@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+    branches:
+      - master
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: make test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v5
+      - name: Build and self-check
+        run: make test
+
+  cmake:
+    name: CMake build + ctest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Configure
+        run: cmake -B build-cmake
+      - name: Build
+        run: cmake --build build-cmake
+      - name: Test
+        run: ctest --test-dir build-cmake --output-on-failure
+
+  format:
+    name: clang-format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install clang-format
+        # apt ships clang-format 18 on 24.04; the tree needs >= 19.
+        run: sudo apt-get update && sudo apt-get install -y clang-format-20
+      - name: Check C formatting
+        run: |
+          sudo ln -sf /usr/bin/clang-format-20 /usr/local/bin/clang-format
+          make format-check

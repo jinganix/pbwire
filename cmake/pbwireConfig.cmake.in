@@ -1,0 +1,11 @@
+@PACKAGE_INIT@
+
+include("${CMAKE_CURRENT_LIST_DIR}/pbwireTargets.cmake")
+
+# pbwire::protoc needs libprotobuf, which the export references by target.
+if(@PBW_WITH_PROTOC@)
+    include(CMakeFindDependencyMacro)
+    find_dependency(protobuf CONFIG)
+endif()
+
+check_required_components(pbwire)

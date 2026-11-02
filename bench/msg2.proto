@@ -1,0 +1,59 @@
+// proto2 counterpart of bench/msg.proto, used to compare the two syntaxes:
+// proto2 has explicit presence for every field (so a field set to its default
+// value is serialized), unpacked repetition by default, groups, and required
+// fields. pbwire mirrors proto2 presence and does not enforce required.
+syntax = "proto2";
+
+package bench2;
+
+enum Color2 {
+  C2_UNSPECIFIED = 0;
+  C2_RED = 1;
+  C2_GREEN = 2;
+  C2_BLUE = 3;
+}
+
+message Child2 {
+  optional string name = 1;
+  optional int64 value = 2 [default = 7];
+}
+
+message Msg2 {
+  optional int32 i32 = 1 [default = -5];
+  optional int64 i64 = 2;
+  optional uint32 u32 = 3;
+  optional uint64 u64 = 4;
+  optional sint32 s32 = 5;
+  optional sint64 s64 = 6;
+  optional fixed32 fx32 = 7;
+  optional fixed64 fx64 = 8;
+  optional sfixed32 sfx32 = 9;
+  optional sfixed64 sfx64 = 10;
+  optional float f32 = 11;
+  optional double f64 = 12;
+  optional bool flag = 13;
+  optional bytes name = 14;
+  optional bytes blob = 15;
+  optional Color2 color = 16;
+  optional Child2 child = 17;
+  repeated int32 nums = 18;
+  repeated int32 packed_nums = 19 [packed = true];
+  repeated bytes tags = 20;
+}
+
+// pbwire skips groups when decoding and cannot encode them; this message exists
+// to pin that behaviour against libprotobuf.
+message HasGroup {
+  optional int32 before = 1;
+  optional group Grp = 2 {
+    optional int32 x = 3;
+  }
+  optional int32 after = 4;
+}
+
+// pbwire has no required-field enforcement: decoding a message without it must
+// succeed (libprotobuf reports IsInitialized() == false instead).
+message HasRequired {
+  required int32 needed = 1;
+  optional int32 other = 2;
+}

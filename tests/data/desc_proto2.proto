@@ -1,0 +1,27 @@
+// proto2 fixture: required/optional presence, an enum with a negative value and
+// a repeated field that must NOT default to packed.
+syntax = "proto2";
+
+package pbwire.test;
+
+enum Legacy {
+  LEGACY_NONE = 0;
+  LEGACY_ONE = 1;
+  LEGACY_NEG = -2;
+}
+
+message Old {
+  required int32 id = 1;
+  optional string name = 2 [default = "x"];
+  repeated sint64 vals = 3;
+  optional Legacy kind = 4;
+}
+
+// Legacy group: the loader drops the field (pbwire never decodes or encodes
+// groups), so the field number behaves like any unknown field.
+message Grouped {
+  optional group Inner = 1 {
+    optional int32 x = 2;
+  }
+  optional int32 after = 3;
+}
