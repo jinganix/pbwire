@@ -1,0 +1,45 @@
+# Secrets / env
+.env
+.env.*
+!.env.example
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+*.iml
+.vscode/
+
+# Agent tool directories: whether to commit them is up to each repository
+.cursor/
+.claude/
+.kilo/
+
+# Node
+node_modules/
+.tmp/
+.npm
+
+# Build artifacts
+build/
+build-*/
+dist/
+out/
+coverage/
+.gradle/
+.kotlin/
+.nx/
+*.class
+*.jar
+*.o
+*.a
+*.dSYM/
+*.tsbuildinfo
+bench/gen/
+*.log
+*.log.*
+.logs/
+*.pid
+*.port

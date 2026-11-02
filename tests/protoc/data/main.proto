@@ -1,0 +1,12 @@
+syntax = "proto3";
+
+package pbwire.protoc.main;
+
+import "dep.proto";
+
+message Shape {
+  pbwire.protoc.dep.Point origin = 1;
+  repeated pbwire.protoc.dep.Point points = 2;
+  pbwire.protoc.dep.Kind kind = 3;
+  map<string, int32> labels = 4;
+}

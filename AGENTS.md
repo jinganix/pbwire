@@ -1,0 +1,111 @@
+# Agents
+
+## Commands
+
+```bash
+make          # build build/libpbwire.a
+make test     # build and run the self-checks (core + threads + descriptor set)
+make format   # clang-format (>= 19) over include/, src/, tests/, bench/
+make format-check
+
+# Optional, requires protoc + libprotobuf C++ (brew install protobuf).
+# Never part of the commit gate; run them after wire-format changes.
+make difftest     # differential test against the official C++ runtime
+make bench        # encode/decode benchmark vs generated code and DynamicMessage
+./build/bench difftest <cases> <seed>   # longer fuzz run
+make desc-fixture # regenerate the pinned descriptor set in tests/test_descriptor.c
+
+# Official conformance suite (binary wire format). Needs a protobuf v36.2
+# source checkout with conformance_test_runner built; see the Makefile comment.
+PBWIRE_PROTOBUF_SRC=$PWD/protobuf make conformance
+
+# The Makefile is the development gate. CMake is the packaging path and the only
+# build that knows about the optional pbwire-protoc target (needs libprotobuf).
+cmake -B build-cmake -DPBW_BUILD_PROTOC=ON && cmake --build build-cmake
+(cd build-cmake && ctest)   # same checks as `make test`, plus test_importer
+```
+
+Run `make test` after any C change; run `make format` after touching `include/`, `src/`, `tests/`,
+`bench/` or `conformance/`.
+
+## Layout
+
+| Path | Contents |
+|------|----------|
+| `include/pbwire.h` | Public C ABI: schema, descriptor, message, value, wire |
+| `src/wire.c` | varint / zigzag / tag / little-endian primitives, output buffer |
+| `src/schema.c` | Descriptor registry, name resolution, field lookup tables |
+| `src/message.c` | Dynamic message and value tree, ownership, oneof handling |
+| `src/arena.c` | Bump allocator behind `pbw_ctx` (reset = pointer move) |
+| `src/ctx.c` | `pbw_ctx`: reusable arena + encode buffer, decode/encode entry points |
+| `src/encode.c` | Message tree -> wire bytes |
+| `src/decode.c` | Wire bytes -> message tree, unknown field preservation |
+| `src/descriptor_set.c` | `FileDescriptorSet` (protoc/buf output) -> schema; the only reader of descriptor.proto |
+| `src/internal.h` | Internal structs and helpers; never included by consumers |
+| `include/pbwire-protoc/` | Optional C++ importer headers: `importer.h`, `descriptor_set.h`, `error.h`; no protobuf types in the API |
+| `src/protoc/` | `.proto` -> `FileDescriptorSet` via Google `compiler::Importer` |
+| `CMakeLists.txt`, `cmake/` | Two targets (`pbwire`, `pbwire-protoc`), install + `pbwire::pbwire` / `pbwire::protoc` export |
+| `tests/test_pbwire.c` | Assert-based self-check (no framework, no dependencies) |
+| `tests/test_threads.c` | 8-thread arena/workspace stress test (pthread) |
+| `conformance/testee.c` | Testee for Google's `conformance_test_runner`, binary wire format only |
+| `tests/test_descriptor.c` | Pinned `protoc` descriptor set -> schema -> wire bytes |
+| `tests/data/*.proto` | Fixtures the pinned descriptor set was generated from |
+| `tests/protoc/` | Importer self-check and its `.proto` fixtures (CMake only) |
+| `bench/bench.cc` | Differential test and benchmark against libprotobuf C++ |
+| `bench/msg.proto` | proto3 message used by both; `bench/gen/` is generated, never committed |
+| `bench/msg2.proto` | proto2 counterpart: explicit presence, groups, required fields |
+| `scripts/` | Gate scripts: `check.sh` (hooks), `validate-commit-msg.sh`, `setup-git-hooks.sh` |
+| `.github/workflows/ci.yml` | CI: `make test` on Linux + macOS, CMake/ctest, clang-format |
+| `README.md`, `llms.txt` | User-facing docs and the AI-retrieval summary; keep them in sync with behavior |
+
+## Hard invariants
+
+This library is meant to be embedded in foreign runtimes (Erlang NIF, Python, Go), where a crash
+takes down the whole host process. Anything is better than a segfault.
+
+1. **No uncaught errors.** Every failure path returns a `pbw_status`; never `abort`, never
+   dereference NULL after a failed allocation, never leave a caller-owned pointer dangling.
+2. **Validate at the boundary.** Wire data and public API arguments are untrusted: bounds-check
+   every length, reject field number 0 and wire types above 5, cap nesting at `PBW_MAX_DEPTH`.
+3. **Ownership is explicit.** Functions documented as taking ownership do so only on success.
+   Values rejected by `pbw_message_set` stay owned by the caller.
+4. **Bounded recursion and sizes.** Recursion happens only over nested messages and legacy groups,
+   both capped by `PBW_MAX_DEPTH`. Buffer growth is bounded by the data being encoded.
+5. **Allocation strategy is part of the contract.** `pbw_message_new`/`pbw_decode` own one message
+   each; `pbw_decode_ctx` puts the whole tree in the context's arena and the result is read-only.
+   Anything allocated from an arena must never be freed individually (`value_free`/`pbw_message_free`
+   check `->arena` and become no-ops). Performance work goes through `make bench`: it also verifies
+   byte equality with libprotobuf, so a change that wins ns by changing bytes fails.
+6. **The wire format is defined by the reference implementation.** Where the spec is silent
+   (varint width, truncation, group skipping), match libprotobuf C++/Java, and prove it with
+   `make difftest` rather than reasoning about it. Wire changes that also touch wire.c/decode.c need a
+   difftest run, not only `make test`.
+   `make conformance` is the authority for the whole binary format: it must stay at 0 unexpected
+   failures. A test may only be declared expected-to-fail by editing nothing -- the failure list is
+   empty on purpose, so any new failure is a regression to fix, not a line to add.
+7. **The two libraries stay decoupled.** `pbwire` never includes a protobuf header and never links
+   against `pbwire-protoc`; `pbwire-protoc` never includes `src/internal.h` and links nothing from
+   the core. They meet only at the serialized `FileDescriptorSet`. Nothing in `src/` may learn to
+   parse `.proto` text: that is what the optional importer is for. `make` and `make test` must stay
+   buildable with a C99 compiler and no external library.
+8. **Unknown fields are data, not noise.** Anything the schema does not declare (including a known
+   field carrying the wrong wire type, and legacy groups) is stored as raw wire bytes and written
+   back after the known fields in input order. Do not "simplify" this away: it is what lets a
+   gateway pass through a schema it only partially knows, and 7 conformance tests depend on it.
+9. **No hidden state.** No globals, no thread-local buffers: a schema or message must be safely
+   confined to one thread by the caller, and nothing else.
+
+## Commits
+
+- Commit only when the user explicitly asks; follow `CONTRIBUTING.md`
+- Run `./scripts/check.sh` before committing or pushing. Use `SKIP_CHECKS=1` only with a real
+  reason, and say so in the summary
+- Commit messages are English-only (ASCII): `<type>(<scope>): <subject>`, header <= 100 characters
+
+## Repository conventions
+
+- Gates are shell hooks (`.githooks/` + `scripts/`); never add husky / commitlint as a second
+  validation path
+- `.githooks/pre-commit` and `pre-push` refuse direct commits/pushes on `master`: work on a feature
+  branch
+- A human enables the hooks once with `./scripts/setup-git-hooks.sh`; agents do not run it
