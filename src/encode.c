@@ -189,11 +189,11 @@ w_scalar(writer *w, pbw_type type, uint64_t bits)
 static void
 w_len_begin(writer *w, size_t *mark)
 {
+    *mark = w->pos;
     if (!w_reserve(w, 1)) {
         return;
     }
     w->buf->data[w->pos] = 0;
-    *mark = w->pos;
     w->pos += 1;
 }
 
