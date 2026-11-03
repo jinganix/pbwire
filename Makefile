@@ -13,6 +13,26 @@ DESC_BIN := build/test_descriptor
 HDRS := include/pbwire.h src/internal.h
 TEST_HDRS := tests/desc_set.h
 
+# Shared library for the bindings (python/, go/): same ABI number as
+# PBW_ABI_VERSION and the CMake SOVERSION.
+UNAME_S := $(shell uname -s)
+ifeq ($(UNAME_S),Darwin)
+SHLIB := build/libpbwire.1.dylib
+SHLIB_LINK := build/libpbwire.dylib
+SHLIB_FLAGS := -dynamiclib -install_name @rpath/libpbwire.1.dylib \
+	-compatibility_version 1 -current_version 0.1.0
+else
+SHLIB := build/libpbwire.so.1
+SHLIB_LINK := build/libpbwire.so
+SHLIB_FLAGS := -shared -Wl,-soname,libpbwire.so.1
+endif
+
+shared: $(SHLIB)
+
+$(SHLIB): $(OBJ) | build
+	$(CC) $(SHLIB_FLAGS) -o $@ $^
+	ln -sf $(notdir $@) $(SHLIB_LINK)
+
 all: $(LIB)
 
 $(LIB): $(OBJ)

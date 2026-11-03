@@ -27,7 +27,8 @@ target_include_directories(pbwire
     PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
            $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
 target_compile_features(pbwire PUBLIC c_std_99)
-set_target_properties(pbwire PROPERTIES EXPORT_NAME pbwire)
+set_target_properties(pbwire PROPERTIES EXPORT_NAME pbwire
+    VERSION ${PROJECT_VERSION} SOVERSION 1)
 
 # Optional: .proto text -> FileDescriptorSet, built on Google Protobuf.
 # Nothing in the core links against it, and it links against nothing in the core.
