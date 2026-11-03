@@ -13,13 +13,20 @@ make format-check
 # Never part of the commit gate; run them after wire-format changes.
 make difftest     # differential test against the official C++ runtime
 make bench        # encode/decode benchmark vs generated code and DynamicMessage
+make bench-c      # C struct binding benchmark vs protoc C++ on the same message
 ./build/bench difftest <cases> <seed>   # longer fuzz run
 make desc-fixture # regenerate the pinned descriptor set in tests/test_descriptor.c
+
+# Bindings: Python needs cffi (and protobuf only for the benchmark); Erlang
+# needs OTP + gpb. Neither is part of the commit gate.
+make python-test   # Python binding self-check (pinned protoc bytes as oracle)
+make python-bench  # Python binding vs google.protobuf on the four standard tiers
+make erlang-bench  # gpb, gpb NIF and enif_protobuf
 
 # Official conformance suite (binary wire format). Needs the cached reference
 # checkout: `make conformance-setup` clones it once, `make conformance`
 # reuses it. Override with PBWIRE_PROTOBUF_SRC=/path/to/protobuf.
-make conformance-setup   # once (cached in ~/.cache/pbwire)
+make conformance-setup   # once (kept in .tmp/, git-ignored)
 make conformance
 
 # The Makefile is the development gate. CMake is the packaging path and the only
@@ -29,7 +36,8 @@ cmake -B build-cmake -DPBW_BUILD_PROTOC=ON && cmake --build build-cmake
 ```
 
 Run `make test` after any C change; run `make format` after touching `include/`, `src/`, `tests/`,
-`bench/` or `conformance/`.
+`bench/` or `conformance/`. Run `make python-test` after touching `bindings/python`, and refresh
+`BENCHMARKS.md` after changing anything on the encode/decode hot path.
 
 ## Layout
 
@@ -62,6 +70,11 @@ Run `make test` after any C change; run `make format` after touching `include/`,
 | `bindings/erlang/` | Erlang/OTP NIF binding (`enif_protobuf` app, own rebar3 build, see its AGENTS.md) |
 | `bench/msg.proto` | proto3 message used by both; `bench/gen/` is generated, never committed |
 | `bench/msg2.proto` | proto2 counterpart: explicit presence, groups, required fields, closed enums, extensions |
+| `BENCHMARKS.md` | the four standard payload tiers, every binding vs its baseline, cross-binding table |
+| `bindings/c/` | C binding: struct engine (`runtime/`), `protoc-gen-pbwire-c` (`plugin/`), `tests/`, `benchmarks/`, `example/` |
+| `bindings/python/` | Python binding: `pbwire_cffi.py` (schema from a descriptor set, dict<->wire), `csrc/` bulk bridge, `tests/`, `benchmarks/` |
+| `bindings/go/`, `bindings/cpp/` | cgo smoke package and a C++ example over the C runtime |
+| `bindings/erlang/` | Erlang/OTP NIF binding with its own AGENTS.md |
 | `scripts/` | Gate scripts: `check.sh` (hooks), `validate-commit-msg.sh`, `setup-git-hooks.sh` |
 | `.github/workflows/ci.yml` | CI: `make test` on Linux + macOS, CMake/ctest, clang-format |
 | `README.md`, `llms.txt` | User-facing docs and the AI-retrieval summary; keep them in sync with behavior |

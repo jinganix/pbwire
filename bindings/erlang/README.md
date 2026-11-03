@@ -208,17 +208,17 @@ Case names follow the four standard payload tiers shared by every binding in thi
 cross-binding comparison lives in [BENCHMARKS.md](../../BENCHMARKS.md) at the repo root.
 
 <!-- BENCHMARK_RESULTS_START -->
-Last run: 2026-11-02 16:09:07 UTC (standard Google benchmark messages; Erlang 29.0.1 per `.tool-versions`; machine Apple M4 Pro)
+Last run: 2026-11-03 11:10:46 UTC (standard Google benchmark messages; Erlang 29.0.1 per `.tool-versions`; machine Apple M4 Pro)
 
 | Test case | epb | gpb | gpb nif |
 |-----------|-----|-----|---------|
-| medium · 228 B · serialize | 286.91 | 157.14 | 56.79 |
-| medium · 228 B · deserialize | 716.65 | 272.49 | 76.29 |
-| xlarge · 84584 B · serialize | 299.14 | 135.76 | 103.76 |
-| xlarge · 84584 B · deserialize | 516.21 | 255.91 | 196.61 |
+| medium · 228 B · serialize | 300.10 | 165.01 | 59.14 |
+| medium · 228 B · deserialize | 739.08 | 278.99 | 74.74 |
+| xlarge · 84584 B · serialize | 304.98 | 135.02 | 102.86 |
+| xlarge · 84584 B · deserialize | 548.23 | 255.49 | 189.66 |
 
-Higher is better. Throughput in MB/s on serialized wire size. `medium` and `xlarge` are the
-shared tier names; in gpb's own vocabulary these are its "small" and "large" messages.
+Higher is better. Throughput in MB/s on serialized wire size. Case names follow
+the four standard tiers at the repo root ([BENCHMARKS.md](../../../BENCHMARKS.md)).
 <!-- BENCHMARK_RESULTS_END -->
 
 ## Comparison with alternatives

@@ -145,6 +145,8 @@ commit gate:
 make difftest     # differential test against the official C++ runtime
 make bench        # encode/decode benchmark vs generated code and DynamicMessage
 make bench-c      # C structs benchmark vs protoc C++ (same optional deps)
+make python-test  # Python binding self-check (needs cffi)
+make python-bench # Python binding benchmark vs google.protobuf (needs protobuf)
 make erlang-bench # Erlang binding: gpb, gpb NIF and enif_protobuf
 make conformance-setup  # once: shallow-clone pinned protobuf + build runner (kept in .tmp/, git-ignored)
 make conformance  # official binary/text/JSON conformance suite (reuses the cached checkout)
@@ -372,7 +374,7 @@ src/stream.c                delimited framing reader, encode sink, deterministic
 src/ctx.c                   pbw_ctx: arena + encode buffer reuse
 bindings/c/                 C binding: struct engine (runtime/) + protoc plugin (plugin/) + example/
 bindings/cpp/               C++ example: same addressbook round-trip on the shared C runtime (no plugin)
-bindings/python/            cffi binding (ABI mode, stdlib-free smoke cover)
+bindings/python/            cffi binding: schema from a descriptor set at runtime, dict<->wire, tests + benchmark
 bindings/go/pbwire/        cgo binding with a round-trip test
 bindings/erlang/           Erlang/OTP NIF binding (enif_protobuf, gpb-compatible, own rebar3 build)
 
@@ -672,10 +674,13 @@ mutated inputs, all well-known types, extensions as `[full.name]`, strict base64
 
 ### Can I use it from Python, Erlang, Go or Rust?
 
-Yes — that is the intended use. `bindings/` holds a minimal cffi cover (Python, ABI mode, no
-compiler needed) and a minimal cgo package (Go), each with a round-trip smoke test. They pin
-`PBW_ABI_VERSION` at load time, so a library built from a newer, incompatible tree fails fast
-instead of corrupting memory. The C ABI is the product; richer host bindings live on top of it.
+Yes — that is the intended use. `bindings/` holds the C struct engine with its `protoc` plugin, a
+cffi binding for Python (schema from a `FileDescriptorSet` at runtime, dict↔wire, no generated
+code), an Erlang/OTP NIF, and a minimal cgo package (Go), each with a round-trip test; the C and
+Python bindings also carry benchmarks against `protoc` C++ and `google.protobuf` (see
+[BENCHMARKS.md](BENCHMARKS.md)). They pin `PBW_ABI_VERSION` at load time, so a library built from a
+newer, incompatible tree fails fast instead of corrupting memory. The C ABI is the product; richer
+host bindings live on top of it.
 
 ### Is it thread-safe?
 
