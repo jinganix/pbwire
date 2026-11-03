@@ -81,60 +81,135 @@ def main():
                     print("  first diff at %d: %02x vs %02x" % (i, a, b))
                     break
 
-        decoded = scalars.decode(reference)
-        check(decoded == SCALARS3, "decode of the reference bytes")
-        if decoded != SCALARS3:
-            for key in sorted(set(decoded) | set(SCALARS3)):
-                if decoded.get(key) != SCALARS3.get(key):
+        message = scalars.decode(reference)
+        check(message.to_dict() == SCALARS3, "decode(to_dict) of the reference")
+        if message.to_dict() != SCALARS3:
+            eager = message.to_dict()
+            for key in sorted(set(eager) | set(SCALARS3)):
+                if eager.get(key) != SCALARS3.get(key):
                     print("  %s: %r != %r"
-                          % (key, decoded.get(key), SCALARS3.get(key)))
+                          % (key, eager.get(key), SCALARS3.get(key)))
 
-        check(scalars.decode(got) == SCALARS3, "decode of our own bytes")
-        check(scalars.decode(b"") == {}, "empty wire decodes to no fields")
+        check(scalars.decode(got).to_dict() == SCALARS3,
+              "decode of our own bytes")
+        check(scalars.decode(b"").to_dict() == {}, "empty wire decodes to {}")
         check(scalars.encode({}) == b"", "empty dict encodes to no bytes")
 
-        # Lazy view: attribute access materializes, dict(m) is the eager form.
-        view = scalars.parse(reference)
-        check(view.i32 == SCALARS3["i32"], "lazy view: scalar attribute")
-        check(view.str == SCALARS3["str"], "lazy view: string attribute")
-        check(view.nums == SCALARS3["nums"], "lazy view: packed repeated")
-        check(view.inners[1].value == -2, "lazy view: nested message")
-        check(view.inner.name == "kid", "lazy view: singular message")
-        check(view.to_dict() == SCALARS3, "lazy view: to_dict")
-        check(dict(view) == SCALARS3, "lazy view: dict(view)")
-        check(len(view) == len(SCALARS3), "lazy view: length")
-        check("nums" in view and "nope" not in view, "lazy view: contains")
-        check_raises(KeyError, lambda: view["nope"], "lazy view: absent key")
-        check(scalars.parse(b"").to_dict() == {}, "lazy view: empty wire")
-        check(view.i32 == SCALARS3["i32"], "lazy view: cached read")
+        # A parsed message reads fields from the wire on demand.
+        check(message.i32 == SCALARS3["i32"], "scalar attribute")
+        check(message.str == SCALARS3["str"], "string attribute")
+        check(message.nums == SCALARS3["nums"], "packed repeated")
+        check(message.flags == SCALARS3["flags"], "packed repeated bool")
+        check(message.inners[1].value == -2, "nested message")
+        check(message.inners[1].to_dict() == {"name": "y", "value": -2},
+              "nested message to_dict")
+        check(message.inner.name == "kid", "singular message")
+        check(message["i32"] == SCALARS3["i32"], "item access")
+        check(message.get("nope") is None, "get() of an absent field")
+        check(message.get("nope", 7) == 7, "get() default")
+        check(message.get("nums") == SCALARS3["nums"], "get() of a field")
+        check(len(message) == len(SCALARS3), "length is the field count")
+        check(sorted(message.keys()) == sorted(SCALARS3),
+              "keys() are the present fields")
+        check(len(message.items()) == len(SCALARS3), "items() pair count")
+        check(dict(message.items())["inner"].to_dict() == SCALARS3["inner"],
+              "items() values")
+        check("nums" in message and "nope" not in message, "contains")
+        check_raises(KeyError, lambda: message["nope"], "absent key")
+        check(message.type == "structtest.Scalars3", "message type name")
 
-        # Unknown fields in the wire are skipped, not an error.
-        # Field 999 is not in the schema: its bytes are skipped.
-        check(scalars.decode(reference + b"\xb8\x3e\x2a") == SCALARS3,
-              "unknown field in the wire is skipped")
-        check(scalars.parse(reference + b"\xb8\x3e\x2a").to_dict() == SCALARS3,
-              "unknown field in a lazy view is skipped")
+        # An absent field is absent in every view, repeated ones included.
+        sparse = scalars.decode(b"")
+        check(sparse.inner is None, "absent singular message reads as None")
+        check(sparse.nums is None, "absent repeated field reads as None")
+        check(sparse.get("nums") is None, "absent repeated field get()")
+        check(not sparse, "empty message is empty")
+        check(len(sparse) == 0, "empty message has no keys")
+        check_raises(KeyError, lambda: sparse["nums"],
+                     "absent repeated field is a KeyError")
+        check(scalars.decode(b"").to_dict() == {}, "empty wire")
+
+        # encode() of a Message hands back the bytes it was parsed from, so a
+        # round trip keeps unknown fields that a dict round trip cannot.
+        check(scalars.encode(message) == reference, "encode(Message) round trip")
+        inner_type = schema.message("structtest.Inner3")
+        check(inner_type.encode(message.inners[1]) ==
+              inner_type.encode({"name": "y", "value": -2}),
+              "encode(sub-message)")
+        check(inner_type.encode(message.inner) == inner_type.encode(
+                  {"name": "kid", "value": 42}), "encode(singular message)")
+        check_raises(TypeError, lambda: inner_type.encode(message),
+                     "encode() rejects another message type")
+
+        # Unknown fields in the wire are skipped by the dict view, and kept by
+        # the Message (it owns the bytes).
+        unknown = reference + b"\xb8\x3e\x2a"
+        check(scalars.decode(unknown).to_dict() == SCALARS3,
+              "unknown field is skipped by to_dict")
+        check(scalars.encode(scalars.decode(unknown)) == unknown,
+              "unknown field survives encode(Message)")
 
         check_raises(KeyError, lambda: scalars.encode({"nope": 1}),
                      "unknown field name")
         check_raises(ValueError, lambda: scalars.decode(reference[:-1]),
                      "truncated wire")
+        check_raises(ValueError,
+                     lambda: scalars.decode(scalars.encode(
+                         {"inner": {"name": "x"}})[:-1]),
+                     "truncated nested message")
+        check_raises(ValueError, lambda: scalars.decode(b"\x0f"),
+                     "field number 0")
 
         inner = schema.message("structtest.Inner3")
-        check(inner.decode(inner.encode({"name": "x", "value": 1})) ==
+        check(inner.decode(inner.encode({"name": "x", "value": 1})).to_dict() ==
               {"name": "x", "value": 1}, "nested type round trip")
+
+        # Merge semantics: a singular message field that shows up twice on the
+        # wire merges instead of replacing.
+        merged = scalars.decode(b"\x82\x01\x03\x0a\x01a"      # inner.name = "a"
+                                b"\x82\x01\x02\x10\x07")     # inner.value = 7
+        check(merged.inner.to_dict() == {"name": "a", "value": 7},
+              "singular message seen twice merges")
+        check(merged.to_dict()["inner"] == {"name": "a", "value": 7},
+              "merged message as a dict")
+
+        # schema.message() hands out one MessageType per name.
+        check(schema.message("structtest.Scalars3") is scalars,
+              "message() is cached per schema")
+
+    # Oneof: a member set later on the wire clears the earlier ones, and the
+    # cleared member is absent from every view.
+    with pbw.Schema.from_file("bindings/python/tests/data/oneof.desc") as schema:
+        pick = schema.message("oneoftest.Pick")
+        wire = b"\x08\x01\x12\x01z\x20\x05"  # a=1, b="z", tail=5
+        message = pick.decode(wire)
+        check(message.to_dict() == {"b": "z", "tail": 5},
+              "oneof keeps only the last member")
+        check(message.b == "z" and message.tail == 5, "oneof member value")
+        check(message.a is None, "cleared oneof member reads as None")
+        check("a" not in message and "b" in message, "cleared oneof contains")
+        check(list(message.keys()) == ["b", "tail"], "cleared oneof in keys()")
+        check(len(message) == 2, "cleared oneof not counted")
+        check(pick.encode(message) == wire, "oneof round trip")
+
+        # A singular message in a oneof merges with itself, like any other.
+        merged = pick.decode(b"\x1a\x02\x08\x07\x1a\x02\x08\x08")
+        check(merged.c.to_dict() == {"x": 8}, "oneof sub-message last wins")
+        check(merged.to_dict() == {"c": {"x": 8}}, "oneof sub-message as dict")
 
     with pbw.Schema.from_file("examples/addressbook.desc") as schema:
         person = schema.message("tutorial.Person")
         values = {"name": "alice", "id": 1, "email": "a@example.com",
                   "phones": [{"number": "555", "type": 1},
                              {"number": "666"}]}
-        check(person.decode(person.encode(values)) == values,
-              "proto2 addressbook round trip")
+        message = person.decode(person.encode(values))
+        check(message.to_dict() == values, "proto2 addressbook round trip")
+        check(message.phones[1].number == "666", "proto2 nested message")
         check_raises(ValueError, lambda: person.encode({"id": 1}),
                      "proto2 required field missing")
-        check(person.parse(person.encode(values)).phones[1].number == "666",
-              "proto2 lazy view")
+        check_raises(ValueError,
+                     lambda: person.decode(b"\x08\x01").to_dict(),
+                     "proto2 required field missing on materialize")
 
     print("test_pbwire: %s" % ("all checks passed" if not failures
                                else "%d FAILURES" % failures))

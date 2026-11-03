@@ -1,4 +1,4 @@
-"""AddressBook example (Python): schema at runtime, messages as dicts.
+"""AddressBook example (Python): schema at runtime, messages parsed from bytes.
 
     python bindings/python/examples/addressbook.py
 
@@ -29,13 +29,16 @@ def main():
     }
 
     wire = person.encode(values)
-    assert person.decode(wire) == values
 
-    # Lazy view: parse once, materialize only what is read.
-    view = person.parse(wire)
+    # decode() parses the bytes once; a field materializes when it is read.
+    message = person.decode(wire)
     print("%d bytes, name=%s, %d phone(s), phone[0]=%s"
-          % (len(wire), view.name, len(view.phones),
-             view.phones[0].number))
+          % (len(wire), message.name, len(message.phones),
+             message.phones[0].number))
+
+    # The eager form: plain dicts, and a byte-exact round trip of the wire.
+    assert message.to_dict() == values
+    assert person.encode(message) == wire
     return 0
 
 

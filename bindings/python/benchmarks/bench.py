@@ -5,6 +5,25 @@ scalar kind, string, enum, nested message, three repeated kinds, proto3
 optional) and the four standard tiers from BENCHMARKS.md: the repeated fields
 scale x0 / x1 / x100 / x3000.
 
+The rows compare the same user-visible task, not the same internal call:
+
+    encode(data)    Python values -> wire bytes
+                    pbwire: encode(dict)
+                    upb:    populate a message from the dict, then serialize
+    decode(bytes)   wire bytes -> in-memory message (fields read on demand)
+                    pbwire: decode(bytes)
+                    upb:    Scalars3.FromString(bytes)
+    to_dict(bytes)  wire bytes -> plain Python data
+                    pbwire: decode(bytes).to_dict()
+                    upb:    FromString, then read every field into dicts/lists
+    encode(parsed)  in-memory message -> wire bytes
+                    pbwire: encode(message)   (a parsed message keeps its bytes)
+                    upb:    message.SerializeToString()
+
+`to_dict(bytes)` deliberately does not use `json_format.MessageToDict`: that
+goes through JSON-shaped intermediate values and is ~4x slower than reading the
+fields, so it would not measure the same thing.
+
 The baseline row names the protobuf implementation that is actually loaded
 (`pb upb`: protobuf's C extension). The generated `matrix3_pb2` module comes
 from `protoc --python_out` (see the Makefile).
@@ -27,10 +46,12 @@ import matrix3_pb2
 TIERS = (("small", 0), ("medium", 1), ("large", 100), ("xlarge", 3000))
 DESC = "bindings/c/tests/data/matrix3.desc"
 
+REPEATED = ("nums", "tags", "flags")
+
 
 def scalars3(repeats):
     """The populated matrix3 message as a dict (mirrors matrix3.txt)."""
-    values = {
+    return {
         "i32": -2147483648,
         "i64": 9223372036854775807,
         "u32": 4294967295,
@@ -54,7 +75,6 @@ def scalars3(repeats):
         "opt_str": "opt",
         "flags": [i % 2 == 0 for i in range(repeats)],
     }
-    return values
 
 
 def pruned(values):
@@ -64,9 +84,11 @@ def pruned(values):
 
 
 def protobuf_of(values):
+    """Fill a generated message from the same dict: the upb side of
+    encode(data)."""
     message = matrix3_pb2.Scalars3()
     for name, value in values.items():
-        if name in ("nums", "tags", "flags"):
+        if name in REPEATED:
             getattr(message, name).extend(value)
         elif name == "inners":
             for item in value:
@@ -79,6 +101,23 @@ def protobuf_of(values):
         else:
             setattr(message, name, value)
     return message
+
+
+def protobuf_data(message):
+    """Every field of a generated message as plain dicts/lists/scalars: the upb
+    side of to_dict(bytes)."""
+    out = {}
+    for field, value in message.ListFields():
+        if field.is_repeated:
+            if field.message_type is not None:
+                out[field.name] = [protobuf_data(item) for item in value]
+            else:
+                out[field.name] = list(value)
+        elif field.message_type is not None:
+            out[field.name] = protobuf_data(value)
+        else:
+            out[field.name] = value
+    return out
 
 
 def time_it(fn, target=0.6, minimum=0.15):
@@ -100,47 +139,61 @@ def time_it(fn, target=0.6, minimum=0.15):
     return elapsed / iterations * 1e9, iterations
 
 
+def fail(what, label):
+    print("FAIL %s: %s" % (label, what))
+    return 1
+
+
 def run():
     base_label = "pb %s" % api_implementation.Type()
     schema = pbw.Schema.from_file(DESC)
     scalars = schema.message("structtest.Scalars3")
+    status = 0
 
     for label, repeats in TIERS:
         values = scalars3(repeats)
-        reference_msg = protobuf_of(values)
-        reference = reference_msg.SerializeToString()
+        want = pruned(values)
+        reference = protobuf_of(values).SerializeToString()
 
-        got = scalars.encode(values)
-        if got != reference:
-            print("FAIL %s: pbwire-py bytes differ from protobuf (%d vs %d)"
-                  % (label, len(got), len(reference)))
-            return 1
-        if scalars.decode(reference) != pruned(values):
-            print("FAIL %s: pbwire-py decode differs" % label)
-            return 1
+        if scalars.encode(values) != reference:
+            return fail("pbwire-py bytes differ from protobuf", label)
+        if scalars.decode(reference).to_dict() != want:
+            return fail("pbwire-py to_dict differs", label)
+        if scalars.encode(scalars.decode(reference)) != reference:
+            return fail("pbwire-py Message round trip differs", label)
+        if protobuf_data(matrix3_pb2.Scalars3.FromString(reference)) != want:
+            return fail("protobuf data differs", label)
 
-        rows = []
-        ns, _ = time_it(lambda: scalars.encode(values))
-        rows.append(("pbwire-py", "encode", ns))
-        ns, _ = time_it(lambda: scalars.decode(reference))
-        rows.append(("pbwire-py", "decode", ns))
-        ns, _ = time_it(lambda: scalars.parse(reference))
-        rows.append(("pbwire-py", "parse", ns))
-        ns, _ = time_it(lambda: scalars.parse(reference).to_dict())
-        rows.append(("pbwire-py", "parse+dict", ns))
-        ns, _ = time_it(lambda: reference_msg.SerializeToString())
-        rows.append((base_label, "encode", ns))
-        ns, _ = time_it(lambda: matrix3_pb2.Scalars3.FromString(reference))
-        rows.append((base_label, "decode", ns))
+        message = scalars.decode(reference)
+        pb_message = matrix3_pb2.Scalars3.FromString(reference)
+
+        rows = [
+            ("pbwire-py", "encode(data)",
+             time_it(lambda: scalars.encode(values))[0]),
+            (base_label, "encode(data)",
+             time_it(lambda: protobuf_of(values).SerializeToString())[0]),
+            ("pbwire-py", "decode(bytes)",
+             time_it(lambda: scalars.decode(reference))[0]),
+            (base_label, "decode(bytes)",
+             time_it(lambda: matrix3_pb2.Scalars3.FromString(reference))[0]),
+            ("pbwire-py", "to_dict(bytes)",
+             time_it(lambda: scalars.decode(reference).to_dict())[0]),
+            (base_label, "to_dict(bytes)",
+             time_it(lambda: protobuf_data(
+                 matrix3_pb2.Scalars3.FromString(reference)))[0]),
+            ("pbwire-py", "encode(parsed)",
+             time_it(lambda: scalars.encode(message))[0]),
+            (base_label, "encode(parsed)",
+             time_it(lambda: pb_message.SerializeToString())[0]),
+        ]
 
         print("\n%s: %d bytes, repeat field x%d" % (label, len(reference),
                                                     repeats))
-        print("  %-12s %-11s %10s %10s" % ("impl", "op", "ns/op", "MB/s"))
+        print("  %-12s %-15s %10s %10s" % ("impl", "op", "ns/op", "MB/s"))
         for impl, op, ns in rows:
             mbps = len(reference) / ns * 1e3
-            print("  %-12s %-11s %10.1f %10.1f" % (impl, op, ns, mbps))
-    schema.close()
-    return 0
+            print("  %-12s %-15s %10.1f %10.1f" % (impl, op, ns, mbps))
+    return status
 
 
 def main(argv):

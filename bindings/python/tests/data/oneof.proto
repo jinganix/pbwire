@@ -1,0 +1,24 @@
+// Oneof fixture for the Python binding self-check: a singular message inside
+// a oneof plus a plain field, so the lazy message has to drop the oneof member
+// that a later member on the wire overwrote.
+//
+// Regenerate the descriptor set with:
+//   protoc -Ibindings/python/tests/data \
+//       --descriptor_set_out=bindings/python/tests/data/oneof.desc \
+//       bindings/python/tests/data/oneof.proto
+syntax = "proto3";
+
+package oneoftest;
+
+message Sub {
+  int32 x = 1;
+}
+
+message Pick {
+  oneof choice {
+    int32 a = 1;
+    string b = 2;
+    Sub c = 3;
+  }
+  int32 tail = 4;
+}

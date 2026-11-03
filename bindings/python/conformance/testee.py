@@ -12,6 +12,11 @@ Supported: binary in -> binary out. JSON and text output need printers the
 binding does not expose yet, so those requests answer `skipped` and the runner
 reports them as skipped rather than failed.
 
+`decode()` walks and validates the whole payload before returning, and a parsed
+message keeps the bytes it was parsed from, so `encode()` hands them back: a
+round trip preserves unknown fields and repeated fields in wire order, which is
+why this testee has no expected failures.
+
     python testee.py build/conformance.desc     # from the repo root
 """
 
@@ -92,12 +97,12 @@ def main(argv):
                 response["runtime_error"] = "unknown message type %r" % name
             else:
                 try:
-                    fields = message.decode(request["protobuf_payload"])
+                    parsed = message.decode(request["protobuf_payload"])
                 except Exception as error:  # noqa: BLE001
                     response["parse_error"] = str(error)
                 else:
                     try:
-                        response["protobuf_payload"] = message.encode(fields)
+                        response["protobuf_payload"] = message.encode(parsed)
                     except Exception as error:  # noqa: BLE001
                         response["serialize_error"] = str(error)
         try:
