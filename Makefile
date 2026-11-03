@@ -1,5 +1,7 @@
 CC ?= cc
 CFLAGS ?= -O2 -std=c99 -Wall -Wextra -Werror -pedantic -fPIC
+CXX ?= c++
+CXXFLAGS ?= -O2 -std=c++17 -Wall -Wextra -Werror -pedantic
 CPPFLAGS += -Iinclude -Isrc
 AR ?= ar
 
@@ -10,6 +12,9 @@ LIB := build/libpbwire.a
 TEST_BIN := build/test_pbwire
 THREAD_BIN := build/test_threads
 DESC_BIN := build/test_descriptor
+STRUCT_BIN := build/test_struct
+EXAMPLE_BIN := build/example_addressbook
+CPP_EXAMPLE_BIN := build/example_addressbook_cpp
 HDRS := include/pbwire.h src/internal.h
 TEST_HDRS := tests/desc_set.h
 
@@ -50,18 +55,49 @@ build:
 $(THREAD_BIN): tests/test_threads.c $(TEST_HDRS) $(LIB) | build
 	$(CC) $(CFLAGS) $(CPPFLAGS) -pthread -o $@ $< $(LIB)
 
-test: $(TEST_BIN) $(THREAD_BIN) $(DESC_BIN)
+test: $(TEST_BIN) $(THREAD_BIN) $(DESC_BIN) $(STRUCT_BIN) $(EXAMPLE_BIN)
 	./$(TEST_BIN)
 	./$(THREAD_BIN)
 	./$(DESC_BIN)
+	./$(STRUCT_BIN)
+	./$(EXAMPLE_BIN)
 
 # Erlang binding (bindings/erlang): OTP app with its own rebar3 build.
 # Needs Erlang/OTP (CI installs it); rebar3 is bootstrapped by its Makefile.
 erlang-test:
 	$(MAKE) -C bindings/erlang tests c-tests
 
+# Erlang binding benchmark (bindings/erlang/benchmarks): gpb, gpb NIF and
+# enif_protobuf. Same optional status as `bench`/`bench-c`; needs OTP + gpb.
+erlang-bench:
+	$(MAKE) -C bindings/erlang/benchmarks benchmarks
+
+# C binding plugin (bindings/c/plugin): self-contained Go module, needs Go.
+# Stays out of `make test` like the other optional targets.
+plugin-c:
+	$(MAKE) -C bindings/c/plugin test
+
 $(DESC_BIN): tests/test_descriptor.c $(TEST_HDRS) $(LIB) | build
 	$(CC) $(CFLAGS) $(CPPFLAGS) -o $@ $< $(LIB)
+
+C_RUNTIME := bindings/c/runtime/pbw_struct.c
+$(STRUCT_BIN): bindings/c/tests/test_struct.c $(C_RUNTIME) $(LIB) | build
+	$(CC) $(CFLAGS) $(CPPFLAGS) -Ibindings/c/runtime -Ibindings/c/tests -Ibindings/c/example -o $@ bindings/c/tests/test_struct.c $(C_RUNTIME) $(LIB)
+$(EXAMPLE_BIN): bindings/c/example/addressbook.c $(C_RUNTIME) $(LIB) | build
+	$(CC) $(CFLAGS) $(CPPFLAGS) -Ibindings/c/runtime -o $@ bindings/c/example/addressbook.c $(C_RUNTIME) $(LIB)
+
+# C++ binding example (bindings/cpp): same addressbook round-trip as the
+# C example, reusing the C runtime (compiled as C, linked into the C++
+# binary). Stays out of `make test` (that gate is C99-only).
+CPP_RUNTIME_OBJ := build/pbw_struct_c.o
+$(CPP_RUNTIME_OBJ): $(C_RUNTIME) | build
+	$(CC) $(CFLAGS) $(CPPFLAGS) -Ibindings/c/runtime -c -o $@ $(C_RUNTIME)
+$(CPP_EXAMPLE_BIN): bindings/cpp/example/addressbook.cc $(CPP_RUNTIME_OBJ) $(LIB) | build
+	$(CXX) $(CXXFLAGS) $(CPPFLAGS) -Ibindings/c/runtime -Ibindings/c/example -o $@ bindings/cpp/example/addressbook.cc $(CPP_RUNTIME_OBJ) $(LIB)
+
+examples: $(EXAMPLE_BIN) $(CPP_EXAMPLE_BIN)
+	./$(EXAMPLE_BIN)
+	./$(CPP_EXAMPLE_BIN)
 
 # Regenerates the pinned descriptor set embedded in tests/test_descriptor.c.
 # Optional (needs protoc); paste the output into the array by hand.
@@ -71,8 +107,8 @@ desc-fixture:
 	xxd -i /tmp/pbw_desc.pb
 
 # Optional: official Protobuf conformance suite, binary wire format and text
-# format. The reference checkout lives outside the worktree (a cache, not a
-# build artifact), so one clone serves every branch and is never re-pulled:
+# format. The reference checkout lives in .tmp/ (git-ignored, not a build
+# artifact), so one clone serves every branch and is never re-pulled:
 # `make conformance-setup` clones it once (shallow, pinned version) and builds
 # the runner; later runs only rebuild incrementally. Override the location
 # with PBWIRE_PROTOBUF_SRC=/path/to/protobuf.
@@ -82,7 +118,7 @@ desc-fixture:
 # UINT32_MAX is truncated instead of rejected). They are listed so the runner
 # proceeds to the text suite instead of stopping after binary.
 PROTOBUF_VERSION := v36.2
-PROTOBUF_SRC = $(or $(PBWIRE_PROTOBUF_SRC),$(HOME)/.cache/pbwire/protobuf-$(PROTOBUF_VERSION))
+PROTOBUF_SRC = $(or $(PBWIRE_PROTOBUF_SRC),$(CURDIR)/.tmp/protobuf-$(PROTOBUF_VERSION))
 CONFORMANCE_RUNNER ?= $(PROTOBUF_SRC)/build/conformance_test_runner
 CONFORMANCE_DESC := build/conformance.desc
 CONFORMANCE_TESTEE := build/conformance_pbwire
@@ -134,9 +170,14 @@ BENCH_CXX ?= c++
 BENCH_BIN := build/bench
 BENCH_PB := bench/gen/msg.pb.cc bench/gen/msg2.pb.cc
 BENCH_DESC := bench/gen/msg.pb
+BENCH_C_PB := bindings/c/benchmarks/gen/matrix3.pb.cc
+BENCH_C_BIN := build/bench_struct_c
 
 CFILES := include/*.h include/pbwire-protoc/*.h src/*.c src/*.h \
 	src/protoc/*.cc tests/*.c tests/protoc/*.cc bench/bench.cc conformance/testee.c \
+	bindings/c/benchmarks/*.cc \
+	bindings/c/runtime/*.c bindings/c/runtime/*.h \
+	bindings/c/example/*.c bindings/c/tests/*.c bindings/cpp/example/*.cc \
 	bindings/erlang/c_src/*.c bindings/erlang/c_src/*.h \
 	bindings/erlang/c_src_tests/*.c bindings/erlang/c_src_tests/*.h \
 	bindings/erlang/c_src_tests/stub/*.c bindings/erlang/c_src_tests/stub/*.h
@@ -162,10 +203,25 @@ $(BENCH_BIN): bench/bench.cc $(BENCH_PB) $(BENCH_DESC) $(LIB) | build
 bench: $(BENCH_BIN)
 	./$(BENCH_BIN) bench
 
+# C binding benchmark (bindings/c/benchmarks): generated structs vs the
+# official C++ generated code on matrix3.proto. Same optional deps as
+# bench/difftest (protoc + libprotobuf), same spot outside `make test`.
+bindings/c/benchmarks/gen/%.pb.cc: bindings/c/tests/data/%.proto
+	@mkdir -p bindings/c/benchmarks/gen
+	$(PROTOC) -Ibindings/c/tests/data --cpp_out=bindings/c/benchmarks/gen $<
+
+$(BENCH_C_BIN): bindings/c/benchmarks/bench_struct.cc $(BENCH_C_PB) $(CPP_RUNTIME_OBJ) $(LIB) | build
+	$(BENCH_CXX) -std=c++17 -O2 -pthread -Iinclude -Ibindings/c/runtime \
+		-Ibindings/c/tests -Ibindings/c/benchmarks/gen $(PB_CXXFLAGS) \
+		-o $@ bindings/c/benchmarks/bench_struct.cc $(BENCH_C_PB) $(CPP_RUNTIME_OBJ) $(LIB) $(PB_LIBS)
+
+bench-c: $(BENCH_C_BIN)
+	./$(BENCH_C_BIN) bench
+
 difftest: $(BENCH_BIN)
 	./$(BENCH_BIN) difftest
 
 clean:
 	rm -rf build bench/gen
 
-.PHONY: all test format format-check bench difftest conformance desc-fixture clean
+.PHONY: all test examples format format-check bench bench-c erlang-bench difftest conformance desc-fixture clean

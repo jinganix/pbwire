@@ -1,0 +1,15 @@
+{
+  "people": [
+    {
+      "name": "Alice",
+      "id": 1,
+      "phones": [{"number": "555-0100", "type": "MOBILE"}]
+    },
+    {
+      "name": "Bob",
+      "id": 2,
+      "email": "bob@example.com",
+      "phones": [{"number": "555-0200", "type": "HOME"}]
+    }
+  ]
+}
