@@ -259,6 +259,33 @@ pbw_ctx *pbw_ctx_new(void);
 void pbw_ctx_free(pbw_ctx *ctx);
 /* Release every allocation made since the last reset, keeping the buffers. */
 void pbw_ctx_reset(pbw_ctx *ctx);
+/* Max bytes the context keeps resident across resets (decode arena head +
+ * encode buffer), default 1 MiB. Single allocations above it bypass the
+ * reusable chunk and are freed on reset, so one outlier never pins the
+ * context. 0 keeps nothing: every reset frees everything, like the plain
+ * functions but through the context API. Applies lazily at the next reset. */
+void pbw_ctx_set_retain_cap(pbw_ctx *ctx, size_t cap);
+
+typedef struct pbw_pool pbw_pool;
+
+/* Bounded freelist of contexts: acquire instead of pbw_ctx_new, release
+ * instead of pbw_ctx_reset/pbw_ctx_free. A released context is already
+ * reset, so the next acquire can use it directly; releases past max_idle
+ * are freed. Unsynchronized: one pool per worker thread, never shared
+ * concurrently (this keeps the core dependency-free). Allocation is lazy;
+ * steady use then stops calling malloc.
+ *
+ * retain_cap is stamped on contexts the pool creates (0 = the 1 MiB
+ * default, like the zero-means-default pbw_limits fields); max_idle 0
+ * keeps nothing and the pool degenerates to new/free. Releasing a context
+ * whose retain cap the caller changed keeps that cap. */
+pbw_pool *pbw_pool_new(size_t max_idle, size_t retain_cap);
+void pbw_pool_free(pbw_pool *pool);
+/* Exclusive use until released; NULL when pool is NULL or out of memory. */
+pbw_ctx *pbw_pool_acquire(pbw_pool *pool);
+void pbw_pool_release(pbw_pool *pool, pbw_ctx *ctx);
+/* Idle contexts held now (for sizing/debugging, the printf side). */
+size_t pbw_pool_idle(const pbw_pool *pool);
 /* Bytes currently held in the context (for sizing/debugging). */
 size_t pbw_ctx_used(const pbw_ctx *ctx);
 

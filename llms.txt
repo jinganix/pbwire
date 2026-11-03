@@ -64,7 +64,9 @@ C++ runtime), `make bench`. Optional, needs a protobuf v36.2 source checkout:
   `pbw_free()`; `pbw_status pbw_decode(const pbw_descriptor *, const void *buf, size_t len,
   pbw_message **out)` -> `pbw_message_free()`.
 - `pbw_ctx *pbw_ctx_new(void)`: one arena + encode buffer per thread; `pbw_decode_ctx`,
-  `pbw_encode_ctx`, `pbw_ctx_reset` (frees the whole tree at once), `pbw_ctx_used`, `pbw_ctx_free`.
+  `pbw_encode_ctx`, `pbw_ctx_reset` (frees the whole tree at once), `pbw_ctx_used`, `pbw_ctx_free`,
+  `pbw_ctx_set_retain_cap` (resident budget across resets, default 1 MiB, 0 keeps nothing),
+  `pbw_pool_*` (bounded freelist: acquire/release/idle, one pool per worker, no locks).
 - `pbw_limits { max_bytes, max_depth }` (0 = default) with `pbw_decode_limits` and
   `pbw_decode_ctx_limits`; over-large `max_depth` clamps to `PBW_MAX_DEPTH`.
 - `pbw_encode_deterministic`: map entries sorted by key, everything else byte-identical to
@@ -100,7 +102,8 @@ C++ runtime), `make bench`. Optional, needs a protobuf v36.2 source checkout:
   and re-emitted after the known fields, in input order.
 - No globals and no thread-local state: confine a schema or message to one thread. `pbw_ctx` gives
   arena and encode-buffer reuse per thread; messages decoded through a context are read-only and
-  freed by `pbw_ctx_reset`.
+  freed by `pbw_ctx_reset`. `pbw_ctx_set_retain_cap` bounds the resident bytes without adding
+  shared state.
 - `tests/test_threads.c` is the multi-thread gate: shared linked schema reflection, one `pbw_ctx`
   per thread, plain per-message ownership, per-thread `pbw_descriptor_set_load()` of the same bytes
   (including the truncated-set error path), one shared loaded schema for decode/encode, and a

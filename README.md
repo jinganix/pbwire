@@ -259,6 +259,15 @@ no-op, and `pbw_ctx_reset` invalidates them. The plain functions share all the c
 every decoded tree its own arena, so a decode is still one `malloc`; `pbw_message_free` releases the
 whole tree and everything reachable from it.
 
+A context keeps at most `pbw_ctx_set_retain_cap` bytes resident across resets (1 MiB by default;
+single allocations above it bypass the reusable chunk and are freed on reset, so one outlier never
+pins the context). `0` keeps nothing. Pick a small cap for many-goroutine hosts, a larger one for a
+few scheduler threads.
+
+`pbw_pool` is a bounded freelist of contexts for short-lived workers: `pbw_pool_acquire` instead of
+`pbw_ctx_new`, `pbw_pool_release` instead of reset + free. One pool per worker thread (it holds no
+lock); `pbw_pool_idle` reports the idle count for your own logging.
+
 ### Stream, bound and sort
 
 Length-delimited framing (`varint length + message`) is the standard way to put messages on a
@@ -499,14 +508,15 @@ iterations, throughput in MB/s (higher is better):
 
 | payload | op | pbwire ctx (MB/s) | pbwire plain (MB/s) | protoc gen (MB/s) | DynamicMessage (MB/s) |
 |---|---|---|---|---|---|
-| 132 B | encode | 1832.2 | 1357.0 | 1688.7 | 111.2 |
-| 132 B | decode | 1420.4 | 974.5 | 921.3 | 298.9 |
-| 169 B | encode | 1698.6 | 1272.6 | 1789.5 | 105.8 |
-| 169 B | decode | 1095.1 | 839.1 | 810.0 | 272.1 |
-| 2755 B | encode | 1491.4 | 1448.0 | 1119.0 | 127.2 |
-| 2755 B | decode | 556.7 | 529.7 | 468.3 | 255.4 |
+| 132 B | encode | 1878.2 | 1369.0 | 1543.4 | 111.9 |
+| 132 B | decode | 1328.3 | 957.4 | 892.2 | 284.0 |
+| 169 B | encode | 1721.8 | 1209.9 | 1658.6 | 104.5 |
+| 169 B | decode | 1048.9 | 785.6 | 794.3 | 278.4 |
+| 2755 B | encode | 1500.1 | 1287.0 | 1107.0 | 130.6 |
+| 2755 B | decode | 548.3 | 531.8 | 440.2 | 255.3 |
 
 Throughput moves by a few percent between runs; the numbers above are one run.
+Regenerate both tables for the current machine with `scripts/perf.sh` (same layout, MB/s only).
 
 `make bench` also runs the 169-byte payload with 1 vs 8 threads (one context and one message per
 thread, the same read-only wire input) and prints MB/s per thread, aggregate MB/s, the per-operation
@@ -514,13 +524,13 @@ degradation and the aggregate speedup. Same machine (14 cores), from the same ru
 
 | op | pbwire 1thr (MB/s) | pbwire 8thr agg (MB/s) | gen 1thr (MB/s) | gen 8thr agg (MB/s) |
 |---|---|---|---|---|
-| encode | 1743.5 | 13574.4 | 1625.2 | 10929.2 |
-| decode | 1069.3 | 7924.9 | 686.1 | 5755.3 |
+| encode | 1732.0 | 13731.8 | 1646.7 | 10200.0 |
+| decode | 1091.3 | 6775.1 | 811.3 | 5890.3 |
 
 `8thr agg` is the total throughput of all eight threads. The schema, the descriptors and the wire
 input are shared by all threads; each thread only adds its own `pbw_ctx` and message. pbwire scales
-7.8x (encode) and 7.4x (decode) from 1 to 8 threads in that run; generated code reaches 6.7x and
-8.4x. Both are limited by cache and memory bandwidth, not by a lock: the library has no global or
+7.9x (encode) and 6.2x (decode) from 1 to 8 threads in that run; generated code reaches 6.2x and
+7.3x. Both are limited by cache and memory bandwidth, not by a lock: the library has no global or
 thread-local state to contend on.
 
 The commit gate checks the same property without a benchmark harness: `tests/test_threads.c` prints
@@ -528,8 +538,8 @@ The commit gate checks the same property without a benchmark harness: `tests/tes
 machine):
 
 ```
-scale ctx decode 1 thread: 3403.8 MB/s ( 57.0 ns/op) | 8 threads: 3412.6 MB/s/thread, 27301.1 MB/s aggregate (per-op 1.00x, aggregate 8.02x, 14 cores)
-scale ctx encode 1 thread: 6488.3 MB/s ( 29.9 ns/op) | 8 threads: 3877.1 MB/s/thread, 31017.1 MB/s aggregate (per-op 1.67x, aggregate 4.78x, 14 cores)
+scale ctx decode 1 thread: 3453.2 MB/s ( 56.2 ns/op) | 8 threads: 1975.2 MB/s/thread, 15801.3 MB/s aggregate (per-op 1.75x, aggregate 4.58x, 14 cores)
+scale ctx encode 1 thread: 6206.0 MB/s ( 31.3 ns/op) | 8 threads: 4528.8 MB/s/thread, 36230.5 MB/s aggregate (per-op 1.37x, aggregate 5.84x, 14 cores)
 ```
 
 It fails when the aggregate throughput collapses below 0.35x of `min(8, cores)`, which is what a
@@ -580,6 +590,8 @@ How the gap was closed, since `make bench` is the reason the numbers are trustwo
    `malloc` per field. The tree's arena struct, its first chunk and the tree itself are one block
    too, so plain `pbw_decode` is a single `malloc`.
 2. The `pbw_ctx` API reuses those arenas and the output buffer: `pbw_ctx_reset` is a pointer move.
+Oversized single allocations bypass the reusable chunk (freed on reset), and `pbw_ctx_set_retain_cap`
+bounds what a reset keeps, so steady workloads stop calling `malloc` without pinning outliers.
 3. Encoding computes no size pass: it writes into a growable buffer, puts a one-byte placeholder
    where a nested length goes and patches it afterwards (strings and bytes write their known length
    up front). Per-field tag bytes and the packed variant are precomputed at `pbw_schema_link()` and

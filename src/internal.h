@@ -44,10 +44,22 @@ typedef struct pbw_arena_chunk {
 
 typedef struct {
     pbw_arena_chunk *head;
+    /* Oversized single allocations (see PBW_ARENA_LARGE_THRESHOLD): one malloc
+     * each, freed on reset/free instead of pinning the reusable head chunk. */
+    pbw_arena_chunk *large;
+    /* Max head-chunk bytes kept across reset; 0 drops everything (plain-like
+     * churn, no retention). Set by pbw_ctx_set_retain_cap, defaults to
+     * PBW_ARENA_LARGE_THRESHOLD. */
+    size_t retain_cap;
     size_t chunk_size;
     int readonly; /* a context arena: messages decoded into it are read-only */
     void *block;  /* non-NULL: the arena and its first chunk share one malloc */
 } pbw_arena;
+
+/* Single allocations above this bypass the bump chunk (nginx-style large
+ * handling) and are freed on reset, so one outlier never pins the context.
+ * Matches the chunk-growth cap so steady reuse still converges. */
+#define PBW_ARENA_LARGE_THRESHOLD ((size_t)1 << 20)
 
 struct pbw_field {
     char *name;

@@ -2,6 +2,7 @@
  * dependencies. */
 
 #include "pbwire.h"
+#include "internal.h"
 
 #include <stdint.h>
 #include <stdio.h>
@@ -1478,6 +1479,161 @@ test_ctx(pbw_schema *schema)
     pbw_free(heap_bytes);
     pbw_message_free(msg);
     pbw_ctx_free(ctx);
+}
+
+/* Retain cap: an outlier must not pin the context, and cap 0 keeps nothing.
+ * Resident size is invisible to the public API, so this peeks at the arena
+ * head (a pbw_ctx starts with its pbw_arena). */
+static size_t
+test_head_cap(pbw_ctx *ctx)
+{
+    const pbw_arena *arena = (const pbw_arena *)(const void *)ctx;
+
+    return arena->head != NULL ? arena->head->cap : 0;
+}
+
+static void
+test_ctx_retain_cap(pbw_schema *schema)
+{
+    const pbw_descriptor *person = desc(schema, "Person");
+    pbw_ctx *ctx = pbw_ctx_new();
+    pbw_message *msg;
+    pbw_message *decoded = NULL;
+    uint8_t *big_wire = NULL;
+    size_t big_len = 0;
+    const uint8_t *out = NULL;
+    size_t out_len = 0;
+
+    CHECK(ctx != NULL);
+    msg = pbw_message_new(person);
+    CHECK(msg != NULL);
+    {
+        /* One 2 MiB string: a single allocation above the default budget. */
+        size_t n = (size_t)2 << 20;
+        char *blob = (char *)malloc(n);
+
+        CHECK(blob != NULL);
+        memset(blob, 'x', n - 1);
+        blob[n - 1] = '\0';
+        CHECK_OK(pbw_message_set(msg, 1, pbw_value_new_string(blob)));
+        free(blob);
+    }
+    CHECK_OK(pbw_encode(msg, &big_wire, &big_len));
+    pbw_message_free(msg);
+
+    /* Default budget: the outlier bypasses the reusable chunk, so reset
+     * leaves the head small instead of pinning 2 MiB. */
+    CHECK_STATUS(PBW_OK,
+                 pbw_decode_ctx(ctx, person, big_wire, big_len, &decoded));
+    CHECK(decoded != NULL);
+    CHECK(pbw_ctx_used(ctx) > ((size_t)2 << 20));
+    pbw_ctx_reset(ctx);
+    CHECK(test_head_cap(ctx) <= PBW_ARENA_LARGE_THRESHOLD);
+
+    /* A small budget drops even a 4 KiB head on reset, and decoding still
+     * works afterwards. */
+    pbw_ctx_set_retain_cap(ctx, 1024);
+    CHECK_STATUS(PBW_OK,
+                 pbw_decode_ctx(ctx, person, big_wire, big_len, &decoded));
+    pbw_ctx_reset(ctx);
+    CHECK(test_head_cap(ctx) <= 1024);
+    CHECK_STATUS(PBW_OK,
+                 pbw_decode_ctx(ctx, person, big_wire, big_len, &decoded));
+    CHECK(decoded != NULL);
+    CHECK(pbw_message_get(decoded, 1) != NULL);
+    pbw_ctx_reset(ctx);
+
+    /* Cap 0 keeps nothing but stays functional, for decode and encode. */
+    pbw_ctx_set_retain_cap(ctx, 0);
+    CHECK_STATUS(PBW_OK,
+                 pbw_decode_ctx(ctx, person, big_wire, big_len, &decoded));
+    CHECK(decoded != NULL);
+    CHECK(strlen(pbw_value_get_string(pbw_message_get(decoded, 1))) ==
+          ((size_t)2 << 20) - 1);
+    pbw_ctx_reset(ctx);
+    CHECK(test_head_cap(ctx) == 0);
+    msg = pbw_message_new(person);
+    CHECK(msg != NULL);
+    CHECK_OK(pbw_message_set(msg, 1, pbw_value_new_string("ok")));
+    CHECK_STATUS(PBW_OK, pbw_encode_ctx(ctx, msg, &out, &out_len));
+    CHECK(out_len > 0);
+    pbw_message_free(msg);
+
+    pbw_free(big_wire);
+    pbw_ctx_free(ctx);
+}
+
+static void
+test_ctx_pool(pbw_schema *schema)
+{
+    const pbw_descriptor *person = desc(schema, "Person");
+    pbw_pool *pool = pbw_pool_new(2, 0);
+    pbw_message *msg = pbw_message_new(person);
+    pbw_message *decoded = NULL;
+    uint8_t *wire = NULL;
+    size_t len = 0;
+    pbw_ctx *a;
+    pbw_ctx *b;
+    pbw_ctx *c;
+
+    CHECK(pool != NULL);
+    CHECK(pbw_pool_idle(pool) == 0);
+    CHECK_OK(pbw_message_set(msg, 1, pbw_value_new_string("pooled")));
+    CHECK_OK(pbw_encode(msg, &wire, &len));
+    pbw_message_free(msg);
+
+    /* acquire gives distinct contexts; release resets, so reuse needs no
+     * reset and the idle count is observable instead of printed. */
+    a = pbw_pool_acquire(pool);
+    b = pbw_pool_acquire(pool);
+    CHECK(a != NULL && b != NULL && a != b);
+    CHECK(pbw_pool_idle(pool) == 0);
+    CHECK_STATUS(PBW_OK, pbw_decode_ctx(a, person, wire, len, &decoded));
+    CHECK(decoded != NULL);
+    pbw_pool_release(pool, a);
+    CHECK(pbw_pool_idle(pool) == 1);
+    c = pbw_pool_acquire(pool);
+    CHECK(c == a); /* freelist reuse, already reset */
+    CHECK_STATUS(PBW_OK, pbw_decode_ctx(c, person, wire, len, &decoded));
+    CHECK(decoded != NULL);
+    CHECK(strcmp(pbw_value_get_string(pbw_message_get(decoded, 1)),
+                 "pooled") == 0);
+
+    /* releases past max_idle are freed, not kept */
+    pbw_pool_release(pool, b);
+    pbw_pool_release(pool, c);
+    CHECK(pbw_pool_idle(pool) == 2);
+    a = pbw_pool_acquire(pool);
+    b = pbw_pool_acquire(pool);
+    c = pbw_pool_acquire(pool); /* pool empty: fresh context */
+    CHECK(a != NULL && b != NULL && c != NULL);
+    pbw_pool_release(pool, a);
+    pbw_pool_release(pool, b);
+    pbw_pool_release(pool, c);
+    CHECK(pbw_pool_idle(pool) == 2);
+
+    /* NULL-safe, and max_idle 0 degenerates to new/free */
+    CHECK(pbw_pool_acquire(NULL) == NULL);
+    CHECK(pbw_pool_idle(NULL) == 0);
+    pbw_pool_release(NULL, NULL);
+    pbw_pool_release(pool, NULL);
+    {
+        pbw_pool *none = pbw_pool_new(0, 0);
+        pbw_ctx *one;
+
+        CHECK(none != NULL);
+        one = pbw_pool_acquire(none);
+        CHECK(one != NULL);
+        CHECK_STATUS(PBW_OK,
+                     pbw_decode_ctx(one, person, wire, len, &decoded));
+        pbw_pool_release(none, one);
+        CHECK(pbw_pool_idle(none) == 0);
+        pbw_pool_free(none);
+    }
+
+    pbw_free(wire);
+    pbw_pool_free(pool);
+    pbw_pool_free(NULL);
 }
 
 static void
@@ -3057,6 +3213,8 @@ main(void)
     test_large_payloads(schema);
     test_length_patch_boundaries(schema);
     test_ctx(schema);
+    test_ctx_retain_cap(schema);
+    test_ctx_pool(schema);
     test_errors(schema);
     test_depth_limit(schema);
     test_enum(schema);
