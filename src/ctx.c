@@ -71,10 +71,12 @@ pbw_decode_ctx_limits(pbw_ctx *ctx, const pbw_descriptor *desc,
     if (ctx == NULL) {
         return PBW_ERR_INVALID;
     }
+    if (out == NULL) {
+        return PBW_ERR_INVALID;
+    }
+    /* Every failure below leaves NULL: callers can rely on *out alone. */
+    *out = NULL;
     if (limits != NULL && limits->max_bytes > 0 && len > limits->max_bytes) {
-        if (out != NULL) {
-            *out = NULL;
-        }
         return PBW_ERR_LIMIT;
     }
     return pbw_decode_arena_lim(&ctx->arena, desc, buf, len,

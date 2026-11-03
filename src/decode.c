@@ -684,8 +684,9 @@ pbw_decode_limits(const pbw_descriptor *desc, const void *buf, size_t len,
     if (desc == NULL || out == NULL || (buf == NULL && len > 0)) {
         return PBW_ERR_INVALID;
     }
+    /* Every failure below leaves NULL: callers can rely on *out alone. */
+    *out = NULL;
     if (limits != NULL && limits->max_bytes > 0 && len > limits->max_bytes) {
-        *out = NULL;
         return PBW_ERR_LIMIT;
     }
     arena = pbw_arena_new_packed(len <= 4096 ? len * 6 + 1024
