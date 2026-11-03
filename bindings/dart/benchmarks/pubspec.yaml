@@ -1,0 +1,14 @@
+name: pbwire_bench
+description: pbwire Dart binding benchmark against the protobuf Dart runtime.
+version: 0.1.0
+publish_to: none
+
+environment:
+  sdk: ^3.0.0
+
+dependencies:
+  pbwire:
+    path: ..
+  protobuf: ^6.1.0
+  # protobuf models int64 as Int64; the harness fills those fields directly.
+  fixnum: ^1.1.0

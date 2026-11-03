@@ -184,6 +184,17 @@ pbw_buf_init(pbw_buf *buf)
     buf->len = 0;
     buf->cap = 0;
     buf->oom = 0;
+    buf->fixed = 0;
+}
+
+void
+pbw_buf_init_fixed(pbw_buf *buf, void *data, size_t cap)
+{
+    buf->data = (uint8_t *)data;
+    buf->len = 0;
+    buf->cap = cap;
+    buf->oom = 0;
+    buf->fixed = 1;
 }
 
 void
@@ -211,6 +222,11 @@ pbw_buf_reserve(pbw_buf *buf, size_t extra)
     }
     if (need <= buf->cap) {
         return 1;
+    }
+    if (buf->fixed) {
+        /* Caller memory: report the overflow as "does not fit". */
+        buf->oom = 1;
+        return 0;
     }
     cap = buf->cap ? buf->cap : 64;
     while (cap < need) {

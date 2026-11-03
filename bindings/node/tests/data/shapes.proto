@@ -1,0 +1,46 @@
+// Fixture for the Node.js binding self-check: the shapes the lazy wire view has
+// to match the tree decoder on — oneof (scalar, string and message members),
+// packed and unpacked repeated scalars, repeated enums, proto3 optional, and a
+// repeated submessage. Regenerate the descriptor set with:
+//   protoc -Ibindings/node/tests/data --descriptor_set_out=\
+//       bindings/node/tests/data/shapes.desc bindings/node/tests/data/shapes.proto
+syntax = "proto3";
+
+package shapes;
+
+enum Kind {
+  KIND_UNSPECIFIED = 0;
+  KIND_A = 1;
+  KIND_B = 2;
+}
+
+message Leaf {
+  int32 n = 1;
+}
+
+// Recursive on purpose: caps nesting for both directions (test_pbwire.js builds
+// a too-deep payload by hand).
+message Node {
+  Node next = 1;
+  int32 n = 2;
+}
+
+// A message holding one with a oneof inside: reading a nested oneof must yield
+// only its live member, like the tree decoder does.
+message Wrap {
+  One one = 1;
+  Leaf leaf = 2;
+}
+
+message One {
+  repeated int32 packed_nums = 1;
+  repeated int32 loose_nums = 2 [packed = false];
+  repeated Kind kinds = 3;
+  optional int32 maybe = 4;
+  repeated Leaf leaves = 5;
+  oneof pick {
+    int32 num = 10;
+    string text = 11;
+    Leaf leaf = 12;
+  }
+}

@@ -20,7 +20,6 @@
 #define PBW_PREFETCH(p) ((void)0)
 #endif
 
-#define PBW_MAX_DEPTH 256               /* 100 in the reference impls; 256 for the Erlang binding's 200-deep round-trips (conformance tests 20000, still rejected) */
 #define PBW_MAX_FIELD_NUMBER 536870911u /* 2^29 - 1 */
 #define PBW_FNUM_MAP_LIMIT 512
 
@@ -37,6 +36,9 @@ typedef struct {
     size_t len;
     size_t cap;
     int oom;
+    /* Caller-owned memory (pbw_encode_to): growing is impossible, so a write
+     * that does not fit fails the encode instead of reallocating. */
+    int fixed;
 } pbw_buf;
 
 /* Bump allocator. Everything a caller decodes with a pbw_ctx lives in one of
@@ -245,6 +247,9 @@ int pbw_tag_read(const uint8_t *p, const uint8_t *end, uint32_t *tag,
 int pbw_len_read(const uint8_t *p, const uint8_t *end, size_t *len,
                  size_t *used);
 void pbw_buf_init(pbw_buf *buf);
+/* Wrap caller memory: reserve never reallocates, it fails once the buffer is
+ * full. The memory stays the caller's. */
+void pbw_buf_init_fixed(pbw_buf *buf, void *data, size_t cap);
 void pbw_buf_free(pbw_buf *buf);
 /* Grows buf so that `extra` more bytes fit; capacity survives across calls. */
 int pbw_buf_reserve(pbw_buf *buf, size_t extra);

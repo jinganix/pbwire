@@ -160,6 +160,11 @@ pbw_status pbw_descriptor_set_load(const void *data, size_t len,
 
 const char *pbw_descriptor_name(const pbw_descriptor *desc);
 int pbw_descriptor_is_enum(const pbw_descriptor *desc);
+/* 1 for proto3/editions semantics (open enums, no `required` fields), 0 for
+ * proto2 syntax. Decides whether an unknown enum number stays in the field or
+ * moves to the unknown fields, so a decoder that materializes values itself
+ * needs it to match the reference parsers. */
+int pbw_descriptor_is_proto3(const pbw_descriptor *desc);
 size_t pbw_descriptor_field_count(const pbw_descriptor *desc);
 const pbw_field *pbw_descriptor_field_at(const pbw_descriptor *desc,
                                          size_t index);
@@ -186,6 +191,10 @@ const pbw_descriptor *pbw_field_message_type(const pbw_field *field);
 pbw_message *pbw_message_new(const pbw_descriptor *desc);
 void pbw_message_free(pbw_message *msg);
 const pbw_descriptor *pbw_message_descriptor(const pbw_message *msg);
+/* Wire length this tree was decoded from, 0 when it was built by hand. A
+ * buffer-size hint that needs no invalidation: mutation makes it an
+ * underestimate, which the encoder handles by growing. */
+size_t pbw_message_wire_size(const pbw_message *msg);
 
 /* Present value of a field, or NULL. Repeated fields expose a PBW_VALUE_LIST.
  */
@@ -385,6 +394,13 @@ pbw_status pbw_json_parse(const pbw_descriptor *desc, const char *text,
                           size_t len, pbw_message **out);
 
 pbw_status pbw_encode(const pbw_message *msg, uint8_t **out, size_t *len);
+/* Encode into caller memory of `cap` bytes, so a binding can write straight
+ * into its own buffer. No allocation happens and nothing is freed; `cap` is
+ * the hard limit and the writer over-reserves up to 10 bytes per write, so
+ * leave a few bytes of slack when the exact size is known. *len is the bytes
+ * written. PBW_ERR_LIMIT when the message does not fit. */
+pbw_status pbw_encode_to(const pbw_message *msg, void *out, size_t cap,
+                         size_t *len);
 /* Decode buf into a new message of the given type. Unknown fields are kept.
  *
  * The returned tree is one allocation: pbw_message_free() on the root releases
@@ -396,6 +412,12 @@ pbw_status pbw_decode(const pbw_descriptor *desc, const void *buf, size_t len,
                       pbw_message **out);
 
 /* ------------------------------------------------------------------ limits */
+
+/* Nesting cap the decoder enforces (100 in the reference implementations; 256
+ * here for the Erlang binding's 200-deep round-trips, which still rejects
+ * conformance test 20000). A decoder that walks wire bytes itself must use the
+ * same bound. */
+#define PBW_MAX_DEPTH 256
 
 /* Bounds for untrusted input. Zero fields mean the defaults: no byte cap and
  * PBW_MAX_DEPTH nesting. A max_depth above PBW_MAX_DEPTH is clamped to it. */

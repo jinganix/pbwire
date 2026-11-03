@@ -29,6 +29,24 @@ anything else:
   load `protoc --descriptor_set_out` bytes at run time; the C struct entry
   points also validate the generated layout against that schema. Go needs no
   descriptor at run time: its generated code is the complete schema.
+- **FFI hosts get the descriptor set and nothing else.** Java, Node and
+  Objective-C call the C ABI directly and load a `FileDescriptorSet` at run
+  time, so none of them carries a plugin, generated code or a second wire
+  implementation. The C core owns the format; the binding owns the ergonomics.
+  This is also the cheapest way to add a language.
+- **Ruby is a C extension, not an FFI host.** It links the core statically and
+  loads a `FileDescriptorSet` at run time like Java/Node/Objective-C, but the
+  message conversion happens in C: a builder tree for mutation and encoding, and
+  a validating wire scan that materializes fields lazily for decoding. That is
+  what removes the per-call boundary cost that made the Fiddle version lose.
+- **Languages whose toolchain can call C get the descriptor set, not a plugin.**
+  PHP (`ext-ffi`), Dart (`dart:ffi`) and C# (P/Invoke) are one class with Java,
+  Node and Objective-C: load the `FileDescriptorSet`, call the C ABI, own no
+  wire code. Rust links `libpbwire.a` in statically instead of `dlopen`-ing it,
+  which makes the result a single self-contained binary.
+- **Kotlin needs no separate layer.** Kotlin runs on the JVM, so it uses the
+  Java binding's FFM downcalls and adds only the DSL that official Kotlin support
+  is (protoc `--kotlin_out` generates Kotlin over protobuf-java).
 - **Erlang needs neither.** gpb already is that plugin: `gpb_compile` /
   `protoc-erl` generates the record definitions plus `get_msg_defs/0`, and
   `enif_protobuf:load_cache/1` consumes exactly that. Adding a second
@@ -43,6 +61,15 @@ anything else:
 | Python | `pbwire.Schema.from_file/load` on a `FileDescriptorSet` | ✅ | the extension is compiled but the schema is always loaded; `decode()` returns a parsed message, `to_dict()`/`encode(dict)` are the dict path |
 | Go | `protoc-gen-pbwire-go` at build time: structs + straight-line size/encode/decode (`bindings/go/plugin`) | ✅ | no cgo, no descriptor at run time; maps/oneofs/groups/extensions rejected |
 | Erlang | `gpb_compile` → records + `get_msg_defs/0` → `enif_protobuf:load_cache/1` | ✅ | gpb is the plugin, epb needs no descriptor path |
+| Java | `FileDescriptorSet` at run time, `java.lang.foreign` downcalls (JDK 22+) | ✅ | no JNI, no C glue, no generator |
+| Ruby | `FileDescriptorSet` at run time, a C extension linked against the core | ✅ | no gems, no generator; binary-only conformance testee |
+| Node | `FileDescriptorSet` at run time, hand-written N-API addon | ✅ | no npm deps, node headers only |
+| Objective-C | `FileDescriptorSet` at run time, ARC wrapper over the C API | ✅ | Foundation only, no codegen |
+| Kotlin | the Java binding's runtime: `FileDescriptorSet` at run time, one FFM layer for both | ✅ | four DSL helpers, no second FFI layer |
+| PHP | `Pbwire\Schema::fromFile` on a `FileDescriptorSet`, `ext-ffi` | ✅ | no C extension, no composer |
+| Dart | `Schema.load` on a `FileDescriptorSet`, `dart:ffi` | ✅ | `package:ffi` only (malloc, strings) |
+| Rust | `Schema::from_file` on a `FileDescriptorSet`, core linked in statically | ✅ | no bindgen, no external crate |
+| C# | `Schema.FromFile` on a `FileDescriptorSet`, P/Invoke + `DllImportResolver` | ✅ | no packages in the binding project |
 
 Compiler-level code generation is never hand-written: C's layout tables and
 Go's codecs both come from the same descriptor `protoc` parsed, so field

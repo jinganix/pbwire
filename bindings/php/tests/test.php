@@ -1,0 +1,192 @@
+<?php
+
+declare(strict_types=1);
+
+/*
+ * Self-check against the pinned protoc bytes: build structtest.Scalars3 from
+ * bindings/c/tests/data/matrix3.txt, encode, compare with matrix3.bin (the same
+ * oracle the C binding uses), then decode it back and check the values.
+ *
+ *   php tests/test.php [descriptor-set] [wire-bytes]
+ */
+
+require __DIR__ . '/../runtime/pbwire.php';
+
+use Pbwire\Error;
+use Pbwire\Schema;
+
+$data = dirname(__DIR__, 2) . '/c/tests/data';
+$desc = $argv[1] ?? "$data/matrix3.desc";
+$wire = fopen($argv[2] ?? "$data/matrix3.bin", 'rb');
+
+if ($wire === false) {
+    fwrite(STDERR, "cannot read the oracle bytes\n");
+    exit(2);
+}
+
+$oracle = stream_get_contents($wire);
+$schema = Schema::fromFile($desc);
+$ty = $schema->message('structtest.Scalars3');
+$innerTy = $schema->message('structtest.Inner3');
+$checks = 0;
+
+function check(bool $ok, string $what): void
+{
+    global $checks;
+
+    $checks++;
+
+    if (!$ok) {
+        fwrite(STDERR, "FAIL $what\n");
+        exit(1);
+    }
+}
+
+$msg = $ty->newMessage();
+$msg->setInt('i32', -2147483648)
+    ->setInt('i64', PHP_INT_MAX)
+    ->setInt('u32', 4294967295)
+    ->setInt('u64', -1) /* u64::MAX bits */
+    ->setInt('s32', -2147483648)
+    ->setInt('s64', PHP_INT_MIN)
+    ->setInt('fx32', 0xdeadbeef)
+    ->setInt('fx64', 72623859790382856)
+    ->setInt('sfx32', -2147483648)
+    ->setInt('sfx64', PHP_INT_MIN)
+    ->setFloat('f32', INF)
+    ->setDouble('f64', -123456.789)
+    ->setBool('flag', true)
+    ->setString('str', 'hello')
+    ->setInt('color', 2)
+    ->setInt('opt_i32', -7)
+    ->setString('opt_str', 'opt');
+
+foreach ([1, -5, 300] as $value) {
+    $msg->setInt('nums', $value);
+}
+foreach (['a', 'bb'] as $tag) {
+    $msg->setString('tags', $tag);
+}
+foreach ([['x', 1], ['y', -2]] as [$name, $value]) {
+    $msg->setMessage('inners')->setString($innerTy->field('name'), $name)->setInt('value', $value);
+}
+foreach ([true, false, true] as $flag) {
+    $msg->setBool('flags', $flag);
+}
+$msg->setMessage('inner')->setString('name', 'kid')->setInt('value', 42);
+
+$encoded = $msg->encode();
+check($encoded === $oracle, 'encoded bytes differ from protoc (' . strlen($encoded) . ' vs ' . strlen($oracle) . ')');
+echo 'OK   encode matches protoc, ' . strlen($oracle) . " bytes\n";
+
+$decoded = $ty->decode($oracle);
+check($decoded->getInt('i32') === -2147483648, 'i32');
+check($decoded->getBool('flag') === true, 'flag');
+check($decoded->getString('str') === 'hello', 'str');
+check(abs($decoded->getDouble('f64') + 123456.789) < 1e-9, 'f64');
+check($decoded->getInt('color') === 2, 'color');
+check($decoded->getInt('opt_i32') === -7, 'opt_i32');
+check($decoded->has('opt_str') && !$ty->newMessage()->has('i32'), 'presence');
+check($decoded->count('nums') === 3, 'nums count');
+check($decoded->at('nums', 1)?->asInt() === -5, 'nums[1]');
+check($decoded->at('tags', 1)?->asString() === 'bb', 'tags[1]');
+check($decoded->at('inners', 1)?->asMessage()?->getInt('value') === -2, 'inners[1].value');
+check($decoded->at('flags', 1)?->asBool() === false, 'flags[1]');
+check($decoded->getMessage('inner')?->getString('name') === 'kid', 'inner.name');
+check($decoded->encode() === $oracle, 'decode -> encode is byte-exact');
+echo "OK   decode round trip, repeated and nested fields\n";
+
+/* A field the schema does not declare (99, varint 7) survives re-encoding. */
+$unknown = "\x98\x06\x07";
+$innerOnly = $innerTy->decode($unknown);
+check($innerOnly->encode() === $unknown, 'unknown field preserved');
+
+/* Bad input is an error, not a crash. */
+try {
+    $ty->decode("\x80");
+    check(false, 'truncated tag accepted');
+} catch (Error) {
+    check(true, 'truncated tag');
+}
+
+try {
+    $schema->message('structtest.Nope');
+    check(false, 'unknown message accepted');
+} catch (Error) {
+    check(true, 'unknown message');
+}
+
+try {
+    $ty->field('nope');
+    check(false, 'unknown field accepted');
+} catch (Error) {
+    check(true, 'unknown field');
+}
+
+echo "OK   $checks checks passed\n";
+
+/* ------------------------------------------------------------------ edge cases */
+
+/*
+ * The cases a binding can get wrong even when the core is right: payloads with
+ * embedded NULs / invalid UTF-8, non-ASCII text, a negative enum, an empty
+ * repeated element, proto3 optional presence with an empty value, and oneof
+ * switching. tests/data/edge.bin is protoc --encode.
+ */
+$root = dirname(__DIR__, 3);
+$edgeOracle = file_get_contents("$root/tests/data/edge.bin");
+$edgeSchema = Schema::fromFile("$root/tests/data/edge.desc");
+$edgeTy = $edgeSchema->message('edge.Edge');
+$edgeInner = $edgeSchema->message('edge.Inner');
+
+$edge = $edgeTy->newMessage();
+$edge->setBytes('raw', "\x00\x01\xff")
+    ->setString('text', 'héllo ☃')
+    ->setInt('sign', -3)
+    ->setString('maybe', '')
+    ->setInt('pick_num', 5) /* oneof: replaced below */
+    ->setString('pick_str', 'one');
+foreach (['a', '', 'b'] as $tag) {
+    $edge->setString('tags', $tag);
+}
+$edge->setBytes('blobs', "\x00");
+$edge->setBytes('blobs', '');
+$edge->setMessage('inner')->setString('tag', 'kid')->setInt('n', -1);
+
+check($edge->encode() === $edgeOracle, 'edge payload differs from protoc');
+$edgeDecoded = $edgeTy->decode($edgeOracle);
+check($edgeDecoded->getBytes('raw') === "\x00\x01\xff", 'bytes with NUL and 0xff');
+check($edgeDecoded->getString('text') === 'héllo ☃', 'non-ASCII string');
+check($edgeDecoded->getInt('sign') === -3, 'negative enum');
+check($edgeDecoded->count('tags') === 3, 'empty repeated element count');
+check($edgeDecoded->at('tags', 1)?->asString() === '', 'empty repeated element');
+check($edgeDecoded->at('blobs', 0)?->asBytes() === "\x00", 'bytes element with NUL');
+check($edgeDecoded->at('blobs', 1)?->asBytes() === '', 'empty bytes element');
+check($edgeDecoded->getMessage('inner')?->getInt('n') === -1, 'nested negative');
+check($edgeDecoded->has('maybe') && $edgeDecoded->getString('maybe') === '', 'optional present and empty');
+check($edgeDecoded->has('pick_str') && !$edgeDecoded->has('pick_num'), 'oneof keeps only the last member');
+check($edgeDecoded->encode() === $edgeOracle, 'edge decode -> encode is byte-exact');
+echo "OK   edge payload: bytes, UTF-8, negative enum, empty elements, oneof\n";
+
+/* A default message is zero bytes both ways. */
+check($edgeTy->newMessage()->encode() === '', 'empty message encodes to zero bytes');
+$emptyDecoded = $edgeTy->decode('');
+check($emptyDecoded->encode() === '', 'empty wire decodes and re-encodes to zero bytes');
+check(!$emptyDecoded->has('text'), 'empty message has no fields');
+
+/* A wrong value kind is refused, not written. */
+try {
+    $edgeTy->newMessage()->setString('pick_num', 'not a number');
+    check(false, 'wrong-typed value accepted');
+} catch (Error $e) {
+    check(str_contains($e->getMessage(), 'type mismatch'), 'wrong-typed value rejected');
+}
+
+try {
+    $edgeTy->newMessage()->setMessage('text');
+    check(false, 'setMessage on a scalar accepted');
+} catch (Error $e) {
+    check(str_contains($e->getMessage(), 'not a message field'), 'setMessage on a scalar rejected');
+}
+
+echo "OK   $checks checks passed\n";

@@ -24,6 +24,15 @@ make python-test   # Python binding self-check (pinned protoc bytes as oracle)
 make python-bench  # Python binding vs google.protobuf on the four standard tiers
 make erlang-bench  # gpb, gpb NIF and enif_protobuf
 make test-cpp      # C++ binding self-check (C++17, no protobuf needed)
+make java-bench    # Java FFM binding vs protobuf-java on the four standard tiers
+make node-bench    # Node N-API addon vs google-protobuf (jspb)
+make ruby-bench    # Ruby C extension vs the google-protobuf gem
+make objc-bench    # Objective-C binding vs the protobuf ObjC runtime (needs the checkout)
+make kotlin-bench  # Kotlin binding vs protoc --kotlin_out over protobuf-java
+make php-bench     # PHP binding vs the official PHP runtime (needs the checkout)
+make dart-bench    # Dart binding vs the protobuf Dart package (needs protoc-gen-dart)
+make rust-bench    # Rust binding vs rust-protobuf (needs protoc-gen-rs)
+make csharp-bench  # C# binding vs Google.Protobuf (NuGet restore)
 make conformance-python  # official suite through the Python binding
 
 # Official conformance suite (binary wire format). Needs the cached reference
@@ -39,7 +48,8 @@ cmake -B build-cmake -DPBW_BUILD_PROTOC=ON && cmake --build build-cmake
 ```
 
 Run `make test` after any C change; run `make format` after touching `include/`, `src/`, `tests/`,
-`bench/` or `conformance/`. Run `make python-test` after touching `bindings/python`, and refresh
+`bench/` or `conformance/`. Run `make python-test` after touching `bindings/python`, `make ruby-test`
+after touching `bindings/ruby`, and refresh
 `BENCHMARKS.md` after changing anything on the encode/decode hot path.
 
 ## Layout
@@ -76,6 +86,7 @@ Run `make test` after any C change; run `make format` after touching `include/`,
 | `BENCHMARKS.md` | the four standard payload tiers, every binding vs its baseline, cross-binding table |
 | `bindings/c/` | C binding: direct struct codec (`runtime/pbw_struct.c`, layout tables carry the wire facts), `protoc-gen-pbwire-c` (`plugin/`), `examples/`, `tests/`, `benchmarks/`, `conformance/` |
 | `bindings/python/` | Python binding: CPython extension (`runtime/pbwire.c`, dict<->wire in C), `examples/`, `tests/`, `benchmarks/`, `conformance/` (official runner testee) |
+| `bindings/ruby/` | Ruby binding: a C extension over the core (`ext/pbwire_ext`, builder tree + lazy wire view), `lib/`, `examples/`, `test/`, `benchmarks/`, `conformance/` (official runner testee) |
 | `bindings/go/` | `protoc-gen-pbwire-go` (`plugin/`) + generated struct codecs over the dependency-free `runtime/`, `tests/`, `examples/`, `benchmarks/`, `conformance/` |
 | `bindings/cpp/` | C++ binding over the shared C runtime: `examples/`, `tests/`, `benchmarks/`, `conformance/` |
 | `bindings/erlang/` | Erlang/OTP NIF binding with its own AGENTS.md |
@@ -87,10 +98,11 @@ Run `make test` after any C change; run `make format` after touching `include/`,
 
 This decides how a binding gets its schema, and it is not negotiable:
 
-1. **Ahead-of-time compiled languages load the descriptor set.** C, C++ and Go
-   have no way to bake a dynamic schema into the binary, so every binding loads
-   a `FileDescriptorSet` (`protoc --descriptor_set_out`) at runtime and drives
-   field lookup, wire types and presence from it. A hand-built schema in a
+1. **Ahead-of-time compiled languages load the descriptor set.** C, C++, Rust
+   and C# have no way to bake a dynamic schema into the binary, so every binding
+   loads a `FileDescriptorSet` (`protoc --descriptor_set_out`) at runtime and
+   drives field lookup, wire types and presence from it. Go is the one exception
+   in kind: its plugin emits straight-line codecs, which are the schema. A hand-built schema in a
    compiled binding is a bug: it cannot express what a real `.proto` can, and
    it silently diverges from the descriptor every other binding uses.
 2. **Languages that load code at runtime get a plugin.** The plugin turns

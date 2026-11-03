@@ -151,8 +151,17 @@ make python-bench # Python binding benchmark vs google.protobuf (needs protobuf)
 make go-test      # Go binding: generated-code tests + plugin golden tests (needs Go)
 make go-bench     # Go binding benchmark vs google.golang.org/protobuf (adds protoc-gen-go)
 make erlang-bench # Erlang binding: gpb, gpb NIF and enif_protobuf
+make java-bench   # Java binding vs protobuf-java (fetches the jar from Maven once)
+make node-bench   # Node binding vs google-protobuf (jspb)
+make ruby-bench   # Ruby binding vs the google-protobuf gem (`RUBY=...` to pick it)
+make objc-bench   # Objective-C binding vs the protobuf ObjC runtime
+make java-test    # Java binding self-check (JDK 22+, no JNI)
+make ruby-test    # Ruby binding self-check (C extension)
+make node-test    # Node binding self-check (N-API addon, no npm)
+make objc-test    # Objective-C binding self-check (ARC, Foundation)
 make conformance-setup  # once: shallow-clone pinned protobuf + build runner (kept in .tmp/, git-ignored)
 make conformance  # official binary/text/JSON conformance suite (reuses the cached checkout)
+make conformance-ruby    # official binary suite through the Ruby binding
 ```
 
 ## Quick start
@@ -382,6 +391,10 @@ bindings/cpp/               C++ binding: examples/, tests/, benchmarks/ over the
 bindings/python/            CPython extension: runtime/, examples/, tests/, benchmarks/, conformance/
 bindings/go/               protoc-gen-pbwire-go + generated codecs (no cgo), runtime/, tests/, examples/, benchmarks/, conformance/
 bindings/erlang/           Erlang/OTP NIF: c_src/ (runtime), examples/, test/, benchmarks/, conformance/
+bindings/java/             Java: java.lang.foreign over the C ABI, runtime/, examples/, tests/ (no JNI)
+bindings/ruby/             Ruby: a C extension over the core, ext/, lib/, examples/, test/, benchmarks/, conformance/ (no gems)
+bindings/node/             Node: N-API addon over the C ABI, lib/, examples/, test/ (no npm deps)
+bindings/objc/             Objective-C: ARC wrapper over the C ABI, examples/, tests/ (Foundation only)
 
 include/pbwire-protoc/      importer / descriptor set / diagnostic headers (no protobuf types)
 src/protoc/importer.cc      .proto -> FileDescriptorSet, via compiler::Importer
@@ -677,17 +690,24 @@ reference, strict parser parity including extensions, groups, `Any` and unknown 
 JSON yes (`pbw_json_print` / `pbw_json_parse`, same verdicts as the reference parser on 40,000
 mutated inputs, all well-known types, extensions as `[full.name]`, strict base64 and number rules).
 
-### Can I use it from Python, Erlang, Go or Rust?
+### Can I use it from Python, Erlang, Go, Java, Ruby, Node, Objective-C, Kotlin, PHP, Dart, Rust or C#?
 
 Yes — that is the intended use. `bindings/` holds the C struct engine with its `protoc` plugin, a
 CPython extension for Python (schema from a `FileDescriptorSet` at runtime, dict↔wire in C, and a
 `decode()` that returns a parsed message, no generated Python), an Erlang/OTP NIF, and a Go binding
 whose `protoc-gen-pbwire-go` plugin emits plain structs with straight-line codecs (no cgo, no
-runtime dependency), each with a round-trip test. Every binding also carries a benchmark against its official counterpart -- `protoc` C++,
-`google.protobuf` and `google.golang.org/protobuf` (see [BENCHMARKS.md](BENCHMARKS.md)). The C
+runtime dependency), each with a round-trip test. Three thinner bindings drive the same C ABI
+directly and load their schema from a `FileDescriptorSet` at run time, with no generator and no
+code generation: Java (`java.lang.foreign`, no JNI), Node (a hand-written N-API addon, headers ship
+with node), Objective-C (ARC + Foundation), PHP (`ext-ffi`), Dart (`dart:ffi`) and C# (`DllImport`
+plus a resolver). Rust links the archive in statically and exposes a safe wrapper, Kotlin reuses
+the Java FFM layer (official Kotlin is also just Kotlin over protobuf-java), and Ruby is a small C
+extension over the same core (also schema-at-runtime, no FFI boundary, no gem). Every binding also carries a benchmark against its official counterpart -- `protoc` C++,
+`google.protobuf`, `google.golang.org/protobuf`, `protobuf-java`/`protobuf-kotlin`, `protobuf` for
+PHP, Dart, Rust and C# (see [BENCHMARKS.md](BENCHMARKS.md)). The C
 bindings check `PBW_ABI_VERSION` at load time, so a library built from a newer, incompatible tree
 fails fast instead of corrupting memory. The C ABI is the product; richer host bindings live on
-top of it.
+top of it, and every language the official `protoc` supports now has one.
 
 ### Is it thread-safe?
 

@@ -114,6 +114,12 @@ pbw_message_descriptor(const pbw_message *msg)
     return msg == NULL ? NULL : msg->desc;
 }
 
+size_t
+pbw_message_wire_size(const pbw_message *msg)
+{
+    return msg == NULL ? 0 : msg->wire_len;
+}
+
 int
 pbw_message_add_unknown(pbw_message *msg, const uint8_t *data, size_t len)
 {

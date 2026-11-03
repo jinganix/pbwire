@@ -1,0 +1,24 @@
+// Fixture for the Node.js binding self-check: one of each shape the addon
+// translates (scalar, 64-bit, bytes, nested, repeated scalar, repeated
+// message). Regenerate the descriptor set with:
+//   protoc -Ibindings/node/tests/data --descriptor_set_out=\
+//       bindings/node/tests/data/demo.desc bindings/node/tests/data/demo.proto
+syntax = "proto3";
+
+package demo;
+
+message Inner {
+  int32 x = 1;
+  string tag = 2;
+}
+
+message Person {
+  string name = 1;
+  int32 id = 2;
+  bool active = 3;
+  bytes blob = 4;
+  int64 big = 5;
+  Inner inner = 6;
+  repeated int32 nums = 7;
+  repeated Inner kids = 8;
+}

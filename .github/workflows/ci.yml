@@ -63,6 +63,17 @@ jobs:
       - name: Generated-code, runtime and plugin tests
         run: make go-test
 
+  ruby:
+    name: Ruby binding
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.4'
+      - name: Build the extension and run the self-check
+        run: make ruby-test
+
   erlang:
     name: Erlang binding (OTP 29 on ${{ matrix.os }})
     runs-on: ${{ matrix.os }}

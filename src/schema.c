@@ -612,6 +612,12 @@ pbw_descriptor_is_enum(const pbw_descriptor *desc)
     return desc != NULL && desc->is_enum;
 }
 
+int
+pbw_descriptor_is_proto3(const pbw_descriptor *desc)
+{
+    return desc != NULL && desc->proto3;
+}
+
 size_t
 pbw_descriptor_field_count(const pbw_descriptor *desc)
 {

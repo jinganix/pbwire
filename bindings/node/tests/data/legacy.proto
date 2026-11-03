@@ -1,0 +1,29 @@
+// Fixture for the Node.js binding self-check: proto2 semantics. `Legacy` has a
+// closed enum and a group and stays on the lazy wire view; `Strict` reaches a
+// `required` field, so it exercises the eager (tree) decode path and its
+// required-field validation. Regenerate the descriptor set with:
+//   protoc -Ibindings/node/tests/data --descriptor_set_out=\
+//       bindings/node/tests/data/legacy.desc bindings/node/tests/data/legacy.proto
+syntax = "proto2";
+
+package legacy;
+
+enum Color {
+  RED = 0;
+  GREEN = 1;
+}
+
+message Legacy {
+  optional Color color = 1;
+  repeated Color colors = 2;
+  optional group Items = 3 {
+    optional int32 x = 4;
+    optional string y = 5;
+  }
+  optional int32 plain = 6;
+}
+
+message Strict {
+  required int32 id = 1;
+  optional Legacy legacy = 2;
+}

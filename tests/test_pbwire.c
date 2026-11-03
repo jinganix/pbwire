@@ -177,6 +177,16 @@ make_schema(void)
         }
     }
 
+    /* A packed field whose length tag is five bytes (number >= 2^21). */
+    {
+        pbw_descriptor *wide = pbw_schema_add_message(schema, "WidePacked");
+
+        pbw_field_set_packed(
+            pbw_message_add_field(wide, "big", 33554432u, PBW_TYPE_INT32,
+                                  PBW_LABEL_REPEATED),
+            1);
+    }
+
     /* Every packable type, packed and unpacked variants of the same numbers. */
     {
         static const struct field_def packable[] = {
@@ -866,6 +876,34 @@ test_field_number_edges(pbw_schema *schema)
     pbw_free(buf);
     pbw_message_free(decoded);
     pbw_message_free(msg);
+}
+
+static void
+test_packed_wide_tag(pbw_schema *schema)
+{
+    const pbw_descriptor *type = desc(schema, "WidePacked");
+    pbw_message *msg = pbw_message_new(type);
+    pbw_message *decoded = NULL;
+    uint8_t *buf = NULL;
+    size_t len = 0;
+
+    CHECK_OK(pbw_message_set(msg, 33554432u, pbw_value_new_int(1)));
+    CHECK_OK(pbw_message_set(msg, 33554432u, pbw_value_new_int(150)));
+    CHECK_OK(pbw_encode(msg, &buf, &len));
+    /* Tag 0x82 0x80 0x80 0x80 0x01, length 3, then the two varints. */
+    {
+        static const uint8_t expected[] = {0x82, 0x80, 0x80, 0x80,
+                                           0x01, 0x03, 0x01, 0x96, 0x01};
+
+        CHECK(len == sizeof(expected));
+        CHECK(buf != NULL && memcmp(buf, expected, sizeof(expected)) == 0);
+    }
+    CHECK_OK(pbw_decode(type, buf, len, &decoded));
+    CHECK(decoded != NULL);
+    CHECK(pbw_value_count(pbw_message_get(decoded, 33554432u)) == 2);
+    pbw_message_free(decoded);
+    pbw_message_free(msg);
+    pbw_free(buf);
 }
 
 /* Every packable type, packed and unpacked, decoded by both descriptors. */
@@ -1722,6 +1760,67 @@ test_ctx_pool(pbw_schema *schema)
     pbw_free(wire);
     pbw_pool_free(pool);
     pbw_pool_free(NULL);
+}
+
+static void
+test_encode_to(pbw_schema *schema)
+{
+    const pbw_descriptor *type = desc(schema, "Scalar");
+    pbw_message *msg = make_scalars(schema);
+    pbw_message *decoded = NULL;
+    uint8_t *wire = NULL;
+    size_t wire_len = 0;
+    uint8_t *buf = NULL;
+    size_t len = 0;
+
+    CHECK(msg != NULL);
+    CHECK(pbw_message_wire_size(msg) == 0);
+    CHECK_OK(pbw_encode(msg, &wire, &wire_len));
+
+    /* The caller buffer needs slack: the writer over-reserves tag/varint space. */
+    buf = (uint8_t *)malloc(wire_len + 16);
+    CHECK(buf != NULL);
+    if (buf != NULL) {
+        memset(buf, 0xaa, wire_len + 16);
+        CHECK_OK(pbw_encode_to(msg, buf, wire_len + 16, &len));
+        CHECK(len == wire_len);
+        CHECK(memcmp(buf, wire, wire_len) == 0);
+        CHECK(buf[wire_len + 15] == 0xaa); /* never writes past the message */
+        CHECK_STATUS(PBW_ERR_LIMIT, pbw_encode_to(msg, buf, 4, &len));
+        CHECK_STATUS(PBW_ERR_LIMIT, pbw_encode_to(msg, buf, wire_len, &len));
+        CHECK_STATUS(PBW_ERR_INVALID, pbw_encode_to(msg, NULL, wire_len + 16, &len));
+        CHECK_STATUS(PBW_ERR_INVALID, pbw_encode_to(NULL, buf, wire_len + 16, &len));
+        CHECK_STATUS(PBW_ERR_INVALID, pbw_encode_to(msg, buf, wire_len + 16, NULL));
+        free(buf);
+    }
+
+    /* An empty message encodes to nothing and needs no buffer. */
+    {
+        pbw_message *empty = pbw_message_new(type);
+
+        CHECK(empty != NULL);
+        CHECK_OK(pbw_encode_to(empty, NULL, 0, &len));
+        CHECK(len == 0);
+        pbw_message_free(empty);
+    }
+
+    /* A decoded tree reports the wire length it came from. */
+    CHECK_OK(pbw_decode(type, wire, wire_len, &decoded));
+    CHECK(decoded != NULL);
+    CHECK(pbw_message_wire_size(decoded) == wire_len);
+    buf = (uint8_t *)malloc(wire_len + 16);
+    CHECK(buf != NULL);
+    if (buf != NULL) {
+        CHECK_OK(pbw_encode_to(decoded, buf, wire_len + 16, &len));
+        CHECK(len == wire_len);
+        CHECK(memcmp(buf, wire, wire_len) == 0);
+        free(buf);
+    }
+    CHECK(pbw_message_wire_size(NULL) == 0);
+
+    pbw_message_free(decoded);
+    pbw_message_free(msg);
+    pbw_free(wire);
 }
 
 static void
@@ -3288,6 +3387,7 @@ main(void)
     test_unknown_fields(schema);
     test_tag_limits(schema);
     test_field_number_edges(schema);
+    test_packed_wide_tag(schema);
     test_pack_all_types(schema);
     test_packed_presize(schema);
     test_recursive_type(schema);
@@ -3305,6 +3405,7 @@ main(void)
     test_ctx_build(schema);
     test_ctx_retain_cap(schema);
     test_ctx_pool(schema);
+    test_encode_to(schema);
     test_errors(schema);
     test_depth_limit(schema);
     test_enum(schema);

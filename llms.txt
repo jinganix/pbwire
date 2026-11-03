@@ -24,6 +24,20 @@ make              # build/libpbwire.a
 make test         # core + threads + descriptor-set + C-binding self-checks (required before commit)
 make format       # clang-format >= 19; make format-check for the gate
 
+# Host-language bindings over the C ABI, each needing only its own toolchain:
+make java-test    # Java (java.lang.foreign, no JNI)
+make ruby-test    # Ruby (C extension over the core)
+make node-test    # Node (N-API addon, no npm)
+make objc-test    # Objective-C (ARC + Foundation)
+make kotlin-test  # Kotlin (reuses the Java FFM layer, adds the DSL)
+make php-test     # PHP (ext-ffi)
+make dart-test    # Dart (dart:ffi)
+make rust-test    # Rust (links libpbwire.a statically)
+make csharp-test  # C# (P/Invoke)
+
+make java-bench node-bench ruby-bench objc-bench \
+     kotlin-bench php-bench dart-bench rust-bench csharp-bench  # each binding vs its official runtime
+
 cmake -B build-cmake && cmake --build build-cmake && (cd build-cmake && ctest)
 cmake -B build-cmake -DPBW_BUILD_PROTOC=ON   # adds the .proto importer (needs libprotobuf)
 ```
@@ -128,8 +142,9 @@ C++ runtime), `make bench`, `make bench-c` (C structs vs protoc C++). Optional, 
 - ABI stability: `PBW_ABI_VERSION` in the header, `pbw_abi_version()` at runtime, CMake
   `SOVERSION 1`, `make shared` producing `libpbwire.so.1` / `libpbwire.1.dylib`. Additive changes
   keep the number, breaking changes bump it with the SONAME. `bindings/python` (a CPython
-  extension) and the C struct runtime check it at load; `bindings/go` is
-  generated Go code with no cgo and no runtime dependency.
+  extension), `bindings/java` (Foreign Function & Memory API), `bindings/ruby` (C extension),
+  `bindings/node` (N-API addon), `bindings/objc` (ARC) and the C struct runtime check it at load;
+  `bindings/go` is generated Go code with no cgo and no runtime dependency.
 - Not implemented in the core: RPC/HTTP, MessageSet decoding into extensions, code generation (the
   bindings ship their own protoc plugins: C layout tables and Go straight-line codecs).
 - Text format (`pbw_text_print` / `pbw_text_parse`): printer output is byte-identical to the
@@ -153,7 +168,18 @@ C++ runtime), `make bench`, `make bench-c` (C structs vs protoc C++). Optional, 
   structs vs protoc C++ on the same tiers.
 - [bindings/README.md](bindings/README.md): every binding's layout and where its schema comes
   from (C, C++ and Python load a FileDescriptorSet at run time; Go generates codecs with
-  `protoc-gen-pbwire-go` and needs no descriptor at run time; Erlang uses gpb's definitions).
+  `protoc-gen-pbwire-go` and needs no descriptor at run time; Erlang uses gpb's definitions;
+  Java, Kotlin, Node, Objective-C, PHP, Dart and C# are FFI hosts that load the descriptor set and
+  nothing else; Rust links the archive in statically; Ruby is a small C extension over the same core
+  that also loads the descriptor set at run time).
+- [bindings/java/README.md](bindings/java/README.md), [bindings/kotlin/README.md](bindings/kotlin/README.md),
+  [bindings/ruby/README.md](bindings/ruby/README.md), [bindings/node/README.md](bindings/node/README.md),
+  [bindings/objc/README.md](bindings/objc/README.md), [bindings/php/README.md](bindings/php/README.md),
+  [bindings/dart/README.md](bindings/dart/README.md), [bindings/rust/README.md](bindings/rust/README.md),
+  [bindings/csharp/README.md](bindings/csharp/README.md):
+  the host bindings — no generator, no codegen, no new dependency; schema at run time. Java (and
+  Kotlin through it), Node, Objective-C, PHP, Dart and C# go through the C ABI; Ruby is a C
+  extension that links the core and keeps the message conversion in C; Rust links the archive in.
 - [bindings/go/README.md](bindings/go/README.md): Go binding, generated structs + straight-line
   codecs (`protoc-gen-pbwire-go`), no cgo and no run-time dependency, plus its benchmark against
   `google.golang.org/protobuf`.

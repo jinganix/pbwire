@@ -1,0 +1,13 @@
+[package]
+name = "pbwire-bench"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+pbwire = { path = ".." }
+protobuf = "3"
+
+[[bin]]
+name = "bench"
+path = "src/main.rs"

@@ -2,7 +2,7 @@
 # clang-format config for pbwire C sources (include/, src/, tests/).
 # Apply: make format   Check: make format-check
 # Requires clang-format >= 19.
-Language: Cpp
+# No Language: the same rules apply to C, C++ and Objective-C.
 BasedOnStyle: LLVM
 IndentWidth: 4
 UseTab: Never
