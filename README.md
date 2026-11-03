@@ -145,9 +145,11 @@ commit gate:
 make difftest     # differential test against the official C++ runtime
 make bench        # encode/decode benchmark vs generated code and DynamicMessage
 make bench-c      # C structs benchmark vs protoc C++ (same optional deps)
-make python-bind  # CPython extension (schema at runtime, dict<->wire in C)
+make python-bind  # CPython extension (schema at runtime, dict<->wire + parsed messages)
 make python-test  # Python binding self-check
 make python-bench # Python binding benchmark vs google.protobuf (needs protobuf)
+make go-test      # Go binding: generated-code tests + plugin golden tests (needs Go)
+make go-bench     # Go binding benchmark vs google.golang.org/protobuf (adds protoc-gen-go)
 make erlang-bench # Erlang binding: gpb, gpb NIF and enif_protobuf
 make conformance-setup  # once: shallow-clone pinned protobuf + build runner (kept in .tmp/, git-ignored)
 make conformance  # official binary/text/JSON conformance suite (reuses the cached checkout)
@@ -357,7 +359,8 @@ resource-consumption and denial-of-service risk.
 - **Erlang NIF**: handle Protobuf messages dynamically without generating Erlang code per message
 - **Python**: load schemas at runtime, read and write messages dynamically
 - **C / C++**: operate on dynamic messages without generated business message classes
-- **Go / Rust**: reuse one C runtime through FFI
+- **Go**: generated codecs that need neither the C runtime nor a descriptor at run time (`bindings/go`)
+- **Rust**: reuse one C runtime through FFI
 - **Protocol gateways**: transform, inspect and forward Protobuf messages driven by a dynamic schema
 - **Dynamic protocol tools**: debug, inspect and modify Protobuf payloads of unknown types
 
@@ -377,7 +380,7 @@ bindings/README.md           binding layout + where each one's schema comes from
 bindings/c/                 C binding: runtime/ (struct codec), plugin/, examples/, tests/, benchmarks/, conformance/
 bindings/cpp/               C++ binding: examples/, tests/, benchmarks/ over the shared C runtime (no plugin)
 bindings/python/            CPython extension: runtime/, examples/, tests/, benchmarks/, conformance/
-bindings/go/               cgo binding: runtime/ (package pbwire), examples/, benchmarks/, conformance/
+bindings/go/               protoc-gen-pbwire-go + generated codecs (no cgo), runtime/, tests/, examples/, benchmarks/, conformance/
 bindings/erlang/           Erlang/OTP NIF: c_src/ (runtime), examples/, test/, benchmarks/, conformance/
 
 include/pbwire-protoc/      importer / descriptor set / diagnostic headers (no protobuf types)
@@ -677,12 +680,14 @@ mutated inputs, all well-known types, extensions as `[full.name]`, strict base64
 ### Can I use it from Python, Erlang, Go or Rust?
 
 Yes — that is the intended use. `bindings/` holds the C struct engine with its `protoc` plugin, a
-CPython extension for Python (schema from a `FileDescriptorSet` at runtime, dict↔wire in C, no
-generated Python), an Erlang/OTP NIF, and a minimal cgo package (Go), each with a round-trip test;
-the C and Python bindings also carry benchmarks against `protoc` C++ and `google.protobuf` (see
-[BENCHMARKS.md](BENCHMARKS.md)). They check `PBW_ABI_VERSION` at load time, so a library built from
-a newer, incompatible tree fails fast instead of corrupting memory. The C ABI is the product;
-richer host bindings live on top of it.
+CPython extension for Python (schema from a `FileDescriptorSet` at runtime, dict↔wire in C, and a
+`decode()` that returns a parsed message, no generated Python), an Erlang/OTP NIF, and a Go binding
+whose `protoc-gen-pbwire-go` plugin emits plain structs with straight-line codecs (no cgo, no
+runtime dependency), each with a round-trip test. Every binding also carries a benchmark against its official counterpart -- `protoc` C++,
+`google.protobuf` and `google.golang.org/protobuf` (see [BENCHMARKS.md](BENCHMARKS.md)). The C
+bindings check `PBW_ABI_VERSION` at load time, so a library built from a newer, incompatible tree
+fails fast instead of corrupting memory. The C ABI is the product; richer host bindings live on
+top of it.
 
 ### Is it thread-safe?
 
