@@ -64,6 +64,9 @@ if(PBW_BUILD_TESTS)
 
     add_executable(test_pbwire tests/test_pbwire.c)
     target_link_libraries(test_pbwire PRIVATE pbwire)
+    # The self-check also exercises the internal limits and tag helpers.
+    target_include_directories(test_pbwire PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src)
     add_test(NAME test_pbwire COMMAND test_pbwire)
 
     add_executable(test_threads tests/test_threads.c)
