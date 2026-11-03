@@ -1,0 +1,14 @@
+data: "abc"
+opt_data: ""
+chunks: "x"
+chunks: ""
+opt_num: -9
+packed: [1, -1, 300]
+unpacked: [2, -2, 300]
+f32: -0
+f64: -123456.789
+u64: 18446744073709551615
+str: "edge"
+flags: [true, false, true]
+floats: [0, -0, 1.5]
+doubles: [0, -0, -2.5]

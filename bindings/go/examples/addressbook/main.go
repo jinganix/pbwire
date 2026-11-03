@@ -1,59 +1,44 @@
-// AddressBook example (Go): load a FileDescriptorSet, encode, decode back.
+// AddressBook example (Go): generated codecs, no schema at run time.
 //
-// The schema comes from the same descriptor set the C and C++ examples use
-// (`examples/addressbook.desc`, protoc --descriptor_set_out); nothing is
-// generated for Go. The binding covers scalar fields today, so the example
-// round-trips Person.name / Person.id and reports what else the type has.
+// The message types and their size/encode/decode methods are generated from
+// examples/addressbook.proto by protoc-gen-pbwire-go; this file only fills the
+// structs and prints the round trip. Regenerate with
+// `make -C bindings/go/plugin regen`, run with
 //
-// Run from bindings/go: `go run ./examples/addressbook` after `make shared`
-// (and `make examples` once, to build examples/addressbook.desc).
+//	cd bindings/go && go run ./examples/addressbook
 package main
 
 import (
 	"fmt"
 	"log"
-	"path/filepath"
-	"runtime"
 
-	pbwire "pbwire/runtime"
+	tutorial "pbwire/examples/addressbook/tutorial"
 )
 
-var descPath = filepath.Join(sourceDir(), "..", "..", "..", "..", "examples", "addressbook.desc")
-
 func main() {
-	schema, err := pbwire.LoadFile(descPath)
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer schema.Close()
-	if schema.ABI() != 1 {
-		log.Fatalf("libpbwire ABI %d, want 1", schema.ABI())
-	}
+	book := &tutorial.AddressBook{People: []tutorial.Person{{
+		Name:  ptr("alice"),
+		Id:    ptr(int32(1234)),
+		Email: ptr("alice@example.com"),
+		Phones: []tutorial.Person_PhoneNumber{
+			{Number: ptr("555-1212"), Type: ptr(tutorial.Person_PhoneType_HOME)},
+			{Number: ptr("555-3434"), Type: ptr(tutorial.Person_PhoneType_WORK)},
+		},
+	}}}
 
-	person, err := schema.Message("tutorial.Person")
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	wire, err := person.Encode(map[uint32]pbwire.Value{
-		1: {Bytes: []byte("alice"), IsStr: true},
-		2: {Uint: 1234},
-	})
+	wire, err := book.Marshal()
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	got, err := person.Decode(wire)
-	if err != nil {
+	var back tutorial.AddressBook
+	if err := back.Unmarshal(wire); err != nil {
 		log.Fatal(err)
 	}
-	if string(got[1].Bytes) != "alice" || got[2].Uint != 1234 {
-		log.Fatalf("round trip mismatch: %+v", got)
-	}
-	fmt.Printf("%d bytes, name=%s id=%d\n", len(wire), got[1].Bytes, got[2].Uint)
+	person := back.People[0]
+	fmt.Printf("%d bytes, name=%s id=%d phones=%d first=%s/%d\n",
+		len(wire), *person.Name, *person.Id, len(person.Phones),
+		*person.Phones[0].Number, int32(*person.Phones[0].Type))
 }
 
-func sourceDir() string {
-	_, file, _, _ := runtime.Caller(0)
-	return filepath.Dir(file)
-}
+func ptr[T any](v T) *T { return &v }
