@@ -113,21 +113,31 @@ because `protoc --cpp_out` emits straight-line code with no per-field dispatch.
 
 | payload | op | pbwire-py (MB/s, x upb) | upb (MB/s) |
 |---|---|---|---|
-| 136 B | encode | 290.3 (0.40x) | 726.1 |
-| 136 B | decode | 255.8 (0.44x) | 576.2 |
-| 174 B | encode | 339.0 (0.42x) | 806.2 |
-| 174 B | decode | 211.1 (0.38x) | 561.1 |
-| 2469 B | encode | 494.8 (0.35x) | 1413.0 |
-| 2469 B | decode | 255.7 (0.37x) | 695.5 |
-| 74913 B | encode | 586.7 (0.39x) | 1487.3 |
-| 74913 B | decode | 202.5 (0.25x) | 796.2 |
+| 136 B | encode | 301.9 (0.42x) | 718.6 |
+| 136 B | decode (dict) | 245.1 (0.42x) | 580.4 |
+| 136 B | parse (lazy view) | 723.5 | — |
+| 174 B | encode | 340.2 (0.41x) | 822.0 |
+| 174 B | decode (dict) | 214.8 (0.38x) | 569.6 |
+| 174 B | parse (lazy view) | 836.0 | — |
+| 2469 B | encode | 494.0 (0.37x) | 1341.6 |
+| 2469 B | decode (dict) | 256.5 (0.36x) | 707.3 |
+| 2469 B | parse (lazy view) | 1863.2 | — |
+| 74913 B | encode | 592.3 (0.40x) | 1465.3 |
+| 74913 B | decode (dict) | 202.5 (0.26x) | 785.7 |
+| 74913 B | parse (lazy view) | 3227.8 | — |
 
-The binding is a CPython extension that walks the schema and converts
-dict <-> wire in C (`bindings/python/csrc/pbwire.c`), the same shape as the
-Erlang NIF. It used to be a cffi ABI bridge at 0.02x; the extension is 12-15x
-faster than that. The remaining gap is representation, not wire work: upb
-parses into its arena and builds Python objects lazily, while this API promises
-plain dicts and therefore allocates one dict, string and int per value.
+Two fronts, because the binding has two APIs:
+
+- `decode()` returns plain dicts and is 0.26-0.42x of upb. It has to build every
+  dict, string and int eagerly, while upb parses into its arena and defers
+  Python objects.
+- `parse()` returns a lazy `pbwire.Message`: it scans the wire once, records a
+  slice per wire field, and builds a Python object only when a field is read.
+  Parsing the 75 KB message costs 23 µs where upb's `FromString` costs 95 µs,
+  so "get a message and read a few fields" is 2-4x faster than protobuf.
+  Materializing everything through `to_dict()` costs ~500 µs, i.e. more than
+  `decode()`, because the wire is walked twice: use `decode()` for a dict,
+  `parse()` for field access.
 
 #### What the optimization pass changed
 

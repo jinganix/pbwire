@@ -31,6 +31,27 @@ setuptools, no wheel, no generated Python. `make python-bind` writes
 `bindings/python/pbwire<EXT_SUFFIX>`; add that directory to `PYTHONPATH` (the
 tests and the benchmark do it themselves).
 
+## Lazy views
+
+`decode()` builds the whole dict tree. When only a few fields are needed,
+`parse()` returns a view that scans the wire once (one slice per wire field) and
+builds Python objects on demand:
+
+```python
+msg = person.parse(wire)      # 23 us for a 75 KB message (upb: 95 us)
+msg.name                      # materializes just this field
+msg.phones[0].number          # sub-messages are views too
+person.decode(wire)           # plain dicts, ~370 us for the same message
+msg.to_dict()                 # the eager form of a view (== decode)
+dict(msg)                     # same, deep
+```
+
+A view supports attribute and `msg["field"]` access (absent field raises
+`KeyError`), `in`, `len()`, iteration over `(name, value)` pairs, and
+`to_dict()`. Field reads are cached per view. Note that a view re-reads the
+wire: use `decode()` when you want every field as a dict, `parse()` when you
+want a few.
+
 ## Value mapping
 
 | protobuf | Python |
@@ -76,15 +97,16 @@ make python-bench
 
 It verifies byte-for-byte parity with `protobuf`'s own encoding before timing.
 
-Current standing on Apple M4 Pro (see `BENCHMARKS.md` for the table): the
-extension reaches ~0.25-0.4x of upb, i.e. 12-15x faster than the cffi version
-it replaced (which was 0.02x). Two reasons it does not go further:
+Current standing on Apple M4 Pro (see `BENCHMARKS.md` for the table):
 
-- upb parses into its own arena and materializes Python objects lazily; a
-  decoder that promises plain dicts has to build every dict, string and int
-  eagerly.
-- upb's Python interop is hand-tuned Cython; a table-driven walker pays a
-  per-field dispatch that generated code would not.
+| path | 75 KB message | relative to upb |
+|---|---|---|
+| `encode()` | 592 MB/s | 0.40x |
+| `decode()` (dicts) | 202 MB/s | 0.26x |
+| `parse()` (lazy view) | 3228 MB/s | 4.1x faster than `upb.FromString` |
 
-Closing the gap would mean lazy message views (a different API) or emitting
-straight-line C per message from the plugin.
+The eager dict path stays behind upb because it must build every dict, string
+and int; the lazy path beats it because it only records slices and defers those
+objects until a field is read. `parse()` + `to_dict()` (~145 MB/s) is slower
+than `decode()`: it walks the wire twice, so pick the API that matches the
+access pattern.

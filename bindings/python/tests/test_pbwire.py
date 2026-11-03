@@ -93,10 +93,27 @@ def main():
         check(scalars.decode(b"") == {}, "empty wire decodes to no fields")
         check(scalars.encode({}) == b"", "empty dict encodes to no bytes")
 
+        # Lazy view: attribute access materializes, dict(m) is the eager form.
+        view = scalars.parse(reference)
+        check(view.i32 == SCALARS3["i32"], "lazy view: scalar attribute")
+        check(view.str == SCALARS3["str"], "lazy view: string attribute")
+        check(view.nums == SCALARS3["nums"], "lazy view: packed repeated")
+        check(view.inners[1].value == -2, "lazy view: nested message")
+        check(view.inner.name == "kid", "lazy view: singular message")
+        check(view.to_dict() == SCALARS3, "lazy view: to_dict")
+        check(dict(view) == SCALARS3, "lazy view: dict(view)")
+        check(len(view) == len(SCALARS3), "lazy view: length")
+        check("nums" in view and "nope" not in view, "lazy view: contains")
+        check_raises(KeyError, lambda: view["nope"], "lazy view: absent key")
+        check(scalars.parse(b"").to_dict() == {}, "lazy view: empty wire")
+        check(view.i32 == SCALARS3["i32"], "lazy view: cached read")
+
         # Unknown fields in the wire are skipped, not an error.
         # Field 999 is not in the schema: its bytes are skipped.
         check(scalars.decode(reference + b"\xb8\x3e\x2a") == SCALARS3,
               "unknown field in the wire is skipped")
+        check(scalars.parse(reference + b"\xb8\x3e\x2a").to_dict() == SCALARS3,
+              "unknown field in a lazy view is skipped")
 
         check_raises(KeyError, lambda: scalars.encode({"nope": 1}),
                      "unknown field name")
@@ -116,6 +133,8 @@ def main():
               "proto2 addressbook round trip")
         check_raises(ValueError, lambda: person.encode({"id": 1}),
                      "proto2 required field missing")
+        check(person.parse(person.encode(values)).phones[1].number == "666",
+              "proto2 lazy view")
 
     print("test_pbwire: %s" % ("all checks passed" if not failures
                                else "%d FAILURES" % failures))

@@ -124,6 +124,10 @@ def run():
         rows.append(("pbwire-py", "encode", ns))
         ns, _ = time_it(lambda: scalars.decode(reference))
         rows.append(("pbwire-py", "decode", ns))
+        ns, _ = time_it(lambda: scalars.parse(reference))
+        rows.append(("pbwire-py", "parse", ns))
+        ns, _ = time_it(lambda: scalars.parse(reference).to_dict())
+        rows.append(("pbwire-py", "parse+dict", ns))
         ns, _ = time_it(lambda: reference_msg.SerializeToString())
         rows.append((base_label, "encode", ns))
         ns, _ = time_it(lambda: matrix3_pb2.Scalars3.FromString(reference))
@@ -131,10 +135,10 @@ def run():
 
         print("\n%s: %d bytes, repeat field x%d" % (label, len(reference),
                                                     repeats))
-        print("  %-10s %-7s %10s %10s" % ("impl", "op", "ns/op", "MB/s"))
+        print("  %-12s %-11s %10s %10s" % ("impl", "op", "ns/op", "MB/s"))
         for impl, op, ns in rows:
             mbps = len(reference) / ns * 1e3
-            print("  %-10s %-7s %10.1f %10.1f" % (impl, op, ns, mbps))
+            print("  %-12s %-11s %10.1f %10.1f" % (impl, op, ns, mbps))
     schema.close()
     return 0
 

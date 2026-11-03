@@ -347,6 +347,7 @@ typedef struct {
     const pbw_descriptor *desc;
     size_t nfields;
     field_t *fields;
+    PyObject *by_name; /* owned dict: field name -> field index */
     int has_required;
 } MessageType;
 
@@ -1208,8 +1209,10 @@ make_message(PyObject *schema_obj, const pbw_descriptor *desc, PyObject *cache)
     mt->desc = desc;
     mt->nfields = count;
     mt->has_required = 0;
+    mt->by_name = PyDict_New();
     mt->fields = count == 0 ? NULL : calloc(count, sizeof(field_t));
-    if (mt->name == NULL || (count != 0 && mt->fields == NULL)) {
+    if (mt->name == NULL || mt->by_name == NULL ||
+        (count != 0 && mt->fields == NULL)) {
         Py_DECREF(key);
         Py_DECREF(self);
         return NULL;
@@ -1245,7 +1248,24 @@ make_message(PyObject *schema_obj, const pbw_descriptor *desc, PyObject *cache)
             Py_DECREF(self);
             return NULL;
         }
-        if (type == PBW_TYPE_MESSAGE) {
+        {
+            PyObject *idx = PyLong_FromSize_t(i);
+
+            if (idx == NULL || PyDict_SetItem(mt->by_name, f->name, idx) < 0) {
+                Py_XDECREF(idx);
+                Py_DECREF(self);
+                return NULL;
+            }
+            Py_DECREF(idx);
+        }
+    }
+    /* Sub messages after every name is known, so a recursive type is usable
+     * as soon as it comes back out of the cache. */
+    for (i = 0; i < count; i++) {
+        const pbw_field *field = pbw_descriptor_field_at(desc, i);
+        field_t *f = &mt->fields[i];
+
+        if (f->type == PBW_TYPE_MESSAGE) {
             const pbw_descriptor *sub = pbw_field_message_type(field);
 
             if (sub == NULL) {
@@ -1262,6 +1282,625 @@ make_message(PyObject *schema_obj, const pbw_descriptor *desc, PyObject *cache)
     return self;
 }
 
+/* ------------------------------------------------------------ lazy view */
+
+/* A parsed message costs one tag scan and a slice per wire field; Python
+ * objects appear only when a field is read. For 3000 packed ints that is one
+ * slice, not 3000 objects. */
+typedef struct {
+    uint32_t fidx;
+    uint32_t len_delimited;
+    size_t off; /* into MessageView.data */
+    size_t len; /* payload length when len_delimited */
+} slice_t;
+
+typedef struct {
+    PyObject_HEAD PyObject *mtype; /* owned MessageType */
+    PyObject *buffer;              /* owned bytes object that owns data */
+    const uint8_t *data;
+    size_t len;
+    slice_t *slices;
+    size_t nslices;
+    PyObject **cache; /* lazily materialized per field, calloc'd on demand */
+} MessageView;
+
+static PyTypeObject MessageViewType;
+
+static PyObject *parse_view(PyObject *mtype_obj, const uint8_t *data, size_t len,
+                            PyObject *buffer, unsigned depth);
+static PyObject *view_to_dict(MessageView *self);
+
+static void
+MessageView_dealloc(MessageView *self)
+{
+    if (self->cache != NULL && self->mtype != NULL) {
+        size_t i, n = ((MessageType *)self->mtype)->nfields;
+
+        for (i = 0; i < n; i++) {
+            Py_XDECREF(self->cache[i]);
+        }
+        free(self->cache);
+    }
+    free(self->slices);
+    Py_XDECREF(self->mtype);
+    Py_XDECREF(self->buffer);
+    PyObject_Del(self);
+}
+
+static PyObject *
+view_of_slice(MessageView *v, field_t *f, const slice_t *s)
+{
+    if (!s->len_delimited) {
+        rdr r;
+        uint64_t bits;
+
+        r.p = v->data + s->off;
+        r.end = v->data + v->len;
+        if (f->wire == 0) {
+            if (!rd_varint(&r, &bits)) {
+                PyErr_SetString(PyExc_ValueError, "truncated field");
+                return NULL;
+            }
+            if (f->type == PBW_TYPE_SINT32 || f->type == PBW_TYPE_SINT64) {
+                bits = unzigzag(bits, f->type == PBW_TYPE_SINT32 ? 32 : 64);
+            }
+        } else if (!rd_fixed(&r, &bits, f->wire == 1 ? 8 : 4)) {
+            PyErr_SetString(PyExc_ValueError, "truncated field");
+            return NULL;
+        }
+        return scalar_object(f->type, bits);
+    }
+    if (f->type == PBW_TYPE_MESSAGE) {
+        return parse_view(f->sub, v->data + s->off, s->len, v->buffer, 0);
+    }
+    return string_object(f->type, v->data + s->off, s->len);
+}
+
+/* Appends the element(s) of one slice to `list`. */
+static int
+append_slice(MessageView *v, field_t *f, PyObject *list, const slice_t *s,
+             int deep)
+{
+    if (s->len_delimited && f->wire == 0) {
+        /* packed run */
+        rdr r;
+
+        r.p = v->data + s->off;
+        r.end = r.p + s->len;
+        while (r.p < r.end) {
+            uint64_t bits;
+            PyObject *item;
+
+            if (!rd_varint(&r, &bits)) {
+                PyErr_SetString(PyExc_ValueError, "truncated packed field");
+                return 0;
+            }
+            if (f->type == PBW_TYPE_SINT32 || f->type == PBW_TYPE_SINT64) {
+                bits = unzigzag(bits, f->type == PBW_TYPE_SINT32 ? 32 : 64);
+            }
+            item = scalar_object(f->type, bits);
+            if (item == NULL) {
+                return 0;
+            }
+            if (PyList_Append(list, item) < 0) {
+                Py_DECREF(item);
+                return 0;
+            }
+            Py_DECREF(item);
+        }
+        return 1;
+    }
+    {
+        PyObject *item = view_of_slice(v, f, s);
+
+        if (item == NULL) {
+            return 0;
+        }
+        if (deep && f->type == PBW_TYPE_MESSAGE) {
+            PyObject *eager = view_to_dict((MessageView *)item);
+
+            Py_DECREF(item);
+            if (eager == NULL) {
+                return 0;
+            }
+            item = eager;
+        }
+        if (PyList_Append(list, item) < 0) {
+            Py_DECREF(item);
+            return 0;
+        }
+        Py_DECREF(item);
+    }
+    return 1;
+}
+
+/* Materializes one field (cached). */
+static PyObject *
+view_field(MessageView *v, size_t fidx)
+{
+    MessageType *mt = (MessageType *)v->mtype;
+    field_t *f = &mt->fields[fidx];
+    PyObject *value = NULL;
+    size_t i;
+
+    if (v->cache == NULL) {
+        v->cache = calloc(mt->nfields, sizeof(*v->cache));
+        if (v->cache == NULL) {
+            return PyErr_NoMemory();
+        }
+    }
+    if (v->cache[fidx] != NULL) {
+        Py_INCREF(v->cache[fidx]);
+        return v->cache[fidx];
+    }
+    for (i = 0; i < v->nslices; i++) {
+        if (v->slices[i].fidx != fidx) {
+            continue;
+        }
+        if (!f->repeated) {
+            value = view_of_slice(v, f, &v->slices[i]); /* last wins */
+        } else if (value == NULL) {
+            value = PyList_New(0);
+        }
+        if (value != NULL && f->repeated &&
+            !append_slice(v, f, value, &v->slices[i], 0)) {
+            Py_CLEAR(value);
+        }
+        if (value == NULL) {
+            return NULL;
+        }
+    }
+    if (value == NULL) {
+        Py_RETURN_NONE; /* absent field: not cached, stays None */
+    }
+    v->cache[fidx] = value;
+    Py_INCREF(value);
+    return value;
+}
+
+static PyObject *
+view_getattro(MessageView *self, PyObject *name)
+{
+    MessageType *mt = (MessageType *)self->mtype;
+    PyObject *idx = PyDict_GetItemWithError(mt->by_name, name);
+
+    if (idx != NULL) {
+        return view_field(self, (size_t)PyLong_AsSize_t(idx));
+    }
+    if (PyErr_Occurred()) {
+        return NULL;
+    }
+    return PyObject_GenericGetAttr((PyObject *)self, name);
+}
+
+static PyObject *
+view_getitem(MessageView *self, PyObject *name)
+{
+    MessageType *mt = (MessageType *)self->mtype;
+    PyObject *idx;
+
+    if (!PyUnicode_Check(name)) {
+        PyErr_SetString(PyExc_TypeError, "field name must be a str");
+        return NULL;
+    }
+    idx = PyDict_GetItemWithError(mt->by_name, name);
+    if (idx == NULL) {
+        if (PyErr_Occurred()) {
+            return NULL;
+        }
+        PyErr_SetObject(PyExc_KeyError, name);
+        return NULL;
+    }
+    {
+        PyObject *value = view_field(self, (size_t)PyLong_AsSize_t(idx));
+
+        if (value == Py_None) { /* absent field is a KeyError, like a dict */
+            Py_DECREF(value);
+            PyErr_SetObject(PyExc_KeyError, name);
+            return NULL;
+        }
+        return value;
+    }
+}
+
+/* Field names present in the wire, in wire order, without duplicates. */
+static PyObject *
+view_keys(MessageView *self)
+{
+    MessageType *mt = (MessageType *)self->mtype;
+    PyObject *list = PyList_New(0);
+    char *seen;
+    size_t i;
+
+    if (list == NULL) {
+        return NULL;
+    }
+    seen = calloc(mt->nfields == 0 ? 1 : mt->nfields, 1);
+    if (seen == NULL) {
+        Py_DECREF(list);
+        return PyErr_NoMemory();
+    }
+    for (i = 0; i < self->nslices; i++) {
+        size_t fidx = self->slices[i].fidx;
+
+        if (!seen[fidx]) {
+            seen[fidx] = 1;
+            if (PyList_Append(list, mt->fields[fidx].name) < 0) {
+                free(seen);
+                Py_DECREF(list);
+                return NULL;
+            }
+        }
+    }
+    free(seen);
+    return list;
+}
+
+static PyObject *
+view_to_dict(MessageView *self)
+{
+    MessageType *mt = (MessageType *)self->mtype;
+    PyObject *dict = PyDict_New();
+    PyObject **lists = NULL;
+    size_t i;
+
+    if (dict == NULL) {
+        return NULL;
+    }
+    if (self->nslices > 0) {
+        lists = calloc(mt->nfields == 0 ? 1 : mt->nfields, sizeof(*lists));
+        if (lists == NULL) {
+            Py_DECREF(dict);
+            return PyErr_NoMemory();
+        }
+    }
+    for (i = 0; i < self->nslices; i++) {
+        const slice_t *s = &self->slices[i];
+        field_t *f = &mt->fields[s->fidx];
+
+        if (f->repeated) {
+            PyObject *list = lists[s->fidx];
+
+            if (list == NULL) {
+                list = PyList_New(0);
+                if (list == NULL ||
+                    PyDict_SetItem(dict, f->name, list) < 0) {
+                    Py_XDECREF(list);
+                    goto fail;
+                }
+                Py_DECREF(list); /* the dict owns it */
+                lists[s->fidx] = list;
+            }
+            if (!append_slice(self, f, list, s, 1)) {
+                goto fail;
+            }
+        } else {
+            PyObject *item = view_of_slice(self, f, s);
+
+            if (item != NULL && f->type == PBW_TYPE_MESSAGE) {
+                PyObject *deep = view_to_dict((MessageView *)item);
+
+                Py_DECREF(item);
+                item = deep;
+            }
+            if (item == NULL) {
+                goto fail;
+            }
+            if (PyDict_SetItem(dict, f->name, item) < 0) {
+                Py_DECREF(item);
+                goto fail;
+            }
+            Py_DECREF(item);
+        }
+    }
+    free(lists);
+    if (mt->has_required) {
+        size_t k;
+
+        for (k = 0; k < mt->nfields; k++) {
+            if (mt->fields[k].required &&
+                !PyDict_Contains(dict, mt->fields[k].name)) {
+                PyErr_Format(PyExc_ValueError,
+                             "%s: required field %s is missing", mt->name_utf8,
+                             mt->fields[k].cname);
+                Py_DECREF(dict);
+                return NULL;
+            }
+        }
+    }
+    return dict;
+
+fail:
+    free(lists);
+    Py_DECREF(dict);
+    return NULL;
+}
+
+static int
+view_contains(PyObject *self_obj, PyObject *name)
+{
+    MessageView *self = (MessageView *)self_obj;
+    MessageType *mt = (MessageType *)self->mtype;
+    size_t i;
+
+    if (!PyUnicode_Check(name)) {
+        return 0;
+    }
+    if (PyDict_GetItemWithError(mt->by_name, name) == NULL) {
+        return PyErr_Occurred() ? -1 : 0;
+    }
+    {
+        PyObject *idx = PyDict_GetItem(mt->by_name, name);
+        size_t fidx = (size_t)PyLong_AsSize_t(idx);
+
+        if (PyErr_Occurred()) {
+            return -1;
+        }
+        for (i = 0; i < self->nslices; i++) {
+            if (self->slices[i].fidx == fidx) {
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
+static Py_ssize_t
+view_length(MessageView *self)
+{
+    PyObject *keys = view_keys(self);
+    Py_ssize_t n;
+
+    if (keys == NULL) {
+        return -1;
+    }
+    n = PyList_GET_SIZE(keys);
+    Py_DECREF(keys);
+    return n;
+}
+
+static PyObject *
+view_repr(MessageView *self)
+{
+    return PyUnicode_FromFormat("<pbwire.Message %s, %zu field(s) on the wire>",
+                                ((MessageType *)self->mtype)->name_utf8,
+                                (size_t)self->nslices);
+}
+
+static PyObject *
+view_to_dict_method(MessageView *self, PyObject *unused)
+{
+    (void)unused;
+    return view_to_dict(self);
+}
+
+/* Turns a (possibly lazy) message value into plain dicts, consuming `value`. */
+static PyObject *
+deepen(field_t *f, PyObject *value)
+{
+    if (f->type != PBW_TYPE_MESSAGE) {
+        return value;
+    }
+    if (!f->repeated) {
+        PyObject *deep = view_to_dict((MessageView *)value);
+
+        Py_DECREF(value);
+        return deep;
+    }
+    {
+        PyObject *list = PyList_New(0);
+        Py_ssize_t i, n = PyList_GET_SIZE(value);
+
+        if (list == NULL) {
+            Py_DECREF(value);
+            return NULL;
+        }
+        for (i = 0; i < n; i++) {
+            PyObject *deep =
+                view_to_dict((MessageView *)PyList_GET_ITEM(value, i));
+
+            if (deep == NULL || PyList_Append(list, deep) < 0) {
+                Py_XDECREF(deep);
+                Py_DECREF(list);
+                Py_DECREF(value);
+                return NULL;
+            }
+            Py_DECREF(deep);
+        }
+        Py_DECREF(value);
+        return list;
+    }
+}
+
+static PyObject *
+view_iter(MessageView *self)
+{
+    PyObject *pairs = PyList_New(0);
+    size_t i;
+
+    if (pairs == NULL) {
+        return NULL;
+    }
+    for (i = 0; i < self->nslices; i++) {
+        size_t fidx = self->slices[i].fidx;
+        MessageType *mt = (MessageType *)self->mtype;
+        PyObject *value, *pair;
+
+        if (i > 0 && self->slices[i - 1].fidx == fidx) {
+            continue; /* already yielded this field */
+        }
+        value = view_field(self, fidx);
+        if (value == NULL) {
+            Py_DECREF(pairs);
+            return NULL;
+        }
+        value = deepen(&mt->fields[fidx], value);
+        if (value == NULL) {
+            Py_DECREF(pairs);
+            return NULL;
+        }
+        pair = PyTuple_Pack(2, mt->fields[fidx].name, value);
+        Py_DECREF(value);
+        if (pair == NULL || PyList_Append(pairs, pair) < 0) {
+            Py_XDECREF(pair);
+            Py_DECREF(pairs);
+            return NULL;
+        }
+        Py_DECREF(pair);
+    }
+    {
+        PyObject *it = PyObject_GetIter(pairs);
+
+        Py_DECREF(pairs);
+        return it;
+    }
+}
+
+static PyObject *
+parse_view(PyObject *mtype_obj, const uint8_t *data, size_t len,
+           PyObject *buffer, unsigned depth)
+{
+    MessageType *mt = (MessageType *)mtype_obj;
+    MessageView *v;
+    rdr r;
+    size_t cursor = 0, cap = 0;
+
+    if (depth >= PY_MAX_DEPTH) {
+        PyErr_SetString(PyExc_ValueError, "nesting limit exceeded");
+        return NULL;
+    }
+    v = PyObject_New(MessageView, &MessageViewType);
+    if (v == NULL) {
+        return NULL;
+    }
+    v->mtype = mtype_obj;
+    Py_INCREF(mtype_obj);
+    v->buffer = buffer;
+    Py_INCREF(buffer);
+    v->data = data;
+    v->len = len;
+    v->slices = NULL;
+    v->nslices = 0;
+    v->cache = NULL;
+
+    r.p = data;
+    r.end = data + len;
+    while (r.p < r.end) {
+        uint32_t fnum;
+        unsigned wt;
+        field_t *f = NULL;
+        size_t i;
+        slice_t slice;
+
+        if (!rd_tag(&r, &fnum, &wt)) {
+            PyErr_SetString(PyExc_ValueError, "truncated or malformed tag");
+            goto fail;
+        }
+        for (i = 0; i < mt->nfields; i++) {
+            size_t k = (cursor + i) % mt->nfields;
+
+            if (mt->fields[k].number == fnum) {
+                f = &mt->fields[k];
+                slice.fidx = (uint32_t)k;
+                cursor = k;
+                break;
+            }
+        }
+        if (f == NULL || f->unsupported ||
+            (wt != f->wire && !(wt == 2 && f->repeated &&
+                                packable((pbw_type)f->type)))) {
+            if (!rd_skip(&r, fnum, wt, depth)) {
+                PyErr_SetString(PyExc_ValueError, "truncated field");
+                goto fail;
+            }
+            continue;
+        }
+        if (wt == 2 && (f->wire == 2 || f->repeated)) {
+            uint64_t plen;
+
+            if (!rd_varint(&r, &plen) ||
+                plen > (uint64_t)(r.end - r.p)) {
+                PyErr_SetString(PyExc_ValueError, "truncated field");
+                goto fail;
+            }
+            slice.len_delimited = 1;
+            slice.off = (size_t)(r.p - data);
+            slice.len = (size_t)plen;
+            r.p += (size_t)plen;
+        } else {
+            slice.len_delimited = 0;
+            slice.off = (size_t)(r.p - data);
+            slice.len = 0;
+            if (!rd_skip(&r, fnum, wt, depth)) {
+                PyErr_SetString(PyExc_ValueError, "truncated field");
+                goto fail;
+            }
+        }
+        if (v->nslices == cap) {
+            size_t grown_cap = cap == 0 ? 16 : cap * 2;
+            slice_t *grown = realloc(v->slices, grown_cap * sizeof(*grown));
+
+            if (grown == NULL) {
+                PyErr_NoMemory();
+                goto fail;
+            }
+            v->slices = grown;
+            cap = grown_cap;
+        }
+        v->slices[v->nslices++] = slice;
+    }
+    return (PyObject *)v;
+
+fail:
+    Py_DECREF(v);
+    return NULL;
+}
+
+static PyObject *
+MessageType_parse(MessageType *self, PyObject *args)
+{
+    PyObject *bytes;
+
+    if (!PyArg_ParseTuple(args, "S:parse", &bytes)) {
+        return NULL; /* bytes only: the view keeps it alive, no copy */
+    }
+    return parse_view((PyObject *)self,
+                      (const uint8_t *)PyBytes_AS_STRING(bytes),
+                      (size_t)PyBytes_GET_SIZE(bytes), bytes, 0);
+}
+
+static PyMethodDef MessageView_methods[] = {
+    {"to_dict", (PyCFunction)view_to_dict_method, METH_NOARGS,
+     "to_dict() -> dict, the eager form of this message"},
+    {NULL, NULL, 0, NULL},
+};
+
+static PyMappingMethods MessageView_as_mapping = {
+    (lenfunc)view_length,
+    (binaryfunc)view_getitem,
+    NULL,
+};
+
+static PySequenceMethods MessageView_as_sequence = {
+    .sq_contains = view_contains,
+};
+
+static PyTypeObject MessageViewType = {
+    PyVarObject_HEAD_INIT(NULL, 0)
+        .tp_name = "pbwire.Message",
+    .tp_basicsize = sizeof(MessageView),
+    .tp_dealloc = (destructor)MessageView_dealloc,
+    .tp_flags = Py_TPFLAGS_DEFAULT,
+    .tp_doc = "A lazy view over parsed protobuf bytes: fields materialize on "
+              "access.",
+    .tp_methods = MessageView_methods,
+    .tp_getattro = (getattrofunc)view_getattro,
+    .tp_as_mapping = &MessageView_as_mapping,
+    .tp_iter = (getiterfunc)view_iter,
+    .tp_as_sequence = &MessageView_as_sequence,
+    .tp_repr = (reprfunc)view_repr,
+};
+
 /* ----------------------------------------------------------- type methods */
 
 static void
@@ -1276,6 +1915,7 @@ MessageType_dealloc(MessageType *self)
         }
     }
     free(self->fields);
+    Py_XDECREF(self->by_name);
     Py_XDECREF(self->name);
     Py_XDECREF(self->schema_obj);
     PyObject_Del(self);
@@ -1294,6 +1934,8 @@ static PyMethodDef MessageType_methods[] = {
      "encode(dict) -> bytes"},
     {"decode", (PyCFunction)MessageType_decode, METH_VARARGS,
      "decode(bytes) -> dict"},
+    {"parse", (PyCFunction)MessageType_parse, METH_VARARGS,
+     "parse(bytes) -> Message, a lazy view"},
     {NULL, NULL, 0, NULL},
 };
 
@@ -1520,7 +2162,8 @@ PyInit_pbwire(void)
     PyObject *m;
 
     if (PyType_Ready(&SchemaType) < 0 ||
-        PyType_Ready(&MessageTypeType) < 0) {
+        PyType_Ready(&MessageTypeType) < 0 ||
+        PyType_Ready(&MessageViewType) < 0) {
         return NULL;
     }
     m = PyModule_Create(&module_def);
@@ -1538,5 +2181,7 @@ PyInit_pbwire(void)
     PyModule_AddObject(m, "Schema", (PyObject *)&SchemaType);
     Py_INCREF(&MessageTypeType);
     PyModule_AddObject(m, "MessageType", (PyObject *)&MessageTypeType);
+    Py_INCREF(&MessageViewType);
+    PyModule_AddObject(m, "Message", (PyObject *)&MessageViewType);
     return m;
 }
