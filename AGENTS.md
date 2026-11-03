@@ -15,9 +15,11 @@ make bench        # encode/decode benchmark vs generated code and DynamicMessage
 ./build/bench difftest <cases> <seed>   # longer fuzz run
 make desc-fixture # regenerate the pinned descriptor set in tests/test_descriptor.c
 
-# Official conformance suite (binary wire format). Needs a protobuf v36.2
-# source checkout with conformance_test_runner built; see the Makefile comment.
-PBWIRE_PROTOBUF_SRC=$PWD/protobuf make conformance
+# Official conformance suite (binary wire format). Needs the cached reference
+# checkout: `make conformance-setup` clones it once, `make conformance`
+# reuses it. Override with PBWIRE_PROTOBUF_SRC=/path/to/protobuf.
+make conformance-setup   # once (cached in ~/.cache/pbwire)
+make conformance
 
 # The Makefile is the development gate. CMake is the packaging path and the only
 # build that knows about the optional pbwire-protoc target (needs libprotobuf).

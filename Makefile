@@ -66,25 +66,26 @@ desc-fixture:
 	xxd -i /tmp/pbw_desc.pb
 
 # Optional: official Protobuf conformance suite, binary wire format and text
-# format. Needs a Protobuf source checkout (v36.2) with conformance_test_runner
-# built:
-#   git clone --depth 1 --branch v36.2 https://github.com/protocolbuffers/protobuf
-#   cmake -S protobuf -B protobuf/build -Dprotobuf_BUILD_CONFORMANCE=ON
-#   cmake --build protobuf/build --target conformance_test_runner
-# Then: PBWIRE_PROTOBUF_SRC=$PWD/protobuf make conformance
+# format. The reference checkout lives outside the worktree (a cache, not a
+# build artifact), so one clone serves every branch and is never re-pulled:
+# `make conformance-setup` clones it once (shallow, pinned version) and builds
+# the runner; later runs only rebuild incrementally. Override the location
+# with PBWIRE_PROTOBUF_SRC=/path/to/protobuf.
 # The testee answers binary and text requests and reports every JSON test as
 # skipped. Two binary tests fail and are expected to: the reference C++ testee
 # from the same checkout fails them identically (a 5-byte tag varint above
 # UINT32_MAX is truncated instead of rejected). They are listed so the runner
 # proceeds to the text suite instead of stopping after binary.
-PROTOBUF_SRC ?= $(PBWIRE_PROTOBUF_SRC)
+PROTOBUF_VERSION := v36.2
+PROTOBUF_SRC = $(or $(PBWIRE_PROTOBUF_SRC),$(HOME)/.cache/pbwire/protobuf-$(PROTOBUF_VERSION))
 CONFORMANCE_RUNNER ?= $(PROTOBUF_SRC)/build/conformance_test_runner
 CONFORMANCE_DESC := build/conformance.desc
 CONFORMANCE_TESTEE := build/conformance_pbwire
 
 $(CONFORMANCE_DESC): | build
-	@test -n "$(PROTOBUF_SRC)" || { \
-		echo "set PBWIRE_PROTOBUF_SRC to a Protobuf source checkout"; exit 1; }
+	@test -d "$(PROTOBUF_SRC)/src" || { \
+		echo "protobuf checkout not found: $(PROTOBUF_SRC)"; \
+		echo "run 'make conformance-setup' first (clones once, then reuses it)"; exit 1; }
 	cd $(PROTOBUF_SRC) && $(PROTOC) -Isrc -I. -Ieditions/golden --include_imports \
 		--descriptor_set_out=$(CURDIR)/$(CONFORMANCE_DESC) \
 		google/protobuf/test_messages_proto3.proto \
@@ -98,9 +99,25 @@ $(CONFORMANCE_TESTEE): conformance/testee.c $(LIB) | build
 
 conformance: $(CONFORMANCE_DESC) $(CONFORMANCE_TESTEE)
 	@test -x "$(CONFORMANCE_RUNNER)" || { \
-		echo "conformance_test_runner not found: $(CONFORMANCE_RUNNER)"; exit 1; }
+		echo "conformance_test_runner not found: $(CONFORMANCE_RUNNER)"; \
+		echo "run 'make conformance-setup' first (clones once, then reuses it)"; exit 1; }
 	$(CONFORMANCE_RUNNER) --failure_list $(CURDIR)/conformance/failure_list_pbwire.txt \
 		$(CURDIR)/$(CONFORMANCE_TESTEE) $(CURDIR)/$(CONFORMANCE_DESC)
+
+# One-time (idempotent) setup for `make conformance`: shallow-clone the pinned
+# protobuf checkout into the cache and build the runner. Re-runs skip the
+# clone and only rebuild what changed.
+conformance-setup:
+	@if [ ! -d "$(PROTOBUF_SRC)/src/google/protobuf" ]; then \
+		echo "cloning protobuf $(PROTOBUF_VERSION) (shallow) into $(PROTOBUF_SRC)"; \
+		git clone --depth 1 --branch $(PROTOBUF_VERSION) \
+			https://github.com/protocolbuffers/protobuf $(PROTOBUF_SRC); \
+	else \
+		echo "protobuf checkout exists: $(PROTOBUF_SRC)"; \
+	fi
+	cmake -S $(PROTOBUF_SRC) -B $(PROTOBUF_SRC)/build -Dprotobuf_BUILD_CONFORMANCE=ON \
+		-DBUILD_SHARED_LIBS=ON
+	cmake --build $(PROTOBUF_SRC)/build --target conformance_test_runner
 
 # Optional: differential test and benchmark against the official Protobuf C++
 # runtime. Needs protoc and libprotobuf (Homebrew: brew install protobuf), so it

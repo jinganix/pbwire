@@ -144,7 +144,8 @@ commit gate:
 ```bash
 make difftest     # differential test against the official C++ runtime
 make bench        # encode/decode benchmark vs generated code and DynamicMessage
-make conformance  # official binary conformance suite (needs a protobuf v36.2 source checkout)
+make conformance-setup  # once: shallow-clone pinned protobuf + build runner (cached in ~/.cache/pbwire)
+make conformance  # official binary/text/JSON conformance suite (reuses the cached checkout)
 ```
 
 ## Quick start
@@ -451,8 +452,8 @@ Five layers, in order of how much they can catch:
    It answers the binary wire format, the JSON mapping and the text format.
 
    ```
-   # needs a protobuf v36.2 checkout with the runner built (see the Makefile comment)
-   PBWIRE_PROTOBUF_SRC=$PWD/protobuf make conformance
+   make conformance-setup   # once: shallow-clone protobuf v36.2 + build the runner
+   make conformance         # reuses the cached checkout, rebuilds incrementally
    CONFORMANCE SUITE PASSED: 2745 successes, 0 skipped, 2 expected failures, 0 unexpected failures.
    CONFORMANCE SUITE PASSED: 445 successes, 0 skipped, 0 expected failures, 0 unexpected failures.
    ```
