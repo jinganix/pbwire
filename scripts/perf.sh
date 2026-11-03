@@ -11,7 +11,7 @@ if [ ! -x build/bench ]; then
 fi
 
 ./build/bench bench 2>&1 | awk '
-/^small:|^full:|^large:/ {
+/^small:|^full:|^large:|^xlarge:/ {
     section = $1; sub(/:$/, "", section)
     order[++nsec] = section
     secbytes[section] = $2

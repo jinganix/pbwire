@@ -21,7 +21,7 @@ CMake + C++17 + libprotobuf only for the optional `.proto` importer `pbwire-prot
 
 ```bash
 make              # build/libpbwire.a
-make test         # core + threads + descriptor-set self-checks (required before commit)
+make test         # core + threads + descriptor-set + C-binding self-checks (required before commit)
 make format       # clang-format >= 19; make format-check for the gate
 
 cmake -B build-cmake && cmake --build build-cmake && (cd build-cmake && ctest)
@@ -29,7 +29,7 @@ cmake -B build-cmake -DPBW_BUILD_PROTOC=ON   # adds the .proto importer (needs l
 ```
 
 Optional, needs `protoc` + libprotobuf C++: `make difftest` (differential test against the official
-C++ runtime), `make bench`. Optional, needs a protobuf v36.2 source checkout:
+C++ runtime), `make bench`, `make bench-c` (C structs vs protoc C++). Optional, needs a protobuf v36.2 source checkout:
 `PBWIRE_PROTOBUF_SRC=$PWD/protobuf make conformance`.
 
 ## Docs
@@ -145,5 +145,9 @@ C++ runtime), `make bench`. Optional, needs a protobuf v36.2 source checkout:
   executable examples.
 - [bench/bench.cc](bench/bench.cc): differential test and benchmark against libprotobuf C++
   (generated code and `DynamicMessage`).
+- [BENCHMARKS.md](BENCHMARKS.md): the four standard payload tiers, every binding vs its baseline,
+  and the cross-binding comparison (start here for numbers).
+- [bindings/c/benchmarks/bench_struct.cc](bindings/c/benchmarks/bench_struct.cc): C generated
+  structs vs protoc C++ on the same tiers.
 - [conformance/testee.c](conformance/testee.c): testee for Google's `conformance_test_runner`, binary
   wire format only.

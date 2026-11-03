@@ -144,7 +144,9 @@ commit gate:
 ```bash
 make difftest     # differential test against the official C++ runtime
 make bench        # encode/decode benchmark vs generated code and DynamicMessage
-make conformance-setup  # once: shallow-clone pinned protobuf + build runner (cached in ~/.cache/pbwire)
+make bench-c      # C structs benchmark vs protoc C++ (same optional deps)
+make erlang-bench # Erlang binding: gpb, gpb NIF and enif_protobuf
+make conformance-setup  # once: shallow-clone pinned protobuf + build runner (kept in .tmp/, git-ignored)
 make conformance  # official binary/text/JSON conformance suite (reuses the cached checkout)
 ```
 
@@ -368,6 +370,8 @@ src/decode.c                wire bytes -> message tree, unknown field preservati
 src/descriptor_set.c        FileDescriptorSet -> schema (the only reader of descriptor.proto)
 src/stream.c                delimited framing reader, encode sink, deterministic encode
 src/ctx.c                   pbw_ctx: arena + encode buffer reuse
+bindings/c/                 C binding: struct engine (runtime/) + protoc plugin (plugin/) + example/
+bindings/cpp/               C++ example: same addressbook round-trip on the shared C runtime (no plugin)
 bindings/python/            cffi binding (ABI mode, stdlib-free smoke cover)
 bindings/go/pbwire/        cgo binding with a round-trip test
 bindings/erlang/           Erlang/OTP NIF binding (enif_protobuf, gpb-compatible, own rebar3 build)
@@ -409,7 +413,7 @@ set chooses it per file.
 
 Five layers, in order of how much they can catch:
 
-1. **Self-check** (`make test`, three binaries). Dependency-free, assert-based. `test_pbwire` covers
+1. **Self-check** (`make test`, four binaries). Dependency-free, assert-based. `test_pbwire` covers
    every scalar type at its edges (varint width boundaries, zigzag/fixed/NaN/Inf/-0 bit patterns,
    open enums, any-non-zero `bool`), field numbers up to 2^29-1 and the tag widths in between,
    packed and unpacked repetition of all 14 packable types, recursive message types, maps, oneof,
@@ -424,6 +428,11 @@ Five layers, in order of how much they can catch:
    extension full names, reserved names, Any) plus the bytes encoded through it and text and JSON
    parsing through it (extensions, reserved skipping, Any round trip, unknown-field policy,
    required).
+   `test_struct` pins the C binding: plugin-generated structs encode to the exact bytes
+   `protoc --encode` produces (a proto3 and a proto2 matrix covering every scalar kind the
+   struct engine supports, plus string/enum/message, repetition, packed forms, defaults and
+   the addressbook golden), decode recovers every field, and layout mismatches, missing
+   required fields, truncated input and bad arguments all fail loudly.
    `test_threads` runs 8 threads through five shapes that must all stay independent: per-thread
    contexts (resets and recreated arenas, verifying that no other thread's payload ever shows up in
    their memory), the plain API, reflection over one shared linked schema, descriptor-set loading
@@ -510,15 +519,22 @@ iterations, throughput in MB/s (higher is better):
 
 | payload | op | pbwire ctx (MB/s, x gen) | pbwire plain (MB/s, x gen) | protoc gen (MB/s) | DynamicMessage (MB/s) |
 |---|---|---|---|---|---|
-| 132 B | encode | 1829.5 (1.09x) | 1381.4 (0.82x) | 1680.7 | 109.7 |
-| 132 B | decode | 1375.3 (1.56x) | 975.3 (1.11x) | 879.7 | 288.8 |
-| 169 B | encode | 1636.4 (0.97x) | 1244.9 (0.74x) | 1679.7 | 108.9 |
-| 169 B | decode | 1030.2 (1.28x) | 779.6 (0.97x) | 804.8 | 283.2 |
-| 2755 B | encode | 1528.4 (1.36x) | 1265.6 (1.13x) | 1121.3 | 133.6 |
-| 2755 B | decode | 559.7 (1.19x) | 550.2 (1.17x) | 471.9 | 255.4 |
+| 132 B | encode | 2067.3 (1.27x) | 1635.4 (1.00x) | 1631.1 | 112.4 |
+| 132 B | decode | 1393.8 (1.55x) | 1014.7 (1.13x) | 898.5 | 285.1 |
+| 169 B | encode | 1902.9 (1.15x) | 1640.9 (0.99x) | 1652.3 | 108.3 |
+| 169 B | decode | 1104.5 (1.40x) | 831.3 (1.06x) | 787.3 | 272.3 |
+| 2755 B | encode | 1430.1 (1.25x) | 1325.0 (1.16x) | 1144.4 | 127.2 |
+| 2755 B | decode | 553.1 (1.24x) | 533.0 (1.19x) | 447.5 | 248.4 |
+| 85933 B | encode | 1653.0 (1.42x) | 1689.3 (1.45x) | 1163.7 | 146.7 |
+| 85933 B | decode | 614.8 (1.38x) | 597.1 (1.34x) | 446.1 | 256.8 |
 
 Throughput moves by a few percent between runs; the numbers above are one run.
 Regenerate both tables for the current machine with `scripts/perf.sh` (same layout, MB/s only).
+
+The four payloads are the standard benchmark tiers shared by every binding; `make bench-c`
+measures the C generated structs against `protoc` C++ on the same tiers. See
+[BENCHMARKS.md](BENCHMARKS.md) for the tier definitions, the per-binding baselines, and the
+cross-binding comparison.
 
 `make bench` also runs the 169-byte payload with 1 vs 8 threads (one context and one message per
 thread, the same read-only wire input) and prints MB/s per thread, aggregate MB/s, the per-operation
@@ -526,13 +542,13 @@ degradation and the aggregate speedup. Same machine (14 cores), from the same ru
 
 | op | pbwire 1thr (MB/s, x gen) | pbwire 8thr agg (MB/s, x gen) | gen 1thr (MB/s) | gen 8thr agg (MB/s) |
 |---|---|---|---|---|
-| encode | 1816.9 (1.07x) | 11131.5 (1.05x) | 1696.2 | 10605.0 |
-| decode | 1041.2 (1.42x) | 6571.8 (1.77x) | 735.3 | 3705.7 |
+| encode | 1914.4 (1.10x) | 14028.1 (1.33x) | 1734.9 | 10569.9 |
+| decode | 1171.0 (1.52x) | 8286.6 (1.38x) | 770.9 | 6001.2 |
 
 `8thr agg` is the total throughput of all eight threads. The schema, the descriptors and the wire
 input are shared by all threads; each thread only adds its own `pbw_ctx` and message. pbwire scales
-6.1x (encode) and 6.3x (decode) from 1 to 8 threads in that run; generated code reaches 6.3x and
-5.0x. Both are limited by cache and memory bandwidth, not by a lock: the library has no global or
+7.3x (encode) and 7.1x (decode) from 1 to 8 threads in that run; generated code reaches 6.1x and
+7.8x. Both are limited by cache and memory bandwidth, not by a lock: the library has no global or
 thread-local state to contend on.
 
 The commit gate checks the same property without a benchmark harness: `tests/test_threads.c` prints

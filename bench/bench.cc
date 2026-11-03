@@ -1944,6 +1944,15 @@ main(int argc, char **argv)
     bench_case("small", 0, iterations, desc);
     bench_case("full", 1, iterations, desc);
     bench_case("large", 100, iterations, desc);
+    /* xlarge is the fourth standard size (see BENCHMARKS.md): the ~80KB tier
+     * of the Erlang google_message2.dat case. Iterations scale down so one
+     * row still takes about as long as a large row. */
+    {
+        int xlarge_iters = iterations / 100;
+        if (xlarge_iters < 200)
+            xlarge_iters = 200;
+        bench_case("xlarge", 3000, xlarge_iters, desc);
+    }
     bench_text("full", 1, iterations, desc);
     bench_json("full", 1, iterations, desc);
     bench_stream("full", 1, iterations, desc);

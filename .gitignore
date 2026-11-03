@@ -38,6 +38,7 @@ coverage/
 *.dSYM/
 *.tsbuildinfo
 bench/gen/
+bindings/c/benchmarks/gen/
 *.log
 *.log.*
 .logs/
