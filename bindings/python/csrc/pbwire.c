@@ -872,6 +872,28 @@ string_object(uint8_t type, const uint8_t *p, size_t len)
     return PyBytes_FromStringAndSize((const char *)p, (Py_ssize_t)len);
 }
 
+/* Element count of a packed run, so the list can be allocated once: varints
+ * end on a byte without the continuation bit, fixed-width runs divide. */
+static Py_ssize_t
+packed_count(unsigned wire, const uint8_t *p, size_t len)
+{
+    if (wire == 0) {
+        const uint8_t *end = p + len;
+        Py_ssize_t n = 0;
+
+        while (p < end) {
+            n += (*p & 0x80) == 0;
+            p++;
+        }
+        return n;
+    }
+    {
+        size_t width = wire == 1 ? 8 : 4;
+
+        return len % width == 0 ? (Py_ssize_t)(len / width) : -1;
+    }
+}
+
 /* Appends to the per-field list, creating and publishing it on first use. */
 static int
 append_list(PyObject *dict, PyObject **slot, PyObject *name, PyObject *value)
@@ -989,8 +1011,10 @@ dec_message(MessageType *mt, const uint8_t *wire, size_t wire_len,
         }
 
         if (wt == 2) {
-            /* packed run */
+            /* packed run: allocate the list once, fill it by slot */
             uint64_t len;
+            Py_ssize_t n, pos = 0;
+            PyObject *list;
             rdr inner;
 
             if (!rd_varint(&r, &len) || len > (uint64_t)(r.end - r.p)) {
@@ -1003,6 +1027,26 @@ dec_message(MessageType *mt, const uint8_t *wire, size_t wire_len,
                     PyErr_NoMemory();
                     goto fail;
                 }
+            }
+            list = lists[fidx];
+            if (list == NULL) {
+                n = packed_count(f->wire, r.p, (size_t)len);
+                if (n < 0) {
+                    PyErr_SetString(PyExc_ValueError,
+                                    "packed field is not a whole number of "
+                                    "elements");
+                    goto fail;
+                }
+                list = PyList_New(n);
+                if (list == NULL ||
+                    PyDict_SetItem(dict, f->name, list) < 0) {
+                    Py_XDECREF(list);
+                    goto fail;
+                }
+                Py_DECREF(list); /* the dict owns it */
+                lists[fidx] = list;
+            } else {
+                n = 0; /* already sized by an earlier run: append */
             }
             inner.p = r.p;
             inner.end = r.p + (size_t)len;
@@ -1026,9 +1070,17 @@ dec_message(MessageType *mt, const uint8_t *wire, size_t wire_len,
                     goto fail;
                 }
                 value = scalar_object(f->type, bits);
-                if (value == NULL ||
-                    !append_list(dict, &lists[fidx], f->name, value)) {
+                if (value == NULL) {
                     goto fail;
+                }
+                if (pos < n) {
+                    PyList_SET_ITEM(list, pos, value); /* steals the ref */
+                    pos++;
+                } else if (PyList_Append(list, value) < 0) {
+                    Py_DECREF(value);
+                    goto fail;
+                } else {
+                    Py_DECREF(value);
                 }
             }
             r.p = inner.end;

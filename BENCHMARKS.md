@@ -113,14 +113,14 @@ because `protoc --cpp_out` emits straight-line code with no per-field dispatch.
 
 | payload | op | pbwire-py (MB/s, x upb) | upb (MB/s) |
 |---|---|---|---|
-| 136 B | encode | 291.4 (0.39x) | 741.9 |
-| 136 B | decode | 254.6 (0.44x) | 579.3 |
-| 174 B | encode | 335.2 (0.42x) | 803.6 |
-| 174 B | decode | 219.9 (0.39x) | 561.9 |
-| 2469 B | encode | 483.0 (0.33x) | 1443.0 |
-| 2469 B | decode | 230.9 (0.33x) | 704.0 |
-| 74913 B | encode | 570.8 (0.38x) | 1497.5 |
-| 74913 B | decode | 188.8 (0.24x) | 787.0 |
+| 136 B | encode | 290.3 (0.40x) | 726.1 |
+| 136 B | decode | 255.8 (0.44x) | 576.2 |
+| 174 B | encode | 339.0 (0.42x) | 806.2 |
+| 174 B | decode | 211.1 (0.38x) | 561.1 |
+| 2469 B | encode | 494.8 (0.35x) | 1413.0 |
+| 2469 B | decode | 255.7 (0.37x) | 695.5 |
+| 74913 B | encode | 586.7 (0.39x) | 1487.3 |
+| 74913 B | decode | 202.5 (0.25x) | 796.2 |
 
 The binding is a CPython extension that walks the schema and converts
 dict <-> wire in C (`bindings/python/csrc/pbwire.c`), the same shape as the
@@ -135,12 +135,19 @@ plain dicts and therefore allocates one dict, string and int per value.
 |---|---|---|
 | cffi bridge (one call per value) | 9.3 MB/s | 8.6 MB/s |
 | cffi bridge + bulk helpers | 25.1 | 15.6 |
-| CPython extension (this) | 570.8 | 188.8 |
+| CPython extension (this) | 586.7 | 202.5 |
 
 The extension caches per-field facts once per message type (name, number,
 type, wire type, packed/required, sub-type), skips the descriptor entirely in
 the hot loops, uses the list fast path for repeated fields, and writes tag +
 value with one capacity reservation per field.
+
+Decode also pre-sizes the list for a packed run (element count from the
+payload: varints end on a byte without the continuation bit, fixed runs
+divide) and fills it with `PyList_SET_ITEM` instead of appending: worth 7-11%
+on the large tiers. That is the only part of the "pre-built body, then fill"
+trick that a dict API can use — the container shape is reused, the values
+cannot be.
 
 ### Erlang: enif_protobuf vs gpb vs gpb NIF
 
