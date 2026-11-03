@@ -15,14 +15,20 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <algorithm>
 #include <chrono>
+#include <memory>
 #include <random>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "google/protobuf/descriptor.pb.h"
 #include "google/protobuf/dynamic_message.h"
 #include "google/protobuf/message.h"
+#include "google/protobuf/json/json.h"
+#include "google/protobuf/text_format.h"
+#include "google/protobuf/unknown_field_set.h"
 #include "msg.pb.h"
 #include "msg2.pb.h"
 #include "pbwire.h"
@@ -60,7 +66,7 @@ build_schema(pbw_descriptor **msg_out)
     pbw_enum_add_value(color, "BLUE", 3);
 
     pbw_descriptor *child = pbw_schema_add_message(s, "bench.Child");
-    pbw_message_add_field(child, "name", 1, PBW_TYPE_STRING, PBW_LABEL_OPTIONAL);
+    pbw_message_add_field(child, "name", 1, PBW_TYPE_BYTES, PBW_LABEL_OPTIONAL);
     pbw_message_add_field(child, "value", 2, PBW_TYPE_INT64, PBW_LABEL_OPTIONAL);
 
     pbw_descriptor *m = pbw_schema_add_message(s, "bench.Msg");
@@ -78,13 +84,13 @@ build_schema(pbw_descriptor **msg_out)
         {"f32", 11, PBW_TYPE_FLOAT, PBW_LABEL_OPTIONAL, nullptr, 0},
         {"f64", 12, PBW_TYPE_DOUBLE, PBW_LABEL_OPTIONAL, nullptr, 0},
         {"flag", 13, PBW_TYPE_BOOL, PBW_LABEL_OPTIONAL, nullptr, 0},
-        {"name", 14, PBW_TYPE_STRING, PBW_LABEL_OPTIONAL, nullptr, 0},
+        {"name", 14, PBW_TYPE_BYTES, PBW_LABEL_OPTIONAL, nullptr, 0},
         {"blob", 15, PBW_TYPE_BYTES, PBW_LABEL_OPTIONAL, nullptr, 0},
         {"color", 16, PBW_TYPE_ENUM, PBW_LABEL_OPTIONAL, "bench.Color", 0},
         {"child", 17, PBW_TYPE_MESSAGE, PBW_LABEL_OPTIONAL, "bench.Child", 0},
         {"nums", 18, PBW_TYPE_INT32, PBW_LABEL_REPEATED, nullptr, 0},
         {"packed_nums", 19, PBW_TYPE_INT32, PBW_LABEL_REPEATED, nullptr, 1},
-        {"tags", 20, PBW_TYPE_STRING, PBW_LABEL_REPEATED, nullptr, 0},
+        {"tags", 20, PBW_TYPE_BYTES, PBW_LABEL_REPEATED, nullptr, 0},
         {"kids", 21, PBW_TYPE_MESSAGE, PBW_LABEL_REPEATED, "bench.Child", 0},
     };
     for (const FieldDef &d : defs) {
@@ -111,6 +117,8 @@ build_schema2(pbw_descriptor **msg_out, pbw_descriptor **group_out,
               pbw_descriptor **required_out)
 {
     pbw_schema *s = pbw_schema_new();
+
+    pbw_schema_set_proto3(s, 0); /* closed enums, required is enforced */
     pbw_descriptor *color = pbw_schema_add_enum(s, "bench2.Color2");
     pbw_enum_add_value(color, "C2_UNSPECIFIED", 0);
     pbw_enum_add_value(color, "C2_RED", 1);
@@ -143,6 +151,8 @@ build_schema2(pbw_descriptor **msg_out, pbw_descriptor **group_out,
         {"nums", 18, PBW_TYPE_INT32, PBW_LABEL_REPEATED, nullptr, 0},
         {"packed_nums", 19, PBW_TYPE_INT32, PBW_LABEL_REPEATED, nullptr, 1},
         {"tags", 20, PBW_TYPE_BYTES, PBW_LABEL_REPEATED, nullptr, 0},
+        {"packed_colors", 21, PBW_TYPE_ENUM, PBW_LABEL_REPEATED, "bench2.Color2",
+         1},
     };
     for (const FieldDef &d : defs) {
         pbw_field *f = pbw_message_add_field(m, d.name, d.number, d.type, d.label);
@@ -151,9 +161,27 @@ build_schema2(pbw_descriptor **msg_out, pbw_descriptor **group_out,
         if (d.packed)
             pbw_field_set_packed(f, 1);
     }
+    /* extensions live on the extendee with their full dotted names */
+    {
+        pbw_field *e1 = pbw_message_add_extension(
+            m, "ext_int", 100, PBW_TYPE_INT32, PBW_LABEL_OPTIONAL);
+        pbw_field *e2 = pbw_message_add_extension(
+            m, "ext_str", 101, PBW_TYPE_STRING, PBW_LABEL_OPTIONAL);
+        pbw_field_set_full_name(e1, "bench2.ext_int");
+        pbw_field_set_full_name(e2, "bench2.ext_str");
+    }
 
     pbw_descriptor *grp = pbw_schema_add_message(s, "bench2.HasGroup");
+    pbw_descriptor *grp_inner =
+        pbw_schema_add_message(s, "bench2.HasGroup.Grp");
     pbw_message_add_field(grp, "before", 1, PBW_TYPE_INT32, PBW_LABEL_OPTIONAL);
+    {
+        pbw_field *gf = pbw_message_add_field(grp, "grp", 2, PBW_TYPE_GROUP,
+                                              PBW_LABEL_OPTIONAL);
+        pbw_field_set_type_name(gf, "bench2.HasGroup.Grp");
+    }
+    pbw_message_add_field(grp_inner, "x", 3, PBW_TYPE_INT32,
+                          PBW_LABEL_OPTIONAL);
     pbw_message_add_field(grp, "after", 4, PBW_TYPE_INT32, PBW_LABEL_OPTIONAL);
 
     pbw_descriptor *req = pbw_schema_add_message(s, "bench2.HasRequired");
@@ -300,8 +328,9 @@ fill_pbw2(pbw_message *m)
     pbw_message_set(m, 20, pbw_value_new_string("tag"));
 }
 
-/* proto2 semantics against the reference, plus the two documented limits:
- * groups are skipped, required fields are not enforced. */
+/* proto2 semantics against the reference: presence, groups, extensions,
+ * required, closed enums. MessageSet stays out: its wire encoding is kept as
+ * unknown bytes instead of populating the extensions. */
 void
 check_proto2(pbw_descriptor *desc, pbw_descriptor *group,
              pbw_descriptor *required)
@@ -363,7 +392,7 @@ check_proto2(pbw_descriptor *desc, pbw_descriptor *group,
         }
     }
 
-    /* groups: libprotobuf writes them, pbwire skips them on decode */
+    /* groups: decoded into their submessage like message fields */
     {
         bench2::HasGroup g;
         g.set_before(1);
@@ -373,43 +402,388 @@ check_proto2(pbw_descriptor *desc, pbw_descriptor *group,
         g.SerializeToString(&wire);
         pbw_message *dm = nullptr;
         if (pbw_decode(group, wire.data(), wire.size(), &dm) != PBW_OK) {
-            fail("group decode must skip, not fail");
+            fail("group decode must succeed");
         } else {
+            pbw_message *grp_msg =
+                pbw_value_get_message(pbw_message_get(dm, 2));
+            std::string round = pbw_bytes_of(group, dm);
             if (pbw_message_get(dm, 1) == nullptr ||
                 pbw_value_get_int32(pbw_message_get(dm, 1)) != 1 ||
                 pbw_message_get(dm, 4) == nullptr ||
                 pbw_value_get_int32(pbw_message_get(dm, 4)) != 2 ||
-                pbw_message_get(dm, 2) != nullptr) {
+                grp_msg == NULL ||
+                pbw_value_get_int32(pbw_message_get(grp_msg, 3)) != 7) {
                 fail("group decode kept the wrong fields");
+            } else if (round != wire) {
+                fail("group decode -> encode differs");
             } else {
-                std::printf("OK   proto2 group skipped, surrounding fields intact\n");
+                std::printf("OK   proto2 group decodes like a message field\n");
             }
             pbw_message_free(dm);
         }
     }
 
-    /* required: pbwire accepts a message without it, libprotobuf reports
-     * IsInitialized() == false. Pinned so the difference stays visible. */
+    /* extensions: set on both sides, the bytes must match, and decoding the
+     * reference bytes must land the values on the same field numbers */
+    {
+        bench2::Msg2 gen;
+        gen.SetExtension(bench2::ext_int, 42);
+        gen.SetExtension(bench2::ext_str, "hello");
+        std::string wire;
+        gen.SerializeToString(&wire);
+
+        pbw_message *m = pbw_message_new(desc);
+        pbw_message_set(m, 100, pbw_value_new_int(42));
+        pbw_message_set(m, 101, pbw_value_new_string("hello"));
+        std::string pbw_wire = pbw_bytes_of(desc, m);
+        pbw_message_free(m);
+
+        pbw_message *dm = nullptr;
+        pbw_status st = pbw_decode(desc, wire.data(), wire.size(), &dm);
+        bool match = dm != nullptr &&
+                     pbw_value_get_int32(pbw_message_get(dm, 100)) == 42 &&
+                     strcmp(pbw_value_get_string(pbw_message_get(dm, 101)),
+                            "hello") == 0;
+        pbw_message_free(dm);
+
+        if (pbw_wire != wire) {
+            fail("proto2 extension encoding parity");
+        } else if (st != PBW_OK || !match) {
+            fail("proto2 extension decode");
+        } else {
+            std::printf("OK   proto2 extensions parity (%zu bytes)\n",
+                        wire.size());
+        }
+    }
+
+    /* required: the reference parser refuses the incomplete data; the reference
+     * serializer writes whatever the tree holds. pbwire does the same. */
     {
         bench2::HasRequired r;
         r.set_other(3);
         std::string wire;
         r.SerializePartialToString(&wire);
         bench2::HasRequired check;
-        bool parsed = check.ParseFromArray(wire.data(), static_cast<int>(wire.size()));
+        bool parsed =
+            check.ParseFromArray(wire.data(), static_cast<int>(wire.size()));
+        std::string gen_out;
+        bool gen_serialized = r.SerializeToString(&gen_out);
+
         pbw_message *dm = nullptr;
         pbw_status st = pbw_decode(required, wire.data(), wire.size(), &dm);
         pbw_message_free(dm);
-        /* ParseFromArray() reports false because the message is uninitialized;
-         * the point is that pbwire has no such notion. */
-        if (parsed && check.IsInitialized()) {
+
+        pbw_message *built = pbw_message_new(required);
+        pbw_message_set(built, 2, pbw_value_new_int(3));
+        int initialized = pbw_message_is_initialized(built);
+        std::string pbw_out = pbw_bytes_of(required, built);
+        pbw_message_free(built);
+
+        if (parsed || !gen_serialized) {
             fail("libprotobuf baseline for required-field test");
-        } else if (st != PBW_OK) {
-            fail("pbwire must not enforce required fields");
+        } else if (st != PBW_ERR_REQUIRED) {
+            fail("pbwire must refuse to parse a proto2 message missing required");
+        } else if (initialized != 0 || pbw_out != gen_out) {
+            fail("pbwire must serialize a partial proto2 message like the reference");
         } else {
-            std::printf("OK   proto2 required field not enforced (documented)\n");
+            std::printf(
+                "OK   proto2 required: parse refuses, serialize matches (%zu bytes)\n",
+                gen_out.size());
         }
     }
+
+    /* closed enum: an unknown number leaves the field on both sides and comes
+     * back as an unknown field */
+    {
+        static const unsigned char raw[] = {0x80, 0x01, 0x63}; /* field 16 = 99 */
+        bench2::Msg2 ref;
+        std::string out;
+        bool parsed = ref.ParseFromArray(reinterpret_cast<const char *>(raw),
+                                         static_cast<int>(sizeof(raw)));
+        ref.SerializeToString(&out);
+
+        pbw_message *dm = nullptr;
+        pbw_status st = pbw_decode(desc, raw, sizeof(raw), &dm);
+        std::string pbw_out = dm != nullptr ? pbw_bytes_of(desc, dm) : "?";
+        bool kept = dm != nullptr && pbw_message_get(dm, 16) != nullptr;
+        pbw_message_free(dm);
+
+        if (!parsed || ref.has_color() ||
+            out != std::string(reinterpret_cast<const char *>(raw), sizeof(raw))) {
+            fail("libprotobuf baseline for closed-enum test");
+        } else if (st != PBW_OK || kept) {
+            fail("closed enum: an unknown value must leave the field");
+        } else if (pbw_out != out) {
+            fail("closed enum: unknown value must round-trip as an unknown field");
+        } else {
+            std::printf("OK   proto2 closed enum keeps an unknown value as unknown\n");
+        }
+    }
+
+    /* the same for a packed repeated closed enum: known values stay packed and
+     * the unknown one is written back unpacked */
+    {
+        /* field 21 (packed), values 0, 99, 1 */
+        static const unsigned char raw[] = {0xaa, 0x01, 0x03, 0x00, 0x63, 0x01};
+        bench2::Msg2 ref;
+        std::string out;
+        bool parsed = ref.ParseFromArray(reinterpret_cast<const char *>(raw),
+                                         static_cast<int>(sizeof(raw)));
+        ref.SerializeToString(&out);
+
+        pbw_message *dm = nullptr;
+        pbw_status st = pbw_decode(desc, raw, sizeof(raw), &dm);
+        std::string pbw_out = dm != nullptr ? pbw_bytes_of(desc, dm) : "?";
+        size_t kept = pbw_value_count(pbw_message_get(dm, 21));
+        pbw_message_free(dm);
+
+        if (!parsed || ref.packed_colors_size() != 2 ||
+            ref.packed_colors(0) != bench2::C2_UNSPECIFIED ||
+            ref.packed_colors(1) != bench2::C2_RED) {
+            fail("libprotobuf baseline for packed closed-enum test");
+        } else if (st != PBW_OK || kept != 2) {
+            fail("packed closed enum: known values must stay in the field");
+        } else if (pbw_out != out) {
+            fail("packed closed enum: bytes must match the reference");
+        } else {
+            std::printf("OK   proto2 packed closed enum parity (%zu bytes)\n",
+                        out.size());
+        }
+    }
+}
+
+static std::string
+pbw_text_of(pbw_message *m)
+{
+    char *out = nullptr;
+    size_t len = 0;
+    std::string s;
+
+    if (pbw_text_print(m, &out, &len) != PBW_OK) {
+        fail("pbw_text_print");
+        return s;
+    }
+    s.assign(out, len);
+    pbw_free(out);
+    return s;
+}
+
+/* Text format against the reference: C++-printed text parses the same,
+ * pbw-printed text parses the same, and unknown fields print identically. */
+void
+check_text_parity(pbw_descriptor *desc, pbw_descriptor *msg2,
+                  pbw_descriptor *group)
+{
+    /* proto3 message both directions */
+    {
+        bench::Msg gen;
+        fill_gen(&gen, 1);
+        std::string text;
+        google::protobuf::TextFormat::PrintToString(gen, &text);
+        pbw_message *dm = nullptr;
+        if (pbw_text_parse(desc, text.data(), text.size(), &dm) != PBW_OK) {
+            fail("text parse of C++-printed proto3");
+            std::printf("  text was:\n%s\n", text.c_str());
+        } else {
+            bench::Msg rt;
+            std::string back = pbw_text_of(dm);
+            if (!google::protobuf::TextFormat::ParseFromString(back, &rt) ||
+                rt.DebugString() != gen.DebugString()) {
+                fail("text round trip proto3");
+            } else {
+                std::printf("OK   text round trip proto3 (%zu bytes of text)\n",
+                            text.size());
+            }
+            pbw_message_free(dm);
+        }
+        pbw_message *m = pbw_message_new(desc);
+        fill_pbw(m, 1);
+        std::string tp = pbw_text_of(m);
+        pbw_message_free(m);
+        bench::Msg rt2;
+        if (!google::protobuf::TextFormat::ParseFromString(tp, &rt2) ||
+            rt2.DebugString() != gen.DebugString()) {
+            fail("pbw text print parses as proto3");
+        } else {
+            std::printf("OK   pbw text print parses as proto3\n");
+        }
+    }
+    /* proto2 message with extensions, both directions */
+    {
+        bench2::Msg2 gen;
+        fill_gen2(&gen);
+        gen.SetExtension(bench2::ext_int, 42);
+        gen.SetExtension(bench2::ext_str, "hi");
+        std::string text;
+        google::protobuf::TextFormat::PrintToString(gen, &text);
+        pbw_message *dm = nullptr;
+        if (pbw_text_parse(msg2, text.data(), text.size(), &dm) != PBW_OK) {
+            fail("text parse of C++-printed proto2");
+        } else {
+            bench2::Msg2 rt;
+            std::string back = pbw_text_of(dm);
+            if (!google::protobuf::TextFormat::ParseFromString(back, &rt) ||
+                rt.DebugString() != gen.DebugString()) {
+                fail("text round trip proto2");
+            } else {
+                std::printf("OK   text round trip proto2 (%zu bytes of text)\n",
+                            text.size());
+            }
+            pbw_message_free(dm);
+        }
+    }
+    /* groups print with their type name and parse back */
+    {
+        bench2::HasGroup g;
+        g.set_before(1);
+        g.mutable_grp()->set_x(7);
+        g.set_after(2);
+        std::string text;
+        google::protobuf::TextFormat::PrintToString(g, &text);
+        pbw_message *dm = nullptr;
+        if (pbw_text_parse(group, text.data(), text.size(), &dm) != PBW_OK) {
+            fail("text parse of C++-printed group");
+        } else {
+            std::string back = pbw_text_of(dm);
+            bench2::HasGroup rt;
+            if (!google::protobuf::TextFormat::ParseFromString(back, &rt) ||
+                rt.DebugString() != g.DebugString()) {
+                fail("text round trip group");
+            } else {
+                std::printf("OK   text round trip group\n");
+            }
+            pbw_message_free(dm);
+        }
+    }
+    /* unknown fields print byte-identically to the reference printer */
+    {
+        bench::Msg gen;
+        fill_gen(&gen, 1);
+        google::protobuf::UnknownFieldSet *uf =
+            gen.GetReflection()->MutableUnknownFields(&gen);
+        uf->AddVarint(50, 300);
+        uf->AddFixed32(51, 0x12345678u);
+        uf->AddFixed64(52, 0x0102030405060708ULL);
+        uf->AddLengthDelimited(53, "hi");
+        uf->AddLengthDelimited(54, "\x08\x01");
+        uf->AddGroup(55)->AddVarint(1, 2);
+        std::string wire;
+        gen.SerializeToString(&wire);
+        std::string cxx;
+        google::protobuf::TextFormat::PrintToString(gen, &cxx);
+        pbw_message *dm = nullptr;
+        if (pbw_decode(desc, wire.data(), wire.size(), &dm) != PBW_OK) {
+            fail("text unknowns decode");
+        } else {
+            std::string mine = pbw_text_of(dm);
+            if (mine != cxx) {
+                fail("text unknowns print identically");
+            } else {
+                std::printf("OK   text unknowns print identically\n");
+            }
+            pbw_message_free(dm);
+        }
+    }
+}
+
+/* Text verdict fuzz: both parsers must agree. Seeds and alphabet stay ASCII
+ * (no backslashes, no high bytes), because string escapes and UTF-8
+ * strictness are pinned by unit tests instead: there pbw intentionally
+ * rejects what C++ accepts. */
+template <typename Message>
+void
+check_text_verdicts_for(pbw_descriptor *desc, const std::string &seed,
+                        int cases, unsigned rng_seed)
+{
+    std::mt19937 rng(rng_seed);
+    int mismatches = 0;
+    int accepted = 0;
+
+    for (int i = 0; i < cases; i++) {
+        std::string input = seed;
+        int ops = 1 + static_cast<int>(rng() % 3);
+        for (int k = 0; k < ops && !input.empty(); k++) {
+            size_t pos = rng() % input.size();
+            switch (rng() % 4) {
+            case 0:
+                input[pos] = static_cast<char>(32 + rng() % 95);
+                if (input[pos] == '\\') {
+                    input[pos] = '!';
+                }
+                break;
+            case 1: {
+                char ch = static_cast<char>(32 + rng() % 95);
+                input.insert(pos, 1, ch == '\\' ? '!' : ch);
+                break;
+            }
+            case 2:
+                input.erase(pos, 1);
+                break;
+            default:
+                input.insert(pos, ",;:[]{}<> \t\n");
+                break;
+            }
+        }
+        Message ref;
+        bool ref_ok =
+            google::protobuf::TextFormat::ParseFromString(input, &ref);
+        pbw_message *m = nullptr;
+        bool pbw_ok =
+            pbw_text_parse(desc, input.data(), input.size(), &m) == PBW_OK;
+        pbw_message_free(m);
+        if (ref_ok) {
+            accepted++;
+        }
+        if (ref_ok != pbw_ok) {
+            mismatches++;
+            if (mismatches <= 4) {
+                std::printf("  text verdict mismatch: libprotobuf=%d pbwire=%d\n",
+                            ref_ok, pbw_ok);
+                std::string esc;
+                for (char ch : input) {
+                    if (ch == '\n')
+                        esc += "\\n";
+                    else if (ch == '\t')
+                        esc += "\\t";
+                    else
+                        esc += ch;
+                }
+                std::printf("    input: [%s]\n", esc.c_str());
+            }
+        }
+    }
+    std::printf("     %d/%d text inputs accepted by libprotobuf, %d verdict "
+                "mismatches\n",
+                accepted, cases, mismatches);
+    if (mismatches > 0) {
+        fail("text verdict parity");
+    }
+}
+
+void
+check_text_verdicts(pbw_descriptor *desc, pbw_descriptor *msg2,
+                    pbw_descriptor *group, int cases, unsigned seed)
+{
+    bench::Msg proto3;
+    fill_gen(&proto3, 1);
+    std::string t3;
+    google::protobuf::TextFormat::PrintToString(proto3, &t3);
+    check_text_verdicts_for<bench::Msg>(desc, t3, cases, seed);
+
+    bench2::Msg2 proto2;
+    fill_gen2(&proto2);
+    proto2.SetExtension(bench2::ext_int, 42);
+    std::string t2;
+    google::protobuf::TextFormat::PrintToString(proto2, &t2);
+    check_text_verdicts_for<bench2::Msg2>(msg2, t2, cases, seed + 1);
+
+    bench2::HasGroup g;
+    g.set_before(1);
+    g.mutable_grp()->set_x(7);
+    g.set_after(2);
+    std::string tg;
+    google::protobuf::TextFormat::PrintToString(g, &tg);
+    check_text_verdicts_for<bench2::HasGroup>(group, tg, cases, seed + 2);
 }
 
 /* proto3 implicit presence: a field set to its default is not serialized by the
@@ -702,13 +1076,6 @@ check_roundtrip(pbw_descriptor *desc)
 }
 
 bool
-ref_parse_ok(const std::string &input)
-{
-    bench::Msg m;
-    return m.ParseFromArray(input.data(), static_cast<int>(input.size()));
-}
-
-bool
 pbw_parse_ok(pbw_descriptor *desc, const std::string &input)
 {
     pbw_message *m = nullptr;
@@ -718,10 +1085,12 @@ pbw_parse_ok(pbw_descriptor *desc, const std::string &input)
 }
 
 /* Shrink a disagreeing input to a minimal reproducer so the class of
- * divergence is readable instead of guessed. */
+ * divergence is readable instead of guessed. `ref_ok_fn` parses with the same
+ * message type as the fuzz case. */
+template <typename RefOk>
 std::string
-minimize(pbw_descriptor *desc, const std::string &input,
-         bool ref_ok)
+minimize(pbw_descriptor *desc, const std::string &input, bool ref_ok,
+         RefOk ref_ok_fn)
 {
     std::string best = input;
     bool changed = true;
@@ -731,7 +1100,7 @@ minimize(pbw_descriptor *desc, const std::string &input,
             std::string cand = best.substr(0, i) + best.substr(i + 1);
             if (cand.empty())
                 continue;
-            if (ref_parse_ok(cand) == ref_ok &&
+            if (ref_ok_fn(cand) == ref_ok &&
                 pbw_parse_ok(desc, cand) != ref_ok) {
                 best = cand;
                 changed = true;
@@ -753,13 +1122,18 @@ print_hex(const char *indent, const std::string &s)
 
 /* Both parsers must agree on whether a byte stream is parseable. libprotobuf is
  * the reference: a disagreement means one of them misreads the wire format. */
+template <typename Message>
 void
-check_parse_verdicts(pbw_descriptor *desc, int cases, unsigned seed)
+check_parse_verdicts_for(pbw_descriptor *desc, const std::string &valid,
+                         int cases, unsigned seed)
 {
     std::mt19937 rng(seed);
-    std::string valid = gen_bytes(2);
     int mismatches = 0;
     int accepted = 0;
+    auto ref_of = [](const std::string &s) {
+        Message m;
+        return m.ParseFromArray(s.data(), static_cast<int>(s.size()));
+    };
 
     for (int i = 0; i < cases; i++) {
         std::string input;
@@ -777,7 +1151,7 @@ check_parse_verdicts(pbw_descriptor *desc, int cases, unsigned seed)
                 input.resize(rng() % input.size());
         }
 
-        bench::Msg ref;
+        Message ref;
         bool ref_ok =
             ref.ParseFromArray(input.data(), static_cast<int>(input.size()));
         pbw_message *m = nullptr;
@@ -789,7 +1163,7 @@ check_parse_verdicts(pbw_descriptor *desc, int cases, unsigned seed)
         if (ref_ok != pbw_ok) {
             mismatches++;
             if (mismatches <= 4) {
-                std::string min = minimize(desc, input, ref_ok);
+                std::string min = minimize(desc, input, ref_ok, ref_of);
                 std::printf("  verdict mismatch: libprotobuf=%d pbwire=%d (%s)\n",
                             ref_ok, pbw_ok, pbw_strerror(st));
                 std::printf("    input  %zu bytes:\n", input.size());
@@ -804,6 +1178,42 @@ check_parse_verdicts(pbw_descriptor *desc, int cases, unsigned seed)
                 accepted, cases, mismatches);
     if (mismatches > 0)
         fail("parse verdict parity");
+}
+
+void
+check_parse_verdicts(pbw_descriptor *desc, pbw_descriptor *msg2,
+                     pbw_descriptor *group, pbw_descriptor *required, int cases,
+                     unsigned seed)
+{
+    check_parse_verdicts_for<bench::Msg>(desc, gen_bytes(2), cases, seed);
+
+    /* Same fuzz over a proto2 message with a group field: verdicts must agree
+     * with the reference as well. */
+    bench2::HasGroup g;
+    g.set_before(1);
+    g.mutable_grp()->set_x(7);
+    g.set_after(2);
+    std::string wire;
+    g.SerializeToString(&wire);
+    check_parse_verdicts_for<bench2::HasGroup>(group, wire, cases, seed + 1);
+
+    /* ... over a proto2 message with a required field: dropping or corrupting it
+     * must make both parsers reject the input. */
+    bench2::HasRequired r;
+    r.set_needed(1);
+    r.set_other(3);
+    std::string required_wire;
+    r.SerializeToString(&required_wire);
+    check_parse_verdicts_for<bench2::HasRequired>(required, required_wire, cases,
+                                                  seed + 2);
+
+    /* ... and over a closed enum: an unknown number moves to the unknown fields
+     * without changing the verdict. */
+    bench2::Msg2 e;
+    e.set_color(bench2::C2_BLUE);
+    std::string enum_wire;
+    e.SerializeToString(&enum_wire);
+    check_parse_verdicts_for<bench2::Msg2>(msg2, enum_wire, cases, seed + 3);
 }
 
 /* --------------------------------------------------------------- benchmark */
@@ -894,10 +1304,14 @@ bench_case(const char *label, int repeated, int iterations,
                                                   iterations, iterations / 10),
                     ref.size()});
 
+    /* Decode rows sink only the status: every implementation must produce it,
+     * so nothing is eliminated, and "decode" measures decoding rather than
+     * decoding plus a full-tree walk (which costs each side differently). */
     rows.push_back({"pbwire c", "decode", time_it([&] {
                         pbw_message *m = nullptr;
-                        pbw_decode_ctx(ctx, desc, ref.data(), ref.size(), &m);
-                        encoded_len = m != nullptr ? pbw_message_field_count(m) : 0;
+                        if (pbw_decode_ctx(ctx, desc, ref.data(), ref.size(),
+                                           &m) != PBW_OK)
+                            failures++;
                         pbw_ctx_reset(ctx);
                     },
                                                   iterations, iterations / 10),
@@ -905,8 +1319,9 @@ bench_case(const char *label, int repeated, int iterations,
 
     rows.push_back({"pbwire", "decode", time_it([&] {
                         pbw_message *m = nullptr;
-                        pbw_decode(desc, ref.data(), ref.size(), &m);
-                        encoded_len = m != nullptr ? pbw_message_field_count(m) : 0;
+                        if (pbw_decode(desc, ref.data(), ref.size(), &m) !=
+                            PBW_OK)
+                            failures++;
                         pbw_message_free(m);
                     },
                                                 iterations, iterations / 10),
@@ -914,17 +1329,18 @@ bench_case(const char *label, int repeated, int iterations,
 
     rows.push_back({"pb gen", "decode", time_it([&] {
                         bench::Msg m;
-                        (void)m.ParseFromArray(ref.data(), static_cast<int>(ref.size()));
-                        encoded_len = m.ByteSizeLong();
+                        if (!m.ParseFromArray(ref.data(),
+                                              static_cast<int>(ref.size())))
+                            failures++;
                     },
                                                 iterations, iterations / 10),
                     ref.size()});
 
     rows.push_back({"pb dyn", "decode", time_it([&] {
                         google::protobuf::Message *m = prototype->New();
-                        (void)m->ParseFromArray(ref.data(),
-                                                static_cast<int>(ref.size()));
-                        encoded_len = m->ByteSizeLong();
+                        if (!m->ParseFromArray(ref.data(),
+                                               static_cast<int>(ref.size())))
+                            failures++;
                         delete m;
                     },
                                                 iterations, iterations / 10),
@@ -941,6 +1357,528 @@ bench_case(const char *label, int repeated, int iterations,
 
     delete dyn;
     pbw_message_free(pbw_msg);
+}
+
+/* Text print/parse against the reference printer/parser. */
+void
+bench_text(const char *label, int repeated, int iterations,
+           pbw_descriptor *desc)
+{
+    bench::Msg gen_msg;
+    fill_gen(&gen_msg, repeated);
+    std::string text;
+    google::protobuf::TextFormat::PrintToString(gen_msg, &text);
+    pbw_message *pbw_msg = pbw_message_new(desc);
+    fill_pbw(pbw_msg, repeated);
+    std::string scratch;
+    std::vector<Row> rows;
+
+    rows.push_back({"pbwire", "print", time_it([&] {
+                        char *out = nullptr;
+                        size_t len = 0;
+                        (void)pbw_text_print(pbw_msg, &out, &len);
+                        pbw_free(out);
+                    },
+                                               iterations, iterations / 10),
+                    text.size()});
+    rows.push_back({"pb gen", "print", time_it([&] {
+                        scratch.clear();
+                        (void)google::protobuf::TextFormat::PrintToString(
+                            gen_msg, &scratch);
+                    },
+                                               iterations, iterations / 10),
+                    text.size()});
+    rows.push_back({"pbwire", "parse", time_it([&] {
+                        pbw_message *dm = nullptr;
+                        (void)pbw_text_parse(desc, text.data(), text.size(),
+                                             &dm);
+                        pbw_message_free(dm);
+                    },
+                                               iterations, iterations / 10),
+                    text.size()});
+    rows.push_back({"pb gen", "parse", time_it([&] {
+                        bench::Msg m;
+                        (void)google::protobuf::TextFormat::ParseFromString(
+                            text, &m);
+                    },
+                                               iterations, iterations / 10),
+                    text.size()});
+    std::printf("\ntext: %s (%zu bytes of text), %d iterations\n", label,
+                text.size(), iterations);
+    std::printf("  %-9s %-7s %10s %10s\n", "impl", "op", "ns/op", "MB/s");
+    for (const Row &r : rows) {
+        double mbps = r.ns > 0 ? static_cast<double>(r.bytes) / r.ns * 1e3 : 0;
+        std::printf("  %-9s %-7s %10.1f %10.1f\n", r.impl, r.op, r.ns, mbps);
+    }
+    pbw_message_free(pbw_msg);
+}
+
+static std::string
+pbw_json_of(pbw_message *m)
+{
+    char *out = nullptr;
+    size_t len = 0;
+    std::string s;
+
+    if (pbw_json_print(m, &out, &len) != PBW_OK) {
+        fail("pbw_json_print");
+        return s;
+    }
+    s.assign(out, len);
+    pbw_free(out);
+    return s;
+}
+
+/* JSON mapping against the reference: C++-printed JSON parses to the same
+ * message, pbw-printed JSON parses the same under C++, on both dialects. */
+void
+check_json_parity(pbw_descriptor *desc, pbw_descriptor *msg2)
+{
+    /* proto3 message both directions */
+    {
+        bench::Msg gen;
+        fill_gen(&gen, 1);
+        std::string text;
+        if (!google::protobuf::json::MessageToJsonString(gen, &text).ok()) {
+            fail("C++ MessageToJsonString");
+        } else {
+            pbw_message *dm = nullptr;
+            if (pbw_json_parse(desc, text.data(), text.size(), &dm) !=
+                PBW_OK) {
+                fail("json parse of C++-printed proto3");
+                std::printf("  text was:\n%s\n", text.c_str());
+            } else {
+                bench::Msg rt;
+                std::string back = pbw_json_of(dm);
+                if (!google::protobuf::json::JsonStringToMessage(back, &rt)
+                         .ok() ||
+                    rt.DebugString() != gen.DebugString()) {
+                    fail("json round trip proto3");
+                } else {
+                    std::printf("OK   json round trip proto3 (%zu bytes of "
+                                "text)\n",
+                                text.size());
+                }
+                pbw_message_free(dm);
+            }
+        }
+        pbw_message *m = pbw_message_new(desc);
+        fill_pbw(m, 1);
+        std::string tp = pbw_json_of(m);
+        pbw_message_free(m);
+        {
+            bench::Msg rt2;
+            if (!google::protobuf::json::JsonStringToMessage(tp, &rt2).ok() ||
+                rt2.DebugString() != gen.DebugString()) {
+                fail("pbw json print parses as proto3");
+            } else {
+                std::printf("OK   pbw json print parses as proto3\n");
+            }
+        }
+    }
+    /* proto2 message both directions */
+    {
+        bench2::Msg2 gen;
+        fill_gen2(&gen);
+        gen.SetExtension(bench2::ext_int, 42);
+        gen.SetExtension(bench2::ext_str, "hi");
+        std::string text;
+        if (!google::protobuf::json::MessageToJsonString(gen, &text).ok()) {
+            fail("C++ MessageToJsonString proto2");
+        } else {
+            pbw_message *dm = nullptr;
+            if (pbw_json_parse(msg2, text.data(), text.size(), &dm) !=
+                PBW_OK) {
+                fail("json parse of C++-printed proto2");
+                std::printf("  text was:\n%s\n", text.c_str());
+            } else {
+                bench2::Msg2 rt;
+                std::string back = pbw_json_of(dm);
+                if (!google::protobuf::json::JsonStringToMessage(back, &rt)
+                         .ok() ||
+                    rt.DebugString() != gen.DebugString()) {
+                    fail("json round trip proto2");
+                } else {
+                    std::printf("OK   json round trip proto2 (%zu bytes of "
+                                "text)\n",
+                                text.size());
+                }
+                pbw_message_free(dm);
+            }
+        }
+    }
+}
+
+template <typename Message>
+void
+check_json_verdicts_for(pbw_descriptor *desc, const std::string &seed,
+                        int cases, unsigned rng_seed)
+{
+    std::mt19937 rng(rng_seed);
+    int mismatches = 0;
+    int accepted = 0;
+
+    for (int i = 0; i < cases; i++) {
+        std::string input = seed;
+        int ops = 1 + static_cast<int>(rng() % 3);
+        for (int k = 0; k < ops && !input.empty(); k++) {
+            size_t pos = rng() % input.size();
+            switch (rng() % 4) {
+            case 0:
+                input[pos] = static_cast<char>(32 + rng() % 95);
+                if (input[pos] == '\\') {
+                    input[pos] = '!';
+                }
+                break;
+            case 1: {
+                char ch = static_cast<char>(32 + rng() % 95);
+                input.insert(pos, 1, ch == '\\' ? '!' : ch);
+                break;
+            }
+            case 2:
+                input.erase(pos, 1);
+                break;
+            default:
+                input.insert(pos, ",;:[]{} \"\\");
+                break;
+            }
+        }
+        Message ref;
+        bool ref_ok =
+            google::protobuf::json::JsonStringToMessage(input, &ref).ok();
+        pbw_message *m = nullptr;
+        bool pbw_ok =
+            pbw_json_parse(desc, input.data(), input.size(), &m) == PBW_OK;
+        pbw_message_free(m);
+        if (ref_ok) {
+            accepted++;
+        }
+        if (ref_ok != pbw_ok) {
+            mismatches++;
+            if (mismatches <= 4) {
+                std::printf("  json verdict mismatch: libprotobuf=%d pbwire=%d\n",
+                            ref_ok, pbw_ok);
+                std::string esc;
+                for (char ch : input) {
+                    if (ch == '\n')
+                        esc += "\\n";
+                    else if (ch == '\t')
+                        esc += "\\t";
+                    else
+                        esc += ch;
+                }
+                std::printf("    input: [%s]\n", esc.c_str());
+            }
+        }
+    }
+    std::printf("     %d/%d json inputs accepted by libprotobuf, %d verdict "
+                "mismatches\n",
+                accepted, cases, mismatches);
+    if (mismatches > 0) {
+        fail("json verdict parity");
+    }
+}
+
+void
+check_json_verdicts(pbw_descriptor *desc, pbw_descriptor *msg2, int cases,
+                    unsigned seed)
+{
+    bench::Msg proto3;
+    fill_gen(&proto3, 1);
+    std::string t3;
+    if (!google::protobuf::json::MessageToJsonString(proto3, &t3).ok()) {
+        fail("C++ MessageToJsonString seed");
+        return;
+    }
+    check_json_verdicts_for<bench::Msg>(desc, t3, cases, seed);
+
+    bench2::Msg2 proto2;
+    fill_gen2(&proto2);
+    proto2.SetExtension(bench2::ext_int, 42);
+    std::string t2;
+    if (!google::protobuf::json::MessageToJsonString(proto2, &t2).ok()) {
+        fail("C++ MessageToJsonString seed2");
+        return;
+    }
+    check_json_verdicts_for<bench2::Msg2>(msg2, t2, cases, seed + 1);
+}
+
+void
+bench_json(const char *label, int repeated, int iterations,
+           pbw_descriptor *desc)
+{
+    bench::Msg gen_msg;
+    fill_gen(&gen_msg, repeated);
+    std::string text;
+    if (!google::protobuf::json::MessageToJsonString(gen_msg, &text).ok()) {
+        fail("C++ MessageToJsonString bench");
+        return;
+    }
+    pbw_message *pbw_msg = pbw_message_new(desc);
+    fill_pbw(pbw_msg, repeated);
+    std::string scratch;
+    std::vector<Row> rows;
+
+    rows.push_back({"pbwire", "print", time_it([&] {
+                        char *out = nullptr;
+                        size_t len = 0;
+                        (void)pbw_json_print(pbw_msg, &out, &len);
+                        pbw_free(out);
+                    },
+                                               iterations, iterations / 10),
+                    text.size()});
+    rows.push_back({"pb gen", "print", time_it([&] {
+                        scratch.clear();
+                        (void)google::protobuf::json::MessageToJsonString(
+                            gen_msg, &scratch);
+                    },
+                                               iterations, iterations / 10),
+                    text.size()});
+    rows.push_back({"pbwire", "parse", time_it([&] {
+                        pbw_message *dm = nullptr;
+                        (void)pbw_json_parse(desc, text.data(), text.size(),
+                                             &dm);
+                        pbw_message_free(dm);
+                    },
+                                               iterations, iterations / 10),
+                    text.size()});
+    rows.push_back({"pb gen", "parse", time_it([&] {
+                        bench::Msg m;
+                        (void)google::protobuf::json::JsonStringToMessage(
+                            text, &m);
+                    },
+                                               iterations, iterations / 10),
+                    text.size()});
+    std::printf("\njson: %s (%zu bytes of text), %d iterations\n", label,
+                text.size(), iterations);
+    std::printf("  %-9s %-7s %10s %10s\n", "impl", "op", "ns/op", "MB/s");
+    for (const Row &r : rows) {
+        double mbps = r.ns > 0 ? static_cast<double>(r.bytes) / r.ns * 1e3 : 0;
+        std::printf("  %-9s %-7s %10.1f %10.1f\n", r.impl, r.op, r.ns, mbps);
+    }
+    pbw_message_free(pbw_msg);
+}
+
+static pbw_status
+null_sink(const uint8_t *data, size_t len, void *opaque)
+{
+    (void)data;
+    (void)len;
+    (void)opaque;
+    return PBW_OK;
+}
+
+/* Step 4 costs: deterministic encode (no maps in this message, so it must tie
+ * plain encode), streaming sink vs one-shot, and a delimited feed/next
+ * round-trip vs encode+decode. */
+void
+bench_stream(const char *label, int repeated, int iterations,
+             pbw_descriptor *desc)
+{
+    pbw_message *pbw_msg = pbw_message_new(desc);
+    uint8_t *framed = nullptr;
+    size_t framed_len = 0;
+    size_t bytes = 0;
+    std::vector<Row> rows;
+
+    fill_pbw(pbw_msg, repeated);
+    if (pbw_encode_delimited(pbw_msg, &framed, &framed_len) != PBW_OK) {
+        fail("delimited encode bench");
+        pbw_message_free(pbw_msg);
+        return;
+    }
+    bytes = framed_len;
+
+    rows.push_back({"pbwire", "encode", time_it([&] {
+                        uint8_t *buf = nullptr;
+                        size_t len = 0;
+                        (void)pbw_encode(pbw_msg, &buf, &len);
+                        pbw_free(buf);
+                    },
+                                                iterations, iterations / 10),
+                    bytes});
+    rows.push_back({"pbwire", "detenc", time_it([&] {
+                        uint8_t *buf = nullptr;
+                        size_t len = 0;
+                        (void)pbw_encode_deterministic(pbw_msg, &buf, &len);
+                        pbw_free(buf);
+                    },
+                                                iterations, iterations / 10),
+                    bytes});
+    rows.push_back({"pbwire", "sink", time_it([&] {
+                        (void)pbw_encode_sink(pbw_msg, null_sink, nullptr);
+                    },
+                                              iterations, iterations / 10),
+                    bytes});
+    rows.push_back({"pbwire", "framed", time_it([&] {
+                        pbw_istream *s = pbw_istream_new(nullptr);
+                        pbw_message *m = nullptr;
+                        (void)pbw_istream_feed(s, framed, framed_len);
+                        (void)pbw_istream_next(s, desc, &m);
+                        pbw_message_free(m);
+                        pbw_istream_free(s);
+                    },
+                                                iterations, iterations / 10),
+                    bytes});
+    std::printf("\nstream: %s (%zu framed bytes), %d iterations\n", label,
+                bytes, iterations);
+    std::printf("  %-9s %-7s %10s %10s\n", "impl", "op", "ns/op",
+                "MB/s");
+    for (const Row &r : rows) {
+        double mbps = r.ns > 0 ? static_cast<double>(r.bytes) / r.ns * 1e3 : 0;
+        std::printf("  %-9s %-7s %10.1f %10.1f\n", r.impl, r.op, r.ns, mbps);
+    }
+    pbw_free(framed);
+    pbw_message_free(pbw_msg);
+}
+
+/* ------------------------------------------------------- threaded benchmark */
+
+/* Runs `threads` copies of fn, each timing its own loop, and returns the average
+ * per-operation time. fn(t) does the per-thread setup and returns the operation
+ * to time; setup therefore stays outside the measured loop, and the operation
+ * owns its own context/message. */
+template <typename Fn>
+double
+time_pool(int threads, int iterations, Fn fn)
+{
+    std::vector<std::thread> pool;
+    std::vector<double> ns(static_cast<size_t>(threads), 0.0);
+
+    for (int t = 0; t < threads; t++) {
+        pool.emplace_back([&, t] {
+            auto op = fn(t);
+            auto start = Clock::now();
+            for (int i = 0; i < iterations; i++)
+                op(i);
+            ns[static_cast<size_t>(t)] = ns_per_op(start, iterations);
+        });
+    }
+    for (auto &thread : pool)
+        thread.join();
+    double sum = 0;
+    for (double value : ns)
+        sum += value;
+    return sum / static_cast<double>(threads);
+}
+
+long
+core_count()
+{
+    unsigned cores = std::thread::hardware_concurrency();
+    return cores > 0 ? static_cast<long>(cores) : 1;
+}
+
+struct ThreadRow {
+    const char *impl;
+    const char *op;
+    double single;
+    double multi;
+};
+
+/* Same work as bench_case(), but one context/message per thread and the same
+ * read-only wire input: this is what a multi-threaded server does. Reports the
+ * per-thread latency and checks that concurrency does not degrade it beyond what
+ * the available cores allow (a hidden lock or false sharing would). */
+void
+bench_threads(const char *label, int repeated, int iterations, pbw_descriptor *desc)
+{
+    const int threads = 8;
+    const long cores = core_count();
+    const double expected = std::max(1.0, static_cast<double>(threads) / static_cast<double>(cores));
+    std::string ref = gen_bytes(repeated);
+    std::vector<ThreadRow> rows;
+
+    rows.push_back({"pbwire", "encode", 0, 0});
+    rows.push_back({"pb gen", "encode", 0, 0});
+    rows.push_back({"pbwire", "decode", 0, 0});
+    rows.push_back({"pb gen", "decode", 0, 0});
+
+    /* encode: one read-only message per thread, encoded into its own buffer */
+    {
+        auto setup = [&](int) {
+            auto ctx = std::shared_ptr<pbw_ctx>(pbw_ctx_new(), pbw_ctx_free);
+            auto msg = std::shared_ptr<pbw_message>(pbw_message_new(desc), pbw_message_free);
+
+            fill_pbw(msg.get(), repeated);
+            return [ctx, msg](int) {
+                const uint8_t *out = nullptr;
+                size_t len = 0;
+                (void)pbw_encode_ctx(ctx.get(), msg.get(), &out, &len);
+            };
+        };
+        rows[0].single = time_pool(1, iterations, setup);
+        rows[0].multi = time_pool(threads, iterations, setup);
+    }
+    {
+        auto setup = [&](int) {
+            auto msg = std::shared_ptr<bench::Msg>(new bench::Msg());
+            std::string scratch;
+
+            fill_gen(msg.get(), repeated);
+            scratch.reserve(ref.size() + 16);
+            return [msg, scratch = std::move(scratch)](int) mutable {
+                scratch.clear();
+                (void)msg->SerializeToString(&scratch);
+            };
+        };
+        rows[1].single = time_pool(1, iterations, setup);
+        rows[1].multi = time_pool(threads, iterations, setup);
+    }
+    /* decode: every thread parses the same read-only bytes into its own tree */
+    {
+        auto setup = [&](int) {
+            auto ctx = std::shared_ptr<pbw_ctx>(pbw_ctx_new(), pbw_ctx_free);
+
+            return [ctx, desc, &ref](int) {
+                pbw_message *m = nullptr;
+                (void)pbw_decode_ctx(ctx.get(), desc, ref.data(), ref.size(), &m);
+                pbw_ctx_reset(ctx.get());
+            };
+        };
+        rows[2].single = time_pool(1, iterations, setup);
+        rows[2].multi = time_pool(threads, iterations, setup);
+    }
+    {
+        auto setup = [&](int) {
+            return [&ref](int) {
+                bench::Msg m;
+                (void)m.ParseFromArray(ref.data(), static_cast<int>(ref.size()));
+            };
+        };
+        rows[3].single = time_pool(1, iterations, setup);
+        rows[3].multi = time_pool(threads, iterations, setup);
+    }
+
+    std::printf("\nthreads: 1 vs %d (%ld cores), %d iterations per thread, "
+                "%zu bytes (repeat field x%d)\n",
+                threads, cores, iterations, ref.size(), repeated);
+    std::printf("  %-9s %-7s %11s %11s %11s %9s %10s\n", "impl", "op",
+                "1thr MB/s", "8thr MB/s", "8thr agg", "per-op", "aggregate");
+    for (const ThreadRow &row : rows) {
+        double per_op = row.single > 0 ? row.multi / row.single : 0;
+        double aggregate = row.single > 0 ? threads * row.single / row.multi : 0;
+        /* MB/s from ns/op and the payload size, per thread and aggregated over
+         * all threads. */
+        double mb_one = row.single > 0
+                            ? static_cast<double>(ref.size()) / row.single * 1e3
+                            : 0;
+        double mb_eight = row.multi > 0
+                              ? static_cast<double>(ref.size()) / row.multi * 1e3
+                              : 0;
+
+        std::printf("  %-9s %-7s %11.1f %11.1f %11.1f %8.2fx %9.2fx\n", row.impl,
+                    row.op, mb_one, mb_eight, threads * mb_eight, per_op,
+                    aggregate);
+        if (per_op > 2.5 * expected) {
+            char msg[192];
+
+            std::snprintf(msg, sizeof msg,
+                          "%s %s degrades %.2fx under %d threads (cores: %ld)",
+                          row.impl, row.op, per_op, threads, cores);
+            fail(msg);
+        }
+    }
 }
 
 } // namespace
@@ -963,7 +1901,15 @@ main(int argc, char **argv)
         check_encoding_parity(desc);
         check_descriptor_set();
         check_roundtrip(desc);
-        check_parse_verdicts(desc, fuzz_cases, seed);
+        {
+            pbw_descriptor *msg2 = nullptr;
+            pbw_descriptor *group = nullptr;
+            pbw_descriptor *required = nullptr;
+            pbw_schema *schema2 = build_schema2(&msg2, &group, &required);
+
+            check_parse_verdicts(desc, msg2, group, required, fuzz_cases, seed);
+            pbw_schema_free(schema2);
+        }
         check_proto3_defaults(desc);
         {
             pbw_descriptor *msg2 = nullptr;
@@ -972,6 +1918,18 @@ main(int argc, char **argv)
             pbw_schema *schema2 = build_schema2(&msg2, &group, &required);
 
             check_proto2(msg2, group, required);
+            pbw_schema_free(schema2);
+        }
+        {
+            pbw_descriptor *msg2 = nullptr;
+            pbw_descriptor *group = nullptr;
+            pbw_descriptor *required = nullptr;
+            pbw_schema *schema2 = build_schema2(&msg2, &group, &required);
+
+            check_text_parity(desc, msg2, group);
+            check_text_verdicts(desc, msg2, group, fuzz_cases, seed);
+            check_json_parity(desc, msg2);
+            check_json_verdicts(desc, msg2, fuzz_cases, seed + 100);
             pbw_schema_free(schema2);
         }
         pbw_schema_free(schema);
@@ -986,6 +1944,19 @@ main(int argc, char **argv)
     bench_case("small", 0, iterations, desc);
     bench_case("full", 1, iterations, desc);
     bench_case("large", 100, iterations, desc);
+    /* xlarge is the fourth standard size (see BENCHMARKS.md): the ~80KB tier
+     * of the Erlang google_message2.dat case. Iterations scale down so one
+     * row still takes about as long as a large row. */
+    {
+        int xlarge_iters = iterations / 100;
+        if (xlarge_iters < 200)
+            xlarge_iters = 200;
+        bench_case("xlarge", 3000, xlarge_iters, desc);
+    }
+    bench_text("full", 1, iterations, desc);
+    bench_json("full", 1, iterations, desc);
+    bench_stream("full", 1, iterations, desc);
+    bench_threads("full", 1, iterations / 2, desc);
 
     pbw_schema_free(schema);
     return failures ? 1 : 0;

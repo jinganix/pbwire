@@ -4,6 +4,8 @@ syntax = "proto2";
 
 package pbwire.test;
 
+import "google/protobuf/any.proto";
+
 enum Legacy {
   LEGACY_NONE = 0;
   LEGACY_ONE = 1;
@@ -15,10 +17,18 @@ message Old {
   optional string name = 2 [default = "x"];
   repeated sint64 vals = 3;
   optional Legacy kind = 4;
+  optional google.protobuf.Any payload = 5;
+  extensions 100 to 199;
+  reserved 999;
+  reserved "ancient";
 }
 
-// Legacy group: the loader drops the field (pbwire never decodes or encodes
-// groups), so the field number behaves like any unknown field.
+extend Old {
+  optional int32 ext_int = 100 [default = 5];
+  optional string ext_str = 101;
+}
+
+// Legacy group field: decoded into its submessage like a message field.
 message Grouped {
   optional group Inner = 1 {
     optional int32 x = 2;

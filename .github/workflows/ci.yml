@@ -46,3 +46,37 @@ jobs:
         run: |
           sudo ln -sf /usr/bin/clang-format-20 /usr/local/bin/clang-format
           make format-check
+
+  go:
+    name: Go binding
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v5
+        with:
+          # The generator module's protobuf-go dependency needs Go >= 1.23.
+          go-version: '1.23'
+      - name: Check Go formatting
+        run: |
+          out=$(gofmt -l bindings/go)
+          if [ -n "$out" ]; then echo "$out"; exit 1; fi
+      - name: Generated-code, runtime and plugin tests
+        run: make go-test
+
+  erlang:
+    name: Erlang binding (OTP 29 on ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: erlef/setup-beam@v1.24.0
+        with:
+          otp-version: '29'
+          version-type: loose
+      - name: Erlang unit tests (EUnit + PropEr parity)
+        run: make -C bindings/erlang tests
+      - name: NIF C unit tests
+        run: make -C bindings/erlang c-tests

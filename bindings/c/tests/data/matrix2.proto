@@ -1,0 +1,34 @@
+// Struct-binding coverage matrix (proto2): required/optional/defaults,
+// explicit presence, unpacked vs packed repetition and a negative enum
+// value. Reference bytes (matrix2.bin) produced by protoc --encode from
+// matrix2.txt; the C test encodes the same values through the generated
+// structs and must get identical bytes.
+syntax = "proto2";
+
+package structtest;
+
+enum Shade {
+  SHADE_UNSPECIFIED = 0;
+  SHADE_ONE = 1;
+  SHADE_NEG = -2;
+}
+
+message Inner2 {
+  required string name = 1;
+  optional int32 value = 2 [default = 7];
+}
+
+message Scalars2 {
+  required int32 id = 1;
+  optional int32 i32 = 2 [default = -5];
+  optional sint64 s64 = 3;
+  optional fixed32 fx32 = 4;
+  optional double dbl = 5;
+  optional bool flag = 6;
+  optional string str = 7 [default = "x"];
+  optional Shade shade = 8 [default = SHADE_NEG];
+  repeated int32 nums = 9;
+  repeated int32 packed_nums = 10 [packed = true];
+  optional Inner2 inner = 11;
+  repeated Inner2 inners = 12;
+}

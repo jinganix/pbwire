@@ -9,6 +9,7 @@
 #include "pbwire.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 static int failures;
@@ -41,835 +42,8 @@ static int failures;
         }                                                                       \
     } while (0)
 
-/* FileDescriptorSet from protoc, see the comment at the top. */
-static const unsigned char desc_set[] = {
-    0x0a,
-    0xb9,
-    0x02,
-    0x0a,
-    0x11,
-    0x64,
-    0x65,
-    0x73,
-    0x63,
-    0x5f,
-    0x70,
-    0x72,
-    0x6f,
-    0x74,
-    0x6f,
-    0x32,
-    0x2e,
-    0x70,
-    0x72,
-    0x6f,
-    0x74,
-    0x6f,
-    0x12,
-    0x0b,
-    0x70,
-    0x62,
-    0x77,
-    0x69,
-    0x72,
-    0x65,
-    0x2e,
-    0x74,
-    0x65,
-    0x73,
-    0x74,
-    0x22,
-    0x69,
-    0x0a,
-    0x03,
-    0x4f,
-    0x6c,
-    0x64,
-    0x12,
-    0x0e,
-    0x0a,
-    0x02,
-    0x69,
-    0x64,
-    0x18,
-    0x01,
-    0x20,
-    0x02,
-    0x28,
-    0x05,
-    0x52,
-    0x02,
-    0x69,
-    0x64,
-    0x12,
-    0x15,
-    0x0a,
-    0x04,
-    0x6e,
-    0x61,
-    0x6d,
-    0x65,
-    0x18,
-    0x02,
-    0x20,
-    0x01,
-    0x28,
-    0x09,
-    0x3a,
-    0x01,
-    0x78,
-    0x52,
-    0x04,
-    0x6e,
-    0x61,
-    0x6d,
-    0x65,
-    0x12,
-    0x12,
-    0x0a,
-    0x04,
-    0x76,
-    0x61,
-    0x6c,
-    0x73,
-    0x18,
-    0x03,
-    0x20,
-    0x03,
-    0x28,
-    0x12,
-    0x52,
-    0x04,
-    0x76,
-    0x61,
-    0x6c,
-    0x73,
-    0x12,
-    0x27,
-    0x0a,
-    0x04,
-    0x6b,
-    0x69,
-    0x6e,
-    0x64,
-    0x18,
-    0x04,
-    0x20,
-    0x01,
-    0x28,
-    0x0e,
-    0x32,
-    0x13,
-    0x2e,
-    0x70,
-    0x62,
-    0x77,
-    0x69,
-    0x72,
-    0x65,
-    0x2e,
-    0x74,
-    0x65,
-    0x73,
-    0x74,
-    0x2e,
-    0x4c,
-    0x65,
-    0x67,
-    0x61,
-    0x63,
-    0x79,
-    0x52,
-    0x04,
-    0x6b,
-    0x69,
-    0x6e,
-    0x64,
-    0x22,
-    0x68,
-    0x0a,
-    0x07,
-    0x47,
-    0x72,
-    0x6f,
-    0x75,
-    0x70,
-    0x65,
-    0x64,
-    0x12,
-    0x30,
-    0x0a,
-    0x05,
-    0x69,
-    0x6e,
-    0x6e,
-    0x65,
-    0x72,
-    0x18,
-    0x01,
-    0x20,
-    0x01,
-    0x28,
-    0x0a,
-    0x32,
-    0x1a,
-    0x2e,
-    0x70,
-    0x62,
-    0x77,
-    0x69,
-    0x72,
-    0x65,
-    0x2e,
-    0x74,
-    0x65,
-    0x73,
-    0x74,
-    0x2e,
-    0x47,
-    0x72,
-    0x6f,
-    0x75,
-    0x70,
-    0x65,
-    0x64,
-    0x2e,
-    0x49,
-    0x6e,
-    0x6e,
-    0x65,
-    0x72,
-    0x52,
-    0x05,
-    0x69,
-    0x6e,
-    0x6e,
-    0x65,
-    0x72,
-    0x12,
-    0x14,
-    0x0a,
-    0x05,
-    0x61,
-    0x66,
-    0x74,
-    0x65,
-    0x72,
-    0x18,
-    0x03,
-    0x20,
-    0x01,
-    0x28,
-    0x05,
-    0x52,
-    0x05,
-    0x61,
-    0x66,
-    0x74,
-    0x65,
-    0x72,
-    0x1a,
-    0x15,
-    0x0a,
-    0x05,
-    0x49,
-    0x6e,
-    0x6e,
-    0x65,
-    0x72,
-    0x12,
-    0x0c,
-    0x0a,
-    0x01,
-    0x78,
-    0x18,
-    0x02,
-    0x20,
-    0x01,
-    0x28,
-    0x05,
-    0x52,
-    0x01,
-    0x78,
-    0x2a,
-    0x42,
-    0x0a,
-    0x06,
-    0x4c,
-    0x65,
-    0x67,
-    0x61,
-    0x63,
-    0x79,
-    0x12,
-    0x0f,
-    0x0a,
-    0x0b,
-    0x4c,
-    0x45,
-    0x47,
-    0x41,
-    0x43,
-    0x59,
-    0x5f,
-    0x4e,
-    0x4f,
-    0x4e,
-    0x45,
-    0x10,
-    0x00,
-    0x12,
-    0x0e,
-    0x0a,
-    0x0a,
-    0x4c,
-    0x45,
-    0x47,
-    0x41,
-    0x43,
-    0x59,
-    0x5f,
-    0x4f,
-    0x4e,
-    0x45,
-    0x10,
-    0x01,
-    0x12,
-    0x17,
-    0x0a,
-    0x0a,
-    0x4c,
-    0x45,
-    0x47,
-    0x41,
-    0x43,
-    0x59,
-    0x5f,
-    0x4e,
-    0x45,
-    0x47,
-    0x10,
-    0xfe,
-    0xff,
-    0xff,
-    0xff,
-    0xff,
-    0xff,
-    0xff,
-    0xff,
-    0xff,
-    0x01,
-    0x0a,
-    0xfb,
-    0x03,
-    0x0a,
-    0x11,
-    0x64,
-    0x65,
-    0x73,
-    0x63,
-    0x5f,
-    0x70,
-    0x72,
-    0x6f,
-    0x74,
-    0x6f,
-    0x33,
-    0x2e,
-    0x70,
-    0x72,
-    0x6f,
-    0x74,
-    0x6f,
-    0x12,
-    0x0b,
-    0x70,
-    0x62,
-    0x77,
-    0x69,
-    0x72,
-    0x65,
-    0x2e,
-    0x74,
-    0x65,
-    0x73,
-    0x74,
-    0x1a,
-    0x11,
-    0x64,
-    0x65,
-    0x73,
-    0x63,
-    0x5f,
-    0x70,
-    0x72,
-    0x6f,
-    0x74,
-    0x6f,
-    0x32,
-    0x2e,
-    0x70,
-    0x72,
-    0x6f,
-    0x74,
-    0x6f,
-    0x22,
-    0x8e,
-    0x03,
-    0x0a,
-    0x05,
-    0x4f,
-    0x75,
-    0x74,
-    0x65,
-    0x72,
-    0x12,
-    0x14,
-    0x0a,
-    0x05,
-    0x70,
-    0x6c,
-    0x61,
-    0x69,
-    0x6e,
-    0x18,
-    0x01,
-    0x20,
-    0x01,
-    0x28,
-    0x05,
-    0x52,
-    0x05,
-    0x70,
-    0x6c,
-    0x61,
-    0x69,
-    0x6e,
-    0x12,
-    0x1f,
-    0x0a,
-    0x0b,
-    0x61,
-    0x75,
-    0x74,
-    0x6f,
-    0x5f,
-    0x70,
-    0x61,
-    0x63,
-    0x6b,
-    0x65,
-    0x64,
-    0x18,
-    0x02,
-    0x20,
-    0x03,
-    0x28,
-    0x05,
-    0x52,
-    0x0a,
-    0x61,
-    0x75,
-    0x74,
-    0x6f,
-    0x50,
-    0x61,
-    0x63,
-    0x6b,
-    0x65,
-    0x64,
-    0x12,
-    0x1e,
-    0x0a,
-    0x08,
-    0x75,
-    0x6e,
-    0x70,
-    0x61,
-    0x63,
-    0x6b,
-    0x65,
-    0x64,
-    0x18,
-    0x03,
-    0x20,
-    0x03,
-    0x28,
-    0x11,
-    0x42,
-    0x02,
-    0x10,
-    0x00,
-    0x52,
-    0x08,
-    0x75,
-    0x6e,
-    0x70,
-    0x61,
-    0x63,
-    0x6b,
-    0x65,
-    0x64,
-    0x12,
-    0x2e,
-    0x0a,
-    0x05,
-    0x69,
-    0x6e,
-    0x6e,
-    0x65,
-    0x72,
-    0x18,
-    0x04,
-    0x20,
-    0x01,
-    0x28,
-    0x0b,
-    0x32,
-    0x18,
-    0x2e,
-    0x70,
-    0x62,
-    0x77,
-    0x69,
-    0x72,
-    0x65,
-    0x2e,
-    0x74,
-    0x65,
-    0x73,
-    0x74,
-    0x2e,
-    0x4f,
-    0x75,
-    0x74,
-    0x65,
-    0x72,
-    0x2e,
-    0x49,
-    0x6e,
-    0x6e,
-    0x65,
-    0x72,
-    0x52,
-    0x05,
-    0x69,
-    0x6e,
-    0x6e,
-    0x65,
-    0x72,
-    0x12,
-    0x30,
-    0x0a,
-    0x04,
-    0x74,
-    0x61,
-    0x67,
-    0x73,
-    0x18,
-    0x05,
-    0x20,
-    0x03,
-    0x28,
-    0x0b,
-    0x32,
-    0x1c,
-    0x2e,
-    0x70,
-    0x62,
-    0x77,
-    0x69,
-    0x72,
-    0x65,
-    0x2e,
-    0x74,
-    0x65,
-    0x73,
-    0x74,
-    0x2e,
-    0x4f,
-    0x75,
-    0x74,
-    0x65,
-    0x72,
-    0x2e,
-    0x54,
-    0x61,
-    0x67,
-    0x73,
-    0x45,
-    0x6e,
-    0x74,
-    0x72,
-    0x79,
-    0x52,
-    0x04,
-    0x74,
-    0x61,
-    0x67,
-    0x73,
-    0x12,
-    0x0e,
-    0x0a,
-    0x01,
-    0x61,
-    0x18,
-    0x06,
-    0x20,
-    0x01,
-    0x28,
-    0x05,
-    0x48,
-    0x00,
-    0x52,
-    0x01,
-    0x61,
-    0x12,
-    0x0e,
-    0x0a,
-    0x01,
-    0x62,
-    0x18,
-    0x07,
-    0x20,
-    0x01,
-    0x28,
-    0x09,
-    0x48,
-    0x00,
-    0x52,
-    0x01,
-    0x62,
-    0x12,
-    0x28,
-    0x0a,
-    0x06,
-    0x6c,
-    0x65,
-    0x67,
-    0x61,
-    0x63,
-    0x79,
-    0x18,
-    0x08,
-    0x20,
-    0x01,
-    0x28,
-    0x0b,
-    0x32,
-    0x10,
-    0x2e,
-    0x70,
-    0x62,
-    0x77,
-    0x69,
-    0x72,
-    0x65,
-    0x2e,
-    0x74,
-    0x65,
-    0x73,
-    0x74,
-    0x2e,
-    0x4f,
-    0x6c,
-    0x64,
-    0x52,
-    0x06,
-    0x6c,
-    0x65,
-    0x67,
-    0x61,
-    0x63,
-    0x79,
-    0x12,
-    0x28,
-    0x0a,
-    0x05,
-    0x63,
-    0x6f,
-    0x6c,
-    0x6f,
-    0x72,
-    0x18,
-    0x09,
-    0x20,
-    0x01,
-    0x28,
-    0x0e,
-    0x32,
-    0x12,
-    0x2e,
-    0x70,
-    0x62,
-    0x77,
-    0x69,
-    0x72,
-    0x65,
-    0x2e,
-    0x74,
-    0x65,
-    0x73,
-    0x74,
-    0x2e,
-    0x43,
-    0x6f,
-    0x6c,
-    0x6f,
-    0x72,
-    0x52,
-    0x05,
-    0x63,
-    0x6f,
-    0x6c,
-    0x6f,
-    0x72,
-    0x1a,
-    0x15,
-    0x0a,
-    0x05,
-    0x49,
-    0x6e,
-    0x6e,
-    0x65,
-    0x72,
-    0x12,
-    0x0c,
-    0x0a,
-    0x01,
-    0x73,
-    0x18,
-    0x01,
-    0x20,
-    0x01,
-    0x28,
-    0x09,
-    0x52,
-    0x01,
-    0x73,
-    0x1a,
-    0x37,
-    0x0a,
-    0x09,
-    0x54,
-    0x61,
-    0x67,
-    0x73,
-    0x45,
-    0x6e,
-    0x74,
-    0x72,
-    0x79,
-    0x12,
-    0x10,
-    0x0a,
-    0x03,
-    0x6b,
-    0x65,
-    0x79,
-    0x18,
-    0x01,
-    0x20,
-    0x01,
-    0x28,
-    0x09,
-    0x52,
-    0x03,
-    0x6b,
-    0x65,
-    0x79,
-    0x12,
-    0x14,
-    0x0a,
-    0x05,
-    0x76,
-    0x61,
-    0x6c,
-    0x75,
-    0x65,
-    0x18,
-    0x02,
-    0x20,
-    0x01,
-    0x28,
-    0x05,
-    0x52,
-    0x05,
-    0x76,
-    0x61,
-    0x6c,
-    0x75,
-    0x65,
-    0x3a,
-    0x02,
-    0x38,
-    0x01,
-    0x42,
-    0x08,
-    0x0a,
-    0x06,
-    0x63,
-    0x68,
-    0x6f,
-    0x69,
-    0x63,
-    0x65,
-    0x2a,
-    0x2d,
-    0x0a,
-    0x05,
-    0x43,
-    0x6f,
-    0x6c,
-    0x6f,
-    0x72,
-    0x12,
-    0x15,
-    0x0a,
-    0x11,
-    0x43,
-    0x4f,
-    0x4c,
-    0x4f,
-    0x52,
-    0x5f,
-    0x55,
-    0x4e,
-    0x53,
-    0x50,
-    0x45,
-    0x43,
-    0x49,
-    0x46,
-    0x49,
-    0x45,
-    0x44,
-    0x10,
-    0x00,
-    0x12,
-    0x0d,
-    0x0a,
-    0x09,
-    0x43,
-    0x4f,
-    0x4c,
-    0x4f,
-    0x52,
-    0x5f,
-    0x52,
-    0x45,
-    0x44,
-    0x10,
-    0x01,
-    0x62,
-    0x06,
-    0x70,
-    0x72,
-    0x6f,
-    0x74,
-    0x6f,
-    0x33,
-};
+/* The pinned FileDescriptorSet this test loads (shared with test_threads.c). */
+#include "desc_set.h"
 
 static void
 test_schema(void)
@@ -949,28 +123,35 @@ test_schema(void)
     CHECK(pbw_field_label(field) == PBW_LABEL_REPEATED);
     CHECK(!pbw_field_is_packed(field));
 
-    /* a legacy group field is dropped by the loader instead of failing the
-     * whole set: the message still loads, and the group's number behaves like
-     * an unknown field (kept on decode, written back unchanged) */
+    /* a group field loads like a message field: decoding fills the group
+     * submessage and encoding writes it back byte for byte */
     {
         const pbw_descriptor *grouped =
             pbw_schema_find(schema, "pbwire.test.Grouped");
+        const pbw_field *inner = NULL;
+        const pbw_descriptor *inner_msg = NULL;
         static const uint8_t wire[] = {0x0b, 0x10, 0x07, 0x0c, 0x18, 0x09};
-        static const uint8_t expected[] = {0x18, 0x09, 0x0b, 0x10, 0x07, 0x0c};
         pbw_message *decoded = NULL;
+        pbw_message *group = NULL;
         uint8_t *buf = NULL;
         size_t len = 0;
 
         CHECK(grouped != NULL);
-        CHECK(pbw_descriptor_field_count(grouped) == 1);
-        CHECK(pbw_descriptor_find_field(grouped, 1) == NULL);
-        CHECK(pbw_descriptor_find_field(grouped, 3) != NULL);
+        CHECK(pbw_descriptor_field_count(grouped) == 2);
+        inner = pbw_descriptor_find_field(grouped, 1);
+        CHECK(inner != NULL && pbw_field_type(inner) == PBW_TYPE_GROUP);
+        CHECK(!pbw_field_is_extension(inner));
+        inner_msg = pbw_field_message_type(inner);
+        CHECK(inner_msg != NULL &&
+              strcmp(pbw_descriptor_name(inner_msg),
+                     "pbwire.test.Grouped.Inner") == 0);
         CHECK_OK(pbw_decode(grouped, wire, sizeof(wire), &decoded));
         CHECK(pbw_value_get_int32(pbw_message_get(decoded, 3)) == 9);
-        CHECK(pbw_message_get(decoded, 1) == NULL);
+        group = pbw_value_get_message(pbw_message_get(decoded, 1));
+        CHECK(group != NULL);
+        CHECK(pbw_value_get_int32(pbw_message_get(group, 2)) == 7);
         CHECK_OK(pbw_encode(decoded, &buf, &len));
-        CHECK(len == sizeof(expected) &&
-              memcmp(buf, expected, sizeof(expected)) == 0);
+        CHECK(len == sizeof(wire) && memcmp(buf, wire, sizeof(wire)) == 0);
         pbw_free(buf);
         pbw_message_free(decoded);
     }
@@ -1099,6 +280,159 @@ test_errors(void)
     pbw_schema_free(schema);
 }
 
+/* Two loads of the same bytes are independent schemas: no state is shared, and
+ * freeing one must not disturb the other. */
+static void
+test_independent_loads(void)
+{
+    pbw_schema *a = NULL;
+    pbw_schema *b = NULL;
+    const pbw_descriptor *outer_a;
+    const pbw_descriptor *outer_b;
+    pbw_message *msg;
+    uint8_t *buf = NULL;
+    size_t len = 0;
+
+    CHECK_STATUS(PBW_OK,
+                 pbw_descriptor_set_load(desc_set, sizeof(desc_set), &a));
+    CHECK_STATUS(PBW_OK,
+                 pbw_descriptor_set_load(desc_set, sizeof(desc_set), &b));
+    CHECK(a != NULL && b != NULL && a != b);
+    if (a == NULL || b == NULL) {
+        pbw_schema_free(a);
+        pbw_schema_free(b);
+        return;
+    }
+    CHECK(pbw_schema_error(a)[0] == '\0');
+    outer_a = pbw_schema_find(a, "pbwire.test.Outer");
+    outer_b = pbw_schema_find(b, "pbwire.test.Outer");
+    CHECK(outer_a != NULL && outer_b != NULL && outer_a != outer_b);
+
+    /* the same message built from each schema encodes identically */
+    msg = pbw_message_new(outer_a);
+    CHECK_OK(pbw_message_set(msg, 1, pbw_value_new_int(7)));
+    CHECK_OK(pbw_encode(msg, &buf, &len));
+    pbw_message_free(msg);
+    pbw_schema_free(a); /* b must be unaffected */
+    CHECK(pbw_schema_find(b, "pbwire.test.Outer") == outer_b);
+    {
+        pbw_message *decoded = NULL;
+
+        CHECK_OK(pbw_decode(outer_b, buf, len, &decoded));
+        CHECK(decoded != NULL &&
+              pbw_value_get_int32(pbw_message_get(decoded, 1)) == 7);
+        pbw_message_free(decoded);
+    }
+    pbw_free(buf);
+    pbw_schema_free(b);
+}
+
+/* Number and name lookup must agree for every declared field, and must not
+ * answer for numbers or names the message does not have. */
+static void
+test_lookup_tables(void)
+{
+    static const char *const names[] = {
+        "pbwire.test.Outer", "pbwire.test.Outer.Inner",
+        "pbwire.test.Outer.TagsEntry", "pbwire.test.Old",
+        "pbwire.test.Grouped"};
+    pbw_schema *schema = NULL;
+    size_t n;
+
+    CHECK_STATUS(PBW_OK,
+                 pbw_descriptor_set_load(desc_set, sizeof(desc_set), &schema));
+    if (schema == NULL) {
+        return;
+    }
+    for (n = 0; n < sizeof(names) / sizeof(names[0]); n++) {
+        const pbw_descriptor *type = pbw_schema_find(schema, names[n]);
+        size_t i;
+        uint32_t previous = 0;
+
+        CHECK(type != NULL);
+        if (type == NULL) {
+            continue;
+        }
+        CHECK(pbw_descriptor_field_count(type) > 0);
+        for (i = 0; i < pbw_descriptor_field_count(type); i++) {
+            const pbw_field *field = pbw_descriptor_field_at(type, i);
+
+            CHECK(field != NULL);
+            if (field == NULL) {
+                continue;
+            }
+            /* sorted by number, and every lookup table agrees with the array */
+            CHECK(pbw_field_number(field) > previous);
+            previous = pbw_field_number(field);
+            CHECK(pbw_descriptor_find_field(type, pbw_field_number(field)) ==
+                  field);
+            CHECK(pbw_descriptor_find_field_name(type, pbw_field_name(field)) ==
+                  field);
+        }
+        CHECK(pbw_descriptor_field_at(type, pbw_descriptor_field_count(type)) ==
+              NULL);
+        CHECK(pbw_descriptor_find_field(type, 0) == NULL);
+        CHECK(pbw_descriptor_find_field(type, 536870911u) == NULL);
+        CHECK(pbw_descriptor_find_field_name(type, "no_such_field") == NULL);
+        CHECK(pbw_descriptor_find_field_name(type, "") == NULL);
+    }
+    /* an enum is not a message: no field lookups, no decoding */
+    CHECK(pbw_descriptor_find_field(pbw_schema_find(schema, "pbwire.test.Color"),
+                                    1) == NULL);
+    CHECK(pbw_message_new(pbw_schema_find(schema, "pbwire.test.Color")) == NULL);
+    pbw_schema_free(schema);
+}
+
+/* The set itself is a protobuf message: unknown fields in it are skipped, and
+ * anything malformed is reported instead of crashing. */
+static void
+test_load_tolerance(void)
+{
+    /* FileDescriptorSet has one declared field (1 = file); field 999 is an
+     * unknown varint, which the loader must skip. */
+    static const unsigned char trailing[] = {0xf8, 0x3e, 0x05};
+    static const unsigned char bad_group[] = {0x0b, 0x0c};
+    static const unsigned char bad_wire_type[] = {0x0e};
+    unsigned char *buf = (unsigned char *)malloc(sizeof(desc_set) + 8);
+    pbw_schema *schema = NULL;
+
+    CHECK(buf != NULL);
+    if (buf == NULL) {
+        return;
+    }
+    memcpy(buf, desc_set, sizeof(desc_set));
+    memcpy(buf + sizeof(desc_set), trailing, sizeof(trailing));
+    CHECK_STATUS(PBW_OK, pbw_descriptor_set_load(buf, sizeof(desc_set) + 3,
+                                                 &schema));
+    CHECK(schema != NULL &&
+          pbw_schema_find(schema, "pbwire.test.Outer") != NULL);
+    CHECK(pbw_schema_error(schema)[0] == '\0');
+    pbw_schema_free(schema);
+
+    /* a group or an invalid wire type inside the set is malformed */
+    schema = NULL;
+    memcpy(buf, bad_group, sizeof(bad_group));
+    CHECK_STATUS(PBW_ERR_INVALID,
+                 pbw_descriptor_set_load(buf, sizeof(bad_group), &schema));
+    CHECK(schema != NULL && pbw_schema_error(schema)[0] != '\0');
+    pbw_schema_free(schema);
+
+    schema = NULL;
+    memcpy(buf, bad_wire_type, sizeof(bad_wire_type));
+    CHECK_STATUS(PBW_ERR_INVALID,
+                 pbw_descriptor_set_load(buf, sizeof(bad_wire_type), &schema));
+    CHECK(schema != NULL && pbw_schema_error(schema)[0] != '\0');
+    pbw_schema_free(schema);
+
+    /* a set that declares nothing is a valid, empty schema */
+    schema = NULL;
+    memcpy(buf, desc_set, sizeof(desc_set));
+    CHECK_STATUS(PBW_OK, pbw_descriptor_set_load(buf, 0, &schema));
+    CHECK(schema != NULL && pbw_schema_find(schema, "pbwire.test.Outer") == NULL);
+    pbw_schema_free(schema);
+    free(buf);
+}
+
 /* Descriptor bytes are untrusted input: a mutated or truncated set must produce
  * a status, never a crash. 2000 deterministic mutations, no RNG dependency. */
 static void
@@ -1118,9 +452,323 @@ test_mutation_sweep(void)
         buf[state % sizeof(desc_set)] ^= (unsigned char)(1u << ((state >> 16) & 7u));
         available = sizeof(desc_set) - (size_t)(state >> 20) % 16;
         status = pbw_descriptor_set_load(buf, available, &schema);
-        CHECK(status != PBW_OK || schema != NULL);
+        /* *out is always written for a non-NULL input, and a failure explains
+         * itself through pbw_schema_error(). */
+        CHECK(schema != NULL);
+        if (status != PBW_OK) {
+            CHECK(pbw_schema_error(schema)[0] != '\0');
+        }
         pbw_schema_free(schema);
     }
+}
+
+/* The dialect comes from each file's `syntax`, so a proto2 message loaded from
+ * a set has closed enums and a required-field check. */
+static void
+test_proto2_dialect(void)
+{
+    pbw_schema *schema = NULL;
+    const pbw_descriptor *old_msg;
+    pbw_message *decoded = NULL;
+    uint8_t *buf = NULL;
+    size_t len = 0;
+    /* id = 1, kind = 99 (not a Legacy value) */
+    static const uint8_t unknown_enum[] = {0x08, 0x01, 0x20, 0x63};
+    /* id = 1, kind = LEGACY_NEG (-2) */
+    static const uint8_t negative_enum[] = {0x08, 0x01, 0x20, 0xfe, 0xff, 0xff,
+                                            0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+                                            0x01};
+    /* kind without the required id */
+    static const uint8_t missing_id[] = {0x20, 0x01};
+
+    CHECK_OK(pbw_descriptor_set_load(desc_set, sizeof(desc_set), &schema));
+    if (schema == NULL) {
+        return;
+    }
+    old_msg = pbw_schema_find(schema, "pbwire.test.Old");
+    CHECK(old_msg != NULL);
+    if (old_msg == NULL) {
+        pbw_schema_free(schema);
+        return;
+    }
+
+    /* an unknown closed-enum number leaves the field ... */
+    CHECK_OK(pbw_decode(old_msg, unknown_enum, sizeof(unknown_enum), &decoded));
+    CHECK(decoded != NULL);
+    if (decoded != NULL) {
+        CHECK(pbw_message_get(decoded, 4) == NULL);
+        CHECK(pbw_value_get_int32(pbw_message_get(decoded, 1)) == 1);
+        /* ... and is written back byte for byte */
+        CHECK_OK(pbw_encode(decoded, &buf, &len));
+        CHECK(len == sizeof(unknown_enum) &&
+              memcmp(buf, unknown_enum, len) == 0);
+        pbw_free(buf);
+        buf = NULL;
+        pbw_message_free(decoded);
+        decoded = NULL;
+    }
+
+    /* a declared value, negative included, stays in the field */
+    CHECK_OK(pbw_decode(old_msg, negative_enum, sizeof(negative_enum), &decoded));
+    CHECK(decoded != NULL);
+    if (decoded != NULL) {
+        CHECK(pbw_value_get_int32(pbw_message_get(decoded, 4)) == -2);
+        CHECK_OK(pbw_encode(decoded, &buf, &len));
+        CHECK(len == sizeof(negative_enum) &&
+              memcmp(buf, negative_enum, len) == 0);
+        pbw_free(buf);
+        buf = NULL;
+        pbw_message_free(decoded);
+        decoded = NULL;
+    }
+
+    /* the required field is enforced, and only when it is missing */
+    CHECK_STATUS(PBW_ERR_REQUIRED,
+                 pbw_decode(old_msg, missing_id, sizeof(missing_id), &decoded));
+    CHECK(decoded == NULL);
+    CHECK_OK(pbw_decode(old_msg, unknown_enum, sizeof(unknown_enum), &decoded));
+    CHECK(decoded != NULL && pbw_message_is_initialized(decoded) == 1);
+    pbw_message_free(decoded);
+    decoded = NULL;
+
+    /* extensions attach to their extendee and decode like regular fields */
+    {
+        const pbw_field *ext_int =
+            pbw_descriptor_find_field(old_msg, 100);
+        const pbw_field *ext_str =
+            pbw_descriptor_find_field_name(old_msg, "ext_str");
+        /* id = 1, ext_int = 42, ext_str = "hi" */
+        static const uint8_t with_ext[] = {0x08, 0x01, 0xa0, 0x06, 0x2a,
+                                           0xaa, 0x06, 0x02, 'h', 'i'};
+        pbw_message *msg;
+
+        CHECK(ext_int != NULL && pbw_field_is_extension(ext_int));
+        CHECK(ext_str != NULL && pbw_field_is_extension(ext_str));
+        CHECK(ext_int != NULL &&
+              strcmp(pbw_field_default_value(ext_int), "5") == 0);
+        /* regular fields are not extensions; most have no default */
+        CHECK(!pbw_field_is_extension(
+            pbw_descriptor_find_field(old_msg, 1)));
+        CHECK(pbw_field_default_value(
+                  pbw_descriptor_find_field(old_msg, 1)) == NULL);
+        CHECK(strcmp(pbw_field_default_value(
+                         pbw_descriptor_find_field(old_msg, 2)),
+                     "x") == 0);
+        CHECK_OK(pbw_decode(old_msg, with_ext, sizeof(with_ext), &decoded));
+        CHECK(decoded != NULL);
+        if (decoded != NULL) {
+            CHECK(pbw_value_get_int32(pbw_message_get(decoded, 100)) == 42);
+            CHECK(strcmp(pbw_value_get_string(
+                             pbw_message_get(decoded, 101)),
+                         "hi") == 0);
+            CHECK_OK(pbw_encode(decoded, &buf, &len));
+            CHECK(len == sizeof(with_ext) &&
+                  memcmp(buf, with_ext, len) == 0);
+            pbw_free(buf);
+            buf = NULL;
+            pbw_message_free(decoded);
+            decoded = NULL;
+        }
+        /* an absent extension stays absent: the default is reported,
+         * not materialized */
+        CHECK_OK(pbw_decode(old_msg, unknown_enum, sizeof(unknown_enum),
+                            &decoded));
+        CHECK(decoded != NULL && pbw_message_get(decoded, 100) == NULL);
+        if (decoded != NULL) {
+            CHECK_OK(pbw_encode(decoded, &buf, &len));
+            CHECK(len == sizeof(unknown_enum) &&
+                  memcmp(buf, unknown_enum, len) == 0);
+            pbw_free(buf);
+            buf = NULL;
+            pbw_message_free(decoded);
+            decoded = NULL;
+        }
+        /* set through the API, encoded with the extension number */
+        msg = pbw_message_new(old_msg);
+        CHECK(msg != NULL);
+        if (msg != NULL) {
+            CHECK_OK(pbw_message_set(msg, 1, pbw_value_new_int(1)));
+            CHECK_OK(pbw_message_set(msg, 100, pbw_value_new_int(42)));
+            CHECK_OK(pbw_encode(msg, &buf, &len));
+            CHECK(len == 5 && buf[0] == 0x08 && buf[1] == 0x01 &&
+                  buf[2] == 0xa0 && buf[3] == 0x06 && buf[4] == 0x2a);
+            pbw_free(buf);
+            buf = NULL;
+            pbw_message_free(msg);
+        }
+    }
+    pbw_schema_free(schema);
+}
+
+/* Text format through a loaded descriptor set: full-name extensions, reserved
+ * names skipped, Any round trip. */
+static void
+test_text_loader(void)
+{
+    pbw_schema *schema = NULL;
+    const pbw_descriptor *old_msg;
+    pbw_message *decoded = NULL;
+    char *out = NULL;
+    size_t len = 0;
+    static const char text[] =
+        "id: 1 [pbwire.test.ext_int]: 42 ancient: 7\n"
+        "payload { [type.googleapis.com/pbwire.test.Old] { id: 2 } }";
+    static const char want[] =
+        "id: 1\n"
+        "payload {\n"
+        "  type_url: \"type.googleapis.com/pbwire.test.Old\"\n"
+        "  value: \"\\010\\002\"\n"
+        "}\n"
+        "[pbwire.test.ext_int]: 42\n";
+
+    CHECK_STATUS(PBW_OK,
+                 pbw_descriptor_set_load(desc_set, sizeof(desc_set), &schema));
+    if (schema == NULL) {
+        return;
+    }
+    old_msg = pbw_schema_find(schema, "pbwire.test.Old");
+    CHECK(old_msg != NULL);
+    if (old_msg == NULL) {
+        pbw_schema_free(schema);
+        return;
+    }
+    /* extension by full name parses; the reserved name vanishes silently */
+    CHECK_OK(pbw_text_parse(old_msg, text, sizeof(text) - 1, &decoded));
+    CHECK(decoded != NULL);
+    if (decoded != NULL) {
+        pbw_message *payload =
+            pbw_value_get_message(pbw_message_get(decoded, 5));
+
+        CHECK(pbw_value_get_int32(pbw_message_get(decoded, 100)) == 42);
+        CHECK(payload != NULL);
+        CHECK(strcmp(pbw_value_get_string(pbw_message_get(payload, 1)),
+                     "type.googleapis.com/pbwire.test.Old") == 0);
+        CHECK_OK(pbw_text_print(decoded, &out, &len));
+        CHECK(len == sizeof(want) - 1 && memcmp(out, want, len) == 0);
+        pbw_free(out);
+        out = NULL;
+        /* print(parse(print)) is stable */
+        CHECK_OK(pbw_text_print(decoded, &out, &len));
+        {
+            pbw_message *again = NULL;
+
+            CHECK_OK(pbw_text_parse(old_msg, out, len, &again));
+            pbw_free(out);
+            out = NULL;
+            CHECK(again != NULL);
+            pbw_message_free(again);
+        }
+        pbw_message_free(decoded);
+        decoded = NULL;
+    }
+    /* a short extension name is not a field; an unknown name fails */
+    CHECK_STATUS(PBW_ERR_INVALID,
+                 pbw_text_parse(old_msg, "ext_int: 1", 10, &decoded));
+    CHECK(decoded == NULL);
+    CHECK_STATUS(PBW_ERR_INVALID,
+                 pbw_text_parse(old_msg, "id: 1 nope: 2",
+                                strlen("id: 1 nope: 2"), &decoded));
+    CHECK(decoded == NULL);
+    /* an unresolvable Any type fails */
+    CHECK_STATUS(PBW_ERR_INVALID,
+                 pbw_text_parse(old_msg,
+                                "id: 1 payload { [type.googleapis.com/Nope]"
+                                " { id: 1 } }",
+                                strlen("id: 1 payload { "
+                                       "[type.googleapis.com/Nope]"
+                                       " { id: 1 } }"),
+                                &decoded));
+    CHECK(decoded == NULL);
+    pbw_schema_free(schema);
+}
+
+static void
+test_json_loader(void)
+{
+    pbw_schema *schema = NULL;
+    const pbw_descriptor *old_msg;
+    pbw_message *decoded = NULL;
+    pbw_json_parse_options ignore = {1};
+    char *out = NULL;
+    size_t len = 0;
+    static const char input[] =
+        "{\"id\":1,\"kind\":\"LEGACY_NEG\","
+        "\"payload\":{\"@type\":\"type.googleapis.com/"
+        "pbwire.test.Old\",\"id\":2},"
+        "\"[pbwire.test.ext_int]\":42}";
+    /* known Any types print expanded, like the reference */
+    static const char want[] =
+        "{\"id\":1,\"kind\":\"LEGACY_NEG\","
+        "\"payload\":{\"@type\":\"type.googleapis.com/"
+        "pbwire.test.Old\",\"id\":2},"
+        "\"[pbwire.test.ext_int]\":42}";
+
+    CHECK_STATUS(PBW_OK,
+                 pbw_descriptor_set_load(desc_set, sizeof(desc_set), &schema));
+    if (schema == NULL) {
+        return;
+    }
+    old_msg = pbw_schema_find(schema, "pbwire.test.Old");
+    CHECK(old_msg != NULL);
+    if (old_msg == NULL) {
+        pbw_schema_free(schema);
+        return;
+    }
+    /* extension by full name parses; the embedded message prints raw */
+    CHECK_OK(pbw_json_parse(old_msg, input, sizeof(input) - 1, &decoded));
+    CHECK(decoded != NULL);
+    if (decoded != NULL) {
+        pbw_message *payload =
+            pbw_value_get_message(pbw_message_get(decoded, 5));
+
+        CHECK(pbw_value_get_int32(pbw_message_get(decoded, 100)) == 42);
+        CHECK(payload != NULL);
+        CHECK(strcmp(pbw_value_get_string(pbw_message_get(payload, 1)),
+                     "type.googleapis.com/pbwire.test.Old") == 0);
+        CHECK_OK(pbw_json_print(decoded, &out, &len));
+        CHECK(len == sizeof(want) - 1 && memcmp(out, want, len) == 0);
+        pbw_free(out);
+        out = NULL;
+        /* print(parse(print)) is stable */
+        CHECK_OK(pbw_json_print(decoded, &out, &len));
+        {
+            pbw_message *again = NULL;
+
+            CHECK_OK(pbw_json_parse(old_msg, out, len, &again));
+            pbw_free(out);
+            out = NULL;
+            CHECK(again != NULL);
+            pbw_message_free(again);
+        }
+        pbw_message_free(decoded);
+        decoded = NULL;
+    }
+    /* unknown fields fail by default but pass when ignored */
+    CHECK_STATUS(PBW_ERR_INVALID,
+                 pbw_json_parse(old_msg, "{\"id\":1,\"nope\":2}",
+                                strlen("{\"id\":1,\"nope\":2}"),
+                                &decoded));
+    CHECK(decoded == NULL);
+    CHECK_OK(pbw_json_parse_opts(old_msg, "{\"id\":1,\"nope\":2}",
+                                 strlen("{\"id\":1,\"nope\":2}"),
+                                 &ignore, &decoded));
+    pbw_message_free(decoded);
+    decoded = NULL;
+    /* an unresolvable Any type fails */
+    CHECK_STATUS(PBW_ERR_INVALID,
+                 pbw_json_parse(old_msg,
+                                "{\"id\":1,\"payload\":{\"@type\":\"type."
+                                "googleapis.com/Nope\"}}",
+                                strlen("{\"id\":1,\"payload\":{\"@type\":\"type."
+                                       "googleapis.com/Nope\"}}"),
+                                &decoded));
+    CHECK(decoded == NULL);
+    /* required fields are enforced */
+    CHECK_STATUS(PBW_ERR_REQUIRED,
+                 pbw_json_parse(old_msg, "{\"name\":\"x\"}",
+                                strlen("{\"name\":\"x\"}"), &decoded));
+    CHECK(decoded == NULL);
+    pbw_schema_free(schema);
 }
 
 int
@@ -1128,7 +776,13 @@ main(void)
 {
     test_schema();
     test_wire();
+    test_proto2_dialect();
+    test_text_loader();
+    test_json_loader();
     test_errors();
+    test_independent_loads();
+    test_lookup_tables();
+    test_load_tolerance();
     test_mutation_sweep();
 
     if (failures != 0) {

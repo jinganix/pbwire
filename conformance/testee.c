@@ -9,9 +9,12 @@
  * descriptor set compiled at build time -- which is exactly the job
  * pbw_descriptor_set_load() exists for. No generated code, no libprotobuf.
  *
- * Only the binary wire format is implemented (JSON and text format report
- * "skipped"), so the tester runs the whole suite and every non-binary test is
- * counted as skipped rather than failed.
+ * The binary wire format, the JSON mapping and the text format are
+ * implemented (only JSPB reports "skipped"), so the tester runs the whole
+ * suite with nothing skipped. Two binary tests report a failure and
+ * are expected to: the reference C++ testee from the same protobuf checkout
+ * fails them identically (a 5-byte tag varint above UINT32_MAX is truncated
+ * instead of rejected).
  *
  * Usage: testee <descriptor-set> */
 
@@ -31,7 +34,15 @@
 #define write_fd write
 #endif
 
-enum { WIRE_PROTOBUF = 1 };
+enum {
+    WIRE_PROTOBUF = 1,
+    WIRE_JSON = 2,
+    WIRE_TEXT = 4
+};
+
+enum {
+    CATEGORY_JSON_IGNORE_UNKNOWN = 3
+};
 
 static pbw_schema *requests;
 static pbw_schema *responses;
@@ -169,14 +180,27 @@ static int
 conform(const pbw_message *request, pbw_message *out)
 {
     const int format = as_enum(request, 3);
+    const int category = as_enum(request, 5);
     const char *type = as_string(request, 4);
     size_t payload_len = 0;
     const void *payload = as_bytes(request, 1, &payload_len);
+    size_t text_len = 0;
+    const char *text = as_string(request, 8);
+    size_t json_len = 0;
+    const char *json = as_string(request, 2);
+    int print_unknown = as_enum(request, 9);
 
-    /* Anything we cannot answer in the binary format is reported as skipped:
-     * the suite treats that as "not applicable", not as a failure. */
-    if (format != WIRE_PROTOBUF || payload == NULL) {
-        return pbw_message_set(out, 5, pbw_value_new_string("only binary")) == PBW_OK;
+    if (text != NULL) {
+        text_len = strlen(text);
+    }
+    if (json != NULL) {
+        json_len = strlen(json);
+    }
+    /* JSPB has no pbwire layer: reported as skipped. */
+    if (format != WIRE_PROTOBUF && format != WIRE_JSON &&
+        format != WIRE_TEXT) {
+        return pbw_message_set(out, 5, pbw_value_new_string("no JSPB layer")) ==
+               PBW_OK;
     }
     if (type == NULL) {
         return pbw_message_set(out, 2, pbw_value_new_string("no message_type")) ==
@@ -184,39 +208,102 @@ conform(const pbw_message *request, pbw_message *out)
     }
     {
         const pbw_descriptor *desc = pbw_schema_find(under_test, type);
+        pbw_message *decoded = NULL;
+        pbw_status status;
 
         if (desc == NULL) {
             char why[256];
 
             snprintf(why, sizeof(why), "unknown message type %s", type);
             return pbw_message_set(out, 2, pbw_value_new_string(why)) == PBW_OK;
-        } else {
-            pbw_message *decoded = NULL;
-            pbw_status status;
+        }
+        /* input by presence: json_payload, text_payload or protobuf_payload */
+        if (json != NULL) {
+            pbw_json_parse_options opts;
 
+            opts.ignore_unknown_fields =
+                category == CATEGORY_JSON_IGNORE_UNKNOWN;
+            status = pbw_json_parse_opts(desc, json, json_len, &opts,
+                                         &decoded);
+            if (status != PBW_OK) {
+                return pbw_message_set(out, 1,
+                                       pbw_value_new_string(pbw_strerror(status))) ==
+                       PBW_OK;
+            }
+        } else if (text != NULL) {
+            status = pbw_text_parse(desc, text, text_len, &decoded);
+            if (status != PBW_OK) {
+                return pbw_message_set(out, 1,
+                                       pbw_value_new_string(pbw_strerror(status))) ==
+                       PBW_OK;
+            }
+        } else if (payload != NULL) {
             status = pbw_decode(desc, payload, payload_len, &decoded);
             if (status != PBW_OK) {
                 return pbw_message_set(out, 1,
                                        pbw_value_new_string(pbw_strerror(status))) ==
                        PBW_OK;
-            } else {
-                uint8_t *bytes = NULL;
-                size_t len = 0;
+            }
+        } else {
+            return pbw_message_set(out, 5,
+                                   pbw_value_new_string("unsupported payload")) ==
+                   PBW_OK;
+        }
+        if (format == WIRE_JSON) {
+            /* binary or text in, JSON out */
+            char *jout = NULL;
+            size_t jlen = 0;
 
-                status = pbw_encode(decoded, &bytes, &len);
-                pbw_message_free(decoded);
-                if (status != PBW_OK) {
-                    return pbw_message_set(
-                               out, 6, pbw_value_new_string(pbw_strerror(status))) ==
-                           PBW_OK;
-                }
-                {
-                    int ok = pbw_message_set(out, 3, pbw_value_new_bytes(bytes, len)) ==
-                             PBW_OK;
+            status = pbw_json_print(decoded, &jout, &jlen);
+            pbw_message_free(decoded);
+            if (status != PBW_OK) {
+                return pbw_message_set(
+                           out, 6, pbw_value_new_string(pbw_strerror(status))) ==
+                       PBW_OK;
+            }
+            {
+                int ok = pbw_message_set(out, 4, pbw_value_new_bytes(jout, jlen)) ==
+                         PBW_OK;
 
-                    pbw_free(bytes);
-                    return ok;
-                }
+                pbw_free(jout);
+                return ok;
+            }
+        } else if (format == WIRE_TEXT) {
+            /* protobuf in, text out (also answers text->text round trips) */
+            char *tout = NULL;
+            size_t tlen = 0;
+
+            status = pbw_text_print_opts(decoded, print_unknown, &tout, &tlen);
+            pbw_message_free(decoded);
+            if (status != PBW_OK) {
+                return pbw_message_set(
+                           out, 6, pbw_value_new_string(pbw_strerror(status))) ==
+                       PBW_OK;
+            }
+            {
+                int ok = pbw_message_set(out, 8, pbw_value_new_bytes(tout, tlen)) ==
+                         PBW_OK;
+
+                pbw_free(tout);
+                return ok;
+            }
+        } else {
+            uint8_t *bytes = NULL;
+            size_t len = 0;
+
+            status = pbw_encode(decoded, &bytes, &len);
+            pbw_message_free(decoded);
+            if (status != PBW_OK) {
+                return pbw_message_set(
+                           out, 6, pbw_value_new_string(pbw_strerror(status))) ==
+                       PBW_OK;
+            }
+            {
+                int ok = pbw_message_set(out, 3, pbw_value_new_bytes(bytes, len)) ==
+                         PBW_OK;
+
+                pbw_free(bytes);
+                return ok;
             }
         }
     }

@@ -16,7 +16,10 @@ set(PBW_CORE_SOURCES
     src/encode.c
     src/decode.c
     src/ctx.c
-    src/descriptor_set.c)
+    src/descriptor_set.c
+    src/text.c
+    src/json.c
+    src/stream.c)
 
 add_library(pbwire ${PBW_CORE_SOURCES})
 add_library(pbwire::pbwire ALIAS pbwire)
@@ -24,7 +27,8 @@ target_include_directories(pbwire
     PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
            $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
 target_compile_features(pbwire PUBLIC c_std_99)
-set_target_properties(pbwire PROPERTIES EXPORT_NAME pbwire)
+set_target_properties(pbwire PROPERTIES EXPORT_NAME pbwire
+    VERSION ${PROJECT_VERSION} SOVERSION 1)
 
 # Optional: .proto text -> FileDescriptorSet, built on Google Protobuf.
 # Nothing in the core links against it, and it links against nothing in the core.
@@ -60,6 +64,9 @@ if(PBW_BUILD_TESTS)
 
     add_executable(test_pbwire tests/test_pbwire.c)
     target_link_libraries(test_pbwire PRIVATE pbwire)
+    # The self-check also exercises the internal limits and tag helpers.
+    target_include_directories(test_pbwire PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src)
     add_test(NAME test_pbwire COMMAND test_pbwire)
 
     add_executable(test_threads tests/test_threads.c)

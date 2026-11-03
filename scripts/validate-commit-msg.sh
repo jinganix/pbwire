@@ -13,13 +13,13 @@ case "$HEADER" in
 esac
 
 TYPES='feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert'
-SCOPES='core|protoc|test|docs|build|ci'
+SCOPES='core|protoc|test|docs|build|ci|bindings'
 PATTERN="^(${TYPES})\\((${SCOPES})\\): .+"
 
 if ! printf '%s\n' "$HEADER" | grep -qE "$PATTERN"; then
   echo "commit-msg: invalid header -- expected: <type>(<scope>): <subject>"
   echo "  types:  feat fix docs style refactor perf test build ci chore revert"
-  echo "  scopes: core protoc test docs build ci"
+  echo "  scopes: core protoc test docs build ci bindings"
   echo "  see CONTRIBUTING.md"
   exit 1
 fi

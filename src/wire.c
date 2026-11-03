@@ -16,22 +16,96 @@ pbw_varint_write(uint8_t *out, uint64_t value)
 }
 
 /* Returns 1 on success, 0 on truncation or overflow. Rejects varints longer
- * than 10 bytes, which no valid encoder produces. */
+ * than 10 bytes, which no valid encoder produces. Bits above bit 63 of the last
+ * byte are dropped, matching the reference parser. */
 int
 pbw_varint_read(const uint8_t *p, const uint8_t *end, uint64_t *value,
                 size_t *used)
 {
-    uint64_t result = 0;
-    size_t i;
+    uint64_t result;
+    unsigned i;
 
-    for (i = 0; i < 10 && p + i < end; i++) {
-        uint8_t byte = p[i];
-        result |= (uint64_t)(byte & 0x7f) << (7 * i);
-        if ((byte & 0x80) == 0) {
-            *value = result;
-            *used = i + 1;
-            return 1;
+    (void)i;
+    if (p >= end) {
+        return 0;
+    }
+    /* One-byte varints (small tags and lengths) are the common case. */
+    result = p[0];
+    if (result < 0x80) {
+        *value = result;
+        *used = 1;
+        return 1;
+    }
+    if ((size_t)(end - p) < 10) {
+        result = 0;
+        for (i = 0; i < 10 && p + i < end; i++) {
+            uint8_t byte = p[i];
+
+            result |= (uint64_t)(byte & 0x7f) << (7 * i);
+            if ((byte & 0x80) == 0) {
+                *value = result;
+                *used = i + 1;
+                return 1;
+            }
         }
+        return 0;
+    }
+    /* Ten readable bytes: no per-byte bounds check, and the shifts are
+     * constants, which is what makes long (negative int32/int64) varints cheap. */
+    result = p[0] & 0x7f;
+    result |= (uint64_t)(p[1] & 0x7f) << 7;
+    if (p[1] < 0x80) {
+        *value = result;
+        *used = 2;
+        return 1;
+    }
+    result |= (uint64_t)(p[2] & 0x7f) << 14;
+    if (p[2] < 0x80) {
+        *value = result;
+        *used = 3;
+        return 1;
+    }
+    result |= (uint64_t)(p[3] & 0x7f) << 21;
+    if (p[3] < 0x80) {
+        *value = result;
+        *used = 4;
+        return 1;
+    }
+    result |= (uint64_t)(p[4] & 0x7f) << 28;
+    if (p[4] < 0x80) {
+        *value = result;
+        *used = 5;
+        return 1;
+    }
+    result |= (uint64_t)(p[5] & 0x7f) << 35;
+    if (p[5] < 0x80) {
+        *value = result;
+        *used = 6;
+        return 1;
+    }
+    result |= (uint64_t)(p[6] & 0x7f) << 42;
+    if (p[6] < 0x80) {
+        *value = result;
+        *used = 7;
+        return 1;
+    }
+    result |= (uint64_t)(p[7] & 0x7f) << 49;
+    if (p[7] < 0x80) {
+        *value = result;
+        *used = 8;
+        return 1;
+    }
+    result |= (uint64_t)(p[8] & 0x7f) << 56;
+    if (p[8] < 0x80) {
+        *value = result;
+        *used = 9;
+        return 1;
+    }
+    result |= (uint64_t)(p[9] & 0x7f) << 63;
+    if (p[9] < 0x80) {
+        *value = result;
+        *used = 10;
+        return 1;
     }
     return 0;
 }
@@ -39,19 +113,63 @@ pbw_varint_read(const uint8_t *p, const uint8_t *end, uint64_t *value,
 int
 pbw_tag_read(const uint8_t *p, const uint8_t *end, uint32_t *tag, size_t *used)
 {
-    uint32_t result = 0;
-    size_t i;
+    uint32_t result;
+    unsigned i;
 
-    for (i = 0; i < 5 && p + i < end; i++) {
-        uint8_t byte = p[i];
-        /* A tag is a varint32: its fifth byte may only carry the four low bits.
-         * Silently truncating would turn an out-of-range tag into a valid one. */
+    if (p >= end) {
+        return 0;
+    }
+    result = p[0];
+    if (result < 0x80) {
+        *tag = result;
+        *used = 1;
+        return 1;
+    }
+    result &= 0x7f;
+    /* A tag is a varint32: the fifth byte only contributes its four low bits,
+     * anything above is dropped exactly like the reference parser (a 5-byte tag
+     * may overflow without being rejected). A 6-byte tag is invalid. */
+    for (i = 1; i < 5 && p + i < end; i++) {
+        uint32_t byte = p[i];
+
+        result |= (byte & 0x7f) << (7 * i);
+        if (byte < 0x80) {
+            *tag = result;
+            *used = i + 1;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* A length prefix is a strict varint32 in the reference parser: at most five
+ * bytes, and the fifth may only carry the four low bits. Unlike a tag, an
+ * out-of-range length is rejected instead of truncated. */
+int
+pbw_len_read(const uint8_t *p, const uint8_t *end, size_t *len, size_t *used)
+{
+    uint32_t result;
+    unsigned i;
+
+    if (p >= end) {
+        return 0;
+    }
+    result = p[0];
+    if (result < 0x80) {
+        *len = result;
+        *used = 1;
+        return 1;
+    }
+    result &= 0x7f;
+    for (i = 1; i < 5 && p + i < end; i++) {
+        uint32_t byte = p[i];
+
         if (i == 4 && (byte & 0x7f) > 0x0f) {
             return 0;
         }
-        result |= (uint32_t)(byte & 0x7f) << (7 * i);
-        if ((byte & 0x80) == 0) {
-            *tag = result;
+        result |= (byte & 0x7f) << (7 * i);
+        if (byte < 0x80) {
+            *len = (size_t)result;
             *used = i + 1;
             return 1;
         }
@@ -86,11 +204,20 @@ pbw_buf_reserve(pbw_buf *buf, size_t extra)
         return 0;
     }
     need = buf->len + extra;
+    if (need < buf->len) {
+        /* Size overflow: there is no buffer that big. */
+        buf->oom = 1;
+        return 0;
+    }
     if (need <= buf->cap) {
         return 1;
     }
     cap = buf->cap ? buf->cap : 64;
     while (cap < need) {
+        if (cap > SIZE_MAX / 2) {
+            cap = need;
+            break;
+        }
         cap *= 2;
     }
     data = (uint8_t *)realloc(buf->data, cap);
@@ -110,13 +237,6 @@ pbw_write_le32(uint8_t *out, uint32_t value)
     out[1] = (uint8_t)((value >> 8) & 0xff);
     out[2] = (uint8_t)((value >> 16) & 0xff);
     out[3] = (uint8_t)((value >> 24) & 0xff);
-}
-
-void
-pbw_write_le64(uint8_t *out, uint64_t value)
-{
-    pbw_write_le32(out, (uint32_t)(value & 0xffffffffu));
-    pbw_write_le32(out + 4, (uint32_t)(value >> 32));
 }
 
 uint32_t
@@ -154,6 +274,8 @@ pbw_strerror(pbw_status status)
         return "type mismatch";
     case PBW_ERR_LIMIT:
         return "limit exceeded";
+    case PBW_ERR_REQUIRED:
+        return "required field not set";
     default:
         return "unknown error";
     }

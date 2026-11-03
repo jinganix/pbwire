@@ -1,0 +1,12 @@
+id: 99
+i32: -5
+s64: -1
+fx32: 305419896
+dbl: 2.5
+flag: true
+str: "hi"
+shade: SHADE_NEG
+nums: [4, 5]
+packed_nums: [6, 7, 8]
+inner: {name: "req" value: 9}
+inners: [{name: "a"}, {name: "b" value: -3}]

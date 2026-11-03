@@ -1,0 +1,119 @@
+#ifndef __EP_CODEC_H__
+#define __EP_CODEC_H__
+
+#include "enif_protobuf.h"
+
+#define MAX_UINT64_ENCODED_SIZE 10
+
+/* Group nesting limit, same idea as the protobuf reference implementations.
+ * Group skipping is recursive, so unbounded nesting would overflow the C stack. */
+#define EP_MAX_GROUP_DEPTH 100
+
+enum {
+    spot_default,
+    spot_tuple,
+    spot_map,
+    spot_list
+};
+
+typedef enum {
+    WIRE_TYPE_VARINT = 0,
+    WIRE_TYPE_64BIT = 1,
+    WIRE_TYPE_LENGTH_PREFIXED = 2,
+    WIRE_TYPE_START_GROUP = 3,
+    WIRE_TYPE_END_GROUP = 4,
+    WIRE_TYPE_32BIT = 5,
+} wire_type_e;
+
+static inline int16_t
+swap_int16(int16_t value)
+{
+    return (value << 8) | ((value >> 8) & 0x00ff);
+}
+
+static inline uint16_t
+swap_uint16(uint16_t value)
+{
+    return (value << 8) | (value >> 8);
+}
+
+static inline int32_t
+swap_int32(int32_t value)
+{
+    return ((value & 0x000000ff) << 24) |
+           ((value & 0x0000ff00) << 8) |
+           ((value & 0x00ff0000) >> 8) |
+           ((value >> 24) & 0x000000ff);
+}
+
+static inline uint32_t
+swap_uint32(uint32_t value)
+{
+    return ((value & 0x000000ff) << 24) |
+           ((value & 0x0000ff00) << 8) |
+           ((value & 0x00ff0000) >> 8) |
+           (value >> 24);
+}
+
+static inline int64_t
+swap_int64(int64_t value)
+{
+    return ((value & 0x00000000000000ffUL) << 56) |
+           ((value & 0x000000000000ff00UL) << 40) |
+           ((value & 0x0000000000ff0000UL) << 24) |
+           ((value & 0x00000000ff000000UL) << 8) |
+           ((value & 0x000000ff00000000UL) >> 8) |
+           ((value & 0x0000ff0000000000UL) >> 24) |
+           ((value & 0x00ff000000000000UL) >> 40) |
+           ((value >> 56) & 0x00000000000000ffUL);
+}
+
+static inline uint64_t
+swap_uint64(uint64_t value)
+{
+    return ((value & 0x00000000000000ffUL) << 56) |
+           ((value & 0x000000000000ff00UL) << 40) |
+           ((value & 0x0000000000ff0000UL) << 24) |
+           ((value & 0x00000000ff000000UL) << 8) |
+           ((value & 0x000000ff00000000UL) >> 8) |
+           ((value & 0x0000ff0000000000UL) >> 24) |
+           ((value & 0x00ff000000000000UL) >> 40) |
+           (value >> 56);
+}
+
+/*
+ * encode
+ */
+ERL_NIF_TERM
+encode(ErlNifEnv *env, ERL_NIF_TERM term, ep_tdata_t *tdata);
+
+/*
+ * decode
+ */
+ERL_NIF_TERM
+decode(ErlNifEnv *env, ep_tdata_t *tdata, ep_node_t *node);
+
+#if defined(EPB_UNIT_TEST)
+int ep_unit_unpack_tag(const unsigned char *buf, size_t len, uint32_t *tag, uint32_t *wire_type);
+int ep_unit_unpack_length(const unsigned char *buf, size_t len, uint32_t *out);
+size_t ep_unit_pack_uint32(uint32_t val, unsigned char *buf, size_t cap);
+size_t ep_unit_pack_sint32(int32_t val, unsigned char *buf, size_t cap);
+size_t ep_unit_pack_int32(int32_t val, unsigned char *buf, size_t cap);
+size_t ep_unit_pack_int64(int64_t val, unsigned char *buf, size_t cap);
+size_t ep_unit_pack_uint64(uint64_t val, unsigned char *buf, size_t cap);
+size_t ep_unit_pack_fixed32(int32_t val, unsigned char *buf, size_t cap);
+size_t ep_unit_pack_fixed64(int64_t val, unsigned char *buf, size_t cap);
+size_t ep_unit_pack_bool(int val, unsigned char *buf, size_t cap);
+size_t ep_unit_pack_double(double val, unsigned char *buf, size_t cap);
+int ep_unit_unpack_uint32(const unsigned char *buf, size_t len, uint32_t *out);
+int ep_unit_unpack_sint32(const unsigned char *buf, size_t len, int32_t *out);
+int ep_unit_unpack_int32(const unsigned char *buf, size_t len, int32_t *out);
+int ep_unit_unpack_int64(const unsigned char *buf, size_t len, int64_t *out);
+int ep_unit_unpack_uint64(const unsigned char *buf, size_t len, uint64_t *out);
+int ep_unit_unpack_fixed32(const unsigned char *buf, size_t len, uint32_t *out);
+int ep_unit_unpack_fixed64(const unsigned char *buf, size_t len, uint64_t *out);
+int ep_unit_unpack_bool(const unsigned char *buf, size_t len, int *out);
+int ep_unit_unpack_double(const unsigned char *buf, size_t len, double *out);
+#endif
+
+#endif

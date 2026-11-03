@@ -1,7 +1,8 @@
 // proto2 counterpart of bench/msg.proto, used to compare the two syntaxes:
 // proto2 has explicit presence for every field (so a field set to its default
-// value is serialized), unpacked repetition by default, groups, and required
-// fields. pbwire mirrors proto2 presence and does not enforce required.
+// value is serialized), unpacked repetition by default, groups, required
+// fields, closed enums, extensions, and default values that pbwire reports
+// but does not materialize.
 syntax = "proto2";
 
 package bench2;
@@ -39,10 +40,16 @@ message Msg2 {
   repeated int32 nums = 18;
   repeated int32 packed_nums = 19 [packed = true];
   repeated bytes tags = 20;
+  repeated Color2 packed_colors = 21 [packed = true];
+  extensions 100 to 199;
 }
 
-// pbwire skips groups when decoding and cannot encode them; this message exists
-// to pin that behaviour against libprotobuf.
+extend Msg2 {
+  optional int32 ext_int = 100 [default = 5];
+  optional string ext_str = 101;
+}
+
+// Groups decode into their submessage like message fields.
 message HasGroup {
   optional int32 before = 1;
   optional group Grp = 2 {
@@ -51,8 +58,8 @@ message HasGroup {
   optional int32 after = 4;
 }
 
-// pbwire has no required-field enforcement: decoding a message without it must
-// succeed (libprotobuf reports IsInitialized() == false instead).
+// `required` is enforced the way the reference does it: the parser refuses
+// incomplete data, the serializer writes whatever the tree holds.
 message HasRequired {
   required int32 needed = 1;
   optional int32 other = 2;
