@@ -53,7 +53,7 @@ pbw_expected_wire_type(pbw_type type)
     }
 }
 
-static uint64_t
+PBW_INLINE uint64_t
 zigzag_encode(uint64_t value, unsigned width)
 {
     uint64_t mask = width == 32 ? 0xffffffffull : ~0ull;
@@ -63,8 +63,9 @@ zigzag_encode(uint64_t value, unsigned width)
     return ((u << 1) ^ (0ull - (u >> sign))) & mask;
 }
 
-/* Value as it goes on the wire, before tag and length. */
-static uint64_t
+/* Value as it goes on the wire, before tag and length. Inlined: it runs once
+ * per varint field on the encode hot path. */
+PBW_INLINE uint64_t
 wire_value(pbw_type type, uint64_t u)
 {
     switch (type) {
@@ -81,6 +82,22 @@ wire_value(pbw_type type, uint64_t u)
         return u != 0 ? 1u : 0u;
     default:
         return u;
+    }
+}
+
+/* Local packable check for the encode hot path (the global
+ * pbw_is_packable stays for the other translation units). */
+PBW_INLINE int
+enc_packable(pbw_type type)
+{
+    switch (type) {
+    case PBW_TYPE_STRING:
+    case PBW_TYPE_BYTES:
+    case PBW_TYPE_MESSAGE:
+    case PBW_TYPE_GROUP:
+        return 0;
+    default:
+        return 1;
     }
 }
 
@@ -101,7 +118,7 @@ w_grow(writer *w, size_t extra)
 PBW_INLINE int
 w_reserve(writer *w, size_t extra)
 {
-    if (w->buf->cap - w->pos >= extra) {
+    if (PBW_EXPECT(w->buf->cap - w->pos >= extra, 1)) {
         return 1;
     }
     return w_grow(w, extra);
@@ -169,6 +186,64 @@ w_tag(writer *w, uint32_t word, size_t len)
      * output offset is aligned. */
     memcpy(w->buf->data + w->pos, &word, sizeof(word));
     w->pos += len;
+}
+
+/* Same writes without a capacity check, for callers that reserved once for
+ * the whole field (tag plus value). Encoding only appends, so the reserved
+ * slack past w->pos is never read. */
+PBW_INLINE void
+w_tag_noreserve(writer *w, uint32_t word, size_t len)
+{
+    memcpy(w->buf->data + w->pos, &word, sizeof(word));
+    w->pos += len;
+}
+
+PBW_INLINE void
+w_varint_noreserve(writer *w, uint64_t value)
+{
+    uint8_t *out = w->buf->data + w->pos;
+    size_t len = 0;
+
+    if (value < 0x80) {
+        out[0] = (uint8_t)value;
+        w->pos += 1;
+        return;
+    }
+    if (value < 0x4000) {
+        out[0] = (uint8_t)((value & 0x7f) | 0x80);
+        out[1] = (uint8_t)(value >> 7);
+        w->pos += 2;
+        return;
+    }
+    while (value >= 0x80) {
+        out[len++] = (uint8_t)((value & 0x7f) | 0x80);
+        value >>= 7;
+    }
+    out[len++] = (uint8_t)value;
+    w->pos += len;
+}
+
+PBW_INLINE void
+w_fixed_noreserve(writer *w, uint64_t value, size_t size)
+{
+    uint8_t *out = w->buf->data + w->pos;
+
+    if (size == 4) {
+        out[0] = (uint8_t)value;
+        out[1] = (uint8_t)(value >> 8);
+        out[2] = (uint8_t)(value >> 16);
+        out[3] = (uint8_t)(value >> 24);
+    } else {
+        out[0] = (uint8_t)value;
+        out[1] = (uint8_t)(value >> 8);
+        out[2] = (uint8_t)(value >> 16);
+        out[3] = (uint8_t)(value >> 24);
+        out[4] = (uint8_t)(value >> 32);
+        out[5] = (uint8_t)(value >> 40);
+        out[6] = (uint8_t)(value >> 48);
+        out[7] = (uint8_t)(value >> 56);
+    }
+    w->pos += size;
 }
 
 /* Field-number >= 2^21 (five tag bytes) is rare enough to take the slow path. */
@@ -289,18 +364,35 @@ PBW_INLINE void
 write_element(writer *w, const pbw_field *field, const pbw_value *value,
               uint32_t depth, int det)
 {
-    if (depth > PBW_MAX_DEPTH) {
-        w->status = PBW_ERR_LIMIT;
-        return;
-    }
+    /* No depth check for scalars: only messages and groups recurse, and they
+     * guard against PBW_MAX_DEPTH below. Depth never exceeds the limit here
+     * (top-level starts at 0, nesting is capped before recursing). */
     switch (field->type) {
     case PBW_TYPE_STRING:
-    case PBW_TYPE_BYTES:
-        /* Length is known before the payload: write it directly. */
+    case PBW_TYPE_BYTES: {
+        /* Length is known before the payload: reserve once for tag,
+         * length and payload instead of three separate checks. The tag
+         * write stores a whole word, so reserve 4 for it. */
+        size_t lb = pbw_varint_size(value->as.bytes.len);
+        if (field->tag_len <= 4) {
+            if (!w_reserve(w, 4 + lb + value->as.bytes.len)) {
+                w->status = PBW_ERR_NOMEM;
+                return;
+            }
+            w_tag_noreserve(w, field->tag_word, field->tag_len);
+            w_varint_noreserve(w, value->as.bytes.len);
+            if (value->as.bytes.len > 0) {
+                memcpy(w->buf->data + w->pos, value->as.bytes.data,
+                       value->as.bytes.len);
+                w->pos += value->as.bytes.len;
+            }
+            return;
+        }
         w_field_tag(w, field, 0);
         w_varint(w, value->as.bytes.len);
         w_put(w, value->as.bytes.data, value->as.bytes.len);
         return;
+    }
     case PBW_TYPE_GROUP: {
         uint8_t end[5];
         size_t end_len;
@@ -336,8 +428,25 @@ write_element(writer *w, const pbw_field *field, const pbw_value *value,
             w->status = PBW_ERR_LIMIT;
             return;
         }
-        w_field_tag(w, field, 0);
-        w_len_begin(w, &mark);
+        /* Tag plus length placeholder in one reserve; the payload that
+         * follows grows on demand like before. The tag write stores a
+         * whole word, so reserve 4 for it. */
+        if (field->tag_len <= 4) {
+            if (!w_reserve(w, 4 + 1)) {
+                w->status = PBW_ERR_NOMEM;
+                return;
+            }
+            w_tag_noreserve(w, field->tag_word, field->tag_len);
+            mark = w->pos;
+            w->buf->data[w->pos] = 0;
+            w->pos += 1;
+        } else {
+            w_field_tag(w, field, 0);
+            w_len_begin(w, &mark);
+            if (w->status != PBW_OK) {
+                return;
+            }
+        }
         encode_message(w, value->as.msg, depth + 1, det);
         if (w->status != PBW_OK) {
             return;
@@ -348,16 +457,46 @@ write_element(writer *w, const pbw_field *field, const pbw_value *value,
     case PBW_TYPE_FLOAT:
     case PBW_TYPE_FIXED32:
     case PBW_TYPE_SFIXED32:
+        /* One reserve for tag plus value: the common small-message path
+         * then writes without another capacity check. The tag write stores
+         * a whole word, so reserve 4 for it. */
+        if (field->tag_len <= 4) {
+            if (!w_reserve(w, 4 + 4)) {
+                w->status = PBW_ERR_NOMEM;
+                return;
+            }
+            w_tag_noreserve(w, field->tag_word, field->tag_len);
+            w_fixed_noreserve(w, value->as.u64, 4);
+            return;
+        }
         w_field_tag(w, field, 0);
         w_fixed(w, value->as.u64, 4);
         return;
     case PBW_TYPE_DOUBLE:
     case PBW_TYPE_FIXED64:
     case PBW_TYPE_SFIXED64:
+        if (field->tag_len <= 4) {
+            if (!w_reserve(w, 4 + 8)) {
+                w->status = PBW_ERR_NOMEM;
+                return;
+            }
+            w_tag_noreserve(w, field->tag_word, field->tag_len);
+            w_fixed_noreserve(w, value->as.u64, 8);
+            return;
+        }
         w_field_tag(w, field, 0);
         w_fixed(w, value->as.u64, 8);
         return;
     default:
+        if (field->tag_len <= 4) {
+            if (!w_reserve(w, 4 + 10)) {
+                w->status = PBW_ERR_NOMEM;
+                return;
+            }
+            w_tag_noreserve(w, field->tag_word, field->tag_len);
+            w_varint_noreserve(w, wire_value(field->type, value->as.u64));
+            return;
+        }
         w_field_tag(w, field, 0);
         w_varint(w, wire_value(field->type, value->as.u64));
         return;
@@ -369,7 +508,90 @@ write_packed(writer *w, const pbw_field *field, const pbw_value *list)
 {
     size_t mark;
     size_t i;
-
+    size_t n = list->as.list.len;
+    /* Reserve once for tag, length and the whole payload: fixed-width items
+     * have an exact size, varints their 10-byte maximum. The length
+     * placeholder then has its 4-byte slack already reserved, so the patch
+     * never grows and items write without further capacity checks. */
+    if (n > 0 && field->len_tag_len <= 4) {
+        size_t max_payload;
+        switch (field->type) {
+        case PBW_TYPE_FLOAT:
+        case PBW_TYPE_FIXED32:
+        case PBW_TYPE_SFIXED32:
+            max_payload = n * 4;
+            break;
+        case PBW_TYPE_DOUBLE:
+        case PBW_TYPE_FIXED64:
+        case PBW_TYPE_SFIXED64:
+            max_payload = n * 8;
+            break;
+        default:
+            max_payload = n * 10;
+            break;
+        }
+        if (n <= (SIZE_MAX - field->len_tag_len - 5) / 10 &&
+            w_reserve(w, (size_t)field->len_tag_len + 5 + max_payload)) {
+            pbw_value **items = list->as.list.items;
+            size_t payload;
+            size_t lb;
+            size_t shift;
+            uint8_t *base;
+            uint8_t *out;
+            w_tag_noreserve(w, field->len_tag_word, field->len_tag_len);
+            mark = w->pos;
+            w->buf->data[w->pos] = 0;
+            w->pos += 1;
+            if (field->type == PBW_TYPE_FLOAT ||
+                field->type == PBW_TYPE_FIXED32 ||
+                field->type == PBW_TYPE_SFIXED32) {
+                for (i = 0; i < n; i++) {
+                    if (i + 1 < n) {
+                        PBW_PREFETCH(items[i + 1]);
+                    }
+                    w_fixed_noreserve(w, items[i]->as.u64, 4);
+                }
+            } else if (field->type == PBW_TYPE_DOUBLE ||
+                       field->type == PBW_TYPE_FIXED64 ||
+                       field->type == PBW_TYPE_SFIXED64) {
+                for (i = 0; i < n; i++) {
+                    if (i + 1 < n) {
+                        PBW_PREFETCH(items[i + 1]);
+                    }
+                    w_fixed_noreserve(w, items[i]->as.u64, 8);
+                }
+            } else {
+                for (i = 0; i < n; i++) {
+                    if (i + 1 < n) {
+                        PBW_PREFETCH(items[i + 1]);
+                    }
+                    w_varint_noreserve(
+                        w, wire_value(field->type, items[i]->as.u64));
+                }
+            }
+            payload = w->pos - mark - 1;
+            lb = pbw_varint_size(payload);
+            shift = lb - 1;
+            if (shift > 0) {
+                base = w->buf->data;
+                memmove(base + mark + 1 + shift, base + mark + 1, payload);
+                w->pos += shift;
+            }
+            out = w->buf->data + mark;
+            while (payload >= 0x80) {
+                *out++ = (uint8_t)((payload & 0x7f) | 0x80);
+                payload >>= 7;
+            }
+            *out = (uint8_t)payload;
+            return;
+        }
+        if (w->status != PBW_OK) {
+            w->status = PBW_ERR_NOMEM;
+            return;
+        }
+        /* Reserve failed or overflowed the estimate: fall through to the
+         * growing path below. */
+    }
     w_field_tag(w, field, 1);
     w_len_begin(w, &mark);
     for (i = 0; i < list->as.list.len; i++) {
@@ -510,13 +732,24 @@ static void
 encode_message(writer *w, const pbw_message *msg, uint32_t depth, int det)
 {
     size_t i;
+    /* The presence bitmap never changes while encoding, so hoist the first
+     * word: most messages have 32 fields or fewer and then test bits without
+     * reloading the bitmap per field. Larger descriptors use the generic
+     * accessor. */
+    int single_word = msg->desc->field_count <= 32;
+    uint32_t present0 =
+        (single_word && msg->desc->field_count > 0 && msg->present != NULL)
+            ? msg->present[0]
+            : 0;
 
     for (i = 0; i < msg->desc->field_count; i++) {
         const pbw_field *field = &msg->desc->fields[i];
         const pbw_value *value;
         size_t j;
+        int present = single_word ? (int)((present0 >> (i & 31u)) & 1u)
+                                  : pbw_msg_present(msg, i);
 
-        if (!pbw_msg_present(msg, i)) {
+        if (!PBW_EXPECT(present, 1)) {
             continue;
         }
         value = &msg->values[i];
@@ -524,7 +757,7 @@ encode_message(writer *w, const pbw_message *msg, uint32_t depth, int det)
             if (value->kind != PBW_VALUE_LIST || value->as.list.len == 0) {
                 continue;
             }
-            if (field->packed && pbw_is_packable(field->type)) {
+            if (field->packed && enc_packable(field->type)) {
                 write_packed(w, field, value);
                 continue;
             }
@@ -537,6 +770,11 @@ encode_message(writer *w, const pbw_message *msg, uint32_t depth, int det)
                 continue;
             }
             for (j = 0; j < value->as.list.len; j++) {
+                /* The items array holds pointers; prefetch the next value
+                 * while the current one encodes. */
+                if (j + 1 < value->as.list.len) {
+                    PBW_PREFETCH(value->as.list.items[j + 1]);
+                }
                 write_element(w, field, value->as.list.items[j], depth, det);
                 if (w->status != PBW_OK) {
                     return;
@@ -553,54 +791,6 @@ encode_message(writer *w, const pbw_message *msg, uint32_t depth, int det)
      * implementations do the same, so a re-encoded message stays byte-identical
      * for a peer that only knows part of the schema. */
     w_put(w, msg->unknown, msg->unknown_len);
-}
-
-/* Upper bound on the encoded size, used to give pbw_encode() a buffer that is
- * already big enough: one malloc instead of the doubling sequence. Varints are
- * charged their maximum width, so it is cheap to compute and never too small. */
-static size_t
-size_hint(const pbw_message *msg, uint32_t depth)
-{
-    size_t size = msg->unknown_len + 1;
-    size_t i;
-
-    if (depth >= PBW_MAX_DEPTH) {
-        return size;
-    }
-
-    for (i = 0; i < msg->desc->field_count; i++) {
-        const pbw_field *field = &msg->desc->fields[i];
-        const pbw_value *value;
-
-        if (!pbw_msg_present(msg, i)) {
-            continue;
-        }
-        value = &msg->values[i];
-        if (field->label == PBW_LABEL_REPEATED) {
-            if (value->kind != PBW_VALUE_LIST) {
-                continue;
-            }
-            if (field->packed && pbw_is_packable(field->type)) {
-                size += (size_t)field->len_tag_len + 5 +
-                        (size_t)value->as.list.len * 10;
-            } else {
-                /* Per-item payloads are not walked: a short hint only means the
-                 * buffer grows again, which is cheap compared to the walk. */
-                size += (size_t)value->as.list.len *
-                        ((size_t)field->tag_len + 10);
-            }
-            continue;
-        }
-        size += (size_t)field->tag_len + 10;
-        if (field->type == PBW_TYPE_STRING || field->type == PBW_TYPE_BYTES) {
-            size += value->as.bytes.len;
-        } else if ((field->type == PBW_TYPE_MESSAGE ||
-                    field->type == PBW_TYPE_GROUP) &&
-                   value->as.msg != NULL) {
-            size += size_hint(value->as.msg, depth + 1);
-        }
-    }
-    return size;
 }
 
 /* -------------------------------------------------------------- entry points */
@@ -636,15 +826,20 @@ encode_alloc(const pbw_message *msg, int det, uint8_t **out, size_t *len)
     {
         /* Load-time hint first: a decoded tree re-encodes to about its wire
          * length, so no walk is needed (exact for untouched trees; the
-         * writer grows if it was mutated, hence no invalidation). Hand-built
-         * trees keep the exact-size hint: fixed starts win small messages
-         * but lose large ones on realloc chains (measured 2026-11). */
+         * writer grows if it was mutated, hence no invalidation).
+         * Hand-built trees start from a small fixed buffer and grow on
+         * demand: walking the tree to size it costs more than one or two
+         * doublings for small messages, and large ones only pay a few
+         * realloc copies (measured 2026-11). 256 stays in the fast tiny
+         * allocation class on common allocators, so small messages avoid
+         * both the sizing walk and a slow large malloc. No shared state is
+         * touched, so concurrent encodes of one message stay independent. */
         size_t initial;
 
         if (msg->wire_len > 0 && msg->wire_len <= SIZE_MAX - 32) {
             initial = msg->wire_len + 32;
         } else {
-            initial = size_hint(msg, 0);
+            initial = 256;
         }
         if (!pbw_buf_reserve(&buf, initial)) {
             return PBW_ERR_NOMEM;

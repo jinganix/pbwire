@@ -8,13 +8,28 @@ typedef struct {
     const uint8_t *end;
 } reader;
 
-static uint64_t
+PBW_INLINE uint64_t
 zigzag_decode(uint64_t value, unsigned width)
 {
     uint64_t mask = width == 32 ? 0xffffffffull : ~0ull;
     uint64_t u = value & mask;
 
     return ((u >> 1) ^ (0ull - (u & 1))) & mask;
+}
+
+/* Little-endian loads without a cross-translation-unit call: the fixed-width
+ * fast paths run them once per field. */
+PBW_INLINE uint32_t
+dec_le32(const uint8_t *p)
+{
+    return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) |
+           ((uint32_t)p[3] << 24);
+}
+
+PBW_INLINE uint64_t
+dec_le64(const uint8_t *p)
+{
+    return (uint64_t)dec_le32(p) | ((uint64_t)dec_le32(p + 4) << 32);
 }
 
 /* Reads a varint. One- and two-byte values (most tags and small numbers) are
@@ -194,7 +209,7 @@ read_scalar(reader *r, pbw_type type, uint64_t *out)
         if ((size_t)(r->end - r->p) < 4) {
             return PBW_ERR_INVALID;
         }
-        *out = (uint64_t)pbw_read_le32(r->p);
+        *out = (uint64_t)dec_le32(r->p);
         r->p += 4;
         return PBW_OK;
     case PBW_TYPE_FIXED64:
@@ -203,7 +218,7 @@ read_scalar(reader *r, pbw_type type, uint64_t *out)
         if ((size_t)(r->end - r->p) < 8) {
             return PBW_ERR_INVALID;
         }
-        *out = pbw_read_le64(r->p);
+        *out = dec_le64(r->p);
         r->p += 8;
         return PBW_OK;
     default:
@@ -307,6 +322,22 @@ append_item(pbw_message *msg, const pbw_field *field, pbw_value *item)
         return PBW_ERR_NOMEM;
     }
     return PBW_OK;
+}
+
+/* Two-byte tag fast path: field numbers 16..2047 encode to two bytes
+ * (first byte has the high bit set, second does not). They are common in
+ * any schema with more than fifteen fields, so they get the same inline
+ * handling as one-byte tags instead of going through pbw_tag_read() and
+ * the generic field logic. Anything ineligible (oneof members, groups,
+ * closed enums) falls through to read_field()/read_packed() below. */
+PBW_INLINE int
+decode_tag2(const uint8_t *p, const uint8_t *end, uint32_t *tag)
+{
+    if ((size_t)(end - p) < 2 || p[0] < 0x80 || p[1] >= 0x80) {
+        return 0;
+    }
+    *tag = (uint32_t)(p[0] & 0x7f) | ((uint32_t)p[1] << 7);
+    return 1;
 }
 
 static pbw_status decode_fields(pbw_message *msg, const uint8_t *buf,
@@ -662,9 +693,13 @@ decode_fields(pbw_message *msg, const uint8_t *buf, size_t len, uint32_t depth, 
         pbw_status status;
         uint8_t action = PBW_ACT_GENERIC;
 
+        /* The next cache line usually holds the upcoming fields: prefetch
+         * it while the current one decodes. A prefetch of resident memory
+         * is a single cheap hint. */
+        PBW_PREFETCH(r.p + 64);
         /* One-byte tag (field number < 16): the common case, dispatched by
          * the link-time tag table with a single indexed load. */
-        if (r.p < r.end && r.p[0] < 0x80) {
+        if (PBW_EXPECT(r.p < r.end && r.p[0] < 0x80, 1)) {
             tag = r.p[0];
             r.p++;
             wire_type = tag & 7;
@@ -723,14 +758,14 @@ decode_fields(pbw_message *msg, const uint8_t *buf, size_t len, uint32_t depth, 
                     if ((size_t)(r.end - r.p) < 4) {
                         return PBW_ERR_INVALID;
                     }
-                    store_first_or_put(msg, index, pbw_read_le32(r.p));
+                    store_first_or_put(msg, index, dec_le32(r.p));
                     r.p += 4;
                     continue;
                 case PBW_ACT_F64:
                     if ((size_t)(r.end - r.p) < 8) {
                         return PBW_ERR_INVALID;
                     }
-                    store_first_or_put(msg, index, pbw_read_le64(r.p));
+                    store_first_or_put(msg, index, dec_le64(r.p));
                     r.p += 8;
                     continue;
                 case PBW_ACT_STR: {
@@ -795,6 +830,223 @@ decode_fields(pbw_message *msg, const uint8_t *buf, size_t len, uint32_t depth, 
                     continue;
                 default:
                     break;
+                }
+            }
+        } else if (decode_tag2(r.p, r.end, &tag)) {
+            /* Two-byte tag (field number 16..2047): same inline handling
+             * as one-byte tags. Ineligible shapes fall through to the
+             * shared generic logic below. */
+            r.p += 2;
+            wire_type = tag & 7;
+            number = tag >> 3;
+            if (number == 0 || wire_type == PBW_WIRE_END_GROUP ||
+                wire_type > PBW_WIRE_32BIT) {
+                return PBW_ERR_INVALID;
+            }
+            if (fnum_map != NULL) {
+                field = number < fnum_map_size ? fnum_map[number] : NULL;
+            } else {
+                field = pbw_find_field(desc, number);
+            }
+            if (field != NULL && wire_type == field->wire_type &&
+                field->oneof_index == 0 && field->type != PBW_TYPE_GROUP &&
+                !(closed && pbw_enum_is_closed(field))) {
+                size_t index2 = (size_t)(field - desc->fields);
+                if (field->label != PBW_LABEL_REPEATED) {
+                    uint64_t bits2;
+                    switch (field->type) {
+                    case PBW_TYPE_INT32:
+                    case PBW_TYPE_ENUM:
+                        if (!read_varint(&r, &bits2)) {
+                            return PBW_ERR_INVALID;
+                        }
+                        store_first_or_put(msg, index2,
+                                           (uint64_t)(int64_t)(int32_t)bits2);
+                        continue;
+                    case PBW_TYPE_INT64:
+                    case PBW_TYPE_UINT64:
+                        if (!read_varint(&r, &bits2)) {
+                            return PBW_ERR_INVALID;
+                        }
+                        store_first_or_put(msg, index2, bits2);
+                        continue;
+                    case PBW_TYPE_UINT32:
+                        if (!read_varint(&r, &bits2)) {
+                            return PBW_ERR_INVALID;
+                        }
+                        store_first_or_put(msg, index2,
+                                           (uint64_t)(uint32_t)bits2);
+                        continue;
+                    case PBW_TYPE_SINT32:
+                        if (!read_varint(&r, &bits2)) {
+                            return PBW_ERR_INVALID;
+                        }
+                        bits2 = (uint64_t)(int64_t)(int32_t)zigzag_decode(
+                            bits2, 32);
+                        store_first_or_put(msg, index2, bits2);
+                        continue;
+                    case PBW_TYPE_SINT64:
+                        if (!read_varint(&r, &bits2)) {
+                            return PBW_ERR_INVALID;
+                        }
+                        store_first_or_put(msg, index2,
+                                           zigzag_decode(bits2, 64));
+                        continue;
+                    case PBW_TYPE_BOOL:
+                        if (!read_varint(&r, &bits2)) {
+                            return PBW_ERR_INVALID;
+                        }
+                        store_first_or_put(msg, index2,
+                                           bits2 != 0 ? 1u : 0u);
+                        continue;
+                    case PBW_TYPE_FIXED32:
+                    case PBW_TYPE_SFIXED32:
+                    case PBW_TYPE_FLOAT:
+                        if ((size_t)(r.end - r.p) < 4) {
+                            return PBW_ERR_INVALID;
+                        }
+                        store_first_or_put(msg, index2, dec_le32(r.p));
+                        r.p += 4;
+                        continue;
+                    case PBW_TYPE_FIXED64:
+                    case PBW_TYPE_SFIXED64:
+                    case PBW_TYPE_DOUBLE:
+                        if ((size_t)(r.end - r.p) < 8) {
+                            return PBW_ERR_INVALID;
+                        }
+                        store_first_or_put(msg, index2, dec_le64(r.p));
+                        r.p += 8;
+                        continue;
+                    case PBW_TYPE_STRING:
+                    case PBW_TYPE_BYTES: {
+                        const uint8_t *data2;
+                        size_t data_len2;
+                        status = read_length(&r, &data2, &data_len2);
+                        if (status != PBW_OK) {
+                            return status;
+                        }
+                        if (!pbw_msg_present(msg, index2)) {
+                            if (!store_bytes_first(msg, index2, data2,
+                                                   data_len2)) {
+                                return PBW_ERR_NOMEM;
+                            }
+                        } else {
+                            pbw_value value2;
+                            if (!pbw_value_init_bytes(&value2, msg->arena,
+                                                      data2, data_len2)) {
+                                return PBW_ERR_NOMEM;
+                            }
+                            pbw_message_put(msg, index2, &value2);
+                        }
+                        continue;
+                    }
+                    case PBW_TYPE_MESSAGE: {
+                        const uint8_t *data2;
+                        size_t data_len2;
+                        pbw_message *nested2 = NULL;
+                        if (depth >= dlim) {
+                            return PBW_ERR_LIMIT;
+                        }
+                        status = read_length(&r, &data2, &data_len2);
+                        if (status != PBW_OK) {
+                            return status;
+                        }
+                        if (pbw_msg_present(msg, index2) &&
+                            msg->values[index2].kind == PBW_VALUE_MESSAGE &&
+                            msg->values[index2].as.msg != NULL &&
+                            msg->values[index2].as.msg->desc == field->sub) {
+                            status = decode_fields(msg->values[index2].as.msg,
+                                                   data2, data_len2,
+                                                   depth + 1, dlim);
+                            if (status != PBW_OK) {
+                                return status;
+                            }
+                            continue;
+                        }
+                        status = decode_message(msg->arena, field->sub, data2,
+                                                data_len2, &nested2,
+                                                depth + 1, dlim);
+                        if (status != PBW_OK) {
+                            return status;
+                        }
+                        if (pbw_msg_present(msg, index2)) {
+                            pbw_value_destroy(&msg->values[index2]);
+                        }
+                        msg->values[index2].kind = PBW_VALUE_MESSAGE;
+                        msg->values[index2].flags = PBW_VF_EMBEDDED |
+                                                    (msg->arena != NULL ? PBW_VF_ARENA : 0u);
+                        msg->values[index2].as.msg = nested2;
+                        pbw_msg_set_present(msg, index2, 1);
+                        continue;
+                    }
+                    default:
+                        break;
+                    }
+                } else {
+                    /* Repeated unpacked form with a two-byte tag. Scalars
+                     * and bytes append inline; messages and groups use the
+                     * generic logic below (one call per item either way). */
+                    switch (field->type) {
+                    case PBW_TYPE_INT32:
+                    case PBW_TYPE_ENUM:
+                    case PBW_TYPE_INT64:
+                    case PBW_TYPE_UINT64:
+                    case PBW_TYPE_UINT32:
+                    case PBW_TYPE_SINT32:
+                    case PBW_TYPE_SINT64:
+                    case PBW_TYPE_BOOL: {
+                        uint64_t bits2;
+                        status = read_scalar(&r, field->type, &bits2);
+                        if (status != PBW_OK) {
+                            return status;
+                        }
+                        status = append_item(
+                            msg, field,
+                            pbw_value_new_uint_a(msg->arena, bits2));
+                        if (status != PBW_OK) {
+                            return status;
+                        }
+                        continue;
+                    }
+                    case PBW_TYPE_FIXED32:
+                    case PBW_TYPE_SFIXED32:
+                    case PBW_TYPE_FLOAT:
+                    case PBW_TYPE_FIXED64:
+                    case PBW_TYPE_SFIXED64:
+                    case PBW_TYPE_DOUBLE: {
+                        uint64_t bits2;
+                        status = read_scalar(&r, field->type, &bits2);
+                        if (status != PBW_OK) {
+                            return status;
+                        }
+                        status = append_item(
+                            msg, field,
+                            pbw_value_new_uint_a(msg->arena, bits2));
+                        if (status != PBW_OK) {
+                            return status;
+                        }
+                        continue;
+                    }
+                    case PBW_TYPE_STRING:
+                    case PBW_TYPE_BYTES: {
+                        const uint8_t *data2;
+                        size_t data_len2;
+                        status = read_length(&r, &data2, &data_len2);
+                        if (status != PBW_OK) {
+                            return status;
+                        }
+                        status = append_item(
+                            msg, field,
+                            pbw_value_new_bytes_a(msg->arena, data2,
+                                                  data_len2));
+                        if (status != PBW_OK) {
+                            return status;
+                        }
+                        continue;
+                    }
+                    default:
+                        break;
+                    }
                 }
             }
         } else if (pbw_tag_read(r.p, r.end, &tag, &used)) {

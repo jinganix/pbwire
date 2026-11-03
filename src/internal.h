@@ -10,8 +10,14 @@
  * enif_protobuf's codec: unbounded nesting is a stack-overflow vector. */
 #if defined(__GNUC__) || defined(__clang__)
 #define PBW_INLINE __attribute__((always_inline)) static inline
+/* Branch and prefetch hints: no-ops on compilers without them, so the core
+ * stays buildable with a plain C99 compiler. */
+#define PBW_EXPECT(x, v) __builtin_expect((x), (v))
+#define PBW_PREFETCH(p) __builtin_prefetch(p)
 #else
 #define PBW_INLINE static inline
+#define PBW_EXPECT(x, v) (x)
+#define PBW_PREFETCH(p) ((void)0)
 #endif
 
 #define PBW_MAX_DEPTH 100
