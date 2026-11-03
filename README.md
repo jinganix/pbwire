@@ -508,12 +508,12 @@ iterations, throughput in MB/s (higher is better):
 
 | payload | op | pbwire ctx (MB/s, x gen) | pbwire plain (MB/s, x gen) | protoc gen (MB/s) | DynamicMessage (MB/s) |
 |---|---|---|---|---|---|
-| 132 B | encode | 1888.1 (1.15x) | 1385.1 (0.84x) | 1641.1 | 110.2 |
-| 132 B | decode | 1449.3 (1.59x) | 987.9 (1.08x) | 910.8 | 287.5 |
-| 169 B | encode | 1741.9 (1.02x) | 1275.8 (0.75x) | 1712.0 | 108.7 |
-| 169 B | decode | 1080.7 (1.32x) | 829.3 (1.01x) | 819.2 | 281.1 |
-| 2755 B | encode | 1491.1 (1.31x) | 1233.6 (1.09x) | 1135.6 | 133.5 |
-| 2755 B | decode | 549.0 (1.18x) | 517.9 (1.11x) | 465.9 | 256.9 |
+| 132 B | encode | 1829.5 (1.09x) | 1381.4 (0.82x) | 1680.7 | 109.7 |
+| 132 B | decode | 1375.3 (1.56x) | 975.3 (1.11x) | 879.7 | 288.8 |
+| 169 B | encode | 1636.4 (0.97x) | 1244.9 (0.74x) | 1679.7 | 108.9 |
+| 169 B | decode | 1030.2 (1.28x) | 779.6 (0.97x) | 804.8 | 283.2 |
+| 2755 B | encode | 1528.4 (1.36x) | 1265.6 (1.13x) | 1121.3 | 133.6 |
+| 2755 B | decode | 559.7 (1.19x) | 550.2 (1.17x) | 471.9 | 255.4 |
 
 Throughput moves by a few percent between runs; the numbers above are one run.
 Regenerate both tables for the current machine with `scripts/perf.sh` (same layout, MB/s only).
@@ -524,13 +524,13 @@ degradation and the aggregate speedup. Same machine (14 cores), from the same ru
 
 | op | pbwire 1thr (MB/s, x gen) | pbwire 8thr agg (MB/s, x gen) | gen 1thr (MB/s) | gen 8thr agg (MB/s) |
 |---|---|---|---|---|
-| encode | 1680.6 (1.15x) | 13998.2 (1.40x) | 1467.2 | 9967.6 |
-| decode | 1099.1 (1.39x) | 7268.8 (1.25x) | 789.5 | 5809.0 |
+| encode | 1816.9 (1.07x) | 11131.5 (1.05x) | 1696.2 | 10605.0 |
+| decode | 1041.2 (1.42x) | 6571.8 (1.77x) | 735.3 | 3705.7 |
 
 `8thr agg` is the total throughput of all eight threads. The schema, the descriptors and the wire
 input are shared by all threads; each thread only adds its own `pbw_ctx` and message. pbwire scales
-8.3x (encode) and 6.6x (decode) from 1 to 8 threads in that run; generated code reaches 6.8x and
-7.4x. Both are limited by cache and memory bandwidth, not by a lock: the library has no global or
+6.1x (encode) and 6.3x (decode) from 1 to 8 threads in that run; generated code reaches 6.3x and
+5.0x. Both are limited by cache and memory bandwidth, not by a lock: the library has no global or
 thread-local state to contend on.
 
 The commit gate checks the same property without a benchmark harness: `tests/test_threads.c` prints

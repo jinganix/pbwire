@@ -449,35 +449,62 @@ read_packed(reader *r, const pbw_field *field, pbw_message *msg, int closed)
     if (status != PBW_OK) {
         return status;
     }
+    /* Fixed-width items divide the length exactly, so the count is known
+     * before the first item: reserve it and skip the push growth chain.
+     * The length guard also keeps an empty packed field absent (no list is
+     * created for it, as before). Both tests below are loop-invariant. */
+    if (data_len > 0 && (field->type == PBW_TYPE_FIXED32 ||
+                         field->type == PBW_TYPE_SFIXED32 ||
+                         field->type == PBW_TYPE_FLOAT ||
+                         field->type == PBW_TYPE_FIXED64 ||
+                         field->type == PBW_TYPE_SFIXED64 ||
+                         field->type == PBW_TYPE_DOUBLE)) {
+        size_t width = (field->type == PBW_TYPE_FIXED64 ||
+                        field->type == PBW_TYPE_SFIXED64 ||
+                        field->type == PBW_TYPE_DOUBLE)
+                           ? 8u
+                           : 4u;
+        pbw_value *list = pbw_message_list_for(msg, field);
+
+        if (list == NULL ||
+            !pbw_value_list_reserve(list, (uint32_t)(data_len / width),
+                                    msg->arena)) {
+            return PBW_ERR_NOMEM;
+        }
+    }
     sub.p = data;
     sub.end = data + data_len;
-    while (sub.p < sub.end) {
-        const uint8_t *item = sub.p;
-        uint64_t bits;
+    {
+        int closed_enum =
+            closed && pbw_enum_is_closed(field); /* loop-invariant */
+        while (sub.p < sub.end) {
+            const uint8_t *item = sub.p;
+            uint64_t bits;
 
-        status = read_scalar(&sub, field->type, &bits);
-        if (status != PBW_OK) {
-            return status;
-        }
-        if (closed && pbw_enum_is_closed(field) &&
-            !pbw_enum_find_name(field->sub, (int32_t)bits, NULL)) {
-            /* A closed enum's unknown value leaves the field: the reference
-             * parsers keep it as an unpacked unknown field instead. */
-            status = (pbw_status)pbw_message_add_unknown(msg, field->tag,
-                                                         field->tag_len);
-            if (status == PBW_OK) {
-                status = (pbw_status)pbw_message_add_unknown(
-                    msg, item, (size_t)(sub.p - item));
-            }
+            status = read_scalar(&sub, field->type, &bits);
             if (status != PBW_OK) {
                 return status;
             }
-            continue;
-        }
-        status = append_item(msg, field,
-                             pbw_value_new_uint_a(msg->arena, bits));
-        if (status != PBW_OK) {
-            return status;
+            if (closed_enum &&
+                !pbw_enum_find_name(field->sub, (int32_t)bits, NULL)) {
+                /* A closed enum's unknown value leaves the field: the reference
+                 * parsers keep it as an unpacked unknown field instead. */
+                status = (pbw_status)pbw_message_add_unknown(msg, field->tag,
+                                                             field->tag_len);
+                if (status == PBW_OK) {
+                    status = (pbw_status)pbw_message_add_unknown(
+                        msg, item, (size_t)(sub.p - item));
+                }
+                if (status != PBW_OK) {
+                    return status;
+                }
+                continue;
+            }
+            status = append_item(msg, field,
+                                 pbw_value_new_uint_a(msg->arena, bits));
+            if (status != PBW_OK) {
+                return status;
+            }
         }
     }
     return PBW_OK;

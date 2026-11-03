@@ -346,6 +346,10 @@ pbw_value *pbw_value_new_list(void);
 /* Appends item to list; the items array comes from `arena` when it is not
  * NULL. Takes ownership of item. */
 int pbw_value_list_push(pbw_value *list, pbw_value *item, pbw_arena *arena);
+/* Grows list capacity to `cap` without adding items, for inputs whose item
+ * count is known upfront (packed fixed-width fields). Mirrors the growth
+ * policy of pbw_value_list_push; 1 on success (or when already big enough). */
+int pbw_value_list_reserve(pbw_value *list, uint32_t cap, pbw_arena *arena);
 /* Frees what a value points at (bytes, nested message, list items) but not the
  * pbw_value struct itself. */
 void pbw_value_destroy(pbw_value *value);

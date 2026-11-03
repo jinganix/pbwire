@@ -501,6 +501,42 @@ pbw_value_list_push(pbw_value *list, pbw_value *item, pbw_arena *arena)
     return 1;
 }
 
+int
+pbw_value_list_reserve(pbw_value *list, uint32_t cap, pbw_arena *arena)
+{
+    pbw_value **items;
+    size_t bytes;
+
+    if (list == NULL || list->kind != PBW_VALUE_LIST ||
+        cap <= list->as.list.cap) {
+        return list != NULL && list->kind == PBW_VALUE_LIST;
+    }
+    bytes = (size_t)cap * sizeof(*items);
+    if (bytes / sizeof(*items) != cap) {
+        return 0;
+    }
+    if (arena != NULL) {
+        /* Same as the push growth: no realloc in an arena, the old block is
+         * recycled by pbw_ctx_reset(). */
+        items = (pbw_value **)pbw_arena_alloc(arena, bytes);
+        if (items == NULL) {
+            return 0;
+        }
+        if (list->as.list.len > 0) {
+            memcpy(items, list->as.list.items,
+                   list->as.list.len * sizeof(*items));
+        }
+    } else {
+        items = (pbw_value **)realloc(list->as.list.items, bytes);
+        if (items == NULL) {
+            return 0;
+        }
+    }
+    list->as.list.items = items;
+    list->as.list.cap = cap;
+    return 1;
+}
+
 pbw_value_kind
 pbw_value_get_kind(const pbw_value *value)
 {

@@ -921,6 +921,37 @@ test_pack_all_types(pbw_schema *schema)
     }
 }
 
+/* Packed fixed-width fields reserve their exact item count up front (no
+ * growth chain), and an empty packed field on the wire stays absent. */
+static void
+test_packed_presize(pbw_schema *schema)
+{
+    const pbw_descriptor *packed = desc(schema, "PackAll");
+    /* Field 9 (fixed32) tag with an empty length. */
+    static const uint8_t empty_packed[] = {0x4A, 0x00};
+    pbw_message *msg = pbw_message_new(packed);
+    pbw_message *decoded = NULL;
+    pbw_message *empty = NULL;
+    uint8_t *buf = NULL;
+    size_t len = 0;
+
+    CHECK_OK(pbw_message_set(msg, 9, pbw_value_new_uint(1)));
+    CHECK_OK(pbw_message_set(msg, 9, pbw_value_new_uint(2)));
+    CHECK_OK(pbw_message_set(msg, 12, pbw_value_new_int(-1)));
+    CHECK_OK(pbw_encode(msg, &buf, &len));
+    CHECK_OK(pbw_decode(packed, buf, len, &decoded));
+    CHECK(decoded->values[8].as.list.len == 2);
+    CHECK(decoded->values[8].as.list.cap == 2);
+    CHECK(decoded->values[11].as.list.len == 1);
+    CHECK(decoded->values[11].as.list.cap == 1);
+    CHECK_OK(pbw_decode(packed, empty_packed, sizeof(empty_packed), &empty));
+    CHECK(!pbw_msg_present(empty, 8));
+    pbw_free(buf);
+    pbw_message_free(decoded);
+    pbw_message_free(empty);
+    pbw_message_free(msg);
+}
+
 static void
 test_recursive_type(pbw_schema *schema)
 {
@@ -3210,6 +3241,7 @@ main(void)
     test_tag_limits(schema);
     test_field_number_edges(schema);
     test_pack_all_types(schema);
+    test_packed_presize(schema);
     test_recursive_type(schema);
     test_bool_and_float_bits(schema);
     test_enum_edges(schema);
