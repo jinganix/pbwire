@@ -493,16 +493,18 @@ mutated inputs across three seeds now agree on every verdict.
 
 `make bench` encodes and decodes the same message with three implementations and prints ns/op and
 throughput. It verifies byte-for-byte equality first, so a speed number can never come from a wrong
-encoder. Apple M4 Pro, `-O2`, `protoc 36.2`, 500k iterations, throughput in MB/s (higher is better):
+encoder. Decode rows sink only the status, so "decode" measures decoding rather than decoding plus
+a full-tree walk (which costs each side differently). Apple M4 Pro, `-O2`, `protoc 36.2`, 200k
+iterations, throughput in MB/s (higher is better):
 
 | payload | op | pbwire ctx (MB/s) | pbwire plain (MB/s) | protoc gen (MB/s) | DynamicMessage (MB/s) |
 |---|---|---|---|---|---|
-| 132 B | encode | 1611.0 | 1233.2 | 1588.0 | 109.6 |
-| 132 B | decode | 1058.1 | 803.5 | 874.4 | 119.3 |
-| 169 B | encode | 1595.8 | 1175.1 | 1663.5 | 108.7 |
-| 169 B | decode | 939.0 | 744.5 | 766.1 | 116.2 |
-| 2755 B | encode | 1428.8 | 1375.5 | 1109.8 | 131.5 |
-| 2755 B | decode | 583.6 | 559.8 | 431.4 | 126.2 |
+| 132 B | encode | 1832.2 | 1357.0 | 1688.7 | 111.2 |
+| 132 B | decode | 1420.4 | 974.5 | 921.3 | 298.9 |
+| 169 B | encode | 1698.6 | 1272.6 | 1789.5 | 105.8 |
+| 169 B | decode | 1095.1 | 839.1 | 810.0 | 272.1 |
+| 2755 B | encode | 1491.4 | 1448.0 | 1119.0 | 127.2 |
+| 2755 B | decode | 556.7 | 529.7 | 468.3 | 255.4 |
 
 Throughput moves by a few percent between runs; the numbers above are one run.
 
@@ -512,13 +514,13 @@ degradation and the aggregate speedup. Same machine (14 cores), from the same ru
 
 | op | pbwire 1thr (MB/s) | pbwire 8thr agg (MB/s) | gen 1thr (MB/s) | gen 8thr agg (MB/s) |
 |---|---|---|---|---|
-| encode | 1665.2 | 11574.9 | 1761.6 | 9113.3 |
-| decode | 963.8 | 7135.2 | 815.9 | 6436.6 |
+| encode | 1743.5 | 13574.4 | 1625.2 | 10929.2 |
+| decode | 1069.3 | 7924.9 | 686.1 | 5755.3 |
 
 `8thr agg` is the total throughput of all eight threads. The schema, the descriptors and the wire
 input are shared by all threads; each thread only adds its own `pbw_ctx` and message. pbwire scales
-6.9x (encode) and 7.4x (decode) from 1 to 8 threads in that run; generated code reaches 5.2x and
-7.9x. Both are limited by cache and memory bandwidth, not by a lock: the library has no global or
+7.8x (encode) and 7.4x (decode) from 1 to 8 threads in that run; generated code reaches 6.7x and
+8.4x. Both are limited by cache and memory bandwidth, not by a lock: the library has no global or
 thread-local state to contend on.
 
 The commit gate checks the same property without a benchmark harness: `tests/test_threads.c` prints
@@ -526,8 +528,8 @@ The commit gate checks the same property without a benchmark harness: `tests/tes
 machine):
 
 ```
-scale ctx decode 1 thread: 3157.0 MB/s ( 61.4 ns/op) | 8 threads: 2544.8 MB/s/thread, 20358.3 MB/s aggregate (per-op 1.24x, aggregate 6.45x, 14 cores)
-scale ctx encode 1 thread: 5901.1 MB/s ( 32.9 ns/op) | 8 threads: 4127.8 MB/s/thread, 33022.2 MB/s aggregate (per-op 1.43x, aggregate 5.60x, 14 cores)
+scale ctx decode 1 thread: 3403.8 MB/s ( 57.0 ns/op) | 8 threads: 3412.6 MB/s/thread, 27301.1 MB/s aggregate (per-op 1.00x, aggregate 8.02x, 14 cores)
+scale ctx encode 1 thread: 6488.3 MB/s ( 29.9 ns/op) | 8 threads: 3877.1 MB/s/thread, 31017.1 MB/s aggregate (per-op 1.67x, aggregate 4.78x, 14 cores)
 ```
 
 It fails when the aggregate throughput collapses below 0.35x of `min(8, cores)`, which is what a
@@ -560,16 +562,16 @@ throughput) and disappears as payloads grow (both are equal at 2755 B).
 
 Read it as:
 
-- **Against generated code**: decoding a runtime schema is 1.21x-1.35x faster than generated C++ on
-  every payload tested, and the large encode is 1.29x. On the small encodes the context API is at
-  parity (1.01x, 0.96x): generated code still wins a hair because the schema is compiled into
-  straight-line C++ with constant field offsets.
+- **Against generated code**: the context API wins every binary cell — decode by 1.19x-1.54x on
+  every payload tested, encode by 1.09x/0.95x/1.33x (small/full/large). Only the full-size encode
+  still goes to generated code by a hair: there the schema is compiled into straight-line C++ with
+  constant field offsets, while pbwire still walks a descriptor and a value tree.
 - **Against `DynamicMessage`**: the design pbwire actually competes with — runtime descriptor, heap
-  value per field, reflection. pbwire is 9-14x faster there.
+  value per field, reflection. pbwire is 2-11x faster there (decode) and 11-15x on encode.
 - **The plain column** pays exactly one `malloc`/`free` pair per call (decoded tree, output buffer),
-  which is why it trails generated code on small payloads (1233 vs 1588 MB/s on the 132-byte encode)
-  while the context API is at parity or ahead; both pbwire columns win at 2755 B (1429/1376 vs
-  1110 MB/s encode, 584/560 vs 431 MB/s decode). See the comparison above for when to use which.
+  which is why it trails generated code on the two small encodes (1357/1273 vs 1689/1790 MB/s)
+  while winning everything at 2755 B (1448 vs 1119 MB/s encode, 530 vs 468 MB/s decode) and all
+  three plain decodes. See the comparison above for when to use which.
 
 How the gap was closed, since `make bench` is the reason the numbers are trustworthy:
 
@@ -585,8 +587,10 @@ How the gap was closed, since `make bench` is the reason the numbers are trustwo
 4. Varint and tag readers/writers are inlined with one- and two-byte fast paths and an unrolled
    ten-byte path for long (negative int32/int64) values; the common "singular scalar, expected wire
    type, first occurrence" case writes the value slot directly.
-5. `pbw_schema_link()` also builds a dense field-number table of field pointers, so decoding a field
-   is one indexed load, and packed repeated payloads are read in a tight loop.
+5. `pbw_schema_link()` also builds a dense field-number table of field pointers, a 128-entry
+   one-byte tag table, and a per-tag decode action, so the hot loop dispatches a field with two
+   indexed loads and runs it without re-checking its type, label, oneof membership or enum
+   openness; packed repeated payloads are read in a tight loop.
 
 ## Comparison with alternatives
 
@@ -599,9 +603,9 @@ How the gap was closed, since `make bench` is the reason the numbers are trustwo
 | nanopb | no | yes | none (embedded C) | no |
 
 Pick pbwire when the schema is only known at runtime, when one C core serves several host languages,
-or when libprotobuf must not be in the process. Pick generated code when payloads are tiny and the
-schema never changes — it still wins the 132-byte encode by a few percent (1595.8 vs 1663.5 MB/s at
-169 B) and needs no descriptor walk.
+or when libprotobuf must not be in the process. Pick generated code when the schema never changes
+and every nanosecond of small-message encode matters — it still wins the 169-byte encode by about
+5% (1698.6 vs 1789.5 MB/s) with zero descriptor walk.
 
 ## Using pbwire with AI coding assistants
 

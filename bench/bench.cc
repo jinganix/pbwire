@@ -1304,10 +1304,14 @@ bench_case(const char *label, int repeated, int iterations,
                                                   iterations, iterations / 10),
                     ref.size()});
 
+    /* Decode rows sink only the status: every implementation must produce it,
+     * so nothing is eliminated, and "decode" measures decoding rather than
+     * decoding plus a full-tree walk (which costs each side differently). */
     rows.push_back({"pbwire c", "decode", time_it([&] {
                         pbw_message *m = nullptr;
-                        pbw_decode_ctx(ctx, desc, ref.data(), ref.size(), &m);
-                        encoded_len = m != nullptr ? pbw_message_field_count(m) : 0;
+                        if (pbw_decode_ctx(ctx, desc, ref.data(), ref.size(),
+                                           &m) != PBW_OK)
+                            failures++;
                         pbw_ctx_reset(ctx);
                     },
                                                   iterations, iterations / 10),
@@ -1315,8 +1319,9 @@ bench_case(const char *label, int repeated, int iterations,
 
     rows.push_back({"pbwire", "decode", time_it([&] {
                         pbw_message *m = nullptr;
-                        pbw_decode(desc, ref.data(), ref.size(), &m);
-                        encoded_len = m != nullptr ? pbw_message_field_count(m) : 0;
+                        if (pbw_decode(desc, ref.data(), ref.size(), &m) !=
+                            PBW_OK)
+                            failures++;
                         pbw_message_free(m);
                     },
                                                 iterations, iterations / 10),
@@ -1324,17 +1329,18 @@ bench_case(const char *label, int repeated, int iterations,
 
     rows.push_back({"pb gen", "decode", time_it([&] {
                         bench::Msg m;
-                        (void)m.ParseFromArray(ref.data(), static_cast<int>(ref.size()));
-                        encoded_len = m.ByteSizeLong();
+                        if (!m.ParseFromArray(ref.data(),
+                                              static_cast<int>(ref.size())))
+                            failures++;
                     },
                                                 iterations, iterations / 10),
                     ref.size()});
 
     rows.push_back({"pb dyn", "decode", time_it([&] {
                         google::protobuf::Message *m = prototype->New();
-                        (void)m->ParseFromArray(ref.data(),
-                                                static_cast<int>(ref.size()));
-                        encoded_len = m->ByteSizeLong();
+                        if (!m->ParseFromArray(ref.data(),
+                                               static_cast<int>(ref.size())))
+                            failures++;
                         delete m;
                     },
                                                 iterations, iterations / 10),

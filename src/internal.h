@@ -100,6 +100,16 @@ struct pbw_descriptor {
     size_t reserved_count;
     /* map entry (MessageOptions.map_entry): JSON prints it as an object */
     int map_entry;
+    /* set by pbw_schema_link(): some field is a proto2 closed enum, so the
+     * decoder must detour unknown enum numbers into the unknown fields */
+    int has_closed_enum;
+    /* Fast tag dispatch: tag_map[byte] is the field whose one-byte tag equals
+     * `byte`, NULL when no field (or no one-byte tag) matches. Multibyte tags
+     * still use fnum_map. NULL when no field has a one-byte tag. */
+    pbw_field **tag_map;
+    /* Parallel to tag_map: the precomputed decode action for that tag byte,
+     * 0 (PBW_ACT_GENERIC) when the generic field logic must run. */
+    uint8_t *tag_action;
 };
 
 struct pbw_schema {
@@ -147,6 +157,24 @@ struct pbw_message {
     uint8_t *unknown;
     size_t unknown_len;
     size_t unknown_cap;
+};
+
+/* Link-time decode actions for one-byte tags (see tag_action). Only shapes
+ * whose semantics fit the inline fast path get one; everything else runs the
+ * generic field logic, which is also what multibyte tags use. */
+enum {
+    PBW_ACT_GENERIC = 0,
+    PBW_ACT_I32,   /* varint, sign-extended from 32 bits (int32, open enum) */
+    PBW_ACT_I64,   /* varint raw (int64, uint64) */
+    PBW_ACT_U32,   /* varint, masked to 32 bits (uint32) */
+    PBW_ACT_S32,   /* varint, zigzag-decoded to 32 bits (sint32) */
+    PBW_ACT_S64,   /* varint, zigzag-decoded to 64 bits (sint64) */
+    PBW_ACT_BOOL,  /* varint, normalized to 0/1 (bool) */
+    PBW_ACT_F32,   /* 4 little-endian bytes (fixed32, sfixed32, float) */
+    PBW_ACT_F64,   /* 8 little-endian bytes (fixed64, sfixed64, double) */
+    PBW_ACT_STR,   /* singular string/bytes, first or later occurrence */
+    PBW_ACT_MSG,   /* singular message, merge or replace */
+    PBW_ACT_PACKED /* packed form of a repeated packable field */
 };
 
 /* A message keeps its values inline: one allocation holds the struct, the value

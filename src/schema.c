@@ -42,6 +42,8 @@ pbw_descriptor_free(pbw_descriptor *desc)
     }
     free(desc->enum_values);
     free(desc->fnum_map);
+    free(desc->tag_map);
+    free(desc->tag_action);
     for (i = 0; i < desc->reserved_count; i++) {
         free(desc->reserved[i]);
     }
@@ -426,6 +428,17 @@ link_message(pbw_schema *schema, pbw_descriptor *msg)
         }
     }
 
+    msg->has_closed_enum = 0;
+    for (i = 0; i < msg->field_count; i++) {
+        const pbw_field *field = &msg->fields[i];
+
+        if (field->type == PBW_TYPE_ENUM && field->sub != NULL &&
+            !field->sub->proto3) {
+            msg->has_closed_enum = 1;
+            break;
+        }
+    }
+
     qsort(msg->fields, msg->field_count, sizeof(*msg->fields), compare_fields);
     for (i = 1; i < msg->field_count; i++) {
         if (msg->fields[i - 1].number == msg->fields[i].number) {
@@ -453,6 +466,104 @@ link_message(pbw_schema *schema, pbw_descriptor *msg)
         }
         msg->fnum_map = map;
         msg->fnum_map_size = max_fnum + 1;
+    }
+    /* One-byte tag dispatch for the decoder hot loop: a tag byte below 0x80
+     * indexes this table directly, skipping the field-number lookup. A tag
+     * byte is unique per field (number and wire type are both fixed), so no
+     * entry is ever shared. */
+    free(msg->tag_map);
+    msg->tag_map = NULL;
+    free(msg->tag_action);
+    msg->tag_action = NULL;
+    for (i = 0; i < msg->field_count; i++) {
+        if (msg->fields[i].tag_len == 1) {
+            break;
+        }
+    }
+    if (i < msg->field_count) {
+        pbw_field **map = (pbw_field **)calloc(128, sizeof(*map));
+        uint8_t *act;
+        if (map == NULL) {
+            return PBW_ERR_NOMEM;
+        }
+        act = (uint8_t *)calloc(128, sizeof(*act));
+        if (act == NULL) {
+            free(map);
+            return PBW_ERR_NOMEM;
+        }
+        for (i = 0; i < msg->field_count; i++) {
+            pbw_field *field = &msg->fields[i];
+            int closed = field->type == PBW_TYPE_ENUM && field->sub != NULL &&
+                         !field->sub->proto3;
+            uint8_t action = PBW_ACT_GENERIC;
+            /* Oneof members, groups and closed enums keep the generic logic:
+             * only shapes with no side branches get a fast action. */
+            if (field->oneof_index == 0 && field->type != PBW_TYPE_GROUP &&
+                !closed) {
+                if (field->label != PBW_LABEL_REPEATED) {
+                    switch (field->type) {
+                    case PBW_TYPE_INT32:
+                    case PBW_TYPE_ENUM:
+                        action = PBW_ACT_I32;
+                        break;
+                    case PBW_TYPE_INT64:
+                    case PBW_TYPE_UINT64:
+                        action = PBW_ACT_I64;
+                        break;
+                    case PBW_TYPE_UINT32:
+                        action = PBW_ACT_U32;
+                        break;
+                    case PBW_TYPE_SINT32:
+                        action = PBW_ACT_S32;
+                        break;
+                    case PBW_TYPE_SINT64:
+                        action = PBW_ACT_S64;
+                        break;
+                    case PBW_TYPE_BOOL:
+                        action = PBW_ACT_BOOL;
+                        break;
+                    case PBW_TYPE_FIXED32:
+                    case PBW_TYPE_SFIXED32:
+                    case PBW_TYPE_FLOAT:
+                        action = PBW_ACT_F32;
+                        break;
+                    case PBW_TYPE_FIXED64:
+                    case PBW_TYPE_SFIXED64:
+                    case PBW_TYPE_DOUBLE:
+                        action = PBW_ACT_F64;
+                        break;
+                    case PBW_TYPE_STRING:
+                    case PBW_TYPE_BYTES:
+                        action = PBW_ACT_STR;
+                        break;
+                    case PBW_TYPE_MESSAGE:
+                        action = PBW_ACT_MSG;
+                        break;
+                    default:
+                        break;
+                    }
+                } else if (pbw_is_packable(field->type)) {
+                    /* The packed LEN form gets its own entry below; the
+                     * unpacked form stays generic. */
+                    action = PBW_ACT_GENERIC;
+                }
+            }
+            if (field->tag_len == 1) {
+                map[field->tag[0]] = field;
+                act[field->tag[0]] = action;
+            }
+            /* A repeated packable field also accepts the packed (LEN)
+             * form; its tag byte can never belong to another field. */
+            if (field->len_tag_len == 1 &&
+                field->label == PBW_LABEL_REPEATED &&
+                pbw_is_packable(field->type) && !closed &&
+                field->oneof_index == 0) {
+                map[field->len_tag[0]] = field;
+                act[field->len_tag[0]] = PBW_ACT_PACKED;
+            }
+        }
+        msg->tag_map = map;
+        msg->tag_action = act;
     }
     return PBW_OK;
 }
