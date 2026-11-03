@@ -1,7 +1,10 @@
-// Package pbwire is a minimal cgo binding for the pbwire C library: it
-// builds a schema by hand, encodes maps of scalar fields, and decodes them
-// back. It proves the ABI path end to end; anything richer belongs in a real
-// host binding.
+// Package pbwire is the cgo binding for the pbwire C library.
+//
+// The schema always comes from a FileDescriptorSet (protoc
+// --descriptor_set_out), the same artifact every compiled pbwire binding
+// loads; nothing is generated for Go. Encode takes a map of field number to
+// value for the scalar kinds, Decode returns the same shape. Nested messages
+// and repeated fields are not exposed yet -- see conformance/README.md.
 //
 // Build the library first so the linker finds it:
 //
@@ -18,7 +21,9 @@ import "C"
 
 import (
 	"errors"
+	"fmt"
 	"math"
+	"os"
 	"unsafe"
 )
 
@@ -42,22 +47,46 @@ const (
 	TSInt64   = 18
 )
 
-// Field is one scalar field of a hand-built message.
+// Field is one field of a message, read from the descriptor set.
 type Field struct {
 	Name   string
 	Number uint32
 	Type   int
 }
 
-// Schema owns a pbw_schema and the descriptors built from it: the Schema
-// must outlive every message, like in C.
+// Schema owns a pbw_schema: it must outlive every message, like in C.
 type Schema struct {
 	s *C.pbw_schema
 }
 
-// New opens an empty schema.
+// New opens an empty schema. Only useful to check the ABI; load a descriptor
+// set for real work.
 func New() *Schema {
 	return &Schema{s: C.pbw_schema_new()}
+}
+
+// Load reads a FileDescriptorSet (protoc --descriptor_set_out) into a schema.
+// The bytes are copied by the loader, so the slice can be reused.
+func Load(desc []byte) (*Schema, error) {
+	if len(desc) == 0 {
+		return nil, errors.New("pbwire: empty descriptor set")
+	}
+	var s *C.pbw_schema
+	if st := C.pbw_descriptor_set_load(unsafe.Pointer(&desc[0]),
+		C.size_t(len(desc)), &s); st != C.PBW_OK {
+		return nil, fmt.Errorf("pbwire: descriptor set: %s",
+			C.GoString(C.pbw_strerror(st)))
+	}
+	return &Schema{s: s}, nil
+}
+
+// LoadFile reads a FileDescriptorSet from disk and loads it.
+func LoadFile(path string) (*Schema, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	return Load(data)
 }
 
 // Close releases the schema.
@@ -73,32 +102,28 @@ func (s *Schema) ABI() int {
 	return int(C.pbw_abi_version())
 }
 
-// Message declares a message type and links the schema.
-func (s *Schema) Message(name string, fields []Field) (*Message, error) {
+// Message resolves a message type in the schema and reads its fields.
+func (s *Schema) Message(name string) (*Message, error) {
 	cname := C.CString(name)
 	defer C.free(unsafe.Pointer(cname))
-	desc := C.pbw_schema_add_message(s.s, cname)
+	desc := C.pbw_schema_find(s.s, cname)
 	if desc == nil {
-		return nil, errors.New("add message")
+		return nil, fmt.Errorf("pbwire: no message %q in the schema", name)
 	}
-	for _, f := range fields {
-		cf := C.CString(f.Name)
-		// shortcut: hand-built schemas here are trusted; a host binding
-		// takes names from its own registry, upgrade to validation there.
-		C.pbw_message_add_field(desc, cf, C.uint32_t(f.Number),
-			C.pbw_type(f.Type), C.PBW_LABEL_OPTIONAL)
-		C.free(unsafe.Pointer(cf))
+	n := int(C.pbw_descriptor_field_count(desc))
+	fields := make([]Field, 0, n)
+	for i := 0; i < n; i++ {
+		f := C.pbw_descriptor_field_at(desc, C.size_t(i))
+		if f == nil {
+			return nil, errors.New("pbwire: field lookup failed")
+		}
+		fields = append(fields, Field{
+			Name:   C.GoString(C.pbw_field_name(f)),
+			Number: uint32(C.pbw_field_number(f)),
+			Type:   int(C.pbw_field_type(f)),
+		})
 	}
-	if C.pbw_schema_link(s.s) != C.PBW_OK {
-		return nil, errors.New("link")
-	}
-	cf := C.CString(name)
-	defer C.free(unsafe.Pointer(cf))
-	found := C.pbw_schema_find(s.s, cf)
-	if found == nil {
-		return nil, errors.New("find")
-	}
-	return &Message{desc: found, fields: fields}, nil
+	return &Message{desc: desc, fields: fields}, nil
 }
 
 // Value is one scalar: ints and floats arrive as uint64 bit patterns,
@@ -206,6 +231,10 @@ func (m *Message) Decode(wire []byte) (map[uint32]Value, error) {
 		got := C.pbw_message_get(msg, C.uint32_t(f.Number))
 		if got == nil {
 			continue
+		}
+		switch C.pbw_value_get_kind(got) {
+		case C.PBW_VALUE_MESSAGE, C.PBW_VALUE_LIST:
+			continue // nested and repeated values are not exposed yet
 		}
 		if C.pbw_value_get_kind(got) == C.PBW_VALUE_BYTES {
 			var n C.size_t

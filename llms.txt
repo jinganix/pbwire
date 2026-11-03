@@ -149,6 +149,8 @@ C++ runtime), `make bench`, `make bench-c` (C structs vs protoc C++). Optional, 
   and the cross-binding comparison (start here for numbers).
 - [bindings/c/benchmarks/bench_struct.cc](bindings/c/benchmarks/bench_struct.cc): C generated
   structs vs protoc C++ on the same tiers.
+- [bindings/README.md](bindings/README.md): every binding's layout and where its schema comes
+  from (compiled bindings load a FileDescriptorSet; Erlang uses gpb's definitions).
 - [bindings/python/runtime/pbwire.c](bindings/python/runtime/pbwire.c): Python binding, a CPython
   extension; schema from a `FileDescriptorSet`, dict<->wire in C for every field kind, tests +
   benchmark against `google.protobuf` (`bindings/python/benchmarks/bench.py`).

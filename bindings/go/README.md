@@ -1,8 +1,9 @@
 # pbwire Go binding
 
-A cgo cover of the C ABI: build a schema by hand, encode a map of scalar
-fields, decode it back. It pins the ABI path end to end; anything richer belongs
-in a dedicated binding.
+A cgo cover of the C ABI. The schema always comes from a `FileDescriptorSet`
+(`pbw.Load` / `pbw.LoadFile`), the same artifact the C, C++ and Python bindings
+load; nothing is generated for Go. Messages travel as a map of field number to
+scalar value.
 
 | Piece | Path | Role |
 |---|---|---|
@@ -14,7 +15,7 @@ in a dedicated binding.
 ```shell
 make shared                                    # build/libpbwire.so.1 (or .dylib)
 cd bindings/go
-go test ./...                                  # ABI + round trip
+go test ./...                                  # descriptor loading + round trip
 go run ./examples/addressbook                  # 10 bytes, name=alice id=1234
 go test -bench . -benchmem ./benchmarks        # cgo overhead per op
 ```

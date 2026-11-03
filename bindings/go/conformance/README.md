@@ -10,12 +10,14 @@ a testee built on it would fail nearly every case and prove nothing.
 
 How to get there, in order:
 
-1. add descriptor-set loading to the binding (`pbw_descriptor_set_load`) so a
-   Go program can take a schema at runtime instead of hand-building one;
-2. add message/repeated accessors over `pbw_message_get` / `pbw_value_at`;
+1. ~~add descriptor-set loading~~ done: `pbwire.Load` / `LoadFile` take a
+   `FileDescriptorSet`, and `Schema.Message(name)` reads the fields from it;
+2. add message/repeated accessors over `pbw_message_get` / `pbw_value_at` (the
+   binding decodes scalars only today);
 3. then port `conformance/testee.c`: read the length-prefixed
-   `ConformanceRequest`, pick the message by name from the descriptor set,
-   decode and re-encode, answer `skipped` for JSON and text.
+   `ConformanceRequest` (decoded with the binding itself, from
+   `conformance.proto` in the descriptor set), pick the message by name, decode
+   and re-encode, answer `skipped` for JSON and text.
 
 Until then, the Go binding is covered by
 [`runtime/pbwire_test.go`](../runtime/pbwire_test.go) (round trip + ABI check)

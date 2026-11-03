@@ -373,6 +373,7 @@ src/decode.c                wire bytes -> message tree, unknown field preservati
 src/descriptor_set.c        FileDescriptorSet -> schema (the only reader of descriptor.proto)
 src/stream.c                delimited framing reader, encode sink, deterministic encode
 src/ctx.c                   pbw_ctx: arena + encode buffer reuse
+bindings/README.md           binding layout + where each one's schema comes from
 bindings/c/                 C binding: runtime/ (struct codec), plugin/, examples/, tests/, benchmarks/, conformance/
 bindings/cpp/               C++ binding: examples/, tests/, benchmarks/ over the shared C runtime (no plugin)
 bindings/python/            CPython extension: runtime/, examples/, tests/, benchmarks/, conformance/

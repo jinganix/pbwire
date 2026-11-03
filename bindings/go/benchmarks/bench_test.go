@@ -1,53 +1,60 @@
-// Benchmark the cgo binding on the four standard payload tiers.
+// Benchmark the cgo binding on four payload sizes.
 //
-// The Go binding covers scalar fields, so the tiers scale the *number of
-// scalar fields* (4 / 16 / 64 / 256) instead of a repeated field. Every
-// iteration crosses cgo twice (build the message, then encode), which is the
-// cost the binding has to be judged on: run with
+// The schema comes from matrix3.desc (structtest.Scalars3) and the tiers encode
+// a growing subset of its scalar fields, so the numbers include the cgo
+// crossings that dominate this binding. Run with
 //
 //	go test -bench . -benchmem ./benchmarks
 package benchmarks
 
 import (
-	"fmt"
+	"path/filepath"
+	"runtime"
 	"testing"
 
 	pbwire "pbwire/runtime"
 )
 
+var descPath = filepath.Join(sourceDir(), "..", "..", "c", "tests", "data", "matrix3.desc")
+
 var tiers = []struct {
-	label  string
-	fields int
+	label   string
+	numbers []uint32
 }{
-	{"small", 4}, {"medium", 16}, {"large", 64}, {"xlarge", 256},
+	{"small", []uint32{1, 2, 3, 4}},
+	{"medium", []uint32{1, 2, 3, 4, 5, 6, 7, 8}},
+	{"large", []uint32{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12}},
+	{"xlarge", []uint32{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 20}},
 }
 
-func schema(tb testing.TB, n int) (*pbwire.Schema, *pbwire.Message) {
+func setup(tb testing.TB) (*pbwire.Schema, *pbwire.Message) {
 	tb.Helper()
-	s := pbwire.New()
-	fields := make([]pbwire.Field, n)
-	for i := range fields {
-		fields[i] = pbwire.Field{Name: fmt.Sprintf("f%d", i), Number: uint32(i + 1), Type: pbwire.TInt32}
+	s, err := pbwire.LoadFile(descPath)
+	if err != nil {
+		tb.Fatal(err)
 	}
-	m, err := s.Message("Msg", fields)
+	m, err := s.Message("structtest.Scalars3")
 	if err != nil {
 		tb.Fatal(err)
 	}
 	return s, m
 }
 
-func values(n int) map[uint32]pbwire.Value {
-	v := make(map[uint32]pbwire.Value, n)
-	for i := 0; i < n; i++ {
-		v[uint32(i+1)] = pbwire.Value{Uint: uint64(i * 1000)}
+func values(numbers []uint32, text bool) map[uint32]pbwire.Value {
+	v := make(map[uint32]pbwire.Value, len(numbers))
+	for i, n := range numbers {
+		v[n] = pbwire.Value{Uint: uint64(i) * 1000}
+	}
+	if text {
+		v[14] = pbwire.Value{Bytes: []byte("benchmark payload"), IsStr: true}
 	}
 	return v
 }
 
 func BenchmarkEncode(b *testing.B) {
 	for _, tier := range tiers {
-		s, m := schema(b, tier.fields)
-		v := values(tier.fields)
+		s, m := setup(b)
+		v := values(tier.numbers, true)
 		wire, err := m.Encode(v)
 		if err != nil {
 			b.Fatal(err)
@@ -66,8 +73,8 @@ func BenchmarkEncode(b *testing.B) {
 
 func BenchmarkDecode(b *testing.B) {
 	for _, tier := range tiers {
-		s, m := schema(b, tier.fields)
-		wire, err := m.Encode(values(tier.fields))
+		s, m := setup(b)
+		wire, err := m.Encode(values(tier.numbers, true))
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -81,4 +88,11 @@ func BenchmarkDecode(b *testing.B) {
 		})
 		s.Close()
 	}
+}
+
+// sourceDir is this file's directory, so the descriptor path does not depend on
+// the working directory Go picks for the package.
+func sourceDir() string {
+	_, file, _, _ := runtime.Caller(0)
+	return filepath.Dir(file)
 }

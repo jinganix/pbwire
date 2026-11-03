@@ -83,6 +83,27 @@ Run `make test` after any C change; run `make format` after touching `include/`,
 | `.github/workflows/ci.yml` | CI: `make test` on Linux + macOS, CMake/ctest, clang-format |
 | `README.md`, `llms.txt` | User-facing docs and the AI-retrieval summary; keep them in sync with behavior |
 
+## Binding schema source
+
+This decides how a binding gets its schema, and it is not negotiable:
+
+1. **Ahead-of-time compiled languages load the descriptor set.** C, C++ and Go
+   have no way to bake a dynamic schema into the binary, so every binding loads
+   a `FileDescriptorSet` (`protoc --descriptor_set_out`) at runtime and drives
+   field lookup, wire types and presence from it. A hand-built schema in a
+   compiled binding is a bug: it cannot express what a real `.proto` can, and
+   it silently diverges from the descriptor every other binding uses.
+2. **Languages that load code at runtime get a plugin.** The plugin turns
+   `.proto` into that host's own schema definition, which the binding loads once
+   at startup. Generated *layout* (C structs and offset tables, Erlang records)
+   is part of this, but the field numbers and types still come from the schema.
+3. **Erlang needs neither.** gpb already is the plugin: `gpb_compile` /
+   `protoc-erl` emits the record definitions plus `get_msg_defs/0`, and
+   `enif_protobuf:load_cache/1` consumes exactly that. Do not add a second
+   generator or a descriptor loader to the Erlang binding.
+
+`bindings/README.md` tracks each binding against these rules.
+
 ## Hard invariants
 
 This library is meant to be embedded in foreign runtimes (Erlang NIF, Python, Go), where a crash
