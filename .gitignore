@@ -40,6 +40,8 @@ coverage/
 bench/gen/
 bindings/c/benchmarks/gen/
 bindings/python/benchmarks/gen/
+bindings/python/*.so
+bindings/python/*.dylib
 __pycache__/
 *.pyc
 *.log

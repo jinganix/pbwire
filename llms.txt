@@ -127,8 +127,8 @@ C++ runtime), `make bench`, `make bench-c` (C structs vs protoc C++). Optional, 
   serialized descriptor set.
 - ABI stability: `PBW_ABI_VERSION` in the header, `pbw_abi_version()` at runtime, CMake
   `SOVERSION 1`, `make shared` producing `libpbwire.so.1` / `libpbwire.1.dylib`. Additive changes
-  keep the number, breaking changes bump it with the SONAME. `bindings/python` (cffi, ABI mode,
-  full field coverage) and `bindings/go/pbwire` (cgo) pin it at load.
+  keep the number, breaking changes bump it with the SONAME. `bindings/python` (a CPython
+  extension) and `bindings/go/pbwire` (cgo) check it at load.
 - Not implemented: RPC/HTTP, MessageSet decoding into extensions, code generation.
 - Text format (`pbw_text_print` / `pbw_text_parse`): printer output is byte-identical to the
   reference; the parser matches it (extensions as `[full.name]`, group type names, `Any`
@@ -149,8 +149,8 @@ C++ runtime), `make bench`, `make bench-c` (C structs vs protoc C++). Optional, 
   and the cross-binding comparison (start here for numbers).
 - [bindings/c/benchmarks/bench_struct.cc](bindings/c/benchmarks/bench_struct.cc): C generated
   structs vs protoc C++ on the same tiers.
-- [bindings/python/pbwire_cffi.py](bindings/python/pbwire_cffi.py): Python binding; schema from a
-  `FileDescriptorSet`, dict<->wire for every field kind, tests + benchmark against
-  `google.protobuf` (`bindings/python/benchmarks/bench.py`).
+- [bindings/python/csrc/pbwire.c](bindings/python/csrc/pbwire.c): Python binding, a CPython
+  extension; schema from a `FileDescriptorSet`, dict<->wire in C for every field kind, tests +
+  benchmark against `google.protobuf` (`bindings/python/benchmarks/bench.py`).
 - [conformance/testee.c](conformance/testee.c): testee for Google's `conformance_test_runner`, binary
   wire format only.

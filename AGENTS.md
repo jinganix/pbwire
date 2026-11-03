@@ -17,8 +17,9 @@ make bench-c      # C struct binding benchmark vs protoc C++ on the same message
 ./build/bench difftest <cases> <seed>   # longer fuzz run
 make desc-fixture # regenerate the pinned descriptor set in tests/test_descriptor.c
 
-# Bindings: Python needs cffi (and protobuf only for the benchmark); Erlang
-# needs OTP + gpb. Neither is part of the commit gate.
+# Bindings: Python needs the Python headers + a C compiler (protobuf only for
+# the benchmark); Erlang needs OTP + gpb. Neither is part of the commit gate.
+make python-bind   # build the CPython extension next to its sources
 make python-test   # Python binding self-check (pinned protoc bytes as oracle)
 make python-bench  # Python binding vs google.protobuf on the four standard tiers
 make erlang-bench  # gpb, gpb NIF and enif_protobuf
@@ -72,7 +73,7 @@ Run `make test` after any C change; run `make format` after touching `include/`,
 | `bench/msg2.proto` | proto2 counterpart: explicit presence, groups, required fields, closed enums, extensions |
 | `BENCHMARKS.md` | the four standard payload tiers, every binding vs its baseline, cross-binding table |
 | `bindings/c/` | C binding: direct struct codec (`runtime/pbw_struct.c`, layout tables carry the wire facts), `protoc-gen-pbwire-c` (`plugin/`), `tests/`, `benchmarks/`, `example/` |
-| `bindings/python/` | Python binding: `pbwire_cffi.py` (schema from a descriptor set, dict<->wire), `csrc/` bulk bridge, `tests/`, `benchmarks/` |
+| `bindings/python/` | Python binding: CPython extension (`csrc/pbwire.c`, dict<->wire in C), `tests/`, `benchmarks/` |
 | `bindings/go/`, `bindings/cpp/` | cgo smoke package and a C++ example over the C runtime |
 | `bindings/erlang/` | Erlang/OTP NIF binding with its own AGENTS.md |
 | `scripts/` | Gate scripts: `check.sh` (hooks), `validate-commit-msg.sh`, `setup-git-hooks.sh` |

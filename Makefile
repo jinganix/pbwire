@@ -218,29 +218,30 @@ $(BENCH_C_BIN): bindings/c/benchmarks/bench_struct.cc $(BENCH_C_PB) $(CPP_RUNTIM
 bench-c: $(BENCH_C_BIN)
 	./$(BENCH_C_BIN) bench
 
-# Python binding (bindings/python): cffi in ABI mode, no generated code.
-# The shared library is required; the bulk helpers below are an optional fast
-# path (without them the binding falls back to one cffi call per value).
+# Python binding (bindings/python): a CPython extension that converts
+# dict <-> wire in C. Needs the core library and a C compiler; no generated
+# Python code and no setuptools.
 PY ?= python3
+PY_INC := $(shell $(PY) -c "import sysconfig; print('-I' + sysconfig.get_paths()['include'])")
+PY_EXT := $(shell $(PY) -c "import sysconfig; print(sysconfig.get_config_var('EXT_SUFFIX'))")
+PY_MODULE := bindings/python/pbwire$(PY_EXT)
 ifeq ($(UNAME_S),Darwin)
-SHIM := build/libpbwirepy.dylib
-SHIM_FLAGS := -dynamiclib -install_name @rpath/libpbwirepy.dylib \
-	-Wl,-rpath,@loader_path
+PY_LDFLAGS := -undefined dynamic_lookup
 else
-SHIM := build/libpbwirepy.so
-SHIM_FLAGS := -shared -Wl,-soname,libpbwirepy.so -Wl,-rpath,'$$ORIGIN'
+PY_LDFLAGS :=
 endif
 
-$(SHIM): bindings/python/csrc/pbw_py.c $(SHLIB) | build
-	$(CC) $(CFLAGS) $(CPPFLAGS) $(SHIM_FLAGS) -o $@ $< -Lbuild -lpbwire
+$(PY_MODULE): bindings/python/csrc/pbwire.c $(LIB) | build
+	$(CC) $(CFLAGS) $(CPPFLAGS) -fPIC -shared $(PY_INC) -Iinclude \
+		$(PY_LDFLAGS) -o $@ $< $(LIB)
 
-python-bind: $(SHIM)
+python-bind: $(PY_MODULE)
 
 python-test: python-bind
 	$(PY) bindings/python/tests/test_pbwire.py
 
 # The benchmark compares against the official Python runtime, so it needs
-# protoc --python_out plus `pip install protobuf cffi`.
+# protoc --python_out plus `pip install protobuf`.
 bindings/python/benchmarks/gen/matrix3_pb2.py: bindings/c/tests/data/matrix3.proto
 	@mkdir -p bindings/python/benchmarks/gen
 	$(PROTOC) -Ibindings/c/tests/data --python_out=bindings/python/benchmarks/gen $<

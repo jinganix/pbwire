@@ -11,7 +11,7 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
-import pbwire_cffi as pbw
+import pbwire as pbw
 
 DATA = "bindings/c/tests/data"
 SCALARS3 = {
@@ -64,13 +64,12 @@ def check_raises(exc, fn, what):
 
 
 def main():
-    lib = pbw.load()
-    check(lib.shim is not None, "bulk helpers loaded (`make python-bind`)")
+    check(pbw.abi_version() == 1, "ABI version matches the core")
 
     with open(os.path.join(DATA, "matrix3.bin"), "rb") as handle:
         reference = handle.read()
 
-    with pbw.Schema.from_file(lib, os.path.join(DATA, "matrix3.desc")) as schema:
+    with pbw.Schema.from_file(os.path.join(DATA, "matrix3.desc")) as schema:
         scalars = schema.message("structtest.Scalars3")
 
         got = scalars.encode(SCALARS3)
@@ -94,18 +93,10 @@ def main():
         check(scalars.decode(b"") == {}, "empty wire decodes to no fields")
         check(scalars.encode({}) == b"", "empty dict encodes to no bytes")
 
-        # The slow path (no bulk helpers) must produce identical bytes.
-        saved = lib.shim
-        lib.shim = None
-        try:
-            scalars._shim = None
-            check(scalars.encode(SCALARS3) == reference,
-                  "encode without bulk helpers")
-            check(scalars.decode(reference) == SCALARS3,
-                  "decode without bulk helpers")
-        finally:
-            lib.shim = saved
-            scalars._shim = saved
+        # Unknown fields in the wire are skipped, not an error.
+        # Field 999 is not in the schema: its bytes are skipped.
+        check(scalars.decode(reference + b"\xb8\x3e\x2a") == SCALARS3,
+              "unknown field in the wire is skipped")
 
         check_raises(KeyError, lambda: scalars.encode({"nope": 1}),
                      "unknown field name")
@@ -116,7 +107,7 @@ def main():
         check(inner.decode(inner.encode({"name": "x", "value": 1})) ==
               {"name": "x", "value": 1}, "nested type round trip")
 
-    with pbw.Schema.from_file(lib, "examples/addressbook.desc") as schema:
+    with pbw.Schema.from_file("examples/addressbook.desc") as schema:
         person = schema.message("tutorial.Person")
         values = {"name": "alice", "id": 1, "email": "a@example.com",
                   "phones": [{"number": "555", "type": 1},

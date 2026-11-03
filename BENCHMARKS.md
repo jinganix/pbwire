@@ -45,15 +45,17 @@ op (`<op>: <bytes> bytes, <iterations> iterations in <seconds>s; <MB/s>MB/s;
 | core (dynamic) | `make bench` (`bench/bench.cc`) | `protoc` C++ generated + DynamicMessage | all 4 | 1.5x / 1.4x ✅ |
 | C structs | `make bench-c` (`bindings/c/benchmarks/bench_struct.cc`) | `protoc` C++ generated from the same `matrix3.proto` | all 4 | 1.11x / 1.20x ✅ |
 | Erlang/OTP NIF | `make benchmarks` in `bindings/erlang/benchmarks` | gpb (pure Erlang) and gpb NIF (libprotobuf) | medium, xlarge | 1.9x / 1.2x ✅ |
-| Python (cffi) | `make python-bench` (`bindings/python/benchmarks/bench.py`) | `google.protobuf` (upb C extension) on the same `matrix3.proto` | all 4 | 0.02x ❌ |
+| Python (CPython ext) | `make python-bench` (`bindings/python/benchmarks/bench.py`) | `google.protobuf` (upb C extension) on the same `matrix3.proto` | all 4 | 0.38x / 0.24x ❌ |
 | C++ | same engine as C (`bindings/cpp` mirrors the C structs) | — | — | planned |
 | Go | smoke cover only, no perf harness yet | — | — | planned |
 
 "vs baseline" is encode / decode throughput relative to the baseline on the
-largest case the binding runs. The Python row is the one binding that is far
-behind: it is a cffi ABI bridge in front of the core, and its baseline is a
-C++ extension; closing that needs a CPython extension that converts
-dict <-> wire in C, not another Python-side shortcut.
+largest case the binding runs. The Python row is the one binding still behind
+its baseline: upb parses into its own arena and materializes Python objects
+lazily, while the binding's contract is plain dicts, so every dict, string and
+int is built eagerly. It went from 0.02x (cffi bridge) to 0.25-0.4x with a
+CPython extension; going further needs lazy message views or per-message
+generated C.
 
 Correctness first everywhere: the core bench verifies byte-for-byte equality
 before timing, the C and Python benches check their bytes against the
@@ -107,47 +109,38 @@ on the 75 KB tier (0.17x / 0.32x of generated code). From ~2.5 KB up it now
 matches or beats generated code; the 136 B / 174 B tiers stay ~1.7x behind
 because `protoc --cpp_out` emits straight-line code with no per-field dispatch.
 
-### Python (cffi) vs `google.protobuf` (upb)
+### Python vs `google.protobuf` (upb)
 
 | payload | op | pbwire-py (MB/s, x upb) | upb (MB/s) |
 |---|---|---|---|
-| 136 B | encode | 15.4 (0.02x) | 763.1 |
-| 136 B | decode | 9.2 (0.02x) | 600.5 |
-| 174 B | encode | 17.0 (0.02x) | 853.4 |
-| 174 B | decode | 9.4 (0.02x) | 576.9 |
-| 2469 B | encode | 22.3 (0.02x) | 1408.6 |
-| 2469 B | decode | 14.4 (0.02x) | 709.4 |
-| 74913 B | encode | 25.1 (0.02x) | 1473.7 |
-| 74913 B | decode | 15.6 (0.02x) | 790.0 |
+| 136 B | encode | 291.4 (0.39x) | 741.9 |
+| 136 B | decode | 254.6 (0.44x) | 579.3 |
+| 174 B | encode | 335.2 (0.42x) | 803.6 |
+| 174 B | decode | 219.9 (0.39x) | 561.9 |
+| 2469 B | encode | 483.0 (0.33x) | 1443.0 |
+| 2469 B | decode | 230.9 (0.33x) | 704.0 |
+| 74913 B | encode | 570.8 (0.38x) | 1497.5 |
+| 74913 B | decode | 188.8 (0.24x) | 787.0 |
 
-The baseline is a C++ extension; the binding is a cffi bridge that has to
-build (or walk) one Python object per value, so it cannot match upb on large
-payloads. In absolute terms it moves ~25 MB/s encode and ~16 MB/s decode, i.e.
-~40k of the 136 B messages per second. What it buys: no generated Python
-module, one `FileDescriptorSet` load for any schema, and the same wire bytes.
+The binding is a CPython extension that walks the schema and converts
+dict <-> wire in C (`bindings/python/csrc/pbwire.c`), the same shape as the
+Erlang NIF. It used to be a cffi ABI bridge at 0.02x; the extension is 12-15x
+faster than that. The remaining gap is representation, not wire work: upb
+parses into its arena and builds Python objects lazily, while this API promises
+plain dicts and therefore allocates one dict, string and int per value.
 
 #### What the optimization pass changed
 
-The first version of the binding made 5 cffi calls (and 5 cffi allocations)
-per value. Two changes, both in `bindings/python`:
-
-1. `libpbwirepy` (`csrc/pbw_py.c`): one bulk setter per value kind for the
-   *whole message tree* (flat target/number/value arrays), one getter per
-   scalar field for decode, sign widening for signed ints in C.
-2. cffi-side: cached accessors, one reusable scratch buffer per value kind,
-   `array.array.frombytes` for large lists instead of per-element reads.
-
-xlarge (74913 B), same machine, measured by `bench.py bench --slow` (fallback
-path) against `bench.py bench` (bulk path):
-
-| path | encode | decode |
+| version | xlarge encode | xlarge decode |
 |---|---|---|
-| without bulk helpers (`--slow`) | 14.3 MB/s | 10.6 MB/s |
-| with bulk helpers | 25.1 MB/s | 15.6 MB/s |
-| first version (no bulk helpers, per-value tuples + double calls) | 9.3 MB/s | 8.6 MB/s |
+| cffi bridge (one call per value) | 9.3 MB/s | 8.6 MB/s |
+| cffi bridge + bulk helpers | 25.1 | 15.6 |
+| CPython extension (this) | 570.8 | 188.8 |
 
-So the bulk bridge is worth ~1.8x encode / ~1.6x decode over the fallback, and
-the fallback itself gained ~1.5x from the Python-side cleanups.
+The extension caches per-field facts once per message type (name, number,
+type, wire type, packed/required, sub-type), skips the descriptor entirely in
+the hot loops, uses the list fast path for repeated fields, and writes tag +
+value with one capacity reservation per field.
 
 ### Erlang: enif_protobuf vs gpb vs gpb NIF
 
@@ -163,15 +156,14 @@ the fallback itself gained ~1.5x from the Python-side cleanups.
 ```bash
 make bench        # core: 4 cases + text/json/stream/threads (needs protoc + libprotobuf)
 make bench-c      # C structs vs protoc C++ on matrix3.proto (same deps)
-make python-bench # Python vs google.protobuf (needs cffi + protobuf + protoc)
+make python-bench # Python extension vs google.protobuf (needs protobuf + protoc)
 make erlang-bench # Erlang binding: gpb, gpb NIF, enif_protobuf (needs OTP + gpb)
 ./build/bench bench 2000          # shorter core run (default 200000; xlarge scales /100)
 ./build/bench_struct_c bench 2000 # shorter C run (same scaling)
 ```
 
 The Python benchmark calibrates its own iteration count per case, so it needs
-no iteration argument. `python3 benchmarks/bench.py bench --slow` from
-`bindings/python` adds the no-bulk-helpers row.
+no iteration argument.
 
 From `bindings/erlang/benchmarks` (needs Erlang/OTP + gpb, ~30 s per op by
 default, `BENCH_TARGET_TIME=3` for a quick run):

@@ -1,19 +1,15 @@
-"""Python binding benchmark: pbwire-py (cffi) vs the official Python runtime.
+"""Python binding benchmark: the pbwire CPython extension vs google.protobuf.
 
 Both sides use the same `bindings/c/tests/data/matrix3.proto` message (every
 scalar kind, string, enum, nested message, three repeated kinds, proto3
 optional) and the four standard tiers from BENCHMARKS.md: the repeated fields
 scale x0 / x1 / x100 / x3000.
 
-The baseline rows name the protobuf implementation that is actually loaded:
-`pb upb` for the default C (upb) backend, `pb py` for the pure-Python one
-(`PROTOBUF_PYTHON_IMPLEMENTATION=python`). The generated `matrix3_pb2` module
-comes from `protoc --python_out` (see the Makefile).
+The baseline row names the protobuf implementation that is actually loaded
+(`pb upb`: protobuf's C extension). The generated `matrix3_pb2` module comes
+from `protoc --python_out` (see the Makefile).
 
-    make python-bench                         # pbwire-py vs the default backend
-    PROTOBUF_PYTHON_IMPLEMENTATION=python \
-        make python-bench                     # ... vs the pure-Python backend
-    python3 bench.py bench --slow             # add the no-shim fallback row
+    make python-bench
 """
 
 import os
@@ -21,10 +17,10 @@ import sys
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, os.path.join(HERE, ".."))          # pbwire_cffi
+sys.path.insert(0, os.path.join(HERE, ".."))          # pbwire extension
 sys.path.insert(0, os.path.join(HERE, "gen"))         # matrix3_pb2
 
-import pbwire_cffi as pbw
+import pbwire as pbw
 from google.protobuf.internal import api_implementation
 import matrix3_pb2
 
@@ -104,12 +100,9 @@ def time_it(fn, target=0.6, minimum=0.15):
     return elapsed / iterations * 1e9, iterations
 
 
-def run(slow):
-    lib = pbw.load()
-    if lib.shim is None:
-        print("note: libpbwirepy is not built, measuring the fallback path only")
+def run():
     base_label = "pb %s" % api_implementation.Type()
-    schema = pbw.Schema.from_file(lib, DESC)
+    schema = pbw.Schema.from_file(DESC)
     scalars = schema.message("structtest.Scalars3")
 
     for label, repeats in TIERS:
@@ -127,21 +120,10 @@ def run(slow):
             return 1
 
         rows = []
-        if lib.shim is not None:
-            ns, _ = time_it(lambda: scalars.encode(values))
-            rows.append(("pbwire-py", "encode", ns))
-            ns, _ = time_it(lambda: scalars.decode(reference))
-            rows.append(("pbwire-py", "decode", ns))
-        if slow or lib.shim is None:
-            saved = lib.shim
-            lib.shim, scalars._shim = None, None
-            try:
-                ns, _ = time_it(lambda: scalars.encode(values))
-                rows.append(("py-cffi", "encode", ns))
-                ns, _ = time_it(lambda: scalars.decode(reference))
-                rows.append(("py-cffi", "decode", ns))
-            finally:
-                lib.shim, scalars._shim = saved, saved
+        ns, _ = time_it(lambda: scalars.encode(values))
+        rows.append(("pbwire-py", "encode", ns))
+        ns, _ = time_it(lambda: scalars.decode(reference))
+        rows.append(("pbwire-py", "decode", ns))
         ns, _ = time_it(lambda: reference_msg.SerializeToString())
         rows.append((base_label, "encode", ns))
         ns, _ = time_it(lambda: matrix3_pb2.Scalars3.FromString(reference))
@@ -159,9 +141,9 @@ def run(slow):
 
 def main(argv):
     if len(argv) < 2 or argv[1] != "bench":
-        print("usage: %s bench [--slow]" % argv[0])
+        print("usage: %s bench" % argv[0])
         return 2
-    return run("--slow" in argv)
+    return run()
 
 
 if __name__ == "__main__":
