@@ -1,20 +1,28 @@
 /* Generic struct codec: the C binding runtime. See pbw_struct.h.
  *
- * Direct: the encoder walks the layout table and appends wire bytes, the
+ * Direct: the encoder walks a compiled plan and appends wire bytes, the
  * decoder reads the wire and stores into the struct. No pbw_message is built
  * anywhere. The dynamic core pays one allocation per value plus a second
  * traversal for the tree; a struct codec has the bytes at hand, so skipping
  * the tree is what makes it competitive with generated code (this is the same
  * design the Erlang binding uses in c_src/ep_encoder.c / ep_decoder.c).
  *
+ * The plan is what keeps a *generic* engine close to straight-line generated
+ * code: pbw_struct_codec_init resolves the schema once and precomputes, per
+ * field, an opcode (which value transform), the tag bytes, offsets and the
+ * sub-message plan. Encode and decode then dispatch on one small opcode per
+ * field instead of re-deriving wire facts and re-computing tags every time.
+ *
  * The schema is the truth for field numbers, wire types and proto2/proto3
  * semantics; the layout only answers "where in memory". Every schema field
  * must have a layout row (a missing row is PBW_ERR_INVALID, so a wrong field
  * number fails loudly instead of dropping data silently).
  *
- * Memory: encode borrows the struct. Decode allocates (strings, arrays,
- * sub-messages) into a zero-initialized struct; release with
- * pbw_struct_free(). Pure C99, no dependencies beyond pbwire itself.
+ * Memory: encode borrows the struct and writes into a caller buffer. Decode
+ * either mallocs every value (release with pbw_struct_free) or bump-allocates
+ * the whole tree from a chunked arena that never moves a handed-out pointer,
+ * so a steady-state decode loop allocates nothing. Pure C99, no dependencies
+ * beyond pbwire itself.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -50,49 +58,35 @@ put_varint(uint8_t *out, uint64_t value)
     return out;
 }
 
-static uint64_t
-zigzag(uint64_t value, unsigned width)
+static uint32_t
+zigzag32(uint32_t value)
 {
-    uint64_t mask = width == 32 ? 0xffffffffull : ~0ull;
-    uint64_t sign = width == 32 ? 31 : 63;
-    uint64_t u = value & mask;
-
-    return ((u << 1) ^ (0ull - (u >> sign))) & mask;
+    return (value << 1) ^ (uint32_t)(0u - (value >> 31));
 }
 
 static uint64_t
-unzigzag(uint64_t value, unsigned width)
+zigzag64(uint64_t value)
 {
-    uint64_t mask = width == 32 ? 0xffffffffull : ~0ull;
-
-    /* Mask first: an overlong varint must truncate like the reference. */
-    value &= mask;
-    return ((value >> 1) ^ (0ull - (value & 1))) & mask;
+    return (value << 1) ^ (0ull - (value >> 63));
 }
 
-/* Value as it goes on the wire, before tag and length. */
-static uint64_t
-wire_value(pbw_type type, uint64_t bits)
+/* Mask first: an overlong varint must truncate like the reference. */
+static uint32_t
+unzigzag32(uint64_t value)
 {
-    switch (type) {
-    case PBW_TYPE_INT32:
-    case PBW_TYPE_ENUM:
-        return (uint64_t)(int64_t)(int32_t)bits;
-    case PBW_TYPE_UINT32:
-        return (uint32_t)bits;
-    case PBW_TYPE_SINT32:
-        return zigzag(bits, 32);
-    case PBW_TYPE_SINT64:
-        return zigzag(bits, 64);
-    case PBW_TYPE_BOOL:
-        return bits != 0 ? 1u : 0u;
-    default:
-        return bits;
-    }
+    uint32_t u = (uint32_t)value;
+
+    return (u >> 1) ^ (uint32_t)(0u - (u & 1));
+}
+
+static uint64_t
+unzigzag64(uint64_t value)
+{
+    return (value >> 1) ^ (0ull - (value & 1));
 }
 
 static unsigned
-wire_type(pbw_type type)
+wire_type_of(pbw_type type)
 {
     switch (type) {
     case PBW_TYPE_DOUBLE:
@@ -117,6 +111,35 @@ packable(pbw_type type)
     return type != PBW_TYPE_STRING && type != PBW_TYPE_MESSAGE &&
            type != PBW_TYPE_GROUP;
 }
+
+static uint64_t
+tag_value(uint32_t fnum, unsigned wt)
+{
+    return ((uint64_t)fnum << 3) | wt;
+}
+
+/* ---------------------------------------------------------------- layout */
+
+/* Layout kind that can store a given wire type. No type maps to two kinds,
+ * so this doubles as the "kind and type agree" check. */
+static const uint8_t expected_kind[PBW_TYPE_SINT64 + 1] = {
+    [PBW_TYPE_DOUBLE] = PBW_SF_DOUBLE,
+    [PBW_TYPE_FLOAT] = PBW_SF_FLOAT,
+    [PBW_TYPE_INT64] = PBW_SF_INT64,
+    [PBW_TYPE_UINT64] = PBW_SF_UINT64,
+    [PBW_TYPE_INT32] = PBW_SF_INT32,
+    [PBW_TYPE_FIXED64] = PBW_SF_UINT64,
+    [PBW_TYPE_FIXED32] = PBW_SF_UINT32,
+    [PBW_TYPE_BOOL] = PBW_SF_BOOL,
+    [PBW_TYPE_STRING] = PBW_SF_STRING,
+    [PBW_TYPE_MESSAGE] = PBW_SF_MESSAGE,
+    [PBW_TYPE_UINT32] = PBW_SF_UINT32,
+    [PBW_TYPE_ENUM] = PBW_SF_ENUM,
+    [PBW_TYPE_SFIXED32] = PBW_SF_INT32,
+    [PBW_TYPE_SFIXED64] = PBW_SF_INT64,
+    [PBW_TYPE_SINT32] = PBW_SF_INT32,
+    [PBW_TYPE_SINT64] = PBW_SF_INT64,
+};
 
 /* Schema field type accepted for a layout kind. */
 static int
@@ -149,27 +172,6 @@ kind_accepts(pbw_struct_kind_t kind, pbw_type type)
     return 0;
 }
 
-/* Layout kind that can store a given wire type. No type maps to two kinds,
- * so this doubles as the "kind and type agree" check. */
-static const uint8_t expected_kind[PBW_TYPE_SINT64 + 1] = {
-    [PBW_TYPE_DOUBLE] = PBW_SF_DOUBLE,
-    [PBW_TYPE_FLOAT] = PBW_SF_FLOAT,
-    [PBW_TYPE_INT64] = PBW_SF_INT64,
-    [PBW_TYPE_UINT64] = PBW_SF_UINT64,
-    [PBW_TYPE_INT32] = PBW_SF_INT32,
-    [PBW_TYPE_FIXED64] = PBW_SF_UINT64,
-    [PBW_TYPE_FIXED32] = PBW_SF_UINT32,
-    [PBW_TYPE_BOOL] = PBW_SF_BOOL,
-    [PBW_TYPE_STRING] = PBW_SF_STRING,
-    [PBW_TYPE_MESSAGE] = PBW_SF_MESSAGE,
-    [PBW_TYPE_UINT32] = PBW_SF_UINT32,
-    [PBW_TYPE_ENUM] = PBW_SF_ENUM,
-    [PBW_TYPE_SFIXED32] = PBW_SF_INT32,
-    [PBW_TYPE_SFIXED64] = PBW_SF_INT64,
-    [PBW_TYPE_SINT32] = PBW_SF_INT32,
-    [PBW_TYPE_SINT64] = PBW_SF_INT64,
-};
-
 /* Everything the codec needs about one field, without touching the schema
  * when the layout row carries it (generated tables do; hand-written tables
  * written before those members existed fall back to the schema). */
@@ -185,7 +187,7 @@ row_info(const pbw_struct_field_t *row, const pbw_descriptor *desc, rinfo *out)
 {
     if (row->type != 0) {
         if (expected_kind[row->type] != (uint8_t)row->kind ||
-            row->wire != wire_type((pbw_type)row->type) ||
+            row->wire != wire_type_of((pbw_type)row->type) ||
             (row->repeated != 0) != (row->count != 0)) {
             return 0;
         }
@@ -200,7 +202,7 @@ row_info(const pbw_struct_field_t *row, const pbw_descriptor *desc, rinfo *out)
 
         if (field != NULL && kind_accepts(row->kind, pbw_field_type(field))) {
             out->type = pbw_field_type(field);
-            out->wire = wire_type(out->type);
+            out->wire = wire_type_of(out->type);
             out->packed = pbw_field_is_packed(field) != 0;
             out->required = pbw_field_label(field) == PBW_LABEL_REQUIRED;
             return 1;
@@ -209,10 +211,293 @@ row_info(const pbw_struct_field_t *row, const pbw_descriptor *desc, rinfo *out)
     return 0;
 }
 
-/* A generated layout row describes itself; expected_kind and wire_type above
- * are what keeps a hand-edited row from writing the wrong bytes or walking
- * past the struct. The one thing a single pass cannot see is a row that is not
- * there at all, so the entry points compare the row count with the schema. */
+/* --------------------------------------------------------------- plan */
+
+/* One opcode per field: which value transform the encoder/decoder applies.
+ * The flag bits carry the per-field shape, so the hot loops branch on the
+ * opcode alone. */
+enum {
+    SC_OP_I32 = 0, /* int32, enum: sign-extend 32 bits into a varint */
+    SC_OP_I64,
+    SC_OP_U32,
+    SC_OP_U64,
+    SC_OP_S32, /* sint32: zigzag */
+    SC_OP_S64,
+    SC_OP_BOOL,
+    SC_OP_F32, /* 4-byte little-endian: float, fixed32, sfixed32 */
+    SC_OP_F64, /* 8-byte little-endian: double, fixed64, sfixed64 */
+    SC_OP_STR,
+    SC_OP_MSG
+};
+
+#define SC_OP_MASK 0x0fu
+#define SC_DFLT 0x10u /* singular enum with a non-zero default to seed */
+#define SC_RPT 0x20u  /* repeated: *ptr + count member */
+#define SC_PACK 0x40u /* repeated and packed on the wire */
+#define SC_REQ 0x80u  /* proto2 required */
+
+typedef struct sc_plan sc_plan;
+
+typedef struct sc_entry {
+    uint8_t op;
+    uint8_t wire;   /* wire type of one element */
+    uint8_t taglen; /* 1..5, precomputed */
+    uint8_t tag[8]; /* tag bytes, then zero padding for one wide store */
+    uint32_t fnum;
+    int32_t dflt; /* enum default (SC_DFLT) */
+    size_t off;   /* value offset */
+    size_t has;   /* has-flag offset, 0 = none */
+    size_t cnt;   /* count offset (SC_RPT), 0 = singular */
+    size_t elem;  /* element size in memory: struct stride or scalar width */
+    sc_plan *sub; /* SC_OP_MSG */
+} sc_entry;
+
+struct sc_plan {
+    sc_entry *e; /* ascending field number = canonical wire order */
+    size_t n;
+    uint32_t *byfnum; /* fnum -> index + 1, 0 = unknown; NULL = binary search */
+    size_t maxfnum;
+    const sc_entry **dflts; /* entries seeding an enum default */
+    size_t ndflts;
+    const sc_entry **reqs; /* proto2 required fields */
+    size_t nreqs;
+};
+
+static size_t
+elem_size(const pbw_struct_field_t *row, const rinfo *info)
+{
+    switch (info->type) {
+    case PBW_TYPE_BOOL:
+        return 1;
+    case PBW_TYPE_INT32:
+    case PBW_TYPE_UINT32:
+    case PBW_TYPE_SINT32:
+    case PBW_TYPE_FIXED32:
+    case PBW_TYPE_SFIXED32:
+    case PBW_TYPE_FLOAT:
+    case PBW_TYPE_ENUM:
+        return 4;
+    case PBW_TYPE_STRING:
+        return sizeof(const char *);
+    case PBW_TYPE_MESSAGE:
+        return row->elem;
+    default:
+        return 8;
+    }
+}
+
+static uint8_t
+field_op(const pbw_struct_field_t *row, const rinfo *info)
+{
+    uint8_t op;
+
+    switch (info->type) {
+    case PBW_TYPE_INT32:
+    case PBW_TYPE_ENUM:
+        op = SC_OP_I32;
+        break;
+    case PBW_TYPE_UINT32:
+        op = SC_OP_U32;
+        break;
+    case PBW_TYPE_SINT32:
+        op = SC_OP_S32;
+        break;
+    case PBW_TYPE_INT64:
+        op = SC_OP_I64;
+        break;
+    case PBW_TYPE_UINT64:
+        op = SC_OP_U64;
+        break;
+    case PBW_TYPE_SINT64:
+        op = SC_OP_S64;
+        break;
+    case PBW_TYPE_BOOL:
+        op = SC_OP_BOOL;
+        break;
+    case PBW_TYPE_FLOAT:
+    case PBW_TYPE_FIXED32:
+    case PBW_TYPE_SFIXED32:
+        op = SC_OP_F32;
+        break;
+    case PBW_TYPE_DOUBLE:
+    case PBW_TYPE_FIXED64:
+    case PBW_TYPE_SFIXED64:
+        op = SC_OP_F64;
+        break;
+    case PBW_TYPE_STRING:
+        op = SC_OP_STR;
+        break;
+    default:
+        op = SC_OP_MSG;
+        break;
+    }
+    if (row->repeated) {
+        op |= SC_RPT;
+        if (info->packed && packable(info->type)) {
+            op |= SC_PACK;
+        }
+    }
+    if (info->required) {
+        op |= SC_REQ;
+    }
+    return op;
+}
+
+static void
+plan_free(sc_plan *p)
+{
+    size_t i;
+
+    if (p == NULL) {
+        return;
+    }
+    for (i = 0; i < p->n; i++) {
+        plan_free(p->e[i].sub);
+    }
+    free(p->e);
+    free(p->byfnum);
+    free(p->dflts);
+    free(p->reqs);
+    free(p);
+}
+
+/* Insertion sort: layouts are written in field order, so this is close to
+ * linear, and it keeps the plan in canonical (ascending fnum) wire order. */
+static void
+plan_sort(sc_entry *e, size_t n)
+{
+    size_t i, j;
+
+    for (i = 1; i < n; i++) {
+        sc_entry tmp = e[i];
+
+        for (j = i; j > 0 && e[j - 1].fnum > tmp.fnum; j--) {
+            e[j] = e[j - 1];
+        }
+        e[j] = tmp;
+    }
+}
+
+/* Resolve every row into an entry; recursive for MESSAGE rows. */
+static pbw_status
+plan_build(const pbw_descriptor *desc, const pbw_struct_field_t *fields,
+           size_t nfields, unsigned depth, sc_plan **out)
+{
+    sc_plan *p;
+    size_t i, ndflts = 0, nreqs = 0, maxfnum = 0;
+    pbw_status status = PBW_ERR_INVALID;
+
+    *out = NULL;
+    if (depth >= SC_MAX_DEPTH) {
+        return PBW_ERR_LIMIT;
+    }
+    p = (sc_plan *)calloc(1, sizeof(*p));
+    if (p == NULL) {
+        return PBW_ERR_NOMEM;
+    }
+    p->n = nfields;
+    p->e = (sc_entry *)calloc(nfields ? nfields : 1, sizeof(*p->e));
+    if (p->e == NULL) {
+        plan_free(p);
+        return PBW_ERR_NOMEM;
+    }
+    for (i = 0; i < nfields; i++) {
+        const pbw_struct_field_t *row = &fields[i];
+        sc_entry *e = &p->e[i];
+        rinfo info;
+
+        if (!row_info(row, desc, &info) || info.type == PBW_TYPE_GROUP) {
+            status = PBW_ERR_INVALID; /* no group support in a layout */
+            goto fail;
+        }
+        e->op = field_op(row, &info);
+        if (row->kind == PBW_SF_ENUM && !row->repeated && row->dflt != 0) {
+            /* The struct arrives zeroed, so only non-zero defaults need a
+             * store; absent proto3 enums already read 0. */
+            e->op |= SC_DFLT;
+            e->dflt = row->dflt;
+        }
+        e->fnum = row->fnum;
+        e->wire = (uint8_t)info.wire;
+        e->off = row->offset;
+        e->has = row->has;
+        e->cnt = row->count;
+        e->elem = elem_size(row, &info);
+        e->taglen = (uint8_t)varint_size(tag_value(row->fnum, info.wire));
+        put_varint(e->tag, tag_value(row->fnum, info.wire));
+        if ((e->op & SC_OP_MASK) == SC_OP_MSG) {
+            pbw_status sub = plan_build(desc, row->fields, row->nfields,
+                                        depth + 1, &e->sub);
+
+            if (sub != PBW_OK) {
+                status = sub;
+                goto fail;
+            }
+        }
+        maxfnum = row->fnum > maxfnum ? row->fnum : maxfnum;
+        ndflts += (e->op & SC_DFLT) != 0;
+        nreqs += (e->op & SC_REQ) != 0;
+    }
+    plan_sort(p->e, p->n);
+    p->maxfnum = maxfnum;
+    /* A direct fnum -> entry map is one load per field on decode, which is
+     * what a generated switch does; for sparse field numbers it would be a
+     * big table for few fields, so fall back to binary search there. */
+    if (maxfnum + 1 <= 8 * (p->n + 1)) {
+        p->byfnum = (uint32_t *)calloc(maxfnum + 1, sizeof(*p->byfnum));
+        if (p->byfnum == NULL) {
+            status = PBW_ERR_NOMEM;
+            goto fail;
+        }
+        for (i = 0; i < p->n; i++) {
+            if (p->byfnum[p->e[i].fnum] == 0) {
+                p->byfnum[p->e[i].fnum] = (uint32_t)i + 1;
+            }
+        }
+    }
+    if (ndflts > 0) {
+        size_t k = 0;
+
+        p->dflts = (const sc_entry **)calloc(ndflts, sizeof(*p->dflts));
+        if (p->dflts == NULL) {
+            status = PBW_ERR_NOMEM;
+            goto fail;
+        }
+        for (i = 0; i < p->n; i++) {
+            if (p->e[i].op & SC_DFLT) {
+                p->dflts[k++] = &p->e[i];
+            }
+        }
+        p->ndflts = k;
+    }
+    if (nreqs > 0) {
+        size_t k = 0;
+
+        p->reqs = (const sc_entry **)calloc(nreqs, sizeof(*p->reqs));
+        if (p->reqs == NULL) {
+            status = PBW_ERR_NOMEM;
+            goto fail;
+        }
+        for (i = 0; i < p->n; i++) {
+            if (p->e[i].op & SC_REQ) {
+                p->reqs[k++] = &p->e[i];
+            }
+        }
+        p->nreqs = k;
+    }
+    *out = p;
+    return PBW_OK;
+fail:
+    plan_free(p);
+    return status;
+}
+
+struct pbw_struct_codec {
+    sc_plan *root;
+    const pbw_struct_field_t *fields; /* for pbw_struct_free() on a failed
+                                       * per-object decode */
+    size_t nfields;
+};
 
 /* ----------------------------------------------------------------- writer */
 
@@ -240,7 +525,7 @@ sb_reserve(sbuf *b, size_t extra)
     while (cap < need) {
         cap += cap / 2;
     }
-    data = realloc(b->data, cap);
+    data = (uint8_t *)realloc(b->data, cap);
     if (data == NULL) {
         b->status = PBW_ERR_NOMEM;
         return 0;
@@ -250,40 +535,22 @@ sb_reserve(sbuf *b, size_t extra)
     return 1;
 }
 
+/* Callers that reserved 16 bytes write tag and value without checking. */
 static void
-sb_byte(sbuf *b, uint8_t value)
+sb_tag(sbuf *b, const sc_entry *e)
 {
-    if (sb_reserve(b, 1)) {
-        b->data[b->len++] = value;
-    }
+    memcpy(b->data + b->len, e->tag, sizeof(e->tag));
+    b->len += e->taglen;
 }
 
-/* Reserves the maximum width so the value is written in place. Encoding only
- * appends, so the slack past b->len is never read. */
 static void
 sb_varint(sbuf *b, uint64_t value)
-{
-    if (sb_reserve(b, 10)) {
-        b->len = (size_t)(put_varint(b->data + b->len, value) - b->data);
-    }
-}
-
-/* Same writes without a capacity check. A field reserves tag (5) plus value
- * (10) once, which is the widest a scalar can be, then writes inline. */
-static void
-sb_varint_raw(sbuf *b, uint64_t value)
 {
     b->len = (size_t)(put_varint(b->data + b->len, value) - b->data);
 }
 
 static void
-sb_tag_raw(sbuf *b, uint32_t fnum, unsigned wt)
-{
-    sb_varint_raw(b, ((uint64_t)fnum << 3) | wt);
-}
-
-static void
-sb_fixed_raw(sbuf *b, uint64_t value, size_t width)
+sb_fixed(sbuf *b, uint64_t value, size_t width)
 {
     uint8_t *out = b->data + b->len;
 
@@ -300,20 +567,21 @@ sb_fixed_raw(sbuf *b, uint64_t value, size_t width)
     b->len += width;
 }
 
-static void
-sb_tag(sbuf *b, uint32_t fnum, unsigned wt)
-{
-    sb_varint(b, ((uint64_t)fnum << 3) | wt);
-}
-
 /* A length-delimited payload needs its length first, but it is only known
  * afterwards: write a one-byte placeholder, encode, then patch it and shift
  * the payload right if the length needs more than one byte. */
-static void
-sb_len_begin(sbuf *b, size_t *mark)
+static size_t
+sb_len_begin(sbuf *b, uint32_t fnum)
 {
-    *mark = b->len;
-    sb_byte(b, 0);
+    size_t mark;
+
+    if (!sb_reserve(b, 16)) {
+        return 0;
+    }
+    sb_varint(b, tag_value(fnum, 2));
+    mark = b->len;
+    b->data[b->len++] = 0;
+    return mark;
 }
 
 static void
@@ -337,302 +605,324 @@ sb_len_end(sbuf *b, size_t mark)
     put_varint(b->data + mark, payload);
 }
 
-/* ------------------------------------------------------------------ layout */
-
-/* Wire order usually repeats a field a few times in a row (repeated fields,
- * one per element), so the last hit is checked first. */
-static const pbw_struct_field_t *
-find_row_from(const pbw_struct_field_t *fields, size_t nfields, uint32_t fnum,
-              size_t *cursor)
-{
-    size_t i = *cursor;
-
-    if (i < nfields && fields[i].fnum == fnum) {
-        return &fields[i];
-    }
-    for (i = 0; i < nfields; i++) {
-        if (fields[i].fnum == fnum) {
-            *cursor = i;
-            return &fields[i];
-        }
-    }
-    return NULL;
-}
-
-static size_t
-scalar_size(pbw_struct_kind_t kind)
-{
-    switch (kind) {
-    case PBW_SF_INT32:
-    case PBW_SF_UINT32:
-    case PBW_SF_FLOAT:
-    case PBW_SF_ENUM:
-        return 4;
-    case PBW_SF_INT64:
-    case PBW_SF_UINT64:
-    case PBW_SF_DOUBLE:
-        return 8;
-    case PBW_SF_BOOL:
-        return 1;
-    default:
-        return 0;
-    }
-}
-
-/* ---------------------------------------------------------------- encoding */
-
-static uint64_t
-read_bits(pbw_struct_kind_t kind, const void *p)
-{
-    uint32_t u32;
-    uint64_t u64;
-
-    switch (kind) {
-    case PBW_SF_BOOL: {
-        unsigned char b;
-
-        memcpy(&b, p, 1);
-        return b != 0;
-    }
-    case PBW_SF_INT32:
-    case PBW_SF_UINT32:
-    case PBW_SF_ENUM:
-    case PBW_SF_FLOAT:
-        memcpy(&u32, p, 4);
-        return u32;
-    default:
-        memcpy(&u64, p, 8);
-        return u64;
-    }
-}
-
-/* Caller must have reserved 10 bytes. */
 static void
-enc_scalar_raw(sbuf *b, pbw_type type, pbw_struct_kind_t kind, const void *p)
-{
-    uint64_t bits = read_bits(kind, p);
+enc_msg(const sc_plan *p, sbuf *b, const char *base, unsigned depth);
 
-    switch (type) {
-    case PBW_TYPE_FLOAT:
-    case PBW_TYPE_FIXED32:
-    case PBW_TYPE_SFIXED32:
-        sb_fixed_raw(b, bits, 4);
-        return;
-    case PBW_TYPE_DOUBLE:
-    case PBW_TYPE_FIXED64:
-    case PBW_TYPE_SFIXED64:
-        sb_fixed_raw(b, bits, 8);
-        return;
-    default:
-        sb_varint_raw(b, wire_value(type, bits));
+/* Reserves the widest a scalar can be (5-byte tag + 10-byte varint) so the
+ * value is written in place; the slack past b->len is never read. */
+static void
+enc_varint(sbuf *b, const sc_entry *e, uint64_t value)
+{
+    if (!sb_reserve(b, 16)) {
         return;
     }
+    sb_tag(b, e);
+    sb_varint(b, value);
 }
 
 static void
-enc_len_bytes(sbuf *b, uint32_t fnum, const char *data, size_t len)
+enc_bytes(sbuf *b, const sc_entry *e, const char *data, size_t len)
 {
-    if (!sb_reserve(b, 5 + 10 + len)) {
+    if (!sb_reserve(b, 16 + len)) {
         return;
     }
-    sb_tag_raw(b, fnum, 2);
-    sb_varint_raw(b, len);
+    sb_tag(b, e);
+    sb_varint(b, len);
     if (len > 0) {
         memcpy(b->data + b->len, data, len);
         b->len += len;
     }
 }
 
+static uint64_t
+load_varint(uint8_t op, const char *v)
+{
+    uint32_t u32;
+    uint64_t u64;
+
+    switch (op & SC_OP_MASK) {
+    case SC_OP_I32:
+        memcpy(&u32, v, 4);
+        return (uint64_t)(int64_t)(int32_t)u32;
+    case SC_OP_U32:
+        memcpy(&u32, v, 4);
+        return u32;
+    case SC_OP_S32:
+        memcpy(&u32, v, 4);
+        return zigzag32(u32);
+    case SC_OP_BOOL:
+        return *(const uint8_t *)v != 0;
+    default: /* I64, U64, S64 */
+        memcpy(&u64, v, 8);
+        return (op & SC_OP_MASK) == SC_OP_S64 ? zigzag64(u64) : u64;
+    }
+}
+
+/* data points at the first element: for a repeated field that is the value
+ * held in the array slot, for a singular one the member itself. */
 static void
-enc_msg(sbuf *b, const pbw_descriptor *desc,
-        const pbw_struct_field_t *fields, size_t nfields, const void *base,
-        unsigned depth)
+enc_scalars(const sc_entry *e, sbuf *b, const char *data, size_t n)
+{
+    uint8_t op = e->op;
+    size_t j;
+
+    if (n == 0) {
+        return; /* an empty packed run writes no tag at all */
+    }
+    if ((op & SC_OP_MASK) == SC_OP_F32 || (op & SC_OP_MASK) == SC_OP_F64) {
+        size_t width = (op & SC_OP_MASK) == SC_OP_F32 ? 4 : 8;
+
+        if (op & SC_PACK) {
+            size_t mark = sb_len_begin(b, e->fnum);
+
+            for (j = 0; j < n && b->status == PBW_OK; j++) {
+                uint64_t bits = 0;
+
+                memcpy(&bits, data + j * e->elem, width);
+                if (!sb_reserve(b, width)) {
+                    return;
+                }
+                sb_fixed(b, bits, width);
+            }
+            sb_len_end(b, mark);
+            return;
+        }
+        for (j = 0; j < n; j++) {
+            uint64_t bits = 0;
+
+            memcpy(&bits, data + j * e->elem, width);
+            if (!sb_reserve(b, 16)) {
+                return;
+            }
+            sb_tag(b, e);
+            sb_fixed(b, bits, width);
+        }
+        return;
+    }
+    if (op & SC_PACK) {
+        size_t mark = sb_len_begin(b, e->fnum);
+
+        for (j = 0; j < n && b->status == PBW_OK; j++) {
+            if (!sb_reserve(b, 10)) {
+                return;
+            }
+            sb_varint(b, load_varint(op, data + j * e->elem));
+        }
+        sb_len_end(b, mark);
+        return;
+    }
+    for (j = 0; j < n; j++) {
+        enc_varint(b, e, load_varint(op, data + j * e->elem));
+    }
+}
+
+static void
+enc_msg(const sc_plan *p, sbuf *b, const char *base, unsigned depth)
 {
     size_t i;
 
-    for (i = 0; i < nfields && b->status == PBW_OK; i++) {
-        const pbw_struct_field_t *row = &fields[i];
-        const char *p = (const char *)base + row->offset;
-        rinfo info;
-        pbw_type type;
-        int repeated = row->repeated != 0;
-        size_t j, n;
+    if (depth >= SC_MAX_DEPTH) {
+        b->status = PBW_ERR_LIMIT;
+        return;
+    }
+    for (i = 0; i < p->n && b->status == PBW_OK; i++) {
+        const sc_entry *e = &p->e[i];
+        uint8_t op = e->op;
+        const char *v = base + e->off;
+        const char *data = v;
+        size_t n = 1;
 
-        if (!row_info(row, desc, &info)) {
-            b->status = PBW_ERR_INVALID;
-            return;
-        }
-        type = info.type;
-        if (type == PBW_TYPE_GROUP) {
-            b->status = PBW_ERR_INVALID; /* layout has no group support */
-            return;
-        }
+        switch (op & SC_OP_MASK) {
+        case SC_OP_STR:
+            if ((op & SC_RPT) == 0) {
+                const char *str = *(const char *const *)v;
 
-        if (type == PBW_TYPE_STRING) {
-            if (!repeated) {
-                const char *s = *(const char *const *)p;
-
-                if (s == NULL) {
-                    if (info.required) {
+                if (str == NULL) {
+                    if (op & SC_REQ) {
                         b->status = PBW_ERR_REQUIRED;
-                        return;
                     }
                     continue;
                 }
-                enc_len_bytes(b, row->fnum, s, strlen(s));
+                enc_bytes(b, e, str, strlen(str));
                 continue;
             }
-            n = *(const size_t *)((const char *)base + row->count);
             {
-                const char *const *items = *(const char *const *const *)p;
+                const char *const *items = *(const char *const *const *)v;
 
-                if (n > 0 && items == NULL) {
-                    b->status = PBW_ERR_INVALID;
-                    return;
+                n = *(const size_t *)(base + e->cnt);
+                if (n == 0) {
+                    continue;
                 }
-                for (j = 0; j < n; j++) {
-                    if (items[j] == NULL) {
-                        enc_len_bytes(b, row->fnum, "", 0);
+                if (items == NULL) {
+                    b->status = PBW_ERR_INVALID;
+                    continue;
+                }
+                for (; n > 0; n--, items++) {
+                    if (*items == NULL) {
+                        enc_bytes(b, e, "", 0);
                     } else {
-                        enc_len_bytes(b, row->fnum, items[j],
-                                      strlen(items[j]));
+                        enc_bytes(b, e, *items, strlen(*items));
                     }
                 }
             }
             continue;
-        }
-
-        if (type == PBW_TYPE_MESSAGE) {
-            if (!repeated) {
-                const void *item = *(void *const *)p;
+        case SC_OP_MSG:
+            if ((op & SC_RPT) == 0) {
+                const char *item = *(const char *const *)v;
                 size_t mark;
 
                 if (item == NULL) {
-                    if (info.required) {
+                    if (op & SC_REQ) {
                         b->status = PBW_ERR_REQUIRED;
-                        return;
                     }
                     continue;
                 }
-                if (!sb_reserve(b, 5 + 1)) {
-                    return;
-                }
-                sb_tag_raw(b, row->fnum, 2);
-                mark = b->len;
-                b->data[b->len++] = 0;
-                enc_msg(b, desc, row->fields, row->nfields, item,
-                        depth + 1);
+                mark = sb_len_begin(b, e->fnum);
+                enc_msg(e->sub, b, item, depth + 1);
                 sb_len_end(b, mark);
                 continue;
             }
-            n = *(const size_t *)((const char *)base + row->count);
             {
-                const char *items = *(const char *const *)p;
+                const char *items = *(const char *const *)v;
 
-                if (n > 0 && items == NULL) {
-                    b->status = PBW_ERR_INVALID;
-                    return;
+                n = *(const size_t *)(base + e->cnt);
+                if (n == 0) {
+                    continue;
                 }
-                for (j = 0; j < n; j++) {
-                    size_t mark;
+                if (items == NULL) {
+                    b->status = PBW_ERR_INVALID;
+                    continue;
+                }
+                for (; n > 0; n--, items += e->elem) {
+                    size_t mark = sb_len_begin(b, e->fnum);
 
-                    if (!sb_reserve(b, 5 + 1)) {
-                        return;
-                    }
-                    sb_tag_raw(b, row->fnum, 2);
-                    mark = b->len;
-                    b->data[b->len++] = 0;
-                    enc_msg(b, desc, row->fields, row->nfields,
-                            items + j * row->elem, depth + 1);
+                    enc_msg(e->sub, b, items, depth + 1);
                     sb_len_end(b, mark);
                 }
             }
             continue;
+        default:
+            /* Scalars. */
+            break;
         }
-
-        if (!repeated) {
-            if (row->has != 0 &&
-                *(const int *)((const char *)base + row->has) == 0) {
+        if ((op & SC_RPT) == 0) {
+            if (e->has != 0 && *(const int *)(base + e->has) == 0) {
                 continue;
             }
-            if (!sb_reserve(b, 15)) {
-                return;
+            if ((op & SC_OP_MASK) >= SC_OP_F32) {
+                uint64_t bits = 0;
+                size_t width = (op & SC_OP_MASK) == SC_OP_F32 ? 4 : 8;
+
+                memcpy(&bits, v, width);
+                if (!sb_reserve(b, 16)) {
+                    continue;
+                }
+                sb_tag(b, e);
+                sb_fixed(b, bits, width);
+            } else {
+                enc_varint(b, e, load_varint(op, v));
             }
-            sb_tag_raw(b, row->fnum, info.wire);
-            enc_scalar_raw(b, type, row->kind, p);
             continue;
         }
-
-        n = *(const size_t *)((const char *)base + row->count);
-        if (info.packed && packable(type)) {
-            size_t mark, width = scalar_size(row->kind);
-            const char *items = *(const char *const *)p;
-
-            if (n == 0) {
-                continue;
-            }
-            sb_tag(b, row->fnum, 2);
-            sb_len_begin(b, &mark);
-            for (j = 0; j < n; j++) {
-                if (!sb_reserve(b, 10)) {
-                    return;
-                }
-                enc_scalar_raw(b, type, row->kind, items + j * width);
-            }
-            sb_len_end(b, mark);
+        data = *(const char *const *)v;
+        n = *(const size_t *)(base + e->cnt);
+        if (n == 0) {
             continue;
         }
-        {
-            size_t width = scalar_size(row->kind);
-            const char *items = *(const char *const *)p;
-
-            if (n > 0 && items == NULL) {
-                b->status = PBW_ERR_INVALID;
-                return;
-            }
-            for (j = 0; j < n; j++) {
-                if (!sb_reserve(b, 15)) {
-                    return;
-                }
-                sb_tag_raw(b, row->fnum, info.wire);
-                enc_scalar_raw(b, type, row->kind, items + j * width);
-            }
+        if (data == NULL) {
+            b->status = PBW_ERR_INVALID;
+            continue;
         }
+        enc_scalars(e, b, data, n);
     }
 }
 
-pbw_status
-pbw_struct_encode(const pbw_schema *schema, const char *message,
-                  const pbw_struct_field_t *fields, size_t nfields,
-                  const void *base, uint8_t **wire, size_t *wire_len)
-{
-    const pbw_descriptor *desc;
-    sbuf b;
+/* ------------------------------------------------------------------ arena */
 
-    if (wire == NULL || wire_len == NULL) {
-        return PBW_ERR_INVALID;
+/* Blocks are chained and never moved, so pointers handed out by an earlier
+ * allocation stay valid. A reset keeps the blocks and rewinds them, which is
+ * what makes a steady-state decode loop allocation-free. */
+typedef struct sc_block {
+    struct sc_block *next;
+    size_t used;
+    size_t cap;
+    unsigned char data[1]; /* padded to 16 by alloc_block */
+} sc_block;
+
+struct pbw_struct_arena {
+    sc_block *head;
+    sc_block *tail;
+    sc_block *cur;
+};
+
+static sc_block *
+block_new(size_t cap)
+{
+    sc_block *b;
+    size_t total = sizeof(*b) + cap + 15;
+
+    b = (sc_block *)malloc(total);
+    if (b == NULL) {
+        return NULL;
     }
-    *wire = NULL;
-    *wire_len = 0;
-    if (schema == NULL || message == NULL || fields == NULL || base == NULL) {
-        return PBW_ERR_INVALID;
+    b->next = NULL;
+    b->used = 0;
+    b->cap = cap;
+    return b;
+}
+
+/* First usable byte, rounded up so every allocation is 16-byte aligned. */
+static unsigned char *
+block_data(sc_block *b)
+{
+    return (unsigned char *)(((uintptr_t)b->data + 15u) & ~(uintptr_t)15u);
+}
+
+static void
+arena_reset(pbw_struct_arena *a)
+{
+    sc_block *b;
+
+    for (b = a->head; b != NULL; b = b->next) {
+        b->used = 0;
     }
-    desc = pbw_schema_find(schema, message);
-    if (desc == NULL) {
-        return PBW_ERR_INVALID;
+    a->cur = a->head;
+}
+
+static void *
+arena_alloc(pbw_struct_arena *a, size_t n)
+{
+    sc_block *b = a->cur;
+    void *p;
+
+    n = (n + 15u) & ~(size_t)15u;
+    if (n == 0) {
+        n = 16;
     }
-    if (pbw_descriptor_field_count(desc) != nfields) {
-        return PBW_ERR_INVALID;
+    while (b != NULL && b->cap - b->used < n) {
+        b = b->next;
     }
-    memset(&b, 0, sizeof(b));
-    enc_msg(&b, desc, fields, nfields, base, 0);
-    if (b.status != PBW_OK) {
-        free(b.data);
-        return b.status;
+    if (b == NULL) {
+        size_t cap = a->tail != NULL ? a->tail->cap * 2 : 8192;
+
+        if (cap < n) {
+            cap = n;
+        }
+        b = block_new(cap);
+        if (b == NULL) {
+            return NULL;
+        }
+        if (a->tail != NULL) {
+            a->tail->next = b;
+        } else {
+            a->head = b;
+        }
+        a->tail = b;
     }
-    *wire = b.data;
-    *wire_len = b.len;
-    return PBW_OK;
+    p = block_data(b) + b->used;
+    b->used += n;
+    a->cur = b;
+    return p;
 }
 
 /* ---------------------------------------------------------------- decoding */
@@ -641,16 +931,6 @@ typedef struct {
     const uint8_t *p;
     const uint8_t *end;
 } rdr;
-
-static int
-rd_bytes(rdr *r, size_t n)
-{
-    if ((size_t)(r->end - r->p) < n) {
-        return 0;
-    }
-    r->p += n;
-    return 1;
-}
 
 static int
 rd_varint(rdr *r, uint64_t *out)
@@ -723,7 +1003,11 @@ rd_skip(rdr *r, uint32_t fnum, unsigned wt, unsigned depth)
         return rd_varint(r, &value);
     }
     case 1:
-        return rd_bytes(r, 8);
+        if ((size_t)(r->end - r->p) < 8) {
+            return 0;
+        }
+        r->p += 8;
+        return 1;
     case 2: {
         uint64_t n;
 
@@ -752,344 +1036,420 @@ rd_skip(rdr *r, uint32_t fnum, unsigned wt, unsigned depth)
             }
         }
     case 5:
-        return rd_bytes(r, 4);
+        if ((size_t)(r->end - r->p) < 4) {
+            return 0;
+        }
+        r->p += 4;
+        return 1;
     default:
         return 0; /* stray END_GROUP */
     }
 }
 
 static void
-store_varint(pbw_struct_kind_t kind, pbw_type type, void *p, uint64_t value)
+store_varint(uint8_t op, char *v, uint64_t value)
 {
-    int32_t i32;
-    uint32_t u32;
-    int64_t i64;
-    uint64_t u64;
+    switch (op & SC_OP_MASK) {
+    case SC_OP_I32: {
+        int32_t i = (int32_t)value;
 
-    switch (type) {
-    case PBW_TYPE_SINT32:
-        value = unzigzag(value, 32);
-        break;
-    case PBW_TYPE_SINT64:
-        value = unzigzag(value, 64);
-        break;
-    default:
-        break;
+        memcpy(v, &i, 4);
+        return;
     }
-    switch (kind) {
-    case PBW_SF_INT32:
-    case PBW_SF_ENUM:
-        i32 = (int32_t)value;
-        memcpy(p, &i32, 4);
+    case SC_OP_U32: {
+        uint32_t u = (uint32_t)value;
+
+        memcpy(v, &u, 4);
         return;
-    case PBW_SF_UINT32:
-        u32 = (uint32_t)value;
-        memcpy(p, &u32, 4);
+    }
+    case SC_OP_S32: {
+        uint32_t u = unzigzag32(value);
+
+        memcpy(v, &u, 4);
         return;
-    case PBW_SF_BOOL: {
+    }
+    case SC_OP_BOOL: {
         unsigned char b = value != 0 ? 1 : 0;
 
-        memcpy(p, &b, 1);
+        memcpy(v, &b, 1);
         return;
     }
-    case PBW_SF_INT64:
-        i64 = (int64_t)value;
-        memcpy(p, &i64, 8);
+    case SC_OP_S64:
+        value = unzigzag64(value);
+        memcpy(v, &value, 8);
         return;
     default:
-        u64 = value;
-        memcpy(p, &u64, 8);
+        memcpy(v, &value, 8);
         return;
     }
 }
 
-static void
-store_fixed(pbw_struct_kind_t kind, void *p, uint64_t bits)
+static void *
+sc_alloc(pbw_struct_arena *a, size_t n)
 {
-    uint32_t u32 = (uint32_t)bits;
-
-    if (scalar_size(kind) == 4) {
-        memcpy(p, &u32, 4);
-    } else {
-        memcpy(p, &bits, 8);
-    }
+    return a == NULL ? malloc(n) : arena_alloc(a, n);
 }
 
-/* A packed run carries the elements' wire type in the length-delimited form,
- * so it does not match wire_type() of the element type. */
-static int
-packed_run(const pbw_struct_field_t *row, pbw_type type, unsigned wt)
+static void *
+sc_alloc0(pbw_struct_arena *a, size_t n)
 {
-    return wt == 2 && row->repeated != 0 && packable(type);
+    void *p = sc_alloc(a, n);
+
+    if (p != NULL) {
+        memset(p, 0, n);
+    }
+    return p;
+}
+
+static void *
+sc_grow(pbw_struct_arena *a, void *old, size_t old_bytes, size_t new_bytes)
+{
+    void *p = sc_alloc(a, new_bytes);
+
+    if (p == NULL) {
+        return NULL;
+    }
+    if (old != NULL) {
+        memcpy(p, old, old_bytes);
+        if (a == NULL) {
+            free(old);
+        }
+    }
+    return p;
 }
 
 /* Repeated fields grow by doubling: the count member is both the fill index
  * and (via powers of two) the capacity, so no sizing pass is needed and a
  * message with empty repeated fields allocates nothing. */
 static void *
-append_slot(const pbw_struct_field_t *row, void *base, size_t width)
+sc_slot(const sc_entry *e, char *base, pbw_struct_arena *a)
 {
-    size_t *count = (size_t *)((char *)base + row->count);
-    size_t idx = *count;
-    char **array = (char **)((char *)base + row->offset);
+    size_t *cnt = (size_t *)(base + e->cnt);
+    size_t i = *cnt;
+    char **arr = (char **)(base + e->off);
 
-    if (idx == 0) {
-        *array = malloc(8 * width);
-        if (*array == NULL) {
+    if (i == 0) {
+        *arr = (char *)sc_alloc(a, 8 * e->elem);
+        if (*arr == NULL) {
             return NULL;
         }
-    } else if ((idx & (idx - 1)) == 0 && idx >= 8) {
-        char *grown = realloc(*array, idx * 2 * width);
+    } else if ((i & (i - 1)) == 0 && i >= 8) {
+        char *grown = (char *)sc_grow(a, *arr, i * e->elem, 2 * i * e->elem);
 
         if (grown == NULL) {
             return NULL;
         }
-        *array = grown;
+        *arr = grown;
     }
-    *count = idx + 1;
-    return *array + idx * width;
+    *cnt = i + 1;
+    return *arr + i * e->elem;
 }
 
-/* Absent enums fall back to their schema default. Pre-filled before the wire
- * is read, so a decoded value simply overwrites it. */
-static size_t
-seed_enum_defaults(const pbw_struct_field_t *fields, size_t nfields,
-                   void *base)
+static const sc_entry *
+sc_lookup(const sc_plan *p, uint32_t fnum)
 {
-    size_t i, required = 0;
-
-    for (i = 0; i < nfields; i++) {
-        const pbw_struct_field_t *row = &fields[i];
-
-        if (row->kind == PBW_SF_ENUM && !row->repeated) {
-            memcpy((char *)base + row->offset, &row->dflt, 4);
-        }
-        required += row->required != 0;
+    if (p->byfnum != NULL) {
+        return fnum <= p->maxfnum && p->byfnum[fnum] != 0
+                   ? &p->e[p->byfnum[fnum] - 1]
+                   : NULL;
     }
-    return required;
+    if (p->n > 0) {
+        size_t lo = 0, hi = p->n;
+
+        while (lo < hi) {
+            size_t mid = lo + (hi - lo) / 2;
+
+            if (p->e[mid].fnum < fnum) {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        if (lo < p->n && p->e[lo].fnum == fnum) {
+            return &p->e[lo];
+        }
+    }
+    return NULL;
 }
 
-/* proto2 required fields must be present; a required scalar without a has-flag
- * is always written by the encoder, so only pointers and counts can be absent.
- * Only called for message types that have required fields at all. */
+/* proto2 required fields must be present; a required scalar without a
+ * has-flag is always written by the encoder, so only pointers and counts can
+ * be absent. Only called for message types that have required fields. */
 static pbw_status
-check_required(const pbw_struct_field_t *fields, size_t nfields, const void *base)
+check_required(const sc_plan *p, const char *base)
 {
     size_t i;
 
-    for (i = 0; i < nfields; i++) {
-        const pbw_struct_field_t *row = &fields[i];
-        rinfo info;
-        const char *p;
+    for (i = 0; i < p->nreqs; i++) {
+        const sc_entry *e = p->reqs[i];
+        uint8_t op = e->op & SC_OP_MASK;
 
-        if (!row->required || !row_info(row, NULL, &info)) {
-            continue;
-        }
-        p = (const char *)base + row->offset;
-        if (row->repeated) {
-            if (*(const size_t *)((const char *)base + row->count) == 0) {
+        if (e->op & SC_RPT) {
+            if (*(const size_t *)(base + e->cnt) == 0) {
                 return PBW_ERR_REQUIRED;
             }
             continue;
         }
-        if (info.type == PBW_TYPE_STRING || info.type == PBW_TYPE_MESSAGE) {
-            if (*(void *const *)p == NULL) {
-                return PBW_ERR_REQUIRED;
-            }
+        if ((op == SC_OP_STR || op == SC_OP_MSG) &&
+            *(const void *const *)(base + e->off) == NULL) {
+            return PBW_ERR_REQUIRED;
         }
     }
     return PBW_OK;
 }
 
+/* Reads a length-delimited payload header and returns the payload bounds. */
+static int
+rd_payload(rdr *r, rdr *inner)
+{
+    uint64_t len;
+
+    if (!rd_varint(r, &len) || len > (uint64_t)(r->end - r->p)) {
+        return 0;
+    }
+    inner->p = r->p;
+    inner->end = r->p + (size_t)len;
+    r->p = inner->end;
+    return 1;
+}
+
 static pbw_status
-dec_msg(const pbw_descriptor *desc, const pbw_struct_field_t *fields,
-        size_t nfields, const uint8_t *wire, size_t wire_len, void *base,
+dec_msg(const sc_plan *p, rdr *r, char *base, pbw_struct_arena *a,
         unsigned depth)
 {
-    rdr r;
-    size_t cursor = 0;
-    size_t required;
-    pbw_status status;
+    size_t i;
 
     if (depth >= SC_MAX_DEPTH) {
         return PBW_ERR_LIMIT;
     }
-    required = seed_enum_defaults(fields, nfields, base);
-    r.p = wire;
-    r.end = wire + wire_len;
-    while (r.p < r.end) {
+    for (i = 0; i < p->ndflts; i++) {
+        const sc_entry *e = p->dflts[i];
+
+        memcpy(base + e->off, &e->dflt, 4);
+    }
+    while (r->p < r->end) {
         uint32_t fnum;
         unsigned wt;
-        const pbw_struct_field_t *row;
-        rinfo info;
-        pbw_type type;
-        char *p;
-        char *slot;
+        const sc_entry *e;
+        uint8_t op;
+        char *v;
         uint64_t value;
 
-        if (!rd_tag(&r, &fnum, &wt)) {
+        if (!rd_tag(r, &fnum, &wt)) {
             return PBW_ERR_INVALID;
         }
-        row = find_row_from(fields, nfields, fnum, &cursor);
-        if (row == NULL || !row_info(row, desc, &info)) {
-            if (!rd_skip(&r, fnum, wt, depth)) {
+        e = sc_lookup(p, fnum);
+        if (e == NULL) {
+            if (!rd_skip(r, fnum, wt, depth)) {
                 return PBW_ERR_INVALID;
             }
             continue;
         }
-        type = info.type;
-        p = (char *)base + row->offset;
-        if (wt != info.wire && !packed_run(row, type, wt)) {
-            /* Known field, wrong wire type: keep it out of the struct. */
-            if (!rd_skip(&r, fnum, wt, depth)) {
-                return PBW_ERR_INVALID;
-            }
-            continue;
-        }
+        op = e->op;
+        v = base + e->off;
 
-        if (type == PBW_TYPE_STRING) {
-            uint64_t len;
+        switch (op & SC_OP_MASK) {
+        case SC_OP_I32:
+        case SC_OP_I64:
+        case SC_OP_U32:
+        case SC_OP_U64:
+        case SC_OP_S32:
+        case SC_OP_S64:
+        case SC_OP_BOOL:
+            if (op & SC_RPT) {
+                if (wt == 2) { /* packed run for a numeric field */
+                    rdr inner;
+
+                    if (!rd_payload(r, &inner)) {
+                        return PBW_ERR_INVALID;
+                    }
+                    while (inner.p < inner.end) {
+                        char *slot;
+
+                        if (!rd_varint(&inner, &value)) {
+                            return PBW_ERR_INVALID;
+                        }
+                        slot = (char *)sc_slot(e, base, a);
+                        if (slot == NULL) {
+                            return PBW_ERR_NOMEM;
+                        }
+                        store_varint(op, slot, value);
+                    }
+                } else if (wt == e->wire) {
+                    char *slot;
+
+                    if (!rd_varint(r, &value)) {
+                        return PBW_ERR_INVALID;
+                    }
+                    slot = (char *)sc_slot(e, base, a);
+                    if (slot == NULL) {
+                        return PBW_ERR_NOMEM;
+                    }
+                    store_varint(op, slot, value);
+                } else if (!rd_skip(r, fnum, wt, depth)) {
+                    return PBW_ERR_INVALID;
+                }
+                continue;
+            }
+            if (wt != e->wire) {
+                if (!rd_skip(r, fnum, wt, depth)) {
+                    return PBW_ERR_INVALID;
+                }
+                continue;
+            }
+            if (!rd_varint(r, &value)) {
+                return PBW_ERR_INVALID;
+            }
+            store_varint(op, v, value);
+            if (e->has != 0) {
+                *(int *)(base + e->has) = 1;
+            }
+            continue;
+        case SC_OP_F32:
+        case SC_OP_F64: {
+            size_t width = (op & SC_OP_MASK) == SC_OP_F32 ? 4 : 8;
+
+            if (op & SC_RPT) {
+                if (wt == 2) {
+                    rdr inner;
+
+                    if (!rd_payload(r, &inner)) {
+                        return PBW_ERR_INVALID;
+                    }
+                    while (inner.p < inner.end) {
+                        char *slot;
+
+                        if (!rd_fixed(&inner, &value, width)) {
+                            return PBW_ERR_INVALID;
+                        }
+                        slot = (char *)sc_slot(e, base, a);
+                        if (slot == NULL) {
+                            return PBW_ERR_NOMEM;
+                        }
+                        memcpy(slot, &value, width);
+                    }
+                } else if (wt == e->wire) {
+                    char *slot;
+
+                    if (!rd_fixed(r, &value, width)) {
+                        return PBW_ERR_INVALID;
+                    }
+                    slot = (char *)sc_slot(e, base, a);
+                    if (slot == NULL) {
+                        return PBW_ERR_NOMEM;
+                    }
+                    memcpy(slot, &value, width);
+                } else if (!rd_skip(r, fnum, wt, depth)) {
+                    return PBW_ERR_INVALID;
+                }
+                continue;
+            }
+            if (wt != e->wire) {
+                if (!rd_skip(r, fnum, wt, depth)) {
+                    return PBW_ERR_INVALID;
+                }
+                continue;
+            }
+            if (!rd_fixed(r, &value, width)) {
+                return PBW_ERR_INVALID;
+            }
+            memcpy(v, &value, width);
+            if (e->has != 0) {
+                *(int *)(base + e->has) = 1;
+            }
+            continue;
+        }
+        case SC_OP_STR: {
+            rdr inner;
             char *dup;
 
-            if (!rd_varint(&r, &len) || len > (uint64_t)(r.end - r.p)) {
+            if (wt != e->wire) {
+                if (!rd_skip(r, fnum, wt, depth)) {
+                    return PBW_ERR_INVALID;
+                }
+                continue;
+            }
+            if (!rd_payload(r, &inner)) {
                 return PBW_ERR_INVALID;
             }
-            dup = malloc((size_t)len + 1);
+            dup = (char *)sc_alloc(a, (size_t)(inner.end - inner.p) + 1);
             if (dup == NULL) {
                 return PBW_ERR_NOMEM;
             }
-            memcpy(dup, r.p, (size_t)len);
-            dup[len] = '\0';
-            r.p += (size_t)len;
-            if (row->repeated) {
-                char **slot = append_slot(row, base, sizeof(char *));
+            memcpy(dup, inner.p, (size_t)(inner.end - inner.p));
+            dup[inner.end - inner.p] = '\0';
+            if (op & SC_RPT) {
+                char *slot = (char *)sc_slot(e, base, a);
 
                 if (slot == NULL) {
-                    free(dup);
+                    if (a == NULL) {
+                        free(dup);
+                    }
                     return PBW_ERR_NOMEM;
                 }
-                *slot = dup;
+                *(char **)slot = dup;
             } else {
-                *(char **)p = dup;
+                *(char **)v = dup;
             }
             continue;
         }
-
-        if (type == PBW_TYPE_MESSAGE) {
-            uint64_t len;
-            void *slot;
-
-            if (!rd_varint(&r, &len) || len > (uint64_t)(r.end - r.p)) {
-                return PBW_ERR_INVALID;
-            }
-            if (row->repeated) {
-                slot = append_slot(row, base, row->elem);
-                if (slot == NULL) {
-                    return PBW_ERR_NOMEM;
-                }
-                memset(slot, 0, row->elem);
-            } else {
-                slot = calloc(1, row->elem);
-                if (slot == NULL) {
-                    return PBW_ERR_NOMEM;
-                }
-                *(void **)p = slot;
-            }
-            status = dec_msg(desc, row->fields, row->nfields, r.p,
-                             (size_t)len, slot, depth + 1);
-            if (status != PBW_OK) {
-                return status;
-            }
-            r.p += (size_t)len;
-            continue;
-        }
-
-        if (packed_run(row, type, wt)) {
-            /* Packed run for a repeated numeric field. */
-            uint64_t len;
+        case SC_OP_MSG: {
             rdr inner;
-            size_t width = scalar_size(row->kind);
+            char *slot;
 
-            if (!rd_varint(&r, &len) || len > (uint64_t)(r.end - r.p)) {
-                return PBW_ERR_INVALID;
-            }
-            inner.p = r.p;
-            inner.end = r.p + (size_t)len;
-            while (inner.p < inner.end) {
-                uint64_t bits;
-
-                if (info.wire == 0) {
-                    if (!rd_varint(&inner, &bits)) {
-                        return PBW_ERR_INVALID;
-                    }
-                    slot = append_slot(row, base, width);
-                    if (slot == NULL) {
-                        return PBW_ERR_NOMEM;
-                    }
-                    store_varint(row->kind, type, slot, bits);
-                } else {
-                    if (!rd_fixed(&inner, &bits, info.wire == 1 ? 8 : 4)) {
-                        return PBW_ERR_INVALID;
-                    }
-                    slot = append_slot(row, base, width);
-                    if (slot == NULL) {
-                        return PBW_ERR_NOMEM;
-                    }
-                    store_fixed(row->kind, slot, bits);
+            if (wt != e->wire) {
+                if (!rd_skip(r, fnum, wt, depth)) {
+                    return PBW_ERR_INVALID;
                 }
+                continue;
             }
-            r.p = inner.end;
-            continue;
-        }
-
-        if (wt == 0) {
-            if (!rd_varint(&r, &value)) {
+            if (!rd_payload(r, &inner)) {
                 return PBW_ERR_INVALID;
             }
-        } else {
-            size_t width = wt == 1 ? 8 : 4;
-
-            if (!rd_fixed(&r, &value, width)) {
-                return PBW_ERR_INVALID;
+            if (op & SC_RPT) {
+                slot = (char *)sc_slot(e, base, a);
+                if (slot != NULL) {
+                    memset(slot, 0, e->elem);
+                }
+            } else {
+                slot = (char *)sc_alloc0(a, e->elem);
             }
-        }
-        if (row->repeated) {
-            size_t width = scalar_size(row->kind);
-
-            slot = append_slot(row, base, width);
             if (slot == NULL) {
                 return PBW_ERR_NOMEM;
             }
-            if (wt == 0) {
-                store_varint(row->kind, type, slot, value);
-            } else {
-                store_fixed(row->kind, slot, value);
+            {
+                pbw_status status = dec_msg(e->sub, &inner, slot, a, depth + 1);
+
+                if (status != PBW_OK) {
+                    return status;
+                }
+            }
+            if ((op & SC_RPT) == 0) {
+                *(char **)v = slot;
             }
             continue;
         }
-        if (wt == 0) {
-            store_varint(row->kind, type, p, value);
-        } else {
-            store_fixed(row->kind, p, value);
-        }
-        if (row->has != 0) {
-            *(int *)((char *)base + row->has) = 1;
         }
     }
-
-    return required == 0 ? PBW_OK : check_required(fields, nfields, base);
+    return p->nreqs == 0 ? PBW_OK : check_required(p, base);
 }
 
+/* ------------------------------------------------------------------- api */
+
 pbw_status
-pbw_struct_decode(const pbw_schema *schema, const char *message,
-                  const pbw_struct_field_t *fields, size_t nfields,
-                  const uint8_t *wire, size_t wire_len, void *base)
+pbw_struct_codec_init(pbw_struct_codec **out, const pbw_schema *schema,
+                      const char *message, const pbw_struct_field_t *fields,
+                      size_t nfields)
 {
     const pbw_descriptor *desc;
+    pbw_struct_codec *codec;
     pbw_status status;
 
-    if (schema == NULL || message == NULL || fields == NULL || base == NULL ||
-        (wire == NULL && wire_len != 0)) {
+    if (out == NULL) {
+        return PBW_ERR_INVALID;
+    }
+    *out = NULL;
+    if (schema == NULL || message == NULL || fields == NULL) {
         return PBW_ERR_INVALID;
     }
     desc = pbw_schema_find(schema, message);
@@ -1099,10 +1459,157 @@ pbw_struct_decode(const pbw_schema *schema, const char *message,
     if (pbw_descriptor_field_count(desc) != nfields) {
         return PBW_ERR_INVALID;
     }
-    status = dec_msg(desc, fields, nfields, wire, wire_len, base, 0);
-    if (status != PBW_OK) {
-        pbw_struct_free(fields, nfields, base);
+    codec = (pbw_struct_codec *)calloc(1, sizeof(*codec));
+    if (codec == NULL) {
+        return PBW_ERR_NOMEM;
     }
+    status = plan_build(desc, fields, nfields, 0, &codec->root);
+    if (status != PBW_OK) {
+        free(codec);
+        return status;
+    }
+    codec->fields = fields;
+    codec->nfields = nfields;
+    *out = codec;
+    return PBW_OK;
+}
+
+void
+pbw_struct_codec_free(pbw_struct_codec *codec)
+{
+    if (codec == NULL) {
+        return;
+    }
+    plan_free(codec->root);
+    free(codec);
+}
+
+pbw_status
+pbw_struct_codec_encode(const pbw_struct_codec *codec, const void *base,
+                        pbw_struct_buf *buf)
+{
+    sbuf b;
+
+    if (codec == NULL || base == NULL || buf == NULL) {
+        return PBW_ERR_INVALID;
+    }
+    b.data = buf->data;
+    b.len = 0;
+    b.cap = buf->cap;
+    b.status = PBW_OK;
+    enc_msg(codec->root, &b, (const char *)base, 0);
+    buf->data = b.data;
+    buf->cap = b.cap;
+    buf->len = b.status == PBW_OK ? b.len : 0;
+    return b.status;
+}
+
+pbw_status
+pbw_struct_codec_decode(const pbw_struct_codec *codec, const uint8_t *wire,
+                        size_t wire_len, pbw_struct_arena **arena, void *base)
+{
+    pbw_struct_arena *a = arena != NULL ? *arena : NULL;
+    rdr r;
+    pbw_status status;
+
+    if (codec == NULL || base == NULL || (wire == NULL && wire_len != 0)) {
+        return PBW_ERR_INVALID;
+    }
+    if (arena != NULL && a == NULL) {
+        a = (pbw_struct_arena *)calloc(1, sizeof(*a));
+        if (a == NULL) {
+            return PBW_ERR_NOMEM;
+        }
+        *arena = a;
+    }
+    if (a != NULL) {
+        arena_reset(a);
+    }
+    r.p = wire;
+    r.end = wire + wire_len;
+    status = dec_msg(codec->root, &r, (char *)base, a, 0);
+    if (status != PBW_OK && a == NULL) {
+        /* Per-object allocations belong to the caller: hand them back so a
+         * failed decode leaks nothing. */
+        pbw_struct_free(codec->fields, codec->nfields, base);
+    }
+    return status;
+}
+
+void
+pbw_struct_buf_free(pbw_struct_buf *buf)
+{
+    if (buf == NULL) {
+        return;
+    }
+    free(buf->data);
+    buf->data = NULL;
+    buf->len = 0;
+    buf->cap = 0;
+}
+
+void
+pbw_struct_arena_free(pbw_struct_arena *arena)
+{
+    sc_block *b;
+    sc_block *next;
+
+    if (arena == NULL) {
+        return;
+    }
+    for (b = arena->head; b != NULL; b = next) {
+        next = b->next;
+        free(b);
+    }
+    free(arena);
+}
+
+pbw_status
+pbw_struct_encode(const pbw_schema *schema, const char *message,
+                  const pbw_struct_field_t *fields, size_t nfields,
+                  const void *base, uint8_t **wire, size_t *wire_len)
+{
+    pbw_struct_codec *codec = NULL;
+    pbw_struct_buf buf = {NULL, 0, 0};
+    pbw_status status;
+
+    if (wire == NULL || wire_len == NULL) {
+        return PBW_ERR_INVALID;
+    }
+    *wire = NULL;
+    *wire_len = 0;
+    if (base == NULL) {
+        return PBW_ERR_INVALID;
+    }
+    status = pbw_struct_codec_init(&codec, schema, message, fields, nfields);
+    if (status != PBW_OK) {
+        return status;
+    }
+    status = pbw_struct_codec_encode(codec, base, &buf);
+    pbw_struct_codec_free(codec);
+    if (status != PBW_OK) {
+        pbw_struct_buf_free(&buf);
+        return status;
+    }
+    *wire = buf.data;
+    *wire_len = buf.len;
+    return PBW_OK;
+}
+
+pbw_status
+pbw_struct_decode(const pbw_schema *schema, const char *message,
+                  const pbw_struct_field_t *fields, size_t nfields,
+                  const uint8_t *wire, size_t wire_len, void *base)
+{
+    pbw_struct_codec *codec = NULL;
+    pbw_status status;
+
+    status = pbw_struct_codec_init(&codec, schema, message, fields, nfields);
+    if (status != PBW_OK) {
+        return status;
+    }
+    status = pbw_struct_codec_decode(codec, wire, wire_len, NULL, base);
+    pbw_struct_codec_free(codec);
     return status;
 }
 

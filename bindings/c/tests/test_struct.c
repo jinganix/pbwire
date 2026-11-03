@@ -274,6 +274,154 @@ fill_scalars2(structtest_scalars2_t *s, structtest_inner2_t *inner,
     s->n_inners = 2;
 }
 
+/* The compiled codec is the hot path: same bytes as the one-shot calls,
+ * caller-owned buffers reused, and an arena that owns the decoded tree. */
+static void
+test_codec(void)
+{
+    structtest_scalars3_t s;
+    structtest_scalars3_t a;
+    structtest_scalars3_t b;
+    structtest_inner3_t inner;
+    int32_t nums[3];
+    const char *tags[2];
+    structtest_inner3_t inners[2];
+    bool flags[3];
+    pbw_schema *schema = NULL;
+    pbw_struct_codec *codec = NULL;
+    pbw_struct_codec *wrong = (pbw_struct_codec *)0x1;
+    pbw_struct_buf buf = {NULL, 0, 0};
+    pbw_struct_arena *arena = NULL;
+    uint8_t *expect = NULL;
+    uint8_t *wire = NULL;
+    size_t expect_len = 0;
+    size_t wire_len = 0;
+    size_t cap;
+
+    CHECK(read_file("bindings/c/tests/data/matrix3.bin", &expect,
+                    &expect_len) == 0);
+    CHECK_OK(pbw_struct_schema_load(MATRIX3_DESC_PATH, &schema));
+    if (schema == NULL || expect == NULL) {
+        goto done;
+    }
+    fill_scalars3(&s, &inner, nums, tags, inners);
+    fill_flags(&s, flags);
+
+    /* Same bytes as the one-shot encoder, into a buffer that keeps its
+     * capacity across calls. */
+    CHECK_OK(pbw_struct_codec_init(&codec, schema, "structtest.Scalars3",
+                                   structtest_scalars3_fields, 22));
+    CHECK(codec != NULL);
+    if (codec == NULL) {
+        goto done;
+    }
+    CHECK_OK(pbw_struct_codec_encode(codec, &s, &buf));
+    CHECK(buf.len == expect_len && memcmp(buf.data, expect, expect_len) == 0);
+    cap = buf.cap;
+    CHECK_OK(structtest_scalars3_encode(schema, &s, &wire, &wire_len));
+    CHECK(wire_len == expect_len && memcmp(wire, expect, expect_len) == 0);
+    CHECK_OK(pbw_struct_codec_encode(codec, &s, &buf));
+    CHECK(buf.len == expect_len && memcmp(buf.data, expect, expect_len) == 0);
+    CHECK(buf.cap == cap); /* steady state reuses the allocation */
+
+    /* Arena decode: no per-value allocation to release, and the arena is
+     * reused (the second decode invalidates the first tree). */
+    memset(&a, 0, sizeof(a));
+    CHECK_OK(pbw_struct_codec_decode(codec, expect, expect_len, &arena, &a));
+    CHECK(arena != NULL);
+    CHECK(a.n_nums == 3 && a.n_tags == 2 && a.n_inners == 2 && a.n_flags == 3);
+    CHECK(a.str != NULL && strcmp(a.str, "hello") == 0);
+    CHECK(a.inner != NULL && strcmp(a.inner->name, "kid") == 0);
+    CHECK(a.inners != NULL && a.inners[1].value == -2);
+    memset(&b, 0, sizeof(b));
+    CHECK_OK(pbw_struct_codec_decode(codec, expect, expect_len, &arena, &b));
+    CHECK(b.n_nums == 3 && b.str != NULL && strcmp(b.str, "opt") != 0);
+    CHECK(b.opt_str != NULL && strcmp(b.opt_str, "opt") == 0);
+    /* Re-encode from an arena-decoded tree: still byte identical. */
+    CHECK_OK(pbw_struct_codec_encode(codec, &b, &buf));
+    CHECK(buf.len == expect_len && memcmp(buf.data, expect, expect_len) == 0);
+
+    /* No arena means per-value allocations, released by pbw_struct_free. */
+    memset(&a, 0, sizeof(a));
+    CHECK_OK(pbw_struct_codec_decode(codec, expect, expect_len, NULL, &a));
+    CHECK(a.str != NULL && strcmp(a.str, "hello") == 0);
+    structtest_scalars3_free(&a);
+
+    /* A failed decode cleans up after itself on both allocator paths. */
+    memset(&a, 0, sizeof(a));
+    CHECK_STATUS(PBW_ERR_INVALID,
+                 pbw_struct_codec_decode(codec, expect, expect_len / 2, NULL,
+                                         &a));
+    memset(&b, 0, sizeof(b));
+    CHECK_STATUS(PBW_ERR_INVALID,
+                 pbw_struct_codec_decode(codec, expect, expect_len / 2, &arena,
+                                         &b));
+
+    /* A repeated numeric field may arrive unpacked: field 17 (nums) as plain
+     * varints, field 22 (flags) as single bools. Both must be accepted. */
+    {
+        static const uint8_t unpacked[] = {
+            0x88,
+            0x01,
+            0x01, /* nums = 1 */
+            0x88,
+            0x01,
+            0x02, /* nums = 2 */
+            0xb0,
+            0x01,
+            0x01, /* flags[0] = true */
+            0xb0,
+            0x01,
+            0x00, /* flags[1] = false */
+        };
+
+        memset(&b, 0, sizeof(b));
+        CHECK_OK(pbw_struct_codec_decode(codec, unpacked, sizeof(unpacked),
+                                         &arena, &b));
+        CHECK(b.n_nums == 2);
+        if (b.n_nums == 2) {
+            CHECK(b.nums[0] == 1 && b.nums[1] == 2);
+        }
+        CHECK(b.n_flags == 2);
+        if (b.n_flags == 2) {
+            CHECK(b.flags[0] == 1 && b.flags[1] == 0);
+        }
+    }
+
+    /* Codec setup reports bad arguments instead of half-building a codec. */
+    CHECK_STATUS(PBW_ERR_INVALID, pbw_struct_codec_init(NULL, schema,
+                                                        "structtest.Scalars3",
+                                                        structtest_scalars3_fields,
+                                                        22));
+    CHECK_STATUS(PBW_ERR_INVALID,
+                 pbw_struct_codec_init(&wrong, NULL, "structtest.Scalars3",
+                                       structtest_scalars3_fields, 22));
+    CHECK(wrong == NULL);
+    CHECK_STATUS(PBW_ERR_INVALID,
+                 pbw_struct_codec_init(&wrong, schema, "structtest.Nope",
+                                       structtest_scalars3_fields, 22));
+    CHECK(wrong == NULL);
+    CHECK_STATUS(PBW_ERR_INVALID,
+                 pbw_struct_codec_init(&wrong, schema, "structtest.Scalars3",
+                                       structtest_scalars3_fields, 21));
+    CHECK(wrong == NULL);
+    CHECK_STATUS(PBW_ERR_INVALID, pbw_struct_codec_encode(NULL, &s, &buf));
+    CHECK_STATUS(PBW_ERR_INVALID, pbw_struct_codec_encode(codec, NULL, &buf));
+    CHECK_STATUS(PBW_ERR_INVALID,
+                 pbw_struct_codec_encode(codec, &s, NULL));
+    structtest_scalars3_free(&a);
+done:
+    pbw_struct_codec_free(NULL);
+    pbw_struct_codec_free(codec);
+    pbw_struct_arena_free(arena);
+    pbw_struct_arena_free(NULL);
+    pbw_struct_buf_free(&buf);
+    pbw_struct_buf_free(NULL);
+    pbw_free(wire);
+    free(expect);
+    pbw_schema_free(schema);
+}
+
 static void
 test_matrix2_reference(void)
 {
@@ -729,6 +877,7 @@ int
 main(void)
 {
     test_matrix3_reference();
+    test_codec();
     test_matrix2_reference();
     test_addressbook_reference();
     test_absent_and_empty();

@@ -4,7 +4,7 @@ Three pieces, like every language binding in this repo:
 
 | Piece | Path | Role |
 |---|---|---|
-| 1. Binding runtime | [`runtime/`](runtime/) | generic struct codec: layout table, direct wire <-> struct (`pbw_struct_encode/decode/free`) |
+| 1. Binding runtime | [`runtime/`](runtime/) | generic struct codec: layout table, direct wire <-> struct (`pbw_struct_encode/decode/free`, plus the compiled `pbw_struct_codec`) |
 | 2. Compiler plugin | [`plugin/`](plugin/) | `protoc-gen-pbwire-c`: `.proto` -> structs + layout tables |
 | 3. Example | [`examples/`](examples/) | addressbook round-trip on plain structs |
 
@@ -28,9 +28,9 @@ beyond a C99 compiler (the plugin needs Go, but only maintainers run it).
 [`runtime/pbw_struct.h`](runtime/pbw_struct.h) declares the layout row
 (field number -> struct offset) and the codec entry points. Application
 structs stay plain data; the codec walks the layout rows and reads/writes
-wire bytes directly — no `pbw_message` tree in between, which is what keeps
-it within reach of generated code (the same design as the Erlang binding's
-hand-written `ep_encoder.c` / `ep_decoder.c`):
+wire bytes directly — no `pbw_message` tree in between, which is what beats
+generated code instead of merely keeping up with it (the same design as the
+Erlang binding's hand-written `ep_encoder.c` / `ep_decoder.c`):
 
 ```c
 static const pbw_struct_field_t person_fields[] = {
@@ -50,11 +50,53 @@ truth for field numbers and proto2/proto3 semantics: the row count must match
 the descriptor, and a row whose kind/wire type disagrees with its own `type`
 is `PBW_ERR_INVALID`.
 
-`decode` allocates (strings, arrays, sub-messages) into a zeroed struct;
-release with `pbw_struct_free()`. Repeated fields grow by doubling from the
-count member, so a message with empty repeated fields allocates nothing.
-Unsupported kinds (bytes, groups, maps, oneofs) fail with `PBW_ERR_INVALID`;
-extend the codec when a user needs them.
+`decode` allocates (strings, arrays, sub-messages) into a zeroed struct.
+Repeated fields grow by doubling from the count member, so a message with
+empty repeated fields allocates nothing. Unsupported kinds (bytes, groups,
+maps, oneofs) fail with `PBW_ERR_INVALID`; extend the codec when a user
+needs them.
+
+### Two levels: one-shot calls and a compiled codec
+
+The calls above resolve the schema and re-derive the wire facts on every
+invocation. That is fine for a single message, but a hot loop wants the
+layout compiled once:
+
+```c
+pbw_struct_codec *codec = NULL;
+pbw_struct_buf out = {0};              /* reusable output buffer */
+pbw_struct_arena *arena = NULL;        /* owns decoded memory */
+
+pbw_struct_codec_init(&codec, schema, "tutorial.Person", person_fields, 4);
+pbw_struct_codec_encode(codec, &person, &out);   /* out.data / out.len */
+pbw_struct_codec_decode(codec, out.data, out.len, &arena, &got);
+...
+pbw_struct_arena_free(arena);          /* also invalidates `got` */
+pbw_struct_buf_free(&out);
+pbw_struct_codec_free(codec);
+```
+
+`pbw_struct_codec_init` resolves the message once and precomputes, per field,
+an opcode (which value transform applies), the tag bytes, the struct offsets
+and the sub-message plan. Encode and decode then dispatch on one small
+opcode per field instead of looking facts up every time — that single change
+is what closes the gap to `protoc --cpp_out`'s straight-line code.
+
+Two buffers make the loop allocation-free:
+
+- `pbw_struct_buf` is the encode output. It keeps its capacity, so repeated
+  encodes reuse the same allocation. `pbw_struct_buf_free` releases it.
+- `pbw_struct_arena` owns everything a decode allocates. Each decode resets
+  it (so the previous tree becomes invalid), the blocks themselves are
+  reused, and `pbw_struct_arena_free` releases them. Because the arena never
+  moves a block, the pointers stored in the decoded struct stay valid.
+
+With `arena == NULL` the decoder instead mallocs every string, array and
+sub-message, exactly like the one-shot `pbw_struct_decode`; that tree is
+released by `pbw_struct_free(fields, nfields, base)`. Never pass an
+arena-decoded struct to `pbw_struct_free`: its pointers do not point at
+individual allocations. Use the one-shot calls (or a NULL arena) when a
+single message should own its memory.
 
 ## 2. Plugin
 
@@ -147,13 +189,29 @@ make bench-c    # from the repo root; needs protoc + libprotobuf like `make benc
 ```
 
 It checks struct encode == `protoc` bytes (plus a decode→encode round trip)
-before timing. Decode rows include the mandatory `free`: the struct decoder
-allocates into the output, so releasing is part of every decode.
+before timing. Both sides reuse their output storage: generated code an
+`std::string` that keeps its capacity, the struct codec one `pbw_struct_buf`
+and one `pbw_struct_arena`.
 
-Since the codec went direct (2026-11), the numbers are in the same league as
-generated code rather than 6x behind it: on the 2.5 KB and 75 KB tiers the
-struct codec matches or beats `protoc --cpp_out` (encode 1.11x, decode 1.20x
-on 75 KB), and it is ~1.7x slower on the 136 B / 174 B tiers, where generated
-straight-line code wins because it has no per-row dispatch at all. Generated
-codecs (the plugin emitting `encode`/`decode` per message instead of tables)
-are the way to close that last gap.
+With the compiled codec the struct binding is ahead of `protoc --cpp_out`
+from the 174 B tier up, and ahead on every decode tier; only the 136 B encode
+is at parity, where generated straight-line code has so little work per field
+that the per-field dispatch is all that is left to pay. The gap grows with
+message size because `SerializeToString` walks the message twice (size, then
+write) while the struct encoder writes in one pass:
+
+| payload | op | pbwire-c (MB/s, x gen) | protoc gen (MB/s) |
+|---|---|---|---|
+| 136 B | encode | 1431.7 (0.98x) | 1464.3 |
+| 136 B | decode | 1138.7 (1.28x) | 888.0 |
+| 174 B | encode | 1466.4 (1.05x) | 1392.8 |
+| 174 B | decode | 1056.0 (1.40x) | 755.8 |
+| 2469 B | encode | 1083.6 (1.22x) | 884.7 |
+| 2469 B | decode | 810.6 (2.10x) | 386.5 |
+| 74913 B | encode | 1318.8 (1.47x) | 898.2 |
+| 74913 B | decode | 910.3 (2.42x) | 375.5 |
+
+The harness also prints a `pbwire-c1` block: the one-shot API, which compiles
+the layout on every call and mallocs every value. It is 3-5x slower, which is
+the price of that convenience — the point of the extra block is to keep the
+trade-off visible rather than hidden.

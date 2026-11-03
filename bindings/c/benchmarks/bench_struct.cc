@@ -1,7 +1,7 @@
-/* C binding benchmark: generated structs (`pbw_struct_*` over the pinned
- * `bindings/c/tests/gen/matrix3.h`) against the official C++ generated code
- * (`protoc --cpp_out` from the same `matrix3.proto`) on the same Scalars3
- * message.
+/* C binding benchmark: generated structs (the compiled `pbw_struct_codec`
+ * over the pinned `bindings/c/tests/gen/matrix3.h`) against the official C++
+ * generated code (`protoc --cpp_out` from the same `matrix3.proto`) on the
+ * same Scalars3 message.
  *
  * The four cases are the standard sizes from BENCHMARKS.md: small / medium /
  * large / xlarge scale the repeated fields x0 / x1 / x100 / x3000, so xlarge
@@ -174,14 +174,28 @@ check_parity(pbw_schema *schema, int n)
     std::string want;
     uint8_t *got = nullptr;
     size_t got_len = 0;
+    pbw_struct_codec *codec = nullptr;
 
     fill_struct(d, n);
     fill_gen(&gen, n);
     (void)gen.SerializeToString(&want);
-    if (structtest_scalars3_encode(schema, &d.s, &got, &got_len) != PBW_OK) {
-        fail("struct encode of Scalars3");
+    if (pbw_struct_codec_init(&codec, schema, "structtest.Scalars3",
+                              structtest_scalars3_fields, 22) != PBW_OK) {
+        fail("struct codec init");
         free_struct(d);
         return;
+    }
+    {
+        pbw_struct_buf buf = {nullptr, 0, 0};
+
+        if (pbw_struct_codec_encode(codec, &d.s, &buf) != PBW_OK) {
+            fail("struct encode of Scalars3");
+            pbw_struct_codec_free(codec);
+            free_struct(d);
+            return;
+        }
+        got = buf.data;
+        got_len = buf.len;
     }
     if (got_len != want.size() || std::memcmp(got, want.data(), got_len) != 0) {
         char msg[128];
@@ -201,31 +215,37 @@ check_parity(pbw_schema *schema, int n)
         std::printf("OK   struct encoding parity, x%d (%zu bytes)\n", n,
                     want.size());
     }
-    pbw_free(got);
+    {
+        pbw_struct_buf encoded = {got, got_len, 0};
 
-    /* Decode the reference bytes and re-encode: byte identical. */
+        pbw_struct_buf_free(&encoded);
+    }
+
+    /* Decode the reference bytes into an arena and re-encode: byte identical.
+     * Reusing one arena and one buffer is the steady state a hot loop runs. */
     {
         structtest_scalars3_t out;
-        uint8_t *back = nullptr;
-        size_t back_len = 0;
+        pbw_struct_arena *arena = nullptr;
+        pbw_struct_buf back = {nullptr, 0, 0};
 
-        if (structtest_scalars3_decode(schema,
-                                       reinterpret_cast<const uint8_t *>(want.data()),
-                                       want.size(), &out) != PBW_OK) {
+        std::memset(&out, 0, sizeof(out));
+        if (pbw_struct_codec_decode(
+                codec, reinterpret_cast<const uint8_t *>(want.data()),
+                want.size(), &arena, &out) != PBW_OK) {
             fail("struct decode of libprotobuf output");
-        } else if (structtest_scalars3_encode(schema, &out, &back, &back_len) !=
-                       PBW_OK ||
-                   back_len != want.size() ||
-                   std::memcmp(back, want.data(), back_len) != 0) {
+        } else if (pbw_struct_codec_encode(codec, &out, &back) != PBW_OK ||
+                   back.len != want.size() ||
+                   std::memcmp(back.data, want.data(), back.len) != 0) {
             fail("struct decode->encode is not byte identical");
         } else {
             std::printf("OK   struct decode(libprotobuf) -> encode identical, "
                         "x%d\n",
                         n);
         }
-        pbw_free(back);
-        structtest_scalars3_free(&out);
+        pbw_struct_buf_free(&back);
+        pbw_struct_arena_free(arena);
     }
+    pbw_struct_codec_free(codec);
     free_struct(d);
 }
 
@@ -237,6 +257,16 @@ struct Row {
 };
 
 void
+print_rows(const std::vector<Row> &rows)
+{
+    std::printf("  %-9s %-7s %10s %10s\n", "impl", "op", "ns/op", "MB/s");
+    for (const Row &r : rows) {
+        double mbps = r.ns > 0 ? (static_cast<double>(r.bytes) / r.ns) * 1e3 : 0;
+        std::printf("  %-9s %-7s %10.1f %10.1f\n", r.impl, r.op, r.ns, mbps);
+    }
+}
+
+void
 bench_case(pbw_schema *schema, const char *label, int n, int iterations)
 {
     CaseData d;
@@ -244,38 +274,45 @@ bench_case(pbw_schema *schema, const char *label, int n, int iterations)
     std::string ref;
     std::string scratch;
     std::vector<Row> rows;
+    pbw_struct_codec *codec = nullptr;
+    pbw_struct_buf out = {nullptr, 0, 0};
+    pbw_struct_arena *arena = nullptr;
+    structtest_scalars3_t decoded;
+    int warmup = iterations / 10;
 
     fill_struct(d, n);
     fill_gen(&gen_msg, n);
     (void)gen_msg.SerializeToString(&ref);
+    if (pbw_struct_codec_init(&codec, schema, "structtest.Scalars3",
+                              structtest_scalars3_fields, 22) != PBW_OK) {
+        fail("struct codec init");
+        free_struct(d);
+        return;
+    }
 
+    /* Steady state: one compiled codec, one output buffer, one decode arena,
+     * so neither path allocates per message (the generated side reuses its
+     * std::string the same way). */
     rows.push_back({"pbwire-c", "encode", time_it([&] {
-                        uint8_t *buf = nullptr;
-                        size_t len = 0;
-                        (void)structtest_scalars3_encode(schema, &d.s, &buf,
-                                                         &len);
-                        pbw_free(buf);
+                        (void)pbw_struct_codec_encode(codec, &d.s, &out);
                     },
-                                                  iterations, iterations / 10),
+                                                  iterations, warmup),
                     ref.size()});
     rows.push_back({"pb gen", "encode", time_it([&] {
                         scratch.clear();
                         (void)gen_msg.SerializeToString(&scratch);
                     },
-                                                iterations, iterations / 10),
+                                                iterations, warmup),
                     ref.size()});
-    /* Decode sinks the status plus the mandatory release: the struct decoder
-     * allocates into the output, so freeing is part of every decode. */
     rows.push_back({"pbwire-c", "decode", time_it([&] {
-                        structtest_scalars3_t out;
-                        if (structtest_scalars3_decode(
-                                schema,
+                        std::memset(&decoded, 0, sizeof(decoded));
+                        if (pbw_struct_codec_decode(
+                                codec,
                                 reinterpret_cast<const uint8_t *>(ref.data()),
-                                ref.size(), &out) != PBW_OK)
+                                ref.size(), &arena, &decoded) != PBW_OK)
                             failures++;
-                        structtest_scalars3_free(&out);
                     },
-                                                  iterations, iterations / 10),
+                                                  iterations, warmup),
                     ref.size()});
     rows.push_back({"pb gen", "decode", time_it([&] {
                         structtest::Scalars3 m;
@@ -283,16 +320,42 @@ bench_case(pbw_schema *schema, const char *label, int n, int iterations)
                                               static_cast<int>(ref.size())))
                             failures++;
                     },
-                                                iterations, iterations / 10),
+                                                iterations, warmup),
                     ref.size()});
 
     std::printf("\n%s: %zu bytes, %d iterations (repeat field x%d)\n", label,
                 ref.size(), iterations, n);
-    std::printf("  %-9s %-7s %10s %10s\n", "impl", "op", "ns/op", "MB/s");
-    for (const Row &r : rows) {
-        double mbps = r.ns > 0 ? (static_cast<double>(r.bytes) / r.ns) * 1e3 : 0;
-        std::printf("  %-9s %-7s %10.1f %10.1f\n", r.impl, r.op, r.ns, mbps);
-    }
+    print_rows(rows);
+
+    /* The one-shot API compiles the layout on every call; kept visible so a
+     * regression there is not mistaken for a codec regression. */
+    rows.clear();
+    rows.push_back({"pbwire-c1", "encode", time_it([&] {
+                        uint8_t *buf = nullptr;
+                        size_t len = 0;
+                        (void)structtest_scalars3_encode(schema, &d.s, &buf,
+                                                         &len);
+                        pbw_free(buf);
+                    },
+                                                   iterations, warmup),
+                    ref.size()});
+    rows.push_back({"pbwire-c1", "decode", time_it([&] {
+                        structtest_scalars3_t m;
+                        if (structtest_scalars3_decode(
+                                schema,
+                                reinterpret_cast<const uint8_t *>(ref.data()),
+                                ref.size(), &m) != PBW_OK)
+                            failures++;
+                        structtest_scalars3_free(&m);
+                    },
+                                                   iterations, warmup),
+                    ref.size()});
+    std::printf("  one-shot API (per-call layout compile + per-message alloc):\n");
+    print_rows(rows);
+
+    pbw_struct_buf_free(&out);
+    pbw_struct_arena_free(arena);
+    pbw_struct_codec_free(codec);
     free_struct(d);
 }
 
