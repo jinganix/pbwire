@@ -39,6 +39,9 @@ coverage/
 *.tsbuildinfo
 bench/gen/
 bindings/c/benchmarks/gen/
+bindings/python/benchmarks/gen/
+__pycache__/
+*.pyc
 *.log
 *.log.*
 .logs/

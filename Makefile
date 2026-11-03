@@ -175,7 +175,7 @@ BENCH_C_BIN := build/bench_struct_c
 
 CFILES := include/*.h include/pbwire-protoc/*.h src/*.c src/*.h \
 	src/protoc/*.cc tests/*.c tests/protoc/*.cc bench/bench.cc conformance/testee.c \
-	bindings/c/benchmarks/*.cc \
+	bindings/c/benchmarks/*.cc bindings/python/csrc/*.c \
 	bindings/c/runtime/*.c bindings/c/runtime/*.h \
 	bindings/c/example/*.c bindings/c/tests/*.c bindings/cpp/example/*.cc \
 	bindings/erlang/c_src/*.c bindings/erlang/c_src/*.h \
@@ -218,10 +218,41 @@ $(BENCH_C_BIN): bindings/c/benchmarks/bench_struct.cc $(BENCH_C_PB) $(CPP_RUNTIM
 bench-c: $(BENCH_C_BIN)
 	./$(BENCH_C_BIN) bench
 
+# Python binding (bindings/python): cffi in ABI mode, no generated code.
+# The shared library is required; the bulk helpers below are an optional fast
+# path (without them the binding falls back to one cffi call per value).
+PY ?= python3
+ifeq ($(UNAME_S),Darwin)
+SHIM := build/libpbwirepy.dylib
+SHIM_FLAGS := -dynamiclib -install_name @rpath/libpbwirepy.dylib \
+	-Wl,-rpath,@loader_path
+else
+SHIM := build/libpbwirepy.so
+SHIM_FLAGS := -shared -Wl,-soname,libpbwirepy.so -Wl,-rpath,'$$ORIGIN'
+endif
+
+$(SHIM): bindings/python/csrc/pbw_py.c $(SHLIB) | build
+	$(CC) $(CFLAGS) $(CPPFLAGS) $(SHIM_FLAGS) -o $@ $< -Lbuild -lpbwire
+
+python-bind: $(SHIM)
+
+python-test: python-bind
+	$(PY) bindings/python/tests/test_pbwire.py
+
+# The benchmark compares against the official Python runtime, so it needs
+# protoc --python_out plus `pip install protobuf cffi`.
+bindings/python/benchmarks/gen/matrix3_pb2.py: bindings/c/tests/data/matrix3.proto
+	@mkdir -p bindings/python/benchmarks/gen
+	$(PROTOC) -Ibindings/c/tests/data --python_out=bindings/python/benchmarks/gen $<
+
+python-bench: python-bind bindings/python/benchmarks/gen/matrix3_pb2.py
+	$(PY) bindings/python/benchmarks/bench.py bench
+
 difftest: $(BENCH_BIN)
 	./$(BENCH_BIN) difftest
 
 clean:
 	rm -rf build bench/gen
 
-.PHONY: all test examples format format-check bench bench-c erlang-bench difftest conformance desc-fixture clean
+.PHONY: all test examples format format-check bench bench-c erlang-bench \
+	python-bind python-test python-bench difftest conformance desc-fixture clean
