@@ -174,6 +174,23 @@ pbw_message_get(const pbw_message *msg, uint32_t number)
     return pbw_msg_present(msg, index) ? &msg->values[index] : NULL;
 }
 
+pbw_value *
+pbw_message_get_field(const pbw_message *msg, const pbw_field *field)
+{
+    const pbw_field *base;
+    size_t index;
+
+    if (msg == NULL || msg->desc == NULL || field == NULL) {
+        return NULL;
+    }
+    base = msg->desc->fields;
+    if (field < base || field >= base + msg->desc->field_count) {
+        return NULL;
+    }
+    index = (size_t)(field - base);
+    return pbw_msg_present(msg, index) ? &msg->values[index] : NULL;
+}
+
 static int
 is_initialized(const pbw_message *msg, uint32_t depth)
 {
@@ -221,6 +238,26 @@ int
 pbw_message_is_initialized(const pbw_message *msg)
 {
     return is_initialized(msg, 0);
+}
+
+size_t
+pbw_message_present_list(const pbw_message *msg, uint32_t *fnums,
+                         const pbw_value **values, size_t cap)
+{
+    size_t i;
+    size_t n = 0;
+
+    if (msg == NULL || msg->desc == NULL || fnums == NULL || values == NULL) {
+        return 0;
+    }
+    for (i = 0; i < msg->desc->field_count && n < cap; i++) {
+        if (pbw_msg_present(msg, i)) {
+            fnums[n] = msg->desc->fields[i].number;
+            values[n] = &msg->values[i];
+            n++;
+        }
+    }
+    return n;
 }
 
 size_t
@@ -387,7 +424,7 @@ pbw_value_init_bytes(pbw_value *value, pbw_arena *arena, const void *data,
     if (value->as.bytes.data == NULL) {
         return 0;
     }
-    if (len > 0) {
+    if (len > 0 && data != NULL) {
         memcpy(value->as.bytes.data, data, len);
     }
     value->as.bytes.data[len] = '\0';
@@ -708,7 +745,12 @@ pbw_message_store(pbw_message *msg, const pbw_field *field, pbw_value *value)
         return 1;
     }
     pbw_message_put(msg, value_field_index(msg, field), value);
-    free(value);
+    /* put() copied the payload into the slot (shared, not cloned): release
+     * only the wrapper. Arena wrappers die with their arena, which is what
+     * makes arena-built trees work. */
+    if ((value->flags & (PBW_VF_EMBEDDED | PBW_VF_ARENA)) == 0) {
+        free(value);
+    }
     return 1;
 }
 
@@ -757,6 +799,30 @@ pbw_message_clear(pbw_message *msg, uint32_t number)
     }
 }
 
+size_t
+pbw_message_unknown_len(const pbw_message *msg)
+{
+    return msg == NULL ? 0 : msg->unknown_len;
+}
+
+const uint8_t *
+pbw_message_unknown_bytes(const pbw_message *msg)
+{
+    return msg == NULL ? NULL : msg->unknown;
+}
+
+pbw_status
+pbw_message_add_unknown_bytes(pbw_message *msg, const void *data, size_t len)
+{
+    if (msg == NULL || (data == NULL && len > 0)) {
+        return PBW_ERR_INVALID;
+    }
+    if (msg->arena != NULL && msg->arena->readonly) {
+        return PBW_ERR_INVALID;
+    }
+    return (pbw_status)pbw_message_add_unknown(msg, (const uint8_t *)data, len);
+}
+
 pbw_status
 pbw_message_set(pbw_message *msg, uint32_t number, pbw_value *value)
 {
@@ -770,9 +836,28 @@ pbw_message_set(pbw_message *msg, uint32_t number, pbw_value *value)
          * outlive the arena that owns its siblings. */
         return PBW_ERR_INVALID;
     }
-    field = pbw_descriptor_find_field(msg->desc, number);
+    field = msg->desc != NULL ? pbw_descriptor_find_field(msg->desc, number) : NULL;
     if (field == NULL) {
         return PBW_ERR_NOT_FOUND;
+    }
+    return pbw_message_set_field(msg, field, value);
+}
+
+pbw_status
+pbw_message_set_field(pbw_message *msg, const pbw_field *field, pbw_value *value)
+{
+    const pbw_field *base;
+
+    if (msg == NULL || value == NULL || (value->flags & PBW_VF_EMBEDDED) != 0 ||
+        msg->desc == NULL || field == NULL) {
+        return PBW_ERR_INVALID;
+    }
+    if (msg->arena != NULL && msg->arena->readonly) {
+        return PBW_ERR_INVALID;
+    }
+    base = msg->desc->fields;
+    if (field < base || field >= base + msg->desc->field_count) {
+        return PBW_ERR_INVALID;
     }
     if (!value_matches(field, value)) {
         return PBW_ERR_TYPE;
@@ -807,11 +892,11 @@ pbw_message_set_message(pbw_message *msg, uint32_t number)
             return msg->values[index].as.msg;
         }
     }
-    nested = pbw_message_new(field->sub);
+    nested = pbw_message_new_a(msg->arena, field->sub);
     if (nested == NULL) {
         return NULL;
     }
-    value = pbw_value_new_message(nested);
+    value = pbw_value_new_message_a(msg->arena, nested);
     if (value == NULL) {
         pbw_message_free(nested);
         return NULL;

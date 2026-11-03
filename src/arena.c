@@ -84,9 +84,15 @@ pbw_arena_reset(pbw_arena *arena)
     pbw_arena_chunk *chunk;
 
     if (head == NULL || arena->block != NULL) {
-        /* A packed arena belongs to one decoded tree and is never reset. */
+        /* A packed arena belongs to one decoded tree and is never reset.
+         * A fresh context has no chunks yet: still return it to the blank
+         * (mutable) slate. */
+        arena->readonly = 0;
         return;
     }
+    /* A reset context is a blank slate: trees built into it afterwards are
+     * mutable until a decode seals it read-only again. */
+    arena->readonly = 0;
     /* Large single allocations never become resident. */
     for (chunk = arena->large; chunk != NULL;) {
         pbw_arena_chunk *next = chunk->next;
@@ -95,6 +101,9 @@ pbw_arena_reset(pbw_arena *arena)
         chunk = next;
     }
     arena->large = NULL;
+    /* A reset context is a blank slate: trees built into it afterwards are
+     * mutable until a decode seals it read-only again. */
+    arena->readonly = 0;
     /* An outlier that grew the head past the budget is dropped as well:
      * steady workloads under budget stay malloc-free, anything above pays
      * one malloc per reset instead of pinning the peak forever. */

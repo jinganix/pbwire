@@ -20,7 +20,7 @@
 #define PBW_PREFETCH(p) ((void)0)
 #endif
 
-#define PBW_MAX_DEPTH 100
+#define PBW_MAX_DEPTH 256               /* 100 in the reference impls; 256 for the Erlang binding's 200-deep round-trips (conformance tests 20000, still rejected) */
 #define PBW_MAX_FIELD_NUMBER 536870911u /* 2^29 - 1 */
 #define PBW_FNUM_MAP_LIMIT 512
 

@@ -55,6 +55,11 @@ test: $(TEST_BIN) $(THREAD_BIN) $(DESC_BIN)
 	./$(THREAD_BIN)
 	./$(DESC_BIN)
 
+# Erlang binding (bindings/erlang): OTP app with its own rebar3 build.
+# Needs Erlang/OTP (CI installs it); rebar3 is bootstrapped by its Makefile.
+erlang-test:
+	$(MAKE) -C bindings/erlang tests c-tests
+
 $(DESC_BIN): tests/test_descriptor.c $(TEST_HDRS) $(LIB) | build
 	$(CC) $(CFLAGS) $(CPPFLAGS) -o $@ $< $(LIB)
 
@@ -131,7 +136,10 @@ BENCH_PB := bench/gen/msg.pb.cc bench/gen/msg2.pb.cc
 BENCH_DESC := bench/gen/msg.pb
 
 CFILES := include/*.h include/pbwire-protoc/*.h src/*.c src/*.h \
-	src/protoc/*.cc tests/*.c tests/protoc/*.cc bench/bench.cc conformance/testee.c
+	src/protoc/*.cc tests/*.c tests/protoc/*.cc bench/bench.cc conformance/testee.c \
+	bindings/erlang/c_src/*.c bindings/erlang/c_src/*.h \
+	bindings/erlang/c_src_tests/*.c bindings/erlang/c_src_tests/*.h \
+	bindings/erlang/c_src_tests/stub/*.c bindings/erlang/c_src_tests/stub/*.h
 
 format:
 	clang-format -i $(CFILES)

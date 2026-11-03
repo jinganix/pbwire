@@ -67,7 +67,7 @@ pbw_free(buf);
 | Runtime dependencies | none (optional importer `pbwire-protoc` needs libprotobuf, C++17) |
 | Not implemented | RPC, MessageSet decoding into extensions |
 | Memory model | one allocation per decoded tree, or one reusable arena `pbw_ctx` per thread |
-| Limits | nesting depth 100, field numbers up to 2^29-1 |
+| Limits | nesting depth 256, field numbers up to 2^29-1 |
 | Platforms | Linux, macOS, anywhere with a C99 compiler |
 | License | Apache-2.0 |
 
@@ -266,7 +266,8 @@ few scheduler threads.
 
 `pbw_pool` is a bounded freelist of contexts for short-lived workers: `pbw_pool_acquire` instead of
 `pbw_ctx_new`, `pbw_pool_release` instead of reset + free. One pool per worker thread (it holds no
-lock); `pbw_pool_idle` reports the idle count for your own logging.
+lock); `pbw_pool_idle` reports the idle count for your own logging. `pbw_ctx_set_user`/`pbw_ctx_user`
+carry one opaque binding pointer per context (untouched by resets and pooling).
 
 ### Stream, bound and sort
 
@@ -325,7 +326,7 @@ everything else encodes exactly as `pbw_encode` writes it.
   the known fields, in the order they were read. A proxy or gateway can therefore pass through
   fields it was never taught about. The cost is one buffer per message that actually contains
   unknowns.
-- **Nesting is capped at 100 levels** in both directions.
+- **Nesting is capped at 256 levels** in both directions.
 
 ## Scope and boundaries
 
@@ -369,6 +370,7 @@ src/stream.c                delimited framing reader, encode sink, deterministic
 src/ctx.c                   pbw_ctx: arena + encode buffer reuse
 bindings/python/            cffi binding (ABI mode, stdlib-free smoke cover)
 bindings/go/pbwire/        cgo binding with a round-trip test
+bindings/erlang/           Erlang/OTP NIF binding (enif_protobuf, gpb-compatible, own rebar3 build)
 
 include/pbwire-protoc/      importer / descriptor set / diagnostic headers (no protobuf types)
 src/protoc/importer.cc      .proto -> FileDescriptorSet, via compiler::Importer

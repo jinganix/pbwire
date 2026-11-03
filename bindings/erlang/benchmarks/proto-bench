@@ -1,0 +1,184 @@
+#! /usr/bin/env escript
+%% -*- erlang -*-
+%%! -pa ../_build/test/lib/gpb/ebin -pa ../_build/default/lib/enif_protobuf/ebin -pa tmp/
+
+%%% Copyright (C) 2011  Tomas Abrahamsson
+%%%
+%%% Benchmark driver for gpb and enif_protobuf. Based on gpb/benchmarks/proto-bench.
+
+-mode(compile).
+-export([main/1]).
+
+main(Args) ->
+    {Backend, Rest} = parse_backend(Args),
+    run_tests(Backend, Rest).
+
+parse_backend(["--backend", BackendStr | Rest]) ->
+    case BackendStr of
+        "gpb" -> {gpb, Rest};
+        "epb" -> {epb, Rest};
+        Other -> usage(Other)
+    end;
+parse_backend(_Args) ->
+    usage(missing).
+
+usage(What) ->
+  io:format(standard_error,
+            "Usage: proto-bench --backend gpb|epb [options] MODULE MSG FILE ...~n"
+            "  Problem: ~p~n", [What]),
+  halt(2).
+
+run_tests(Backend, ["--echo", Str | Rest]) ->
+    io:format("~s~n", [Str]),
+    run_tests(Backend, Rest);
+run_tests(Backend, [MsgModuleStr, MsgNameStr | MsgFileAndRest]) ->
+    MsgModule = list_to_atom(MsgModuleStr),
+    MsgName = list_to_atom(MsgNameStr),
+    {MsgFiles, Rest} = pickup_msg_file_or_files(MsgFileAndRest),
+    MsgBins = [begin
+                   {ok, B} = file:read_file(MsgFile),
+                   B
+               end || MsgFile <- MsgFiles],
+    DataSize = iolist_size(MsgBins),
+    EMsgName = case encode_needs_msgname(MsgModule) of
+                   true -> MsgName;
+                   false -> undefined
+               end,
+  setup_backend(Backend, MsgModule),
+  Decoder = fun() -> decode_bins(Backend, MsgBins, MsgModule, MsgName) end,
+  Msgs = decode_for_encode_samples(Backend, MsgBins, MsgModule, MsgName),
+  Encoder = fun() -> encode_msgs(Backend, Msgs, MsgModule, EMsgName) end,
+  maybe_warn_skewed_results(),
+  io:format("Benchmarking ~s ~s (~s) with file ~s~n",
+            [backend_label(Backend), MsgModule, MsgName,
+             string:join(MsgFiles, ",")]),
+  run_test("Serialize to binary", DataSize, Encoder),
+  run_test("Deserialize from binary", DataSize, Decoder),
+  io:format("~n"),
+  run_tests(Backend, Rest);
+run_tests(_Backend, []) ->
+    ok.
+
+backend_label(gpb) -> "gpb";
+backend_label(epb) -> "enif_protobuf".
+
+setup_backend(epb, MsgModule) ->
+    ok = enif_protobuf:load_cache(MsgModule:get_msg_defs());
+setup_backend(gpb, _MsgModule) ->
+    ok.
+
+decode_for_encode_samples(gpb, MsgBins, MsgModule, MsgName) ->
+    [MsgModule:decode_msg(Bin, MsgName) || Bin <- MsgBins];
+decode_for_encode_samples(epb, MsgBins, MsgModule, MsgName) ->
+    [MsgModule:decode_msg(Bin, MsgName) || Bin <- MsgBins].
+
+encode_needs_msgname(MsgModule) ->
+    Exports = MsgModule:module_info(exports),
+    case lists:keyfind(encode_msg, 1, Exports) of
+        {encode_msg, 1} -> false;
+        {encode_msg, 2} -> true
+    end.
+
+pickup_msg_file_or_files(["--multi" | MsgFilesAndRest]) ->
+    EndMarker = "--end-multi",
+    {MsgFiles, [EndMarker | Rest]} =
+        lists:splitwith(fun(S) -> S /= EndMarker end, MsgFilesAndRest),
+    {MsgFiles, Rest};
+pickup_msg_file_or_files([MsgFile | Rest]) ->
+    {[MsgFile], Rest}.
+
+decode_bins(gpb, [MsgBin | Rest], MsgModule, MsgName) ->
+    MsgModule:decode_msg(MsgBin, MsgName),
+    decode_bins(gpb, Rest, MsgModule, MsgName);
+decode_bins(gpb, [], _, _) ->
+    ok;
+decode_bins(epb, [MsgBin | Rest], _MsgModule, MsgName) ->
+    enif_protobuf:decode(MsgBin, MsgName),
+    decode_bins(epb, Rest, _MsgModule, MsgName);
+decode_bins(epb, [], _, _) ->
+    ok.
+
+encode_msgs(gpb, [Msg | Rest], MsgModule, undefined) ->
+    MsgModule:encode_msg(Msg),
+    encode_msgs(gpb, Rest, MsgModule, undefined);
+encode_msgs(gpb, [Msg | Rest], MsgModule, MsgName) ->
+    MsgModule:encode_msg(Msg, MsgName),
+    encode_msgs(gpb, Rest, MsgModule, MsgName);
+encode_msgs(gpb, [], _, _) ->
+    ok;
+encode_msgs(epb, [Msg | Rest], _MsgModule, undefined) ->
+    enif_protobuf:encode(Msg),
+    encode_msgs(epb, Rest, _MsgModule, undefined);
+encode_msgs(epb, [Msg | Rest], MsgModule, _MsgName) ->
+    enif_protobuf:encode_msg(Msg, MsgModule:get_msg_defs()),
+    encode_msgs(epb, Rest, MsgModule, _MsgName);
+encode_msgs(epb, [], _, _) ->
+    ok.
+
+maybe_warn_skewed_results() ->
+    ok.
+
+run_test(Description, DataSize, Action) ->
+    P = spawn_opt(
+          fun() ->
+                  run_test_aux(Description, DataSize, Action)
+          end,
+          [{min_heap_size, 10000000},
+           {min_bin_vheap_size, 10000000}]),
+    M = monitor(process, P),
+    receive
+        {'DOWN', M, process, P, normal} ->
+            ok;
+        {'DOWN', M, process, P, Other} ->
+            error({aux_died, Other})
+    end.
+
+run_test_aux(Description, DataSize, Action) ->
+    MinSampleTime = sample_time_min(),
+    TargetTime = sample_time_target(),
+    {Elapsed, NumIterations} = iterate_until_elapsed(MinSampleTime, Action),
+    TargetNumIterations = round((TargetTime / Elapsed) * NumIterations),
+    Elapsed2 = time_action(TargetNumIterations, Action),
+    io:format("~s: ~w iterations in ~.3fs; ~.2fMB/s~n",
+              [Description, TargetNumIterations, Elapsed2,
+               (TargetNumIterations * DataSize) / (Elapsed2 * 1024 * 1024)]),
+    ok.
+
+sample_time_min() ->
+    env_int("BENCH_MIN_SAMPLE_TIME", 2).
+
+sample_time_target() ->
+    env_int("BENCH_TARGET_TIME", 30).
+
+env_int(Name, Default) ->
+    case os:getenv(Name) of
+        false -> Default;
+        Val -> list_to_integer(Val)
+    end.
+
+iterate_until_elapsed(MaxDuration, Action) ->
+    iterate_until_elapsed_2(1, MaxDuration, Action).
+
+iterate_until_elapsed_2(NumIterations, MaxDuration, Action) ->
+    case time_action(NumIterations, Action) of
+        Elapsed when Elapsed < MaxDuration ->
+            iterate_until_elapsed_2(NumIterations * 2, MaxDuration, Action);
+        Elapsed when Elapsed >= MaxDuration ->
+            {Elapsed, NumIterations}
+    end.
+
+time_action(NumIterations, Action) ->
+    garbage_collect(),
+    T0 = erlang:monotonic_time(),
+    iterate_action(NumIterations, Action),
+    T1 = erlang:monotonic_time(),
+    to_seconds(T1 - T0, native).
+
+to_seconds(Time, InUnit) ->
+    erlang:convert_time_unit(Time, InUnit, microsecond) / 1000000.
+
+iterate_action(N, Action) when N > 0 ->
+    Action(),
+    iterate_action(N - 1, Action);
+iterate_action(0, _Action) ->
+    ok.

@@ -5,6 +5,7 @@
 ```bash
 make          # build build/libpbwire.a
 make test     # build and run the self-checks (core + threads + descriptor set)
+make erlang-test # Erlang binding: EUnit + NIF C tests (needs OTP, rebar3 bootstrapped)
 make format   # clang-format (>= 19) over include/, src/, tests/, bench/
 make format-check
 
@@ -58,6 +59,7 @@ Run `make test` after any C change; run `make format` after touching `include/`,
 | `tests/data/*.proto` | Fixtures the pinned descriptor set was generated from |
 | `tests/protoc/` | Importer self-check and its `.proto` fixtures (CMake only) |
 | `bench/bench.cc` | Differential test and benchmark against libprotobuf C++ |
+| `bindings/erlang/` | Erlang/OTP NIF binding (`enif_protobuf` app, own rebar3 build, see its AGENTS.md) |
 | `bench/msg.proto` | proto3 message used by both; `bench/gen/` is generated, never committed |
 | `bench/msg2.proto` | proto2 counterpart: explicit presence, groups, required fields, closed enums, extensions |
 | `scripts/` | Gate scripts: `check.sh` (hooks), `validate-commit-msg.sh`, `setup-git-hooks.sh` |

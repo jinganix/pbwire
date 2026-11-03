@@ -66,6 +66,7 @@ C++ runtime), `make bench`. Optional, needs a protobuf v36.2 source checkout:
 - `pbw_ctx *pbw_ctx_new(void)`: one arena + encode buffer per thread; `pbw_decode_ctx`,
   `pbw_encode_ctx`, `pbw_ctx_reset` (frees the whole tree at once), `pbw_ctx_used`, `pbw_ctx_free`,
   `pbw_ctx_set_retain_cap` (resident budget across resets, default 1 MiB, 0 keeps nothing),
+  `pbw_ctx_set_user`/`pbw_ctx_user` (one opaque binding pointer per context, kept across resets),
   `pbw_pool_*` (bounded freelist: acquire/release/idle, one pool per worker, no locks).
 - `pbw_limits { max_bytes, max_depth }` (0 = default) with `pbw_decode_limits` and
   `pbw_decode_ctx_limits`; over-large `max_depth` clamps to `PBW_MAX_DEPTH`.
@@ -87,7 +88,7 @@ C++ runtime), `make bench`. Optional, needs a protobuf v36.2 source checkout:
   `pbw_message_is_initialized()`; `pbw_encode()` writes the tree as it stands, like the reference
   serializer.
 - Wire data is untrusted input: lengths bounds-checked, field number 0 and wire types above 5
-  rejected, nesting capped at 100 (`PBW_MAX_DEPTH`), every failure returns a `pbw_status`.
+  rejected, nesting capped at 256 (`PBW_MAX_DEPTH`), every failure returns a `pbw_status`.
 - Descriptors are trusted input; loading adversarial descriptor sets is out of scope.
 - Dynamic schema loading: `pbw_descriptor_set_load()` reads a standard `FileDescriptorSet` produced by
   `protoc --include_imports --descriptor_set_out`, `buf build -o`, or the optional `pbwire-protoc`

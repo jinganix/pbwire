@@ -190,8 +190,18 @@ const pbw_descriptor *pbw_message_descriptor(const pbw_message *msg);
 /* Present value of a field, or NULL. Repeated fields expose a PBW_VALUE_LIST.
  */
 pbw_value *pbw_message_get(const pbw_message *msg, uint32_t number);
+/* Same as pbw_message_get() for an already-resolved field of the message's
+ * descriptor (NULL when it belongs elsewhere); skips the number lookup for
+ * hot reflection loops that cached the pointer. */
+pbw_value *pbw_message_get_field(const pbw_message *msg,
+                                 const pbw_field *field);
 /* Number of fields with a value. */
 size_t pbw_message_field_count(const pbw_message *msg);
+/* Present fields in field-index order: fills up to cap (fnum, value) pairs
+ * and returns how many were written. Lets hot reflection loops visit only
+ * what the wire carried instead of probing every schema field. */
+size_t pbw_message_present_list(const pbw_message *msg, uint32_t *fnums,
+                                const pbw_value **values, size_t cap);
 /* Reflection over present fields; returns NULL past the end. */
 const pbw_field *pbw_message_field_at(const pbw_message *msg, size_t index,
                                       pbw_value **value);
@@ -204,13 +214,35 @@ int pbw_message_is_initialized(const pbw_message *msg);
 /* Drop a field value (and, for a oneof, the group case). */
 void pbw_message_clear(pbw_message *msg, uint32_t number);
 
+/* Unknown fields kept from decoding, as raw wire bytes (each item is its
+ * tag followed by its payload), in wire order. Empty when nothing unknown
+ * was seen. The bytes stay owned by the message. */
+size_t pbw_message_unknown_len(const pbw_message *msg);
+const uint8_t *pbw_message_unknown_bytes(const pbw_message *msg);
+/* Append raw unknown-field bytes (tag + payload per item, as produced by
+ * pbw_message_unknown_bytes). Fails on context-owned read-only messages. */
+pbw_status pbw_message_add_unknown_bytes(pbw_message *msg, const void *data,
+                                         size_t len);
+
 /* Store a value: appends for repeated fields, replaces otherwise. Takes
  * ownership of value on success only. Values owned by another message (see
  * pbw_message_get()) are rejected with PBW_ERR_INVALID; build a fresh value
  * instead. */
 pbw_status pbw_message_set(pbw_message *msg, uint32_t number, pbw_value *value);
+/* Same as pbw_message_set() for an already-resolved field of the message's
+ * descriptor (PBW_ERR_INVALID when it belongs elsewhere); skips the number
+ * lookup for hot build loops that cached the pointer. */
+pbw_status pbw_message_set_field(pbw_message *msg, const pbw_field *field,
+                                 pbw_value *value);
 /* Create (or return the existing) nested message value for a MESSAGE field. */
 pbw_message *pbw_message_set_message(pbw_message *msg, uint32_t number);
+/* Build a message tree in a context's arena for pbw_encode_ctx(): steady use
+ * stops calling malloc after the first few messages. The tree is mutable
+ * until the next pbw_decode_ctx() on the same context seals it; reset the
+ * context before each build or decode. Values are built with the
+ * pbw_value_new_*_ctx() constructors below so every payload lives in the
+ * same arena and dies with the reset. */
+pbw_message *pbw_message_new_ctx(pbw_ctx *ctx, const pbw_descriptor *desc);
 
 /* ----------------------------------------------------------------- value */
 
@@ -222,6 +254,15 @@ pbw_value *pbw_value_new_double(double value);
 pbw_value *pbw_value_new_bytes(const void *data, size_t len);
 pbw_value *pbw_value_new_string(const char *str);
 pbw_value *pbw_value_new_message(pbw_message *msg); /* takes ownership of msg */
+/* Arena twins of the constructors above, for trees built with
+ * pbw_message_new_ctx(): payload bytes are copied into the context so the
+ * tree never points at caller memory (NULL data leaves the buffer
+ * uninitialized for the caller to fill, read back via
+ * pbw_value_get_bytes()). All scalars share the uint constructor
+ * (float/double/int/bool pass their bit pattern, like the plain
+ * pbw_value_new_int/bool/float/double do). */
+pbw_value *pbw_value_new_uint_ctx(pbw_ctx *ctx, uint64_t bits);
+pbw_value *pbw_value_new_bytes_ctx(pbw_ctx *ctx, const void *data, size_t len);
 /* Frees a value created by pbw_value_new*(). Values owned by a message (from
  * pbw_message_get(), pbw_value_at(), ...) are released with it: this call is a
  * no-op on them. */
@@ -257,6 +298,11 @@ pbw_value *pbw_value_at(const pbw_value *value, size_t index);
  */
 pbw_ctx *pbw_ctx_new(void);
 void pbw_ctx_free(pbw_ctx *ctx);
+/* Opaque binding slot, e.g. the language binding's per-thread state.
+ * Untouched by the core (reads, writes, reset and pooling all preserve
+ * it); freed with the context. */
+void pbw_ctx_set_user(pbw_ctx *ctx, void *user);
+void *pbw_ctx_user(const pbw_ctx *ctx);
 /* Release every allocation made since the last reset, keeping the buffers. */
 void pbw_ctx_reset(pbw_ctx *ctx);
 /* Max bytes the context keeps resident across resets (decode arena head +

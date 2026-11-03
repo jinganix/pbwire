@@ -7,6 +7,9 @@
 struct pbw_ctx {
     pbw_arena arena;
     pbw_buf out;
+    /* Opaque binding slot (Erlang NIF thread data, Go state, ...). Set once
+     * by the binding; the core never reads it, and reset/pool keep it. */
+    void *user;
 };
 
 /* Bounded freelist of contexts. Unsynchronized by design (the core stays
@@ -35,7 +38,9 @@ pbw_ctx_new(void)
         return NULL;
     }
     ctx->arena.chunk_size = 4096;
-    ctx->arena.readonly = 1;
+    /* Writable: an empty context holds nothing to protect. Decoding seals
+     * it read-only; resetting returns it to this state. */
+    ctx->arena.readonly = 0;
     ctx->arena.retain_cap = PBW_ARENA_LARGE_THRESHOLD;
     pbw_buf_init(&ctx->out);
     return ctx;
@@ -50,6 +55,20 @@ pbw_ctx_free(pbw_ctx *ctx)
     pbw_arena_free(&ctx->arena);
     pbw_buf_free(&ctx->out);
     free(ctx);
+}
+
+void
+pbw_ctx_set_user(pbw_ctx *ctx, void *user)
+{
+    if (ctx != NULL) {
+        ctx->user = user;
+    }
+}
+
+void *
+pbw_ctx_user(const pbw_ctx *ctx)
+{
+    return ctx != NULL ? ctx->user : NULL;
 }
 
 void
@@ -187,8 +206,16 @@ pbw_decode_ctx_limits(pbw_ctx *ctx, const pbw_descriptor *desc,
     if (limits != NULL && limits->max_bytes > 0 && len > limits->max_bytes) {
         return PBW_ERR_LIMIT;
     }
-    return pbw_decode_arena_lim(&ctx->arena, desc, buf, len,
-                                pbw_effective_depth(limits), out);
+    {
+        pbw_status status =
+            pbw_decode_arena_lim(&ctx->arena, desc, buf, len, pbw_effective_depth(limits), out);
+        if (status == PBW_OK) {
+            /* Seal the arena: decoded trees are read-only, later builds
+             * need a reset first. */
+            ctx->arena.readonly = 1;
+        }
+        return status;
+    }
 }
 
 pbw_status
@@ -209,4 +236,31 @@ pbw_encode_ctx(pbw_ctx *ctx, const pbw_message *msg, const uint8_t **out,
     *out = ctx->out.data != NULL ? ctx->out.data : (const uint8_t *)"";
     *len = ctx->out.len;
     return PBW_OK;
+}
+
+pbw_message *
+pbw_message_new_ctx(pbw_ctx *ctx, const pbw_descriptor *desc)
+{
+    if (ctx == NULL) {
+        return NULL;
+    }
+    return pbw_message_new_a(&ctx->arena, desc);
+}
+
+pbw_value *
+pbw_value_new_uint_ctx(pbw_ctx *ctx, uint64_t bits)
+{
+    if (ctx == NULL) {
+        return NULL;
+    }
+    return pbw_value_new_uint_a(&ctx->arena, bits);
+}
+
+pbw_value *
+pbw_value_new_bytes_ctx(pbw_ctx *ctx, const void *data, size_t len)
+{
+    if (ctx == NULL) {
+        return NULL;
+    }
+    return pbw_value_new_bytes_a(&ctx->arena, data, len);
 }

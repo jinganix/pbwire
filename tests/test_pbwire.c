@@ -12,7 +12,7 @@
 static int failures;
 
 /* Nesting limit shared by messages and legacy groups. */
-#define PBW_GROUP_DEPTH 200
+#define PBW_GROUP_DEPTH 300
 
 #define CHECK(cond)                                                                  \
     do {                                                                             \
@@ -1425,6 +1425,47 @@ test_length_patch_boundaries(pbw_schema *schema)
     }
 }
 
+/* Arena-built trees (pbw_message_new_ctx + pbw_value_new_*_ctx) encode
+ * exactly like heap trees, and a decode seals the arena read-only. */
+static void
+test_ctx_build(pbw_schema *schema)
+{
+    const pbw_descriptor *parent = desc(schema, "Parent");
+    pbw_ctx *ctx = pbw_ctx_new();
+    pbw_message *msg;
+    pbw_message *kid;
+    pbw_message *decoded = NULL;
+    const uint8_t *bytes = NULL;
+    size_t len = 0;
+
+    CHECK(ctx != NULL);
+    pbw_ctx_reset(ctx);
+    msg = pbw_message_new_ctx(ctx, parent);
+    CHECK(msg != NULL);
+    CHECK(pbw_message_set_message(msg, 1) != NULL);
+    CHECK_OK(pbw_message_set(pbw_value_get_message(pbw_message_get(msg, 1)), 2, pbw_value_new_uint_ctx(ctx, 7)));
+    CHECK_OK(pbw_message_set(msg, 2, pbw_value_new_uint_ctx(ctx, 1)));
+    CHECK_OK(pbw_message_set(msg, 2, pbw_value_new_uint_ctx(ctx, 2)));
+    kid = pbw_message_set_message(msg, 3);
+    CHECK(kid != NULL);
+    CHECK_OK(pbw_message_set(kid, 1, pbw_value_new_bytes_ctx(ctx, "x", 1)));
+    CHECK(pbw_message_is_initialized(msg));
+    CHECK_STATUS(PBW_OK, pbw_encode_ctx(ctx, msg, &bytes, &len));
+    CHECK(len > 0);
+
+    /* Same bytes survive a decode roundtrip. */
+    pbw_ctx_reset(ctx);
+    CHECK_STATUS(PBW_OK, pbw_decode_ctx(ctx, parent, bytes, len, &decoded));
+    CHECK(decoded != NULL);
+    CHECK(pbw_value_get_int32(pbw_message_get(pbw_value_get_message(pbw_message_get(decoded, 1)), 2)) == 7);
+    CHECK(pbw_value_count(pbw_message_get(decoded, 2)) == 2);
+
+    /* Sealed: building into a decoded arena fails. */
+    CHECK(pbw_message_set(decoded, 2, pbw_value_new_uint(9)) == PBW_ERR_INVALID);
+    pbw_value_free(pbw_value_new_uint(9));
+    pbw_ctx_free(ctx);
+}
+
 static void
 test_ctx(pbw_schema *schema)
 {
@@ -1440,6 +1481,13 @@ test_ctx(pbw_schema *schema)
     size_t used_before;
 
     CHECK(ctx != NULL);
+    /* Binding slot: set once, preserved by reset, freed with the context. */
+    CHECK(pbw_ctx_user(ctx) == NULL);
+    pbw_ctx_set_user(ctx, &heap_len);
+    CHECK(pbw_ctx_user(ctx) == &heap_len);
+    pbw_ctx_reset(ctx);
+    CHECK(pbw_ctx_user(ctx) == &heap_len);
+    pbw_ctx_set_user(ctx, NULL);
     CHECK_OK(pbw_message_set(msg, 1, pbw_value_new_string("abc")));
     CHECK_OK(pbw_message_set(msg, 2, pbw_value_new_int(7)));
     CHECK_OK(pbw_encode(msg, &heap_bytes, &heap_len));
@@ -1716,21 +1764,21 @@ test_depth_limit(pbw_schema *schema)
     size_t len = 0;
     int i;
 
-    for (i = 0; i < 150; i++) {
+    for (i = 0; i < 300; i++) {
         cursor = pbw_message_set_message(cursor, 1);
         CHECK(cursor != NULL);
     }
     CHECK_STATUS(PBW_ERR_LIMIT, pbw_encode(msg, &buf, &len));
     pbw_message_free(msg);
 
-    /* Build 150 levels of nested length-delimited frames by hand and decode. */
+    /* Build 300 levels of nested length-delimited frames by hand and decode. */
     {
         pbw_message *decoded = NULL;
         uint8_t *wire = NULL;
         size_t wire_len = 0;
         size_t cap = 0;
 
-        for (i = 0; i < 150; i++) {
+        for (i = 0; i < 300; i++) {
             uint8_t header[3];
             size_t header_len;
             size_t need = wire_len + 3;
@@ -3254,6 +3302,7 @@ main(void)
     test_large_payloads(schema);
     test_length_patch_boundaries(schema);
     test_ctx(schema);
+    test_ctx_build(schema);
     test_ctx_retain_cap(schema);
     test_ctx_pool(schema);
     test_errors(schema);
