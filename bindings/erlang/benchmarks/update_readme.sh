@@ -107,12 +107,13 @@ Last run: ${RUN_DATE} (standard Google benchmark messages; Erlang ${ERLANG_VERSI
 
 | Test case | epb | gpb | gpb nif |
 |-----------|-----|-----|---------|
-| Small msgs · serialize | ${epb_s1_f} | ${gpb_s1_f} | ${gpb_nif_s1_f} |
-| Small msgs · deserialize | ${epb_d1_f} | ${gpb_d1_f} | ${gpb_nif_d1_f} |
-| Large msgs · serialize | ${epb_s2_f} | ${gpb_s2_f} | ${gpb_nif_s2_f} |
-| Large msgs · deserialize | ${epb_d2_f} | ${gpb_d2_f} | ${gpb_nif_d2_f} |
+| medium · 228 B · serialize | ${epb_s1_f} | ${gpb_s1_f} | ${gpb_nif_s1_f} |
+| medium · 228 B · deserialize | ${epb_d1_f} | ${gpb_d1_f} | ${gpb_nif_d1_f} |
+| xlarge · 84584 B · serialize | ${epb_s2_f} | ${gpb_s2_f} | ${gpb_nif_s2_f} |
+| xlarge · 84584 B · deserialize | ${epb_d2_f} | ${gpb_d2_f} | ${gpb_nif_d2_f} |
 
-Higher is better. Throughput in MB/s on serialized wire size.
+Higher is better. Throughput in MB/s on serialized wire size. Case names follow
+the four standard tiers at the repo root ([BENCHMARKS.md](../../../BENCHMARKS.md)).
 EOF
 )
 
@@ -182,9 +183,9 @@ patch_file ../README.md "$SUMMARY_FILE"
 rm -f "$RESULTS_FILE" "$SUMMARY_FILE"
 
 echo "Benchmark summary:"
-echo "  gpb  small: serialize=${gpb_s1} deserialize=${gpb_d1}"
-echo "  gpb nif small: serialize=${gpb_nif_s1} deserialize=${gpb_nif_d1}"
-echo "  epb  small: serialize=${epb_s1} deserialize=${epb_d1}"
-echo "  gpb  large: serialize=${gpb_s2} deserialize=${gpb_d2}"
-echo "  gpb nif large: serialize=${gpb_nif_s2} deserialize=${gpb_nif_d2}"
-echo "  epb  large: serialize=${epb_s2} deserialize=${epb_d2}"
+echo "  gpb  medium: serialize=${gpb_s1} deserialize=${gpb_d1}"
+echo "  gpb nif medium: serialize=${gpb_nif_s1} deserialize=${gpb_nif_d1}"
+echo "  epb  medium: serialize=${epb_s1} deserialize=${epb_d1}"
+echo "  gpb  xlarge: serialize=${gpb_s2} deserialize=${gpb_d2}"
+echo "  gpb nif xlarge: serialize=${gpb_nif_s2} deserialize=${gpb_nif_d2}"
+echo "  epb  xlarge: serialize=${epb_s2} deserialize=${epb_d2}"

@@ -139,9 +139,14 @@ run_test_aux(Description, DataSize, Action) ->
     {Elapsed, NumIterations} = iterate_until_elapsed(MinSampleTime, Action),
     TargetNumIterations = round((TargetTime / Elapsed) * NumIterations),
     Elapsed2 = time_action(TargetNumIterations, Action),
-    io:format("~s: ~w iterations in ~.3fs; ~.2fMB/s~n",
-              [Description, TargetNumIterations, Elapsed2,
-               (TargetNumIterations * DataSize) / (Elapsed2 * 1024 * 1024)]),
+    % Same four fields every binding prints (see BENCHMARKS.md at the repo root):
+    % wire bytes, iterations, MB/s and ns/op. Keep "; <n>MB/s" intact:
+    % update_readme.sh extracts the number from that exact shape.
+    Mbps = (TargetNumIterations * DataSize) / (Elapsed2 * 1024 * 1024),
+    NsPerOp = (Elapsed2 * 1000000000) / TargetNumIterations,
+    io:format("~s: ~w bytes, ~w iterations in ~.3fs; ~.2fMB/s; ~.1f ns/op~n",
+              [Description, DataSize, TargetNumIterations, Elapsed2, Mbps,
+               NsPerOp]),
     ok.
 
 sample_time_min() ->
