@@ -55,17 +55,6 @@ pbw_arena_alloc_slow(pbw_arena *arena, size_t size)
     return ptr;
 }
 
-void *
-pbw_arena_calloc(pbw_arena *arena, size_t size)
-{
-    void *ptr = pbw_arena_alloc(arena, size);
-
-    if (ptr != NULL) {
-        memset(ptr, 0, size);
-    }
-    return ptr;
-}
-
 void
 pbw_arena_reset(pbw_arena *arena)
 {
@@ -75,7 +64,8 @@ pbw_arena_reset(pbw_arena *arena)
     pbw_arena_chunk *head = arena->head;
     pbw_arena_chunk *chunk;
 
-    if (head == NULL) {
+    if (head == NULL || arena->block != NULL) {
+        /* A packed arena belongs to one decoded tree and is never reset. */
         return;
     }
     for (chunk = head->next; chunk != NULL;) {
@@ -87,11 +77,55 @@ pbw_arena_reset(pbw_arena *arena)
     head->used = 0;
 }
 
+pbw_arena *
+pbw_arena_new_packed(size_t first_chunk)
+{
+    size_t total;
+    uint8_t *block;
+    pbw_arena *arena;
+    pbw_arena_chunk *chunk;
+
+    if (first_chunk > SIZE_MAX - sizeof(pbw_arena) - sizeof(pbw_arena_chunk)) {
+        return NULL;
+    }
+    total = sizeof(pbw_arena) + sizeof(pbw_arena_chunk) + first_chunk;
+    block = (uint8_t *)malloc(total);
+    if (block == NULL) {
+        return NULL;
+    }
+    arena = (pbw_arena *)(void *)block;
+    chunk = (pbw_arena_chunk *)(void *)(block + sizeof(pbw_arena));
+    chunk->next = NULL;
+    chunk->used = 0;
+    chunk->cap = first_chunk;
+    arena->head = chunk;
+    arena->chunk_size = first_chunk < PBW_ARENA_MIN_CHUNK ? PBW_ARENA_MIN_CHUNK
+                                                          : first_chunk;
+    arena->readonly = 0;
+    arena->block = block;
+    return arena;
+}
+
 void
 pbw_arena_free(pbw_arena *arena)
 {
     pbw_arena_chunk *chunk = arena->head;
 
+    if (arena->block != NULL) {
+        /* The arena struct and its first chunk live in the block itself. */
+        uint8_t *base = (uint8_t *)arena->block;
+        pbw_arena_chunk *first =
+            (pbw_arena_chunk *)(void *)(base + sizeof(pbw_arena));
+
+        for (chunk = arena->head; chunk != NULL && chunk != first;) {
+            pbw_arena_chunk *next = chunk->next;
+
+            free(chunk);
+            chunk = next;
+        }
+        free(base);
+        return;
+    }
     while (chunk != NULL) {
         pbw_arena_chunk *next = chunk->next;
         free(chunk);

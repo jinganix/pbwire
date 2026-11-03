@@ -4,13 +4,14 @@ CPPFLAGS += -Iinclude -Isrc
 AR ?= ar
 
 SRC := src/wire.c src/arena.c src/schema.c src/message.c src/encode.c src/decode.c \
-	src/ctx.c src/descriptor_set.c
+	src/ctx.c src/descriptor_set.c src/text.c src/json.c src/stream.c
 OBJ := $(SRC:src/%.c=build/%.o)
 LIB := build/libpbwire.a
 TEST_BIN := build/test_pbwire
 THREAD_BIN := build/test_threads
 DESC_BIN := build/test_descriptor
 HDRS := include/pbwire.h src/internal.h
+TEST_HDRS := tests/desc_set.h
 
 all: $(LIB)
 
@@ -26,7 +27,7 @@ $(TEST_BIN): tests/test_pbwire.c $(LIB) | build
 build:
 	mkdir -p build
 
-$(THREAD_BIN): tests/test_threads.c $(LIB) | build
+$(THREAD_BIN): tests/test_threads.c $(TEST_HDRS) $(LIB) | build
 	$(CC) $(CFLAGS) $(CPPFLAGS) -pthread -o $@ $< $(LIB)
 
 test: $(TEST_BIN) $(THREAD_BIN) $(DESC_BIN)
@@ -34,7 +35,7 @@ test: $(TEST_BIN) $(THREAD_BIN) $(DESC_BIN)
 	./$(THREAD_BIN)
 	./$(DESC_BIN)
 
-$(DESC_BIN): tests/test_descriptor.c $(LIB) | build
+$(DESC_BIN): tests/test_descriptor.c $(TEST_HDRS) $(LIB) | build
 	$(CC) $(CFLAGS) $(CPPFLAGS) -o $@ $< $(LIB)
 
 # Regenerates the pinned descriptor set embedded in tests/test_descriptor.c.
@@ -44,14 +45,18 @@ desc-fixture:
 		--descriptor_set_out=/tmp/pbw_desc.pb tests/data/desc_proto3.proto
 	xxd -i /tmp/pbw_desc.pb
 
-# Optional: official Protobuf conformance suite, binary wire format only.
-# Needs a Protobuf source checkout (v36.2) with conformance_test_runner built:
+# Optional: official Protobuf conformance suite, binary wire format and text
+# format. Needs a Protobuf source checkout (v36.2) with conformance_test_runner
+# built:
 #   git clone --depth 1 --branch v36.2 https://github.com/protocolbuffers/protobuf
 #   cmake -S protobuf -B protobuf/build -Dprotobuf_BUILD_CONFORMANCE=ON
 #   cmake --build protobuf/build --target conformance_test_runner
 # Then: PBWIRE_PROTOBUF_SRC=$PWD/protobuf make conformance
-# The testee answers binary requests and reports every JSON/text test as
-# skipped, so 0 unexpected failures means the whole binary suite passes.
+# The testee answers binary and text requests and reports every JSON test as
+# skipped. Two binary tests fail and are expected to: the reference C++ testee
+# from the same checkout fails them identically (a 5-byte tag varint above
+# UINT32_MAX is truncated instead of rejected). They are listed so the runner
+# proceeds to the text suite instead of stopping after binary.
 PROTOBUF_SRC ?= $(PBWIRE_PROTOBUF_SRC)
 CONFORMANCE_RUNNER ?= $(PROTOBUF_SRC)/build/conformance_test_runner
 CONFORMANCE_DESC := build/conformance.desc
@@ -74,7 +79,8 @@ $(CONFORMANCE_TESTEE): conformance/testee.c $(LIB) | build
 conformance: $(CONFORMANCE_DESC) $(CONFORMANCE_TESTEE)
 	@test -x "$(CONFORMANCE_RUNNER)" || { \
 		echo "conformance_test_runner not found: $(CONFORMANCE_RUNNER)"; exit 1; }
-	$(CONFORMANCE_RUNNER) $(CURDIR)/$(CONFORMANCE_TESTEE) $(CURDIR)/$(CONFORMANCE_DESC)
+	$(CONFORMANCE_RUNNER) --failure_list $(CURDIR)/conformance/failure_list_pbwire.txt \
+		$(CURDIR)/$(CONFORMANCE_TESTEE) $(CURDIR)/$(CONFORMANCE_DESC)
 
 # Optional: differential test and benchmark against the official Protobuf C++
 # runtime. Needs protoc and libprotobuf (Homebrew: brew install protobuf), so it
@@ -105,7 +111,7 @@ bench/gen/%.pb: bench/%.proto
 	$(PROTOC) -Ibench --include_imports --descriptor_set_out=$@ $<
 
 $(BENCH_BIN): bench/bench.cc $(BENCH_PB) $(BENCH_DESC) $(LIB) | build
-	$(BENCH_CXX) -std=c++17 -O2 -Iinclude -Ibench/gen $(PB_CXXFLAGS) \
+	$(BENCH_CXX) -std=c++17 -O2 -pthread -Iinclude -Ibench/gen $(PB_CXXFLAGS) \
 		-o $@ bench/bench.cc $(BENCH_PB) $(LIB) $(PB_LIBS)
 
 bench: $(BENCH_BIN)

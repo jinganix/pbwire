@@ -16,7 +16,10 @@ set(PBW_CORE_SOURCES
     src/encode.c
     src/decode.c
     src/ctx.c
-    src/descriptor_set.c)
+    src/descriptor_set.c
+    src/text.c
+    src/json.c
+    src/stream.c)
 
 add_library(pbwire ${PBW_CORE_SOURCES})
 add_library(pbwire::pbwire ALIAS pbwire)

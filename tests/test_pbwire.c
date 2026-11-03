@@ -786,12 +786,15 @@ test_tag_limits(pbw_schema *schema)
         CHECK_STATUS(PBW_ERR_INVALID,
                      pbw_decode(type, long_tag, sizeof(long_tag), &decoded));
     }
-    /* 5-byte tag varint whose value exceeds 32 bits (bit 35 set): rejected.
-     * Truncating it would silently turn it into a valid tag for field 2. */
+    /* A 5-byte tag varint above UINT32_MAX truncates to 32 bits, exactly like
+     * the reference parser: this one becomes a valid tag for field 2.
+     * (The conformance BadTag tests pin the shared truncation.) */
     {
         static const uint8_t wide_tag[] = {0x90, 0x80, 0x80, 0x80, 0x70, 0x01};
-        CHECK_STATUS(PBW_ERR_INVALID,
-                     pbw_decode(type, wide_tag, sizeof(wide_tag), &decoded));
+        decoded = NULL;
+        CHECK_OK(pbw_decode(type, wide_tag, sizeof(wide_tag), &decoded));
+        CHECK(pbw_message_field_count(decoded) == 1);
+        pbw_message_free(decoded);
         /* Four bits in the fifth byte still fit in 32 bits: a legal tag for a
          * field number nobody declared, so it is skipped as unknown. */
         static const uint8_t high_ok[] = {0x90, 0x80, 0x80, 0x80, 0x0f, 0x01};
@@ -1638,11 +1641,11 @@ test_schema_errors(void)
     CHECK_STATUS(PBW_ERR_INVALID, pbw_schema_link(schema));
     pbw_schema_free(schema);
 
-    /* groups are not supported as fields (they are skipped when decoding) */
+    /* groups are real fields: typeless ones still fail, typed ones link */
     schema = pbw_schema_new();
     msg = pbw_schema_add_message(schema, "M");
     pbw_message_add_field(msg, "g", 1, PBW_TYPE_GROUP, PBW_LABEL_OPTIONAL);
-    CHECK_STATUS(PBW_ERR_TYPE, pbw_schema_link(schema));
+    CHECK_STATUS(PBW_ERR_INVALID, pbw_schema_link(schema));
     pbw_schema_free(schema);
 
     /* packed is only meaningful for repeated numeric fields */
@@ -1671,6 +1674,1049 @@ test_schema_errors(void)
                                               &decoded));
     }
     pbw_schema_free(schema);
+}
+
+/* proto2 semantics on a hand-built schema: required enforcement. */
+static void
+test_proto2_required(void)
+{
+    pbw_schema *schema = pbw_schema_new();
+    pbw_descriptor *msg;
+    pbw_message *m;
+    pbw_message *decoded;
+    uint8_t *bytes;
+    size_t len;
+
+    CHECK(schema != NULL);
+    pbw_schema_set_proto3(schema, 0);
+    msg = pbw_schema_add_message(schema, "Req");
+    CHECK(msg != NULL);
+    CHECK(pbw_message_add_field(msg, "a", 1, PBW_TYPE_INT32,
+                                PBW_LABEL_REQUIRED) != NULL);
+    CHECK(pbw_message_add_field(msg, "b", 2, PBW_TYPE_STRING,
+                                PBW_LABEL_OPTIONAL) != NULL);
+    CHECK_OK(pbw_schema_link(schema));
+    /* An empty payload misses the required field. */
+    decoded = NULL;
+    CHECK_STATUS(PBW_ERR_REQUIRED, pbw_decode(msg, NULL, 0, &decoded));
+    CHECK(decoded == NULL);
+    /* Only the optional field: still missing. */
+    {
+        static const uint8_t only_b[] = {0x12, 0x01, 0x78};
+
+        decoded = NULL;
+        CHECK_STATUS(PBW_ERR_REQUIRED,
+                     pbw_decode(msg, only_b, sizeof(only_b), &decoded));
+        CHECK(decoded == NULL);
+    }
+    /* With the required field set: fine, and the tree reports ready. */
+    {
+        static const uint8_t full[] = {0x08, 0x05, 0x12, 0x01, 0x78};
+
+        CHECK_OK(pbw_decode(msg, full, sizeof(full), &decoded));
+        CHECK(decoded != NULL);
+        CHECK(pbw_message_is_initialized(decoded));
+        pbw_message_free(decoded);
+        decoded = NULL;
+    }
+    /* A hand-built tree without it is not initialized, but still encodes
+     * (the reference serializer writes whatever the tree holds). */
+    m = pbw_message_new(msg);
+    CHECK(m != NULL);
+    CHECK(!pbw_message_is_initialized(m));
+    CHECK(pbw_message_set(m, 1, pbw_value_new_int(7)) == PBW_OK);
+    CHECK(pbw_message_is_initialized(m));
+    bytes = NULL;
+    CHECK_OK(pbw_encode(m, &bytes, &len));
+    CHECK(len == 2 && bytes[0] == 0x08 && bytes[1] == 0x07);
+    pbw_free(bytes);
+    pbw_message_free(m);
+    pbw_schema_free(schema);
+}
+
+/* A closed (proto2) enum diverts unknown numbers to the unknown fields,
+ * like the binary decoder; an open enum keeps them as values. */
+static void
+test_closed_enum(void)
+{
+    static const uint8_t foreign[] = {0x08, 0xe7, 0x07}; /* field 1 = 999 */
+    pbw_schema *schema = pbw_schema_new();
+    pbw_descriptor *color;
+    pbw_descriptor *msg;
+    pbw_field *f;
+    pbw_message *decoded;
+    char *out;
+    size_t len;
+    uint8_t *bytes;
+
+    CHECK(schema != NULL);
+    pbw_schema_set_proto3(schema, 0);
+    color = pbw_schema_add_enum(schema, "E");
+    pbw_enum_add_value(color, "E_ZERO", 0);
+    pbw_enum_add_value(color, "E_ONE", 1);
+    msg = pbw_schema_add_message(schema, "M");
+    f = pbw_message_add_field(msg, "e", 1, PBW_TYPE_ENUM,
+                              PBW_LABEL_OPTIONAL);
+    pbw_field_set_type_name(f, "E");
+    CHECK_OK(pbw_schema_link(schema));
+    /* Closed: the number is not a value (text shows nothing), but the
+     * bytes round-trip through the unknown fields. */
+    CHECK_OK(pbw_decode(msg, foreign, sizeof(foreign), &decoded));
+    CHECK(decoded != NULL);
+    CHECK(pbw_message_get(decoded, 1) == NULL);
+    out = NULL;
+    CHECK_OK(pbw_text_print_opts(decoded, 0, &out, &len));
+    CHECK(len == 0);
+    pbw_free(out);
+    bytes = NULL;
+    CHECK_OK(pbw_encode(decoded, &bytes, &len));
+    CHECK(len == sizeof(foreign) && memcmp(bytes, foreign, len) == 0);
+    pbw_free(bytes);
+    pbw_message_free(decoded);
+    decoded = NULL;
+    pbw_schema_free(schema);
+    /* Open: the same bytes land on the field and print as a number. */
+    schema = pbw_schema_new();
+    CHECK(schema != NULL);
+    color = pbw_schema_add_enum(schema, "E");
+    pbw_enum_add_value(color, "E_ZERO", 0);
+    pbw_enum_add_value(color, "E_ONE", 1);
+    msg = pbw_schema_add_message(schema, "M");
+    f = pbw_message_add_field(msg, "e", 1, PBW_TYPE_ENUM,
+                              PBW_LABEL_OPTIONAL);
+    pbw_field_set_type_name(f, "E");
+    CHECK_OK(pbw_schema_link(schema));
+    CHECK_OK(pbw_decode(msg, foreign, sizeof(foreign), &decoded));
+    CHECK(pbw_message_get(decoded, 1) != NULL);
+    out = NULL;
+    CHECK_OK(pbw_text_print(decoded, &out, &len));
+    CHECK(len == sizeof("e: 999\n") - 1 &&
+          memcmp(out, "e: 999\n", len) == 0);
+    pbw_free(out);
+    pbw_message_free(decoded);
+    pbw_schema_free(schema);
+}
+
+/* Groups decode into their submessage and print by type name. */
+static void
+test_group_fields(void)
+{
+    pbw_schema *schema = pbw_schema_new();
+    pbw_descriptor *grp;
+    pbw_descriptor *msg;
+    pbw_field *f;
+    pbw_message *decoded;
+    char *out;
+    size_t len;
+    static const uint8_t wire[] = {0x0b, 0x08, 0x01, 0x0c};
+
+    CHECK(schema != NULL);
+    pbw_schema_set_proto3(schema, 0);
+    grp = pbw_schema_add_message(schema, "Grp");
+    CHECK(grp != NULL);
+    CHECK(pbw_message_add_field(grp, "x", 1, PBW_TYPE_INT32,
+                                PBW_LABEL_OPTIONAL) != NULL);
+    msg = pbw_schema_add_message(schema, "M");
+    CHECK(msg != NULL);
+    f = pbw_message_add_field(msg, "g", 1, PBW_TYPE_GROUP,
+                              PBW_LABEL_OPTIONAL);
+    pbw_field_set_type_name(f, "Grp");
+    CHECK_OK(pbw_schema_link(schema));
+    CHECK_OK(pbw_decode(msg, wire, sizeof(wire), &decoded));
+    CHECK(decoded != NULL);
+    CHECK(pbw_message_get(decoded, 1) != NULL);
+    CHECK_OK(pbw_text_print(decoded, &out, &len));
+    CHECK(len == sizeof("Grp {\n  x: 1\n}\n") - 1 &&
+          memcmp(out, "Grp {\n  x: 1\n}\n", len) == 0);
+    pbw_free(out);
+    out = NULL;
+    pbw_message_free(decoded);
+    decoded = NULL;
+    /* The type name parses back, lowercase too. */
+    CHECK_OK(pbw_text_parse(msg, "Grp { x: 2 }", 12, &decoded));
+    {
+        uint8_t *bytes = NULL;
+
+        CHECK_OK(pbw_encode(decoded, &bytes, &len));
+        CHECK(len == 4 && bytes[0] == 0x0b && bytes[1] == 0x08 &&
+              bytes[2] == 0x02 && bytes[3] == 0x0c);
+        pbw_free(bytes);
+    }
+    pbw_message_free(decoded);
+    pbw_schema_free(schema);
+}
+
+/* Extensions attach by number and print under their full name. */
+static void
+test_hand_built_extensions(void)
+{
+    pbw_schema *schema = pbw_schema_new();
+    pbw_descriptor *msg;
+    pbw_field *ext;
+    pbw_message *decoded;
+    char *out;
+    size_t len;
+    static const uint8_t wire[] = {0xa0, 0x06, 0x05};
+
+    CHECK(schema != NULL);
+    msg = pbw_schema_add_message(schema, "M");
+    CHECK(msg != NULL);
+    ext = pbw_message_add_extension(msg, "ext_int", 100, PBW_TYPE_INT32,
+                                    PBW_LABEL_OPTIONAL);
+    CHECK(ext != NULL);
+    CHECK(pbw_field_is_extension(ext));
+    pbw_field_set_full_name(ext, "t.ext_int");
+    CHECK_OK(pbw_schema_link(schema));
+    CHECK_OK(pbw_decode(msg, wire, sizeof(wire), &decoded));
+    CHECK_OK(pbw_text_print(decoded, &out, &len));
+    CHECK(len == sizeof("[t.ext_int]: 5\n") - 1 &&
+          memcmp(out, "[t.ext_int]: 5\n", len) == 0);
+    pbw_free(out);
+    pbw_message_free(decoded);
+    pbw_schema_free(schema);
+}
+
+/* Text format: printer goldens, accepted/rejected spellings, required
+ * fields, unknown-field display. */
+static void
+test_text_format(void)
+{
+    pbw_schema *schema = pbw_schema_new();
+    pbw_descriptor *color;
+    pbw_descriptor *sub;
+    pbw_descriptor *grp;
+    pbw_descriptor *msg;
+    pbw_descriptor *req;
+    pbw_field *f;
+    pbw_message *decoded;
+    char *out;
+    size_t len;
+    static const char *golden =
+        "a: 1\n"
+        "blob: \"\\000\\377\\177\"\n"
+        "f32: 3.5\n"
+        "f64: -2.25\n"
+        "color: C_RED\n"
+        "kid {\n"
+        "  a: 1\n"
+        "}\n"
+        "nums: 1\n"
+        "nums: -2\n"
+        "Grp {\n"
+        "  x: 1\n"
+        "}\n"
+        "[t.x_int]: 5\n";
+
+    CHECK(schema != NULL);
+    color = pbw_schema_add_enum(schema, "C");
+    pbw_enum_add_value(color, "C_ZERO", 0);
+    pbw_enum_add_value(color, "C_RED", 1);
+    sub = pbw_schema_add_message(schema, "Sub");
+    CHECK(sub != NULL);
+    CHECK(pbw_message_add_field(sub, "a", 1, PBW_TYPE_INT32,
+                                PBW_LABEL_OPTIONAL) != NULL);
+    grp = pbw_schema_add_message(schema, "Grp");
+    CHECK(grp != NULL);
+    CHECK(pbw_message_add_field(grp, "x", 1, PBW_TYPE_INT32,
+                                PBW_LABEL_OPTIONAL) != NULL);
+    msg = pbw_schema_add_message(schema, "M");
+    CHECK(msg != NULL);
+    CHECK(pbw_message_add_field(msg, "a", 1, PBW_TYPE_INT32,
+                                PBW_LABEL_OPTIONAL) != NULL);
+    CHECK(pbw_message_add_field(msg, "blob", 2, PBW_TYPE_BYTES,
+                                PBW_LABEL_OPTIONAL) != NULL);
+    CHECK(pbw_message_add_field(msg, "f32", 3, PBW_TYPE_FLOAT,
+                                PBW_LABEL_OPTIONAL) != NULL);
+    CHECK(pbw_message_add_field(msg, "f64", 4, PBW_TYPE_DOUBLE,
+                                PBW_LABEL_OPTIONAL) != NULL);
+    f = pbw_message_add_field(msg, "color", 5, PBW_TYPE_ENUM,
+                              PBW_LABEL_OPTIONAL);
+    pbw_field_set_type_name(f, "C");
+    f = pbw_message_add_field(msg, "kid", 6, PBW_TYPE_MESSAGE,
+                              PBW_LABEL_OPTIONAL);
+    pbw_field_set_type_name(f, "Sub");
+    CHECK(pbw_message_add_field(msg, "nums", 7, PBW_TYPE_INT32,
+                                PBW_LABEL_REPEATED) != NULL);
+    f = pbw_message_add_field(msg, "grp", 8, PBW_TYPE_GROUP,
+                              PBW_LABEL_OPTIONAL);
+    pbw_field_set_type_name(f, "Grp");
+    f = pbw_message_add_extension(msg, "x_int", 100, PBW_TYPE_INT32,
+                                  PBW_LABEL_OPTIONAL);
+    pbw_field_set_full_name(f, "t.x_int");
+    CHECK_OK(pbw_schema_link(schema));
+    /* The golden parses and prints back byte-identically. */
+    out = NULL;
+    CHECK_OK(pbw_text_parse(msg, golden, strlen(golden), &decoded));
+    CHECK_OK(pbw_text_print(decoded, &out, &len));
+    CHECK(len == strlen(golden) && memcmp(out, golden, len) == 0);
+    pbw_free(out);
+    out = NULL;
+    pbw_message_free(decoded);
+    decoded = NULL;
+    /* Accepted spellings. */
+    {
+        static const char *ok[] = {
+            "a: 1, blob: \"x\";", /* separators */
+            "a: 1 # comment\n",   /* comments */
+            "a:0x10",             /* hex */
+            "a:010",              /* octal */
+            "nums: [1, 2]",       /* list */
+            "nums: []",           /* empty list */
+            "kid < a: 1 >",       /* angle brackets */
+            "kid: { a: 1 }",      /* colon before message */
+            "grp { x: 1 }",       /* lowercase group name */
+            "Grp: { x: 1 }",      /* colon with group */
+            "blob: \"a\" \"b\"",  /* adjacent strings */
+        };
+        size_t i;
+
+        for (i = 0; i < sizeof(ok) / sizeof(ok[0]); i++) {
+            CHECK_OK(pbw_text_parse(msg, ok[i], strlen(ok[i]), &decoded));
+            pbw_message_free(decoded);
+            decoded = NULL;
+        }
+    }
+    /* Rejected spellings. */
+    {
+        static const char *bad[] = {
+            "a: 2147483648", /* range */
+            "a: 0x",         /* empty hex */
+            "a: 1.5",        /* float for int */
+            "blob: \"\\x\"", /* bad escape */
+            "blob: \"abc",   /* unterminated */
+            "bogus: 1",      /* unknown name */
+            "[x_int]: 5",    /* short names never match extensions */
+            "color: BOGUS",  /* unknown enum */
+            "kid: 1",        /* scalar for message */
+            "a: 1 bogus",    /* trailing garbage */
+        };
+        size_t i;
+
+        for (i = 0; i < sizeof(bad) / sizeof(bad[0]); i++) {
+            CHECK_STATUS(PBW_ERR_INVALID,
+                         pbw_text_parse(msg, bad[i], strlen(bad[i]),
+                                        &decoded));
+            CHECK(decoded == NULL);
+        }
+    }
+    /* A missing required field fails the parse. */
+    {
+        pbw_schema *s2 = pbw_schema_new();
+
+        CHECK(s2 != NULL);
+        pbw_schema_set_proto3(s2, 0);
+        req = pbw_schema_add_message(s2, "R");
+        CHECK(req != NULL);
+        CHECK(pbw_message_add_field(req, "a", 1, PBW_TYPE_INT32,
+                                    PBW_LABEL_REQUIRED) != NULL);
+        CHECK_OK(pbw_schema_link(s2));
+        decoded = NULL;
+        CHECK_STATUS(PBW_ERR_REQUIRED,
+                     pbw_text_parse(req, "", 0, &decoded));
+        CHECK(decoded == NULL);
+        CHECK_OK(pbw_text_parse(req, "a: 1", 4, &decoded));
+        pbw_message_free(decoded);
+        decoded = NULL;
+        pbw_schema_free(s2);
+    }
+    /* Unknown fields from the wire hide by default and show with the flag;
+     * the text parser itself rejects unknown names. */
+    {
+        static const uint8_t with_unknown[] = {0x08, 0x01, 0x90, 0x03, 0x2a};
+
+        decoded = NULL;
+        CHECK_OK(
+            pbw_decode(msg, with_unknown, sizeof(with_unknown), &decoded));
+    }
+    CHECK_OK(pbw_text_print_opts(decoded, 0, &out, &len));
+    CHECK(len == 5 && memcmp(out, "a: 1\n", 5) == 0);
+    pbw_free(out);
+    out = NULL;
+    CHECK_OK(pbw_text_print_opts(decoded, 1, &out, &len));
+    CHECK(len == sizeof("a: 1\n50: 42\n") - 1 &&
+          memcmp(out, "a: 1\n50: 42\n", len) == 0);
+    pbw_free(out);
+    pbw_message_free(decoded);
+    decoded = NULL;
+    /* ...while the text parser itself rejects the unknown name. */
+    CHECK_STATUS(PBW_ERR_INVALID, pbw_text_parse(msg, "50: 42", 6, &decoded));
+    CHECK(decoded == NULL);
+    pbw_schema_free(schema);
+}
+
+/* JSON mapping: printer goldens, accepted/rejected spellings, WKT forms. */
+static void
+test_json_format(void)
+{
+    pbw_schema *schema = pbw_schema_new();
+    pbw_descriptor *color;
+    pbw_descriptor *msg;
+    pbw_descriptor *sub;
+    pbw_descriptor *ts;
+    pbw_descriptor *dur;
+    pbw_descriptor *fm;
+    pbw_descriptor *st;
+    pbw_descriptor *entry;
+    pbw_descriptor *mapentry;
+    pbw_descriptor *val;
+    pbw_descriptor *lval;
+    pbw_descriptor *null;
+    pbw_descriptor *any;
+    pbw_descriptor *wrap;
+    pbw_field *f;
+    pbw_message *decoded;
+    char *out;
+    size_t len;
+    static const struct field_def defs[] = {
+        {"i32", 1, PBW_TYPE_INT32, PBW_LABEL_OPTIONAL},
+        {"i64", 2, PBW_TYPE_INT64, PBW_LABEL_OPTIONAL},
+        {"u64", 3, PBW_TYPE_UINT64, PBW_LABEL_OPTIONAL},
+        {"flag", 4, PBW_TYPE_BOOL, PBW_LABEL_OPTIONAL},
+        {"name", 5, PBW_TYPE_STRING, PBW_LABEL_OPTIONAL},
+        {"blob", 6, PBW_TYPE_BYTES, PBW_LABEL_OPTIONAL},
+        {"f32", 7, PBW_TYPE_FLOAT, PBW_LABEL_OPTIONAL},
+        {"f64", 8, PBW_TYPE_DOUBLE, PBW_LABEL_OPTIONAL},
+        {"color", 9, PBW_TYPE_ENUM, PBW_LABEL_OPTIONAL},
+        {"kid", 10, PBW_TYPE_MESSAGE, PBW_LABEL_OPTIONAL},
+        {"nums", 11, PBW_TYPE_INT32, PBW_LABEL_REPEATED},
+        {"tags", 12, PBW_TYPE_STRING, PBW_LABEL_REPEATED},
+        {"when", 13, PBW_TYPE_MESSAGE, PBW_LABEL_OPTIONAL},
+        {"howLong", 14, PBW_TYPE_MESSAGE, PBW_LABEL_OPTIONAL},
+        {"mask", 15, PBW_TYPE_MESSAGE, PBW_LABEL_OPTIONAL},
+        {"props", 16, PBW_TYPE_MESSAGE, PBW_LABEL_OPTIONAL},
+        {"payload", 17, PBW_TYPE_MESSAGE, PBW_LABEL_OPTIONAL},
+        {"count", 18, PBW_TYPE_MESSAGE, PBW_LABEL_OPTIONAL},
+        {"alt", 19, PBW_TYPE_INT32, PBW_LABEL_OPTIONAL},
+        {"scores", 20, PBW_TYPE_MESSAGE, PBW_LABEL_REPEATED},
+    };
+    /* \u00e9 in, raw UTF-8 out: the printer passes valid text through. */
+    static const char *input =
+        "{\"i32\":-5,\"i64\":\"-6\",\"u64\":\"7\",\"flag\":true,"
+        "\"name\":\"hi\\u00e9\",\"blob\":\"AP8/\",\"f32\":3.5,"
+        "\"f64\":\"NaN\",\"color\":\"C_RED\",\"kid\":{\"a\":1},"
+        "\"nums\":[1,2],\"tags\":[\"x\"]}";
+    static const char *golden =
+        "{\"i32\":-5,\"i64\":\"-6\",\"u64\":\"7\",\"flag\":true,"
+        "\"name\":\"hi\u00e9\",\"blob\":\"AP8/\",\"f32\":3.5,"
+        "\"f64\":\"NaN\",\"color\":\"C_RED\",\"kid\":{\"a\":1},"
+        "\"nums\":[1,2],\"tags\":[\"x\"]}";
+
+    CHECK(schema != NULL);
+    color = pbw_schema_add_enum(schema, "C");
+    CHECK(color != NULL);
+    pbw_enum_add_value(color, "C_ZERO", 0);
+    pbw_enum_add_value(color, "C_RED", 1);
+    sub = pbw_schema_add_message(schema, "Sub");
+    CHECK(sub != NULL);
+    CHECK(pbw_message_add_field(sub, "a", 1, PBW_TYPE_INT32,
+                                PBW_LABEL_OPTIONAL) != NULL);
+    ts = pbw_schema_add_message(schema, "google.protobuf.Timestamp");
+    dur = pbw_schema_add_message(schema, "google.protobuf.Duration");
+    fm = pbw_schema_add_message(schema, "google.protobuf.FieldMask");
+    st = pbw_schema_add_message(schema, "google.protobuf.Struct");
+    entry = pbw_schema_add_message(schema, "google.protobuf.Struct.FieldsEntry");
+    val = pbw_schema_add_message(schema, "google.protobuf.Value");
+    lval = pbw_schema_add_message(schema, "google.protobuf.ListValue");
+    null = pbw_schema_add_enum(schema, "google.protobuf.NullValue");
+    pbw_enum_add_value(null, "NULL_VALUE", 0);
+    any = pbw_schema_add_message(schema, "google.protobuf.Any");
+    wrap = pbw_schema_add_message(schema, "google.protobuf.Int32Value");
+    CHECK(ts != NULL && dur != NULL && fm != NULL && st != NULL &&
+          any != NULL && wrap != NULL);
+    {
+        struct field_def tf[] = {
+            {"seconds", 1, PBW_TYPE_INT64, PBW_LABEL_OPTIONAL},
+            {"nanos", 2, PBW_TYPE_INT32, PBW_LABEL_OPTIONAL},
+        };
+
+        add_fields(ts, tf, 2);
+        add_fields(dur, tf, 2);
+    }
+    CHECK(pbw_message_add_field(fm, "paths", 1, PBW_TYPE_STRING,
+                                PBW_LABEL_REPEATED) != NULL);
+    CHECK(pbw_message_add_field(st, "fields", 1, PBW_TYPE_MESSAGE,
+                                PBW_LABEL_REPEATED) != NULL);
+    CHECK(pbw_message_add_field(entry, "key", 1, PBW_TYPE_STRING,
+                                PBW_LABEL_OPTIONAL) != NULL);
+    f = pbw_message_add_field(entry, "value", 2, PBW_TYPE_MESSAGE,
+                              PBW_LABEL_OPTIONAL);
+    pbw_field_set_type_name(f, "google.protobuf.Value");
+    pbw_descriptor_set_map_entry(entry);
+    f = pbw_message_add_field(val, "null_value", 1, PBW_TYPE_ENUM,
+                              PBW_LABEL_OPTIONAL);
+    pbw_field_set_type_name(f, "google.protobuf.NullValue");
+    CHECK(pbw_message_add_field(val, "number_value", 2, PBW_TYPE_DOUBLE,
+                                PBW_LABEL_OPTIONAL) != NULL);
+    CHECK(pbw_message_add_field(val, "string_value", 3, PBW_TYPE_STRING,
+                                PBW_LABEL_OPTIONAL) != NULL);
+    CHECK(pbw_message_add_field(val, "bool_value", 4, PBW_TYPE_BOOL,
+                                PBW_LABEL_OPTIONAL) != NULL);
+    mapentry =
+        pbw_schema_add_message(schema, "M.ScoresEntry");
+    CHECK(mapentry != NULL);
+    CHECK(pbw_message_add_field(mapentry, "key", 1, PBW_TYPE_STRING,
+                                PBW_LABEL_OPTIONAL) != NULL);
+    CHECK(pbw_message_add_field(mapentry, "value", 2, PBW_TYPE_INT32,
+                                PBW_LABEL_OPTIONAL) != NULL);
+    pbw_descriptor_set_map_entry(mapentry);
+    f = pbw_message_add_field(val, "struct_value", 5, PBW_TYPE_MESSAGE,
+                              PBW_LABEL_OPTIONAL);
+    pbw_field_set_type_name(f, "google.protobuf.Struct");
+    f = pbw_message_add_field(val, "list_value", 6, PBW_TYPE_MESSAGE,
+                              PBW_LABEL_OPTIONAL);
+    pbw_field_set_type_name(f, "google.protobuf.ListValue");
+    f = pbw_message_add_field(lval, "values", 1, PBW_TYPE_MESSAGE,
+                              PBW_LABEL_REPEATED);
+    pbw_field_set_type_name(f, "google.protobuf.Value");
+    CHECK(pbw_message_add_field(any, "type_url", 1, PBW_TYPE_STRING,
+                                PBW_LABEL_OPTIONAL) != NULL);
+    CHECK(pbw_message_add_field(any, "value", 2, PBW_TYPE_BYTES,
+                                PBW_LABEL_OPTIONAL) != NULL);
+    CHECK(pbw_message_add_field(wrap, "value", 1, PBW_TYPE_INT32,
+                                PBW_LABEL_OPTIONAL) != NULL);
+    msg = pbw_schema_add_message(schema, "M");
+    CHECK(msg != NULL);
+    add_fields(msg, defs, sizeof(defs) / sizeof(defs[0]));
+    f = (pbw_field *)pbw_descriptor_find_field_name(msg, "color");
+    pbw_field_set_type_name(f, "C");
+    f = (pbw_field *)pbw_descriptor_find_field_name(msg, "kid");
+    pbw_field_set_type_name(f, "Sub");
+    f = (pbw_field *)pbw_descriptor_find_field_name(msg, "when");
+    pbw_field_set_type_name(f, "google.protobuf.Timestamp");
+    f = (pbw_field *)pbw_descriptor_find_field_name(msg, "howLong");
+    pbw_field_set_type_name(f, "google.protobuf.Duration");
+    f = (pbw_field *)pbw_descriptor_find_field_name(msg, "mask");
+    pbw_field_set_type_name(f, "google.protobuf.FieldMask");
+    f = (pbw_field *)pbw_descriptor_find_field_name(msg, "props");
+    pbw_field_set_type_name(f, "google.protobuf.Struct");
+    f = (pbw_field *)pbw_descriptor_find_field_name(st, "fields");
+    pbw_field_set_type_name(f, "google.protobuf.Struct.FieldsEntry");
+    f = (pbw_field *)pbw_descriptor_find_field_name(msg, "payload");
+    pbw_field_set_type_name(f, "google.protobuf.Any");
+    f = (pbw_field *)pbw_descriptor_find_field_name(msg, "count");
+    pbw_field_set_type_name(f, "google.protobuf.Int32Value");
+    /* name(5) and alt(19) share oneof 1: setting both fails */
+    f = (pbw_field *)pbw_descriptor_find_field_name(msg, "alt");
+    pbw_field_set_oneof(f, 1);
+    f = (pbw_field *)pbw_descriptor_find_field_name(msg, "scores");
+    pbw_field_set_type_name(f, "M.ScoresEntry");
+    f = (pbw_field *)pbw_descriptor_find_field_name(msg, "name");
+    pbw_field_set_oneof(f, 1);
+    CHECK_OK(pbw_schema_link(schema));
+    /* The golden parses and prints back identically. */
+    out = NULL;
+    CHECK_OK(pbw_json_parse(msg, input, strlen(input), &decoded));
+    CHECK_OK(pbw_json_print(decoded, &out, &len));
+    CHECK(len == strlen(golden) && memcmp(out, golden, len) == 0);
+    pbw_free(out);
+    out = NULL;
+    pbw_message_free(decoded);
+    decoded = NULL;
+    /* Accepted spellings. */
+    {
+        static const char *ok[] = {
+            "{}",
+            "{\"i32\":\"5\"}",
+            "{\"i32\":\"5.0\"}",
+            "{\"i32\":\"0x10\"}",
+            "{\"i32\":5.0}",
+            "{\"i32\":1e3}",
+            "{\"flag\":\"true\"}",
+            "{\"flag\":\"YES\"}",
+            "{\"f64\":\"Infinity\"}",
+            "{\"f64\":\"-Infinity\"}",
+            "{\"color\":1}",
+            "{\"color\":\"1\"}",
+            "{\"name\":null}",
+            "{\"kid\":null}",
+            "{\"nums\":null}",
+            "{\"nums\":[1,null,2]}",
+            "{\"nums\":[[1,2]]}",
+            "{'i32':1}",
+            "{i32:1}",
+            "{\"i32\":1,}",
+            "{\"when\":\"1970-01-01T00:00:00Z\"}",
+            "{\"when\":{\"seconds\":\"5\"}}",
+            "{\"howLong\":\"-3.5s\"}",
+            "{\"mask\":\"fooBar,baz\"}",
+            "{\"mask\":\"\"}",
+            "{\"props\":{\"k\":1}}",
+            "{\"payload\":{\"a\":2,\"@type\":\"type.googleapis.com/Sub\"}}",
+            "{\"payload\":{}}",
+            "{\"count\":7}",
+            "{\"count\":null}",
+            "{\"scores\":{\"a\":1}}",
+            "{\"scores\":{}}",
+        };
+        size_t i;
+
+        for (i = 0; i < sizeof(ok) / sizeof(ok[0]); i++) {
+            CHECK_OK(pbw_json_parse(msg, ok[i], strlen(ok[i]), &decoded));
+            pbw_message_free(decoded);
+            decoded = NULL;
+        }
+    }
+    /* Rejected spellings. */
+    {
+        static const char *bad[] = {
+            "",
+            " ",
+            "{",
+            "{\"i32\":}",
+            "{\"i32\":01}",
+            "{\"i32\":1.}",
+            "{\"i32\":+1}",
+            "{\"i32\":\"5 \"}",
+            "{\"i32\":\"1.5\"}",
+            "{\"i32\":1.5}",
+            "{\"u64\":-1}",
+            "{\"u64\":\"-1\"}",
+            "{\"u64\":\"0.5\"}",
+            "{\"u64\":0.5}",
+            "{\"f32\":1e400}",
+            "{\"flag\":1}",
+            "{\"flag\":\"2\"}",
+            "{\"name\":5}",
+            "{\"blob\":\"!\"}",
+            "{\"blob\":\"A\"}",
+            "{\"color\":\"BOGUS\"}",
+            "{\"color\":9999999999}",
+            "{\"nums\":1}",
+            "{\"kid\":[]}",
+            "{\"scores\":{\"a\":1,\"a\":2}}",
+            "{\"bogus\":1}",
+            "{\"name\":\"x\",\"alt\":1}",
+            "{\"when\":\"10000-01-01T00:00:00Z\"}",
+            "{\"when\":\"1970-01-01T00:00:01+0800\"}",
+            "{\"howLong\":\"3\"}",
+            "{\"howLong\":\"3.0000000000s\"}",
+            "{\"payload\":{\"a\":1}}",
+            "{\"payload\":{\"a\":1,\"@type\":\"type.googleapis.com/Nope\"}}",
+            "{\"name\":\"\\ud800\"}",
+        };
+        size_t i;
+
+        for (i = 0; i < sizeof(bad) / sizeof(bad[0]); i++) {
+            CHECK_STATUS(PBW_ERR_INVALID,
+                         pbw_json_parse(msg, bad[i], strlen(bad[i]),
+                                        &decoded));
+            CHECK(decoded == NULL);
+        }
+    }
+    /* Unknown fields fail unless ignored; unknown Any types too. */
+    decoded = NULL;
+    CHECK_STATUS(PBW_ERR_INVALID,
+                 pbw_json_parse(msg, "{\"zzz\":1}", 9, &decoded));
+    CHECK(decoded == NULL);
+    {
+        pbw_json_parse_options opts;
+
+        opts.ignore_unknown_fields = 1;
+        CHECK_OK(
+            pbw_json_parse_opts(msg, "{\"zzz\":1}", 9, &opts, &decoded));
+        pbw_message_free(decoded);
+        decoded = NULL;
+        CHECK_OK(pbw_json_parse_opts(
+            msg,
+            "{\"payload\":{\"@type\":\"type.googleapis.com/Nope\"}}",
+            48, &opts, &decoded));
+        pbw_message_free(decoded);
+        decoded = NULL;
+    }
+    /* A map round-trips through parse and print. */
+    CHECK_OK(pbw_json_parse(msg, "{\"scores\":{\"b\":2,\"a\":1}}", 24,
+                            &decoded));
+    CHECK_OK(pbw_json_print(decoded, &out, &len));
+    CHECK(len == 24 && memcmp(out, "{\"scores\":{\"b\":2,\"a\":1}}",
+                              len) == 0);
+    pbw_free(out);
+    out = NULL;
+    pbw_message_free(decoded);
+    decoded = NULL;
+    /* Proto3 zero fields stay out of the print. */
+    CHECK_OK(pbw_json_parse(msg, "{\"i32\":0}", 9, &decoded));
+    CHECK_OK(pbw_json_print(decoded, &out, &len));
+    CHECK(len == 2 && memcmp(out, "{}", 2) == 0);
+    pbw_free(out);
+    pbw_message_free(decoded);
+    pbw_schema_free(schema);
+}
+
+struct sink_buf {
+    uint8_t *data;
+    size_t len;
+    size_t cap;
+    pbw_status inject; /* returned instead of PBW_OK once armed */
+};
+
+static pbw_status
+collect_sink(const uint8_t *data, size_t len, void *opaque)
+{
+    struct sink_buf *s = (struct sink_buf *)opaque;
+    uint8_t *grown;
+    size_t cap;
+
+    if (s->inject != PBW_OK) {
+        return s->inject;
+    }
+    cap = s->cap != 0 ? s->cap : 64;
+    if (len > cap - s->len) {
+        while (cap - s->len < len) {
+            cap *= 2;
+        }
+        grown = (uint8_t *)realloc(s->data, cap);
+        if (grown == NULL) {
+            return PBW_ERR_NOMEM;
+        }
+        s->data = grown;
+        s->cap = cap;
+    } else if (s->data == NULL) {
+        /* First chunk fit the initial guess but the buffer is not out yet. */
+        s->data = (uint8_t *)malloc(cap);
+        if (s->data == NULL) {
+            return PBW_ERR_NOMEM;
+        }
+        s->cap = cap;
+    }
+    memcpy(s->data + s->len, data, len);
+    s->len += len;
+    return PBW_OK;
+}
+
+static const char *
+entry_key(const pbw_value *list, size_t i)
+{
+    return pbw_value_get_string(
+        pbw_message_get(pbw_value_get_message(pbw_value_at(list, i)), 1));
+}
+
+static void
+test_deterministic(void)
+{
+    pbw_schema *schema = pbw_schema_new();
+    pbw_descriptor *entry;
+    pbw_descriptor *holder;
+    pbw_descriptor *ientry;
+    pbw_descriptor *iholder;
+    pbw_field *field;
+    pbw_message *msg;
+    pbw_message *sub;
+    pbw_message *decoded = NULL;
+    pbw_value *entries;
+    uint8_t *plain = NULL;
+    uint8_t *det = NULL;
+    uint8_t *det2 = NULL;
+    size_t plain_len = 0;
+    size_t det_len = 0;
+    size_t det2_len = 0;
+    static const char *keys[] = {"c", "a", "b"};
+    static const int32_t vals[] = {3, 1, 2};
+    static const int32_t ikeys[] = {3, -5, 0};
+    size_t i;
+
+    CHECK(schema != NULL);
+    entry = pbw_schema_add_message(schema, "SEntry");
+    pbw_message_add_field(entry, "key", 1, PBW_TYPE_STRING,
+                          PBW_LABEL_OPTIONAL);
+    pbw_message_add_field(entry, "value", 2, PBW_TYPE_INT32,
+                          PBW_LABEL_OPTIONAL);
+    pbw_descriptor_set_map_entry(entry);
+    holder = pbw_schema_add_message(schema, "SMap");
+    field = pbw_message_add_field(holder, "entries", 1, PBW_TYPE_MESSAGE,
+                                  PBW_LABEL_REPEATED);
+    pbw_field_set_type_name(field, "SEntry");
+    ientry = pbw_schema_add_message(schema, "IEntry");
+    pbw_message_add_field(ientry, "key", 1, PBW_TYPE_INT32,
+                          PBW_LABEL_OPTIONAL);
+    pbw_message_add_field(ientry, "value", 2, PBW_TYPE_INT32,
+                          PBW_LABEL_OPTIONAL);
+    pbw_descriptor_set_map_entry(ientry);
+    iholder = pbw_schema_add_message(schema, "IMap");
+    field = pbw_message_add_field(iholder, "entries", 1, PBW_TYPE_MESSAGE,
+                                  PBW_LABEL_REPEATED);
+    pbw_field_set_type_name(field, "IEntry");
+    CHECK_OK(pbw_schema_link(schema));
+
+    /* Insert out of order: plain encode keeps it, deterministic sorts it. */
+    msg = pbw_message_new(desc(schema, "SMap"));
+    for (i = 0; i < 3; i++) {
+        sub = pbw_message_set_message(msg, 1);
+        CHECK(sub != NULL);
+        CHECK_OK(pbw_message_set(sub, 1, pbw_value_new_string(keys[i])));
+        CHECK_OK(pbw_message_set(sub, 2, pbw_value_new_int(vals[i])));
+    }
+    CHECK_OK(pbw_encode(msg, &plain, &plain_len));
+    CHECK_OK(pbw_encode_deterministic(msg, &det, &det_len));
+    CHECK(plain_len == det_len);
+    CHECK(memcmp(plain, det, plain_len) != 0);
+    CHECK_OK(pbw_decode(desc(schema, "SMap"), det, det_len, &decoded));
+    entries = pbw_message_get(decoded, 1);
+    CHECK(pbw_value_count(entries) == 3);
+    CHECK(strcmp(entry_key(entries, 0), "a") == 0);
+    CHECK(pbw_value_get_int32(pbw_message_get(
+              pbw_value_get_message(pbw_value_at(entries, 0)), 2)) == 1);
+    CHECK(strcmp(entry_key(entries, 1), "b") == 0);
+    CHECK(strcmp(entry_key(entries, 2), "c") == 0);
+    pbw_message_free(decoded);
+    decoded = NULL;
+    /* Deterministic output is stable across runs. */
+    CHECK_OK(pbw_encode_deterministic(msg, &det2, &det2_len));
+    CHECK(det_len == det2_len && memcmp(det, det2, det_len) == 0);
+    pbw_free(det2);
+    pbw_message_free(msg);
+
+    /* Signed integer keys sort numerically, not by raw bits. */
+    msg = pbw_message_new(desc(schema, "IMap"));
+    for (i = 0; i < 3; i++) {
+        sub = pbw_message_set_message(msg, 1);
+        CHECK(sub != NULL);
+        CHECK_OK(pbw_message_set(sub, 1, pbw_value_new_int(ikeys[i])));
+        CHECK_OK(pbw_message_set(sub, 2, pbw_value_new_int(0)));
+    }
+    pbw_free(det);
+    det = NULL;
+    CHECK_OK(pbw_encode_deterministic(msg, &det, &det_len));
+    CHECK_OK(pbw_decode(desc(schema, "IMap"), det, det_len, &decoded));
+    entries = pbw_message_get(decoded, 1);
+    CHECK(pbw_value_get_int32(pbw_message_get(
+              pbw_value_get_message(pbw_value_at(entries, 0)), 1)) == -5);
+    CHECK(pbw_value_get_int32(pbw_message_get(
+              pbw_value_get_message(pbw_value_at(entries, 1)), 1)) == 0);
+    CHECK(pbw_value_get_int32(pbw_message_get(
+              pbw_value_get_message(pbw_value_at(entries, 2)), 1)) == 3);
+    pbw_message_free(decoded);
+    pbw_message_free(msg);
+
+    /* No maps: deterministic bytes equal plain bytes. */
+    msg = pbw_message_new(desc(schema, "SMap"));
+    for (i = 0; i < 3; i++) {
+        static const char *ordered[] = {"a", "b", "c"};
+        static const int32_t ovals[] = {1, 2, 3};
+
+        sub = pbw_message_set_message(msg, 1);
+        CHECK(sub != NULL);
+        CHECK_OK(pbw_message_set(sub, 1, pbw_value_new_string(ordered[i])));
+        CHECK_OK(pbw_message_set(sub, 2, pbw_value_new_int(ovals[i])));
+    }
+    pbw_free(plain);
+    plain = NULL;
+    pbw_free(det);
+    det = NULL;
+    CHECK_OK(pbw_encode(msg, &plain, &plain_len));
+    CHECK_OK(pbw_encode_deterministic(msg, &det, &det_len));
+    CHECK(plain_len == det_len && memcmp(plain, det, plain_len) == 0);
+    pbw_message_free(msg);
+
+    CHECK_STATUS(PBW_ERR_INVALID,
+                 pbw_encode_deterministic(NULL, &det, &det_len));
+    pbw_free(plain);
+    pbw_free(det);
+    pbw_schema_free(schema);
+}
+
+static void
+test_limits(pbw_schema *schema)
+{
+    const pbw_descriptor *type = desc(schema, "Deep");
+    pbw_message *msg = pbw_message_new(type);
+    pbw_message *cursor = msg;
+    pbw_message *decoded = NULL;
+    pbw_ctx *ctx = pbw_ctx_new();
+    pbw_limits limits;
+    uint8_t *buf = NULL;
+    size_t len = 0;
+    int i;
+
+    for (i = 0; i < 5; i++) {
+        cursor = pbw_message_set_message(cursor, 1);
+        CHECK(cursor != NULL);
+    }
+    CHECK_OK(pbw_encode(msg, &buf, &len));
+
+    /* No limits: fine. */
+    CHECK_OK(pbw_decode_limits(type, buf, len, NULL, &decoded));
+    pbw_message_free(decoded);
+    decoded = NULL;
+    CHECK_OK(pbw_decode_ctx_limits(ctx, type, buf, len, NULL, &decoded));
+    pbw_ctx_reset(ctx);
+    decoded = NULL;
+
+    /* Zero limits mean the defaults. */
+    limits.max_bytes = 0;
+    limits.max_depth = 0;
+    CHECK_OK(pbw_decode_limits(type, buf, len, &limits, &decoded));
+    pbw_message_free(decoded);
+    decoded = NULL;
+
+    /* A byte cap below the input fails; an exact one passes. */
+    limits.max_bytes = len - 1;
+    limits.max_depth = 0;
+    decoded = (pbw_message *)0x1;
+    CHECK_STATUS(PBW_ERR_LIMIT,
+                 pbw_decode_limits(type, buf, len, &limits, &decoded));
+    CHECK(decoded == NULL);
+    CHECK_STATUS(PBW_ERR_LIMIT,
+                 pbw_decode_ctx_limits(ctx, type, buf, len, &limits,
+                                       &decoded));
+    CHECK(decoded == NULL);
+    limits.max_bytes = len;
+    CHECK_OK(pbw_decode_limits(type, buf, len, &limits, &decoded));
+    pbw_message_free(decoded);
+    decoded = NULL;
+
+    /* A depth cap below the nesting fails; above passes. */
+    limits.max_bytes = 0;
+    limits.max_depth = 2;
+    CHECK_STATUS(PBW_ERR_LIMIT,
+                 pbw_decode_limits(type, buf, len, &limits, &decoded));
+    CHECK(decoded == NULL);
+    limits.max_depth = 100;
+    CHECK_OK(pbw_decode_limits(type, buf, len, &limits, &decoded));
+    pbw_message_free(decoded);
+    decoded = NULL;
+    /* Over-large caps clamp to the default instead of failing. */
+    limits.max_depth = 1000000;
+    CHECK_OK(pbw_decode_limits(type, buf, len, &limits, &decoded));
+    pbw_message_free(decoded);
+    decoded = NULL;
+
+    CHECK_STATUS(PBW_ERR_INVALID,
+                 pbw_decode_limits(NULL, buf, len, NULL, &decoded));
+    pbw_message_free(msg);
+    pbw_ctx_free(ctx);
+    pbw_free(buf);
+}
+
+static void
+test_streaming(pbw_schema *schema)
+{
+    const pbw_descriptor *type = desc(schema, "Person");
+    pbw_message *m1 = pbw_message_new(type);
+    pbw_message *m2 = pbw_message_new(type);
+    pbw_message *got = NULL;
+    pbw_istream *s = pbw_istream_new(NULL);
+    struct sink_buf sunk = {NULL, 0, 0, PBW_OK};
+    uint8_t *f1 = NULL;
+    uint8_t *f2 = NULL;
+    uint8_t *wire = NULL;
+    uint8_t *plain = NULL;
+    size_t f1_len = 0;
+    size_t f2_len = 0;
+    size_t plain_len = 0;
+    size_t i;
+    char big[200];
+
+    CHECK(s != NULL);
+    CHECK_OK(pbw_message_set(m1, 1, pbw_value_new_string("alice")));
+    CHECK_OK(pbw_message_set(m1, 2, pbw_value_new_int(1)));
+    memset(big, 'x', sizeof(big));
+    CHECK_OK(pbw_message_set(
+        m2, 1, pbw_value_new_bytes(big, sizeof(big))));
+    CHECK_OK(pbw_message_set(m2, 2, pbw_value_new_int(2)));
+    CHECK_OK(pbw_encode_delimited(m1, &f1, &f1_len));
+    CHECK_OK(pbw_encode_delimited(m2, &f2, &f2_len));
+    wire = (uint8_t *)malloc(f1_len + f2_len);
+    CHECK(wire != NULL);
+    memcpy(wire, f1, f1_len);
+    memcpy(wire + f1_len, f2, f2_len);
+
+    /* Whole buffer at once: two messages, then nothing left. */
+    CHECK_OK(pbw_istream_feed(s, wire, f1_len + f2_len));
+    CHECK_OK(pbw_istream_next(s, type, &got));
+    CHECK(got != NULL);
+    CHECK(strcmp(pbw_value_get_string(pbw_message_get(got, 1)), "alice") ==
+          0);
+    pbw_message_free(got);
+    got = NULL;
+    CHECK_OK(pbw_istream_next(s, type, &got));
+    CHECK(got != NULL);
+    CHECK(pbw_value_get_int32(pbw_message_get(got, 2)) == 2);
+    pbw_message_free(got);
+    got = NULL;
+    CHECK_OK(pbw_istream_next(s, type, &got));
+    CHECK(got == NULL);
+
+    /* Byte-by-byte: split length varints and bodies all reassemble. */
+    pbw_istream_reset(s);
+    for (i = 0; i < f1_len + f2_len; i++) {
+        CHECK_OK(pbw_istream_feed(s, wire + i, 1));
+        CHECK_OK(pbw_istream_next(s, type, &got));
+        if (i + 1 == f1_len) {
+            CHECK(got != NULL);
+            CHECK(pbw_value_get_int32(pbw_message_get(got, 2)) == 1);
+            pbw_message_free(got);
+            got = NULL;
+        } else if (i + 1 == f1_len + f2_len) {
+            CHECK(got != NULL);
+            CHECK(pbw_value_get_int32(pbw_message_get(got, 2)) == 2);
+            pbw_message_free(got);
+            got = NULL;
+        } else {
+            CHECK(got == NULL);
+        }
+    }
+
+    /* Partial frame: nothing until the rest arrives. Half the first frame. */
+    pbw_istream_reset(s);
+    CHECK_OK(pbw_istream_feed(s, wire, f1_len / 2));
+    CHECK_OK(pbw_istream_next(s, type, &got));
+    CHECK(got == NULL);
+    CHECK_OK(pbw_istream_feed(s, wire + f1_len / 2, f1_len - f1_len / 2));
+    CHECK_OK(pbw_istream_next(s, type, &got));
+    CHECK(got != NULL);
+    pbw_message_free(got);
+    got = NULL;
+
+    /* Sink hands over the same bytes one-shot encode produces. */
+    CHECK_OK(pbw_encode(m2, &plain, &plain_len));
+    CHECK_OK(pbw_encode_sink(m2, collect_sink, &sunk));
+    CHECK(sunk.len == plain_len && memcmp(sunk.data, plain, plain_len) == 0);
+    free(sunk.data);
+    sunk.data = NULL;
+    sunk.len = 0;
+    sunk.cap = 0;
+    sunk.inject = PBW_ERR_INVALID;
+    CHECK_STATUS(PBW_ERR_INVALID, pbw_encode_sink(m2, collect_sink, &sunk));
+    CHECK(sunk.data == NULL);
+    sunk.inject = PBW_OK;
+
+    /* Bad length varint fails instead of waiting forever. */
+    {
+        static const uint8_t bad[] = {0xff, 0xff, 0xff, 0xff, 0xff};
+
+        pbw_istream_reset(s);
+        CHECK_OK(pbw_istream_feed(s, bad, sizeof(bad)));
+        CHECK_STATUS(PBW_ERR_INVALID, pbw_istream_next(s, type, &got));
+        CHECK(got == NULL);
+    }
+    /* A frame over max_bytes is refused. */
+    {
+        pbw_limits limits;
+        pbw_istream *capped;
+
+        limits.max_bytes = 4;
+        limits.max_depth = 0;
+        capped = pbw_istream_new(&limits);
+        CHECK(capped != NULL);
+        CHECK_OK(pbw_istream_feed(capped, wire, f1_len + f2_len));
+        CHECK_STATUS(PBW_ERR_LIMIT, pbw_istream_next(capped, type, &got));
+        CHECK(got == NULL);
+        pbw_istream_free(capped);
+    }
+    CHECK_STATUS(PBW_ERR_INVALID, pbw_istream_feed(NULL, wire, 1));
+    CHECK_STATUS(PBW_ERR_INVALID, pbw_istream_next(s, type, NULL));
+    CHECK_STATUS(PBW_ERR_INVALID, pbw_encode_sink(NULL, collect_sink, &sunk));
+    CHECK_STATUS(PBW_ERR_INVALID, pbw_encode_sink(m2, NULL, &sunk));
+    CHECK_STATUS(PBW_ERR_INVALID,
+                 pbw_encode_delimited(NULL, &f1, &f1_len));
+
+    pbw_istream_free(s);
+    pbw_message_free(m1);
+    pbw_message_free(m2);
+    pbw_free(f1);
+    pbw_free(f2);
+    pbw_free(plain);
+    free(wire);
 }
 
 int
@@ -1711,6 +2757,15 @@ main(void)
     test_errors(schema);
     test_depth_limit(schema);
     test_enum(schema);
+    test_proto2_required();
+    test_closed_enum();
+    test_group_fields();
+    test_hand_built_extensions();
+    test_text_format();
+    test_json_format();
+    test_deterministic();
+    test_limits(schema);
+    test_streaming(schema);
     test_schema_errors();
 
     pbw_schema_free(schema);

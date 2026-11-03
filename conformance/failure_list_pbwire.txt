@@ -1,0 +1,6 @@
+# Expected binary failures for the pbwire testee. Both are cases where pbwire
+# and the reference C++ testee (built from the same protobuf checkout) behave
+# identically: a 5-byte tag varint above UINT32_MAX is truncated instead of
+# rejected, which is what CodedInputStream::ReadVarint32FromArray does.
+Required.Proto2.ProtobufInput.BadTag_FieldNumberSlightlyTooHigh # Should have failed to parse, but didn't.
+Required.Proto3.ProtobufInput.BadTag_FieldNumberSlightlyTooHigh # Should have failed to parse, but didn't.

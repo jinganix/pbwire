@@ -2,14 +2,19 @@
 
 > pbwire is a dynamic Protobuf runtime for C. It loads a schema at runtime — a hand-built descriptor
 > tree or a standard `FileDescriptorSet` — then builds, reads, encodes and decodes messages through
-> reflection, speaking the standard Protobuf binary wire format. No code generation, no `protoc` at
-> runtime, no libprotobuf in the process: C99, one public header, about 3.4k lines of C, zero runtime
-> dependencies.
+> reflection, speaking the standard Protobuf binary wire format plus the JSON mapping and the text
+> format. No code generation, no `protoc` at runtime, no libprotobuf in the process: C99, one public
+> header, about 10k lines of C, zero runtime dependencies.
 
 Facts: source at <https://github.com/jinganix/pbwire>, license Apache-2.0, version `0.1.0`
 (`project(pbwire VERSION ...)` in `CMakeLists.txt`). Encodings are byte-identical to `protoc 36.2`
-and pass Google's official binary conformance suite: 1391 successes, 0 unexpected failures, 1403
-JSON/text tests skipped because pbwire has no JSON layer. Requirements: a C99 compiler for the core;
+and pass Google's official conformance suites: binary + JSON 2745 successes, 0 skipped (2 expected
+failures that the reference C++ testee fails identically:
+`Required.Proto2/Proto3.ProtobufInput.BadTag_FieldNumberSlightlyTooHigh`; pbwire additionally
+passes 4 JSON tests the reference fails, `SingleValueForRepeatedFieldInt32/Message` on both
+syntaxes) and text 445 successes with 0 failures — including 4 the reference itself fails
+(bad-UTF-8 strings, `\U` past the planes).
+Requirements: a C99 compiler for the core;
 CMake + C++17 + libprotobuf only for the optional `.proto` importer `pbwire-protoc`.
 
 ## Build and test
@@ -30,7 +35,8 @@ C++ runtime), `make bench`. Optional, needs a protobuf v36.2 source checkout:
 ## Docs
 
 - [README.md](README.md): why pbwire exists, quick start (hand-built schema, `FileDescriptorSet`,
-  `pbw_ctx` loop), dynamic message semantics, scope, testing layers, benchmark table, comparison with
+  `pbw_ctx` loop), dynamic message semantics, scope, testing layers, MB/s benchmark tables (single- and
+  multi-thread), a `pbw_ctx` vs plain API ownership comparison, comparison with
   generated code / `DynamicMessage` / upb / nanopb, FAQ.
 - [AGENTS.md](AGENTS.md): commands, layout and the hard invariants for agents changing this code.
 - [CONTRIBUTING.md](CONTRIBUTING.md): Conventional Commits scopes, hooks, commit gate.
@@ -42,11 +48,13 @@ C++ runtime), `make bench`. Optional, needs a protobuf v36.2 source checkout:
 - `pbw_descriptor *pbw_schema_add_message(pbw_schema *, const char *name)`, `pbw_schema_add_enum`,
   `pbw_schema_find(const pbw_schema *, const char *name)`; `pbw_schema_link()` resolves type names.
 - `pbw_field *pbw_message_add_field(pbw_descriptor *msg, const char *name, uint32_t number,
-  pbw_type type, pbw_label label)`; `pbw_field_set_type_name`, `pbw_field_set_packed`,
-  `pbw_field_set_oneof`.
+  pbw_type type, pbw_label label)`; `pbw_message_add_extension` (same, but only the number must
+  be unique); `pbw_field_set_type_name`, `pbw_field_set_packed`, `pbw_field_set_oneof`;
+  `pbw_field_default_value`, `pbw_field_is_extension`.
 - `pbw_status pbw_descriptor_set_load(const void *data, size_t len, pbw_schema **out)`: standard
   `FileDescriptorSet` -> linked schema; `pbw_schema_error()` explains a failure.
 - `pbw_message *pbw_message_new(const pbw_descriptor *)`, `pbw_message_free`;
+  `pbw_message_is_initialized` (proto2 `required` check; `pbw_decode` already enforces it);
   `pbw_message_set(pbw_message *, uint32_t number, pbw_value *)` takes ownership of the value on
   success only; `pbw_message_get`, `pbw_message_clear`, `pbw_message_set_message`.
 - `pbw_value_new_{int,uint,bool,float,double,string,bytes,message}`, typed getters
@@ -57,10 +65,25 @@ C++ runtime), `make bench`. Optional, needs a protobuf v36.2 source checkout:
   pbw_message **out)` -> `pbw_message_free()`.
 - `pbw_ctx *pbw_ctx_new(void)`: one arena + encode buffer per thread; `pbw_decode_ctx`,
   `pbw_encode_ctx`, `pbw_ctx_reset` (frees the whole tree at once), `pbw_ctx_used`, `pbw_ctx_free`.
+- `pbw_limits { max_bytes, max_depth }` (0 = default) with `pbw_decode_limits` and
+  `pbw_decode_ctx_limits`; over-large `max_depth` clamps to `PBW_MAX_DEPTH`.
+- `pbw_encode_deterministic`: map entries sorted by key, everything else byte-identical to
+  `pbw_encode`.
+- Streaming: `pbw_encode_delimited` (varint length + message), `pbw_istream_new/feed/next/reset/free`
+  (`*out == NULL` + `PBW_OK` means need more data), `pbw_encode_sink(msg, sink, opaque)` in 8 KiB
+  chunks with a `pbw_status`-returning sink.
+- `PBW_ABI_VERSION` (== 1) with `pbw_abi_version()`; the shared library SONAME carries the same
+  number. Additive C API changes keep it; breaking changes bump it and the SONAME together.
 
 ## Key facts
 
 - Explicit presence: a field absent on the wire stays absent; no defaults are filled in.
+- Dialect per descriptor, from the file it came from (hand-built schemas default to proto3;
+  `pbw_schema_set_proto3(schema, 0)` gives proto2). A proto2 closed enum's unknown number is kept as
+  an unknown field instead of the field value, also inside packed repetition. A proto2 `required`
+  field is rejected by `pbw_decode()` (`PBW_ERR_REQUIRED`) and reported by
+  `pbw_message_is_initialized()`; `pbw_encode()` writes the tree as it stands, like the reference
+  serializer.
 - Wire data is untrusted input: lengths bounds-checked, field number 0 and wire types above 5
   rejected, nesting capped at 100 (`PBW_MAX_DEPTH`), every failure returns a `pbw_status`.
 - Descriptors are trusted input; loading adversarial descriptor sets is out of scope.
@@ -68,23 +91,49 @@ C++ runtime), `make bench`. Optional, needs a protobuf v36.2 source checkout:
   `protoc --include_imports --descriptor_set_out`, `buf build -o`, or the optional `pbwire-protoc`
   library. Every imported file must be in the set (types resolve by name), otherwise the load fails
   with `unknown type ... for field ...` in `pbw_schema_error()`. The loader reads names, numbers,
-  types, labels, oneofs, `packed` and the file syntax; services, extensions and source info are
-  ignored. proto3/edition-2023 sets get packed repetition by default.
+  types, labels, oneofs, `packed`, defaults and the file syntax, plus extensions with their
+  extendee; services, reserved ranges and source info are ignored. proto3/edition-2023 sets get
+  packed repetition by default.
 - The schema owns its descriptors and must outlive every message, value and `pbw_ctx` tree built from
   it; treat a linked schema as read-only while other threads use it.
 - Unknown fields (including a known field with the wrong wire type) are preserved as raw wire bytes
   and re-emitted after the known fields, in input order.
-- No globals and no thread-local state: confine a schema or message to one thread. One `pbw_ctx` per
-  thread gives arena reuse; messages decoded through a context are read-only and freed by
-  `pbw_ctx_reset`.
+- No globals and no thread-local state: confine a schema or message to one thread. `pbw_ctx` gives
+  arena and encode-buffer reuse per thread; messages decoded through a context are read-only and
+  freed by `pbw_ctx_reset`.
+- `tests/test_threads.c` is the multi-thread gate: shared linked schema reflection, one `pbw_ctx`
+  per thread, plain per-message ownership, per-thread `pbw_descriptor_set_load()` of the same bytes
+  (including the truncated-set error path), one shared loaded schema for decode/encode, and a
+  1-vs-8-thread throughput comparison that fails if aggregate throughput collapses. `make bench`
+  prints the same comparison per implementation next to the generated-code rows.
+- `pbw_decode()` gives every decoded tree its own arena (one `malloc` for the whole tree), so
+  `pbw_message_free()` releases subtrees, values and payloads at once: values taken from a decoded
+  message are not individually freeable, and the tree is still mutable (`pbw_message_set`,
+  `pbw_message_clear`, `pbw_message_set_message` work on it).
+- Two allocation strategies, same bytes: `pbw_ctx` (`pbw_decode_ctx`/`pbw_encode_ctx`) reuses one
+  arena and one output buffer, so a steady loop stops calling `malloc`; its messages are read-only
+  and die with `pbw_ctx_reset`. The plain `pbw_decode`/`pbw_encode` allocate one tree and one buffer
+  per call, the caller owns both (`pbw_message_free`/`pbw_free`), and the tree is mutable. Use the
+  context in hot loops and per worker thread, the plain API for one-off or long-lived results.
 - Numbers are raw bit patterns; the descriptor type decides which typed getter applies. Repeated
   numeric fields accept both packed and unpacked encodings; the descriptor controls encoding, and
   proto3 schemas loaded from a `FileDescriptorSet` get packed defaults.
 - Two independent libraries in one repository: `pbwire` (pure C, no dependency) and
   `pbwire-protoc` (C++17 + libprotobuf, `.proto` -> `FileDescriptorSet`). They meet only at the
   serialized descriptor set.
-- Not implemented: JSON/text format mapping, RPC/HTTP, groups as fields (skipped on decode),
-  extension resolution, `required` enforcement, code generation.
+- ABI stability: `PBW_ABI_VERSION` in the header, `pbw_abi_version()` at runtime, CMake
+  `SOVERSION 1`, `make shared` producing `libpbwire.so.1` / `libpbwire.1.dylib`. Additive changes
+  keep the number, breaking changes bump it with the SONAME. `bindings/python` (cffi, ABI mode)
+  and `bindings/go/pbwire` (cgo) pin it at load and round-trip scalar messages.
+- Not implemented: RPC/HTTP, MessageSet decoding into extensions, code generation.
+- Text format (`pbw_text_print` / `pbw_text_parse`): printer output is byte-identical to the
+  reference; the parser matches it (extensions as `[full.name]`, group type names, `Any`
+  expansions, unknown fields as numeric lines with `print_unknown_fields`, strict rejections
+  including bad-UTF-8 strings, singular duplicates and unknown names).
+- JSON mapping (`pbw_json_print` / `pbw_json_parse`): same verdicts as the reference parser on
+  40,000 mutated inputs; all well-known types (`Any`, `Timestamp`, `Duration`, `FieldMask`,
+  `Struct`/`Value`, wrappers, `Empty`), extensions as `[full.name]`, closed-enum unknowns kept as
+  unknown fields, strict base64 (padded input must fill quanta) and strict numbers.
 
 ## Optional
 

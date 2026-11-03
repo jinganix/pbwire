@@ -9,6 +9,12 @@ struct pbw_ctx {
     pbw_buf out;
 };
 
+int
+pbw_abi_version(void)
+{
+    return PBW_ABI_VERSION;
+}
+
 pbw_ctx *
 pbw_ctx_new(void)
 {
@@ -18,6 +24,7 @@ pbw_ctx_new(void)
         return NULL;
     }
     ctx->arena.chunk_size = 4096;
+    ctx->arena.readonly = 1;
     pbw_buf_init(&ctx->out);
     return ctx;
 }
@@ -53,10 +60,25 @@ pbw_status
 pbw_decode_ctx(pbw_ctx *ctx, const pbw_descriptor *desc, const void *buf,
                size_t len, pbw_message **out)
 {
+    return pbw_decode_ctx_limits(ctx, desc, buf, len, NULL, out);
+}
+
+pbw_status
+pbw_decode_ctx_limits(pbw_ctx *ctx, const pbw_descriptor *desc,
+                      const void *buf, size_t len, const pbw_limits *limits,
+                      pbw_message **out)
+{
     if (ctx == NULL) {
         return PBW_ERR_INVALID;
     }
-    return pbw_decode_arena(&ctx->arena, desc, buf, len, out);
+    if (limits != NULL && limits->max_bytes > 0 && len > limits->max_bytes) {
+        if (out != NULL) {
+            *out = NULL;
+        }
+        return PBW_ERR_LIMIT;
+    }
+    return pbw_decode_arena_lim(&ctx->arena, desc, buf, len,
+                                pbw_effective_depth(limits), out);
 }
 
 pbw_status
