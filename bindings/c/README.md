@@ -6,11 +6,22 @@ Three pieces, like every language binding in this repo:
 |---|---|---|
 | 1. Binding runtime | [`runtime/`](runtime/) | generic struct codec: layout table, direct wire <-> struct (`pbw_struct_encode/decode/free`) |
 | 2. Compiler plugin | [`plugin/`](plugin/) | `protoc-gen-pbwire-c`: `.proto` -> structs + layout tables |
-| 3. Example | [`example/`](example/) | addressbook round-trip on plain structs |
+| 3. Example | [`examples/`](examples/) | addressbook round-trip on plain structs |
 
 The C binding is the core library itself plus this thin struct layer: no
 wrapper objects, no code generation at build time, no runtime dependencies
 beyond a C99 compiler (the plugin needs Go, but only maintainers run it).
+
+## Layout
+
+| Piece | Path | Role |
+|---|---|---|
+| runtime | [`runtime/`](runtime/) | the struct codec (`pbw_struct.{h,c}`) |
+| plugin | [`plugin/`](plugin/) | `protoc-gen-pbwire-c` (Go): `.proto` -> structs + layout tables |
+| examples | [`examples/`](examples/) | addressbook round trip on plain structs |
+| tests | [`tests/`](tests/) | byte-parity and failure-path self-checks (`matrix2`, `matrix3`, addressbook) |
+| benchmarks | [`benchmarks/`](benchmarks/) | structs vs `protoc --cpp_out` on four tiers |
+| conformance | [`conformance/`](conformance/) | how the official suite covers this binding |
 
 ## 1. Runtime
 

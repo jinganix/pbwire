@@ -373,11 +373,11 @@ src/decode.c                wire bytes -> message tree, unknown field preservati
 src/descriptor_set.c        FileDescriptorSet -> schema (the only reader of descriptor.proto)
 src/stream.c                delimited framing reader, encode sink, deterministic encode
 src/ctx.c                   pbw_ctx: arena + encode buffer reuse
-bindings/c/                 C binding: struct engine (runtime/) + protoc plugin (plugin/) + example/
-bindings/cpp/               C++ example: same addressbook round-trip on the shared C runtime (no plugin)
-bindings/python/            CPython extension: schema from a descriptor set at runtime, dict<->wire in C
-bindings/go/pbwire/        cgo binding with a round-trip test
-bindings/erlang/           Erlang/OTP NIF binding (enif_protobuf, gpb-compatible, own rebar3 build)
+bindings/c/                 C binding: runtime/ (struct codec), plugin/, examples/, tests/, benchmarks/, conformance/
+bindings/cpp/               C++ binding: examples/, tests/, benchmarks/ over the shared C runtime (no plugin)
+bindings/python/            CPython extension: runtime/, examples/, tests/, benchmarks/, conformance/
+bindings/go/               cgo binding: runtime/ (package pbwire), examples/, benchmarks/, conformance/
+bindings/erlang/           Erlang/OTP NIF: c_src/ (runtime), examples/, test/, benchmarks/, conformance/
 
 include/pbwire-protoc/      importer / descriptor set / diagnostic headers (no protobuf types)
 src/protoc/importer.cc      .proto -> FileDescriptorSet, via compiler::Importer

@@ -1,0 +1,13 @@
+# Expected failures for the Python binding testee, all one cause: a decoded
+# message is a dict, so unknown fields (and MessageSet extensions, which are
+# stored as unknown fields) cannot be carried through to the output. The
+# dynamic core keeps them as raw wire bytes, the dict API has nowhere to put
+# them. JSON and text requests are answered "skipped", so those never appear
+# here.
+Required.Proto2.ProtobufInput.UnknownOrdering.ProtobufOutput
+Required.Proto2.ProtobufInput.UnknownVarint.ProtobufOutput
+Required.Proto3.ProtobufInput.UnknownOrdering.ProtobufOutput
+Required.Proto3.ProtobufInput.UnknownVarint.ProtobufOutput
+Required.Proto2.ProtobufInput.MessageSetEncoding.UnknownExtension.ProtobufOutput
+Required.Proto2.ProtobufInput.ValidMessageSetEncoding.ProtobufOutput
+Required.Proto2.ProtobufInput.ValidMessageSetEncoding.OutOfOrderGroupsEntries.ProtobufOutput

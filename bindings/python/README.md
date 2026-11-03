@@ -1,6 +1,6 @@
 # pbwire Python binding
 
-`bindings/python/csrc/pbwire.c` is a CPython extension and the Python binding:
+`bindings/python/runtime/pbwire.c` is a CPython extension and the Python binding:
 a `FileDescriptorSet` (`protoc --descriptor_set_out`) becomes a schema at
 runtime, and messages go in and out as plain dicts. The C code walks the
 pbwire schema and converts dict <-> wire directly — no generated Python code,
@@ -16,6 +16,16 @@ wire = person.encode({"name": "alice", "id": 1,
 assert person.decode(wire) == {"name": "alice", "id": 1,
                                "phones": [{"number": "555", "type": 1}]}
 ```
+
+## Layout
+
+| Piece | Path | Role |
+|---|---|---|
+| runtime | [`runtime/pbwire.c`](runtime/pbwire.c) | the CPython extension: schema, message types, dict <-> wire, lazy views |
+| examples | [`examples/addressbook.py`](examples/addressbook.py) | schema at runtime, dict round trip + lazy view |
+| tests | [`tests/test_pbwire.py`](tests/test_pbwire.py) | byte parity with the `protoc` reference, failure paths |
+| benchmarks | [`benchmarks/bench.py`](benchmarks/bench.py) | vs `google.protobuf` on four tiers |
+| conformance | [`conformance/`](conformance/) | official runner testee, `make conformance-python` |
 
 ## Build
 

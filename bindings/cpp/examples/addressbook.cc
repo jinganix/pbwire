@@ -1,9 +1,9 @@
 /* AddressBook example (C++): plain structs -> wire bytes -> plain structs.
  *
- * Same round-trip as bindings/c/example/addressbook.c, written the C++ way:
+ * Same round-trip as bindings/c/examples/addressbook.c, written the C++ way:
  * aggregate initialization instead of designated initializers, nullptr
  * instead of NULL. The C runtime (../c/runtime/pbw_struct.{h,c}) and the
- * generated header (../c/example/gen/addressbook.h) are shared unchanged;
+ * generated header (../c/examples/gen/addressbook.h) are shared unchanged;
  * pbw_struct.h carries extern "C" guards so C++ can include it directly.
  *
  * The schema loads once from its FileDescriptorSet

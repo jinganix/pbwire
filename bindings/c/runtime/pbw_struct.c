@@ -65,6 +65,8 @@ unzigzag(uint64_t value, unsigned width)
 {
     uint64_t mask = width == 32 ? 0xffffffffull : ~0ull;
 
+    /* Mask first: an overlong varint must truncate like the reference. */
+    value &= mask;
     return ((value >> 1) ^ (0ull - (value & 1))) & mask;
 }
 

@@ -23,6 +23,8 @@ make python-bind   # build the CPython extension next to its sources
 make python-test   # Python binding self-check (pinned protoc bytes as oracle)
 make python-bench  # Python binding vs google.protobuf on the four standard tiers
 make erlang-bench  # gpb, gpb NIF and enif_protobuf
+make test-cpp      # C++ binding self-check (C++17, no protobuf needed)
+make conformance-python  # official suite through the Python binding
 
 # Official conformance suite (binary wire format). Needs the cached reference
 # checkout: `make conformance-setup` clones it once, `make conformance`
@@ -72,9 +74,10 @@ Run `make test` after any C change; run `make format` after touching `include/`,
 | `bench/msg.proto` | proto3 message used by both; `bench/gen/` is generated, never committed |
 | `bench/msg2.proto` | proto2 counterpart: explicit presence, groups, required fields, closed enums, extensions |
 | `BENCHMARKS.md` | the four standard payload tiers, every binding vs its baseline, cross-binding table |
-| `bindings/c/` | C binding: direct struct codec (`runtime/pbw_struct.c`, layout tables carry the wire facts), `protoc-gen-pbwire-c` (`plugin/`), `tests/`, `benchmarks/`, `example/` |
-| `bindings/python/` | Python binding: CPython extension (`csrc/pbwire.c`, dict<->wire in C), `tests/`, `benchmarks/` |
-| `bindings/go/`, `bindings/cpp/` | cgo smoke package and a C++ example over the C runtime |
+| `bindings/c/` | C binding: direct struct codec (`runtime/pbw_struct.c`, layout tables carry the wire facts), `protoc-gen-pbwire-c` (`plugin/`), `examples/`, `tests/`, `benchmarks/`, `conformance/` |
+| `bindings/python/` | Python binding: CPython extension (`runtime/pbwire.c`, dict<->wire in C), `examples/`, `tests/`, `benchmarks/`, `conformance/` (official runner testee) |
+| `bindings/go/` | cgo binding: `runtime/` (package pbwire), `examples/`, `benchmarks/`, `conformance/` |
+| `bindings/cpp/` | C++ binding over the shared C runtime: `examples/`, `tests/`, `benchmarks/`, `conformance/` |
 | `bindings/erlang/` | Erlang/OTP NIF binding with its own AGENTS.md |
 | `scripts/` | Gate scripts: `check.sh` (hooks), `validate-commit-msg.sh`, `setup-git-hooks.sh` |
 | `.github/workflows/ci.yml` | CI: `make test` on Linux + macOS, CMake/ctest, clang-format |

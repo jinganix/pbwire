@@ -16,6 +16,20 @@ Use gpb's `protoc-erl` to generate the Erlang modules as usual, load the schema 
 `enif_protobuf:load_cache(Module:get_msg_defs())`, then call `enif_protobuf:encode/1` and
 `enif_protobuf:decode/2`. The same calls work from Elixir, since the API is plain Erlang.
 
+## Layout
+
+| Piece | Path | Role |
+|---|---|---|
+| runtime | [`c_src/`](c_src/), [`src/`](src/), [`priv/`](priv/) | the NIF (`ep_encoder.c` / `ep_decoder.c`) and its Erlang module |
+| examples | [`examples/`](examples/) | `addressbook.escript`: hand-built defs, record round trip |
+| tests | [`test/`](test/), [`c_src_tests/`](c_src_tests/) | EUnit suites and the NIF's C tests (`make erlang-test`) |
+| benchmarks | [`benchmarks/`](benchmarks/) | vs gpb and gpb NIF (`make erlang-bench`) |
+| conformance | [`conformance/`](conformance/) | status and plan: blocked on gpb record-name collisions |
+| plugin | none | epb takes gpb definitions; `gpb_compile` is the generator |
+
+This is the rebar3 layout (`src/`, `c_src/`, `include/`, `priv/`, `test/`), the
+local equivalent of the other bindings' `runtime/` + `tests/`.
+
 ## Contents
 
 - [Why use enif_protobuf](#why-use-enif_protobuf)

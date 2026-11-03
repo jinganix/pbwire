@@ -61,6 +61,8 @@ unzigzag(uint64_t value, unsigned width)
 {
     uint64_t mask = width == 32 ? 0xffffffffull : ~0ull;
 
+    /* Mask first: an overlong varint must truncate like the reference. */
+    value &= mask;
     return ((value >> 1) ^ (0ull - (value & 1))) & mask;
 }
 
@@ -263,9 +265,13 @@ rd_fixed(rdr *r, uint64_t *out, size_t width)
 static int
 rd_tag(rdr *r, uint32_t *fnum, unsigned *wt)
 {
+    const uint8_t *start = r->p;
     uint64_t value;
 
     if (!rd_varint(r, &value)) {
+        return 0;
+    }
+    if ((size_t)(r->p - start) > 5) { /* overlong tag varint */
         return 0;
     }
     if ((value >> 3) == 0 || (value >> 3) > 0x1fffffffull) {
@@ -337,6 +343,7 @@ typedef struct {
     uint8_t packed;
     uint8_t required;
     uint8_t unsupported; /* group: skipped on decode, rejected on encode */
+    uint32_t oneof;      /* 1-based oneof group, 0 = not in a oneof */
     PyObject *sub;       /* owned MessageType for MESSAGE fields */
 } field_t;
 
@@ -922,6 +929,98 @@ append_list(PyObject *dict, PyObject **slot, PyObject *name, PyObject *value)
     return 1;
 }
 
+/* Protobuf merge semantics: a singular message field that shows up twice on
+ * the wire merges into what was already there instead of replacing it. */
+static int
+merge_into(PyObject *dst, PyObject *src)
+{
+    PyObject *key, *value;
+    Py_ssize_t pos = 0;
+
+    while (PyDict_Next(src, &pos, &key, &value)) {
+        PyObject *prev = PyDict_GetItemWithError(dst, key);
+
+        if (prev == NULL && PyErr_Occurred()) {
+            return 0;
+        }
+        if (prev != NULL && PyDict_Check(prev) && PyDict_Check(value)) {
+            if (!merge_into(prev, value)) {
+                return 0;
+            }
+            continue;
+        }
+        if (prev != NULL && PyList_Check(prev) && PyList_Check(value)) {
+            Py_ssize_t i, n = PyList_GET_SIZE(value);
+
+            for (i = 0; i < n; i++) {
+                if (PyList_Append(prev, PyList_GET_ITEM(value, i)) < 0) {
+                    return 0;
+                }
+            }
+            continue;
+        }
+        if (PyDict_SetItem(dst, key, value) < 0) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/* One oneof member set on the wire clears the others. */
+static int
+clear_oneof(MessageType *mt, PyObject *dict, uint32_t oneof, size_t keep)
+{
+    size_t i;
+
+    for (i = 0; i < mt->nfields; i++) {
+        if (mt->fields[i].oneof != oneof || i == keep) {
+            continue;
+        }
+        if (PyDict_DelItem(dict, mt->fields[i].name) < 0) {
+            if (!PyErr_ExceptionMatches(PyExc_KeyError)) {
+                return 0;
+            }
+            PyErr_Clear();
+        }
+    }
+    return 1;
+}
+
+/* Stores one singular value (steals the reference), applying oneof clearing
+ * and sub-message merging. */
+static int
+store_singular(MessageType *mt, PyObject *dict, size_t fidx, PyObject *value)
+{
+    field_t *f = &mt->fields[fidx];
+
+    if (f->oneof != 0 && !clear_oneof(mt, dict, f->oneof, fidx)) {
+        Py_DECREF(value);
+        return 0;
+    }
+    if (f->type == PBW_TYPE_MESSAGE) {
+        PyObject *prev = PyDict_GetItemWithError(dict, f->name);
+
+        if (prev == NULL && PyErr_Occurred()) {
+            Py_DECREF(value);
+            return 0;
+        }
+        if (prev != NULL && PyDict_Check(prev)) {
+            if (!merge_into(prev, value)) {
+                Py_DECREF(value);
+                return 0;
+            }
+            Py_DECREF(value);
+            return 1;
+        }
+    }
+    if (PyDict_SetItem(dict, f->name, value) < 0) {
+        Py_DECREF(value);
+        return 0;
+    }
+    Py_DECREF(value);
+    return 1;
+}
+
 static PyObject *
 dec_message(MessageType *mt, const uint8_t *wire, size_t wire_len,
             unsigned depth)
@@ -1002,11 +1101,8 @@ dec_message(MessageType *mt, const uint8_t *wire, size_t wire_len,
                 if (!append_list(dict, &lists[fidx], f->name, value)) {
                     goto fail;
                 }
-            } else if (PyDict_SetItem(dict, f->name, value) < 0) {
-                Py_DECREF(value);
+            } else if (!store_singular(mt, dict, fidx, value)) {
                 goto fail;
-            } else {
-                Py_DECREF(value);
             }
             continue;
         }
@@ -1120,11 +1216,8 @@ dec_message(MessageType *mt, const uint8_t *wire, size_t wire_len,
                 if (!append_list(dict, &lists[fidx], f->name, value)) {
                     goto fail;
                 }
-            } else if (PyDict_SetItem(dict, f->name, value) < 0) {
-                Py_DECREF(value);
+            } else if (!store_singular(mt, dict, fidx, value)) {
                 goto fail;
-            } else {
-                Py_DECREF(value);
             }
         }
     }
@@ -1243,6 +1336,7 @@ make_message(PyObject *schema_obj, const pbw_descriptor *desc, PyObject *cache)
         f->packed = pbw_field_is_packed(field) != 0;
         f->required = pbw_field_label(field) == PBW_LABEL_REQUIRED;
         f->unsupported = type == PBW_TYPE_GROUP;
+        f->oneof = pbw_field_oneof_index(field);
         mt->has_required |= f->required;
         if (f->name == NULL) {
             Py_DECREF(self);

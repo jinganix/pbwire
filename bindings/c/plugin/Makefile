@@ -36,7 +36,7 @@ regen: build
 		--plugin=protoc-gen-pbwire-c=$(BIN) \
 		--pbwire-c_out=$(CURDIR)/build/regen \
 		examples/addressbook.proto
-	cp build/regen/addressbook.h ../example/gen/addressbook.h
+	cp build/regen/addressbook.h ../examples/gen/addressbook.h
 	$(PROTOC) -I$(ROOT) --include_imports \
 		--descriptor_set_out=$(ROOT)/examples/addressbook.desc \
 		examples/addressbook.proto

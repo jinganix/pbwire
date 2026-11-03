@@ -82,9 +82,9 @@ $(DESC_BIN): tests/test_descriptor.c $(TEST_HDRS) $(LIB) | build
 
 C_RUNTIME := bindings/c/runtime/pbw_struct.c
 $(STRUCT_BIN): bindings/c/tests/test_struct.c $(C_RUNTIME) $(LIB) | build
-	$(CC) $(CFLAGS) $(CPPFLAGS) -Ibindings/c/runtime -Ibindings/c/tests -Ibindings/c/example -o $@ bindings/c/tests/test_struct.c $(C_RUNTIME) $(LIB)
-$(EXAMPLE_BIN): bindings/c/example/addressbook.c $(C_RUNTIME) $(LIB) | build
-	$(CC) $(CFLAGS) $(CPPFLAGS) -Ibindings/c/runtime -o $@ bindings/c/example/addressbook.c $(C_RUNTIME) $(LIB)
+	$(CC) $(CFLAGS) $(CPPFLAGS) -Ibindings/c/runtime -Ibindings/c/tests -Ibindings/c/examples -o $@ bindings/c/tests/test_struct.c $(C_RUNTIME) $(LIB)
+$(EXAMPLE_BIN): bindings/c/examples/addressbook.c $(C_RUNTIME) $(LIB) | build
+	$(CC) $(CFLAGS) $(CPPFLAGS) -Ibindings/c/runtime -o $@ bindings/c/examples/addressbook.c $(C_RUNTIME) $(LIB)
 
 # C++ binding example (bindings/cpp): same addressbook round-trip as the
 # C example, reusing the C runtime (compiled as C, linked into the C++
@@ -92,8 +92,16 @@ $(EXAMPLE_BIN): bindings/c/example/addressbook.c $(C_RUNTIME) $(LIB) | build
 CPP_RUNTIME_OBJ := build/pbw_struct_c.o
 $(CPP_RUNTIME_OBJ): $(C_RUNTIME) | build
 	$(CC) $(CFLAGS) $(CPPFLAGS) -Ibindings/c/runtime -c -o $@ $(C_RUNTIME)
-$(CPP_EXAMPLE_BIN): bindings/cpp/example/addressbook.cc $(CPP_RUNTIME_OBJ) $(LIB) | build
-	$(CXX) $(CXXFLAGS) $(CPPFLAGS) -Ibindings/c/runtime -Ibindings/c/example -o $@ bindings/cpp/example/addressbook.cc $(CPP_RUNTIME_OBJ) $(LIB)
+CPP_TEST_BIN := build/test_cpp_addressbook
+
+$(CPP_TEST_BIN): bindings/cpp/tests/roundtrip.cc $(CPP_RUNTIME_OBJ) $(LIB) | build
+	$(CXX) $(CXXFLAGS) $(CPPFLAGS) -Ibindings/c/runtime -Ibindings/c/examples -o $@ $< $(CPP_RUNTIME_OBJ) $(LIB)
+
+test-cpp: $(CPP_TEST_BIN)
+	./$(CPP_TEST_BIN)
+
+$(CPP_EXAMPLE_BIN): bindings/cpp/examples/addressbook.cc $(CPP_RUNTIME_OBJ) $(LIB) | build
+	$(CXX) $(CXXFLAGS) $(CPPFLAGS) -Ibindings/c/runtime -Ibindings/c/examples -o $@ bindings/cpp/examples/addressbook.cc $(CPP_RUNTIME_OBJ) $(LIB)
 
 examples: $(EXAMPLE_BIN) $(CPP_EXAMPLE_BIN)
 	./$(EXAMPLE_BIN)
@@ -131,12 +139,23 @@ $(CONFORMANCE_DESC): | build
 		--descriptor_set_out=$(CURDIR)/$(CONFORMANCE_DESC) \
 		google/protobuf/test_messages_proto3.proto \
 		google/protobuf/test_messages_proto2.proto \
+		conformance/conformance.proto \
 		conformance/test_protos/test_messages_edition2023.proto \
 		editions/golden/test_messages_proto3_editions.proto \
 		editions/golden/test_messages_proto2_editions.proto
 
 $(CONFORMANCE_TESTEE): conformance/testee.c $(LIB) | build
 	$(CC) $(CFLAGS) $(CPPFLAGS) -o $@ $< $(LIB)
+
+# Same suite through the Python binding (needs make python-bind first).
+conformance-python: python-bind $(CONFORMANCE_DESC)
+	@test -x "$(CONFORMANCE_RUNNER)" || { \
+		echo "conformance_test_runner not found: $(CONFORMANCE_RUNNER)"; \
+		echo "run 'make conformance-setup' first"; exit 1; }
+	$(CONFORMANCE_RUNNER) \
+		--failure_list bindings/python/conformance/failure_list.txt \
+		$(CURDIR)/$(PY) bindings/python/conformance/testee.py \
+		$(CURDIR)/$(CONFORMANCE_DESC)
 
 conformance: $(CONFORMANCE_DESC) $(CONFORMANCE_TESTEE)
 	@test -x "$(CONFORMANCE_RUNNER)" || { \
@@ -175,9 +194,9 @@ BENCH_C_BIN := build/bench_struct_c
 
 CFILES := include/*.h include/pbwire-protoc/*.h src/*.c src/*.h \
 	src/protoc/*.cc tests/*.c tests/protoc/*.cc bench/bench.cc conformance/testee.c \
-	bindings/c/benchmarks/*.cc bindings/python/csrc/*.c \
+	bindings/c/benchmarks/*.cc bindings/python/runtime/*.c \
 	bindings/c/runtime/*.c bindings/c/runtime/*.h \
-	bindings/c/example/*.c bindings/c/tests/*.c bindings/cpp/example/*.cc \
+	bindings/c/examples/*.c bindings/c/tests/*.c bindings/cpp/exampless/*.cc \
 	bindings/erlang/c_src/*.c bindings/erlang/c_src/*.h \
 	bindings/erlang/c_src_tests/*.c bindings/erlang/c_src_tests/*.h \
 	bindings/erlang/c_src_tests/stub/*.c bindings/erlang/c_src_tests/stub/*.h
@@ -231,7 +250,7 @@ else
 PY_LDFLAGS :=
 endif
 
-$(PY_MODULE): bindings/python/csrc/pbwire.c $(LIB) | build
+$(PY_MODULE): bindings/python/runtime/pbwire.c $(LIB) | build
 	$(CC) $(CFLAGS) $(CPPFLAGS) -fPIC -shared $(PY_INC) -Iinclude \
 		$(PY_LDFLAGS) -o $@ $< $(LIB)
 
@@ -256,4 +275,5 @@ clean:
 	rm -rf build bench/gen
 
 .PHONY: all test examples format format-check bench bench-c erlang-bench \
-	python-bind python-test python-bench difftest conformance desc-fixture clean
+	python-bind python-test python-bench difftest conformance conformance-python \
+	desc-fixture test-cpp clean
