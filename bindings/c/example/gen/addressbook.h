@@ -43,19 +43,19 @@ typedef struct {
 } tutorial_address_book_t;
 
 static const pbw_struct_field_t tutorial_person_phone_number_fields[] = {
-    {1, PBW_SF_STRING, 0, offsetof(tutorial_person_phone_number_t, number), 0, 0, 0, 0, NULL, 0},
-    {2, PBW_SF_ENUM, 0, offsetof(tutorial_person_phone_number_t, type), offsetof(tutorial_person_phone_number_t, has_type), 0, 0, 1, NULL, 0},
+    {1, PBW_SF_STRING, 0, offsetof(tutorial_person_phone_number_t, number), 0, 0, 0, 0, NULL, 0, PBW_TYPE_STRING, 2, 0, 1},
+    {2, PBW_SF_ENUM, 0, offsetof(tutorial_person_phone_number_t, type), offsetof(tutorial_person_phone_number_t, has_type), 0, 0, 1, NULL, 0, PBW_TYPE_ENUM, 0, 0, 0},
 };
 
 static const pbw_struct_field_t tutorial_person_fields[] = {
-    {1, PBW_SF_STRING, 0, offsetof(tutorial_person_t, name), 0, 0, 0, 0, NULL, 0},
-    {2, PBW_SF_INT32, 0, offsetof(tutorial_person_t, id), 0, 0, 0, 0, NULL, 0},
-    {3, PBW_SF_STRING, 0, offsetof(tutorial_person_t, email), 0, 0, 0, 0, NULL, 0},
-    {4, PBW_SF_MESSAGE, 1, offsetof(tutorial_person_t, phones), 0, offsetof(tutorial_person_t, n_phones), sizeof(tutorial_person_phone_number_t), 0, tutorial_person_phone_number_fields, 2},
+    {1, PBW_SF_STRING, 0, offsetof(tutorial_person_t, name), 0, 0, 0, 0, NULL, 0, PBW_TYPE_STRING, 2, 0, 1},
+    {2, PBW_SF_INT32, 0, offsetof(tutorial_person_t, id), 0, 0, 0, 0, NULL, 0, PBW_TYPE_INT32, 0, 0, 1},
+    {3, PBW_SF_STRING, 0, offsetof(tutorial_person_t, email), 0, 0, 0, 0, NULL, 0, PBW_TYPE_STRING, 2, 0, 0},
+    {4, PBW_SF_MESSAGE, 1, offsetof(tutorial_person_t, phones), 0, offsetof(tutorial_person_t, n_phones), sizeof(tutorial_person_phone_number_t), 0, tutorial_person_phone_number_fields, 2, PBW_TYPE_MESSAGE, 2, 0, 0},
 };
 
 static const pbw_struct_field_t tutorial_address_book_fields[] = {
-    {1, PBW_SF_MESSAGE, 1, offsetof(tutorial_address_book_t, people), 0, offsetof(tutorial_address_book_t, n_people), sizeof(tutorial_person_t), 0, tutorial_person_fields, 4},
+    {1, PBW_SF_MESSAGE, 1, offsetof(tutorial_address_book_t, people), 0, offsetof(tutorial_address_book_t, n_people), sizeof(tutorial_person_t), 0, tutorial_person_fields, 4, PBW_TYPE_MESSAGE, 2, 0, 0},
 };
 
 static inline pbw_status

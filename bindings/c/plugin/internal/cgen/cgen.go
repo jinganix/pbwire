@@ -360,9 +360,66 @@ func (g *generator) writeRow(b *strings.Builder, m protoreflect.MessageDescripto
 		sub = cname(f.Message()) + "_fields"
 		nsub = fmt.Sprintf("%d", messageFieldCount(f.Message()))
 	}
-	fmt.Fprintf(b, "    {%d, %s, %d, %s, %s, %s, %s, %s, %s, %s},\n",
-		f.Number(), kind, rep, off, has, count, elem, dflt, sub, nsub)
+	ptype, wire, err := pbwType(f)
+	if err != nil {
+		return err
+	}
+	packed := 0
+	if f.IsPacked() {
+		packed = 1
+	}
+	required := 0
+	if f.Cardinality() == protoreflect.Required {
+		required = 1
+	}
+	// The trailing type/wire/packed/required members let the runtime codec
+	// work without looking anything up in the schema.
+	fmt.Fprintf(b, "    {%d, %s, %d, %s, %s, %s, %s, %s, %s, %s, %s, %d, %d, %d},\n",
+		f.Number(), kind, rep, off, has, count, elem, dflt, sub, nsub,
+		ptype, wire, packed, required)
 	return nil
+}
+
+// pbwType maps a field to its pbw_type value and wire type. It mirrors
+// src/encode.c (wire_value / expected_wire_type); keep the two in sync.
+func pbwType(f protoreflect.FieldDescriptor) (string, int, error) {
+	switch f.Kind() {
+	case protoreflect.DoubleKind:
+		return "PBW_TYPE_DOUBLE", 1, nil
+	case protoreflect.FloatKind:
+		return "PBW_TYPE_FLOAT", 5, nil
+	case protoreflect.Int64Kind:
+		return "PBW_TYPE_INT64", 0, nil
+	case protoreflect.Uint64Kind:
+		return "PBW_TYPE_UINT64", 0, nil
+	case protoreflect.Int32Kind:
+		return "PBW_TYPE_INT32", 0, nil
+	case protoreflect.Fixed64Kind:
+		return "PBW_TYPE_FIXED64", 1, nil
+	case protoreflect.Fixed32Kind:
+		return "PBW_TYPE_FIXED32", 5, nil
+	case protoreflect.BoolKind:
+		return "PBW_TYPE_BOOL", 0, nil
+	case protoreflect.StringKind:
+		return "PBW_TYPE_STRING", 2, nil
+	case protoreflect.GroupKind:
+		return "PBW_TYPE_GROUP", 3, nil
+	case protoreflect.MessageKind:
+		return "PBW_TYPE_MESSAGE", 2, nil
+	case protoreflect.Uint32Kind:
+		return "PBW_TYPE_UINT32", 0, nil
+	case protoreflect.EnumKind:
+		return "PBW_TYPE_ENUM", 0, nil
+	case protoreflect.Sfixed32Kind:
+		return "PBW_TYPE_SFIXED32", 5, nil
+	case protoreflect.Sfixed64Kind:
+		return "PBW_TYPE_SFIXED64", 1, nil
+	case protoreflect.Sint32Kind:
+		return "PBW_TYPE_SINT32", 0, nil
+	case protoreflect.Sint64Kind:
+		return "PBW_TYPE_SINT64", 0, nil
+	}
+	return "", 0, fmt.Errorf("%s: unsupported kind %s", f.FullName(), f.Kind())
 }
 
 func messageFieldCount(m protoreflect.MessageDescriptor) int {

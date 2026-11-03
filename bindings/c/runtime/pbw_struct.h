@@ -51,6 +51,14 @@ typedef struct pbw_struct_field {
     int32_t dflt;                          /* ENUM default when absent (proto2 [default=] or 0) */
     const struct pbw_struct_field *fields; /* sub-layout (MESSAGE) */
     size_t nfields;
+    /* Wire facts, filled in by the code generator. A table that leaves type
+     * at 0 (tables written before these members existed) makes the codec fall
+     * back to the schema, which is slower but identical. With them the codec
+     * needs no schema lookup at all. */
+    uint8_t type;     /* pbw_type of the field */
+    uint8_t wire;     /* wire type of one element */
+    uint8_t packed;   /* repeated and packed on the wire */
+    uint8_t required; /* proto2 required */
 } pbw_struct_field_t;
 
 #ifdef __cplusplus

@@ -71,7 +71,7 @@ Run `make test` after any C change; run `make format` after touching `include/`,
 | `bench/msg.proto` | proto3 message used by both; `bench/gen/` is generated, never committed |
 | `bench/msg2.proto` | proto2 counterpart: explicit presence, groups, required fields, closed enums, extensions |
 | `BENCHMARKS.md` | the four standard payload tiers, every binding vs its baseline, cross-binding table |
-| `bindings/c/` | C binding: struct engine (`runtime/`), `protoc-gen-pbwire-c` (`plugin/`), `tests/`, `benchmarks/`, `example/` |
+| `bindings/c/` | C binding: direct struct codec (`runtime/pbw_struct.c`, layout tables carry the wire facts), `protoc-gen-pbwire-c` (`plugin/`), `tests/`, `benchmarks/`, `example/` |
 | `bindings/python/` | Python binding: `pbwire_cffi.py` (schema from a descriptor set, dict<->wire), `csrc/` bulk bridge, `tests/`, `benchmarks/` |
 | `bindings/go/`, `bindings/cpp/` | cgo smoke package and a C++ example over the C runtime |
 | `bindings/erlang/` | Erlang/OTP NIF binding with its own AGENTS.md |

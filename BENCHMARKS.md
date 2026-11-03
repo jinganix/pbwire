@@ -40,14 +40,20 @@ op (`<op>: <bytes> bytes, <iterations> iterations in <seconds>s; <MB/s>MB/s;
 
 ## Bindings vs their baselines
 
-| binding | harness | baseline | cases | status |
+| binding | harness | baseline | cases | vs baseline (xlarge) |
 |---|---|---|---|---|
-| core (dynamic) | `make bench` (`bench/bench.cc`) | `protoc` C++ generated + DynamicMessage | all 4 | ✅ |
-| C structs | `make bench-c` (`bindings/c/benchmarks/bench_struct.cc`) | `protoc` C++ generated from the same `matrix3.proto` | all 4 | ✅ |
-| Python (cffi) | `make python-bench` (`bindings/python/benchmarks/bench.py`) | `google.protobuf` (upb C extension) on the same `matrix3.proto` | all 4 | ✅ |
-| Erlang/OTP NIF | `make benchmarks` in `bindings/erlang/benchmarks` | gpb (pure Erlang) and gpb NIF (libprotobuf) | medium, xlarge | ✅ |
+| core (dynamic) | `make bench` (`bench/bench.cc`) | `protoc` C++ generated + DynamicMessage | all 4 | 1.5x / 1.4x ✅ |
+| C structs | `make bench-c` (`bindings/c/benchmarks/bench_struct.cc`) | `protoc` C++ generated from the same `matrix3.proto` | all 4 | 1.11x / 1.20x ✅ |
+| Erlang/OTP NIF | `make benchmarks` in `bindings/erlang/benchmarks` | gpb (pure Erlang) and gpb NIF (libprotobuf) | medium, xlarge | 1.9x / 1.2x ✅ |
+| Python (cffi) | `make python-bench` (`bindings/python/benchmarks/bench.py`) | `google.protobuf` (upb C extension) on the same `matrix3.proto` | all 4 | 0.02x ❌ |
 | C++ | same engine as C (`bindings/cpp` mirrors the C structs) | — | — | planned |
 | Go | smoke cover only, no perf harness yet | — | — | planned |
+
+"vs baseline" is encode / decode throughput relative to the baseline on the
+largest case the binding runs. The Python row is the one binding that is far
+behind: it is a cffi ABI bridge in front of the core, and its baseline is a
+C++ extension; closing that needs a CPython extension that converts
+dict <-> wire in C, not another Python-side shortcut.
 
 Correctness first everywhere: the core bench verifies byte-for-byte equality
 before timing, the C and Python benches check their bytes against the
@@ -85,19 +91,21 @@ Threads (169 B, 1 vs 8):
 
 | payload | op | pbwire-c (MB/s, x gen) | protoc gen (MB/s) |
 |---|---|---|---|
-| 136 B | encode | 197.3 (0.14x) | 1417.4 |
-| 136 B | decode | 273.9 (0.32x) | 845.3 |
-| 174 B | encode | 196.0 (0.14x) | 1385.9 |
-| 174 B | decode | 271.4 (0.36x) | 756.3 |
-| 2469 B | encode | 150.4 (0.17x) | 908.2 |
-| 2469 B | decode | 250.3 (0.63x) | 398.5 |
-| 74913 B | encode | 151.7 (0.17x) | 914.0 |
-| 74913 B | decode | 268.8 (0.70x) | 384.1 |
+| 136 B | encode | 807.2 (0.55x) | 1455.6 |
+| 136 B | decode | 517.0 (0.58x) | 892.3 |
+| 174 B | encode | 875.3 (0.63x) | 1391.6 |
+| 174 B | decode | 441.1 (0.59x) | 750.3 |
+| 2469 B | encode | 845.3 (0.97x) | 869.3 |
+| 2469 B | decode | 409.7 (1.12x) | 366.7 |
+| 74913 B | encode | 971.9 (1.11x) | 879.1 |
+| 74913 B | decode | 434.2 (1.20x) | 361.4 |
 
-The struct layer pays for walking twice (structs → message tree → wire) plus
-one allocation per value, so it trails generated code; decode stays closer
-because parsing dominates on both sides. The struct decode time includes the
-mandatory `free` (the decoder allocates into the output struct).
+The struct codec writes and reads wire bytes directly from the layout tables;
+there is no dynamic message tree in between. That is what changed here: it used
+to build a `pbw_message` first, which cost 146 MB/s encode and 268 MB/s decode
+on the 75 KB tier (0.17x / 0.32x of generated code). From ~2.5 KB up it now
+matches or beats generated code; the 136 B / 174 B tiers stay ~1.7x behind
+because `protoc --cpp_out` emits straight-line code with no per-field dispatch.
 
 ### Python (cffi) vs `google.protobuf` (upb)
 
