@@ -169,6 +169,11 @@ struct pbw_message {
     uint8_t *unknown;
     size_t unknown_len;
     size_t unknown_cap;
+    /* Wire bytes this tree was loaded from (root only, 0 = unknown).
+     * encode_alloc() uses it as the initial buffer guess: exact for an
+     * untouched tree, and merely a guess otherwise (the writer grows on
+     * demand), so it needs no invalidation on mutation. Set at decode. */
+    size_t wire_len;
 };
 
 /* Link-time decode actions for one-byte tags (see tag_action). Only shapes

@@ -35,23 +35,35 @@ fi
     }
     next
 }
+function cell(v, base) {
+    if (base > 0) {
+        return sprintf("%.1f (%.2fx)", v, v / base)
+    }
+    return sprintf("%.1f", v)
+}
 END {
-    printf("| payload | op | pbwire ctx (MB/s) | pbwire plain (MB/s) | protoc gen (MB/s) | DynamicMessage (MB/s) |\n")
+    printf("| payload | op | pbwire ctx (MB/s, x gen) | pbwire plain (MB/s, x gen) | protoc gen (MB/s) | DynamicMessage (MB/s) |\n")
     printf("|---|---|---|---|---|---|\n")
     for (i = 1; i <= nsec; i++) {
         s = order[i]
-        printf("| %s B | encode | %.1f | %.1f | %.1f | %.1f |\n", secbytes[s],
-            mbps[s, "pbwire c", "encode"], mbps[s, "pbwire", "encode"],
+        printf("| %s B | encode | %s | %s | %.1f | %.1f |\n", secbytes[s],
+            cell(mbps[s, "pbwire c", "encode"], mbps[s, "pb gen", "encode"]),
+            cell(mbps[s, "pbwire", "encode"], mbps[s, "pb gen", "encode"]),
             mbps[s, "pb gen", "encode"], mbps[s, "pb dyn", "encode"])
-        printf("| %s B | decode | %.1f | %.1f | %.1f | %.1f |\n", secbytes[s],
-            mbps[s, "pbwire c", "decode"], mbps[s, "pbwire", "decode"],
+        printf("| %s B | decode | %s | %s | %.1f | %.1f |\n", secbytes[s],
+            cell(mbps[s, "pbwire c", "decode"], mbps[s, "pb gen", "decode"]),
+            cell(mbps[s, "pbwire", "decode"], mbps[s, "pb gen", "decode"]),
             mbps[s, "pb gen", "decode"], mbps[s, "pb dyn", "decode"])
     }
-    printf("\n| op | pbwire 1thr (MB/s) | pbwire 8thr agg (MB/s) | gen 1thr (MB/s) | gen 8thr agg (MB/s) |\n")
+    printf("\n| op | pbwire 1thr (MB/s, x gen) | pbwire 8thr agg (MB/s, x gen) | gen 1thr (MB/s) | gen 8thr agg (MB/s) |\n")
     printf("|---|---|---|---|---|\n")
-    printf("| encode | %.1f | %.1f | %.1f | %.1f |\n", thr1["pbwire", "encode"],
-        thragg["pbwire", "encode"], thr1["pb gen", "encode"], thragg["pb gen", "encode"])
-    printf("| decode | %.1f | %.1f | %.1f | %.1f |\n", thr1["pbwire", "decode"],
-        thragg["pbwire", "decode"], thr1["pb gen", "decode"], thragg["pb gen", "decode"])
+    printf("| encode | %s | %s | %.1f | %.1f |\n",
+        cell(thr1["pbwire", "encode"], thr1["pb gen", "encode"]),
+        cell(thragg["pbwire", "encode"], thragg["pb gen", "encode"]),
+        thr1["pb gen", "encode"], thragg["pb gen", "encode"])
+    printf("| decode | %s | %s | %.1f | %.1f |\n",
+        cell(thr1["pbwire", "decode"], thr1["pb gen", "decode"]),
+        cell(thragg["pbwire", "decode"], thragg["pb gen", "decode"]),
+        thr1["pb gen", "decode"], thragg["pb gen", "decode"])
 }
 '

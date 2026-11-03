@@ -633,8 +633,22 @@ encode_alloc(const pbw_message *msg, int det, uint8_t **out, size_t *len)
         return PBW_ERR_INVALID;
     }
     pbw_buf_init(&buf);
-    if (!pbw_buf_reserve(&buf, size_hint(msg, 0))) {
-        return PBW_ERR_NOMEM;
+    {
+        /* Load-time hint first: a decoded tree re-encodes to about its wire
+         * length, so no walk is needed (exact for untouched trees; the
+         * writer grows if it was mutated, hence no invalidation). Hand-built
+         * trees keep the exact-size hint: fixed starts win small messages
+         * but lose large ones on realloc chains (measured 2026-11). */
+        size_t initial;
+
+        if (msg->wire_len > 0 && msg->wire_len <= SIZE_MAX - 32) {
+            initial = msg->wire_len + 32;
+        } else {
+            initial = size_hint(msg, 0);
+        }
+        if (!pbw_buf_reserve(&buf, initial)) {
+            return PBW_ERR_NOMEM;
+        }
     }
     w.buf = &buf;
     w.pos = 0;

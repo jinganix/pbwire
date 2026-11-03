@@ -1526,9 +1526,18 @@ test_ctx_retain_cap(pbw_schema *schema)
     CHECK_STATUS(PBW_OK,
                  pbw_decode_ctx(ctx, person, big_wire, big_len, &decoded));
     CHECK(decoded != NULL);
+    CHECK(decoded->wire_len == big_len); /* load-time size for encode */
     CHECK(pbw_ctx_used(ctx) > ((size_t)2 << 20));
     pbw_ctx_reset(ctx);
     CHECK(test_head_cap(ctx) <= PBW_ARENA_LARGE_THRESHOLD);
+    {
+        /* Same through the plain path. */
+        pbw_message *plain = NULL;
+
+        CHECK_STATUS(PBW_OK, pbw_decode(person, big_wire, big_len, &plain));
+        CHECK(plain != NULL && plain->wire_len == big_len);
+        pbw_message_free(plain);
+    }
 
     /* A small budget drops even a 4 KiB head on reset, and decoding still
      * works afterwards. */

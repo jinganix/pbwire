@@ -506,14 +506,14 @@ encoder. Decode rows sink only the status, so "decode" measures decoding rather 
 a full-tree walk (which costs each side differently). Apple M4 Pro, `-O2`, `protoc 36.2`, 200k
 iterations, throughput in MB/s (higher is better):
 
-| payload | op | pbwire ctx (MB/s) | pbwire plain (MB/s) | protoc gen (MB/s) | DynamicMessage (MB/s) |
+| payload | op | pbwire ctx (MB/s, x gen) | pbwire plain (MB/s, x gen) | protoc gen (MB/s) | DynamicMessage (MB/s) |
 |---|---|---|---|---|---|
-| 132 B | encode | 1878.2 | 1369.0 | 1543.4 | 111.9 |
-| 132 B | decode | 1328.3 | 957.4 | 892.2 | 284.0 |
-| 169 B | encode | 1721.8 | 1209.9 | 1658.6 | 104.5 |
-| 169 B | decode | 1048.9 | 785.6 | 794.3 | 278.4 |
-| 2755 B | encode | 1500.1 | 1287.0 | 1107.0 | 130.6 |
-| 2755 B | decode | 548.3 | 531.8 | 440.2 | 255.3 |
+| 132 B | encode | 1888.1 (1.15x) | 1385.1 (0.84x) | 1641.1 | 110.2 |
+| 132 B | decode | 1449.3 (1.59x) | 987.9 (1.08x) | 910.8 | 287.5 |
+| 169 B | encode | 1741.9 (1.02x) | 1275.8 (0.75x) | 1712.0 | 108.7 |
+| 169 B | decode | 1080.7 (1.32x) | 829.3 (1.01x) | 819.2 | 281.1 |
+| 2755 B | encode | 1491.1 (1.31x) | 1233.6 (1.09x) | 1135.6 | 133.5 |
+| 2755 B | decode | 549.0 (1.18x) | 517.9 (1.11x) | 465.9 | 256.9 |
 
 Throughput moves by a few percent between runs; the numbers above are one run.
 Regenerate both tables for the current machine with `scripts/perf.sh` (same layout, MB/s only).
@@ -522,15 +522,15 @@ Regenerate both tables for the current machine with `scripts/perf.sh` (same layo
 thread, the same read-only wire input) and prints MB/s per thread, aggregate MB/s, the per-operation
 degradation and the aggregate speedup. Same machine (14 cores), from the same run:
 
-| op | pbwire 1thr (MB/s) | pbwire 8thr agg (MB/s) | gen 1thr (MB/s) | gen 8thr agg (MB/s) |
+| op | pbwire 1thr (MB/s, x gen) | pbwire 8thr agg (MB/s, x gen) | gen 1thr (MB/s) | gen 8thr agg (MB/s) |
 |---|---|---|---|---|
-| encode | 1732.0 | 13731.8 | 1646.7 | 10200.0 |
-| decode | 1091.3 | 6775.1 | 811.3 | 5890.3 |
+| encode | 1680.6 (1.15x) | 13998.2 (1.40x) | 1467.2 | 9967.6 |
+| decode | 1099.1 (1.39x) | 7268.8 (1.25x) | 789.5 | 5809.0 |
 
 `8thr agg` is the total throughput of all eight threads. The schema, the descriptors and the wire
 input are shared by all threads; each thread only adds its own `pbw_ctx` and message. pbwire scales
-7.9x (encode) and 6.2x (decode) from 1 to 8 threads in that run; generated code reaches 6.2x and
-7.3x. Both are limited by cache and memory bandwidth, not by a lock: the library has no global or
+8.3x (encode) and 6.6x (decode) from 1 to 8 threads in that run; generated code reaches 6.8x and
+7.4x. Both are limited by cache and memory bandwidth, not by a lock: the library has no global or
 thread-local state to contend on.
 
 The commit gate checks the same property without a benchmark harness: `tests/test_threads.c` prints
