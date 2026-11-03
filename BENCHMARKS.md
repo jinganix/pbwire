@@ -96,13 +96,13 @@ class): enif_protobuf vs gpb vs gpb NIF, throughput in MB/s:
 
 | Test case | epb | gpb | gpb nif |
 |-----------|-----|-----|---------|
-| Small msgs · serialize | 286.91 | 157.14 | 56.79 |
-| Small msgs · deserialize | 716.65 | 272.49 | 76.29 |
-| Large msgs · serialize | 299.14 | 135.76 | 103.76 |
-| Large msgs · deserialize | 516.21 | 255.91 | 196.61 |
+| medium · 228 B · serialize | 286.91 | 157.14 | 56.79 |
+| medium · 228 B · deserialize | 716.65 | 272.49 | 76.29 |
+| xlarge · 84584 B · serialize | 299.14 | 135.76 | 103.76 |
+| xlarge · 84584 B · deserialize | 516.21 | 255.91 | 196.61 |
 
-Small/large here are the 228 B and 84584 B Google messages, i.e. the medium
-and xlarge tiers above.
+These are the gpb suite's two fixed Google messages, i.e. the medium and
+xlarge tiers above; the Erlang suite has no small/large fixture.
 
 ## Run them
 
