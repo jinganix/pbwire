@@ -76,7 +76,7 @@ Run `make test` after any C change; run `make format` after touching `include/`,
 | `BENCHMARKS.md` | the four standard payload tiers, every binding vs its baseline, cross-binding table |
 | `bindings/c/` | C binding: direct struct codec (`runtime/pbw_struct.c`, layout tables carry the wire facts), `protoc-gen-pbwire-c` (`plugin/`), `examples/`, `tests/`, `benchmarks/`, `conformance/` |
 | `bindings/python/` | Python binding: CPython extension (`runtime/pbwire.c`, dict<->wire in C), `examples/`, `tests/`, `benchmarks/`, `conformance/` (official runner testee) |
-| `bindings/go/` | cgo binding: `runtime/` (package pbwire), `examples/`, `benchmarks/`, `conformance/` |
+| `bindings/go/` | `protoc-gen-pbwire-go` (`plugin/`) + generated struct codecs over the dependency-free `runtime/`, `tests/`, `examples/`, `benchmarks/`, `conformance/` |
 | `bindings/cpp/` | C++ binding over the shared C runtime: `examples/`, `tests/`, `benchmarks/`, `conformance/` |
 | `bindings/erlang/` | Erlang/OTP NIF binding with its own AGENTS.md |
 | `scripts/` | Gate scripts: `check.sh` (hooks), `validate-commit-msg.sh`, `setup-git-hooks.sh` |

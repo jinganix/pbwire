@@ -39,6 +39,7 @@ coverage/
 *.tsbuildinfo
 bench/gen/
 bindings/c/benchmarks/gen/
+bindings/go/benchmarks/gen/
 bindings/python/benchmarks/gen/
 bindings/python/*.so
 bindings/python/*.dylib

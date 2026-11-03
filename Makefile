@@ -77,6 +77,40 @@ erlang-bench:
 plugin-c:
 	$(MAKE) -C bindings/c/plugin test
 
+# Go binding (bindings/go): protoc-gen-pbwire-go emits plain Go structs with
+# straight-line codecs, no cgo and no runtime dependency. Tests replay pinned
+# protoc requests and pinned reference bytes, so they need Go only; the
+# benchmark additionally needs protoc, protoc-gen-go and google.golang.org/
+# protobuf (same optional status as bench/bench-c).
+GO ?= go
+GO_PLUGIN_BIN := bindings/go/plugin/build/protoc-gen-pbwire-go
+GO_BENCH_GEN := bindings/go/benchmarks/gen
+
+$(GO_PLUGIN_BIN): $(shell find bindings/go/plugin -type f -name '*.go') \
+		bindings/go/plugin/go.mod bindings/go/plugin/go.sum
+	$(MAKE) -C bindings/go/plugin build
+
+plugin-go: $(GO_PLUGIN_BIN)
+
+go-test: $(GO_PLUGIN_BIN)
+	cd bindings/go && $(GO) test ./...
+	$(MAKE) -C bindings/go/plugin test
+
+$(GO_BENCH_GEN)/official/matrix3.pb.go: bindings/c/tests/data/matrix3.proto
+	@mkdir -p $(dir $@)
+	$(PROTOC) -Ibindings/c/tests/data --go_out=$(GO_BENCH_GEN)/official \
+		--go_opt=paths=source_relative \
+		--go_opt=Mmatrix3.proto=pbwire/benchmarks/gen/official $<
+
+$(GO_BENCH_GEN)/pbwire/matrix3.pbwire.go: bindings/c/tests/data/matrix3.proto $(GO_PLUGIN_BIN)
+	@mkdir -p $(dir $@)
+	$(PROTOC) -Ibindings/c/tests/data \
+		--plugin=protoc-gen-pbwire-go=$(GO_PLUGIN_BIN) \
+		--pbwire-go_out=$(GO_BENCH_GEN)/pbwire $<
+
+go-bench: $(GO_BENCH_GEN)/official/matrix3.pb.go $(GO_BENCH_GEN)/pbwire/matrix3.pbwire.go
+	cd bindings/go/benchmarks && $(GO) run .
+
 $(DESC_BIN): tests/test_descriptor.c $(TEST_HDRS) $(LIB) | build
 	$(CC) $(CFLAGS) $(CPPFLAGS) -o $@ $< $(LIB)
 
@@ -153,7 +187,6 @@ conformance-python: python-bind $(CONFORMANCE_DESC)
 		echo "conformance_test_runner not found: $(CONFORMANCE_RUNNER)"; \
 		echo "run 'make conformance-setup' first"; exit 1; }
 	$(CONFORMANCE_RUNNER) \
-		--failure_list bindings/python/conformance/failure_list.txt \
 		$(CURDIR)/$(PY) bindings/python/conformance/testee.py \
 		$(CURDIR)/$(CONFORMANCE_DESC)
 
@@ -196,7 +229,7 @@ CFILES := include/*.h include/pbwire-protoc/*.h src/*.c src/*.h \
 	src/protoc/*.cc tests/*.c tests/protoc/*.cc bench/bench.cc conformance/testee.c \
 	bindings/c/benchmarks/*.cc bindings/python/runtime/*.c \
 	bindings/c/runtime/*.c bindings/c/runtime/*.h \
-	bindings/c/examples/*.c bindings/c/tests/*.c bindings/cpp/exampless/*.cc \
+	bindings/c/examples/*.c bindings/c/tests/*.c bindings/cpp/examples/*.cc \
 	bindings/erlang/c_src/*.c bindings/erlang/c_src/*.h \
 	bindings/erlang/c_src_tests/*.c bindings/erlang/c_src_tests/*.h \
 	bindings/erlang/c_src_tests/stub/*.c bindings/erlang/c_src_tests/stub/*.h
@@ -272,8 +305,8 @@ difftest: $(BENCH_BIN)
 	./$(BENCH_BIN) difftest
 
 clean:
-	rm -rf build bench/gen
+	rm -rf build bench/gen bindings/go/benchmarks/gen
 
 .PHONY: all test examples format format-check bench bench-c erlang-bench \
 	python-bind python-test python-bench difftest conformance conformance-python \
-	desc-fixture test-cpp clean
+	desc-fixture test-cpp clean plugin-c plugin-go go-test go-bench
