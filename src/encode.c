@@ -1191,6 +1191,16 @@ encode_alloc(const pbw_message *msg, int det, uint8_t **out, size_t *len)
         if (msg->wire_len > 0 && msg->wire_len <= SIZE_MAX - 32) {
             initial = msg->wire_len + 32;
         } else {
+            /* Tried 512/1024 here (2026-11): large x100 saved ~230 ns by
+             * skipping two doublings, but small x0/x1 lost 6-8 ns to the
+             * bigger malloc and flipped below gen. Keep 256: the plain path
+             * stays within noise on small tiers, ctx is the stable fast
+             * path. Do not retry without a size hint that costs <10 ns.
+             * Tried removing the per-write capacity checks instead (2026-11):
+             * a 15-field hand-built message saved 1.6 ns (58.1 -> 56.5),
+             * the checks already hit the fast path and the per-field dispatch
+             * dominates. A cursor-hoisted rewrite like the struct codec's
+             * tail is not worth it here; the malloc is the floor. */
             initial = 256;
         }
         if (!pbw_buf_reserve(&buf, initial)) {

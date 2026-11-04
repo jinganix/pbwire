@@ -153,6 +153,7 @@ CASES.each do |label, repeats, want, iterations|
     fail(label, 'pbwire-ruby and google-protobuf encode differently')
     next
   end
+  decoder = schema.message('structtest.Scalars3')
   # Decode must round-trip byte-exactly and expose the same values.
   back = decoder.decode(reference)
   back_ok = (back.encode == reference) &&
@@ -170,7 +171,6 @@ CASES.each do |label, repeats, want, iterations|
   puts "OK   #{label} encoding parity (#{reference.bytesize} bytes)"
 
   official = fill_official(repeats)
-  decoder = schema.message('structtest.Scalars3')
   ns, count = measure(iterations,
                        'pbwire_encode' => -> { message.encode },
                        'gem_encode' => -> { Structtest::Scalars3.encode(official) },

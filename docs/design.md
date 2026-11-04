@@ -75,6 +75,35 @@ src/text.c           text format printer + parser
 src/internal.h       internal structs and helpers; never included by consumers
 ```
 
+## Prejudge at load
+
+Every hot loop in `src/` and the C struct runtime runs on facts decided
+before the first byte moves, not derived per field. The rule is the same
+everywhere: **decide at link/load, hint at entry, never re-derive in the
+loop.** What that means per site:
+
+| decided when | fact | used where |
+|---|---|---|
+| `pbw_schema_link()` | tag bytes + word store, wire type, packed form, dense fnum map, 1-byte tag map, per-field decode action | `decode_fields()` dispatches with two indexed loads and no type/label/oneof/enum checks |
+| `pbw_schema_link()` | `has_required`, `has_closed_enum` | decoders skip the required walk and the enum detour for subtrees that cannot need them |
+| `pbw_schema_load` / decode entry | `wire_len` (bytes the tree was loaded from) | `encode_alloc()` sizes the first buffer from it: exact for untouched trees |
+| decode entry | arena first-chunk hint from the wire length | `pbw_decode()` lands the whole tree in one `malloc` |
+| `pbw_struct_codec_init()` | per-level `tail` (suffix worst-case bytes) | `enc_msg()` reserves once and writes singular scalars through a hoisted cursor with no capacity check |
+| `MessageType` resolve (every binding) | field facts cached per type | hot encode/decode loops never walk the descriptor |
+
+Runtime hints (`wire_len`, arena size, last-encoded length, buffer
+capacity) are guesses, never invalid state: a wrong hint only costs a
+grow, never a wrong byte. Entry reserves are absolute (`cap - len`), so
+a hint that is too small degrades to the old per-field path instead of
+overflowing.
+
+The discipline around new ideas is recorded at the site, not in a
+separate log: a rejected scheme stays as a comment with its measured
+delta (see the `256` initial buffer in `encode_alloc()`, the `tail`
+comment in `enc_msg()`), so a later pass does not retry it without a
+cheaper hint. `BENCHMARKS.md` holds the A/B numbers behind the current
+shapes.
+
 ## Dynamic message semantics
 
 - **Explicit presence for every field.** Nothing is filled with defaults; a

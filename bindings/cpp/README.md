@@ -40,13 +40,13 @@ performance numbers; higher is better, MB/s over wire bytes:
 
 | payload | op | pbwire-c (MB/s, x gen) | protoc gen (MB/s) |
 |---|---|---|---|
-| 136 B | encode | 1354.7 (0.96x) | 1405.2 |
-| 136 B | decode | 1123.1 (1.32x) | 848.4 |
-| 174 B | encode | 1436.5 (1.06x) | 1350.2 |
-| 174 B | decode | 1049.0 (1.35x) | 777.9 |
-| 2469 B | encode | 1043.0 (1.17x) | 891.5 |
-| 2469 B | decode | 786.7 (2.01x) | 391.3 |
-| 74913 B | encode | 1300.6 (1.42x) | 913.2 |
-| 74913 B | decode | 885.4 (2.25x) | 393.6 |
+| 136 B | encode | 1669.6 (1.22x) | 1364.9 |
+| 136 B | decode | 1120.9 (1.39x) | 809.1 |
+| 174 B | encode | 1637.2 (1.22x) | 1338.4 |
+| 174 B | decode | 1017.4 (1.33x) | 765.1 |
+| 2469 B | encode | 1187.7 (1.35x) | 877.8 |
+| 2469 B | decode | 779.6 (1.95x) | 399.7 |
+| 74913 B | encode | 1444.7 (1.58x) | 911.5 |
+| 74913 B | decode | 865.1 (2.26x) | 383.3 |
 
 
