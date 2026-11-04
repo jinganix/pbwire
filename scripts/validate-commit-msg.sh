@@ -14,6 +14,10 @@ case "$HEADER" in
   "Merge branch "*|"Merge remote-tracking branch "*|"Merge remote branch "*|\
   "Merge pull request "*|"Merge commit "*|"Merge tag "*) exit 0
     ;;
+  # GitHub's synthetic merge for pull_request CI runs
+  # ("Merge <sha> into <sha>"): machine-made, not hand-written.
+  "Merge "[0-9a-f]*" into "[0-9a-f]*) exit 0
+    ;;
   Merge*)
     echo "commit-msg: hand-written merge message -- use <type>(<scope>): <subject> instead"
     echo "  see CONTRIBUTING.md"

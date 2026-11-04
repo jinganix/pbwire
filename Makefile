@@ -94,7 +94,7 @@ plugin-c:
 # other cgo/FFI bindings).
 GO ?= go
 
-go-test:
+go-test: $(LIB)
 	cd bindings/go && $(GO) test ./...
 
 go-bench: $(LIB)
