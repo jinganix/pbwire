@@ -1800,6 +1800,12 @@ bench_stream(const char *label, int repeated, int iterations,
                     },
                                               iterations),
                     bytes});
+    rows.push_back({"pbwire", "size", time_it([&] {
+                        size_t n = 0;
+                        (void)pbw_message_encoded_size(pbw_msg, &n);
+                    },
+                                              iterations, iterations / 10),
+                    bytes});
     rows.push_back({"pbwire", "sink", time_it([&] {
                         (void)pbw_encode_sink(pbw_msg, null_sink, nullptr);
                     },

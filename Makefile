@@ -432,7 +432,7 @@ typed-conformance:
 	$(MAKE) -C bindings/typed conformance
 
 clean:
-	rm -rf build bindings/typed/build bench/gen \
+	rm -rf build bindings/typed/build bench/gen bindings/go/benchmarks/gen \
 		bindings/java/benchmarks/gen bindings/java/benchmarks/out \
 		bindings/node/benchmarks/gen bindings/ruby/benchmarks/gen \
 		bindings/ruby/lib/pbwire_ext.* bindings/objc/benchmarks/gen \

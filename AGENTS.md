@@ -174,9 +174,10 @@ takes down the whole host process. Anything is better than a segfault.
 ## Commits
 
 - Commit only when the user explicitly asks; follow `CONTRIBUTING.md`
+- Conventional Commits (commitizen-compatible): `<type>(<scope>): <subject>`, header <= 100 characters; types/scopes per `CONTRIBUTING.md`
+- English-only (ASCII) everywhere: commit messages, PR titles/bodies, review replies -- no CJK or other non-ASCII (enforced by `validate-commit-msg.sh` for commits)
 - Run `./scripts/check.sh` before committing or pushing. Use `SKIP_CHECKS=1` only with a real
   reason, and say so in the summary
-- Commit messages are English-only (ASCII): `<type>(<scope>): <subject>`, header <= 100 characters
 
 ## Repository conventions
 

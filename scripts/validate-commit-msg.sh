@@ -7,9 +7,18 @@ set -e
 COMMIT_MSG_FILE="${1:?usage: validate-commit-msg.sh <commit-msg-file>}"
 HEADER=$(sed -n '1p' "$COMMIT_MSG_FILE")
 
-# Merge commits
+# Genuine git-generated merge headers only. A hand-written message like
+# "Merge dev into master" is not one: write a conventional message instead
+# (e.g. chore(bindings): record master as merged).
 case "$HEADER" in
-  Merge*) exit 0
+  "Merge branch "*|"Merge remote-tracking branch "*|"Merge remote branch "*|\
+  "Merge pull request "*|"Merge commit "*|"Merge tag "*) exit 0
+    ;;
+  Merge*)
+    echo "commit-msg: hand-written merge message -- use <type>(<scope>): <subject> instead"
+    echo "  see CONTRIBUTING.md"
+    exit 1
+    ;;
 esac
 
 TYPES='feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert'

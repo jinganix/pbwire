@@ -213,10 +213,10 @@ main(int argc, char **argv)
                 NSData *backBytes = back == nil ? nil : [back encode:&gateError];
                 PBWMessage *backInner = back == nil ? nil : [back messageForField:@"inner"];
                 BOOL backOk = back != nil && backBytes != nil &&
-                    [backBytes isEqualToData:reference] &&
-                    [[back valueForField:@"str"] isEqual:@"hello"] &&
-                    [[backInner valueForField:@"name"] isEqual:@"kid"] &&
-                    [[backInner valueForField:@"value"] isEqual:@42];
+                              [backBytes isEqualToData:reference] &&
+                              [[back valueForField:@"str"] isEqual:@"hello"] &&
+                              [[backInner valueForField:@"name"] isEqual:@"kid"] &&
+                              [[backInner valueForField:@"value"] isEqual:@42];
                 if (!backOk) {
                     printf("FAIL %s: pbwire-objc decode differs\n", c->label);
                     failures++;
