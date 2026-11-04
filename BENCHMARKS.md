@@ -68,7 +68,7 @@ binding has two representations and only comparing like with like is fair.
 | Erlang/OTP NIF | `make benchmarks` in `bindings/erlang/benchmarks` | gpb (pure Erlang), with gpb NIF (libprotobuf) as the second baseline, same `matrix3.proto` | all 4 | 2.04x / 1.68x vs gpb ✅ |
 | Python (CPython ext) | `make python-bench` (`bindings/python/benchmarks/bench.py`) | `google.protobuf` (upb C extension) on the same `matrix3.proto` | all 4 | 6.5x / 1.69x ✅ |
 | C++ | same engine as C (`bindings/cpp` mirrors the C structs) | — | — | planned |
-| Go (generated) | `make go-bench` (`bindings/go/benchmarks`) | `google.golang.org/protobuf` generated code + vtproto (fastest) from the same `matrix3.proto` | all 4 | 2.90x / 1.73x vs official (0.88x / 0.97x vs vtproto) ✅ |
+| Go (`cgo` dynamic) | `go test ./...` in `bindings/go` (parity + hot-swap; no standard bench yet) | — | — | rebench pending |
 | Java (`java.lang.foreign`) | `make java-bench` (`bindings/java/benchmarks`) | `protobuf-java` generated code from the same `matrix3.proto` | all 4 | 1.56x / 1.16x ✅ (0.69x at 136 B) |
 | Node (N-API addon) | `make node-bench` (`bindings/node/benchmarks`) | `google-protobuf` (jspb) + protobufjs (fastest) from the same `matrix3.proto` | all 4 | 22.3x / 20.0x vs jspb (2.7x / 4.1x vs protobufjs) ✅ |
 | Ruby (C extension) | `make ruby-bench` (`bindings/ruby/benchmarks`) | the `google-protobuf` gem (C extension) | all 4 | 1.05x / 1.69x ✅ |
@@ -87,7 +87,7 @@ filling a message from the same dict and serializing it, and `decode(bytes)`
 against `FromString`. Every binding is ahead of its baseline now.
 
 Correctness first everywhere: the core bench verifies byte-for-byte equality
-before timing, the C, Go and Python benches check their bytes against the
+before timing, the C and Python benches check their bytes against the
 `protoc`-produced reference (plus a decode→encode round trip) before timing,
 the Java, Kotlin, Node, Ruby, Objective-C, PHP, Dart, Rust and C# harnesses
 require their bytes to equal the official encoder's bytes before timing
@@ -107,7 +107,7 @@ payload, the boundary cost and the baseline all differ.
 | core dynamic (`pbw_ctx`) | direct call | 85933 B | 1540.6 (1.32x) | 642.3 (1.41x) |
 | core dynamic (plain API) | direct call | 85933 B | 1429.5 (1.23x) | 619.9 (1.36x) |
 | C structs | direct call, layout tables | 74913 B | 1300.6 (1.42x) | 885.4 (2.25x) |
-| Go | generated straight-line codecs | 74913 B | 1721.8 (2.90x) | 603.5 (1.73x) |
+| Go | `cgo` dynamic over the C core | — (rebench pending) | — | — |
 | Python (dict path) | CPython extension | 74913 B | 564.4 (6.5x) | 1366.0 (1.69x) |
 | Java | `java.lang.foreign` | 74913 B | 1413.5 (1.56x) | 530.7 (1.16x) |
 | Kotlin | the Java FFM layer + DSL | 74913 B | 1441.1 (1.60x) | 549.1 (1.19x) |
@@ -204,7 +204,6 @@ through both paths:
 | language | encode, typed / dynamic | decode, typed / dynamic |
 |---|---|---|
 | C (struct binding) | 1.00x (the struct path itself) | 1.00x |
-| Go (generated codecs) | 1.00x (no dynamic layer) | 1.00x |
 | Java | 1.00x | 1.09x |
 | Python (dataclass ⇄ dict) | 3.8x slower | 3.2x slower |
 
@@ -216,9 +215,8 @@ No binding gained a slower encode/decode path from this layer.
 
 Apple M4 Pro, `-O2`, `protoc 36.2`, protobuf Python 7.36.2 (upb), Erlang
 29.0.1. Every harness calibrates from its tier floor until one pass takes at
-least 0.25 s, then reports the best of 3 passes (Go row: Go 1.27.3,
-`google.golang.org/protobuf` v1.36.12; Erlang uses the same bar with a 0.25 s
-sample time). Throughput in MB/s
+least 0.25 s, then reports the best of 3 passes (Erlang uses the same bar
+with a 0.25 s sample time). Throughput in MB/s
 on serialized wire size. Per-run noise is a few percent; regenerate below for
 the current machine.
 
@@ -360,35 +358,14 @@ The harness also prints a `pbwire-c1` block: the one-shot API, which compiles
 the layout per call and mallocs per value (2.8x-5x slower). It stays in the
 output so that trade-off is visible rather than hidden.
 
-### Go generated codecs vs `google.golang.org/protobuf`
+### Go (`cgo` dynamic)
 
-Same `matrix3.proto`, same values, both sides encode identically before timing
-(the harness fails otherwise). Go numbers are `make go-bench`, encode and decode
-into a fresh message per iteration.
-
-| payload | op | pbwire-go (MB/s, x official) | official generated (MB/s) | vtproto (MB/s) |
-|---|---|---|---|---|
-| 136 B | encode | 1462.4 (2.20x) | 663.4 | 2092.3 |
-| 136 B | decode | 1247.7 (2.13x) | 586.2 | 1387.8 |
-| 174 B | encode | 1450.0 (2.34x) | 619.2 | 1933.3 |
-| 174 B | decode | 887.8 (1.84x) | 482.0 | 1000.0 |
-| 2469 B | encode | 1663.7 (3.06x) | 543.6 | 1800.9 |
-| 2469 B | decode | 522.7 (1.67x) | 312.7 | 596.7 |
-| 74913 B | encode | 1721.8 (2.90x) | 593.9 | 1967.0 |
-| 74913 B | decode | 603.5 (1.73x) | 348.5 | 622.2 |
-
-The generated code writes each field as a constant tag byte plus an inline
-value append from a pre-sized buffer; the official runtime walks a codec table
-(`protoreflect`/`protowire`) with presence and size bookkeeping per field. On
-decode the difference is allocation count: the binding appends values into one
-slice per repeated field and copies strings once, where the official runtime
-allocates per element (and per `[]*T` element pointer).
-
-vtproto generates the same reflection-free style (its methods attach to the
-official types, and the harness gates its bytes too), and on this machine it
-is the ceiling, not the official runtime: xlarge encode 1967.0 vs 1721.8
-(0.88x), decode 622.2 vs 603.5 (0.97x). pbwire-go beats the official runtime
-at every tier and trades blows with the fastest one.
+The static generator (`protoc-gen-pbwire-go`) is removed: Go keeps only the
+`cgo` dynamic binding (`bindings/go/dynamic`), which loads a
+`FileDescriptorSet` at run time and hot-swaps schemas without a restart.
+No standard four-tier bench exists for it yet (`go test ./...` covers byte
+parity plus hot-swap); rebench pending before any number lands in the tables
+above.
 
 ### Python vs `google.protobuf` (upb)
 
@@ -757,7 +734,6 @@ against gpb, the third column is the gpb NIF (libprotobuf) second baseline.
 ```bash
 make bench        # core: 4 cases + text/json/stream/threads (needs protoc + libprotobuf)
 make bench-c      # C structs vs protoc C++ on matrix3.proto (same deps)
-make go-bench     # Go generated codecs vs google.golang.org/protobuf (needs protoc + protoc-gen-go)
 make python-bench # Python extension vs google.protobuf (needs protobuf + protoc)
 make erlang-bench # Erlang binding: epb, gpb, gpb NIF on matrix3.proto (needs OTP + gpb)
 make java-bench   # Java FFM vs protobuf-java (fetches the jar from Maven Central once)
@@ -811,16 +787,16 @@ make benchmarks-quick  # same suite with BENCH_TARGET_TIME=0.05
 ## Regenerate this file
 
 The core tables (single-thread and threads) are `scripts/perf.sh` output (same
-layout, MB/s only); the C, Go,
+layout, MB/s only); the C,
 Python, Java, Kotlin, Node, Ruby, Objective-C, PHP, Dart, Rust and C# tables are
-`make bench-c` / `make go-bench` / `make python-bench` / `make java-bench` /
+`make bench-c` / `make python-bench` / `make java-bench` /
 `make kotlin-bench` / `make node-bench` / `make ruby-bench` / `make objc-bench` /
 `make php-bench` / `make dart-bench` / `make rust-bench` / `make csharp-bench`
 output reformatted the same way; the
 Erlang table is copied from
 `bindings/erlang/benchmarks/README.md` (`make update-readme` there). The
-second baselines come along for free: `make go-bench` installs the vtproto
-plugin, Rust's build.rs generates prost from crates.io, C# restores
+second baselines come along for free: Rust's build.rs generates prost from
+crates.io, C# restores
 protobuf-net from NuGet, Node npm-installs protobufjs, and `make php-bench`
 runs the C-extension rows plus a `php -n` pure-PHP pass when the extension is
 present. Rebuild the

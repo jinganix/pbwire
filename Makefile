@@ -78,53 +78,14 @@ erlang-bench:
 plugin-c:
 	$(MAKE) -C bindings/c/plugin test
 
-# Go binding (bindings/go): protoc-gen-pbwire-go emits plain Go structs with
-# straight-line codecs, no cgo and no runtime dependency. Tests replay pinned
-# protoc requests and pinned reference bytes, so they need Go only; the
-# benchmark additionally needs protoc, protoc-gen-go and google.golang.org/
-# protobuf (same optional status as bench/bench-c).
+# Go binding (bindings/go): cgo dynamic binding over the shared C core.
+# Loads a FileDescriptorSet at run time, so schemas hot-swap without a
+# restart. Needs Go and a C compiler only (same optional status as the
+# other cgo/FFI bindings).
 GO ?= go
-GO_PLUGIN_BIN := bindings/go/plugin/build/protoc-gen-pbwire-go
-GO_BENCH_GEN := bindings/go/benchmarks/gen
-GO_VTPROTO_BIN := $(GO_BENCH_GEN)/bin/protoc-gen-go-vtproto
-GO_VTPROTO_VERSION := v0.6.0
 
-$(GO_PLUGIN_BIN): $(shell find bindings/go/plugin -type f -name '*.go') \
-		bindings/go/plugin/go.mod bindings/go/plugin/go.sum
-	$(MAKE) -C bindings/go/plugin build
-
-plugin-go: $(GO_PLUGIN_BIN)
-
-go-test: $(GO_PLUGIN_BIN)
+go-test:
 	cd bindings/go && $(GO) test ./...
-	$(MAKE) -C bindings/go/plugin test
-
-$(GO_BENCH_GEN)/official/matrix3.pb.go: bindings/c/tests/data/matrix3.proto
-	@mkdir -p $(dir $@)
-	$(PROTOC) -Ibindings/c/tests/data --go_out=$(GO_BENCH_GEN)/official \
-		--go_opt=paths=source_relative \
-		--go_opt=Mmatrix3.proto=pbwire/benchmarks/gen/official $<
-
-$(GO_VTPROTO_BIN):
-	@mkdir -p $(dir $@)
-	GOBIN=$(abspath $(dir $@)) $(GO) install github.com/planetscale/vtprotobuf/cmd/protoc-gen-go-vtproto@$(GO_VTPROTO_VERSION)
-
-$(GO_BENCH_GEN)/official/matrix3_vtproto.pb.go: bindings/c/tests/data/matrix3.proto $(GO_BENCH_GEN)/official/matrix3.pb.go $(GO_VTPROTO_BIN)
-	@mkdir -p $(dir $@)
-	$(PROTOC) -Ibindings/c/tests/data \
-		--plugin=protoc-gen-go-vtproto=$(GO_VTPROTO_BIN) \
-		--go-vtproto_out=$(GO_BENCH_GEN)/official \
-		--go-vtproto_opt=paths=source_relative \
-		--go-vtproto_opt=Mmatrix3.proto=pbwire/benchmarks/gen/official $<
-
-$(GO_BENCH_GEN)/pbwire/matrix3.pbwire.go: bindings/c/tests/data/matrix3.proto $(GO_PLUGIN_BIN)
-	@mkdir -p $(dir $@)
-	$(PROTOC) -Ibindings/c/tests/data \
-		--plugin=protoc-gen-pbwire-go=$(GO_PLUGIN_BIN) \
-		--pbwire-go_out=$(GO_BENCH_GEN)/pbwire $<
-
-go-bench: $(GO_BENCH_GEN)/official/matrix3.pb.go $(GO_BENCH_GEN)/official/matrix3_vtproto.pb.go $(GO_BENCH_GEN)/pbwire/matrix3.pbwire.go
-	cd bindings/go/benchmarks && $(GO) run .
 
 $(DESC_BIN): tests/test_descriptor.c $(TEST_HDRS) $(LIB) | build
 	$(CC) $(CFLAGS) $(CPPFLAGS) -o $@ $< $(LIB)
@@ -438,7 +399,7 @@ typed-conformance:
 	$(MAKE) -C bindings/typed conformance
 
 clean:
-	rm -rf build bindings/typed/build bench/gen bindings/go/benchmarks/gen \
+	rm -rf build bindings/typed/build bench/gen \
 		bindings/java/benchmarks/gen bindings/java/benchmarks/out \
 		bindings/node/benchmarks/gen bindings/ruby/benchmarks/gen \
 		bindings/ruby/lib/pbwire_ext.* bindings/objc/benchmarks/gen \
@@ -453,5 +414,5 @@ clean:
 	java-bench ruby-bench node-bench objc-bench \
 	kotlin-test php-test dart-test rust-test csharp-test \
 	kotlin-bench php-bench dart-bench rust-bench csharp-bench \
-	desc-fixture test-cpp clean plugin-c plugin-go go-test go-bench \
+	desc-fixture test-cpp clean plugin-c go-test \
 	typed-gen typed-test typed-conformance

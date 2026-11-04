@@ -29,8 +29,8 @@ Every language gets the same shape, spelled the way that language spells things:
 | Rust | struct | `pub i32: i32` + `encode(&Schema)` / `decode(&Schema, &[u8])` |
 | Objective-C | NSObject subclass | `@property int32_t i32;` + `-encodeWithSchema:error:` / `+decodeWithSchema:data:error:` |
 
-C and Go are not in this table twice: the C plugin already generates the typed
-struct layer, and Go's plugin generates typed structs with straight-line codecs.
+C is not in this table twice: the C plugin already generates the typed
+struct layer. Go is dynamic-API only and has no typed model for now.
 Erlang gets typed records from gpb (`get_msg_defs/0`), which is its existing
 schema source; adding a second generator there would duplicate gpb.
 
@@ -104,7 +104,6 @@ x3000 (30 KB) and the same values through both paths:
 | language | typed encode vs dynamic | typed decode vs dynamic |
 |---|---|---|
 | C (struct binding) | 1.00x (it *is* the struct path) | 1.00x |
-| Go (generated codecs) | 1.00x (no dynamic layer) | 1.00x |
 | Java | 1.00x | 1.09x |
 | Python (dataclass ⇄ dict) | 3.8x slower | 3.2x slower |
 

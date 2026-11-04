@@ -29,14 +29,11 @@ anything else:
 - **Compiled languages bake the schema in at build time.** A protoc plugin
   turns the `.proto` into the language's own structs and wire facts, so no
   binding hand-builds a schema. C does that for layout/kind/type columns on
-  top of the dynamic core; Go generates straight-line codecs that carry every
-  wire fact themselves (`bindings/go/plugin`), which is also where the
-  performance comes from.
+  top of the dynamic core.
 - **A `FileDescriptorSet` is the runtime schema for the dynamic core and for
   interpreted bindings.** C, C++, the Python extension and the JSON/text paths
   load `protoc --descriptor_set_out` bytes at run time; the C struct entry
-  points also validate the generated layout against that schema. Go needs no
-  descriptor at run time: its generated code is the complete schema. Whether
+  points also validate the generated layout against that schema. Whether
   the set ships as a sidecar file or is embedded in the binary is a deployment
   choice — the loader takes bytes either way (see the
   [FAQ](../docs/faq.md#do-i-have-to-recompile-when-a-proto-changes)).
@@ -54,7 +51,8 @@ anything else:
   PHP (`ext-ffi`), Dart (`dart:ffi`) and C# (P/Invoke) are one class with Java,
   Node and Objective-C: load the `FileDescriptorSet`, call the C ABI, own no
   wire code. Rust links `libpbwire.a` in statically instead of `dlopen`-ing it,
-  which makes the result a single self-contained binary.
+  which makes the result a single self-contained binary; Go does the same over
+  cgo and adds a hot-swappable schema registry on top.
 - **Kotlin needs no separate layer.** Kotlin runs on the JVM, so it uses the
   Java binding's FFM downcalls and adds only the DSL that official Kotlin support
   is (protoc `--kotlin_out` generates Kotlin over protobuf-java).
@@ -85,7 +83,7 @@ the full tables are.
 | Dart | a pure-Dart field loop dominates, and FFI adds copies | `dart:ffi` plus the core's arena | 12.2x / 3.3x (vs protobuf-dart) |
 | Rust | rust-protobuf generated codecs | links `libpbwire.a` statically behind a safe wrapper | 1.57x / 1.45x (vs rust-protobuf; 0.93x / 1.46x vs prost) |
 | C# | Google.Protobuf is already a fast tree codec — the closest race of the set | P/Invoke plus a resolver, no packages | 2.90x / 1.07x (vs Google.Protobuf; 3.6x / 1.62x vs protobuf-net) |
-| Go | the official runtime walks `protoreflect`/`protowire` per field | `protoc-gen-pbwire-go` emits straight-line codecs: no cgo, no descriptor at run time | 2.90x / 1.73x (vs official; 0.88x / 0.97x vs vtproto) |
+| Go | the official runtime walks `protoreflect`/`protowire` per field | cgo dynamic binding over the C core: one downcall per op, zero-copy decode in, hot-swappable registry | 2.3x / 1.7x (vs official, xlarge; 1.1x / 1.1x small) |
 | Erlang | gpb is pure Erlang; gpb NIF binds libprotobuf per message | NIF over the core, consuming gpb's own definitions — no second generator | 2.04x / 1.68x (vs gpb) |
 
 Read the ratios as "what this binding buys its host language", not as a
@@ -101,7 +99,7 @@ side by side with the absolute MB/s.
 | C | `pbw_struct_schema_load(path)` on a `FileDescriptorSet`; `plugin/` additionally emits structs + layout tables for the compile-time side | ✅ | struct layout is codegen, the schema itself is loaded |
 | C++ | the C runtime and its generated headers, unchanged | ✅ | inherits C |
 | Python | `pbwire.Schema.from_file/load` on a `FileDescriptorSet` | ✅ | the extension is compiled but the schema is always loaded; `decode()` returns a parsed message, `to_dict()`/`encode(dict)` are the dict path |
-| Go | `protoc-gen-pbwire-go` at build time: structs + straight-line size/encode/decode (`bindings/go/plugin`) | ✅ | no cgo, no descriptor at run time; maps/oneofs/groups/extensions rejected |
+| Go | `dynamic.Registry` on a `FileDescriptorSet`, cgo downcalls into the C core | ✅ | explicit `Close` per root (no finalizer); failed loads never disturb the live version |
 | Erlang | `gpb_compile` → records + `get_msg_defs/0` → `enif_protobuf:load_cache/1` | ✅ | gpb is the plugin, epb needs no descriptor path |
 | Java | `FileDescriptorSet` at run time, `java.lang.foreign` downcalls (JDK 22+) | ✅ | no JNI, no C glue, no generator |
 | Ruby | `FileDescriptorSet` at run time, a C extension linked against the core | ✅ | no gems, no generator; binary-only conformance testee |
@@ -114,8 +112,9 @@ side by side with the absolute MB/s.
 | C# | `Schema.FromFile` on a `FileDescriptorSet`, P/Invoke + `DllImportResolver` | ✅ | no packages in the binding project |
 
 Every row above also has a typed model from `bindings/typed`: generated typed
-fields plus `encode`/`decode` over that binding's dynamic API. C and Go keep
-their own generators (they are ahead-of-time compiled); Erlang keeps gpb.
+fields plus `encode`/`decode` over that binding's dynamic API. C keeps
+its own generator (it is ahead-of-time compiled); Go is dynamic-API only
+for now; Erlang keeps gpb.
 
 ## Memory: what each binding keeps, and the one rule per row
 
@@ -132,14 +131,11 @@ the default cap and the table gives the ceiling plus the workaround.
 | Ruby | builder = C tree, `encode` writes straight into the returned `String`; a wire view pins the bytes | retained views | same as Python: `set` on a view raises, and holding a view holds its bytes |
 | Java / Kotlin | one `ThreadLocal` workspace: a `pbw_ctx` + a grown-on-demand input buffer, never freed until process exit | live + dead threads x largest message each | the sharpest edge here: thread-per-request plus one xlarge message pins ~1 MiB per dead thread; keep request threads off the binding or reuse a fixed pool |
 | Node | single-threaded: one reusable encode `pbw_ctx` per message type (freed with the type) + decoded message = JS `Buffer` + slice array | types x largest encoding each + retained messages | drop decoded messages; a type's buffer stays at its largest encoding |
-| Objective-C / PHP / Dart / Rust / C# | plain `pbw_encode`/`pbw_decode` per call (`NSData` takes the malloc'd buffer over with no copy) | none | nothing to tune, nothing retained |
-| Go | no C at all: `Marshal` allocates once, `MarshalAppend` reuses the caller buffer, `Unmarshal` copies strings/bytes and skips unknown fields | what you hold | size with `Size()`, reuse buffers via `sync.Pool`, release xlarge structs |
+| Objective-C / PHP / Dart / Rust / C# / Go | plain `pbw_encode`/`pbw_decode` per call (`NSData` takes the malloc'd buffer over with no copy; Go passes the input slice straight in) | none, except retained Go roots | nothing to tune; Go roots need an explicit `Close` |
 | Erlang | one `pbw_ctx` per scheduler + a geometrically grown encode buffer, never shrunk (see its README FAQ) | schedulers x largest message | bounded by the scheduler count; keep individual messages reasonably sized |
 
-Compiler-level code generation is never hand-written: C's layout tables and
-Go's codecs both come from the same descriptor `protoc` parsed, so field
-numbers, wire types and proto2/proto3 semantics are the schema's. The
-difference is where they live -- C loads the descriptor set at run time as
-well (the dynamic core needs it and the struct entry points validate against
-it), Go bakes the facts into the generated code, and Erlang's records are a
-layout over gpb's definitions.
+Compiler-level code generation is never hand-written: C's layout tables come
+from the same descriptor `protoc` parsed, so field numbers, wire types and
+proto2/proto3 semantics are the schema's. C loads the descriptor set at run
+time as well (the dynamic core needs it and the struct entry points validate
+against it), and Erlang's records are a layout over gpb's definitions.

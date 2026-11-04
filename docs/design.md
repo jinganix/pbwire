@@ -19,7 +19,7 @@ boundaries are. The API walk-through is [guide.md](guide.md), the numbers are in
 Traditional Protobuf usage binds the schema at compile time:
 
 ```
-.proto -> protoc -> generated C++/Java/Go code -> compiled into the app -> encode / decode
+.proto -> protoc -> generated C++/Java code -> compiled into the app -> encode / decode
 ```
 
 The schema must be known up front, changing a `.proto` usually means regenerating
@@ -218,7 +218,7 @@ bindings/typed/             protoc-gen-pbwire-typed: typed models for every lang
 bindings/c/                 C binding: runtime/ (struct codec), plugin/, examples/, tests/, benchmarks/, conformance/
 bindings/cpp/               C++ binding: examples/, tests/, benchmarks/ over the shared C runtime (no plugin)
 bindings/python/            CPython extension: runtime/, examples/, tests/, benchmarks/, conformance/
-bindings/go/                protoc-gen-pbwire-go + generated codecs (no cgo), runtime/, tests/, examples/, benchmarks/, conformance/
+bindings/go/                Go: cgo dynamic over the C ABI, dynamic/ with hot-swap registry (no plugin)
 bindings/erlang/            Erlang/OTP NIF: c_src/ (runtime), examples/, test/, benchmarks/, conformance/
 bindings/java/              Java: java.lang.foreign over the C ABI, runtime/, examples/, tests/ (no JNI)
 bindings/kotlin/            Kotlin: the Java FFM layer + a DSL

@@ -68,7 +68,7 @@ the short version:
 | Dart | `dart:ffi` | `FileDescriptorSet` |
 | C# | `DllImport` + a resolver | `FileDescriptorSet` |
 | Rust | links `libpbwire.a` statically | `FileDescriptorSet` |
-| Go | `protoc-gen-pbwire-go` straight-line codecs (no cgo) | the generated code |
+| Go | cgo dynamic binding over the C core | `FileDescriptorSet` (hot-swappable) |
 | Erlang | NIF; gpb records via `enif_protobuf:load_cache/1` | gpb's `get_msg_defs/0` |
 
 The C bindings check `PBW_ABI_VERSION` at load time, so a library built from a
@@ -140,8 +140,7 @@ call — the difference is deployment, not API:
   (`from_bytes` / `fromBytes` / `load(bytes)`, depending on the binding). No
   sidecar file to lose, but a `.proto` change means rebuilding and redeploying.
 
-Exceptions: Go bakes the schema into generated codecs and never loads a
-descriptor, Erlang uses gpb's compiled definitions — both recompile by
+Exceptions: Erlang uses gpb's compiled definitions and recompiles by
 construction. The C struct binding still validates its generated layout against
 a descriptor set at run time, so embed that set too rather than dropping it.
 

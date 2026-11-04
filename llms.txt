@@ -169,14 +169,15 @@ C++ runtime), `make bench`, `make bench-c` (C structs vs protoc C++). Optional, 
   extension), `bindings/java` (Foreign Function & Memory API, and Kotlin through it),
   `bindings/ruby` (C extension), `bindings/node` (N-API addon) and `bindings/php` (`ext-ffi`)
   compare `pbw_abi_version()` with `PBW_ABI_VERSION` at load;
-  `bindings/go` is generated Go code with no cgo and no runtime dependency.
+  `bindings/go` is a cgo dynamic binding with a hot-swappable schema registry.
 - Binding memory ceilings (no binding exposes `pbw_ctx_set_retain_cap`/`pbw_pool_*`, so every
   `pbw_ctx` runs at the 1 MiB default): Java/Kotlin pin one never-freed workspace per thread,
   Erlang one per scheduler, Node one encode buffer per type, Python/Ruby/Node views pin the input
-  bytes, C needs `pbw_struct_free` only for non-arena trees, Go/plain-FFI rows keep nothing resident.
+  bytes, C needs `pbw_struct_free` only for non-arena trees, plain-FFI rows keep nothing resident
+  (Go excepted: retained roots live until `Close`).
   Full per-row table in [bindings/README.md](bindings/README.md#memory-what-each-binding-keeps-and-the-one-rule-per-row).
 - Not implemented in the core: RPC/HTTP, MessageSet decoding into extensions, code generation (the
-  bindings ship their own protoc plugins: C layout tables and Go straight-line codecs).
+  C binding ships its own protoc plugin for layout tables).
 - Typed message models: `bindings/typed` is one protoc plugin (`protoc-gen-pbwire-typed`) that
   emits typed fields, presence flags and encode/decode wrappers per language (Java, Kotlin, C#,
   Dart, PHP, Ruby, Python, TypeScript/JavaScript, Rust, Objective-C). The wrappers call the
@@ -204,8 +205,7 @@ C++ runtime), `make bench`, `make bench-c` (C structs vs protoc C++). Optional, 
 - [bindings/c/benchmarks/bench_struct.cc](bindings/c/benchmarks/bench_struct.cc): C generated
   structs vs protoc C++ on the same tiers.
 - [bindings/README.md](bindings/README.md): every binding's layout and where its schema comes
-  from (C, C++ and Python load a FileDescriptorSet at run time; Go generates codecs with
-  `protoc-gen-pbwire-go` and needs no descriptor at run time; Erlang uses gpb's definitions;
+  from (C, C++, Go and Python load a FileDescriptorSet at run time; Erlang uses gpb's definitions;
   Java, Kotlin, Node, Objective-C, PHP, Dart and C# are FFI hosts that load the descriptor set and
   nothing else; Rust links the archive in statically; Ruby is a small C extension over the same core
   that also loads the descriptor set at run time).
@@ -216,10 +216,10 @@ C++ runtime), `make bench`, `make bench-c` (C structs vs protoc C++). Optional, 
   [bindings/csharp/README.md](bindings/csharp/README.md):
   the host bindings — no generator, no codegen, no new dependency; schema at run time. Java (and
   Kotlin through it), Node, Objective-C, PHP, Dart and C# go through the C ABI; Ruby is a C
-  extension that links the core and keeps the message conversion in C; Rust links the archive in.
-- [bindings/go/README.md](bindings/go/README.md): Go binding, generated structs + straight-line
-  codecs (`protoc-gen-pbwire-go`), no cgo and no run-time dependency, plus its benchmark against
-  `google.golang.org/protobuf`.
+  extension that links the core and keeps the message conversion in C; Rust links the archive in;
+  Go links it over cgo with a hot-swappable registry.
+- [bindings/go/README.md](bindings/go/README.md): Go binding, cgo dynamic over the C core with
+a hot-swappable `Registry` (`go test ./...` covers parity plus hot-swap).
 - [bindings/python/runtime/pbwire.c](bindings/python/runtime/pbwire.c): Python binding, a CPython
   extension; schema from a `FileDescriptorSet`, dict<->wire in C for every field kind,
   `decode()` returns a parsed message that records one slice per wire field (fields materialize on

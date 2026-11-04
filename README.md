@@ -156,9 +156,9 @@ the comparison includes an FFI boundary (Java, 136 B, 0.69x) or where pbwire's
 API wins every tier.
 
 The per-language tables — the same four payload tiers for every binding against
-its official runtime (Python, Go, Java, Kotlin, Node, Ruby, Objective-C, PHP,
+its official runtime (Python, Java, Kotlin, Node, Ruby, Objective-C, PHP,
 Dart, Rust, C#, Erlang), plus the fastest third-party runtime wherever one
-meaningfully exists (Go, Node, Rust, C#, PHP), the C struct codec, 1-vs-8-thread
+meaningfully exists (Node, Rust, C#, PHP), the C struct codec, 1-vs-8-thread
 scaling, and the reason behind each gap — live in [BENCHMARKS.md](BENCHMARKS.md).
 The one-row summary is here; the detail is there.
 
@@ -176,7 +176,7 @@ The one-row summary is here; the detail is there.
 | [Dart](bindings/dart/) | `dart:ffi` | 12.2x (xlarge) / 3.3x (xlarge) | [protobuf-dart](https://pub.dev/packages/protobuf) |
 | [Rust](bindings/rust/) | static link | 1.57x (xlarge) / 1.45x (xlarge) | [rust-protobuf 3.x](https://github.com/stepancheg/rust-protobuf) + prost |
 | [C#](bindings/csharp/) | P/Invoke | 3.4x (medium) / 2.0x (medium) | [Google.Protobuf](https://www.nuget.org/packages/Google.Protobuf) + protobuf-net |
-| [Go](bindings/go/) | generated, no cgo | 3.06x (large) / 2.13x (small) | [google.golang.org/protobuf](https://pkg.go.dev/google.golang.org/protobuf) + vtproto |
+| [Go](bindings/go/) | cgo dynamic (hot-swappable registry) | — (rebench pending) | [google.golang.org/protobuf](https://pkg.go.dev/google.golang.org/protobuf) |
 | [Erlang](bindings/erlang/) | NIF | 2.35x (medium) / 2.33x (medium) | [gpb](https://github.com/tomas-abrahamsson/gpb) |
 
 ¹ C++ has no separate bench; same engine as the C struct codec. Best columns take the highest tier each for encode/decode separately (Apple M4 Pro, `protoc 36.2`); tiers and absolute MB/s are in [BENCHMARKS.md](BENCHMARKS.md).
