@@ -1,6 +1,6 @@
 {
   "name": "@pbwire/pbwire",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "Dynamic protobuf over the pbwire C ABI, schema at runtime, no generated code",
   "license": "Apache-2.0",
   "repository": {
