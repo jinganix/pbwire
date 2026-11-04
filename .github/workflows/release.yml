@@ -81,22 +81,26 @@ jobs:
           gh release upload "v$ver" /tmp/plugins/* --clobber
 
   pypi:
-    name: PyPI (bindings/python)
+    name: PyPI (bindings/python, OIDC)
     needs: validate
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Build and publish
-        env:
-          PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
+      - name: Build
         run: |
-          [ -n "$PYPI_TOKEN" ] || { echo "PYPI_TOKEN unset, skipping"; exit 0; }
-          python -m pip install build twine
+          python -m pip install build
           (cd bindings/python && python -m build)
-          twine upload -u __token__ -p "$PYPI_TOKEN" bindings/python/dist/*
+          mkdir -p dist && cp bindings/python/dist/* dist/
+      - name: Publish
+        # Trusted Publishing (pending publisher on PyPI, workflow release.yml,
+        # no environment): mints an OIDC token, no API secret needed.
+        uses: pypa/gh-action-pypi-publish@release/v1
 
   npm:
     name: npm (bindings/node)
