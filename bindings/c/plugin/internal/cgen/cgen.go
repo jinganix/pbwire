@@ -282,6 +282,14 @@ func (g *generator) writeMessages(b *strings.Builder) error {
 			} else if f.Cardinality() == protoreflect.Required {
 				comment = "required"
 			}
+			/* Name the declared type: the member is an int for an enum and a
+			 * pointer for a message, so the comment is where the .proto type shows. */
+			switch f.Kind() {
+			case protoreflect.EnumKind:
+				comment += ", " + string(f.Enum().FullName())
+			case protoreflect.MessageKind, protoreflect.GroupKind:
+				comment += ", " + string(f.Message().FullName())
+			}
 			member := snake(string(f.Name()))
 			if strings.HasSuffix(ctype, "*") {
 				member = ctype + member

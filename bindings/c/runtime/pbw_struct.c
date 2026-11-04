@@ -523,6 +523,10 @@ sb_reserve(sbuf *b, size_t extra)
     }
     cap = b->cap == 0 ? 256 : b->cap;
     while (cap < need) {
+        if (cap > SIZE_MAX - cap / 2) {
+            cap = need;
+            break;
+        }
         cap += cap / 2;
     }
     data = (uint8_t *)realloc(b->data, cap);
@@ -895,6 +899,9 @@ arena_alloc(pbw_struct_arena *a, size_t n)
     sc_block *b = a->cur;
     void *p;
 
+    if (n > SIZE_MAX - 15u) {
+        return NULL;
+    }
     n = (n + 15u) & ~(size_t)15u;
     if (n == 0) {
         n = 16;

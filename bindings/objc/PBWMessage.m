@@ -80,14 +80,47 @@
 - (nullable id)valueForField:(NSString *)name
 {
     const pbw_field *field = [self fieldForName:name];
-    const void *bytes;
-    size_t len = 0;
-    pbw_value *value;
 
     if (field == NULL || pbw_field_label(field) == PBW_LABEL_REPEATED) {
         return nil;
     }
+    return [self objectForValue:pbw_message_get(_message, pbw_field_number(field)) field:field];
+}
+
+- (NSUInteger)countForField:(NSString *)name
+{
+    const pbw_field *field = [self fieldForName:name];
+    pbw_value *value;
+
+    if (field == NULL || pbw_field_label(field) != PBW_LABEL_REPEATED) {
+        return 0;
+    }
     value = pbw_message_get(_message, pbw_field_number(field));
+    return value == NULL ? 0 : (NSUInteger)pbw_value_count(value);
+}
+
+- (nullable id)valueForField:(NSString *)name atIndex:(NSUInteger)index
+{
+    const pbw_field *field = [self fieldForName:name];
+    pbw_value *value;
+
+    if (field == NULL || pbw_field_label(field) != PBW_LABEL_REPEATED) {
+        return nil;
+    }
+    value = pbw_message_get(_message, pbw_field_number(field));
+    if (value == NULL || index >= pbw_value_count(value)) {
+        return nil;
+    }
+    return [self objectForValue:pbw_value_at(value, index) field:field];
+}
+
+/* One pbw_value as the Objective-C object valueForField: returns. The value
+ * may belong to a repeated field's list; it is read only. */
+- (nullable id)objectForValue:(pbw_value *)value field:(const pbw_field *)field
+{
+    const void *bytes;
+    size_t len = 0;
+
     if (value == NULL) {
         return nil;
     }
@@ -132,6 +165,19 @@
         forField:(NSString *)name
            error:(NSError **)error
 {
+    return [self storeValue:value forField:name allowRepeated:NO error:error];
+}
+
+- (BOOL)addValue:(id)value forField:(NSString *)name error:(NSError **)error
+{
+    return [self storeValue:value forField:name allowRepeated:YES error:error];
+}
+
+- (BOOL)storeValue:(nullable id)value
+          forField:(NSString *)name
+     allowRepeated:(BOOL)allowRepeated
+             error:(NSError **)error
+{
     const pbw_field *field = [self fieldForName:name];
     pbw_type type;
     pbw_value *stored = NULL;
@@ -145,8 +191,8 @@
         pbw_message_clear(_message, pbw_field_number(field));
         return YES;
     }
-    if (pbw_field_label(field) == PBW_LABEL_REPEATED) {
-        return PBWSetError(error, PBW_ERR_INVALID, @"repeated field");
+    if (pbw_field_label(field) == PBW_LABEL_REPEATED && !allowRepeated) {
+        return PBWSetError(error, PBW_ERR_INVALID, @"repeated field (use addValue:forField:error:)");
     }
     switch (type) {
     case PBW_TYPE_STRING: {
@@ -266,9 +312,8 @@
         PBWSetError(error, PBW_ERR_NOT_FOUND, name);
         return nil;
     }
-    if ((pbw_field_type(field) != PBW_TYPE_MESSAGE &&
-         pbw_field_type(field) != PBW_TYPE_GROUP) ||
-        pbw_field_label(field) == PBW_LABEL_REPEATED) {
+    if (pbw_field_type(field) != PBW_TYPE_MESSAGE &&
+        pbw_field_type(field) != PBW_TYPE_GROUP) {
         PBWSetError(error, PBW_ERR_TYPE, name);
         return nil;
     }

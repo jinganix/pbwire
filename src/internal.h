@@ -3,6 +3,7 @@
 
 #include "pbwire.h"
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -137,6 +138,9 @@ struct pbw_schema {
     size_t count;
     size_t cap;
     int linked;
+    /* Set once a link has succeeded: field counts can no longer change, so a
+     * message's value slots always match its descriptor. */
+    int frozen;
     int proto3; /* dialect handed to descriptors created from now on */
     /* set by pbw_schema_link(): some proto2 message declares a required field,
      * so a decode has to walk the tree once to validate it */
@@ -237,6 +241,38 @@ pbw_varint_size(uint64_t value)
     return size;
 }
 size_t pbw_varint_write(uint8_t *out, uint64_t value);
+/* Locale-independent decimal conversions for the JSON and text formats:
+ * pbw_locale_dot() is asked once per print/parse call, then passed down. The
+ * C-locale path is inlined, so it costs exactly the libc call it replaced. */
+int pbw_locale_dot(void);
+double pbw_strtod_slow(const char *text, char **end, double value, char *stop);
+int pbw_format_g_slow(char *buf, int n);
+
+static inline double
+pbw_strtod(const char *text, char **end, int dot)
+{
+    char *stop = NULL;
+    double value = strtod(text, &stop);
+
+    if (dot || stop == NULL || *stop != '.') {
+        if (end != NULL) {
+            *end = stop;
+        }
+        return value;
+    }
+    return pbw_strtod_slow(text, end, value, stop);
+}
+
+static inline int
+pbw_format_g(char *buf, size_t cap, int precision, double value, int dot)
+{
+    int n = snprintf(buf, cap, "%.*g", precision, value);
+
+    if (dot || n <= 0 || (size_t)n >= cap) {
+        return n;
+    }
+    return pbw_format_g_slow(buf, n);
+}
 int pbw_varint_read(const uint8_t *p, const uint8_t *end, uint64_t *value,
                     size_t *used);
 /* Reads a field tag. A tag is a varint32: at most 5 bytes, and the value is
@@ -263,6 +299,9 @@ void *pbw_arena_alloc_slow(pbw_arena *arena, size_t size);
 static inline void *
 pbw_arena_alloc(pbw_arena *arena, size_t size)
 {
+    /* Callers are internal and pass sizes bounded by real buffers, so the
+     * align_up below cannot wrap; a public entry point must reject
+     * size > SIZE_MAX - 7 itself. */
     pbw_arena_chunk *chunk = arena->head;
     void *ptr;
 

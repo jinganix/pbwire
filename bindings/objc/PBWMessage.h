@@ -49,16 +49,30 @@ NS_ASSUME_NONNULL_BEGIN
  * string (written as UTF-8) and NSData for bytes. Fails with PBW_ERR_TYPE for
  * another class, an out-of-range 32-bit value, or a message field (use
  * addMessageForField:); PBW_ERR_NOT_FOUND for an unknown field; and
- * PBW_ERR_INVALID for a repeated field, which this wrapper does not wrap. */
+ * PBW_ERR_INVALID for a repeated field (use addValue:forField:error:). */
 - (BOOL)setValue:(nullable id)value
         forField:(NSString *)name
            error:(NSError **)error;
 
+/* Appends one item to a repeated field (or sets a singular one). Same value
+ * classes as setValue:forField:error:; a message item uses
+ * addMessageForField: instead. */
+- (BOOL)addValue:(id)value forField:(NSString *)name error:(NSError **)error;
+
+/* Items in a repeated field, 0 when the field is absent or singular. */
+- (NSUInteger)countForField:(NSString *)name;
+
+/* One item of a repeated field: NSNumber for numeric/bool/enum, NSString for
+ * string, NSData for bytes, PBWMessage for a message field; nil when the field
+ * is not repeated or the index is out of range. */
+- (nullable id)valueForField:(NSString *)name atIndex:(NSUInteger)index;
+
 /* The nested message of a singular message field, or nil when it is absent. */
 - (nullable PBWMessage *)messageForField:(NSString *)name;
 
-/* Get-or-create the nested message of a singular message field, filling it in
- * place. The C API owns the returned tree; it encodes with the parent. */
+/* Get-or-create the nested message of a message field, filling it in place: a
+ * singular field replaces its value, a repeated one appends. The C API owns
+ * the returned tree; it encodes with the parent. */
 - (nullable PBWMessage *)addMessageForField:(NSString *)name
                                       error:(NSError **)error;
 

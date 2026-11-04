@@ -115,7 +115,10 @@ int pbw_enum_find_name(const pbw_descriptor *enum_desc, int32_t number,
 int pbw_enum_find_value(const pbw_descriptor *enum_desc, const char *name,
                         int32_t *number);
 
-/* Append a field. Field numbers must be unique within the message. */
+/* Append a field. Field numbers must be unique within the message, and every
+ * field must be added before the first successful pbw_schema_link(): the layout
+ * (and with it the value slots of every existing message) freezes then, so a
+ * later add fails and returns NULL. */
 pbw_field *pbw_message_add_field(pbw_descriptor *msg, const char *name,
                                  uint32_t number, pbw_type type,
                                  pbw_label label);
@@ -142,8 +145,9 @@ void pbw_descriptor_set_map_entry(pbw_descriptor *msg);
 /* 1-based oneof group index; 0 means the field is not in a oneof. */
 void pbw_field_set_oneof(pbw_field *field, uint32_t oneof_index);
 
-/* Resolve type names, sort fields by number and build lookup tables.
- * Idempotent. */
+/* Resolve type names, sort fields by number and build lookup tables. Idempotent
+ * while no field is added; the first success freezes the field layout, so
+ * create messages and set values only after it returns PBW_OK. */
 pbw_status pbw_schema_link(pbw_schema *schema);
 /* Last link failure reason (empty when the last link succeeded). */
 const char *pbw_schema_error(const pbw_schema *schema);

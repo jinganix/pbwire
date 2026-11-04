@@ -20,6 +20,7 @@ struct pbw_pool {
     pbw_ctx **idle;
     size_t count;
     size_t cap;        /* max_idle: how many a release keeps */
+    size_t idle_cap;   /* allocated slots in idle[] */
     size_t retain_cap; /* budget stamped on contexts this pool creates */
 };
 
@@ -167,13 +168,22 @@ pbw_pool_release(pbw_pool *pool, pbw_ctx *ctx)
         pbw_ctx_free(ctx);
         return;
     }
-    slot = (pbw_ctx **)realloc(pool->idle,
-                               (pool->count + 1) * sizeof(*slot));
-    if (slot == NULL) {
-        pbw_ctx_free(ctx);
-        return;
+    /* Grow the slot array by doubling: one realloc per doubling instead of
+     * one per release, which matters for a pool that fills up. */
+    if (pool->count == pool->idle_cap) {
+        size_t want = pool->idle_cap != 0 ? pool->idle_cap * 2 : 8;
+
+        if (want > pool->cap) {
+            want = pool->cap;
+        }
+        slot = (pbw_ctx **)realloc(pool->idle, want * sizeof(*slot));
+        if (slot == NULL) {
+            pbw_ctx_free(ctx);
+            return;
+        }
+        pool->idle = slot;
+        pool->idle_cap = want;
     }
-    pool->idle = slot;
     pool->idle[pool->count++] = ctx;
 }
 

@@ -4,6 +4,7 @@
 #include "pbwire.h"
 #include "internal.h"
 
+#include <locale.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -681,6 +682,188 @@ test_oneof(pbw_schema *schema)
         pbw_message_free(decoded);
     }
     pbw_message_free(msg);
+}
+
+/* Boundary arguments the library must reject instead of computing with them:
+ * sizes that would wrap the length arithmetic in the bytes constructor and the
+ * unknown-field accumulator, and a nested decoded root (which owns an arena)
+ * stored inside another message. */
+
+/* JSON and text format are defined with '.' as the decimal separator; the host
+ * process's LC_NUMERIC must not change what is written or accepted. */
+static void
+test_locale_independence(pbw_schema *schema)
+{
+    const pbw_descriptor *type = desc(schema, "Scalar");
+    char saved[64];
+    const char *current = setlocale(LC_NUMERIC, NULL);
+
+    if (current == NULL || strlen(current) >= sizeof(saved)) {
+        return; /* no locale support: nothing to check */
+    }
+    memcpy(saved, current, strlen(current) + 1);
+    if (setlocale(LC_NUMERIC, "de_DE.UTF-8") == NULL &&
+        setlocale(LC_NUMERIC, "de_DE") == NULL &&
+        setlocale(LC_NUMERIC, "fr_FR.UTF-8") == NULL) {
+        return; /* no comma locale installed on this machine */
+    }
+    if (!(localeconv()->decimal_point[0] == ',')) {
+        setlocale(LC_NUMERIC, saved);
+        return;
+    }
+    {
+        pbw_message *msg = pbw_message_new(type);
+        pbw_message *parsed = NULL;
+        char *out = NULL;
+        size_t out_len = 0;
+
+        CHECK(msg != NULL);
+        CHECK_OK(pbw_message_set(msg, 12, pbw_value_new_double(1.5)));
+        CHECK_OK(pbw_json_print(msg, &out, &out_len));
+        CHECK(out != NULL && strcmp(out, "{\"db\":1.5}") == 0);
+        pbw_free(out);
+        out = NULL;
+        CHECK_OK(pbw_text_print(msg, &out, &out_len));
+        CHECK(out != NULL && strcmp(out, "db: 1.5\n") == 0);
+        pbw_free(out);
+        pbw_message_free(msg);
+
+        CHECK_OK(pbw_json_parse(type, "{\"db\":1.5}", strlen("{\"db\":1.5}"), &parsed));
+        CHECK(parsed != NULL &&
+              pbw_value_get_double(pbw_message_get(parsed, 12)) == 1.5);
+        pbw_message_free(parsed);
+        parsed = NULL;
+        CHECK_OK(pbw_text_parse(type, "db: 1.5", 7, &parsed));
+        CHECK(parsed != NULL &&
+              pbw_value_get_double(pbw_message_get(parsed, 12)) == 1.5);
+        pbw_message_free(parsed);
+    }
+    setlocale(LC_NUMERIC, saved);
+}
+
+static void
+test_hostile_arguments(pbw_schema *schema)
+{
+    const pbw_descriptor *person = desc(schema, "Person");
+    const pbw_descriptor *parent = desc(schema, "Parent");
+
+    /* len + 1 must not wrap. */
+    CHECK(pbw_value_new_bytes(NULL, SIZE_MAX) == NULL);
+    {
+        pbw_value *value = pbw_value_new_bytes("x", 1);
+
+        CHECK(value != NULL);
+        CHECK(pbw_value_get_bytes(value, NULL) != NULL);
+        pbw_value_free(value);
+    }
+
+    /* Unknown-field growth past the first 64-byte block, on the heap path and
+     * on the arena path, keeps every byte. */
+    {
+        size_t n = 256 * 1024;
+        uint8_t *blob = (uint8_t *)malloc(n);
+        pbw_message *msg = pbw_message_new(person);
+        size_t i;
+
+        CHECK(blob != NULL);
+        CHECK(msg != NULL);
+        for (i = 0; i < n; i++) {
+            blob[i] = (uint8_t)i;
+        }
+        CHECK_OK(pbw_message_add_unknown_bytes(msg, blob, n));
+        CHECK(pbw_message_unknown_len(msg) == n);
+        CHECK(memcmp(pbw_message_unknown_bytes(msg), blob, n) == 0);
+        pbw_message_free(msg);
+        free(blob);
+    }
+    {
+        /* A decoded root owns its arena; storing it as a submessage of a heap
+         * message must free that arena with the parent (no leak, no double
+         * free). */
+        static const uint8_t child_wire[] = {0x0a, 0x01, 'k', 0x10, 0x01};
+        pbw_message *child = NULL;
+        pbw_message *container = pbw_message_new(parent);
+        pbw_value *value;
+
+        CHECK_OK(pbw_decode(desc(schema, "Child"), child_wire,
+                            sizeof(child_wire), &child));
+        value = pbw_value_new_message(child);
+        CHECK(value != NULL);
+        CHECK_OK(pbw_message_set(container, 1, value));
+        {
+            pbw_message *nested =
+                pbw_value_get_message(pbw_message_get(container, 1));
+
+            CHECK(nested != NULL);
+            CHECK(pbw_value_get_int32(pbw_message_get(nested, 2)) == 1);
+        }
+        pbw_message_free(container);
+    }
+
+    /* The layout freezes at the first successful link: a later field would
+     * desynchronize the value slots of messages that already exist. */
+    {
+        pbw_schema *late = pbw_schema_new();
+        pbw_descriptor *msg_type;
+
+        CHECK(late != NULL);
+        msg_type = pbw_schema_add_message(late, "Late");
+        CHECK(msg_type != NULL);
+        CHECK(pbw_message_add_field(msg_type, "a", 1, PBW_TYPE_INT32,
+                                    PBW_LABEL_OPTIONAL) != NULL);
+        CHECK_OK(pbw_schema_link(late));
+        {
+            pbw_message *msg = pbw_message_new(msg_type);
+
+            CHECK(msg != NULL);
+            CHECK(pbw_message_add_field(msg_type, "b", 2, PBW_TYPE_INT32,
+                                        PBW_LABEL_OPTIONAL) == NULL);
+            CHECK(pbw_descriptor_field_count(msg_type) == 1);
+            CHECK(pbw_descriptor_find_field(msg_type, 2) == NULL);
+            CHECK_OK(pbw_message_set(msg, 1, pbw_value_new_int(5)));
+            CHECK(pbw_value_get_int32(pbw_message_get(msg, 1)) == 5);
+            pbw_message_free(msg);
+        }
+        pbw_schema_free(late);
+    }
+
+    /* A JSON number is not limited to the reference-agnostic 63 characters the
+     * parser used to accept. */
+    {
+        static const char long_number[] =
+            "{\"db\":1.00000000000000000000000000000000000000000000000000000000000000000000001}";
+        pbw_message *parsed = NULL;
+
+        CHECK_OK(pbw_json_parse(desc(schema, "Scalar"), long_number,
+                                sizeof(long_number) - 1, &parsed));
+        CHECK(parsed != NULL);
+        pbw_message_free(parsed);
+    }
+
+    /* A feed chunk no allocation can hold fails instead of spinning on a
+     * wrapped capacity. */
+    {
+        pbw_istream *stream = pbw_istream_new(NULL);
+
+        CHECK(stream != NULL);
+        CHECK_STATUS(PBW_ERR_NOMEM, pbw_istream_feed(stream, "x", SIZE_MAX));
+        CHECK_OK(pbw_istream_feed(stream, "ab", 2));
+        pbw_istream_free(stream);
+    }
+
+    /* A one-byte length prefix that runs past the buffer is invalid, on the
+     * fast path as well as the general one. */
+    {
+        static const uint8_t truncated[] = {0x0a, 0x05, 'a'};
+        static const uint8_t complete[] = {0x0a, 0x01, 'a'};
+        pbw_message *msg = NULL;
+
+        CHECK_STATUS(PBW_ERR_INVALID,
+                     pbw_decode(person, truncated, sizeof(truncated), &msg));
+        CHECK_OK(pbw_decode(person, complete, sizeof(complete), &msg));
+        CHECK(strcmp(pbw_value_get_string(pbw_message_get(msg, 1)), "a") == 0);
+        pbw_message_free(msg);
+    }
 }
 
 static void
@@ -3385,6 +3568,8 @@ main(void)
     test_map(schema);
     test_oneof(schema);
     test_unknown_fields(schema);
+    test_hostile_arguments(schema);
+    test_locale_independence(schema);
     test_tag_limits(schema);
     test_field_number_edges(schema);
     test_packed_wide_tag(schema);

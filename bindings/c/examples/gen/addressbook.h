@@ -23,7 +23,7 @@ typedef enum {
 /* tutorial.Person.PhoneNumber */
 typedef struct {
     const char *number; /* required */
-    int32_t type; /* optional */
+    int32_t type; /* optional, tutorial.Person.PhoneType */
     int has_type;
 } tutorial_person_phone_number_t;
 

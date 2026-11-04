@@ -28,13 +28,16 @@ public final class Message implements AutoCloseable {
     private final MessageType type;
     private final MemorySegment handle;
     private final AtomicReference<MemorySegment> root; /* shared with child views, null once freed */
+    private final Message parent; /* a view keeps its root (and tree) reachable */
     private final Cleaner.Cleanable cleanable; /* roots only */
 
     /** A root owns the tree (and frees it, here or from the cleaner); a view only reads it. */
-    private Message(MessageType type, MemorySegment handle, AtomicReference<MemorySegment> root, boolean own) {
+    private Message(MessageType type, MemorySegment handle, AtomicReference<MemorySegment> root, Message parent,
+            boolean own) {
         this.type = type;
         this.handle = handle;
         this.root = root;
+        this.parent = parent;
         /* The action must not reference this message, or the cleaner could never
          * see it become unreachable; it holds the handle reference instead. */
         this.cleanable = own
@@ -44,12 +47,14 @@ public final class Message implements AutoCloseable {
 
     /** A root: owns the tree and frees it. */
     static Message root(MessageType type, MemorySegment handle) {
-        return new Message(type, handle, new AtomicReference<>(handle), true);
+        return new Message(type, handle, new AtomicReference<>(handle), null, true);
     }
 
     /** A child view: the root owns the allocation, so this holds no cleaner. */
     private Message view(MemorySegment child, MessageType childType) {
-        return new Message(childType, child, root, false);
+        /* The view holds the root message, not just its handle: a live list item or
+         * nested view must keep the cleaner from freeing the tree it reads. */
+        return new Message(childType, child, root, parent != null ? parent : this, false);
     }
 
     public MessageType type() {

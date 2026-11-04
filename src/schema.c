@@ -229,6 +229,14 @@ add_field(pbw_descriptor *msg, const char *name, uint32_t number, pbw_type type,
     if (msg == NULL || msg->is_enum || name == NULL) {
         return NULL;
     }
+    if (msg->schema != NULL && msg->schema->frozen) {
+        /* Growing field_count after a message exists would put that message's
+         * value slots out of sync with the descriptor, so the layout freezes at
+         * the first successful link. */
+        snprintf(msg->schema->error, sizeof(msg->schema->error),
+                 "add field %s.%s before pbw_schema_link()", msg->name, name);
+        return NULL;
+    }
     if (number == 0 || number > PBW_MAX_FIELD_NUMBER) {
         return NULL;
     }
@@ -591,6 +599,7 @@ pbw_schema_link(pbw_schema *schema)
         }
     }
     schema->linked = 1;
+    schema->frozen = 1;
     return PBW_OK;
 }
 
