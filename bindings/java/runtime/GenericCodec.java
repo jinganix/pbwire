@@ -1295,8 +1295,15 @@ public final class GenericCodec {
         if (f.kind == K_GROUP) {
             return wt != 3; // start-group only; end tags handled by the parent
         }
-        if (f.repeated && wt == Wire.WT_LEN && isPackableKind(f.kind)) {
-            return false; // packed run (or unpacked-form tag, checked inside)
+        if (f.repeated && isPackableKind(f.kind)) {
+            if (wt == Wire.WT_LEN) {
+                return false; // packed run, whatever the declared form
+            }
+            if (f.packed) {
+                // A packed field still accepts the unpacked element form,
+                // like the C core (singular tag) and the reference parsers.
+                return wt != wireType(f.type, false);
+            }
         }
         return wt != f.wt;
     }

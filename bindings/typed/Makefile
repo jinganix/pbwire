@@ -18,7 +18,7 @@ all: build
 build:
 	$(GO) build -o $(PLUGIN) ./cmd/protoc-gen-pbwire-typed
 
-gen: gen-java gen-kotlin gen-csharp gen-dart gen-php gen-ruby gen-python gen-node gen-rust gen-objc gen-examples
+gen: gen-java gen-kotlin gen-csharp gen-dart gen-php gen-ruby gen-python gen-node gen-rust gen-objc gen-lua gen-examples
 
 # The examples all speak the C example's addressbook.proto: same schema, same
 # bytes, one typed walkthrough per language.
@@ -29,7 +29,7 @@ gen-examples: build
 	mkdir -p ../java/examples/gen ../kotlin/examples/gen ../csharp/examples/gen \
 		../dart/examples/gen ../php/examples/gen ../ruby/examples/gen \
 		../python/examples/gen ../node/examples/gen ../rust/examples/gen \
-		../objc/examples/gen
+		../objc/examples/gen ../lua/examples/gen
 	$(PROTOC) $(EXAMPLE_OPTS) --pbwire-typed_out=../java/examples/gen --pbwire-typed_opt=lang=java $(EXAMPLE)
 	$(PROTOC) $(EXAMPLE_OPTS) --pbwire-typed_out=../kotlin/examples/gen --pbwire-typed_opt=lang=kotlin $(EXAMPLE)
 	$(PROTOC) $(EXAMPLE_OPTS) --pbwire-typed_out=../csharp/examples/gen --pbwire-typed_opt=lang=csharp $(EXAMPLE)
@@ -41,6 +41,7 @@ gen-examples: build
 	$(PROTOC) $(EXAMPLE_OPTS) --pbwire-typed_out=../node/examples/gen --pbwire-typed_opt=lang=typescript $(EXAMPLE)
 	$(PROTOC) $(EXAMPLE_OPTS) --pbwire-typed_out=../rust/examples/gen --pbwire-typed_opt=lang=rust $(EXAMPLE)
 	$(PROTOC) $(EXAMPLE_OPTS) --pbwire-typed_out=../objc/examples/gen --pbwire-typed_opt=lang=objc $(EXAMPLE)
+	$(PROTOC) $(EXAMPLE_OPTS) --pbwire-typed_out=../lua/examples/gen --pbwire-typed_opt=lang=lua $(EXAMPLE)
 
 gen-java: build
 	mkdir -p ../java/tests/gen
@@ -83,13 +84,18 @@ gen-objc: build
 	mkdir -p ../objc/tests/gen
 	$(PROTOC) $(OPTS) --pbwire-typed_out=../objc/tests/gen --pbwire-typed_opt=lang=objc $(PROTO)
 
+gen-lua: build
+	mkdir -p ../lua/tests/gen
+	$(PROTOC) $(OPTS) --pbwire-typed_out=../lua/tests/gen --pbwire-typed_opt=lang=lua $(PROTO)
+
 # Each target needs its language's toolchain plus the shared library, which is
 # why `make typed-test` at the repo root is not part of the C commit gate.
-test: test-java test-kotlin test-csharp test-dart test-php test-ruby test-python test-node test-rust test-objc
+test: test-java test-kotlin test-csharp test-dart test-php test-ruby test-python test-node test-rust test-objc test-lua
 
 JAVA ?= java
 RUBY ?= ruby
 PYTHON ?= python3
+LUA ?= lua
 DART ?= dart
 DOTNET ?= dotnet
 NODE ?= node
@@ -137,6 +143,10 @@ test-rust:
 test-objc:
 	cd .. && ./objc/build.sh typed
 
+test-lua: build
+	LUA=$(LUA) $(MAKE) -C ../.. lua-bind >/dev/null
+	cd ../lua && $(LUA) tests/test_typed.lua
+
 # The real conformance proto (google/protobuf/test_messages_proto3.proto) is
 # the hardest schema the generator meets: maps, oneofs, deep nesting, every
 # scalar kind. Generating models for it must succeed and compile in every
@@ -170,6 +180,8 @@ conformance: build
 		--pbwire-typed_out=build/conformance --pbwire-typed_opt=lang=rust $(CONFORMANCE_PROTO)
 	$(PROTOC) -I../../.tmp/protobuf-v36.2/src $(OPTS) \
 		--pbwire-typed_out=build/conformance --pbwire-typed_opt=lang=objc $(CONFORMANCE_PROTO)
+	$(PROTOC) -I../../.tmp/protobuf-v36.2/src $(OPTS) \
+		--pbwire-typed_out=build/conformance --pbwire-typed_opt=lang=lua $(CONFORMANCE_PROTO)
 	@echo "typed models for test_messages_proto3.proto: build/conformance"
 	$(MAKE) conformance-check
 
@@ -190,12 +202,13 @@ conformance-check: build
 	ruby -c build/conformance/test_messages_proto3.rb
 	$(PYTHON) -m py_compile build/conformance/test_messages_proto3_pbwire.py
 	$(NODE) --check build/conformance/test_messages_proto3.js
+	$(LUA) -e 'assert(loadfile("build/conformance/test_messages_proto3.lua"))'
 	clang -fsyntax-only -fobjc-arc -Wall -Wextra -I../../include -I../objc -Ibuild/conformance build/conformance/test_messages_proto3.m
 	printf '#[path = "../../typed/build/conformance/test_messages_proto3_pbwire.rs"]\nmod conf;\n#[test]\nfn conformance_models_compile() { let _ = conf::TestAllTypesProto3::FULL_NAME; }\n' > ../rust/tests/conf_gen.rs
 	cd ../rust && $(CARGO) test --test conf_gen
 	rm -f ../rust/tests/conf_gen.rs
-	@echo "conformance models compile in java, kotlin, c#, dart, php, ruby, python, node, objc, rust"
+	@echo "conformance models compile in java, kotlin, c#, dart, php, ruby, python, node, objc, rust, lua"
 
 .PHONY: all build gen gen-examples test conformance conformance-check $(addprefix gen-,$(LANGS)) \
-	gen-java gen-kotlin gen-csharp gen-dart gen-php gen-ruby gen-python gen-node gen-rust gen-objc \
-	test-java test-kotlin test-csharp test-dart test-php test-ruby test-python test-node test-rust test-objc
+	gen-java gen-kotlin gen-csharp gen-dart gen-php gen-ruby gen-python gen-node gen-rust gen-objc gen-lua \
+	test-java test-kotlin test-csharp test-dart test-php test-ruby test-python test-node test-rust test-objc test-lua

@@ -55,9 +55,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version: '1.23'
+          cache: false
       - name: Cross-compile both plugins
         env:
           CGO_ENABLED: "0"
@@ -164,6 +165,24 @@ jobs:
           # The escript is gitignored and bootstrapped by the Makefile, same
           # as every local build; hex_core picks the key up from HEX_API_KEY.
           (cd bindings/erlang && make ./rebar3 >/dev/null && ./rebar3 hex publish --yes)
+
+  luarocks:
+    name: LuaRocks (bindings/lua)
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Build from the tag tarball, then upload the rockspec
+        env:
+          LUAROCKS_API_KEY: ${{ secrets.LUAROCKS_API_KEY }}
+        run: |
+          [ -n "$LUAROCKS_API_KEY" ] || { echo "LUAROCKS_API_KEY unset, skipping"; exit 0; }
+          sudo apt-get update && sudo apt-get install -y luarocks lua5.4 liblua5.4-dev
+          ver="$(tr -d ' \t\n' < VERSION)"
+          # Installs from source.url (the tag tarball above), exactly what
+          # users get; fails the job if the C sources do not compile.
+          luarocks build --lua-version=5.4 --local "bindings/lua/pbwire-$ver-1.rockspec"
+          luarocks upload --api-key "$LUAROCKS_API_KEY" "bindings/lua/pbwire-$ver-1.rockspec"
 
   nuget:
     name: NuGet (bindings/csharp)

@@ -56,8 +56,10 @@ func Generate(fd protoreflect.FileDescriptor, opt Options) ([]File, error) {
 		files = rustFiles(f)
 	case "objc":
 		files = objcFiles(f)
+	case "lua":
+		files = luaFiles(f)
 	default:
-		return nil, fmt.Errorf("unknown lang=%q (want java, kotlin, csharp, dart, php, ruby, python, typescript, javascript, rust or objc)", opt.Lang)
+		return nil, fmt.Errorf("unknown lang=%q (want java, kotlin, csharp, dart, php, ruby, python, typescript, javascript, rust, objc or lua)", opt.Lang)
 	}
 	if opt.Dir == "" {
 		return files, nil

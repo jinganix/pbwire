@@ -107,6 +107,35 @@ numbers are doubles) values past 2^53 round-trip approximately, the same caveat
 `lua-protobuf` documents. Decode pushes a `uint64` past `LUA_MAXINTEGER` as the
 nearest double.
 
+## Typed model
+
+`bindings/typed` (`protoc-gen-pbwire-typed`, `lang=lua`) emits one Lua module
+per `.proto`: an enum table per enum plus, per message, a plain table with
+defaults (`new`), a `to_table`/`from_table` conversion pair, and
+`encode`/`decode` that call the dynamic API above — the wire format keeps its
+single implementation:
+
+```lua
+local gen = dofile("bindings/lua/tests/gen/matrix3.lua")
+local Scalars = gen.Structtest_Scalars3
+
+local t = Scalars.new({ i32 = -7, str = "alice",
+                         has_opt_i32 = true, opt_i32 = 0 })
+local wire = Scalars.encode(schema, t)      -- schema:encode of to_table(t)
+local back = Scalars.decode(schema, wire)   -- from_table of schema:decode
+assert(back.has_opt_i32 and back.opt_i32 == 0)
+```
+
+Implicit fields default to their zero value and stay off the wire when zero;
+explicit presence (`optional`, oneofs) gets a `has_<name>` flag next to the
+value; `required` fields are always written; repeated fields are arrays (`{}`
+means absent); nested messages are `nil`-able tables. `tests/test_typed.lua`
+runs the same flow every binding's typed test runs (typed fields -> encode ->
+compare with the pinned `protoc` bytes -> decode -> verify); the byte-exact
+comparison needs Lua 5.3+ integers, below that the test asserts typed/dynamic
+equivalence on the same values instead. `examples/roundtrip.lua` walks the
+`addressbook` example through its generated model.
+
 ## Deliberately skipped
 
 - **No `protoc` plugin, no codegen, no second wire implementation.** The
@@ -174,8 +203,9 @@ is one validating parse straight into tables with no tree kept.
 |---|---|
 | the binding | [`runtime/pbwire.c`](runtime/pbwire.c) |
 | build | [`build.sh`](build.sh) |
-| example | [`examples/roundtrip.lua`](examples/roundtrip.lua) |
-| self-check | [`tests/test.lua`](tests/test.lua) + [`tests/test_fuzz.lua`](tests/test_fuzz.lua) (300 seeded cases vs `lua-protobuf`) |
+| example | [`examples/roundtrip.lua`](examples/roundtrip.lua) (through [`examples/gen/addressbook.lua`](examples/gen/addressbook.lua)) |
+| self-check | [`tests/test.lua`](tests/test.lua) + [`tests/test_fuzz.lua`](tests/test_fuzz.lua) (300 seeded cases vs `lua-protobuf`) + [`tests/test_typed.lua`](tests/test_typed.lua) (typed model vs the pinned `protoc` bytes) |
+| typed models | [`tests/gen/matrix3.lua`](tests/gen/matrix3.lua) + [`examples/gen/addressbook.lua`](examples/gen/addressbook.lua), from `protoc-gen-pbwire-typed` (`make typed-gen`) |
 | benchmark | [`benchmarks/bench.lua`](benchmarks/bench.lua) | the four standard tiers against `lua-protobuf` |
 | conformance | [`conformance/testee.lua`](conformance/testee.lua) | binary wire format through the official runner |
 | fixture | [`tests/data/sample.proto`](tests/data/sample.proto) and the checked-in `sample.desc`; [`tests/data/sample2.proto`](tests/data/sample2.proto) (`sample2.desc`: proto2 required/closed-enum/groups) |

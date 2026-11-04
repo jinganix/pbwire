@@ -37,6 +37,19 @@ if ! printf '%s\n' "$HEADER" | grep -qE "$PATTERN"; then
   exit 1
 fi
 
+# A dev-to-master merge must summarize what dev brings in; the subject must
+# not be only "merge dev into master" (optionally with a " (#N)" suffix).
+SUBJECT=$(printf '%s\n' "$HEADER" | sed -E 's/^[^:]+: //; s/ \(#[0-9]+\)$//')
+SUBJECT_LOWER=$(printf '%s\n' "$SUBJECT" | tr 'A-Z' 'a-z')
+case "$SUBJECT_LOWER" in
+  "merge dev into master"|"merge dev to master"|"merge dev")
+    echo "commit-msg: dev-to-master merge must summarize the changes, not just 'merge dev into master'"
+    echo "  e.g. feat(bindings): lua binding, typed Go codecs"
+    echo "  see CONTRIBUTING.md"
+    exit 1
+    ;;
+esac
+
 if [ "${#HEADER}" -gt 100 ]; then
   echo "commit-msg: header exceeds 100 characters (${#HEADER})"
   exit 1

@@ -32,6 +32,10 @@ public final class TestPbwire {
             nested(schema);
             doubleClose(schema);
             unknownField(schema);
+            malformedWire(schema);
+            unknownPreserved(schema);
+            unpackedRepeated(schema);
+            singularMerge(schema);
             threads(schema);
         }
 
@@ -172,11 +176,77 @@ public final class TestPbwire {
         }
     }
 
+    private static void malformedWire(Schema schema) {
+        MessageType sample = schema.message("pbwire.test.Sample");
+        byte[] reference;
+        try (Message message = sampleMessage(sample)) {
+            reference = message.encode();
+        }
+        // A truncated payload, a lone tag, field 0 and a wire type above 5
+        // must all fail (Python/Ruby already pin these; Java did not).
+        byte[][] bad = {
+            Arrays.copyOf(reference, reference.length - 1),
+            new byte[] {0x08},
+            new byte[] {0x00},
+            new byte[] {0x0f},
+        };
+        for (byte[] wire : bad) {
+            try (Message ignored = sample.decode(wire)) {
+                check(false, "malformed wire must fail");
+            } catch (PbwireException expected) {
+                check(true, "malformed wire fails");
+            }
+        }
+    }
+
+    private static void unknownPreserved(Schema schema) {
+        MessageType sample = schema.message("pbwire.test.Sample");
+        byte[] reference;
+        try (Message message = sampleMessage(sample)) {
+            reference = message.encode();
+        }
+        // Field 111, varint 1: unknown to the schema, kept verbatim.
+        byte[] withUnknown = Arrays.copyOf(reference, reference.length + 3);
+        withUnknown[reference.length] = (byte) 0xF8;
+        withUnknown[reference.length + 1] = 0x06;
+        withUnknown[reference.length + 2] = 0x01;
+        try (Message decoded = sample.decode(withUnknown)) {
+            check(Arrays.equals(withUnknown, decoded.encode()),
+                    "unknown fields survive a decode/encode round trip");
+            check(decoded.getInt("int32_field") == -42, "known fields still read");
+        }
+    }
+
+    private static void unpackedRepeated(Schema schema) {
+        MessageType sample = schema.message("pbwire.test.Sample");
+        // Field 13 (numbers) is packed in the schema, but every protobuf
+        // parser also accepts the unpacked element form (Ruby pins this).
+        byte[] unpacked = new byte[] {0x68, 0x01, 0x68, 0x02, 0x68, 0x03};
+        try (Message decoded = sample.decode(unpacked)) {
+            check(decoded.getList("numbers").equals(List.of(1L, 2L, 3L)),
+                    "unpacked occurrences of a packed field are accepted");
+        }
+    }
+
+    private static void singularMerge(Schema schema) {
+        MessageType sample = schema.message("pbwire.test.Sample");
+        // Field 12 (inner) seen twice merges instead of replacing
+        // (Python pins this on its own fixture).
+        byte[] wire = new byte[] {
+            0x62, 0x02, 0x08, 0x07, // inner.x = 7
+            0x62, 0x04, 0x12, 0x02, 0x69, 0x6e, // inner.tag = "in"
+        };
+        try (Message decoded = sample.decode(wire)) {
+            check(decoded.getMessage("inner").getLong("x") == 7, "merged int survives");
+            check("in".equals(decoded.getMessage("inner").getString("tag")),
+                    "merged string survives");
+        }
+    }
+
     /**
      * A loaded schema and its message types are read-only, so threads can share
      * them; only a message (and the per-thread encode workspace) is confined.
-     */
-    private static void threads(Schema schema) {
+     */    private static void threads(Schema schema) {
         MessageType sample = schema.message("pbwire.test.Sample");
         byte[] reference;
         try (Message message = sampleMessage(sample)) {
