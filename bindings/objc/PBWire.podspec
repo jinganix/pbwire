@@ -13,14 +13,14 @@ Pod::Spec.new do |s|
   s.license = { :type => "Apache-2.0", :file => "LICENSE" }
   s.authors = { "jinganix" => "jinganix@gmail.com" }
   s.source = { :git => "https://github.com/jinganix/pbwire.git", :tag => "v#{s.version}" }
-  s.osx.deployment_target = "10.15"
-  s.ios.deployment_target = "13.0"
+  s.osx.deployment_target = "12.0"
+  s.ios.deployment_target = "15.0"
   s.requires_arc = true
   # All patterns are resolved from the repo root (the download root), not
   # from this file's directory.
   # internal.h travels with the C sources (they include it by quote); src/protoc
   # stays out: the single-level glob does not descend into it.
-  s.source_files = "bindings/objc/*.{h,m}", "src/*.{c,h}"
+  s.source_files = "bindings/objc/*.{h,m}", "src/*.{c,h}", "include/pbwire.h"
   s.public_header_files = "bindings/objc/*.h", "include/pbwire.h"
   s.pod_target_xcconfig = { "HEADER_SEARCH_PATHS" => "$(PODS_TARGET_SRCROOT)/include" }
 end
