@@ -3242,6 +3242,227 @@ test_limits(pbw_schema *schema)
     pbw_free(buf);
 }
 
+struct visit_hit {
+    const pbw_field *field;
+    const uint8_t *data;
+    uint32_t number;
+    uint32_t wire;
+    uint64_t u64;
+    uint8_t bytes[16];
+    size_t len;
+};
+
+struct visit_log {
+    struct visit_hit hits[16];
+    size_t count;
+    size_t abort_at; /* 1-based hit index to abort on, 0 = never */
+    pbw_status abort_with;
+};
+
+static pbw_status
+visit_collect(void *ud, const pbw_field *field, uint32_t number,
+              uint32_t wire_type, const pbw_visit_value *value)
+{
+    struct visit_log *log = (struct visit_log *)ud;
+    struct visit_hit *hit;
+
+    if (log->count >= sizeof(log->hits) / sizeof(log->hits[0])) {
+        return PBW_ERR_LIMIT;
+    }
+    hit = &log->hits[log->count++];
+    hit->field = field;
+    hit->data = value->data;
+    hit->number = number;
+    hit->wire = wire_type;
+    hit->u64 = value->u64;
+    hit->len = value->len;
+    if (value->data != NULL && value->len > 0) {
+        size_t n =
+            value->len < sizeof(hit->bytes) ? value->len : sizeof(hit->bytes);
+        memcpy(hit->bytes, value->data, n);
+    }
+    if (log->abort_at > 0 && log->count == log->abort_at) {
+        return log->abort_with;
+    }
+    return PBW_OK;
+}
+
+static void
+test_visit(pbw_schema *schema)
+{
+    const pbw_descriptor *person = desc(schema, "Person");
+    const pbw_descriptor *parent = desc(schema, "Parent");
+    const pbw_descriptor *child = desc(schema, "Child");
+    const pbw_descriptor *wide = desc(schema, "Wide");
+    const pbw_descriptor *color = desc(schema, "Color");
+    struct visit_log log;
+    pbw_message *msg = pbw_message_new(person);
+    pbw_message *par = NULL;
+    pbw_message *kid = NULL;
+    uint8_t *buf = NULL;
+    size_t len = 0;
+    size_t off = 0;
+    pbw_limits limits;
+
+    CHECK(msg != NULL);
+    CHECK_OK(pbw_message_set(msg, 1, pbw_value_new_string("abc")));
+    CHECK_OK(pbw_message_set(msg, 2, pbw_value_new_int(-1)));
+    CHECK_OK(pbw_encode(msg, &buf, &len));
+    pbw_message_free(msg);
+
+    /* Two known fields: string payload plus a raw negative-int32 varint. */
+    memset(&log, 0, sizeof(log));
+    off = 999;
+    CHECK_OK(pbw_visit(person, buf, len, visit_collect, &log, &off));
+    CHECK(off == len);
+    CHECK(log.count == 2);
+    CHECK(log.hits[0].field != NULL && log.hits[0].number == 1);
+    CHECK(log.hits[0].wire == 2 && log.hits[0].len == 3);
+    CHECK(memcmp(log.hits[0].bytes, "abc", 3) == 0);
+    CHECK(log.hits[0].data >= buf && log.hits[0].data < buf + len);
+    CHECK(log.hits[1].field != NULL && log.hits[1].number == 2);
+    CHECK(log.hits[1].wire == 0 && log.hits[1].u64 == ~0ull);
+    CHECK(log.hits[1].data == NULL && log.hits[1].len == 0);
+
+    /* Aborting on the second field reports its offset (5 = 2 + 3 payload). */
+    memset(&log, 0, sizeof(log));
+    log.abort_at = 2;
+    log.abort_with = PBW_ERR_LIMIT;
+    off = 999;
+    CHECK_STATUS(PBW_ERR_LIMIT,
+                 pbw_visit(person, buf, len, visit_collect, &log, &off));
+    CHECK(off == 5);
+    CHECK(log.count == 2);
+
+    /* Unknown numbers arrive with a NULL field; a wire-type mismatch keeps
+     * its field so the caller can tell the two cases apart. */
+    {
+        /* Field 99, varint 7: tag 0x98 0x06. */
+        static const uint8_t unknown[] = {0x98, 0x06, 0x07};
+        /* Field 2 carrying LEN instead of its varint. */
+        static const uint8_t mismatch[] = {0x12, 0x01, 'x'};
+        uint8_t *with = (uint8_t *)malloc(len + sizeof(unknown));
+        uint8_t *bad = (uint8_t *)malloc(len + sizeof(mismatch));
+
+        CHECK(with != NULL && bad != NULL);
+        memcpy(with, buf, len);
+        memcpy(with + len, unknown, sizeof(unknown));
+        memset(&log, 0, sizeof(log));
+        CHECK_OK(pbw_visit(person, with, len + sizeof(unknown),
+                           visit_collect, &log, NULL));
+        CHECK(log.count == 3);
+        CHECK(log.hits[2].field == NULL && log.hits[2].number == 99);
+        CHECK(log.hits[2].wire == 0 && log.hits[2].u64 == 7);
+        memcpy(bad, buf, len);
+        memcpy(bad + len, mismatch, sizeof(mismatch));
+        memset(&log, 0, sizeof(log));
+        CHECK_OK(pbw_visit(person, bad, len + sizeof(mismatch),
+                           visit_collect, &log, NULL));
+        CHECK(log.count == 3);
+        CHECK(log.hits[2].field != NULL && log.hits[2].number == 2);
+        CHECK(log.hits[2].wire == 2 && log.hits[2].len == 1);
+        CHECK(log.hits[2].bytes[0] == 'x');
+        free(with);
+        free(bad);
+    }
+    pbw_free(buf);
+    buf = NULL;
+
+    /* Nested messages arrive as LEN payloads the caller recurses into. */
+    par = pbw_message_new(parent);
+    CHECK(par != NULL);
+    kid = pbw_message_set_message(par, 3);
+    CHECK(kid != NULL);
+    CHECK_OK(pbw_message_set(kid, 1, pbw_value_new_string("bo")));
+    CHECK_OK(pbw_message_set(kid, 2, pbw_value_new_int(42)));
+    CHECK_OK(
+        pbw_message_set(par, 2, pbw_value_new_int(300))); /* packed run */
+    CHECK_OK(pbw_encode(par, &buf, &len));
+    pbw_message_free(par);
+    memset(&log, 0, sizeof(log));
+    CHECK_OK(pbw_visit(parent, buf, len, visit_collect, &log, NULL));
+    CHECK(log.count == 2);
+    /* Field order on the wire follows field number: nums(2) before kids(3). */
+    CHECK(log.hits[0].number == 2 && log.hits[0].wire == 2);
+    CHECK(log.hits[0].len == 2); /* 300 = 0xAC 0x02 */
+    CHECK(log.hits[0].bytes[0] == 0xac && log.hits[0].bytes[1] == 0x02);
+    CHECK(log.hits[1].number == 3 && log.hits[1].wire == 2);
+    {
+        struct visit_log inner;
+
+        memset(&inner, 0, sizeof(inner));
+        CHECK_OK(pbw_visit(child, log.hits[1].data, log.hits[1].len,
+                           visit_collect, &inner, NULL));
+        CHECK(inner.count == 2);
+        CHECK(inner.hits[0].number == 1 && inner.hits[0].len == 2);
+        CHECK(inner.hits[1].number == 2 && inner.hits[1].u64 == 42);
+    }
+    pbw_free(buf);
+    buf = NULL;
+
+    /* Multibyte tags take the two-byte and generic lookup paths. */
+    msg = pbw_message_new(wide);
+    CHECK(msg != NULL);
+    CHECK_OK(pbw_message_set(msg, 16, pbw_value_new_int(7)));
+    CHECK_OK(pbw_message_set(msg, 2048, pbw_value_new_int(9)));
+    CHECK_OK(pbw_encode(msg, &buf, &len));
+    pbw_message_free(msg);
+    memset(&log, 0, sizeof(log));
+    CHECK_OK(pbw_visit(wide, buf, len, visit_collect, &log, NULL));
+    CHECK(log.count == 2);
+    CHECK(log.hits[0].field != NULL && log.hits[0].number == 16);
+    CHECK(log.hits[0].u64 == 7);
+    CHECK(log.hits[1].field != NULL && log.hits[1].number == 2048);
+    CHECK(log.hits[1].u64 == 9);
+    pbw_free(buf);
+    buf = NULL;
+
+    /* Empty input visits nothing; truncation fails at the field start. */
+    memset(&log, 0, sizeof(log));
+    off = 999;
+    CHECK_OK(pbw_visit(person, NULL, 0, visit_collect, &log, &off));
+    CHECK(log.count == 0 && off == 0);
+    {
+        static const uint8_t cut_tag[] = {0x0a};
+        static const uint8_t cut_val[] = {0x10};
+
+        off = 999;
+        CHECK_STATUS(PBW_ERR_INVALID,
+                     pbw_visit(person, cut_tag, sizeof(cut_tag),
+                               visit_collect, &log, &off));
+        CHECK(off == 0);
+        off = 999;
+        CHECK_STATUS(PBW_ERR_INVALID,
+                     pbw_visit(person, cut_val, sizeof(cut_val),
+                               visit_collect, &log, &off));
+        CHECK(off == 0);
+    }
+
+    /* Bounds and argument checks mirror the decoder. */
+    msg = pbw_message_new(person);
+    CHECK(msg != NULL);
+    CHECK_OK(pbw_message_set(msg, 1, pbw_value_new_string("q")));
+    CHECK_OK(pbw_encode(msg, &buf, &len));
+    pbw_message_free(msg);
+    limits.max_bytes = len - 1;
+    limits.max_depth = 0;
+    off = 999;
+    CHECK_STATUS(PBW_ERR_LIMIT,
+                 pbw_visit_limits(person, buf, len, &limits,
+                                  visit_collect, &log, &off));
+    CHECK(off == 0);
+    limits.max_bytes = len;
+    CHECK_OK(pbw_visit_limits(person, buf, len, &limits, visit_collect,
+                              &log, NULL));
+    CHECK_STATUS(PBW_ERR_INVALID,
+                 pbw_visit(NULL, buf, len, visit_collect, &log, NULL));
+    CHECK_STATUS(PBW_ERR_INVALID,
+                 pbw_visit(person, buf, len, NULL, &log, NULL));
+    CHECK_STATUS(PBW_ERR_TYPE,
+                 pbw_visit(color, buf, len, visit_collect, &log, NULL));
+    pbw_free(buf);
+}
+
 static void
 test_streaming(pbw_schema *schema)
 {
@@ -3672,6 +3893,7 @@ main(void)
     test_deterministic();
     test_deterministic_edges();
     test_limits(schema);
+    test_visit(schema);
     test_streaming(schema);
     test_streaming_edges(schema);
     test_schema_errors();

@@ -228,6 +228,46 @@ pbw_decode_ctx_limits(ctx, person, buf, len, &limits, &msg);
 `pbw_encode_deterministic` sorts map entries by key so equal messages encode to
 equal bytes; everything else encodes exactly as `pbw_encode` writes it.
 
+## Scan without a tree
+
+When a look is enough — counting fields, filtering, pre-checking a large
+payload — `pbw_visit` walks one message level and calls you back per field,
+with no message tree and no allocation. Scalars arrive as raw wire bits (no
+zigzag or sign fold), nested messages and packed runs as `LEN` payloads to
+recurse into, groups as raw bytes. `field` is `NULL` for unknown numbers; a
+known field carrying another wire type still resolves, so the callback can
+tell a mismatch from an unknown. `LEN` data points into `buf` (copy it if it
+must outlive the buffer); `fail_off` reports the failing field's byte offset:
+
+```c
+static pbw_status count_inner(void *ud, const pbw_field *field, uint32_t number,
+                              uint32_t wire_type, const pbw_visit_value *v)
+{
+    (*(size_t *)ud)++;
+    return PBW_OK;
+}
+
+static pbw_status count_outer(void *ud, const pbw_field *field, uint32_t number,
+                              uint32_t wire_type, const pbw_visit_value *v)
+{
+    if (number == 1 && wire_type == 2)   /* a nested message: recurse */
+        return pbw_visit(field->sub, v->data, v->len, count_inner, ud, NULL);
+    (*(size_t *)ud)++;
+    return PBW_OK;                       /* anything else aborts the scan */
+}
+
+size_t n = 0, off = 0;
+
+pbw_visit(person, buf, len, count_outer, &n, &off);   /* off == len on success */
+```
+
+`pbw_visit_limits` takes the same `pbw_limits` as the decoders (only
+`max_bytes` and the group-nesting cap apply: the scan itself never recurses).
+No required/enum checks run — values are raw wire bits. Reach for `pbw_decode`
+when the tree must be kept or mutated; reach for `visit` when a single pass
+answers the question (about 2.8x a decode+free on a repeated-submessage
+payload).
+
 ## Unknown fields
 
 Fields the schema does not declare — and known fields arriving with the wrong

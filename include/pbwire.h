@@ -459,6 +459,44 @@ pbw_status pbw_decode_ctx_limits(pbw_ctx *ctx, const pbw_descriptor *desc,
 pbw_status pbw_encode_deterministic(const pbw_message *msg, uint8_t **out,
                                     size_t *len);
 
+/* ------------------------------------------------------------ visit scan */
+
+/* One scanned field: raw wire content, no allocation, no value tree. */
+typedef struct pbw_visit_value {
+    /* VARINT/32BIT/64BIT: raw wire bits (varints unfolded: no zigzag or sign
+     * extension applied). Unused for the length-delimited shapes below. */
+    uint64_t u64;
+    /* LEN: the payload bytes (a nested message, a packed run, a string); for
+     * START_GROUP the whole field (tag through the matching END_GROUP).
+     * Points into buf; NULL for the scalar shapes above. */
+    const uint8_t *data;
+    /* Payload/raw length; 0 for the scalar shapes. */
+    size_t len;
+} pbw_visit_value;
+
+/* Scan callback: field is NULL when the number is unknown to the schema.
+ * number/wire_type are what the wire carries: a known field may carry another
+ * wire type (a packed LEN for a repeated scalar, or a mismatch the reference
+ * decoders would keep as an unknown field). LEN data points into buf. Return
+ * PBW_OK to continue, anything else aborts the scan with that status. */
+typedef pbw_status (*pbw_visit_fn)(void *ud, const pbw_field *field,
+                                   uint32_t number, uint32_t wire_type,
+                                   const pbw_visit_value *value);
+
+/* Single-level scan of buf without building a message tree: one validating tag
+ * pass, one callback per field, no allocation. Nested messages and packed runs
+ * arrive as LEN payloads for the caller to recurse into (field->sub plus
+ * another pbw_visit); groups arrive as raw bytes. No required/enum checks:
+ * values are raw wire bits. fail_off (nullable) is always written: len on
+ * success, the failing/aborting field's byte offset otherwise. */
+pbw_status pbw_visit(const pbw_descriptor *desc, const void *buf, size_t len,
+                     pbw_visit_fn cb, void *ud, size_t *fail_off);
+/* Same with explicit bounds; identical to pbw_visit() with NULL limits. Only
+ * max_bytes and the group-nesting cap apply: the scan itself never recurses. */
+pbw_status pbw_visit_limits(const pbw_descriptor *desc, const void *buf,
+                            size_t len, const pbw_limits *limits,
+                            pbw_visit_fn cb, void *ud, size_t *fail_off);
+
 /* --------------------------------------------------------------- streaming */
 
 /* Sink for streaming encodes: return PBW_OK to continue, anything else aborts

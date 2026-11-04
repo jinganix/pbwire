@@ -1225,3 +1225,173 @@ pbw_decode(const pbw_descriptor *desc, const void *buf, size_t len,
 {
     return pbw_decode_limits(desc, buf, len, NULL, out);
 }
+
+/* Event scan: one validating pass over a single message level, no tree, no
+ * allocation. Reuses the tag dispatch and field lookup of decode_fields, but
+ * the per-field work is only a wire-type switch plus one callback: values
+ * stay raw (no zigzag/sign fold, no enum/required checks, no packed split),
+ * so a counting/filtering pass never pays for materialization. */
+#define VISIT_FAIL(off, st)     \
+    do {                        \
+        if (fail_off != NULL) { \
+            *fail_off = (off);  \
+        }                       \
+        return (st);            \
+    } while (0)
+
+pbw_status
+pbw_visit_limits(const pbw_descriptor *desc, const void *buf, size_t len,
+                 const pbw_limits *limits, pbw_visit_fn cb, void *ud,
+                 size_t *fail_off)
+{
+    reader r;
+    const uint8_t *base;
+    pbw_field *const *fnum_map;
+    uint32_t fnum_map_size;
+    pbw_field *const *tag_map;
+    uint32_t dlim;
+
+    if (desc == NULL || (buf == NULL && len > 0) || cb == NULL) {
+        VISIT_FAIL(0, PBW_ERR_INVALID);
+    }
+    if (limits != NULL && limits->max_bytes > 0 && len > limits->max_bytes) {
+        VISIT_FAIL(0, PBW_ERR_LIMIT);
+    }
+    if (desc->is_enum) {
+        VISIT_FAIL(0, PBW_ERR_TYPE);
+    }
+    if (desc->schema != NULL && !desc->schema->linked) {
+        VISIT_FAIL(0, PBW_ERR_INVALID);
+    }
+    base = pbw_normalize_input(buf, len);
+    dlim = pbw_effective_depth(limits);
+    fnum_map = desc->fnum_map;
+    fnum_map_size = desc->fnum_map_size;
+    tag_map = desc->tag_map;
+    r.p = base;
+    r.end = base + len;
+    while (r.p < r.end) {
+        uint32_t tag;
+        size_t used = 1;
+        uint32_t wire_type;
+        uint32_t number;
+        const pbw_field *field;
+        const uint8_t *start = r.p;
+        size_t at = (size_t)(start - base);
+        pbw_visit_value value;
+        pbw_status status;
+
+        if (PBW_EXPECT(r.p < r.end && r.p[0] < 0x80, 1)) {
+            tag = r.p[0];
+            r.p++;
+            wire_type = tag & 7;
+            number = tag >> 3;
+            if (number == 0 || wire_type == PBW_WIRE_END_GROUP ||
+                wire_type > PBW_WIRE_32BIT) {
+                VISIT_FAIL(at, PBW_ERR_INVALID);
+            }
+            field = tag_map != NULL ? tag_map[tag] : NULL;
+            if (field == NULL) {
+                /* Unknown or mismatched one-byte tag: fall back to the
+                 * number so a known field carrying another wire type
+                 * still resolves. Cold path only: the table hit above
+                 * already handled the common case. */
+                if (fnum_map != NULL) {
+                    field =
+                        number < fnum_map_size ? fnum_map[number] : NULL;
+                } else {
+                    field = pbw_find_field(desc, number);
+                }
+            }
+        } else if (decode_tag2(r.p, r.end, &tag)) {
+            r.p += 2;
+            wire_type = tag & 7;
+            number = tag >> 3;
+            if (number == 0 || wire_type == PBW_WIRE_END_GROUP ||
+                wire_type > PBW_WIRE_32BIT) {
+                VISIT_FAIL(at, PBW_ERR_INVALID);
+            }
+            if (fnum_map != NULL) {
+                field = number < fnum_map_size ? fnum_map[number] : NULL;
+            } else {
+                field = pbw_find_field(desc, number);
+            }
+        } else if (pbw_tag_read(r.p, r.end, &tag, &used)) {
+            r.p += used;
+            wire_type = tag & 7;
+            number = tag >> 3;
+            if (number == 0 || wire_type == PBW_WIRE_END_GROUP ||
+                wire_type > PBW_WIRE_32BIT) {
+                VISIT_FAIL(at, PBW_ERR_INVALID);
+            }
+            if (fnum_map != NULL) {
+                field = number < fnum_map_size ? fnum_map[number] : NULL;
+            } else {
+                field = pbw_find_field(desc, number);
+            }
+        } else {
+            VISIT_FAIL(at, PBW_ERR_INVALID);
+        }
+        value.u64 = 0;
+        value.data = NULL;
+        value.len = 0;
+        switch (wire_type) {
+        case PBW_WIRE_VARINT:
+            if (!read_varint(&r, &value.u64)) {
+                VISIT_FAIL(at, PBW_ERR_INVALID);
+            }
+            break;
+        case PBW_WIRE_64BIT:
+            if (pbw_remaining(r.end, r.p) < 8) {
+                VISIT_FAIL(at, PBW_ERR_INVALID);
+            }
+            value.u64 = dec_le64(r.p);
+            r.p += 8;
+            break;
+        case PBW_WIRE_32BIT:
+            if (pbw_remaining(r.end, r.p) < 4) {
+                VISIT_FAIL(at, PBW_ERR_INVALID);
+            }
+            value.u64 = dec_le32(r.p);
+            r.p += 4;
+            break;
+        case PBW_WIRE_LEN: {
+            const uint8_t *data;
+            size_t data_len;
+
+            status = read_length(&r, &data, &data_len);
+            if (status != PBW_OK) {
+                VISIT_FAIL(at, PBW_ERR_INVALID);
+            }
+            value.data = data;
+            value.len = data_len;
+            break;
+        }
+        default: /* START_GROUP: deliver the whole field as raw bytes. */
+            status = skip_value(&r, number, wire_type, 0, dlim);
+            if (status != PBW_OK) {
+                VISIT_FAIL(at, status);
+            }
+            value.data = start;
+            value.len = pbw_remaining(r.p, start);
+            break;
+        }
+        status = cb(ud, field, number, wire_type, &value);
+        if (status != PBW_OK) {
+            VISIT_FAIL(at, status);
+        }
+    }
+    if (fail_off != NULL) {
+        *fail_off = len;
+    }
+    return PBW_OK;
+}
+
+#undef VISIT_FAIL
+
+pbw_status
+pbw_visit(const pbw_descriptor *desc, const void *buf, size_t len,
+          pbw_visit_fn cb, void *ud, size_t *fail_off)
+{
+    return pbw_visit_limits(desc, buf, len, NULL, cb, ud, fail_off);
+}
