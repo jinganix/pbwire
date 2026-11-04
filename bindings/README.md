@@ -53,6 +53,10 @@ anything else:
   message conversion happens in C: a builder tree for mutation and encoding, and
   a validating wire scan that materializes fields lazily for decoding. That is
   what removes the per-call boundary cost that made the Fiddle version lose.
+- **Lua is the same shape as Ruby, minus the wire view.** It links the core
+  statically and loads a `FileDescriptorSet` at run time, but messages are
+  plain tables converted through one transient tree per call instead of a
+  builder/wire-view pair.
 - **Languages whose toolchain can call C get the descriptor set, not a plugin.**
   Dart (`dart:ffi`) and C# (P/Invoke) are one class with Node
   and Objective-C: load the `FileDescriptorSet`, call the C ABI, own no
@@ -93,6 +97,7 @@ the full tables are.
 | C# | Google.Protobuf is already a fast tree codec — the closest race of the set | P/Invoke plus a resolver, no packages | 2.90x / 1.07x (vs Google.Protobuf; 3.6x / 1.62x vs protobuf-net) |
 | Go | the official runtime walks `protoreflect`/`protowire` per field | cgo dynamic binding over the C core: one downcall per op, zero-copy decode in, hot-swappable registry | 2.6x / 2.1x (vs official, xlarge; 1.0x / 1.1x small) |
 | Erlang | gpb is pure Erlang; gpb NIF binds libprotobuf per message | NIF over the core, consuming gpb's own definitions — no second generator | 4.21x / 1.98x (vs gpb) |
+| Lua | game servers hand tables to `pbc`/`lua-protobuf`, each with its own schema story | C module over the core: tables convert through the schema's arena, builders encode hot | 0.79x / 1.20x (vs lua-protobuf; 8.17x via builder encode) |
 
 Read the ratios as "what this binding buys its host language", not as a
 cross-language speed ranking: the payload and the boundary cost differ per row,
@@ -109,6 +114,7 @@ side by side with the absolute MB/s.
 | Python | `pbwire.Schema.from_file/load` on a `FileDescriptorSet` | ✅ | the extension is compiled but the schema is always loaded; `decode()` returns a parsed message, `to_dict()`/`encode(dict)` are the dict path |
 | Go | `dynamic.Registry` on a `FileDescriptorSet`, cgo downcalls into the C core | ✅ | explicit `Close` per root (no finalizer); failed loads never disturb the live version |
 | Erlang | `gpb_compile` → records + `get_msg_defs/0` → `pbwire:load_cache/1` | ✅ | gpb is the plugin, epb needs no descriptor path |
+| Lua | `pbwire.loadfile` on a `FileDescriptorSet` | ✅ | tables in, tables out; arena per schema, builders anchor it |
 | Java | `FileDescriptorSet` at run time, own pure-Java reader (JDK 17+) | ✅ | no JNI, no C glue, no generator, no native library; binary-only conformance testee |
 | Ruby | `FileDescriptorSet` at run time, a C extension linked against the core | ✅ | no gems, no generator; binary-only conformance testee |
 | Node | `FileDescriptorSet` at run time, hand-written N-API addon | ✅ | no npm deps, node headers only |
@@ -142,6 +148,7 @@ the default cap and the table gives the ceiling plus the workaround.
 | Objective-C / Dart / Rust / C# / Go | plain `pbw_encode`/`pbw_decode` per call (`NSData` takes the malloc'd buffer over with no copy; Go passes the input slice straight in) | none, except retained Go roots | nothing to tune; Go roots need an explicit `Close` |
 | PHP | built trees live in one `pbw_ctx` each (freed with the message, never decoded into so always mutable); decoded trees are single-malloc arenas | retained messages | drop the message; nested views hold the parent, `close()` frees either kind |
 | Erlang | one `pbw_ctx` per scheduler + a geometrically grown encode buffer, never shrunk (see its README FAQ) | schedulers x largest message | bounded by the scheduler count; keep individual messages reasonably sized |
+| Lua | one `pbw_ctx` per schema (arena + encode buffer, reset per call; builders own plain trees) | largest message handled | nothing to tune; idle schemas keep up to the retain cap |
 
 Compiler-level code generation is never hand-written: C's layout tables come
 from the same descriptor `protoc` parsed, so field numbers, wire types and

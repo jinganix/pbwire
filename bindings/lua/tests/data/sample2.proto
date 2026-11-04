@@ -1,0 +1,20 @@
+// Fixture for the Lua binding's proto2 paths: required fields, closed
+// enums (unknown numbers are dropped on decode) and legacy groups (kept as
+// unknown bytes by the core, so decode skips them without failing).
+syntax = "proto2";
+
+package pbwire.lua2;
+
+enum Color2 {
+  COLOR2_A = 0;
+  COLOR2_B = 1;
+}
+
+message Sample2 {
+  required int32 need = 1;
+  optional string opt = 2 [default = "dflt"];
+  optional Color2 color = 3;
+  optional group MyGroup = 4 {
+    optional int32 gv = 5;
+  }
+}

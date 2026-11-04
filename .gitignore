@@ -82,6 +82,8 @@ bindings/php/ext/.libs/
 bindings/php/ext/*.la
 bindings/php/ext/*~
 bindings/ruby/lib/pbwire_ext.*
+bindings/lua/pbwire.so
+bindings/lua/pbwire.o
 __pycache__/
 *.pyc
 *.log
