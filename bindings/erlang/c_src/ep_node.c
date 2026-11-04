@@ -549,6 +549,73 @@ fill_oneof_field(ErlNifEnv *env, ERL_NIF_TERM term, ep_field_t *field)
     return RET_OK;
 }
 
+void
+ep_field_init_tag(ep_field_t *field)
+{
+    int wt = -1;
+    uint64_t tag;
+    uint8_t *p;
+
+    switch (field->type) {
+    case field_int32:
+    case field_int64:
+    case field_uint32:
+    case field_uint64:
+    case field_sint32:
+    case field_sint64:
+    case field_bool:
+    case field_enum:
+        wt = 0;
+        break;
+    case field_fixed64:
+    case field_sfixed64:
+    case field_double:
+        wt = 1;
+        break;
+    case field_string:
+    case field_bytes:
+    case field_msg:
+    case field_map:
+        wt = 2;
+        break;
+    case field_fixed32:
+    case field_sfixed32:
+    case field_float:
+        wt = 5;
+        break;
+    default:
+        break; /* group/oneof/unknown keep the generic tag path */
+    }
+
+    if (wt < 0) {
+        field->tag_len = 0;
+        field->packed_tag_len = 0;
+        return;
+    }
+
+    /* fnum <= 2^29-1, so five bytes always suffice; 64-bit math also dodges
+     * the uint32 overflow pack_tag risks on out-of-range numbers. */
+    tag = ((uint64_t)field->fnum << 3) | (uint64_t)wt;
+    p = field->tag;
+    do {
+        *p++ = (tag >= 0x80) ? (uint8_t)(tag | 0x80) : (uint8_t)tag;
+        tag >>= 7;
+    } while (tag);
+    field->tag_len = (uint8_t)(p - field->tag);
+
+    if (field->packed) {
+        tag = ((uint64_t)field->fnum << 3) | 2u;
+        p = field->packed_tag;
+        do {
+            *p++ = (tag >= 0x80) ? (uint8_t)(tag | 0x80) : (uint8_t)tag;
+            tag >>= 7;
+        } while (tag);
+        field->packed_tag_len = (uint8_t)(p - field->packed_tag);
+    } else {
+        field->packed_tag_len = 0;
+    }
+}
+
 ERL_NIF_TERM
 fill_msg_field(ErlNifEnv *env, ERL_NIF_TERM term, ep_field_t *field)
 {
@@ -592,6 +659,7 @@ fill_msg_field(ErlNifEnv *env, ERL_NIF_TERM term, ep_field_t *field)
         raise_exception(env, term);
     }
 
+    ep_field_init_tag(field);
     return RET_OK;
 }
 

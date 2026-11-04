@@ -180,7 +180,7 @@ The one-row summary is here; the detail is there.
 | [Rust](bindings/rust/) | static link | 1.57x (xlarge) / 1.45x (xlarge) | [rust-protobuf 3.x](https://github.com/stepancheg/rust-protobuf) + prost |
 | [C#](bindings/csharp/) | P/Invoke | 3.4x (medium) / 2.0x (medium) | [Google.Protobuf](https://www.nuget.org/packages/Google.Protobuf) + protobuf-net |
 | [Go](bindings/go/) | cgo dynamic (hot-swappable registry) | 2.57x (xlarge) / 2.13x (xlarge) | [google.golang.org/protobuf](https://pkg.go.dev/google.golang.org/protobuf) |
-| [Erlang](bindings/erlang/) | NIF | 2.35x (medium) / 2.33x (medium) | [gpb](https://github.com/tomas-abrahamsson/gpb) |
+| [Erlang](bindings/erlang/) | NIF | 4.21x (xlarge) / 2.21x (medium) | [gpb](https://github.com/tomas-abrahamsson/gpb) |
 
 ¹ C++ has no separate bench; same engine as the C struct codec. Best columns take the highest tier each for encode/decode separately (Apple M4 Pro, `protoc 36.2`); tiers and absolute MB/s are in [BENCHMARKS.md](BENCHMARKS.md).
 

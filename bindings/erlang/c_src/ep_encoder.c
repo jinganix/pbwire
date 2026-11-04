@@ -504,12 +504,49 @@ static inline ERL_NIF_TERM
 pack_bytes(ErlNifEnv *env, ERL_NIF_TERM term, ep_enc_t *enc, ep_field_t *field)
 {
     ErlNifBinary bin;
+    size_t len;
 
-    if (!enif_inspect_iolist_as_binary(env, term, &bin)) {
-        raise_exception(env, term);
+    /* Binary input: zero-copy pointer, no temp buffer. */
+    if (enif_is_binary(env, term)) {
+        if (!enif_inspect_binary(env, term, &bin)) {
+            raise_exception(env, term);
+        }
+        len = bin.size;
+    } else if (enif_is_list(env, term)) {
+        /* Flat charlists (gpb's default string shape) come through here.
+         * One enif_get_string walks the list inside OTP into a stack
+         * buffer: no sizing pass, no malloc, no flatten-then-copy. Only
+         * longer or nested iolists take the generic path below (sampling
+         * showed its size+malloc+flatten+free dominating string-heavy
+         * encodes). */
+        char stackbuf[256];
+        int n;
+
+        if (enif_is_empty_list(env, term)) {
+            len = 0;
+        } else if ((n = enif_get_string(env, term, stackbuf, sizeof(stackbuf), ERL_NIF_LATIN1)) > 0) {
+            /* n counts the terminating NUL as well; the payload is n - 1. */
+            size_t slen = (size_t)n - 1;
+
+            enc_reserve(env, enc, MAX_UINT64_ENCODED_SIZE + slen);
+            do_pack_uint32(env, (uint32_t)slen, enc);
+            memcpy(enc->p, stackbuf, slen);
+            enc->p += slen;
+            return RET_OK;
+        } else if (!enif_inspect_iolist_as_binary(env, term, &bin)) {
+            raise_exception(env, term);
+        } else {
+            len = bin.size;
+        }
+    } else {
+        /* Nested iolists keep the old path (it raises on bad input). */
+        if (!enif_inspect_iolist_as_binary(env, term, &bin)) {
+            raise_exception(env, term);
+        }
+        len = bin.size;
     }
 
-    if (bin.size == 0) {
+    if (len == 0) {
         if (field->proto_v == 3 && field->o_type == occurrence_defaulty) {
             return RET_OK;
         }
@@ -519,9 +556,9 @@ pack_bytes(ErlNifEnv *env, ERL_NIF_TERM term, ep_enc_t *enc, ep_field_t *field)
         return RET_OK;
     }
 
-    enc_reserve(env, enc, MAX_UINT64_ENCODED_SIZE + bin.size);
+    enc_reserve(env, enc, MAX_UINT64_ENCODED_SIZE + len);
 
-    do_pack_uint32(env, (uint32_t)bin.size, enc);
+    do_pack_uint32(env, (uint32_t)len, enc);
 
     memcpy(enc->p, bin.data, bin.size);
     enc->p += bin.size;
@@ -690,6 +727,17 @@ pack_tag(ErlNifEnv *env, uint32_t id, ep_enc_t *enc)
     return RET_OK;
 }
 
+/* Tags for known fields are precomputed at parse time (see field_init_tag);
+ * only groups and unknown fields still encode the tag per value. */
+static inline ERL_NIF_TERM
+pack_known_tag(ErlNifEnv *env, const uint8_t *tag, uint8_t tag_len, ep_enc_t *enc)
+{
+    enc_reserve(env, enc, tag_len);
+    memcpy(enc->p, tag, tag_len);
+    enc->p += tag_len;
+    return RET_OK;
+}
+
 static inline ep_field_t *
 get_oneof_field(ErlNifEnv *env, ERL_NIF_TERM term, ep_node_t *node, ERL_NIF_TERM *out)
 {
@@ -781,91 +829,75 @@ pack_element_packed(ErlNifEnv *env, ERL_NIF_TERM term, ep_enc_t *enc, ep_field_t
 static ERL_NIF_TERM
 pack_field(ErlNifEnv *env, ERL_NIF_TERM term, ep_enc_t *enc, ep_field_t *field)
 {
-    size_t sentinel_at;
+    size_t tag_at, sentinel_at;
     ERL_NIF_TERM ret;
 
-    enc->sentinel = enc->p;
-    pack_tag(env, field->fnum, enc);
+    tag_at = (size_t)(enc->p - enc->mem);
+    check_ret(ret, pack_known_tag(env, field->tag, field->tag_len, enc));
     sentinel_at = (size_t)(enc->p - enc->mem);
 
     switch (field->type) {
     case field_sint32:
-        *(enc->sentinel) |= WIRE_TYPE_VARINT;
         check_ret(ret, pack_sint32(env, term, enc, field));
         break;
 
     case field_enum:
-        *(enc->sentinel) |= WIRE_TYPE_VARINT;
         check_ret(ret, pack_enum(env, term, enc, field));
         break;
 
     case field_int32:
-        *(enc->sentinel) |= WIRE_TYPE_VARINT;
         check_ret(ret, pack_int32(env, term, enc, field));
         break;
 
     case field_uint32:
-        *(enc->sentinel) |= WIRE_TYPE_VARINT;
         check_ret(ret, pack_uint32(env, term, enc, field));
         break;
 
     case field_sint64:
-        *(enc->sentinel) |= WIRE_TYPE_VARINT;
         check_ret(ret, pack_sint64(env, term, enc, field));
         break;
 
     case field_int64:
-        *(enc->sentinel) |= WIRE_TYPE_VARINT;
         check_ret(ret, pack_int64(env, term, enc, field));
         break;
 
     case field_uint64:
-        *(enc->sentinel) |= WIRE_TYPE_VARINT;
         check_ret(ret, pack_uint64(env, term, enc, field));
         break;
 
     case field_fixed32:
-        *(enc->sentinel) |= WIRE_TYPE_32BIT;
         check_ret(ret, pack_fixed32(env, term, enc, field));
         break;
 
     case field_sfixed32:
-        *(enc->sentinel) |= WIRE_TYPE_32BIT;
         check_ret(ret, pack_sfixed32(env, term, enc, field));
         break;
 
     case field_float:
-        *(enc->sentinel) |= WIRE_TYPE_32BIT;
         check_ret(ret, pack_float(env, term, enc, field));
         break;
 
     case field_fixed64:
-        *(enc->sentinel) |= WIRE_TYPE_64BIT;
         check_ret(ret, pack_fixed64(env, term, enc, field));
         break;
 
     case field_sfixed64:
-        *(enc->sentinel) |= WIRE_TYPE_64BIT;
         check_ret(ret, pack_sfixed64(env, term, enc, field));
         break;
 
     case field_double:
-        *(enc->sentinel) |= WIRE_TYPE_64BIT;
         check_ret(ret, pack_double(env, term, enc, field));
         break;
 
     case field_bool:
-        *(enc->sentinel) |= WIRE_TYPE_VARINT;
         check_ret(ret, pack_boolean(env, term, enc, field));
         break;
 
     case field_string:
-        *(enc->sentinel) |= WIRE_TYPE_LENGTH_PREFIXED;
         check_ret(ret, pack_string(env, term, enc, field));
         break;
 
     case field_bytes:
-        *(enc->sentinel) |= WIRE_TYPE_LENGTH_PREFIXED;
         check_ret(ret, pack_bytes(env, term, enc, field));
         break;
 
@@ -874,7 +906,7 @@ pack_field(ErlNifEnv *env, ERL_NIF_TERM term, ep_enc_t *enc, ep_field_t *field)
     }
 
     if ((size_t)(enc->p - enc->mem) == sentinel_at) {
-        enc->p = enc->sentinel;
+        enc->p = enc->mem + tag_at;
     }
 
     return RET_OK;
@@ -1104,9 +1136,7 @@ encode(ErlNifEnv *env, ERL_NIF_TERM term, ep_tdata_t *tdata)
                         continue;
                     }
 
-                    enc->sentinel = enc->p;
-                    pack_tag(env, field->fnum, enc);
-                    *(enc->sentinel) |= WIRE_TYPE_LENGTH_PREFIXED;
+                    check_ret(ret, pack_known_tag(env, field->packed_tag, field->packed_tag_len, enc));
 
                     enc->sentinel = enc->p;
                     enc_ensure_default(env, enc);
@@ -1167,9 +1197,7 @@ encode(ErlNifEnv *env, ERL_NIF_TERM term, ep_tdata_t *tdata)
                         check_ret(ret, begin_group_encode(env, term, enc, stack, &spot, field));
                         break;
                     } else if (field->type == field_msg || field->type == field_map) {
-                        enc->sentinel = enc->p;
-                        pack_tag(env, field->fnum, enc);
-                        *(enc->sentinel) |= WIRE_TYPE_LENGTH_PREFIXED;
+                        check_ret(ret, pack_known_tag(env, field->tag, field->tag_len, enc));
 
                         spot++;
                         check_ret(ret, stack_ensure(env, stack, &spot));
@@ -1223,9 +1251,7 @@ encode(ErlNifEnv *env, ERL_NIF_TERM term, ep_tdata_t *tdata)
                 continue;
             }
 
-            enc->sentinel = enc->p;
-            pack_tag(env, spot->field->fnum, enc);
-            *(enc->sentinel) |= WIRE_TYPE_LENGTH_PREFIXED;
+            check_ret(ret, pack_known_tag(env, spot->field->tag, spot->field->tag_len, enc));
 
             spot++;
             check_ret(ret, stack_ensure(env, stack, &spot));

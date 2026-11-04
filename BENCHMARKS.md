@@ -68,7 +68,7 @@ binding has two representations and only comparing like with like is fair.
 |---|---|---|---|---|
 | core (dynamic) | `make bench` (`bench/bench.cc`) | `protoc` C++ generated + DynamicMessage | all 4 | 1.3x / 1.4x ✅ |
 | C structs | `make bench-c` (`bindings/c/benchmarks/bench_struct.cc`) | `protoc` C++ generated from the same `matrix3.proto` | all 4 | 1.42x / 2.25x ✅ |
-| Erlang/OTP NIF | `make benchmarks` in `bindings/erlang/benchmarks` | gpb (pure Erlang), with gpb NIF (libprotobuf) as the second baseline, same `matrix3.proto` | all 4 | 2.04x / 1.68x vs gpb ✅ |
+| Erlang/OTP NIF | `make benchmarks` in `bindings/erlang/benchmarks` | gpb (pure Erlang), with gpb NIF (libprotobuf) as the second baseline, same `matrix3.proto` | all 4 | 4.21x / 1.98x vs gpb ✅ |
 | Python (CPython ext) | `make python-bench` (`bindings/python/benchmarks/bench.py`) | `google.protobuf` (upb C extension) on the same `matrix3.proto` | all 4 | 6.5x / 1.69x ✅ |
 | C++ | same engine as C (`bindings/cpp` mirrors the C structs) | — | — | planned |
 | Go (`cgo` dynamic) | `make go-bench` (`bindings/go/benchmarks`) | `protobuf-go` generated code from the same `matrix3.proto` | all 4 | 2.57x / 2.13x ✅ |
@@ -121,7 +121,7 @@ payload, the boundary cost and the baseline all differ.
 | Dart | `dart:ffi` | 74913 B | 1273.8 (12.2x ✅) | 555.9 (3.3x ✅) |
 | Rust | static link | 74913 B | 1423.0 (1.57x ✅) | 575.8 (1.45x ✅) |
 | C# | P/Invoke | 74913 B | 1393.5 (2.90x ✅) | 547.1 (1.07x ✅) |
-| Erlang | NIF (`pbwire`) | 74913 B | 251.2 (2.04x ✅) | 365.2 (1.68x ✅) |
+| Erlang | NIF (`pbwire`) | 74913 B | 441.7 (4.21x ✅) | 354.1 (1.98x ✅) |
 
 Read it as: the in-process dynamic core sets the pace (1.4x the C++
 generated code at this size), a binding that links the core in (Ruby, Rust)
@@ -771,14 +771,14 @@ against gpb, the third column is the gpb NIF (libprotobuf) second baseline.
 
 | payload | op | pbwire-erlang (MB/s, x gpb) | gpb (MB/s) | gpb-nif (MB/s) |
 |---|---|---|---|---|
-| 136 B | encode | 341.0 (2.00x ✅) | 170.3 | 68.0 |
-| 136 B | decode | 486.4 (2.18x ✅) | 223.4 | 69.9 |
-| 174 B | encode | 312.0 (2.22x ✅) | 140.3 | 83.3 |
-| 174 B | decode | 481.3 (2.33x ✅) | 206.6 | 92.6 |
-| 2469 B | encode | 234.4 (1.99x ✅) | 117.8 | 93.4 |
-| 2469 B | decode | 327.9 (1.69x ✅) | 194.2 | 172.1 |
-| 74913 B | encode | 249.4 (2.03x ✅) | 122.6 | 118.0 |
-| 74913 B | decode | 346.5 (1.52x ✅) | 228.5 | 198.8 |
+| 136 B | encode | 491.2 (2.47x ✅) | 198.9 | 56.5 |
+| 136 B | decode | 512.0 (2.18x ✅) | 234.9 | 60.9 |
+| 174 B | encode | 472.0 (2.44x ✅) | 193.5 | 63.7 |
+| 174 B | decode | 525.6 (2.21x ✅) | 238.2 | 80.3 |
+| 2469 B | encode | 407.9 (3.60x ✅) | 113.4 | 43.9 |
+| 2469 B | decode | 326.1 (1.81x ✅) | 180.0 | 135.5 |
+| 74913 B | encode | 441.7 (4.21x ✅) | 104.9 | 109.6 |
+| 74913 B | decode | 354.1 (1.98x ✅) | 178.8 | 182.8 |
 
 ## Run them
 

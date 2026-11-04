@@ -110,18 +110,18 @@ that `pbwire:load_cache/1` consumes.
 ## Results
 
 <!-- BENCHMARK_RESULTS_START -->
-Last run: 2026-11-04 05:00:02 UTC (matrix3.proto, the four standard tiers; Erlang 29.0.1 per `.tool-versions`; machine Apple M4 Pro)
+Last run: 2026-11-04 10:29:33 UTC (matrix3.proto, the four standard tiers; Erlang 29.0.1 per `.tool-versions`; machine Apple M4 Pro)
 
 | payload | op | pbwire-erlang (MB/s, x gpb) | gpb (MB/s) | gpb-nif (MB/s) |
 |---|---|---|---|---|
-| 136 B | encode | 362.1 (2.01x) | 180.1 | 81.5 |
-| 136 B | decode | 494.7 (2.20x) | 224.6 | 92.6 |
-| 174 B | encode | 347.7 (2.46x) | 141.5 | 72.6 |
-| 174 B | decode | 477.9 (2.17x) | 219.8 | 84.6 |
-| 2469 B | encode | 233.8 (1.84x) | 127.0 | 96.0 |
-| 2469 B | decode | 327.9 (1.71x) | 192.3 | 173.7 |
-| 74913 B | encode | 253.9 (2.06x) | 123.2 | 123.0 |
-| 74913 B | decode | 369.4 (1.69x) | 218.6 | 210.4 |
+| 136 B | encode | 491.2 (2.47x) | 198.9 | 56.5 |
+| 136 B | decode | 512.0 (2.18x) | 234.9 | 60.9 |
+| 174 B | encode | 472.0 (2.44x) | 193.5 | 63.7 |
+| 174 B | decode | 525.6 (2.21x) | 238.2 | 80.3 |
+| 2469 B | encode | 407.9 (3.60x) | 113.4 | 43.9 |
+| 2469 B | decode | 326.1 (1.81x) | 180.0 | 135.5 |
+| 74913 B | encode | 441.7 (4.21x) | 104.9 | 109.6 |
+| 74913 B | decode | 354.1 (1.98x) | 178.8 | 182.8 |
 
 Higher is better. Throughput in MB/s on serialized wire size. Case names are the
 four standard tiers at the repo root ([BENCHMARKS.md](../../../BENCHMARKS.md)).
@@ -151,50 +151,50 @@ Erlang/OTP 29 [erts-17.0.1] [source] [64-bit] [smp:14:14] [ds:14:14:10] [async-t
 OK   small: pbwire-erlang encode/decode parity (136 bytes)
 OK   small: gpb encode/decode parity (136 bytes)
 OK   small: gpb-nif encode/decode parity (136 bytes)
-small: 136 bytes, 262144 iterations (repeated fields x0)
+small: 136 bytes, 131072 iterations (repeated fields x0)
   impl           op             ns/op       MB/s
-  pbwire-erlang  encode         375.6      362.1
-  gpb            encode         755.0      180.1
-  gpb-nif        encode        1669.7       81.5
-  pbwire-erlang  decode         274.9      494.7
-  gpb            decode         605.6      224.6
-  gpb-nif        decode        1468.9       92.6
+  pbwire-erlang  encode         276.9      491.2
+  gpb            encode         683.9      198.9
+  gpb-nif        encode        2406.5       56.5
+  pbwire-erlang  decode         265.6      512.0
+  gpb            decode         579.1      234.9
+  gpb-nif        decode        2234.9       60.9
 
 OK   medium: pbwire-erlang encode/decode parity (174 bytes)
 OK   medium: gpb encode/decode parity (174 bytes)
 OK   medium: gpb-nif encode/decode parity (174 bytes)
-medium: 174 bytes, 131072 iterations (repeated fields x1)
+medium: 174 bytes, 8192 iterations (repeated fields x1)
   impl           op             ns/op       MB/s
-  pbwire-erlang  encode         500.4      347.7
-  gpb            encode        1229.6      141.5
-  gpb-nif        encode        2396.0       72.6
-  pbwire-erlang  decode         364.1      477.9
-  gpb            decode         791.6      219.8
-  gpb-nif        decode        2056.3       84.6
+  pbwire-erlang  encode         368.7      472.0
+  gpb            encode         899.4      193.5
+  gpb-nif        encode        2729.9       63.7
+  pbwire-erlang  decode         331.1      525.6
+  gpb            decode         730.3      238.2
+  gpb-nif        decode        2168.0       80.3
 
 OK   large: pbwire-erlang encode/decode parity (2469 bytes)
 OK   large: gpb encode/decode parity (2469 bytes)
 OK   large: gpb-nif encode/decode parity (2469 bytes)
-large: 2469 bytes, 16384 iterations (repeated fields x100)
+large: 2469 bytes, 8192 iterations (repeated fields x100)
   impl           op             ns/op       MB/s
-  pbwire-erlang  encode       10559.2      233.8
-  gpb            encode       19443.9      127.0
-  gpb-nif        encode       25718.8       96.0
-  pbwire-erlang  decode        7530.5      327.9
-  gpb            decode       12841.2      192.3
-  gpb-nif        decode       14210.3      173.7
+  pbwire-erlang  encode        6053.1      407.9
+  gpb            encode       21777.1      113.4
+  gpb-nif        encode       56263.9       43.9
+  pbwire-erlang  decode        7572.1      326.1
+  gpb            decode       13718.9      180.0
+  gpb-nif        decode       18221.4      135.5
 
 OK   xlarge: pbwire-erlang encode/decode parity (74913 bytes)
 OK   xlarge: gpb encode/decode parity (74913 bytes)
 OK   xlarge: gpb-nif encode/decode parity (74913 bytes)
-xlarge: 74913 bytes, 512 iterations (repeated fields x3000)
+xlarge: 74913 bytes, 256 iterations (repeated fields x3000)
   impl           op             ns/op       MB/s
-  pbwire-erlang  encode      295095.7      253.9
-  gpb            encode      607851.6      123.2
-  gpb-nif        encode      609236.3      123.0
-  pbwire-erlang  decode      202789.1      369.4
-  gpb            decode      342712.9      218.6
-  gpb-nif        decode      356033.2      210.4
+  pbwire-erlang  encode      169617.2      441.7
+  gpb            encode      713875.0      104.9
+  gpb-nif        encode      683507.8      109.6
+  pbwire-erlang  decode      211539.1      354.1
+  gpb            decode      418914.1      178.8
+  gpb-nif        decode      409769.5      182.8
 ```
 </details>
 <!-- BENCHMARK_RESULTS_END -->

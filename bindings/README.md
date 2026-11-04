@@ -92,7 +92,7 @@ the full tables are.
 | Rust | rust-protobuf generated codecs | links `libpbwire.a` statically behind a safe wrapper | 1.57x / 1.45x (vs rust-protobuf; 0.93x / 1.46x vs prost) |
 | C# | Google.Protobuf is already a fast tree codec — the closest race of the set | P/Invoke plus a resolver, no packages | 2.90x / 1.07x (vs Google.Protobuf; 3.6x / 1.62x vs protobuf-net) |
 | Go | the official runtime walks `protoreflect`/`protowire` per field | cgo dynamic binding over the C core: one downcall per op, zero-copy decode in, hot-swappable registry | 2.6x / 2.1x (vs official, xlarge; 1.0x / 1.1x small) |
-| Erlang | gpb is pure Erlang; gpb NIF binds libprotobuf per message | NIF over the core, consuming gpb's own definitions — no second generator | 2.04x / 1.68x (vs gpb) |
+| Erlang | gpb is pure Erlang; gpb NIF binds libprotobuf per message | NIF over the core, consuming gpb's own definitions — no second generator | 4.21x / 1.98x (vs gpb) |
 
 Read the ratios as "what this binding buys its host language", not as a
 cross-language speed ranking: the payload and the boundary cost differ per row,

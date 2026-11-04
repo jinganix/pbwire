@@ -328,7 +328,8 @@ enif_get_string(ErlNifEnv *env, ERL_NIF_TERM term, char *buf, unsigned len, int 
     }
     memcpy(buf, bin.data, bin.size);
     buf[bin.size] = '\0';
-    return 1;
+    /* like the real thing: count includes the terminating NUL */
+    return (int)bin.size + 1;
 }
 
 int
@@ -808,6 +809,7 @@ ep_test_build_int32_msg(ErlNifEnv *env, const char *msg_name, uint32_t fnum)
     field->rnum = 1;
     field->o_type = occurrence_optional;
     field->proto_v = 2;
+    ep_field_init_tag(field);
 
     node->v_fields = _calloc(sizeof(ep_fnum_field_t), 1);
     ff = node->v_fields;
