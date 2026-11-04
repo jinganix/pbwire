@@ -32,11 +32,14 @@ func rustName(name string) string {
 func rustType(field model.Field) string {
 	switch field.Kind {
 	case protoreflect.Int32Kind, protoreflect.Sint32Kind, protoreflect.Sfixed32Kind,
-		protoreflect.Uint32Kind, protoreflect.Fixed32Kind, protoreflect.EnumKind:
+		protoreflect.EnumKind:
 		return "i32"
-	case protoreflect.Int64Kind, protoreflect.Sint64Kind, protoreflect.Sfixed64Kind,
-		protoreflect.Uint64Kind, protoreflect.Fixed64Kind:
+	case protoreflect.Uint32Kind, protoreflect.Fixed32Kind:
+		return "u32"
+	case protoreflect.Int64Kind, protoreflect.Sint64Kind, protoreflect.Sfixed64Kind:
 		return "i64"
+	case protoreflect.Uint64Kind, protoreflect.Fixed64Kind:
+		return "u64"
 	case protoreflect.FloatKind:
 		return "f32"
 	case protoreflect.DoubleKind:
@@ -202,7 +205,10 @@ func rustSetter(field model.Field) string {
 func rustSetArg(field model.Field, expr string) string {
 	switch field.Kind {
 	case protoreflect.Int32Kind, protoreflect.Sint32Kind, protoreflect.Sfixed32Kind,
-		protoreflect.Uint32Kind, protoreflect.Fixed32Kind, protoreflect.EnumKind:
+		protoreflect.Uint32Kind, protoreflect.Fixed32Kind, protoreflect.EnumKind,
+		protoreflect.Uint64Kind, protoreflect.Fixed64Kind:
+		/* set_i64 takes every integer kind: u32 zero-extends, u64 wraps
+		 * with its bits intact (the core masks by field type). */
 		return expr + " as i64"
 	case protoreflect.StringKind:
 		return expr + ".as_str()"
@@ -260,8 +266,12 @@ func rustGetter(field model.Field) string {
 func rustValue(field model.Field, expr string) string {
 	switch field.Kind {
 	case protoreflect.Int32Kind, protoreflect.Sint32Kind, protoreflect.Sfixed32Kind,
-		protoreflect.Uint32Kind, protoreflect.Fixed32Kind, protoreflect.EnumKind:
+		protoreflect.EnumKind:
 		return expr + " as i32"
+	case protoreflect.Uint32Kind, protoreflect.Fixed32Kind:
+		return expr + " as u32"
+	case protoreflect.Uint64Kind, protoreflect.Fixed64Kind:
+		return expr + " as u64"
 	case protoreflect.StringKind:
 		return expr + ".unwrap_or(\"\").to_string()"
 	case protoreflect.BytesKind:
@@ -274,8 +284,12 @@ func rustValue(field model.Field, expr string) string {
 func rustElem(field model.Field, expr string) string {
 	switch field.Kind {
 	case protoreflect.Int32Kind, protoreflect.Sint32Kind, protoreflect.Sfixed32Kind,
-		protoreflect.Uint32Kind, protoreflect.Fixed32Kind, protoreflect.EnumKind:
+		protoreflect.EnumKind:
 		return expr + ".as_i64() as i32"
+	case protoreflect.Uint32Kind, protoreflect.Fixed32Kind:
+		return expr + ".as_i64() as u32"
+	case protoreflect.Uint64Kind, protoreflect.Fixed64Kind:
+		return expr + ".as_i64() as u64"
 	case protoreflect.StringKind:
 		return expr + ".as_str().unwrap_or(\"\").to_string()"
 	case protoreflect.BytesKind:

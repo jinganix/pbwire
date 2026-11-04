@@ -29,11 +29,11 @@ BuildTyped(void)
 
     m.i32 = INT32_MIN;
     m.i64 = INT64_MAX;
-    m.u32 = -1; /* 4294967295 as raw 32-bit bits */
-    m.u64 = -1; /* 18446744073709551615 as raw 64-bit bits */
+    m.u32 = UINT32_MAX;
+    m.u64 = UINT64_MAX;
     m.s32 = INT32_MIN;
     m.s64 = INT64_MIN;
-    m.fx32 = (int32_t)0xdeadbeef;
+    m.fx32 = (uint32_t)0xdeadbeef;
     m.fx64 = 72623859790382856LL;
     m.sfx32 = INT32_MIN;
     m.sfx64 = INT64_MIN;
@@ -67,11 +67,11 @@ VerifyTyped(PBWGen_Scalars3 *m)
 {
     CHECK(m.i32 == INT32_MIN);
     CHECK(m.i64 == INT64_MAX);
-    CHECK(m.u32 == -1);
-    CHECK(m.u64 == -1);
+    CHECK(m.u32 == UINT32_MAX);
+    CHECK(m.u64 == UINT64_MAX);
     CHECK(m.s32 == INT32_MIN);
     CHECK(m.s64 == INT64_MIN);
-    CHECK(m.fx32 == (int32_t)0xdeadbeef);
+    CHECK(m.fx32 == (uint32_t)0xdeadbeef);
     CHECK(m.fx64 == 72623859790382856LL);
     CHECK(m.sfx32 == INT32_MIN);
     CHECK(m.sfx64 == INT64_MIN);

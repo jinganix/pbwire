@@ -12,11 +12,14 @@ import (
 func objcScalar(field model.Field) string {
 	switch field.Kind {
 	case protoreflect.Int32Kind, protoreflect.Sint32Kind, protoreflect.Sfixed32Kind,
-		protoreflect.Uint32Kind, protoreflect.Fixed32Kind, protoreflect.EnumKind:
+		protoreflect.EnumKind:
 		return "int32_t"
-	case protoreflect.Int64Kind, protoreflect.Sint64Kind, protoreflect.Sfixed64Kind,
-		protoreflect.Uint64Kind, protoreflect.Fixed64Kind:
+	case protoreflect.Uint32Kind, protoreflect.Fixed32Kind:
+		return "uint32_t"
+	case protoreflect.Int64Kind, protoreflect.Sint64Kind, protoreflect.Sfixed64Kind:
 		return "int64_t"
+	case protoreflect.Uint64Kind, protoreflect.Fixed64Kind:
+		return "uint64_t"
 	case protoreflect.FloatKind:
 		return "float"
 	case protoreflect.DoubleKind:

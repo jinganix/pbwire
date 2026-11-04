@@ -19,9 +19,9 @@ namespace Pbwire.Generated
     /// <summary>tutorial.Person.PhoneNumber</summary>
     public sealed class Tutorial_Person_PhoneNumber
     {
-        public string? Number; // number = 1
-        public bool HasType;
-        public int Type; // type = 2
+        public string? Number { get; set; } // number = 1
+        public bool HasType { get; set; }
+        public int Type { get; set; } // type = 2
 
         public byte[] Encode(Schema schema)
         {
@@ -58,11 +58,11 @@ namespace Pbwire.Generated
     /// <summary>tutorial.Person</summary>
     public sealed class Tutorial_Person
     {
-        public string? Name; // name = 1
-        public int Id; // id = 2
-        public bool HasEmail;
-        public string? Email; // email = 3
-        public List<Tutorial_Person_PhoneNumber> Phones = new(); // phones = 4
+        public string? Name { get; set; } // name = 1
+        public int Id { get; set; } // id = 2
+        public bool HasEmail { get; set; }
+        public string? Email { get; set; } // email = 3
+        public List<Tutorial_Person_PhoneNumber> Phones { get; set; } = new(); // phones = 4
 
         public byte[] Encode(Schema schema)
         {
@@ -113,7 +113,7 @@ namespace Pbwire.Generated
     /// <summary>tutorial.AddressBook</summary>
     public sealed class Tutorial_AddressBook
     {
-        public List<Tutorial_Person> People = new(); // people = 1
+        public List<Tutorial_Person> People { get; set; } = new(); // people = 1
 
         public byte[] Encode(Schema schema)
         {

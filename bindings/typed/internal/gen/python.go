@@ -127,6 +127,23 @@ func writePythonDict(b *strings.Builder, f *model.File, m model.Message) {
 		}
 		name := pythonName(field.Name)
 		cond := pythonPresent(field, name)
+		// Required fields are always present: emit a plain assignment so
+		// the generated code reads like hand-written Python, not a
+		// template leftover (`if True:`). Optional fields keep the guard.
+		if cond == "True" {
+			switch {
+			case field.Repeated && field.Message != "":
+				fmt.Fprintf(b, "        out[%q] = [v.to_dict() for v in self.%s]\n", field.Name, name)
+			case field.Repeated:
+				fmt.Fprintf(b, "        out[%q] = list(self.%s)\n", field.Name, name)
+			case field.Message != "":
+				fmt.Fprintf(b, "        out[%q] = self.%s.to_dict()\n", field.Name, name)
+			default:
+				fmt.Fprintf(b, "        out[%q] = self.%s\n", field.Name, name)
+			}
+			b.WriteString("\n")
+			continue
+		}
 		fmt.Fprintf(b, "        if %s:\n", cond)
 		switch {
 		case field.Repeated && field.Message != "":

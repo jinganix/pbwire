@@ -161,7 +161,7 @@ fun main(args: Array<String>) {
         /* A wrong value kind is refused, not written. */
         check(
             runCatching { edgeTy.newMessage().set("pick_num", "not a number") }
-                .exceptionOrNull()?.message?.contains("type mismatch") == true,
+                .exceptionOrNull()?.message?.contains("needs a string") == true,
             "wrong-typed value rejected",
         )
         check(

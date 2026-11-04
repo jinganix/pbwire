@@ -12,11 +12,14 @@ import (
 func csType(field model.Field, prefix string) string {
 	switch field.Kind {
 	case protoreflect.Int32Kind, protoreflect.Sint32Kind, protoreflect.Sfixed32Kind,
-		protoreflect.Uint32Kind, protoreflect.Fixed32Kind, protoreflect.EnumKind:
+		protoreflect.EnumKind:
 		return "int"
-	case protoreflect.Int64Kind, protoreflect.Sint64Kind, protoreflect.Sfixed64Kind,
-		protoreflect.Uint64Kind, protoreflect.Fixed64Kind:
+	case protoreflect.Uint32Kind, protoreflect.Fixed32Kind:
+		return "uint"
+	case protoreflect.Int64Kind, protoreflect.Sint64Kind, protoreflect.Sfixed64Kind:
 		return "long"
+	case protoreflect.Uint64Kind, protoreflect.Fixed64Kind:
+		return "ulong"
 	case protoreflect.FloatKind:
 		return "float"
 	case protoreflect.DoubleKind:
@@ -68,12 +71,12 @@ func csharpFiles(f *model.File) []File {
 				continue
 			}
 			if field.NeedsHas {
-				fmt.Fprintf(&b, "        public bool Has%s;\n", field.Pascal)
+				fmt.Fprintf(&b, "        public bool Has%s { get; set; }\n", field.Pascal)
 			}
 			if field.Repeated {
-				fmt.Fprintf(&b, "        public List<%s> %s = new(); // %s = %d\n", strings.TrimSuffix(csType(field, f.Prefix), "?"), field.Pascal, field.Name, field.Number)
+				fmt.Fprintf(&b, "        public List<%s> %s { get; set; } = new(); // %s = %d\n", strings.TrimSuffix(csType(field, f.Prefix), "?"), field.Pascal, field.Name, field.Number)
 			} else {
-				fmt.Fprintf(&b, "        public %s %s; // %s = %d\n", csType(field, f.Prefix), field.Pascal, field.Name, field.Number)
+				fmt.Fprintf(&b, "        public %s %s { get; set; } // %s = %d\n", csType(field, f.Prefix), field.Pascal, field.Name, field.Number)
 			}
 		}
 		fmt.Fprintf(&b, "\n        public byte[] Encode(Schema schema)\n        {\n")
@@ -140,7 +143,10 @@ func csPresent(field model.Field) string {
 func csSetArg(field model.Field, expr string) string {
 	switch field.Kind {
 	case protoreflect.Int32Kind, protoreflect.Sint32Kind, protoreflect.Sfixed32Kind,
-		protoreflect.Uint32Kind, protoreflect.Fixed32Kind, protoreflect.EnumKind:
+		protoreflect.Uint32Kind, protoreflect.Fixed32Kind, protoreflect.EnumKind,
+		protoreflect.Uint64Kind, protoreflect.Fixed64Kind:
+		/* The dynamic Set takes a long: uint zero-extends, ulong wraps
+		 * with its bits intact (the core masks by field type). */
 		return "(long)" + expr
 	case protoreflect.StringKind:
 		return expr + "!"
@@ -165,9 +171,12 @@ func writeCsRead(b *strings.Builder, f *model.File, field model.Field) {
 			value = "v.AsFloat()"
 		case protoreflect.DoubleKind:
 			value = "v.AsDouble()"
-		case protoreflect.Int64Kind, protoreflect.Sint64Kind, protoreflect.Sfixed64Kind,
-			protoreflect.Uint64Kind, protoreflect.Fixed64Kind:
+		case protoreflect.Int64Kind, protoreflect.Sint64Kind, protoreflect.Sfixed64Kind:
 			value = "v.AsLong()"
+		case protoreflect.Uint64Kind, protoreflect.Fixed64Kind:
+			value = "(ulong)v.AsLong()"
+		case protoreflect.Uint32Kind, protoreflect.Fixed32Kind:
+			value = "(uint)v.AsInt()"
 		default:
 			value = "v.AsInt()"
 		}
@@ -189,11 +198,15 @@ func writeCsRead(b *strings.Builder, f *model.File, field model.Field) {
 	var read string
 	switch field.Kind {
 	case protoreflect.Int32Kind, protoreflect.Sint32Kind, protoreflect.Sfixed32Kind,
-		protoreflect.Uint32Kind, protoreflect.Fixed32Kind, protoreflect.EnumKind:
+		protoreflect.EnumKind:
 		read = fmt.Sprintf("msg.GetInt(%q)", field.Name)
-	case protoreflect.Int64Kind, protoreflect.Sint64Kind, protoreflect.Sfixed64Kind,
-		protoreflect.Uint64Kind, protoreflect.Fixed64Kind:
+	case protoreflect.Uint32Kind, protoreflect.Fixed32Kind:
+		/* GetInt truncates to 32 bits; the cast restores the unsigned value. */
+		read = fmt.Sprintf("(uint)msg.GetInt(%q)", field.Name)
+	case protoreflect.Int64Kind, protoreflect.Sint64Kind, protoreflect.Sfixed64Kind:
 		read = fmt.Sprintf("msg.GetLong(%q)", field.Name)
+	case protoreflect.Uint64Kind, protoreflect.Fixed64Kind:
+		read = fmt.Sprintf("(ulong)msg.GetLong(%q)", field.Name)
 	case protoreflect.FloatKind:
 		read = fmt.Sprintf("msg.GetFloat(%q)", field.Name)
 	case protoreflect.DoubleKind:

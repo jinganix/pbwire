@@ -36,12 +36,12 @@ typedef NS_ENUM(int32_t, PBWGen_Color3) {
 @interface PBWGen_Scalars3 : NSObject
 @property (nonatomic, assign) int32_t i32;
 @property (nonatomic, assign) int64_t i64;
-@property (nonatomic, assign) int32_t u32;
-@property (nonatomic, assign) int64_t u64;
+@property (nonatomic, assign) uint32_t u32;
+@property (nonatomic, assign) uint64_t u64;
 @property (nonatomic, assign) int32_t s32;
 @property (nonatomic, assign) int64_t s64;
-@property (nonatomic, assign) int32_t fx32;
-@property (nonatomic, assign) int64_t fx64;
+@property (nonatomic, assign) uint32_t fx32;
+@property (nonatomic, assign) uint64_t fx64;
 @property (nonatomic, assign) int32_t sfx32;
 @property (nonatomic, assign) int64_t sfx64;
 @property (nonatomic, assign) float f32;

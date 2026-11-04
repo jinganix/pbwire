@@ -55,7 +55,7 @@ module Pbwire
     class Structtest_Scalars3
       attr_accessor :i32, :i64, :u32, :u64, :s32, :s64, :fx32, :fx64, :sfx32, :sfx64, :f32, :f64, :flag, :str, :color, :inner, :nums, :tags, :inners, :opt_i32, :has_opt_i32, :opt_str, :has_opt_str, :flags
 
-      def initialize(i32: 0, i64: 0, u32: 0, u64: 0, s32: 0, s64: 0, fx32: 0, fx64: 0, sfx32: 0, sfx64: 0, f32: 0.0, f64: 0.0, flag: false, str: nil, color: 0, inner: nil, nums: [], tags: [], inners: [], has_opt_i32: false, opt_i32: 0, has_opt_str: false, opt_str: nil, flags: [])
+      def initialize(i32: 0, i64: 0, u32: 0, u64: 0, s32: 0, s64: 0, fx32: 0, fx64: 0, sfx32: 0, sfx64: 0, f32: 0.0, f64: 0.0, flag: false, str: nil, color: 0, inner: nil, nums: nil, tags: nil, inners: nil, has_opt_i32: false, opt_i32: 0, has_opt_str: false, opt_str: nil, flags: nil)
         @i32 = i32
         @i64 = i64
         @u32 = u32
@@ -72,14 +72,14 @@ module Pbwire
         @str = str
         @color = color
         @inner = inner
-        @nums = nums
-        @tags = tags
-        @inners = inners
+        @nums = nums || []
+        @tags = tags || []
+        @inners = inners || []
         @has_opt_i32 = has_opt_i32
         @opt_i32 = opt_i32
         @has_opt_str = has_opt_str
         @opt_str = opt_str
-        @flags = flags
+        @flags = flags || []
       end
 
       def to_message(schema)

@@ -57,12 +57,12 @@ module Pbwire
     class Tutorial_Person
       attr_accessor :name, :id, :email, :has_email, :phones
 
-      def initialize(name: nil, id: 0, has_email: false, email: nil, phones: [])
+      def initialize(name: nil, id: 0, has_email: false, email: nil, phones: nil)
         @name = name
         @id = id
         @has_email = has_email
         @email = email
-        @phones = phones
+        @phones = phones || []
       end
 
       def to_message(schema)
@@ -97,8 +97,8 @@ module Pbwire
     class Tutorial_AddressBook
       attr_accessor :people
 
-      def initialize(people: [])
-        @people = people
+      def initialize(people: nil)
+        @people = people || []
       end
 
       def to_message(schema)

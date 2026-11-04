@@ -20,14 +20,14 @@ Every language gets the same shape, spelled the way that language spells things:
 |---|---|---|
 | Java | class per message | `public int i32; public String str; public List<Inner3> inners;` + `encode(Schema)` / `static decode(Schema, byte[])` |
 | Kotlin | `data class` | same fields as `var`, `fun encode(schema)`, `companion object { fun decode(...) }` |
-| C# | `sealed class` | `public int I32;` `public List<Inner3> Inners;` + `Encode(Schema)` / `static Decode` |
+| C# | `sealed class` | `public int I32 { get; set; }` `public uint U32 { get; set; }` `public List<Inner3> Inners { get; set; }` + `Encode(Schema)` / `static Decode` |
 | Dart | class | `int i32 = 0;` `List<Inner3> inners = [];` + `encode(schema)` / `static decode` |
 | PHP | `final class` | typed properties `public int $i32;` + `encode(Schema)` / `static decode` |
 | Ruby | class + kwargs | `attr_accessor :i32` + `#encode(schema)` / `.decode(schema, wire)` |
 | Python | dataclass | `i32: int = 0` + `#encode(msg_type)` / `.decode(msg_type, wire)` |
 | Node | `.d.ts` + JSDoc | interfaces for the plain objects `MessageType.encode()` accepts |
-| Rust | struct | `pub i32: i32` + `encode(&Schema)` / `decode(&Schema, &[u8])` |
-| Objective-C | NSObject subclass | `@property int32_t i32;` + `-encodeWithSchema:error:` / `+decodeWithSchema:data:error:` |
+| Rust | struct | `pub i32: i32; pub u32: u32` + `encode(&Schema)` / `decode(&Schema, &[u8])` |
+| Objective-C | NSObject subclass | `@property int32_t i32; @property uint32_t u32;` + `-encodeWithSchema:error:` / `+decodeWithSchema:data:error:` |
 
 C is not in this table twice: the C plugin already generates the typed
 struct layer. Go is dynamic-API only and has no typed model for now.

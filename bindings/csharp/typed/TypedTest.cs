@@ -28,11 +28,11 @@ Structtest_Scalars3 Build()
     {
         I32 = int.MinValue,
         I64 = long.MaxValue,
-        U32 = -1,
-        U64 = -1L,
+        U32 = uint.MaxValue,
+        U64 = ulong.MaxValue,
         S32 = int.MinValue,
         S64 = long.MinValue,
-        Fx32 = unchecked((int)0xdeadbeef),
+        Fx32 = 0xdeadbeef,
         Fx64 = 72623859790382856L,
         Sfx32 = int.MinValue,
         Sfx64 = long.MinValue,
@@ -59,11 +59,11 @@ void Verify(Structtest_Scalars3 m)
 {
     Check(m.I32 == int.MinValue, "i32");
     Check(m.I64 == long.MaxValue, "i64");
-    Check(m.U32 == -1, "u32");
-    Check(m.U64 == -1L, "u64");
+    Check(m.U32 == uint.MaxValue, "u32");
+    Check(m.U64 == ulong.MaxValue, "u64");
     Check(m.S32 == int.MinValue, "s32");
     Check(m.S64 == long.MinValue, "s64");
-    Check(m.Fx32 == unchecked((int)0xdeadbeef), "fx32");
+    Check(m.Fx32 == 0xdeadbeef, "fx32");
     Check(m.Fx64 == 72623859790382856L, "fx64");
     Check(m.Sfx32 == int.MinValue, "sfx32");
     Check(m.Sfx64 == long.MinValue, "sfx64");
