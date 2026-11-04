@@ -1,0 +1,43 @@
+// Fixture for the Lua binding self-check: one field per value mapping, a
+// nested message, an enum, and the three repeated shapes (packed scalar,
+// string, message).
+syntax = "proto3";
+
+package pbwire.lua;
+
+enum Color {
+  COLOR_UNSPECIFIED = 0;
+  COLOR_RED = 1;
+}
+
+message Inner {
+  string s = 1;
+}
+
+message Sample {
+  int32 i32 = 1;
+  int64 i64 = 2;
+  uint32 u32 = 3;
+  uint64 u64 = 4;
+  bool flag = 5;
+  float f32 = 6;
+  double f64 = 7;
+  string name = 8;
+  bytes blob = 9;
+  Color color = 10;
+  Inner inner = 11;
+  repeated int32 nums = 12;
+  repeated string tags = 13;
+  repeated Inner inners = 14;
+  map<string, int32> attrs = 15;
+  map<int32, string> sticks = 18;
+  oneof choice {
+    string pick_str = 16;
+    int32 pick_num = 17;
+  }
+}
+
+message Chain {
+  Chain next = 1;
+  int32 v = 2;
+}

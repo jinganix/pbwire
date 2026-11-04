@@ -57,6 +57,8 @@ bindings/dart/benchmarks/.dart_tool/
 bindings/csharp/benchmarks/gen/
 bindings/csharp/*/bin/
 bindings/csharp/*/obj/
+bindings/java/target/
+bindings/kotlin/target/
 bindings/python/*.so
 bindings/python/*.dylib
 bindings/php/ext/modules/
@@ -80,6 +82,8 @@ bindings/php/ext/.libs/
 bindings/php/ext/*.la
 bindings/php/ext/*~
 bindings/ruby/lib/pbwire_ext.*
+bindings/lua/pbwire.so
+bindings/lua/pbwire.o
 __pycache__/
 *.pyc
 *.log

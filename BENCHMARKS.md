@@ -18,7 +18,7 @@ is the detail behind it.
 - [Per-binding tables](#cross-binding-comparison-last-run) — one section per language (✅ exceeds baseline ≥1.0x, ❌ below):
   - [Core](#core-pbw_ctx-vs-plain-vs-generated) · [C structs](#c-structs-vs-protoc-generated-same-matrix3proto) · [Go](#go-cgo-dynamic) · [Python](#python-vs-googleprotobuf-upb)
   - [Java](#java-vs-protobuf-java) · [Node](#node-vs-google-protobuf-jspb) · [Ruby](#ruby-c-extension-vs-the-google-protobuf-gem) · [Objective-C](#objective-c-vs-the-protobuf-objc-runtime)
-  - [Kotlin](#kotlin-vs-protoc---kotlin_out-over-protobuf-java) · [PHP](#php-vs-the-official-php-runtime-pure--c-extension) · [Dart](#dart-vs-the-protobuf-dart-package) · [Rust](#rust-vs-rust-protobuf-3x) · [C#](#c-vs-googleprotobuf) · [Erlang](#erlang-pbwire-vs-gpb-vs-gpb-nif)
+  - [Kotlin](#kotlin-vs-protoc---kotlin_out-over-protobuf-java) · [PHP](#php-vs-the-official-php-runtime-pure--c-extension) · [Dart](#dart-vs-the-protobuf-dart-package) · [Rust](#rust-vs-rust-protobuf-3x) · [C#](#c-vs-googleprotobuf) · [Lua](#lua-c-module-tables-vs-lua-protobuf) · [Erlang](#erlang-pbwire-vs-gpb-vs-gpb-nif)
 - [Run them](#run-them) / [Regenerate this file](#regenerate-this-file)
 
 ## Standard cases
@@ -95,6 +95,7 @@ Last full refresh, all rows below unless a table says otherwise:
 | Dart | 3.13.7 |
 | Rust | 1.99.1 |
 | C# | .NET 10.0.403 |
+| Lua | 5.5.1, `lua-protobuf` 0.6.0 |
 
 ## Bindings vs their baselines
 
@@ -115,6 +116,7 @@ Last full refresh, all rows below unless a table says otherwise:
 | Dart (`dart:ffi`) | `make dart-bench` (`bindings/dart/benchmarks`) | the `protobuf` Dart package + generated code | all 4 | 12.2x / 3.3x ✅ |
 | Rust (static link) | `make rust-bench` (`bindings/rust/benchmarks`) | rust-protobuf 3.x generated code + prost (fastest) | all 4 | 1.84x / 1.69x vs rust-protobuf (1.09x / 1.64x vs prost) ✅ |
 | C# (P/Invoke) | `make csharp-bench` (`bindings/csharp/benchmarks`) | Google.Protobuf C# generated code + protobuf-net (fastest) | all 4 | 2.90x / 1.07x vs official (3.6x / 1.62x vs protobuf-net) ✅ |
+| Lua (C module, tables) | `make lua-bench` (`bindings/lua/benchmarks`) | `lua-protobuf` 0.6.0 | all 4 | 0.79x / 1.20x ❌/✅ (8.17x via builder encode) |
 
 "vs baseline" is encode / decode throughput relative to the baseline on the
 largest case the binding runs. `encode` is Python data to wire bytes and
@@ -155,6 +157,7 @@ payload, the boundary cost and the baseline all differ.
 | Dart | `dart:ffi` | 74913 B | 1273.8 (12.2x ✅) | 555.9 (3.3x ✅) |
 | Rust | static link | 74913 B | 1596.5 (1.84x ✅) | 669.0 (1.69x ✅) |
 | C# | P/Invoke | 74913 B | 1393.5 (2.90x ✅) | 547.1 (1.07x ✅) |
+| Lua | C module, tables | 74913 B | 150.0 (0.79x ❌) | 108.0 (1.15x ✅) |
 | Erlang | NIF (`pbwire`) | 74913 B | 441.7 (4.21x ✅) | 354.1 (1.98x ✅) |
 
 Read it as: the in-process dynamic core sets the pace (1.4x the C++
@@ -803,6 +806,35 @@ is the C core's own number: by 2.5 KB the per-call boundary is invisible and onl
 the baseline's own codec is being measured. That is the point of the schema-at-
 runtime design -- the binding owns ergonomics, the core owns the format.
 
+### Lua (C module, tables) vs `lua-protobuf`
+
+| payload | op | pbwire-lua (MB/s, x lua-protobuf) | lua-protobuf (MB/s) |
+|---|---|---|---|
+| 136 B | encode | 84.7 (0.64x ❌) | 132.3 |
+| 136 B | encode_msg | 933.9 (7.06x ✅) | 132.3 |
+| 136 B | decode | 101.2 (1.14x ✅) | 88.6 |
+| 174 B | encode | 97.3 (0.68x ❌) | 144.0 |
+| 174 B | encode_msg | 995.0 (6.91x ✅) | 144.0 |
+| 174 B | decode | 101.6 (1.14x ✅) | 89.3 |
+| 2469 B | encode | 135.3 (0.79x ❌) | 170.4 |
+| 2469 B | encode_msg | 1209.5 (7.10x ✅) | 170.4 |
+| 2469 B | decode | 108.3 (1.20x ✅) | 90.3 |
+| 74913 B | encode | 150.0 (0.79x ❌) | 189.9 |
+| 74913 B | encode_msg | 1550.3 (8.17x ✅) | 189.9 |
+| 74913 B | decode | 108.0 (1.15x ✅) | 94.0 |
+
+`encode_msg` is the builder hot path (`schema:message()` once, then
+`encode()` per send): one core walk plus one buffer malloc, no table
+conversion, which is why it runs at the core's own ~1.0-1.5 GB/s. The table
+path converts table→tree→wire (two passes where the baseline writes one),
+so encode trails ~0.6-0.8x -- the same structural reason the Python dict path
+trails upb until parsed messages take over. Decode wins at every tier because
+it is one validating parse straight into tables with no tree kept. The gate
+is tier size (the bytes are canonical and match `protoc --encode` on the
+small tier) plus a full-field expectation check; the baseline only has to
+agree on size and decode, because `lua-protobuf` writes nested messages in
+table hash order, so raw baseline bytes are not comparable.
+
 ### Erlang: `pbwire` vs gpb vs gpb NIF
 
 `matrix3.proto`, all four tiers, best of three samples per op. Same payload / op /
@@ -837,6 +869,7 @@ make php-bench    # ext-ffi binding vs the official PHP runtime (needs `make con
 make dart-bench   # dart:ffi binding vs the protobuf Dart package (needs `dart pub global activate protoc_plugin`)
 make rust-bench   # static-link binding vs rust-protobuf (needs `cargo install protobuf-codegen`)
 make csharp-bench # P/Invoke binding vs Google.Protobuf (NuGet restore on first run)
+make lua-bench    # C-module binding vs lua-protobuf (luarocks install lua-protobuf for the baseline)
 ./build/bench bench 2000          # fixed-count smoke run (default calibrates from 200000; xlarge floor scales /100)
 ./build/bench_struct_c bench 2000 # fixed-count smoke run (same scaling)
 ```
@@ -878,11 +911,11 @@ make benchmarks-quick  # same suite with BENCH_TARGET_TIME=0.05
 
 The core tables (single-thread and threads) are `scripts/perf.sh` output (same
 layout, MB/s only); the C,
-Python, Java, Kotlin, Node, Ruby, Objective-C, PHP, Dart, Rust, C# and Go tables are
+Python, Java, Kotlin, Node, Ruby, Objective-C, PHP, Dart, Rust, C#, Lua and Go tables are
 `make bench-c` / `make python-bench` / `make java-bench` /
 `make kotlin-bench` / `make node-bench` / `make ruby-bench` / `make objc-bench` /
 `make php-bench` / `make dart-bench` / `make rust-bench` / `make csharp-bench` /
-`make go-bench`
+`make lua-bench` / `make go-bench`
 output reformatted the same way; the
 Erlang table is copied from
 `bindings/erlang/benchmarks/README.md` (`make update-readme` there). The

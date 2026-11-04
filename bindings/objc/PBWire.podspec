@@ -18,7 +18,9 @@ Pod::Spec.new do |s|
   s.requires_arc = true
   # All patterns are resolved from the repo root (the download root), not
   # from this file's directory.
-  s.source_files = "bindings/objc/*.{h,m}", "src/*.c"
+  # internal.h travels with the C sources (they include it by quote); src/protoc
+  # stays out: the single-level glob does not descend into it.
+  s.source_files = "bindings/objc/*.{h,m}", "src/*.{c,h}"
   s.public_header_files = "bindings/objc/*.h", "include/pbwire.h"
   s.pod_target_xcconfig = { "HEADER_SEARCH_PATHS" => "$(PODS_TARGET_SRCROOT)/include" }
 end

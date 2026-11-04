@@ -58,6 +58,10 @@ if [[ $CHECK == 1 ]]; then
     fail "java pom: plugin version must not track VERSION"
   fi
   expect README.md "releases/tag/v$VER" "README release line"
+  rock="bindings/lua/pbwire-$VER-1.rockspec"
+  [ -f "$rock" ] || fail "lua rockspec missing ($rock)"
+  expect "$rock" "^version = \"$VER-1\"$" "lua rockspec version"
+  expect "$rock" "refs/tags/v$VER.tar.gz" "lua rockspec source url"
   for f in bindings/python/setup.py bindings/ruby/pbwire.gemspec bindings/objc/PBWire.podspec; do
     grep -q "VERSION" "$f" || fail "$f: no longer reads the VERSION file"
   done
@@ -86,5 +90,14 @@ setver bindings/kotlin/pom.xml -e "s|^  <version>[0-9.]*</version>|  <version>$V
 setver bindings/kotlin/pom.xml -e "/<artifactId>pbwire-java<\/artifactId>/,/<\/dependency>/s|<version>[0-9.]*</version>|<version>$VER</version>|"
 setver README.md -e "s|releases/tag/v[0-9.]*|releases/tag/v$VER|g" \
   -e "s|\*\*Release \[\`v[0-9.]*\`\]|**Release [\`v$VER\`]|"
+# The rockspec filename carries the version, so a bump renames it.
+old_rock=$(echo bindings/lua/pbwire-*-*.rockspec)
+new_rock="bindings/lua/pbwire-$VER-1.rockspec"
+if [[ "$old_rock" != "$new_rock" ]]; then
+  mv "$old_rock" "$new_rock"
+fi
+setver "$new_rock" -e "s/^version = \".*\"/version = \"$VER-1\"/" \
+  -e "s|refs/tags/v[0-9.]*.tar.gz|refs/tags/v$VER.tar.gz|" \
+  -e "s|^  dir = \"pbwire-[0-9.]*\"|  dir = \"pbwire-$VER\"|"
 
 echo "sync-versions: synced everything to $VER"

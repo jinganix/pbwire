@@ -27,6 +27,7 @@ Every language gets the same shape, spelled the way that language spells things:
 | Python | dataclass | `i32: int = 0` + `#encode(msg_type)` / `.decode(msg_type, wire)` |
 | Node | `.d.ts` + JSDoc | interfaces for the plain objects `MessageType.encode()` accepts |
 | Rust | struct | `pub i32: i32; pub u32: u32` + `encode(&Schema)` / `decode(&Schema, &[u8])` |
+| Lua | table + constructor | `M.Scalars3.new{i32 = 1}` + `encode(schema, t)` / `decode(schema, wire)` |
 | Objective-C | NSObject subclass | `@property int32_t i32; @property uint32_t u32;` + `-encodeWithSchema:error:` / `+decodeWithSchema:data:error:` |
 
 C is not in this table twice: the C plugin already generates the typed
@@ -67,6 +68,7 @@ bindings/python/tests/gen/      matrix3_pbwire.py
 bindings/node/tests/gen/        matrix3.d.ts, matrix3.js
 bindings/rust/tests/gen/        matrix3_pbwire.rs
 bindings/objc/tests/gen/        matrix3.h, matrix3.m
+bindings/lua/tests/gen/         matrix3.lua
 bindings/*/examples/gen/        addressbook.* (the C example's schema)
 ```
 

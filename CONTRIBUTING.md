@@ -57,6 +57,19 @@ docs(docs): document local hook setup
 feat(ci): add stack detection to pre-push checks
 ```
 
+### dev -> master merges
+
+A dev-to-master merge subject and PR must summarize what dev brings in,
+never just "merge dev into master". List the main changes in the subject
+and the included PRs/commits in the body:
+
+```
+feat(bindings): lua binding, typed Go codecs (#7)
+
+- #2 Go codecs, C struct codec, lazy Python message
+- #6 lua binding
+```
+
 ## Local validation (shell hooks, no npm)
 
 Enable once per clone:

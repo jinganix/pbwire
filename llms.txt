@@ -41,9 +41,10 @@ make php-test     # PHP (ext-ffi)
 make dart-test    # Dart (dart:ffi)
 make rust-test    # Rust (links libpbwire.a statically)
 make csharp-test  # C# (P/Invoke)
+make lua-test     # Lua (C module over the core, tables + builder)
 
 make java-bench node-bench ruby-bench objc-bench \
-     kotlin-bench php-bench dart-bench rust-bench csharp-bench  # each binding vs its official runtime
+     kotlin-bench php-bench dart-bench rust-bench csharp-bench lua-bench  # each binding vs its official runtime
 
 cmake -B build-cmake && cmake --build build-cmake && (cd build-cmake && ctest)
 cmake -B build-cmake -DPBW_BUILD_PROTOC=ON   # adds the .proto importer (needs libprotobuf)
@@ -184,7 +185,7 @@ C++ runtime), `make bench`, `make bench-c` (C structs vs protoc C++). Optional, 
   C binding ships its own protoc plugin for layout tables).
 - Typed message models: `bindings/typed` is one protoc plugin (`protoc-gen-pbwire-typed`) that
   emits typed fields, presence flags and encode/decode wrappers per language (Java, Kotlin, C#,
-  Dart, PHP, Ruby, Python, TypeScript/JavaScript, Rust, Objective-C). The wrappers call the
+  Dart, PHP, Ruby, Python, TypeScript/JavaScript, Rust, Objective-C, Lua). The wrappers call the
   binding's dynamic API, so the typed layer never adds a second wire implementation. `make
   typed-gen` regenerates the committed models, `make typed-test` runs one typed test per binding
   (typed fields -> encode -> compare with the pinned protoc bytes -> decode -> verify), and
@@ -213,18 +214,21 @@ C++ runtime), `make bench`, `make bench-c` (C structs vs protoc C++). Optional, 
   Node, Objective-C, Dart and C# are FFI hosts that load the descriptor set and
   nothing else (PHP adds a native C extension over the same core); Java and Kotlin parse it with their own pure-Java reader; Rust links the
   archive in statically; Ruby is a small C extension over the same core
-  that also loads the descriptor set at run time).
+  that also loads the descriptor set at run time, and Lua is a C module
+  over the core with the same shape: tables in, tables out).
 - [bindings/java/README.md](bindings/java/README.md), [bindings/kotlin/README.md](bindings/kotlin/README.md),
   [bindings/ruby/README.md](bindings/ruby/README.md), [bindings/node/README.md](bindings/node/README.md),
   [bindings/objc/README.md](bindings/objc/README.md), [bindings/php/README.md](bindings/php/README.md),
   [bindings/dart/README.md](bindings/dart/README.md), [bindings/rust/README.md](bindings/rust/README.md),
-  [bindings/csharp/README.md](bindings/csharp/README.md):
+  [bindings/csharp/README.md](bindings/csharp/README.md),
+  [bindings/lua/README.md](bindings/lua/README.md):
   the host bindings — no generator, no codegen, no new dependency; schema at run time. Node,
   Objective-C, Dart and C# go through the C ABI (PHP does too, and adds a native
   extension that links the core); Java (and Kotlin through it) encodes
   with its own pure-Java codec; Ruby is a C
   extension that links the core and keeps the message conversion in C; Rust links the archive in;
-  Go links it over cgo with a hot-swappable registry.
+  Go links it over cgo with a hot-swappable registry; Lua is a C module over the core with
+  tables in and tables out.
 - [bindings/go/README.md](bindings/go/README.md): Go binding, cgo dynamic over the C core with
 a hot-swappable `Registry` (`go test ./...` covers parity plus hot-swap).
 - [bindings/python/runtime/pbwire.c](bindings/python/runtime/pbwire.c): Python binding, a CPython

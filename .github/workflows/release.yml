@@ -55,9 +55,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version: '1.23'
+          cache: false
       - name: Cross-compile both plugins
         env:
           CGO_ENABLED: "0"
@@ -165,6 +166,24 @@ jobs:
           # as every local build; hex_core picks the key up from HEX_API_KEY.
           (cd bindings/erlang && make ./rebar3 >/dev/null && ./rebar3 hex publish --yes)
 
+  luarocks:
+    name: LuaRocks (bindings/lua)
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Build from the tag tarball, then upload the rockspec
+        env:
+          LUAROCKS_API_KEY: ${{ secrets.LUAROCKS_API_KEY }}
+        run: |
+          [ -n "$LUAROCKS_API_KEY" ] || { echo "LUAROCKS_API_KEY unset, skipping"; exit 0; }
+          sudo apt-get update && sudo apt-get install -y luarocks lua5.4 liblua5.4-dev
+          ver="$(tr -d ' \t\n' < VERSION)"
+          # Installs from source.url (the tag tarball above), exactly what
+          # users get; fails the job if the C sources do not compile.
+          luarocks build --lua-version=5.4 --local "bindings/lua/pbwire-$ver-1.rockspec"
+          luarocks upload --api-key "$LUAROCKS_API_KEY" "bindings/lua/pbwire-$ver-1.rockspec"
+
   nuget:
     name: NuGet (bindings/csharp)
     needs: validate
@@ -181,7 +200,8 @@ jobs:
           [ -n "$NUGET_API_KEY" ] || { echo "NUGET_API_KEY unset, skipping"; exit 0; }
           dotnet pack bindings/csharp/Pbwire/Pbwire.csproj -c Release
           dotnet nuget push "bindings/csharp/Pbwire/bin/Release/*.nupkg" \
-            --api-key "$NUGET_API_KEY" --source https://api.nuget.org/v3/index.json
+            --api-key "$NUGET_API_KEY" --source https://api.nuget.org/v3/index.json \
+            --skip-duplicate
 
   pub:
     name: pub.dev (bindings/dart, OIDC)
@@ -217,8 +237,11 @@ jobs:
           MAVEN_PASSWORD: ${{ secrets.MAVEN_PASSWORD }}
         run: |
           [ -n "$MAVEN_USERNAME" ] || { echo "Maven secrets unset, skipping"; exit 0; }
-          (cd bindings/java && mvn -B deploy -DskipTests -Dgpg.passphrase=)
-          (cd bindings/kotlin && mvn -B deploy -DskipTests -Dgpg.passphrase=)
+          (cd bindings/java && mvn -B deploy -DskipTests)
+          # Kotlin resolves pbwire-java from Central, which lags publishes:
+          # install it into this runner's local repo first.
+          (cd bindings/java && mvn -B install -DskipTests -Dgpg.skip=true)
+          (cd bindings/kotlin && mvn -B deploy -DskipTests)
 
   cocoapods:
     name: CocoaPods (bindings/objc)
