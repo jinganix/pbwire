@@ -1,29 +1,23 @@
 import java.io.IOException;
 import java.io.UncheckedIOException;
-import java.lang.foreign.Arena;
-import java.lang.foreign.MemorySegment;
-import java.lang.foreign.ValueLayout;
-import java.lang.ref.Cleaner;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * A loaded {@code FileDescriptorSet}: the runtime schema every MessageType comes
- * from. No generated code, no protoc plugin -- load the bytes protoc emitted.
+ * from. No generated code, no protoc plugin, no native library -- the parser
+ * in {@code Proto} reads the bytes protoc emitted, and {@code GenericCodec}
+ * owns the wire format.
  *
- * <p>Closing the schema frees it; messages and types created from it must not be
- * used afterwards (they throw {@link IllegalStateException}).
+ * <p>Closing the schema marks it unusable; messages and types created from it
+ * must not be used afterwards (they throw {@link IllegalStateException}).
  */
 public final class Schema implements AutoCloseable {
-    private final AtomicReference<MemorySegment> handle;
-    private final Cleaner.Cleanable cleanable;
+    private final GenericCodec.Schema schema;
+    private boolean closed;
 
-    private Schema(MemorySegment schema) {
-        handle = new AtomicReference<>(schema);
-        /* The action holds the handle reference, not this schema, so the cleaner
-         * can see the schema become unreachable. */
-        cleanable = Pbwire.CLEANER.register(this, new Pbwire.FreeOnce(handle, Pbwire::schemaFree));
+    private Schema(GenericCodec.Schema schema) {
+        this.schema = schema;
     }
 
     /** Loads a descriptor set written by {@code protoc --descriptor_set_out}. */
@@ -37,49 +31,31 @@ public final class Schema implements AutoCloseable {
 
     /** Loads descriptor-set bytes; use {@code --include_imports} so every type resolves. */
     public static Schema fromBytes(byte[] descriptorSet) {
-        Pbwire.Workspace workspace = Pbwire.workspace();
-        MemorySegment data = workspace.input(descriptorSet.length);
-        MemorySegment.copy(descriptorSet, 0, data, ValueLayout.JAVA_BYTE, 0, descriptorSet.length);
-        MemorySegment out = workspace.messageOut();
-        int status = Pbwire.descriptorSetLoad(data, descriptorSet.length, out);
-        MemorySegment schema = out.get(Pbwire.PTR, 0);
-        if (status != Pbwire.OK) {
-            /* The loader always hands back the partial schema so its error string is readable. */
-            PbwireException failure = new PbwireException("descriptor set: " + errorText(schema, status), status);
-            Pbwire.schemaFree(schema);
-            throw failure;
+        try {
+            return new Schema(GenericCodec.Schema.load(descriptorSet));
+        } catch (IllegalArgumentException e) {
+            throw new PbwireException("descriptor set: " + e.getMessage(), 1);
         }
-        return new Schema(Pbwire.notNull(schema, "descriptor set: no schema returned"));
-    }
-
-    private static String errorText(MemorySegment schema, int status) {
-        String why = Pbwire.isNull(schema) ? "" : Pbwire.cstr(Pbwire.schemaError(schema));
-        return why.isEmpty() ? Pbwire.strerror(status) : why;
     }
 
     /** Looks up a message by its fully qualified name, e.g. {@code "pbwire.test.Sample"}. */
     public MessageType message(String fullName) {
-        MemorySegment schema = segment();
-        try (Arena arena = Arena.ofConfined()) {
-            MemorySegment desc = Pbwire.schemaFind(schema, arena.allocateFrom(fullName));
-            if (Pbwire.isNull(desc)) {
-                throw new PbwireException("no such message type: " + fullName);
-            }
-            return new MessageType(this, desc);
+        checkOpen();
+        try {
+            return new MessageType(this, schema.message(fullName));
+        } catch (IllegalArgumentException e) {
+            throw new PbwireException("no such message type: " + fullName);
         }
     }
 
-    /** The native schema; throws once the schema is closed. */
-    MemorySegment segment() {
-        MemorySegment schema = handle.get();
-        if (schema == null) {
+    void checkOpen() {
+        if (closed) {
             throw new IllegalStateException("schema is closed");
         }
-        return schema;
     }
 
     @Override
     public void close() {
-        cleanable.clean();
+        closed = true;
     }
 }

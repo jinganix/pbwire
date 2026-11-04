@@ -1,10 +1,3 @@
-package mvp;
-
-import com.google.protobuf.DescriptorProtos;
-import com.google.protobuf.Descriptors;
-
-import static mvp.Wire.*;
-
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -40,7 +33,7 @@ public final class GenericCodec {
     public static final int IMPLICIT = 0, EXPLICIT = 1, REQUIRED = 2, MESSAGE = 3;
 
     /* Storage kinds: one dispatch per field, tight loops per element. */
-    private static final int K_INT32 = 0, K_UINT32 = 1, K_SINT32 = 2,
+    static final int K_INT32 = 0, K_UINT32 = 1, K_SINT32 = 2,
             K_INT64 = 3, K_UINT64 = 4, K_SINT64 = 5, K_BOOL = 6, K_ENUM = 7,
             K_FIXED32 = 8, K_SFIXED32 = 9, K_FLOAT = 10, K_FIXED64 = 11,
             K_SFIXED64 = 12, K_DOUBLE = 13, K_STRING = 14, K_BYTES = 15,
@@ -50,7 +43,7 @@ public final class GenericCodec {
 
     public static final class Field {
         public int number;
-        public Descriptors.FieldDescriptor.Type type;
+        public Proto.Type type;
         public int kind;
         public int wt; // wire type for the singular/packed form
         public boolean repeated;
@@ -59,11 +52,11 @@ public final class GenericCodec {
         public int presence = IMPLICIT;
         public MessageDef msgType; // MESSAGE/GROUP element type
         public byte[] tag; // precomputed tag bytes (singular/packed form)
-        public Descriptors.FieldDescriptor descriptor;
+        public String fieldName;
     }
 
     public static final class MessageDef {
-        public Descriptors.Descriptor descriptor;
+        public String fullName;
         public Field[] fields; // sorted by number
         public int[] slotByFnum; // dense
         public Map<String, Integer> byName = new HashMap<>();
@@ -82,110 +75,105 @@ public final class GenericCodec {
             return d;
         }
 
-        /** Loads every message (+ extensions) in the set, dependencies first. */
-        public static Schema load(DescriptorProtos.FileDescriptorSet set) {
-            List<Descriptors.FileDescriptor> built = new ArrayList<>();
-            Map<String, Descriptors.FileDescriptor> byFile = new HashMap<>();
-            for (int i = 0; i < set.getFileCount(); i++) {
-                DescriptorProtos.FileDescriptorProto f = set.getFile(i);
-                Descriptors.FileDescriptor[] deps =
-                        new Descriptors.FileDescriptor[f.getDependencyCount()];
-                for (int j = 0; j < deps.length; j++) {
-                    deps[j] = byFile.get(f.getDependency(j));
-                    if (deps[j] == null) {
-                        throw new IllegalArgumentException("deps out of order: "
-                                + f.getName() + " needs " + f.getDependency(j));
-                    }
-                }
-                try {
-                    Descriptors.FileDescriptor fd =
-                            Descriptors.FileDescriptor.buildFrom(f, deps);
-                    built.add(fd);
-                    byFile.put(f.getName(), fd);
-                } catch (Descriptors.DescriptorValidationException e) {
-                    throw new IllegalArgumentException(e);
-                }
+        /**
+         * Loads every message (+ extensions) in the set. The set is parsed
+         * and linked here, so the runtime has no protobuf-java dependency:
+         * a descriptor set plus this file is the whole schema story.
+         */
+        public static Schema load(byte[] fileDescriptorSet) {
+            List<Proto.File> files;
+            try {
+                files = Proto.parseSet(fileDescriptorSet);
+                Proto.link(files);
+            } catch (IllegalArgumentException e) {
+                throw new IllegalArgumentException("descriptor set: "
+                        + e.getMessage(), e);
             }
             Schema s = new Schema();
-            for (Descriptors.FileDescriptor fd : built) {
-                for (Descriptors.Descriptor m : fd.getMessageTypes()) {
+            for (Proto.File f : files) {
+                for (Proto.Message m : f.messages) {
                     s.buildDef(m);
                 }
             }
             // Extensions attach to their extendee after all defs exist.
-            for (Descriptors.FileDescriptor fd : built) {
-                for (Descriptors.FieldDescriptor e : fd.getExtensions()) {
-                    MessageDef d = s.byName.get(e.getContainingType().getFullName());
-                    if (d == null) {
-                        throw new IllegalArgumentException("extendee missing: "
-                                + e.getContainingType().getFullName());
+            for (Proto.File f : files) {
+                for (Proto.Field e : f.extensions) {
+                    s.attachExtension(e);
+                }
+                for (Proto.Message m : f.messages) {
+                    for (Proto.Field e : m.extensions) {
+                        s.attachExtension(e);
                     }
-                    s.attachExtension(d, e);
                 }
             }
             return s;
         }
 
-        private MessageDef buildDef(Descriptors.Descriptor m) {
-            MessageDef done = byName.get(m.getFullName());
+        private MessageDef buildDef(Proto.Message m) {
+            MessageDef done = byName.get(m.fullName);
             if (done != null) {
                 return done;
             }
             MessageDef d = new MessageDef();
-            d.descriptor = m;
-            byName.put(m.getFullName(), d); // before fields: recursion-safe
+            d.fullName = m.fullName;
+            byName.put(m.fullName, d); // before fields: recursion-safe
             List<Field> fs = new ArrayList<>();
-            Map<Descriptors.OneofDescriptor, Integer> oneofs = new HashMap<>();
-            for (Descriptors.FieldDescriptor f : m.getFields()) {
-                if (f.isExtension()) {
-                    continue; // attached in the extension pass
-                }
+            Map<Proto.Oneof, Integer> oneofs = new HashMap<>();
+            for (Proto.Field f : m.fields) {
                 fs.add(buildField(f, oneofs));
             }
             finishDef(d, fs, oneofs);
-            for (Descriptors.Descriptor n : m.getNestedTypes()) {
+            for (Proto.Message n : m.nested) {
                 buildDef(n);
             }
             return d;
         }
 
-        private Field buildField(Descriptors.FieldDescriptor f,
-                Map<Descriptors.OneofDescriptor, Integer> oneofs) {
+        private Field buildField(Proto.Field f,
+                Map<Proto.Oneof, Integer> oneofs) {
             Field s = new Field();
-            s.number = f.getNumber();
-            s.type = f.getType();
-            s.kind = kindOf(f.getType());
-            s.repeated = f.isRepeated();
-            s.packed = f.isPacked();
-            s.descriptor = f;
-            if (f.getContainingOneof() != null) {
-                Integer idx = oneofs.get(f.getContainingOneof());
+            s.number = f.number;
+            s.type = f.type;
+            s.kind = kindOf(f.type);
+            s.repeated = f.label == Proto.Label.REPEATED;
+            s.packed = f.packed;
+            s.fieldName = f.name;
+            if (f.oneof != null) {
+                Integer idx = oneofs.get(f.oneof);
                 if (idx == null) {
                     idx = oneofs.size();
-                    oneofs.put(f.getContainingOneof(), idx);
+                    oneofs.put(f.oneof, idx);
                 }
                 s.oneof = idx;
                 s.presence = EXPLICIT; // reads/writes go through the oneof case
-            } else if (f.isRequired()) {
+            } else if (f.label == Proto.Label.REQUIRED) {
                 s.presence = REQUIRED;
-            } else if (s.type == Descriptors.FieldDescriptor.Type.MESSAGE
-                    || s.type == Descriptors.FieldDescriptor.Type.GROUP) {
+            } else if (s.type == Proto.Type.MESSAGE
+                    || s.type == Proto.Type.GROUP) {
                 s.presence = MESSAGE;
-            } else if (f.hasPresence()) {
+            } else if (f.hasPresence) {
                 s.presence = EXPLICIT;
             } else {
                 s.presence = IMPLICIT;
             }
-            if (s.type == Descriptors.FieldDescriptor.Type.MESSAGE
-                    || s.type == Descriptors.FieldDescriptor.Type.GROUP) {
-                s.msgType = buildDef(f.getMessageType());
+            if (s.type == Proto.Type.MESSAGE || s.type == Proto.Type.GROUP) {
+                s.msgType = buildDef(f.messageType);
             }
             s.wt = wireType(s.type, s.repeated && s.packed);
             s.tag = Wire.tagBytes(s.number, s.wt);
             return s;
         }
 
-        private void attachExtension(MessageDef d, Descriptors.FieldDescriptor e) {
+        private void attachExtension(Proto.Field e) {
+            String extendee = e.extendee;
+            if (extendee.startsWith(".")) {
+                extendee = extendee.substring(1);
+            }
+            MessageDef d = byName.get(extendee);
+            if (d == null) {
+                throw new IllegalArgumentException("extendee missing: "
+                        + e.extendee);
+            }
             Field s = buildField(e, new HashMap<>());
             List<Field> fs = new ArrayList<>(Arrays.asList(d.fields));
             fs.add(s);
@@ -197,7 +185,7 @@ public final class GenericCodec {
         }
 
         private void finishDef(MessageDef d, List<Field> fs,
-                Map<Descriptors.OneofDescriptor, Integer> oneofs) {
+                Map<Proto.Oneof, Integer> oneofs) {
             fs.sort((a, b) -> Integer.compare(a.number, b.number));
             int max = 0;
             for (Field f : fs) {
@@ -209,17 +197,17 @@ public final class GenericCodec {
             d.byName.clear();
             for (int i = 0; i < d.fields.length; i++) {
                 d.slotByFnum[d.fields[i].number] = i;
-                d.byName.put(d.fields[i].descriptor.getName(), i);
+                d.byName.put(d.fields[i].fieldName, i);
             }
             d.oneofByName.clear();
-            for (Map.Entry<Descriptors.OneofDescriptor, Integer> oe : oneofs.entrySet()) {
-                d.oneofByName.put(oe.getKey().getName(), oe.getValue());
+            for (Map.Entry<Proto.Oneof, Integer> oe : oneofs.entrySet()) {
+                d.oneofByName.put(oe.getKey().name, oe.getValue());
             }
             d.oneofCount = Math.max(d.oneofCount, oneofs.size());
         }
     }
 
-    private static int kindOf(Descriptors.FieldDescriptor.Type t) {
+    private static int kindOf(Proto.Type t) {
         switch (t) {
             case INT32:
                 return K_INT32;
@@ -266,9 +254,9 @@ public final class GenericCodec {
         return kind <= K_DOUBLE; // every numeric kind packs
     }
 
-    private static int wireType(Descriptors.FieldDescriptor.Type t, boolean packed) {
+    private static int wireType(Proto.Type t, boolean packed) {
         if (packed) {
-            return WT_LEN;
+            return Wire.WT_LEN;
         }
         switch (t) {
             case INT32:
@@ -279,21 +267,21 @@ public final class GenericCodec {
             case SINT64:
             case BOOL:
             case ENUM:
-                return WT_VARINT;
+                return Wire.WT_VARINT;
             case FIXED64:
             case SFIXED64:
             case DOUBLE:
-                return WT_FIXED64;
+                return Wire.WT_FIXED64;
             case STRING:
             case BYTES:
             case MESSAGE:
-                return WT_LEN;
+                return Wire.WT_LEN;
             case GROUP:
                 return 3; // start-group tag; end tag derived at use
             case FIXED32:
             case SFIXED32:
             case FLOAT:
-                return WT_FIXED32;
+                return Wire.WT_FIXED32;
             default:
                 throw new IllegalArgumentException("no wire type for " + t);
         }
@@ -347,7 +335,7 @@ public final class GenericCodec {
         private int slot(int fnum) {
             if (fnum < 0 || fnum >= def.slotByFnum.length
                     || def.slotByFnum[fnum] < 0) {
-                throw new IllegalArgumentException(def.descriptor.getFullName()
+                throw new IllegalArgumentException(def.fullName
                         + " has no field " + fnum);
             }
             return def.slotByFnum[fnum];
@@ -356,7 +344,7 @@ public final class GenericCodec {
         private int slotByName(String name) {
             Integer i = def.byName.get(name);
             if (i == null) {
-                throw new IllegalArgumentException(def.descriptor.getFullName()
+                throw new IllegalArgumentException(def.fullName
                         + " has no field " + name);
             }
             return i;
@@ -592,6 +580,8 @@ public final class GenericCodec {
         }
 
         static Object box(Field f, long n) {
+            // Every integer kind boxes as Long: the public get()/getList()
+            // contract (and the old FFI binding) reads ints as long.
             switch (f.kind) {
                 case K_INT32:
                 case K_SINT32:
@@ -599,7 +589,7 @@ public final class GenericCodec {
                 case K_UINT32:
                 case K_FIXED32:
                 case K_ENUM:
-                    return Integer.valueOf((int) n);
+                    return Long.valueOf((int) n);
                 case K_INT64:
                 case K_SINT64:
                 case K_UINT64:
@@ -698,7 +688,7 @@ public final class GenericCodec {
             c.s = s;
             c.b = u;
         }
-        wBytes(b, u);
+        Wire.wBytes(b, u);
     }
 
     /** Single pass into a reusable buffer; nested payloads use a 1-byte
@@ -720,7 +710,7 @@ public final class GenericCodec {
             Field f = m.def.fields[s];
             if (f.presence == REQUIRED && !m.has[s]) {
                 throw new IllegalStateException("missing required field "
-                        + m.def.descriptor.getFullName() + "." + f.number);
+                        + m.def.fullName + "." + f.number);
             }
             if (f.repeated) {
                 int n = f.kind <= K_DOUBLE ? m.repNumLen[s] : m.repRefLen[s];
@@ -751,39 +741,39 @@ public final class GenericCodec {
                     case K_INT32:
                     case K_ENUM:
                         writeBytes(b, f.tag);
-                        wInt32(b, (int) v);
+                        Wire.wInt32(b, (int) v);
                         break;
                     case K_UINT32:
                         writeBytes(b, f.tag);
-                        wVar32(b, (int) v);
+                        Wire.wVar32(b, (int) v);
                         break;
                     case K_SINT32:
                         writeBytes(b, f.tag);
-                        wVar32(b, zig32((int) v));
+                        Wire.wVar32(b, Wire.zig32((int) v));
                         break;
                     case K_INT64:
                     case K_UINT64:
                         writeBytes(b, f.tag);
-                        wVar64(b, v);
+                        Wire.wVar64(b, v);
                         break;
                     case K_SINT64:
                         writeBytes(b, f.tag);
-                        wVar64(b, zig64(v));
+                        Wire.wVar64(b, Wire.zig64(v));
                         break;
                     case K_BOOL:
                         writeBytes(b, f.tag);
-                        ensure(b, 1);
+                        Wire.ensure(b, 1);
                         b.b[b.pos++] = (byte) (v == 0 ? 0 : 1);
                         break;
                     case K_FIXED32:
                     case K_SFIXED32:
                     case K_FLOAT:
                         writeBytes(b, f.tag);
-                        wFixed32(b, (int) v);
+                        Wire.wFixed32(b, (int) v);
                         break;
                     default:
                         writeBytes(b, f.tag);
-                        wFixed64(b, v);
+                        Wire.wFixed64(b, v);
                         break;
                 }
                 continue;
@@ -802,7 +792,7 @@ public final class GenericCodec {
         }
         if (m.unknown != null) { // unknown fields last, in input order
             for (byte[] u : m.unknown) {
-                ensure(b, u.length);
+                Wire.ensure(b, u.length);
                 System.arraycopy(u, 0, b.b, b.pos, u.length);
                 b.pos += u.length;
             }
@@ -814,7 +804,7 @@ public final class GenericCodec {
             StrCache sc) {
         if (v instanceof Slice) {
             Slice sl = (Slice) v; // tag included: pure copy, stays byte-exact
-            ensure(b, sl.len);
+            Wire.ensure(b, sl.len);
             System.arraycopy(sl.b, sl.off, b.b, b.pos, sl.len);
             b.pos += sl.len;
             return;
@@ -826,14 +816,14 @@ public final class GenericCodec {
         }
         if (f.kind == K_BYTES) {
             writeBytes(b, f.tag);
-            wBytes(b, (byte[]) v);
+            Wire.wBytes(b, (byte[]) v);
             return;
         }
         if (f.kind == K_MESSAGE) {
             writeBytes(b, f.tag);
-            int lp = patchReserve(b);
+            int lp = Wire.patchReserve(b);
             encodeInto((DMsg) v, b, depth + 1, sc);
-            patch(b, lp);
+            Wire.patch(b, lp);
             return;
         }
         writeGroup(b, f, (DMsg) v, depth, sc);
@@ -855,8 +845,8 @@ public final class GenericCodec {
         if (f.packed) {
             if (f.kind == K_BOOL) {
                 writeBytes(b, f.tag);
-                wVar32(b, n);
-                ensure(b, n);
+                Wire.wVar32(b, n);
+                Wire.ensure(b, n);
                 for (int i = 0; i < n; i++) {
                     b.b[b.pos++] = (byte) (a[i] == 0 ? 0 : 1);
                 }
@@ -865,8 +855,8 @@ public final class GenericCodec {
             if (f.kind == K_FIXED32 || f.kind == K_SFIXED32
                     || f.kind == K_FLOAT) {
                 writeBytes(b, f.tag);
-                wVar32(b, n * 4);
-                ensure(b, n * 4);
+                Wire.wVar32(b, n * 4);
+                Wire.ensure(b, n * 4);
                 for (int i = 0; i < n; i++) {
                     int v = (int) a[i];
                     b.b[b.pos++] = (byte) v;
@@ -879,8 +869,8 @@ public final class GenericCodec {
             if (f.kind == K_FIXED64 || f.kind == K_SFIXED64
                     || f.kind == K_DOUBLE) {
                 writeBytes(b, f.tag);
-                wVar32(b, n * 8);
-                ensure(b, n * 8);
+                Wire.wVar32(b, n * 8);
+                Wire.ensure(b, n * 8);
                 for (int i = 0; i < n; i++) {
                     long v = a[i];
                     b.b[b.pos++] = (byte) v;
@@ -899,13 +889,13 @@ public final class GenericCodec {
             // (~1 us) beats a full size pre-pass over 3000 elements.
             writeBytes(b, f.tag);
             int lp = b.pos;
-            ensure(b, n * 10 + 5);
+            Wire.ensure(b, n * 10 + 5);
             b.pos += 5;
             for (int i = 0; i < n; i++) {
                 writePackedVar(b, f.kind, a[i]);
             }
             int len = b.pos - lp - 5;
-            int llen = sizeVar32(len);
+            int llen = Wire.sizeVar32(len);
             System.arraycopy(b.b, lp + 5, b.b, lp + llen, len);
             int p = lp;
             int v = len;
@@ -927,20 +917,20 @@ public final class GenericCodec {
         switch (kind) {
             case K_INT32:
             case K_ENUM:
-                wInt32(b, (int) v);
+                Wire.wInt32(b, (int) v);
                 return;
             case K_UINT32:
-                wVar32(b, (int) v);
+                Wire.wVar32(b, (int) v);
                 return;
             case K_SINT32:
-                wVar32(b, zig32((int) v));
+                Wire.wVar32(b, Wire.zig32((int) v));
                 return;
             case K_INT64:
             case K_UINT64:
-                wVar64(b, v);
+                Wire.wVar64(b, v);
                 return;
             case K_SINT64:
-                wVar64(b, zig64(v));
+                Wire.wVar64(b, Wire.zig64(v));
                 return;
             default:
                 throw new IllegalArgumentException("not packable");
@@ -951,34 +941,34 @@ public final class GenericCodec {
         switch (kind) {
             case K_INT32:
             case K_ENUM:
-                wInt32(b, (int) v);
+                Wire.wInt32(b, (int) v);
                 return;
             case K_UINT32:
-                wVar32(b, (int) v);
+                Wire.wVar32(b, (int) v);
                 return;
             case K_SINT32:
-                wVar32(b, zig32((int) v));
+                Wire.wVar32(b, Wire.zig32((int) v));
                 return;
             case K_INT64:
             case K_UINT64:
-                wVar64(b, v);
+                Wire.wVar64(b, v);
                 return;
             case K_SINT64:
-                wVar64(b, zig64(v));
+                Wire.wVar64(b, Wire.zig64(v));
                 return;
             case K_BOOL:
-                ensure(b, 1);
+                Wire.ensure(b, 1);
                 b.b[b.pos++] = (byte) (v == 0 ? 0 : 1);
                 return;
             case K_FIXED32:
             case K_SFIXED32:
             case K_FLOAT:
-                wFixed32(b, (int) v);
+                Wire.wFixed32(b, (int) v);
                 return;
             case K_FIXED64:
             case K_SFIXED64:
             case K_DOUBLE:
-                wFixed64(b, v);
+                Wire.wFixed64(b, v);
                 return;
             default:
                 throw new IllegalArgumentException("not numeric");
@@ -987,12 +977,12 @@ public final class GenericCodec {
 
     private static void writeBytes(Wire.Buf b, byte[] tag) {
         if (tag.length == 2) { // every multi-byte field number: no loop
-            ensure(b, 2);
+            Wire.ensure(b, 2);
             b.b[b.pos++] = tag[0];
             b.b[b.pos++] = tag[1];
             return;
         }
-        ensure(b, tag.length);
+        Wire.ensure(b, tag.length);
         for (byte x : tag) {
             b.b[b.pos++] = x;
         }
@@ -1040,7 +1030,7 @@ public final class GenericCodec {
         boolean closed = groupEnd < 0;
         while (r.pos < r.end) {
             int fieldStart = r.pos;
-            int tag = (int) rVar(r);
+            int tag = (int) Wire.rVar(r);
             int fnum = tag >>> 3;
             int wt = tag & 7;
             if (groupEnd >= 0 && wt == 4 && fnum == groupEnd) {
@@ -1071,18 +1061,18 @@ public final class GenericCodec {
                 if (r.pos >= r.end) {
                     throw new IllegalArgumentException("truncated group");
                 }
-                int t = (int) rVar(r);
+                int t = (int) Wire.rVar(r);
                 int w = t & 7;
                 if (w == 3) {
                     depth++;
                 } else if (w == 4) {
                     depth--;
                 } else {
-                    skip(r, w);
+                    Wire.skip(r, w);
                 }
             }
         } else {
-            skip(r, wt);
+            Wire.skip(r, wt);
         }
         if (m.unknown == null) {
             m.unknown = new ArrayList<>(4); // lazy: most messages have none
@@ -1094,7 +1084,7 @@ public final class GenericCodec {
         if (f.kind == K_GROUP) {
             return wt != 3; // start-group only; end tags handled by the parent
         }
-        if (f.repeated && wt == WT_LEN && isPackableKind(f.kind)) {
+        if (f.repeated && wt == Wire.WT_LEN && isPackableKind(f.kind)) {
             return false; // packed run (or unpacked-form tag, checked inside)
         }
         return wt != f.wt;
@@ -1106,27 +1096,27 @@ public final class GenericCodec {
             if (f.kind <= K_DOUBLE) {
                 long[] a = m.repNum[s];
                 int n = m.repNumLen[s];
-                if (wt == WT_LEN && isPackableKind(f.kind)) { // packed run
-                    int len = rLen(r);
+                if (wt == Wire.WT_LEN && isPackableKind(f.kind)) { // packed run
+                    int len = Wire.rLen(r);
                     int end = r.pos + len;
                     if (f.kind == K_BOOL) {
                         a = needLong(m, s, n + len);
                         while (r.pos < end) {
-                            a[n++] = rVar(r) != 0 ? 1 : 0;
+                            a[n++] = Wire.rVar(r) != 0 ? 1 : 0;
                         }
                     } else if (f.kind == K_FIXED32 || f.kind == K_SFIXED32
                             || f.kind == K_FLOAT) {
                         int count = len / 4;
                         a = needLong(m, s, n + count);
                         for (int i = 0; i < count; i++) {
-                            a[n++] = rFixed32(r) & 0xFFFFFFFFL;
+                            a[n++] = Wire.rFixed32(r) & 0xFFFFFFFFL;
                         }
                     } else if (f.kind == K_FIXED64 || f.kind == K_SFIXED64
                             || f.kind == K_DOUBLE) {
                         int count = len / 8;
                         a = needLong(m, s, n + count);
                         for (int i = 0; i < count; i++) {
-                            a[n++] = rFixed64(r);
+                            a[n++] = Wire.rFixed64(r);
                         }
                     } else { // packed varints: at most len elements
                         a = needLong(m, s, n + Math.min(len, 4096));
@@ -1151,7 +1141,7 @@ public final class GenericCodec {
             }
             // Ref-kind repeated: record one slice per element, parse nothing.
             if (f.kind == K_MESSAGE) {
-                int len = rLen(r);
+                int len = Wire.rLen(r);
                 r.pos += len;
             } else if (f.kind == K_GROUP) {
                 int depth = 1;
@@ -1159,18 +1149,18 @@ public final class GenericCodec {
                     if (r.pos >= r.end) {
                         throw new IllegalArgumentException("truncated group");
                     }
-                    int t = (int) rVar(r);
+                    int t = (int) Wire.rVar(r);
                     int w = t & 7;
                     if (w == 3) {
                         depth++;
                     } else if (w == 4) {
                         depth--;
                     } else {
-                        skip(r, w);
+                        Wire.skip(r, w);
                     }
                 }
             } else { // K_STRING / K_BYTES element
-                int len = rLen(r);
+                int len = Wire.rLen(r);
                 r.pos += len;
             }
             Object[] a = m.repRef[s];
@@ -1193,7 +1183,7 @@ public final class GenericCodec {
         }
         // Ref-kind singular: slice it (empty implicit strings stay absent).
         if (f.kind == K_MESSAGE) {
-            int len = rLen(r);
+            int len = Wire.rLen(r);
             if (len == 0 && f.presence == IMPLICIT) {
                 return; // unreachable in practice, but costs nothing
             }
@@ -1204,18 +1194,18 @@ public final class GenericCodec {
                 if (r.pos >= r.end) {
                     throw new IllegalArgumentException("truncated group");
                 }
-                int t = (int) rVar(r);
+                int t = (int) Wire.rVar(r);
                 int w = t & 7;
                 if (w == 3) {
                     depth++;
                 } else if (w == 4) {
                     depth--;
                 } else {
-                    skip(r, w);
+                    Wire.skip(r, w);
                 }
             }
         } else { // K_STRING / K_BYTES
-            int len = rLen(r);
+            int len = Wire.rLen(r);
             if (len == 0 && f.presence == IMPLICIT) {
                 return; // proto3 "": absent, never emitted
             }
@@ -1240,9 +1230,9 @@ public final class GenericCodec {
         r.b = sl.b;
         r.pos = sl.off;
         r.end = sl.off + sl.len;
-        rVar(r); // the tag; already validated at slice time
+        Wire.rVar(r); // the tag; already validated at slice time
         if (f.kind == K_MESSAGE) {
-            int n = rLen(r);
+            int n = Wire.rLen(r);
             DMsg sub = new DMsg(f.msgType);
             decodeInto(sub, r, r.pos + n, -1, 0);
             return sub;
@@ -1252,7 +1242,7 @@ public final class GenericCodec {
             decodeInto(sub, r, r.end, f.number, 0);
             return sub;
         }
-        int n = rLen(r);
+        int n = Wire.rLen(r);
         if (f.kind == K_STRING) {
             return new String(r.b, r.pos, n, StandardCharsets.UTF_8);
         }
@@ -1260,12 +1250,12 @@ public final class GenericCodec {
     }
 
     private static long readPackedVar(Wire.Reader r, int kind) {
-        long v = rVar(r);
+        long v = Wire.rVar(r);
         if (kind == K_SINT32) {
-            return unzig32(v);
+            return Wire.unzig32(v);
         }
         if (kind == K_SINT64) {
-            return unzig64(v);
+            return Wire.unzig64(v);
         }
         return v; // INT32/UINT32/INT64/UINT64/ENUM stay raw (decode at use)
     }
@@ -1278,19 +1268,19 @@ public final class GenericCodec {
             case K_UINT64:
             case K_BOOL:
             case K_ENUM:
-                return rVar(r);
+                return Wire.rVar(r);
             case K_SINT32:
-                return unzig32(rVar(r));
+                return Wire.unzig32(Wire.rVar(r));
             case K_SINT64:
-                return unzig64(rVar(r));
+                return Wire.unzig64(Wire.rVar(r));
             case K_FIXED32:
             case K_SFIXED32:
             case K_FLOAT:
-                return rFixed32(r) & 0xFFFFFFFFL;
+                return Wire.rFixed32(r) & 0xFFFFFFFFL;
             case K_FIXED64:
             case K_SFIXED64:
             case K_DOUBLE:
-                return rFixed64(r);
+                return Wire.rFixed64(r);
             default:
                 throw new IllegalArgumentException("not numeric");
         }

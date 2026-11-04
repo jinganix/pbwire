@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <groupId>io.github.jinganix</groupId>
+  <artifactId>pbwire-java</artifactId>
+  <!-- Release version: kept in sync with the repo-root VERSION file by
+       scripts/sync-versions.sh; never edit by hand. -->
+  <version>0.1.0</version>
+  <packaging>jar</packaging>
+
+  <name>pbwire-java</name>
+  <description>Dynamic protobuf over the pbwire C ABI, schema at runtime, no generated code</description>
+  <url>https://github.com/jinganix/pbwire</url>
+  <licenses>
+    <license>
+      <name>Apache-2.0</name>
+      <url>https://www.apache.org/licenses/LICENSE-2.0</url>
+    </license>
+  </licenses>
+
+  <properties>
+    <maven.compiler.release>22</maven.compiler.release>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+  </properties>
+
+  <build>
+    <sourceDirectory>runtime</sourceDirectory>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-compiler-plugin</artifactId>
+        <version>0.1.0</version>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-jar-plugin</artifactId>
+        <version>0.1.0</version>
+      </plugin>
+    </plugins>
+  </build>
+</project>
