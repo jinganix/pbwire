@@ -177,7 +177,7 @@ jobs:
           LUAROCKS_API_KEY: ${{ secrets.LUAROCKS_API_KEY }}
         run: |
           [ -n "$LUAROCKS_API_KEY" ] || { echo "LUAROCKS_API_KEY unset, skipping"; exit 0; }
-          sudo apt-get update && sudo apt-get install -y luarocks lua5.4 liblua5.4-dev
+          sudo apt-get update && sudo apt-get install -y luarocks lua5.4 liblua5.4-dev lua-dkjson
           ver="$(tr -d ' \t\n' < VERSION)"
           # Installs from source.url (the tag tarball above), exactly what
           # users get; fails the job if the C sources do not compile.
@@ -223,7 +223,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v6
         with:
           java-version: "22"
           distribution: temurin
