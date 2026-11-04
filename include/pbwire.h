@@ -191,7 +191,9 @@ const pbw_descriptor *pbw_field_message_type(const pbw_field *field);
 
 /* --------------------------------------------------------------- message */
 
-/* A message keeps pointing at its descriptor: the schema must outlive it. */
+/* A message keeps pointing at its descriptor: the schema must outlive it. The
+ * descriptor must be linked (pbw_schema_link() returned PBW_OK), because field
+ * lookup relies on the number-sorted field array the link builds. */
 pbw_message *pbw_message_new(const pbw_descriptor *desc);
 void pbw_message_free(pbw_message *msg);
 const pbw_descriptor *pbw_message_descriptor(const pbw_message *msg);
@@ -199,6 +201,17 @@ const pbw_descriptor *pbw_message_descriptor(const pbw_message *msg);
  * buffer-size hint that needs no invalidation: mutation makes it an
  * underestimate, which the encoder handles by growing. */
 size_t pbw_message_wire_size(const pbw_message *msg);
+/* Exact number of bytes pbw_encode() writes for this tree: one walk over the
+ * present values, no allocation, no bytes written. For callers that must know
+ * the length before encoding (a length-prefixed frame, a pre-sized buffer)
+ * this costs less than encoding twice. Deterministic encoding produces the
+ * same length. PBW_ERR_LIMIT when nesting exceeds PBW_MAX_DEPTH, PBW_ERR_INVALID
+ * on a NULL submessage. */
+pbw_status pbw_message_encoded_size(const pbw_message *msg, size_t *len);
+/* Slack pbw_encode_to() needs past pbw_message_encoded_size(): the writer
+ * reserves tag/varint room upfront, so `size + PBW_ENCODE_SLACK` is the
+ * smallest cap guaranteed to fit, while `size` alone may be rejected. */
+#define PBW_ENCODE_SLACK 12
 
 /* Present value of a field, or NULL. Repeated fields expose a PBW_VALUE_LIST.
  */
@@ -401,8 +414,9 @@ pbw_status pbw_encode(const pbw_message *msg, uint8_t **out, size_t *len);
 /* Encode into caller memory of `cap` bytes, so a binding can write straight
  * into its own buffer. No allocation happens and nothing is freed; `cap` is
  * the hard limit and the writer over-reserves up to 10 bytes per write, so
- * leave a few bytes of slack when the exact size is known. *len is the bytes
- * written. PBW_ERR_LIMIT when the message does not fit. */
+ * `pbw_message_encoded_size(msg) + PBW_ENCODE_SLACK` may be needed even when
+ * the exact size is known. *len is the bytes written. PBW_ERR_LIMIT when the
+ * message does not fit. */
 pbw_status pbw_encode_to(const pbw_message *msg, void *out, size_t cap,
                          size_t *len);
 /* Decode buf into a new message of the given type. Unknown fields are kept.

@@ -181,6 +181,13 @@ sort_compare_enum_v_field(const void *a, const void *b)
     return (lhs > rhs) - (lhs < rhs);
 }
 
+/* gpb defs format 3+ enum value: {Sym, Value, [Option]}. */
+static int
+is_enum_value_3(ErlNifEnv *env, ERL_NIF_TERM *array, int32_t *value)
+{
+    return enif_is_atom(env, array[0]) && enif_get_int(env, array[1], value) && enif_is_list(env, array[2]);
+}
+
 ERL_NIF_TERM
 parse_enum_fields(ErlNifEnv *env, ERL_NIF_TERM term, ep_node_t *node)
 {
@@ -205,6 +212,10 @@ parse_enum_fields(ErlNifEnv *env, ERL_NIF_TERM term, ep_node_t *node)
                 } else {
                     raise_exception(env, head);
                 }
+            } else if (is_enum_value_3(env, array, &value)) {
+                /* gpb defs format 3+ (gpb 5): {Sym, Value, Options}. gpb has
+                 * already verified the proto, so repeated values are aliases. */
+                allow_alias = 1;
             } else {
                 raise_exception(env, head);
             }
@@ -228,6 +239,9 @@ parse_enum_fields(ErlNifEnv *env, ERL_NIF_TERM term, ep_node_t *node)
             } else {
                 raise_exception(env, term);
             }
+        } else if (arity == 3 && is_enum_value_3(env, array, &value)) {
+            field->name = array[0];
+            field->value = value;
         } else if (arity == 3 && array[0] == state->atom_option && array[1] == make_atom(env, A_ALLOW_ALIAS) && (array[2] == state->atom_true || array[2] == state->atom_false)) {
             term = tail;
             continue;

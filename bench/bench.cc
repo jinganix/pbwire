@@ -828,6 +828,39 @@ gen_bytes(int repeated)
     return out;
 }
 
+/* The size walk must predict the encoder exactly, and a buffer of exactly that
+ * size plus PBW_ENCODE_SLACK must take the whole message. Self-consistency, so
+ * it holds for hand-built and decoded trees (unknown fields included). */
+void
+check_encoded_size(const char *what, const pbw_message *m)
+{
+    uint8_t *wire = nullptr;
+    size_t wire_len = 0;
+    size_t size = 0;
+    size_t len = 0;
+
+    if (pbw_message_encoded_size(m, &size) != PBW_OK ||
+        pbw_encode(m, &wire, &wire_len) != PBW_OK) {
+        fail("encoded size: encode failed");
+        pbw_free(wire);
+        return;
+    }
+    if (size != wire_len) {
+        char msg[160];
+        std::snprintf(msg, sizeof msg, "encoded size mismatch (%s): %zu vs %zu",
+                      what, size, wire_len);
+        fail(msg);
+        pbw_free(wire);
+        return;
+    }
+    std::vector<uint8_t> buf(size + PBW_ENCODE_SLACK);
+    if (pbw_encode_to(m, buf.data(), buf.size(), &len) != PBW_OK ||
+        len != size || (size > 0 && std::memcmp(buf.data(), wire, size) != 0)) {
+        fail("encode_to(size + PBW_ENCODE_SLACK) failed");
+    }
+    pbw_free(wire);
+}
+
 std::string
 pbw_bytes_of(pbw_descriptor *desc, pbw_message *m)
 {
@@ -883,6 +916,7 @@ check_encoding_parity(pbw_descriptor *desc)
                 std::memcmp(out, a.data(), len) != 0) {
                 fail("pbw_encode_ctx is not byte identical");
             }
+            check_encoded_size("parity", m);
             pbw_message_free(m);
             pbw_ctx_reset(ctx);
         }
@@ -1051,6 +1085,7 @@ check_roundtrip(pbw_descriptor *desc)
                         "repeated=%d\n",
                         repeated);
         }
+        check_encoded_size("roundtrip", m);
         pbw_free(buf);
         pbw_message_free(m);
 
@@ -1157,6 +1192,8 @@ check_parse_verdicts_for(pbw_descriptor *desc, const std::string &valid,
         pbw_message *m = nullptr;
         pbw_status st = pbw_decode(desc, input.data(), input.size(), &m);
         bool pbw_ok = st == PBW_OK;
+        if (pbw_ok)
+            check_encoded_size("parse fuzz", m);
         pbw_message_free(m);
         if (ref_ok)
             accepted++;
@@ -1705,6 +1742,12 @@ bench_stream(const char *label, int repeated, int iterations,
                     },
                                                 iterations, iterations / 10),
                     bytes});
+    rows.push_back({"pbwire", "size", time_it([&] {
+                        size_t n = 0;
+                        (void)pbw_message_encoded_size(pbw_msg, &n);
+                    },
+                                              iterations, iterations / 10),
+                    bytes});
     rows.push_back({"pbwire", "sink", time_it([&] {
                         (void)pbw_encode_sink(pbw_msg, null_sink, nullptr);
                     },
@@ -1945,8 +1988,8 @@ main(int argc, char **argv)
     bench_case("full", 1, iterations, desc);
     bench_case("large", 100, iterations, desc);
     /* xlarge is the fourth standard size (see BENCHMARKS.md): the ~80KB tier
-     * of the Erlang google_message2.dat case. Iterations scale down so one
-     * row still takes about as long as a large row. */
+     * of matrix3.proto (x3000 repeats). Iterations scale down so one row still
+     * takes about as long as a large row. */
     {
         int xlarge_iters = iterations / 100;
         if (xlarge_iters < 200)

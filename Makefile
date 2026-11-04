@@ -67,8 +67,9 @@ test: $(TEST_BIN) $(THREAD_BIN) $(DESC_BIN) $(STRUCT_BIN) $(EXAMPLE_BIN)
 erlang-test:
 	$(MAKE) -C bindings/erlang tests c-tests
 
-# Erlang binding benchmark (bindings/erlang/benchmarks): gpb, gpb NIF and
-# enif_protobuf. Same optional status as `bench`/`bench-c`; needs OTP + gpb.
+# Erlang binding benchmark (bindings/erlang/benchmarks): epb, gpb and (when
+# protoc + libprotobuf are available) gpb NIF on matrix3.proto. Same optional
+# status as `bench`/`bench-c`; needs OTP + gpb.
 erlang-bench:
 	$(MAKE) -C bindings/erlang/benchmarks benchmarks
 

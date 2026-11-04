@@ -18,23 +18,24 @@ is the detail behind it.
 
 ## Standard cases
 
-`small` / `medium` / `large` come from `make bench`; `xlarge` is the tier of
-the Erlang `google_message2.dat` case (84584 B). Each binding scales the
-repeated fields of its own representative message (x0 / x1 / x100 / x3000);
-schemas differ per binding, so tiers match by wire size, not by bytes.
+`small` / `medium` / `large` / `xlarge` scale the repeated fields of each
+binding's representative message x0 / x1 / x100 / x3000. Every binding except
+the core uses the same `matrix3.proto` schema and the same payload, so their
+wire sizes are identical; the core has its own `bench.Msg` because it measures
+`DynamicMessage` against generated C++ on the same tree.
 
-| case | repeats | core `bench.Msg` | C `Scalars3` | Go `Scalars3` | Python `Scalars3` | Erlang Google messages |
-|---|---|---|---|---|---|---|
-| small | x0 | 132 B | 136 B | 136 B | 136 B | — |
-| medium | x1 | 169 B | 174 B | 174 B | 174 B | 228 B (`google_message1.dat`) |
-| large | x100 | 2755 B | 2469 B | 2469 B | 2469 B | — |
-| xlarge | x3000 | 85933 B | 74913 B | 74913 B | 74913 B | 84584 B (`google_message2.dat`) |
+| case | repeats | core `bench.Msg` | matrix3 `Scalars3` (every other binding) |
+|---|---|---|---|
+| small | x0 | 132 B | 136 B |
+| medium | x1 | 169 B | 174 B |
+| large | x100 | 2755 B | 2469 B |
+| xlarge | x3000 | 85933 B | 74913 B |
 
-Go reuses the C `matrix3.proto` schema and the same generated payload, so its
-wire sizes match the C column exactly. Java, Node and Ruby do the same with the
-same repeated-field payload; Objective-C lands on the same four wire sizes by
-padding the `str` field instead (its wrapper does not wrap repeated fields), so
-its xlarge tier is one 74 KB string rather than 3000 sub-messages.
+Objective-C lands on the same four wire sizes by padding the `str` field
+instead of wrapping repeated fields, so its xlarge tier is one 74 KB string
+rather than 3000 sub-messages. Erlang uses `matrix3.proto` like the others:
+the gpb record module is generated from `bindings/c/tests/data/matrix3.proto`
+and the payload is built in `proto-bench` from the same values as `matrix3.txt`.
 
 ## Output format
 
@@ -54,12 +55,9 @@ is better):
 (`MB/s = bytes / ns/op * 1000`). `make bench-c` adds one more block per case
 (`pbwire-c1`: the C binding's one-shot API, which compiles the layout on every
 call) after the standard four rows; only the standard block is aggregated
-below. The Erlang `proto-bench` prints one line per
-op (`<op>: <bytes> bytes, <iterations> iterations in <seconds>s; <MB/s>MB/s;
-<ns/op> ns/op`), carrying the same four fields. The Python harness names its
-ops by the task instead (`encode(data)`, `decode(bytes)`, `to_dict(bytes)`,
-`encode(parsed)`), because a dict-based binding has two representations and
-only comparing like with like is fair.
+below. The Python harness names its ops by the task instead (`encode(data)`,
+`decode(bytes)`, `to_dict(bytes)`, `encode(parsed)`), because a dict-based
+binding has two representations and only comparing like with like is fair.
 
 ## Bindings vs their baselines
 
@@ -67,7 +65,7 @@ only comparing like with like is fair.
 |---|---|---|---|---|
 | core (dynamic) | `make bench` (`bench/bench.cc`) | `protoc` C++ generated + DynamicMessage | all 4 | 1.5x / 1.4x ✅ |
 | C structs | `make bench-c` (`bindings/c/benchmarks/bench_struct.cc`) | `protoc` C++ generated from the same `matrix3.proto` | all 4 | 1.47x / 2.42x ✅ |
-| Erlang/OTP NIF | `make benchmarks` in `bindings/erlang/benchmarks` | gpb (pure Erlang), with gpb NIF (libprotobuf) as the second baseline | medium, xlarge | 2.26x / 2.15x vs gpb ✅ |
+| Erlang/OTP NIF | `make benchmarks` in `bindings/erlang/benchmarks` | gpb (pure Erlang), with gpb NIF (libprotobuf) as the second baseline, same `matrix3.proto` | all 4 | 2.16x / 1.57x vs gpb ✅ |
 | Python (CPython ext) | `make python-bench` (`bindings/python/benchmarks/bench.py`) | `google.protobuf` (upb C extension) on the same `matrix3.proto` | all 4 | 6.7x / 1.7x ✅ |
 | C++ | same engine as C (`bindings/cpp` mirrors the C structs) | — | — | planned |
 | Go (generated) | `make go-bench` (`bindings/go/benchmarks`) | `google.golang.org/protobuf` generated code from the same `matrix3.proto` | all 4 | 2.85x / 1.69x ✅ |
@@ -93,7 +91,9 @@ before timing, the C, Go and Python benches check their bytes against the
 `protoc`-produced reference (plus a decode→encode round trip) before timing,
 the Java, Kotlin, Node, Ruby, Objective-C, PHP, Dart, Rust and C# harnesses
 require their bytes to equal the official encoder's bytes before timing
-anything, and the Erlang suite asserts gpb byte parity.
+anything, and the Erlang harness requires gpb's pinned wire size and byte
+equality (encode, plus re-encoding a decoded reference) from every backend
+before timing.
 
 ## At a glance: every binding, one tier
 
@@ -118,7 +118,7 @@ payload, the boundary cost and the baseline all differ.
 | Dart | `dart:ffi` | 74913 B | 1298.9 (14.0x) | 528.5 (3.1x) |
 | Rust | static link | 74913 B | 1411.3 (1.60x) | 555.1 (1.47x) |
 | C# | P/Invoke | 74913 B | 1345.7 (2.9x) | 533.9 (1.07x) |
-| Erlang | NIF (`enif_protobuf`) | 84584 B | 305.0 (2.26x) | 548.2 (2.15x) |
+| Erlang | NIF (`enif_protobuf`) | 74913 B | 250.2 (2.16x) | 346.2 (1.57x) |
 
 Read it as: the in-process dynamic core sets the pace (1.4-1.5x the C++
 generated code at this size), a binding that links the core in (Ruby, Rust)
@@ -163,6 +163,20 @@ unmodified reference rows drifting -0.7..+0.5% in the same runs, i.e. inside the
 noise floor. The same pass removed the JSON parser's 64-byte number buffer (long
 numbers were rejected; the reference has no such limit).
 
+The JSON printer built a per-message `order` array (malloc + insertion sort)
+before printing fields, although a linked schema's fields are already sorted by
+number (as `link_message()` leaves them). The linked path now prints in place:
+one pass, no allocation. Measured two ways, medians of alternating runs:
+
+| measurement | before | after | delta |
+|---|---|---|---|
+| `make bench` json print (one message) | 1815.3 ns | 1746.5 ns | -3.8% |
+| `pbw_json_print` on matrix3 x3000 (3000 messages) | 13.3 ms | 12.6 ms | -5.2% |
+
+The text parser also stopped malloc-ing a buffer per numeric token (stack
+buffer first); measured neutral on the bench schema (text parse -0.2%), kept
+because it removes one allocation per number.
+
 `pbw_pool_release` grew its idle array with one `realloc` per release, so filling
 a pool of N contexts cost O(N^2) copying. It now doubles the slot array. Filling
 300 pools x 2048 contexts (acquire all, release all, free the pool):
@@ -202,9 +216,9 @@ No binding gained a slower encode/decode path from this layer.
 Apple M4 Pro, `-O2`, `protoc 36.2`, protobuf Python 7.36.2 (upb), Erlang
 29.0.1. Core/C: 200k iterations (xlarge: 2000); Python and Go calibrate their
 own iteration count per case (Go row: Go 1.27.3, `google.golang.org/protobuf`
-v1.36.12); Erlang: 10 s per op. Throughput in MB/s on serialized
-wire size. Per-run noise is a few percent; regenerate below for the current
-machine.
+v1.36.12); Erlang: best of three samples per op, 2 s each. Throughput in MB/s
+on serialized wire size. Per-run noise is a few percent; regenerate below for
+the current machine.
 
 ### Core: `pbw_ctx` vs plain vs generated
 
@@ -300,10 +314,11 @@ that produced them, each verified byte-for-byte against libprotobuf:
 #### Streaming and framing
 
 `make bench` also prints a `stream` table for the same payload: deterministic
-encode ties plain encode (no maps in that message, so it is one branch), the
-sink costs one pass over the bytes, and a delimited feed/next round-trip costs
-about one encode plus one decode. Ratios only — absolute numbers move between
-machines.
+encode ties plain encode (no maps in that message, so it is one branch), `size`
+(`pbw_message_encoded_size`) costs about 0.75 of an encode because it walks the
+same tree without writing, the sink costs one pass over the bytes, and a
+delimited feed/next round-trip costs about one encode plus one decode. Ratios
+only — absolute numbers move between machines.
 
 ### C structs vs `protoc` generated (same `matrix3.proto`)
 
@@ -685,12 +700,18 @@ runtime design -- the binding owns ergonomics, the core owns the format.
 
 ### Erlang: enif_protobuf vs gpb vs gpb NIF
 
+`matrix3.proto`, all four tiers, best of three samples per op:
+
 | Test case | epb | gpb | gpb nif |
 |-----------|-----|-----|---------|
-| medium · 228 B · serialize | 300.10 | 165.01 | 59.14 |
-| medium · 228 B · deserialize | 739.08 | 278.99 | 74.74 |
-| xlarge · 84584 B · serialize | 304.98 | 135.02 | 102.86 |
-| xlarge · 84584 B · deserialize | 548.23 | 255.49 | 189.66 |
+| small · 136 B · encode | 328.4 | 169.9 | 61.0 |
+| small · 136 B · decode | 483.6 | 221.9 | 66.4 |
+| medium · 174 B · encode | 298.3 | 148.5 | 71.3 |
+| medium · 174 B · decode | 500.4 | 210.1 | 82.1 |
+| large · 2469 B · encode | 235.3 | 124.5 | 94.5 |
+| large · 2469 B · decode | 337.6 | 196.8 | 177.0 |
+| xlarge · 74913 B · encode | 250.2 | 115.9 | 118.3 |
+| xlarge · 74913 B · decode | 346.2 | 220.8 | 197.1 |
 
 ## Run them
 
@@ -699,7 +720,7 @@ make bench        # core: 4 cases + text/json/stream/threads (needs protoc + lib
 make bench-c      # C structs vs protoc C++ on matrix3.proto (same deps)
 make go-bench     # Go generated codecs vs google.golang.org/protobuf (needs protoc + protoc-gen-go)
 make python-bench # Python extension vs google.protobuf (needs protobuf + protoc)
-make erlang-bench # Erlang binding: gpb, gpb NIF, enif_protobuf (needs OTP + gpb)
+make erlang-bench # Erlang binding: epb, gpb, gpb NIF on matrix3.proto (needs OTP + gpb)
 make java-bench   # Java FFM vs protobuf-java (fetches the jar from Maven Central once)
 make node-bench   # N-API addon vs google-protobuf/jspb (npm installs into the harness)
 make ruby-bench   # Ruby C extension vs the google-protobuf gem (`RUBY=...` picks the interpreter)
@@ -719,12 +740,14 @@ The four FFI harnesses use a fixed iteration count per tier (printed in each
 block) and report the best of a warm-up pass plus five interleaved timed passes,
 so the JIT has settled and a load spike hits both implementations equally.
 
-From `bindings/erlang/benchmarks` (needs Erlang/OTP + gpb, ~30 s per op by
-default, `BENCH_TARGET_TIME=3` for a quick run):
+From `bindings/erlang/benchmarks` (needs Erlang/OTP + gpb; the gpb NIF baseline
+additionally needs protoc + libprotobuf C++, and is skipped without them).
+Each op is the best of three samples, each `BENCH_TARGET_TIME` seconds long
+(default 2):
 
 ```bash
-make benchmarks        # gpb, gpb NIF and enif_protobuf on both .dat files
-make benchmarks-quick  # same suite, 3 s target per op
+make benchmarks        # epb, gpb and (when built) gpb NIF on matrix3.proto
+make benchmarks-quick  # same suite with BENCH_TARGET_TIME=0.2
 ```
 
 ## Regenerate this file

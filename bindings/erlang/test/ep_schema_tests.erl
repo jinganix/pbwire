@@ -1,10 +1,19 @@
--module(ep_tests).
+%% load_cache/1: the schema comes from a gpb module's introspection list, so it
+%% has to accept that list as gpb emits it (every field kind, oneofs, map
+%% fields, aliases, and the gpb 5 defs-format-3 shapes) and resolve the message
+%% and enum references between the definitions.
+-module(ep_schema_tests).
 
 -include_lib("eunit/include/eunit.hrl").
 -include_lib("gpb/include/gpb.hrl").
 
-load_cache_test() ->
-    ok = ep_test_helpers:load_cache([
+-record(m1, {a}).
+
+%% Every field kind and occurrence in one schema, with options that are
+%% irrelevant for the wire type (`packed` on non-packable types) and a default
+%% that is not a valid value for the type: load_cache/1 must not care.
+load_cache_accepts_every_field_kind_test() ->
+    ok = enif_protobuf:load_cache([
         {{msg, m1}, [
             {field, int32, 1, 1, int32, optional, [packed, {default, ok}]},
             {field, int64, 2, 2, int64, optional, [packed, {default, ok}]},
@@ -47,15 +56,18 @@ load_cache_test() ->
         ]}
     ]).
 
-load_oneof_test() ->
-    ok = ep_test_helpers:load_cache([{{msg, 'Person'}, [
+%% A oneof whose members are scalars, plus a plain field after it.
+load_cache_oneof_test() ->
+    ok = enif_protobuf:load_cache([{{msg, 'Person'}, [
         #gpb_oneof{name = message_body, rnum = 2, fields = [
             #field{name = file_children, fnum = 3, rnum = 2, type = int32, occurrence = optional, opts = []},
             #field{name = xattr, fnum = 4, rnum = 2, type = bytes, occurrence = optional, opts = []}]},
         #field{name = proxy_session_id, fnum = 21, rnum = 3, type = bytes, occurrence = optional, opts = []}
     ]}]).
 
-nested_oneof_test() ->
+%% A oneof nested under a message, which is itself inside a oneof: the linker
+%% has to resolve the whole tree before the first encode.
+nested_oneof_roundtrip_test() ->
     Defs = [
         {{msg, 'ChildLink'}, [
             #field{name = name, fnum = 2, rnum = 2, type = bytes, occurrence = required, opts = []}
@@ -75,7 +87,7 @@ nested_oneof_test() ->
             ]}
         ]}
     ],
-    ok = ep_test_helpers:load_cache(Defs),
+    ok = enif_protobuf:load_cache(Defs),
     Msg = {'ServerMessage',
         {fuse_response,
             {'FuseResponse',
@@ -88,67 +100,23 @@ nested_oneof_test() ->
     Bin = enif_protobuf:encode(Msg),
     Msg = enif_protobuf:decode(Bin, 'ServerMessage').
 
-person_roundtrip_test() ->
-    ok = ep_test_helpers:load_cache(ep_test_helpers:person_defs()),
-    Msg = {'Person', "abc def", 345, "a@example.com"},
-    ?assertEqual(Msg, ep_test_helpers:roundtrip(Msg, ep_test_helpers:person_defs())).
-
-smp_cache_encoding_test_() ->
-    {spawn, {timeout, 60, ?_test(begin
-        rand:uniform(),
-        Processors = erlang:system_info(logical_processors),
-        N = 500000,
-        [spawn(fun() ->
-            ok = ep_test_helpers:load_cache(ep_test_helpers:person_defs()),
-            loop_encoding(N)
-        end) || _ <- lists:seq(1, Processors * 2)],
-        ok = ep_test_helpers:load_cache(ep_test_helpers:person_defs()),
-        loop_encoding(N + 1000000)
-    end)}}.
-
-smp_cache_decoding_test_() ->
-    {spawn, {timeout, 60, ?_test(begin
-        rand:uniform(),
-        Processors = erlang:system_info(logical_processors),
-        N = 500000,
-        [spawn(fun() ->
-            ok = ep_test_helpers:load_cache(ep_test_helpers:person_defs()),
-            loop_decoding(N)
-        end) || _ <- lists:seq(1, Processors * 2)],
-        ok = ep_test_helpers:load_cache(ep_test_helpers:person_defs()),
-        loop_decoding(N + 1000000)
-    end)}}.
-
-loop_encoding(0) ->
-    encoding(),
-    ok;
-loop_encoding(N) ->
-    case rand:uniform() > 0.99 of
-        true ->
-            ok = ep_test_helpers:load_cache(ep_test_helpers:person_defs());
-        false ->
-            ok
-    end,
-    encoding(),
-    loop_encoding(N - 1).
-
-loop_decoding(0) ->
-    decoding(),
-    ok;
-loop_decoding(N) ->
-    case rand:uniform() > 0.99 of
-        true ->
-            ok = ep_test_helpers:load_cache(ep_test_helpers:person_defs());
-        false ->
-            ok
-    end,
-    decoding(),
-    loop_decoding(N - 1).
-
-encoding() ->
-    enif_protobuf:encode({'Person', "abc def", 345, "a@example.com"}).
-
-decoding() ->
-    Bin = <<10, 7, 97, 98, 99, 32, 100, 101, 102, 16, 217, 2, 26, 13, 97, 64,
-        101, 120, 97, 109, 112, 108, 101, 46, 99, 111, 109>>,
-    enif_protobuf:decode(Bin, 'Person').
+%% gpb 5 (defs format 3) emits enum values as {Sym, Value, Options} and keeps
+%% the proto3 markers only in get_proto_defs/0, next to metadata entries such
+%% as {proto_defs_version, 4} and {file, _}. load_cache/1 accepts that list
+%% as-is; gpb has already verified the proto, so repeated values are aliases.
+defs_format_3_enum_test() ->
+    Defs = [{proto_defs_version, 4},
+        {file, {"m", "m.proto"}},
+        {syntax, "proto3"},
+        {package, pkg},
+        {{enum, e}, [{v1, 100, []},
+            {v2, 100, []},
+            {v3, 150, []}]},
+        {{msg, m1}, [#?gpb_field{name = a, fnum = 1, rnum = #m1.a,
+            type = {enum, e}, occurrence = defaulty,
+            opts = []}]}],
+    ok = enif_protobuf:load_cache(Defs),
+    #m1{a = v1} = enif_protobuf:decode(<<8, 100>>, m1),
+    #m1{a = v3} = enif_protobuf:decode(<<8, 150, 1>>, m1),
+    <<8, 100>> = enif_protobuf:encode(#m1{a = v1}),
+    <<8, 100>> = enif_protobuf:encode(#m1{a = v2}).

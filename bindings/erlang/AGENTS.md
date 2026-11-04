@@ -13,7 +13,7 @@ generate Erlang modules with [gpb](https://github.com/tomas-abrahamsson/gpb) (`p
 
 ```shell
 make                    # rebar3 compile + build the NIF
-make tests              # EUnit (gpb parity, PropEr round-trips, per-issue regressions)
+make tests              # EUnit (API, schema, validation, gpb parity, PropEr round-trips)
 make c-tests            # C unit tests
 make c-coverage-check   # gcovr coverage gate
 make c-format           # clang-format >= 19 on c_src/ and c_src_tests/
@@ -29,13 +29,13 @@ Run `make tests` and `make c-tests` after any C or Erlang change; run `make c-fo
 | Path | Contents |
 |---|---|
 | `src/enif_protobuf.erl` | Public API; each function is an `erlang:nif_error` stub replaced by the NIF |
-| `c_src/enif_protobuf.c` | NIF entry points, schema (`get_msg_defs/0`) parsing, global cache, per-thread core contexts |
+| `c_src/enif_protobuf.c` | NIF entry points, schema (`get_msg_defs/0` / `get_proto_defs/0`) parsing, global cache, per-thread core contexts |
 | `c_src/ep_cache.c` | Schema node cache (lookup by message id / name) |
 | `c_src/ep_encoder.c` / `c_src/ep_decoder.c` | Wire format codec |
 | `c_src/ep_node.c` | Schema node tree, reference counting |
-| `test/` | EUnit tests; `ep_gpb_tests.erl` asserts byte parity with gpb |
+| `test/` | EUnit, one module per concern: `ep_api_tests`, `ep_schema_tests`, `ep_validation_tests`, `ep_gpb_tests`, `ep_gpb_compile_parity_tests`, `ep_wire_parity_tests`, `ep_wire_edge_case_tests`, `ep_concurrency_tests`, `ep_proper_encode_tests` / `ep_proper_decode_tests` (+ shared `ep_test_helpers`, `ep_proper_gen`) |
 | `c_src_tests/` | C unit tests (built with `EPB_UNIT_TEST`) |
-| `benchmarks/` | `proto-bench` suite against gpb and gpb NIF |
+| `benchmarks/` | `proto-bench` suite on `bindings/c/tests/data/matrix3.proto` against gpb and gpb NIF |
 
 ## Hard invariants
 
@@ -62,8 +62,11 @@ segfault; raising an Erlang exception is always acceptable.
   static helpers for file-local functions, `ep_` / `EP_` prefixes.
 - Erlang: keep the public surface exactly as in `src/enif_protobuf.erl` plus `encode_msg/2`,
   `decode_msg/3`; do not add options without updating README and tests.
-- Tests: add a regression test named after the issue (`ep_issue_42_tests.erl`) for bug fixes; C-side
-  tests go in `c_src_tests/`.
+- Tests: add the case to the topical module under `test/` — `ep_api_tests` (public API),
+  `ep_schema_tests` (load_cache/1 and defs shapes), `ep_validation_tests` (bad arguments, improper
+  lists, arity), `ep_gpb_tests` (wire/record parity with gpb), `ep_wire_parity_tests` (NIF wire
+  behaviour), `ep_wire_edge_case_tests` (malformed wire), `ep_concurrency_tests` (cache lock) — and
+  name it after the behaviour it pins. C-side tests go in `c_src_tests/`.
 - Never hand-edit the `<!-- BENCHMARK_RESULTS_START -->` … `<!-- BENCHMARK_RESULTS_END -->` block in
   `README.md`; regenerate it with `make benchmark-update-readme`.
 
@@ -71,7 +74,7 @@ segfault; raising an Erlang exception is always acceptable.
 
 ```erlang
 ok = enif_protobuf:set_opts([{with_utf8, true}]),   %% optional, before load_cache
-ok = enif_protobuf:load_cache(x:get_msg_defs()),    %% once per node
+ok = enif_protobuf:load_cache(x:get_msg_defs()),    %% once per node; gpb 5+: x:get_proto_defs()
 Bin = enif_protobuf:encode(Msg),                    %% Msg is a gpb record/map tuple
 Msg = enif_protobuf:decode(Bin, 'Person').
 ```

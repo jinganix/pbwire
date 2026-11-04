@@ -1,12 +1,14 @@
-# Benchmarks for enif_protobuf vs gpb (same harness as gpb/benchmarks).
+# Benchmarks for enif_protobuf against gpb (same harness as every other
+# binding: bindings/c/tests/data/matrix3.proto, four payload tiers).
 #
-# Prerequisites: Erlang/OTP, gpb (via parent test profile or GPB_PATH).
+# Prerequisites: Erlang/OTP, gpb (via the parent test profile or GPB_PATH).
+# The gpb NIF baseline additionally needs protoc + libprotobuf C++; it is built
+# and measured automatically when both are available.
 #
 # Quick start:
-#   make build              # compile parent + benchmark beams
-#   make gpb-benchmarks     # pure Erlang gpb (records)
-#   make epb-benchmarks     # enif_protobuf NIF
-#   make benchmarks         # run both backends
+#   make build              # compile parent + the gpb record modules
+#   make benchmarks         # run every backend that is available
+#   make benchmarks-quick   # same, with a short sample time
 #   make update-readme      # run benchmarks and refresh README.md files
 
 ROOT       ?= ..
@@ -21,20 +23,17 @@ EPB_EBIN ?= $(ROOT)/_build/default/lib/enif_protobuf/ebin
 # Erlang from repo .tool-versions (asdf/mise); override only if needed.
 erl     ?= $(shell $(TOOL_SH) --erl)
 erlc    ?= $(shell $(TOOL_SH) --erlc)
-escript ?= $(shell $(TOOL_SH) --escript)
 ERLANG_VERSION ?= $(shell $(TOOL_SH) --erlang-version)
 ERL_ROOT ?= $(shell $(erl) -noshell -eval 'io:format("~s",[code:root_dir()]), halt().')
 ERL_NIF_CFLAGS ?= -I$(ERL_ROOT)/usr/include
 
-ifdef HIPE
-  HIPE_ERLC_OPTS := +'native' +'{hipe,[o3]}'
-else
-  HIPE_ERLC_OPTS :=
-endif
+MATRIX3     := $(abspath ../../c/tests/data/matrix3.proto)
+MATRIX3_DIR := $(dir $(MATRIX3))
 
+PROTOC           ?= $(shell which protoc 2>/dev/null)
 PROTOBUF_CFLAGS  ?= $(shell pkg-config --cflags protobuf 2>/dev/null)
 PROTOBUF_LDFLAGS ?= $(shell pkg-config --libs protobuf 2>/dev/null)
-PROTOC           ?= $(shell which protoc 2>/dev/null)
+CXX              ?= c++
 CXXSTD           ?= -std=c++17
 UNAME_S          ?= $(shell uname -s)
 ifeq ($(UNAME_S),Darwin)
@@ -43,14 +42,15 @@ else
 NIF_LDFLAGS      ?=
 endif
 
-.PHONY: all build clean \
-	benchmarks gpb-benchmarks gpb-nif-benchmarks epb-benchmarks benchmarks-quick \
-	maps-benchmarks erl-benchmarks d-benchmarks nif-benchmarks \
-	update-readme show-hw-sw-info
+# The gpb NIF baseline needs protoc and the protobuf C++ runtime.
+HAVE_NIF := $(if $(PROTOC),$(shell pkg-config --exists protobuf 2>/dev/null && echo yes))
+
+.PHONY: all build benchmarks benchmarks-quick benchmarks-nif-code \
+	update-readme show-hw-sw-info clean
 
 all: build
 
-build: check-erlang parent-compile benchmarks-gr-code
+build: check-erlang parent-compile benchmarks-code
 
 check-erlang:
 	@$(TOOL_SH) --check
@@ -60,111 +60,21 @@ parent-compile: check-erlang
 	$(REBAR) compile
 	@test -f $(GPB_EBIN)/gpb_compile.beam || $(REBAR) as test compile
 
-benchmarks-erl-code: tmp/msg_r.beam tmp/d_r.beam \
-		tmp/msg_mo.beam tmp/d_mo.beam \
-		tmp/msg_mp.beam tmp/d_mp.beam
+benchmarks-code: tmp/matrix3_r.beam
 
-benchmarks-gr-code: tmp/msg_r.beam
+benchmarks-nif-code: tmp/matrix3.beam tmp/matrix3.nif.so
 
-benchmarks-maps-mo-code: tmp/msg_mo.beam
-
-benchmarks-nif-code: tmp/msg.beam tmp/msg.nif.so tmp/d.beam tmp/d.nif.so
-
-# Standard Google benchmark messages (records), both backends
 benchmarks: build
-	@$(MAKE) gpb-benchmarks
-	@$(MAKE) gpb-nif-benchmarks
-	@$(MAKE) epb-benchmarks
+ifneq ($(HAVE_NIF),)
+	@$(MAKE) benchmarks-nif-code
+endif
+	$(PROTO_BENCH)
 
 benchmarks-quick: build
-	@$(MAKE) BENCH_TARGET_TIME=3 gpb-benchmarks
-	@$(MAKE) BENCH_TARGET_TIME=3 gpb-nif-benchmarks
-	@$(MAKE) BENCH_TARGET_TIME=3 epb-benchmarks
-
-gpb-benchmarks: build
-	@$(call show-hw-sw-info)
-	@echo
-	@echo "=== gpb (pure Erlang, records) ==="
-	@echo
-	$(PROTO_BENCH) --backend gpb \
-	  msg_r Message1 google_message1.dat \
-	  msg_r Message2 google_message2.dat
-
-gpb-nif-benchmarks: benchmarks-nif-code
-	@echo
-	@echo "=== gpb NIF (libprotobuf, standard messages) ==="
-	@echo
-	$(PROTO_BENCH) --backend gpb \
-	  msg Message1 google_message1.dat \
-	  msg Message2 google_message2.dat
-
-epb-benchmarks: build
-	@echo
-	@echo "=== enif_protobuf (NIF) ==="
-	@echo
-	$(PROTO_BENCH) --backend epb \
-	  msg_r Message1 google_message1.dat \
-	  msg_r Message2 google_message2.dat
-
-maps-benchmarks: benchmarks-maps-mo-code parent-compile
-	@$(call show-hw-sw-info)
-	@echo
-	$(PROTO_BENCH) --backend gpb \
-	  msg_mo Message1 google_message1.dat \
-	  msg_mo Message2 google_message2.dat
-	@echo
-	$(PROTO_BENCH) --backend epb \
-	  msg_mo Message1 google_message1.dat \
-	  msg_mo Message2 google_message2.dat
-
-erl-benchmarks: benchmarks-erl-code parent-compile
-	@$(call show-hw-sw-info)
-	@echo
-	$(PROTO_BENCH) --backend gpb \
-	  --echo "-- Records (gpb) --" \
-	  msg_r  Message1 google_message1.dat \
-	  msg_r  Message2 google_message2.dat \
-	  --echo "-- Maps (omitted, gpb) --" \
-	  msg_mo Message1 google_message1.dat \
-	  msg_mo Message2 google_message2.dat \
-	  --echo "-- Maps (present_undefined, gpb) --" \
-	  msg_mp Message1 google_message1.dat \
-	  msg_mp Message2 google_message2.dat
-	@echo
-	$(PROTO_BENCH) --backend epb \
-	  --echo "-- Records (enif_protobuf) --" \
-	  msg_r  Message1 google_message1.dat \
-	  msg_r  Message2 google_message2.dat \
-	  --echo "-- Maps (omitted, enif_protobuf) --" \
-	  msg_mo Message1 google_message1.dat \
-	  msg_mo Message2 google_message2.dat \
-	  --echo "-- Maps (present_undefined, enif_protobuf) --" \
-	  msg_mp Message1 google_message1.dat \
-	  msg_mp Message2 google_message2.dat
-
-d-benchmarks: benchmarks-erl-code parent-compile
-	@$(call show-hw-sw-info)
-	@echo
-	$(PROTO_BENCH) --backend gpb \
-	  --echo "-- Records (gpb) --" \
-	  d_r  dm1 --multi d-msgs/d-msg-n*.dat --end-multi \
-	  d_r  dm1 d-msgs/d-all-concatenated.dat
-	@echo
-	$(PROTO_BENCH) --backend epb \
-	  --echo "-- Records (enif_protobuf) --" \
-	  d_r  dm1 --multi d-msgs/d-msg-n*.dat --end-multi \
-	  d_r  dm1 d-msgs/d-all-concatenated.dat
-
-nif-benchmarks: benchmarks-nif-code
-	@$(call show-hw-sw-info)
-	@echo
-	@echo "=== gpb NIF (libprotobuf) ==="
-	@echo
-	$(PROTO_BENCH) --backend gpb \
-	  msg  Message1 google_message1.dat \
-	  msg  Message2 google_message2.dat \
-	  d dm1 --multi d-msgs/d-msg-n*.dat --end-multi \
-	  d dm1 d-msgs/d-all-concatenated.dat
+ifneq ($(HAVE_NIF),)
+	@$(MAKE) benchmarks-nif-code
+endif
+	BENCH_TARGET_TIME=0.2 $(PROTO_BENCH)
 
 update-readme: build
 	@./update_readme.sh
@@ -195,42 +105,37 @@ define show-hw-sw-info
 	$(erl) -noshell -eval 'io:format("OTP release ~s~n", [erlang:system_info(otp_release)]), io:format("~s~n", [erlang:system_info(system_version)]), halt().'
 endef
 
+# get_proto_defs/0 carries the proto3 markers and the defs-format-3 enum
+# values that enif_protobuf:load_cache/1 needs.
 gpb-compile = \
 	$(erl) -boot start_clean -pa $(GPB_EBIN) -noshell -noinput +B \
-		-v never -c false -I`pwd` -o tmp \
-		-modsuffix $1 \
-		$(2) \
-		-s gpb_compile c $(3)
+		-v never -c false -I$(MATRIX3_DIR) -o tmp \
+		$(1) -introspect-get_proto_defs \
+		-s gpb_compile c $(MATRIX3)
 
-tmp/%_r.erl: %.proto
-	@[ -d tmp ] || mkdir tmp
-	$(call gpb-compile,_r,,$<)
+tmp/matrix3_r.beam: tmp/matrix3_r.erl
+	$(erlc) -Wall -I$(GPB_INCLUDE) -o tmp $<
 
-tmp/%_mo.erl: %.proto
-	@[ -d tmp ] || mkdir tmp
-	$(call gpb-compile,_mo,-maps -maps_unset_optional omitted,$<)
+tmp/matrix3_r.erl: $(MATRIX3)
+	@mkdir -p tmp
+	$(call gpb-compile,-modsuffix _r)
 
-tmp/%_mp.erl: %.proto
-	@[ -d tmp ] || mkdir tmp
-	$(call gpb-compile,_mp,-maps -maps_unset_optional present_undefined,$<)
+tmp/matrix3.beam: tmp/matrix3.nif.cc
+	$(erlc) -Wall -I$(GPB_INCLUDE) -o tmp tmp/matrix3.erl
 
-tmp/%.beam: tmp/%.erl
-	cd tmp && $(erlc) -Wall $(HIPE_ERLC_OPTS) -I$(GPB_INCLUDE) +debug_info \
-		$(patsubst tmp/%,%,$<)
+# One gpb invocation writes matrix3.erl, matrix3.hrl and matrix3.nif.cc.
+tmp/matrix3.nif.cc: $(MATRIX3)
+	@mkdir -p tmp
+	$(call gpb-compile,-nif)
 
-tmp/%.nif.so: %.proto
-	@[ -d tmp ] || mkdir tmp
-	$(PROTOC) --cpp_out=tmp/ $*.proto
+tmp/matrix3.nif.so: tmp/matrix3.nif.cc
+	$(PROTOC) -I$(MATRIX3_DIR) --cpp_out=tmp $(MATRIX3)
 	$(CXX) -g -fPIC -O3 $(CXXSTD) $(PROTOBUF_CFLAGS) $(CXXFLAGS) \
-	  -o tmp/$*.pb.o -c tmp/$*.pb.cc
-	$(CXX) -g -fPIC -Wall -O3 $(CXXSTD) $(ERL_NIF_CFLAGS) $(PROTOBUF_CFLAGS) $(CXXFLAGS) \
-	  -o tmp/$*.nif.o -c tmp/$*.nif.cc
-	$(CXX) -g -fPIC -shared -O3 -Wall $(NIF_LDFLAGS) $(CXXSTD) $(PROTOBUF_CFLAGS) $(CXXFLAGS) \
-	  -o $@ tmp/$*.nif.o tmp/$*.pb.o $(PROTOBUF_LDFLAGS)
-
-tmp/%.erl: %.proto
-	@[ -d tmp ] || mkdir tmp
-	$(call gpb-compile,"",-nif,$<)
+		-o tmp/matrix3.pb.o -c tmp/matrix3.pb.cc
+	$(CXX) -g -fPIC -O3 $(CXXSTD) $(ERL_NIF_CFLAGS) $(PROTOBUF_CFLAGS) $(CXXFLAGS) \
+		-o tmp/matrix3.nif.o -c tmp/matrix3.nif.cc
+	$(CXX) -g -fPIC -shared -O3 $(CXXSTD) $(NIF_LDFLAGS) \
+		-o $@ tmp/matrix3.nif.o tmp/matrix3.pb.o $(PROTOBUF_LDFLAGS)
 
 clean:
 	$(RM) -r tmp

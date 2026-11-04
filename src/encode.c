@@ -754,6 +754,194 @@ encode_message(writer *w, const pbw_message *msg, uint32_t depth, int det)
     w_put(w, msg->unknown, msg->unknown_len);
 }
 
+/* ------------------------------------------------------------------ sizing */
+
+/* Exact wire size, mirroring encode_message()/write_element() branch for
+ * branch. The per-item helpers (packed_item_size, wire_value,
+ * pbw_varint_size) are shared, so only the traversal itself can drift: the
+ * self-checks and the bench difftest assert size == encoded length for every
+ * message they walk, fuzzed ones included. */
+
+/* a + b, refusing to wrap: lengths come from user data and a wrapped total
+ * would make the caller allocate too little. */
+static int
+size_add(size_t *total, size_t extra)
+{
+    if (*total > SIZE_MAX - extra) {
+        return 0;
+    }
+    *total += extra;
+    return 1;
+}
+
+/* tag + length varint + payload, the shape of every length-delimited field. */
+static pbw_status
+size_len_prefixed(size_t *out, size_t tag_len, size_t body)
+{
+    size_t total = tag_len;
+
+    if (!size_add(&total, pbw_varint_size(body)) || !size_add(&total, body)) {
+        return PBW_ERR_LIMIT;
+    }
+    *out = total;
+    return PBW_OK;
+}
+
+static pbw_status size_message(const pbw_message *msg, uint32_t depth,
+                               size_t *out);
+
+static pbw_status
+size_element(const pbw_field *field, const pbw_value *value, uint32_t depth,
+             size_t *out)
+{
+    size_t body;
+    pbw_status status;
+
+    switch (field->type) {
+    case PBW_TYPE_STRING:
+    case PBW_TYPE_BYTES:
+        return size_len_prefixed(out, field->tag_len, value->as.bytes.len);
+    case PBW_TYPE_MESSAGE:
+        if (value->as.msg == NULL) {
+            return PBW_ERR_INVALID;
+        }
+        if (depth == PBW_MAX_DEPTH) {
+            return PBW_ERR_LIMIT;
+        }
+        status = size_message(value->as.msg, depth + 1, &body);
+        if (status != PBW_OK) {
+            return status;
+        }
+        return size_len_prefixed(out, field->tag_len, body);
+    case PBW_TYPE_GROUP:
+        if (value->as.msg == NULL) {
+            return PBW_ERR_INVALID;
+        }
+        if (depth == PBW_MAX_DEPTH) {
+            return PBW_ERR_LIMIT;
+        }
+        status = size_message(value->as.msg, depth + 1, &body);
+        if (status != PBW_OK) {
+            return status;
+        }
+        /* A group has no length prefix: the END_GROUP tag stands in for it. */
+        if (!size_add(&body, pbw_varint_size(((uint64_t)field->number << 3) |
+                                             PBW_WIRE_END_GROUP)) ||
+            !size_add(&body, field->tag_len)) {
+            return PBW_ERR_LIMIT;
+        }
+        *out = body;
+        return PBW_OK;
+    case PBW_TYPE_FLOAT:
+    case PBW_TYPE_FIXED32:
+    case PBW_TYPE_SFIXED32:
+        *out = field->tag_len + 4;
+        return PBW_OK;
+    case PBW_TYPE_DOUBLE:
+    case PBW_TYPE_FIXED64:
+    case PBW_TYPE_SFIXED64:
+        *out = field->tag_len + 8;
+        return PBW_OK;
+    default:
+        body = pbw_varint_size(wire_value(field->type, value->as.u64));
+        if (!size_add(&body, field->tag_len)) {
+            return PBW_ERR_LIMIT;
+        }
+        *out = body;
+        return PBW_OK;
+    }
+}
+
+static pbw_status
+size_message(const pbw_message *msg, uint32_t depth, size_t *out)
+{
+    size_t total = 0;
+    size_t i;
+    /* Same presence hoist as encode_message(): one bitmap word covers most
+     * descriptors, so the walk does not reload it per field. */
+    int single_word = msg->desc->field_count <= 32;
+    uint32_t present0 =
+        (single_word && msg->desc->field_count > 0 && msg->present != NULL)
+            ? msg->present[0]
+            : 0;
+
+    for (i = 0; i < msg->desc->field_count; i++) {
+        const pbw_field *field = &msg->desc->fields[i];
+        const pbw_value *value;
+        size_t part = 0;
+        size_t j;
+        int present = single_word ? (int)((present0 >> (i & 31u)) & 1u)
+                                  : pbw_msg_present(msg, i);
+
+        if (!PBW_EXPECT(present, 1)) {
+            continue;
+        }
+        value = &msg->values[i];
+        if (field->label == PBW_LABEL_REPEATED) {
+            size_t n;
+            pbw_status status;
+
+            if (value->kind != PBW_VALUE_LIST || value->as.list.len == 0) {
+                continue;
+            }
+            n = value->as.list.len;
+            if (field->packed && enc_packable(field->type)) {
+                size_t payload = 0;
+
+                for (j = 0; j < n; j++) {
+                    if (!size_add(&payload,
+                                  packed_item_size(
+                                      field->type,
+                                      value->as.list.items[j]->as.u64))) {
+                        return PBW_ERR_LIMIT;
+                    }
+                }
+                status = size_len_prefixed(&part, field->len_tag_len, payload);
+                if (status != PBW_OK) {
+                    return status;
+                }
+            } else {
+                for (j = 0; j < n; j++) {
+                    size_t item = 0;
+
+                    status = size_element(field, value->as.list.items[j],
+                                          depth, &item);
+                    if (status != PBW_OK) {
+                        return status;
+                    }
+                    if (!size_add(&part, item)) {
+                        return PBW_ERR_LIMIT;
+                    }
+                }
+            }
+        } else {
+            pbw_status status = size_element(field, value, depth, &part);
+
+            if (status != PBW_OK) {
+                return status;
+            }
+        }
+        if (!size_add(&total, part)) {
+            return PBW_ERR_LIMIT;
+        }
+    }
+    /* Unknown fields are written verbatim after the known ones. */
+    if (!size_add(&total, msg->unknown_len)) {
+        return PBW_ERR_LIMIT;
+    }
+    *out = total;
+    return PBW_OK;
+}
+
+pbw_status
+pbw_message_encoded_size(const pbw_message *msg, size_t *len)
+{
+    if (msg == NULL || len == NULL) {
+        return PBW_ERR_INVALID;
+    }
+    return size_message(msg, 0, len);
+}
+
 /* -------------------------------------------------------------- entry points */
 
 /* Encodes into a caller-provided buffer whose capacity is reused across calls. */

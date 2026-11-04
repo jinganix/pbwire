@@ -154,8 +154,34 @@ pack_int32(ErlNifEnv *env, ERL_NIF_TERM term, ep_enc_t *enc, ep_field_t *field)
     return RET_OK;
 }
 
+/* fixed32/fixed64 are unsigned on the wire, but gpb's generated encoder takes
+ * any Erlang integer and writes its low 32/64 bits (`<<Value:32/little>>`), so
+ * negative values must stay accepted. */
 static inline ERL_NIF_TERM
 pack_fixed32(ErlNifEnv *env, ERL_NIF_TERM term, ep_enc_t *enc, ep_field_t *field)
+{
+    ErlNifSInt64 val;
+    uint32_t low;
+
+    if (!enif_get_int64(env, term, &val)) {
+        raise_exception(env, term);
+    }
+
+    if (val == 0 && field->proto_v == 3 && field->o_type == occurrence_defaulty) {
+        return RET_OK;
+    }
+
+    low = (uint32_t)val;
+    enc_reserve(env, enc, sizeof(uint32_t));
+
+    memcpy(enc->p, &low, sizeof(uint32_t));
+    enc->p += sizeof(uint32_t);
+
+    return RET_OK;
+}
+
+static inline ERL_NIF_TERM
+pack_sfixed32(ErlNifEnv *env, ERL_NIF_TERM term, ep_enc_t *enc, ep_field_t *field)
 {
     int32_t val;
 
@@ -273,6 +299,31 @@ pack_int64(ErlNifEnv *env, ERL_NIF_TERM term, ep_enc_t *enc, ep_field_t *field)
 
 static inline ERL_NIF_TERM
 pack_fixed64(ErlNifEnv *env, ERL_NIF_TERM term, ep_enc_t *enc, ep_field_t *field)
+{
+    ErlNifUInt64 val;
+    ErlNifSInt64 signed_val;
+
+    if (!enif_get_uint64(env, term, &val)) {
+        if (!enif_get_int64(env, term, &signed_val)) {
+            raise_exception(env, term);
+        }
+        val = (ErlNifUInt64)signed_val;
+    }
+
+    if (val == 0 && field->proto_v == 3 && field->o_type == occurrence_defaulty) {
+        return RET_OK;
+    }
+
+    enc_reserve(env, enc, sizeof(uint64_t));
+
+    memcpy(enc->p, &val, sizeof(uint64_t));
+    enc->p += sizeof(uint64_t);
+
+    return RET_OK;
+}
+
+static inline ERL_NIF_TERM
+pack_sfixed64(ErlNifEnv *env, ERL_NIF_TERM term, ep_enc_t *enc, ep_field_t *field)
 {
     ErlNifSInt64 val;
 
@@ -692,18 +743,24 @@ pack_element_packed(ErlNifEnv *env, ERL_NIF_TERM term, ep_enc_t *enc, ep_field_t
         check_ret(ret, pack_uint64(env, term, enc, field));
         break;
 
-    case field_sfixed32:
     case field_fixed32:
         check_ret(ret, pack_fixed32(env, term, enc, field));
+        break;
+
+    case field_sfixed32:
+        check_ret(ret, pack_sfixed32(env, term, enc, field));
         break;
 
     case field_float:
         check_ret(ret, pack_float(env, term, enc, field));
         break;
 
-    case field_sfixed64:
     case field_fixed64:
         check_ret(ret, pack_fixed64(env, term, enc, field));
+        break;
+
+    case field_sfixed64:
+        check_ret(ret, pack_sfixed64(env, term, enc, field));
         break;
 
     case field_double:
@@ -767,10 +824,14 @@ pack_field(ErlNifEnv *env, ERL_NIF_TERM term, ep_enc_t *enc, ep_field_t *field)
         check_ret(ret, pack_uint64(env, term, enc, field));
         break;
 
-    case field_sfixed32:
     case field_fixed32:
         *(enc->sentinel) |= WIRE_TYPE_32BIT;
         check_ret(ret, pack_fixed32(env, term, enc, field));
+        break;
+
+    case field_sfixed32:
+        *(enc->sentinel) |= WIRE_TYPE_32BIT;
+        check_ret(ret, pack_sfixed32(env, term, enc, field));
         break;
 
     case field_float:
@@ -778,10 +839,14 @@ pack_field(ErlNifEnv *env, ERL_NIF_TERM term, ep_enc_t *enc, ep_field_t *field)
         check_ret(ret, pack_float(env, term, enc, field));
         break;
 
-    case field_sfixed64:
     case field_fixed64:
         *(enc->sentinel) |= WIRE_TYPE_64BIT;
         check_ret(ret, pack_fixed64(env, term, enc, field));
+        break;
+
+    case field_sfixed64:
+        *(enc->sentinel) |= WIRE_TYPE_64BIT;
+        check_ret(ret, pack_sfixed64(env, term, enc, field));
         break;
 
     case field_double:

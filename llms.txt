@@ -106,6 +106,10 @@ C++ runtime), `make bench`, `make bench-c` (C structs vs protoc C++). Optional, 
   `pbw_decode_ctx_limits`; over-large `max_depth` clamps to `PBW_MAX_DEPTH`.
 - `pbw_encode_deterministic`: map entries sorted by key, everything else byte-identical to
   `pbw_encode`.
+- `pbw_status pbw_message_encoded_size(const pbw_message *, size_t *len)`: exact wire length
+  without allocating or writing bytes (one walk; measured at ~0.75x of an encode), for callers that
+  must frame a message before encoding it. `pbw_encode_to()` over-reserves tag/varint space, so its
+  smallest guaranteed cap is `size + PBW_ENCODE_SLACK` (12), not `size`.
 - Streaming: `pbw_encode_delimited` (varint length + message), `pbw_istream_new/feed/next/reset/free`
   (`*out == NULL` + `PBW_OK` means need more data), `pbw_encode_sink(msg, sink, opaque)` in 8 KiB
   chunks with a `pbw_status`-returning sink.

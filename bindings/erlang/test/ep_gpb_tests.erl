@@ -1142,212 +1142,103 @@ is_hex_digit(D) when $a =< D, D =< $f -> true;
 is_hex_digit(D) when $A =< D, D =< $F -> true;
 is_hex_digit(_) -> false.
 
-%% -------------------------------------------------------------
-%% gpb library API tests (not part of enif_protobuf NIF scope)
+%% fixed32/fixed64 are unsigned on the wire. gpb's generated encoder writes the
+%% low 32/64 bits, so values above INT32_MAX/INT64_MAX must encode too;
+%% sfixed32/sfixed64 stay signed.
+encode_unsigned_fixed32_test() ->
+    Defs = [{{msg, m1}, [#?gpb_field{name = a, fnum = 1, rnum = #m1.a,
+        type = fixed32, occurrence = required,
+        opts = []}]}],
+    Msg = #m1{a = 4294967295},
+    Bin = <<13, 255, 255, 255, 255>>,
+    ?assertEqual(Bin, encode_msg(Msg, Defs)),
+    ?assertEqual(gpb:encode_msg(Msg, Defs), encode_msg(Msg, Defs)),
+    ?assertEqual(Msg, decode_msg(Bin, m1, Defs)).
 
-gpb_only_skip(Name) ->
-    {skip, "gpb library API, not enif_protobuf: " ++ atom_to_list(Name)}.
+encode_unsigned_fixed64_test() ->
+    Defs = [{{msg, m1}, [#?gpb_field{name = a, fnum = 1, rnum = #m1.a,
+        type = fixed64, occurrence = required,
+        opts = []}]}],
+    Msg = #m1{a = 18446744073709551615},
+    Bin = <<9, 255, 255, 255, 255, 255, 255, 255, 255>>,
+    ?assertEqual(Bin, encode_msg(Msg, Defs)),
+    ?assertEqual(gpb:encode_msg(Msg, Defs), encode_msg(Msg, Defs)),
+    ?assertEqual(Msg, decode_msg(Bin, m1, Defs)).
 
-decode_varint_test() -> gpb_only_skip(decode_varint).
-decode_overly_long_noncanonical_varints_test() ->
-    gpb_only_skip(decode_overly_long_noncanonical_varints).
-decode_fails_for_varints_of_too_many_bytes_test() ->
-    gpb_only_skip(decode_fails_for_varints_of_too_many_bytes).
-encode_varint_test() -> gpb_only_skip(encode_varint).
-decode_packet_test() -> gpb_only_skip(decode_packet).
-field_proplist_conversion_test() -> gpb_only_skip(field_proplist_conversion).
-gpb_error_on_decoding_test() -> gpb_only_skip(gpb_error_on_decoding).
+encode_signed_fixed32_test() ->
+    Defs = [{{msg, m1}, [#?gpb_field{name = a, fnum = 1, rnum = #m1.a,
+        type = sfixed32, occurrence = required,
+        opts = []}]}],
+    Msg = #m1{a = -2147483648},
+    Bin = <<13, 0, 0, 0, 128>>,
+    ?assertEqual(Bin, encode_msg(Msg, Defs)),
+    ?assertEqual(gpb:encode_msg(Msg, Defs), encode_msg(Msg, Defs)),
+    ?assertEqual(Msg, decode_msg(Bin, m1, Defs)).
 
-merging_second_required_integer_overrides_first_test() ->
-    gpb_only_skip(merging_second_required_integer_overrides_first).
-merging_second_optional_integer_overrides_undefined_test() ->
-    gpb_only_skip(merging_second_optional_integer_overrides_undefined).
-merging_undefined_does_not_overrides_defined_integer_test() ->
-    gpb_only_skip(merging_undefined_does_not_overrides_defined_integer).
-merging_sequences_test() -> gpb_only_skip(merging_sequences).
-merging_messages_recursively_test() -> gpb_only_skip(merging_messages_recursively).
-merging_optional_messages_recursively1_test() ->
-    gpb_only_skip(merging_optional_messages_recursively1).
-merging_optional_messages_recursively2_test() ->
-    gpb_only_skip(merging_optional_messages_recursively2).
-merge_oneof_test() -> gpb_only_skip(merge_oneof).
-merge_oneof_msg_test() -> gpb_only_skip(merge_oneof_msg).
-merge_map_test() -> gpb_only_skip(merge_map).
+encode_signed_fixed64_test() ->
+    Defs = [{{msg, m1}, [#?gpb_field{name = a, fnum = 1, rnum = #m1.a,
+        type = sfixed64, occurrence = required,
+        opts = []}]}],
+    Msg = #m1{a = -9223372036854775808},
+    Bin = <<9, 0, 0, 0, 0, 0, 0, 0, 128>>,
+    ?assertEqual(Bin, encode_msg(Msg, Defs)),
+    ?assertEqual(gpb:encode_msg(Msg, Defs), encode_msg(Msg, Defs)),
+    ?assertEqual(Msg, decode_msg(Bin, m1, Defs)).
 
-verify_present_required_field_succeeds_test() ->
-    gpb_only_skip(verify_present_required_field_succeeds).
-verify_missing_required_field_fails_test() ->
-    gpb_only_skip(verify_missing_required_field_fails).
-verify_optional_undefined_field_is_ok_test() ->
-    gpb_only_skip(verify_optional_undefined_field_is_ok).
-verify_optional_present_field_is_ok_test() ->
-    gpb_only_skip(verify_optional_present_field_is_ok).
-verify_valid_repeated_field_succeeds_test() ->
-    gpb_only_skip(verify_valid_repeated_field_succeeds).
-verify_invalid_repeated_field_fails_test() ->
-    gpb_only_skip(verify_invalid_repeated_field_fails).
-verify_valid_integer_succeeds_test() -> gpb_only_skip(verify_valid_integer_succeeds).
-verify_integer_type_and_range_fails_test_() ->
-    {timeout, 59, fun() -> gpb_only_skip(verify_integer_type_and_range_fails) end}.
-verify_bad_integer_fails_test() -> gpb_only_skip(verify_bad_integer_fails).
-verify_valid_booleans_succeed_test() -> gpb_only_skip(verify_valid_booleans_succeed).
-verify_bad_booleans_fails_test() -> gpb_only_skip(verify_bad_booleans_fails).
-verify_valid_float_succeeds_test() -> gpb_only_skip(verify_valid_float_succeeds).
-verify_bad_floats_fails_test() -> gpb_only_skip(verify_bad_floats_fails).
-verify_valid_string_succeeds_test() -> gpb_only_skip(verify_valid_string_succeeds).
-verify_invalid_string_fails_test() -> gpb_only_skip(verify_invalid_string_fails).
-verify_valid_bytes_succeeds_test() -> gpb_only_skip(verify_valid_bytes_succeeds).
-verify_invalid_bytes_fails_test() -> gpb_only_skip(verify_invalid_bytes_fails).
-verify_valid_enum_succeeds_test() -> gpb_only_skip(verify_valid_enum_succeeds).
-verify_enum_as_integer_succeeds_test() -> gpb_only_skip(verify_enum_as_integer_succeeds).
-verify_invalid_enum_fails_test() -> gpb_only_skip(verify_invalid_enum_fails).
-verify_valid_submsg_succeeds_test() -> gpb_only_skip(verify_valid_submsg_succeeds).
-verify_valid_map_succeeds_test() -> gpb_only_skip(verify_valid_map_succeeds).
-verify_invalid_submsg_fails_test() -> gpb_only_skip(verify_invalid_submsg_fails).
-verify_invalid_optional_submsg_fails_test() ->
-    gpb_only_skip(verify_invalid_optional_submsg_fails).
-verify_invalid_oneof_test() -> gpb_only_skip(verify_invalid_oneof).
-verify_invalid_map_fails_test() -> gpb_only_skip(verify_invalid_map_fails).
-verify_proto3_fields_mandatory_test() ->
-    gpb_only_skip(verify_proto3_fields_mandatory).
-verify_path_when_failure_test() -> gpb_only_skip(verify_path_when_failure).
-verify_required_group_test() -> gpb_only_skip(verify_required_group).
-verify_repeated_and_optional_group_test() ->
-    gpb_only_skip(verify_repeated_and_optional_group).
-
-version_test() -> gpb_only_skip(version).
-
--ifndef(NO_HAVE_MAPS).
-msg_to_from_map_test() ->
-    %% map<_,_> messages
-    MtDefs = [{{msg, m1},
-        [#?gpb_field{name = a, fnum = 1, rnum = #m1.a,
-            type = {map, string, fixed32},
-            occurrence = repeated, opts = []}]}],
-    Msg10 = #m1{a = [{"a", 1}, {"b", 2}]},
-    #{a := #{"a" := 1, "b" := 2}} = Map10 =
-        gpb:msg_to_map(Msg10, MtDefs, []),
-    Msg10 = sort_elem2(gpb:msg_from_map(Map10, m1, MtDefs, [])),
-    Msg10 = sort_elem2(gpb:msg_from_map(#{a => Msg10#m1.a}, m1, MtDefs,
-        [{mapfields_as_maps, false}])),
-
-    %% Oneof
-    OoDefs = [{{msg, m1},
-        [#gpb_oneof{
-            name = a, rnum = #m1.a,
-            fields = [#?gpb_field{name = a1, fnum = 1, rnum = #m1.a,
-                type = int32, occurrence = optional,
-                opts = []},
-                #?gpb_field{name = a2, fnum = 2, rnum = #m1.a,
-                    type = int32, occurrence = optional,
-                    opts = []}]}]}],
-
-    Msg20 = #m1{a = {a1, 10}},
-    #{a := {a1, 10}} = Map20 =
-        gpb:msg_to_map(Msg20, OoDefs, []),
-    Msg20 = gpb:msg_from_map(Map20, m1, OoDefs, []),
-    %% Flat oneof
-    #{a1 := 10} = Map21 =
-        gpb:msg_to_map(Msg20, OoDefs, [{maps_oneof, flat}]),
-    Msg20 = gpb:msg_from_map(Map21, m1, OoDefs, [{maps_oneof, flat}]),
-
-    %% Unset
-    Msg22 = #m1{a = undefined},
-    ?assertEqual(#{}, gpb:msg_to_map(Msg22, OoDefs, [])),
-    ?assertEqual(#{}, gpb:msg_to_map(Msg22, OoDefs, [{maps_oneof, flat}])),
-    Msg22 = gpb:msg_from_map(#{}, m1, OoDefs, []),
-    Msg22 = gpb:msg_from_map(#{}, m1, OoDefs, [{maps_oneof, flat}]),
-
-    %% Repeated
-    RpDefs = [{{msg, m1},
-        [#?gpb_field{name = a, fnum = 1, rnum = #m1.a,
-            type = uint32,
-            occurrence = repeated, opts = []}]}],
-    Msg30 = #m1{a = [1, 2, 3]},
-    #{a := [1, 2, 3]} = Map30 = gpb:msg_to_map(Msg30, RpDefs, []),
-    Msg30 = gpb:msg_from_map(Map30, m1, RpDefs, []),
-
-    %% Required
-    RqDefs = [{{msg, m1},
-        [#?gpb_field{name = a, fnum = 1, rnum = #m1.a,
-            type = uint32,
-            occurrence = required, opts = []}]}],
-    Msg40 = #m1{a = 4711},
-    #{a := 4711} = Map40 = gpb:msg_to_map(Msg40, RqDefs, []),
-    Msg40 = gpb:msg_from_map(Map40, m1, RqDefs, []),
-
-    %% Optional (proto2 and proto3)
-    O2Defs = [{{msg, m1},
-        [#?gpb_field{name = a, fnum = 1, rnum = #m1.a,
-            type = uint32,
-            occurrence = optional, opts = []}]}],
-    O3Defs = [{{msg, m1},
-        [#?gpb_field{name = a, fnum = 1, rnum = #m1.a,
-            type = uint32,
-            occurrence = defaulty, opts = []}]},
-        {proto3_msgs, [m1]}],
-    OptOmitted = {maps_unset_optional, omitted},
-    OptPresentUndefined = {maps_unset_optional, present_undefined},
-    Msg51 = #m1{a = 4711},
-    Msg52 = #m1{a = undefined},
-    #{a := 4711} = Map51 = gpb:msg_to_map(Msg51, O2Defs, []),
-    Msg51 = gpb:msg_from_map(Map51, m1, O2Defs, []),
-    Msg51 = gpb:msg_from_map(Map51, m1, O2Defs,
-        []),
-    ?assertEqual(#{}, gpb:msg_to_map(Msg52, O2Defs, [])),
-    ?assertEqual(#{}, gpb:msg_to_map(Msg52, O2Defs, [OptOmitted])),
-    #{a := undefined} = Map52 =
-        gpb:msg_to_map(Msg52, O2Defs, [OptPresentUndefined]),
-    Msg52 = gpb:msg_from_map(#{}, m1, O2Defs, []),
-    Msg52 = gpb:msg_from_map(Map52, m1, O2Defs, [OptPresentUndefined]),
-
-    O3Map = gpb:msg_to_map({m1, undefined}, O3Defs, []),
-    0 = maps:size(O3Map),
-    #m1{a = undefined} = gpb:msg_from_map(#{}, m1, O3Defs, []),
-    #m1{a = undefined} = gpb:msg_from_map(#{}, m1, O3Defs, [OptOmitted]),
-    #m1{a = undefined} = gpb:msg_from_map(#{a => undefined}, m1, O3Defs,
-        [OptPresentUndefined]),
-
-    %% Submessages are to get converted recursively
-    SmDefs = [{{msg, m},
-        [#?gpb_field{name = mt, fnum = 1, rnum = 2,
-            type = {map, uint32, {msg, m2}},
-            occurrence = repeated, opts = []},
-            #?gpb_field{name = rp, fnum = 1, rnum = 2,
-                type = {msg, m2},
-                occurrence = repeated, opts = []},
-            #?gpb_field{name = op, fnum = 1, rnum = 3,
-                type = {msg, m2},
+%% proto3 `optional` has explicit presence: the field is written even at the
+%% type default, and stays absent (undefined) when it was never set. gpb's
+%% generated code and the NIF must agree on the exact bytes.
+proto3_optional_explicit_presence_parity_test() ->
+    Defs = [{syntax, "proto3"},
+        {proto3_msgs, [default_uint32_msg, mixed_msg]},
+        {{msg, default_uint32_msg}, [
+            #?gpb_field{name = count_num, fnum = 1, rnum = 2, type = uint32,
+                occurrence = optional, opts = []}
+        ]},
+        {{msg, mixed_msg}, [
+            #?gpb_field{name = count_num, fnum = 1, rnum = 2, type = uint32,
                 occurrence = optional, opts = []},
-            #?gpb_field{name = rq, fnum = 1, rnum = 4,
-                type = {msg, m2},
-                occurrence = required, opts = []},
-            #gpb_oneof{name = c, rnum = 5,
-                fields = [#?gpb_field{name = a1, fnum = 1, rnum = 5,
-                    type = {msg, m2},
-                    occurrence = optional,
-                    opts = []}]}]},
-        {{msg, m2},
-            [#?gpb_field{name = b, fnum = 1, rnum = #m2.b,
-                type = uint32,
-                occurrence = optional, opts = []}]}],
-    Msg61 = {m, [{"a", #m2{b = 11}}],
-        [#m2{b = 12}], #m2{b = 13}, #m2{b = 14}, {a1, #m2{b = 15}}},
-    #{mt := #{"a" := #{b := 11}},
-        rp := [#{b := 12}],
-        op := #{b := 13},
-        rq := #{b := 14},
-        c := {a1, #{b := 15}}} = Map61 = gpb:msg_to_map(Msg61, SmDefs, []),
-    Msg61 = gpb:msg_from_map(Map61, m, SmDefs, []),
-    #{mt := #{"a" := #{b := 11}},
-        rp := [#{b := 12}],
-        op := #{b := 13},
-        rq := #{b := 14},
-        a1 := #{b := 15}} = Map62 = gpb:msg_to_map(Msg61, SmDefs,
-        [{maps_oneof, flat}]),
-    Msg61 = gpb:msg_from_map(Map62, m, SmDefs, [{maps_oneof, flat}]),
-    ok.
+            #?gpb_field{name = rname, fnum = 2, rnum = 3, type = string,
+                occurrence = optional, opts = []},
+            #?gpb_field{name = py_id, fnum = 3, rnum = 4, type = uint32,
+                occurrence = optional, opts = []},
+            #?gpb_field{name = status_arr, fnum = 4, rnum = 5, type = uint32,
+                occurrence = repeated, opts = [packed]},
+            #?gpb_field{name = py_num, fnum = 5, rnum = 6, type = uint32,
+                occurrence = optional, opts = []},
+            #?gpb_field{name = gname, fnum = 11, rnum = 7, type = string,
+                occurrence = optional, opts = []},
+            #?gpb_field{name = gnum, fnum = 12, rnum = 8, type = uint32,
+                occurrence = optional, opts = []}
+        ]}],
+    Zero = {default_uint32_msg, 0},
+    ?assertEqual(<<8, 0>>, encode_msg(Zero, Defs)),
+    ?assertEqual(gpb:encode_msg(Zero, Defs), encode_msg(Zero, Defs)),
+    Absent = {default_uint32_msg, undefined},
+    ?assertEqual(<<>>, encode_msg(Absent, Defs)),
+    ?assertEqual(gpb:encode_msg(Absent, Defs), encode_msg(Absent, Defs)),
+    %% Zero values on optional fields are sent even though proto3's implicit
+    %% presence would drop them; the empty repeated field is not sent.
+    Mixed = {mixed_msg, 99, "test", 0, [], 0, [], 0},
+    Bin = <<8, 99, 18, 4, "test", 24, 0, 40, 0, 90, 0, 96, 0>>,
+    ?assertEqual(Bin, gpb:encode_msg(Mixed, Defs)),
+    ?assertEqual(Bin, encode_msg(Mixed, Defs)),
+    ?assertEqual(Mixed, decode_msg(Bin, mixed_msg, Defs)).
 
-sort_elem2(Tuple) ->
-    setelement(2, Tuple, lists:sort(element(2, Tuple))).
--endif. % -ifndef(NO_HAVE_MAPS).
+%% map<string, Inner> entries are ordinary nested messages on the wire; both
+%% encoders must produce and accept the same bytes.
+map_of_message_parity_test() ->
+    Defs = [
+        {{msg, a_message}, [
+            {field, non_trivial_map, 1, 2, {map, string, {msg, non_trivial_item}},
+                repeated, []}
+        ]},
+        {{msg, non_trivial_item}, [
+            {field, item, 1, 2, int64, optional, []}
+        ]}
+    ],
+    Msg = {a_message, [{"a", {non_trivial_item, 1}}]},
+    Bin = <<10, 7, 10, 1, 97, 18, 2, 8, 1>>,
+    ?assertEqual(Bin, gpb:encode_msg(Msg, Defs)),
+    ?assertEqual(Bin, encode_msg(Msg, Defs)),
+    ?assertEqual(Msg, decode_msg(Bin, a_message, Defs)).

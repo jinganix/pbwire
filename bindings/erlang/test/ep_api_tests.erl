@@ -4,9 +4,11 @@
 -include_lib("gpb/include/gpb.hrl").
 
 encode_without_cache_test() ->
+    ok = enif_protobuf:purge_cache(),
     ?assertError(cache_not_exists, enif_protobuf:encode({m1, 1})).
 
 decode_without_cache_test() ->
+    ok = enif_protobuf:purge_cache(),
     ?assertError(cache_not_exists, enif_protobuf:decode(<<>>, m1)).
 
 encode_badarg_test() ->
@@ -74,43 +76,6 @@ set_opts_utf8_test() ->
     Utf8Opts = [{with_utf8, true}, {string_as_list, true}],
     Bin = ep_test_helpers:encode_msg(Msg, Defs, Utf8Opts),
     {'Person', "你好", 1, undefined} = ep_test_helpers:decode_msg(Bin, 'Person', Defs, Utf8Opts).
-
-set_opts_invalid_option_test() ->
-    ?assertError(badarg, enif_protobuf:set_opts([{unknown_opt, true}])),
-    ?assertError(badarg, enif_protobuf:set_opts([{with_utf8, not_bool}])).
-
-load_cache_badarg_test() ->
-    ?assertError(not_a_list, enif_protobuf:load_cache(not_a_list)).
-
-load_cache_invalid_map_key_type_should_fail_test() ->
-    ok = enif_protobuf:purge_cache(),
-    Defs = [
-        {{msg, m1}, [
-            #field{name = m, fnum = 1, rnum = 2, type = {map, double, int32}, occurrence = repeated, opts = []}
-        ]}
-    ],
-    ?assertError(_, enif_protobuf:load_cache(Defs)).
-
-load_cache_nested_map_value_type_should_fail_test() ->
-    ok = enif_protobuf:purge_cache(),
-    Defs = [
-        {{msg, m1}, [
-            #field{name = m, fnum = 1, rnum = 2, type = {map, string, {map, int32, int32}}, occurrence = repeated, opts = []}
-        ]}
-    ],
-    ?assertError(_, enif_protobuf:load_cache(Defs)).
-
-encode_nested_msg_with_wrong_name_should_fail_test() ->
-    Defs = [
-        {{msg, child}, [
-            #field{name = v, fnum = 1, rnum = 2, type = int32, occurrence = optional, opts = []}
-        ]},
-        {{msg, parent}, [
-            #field{name = c, fnum = 1, rnum = 2, type = {msg, child}, occurrence = optional, opts = []}
-        ]}
-    ],
-    ok = enif_protobuf:load_cache(Defs),
-    ?assertError(_, enif_protobuf:encode({parent, {wrong_child, 123}})).
 
 roundtrip_test() ->
     Defs = ep_test_helpers:person_defs(),

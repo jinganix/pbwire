@@ -1413,48 +1413,61 @@ t_parse_float_value(text_in *t, pbw_message *msg, const pbw_field *field,
         }
         if (num.kind != T_NUM_FLOAT) {
             /* plain decimal integer: allowed; hex and octal are not */
-            char *tmp;
+            char stack[64];
+            char *tmp = stack;
             char *endp;
 
             if (num.is_hex || num.is_oct) {
                 return PBW_ERR_INVALID;
             }
-            tmp = (char *)malloc(num.len + 1);
-
-            if (tmp == NULL) {
-                return PBW_ERR_NOMEM;
+            /* Numbers fit the stack buffer in practice; a longer one is unusual,
+             * not invalid. */
+            if (num.len >= sizeof(stack)) {
+                tmp = (char *)malloc(num.len + 1);
+                if (tmp == NULL) {
+                    return PBW_ERR_NOMEM;
+                }
             }
             memcpy(tmp, num.start, num.len);
             tmp[num.len] = '\0';
             value = pbw_strtod(tmp, &endp, t->dot);
-            free(tmp);
-            if (endp == tmp) {
-                return PBW_ERR_INVALID;
+            {
+                int ok = endp != tmp;
+
+                if (tmp != stack) {
+                    free(tmp);
+                }
+                if (!ok) {
+                    return PBW_ERR_INVALID;
+                }
             }
         } else {
-            char *tmp = (char *)malloc(num.len + 1);
+            char stack[64];
+            char *tmp = stack;
             char *endp;
+            size_t used;
+            size_t want = num.len;
 
-            if (tmp == NULL) {
-                return PBW_ERR_NOMEM;
+            if (num.len >= sizeof(stack)) {
+                tmp = (char *)malloc(num.len + 1);
+                if (tmp == NULL) {
+                    return PBW_ERR_NOMEM;
+                }
             }
             memcpy(tmp, num.start, num.len);
             /* strip a trailing f/F: strtod stops there anyway, but a bare
              * "1e" must fail instead of parsing as 1 */
             tmp[num.len] = '\0';
             value = pbw_strtod(tmp, &endp, t->dot);
-            {
-                size_t used = (size_t)(endp - tmp);
-                size_t want = num.len;
-
-                if (want > 0 &&
-                    (tmp[want - 1] == 'f' || tmp[want - 1] == 'F')) {
-                    want--;
-                }
+            used = (size_t)(endp - tmp);
+            if (want > 0 && (tmp[want - 1] == 'f' || tmp[want - 1] == 'F')) {
+                want--;
+            }
+            if (tmp != stack) {
                 free(tmp);
-                if (used != want) {
-                    return PBW_ERR_INVALID;
-                }
+            }
+            if (used != want) {
+                return PBW_ERR_INVALID;
             }
         }
         have = 1;
