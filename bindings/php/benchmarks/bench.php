@@ -88,6 +88,19 @@ for ($tier = 0; $tier < count(CASES); $tier++) {
         continue;
     }
 
+    // Decode must round-trip byte-exactly and expose the same values.
+    $back = $ty->decode($reference);
+    $backOk = $back->encode() === $reference
+        && $back->getString('str') === 'hello'
+        && $back->getMessage('inner')?->getString('name') === 'kid'
+        && $back->count('nums') === $n
+        && ($n === 0 || $back->at('nums', $n - 1)?->asInt() === $n - 4);
+    $back->close();
+    if (!$backOk) {
+        fail($label, "$impl decode differs");
+        continue;
+    }
+
     echo "OK   $label encoding parity, x$n (" . strlen($reference) . " bytes)\n";
 
     $official = fillOfficial($n);

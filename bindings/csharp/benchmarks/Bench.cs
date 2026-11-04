@@ -56,6 +56,22 @@ for (var tier = 0; tier < cases.Length; tier++)
     }
     Console.WriteLine($"OK   {label} encoding parity, x{n} ({reference.Length} bytes)");
 
+    // Decode must round-trip byte-exactly and expose the same values.
+    using (var back = ty.Decode(reference))
+    {
+        var backInner = back.GetMessage("inner");
+        var backOk = back.Encode().SequenceEqual(reference)
+            && back.GetString("str") == "hello"
+            && backInner?.GetString("name") == "kid"
+            && back.Count("nums") == n
+            && (n == 0 || back.At("nums", n - 1)?.AsLong() == n - 4);
+        if (!backOk)
+        {
+            Fail(label, "pbwire-csharp decode differs");
+            continue;
+        }
+    }
+
     var pbn = FillPbn(n);
     var pbnBytes = PbnEncode(pbn);
     // protobuf-net writes single-element packed fields in singular form: valid

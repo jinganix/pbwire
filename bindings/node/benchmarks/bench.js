@@ -213,6 +213,23 @@ function main() {
             message.free();
             continue;
         }
+        // Decode must round-trip byte-exactly and expose the same values.
+        const back = type.decode(reference);
+        const backBytes = back.encode();
+        const backOk = backBytes.equals(reference)
+            && back.get('str') === 'hello'
+            && back.get('inner').name === 'kid'
+            && back.get('inner').value === 42
+            && (back.get('nums') ?? []).length === repeats
+            && (back.get('inners') ?? []).length === repeats
+            && (repeats === 0 || back.get('inners')[repeats - 1].value === repeats);
+        back.free();
+        if (!backOk) {
+            console.log(`FAIL ${label}: pbwire-node decode differs`);
+            failures++;
+            message.free();
+            continue;
+        }
         console.log(`OK   ${label} encoding parity, x${repeats} (${reference.length} bytes)`);
 
         const official = fillOfficial(repeats);

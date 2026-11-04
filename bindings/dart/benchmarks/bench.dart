@@ -53,6 +53,20 @@ void main(List<String> args) {
       _fail(label, 'pbwire-dart wrote ${got.length} bytes, protobuf-dart ${reference.length}');
       continue;
     }
+    // Decode must round-trip byte-exactly and expose the same values.
+    final back = ty.decode(reference);
+    final backInner = back.getMessage('inner');
+    final backOk = _equals(back.encode(), reference) &&
+        back.getString('str') == 'hello' &&
+        backInner?.getString('name') == 'kid' &&
+        back.count('nums') == n &&
+        (n == 0 || back.at('nums', n - 1)?.asInt() == n - 4);
+    back.close();
+    if (!backOk) {
+      _fail(label, 'pbwire-dart decode differs');
+      message.close();
+      continue;
+    }
     stdout.writeln('OK   $label encoding parity, x$n (${reference.length} bytes)');
 
     final official = _fillOfficial(n);

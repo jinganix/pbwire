@@ -25,9 +25,11 @@ back.Close()
 |---|---|---|
 | dynamic | [`dynamic/`](dynamic/) | the binding: `Registry` (hot-swap), `Schema`, `MessageType`, `Message` |
 | dynamic tests | [`dynamic/dynamic_test.go`](dynamic/dynamic_test.go) | tier parity (136/174/2469/74913 B) + hot-swap, desc built by `protoc` |
+| bench | [`benchmarks/bench_test.go`](benchmarks/bench_test.go) (`bench.sh` generates `gen/`) | four standard tiers vs `protobuf-go` generated code, gated on byte parity before timing |
 
 ```shell
 make go-test    # dynamic binding self-check (parity + hot-swap, needs protoc)
+make go-bench   # four standard tiers vs protobuf-go (needs Go + protoc + protoc-gen-go)
 ```
 
 Explicit `Close` discipline: roots own their C tree and must be freed with

@@ -28,6 +28,7 @@ make typed-conformance  # generate typed models for the official conformance pro
 make erlang-bench  # Erlang: epb, gpb, gpb NIF on matrix3.proto
 make test-cpp      # C++ binding self-check (C++17, no protobuf needed)
 make go-test       # Go cgo dynamic binding self-check (parity + hot-swap)
+make go-bench      # Go cgo dynamic binding vs protobuf-go on the four standard tiers
 make java-bench    # Java FFM binding vs protobuf-java on the four standard tiers
 make node-bench    # Node N-API addon vs google-protobuf (jspb)
 make ruby-bench    # Ruby C extension vs the google-protobuf gem

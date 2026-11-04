@@ -43,7 +43,7 @@ import pbwire as pbw
 from google.protobuf.internal import api_implementation
 import matrix3_pb2
 
-TIERS = (("small", 0), ("medium", 1), ("large", 100), ("xlarge", 3000))
+TIERS = (("small", 0, 136), ("medium", 1, 174), ("large", 100, 2469), ("xlarge", 3000, 74913))
 DESC = "bindings/c/tests/data/matrix3.desc"
 
 REPEATED = ("nums", "tags", "flags")
@@ -158,18 +158,20 @@ def run():
     scalars = schema.message("structtest.Scalars3")
     status = 0
 
-    for label, repeats in TIERS:
+    for label, repeats, want in TIERS:
         values = scalars3(repeats)
-        want = pruned(values)
+        want_dict = pruned(values)
         reference = protobuf_of(values).SerializeToString()
 
+        if len(reference) != want:
+            return fail("official encoder wrote %d bytes, expected %d" % (len(reference), want), label)
         if scalars.encode(values) != reference:
             return fail("pbwire-py bytes differ from protobuf", label)
-        if scalars.decode(reference).to_dict() != want:
+        if scalars.decode(reference).to_dict() != want_dict:
             return fail("pbwire-py to_dict differs", label)
         if scalars.encode(scalars.decode(reference)) != reference:
             return fail("pbwire-py Message round trip differs", label)
-        if protobuf_data(matrix3_pb2.Scalars3.FromString(reference)) != want:
+        if protobuf_data(matrix3_pb2.Scalars3.FromString(reference)) != want_dict:
             return fail("protobuf data differs", label)
 
         message = scalars.decode(reference)

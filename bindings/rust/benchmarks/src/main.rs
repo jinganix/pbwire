@@ -93,6 +93,28 @@ fn run_case(ty: &Type<'_>, inner_ty: &Type<'_>, tier: usize) {
         reference.len()
     );
 
+    // Decode must round-trip byte-exactly and expose the same values.
+    let back = ty.decode(&reference).expect("decode");
+    let back_ok = back.encode().expect("encode") == reference
+        && back.get_str(ty.field("str").expect("field")) == Some("hello")
+        && back
+            .get_message(ty.field("inner").expect("field"))
+            .as_ref()
+            .and_then(|m| m.get_str(inner_ty.field("name").expect("field")))
+            == Some("kid")
+        && back
+            .value(ty.field("nums").expect("field"))
+            .map_or(n == 0, |v| v.len() == n)
+        && (n == 0
+            || back
+                .value(ty.field("nums").expect("field"))
+                .and_then(|v| v.at(n - 1))
+                .map_or(false, |v| v.as_i64() == n as i64 - 4));
+    if !back_ok {
+        fail(label, "pbwire-rust decode differs");
+        return;
+    }
+
     let official = fill_official(n);
     // Tier line shows the reference op's count; slower ops keep the floor.
     let tier_count = calibrate(&mut || message.encode().expect("encode").len(), iterations);

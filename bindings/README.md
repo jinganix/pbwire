@@ -91,7 +91,7 @@ the full tables are.
 | Dart | a pure-Dart field loop dominates, and FFI adds copies | `dart:ffi` plus the core's arena | 12.2x / 3.3x (vs protobuf-dart) |
 | Rust | rust-protobuf generated codecs | links `libpbwire.a` statically behind a safe wrapper | 1.57x / 1.45x (vs rust-protobuf; 0.93x / 1.46x vs prost) |
 | C# | Google.Protobuf is already a fast tree codec — the closest race of the set | P/Invoke plus a resolver, no packages | 2.90x / 1.07x (vs Google.Protobuf; 3.6x / 1.62x vs protobuf-net) |
-| Go | the official runtime walks `protoreflect`/`protowire` per field | cgo dynamic binding over the C core: one downcall per op, zero-copy decode in, hot-swappable registry | 2.3x / 1.7x (vs official, xlarge; 1.1x / 1.1x small) |
+| Go | the official runtime walks `protoreflect`/`protowire` per field | cgo dynamic binding over the C core: one downcall per op, zero-copy decode in, hot-swappable registry | 2.6x / 2.1x (vs official, xlarge; 1.0x / 1.1x small) |
 | Erlang | gpb is pure Erlang; gpb NIF binds libprotobuf per message | NIF over the core, consuming gpb's own definitions — no second generator | 2.04x / 1.68x (vs gpb) |
 
 Read the ratios as "what this binding buys its host language", not as a

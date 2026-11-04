@@ -71,7 +71,7 @@ binding has two representations and only comparing like with like is fair.
 | Erlang/OTP NIF | `make benchmarks` in `bindings/erlang/benchmarks` | gpb (pure Erlang), with gpb NIF (libprotobuf) as the second baseline, same `matrix3.proto` | all 4 | 2.04x / 1.68x vs gpb ✅ |
 | Python (CPython ext) | `make python-bench` (`bindings/python/benchmarks/bench.py`) | `google.protobuf` (upb C extension) on the same `matrix3.proto` | all 4 | 6.5x / 1.69x ✅ |
 | C++ | same engine as C (`bindings/cpp` mirrors the C structs) | — | — | planned |
-| Go (`cgo` dynamic) | `go test ./...` in `bindings/go` (parity + hot-swap; no standard bench yet) | — | — | rebench pending |
+| Go (`cgo` dynamic) | `make go-bench` (`bindings/go/benchmarks`) | `protobuf-go` generated code from the same `matrix3.proto` | all 4 | 2.57x / 2.13x ✅ |
 | Java (pure-Java codec) | `make java-bench` (`bindings/java/benchmarks`) | `protobuf-java` generated code from the same `matrix3.proto` | all 4 | 1.21x / 2.40x ✅ (0.75x at 136 B) |
 | Node (N-API addon) | `make node-bench` (`bindings/node/benchmarks`) | `google-protobuf` (jspb) + protobufjs (fastest) from the same `matrix3.proto` | all 4 | 22.3x / 20.0x vs jspb (2.7x / 4.1x vs protobufjs) ✅ |
 | Ruby (C extension) | `make ruby-bench` (`bindings/ruby/benchmarks`) | the `google-protobuf` gem (C extension) | all 4 | 1.05x / 1.69x ✅ |
@@ -92,7 +92,7 @@ against `FromString`. Every binding is ahead of its baseline now.
 Correctness first everywhere: the core bench verifies byte-for-byte equality
 before timing, the C and Python benches check their bytes against the
 `protoc`-produced reference (plus a decode→encode round trip) before timing,
-the Java, Kotlin, Node, Ruby, Objective-C, PHP, Dart, Rust and C# harnesses
+the Java, Kotlin, Node, Ruby, Objective-C, PHP, Dart, Rust, C# and Go harnesses
 require their bytes to equal the official encoder's bytes before timing
 anything, and the Erlang harness requires gpb's pinned wire size and byte
 equality (encode, plus re-encoding a decoded reference) from every backend
@@ -110,7 +110,7 @@ payload, the boundary cost and the baseline all differ.
 | core dynamic (`pbw_ctx`) | direct call | 85933 B | 1540.6 (1.32x ✅) | 642.3 (1.41x ✅) |
 | core dynamic (plain API) | direct call | 85933 B | 1429.5 (1.23x ✅) | 619.9 (1.36x ✅) |
 | C structs | direct call, layout tables | 74913 B | 1300.6 (1.42x ✅) | 885.4 (2.25x ✅) |
-| Go | `cgo` dynamic over the C core | — (rebench pending) | — | — |
+| Go | `cgo` dynamic over the C core | 74913 B | 1428.7 (2.57x ✅) | 678.6 (2.13x ✅) |
 | Python (dict path) | CPython extension | 74913 B | 564.4 (6.5x ✅) | 1366.0 (1.69x ✅) |
 | Java | pure-Java codec, no native code | 74913 B | 1082.8 (1.21x ✅) | 953.1 (2.40x ✅) |
 | Kotlin | the Java FFM layer + DSL | 74913 B | 1441.1 (1.60x ✅) | 549.1 (1.19x ✅) |
@@ -385,9 +385,29 @@ output so that trade-off is visible rather than hidden.
 The static generator (`protoc-gen-pbwire-go`) is removed: Go keeps only the
 `cgo` dynamic binding (`bindings/go/dynamic`), which loads a
 `FileDescriptorSet` at run time and hot-swaps schemas without a restart.
-No standard four-tier bench exists for it yet (`go test ./...` covers byte
-parity plus hot-swap); rebench pending before any number lands in the tables
-above.
+`make go-bench` (`bindings/go/benchmarks`, build-tagged so `go test ./...`
+stays fast) times it against `protobuf-go` generated code from the same
+`matrix3.proto` on all four tiers; `bench.sh` generates the baseline with
+`protoc-gen-go` and the `FileDescriptorSet` both sides load.
+
+| payload | op | pbwire-go (MB/s, x protobuf-go) | protobuf-go (MB/s) |
+|---|---|---|---|
+| 136 B | encode | 647.1 (1.02x ✅) | 633.2 |
+| 136 B | decode | 624.9 (1.13x ✅) | 553.2 |
+| 174 B | encode | 643.3 (1.06x ✅) | 606.5 |
+| 174 B | decode | 604.5 (1.33x ✅) | 455.1 |
+| 2469 B | encode | 1024.0 (1.97x ✅) | 519.9 |
+| 2469 B | decode | 636.7 (2.13x ✅) | 298.2 |
+| 74913 B | encode | 1428.7 (2.57x ✅) | 555.1 |
+| 74913 B | decode | 678.6 (2.13x ✅) | 319.2 |
+
+Every tier is gated before timing: the official bytes must land on the
+pinned size, `pbwire-go` must encode byte-identical bytes, decoding the
+reference and re-encoding must return the same bytes, and the official
+decode is spot-checked (`str`, inner `kid`/42, repeated count and last
+`inners` value). The `cgo` boundary is one downcall per op with zero-copy
+decode in, so the small tiers sit near parity (1.02x / 1.13x) and the C
+core's single pass pulls ahead from 2.5 KB up.
 
 ### Python vs `google.protobuf` (upb)
 
@@ -767,6 +787,7 @@ make bench        # core: 4 cases + text/json/stream/threads (needs protoc + lib
 make bench-c      # C structs vs protoc C++ on matrix3.proto (same deps)
 make python-bench # Python extension vs google.protobuf (needs protobuf + protoc)
 make erlang-bench # Erlang binding: epb, gpb, gpb NIF on matrix3.proto (needs OTP + gpb)
+make go-bench     # Go cgo dynamic vs protobuf-go generated code (needs Go + protoc-gen-go)
 make java-bench   # Java FFM vs protobuf-java (fetches the jar from Maven Central once)
 make node-bench   # N-API addon vs google-protobuf/jspb (npm installs into the harness)
 make ruby-bench   # Ruby C extension vs the google-protobuf gem (`RUBY=...` picks the interpreter)
@@ -791,17 +812,15 @@ one language means the same thing as a number from another:
    takes at least **0.25 s**. A slow op already exceeds the minimum at the
    floor and keeps it; a fast op doubles up. The tier line prints the
    reference op's (the binding's own encode) calibrated count; the other
-   ops' counts differ silently — exactly like Go's `testing.Benchmark`,
-   which has always reported its own per-op count. Erlang calibrates one
+   ops' counts differ silently. Erlang calibrates one
    count per case on its slowest op instead, which is equivalent when the
    backends sit within a factor of a few, as they do.
 3. **Warm up** one full pass at the calibrated count, then report the
    **best of 3 timed passes** (interleaved per op where the harness
    supports it, so a load spike hits both implementations equally).
 
-Two harnesses meet the same bar with their own calibrator instead of the
-shared doubling loop: Go's `testing.Benchmark` calibrates internally to ~1 s
-per op, and the core/C++ harnesses keep an explicit count only when one is
+One harness meets the same bar with its own calibrator instead of the
+shared doubling loop: the core/C++ harnesses keep an explicit count only when one is
 passed on the command line (`./build/bench bench 2000` fixes the count for a
 smoke run but still warms up and takes the best of 3).
 
@@ -819,10 +838,11 @@ make benchmarks-quick  # same suite with BENCH_TARGET_TIME=0.05
 
 The core tables (single-thread and threads) are `scripts/perf.sh` output (same
 layout, MB/s only); the C,
-Python, Java, Kotlin, Node, Ruby, Objective-C, PHP, Dart, Rust and C# tables are
+Python, Java, Kotlin, Node, Ruby, Objective-C, PHP, Dart, Rust, C# and Go tables are
 `make bench-c` / `make python-bench` / `make java-bench` /
 `make kotlin-bench` / `make node-bench` / `make ruby-bench` / `make objc-bench` /
-`make php-bench` / `make dart-bench` / `make rust-bench` / `make csharp-bench`
+`make php-bench` / `make dart-bench` / `make rust-bench` / `make csharp-bench` /
+`make go-bench`
 output reformatted the same way; the
 Erlang table is copied from
 `bindings/erlang/benchmarks/README.md` (`make update-readme` there). The

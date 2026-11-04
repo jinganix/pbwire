@@ -285,6 +285,23 @@ check_parity(pbw_schema *schema, int n)
                    back.len != want.size() ||
                    std::memcmp(back.data, want.data(), back.len) != 0) {
             fail("struct decode->encode is not byte identical");
+        } else if (out.str == nullptr || std::strcmp(out.str, "hello") != 0 ||
+                   !out.flag ||
+                   out.color != STRUCTTEST_COLOR3_COLOR3_GREEN ||
+                   out.inner == nullptr ||
+                   out.inner->name == nullptr ||
+                   std::strcmp(out.inner->name, "kid") != 0 ||
+                   out.inner->value != 42 || !out.has_opt_i32 ||
+                   out.opt_i32 != -7 || out.opt_str == nullptr ||
+                   std::strcmp(out.opt_str, "opt") != 0 ||
+                   out.n_nums != (size_t)n || out.n_tags != (size_t)n ||
+                   out.n_inners != (size_t)n || out.n_flags != (size_t)n ||
+                   (n > 0 &&
+                    (out.nums[n - 1] != n - 4 ||
+                     std::strcmp(out.tags[n - 1], "tag") != 0 ||
+                     std::strcmp(out.inners[n - 1].name, "grandkid") != 0 ||
+                     out.inners[n - 1].value != n))) {
+            fail("struct decoded values differ");
         } else {
             std::printf("OK   struct decode(libprotobuf) -> encode identical, "
                         "x%d\n",
@@ -431,8 +448,7 @@ main(int argc, char **argv)
         return 2;
     }
     for (int n : repeats) {
-        if (n <= 1)
-            check_parity(schema, n);
+        check_parity(schema, n);
     }
     for (size_t i = 0; i < 4; i++) {
         int iters = iterations;

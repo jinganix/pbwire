@@ -153,6 +153,20 @@ CASES.each do |label, repeats, want, iterations|
     fail(label, 'pbwire-ruby and google-protobuf encode differently')
     next
   end
+  # Decode must round-trip byte-exactly and expose the same values.
+  back = decoder.decode(reference)
+  back_ok = (back.encode == reference) &&
+              back['str'] == 'hello' &&
+              back['inner']['name'] == 'kid' &&
+              back['inner']['value'] == 42 &&
+              Array(back['nums']).length == repeats &&
+              Array(back['inners']).length == repeats &&
+              (repeats.zero? || back['inners'][repeats - 1]['value'] == repeats)
+  back.close
+  unless back_ok
+    fail(label, 'pbwire-ruby decode differs')
+    next
+  end
   puts "OK   #{label} encoding parity (#{reference.bytesize} bytes)"
 
   official = fill_official(repeats)

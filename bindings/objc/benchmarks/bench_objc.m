@@ -206,6 +206,23 @@ main(int argc, char **argv)
                 failures++;
                 continue;
             }
+            /* Decode must round-trip byte-exactly and expose the same values. */
+            {
+                NSError *gateError = nil;
+                PBWMessage *back = [message decode:reference error:&gateError];
+                NSData *backBytes = back == nil ? nil : [back encode:&gateError];
+                PBWMessage *backInner = back == nil ? nil : [back messageForField:@"inner"];
+                BOOL backOk = back != nil && backBytes != nil &&
+                    [backBytes isEqualToData:reference] &&
+                    [[back valueForField:@"str"] isEqual:@"hello"] &&
+                    [[backInner valueForField:@"name"] isEqual:@"kid"] &&
+                    [[backInner valueForField:@"value"] isEqual:@42];
+                if (!backOk) {
+                    printf("FAIL %s: pbwire-objc decode differs\n", c->label);
+                    failures++;
+                    continue;
+                }
+            }
             printf("OK   %s encoding parity, x%d (%zu bytes)\n", c->label,
                    c->repeats, (size_t)reference.length);
 

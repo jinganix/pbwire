@@ -97,6 +97,9 @@ GO ?= go
 go-test:
 	cd bindings/go && $(GO) test ./...
 
+go-bench: $(LIB)
+	./scripts/bench-run.sh --binding go -- sh bindings/go/benchmarks/bench.sh
+
 $(DESC_BIN): tests/test_descriptor.c $(TEST_HDRS) $(LIB) | build
 	$(CC) $(CFLAGS) $(CPPFLAGS) -o $@ $< $(LIB)
 
