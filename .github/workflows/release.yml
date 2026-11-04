@@ -1,0 +1,203 @@
+name: Release
+
+# Cut a release by bumping VERSION, running scripts/sync-versions.sh,
+# committing the result, then tagging: git tag v$(cat VERSION); git push --tags
+# Every registry publish below is skipped (not failed) when its secret or
+# setup is missing, so a partially-configured release still ships the rest.
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  validate:
+    name: Tag matches VERSION, versions consistent, core green
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Tag must equal v$(cat VERSION)
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          ver="$(tr -d ' \t\n' < VERSION)"
+          [ "$tag" = "v$ver" ] || { echo "tag $tag != VERSION v$ver" >&2; exit 1; }
+      - name: Versions consistent
+        run: ./scripts/sync-versions.sh --check
+      - name: Core gate
+        run: make test
+
+  github-release:
+    name: GitHub release + C tarball
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Create release and upload tarball
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ver="$(tr -d ' \t\n' < VERSION)"
+          git archive --format=tar.gz --prefix="pbwire-$ver/" \
+            -o "/tmp/pbwire-$ver.tar.gz" "v$ver"
+          if gh release view "v$ver" >/dev/null 2>&1; then
+            gh release upload "v$ver" "/tmp/pbwire-$ver.tar.gz" --clobber
+          else
+            gh release create "v$ver" "/tmp/pbwire-$ver.tar.gz" \
+              --title "v$ver" --generate-notes
+          fi
+
+  pypi:
+    name: PyPI (bindings/python)
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build and publish
+        env:
+          PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
+        run: |
+          [ -n "$PYPI_TOKEN" ] || { echo "PYPI_TOKEN unset, skipping"; exit 0; }
+          python -m pip install build twine
+          (cd bindings/python && python -m build)
+          twine upload -u __token__ -p "$PYPI_TOKEN" bindings/python/dist/*
+
+  npm:
+    name: npm (bindings/node)
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: "https://registry.npmjs.org"
+      - name: Publish
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          [ -n "$NPM_TOKEN" ] || { echo "NPM_TOKEN unset, skipping"; exit 0; }
+          (cd bindings/node && npm publish --access public)
+
+  rubygems:
+    name: RubyGems (bindings/ruby)
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.4"
+      - name: Build and push
+        env:
+          RUBYGEMS_API_KEY: ${{ secrets.RUBYGEMS_API_KEY }}
+        run: |
+          [ -n "$RUBYGEMS_API_KEY" ] || { echo "RUBYGEMS_API_KEY unset, skipping"; exit 0; }
+          mkdir -p ~/.gem && printf -- "---\n:rubygems_api_key: %s\n" "$RUBYGEMS_API_KEY" > ~/.gem/credentials
+          chmod 0600 ~/.gem/credentials
+          (cd bindings/ruby && gem build pbwire.gemspec && gem push "pbwire-$(tr -d ' \t\n' < ../../VERSION).gem")
+
+  crates:
+    name: crates.io (bindings/rust)
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Publish
+        env:
+          CARGO_TOKEN: ${{ secrets.CARGO_TOKEN }}
+        run: |
+          [ -n "$CARGO_TOKEN" ] || { echo "CARGO_TOKEN unset, skipping"; exit 0; }
+          make all
+          (cd bindings/rust && cargo publish --token "$CARGO_TOKEN")
+
+  hex:
+    name: Hex (bindings/erlang)
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: erlef/setup-beam@v1.24.0
+        with:
+          otp-version: "29"
+          version-type: loose
+      - name: Publish
+        env:
+          HEX_API_KEY: ${{ secrets.HEX_API_KEY }}
+        run: |
+          [ -n "$HEX_API_KEY" ] || { echo "HEX_API_KEY unset, skipping"; exit 0; }
+          # hex_core picks the key up from HEX_API_KEY; --yes avoids prompts.
+          (cd bindings/erlang && rebar3 hex publish --yes)
+
+  nuget:
+    name: NuGet (bindings/csharp)
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+      - name: Pack and push
+        env:
+          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+        run: |
+          [ -n "$NUGET_API_KEY" ] || { echo "NUGET_API_KEY unset, skipping"; exit 0; }
+          dotnet pack bindings/csharp/Pbwire/Pbwire.csproj -c Release
+          dotnet nuget push "bindings/csharp/Pbwire/bin/Release/*.nupkg" \
+            --api-key "$NUGET_API_KEY" --source https://api.nuget.org/v3/index.json
+
+  pub:
+    name: pub.dev (bindings/dart, OIDC)
+    needs: validate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dart-lang/setup-dart@v1
+      - name: Publish
+        run: |
+          (cd bindings/dart && dart pub publish --force)
+
+  maven:
+    name: Maven Central (bindings/java, bindings/kotlin)
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v4
+        with:
+          java-version: "22"
+          distribution: temurin
+          server-id: central
+          server-username: MAVEN_USERNAME
+          server-password: MAVEN_PASSWORD
+          gpg-private-key: ${{ secrets.MAVEN_GPG_PRIVATE_KEY }}
+      - name: Deploy java then kotlin
+        env:
+          MAVEN_USERNAME: ${{ secrets.MAVEN_USERNAME }}
+          MAVEN_PASSWORD: ${{ secrets.MAVEN_PASSWORD }}
+        run: |
+          [ -n "$MAVEN_USERNAME" ] || { echo "Maven secrets unset, skipping"; exit 0; }
+          (cd bindings/java && mvn -B deploy -DskipTests)
+          (cd bindings/kotlin && mvn -B deploy -DskipTests)
+
+  cocoapods:
+    name: CocoaPods (bindings/objc)
+    needs: validate
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Push podspec
+        env:
+          COCOAPODS_TRUNK_TOKEN: ${{ secrets.COCOAPODS_TRUNK_TOKEN }}
+        run: |
+          [ -n "$COCOAPODS_TRUNK_TOKEN" ] || { echo "COCOAPODS_TRUNK_TOKEN unset, skipping"; exit 0; }
+          (cd bindings/objc && pod trunk push PBWire.podspec --allow-warnings)

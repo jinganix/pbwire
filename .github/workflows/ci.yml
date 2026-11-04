@@ -57,6 +57,14 @@ jobs:
       - name: Test
         run: ctest --test-dir build-cmake --output-on-failure
 
+  versions:
+    name: Versions consistent with VERSION
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Every manifest matches VERSION
+        run: ./scripts/sync-versions.sh --check
+
   format:
     name: clang-format
     runs-on: ubuntu-latest

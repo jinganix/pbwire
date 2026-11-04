@@ -40,6 +40,11 @@ $(SHLIB): $(OBJ) | build
 
 all: $(LIB)
 
+# Every binding ships one version: VERSION is the source of truth,
+# scripts/sync-versions.sh propagates it (also a CI job).
+version-check:
+	./scripts/sync-versions.sh --check
+
 $(LIB): $(OBJ)
 	$(AR) rcs $@ $^
 
