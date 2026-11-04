@@ -3,7 +3,7 @@
 [![Language](https://img.shields.io/badge/C-C99-blue.svg)](#requirements-and-build)
 [![Dependencies](https://img.shields.io/badge/runtime%20dependencies-none-brightgreen.svg)](#at-a-glance)
 
-> **Release [`v0.1.1`](https://github.com/jinganix/pbwire/releases/tag/v0.1.1)** — every binding ships this one version; [`VERSION`](VERSION) is the source of truth, `scripts/sync-versions.sh` propagates it.
+> **Release [`v0.1.2`](https://github.com/jinganix/pbwire/releases/tag/v0.1.2)** — every binding ships this one version; [`VERSION`](VERSION) is the source of truth, `scripts/sync-versions.sh` propagates it.
 
 # pbwire — a dynamic Protobuf runtime for C, no code generation
 
@@ -178,8 +178,8 @@ The one-row summary is here; the detail is there.
 | [Objective-C](bindings/objc/) | ARC wrapper | 6.6x (medium) / 2.9x (large) | [protobuf-objc](https://github.com/protocolbuffers/protobuf/tree/main/objectivec) |
 | [PHP](bindings/php/) | C extension | 1.11x (xlarge) / 1.15x (xlarge) vs C ext (374x / 127x vs pure PHP) | [protobuf-php](https://github.com/protocolbuffers/protobuf/tree/main/php) |
 | [Dart](bindings/dart/) | `dart:ffi` | 12.2x (xlarge) / 3.3x (xlarge) | [protobuf-dart](https://pub.dev/packages/protobuf) |
-| [Rust](bindings/rust/) | static link | 2.05x (large) / 1.70x (large) | [rust-protobuf 3.x](https://github.com/stepancheg/rust-protobuf) + prost |
-| [C#](bindings/csharp/) | P/Invoke | 3.4x (medium) / 2.0x (medium) | [Google.Protobuf](https://www.nuget.org/packages/Google.Protobuf) + protobuf-net |
+| [Rust](bindings/rust/) | static link | 2.05x (large) / 1.70x (large) | [rust-protobuf 3.x](https://github.com/stepancheg/rust-protobuf) + [prost](https://github.com/tokio-rs/prost) |
+| [C#](bindings/csharp/) | P/Invoke | 3.4x (medium) / 2.0x (medium) | [Google.Protobuf](https://www.nuget.org/packages/Google.Protobuf) + [protobuf-net](https://github.com/protobuf-net/protobuf-net) |
 | [Go](bindings/go/) | cgo dynamic (hot-swappable registry) | 2.57x (xlarge) / 2.13x (xlarge) | [google.golang.org/protobuf](https://pkg.go.dev/google.golang.org/protobuf) |
 | [Erlang](bindings/erlang/) | NIF | 4.21x (xlarge) / 2.21x (medium) | [gpb](https://github.com/tomas-abrahamsson/gpb) |
 
