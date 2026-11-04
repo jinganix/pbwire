@@ -74,7 +74,7 @@ benchmarks-quick: build
 ifneq ($(HAVE_NIF),)
 	@$(MAKE) benchmarks-nif-code
 endif
-	BENCH_TARGET_TIME=0.2 $(PROTO_BENCH)
+	BENCH_TARGET_TIME=0.05 $(PROTO_BENCH)
 
 update-readme: build
 	@./update_readme.sh

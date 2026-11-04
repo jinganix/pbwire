@@ -86,6 +86,8 @@ plugin-c:
 GO ?= go
 GO_PLUGIN_BIN := bindings/go/plugin/build/protoc-gen-pbwire-go
 GO_BENCH_GEN := bindings/go/benchmarks/gen
+GO_VTPROTO_BIN := $(GO_BENCH_GEN)/bin/protoc-gen-go-vtproto
+GO_VTPROTO_VERSION := v0.6.0
 
 $(GO_PLUGIN_BIN): $(shell find bindings/go/plugin -type f -name '*.go') \
 		bindings/go/plugin/go.mod bindings/go/plugin/go.sum
@@ -103,13 +105,25 @@ $(GO_BENCH_GEN)/official/matrix3.pb.go: bindings/c/tests/data/matrix3.proto
 		--go_opt=paths=source_relative \
 		--go_opt=Mmatrix3.proto=pbwire/benchmarks/gen/official $<
 
+$(GO_VTPROTO_BIN):
+	@mkdir -p $(dir $@)
+	GOBIN=$(abspath $(dir $@)) $(GO) install github.com/planetscale/vtprotobuf/cmd/protoc-gen-go-vtproto@$(GO_VTPROTO_VERSION)
+
+$(GO_BENCH_GEN)/official/matrix3_vtproto.pb.go: bindings/c/tests/data/matrix3.proto $(GO_BENCH_GEN)/official/matrix3.pb.go $(GO_VTPROTO_BIN)
+	@mkdir -p $(dir $@)
+	$(PROTOC) -Ibindings/c/tests/data \
+		--plugin=protoc-gen-go-vtproto=$(GO_VTPROTO_BIN) \
+		--go-vtproto_out=$(GO_BENCH_GEN)/official \
+		--go-vtproto_opt=paths=source_relative \
+		--go-vtproto_opt=Mmatrix3.proto=pbwire/benchmarks/gen/official $<
+
 $(GO_BENCH_GEN)/pbwire/matrix3.pbwire.go: bindings/c/tests/data/matrix3.proto $(GO_PLUGIN_BIN)
 	@mkdir -p $(dir $@)
 	$(PROTOC) -Ibindings/c/tests/data \
 		--plugin=protoc-gen-pbwire-go=$(GO_PLUGIN_BIN) \
 		--pbwire-go_out=$(GO_BENCH_GEN)/pbwire $<
 
-go-bench: $(GO_BENCH_GEN)/official/matrix3.pb.go $(GO_BENCH_GEN)/pbwire/matrix3.pbwire.go
+go-bench: $(GO_BENCH_GEN)/official/matrix3.pb.go $(GO_BENCH_GEN)/official/matrix3_vtproto.pb.go $(GO_BENCH_GEN)/pbwire/matrix3.pbwire.go
 	cd bindings/go/benchmarks && $(GO) run .
 
 $(DESC_BIN): tests/test_descriptor.c $(TEST_HDRS) $(LIB) | build

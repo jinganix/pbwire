@@ -153,24 +153,25 @@ protoc -Ibindings/node/tests/data \
 ## Benchmark
 
 `benchmarks/bench.sh` generates `matrix3_pb.js` with `protoc-gen-js`, installs
-`google-protobuf` (the jspb runtime) and `protoc-gen-js` into
-`benchmarks/node_modules` on first run, and prints the four standard tiers from
-[`BENCHMARKS.md`](../../BENCHMARKS.md) for `pbwire-node` and jspb side by side:
+`google-protobuf` (the jspb runtime), `protoc-gen-js` and `protobufjs` (the
+fastest widely used JS runtime) into `benchmarks/node_modules` on first run,
+and prints the four standard tiers from [`BENCHMARKS.md`](../../BENCHMARKS.md)
+for `pbwire-node`, jspb and protobufjs side by side:
 
 ```sh
 ./benchmarks/bench.sh      # or: make node-bench
 ```
 
-| payload | op | pbwire-node (MB/s, x jspb) | jspb (MB/s) |
-|---|---|---|---|
-| 136 B | encode | 579.6 (10.4x) | 55.8 |
-| 136 B | decode | 371.0 (3.3x) | 113.4 |
-| 174 B | encode | 531.9 (9.5x) | 55.9 |
-| 174 B | decode | 419.1 (3.9x) | 107.1 |
-| 2469 B | encode | 1222.6 (22.8x) | 53.6 |
-| 2469 B | decode | 1102.8 (14.0x) | 78.8 |
-| 74913 B | encode | 1366.6 (23.8x) | 57.4 |
-| 74913 B | decode | 1596.7 (19.0x) | 84.1 |
+| payload | op | pbwire-node (MB/s, x jspb) | jspb (MB/s) | protobufjs (MB/s) |
+|---|---|---|---|---|
+| 136 B | encode | 608.5 (10.9x) | 56.0 | 243.3 |
+| 136 B | decode | 375.3 (3.1x) | 119.5 | 395.7 |
+| 174 B | encode | 568.6 (9.0x) | 62.9 | 300.8 |
+| 174 B | decode | 431.9 (3.8x) | 112.7 | 391.1 |
+| 2469 B | encode | 1201.6 (20.8x) | 57.9 | 445.6 |
+| 2469 B | decode | 1122.9 (14.0x) | 80.3 | 375.4 |
+| 74913 B | encode | 1350.2 (22.3x) | 60.6 | 496.5 |
+| 74913 B | decode | 1655.0 (20.0x) | 82.9 | 402.0 |
 
 jspb's throughput does not move with payload size: its writer resolves a
 code/type table per field and hands every repeated element to a closure, where

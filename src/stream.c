@@ -60,31 +60,36 @@ pbw_istream_feed(pbw_istream *s, const void *data, size_t len)
     if (len == 0) {
         return PBW_OK;
     }
-    /* Compact the consumed prefix first so a long-lived stream does not grow
-     * without bound. */
-    if (s->off > 0) {
-        memmove(s->data, s->data + s->off, s->len - s->off);
-        s->len -= s->off;
-        s->off = 0;
-    }
+    /* Compact the consumed prefix only when the tail has no room: a steady
+     * feed/next loop then appends without a memmove per chunk. */
     if (len > s->cap - s->len) {
-        size_t cap = s->cap != 0 ? s->cap : 256;
+        size_t cap;
         uint8_t *grown;
 
-        while (cap - s->len < len) {
-            if (cap > SIZE_MAX / 2) {
-                /* No allocation can hold this chunk; report it instead of
-                 * spinning on a wrapped capacity. */
+        if (s->off > 0) {
+            memmove(s->data, s->data + s->off, s->len - s->off);
+            s->len -= s->off;
+            s->off = 0;
+        }
+        if (len <= s->cap - s->len) {
+            /* Compacting freed enough room; no realloc needed. */
+        } else {
+            cap = s->cap != 0 ? s->cap : 256;
+            while (cap - s->len < len) {
+                if (cap > SIZE_MAX / 2) {
+                    /* No allocation can hold this chunk; report it instead of
+                     * spinning on a wrapped capacity. */
+                    return PBW_ERR_NOMEM;
+                }
+                cap *= 2;
+            }
+            grown = (uint8_t *)realloc(s->data, cap);
+            if (grown == NULL) {
                 return PBW_ERR_NOMEM;
             }
-            cap *= 2;
+            s->data = grown;
+            s->cap = cap;
         }
-        grown = (uint8_t *)realloc(s->data, cap);
-        if (grown == NULL) {
-            return PBW_ERR_NOMEM;
-        }
-        s->data = grown;
-        s->cap = cap;
     }
     memcpy(s->data + s->len, data, len);
     s->len += len;

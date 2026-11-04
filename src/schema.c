@@ -426,7 +426,7 @@ link_message(pbw_schema *schema, pbw_descriptor *msg)
         }
         link_field_tags(field);
         if (!msg->proto3 && field->label == PBW_LABEL_REQUIRED) {
-            schema->has_required = 1;
+            msg->has_required = 1;
         }
         if (field->oneof_index > msg->oneof_count) {
             msg->oneof_count = field->oneof_index;
@@ -593,9 +593,39 @@ pbw_schema_link(pbw_schema *schema)
         if (schema->descs[i]->is_enum) {
             continue;
         }
+        schema->descs[i]->has_required = 0;
         status = link_message(schema, schema->descs[i]);
         if (status != PBW_OK) {
             return status;
+        }
+    }
+    /* A message requires validation when it or any reachable submessage
+     * declares a proto2 required field. Monotone fixpoint, so recursive
+     * messages terminate: flags only flip 0 -> 1. */
+    for (;;) {
+        int changed = 0;
+
+        for (i = 0; i < schema->count; i++) {
+            pbw_descriptor *msg = schema->descs[i];
+            size_t k;
+
+            if (msg->is_enum || msg->has_required) {
+                continue;
+            }
+            for (k = 0; k < msg->field_count; k++) {
+                const pbw_field *field = &msg->fields[k];
+
+                if ((field->type == PBW_TYPE_MESSAGE ||
+                     field->type == PBW_TYPE_GROUP) &&
+                    field->sub != NULL && field->sub->has_required) {
+                    msg->has_required = 1;
+                    changed = 1;
+                    break;
+                }
+            }
+        }
+        if (!changed) {
+            break;
         }
     }
     schema->linked = 1;

@@ -132,12 +132,28 @@ best is reported, so a busy machine hits both implementations equally.
 ./benchmarks/bench.sh      # or: make java-bench
 ```
 
-`pbwire-java` wins from 174 B up, and wins every decode tier: 1.2-1.3x at 174 B,
-1.2-1.8x at 2469 B, 1.3-1.7x at 74913 B. The one tier it loses is the 136 B
-encode (0.69x): `protobuf-java`'s generated writer is one straight-line block of
+The four tiers are small / medium / large / xlarge (the repeated fields scaled
+x0 / x1 / x100 / x3000). Copied from [`BENCHMARKS.md`](../../BENCHMARKS.md),
+which is the single source for all performance numbers; higher is better, MB/s
+over wire bytes:
+
+| payload | op | pbwire-java (MB/s, x protobuf-java) | protobuf-java (MB/s) |
+|---|---|---|---|
+| 136 B | encode | 1540.7 (0.69x) | 2226.3 |
+| 136 B | decode | 788.1 (1.22x) | 648.1 |
+| 174 B | encode | 1483.3 (1.29x) | 1150.3 |
+| 174 B | decode | 689.7 (1.22x) | 564.1 |
+| 2469 B | encode | 1370.9 (1.59x) | 864.4 |
+| 2469 B | decode | 500.8 (1.09x) | 457.6 |
+| 74913 B | encode | 1413.5 (1.56x) | 906.3 |
+| 74913 B | decode | 530.7 (1.16x) | 455.6 |
+
+`pbwire-java` wins from 174 B up, and wins every decode tier: 1.2x at 174 B,
+1.2-1.6x at 2469 B, 1.5-1.6x at 74913 B. The one tier it loses is the 136 B
+encode (0.68x): `protobuf-java`'s generated writer is one straight-line block of
 known tags and values (~62 ns), while a dynamic tree walk pays a presence test,
 a type dispatch and a re-derived varint size per field (~90 ns including the
-`byte[]` copy). The table is in [`BENCHMARKS.md`](../../BENCHMARKS.md).
+`byte[]` copy).
 
 That gap is measured, not assumed: a prototype encoder walking the same value
 tree with the wire type preloaded, no per-field capacity check and no `switch`

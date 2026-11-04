@@ -2417,8 +2417,7 @@ pbw_text_parse(const pbw_descriptor *desc, const char *text, size_t len,
         return status;
     }
     /* a missing proto2 `required` field fails, like the binary decoder */
-    if (desc->schema != NULL && desc->schema->has_required &&
-        !pbw_message_is_initialized(msg)) {
+    if (desc->has_required && !pbw_message_is_initialized(msg)) {
         pbw_message_free(msg);
         return PBW_ERR_REQUIRED;
     }

@@ -46,6 +46,9 @@ pbw_arena_alloc_slow(pbw_arena *arena, size_t size)
                           ? arena->retain_cap
                           : PBW_ARENA_LARGE_THRESHOLD;
 
+    if (size > SIZE_MAX - 7u) {
+        return NULL;
+    }
     size = align_up(size == 0 ? 1 : size);
     if (size > large_at) {
         /* Oversized single allocation: one malloc on the large list, freed on
@@ -107,9 +110,6 @@ pbw_arena_reset(pbw_arena *arena)
         chunk = next;
     }
     arena->large = NULL;
-    /* A reset context is a blank slate: trees built into it afterwards are
-     * mutable until a decode seals it read-only again. */
-    arena->readonly = 0;
     /* An outlier that grew the head past the budget is dropped as well:
      * steady workloads under budget stay malloc-free, anything above pays
      * one malloc per reset instead of pinning the peak forever. */

@@ -170,6 +170,11 @@ C++ runtime), `make bench`, `make bench-c` (C structs vs protoc C++). Optional, 
   `bindings/ruby` (C extension), `bindings/node` (N-API addon) and `bindings/php` (`ext-ffi`)
   compare `pbw_abi_version()` with `PBW_ABI_VERSION` at load;
   `bindings/go` is generated Go code with no cgo and no runtime dependency.
+- Binding memory ceilings (no binding exposes `pbw_ctx_set_retain_cap`/`pbw_pool_*`, so every
+  `pbw_ctx` runs at the 1 MiB default): Java/Kotlin pin one never-freed workspace per thread,
+  Erlang one per scheduler, Node one encode buffer per type, Python/Ruby/Node views pin the input
+  bytes, C needs `pbw_struct_free` only for non-arena trees, Go/plain-FFI rows keep nothing resident.
+  Full per-row table in [bindings/README.md](bindings/README.md#memory-what-each-binding-keeps-and-the-one-rule-per-row).
 - Not implemented in the core: RPC/HTTP, MessageSet decoding into extensions, code generation (the
   bindings ship their own protoc plugins: C layout tables and Go straight-line codecs).
 - Typed message models: `bindings/typed` is one protoc plugin (`protoc-gen-pbwire-typed`) that
@@ -221,4 +226,4 @@ C++ runtime), `make bench`, `make bench-c` (C structs vs protoc C++). Optional, 
   read, `to_dict()` for the eager form, `encode(message)` for a byte-exact round trip), tests +
   benchmark against `google.protobuf` (`bindings/python/benchmarks/bench.py`).
 - [conformance/testee.c](conformance/testee.c): testee for Google's `conformance_test_runner`, binary
-  wire format only.
+  wire format plus the JSON mapping and the text format.

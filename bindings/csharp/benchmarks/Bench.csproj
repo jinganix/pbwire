@@ -13,9 +13,11 @@
 
   <ItemGroup>
     <Compile Include="Bench.cs" />
+    <Compile Include="Pbn.cs" />
     <Compile Include="gen/*.cs" />
     <ProjectReference Include="../Pbwire/Pbwire.csproj" />
     <PackageReference Include="Google.Protobuf" Version="3.36.2" />
+    <PackageReference Include="protobuf-net" Version="3.4.40" />
   </ItemGroup>
 
 </Project>

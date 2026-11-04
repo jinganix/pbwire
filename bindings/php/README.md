@@ -50,13 +50,32 @@ php examples/roundtrip.php                          # example
 ## Benchmarks
 
 ```shell
-./benchmarks/bench.sh    # vs the official google/protobuf PHP runtime, four tiers
+./benchmarks/bench.sh    # vs the official google/protobuf PHP runtime (pure + C ext), four tiers
 ```
 
 The official side is the `php/src` tree of the cached protobuf checkout that
 `make conformance-setup` clones (or `PBWIRE_PROTOBUF_SRC`), loaded through a
-plain SPL autoloader: no composer, no PEAR. Numbers live in
-[BENCHMARKS.md](../../BENCHMARKS.md).
+plain SPL autoloader: no composer, no PEAR. When the protobuf C extension is
+installed the harness times it first (`-c` rows), then re-runs under `php -n`
+for the pure-PHP baseline. The four tiers are small / medium /
+large / xlarge (the repeated fields scaled x0 / x1 / x100 / x3000). Copied from
+[BENCHMARKS.md](../../BENCHMARKS.md), which is the single source for all
+performance numbers; higher is better, MB/s over wire bytes:
+
+| payload | op | pbwire-php (MB/s, x protobuf-php-c) | protobuf-php-c (MB/s) |
+|---|---|---|---|
+| 136 B | encode | 256.2 (0.30x) | 864.9 |
+| 136 B | decode | 234.7 (0.56x) | 420.4 |
+| 174 B | encode | 296.1 (0.31x) | 942.6 |
+| 174 B | decode | 261.8 (0.62x) | 422.4 |
+| 2469 B | encode | 1029.0 (0.76x) | 1351.6 |
+| 2469 B | decode | 481.9 (0.93x) | 518.2 |
+| 74913 B | encode | 1301.6 (0.99x) | 1319.6 |
+| 74913 B | decode | 554.1 (0.99x) | 556.9 |
+
+Without the C extension the same harness measures the pure-PHP runtime
+instead (single `php -n`-style run): xlarge 1315.2 MB/s vs 3.9 (encode) and
+564.9 vs 5.5 (decode). The ~300x gap is the interpreter, not the codec.
 
 Strings cross as NUL-terminated C strings, so `setString()` stops at the first
 NUL byte: use `setBytes()` for binary payloads (a `string` field accepts them

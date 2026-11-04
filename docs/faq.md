@@ -19,7 +19,8 @@
 
 No. It is a runtime: descriptors in, dynamic messages out. Nothing is generated,
 nothing is compiled per schema, and adding a message type does not require a
-rebuild.
+rebuild — unless you embedded the descriptor set in the binary (see
+[Do I have to recompile when a `.proto` changes?](#do-i-have-to-recompile-when-a-proto-changes)).
 
 ### Does it need `protoc` at runtime?
 
@@ -127,9 +128,22 @@ you. All imported files must be in the set. See [guide.md](guide.md).
 
 ### Do I have to recompile when a `.proto` changes?
 
-No. Ship the new descriptor set and reload the schema in the running process;
-nothing is generated or compiled per schema. Messages of the old schema stay
-valid until you free that schema.
+Only if you baked the schema into the binary. The loader takes bytes
+(`pbw_descriptor_set_load`), so a sidecar file and embedded bytes are the same
+call — the difference is deployment, not API:
+
+- **External file (default).** Ship the new `FileDescriptorSet` next to the
+  binary and reload the schema in the running process; no rebuild. Messages of
+  the old schema stay valid until you free that schema.
+- **Embedded bytes (single binary).** Compile the set in (`xxd -i`, Rust
+  `include_bytes!`, app resources) and load it from memory
+  (`from_bytes` / `fromBytes` / `load(bytes)`, depending on the binding). No
+  sidecar file to lose, but a `.proto` change means rebuilding and redeploying.
+
+Exceptions: Go bakes the schema into generated codecs and never loads a
+descriptor, Erlang uses gpb's compiled definitions — both recompile by
+construction. The C struct binding still validates its generated layout against
+a descriptor set at run time, so embed that set too rather than dropping it.
 
 ### Where do I report a bug?
 

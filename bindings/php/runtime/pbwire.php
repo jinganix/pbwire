@@ -119,6 +119,17 @@ final class Lib
         return self::ffi()->new($type);
     }
 
+    /** A reused out-parameter slot, one per C type. The hot paths (encode,
+     * decode, byte getters) must use this, not newSlot: addr() of a freshly
+     * allocated slot is never collected, so a loop over newSlot leaks ~100 B
+     * per call. Shared mutable state: single-threaded use only, which the
+     * binding already assumes. */
+    private static array $slots = [];
+    public static function slot(string $type): CData
+    {
+        return self::$slots[$type] ??= self::ffi()->new($type);
+    }
+
     /* `const char *` returns arrive as PHP strings (null when the C side returns NULL). */
     public static function errorText(int $status): string
     {
@@ -153,7 +164,7 @@ final class Schema
     public static function fromBytes(string $bytes): self
     {
         $ffi = Lib::ffi();
-        $out = Lib::newSlot('void*[1]');
+        $out = Lib::slot('void*[1]');
         $status = $ffi->pbw_descriptor_set_load($bytes, strlen($bytes), FFI::addr($out[0]));
         $handle = $out[0];
 
@@ -278,7 +289,7 @@ final class Type
     /** Decodes wire bytes; unknown fields are preserved and re-encoded. */
     public function decode(string $wire): Message
     {
-        $out = Lib::newSlot('void*[1]');
+        $out = Lib::slot('void*[1]');
         $status = Lib::ffi()->pbw_decode($this->desc, $wire, strlen($wire), FFI::addr($out[0]));
 
         if ($status !== 0) {
@@ -523,7 +534,7 @@ final class Message
             return null;
         }
 
-        $len = Lib::newSlot('size_t');
+        $len = Lib::slot('size_t');
         $ptr = Lib::ffi()->pbw_value_get_bytes($value, FFI::addr($len));
 
         return $ptr === null ? null : FFI::string($ptr, $len->cdata);
@@ -576,8 +587,8 @@ final class Message
     public function encode(): string
     {
         $ffi = Lib::ffi();
-        $out = Lib::newSlot('void*[1]');
-        $len = Lib::newSlot('size_t');
+        $out = Lib::slot('void*[1]');
+        $len = Lib::slot('size_t');
         $status = $ffi->pbw_encode($this->cdata(), FFI::addr($out[0]), FFI::addr($len));
 
         if ($status !== 0) {
@@ -660,7 +671,7 @@ final class Value
 
     public function asBytes(): ?string
     {
-        $len = Lib::newSlot('size_t');
+        $len = Lib::slot('size_t');
         $ptr = Lib::ffi()->pbw_value_get_bytes($this->ptr, FFI::addr($len));
 
         return $ptr === null ? null : FFI::string($ptr, $len->cdata);

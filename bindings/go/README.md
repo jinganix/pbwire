@@ -19,7 +19,7 @@ codec writes and reads wire bytes directly instead of going through
 | plugin | [`plugin/`](plugin/) | `protoc-gen-pbwire-go`, its golden tests and the regen/dump targets |
 | tests | [`tests/`](tests/) | generated fixtures + `protoc`-pinned reference bytes (matrix2, matrix3, edge cases) |
 | examples | [`examples/addressbook/`](examples/addressbook/) | generated `tutorial.AddressBook` round trip |
-| benchmarks | [`benchmarks/`](benchmarks/) | four standard tiers vs `google.golang.org/protobuf` generated code |
+| benchmarks | [`benchmarks/`](benchmarks/) | four standard tiers vs `google.golang.org/protobuf` + vtproto generated code |
 | conformance | [`conformance/`](conformance/) | why the generated-only model has no conformance testee |
 
 ```shell
@@ -102,6 +102,27 @@ required-field errors, singular-message merge and the nesting cap.
 `make -C bindings/go/plugin test` replays the checked-in protoc requests
 against the pinned generated files, so the generator itself is covered without
 needing `protoc`.
+
+## Benchmark
+
+`benchmarks/` runs the four standard tiers from
+[`BENCHMARKS.md`](../../BENCHMARKS.md) against `google.golang.org/protobuf`
+generated code and vtproto (the fastest widely used Go generator) from the same
+`matrix3.proto` (small / medium / large / xlarge
+scale the repeated fields x0 / x1 / x100 / x3000). Copied from that file, which
+is the single source for all performance numbers; higher is better, MB/s over
+wire bytes:
+
+| payload | op | pbwire-go (MB/s, x official) | official generated (MB/s) | vtproto (MB/s) |
+|---|---|---|---|---|
+| 136 B | encode | 1462.4 (2.20x) | 663.4 | 2092.3 |
+| 136 B | decode | 1247.7 (2.13x) | 586.2 | 1387.8 |
+| 174 B | encode | 1450.0 (2.34x) | 619.2 | 1933.3 |
+| 174 B | decode | 887.8 (1.84x) | 482.0 | 1000.0 |
+| 2469 B | encode | 1663.7 (3.06x) | 543.6 | 1800.9 |
+| 2469 B | decode | 522.7 (1.67x) | 312.7 | 596.7 |
+| 74913 B | encode | 1721.8 (2.90x) | 593.9 | 1967.0 |
+| 74913 B | decode | 603.5 (1.73x) | 348.5 | 622.2 |
 
 ## Typed models
 

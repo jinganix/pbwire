@@ -54,11 +54,27 @@ dotnet run --project examples -- ../c/tests/data/matrix3.desc   # example
 ## Benchmarks
 
 ```shell
-./benchmarks/bench.sh    # vs Google.Protobuf C# generated code, four tiers
+./benchmarks/bench.sh    # vs Google.Protobuf C# + protobuf-net, four tiers
 ```
 
-Needs `protoc` and NuGet access (`dotnet restore` fetches `Google.Protobuf`).
-Numbers live in [BENCHMARKS.md](../../BENCHMARKS.md).
+Needs `protoc` and NuGet access (`dotnet restore` fetches `Google.Protobuf`
+and `protobuf-net`).
+The four tiers are small / medium / large / xlarge (the repeated fields scaled
+x0 / x1 / x100 / x3000). Copied from [BENCHMARKS.md](../../BENCHMARKS.md),
+which is the single source for all performance numbers; higher is better, MB/s
+over wire bytes (protobuf-net's medium rows are absent: it singular-encodes
+single-element packed fields, so there is nothing byte-identical to time):
+
+| payload | op | pbwire-csharp (MB/s, x protobuf-csharp) | protobuf-csharp (MB/s) | protobuf-net (MB/s) |
+|---|---|---|---|---|
+| 136 B | encode | 1365.4 (3.0x) | 450.7 | 583.9 |
+| 136 B | decode | 922.1 (1.9x) | 487.5 | 467.5 |
+| 174 B | encode | 1410.7 (3.4x) | 417.7 | — |
+| 174 B | decode | 825.1 (2.0x) | 411.6 | — |
+| 2469 B | encode | 1206.7 (2.2x) | 546.8 | 384.0 |
+| 2469 B | decode | 519.8 (1.18x) | 441.8 | 303.7 |
+| 74913 B | encode | 1393.5 (2.9x) | 480.6 | 392.5 |
+| 74913 B | decode | 547.1 (1.07x) | 513.0 | 337.2 |
 
 Strings cross as NUL-terminated C strings, so `Set(field, string)` stops at the
 first NUL byte: use the `ReadOnlySpan<byte>` overload for binary payloads (a

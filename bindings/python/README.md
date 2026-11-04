@@ -116,28 +116,43 @@ tests and the benchmark do it themselves).
 
 [`benchmarks/bench.py`](benchmarks/bench.py) compares against `google.protobuf`
 (the upb C extension) on the same `matrix3.proto` message at the four standard
-tiers from [`../../BENCHMARKS.md`](../../BENCHMARKS.md), printing the same
-`impl op ns/op MB/s` table as every other harness:
+tiers from [`../../BENCHMARKS.md`](../../BENCHMARKS.md) (small / medium / large /
+xlarge scale the repeated fields x0 / x1 / x100 / x3000), printing the same
+`impl op ns/op MB/s` table as every other harness. Copied from that file, which
+is the single source for all performance numbers; higher is better, MB/s over
+wire bytes.
 
 ```shell
 make python-bench
 ```
 
-Both sides do the same user-visible work in every row: `encode(data)` starts
-from the same dict, `decode(bytes)` returns an in-memory message, `to_dict(bytes)`
-returns plain Python data, and `encode(parsed)` starts from an already parsed
-message. It verifies byte-for-byte parity with `protobuf`'s own encoding and
+It verifies byte-for-byte parity with `protobuf`'s own encoding and
 both dict representations before timing.
 
-Current standing on Apple M4 Pro, 74913 B message (full table in
-`BENCHMARKS.md`):
-
-| path | pbwire-py | upb | relative |
+| payload | op | pbwire-py (MB/s, x upb) | upb (MB/s) |
 |---|---|---|---|
-| `encode(data)`: dict → wire | 135.1 µs | 900.1 µs | 6.7x |
-| `decode(bytes)`: wire → message | 58.3 µs | 96.4 µs | 1.65x |
-| `to_dict(bytes)`: wire → plain data | 465.3 µs | 1810.5 µs | 3.9x |
-| `encode(parsed)`: message → wire | 0.8 µs | 52.1 µs | 63x |
+| 136 B | encode(data) | 298.9 (5.7x) | 52.3 |
+| 136 B | decode(bytes) | 689.3 (1.20x) | 575.5 |
+| 136 B | to_dict(bytes) | 162.0 (4.9x) | 33.3 |
+| 136 B | encode(parsed) | 3099.8 (4.1x) | 747.6 |
+| 174 B | encode(data) | 342.2 (5.6x) | 60.6 |
+| 174 B | decode(bytes) | 724.9 (1.25x) | 580.8 |
+| 174 B | to_dict(bytes) | 156.7 (5.7x) | 27.6 |
+| 174 B | encode(parsed) | 4005.2 (4.7x) | 860.8 |
+| 2469 B | encode(data) | 495.3 (6.5x) | 76.5 |
+| 2469 B | decode(bytes) | 1167.1 (1.60x) | 730.5 |
+| 2469 B | to_dict(bytes) | 195.9 (4.8x) | 40.4 |
+| 2469 B | encode(parsed) | 30710.1 (22x) | 1400.5 |
+| 74913 B | encode(data) | 564.4 (6.5x) | 86.6 |
+| 74913 B | decode(bytes) | 1366.0 (1.69x) | 810.0 |
+| 74913 B | to_dict(bytes) | 170.6 (3.8x) | 44.6 |
+| 74913 B | encode(parsed) | 97683.0 (63x) | 1540.4 |
+
+Rows are the same user-visible task on both sides: `encode(data)` starts from
+the same dict, `decode(bytes)` ends with an in-memory message, `to_dict(bytes)`
+ends with plain Python data, and `encode(parsed)` starts from an already parsed
+message (a `Message` hands back the bytes it was parsed from, so the round trip
+is byte-exact).
 
 upb wins nothing: it spends 890 µs filling a message field by field from the
 dict, it parses into its arena and materializes a proxy per field access, and

@@ -28,9 +28,12 @@ public final class Bench {
     private static final String[] CASES = {"small", "medium", "large", "xlarge"};
     private static final int[] REPEATS = {0, 1, 100, 3000};
     private static final int[] WANT = {136, 174, 2469, 74913};
+    /** Floor iterations per tier; doubled until one pass takes 0.25 s. */
     private static final int[] ITERATIONS = {50_000, 50_000, 5_000, 500};
+    /** Minimum seconds for one calibrated pass (shared standard, BENCHMARKS.md). */
+    private static final double MIN_PASS_SECONDS = 0.25;
     /** Interleaved passes; the best of them is reported (C2 needs a few). */
-    private static final int PASSES = 5;
+    private static final int PASSES = 3;
 
     private static int failures;
 
@@ -54,7 +57,8 @@ public final class Bench {
     private static void runCase(MessageType type, int tier) {
         String label = CASES[tier];
         int n = REPEATS[tier];
-        int iterations = ITERATIONS[tier];
+        int floor = ITERATIONS[tier];
+        int count = floor; // replaced by the reference op's calibrated count
         byte[] reference = fillOfficial(n).toByteArray();
         if (reference.length != WANT[tier]) {
             fail(label, "official encoder wrote " + reference.length + " bytes, expected " + WANT[tier]);
@@ -75,23 +79,21 @@ public final class Bench {
         double[] best = new double[4];
         Arrays.fill(best, Double.MAX_VALUE);
         try (Message message = fillPbwire(type, n)) {
-            /* One warm-up pass per candidate, then interleaved timed passes, best
-             * of each: the JIT needs a few passes to settle and a busy machine
-             * then hits every candidate equally. */
-            run(() -> message.encode(), iterations);
-            run(() -> type.decode(reference).close(), iterations);
-            run(officialMessage::toByteArray, iterations);
-            run(() -> parse(reference), iterations);
-            for (int pass = 0; pass < PASSES; pass++) {
-                best[0] = Math.min(best[0], run(() -> message.encode(), iterations));
-                best[1] = Math.min(best[1], run(() -> type.decode(reference).close(), iterations));
-                best[2] = Math.min(best[2], run(officialMessage::toByteArray, iterations));
-                best[3] = Math.min(best[3], run(() -> parse(reference), iterations));
-            }
+            /* Every op calibrates independently from the floor (a slow op
+             * already exceeds the minimum at the floor and keeps it), then
+             * one warm-up pass and interleaved timed passes, best of each:
+             * the JIT needs a few passes to settle and a busy machine then
+             * hits every candidate equally. The tier line shows the reference
+             * op's count; slower ops keep the floor. */
+            count = calibrate(message::encode, floor);
+            best[0] = measure(floor, message::encode);
+            best[1] = measure(floor, () -> type.decode(reference).close());
+            best[2] = measure(floor, officialMessage::toByteArray);
+            best[3] = measure(floor, () -> parse(reference));
         }
 
         System.out.printf("%s: %d bytes, %d iterations (repeat field x%d)%n",
-                label, reference.length, iterations, REPEATS[tier]);
+                label, reference.length, count, REPEATS[tier]);
         System.out.printf("  %-14s %-7s %12s %10s%n", "impl", "op", "ns/op", "MB/s");
         row("pbwire-java", "encode", reference.length, best[0]);
         row("protobuf-java", "encode", reference.length, best[2]);
@@ -181,5 +183,32 @@ public final class Bench {
             op.run();
         }
         return (System.nanoTime() - start) / (double) iterations;
+    }
+
+    /** Every op calibrates independently from the floor, then one warm-up
+     * pass and the best of PASSES timed passes. */
+    private static double measure(int floor, Runnable op) {
+        int count = calibrate(op, floor);
+        run(op, count);
+        double best = Double.MAX_VALUE;
+        for (int pass = 0; pass < PASSES; pass++) {
+            best = Math.min(best, run(op, count));
+        }
+        return best;
+    }
+
+    /** Double from the tier floor until one pass takes MIN_PASS_SECONDS. */
+    private static int calibrate(Runnable op, int floor) {
+        int count = Math.max(1, floor);
+        for (;;) {
+            long start = System.nanoTime();
+            for (int i = 0; i < count; i++) {
+                op.run();
+            }
+            if ((System.nanoTime() - start) / 1e9 >= MIN_PASS_SECONDS || count >= 100_000_000) {
+                return count;
+            }
+            count *= 2;
+        }
     }
 }

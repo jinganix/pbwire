@@ -28,7 +28,6 @@ pbw_varint_read(const uint8_t *p, const uint8_t *end, uint64_t *value,
     uint64_t result;
     unsigned i;
 
-    (void)i;
     if (p >= end) {
         return 0;
     }

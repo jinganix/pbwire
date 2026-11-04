@@ -6,7 +6,10 @@
 # The official side needs the protobuf source tree for its php/src runtime; this
 # uses the cached checkout that `make conformance-setup` clones (or
 # PBWIRE_PROTOBUF_SRC). No composer, no PEAR: a plain SPL autoloader loads both
-# the generated classes and that runtime.
+# the generated classes and that runtime. When the protobuf C extension is
+# installed the first run times it (`protobuf-php-c` rows) and a second
+# `php -n` run captures the pure-PHP baseline (`protobuf-php` rows); without
+# the extension there is only the pure-PHP run.
 #
 #   ./bench.sh          generate, build, run
 set -eu
@@ -29,4 +32,13 @@ protoc -I"$(dirname "$proto")" --php_out="$gen" \
 
 make -C "$root" shared >/dev/null
 
-exec php "$here/bench.php" "$gen/matrix3.desc"
+php "$here/bench.php" "$gen/matrix3.desc"
+
+# When the C extension is present the run above timed it (`protobuf-php-c`
+# rows); a second `php -n` run captures the pure-PHP baseline too.
+if php -m 2>/dev/null | grep -qi '^protobuf$'; then
+    echo
+    echo '--- pure-PHP baseline (extensions disabled) ---'
+    echo
+    php -n "$here/bench.php" "$gen/matrix3.desc"
+fi

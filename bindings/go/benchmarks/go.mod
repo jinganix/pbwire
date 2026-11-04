@@ -7,4 +7,6 @@ require (
 	pbwire v0.0.0
 )
 
+require github.com/planetscale/vtprotobuf v0.6.0
+
 replace pbwire => ../

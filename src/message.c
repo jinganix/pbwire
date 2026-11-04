@@ -220,6 +220,13 @@ is_initialized(const pbw_message *msg, uint32_t depth)
     if (msg == NULL || msg->desc == NULL || depth >= PBW_MAX_DEPTH) {
         return 0;
     }
+    /* The flag is computed by pbw_schema_link(); an unlinked descriptor is
+     * unsupported for messages already (its fields are still unsorted), so
+     * only a linked tree may take the shortcut. */
+    if (!msg->desc->has_required && (msg->desc->schema == NULL ||
+                                     msg->desc->schema->linked)) {
+        return 1; /* no required field in this subtree */
+    }
     for (i = 0; i < msg->desc->field_count; i++) {
         const pbw_field *field = &msg->desc->fields[i];
         const pbw_value *value = &msg->values[i];

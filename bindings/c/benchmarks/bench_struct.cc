@@ -45,16 +45,64 @@ ns_per_op(Clock::time_point start, int iterations)
     return static_cast<double>(elapsed.count()) / iterations;
 }
 
+/* Unified measurement standard (see BENCHMARKS.md): from the tier floor,
+ * double the iterations until one pass takes at least 0.25 s, then report
+ * the best of 3 timed passes after one warm-up pass. An explicit iteration
+ * count on the command line fixes the count (smoke runs) but keeps the
+ * warm-up + best-of-3. */
+static bool g_calibrate = true;
+static const double kMinPassSeconds = 0.25;
+static const int kPasses = 3;
+static const double kInfNs = 1e100;
+
+template <typename Fn>
+int
+calibrate(Fn &&fn, int floor)
+{
+    int iters = floor > 0 ? floor : 1;
+    if (!g_calibrate)
+        return iters;
+    for (;;) {
+        auto start = Clock::now();
+        for (int i = 0; i < iters; i++)
+            fn();
+        double seconds =
+            std::chrono::duration_cast<std::chrono::duration<double>>(Clock::now() -
+                                                                      start)
+                .count();
+        if (seconds >= kMinPassSeconds || iters >= 100000000)
+            return iters;
+        iters *= 2;
+    }
+}
+
 template <typename Fn>
 double
-time_it(Fn &&fn, int iterations, int warmup)
+timed_best3(Fn &&fn, int iters)
 {
-    for (int i = 0; i < warmup; i++)
+    for (int i = 0; i < iters; i++)
         fn();
-    auto start = Clock::now();
-    for (int i = 0; i < iterations; i++)
-        fn();
-    return ns_per_op(start, iterations);
+    double best = kInfNs;
+    for (int p = 0; p < kPasses; p++) {
+        auto start = Clock::now();
+        for (int i = 0; i < iters; i++)
+            fn();
+        best = std::min(best, ns_per_op(start, iters));
+    }
+    return best;
+}
+
+/* Every op calibrates independently from the floor: a slow op already exceeds
+ * the minimum at the floor and keeps it, a fast op doubles up. Pass
+ * &iters on the reference op to report its count on the tier line. */
+template <typename Fn>
+double
+time_it(Fn &&fn, int floor, int *count_out = nullptr)
+{
+    int iters = calibrate(fn, floor);
+    if (count_out != nullptr)
+        *count_out = iters;
+    return timed_best3(fn, iters);
 }
 
 struct CaseData {
@@ -278,7 +326,7 @@ bench_case(pbw_schema *schema, const char *label, int n, int iterations)
     pbw_struct_buf out = {nullptr, 0, 0};
     pbw_struct_arena *arena = nullptr;
     structtest_scalars3_t decoded;
-    int warmup = iterations / 10;
+    int iters = 0;
 
     fill_struct(d, n);
     fill_gen(&gen_msg, n);
@@ -296,13 +344,13 @@ bench_case(pbw_schema *schema, const char *label, int n, int iterations)
     rows.push_back({"pbwire-c", "encode", time_it([&] {
                         (void)pbw_struct_codec_encode(codec, &d.s, &out);
                     },
-                                                  iterations, warmup),
+                                                  iterations, &iters),
                     ref.size()});
     rows.push_back({"pb gen", "encode", time_it([&] {
                         scratch.clear();
                         (void)gen_msg.SerializeToString(&scratch);
                     },
-                                                iterations, warmup),
+                                                iterations),
                     ref.size()});
     rows.push_back({"pbwire-c", "decode", time_it([&] {
                         std::memset(&decoded, 0, sizeof(decoded));
@@ -312,7 +360,7 @@ bench_case(pbw_schema *schema, const char *label, int n, int iterations)
                                 ref.size(), &arena, &decoded) != PBW_OK)
                             failures++;
                     },
-                                                  iterations, warmup),
+                                                  iterations),
                     ref.size()});
     rows.push_back({"pb gen", "decode", time_it([&] {
                         structtest::Scalars3 m;
@@ -320,11 +368,11 @@ bench_case(pbw_schema *schema, const char *label, int n, int iterations)
                                               static_cast<int>(ref.size())))
                             failures++;
                     },
-                                                iterations, warmup),
+                                                iterations),
                     ref.size()});
 
     std::printf("\n%s: %zu bytes, %d iterations (repeat field x%d)\n", label,
-                ref.size(), iterations, n);
+                ref.size(), iters, n);
     print_rows(rows);
 
     /* The one-shot API compiles the layout on every call; kept visible so a
@@ -337,7 +385,7 @@ bench_case(pbw_schema *schema, const char *label, int n, int iterations)
                                                          &len);
                         pbw_free(buf);
                     },
-                                                   iterations, warmup),
+                                                   iterations),
                     ref.size()});
     rows.push_back({"pbwire-c1", "decode", time_it([&] {
                         structtest_scalars3_t m;
@@ -348,7 +396,7 @@ bench_case(pbw_schema *schema, const char *label, int n, int iterations)
                             failures++;
                         structtest_scalars3_free(&m);
                     },
-                                                   iterations, warmup),
+                                                   iterations),
                     ref.size()});
     std::printf("  one-shot API (per-call layout compile + per-message alloc):\n");
     print_rows(rows);
@@ -366,6 +414,7 @@ main(int argc, char **argv)
 {
     /* Same CLI as bench/bench.cc: `bench [iterations]`. */
     bool run_bench = argc > 1 && std::strcmp(argv[1], "bench") == 0;
+    g_calibrate = argc <= 2;
     int iterations = argc > 2 ? std::atoi(argv[2]) : 200000;
 
     if (!run_bench) {
@@ -389,8 +438,8 @@ main(int argc, char **argv)
         int iters = iterations;
         if (repeats[i] >= 3000) {
             iters = iterations / 100;
-            if (iters < 200)
-                iters = 200;
+            if (iters < 500)
+                iters = 500;
         }
         bench_case(schema, labels[i], repeats[i], iters);
     }

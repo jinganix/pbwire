@@ -496,13 +496,34 @@ read_packed(reader *r, const pbw_field *field, pbw_message *msg, int closed)
     /* Fixed-width items divide the length exactly, so the count is known
      * before the first item: reserve it and skip the push growth chain.
      * The length guard also keeps an empty packed field absent (no list is
-     * created for it, as before). Both tests below are loop-invariant. */
-    if (data_len > 0 && (field->type == PBW_TYPE_FIXED32 ||
-                         field->type == PBW_TYPE_SFIXED32 ||
-                         field->type == PBW_TYPE_FLOAT ||
-                         field->type == PBW_TYPE_FIXED64 ||
-                         field->type == PBW_TYPE_SFIXED64 ||
-                         field->type == PBW_TYPE_DOUBLE)) {
+     * created for it, as before). Both tests below are loop-invariant.
+     * Varint runs count their items the same way: every value ends on a
+     * byte without the continuation bit. Only worth a scan past 64 bytes;
+     * shorter runs grow at most three times. */
+    if (data_len > 64 && field->type != PBW_TYPE_FIXED32 &&
+        field->type != PBW_TYPE_SFIXED32 && field->type != PBW_TYPE_FLOAT &&
+        field->type != PBW_TYPE_FIXED64 &&
+        field->type != PBW_TYPE_SFIXED64 && field->type != PBW_TYPE_DOUBLE) {
+        size_t n = 0;
+        size_t k;
+        pbw_value *vlist;
+
+        for (k = 0; k < data_len; k++) {
+            n += (size_t)(data[k] < 0x80);
+        }
+        vlist = pbw_message_list_for(msg, field);
+        if (vlist == NULL ||
+            !pbw_value_list_reserve(
+                vlist, n > UINT32_MAX ? UINT32_MAX : (uint32_t)n,
+                msg->arena)) {
+            return PBW_ERR_NOMEM;
+        }
+    } else if (data_len > 0 && (field->type == PBW_TYPE_FIXED32 ||
+                                field->type == PBW_TYPE_SFIXED32 ||
+                                field->type == PBW_TYPE_FLOAT ||
+                                field->type == PBW_TYPE_FIXED64 ||
+                                field->type == PBW_TYPE_SFIXED64 ||
+                                field->type == PBW_TYPE_DOUBLE)) {
         size_t width = (field->type == PBW_TYPE_FIXED64 ||
                         field->type == PBW_TYPE_SFIXED64 ||
                         field->type == PBW_TYPE_DOUBLE)
@@ -511,8 +532,12 @@ read_packed(reader *r, const pbw_field *field, pbw_message *msg, int closed)
         pbw_value *list = pbw_message_list_for(msg, field);
 
         if (list == NULL ||
-            !pbw_value_list_reserve(list, (uint32_t)(data_len / width),
-                                    msg->arena)) {
+            !pbw_value_list_reserve(
+                list,
+                data_len / width > UINT32_MAX
+                    ? UINT32_MAX
+                    : (uint32_t)(data_len / width),
+                msg->arena)) {
             return PBW_ERR_NOMEM;
         }
     }
@@ -706,10 +731,6 @@ decode_fields(pbw_message *msg, const uint8_t *buf, size_t len, uint32_t depth, 
         pbw_status status;
         uint8_t action = PBW_ACT_GENERIC;
 
-        /* The next cache line usually holds the upcoming fields: prefetch
-         * it while the current one decodes. A prefetch of resident memory
-         * is a single cheap hint. */
-        PBW_PREFETCH(r.p + 64);
         /* One-byte tag (field number < 16): the common case, dispatched by
          * the link-time tag table with a single indexed load. */
         if (PBW_EXPECT(r.p < r.end && r.p[0] < 0x80, 1)) {
@@ -1148,9 +1169,9 @@ pbw_decode_arena_lim(pbw_arena *arena, const pbw_descriptor *desc,
                             dlim);
     /* The reference parsers check for missing `required` fields once the whole
      * message is in, not per nested occurrence, so this is the same point. The
-     * schema-wide flag keeps the walk off every pure-proto3 decode. */
-    if (status == PBW_OK && desc->schema != NULL &&
-        desc->schema->has_required && !pbw_message_is_initialized(*out)) {
+     * per-descriptor flag keeps the walk off subtrees without `required`. */
+    if (status == PBW_OK && desc->has_required &&
+        !pbw_message_is_initialized(*out)) {
         pbw_message_free(*out);
         *out = NULL;
         return PBW_ERR_REQUIRED;

@@ -1264,16 +1264,64 @@ ns_per_op(Clock::time_point start, int iterations)
     return static_cast<double>(elapsed.count()) / iterations;
 }
 
+/* Unified measurement standard (see BENCHMARKS.md): from the tier floor,
+ * double the iterations until one pass takes at least 0.25 s, then report
+ * the best of 3 timed passes after one warm-up pass. An explicit iteration
+ * count on the command line fixes the count (smoke runs) but keeps the
+ * warm-up + best-of-3. */
+static bool g_calibrate = true;
+static const double kMinPassSeconds = 0.25;
+static const int kPasses = 3;
+static const double kInfNs = 1e100;
+
+template <typename Fn>
+int
+calibrate(Fn &&fn, int floor)
+{
+    int iters = floor > 0 ? floor : 1;
+    if (!g_calibrate)
+        return iters;
+    for (;;) {
+        auto start = Clock::now();
+        for (int i = 0; i < iters; i++)
+            fn();
+        double seconds =
+            std::chrono::duration_cast<std::chrono::duration<double>>(Clock::now() -
+                                                                      start)
+                .count();
+        if (seconds >= kMinPassSeconds || iters >= 100000000)
+            return iters;
+        iters *= 2;
+    }
+}
+
 template <typename Fn>
 double
-time_it(Fn &&fn, int iterations, int warmup)
+timed_best3(Fn &&fn, int iters)
 {
-    for (int i = 0; i < warmup; i++)
+    for (int i = 0; i < iters; i++)
         fn();
-    auto start = Clock::now();
-    for (int i = 0; i < iterations; i++)
-        fn();
-    return ns_per_op(start, iterations);
+    double best = kInfNs;
+    for (int p = 0; p < kPasses; p++) {
+        auto start = Clock::now();
+        for (int i = 0; i < iters; i++)
+            fn();
+        best = std::min(best, ns_per_op(start, iters));
+    }
+    return best;
+}
+
+/* Every op calibrates independently from the floor: a slow op already exceeds
+ * the minimum at the floor and keeps it, a fast op doubles up. Pass
+ * &iters on the reference op to report its count on the tier line. */
+template <typename Fn>
+double
+time_it(Fn &&fn, int floor, int *count_out = nullptr)
+{
+    int iters = calibrate(fn, floor);
+    if (count_out != nullptr)
+        *count_out = iters;
+    return timed_best3(fn, iters);
 }
 
 struct Row {
@@ -1305,6 +1353,7 @@ bench_case(const char *label, int repeated, int iterations,
     std::string scratch;
     size_t encoded_len = 0;
     std::vector<Row> rows;
+    int iters = 0;
 
     rows.push_back({"pbwire", "encode", time_it([&] {
                         uint8_t *buf = nullptr;
@@ -1313,7 +1362,7 @@ bench_case(const char *label, int repeated, int iterations,
                         encoded_len = len;
                         pbw_free(buf);
                     },
-                                                iterations, iterations / 10),
+                                                iterations, &iters),
                     ref.size()});
 
     rows.push_back({"pb gen", "encode", time_it([&] {
@@ -1321,7 +1370,7 @@ bench_case(const char *label, int repeated, int iterations,
                         (void)gen_msg.SerializeToString(&scratch);
                         encoded_len = scratch.size();
                     },
-                                                iterations, iterations / 10),
+                                                iterations),
                     ref.size()});
 
     rows.push_back({"pb dyn", "encode", time_it([&] {
@@ -1329,7 +1378,7 @@ bench_case(const char *label, int repeated, int iterations,
                         (void)dyn->SerializeToString(&scratch);
                         encoded_len = scratch.size();
                     },
-                                                iterations, iterations / 10),
+                                                iterations),
                     ref.size()});
 
     rows.push_back({"pbwire c", "encode", time_it([&] {
@@ -1338,7 +1387,7 @@ bench_case(const char *label, int repeated, int iterations,
                         pbw_encode_ctx(ctx, pbw_msg, &out, &len);
                         encoded_len = len;
                     },
-                                                  iterations, iterations / 10),
+                                                  iterations),
                     ref.size()});
 
     /* Decode rows sink only the status: every implementation must produce it,
@@ -1351,7 +1400,7 @@ bench_case(const char *label, int repeated, int iterations,
                             failures++;
                         pbw_ctx_reset(ctx);
                     },
-                                                  iterations, iterations / 10),
+                                                  iterations),
                     ref.size()});
 
     rows.push_back({"pbwire", "decode", time_it([&] {
@@ -1361,7 +1410,7 @@ bench_case(const char *label, int repeated, int iterations,
                             failures++;
                         pbw_message_free(m);
                     },
-                                                iterations, iterations / 10),
+                                                iterations),
                     ref.size()});
 
     rows.push_back({"pb gen", "decode", time_it([&] {
@@ -1370,7 +1419,7 @@ bench_case(const char *label, int repeated, int iterations,
                                               static_cast<int>(ref.size())))
                             failures++;
                     },
-                                                iterations, iterations / 10),
+                                                iterations),
                     ref.size()});
 
     rows.push_back({"pb dyn", "decode", time_it([&] {
@@ -1380,11 +1429,11 @@ bench_case(const char *label, int repeated, int iterations,
                             failures++;
                         delete m;
                     },
-                                                iterations, iterations / 10),
+                                                iterations),
                     ref.size()});
 
     std::printf("\n%s: %zu bytes, %d iterations (repeat field x%d)\n", label,
-                ref.size(), iterations, repeated);
+                ref.size(), iters, repeated);
     std::printf("  %-9s %-7s %10s %10s\n", "impl", "op", "ns/op", "MB/s");
     for (const Row &r : rows) {
         double mbps = r.ns > 0 ? (static_cast<double>(r.bytes) / r.ns) * 1e3 : 0;
@@ -1409,6 +1458,7 @@ bench_text(const char *label, int repeated, int iterations,
     fill_pbw(pbw_msg, repeated);
     std::string scratch;
     std::vector<Row> rows;
+    int iters = 0;
 
     rows.push_back({"pbwire", "print", time_it([&] {
                         char *out = nullptr;
@@ -1416,14 +1466,14 @@ bench_text(const char *label, int repeated, int iterations,
                         (void)pbw_text_print(pbw_msg, &out, &len);
                         pbw_free(out);
                     },
-                                               iterations, iterations / 10),
+                                               iterations, &iters),
                     text.size()});
     rows.push_back({"pb gen", "print", time_it([&] {
                         scratch.clear();
                         (void)google::protobuf::TextFormat::PrintToString(
                             gen_msg, &scratch);
                     },
-                                               iterations, iterations / 10),
+                                               iterations),
                     text.size()});
     rows.push_back({"pbwire", "parse", time_it([&] {
                         pbw_message *dm = nullptr;
@@ -1431,17 +1481,17 @@ bench_text(const char *label, int repeated, int iterations,
                                              &dm);
                         pbw_message_free(dm);
                     },
-                                               iterations, iterations / 10),
+                                               iterations),
                     text.size()});
     rows.push_back({"pb gen", "parse", time_it([&] {
                         bench::Msg m;
                         (void)google::protobuf::TextFormat::ParseFromString(
                             text, &m);
                     },
-                                               iterations, iterations / 10),
+                                               iterations),
                     text.size()});
     std::printf("\ntext: %s (%zu bytes of text), %d iterations\n", label,
-                text.size(), iterations);
+                text.size(), iters);
     std::printf("  %-9s %-7s %10s %10s\n", "impl", "op", "ns/op", "MB/s");
     for (const Row &r : rows) {
         double mbps = r.ns > 0 ? static_cast<double>(r.bytes) / r.ns * 1e3 : 0;
@@ -1655,6 +1705,7 @@ bench_json(const char *label, int repeated, int iterations,
     fill_pbw(pbw_msg, repeated);
     std::string scratch;
     std::vector<Row> rows;
+    int iters = 0;
 
     rows.push_back({"pbwire", "print", time_it([&] {
                         char *out = nullptr;
@@ -1662,14 +1713,14 @@ bench_json(const char *label, int repeated, int iterations,
                         (void)pbw_json_print(pbw_msg, &out, &len);
                         pbw_free(out);
                     },
-                                               iterations, iterations / 10),
+                                               iterations, &iters),
                     text.size()});
     rows.push_back({"pb gen", "print", time_it([&] {
                         scratch.clear();
                         (void)google::protobuf::json::MessageToJsonString(
                             gen_msg, &scratch);
                     },
-                                               iterations, iterations / 10),
+                                               iterations),
                     text.size()});
     rows.push_back({"pbwire", "parse", time_it([&] {
                         pbw_message *dm = nullptr;
@@ -1677,17 +1728,17 @@ bench_json(const char *label, int repeated, int iterations,
                                              &dm);
                         pbw_message_free(dm);
                     },
-                                               iterations, iterations / 10),
+                                               iterations),
                     text.size()});
     rows.push_back({"pb gen", "parse", time_it([&] {
                         bench::Msg m;
                         (void)google::protobuf::json::JsonStringToMessage(
                             text, &m);
                     },
-                                               iterations, iterations / 10),
+                                               iterations),
                     text.size()});
     std::printf("\njson: %s (%zu bytes of text), %d iterations\n", label,
-                text.size(), iterations);
+                text.size(), iters);
     std::printf("  %-9s %-7s %10s %10s\n", "impl", "op", "ns/op", "MB/s");
     for (const Row &r : rows) {
         double mbps = r.ns > 0 ? static_cast<double>(r.bytes) / r.ns * 1e3 : 0;
@@ -1717,6 +1768,7 @@ bench_stream(const char *label, int repeated, int iterations,
     size_t framed_len = 0;
     size_t bytes = 0;
     std::vector<Row> rows;
+    int iters = 0;
 
     fill_pbw(pbw_msg, repeated);
     if (pbw_encode_delimited(pbw_msg, &framed, &framed_len) != PBW_OK) {
@@ -1732,7 +1784,7 @@ bench_stream(const char *label, int repeated, int iterations,
                         (void)pbw_encode(pbw_msg, &buf, &len);
                         pbw_free(buf);
                     },
-                                                iterations, iterations / 10),
+                                                iterations, &iters),
                     bytes});
     rows.push_back({"pbwire", "detenc", time_it([&] {
                         uint8_t *buf = nullptr;
@@ -1740,18 +1792,18 @@ bench_stream(const char *label, int repeated, int iterations,
                         (void)pbw_encode_deterministic(pbw_msg, &buf, &len);
                         pbw_free(buf);
                     },
-                                                iterations, iterations / 10),
+                                                iterations),
                     bytes});
     rows.push_back({"pbwire", "size", time_it([&] {
                         size_t n = 0;
                         (void)pbw_message_encoded_size(pbw_msg, &n);
                     },
-                                              iterations, iterations / 10),
+                                              iterations),
                     bytes});
     rows.push_back({"pbwire", "sink", time_it([&] {
                         (void)pbw_encode_sink(pbw_msg, null_sink, nullptr);
                     },
-                                              iterations, iterations / 10),
+                                              iterations),
                     bytes});
     rows.push_back({"pbwire", "framed", time_it([&] {
                         pbw_istream *s = pbw_istream_new(nullptr);
@@ -1761,10 +1813,10 @@ bench_stream(const char *label, int repeated, int iterations,
                         pbw_message_free(m);
                         pbw_istream_free(s);
                     },
-                                                iterations, iterations / 10),
+                                                iterations),
                     bytes});
     std::printf("\nstream: %s (%zu framed bytes), %d iterations\n", label,
-                bytes, iterations);
+                bytes, iters);
     std::printf("  %-9s %-7s %10s %10s\n", "impl", "op", "ns/op",
                 "MB/s");
     for (const Row &r : rows) {
@@ -1783,26 +1835,35 @@ bench_stream(const char *label, int repeated, int iterations,
  * owns its own context/message. */
 template <typename Fn>
 double
-time_pool(int threads, int iterations, Fn fn)
+time_pool(int threads, int &iters, int floor, Fn fn)
 {
-    std::vector<std::thread> pool;
-    std::vector<double> ns(static_cast<size_t>(threads), 0.0);
-
-    for (int t = 0; t < threads; t++) {
-        pool.emplace_back([&, t] {
-            auto op = fn(t);
-            auto start = Clock::now();
-            for (int i = 0; i < iterations; i++)
-                op(i);
-            ns[static_cast<size_t>(t)] = ns_per_op(start, iterations);
-        });
+    if (iters == 0) {
+        auto op = fn(0);
+        iters = calibrate([&] { op(0); }, floor);
     }
-    for (auto &thread : pool)
-        thread.join();
-    double sum = 0;
-    for (double value : ns)
-        sum += value;
-    return sum / static_cast<double>(threads);
+    double best = kInfNs;
+    for (int p = 0; p < 1 + kPasses; p++) {
+        std::vector<std::thread> pool;
+        std::vector<double> ns(static_cast<size_t>(threads), 0.0);
+
+        for (int t = 0; t < threads; t++) {
+            pool.emplace_back([&, t] {
+                auto op = fn(t);
+                auto start = Clock::now();
+                for (int i = 0; i < iters; i++)
+                    op(i);
+                ns[static_cast<size_t>(t)] = ns_per_op(start, iters);
+            });
+        }
+        for (auto &thread : pool)
+            thread.join();
+        double sum = 0;
+        for (double value : ns)
+            sum += value;
+        if (p > 0)
+            best = std::min(best, sum / static_cast<double>(threads));
+    }
+    return best;
 }
 
 long
@@ -1836,6 +1897,7 @@ bench_threads(const char *label, int repeated, int iterations, pbw_descriptor *d
     rows.push_back({"pb gen", "encode", 0, 0});
     rows.push_back({"pbwire", "decode", 0, 0});
     rows.push_back({"pb gen", "decode", 0, 0});
+    int iters = 0;
 
     /* encode: one read-only message per thread, encoded into its own buffer */
     {
@@ -1850,8 +1912,8 @@ bench_threads(const char *label, int repeated, int iterations, pbw_descriptor *d
                 (void)pbw_encode_ctx(ctx.get(), msg.get(), &out, &len);
             };
         };
-        rows[0].single = time_pool(1, iterations, setup);
-        rows[0].multi = time_pool(threads, iterations, setup);
+        rows[0].single = time_pool(1, iters, iterations, setup);
+        rows[0].multi = time_pool(threads, iters, iterations, setup);
     }
     {
         auto setup = [&](int) {
@@ -1865,8 +1927,8 @@ bench_threads(const char *label, int repeated, int iterations, pbw_descriptor *d
                 (void)msg->SerializeToString(&scratch);
             };
         };
-        rows[1].single = time_pool(1, iterations, setup);
-        rows[1].multi = time_pool(threads, iterations, setup);
+        rows[1].single = time_pool(1, iters, iterations, setup);
+        rows[1].multi = time_pool(threads, iters, iterations, setup);
     }
     /* decode: every thread parses the same read-only bytes into its own tree */
     {
@@ -1879,8 +1941,8 @@ bench_threads(const char *label, int repeated, int iterations, pbw_descriptor *d
                 pbw_ctx_reset(ctx.get());
             };
         };
-        rows[2].single = time_pool(1, iterations, setup);
-        rows[2].multi = time_pool(threads, iterations, setup);
+        rows[2].single = time_pool(1, iters, iterations, setup);
+        rows[2].multi = time_pool(threads, iters, iterations, setup);
     }
     {
         auto setup = [&](int) {
@@ -1889,13 +1951,13 @@ bench_threads(const char *label, int repeated, int iterations, pbw_descriptor *d
                 (void)m.ParseFromArray(ref.data(), static_cast<int>(ref.size()));
             };
         };
-        rows[3].single = time_pool(1, iterations, setup);
-        rows[3].multi = time_pool(threads, iterations, setup);
+        rows[3].single = time_pool(1, iters, iterations, setup);
+        rows[3].multi = time_pool(threads, iters, iterations, setup);
     }
 
     std::printf("\nthreads: 1 vs %d (%ld cores), %d iterations per thread, "
                 "%zu bytes (repeat field x%d)\n",
-                threads, cores, iterations, ref.size(), repeated);
+                threads, cores, iters, ref.size(), repeated);
     std::printf("  %-9s %-7s %11s %11s %11s %9s %10s\n", "impl", "op",
                 "1thr MB/s", "8thr MB/s", "8thr agg", "per-op", "aggregate");
     for (const ThreadRow &row : rows) {
@@ -1931,6 +1993,7 @@ main(int argc, char **argv)
 {
     bool run_diff = argc > 1 && std::strcmp(argv[1], "difftest") == 0;
     bool has_count = argc > 2;
+    g_calibrate = !has_count;
     int iterations = has_count ? std::atoi(argv[2]) : 200000;
     int fuzz_cases = has_count ? std::atoi(argv[2]) : 20000;
     unsigned seed = argc > 3 ? (unsigned)std::atoi(argv[3]) : 20260219u;
@@ -1992,8 +2055,8 @@ main(int argc, char **argv)
      * takes about as long as a large row. */
     {
         int xlarge_iters = iterations / 100;
-        if (xlarge_iters < 200)
-            xlarge_iters = 200;
+        if (xlarge_iters < 500)
+            xlarge_iters = 500;
         bench_case("xlarge", 3000, xlarge_iters, desc);
     }
     bench_text("full", 1, iterations, desc);

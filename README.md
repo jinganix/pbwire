@@ -52,8 +52,7 @@ pbw_free(buf);
 - **Built for embedding.** Stable C ABI, no globals, caller-confined
   schema/message objects, arena-backed `pbw_ctx` for per-thread hot loops, wire
   input validated at the boundary.
-- **One core, fourteen host languages.** C, C++, Python, Ruby, Java, Kotlin,
-  Node, Objective-C, PHP, Dart, C#, Rust, Go and Erlang all speak the same wire
+- **One core, fourteen host languages.** [C](bindings/c/), [C++](bindings/cpp/), [Python](bindings/python/), [Ruby](bindings/ruby/), [Java](bindings/java/), [Kotlin](bindings/kotlin/), [Node](bindings/node/), [Objective-C](bindings/objc/), [PHP](bindings/php/), [Dart](bindings/dart/), [C#](bindings/csharp/), [Rust](bindings/rust/), [Go](bindings/go/) and [Erlang](bindings/erlang/) all speak the same wire
   format, each with a measured answer to its runtime's own pain point — see
   [what each binding solves](bindings/README.md#what-each-binding-solves).
 
@@ -149,18 +148,38 @@ address book, loaded from `addressbook.desc` at runtime) is in
 `make bench` verifies byte-for-byte equality with libprotobuf before timing
 anything, so a speed number can never come from a wrong encoder. On an Apple
 M4 Pro with `-O2` and `protoc 36.2`, the in-process dynamic core with a
-`pbw_ctx` runs 1.2-1.7x the throughput of the generated C++ codec on every tier
-(132 B to 86 KB, encode and decode), and 12-19x the speed of C++
-`DynamicMessage` on encode and 2-5x on decode. Generated code only wins where
+`pbw_ctx` runs 1.1-1.7x the throughput of the generated C++ codec on every tier
+(132 B to 86 KB, encode and decode), and 8-15x the speed of C++
+`DynamicMessage` on encode and 2-4x on decode. Generated code only wins where
 the comparison includes an FFI boundary (Java, 136 B, 0.69x) or where pbwire's
-*plain* API pays one `malloc`/`free` pair per call (0.96x at 169 B); the arena
+*plain* API pays one `malloc`/`free` pair per call (0.97x at 2755 B); the arena
 API wins every tier.
 
 The per-language tables — the same four payload tiers for every binding against
 its official runtime (Python, Go, Java, Kotlin, Node, Ruby, Objective-C, PHP,
-Dart, Rust, C#, Erlang), the C struct codec, 1-vs-8-thread scaling, and the
-reason behind each gap — live in [BENCHMARKS.md](BENCHMARKS.md). That is the
-single place performance numbers live; this page does not repeat them.
+Dart, Rust, C#, Erlang), plus the fastest third-party runtime wherever one
+meaningfully exists (Go, Node, Rust, C#, PHP), the C struct codec, 1-vs-8-thread
+scaling, and the reason behind each gap — live in [BENCHMARKS.md](BENCHMARKS.md).
+The one-row summary is here; the detail is there.
+
+| Language | How it talks to the core | Best encode / decode vs official | Baseline |
+|---|---|---|---|
+| [C](bindings/c/) | static link, struct codec | 1.42x (xlarge) / 2.25x (xlarge) | [protoc C++](https://github.com/protocolbuffers/protobuf) |
+| [C++](bindings/cpp/) | same C runtime, same header | 1.42x (xlarge) / 2.25x (xlarge)¹ | [protoc C++](https://github.com/protocolbuffers/protobuf) |
+| [Python](bindings/python/) | CPython extension | 6.5x (xlarge) / 1.69x (xlarge) | [google.protobuf (upb)](https://pypi.org/project/protobuf/) |
+| [Ruby](bindings/ruby/) | C extension, linked | 1.42x (small) / 1.93x (large) | [google-protobuf gem](https://rubygems.org/gems/google-protobuf) |
+| [Java](bindings/java/) | FFI `java.lang.foreign` | 1.59x (large) / 1.22x (small) | [protobuf-java](https://github.com/protocolbuffers/protobuf/tree/main/java) |
+| [Kotlin](bindings/kotlin/) | Java FFM layer + DSL | 1.60x (xlarge) / 1.20x (medium) | [protobuf-kotlin](https://github.com/protocolbuffers/protobuf/tree/main/java/kotlin) |
+| [Node](bindings/node/) | N-API addon | 22.3x (xlarge) / 20.0x (xlarge) | [jspb](https://www.npmjs.com/package/google-protobuf) + protobufjs |
+| [Objective-C](bindings/objc/) | ARC wrapper | 6.6x (medium) / 2.9x (large) | [protobuf-objc](https://github.com/protocolbuffers/protobuf/tree/main/objectivec) |
+| [PHP](bindings/php/) | `ext-ffi` | 0.99x (xlarge) / 0.99x (xlarge) vs C ext (337x / 103x vs pure PHP) | [protobuf-php](https://github.com/protocolbuffers/protobuf/tree/main/php) |
+| [Dart](bindings/dart/) | `dart:ffi` | 12.2x (xlarge) / 3.3x (xlarge) | [protobuf-dart](https://pub.dev/packages/protobuf) |
+| [Rust](bindings/rust/) | static link | 1.57x (xlarge) / 1.45x (xlarge) | [rust-protobuf 3.x](https://github.com/stepancheg/rust-protobuf) + prost |
+| [C#](bindings/csharp/) | P/Invoke | 3.4x (medium) / 2.0x (medium) | [Google.Protobuf](https://www.nuget.org/packages/Google.Protobuf) + protobuf-net |
+| [Go](bindings/go/) | generated, no cgo | 3.06x (large) / 2.13x (small) | [google.golang.org/protobuf](https://pkg.go.dev/google.golang.org/protobuf) + vtproto |
+| [Erlang](bindings/erlang/) | NIF | 2.35x (medium) / 2.33x (medium) | [gpb](https://github.com/tomas-abrahamsson/gpb) |
+
+¹ C++ has no separate bench; same engine as the C struct codec. Best columns take the highest tier each for encode/decode separately (Apple M4 Pro, `protoc 36.2`); tiers and absolute MB/s are in [BENCHMARKS.md](BENCHMARKS.md).
 
 ## Comparison with generated code, `DynamicMessage` and upb
 

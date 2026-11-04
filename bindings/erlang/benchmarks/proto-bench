@@ -16,9 +16,10 @@
 %%   <case>: <bytes> bytes, <iterations> iterations (repeated fields x<n>)
 %%     impl      op           ns/op       MB/s
 %%
-%% BENCH_TARGET_TIME (seconds, default 2) is the minimum duration of one timed
-%% sample; iterations double until the slowest operation reaches it, then the
-%% best of three samples is reported.
+%% BENCH_TARGET_TIME (seconds, default 0.25) is the minimum duration of one
+%% timed sample; iterations double until the slowest operation reaches it,
+%% then the best of three samples is reported. Same unified standard as every
+%% other binding (see BENCHMARKS.md).
 
 -mode(compile).
 -export([main/1]).
@@ -172,7 +173,7 @@ iterate(0, _Fun) ->
 
 target_time() ->
     case os:getenv("BENCH_TARGET_TIME") of
-        false -> 2.0;
+        false -> 0.25;
         Value ->
             try list_to_float(Value)
             catch error:badarg -> float(list_to_integer(Value))

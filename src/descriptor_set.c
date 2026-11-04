@@ -601,17 +601,29 @@ ds_message_proto(pbw_schema *schema, int proto3, const char *parent,
         case 2: /* field */
         case 6: /* extension */
         {
-            ds_field_info info;
+            /* Heap, not stack: the struct carries a 4 KiB default buffer
+             * and this function recurses per nesting level, so a stack
+             * slot would multiply a hostile descriptor's depth into a
+             * stack overflow. Parsing is load-time only, one malloc per
+             * field is immaterial. */
+            ds_field_info *info = (ds_field_info *)malloc(sizeof(*info));
 
-            status = ds_parse_field(&info, f.data, f.data + f.len);
+            if (info == NULL) {
+                ds_error(schema, "out of memory");
+                return PBW_ERR_NOMEM;
+            }
+            status = ds_parse_field(info, f.data, f.data + f.len);
+            if (status == PBW_OK) {
+                if (f.field == 6 || info->extendee[0] != '\0') {
+                    status = ds_queue_extension(schema, exts, ext_count,
+                                                ext_cap, info, fqname);
+                } else {
+                    status = ds_add_field(schema, msg, proto3, info, 0);
+                }
+            }
+            free(info);
             if (status != PBW_OK) {
                 return status;
-            }
-            if (f.field == 6 || info.extendee[0] != '\0') {
-                status = ds_queue_extension(schema, exts, ext_count, ext_cap,
-                                            &info, fqname);
-            } else {
-                status = ds_add_field(schema, msg, proto3, &info, 0);
             }
             break;
         }
@@ -747,13 +759,19 @@ ds_file_proto(pbw_schema *schema, const uint8_t *p, const uint8_t *end,
         } else if (f.field == 5) { /* enum_type */
             status = ds_enum_proto(schema, package, f.data, f.data + f.len);
         } else if (f.field == 7) { /* extension */
-            ds_field_info info;
+            /* Heap, not stack: see the field/extension case above. */
+            ds_field_info *info = (ds_field_info *)malloc(sizeof(*info));
 
-            status = ds_parse_field(&info, f.data, f.data + f.len);
+            if (info == NULL) {
+                ds_error(schema, "out of memory");
+                return PBW_ERR_NOMEM;
+            }
+            status = ds_parse_field(info, f.data, f.data + f.len);
             if (status == PBW_OK) {
                 status = ds_queue_extension(schema, exts, ext_count, ext_cap,
-                                            &info, package);
+                                            info, package);
             }
+            free(info);
         } else {
             status = PBW_OK;
         }

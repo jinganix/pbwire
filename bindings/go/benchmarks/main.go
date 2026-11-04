@@ -1,9 +1,12 @@
 // Benchmark the generated Go codec against the official protobuf runtime
-// (google.golang.org/protobuf generated code) on the same matrix3.proto and
-// the four standard payload tiers from BENCHMARKS.md.
+// (google.golang.org/protobuf generated code) and vtproto (the fastest
+// widely used Go generator) on the same matrix3.proto and the four standard
+// payload tiers from BENCHMARKS.md. vtproto's methods attach to the official
+// types (its generated file lands in gen/official), so all three encoders
+// share one fixture and one byte-parity gate.
 //
-// Both sides encode the same values and the harness refuses to time anything
-// until the two encoders produce identical bytes; decode is timed on a fresh
+// All sides encode the same values and the harness refuses to time anything
+// until every encoder produces identical bytes; decode is timed on a fresh
 // message per iteration, like the C and Python harnesses.
 //
 //	cd bindings/go && go run ./benchmarks        # generate the sources first:
@@ -43,7 +46,7 @@ type row struct {
 }
 
 func main() {
-	fmt.Printf("gen: protoc-gen-pbwire-go (generated) vs google.golang.org/protobuf (official)\n")
+	fmt.Printf("gen: protoc-gen-pbwire-go (generated) vs google.golang.org/protobuf (official) vs vtproto (fastest)\n")
 	fmt.Printf("message: structtest.Scalars3, source %s\n\n", desc)
 	failures := 0
 	for _, tier := range tiers {
@@ -69,6 +72,13 @@ func main() {
 					}
 				}
 			}),
+			mustMeasure("vtproto", "encode", len(wire), func(b *testing.B) {
+				for i := 0; i < b.N; i++ {
+					if _, err := officialMsg.MarshalVT(); err != nil {
+						b.Fatal(err)
+					}
+				}
+			}),
 			mustMeasure("go", "decode", len(wire), func(b *testing.B) {
 				for i := 0; i < b.N; i++ {
 					var out pbwire.Scalars3
@@ -81,6 +91,14 @@ func main() {
 				for i := 0; i < b.N; i++ {
 					var out official.Scalars3
 					if err := proto.Unmarshal(wire, &out); err != nil {
+						b.Fatal(err)
+					}
+				}
+			}),
+			mustMeasure("vtproto", "decode", len(wire), func(b *testing.B) {
+				for i := 0; i < b.N; i++ {
+					var out official.Scalars3
+					if err := out.UnmarshalVT(wire); err != nil {
 						b.Fatal(err)
 					}
 				}
@@ -113,6 +131,13 @@ func verify(repeats int) []byte {
 	}
 	if !bytes.Equal(got, want) {
 		fatalf("go encode = %x, official = %x", got, want)
+	}
+	vt, err := officialMsg.MarshalVT()
+	if err != nil {
+		fatalf("vtproto encode: %v", err)
+	}
+	if !bytes.Equal(vt, want) {
+		fatalf("vtproto encode = %x, official = %x", vt, want)
 	}
 	if size := goMsg.Size(); size != len(want) {
 		fatalf("go Size() = %d, encoded %d bytes", size, len(want))

@@ -1,11 +1,12 @@
 #!/bin/sh
 # Benchmarks the C# binding against the official Google.Protobuf C# runtime and
-# generated code on the same matrix3.proto (the four standard tiers from
-# BENCHMARKS.md).
+# generated code, plus protobuf-net (the fastest widely used C# runtime), on
+# the same matrix3.proto (the four standard tiers from BENCHMARKS.md).
 #
-# Needs protoc and the .NET SDK; `dotnet restore` fetches Google.Protobuf
-# (NuGet) on the first run. The generated code is compiled into the benchmark
-# project, so no protoc plugin is involved.
+# Needs protoc and the .NET SDK; `dotnet restore` fetches Google.Protobuf and
+# protobuf-net (NuGet) on the first run. The generated code is compiled into
+# the benchmark project, so no protoc plugin is involved; protobuf-net uses
+# hand-written contracts in Pbn.cs matching matrix3.proto field for field.
 #
 #   ./bench.sh          generate, build, run
 set -eu

@@ -15,7 +15,11 @@ declare(strict_types=1);
  * mergeFromString()), so the comparison is like for like.
  *
  * The official runtime comes from the cached protobuf checkout (its php/src
- * tree), loaded through a plain SPL autoloader: no composer needed.
+ * tree), loaded through a plain SPL autoloader: no composer needed. When the
+ * protobuf C extension is loaded it transparently accelerates the same API,
+ * so the harness labels its rows `protobuf-php-c`; without it they are the
+ * pure-PHP `protobuf-php` rows. bench.sh runs both when the extension is
+ * present (the pure run via `php -n`).
  *
  *   ./bench.sh          generate, build, run
  */
@@ -42,10 +46,19 @@ spl_autoload_register(static function (string $class) use ($gen, $src): void {
 const CASES = ['small', 'medium', 'large', 'xlarge'];
 const REPEATS = [0, 1, 100, 3000];
 const WANT = [136, 174, 2469, 74913];
+// Floor iterations per tier; doubled until one pass takes 0.25 s (shared
+// standard, see BENCHMARKS.md). Floors stay below the 50k/50k/5k/500 default
+// because the pure-PHP ops are millisecond-scale: 200 iterations already take
+// seconds there, which satisfies the time leg of the standard.
 const ITERATIONS = [20000, 20000, 2000, 200];
+const MIN_PASS_SECONDS = 0.25;
 const PASSES = 3;
 
 $desc = $argv[1] ?? "$gen/matrix3.desc";
+// The C extension (when loaded) backs the same generated classes, so one
+// label covers whichever official implementation is actually timed.
+$officialImpl = extension_loaded('protobuf') ? 'protobuf-php-c' : 'protobuf-php';
+echo 'official: ' . ($officialImpl === 'protobuf-php-c' ? 'C extension ' . phpversion('protobuf') : 'pure PHP') . "\n\n";
 $schema = Schema::fromFile($desc);
 $ty = $schema->message('structtest.Scalars3');
 $innerTy = $schema->message('structtest.Inner3');
@@ -75,6 +88,8 @@ for ($tier = 0; $tier < count(CASES); $tier++) {
 
     $official = fillOfficial($n);
     $officialClass = \Structtest\Scalars3::class;
+    // Tier line shows the reference op's count; slower ops keep the floor.
+    $count = calibrate(static fn () => $message->encode(), $iterations);
     $encode = measure($iterations, static fn () => $message->encode());
     $decode = measure($iterations, static fn () => $ty->decode($reference));
     $officialEncode = measure($iterations, static fn () => $official->serializeToString());
@@ -86,12 +101,12 @@ for ($tier = 0; $tier < count(CASES); $tier++) {
     });
 
     $bytes = strlen($reference);
-    printf("%s: %d bytes, %d iterations (repeat field x%d)\n", $label, $bytes, $iterations, $n);
+    printf("%s: %d bytes, %d iterations (repeat field x%d)\n", $label, $bytes, $count, $n);
     printf("  %-12s %-7s %12s %10s\n", 'impl', 'op', 'ns/op', 'MB/s');
     row('pbwire-php', 'encode', $bytes, $encode);
-    row('protobuf-php', 'encode', $bytes, $officialEncode);
+    row($officialImpl, 'encode', $bytes, $officialEncode);
     row('pbwire-php', 'decode', $bytes, $decode);
-    row('protobuf-php', 'decode', $bytes, $officialDecode);
+    row($officialImpl, 'decode', $bytes, $officialDecode);
     echo "\n";
 }
 
@@ -179,13 +194,36 @@ function fillPbwire(Pbwire\Type $ty, Pbwire\Type $innerTy, int $n): Pbwire\Messa
 }
 
 /** Warm up, then keep the best of PASSES runs. */
-function measure(int $iterations, callable $op): float
+function calibrate(callable $op, int $floor): int
 {
-    run($iterations, $op);
+    $count = max(1, $floor);
+
+    for (;;) {
+        $start = hrtime(true);
+
+        for ($i = 0; $i < $count; $i++) {
+            $op();
+        }
+
+        if ((hrtime(true) - $start) / 1e9 >= MIN_PASS_SECONDS || $count >= 100000000) {
+            return $count;
+        }
+
+        $count *= 2;
+    }
+}
+
+// Every op calibrates independently from the floor (a slow op already exceeds
+// the minimum at the floor and keeps it), then warms up and keeps the best
+// of PASSES timed passes.
+function measure(int $floor, callable $op): float
+{
+    $count = calibrate($op, $floor);
+    run($count, $op);
     $best = INF;
 
     for ($pass = 0; $pass < PASSES; $pass++) {
-        $best = min($best, run($iterations, $op));
+        $best = min($best, run($count, $op));
     }
 
     return $best;

@@ -21,7 +21,9 @@ import 'gen/matrix3.pb.dart' as proto;
 const _cases = ['small', 'medium', 'large', 'xlarge'];
 const _repeats = [0, 1, 100, 3000];
 const _want = [136, 174, 2469, 74913];
+/// Floor iterations per tier; doubled until one pass takes 0.25 s.
 const _iterations = [50000, 50000, 5000, 500];
+const _minPassSeconds = 0.25;
 const _passes = 3;
 
 var _failures = 0;
@@ -54,12 +56,14 @@ void main(List<String> args) {
     stdout.writeln('OK   $label encoding parity, x$n (${reference.length} bytes)');
 
     final official = _fillOfficial(n);
+    // Tier line shows the reference op's count; slower ops keep the floor.
+    final tierCount = _calibrate(() => message.encode(), count);
     final encode = _measure(count, () => message.encode());
     final decode = _measure(count, () => ty.decode(reference)..close());
     final officialEncode = _measure(count, () => official.writeToBuffer());
     final officialDecode = _measure(count, () => proto.Scalars3.fromBuffer(reference));
 
-    stdout.writeln('$label: ${reference.length} bytes, $count iterations (repeat field x$n)');
+    stdout.writeln('$label: ${reference.length} bytes, $tierCount iterations (repeat field x$n)');
     stdout.writeln('  ${'impl'.padRight(12)} ${'op'.padRight(7)} '
         '${'ns/op'.padLeft(12)} ${'MB/s'.padLeft(10)}');
     _row('pbwire-dart', 'encode', reference.length, encode);
@@ -143,12 +147,30 @@ double _run(int iterations, void Function() op) {
   return watch.elapsedMicroseconds * 1000.0 / iterations;
 }
 
-/// Warm up, then keep the best of [_passes] runs.
-double _measure(int iterations, void Function() op) {
-  _run(iterations, op);
+/// Double from the tier floor until one pass takes [_minPassSeconds].
+int _calibrate(void Function() op, int floor) {
+  var count = floor > 0 ? floor : 1;
+  for (;;) {
+    final watch = Stopwatch()..start();
+    for (var i = 0; i < count; i++) {
+      op();
+    }
+    if (watch.elapsedMicroseconds / 1e6 >= _minPassSeconds || count >= 100000000) {
+      return count;
+    }
+    count *= 2;
+  }
+}
+
+/// Every op calibrates independently from the floor (a slow op already
+/// exceeds the minimum at the floor and keeps it). Warm up, then keep the
+/// best of [_passes] runs.
+double _measure(int floor, void Function() op) {
+  final count = _calibrate(op, floor);
+  _run(count, op);
   var best = double.maxFinite;
   for (var pass = 0; pass < _passes; pass++) {
-    final ns = _run(iterations, op);
+    final ns = _run(count, op);
     if (ns < best) {
       best = ns;
     }

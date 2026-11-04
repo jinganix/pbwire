@@ -55,7 +55,21 @@ none.
 ```
 
 Downloads `protobuf-java` and `protobuf-kotlin` from Maven Central on first run.
-Numbers live in [BENCHMARKS.md](../../BENCHMARKS.md).
+The four tiers are small / medium / large / xlarge (the repeated fields scaled
+x0 / x1 / x100 / x3000). Copied from [BENCHMARKS.md](../../BENCHMARKS.md),
+which is the single source for all performance numbers; higher is better, MB/s
+over wire bytes:
+
+| payload | op | pbwire-kotlin (MB/s, x protobuf-kotlin) | protobuf-kotlin (MB/s) |
+|---|---|---|---|
+| 136 B | encode | 1537.6 (0.67x) | 2287.6 |
+| 136 B | decode | 804.3 (1.17x) | 689.7 |
+| 174 B | encode | 1557.2 (1.31x) | 1188.7 |
+| 174 B | decode | 716.7 (1.20x) | 596.9 |
+| 2469 B | encode | 1347.8 (1.60x) | 840.5 |
+| 2469 B | decode | 496.0 (1.10x) | 448.9 |
+| 74913 B | encode | 1441.1 (1.60x) | 899.9 |
+| 74913 B | decode | 549.1 (1.19x) | 462.3 |
 
 ## Why not a copy of the Java runtime?
 

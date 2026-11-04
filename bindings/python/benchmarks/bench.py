@@ -120,7 +120,10 @@ def protobuf_data(message):
     return out
 
 
-def time_it(fn, target=0.6, minimum=0.15):
+# Shared measurement standard (see BENCHMARKS.md): from the tier floor (which
+# is 1 here: every op is calibrated), double until one pass takes at least
+# 0.25 s, then report the best of 3 timed passes after one warm-up pass.
+def time_it(fn, target=0.25, minimum=0.25):
     """ns per operation, with the iteration count calibrated to `target`."""
     iterations = 1
     while True:
@@ -132,11 +135,16 @@ def time_it(fn, target=0.6, minimum=0.15):
             break
         iterations *= 2
     iterations = max(1, int(target / elapsed * iterations))
-    start = time.perf_counter()
-    for _ in range(iterations):
+    for _ in range(iterations):  # warm-up pass
         fn()
-    elapsed = time.perf_counter() - start
-    return elapsed / iterations * 1e9, iterations
+    best = float("inf")
+    for _ in range(3):
+        start = time.perf_counter()
+        for _ in range(iterations):
+            fn()
+        elapsed = time.perf_counter() - start
+        best = min(best, elapsed / iterations * 1e9)
+    return best, iterations
 
 
 def fail(what, label):

@@ -539,9 +539,6 @@ write_packed(writer *w, const pbw_field *field, const pbw_value *list)
     if (field->type == PBW_TYPE_FLOAT || field->type == PBW_TYPE_FIXED32 ||
         field->type == PBW_TYPE_SFIXED32) {
         for (i = 0; i < n; i++) {
-            if (i + 1 < n) {
-                PBW_PREFETCH(items[i + 1]);
-            }
             w_fixed_noreserve(w, items[i]->as.u64, 4);
         }
         return;
@@ -549,17 +546,11 @@ write_packed(writer *w, const pbw_field *field, const pbw_value *list)
     if (field->type == PBW_TYPE_DOUBLE || field->type == PBW_TYPE_FIXED64 ||
         field->type == PBW_TYPE_SFIXED64) {
         for (i = 0; i < n; i++) {
-            if (i + 1 < n) {
-                PBW_PREFETCH(items[i + 1]);
-            }
             w_fixed_noreserve(w, items[i]->as.u64, 8);
         }
         return;
     }
     for (i = 0; i < n; i++) {
-        if (i + 1 < n) {
-            PBW_PREFETCH(items[i + 1]);
-        }
         w_varint_noreserve(w, wire_value(field->type, items[i]->as.u64));
     }
 }
@@ -731,11 +722,6 @@ encode_message(writer *w, const pbw_message *msg, uint32_t depth, int det)
                 continue;
             }
             for (j = 0; j < value->as.list.len; j++) {
-                /* The items array holds pointers; prefetch the next value
-                 * while the current one encodes. */
-                if (j + 1 < value->as.list.len) {
-                    PBW_PREFETCH(value->as.list.items[j + 1]);
-                }
                 write_element(w, field, value->as.list.items[j], depth, det);
                 if (w->status != PBW_OK) {
                     return;

@@ -10,6 +10,29 @@ on:
   workflow_dispatch:
 
 jobs:
+  commit-msg:
+    name: Conventional Commits
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Validate commit messages
+        run: |
+          set -e
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            RANGE="origin/${{ github.base_ref }}..HEAD"
+          elif [ -n "${{ github.event.before }}" ] && [ "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ]; then
+            RANGE="${{ github.event.before }}...${{ github.sha }}"
+          else
+            RANGE="HEAD~1..HEAD"
+          fi
+          for c in $(git log --format=%H "$RANGE"); do
+            git show -s --format=%B "$c" > /tmp/pbwire-commit-msg
+            echo "--- $c: $(head -n 1 /tmp/pbwire-commit-msg)"
+            ./scripts/validate-commit-msg.sh /tmp/pbwire-commit-msg
+          done
+
   test:
     name: make test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}

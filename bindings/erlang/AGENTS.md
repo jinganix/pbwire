@@ -17,7 +17,6 @@ make tests              # EUnit (API, schema, validation, gpb parity, PropEr rou
 make c-tests            # C unit tests
 make c-coverage-check   # gcovr coverage gate
 make c-format           # clang-format >= 19 on c_src/ and c_src_tests/
-make release            # rebar3 hex publish (local alternative to pushing a v* tag)
 make benchmark-update-readme   # regenerate benchmark tables in README.md
 ```
 

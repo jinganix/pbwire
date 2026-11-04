@@ -124,6 +124,10 @@ struct pbw_descriptor {
     /* set by pbw_schema_link(): some field is a proto2 closed enum, so the
      * decoder must detour unknown enum numbers into the unknown fields */
     int has_closed_enum;
+    /* set by pbw_schema_link(): this message or a reachable submessage
+     * declares a proto2 required field, so a decode has to walk the tree
+     * once to validate it. Pure-proto3 subtrees stay 0 and are skipped. */
+    int has_required;
     /* Fast tag dispatch: tag_map[byte] is the field whose one-byte tag equals
      * `byte`, NULL when no field (or no one-byte tag) matches. Multibyte tags
      * still use fnum_map. NULL when no field has a one-byte tag. */
@@ -142,9 +146,6 @@ struct pbw_schema {
      * message's value slots always match its descriptor. */
     int frozen;
     int proto3; /* dialect handed to descriptors created from now on */
-    /* set by pbw_schema_link(): some proto2 message declares a required field,
-     * so a decode has to walk the tree once to validate it */
-    int has_required;
     char error[192];
 };
 
@@ -299,12 +300,14 @@ void *pbw_arena_alloc_slow(pbw_arena *arena, size_t size);
 static inline void *
 pbw_arena_alloc(pbw_arena *arena, size_t size)
 {
-    /* Callers are internal and pass sizes bounded by real buffers, so the
-     * align_up below cannot wrap; a public entry point must reject
-     * size > SIZE_MAX - 7 itself. */
+    /* Sizes near SIZE_MAX would wrap the align_up below into a tiny request:
+     * bounce them to the slow path, which rejects what it cannot hold. */
     pbw_arena_chunk *chunk = arena->head;
     void *ptr;
 
+    if (PBW_EXPECT(size > SIZE_MAX - (size_t)7u, 0)) {
+        return pbw_arena_alloc_slow(arena, size);
+    }
     size = (size + 7u) & ~(size_t)7u;
     if (chunk == NULL || chunk->cap - chunk->used < size) {
         return pbw_arena_alloc_slow(arena, size);
