@@ -52,6 +52,11 @@ if [[ $CHECK == 1 ]]; then
   expect bindings/node/package.json "\"version\": \"$VER\"" "node package.json"
   expect bindings/java/pom.xml "<version>$VER</version>" "java pom"
   expect bindings/kotlin/pom.xml "<version>$VER</version>" "kotlin pom"
+  # Plugin versions must never track VERSION (a blanket rewrite once
+  # shipped maven-compiler-plugin:0.1.1 to every user of the file).
+  if grep -A1 "maven-compiler-plugin" bindings/java/pom.xml | grep -q "<version>$VER</version>"; then
+    fail "java pom: plugin version must not track VERSION"
+  fi
   expect README.md "releases/tag/v$VER" "README release line"
   for f in bindings/python/setup.py bindings/ruby/pbwire.gemspec bindings/objc/PBWire.podspec; do
     grep -q "VERSION" "$f" || fail "$f: no longer reads the VERSION file"
@@ -72,8 +77,13 @@ setver bindings/rust/benchmarks/Cargo.toml -e "s/^version = \".*\"/version = \"$
 setver bindings/erlang/src/pbwire.app.src -e "s/{vsn, \"[^\"]*\"}/{vsn, \"$VER\"}/"
 setver bindings/csharp/Pbwire/Pbwire.csproj -e "s|<Version>[^<]*</Version>|<Version>$VER</Version>|"
 setver bindings/node/package.json -e "s/\"version\": \"[^\"]*\"/\"version\": \"$VER\"/"
-setver bindings/java/pom.xml -e "s|<version>[0-9.]*</version>|<version>$VER</version>|g"
-setver bindings/kotlin/pom.xml -e "s|<version>[0-9.]*</version>|<version>$VER</version>|g"
+# The project version is the only two-space <version> in each pom. Plugin
+# versions live deeper and must never be touched (a blanket rewrite once
+# shipped maven-compiler-plugin:0.1.1 to every user of the file).
+setver bindings/java/pom.xml -e "s|^  <version>[0-9.]*</version>|  <version>$VER</version>|"
+setver bindings/kotlin/pom.xml -e "s|^  <version>[0-9.]*</version>|  <version>$VER</version>|"
+# Kotlin pins its pbwire-java dependency to the same release line.
+setver bindings/kotlin/pom.xml -e "/<artifactId>pbwire-java<\/artifactId>/,/<\/dependency>/s|<version>[0-9.]*</version>|<version>$VER</version>|"
 setver README.md -e "s|releases/tag/v[0-9.]*|releases/tag/v$VER|g" \
   -e "s|\*\*Release \[\`v[0-9.]*\`\]|**Release [\`v$VER\`]|"
 

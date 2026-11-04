@@ -49,6 +49,36 @@ jobs:
               --title "v$ver" --generate-notes
           fi
 
+  protoc-plugins:
+    name: protoc plugins (typed + C)
+    needs: github-release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+      - name: Cross-compile both plugins
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          set -e
+          mkdir -p /tmp/plugins
+          for os_arch in "linux amd64" "linux arm64" "darwin amd64" "darwin arm64" "windows amd64"; do
+            set -- $os_arch
+            os=$1; arch=$2
+            suffix=""; [ "$os" = windows ] && suffix=".exe"
+            (cd bindings/typed && GOOS=$os GOARCH=$arch go build -o "/tmp/plugins/protoc-gen-pbwire-typed-$os-$arch$suffix" ./cmd/protoc-gen-pbwire-typed)
+            (cd bindings/c/plugin && GOOS=$os GOARCH=$arch go build -o "/tmp/plugins/protoc-gen-pbwire-c-$os-$arch$suffix" ./cmd/protoc-gen-pbwire-c)
+          done
+          ls -la /tmp/plugins
+      - name: Upload to this release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ver="$(tr -d ' \t\n' < VERSION)"
+          gh release upload "v$ver" /tmp/plugins/* --clobber
+
   pypi:
     name: PyPI (bindings/python)
     needs: validate
@@ -131,8 +161,9 @@ jobs:
           HEX_API_KEY: ${{ secrets.HEX_API_KEY }}
         run: |
           [ -n "$HEX_API_KEY" ] || { echo "HEX_API_KEY unset, skipping"; exit 0; }
-          # hex_core picks the key up from HEX_API_KEY; --yes avoids prompts.
-          (cd bindings/erlang && rebar3 hex publish --yes)
+          # The escript is gitignored and bootstrapped by the Makefile, same
+          # as every local build; hex_core picks the key up from HEX_API_KEY.
+          (cd bindings/erlang && make ./rebar3 >/dev/null && ./rebar3 hex publish --yes)
 
   nuget:
     name: NuGet (bindings/csharp)
@@ -186,8 +217,8 @@ jobs:
           MAVEN_PASSWORD: ${{ secrets.MAVEN_PASSWORD }}
         run: |
           [ -n "$MAVEN_USERNAME" ] || { echo "Maven secrets unset, skipping"; exit 0; }
-          (cd bindings/java && mvn -B deploy -DskipTests)
-          (cd bindings/kotlin && mvn -B deploy -DskipTests)
+          (cd bindings/java && mvn -B deploy -DskipTests -Dgpg.passphrase=)
+          (cd bindings/kotlin && mvn -B deploy -DskipTests -Dgpg.passphrase=)
 
   cocoapods:
     name: CocoaPods (bindings/objc)
