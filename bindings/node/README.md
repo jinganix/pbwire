@@ -153,7 +153,7 @@ protoc -Ibindings/node/tests/data \
 ## Benchmark
 
 `benchmarks/bench.sh` generates `matrix3_pb.js` with `protoc-gen-js`, installs
-`google-protobuf` (the jspb runtime), `protoc-gen-js` and `protobufjs` (the
+`google-protobuf` (the jspb runtime), `protoc-gen-js` and [protobufjs](https://www.npmjs.com/package/protobufjs) (the
 fastest widely used JS runtime) into `benchmarks/node_modules` on first run,
 and prints the four standard tiers from [`BENCHMARKS.md`](../../BENCHMARKS.md)
 for `pbwire-node`, jspb and protobufjs side by side:

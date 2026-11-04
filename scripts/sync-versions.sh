@@ -57,7 +57,7 @@ if [[ $CHECK == 1 ]]; then
     grep -q "VERSION" "$f" || fail "$f: no longer reads the VERSION file"
   done
   # These carry no version field by design (registry versions come from git tags).
-  grep -q '"version"' bindings/php/composer.json && fail "composer.json: must not hardcode a version"
+  grep -q '"version"' composer.json && fail "composer.json: must not hardcode a version"
   if [[ $FAIL == 1 ]]; then exit 1; fi
   echo "sync-versions: all versions are $VER"
   exit 0

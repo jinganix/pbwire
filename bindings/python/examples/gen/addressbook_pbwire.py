@@ -21,8 +21,7 @@ class Person_PhoneNumber:
     type: Optional[int] = None
     def to_dict(self) -> Dict[str, Any]:
         out: Dict[str, Any] = {}
-        if True:
-            out["number"] = self.number
+        out["number"] = self.number
 
         if self.type is not None:
             out["type"] = self.type
@@ -55,11 +54,9 @@ class Person:
     phones: List[Person_PhoneNumber] = dc_field(default_factory=list)
     def to_dict(self) -> Dict[str, Any]:
         out: Dict[str, Any] = {}
-        if True:
-            out["name"] = self.name
+        out["name"] = self.name
 
-        if True:
-            out["id"] = self.id
+        out["id"] = self.id
 
         if self.email is not None:
             out["email"] = self.email

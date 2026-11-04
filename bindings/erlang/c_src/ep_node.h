@@ -25,6 +25,13 @@ struct ep_field_s {
     uint32_t proto_v;
     uint32_t is_oneof;
     uint32_t packed;
+    /* Tag bytes (field number + wire type) resolved at parse time, like the
+     * core's link step: the hot loop memcpys instead of varint-encoding the
+     * tag per value. packed_tag carries the length-delimited variant. */
+    uint8_t tag[5];
+    uint8_t tag_len;
+    uint8_t packed_tag[5];
+    uint8_t packed_tag_len;
 };
 
 struct ep_fnum_field_s {
@@ -57,6 +64,11 @@ struct ep_node_name_s {
 
 void
 free_node(ep_node_t *node);
+
+/* Precompute a field's tag bytes (number + wire type). Called by the parser
+ * and by any test helper that builds fields by hand. */
+void
+ep_field_init_tag(ep_field_t *field);
 
 ERL_NIF_TERM
 parse_node(ErlNifEnv *env, ERL_NIF_TERM term, ep_node_t **node, uint32_t proto_v, ERL_NIF_TERM proto3_list);

@@ -75,6 +75,7 @@ sub type, name lookup) are resolved once per message type and cached per schema.
 | member | meaning |
 |---|---|
 | `Pbwire::Schema.from_file(path)` / `.from_bytes(string)` | load a `FileDescriptorSet`; raises `Pbwire::Error` with the core's `pbw_schema_error()` text when the set is rejected |
+| `Pbwire::Schema.from_file(path) { \|schema\| ... }` (same for `.from_bytes`) | block form: the schema closes itself after the block, even on exception, like `File.open`; without a block the caller owns it and closes explicitly |
 | `schema.message("pkg.Name")` | a new builder message; raises `Pbwire::Error` for an unknown name |
 | `msg.set(name_or_number_symbol, value)` / `msg[...] = value` | set a field; returns the message |
 | `msg.get(name_or_number_symbol)` / `msg[...]` | field value; `nil` when a singular field is absent, `[]` for an empty repeated field |
@@ -159,14 +160,14 @@ source for all performance numbers; higher is better, MB/s over wire bytes:
 
 | payload | op | pbwire-ruby (MB/s, x gem) | gem (MB/s) |
 |---|---|---|---|
-| 136 B | encode | 966.3 (1.42x) | 680.4 |
-| 136 B | decode | 377.2 (1.58x) | 238.1 |
-| 174 B | encode | 886.4 (1.11x) | 795.9 |
-| 174 B | decode | 469.6 (1.91x) | 246.4 |
-| 2469 B | encode | 1221.4 (0.97x) | 1262.6 |
-| 2469 B | decode | 972.4 (1.93x) | 503.2 |
-| 74913 B | encode | 1427.1 (1.05x) | 1360.9 |
-| 74913 B | decode | 1186.7 (1.69x) | 700.8 |
+| 136 B | encode | 896.1 (1.29x) | 695.9 |
+| 136 B | decode | 392.8 (1.61x) | 243.4 |
+| 174 B | encode | 858.1 (1.11x) | 771.0 |
+| 174 B | decode | 416.4 (1.68x) | 247.5 |
+| 2469 B | encode | 1418.6 (1.16x) | 1222.6 |
+| 2469 B | decode | 924.3 (1.88x) | 492.1 |
+| 74913 B | encode | 1607.8 (1.22x) | 1312.4 |
+| 74913 B | decode | 1122.2 (1.67x) | 673.3 |
 
 ```shell
 gem install google-protobuf

@@ -63,12 +63,12 @@ impl Inner3 {
 pub struct Scalars3 {
     pub i32: i32, // 1
     pub i64: i64, // 2
-    pub u32: i32, // 3
-    pub u64: i64, // 4
+    pub u32: u32, // 3
+    pub u64: u64, // 4
     pub s32: i32, // 5
     pub s64: i64, // 6
-    pub fx32: i32, // 7
-    pub fx64: i64, // 8
+    pub fx32: u32, // 7
+    pub fx64: u64, // 8
     pub sfx32: i32, // 9
     pub sfx64: i64, // 10
     pub f32: f32, // 11
@@ -110,7 +110,7 @@ impl Scalars3 {
             msg.set_i64(t.field("u32")?, self.u32 as i64);
         }
         if self.u64 != 0 {
-            msg.set_i64(t.field("u64")?, self.u64);
+            msg.set_i64(t.field("u64")?, self.u64 as i64);
         }
         if self.s32 != 0 {
             msg.set_i64(t.field("s32")?, self.s32 as i64);
@@ -122,7 +122,7 @@ impl Scalars3 {
             msg.set_i64(t.field("fx32")?, self.fx32 as i64);
         }
         if self.fx64 != 0 {
-            msg.set_i64(t.field("fx64")?, self.fx64);
+            msg.set_i64(t.field("fx64")?, self.fx64 as i64);
         }
         if self.sfx32 != 0 {
             msg.set_i64(t.field("sfx32")?, self.sfx32 as i64);
@@ -189,12 +189,12 @@ impl Scalars3 {
         let mut o = Self::default();
         o.i32 = msg.get_i64(t.field("i32")?) as i32;
         o.i64 = msg.get_i64(t.field("i64")?);
-        o.u32 = msg.get_i64(t.field("u32")?) as i32;
-        o.u64 = msg.get_i64(t.field("u64")?);
+        o.u32 = msg.get_i64(t.field("u32")?) as u32;
+        o.u64 = msg.get_i64(t.field("u64")?) as u64;
         o.s32 = msg.get_i64(t.field("s32")?) as i32;
         o.s64 = msg.get_i64(t.field("s64")?);
-        o.fx32 = msg.get_i64(t.field("fx32")?) as i32;
-        o.fx64 = msg.get_i64(t.field("fx64")?);
+        o.fx32 = msg.get_i64(t.field("fx32")?) as u32;
+        o.fx64 = msg.get_i64(t.field("fx64")?) as u64;
         o.sfx32 = msg.get_i64(t.field("sfx32")?) as i32;
         o.sfx64 = msg.get_i64(t.field("sfx64")?);
         o.f32 = msg.get_f32(t.field("f32")?);

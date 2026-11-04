@@ -5,9 +5,14 @@
  * The same payload as the C/Go/Java rows: every scalar kind, the nested
  * message, the two proto3 optionals, and the repeated fields scaled x0 / x1 /
  * x100 / x3000, which lands the tiers on 136 / 174 / 2469 / 74913 bytes. Both
- * sides must produce identical bytes before anything is timed, and both sides
- * allocate per call (pbwire encode()/decode() against write_to_bytes()/
- * parse_from_bytes()), so the comparison is like for like.
+ * sides must produce identical bytes before anything is timed. Encode reuses
+ * one buffer per implementation (pbwire encode_to(), rust-protobuf
+ * write_to_vec(), prost encode()): each side's idiomatic hot loop, so the
+ * steady state allocates nothing anywhere and the codec is timed, not the
+ * allocator. A one-shot pbwire encode() would pay the core malloc plus a
+ * 75 KB copy that neither baseline pays; encode_to() exists so hot loops do
+ * not. Decode stays one-shot on every side (parse_from_bytes / decode /
+ * Type::decode, each with its own arena).
  *
  *   ./bench.sh          generate, build, run
  */
@@ -116,20 +121,44 @@ fn run_case(ty: &Type<'_>, inner_ty: &Type<'_>, tier: usize) {
     }
 
     let official = fill_official(n);
-    // Tier line shows the reference op's count; slower ops keep the floor.
-    let tier_count = calibrate(&mut || message.encode().expect("encode").len(), iterations);
     let prost_msg = fill_prost(n);
     if prost_msg.encode_to_vec() != reference {
         fail(label, "prost wrote different bytes than protobuf-rust");
         return;
     }
-    let encode = measure(iterations, || message.encode().expect("encode").len());
+    // Hot-loop shape on every side: one reused buffer, cleared per op.
+    let mut pbwire_buf = Vec::new();
+    let mut official_buf = Vec::new();
+    let mut prost_buf = Vec::new();
+    // Tier line shows the reference op's count; slower ops keep the floor.
+    let tier_count = calibrate(
+        &mut || {
+            pbwire_buf.clear();
+            message
+                .encode_to(&mut pbwire_buf)
+                .expect("encode")
+                .len()
+        },
+        iterations,
+    );
+    let encode = measure(iterations, || {
+        pbwire_buf.clear();
+        message.encode_to(&mut pbwire_buf).expect("encode").len()
+    });
     let decode = measure(iterations, || ty.decode(&reference).expect("decode"));
-    let official_encode = measure(iterations, || official.write_to_bytes().expect("encode").len());
+    let official_encode = measure(iterations, || {
+        official_buf.clear();
+        official.write_to_vec(&mut official_buf).expect("encode");
+        official_buf.len()
+    });
     let official_decode = measure(iterations, || {
         Scalars3::parse_from_bytes(&reference).expect("decode")
     });
-    let prost_encode = measure(iterations, || prost_msg.encode_to_vec().len());
+    let prost_encode = measure(iterations, || {
+        prost_buf.clear();
+        prost_msg.encode(&mut prost_buf).expect("encode");
+        prost_buf.len()
+    });
     let prost_decode = measure(iterations, || {
         prost_gen::Scalars3::decode(&reference[..]).expect("decode")
     });

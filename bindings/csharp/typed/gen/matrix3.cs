@@ -19,8 +19,8 @@ namespace Pbwire.Generated
     /// <summary>structtest.Inner3</summary>
     public sealed class Structtest_Inner3
     {
-        public string? Name; // name = 1
-        public int Value; // value = 2
+        public string? Name { get; set; } // name = 1
+        public int Value { get; set; } // value = 2
 
         public byte[] Encode(Schema schema)
         {
@@ -56,30 +56,30 @@ namespace Pbwire.Generated
     /// <summary>structtest.Scalars3</summary>
     public sealed class Structtest_Scalars3
     {
-        public int I32; // i32 = 1
-        public long I64; // i64 = 2
-        public int U32; // u32 = 3
-        public long U64; // u64 = 4
-        public int S32; // s32 = 5
-        public long S64; // s64 = 6
-        public int Fx32; // fx32 = 7
-        public long Fx64; // fx64 = 8
-        public int Sfx32; // sfx32 = 9
-        public long Sfx64; // sfx64 = 10
-        public float F32; // f32 = 11
-        public double F64; // f64 = 12
-        public bool Flag; // flag = 13
-        public string? Str; // str = 14
-        public int Color; // color = 15
-        public Structtest_Inner3? Inner; // inner = 16
-        public List<int> Nums = new(); // nums = 17
-        public List<string> Tags = new(); // tags = 18
-        public List<Structtest_Inner3> Inners = new(); // inners = 19
-        public bool HasOptI32;
-        public int OptI32; // opt_i32 = 20
-        public bool HasOptStr;
-        public string? OptStr; // opt_str = 21
-        public List<bool> Flags = new(); // flags = 22
+        public int I32 { get; set; } // i32 = 1
+        public long I64 { get; set; } // i64 = 2
+        public uint U32 { get; set; } // u32 = 3
+        public ulong U64 { get; set; } // u64 = 4
+        public int S32 { get; set; } // s32 = 5
+        public long S64 { get; set; } // s64 = 6
+        public uint Fx32 { get; set; } // fx32 = 7
+        public ulong Fx64 { get; set; } // fx64 = 8
+        public int Sfx32 { get; set; } // sfx32 = 9
+        public long Sfx64 { get; set; } // sfx64 = 10
+        public float F32 { get; set; } // f32 = 11
+        public double F64 { get; set; } // f64 = 12
+        public bool Flag { get; set; } // flag = 13
+        public string? Str { get; set; } // str = 14
+        public int Color { get; set; } // color = 15
+        public Structtest_Inner3? Inner { get; set; } // inner = 16
+        public List<int> Nums { get; set; } = new(); // nums = 17
+        public List<string> Tags { get; set; } = new(); // tags = 18
+        public List<Structtest_Inner3> Inners { get; set; } = new(); // inners = 19
+        public bool HasOptI32 { get; set; }
+        public int OptI32 { get; set; } // opt_i32 = 20
+        public bool HasOptStr { get; set; }
+        public string? OptStr { get; set; } // opt_str = 21
+        public List<bool> Flags { get; set; } = new(); // flags = 22
 
         public byte[] Encode(Schema schema)
         {
@@ -104,7 +104,7 @@ namespace Pbwire.Generated
             }
             if (U64 != 0)
             {
-                msg.Set("u64", U64);
+                msg.Set("u64", (long)U64);
             }
             if (S32 != 0)
             {
@@ -120,7 +120,7 @@ namespace Pbwire.Generated
             }
             if (Fx64 != 0)
             {
-                msg.Set("fx64", Fx64);
+                msg.Set("fx64", (long)Fx64);
             }
             if (Sfx32 != 0)
             {
@@ -188,12 +188,12 @@ namespace Pbwire.Generated
             var o = new Structtest_Scalars3();
             o.I32 = msg.GetInt("i32");
             o.I64 = msg.GetLong("i64");
-            o.U32 = msg.GetInt("u32");
-            o.U64 = msg.GetLong("u64");
+            o.U32 = (uint)msg.GetInt("u32");
+            o.U64 = (ulong)msg.GetLong("u64");
             o.S32 = msg.GetInt("s32");
             o.S64 = msg.GetLong("s64");
-            o.Fx32 = msg.GetInt("fx32");
-            o.Fx64 = msg.GetLong("fx64");
+            o.Fx32 = (uint)msg.GetInt("fx32");
+            o.Fx64 = (ulong)msg.GetLong("fx64");
             o.Sfx32 = msg.GetInt("sfx32");
             o.Sfx64 = msg.GetLong("sfx64");
             o.F32 = msg.GetFloat("f32");

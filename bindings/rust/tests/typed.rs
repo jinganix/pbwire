@@ -17,11 +17,11 @@ fn build() -> Scalars3 {
     Scalars3 {
         i32: i32::MIN,
         i64: i64::MAX,
-        u32: u32::MAX as i32,
-        u64: -1, // u64::MAX bits
+        u32: u32::MAX,
+        u64: u64::MAX,
         s32: i32::MIN,
         s64: i64::MIN,
-        fx32: 0xdeadbeefu32 as i32,
+        fx32: 0xdeadbeef,
         fx64: 72623859790382856,
         sfx32: i32::MIN,
         sfx64: i64::MIN,

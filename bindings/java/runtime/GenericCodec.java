@@ -24,6 +24,12 @@ import java.util.Map;
  * lazy slices retain the input buffer while the message lives; a lazily
  * nested message restarts the MAX_DEPTH budget when materialized; JSON/
  * text mappings still binary-only.
+ *
+ * Small-tier encode floor (136 B, ~0.7x vs generated): one presence gate +
+ * one dispatch + tag load per field plus the result byte[] copy (~80 ns vs
+ * ~60 ns straight-line). Fused writes and Unsafe stores already removed
+ * what tuning can; closing it needs per-message codegen, which this
+ * binding avoids on purpose. Do not retry micro-tuning here.
  */
 public final class GenericCodec {
     private GenericCodec() {

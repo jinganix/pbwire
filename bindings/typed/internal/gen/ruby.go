@@ -50,7 +50,11 @@ func writeRubyMessage(b *strings.Builder, f *model.File, m model.Message) {
 		}
 		switch {
 		case field.Repeated:
-			params = append(params, fmt.Sprintf("%s: []", name))
+			/* nil default, not []: a literal [] would be one array shared by
+			 * every instance constructed without the argument. */
+			params = append(params, fmt.Sprintf("%s: nil", name))
+			assigns = append(assigns, fmt.Sprintf("@%s = %s || []", name, name))
+			continue
 		case field.Message != "":
 			params = append(params, fmt.Sprintf("%s: nil", name))
 		case field.Kind == protoreflect.BoolKind:
