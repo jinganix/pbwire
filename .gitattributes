@@ -1,0 +1,39 @@
+# The Packagist package (jinganix/pbwire, composer.json at the repo root) is
+# the PHP binding plus the C core it dlopen()s. Everything else ships in the
+# git checkout but stays out of the composer dist zip. Adding a new top-level
+# binding? Add it here.
+.github export-ignore
+.githooks export-ignore
+.clang-format export-ignore
+.editorconfig export-ignore
+bench export-ignore
+cmake export-ignore
+CMakeLists.txt export-ignore
+conformance export-ignore
+docs export-ignore
+llms.txt export-ignore
+
+# Sibling bindings: nothing under them is loaded by the PHP package.
+/bindings/cpp export-ignore
+/bindings/csharp export-ignore
+/bindings/dart export-ignore
+/bindings/erlang export-ignore
+/bindings/go export-ignore
+/bindings/java export-ignore
+/bindings/kotlin export-ignore
+/bindings/node export-ignore
+/bindings/objc export-ignore
+/bindings/python export-ignore
+/bindings/ruby export-ignore
+/bindings/rust export-ignore
+/bindings/typed export-ignore
+
+# The C binding minus its test oracle: tests/data/matrix3.* is what the PHP
+# self-checks compare against, so it stays.
+/bindings/c/benchmarks export-ignore
+/bindings/c/conformance export-ignore
+/bindings/c/examples export-ignore
+/bindings/c/plugin export-ignore
+/bindings/c/runtime export-ignore
+/bindings/c/tests/gen export-ignore
+/bindings/c/tests/test_struct.c export-ignore

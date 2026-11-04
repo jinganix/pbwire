@@ -13,7 +13,7 @@
         "ext-ffi": "*"
     },
     "autoload": {
-        "files": ["runtime/pbwire.php"]
+        "files": ["bindings/php/runtime/pbwire.php"]
     },
     "extra": {
         "pbwire": {
