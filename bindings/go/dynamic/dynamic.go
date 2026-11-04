@@ -161,9 +161,9 @@ func (t *MessageType) field(name string) (*C.pbw_field, error) {
 	return f, nil
 }
 
-// Message is one dynamic tree. Roots own their tree (Close frees it);
-// nested views from NewMessage/GetMessage read into the root and must not
-// be freed separately.
+// Message is one dynamic tree. Roots own their tree and MUST be freed with
+// an explicit Close: no finalizer on the hot path (explicit-close discipline).
+// Nested views from NewMessage read into the root and must not be freed.
 type Message struct {
 	typ  *MessageType
 	c    *C.pbw_message
@@ -175,7 +175,6 @@ type Message struct {
 func (t *MessageType) New() *Message {
 	m := &Message{typ: t, c: C.pbw_message_new(t.c), own: true}
 	t.s.retain()
-	runtime.SetFinalizer(m, func(m *Message) { m.Close() })
 	return m
 }
 
@@ -302,20 +301,19 @@ func (m *Message) Encode() ([]byte, error) {
 	return C.GoBytes(unsafe.Pointer(out), C.int(l)), nil
 }
 
-// Decode parses wire bytes into a new root tree; one copy in, one downcall.
+// Decode parses wire bytes into a new root tree; zero-copy in, one downcall.
+// The slice crosses into C for the call only: it holds no Go pointers and
+// decode copies what it keeps, so no C-side input allocation happens.
 func (t *MessageType) Decode(wire []byte) (*Message, error) {
-	var cbuf unsafe.Pointer
-	if len(wire) > 0 {
-		cbuf = C.CBytes(wire)
-		defer C.free(cbuf)
-	}
+	cbuf := unsafe.Pointer(unsafe.SliceData(wire))
 	var out *C.pbw_message
 	if st := C.pbw_decode(t.c, cbuf, C.size_t(len(wire)), &out); st != C.PBW_OK {
+		runtime.KeepAlive(wire)
 		return nil, statusErr("dynamic: decode", st)
 	}
+	runtime.KeepAlive(wire)
 	m := &Message{typ: t, c: out, own: true}
 	t.s.retain()
-	runtime.SetFinalizer(m, func(m *Message) { m.Close() })
 	return m, nil
 }
 
