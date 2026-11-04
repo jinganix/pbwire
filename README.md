@@ -12,7 +12,7 @@ at runtime — a hand-built descriptor tree or a standard `FileDescriptorSet` �
 then builds, reads, encodes and decodes messages dynamically through reflection.
 No `protoc` step, no generated message code, no libprotobuf in the process. It
 speaks proto2, proto3 and edition-2023 descriptor sets, the JSON mapping and the
-text format, and drives fourteen host-language bindings from that one core.
+text format, and drives fifteen host-language bindings from that one core.
 
 The point is not to re-implement Protobuf encoding. It is to let every language
 with a C ABI share one dynamic Protobuf schema and one message-processing core
@@ -55,7 +55,7 @@ pbw_free(buf);
 - **Built for embedding.** Stable C ABI, no globals, caller-confined
   schema/message objects, arena-backed `pbw_ctx` for per-thread hot loops, wire
   input validated at the boundary.
-- **One core, fourteen host languages.** [C](bindings/c/), [C++](bindings/cpp/), [Python](bindings/python/), [Ruby](bindings/ruby/), [Java](bindings/java/), [Kotlin](bindings/kotlin/), [Node](bindings/node/), [Objective-C](bindings/objc/), [PHP](bindings/php/), [Dart](bindings/dart/), [C#](bindings/csharp/), [Rust](bindings/rust/), [Go](bindings/go/) and [Erlang](bindings/erlang/) all speak the same wire
+- **One core, fifteen host languages.** [C](bindings/c/), [C++](bindings/cpp/), [Python](bindings/python/), [Ruby](bindings/ruby/), [Java](bindings/java/), [Kotlin](bindings/kotlin/), [Node](bindings/node/), [Objective-C](bindings/objc/), [PHP](bindings/php/), [Dart](bindings/dart/), [C#](bindings/csharp/), [Rust](bindings/rust/), [Go](bindings/go/), [Erlang](bindings/erlang/) and [Lua](bindings/lua/) all speak the same wire
   format, each with a measured answer to its runtime's own pain point — see
   [what each binding solves](bindings/README.md#what-each-binding-solves).
 
@@ -182,6 +182,7 @@ The one-row summary is here; the detail is there.
 | [C#](bindings/csharp/) | P/Invoke | 3.4x (medium) / 2.0x (medium) | [Google.Protobuf](https://www.nuget.org/packages/Google.Protobuf) + [protobuf-net](https://github.com/protobuf-net/protobuf-net) |
 | [Go](bindings/go/) | cgo dynamic (hot-swappable registry) | 2.57x (xlarge) / 2.13x (xlarge) | [google.golang.org/protobuf](https://pkg.go.dev/google.golang.org/protobuf) |
 | [Erlang](bindings/erlang/) | NIF | 4.21x (xlarge) / 2.21x (medium) | [gpb](https://github.com/tomas-abrahamsson/gpb) |
+| [Lua](bindings/lua/) | C module, tables + builder | 8.17x (xlarge, builder) / 1.20x (large) | [lua-protobuf](https://github.com/starwing/lua-protobuf) |
 
 ¹ C++ has no separate bench; same engine as the C struct codec. Best columns take the highest tier each for encode/decode separately (Apple M4 Pro, `protoc 36.2`); tiers and absolute MB/s are in [BENCHMARKS.md](BENCHMARKS.md).
 

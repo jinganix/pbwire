@@ -179,8 +179,15 @@ conformance-python: python-bind $(CONFORMANCE_DESC)
 		$(PY_ABS) bindings/python/conformance/testee.py \
 		$(CURDIR)/$(CONFORMANCE_DESC)
 
-# Same suite through the Ruby binding (binary wire format; JSON/text answer
+# Same suite through the Lua binding (binary wire format; JSON/text answer
 # "skipped" because the binding has no printers).
+conformance-lua: $(CONFORMANCE_DESC) lua-bind
+	@test -x "$(CONFORMANCE_RUNNER)" || { \
+		echo "conformance_test_runner not found: $(CONFORMANCE_RUNNER)"; \
+		echo "run 'make conformance-setup' first"; exit 1; }
+	$(CONFORMANCE_RUNNER) --failure_list $(CURDIR)/conformance/failure_list_pbwire.txt \
+		$(LUA_ABS) bindings/lua/conformance/testee.lua \
+		$(CURDIR)/$(CONFORMANCE_DESC)
 conformance-ruby: $(CONFORMANCE_DESC) ruby-bind
 	@test -x "$(CONFORMANCE_RUNNER)" || { \
 		echo "conformance_test_runner not found: $(CONFORMANCE_RUNNER)"; \
@@ -329,6 +336,19 @@ ruby-bind:
 ruby-test: ruby-bind
 	$(RUBY) bindings/ruby/test/test_pbwire.rb
 
+LUA ?= lua
+LUA_ABS := $(shell command -v $(LUA) 2>/dev/null || echo $(LUA))
+
+# Builds bindings/lua/pbwire.so for $(LUA); the core is linked in
+# statically, so the binding needs no library path at run time.
+lua-bind:
+	LUA=$(LUA) sh bindings/lua/build.sh
+
+lua-test: lua-bind
+	cd bindings/lua && $(LUA) tests/test.lua
+	cd bindings/lua && $(LUA) tests/test_fuzz.lua
+	cd bindings/lua && $(LUA) examples/roundtrip.lua
+
 node-test:
 	./bindings/node/build.sh
 
@@ -383,6 +403,9 @@ java-bench:
 
 ruby-bench: ruby-bind
 	RUBY=$(RUBY) ./scripts/bench-run.sh --binding ruby -- sh bindings/ruby/benchmarks/bench.sh
+
+lua-bench: lua-bind
+	LUA=$(LUA) ./scripts/bench-run.sh --binding lua -- sh bindings/lua/benchmarks/bench.sh
 
 node-bench:
 	./scripts/bench-run.sh --binding node -- ./bindings/node/benchmarks/bench.sh
@@ -439,11 +462,13 @@ clean:
 		bindings/kotlin/out bindings/php/benchmarks/gen \
 		bindings/dart/benchmarks/gen bindings/csharp/benchmarks/gen \
 		bindings/csharp/*/obj bindings/csharp/*/bin \
-		bindings/rust/target bindings/rust/benchmarks/gen
+		bindings/rust/target bindings/rust/benchmarks/gen \
+	bindings/lua/pbwire.so bindings/lua/pbwire.o
 
 .PHONY: all test examples format format-check bench bench-c erlang-bench \
 	python-bind python-test python-bench difftest conformance conformance-python \
-	conformance-ruby conformance-java ruby-bind java-test ruby-test node-test objc-test \
+	conformance-ruby conformance-java conformance-lua ruby-bind java-test ruby-test node-test objc-test \
+	lua-bind lua-test lua-bench \
 	java-bench ruby-bench node-bench objc-bench \
 	kotlin-test php-test dart-test rust-test csharp-test \
 	kotlin-bench php-bench dart-bench rust-bench csharp-bench \
