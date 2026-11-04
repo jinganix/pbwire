@@ -1,6 +1,6 @@
 name: pbwire
 description: Dynamic protobuf over the pbwire C ABI, schema at runtime, no generated code.
-version: 0.1.4
+version: 0.1.5
 repository: https://github.com/jinganix/pbwire
 
 environment:
