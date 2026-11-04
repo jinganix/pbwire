@@ -173,7 +173,7 @@ The one-row summary is here; the detail is there.
 | [Ruby](bindings/ruby/) | C extension, linked | 1.42x (small) / 1.93x (large) | [google-protobuf gem](https://rubygems.org/gems/google-protobuf) |
 | [Java](bindings/java/) | pure-Java codec, no native code | 1.25x (medium) / 3.20x (xlarge) | [protobuf-java](https://github.com/protocolbuffers/protobuf/tree/main/java) |
 | [Kotlin](bindings/kotlin/) | Java runtime + DSL | 1.60x (xlarge) / 1.20x (medium) | [protobuf-kotlin](https://github.com/protocolbuffers/protobuf/tree/main/java/kotlin) |
-| [Node](bindings/node/) | N-API addon | 22.3x (xlarge) / 20.0x (xlarge) | [jspb](https://www.npmjs.com/package/google-protobuf) + protobufjs |
+| [Node](bindings/node/) | N-API addon | 22.3x (xlarge) / 20.0x (xlarge) | [jspb](https://www.npmjs.com/package/google-protobuf) + [protobufjs](https://www.npmjs.com/package/protobufjs) |
 | [Objective-C](bindings/objc/) | ARC wrapper | 6.6x (medium) / 2.9x (large) | [protobuf-objc](https://github.com/protocolbuffers/protobuf/tree/main/objectivec) |
 | [PHP](bindings/php/) | C extension | 1.11x (xlarge) / 1.15x (xlarge) vs C ext (374x / 127x vs pure PHP) | [protobuf-php](https://github.com/protocolbuffers/protobuf/tree/main/php) |
 | [Dart](bindings/dart/) | `dart:ffi` | 12.2x (xlarge) / 3.3x (xlarge) | [protobuf-dart](https://pub.dev/packages/protobuf) |

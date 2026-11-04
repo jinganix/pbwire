@@ -73,7 +73,7 @@ binding has two representations and only comparing like with like is fair.
 | C++ | same engine as C (`bindings/cpp` mirrors the C structs) | — | — | planned |
 | Go (`cgo` dynamic) | `make go-bench` (`bindings/go/benchmarks`) | `protobuf-go` generated code from the same `matrix3.proto` | all 4 | 2.57x / 2.13x ✅ |
 | Java (pure-Java codec) | `make java-bench` (`bindings/java/benchmarks`) | `protobuf-java` generated code from the same `matrix3.proto` | all 4 | 1.21x / 2.40x ✅ (0.75x at 136 B) |
-| Node (N-API addon) | `make node-bench` (`bindings/node/benchmarks`) | `google-protobuf` (jspb) + protobufjs (fastest) from the same `matrix3.proto` | all 4 | 22.3x / 20.0x vs jspb (2.7x / 4.1x vs protobufjs) ✅ |
+| Node (N-API addon) | `make node-bench` (`bindings/node/benchmarks`) | `google-protobuf` (jspb) + [protobufjs](https://www.npmjs.com/package/protobufjs) (fastest) from the same `matrix3.proto` | all 4 | 22.3x / 20.0x vs jspb (2.7x / 4.1x vs protobufjs) ✅ |
 | Ruby (C extension) | `make ruby-bench` (`bindings/ruby/benchmarks`) | the `google-protobuf` gem (C extension) | all 4 | 1.05x / 1.69x ✅ |
 | Objective-C (ARC) | `make objc-bench` (`bindings/objc/benchmarks`) | the `protobuf` ObjC runtime + generated code from the same `matrix3.proto` | all 4 | 1.8x / 2.7x ✅ |
 | Kotlin (same FFM layer as Java) | `make kotlin-bench` (`bindings/kotlin/benchmarks`) | `protoc --kotlin_out` over `protobuf-java`, same `matrix3.proto` | all 4 | 1.60x / 1.19x ✅ (0.67x at 136 B) |

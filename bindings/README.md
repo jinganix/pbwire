@@ -85,7 +85,7 @@ the full tables are.
 | Ruby | the `google-protobuf` gem materializes and re-encodes every field; a Fiddle bridge costs ~3 µs per downcall | C extension over the core: builder tree for writes, validating wire view for reads | 1.05x / 1.69x (vs the gem) |
 | Java | JNI glue, or protobuf-java re-deriving sizes before every write | pure-Java codec: columnar values, lazy decode, `Unsafe` stores (no JNI, no native lib, no generator) | 1.15x / 3.20x (vs protobuf-java) |
 | Kotlin | official Kotlin is Kotlin over protobuf-java | reuses the Java runtime, adds a DSL | 1.60x / 1.19x (vs protobuf-kotlin) |
-| Node | jspb resolves a code/type table per field and hands every repeated element to a closure | N-API addon (node headers only), reusable buffer, wire view for decoded messages | 22.3x / 20.0x (vs jspb; 2.7x / 4.1x vs protobufjs) |
+| Node | jspb resolves a code/type table per field and hands every repeated element to a closure | N-API addon (node headers only), reusable buffer, wire view for decoded messages | 22.3x / 20.0x (vs jspb; 2.7x / 4.1x vs [protobufjs](https://www.npmjs.com/package/protobufjs)) |
 | Objective-C | the ObjC runtime allocates and copies per field | ARC wrapper: the encoder's buffer is handed to `NSData` with no copy | 1.8x / 2.7x (vs protobuf-objc) |
 | PHP | the official runtime is pure PHP, all per-field bookkeeping in the interpreter | native C extension over the core (`ext-ffi` wrapper without a compiler) | 1.11x / 1.15x (vs C ext; 374x / 127x vs pure PHP) |
 | Dart | a pure-Dart field loop dominates, and FFI adds copies | `dart:ffi` plus the core's arena | 12.2x / 3.3x (vs protobuf-dart) |
