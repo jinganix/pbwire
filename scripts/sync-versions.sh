@@ -63,7 +63,7 @@ if [[ $CHECK == 1 ]]; then
   exit 0
 fi
 
-setver CMakeLists.txt -e "s/^project(pbwire VERSION )[0-9.]*/project(pbwire VERSION $VER/"
+setver CMakeLists.txt -e "s/^project[(]pbwire VERSION [0-9.]*/project(pbwire VERSION $VER/"
 setver Makefile -e "s/-current_version [0-9.]*/-current_version $VER/"
 setver bindings/dart/pubspec.yaml -e "s/^version: .*/version: $VER/"
 setver bindings/dart/benchmarks/pubspec.yaml -e "s/^version: .*/version: $VER/"

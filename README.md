@@ -3,7 +3,7 @@
 [![Language](https://img.shields.io/badge/C-C99-blue.svg)](#requirements-and-build)
 [![Dependencies](https://img.shields.io/badge/runtime%20dependencies-none-brightgreen.svg)](#at-a-glance)
 
-> **Release [`v0.1.0`](https://github.com/jinganix/pbwire/releases/tag/v0.1.0)** — every binding ships this one version; [`VERSION`](VERSION) is the source of truth, `scripts/sync-versions.sh` propagates it.
+> **Release [`v0.1.1`](https://github.com/jinganix/pbwire/releases/tag/v0.1.1)** — every binding ships this one version; [`VERSION`](VERSION) is the source of truth, `scripts/sync-versions.sh` propagates it.
 
 # pbwire — a dynamic Protobuf runtime for C, no code generation
 
