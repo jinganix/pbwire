@@ -29,4 +29,4 @@ rm -rf "$out"
 mkdir -p "$out"
 javac -d "$out" -cp "$jar" "$here"/*.java "$gen"/structtest/*.java
 
-exec java -cp "$out:$jar" PureBench "$gen/matrix3.desc"
+exec java -cp "$out:$jar" mvp.PureBench "$gen/matrix3.desc"

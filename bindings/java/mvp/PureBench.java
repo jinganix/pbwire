@@ -1,3 +1,5 @@
+package mvp;
+
 import com.google.protobuf.DescriptorProtos;
 import com.google.protobuf.Descriptors;
 import java.io.UncheckedIOException;
