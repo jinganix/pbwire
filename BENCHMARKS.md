@@ -8,6 +8,8 @@ across languages. The single-glance comparison is the
 is the detail behind it.
 
 - [Standard cases](#standard-cases) — what the four tiers are
+- [Output format](#output-format) — what one harness block means
+- [Test environment](#test-environment) — the machine and toolchain behind every number below
 - [At a glance](#at-a-glance-every-binding-one-tier) — every binding, one tier
 - [Bindings vs their baselines](#bindings-vs-their-baselines) — who is ahead and by how much
 - [Core](#core-pbw_ctx-vs-plain-vs-generated) — ctx vs plain vs generated vs `DynamicMessage`, threads, streaming
@@ -61,6 +63,38 @@ call) after the standard four rows; only the standard block is aggregated
 below. The Python harness names its ops by the task instead (`encode(data)`,
 `decode(bytes)`, `to_dict(bytes)`, `encode(parsed)`), because a dict-based
 binding has two representations and only comparing like with like is fair.
+
+## Test environment
+
+Every table below was pasted from runs on the same machine, so MB/s can be
+read across rows (compare `x baseline` between bindings, not absolute MB/s
+across languages — the payload, the boundary cost and the baseline all
+differ). The per-run proof lives next to each harness run, not here: every
+`make *-bench` target writes a versioned JSON record into `results/`
+(git-ignored) holding the timestamp, git sha, OS/arch/CPU/cores/RAM,
+`protoc` and compiler versions, and the full log (see
+[Regenerate this file](#regenerate-this-file)). Re-paste the tables after
+re-running, and refresh this section when the machine or toolchain moves.
+
+Last full refresh, all rows below unless a table says otherwise:
+
+| piece | version |
+|---|---|
+| machine | Apple M4 Pro, 14 cores, 48 GB RAM |
+| OS | macOS (Darwin 27.0.0, arm64) |
+| C/C++ | Apple clang 21.0.0, `-O2` |
+| `protoc` / libprotobuf C++ | 36.2 |
+| Python | 3.15.2, `protobuf` 7.36.2 (upb) |
+| Erlang/OTP | 29.0.1 |
+| Node | v26.3.0 (`google-protobuf` 4.0.3, protobufjs 8.8.1) |
+| Go | 1.27.3 |
+| Java | OpenJDK 26.0.1 |
+| Ruby | 4.0.9 (`google-protobuf` gem 4.36.2) |
+| Objective-C | same clang, Xcode Foundation |
+| PHP | 8.5.12 (`protobuf` C extension 5.36.2) |
+| Dart | 3.13.7 |
+| Rust | 1.99.1 |
+| C# | .NET 10.0.403 |
 
 ## Bindings vs their baselines
 
@@ -234,8 +268,8 @@ No binding gained a slower encode/decode path from this layer.
 
 Per-language index: [Core](#core-pbw_ctx-vs-plain-vs-generated) · [C structs](#c-structs-vs-protoc-generated-same-matrix3proto) · [Go](#go-cgo-dynamic) · [Python](#python-vs-googleprotobuf-upb) · [Java](#java-vs-protobuf-java) · [Node](#node-vs-google-protobuf-jspb) · [Ruby](#ruby-c-extension-vs-the-google-protobuf-gem) · [Objective-C](#objective-c-vs-the-protobuf-objc-runtime) · [Kotlin](#kotlin-vs-protoc---kotlin_out-over-protobuf-java) · [PHP](#php-vs-the-official-php-runtime-pure--c-extension) · [Dart](#dart-vs-the-protobuf-dart-package) · [Rust](#rust-vs-rust-protobuf-3x) · [C#](#c-vs-googleprotobuf) · [Erlang](#erlang-pbwire-vs-gpb-vs-gpb-nif). In every table below, ✅ means that cell beats its baseline (≥1.0x), ❌ means it does not.
 
-Apple M4 Pro, `-O2`, `protoc 36.2`, protobuf Python 7.36.2 (upb), Erlang
-29.0.1. Every harness calibrates from its tier floor until one pass takes at
+See [Test environment](#test-environment) for the machine and toolchain.
+Every harness calibrates from its tier floor until one pass takes at
 least 0.25 s, then reports the best of 3 passes (Erlang uses the same bar
 with a 0.25 s sample time). Throughput in MB/s
 on serialized wire size. Per-run noise is a few percent; regenerate below for
