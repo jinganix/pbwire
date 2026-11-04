@@ -29,14 +29,16 @@ end
 desc = ARGV[0] || File.expand_path('../../../examples/addressbook.desc', __dir__)
 bin = ARGV[1] || File.expand_path('../../../examples/addressbook.bin', __dir__)
 
-schema = Pbwire::Schema.from_file(desc)
-wire = build.encode(schema)
-raise "encode does not match #{bin}" if File.exist?(bin) && wire != File.binread(bin)
+# Block form closes the schema even on exception, like File.open;
+# without a block the caller owns it and closes explicitly.
+Pbwire::Schema.from_file(desc) do |schema|
+  wire = build.encode(schema)
+  raise "encode does not match #{bin}" if File.exist?(bin) && wire != File.binread(bin)
 
-back = Pbwire::Gen::Tutorial_AddressBook.decode(schema, wire)
-puts "addressbook: #{wire.bytesize} bytes, #{back.people.length} people"
-back.people.each do |person|
-  puts "  #{person.name} (#{person.id}) #{person.has_email ? person.email : ''}"
-  person.phones.each { |phone| puts "    #{phone.number}" }
+  back = Pbwire::Gen::Tutorial_AddressBook.decode(schema, wire)
+  puts "addressbook: #{wire.bytesize} bytes, #{back.people.length} people"
+  back.people.each do |person|
+    puts "  #{person.name} (#{person.id}) #{person.has_email ? person.email : ''}"
+    person.phones.each { |phone| puts "    #{phone.number}" }
+  end
 end
-schema.close
