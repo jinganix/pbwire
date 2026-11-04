@@ -181,7 +181,8 @@ jobs:
           [ -n "$NUGET_API_KEY" ] || { echo "NUGET_API_KEY unset, skipping"; exit 0; }
           dotnet pack bindings/csharp/Pbwire/Pbwire.csproj -c Release
           dotnet nuget push "bindings/csharp/Pbwire/bin/Release/*.nupkg" \
-            --api-key "$NUGET_API_KEY" --source https://api.nuget.org/v3/index.json
+            --api-key "$NUGET_API_KEY" --source https://api.nuget.org/v3/index.json \
+            --skip-duplicate
 
   pub:
     name: pub.dev (bindings/dart, OIDC)
@@ -217,8 +218,11 @@ jobs:
           MAVEN_PASSWORD: ${{ secrets.MAVEN_PASSWORD }}
         run: |
           [ -n "$MAVEN_USERNAME" ] || { echo "Maven secrets unset, skipping"; exit 0; }
-          (cd bindings/java && mvn -B deploy -DskipTests -Dgpg.passphrase=)
-          (cd bindings/kotlin && mvn -B deploy -DskipTests -Dgpg.passphrase=)
+          (cd bindings/java && mvn -B deploy -DskipTests)
+          # Kotlin resolves pbwire-java from Central, which lags publishes:
+          # install it into this runner's local repo first.
+          (cd bindings/java && mvn -B install -DskipTests -Dgpg.skip=true)
+          (cd bindings/kotlin && mvn -B deploy -DskipTests)
 
   cocoapods:
     name: CocoaPods (bindings/objc)
