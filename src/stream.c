@@ -155,9 +155,6 @@ pbw_istream_next(pbw_istream *s, const pbw_descriptor *desc, pbw_message **out)
     if (used > avail || frame > avail - used) {
         return PBW_OK;
     }
-    if (frame > 0 && base + used == NULL) {
-        return PBW_ERR_INVALID;
-    }
     status = pbw_decode_limits(desc, base + used, frame, &s->limits, out);
     if (status != PBW_OK) {
         return status;
