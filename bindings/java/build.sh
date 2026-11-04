@@ -16,7 +16,7 @@ fi
 rm -rf "$here/out"
 mkdir -p "$here/out"
 # shellcheck disable=SC2046 # the source paths hold no whitespace
-javac -d "$here/out" $(find "$here/runtime" "$here/examples" "$here/tests" -name '*.java')
+javac -d "$here/out" $(find "$here/runtime" "$here/examples" "$here/tests" "$here/conformance" -name '*.java')
 
 # Self-check: TestPbwire is the binding gate, TestTyped covers the typed models
 # (needs the pinned matrix3 descriptor + bytes, both checked in).

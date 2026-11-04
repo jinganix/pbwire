@@ -6,6 +6,8 @@
 
 #include "internal.h"
 
+const uint8_t pbw_empty_input[1] = {0};
+
 size_t
 pbw_varint_write(uint8_t *out, uint64_t value)
 {
@@ -27,8 +29,10 @@ pbw_varint_read(const uint8_t *p, const uint8_t *end, uint64_t *value,
 {
     uint64_t result;
     unsigned i;
+    size_t avail;
 
-    if (p >= end) {
+    if (p == NULL || end == NULL || value == NULL || used == NULL ||
+        p >= end) {
         return 0;
     }
     /* One-byte varints (small tags and lengths) are the common case. */
@@ -38,9 +42,10 @@ pbw_varint_read(const uint8_t *p, const uint8_t *end, uint64_t *value,
         *used = 1;
         return 1;
     }
-    if ((size_t)(end - p) < 10) {
+    avail = pbw_remaining(end, p);
+    if (avail < 10) {
         result = 0;
-        for (i = 0; i < 10 && p + i < end; i++) {
+        for (i = 0; i < 10 && (size_t)i < avail; i++) {
             uint8_t byte = p[i];
 
             result |= (uint64_t)(byte & 0x7f) << (7 * i);
@@ -117,8 +122,10 @@ pbw_tag_read(const uint8_t *p, const uint8_t *end, uint32_t *tag, size_t *used)
 {
     uint32_t result;
     unsigned i;
+    size_t avail;
 
-    if (p >= end) {
+    if (p == NULL || end == NULL || tag == NULL || used == NULL ||
+        p >= end) {
         return 0;
     }
     result = p[0];
@@ -128,10 +135,11 @@ pbw_tag_read(const uint8_t *p, const uint8_t *end, uint32_t *tag, size_t *used)
         return 1;
     }
     result &= 0x7f;
+    avail = pbw_remaining(end, p);
     /* A tag is a varint32: the fifth byte only contributes its four low bits,
      * anything above is dropped exactly like the reference parser (a 5-byte tag
      * may overflow without being rejected). A 6-byte tag is invalid. */
-    for (i = 1; i < 5 && p + i < end; i++) {
+    for (i = 1; i < 5 && (size_t)i < avail; i++) {
         uint32_t byte = p[i];
 
         result |= (byte & 0x7f) << (7 * i);
@@ -152,8 +160,10 @@ pbw_len_read(const uint8_t *p, const uint8_t *end, size_t *len, size_t *used)
 {
     uint32_t result;
     unsigned i;
+    size_t avail;
 
-    if (p >= end) {
+    if (p == NULL || end == NULL || len == NULL || used == NULL ||
+        p >= end) {
         return 0;
     }
     result = p[0];
@@ -163,7 +173,8 @@ pbw_len_read(const uint8_t *p, const uint8_t *end, size_t *len, size_t *used)
         return 1;
     }
     result &= 0x7f;
-    for (i = 1; i < 5 && p + i < end; i++) {
+    avail = pbw_remaining(end, p);
+    for (i = 1; i < 5 && (size_t)i < avail; i++) {
         uint32_t byte = p[i];
 
         if (i == 4 && (byte & 0x7f) > 0x0f) {
@@ -213,7 +224,11 @@ pbw_buf_reserve(pbw_buf *buf, size_t extra)
     size_t cap;
     uint8_t *data;
 
-    if (buf->oom) {
+    if (buf == NULL || buf->oom) {
+        return 0;
+    }
+    if (!pbw_cap_holds(buf->cap, buf->len)) {
+        buf->oom = 1;
         return 0;
     }
     need = buf->len + extra;

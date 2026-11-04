@@ -298,8 +298,21 @@ static void
 j_quoted(j_out *j, const uint8_t *data, size_t len)
 {
     static const char *hex = "0123456789abcdef";
-    const uint8_t *p = data;
-    const uint8_t *end = data + len;
+    const uint8_t *p;
+    const uint8_t *end;
+
+    if (j == NULL || j->status != PBW_OK) {
+        return;
+    }
+    if (data == NULL) {
+        if (len > 0) {
+            j->status = PBW_ERR_INVALID;
+            return;
+        }
+        data = pbw_empty_input;
+    }
+    p = data;
+    end = data + len;
 
     j_ch(j, '"');
     while (p < end) {
@@ -367,7 +380,7 @@ j_quoted(j_out *j, const uint8_t *data, size_t len)
         }
         /* Pass UTF-8 through after validating the whole scalar. */
         {
-            size_t left = (size_t)(end - p);
+            size_t left = pbw_remaining((const uint8_t *)end, (const uint8_t *)p);
             uint32_t rune = 0;
             size_t width = 0;
 
@@ -418,11 +431,24 @@ j_base64(j_out *j, const uint8_t *data, size_t len)
 {
     static const char *alphabet =
         "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    const uint8_t *p = data;
-    const uint8_t *end = data + len;
+    const uint8_t *p;
+    const uint8_t *end;
+
+    if (j == NULL || j->status != PBW_OK) {
+        return;
+    }
+    if (data == NULL) {
+        if (len > 0) {
+            j->status = PBW_ERR_INVALID;
+            return;
+        }
+        data = pbw_empty_input;
+    }
+    p = data;
+    end = data + len;
 
     j_ch(j, '"');
-    while ((size_t)(end - p) >= 3) {
+    while (pbw_remaining(end, p) >= 3) {
         char out[4];
 
         out[0] = alphabet[p[0] >> 2];
@@ -432,7 +458,7 @@ j_base64(j_out *j, const uint8_t *data, size_t len)
         j_put(j, out, 4);
         p += 3;
     }
-    if ((size_t)(end - p) == 2) {
+    if (pbw_remaining((const uint8_t *)end, (const uint8_t *)p) == 2) {
         char out[4];
 
         out[0] = alphabet[p[0] >> 2];
@@ -440,7 +466,7 @@ j_base64(j_out *j, const uint8_t *data, size_t len)
         out[2] = alphabet[(p[1] & 0xf) << 2];
         out[3] = '=';
         j_put(j, out, 4);
-    } else if ((size_t)(end - p) == 1) {
+    } else if (pbw_remaining((const uint8_t *)end, (const uint8_t *)p) == 1) {
         char out[4];
 
         out[0] = alphabet[p[0] >> 2];
@@ -1213,7 +1239,16 @@ j_print_value(j_out *j, const pbw_message *msg)
 static void
 j_print_struct_value(j_out *j, const pbw_message *msg)
 {
-    const pbw_value *fields = pbw_message_get(msg, 1);
+    const pbw_value *fields;
+
+    if (j == NULL || j->status != PBW_OK || msg == NULL ||
+        msg->desc == NULL) {
+        if (j != NULL && j->status == PBW_OK) {
+            j->status = PBW_ERR_INVALID;
+        }
+        return;
+    }
+    fields = pbw_message_get(msg, 1);
     size_t i;
 
     j_ch(j, '{');
@@ -1265,7 +1300,16 @@ j_print_struct_value(j_out *j, const pbw_message *msg)
 static void
 j_print_list_value(j_out *j, const pbw_message *msg)
 {
-    const pbw_value *values = pbw_message_get(msg, 1);
+    const pbw_value *values;
+
+    if (j == NULL || j->status != PBW_OK || msg == NULL ||
+        msg->desc == NULL) {
+        if (j != NULL && j->status == PBW_OK) {
+            j->status = PBW_ERR_INVALID;
+        }
+        return;
+    }
+    values = pbw_message_get(msg, 1);
 
     j_ch(j, '[');
     if (values != NULL && values->kind == PBW_VALUE_LIST) {
@@ -1492,7 +1536,16 @@ j_print_fields(j_out *j, const pbw_message *msg)
 static void
 j_print_message(j_out *j, const pbw_message *msg)
 {
-    if (j->status != PBW_OK) {
+    if (j == NULL || j->status != PBW_OK || msg == NULL ||
+        msg->desc == NULL) {
+        if (j != NULL && j->status == PBW_OK) {
+            j->status = PBW_ERR_INVALID;
+        }
+        return;
+    }
+    if (msg->desc->field_count > 0 &&
+        (msg->values == NULL || msg->present == NULL)) {
+        j->status = PBW_ERR_INVALID;
         return;
     }
     switch (j_classify(msg->desc)) {
@@ -1702,7 +1755,7 @@ j_valid_utf8(const uint8_t *data, size_t len)
         } else {
             return 0;
         }
-        if (width > (size_t)(end - p)) {
+        if (width > pbw_remaining((const uint8_t *)end, (const uint8_t *)p)) {
             return 0;
         }
         for (k = 1; k < width; k++) {
@@ -1816,8 +1869,8 @@ j_parse_string(j_in *j, pbw_buf *out)
                 if (rune >= 0xd800 && rune <= 0xdbff) {
                     uint32_t lo = 0;
 
-                    if (j->cur.p + 1 >= j->cur.end || j->cur.p[0] != '\\' ||
-                        j->cur.p[1] != 'u') {
+                    if (pbw_remaining((const uint8_t *)j->cur.end, (const uint8_t *)j->cur.p) < 2 ||
+                        j->cur.p[0] != '\\' || j->cur.p[1] != 'u') {
                         return PBW_ERR_INVALID;
                     }
                     j->cur.p += 2;
@@ -2048,10 +2101,16 @@ j_atod(const char *text, size_t len, int dot, double *out)
     char *stop;
     double v;
 
+    if (text == NULL || out == NULL) {
+        return PBW_ERR_INVALID;
+    }
     /* strtod skips leading whitespace itself, but not trailing garbage. A
      * number longer than the stack buffer is unusual, not invalid: the
      * reference parser has no length limit either. */
     if (len >= sizeof(stack)) {
+        if (len == SIZE_MAX) {
+            return PBW_ERR_NOMEM;
+        }
         tmp = (char *)malloc(len + 1);
         if (tmp == NULL) {
             return PBW_ERR_NOMEM;
@@ -2059,6 +2118,9 @@ j_atod(const char *text, size_t len, int dot, double *out)
     }
     memcpy(tmp, text, len);
     tmp[len] = '\0';
+    if (tmp == NULL) {
+        return PBW_ERR_INVALID;
+    }
     v = pbw_strtod(tmp, &stop, dot);
     if (stop == tmp) {
         goto invalid;
@@ -2141,7 +2203,10 @@ j_parse_key(j_in *j, pbw_buf *out)
             }
             n++;
         }
-        if (n == 0 || (j->cur.p[0] >= '0' && j->cur.p[0] <= '9')) {
+        if (n == 0) {
+            return PBW_ERR_INVALID;
+        }
+        if (j->cur.p >= j->cur.end || (j->cur.p[0] >= '0' && j->cur.p[0] <= '9')) {
             return PBW_ERR_INVALID;
         }
         if ((n == 4 && memcmp(j->cur.p, "true", 4) == 0) ||
@@ -2517,8 +2582,20 @@ j_base64_value(char c)
 static pbw_status
 j_parse_base64(const char *text, size_t len, pbw_buf *out)
 {
-    size_t n = len;
+    size_t n;
     size_t i = 0;
+    size_t need;
+
+    if (out == NULL) {
+        return PBW_ERR_INVALID;
+    }
+    if (text == NULL && len > 0) {
+        return PBW_ERR_INVALID;
+    }
+    if (text == NULL) {
+        text = (const char *)pbw_empty_input;
+    }
+    n = len;
 
     /* Padding, if any, is 1-2 '=' at the very end. */
     while (n > 0 && text[n - 1] == '=') {
@@ -2536,7 +2613,13 @@ j_parse_base64(const char *text, size_t len, pbw_buf *out)
          * fill complete quanta, like the reference. */
         return PBW_ERR_INVALID;
     }
-    if (!pbw_buf_reserve(out, (n / 4) * 3 + 3)) {
+    /* (n/4)*3+3 cannot wrap: n <= SIZE_MAX, so (n/4)*3 <= n on both
+     * 32- and 64-bit targets. */
+    need = (n / 4) * 3 + 3;
+    if (need < (n / 4) * 3) {
+        return PBW_ERR_NOMEM;
+    }
+    if (!pbw_buf_reserve(out, need)) {
         return PBW_ERR_NOMEM;
     }
     while (i < (n & ~(size_t)3)) {
@@ -4312,10 +4395,21 @@ pbw_json_parse_opts(const pbw_descriptor *desc, const char *text,
     j_in j;
     pbw_message *msg;
 
+    if (out != NULL) {
+        *out = NULL;
+    }
     if (desc == NULL || (text == NULL && len != 0) || out == NULL) {
         return PBW_ERR_INVALID;
     }
-    *out = NULL;
+    if (desc->is_enum) {
+        return PBW_ERR_TYPE;
+    }
+    if (desc->schema != NULL && !desc->schema->linked) {
+        return PBW_ERR_INVALID;
+    }
+    if (text == NULL) {
+        text = (const char *)pbw_empty_input;
+    }
     msg = pbw_message_new(desc);
     if (msg == NULL) {
         return PBW_ERR_NOMEM;

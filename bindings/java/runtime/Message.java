@@ -218,6 +218,7 @@ public final class Message implements AutoCloseable {
     }
 
     private boolean hasAt(int slot) {
+        segment();
         return data.has(type.def.fields[slot].number);
     }
 
@@ -233,6 +234,7 @@ public final class Message implements AutoCloseable {
     }
 
     private Object getAt(int slot) {
+        segment();
         GenericCodec.Field f = type.def.fields[slot];
         if (f.repeated) {
             return getList(slot);
@@ -412,6 +414,7 @@ public final class Message implements AutoCloseable {
     }
 
     private List<Object> getListAt(int slot) {
+        segment();
         GenericCodec.Field f = type.def.fields[slot];
         if (!f.repeated) {
             throw new PbwireException(type.name() + ": field " + f.number

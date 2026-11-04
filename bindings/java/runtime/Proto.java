@@ -117,6 +117,7 @@ final class Proto {
         String name;
         String pkg = "";
         String syntax = "proto2"; // absent means proto2
+        boolean edition; // field 14: editions files behave as proto3
         final List<String> deps = new ArrayList<>();
         final List<Message> messages = new ArrayList<>();
         final List<Field> extensions = new ArrayList<>();
@@ -154,7 +155,9 @@ final class Proto {
             }
         }
         for (File f : files) {
-            boolean proto3 = "proto3".equals(f.syntax);
+            // Editions files carry syntax "editions" plus field 14: the core
+            // treats them as proto3, so packed defaults and presence match.
+            boolean proto3 = "proto3".equals(f.syntax) || f.edition;
             for (Message m : f.messages) {
                 linkMessage(m, f.pkg, proto3, byName);
             }
@@ -262,27 +265,35 @@ final class Proto {
         while (r.pos < r.end) {
             int tag = (int) Wire.rVar(r);
             int num = tag >>> 3;
-            switch (tag & 7) {
-                case Wire.WT_LEN:
-                    int n = Wire.rLen(r);
-                    if (num == 4) {
-                        f.messages.add(parseMessage(r.b, r.pos, n));
-                    } else if (num == 7) {
-                        f.extensions.add(parseField(r.b, r.pos, n, true));
-                    } else if (num == 1) {
-                        f.name = str(r.b, r.pos, n);
-                    } else if (num == 2) {
-                        f.pkg = str(r.b, r.pos, n);
-                    } else if (num == 3) {
-                        f.deps.add(str(r.b, r.pos, n));
-                    } else if (num == 12) {
-                        f.syntax = str(r.b, r.pos, n);
-                    }
-                    r.pos += n;
-                    break;
-                default:
-                    Wire.skip(r, tag & 7);
-                    break;
+            int wt = tag & 7;
+            if (wt == Wire.WT_VARINT) {
+                // Field 14 is the edition marker; its value is irrelevant.
+                if (num == 14) {
+                    Wire.rVar(r);
+                    f.edition = true;
+                } else {
+                    Wire.skip(r, wt);
+                }
+                continue;
+            }
+            if (wt == Wire.WT_LEN) {
+                int n = Wire.rLen(r);
+                if (num == 4) {
+                    f.messages.add(parseMessage(r.b, r.pos, n));
+                } else if (num == 7) {
+                    f.extensions.add(parseField(r.b, r.pos, n, true));
+                } else if (num == 1) {
+                    f.name = str(r.b, r.pos, n);
+                } else if (num == 2) {
+                    f.pkg = str(r.b, r.pos, n);
+                } else if (num == 3) {
+                    f.deps.add(str(r.b, r.pos, n));
+                } else if (num == 12) {
+                    f.syntax = str(r.b, r.pos, n);
+                }
+                r.pos += n;
+            } else {
+                Wire.skip(r, wt);
             }
         }
         return f;

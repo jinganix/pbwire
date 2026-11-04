@@ -1,10 +1,16 @@
 # pbwire PHP binding
 
-`bindings/php/runtime` is the PHP binding: an `FFI` wrapper over the C ABI in
+Two versions, one API (`Pbwire\Schema`, `Type`, `Field`, `Message`, `Value`):
+
+- `runtime/` is the default: an `FFI` wrapper over the C ABI in
 [`include/pbwire.h`](../../include/pbwire.h). PHP ships `ext-ffi`, so there is no
 C extension to compile and no composer package: the shared library is
 `dlopen()`ed, and a `FileDescriptorSet` (`protoc --descriptor_set_out`) becomes
 the schema at run time. No generated code, no build step.
+- `ext/` is the native sibling: the same classes as a C extension with the
+  core compiled in (like the Ruby C extension), so small payloads skip the
+  per-call FFI trampoline. `runtime/pbwire.php` returns early when it is
+  loaded, so the two never declare the same class twice.
 
 ```php
 use Pbwire\Schema;
@@ -43,15 +49,27 @@ points at it; otherwise the binding looks next to the checkout and in `./build`.
 
 ```shell
 make shared
-php tests/test.php                                  # self-check vs pinned protoc bytes
+php tests/test.php                                  # FFI self-check vs pinned protoc bytes
+make php-ext-test                                   # same checks through the C extension
 php examples/roundtrip.php                          # example
 ```
+
+```shell
+cd ext && ./build.sh                               # builds ext/modules/pbwire.so
+php -d extension=$PWD/ext/modules/pbwire.so tests/test.php
+```
+
+`composer.json` requires `ext-ffi` for the default wrapper; the C extension
+needs only the `.so` above (no `PBWIRE_LIB`, no shared library).
 
 ## Benchmarks
 
 ```shell
-./benchmarks/bench.sh    # vs the official google/protobuf PHP runtime (pure + C ext), four tiers
+./benchmarks/bench.sh    # FFI, then the C extension when built, vs the official runtime (pure + C ext)
 ```
+
+`bench.sh` builds `ext/` when `phpize` exists and times both versions back
+to back (`pbwire-php` rows for FFI, `pbwire-php-c` for the native extension).
 
 The official side is the `php/src` tree of the cached protobuf checkout that
 `make conformance-setup` clones (or `PBWIRE_PROTOBUF_SRC`), loaded through a
@@ -62,24 +80,30 @@ large / xlarge (the repeated fields scaled x0 / x1 / x100 / x3000). Copied from
 [BENCHMARKS.md](../../BENCHMARKS.md), which is the single source for all
 performance numbers; higher is better, MB/s over wire bytes:
 
-| payload | op | pbwire-php (MB/s, x protobuf-php-c) | protobuf-php-c (MB/s) |
+| payload | op | pbwire-php-c (MB/s, x protobuf-php-c) | protobuf-php-c (MB/s) |
 |---|---|---|---|
-| 136 B | encode | 256.2 (0.30x) | 864.9 |
-| 136 B | decode | 234.7 (0.56x) | 420.4 |
-| 174 B | encode | 296.1 (0.31x) | 942.6 |
-| 174 B | decode | 261.8 (0.62x) | 422.4 |
-| 2469 B | encode | 1029.0 (0.76x) | 1351.6 |
-| 2469 B | decode | 481.9 (0.93x) | 518.2 |
-| 74913 B | encode | 1301.6 (0.99x) | 1319.6 |
-| 74913 B | decode | 554.1 (0.99x) | 556.9 |
+| 136 B | encode | 1370.4 (1.63x) | 842.4 |
+| 136 B | decode | 683.6 (1.65x) | 414.6 |
+| 174 B | encode | 1299.6 (1.41x) | 921.4 |
+| 174 B | decode | 637.9 (1.56x) | 407.8 |
+| 2469 B | encode | 1618.7 (1.24x) | 1300.5 |
+| 2469 B | decode | 607.8 (1.21x) | 501.0 |
+| 74913 B | encode | 1478.3 (1.11x) | 1326.1 |
+| 74913 B | decode | 661.1 (1.15x) | 572.7 |
+
+The rows above are the C extension (`pbwire-php-c`); `bench.sh` times the
+FFI wrapper first (`pbwire-php` rows) when `phpize` is missing or the build
+fails. The FFI version pays one trampoline per call, so it trails on the
+small tiers and converges as the payload grows (xlarge 1.09x / 1.23x vs the
+same C-extension baseline in the same harness).
 
 Without the C extension the same harness measures the pure-PHP runtime
-instead (single `php -n`-style run): xlarge 1315.2 MB/s vs 3.9 (encode) and
-564.9 vs 5.5 (decode). The ~300x gap is the interpreter, not the codec.
+instead (single `php -n`-style run): xlarge 1384.2 MB/s vs 3.7 (encode) and
+658.7 vs 5.2 (decode). The ~300x gap is the interpreter, not the codec.
 
-Strings cross as NUL-terminated C strings, so `setString()` stops at the first
-NUL byte: use `setBytes()` for binary payloads (a `string` field accepts them
-too, which is how protobuf's wire format works).
+Strings cross with explicit lengths, so embedded NUL bytes survive both
+ways (`setString()` and `setBytes()` accept them; a `string` field accepts
+byte payloads too, which is how protobuf's wire format works).
 
 ## Threads and lifetimes
 

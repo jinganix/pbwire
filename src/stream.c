@@ -60,6 +60,12 @@ pbw_istream_feed(pbw_istream *s, const void *data, size_t len)
     if (len == 0) {
         return PBW_OK;
     }
+    if (!pbw_cap_holds(s->cap, s->len) || s->off > s->len) {
+        return PBW_ERR_INVALID;
+    }
+    if (s->data == NULL && (s->len > 0 || s->cap > 0 || s->off > 0)) {
+        return PBW_ERR_INVALID;
+    }
     /* Compact the consumed prefix only when the tail has no room: a steady
      * feed/next loop then appends without a memmove per chunk. */
     if (len > s->cap - s->len) {
@@ -67,6 +73,9 @@ pbw_istream_feed(pbw_istream *s, const void *data, size_t len)
         uint8_t *grown;
 
         if (s->off > 0) {
+            if (s->data == NULL) {
+                return PBW_ERR_INVALID;
+            }
             memmove(s->data, s->data + s->off, s->len - s->off);
             s->len -= s->off;
             s->off = 0;
@@ -74,6 +83,9 @@ pbw_istream_feed(pbw_istream *s, const void *data, size_t len)
         if (len <= s->cap - s->len) {
             /* Compacting freed enough room; no realloc needed. */
         } else {
+            if (s->cap > SIZE_MAX - s->len) {
+                return PBW_ERR_NOMEM;
+            }
             cap = s->cap != 0 ? s->cap : 256;
             while (cap - s->len < len) {
                 if (cap > SIZE_MAX / 2) {
@@ -91,7 +103,13 @@ pbw_istream_feed(pbw_istream *s, const void *data, size_t len)
             s->cap = cap;
         }
     }
+    if (s->data == NULL) {
+        return PBW_ERR_NOMEM;
+    }
     memcpy(s->data + s->len, data, len);
+    if (s->len > SIZE_MAX - len) {
+        return PBW_ERR_NOMEM;
+    }
     s->len += len;
     return PBW_OK;
 }
@@ -112,11 +130,17 @@ pbw_istream_next(pbw_istream *s, const pbw_descriptor *desc, pbw_message **out)
         return PBW_ERR_INVALID;
     }
     *out = NULL;
-    base = s->data + s->off;
+    if (s->off > s->len || !pbw_cap_holds(s->cap, s->len)) {
+        return PBW_ERR_INVALID;
+    }
     avail = s->len - s->off;
     if (avail == 0) {
         return PBW_OK;
     }
+    if (s->data == NULL) {
+        return PBW_ERR_INVALID;
+    }
+    base = s->data + s->off;
     if (!pbw_len_read(base, base + avail, &frame, &used)) {
         /* A length varint is at most 5 bytes: anything longer is corrupt,
          * anything shorter may just be split across feeds. */
@@ -128,8 +152,11 @@ pbw_istream_next(pbw_istream *s, const pbw_descriptor *desc, pbw_message **out)
     if (s->limits.max_bytes > 0 && frame > s->limits.max_bytes) {
         return PBW_ERR_LIMIT;
     }
-    if (frame > avail - used) {
+    if (used > avail || frame > avail - used) {
         return PBW_OK;
+    }
+    if (frame > 0 && base + used == NULL) {
+        return PBW_ERR_INVALID;
     }
     status = pbw_decode_limits(desc, base + used, frame, &s->limits, out);
     if (status != PBW_OK) {
@@ -183,11 +210,17 @@ pbw_encode_delimited(const pbw_message *msg, uint8_t **out, size_t *len)
     if (msg == NULL || out == NULL || len == NULL) {
         return PBW_ERR_INVALID;
     }
+    *out = NULL;
+    *len = 0;
     status = pbw_encode(msg, &body, &body_len);
     if (status != PBW_OK) {
         return status;
     }
     prefix = pbw_varint_size(body_len);
+    if (prefix > SIZE_MAX - body_len) {
+        pbw_free(body);
+        return PBW_ERR_NOMEM;
+    }
     framed = (uint8_t *)malloc(prefix + body_len);
     if (framed == NULL) {
         pbw_free(body);

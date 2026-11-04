@@ -162,6 +162,7 @@ make erlang-test                 # EUnit + NIF C tests
 make typed-test                  # the typed model test of every binding
 make conformance-python          # official suite through the Python binding
 make conformance-ruby            # official binary suite through the Ruby binding
+make conformance-java            # official binary suite through the Java binding
 ```
 
 ## What the differential test found

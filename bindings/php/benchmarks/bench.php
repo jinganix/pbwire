@@ -58,6 +58,10 @@ $desc = $argv[1] ?? "$gen/matrix3.desc";
 // The C extension (when loaded) backs the same generated classes, so one
 // label covers whichever official implementation is actually timed.
 $officialImpl = extension_loaded('protobuf') ? 'protobuf-php-c' : 'protobuf-php';
+// Our own implementation: the native extension when loaded, else the FFI
+// wrapper. bench.sh runs both when ext/modules/pbwire.so exists.
+$impl = extension_loaded('pbwire') ? 'pbwire-php-c' : 'pbwire-php';
+echo 'impl: ' . ($impl === 'pbwire-php-c' ? 'C extension ' . phpversion('pbwire') : 'ext-ffi') . "\n";
 echo 'official: ' . ($officialImpl === 'protobuf-php-c' ? 'C extension ' . phpversion('protobuf') : 'pure PHP') . "\n\n";
 $schema = Schema::fromFile($desc);
 $ty = $schema->message('structtest.Scalars3');
@@ -80,7 +84,7 @@ for ($tier = 0; $tier < count(CASES); $tier++) {
     $got = $message->encode();
 
     if ($got !== $reference) {
-        fail($label, 'pbwire-php wrote ' . strlen($got) . ' bytes, protobuf-php ' . strlen($reference));
+        fail($label, "$impl wrote " . strlen($got) . ' bytes, protobuf-php ' . strlen($reference));
         continue;
     }
 
@@ -103,9 +107,9 @@ for ($tier = 0; $tier < count(CASES); $tier++) {
     $bytes = strlen($reference);
     printf("%s: %d bytes, %d iterations (repeat field x%d)\n", $label, $bytes, $count, $n);
     printf("  %-12s %-7s %12s %10s\n", 'impl', 'op', 'ns/op', 'MB/s');
-    row('pbwire-php', 'encode', $bytes, $encode);
+    row($impl, 'encode', $bytes, $encode);
     row($officialImpl, 'encode', $bytes, $officialEncode);
-    row('pbwire-php', 'decode', $bytes, $decode);
+    row($impl, 'decode', $bytes, $decode);
     row($officialImpl, 'decode', $bytes, $officialDecode);
     echo "\n";
 }

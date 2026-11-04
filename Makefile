@@ -10,6 +10,7 @@ SRC := src/wire.c src/arena.c src/schema.c src/message.c src/encode.c src/decode
 OBJ := $(SRC:src/%.c=build/%.o)
 LIB := build/libpbwire.a
 TEST_BIN := build/test_pbwire
+MALFORMED_BIN := build/test_malformed
 THREAD_BIN := build/test_threads
 DESC_BIN := build/test_descriptor
 STRUCT_BIN := build/test_struct
@@ -54,14 +55,18 @@ build/%.o: src/%.c $(HDRS) | build
 $(TEST_BIN): tests/test_pbwire.c $(LIB) | build
 	$(CC) $(CFLAGS) $(CPPFLAGS) -o $@ $< $(LIB)
 
+$(MALFORMED_BIN): tests/test_malformed.c $(LIB) | build
+	$(CC) $(CFLAGS) $(CPPFLAGS) -o $@ $< $(LIB)
+
 build:
 	mkdir -p build
 
 $(THREAD_BIN): tests/test_threads.c $(TEST_HDRS) $(LIB) | build
 	$(CC) $(CFLAGS) $(CPPFLAGS) -pthread -o $@ $< $(LIB)
 
-test: $(TEST_BIN) $(THREAD_BIN) $(DESC_BIN) $(STRUCT_BIN) $(EXAMPLE_BIN)
+test: $(TEST_BIN) $(MALFORMED_BIN) $(THREAD_BIN) $(DESC_BIN) $(STRUCT_BIN) $(EXAMPLE_BIN)
 	./$(TEST_BIN)
+	./$(MALFORMED_BIN)
 	./$(THREAD_BIN)
 	./$(DESC_BIN)
 	./$(STRUCT_BIN)
@@ -76,7 +81,7 @@ erlang-test:
 # protoc + libprotobuf are available) gpb NIF on matrix3.proto. Same optional
 # status as `bench`/`bench-c`; needs OTP + gpb.
 erlang-bench:
-	$(MAKE) -C bindings/erlang/benchmarks benchmarks
+	./scripts/bench-run.sh --binding erlang -- $(MAKE) -C bindings/erlang/benchmarks benchmarks
 
 # C binding plugin (bindings/c/plugin): self-contained Go module, needs Go.
 # Stays out of `make test` like the other optional targets.
@@ -181,6 +186,17 @@ conformance-ruby: $(CONFORMANCE_DESC) ruby-bind
 		$(RUBY_ABS) bindings/ruby/conformance/testee.rb \
 		$(CURDIR)/$(CONFORMANCE_DESC)
 
+# Same suite through the Java binding (binary wire format; JSON/text answer
+# "skipped" because the binding has no printers). The runner execv()s the
+# testee program directly, so the interpreter has to be an absolute path.
+conformance-java: java-test $(CONFORMANCE_DESC)
+	@test -x "$(CONFORMANCE_RUNNER)" || { \
+		echo "conformance_test_runner not found: $(CONFORMANCE_RUNNER)"; \
+		echo "run 'make conformance-setup' first"; exit 1; }
+	$(CONFORMANCE_RUNNER) --failure_list $(CURDIR)/conformance/failure_list_pbwire.txt \
+		$(JAVA_ABS) -cp $(CURDIR)/bindings/java/out Testee \
+		$(CURDIR)/$(CONFORMANCE_DESC)
+
 conformance: $(CONFORMANCE_DESC) $(CONFORMANCE_TESTEE)
 	@test -x "$(CONFORMANCE_RUNNER)" || { \
 		echo "conformance_test_runner not found: $(CONFORMANCE_RUNNER)"; \
@@ -246,7 +262,7 @@ $(BENCH_BIN): bench/bench.cc $(BENCH_PB) $(BENCH_DESC) $(LIB) | build
 		-o $@ bench/bench.cc $(BENCH_PB) $(LIB) $(PB_LIBS)
 
 bench: $(BENCH_BIN)
-	./$(BENCH_BIN) bench
+	./scripts/bench-run.sh --binding core -- ./$(BENCH_BIN) bench
 
 # C binding benchmark (bindings/c/benchmarks): generated structs vs the
 # official C++ generated code on matrix3.proto. Same optional deps as
@@ -261,7 +277,7 @@ $(BENCH_C_BIN): bindings/c/benchmarks/bench_struct.cc $(BENCH_C_PB) $(CPP_RUNTIM
 		-o $@ bindings/c/benchmarks/bench_struct.cc $(BENCH_C_PB) $(CPP_RUNTIME_OBJ) $(LIB) $(PB_LIBS)
 
 bench-c: $(BENCH_C_BIN)
-	./$(BENCH_C_BIN) bench
+	./scripts/bench-run.sh --binding c -- ./$(BENCH_C_BIN) bench
 
 # Python binding (bindings/python): a CPython extension that converts
 # dict <-> wire in C. Needs the core library and a C compiler; no generated
@@ -295,13 +311,12 @@ python-test: python-bind
 # Objective-C (ARC + Foundation). They need only their own toolchain and are not
 # part of the commit gate.
 JAVA ?= java
+JAVA_ABS := $(shell command -v $(JAVA) 2>/dev/null || echo $(JAVA))
 RUBY ?= ruby
 RUBY_ABS := $(shell command -v $(RUBY) 2>/dev/null || echo $(RUBY))
 
-java-test: shared
+java-test:
 	cd bindings/java && ./build.sh
-	cd bindings/java && $(JAVA) --enable-native-access=ALL-UNNAMED \
-		-Dpbwire.library=$(CURDIR)/$(SHLIB_LINK) -cp out TestPbwire tests/data/sample.desc
 
 # Builds lib/pbwire_ext.<DLEXT> for $(RUBY); the core is linked in statically,
 # so the binding needs no library path at run time.
@@ -335,6 +350,16 @@ kotlin-test: shared
 php-test: shared
 	$(PHP) bindings/php/tests/test.php
 
+# Native sibling of the FFI wrapper (core compiled in, like the Ruby C
+# extension). Not part of php-test: it needs phpize, and the FFI version is
+# the default. Both classes share names; the wrapper yields when loaded.
+php-ext:
+	cd bindings/php/ext && ./build.sh
+
+php-ext-test: php-ext shared
+	$(PHP) -d extension=$(CURDIR)/bindings/php/ext/modules/pbwire.so bindings/php/tests/test.php
+	$(PHP) -d extension=$(CURDIR)/bindings/php/ext/modules/pbwire.so bindings/php/tests/typed_test.php
+
 dart-test: shared
 	cd bindings/dart && $(DART) pub get >/dev/null
 	cd bindings/dart && $(DART) run tests/selftest.dart ../c/tests/data/matrix3.desc
@@ -351,31 +376,31 @@ csharp-test: shared
 # gem, the protobuf source for the ObjC runtime). RUBY picks the interpreter
 # whose gem set has google-protobuf.
 java-bench:
-	./bindings/java/benchmarks/bench.sh
+	./scripts/bench-run.sh --binding java -- ./bindings/java/benchmarks/bench.sh
 
 ruby-bench: ruby-bind
-	RUBY=$(RUBY) sh bindings/ruby/benchmarks/bench.sh
+	RUBY=$(RUBY) ./scripts/bench-run.sh --binding ruby -- sh bindings/ruby/benchmarks/bench.sh
 
 node-bench:
-	./bindings/node/benchmarks/bench.sh
+	./scripts/bench-run.sh --binding node -- ./bindings/node/benchmarks/bench.sh
 
 objc-bench:
-	./bindings/objc/benchmarks/bench.sh
+	./scripts/bench-run.sh --binding objc -- ./bindings/objc/benchmarks/bench.sh
 
 kotlin-bench:
-	./bindings/kotlin/benchmarks/bench.sh
+	./scripts/bench-run.sh --binding kotlin -- ./bindings/kotlin/benchmarks/bench.sh
 
 php-bench:
-	./bindings/php/benchmarks/bench.sh
+	./scripts/bench-run.sh --binding php -- ./bindings/php/benchmarks/bench.sh
 
 dart-bench:
-	./bindings/dart/benchmarks/bench.sh
+	./scripts/bench-run.sh --binding dart -- ./bindings/dart/benchmarks/bench.sh
 
 rust-bench:
-	./bindings/rust/benchmarks/bench.sh
+	./scripts/bench-run.sh --binding rust -- ./bindings/rust/benchmarks/bench.sh
 
 csharp-bench:
-	./bindings/csharp/benchmarks/bench.sh
+	./scripts/bench-run.sh --binding csharp -- ./bindings/csharp/benchmarks/bench.sh
 
 # The benchmark compares against the official Python runtime, so it needs
 # protoc --python_out plus `pip install protobuf`.
@@ -384,7 +409,7 @@ bindings/python/benchmarks/gen/matrix3_pb2.py: bindings/c/tests/data/matrix3.pro
 	$(PROTOC) -Ibindings/c/tests/data --python_out=bindings/python/benchmarks/gen $<
 
 python-bench: python-bind bindings/python/benchmarks/gen/matrix3_pb2.py
-	$(PY) bindings/python/benchmarks/bench.py bench
+	./scripts/bench-run.sh --binding python -- $(PY) bindings/python/benchmarks/bench.py bench
 
 difftest: $(BENCH_BIN)
 	./$(BENCH_BIN) difftest
@@ -415,7 +440,7 @@ clean:
 
 .PHONY: all test examples format format-check bench bench-c erlang-bench \
 	python-bind python-test python-bench difftest conformance conformance-python \
-	conformance-ruby ruby-bind java-test ruby-test node-test objc-test \
+	conformance-ruby conformance-java ruby-bind java-test ruby-test node-test objc-test \
 	java-bench ruby-bench node-bench objc-bench \
 	kotlin-test php-test dart-test rust-test csharp-test \
 	kotlin-bench php-bench dart-bench rust-bench csharp-bench \

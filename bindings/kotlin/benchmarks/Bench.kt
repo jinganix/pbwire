@@ -154,6 +154,22 @@ fun main(args: Array<String>) {
                 }
                 println("OK   $label encoding parity, x$n (${reference.size} bytes)")
 
+                // Decode must round-trip byte-exactly and expose the same values.
+                var backOk = false
+                ty.decode(reference).use { back ->
+                    val backInner = back.getMessage("inner")
+                    backOk = back.encode().contentEquals(reference)
+                        && back.getString("str") == "hello"
+                        && backInner.getString("name") == "kid"
+                        && back.getList("nums").size == n
+                        && (n == 0 || back.getList("nums")[n - 1] as Long == (n - 4).toLong())
+                }
+                if (!backOk) {
+                    println("FAIL $label: pbwire-kotlin decode differs")
+                    failures++
+                    return@use
+                }
+
                 val official = fillOfficial(n)
                 // Tier line shows the reference op's count; slower ops keep the floor.
                 val tierCount = calibrate({ message.encode() }, count)

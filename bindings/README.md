@@ -37,24 +37,32 @@ anything else:
   the set ships as a sidecar file or is embedded in the binary is a deployment
   choice — the loader takes bytes either way (see the
   [FAQ](../docs/faq.md#do-i-have-to-recompile-when-a-proto-changes)).
-- **FFI hosts get the descriptor set and nothing else.** Java, Node and
+- **FFI hosts get the descriptor set and nothing else.** Node and
   Objective-C call the C ABI directly and load a `FileDescriptorSet` at run
-  time, so none of them carries a plugin, generated code or a second wire
+  time, so neither of them carries a plugin, generated code or a second wire
   implementation. The C core owns the format; the binding owns the ergonomics.
   This is also the cheapest way to add a language.
+- **Java is a pure-Java codec, not an FFI host.** It parses the same
+  `FileDescriptorSet` with its own reader and owns its wire code in Java
+  (columnar values, lazy decode slices, `Unsafe` stores with a checked
+  fallback), so there is no native library and no downcall. Kotlin reuses
+  that runtime and adds only its DSL.
 - **Ruby is a C extension, not an FFI host.** It links the core statically and
-  loads a `FileDescriptorSet` at run time like Java/Node/Objective-C, but the
+  loads a `FileDescriptorSet` at run time like Node/Objective-C (Java parses
+  it with its own reader instead of the C core), but the
   message conversion happens in C: a builder tree for mutation and encoding, and
   a validating wire scan that materializes fields lazily for decoding. That is
   what removes the per-call boundary cost that made the Fiddle version lose.
 - **Languages whose toolchain can call C get the descriptor set, not a plugin.**
-  PHP (`ext-ffi`), Dart (`dart:ffi`) and C# (P/Invoke) are one class with Java,
-  Node and Objective-C: load the `FileDescriptorSet`, call the C ABI, own no
-  wire code. Rust links `libpbwire.a` in statically instead of `dlopen`-ing it,
+  Dart (`dart:ffi`) and C# (P/Invoke) are one class with Node
+  and Objective-C: load the `FileDescriptorSet`, call the C ABI, own no
+  wire code. PHP offers the same FFI wrapper (`ext-ffi`) plus a native C
+  extension over the same core for hosts with a compiler; Rust links
+  `libpbwire.a` in statically instead of `dlopen`-ing it,
   which makes the result a single self-contained binary; Go does the same over
   cgo and adds a hot-swappable schema registry on top.
 - **Kotlin needs no separate layer.** Kotlin runs on the JVM, so it uses the
-  Java binding's FFM downcalls and adds only the DSL that official Kotlin support
+  Java binding's runtime and adds only the DSL that official Kotlin support
   is (protoc `--kotlin_out` generates Kotlin over protobuf-java).
 - **Erlang needs neither.** gpb already is that plugin: `gpb_compile` /
   `protoc-erl` generates the record definitions plus `get_msg_defs/0`, and
@@ -75,11 +83,11 @@ the full tables are.
 | C++ | generated classes pin the schema at compile time; `DynamicMessage` is 10x slower | the same C runtime and header, no extra layer | 1.42x / 2.25x (vs protoc C++) |
 | Python | `google.protobuf` needs a generated module per `.proto`, and dict conversion is seconds at 75 KB | CPython extension: dict↔wire in C, `decode()` returns a parsed message that keeps one slice per wire field | 6.5x / 1.69x (vs upb) |
 | Ruby | the `google-protobuf` gem materializes and re-encodes every field; a Fiddle bridge costs ~3 µs per downcall | C extension over the core: builder tree for writes, validating wire view for reads | 1.05x / 1.69x (vs the gem) |
-| Java | JNI glue, or protobuf-java re-deriving sizes before every write | `java.lang.foreign` downcalls with one workspace per thread (no JNI, no generator) | 1.56x / 1.16x (vs protobuf-java) |
-| Kotlin | official Kotlin is Kotlin over protobuf-java | reuses the Java FFM layer, adds a DSL | 1.60x / 1.19x (vs protobuf-kotlin) |
+| Java | JNI glue, or protobuf-java re-deriving sizes before every write | pure-Java codec: columnar values, lazy decode, `Unsafe` stores (no JNI, no native lib, no generator) | 1.15x / 3.20x (vs protobuf-java) |
+| Kotlin | official Kotlin is Kotlin over protobuf-java | reuses the Java runtime, adds a DSL | 1.60x / 1.19x (vs protobuf-kotlin) |
 | Node | jspb resolves a code/type table per field and hands every repeated element to a closure | N-API addon (node headers only), reusable buffer, wire view for decoded messages | 22.3x / 20.0x (vs jspb; 2.7x / 4.1x vs protobufjs) |
 | Objective-C | the ObjC runtime allocates and copies per field | ARC wrapper: the encoder's buffer is handed to `NSData` with no copy | 1.8x / 2.7x (vs protobuf-objc) |
-| PHP | the official runtime is pure PHP, all per-field bookkeeping in the interpreter | `ext-ffi`, with whole buffers crossing the boundary for encode and decode | 0.99x / 0.99x (vs C ext; 337x / 103x vs pure PHP) |
+| PHP | the official runtime is pure PHP, all per-field bookkeeping in the interpreter | native C extension over the core (`ext-ffi` wrapper without a compiler) | 1.11x / 1.15x (vs C ext; 374x / 127x vs pure PHP) |
 | Dart | a pure-Dart field loop dominates, and FFI adds copies | `dart:ffi` plus the core's arena | 12.2x / 3.3x (vs protobuf-dart) |
 | Rust | rust-protobuf generated codecs | links `libpbwire.a` statically behind a safe wrapper | 1.57x / 1.45x (vs rust-protobuf; 0.93x / 1.46x vs prost) |
 | C# | Google.Protobuf is already a fast tree codec — the closest race of the set | P/Invoke plus a resolver, no packages | 2.90x / 1.07x (vs Google.Protobuf; 3.6x / 1.62x vs protobuf-net) |
@@ -101,12 +109,12 @@ side by side with the absolute MB/s.
 | Python | `pbwire.Schema.from_file/load` on a `FileDescriptorSet` | ✅ | the extension is compiled but the schema is always loaded; `decode()` returns a parsed message, `to_dict()`/`encode(dict)` are the dict path |
 | Go | `dynamic.Registry` on a `FileDescriptorSet`, cgo downcalls into the C core | ✅ | explicit `Close` per root (no finalizer); failed loads never disturb the live version |
 | Erlang | `gpb_compile` → records + `get_msg_defs/0` → `pbwire:load_cache/1` | ✅ | gpb is the plugin, epb needs no descriptor path |
-| Java | `FileDescriptorSet` at run time, `java.lang.foreign` downcalls (JDK 22+) | ✅ | no JNI, no C glue, no generator |
+| Java | `FileDescriptorSet` at run time, own pure-Java reader (JDK 17+) | ✅ | no JNI, no C glue, no generator, no native library; binary-only conformance testee |
 | Ruby | `FileDescriptorSet` at run time, a C extension linked against the core | ✅ | no gems, no generator; binary-only conformance testee |
 | Node | `FileDescriptorSet` at run time, hand-written N-API addon | ✅ | no npm deps, node headers only |
 | Objective-C | `FileDescriptorSet` at run time, ARC wrapper over the C API | ✅ | Foundation only, no codegen |
-| Kotlin | the Java binding's runtime: `FileDescriptorSet` at run time, one FFM layer for both | ✅ | four DSL helpers, no second FFI layer |
-| PHP | `Pbwire\Schema::fromFile` on a `FileDescriptorSet`, `ext-ffi` | ✅ | no C extension, no composer |
+| Kotlin | the Java binding's runtime: `FileDescriptorSet` at run time, one Java runtime for both | ✅ | four DSL helpers, no second codec |
+| PHP | `Pbwire\Schema::fromFile` on a `FileDescriptorSet`, native C extension or `ext-ffi` | ✅ | no composer; the C extension needs only its `.so` |
 | Dart | `Schema.load` on a `FileDescriptorSet`, `dart:ffi` | ✅ | `package:ffi` only (malloc, strings) |
 | Rust | `Schema::from_file` on a `FileDescriptorSet`, core linked in statically | ✅ | no bindgen, no external crate |
 | C# | `Schema.FromFile` on a `FileDescriptorSet`, P/Invoke + `DllImportResolver` | ✅ | no packages in the binding project |
@@ -129,9 +137,10 @@ the default cap and the table gives the ceiling plus the workaround.
 | C / C++ | caller-owned `pbw_struct_buf` (keeps capacity) + `pbw_struct_arena` (each decode resets it) | largest message handled | an arena decode invalidates the previous tree; never `pbw_struct_free` an arena tree (`NULL` arena = per-message malloc + `pbw_struct_free`) |
 | Python | own C codec, no `pbw_ctx`; a decoded `Message` pins the whole input buffer | retained `Message`s | drop the `Message` after materializing (`to_dict()` output does not free it) |
 | Ruby | builder = C tree, `encode` writes straight into the returned `String`; a wire view pins the bytes | retained views | same as Python: `set` on a view raises, and holding a view holds its bytes |
-| Java / Kotlin | one `ThreadLocal` workspace: a `pbw_ctx` + a grown-on-demand input buffer, never freed until process exit | live + dead threads x largest message each | the sharpest edge here: thread-per-request plus one xlarge message pins ~1 MiB per dead thread; keep request threads off the binding or reuse a fixed pool |
+| Java / Kotlin | one `ThreadLocal` workspace: a reusable encode buffer + a string-image cache, never freed until thread exit | live + dead threads x largest message each | thread-per-request plus one xlarge message pins its buffer per dead thread; keep request threads off the binding or reuse a fixed pool |
 | Node | single-threaded: one reusable encode `pbw_ctx` per message type (freed with the type) + decoded message = JS `Buffer` + slice array | types x largest encoding each + retained messages | drop decoded messages; a type's buffer stays at its largest encoding |
-| Objective-C / PHP / Dart / Rust / C# / Go | plain `pbw_encode`/`pbw_decode` per call (`NSData` takes the malloc'd buffer over with no copy; Go passes the input slice straight in) | none, except retained Go roots | nothing to tune; Go roots need an explicit `Close` |
+| Objective-C / Dart / Rust / C# / Go | plain `pbw_encode`/`pbw_decode` per call (`NSData` takes the malloc'd buffer over with no copy; Go passes the input slice straight in) | none, except retained Go roots | nothing to tune; Go roots need an explicit `Close` |
+| PHP | built trees live in one `pbw_ctx` each (freed with the message, never decoded into so always mutable); decoded trees are single-malloc arenas | retained messages | drop the message; nested views hold the parent, `close()` frees either kind |
 | Erlang | one `pbw_ctx` per scheduler + a geometrically grown encode buffer, never shrunk (see its README FAQ) | schedulers x largest message | bounded by the scheduler count; keep individual messages reasonably sized |
 
 Compiler-level code generation is never hand-written: C's layout tables come

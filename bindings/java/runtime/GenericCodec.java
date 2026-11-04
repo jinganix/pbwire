@@ -62,6 +62,10 @@ public final class GenericCodec {
         public Map<String, Integer> byName = new HashMap<>();
         public Map<String, Integer> oneofByName = new HashMap<>();
         public int oneofCount;
+        public boolean hasRequired; // any REQUIRED field: proto2 only
+        // Transitive closure: some reachable message has a REQUIRED field.
+        // decode() checks the tree only then, so other decodes pay one test.
+        public boolean deepRequired;
     }
 
     public static final class Schema {
@@ -106,7 +110,32 @@ public final class GenericCodec {
                     }
                 }
             }
+            // Transitive required closure, monotone fixpoint so recursive
+            // messages terminate: a cycle with no REQUIRED field stays false.
+            boolean changed = true;
+            while (changed) {
+                changed = false;
+                for (MessageDef d : s.byName.values()) {
+                    if (!d.deepRequired && needsRequired(d)) {
+                        d.deepRequired = true;
+                        changed = true;
+                    }
+                }
+            }
             return s;
+        }
+
+        private static boolean needsRequired(MessageDef d) {
+            for (Field f : d.fields) {
+                if (f.presence == REQUIRED) {
+                    return true;
+                }
+                if ((f.kind == K_MESSAGE || f.kind == K_GROUP)
+                        && f.msgType != null && f.msgType.deepRequired) {
+                    return true;
+                }
+            }
+            return false;
         }
 
         private MessageDef buildDef(Proto.Message m) {
@@ -188,9 +217,12 @@ public final class GenericCodec {
                 Map<Proto.Oneof, Integer> oneofs) {
             fs.sort((a, b) -> Integer.compare(a.number, b.number));
             int max = 0;
+            boolean req = false;
             for (Field f : fs) {
                 max = Math.max(max, f.number);
+                req = req || f.presence == REQUIRED;
             }
+            d.hasRequired = req;
             d.fields = fs.toArray(new Field[0]);
             d.slotByFnum = new int[max + 1];
             Arrays.fill(d.slotByFnum, -1);
@@ -444,6 +476,9 @@ public final class GenericCodec {
             if (v == null) {
                 throw new IllegalArgumentException("null value");
             }
+            // Repeated presence lives in has[], like singular fields: the
+            // encode loop gates every slot on it (see encodeInto).
+            has[s] = true;
             if (f.kind <= K_DOUBLE) {
                 long[] a = repNum[s];
                 int n = repNumLen[s];
@@ -586,10 +621,13 @@ public final class GenericCodec {
                 case K_INT32:
                 case K_SINT32:
                 case K_SFIXED32:
-                case K_UINT32:
-                case K_FIXED32:
                 case K_ENUM:
                     return Long.valueOf((int) n);
+                case K_UINT32:
+                case K_FIXED32:
+                    // Unsigned 32-bit reads zero-extended, so 4000000000
+                    // reads as 4000000000L (like the uint64 raw-bits rule).
+                    return Long.valueOf(n & 0xFFFFFFFFL);
                 case K_INT64:
                 case K_SINT64:
                 case K_UINT64:
@@ -666,38 +704,68 @@ public final class GenericCodec {
 
     /* ---------------- encode ---------------- */
 
-    private static final ThreadLocal<Wire.Buf> BUF =
-            ThreadLocal.withInitial(Wire.Buf::new);
-
-    /** 1-entry reference-equality UTF-8 cache: repeated constants ("tag",
-     *  "grandkid") never re-encode. Falls back to one String.getBytes. */
-    private static final class StrCache {
-        String s;
-        byte[] b;
+    /** One workspace per thread: the encode buffer plus the string
+     *  cache, so an encode pays a single ThreadLocal lookup. */
+    private static final class Workspace {
+        final Wire.Buf buf = new Wire.Buf();
+        final StrCache strings = new StrCache();
     }
 
-    private static final ThreadLocal<StrCache> STRCACHE =
-            ThreadLocal.withInitial(StrCache::new);
+    private static final ThreadLocal<Workspace> WORKSPACE =
+            ThreadLocal.withInitial(Workspace::new);
 
-    private static void writeStr(Wire.Buf b, String s, StrCache c) {
-        byte[] u;
-        if (s == c.s) {
-            u = c.b;
-        } else {
-            u = s.getBytes(StandardCharsets.UTF_8);
-            c.s = s;
-            c.b = u;
+    /** Whole field image (tag + length + UTF-8) by reference: a stable
+     *  String on a stable field re-emits with one arraycopy. 8 FIFO
+     *  slots cover the handful of distinct (field, string) pairs a
+     *  message carries; beyond that each emit rebuilds its image. */
+    private static final class StrCache {
+        final byte[][] tags = new byte[8][];
+        final String[] strs = new String[8];
+        final byte[][] imgs = new byte[8][];
+        int next;
+    }
+
+    private static void writeStrField(Wire.Buf b, byte[] tag, String s,
+            StrCache c) {
+        for (int i = 0; i < c.tags.length; i++) {
+            if (c.tags[i] == tag && c.strs[i] == s) {
+                byte[] img = c.imgs[i];
+                Wire.ensure(b, img.length);
+                System.arraycopy(img, 0, b.b, b.pos, img.length);
+                b.pos += img.length;
+                return;
+            }
         }
-        Wire.wBytes(b, u);
+        byte[] u = s.getBytes(StandardCharsets.UTF_8);
+        int llen = Wire.sizeVar32(u.length);
+        byte[] img = new byte[tag.length + llen + u.length];
+        System.arraycopy(tag, 0, img, 0, tag.length);
+        int p = tag.length;
+        int n = u.length;
+        while ((n & ~0x7F) != 0) {
+            img[p++] = (byte) ((n & 0x7F) | 0x80);
+            n >>>= 7;
+        }
+        img[p++] = (byte) n;
+        System.arraycopy(u, 0, img, p, u.length);
+        c.tags[c.next] = tag;
+        c.strs[c.next] = s;
+        c.imgs[c.next] = img;
+        c.next = (c.next + 1) & (c.tags.length - 1);
+        Wire.ensure(b, img.length);
+        System.arraycopy(img, 0, b.b, b.pos, img.length);
+        b.pos += img.length;
     }
 
     /** Single pass into a reusable buffer; nested payloads use a 1-byte
      *  length placeholder patched after (Wire.patch has the overflow).
-     *  Untouched lazy slices copy verbatim: tag included, no re-encode. */
+     *  Untouched lazy slices copy verbatim: tag included, no re-encode.
+     *  Singular numerics go through one fused tag+value write each. */
     public static byte[] encode(DMsg m) {
-        Wire.Buf b = BUF.get();
+        Workspace w = WORKSPACE.get();
+        Wire.Buf b = w.buf;
         b.pos = 0;
-        encodeInto(m, b, 0, STRCACHE.get()); // cache fetched once per encode
+        encodeInto(m, b, 0, w.strings);
         return Arrays.copyOf(b.b, b.pos); // the one copy, like the FFM out-copy
     }
 
@@ -706,12 +774,22 @@ public final class GenericCodec {
         if (depth > MAX_DEPTH) {
             throw new IllegalArgumentException("nesting exceeds " + MAX_DEPTH);
         }
-        for (int s = 0; s < m.def.fields.length; s++) {
-            Field f = m.def.fields[s];
-            if (f.presence == REQUIRED && !m.has[s]) {
-                throw new IllegalStateException("missing required field "
-                        + m.def.fullName + "." + f.number);
+        MessageDef def = m.def;
+        boolean noRequired = !def.hasRequired; // proto3: skip the check
+        for (int s = 0; s < def.fields.length; s++) {
+            if (!m.has[s]) {
+                // Absent singulars and empty repeats share one gate: every
+                // mutation (set/add/decode) maintains has[] for both, so
+                // the loop never consults lengths or defaults to skip.
+                // Required fields throw below instead of skipping: a
+                // missing required field is an error, never empty output.
+                if (!noRequired && def.fields[s].presence == REQUIRED) {
+                    throw new IllegalStateException("missing required field "
+                            + def.fullName + "." + def.fields[s].number);
+                }
+                continue;
             }
+            Field f = def.fields[s];
             if (f.repeated) {
                 int n = f.kind <= K_DOUBLE ? m.repNumLen[s] : m.repRefLen[s];
                 if (n == 0) {
@@ -727,63 +805,63 @@ public final class GenericCodec {
                 }
                 continue;
             }
-            if (!m.has[s]) {
-                continue;
-            }
-            if (f.kind <= K_DOUBLE) {
-                // Fused single write: one switch per field, no helper call
-                // and no second dispatch. (-0.0 compares equal to 0.0.)
+            int kind = f.kind;
+            if (kind <= K_DOUBLE) {
+                // has[] is set above, so only implicit defaults skip here;
+                // explicit defaults (and required) emit once set.
+                // Raw-bits zero is the default for every numeric kind
+                // (float -0.0 has nonzero bits, like protobuf-java).
                 long v = m.num[s];
-                if (f.presence == IMPLICIT && isDefaultNum(f.kind, v)) {
-                    continue; // implicit presence never emits defaults
+                if (v == 0 && f.presence == IMPLICIT) {
+                    continue;
                 }
-                switch (f.kind) {
+                byte[] tag = f.tag;
+                switch (kind) {
                     case K_INT32:
-                    case K_ENUM:
-                        writeBytes(b, f.tag);
-                        Wire.wInt32(b, (int) v);
+                    case K_ENUM: {
+                        int x = (int) v;
+                        if (x >= 0) {
+                            Wire.wTagVar32(b, tag, x);
+                        } else {
+                            Wire.wTagVar64(b, tag, v);
+                        }
                         break;
+                    }
                     case K_UINT32:
-                        writeBytes(b, f.tag);
-                        Wire.wVar32(b, (int) v);
+                        Wire.wTagVar32(b, tag, (int) v);
                         break;
                     case K_SINT32:
-                        writeBytes(b, f.tag);
-                        Wire.wVar32(b, Wire.zig32((int) v));
+                        Wire.wTagVar32(b, tag, Wire.zig32((int) v));
                         break;
                     case K_INT64:
                     case K_UINT64:
-                        writeBytes(b, f.tag);
-                        Wire.wVar64(b, v);
+                        Wire.wTagVar64(b, tag, v);
                         break;
                     case K_SINT64:
-                        writeBytes(b, f.tag);
-                        Wire.wVar64(b, Wire.zig64(v));
+                        Wire.wTagVar64(b, tag, Wire.zig64(v));
                         break;
                     case K_BOOL:
-                        writeBytes(b, f.tag);
-                        Wire.ensure(b, 1);
-                        b.b[b.pos++] = (byte) (v == 0 ? 0 : 1);
+                        Wire.wTagVar32(b, tag, v == 0 ? 0 : 1);
                         break;
                     case K_FIXED32:
                     case K_SFIXED32:
                     case K_FLOAT:
-                        writeBytes(b, f.tag);
-                        Wire.wFixed32(b, (int) v);
+                        Wire.wTagFixed32(b, tag, (int) v);
                         break;
                     default:
-                        writeBytes(b, f.tag);
-                        Wire.wFixed64(b, v);
+                        Wire.wTagFixed64(b, tag, v);
                         break;
                 }
                 continue;
             }
-            if (f.kind == K_STRING && m.ref[s] instanceof String
+            // has[] is set (see the loop gate): implicit empty strings
+            // and bytes stay silent, everything else emits.
+            if (kind == K_STRING && m.ref[s] instanceof String
                     && f.presence == IMPLICIT
                     && ((String) m.ref[s]).isEmpty()) {
                 continue;
             }
-            if (f.kind == K_BYTES && m.ref[s] instanceof byte[]
+            if (kind == K_BYTES && m.ref[s] instanceof byte[]
                     && f.presence == IMPLICIT
                     && ((byte[]) m.ref[s]).length == 0) {
                 continue;
@@ -810,8 +888,7 @@ public final class GenericCodec {
             return;
         }
         if (f.kind == K_STRING) {
-            writeBytes(b, f.tag);
-            writeStr(b, (String) v, sc);
+            writeStrField(b, f.tag, (String) v, sc);
             return;
         }
         if (f.kind == K_BYTES) {
@@ -820,29 +897,64 @@ public final class GenericCodec {
             return;
         }
         if (f.kind == K_MESSAGE) {
-            writeBytes(b, f.tag);
-            int lp = Wire.patchReserve(b);
+            // Inlined tag + length-placeholder + patch: the hottest
+            // nesting shape (xlarge encodes 3000 of them) pays no calls.
+            byte[] tag = f.tag;
+            Wire.ensure(b, tag.length + 1);
+            for (int i = 0; i < tag.length; i++) {
+                b.b[b.pos++] = tag[i];
+            }
+            int lp = b.pos;
+            b.b[b.pos++] = 0;
             encodeInto((DMsg) v, b, depth + 1, sc);
-            Wire.patch(b, lp);
+            int len = b.pos - lp - 1;
+            if (len < 128) {
+                b.b[lp] = (byte) len;
+            } else {
+                Wire.patch(b, lp);
+            }
             return;
         }
         writeGroup(b, f, (DMsg) v, depth, sc);
     }
 
-    private static boolean isDefaultNum(int kind, long v) {
-        switch (kind) {
-            case K_FLOAT:
-                return Float.intBitsToFloat((int) v) == 0f;
-            case K_DOUBLE:
-                return Double.longBitsToDouble(v) == 0d;
-            default:
-                return v == 0;
-        }
-    }
-
     /** One dispatch per field; the loops below it are branch-free writes. */
     private static void encodeRepNum(Wire.Buf b, Field f, long[] a, int n) {
         if (f.packed) {
+            if (n == 1) {
+                // Single element: the length is one byte, so a placeholder
+                // shuffle (and its arraycopy call) would cost more than
+                // the payload. Only the medium tier hits this.
+                if (f.kind == K_BOOL) {
+                    writeBytes(b, f.tag);
+                    Wire.ensure(b, 2);
+                    b.b[b.pos++] = 1;
+                    b.b[b.pos++] = (byte) (a[0] == 0 ? 0 : 1);
+                    return;
+                }
+                if (f.kind == K_FIXED32 || f.kind == K_SFIXED32
+                        || f.kind == K_FLOAT) {
+                    writeBytes(b, f.tag);
+                    Wire.ensure(b, 5);
+                    b.b[b.pos++] = 4;
+                    Wire.wFixed32(b, (int) a[0]);
+                    return;
+                }
+                if (f.kind == K_FIXED64 || f.kind == K_SFIXED64
+                        || f.kind == K_DOUBLE) {
+                    writeBytes(b, f.tag);
+                    Wire.ensure(b, 9);
+                    b.b[b.pos++] = 8;
+                    Wire.wFixed64(b, a[0]);
+                    return;
+                }
+                int sz = sizePackedVar(f.kind, a[0]);
+                writeBytes(b, f.tag);
+                Wire.ensure(b, 1 + sz);
+                b.b[b.pos++] = (byte) sz;
+                writePackedVar(b, f.kind, a[0]);
+                return;
+            }
             if (f.kind == K_BOOL) {
                 writeBytes(b, f.tag);
                 Wire.wVar32(b, n);
@@ -913,6 +1025,25 @@ public final class GenericCodec {
         }
     }
 
+    private static int sizePackedVar(int kind, long v) {
+        switch (kind) {
+            case K_INT32:
+            case K_ENUM:
+                return Wire.sizeInt32((int) v);
+            case K_UINT32:
+                return Wire.sizeVar32((int) v);
+            case K_SINT32:
+                return Wire.sizeVar32(Wire.zig32((int) v));
+            case K_INT64:
+            case K_UINT64:
+                return Wire.sizeVar64(v);
+            case K_SINT64:
+                return Wire.sizeVar64(Wire.zig64(v));
+            default:
+                throw new IllegalArgumentException("not packable");
+        }
+    }
+
     private static void writePackedVar(Wire.Buf b, int kind, long v) {
         switch (kind) {
             case K_INT32:
@@ -976,16 +1107,8 @@ public final class GenericCodec {
     }
 
     private static void writeBytes(Wire.Buf b, byte[] tag) {
-        if (tag.length == 2) { // every multi-byte field number: no loop
-            Wire.ensure(b, 2);
-            b.b[b.pos++] = tag[0];
-            b.b[b.pos++] = tag[1];
-            return;
-        }
         Wire.ensure(b, tag.length);
-        for (byte x : tag) {
-            b.b[b.pos++] = x;
-        }
+        Wire.putTag(b, tag);
     }
 
     private static void writeGroup(Wire.Buf b, Field f, DMsg m, int depth,
@@ -1009,7 +1132,58 @@ public final class GenericCodec {
         if (r.pos != wire.length) {
             throw new IllegalArgumentException("trailing bytes");
         }
+        // The core refuses a message missing a required field at decode
+        // time; the flag above keeps this walk off trees that cannot fail it.
+        if (def.deepRequired) {
+            checkRequired(m, 0);
+        }
         return m;
+    }
+
+    /**
+     * Whole-tree required check. Present nested messages parse here (and are
+     * cached in place), so a lazy slice cannot smuggle in a missing field.
+     */
+    private static void checkRequired(DMsg m, int depth) {
+        if (depth > MAX_DEPTH) {
+            throw new IllegalArgumentException("nesting exceeds " + MAX_DEPTH);
+        }
+        MessageDef def = m.def;
+        if (def.hasRequired) {
+            for (int s = 0; s < def.fields.length; s++) {
+                if (def.fields[s].presence == REQUIRED && !m.has[s]) {
+                    throw new IllegalArgumentException("missing required field "
+                            + def.fullName + "." + def.fields[s].number);
+                }
+            }
+        }
+        for (int s = 0; s < def.fields.length; s++) {
+            Field f = def.fields[s];
+            if ((f.kind != K_MESSAGE && f.kind != K_GROUP) || !m.has[s]) {
+                continue;
+            }
+            if (f.repeated) {
+                for (int i = 0; i < m.repRefLen[s]; i++) {
+                    Object v = m.repRef[s][i];
+                    if (v instanceof Slice) {
+                        v = materialize(f, (Slice) v);
+                        m.repRef[s][i] = v;
+                    }
+                    if (v instanceof DMsg) {
+                        checkRequired((DMsg) v, depth + 1);
+                    }
+                }
+            } else {
+                Object v = m.ref[s];
+                if (v instanceof Slice) {
+                    v = materialize(f, (Slice) v);
+                    m.ref[s] = v;
+                }
+                if (v instanceof DMsg) {
+                    checkRequired((DMsg) v, depth + 1);
+                }
+            }
+        }
     }
 
     /**
@@ -1017,7 +1191,9 @@ public final class GenericCodec {
      * >= 0). One shared Reader threads through the recursion, so positions
      * never need saving: nested payloads consume exactly their slice.
      * Ref-kind fields (message/group/string/bytes) record a Slice and move
-     * on; numerics parse eagerly.
+     * on; numerics parse eagerly. Tags and lengths are strict (like the
+     * core): field 0, wire types above 5 and 6-byte tags are rejected, and
+     * a 5-byte tag above UINT32_MAX truncates exactly like the reference.
      */
     private static DMsg decodeInto(DMsg m, Wire.Reader r, int end,
             int groupEnd, int depth) {
@@ -1030,19 +1206,26 @@ public final class GenericCodec {
         boolean closed = groupEnd < 0;
         while (r.pos < r.end) {
             int fieldStart = r.pos;
-            int tag = (int) Wire.rVar(r);
+            int tag = Wire.rTag(r);
             int fnum = tag >>> 3;
             int wt = tag & 7;
-            if (groupEnd >= 0 && wt == 4 && fnum == groupEnd) {
+            if (fnum == 0 || wt > Wire.WT_FIXED32) {
+                throw new IllegalArgumentException("bad tag " + tag);
+            }
+            if (wt == 4) { // end-group: only our own number closes us
+                if (groupEnd < 0 || fnum != groupEnd) {
+                    throw new IllegalArgumentException("stray end-group for "
+                            + fnum);
+                }
                 closed = true; // our end-group; tag already consumed
                 break;
             }
             int s = fnum < def.slotByFnum.length ? def.slotByFnum[fnum] : -1;
             if (s < 0 || wtIncompatible(def.fields[s], wt)) {
-                retainUnknown(m, r, fieldStart, wt);
+                retainUnknown(m, r, fieldStart, fnum, wt, depth);
                 continue;
             }
-            readKnown(m, r, def.fields[s], s, wt, fieldStart);
+            readKnown(m, r, def.fields[s], s, wt, fieldStart, depth);
         }
         r.end = outerEnd;
         if (!closed) {
@@ -1052,25 +1235,15 @@ public final class GenericCodec {
         return m;
     }
 
-    /** Wrong wire type (or unknown number) keeps the raw blob, like the core. */
+    /**
+     * Wrong wire type (or unknown number) keeps the raw blob, like the core.
+     * Groups validate to their matching end tag (numbers must pair); anything
+     * else only checks value shape -- unknown LEN payloads stay opaque.
+     */
     private static void retainUnknown(DMsg m, Wire.Reader r, int fieldStart,
-            int wt) {
-        if (wt == 3) { // group: scan to the matching end tag, keep it all
-            int depth = 1;
-            while (depth > 0) {
-                if (r.pos >= r.end) {
-                    throw new IllegalArgumentException("truncated group");
-                }
-                int t = (int) Wire.rVar(r);
-                int w = t & 7;
-                if (w == 3) {
-                    depth++;
-                } else if (w == 4) {
-                    depth--;
-                } else {
-                    Wire.skip(r, w);
-                }
-            }
+            int fnum, int wt, int depth) {
+        if (wt == 3) {
+            skipGroup(r, fnum, depth + 1);
         } else {
             Wire.skip(r, wt);
         }
@@ -1078,6 +1251,38 @@ public final class GenericCodec {
             m.unknown = new ArrayList<>(4); // lazy: most messages have none
         }
         m.unknown.add(Arrays.copyOfRange(r.b, fieldStart, r.pos));
+    }
+
+    /**
+     * Validates a group body up to its matching end tag, like the core's
+     * group skipper: every tag is strict, field 0 and wire types above 5
+     * are rejected, and an end tag only closes the group it names. Used for
+     * unknown groups and for recorded (lazy) group slices alike.
+     */
+    private static void skipGroup(Wire.Reader r, int number, int depth) {
+        if (depth > MAX_DEPTH) {
+            throw new IllegalArgumentException("nesting exceeds " + MAX_DEPTH);
+        }
+        for (;;) {
+            int tag = Wire.rTag(r);
+            int fnum = tag >>> 3;
+            int wt = tag & 7;
+            if (fnum == 0 || wt > Wire.WT_FIXED32) {
+                throw new IllegalArgumentException("bad tag " + tag);
+            }
+            if (wt == 4) {
+                if (fnum != number) {
+                    throw new IllegalArgumentException("mismatched end-group for "
+                            + fnum + ", want " + number);
+                }
+                return;
+            }
+            if (wt == 3) {
+                skipGroup(r, fnum, depth + 1);
+            } else {
+                Wire.skip(r, wt);
+            }
+        }
     }
 
     private static boolean wtIncompatible(Field f, int wt) {
@@ -1091,13 +1296,13 @@ public final class GenericCodec {
     }
 
     private static void readKnown(DMsg m, Wire.Reader r, Field f, int s,
-            int wt, int fieldStart) {
+            int wt, int fieldStart, int depth) {
         if (f.repeated) {
             if (f.kind <= K_DOUBLE) {
                 long[] a = m.repNum[s];
                 int n = m.repNumLen[s];
                 if (wt == Wire.WT_LEN && isPackableKind(f.kind)) { // packed run
-                    int len = Wire.rLen(r);
+                    int len = Wire.rLen32(r);
                     int end = r.pos + len;
                     if (f.kind == K_BOOL) {
                         a = needLong(m, s, n + len);
@@ -1132,35 +1337,24 @@ public final class GenericCodec {
                         throw new IllegalArgumentException("packed overrun");
                     }
                     m.repNumLen[s] = n;
+                    // An empty packed run adds nothing: presence follows length.
+                    m.has[s] = n > 0;
                     return;
                 }
                 a = needLong(m, s, n + 1); // unpacked element
                 a[n] = readNumSingle(r, f.kind);
                 m.repNumLen[s] = n + 1;
+                m.has[s] = true;
                 return;
             }
-            // Ref-kind repeated: record one slice per element, parse nothing.
+            // Ref-kind repeated: validate the element, record one slice each.
             if (f.kind == K_MESSAGE) {
-                int len = Wire.rLen(r);
-                r.pos += len;
+                int len = Wire.rLen32(r);
+                validateInto(f.msgType, r, r.pos + len, depth + 1);
             } else if (f.kind == K_GROUP) {
-                int depth = 1;
-                while (depth > 0) {
-                    if (r.pos >= r.end) {
-                        throw new IllegalArgumentException("truncated group");
-                    }
-                    int t = (int) Wire.rVar(r);
-                    int w = t & 7;
-                    if (w == 3) {
-                        depth++;
-                    } else if (w == 4) {
-                        depth--;
-                    } else {
-                        Wire.skip(r, w);
-                    }
-                }
+                skipGroup(r, f.number, depth + 1);
             } else { // K_STRING / K_BYTES element
-                int len = Wire.rLen(r);
+                int len = Wire.rLen32(r);
                 r.pos += len;
             }
             Object[] a = m.repRef[s];
@@ -1171,48 +1365,158 @@ public final class GenericCodec {
             }
             a[n] = new Slice(r.b, fieldStart, r.pos - fieldStart);
             m.repRefLen[s] = n + 1;
+            m.has[s] = true;
             return;
         }
         if (f.kind <= K_DOUBLE) {
             long v = readNumSingle(r, f.kind);
             m.num[s] = v;
-            if (f.presence != IMPLICIT || !isDefaultNum(f.kind, v)) {
+            if (f.presence != IMPLICIT || v != 0) {
                 m.setPresent(s, f);
             }
             return;
         }
-        // Ref-kind singular: slice it (empty implicit strings stay absent).
+        // Ref-kind singular: a second occurrence merges (like the core),
+        // the first only records a validated slice.
         if (f.kind == K_MESSAGE) {
-            int len = Wire.rLen(r);
+            int len = Wire.rLen32(r);
             if (len == 0 && f.presence == IMPLICIT) {
                 return; // unreachable in practice, but costs nothing
             }
-            r.pos += len;
-        } else if (f.kind == K_GROUP) {
-            int depth = 1;
-            while (depth > 0) {
-                if (r.pos >= r.end) {
-                    throw new IllegalArgumentException("truncated group");
-                }
-                int t = (int) Wire.rVar(r);
-                int w = t & 7;
-                if (w == 3) {
-                    depth++;
-                } else if (w == 4) {
-                    depth--;
-                } else {
-                    Wire.skip(r, w);
-                }
+            DMsg sub = mergeTarget(m, f, s);
+            if (sub != null) {
+                decodeInto(sub, r, r.pos + len, -1, depth + 1);
+            } else {
+                int valueEnd = r.pos + len;
+                validateInto(f.msgType, r, valueEnd, depth + 1);
+                m.ref[s] = new Slice(r.b, fieldStart, valueEnd - fieldStart);
+                m.setPresent(s, f);
             }
-        } else { // K_STRING / K_BYTES
-            int len = Wire.rLen(r);
-            if (len == 0 && f.presence == IMPLICIT) {
-                return; // proto3 "": absent, never emitted
-            }
-            r.pos += len;
+            return;
         }
+        if (f.kind == K_GROUP) {
+            DMsg sub = mergeTarget(m, f, s);
+            if (sub != null) {
+                decodeInto(sub, r, r.end, f.number, depth + 1);
+            } else {
+                skipGroup(r, f.number, depth + 1);
+                m.ref[s] = new Slice(r.b, fieldStart, r.pos - fieldStart);
+                m.setPresent(s, f);
+            }
+            return;
+        }
+        // K_STRING / K_BYTES (empty implicit strings stay absent).
+        int len = Wire.rLen32(r);
+        if (len == 0 && f.presence == IMPLICIT) {
+            return; // proto3 "": absent, never emitted
+        }
+        r.pos += len;
         m.ref[s] = new Slice(r.b, fieldStart, r.pos - fieldStart);
         m.setPresent(s, f);
+    }
+
+    /**
+     * The submessage a repeated singular message/group field merges into,
+     * or null for the first occurrence. Materializes a lazy slice in place,
+     * so the merge parses straight into the live tree.
+     */
+    private static DMsg mergeTarget(DMsg m, Field f, int s) {
+        if (!m.has[s] || (f.oneof >= 0 && m.oneofCase[f.oneof] != s + 1)) {
+            return null;
+        }
+        Object v = m.ref[s];
+        if (v instanceof DMsg) {
+            return (DMsg) v;
+        }
+        if (v instanceof Slice) {
+            DMsg sub = (DMsg) materialize(f, (Slice) v);
+            m.ref[s] = sub;
+            return sub;
+        }
+        return null;
+    }
+
+    /**
+     * Structural validation of a recorded (lazy) message payload: the same
+     * tag, length, group-matching and depth rules as the decoding loop, but
+     * allocating nothing. A truncated or group-mismatched nested payload
+     * must fail the decode, not the first access.
+     */
+    private static void validateInto(MessageDef def, Wire.Reader r, int end,
+            int depth) {
+        if (depth > MAX_DEPTH) {
+            throw new IllegalArgumentException("nesting exceeds " + MAX_DEPTH);
+        }
+        int outerEnd = r.end;
+        r.end = end;
+        while (r.pos < r.end) {
+            int tag = Wire.rTag(r);
+            int fnum = tag >>> 3;
+            int wt = tag & 7;
+            if (fnum == 0 || wt > Wire.WT_FIXED32 || wt == 4) {
+                throw new IllegalArgumentException("bad tag " + tag);
+            }
+            int s = fnum < def.slotByFnum.length ? def.slotByFnum[fnum] : -1;
+            if (s < 0 || wtIncompatible(def.fields[s], wt)) {
+                validateUnknown(r, fnum, wt, depth);
+                continue;
+            }
+            validateKnown(r, def.fields[s], wt, depth);
+        }
+        r.end = outerEnd;
+    }
+
+    /** Value-shape check without storage; mirrors the decoding loop. */
+    private static void validateKnown(Wire.Reader r, Field f, int wt,
+            int depth) {
+        if (f.kind <= K_DOUBLE) {
+            if (f.repeated && wt == Wire.WT_LEN && isPackableKind(f.kind)) {
+                int len = Wire.rLen32(r);
+                int end = r.pos + len;
+                if (f.kind == K_BOOL) {
+                    while (r.pos < end) {
+                        Wire.rVar(r);
+                    }
+                } else if (f.kind == K_FIXED32 || f.kind == K_SFIXED32
+                        || f.kind == K_FLOAT) {
+                    r.pos += (len / 4) * 4;
+                } else if (f.kind == K_FIXED64 || f.kind == K_SFIXED64
+                        || f.kind == K_DOUBLE) {
+                    r.pos += (len / 8) * 8;
+                } else {
+                    while (r.pos < end) {
+                        readPackedVar(r, f.kind);
+                    }
+                }
+                if (r.pos != end) {
+                    throw new IllegalArgumentException("packed overrun");
+                }
+                return;
+            }
+            readNumSingle(r, f.kind);
+            return;
+        }
+        if (f.kind == K_MESSAGE) {
+            int len = Wire.rLen32(r);
+            validateInto(f.msgType, r, r.pos + len, depth + 1);
+            return;
+        }
+        if (f.kind == K_GROUP) {
+            skipGroup(r, f.number, depth + 1);
+            return;
+        }
+        int len = Wire.rLen32(r); // K_STRING / K_BYTES
+        r.pos += len;
+    }
+
+    /** Unknown field shape check: groups must pair, LEN stays opaque. */
+    private static void validateUnknown(Wire.Reader r, int fnum, int wt,
+            int depth) {
+        if (wt == 3) {
+            skipGroup(r, fnum, depth + 1);
+        } else {
+            Wire.skip(r, wt);
+        }
     }
 
     private static long[] needLong(DMsg m, int s, int need) {
@@ -1252,7 +1556,10 @@ public final class GenericCodec {
     private static long readPackedVar(Wire.Reader r, int kind) {
         long v = Wire.rVar(r);
         if (kind == K_SINT32) {
-            return Wire.unzig32(v);
+            // Truncate before unzigzag, like the reference: a 64-bit varint
+            // on a sint32 field decodes its low 32 bits (a mask, not a
+            // sign-extending cast).
+            return Wire.unzig32(v & 0xFFFFFFFFL);
         }
         if (kind == K_SINT64) {
             return Wire.unzig64(v);
@@ -1270,7 +1577,7 @@ public final class GenericCodec {
             case K_ENUM:
                 return Wire.rVar(r);
             case K_SINT32:
-                return Wire.unzig32(Wire.rVar(r));
+                return Wire.unzig32(Wire.rVar(r) & 0xFFFFFFFFL);
             case K_SINT64:
                 return Wire.unzig64(Wire.rVar(r));
             case K_FIXED32:

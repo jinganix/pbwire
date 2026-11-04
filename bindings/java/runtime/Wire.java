@@ -1,4 +1,5 @@
 
+import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 
@@ -33,15 +34,83 @@ public final class Wire {
 
     public static void ensure(Buf b, int extra) {
         if (b.pos + extra > b.b.length) {
-            int n = b.b.length * 2;
-            while (n < b.pos + extra) {
-                n *= 2;
-            }
-            b.b = Arrays.copyOf(b.b, n);
+            grow(b, extra);
         }
     }
 
+    /** Slow path behind every inlined capacity check: grows and reloads. */
+    static void grow(Buf b, int extra) {
+        int n = b.b.length * 2;
+        while (n < b.pos + extra) {
+            n *= 2;
+        }
+        b.b = Arrays.copyOf(b.b, n);
+    }
+
+    /** Unchecked little-endian stores: one capacity check per call, then
+     *  raw stores with no per-byte bounds checks -- the same trick the
+     *  official protobuf-java encoder uses. Every unchecked run is
+     *  dominated by an exact-maximum check, so pos never leaves the
+     *  buffer; without Unsafe, or off little-endian, the checked
+     *  fallback below runs instead. */
+    static final sun.misc.Unsafe U = loadUnsafe();
+    static final long BYTE_BASE = U == null ? 0
+            : U.arrayBaseOffset(byte[].class);
+    static final boolean UNCHECKED = U != null
+            && ByteOrder.nativeOrder() == ByteOrder.LITTLE_ENDIAN
+            && U.arrayIndexScale(byte[].class) == 1;
+
+    private static sun.misc.Unsafe loadUnsafe() {
+        try {
+            java.lang.reflect.Field f =
+                    sun.misc.Unsafe.class.getDeclaredField("theUnsafe");
+            f.setAccessible(true);
+            return (sun.misc.Unsafe) f.get(null);
+            // Throwable, not Exception: a missing field, a locked-down
+            // module, or a future JDK without Unsafe must all fall back
+            // to checked writes, never break class init.
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    /** Raw tag copy at absolute offset p; returns the end offset. */
+    private static long putTagU(byte[] a, long p, byte[] tag) {
+        if (tag.length == 1) {
+            U.putByte(a, p++, tag[0]);
+            return p;
+        }
+        for (byte t : tag) {
+            U.putByte(a, p++, t);
+        }
+        return p;
+    }
+
+    /** Raw varint32 at absolute offset p; returns the end offset. */
+    private static long putVar32U(byte[] a, long p, int v) {
+        while ((v & ~0x7F) != 0) {
+            U.putByte(a, p++, (byte) ((v & 0x7F) | 0x80));
+            v >>>= 7;
+        }
+        U.putByte(a, p++, (byte) v);
+        return p;
+    }
+
+    /** Raw varint64 at absolute offset p; returns the end offset. */
+    private static long putVar64U(byte[] a, long p, long v) {
+        while ((v & ~0x7FL) != 0) {
+            U.putByte(a, p++, (byte) ((v & 0x7F) | 0x80));
+            v >>>= 7;
+        }
+        U.putByte(a, p++, (byte) v);
+        return p;
+    }
+
     public static void wVar32(Buf b, int v) {
+        if (UNCHECKED && b.pos + 5 <= b.b.length) {
+            b.pos = (int) (putVar32U(b.b, BYTE_BASE + b.pos, v) - BYTE_BASE);
+            return;
+        }
         ensure(b, 5);
         while ((v & ~0x7F) != 0) {
             b.b[b.pos++] = (byte) ((v & 0x7F) | 0x80);
@@ -51,6 +120,10 @@ public final class Wire {
     }
 
     public static void wVar64(Buf b, long v) {
+        if (UNCHECKED && b.pos + 10 <= b.b.length) {
+            b.pos = (int) (putVar64U(b.b, BYTE_BASE + b.pos, v) - BYTE_BASE);
+            return;
+        }
         ensure(b, 10);
         while ((v & ~0x7FL) != 0) {
             b.b[b.pos++] = (byte) ((v & 0x7F) | 0x80);
@@ -69,6 +142,11 @@ public final class Wire {
     }
 
     public static void wFixed32(Buf b, int v) {
+        if (UNCHECKED && b.pos + 4 <= b.b.length) {
+            U.putInt(b.b, BYTE_BASE + b.pos, v);
+            b.pos += 4;
+            return;
+        }
         ensure(b, 4);
         b.b[b.pos++] = (byte) v;
         b.b[b.pos++] = (byte) (v >> 8);
@@ -77,7 +155,104 @@ public final class Wire {
     }
 
     public static void wFixed64(Buf b, long v) {
+        if (UNCHECKED && b.pos + 8 <= b.b.length) {
+            U.putLong(b.b, BYTE_BASE + b.pos, v);
+            b.pos += 8;
+            return;
+        }
         ensure(b, 8);
+        b.b[b.pos++] = (byte) v;
+        b.b[b.pos++] = (byte) (v >> 8);
+        b.b[b.pos++] = (byte) (v >> 16);
+        b.b[b.pos++] = (byte) (v >> 24);
+        b.b[b.pos++] = (byte) (v >> 32);
+        b.b[b.pos++] = (byte) (v >> 40);
+        b.b[b.pos++] = (byte) (v >> 48);
+        b.b[b.pos++] = (byte) (v >> 56);
+    }
+
+    /** Tag without a call or loop for the common 1-byte case. */
+    static void putTag(Buf b, byte[] tag) {
+        if (tag.length == 1) {
+            b.b[b.pos++] = tag[0];
+            return;
+        }
+        for (int i = 0; i < tag.length; i++) {
+            b.b[b.pos++] = tag[i];
+        }
+    }
+
+    /** Fused tag+value writes: one bounds check per field. The singular
+     *  numeric switch in GenericCodec calls these instead of
+     *  tag-then-value, halving the ensures and the calls. The capacity
+     *  check is written out (not via ensure) so later stores in the
+     *  same method can go bounds-check-free. */
+    public static void wTagVar32(Buf b, byte[] tag, int v) {
+        int need = tag.length + 5;
+        if (UNCHECKED && b.pos + need <= b.b.length) {
+            long p = putTagU(b.b, BYTE_BASE + b.pos, tag);
+            b.pos = (int) (putVar32U(b.b, p, v) - BYTE_BASE);
+            return;
+        }
+        if (b.pos + need > b.b.length) {
+            grow(b, need);
+        }
+        putTag(b, tag);
+        while ((v & ~0x7F) != 0) {
+            b.b[b.pos++] = (byte) ((v & 0x7F) | 0x80);
+            v >>>= 7;
+        }
+        b.b[b.pos++] = (byte) v;
+    }
+
+    public static void wTagVar64(Buf b, byte[] tag, long v) {
+        int need = tag.length + 10;
+        if (UNCHECKED && b.pos + need <= b.b.length) {
+            long p = putTagU(b.b, BYTE_BASE + b.pos, tag);
+            b.pos = (int) (putVar64U(b.b, p, v) - BYTE_BASE);
+            return;
+        }
+        if (b.pos + need > b.b.length) {
+            grow(b, need);
+        }
+        putTag(b, tag);
+        while ((v & ~0x7FL) != 0) {
+            b.b[b.pos++] = (byte) ((v & 0x7F) | 0x80);
+            v >>>= 7;
+        }
+        b.b[b.pos++] = (byte) v;
+    }
+
+    public static void wTagFixed32(Buf b, byte[] tag, int v) {
+        int need = tag.length + 4;
+        if (UNCHECKED && b.pos + need <= b.b.length) {
+            long p = putTagU(b.b, BYTE_BASE + b.pos, tag);
+            U.putInt(b.b, p, v);
+            b.pos = (int) (p - BYTE_BASE) + 4;
+            return;
+        }
+        if (b.pos + need > b.b.length) {
+            grow(b, need);
+        }
+        putTag(b, tag);
+        b.b[b.pos++] = (byte) v;
+        b.b[b.pos++] = (byte) (v >> 8);
+        b.b[b.pos++] = (byte) (v >> 16);
+        b.b[b.pos++] = (byte) (v >> 24);
+    }
+
+    public static void wTagFixed64(Buf b, byte[] tag, long v) {
+        int need = tag.length + 8;
+        if (UNCHECKED && b.pos + need <= b.b.length) {
+            long p = putTagU(b.b, BYTE_BASE + b.pos, tag);
+            U.putLong(b.b, p, v);
+            b.pos = (int) (p - BYTE_BASE) + 8;
+            return;
+        }
+        if (b.pos + need > b.b.length) {
+            grow(b, need);
+        }
+        putTag(b, tag);
         b.b[b.pos++] = (byte) v;
         b.b[b.pos++] = (byte) (v >> 8);
         b.b[b.pos++] = (byte) (v >> 16);
@@ -158,14 +333,6 @@ public final class Wire {
         return (v >>> 1) ^ -(v & 1);
     }
 
-    /** Reserves a 1-byte length placeholder; see patch(). */
-    public static int patchReserve(Buf b) {
-        ensure(b, 1);
-        int lp = b.pos;
-        b.b[b.pos++] = 0;
-        return lp;
-    }
-
     /** Fills a placeholder: 1-byte fast path, memmove fallback otherwise. */
     public static void patch(Buf b, int lp) {
         int len = b.pos - lp - 1;
@@ -190,6 +357,9 @@ public final class Wire {
     public static long rVar(Reader r) {
         byte[] b = r.b;
         int p = r.pos;
+        if (p >= r.end) {
+            throw new IllegalArgumentException("truncated varint");
+        }
         byte c = b[p++];
         if (c >= 0) { // 1-byte fast path, the common length/small-int case
             r.pos = p;
@@ -226,6 +396,63 @@ public final class Wire {
         return n;
     }
 
+    /**
+     * Strict tag read, like the core's tag reader: a tag is a varint32, at
+     * most five bytes, and a 5-byte tag above UINT32_MAX is truncated instead
+     * of rejected (exactly what the reference parser does -- the official
+     * suite expects two such cases to parse). A 6-byte tag is invalid.
+     */
+    public static int rTag(Reader r) {
+        byte[] b = r.b;
+        int p = r.pos;
+        if (p >= r.end) {
+            throw new IllegalArgumentException("truncated tag");
+        }
+        long v = b[p++] & 0x7F;
+        int shift = 7;
+        while ((b[p - 1] & 0x80) != 0) {
+            if (shift >= 35 || p >= r.end) {
+                throw new IllegalArgumentException("bad tag");
+            }
+            byte c = b[p++];
+            v |= (long) (c & 0x7F) << shift;
+            shift += 7;
+        }
+        r.pos = p;
+        return (int) v; // truncate, like the reference parser
+    }
+
+    /**
+     * Strict length read, like the core's length reader: at most five bytes
+     * and the fifth only carries four bits. Unlike a tag, an out-of-range
+     * length is rejected instead of truncated.
+     */
+    public static int rLen32(Reader r) {
+        byte[] b = r.b;
+        int p = r.pos;
+        if (p >= r.end) {
+            throw new IllegalArgumentException("truncated length");
+        }
+        int v = b[p++] & 0x7F;
+        int shift = 7;
+        while ((b[p - 1] & 0x80) != 0) {
+            if (shift >= 35 || p >= r.end) {
+                throw new IllegalArgumentException("bad length");
+            }
+            byte c = b[p++];
+            if (shift == 28 && (c & 0x7F) > 0x0F) {
+                throw new IllegalArgumentException("length overflow");
+            }
+            v |= (c & 0x7F) << shift;
+            shift += 7;
+        }
+        if (v < 0 || (long) p + (long) v > (long) r.end) {
+            throw new IllegalArgumentException("truncated length-delimited");
+        }
+        r.pos = p;
+        return v;
+    }
+
     public static void skip(Reader r, int wt) {
         switch (wt) {
             case WT_VARINT:
@@ -238,7 +465,11 @@ public final class Wire {
                 r.pos += 8;
                 return;
             case WT_LEN:
-                r.pos += rLen(r);
+                // Strict like the core: at most five bytes, the fifth only
+                // four bits (see rLen32). Two steps, not `+=`, so the length
+                // byte itself is consumed.
+                int n = rLen32(r);
+                r.pos += n;
                 return;
             case WT_FIXED32:
                 if (r.pos + 4 > r.end) {

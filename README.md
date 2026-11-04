@@ -34,6 +34,7 @@ pbw_free(buf);
 | [Performance benchmarks](BENCHMARKS.md) | **the performance document**: the four standard tiers, every binding against its official runtime, and the cross-binding comparison |
 | [Testing and conformance](docs/testing.md) | the self-check, pinned reference bytes, `difftest`, the official conformance suite |
 | [FAQ](docs/faq.md) | syntax support, thread safety, unknown fields, untrusted input, `.proto` at runtime |
+| [Protobuf pain points](docs/protobuf-pain-points.md) | which official-library complaints pbwire solves, eases or leaves alone — the searchable index |
 | [Bindings](bindings/README.md) | every host binding, where its schema comes from, and the per-language pain point each one removes |
 | [include/pbwire.h](include/pbwire.h) | the whole public API with per-function contracts |
 | [AGENTS.md](AGENTS.md) · [CONTRIBUTING.md](CONTRIBUTING.md) · [llms.txt](llms.txt) | working on this repo, commit rules, a one-page factual summary |
@@ -153,9 +154,9 @@ M4 Pro with `-O2` and `protoc 36.2`, the in-process dynamic core with a
 `pbw_ctx` runs 1.1-1.7x the throughput of the generated C++ codec on every tier
 (132 B to 86 KB, encode and decode), and 8-15x the speed of C++
 `DynamicMessage` on encode and 2-4x on decode. Generated code only wins where
-the comparison includes an FFI boundary (Java, 136 B, 0.69x) or where pbwire's
-*plain* API pays one `malloc`/`free` pair per call (0.97x at 2755 B); the arena
-API wins every tier.
+pbwire's *plain* API pays one `malloc`/`free` pair per call (0.97x at 2755 B)
+or where a dynamic codec meets generated straight-line writes on a tiny message
+(Java, 136 B, 0.78x); the arena API wins every tier.
 
 The per-language tables — the same four payload tiers for every binding against
 its official runtime (Python, Java, Kotlin, Node, Ruby, Objective-C, PHP,
@@ -170,11 +171,11 @@ The one-row summary is here; the detail is there.
 | [C++](bindings/cpp/) | same C runtime, same header | 1.42x (xlarge) / 2.25x (xlarge)¹ | [protoc C++](https://github.com/protocolbuffers/protobuf) |
 | [Python](bindings/python/) | CPython extension | 6.5x (xlarge) / 1.69x (xlarge) | [google.protobuf (upb)](https://pypi.org/project/protobuf/) |
 | [Ruby](bindings/ruby/) | C extension, linked | 1.42x (small) / 1.93x (large) | [google-protobuf gem](https://rubygems.org/gems/google-protobuf) |
-| [Java](bindings/java/) | FFI `java.lang.foreign` | 1.59x (large) / 1.22x (small) | [protobuf-java](https://github.com/protocolbuffers/protobuf/tree/main/java) |
-| [Kotlin](bindings/kotlin/) | Java FFM layer + DSL | 1.60x (xlarge) / 1.20x (medium) | [protobuf-kotlin](https://github.com/protocolbuffers/protobuf/tree/main/java/kotlin) |
+| [Java](bindings/java/) | pure-Java codec, no native code | 1.25x (medium) / 3.20x (xlarge) | [protobuf-java](https://github.com/protocolbuffers/protobuf/tree/main/java) |
+| [Kotlin](bindings/kotlin/) | Java runtime + DSL | 1.60x (xlarge) / 1.20x (medium) | [protobuf-kotlin](https://github.com/protocolbuffers/protobuf/tree/main/java/kotlin) |
 | [Node](bindings/node/) | N-API addon | 22.3x (xlarge) / 20.0x (xlarge) | [jspb](https://www.npmjs.com/package/google-protobuf) + protobufjs |
 | [Objective-C](bindings/objc/) | ARC wrapper | 6.6x (medium) / 2.9x (large) | [protobuf-objc](https://github.com/protocolbuffers/protobuf/tree/main/objectivec) |
-| [PHP](bindings/php/) | `ext-ffi` | 0.99x (xlarge) / 0.99x (xlarge) vs C ext (337x / 103x vs pure PHP) | [protobuf-php](https://github.com/protocolbuffers/protobuf/tree/main/php) |
+| [PHP](bindings/php/) | C extension | 1.11x (xlarge) / 1.15x (xlarge) vs C ext (374x / 127x vs pure PHP) | [protobuf-php](https://github.com/protocolbuffers/protobuf/tree/main/php) |
 | [Dart](bindings/dart/) | `dart:ffi` | 12.2x (xlarge) / 3.3x (xlarge) | [protobuf-dart](https://pub.dev/packages/protobuf) |
 | [Rust](bindings/rust/) | static link | 1.57x (xlarge) / 1.45x (xlarge) | [rust-protobuf 3.x](https://github.com/stepancheg/rust-protobuf) + prost |
 | [C#](bindings/csharp/) | P/Invoke | 3.4x (medium) / 2.0x (medium) | [Google.Protobuf](https://www.nuget.org/packages/Google.Protobuf) + protobuf-net |
@@ -197,8 +198,9 @@ Pick pbwire when the schema is only known at runtime, when one C core serves
 several host languages, or when libprotobuf must not be in the process. Pick
 generated code only when the schema never changes *and* you accept a codegen
 step: even then it wins just two cells of the benchmark set — the C struct codec
-at 136 B (0.98x) and the Java binding at 136 B (0.69x, where the FFI downcall
-dominates) — while the in-process `pbw_ctx` wins every tier of the core
+at 136 B (0.98x) and the Java binding at 136 B (0.78x, where generated
+straight-line writes meet generic dispatch) — while the in-process `pbw_ctx`
+wins every tier of the core
 benchmark.
 
 ## Contributing

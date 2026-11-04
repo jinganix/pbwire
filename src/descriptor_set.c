@@ -72,11 +72,15 @@ ds_error(pbw_schema *schema, const char *fmt, ...)
 static int
 ds_next(const uint8_t **pp, const uint8_t *end, ds_field *f)
 {
-    const uint8_t *p = *pp;
+    const uint8_t *p;
     uint64_t value;
     size_t used;
     uint32_t tag;
 
+    if (pp == NULL || end == NULL || f == NULL || *pp == NULL) {
+        return -1;
+    }
+    p = *pp;
     if (p >= end) {
         return 0;
     }
@@ -107,7 +111,7 @@ ds_next(const uint8_t **pp, const uint8_t *end, ds_field *f)
             return -1;
         }
         p += used;
-        if (len > (size_t)(end - p)) {
+        if (len > pbw_remaining(end, p)) {
             return -1;
         }
         f->data = p;
@@ -118,7 +122,7 @@ ds_next(const uint8_t **pp, const uint8_t *end, ds_field *f)
     case PBW_WIRE_64BIT:
     case PBW_WIRE_32BIT: {
         size_t size = f->wire == PBW_WIRE_64BIT ? 8u : 4u;
-        if ((size_t)(end - p) < size) {
+        if (pbw_remaining(end, p) < size) {
             return -1;
         }
         f->data = p;
@@ -136,7 +140,13 @@ ds_next(const uint8_t **pp, const uint8_t *end, ds_field *f)
 static pbw_status
 ds_str(char *buf, size_t cap, const ds_field *f)
 {
+    if (buf == NULL || cap == 0 || f == NULL) {
+        return PBW_ERR_INVALID;
+    }
     if (f->wire != PBW_WIRE_LEN) {
+        return PBW_ERR_INVALID;
+    }
+    if (f->data == NULL && f->len > 0) {
         return PBW_ERR_INVALID;
     }
     if (f->len == 0) {
@@ -557,9 +567,11 @@ ds_enum_proto(pbw_schema *schema, const char *parent, const uint8_t *p,
             ds_error(schema, "enum value without a name in %s", fqname);
             return PBW_ERR_INVALID;
         }
-        /* pbw_enum_add_value cannot report OOM; a lost value would fail link
-         * only if something references it, which is also an allocation path. */
-        pbw_enum_add_value(desc, value_name, number);
+        status = pbw_enum_add_value(desc, value_name, number);
+        if (status != PBW_OK) {
+            ds_error(schema, "out of memory");
+            return status;
+        }
     }
 }
 
@@ -637,6 +649,11 @@ ds_message_proto(pbw_schema *schema, int proto3, const char *parent,
                 return status;
             }
             /* reserved names are skipped silently by the text parser */
+            if (msg->reserved_count == SIZE_MAX ||
+                (msg->reserved_count + 1) > SIZE_MAX / sizeof(*grown)) {
+                ds_error(schema, "out of memory");
+                return PBW_ERR_NOMEM;
+            }
             grown = (char **)realloc(msg->reserved, (msg->reserved_count + 1) *
                                                         sizeof(*grown));
             if (grown == NULL) {
@@ -646,8 +663,13 @@ ds_message_proto(pbw_schema *schema, int proto3, const char *parent,
             msg->reserved = grown;
             grown[msg->reserved_count] = NULL;
             {
-                size_t len = strlen(name) + 1;
-                char *copy = (char *)malloc(len);
+                size_t len = strlen(name);
+                char *copy;
+                if (len == SIZE_MAX) {
+                    ds_error(schema, "out of memory");
+                    return PBW_ERR_NOMEM;
+                }
+                copy = (char *)malloc(len + 1);
                 if (copy == NULL) {
                     ds_error(schema, "out of memory");
                     return PBW_ERR_NOMEM;
@@ -784,7 +806,7 @@ ds_file_proto(pbw_schema *schema, const uint8_t *p, const uint8_t *end,
 pbw_status
 pbw_descriptor_set_load(const void *data, size_t len, pbw_schema **out)
 {
-    const uint8_t *p = (const uint8_t *)data;
+    const uint8_t *p;
     const uint8_t *end;
     pbw_schema *schema;
     pbw_status status = PBW_OK;
@@ -804,6 +826,7 @@ pbw_descriptor_set_load(const void *data, size_t len, pbw_schema **out)
     if (schema == NULL) {
         return PBW_ERR_NOMEM;
     }
+    p = pbw_normalize_input(data, len);
     end = p + len;
     for (;;) {
         int rc = ds_next(&p, end, &f);

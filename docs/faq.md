@@ -60,11 +60,11 @@ the short version:
 | C++ | direct call over the C runtime | `FileDescriptorSet` |
 | Python | CPython extension, dict↔wire in C | `FileDescriptorSet` |
 | Ruby | C extension linked against the core | `FileDescriptorSet` |
-| Java | `java.lang.foreign` downcalls (no JNI) | `FileDescriptorSet` |
-| Kotlin | the Java FFM layer + a DSL | `FileDescriptorSet` |
+| Java | own pure-Java codec (no JNI, no native library) | `FileDescriptorSet` |
+| Kotlin | the Java runtime + a DSL | `FileDescriptorSet` |
 | Node | hand-written N-API addon (no npm) | `FileDescriptorSet` |
 | Objective-C | ARC wrapper (Foundation only) | `FileDescriptorSet` |
-| PHP | `ext-ffi` | `FileDescriptorSet` |
+| PHP | native C extension (`ext-ffi` wrapper without a compiler) | `FileDescriptorSet` |
 | Dart | `dart:ffi` | `FileDescriptorSet` |
 | C# | `DllImport` + a resolver | `FileDescriptorSet` |
 | Rust | links `libpbwire.a` statically | `FileDescriptorSet` |
@@ -107,8 +107,9 @@ descriptor and a value tree at runtime, which costs roughly 40 ns per encode of 
 pass (the C++ serializer sizes first, then writes) and by precomputed tag bytes,
 so the in-process `pbw_ctx` API is 1.2-1.7x the generated codec on every tier.
 The gap only shows up in two places: the plain `pbw_encode` API, which allocates
-a tree per call (0.96x of generated code at 169 B), and bindings that cross an
-FFI boundary per call (Java, 0.69x at 136 B). Numbers and the per-language
+a tree per call (0.96x of generated code at 169 B), and a dynamic codec meeting
+generated straight-line writes on a tiny message (Java, 0.75x at 136 B). Numbers
+and the per-language
 reasons are in [BENCHMARKS.md](../BENCHMARKS.md).
 
 ### Can I decode untrusted bytes with it?

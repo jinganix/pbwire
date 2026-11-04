@@ -32,7 +32,20 @@ protoc -I"$(dirname "$proto")" --php_out="$gen" \
 
 make -C "$root" shared >/dev/null
 
+# Build our C extension when phpize exists; the harness runs it too when
+# present (FFI first, then native), so one run compares both versions.
+if command -v phpize >/dev/null 2>&1; then
+    (cd "$root/bindings/php/ext" && ./build.sh >/dev/null) || echo 'bench.sh: php ext build failed, FFI only' >&2
+fi
+
 php "$here/bench.php" "$gen/matrix3.desc"
+
+if [ -f "$root/bindings/php/ext/modules/pbwire.so" ]; then
+    echo
+    echo '--- pbwire C extension (native, no FFI) ---'
+    echo
+    php -d "extension=$root/bindings/php/ext/modules/pbwire.so" "$here/bench.php" "$gen/matrix3.desc"
+fi
 
 # When the C extension is present the run above timed it (`protobuf-php-c`
 # rows); a second `php -n` run captures the pure-PHP baseline too.

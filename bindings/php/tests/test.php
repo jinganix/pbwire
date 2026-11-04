@@ -168,6 +168,17 @@ check($edgeDecoded->has('pick_str') && !$edgeDecoded->has('pick_num'), 'oneof ke
 check($edgeDecoded->encode() === $edgeOracle, 'edge decode -> encode is byte-exact');
 echo "OK   edge payload: bytes, UTF-8, negative enum, empty elements, oneof\n";
 
+/* Strings are length-delimited: embedded NUL bytes survive both ways. */
+$nul = $edgeTy->newMessage();
+$nul->setString('text', "a\x00b");
+$nul->setString('tags', "x\x00y");
+check($nul->getString('text') === "a\x00b", 'string with NUL');
+check($nul->at('tags', 0)?->asString() === "x\x00y", 'repeated string with NUL');
+$nulBack = $edgeTy->decode($nul->encode());
+check($nulBack->getString('text') === "a\x00b", 'decoded string with NUL');
+check($nulBack->at('tags', 0)?->asString() === "x\x00y", 'decoded repeated string with NUL');
+check($nulBack->encode() === $nul->encode(), 'NUL payload re-encodes byte-exact');
+
 /* A default message is zero bytes both ways. */
 check($edgeTy->newMessage()->encode() === '', 'empty message encodes to zero bytes');
 $emptyDecoded = $edgeTy->decode('');
