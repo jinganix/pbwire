@@ -1,7 +1,7 @@
 [![CI](https://github.com/jinganix/enif_protobuf/actions/workflows/ci.yml/badge.svg)](https://github.com/jinganix/enif_protobuf/actions/workflows/ci.yml)
 [![Hex.pm](https://img.shields.io/hexpm/v/enif_protobuf.svg)](https://hex.pm/packages/enif_protobuf)
 [![Hex Downloads](https://img.shields.io/hexpm/dt/enif_protobuf.svg)](https://hex.pm/packages/enif_protobuf)
-[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](../../LICENSE)
 [![Erlang/OTP](https://img.shields.io/badge/Erlang%2FOTP-28%2B-blue.svg)](https://www.erlang.org/)
 
 # enif_protobuf — fast Google Protobuf encoder/decoder for Erlang and Elixir (NIF)
@@ -15,6 +15,12 @@ libprotobuf dependency.
 Use gpb's `protoc-erl` to generate the Erlang modules as usual, load the schema once with
 `enif_protobuf:load_cache(Module:get_msg_defs())`, then call `enif_protobuf:encode/1` and
 `enif_protobuf:decode/2`. The same calls work from Elixir, since the API is plain Erlang.
+
+On gpb 5+ the introspection list was split: `get_msg_defs/0` keeps only messages and enums, while
+`get_proto_defs/0` (compile with `{introspect_get_proto_defs, true}`, or `-introspect-get_proto_defs`)
+also carries `{syntax, "proto3"}` and `proto3_msgs`. Pass `Module:get_proto_defs()` there: without
+the proto3 markers a proto3 message is read as proto2 and its zero-valued singular fields are
+written out instead of omitted. `get_msg_defs/0` still works for proto2.
 
 ## Layout
 
@@ -46,8 +52,8 @@ local equivalent of the other bindings' `runtime/` + `tests/`.
 
 ## Why use enif_protobuf
 
-- **Roughly 1.8–2.6× faster than pure-Erlang gpb**, and roughly 2.6–9× faster than gpb's libprotobuf
-  NIF, on the standard Google benchmark messages ([see numbers](#performance)).
+- **Roughly 1.6–2.3× faster than pure-Erlang gpb**, and 1.8–7.3× faster than gpb's libprotobuf NIF,
+  on the four standard tiers of `matrix3.proto` ([see numbers](#performance)).
 - **Byte-compatible with gpb.** The test suite asserts `gpb:encode_msg/1 =:= enif_protobuf:encode/1`
   for the covered messages, so existing consumers keep working unchanged.
 - **No runtime dependencies beyond OTP.** One small NIF (`priv/enif_protobuf.so`), no libprotobuf,
@@ -55,8 +61,8 @@ local equivalent of the other bindings' `runtime/` + `tests/`.
 - **Full protobuf feature set** — proto2 and proto3, every scalar type, enums (including aliases and
   negative values), repeated and packed fields, nested messages, oneofs, maps, groups, unknown-field
   passthrough.
-- **No regeneration step for existing gpb users.** The schema comes from `Module:get_msg_defs()`, which
-  your generated modules already export.
+- **No regeneration step for existing gpb users.** The schema comes from the generated module's own
+  introspection (`get_msg_defs/0`, or `get_proto_defs/0` on gpb 5+).
 
 | | |
 |---|---|
@@ -162,7 +168,7 @@ enif_protobuf:decode_msg(Bin, 'Person', x:get_msg_defs()).
 
 | Function | Returns | Notes |
 |---|---|---|
-| `enif_protobuf:load_cache(Defs)` | `ok` | `Defs` is exactly `Module:get_msg_defs()`; replaces any previously loaded schema for the whole node |
+| `enif_protobuf:load_cache(Defs)` | `ok` | `Defs` is `Module:get_msg_defs()`, or `Module:get_proto_defs()` on gpb 5+ (it adds the proto3 markers); replaces any previously loaded schema for the whole node |
 | `enif_protobuf:purge_cache()` | `ok` | Frees the loaded schema; later `encode/1` / `decode/2` raise `cache_not_exists` |
 | `enif_protobuf:set_opts(Opts)` | `ok` | Call before `load_cache/1`; unknown options or non-boolean values raise `badarg` |
 | `enif_protobuf:encode(Msg)` | `binary()` | `Msg` is a gpb record or map tuple; raises `badarg` if it is not a tuple |
@@ -208,8 +214,10 @@ Other API: `purge_cache/0` clears the loaded schema; `debug_term/1` prints inter
 
 ## Performance
 
-Comparison of **enif_protobuf** (NIF), **gpb** (pure Erlang), and **gpb NIF** (libprotobuf) on the
-standard Google benchmark messages (228 and 84584 bytes on the wire). Regenerate on your machine:
+Comparison of **enif_protobuf** (NIF), **gpb** (pure Erlang), and **gpb NIF** (libprotobuf) on
+`bindings/c/tests/data/matrix3.proto` — the same schema and payload as every other binding in this
+repo — with the repeated fields scaled x0 / x1 / x100 / x3000 (136 / 174 / 2469 / 74913 bytes on
+the wire). Regenerate on your machine:
 
 ```shell
 asdf install   # uses .tool-versions (erlang 29.0.1)
@@ -217,22 +225,27 @@ make benchmark-update-readme
 ```
 
 Benchmarks always use the Erlang version from [`.tool-versions`](.tool-versions).
-See [benchmarks/README.md](benchmarks/README.md) for all targets (maps, `d.proto`, gpb NIF, etc.).
+See [benchmarks/README.md](benchmarks/README.md) for all targets (per-backend runs, quick mode, the
+gpb NIF baseline).
 Case names follow the four standard payload tiers shared by every binding in this repo; the
 cross-binding comparison lives in [BENCHMARKS.md](../../BENCHMARKS.md) at the repo root.
 
 <!-- BENCHMARK_RESULTS_START -->
-Last run: 2026-11-03 11:10:46 UTC (standard Google benchmark messages; Erlang 29.0.1 per `.tool-versions`; machine Apple M4 Pro)
+Last run: 2026-11-04 01:48:40 UTC (matrix3.proto, the four standard tiers; Erlang 29.0.1 per `.tool-versions`; machine Apple M4 Pro)
 
 | Test case | epb | gpb | gpb nif |
 |-----------|-----|-----|---------|
-| medium · 228 B · serialize | 300.10 | 165.01 | 59.14 |
-| medium · 228 B · deserialize | 739.08 | 278.99 | 74.74 |
-| xlarge · 84584 B · serialize | 304.98 | 135.02 | 102.86 |
-| xlarge · 84584 B · deserialize | 548.23 | 255.49 | 189.66 |
+| small · 136 B · encode | 328.4 | 169.9 | 61.0 |
+| small · 136 B · decode | 483.6 | 221.9 | 66.4 |
+| medium · 174 B · encode | 298.3 | 148.5 | 71.3 |
+| medium · 174 B · decode | 500.4 | 210.1 | 82.1 |
+| large · 2469 B · encode | 235.3 | 124.5 | 94.5 |
+| large · 2469 B · decode | 337.6 | 196.8 | 177.0 |
+| xlarge · 74913 B · encode | 250.2 | 115.9 | 118.3 |
+| xlarge · 74913 B · decode | 346.2 | 220.8 | 197.1 |
 
-Higher is better. Throughput in MB/s on serialized wire size. Case names follow
-the four standard tiers at the repo root ([BENCHMARKS.md](../../../BENCHMARKS.md)).
+Higher is better. Throughput in MB/s on serialized wire size. Case names are the
+four standard tiers at the repo root ([BENCHMARKS.md](../../../BENCHMARKS.md)).
 <!-- BENCHMARK_RESULTS_END -->
 
 ## Comparison with alternatives
@@ -279,9 +292,10 @@ Example prompt that works well:
 
 ### Is enif_protobuf faster than gpb?
 
-Yes, in this repo's benchmarks it is ~1.8–2.6× faster than pure-Erlang gpb and several times faster
-than gpb's libprotobuf NIF. Numbers and hardware are in the [benchmark table](#performance); rerun
-`make benchmark-update-readme` on your own machine before relying on them.
+Yes, in this repo's benchmarks it is ~1.6–2.3× faster than pure-Erlang gpb and 1.8–7.3× faster than
+gpb's libprotobuf NIF, at every tier. Numbers and hardware are in the
+[benchmark table](#performance); rerun `make benchmark-update-readme` on your own machine before
+relying on them.
 
 ### Do I need to regenerate my `.proto` files or change my records?
 
@@ -373,8 +387,9 @@ Two ways, same result: the source package plus edoc docs land on
 [hexdocs.pm/enif_protobuf](https://hexdocs.pm/enif_protobuf/).
 
 **From CI (preferred).** Bump `{vsn, ...}` in [`src/enif_protobuf.app.src`](src/enif_protobuf.app.src),
-commit, then push a matching tag. [`.github/workflows/release.yml`](.github/workflows/release.yml) runs
-the tests, publishes to Hex and creates the GitHub release. It refuses to publish when the tag and
+commit, then push a matching tag. The release workflow (not part of this repository's
+`.github/workflows/`, which only runs the gates) runs the tests, publishes to Hex and creates the
+GitHub release. It refuses to publish when the tag and
 the `.app.src` version disagree (`v1.0.0` must be `{vsn, "1.0.0"}`). `workflow_dispatch` publishes the
 current `master` without tagging.
 
@@ -396,4 +411,4 @@ before publishing with `./rebar3 hex build` (output in `_build/default/lib/enif_
 
 ## License
 
-[Apache-2.0](LICENSE).
+[Apache-2.0](../../LICENSE).

@@ -30,11 +30,11 @@ C toolchain must exist on the build machine. The Hex package ships sources, not 
 
 - [README](README.md): install, quick start, full API reference, supported protobuf features, options, benchmark table, comparison with gpb and gpb NIF, FAQ.
 - [AGENTS.md](AGENTS.md): instructions and pitfalls for AI coding agents using or modifying the library.
-- [benchmarks/README.md](benchmarks/README.md): how to reproduce the throughput numbers, gpb/gpb-NIF comparison targets, maps and `d.proto` suites.
+- [benchmarks/README.md](benchmarks/README.md): how to reproduce the throughput numbers on `matrix3.proto`, with gpb and the gpb-NIF baseline.
 
 ## API
 
-- `enif_protobuf:load_cache(Module:get_msg_defs())` -> `ok`; loads/replaces the global schema cache.
+- `enif_protobuf:load_cache(Module:get_msg_defs())` -> `ok`; loads/replaces the global schema cache. On gpb 5+ pass `Module:get_proto_defs()` instead (compile with `introspect_get_proto_defs`) so the proto3 markers are included.
 - `enif_protobuf:purge_cache()` -> `ok`; clears the schema.
 - `enif_protobuf:set_opts([{string_as_list, boolean()} | {with_utf8, boolean()}])` -> `ok`; must be called before `load_cache/1`.
 - `enif_protobuf:encode(MsgRecordOrMapTuple)` -> `binary()`; raises `cache_not_exists` if no schema is loaded.
@@ -51,7 +51,7 @@ From Elixir the same calls are `:enif_protobuf.encode/1`, `:enif_protobuf.decode
 - `string` fields decode to binaries by default; `{string_as_list, true}` switches to lists. Non-Latin-1 UTF-8 requires `{with_utf8, true}` before `load_cache/1`.
 - The schema cache is global to the BEAM node and shared by all processes; encode/decode take a read lock and are concurrency-safe.
 - Calls run on normal schedulers (no dirty NIF); use it for normal message sizes and shard very large payloads.
-- Requires gpb-generated modules (`Module:get_msg_defs()`) for the schema; records themselves are unchanged.
+- Requires gpb-generated modules (`get_msg_defs/0`, or `get_proto_defs/0` on gpb 5+) for the schema; records themselves are unchanged.
 
 ## Optional
 

@@ -1,0 +1,11 @@
+raw: "\000\001\377"
+text: "héllo ☃"
+sign: SIGN_NEG
+tags: "a"
+tags: ""
+tags: "b"
+blobs: "\000"
+blobs: ""
+inner: { tag: "kid" n: -1 }
+maybe: ""
+pick_str: "one"

@@ -27,6 +27,7 @@ typedef struct {
     int indent;
     int print_unknown;
     pbw_status status;
+    int dot; /* the host locale's decimal point is '.' (checked once per call) */
 } text_out;
 
 static void
@@ -100,13 +101,13 @@ t_double(text_out *t, double value, int is_float)
     }
     for (prec = prec_min; prec <= prec_max; prec++) {
         char tmp[32];
-        int n = snprintf(tmp, sizeof(tmp), "%.*g", prec, value);
+        int n = pbw_format_g(tmp, sizeof(tmp), prec, value, t->dot);
         double back;
 
         if (n <= 0 || (size_t)n >= sizeof(tmp)) {
             continue;
         }
-        back = strtod(tmp, NULL);
+        back = pbw_strtod(tmp, NULL, t->dot);
         if ((is_float ? (double)(float)back == value : back == value)) {
             t_put(t, tmp, (size_t)n);
             return;
@@ -674,6 +675,7 @@ pbw_text_print_opts(const pbw_message *msg, int print_unknown_fields,
     t.indent = 0;
     t.print_unknown = print_unknown_fields != 0;
     t.status = PBW_OK;
+    t.dot = pbw_locale_dot();
     if (!pbw_buf_reserve(&t.buf, 64)) {
         return PBW_ERR_NOMEM;
     }
@@ -1270,6 +1272,7 @@ t_ident_is(const char *start, size_t len, const char *word)
 typedef struct {
     text_cur cur;
     pbw_status status;
+    int dot; /* the host locale's decimal point is '.' (checked once per call) */
 } text_in;
 
 /* Stores a scalar; repeated fields append. */
@@ -1410,48 +1413,61 @@ t_parse_float_value(text_in *t, pbw_message *msg, const pbw_field *field,
         }
         if (num.kind != T_NUM_FLOAT) {
             /* plain decimal integer: allowed; hex and octal are not */
-            char *tmp;
+            char stack[64];
+            char *tmp = stack;
             char *endp;
 
             if (num.is_hex || num.is_oct) {
                 return PBW_ERR_INVALID;
             }
-            tmp = (char *)malloc(num.len + 1);
-
-            if (tmp == NULL) {
-                return PBW_ERR_NOMEM;
+            /* Numbers fit the stack buffer in practice; a longer one is unusual,
+             * not invalid. */
+            if (num.len >= sizeof(stack)) {
+                tmp = (char *)malloc(num.len + 1);
+                if (tmp == NULL) {
+                    return PBW_ERR_NOMEM;
+                }
             }
             memcpy(tmp, num.start, num.len);
             tmp[num.len] = '\0';
-            value = strtod(tmp, &endp);
-            free(tmp);
-            if (endp == tmp) {
-                return PBW_ERR_INVALID;
+            value = pbw_strtod(tmp, &endp, t->dot);
+            {
+                int ok = endp != tmp;
+
+                if (tmp != stack) {
+                    free(tmp);
+                }
+                if (!ok) {
+                    return PBW_ERR_INVALID;
+                }
             }
         } else {
-            char *tmp = (char *)malloc(num.len + 1);
+            char stack[64];
+            char *tmp = stack;
             char *endp;
+            size_t used;
+            size_t want = num.len;
 
-            if (tmp == NULL) {
-                return PBW_ERR_NOMEM;
+            if (num.len >= sizeof(stack)) {
+                tmp = (char *)malloc(num.len + 1);
+                if (tmp == NULL) {
+                    return PBW_ERR_NOMEM;
+                }
             }
             memcpy(tmp, num.start, num.len);
             /* strip a trailing f/F: strtod stops there anyway, but a bare
              * "1e" must fail instead of parsing as 1 */
             tmp[num.len] = '\0';
-            value = strtod(tmp, &endp);
-            {
-                size_t used = (size_t)(endp - tmp);
-                size_t want = num.len;
-
-                if (want > 0 &&
-                    (tmp[want - 1] == 'f' || tmp[want - 1] == 'F')) {
-                    want--;
-                }
+            value = pbw_strtod(tmp, &endp, t->dot);
+            used = (size_t)(endp - tmp);
+            if (want > 0 && (tmp[want - 1] == 'f' || tmp[want - 1] == 'F')) {
+                want--;
+            }
+            if (tmp != stack) {
                 free(tmp);
-                if (used != want) {
-                    return PBW_ERR_INVALID;
-                }
+            }
+            if (used != want) {
+                return PBW_ERR_INVALID;
             }
         }
         have = 1;
@@ -1743,6 +1759,9 @@ t_skip_value(text_in *t, uint32_t depth)
     }
     if (*t->cur.p == '[') {
         /* a list: skip comma-separated values */
+        if (depth >= PBW_MAX_DEPTH) {
+            return PBW_ERR_LIMIT;
+        }
         t->cur.p++;
         t_skip(&t->cur);
         if (t->cur.p < t->cur.end && *t->cur.p == ']') {
@@ -2391,6 +2410,7 @@ pbw_text_parse(const pbw_descriptor *desc, const char *text, size_t len,
     t.cur.p = text == NULL ? "" : text;
     t.cur.end = t.cur.p + len;
     t.status = PBW_OK;
+    t.dot = pbw_locale_dot();
     status = t_parse_message_body(&t, msg, 0, 0);
     if (status != PBW_OK) {
         pbw_message_free(msg);

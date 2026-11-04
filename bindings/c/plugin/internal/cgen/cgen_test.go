@@ -19,7 +19,7 @@ func TestGoldens(t *testing.T) {
 		name string // expected output file name
 		want string // pinned header, relative to the repo root
 	}{
-		{"addressbook", "addressbook.h", filepath.Join("bindings", "c", "example", "gen", "addressbook.h")},
+		{"addressbook", "addressbook.h", filepath.Join("bindings", "c", "examples", "gen", "addressbook.h")},
 		{"matrix3", "matrix3.h", filepath.Join("bindings", "c", "tests", "gen", "matrix3.h")},
 		{"matrix2", "matrix2.h", filepath.Join("bindings", "c", "tests", "gen", "matrix2.h")},
 	}

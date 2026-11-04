@@ -8,7 +8,7 @@
 %% Load a schema once with {@link load_cache/1}, then call {@link encode/1} and {@link decode/2}:
 %%
 %% ```
-%% ok = enif_protobuf:load_cache(x:get_msg_defs()),
+%% ok = enif_protobuf:load_cache(x:get_msg_defs()),   %% gpb 5+: x:get_proto_defs()
 %% Bin = enif_protobuf:encode(#'Person'{name = "abc", id = 345}),
 %% #'Person'{} = enif_protobuf:decode(Bin, 'Person').
 %% '''
@@ -67,7 +67,8 @@ set_opts(_Opts) ->
     ?NOT_LOADED.
 
 %% @doc Load a schema, replacing any schema loaded before. `Defs' is exactly what a gpb generated
-%% module returns from `Module:get_msg_defs()'.
+%% module returns from `Module:get_msg_defs()', or `Module:get_proto_defs()' on gpb 5+: the latter
+%% also carries the proto3 markers, which proto3 messages need to omit zero-valued singular fields.
 %%
 %% The cache is global to the node, so all processes and applications on one VM share it; two
 %% applications with different schemas need separate nodes or one coordinated `load_cache/1' call.

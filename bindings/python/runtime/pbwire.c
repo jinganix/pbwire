@@ -146,6 +146,10 @@ sb_reserve(sbuf *b, size_t extra)
     }
     cap = b->cap == 0 ? 256 : b->cap;
     while (cap < need) {
+        if (cap > SIZE_MAX - cap / 2) {
+            cap = need;
+            break;
+        }
         cap += cap / 2;
     }
     data = realloc(b->data, cap);
@@ -1269,6 +1273,11 @@ msg_reserve(Message *m, uint32_t need)
     }
     cap = m->cap;
     while (cap < need) {
+        if (cap > UINT32_MAX / 2) {
+            /* A slice count beyond 2^31 cannot be described; fail instead of
+             * wrapping the capacity to zero. */
+            return 0;
+        }
         cap *= 2;
     }
     if (m->slices == m->inline_slices) {

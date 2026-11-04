@@ -1,6 +1,9 @@
 /* Wire format primitives: varints, tags, little-endian fixed values, output
  * buffer. */
 
+#include <locale.h>
+#include <stdio.h>
+
 #include "internal.h"
 
 size_t
@@ -184,6 +187,17 @@ pbw_buf_init(pbw_buf *buf)
     buf->len = 0;
     buf->cap = 0;
     buf->oom = 0;
+    buf->fixed = 0;
+}
+
+void
+pbw_buf_init_fixed(pbw_buf *buf, void *data, size_t cap)
+{
+    buf->data = (uint8_t *)data;
+    buf->len = 0;
+    buf->cap = cap;
+    buf->oom = 0;
+    buf->fixed = 1;
 }
 
 void
@@ -211,6 +225,11 @@ pbw_buf_reserve(pbw_buf *buf, size_t extra)
     }
     if (need <= buf->cap) {
         return 1;
+    }
+    if (buf->fixed) {
+        /* Caller memory: report the overflow as "does not fit". */
+        buf->oom = 1;
+        return 0;
     }
     cap = buf->cap ? buf->cap : 64;
     while (cap < need) {
@@ -250,6 +269,89 @@ uint64_t
 pbw_read_le64(const uint8_t *in)
 {
     return (uint64_t)pbw_read_le32(in) | ((uint64_t)pbw_read_le32(in + 4) << 32);
+}
+
+/* JSON and text format define '.' as the decimal separator, but strtod and
+ * snprintf follow LC_NUMERIC, a process-global the embedding host may have set.
+ * The public entry points ask pbw_locale_dot() once and pass the answer down, so
+ * the C-locale path is exactly the libc call it always was. */
+
+int
+pbw_locale_dot(void)
+{
+    const char *dp = localeconv()->decimal_point;
+
+    return dp != NULL && dp[0] == '.' && dp[1] == '\0';
+}
+
+/* Rare path: the host locale's decimal separator is not '.'. */
+double
+pbw_strtod_slow(const char *text, char **end, double value, char *stop)
+{
+    const char *dp = localeconv()->decimal_point;
+    size_t before = (size_t)(stop - text);
+    size_t dpsize;
+    size_t len;
+    char stack[64];
+    char *buf = stack;
+
+    if (dp == NULL || (dp[0] == '.' && dp[1] == '\0')) {
+        if (end != NULL) {
+            *end = stop;
+        }
+        return value;
+    }
+    dpsize = strlen(dp);
+    len = strlen(text) + 1;
+    if (len + dpsize > sizeof(stack)) {
+        buf = (char *)malloc(len + dpsize);
+        if (buf == NULL) {
+            if (end != NULL) {
+                *end = (char *)text;
+            }
+            return 0.0;
+        }
+    }
+    memcpy(buf, text, before);
+    memcpy(buf + before, dp, dpsize);
+    memcpy(buf + before + dpsize, stop + 1, len - before - 1);
+    {
+        char *translated_stop = NULL;
+
+        value = strtod(buf, &translated_stop);
+        if (end != NULL) {
+            *end = (char *)text + (translated_stop != NULL
+                                       ? (size_t)(translated_stop - buf) -
+                                             (dpsize - 1)
+                                       : before);
+        }
+    }
+    if (buf != stack) {
+        free(buf);
+    }
+    return value;
+}
+
+int
+pbw_format_g_slow(char *buf, int n)
+{
+    const char *dp = localeconv()->decimal_point;
+    char *at;
+    size_t dpsize;
+    size_t tail;
+
+    if (dp == NULL || (dp[0] == '.' && dp[1] == '\0')) {
+        return n;
+    }
+    at = strstr(buf, dp);
+    if (at == NULL) {
+        return n;
+    }
+    dpsize = strlen(dp);
+    tail = (size_t)n - (size_t)(at - buf) - dpsize;
+    *at = '.';
+    memmove(at + 1, at + dpsize, tail + 1);
+    return (int)((size_t)n - (dpsize - 1));
 }
 
 void

@@ -27,7 +27,17 @@ pbw_message_new_a(pbw_arena *arena, const pbw_descriptor *desc)
     values_off = sizeof(pbw_message);
     present_off = values_off + desc->field_count * sizeof(pbw_value);
     words = (desc->field_count + 31u) / 32u;
+    /* The bitmap plus alignment slack must fit past present_off: words * 4
+     * cannot wrap on its own (field_count is bounded above), so this
+     * subtraction sequence is well-defined and rejects the wrap. */
+    if (present_off > SIZE_MAX - words * sizeof(uint32_t) - (size_t)3) {
+        return NULL;
+    }
     oneof_off = (present_off + words * sizeof(uint32_t) + 3u) & ~(size_t)3u;
+    if ((size_t)desc->oneof_count + 1u >
+        (SIZE_MAX - oneof_off) / sizeof(uint32_t)) {
+        return NULL;
+    }
     size = oneof_off + ((size_t)desc->oneof_count + 1u) * sizeof(uint32_t);
 
     if (arena != NULL) {
@@ -76,7 +86,8 @@ message_release(pbw_message *msg)
         }
     }
     if (msg->arena == NULL) {
-        /* Heap message: the struct is ours to free. */
+        /* Heap message: the unknown bytes and the struct are ours to free. In an
+         * arena the unknown bytes are arena memory, released with the arena. */
         free(msg->unknown);
         free(msg);
     }
@@ -114,6 +125,12 @@ pbw_message_descriptor(const pbw_message *msg)
     return msg == NULL ? NULL : msg->desc;
 }
 
+size_t
+pbw_message_wire_size(const pbw_message *msg)
+{
+    return msg == NULL ? 0 : msg->wire_len;
+}
+
 int
 pbw_message_add_unknown(pbw_message *msg, const uint8_t *data, size_t len)
 {
@@ -130,6 +147,10 @@ pbw_message_add_unknown(pbw_message *msg, const uint8_t *data, size_t len)
         size_t cap = msg->unknown_cap == 0 ? 64 : msg->unknown_cap;
 
         while (cap < need) {
+            if (cap > SIZE_MAX / 2) {
+                cap = need;
+                break;
+            }
             cap *= 2;
         }
         if (msg->arena != NULL) {
@@ -332,7 +353,15 @@ pbw_value_destroy(pbw_value *value)
         break;
     case PBW_VALUE_MESSAGE:
         if (value->as.msg != NULL) {
-            message_release(value->as.msg);
+            /* A nested value normally shares its parent's arena or is a heap
+             * message; a nested *decoded root* owns an arena of its own, and
+             * only pbw_message_free() releases that. */
+            if (value->as.msg->own != NULL) {
+                pbw_message_free(value->as.msg);
+            } else {
+                message_release(value->as.msg);
+            }
+            value->as.msg = NULL;
         }
         break;
     case PBW_VALUE_LIST:
@@ -414,8 +443,17 @@ int
 pbw_value_init_bytes(pbw_value *value, pbw_arena *arena, const void *data,
                      size_t len)
 {
+    /* Leave the value destructible on every failure path: the caller hands a
+     * failed init to pbw_value_free(). */
     value->kind = PBW_VALUE_BYTES;
     value->flags = arena != NULL ? PBW_VF_ARENA : 0;
+    value->as.bytes.data = NULL;
+    value->as.bytes.len = 0;
+    if (len > SIZE_MAX - 8) {
+        /* len + 1 must fit and stay 8-byte alignable for the arena; there is no
+         * such buffer. */
+        return 0;
+    }
     if (arena != NULL) {
         value->as.bytes.data = (uint8_t *)pbw_arena_alloc(arena, len + 1);
     } else {
@@ -514,6 +552,10 @@ pbw_value_list_push(pbw_value *list, pbw_value *item, pbw_arena *arena)
             return 0;
         }
         bytes = (size_t)cap * sizeof(*items);
+        if (bytes / sizeof(*items) != cap) {
+            /* 32-bit size_t: the byte count wrapped. */
+            return 0;
+        }
         if (arena != NULL) {
             /* No realloc in an arena: move to a bigger block, the old one is
              * recycled by pbw_ctx_reset(). */

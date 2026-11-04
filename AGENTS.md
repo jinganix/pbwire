@@ -4,7 +4,7 @@
 
 ```bash
 make          # build build/libpbwire.a
-make test     # build and run the self-checks (core + threads + descriptor set)
+make test     # self-checks: core + threads + descriptor set + C structs + examples
 make erlang-test # Erlang binding: EUnit + NIF C tests (needs OTP, rebar3 bootstrapped)
 make format   # clang-format (>= 19) over include/, src/, tests/, bench/
 make format-check
@@ -22,8 +22,20 @@ make desc-fixture # regenerate the pinned descriptor set in tests/test_descripto
 make python-bind   # build the CPython extension next to its sources
 make python-test   # Python binding self-check (pinned protoc bytes as oracle)
 make python-bench  # Python binding vs google.protobuf on the four standard tiers
-make erlang-bench  # gpb, gpb NIF and enif_protobuf
+make typed-gen     # regenerate the typed message models (protoc + the typed plugin)
+make typed-test    # run every binding's typed model test (needs each toolchain)
+make typed-conformance  # generate typed models for the official conformance proto
+make erlang-bench  # Erlang: epb, gpb, gpb NIF on matrix3.proto
 make test-cpp      # C++ binding self-check (C++17, no protobuf needed)
+make java-bench    # Java FFM binding vs protobuf-java on the four standard tiers
+make node-bench    # Node N-API addon vs google-protobuf (jspb)
+make ruby-bench    # Ruby C extension vs the google-protobuf gem
+make objc-bench    # Objective-C binding vs the protobuf ObjC runtime (needs the checkout)
+make kotlin-bench  # Kotlin binding vs protoc --kotlin_out over protobuf-java
+make php-bench     # PHP binding vs the official PHP runtime (needs the checkout)
+make dart-bench    # Dart binding vs the protobuf Dart package (needs protoc-gen-dart)
+make rust-bench    # Rust binding vs rust-protobuf (needs protoc-gen-rs)
+make csharp-bench  # C# binding vs Google.Protobuf (NuGet restore)
 make conformance-python  # official suite through the Python binding
 
 # Official conformance suite (binary wire format). Needs the cached reference
@@ -39,7 +51,8 @@ cmake -B build-cmake -DPBW_BUILD_PROTOC=ON && cmake --build build-cmake
 ```
 
 Run `make test` after any C change; run `make format` after touching `include/`, `src/`, `tests/`,
-`bench/` or `conformance/`. Run `make python-test` after touching `bindings/python`, and refresh
+`bench/` or `conformance/`. Run `make python-test` after touching `bindings/python`, `make ruby-test`
+after touching `bindings/ruby`, and refresh
 `BENCHMARKS.md` after changing anything on the encode/decode hot path.
 
 ## Layout
@@ -73,24 +86,28 @@ Run `make test` after any C change; run `make format` after touching `include/`,
 | `bindings/erlang/` | Erlang/OTP NIF binding (`enif_protobuf` app, own rebar3 build, see its AGENTS.md) |
 | `bench/msg.proto` | proto3 message used by both; `bench/gen/` is generated, never committed |
 | `bench/msg2.proto` | proto2 counterpart: explicit presence, groups, required fields, closed enums, extensions |
-| `BENCHMARKS.md` | the four standard payload tiers, every binding vs its baseline, cross-binding table |
+| `BENCHMARKS.md` | the performance document: the four standard payload tiers, every binding vs its baseline, the cross-binding table |
+| `bindings/typed/` | the typed-model protoc plugin (`protoc-gen-pbwire-typed`): typed fields + encode/decode per language, on top of each binding's dynamic API; `bindings/*/tests/gen` and `bindings/*/examples/gen` hold the committed output |
 | `bindings/c/` | C binding: direct struct codec (`runtime/pbw_struct.c`, layout tables carry the wire facts), `protoc-gen-pbwire-c` (`plugin/`), `examples/`, `tests/`, `benchmarks/`, `conformance/` |
 | `bindings/python/` | Python binding: CPython extension (`runtime/pbwire.c`, dict<->wire in C), `examples/`, `tests/`, `benchmarks/`, `conformance/` (official runner testee) |
+| `bindings/ruby/` | Ruby binding: a C extension over the core (`ext/pbwire_ext`, builder tree + lazy wire view), `lib/`, `examples/`, `test/`, `benchmarks/`, `conformance/` (official runner testee) |
 | `bindings/go/` | `protoc-gen-pbwire-go` (`plugin/`) + generated struct codecs over the dependency-free `runtime/`, `tests/`, `examples/`, `benchmarks/`, `conformance/` |
 | `bindings/cpp/` | C++ binding over the shared C runtime: `examples/`, `tests/`, `benchmarks/`, `conformance/` |
 | `bindings/erlang/` | Erlang/OTP NIF binding with its own AGENTS.md |
 | `scripts/` | Gate scripts: `check.sh` (hooks), `validate-commit-msg.sh`, `setup-git-hooks.sh` |
 | `.github/workflows/ci.yml` | CI: `make test` on Linux + macOS, CMake/ctest, clang-format |
-| `README.md`, `llms.txt` | User-facing docs and the AI-retrieval summary; keep them in sync with behavior |
+| `docs/` | User-facing prose: `design.md` (how it works, semantics, scope, limits), `guide.md` (the C API walk-through), `testing.md` (the five verification layers), `faq.md` |
+| `README.md`, `llms.txt` | Landing page + docs index, and the AI-retrieval summary; keep them in sync with behavior and with `docs/` |
 
 ## Binding schema source
 
 This decides how a binding gets its schema, and it is not negotiable:
 
-1. **Ahead-of-time compiled languages load the descriptor set.** C, C++ and Go
-   have no way to bake a dynamic schema into the binary, so every binding loads
-   a `FileDescriptorSet` (`protoc --descriptor_set_out`) at runtime and drives
-   field lookup, wire types and presence from it. A hand-built schema in a
+1. **Ahead-of-time compiled languages load the descriptor set.** C, C++, Rust
+   and C# have no way to bake a dynamic schema into the binary, so every binding
+   loads a `FileDescriptorSet` (`protoc --descriptor_set_out`) at runtime and
+   drives field lookup, wire types and presence from it. Go is the one exception
+   in kind: its plugin emits straight-line codecs, which are the schema. A hand-built schema in a
    compiled binding is a bug: it cannot express what a real `.proto` can, and
    it silently diverges from the descriptor every other binding uses.
 2. **Languages that load code at runtime get a plugin.** The plugin turns
@@ -98,9 +115,15 @@ This decides how a binding gets its schema, and it is not negotiable:
    at startup. Generated *layout* (C structs and offset tables, Erlang records)
    is part of this, but the field numbers and types still come from the schema.
 3. **Erlang needs neither.** gpb already is the plugin: `gpb_compile` /
-   `protoc-erl` emits the record definitions plus `get_msg_defs/0`, and
+   `protoc-erl` emits the record definitions plus `get_msg_defs/0` (gpb 5+:
+   `get_proto_defs/0`, which keeps the proto3 markers), and
    `enif_protobuf:load_cache/1` consumes exactly that. Do not add a second
    generator or a descriptor loader to the Erlang binding.
+4. **The typed model is ergonomics over the same codec.** `bindings/typed` may
+   emit typed fields, presence flags and `encode`/`decode` wrappers, but those
+   wrappers call the binding's dynamic API; the wire format stays in the C core
+   (or, for Go, in the plugin's straight-line codecs). A typed model that
+   encodes on its own is a bug, and so is one that learns `.proto` text parsing.
 
 `bindings/README.md` tracks each binding against these rules.
 

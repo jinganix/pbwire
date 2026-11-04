@@ -1,0 +1,204 @@
+# pbwire Node.js binding
+
+A `FileDescriptorSet` (`protoc --descriptor_set_out`) becomes a schema at
+runtime; no code generation, no `protoc` plugin, no npm dependencies. The
+runtime is `runtime/addon.c`, an N-API addon in C over `libpbwire.a`; the
+`Schema`/`Message` surface is `lib/pbwire.js`.
+
+```js
+const { Schema } = require('./lib/pbwire');
+
+const schema = Schema.fromFile('tests/data/demo.desc');
+const person = schema.message('demo.Person');
+
+const wire = person.encode({name: 'alice', id: 7, inner: {x: 42}});
+// or, by hand:
+const msg = person.newMessage();
+msg.set('name', 'alice').set('inner', {x: 42});
+msg.encode();          // Buffer
+msg.free();
+
+const back = person.decode(wire);
+back.get('name');      // 'alice'
+back.get('inner').x;   // 42
+back.encode().equals(wire);   // true: byte-exact re-encode
+back.free();
+```
+
+## How it works
+
+A message is one of two things, and both live behind the same API:
+
+- **A built message** (`newMessage()`/`set()`) is a `pbw_message` value tree in
+  C. Field writes go straight into it, and `encode()` runs the core encoder
+  into a per-type reusable buffer, so re-encoding a message never crosses the
+  boundary again.
+- **A decoded message** (`decode()`) is the bytes it came from plus one 12-byte
+  slice per wire field: decode validates the payload once while recording those
+  slices, `get()` materializes a single field on demand, and `encode()` hands
+  the same bytes back. A round trip is therefore byte-exact — unknown fields,
+  field order and non-canonical encodings included — and nothing is built for
+  fields that are never read.
+
+The wire form holds no native state: the bytes are a JS `Buffer` and the slices
+a `Uint32Array`, both owned by the message object. That is deliberate. Attaching
+a finalizer to native memory costs N-API ~250 ns per object, which is more than
+the entire decode of a small message, so only the built form (which has no
+JS-visible storage) pays for one.
+
+Writing to a decoded message promotes it to a tree (one `pbw_decode` of the
+retained bytes), so `set()` works on either form and only callers that actually
+edit a parsed message pay for the tree.
+
+Field facts (number, type, wire type, label, oneof, closed enum, sub-message)
+are resolved once per descriptor into a cached table with a name hash and a
+number index, so `get()`/`set()` and the wire scan never walk the descriptor.
+
+## Build and run
+
+Needs Node (headers ship with it) and a C compiler. No `npm install`, no
+`node-gyp`.
+
+```sh
+bindings/node/build.sh          # build the addon, then run the tests
+bindings/node/build.sh build    # build only
+node bindings/node/test/test_pbwire.js    # the tests alone (node:test)
+node bindings/node/examples/roundtrip.js  # the example
+```
+
+`build.sh` builds `build/libpbwire.a` first when it is missing (the root `make`
+default goal is the shared library, so it asks for the archive by name), then
+compiles the addon with clang against `$(node -p ...)/include/node` and links
+the static core. Set `NODE_INCLUDE` if a packaging splits the Node headers away
+from the binary. Output: `bindings/node/build/pbwire_node.node`.
+
+## API
+
+`Schema`
+| member | meaning |
+|---|---|
+| `Schema.fromBytes(buffer)` | load a `FileDescriptorSet`; throws on malformed input |
+| `Schema.fromFile(path)` | same, from a file |
+| `schema.message(name)` | the message type `name` (`"pkg.Msg"`); throws when it is not a message |
+
+`MessageType`
+| member | meaning |
+|---|---|
+| `type.name` / `type.schema` | dotted full name and owning schema |
+| `type.newMessage()` | empty `Message` (the mutable tree form) |
+| `type.encode(object \| Message)` | encode a plain object or an existing `Message` |
+| `type.decode(buffer)` | decode wire bytes into a `Message`; throws on malformed input |
+
+`Message`
+| member | meaning |
+|---|---|
+| `msg.get(name)` | field value, `undefined` when the field is absent; throws for an unknown name |
+| `msg.set(name, value)` | store a value, replacing what was there; `undefined`/`null` clears the field |
+| `msg.encode()` | wire bytes as a `Buffer` |
+| `msg.free()` | release early; a second call is a no-op, any other call afterwards throws |
+
+Values map per field type:
+
+| field type | JS value |
+|---|---|
+| `int32`, `uint32`, `sint32`, `fixed32`, `sfixed32`, `enum` | `number` |
+| `int64`, `uint64`, `sint64`, `fixed64`, `sfixed64` | `BigInt` (a `number` is accepted on `set`) |
+| `float`, `double` | `number` |
+| `bool` | `boolean` |
+| `string` | `string` |
+| `bytes` | `Buffer` |
+| message | plain `object` (nested `get`/`set` by field name) |
+| repeated | `array` |
+
+Presence is explicit, as in the C core: a field set to its zero value is
+written to the wire instead of being skipped the way a generated proto3
+serializer would skip it. A message field is replaced on `set`, not merged, and
+a repeated write replaces the whole list. Reading follows the wire: a repeated
+field that is not on the wire reads `undefined`, a oneof reads only its last
+member, and a singular sub-message that appears twice merges (the payloads
+concatenate, which is what parsing them as one message means).
+
+Two proto2 behaviours are worth naming:
+
+- **Closed enums.** A number the enum declaration does not list is not a value
+  of the field (the reference parsers move it to the unknown fields), so `get()`
+  skips it, and `encode()` passes the original bytes on untouched.
+- **`required` fields.** Whether a required field is present is a property of
+  the *merged* message, which is what the tree decoder checks after parsing. A
+  type that reaches a `required` field therefore decodes through the tree
+  (`decodeEager`) instead of the wire view; everything else decodes lazily.
+
+## Tests
+
+`test/test_pbwire.js` covers descriptor-set loading, every field kind, oneof,
+packed and unpacked repetition, groups, closed enums, required fields,
+byte-exact re-encode (including unknown field pass-through), editing a decoded
+message, absent fields, schema/wire errors, nesting caps, and double-free
+safety. The last two tests are differential: one decodes a corpus of truncated
+and bit-flipped payloads, asserts that a decoded message is always its own
+bytes, and compares every field against the tree decoder's answer on the same
+bytes (so the two materializers cannot drift apart); the other feeds the addon a
+slice array it did not produce and expects an error rather than a read past the
+buffer.
+
+The fixtures are `tests/data/{demo,shapes,legacy}.desc`, generated from the
+`.proto` files next to them:
+
+```sh
+protoc -Ibindings/node/tests/data \
+    --descriptor_set_out=bindings/node/tests/data/demo.desc \
+    bindings/node/tests/data/demo.proto
+```
+
+## Benchmark
+
+`benchmarks/bench.sh` generates `matrix3_pb.js` with `protoc-gen-js`, installs
+`google-protobuf` (the jspb runtime) and `protoc-gen-js` into
+`benchmarks/node_modules` on first run, and prints the four standard tiers from
+[`BENCHMARKS.md`](../../BENCHMARKS.md) for `pbwire-node` and jspb side by side:
+
+```sh
+./benchmarks/bench.sh      # or: make node-bench
+```
+
+| payload | op | pbwire-node (MB/s, x jspb) | jspb (MB/s) |
+|---|---|---|---|
+| 136 B | encode | 579.6 (10.4x) | 55.8 |
+| 136 B | decode | 371.0 (3.3x) | 113.4 |
+| 174 B | encode | 531.9 (9.5x) | 55.9 |
+| 174 B | decode | 419.1 (3.9x) | 107.1 |
+| 2469 B | encode | 1222.6 (22.8x) | 53.6 |
+| 2469 B | decode | 1102.8 (14.0x) | 78.8 |
+| 74913 B | encode | 1366.6 (23.8x) | 57.4 |
+| 74913 B | decode | 1596.7 (19.0x) | 84.1 |
+
+jspb's throughput does not move with payload size: its writer resolves a
+code/type table per field and hands every repeated element to a closure, where
+the C core writes one tag byte and one inline value, or memcpys an already
+validated slice. Two boundary costs decide the small tiers: N-API's own
+`Buffer` creation costs ~200 ns, so `encode()` encodes into the type's reusable
+buffer and copies into a JS-allocated (pooled) `Buffer` of the exact size, and
+decode copies the payload once with `Buffer.from` instead of paying for a
+per-message finalizer.
+
+## Deliberate skips
+
+- **No protoc plugin / code generation.** The schema is always loaded at run
+  time, like the Python binding: a `FileDescriptorSet` is the only schema
+  source, and there is no generated layout to keep in sync.
+- **No conformance testee.** The official suite is covered through the C core
+  and `conformance/`, not through this binding. The differential test above is
+  what keeps the addon's wire reader honest against the core's.
+
+Also out of scope here: JSON/text format (`pbw_json_print`/`pbw_text_print`),
+field presence introspection (`pbw_message_field_count`), and delimited framing.
+Each is one addon export away when a consumer needs it.
+
+## Typed models
+
+`protoc-gen-pbwire-typed` (in `../typed`) generates `matrix3.d.ts` interfaces
+(for TypeScript) and a JSDoc/`@ts-check` `.js` with the same shapes plus the enum
+constants, describing exactly the plain objects `MessageType.encode()` accepts
+and `Message.get()` returns. The committed output is `tests/gen/` and
+`examples/gen/`; the typed test type-checks with `tsc --strict --checkJs`.
+See `../typed/README.md`.

@@ -93,14 +93,21 @@ end_group_at_top_level_raises_test() ->
     ok = ep_test_helpers:load_cache(optional_int32_defs()),
     ?assertError(_, enif_protobuf:decode(<<16#0c>>, m1)).
 
-%% {default, V} is accepted in field options but never applied on decode: epb
-%% leaves missing optionals undefined, like gpb without defaults-for-omitted.
-default_field_option_is_ignored_on_decode_test() ->
+%% {default, V} is accepted in field options but never applied: epb leaves a
+%% missing optional undefined (like gpb without defaults-for-omitted), and on
+%% encode follows presence, not the declared default.
+default_field_option_is_never_applied_test() ->
     Defs = [{{msg, m1}, [
-        #field{name = a, fnum = 1, rnum = 2, type = int32, occurrence = optional, opts = [{default, 7}]}
+        #field{name = a, fnum = 1, rnum = 2, type = int32, occurrence = optional,
+            opts = [{default, 42}]}
     ]}],
     ?assertEqual({m1, undefined}, decode(Defs, <<>>)),
-    ?assertEqual({m1, 3}, decode(Defs, <<16#08, 16#03>>)).
+    ?assertEqual({m1, 3}, decode(Defs, <<16#08, 16#03>>)),
+    ok = ep_test_helpers:load_cache(Defs),
+    ?assertEqual(<<>>, enif_protobuf:encode({m1, undefined})),
+    ?assertEqual(<<8, 42>>, enif_protobuf:encode({m1, 42})),
+    ?assertEqual(gpb:encode_msg({m1, 42}, Defs), enif_protobuf:encode({m1, 42})),
+    ?assertEqual({m1, 42}, enif_protobuf:decode(<<8, 42>>, m1)).
 
 unknown_group_is_collected_test() ->
     %% start group 2, field 1 varint = 5, end group 2

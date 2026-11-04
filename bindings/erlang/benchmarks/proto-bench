@@ -2,188 +2,229 @@
 %% -*- erlang -*-
 %%! -pa ../_build/test/lib/gpb/ebin -pa ../_build/default/lib/enif_protobuf/ebin -pa tmp/
 
-%%% Copyright (C) 2011  Tomas Abrahamsson
-%%%
-%%% Benchmark driver for gpb and enif_protobuf. Based on gpb/benchmarks/proto-bench.
+%% Unified Erlang benchmark: `bindings/c/tests/data/matrix3.proto`, the same
+%% message and payload every other binding measures (BENCHMARKS.md at the repo
+%% root), for enif_protobuf (pbwire-erlang) against gpb (pure Erlang) and the
+%% gpb libprotobuf NIF when it was built.
+%%
+%%   ./proto-bench [--backend gpb|epb|nif] ...
+%%
+%% The four tiers scale the repeated fields x0 / x1 / x100 / x3000, and every
+%% backend must produce the same 136 / 174 / 2469 / 74913 bytes before
+%% anything is timed. Output is the standard block shape:
+%%
+%%   <case>: <bytes> bytes, <iterations> iterations (repeated fields x<n>)
+%%     impl      op           ns/op       MB/s
+%%
+%% BENCH_TARGET_TIME (seconds, default 2) is the minimum duration of one timed
+%% sample; iterations double until the slowest operation reaches it, then the
+%% best of three samples is reported.
 
 -mode(compile).
 -export([main/1]).
 
-main(Args) ->
-    {Backend, Rest} = parse_backend(Args),
-    run_tests(Backend, Rest).
+-define(MSG, 'Scalars3').
+-define(TIERS, [{"small", 0, 136},
+                {"medium", 1, 174},
+                {"large", 100, 2469},
+                {"xlarge", 3000, 74913}]).
+-define(SAMPLES, 3).
 
-parse_backend(["--backend", BackendStr | Rest]) ->
-    case BackendStr of
-        "gpb" -> {gpb, Rest};
-        "epb" -> {epb, Rest};
-        Other -> usage(Other)
+main(Args) ->
+    Backends = backends(Args),
+    %% Measure in a process with a large heap and binary vheap: a 74 KB payload
+    %% allocates constantly, and a small default vheap would time the GC.
+    {Pid, Monitor} =
+        spawn_opt(fun() -> run(Backends) end,
+                  [monitor, {min_heap_size, 10000000},
+                   {min_bin_vheap_size, 10000000}]),
+    receive
+        {'DOWN', Monitor, process, Pid, normal} ->
+            ok;
+        {'DOWN', Monitor, process, Pid, Reason} ->
+            error({benchmark_failed, Reason})
+    end.
+
+run(Backends) ->
+    case lists:keymember(epb, 1, Backends) of
+        true -> ok = enif_protobuf:load_cache(matrix3_r:get_proto_defs());
+        false -> ok
+    end,
+    [run_case(Label, Repeats, Want, Backends) || {Label, Repeats, Want} <- ?TIERS],
+    ok.
+
+backends(Args) ->
+    case requested(Args) of
+        [] ->
+            [backend(Name) || Name <- [epb, gpb, nif], available(Name)];
+        Names ->
+            [required(Name) || Name <- Names],
+            [backend(Name) || Name <- Names]
+    end.
+
+requested(Args) ->
+    requested(Args, []).
+
+requested([], Acc) ->
+    lists:reverse(Acc);
+requested(["--backend", Name | Rest], Acc) ->
+    case lists:member(Name, ["gpb", "epb", "nif"]) of
+        true -> requested(Rest, [list_to_atom(Name) | Acc]);
+        false -> usage("unknown backend " ++ Name)
     end;
-parse_backend(_Args) ->
-    usage(missing).
+requested([Other | _], _Acc) ->
+    usage("unexpected argument " ++ Other).
+
+available(nif) -> code:which(matrix3) =/= non_existing;
+available(_Name) -> true.
+
+required(Name) ->
+    case available(Name) of
+        true -> ok;
+        false -> usage(impl(Name) ++ " is not built")
+    end.
 
 usage(What) ->
-  io:format(standard_error,
-            "Usage: proto-bench --backend gpb|epb [options] MODULE MSG FILE ...~n"
-            "  Problem: ~p~n", [What]),
-  halt(2).
+    io:format(standard_error,
+              "Usage: proto-bench [--backend gpb|epb|nif] ...~n  ~s~n", [What]),
+    halt(2).
 
-run_tests(Backend, ["--echo", Str | Rest]) ->
-    io:format("~s~n", [Str]),
-    run_tests(Backend, Rest);
-run_tests(Backend, [MsgModuleStr, MsgNameStr | MsgFileAndRest]) ->
-    MsgModule = list_to_atom(MsgModuleStr),
-    MsgName = list_to_atom(MsgNameStr),
-    {MsgFiles, Rest} = pickup_msg_file_or_files(MsgFileAndRest),
-    MsgBins = [begin
-                   {ok, B} = file:read_file(MsgFile),
-                   B
-               end || MsgFile <- MsgFiles],
-    DataSize = iolist_size(MsgBins),
-    EMsgName = case encode_needs_msgname(MsgModule) of
-                   true -> MsgName;
-                   false -> undefined
-               end,
-  setup_backend(Backend, MsgModule),
-  Decoder = fun() -> decode_bins(Backend, MsgBins, MsgModule, MsgName) end,
-  Msgs = decode_for_encode_samples(Backend, MsgBins, MsgModule, MsgName),
-  Encoder = fun() -> encode_msgs(Backend, Msgs, MsgModule, EMsgName) end,
-  maybe_warn_skewed_results(),
-  io:format("Benchmarking ~s ~s (~s) with file ~s~n",
-            [backend_label(Backend), MsgModule, MsgName,
-             string:join(MsgFiles, ",")]),
-  run_test("Serialize to binary", DataSize, Encoder),
-  run_test("Deserialize from binary", DataSize, Decoder),
-  io:format("~n"),
-  run_tests(Backend, Rest);
-run_tests(_Backend, []) ->
-    ok.
+backend(epb) ->
+    {epb, fun enif_protobuf:encode/1,
+        fun(Bin) -> enif_protobuf:decode(Bin, ?MSG) end};
+backend(gpb) ->
+    {gpb, fun matrix3_r:encode_msg/1,
+        fun(Bin) -> matrix3_r:decode_msg(Bin, ?MSG) end};
+backend(nif) ->
+    {nif, fun matrix3:encode_msg/1,
+        fun(Bin) -> matrix3:decode_msg(Bin, ?MSG) end}.
 
-backend_label(gpb) -> "gpb";
-backend_label(epb) -> "enif_protobuf".
+run_case(Label, Repeats, Want, Backends) ->
+    Msg = scalars3(Repeats),
+    {gpb, GpbEncode, _} = backend(gpb),
+    Ref = GpbEncode(Msg),
+    check_size(Label, byte_size(Ref), Want),
+    [check_parity(Label, Name, Encode, Decode, Msg, Ref)
+     || {Name, Encode, Decode} <- Backends],
+    Ops = lists:flatmap(
+            fun({Name, Encode, Decode}) ->
+                    [{Name, "encode", fun() -> Encode(Msg) end},
+                     {Name, "decode", fun() -> Decode(Ref) end}]
+            end, Backends),
+    Iterations = iterations([Op || {_, _, Op} <- Ops], 1),
+    [run(Op, Iterations) || {_, _, Op} <- Ops],    %% warm-up
+    print(Label, Repeats, byte_size(Ref), Iterations, best(Ops, Iterations)).
 
-setup_backend(epb, MsgModule) ->
-    ok = enif_protobuf:load_cache(MsgModule:get_msg_defs());
-setup_backend(gpb, _MsgModule) ->
-    ok.
-
-decode_for_encode_samples(gpb, MsgBins, MsgModule, MsgName) ->
-    [MsgModule:decode_msg(Bin, MsgName) || Bin <- MsgBins];
-decode_for_encode_samples(epb, MsgBins, MsgModule, MsgName) ->
-    [MsgModule:decode_msg(Bin, MsgName) || Bin <- MsgBins].
-
-encode_needs_msgname(MsgModule) ->
-    Exports = MsgModule:module_info(exports),
-    case lists:keyfind(encode_msg, 1, Exports) of
-        {encode_msg, 1} -> false;
-        {encode_msg, 2} -> true
+check_bytes(Label, Name, What, Got, Ref) ->
+    case Got of
+        Ref -> ok;
+        _ -> fail(Label, io_lib:format("~s ~s differs (~w vs ~w bytes)",
+                                       [impl(Name), What, byte_size(Got), byte_size(Ref)]))
     end.
 
-pickup_msg_file_or_files(["--multi" | MsgFilesAndRest]) ->
-    EndMarker = "--end-multi",
-    {MsgFiles, [EndMarker | Rest]} =
-        lists:splitwith(fun(S) -> S /= EndMarker end, MsgFilesAndRest),
-    {MsgFiles, Rest};
-pickup_msg_file_or_files([MsgFile | Rest]) ->
-    {[MsgFile], Rest}.
-
-decode_bins(gpb, [MsgBin | Rest], MsgModule, MsgName) ->
-    MsgModule:decode_msg(MsgBin, MsgName),
-    decode_bins(gpb, Rest, MsgModule, MsgName);
-decode_bins(gpb, [], _, _) ->
-    ok;
-decode_bins(epb, [MsgBin | Rest], _MsgModule, MsgName) ->
-    enif_protobuf:decode(MsgBin, MsgName),
-    decode_bins(epb, Rest, _MsgModule, MsgName);
-decode_bins(epb, [], _, _) ->
-    ok.
-
-encode_msgs(gpb, [Msg | Rest], MsgModule, undefined) ->
-    MsgModule:encode_msg(Msg),
-    encode_msgs(gpb, Rest, MsgModule, undefined);
-encode_msgs(gpb, [Msg | Rest], MsgModule, MsgName) ->
-    MsgModule:encode_msg(Msg, MsgName),
-    encode_msgs(gpb, Rest, MsgModule, MsgName);
-encode_msgs(gpb, [], _, _) ->
-    ok;
-encode_msgs(epb, [Msg | Rest], _MsgModule, undefined) ->
-    enif_protobuf:encode(Msg),
-    encode_msgs(epb, Rest, _MsgModule, undefined);
-encode_msgs(epb, [Msg | Rest], MsgModule, _MsgName) ->
-    enif_protobuf:encode_msg(Msg, MsgModule:get_msg_defs()),
-    encode_msgs(epb, Rest, MsgModule, _MsgName);
-encode_msgs(epb, [], _, _) ->
-    ok.
-
-maybe_warn_skewed_results() ->
-    ok.
-
-run_test(Description, DataSize, Action) ->
-    P = spawn_opt(
-          fun() ->
-                  run_test_aux(Description, DataSize, Action)
-          end,
-          [{min_heap_size, 10000000},
-           {min_bin_vheap_size, 10000000}]),
-    M = monitor(process, P),
-    receive
-        {'DOWN', M, process, P, normal} ->
-            ok;
-        {'DOWN', M, process, P, Other} ->
-            error({aux_died, Other})
+check_size(Label, Got, Want) ->
+    case Got of
+        Want -> ok;
+        _ -> fail(Label, io_lib:format("gpb wrote ~w bytes, expected ~w", [Got, Want]))
     end.
 
-run_test_aux(Description, DataSize, Action) ->
-    MinSampleTime = sample_time_min(),
-    TargetTime = sample_time_target(),
-    {Elapsed, NumIterations} = iterate_until_elapsed(MinSampleTime, Action),
-    TargetNumIterations = round((TargetTime / Elapsed) * NumIterations),
-    Elapsed2 = time_action(TargetNumIterations, Action),
-    % Same four fields every binding prints (see BENCHMARKS.md at the repo root):
-    % wire bytes, iterations, MB/s and ns/op. Keep "; <n>MB/s" intact:
-    % update_readme.sh extracts the number from that exact shape.
-    Mbps = (TargetNumIterations * DataSize) / (Elapsed2 * 1024 * 1024),
-    NsPerOp = (Elapsed2 * 1000000000) / TargetNumIterations,
-    io:format("~s: ~w bytes, ~w iterations in ~.3fs; ~.2fMB/s; ~.1f ns/op~n",
-              [Description, DataSize, TargetNumIterations, Elapsed2, Mbps,
-               NsPerOp]),
-    ok.
+%% Bytes are the contract, and a decoded tree has to re-encode to the same
+%% bytes: a speed number from a wrong codec is meaningless.
+check_parity(Label, Name, Encode, Decode, Msg, Ref) ->
+    check_bytes(Label, Name, "encode", Encode(Msg), Ref),
+    check_bytes(Label, Name, "decode/re-encode", Encode(Decode(Ref)), Ref),
+    io:format("OK   ~s: ~s encode/decode parity (~w bytes)~n",
+              [Label, impl(Name), byte_size(Ref)]).
 
-sample_time_min() ->
-    env_int("BENCH_MIN_SAMPLE_TIME", 2).
-
-sample_time_target() ->
-    env_int("BENCH_TARGET_TIME", 30).
-
-env_int(Name, Default) ->
-    case os:getenv(Name) of
-        false -> Default;
-        Val -> list_to_integer(Val)
+iterations(Ops, N) ->
+    Slowest = lists:max([run(Op, N) || Op <- Ops]),
+    case Slowest >= target_time() of
+        true -> N;
+        false -> iterations(Ops, N * 2)
     end.
 
-iterate_until_elapsed(MaxDuration, Action) ->
-    iterate_until_elapsed_2(1, MaxDuration, Action).
+best(Ops, N) ->
+    lists:foldl(
+      fun(_, Best) ->
+              lists:foldl(
+                fun({Name, Op, Fun}, Acc) ->
+                        Ns = run(Fun, N) * 1000000000 / N,
+                        Key = {Name, Op},
+                        case maps:find(Key, Acc) of
+                            {ok, Previous} when Previous =< Ns -> Acc;
+                            _ -> maps:put(Key, Ns, Acc)
+                        end
+                end, Best, Ops)
+      end, maps:new(), lists:seq(1, ?SAMPLES)).
 
-iterate_until_elapsed_2(NumIterations, MaxDuration, Action) ->
-    case time_action(NumIterations, Action) of
-        Elapsed when Elapsed < MaxDuration ->
-            iterate_until_elapsed_2(NumIterations * 2, MaxDuration, Action);
-        Elapsed when Elapsed >= MaxDuration ->
-            {Elapsed, NumIterations}
+run(Fun, N) ->
+    erlang:garbage_collect(),
+    Started = erlang:monotonic_time(),
+    iterate(N, Fun),
+    erlang:convert_time_unit(erlang:monotonic_time() - Started, native, microsecond)
+        / 1000000.
+
+iterate(N, Fun) when N > 0 ->
+    Fun(),
+    iterate(N - 1, Fun);
+iterate(0, _Fun) ->
+    ok.
+
+target_time() ->
+    case os:getenv("BENCH_TARGET_TIME") of
+        false -> 2.0;
+        Value ->
+            try list_to_float(Value)
+            catch error:badarg -> float(list_to_integer(Value))
+            end
     end.
 
-time_action(NumIterations, Action) ->
-    garbage_collect(),
-    T0 = erlang:monotonic_time(),
-    iterate_action(NumIterations, Action),
-    T1 = erlang:monotonic_time(),
-    to_seconds(T1 - T0, native).
+print(Label, Repeats, Size, Iterations, Best) ->
+    io:format("~s: ~w bytes, ~w iterations (repeated fields x~w)~n",
+              [Label, Size, Iterations, Repeats]),
+    io:format("  ~-14s ~-7s ~12s ~10s~n", ["impl", "op", "ns/op", "MB/s"]),
+    Names = lists:usort([Name || {Name, _Op} <- maps:keys(Best)]),
+    [print_row(Name, "encode", Size, maps:get({Name, "encode"}, Best))
+     || Name <- Names],
+    [print_row(Name, "decode", Size, maps:get({Name, "decode"}, Best))
+     || Name <- Names],
+    io:format("~n").
 
-to_seconds(Time, InUnit) ->
-    erlang:convert_time_unit(Time, InUnit, microsecond) / 1000000.
+print_row(Name, Op, Size, Ns) ->
+    io:format("  ~-14s ~-7s ~12.1f ~10.1f~n",
+              [impl(Name), Op, Ns, Size / Ns * 1000]).
 
-iterate_action(N, Action) when N > 0 ->
-    Action(),
-    iterate_action(N - 1, Action);
-iterate_action(0, _Action) ->
-    ok.
+impl(epb) -> "pbwire-erlang";
+impl(gpb) -> "gpb";
+impl(nif) -> "gpb-nif".
+
+fail(Label, Reason) ->
+    io:format(standard_error, "FAIL ~s: ~s~n", [Label, Reason]),
+    halt(1).
+
+%% The matrix3.txt payload: every singular scalar non-default on purpose
+%% (proto3 implicit presence has no has-flag), repeated fields scaled by n.
+scalars3(N) ->
+    {'Scalars3',
+        -2147483648,
+        9223372036854775807,
+        4294967295,
+        18446744073709551615,
+        -2147483648,
+        -9223372036854775808,
+        3735928559,
+        72623859790382856,
+        -2147483648,
+        -9223372036854775808,
+        infinity,
+        -123456.789,
+        true,
+        "hello",
+        'COLOR3_GREEN',
+        {'Inner3', "kid", 42},
+        [I - 3 || I <- lists:seq(0, N - 1)],
+        lists:duplicate(N, "tag"),
+        [{'Inner3', "grandkid", I + 1} || I <- lists:seq(0, N - 1)],
+        -7,
+        "opt",
+        [I rem 2 =:= 0 || I <- lists:seq(0, N - 1)]}.

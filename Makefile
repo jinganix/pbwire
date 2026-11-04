@@ -67,8 +67,9 @@ test: $(TEST_BIN) $(THREAD_BIN) $(DESC_BIN) $(STRUCT_BIN) $(EXAMPLE_BIN)
 erlang-test:
 	$(MAKE) -C bindings/erlang tests c-tests
 
-# Erlang binding benchmark (bindings/erlang/benchmarks): gpb, gpb NIF and
-# enif_protobuf. Same optional status as `bench`/`bench-c`; needs OTP + gpb.
+# Erlang binding benchmark (bindings/erlang/benchmarks): epb, gpb and (when
+# protoc + libprotobuf are available) gpb NIF on matrix3.proto. Same optional
+# status as `bench`/`bench-c`; needs OTP + gpb.
 erlang-bench:
 	$(MAKE) -C bindings/erlang/benchmarks benchmarks
 
@@ -187,7 +188,17 @@ conformance-python: python-bind $(CONFORMANCE_DESC)
 		echo "conformance_test_runner not found: $(CONFORMANCE_RUNNER)"; \
 		echo "run 'make conformance-setup' first"; exit 1; }
 	$(CONFORMANCE_RUNNER) \
-		$(CURDIR)/$(PY) bindings/python/conformance/testee.py \
+		$(PY_ABS) bindings/python/conformance/testee.py \
+		$(CURDIR)/$(CONFORMANCE_DESC)
+
+# Same suite through the Ruby binding (binary wire format; JSON/text answer
+# "skipped" because the binding has no printers).
+conformance-ruby: $(CONFORMANCE_DESC) ruby-bind
+	@test -x "$(CONFORMANCE_RUNNER)" || { \
+		echo "conformance_test_runner not found: $(CONFORMANCE_RUNNER)"; \
+		echo "run 'make conformance-setup' first"; exit 1; }
+	$(CONFORMANCE_RUNNER) \
+		$(RUBY_ABS) bindings/ruby/conformance/testee.rb \
 		$(CURDIR)/$(CONFORMANCE_DESC)
 
 conformance: $(CONFORMANCE_DESC) $(CONFORMANCE_TESTEE)
@@ -232,7 +243,9 @@ CFILES := include/*.h include/pbwire-protoc/*.h src/*.c src/*.h \
 	bindings/c/examples/*.c bindings/c/tests/*.c bindings/cpp/examples/*.cc \
 	bindings/erlang/c_src/*.c bindings/erlang/c_src/*.h \
 	bindings/erlang/c_src_tests/*.c bindings/erlang/c_src_tests/*.h \
-	bindings/erlang/c_src_tests/stub/*.c bindings/erlang/c_src_tests/stub/*.h
+	bindings/erlang/c_src_tests/stub/*.c bindings/erlang/c_src_tests/stub/*.h \
+	bindings/node/runtime/*.c bindings/objc/*.h bindings/objc/*.m \
+	bindings/objc/examples/*.m bindings/objc/tests/*.m bindings/objc/benchmarks/*.m
 
 format:
 	clang-format -i $(CFILES)
@@ -274,6 +287,9 @@ bench-c: $(BENCH_C_BIN)
 # dict <-> wire in C. Needs the core library and a C compiler; no generated
 # Python code and no setuptools.
 PY ?= python3
+# The conformance runner execv()s the testee program directly (no PATH search),
+# so the interpreter has to be an absolute path.
+PY_ABS := $(shell command -v $(PY) 2>/dev/null || echo $(PY))
 PY_INC := $(shell $(PY) -c "import sysconfig; print('-I' + sysconfig.get_paths()['include'])")
 PY_EXT := $(shell $(PY) -c "import sysconfig; print(sysconfig.get_config_var('EXT_SUFFIX'))")
 PY_MODULE := bindings/python/pbwire$(PY_EXT)
@@ -292,6 +308,95 @@ python-bind: $(PY_MODULE)
 python-test: python-bind
 	$(PY) bindings/python/tests/test_pbwire.py
 
+# Host-language bindings over the same C ABI (see bindings/README.md). Each
+# loads a FileDescriptorSet at run time, so none of them needs a plugin or a
+# generator: Java (JDK 22+ Foreign Function & Memory API), Ruby (a C extension
+# linked against the C core), Node (N-API addon, headers ship with node),
+# Objective-C (ARC + Foundation). They need only their own toolchain and are not
+# part of the commit gate.
+JAVA ?= java
+RUBY ?= ruby
+RUBY_ABS := $(shell command -v $(RUBY) 2>/dev/null || echo $(RUBY))
+
+java-test: shared
+	cd bindings/java && ./build.sh
+	cd bindings/java && $(JAVA) --enable-native-access=ALL-UNNAMED \
+		-Dpbwire.library=$(CURDIR)/$(SHLIB_LINK) -cp out TestPbwire tests/data/sample.desc
+
+# Builds lib/pbwire_ext.<DLEXT> for $(RUBY); the core is linked in statically,
+# so the binding needs no library path at run time.
+ruby-bind:
+	RUBY=$(RUBY) sh bindings/ruby/build.sh
+
+ruby-test: ruby-bind
+	$(RUBY) bindings/ruby/test/test_pbwire.rb
+
+node-test:
+	./bindings/node/build.sh
+
+objc-test:
+	./bindings/objc/build.sh test
+
+# The rest of the official languages, same rule: no plugin, no second wire
+# implementation. Kotlin reuses the Java FFM layer (protoc --kotlin_out is also
+# just Kotlin over protobuf-java), Rust links build/libpbwire.a in statically,
+# and PHP, Dart and C# dlopen the shared library. Each needs only its own
+# toolchain; none is part of the commit gate.
+PHP ?= php
+DART ?= dart
+DOTNET ?= dotnet
+
+kotlin-test: shared
+	cd bindings/kotlin && ./build.sh
+	cd bindings/kotlin && $(JAVA) --enable-native-access=ALL-UNNAMED \
+		-Dpbwire.library=$(CURDIR)/$(SHLIB_LINK) \
+		-cp out/pbwire.jar:../java/out TestPbwireKt ../c/tests/data/matrix3.desc
+
+php-test: shared
+	$(PHP) bindings/php/tests/test.php
+
+dart-test: shared
+	cd bindings/dart && $(DART) pub get >/dev/null
+	cd bindings/dart && $(DART) run tests/selftest.dart ../c/tests/data/matrix3.desc
+
+rust-test: shared
+	cd bindings/rust && cargo test
+
+csharp-test: shared
+	cd bindings/csharp && $(DOTNET) run --project tests -- ../c/tests/data/matrix3.desc
+
+# Each binding benchmarks itself against its language's official runtime on
+# matrix3.proto (same four tiers as `bench`/`bench-c`). Optional like those:
+# they need protoc plus that runtime (a Maven jar, npm, the google-protobuf
+# gem, the protobuf source for the ObjC runtime). RUBY picks the interpreter
+# whose gem set has google-protobuf.
+java-bench:
+	./bindings/java/benchmarks/bench.sh
+
+ruby-bench: ruby-bind
+	RUBY=$(RUBY) sh bindings/ruby/benchmarks/bench.sh
+
+node-bench:
+	./bindings/node/benchmarks/bench.sh
+
+objc-bench:
+	./bindings/objc/benchmarks/bench.sh
+
+kotlin-bench:
+	./bindings/kotlin/benchmarks/bench.sh
+
+php-bench:
+	./bindings/php/benchmarks/bench.sh
+
+dart-bench:
+	./bindings/dart/benchmarks/bench.sh
+
+rust-bench:
+	./bindings/rust/benchmarks/bench.sh
+
+csharp-bench:
+	./bindings/csharp/benchmarks/bench.sh
+
 # The benchmark compares against the official Python runtime, so it needs
 # protoc --python_out plus `pip install protobuf`.
 bindings/python/benchmarks/gen/matrix3_pb2.py: bindings/c/tests/data/matrix3.proto
@@ -304,9 +409,35 @@ python-bench: python-bind bindings/python/benchmarks/gen/matrix3_pb2.py
 difftest: $(BENCH_BIN)
 	./$(BENCH_BIN) difftest
 
+# Typed message models (bindings/typed): one protoc plugin that emits typed
+# message definitions per language, on top of each binding's dynamic API (no
+# second wire implementation). `typed-gen` regenerates the committed models,
+# `typed-test` runs every binding's typed test, `typed-conformance` generates
+# models for the real conformance proto (needs `make conformance-setup`).
+typed-gen:
+	$(MAKE) -C bindings/typed gen
+
+typed-test:
+	$(MAKE) -C bindings/typed test
+
+typed-conformance:
+	$(MAKE) -C bindings/typed conformance
+
 clean:
-	rm -rf build bench/gen bindings/go/benchmarks/gen
+	rm -rf build bindings/typed/build bench/gen bindings/go/benchmarks/gen \
+		bindings/java/benchmarks/gen bindings/java/benchmarks/out \
+		bindings/node/benchmarks/gen bindings/ruby/benchmarks/gen \
+		bindings/ruby/lib/pbwire_ext.* bindings/objc/benchmarks/gen \
+		bindings/kotlin/out bindings/php/benchmarks/gen \
+		bindings/dart/benchmarks/gen bindings/csharp/benchmarks/gen \
+		bindings/csharp/*/obj bindings/csharp/*/bin \
+		bindings/rust/target bindings/rust/benchmarks/gen
 
 .PHONY: all test examples format format-check bench bench-c erlang-bench \
 	python-bind python-test python-bench difftest conformance conformance-python \
-	desc-fixture test-cpp clean plugin-c plugin-go go-test go-bench
+	conformance-ruby ruby-bind java-test ruby-test node-test objc-test \
+	java-bench ruby-bench node-bench objc-bench \
+	kotlin-test php-test dart-test rust-test csharp-test \
+	kotlin-bench php-bench dart-bench rust-bench csharp-bench \
+	desc-fixture test-cpp clean plugin-c plugin-go go-test go-bench \
+	typed-gen typed-test typed-conformance

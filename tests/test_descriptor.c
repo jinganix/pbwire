@@ -679,6 +679,32 @@ test_text_loader(void)
                                        " { id: 1 } }"),
                                 &decoded));
     CHECK(decoded == NULL);
+    /* deeply nested lists under a reserved name stop at the depth cap
+     * instead of recursing on the C stack; shallow ones still skip. */
+    {
+        char deep[1024];
+        size_t at = 0;
+        size_t i;
+        const char head[] = "id: 1 ancient: ";
+
+        memcpy(deep + at, head, sizeof(head) - 1);
+        at += sizeof(head) - 1;
+        for (i = 0; i < 300; i++) {
+            deep[at++] = '[';
+        }
+        deep[at++] = '0';
+        for (i = 0; i < 300; i++) {
+            deep[at++] = ']';
+        }
+        deep[at] = '\0';
+        CHECK_STATUS(PBW_ERR_LIMIT,
+                     pbw_text_parse(old_msg, deep, at, &decoded));
+        CHECK(decoded == NULL);
+        CHECK_OK(pbw_text_parse(old_msg, "id: 1 ancient: [[0]]",
+                                strlen("id: 1 ancient: [[0]]"), &decoded));
+        pbw_message_free(decoded);
+        decoded = NULL;
+    }
     pbw_schema_free(schema);
 }
 

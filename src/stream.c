@@ -72,6 +72,11 @@ pbw_istream_feed(pbw_istream *s, const void *data, size_t len)
         uint8_t *grown;
 
         while (cap - s->len < len) {
+            if (cap > SIZE_MAX / 2) {
+                /* No allocation can hold this chunk; report it instead of
+                 * spinning on a wrapped capacity. */
+                return PBW_ERR_NOMEM;
+            }
             cap *= 2;
         }
         grown = (uint8_t *)realloc(s->data, cap);

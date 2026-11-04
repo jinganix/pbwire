@@ -232,6 +232,19 @@ read_length(reader *r, const uint8_t **data, size_t *len)
     size_t value;
     size_t used;
 
+    /* One-byte length (strings shorter than 128 bytes, the common case): the
+     * generic reader is a call into wire.c for what is one compare and add. */
+    if (r->p < r->end && r->p[0] < 0x80) {
+        size_t n = r->p[0];
+
+        if (n > (size_t)(r->end - r->p) - 1) {
+            return PBW_ERR_INVALID;
+        }
+        *data = r->p + 1;
+        *len = n;
+        r->p += 1 + n;
+        return PBW_OK;
+    }
     if (!pbw_len_read(r->p, r->end, &value, &used)) {
         return PBW_ERR_INVALID;
     }
@@ -804,8 +817,12 @@ decode_fields(pbw_message *msg, const uint8_t *buf, size_t len, uint32_t depth, 
                         msg->values[index].kind == PBW_VALUE_MESSAGE &&
                         msg->values[index].as.msg != NULL &&
                         msg->values[index].as.msg->desc == field->sub) {
-                        return decode_fields(msg->values[index].as.msg, data,
-                                             data_len, depth + 1, dlim);
+                        status = decode_fields(msg->values[index].as.msg, data,
+                                               data_len, depth + 1, dlim);
+                        if (status != PBW_OK) {
+                            return status;
+                        }
+                        continue;
                     }
                     status = decode_message(msg->arena, field->sub, data,
                                             data_len, &nested, depth + 1, dlim);
@@ -1167,8 +1184,18 @@ pbw_decode_limits(const pbw_descriptor *desc, const void *buf, size_t len,
     if (limits != NULL && limits->max_bytes > 0 && len > limits->max_bytes) {
         return PBW_ERR_LIMIT;
     }
-    arena = pbw_arena_new_packed(len <= 4096 ? len * 6 + 1024
-                                             : len + len / 2 + 512);
+    {
+        /* First-chunk hint from the wire length. Saturate instead of wrapping
+         * for a length so large that the size arithmetic would overflow. */
+        size_t hint = len;
+
+        if (len <= 4096) {
+            hint = len * 6 + 1024;
+        } else if (len <= SIZE_MAX - len / 2 - 512) {
+            hint = len + len / 2 + 512;
+        }
+        arena = pbw_arena_new_packed(hint);
+    }
     if (arena == NULL) {
         return PBW_ERR_NOMEM;
     }

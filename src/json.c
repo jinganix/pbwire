@@ -216,6 +216,7 @@ j_classify(const pbw_descriptor *desc)
 typedef struct {
     pbw_buf buf;
     pbw_status status;
+    int dot; /* the host locale's decimal point is '.' (checked once per call) */
 } j_out;
 
 static void
@@ -276,13 +277,13 @@ j_double(j_out *j, double value, int is_float)
 
     for (prec = prec_min; prec <= prec_max; prec++) {
         char tmp[32];
-        int n = snprintf(tmp, sizeof(tmp), "%.*g", prec, value);
+        int n = pbw_format_g(tmp, sizeof(tmp), prec, value, j->dot);
         double back;
 
         if (n <= 0 || (size_t)n >= sizeof(tmp)) {
             continue;
         }
-        back = strtod(tmp, NULL);
+        back = pbw_strtod(tmp, NULL, j->dot);
         if ((is_float ? (double)(float)back == value : back == value)) {
             j_put(j, tmp, (size_t)n);
             return;
@@ -1204,6 +1205,47 @@ j_print_any(j_out *j, const pbw_message *msg)
     j_ch(j, '}');
 }
 
+/* One field of an object body, with the separating comma. */
+static void
+j_print_one(j_out *j, const pbw_message *msg, const pbw_field *field,
+            int *first)
+{
+    char key[288];
+    const pbw_value *value = &msg->values[(size_t)(field - msg->desc->fields)];
+
+    if (!*first) {
+        j_ch(j, ',');
+    }
+    *first = 0;
+    if (field->is_extension) {
+        const char *full =
+            field->full_name != NULL ? field->full_name : field->name;
+
+        if (strlen(full) + 3 > sizeof(key)) {
+            j->status = PBW_ERR_INVALID;
+            return;
+        }
+        key[0] = '[';
+        memcpy(key + 1, full, strlen(full));
+        key[strlen(full) + 1] = ']';
+        key[strlen(full) + 2] = '\0';
+        j_quoted(j, (const uint8_t *)key, strlen(key));
+    } else {
+        j_print_name(field, key, sizeof(key));
+        j_quoted(j, (const uint8_t *)key, strlen(key));
+    }
+    j_ch(j, ':');
+    if (field->label == PBW_LABEL_REPEATED) {
+        if (value->kind == PBW_VALUE_LIST) {
+            j_print_repeated(j, field, value);
+        } else {
+            j->status = PBW_ERR_INVALID;
+        }
+    } else {
+        j_print_scalar(j, field, value);
+    }
+}
+
 static void
 j_print_fields(j_out *j, const pbw_message *msg)
 {
@@ -1213,8 +1255,22 @@ j_print_fields(j_out *j, const pbw_message *msg)
     size_t i;
     size_t k;
     int first = 1;
-    char key[288];
 
+    if (msg->desc->schema != NULL && msg->desc->schema->linked) {
+        /* link_message() already sorted the fields by number: print them in
+         * place, with no per-message order array and no malloc. A printed tree
+         * has one message per element, so this is the common case. */
+        for (i = 0; i < msg->desc->field_count; i++) {
+            if (!j_should_print(msg, i)) {
+                continue;
+            }
+            j_print_one(j, msg, &msg->desc->fields[i], &first);
+            if (j->status != PBW_OK) {
+                return;
+            }
+        }
+        return;
+    }
     for (i = 0; i < msg->desc->field_count; i++) {
         if (j_should_print(msg, i)) {
             count++;
@@ -1233,7 +1289,7 @@ j_print_fields(j_out *j, const pbw_message *msg)
             continue;
         }
         order[count] = &msg->desc->fields[i];
-        /* insertion sort by number; field counts are small */
+        /* insertion sort by number; a hand-built schema is not sorted yet */
         k = count;
         while (k > 0 && order[k - 1]->number > order[k]->number) {
             const pbw_field *tmp = order[k - 1];
@@ -1245,41 +1301,7 @@ j_print_fields(j_out *j, const pbw_message *msg)
         count++;
     }
     for (i = 0; i < count; i++) {
-        const pbw_field *field = order[i];
-        const pbw_value *value =
-            &msg->values[(size_t)(field - msg->desc->fields)];
-
-        if (!first) {
-            j_ch(j, ',');
-        }
-        first = 0;
-        if (field->is_extension) {
-            const char *full =
-                field->full_name != NULL ? field->full_name : field->name;
-
-            if (strlen(full) + 3 > sizeof(key)) {
-                j->status = PBW_ERR_INVALID;
-                break;
-            }
-            key[0] = '[';
-            memcpy(key + 1, full, strlen(full));
-            key[strlen(full) + 1] = ']';
-            key[strlen(full) + 2] = '\0';
-            j_quoted(j, (const uint8_t *)key, strlen(key));
-        } else {
-            j_print_name(field, key, sizeof(key));
-            j_quoted(j, (const uint8_t *)key, strlen(key));
-        }
-        j_ch(j, ':');
-        if (field->label == PBW_LABEL_REPEATED) {
-            if (value->kind == PBW_VALUE_LIST) {
-                j_print_repeated(j, field, value);
-            } else {
-                j->status = PBW_ERR_INVALID;
-            }
-        } else {
-            j_print_scalar(j, field, value);
-        }
+        j_print_one(j, msg, order[i], &first);
         if (j->status != PBW_OK) {
             break;
         }
@@ -1353,6 +1375,7 @@ pbw_json_print(const pbw_message *msg, char **out, size_t *len)
     }
     pbw_buf_init(&j.buf);
     j.status = PBW_OK;
+    j.dot = pbw_locale_dot();
     if (!pbw_buf_reserve(&j.buf, 64)) {
         return PBW_ERR_NOMEM;
     }
@@ -1384,6 +1407,7 @@ typedef struct {
     j_cur cur;
     int ignore_unknown;
     int depth;
+    int dot; /* the host locale's decimal point is '.' (checked once per call) */
 } j_in;
 
 typedef enum {
@@ -1837,31 +1861,45 @@ j_trim(const char **text, size_t *len)
 
 /* strtod with full-consumption check, like SimpleAtod. */
 static pbw_status
-j_atod(const char *text, size_t len, double *out)
+j_atod(const char *text, size_t len, int dot, double *out)
 {
-    char tmp[64];
+    char stack[64];
+    char *tmp = stack;
     char *stop;
     double v;
 
-    /* strtod skips leading whitespace itself, but not trailing garbage. */
-    if (len >= sizeof(tmp)) {
-        return PBW_ERR_INVALID;
+    /* strtod skips leading whitespace itself, but not trailing garbage. A
+     * number longer than the stack buffer is unusual, not invalid: the
+     * reference parser has no length limit either. */
+    if (len >= sizeof(stack)) {
+        tmp = (char *)malloc(len + 1);
+        if (tmp == NULL) {
+            return PBW_ERR_NOMEM;
+        }
     }
     memcpy(tmp, text, len);
     tmp[len] = '\0';
-    v = strtod(tmp, &stop);
+    v = pbw_strtod(tmp, &stop, dot);
     if (stop == tmp) {
-        return PBW_ERR_INVALID;
+        goto invalid;
     }
     while (*stop == ' ' || *stop == '\t' || *stop == '\n' ||
            *stop == '\r') {
         stop++;
     }
     if (*stop != '\0') {
-        return PBW_ERR_INVALID;
+        goto invalid;
+    }
+    if (tmp != stack) {
+        free(tmp);
     }
     *out = v;
     return PBW_OK;
+invalid:
+    if (tmp != stack) {
+        free(tmp);
+    }
+    return PBW_ERR_INVALID;
 }
 
 /* absl::SimpleAtob's word set, case-insensitive. */
@@ -2207,7 +2245,7 @@ j_parse_int_value(j_in *j, const char *text, size_t len, int quoted,
             double d;
 
             /* 1e3 and 1.0 spell integers; 1.5 does not. */
-            if (j_atod(text, len, &d) != PBW_OK || !isfinite(d) ||
+            if (j_atod(text, len, j->dot, &d) != PBW_OK || !isfinite(d) ||
                 d < -9007199254740992.0 || d > 9007199254740992.0) {
                 return PBW_ERR_INVALID;
             }
@@ -2225,7 +2263,7 @@ j_parse_int_value(j_in *j, const char *text, size_t len, int quoted,
     if (j_atou64(text, len, &u) != PBW_OK) {
         double d;
 
-        if (j_atod(text, len, &d) != PBW_OK || !isfinite(d) || d < 0 ||
+        if (j_atod(text, len, j->dot, &d) != PBW_OK || !isfinite(d) || d < 0 ||
             d > 18014398509481984.0) {
             return PBW_ERR_INVALID;
         }
@@ -2264,7 +2302,7 @@ j_parse_double_value(j_in *j, const char *text, size_t len, int is_float,
         }
     }
     /* Quoted floats allow surrounding whitespace (SimpleAtod does). */
-    if (j_atod(text, len, &d) != PBW_OK) {
+    if (j_atod(text, len, j->dot, &d) != PBW_OK) {
         return PBW_ERR_INVALID;
     }
     if (is_float && isfinite(d) && !isfinite((float)d)) {
@@ -2985,7 +3023,7 @@ j_parse_value_msg(j_in *j, pbw_message *msg)
         double d;
 
         if (j_parse_raw(j, &text, &len) != PBW_OK ||
-            j_atod(text, len, &d) != PBW_OK) {
+            j_atod(text, len, j->dot, &d) != PBW_OK) {
             return PBW_ERR_INVALID;
         }
         {
@@ -4107,6 +4145,7 @@ pbw_json_parse_opts(const pbw_descriptor *desc, const char *text,
     j.ignore_unknown =
         options != NULL && options->ignore_unknown_fields;
     j.depth = 0;
+    j.dot = pbw_locale_dot();
     if (j_parse_message(&j, msg) != PBW_OK) {
         pbw_message_free(msg);
         return PBW_ERR_INVALID;

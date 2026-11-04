@@ -42,8 +42,8 @@ typedef struct {
     double f64; /* optional */
     bool flag; /* optional */
     const char *str; /* optional */
-    int32_t color; /* optional */
-    structtest_inner3_t *inner; /* optional */
+    int32_t color; /* optional, structtest.Color3 */
+    structtest_inner3_t *inner; /* optional, structtest.Inner3 */
     int32_t *nums;
     size_t n_nums;
     const char **tags;

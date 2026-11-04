@@ -41,13 +41,13 @@ typedef struct {
     bool flag; /* optional */
     int has_flag;
     const char *str; /* optional */
-    int32_t shade; /* optional */
+    int32_t shade; /* optional, structtest.Shade */
     int has_shade;
     int32_t *nums;
     size_t n_nums;
     int32_t *packed_nums;
     size_t n_packed_nums;
-    structtest_inner2_t *inner; /* optional */
+    structtest_inner2_t *inner; /* optional, structtest.Inner2 */
     structtest_inner2_t *inners;
     size_t n_inners;
 } structtest_scalars2_t;

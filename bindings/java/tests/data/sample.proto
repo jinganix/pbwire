@@ -1,0 +1,33 @@
+// Fixture for the Java binding's self-check: one message with every scalar
+// family the binding exposes, an enum, a nested message and repeated fields.
+syntax = "proto3";
+
+package pbwire.test;
+
+enum Color {
+  COLOR_UNSPECIFIED = 0;
+  RED = 1;
+  GREEN = 2;
+}
+
+message Inner {
+  int32 x = 1;
+  string tag = 2;
+}
+
+message Sample {
+  int32 int32_field = 1;
+  int64 int64_field = 2;
+  uint32 uint32_field = 3;
+  uint64 uint64_field = 4;
+  sint32 sint32_field = 5;
+  bool bool_field = 6;
+  float float_field = 7;
+  double double_field = 8;
+  string string_field = 9;
+  bytes bytes_field = 10;
+  Color color = 11;
+  Inner inner = 12;
+  repeated int32 numbers = 13;
+  repeated Inner inners = 14;
+}

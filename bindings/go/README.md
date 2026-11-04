@@ -102,3 +102,9 @@ required-field errors, singular-message merge and the nesting cap.
 `make -C bindings/go/plugin test` replays the checked-in protoc requests
 against the pinned generated files, so the generator itself is covered without
 needing `protoc`.
+
+## Typed models
+
+Go's generated codecs are already the typed model (`protoc-gen-pbwire-go` emits
+the structs and their size/encode/decode), so the shared typed plugin in
+`../typed/` has nothing to add here.
