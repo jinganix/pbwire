@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.16)
 
-project(pbwire VERSION 0.1.5 LANGUAGES C)
+project(pbwire VERSION 0.1.6 LANGUAGES C)
 
 option(PBW_BUILD_PROTOC "Build the optional .proto importer (needs libprotobuf)" OFF)
 option(PBW_BUILD_TESTS "Build the self-checks" ON)
