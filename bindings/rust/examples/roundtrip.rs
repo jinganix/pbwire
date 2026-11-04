@@ -1,44 +1,63 @@
-//! A round trip over the pinned `matrix3.desc`: build, encode, decode, read back.
+//! The C example (examples/addressbook.c), in Rust, through the generated
+//! typed structs: assign fields, encode, decode, compare. The encoded bytes
+//! must equal the pinned reference examples/addressbook.bin.
 //!
-//!   cargo run --example roundtrip -- ../c/tests/data/matrix3.desc
+//!   cd bindings/rust && cargo run --example roundtrip
 
+#[path = "gen/addressbook_pbwire.rs"]
+mod addressbook;
+
+use addressbook::{AddressBook, Person, PersonPhoneNumber, PersonPhoneType};
 use pbwire::Schema;
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let path = std::env::args()
-        .nth(1)
-        .unwrap_or_else(|| "../c/tests/data/matrix3.desc".to_string());
-    let schema = Schema::from_file(&path)?;
-    let ty = schema.message("structtest.Scalars3")?;
-    let inner_ty = schema.message("structtest.Inner3")?;
+const DESC: &str = "../../examples/addressbook.desc";
+const BIN: &str = "../../examples/addressbook.bin";
 
-    let mut msg = ty.new_message();
-    msg.set_i64(ty.field("i32")?, -42)
-        .set_str(ty.field("str")?, "alice")
-        .set_bool(ty.field("flag")?, true);
-    for tag in ["a", "bb"] {
-        msg.set_str(ty.field("tags")?, tag);
+fn phone(number: &str, kind: i32) -> PersonPhoneNumber {
+    PersonPhoneNumber {
+        number: number.into(),
+        has_type: true,
+        r#type: kind,
     }
-    msg.set_message(ty.field("inner")?)
-        .set_str(inner_ty.field("name")?, "kid")
-        .set_i64(inner_ty.field("value")?, 42);
+}
 
-    let wire = msg.encode()?;
-    println!("{} bytes: {wire:02x?}", wire.len());
-
-    let decoded = ty.decode(&wire)?;
-    println!("i32   = {}", decoded.get_i64(ty.field("i32")?));
-    println!("str   = {:?}", decoded.get_str(ty.field("str")?));
-    println!("inner = {:?}", match decoded.get_message(ty.field("inner")?) {
-        Some(inner) => inner.get_str(inner_ty.field("name")?).map(str::to_string),
-        None => None,
-    });
-    if let Some(tags) = decoded.value(ty.field("tags")?) {
-        let tags: Vec<&str> = (0..tags.len())
-            .filter_map(|i| tags.at(i)?.as_str())
-            .collect();
-        println!("tags  = {tags:?}");
+fn build() -> AddressBook {
+    AddressBook {
+        people: vec![
+            Person {
+                name: "Alice".into(),
+                id: 1,
+                has_email: false,
+                email: String::new(),
+                phones: vec![phone("555-0100", PersonPhoneType::MOBILE)],
+            },
+            Person {
+                name: "Bob".into(),
+                id: 2,
+                has_email: true,
+                email: "bob@example.com".into(),
+                phones: vec![phone("555-0200", PersonPhoneType::HOME)],
+            },
+        ],
     }
-    assert_eq!(decoded.encode()?, wire, "byte-exact round trip");
+}
+
+fn main() -> pbwire::Result<()> {
+    let schema = Schema::from_file(DESC)?;
+    let wire = build().encode(&schema)?;
+
+    if let Ok(reference) = std::fs::read(BIN) {
+        assert_eq!(wire, reference, "encode does not match {BIN}");
+    }
+
+    let book = AddressBook::decode(&schema, &wire)?;
+    println!("addressbook: {} bytes, {} people", wire.len(), book.people.len());
+    for person in &book.people {
+        let email = if person.has_email { person.email.as_str() } else { "" };
+        println!("  {} ({}) {}", person.name, person.id, email);
+        for entry in &person.phones {
+            println!("    {}", entry.number);
+        }
+    }
     Ok(())
 }

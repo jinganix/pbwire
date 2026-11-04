@@ -65,3 +65,11 @@ to C); use `set_bytes` for binary payloads, including on a `string` field.
 
 A `Schema` is immutable once loaded, so `&Schema` can be shared. A `Message` is
 not `Send`/`Sync` on purpose: like the C core, one tree belongs to one thread.
+
+## Typed models
+
+`protoc-gen-pbwire-typed` (in `../typed`) generates structs with typed fields,
+`encode(&Schema)` / `decode(&Schema, &[u8])` and `encode_into` for nesting, all
+resolving fields through the schema. The committed output is `tests/gen/` and
+`examples/gen/`; `examples/roundtrip.rs` assigns typed fields only. See
+`../typed/README.md`.

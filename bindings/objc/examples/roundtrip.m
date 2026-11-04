@@ -1,90 +1,87 @@
-/* Objective-C binding example: load a descriptor set at runtime, build a
- * message field by field, encode, decode, assert, print.
+/* The C example (examples/addressbook.c), in Objective-C, through the generated
+ * typed classes: assign fields, encode, decode, compare. The encoded bytes must
+ * equal the pinned reference examples/addressbook.bin.
  *
- *   ./build.sh          (builds and runs this after the self-check)
- *   ./build/roundtrip   (after the first build; optional .desc path argument)
- *
- * No generated code and no protoc at build time: the .desc file is the schema.
- */
+ * Run it with ./build.sh example. */
 
 #import <Foundation/Foundation.h>
 
 #import "PBWMessage.h"
 #import "PBWSchema.h"
+#import "gen/addressbook.h"
 
 #include <stdio.h>
 
-static NSString *
-defaultDescriptorPath(void)
-{
-    NSString *source = @(__FILE__);
+static int failures;
 
-    return [[[source stringByDeletingLastPathComponent]
-        stringByDeletingLastPathComponent]
-        stringByAppendingPathComponent:@"tests/data/probe.desc"];
+#define CHECK(cond)                                                                  \
+    do {                                                                             \
+        if (!(cond)) {                                                               \
+            fprintf(stderr, "%s:%d: CHECK failed: %s\n", __FILE__, __LINE__, #cond); \
+            failures++;                                                              \
+        }                                                                            \
+    } while (0)
+
+static PBWGen_Person_PhoneNumber *
+Phone(NSString *number, int32_t type)
+{
+    PBWGen_Person_PhoneNumber *phone = [PBWGen_Person_PhoneNumber new];
+    phone.number = number;
+    phone.hasType = YES;
+    phone.type = type;
+    return phone;
+}
+
+static PBWGen_AddressBook *
+Build(void)
+{
+    PBWGen_Person *alice = [PBWGen_Person new];
+    alice.name = @"Alice";
+    alice.id = 1;
+    alice.phones = @[ Phone(@"555-0100", PBWGen_Person_PhoneType_MOBILE) ];
+
+    PBWGen_Person *bob = [PBWGen_Person new];
+    bob.name = @"Bob";
+    bob.id = 2;
+    bob.hasEmail = YES;
+    bob.email = @"bob@example.com";
+    bob.phones = @[ Phone(@"555-0200", PBWGen_Person_PhoneType_HOME) ];
+
+    PBWGen_AddressBook *book = [PBWGen_AddressBook new];
+    book.people = @[ alice, bob ];
+    return book;
 }
 
 int
 main(int argc, char **argv)
 {
     @autoreleasepool {
-        NSString *path = argc > 1 ? @(argv[1]) : defaultDescriptorPath();
+        NSString *desc = argc > 1 ? @(argv[1]) : @"examples/addressbook.desc";
+        NSString *bin = argc > 2 ? @(argv[2]) : @"examples/addressbook.bin";
         NSError *error = nil;
-        PBWSchema *schema = [PBWSchema schemaFromFile:path error:&error];
-        PBWMessage *message;
-        PBWMessage *inner;
-        PBWMessage *decoded;
-        NSData *wire;
 
-        if (schema == nil) {
-            fprintf(stderr, "load %s: %s\n", path.UTF8String,
-                    error.localizedDescription.UTF8String);
-            return 1;
+        PBWSchema *schema = [PBWSchema schemaFromFile:desc error:&error];
+        CHECK(schema != nil);
+
+        NSData *wire = [Build() encodeWithSchema:schema error:&error];
+        CHECK(wire != nil);
+        NSData *reference = [NSData dataWithContentsOfFile:bin];
+        CHECK([wire isEqualToData:reference]);
+
+        PBWGen_AddressBook *back =
+            [PBWGen_AddressBook decodeWithSchema:schema
+                                            data:wire
+                                           error:&error];
+        CHECK(back.people.count == 2);
+        printf("addressbook: %lu bytes, %lu people\n", (unsigned long)wire.length,
+               (unsigned long)back.people.count);
+        for (PBWGen_Person *person in back.people) {
+            printf("  %s (%d) %s\n", person.name.UTF8String, person.id,
+                   person.hasEmail ? person.email.UTF8String : "");
+            for (PBWGen_Person_PhoneNumber *phone in person.phones) {
+                printf("    %s\n", phone.number.UTF8String);
+            }
         }
-
-        message = [schema messageByName:@"pbwobjc.Probe"];
-        if (message == nil) {
-            fprintf(stderr, "no pbwobjc.Probe in %s\n", path.UTF8String);
-            return 1;
-        }
-        [message setValue:@(1234) forField:@"i32" error:&error];
-        [message setValue:@"alice" forField:@"text" error:&error];
-        [message setValue:@YES forField:@"flag" error:&error];
-        [message setValue:@(1) forField:@"color" error:&error];
-        inner = [message addMessageForField:@"inner" error:&error];
-        [inner setValue:@"child" forField:@"label" error:&error];
-        [inner setValue:@(7) forField:@"n" error:&error];
-
-        wire = [message encode:&error];
-        if (wire == nil) {
-            fprintf(stderr, "encode: %s\n", error.localizedDescription.UTF8String);
-            return 1;
-        }
-
-        decoded = [message decode:wire error:&error];
-        if (decoded == nil) {
-            fprintf(stderr, "decode: %s\n", error.localizedDescription.UTF8String);
-            return 1;
-        }
-
-        /* The round trip is byte-exact: unknown fields and field order survive. */
-        NSData *again = [decoded encode:&error];
-
-        assert([[decoded valueForField:@"text"] isEqual:@"alice"]);
-        assert([[decoded valueForField:@"i32"] isEqualToNumber:@(1234)]);
-        assert([[decoded valueForField:@"flag"] isEqualToNumber:@YES]);
-        assert([[[decoded messageForField:@"inner"] valueForField:@"label"]
-            isEqual:@"child"]);
-        assert([[[decoded messageForField:@"inner"] valueForField:@"n"]
-            isEqualToNumber:@(7)]);
-        assert([wire isEqualToData:again]);
-
-        printf("%s: %lu byte(s), text=%s, inner.label=%s, color=%d\n",
-               decoded.messageName.UTF8String, (unsigned long)wire.length,
-               [[decoded valueForField:@"text"] UTF8String],
-               [[[decoded messageForField:@"inner"] valueForField:@"label"]
-                   UTF8String],
-               [(NSNumber *)[decoded valueForField:@"color"] intValue]);
-        return 0;
+        return failures == 0 ? 0 : 1;
     }
 }

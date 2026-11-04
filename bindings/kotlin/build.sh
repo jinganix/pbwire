@@ -18,7 +18,7 @@ javac -d "$java_out" "$root"/bindings/java/runtime/*.java
 
 rm -f "$here/out/pbwire.jar"
 kotlinc -nowarn -cp "$java_out" -include-runtime -d "$here/out/pbwire.jar" \
-    "$here"/runtime/*.kt "$here"/tests/*.kt "$here"/examples/*.kt
+    "$here"/runtime/*.kt "$here"/tests/*.kt "$here"/tests/gen/*.kt "$here"/examples/*.kt "$here"/examples/gen/*.kt
 
 case "$(uname -s)" in
 Darwin) lib=$root/build/libpbwire.dylib ;;
@@ -29,4 +29,4 @@ echo "built $here/out/pbwire.jar"
 echo "self-check: java --enable-native-access=ALL-UNNAMED -Dpbwire.library=$lib \\"
 echo "                 -cp $here/out/pbwire.jar:$java_out TestPbwireKt $root/bindings/c/tests/data/matrix3.desc"
 echo "example:    java --enable-native-access=ALL-UNNAMED -Dpbwire.library=$lib \\"
-echo "                 -cp $here/out/pbwire.jar:$java_out RoundtripKt $root/bindings/c/tests/data/matrix3.desc"
+echo "                 -cp $here/out/pbwire.jar:$java_out RoundtripKt $root/examples/addressbook.desc $root/examples/addressbook.bin"

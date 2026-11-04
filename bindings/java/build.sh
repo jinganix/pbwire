@@ -34,5 +34,5 @@ self-check:
   java --enable-native-access=ALL-UNNAMED -Dpbwire.library=$lib -cp $here/out TestPbwire $desc
 
 example:
-  java --enable-native-access=ALL-UNNAMED -Dpbwire.library=$lib -cp $here/out Roundtrip $desc
+  java --enable-native-access=ALL-UNNAMED -Dpbwire.library=$lib -cp $here/out Roundtrip $root/examples/addressbook.desc $root/examples/addressbook.bin
 EOF

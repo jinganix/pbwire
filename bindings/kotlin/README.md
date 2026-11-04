@@ -64,3 +64,10 @@ A second copy of the FFM tables would be a second thing to keep in sync with
 marshalling cost, and the JVM is the same host either way. The ownership and
 threading rules are the Java binding's: a `Schema` or `Message` belongs to one
 thread, `use`/`close` frees a root, and a nested message is a view of its parent.
+
+## Typed models
+
+`protoc-gen-pbwire-typed` (in `../typed`) generates Kotlin `data class`es with
+typed properties, `fun encode(schema)` and a `companion object { fun decode }`.
+The committed output is `tests/gen/`; `examples/Roundtrip.kt` uses only typed
+assignments. See `../typed/README.md`.

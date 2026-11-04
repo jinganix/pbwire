@@ -193,3 +193,12 @@ per-message finalizer.
 Also out of scope here: JSON/text format (`pbw_json_print`/`pbw_text_print`),
 field presence introspection (`pbw_message_field_count`), and delimited framing.
 Each is one addon export away when a consumer needs it.
+
+## Typed models
+
+`protoc-gen-pbwire-typed` (in `../typed`) generates `matrix3.d.ts` interfaces
+(for TypeScript) and a JSDoc/`@ts-check` `.js` with the same shapes plus the enum
+constants, describing exactly the plain objects `MessageType.encode()` accepts
+and `Message.get()` returns. The committed output is `tests/gen/` and
+`examples/gen/`; the typed test type-checks with `tsc --strict --checkJs`.
+See `../typed/README.md`.

@@ -112,8 +112,8 @@ make -C bindings/c/plugin dump     # needs protoc: re-capture testdata dumps
 ```
 
 Golden tests compare generator output byte-for-byte against
-[`example/gen/addressbook.h`](example/gen/addressbook.h) and
-[`tests/gen/matrix{2,3}.h`](../tests/gen/matrix3.h),
+[`example/gen/addressbook.h`](examples/gen/addressbook.h) and
+[`tests/gen/matrix{2,3}.h`](tests/gen/matrix3.h),
 which are also the files the example and the self-check compile against:
 the test and the build can never disagree. Each `.proto` has a single
 source (`examples/addressbook.proto`, `tests/data/matrix{2,3}.proto`);
@@ -124,7 +124,7 @@ regen commands, so `make test` at the repo root never needs protoc.
 make test    # from the repo root: also runs bindings/c/tests/test_struct
 ```
 
-[`tests/test_struct.c`](../tests/test_struct.c) is the binding self-check
+[`tests/test_struct.c`](tests/test_struct.c) is the binding self-check
 (no framework, no dependencies): the generated structs encode to the exact
 bytes `protoc --encode` produces (pinned `.bin` next to each `.proto`, from
 the checked-in `.txt`), decode recovers every field, and layout mismatches,
@@ -132,7 +132,7 @@ missing required fields, truncated input and bad arguments all fail loudly.
 
 ## 3. Example
 
-[`example/addressbook.c`](example/addressbook.c) mirrors the shared
+[`example/addressbook.c`](examples/addressbook.c) mirrors the shared
 [`examples/addressbook.proto`](../../examples/addressbook.proto) (the
 classic tutorial schema) with plain structs and the generated wrappers:
 
@@ -157,7 +157,7 @@ Run from the repo root so the relative path resolves.
 Run it: `make examples` from the repo root.
 
 Every binding example in this repo follows the same shape (the C++ one
-in [`bindings/cpp/`](../../cpp/) mirrors it line for line):
+in [`bindings/cpp/`](../cpp/) mirrors it line for line):
 
 1. Fill the generated structs with literals (the language's own
    assignment: designated initializers in C, aggregate init in C++).
@@ -215,3 +215,14 @@ The harness also prints a `pbwire-c1` block: the one-shot API, which compiles
 the layout on every call and mallocs every value. It is 3-5x slower, which is
 the price of that convenience — the point of the extra block is to keep the
 trade-off visible rather than hidden.
+
+## Typed models
+
+The struct binding *is* the typed model: `plugin/` generates the C structs, the
+enum typedefs and the layout tables, with the `.proto` type named in each field
+comment (`int32_t color; /* optional, structtest.Color3 */`). `tests/gen/` and
+`examples/gen/` hold the pinned output; `examples/addressbook.c` assigns struct
+literals and calls the generated `*_encode`/`*_decode` wrappers only.
+
+For every other language, `../typed/` generates the same kind of typed layer;
+see `../typed/README.md`.

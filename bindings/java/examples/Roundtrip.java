@@ -1,56 +1,69 @@
-import java.io.IOException;
 import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.Arrays;
 
-/** Build a message, encode it, decode it, and check that every field survived. */
+/**
+ * The C example (examples/addressbook.c), in Java, through the generated typed
+ * classes: assign typed fields, encode, decode, compare. The encoded bytes must
+ * equal the pinned reference {@code examples/addressbook.bin}, so the example
+ * doubles as a cross-language byte check.
+ *
+ * <p>Run it after bindings/java/build.sh:
+ * {@code java ... -cp out Roundtrip ../../examples/addressbook.desc ../../examples/addressbook.bin}
+ */
 public final class Roundtrip {
     private Roundtrip() {
     }
 
-    public static void main(String[] args) throws IOException {
-        if (args.length != 1) {
-            System.err.println("usage: Roundtrip <descriptor-set>  (see tests/data/sample.desc)");
-            System.exit(2);
-        }
-        try (Schema schema = Schema.fromFile(args[0])) {
-            MessageType sample = schema.message("pbwire.test.Sample");
-            byte[] wire;
-            try (Message message = sample.newMessage()) {
-                message.set("int32_field", -42)
-                        .set("string_field", "alice")
-                        .set("bool_field", true)
-                        .set("color", 2)
-                        .set("numbers", 1)
-                        .set("numbers", 2);
-                message.newMessage("inner").set("x", 7).set("tag", "nested");
-                wire = message.encode();
-            }
-            System.out.println("encoded " + wire.length + " bytes: " + hex(wire));
+    public static void main(String[] args) throws Exception {
+        String desc = args.length > 0 ? args[0] : "../../examples/addressbook.desc";
+        Path bin = Path.of(args.length > 1 ? args[1] : "../../examples/addressbook.bin");
 
-            try (Message decoded = sample.decode(wire)) {
-                if (decoded.getLong("int32_field") != -42
-                        || !"alice".equals(decoded.getString("string_field"))
-                        || !decoded.getBool("bool_field")
-                        || decoded.getLong("color") != 2
-                        || !decoded.getList("numbers").equals(java.util.List.of(1L, 2L))
-                        || decoded.getMessage("inner").getLong("x") != 7) {
-                    throw new AssertionError("round trip lost a field");
+        try (Schema schema = Schema.fromFile(desc)) {
+            Tutorial_AddressBook book = build();
+            byte[] wire = book.encode(schema);
+
+            if (Files.exists(bin)) {
+                byte[] reference = Files.readAllBytes(bin);
+                if (!Arrays.equals(wire, reference)) {
+                    throw new AssertionError("encode does not match " + bin);
                 }
-                if (!Arrays.equals(wire, decoded.encode())) {
-                    throw new AssertionError("re-encode of the decoded message differs");
+            }
+
+            Tutorial_AddressBook back = Tutorial_AddressBook.decode(schema, wire);
+            System.out.printf("addressbook: %d bytes, %d people%n", wire.length, back.people.size());
+            for (Tutorial_Person p : back.people) {
+                System.out.printf("  %s (%d) %s%n", p.name, p.id, p.hasEmail ? p.email : "");
+                for (Tutorial_Person_PhoneNumber phone : p.phones) {
+                    System.out.printf("    %s%n", phone.number);
                 }
-                System.out.println("decoded back: " + decoded.get("string_field") + ", inner.x = "
-                        + decoded.getMessage("inner").getLong("x"));
             }
         }
-        System.out.println("round trip ok");
     }
 
-    private static String hex(byte[] bytes) {
-        StringBuilder out = new StringBuilder(bytes.length * 2);
-        for (byte b : bytes) {
-            out.append(Character.forDigit((b >> 4) & 0xf, 16)).append(Character.forDigit(b & 0xf, 16));
-        }
-        return out.toString();
+    private static Tutorial_AddressBook build() {
+        Tutorial_Person alice = new Tutorial_Person();
+        alice.name = "Alice";
+        alice.id = 1;
+        alice.phones.add(phone("555-0100", Tutorial_Person_PhoneType.MOBILE));
+
+        Tutorial_Person bob = new Tutorial_Person();
+        bob.name = "Bob";
+        bob.id = 2;
+        bob.hasEmail = true;
+        bob.email = "bob@example.com";
+        bob.phones.add(phone("555-0200", Tutorial_Person_PhoneType.HOME));
+
+        Tutorial_AddressBook book = new Tutorial_AddressBook();
+        book.people.addAll(Arrays.asList(alice, bob));
+        return book;
+    }
+
+    private static Tutorial_Person_PhoneNumber phone(String number, int type) {
+        Tutorial_Person_PhoneNumber phone = new Tutorial_Person_PhoneNumber();
+        phone.number = number;
+        phone.hasType = true;
+        phone.type = type;
+        return phone;
     }
 }

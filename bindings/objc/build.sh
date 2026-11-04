@@ -3,6 +3,7 @@
 #
 #   ./build.sh              build the self-check + example and run both
 #   ./build.sh test         self-check only
+#   ./build.sh typed        generated typed classes self-check only
 #   ./build.sh example      example only
 #
 # The core static library comes from the repo root: `make all` builds
@@ -34,20 +35,33 @@ run_tests() {
     "$out/test_objc"
 }
 
+run_typed() {
+    # shellcheck disable=SC2086 # flags and runtime are word lists on purpose
+    $cc $flags -I"$here/tests" -o "$out/typed_test" $runtime "$here/tests/gen/matrix3.m" \
+        "$here/tests/typed_test.m" "$lib" -framework Foundation -lpthread
+    "$out/typed_test" "$root/bindings/c/tests/data/matrix3.desc" \
+        "$root/bindings/c/tests/data/matrix3.bin"
+}
+
 run_example() {
-    build roundtrip "$here/examples/roundtrip.m"
+    # shellcheck disable=SC2086 # flags and runtime are word lists on purpose
+    $cc $flags -I"$here/examples" -o "$out/roundtrip" $runtime \
+        "$here/examples/gen/addressbook.m" "$here/examples/roundtrip.m" "$lib" \
+        -framework Foundation -lpthread
     "$out/roundtrip"
 }
 
 case "${1:-all}" in
 all)
     run_tests
+    run_typed
     run_example
     ;;
 test) run_tests ;;
+typed) run_typed ;;
 example) run_example ;;
 *)
-    echo "usage: $0 [all|test|example]" >&2
+    echo "usage: $0 [all|test|typed|example]" >&2
     exit 2
     ;;
 esac

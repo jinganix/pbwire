@@ -1,39 +1,42 @@
-#!/usr/bin/env ruby
 # frozen_string_literal: true
 
-# Round trip without generated code: a FileDescriptorSet becomes the schema at
-# runtime, a message is filled by field name, encoded, and decoded back.
+# The C example (examples/addressbook.c), in Ruby, through the generated typed
+# classes: assign fields, encode, decode, compare. The encoded bytes must equal
+# the pinned reference examples/addressbook.bin.
 #
-#   make ruby-bind                                     # builds the extension
-#   ruby -Ibindings/ruby/lib bindings/ruby/examples/roundtrip.rb [desc]
+#   ruby -Ibindings/ruby/lib bindings/ruby/examples/roundtrip.rb
+
 $LOAD_PATH.unshift File.expand_path('../lib', __dir__)
 require 'pbwire'
+require_relative 'gen/addressbook'
 
-desc = ARGV[0] || File.expand_path('../test/data/sample.desc', __dir__)
+def build
+  alice = Pbwire::Gen::Tutorial_Person.new(
+    name: 'Alice', id: 1,
+    phones: [phone('555-0100', Pbwire::Gen::Tutorial_Person_PhoneType::MOBILE)]
+  )
+  bob = Pbwire::Gen::Tutorial_Person.new(
+    name: 'Bob', id: 2, has_email: true, email: 'bob@example.com',
+    phones: [phone('555-0200', Pbwire::Gen::Tutorial_Person_PhoneType::HOME)]
+  )
+  Pbwire::Gen::Tutorial_AddressBook.new(people: [alice, bob])
+end
+
+def phone(number, type)
+  Pbwire::Gen::Tutorial_Person_PhoneNumber.new(number: number, has_type: true, type: type)
+end
+
+desc = ARGV[0] || File.expand_path('../../../examples/addressbook.desc', __dir__)
+bin = ARGV[1] || File.expand_path('../../../examples/addressbook.bin', __dir__)
+
 schema = Pbwire::Schema.from_file(desc)
-sample = schema.message('pbwire.ruby.Sample')
+wire = build.encode(schema)
+raise "encode does not match #{bin}" if File.exist?(bin) && wire != File.binread(bin)
 
-sample['i32'] = -7
-sample['name'] = 'alice'
-sample['blob'] = "\x00\xff".b
-sample['color'] = 1
-
-inner = schema.message('pbwire.ruby.Inner')
-inner['s'] = 'nested'
-sample['inner'] = inner # moves the C message into the parent
-sample['nums'] = [1, 2, 3] # repeated fields take the whole Array
-
-wire = sample.encode
-back = schema.message('pbwire.ruby.Sample').decode(wire)
-
-raise "name lost: #{back['name'].inspect}" unless back['name'] == 'alice'
-raise "nested message lost: #{back['inner'].inspect}" unless back['inner']['s'] == 'nested'
-raise 're-encode differs from the wire bytes' unless back.encode == wire
-
-puts "encoded #{wire.bytesize} bytes: #{wire.unpack1('H*')}"
-puts "decoded name=#{back['name'].inspect} inner.s=#{back['inner']['s'].inspect} " \
-     "nums=#{back['nums'].inspect} i32=#{back['i32']}"
-
-back.close
-sample.close
+back = Pbwire::Gen::Tutorial_AddressBook.decode(schema, wire)
+puts "addressbook: #{wire.bytesize} bytes, #{back.people.length} people"
+back.people.each do |person|
+  puts "  #{person.name} (#{person.id}) #{person.has_email ? person.email : ''}"
+  person.phones.each { |phone| puts "    #{phone.number}" }
+end
 schema.close

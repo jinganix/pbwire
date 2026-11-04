@@ -194,3 +194,20 @@ protoc --descriptor_set_out=tests/data/sample.desc --include_imports \
   binding keeps one context (bounded by the largest message it handled) until
   the process exits. One context per thread is the same trade the core's own
   `pbw_pool` documents.
+
+## Typed models
+
+`protoc-gen-pbwire-typed` (in `../typed`) generates one Java class per message:
+typed public fields plus `encode(Schema)` / `static decode(Schema, byte[])`.
+The committed output is `tests/gen/`; `examples/Roundtrip.java` and
+`tests/TestTyped.java` use only typed assignments:
+
+```java
+Tutorial_Person person = new Tutorial_Person();
+person.name = "Alice";
+person.id = 1;
+byte[] wire = person.encode(schema);
+```
+
+See `../typed/README.md` for regeneration (`make typed-gen`) and tests
+(`make typed-test`).

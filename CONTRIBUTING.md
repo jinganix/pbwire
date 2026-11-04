@@ -42,7 +42,7 @@ This repository uses [Conventional Commits](https://www.conventionalcommits.org/
 | `protoc` | `include/pbwire-protoc/`, `src/protoc/`, `tests/protoc/` (optional `.proto` importer) |
 | `test` | `tests/`, `bench/`, `conformance/` |
 | `bindings` | `bindings/` (language bindings over the C ABI) |
-| `docs` | `README.md`, `AGENTS.md`, `CONTRIBUTING.md`, `llms.txt`, `LICENSE` |
+| `docs` | `README.md`, `docs/`, `BENCHMARKS.md`, `AGENTS.md`, `CONTRIBUTING.md`, `llms.txt`, `LICENSE` |
 | `build` | `Makefile`, `CMakeLists.txt`, `cmake/`, toolchain versions |
 | `ci` | `.githooks/`, `scripts/`, `.github/` |
 

@@ -72,3 +72,10 @@ so the GC cannot free the schema under a live type or message; `Dispose()` is
 still the caller's promise that nothing else uses it. A nested message is a view
 of its parent, holds it alive through a `Parent` reference, and never frees
 anything. Nothing is shared, so one tree belongs to one thread, like the C core.
+
+## Typed models
+
+`protoc-gen-pbwire-typed` (in `../typed`) generates sealed classes with typed
+fields, `Encode(Schema)` and `static Decode`. The committed output is
+`typed/gen/` for tests and `examples/gen/` for the example; `examples/Roundtrip.cs`
+assigns typed fields only. See `../typed/README.md`.

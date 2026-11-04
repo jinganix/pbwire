@@ -3,49 +3,68 @@
 declare(strict_types=1);
 
 /*
- * A round trip over the pinned matrix3.desc: build, encode, decode, read back.
+ * The C example (examples/addressbook.c), in PHP, through the generated typed
+ * classes: assign fields, encode, decode, compare. The encoded bytes must equal
+ * the pinned reference examples/addressbook.bin.
  *
- *   php examples/roundtrip.php [descriptor-set]
+ *   php bindings/php/examples/roundtrip.php
  */
 
-require __DIR__ . '/../runtime/pbwire.php';
+require_once __DIR__ . '/../runtime/pbwire.php';
+require_once __DIR__ . '/gen/addressbook.php';
 
+use Pbwire\Gen\Tutorial_AddressBook;
+use Pbwire\Gen\Tutorial_Person;
+use Pbwire\Gen\Tutorial_Person_PhoneNumber;
+use Pbwire\Gen\Tutorial_Person_PhoneType;
 use Pbwire\Schema;
 
-$desc = $argv[1] ?? dirname(__DIR__, 2) . '/c/tests/data/matrix3.desc';
+$desc = $argv[1] ?? __DIR__ . '/../../../examples/addressbook.desc';
+$bin = $argv[2] ?? __DIR__ . '/../../../examples/addressbook.bin';
+
 $schema = Schema::fromFile($desc);
-$ty = $schema->message('structtest.Scalars3');
-$innerTy = $schema->message('structtest.Inner3');
+$book = build();
+$wire = $book->encode($schema);
 
-$msg = $ty->newMessage();
-$msg->setInt('i32', -42)
-    ->setString('str', 'alice')
-    ->setBool('flag', true);
-
-foreach (['a', 'bb'] as $tag) {
-    $msg->setString('tags', $tag); /* repeated: appends */
-}
-
-$msg->setMessage('inner')
-    ->setString($innerTy->field('name'), 'kid')
-    ->setInt('value', 42);
-
-$wire = $msg->encode();
-echo strlen($wire) . ' bytes: ' . bin2hex($wire) . "\n";
-
-$decoded = $ty->decode($wire);
-echo 'i32   = ' . $decoded->getInt('i32') . "\n";
-echo 'str   = ' . var_export($decoded->getString('str'), true) . "\n";
-echo 'inner = ' . var_export($decoded->getMessage('inner')?->getString('name'), true) . "\n";
-echo 'tags  = ';
-for ($i = 0; $i < $decoded->count('tags'); $i++) {
-    echo var_export($decoded->at('tags', $i)?->asString(), true) . ' ';
-}
-echo "\n";
-
-if ($decoded->encode() !== $wire) {
-    fwrite(STDERR, "round trip differs\n");
+if (is_file($bin) && $wire !== file_get_contents($bin)) {
+    fwrite(STDERR, "encode does not match $bin\n");
     exit(1);
 }
 
-echo "OK   byte-exact round trip\n";
+$back = Tutorial_AddressBook::decode($schema, $wire);
+printf("addressbook: %d bytes, %d people\n", strlen($wire), count($back->people));
+foreach ($back->people as $person) {
+    printf("  %s (%d) %s\n", $person->name, $person->id, $person->hasEmail ? $person->email : '');
+    foreach ($person->phones as $phone) {
+        printf("    %s\n", $phone->number);
+    }
+}
+$schema->close();
+
+function build(): Tutorial_AddressBook
+{
+    $alice = new Tutorial_Person();
+    $alice->name = 'Alice';
+    $alice->id = 1;
+    $alice->phones = [phone('555-0100', Tutorial_Person_PhoneType::MOBILE)];
+
+    $bob = new Tutorial_Person();
+    $bob->name = 'Bob';
+    $bob->id = 2;
+    $bob->hasEmail = true;
+    $bob->email = 'bob@example.com';
+    $bob->phones = [phone('555-0200', Tutorial_Person_PhoneType::HOME)];
+
+    $book = new Tutorial_AddressBook();
+    $book->people = [$alice, $bob];
+    return $book;
+}
+
+function phone(string $number, int $type): Tutorial_Person_PhoneNumber
+{
+    $phone = new Tutorial_Person_PhoneNumber();
+    $phone->number = $number;
+    $phone->hasType = true;
+    $phone->type = $type;
+    return $phone;
+}

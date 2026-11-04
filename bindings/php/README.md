@@ -72,3 +72,10 @@ A `MessageType` and every `Message` keep the `Schema` object reachable, so
 dropping your own reference does not free the native schema under them. An
 explicit `close()` is still the caller's promise that nothing else uses it --
 close messages and types first, like any arena.
+
+## Typed models
+
+`protoc-gen-pbwire-typed` (in `../typed`) generates classes with typed
+properties, `encode(Schema)` and `static decode`. The committed output is
+`tests/gen/` and `examples/gen/`; `examples/roundtrip.php` assigns typed
+properties only. See `../typed/README.md`.

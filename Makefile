@@ -187,7 +187,7 @@ conformance-python: python-bind $(CONFORMANCE_DESC)
 		echo "conformance_test_runner not found: $(CONFORMANCE_RUNNER)"; \
 		echo "run 'make conformance-setup' first"; exit 1; }
 	$(CONFORMANCE_RUNNER) \
-		$(CURDIR)/$(PY) bindings/python/conformance/testee.py \
+		$(PY_ABS) bindings/python/conformance/testee.py \
 		$(CURDIR)/$(CONFORMANCE_DESC)
 
 # Same suite through the Ruby binding (binary wire format; JSON/text answer
@@ -197,7 +197,7 @@ conformance-ruby: $(CONFORMANCE_DESC) ruby-bind
 		echo "conformance_test_runner not found: $(CONFORMANCE_RUNNER)"; \
 		echo "run 'make conformance-setup' first"; exit 1; }
 	$(CONFORMANCE_RUNNER) \
-		$(RUBY) bindings/ruby/conformance/testee.rb \
+		$(RUBY_ABS) bindings/ruby/conformance/testee.rb \
 		$(CURDIR)/$(CONFORMANCE_DESC)
 
 conformance: $(CONFORMANCE_DESC) $(CONFORMANCE_TESTEE)
@@ -286,6 +286,9 @@ bench-c: $(BENCH_C_BIN)
 # dict <-> wire in C. Needs the core library and a C compiler; no generated
 # Python code and no setuptools.
 PY ?= python3
+# The conformance runner execv()s the testee program directly (no PATH search),
+# so the interpreter has to be an absolute path.
+PY_ABS := $(shell command -v $(PY) 2>/dev/null || echo $(PY))
 PY_INC := $(shell $(PY) -c "import sysconfig; print('-I' + sysconfig.get_paths()['include'])")
 PY_EXT := $(shell $(PY) -c "import sysconfig; print(sysconfig.get_config_var('EXT_SUFFIX'))")
 PY_MODULE := bindings/python/pbwire$(PY_EXT)
@@ -312,6 +315,7 @@ python-test: python-bind
 # part of the commit gate.
 JAVA ?= java
 RUBY ?= ruby
+RUBY_ABS := $(shell command -v $(RUBY) 2>/dev/null || echo $(RUBY))
 
 java-test: shared
 	cd bindings/java && ./build.sh
@@ -404,8 +408,22 @@ python-bench: python-bind bindings/python/benchmarks/gen/matrix3_pb2.py
 difftest: $(BENCH_BIN)
 	./$(BENCH_BIN) difftest
 
+# Typed message models (bindings/typed): one protoc plugin that emits typed
+# message definitions per language, on top of each binding's dynamic API (no
+# second wire implementation). `typed-gen` regenerates the committed models,
+# `typed-test` runs every binding's typed test, `typed-conformance` generates
+# models for the real conformance proto (needs `make conformance-setup`).
+typed-gen:
+	$(MAKE) -C bindings/typed gen
+
+typed-test:
+	$(MAKE) -C bindings/typed test
+
+typed-conformance:
+	$(MAKE) -C bindings/typed conformance
+
 clean:
-	rm -rf build bench/gen bindings/go/benchmarks/gen \
+	rm -rf build bindings/typed/build bench/gen bindings/go/benchmarks/gen \
 		bindings/java/benchmarks/gen bindings/java/benchmarks/out \
 		bindings/node/benchmarks/gen bindings/ruby/benchmarks/gen \
 		bindings/ruby/lib/pbwire_ext.* bindings/objc/benchmarks/gen \
@@ -420,4 +438,5 @@ clean:
 	java-bench ruby-bench node-bench objc-bench \
 	kotlin-test php-test dart-test rust-test csharp-test \
 	kotlin-bench php-bench dart-bench rust-bench csharp-bench \
-	desc-fixture test-cpp clean plugin-c plugin-go go-test go-bench
+	desc-fixture test-cpp clean plugin-c plugin-go go-test go-bench \
+	typed-gen typed-test typed-conformance

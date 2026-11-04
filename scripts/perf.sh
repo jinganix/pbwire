@@ -1,6 +1,7 @@
 #!/bin/sh
 # Fixed-format perf comparison against libprotobuf, MB/s only.
-# Same two tables as README "Performance", same row/column order, every run:
+# Same two tables as BENCHMARKS.md "Core: `pbw_ctx` vs plain vs generated",
+# same row/column order, every run:
 #   1. payload x op: pbwire ctx / plain / protoc gen / DynamicMessage
 #   2. threads: 1-thread and 8-thread aggregate per op
 # Usage: scripts/perf.sh

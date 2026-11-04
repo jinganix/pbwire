@@ -1,61 +1,56 @@
 'use strict';
 
-/* Round trip through the Node.js binding: build a message, encode it, decode
- * the bytes, compare. Run it after bindings/node/build.sh:
+/* The C example (examples/addressbook.c), in Node, through the generated types:
+ * the plain object below is what `matrix3.d.ts`-style declarations describe, and
+ * MessageType.encode()/decode() are the whole codec. The encoded bytes must
+ * equal the pinned reference examples/addressbook.bin.
  *
  *   node bindings/node/examples/roundtrip.js
  */
 
-const assert = require('node:assert');
+const fs = require('node:fs');
 const path = require('node:path');
 
-const { Schema, abiVersion } = require(path.join(__dirname, '..', 'lib', 'pbwire'));
+const { Schema } = require(path.join(__dirname, '..', 'lib', 'pbwire.js'));
+const { Tutorial_Person_PhoneType } = require(path.join(__dirname, 'gen', 'addressbook.js'));
 
-const DESC = path.join(__dirname, '..', 'tests', 'data', 'demo.desc');
+const ROOT = path.join(__dirname, '..', '..', '..');
+const DESC = path.join(ROOT, 'examples', 'addressbook.desc');
+const BIN = path.join(ROOT, 'examples', 'addressbook.bin');
 
-assert.strictEqual(abiVersion(), 1, 'core ABI version');
+/** @returns {import('./gen/addressbook.js').AddressBook} */
+function build() {
+  return {
+    people: [
+      {
+        name: 'Alice',
+        id: 1,
+        phones: [{ number: '555-0100', type: Tutorial_Person_PhoneType.MOBILE }],
+      },
+      {
+        name: 'Bob',
+        id: 2,
+        email: 'bob@example.com',
+        phones: [{ number: '555-0200', type: Tutorial_Person_PhoneType.HOME }],
+      },
+    ],
+  };
+}
 
 const schema = Schema.fromFile(DESC);
-const person = schema.message('demo.Person');
+const bookType = schema.message('tutorial.AddressBook');
 
-// Build from a plain object (MessageType.encode) ...
-const values = {
-  name: 'alice',
-  id: 7,
-  active: true,
-  big: 9223372036854775807n,
-  inner: { x: 42, tag: 'first' },
-  nums: [1, -5, 300],
-  kids: [{ x: 1 }, { x: 2 }],
-};
-const wire = person.encode(values);
+const wire = bookType.encode(build());
+if (fs.existsSync(BIN) && !wire.equals(fs.readFileSync(BIN))) {
+  throw new Error(`encode does not match ${BIN}`);
+}
 
-// ... and by hand (Message.set), which must produce the same bytes.
-const built = person.newMessage();
-built.set('name', values.name).set('id', values.id).set('active', true);
-built.set('big', values.big);
-built.set('inner', values.inner);
-built.set('nums', values.nums);
-built.set('kids', values.kids);
-assert.ok(built.encode().equals(wire), 'both build paths encode the same');
-built.free();
-built.free(); // double free is safe
-
-// Decode returns a Message over the bytes: reading is by field name ...
-const message = person.decode(wire);
-assert.strictEqual(message.get('name'), 'alice');
-assert.strictEqual(message.get('id'), 7);
-assert.strictEqual(message.get('active'), true);
-assert.strictEqual(message.get('big'), 9223372036854775807n);
-assert.deepStrictEqual(message.get('inner'), { x: 42, tag: 'first' });
-assert.deepStrictEqual(message.get('nums'), [1, -5, 300]);
-assert.deepStrictEqual(message.get('kids'), [{ x: 1 }, { x: 2 }]);
-assert.strictEqual(message.get('blob'), undefined, 'absent field is undefined');
-
-// ... and re-encoding a decoded message is byte exact.
-assert.ok(message.encode().equals(wire), 'decode/encode round trip is exact');
-message.free();
-
-const last = person.decode(wire);
-console.log(`roundtrip ok: ${wire.length} bytes, name=${last.get('name')}`);
-last.free();
+const book = bookType.decode(wire);
+const people = book.get('people');
+console.log(`addressbook: ${wire.length} bytes, ${people.length} people`);
+for (const person of people) {
+  console.log(`  ${person.name} (${person.id}) ${person.email ?? ''}`);
+  for (const phone of person.phones) {
+    console.log(`    ${phone.number}`);
+  }
+}

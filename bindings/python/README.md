@@ -145,3 +145,11 @@ its serialization re-encodes every field from its own structs where a parsed
 `Message` just hands back the bytes. The `to_dict()` row is the one where both
 sides pay for every dict, string and int; that cost is `malloc`-bound and
 nobody can avoid it.
+
+## Typed models
+
+`protoc-gen-pbwire-typed` (in `../typed`) generates dataclasses with type
+annotations plus `to_dict()`/`from_dict()`, and `encode(msg_type)` /
+`decode(msg_type, wire)` on top of the dict API. The committed output is
+`tests/gen/` and `examples/gen/`; `examples/addressbook.py` uses the dataclasses
+only. See `../typed/README.md`.

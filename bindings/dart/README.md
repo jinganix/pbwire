@@ -71,3 +71,10 @@ schema under a type or message; an explicit `close()` is still the caller's
 promise that nothing else uses it. A nested message is a view of its parent,
 holds it alive, and never frees anything. `dart:ffi` state is per-isolate, and a
 message tree is not shared: one tree belongs to one isolate, like the C core.
+
+## Typed models
+
+`protoc-gen-pbwire-typed` (in `../typed`) generates Dart classes with typed
+fields, `Uint8List encode(schema)` and `static decode`. The committed output is
+`tests/gen/` and `examples/gen/`; `examples/roundtrip.dart` assigns typed fields
+only. See `../typed/README.md`.

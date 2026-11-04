@@ -1,9 +1,8 @@
-"""AddressBook example (Python): schema at runtime, messages parsed from bytes.
+"""The C example (examples/addressbook.c), in Python, through the generated
+typed dataclasses: assign fields, encode, decode, compare. The encoded bytes
+must equal the pinned reference examples/addressbook.bin.
 
-    python bindings/python/examples/addressbook.py
-
-Needs the CPython extension (`make python-bind`) and the descriptor set that
-`make` also builds for the C example (examples/addressbook.desc).
+    python3 bindings/python/examples/addressbook.py
 """
 
 import os
@@ -11,36 +10,51 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, ".."))
+sys.path.insert(0, os.path.join(HERE, "gen"))
 
-import pbwire
+import pbwire  # noqa: E402
+
+import addressbook_pbwire as ab  # noqa: E402
 
 DESC = os.path.join(HERE, "..", "..", "..", "examples", "addressbook.desc")
+BIN = os.path.join(HERE, "..", "..", "..", "examples", "addressbook.bin")
+
+
+def phone(number, kind):
+    return ab.Person_PhoneNumber(number=number, type=kind)
+
+
+def build():
+    alice = ab.Person(
+        name="Alice",
+        id=1,
+        phones=[phone("555-0100", ab.Person_PhoneType.MOBILE)],
+    )
+    bob = ab.Person(
+        name="Bob",
+        id=2,
+        email="bob@example.com",
+        phones=[phone("555-0200", ab.Person_PhoneType.HOME)],
+    )
+    return ab.AddressBook(people=[alice, bob])
 
 
 def main():
-    schema = pbwire.Schema.from_file(DESC)
-    person = schema.message("tutorial.Person")
-    values = {
-        "name": "alice",
-        "id": 1234,
-        "email": "alice@example.com",
-        "phones": [{"number": "555-1234", "type": 1},
-                   {"number": "555-9999"}],
-    }
+    with pbwire.Schema.from_file(DESC) as schema:
+        book_type = schema.message("tutorial.AddressBook")
+        wire = build().encode(book_type)
+        if os.path.exists(BIN):
+            with open(BIN, "rb") as f:
+                if wire != f.read():
+                    raise SystemExit(f"encode does not match {BIN}")
 
-    wire = person.encode(values)
-
-    # decode() parses the bytes once; a field materializes when it is read.
-    message = person.decode(wire)
-    print("%d bytes, name=%s, %d phone(s), phone[0]=%s"
-          % (len(wire), message.name, len(message.phones),
-             message.phones[0].number))
-
-    # The eager form: plain dicts, and a byte-exact round trip of the wire.
-    assert message.to_dict() == values
-    assert person.encode(message) == wire
-    return 0
+        book = ab.AddressBook.decode(book_type, wire)
+        print(f"addressbook: {len(wire)} bytes, {len(book.people)} people")
+        for person in book.people:
+            print(f"  {person.name} ({person.id}) {person.email or ''}")
+            for entry in person.phones:
+                print(f"    {entry.number}")
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    main()

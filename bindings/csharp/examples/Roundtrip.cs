@@ -1,40 +1,62 @@
-// A round trip over the pinned matrix3.desc: build, encode, decode, read back.
+// The C example (examples/addressbook.c), in C#, through the generated typed
+// classes: assign typed fields, encode, decode, compare. The encoded bytes must
+// equal the pinned reference examples/addressbook.bin.
 //
-//   dotnet run --project examples -- <descriptor-set>
+//   dotnet run --project examples
 
 using Pbwire;
+using Pbwire.Generated;
 
-var desc = args.Length > 0 ? args[0] : "../../c/tests/data/matrix3.desc";
+var desc = args.Length > 0 ? args[0] : "examples/addressbook.desc";
+var bin = args.Length > 1 ? args[1] : "examples/addressbook.bin";
 
 using var schema = Schema.FromFile(desc);
-var ty = schema.Message("structtest.Scalars3");
-var innerTy = schema.Message("structtest.Inner3");
 
-using var msg = ty.NewMessage()
-    .Set("i32", -42L)
-    .Set("str", "alice")
-    .Set("flag", true);
-foreach (var tag in new[] { "a", "bb" })
+var book = new Tutorial_AddressBook
 {
-    msg.Set("tags", tag); // repeated: appends
-}
-msg.SetMessage("inner") // nested: created in place
-    .Set(innerTy.Field("name"), "kid")
-    .Set(innerTy.Field("value"), 42L);
+    People =
+    {
+        new Tutorial_Person
+        {
+            Name = "Alice",
+            Id = 1,
+            Phones = { Phone("555-0100", Tutorial_Person_PhoneType.MOBILE) },
+        },
+        new Tutorial_Person
+        {
+            Name = "Bob",
+            Id = 2,
+            HasEmail = true,
+            Email = "bob@example.com",
+            Phones = { Phone("555-0200", Tutorial_Person_PhoneType.HOME) },
+        },
+    },
+};
 
-var wire = msg.Encode();
-Console.WriteLine($"{wire.Length} bytes: {Convert.ToHexString(wire).ToLowerInvariant()}");
-
-using var decoded = ty.Decode(wire);
-Console.WriteLine($"i32   = {decoded.GetLong("i32")}");
-Console.WriteLine($"str   = {decoded.GetString("str")}");
-Console.WriteLine($"inner = {decoded.GetMessage("inner")?.GetString("name")}");
-Console.WriteLine($"tags  = [{string.Join(", ", Enumerable.Range(0, decoded.Count("tags")).Select(i => decoded.At("tags", i)?.AsString()))}]");
-
-if (!decoded.Encode().SequenceEqual(wire))
+var wire = book.Encode(schema);
+if (File.Exists(bin))
 {
-    Console.Error.WriteLine("round trip differs");
-    return 1;
+    var reference = File.ReadAllBytes(bin);
+    if (!wire.AsSpan().SequenceEqual(reference))
+    {
+        throw new InvalidOperationException($"encode does not match {bin}");
+    }
 }
-Console.WriteLine("OK   byte-exact round trip");
-return 0;
+
+var back = Tutorial_AddressBook.Decode(schema, wire);
+Console.WriteLine($"addressbook: {wire.Length} bytes, {back.People.Count} people");
+foreach (var person in back.People)
+{
+    Console.WriteLine($"  {person.Name} ({person.Id}) {person.Email ?? ""}");
+    foreach (var phone in person.Phones)
+    {
+        Console.WriteLine($"    {phone.Number}");
+    }
+}
+
+static Tutorial_Person_PhoneNumber Phone(string number, int type) => new()
+{
+    Number = number,
+    HasType = true,
+    Type = type,
+};

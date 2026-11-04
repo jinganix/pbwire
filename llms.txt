@@ -4,7 +4,8 @@
 > tree or a standard `FileDescriptorSet` — then builds, reads, encodes and decodes messages through
 > reflection, speaking the standard Protobuf binary wire format plus the JSON mapping and the text
 > format. No code generation, no `protoc` at runtime, no libprotobuf in the process: C99, one public
-> header, about 10k lines of C, zero runtime dependencies.
+> header, about 13k lines of C (roughly 7.5k binary codec, the rest the JSON mapping and text
+> format), zero runtime dependencies.
 
 Facts: source at <https://github.com/jinganix/pbwire>, license Apache-2.0, version `0.1.0`
 (`project(pbwire VERSION ...)` in `CMakeLists.txt`). Encodings are byte-identical to `protoc 36.2`
@@ -17,11 +18,17 @@ syntaxes) and text 445 successes with 0 failures — including 4 the reference i
 Requirements: a C99 compiler for the core;
 CMake + C++17 + libprotobuf only for the optional `.proto` importer `pbwire-protoc`.
 
+When to use it: the schema is only known at run time (multi-tenant, plugin, gateway), one C core
+should serve several host languages, or libprotobuf must not be in the process. When not: the
+schema is fixed at build time, libprotobuf is already there, and a straight-line generated codec
+with no runtime schema is all that is wanted. The per-language pain each binding removes is
+summarized in [bindings/README.md](bindings/README.md#what-each-binding-solves).
+
 ## Build and test
 
 ```bash
 make              # build/libpbwire.a
-make test         # core + threads + descriptor-set + C-binding self-checks (required before commit)
+make test         # core + threads + descriptor set + C structs + examples (required before commit)
 make format       # clang-format >= 19; make format-check for the gate
 
 # Host-language bindings over the C ABI, each needing only its own toolchain:
@@ -48,10 +55,23 @@ C++ runtime), `make bench`, `make bench-c` (C structs vs protoc C++). Optional, 
 
 ## Docs
 
-- [README.md](README.md): why pbwire exists, quick start (hand-built schema, `FileDescriptorSet`,
-  `pbw_ctx` loop), dynamic message semantics, scope, testing layers, MB/s benchmark tables (single- and
-  multi-thread), a `pbw_ctx` vs plain API ownership comparison, comparison with
-  generated code / `DynamicMessage` / upb / nanopb, FAQ.
+- [README.md](README.md): the landing page — why pbwire exists, at-a-glance facts, build, a
+  hand-built-schema quick start, and the index of everything below.
+- [docs/design.md](docs/design.md): the problem it solves, how the pipeline works, dynamic
+  message semantics, the two allocation strategies (`pbw_ctx` vs plain) as a table, scope and
+  boundaries, status and limitations, comparison with generated code / `DynamicMessage` / upb /
+  nanopb, repository layout.
+- [docs/guide.md](docs/guide.md): the C API walk-through — hand-built schema, `FileDescriptorSet`
+  loading with its rules, the `pbw_ctx` loop and retain cap, `pbw_pool`, length-delimited
+  framing, `pbw_limits`, deterministic encode, JSON and text entry points.
+- [docs/testing.md](docs/testing.md): the five verification layers (self-check, pinned reference
+  bytes, `make difftest`, the official conformance suite with its exact pass counts and the two
+  expected failures, per-binding tests) and what each one can catch.
+- [docs/faq.md](docs/faq.md): syntax support, JSON/text, thread safety, unknown fields, untrusted
+  input, runtime `.proto` loading, the binding matrix, bug reports.
+- [BENCHMARKS.md](BENCHMARKS.md): the performance document — the four standard tiers, an
+  at-a-glance table of every binding against its baseline, the core tables (ctx vs plain vs
+  protoc/DynamicMessage, 1 vs 8 threads, streaming), and one detailed section per binding.
 - [AGENTS.md](AGENTS.md): commands, layout and the hard invariants for agents changing this code.
 - [CONTRIBUTING.md](CONTRIBUTING.md): Conventional Commits scopes, hooks, commit gate.
 - [include/pbwire.h](include/pbwire.h): the whole public API with per-function contracts.
@@ -142,11 +162,19 @@ C++ runtime), `make bench`, `make bench-c` (C structs vs protoc C++). Optional, 
 - ABI stability: `PBW_ABI_VERSION` in the header, `pbw_abi_version()` at runtime, CMake
   `SOVERSION 1`, `make shared` producing `libpbwire.so.1` / `libpbwire.1.dylib`. Additive changes
   keep the number, breaking changes bump it with the SONAME. `bindings/python` (a CPython
-  extension), `bindings/java` (Foreign Function & Memory API), `bindings/ruby` (C extension),
-  `bindings/node` (N-API addon), `bindings/objc` (ARC) and the C struct runtime check it at load;
+  extension), `bindings/java` (Foreign Function & Memory API, and Kotlin through it),
+  `bindings/ruby` (C extension), `bindings/node` (N-API addon) and `bindings/php` (`ext-ffi`)
+  compare `pbw_abi_version()` with `PBW_ABI_VERSION` at load;
   `bindings/go` is generated Go code with no cgo and no runtime dependency.
 - Not implemented in the core: RPC/HTTP, MessageSet decoding into extensions, code generation (the
   bindings ship their own protoc plugins: C layout tables and Go straight-line codecs).
+- Typed message models: `bindings/typed` is one protoc plugin (`protoc-gen-pbwire-typed`) that
+  emits typed fields, presence flags and encode/decode wrappers per language (Java, Kotlin, C#,
+  Dart, PHP, Ruby, Python, TypeScript/JavaScript, Rust, Objective-C). The wrappers call the
+  binding's dynamic API, so the typed layer never adds a second wire implementation. `make
+  typed-gen` regenerates the committed models, `make typed-test` runs one typed test per binding
+  (typed fields -> encode -> compare with the pinned protoc bytes -> decode -> verify), and
+  `make typed-conformance` generates models for the official conformance proto.
 - Text format (`pbw_text_print` / `pbw_text_parse`): printer output is byte-identical to the
   reference; the parser matches it (extensions as `[full.name]`, group type names, `Any`
   expansions, unknown fields as numeric lines with `print_unknown_fields`, strict rejections

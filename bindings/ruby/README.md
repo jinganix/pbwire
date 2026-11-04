@@ -203,3 +203,10 @@ tests need no `protoc`):
 ```shell
 (cd bindings/ruby/test/data && protoc --descriptor_set_out=sample.desc sample.proto)
 ```
+
+## Typed models
+
+`protoc-gen-pbwire-typed` (in `../typed`) generates classes with keyword-argument
+constructors and accessors, `#encode(schema)` and `.decode(schema, wire)`. The
+committed output is `test/gen/` and `examples/gen/`; `examples/roundtrip.rb`
+uses typed assignments only. See `../typed/README.md`.

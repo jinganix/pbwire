@@ -1,7 +1,7 @@
 [![CI](https://github.com/jinganix/enif_protobuf/actions/workflows/ci.yml/badge.svg)](https://github.com/jinganix/enif_protobuf/actions/workflows/ci.yml)
 [![Hex.pm](https://img.shields.io/hexpm/v/enif_protobuf.svg)](https://hex.pm/packages/enif_protobuf)
 [![Hex Downloads](https://img.shields.io/hexpm/dt/enif_protobuf.svg)](https://hex.pm/packages/enif_protobuf)
-[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](../../LICENSE)
 [![Erlang/OTP](https://img.shields.io/badge/Erlang%2FOTP-28%2B-blue.svg)](https://www.erlang.org/)
 
 # enif_protobuf — fast Google Protobuf encoder/decoder for Erlang and Elixir (NIF)
@@ -232,7 +232,7 @@ Last run: 2026-11-03 11:10:46 UTC (standard Google benchmark messages; Erlang 29
 | xlarge · 84584 B · deserialize | 548.23 | 255.49 | 189.66 |
 
 Higher is better. Throughput in MB/s on serialized wire size. Case names follow
-the four standard tiers at the repo root ([BENCHMARKS.md](../../../BENCHMARKS.md)).
+the four standard tiers at the repo root ([BENCHMARKS.md](../../BENCHMARKS.md)).
 <!-- BENCHMARK_RESULTS_END -->
 
 ## Comparison with alternatives
@@ -373,8 +373,9 @@ Two ways, same result: the source package plus edoc docs land on
 [hexdocs.pm/enif_protobuf](https://hexdocs.pm/enif_protobuf/).
 
 **From CI (preferred).** Bump `{vsn, ...}` in [`src/enif_protobuf.app.src`](src/enif_protobuf.app.src),
-commit, then push a matching tag. [`.github/workflows/release.yml`](.github/workflows/release.yml) runs
-the tests, publishes to Hex and creates the GitHub release. It refuses to publish when the tag and
+commit, then push a matching tag. The release workflow (not part of this repository's
+`.github/workflows/`, which only runs the gates) runs the tests, publishes to Hex and creates the
+GitHub release. It refuses to publish when the tag and
 the `.app.src` version disagree (`v1.0.0` must be `{vsn, "1.0.0"}`). `workflow_dispatch` publishes the
 current `master` without tagging.
 
@@ -396,4 +397,4 @@ before publishing with `./rebar3 hex build` (output in `_build/default/lib/enif_
 
 ## License
 
-[Apache-2.0](LICENSE).
+[Apache-2.0](../../LICENSE).

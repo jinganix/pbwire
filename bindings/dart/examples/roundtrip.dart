@@ -1,55 +1,65 @@
-// A round trip over the pinned matrix3.desc: build, encode, decode, read back.
+// The C example (examples/addressbook.c), in Dart, through the generated typed
+// classes: assign fields, encode, decode, compare. The encoded bytes must equal
+// the pinned reference examples/addressbook.bin.
 //
-//   dart run examples/roundtrip.dart [descriptor-set]
+//   cd bindings/dart && PBWIRE_LIB=../../build/libpbwire.dylib \
+//     dart run examples/roundtrip.dart
+
+import 'dart:io';
 
 import 'package:pbwire/pbwire.dart';
 
+import 'gen/addressbook.dart';
+
 void main(List<String> args) {
-  final desc = args.isNotEmpty ? args[0] : '../c/tests/data/matrix3.desc';
+  final desc = args.isNotEmpty ? args[0] : '../../examples/addressbook.desc';
+  final bin = File(args.length > 1 ? args[1] : '../../examples/addressbook.bin');
+
   final schema = Schema.load(desc);
-  final ty = schema.message('structtest.Scalars3');
-  final innerTy = schema.message('structtest.Inner3');
-
-  final msg = ty.newMessage()
-    ..setInt('i32', -42)
-    ..setString('str', 'alice')
-    ..setBool('flag', true);
-  for (final tag in ['a', 'bb']) {
-    msg.setString('tags', tag); // repeated: appends
-  }
-  msg.setMessage('inner') // nested: created in place
-    ..setString(innerTy.field('name'), 'kid')
-    ..setInt('value', 42);
-
-  final wire = msg.encode();
-  print('${wire.length} bytes: ${wire.map((b) => b.toRadixString(16).padLeft(2, '0')).join()}');
-  msg.close();
-
-  final decoded = ty.decode(wire);
-  print('i32   = ${decoded.getInt('i32')}');
-  print('str   = ${decoded.getString('str')}');
-  print('inner = ${decoded.getMessage('inner')?.getString('name')}');
-  final tags = <String?>[];
-  for (var i = 0; i < decoded.count('tags'); i++) {
-    tags.add(decoded.at('tags', i)?.asString());
-  }
-  print('tags  = $tags');
-  if (!_equals(decoded.encode(), wire)) {
-    throw StateError('round trip differs');
-  }
-  decoded.close();
-  schema.close();
-  print('OK   byte-exact round trip');
-}
-
-bool _equals(List<int> a, List<int> b) {
-  if (a.length != b.length) {
-    return false;
-  }
-  for (var i = 0; i < a.length; i++) {
-    if (a[i] != b[i]) {
-      return false;
+  try {
+    final book = build();
+    final wire = book.encode(schema);
+    if (bin.existsSync()) {
+      final reference = bin.readAsBytesSync();
+      if (wire.length != reference.length) {
+        throw StateError('encode does not match ${bin.path}');
+      }
+      for (var i = 0; i < wire.length; i++) {
+        if (wire[i] != reference[i]) {
+          throw StateError('encode does not match ${bin.path}');
+        }
+      }
     }
+
+    final back = AddressBook.decode(schema, wire);
+    final decoded = back.people;
+    print('addressbook: ${wire.length} bytes, ${decoded.length} people');
+    for (final person in decoded) {
+      print('  ${person.name} (${person.id}) ${person.hasEmail ? person.email : ''}');
+      for (final phone in person.phones) {
+        print('    ${phone.number}');
+      }
+    }
+  } finally {
+    schema.close();
   }
-  return true;
 }
+
+AddressBook build() => AddressBook()
+  ..people = [
+    Person()
+      ..name = 'Alice'
+      ..id = 1
+      ..phones = [phone('555-0100', Person_PhoneType.MOBILE)],
+    Person()
+      ..name = 'Bob'
+      ..id = 2
+      ..hasEmail = true
+      ..email = 'bob@example.com'
+      ..phones = [phone('555-0200', Person_PhoneType.HOME)],
+  ];
+
+Person_PhoneNumber phone(String number, int type) => Person_PhoneNumber()
+  ..number = number
+  ..hasType = true
+  ..type_ = type;
