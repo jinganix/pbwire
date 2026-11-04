@@ -51,12 +51,26 @@ library, while Rust compiles the archive in.
 ## Benchmarks
 
 ```shell
-./benchmarks/bench.sh    # vs rust-protobuf 3.x generated code, four tiers
+./benchmarks/bench.sh    # vs rust-protobuf 3.x generated code + prost, four tiers
 ```
 
 Needs `cargo install protobuf-codegen` (it provides `protoc-gen-rs` and the
-runtime the generated code uses). Numbers live in
-[BENCHMARKS.md](../../BENCHMARKS.md).
+runtime the generated code uses); the prost baseline generates at build time
+from crates.io. The four tiers are small / medium / large /
+xlarge (the repeated fields scaled x0 / x1 / x100 / x3000). Copied from
+[BENCHMARKS.md](../../BENCHMARKS.md), which is the single source for all
+performance numbers; higher is better, MB/s over wire bytes:
+
+| payload | op | pbwire-rust (MB/s, x protobuf-rust) | protobuf-rust (MB/s) | prost (MB/s) |
+|---|---|---|---|---|
+| 136 B | encode | 1404.6 (1.20x) | 1170.6 | 1322.0 |
+| 136 B | decode | 932.2 (1.26x) | 739.7 | 872.9 |
+| 174 B | encode | 1377.2 (1.16x) | 1189.6 | 1282.9 |
+| 174 B | decode | 856.7 (1.42x) | 604.8 | 714.2 |
+| 2469 B | encode | 1213.1 (1.49x) | 811.7 | 1348.1 |
+| 2469 B | decode | 525.4 (1.44x) | 364.5 | 361.6 |
+| 74913 B | encode | 1423.0 (1.57x) | 906.5 | 1535.0 |
+| 74913 B | decode | 575.8 (1.45x) | 396.8 | 393.4 |
 
 `set_str` rejects a string containing a NUL byte (it would truncate on the way
 to C); use `set_bytes` for binary payloads, including on a `string` field.

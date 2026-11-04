@@ -55,39 +55,46 @@ TABLE=$(echo "$OUT" | awk '
   END {
     split("small medium large xlarge", cases, " ")
     split("encode decode", ops, " ")
+    split("pbwire-erlang gpb gpb-nif", impls, " ")
     for (i = 1; i <= 4; i++) {
       c = cases[i]
       for (j = 1; j <= 2; j++) {
         o = ops[j]
-        printf "| %s · %s B · %s |", c, size[c], o
-        split("pbwire-erlang gpb gpb-nif", impls, " ")
-        for (k = 1; k <= 3; k++) {
-          v = value[c, o, impls[k]]
-          printf " %s |", (v == "" ? "—" : v)
-        }
-        printf "\n"
+        e = value[c, o, impls[1]]
+        g = value[c, o, impls[2]]
+        n = value[c, o, impls[3]]
+        r = (e != "" && g != "") ? sprintf("%.2fx", e / g) : "—"
+        printf "| %s B | %s | %s (%s) | %s | %s |\n", size[c], o, \
+          (e == "" ? "—" : e), r, (g == "" ? "—" : g), (n == "" ? "—" : n)
       }
     }
   }
 ')
 
-TABLE_BLOCK=$(cat <<EOF
+TABLE_HEAD='| payload | op | pbwire-erlang (MB/s, x gpb) | gpb (MB/s) | gpb-nif (MB/s) |
+|---|---|---|---|---|'
+
+TABLE_FOOTER='Higher is better. Throughput in MB/s on serialized wire size. Case names are the
+four standard tiers at the repo root ([BENCHMARKS.md](BENCH_LINK)).'
+
+table_block() {
+  link=$1
+  footer=$(echo "$TABLE_FOOTER" | sed "s|BENCH_LINK|$link|")
+  cat <<EOF
 Last run: ${RUN_DATE} (matrix3.proto, the four standard tiers; Erlang ${ERLANG_VERSION} per \`.tool-versions\`; machine ${MACHINE_MODEL})
 
-| Test case | epb | gpb | gpb nif |
-|-----------|-----|-----|---------|
+${TABLE_HEAD}
 ${TABLE}
 
-Higher is better. Throughput in MB/s on serialized wire size. Case names are the
-four standard tiers at the repo root ([BENCHMARKS.md](../../../BENCHMARKS.md)).
+${footer}
 EOF
-)
+}
 
 RESULTS_FILE=$(mktemp)
 SUMMARY_FILE=$(mktemp)
 cat > "$RESULTS_FILE" <<EOF
 $MARKER_START
-${TABLE_BLOCK}
+$(table_block "../../../BENCHMARKS.md")
 
 <details>
 <summary>Hardware / OTP (last run)</summary>
@@ -109,7 +116,7 @@ EOF
 
 cat > "$SUMMARY_FILE" <<EOF
 $MARKER_START
-${TABLE_BLOCK}
+$(table_block "../../BENCHMARKS.md")
 $MARKER_END
 EOF
 

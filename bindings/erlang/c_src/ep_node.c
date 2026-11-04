@@ -1,4 +1,4 @@
-#include "enif_protobuf.h"
+#include "pbwire.h"
 
 #define A_ALLOW_ALIAS "allow_alias"
 #define A_DEFAULT "default"

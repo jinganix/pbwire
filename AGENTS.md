@@ -27,6 +27,8 @@ make typed-test    # run every binding's typed model test (needs each toolchain)
 make typed-conformance  # generate typed models for the official conformance proto
 make erlang-bench  # Erlang: epb, gpb, gpb NIF on matrix3.proto
 make test-cpp      # C++ binding self-check (C++17, no protobuf needed)
+make go-test       # Go cgo dynamic binding self-check (parity + hot-swap)
+make go-bench      # Go cgo dynamic binding vs protobuf-go on the four standard tiers
 make java-bench    # Java FFM binding vs protobuf-java on the four standard tiers
 make node-bench    # Node N-API addon vs google-protobuf (jspb)
 make ruby-bench    # Ruby C extension vs the google-protobuf gem
@@ -53,7 +55,8 @@ cmake -B build-cmake -DPBW_BUILD_PROTOC=ON && cmake --build build-cmake
 Run `make test` after any C change; run `make format` after touching `include/`, `src/`, `tests/`,
 `bench/` or `conformance/`. Run `make python-test` after touching `bindings/python`, `make ruby-test`
 after touching `bindings/ruby`, and refresh
-`BENCHMARKS.md` after changing anything on the encode/decode hot path.
+`BENCHMARKS.md` after changing anything on the encode/decode hot path. Run `make go-test`
+after touching `bindings/go`.
 
 ## Layout
 
@@ -83,7 +86,7 @@ after touching `bindings/ruby`, and refresh
 | `tests/data/*.proto` | Fixtures the pinned descriptor set was generated from |
 | `tests/protoc/` | Importer self-check and its `.proto` fixtures (CMake only) |
 | `bench/bench.cc` | Differential test and benchmark against libprotobuf C++ |
-| `bindings/erlang/` | Erlang/OTP NIF binding (`enif_protobuf` app, own rebar3 build, see its AGENTS.md) |
+| `bindings/erlang/` | Erlang/OTP NIF binding (`pbwire` app, own rebar3 build, see its AGENTS.md) |
 | `bench/msg.proto` | proto3 message used by both; `bench/gen/` is generated, never committed |
 | `bench/msg2.proto` | proto2 counterpart: explicit presence, groups, required fields, closed enums, extensions |
 | `BENCHMARKS.md` | the performance document: the four standard payload tiers, every binding vs its baseline, the cross-binding table |
@@ -91,7 +94,7 @@ after touching `bindings/ruby`, and refresh
 | `bindings/c/` | C binding: direct struct codec (`runtime/pbw_struct.c`, layout tables carry the wire facts), `protoc-gen-pbwire-c` (`plugin/`), `examples/`, `tests/`, `benchmarks/`, `conformance/` |
 | `bindings/python/` | Python binding: CPython extension (`runtime/pbwire.c`, dict<->wire in C), `examples/`, `tests/`, `benchmarks/`, `conformance/` (official runner testee) |
 | `bindings/ruby/` | Ruby binding: a C extension over the core (`ext/pbwire_ext`, builder tree + lazy wire view), `lib/`, `examples/`, `test/`, `benchmarks/`, `conformance/` (official runner testee) |
-| `bindings/go/` | `protoc-gen-pbwire-go` (`plugin/`) + generated struct codecs over the dependency-free `runtime/`, `tests/`, `examples/`, `benchmarks/`, `conformance/` |
+| `bindings/go/` | Go binding: cgo dynamic binding over the C core (`dynamic/`), loads a `FileDescriptorSet` at runtime, hot-swappable registry, `make go-test` |
 | `bindings/cpp/` | C++ binding over the shared C runtime: `examples/`, `tests/`, `benchmarks/`, `conformance/` |
 | `bindings/erlang/` | Erlang/OTP NIF binding with its own AGENTS.md |
 | `scripts/` | Gate scripts: `check.sh` (hooks), `validate-commit-msg.sh`, `setup-git-hooks.sh` |
@@ -103,11 +106,10 @@ after touching `bindings/ruby`, and refresh
 
 This decides how a binding gets its schema, and it is not negotiable:
 
-1. **Ahead-of-time compiled languages load the descriptor set.** C, C++, Rust
+1. **Ahead-of-time compiled languages load the descriptor set.** C, C++, Go, Rust
    and C# have no way to bake a dynamic schema into the binary, so every binding
    loads a `FileDescriptorSet` (`protoc --descriptor_set_out`) at runtime and
-   drives field lookup, wire types and presence from it. Go is the one exception
-   in kind: its plugin emits straight-line codecs, which are the schema. A hand-built schema in a
+   drives field lookup, wire types and presence from it. A hand-built schema in a
    compiled binding is a bug: it cannot express what a real `.proto` can, and
    it silently diverges from the descriptor every other binding uses.
 2. **Languages that load code at runtime get a plugin.** The plugin turns
@@ -117,12 +119,12 @@ This decides how a binding gets its schema, and it is not negotiable:
 3. **Erlang needs neither.** gpb already is the plugin: `gpb_compile` /
    `protoc-erl` emits the record definitions plus `get_msg_defs/0` (gpb 5+:
    `get_proto_defs/0`, which keeps the proto3 markers), and
-   `enif_protobuf:load_cache/1` consumes exactly that. Do not add a second
+   `pbwire:load_cache/1` consumes exactly that. Do not add a second
    generator or a descriptor loader to the Erlang binding.
 4. **The typed model is ergonomics over the same codec.** `bindings/typed` may
    emit typed fields, presence flags and `encode`/`decode` wrappers, but those
-   wrappers call the binding's dynamic API; the wire format stays in the C core
-   (or, for Go, in the plugin's straight-line codecs). A typed model that
+   wrappers call the binding's dynamic API; the wire format stays in the C core.
+   A typed model that
    encodes on its own is a bug, and so is one that learns `.proto` text parsing.
 
 `bindings/README.md` tracks each binding against these rules.
@@ -172,9 +174,10 @@ takes down the whole host process. Anything is better than a segfault.
 ## Commits
 
 - Commit only when the user explicitly asks; follow `CONTRIBUTING.md`
+- Conventional Commits (commitizen-compatible): `<type>(<scope>): <subject>`, header <= 100 characters; types/scopes per `CONTRIBUTING.md`
+- English-only (ASCII) everywhere: commit messages, PR titles/bodies, review replies -- no CJK or other non-ASCII (enforced by `validate-commit-msg.sh` for commits)
 - Run `./scripts/check.sh` before committing or pushing. Use `SKIP_CHECKS=1` only with a real
   reason, and say so in the summary
-- Commit messages are English-only (ASCII): `<type>(<scope>): <subject>`, header <= 100 characters
 
 ## Repository conventions
 

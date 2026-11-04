@@ -19,8 +19,10 @@ import structtest.scalars3
 private val cases = listOf("small", "medium", "large", "xlarge")
 private val repeats = intArrayOf(0, 1, 100, 3000)
 private val want = intArrayOf(136, 174, 2469, 74913)
+/** Floor iterations per tier; doubled until one pass takes 0.25 s. */
 private val iterations = intArrayOf(50_000, 50_000, 5_000, 500)
-private const val PASSES = 5
+private const val MIN_PASS_SECONDS = 0.25
+private const val PASSES = 3
 
 private var failures = 0
 
@@ -93,11 +95,29 @@ private fun run(iterations: Int, op: () -> Unit): Double {
     return (System.nanoTime() - start) / iterations.toDouble()
 }
 
-private fun measure(iterations: Int, op: () -> Unit): Double {
-    run(iterations, op)
+/** Double from the tier floor until one pass takes MIN_PASS_SECONDS. */
+private fun calibrate(op: () -> Unit, floor: Int): Int {
+    var count = maxOf(1, floor)
+    while (true) {
+        val start = System.nanoTime()
+        for (i in 0 until count) {
+            op()
+        }
+        if ((System.nanoTime() - start) / 1e9 >= MIN_PASS_SECONDS || count >= 100_000_000) {
+            return count
+        }
+        count *= 2
+    }
+}
+
+/** Every op calibrates independently from the floor, then one warm-up
+ * pass and the best of PASSES timed passes. */
+private fun measure(floor: Int, op: () -> Unit): Double {
+    val count = calibrate(op, floor)
+    run(count, op)
     var best = Double.MAX_VALUE
     for (pass in 0 until PASSES) {
-        best = minOf(best, run(iterations, op))
+        best = minOf(best, run(count, op))
     }
     return best
 }
@@ -134,13 +154,31 @@ fun main(args: Array<String>) {
                 }
                 println("OK   $label encoding parity, x$n (${reference.size} bytes)")
 
+                // Decode must round-trip byte-exactly and expose the same values.
+                var backOk = false
+                ty.decode(reference).use { back ->
+                    val backInner = back.getMessage("inner")
+                    backOk = back.encode().contentEquals(reference)
+                        && back.getString("str") == "hello"
+                        && backInner.getString("name") == "kid"
+                        && back.getList("nums").size == n
+                        && (n == 0 || back.getList("nums")[n - 1] as Long == (n - 4).toLong())
+                }
+                if (!backOk) {
+                    println("FAIL $label: pbwire-kotlin decode differs")
+                    failures++
+                    return@use
+                }
+
                 val official = fillOfficial(n)
+                // Tier line shows the reference op's count; slower ops keep the floor.
+                val tierCount = calibrate({ message.encode() }, count)
                 val encode = measure(count) { message.encode() }
                 val decode = measure(count) { ty.decode(reference).close() }
                 val officialEncode = measure(count) { official.toByteArray() }
                 val officialDecode = measure(count) { Matrix3.Scalars3.parseFrom(reference) }
 
-                println("$label: ${reference.size} bytes, $count iterations (repeat field x$n)")
+                println("$label: ${reference.size} bytes, $tierCount iterations (repeat field x$n)")
                 println("  %-12s %-7s %12s %10s".format("impl", "op", "ns/op", "MB/s"))
                 row("pbwire-kotlin", "encode", reference.size, encode)
                 row("protobuf-kotlin", "encode", reference.size, officialEncode)

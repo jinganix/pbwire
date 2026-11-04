@@ -55,7 +55,7 @@ nested_groups(Depth) ->
 
 decode(Defs, Bin) ->
     ok = ep_test_helpers:load_cache(Defs),
-    enif_protobuf:decode(Bin, m1).
+    pbwire:decode(Bin, m1).
 
 %% A group where a scalar is expected is skipped, the field keeps its default.
 group_wire_type_on_scalar_field_is_skipped_test() ->
@@ -68,30 +68,30 @@ nested_group_on_scalar_field_is_skipped_test() ->
 
 unterminated_group_raises_test() ->
     ok = ep_test_helpers:load_cache(optional_int32_defs()),
-    ?assertError(_, enif_protobuf:decode(<<16#0b, 16#08, 16#01>>, m1)).
+    ?assertError(_, pbwire:decode(<<16#0b, 16#08, 16#01>>, m1)).
 
 group_nesting_at_limit_decodes_test() ->
     ?assertEqual({m1, undefined}, decode(optional_int32_defs(), nested_groups(?GROUP_DEPTH_LIMIT))).
 
 group_nesting_over_limit_raises_instead_of_crashing_test() ->
     ok = ep_test_helpers:load_cache(optional_int32_defs()),
-    ?assertError(_, enif_protobuf:decode(nested_groups(?GROUP_DEPTH_LIMIT + 1), m1)),
+    ?assertError(_, pbwire:decode(nested_groups(?GROUP_DEPTH_LIMIT + 1), m1)),
     %% unclosed deep nesting must fail too, not overflow the C stack
-    ?assertError(_, enif_protobuf:decode(binary:copy(start_group(1), 40000), m1)).
+    ?assertError(_, pbwire:decode(binary:copy(start_group(1), 40000), m1)).
 
 field_number_over_32_bits_raises_test() ->
     ok = ep_test_helpers:load_cache(optional_int32_defs()),
     %% field number 2^32, wire type 0
-    ?assertError(_, enif_protobuf:decode(<<16#80, 16#80, 16#80, 16#80, 16#80, 16#01, 16#01>>, m1)).
+    ?assertError(_, pbwire:decode(<<16#80, 16#80, 16#80, 16#80, 16#80, 16#01, 16#01>>, m1)).
 
 reserved_wire_types_raise_test() ->
     ok = ep_test_helpers:load_cache(optional_int32_defs()),
-    ?assertError(_, enif_protobuf:decode(<<16#0e>>, m1)), % field 1, wire type 6
-    ?assertError(_, enif_protobuf:decode(<<16#0f>>, m1)). % field 1, wire type 7
+    ?assertError(_, pbwire:decode(<<16#0e>>, m1)), % field 1, wire type 6
+    ?assertError(_, pbwire:decode(<<16#0f>>, m1)). % field 1, wire type 7
 
 end_group_at_top_level_raises_test() ->
     ok = ep_test_helpers:load_cache(optional_int32_defs()),
-    ?assertError(_, enif_protobuf:decode(<<16#0c>>, m1)).
+    ?assertError(_, pbwire:decode(<<16#0c>>, m1)).
 
 %% {default, V} is accepted in field options but never applied: epb leaves a
 %% missing optional undefined (like gpb without defaults-for-omitted), and on
@@ -104,10 +104,10 @@ default_field_option_is_never_applied_test() ->
     ?assertEqual({m1, undefined}, decode(Defs, <<>>)),
     ?assertEqual({m1, 3}, decode(Defs, <<16#08, 16#03>>)),
     ok = ep_test_helpers:load_cache(Defs),
-    ?assertEqual(<<>>, enif_protobuf:encode({m1, undefined})),
-    ?assertEqual(<<8, 42>>, enif_protobuf:encode({m1, 42})),
-    ?assertEqual(gpb:encode_msg({m1, 42}, Defs), enif_protobuf:encode({m1, 42})),
-    ?assertEqual({m1, 42}, enif_protobuf:decode(<<8, 42>>, m1)).
+    ?assertEqual(<<>>, pbwire:encode({m1, undefined})),
+    ?assertEqual(<<8, 42>>, pbwire:encode({m1, 42})),
+    ?assertEqual(gpb:encode_msg({m1, 42}, Defs), pbwire:encode({m1, 42})),
+    ?assertEqual({m1, 42}, pbwire:decode(<<8, 42>>, m1)).
 
 unknown_group_is_collected_test() ->
     %% start group 2, field 1 varint = 5, end group 2
@@ -117,7 +117,7 @@ unknown_group_is_collected_test() ->
 unknown_deep_group_nesting_over_limit_raises_test() ->
     ok = ep_test_helpers:load_cache(unknown_defs()),
     Deep = binary:copy(start_group(2), ?GROUP_DEPTH_LIMIT + 1),
-    ?assertError(_, enif_protobuf:decode(Deep, m1)).
+    ?assertError(_, pbwire:decode(Deep, m1)).
 
 %% A tag is a varint32: it is read in at most five bytes and bits above bit 31
 %% are dropped before the field number is derived. Length prefixes are a strict

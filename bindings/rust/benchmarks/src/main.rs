@@ -1,5 +1,6 @@
-/* Rust binding benchmark against rust-protobuf's generated code on the same
- * matrix3.proto and the four standard tiers from BENCHMARKS.md.
+/* Rust binding benchmark against rust-protobuf's generated code and prost
+ * (the fastest widely used Rust runtime) on the same matrix3.proto and the
+ * four standard tiers from BENCHMARKS.md.
  *
  * The same payload as the C/Go/Java rows: every scalar kind, the nested
  * message, the two proto3 optionals, and the repeated fields scaled x0 / x1 /
@@ -14,10 +15,15 @@
 #[path = "../gen/matrix3.rs"]
 mod matrix3;
 
+mod prost_gen {
+    include!(concat!(env!("OUT_DIR"), "/structtest.rs"));
+}
+
 use std::time::Instant;
 
 use matrix3::{Color3, Inner3, Scalars3};
 use pbwire::{Message, Schema, Type};
+use prost::Message as _;
 use protobuf::{EnumOrUnknown, Message as _};
 
 const CASES: [&str; 4] = ["small", "medium", "large", "xlarge"];
@@ -87,23 +93,58 @@ fn run_case(ty: &Type<'_>, inner_ty: &Type<'_>, tier: usize) {
         reference.len()
     );
 
+    // Decode must round-trip byte-exactly and expose the same values.
+    let back = ty.decode(&reference).expect("decode");
+    let back_ok = back.encode().expect("encode") == reference
+        && back.get_str(ty.field("str").expect("field")) == Some("hello")
+        && back
+            .get_message(ty.field("inner").expect("field"))
+            .as_ref()
+            .and_then(|m| m.get_str(inner_ty.field("name").expect("field")))
+            == Some("kid")
+        && back
+            .value(ty.field("nums").expect("field"))
+            .map_or(n == 0, |v| v.len() == n)
+        && (n == 0
+            || back
+                .value(ty.field("nums").expect("field"))
+                .and_then(|v| v.at(n - 1))
+                .map_or(false, |v| v.as_i64() == n as i64 - 4));
+    if !back_ok {
+        fail(label, "pbwire-rust decode differs");
+        return;
+    }
+
     let official = fill_official(n);
+    // Tier line shows the reference op's count; slower ops keep the floor.
+    let tier_count = calibrate(&mut || message.encode().expect("encode").len(), iterations);
+    let prost_msg = fill_prost(n);
+    if prost_msg.encode_to_vec() != reference {
+        fail(label, "prost wrote different bytes than protobuf-rust");
+        return;
+    }
     let encode = measure(iterations, || message.encode().expect("encode").len());
     let decode = measure(iterations, || ty.decode(&reference).expect("decode"));
     let official_encode = measure(iterations, || official.write_to_bytes().expect("encode").len());
     let official_decode = measure(iterations, || {
         Scalars3::parse_from_bytes(&reference).expect("decode")
     });
+    let prost_encode = measure(iterations, || prost_msg.encode_to_vec().len());
+    let prost_decode = measure(iterations, || {
+        prost_gen::Scalars3::decode(&reference[..]).expect("decode")
+    });
 
     println!(
-        "{label}: {} bytes, {iterations} iterations (repeat field x{n})",
+        "{label}: {} bytes, {tier_count} iterations (repeat field x{n})",
         reference.len()
     );
     println!("  {:<12} {:<7} {:>12} {:>10}", "impl", "op", "ns/op", "MB/s");
     row("pbwire-rust", "encode", reference.len(), encode);
     row("protobuf-rust", "encode", reference.len(), official_encode);
+    row("prost", "encode", reference.len(), prost_encode);
     row("pbwire-rust", "decode", reference.len(), decode);
     row("protobuf-rust", "decode", reference.len(), official_decode);
+    row("prost", "decode", reference.len(), prost_decode);
     println!();
 }
 
@@ -144,6 +185,43 @@ fn fill_official(n: usize) -> Scalars3 {
     m
 }
 
+fn fill_prost(n: usize) -> prost_gen::Scalars3 {
+    let mut m = prost_gen::Scalars3 {
+        i32: i32::MIN,
+        i64: i64::MAX,
+        u32: u32::MAX,
+        u64: u64::MAX,
+        s32: i32::MIN,
+        s64: i64::MIN,
+        fx32: 0xdeadbeef,
+        fx64: 72623859790382856,
+        sfx32: i32::MIN,
+        sfx64: i64::MIN,
+        f32: f32::INFINITY,
+        f64: -123456.789,
+        flag: true,
+        str: "hello".to_string(),
+        color: prost_gen::Color3::Green as i32,
+        inner: Some(prost_gen::Inner3 {
+            name: "kid".to_string(),
+            value: 42,
+        }),
+        opt_i32: Some(-7),
+        opt_str: Some("opt".to_string()),
+        ..Default::default()
+    };
+    for i in 0..n {
+        m.nums.push(i as i32 - 3);
+        m.tags.push("tag".to_string());
+        m.inners.push(prost_gen::Inner3 {
+            name: "grandkid".to_string(),
+            value: i as i32 + 1,
+        });
+        m.flags.push(i % 2 == 0);
+    }
+    m
+}
+
 fn fill_pbwire<'a>(ty: &'a Type<'a>, inner_ty: &'a Type<'a>, n: usize) -> Message<'a> {
     let mut m = ty.new_message();
     m.set_i64(ty.field("i32").unwrap(), i32::MIN as i64)
@@ -177,6 +255,23 @@ fn fill_pbwire<'a>(ty: &'a Type<'a>, inner_ty: &'a Type<'a>, n: usize) -> Messag
     m
 }
 
+/// Floor iterations per tier; doubled until one pass takes 0.25 s.
+const MIN_PASS_SECONDS: f64 = 0.25;
+
+fn calibrate<T, F: FnMut() -> T>(op: &mut F, floor: usize) -> usize {
+    let mut count = floor.max(1);
+    loop {
+        let start = Instant::now();
+        for _ in 0..count {
+            std::hint::black_box(op());
+        }
+        if start.elapsed().as_secs_f64() >= MIN_PASS_SECONDS || count >= 100_000_000 {
+            return count;
+        }
+        count *= 2;
+    }
+}
+
 fn run<T, F: FnMut() -> T>(op: &mut F, iterations: usize) -> f64 {
     let start = Instant::now();
     for _ in 0..iterations {
@@ -185,12 +280,15 @@ fn run<T, F: FnMut() -> T>(op: &mut F, iterations: usize) -> f64 {
     start.elapsed().as_nanos() as f64 / iterations as f64
 }
 
-/* Warm up, then keep the best of PASSES runs. */
-fn measure<T, F: FnMut() -> T>(iterations: usize, mut op: F) -> f64 {
-    run(&mut op, iterations);
+/* Every op calibrates independently from the floor (a slow op already exceeds
+ * the minimum at the floor and keeps it), then warms up and keeps the best
+ * of PASSES runs. */
+fn measure<T, F: FnMut() -> T>(floor: usize, mut op: F) -> f64 {
+    let count = calibrate(&mut op, floor);
+    run(&mut op, count);
     let mut best = f64::MAX;
     for _ in 0..PASSES {
-        best = best.min(run(&mut op, iterations));
+        best = best.min(run(&mut op, count));
     }
     best
 }

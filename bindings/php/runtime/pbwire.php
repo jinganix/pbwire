@@ -16,6 +16,10 @@ declare(strict_types=1);
 
 namespace Pbwire;
 
+if (\extension_loaded('pbwire')) {
+    return;
+}
+
 use FFI;
 use FFI\CData;
 
@@ -56,6 +60,11 @@ final class Lib
         void *pbw_value_new_double(double value);
         void *pbw_value_new_bytes(const void *data, size_t len);
         void *pbw_value_new_string(const char *str);
+        void *pbw_ctx_new(void);
+        void pbw_ctx_free(void *ctx);
+        void *pbw_message_new_ctx(void *ctx, void *desc);
+        void *pbw_value_new_uint_ctx(void *ctx, long long bits);
+        void *pbw_value_new_bytes_ctx(void *ctx, const void *data, size_t len);
         void pbw_value_free(void *value);
         long long pbw_value_get_int(void *value);
         int pbw_value_get_bool(void *value);
@@ -119,6 +128,17 @@ final class Lib
         return self::ffi()->new($type);
     }
 
+    /** A reused out-parameter slot, one per C type. The hot paths (encode,
+     * decode, byte getters) must use this, not newSlot: addr() of a freshly
+     * allocated slot is never collected, so a loop over newSlot leaks ~100 B
+     * per call. Shared mutable state: single-threaded use only, which the
+     * binding already assumes. */
+    private static array $slots = [];
+    public static function slot(string $type): CData
+    {
+        return self::$slots[$type] ??= self::ffi()->new($type);
+    }
+
     /* `const char *` returns arrive as PHP strings (null when the C side returns NULL). */
     public static function errorText(int $status): string
     {
@@ -153,7 +173,7 @@ final class Schema
     public static function fromBytes(string $bytes): self
     {
         $ffi = Lib::ffi();
-        $out = Lib::newSlot('void*[1]');
+        $out = Lib::slot('void*[1]');
         $status = $ffi->pbw_descriptor_set_load($bytes, strlen($bytes), FFI::addr($out[0]));
         $handle = $out[0];
 
@@ -266,19 +286,30 @@ final class Type
 
     public function newMessage(): Message
     {
-        $ptr = Lib::ffi()->pbw_message_new($this->desc);
+        /* Built trees live in their own context arena: one bump allocator
+         * instead of a malloc per value, sequential layout for the encoder,
+         * and a single free on close. The context is never decoded into,
+         * so the tree stays mutable for its whole life. */
+        $ctx = Lib::ffi()->pbw_ctx_new();
+
+        if ($ctx === null) {
+            throw new Error('pbw_ctx_new: out of memory');
+        }
+
+        $ptr = Lib::ffi()->pbw_message_new_ctx($ctx, $this->desc);
 
         if ($ptr === null) {
+            Lib::ffi()->pbw_ctx_free($ctx);
             throw new Error('pbw_message_new: out of memory');
         }
 
-        return Message::root($this, $ptr);
+        return Message::root($this, $ptr, $ctx);
     }
 
     /** Decodes wire bytes; unknown fields are preserved and re-encoded. */
     public function decode(string $wire): Message
     {
-        $out = Lib::newSlot('void*[1]');
+        $out = Lib::slot('void*[1]');
         $status = Lib::ffi()->pbw_decode($this->desc, $wire, strlen($wire), FFI::addr($out[0]));
 
         if ($status !== 0) {
@@ -359,6 +390,9 @@ final class Message
     private ?CData $handle;
     private bool $owned;
 
+    /** Build arena for context-backed roots; null for decoded trees and views. */
+    private ?CData $ctx;
+
     /** Keeps the parent (and its tree) alive while a nested message is in use. */
     private ?Message $parent;
 
@@ -368,55 +402,81 @@ final class Message
         CData $handle,
         bool $owned,
         ?Message $parent,
+        ?CData $ctx,
     ) {
         $this->handle = $handle;
         $this->owned = $owned;
         $this->parent = $parent;
+        $this->ctx = $ctx;
     }
 
     /** @internal */
-    public static function root(Type $type, CData $handle): self
+    public static function root(Type $type, CData $handle, ?CData $ctx = null): self
     {
-        return new self($type, $handle, true, null);
+        return new self($type, $handle, true, null, $ctx);
     }
 
     /** @internal A nested message: the owner's tree stays alive through $parent. */
     public static function viewFor(Type $type, CData $handle, Message $parent): self
     {
-        return new self($type, $handle, false, $parent);
+        return new self($type, $handle, false, $parent, null);
     }
 
     /* ---------------------------------------------------------------- setting */
 
+    /** A value constructor that builds into the message's arena when it has one. */
+    private function newUint(int $bits): mixed
+    {
+        if ($this->ctx !== null) {
+            return Lib::ffi()->pbw_value_new_uint_ctx($this->ctx, $bits);
+        }
+
+        return Lib::ffi()->pbw_value_new_int($bits);
+    }
+
+    /** Bytes builder with explicit length, so embedded NULs survive. */
+    private function newBytes(string $value): mixed
+    {
+        if ($this->ctx !== null) {
+            return Lib::ffi()->pbw_value_new_bytes_ctx($this->ctx, $value, strlen($value));
+        }
+
+        return Lib::ffi()->pbw_value_new_bytes($value, strlen($value));
+    }
+
     /** Any integer or enum field; the value is stored as raw 64-bit bits. */
     public function setInt(Field|string $field, int $value): self
     {
-        return $this->store($this->resolve($field), Lib::ffi()->pbw_value_new_int($value));
+        return $this->store($this->resolve($field), $this->newUint($value));
     }
 
     public function setBool(Field|string $field, bool $value): self
     {
-        return $this->store($this->resolve($field), Lib::ffi()->pbw_value_new_bool($value ? 1 : 0));
+        return $this->store($this->resolve($field), $this->newUint($value ? 1 : 0));
     }
 
     public function setFloat(Field|string $field, float $value): self
     {
-        return $this->store($this->resolve($field), Lib::ffi()->pbw_value_new_float($value));
+        $bits = unpack('L', pack('f', $value))[1];
+
+        return $this->store($this->resolve($field), $this->newUint($bits));
     }
 
     public function setDouble(Field|string $field, float $value): self
     {
-        return $this->store($this->resolve($field), Lib::ffi()->pbw_value_new_double($value));
+        $bits = unpack('Q', pack('d', $value))[1];
+
+        return $this->store($this->resolve($field), $this->newUint($bits));
     }
 
     public function setString(Field|string $field, string $value): self
     {
-        return $this->store($this->resolve($field), Lib::ffi()->pbw_value_new_string($value));
+        return $this->store($this->resolve($field), $this->newBytes($value));
     }
 
     public function setBytes(Field|string $field, string $value): self
     {
-        return $this->store($this->resolve($field), Lib::ffi()->pbw_value_new_bytes($value, strlen($value)));
+        return $this->store($this->resolve($field), $this->newBytes($value));
     }
 
     /**
@@ -512,7 +572,11 @@ final class Message
             return null;
         }
 
-        return Lib::ffi()->pbw_value_get_string($value);
+        /* Length-based: values with embedded NUL bytes round-trip intact. */
+        $len = Lib::slot('size_t');
+        $ptr = Lib::ffi()->pbw_value_get_bytes($value, FFI::addr($len));
+
+        return $ptr === null ? null : FFI::string($ptr, $len->cdata);
     }
 
     public function getBytes(Field|string $field): ?string
@@ -523,7 +587,7 @@ final class Message
             return null;
         }
 
-        $len = Lib::newSlot('size_t');
+        $len = Lib::slot('size_t');
         $ptr = Lib::ffi()->pbw_value_get_bytes($value, FFI::addr($len));
 
         return $ptr === null ? null : FFI::string($ptr, $len->cdata);
@@ -576,8 +640,8 @@ final class Message
     public function encode(): string
     {
         $ffi = Lib::ffi();
-        $out = Lib::newSlot('void*[1]');
-        $len = Lib::newSlot('size_t');
+        $out = Lib::slot('void*[1]');
+        $len = Lib::slot('size_t');
         $status = $ffi->pbw_encode($this->cdata(), FFI::addr($out[0]), FFI::addr($len));
 
         if ($status !== 0) {
@@ -601,11 +665,17 @@ final class Message
 
     public function close(): void
     {
-        if ($this->handle !== null && $this->owned) {
+        if ($this->ctx !== null) {
+            /* Context-built root: freeing the context releases the whole
+             * tree at once. */
+            Lib::ffi()->pbw_ctx_free($this->ctx);
+            $this->ctx = null;
+            $this->handle = null;
+        } elseif ($this->handle !== null && $this->owned) {
             Lib::ffi()->pbw_message_free($this->handle);
+            $this->handle = null;
         }
 
-        $this->handle = null;
         $this->parent = null;
     }
 
@@ -655,12 +725,16 @@ final class Value
 
     public function asString(): ?string
     {
-        return Lib::ffi()->pbw_value_get_string($this->ptr);
+        /* Length-based: values with embedded NUL bytes round-trip intact. */
+        $len = Lib::slot('size_t');
+        $ptr = Lib::ffi()->pbw_value_get_bytes($this->ptr, FFI::addr($len));
+
+        return $ptr === null ? null : FFI::string($ptr, $len->cdata);
     }
 
     public function asBytes(): ?string
     {
-        $len = Lib::newSlot('size_t');
+        $len = Lib::slot('size_t');
         $ptr = Lib::ffi()->pbw_value_get_bytes($this->ptr, FFI::addr($len));
 
         return $ptr === null ? null : FFI::string($ptr, $len->cdata);

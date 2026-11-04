@@ -1,0 +1,23 @@
+{
+    "name": "jinganix/pbwire",
+    "description": "Dynamic protobuf over the pbwire C ABI, schema at runtime, no generated code",
+    "type": "library",
+    "license": "Apache-2.0",
+    "authors": [
+        {
+            "name": "jinganix"
+        }
+    ],
+    "require": {
+        "php": ">=8.1",
+        "ext-ffi": "*"
+    },
+    "autoload": {
+        "files": ["runtime/pbwire.php"]
+    },
+    "extra": {
+        "pbwire": {
+            "note": "Versions are git tags; composer.json carries no version field by design."
+        }
+    }
+}

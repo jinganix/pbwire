@@ -504,23 +504,211 @@ packed_item_size(pbw_type type, uint64_t bits)
  * length prefix can be written in place: no placeholder, no memmove of the
  * payload, and the reservation is exactly what the run needs (a caller-provided
  * buffer therefore does not need room for a 10-bytes-per-item worst case). */
+/* Appends a varint to a caller-hoisted cursor: the blind packed write
+ * loops advance a local pointer instead of the writer position per item. */
+PBW_INLINE void
+w_varint_out(uint8_t **out, uint64_t value)
+{
+    uint8_t *p = *out;
+
+    while (value >= 0x80) {
+        *p++ = (uint8_t)((value & 0x7f) | 0x80);
+        value >>= 7;
+    }
+    *p++ = (uint8_t)value;
+    *out = p;
+}
+
 static void
 write_packed(writer *w, const pbw_field *field, const pbw_value *list)
 {
-    pbw_value **items = list->as.list.items;
-    size_t n = list->as.list.len;
+    pbw_value **items;
+    size_t n;
     size_t payload = 0;
     size_t i;
 
+    if (w == NULL || w->status != PBW_OK || field == NULL || list == NULL) {
+        if (w != NULL && w->status == PBW_OK) {
+            w->status = PBW_ERR_INVALID;
+        }
+        return;
+    }
+    if (list->kind != PBW_VALUE_LIST) {
+        w->status = PBW_ERR_INVALID;
+        return;
+    }
+    items = list->as.list.items;
+    n = list->as.list.len;
     if (n == 0) {
+        return;
+    }
+    if (items == NULL) {
+        w->status = PBW_ERR_INVALID;
         return;
     }
     if (n > (SIZE_MAX - 16) / 10) {
         w->status = PBW_ERR_LIMIT;
         return;
     }
-    for (i = 0; i < n; i++) {
-        payload += packed_item_size(field->type, items[i]->as.u64);
+    /* One dispatch for the whole run: every item shares the field's type.
+     * Fixed-size kinds write in a single validated pass (their payload is
+     * known upfront); varint kinds size first and then run a blind
+     * kind-specific write. Every loop hoists the output pointer into a
+     * local: advancing through the writer struct per item stalls the
+     * pipeline and blocks vectorization. n is capped above, so n * 8 below
+     * cannot wrap. */
+    switch (field->type) {
+    case PBW_TYPE_BOOL: {
+        uint8_t *out;
+        payload = n;
+        if (!w_reserve(w, (field->len_tag_len <= 4 ? 4 : field->len_tag_len) +
+                              pbw_varint_size(payload) + payload)) {
+            w->status = PBW_ERR_NOMEM;
+            return;
+        }
+        if (field->len_tag_len <= 4) {
+            w_tag_noreserve(w, field->len_tag_word, field->len_tag_len);
+        } else {
+            memcpy(w->buf->data + w->pos, field->len_tag, field->len_tag_len);
+            w->pos += field->len_tag_len;
+        }
+        w_varint_noreserve(w, payload);
+        out = w->buf->data + w->pos;
+        for (i = 0; i < n; i++) {
+            pbw_value *item = items[i];
+            if (item == NULL || item->kind != PBW_VALUE_UINT) {
+                w->pos += i;
+                w->status = PBW_ERR_INVALID;
+                return;
+            }
+            out[i] = item->as.u64 != 0 ? 1u : 0u;
+        }
+        w->pos += n;
+        return;
+    }
+    case PBW_TYPE_FLOAT:
+    case PBW_TYPE_FIXED32:
+    case PBW_TYPE_SFIXED32: {
+        uint8_t *out;
+        payload = n * 4;
+        if (!w_reserve(w, (field->len_tag_len <= 4 ? 4 : field->len_tag_len) +
+                              pbw_varint_size(payload) + payload)) {
+            w->status = PBW_ERR_NOMEM;
+            return;
+        }
+        if (field->len_tag_len <= 4) {
+            w_tag_noreserve(w, field->len_tag_word, field->len_tag_len);
+        } else {
+            memcpy(w->buf->data + w->pos, field->len_tag, field->len_tag_len);
+            w->pos += field->len_tag_len;
+        }
+        w_varint_noreserve(w, payload);
+        out = w->buf->data + w->pos;
+        for (i = 0; i < n; i++) {
+            pbw_value *item = items[i];
+            uint32_t v;
+            if (item == NULL || item->kind != PBW_VALUE_UINT) {
+                w->pos += i * 4;
+                w->status = PBW_ERR_INVALID;
+                return;
+            }
+            v = (uint32_t)item->as.u64;
+            out[i * 4] = (uint8_t)v;
+            out[i * 4 + 1] = (uint8_t)(v >> 8);
+            out[i * 4 + 2] = (uint8_t)(v >> 16);
+            out[i * 4 + 3] = (uint8_t)(v >> 24);
+        }
+        w->pos += payload;
+        return;
+    }
+    case PBW_TYPE_DOUBLE:
+    case PBW_TYPE_FIXED64:
+    case PBW_TYPE_SFIXED64: {
+        uint8_t *out;
+        payload = n * 8;
+        if (!w_reserve(w, (field->len_tag_len <= 4 ? 4 : field->len_tag_len) +
+                              pbw_varint_size(payload) + payload)) {
+            w->status = PBW_ERR_NOMEM;
+            return;
+        }
+        if (field->len_tag_len <= 4) {
+            w_tag_noreserve(w, field->len_tag_word, field->len_tag_len);
+        } else {
+            memcpy(w->buf->data + w->pos, field->len_tag, field->len_tag_len);
+            w->pos += field->len_tag_len;
+        }
+        w_varint_noreserve(w, payload);
+        out = w->buf->data + w->pos;
+        for (i = 0; i < n; i++) {
+            pbw_value *item = items[i];
+            uint64_t v;
+            if (item == NULL || item->kind != PBW_VALUE_UINT) {
+                w->pos += i * 8;
+                w->status = PBW_ERR_INVALID;
+                return;
+            }
+            v = item->as.u64;
+            out[i * 8] = (uint8_t)v;
+            out[i * 8 + 1] = (uint8_t)(v >> 8);
+            out[i * 8 + 2] = (uint8_t)(v >> 16);
+            out[i * 8 + 3] = (uint8_t)(v >> 24);
+            out[i * 8 + 4] = (uint8_t)(v >> 32);
+            out[i * 8 + 5] = (uint8_t)(v >> 40);
+            out[i * 8 + 6] = (uint8_t)(v >> 48);
+            out[i * 8 + 7] = (uint8_t)(v >> 56);
+        }
+        w->pos += payload;
+        return;
+    }
+    case PBW_TYPE_INT32:
+    case PBW_TYPE_ENUM:
+        for (i = 0; i < n; i++) {
+            if (items[i] == NULL || items[i]->kind != PBW_VALUE_UINT) {
+                w->status = PBW_ERR_INVALID;
+                return;
+            }
+            payload += pbw_varint_size(
+                (uint64_t)(int64_t)(int32_t)items[i]->as.u64);
+        }
+        break;
+    case PBW_TYPE_UINT32:
+        for (i = 0; i < n; i++) {
+            if (items[i] == NULL || items[i]->kind != PBW_VALUE_UINT) {
+                w->status = PBW_ERR_INVALID;
+                return;
+            }
+            payload += pbw_varint_size((uint64_t)(uint32_t)items[i]->as.u64);
+        }
+        break;
+    case PBW_TYPE_SINT32:
+        for (i = 0; i < n; i++) {
+            if (items[i] == NULL || items[i]->kind != PBW_VALUE_UINT) {
+                w->status = PBW_ERR_INVALID;
+                return;
+            }
+            payload += pbw_varint_size(
+                zigzag_encode(items[i]->as.u64, 32));
+        }
+        break;
+    case PBW_TYPE_SINT64:
+        for (i = 0; i < n; i++) {
+            if (items[i] == NULL || items[i]->kind != PBW_VALUE_UINT) {
+                w->status = PBW_ERR_INVALID;
+                return;
+            }
+            payload += pbw_varint_size(
+                zigzag_encode(items[i]->as.u64, 64));
+        }
+        break;
+    default:
+        for (i = 0; i < n; i++) {
+            if (items[i] == NULL || items[i]->kind != PBW_VALUE_UINT) {
+                w->status = PBW_ERR_INVALID;
+                return;
+            }
+            payload += pbw_varint_size(items[i]->as.u64);
+        }
+        break;
     }
     /* Four bytes cover the tag word store; a five-byte length tag (field
      * number >= 2^21) is copied byte by byte instead. */
@@ -536,31 +724,51 @@ write_packed(writer *w, const pbw_field *field, const pbw_value *list)
         w->pos += field->len_tag_len;
     }
     w_varint_noreserve(w, payload);
-    if (field->type == PBW_TYPE_FLOAT || field->type == PBW_TYPE_FIXED32 ||
-        field->type == PBW_TYPE_SFIXED32) {
+    /* Blind write pass: every item was validated above, so the output
+     * pointer stays hoisted with no checks and no switches in the loop. */
+    switch (field->type) {
+    case PBW_TYPE_INT32:
+    case PBW_TYPE_ENUM: {
+        uint8_t *out = w->buf->data + w->pos;
         for (i = 0; i < n; i++) {
-            if (i + 1 < n) {
-                PBW_PREFETCH(items[i + 1]);
-            }
-            w_fixed_noreserve(w, items[i]->as.u64, 4);
+            w_varint_out(&out,
+                         (uint64_t)(int64_t)(int32_t)items[i]->as.u64);
         }
+        w->pos += payload;
         return;
     }
-    if (field->type == PBW_TYPE_DOUBLE || field->type == PBW_TYPE_FIXED64 ||
-        field->type == PBW_TYPE_SFIXED64) {
+    case PBW_TYPE_UINT32: {
+        uint8_t *out = w->buf->data + w->pos;
         for (i = 0; i < n; i++) {
-            if (i + 1 < n) {
-                PBW_PREFETCH(items[i + 1]);
-            }
-            w_fixed_noreserve(w, items[i]->as.u64, 8);
+            w_varint_out(&out, (uint64_t)(uint32_t)items[i]->as.u64);
         }
+        w->pos += payload;
         return;
     }
-    for (i = 0; i < n; i++) {
-        if (i + 1 < n) {
-            PBW_PREFETCH(items[i + 1]);
+    case PBW_TYPE_SINT32: {
+        uint8_t *out = w->buf->data + w->pos;
+        for (i = 0; i < n; i++) {
+            w_varint_out(&out, zigzag_encode(items[i]->as.u64, 32));
         }
-        w_varint_noreserve(w, wire_value(field->type, items[i]->as.u64));
+        w->pos += payload;
+        return;
+    }
+    case PBW_TYPE_SINT64: {
+        uint8_t *out = w->buf->data + w->pos;
+        for (i = 0; i < n; i++) {
+            w_varint_out(&out, zigzag_encode(items[i]->as.u64, 64));
+        }
+        w->pos += payload;
+        return;
+    }
+    default: {
+        uint8_t *out = w->buf->data + w->pos;
+        for (i = 0; i < n; i++) {
+            w_varint_out(&out, items[i]->as.u64);
+        }
+        w->pos += payload;
+        return;
+    }
     }
 }
 
@@ -731,11 +939,6 @@ encode_message(writer *w, const pbw_message *msg, uint32_t depth, int det)
                 continue;
             }
             for (j = 0; j < value->as.list.len; j++) {
-                /* The items array holds pointers; prefetch the next value
-                 * while the current one encodes. */
-                if (j + 1 < value->as.list.len) {
-                    PBW_PREFETCH(value->as.list.items[j + 1]);
-                }
                 write_element(w, field, value->as.list.items[j], depth, det);
                 if (w->status != PBW_OK) {
                     return;

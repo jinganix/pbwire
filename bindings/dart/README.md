@@ -55,8 +55,21 @@ cd benchmarks && dart pub get && ./bench.sh         # vs the protobuf Dart runti
 ```
 
 Needs `dart pub global activate protoc_plugin` (it provides `protoc-gen-dart`;
-add `~/.pub-cache/bin` to `PATH`). Numbers live in
-[BENCHMARKS.md](../../BENCHMARKS.md).
+add `~/.pub-cache/bin` to `PATH`). The four tiers are small / medium / large /
+xlarge (the repeated fields scaled x0 / x1 / x100 / x3000). Copied from
+[BENCHMARKS.md](../../BENCHMARKS.md), which is the single source for all
+performance numbers; higher is better, MB/s over wire bytes:
+
+| payload | op | pbwire-dart (MB/s, x protobuf-dart) | protobuf-dart (MB/s) |
+|---|---|---|---|
+| 136 B | encode | 775.8 (3.7x) | 207.8 |
+| 136 B | decode | 383.8 (1.8x) | 218.3 |
+| 174 B | encode | 709.9 (3.8x) | 185.6 |
+| 174 B | decode | 395.5 (2.0x) | 196.2 |
+| 2469 B | encode | 1113.7 (8.7x) | 127.4 |
+| 2469 B | decode | 492.3 (3.2x) | 151.6 |
+| 74913 B | encode | 1273.8 (12.2x) | 104.0 |
+| 74913 B | decode | 555.9 (3.3x) | 166.3 |
 
 Strings cross as NUL-terminated C strings, so `setString()` stops at the first
 NUL byte: use `setBytes()` for binary payloads (a `string` field accepts them

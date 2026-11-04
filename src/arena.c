@@ -19,8 +19,14 @@ chunk_add(pbw_arena *arena, size_t need)
     size_t cap = arena->chunk_size;
     pbw_arena_chunk *chunk;
 
+    if (arena == NULL) {
+        return 0;
+    }
     if (cap < need) {
         cap = need;
+    }
+    if (cap > SIZE_MAX - sizeof(*chunk)) {
+        return 0;
     }
     chunk = (pbw_arena_chunk *)malloc(sizeof(*chunk) + cap);
     if (chunk == NULL) {
@@ -42,10 +48,18 @@ pbw_arena_alloc_slow(pbw_arena *arena, size_t size)
     pbw_arena_chunk *chunk;
     void *ptr;
 
-    size_t large_at = arena->retain_cap > PBW_ARENA_LARGE_THRESHOLD
-                          ? arena->retain_cap
-                          : PBW_ARENA_LARGE_THRESHOLD;
+    size_t large_at;
 
+    if (arena == NULL) {
+        return NULL;
+    }
+    large_at = arena->retain_cap > PBW_ARENA_LARGE_THRESHOLD
+                   ? arena->retain_cap
+                   : PBW_ARENA_LARGE_THRESHOLD;
+
+    if (size > SIZE_MAX - 7u) {
+        return NULL;
+    }
     size = align_up(size == 0 ? 1 : size);
     if (size > large_at) {
         /* Oversized single allocation: one malloc on the large list, freed on
@@ -69,7 +83,8 @@ pbw_arena_alloc_slow(pbw_arena *arena, size_t size)
         return (char *)(big + 1);
     }
     chunk = arena->head;
-    if (chunk == NULL || chunk->cap - chunk->used < size) {
+    if (chunk == NULL || !pbw_cap_holds(chunk->cap, chunk->used) ||
+        chunk->cap - chunk->used < size) {
         if (!chunk_add(arena, size)) {
             return NULL;
         }
@@ -86,8 +101,13 @@ pbw_arena_reset(pbw_arena *arena)
     /* Chunks are pushed at the head and grow, so the head is the largest one:
      * keep it and drop the rest. A workload that needs the same amount of space
      * every time then stops calling malloc entirely. */
-    pbw_arena_chunk *head = arena->head;
+    pbw_arena_chunk *head;
     pbw_arena_chunk *chunk;
+
+    if (arena == NULL) {
+        return;
+    }
+    head = arena->head;
 
     if (head == NULL || arena->block != NULL) {
         /* A packed arena belongs to one decoded tree and is never reset.
@@ -107,9 +127,6 @@ pbw_arena_reset(pbw_arena *arena)
         chunk = next;
     }
     arena->large = NULL;
-    /* A reset context is a blank slate: trees built into it afterwards are
-     * mutable until a decode seals it read-only again. */
-    arena->readonly = 0;
     /* An outlier that grew the head past the budget is dropped as well:
      * steady workloads under budget stay malloc-free, anything above pays
      * one malloc per reset instead of pinning the peak forever. */
@@ -162,8 +179,14 @@ pbw_arena_new_packed(size_t first_chunk)
 void
 pbw_arena_free(pbw_arena *arena)
 {
-    pbw_arena_chunk *chunk = arena->head;
-    pbw_arena_chunk *big = arena->large;
+    pbw_arena_chunk *chunk;
+    pbw_arena_chunk *big;
+
+    if (arena == NULL) {
+        return;
+    }
+    chunk = arena->head;
+    big = arena->large;
 
     while (big != NULL) {
         pbw_arena_chunk *next = big->next;
@@ -201,6 +224,10 @@ pbw_arena_used(const pbw_arena *arena)
 {
     const pbw_arena_chunk *chunk;
     size_t used = 0;
+
+    if (arena == NULL) {
+        return 0;
+    }
 
     for (chunk = arena->head; chunk != NULL; chunk = chunk->next) {
         used += chunk->used;

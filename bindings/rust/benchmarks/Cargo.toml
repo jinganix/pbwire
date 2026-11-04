@@ -7,6 +7,10 @@ publish = false
 [dependencies]
 pbwire = { path = ".." }
 protobuf = "3"
+prost = "0.14"
+
+[build-dependencies]
+prost-build = "0.14"
 
 [[bin]]
 name = "bench"

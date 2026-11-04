@@ -1,113 +1,39 @@
-[![CI](https://github.com/jinganix/enif_protobuf/actions/workflows/ci.yml/badge.svg)](https://github.com/jinganix/enif_protobuf/actions/workflows/ci.yml)
-[![Hex.pm](https://img.shields.io/hexpm/v/enif_protobuf.svg)](https://hex.pm/packages/enif_protobuf)
-[![Hex Downloads](https://img.shields.io/hexpm/dt/enif_protobuf.svg)](https://hex.pm/packages/enif_protobuf)
-[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](../../LICENSE)
-[![Erlang/OTP](https://img.shields.io/badge/Erlang%2FOTP-28%2B-blue.svg)](https://www.erlang.org/)
+# pbwire Erlang binding
 
-# enif_protobuf — fast Google Protobuf encoder/decoder for Erlang and Elixir (NIF)
+A NIF over the C core for Erlang/OTP (and Elixir): gpb generates the record
+definitions as usual, `pbwire:load_cache/1` consumes them, and
+`pbwire:encode/1` / `decode/2` run in C instead of Erlang — same record
+tuples, same wire format, byte-identical output. No libprotobuf, no per-message
+native build.
 
-**enif_protobuf** is a Google Protobuf encoder and decoder for **Erlang/OTP**, implemented as a NIF
-in C. It is a drop-in replacement for the `encode_msg/1` and `decode_msg/2` functions that
-[gpb](https://github.com/tomas-abrahamsson/gpb) generates from `.proto` files: same record tuples,
-same wire format, same results — but serialization runs in C instead of Erlang, with no C++
-libprotobuf dependency.
-
-Use gpb's `protoc-erl` to generate the Erlang modules as usual, load the schema once with
-`enif_protobuf:load_cache(Module:get_msg_defs())`, then call `enif_protobuf:encode/1` and
-`enif_protobuf:decode/2`. The same calls work from Elixir, since the API is plain Erlang.
-
-On gpb 5+ the introspection list was split: `get_msg_defs/0` keeps only messages and enums, while
-`get_proto_defs/0` (compile with `{introspect_get_proto_defs, true}`, or `-introspect-get_proto_defs`)
-also carries `{syntax, "proto3"}` and `proto3_msgs`. Pass `Module:get_proto_defs()` there: without
-the proto3 markers a proto3 message is read as proto2 and its zero-valued singular fields are
-written out instead of omitted. `get_msg_defs/0` still works for proto2.
-
-## Layout
+Previously published standalone as `enif_protobuf`; it is now developed here
+as `bindings/erlang` and published to Hex as `pbwire`. If you depended on the
+old repository, point your checkout at this one and replace `enif_protobuf:`
+with `pbwire:` — the API and the wire format are unchanged.
 
 | Piece | Path | Role |
 |---|---|---|
 | runtime | [`c_src/`](c_src/), [`src/`](src/), [`priv/`](priv/) | the NIF (`ep_encoder.c` / `ep_decoder.c`) and its Erlang module |
-| examples | [`examples/`](examples/) | `addressbook.escript`: hand-built defs, record round trip |
+| examples | [`examples/addressbook.escript`](examples/addressbook.escript) | hand-built defs, record round trip |
 | tests | [`test/`](test/), [`c_src_tests/`](c_src_tests/) | EUnit suites and the NIF's C tests (`make erlang-test`) |
 | benchmarks | [`benchmarks/`](benchmarks/) | vs gpb and gpb NIF (`make erlang-bench`) |
 | conformance | [`conformance/`](conformance/) | status and plan: blocked on gpb record-name collisions |
-| plugin | none | epb takes gpb definitions; `gpb_compile` is the generator |
+| plugin | none | epb takes gpb definitions; `gpb_compile` / `protoc-erl` is the generator |
 
 This is the rebar3 layout (`src/`, `c_src/`, `include/`, `priv/`, `test/`), the
 local equivalent of the other bindings' `runtime/` + `tests/`.
 
-## Contents
+## Build and run
 
-- [Why use enif_protobuf](#why-use-enif_protobuf)
-- [Installation](#installation)
-- [Quick start](#quick-start)
-- [API reference](#api-reference)
-- [Supported protobuf features](#supported-protobuf-features)
-- [Options](#options)
-- [Performance](#performance)
-- [Comparison with alternatives](#comparison-with-alternatives)
-- [Using enif_protobuf with AI coding assistants](#using-enif_protobuf-with-ai-coding-assistants)
-- [FAQ](#faq)
-- [Development](#development)
-
-## Why use enif_protobuf
-
-- **Roughly 1.6–2.3× faster than pure-Erlang gpb**, and 1.8–7.3× faster than gpb's libprotobuf NIF,
-  on the four standard tiers of `matrix3.proto` ([see numbers](#performance)).
-- **Byte-compatible with gpb.** The test suite asserts `gpb:encode_msg/1 =:= enif_protobuf:encode/1`
-  for the covered messages, so existing consumers keep working unchanged.
-- **No runtime dependencies beyond OTP.** One small NIF (`priv/enif_protobuf.so`), no libprotobuf,
-  no `protoc` at runtime, no per-module native build.
-- **Full protobuf feature set** — proto2 and proto3, every scalar type, enums (including aliases and
-  negative values), repeated and packed fields, nested messages, oneofs, maps, groups, unknown-field
-  passthrough.
-- **No regeneration step for existing gpb users.** The schema comes from the generated module's own
-  introspection (`get_msg_defs/0`, or `get_proto_defs/0` on gpb 5+).
-
-| | |
-|---|---|
-| Language | Erlang/OTP + C (NIF) |
-| Input/output | gpb record tuples (and gpb `-maps` generated modules) |
-| Wire compatibility | Google Protobuf, proto2 + proto3 |
-| Requires | Erlang/OTP 28+ (CI matrix: 28, 29), a C compiler, `make` |
-| Package | Hex: [`enif_protobuf`](https://hex.pm/packages/enif_protobuf), license Apache-2.0 |
-| Platforms | Linux, macOS (Windows via `make` is untested in CI) |
-| Schema loading | `enif_protobuf:load_cache/1`, one global cache per node |
-
-## Installation
-
-Add it from [Hex](https://hex.pm/packages/enif_protobuf) in `rebar.config`:
-
-```erlang
-{deps, [
-    {enif_protobuf, "~> 1.0"}
-]}.
-```
-
-Or track `master` directly:
-
-```erlang
-{deps, [
-    {enif_protobuf, {git, "https://github.com/jinganix/enif_protobuf.git", {branch, "master"}}}
-]}.
-```
-
-The NIF is compiled by a `pre_hooks` entry during `rebar3 compile`, so a working C toolchain
-(`cc`/`clang`, `make`) is required on the build machine (the Hex package ships sources, not a
-prebuilt `.so`). Erlang/OTP 28 or newer is required; the CI matrix covers OTP 28 and 29 on Linux and
-macOS. API docs are published at [hexdocs.pm/enif_protobuf](https://hexdocs.pm/enif_protobuf/).
-
-## Build
+Needs Erlang/OTP (see [`.tool-versions`](.tool-versions)) and a C compiler;
+`rebar3` is bootstrapped by the binding's own `Makefile`.
 
 ```shell
-make            # compile (rebar3 + C NIF)
-make tests      # EUnit
-make c-tests    # C unit tests
-make c-format-check  # verify C style (clang-format >= 19)
-make c-format        # apply clang-format to c_src/ and c_src_tests/
+make erlang-test    # from the repo root: EUnit + the NIF C tests
+make erlang-bench   # from the repo root: epb vs gpb (+ gpb NIF, needs protoc + libprotobuf)
 ```
 
-With rebar3 directly:
+With rebar3 directly (from `bindings/erlang`):
 
 ```shell
 rebar3 compile
@@ -134,48 +60,49 @@ ${GPB_PATH}/bin/protoc-erl -I. x.proto
 erlc -I${GPB_PATH}/include x.erl
 ```
 
-With rebar3, compiled beams live under `_build/default/lib/.../ebin`.
-
 Load the schema cache once, then encode and decode:
-
-```shell
-export EPB_EBIN_PATH=/path/to/enif_protobuf/_build/default/lib/enif_protobuf/ebin
-erl -pa ${EPB_EBIN_PATH} -pa .
-```
 
 ```erlang
 1> rr("x.hrl").
 ['Person']
 2> Msg = #'Person'{name = "abc def", id = 345, email = "a@example.com"}.
 3> gpb_bin = x:encode_msg(Msg).
-4> enif_protobuf:load_cache(x:get_msg_defs()).
+4> pbwire:load_cache(x:get_msg_defs()).
 ok
-5> epb_bin = enif_protobuf:encode(Msg).
+5> epb_bin = pbwire:encode(Msg).
 6> gpb_bin =:= epb_bin.
 true
-7> enif_protobuf:decode(epb_bin, 'Person').
+7> pbwire:decode(epb_bin, 'Person').
 #'Person'{name = <<"abc def">>, id = 345, email = <<"a@example.com">>}
 ```
 
 Convenience wrappers that load the cache on each call:
 
 ```erlang
-enif_protobuf:encode_msg(Msg, x:get_msg_defs()).
-enif_protobuf:decode_msg(Bin, 'Person', x:get_msg_defs()).
+pbwire:encode_msg(Msg, x:get_msg_defs()).
+pbwire:decode_msg(Bin, 'Person', x:get_msg_defs()).
 ```
+
+On gpb 5+ the introspection list was split: `get_msg_defs/0` keeps only
+messages and enums, while `get_proto_defs/0` (compile with
+`{introspect_get_proto_defs, true}`) also carries `{syntax, "proto3"}` and
+`proto3_msgs`. Pass `Module:get_proto_defs()` there: without the proto3
+markers a proto3 message is read as proto2 and its zero-valued singular
+fields are written out instead of omitted. `get_msg_defs/0` still works for
+proto2.
 
 ## API reference
 
 | Function | Returns | Notes |
 |---|---|---|
-| `enif_protobuf:load_cache(Defs)` | `ok` | `Defs` is `Module:get_msg_defs()`, or `Module:get_proto_defs()` on gpb 5+ (it adds the proto3 markers); replaces any previously loaded schema for the whole node |
-| `enif_protobuf:purge_cache()` | `ok` | Frees the loaded schema; later `encode/1` / `decode/2` raise `cache_not_exists` |
-| `enif_protobuf:set_opts(Opts)` | `ok` | Call before `load_cache/1`; unknown options or non-boolean values raise `badarg` |
-| `enif_protobuf:encode(Msg)` | `binary()` | `Msg` is a gpb record or map tuple; raises `badarg` if it is not a tuple |
-| `enif_protobuf:decode(Bin, MsgName)` | record/map tuple | `MsgName` is the message atom, e.g. `'Person'`; raises `unknown_msg` if the schema has no such message |
-| `enif_protobuf:encode_msg(Msg, Defs)` | `binary()` | `load_cache(Defs)` + `encode(Msg)` |
-| `enif_protobuf:decode_msg(Bin, Name, Defs)` | tuple | `load_cache(Defs)` + `decode(Bin, Name)` |
-| `enif_protobuf:debug_term(Term)` | term | Prints the internal node layout of the loaded schema (debugging aid) |
+| `pbwire:load_cache(Defs)` | `ok` | `Defs` is `Module:get_msg_defs()`, or `Module:get_proto_defs()` on gpb 5+ (it adds the proto3 markers); replaces any previously loaded schema for the whole node |
+| `pbwire:purge_cache()` | `ok` | Frees the loaded schema; later `encode/1` / `decode/2` raise `cache_not_exists` |
+| `pbwire:set_opts(Opts)` | `ok` | Call before `load_cache/1`; unknown options or non-boolean values raise `badarg` |
+| `pbwire:encode(Msg)` | `binary()` | `Msg` is a gpb record or map tuple; raises `badarg` if it is not a tuple |
+| `pbwire:decode(Bin, MsgName)` | record/map tuple | `MsgName` is the message atom, e.g. `'Person'`; raises `unknown_msg` if the schema has no such message |
+| `pbwire:encode_msg(Msg, Defs)` | `binary()` | `load_cache(Defs)` + `encode(Msg)` |
+| `pbwire:decode_msg(Bin, Name, Defs)` | tuple | `load_cache(Defs)` + `decode(Bin, Name)` |
+| `pbwire:debug_term(Term)` | term | Prints the internal node layout of the loaded schema (debugging aid) |
 
 Calling `encode/1` or `decode/2` before `load_cache/1` raises `cache_not_exists`. All functions are
 safe to call concurrently from many processes: the schema cache is shared and read-locked, and each
@@ -192,110 +119,65 @@ scheduler gets its own scratch buffers.
 | Unknown fields | Preserved on decode and re-emitted on encode |
 | proto3 | Yes, including default-value and `optional` semantics matching gpb |
 
-`string` fields decode to binaries by default; use `{string_as_list, true}` to get lists instead.
-Non-Latin-1 text requires `{with_utf8, true}` when encoding (see below).
-
 ## Options
 
-Call `enif_protobuf:set_opts/1` before `load_cache/1`:
+Call `pbwire:set_opts/1` before `load_cache/1`:
 
 | Option                   | Default | Effect                                                 |
 |--------------------------|---------|--------------------------------------------------------|
 | `{string_as_list, true}` | `false` | Decode string fields as lists instead of binaries      |
 | `{with_utf8, true}`      | `false` | Allow non-Latin-1 UTF-8 in string fields when encoding |
 
-```erlang
-%% UTF-8 strings require with_utf8
-enif_protobuf:set_opts([{with_utf8, true}]).
-enif_protobuf:encode(#'Person'{name = "你好", id = 345, email = "a@example.com"}).
-```
+`string` fields decode to binaries by default; non-Latin-1 text needs
+`{with_utf8, true}` or encoding raises.
 
-Other API: `purge_cache/0` clears the loaded schema; `debug_term/1` prints internal term layout.
+## Benchmark
 
-## Performance
+`benchmarks/proto-bench` measures epb against **gpb** (pure Erlang) and the
+**gpb NIF** (libprotobuf behind gpb's own NIF generator) on the same schema and
+payload as every other binding in this repo:
+`bindings/c/tests/data/matrix3.proto` with the repeated fields scaled
+x0 / x1 / x100 / x3000 (136 / 174 / 2469 / 74913 bytes on the wire). Both
+backends build the same gpb record, so the timer measures the codec, not the
+tree. Every backend must match gpb byte for byte (encoding the record and
+re-encoding a decoded reference) before anything is timed.
 
-Comparison of **enif_protobuf** (NIF), **gpb** (pure Erlang), and **gpb NIF** (libprotobuf) on
-`bindings/c/tests/data/matrix3.proto` — the same schema and payload as every other binding in this
-repo — with the repeated fields scaled x0 / x1 / x100 / x3000 (136 / 174 / 2469 / 74913 bytes on
-the wire). Regenerate on your machine:
+The gpb NIF baseline needs `protoc` plus the protobuf C++ runtime; the suite
+builds and runs it when `pkg-config --exists protobuf` succeeds, otherwise the
+table simply has no `gpb-nif` column. Each op is the best of three timed
+samples (`BENCH_TARGET_TIME` seconds each, default 2) after one warm-up pass.
 
-```shell
-asdf install   # uses .tool-versions (erlang 29.0.1)
-make benchmark-update-readme
-```
-
-Benchmarks always use the Erlang version from [`.tool-versions`](.tool-versions).
-See [benchmarks/README.md](benchmarks/README.md) for all targets (per-backend runs, quick mode, the
-gpb NIF baseline).
-Case names follow the four standard payload tiers shared by every binding in this repo; the
-cross-binding comparison lives in [BENCHMARKS.md](../../BENCHMARKS.md) at the repo root.
+Copied from [`BENCHMARKS.md`](../../BENCHMARKS.md), which is the single source
+for all performance numbers; higher is better, MB/s over wire bytes. See
+[benchmarks/README.md](benchmarks/README.md) for all targets (per-backend
+runs, quick mode, the gpb NIF baseline).
 
 <!-- BENCHMARK_RESULTS_START -->
-Last run: 2026-11-04 01:48:40 UTC (matrix3.proto, the four standard tiers; Erlang 29.0.1 per `.tool-versions`; machine Apple M4 Pro)
+Last run: 2026-11-04 05:00:02 UTC (matrix3.proto, the four standard tiers; Erlang 29.0.1 per `.tool-versions`; machine Apple M4 Pro)
 
-| Test case | epb | gpb | gpb nif |
-|-----------|-----|-----|---------|
-| small · 136 B · encode | 328.4 | 169.9 | 61.0 |
-| small · 136 B · decode | 483.6 | 221.9 | 66.4 |
-| medium · 174 B · encode | 298.3 | 148.5 | 71.3 |
-| medium · 174 B · decode | 500.4 | 210.1 | 82.1 |
-| large · 2469 B · encode | 235.3 | 124.5 | 94.5 |
-| large · 2469 B · decode | 337.6 | 196.8 | 177.0 |
-| xlarge · 74913 B · encode | 250.2 | 115.9 | 118.3 |
-| xlarge · 74913 B · decode | 346.2 | 220.8 | 197.1 |
+| payload | op | pbwire-erlang (MB/s, x gpb) | gpb (MB/s) | gpb-nif (MB/s) |
+|---|---|---|---|---|
+| 136 B | encode | 362.1 (2.01x) | 180.1 | 81.5 |
+| 136 B | decode | 494.7 (2.20x) | 224.6 | 92.6 |
+| 174 B | encode | 347.7 (2.46x) | 141.5 | 72.6 |
+| 174 B | decode | 477.9 (2.17x) | 219.8 | 84.6 |
+| 2469 B | encode | 233.8 (1.84x) | 127.0 | 96.0 |
+| 2469 B | decode | 327.9 (1.71x) | 192.3 | 173.7 |
+| 74913 B | encode | 253.9 (2.06x) | 123.2 | 123.0 |
+| 74913 B | decode | 369.4 (1.69x) | 218.6 | 210.4 |
 
 Higher is better. Throughput in MB/s on serialized wire size. Case names are the
-four standard tiers at the repo root ([BENCHMARKS.md](../../../BENCHMARKS.md)).
+four standard tiers at the repo root ([BENCHMARKS.md](../../BENCHMARKS.md)).
 <!-- BENCHMARK_RESULTS_END -->
 
-## Comparison with alternatives
+Refresh the table after a run (rewrites this block and the one in
+`benchmarks/README.md`):
 
-| | **enif_protobuf** | **gpb** (pure Erlang) | **gpb NIF** (libprotobuf) |
-|---|---|---|---|
-| Implementation | Hand-written C NIF | Erlang modules generated from `.proto` | C++ libprotobuf behind a NIF |
-| Runtime dependencies | OTP only | OTP only | libprotobuf / protobuf headers |
-| Native build per proto module | No | No | Yes (one NIF per generated module) |
-| Speed (serialize / deserialize) | fastest in this repo's benchmarks | baseline | slower here, needs C++ toolchain |
-| Record shape | gpb records / maps | gpb records / maps | gpb records / maps |
-| Best for | high-throughput Erlang services already using gpb | zero build-toolchain portability | projects already standardized on libprotobuf |
-
-The NIF path adds a native build step; if you cannot ship a `.so` (restricted CI, no compiler),
-stay with pure gpb — the API is the same, so switching later is a one-line change.
-
-## Using enif_protobuf with AI coding assistants
-
-This repo ships machine-readable context so LLM assistants (Claude Code, Codex, Cursor, Copilot,
-pi, …) produce working code on the first try:
-
-- [`AGENTS.md`](AGENTS.md) — repo rules, architecture map, commands, and the API pitfalls that
-  cause most wrong answers.
-- [`llms.txt`](llms.txt) — compact, [llms.txt-spec](https://llmstxt.org/) summary of the project for
-  retrieval-based assistants.
-
-Rules an assistant should follow when writing code against this library:
-
-1. Generate modules with gpb `protoc-erl`; do **not** hand-write record definitions.
-2. Call `enif_protobuf:load_cache(Module:get_msg_defs())` once at startup (or use
-   `encode_msg/2` / `decode_msg/3`, which load it per call).
-3. Preserve the gpb record shape: field order and types must match `Module:get_msg_defs()`.
-4. Strings: pass lists on encode, expect binaries on decode unless `{string_as_list, true}` is set;
-   non-Latin-1 text needs `{with_utf8, true}` before `load_cache/1`.
-5. Decode needs the message name atom, e.g. `enif_protobuf:decode(Bin, 'Person')`.
-6. Do not invent options: only `string_as_list` and `with_utf8` exist.
-
-Example prompt that works well:
-
-> Convert this module to use enif_protobuf instead of gpb. Keep the record definitions and generated
-> modules, load the schema once in `start/2`, and keep the wire format unchanged.
+```shell
+make update-readme    # from bindings/erlang/benchmarks (runs the suite)
+```
 
 ## FAQ
-
-### Is enif_protobuf faster than gpb?
-
-Yes, in this repo's benchmarks it is ~1.6–2.3× faster than pure-Erlang gpb and 1.8–7.3× faster than
-gpb's libprotobuf NIF, at every tier. Numbers and hardware are in the
-[benchmark table](#performance); rerun `make benchmark-update-readme` on your own machine before
-relying on them.
 
 ### Do I need to regenerate my `.proto` files or change my records?
 
@@ -308,29 +190,19 @@ the protobuf wire format, so any conforming decoder reads either.
 
 ### Can I use it from Elixir?
 
-Yes. It is an Erlang library with no non-Erlang API: add it to `mix.exs` as a dependency
-(`{:enif_protobuf, "~> 1.0"}`) and call `:enif_protobuf.decode(bin, :'Person')` instead of
-`enif_protobuf:decode(Bin, 'Person')`. Generate the schema module with gpb's `protoc-erl` (or
-`protoc-gen-elixir`) and load it once with `:enif_protobuf.load_cache(X.get_msg_defs())`.
+Yes. It is an Erlang library with no non-Erlang API: generate the schema module with gpb's
+`protoc-erl`, load it once with `:pbwire.load_cache(X.get_msg_defs())`, and call
+`:pbwire.decode(bin, :'Person')` instead of the generated decode.
 
 ### Why does `encode/1` or `decode/2` raise `cache_not_exists`?
 
-No schema is loaded yet (or `purge_cache/0` was called). Call `enif_protobuf:load_cache/1` first, or
+No schema is loaded yet (or `purge_cache/0` was called). Call `pbwire:load_cache/1` first, or
 use `encode_msg/2` / `decode_msg/3`.
 
 ### Why do I get `badarg` from `set_opts/1`?
 
 Only `{string_as_list, boolean()}` and `{with_utf8, boolean()}` are accepted, and the argument must be
 a proper list of such tuples.
-
-### How do I encode non-ASCII (UTF-8) strings?
-
-`enif_protobuf:set_opts([{with_utf8, true}])` before `load_cache/1`. Without it, encoding raises on
-code points outside Latin-1.
-
-### Are strings returned as binaries or lists?
-
-Binaries by default. Set `{string_as_list, true}` for lists.
 
 ### Can several processes or applications use it at once?
 
@@ -357,21 +229,15 @@ nesting is capped at 100 and reserved wire types raise. A malformed binary raise
 returning a partially decoded message, so `decode/2` is safe on untrusted input. gpb is more
 lenient about oversized tags; for those inputs the two implementations may disagree.
 
-### Does it work on Windows?
-
-`rebar.config` has a `win32` make hook, but CI only covers Linux and macOS.
-
 ## Development
 
 ```shell
-make              # rebar3 compile + build the NIF
-make tests        # EUnit (includes gpb compatibility and PropEr round-trip tests)
-make c-tests      # C unit tests
-make c-coverage-check
-make c-format     # clang-format >= 19 applied to c_src/ and c_src_tests/
+make tests              # EUnit (gpb compatibility and PropEr round-trip tests included)
+make c-tests            # C unit tests
+make c-format           # clang-format >= 19 applied to c_src/ and c_src_tests/
 ```
 
-Layout: `src/enif_protobuf.erl` (public API + NIF stubs) → `c_src/enif_protobuf.c` (NIF entry
+Layout: `src/pbwire.erl` (public API + NIF stubs) → `c_src/pbwire.c` (NIF entry
 points, per-thread contexts, cache swap), `c_src/ep_encoder.c` / `c_src/ep_decoder.c`
 (single-pass wire codec over the schema cache), `test/` (EUnit, gpb parity, PropEr fuzzing),
 `benchmarks/` (proto-bench suite). Each thread also owns a core `pbw_ctx` (arena +
@@ -380,35 +246,8 @@ reusable buffers) whose user slot points back at the thread data.
 See [`AGENTS.md`](AGENTS.md) for the invariants that must hold in this codebase — an uncaught C
 exception or a bad term handled in the NIF kills the whole VM.
 
-### Releasing
+## Typed models
 
-Two ways, same result: the source package plus edoc docs land on
-[hex.pm/packages/enif_protobuf](https://hex.pm/packages/enif_protobuf) and
-[hexdocs.pm/enif_protobuf](https://hexdocs.pm/enif_protobuf/).
-
-**From CI (preferred).** Bump `{vsn, ...}` in [`src/enif_protobuf.app.src`](src/enif_protobuf.app.src),
-commit, then push a matching tag. The release workflow (not part of this repository's
-`.github/workflows/`, which only runs the gates) runs the tests, publishes to Hex and creates the
-GitHub release. It refuses to publish when the tag and
-the `.app.src` version disagree (`v1.0.0` must be `{vsn, "1.0.0"}`). `workflow_dispatch` publishes the
-current `master` without tagging.
-
-```shell
-gh secret set HEX_API_KEY                    # once: key from https://hex.pm/dashboard/keys
-git tag v1.1.0 && git push origin v1.1.0     # releases are cut by pushing a tag
-```
-
-**From your machine**, the way [jiffy](https://github.com/davisp/jiffy) does it:
-
-```shell
-rebar3 hex user auth       # once; stores the API key under ~/.config/rebar3/hex/
-make release               # = rebar3 hex publish, uses the {vsn, ...} from app.src
-```
-
-Either way the package contains sources only (`{files, ...}` in the `.app.src`): users compile the NIF
-with their own C toolchain, so there are no per-platform binaries to publish. Check the tarball
-before publishing with `./rebar3 hex build` (output in `_build/default/lib/enif_protobuf/hex/`).
-
-## License
-
-[Apache-2.0](../../LICENSE).
+gpb records are the typed model: `protoc-erl` generates the record definitions and `get_msg_defs/0`,
+and the binding encodes/decodes those records directly. There is no second generator and no
+`bindings/typed` output for Erlang.

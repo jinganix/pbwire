@@ -150,20 +150,30 @@ Extensions are read by number, not name.
 
 `benchmarks/bench.sh` runs the four standard tiers from
 [`BENCHMARKS.md`](../../BENCHMARKS.md) against the `google-protobuf` gem on the
-same `matrix3.proto` (every scalar, the nested message, the proto3 optionals and
-the repeated fields scaled x0/x1/x100/x3000). Both sides build the same message
-and must produce identical bytes before anything is timed; the benchmark
+same `matrix3.proto` (small / medium / large / xlarge scale the repeated fields
+x0 / x1 / x100 / x3000). Both sides build the same message and must produce
+identical bytes before anything is timed; the benchmark
 interleaves the implementations and keeps the best of several runs. It needs
-`protoc`, a C compiler and the gem:
+`protoc`, a C compiler and the gem. Copied from that file, which is the single
+source for all performance numbers; higher is better, MB/s over wire bytes:
+
+| payload | op | pbwire-ruby (MB/s, x gem) | gem (MB/s) |
+|---|---|---|---|
+| 136 B | encode | 966.3 (1.42x) | 680.4 |
+| 136 B | decode | 377.2 (1.58x) | 238.1 |
+| 174 B | encode | 886.4 (1.11x) | 795.9 |
+| 174 B | decode | 469.6 (1.91x) | 246.4 |
+| 2469 B | encode | 1221.4 (0.97x) | 1262.6 |
+| 2469 B | decode | 972.4 (1.93x) | 503.2 |
+| 74913 B | encode | 1427.1 (1.05x) | 1360.9 |
+| 74913 B | decode | 1186.7 (1.69x) | 700.8 |
 
 ```shell
 gem install google-protobuf
 RUBY=$(command -v ruby) make ruby-bench
 ```
 
-The result (best-of-3 runs, Apple M4 Pro, Ruby 4.0.9, `google-protobuf` 4.36.2):
-pbwire is ahead of the gem on all eight rows -- 1.04-1.25x on encode and
-1.66-1.93x on decode. The win is architectural, not a micro-optimization:
+The win is architectural, not a micro-optimization:
 
 - **Encoding** writes one pass from the C tree straight into the String that is
   returned; there is no intermediate buffer and no per-field Ruby call.

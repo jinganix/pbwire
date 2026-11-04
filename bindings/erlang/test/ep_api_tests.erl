@@ -4,39 +4,39 @@
 -include_lib("gpb/include/gpb.hrl").
 
 encode_without_cache_test() ->
-    ok = enif_protobuf:purge_cache(),
-    ?assertError(cache_not_exists, enif_protobuf:encode({m1, 1})).
+    ok = pbwire:purge_cache(),
+    ?assertError(cache_not_exists, pbwire:encode({m1, 1})).
 
 decode_without_cache_test() ->
-    ok = enif_protobuf:purge_cache(),
-    ?assertError(cache_not_exists, enif_protobuf:decode(<<>>, m1)).
+    ok = pbwire:purge_cache(),
+    ?assertError(cache_not_exists, pbwire:decode(<<>>, m1)).
 
 encode_badarg_test() ->
     ok = ep_test_helpers:load_cache(ep_test_helpers:simple_int32_defs()),
-    ?assertError(badarg, enif_protobuf:encode(not_a_tuple)).
+    ?assertError(badarg, pbwire:encode(not_a_tuple)).
 
 decode_badarg_test() ->
     ok = ep_test_helpers:load_cache(ep_test_helpers:simple_int32_defs()),
-    ?assertError(badarg, enif_protobuf:decode(not_a_binary, m1)),
-    ?assertError(not_an_atom, enif_protobuf:decode(<<>>, not_an_atom)).
+    ?assertError(badarg, pbwire:decode(not_a_binary, m1)),
+    ?assertError(not_an_atom, pbwire:decode(<<>>, not_an_atom)).
 
 unknown_message_name_test() ->
     ok = ep_test_helpers:load_cache(ep_test_helpers:simple_int32_defs()),
-    ?assertError(unknown_msg, enif_protobuf:decode(<<8, 1>>, unknown_msg)).
+    ?assertError(unknown_msg, pbwire:decode(<<8, 1>>, unknown_msg)).
 
 encode_msg_test() ->
     Defs = ep_test_helpers:person_defs(),
     Msg = {'Person', "abc def", 345, "a@example.com"},
-    Bin = enif_protobuf:encode_msg(Msg, Defs),
+    Bin = pbwire:encode_msg(Msg, Defs),
     ?assert(is_binary(Bin)),
-    Msg2 = enif_protobuf:decode_msg(Bin, 'Person', Defs),
+    Msg2 = pbwire:decode_msg(Bin, 'Person', Defs),
     ?assertEqual(Msg, Msg2).
 
 decode_msg_test() ->
     Defs = ep_test_helpers:person_defs(),
     Bin = <<10, 7, 97, 98, 99, 32, 100, 101, 102, 16, 217, 2, 26, 13, 97, 64,
         101, 120, 97, 109, 112, 108, 101, 46, 99, 111, 109>>,
-    {'Person', Name, Id, Email} = enif_protobuf:decode_msg(Bin, 'Person', Defs),
+    {'Person', Name, Id, Email} = pbwire:decode_msg(Bin, 'Person', Defs),
     ?assertEqual("abc def", Name),
     ?assertEqual(345, Id),
     ?assertEqual("a@example.com", Email).
@@ -44,17 +44,17 @@ decode_msg_test() ->
 purge_cache_test() ->
     Defs = ep_test_helpers:simple_int32_defs(),
     ok = ep_test_helpers:load_cache(Defs),
-    _ = enif_protobuf:encode({m1, 1}),
-    ok = enif_protobuf:purge_cache(),
-    ?assertError(cache_not_exists, enif_protobuf:encode({m1, 1})).
+    _ = pbwire:encode({m1, 1}),
+    ok = pbwire:purge_cache(),
+    ?assertError(cache_not_exists, pbwire:encode({m1, 1})).
 
 reload_cache_after_purge_test() ->
     Defs = ep_test_helpers:simple_int32_defs(),
     ok = ep_test_helpers:load_cache(Defs),
-    Bin1 = enif_protobuf:encode({m1, 1}),
-    ok = enif_protobuf:purge_cache(),
+    Bin1 = pbwire:encode({m1, 1}),
+    ok = pbwire:purge_cache(),
     ok = ep_test_helpers:load_cache(Defs),
-    Bin2 = enif_protobuf:encode({m1, 1}),
+    Bin2 = pbwire:encode({m1, 1}),
     ?assertEqual(Bin1, Bin2).
 
 set_opts_test() ->
@@ -62,11 +62,11 @@ set_opts_test() ->
         #field{name = a, fnum = 1, rnum = 2, type = string, occurrence = required, opts = []}
     ]}],
     Bin = <<10, 3, 97, 98, 99>>,
-    ok = enif_protobuf:set_opts([{string_as_list, true}]),
-    ok = enif_protobuf:load_cache(Defs),
-    {m1, "abc"} = enif_protobuf:decode(Bin, m1),
-    ok = enif_protobuf:set_opts([{string_as_list, false}]),
-    {m1, <<"abc">>} = enif_protobuf:decode(Bin, m1).
+    ok = pbwire:set_opts([{string_as_list, true}]),
+    ok = pbwire:load_cache(Defs),
+    {m1, "abc"} = pbwire:decode(Bin, m1),
+    ok = pbwire:set_opts([{string_as_list, false}]),
+    {m1, <<"abc">>} = pbwire:decode(Bin, m1).
 
 set_opts_utf8_test() ->
     Defs = ep_test_helpers:person_defs(),

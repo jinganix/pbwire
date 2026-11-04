@@ -14,29 +14,29 @@ varint(N) -> <<(16#80 bor (N band 16#7F)), (varint(N bsr 7))/binary>>.
 %% next tag is not misread (gpb decodes `Value =/= 0`).
 bool_varint_parity_test() ->
     Defs = [{{msg, b}, [field(a, 1, 2, bool, optional)]}],
-    ok = enif_protobuf:load_cache(Defs),
+    ok = pbwire:load_cache(Defs),
     Cases = [{<<8, 16#80, 1>>, true}, {<<8, 2>>, true}, {<<8, 0>>, false}],
     lists:foreach(
         fun({Wire, Expected}) ->
-            ?assertEqual({b, Expected}, enif_protobuf:decode(Wire, b)),
+            ?assertEqual({b, Expected}, pbwire:decode(Wire, b)),
             ?assertEqual({b, Expected}, gpb:decode_msg(Wire, b, Defs))
         end, Cases),
-    ?assertEqual(gpb:encode_msg({b, true}, Defs), enif_protobuf:encode({b, true})),
-    ?assertEqual(gpb:encode_msg({b, false}, Defs), enif_protobuf:encode({b, false})).
+    ?assertEqual(gpb:encode_msg({b, true}, Defs), pbwire:encode({b, true})),
+    ?assertEqual(gpb:encode_msg({b, false}, Defs), pbwire:encode({b, false})).
 
 %% Zigzag values are masked to the declared width before decoding, like gpb.
 sint_extremes_and_oversized_parity_test() ->
     Defs = [{{msg, s}, [field(a, 1, 2, sint32, optional), field(c, 2, 3, sint64, optional)]}],
-    ok = enif_protobuf:load_cache(Defs),
+    ok = pbwire:load_cache(Defs),
     lists:foreach(
         fun(V) ->
             Bin = gpb:encode_msg({s, V, 0}, Defs),
-            ?assertEqual(Bin, enif_protobuf:encode({s, V, 0})),
-            ?assertEqual({s, V, 0}, enif_protobuf:decode(Bin, s))
+            ?assertEqual(Bin, pbwire:encode({s, V, 0})),
+            ?assertEqual({s, V, 0}, pbwire:decode(Bin, s))
         end, [-2147483648, -1, 0, 1, 2147483647]),
     %% varint 2^32+1: gpb masks to 32 bits first, giving -1 rather than INT32_MIN
     Oversized = <<8, 16#81, 16#80, 16#80, 16#80, 16#10>>,
-    ?assertEqual(gpb:decode_msg(Oversized, s, Defs), enif_protobuf:decode(Oversized, s)).
+    ?assertEqual(gpb:decode_msg(Oversized, s, Defs), pbwire:decode(Oversized, s)).
 
 %% proto3 omits the enum type default (value 0); the other values are sent even
 %% when their name sorts first.
@@ -45,27 +45,27 @@ proto3_enum_default_parity_test() ->
             {proto3_msgs, [e]},
             {{enum, en}, [{zzz_zero, 0}, {aaa_one, 1}]},
             {{msg, e}, [field(v, 1, 2, {enum, en}, defaulty)]}],
-    ok = enif_protobuf:load_cache(Defs),
-    ?assertEqual(gpb:encode_msg({e, aaa_one}, Defs), enif_protobuf:encode({e, aaa_one})),
-    ?assertEqual(<<>>, enif_protobuf:encode({e, zzz_zero})),
-    ?assertEqual({e, zzz_zero}, enif_protobuf:decode(<<>>, e)).
+    ok = pbwire:load_cache(Defs),
+    ?assertEqual(gpb:encode_msg({e, aaa_one}, Defs), pbwire:encode({e, aaa_one})),
+    ?assertEqual(<<>>, pbwire:encode({e, zzz_zero})),
+    ?assertEqual({e, zzz_zero}, pbwire:decode(<<>>, e)).
 
 %% Deeply nested messages grow the decoder's spot stack; the result must match
 %% gpb instead of crashing or truncating.
 deep_recursive_message_parity_test() ->
     Defs = [{{msg, r}, [field(a, 1, 2, {msg, r}, optional)]}],
-    ok = enif_protobuf:load_cache(Defs),
+    ok = pbwire:load_cache(Defs),
     Wire = lists:foldl(fun(_, Acc) -> <<10, (varint(byte_size(Acc)))/binary, Acc/binary>> end,
                        <<>>, lists:seq(1, 200)),
-    ?assertEqual(gpb:decode_msg(Wire, r, Defs), enif_protobuf:decode(Wire, r)).
+    ?assertEqual(gpb:decode_msg(Wire, r, Defs), pbwire:decode(Wire, r)).
 
 %% A charlist longer than the encoder's initial buffer must grow it safely.
 long_utf8_charlist_roundtrip_test() ->
-    ok = enif_protobuf:set_opts([{with_utf8, true}, {string_as_list, true}]),
-    ok = enif_protobuf:load_cache([{{msg, u}, [field(s, 1, 2, string, optional)]}]),
+    ok = pbwire:set_opts([{with_utf8, true}, {string_as_list, true}]),
+    ok = pbwire:load_cache([{{msg, u}, [field(s, 1, 2, string, optional)]}]),
     Long = lists:duplicate(20000, 16#800),
-    Bin = enif_protobuf:encode({u, Long}),
-    ?assertEqual({u, Long}, enif_protobuf:decode(Bin, u)).
+    Bin = pbwire:encode({u, Long}),
+    ?assertEqual({u, Long}, pbwire:decode(Bin, u)).
 
 %% A schema may refer to its own message. load_cache/1 has to link that
 %% reference, and a tree of nested children must round-trip byte for byte.
@@ -76,15 +76,15 @@ self_recursive_message_roundtrip_test() ->
         field(float_v, 3, 4, float, optional),
         field(list, 4, 5, {msg, p_v}, repeated)
     ]}],
-    ok = enif_protobuf:set_opts([{string_as_list, true}, {with_utf8, true}]),
-    ok = enif_protobuf:load_cache(Defs),
+    ok = pbwire:set_opts([{string_as_list, true}, {with_utf8, true}]),
+    ok = pbwire:load_cache(Defs),
     Msg = {p_v, 1001, "root", 1.5, [
         {p_v, 1002, "child_1", 2.5, []},
         {p_v, 1003, "child_2", 3.5, [{p_v, 1004, "leaf", 4.5, []}]}
     ]},
     Bin = gpb:encode_msg(Msg, Defs),
-    ?assertEqual(Bin, enif_protobuf:encode(Msg)),
-    ?assertEqual(Msg, enif_protobuf:decode(Bin, p_v)),
+    ?assertEqual(Bin, pbwire:encode(Msg)),
+    ?assertEqual(Msg, pbwire:decode(Bin, p_v)),
     ?assertEqual(Msg, gpb:decode_msg(Bin, p_v, Defs)).
 
 %% A captured real-world message: repeated nested messages, UTF-8 strings and
@@ -93,15 +93,15 @@ self_recursive_message_roundtrip_test() ->
 real_world_message_parity_test() ->
     Defs = real_world_defs(),
     Wire = real_world_wire(),
-    ok = enif_protobuf:set_opts([{with_utf8, true}]),
-    ok = enif_protobuf:load_cache(Defs),
+    ok = pbwire:set_opts([{with_utf8, true}]),
+    ok = pbwire:load_cache(Defs),
     GpbMsg = gpb:decode_msg(Wire, auth2s, Defs),
-    EpbMsg = enif_protobuf:decode(Wire, auth2s),
+    EpbMsg = pbwire:decode(Wire, auth2s),
     GpbBin = gpb:encode_msg(GpbMsg, Defs),
-    EpbBin = enif_protobuf:encode(EpbMsg),
+    EpbBin = pbwire:encode(EpbMsg),
     ?assertEqual(GpbBin, EpbBin),
     ?assertEqual(GpbMsg, gpb:decode_msg(EpbBin, auth2s, Defs)),
-    ?assertEqual(EpbMsg, enif_protobuf:decode(GpbBin, auth2s)).
+    ?assertEqual(EpbMsg, pbwire:decode(GpbBin, auth2s)).
 
 real_world_defs() ->
     [

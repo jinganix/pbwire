@@ -39,7 +39,10 @@ read_varint(reader *r, uint64_t *out)
 {
     size_t used;
 
-    if (r->end - r->p >= 2) {
+    if (r == NULL || r->p == NULL || r->end == NULL || out == NULL) {
+        return 0;
+    }
+    if (pbw_remaining(r->end, r->p) >= 2) {
         uint32_t first = r->p[0];
 
         if (first < 0x80) {
@@ -81,13 +84,13 @@ skip_value(reader *r, uint32_t number, uint32_t wire_type,
     case PBW_WIRE_VARINT:
         return read_varint(r, &scratch) ? PBW_OK : PBW_ERR_INVALID;
     case PBW_WIRE_64BIT:
-        if ((size_t)(r->end - r->p) < 8) {
+        if (pbw_remaining(r->end, r->p) < 8) {
             return PBW_ERR_INVALID;
         }
         r->p += 8;
         return PBW_OK;
     case PBW_WIRE_32BIT:
-        if ((size_t)(r->end - r->p) < 4) {
+        if (pbw_remaining(r->end, r->p) < 4) {
             return PBW_ERR_INVALID;
         }
         r->p += 4;
@@ -97,7 +100,7 @@ skip_value(reader *r, uint32_t number, uint32_t wire_type,
             return PBW_ERR_INVALID;
         }
         r->p += used;
-        if (len > (size_t)(r->end - r->p)) {
+        if (len > pbw_remaining(r->end, r->p)) {
             return PBW_ERR_INVALID;
         }
         r->p += len;
@@ -157,8 +160,11 @@ skip_field(reader *r, pbw_message *msg, uint32_t number, uint32_t wire_type,
     if (status != PBW_OK) {
         return status;
     }
+    if (start == NULL || r->p == NULL || r->p < start) {
+        return PBW_ERR_INVALID;
+    }
     return (pbw_status)pbw_message_add_unknown(msg, start,
-                                               (size_t)(r->p - start));
+                                               pbw_remaining(r->p, start));
 }
 
 /* Reads one scalar of the given type. Strings/bytes/messages are handled by the
@@ -206,7 +212,7 @@ read_scalar(reader *r, pbw_type type, uint64_t *out)
     case PBW_TYPE_FIXED32:
     case PBW_TYPE_SFIXED32:
     case PBW_TYPE_FLOAT:
-        if ((size_t)(r->end - r->p) < 4) {
+        if (pbw_remaining(r->end, r->p) < 4) {
             return PBW_ERR_INVALID;
         }
         *out = (uint64_t)dec_le32(r->p);
@@ -215,7 +221,7 @@ read_scalar(reader *r, pbw_type type, uint64_t *out)
     case PBW_TYPE_FIXED64:
     case PBW_TYPE_SFIXED64:
     case PBW_TYPE_DOUBLE:
-        if ((size_t)(r->end - r->p) < 8) {
+        if (pbw_remaining(r->end, r->p) < 8) {
             return PBW_ERR_INVALID;
         }
         *out = dec_le64(r->p);
@@ -236,8 +242,9 @@ read_length(reader *r, const uint8_t **data, size_t *len)
      * generic reader is a call into wire.c for what is one compare and add. */
     if (r->p < r->end && r->p[0] < 0x80) {
         size_t n = r->p[0];
+        size_t avail = pbw_remaining(r->end, r->p);
 
-        if (n > (size_t)(r->end - r->p) - 1) {
+        if (avail < 1 || n > avail - 1) {
             return PBW_ERR_INVALID;
         }
         *data = r->p + 1;
@@ -249,7 +256,7 @@ read_length(reader *r, const uint8_t **data, size_t *len)
         return PBW_ERR_INVALID;
     }
     r->p += used;
-    if (value > (size_t)(r->end - r->p)) {
+    if (value > pbw_remaining(r->end, r->p)) {
         return PBW_ERR_INVALID;
     }
     *data = r->p;
@@ -299,6 +306,12 @@ store_bytes_first(pbw_message *msg, size_t index, const uint8_t *data,
     pbw_value *slot = &msg->values[index];
     uint8_t *copy;
 
+    if (len > SIZE_MAX - 1) {
+        return 0;
+    }
+    if (len > 0 && data == NULL) {
+        return 0;
+    }
     if (msg->arena != NULL) {
         copy = (uint8_t *)pbw_arena_alloc(msg->arena, len + 1);
     } else {
@@ -320,33 +333,53 @@ store_bytes_first(pbw_message *msg, size_t index, const uint8_t *data,
     return 1;
 }
 
+/* One decode loop's repeated-append cache. A repeated field's list lives in
+ * its message slot and never moves, so once created it stays valid for the
+ * whole decode_fields()/decode_group_contents() invocation: every later
+ * item of the same field skips the get-or-create call. The kind check keeps
+ * this safe even if a slot ever held something else. */
+typedef struct {
+    const pbw_field *field;
+    pbw_value *list;
+} rep_cache;
+
 /* Appends one value to a repeated field. Returns PBW_OK or PBW_ERR_NOMEM. */
-static pbw_status
-append_item(pbw_message *msg, const pbw_field *field, pbw_value *item)
+PBW_INLINE pbw_status
+rep_append(pbw_message *msg, const pbw_field *field, pbw_value *item,
+           rep_cache *rep)
 {
     pbw_value *list;
 
     if (item == NULL) {
         return PBW_ERR_NOMEM;
     }
-    list = pbw_message_list_for(msg, field);
-    if (list == NULL || !pbw_value_list_push(list, item, msg->arena)) {
+    if (rep->field == field && rep->list != NULL &&
+        rep->list->kind == PBW_VALUE_LIST) {
+        list = rep->list;
+    } else {
+        list = pbw_message_list_for(msg, field);
+        if (list == NULL) {
+            pbw_value_free(item);
+            return PBW_ERR_NOMEM;
+        }
+        rep->field = field;
+        rep->list = list;
+    }
+    if (!pbw_value_list_push(list, item, msg->arena)) {
         pbw_value_free(item);
         return PBW_ERR_NOMEM;
     }
     return PBW_OK;
 }
 
-/* Two-byte tag fast path: field numbers 16..2047 encode to two bytes
- * (first byte has the high bit set, second does not). They are common in
- * any schema with more than fifteen fields, so they get the same inline
- * handling as one-byte tags instead of going through pbw_tag_read() and
- * the generic field logic. Anything ineligible (oneof members, groups,
- * closed enums) falls through to read_field()/read_packed() below. */
+/* Two-byte tag reader: field numbers 16..2047 encode to two bytes
+ * (first byte has the high bit set, second does not). The field lookup and
+ * the action switch below are shared with every other tag size. */
 PBW_INLINE int
 decode_tag2(const uint8_t *p, const uint8_t *end, uint32_t *tag)
 {
-    if ((size_t)(end - p) < 2 || p[0] < 0x80 || p[1] >= 0x80) {
+    if (p == NULL || end == NULL || tag == NULL ||
+        pbw_remaining(end, p) < 2 || p[0] < 0x80 || p[1] >= 0x80) {
         return 0;
     }
     *tag = (uint32_t)(p[0] & 0x7f) | ((uint32_t)p[1] << 7);
@@ -360,9 +393,9 @@ static pbw_status decode_message(pbw_arena *arena, const pbw_descriptor *desc,
                                  pbw_message **out, uint32_t depth, uint32_t dlim);
 static pbw_status read_field(reader *r, const pbw_field *field,
                              pbw_message *msg, uint32_t depth, uint32_t dlim,
-                             const uint8_t *start, int closed);
+                             const uint8_t *start, int closed, rep_cache *rep);
 static pbw_status read_packed(reader *r, const pbw_field *field,
-                              pbw_message *msg, int closed);
+                              pbw_message *msg, int closed, rep_cache *rep);
 
 /* Reads the body of a group: fields of `group` until the END_GROUP tag that
  * matches `number`. Same field rules as decode_fields, only the terminator
@@ -372,6 +405,7 @@ decode_group_contents(reader *r, pbw_message *group, uint32_t number,
                       uint32_t depth, uint32_t dlim)
 {
     const pbw_descriptor *desc = group->desc;
+    rep_cache rep = {NULL, NULL};
 
     if (depth >= dlim) {
         return PBW_ERR_LIMIT;
@@ -413,11 +447,11 @@ decode_group_contents(reader *r, pbw_message *group, uint32_t number,
             status = skip_field(r, group, fnum, wire_type, depth, dlim, start);
         } else if (wire_type == field->wire_type) {
             status = read_field(r, field, group, depth, dlim, start,
-                                desc->has_closed_enum);
+                                desc->has_closed_enum, &rep);
         } else if (wire_type == PBW_WIRE_LEN &&
                    field->label == PBW_LABEL_REPEATED &&
                    pbw_is_packable(field->type)) {
-            status = read_packed(r, field, group, desc->has_closed_enum);
+            status = read_packed(r, field, group, desc->has_closed_enum, &rep);
         } else {
             status = skip_field(r, group, fnum, wire_type, depth, dlim, start);
         }
@@ -431,7 +465,7 @@ decode_group_contents(reader *r, pbw_message *group, uint32_t number,
  * matching END_GROUP. Singular groups merge like singular messages. */
 static pbw_status
 read_group_field(reader *r, const pbw_field *field, pbw_message *msg,
-                 uint32_t depth, uint32_t dlim)
+                 uint32_t depth, uint32_t dlim, rep_cache *rep)
 {
     size_t index = (size_t)(field - msg->desc->fields);
     pbw_message *nested = NULL;
@@ -466,7 +500,7 @@ read_group_field(reader *r, const pbw_field *field, pbw_message *msg,
             pbw_message_free(nested);
             return PBW_ERR_NOMEM;
         }
-        return append_item(msg, field, item);
+        return rep_append(msg, field, item, rep);
     }
     {
         pbw_value value;
@@ -482,40 +516,79 @@ read_group_field(reader *r, const pbw_field *field, pbw_message *msg,
 /* A repeated numeric field may arrive packed regardless of the descriptor
  * flag. */
 static pbw_status
-read_packed(reader *r, const pbw_field *field, pbw_message *msg, int closed)
+read_packed(reader *r, const pbw_field *field, pbw_message *msg, int closed,
+            rep_cache *rep)
 {
     const uint8_t *data;
     size_t data_len;
     pbw_status status;
     reader sub;
+    pbw_value *vlist;
+    pbw_value **items;
+    uint32_t len;
+    uint32_t cap;
 
     status = read_length(r, &data, &data_len);
     if (status != PBW_OK) {
         return status;
     }
+    if (data == NULL) {
+        return data_len == 0 ? PBW_OK : PBW_ERR_INVALID;
+    }
+    if (data_len == 0) {
+        /* An empty packed field stays absent: no list is created for it. */
+        return PBW_OK;
+    }
     /* Fixed-width items divide the length exactly, so the count is known
      * before the first item: reserve it and skip the push growth chain.
-     * The length guard also keeps an empty packed field absent (no list is
-     * created for it, as before). Both tests below are loop-invariant. */
-    if (data_len > 0 && (field->type == PBW_TYPE_FIXED32 ||
-                         field->type == PBW_TYPE_SFIXED32 ||
-                         field->type == PBW_TYPE_FLOAT ||
-                         field->type == PBW_TYPE_FIXED64 ||
-                         field->type == PBW_TYPE_SFIXED64 ||
-                         field->type == PBW_TYPE_DOUBLE)) {
+     * Varint runs count their items the same way: every value ends on a
+     * byte without the continuation bit. Only worth a scan past 64 bytes;
+     * shorter runs grow at most three times. */
+    vlist = pbw_message_list_for(msg, field);
+    if (vlist == NULL) {
+        return PBW_ERR_NOMEM;
+    }
+    rep->field = field;
+    rep->list = vlist;
+    if (data_len > 64 && field->type != PBW_TYPE_FIXED32 &&
+        field->type != PBW_TYPE_SFIXED32 && field->type != PBW_TYPE_FLOAT &&
+        field->type != PBW_TYPE_FIXED64 &&
+        field->type != PBW_TYPE_SFIXED64 && field->type != PBW_TYPE_DOUBLE) {
+        size_t n = 0;
+        size_t k;
+
+        for (k = 0; k < data_len; k++) {
+            n += (size_t)(data[k] < 0x80);
+        }
+        if (!pbw_value_list_reserve(
+                vlist, n > UINT32_MAX ? UINT32_MAX : (uint32_t)n,
+                msg->arena)) {
+            return PBW_ERR_NOMEM;
+        }
+    } else if (field->type == PBW_TYPE_FIXED32 ||
+               field->type == PBW_TYPE_SFIXED32 ||
+               field->type == PBW_TYPE_FLOAT ||
+               field->type == PBW_TYPE_FIXED64 ||
+               field->type == PBW_TYPE_SFIXED64 ||
+               field->type == PBW_TYPE_DOUBLE) {
         size_t width = (field->type == PBW_TYPE_FIXED64 ||
                         field->type == PBW_TYPE_SFIXED64 ||
                         field->type == PBW_TYPE_DOUBLE)
                            ? 8u
                            : 4u;
-        pbw_value *list = pbw_message_list_for(msg, field);
 
-        if (list == NULL ||
-            !pbw_value_list_reserve(list, (uint32_t)(data_len / width),
-                                    msg->arena)) {
+        if (!pbw_value_list_reserve(
+                vlist,
+                data_len / width > UINT32_MAX
+                    ? UINT32_MAX
+                    : (uint32_t)(data_len / width),
+                msg->arena)) {
             return PBW_ERR_NOMEM;
         }
     }
+    items = vlist->as.list.items;
+    len = vlist->as.list.len;
+    cap = vlist->as.list.cap;
     sub.p = data;
     sub.end = data + data_len;
     {
@@ -524,6 +597,7 @@ read_packed(reader *r, const pbw_field *field, pbw_message *msg, int closed)
         while (sub.p < sub.end) {
             const uint8_t *item = sub.p;
             uint64_t bits;
+            pbw_value *node;
 
             status = read_scalar(&sub, field->type, &bits);
             if (status != PBW_OK) {
@@ -532,30 +606,51 @@ read_packed(reader *r, const pbw_field *field, pbw_message *msg, int closed)
             if (closed_enum &&
                 !pbw_enum_find_name(field->sub, (int32_t)bits, NULL)) {
                 /* A closed enum's unknown value leaves the field: the reference
-                 * parsers keep it as an unpacked unknown field instead. */
+                 * parsers keep it as an unpacked unknown field instead. The
+                 * list locals stay untouched: only the unknown bytes grow. */
                 status = (pbw_status)pbw_message_add_unknown(msg, field->tag,
                                                              field->tag_len);
                 if (status == PBW_OK) {
+                    if (item == NULL || sub.p == NULL || sub.p < item) {
+                        return PBW_ERR_INVALID;
+                    }
                     status = (pbw_status)pbw_message_add_unknown(
-                        msg, item, (size_t)(sub.p - item));
+                        msg, item, pbw_remaining(sub.p, item));
                 }
                 if (status != PBW_OK) {
                     return status;
                 }
                 continue;
             }
-            status = append_item(msg, field,
-                                 pbw_value_new_uint_a(msg->arena, bits));
-            if (status != PBW_OK) {
-                return status;
+            node = pbw_value_new_uint_a(msg->arena, bits);
+            if (node == NULL) {
+                return PBW_ERR_NOMEM;
             }
+            if (len == cap) {
+                /* Same doubling as pbw_value_list_push, through the shared
+                 * reserve: a push-equivalent growth without a call per item. */
+                uint32_t ncap = cap != 0 ? cap * 2u : 8u;
+                vlist->as.list.items = items;
+                vlist->as.list.len = len;
+                if (ncap < cap ||
+                    !pbw_value_list_reserve(vlist, ncap, msg->arena)) {
+                    pbw_value_free(node);
+                    return PBW_ERR_NOMEM;
+                }
+                items = vlist->as.list.items;
+                cap = vlist->as.list.cap;
+            }
+            items[len++] = node;
         }
     }
+    vlist->as.list.items = items;
+    vlist->as.list.len = len;
     return PBW_OK;
 }
 
 static pbw_status
-read_string_field(reader *r, const pbw_field *field, pbw_message *msg)
+read_string_field(reader *r, const pbw_field *field, pbw_message *msg,
+                  rep_cache *rep)
 {
     const uint8_t *data;
     size_t data_len;
@@ -566,8 +661,9 @@ read_string_field(reader *r, const pbw_field *field, pbw_message *msg)
         return status;
     }
     if (field->label == PBW_LABEL_REPEATED) {
-        return append_item(
-            msg, field, pbw_value_new_bytes_a(msg->arena, data, data_len));
+        return rep_append(
+            msg, field, pbw_value_new_bytes_a(msg->arena, data, data_len),
+            rep);
     }
     {
         pbw_value value;
@@ -582,7 +678,7 @@ read_string_field(reader *r, const pbw_field *field, pbw_message *msg)
 
 static pbw_status
 read_message_field(reader *r, const pbw_field *field, pbw_message *msg,
-                   uint32_t depth, uint32_t dlim)
+                   uint32_t depth, uint32_t dlim, rep_cache *rep)
 {
     const uint8_t *data;
     size_t data_len;
@@ -622,7 +718,7 @@ read_message_field(reader *r, const pbw_field *field, pbw_message *msg,
             pbw_message_free(nested);
             return PBW_ERR_NOMEM;
         }
-        return append_item(msg, field, item);
+        return rep_append(msg, field, item, rep);
     }
     {
         pbw_value value;
@@ -640,7 +736,8 @@ read_message_field(reader *r, const pbw_field *field, pbw_message *msg,
  * fields can be kept byte for byte. */
 static pbw_status
 read_field(reader *r, const pbw_field *field, pbw_message *msg,
-           uint32_t depth, uint32_t dlim, const uint8_t *start, int closed)
+           uint32_t depth, uint32_t dlim, const uint8_t *start, int closed,
+           rep_cache *rep)
 {
     size_t index = (size_t)(field - msg->desc->fields);
     pbw_status status;
@@ -648,13 +745,13 @@ read_field(reader *r, const pbw_field *field, pbw_message *msg,
     pbw_value value;
 
     if (field->type == PBW_TYPE_STRING || field->type == PBW_TYPE_BYTES) {
-        return read_string_field(r, field, msg);
+        return read_string_field(r, field, msg, rep);
     }
     if (field->type == PBW_TYPE_MESSAGE) {
-        return read_message_field(r, field, msg, depth, dlim);
+        return read_message_field(r, field, msg, depth, dlim, rep);
     }
     if (field->type == PBW_TYPE_GROUP) {
-        return read_group_field(r, field, msg, depth, dlim);
+        return read_group_field(r, field, msg, depth, dlim, rep);
     }
 
     status = read_scalar(r, field->type, &bits);
@@ -665,8 +762,12 @@ read_field(reader *r, const pbw_field *field, pbw_message *msg,
         !pbw_enum_find_name(field->sub, (int32_t)bits, NULL)) {
         /* A closed enum's unknown value leaves the field: the reference parsers
          * keep it as an unknown field instead. */
+        if (start == NULL || r->p == NULL || r->p < start) {
+            return PBW_ERR_INVALID;
+        }
         return (pbw_status)pbw_message_add_unknown(msg, start,
-                                                   (size_t)(r->p - start));
+                                                   pbw_remaining(r->p,
+                                                                 start));
     }
     if (field->label != PBW_LABEL_REPEATED) {
         if (field->oneof_index == 0 && !pbw_msg_present(msg, index)) {
@@ -680,21 +781,38 @@ read_field(reader *r, const pbw_field *field, pbw_message *msg,
         pbw_message_put(msg, index, &value);
         return PBW_OK;
     }
-    return append_item(msg, field, pbw_value_new_uint_a(msg->arena, bits));
+    return rep_append(msg, field, pbw_value_new_uint_a(msg->arena, bits),
+                      rep);
 }
 
 static pbw_status
 decode_fields(pbw_message *msg, const uint8_t *buf, size_t len, uint32_t depth, uint32_t dlim)
 {
     reader r;
-    const pbw_descriptor *desc = msg->desc;
-    pbw_field *const *fnum_map = desc->fnum_map;
-    uint32_t fnum_map_size = desc->fnum_map_size;
-    pbw_field *const *tag_map = desc->tag_map;
-    const uint8_t *tag_action = desc->tag_action;
-    int closed = desc->has_closed_enum;
+    const pbw_descriptor *desc;
+    pbw_field *const *fnum_map;
+    uint32_t fnum_map_size;
+    pbw_field *const *tag_map;
+    int closed;
+    rep_cache rep = {NULL, NULL};
+
+    if (msg == NULL || msg->desc == NULL || (buf == NULL && len > 0)) {
+        return PBW_ERR_INVALID;
+    }
+    if (buf == NULL) {
+        buf = pbw_empty_input;
+    }
+    if (dlim == 0 || dlim > PBW_MAX_DEPTH) {
+        dlim = PBW_MAX_DEPTH;
+    }
+    desc = msg->desc;
+    fnum_map = desc->fnum_map;
+    fnum_map_size = desc->fnum_map_size;
+    tag_map = desc->tag_map;
+    closed = desc->has_closed_enum;
 
     r.p = buf;
+    /* buf is non-NULL here; len may be 0, so end is at most one past. */
     r.end = buf + len;
     while (r.p < r.end) {
         uint32_t tag;
@@ -704,12 +822,10 @@ decode_fields(pbw_message *msg, const uint8_t *buf, size_t len, uint32_t depth, 
         const pbw_field *field;
         const uint8_t *start = r.p;
         pbw_status status;
-        uint8_t action = PBW_ACT_GENERIC;
 
-        /* The next cache line usually holds the upcoming fields: prefetch
-         * it while the current one decodes. A prefetch of resident memory
-         * is a single cheap hint. */
-        PBW_PREFETCH(r.p + 64);
+        /* Tag sizes share one lookup: a one-byte tag indexes the link-time
+         * table, anything longer resolves through the field-number map. */
+
         /* One-byte tag (field number < 16): the common case, dispatched by
          * the link-time tag table with a single indexed load. */
         if (PBW_EXPECT(r.p < r.end && r.p[0] < 0x80, 1)) {
@@ -724,135 +840,9 @@ decode_fields(pbw_message *msg, const uint8_t *buf, size_t len, uint32_t depth, 
             /* No one-byte tag can be known when the table is missing: a
              * field numbered below 16 always encodes to one byte. */
             field = tag_map != NULL ? tag_map[tag] : NULL;
-            action = tag_action != NULL ? tag_action[tag] : PBW_ACT_GENERIC;
-            if (action != PBW_ACT_GENERIC) {
-                size_t index = (size_t)(field - desc->fields);
-                uint64_t bits;
-                switch (action) {
-                case PBW_ACT_I32:
-                    if (!read_varint(&r, &bits)) {
-                        return PBW_ERR_INVALID;
-                    }
-                    store_first_or_put(msg, index,
-                                       (uint64_t)(int64_t)(int32_t)bits);
-                    continue;
-                case PBW_ACT_I64:
-                    if (!read_varint(&r, &bits)) {
-                        return PBW_ERR_INVALID;
-                    }
-                    store_first_or_put(msg, index, bits);
-                    continue;
-                case PBW_ACT_U32:
-                    if (!read_varint(&r, &bits)) {
-                        return PBW_ERR_INVALID;
-                    }
-                    store_first_or_put(msg, index, (uint64_t)(uint32_t)bits);
-                    continue;
-                case PBW_ACT_S32:
-                    if (!read_varint(&r, &bits)) {
-                        return PBW_ERR_INVALID;
-                    }
-                    bits = (uint64_t)(int64_t)(int32_t)zigzag_decode(bits, 32);
-                    store_first_or_put(msg, index, bits);
-                    continue;
-                case PBW_ACT_S64:
-                    if (!read_varint(&r, &bits)) {
-                        return PBW_ERR_INVALID;
-                    }
-                    store_first_or_put(msg, index, zigzag_decode(bits, 64));
-                    continue;
-                case PBW_ACT_BOOL:
-                    if (!read_varint(&r, &bits)) {
-                        return PBW_ERR_INVALID;
-                    }
-                    store_first_or_put(msg, index, bits != 0 ? 1u : 0u);
-                    continue;
-                case PBW_ACT_F32:
-                    if ((size_t)(r.end - r.p) < 4) {
-                        return PBW_ERR_INVALID;
-                    }
-                    store_first_or_put(msg, index, dec_le32(r.p));
-                    r.p += 4;
-                    continue;
-                case PBW_ACT_F64:
-                    if ((size_t)(r.end - r.p) < 8) {
-                        return PBW_ERR_INVALID;
-                    }
-                    store_first_or_put(msg, index, dec_le64(r.p));
-                    r.p += 8;
-                    continue;
-                case PBW_ACT_STR: {
-                    const uint8_t *data;
-                    size_t data_len;
-                    status = read_length(&r, &data, &data_len);
-                    if (status != PBW_OK) {
-                        return status;
-                    }
-                    if (!pbw_msg_present(msg, index)) {
-                        if (!store_bytes_first(msg, index, data, data_len)) {
-                            return PBW_ERR_NOMEM;
-                        }
-                    } else {
-                        pbw_value value;
-                        if (!pbw_value_init_bytes(&value, msg->arena, data,
-                                                  data_len)) {
-                            return PBW_ERR_NOMEM;
-                        }
-                        pbw_message_put(msg, index, &value);
-                    }
-                    continue;
-                }
-                case PBW_ACT_MSG: {
-                    const uint8_t *data;
-                    size_t data_len;
-                    pbw_message *nested = NULL;
-                    if (depth >= dlim) {
-                        return PBW_ERR_LIMIT;
-                    }
-                    status = read_length(&r, &data, &data_len);
-                    if (status != PBW_OK) {
-                        return status;
-                    }
-                    if (pbw_msg_present(msg, index) &&
-                        msg->values[index].kind == PBW_VALUE_MESSAGE &&
-                        msg->values[index].as.msg != NULL &&
-                        msg->values[index].as.msg->desc == field->sub) {
-                        status = decode_fields(msg->values[index].as.msg, data,
-                                               data_len, depth + 1, dlim);
-                        if (status != PBW_OK) {
-                            return status;
-                        }
-                        continue;
-                    }
-                    status = decode_message(msg->arena, field->sub, data,
-                                            data_len, &nested, depth + 1, dlim);
-                    if (status != PBW_OK) {
-                        return status;
-                    }
-                    if (pbw_msg_present(msg, index)) {
-                        pbw_value_destroy(&msg->values[index]);
-                    }
-                    msg->values[index].kind = PBW_VALUE_MESSAGE;
-                    msg->values[index].flags = PBW_VF_EMBEDDED |
-                                               (msg->arena != NULL ? PBW_VF_ARENA : 0u);
-                    msg->values[index].as.msg = nested;
-                    pbw_msg_set_present(msg, index, 1);
-                    continue;
-                }
-                case PBW_ACT_PACKED:
-                    status = read_packed(&r, field, msg, 0);
-                    if (status != PBW_OK) {
-                        return status;
-                    }
-                    continue;
-                default:
-                    break;
-                }
-            }
         } else if (decode_tag2(r.p, r.end, &tag)) {
-            /* Two-byte tag (field number 16..2047): same inline handling
-             * as one-byte tags. Ineligible shapes fall through to the
-             * shared generic logic below. */
+            /* Two-byte tag (field number 16..2047): same lookup as any
+             * other multibyte tag; the action switch below is shared. */
             r.p += 2;
             wire_type = tag & 7;
             number = tag >> 3;
@@ -864,207 +854,6 @@ decode_fields(pbw_message *msg, const uint8_t *buf, size_t len, uint32_t depth, 
                 field = number < fnum_map_size ? fnum_map[number] : NULL;
             } else {
                 field = pbw_find_field(desc, number);
-            }
-            if (field != NULL && wire_type == field->wire_type &&
-                field->oneof_index == 0 && field->type != PBW_TYPE_GROUP &&
-                !(closed && pbw_enum_is_closed(field))) {
-                size_t index2 = (size_t)(field - desc->fields);
-                if (field->label != PBW_LABEL_REPEATED) {
-                    uint64_t bits2;
-                    switch (field->type) {
-                    case PBW_TYPE_INT32:
-                    case PBW_TYPE_ENUM:
-                        if (!read_varint(&r, &bits2)) {
-                            return PBW_ERR_INVALID;
-                        }
-                        store_first_or_put(msg, index2,
-                                           (uint64_t)(int64_t)(int32_t)bits2);
-                        continue;
-                    case PBW_TYPE_INT64:
-                    case PBW_TYPE_UINT64:
-                        if (!read_varint(&r, &bits2)) {
-                            return PBW_ERR_INVALID;
-                        }
-                        store_first_or_put(msg, index2, bits2);
-                        continue;
-                    case PBW_TYPE_UINT32:
-                        if (!read_varint(&r, &bits2)) {
-                            return PBW_ERR_INVALID;
-                        }
-                        store_first_or_put(msg, index2,
-                                           (uint64_t)(uint32_t)bits2);
-                        continue;
-                    case PBW_TYPE_SINT32:
-                        if (!read_varint(&r, &bits2)) {
-                            return PBW_ERR_INVALID;
-                        }
-                        bits2 = (uint64_t)(int64_t)(int32_t)zigzag_decode(
-                            bits2, 32);
-                        store_first_or_put(msg, index2, bits2);
-                        continue;
-                    case PBW_TYPE_SINT64:
-                        if (!read_varint(&r, &bits2)) {
-                            return PBW_ERR_INVALID;
-                        }
-                        store_first_or_put(msg, index2,
-                                           zigzag_decode(bits2, 64));
-                        continue;
-                    case PBW_TYPE_BOOL:
-                        if (!read_varint(&r, &bits2)) {
-                            return PBW_ERR_INVALID;
-                        }
-                        store_first_or_put(msg, index2,
-                                           bits2 != 0 ? 1u : 0u);
-                        continue;
-                    case PBW_TYPE_FIXED32:
-                    case PBW_TYPE_SFIXED32:
-                    case PBW_TYPE_FLOAT:
-                        if ((size_t)(r.end - r.p) < 4) {
-                            return PBW_ERR_INVALID;
-                        }
-                        store_first_or_put(msg, index2, dec_le32(r.p));
-                        r.p += 4;
-                        continue;
-                    case PBW_TYPE_FIXED64:
-                    case PBW_TYPE_SFIXED64:
-                    case PBW_TYPE_DOUBLE:
-                        if ((size_t)(r.end - r.p) < 8) {
-                            return PBW_ERR_INVALID;
-                        }
-                        store_first_or_put(msg, index2, dec_le64(r.p));
-                        r.p += 8;
-                        continue;
-                    case PBW_TYPE_STRING:
-                    case PBW_TYPE_BYTES: {
-                        const uint8_t *data2;
-                        size_t data_len2;
-                        status = read_length(&r, &data2, &data_len2);
-                        if (status != PBW_OK) {
-                            return status;
-                        }
-                        if (!pbw_msg_present(msg, index2)) {
-                            if (!store_bytes_first(msg, index2, data2,
-                                                   data_len2)) {
-                                return PBW_ERR_NOMEM;
-                            }
-                        } else {
-                            pbw_value value2;
-                            if (!pbw_value_init_bytes(&value2, msg->arena,
-                                                      data2, data_len2)) {
-                                return PBW_ERR_NOMEM;
-                            }
-                            pbw_message_put(msg, index2, &value2);
-                        }
-                        continue;
-                    }
-                    case PBW_TYPE_MESSAGE: {
-                        const uint8_t *data2;
-                        size_t data_len2;
-                        pbw_message *nested2 = NULL;
-                        if (depth >= dlim) {
-                            return PBW_ERR_LIMIT;
-                        }
-                        status = read_length(&r, &data2, &data_len2);
-                        if (status != PBW_OK) {
-                            return status;
-                        }
-                        if (pbw_msg_present(msg, index2) &&
-                            msg->values[index2].kind == PBW_VALUE_MESSAGE &&
-                            msg->values[index2].as.msg != NULL &&
-                            msg->values[index2].as.msg->desc == field->sub) {
-                            status = decode_fields(msg->values[index2].as.msg,
-                                                   data2, data_len2,
-                                                   depth + 1, dlim);
-                            if (status != PBW_OK) {
-                                return status;
-                            }
-                            continue;
-                        }
-                        status = decode_message(msg->arena, field->sub, data2,
-                                                data_len2, &nested2,
-                                                depth + 1, dlim);
-                        if (status != PBW_OK) {
-                            return status;
-                        }
-                        if (pbw_msg_present(msg, index2)) {
-                            pbw_value_destroy(&msg->values[index2]);
-                        }
-                        msg->values[index2].kind = PBW_VALUE_MESSAGE;
-                        msg->values[index2].flags = PBW_VF_EMBEDDED |
-                                                    (msg->arena != NULL ? PBW_VF_ARENA : 0u);
-                        msg->values[index2].as.msg = nested2;
-                        pbw_msg_set_present(msg, index2, 1);
-                        continue;
-                    }
-                    default:
-                        break;
-                    }
-                } else {
-                    /* Repeated unpacked form with a two-byte tag. Scalars
-                     * and bytes append inline; messages and groups use the
-                     * generic logic below (one call per item either way). */
-                    switch (field->type) {
-                    case PBW_TYPE_INT32:
-                    case PBW_TYPE_ENUM:
-                    case PBW_TYPE_INT64:
-                    case PBW_TYPE_UINT64:
-                    case PBW_TYPE_UINT32:
-                    case PBW_TYPE_SINT32:
-                    case PBW_TYPE_SINT64:
-                    case PBW_TYPE_BOOL: {
-                        uint64_t bits2;
-                        status = read_scalar(&r, field->type, &bits2);
-                        if (status != PBW_OK) {
-                            return status;
-                        }
-                        status = append_item(
-                            msg, field,
-                            pbw_value_new_uint_a(msg->arena, bits2));
-                        if (status != PBW_OK) {
-                            return status;
-                        }
-                        continue;
-                    }
-                    case PBW_TYPE_FIXED32:
-                    case PBW_TYPE_SFIXED32:
-                    case PBW_TYPE_FLOAT:
-                    case PBW_TYPE_FIXED64:
-                    case PBW_TYPE_SFIXED64:
-                    case PBW_TYPE_DOUBLE: {
-                        uint64_t bits2;
-                        status = read_scalar(&r, field->type, &bits2);
-                        if (status != PBW_OK) {
-                            return status;
-                        }
-                        status = append_item(
-                            msg, field,
-                            pbw_value_new_uint_a(msg->arena, bits2));
-                        if (status != PBW_OK) {
-                            return status;
-                        }
-                        continue;
-                    }
-                    case PBW_TYPE_STRING:
-                    case PBW_TYPE_BYTES: {
-                        const uint8_t *data2;
-                        size_t data_len2;
-                        status = read_length(&r, &data2, &data_len2);
-                        if (status != PBW_OK) {
-                            return status;
-                        }
-                        status = append_item(
-                            msg, field,
-                            pbw_value_new_bytes_a(msg->arena, data2,
-                                                  data_len2));
-                        if (status != PBW_OK) {
-                            return status;
-                        }
-                        continue;
-                    }
-                    default:
-                        break;
-                    }
-                }
             }
         } else if (pbw_tag_read(r.p, r.end, &tag, &used)) {
             r.p += used;
@@ -1085,13 +874,216 @@ decode_fields(pbw_message *msg, const uint8_t *buf, size_t len, uint32_t depth, 
         if (field == NULL) {
             status = skip_field(&r, msg, number, wire_type, depth, dlim, start);
         } else if (wire_type == field->wire_type) {
-            status = read_field(&r, field, msg, depth, dlim, start, closed);
+            /* One action switch for every tag size. The link-time action
+             * already encodes eligibility (oneof members, groups and closed
+             * enums stay generic), and a one-byte tag implies its wire type
+             * by construction, so no shape checks remain here. */
+            size_t index = (size_t)(field - desc->fields);
+            uint64_t bits;
+            switch (field->dec_action) {
+            case PBW_ACT_I32:
+                if (!read_varint(&r, &bits)) {
+                    return PBW_ERR_INVALID;
+                }
+                store_first_or_put(msg, index,
+                                   (uint64_t)(int64_t)(int32_t)bits);
+                continue;
+            case PBW_ACT_I64:
+                if (!read_varint(&r, &bits)) {
+                    return PBW_ERR_INVALID;
+                }
+                store_first_or_put(msg, index, bits);
+                continue;
+            case PBW_ACT_U32:
+                if (!read_varint(&r, &bits)) {
+                    return PBW_ERR_INVALID;
+                }
+                store_first_or_put(msg, index, (uint64_t)(uint32_t)bits);
+                continue;
+            case PBW_ACT_S32:
+                if (!read_varint(&r, &bits)) {
+                    return PBW_ERR_INVALID;
+                }
+                bits = (uint64_t)(int64_t)(int32_t)zigzag_decode(bits, 32);
+                store_first_or_put(msg, index, bits);
+                continue;
+            case PBW_ACT_S64:
+                if (!read_varint(&r, &bits)) {
+                    return PBW_ERR_INVALID;
+                }
+                store_first_or_put(msg, index, zigzag_decode(bits, 64));
+                continue;
+            case PBW_ACT_BOOL:
+                if (!read_varint(&r, &bits)) {
+                    return PBW_ERR_INVALID;
+                }
+                store_first_or_put(msg, index, bits != 0 ? 1u : 0u);
+                continue;
+            case PBW_ACT_F32:
+                if (pbw_remaining(r.end, r.p) < 4) {
+                    return PBW_ERR_INVALID;
+                }
+                store_first_or_put(msg, index, dec_le32(r.p));
+                r.p += 4;
+                continue;
+            case PBW_ACT_F64:
+                if (pbw_remaining(r.end, r.p) < 8) {
+                    return PBW_ERR_INVALID;
+                }
+                store_first_or_put(msg, index, dec_le64(r.p));
+                r.p += 8;
+                continue;
+            case PBW_ACT_STR: {
+                const uint8_t *data;
+                size_t data_len;
+                status = read_length(&r, &data, &data_len);
+                if (status != PBW_OK) {
+                    return status;
+                }
+                if (!pbw_msg_present(msg, index)) {
+                    if (!store_bytes_first(msg, index, data, data_len)) {
+                        return PBW_ERR_NOMEM;
+                    }
+                } else {
+                    pbw_value value;
+                    if (!pbw_value_init_bytes(&value, msg->arena, data,
+                                              data_len)) {
+                        return PBW_ERR_NOMEM;
+                    }
+                    pbw_message_put(msg, index, &value);
+                }
+                continue;
+            }
+            case PBW_ACT_MSG: {
+                const uint8_t *data;
+                size_t data_len;
+                pbw_message *nested = NULL;
+                if (depth >= dlim) {
+                    return PBW_ERR_LIMIT;
+                }
+                status = read_length(&r, &data, &data_len);
+                if (status != PBW_OK) {
+                    return status;
+                }
+                if (pbw_msg_present(msg, index) &&
+                    msg->values[index].kind == PBW_VALUE_MESSAGE &&
+                    msg->values[index].as.msg != NULL &&
+                    msg->values[index].as.msg->desc == field->sub) {
+                    status = decode_fields(msg->values[index].as.msg, data,
+                                           data_len, depth + 1, dlim);
+                    if (status != PBW_OK) {
+                        return status;
+                    }
+                    continue;
+                }
+                status = decode_message(msg->arena, field->sub, data,
+                                        data_len, &nested, depth + 1, dlim);
+                if (status != PBW_OK) {
+                    return status;
+                }
+                if (pbw_msg_present(msg, index)) {
+                    pbw_value_destroy(&msg->values[index]);
+                }
+                msg->values[index].kind = PBW_VALUE_MESSAGE;
+                msg->values[index].flags = PBW_VF_EMBEDDED |
+                                           (msg->arena != NULL ? PBW_VF_ARENA : 0u);
+                msg->values[index].as.msg = nested;
+                pbw_msg_set_present(msg, index, 1);
+                continue;
+            }
+            case PBW_ACT_REP_VARINT:
+                status = read_scalar(&r, field->type, &bits);
+                if (status != PBW_OK) {
+                    return status;
+                }
+                status = rep_append(msg, field,
+                                    pbw_value_new_uint_a(msg->arena, bits),
+                                    &rep);
+                if (status != PBW_OK) {
+                    return status;
+                }
+                continue;
+            case PBW_ACT_REP_F32:
+                if (pbw_remaining(r.end, r.p) < 4) {
+                    return PBW_ERR_INVALID;
+                }
+                bits = dec_le32(r.p);
+                r.p += 4;
+                status = rep_append(msg, field,
+                                    pbw_value_new_uint_a(msg->arena, bits),
+                                    &rep);
+                if (status != PBW_OK) {
+                    return status;
+                }
+                continue;
+            case PBW_ACT_REP_F64:
+                if (pbw_remaining(r.end, r.p) < 8) {
+                    return PBW_ERR_INVALID;
+                }
+                bits = dec_le64(r.p);
+                r.p += 8;
+                status = rep_append(msg, field,
+                                    pbw_value_new_uint_a(msg->arena, bits),
+                                    &rep);
+                if (status != PBW_OK) {
+                    return status;
+                }
+                continue;
+            case PBW_ACT_REP_STR: {
+                const uint8_t *data;
+                size_t data_len;
+                status = read_length(&r, &data, &data_len);
+                if (status != PBW_OK) {
+                    return status;
+                }
+                status = rep_append(
+                    msg, field,
+                    pbw_value_new_bytes_a(msg->arena, data, data_len),
+                    &rep);
+                if (status != PBW_OK) {
+                    return status;
+                }
+                continue;
+            }
+            case PBW_ACT_REP_MSG: {
+                const uint8_t *data;
+                size_t data_len;
+                pbw_message *nested = NULL;
+                pbw_value *item;
+                if (depth >= dlim) {
+                    return PBW_ERR_LIMIT;
+                }
+                status = read_length(&r, &data, &data_len);
+                if (status != PBW_OK) {
+                    return status;
+                }
+                status = decode_message(msg->arena, field->sub, data,
+                                        data_len, &nested, depth + 1, dlim);
+                if (status != PBW_OK) {
+                    return status;
+                }
+                item = pbw_value_new_message_a(msg->arena, nested);
+                if (item == NULL) {
+                    pbw_message_free(nested);
+                    return PBW_ERR_NOMEM;
+                }
+                status = rep_append(msg, field, item, &rep);
+                if (status != PBW_OK) {
+                    return status;
+                }
+                continue;
+            }
+            default:
+                break;
+            }
+            status = read_field(&r, field, msg, depth, dlim, start, closed,
+                                &rep);
         } else if (wire_type == PBW_WIRE_LEN &&
                    field->label == PBW_LABEL_REPEATED &&
                    pbw_is_packable(field->type)) {
             /* A repeated numeric field may arrive packed regardless of the
              * descriptor flag. */
-            status = read_packed(&r, field, msg, closed);
+            status = read_packed(&r, field, msg, closed, &rep);
         } else {
             /* Wire type mismatch: treat as an unknown field, like the reference
              * decoders. */
@@ -1108,12 +1100,18 @@ static pbw_status
 decode_message(pbw_arena *arena, const pbw_descriptor *desc, const uint8_t *buf,
                size_t len, pbw_message **out, uint32_t depth, uint32_t dlim)
 {
-    pbw_message *msg = pbw_message_new_a(arena, desc);
+    pbw_message *msg;
     pbw_status status;
 
-    if (msg == NULL) {
-        return PBW_ERR_NOMEM;
+    if (arena == NULL || desc == NULL || out == NULL ||
+        (buf == NULL && len > 0)) {
+        return PBW_ERR_INVALID;
     }
+    if (buf == NULL) {
+        buf = pbw_empty_input;
+    }
+    *out = NULL;
+    msg = pbw_message_new_a(arena, desc);
     status = decode_fields(msg, buf, len, depth, dlim);
     if (status != PBW_OK) {
         pbw_message_free(msg);
@@ -1134,9 +1132,17 @@ pbw_decode_arena_lim(pbw_arena *arena, const pbw_descriptor *desc,
                      pbw_message **out)
 {
     pbw_status status;
+    const uint8_t *bytes;
 
-    if (desc == NULL || out == NULL || (buf == NULL && len > 0)) {
+    if (out != NULL) {
+        *out = NULL;
+    }
+    if (arena == NULL || desc == NULL || out == NULL ||
+        (buf == NULL && len > 0)) {
         return PBW_ERR_INVALID;
+    }
+    if (dlim == 0 || dlim > PBW_MAX_DEPTH) {
+        dlim = PBW_MAX_DEPTH;
     }
     if (desc->is_enum) {
         return PBW_ERR_TYPE;
@@ -1144,13 +1150,13 @@ pbw_decode_arena_lim(pbw_arena *arena, const pbw_descriptor *desc,
     if (desc->schema != NULL && !desc->schema->linked) {
         return PBW_ERR_INVALID;
     }
-    status = decode_message(arena, desc, (const uint8_t *)buf, len, out, 0,
-                            dlim);
+    bytes = pbw_normalize_input(buf, len);
+    status = decode_message(arena, desc, bytes, len, out, 0, dlim);
     /* The reference parsers check for missing `required` fields once the whole
      * message is in, not per nested occurrence, so this is the same point. The
-     * schema-wide flag keeps the walk off every pure-proto3 decode. */
-    if (status == PBW_OK && desc->schema != NULL &&
-        desc->schema->has_required && !pbw_message_is_initialized(*out)) {
+     * per-descriptor flag keeps the walk off subtrees without `required`. */
+    if (status == PBW_OK && desc->has_required &&
+        !pbw_message_is_initialized(*out)) {
         pbw_message_free(*out);
         *out = NULL;
         return PBW_ERR_REQUIRED;
@@ -1175,12 +1181,15 @@ pbw_decode_limits(const pbw_descriptor *desc, const void *buf, size_t len,
 {
     pbw_arena *arena;
     pbw_status status;
+    const uint8_t *bytes;
 
+    if (out != NULL) {
+        *out = NULL;
+    }
     if (desc == NULL || out == NULL || (buf == NULL && len > 0)) {
         return PBW_ERR_INVALID;
     }
     /* Every failure below leaves NULL: callers can rely on *out alone. */
-    *out = NULL;
     if (limits != NULL && limits->max_bytes > 0 && len > limits->max_bytes) {
         return PBW_ERR_LIMIT;
     }
@@ -1199,7 +1208,8 @@ pbw_decode_limits(const pbw_descriptor *desc, const void *buf, size_t len,
     if (arena == NULL) {
         return PBW_ERR_NOMEM;
     }
-    status = pbw_decode_arena_lim(arena, desc, buf, len,
+    bytes = pbw_normalize_input(buf, len);
+    status = pbw_decode_arena_lim(arena, desc, bytes, len,
                                   pbw_effective_depth(limits), out);
     if (status != PBW_OK) {
         pbw_arena_free(arena);

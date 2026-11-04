@@ -1,5 +1,5 @@
 ---
-# clang-format config for enif_protobuf C sources (c_src/, c_src_tests/).
+# clang-format config for pbwire C sources (c_src/, c_src_tests/).
 # Apply: make c-format   Check: make c-format-check
 # Requires clang-format >= 19 (CI uses clang-format-20).
 Language: Cpp

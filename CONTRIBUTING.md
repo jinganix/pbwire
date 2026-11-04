@@ -87,8 +87,8 @@ cmake --build build-cmake && (cd build-cmake && ctest)
 ```
 
 **Commit / push gate:** `pre-commit` and `pre-push` reject direct work on `master` and run
-`scripts/check.sh` (build + `make test`). CI runs the same checks on Linux and macOS, plus CMake/ctest
-and `make format-check`:
+`scripts/check.sh` (build + `make test`). CI runs the same checks on Linux and macOS, plus CMake/ctest,
+`make format-check`, and commit-message validation (`scripts/validate-commit-msg.sh` over every
 
 ```bash
 ./scripts/check.sh                # run the same gate manually

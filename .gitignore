@@ -25,7 +25,9 @@ node_modules/
 # Build artifacts
 build/
 build-*/
+results/
 dist/
+*.egg-info/
 out/
 coverage/
 .gradle/
@@ -57,6 +59,26 @@ bindings/csharp/*/bin/
 bindings/csharp/*/obj/
 bindings/python/*.so
 bindings/python/*.dylib
+bindings/php/ext/modules/
+bindings/php/ext/build/
+bindings/php/ext/autom4te.cache/
+bindings/php/ext/*.lo
+bindings/php/ext/*.dep
+bindings/php/ext/config.log
+bindings/php/ext/config.status
+bindings/php/ext/config.h
+bindings/php/ext/config.h.in
+bindings/php/ext/config.nice
+bindings/php/ext/configure
+bindings/php/ext/configure.ac
+bindings/php/ext/libtool
+bindings/php/ext/Makefile
+bindings/php/ext/Makefile.objects
+bindings/php/ext/Makefile.fragments
+bindings/php/ext/run-tests.php
+bindings/php/ext/.libs/
+bindings/php/ext/*.la
+bindings/php/ext/*~
 bindings/ruby/lib/pbwire_ext.*
 __pycache__/
 *.pyc

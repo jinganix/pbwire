@@ -117,15 +117,41 @@ run(int iterations, void (^op)(void))
     return (double)(now_ns() - start) / iterations;
 }
 
-/* Warm up, then keep the best of three runs. */
-static double
-measure(int iterations, void (^op)(void))
+/* Floor iterations per tier; doubled until one pass takes 0.25 s (shared
+ * standard, see BENCHMARKS.md). Calibrated on the binding's own encode;
+ * slower ops then take longer than the minimum. */
+static const double kMinPassSeconds = 0.25;
+
+static int
+calibrate(void (^op)(void), int floor)
 {
+    int count = floor > 0 ? floor : 1;
+
+    for (;;) {
+        uint64_t start = now_ns();
+        for (int i = 0; i < count; i++)
+            @autoreleasepool {
+                op();
+            }
+        if ((double)(now_ns() - start) / 1e9 >= kMinPassSeconds ||
+            count >= 100000000)
+            return count;
+        count *= 2;
+    }
+}
+
+/* Every op calibrates independently from the floor (a slow op already exceeds
+ * the minimum at the floor and keeps it), then warms up and keeps the best
+ * of three runs. */
+static double
+measure(int floor, void (^op)(void))
+{
+    int count = calibrate(op, floor);
     double best = INFINITY;
 
-    run(iterations, op);
+    run(count, op);
     for (int pass = 0; pass < 3; pass++) {
-        double ns = run(iterations, op);
+        double ns = run(count, op);
 
         if (ns < best)
             best = ns;
@@ -180,12 +206,37 @@ main(int argc, char **argv)
                 failures++;
                 continue;
             }
+            /* Decode must round-trip byte-exactly and expose the same values. */
+            {
+                NSError *gateError = nil;
+                PBWMessage *back = [message decode:reference error:&gateError];
+                NSData *backBytes = back == nil ? nil : [back encode:&gateError];
+                PBWMessage *backInner = back == nil ? nil : [back messageForField:@"inner"];
+                BOOL backOk = back != nil && backBytes != nil &&
+                              [backBytes isEqualToData:reference] &&
+                              [[back valueForField:@"str"] isEqual:@"hello"] &&
+                              [[backInner valueForField:@"name"] isEqual:@"kid"] &&
+                              [[backInner valueForField:@"value"] isEqual:@42];
+                if (!backOk) {
+                    printf("FAIL %s: pbwire-objc decode differs\n", c->label);
+                    failures++;
+                    continue;
+                }
+            }
             printf("OK   %s encoding parity, x%d (%zu bytes)\n", c->label,
                    c->repeats, (size_t)reference.length);
 
             {
                 Scalars3 *official = fill_official(c->pad);
                 PBWMessage *decodeSource = fill_pbwire(schema, c->pad, &error);
+                /* Tier line shows the reference op's count; slower ops keep
+                 * the floor. */
+                int count = calibrate(^{
+                  NSError *ignored = nil;
+
+                  (void)[message encode:&ignored];
+                },
+                                      c->iterations);
                 double encode_ns = measure(c->iterations, ^{
                   NSError *ignored = nil;
 
@@ -206,7 +257,7 @@ main(int argc, char **argv)
                 });
 
                 printf("%s: %zu bytes, %d iterations (str padded x%d)\n", c->label,
-                       (size_t)reference.length, c->iterations, c->pad);
+                       (size_t)reference.length, count, c->pad);
                 printf("  %-14s %-7s %12s %10s\n", "impl", "op", "ns/op", "MB/s");
                 row("pbwire-objc", "encode", reference.length, encode_ns);
                 row("protobuf-objc", "encode", reference.length, official_encode_ns);

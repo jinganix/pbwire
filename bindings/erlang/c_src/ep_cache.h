@@ -1,7 +1,7 @@
 #ifndef __EP_CACHE_H__
 #define __EP_CACHE_H__
 
-#include "enif_protobuf.h"
+#include "pbwire.h"
 
 struct ep_cache_s {
     size_t size;

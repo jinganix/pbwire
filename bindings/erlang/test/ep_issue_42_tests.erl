@@ -3,7 +3,7 @@
 -include_lib("eunit/include/eunit.hrl").
 -include_lib("gpb/include/gpb.hrl").
 
-% https://github.com/jinganix/enif_protobuf/issues/42
+% https://github.com/jinganix/pbwire/issues/42
 issue_42_test_() ->
     {timeout, 5, fun issue_42_self_recursive_load_cache_test/0}.
 
@@ -22,9 +22,9 @@ issue_42_self_recursive_load_cache_test() ->
             {p_v, 1004, "leaf", 4.5, []}
         ]}
     ]},
-    ok = enif_protobuf:set_opts([{string_as_list, true}, {with_utf8, true}]),
-    ok = enif_protobuf:load_cache(Defs),
+    ok = pbwire:set_opts([{string_as_list, true}, {with_utf8, true}]),
+    ok = pbwire:load_cache(Defs),
     Bin = gpb:encode_msg(Msg, Defs),
-    Bin = enif_protobuf:encode_msg(Msg, Defs),
-    Msg = enif_protobuf:decode_msg(Bin, p_v, Defs),
+    Bin = pbwire:encode_msg(Msg, Defs),
+    Msg = pbwire:decode_msg(Bin, p_v, Defs),
     Msg = gpb:decode_msg(Bin, p_v, Defs).

@@ -5,7 +5,7 @@ int run_test_ep_cache(void);
 int run_test_ep_node(void);
 int run_test_ep_encoder(void);
 int run_test_ep_decoder(void);
-int run_test_enif_protobuf(void);
+int run_test_pbwire(void);
 int run_test_integration(void);
 int run_test_wire_codec(void);
 int run_test_codec_types(void);
@@ -39,8 +39,8 @@ main(void)
         failed = 1;
     }
 
-    printf("test_enif_protobuf\n");
-    if (run_test_enif_protobuf() != 0) {
+    printf("test_pbwire\n");
+    if (run_test_pbwire() != 0) {
         failed = 1;
     }
 

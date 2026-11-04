@@ -5,7 +5,7 @@
 -include_lib("eunit/include/eunit.hrl").
 -include_lib("gpb/include/gpb.hrl").
 
-% https://github.com/jinganix/enif_protobuf/issues/11
+% https://github.com/jinganix/pbwire/issues/11
 issue_11_test() ->
     Defs = [
         {{msg, pro_180_items_list}, [
@@ -20,4 +20,4 @@ issue_11_test() ->
         ]},
         {proto3_msgs, [pro_180_all_prop, pro_180_items_list]}
     ],
-    ok = enif_protobuf:load_cache(Defs).
+    ok = pbwire:load_cache(Defs).

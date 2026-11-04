@@ -126,6 +126,13 @@ t_quoted(text_out *t, const uint8_t *data, size_t len)
 {
     size_t i;
 
+    if (data == NULL) {
+        if (len > 0) {
+            t->status = PBW_ERR_INVALID;
+            return;
+        }
+        data = pbw_empty_input;
+    }
     t_put(t, "\"", 1);
     for (i = 0; i < len; i++) {
         uint8_t c = data[i];
@@ -179,6 +186,25 @@ static void t_print_message(text_out *t, const pbw_message *msg, uint32_t depth)
 static void
 t_print_scalar(text_out *t, const pbw_field *field, const pbw_value *value)
 {
+    if (t == NULL || field == NULL || value == NULL) {
+        if (t != NULL && t->status == PBW_OK) {
+            t->status = PBW_ERR_INVALID;
+        }
+        return;
+    }
+    if ((field->type == PBW_TYPE_STRING || field->type == PBW_TYPE_BYTES)) {
+        /* checked in the case below */
+    } else if (field->type == PBW_TYPE_MESSAGE || field->type == PBW_TYPE_GROUP) {
+        if (value->kind != PBW_VALUE_MESSAGE) {
+            t->status = PBW_ERR_INVALID;
+            return;
+        }
+    } else {
+        if (value->kind != PBW_VALUE_UINT) {
+            t->status = PBW_ERR_INVALID;
+            return;
+        }
+    }
     switch (field->type) {
     case PBW_TYPE_DOUBLE: {
         double d;
@@ -210,6 +236,14 @@ t_print_scalar(text_out *t, const pbw_field *field, const pbw_value *value)
     }
     case PBW_TYPE_STRING:
     case PBW_TYPE_BYTES:
+        if (value->kind != PBW_VALUE_BYTES) {
+            t->status = PBW_ERR_INVALID;
+            return;
+        }
+        if (value->as.bytes.len > 0 && value->as.bytes.data == NULL) {
+            t->status = PBW_ERR_INVALID;
+            return;
+        }
         t_quoted(t, value->as.bytes.data, value->as.bytes.len);
         return;
     case PBW_TYPE_INT32:
@@ -265,13 +299,13 @@ unknown_is_message(const uint8_t *data, size_t len, uint32_t depth)
             break;
         }
         case PBW_WIRE_64BIT:
-            if ((size_t)(end - p) < 8) {
+            if (pbw_remaining((const uint8_t *)end, (const uint8_t *)p) < 8) {
                 return 0;
             }
             p += 8;
             break;
         case PBW_WIRE_32BIT:
-            if ((size_t)(end - p) < 4) {
+            if (pbw_remaining((const uint8_t *)end, (const uint8_t *)p) < 4) {
                 return 0;
             }
             p += 4;
@@ -284,7 +318,7 @@ unknown_is_message(const uint8_t *data, size_t len, uint32_t depth)
                 return 0;
             }
             p += n;
-            if (ilen > (size_t)(end - p)) {
+            if (ilen > pbw_remaining((const uint8_t *)end, (const uint8_t *)p)) {
                 return 0;
             }
             p += ilen;
@@ -320,12 +354,12 @@ unknown_is_message(const uint8_t *data, size_t len, uint32_t depth)
                     }
                     p += n;
                 } else if (wire == PBW_WIRE_64BIT) {
-                    if ((size_t)(end - p) < 8) {
+                    if (pbw_remaining((const uint8_t *)end, (const uint8_t *)p) < 8) {
                         return 0;
                     }
                     p += 8;
                 } else if (wire == PBW_WIRE_32BIT) {
-                    if ((size_t)(end - p) < 4) {
+                    if (pbw_remaining((const uint8_t *)end, (const uint8_t *)p) < 4) {
                         return 0;
                     }
                     p += 4;
@@ -337,7 +371,7 @@ unknown_is_message(const uint8_t *data, size_t len, uint32_t depth)
                         return 0;
                     }
                     p += n;
-                    if (ilen > (size_t)(end - p)) {
+                    if (ilen > pbw_remaining((const uint8_t *)end, (const uint8_t *)p)) {
                         return 0;
                     }
                     p += ilen;
@@ -399,7 +433,7 @@ t_print_unknown_value(text_out *t, uint32_t number, uint32_t wire,
         uint64_t v = 0;
         int i;
 
-        if ((size_t)(end - p) < 8) {
+        if (pbw_remaining((const uint8_t *)end, (const uint8_t *)p) < 8) {
             t->status = PBW_ERR_INVALID;
             return;
         }
@@ -418,7 +452,7 @@ t_print_unknown_value(text_out *t, uint32_t number, uint32_t wire,
         uint32_t v = 0;
         int i;
 
-        if ((size_t)(end - p) < 4) {
+        if (pbw_remaining((const uint8_t *)end, (const uint8_t *)p) < 4) {
             t->status = PBW_ERR_INVALID;
             return;
         }
@@ -439,7 +473,7 @@ t_print_unknown_value(text_out *t, uint32_t number, uint32_t wire,
             return;
         }
         p += used;
-        if (len > (size_t)(end - p)) {
+        if (len > pbw_remaining((const uint8_t *)end, (const uint8_t *)p)) {
             t->status = PBW_ERR_INVALID;
             return;
         }
@@ -560,8 +594,14 @@ static void
 t_print_field_value(text_out *t, const pbw_field *field,
                     const pbw_value *value, int indent, uint32_t depth)
 {
+    if (t == NULL || field == NULL || value == NULL) {
+        if (t != NULL && t->status == PBW_OK) {
+            t->status = PBW_ERR_INVALID;
+        }
+        return;
+    }
     if (field->type == PBW_TYPE_MESSAGE || field->type == PBW_TYPE_GROUP) {
-        if (value->as.msg == NULL) {
+        if (value->kind != PBW_VALUE_MESSAGE || value->as.msg == NULL) {
             t->status = PBW_ERR_INVALID;
             return;
         }
@@ -588,11 +628,25 @@ t_print_field(text_out *t, const pbw_field *field, const pbw_value *value,
 {
     size_t j;
 
+    if (t == NULL || field == NULL || value == NULL) {
+        if (t != NULL && t->status == PBW_OK) {
+            t->status = PBW_ERR_INVALID;
+        }
+        return;
+    }
     if (field->label == PBW_LABEL_REPEATED) {
         if (value->kind != PBW_VALUE_LIST) {
             return;
         }
+        if (value->as.list.len > 0 && value->as.list.items == NULL) {
+            t->status = PBW_ERR_INVALID;
+            return;
+        }
         for (j = 0; j < value->as.list.len; j++) {
+            if (value->as.list.items[j] == NULL) {
+                t->status = PBW_ERR_INVALID;
+                return;
+            }
             t_indent(t, 0);
             if (field->is_extension && field->full_name != NULL) {
                 t_put(t, "[", 1);
@@ -603,6 +657,10 @@ t_print_field(text_out *t, const pbw_field *field, const pbw_value *value,
                 t_str(t, field->name);
                 t_put(t, "]", 1);
             } else if (field->type == PBW_TYPE_GROUP) {
+                if (field->sub == NULL || field->sub->name == NULL) {
+                    t->status = PBW_ERR_INVALID;
+                    return;
+                }
                 t_str(t, short_name(field->sub->name));
             } else {
                 t_str(t, field->name);
@@ -624,6 +682,10 @@ t_print_field(text_out *t, const pbw_field *field, const pbw_value *value,
         t_str(t, field->name);
         t_put(t, "]", 1);
     } else if (field->type == PBW_TYPE_GROUP) {
+        if (field->sub == NULL || field->sub->name == NULL) {
+            t->status = PBW_ERR_INVALID;
+            return;
+        }
         t_str(t, short_name(field->sub->name));
     } else {
         t_str(t, field->name);
@@ -636,6 +698,17 @@ t_print_message(text_out *t, const pbw_message *msg, uint32_t depth)
 {
     size_t i;
 
+    if (t == NULL || msg == NULL || msg->desc == NULL) {
+        if (t != NULL && t->status == PBW_OK) {
+            t->status = PBW_ERR_INVALID;
+        }
+        return;
+    }
+    if (msg->desc->field_count > 0 &&
+        (msg->values == NULL || msg->present == NULL)) {
+        t->status = PBW_ERR_INVALID;
+        return;
+    }
     if (t->status != PBW_OK) {
         return;
     }
@@ -655,6 +728,10 @@ t_print_message(text_out *t, const pbw_message *msg, uint32_t depth)
         }
     }
     if (t->print_unknown && msg->unknown_len > 0) {
+        if (msg->unknown == NULL) {
+            t->status = PBW_ERR_INVALID;
+            return;
+        }
         t_print_unknowns(t, msg->unknown, msg->unknown + msg->unknown_len,
                          depth);
     }
@@ -1423,6 +1500,9 @@ t_parse_float_value(text_in *t, pbw_message *msg, const pbw_field *field,
             /* Numbers fit the stack buffer in practice; a longer one is unusual,
              * not invalid. */
             if (num.len >= sizeof(stack)) {
+                if (num.len == SIZE_MAX || num.start == NULL) {
+                    return PBW_ERR_INVALID;
+                }
                 tmp = (char *)malloc(num.len + 1);
                 if (tmp == NULL) {
                     return PBW_ERR_NOMEM;
@@ -1449,6 +1529,9 @@ t_parse_float_value(text_in *t, pbw_message *msg, const pbw_field *field,
             size_t want = num.len;
 
             if (num.len >= sizeof(stack)) {
+                if (num.len == SIZE_MAX || num.start == NULL) {
+                    return PBW_ERR_INVALID;
+                }
                 tmp = (char *)malloc(num.len + 1);
                 if (tmp == NULL) {
                     return PBW_ERR_NOMEM;
@@ -2393,10 +2476,12 @@ pbw_text_parse(const pbw_descriptor *desc, const char *text, size_t len,
     pbw_message *msg;
     pbw_status status;
 
+    if (out != NULL) {
+        *out = NULL;
+    }
     if (desc == NULL || out == NULL || desc->is_enum) {
         return PBW_ERR_INVALID;
     }
-    *out = NULL;
     if (text == NULL && len > 0) {
         return PBW_ERR_INVALID;
     }
@@ -2417,8 +2502,7 @@ pbw_text_parse(const pbw_descriptor *desc, const char *text, size_t len,
         return status;
     }
     /* a missing proto2 `required` field fails, like the binary decoder */
-    if (desc->schema != NULL && desc->schema->has_required &&
-        !pbw_message_is_initialized(msg)) {
+    if (desc->has_required && !pbw_message_is_initialized(msg)) {
         pbw_message_free(msg);
         return PBW_ERR_REQUIRED;
     }

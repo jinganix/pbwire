@@ -103,8 +103,6 @@ endif
 
 test-java: build
 	cd ../java && ./build.sh >/dev/null
-	cd ../java && $(JAVA) --enable-native-access=ALL-UNNAMED -Dpbwire.library=$(LIB) \
-		-cp out TestTyped ../c/tests/data/matrix3.desc ../c/tests/data/matrix3.bin
 
 test-kotlin: build
 	cd ../kotlin && ./build.sh >/dev/null

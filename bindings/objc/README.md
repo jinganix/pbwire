@@ -120,9 +120,23 @@ and runs the four standard tiers from [`BENCHMARKS.md`](../../BENCHMARKS.md):
 The wrapper adds one Objective-C object per call and no copy: `encode` hands
 the malloc'd buffer the C encoder already filled to `NSData`
 (`dataWithBytesNoCopy:length:freeWhenDone:`), and `decode` wraps the arena the C
-decoder produced in one `PBWMessage`. `pbwire-objc` therefore beats the
-generated runtime on every tier and both ops: 5.9x / 2.4x at 136 B, 6.4x / 2.8x
-at 174 B, 4.7x / 2.7x at 2469 B and 1.9x / 2.7x at 74913 B (encode / decode). The
+decoder produced in one `PBWMessage`. Copied from
+[`BENCHMARKS.md`](../../BENCHMARKS.md), which is the single source for all
+performance numbers; higher is better, MB/s over wire bytes:
+
+| payload | op | pbwire-objc (MB/s, x protobuf-objc) | protobuf-objc (MB/s) |
+|---|---|---|---|
+| 136 B | encode | 1088.9 (6.4x) | 169.6 |
+| 136 B | decode | 670.8 (2.5x) | 266.3 |
+| 174 B | encode | 1391.3 (6.6x) | 211.6 |
+| 174 B | decode | 876.2 (2.8x) | 307.5 |
+| 2469 B | encode | 13639.6 (4.7x) | 2889.9 |
+| 2469 B | decode | 11046.0 (2.9x) | 3806.2 |
+| 74913 B | encode | 71739.6 (1.8x) | 38862.9 |
+| 74913 B | decode | 76007.7 (2.7x) | 27919.2 |
+
+`pbwire-objc` therefore beats the generated runtime on every tier and both ops.
+The
 xlarge tier is one 74 KB string, i.e. a memcpy race: the generated encoder writes
 it into an `NSMutableData` of the final size, and the wrapper writes it into its
 own buffer, which `NSData` then takes over; neither side copies the payload

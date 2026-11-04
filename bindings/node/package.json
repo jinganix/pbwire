@@ -1,0 +1,21 @@
+{
+  "name": "pbwire",
+  "version": "0.1.0",
+  "description": "Dynamic protobuf over the pbwire C ABI, schema at runtime, no generated code",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jinganix/pbwire.git",
+    "directory": "bindings/node"
+  },
+  "author": "jinganix",
+  "main": "lib/pbwire.js",
+  "files": ["lib/", "runtime/", "build.sh", "README.md"],
+  "scripts": {
+    "install": "./build.sh build",
+    "test": "./build.sh"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

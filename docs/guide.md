@@ -89,6 +89,12 @@ const pbw_descriptor *person = pbw_schema_find(schema, "example.Person");
   --descriptor_set_out=schema.pb` at build time, `buf build -o schema.pb`
   (imports included), or `pbwire-protoc` at runtime. pbwire only ever reads the
   resulting bytes.
+- **File or embedded, same bytes.** The loader takes bytes, not a path: read a
+  sidecar file at startup for dynamic updates, or bake the set into the binary
+  (`xxd -i schema.pb`, Rust `include_bytes!`, app resources) for a single
+  artifact. Every binding exposes both forms (`from_file` / `from_bytes`,
+  `fromFile` / `fromBytes`, `load(bytes)`); the trade-off is in the
+  [FAQ](faq.md#do-i-have-to-recompile-when-a-proto-changes).
 - **Ship every imported file.** Types are resolved by name inside the set, so a
   field typed `other.Thing` needs `other.Thing` in the same set: pass
   `--include_imports` (`buf build` already does) or the load fails with

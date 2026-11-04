@@ -1,6 +1,6 @@
 /* Reusable per-caller workspace: one bump allocator for decoded messages and one
  * growable buffer for encoded output. This is the explicit, thread-safe-by-
- * construction version of enif_protobuf's per-scheduler thread data. */
+ * construction version of pbwire's per-scheduler thread data. */
 
 #include "internal.h"
 
@@ -171,10 +171,19 @@ pbw_pool_release(pbw_pool *pool, pbw_ctx *ctx)
     /* Grow the slot array by doubling: one realloc per doubling instead of
      * one per release, which matters for a pool that fills up. */
     if (pool->count == pool->idle_cap) {
-        size_t want = pool->idle_cap != 0 ? pool->idle_cap * 2 : 8;
+        size_t want;
 
+        if (pool->idle_cap > SIZE_MAX / 2 / sizeof(*slot)) {
+            pbw_ctx_free(ctx);
+            return;
+        }
+        want = pool->idle_cap != 0 ? pool->idle_cap * 2 : 8;
         if (want > pool->cap) {
             want = pool->cap;
+        }
+        if (want <= pool->idle_cap || want > SIZE_MAX / sizeof(*slot)) {
+            pbw_ctx_free(ctx);
+            return;
         }
         slot = (pbw_ctx **)realloc(pool->idle, want * sizeof(*slot));
         if (slot == NULL) {
@@ -205,14 +214,13 @@ pbw_decode_ctx_limits(pbw_ctx *ctx, const pbw_descriptor *desc,
                       const void *buf, size_t len, const pbw_limits *limits,
                       pbw_message **out)
 {
-    if (ctx == NULL) {
-        return PBW_ERR_INVALID;
+    if (out != NULL) {
+        *out = NULL;
     }
-    if (out == NULL) {
+    if (ctx == NULL || out == NULL || (buf == NULL && len > 0)) {
         return PBW_ERR_INVALID;
     }
     /* Every failure below leaves NULL: callers can rely on *out alone. */
-    *out = NULL;
     if (limits != NULL && limits->max_bytes > 0 && len > limits->max_bytes) {
         return PBW_ERR_LIMIT;
     }
@@ -237,6 +245,8 @@ pbw_encode_ctx(pbw_ctx *ctx, const pbw_message *msg, const uint8_t **out,
     if (ctx == NULL || out == NULL || len == NULL) {
         return PBW_ERR_INVALID;
     }
+    *out = NULL;
+    *len = 0;
     status = pbw_encode_buf(&ctx->out, msg);
     if (status != PBW_OK) {
         *out = NULL;

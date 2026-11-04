@@ -1,10 +1,12 @@
 #!/bin/sh
-# Benchmarks the Rust binding against rust-protobuf's generated code on the same
-# matrix3.proto (the four standard tiers from BENCHMARKS.md).
+# Benchmarks the Rust binding against rust-protobuf's generated code and prost
+# (the fastest widely used Rust runtime) on the same matrix3.proto (the four
+# standard tiers from BENCHMARKS.md).
 #
 # Needs protoc, a cargo toolchain and `cargo install protobuf-codegen` (which
 # provides the protoc-gen-rs plugin and the protobuf runtime the generated code
-# needs).
+# needs). The prost baseline is generated at build time by build.rs (needs
+# crates.io for the prost/prost-build crates).
 #
 #   ./bench.sh          generate, build, run
 set -eu

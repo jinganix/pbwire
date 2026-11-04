@@ -1,11 +1,11 @@
 # pbwire Java binding
 
-`bindings/java/runtime` is the Java binding: a CPython-free, JNI-free FFI layer
-over the C ABI in [`include/pbwire.h`](../../include/pbwire.h), using the JDK 22+
-Foreign Function & Memory API (`java.lang.foreign`, `Linker.nativeLinker()`,
-`SymbolLookup.libraryLookup`). A `FileDescriptorSet`
+`bindings/java/runtime` is the Java binding: a pure-Java codec with no
+JNI, no `java.lang.foreign` and no native library. A `FileDescriptorSet`
 (`protoc --descriptor_set_out`) becomes a schema at runtime; there is no
-generated code and no C glue file.
+generated code and no C glue file. `Proto` parses the descriptor set,
+`GenericCodec` owns the wire format (columnar values, lazy sub-trees,
+field images), and `Wire` holds the varint/tag/little-endian primitives.
 
 ```java
 try (Schema schema = Schema.fromFile("tests/data/sample.desc")) {
@@ -31,24 +31,15 @@ try (Schema schema = Schema.fromFile("tests/data/sample.desc")) {
 ## Build and run
 
 ```shell
-./build.sh          # make shared + javac into bindings/java/out
+./build.sh          # plain javac into bindings/java/out
 
-java --enable-native-access=ALL-UNNAMED \
-     -Dpbwire.library=$PWD/../../build/libpbwire.dylib \
-     -cp out TestPbwire tests/data/sample.desc     # self-check
-
-java --enable-native-access=ALL-UNNAMED \
-     -Dpbwire.library=$PWD/../../build/libpbwire.dylib \
-     -cp out Roundtrip tests/data/sample.desc      # example
+java -cp out TestPbwire tests/data/sample.desc     # self-check
+java -cp out Roundtrip tests/data/sample.desc      # example
 ```
 
-`build.sh` runs `make shared`, not `make`: the FFI `dlopen`s the library, so it
-needs `build/libpbwire.dylib` (macOS) or `build/libpbwire.so` (Linux); a static
-`libpbwire.a` cannot be loaded. `-Dpbwire.library=<path>` (or `PBWIRE_LIB`)
-points the binding at it; without it, `build/libpbwire.{dylib,so}` relative to
-the working directory is used. JDK 22 or newer is required, and
-`--enable-native-access=ALL-UNNAMED` is required on JDK 24+ (a warning turns
-into an error once FFM is blocked by default).
+`build.sh` is plain `javac` (JDK 17+): no Maven, no Gradle, no native
+library, no `--enable-native-access`. The fixture descriptor set is checked
+in, so a build needs no `protoc` either.
 
 ## API
 
@@ -57,7 +48,7 @@ into an error once FFM is blocked by default).
 | `Schema` | `fromFile(path)`, `fromBytes(byte[])`, `message(fullName)`, `close()` |
 | `MessageType` | `name()`, `newMessage()`, `decode(byte[])` |
 | `Message` | `set(name\|number, …)`, `newMessage(name\|number)`, `clear(…)`, `has(…)`, `get(…)`, typed getters, `getList(…)`, `encode()`, `close()` |
-| `PbwireException` | `status()` — the `pbw_status`, `getMessage()` — includes `pbw_strerror`/`pbw_schema_error` |
+| `PbwireException` | unchecked; `decode`/`encode` failures and unknown fields/types name the message and field |
 
 `set` overloads: `long` (every integer, fixed and enum field, raw 64-bit bits),
 `boolean`, `double` (a `float` field is narrowed for you), `String` (UTF-8),
@@ -73,50 +64,50 @@ wire) is absent, matching pbwire's explicit-presence model. Enums are read as
 integers. A `uint64` above `Long.MAX_VALUE` reads as the same raw bits, i.e. a
 negative `long`.
 
-Value mapping: `int32/int64/sint*/sfixed*/fixed*/uint*` → `long`, `enum` →
-`long`/`int`, `bool` → `boolean`, `float/double` → `double` (or `Float`/`Double`
+Value mapping: `int32/int64/sint*/sfixed*/fixed*` → `long` (signed),
+`uint32`/`fixed32` → `long` (zero-extended, so 4000000000 reads as
+4000000000L), `uint64`/`fixed64` → `long` (raw bits, negative above
+`Long.MAX_VALUE`), `enum` → `long`/`int`, `bool` → `boolean`, `float/double` → `double` (or `Float`/`Double`
 from `get`), `string` → `String`, `bytes` → `byte[]`, `message` → `Message`,
 `repeated` → `List<Object>` (or `List<Message>` elements).
 
-Errors are unchecked: `PbwireException` for anything the C API reports
-(`decode` of malformed bytes, a proto2 `required` field missing on encode, a
-load failure whose reason comes from `pbw_schema_error`), `IllegalStateException`
-for using a closed schema/message, `UncheckedIOException` for a missing
-descriptor file.
+Errors are unchecked: `PbwireException` for descriptor problems, malformed
+wire bytes and a proto2 `required` field missing on encode;
+`IllegalArgumentException` for a wrong value type or unknown field number;
+`IllegalStateException` for using a closed schema/message; `UncheckedIOException`
+for a missing descriptor file.
 
-Ownership is explicit and double-free safe:
+Ownership is explicit and race-free:
 
-- `Schema.close()` frees the schema; `Message.close()` frees a tree created by
-  `newMessage()`/`decode()` and is idempotent (the handle is taken out of an
-  `AtomicReference` before freeing, so a `Cleaner` racing `close()` is safe).
-- A child `Message` from `newMessage()`/`getMessage()` is a view: it is never
-  freed on its own and it throws `IllegalStateException` once its root is
-  closed.
-- An unclosed root is freed by a `java.lang.ref.Cleaner` when it becomes
-  unreachable.
+- `Schema.close()` marks the schema unusable; `Message.close()` retires the
+  tree created by `newMessage()`/`decode()` and is idempotent. Both throw
+  `IllegalStateException` once closed.
+- A child `Message` from `newMessage()`/`getMessage()` is a view into the
+  same tree: it is never freed on its own, and it shares the root's closed
+  flag, so using it after the root is closed throws.
+- A decoded tree is one object graph released with its root; nothing is
+  shared between threads except the schema.
 
-## How the boundary is kept cheap
+## How the codec stays fast
 
-Every C function has one `static final` `MethodHandle` called through
-`invokeExact`, so the JIT inlines the downcall into the wrapper instead of
-resolving a signature per call (`invokeWithArguments` boxes every argument and
-costs ~40x the native call itself: 144 ns vs 3 ns on the small tier).
+One workspace per thread holds everything an encode needs: the reusable
+output buffer (so `encode()` allocates nothing but the returned `byte[]`)
+and the string-image cache. Field facts (kind, wire type, tag bytes,
+presence class) are resolved once per message type, so the encode loop is a
+single pass: one presence gate per slot, one `switch` per numeric field,
+fused tag+value writes with one capacity check each. Strings re-emit as one
+`arraycopy` of a cached whole-field image. Numbers, fixed widths and tags go
+through `sun.misc.Unsafe` stores with no per-byte bounds checks -- the same
+trick the official encoder uses -- with a checked fallback when `Unsafe` is
+missing or the platform is big-endian.
 
-On top of that, one workspace per thread holds everything a call needs to hand
-back:
-
-| piece | why |
-|---|---|
-| a `pbw_ctx` | `pbw_encode_ctx` reuses its output buffer, so `encode()` allocates no native buffer and calls no `pbw_free` |
-| three scratch slots | the `uint8_t **`/`size_t *` out-parameters every wire call writes through |
-| a native input buffer | the bytes crossing into C (`decode` input, `set` payloads), grown on demand so a steady decode loop stops allocating |
-
-Field facts (number, type, label, sub-message type) are resolved through the C
-descriptor once per type and cached in a `ConcurrentHashMap`, so `set`/`get` by
-name or number cost a map lookup instead of a native call. That makes
-`Schema`/`MessageType` safe to share between threads — a schema is read-only
-after load — while a `Message` and the workspace stay confined to one thread
-(see `TestPbwire`'s 4-thread check).
+On top of that, decode is lazy: message, group, string and bytes fields
+record a slice (input ref + bounds) and only scan tags, so untouched
+sub-trees cost nothing until first access and re-encode copies them verbatim
+(which is also what keeps unknown fields and byte-exactness for free).
+That makes `Schema`/`MessageType` safe to share between threads -- a schema is
+read-only after load -- while a `Message` and the workspace stay confined to
+one thread (see `TestPbwire`'s 4-thread check).
 
 ## Benchmark
 
@@ -125,34 +116,49 @@ with `--java_out` and runs the four standard tiers from
 [`BENCHMARKS.md`](../../BENCHMARKS.md), printing `ns/op` and `MB/s` for
 `pbwire-java` and `protobuf-java` side by side. It fetches `protobuf-java` from
 Maven Central once (into `benchmarks/deps/`) and needs JDK 22+ and `protoc`.
-All four operations get a warm-up pass, then five interleaved timed passes whose
+All four operations get a warm-up pass, then three interleaved timed passes whose
 best is reported, so a busy machine hits both implementations equally.
 
 ```shell
 ./benchmarks/bench.sh      # or: make java-bench
 ```
 
-`pbwire-java` wins from 174 B up, and wins every decode tier: 1.2-1.3x at 174 B,
-1.2-1.8x at 2469 B, 1.3-1.7x at 74913 B. The one tier it loses is the 136 B
-encode (0.69x): `protobuf-java`'s generated writer is one straight-line block of
-known tags and values (~62 ns), while a dynamic tree walk pays a presence test,
-a type dispatch and a re-derived varint size per field (~90 ns including the
-`byte[]` copy). The table is in [`BENCHMARKS.md`](../../BENCHMARKS.md).
+The four tiers are small / medium / large / xlarge (the repeated fields scaled
+x0 / x1 / x100 / x3000). Copied from [`BENCHMARKS.md`](../../BENCHMARKS.md),
+which is the single source for all performance numbers; higher is better, MB/s
+over wire bytes:
 
-That gap is measured, not assumed: a prototype encoder walking the same value
-tree with the wire type preloaded, no per-field capacity check and no `switch`
-on the field type came in at 66.5 ns against 70.4 ns for `src/encode.c` on the
-same 136-byte payload. The C side is within ~6% of its floor, so the remaining
-~25 ns is the boundary plus the ~10 ns generated code saves by knowing its tags
-at compile time -- closing it needs a code generator, not tuning.
+| payload | op | pbwire-java (MB/s, x protobuf-java) | protobuf-java (MB/s) |
+|---|---|---|---|
+| 136 B | encode | 1717.6 (0.75x) | 2275.6 |
+| 136 B | decode | 929.6 (1.46x) | 637.1 |
+| 174 B | encode | 1523.3 (1.19x) | 1284.8 |
+| 174 B | decode | 833.1 (1.46x) | 572.1 |
+| 2469 B | encode | 1002.2 (1.17x) | 856.4 |
+| 2469 B | decode | 866.6 (1.98x) | 437.6 |
+| 74913 B | encode | 1082.8 (1.21x) | 896.7 |
+| 74913 B | decode | 953.1 (2.40x) | 397.8 |
+
+`pbwire-java` wins from 174 B up on encode and wins every decode tier: 1.2x
+at 174 B, 1.2x at 2469 B, 1.2x at 74913 B on encode; 1.5x, 2.0x and 2.4x on
+decode. The one cell it loses is the 136 B encode (0.75x): `protobuf-java`'s
+generated writer is one straight-line block of known tags and values (~60 ns),
+while a dynamic codec pays a presence gate, a type dispatch and tag loads per
+field (~80 ns including the `byte[]` copy). That floor is structural, not
+tuning: the per-field work left -- loads, one `switch`, one call -- is what a
+generated writer avoids by knowing every field at compile time, a trade the
+typed models (`bindings/typed`) also make by wrapping this same dynamic API.
 
 ## Layout
 
 | Piece | Path | Role |
 |---|---|---|
-| FFI | [`runtime/Pbwire.java`](runtime/Pbwire.java) | one `MethodHandle` per exported C function, the per-thread workspace, library lookup, `pbw_status` → exception |
-| API | [`runtime/Schema.java`](runtime/Schema.java), [`runtime/MessageType.java`](runtime/MessageType.java), [`runtime/Message.java`](runtime/Message.java), [`runtime/PbwireException.java`](runtime/PbwireException.java) | the wrapper and its field cache |
+| codec | [`runtime/GenericCodec.java`](runtime/GenericCodec.java) | columnar value tree, lazy decode slices, the single-pass encoder |
+| wire | [`runtime/Wire.java`](runtime/Wire.java) | varint/tag/little-endian read/write, reusable buffer, `Unsafe` fast path |
+| schema | [`runtime/Proto.java`](runtime/Proto.java), [`runtime/Schema.java`](runtime/Schema.java) | descriptor-set parser and linker, no protobuf dependency |
+| API | [`runtime/MessageType.java`](runtime/MessageType.java), [`runtime/Message.java`](runtime/Message.java), [`runtime/PbwireException.java`](runtime/PbwireException.java) | the wrapper: typed getters, views, presence, errors |
 | example | [`examples/Roundtrip.java`](examples/Roundtrip.java) | build → encode → decode → compare |
+| conformance | [`conformance/Testee.java`](conformance/Testee.java) | official suite testee (binary in → out, JSON/text skip) |
 | tests | [`tests/TestPbwire.java`](tests/TestPbwire.java) | assert-based self-check, no framework (includes a 4-thread schema-sharing check) |
 | fixture | [`tests/data/sample.proto`](tests/data/sample.proto) + `sample.desc` | `protoc --descriptor_set_out --include_imports` |
 | benchmark | [`benchmarks/Bench.java`](benchmarks/Bench.java) | the four standard tiers against `protobuf-java` |
@@ -170,30 +176,31 @@ protoc --descriptor_set_out=tests/data/sample.desc --include_imports \
 - **No protoc plugin and no code generation.** The schema is the descriptor set
   loaded at runtime, like the C, C++ and Python bindings; a Java generator
   would duplicate what the C core already resolves.
-- **No conformance testee.** The C core passes the official suite
-  (`make conformance`); a testee here would only re-test the wrapper.
+- **Binary-only conformance testee.** `make conformance-java` runs the official
+  suite through the binding (same 2 expected tag-truncation failures as the C
+  core, on the shared `conformance/failure_list_pbwire.txt`); JSON/text input
+  answers `skipped` because the binding has no printers, like the Python and
+  Ruby testees.
 - **No Maven/Gradle**, no JNI, no C glue file, no downloads: `build.sh` is
-  `make shared` plus `javac`. Classes are in the default package for the same
+  plain `javac`. Classes are in the default package for the same
   reason (plain `javac -d out`, no module path); move them into a package if
   this ever ships as a jar.
-- **No `Linker.Option.critical` downcalls.** They would let the wire calls read
-  a heap `byte[]` and write one directly, but they forbid allocation and
-  blocking, and `pbw_decode`/`pbw_encode` legitimately allocate; the one copy
-  they would save is ~5 ns of a 90 ns op.
+- **No per-call bounds checks on the encode hot path.** Tags, varints and
+  fixed widths go through `sun.misc.Unsafe` (the same trick the official
+  encoder uses); without `Unsafe`, or off little-endian, the same methods
+  run their checked fallback. The one runtime cost is a terminal-deprecation
+  warning printed once per JVM, like `protobuf-java` itself prints.
+- **No lazy string copies.** A decoded string materializes on first read;
+  re-encoding a decoded message copies untouched slices verbatim, so a
+  gateway that only re-encodes never pays for parsing.
 - **No map/oneof/extension convenience API.** They are ordinary message and
   field operations through the dynamic tree; nothing is lost, nothing is
   sugar-coated.
-- **No lazy parsed-message representation** (the Python binding's trick of
-  keeping the source bytes and materializing fields on read). Here `decode`
-  builds the C message tree and `encode` re-encodes it; the byte-exact round
-  trip comes from the tree keeping unknown fields in wire order.
-- **No 32-bit host support in the FFI signatures**: `size_t` is mapped to a
-  64-bit value layout (LP64: macOS and Linux on x86-64/arm64).
-- **No release of the per-thread workspace.** A `pbw_ctx` has to be freed
-  explicitly and a dead `Thread` gives no callback, so a thread that used the
-  binding keeps one context (bounded by the largest message it handled) until
-  the process exits. One context per thread is the same trade the core's own
-  `pbw_pool` documents.
+- **No per-thread workspace release.** The encode buffer and the string-image
+  cache live in one `ThreadLocal` per thread and are never freed: a thread
+  that used the binding keeps one buffer (bounded by the largest message it
+handled) until the thread dies. Keep request threads off the binding or reuse
+  a fixed pool.
 
 ## Typed models
 

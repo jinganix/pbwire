@@ -4,7 +4,7 @@
 -include_lib("gpb/include/gpb.hrl").
 
 load_cache_msg_fields_improper_list_should_fail_test() ->
-    ok = enif_protobuf:purge_cache(),
+    ok = pbwire:purge_cache(),
     Defs = [
         {{enum, e}, [{v1, 0}]},
         {{msg, m1}, [
@@ -13,4 +13,4 @@ load_cache_msg_fields_improper_list_should_fail_test() ->
             | not_a_proper_list
         ]}
     ],
-    ?assertError(_, enif_protobuf:load_cache(Defs)).
+    ?assertError(_, pbwire:load_cache(Defs)).

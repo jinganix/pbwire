@@ -19,7 +19,8 @@
 
 No. It is a runtime: descriptors in, dynamic messages out. Nothing is generated,
 nothing is compiled per schema, and adding a message type does not require a
-rebuild.
+rebuild — unless you embedded the descriptor set in the binary (see
+[Do I have to recompile when a `.proto` changes?](#do-i-have-to-recompile-when-a-proto-changes)).
 
 ### Does it need `protoc` at runtime?
 
@@ -59,16 +60,16 @@ the short version:
 | C++ | direct call over the C runtime | `FileDescriptorSet` |
 | Python | CPython extension, dict↔wire in C | `FileDescriptorSet` |
 | Ruby | C extension linked against the core | `FileDescriptorSet` |
-| Java | `java.lang.foreign` downcalls (no JNI) | `FileDescriptorSet` |
-| Kotlin | the Java FFM layer + a DSL | `FileDescriptorSet` |
+| Java | own pure-Java codec (no JNI, no native library) | `FileDescriptorSet` |
+| Kotlin | the Java runtime + a DSL | `FileDescriptorSet` |
 | Node | hand-written N-API addon (no npm) | `FileDescriptorSet` |
 | Objective-C | ARC wrapper (Foundation only) | `FileDescriptorSet` |
-| PHP | `ext-ffi` | `FileDescriptorSet` |
+| PHP | native C extension (`ext-ffi` wrapper without a compiler) | `FileDescriptorSet` |
 | Dart | `dart:ffi` | `FileDescriptorSet` |
 | C# | `DllImport` + a resolver | `FileDescriptorSet` |
 | Rust | links `libpbwire.a` statically | `FileDescriptorSet` |
-| Go | `protoc-gen-pbwire-go` straight-line codecs (no cgo) | the generated code |
-| Erlang | NIF; gpb records via `enif_protobuf:load_cache/1` | gpb's `get_msg_defs/0` |
+| Go | cgo dynamic binding over the C core | `FileDescriptorSet` (hot-swappable) |
+| Erlang | NIF; gpb records via `pbwire:load_cache/1` | gpb's `get_msg_defs/0` |
 
 The C bindings check `PBW_ABI_VERSION` at load time, so a library built from a
 newer, incompatible tree fails fast instead of corrupting memory. The C ABI is
@@ -106,8 +107,9 @@ descriptor and a value tree at runtime, which costs roughly 40 ns per encode of 
 pass (the C++ serializer sizes first, then writes) and by precomputed tag bytes,
 so the in-process `pbw_ctx` API is 1.2-1.7x the generated codec on every tier.
 The gap only shows up in two places: the plain `pbw_encode` API, which allocates
-a tree per call (0.96x of generated code at 169 B), and bindings that cross an
-FFI boundary per call (Java, 0.69x at 136 B). Numbers and the per-language
+a tree per call (0.96x of generated code at 169 B), and a dynamic codec meeting
+generated straight-line writes on a tiny message (Java, 0.75x at 136 B). Numbers
+and the per-language
 reasons are in [BENCHMARKS.md](../BENCHMARKS.md).
 
 ### Can I decode untrusted bytes with it?
@@ -127,9 +129,21 @@ you. All imported files must be in the set. See [guide.md](guide.md).
 
 ### Do I have to recompile when a `.proto` changes?
 
-No. Ship the new descriptor set and reload the schema in the running process;
-nothing is generated or compiled per schema. Messages of the old schema stay
-valid until you free that schema.
+Only if you baked the schema into the binary. The loader takes bytes
+(`pbw_descriptor_set_load`), so a sidecar file and embedded bytes are the same
+call — the difference is deployment, not API:
+
+- **External file (default).** Ship the new `FileDescriptorSet` next to the
+  binary and reload the schema in the running process; no rebuild. Messages of
+  the old schema stay valid until you free that schema.
+- **Embedded bytes (single binary).** Compile the set in (`xxd -i`, Rust
+  `include_bytes!`, app resources) and load it from memory
+  (`from_bytes` / `fromBytes` / `load(bytes)`, depending on the binding). No
+  sidecar file to lose, but a `.proto` change means rebuilding and redeploying.
+
+Exceptions: Erlang uses gpb's compiled definitions and recompiles by
+construction. The C struct binding still validates its generated layout against
+a descriptor set at run time, so embed that set too rather than dropping it.
 
 ### Where do I report a bug?
 

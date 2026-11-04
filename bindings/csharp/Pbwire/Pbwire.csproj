@@ -7,6 +7,19 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <RootNamespace>Pbwire</RootNamespace>
     <InvariantGlobalization>true</InvariantGlobalization>
+    <!-- Release metadata: Version is kept in sync with the repo-root VERSION
+         file by scripts/sync-versions.sh; never edit by hand. -->
+    <PackageId>Pbwire</PackageId>
+    <Version>0.1.0</Version>
+    <Authors>jinganix</Authors>
+    <Description>Dynamic protobuf over the pbwire C ABI, schema at runtime, no generated code</Description>
+    <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
+    <RepositoryUrl>https://github.com/jinganix/pbwire</RepositoryUrl>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
   </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="../README.md" Pack="true" PackagePath="README.md" />
+  </ItemGroup>
 
 </Project>

@@ -1,60 +1,53 @@
-import java.lang.foreign.MemorySegment;
-import java.lang.foreign.ValueLayout;
-import java.lang.ref.Cleaner;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
-import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * One dynamic message: a mutable value tree over a pbw_message.
+ * One dynamic message: a mutable value tree over a {@code DMsg}.
  *
- * <p>Fields are addressed by name or by number; both are resolved through the
- * type's field cache, so a hot {@code set}/{@code get} loop makes no native
- * lookup call. {@code set} replaces a singular field and appends to a repeated
+ * <p>Fields are addressed by name or by number; both resolve through the
+ * type's field table, so a hot {@code set}/{@code get} loop costs a map
+ * lookup. {@code set} replaces a singular field and appends to a repeated
  * one; a field that was never set is absent ({@code get} returns null, typed
  * getters return the Java default).
  *
- * <p>Ownership: a message from {@link MessageType#newMessage} or
- * {@link MessageType#decode} owns its native tree; {@link #close()} frees it and
- * is idempotent. {@link #newMessage} and {@link #getMessage} return child views
- * of an existing tree -- closing or using one after the root is closed throws
- * {@link IllegalStateException} (children are never freed on their own). A
- * cleaner frees a root that was not closed explicitly.
+ * <p>Nested messages decode lazily and materialize on first access, so a
+ * gateway that only re-encodes never pays for parsing. Ownership: a message
+ * from {@link MessageType#newMessage} or {@link MessageType#decode} is a
+ * root; {@link #close()} marks it closed and is idempotent.
+ * {@link #newMessage} and {@link #getMessage} return child views of the
+ * same tree -- using or closing one after the root is closed throws
+ * {@link IllegalStateException}.
  *
- * <p>Not thread safe, like the C core: one message belongs to one thread.
+ * <p>Not thread safe: one message belongs to one thread. Share the schema
+ * and the types, not the messages.
  */
 public final class Message implements AutoCloseable {
     private final MessageType type;
-    private final MemorySegment handle;
-    private final AtomicReference<MemorySegment> root; /* shared with child views, null once freed */
-    private final Message parent; /* a view keeps its root (and tree) reachable */
-    private final Cleaner.Cleanable cleanable; /* roots only */
+    private final GenericCodec.DMsg data;
+    private final AtomicBoolean closed; /* shared with child views */
+    private final Message parent; /* a view keeps its root reachable */
+    private final boolean own;
 
-    /** A root owns the tree (and frees it, here or from the cleaner); a view only reads it. */
-    private Message(MessageType type, MemorySegment handle, AtomicReference<MemorySegment> root, Message parent,
-            boolean own) {
+    private Message(MessageType type, GenericCodec.DMsg data,
+            AtomicBoolean closed, Message parent, boolean own) {
         this.type = type;
-        this.handle = handle;
-        this.root = root;
+        this.data = data;
+        this.closed = closed;
         this.parent = parent;
-        /* The action must not reference this message, or the cleaner could never
-         * see it become unreachable; it holds the handle reference instead. */
-        this.cleanable = own
-                ? Pbwire.CLEANER.register(this, new Pbwire.FreeOnce(root, Pbwire::messageFree))
-                : null;
+        this.own = own;
     }
 
-    /** A root: owns the tree and frees it. */
-    static Message root(MessageType type, MemorySegment handle) {
-        return new Message(type, handle, new AtomicReference<>(handle), null, true);
+    /** A root: closing it retires the whole tree. */
+    static Message root(MessageType type, GenericCodec.DMsg data) {
+        return new Message(type, data, new AtomicBoolean(false), null, true);
     }
 
-    /** A child view: the root owns the allocation, so this holds no cleaner. */
-    private Message view(MemorySegment child, MessageType childType) {
-        /* The view holds the root message, not just its handle: a live list item or
-         * nested view must keep the cleaner from freeing the tree it reads. */
-        return new Message(childType, child, root, parent != null ? parent : this, false);
+    /** A child view: closing it is a no-op, closing the root retires it. */
+    private Message view(GenericCodec.DMsg child, MessageType childType) {
+        return new Message(childType, child, closed, parent != null ? parent : this, false);
     }
 
     public MessageType type() {
@@ -64,77 +57,117 @@ public final class Message implements AutoCloseable {
     /* ------------------------------------------------------------ setting */
 
     public Message set(String name, long value) {
-        return set(type.field(name), value);
+        return setAt(type.field(name), value);
     }
 
     /** Any integer or enum field; the value is stored as raw 64-bit bits. */
     public Message set(int number, long value) {
-        return set(type.field(number), value);
+        return setAt(type.field(number), value);
     }
 
-    private Message set(MessageType.FieldInfo field, long value) {
-        store(field, Pbwire.valueNewInt(value));
-        return this;
+    private Message setAt(int slot, long value) {
+        GenericCodec.Field f = type.def.fields[slot];
+        switch (f.kind) {
+            case GenericCodec.K_INT32:
+            case GenericCodec.K_UINT32:
+            case GenericCodec.K_SINT32:
+            case GenericCodec.K_INT64:
+            case GenericCodec.K_UINT64:
+            case GenericCodec.K_SINT64:
+            case GenericCodec.K_FIXED32:
+            case GenericCodec.K_SFIXED32:
+            case GenericCodec.K_FIXED64:
+            case GenericCodec.K_SFIXED64:
+            case GenericCodec.K_ENUM:
+                store(slot, f, Long.valueOf(value));
+                return this;
+            default:
+                throw new PbwireException(type.name() + ": field " + f.number
+                        + " needs an integer");
+        }
     }
 
     public Message set(String name, boolean value) {
-        return set(type.field(name), value);
+        return setAt(type.field(name), value);
     }
 
     public Message set(int number, boolean value) {
-        return set(type.field(number), value);
+        return setAt(type.field(number), value);
     }
 
-    private Message set(MessageType.FieldInfo field, boolean value) {
-        store(field, Pbwire.valueNewBool(value ? 1 : 0));
+    private Message setAt(int slot, boolean value) {
+        GenericCodec.Field f = type.def.fields[slot];
+        if (f.kind != GenericCodec.K_BOOL) {
+            throw new PbwireException(type.name() + ": field " + f.number
+                    + " needs a boolean");
+        }
+        store(slot, f, Boolean.valueOf(value));
         return this;
     }
 
     public Message set(String name, double value) {
-        return set(type.field(name), value);
+        return setAt(type.field(name), value);
     }
 
     /** A single overload for a float and a double field: the field type decides. */
     public Message set(int number, double value) {
-        return set(type.field(number), value);
+        return setAt(type.field(number), value);
     }
 
-    private Message set(MessageType.FieldInfo field, double value) {
-        store(field, field.type == Pbwire.TYPE_FLOAT
-                ? Pbwire.valueNewFloat((float) value)
-                : Pbwire.valueNewDouble(value));
+    private Message setAt(int slot, double value) {
+        GenericCodec.Field f = type.def.fields[slot];
+        if (f.kind != GenericCodec.K_FLOAT && f.kind != GenericCodec.K_DOUBLE) {
+            throw new PbwireException(type.name() + ": field " + f.number
+                    + " needs a float or double");
+        }
+        store(slot, f, Double.valueOf(value));
         return this;
     }
 
     public Message set(String name, String value) {
-        return set(type.field(name), value);
+        return setAt(type.field(name), value);
     }
 
     /** A string field; the payload is UTF-8, like every protobuf string. */
     public Message set(int number, String value) {
-        return set(type.field(number), value);
+        return setAt(type.field(number), value);
     }
 
-    private Message set(MessageType.FieldInfo field, String value) {
-        return set(field, value.getBytes(StandardCharsets.UTF_8));
+    private Message setAt(int slot, String value) {
+        GenericCodec.Field f = type.def.fields[slot];
+        if (f.kind != GenericCodec.K_STRING) {
+            throw new PbwireException(type.name() + ": field " + f.number
+                    + " needs a string");
+        }
+        store(slot, f, value);
+        return this;
     }
 
     public Message set(String name, byte[] value) {
-        return set(type.field(name), value);
+        return setAt(type.field(name), value);
     }
 
     public Message set(int number, byte[] value) {
-        return set(type.field(number), value);
+        return setAt(type.field(number), value);
     }
 
-    private Message set(MessageType.FieldInfo field, byte[] value) {
-        /* C copies the payload into the value, so the workspace buffer is free
-         * again as soon as this returns. */
-        Pbwire.Workspace workspace = Pbwire.workspace();
-        MemorySegment data = workspace.input(value.length);
-        MemorySegment.copy(value, 0, data, ValueLayout.JAVA_BYTE, 0, value.length);
-        store(field, Pbwire.valueNewBytes(data, value.length));
+    private Message setAt(int slot, byte[] value) {
+        GenericCodec.Field f = type.def.fields[slot];
+        if (f.kind != GenericCodec.K_BYTES && f.kind != GenericCodec.K_STRING) {
+            throw new PbwireException(type.name() + ": field " + f.number
+                    + " needs bytes");
+        }
+        store(slot, f, value);
         return this;
+    }
+
+    private void store(int slot, GenericCodec.Field f, Object value) {
+        segment();
+        if (f.repeated) {
+            data.add(f.number, value);
+        } else {
+            data.set(f.number, value);
+        }
     }
 
     /**
@@ -143,293 +176,296 @@ public final class Message implements AutoCloseable {
      * result; it writes straight into this message's tree.
      */
     public Message newMessage(String name) {
-        return newMessage(type.field(name));
+        return newMessageAt(type.field(name));
     }
 
     public Message newMessage(int number) {
-        return newMessage(type.field(number));
+        return newMessageAt(type.field(number));
     }
 
-    private Message newMessage(MessageType.FieldInfo field) {
-        if (!field.isMessage()) {
-            throw new PbwireException(type.name() + ": field " + field.number + " is not a message field");
+    private Message newMessageAt(int slot) {
+        GenericCodec.Field f = type.def.fields[slot];
+        if (f.kind != GenericCodec.K_MESSAGE && f.kind != GenericCodec.K_GROUP) {
+            throw new PbwireException(type.name() + ": field " + f.number
+                    + " is not a message field");
         }
-        MemorySegment child = Pbwire.messageSetMessage(segment(), field.number);
-        return view(Pbwire.notNull(child, type.name() + ": cannot create field " + field.number),
-                field.subtype());
+        segment();
+        return view(data.newMessage(f.number), type.subtype(slot));
     }
 
     /** Drops a field value (and, for a oneof, the group case). */
     public void clear(String name) {
-        clear(type.field(name));
+        clearAt(type.field(name));
     }
 
     public void clear(int number) {
-        clear(type.field(number));
+        clearAt(type.field(number));
     }
 
-    private void clear(MessageType.FieldInfo field) {
-        Pbwire.messageClear(segment(), field.number);
+    private void clearAt(int slot) {
+        segment();
+        data.clear(type.def.fields[slot].number);
     }
 
     /* -------------------------------------------------------------- presence */
 
     public boolean has(String name) {
-        return has(type.field(name));
+        return hasAt(type.field(name));
     }
 
     public boolean has(int number) {
-        return has(type.field(number));
+        return hasAt(type.field(number));
     }
 
-    private boolean has(MessageType.FieldInfo field) {
-        return !Pbwire.isNull(value(field));
+    private boolean hasAt(int slot) {
+        segment();
+        return data.has(type.def.fields[slot].number);
     }
 
     /* -------------------------------------------------------------- reading */
 
-    /** The field value, or null when absent: Long, Boolean, Float, Double, String, byte[], Message or List. */
+    /** The field value, or null when absent: Long, Boolean, Double, String, byte[], Message or List. */
     public Object get(String name) {
-        return get(type.field(name));
+        return getAt(type.field(name));
     }
 
     public Object get(int number) {
-        return get(type.field(number));
+        return getAt(type.field(number));
     }
 
-    private Object get(MessageType.FieldInfo field) {
-        MemorySegment value = value(field);
-        if (field.repeated) {
-            return Pbwire.isNull(value) ? List.of() : list(field, value);
+    private Object getAt(int slot) {
+        segment();
+        GenericCodec.Field f = type.def.fields[slot];
+        if (f.repeated) {
+            return getList(slot);
         }
-        return Pbwire.isNull(value) ? null : element(field, value);
+        Object v = data.get(f.number);
+        if (v instanceof GenericCodec.DMsg) {
+            return view((GenericCodec.DMsg) v, type.subtype(slot));
+        }
+        return v;
     }
 
     public long getLong(String name) {
-        return getLong(type.field(name));
+        return getLongAt(type.field(name));
     }
 
     /** An integer or enum field; absent reads as 0. */
     public long getLong(int number) {
-        return getLong(type.field(number));
+        return getLongAt(type.field(number));
     }
 
-    private long getLong(MessageType.FieldInfo field) {
-        MemorySegment value = value(field);
-        return Pbwire.isNull(value) ? 0L : Pbwire.valueGetInt(value);
+    private long getLongAt(int slot) {
+        Object v = getAt(slot);
+        if (v == null) {
+            return 0L;
+        }
+        if (v instanceof Number) {
+            return ((Number) v).longValue();
+        }
+        throw new PbwireException(type.name() + ": field "
+                + type.def.fields[slot].number + " is not an integer");
     }
 
     public int getInt(String name) {
-        return getInt(type.field(name));
+        return getIntAt(type.field(name));
     }
 
     public int getInt(int number) {
-        return getInt(type.field(number));
+        return getIntAt(type.field(number));
     }
 
-    private int getInt(MessageType.FieldInfo field) {
-        return (int) getLong(field);
+    private int getIntAt(int slot) {
+        return (int) getLongAt(slot);
     }
 
     public boolean getBool(String name) {
-        return getBool(type.field(name));
+        return getBoolAt(type.field(name));
     }
 
     public boolean getBool(int number) {
-        return getBool(type.field(number));
+        return getBoolAt(type.field(number));
     }
 
-    private boolean getBool(MessageType.FieldInfo field) {
-        MemorySegment value = value(field);
-        return !Pbwire.isNull(value) && Pbwire.valueGetBool(value) != 0;
+    private boolean getBoolAt(int slot) {
+        Object v = getAt(slot);
+        if (v == null) {
+            return false;
+        }
+        if (v instanceof Boolean) {
+            return (Boolean) v;
+        }
+        if (v instanceof Number) {
+            return ((Number) v).longValue() != 0;
+        }
+        throw new PbwireException(type.name() + ": field "
+                + type.def.fields[slot].number + " is not a boolean");
     }
 
     public double getDouble(String name) {
-        return getDouble(type.field(name));
+        return getDoubleAt(type.field(name));
     }
 
     /** A float or a double field; absent reads as 0. */
     public double getDouble(int number) {
-        return getDouble(type.field(number));
+        return getDoubleAt(type.field(number));
     }
 
-    private double getDouble(MessageType.FieldInfo field) {
-        MemorySegment value = value(field);
-        if (Pbwire.isNull(value)) {
+    private double getDoubleAt(int slot) {
+        Object v = getAt(slot);
+        if (v == null) {
             return 0;
         }
-        return field.type == Pbwire.TYPE_FLOAT ? Pbwire.valueGetFloat(value) : Pbwire.valueGetDouble(value);
+        if (v instanceof Number) {
+            return ((Number) v).doubleValue();
+        }
+        throw new PbwireException(type.name() + ": field "
+                + type.def.fields[slot].number + " is not a float");
     }
 
     public float getFloat(String name) {
-        return getFloat(type.field(name));
+        return getFloatAt(type.field(name));
     }
 
     public float getFloat(int number) {
-        return getFloat(type.field(number));
+        return getFloatAt(type.field(number));
     }
 
-    private float getFloat(MessageType.FieldInfo field) {
-        return (float) getDouble(field);
+    private float getFloatAt(int slot) {
+        return (float) getDoubleAt(slot);
     }
 
     public String getString(String name) {
-        return getString(type.field(name));
+        return getStringAt(type.field(name));
     }
 
     /** A string field, or null when absent. */
     public String getString(int number) {
-        return getString(type.field(number));
+        return getStringAt(type.field(number));
     }
 
-    private String getString(MessageType.FieldInfo field) {
-        byte[] bytes = payload(field);
-        return bytes == null ? null : new String(bytes, StandardCharsets.UTF_8);
+    private String getStringAt(int slot) {
+        Object v = getAt(slot);
+        if (v == null) {
+            return null;
+        }
+        if (v instanceof String) {
+            return (String) v;
+        }
+        if (v instanceof byte[]) {
+            return new String((byte[]) v, StandardCharsets.UTF_8);
+        }
+        throw new PbwireException(type.name() + ": field "
+                + type.def.fields[slot].number + " is not a string");
     }
 
     public byte[] getBytes(String name) {
-        return getBytes(type.field(name));
+        return getBytesAt(type.field(name));
     }
 
     /** A bytes (or string) field, or null when absent. */
     public byte[] getBytes(int number) {
-        return getBytes(type.field(number));
+        return getBytesAt(type.field(number));
     }
 
-    private byte[] getBytes(MessageType.FieldInfo field) {
-        return payload(field);
+    private byte[] getBytesAt(int slot) {
+        Object v = getAt(slot);
+        if (v == null) {
+            return null;
+        }
+        if (v instanceof byte[]) {
+            return Arrays.copyOf((byte[]) v, ((byte[]) v).length);
+        }
+        if (v instanceof String) {
+            return ((String) v).getBytes(StandardCharsets.UTF_8);
+        }
+        throw new PbwireException(type.name() + ": field "
+                + type.def.fields[slot].number + " is not bytes");
     }
 
     public Message getMessage(String name) {
-        return getMessage(type.field(name));
+        return getMessageAt(type.field(name));
     }
 
     /** A nested message view, or null when absent; never free it separately. */
     public Message getMessage(int number) {
-        return getMessage(type.field(number));
+        return getMessageAt(type.field(number));
     }
 
-    private Message getMessage(MessageType.FieldInfo field) {
-        MemorySegment value = value(field);
-        if (Pbwire.isNull(value)) {
+    private Message getMessageAt(int slot) {
+        Object v = getAt(slot);
+        if (v == null) {
             return null;
         }
-        MemorySegment child = Pbwire.valueGetMessage(value);
-        return Pbwire.isNull(child) ? null : view(child, field.subtype());
+        if (v instanceof Message) {
+            return (Message) v;
+        }
+        throw new PbwireException(type.name() + ": field "
+                + type.def.fields[slot].number + " is not a message");
     }
 
     public List<Object> getList(String name) {
-        return getList(type.field(name));
+        return getListAt(type.field(name));
     }
 
     /** The items of a repeated field, empty when absent. */
     public List<Object> getList(int number) {
-        return getList(type.field(number));
+        return getListAt(type.field(number));
     }
 
-    private List<Object> getList(MessageType.FieldInfo field) {
-        if (!field.repeated) {
-            throw new PbwireException(type.name() + ": field " + field.number + " is not repeated");
+    private List<Object> getListAt(int slot) {
+        segment();
+        GenericCodec.Field f = type.def.fields[slot];
+        if (!f.repeated) {
+            throw new PbwireException(type.name() + ": field " + f.number
+                    + " is not repeated");
         }
-        MemorySegment value = value(field);
-        return Pbwire.isNull(value) ? List.of() : list(field, value);
+        List<Object> items = data.getList(f.number);
+        List<Object> out = new ArrayList<>(items.size());
+        for (Object v : items) {
+            if (v instanceof GenericCodec.DMsg) {
+                out.add(view((GenericCodec.DMsg) v, type.subtype(slot)));
+            } else if (v instanceof byte[]) {
+                byte[] b = (byte[]) v;
+                out.add(Arrays.copyOf(b, b.length));
+            } else {
+                out.add(v);
+            }
+        }
+        return List.copyOf(out);
     }
 
     /* ---------------------------------------------------------------- wire */
 
     /**
-     * Encodes the message. Field order is schema order and unknown fields from a
-     * decode follow, so {@code decode(w).encode()} reproduces a canonical wire
-     * image byte for byte.
+     * Encodes the message. Field order is schema order and unknown fields from
+     * a decode follow, so {@code decode(w).encode()} reproduces a canonical
+     * wire image byte for byte.
      */
     public byte[] encode() {
-        MemorySegment message = segment();
-        Pbwire.Workspace workspace = Pbwire.workspace();
-        MemorySegment out = workspace.outPtr();
-        MemorySegment len = workspace.outLen();
-        int status = Pbwire.encodeCtx(workspace.ctx, message, out, len);
-        if (status != Pbwire.OK) {
-            throw Pbwire.error(type.name() + ": encode failed", status);
+        segment();
+        try {
+            return GenericCodec.encode(data);
+        } catch (IllegalStateException | IllegalArgumentException e) {
+            throw new PbwireException(type.name() + ": encode failed", 1);
         }
-        return Pbwire.toByteArray(out.get(Pbwire.PTR, 0), len.get(Pbwire.I64, 0));
     }
 
-    /** Frees the tree this message owns; callable more than once. */
+    /** Marks the tree closed; callable more than once. Views ignore this. */
     @Override
     public void close() {
-        if (cleanable != null) {
-            cleanable.clean();
+        if (own) {
+            closed.set(true);
         }
     }
 
     /* ------------------------------------------------------------- internals */
 
-    private void store(MessageType.FieldInfo field, MemorySegment value) {
-        Pbwire.notNull(value, type.name() + ": cannot allocate value");
-        int status = Pbwire.messageSetField(segment(), field.handle, value);
-        if (status != Pbwire.OK) {
-            /* Ownership stays with the caller when the set fails. */
-            Pbwire.valueFree(value);
-            throw Pbwire.error(type.name() + ": field " + field.number, status);
-        }
-    }
-
-    private MemorySegment value(MessageType.FieldInfo field) {
-        return Pbwire.messageGetField(segment(), field.handle);
-    }
-
-    private MemorySegment segment() {
-        if (root.get() == null) {
+    private GenericCodec.DMsg segment() {
+        if (closed.get()) {
             throw new IllegalStateException(type.name() + ": message is closed");
         }
         type.checkOpen();
-        return handle;
-    }
-
-    private List<Object> list(MessageType.FieldInfo field, MemorySegment value) {
-        int n = (int) Pbwire.valueCount(value);
-        List<Object> items = new ArrayList<>(n);
-        for (int i = 0; i < n; i++) {
-            items.add(element(field, Pbwire.valueAt(value, i)));
-        }
-        return List.copyOf(items);
-    }
-
-    /** One scalar field value, as the field type maps it. */
-    private Object element(MessageType.FieldInfo field, MemorySegment value) {
-        switch (field.type) {
-            case Pbwire.TYPE_STRING:
-                return new String(payload(value), StandardCharsets.UTF_8);
-            case Pbwire.TYPE_BYTES:
-                return payload(value);
-            case Pbwire.TYPE_MESSAGE:
-            case Pbwire.TYPE_GROUP:
-                MemorySegment child = Pbwire.valueGetMessage(value);
-                return Pbwire.isNull(child) ? null : view(child, field.subtype());
-            case Pbwire.TYPE_FLOAT:
-                return Pbwire.valueGetFloat(value);
-            case Pbwire.TYPE_DOUBLE:
-                return Pbwire.valueGetDouble(value);
-            case Pbwire.TYPE_BOOL:
-                return Pbwire.valueGetBool(value) != 0;
-            default:
-                return Pbwire.valueGetInt(value);
-        }
-    }
-
-    /** A bytes or string field's payload, or null when the field is absent. */
-    private byte[] payload(MessageType.FieldInfo field) {
-        MemorySegment value = value(field);
-        return Pbwire.isNull(value) ? null : payload(value);
-    }
-
-    private static byte[] payload(MemorySegment value) {
-        Pbwire.Workspace workspace = Pbwire.workspace();
-        MemorySegment len = workspace.outLen();
-        MemorySegment data = Pbwire.valueGetBytes(value, len);
-        if (Pbwire.isNull(data)) {
-            return new byte[0];
-        }
-        return Pbwire.toByteArray(data, len.get(Pbwire.I64, 0));
+        return data;
     }
 }

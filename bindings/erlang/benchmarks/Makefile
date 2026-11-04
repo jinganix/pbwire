@@ -1,4 +1,4 @@
-# Benchmarks for enif_protobuf against gpb (same harness as every other
+# Benchmarks for pbwire against gpb (same harness as every other
 # binding: bindings/c/tests/data/matrix3.proto, four payload tiers).
 #
 # Prerequisites: Erlang/OTP, gpb (via the parent test profile or GPB_PATH).
@@ -18,7 +18,7 @@ GPB_PATH   ?= $(ROOT)/_build/test/lib/gpb
 GPB_EBIN   ?= $(if $(wildcard $(GPB_PATH)/ebin/gpb_compile.beam),$(GPB_PATH)/ebin,$(abspath ../gpb/ebin))
 GPB_INCLUDE ?= $(abspath $(GPB_EBIN)/../include)
 
-EPB_EBIN ?= $(ROOT)/_build/default/lib/enif_protobuf/ebin
+EPB_EBIN ?= $(ROOT)/_build/default/lib/pbwire/ebin
 
 # Erlang from repo .tool-versions (asdf/mise); override only if needed.
 erl     ?= $(shell $(TOOL_SH) --erl)
@@ -74,7 +74,7 @@ benchmarks-quick: build
 ifneq ($(HAVE_NIF),)
 	@$(MAKE) benchmarks-nif-code
 endif
-	BENCH_TARGET_TIME=0.2 $(PROTO_BENCH)
+	BENCH_TARGET_TIME=0.05 $(PROTO_BENCH)
 
 update-readme: build
 	@./update_readme.sh
@@ -106,7 +106,7 @@ define show-hw-sw-info
 endef
 
 # get_proto_defs/0 carries the proto3 markers and the defs-format-3 enum
-# values that enif_protobuf:load_cache/1 needs.
+# values that pbwire:load_cache/1 needs.
 gpb-compile = \
 	$(erl) -boot start_clean -pa $(GPB_EBIN) -noshell -noinput +B \
 		-v never -c false -I$(MATRIX3_DIR) -o tmp \

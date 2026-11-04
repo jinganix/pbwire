@@ -16,4 +16,4 @@ load_cache_proto3_msgs_improper_list_should_fail_test() ->
             #field{name = b, fnum = 1, rnum = 2, type = uint32, occurrence = defaulty, opts = []}
         ]}
     ],
-    ?assertError(_, enif_protobuf:load_cache(Defs)).
+    ?assertError(_, pbwire:load_cache(Defs)).

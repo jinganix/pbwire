@@ -3,12 +3,13 @@
 
 #include "pbwire.h"
 
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 /* Limits mirrored from the protobuf reference implementations and from
- * enif_protobuf's codec: unbounded nesting is a stack-overflow vector. */
+ * pbwire's codec: unbounded nesting is a stack-overflow vector. */
 #if defined(__GNUC__) || defined(__clang__)
 #define PBW_INLINE __attribute__((always_inline)) static inline
 /* Branch and prefetch hints: no-ops on compilers without them, so the core
@@ -31,6 +32,45 @@
 #define PBW_WIRE_START_GROUP 3
 #define PBW_WIRE_END_GROUP 4
 #define PBW_WIRE_32BIT 5
+
+/* Byte distance between two pointers into the same buffer, without the
+ * ptrdiff_t overflow that `(size_t)(end - p)` has for multi-gigabyte
+ * buffers on 32-bit targets. Both pointers must be into (or one past)
+ * the same object; otherwise the result is meaningless but still defined. */
+PBW_INLINE size_t
+pbw_remaining(const uint8_t *end, const uint8_t *p)
+{
+    uintptr_t ue = (uintptr_t)(const void *)end;
+    uintptr_t up = (uintptr_t)(const void *)p;
+
+    if (ue < up) {
+        return 0;
+    }
+    return (size_t)(ue - up);
+}
+
+/* Non-NULL empty input: `NULL + 0` is undefined even when nothing is read,
+ * so every entry point normalizes a NULL empty buffer to this first. */
+extern const uint8_t pbw_empty_input[1];
+PBW_INLINE const uint8_t *
+pbw_normalize_input(const void *buf, size_t len)
+{
+    (void)len;
+    if (buf != NULL) {
+        return (const uint8_t *)buf;
+    }
+    return pbw_empty_input;
+}
+
+/* 1 when `pos <= cap`; guards every `cap - pos` site against wrap on
+ * corrupted state. Corruption cannot happen through the public API, but
+ * a wrapped subtraction would turn into a huge "available" length and
+ * then into an out-of-bounds access. */
+PBW_INLINE int
+pbw_cap_holds(size_t cap, size_t pos)
+{
+    return cap >= pos;
+}
 
 typedef struct {
     uint8_t *data;
@@ -96,6 +136,12 @@ struct pbw_field {
     uint8_t tag_len;
     uint8_t len_tag_len;
     uint8_t wire_type;
+    /* Link-time decode action (see PBW_ACT_*): the shape-specific fast path
+     * decode_fields() runs for this field, or PBW_ACT_GENERIC when the
+     * generic field logic must run (oneof members, groups, closed enums).
+     * Computed for every field regardless of tag size, so one- and
+     * multi-byte tags share a single action switch. */
+    uint8_t dec_action;
 };
 
 struct pbw_enum_value {
@@ -124,13 +170,16 @@ struct pbw_descriptor {
     /* set by pbw_schema_link(): some field is a proto2 closed enum, so the
      * decoder must detour unknown enum numbers into the unknown fields */
     int has_closed_enum;
-    /* Fast tag dispatch: tag_map[byte] is the field whose one-byte tag equals
-     * `byte`, NULL when no field (or no one-byte tag) matches. Multibyte tags
-     * still use fnum_map. NULL when no field has a one-byte tag. */
+    /* set by pbw_schema_link(): this message or a reachable submessage
+     * declares a proto2 required field, so a decode has to walk the tree
+     * once to validate it. Pure-proto3 subtrees stay 0 and are skipped. */
+    int has_required;
+    /* Fast tag dispatch: tag_map[byte] is the field whose one-byte tag (or
+     * one-byte packed-form tag) equals `byte`, NULL when no field matches.
+     * Multibyte tags still use fnum_map. NULL when no field has a one-byte
+     * tag. The decode action lives on the field itself (see dec_action),
+     * so this table is lookup-only. */
     pbw_field **tag_map;
-    /* Parallel to tag_map: the precomputed decode action for that tag byte,
-     * 0 (PBW_ACT_GENERIC) when the generic field logic must run. */
-    uint8_t *tag_action;
 };
 
 struct pbw_schema {
@@ -142,9 +191,6 @@ struct pbw_schema {
      * message's value slots always match its descriptor. */
     int frozen;
     int proto3; /* dialect handed to descriptors created from now on */
-    /* set by pbw_schema_link(): some proto2 message declares a required field,
-     * so a decode has to walk the tree once to validate it */
-    int has_required;
     char error[192];
 };
 
@@ -188,22 +234,29 @@ struct pbw_message {
     size_t wire_len;
 };
 
-/* Link-time decode actions for one-byte tags (see tag_action). Only shapes
- * whose semantics fit the inline fast path get one; everything else runs the
- * generic field logic, which is also what multibyte tags use. */
+/* Link-time decode actions, one per field (see dec_action). Only shapes
+ * whose semantics fit the inline fast path get one: oneof members, groups
+ * and closed enums keep PBW_ACT_GENERIC and run the generic field logic.
+ * The packed (length-delimited) form of a repeated packable field is
+ * detected by its wire type at decode time, so it needs no action of its
+ * own: every repeated action below describes the unpacked form. */
 enum {
     PBW_ACT_GENERIC = 0,
-    PBW_ACT_I32,   /* varint, sign-extended from 32 bits (int32, open enum) */
-    PBW_ACT_I64,   /* varint raw (int64, uint64) */
-    PBW_ACT_U32,   /* varint, masked to 32 bits (uint32) */
-    PBW_ACT_S32,   /* varint, zigzag-decoded to 32 bits (sint32) */
-    PBW_ACT_S64,   /* varint, zigzag-decoded to 64 bits (sint64) */
-    PBW_ACT_BOOL,  /* varint, normalized to 0/1 (bool) */
-    PBW_ACT_F32,   /* 4 little-endian bytes (fixed32, sfixed32, float) */
-    PBW_ACT_F64,   /* 8 little-endian bytes (fixed64, sfixed64, double) */
-    PBW_ACT_STR,   /* singular string/bytes, first or later occurrence */
-    PBW_ACT_MSG,   /* singular message, merge or replace */
-    PBW_ACT_PACKED /* packed form of a repeated packable field */
+    PBW_ACT_I32,        /* singular varint, sign-extended from 32 bits */
+    PBW_ACT_I64,        /* singular varint raw (int64, uint64) */
+    PBW_ACT_U32,        /* singular varint, masked to 32 bits (uint32) */
+    PBW_ACT_S32,        /* singular varint, zigzag-decoded to 32 bits */
+    PBW_ACT_S64,        /* singular varint, zigzag-decoded to 64 bits */
+    PBW_ACT_BOOL,       /* singular varint, normalized to 0/1 (bool) */
+    PBW_ACT_F32,        /* singular 4 little-endian bytes */
+    PBW_ACT_F64,        /* singular 8 little-endian bytes */
+    PBW_ACT_STR,        /* singular string/bytes, first or later occurrence */
+    PBW_ACT_MSG,        /* singular message, merge or replace */
+    PBW_ACT_REP_VARINT, /* repeated unpacked varint scalar */
+    PBW_ACT_REP_F32,    /* repeated unpacked 4-byte scalar */
+    PBW_ACT_REP_F64,    /* repeated unpacked 8-byte scalar */
+    PBW_ACT_REP_STR,    /* repeated string/bytes */
+    PBW_ACT_REP_MSG     /* repeated message */
 };
 
 /* A message keeps its values inline: one allocation holds the struct, the value
@@ -299,14 +352,21 @@ void *pbw_arena_alloc_slow(pbw_arena *arena, size_t size);
 static inline void *
 pbw_arena_alloc(pbw_arena *arena, size_t size)
 {
-    /* Callers are internal and pass sizes bounded by real buffers, so the
-     * align_up below cannot wrap; a public entry point must reject
-     * size > SIZE_MAX - 7 itself. */
-    pbw_arena_chunk *chunk = arena->head;
+    /* Sizes near SIZE_MAX would wrap the align_up below into a tiny request:
+     * bounce them to the slow path, which rejects what it cannot hold. */
+    pbw_arena_chunk *chunk;
     void *ptr;
 
+    if (arena == NULL) {
+        return NULL;
+    }
+    chunk = arena->head;
+    if (PBW_EXPECT(size > SIZE_MAX - (size_t)7u, 0)) {
+        return pbw_arena_alloc_slow(arena, size);
+    }
     size = (size + 7u) & ~(size_t)7u;
-    if (chunk == NULL || chunk->cap - chunk->used < size) {
+    if (chunk == NULL || !pbw_cap_holds(chunk->cap, chunk->used) ||
+        chunk->cap - chunk->used < size) {
         return pbw_arena_alloc_slow(arena, size);
     }
     ptr = (char *)(chunk + 1) + chunk->used;

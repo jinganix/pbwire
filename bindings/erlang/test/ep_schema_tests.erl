@@ -13,7 +13,7 @@
 %% irrelevant for the wire type (`packed` on non-packable types) and a default
 %% that is not a valid value for the type: load_cache/1 must not care.
 load_cache_accepts_every_field_kind_test() ->
-    ok = enif_protobuf:load_cache([
+    ok = pbwire:load_cache([
         {{msg, m1}, [
             {field, int32, 1, 1, int32, optional, [packed, {default, ok}]},
             {field, int64, 2, 2, int64, optional, [packed, {default, ok}]},
@@ -58,7 +58,7 @@ load_cache_accepts_every_field_kind_test() ->
 
 %% A oneof whose members are scalars, plus a plain field after it.
 load_cache_oneof_test() ->
-    ok = enif_protobuf:load_cache([{{msg, 'Person'}, [
+    ok = pbwire:load_cache([{{msg, 'Person'}, [
         #gpb_oneof{name = message_body, rnum = 2, fields = [
             #field{name = file_children, fnum = 3, rnum = 2, type = int32, occurrence = optional, opts = []},
             #field{name = xattr, fnum = 4, rnum = 2, type = bytes, occurrence = optional, opts = []}]},
@@ -87,7 +87,7 @@ nested_oneof_roundtrip_test() ->
             ]}
         ]}
     ],
-    ok = enif_protobuf:load_cache(Defs),
+    ok = pbwire:load_cache(Defs),
     Msg = {'ServerMessage',
         {fuse_response,
             {'FuseResponse',
@@ -97,8 +97,8 @@ nested_oneof_roundtrip_test() ->
             }
         }
     },
-    Bin = enif_protobuf:encode(Msg),
-    Msg = enif_protobuf:decode(Bin, 'ServerMessage').
+    Bin = pbwire:encode(Msg),
+    Msg = pbwire:decode(Bin, 'ServerMessage').
 
 %% gpb 5 (defs format 3) emits enum values as {Sym, Value, Options} and keeps
 %% the proto3 markers only in get_proto_defs/0, next to metadata entries such
@@ -115,8 +115,8 @@ defs_format_3_enum_test() ->
         {{msg, m1}, [#?gpb_field{name = a, fnum = 1, rnum = #m1.a,
             type = {enum, e}, occurrence = defaulty,
             opts = []}]}],
-    ok = enif_protobuf:load_cache(Defs),
-    #m1{a = v1} = enif_protobuf:decode(<<8, 100>>, m1),
-    #m1{a = v3} = enif_protobuf:decode(<<8, 150, 1>>, m1),
-    <<8, 100>> = enif_protobuf:encode(#m1{a = v1}),
-    <<8, 100>> = enif_protobuf:encode(#m1{a = v2}).
+    ok = pbwire:load_cache(Defs),
+    #m1{a = v1} = pbwire:decode(<<8, 100>>, m1),
+    #m1{a = v3} = pbwire:decode(<<8, 150, 1>>, m1),
+    <<8, 100>> = pbwire:encode(#m1{a = v1}),
+    <<8, 100>> = pbwire:encode(#m1{a = v2}).

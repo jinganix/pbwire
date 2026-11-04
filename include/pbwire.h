@@ -107,9 +107,10 @@ pbw_descriptor *pbw_schema_find(const pbw_schema *schema, const char *name);
 void pbw_schema_set_proto3(pbw_schema *schema, int proto3);
 
 /* Append an enum value. Enum descriptors are only usable after
- * pbw_schema_link(). */
-void pbw_enum_add_value(pbw_descriptor *enum_desc, const char *name,
-                        int32_t number);
+ * pbw_schema_link(). Returns PBW_OK, PBW_ERR_INVALID for a bad descriptor
+ * or a frozen schema, PBW_ERR_NOMEM when the value cannot be stored. */
+pbw_status pbw_enum_add_value(pbw_descriptor *enum_desc, const char *name,
+                              int32_t number);
 int pbw_enum_find_name(const pbw_descriptor *enum_desc, int32_t number,
                        const char **name);
 int pbw_enum_find_value(const pbw_descriptor *enum_desc, const char *name,

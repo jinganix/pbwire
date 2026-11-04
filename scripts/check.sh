@@ -12,6 +12,9 @@ if [ "${SKIP_CHECKS:-0}" = "1" ]; then
   exit 0
 fi
 
+echo "== versions =="
+./scripts/sync-versions.sh --check
+
 echo "== build + test =="
 make -s test
 echo "check: OK"

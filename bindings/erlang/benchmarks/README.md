@@ -1,6 +1,6 @@
 # Benchmarks
 
-`enif_protobuf` (the Erlang/OTP NIF) against **gpb** (pure Erlang) and the
+`pbwire` (the Erlang/OTP NIF) against **gpb** (pure Erlang) and the
 **gpb NIF** (libprotobuf behind gpb's own NIF generator), on the same schema and
 payload as every other binding in this repo: `bindings/c/tests/data/matrix3.proto`
 with the four standard tiers from [BENCHMARKS.md](../../../BENCHMARKS.md).
@@ -54,7 +54,7 @@ BENCHMARKS.md hold for this suite too.
 
    All benchmark `make` targets run Erlang through `scripts/with_tool_versions.sh` and fail if the active OTP major version does not match `.tool-versions`.
 
-2. Build the parent project (NIF + `enif_protobuf`):
+2. Build the parent project (NIF + `pbwire`):
 
    ```shell
    make build
@@ -80,13 +80,15 @@ From this directory:
 |--------|-------------|
 | `make build` | Compile the parent NIF and the gpb record modules into `tmp/` |
 | `make benchmarks` | Run every available backend (epb, gpb, gpb NIF) |
-| `make benchmarks-quick` | Same suite with `BENCH_TARGET_TIME=0.2` |
+| `make benchmarks-quick` | Same suite with `BENCH_TARGET_TIME=0.05` |
 | `make update-readme` | Run the suite and refresh the result tables here and in `../README.md` |
 | `make show-hw-sw-info` | Print the machine / OTP details recorded with a run |
 
 Each operation is measured with the best of three timed samples; iterations
 double until the slowest operation of a case needs `BENCH_TARGET_TIME` seconds
-(default 2, `make benchmarks-quick` uses 0.2). One warm-up pass runs first.
+(default 0.25, `make benchmarks-quick` uses 0.05) after one warm-up pass — the
+same unified measurement standard as every other binding (see the run-them
+section in `BENCHMARKS.md`).
 
 ### Manual invocation
 
@@ -98,28 +100,28 @@ or not `--backend gpb` is selected.
 ```shell
 make build benchmarks-nif-code
 ../scripts/with_tool_versions.sh ./proto-bench --backend epb --backend gpb
-BENCH_TARGET_TIME=0.2 ../scripts/with_tool_versions.sh ./proto-bench
+BENCH_TARGET_TIME=0.05 ../scripts/with_tool_versions.sh ./proto-bench
 ```
 
 The gpb modules are generated with gpb's `-introspect-get_proto_defs` option:
 `get_proto_defs/0` carries the proto3 markers and the defs-format-3 enum values
-that `enif_protobuf:load_cache/1` consumes.
+that `pbwire:load_cache/1` consumes.
 
 ## Results
 
 <!-- BENCHMARK_RESULTS_START -->
-Last run: 2026-11-04 01:48:40 UTC (matrix3.proto, the four standard tiers; Erlang 29.0.1 per `.tool-versions`; machine Apple M4 Pro)
+Last run: 2026-11-04 05:00:02 UTC (matrix3.proto, the four standard tiers; Erlang 29.0.1 per `.tool-versions`; machine Apple M4 Pro)
 
-| Test case | epb | gpb | gpb nif |
-|-----------|-----|-----|---------|
-| small · 136 B · encode | 328.4 | 169.9 | 61.0 |
-| small · 136 B · decode | 483.6 | 221.9 | 66.4 |
-| medium · 174 B · encode | 298.3 | 148.5 | 71.3 |
-| medium · 174 B · decode | 500.4 | 210.1 | 82.1 |
-| large · 2469 B · encode | 235.3 | 124.5 | 94.5 |
-| large · 2469 B · decode | 337.6 | 196.8 | 177.0 |
-| xlarge · 74913 B · encode | 250.2 | 115.9 | 118.3 |
-| xlarge · 74913 B · decode | 346.2 | 220.8 | 197.1 |
+| payload | op | pbwire-erlang (MB/s, x gpb) | gpb (MB/s) | gpb-nif (MB/s) |
+|---|---|---|---|---|
+| 136 B | encode | 362.1 (2.01x) | 180.1 | 81.5 |
+| 136 B | decode | 494.7 (2.20x) | 224.6 | 92.6 |
+| 174 B | encode | 347.7 (2.46x) | 141.5 | 72.6 |
+| 174 B | decode | 477.9 (2.17x) | 219.8 | 84.6 |
+| 2469 B | encode | 233.8 (1.84x) | 127.0 | 96.0 |
+| 2469 B | decode | 327.9 (1.71x) | 192.3 | 173.7 |
+| 74913 B | encode | 253.9 (2.06x) | 123.2 | 123.0 |
+| 74913 B | decode | 369.4 (1.69x) | 218.6 | 210.4 |
 
 Higher is better. Throughput in MB/s on serialized wire size. Case names are the
 four standard tiers at the repo root ([BENCHMARKS.md](../../../BENCHMARKS.md)).
@@ -149,50 +151,50 @@ Erlang/OTP 29 [erts-17.0.1] [source] [64-bit] [smp:14:14] [ds:14:14:10] [async-t
 OK   small: pbwire-erlang encode/decode parity (136 bytes)
 OK   small: gpb encode/decode parity (136 bytes)
 OK   small: gpb-nif encode/decode parity (136 bytes)
-small: 136 bytes, 1048576 iterations (repeated fields x0)
+small: 136 bytes, 262144 iterations (repeated fields x0)
   impl           op             ns/op       MB/s
-  pbwire-erlang  encode         414.2      328.4
-  gpb            encode         800.3      169.9
-  gpb-nif        encode        2229.1       61.0
-  pbwire-erlang  decode         281.2      483.6
-  gpb            decode         612.9      221.9
-  gpb-nif        decode        2048.4       66.4
+  pbwire-erlang  encode         375.6      362.1
+  gpb            encode         755.0      180.1
+  gpb-nif        encode        1669.7       81.5
+  pbwire-erlang  decode         274.9      494.7
+  gpb            decode         605.6      224.6
+  gpb-nif        decode        1468.9       92.6
 
 OK   medium: pbwire-erlang encode/decode parity (174 bytes)
 OK   medium: gpb encode/decode parity (174 bytes)
 OK   medium: gpb-nif encode/decode parity (174 bytes)
-medium: 174 bytes, 1048576 iterations (repeated fields x1)
+medium: 174 bytes, 131072 iterations (repeated fields x1)
   impl           op             ns/op       MB/s
-  pbwire-erlang  encode         583.4      298.3
-  gpb            encode        1171.7      148.5
-  gpb-nif        encode        2441.4       71.3
-  pbwire-erlang  decode         347.7      500.4
-  gpb            decode         828.1      210.1
-  gpb-nif        decode        2118.6       82.1
+  pbwire-erlang  encode         500.4      347.7
+  gpb            encode        1229.6      141.5
+  gpb-nif        encode        2396.0       72.6
+  pbwire-erlang  decode         364.1      477.9
+  gpb            decode         791.6      219.8
+  gpb-nif        decode        2056.3       84.6
 
 OK   large: pbwire-erlang encode/decode parity (2469 bytes)
 OK   large: gpb encode/decode parity (2469 bytes)
 OK   large: gpb-nif encode/decode parity (2469 bytes)
-large: 2469 bytes, 131072 iterations (repeated fields x100)
+large: 2469 bytes, 16384 iterations (repeated fields x100)
   impl           op             ns/op       MB/s
-  pbwire-erlang  encode       10493.5      235.3
-  gpb            encode       19832.7      124.5
-  gpb-nif        encode       26127.9       94.5
-  pbwire-erlang  decode        7314.2      337.6
-  gpb            decode       12548.8      196.8
-  gpb-nif        decode       13951.9      177.0
+  pbwire-erlang  encode       10559.2      233.8
+  gpb            encode       19443.9      127.0
+  gpb-nif        encode       25718.8       96.0
+  pbwire-erlang  decode        7530.5      327.9
+  gpb            decode       12841.2      192.3
+  gpb-nif        decode       14210.3      173.7
 
 OK   xlarge: pbwire-erlang encode/decode parity (74913 bytes)
 OK   xlarge: gpb encode/decode parity (74913 bytes)
 OK   xlarge: gpb-nif encode/decode parity (74913 bytes)
-xlarge: 74913 bytes, 4096 iterations (repeated fields x3000)
+xlarge: 74913 bytes, 512 iterations (repeated fields x3000)
   impl           op             ns/op       MB/s
-  pbwire-erlang  encode      299449.5      250.2
-  gpb            encode      646308.6      115.9
-  gpb-nif        encode      633278.6      118.3
-  pbwire-erlang  decode      216365.2      346.2
-  gpb            decode      339292.0      220.8
-  gpb-nif        decode      380137.7      197.1
+  pbwire-erlang  encode      295095.7      253.9
+  gpb            encode      607851.6      123.2
+  gpb-nif        encode      609236.3      123.0
+  pbwire-erlang  decode      202789.1      369.4
+  gpb            decode      342712.9      218.6
+  gpb-nif        decode      356033.2      210.4
 ```
 </details>
 <!-- BENCHMARK_RESULTS_END -->

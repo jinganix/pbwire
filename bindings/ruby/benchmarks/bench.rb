@@ -95,18 +95,40 @@ def ns_per_op(iterations)
   (Process.clock_gettime(Process::CLOCK_MONOTONIC) - started) * 1e9 / iterations
 end
 
-# One warm-up pass, then three interleaved passes; the best run per operation
-# wins. Interleaving keeps a busy machine from biasing one implementation.
+# Floor iterations per tier; doubled until one pass takes 0.25 s (shared
+# standard, see BENCHMARKS.md). The count is calibrated on the binding's own
+# encode; slower ops then take longer than the minimum.
+MIN_PASS_SECONDS = 0.25
+
+def calibrate(op, floor)
+  count = [1, floor].max
+  loop do
+    started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+    count.times { op.call }
+    elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - started
+    return count if elapsed >= MIN_PASS_SECONDS || count >= 100_000_000
+    count *= 2
+  end
+end
+
+# Every op calibrates independently from the floor (a slow op already exceeds
+# the minimum at the floor and keeps it), then one warm-up pass and three
+# interleaved passes; the best run per operation wins. Interleaving keeps a
+# busy machine from biasing one implementation. Returns [best, ref_count].
 def measure(iterations, ops)
-  ops.each_value { |op| ns_per_op(iterations, &op) }
+  counts = {}
+  ops.each do |name, op|
+    counts[name] = calibrate(op, iterations)
+  end
+  ops.each { |name, op| ns_per_op(counts[name], &op) }
   best = {}
   3.times do
     ops.each do |name, op|
-      ns = ns_per_op(iterations, &op)
+      ns = ns_per_op(counts[name], &op)
       best[name] = ns if best[name].nil? || ns < best[name]
     end
   end
-  best
+  [best, counts.values.first]
 end
 
 def row(impl, op, bytes, ns)
@@ -131,21 +153,35 @@ CASES.each do |label, repeats, want, iterations|
     fail(label, 'pbwire-ruby and google-protobuf encode differently')
     next
   end
+  # Decode must round-trip byte-exactly and expose the same values.
+  back = decoder.decode(reference)
+  back_ok = (back.encode == reference) &&
+              back['str'] == 'hello' &&
+              back['inner']['name'] == 'kid' &&
+              back['inner']['value'] == 42 &&
+              Array(back['nums']).length == repeats &&
+              Array(back['inners']).length == repeats &&
+              (repeats.zero? || back['inners'][repeats - 1]['value'] == repeats)
+  back.close
+  unless back_ok
+    fail(label, 'pbwire-ruby decode differs')
+    next
+  end
   puts "OK   #{label} encoding parity (#{reference.bytesize} bytes)"
 
   official = fill_official(repeats)
   decoder = schema.message('structtest.Scalars3')
-  ns = measure(iterations,
-               'pbwire_encode' => -> { message.encode },
-               'gem_encode' => -> { Structtest::Scalars3.encode(official) },
-               'pbwire_decode' => -> { decoder.decode(reference).close },
-               'gem_decode' => -> { Structtest::Scalars3.decode(reference) })
+  ns, count = measure(iterations,
+                       'pbwire_encode' => -> { message.encode },
+                       'gem_encode' => -> { Structtest::Scalars3.encode(official) },
+                       'pbwire_decode' => -> { decoder.decode(reference).close },
+                       'gem_decode' => -> { Structtest::Scalars3.decode(reference) })
   encode_ns = ns['pbwire_encode']
   decode_ns = ns['pbwire_decode']
   official_encode_ns = ns['gem_encode']
   official_decode_ns = ns['gem_decode']
 
-  puts "#{label}: #{reference.bytesize} bytes, #{iterations} iterations " \
+  puts "#{label}: #{reference.bytesize} bytes, #{count} iterations " \
        "(repeated fields x#{repeats})"
   puts format("  %-14s %-7s %12s %10s", 'impl', 'op', 'ns/op', 'MB/s')
   puts row('pbwire-ruby', 'encode', reference.bytesize, encode_ns)

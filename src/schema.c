@@ -14,11 +14,15 @@ dup_str(const char *s)
     if (s == NULL) {
         return NULL;
     }
-    len = strlen(s) + 1;
-    copy = (char *)malloc(len);
-    if (copy != NULL) {
-        memcpy(copy, s, len);
+    len = strlen(s);
+    if (len == SIZE_MAX) {
+        return NULL;
     }
+    copy = (char *)malloc(len + 1);
+    if (copy == NULL) {
+        return NULL;
+    }
+    memcpy(copy, s, len + 1);
     return copy;
 }
 
@@ -43,7 +47,6 @@ pbw_descriptor_free(pbw_descriptor *desc)
     free(desc->enum_values);
     free(desc->fnum_map);
     free(desc->tag_map);
-    free(desc->tag_action);
     for (i = 0; i < desc->reserved_count; i++) {
         free(desc->reserved[i]);
     }
@@ -100,7 +103,16 @@ add_descriptor(pbw_schema *schema, const char *name,
     }
     if (schema->count == schema->cap) {
         size_t cap = schema->cap ? schema->cap * 2 : 8;
-        descs = (pbw_descriptor **)realloc(schema->descs, cap * sizeof(*descs));
+        size_t bytes;
+
+        if (schema->cap > SIZE_MAX / 2) {
+            return NULL;
+        }
+        if (cap > SIZE_MAX / sizeof(*descs)) {
+            return NULL;
+        }
+        bytes = cap * sizeof(*descs);
+        descs = (pbw_descriptor **)realloc(schema->descs, bytes);
         if (descs == NULL) {
             return NULL;
         }
@@ -152,30 +164,44 @@ pbw_schema_find(const pbw_schema *schema, const char *name)
     return NULL;
 }
 
-void
+pbw_status
 pbw_enum_add_value(pbw_descriptor *enum_desc, const char *name,
                    int32_t number)
 {
     struct pbw_enum_value *values;
     char *copy;
+    size_t bytes;
 
     if (enum_desc == NULL || !enum_desc->is_enum || name == NULL) {
-        return;
+        return PBW_ERR_INVALID;
+    }
+    if (enum_desc->schema != NULL && enum_desc->schema->frozen) {
+        return PBW_ERR_INVALID;
+    }
+    if (enum_desc->enum_count == SIZE_MAX) {
+        return PBW_ERR_NOMEM;
+    }
+    if ((enum_desc->enum_count + 1) > SIZE_MAX / sizeof(*values)) {
+        return PBW_ERR_NOMEM;
     }
     copy = dup_str(name);
     if (copy == NULL) {
-        return;
+        return PBW_ERR_NOMEM;
     }
-    values = (struct pbw_enum_value *)realloc(
-        enum_desc->enum_values, (enum_desc->enum_count + 1) * sizeof(*values));
+    bytes = (enum_desc->enum_count + 1) * sizeof(*values);
+    values = (struct pbw_enum_value *)realloc(enum_desc->enum_values, bytes);
     if (values == NULL) {
         free(copy);
-        return;
+        return PBW_ERR_NOMEM;
     }
     enum_desc->enum_values = values;
     values[enum_desc->enum_count].name = copy;
     values[enum_desc->enum_count].number = number;
     enum_desc->enum_count++;
+    if (enum_desc->schema != NULL) {
+        enum_desc->schema->linked = 0;
+    }
+    return PBW_OK;
 }
 
 int
@@ -238,6 +264,14 @@ add_field(pbw_descriptor *msg, const char *name, uint32_t number, pbw_type type,
         return NULL;
     }
     if (number == 0 || number > PBW_MAX_FIELD_NUMBER) {
+        return NULL;
+    }
+    if (type < PBW_TYPE_DOUBLE || type > PBW_TYPE_SINT64 ||
+        label < PBW_LABEL_OPTIONAL || label > PBW_LABEL_REPEATED) {
+        return NULL;
+    }
+    if (msg->field_count == SIZE_MAX ||
+        (msg->field_count + 1) > SIZE_MAX / sizeof(*fields)) {
         return NULL;
     }
     for (i = 0; i < msg->field_count; i++) {
@@ -394,6 +428,23 @@ link_message(pbw_schema *schema, pbw_descriptor *msg)
     for (i = 0; i < msg->field_count; i++) {
         pbw_field *field = &msg->fields[i];
 
+        if (field->number == 0 || field->number > PBW_MAX_FIELD_NUMBER ||
+            field->type < PBW_TYPE_DOUBLE ||
+            field->type > PBW_TYPE_SINT64 ||
+            field->label < PBW_LABEL_OPTIONAL ||
+            field->label > PBW_LABEL_REPEATED ||
+            field->name == NULL) {
+            snprintf(schema->error, sizeof(schema->error),
+                     "invalid field %s.#%zu", msg->name, i);
+            return PBW_ERR_INVALID;
+        }
+        if (field->oneof_index > msg->field_count + 1) {
+            snprintf(schema->error, sizeof(schema->error),
+                     "oneof index %u out of range in %s.%s",
+                     field->oneof_index, msg->name, field->name);
+            return PBW_ERR_INVALID;
+        }
+
         if (field->type == PBW_TYPE_MESSAGE || field->type == PBW_TYPE_ENUM ||
             field->type == PBW_TYPE_GROUP) {
             pbw_descriptor *sub;
@@ -426,7 +477,7 @@ link_message(pbw_schema *schema, pbw_descriptor *msg)
         }
         link_field_tags(field);
         if (!msg->proto3 && field->label == PBW_LABEL_REQUIRED) {
-            schema->has_required = 1;
+            msg->has_required = 1;
         }
         if (field->oneof_index > msg->oneof_count) {
             msg->oneof_count = field->oneof_index;
@@ -462,8 +513,12 @@ link_message(pbw_schema *schema, pbw_descriptor *msg)
     free(msg->fnum_map);
     msg->fnum_map = NULL;
     msg->fnum_map_size = 0;
-    if (max_fnum <= PBW_FNUM_MAP_LIMIT &&
+    if (msg->field_count <= (SIZE_MAX - 8) / 8 &&
+        max_fnum <= PBW_FNUM_MAP_LIMIT &&
         max_fnum <= (uint32_t)(msg->field_count * 8 + 8)) {
+        if ((size_t)max_fnum + 1 > SIZE_MAX / sizeof(pbw_field *)) {
+            return PBW_ERR_NOMEM;
+        }
         pbw_field **map =
             (pbw_field **)calloc(max_fnum + 1, sizeof(*map));
         if (map == NULL) {
@@ -475,14 +530,104 @@ link_message(pbw_schema *schema, pbw_descriptor *msg)
         msg->fnum_map = map;
         msg->fnum_map_size = max_fnum + 1;
     }
+    /* Per-field decode action for the decoder hot loop (see dec_action):
+     * every field gets one regardless of tag size, so one- and multi-byte
+     * tags share a single action switch. Oneof members, groups and closed
+     * enums keep the generic logic: only shapes with no side branches get
+     * a fast action. */
+    for (i = 0; i < msg->field_count; i++) {
+        pbw_field *field = &msg->fields[i];
+        int closed = field->type == PBW_TYPE_ENUM && field->sub != NULL &&
+                     !field->sub->proto3;
+        uint8_t action = PBW_ACT_GENERIC;
+        if (field->oneof_index == 0 && field->type != PBW_TYPE_GROUP &&
+            !closed) {
+            if (field->label != PBW_LABEL_REPEATED) {
+                switch (field->type) {
+                case PBW_TYPE_INT32:
+                case PBW_TYPE_ENUM:
+                    action = PBW_ACT_I32;
+                    break;
+                case PBW_TYPE_INT64:
+                case PBW_TYPE_UINT64:
+                    action = PBW_ACT_I64;
+                    break;
+                case PBW_TYPE_UINT32:
+                    action = PBW_ACT_U32;
+                    break;
+                case PBW_TYPE_SINT32:
+                    action = PBW_ACT_S32;
+                    break;
+                case PBW_TYPE_SINT64:
+                    action = PBW_ACT_S64;
+                    break;
+                case PBW_TYPE_BOOL:
+                    action = PBW_ACT_BOOL;
+                    break;
+                case PBW_TYPE_FIXED32:
+                case PBW_TYPE_SFIXED32:
+                case PBW_TYPE_FLOAT:
+                    action = PBW_ACT_F32;
+                    break;
+                case PBW_TYPE_FIXED64:
+                case PBW_TYPE_SFIXED64:
+                case PBW_TYPE_DOUBLE:
+                    action = PBW_ACT_F64;
+                    break;
+                case PBW_TYPE_STRING:
+                case PBW_TYPE_BYTES:
+                    action = PBW_ACT_STR;
+                    break;
+                case PBW_TYPE_MESSAGE:
+                    action = PBW_ACT_MSG;
+                    break;
+                default:
+                    break;
+                }
+            } else {
+                switch (field->type) {
+                case PBW_TYPE_INT32:
+                case PBW_TYPE_ENUM:
+                case PBW_TYPE_INT64:
+                case PBW_TYPE_UINT64:
+                case PBW_TYPE_UINT32:
+                case PBW_TYPE_SINT32:
+                case PBW_TYPE_SINT64:
+                case PBW_TYPE_BOOL:
+                    action = PBW_ACT_REP_VARINT;
+                    break;
+                case PBW_TYPE_FIXED32:
+                case PBW_TYPE_SFIXED32:
+                case PBW_TYPE_FLOAT:
+                    action = PBW_ACT_REP_F32;
+                    break;
+                case PBW_TYPE_FIXED64:
+                case PBW_TYPE_SFIXED64:
+                case PBW_TYPE_DOUBLE:
+                    action = PBW_ACT_REP_F64;
+                    break;
+                case PBW_TYPE_STRING:
+                case PBW_TYPE_BYTES:
+                    action = PBW_ACT_REP_STR;
+                    break;
+                case PBW_TYPE_MESSAGE:
+                    action = PBW_ACT_REP_MSG;
+                    break;
+                default:
+                    break;
+                }
+            }
+        }
+        field->dec_action = action;
+    }
     /* One-byte tag dispatch for the decoder hot loop: a tag byte below 0x80
      * indexes this table directly, skipping the field-number lookup. A tag
      * byte is unique per field (number and wire type are both fixed), so no
-     * entry is ever shared. */
+     * entry is ever shared. Lookup-only now: the action lives on the field.
+     * A repeated packable field also accepts the packed (LEN) form; its tag
+     * byte can never belong to another field. */
     free(msg->tag_map);
     msg->tag_map = NULL;
-    free(msg->tag_action);
-    msg->tag_action = NULL;
     for (i = 0; i < msg->field_count; i++) {
         if (msg->fields[i].tag_len == 1) {
             break;
@@ -490,88 +635,28 @@ link_message(pbw_schema *schema, pbw_descriptor *msg)
     }
     if (i < msg->field_count) {
         pbw_field **map = (pbw_field **)calloc(128, sizeof(*map));
-        uint8_t *act;
         if (map == NULL) {
-            return PBW_ERR_NOMEM;
-        }
-        act = (uint8_t *)calloc(128, sizeof(*act));
-        if (act == NULL) {
-            free(map);
             return PBW_ERR_NOMEM;
         }
         for (i = 0; i < msg->field_count; i++) {
             pbw_field *field = &msg->fields[i];
-            int closed = field->type == PBW_TYPE_ENUM && field->sub != NULL &&
-                         !field->sub->proto3;
-            uint8_t action = PBW_ACT_GENERIC;
-            /* Oneof members, groups and closed enums keep the generic logic:
-             * only shapes with no side branches get a fast action. */
-            if (field->oneof_index == 0 && field->type != PBW_TYPE_GROUP &&
-                !closed) {
-                if (field->label != PBW_LABEL_REPEATED) {
-                    switch (field->type) {
-                    case PBW_TYPE_INT32:
-                    case PBW_TYPE_ENUM:
-                        action = PBW_ACT_I32;
-                        break;
-                    case PBW_TYPE_INT64:
-                    case PBW_TYPE_UINT64:
-                        action = PBW_ACT_I64;
-                        break;
-                    case PBW_TYPE_UINT32:
-                        action = PBW_ACT_U32;
-                        break;
-                    case PBW_TYPE_SINT32:
-                        action = PBW_ACT_S32;
-                        break;
-                    case PBW_TYPE_SINT64:
-                        action = PBW_ACT_S64;
-                        break;
-                    case PBW_TYPE_BOOL:
-                        action = PBW_ACT_BOOL;
-                        break;
-                    case PBW_TYPE_FIXED32:
-                    case PBW_TYPE_SFIXED32:
-                    case PBW_TYPE_FLOAT:
-                        action = PBW_ACT_F32;
-                        break;
-                    case PBW_TYPE_FIXED64:
-                    case PBW_TYPE_SFIXED64:
-                    case PBW_TYPE_DOUBLE:
-                        action = PBW_ACT_F64;
-                        break;
-                    case PBW_TYPE_STRING:
-                    case PBW_TYPE_BYTES:
-                        action = PBW_ACT_STR;
-                        break;
-                    case PBW_TYPE_MESSAGE:
-                        action = PBW_ACT_MSG;
-                        break;
-                    default:
-                        break;
-                    }
-                } else if (pbw_is_packable(field->type)) {
-                    /* The packed LEN form gets its own entry below; the
-                     * unpacked form stays generic. */
-                    action = PBW_ACT_GENERIC;
-                }
-            }
+            int closed = field->type == PBW_TYPE_ENUM &&
+                         field->sub != NULL && !field->sub->proto3;
             if (field->tag_len == 1) {
                 map[field->tag[0]] = field;
-                act[field->tag[0]] = action;
             }
-            /* A repeated packable field also accepts the packed (LEN)
-             * form; its tag byte can never belong to another field. */
+            /* The packed-form entry keeps the old table's scope: only
+             * fields the generic logic would not already route there.
+             * Oneof members, groups and closed enums arriving packed
+             * stay on the generic/unknown path exactly as before. */
             if (field->len_tag_len == 1 &&
                 field->label == PBW_LABEL_REPEATED &&
                 pbw_is_packable(field->type) && !closed &&
                 field->oneof_index == 0) {
                 map[field->len_tag[0]] = field;
-                act[field->len_tag[0]] = PBW_ACT_PACKED;
             }
         }
         msg->tag_map = map;
-        msg->tag_action = act;
     }
     return PBW_OK;
 }
@@ -593,9 +678,39 @@ pbw_schema_link(pbw_schema *schema)
         if (schema->descs[i]->is_enum) {
             continue;
         }
+        schema->descs[i]->has_required = 0;
         status = link_message(schema, schema->descs[i]);
         if (status != PBW_OK) {
             return status;
+        }
+    }
+    /* A message requires validation when it or any reachable submessage
+     * declares a proto2 required field. Monotone fixpoint, so recursive
+     * messages terminate: flags only flip 0 -> 1. */
+    for (;;) {
+        int changed = 0;
+
+        for (i = 0; i < schema->count; i++) {
+            pbw_descriptor *msg = schema->descs[i];
+            size_t k;
+
+            if (msg->is_enum || msg->has_required) {
+                continue;
+            }
+            for (k = 0; k < msg->field_count; k++) {
+                const pbw_field *field = &msg->fields[k];
+
+                if ((field->type == PBW_TYPE_MESSAGE ||
+                     field->type == PBW_TYPE_GROUP) &&
+                    field->sub != NULL && field->sub->has_required) {
+                    msg->has_required = 1;
+                    changed = 1;
+                    break;
+                }
+            }
+        }
+        if (!changed) {
+            break;
         }
     }
     schema->linked = 1;

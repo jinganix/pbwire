@@ -1,7 +1,7 @@
 #ifndef __EP_CODEC_H__
 #define __EP_CODEC_H__
 
-#include "enif_protobuf.h"
+#include "pbwire.h"
 
 #define MAX_UINT64_ENCODED_SIZE 10
 

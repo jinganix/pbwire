@@ -298,8 +298,21 @@ static void
 j_quoted(j_out *j, const uint8_t *data, size_t len)
 {
     static const char *hex = "0123456789abcdef";
-    const uint8_t *p = data;
-    const uint8_t *end = data + len;
+    const uint8_t *p;
+    const uint8_t *end;
+
+    if (j == NULL || j->status != PBW_OK) {
+        return;
+    }
+    if (data == NULL) {
+        if (len > 0) {
+            j->status = PBW_ERR_INVALID;
+            return;
+        }
+        data = pbw_empty_input;
+    }
+    p = data;
+    end = data + len;
 
     j_ch(j, '"');
     while (p < end) {
@@ -367,7 +380,7 @@ j_quoted(j_out *j, const uint8_t *data, size_t len)
         }
         /* Pass UTF-8 through after validating the whole scalar. */
         {
-            size_t left = (size_t)(end - p);
+            size_t left = pbw_remaining((const uint8_t *)end, (const uint8_t *)p);
             uint32_t rune = 0;
             size_t width = 0;
 
@@ -418,11 +431,24 @@ j_base64(j_out *j, const uint8_t *data, size_t len)
 {
     static const char *alphabet =
         "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    const uint8_t *p = data;
-    const uint8_t *end = data + len;
+    const uint8_t *p;
+    const uint8_t *end;
+
+    if (j == NULL || j->status != PBW_OK) {
+        return;
+    }
+    if (data == NULL) {
+        if (len > 0) {
+            j->status = PBW_ERR_INVALID;
+            return;
+        }
+        data = pbw_empty_input;
+    }
+    p = data;
+    end = data + len;
 
     j_ch(j, '"');
-    while ((size_t)(end - p) >= 3) {
+    while (pbw_remaining(end, p) >= 3) {
         char out[4];
 
         out[0] = alphabet[p[0] >> 2];
@@ -432,7 +458,7 @@ j_base64(j_out *j, const uint8_t *data, size_t len)
         j_put(j, out, 4);
         p += 3;
     }
-    if ((size_t)(end - p) == 2) {
+    if (pbw_remaining((const uint8_t *)end, (const uint8_t *)p) == 2) {
         char out[4];
 
         out[0] = alphabet[p[0] >> 2];
@@ -440,7 +466,7 @@ j_base64(j_out *j, const uint8_t *data, size_t len)
         out[2] = alphabet[(p[1] & 0xf) << 2];
         out[3] = '=';
         j_put(j, out, 4);
-    } else if ((size_t)(end - p) == 1) {
+    } else if (pbw_remaining((const uint8_t *)end, (const uint8_t *)p) == 1) {
         char out[4];
 
         out[0] = alphabet[p[0] >> 2];
@@ -670,6 +696,157 @@ j_print_map_key(j_out *j, const pbw_field *key_field, const pbw_value *key)
     j_ch(j, '"');
 }
 
+/* Flat map key for duplicate elimination: missing keys normalize to
+ * (UINT, 0), exactly like the `&zero` default in the print loop below. */
+typedef struct {
+    uint32_t kind;
+    uint64_t u64;
+    const uint8_t *data;
+    size_t len;
+    int has_key; /* 0: entry omitted the key; never counts as a later dup */
+} j_flatkey;
+
+static int
+j_flatkey_cmp(const j_flatkey *a, const j_flatkey *b)
+{
+    if (a->kind != b->kind) {
+        return a->kind < b->kind ? -1 : 1;
+    }
+    if (a->kind == PBW_VALUE_BYTES) {
+        size_t n = a->len < b->len ? a->len : b->len;
+        int r = n > 0 ? memcmp(a->data, b->data, n) : 0;
+
+        if (r != 0) {
+            return r < 0 ? -1 : 1;
+        }
+        if (a->len != b->len) {
+            return a->len < b->len ? -1 : 1;
+        }
+        return 0;
+    }
+    if (a->u64 != b->u64) {
+        return a->u64 < b->u64 ? -1 : 1;
+    }
+    return 0;
+}
+
+/* Stable merge sort of indices by flat key (recursion is log2(n), like the
+ * deterministic map sort on the encode side). Stability keeps wire order
+ * inside an equal run, so the run's last countable member is the winner. */
+static void
+j_idx_sort(const j_flatkey *keys, size_t *idx, size_t *tmp, size_t n)
+{
+    size_t mid;
+    size_t i;
+    size_t j;
+    size_t k;
+
+    if (n < 2) {
+        return;
+    }
+    mid = n / 2;
+    j_idx_sort(keys, idx, tmp, mid);
+    j_idx_sort(keys, idx + mid, tmp + mid, n - mid);
+    i = 0;
+    j = mid;
+    k = 0;
+    while (i < mid && j < n) {
+        if (j_flatkey_cmp(&keys[idx[j]], &keys[idx[i]]) < 0) {
+            tmp[k++] = idx[j++];
+        } else {
+            tmp[k++] = idx[i++];
+        }
+    }
+    while (i < mid) {
+        tmp[k++] = idx[i++];
+    }
+    while (j < n) {
+        tmp[k++] = idx[j++];
+    }
+    memcpy(idx, tmp, n * sizeof(*idx));
+}
+
+/* Marks entries shadowed by a later equal key in caller-owned, zeroed
+ * skip[]: 1 = keep the legacy loop (small maps and malformed input),
+ * -1 = out of memory, 0 = skip[] filled. */
+static int
+j_map_winners(const pbw_value *list, uint8_t *skip)
+{
+    size_t n = list->as.list.len;
+    j_flatkey *keys;
+    size_t *idx;
+    size_t *tmp;
+    uint8_t *block;
+    size_t i;
+
+    if (n <= 32 || n > SIZE_MAX / (sizeof(*keys) + 2 * sizeof(*idx))) {
+        return 1;
+    }
+    block =
+        (uint8_t *)malloc(n * (sizeof(*keys) + 2 * sizeof(*idx)));
+    if (block == NULL) {
+        return -1;
+    }
+    keys = (j_flatkey *)(void *)block;
+    idx = (size_t *)(void *)(keys + n);
+    tmp = idx + n;
+    for (i = 0; i < n; i++) {
+        const pbw_value *item = list->as.list.items[i];
+        const pbw_value *key;
+
+        /* Malformed entries keep the exact legacy path (which reports them). */
+        if (item == NULL || item->kind != PBW_VALUE_MESSAGE ||
+            item->as.msg == NULL) {
+            free(block);
+            return 1;
+        }
+        key = pbw_message_get(item->as.msg, 1);
+        keys[i].has_key = key != NULL;
+        if (key == NULL) {
+            static const pbw_value zero = {PBW_VALUE_UINT, 0, {0}};
+
+            key = &zero;
+        }
+        keys[i].kind = (uint32_t)key->kind;
+        if (key->kind == PBW_VALUE_BYTES) {
+            keys[i].data = key->as.bytes.data;
+            keys[i].len = key->as.bytes.len;
+            keys[i].u64 = 0;
+        } else {
+            keys[i].data = NULL;
+            keys[i].len = 0;
+            keys[i].u64 = key->as.u64;
+        }
+        idx[i] = i;
+    }
+    j_idx_sort(keys, idx, tmp, n);
+    /* One pass over equal runs: everything before the run's last countable
+     * member is shadowed (a missing key never counts as the later dup). */
+    i = 0;
+    while (i < n) {
+        size_t e = i + 1;
+        size_t last = i;
+        size_t m;
+
+        while (e < n && j_flatkey_cmp(&keys[idx[e]], &keys[idx[i]]) == 0) {
+            e++;
+        }
+        for (m = i; m < e; m++) {
+            if (keys[idx[m]].has_key) {
+                last = m;
+            }
+        }
+        if (keys[idx[last]].has_key) {
+            for (m = i; m < last; m++) {
+                skip[idx[m]] = 1;
+            }
+        }
+        i = e;
+    }
+    free(block);
+    return 0;
+}
+
 static void
 j_print_map(j_out *j, const pbw_field *field, const pbw_value *list)
 {
@@ -686,7 +863,30 @@ j_print_map(j_out *j, const pbw_field *field, const pbw_value *list)
         j->status = PBW_ERR_INVALID;
         return;
     }
-    /* Binary input may repeat a key (last wins); JSON objects cannot. */
+    /* Binary input may repeat a key (last wins); JSON objects cannot.
+     * Past a few dozen entries the per-item later-scan turns quadratic,
+     * so large maps precompute the shadowed entries once by sorting. */
+    uint8_t *skip = NULL;
+    if (list->as.list.len > 32) {
+        int winners;
+
+        skip = (uint8_t *)calloc(list->as.list.len, 1);
+        if (skip == NULL) {
+            j->status = PBW_ERR_NOMEM;
+            return;
+        }
+        winners = j_map_winners(list, skip);
+        if (winners < 0) {
+            free(skip);
+            j->status = PBW_ERR_NOMEM;
+            return;
+        }
+        if (winners > 0) {
+            /* Small or malformed input: the loop below scans as before. */
+            free(skip);
+            skip = NULL;
+        }
+    }
     int first = 1;
 
     j_ch(j, '{');
@@ -701,6 +901,7 @@ j_print_map(j_out *j, const pbw_field *field, const pbw_value *list)
         if (item == NULL || item->kind != PBW_VALUE_MESSAGE ||
             item->as.msg == NULL) {
             j->status = PBW_ERR_INVALID;
+            free(skip);
             return;
         }
         /* Binary input may omit the key or the value; both default. */
@@ -727,28 +928,32 @@ j_print_map(j_out *j, const pbw_field *field, const pbw_value *list)
             }
             /* message values left NULL print as {} below */
         }
-        for (k = i + 1; k < list->as.list.len; k++) {
-            const pbw_value *later = list->as.list.items[k];
-            const pbw_value *later_key;
+        if (skip != NULL) {
+            last = !skip[i];
+        } else {
+            for (k = i + 1; k < list->as.list.len; k++) {
+                const pbw_value *later = list->as.list.items[k];
+                const pbw_value *later_key;
 
-            if (later == NULL || later->kind != PBW_VALUE_MESSAGE ||
-                later->as.msg == NULL) {
-                continue;
-            }
-            later_key = pbw_message_get(later->as.msg, 1);
-            if (later_key == NULL || later_key->kind != key->kind) {
-                continue;
-            }
-            if (key->kind == PBW_VALUE_BYTES) {
-                if (later_key->as.bytes.len == key->as.bytes.len &&
-                    memcmp(later_key->as.bytes.data, key->as.bytes.data,
-                           key->as.bytes.len) == 0) {
+                if (later == NULL || later->kind != PBW_VALUE_MESSAGE ||
+                    later->as.msg == NULL) {
+                    continue;
+                }
+                later_key = pbw_message_get(later->as.msg, 1);
+                if (later_key == NULL || later_key->kind != key->kind) {
+                    continue;
+                }
+                if (key->kind == PBW_VALUE_BYTES) {
+                    if (later_key->as.bytes.len == key->as.bytes.len &&
+                        memcmp(later_key->as.bytes.data, key->as.bytes.data,
+                               key->as.bytes.len) == 0) {
+                        last = 0;
+                        break;
+                    }
+                } else if (later_key->as.u64 == key->as.u64) {
                     last = 0;
                     break;
                 }
-            } else if (later_key->as.u64 == key->as.u64) {
-                last = 0;
-                break;
             }
         }
         if (!last) {
@@ -772,6 +977,7 @@ j_print_map(j_out *j, const pbw_field *field, const pbw_value *list)
             j_print_scalar(j, value_field, val);
         }
     }
+    free(skip);
     j_ch(j, '}');
 }
 
@@ -1033,7 +1239,16 @@ j_print_value(j_out *j, const pbw_message *msg)
 static void
 j_print_struct_value(j_out *j, const pbw_message *msg)
 {
-    const pbw_value *fields = pbw_message_get(msg, 1);
+    const pbw_value *fields;
+
+    if (j == NULL || j->status != PBW_OK || msg == NULL ||
+        msg->desc == NULL) {
+        if (j != NULL && j->status == PBW_OK) {
+            j->status = PBW_ERR_INVALID;
+        }
+        return;
+    }
+    fields = pbw_message_get(msg, 1);
     size_t i;
 
     j_ch(j, '{');
@@ -1085,7 +1300,16 @@ j_print_struct_value(j_out *j, const pbw_message *msg)
 static void
 j_print_list_value(j_out *j, const pbw_message *msg)
 {
-    const pbw_value *values = pbw_message_get(msg, 1);
+    const pbw_value *values;
+
+    if (j == NULL || j->status != PBW_OK || msg == NULL ||
+        msg->desc == NULL) {
+        if (j != NULL && j->status == PBW_OK) {
+            j->status = PBW_ERR_INVALID;
+        }
+        return;
+    }
+    values = pbw_message_get(msg, 1);
 
     j_ch(j, '[');
     if (values != NULL && values->kind == PBW_VALUE_LIST) {
@@ -1312,7 +1536,16 @@ j_print_fields(j_out *j, const pbw_message *msg)
 static void
 j_print_message(j_out *j, const pbw_message *msg)
 {
-    if (j->status != PBW_OK) {
+    if (j == NULL || j->status != PBW_OK || msg == NULL ||
+        msg->desc == NULL) {
+        if (j != NULL && j->status == PBW_OK) {
+            j->status = PBW_ERR_INVALID;
+        }
+        return;
+    }
+    if (msg->desc->field_count > 0 &&
+        (msg->values == NULL || msg->present == NULL)) {
+        j->status = PBW_ERR_INVALID;
         return;
     }
     switch (j_classify(msg->desc)) {
@@ -1522,7 +1755,7 @@ j_valid_utf8(const uint8_t *data, size_t len)
         } else {
             return 0;
         }
-        if (width > (size_t)(end - p)) {
+        if (width > pbw_remaining((const uint8_t *)end, (const uint8_t *)p)) {
             return 0;
         }
         for (k = 1; k < width; k++) {
@@ -1636,8 +1869,8 @@ j_parse_string(j_in *j, pbw_buf *out)
                 if (rune >= 0xd800 && rune <= 0xdbff) {
                     uint32_t lo = 0;
 
-                    if (j->cur.p + 1 >= j->cur.end || j->cur.p[0] != '\\' ||
-                        j->cur.p[1] != 'u') {
+                    if (pbw_remaining((const uint8_t *)j->cur.end, (const uint8_t *)j->cur.p) < 2 ||
+                        j->cur.p[0] != '\\' || j->cur.p[1] != 'u') {
                         return PBW_ERR_INVALID;
                     }
                     j->cur.p += 2;
@@ -1868,10 +2101,16 @@ j_atod(const char *text, size_t len, int dot, double *out)
     char *stop;
     double v;
 
+    if (text == NULL || out == NULL) {
+        return PBW_ERR_INVALID;
+    }
     /* strtod skips leading whitespace itself, but not trailing garbage. A
      * number longer than the stack buffer is unusual, not invalid: the
      * reference parser has no length limit either. */
     if (len >= sizeof(stack)) {
+        if (len == SIZE_MAX) {
+            return PBW_ERR_NOMEM;
+        }
         tmp = (char *)malloc(len + 1);
         if (tmp == NULL) {
             return PBW_ERR_NOMEM;
@@ -1879,6 +2118,9 @@ j_atod(const char *text, size_t len, int dot, double *out)
     }
     memcpy(tmp, text, len);
     tmp[len] = '\0';
+    if (tmp == NULL) {
+        return PBW_ERR_INVALID;
+    }
     v = pbw_strtod(tmp, &stop, dot);
     if (stop == tmp) {
         goto invalid;
@@ -1961,7 +2203,10 @@ j_parse_key(j_in *j, pbw_buf *out)
             }
             n++;
         }
-        if (n == 0 || (j->cur.p[0] >= '0' && j->cur.p[0] <= '9')) {
+        if (n == 0) {
+            return PBW_ERR_INVALID;
+        }
+        if (j->cur.p >= j->cur.end || (j->cur.p[0] >= '0' && j->cur.p[0] <= '9')) {
             return PBW_ERR_INVALID;
         }
         if ((n == 4 && memcmp(j->cur.p, "true", 4) == 0) ||
@@ -2337,8 +2582,20 @@ j_base64_value(char c)
 static pbw_status
 j_parse_base64(const char *text, size_t len, pbw_buf *out)
 {
-    size_t n = len;
+    size_t n;
     size_t i = 0;
+    size_t need;
+
+    if (out == NULL) {
+        return PBW_ERR_INVALID;
+    }
+    if (text == NULL && len > 0) {
+        return PBW_ERR_INVALID;
+    }
+    if (text == NULL) {
+        text = (const char *)pbw_empty_input;
+    }
+    n = len;
 
     /* Padding, if any, is 1-2 '=' at the very end. */
     while (n > 0 && text[n - 1] == '=') {
@@ -2356,7 +2613,13 @@ j_parse_base64(const char *text, size_t len, pbw_buf *out)
          * fill complete quanta, like the reference. */
         return PBW_ERR_INVALID;
     }
-    if (!pbw_buf_reserve(out, (n / 4) * 3 + 3)) {
+    /* (n/4)*3+3 cannot wrap: n <= SIZE_MAX, so (n/4)*3 <= n on both
+     * 32- and 64-bit targets. */
+    need = (n / 4) * 3 + 3;
+    if (need < (n / 4) * 3) {
+        return PBW_ERR_NOMEM;
+    }
+    if (!pbw_buf_reserve(out, need)) {
         return PBW_ERR_NOMEM;
     }
     while (i < (n & ~(size_t)3)) {
@@ -4132,10 +4395,21 @@ pbw_json_parse_opts(const pbw_descriptor *desc, const char *text,
     j_in j;
     pbw_message *msg;
 
+    if (out != NULL) {
+        *out = NULL;
+    }
     if (desc == NULL || (text == NULL && len != 0) || out == NULL) {
         return PBW_ERR_INVALID;
     }
-    *out = NULL;
+    if (desc->is_enum) {
+        return PBW_ERR_TYPE;
+    }
+    if (desc->schema != NULL && !desc->schema->linked) {
+        return PBW_ERR_INVALID;
+    }
+    if (text == NULL) {
+        text = (const char *)pbw_empty_input;
+    }
     msg = pbw_message_new(desc);
     if (msg == NULL) {
         return PBW_ERR_NOMEM;
@@ -4156,8 +4430,7 @@ pbw_json_parse_opts(const pbw_descriptor *desc, const char *text,
         return PBW_ERR_INVALID;
     }
     /* A missing proto2 `required` field fails, like the binary decoder. */
-    if (desc->schema != NULL && desc->schema->has_required &&
-        !pbw_message_is_initialized(msg)) {
+    if (desc->has_required && !pbw_message_is_initialized(msg)) {
         pbw_message_free(msg);
         return PBW_ERR_REQUIRED;
     }

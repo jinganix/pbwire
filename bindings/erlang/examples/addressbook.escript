@@ -1,9 +1,9 @@
 #!/usr/bin/env escript
 %% -*- erlang -*-
-%%! -pa _build/test/lib/gpb/ebin -pa _build/default/lib/enif_protobuf/ebin
+%%! -pa _build/test/lib/gpb/ebin -pa _build/default/lib/pbwire/ebin
 %%
 %% AddressBook example (Erlang): hand-built gpb-style schema, then a plain
-%% record round-trips through enif_protobuf.
+%% record round-trips through pbwire.
 %%
 %% Run from bindings/erlang (needs OTP, the test profile and gpb headers):
 %%
@@ -37,11 +37,11 @@ defs() ->
      {{enum, 'Person.PhoneType'}, [{'MOBILE', 0}, {'HOME', 1}, {'WORK', 2}]}].
 
 main(_Args) ->
-    ok = enif_protobuf:load_cache(defs()),
+    ok = pbwire:load_cache(defs()),
     Person = {'Person', <<"alice">>, 1234, undefined,
               [{'Person.PhoneNumber', <<"555-1234">>, 'MOBILE'}]},
-    Wire = enif_protobuf:encode(Person),
-    Person = enif_protobuf:decode(Wire, 'Person'),
+    Wire = pbwire:encode(Person),
+    Person = pbwire:decode(Wire, 'Person'),
     {'Person', Name, Id, _Email, Phones} = Person,
     io:format("~w bytes, name=~s, id=~w, ~w phone(s)~n",
               [byte_size(Wire), Name, Id, length(Phones)]).

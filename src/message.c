@@ -48,13 +48,19 @@ pbw_message_new_a(pbw_arena *arena, const pbw_descriptor *desc)
     if (block == NULL) {
         return NULL;
     }
+    /* Every member is assigned below: the struct needs no blanket zeroing,
+     * only the presence bitmap and the oneof cases start cleared. */
     msg = (pbw_message *)block;
-    memset(msg, 0, sizeof(*msg));
     msg->desc = desc;
     msg->arena = arena;
+    msg->own = NULL;
     msg->values = (pbw_value *)(void *)(block + values_off);
     msg->present = (uint32_t *)(void *)(block + present_off);
     msg->oneof_case = (uint32_t *)(void *)(block + oneof_off);
+    msg->unknown = NULL;
+    msg->unknown_len = 0;
+    msg->unknown_cap = 0;
+    msg->wire_len = 0;
     if (words > 0) {
         memset(msg->present, 0, words * sizeof(uint32_t));
     }
@@ -134,13 +140,23 @@ pbw_message_wire_size(const pbw_message *msg)
 int
 pbw_message_add_unknown(pbw_message *msg, const uint8_t *data, size_t len)
 {
-    size_t need = msg->unknown_len + len;
+    size_t need;
     uint8_t *grown;
 
+    if (msg == NULL) {
+        return PBW_ERR_INVALID;
+    }
     if (len == 0) {
         return PBW_OK;
     }
-    if (need < msg->unknown_len) {
+    if (data == NULL) {
+        return PBW_ERR_INVALID;
+    }
+    if (msg->unknown_len > SIZE_MAX - len) {
+        return PBW_ERR_NOMEM;
+    }
+    need = msg->unknown_len + len;
+    if (!pbw_cap_holds(msg->unknown_cap, msg->unknown_len)) {
         return PBW_ERR_NOMEM;
     }
     if (need > msg->unknown_cap) {
@@ -154,6 +170,9 @@ pbw_message_add_unknown(pbw_message *msg, const uint8_t *data, size_t len)
             cap *= 2;
         }
         if (msg->arena != NULL) {
+            if (msg->unknown == NULL && msg->unknown_len > 0) {
+                return PBW_ERR_NOMEM;
+            }
             grown = (uint8_t *)pbw_arena_alloc(msg->arena, cap);
             if (grown != NULL && msg->unknown_len > 0) {
                 memcpy(grown, msg->unknown, msg->unknown_len);
@@ -219,6 +238,13 @@ is_initialized(const pbw_message *msg, uint32_t depth)
 
     if (msg == NULL || msg->desc == NULL || depth >= PBW_MAX_DEPTH) {
         return 0;
+    }
+    /* The flag is computed by pbw_schema_link(); an unlinked descriptor is
+     * unsupported for messages already (its fields are still unsorted), so
+     * only a linked tree may take the shortcut. */
+    if (!msg->desc->has_required && (msg->desc->schema == NULL ||
+                                     msg->desc->schema->linked)) {
+        return 1; /* no required field in this subtree */
     }
     for (i = 0; i < msg->desc->field_count; i++) {
         const pbw_field *field = &msg->desc->fields[i];
@@ -445,6 +471,9 @@ pbw_value_init_bytes(pbw_value *value, pbw_arena *arena, const void *data,
 {
     /* Leave the value destructible on every failure path: the caller hands a
      * failed init to pbw_value_free(). */
+    if (value == NULL) {
+        return 0;
+    }
     value->kind = PBW_VALUE_BYTES;
     value->flags = arena != NULL ? PBW_VF_ARENA : 0;
     value->as.bytes.data = NULL;
@@ -454,6 +483,12 @@ pbw_value_init_bytes(pbw_value *value, pbw_arena *arena, const void *data,
          * such buffer. */
         return 0;
     }
+    if (len > 0 && data == NULL) {
+        /* A NULL payload with a nonzero length would otherwise expose
+         * uninitialized heap/arena bytes on the wire. Zero it instead. */
+        data = pbw_empty_input;
+        /* Fall through to the zero-fill below. */
+    }
     if (arena != NULL) {
         value->as.bytes.data = (uint8_t *)pbw_arena_alloc(arena, len + 1);
     } else {
@@ -462,8 +497,12 @@ pbw_value_init_bytes(pbw_value *value, pbw_arena *arena, const void *data,
     if (value->as.bytes.data == NULL) {
         return 0;
     }
-    if (len > 0 && data != NULL) {
-        memcpy(value->as.bytes.data, data, len);
+    if (len > 0) {
+        if (data != NULL && data != pbw_empty_input) {
+            memcpy(value->as.bytes.data, data, len);
+        } else {
+            memset(value->as.bytes.data, 0, len);
+        }
     }
     value->as.bytes.data[len] = '\0';
     value->as.bytes.len = len;

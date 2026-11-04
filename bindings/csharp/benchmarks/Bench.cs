@@ -1,6 +1,6 @@
 // C# binding benchmark against the official Google.Protobuf C# runtime and
-// generated code on the same matrix3.proto and the four standard tiers from
-// BENCHMARKS.md.
+// generated code, plus protobuf-net (the fastest widely used C# runtime),
+// on the same matrix3.proto and the four standard tiers from BENCHMARKS.md.
 //
 // The same payload as the C/Go/Java/Rust rows: every scalar kind, the nested
 // message, the two proto3 optionals, and the repeated fields scaled x0 / x1 /
@@ -19,8 +19,10 @@ using Structtest;
 var cases = new[] { "small", "medium", "large", "xlarge" };
 var repeats = new[] { 0, 1, 100, 3000 };
 var want = new[] { 136, 174, 2469, 74913 };
+// Floor iterations per tier; doubled until one pass takes 0.25 s.
 var iterations = new[] { 50_000, 50_000, 5_000, 500 };
-const int passes = 5;
+const double MinPassSeconds = 0.25;
+const int passes = 3;
 var failures = 0;
 
 if (args.Length != 1)
@@ -54,21 +56,59 @@ for (var tier = 0; tier < cases.Length; tier++)
     }
     Console.WriteLine($"OK   {label} encoding parity, x{n} ({reference.Length} bytes)");
 
+    // Decode must round-trip byte-exactly and expose the same values.
+    using (var back = ty.Decode(reference))
+    {
+        var backInner = back.GetMessage("inner");
+        var backOk = back.Encode().SequenceEqual(reference)
+            && back.GetString("str") == "hello"
+            && backInner?.GetString("name") == "kid"
+            && back.Count("nums") == n
+            && (n == 0 || back.At("nums", n - 1)?.AsLong() == n - 4);
+        if (!backOk)
+        {
+            Fail(label, "pbwire-csharp decode differs");
+            continue;
+        }
+    }
+
+    var pbn = FillPbn(n);
+    var pbnBytes = PbnEncode(pbn);
+    // protobuf-net writes single-element packed fields in singular form: valid
+    // protobuf and semantically equal, but not byte-identical to the canonical
+    // packed encoding, so those tiers carry no protobuf-net rows.
+    var pbnOk = pbnBytes.SequenceEqual(reference);
+    if (!pbnOk && !Scalars3.Parser.ParseFrom(pbnBytes).Equals(FillOfficial(n)))
+    {
+        Fail(label, $"protobuf-net wrote {pbnBytes.Length} bytes, protobuf-csharp {reference.Length}");
+        continue;
+    }
+    if (!pbnOk)
+    {
+        Console.WriteLine($"NOTE   {label}: protobuf-net singular-encodes single-element packed fields ({pbnBytes.Length} vs {reference.Length} bytes); its rows skipped");
+    }
+
     var official = FillOfficial(n);
+    // Tier line shows the reference op's count; slower ops keep the floor.
+    var tierCount = Calibrate(() => message.Encode(), count);
     var encode = Measure(count, () => message.Encode());
     var decode = Measure(count, () =>
     {
         using var decoded = ty.Decode(reference);
     });
     var officialEncode = Measure(count, () => official.ToByteArray());
+    var pbnEncode = pbnOk ? Measure(count, () => PbnEncode(pbn)) : 0;
     var officialDecode = Measure(count, () => Scalars3.Parser.ParseFrom(reference));
+    var pbnDecode = pbnOk ? Measure(count, () => PbnDecode(reference)) : 0;
 
-    Console.WriteLine($"{label}: {reference.Length} bytes, {count} iterations (repeat field x{n})");
+    Console.WriteLine($"{label}: {reference.Length} bytes, {tierCount} iterations (repeat field x{n})");
     Console.WriteLine($"  {"impl",-12} {"op",-7} {"ns/op",12} {"MB/s",10}");
     Row("pbwire-csharp", "encode", reference.Length, encode);
     Row("protobuf-csharp", "encode", reference.Length, officialEncode);
+    if (pbnOk) Row("protobuf-net", "encode", reference.Length, pbnEncode);
     Row("pbwire-csharp", "decode", reference.Length, decode);
     Row("protobuf-csharp", "decode", reference.Length, officialDecode);
+    if (pbnOk) Row("protobuf-net", "decode", reference.Length, pbnDecode);
     Console.WriteLine();
 }
 
@@ -144,6 +184,57 @@ static Message FillPbwire(MessageType ty, MessageType innerTy, int n)
     return msg;
 }
 
+static Pbn.Scalars3 FillPbn(int n)
+{
+    var m = new Pbn.Scalars3
+    {
+        I32 = int.MinValue,
+        I64 = long.MaxValue,
+        U32 = uint.MaxValue,
+        U64 = ulong.MaxValue,
+        S32 = int.MinValue,
+        S64 = long.MinValue,
+        Fx32 = 0xdeadbeef,
+        Fx64 = 72623859790382856,
+        Sfx32 = int.MinValue,
+        Sfx64 = long.MinValue,
+        F32 = float.PositiveInfinity,
+        F64 = -123456.789,
+        Flag = true,
+        Str = "hello",
+        Color = 2,
+        Inner = new Pbn.Inner3 { Name = "kid", Value = 42 },
+        OptI32 = -7,
+        OptStr = "opt",
+    };
+    // Null (not empty) repeated fields encode to nothing, matching the
+    // reference bytes: protobuf-net writes a zero-length header for an
+    // explicitly-packed empty list.
+    m.Nums = n == 0 ? null : new List<int>(n);
+    m.Flags = n == 0 ? null : new List<bool>(n);
+    for (var i = 0; i < n; i++)
+    {
+        m.Nums!.Add(i - 3);
+        m.Tags.Add("tag");
+        m.Inners.Add(new Pbn.Inner3 { Name = "grandkid", Value = i + 1 });
+        m.Flags!.Add(i % 2 == 0);
+    }
+    return m;
+}
+
+static byte[] PbnEncode(Pbn.Scalars3 m)
+{
+    using var ms = new MemoryStream();
+    ProtoBuf.Serializer.Serialize(ms, m);
+    return ms.ToArray();
+}
+
+static Pbn.Scalars3 PbnDecode(byte[] bytes)
+{
+    using var ms = new MemoryStream(bytes, false);
+    return ProtoBuf.Serializer.Deserialize<Pbn.Scalars3>(ms);
+}
+
 static double Run(int iterations, Action op)
 {
     var watch = Stopwatch.StartNew();
@@ -154,14 +245,36 @@ static double Run(int iterations, Action op)
     return watch.Elapsed.TotalNanoseconds / iterations;
 }
 
-// One warm-up pass, then the best of `passes`.
-static double Measure(int iterations, Action op)
+// Double from the tier floor until one pass takes MinPassSeconds.
+static int Calibrate(Action op, int floor)
 {
-    Run(iterations, op);
+    var count = Math.Max(1, floor);
+    for (;;)
+    {
+        var watch = Stopwatch.StartNew();
+        for (var i = 0; i < count; i++)
+        {
+            op();
+        }
+        if (watch.Elapsed.TotalSeconds >= MinPassSeconds || count >= 100_000_000)
+        {
+            return count;
+        }
+        count *= 2;
+    }
+}
+
+// Every op calibrates independently from the floor (a slow op already exceeds
+// the minimum at the floor and keeps it), then one warm-up pass and the best
+// of `passes`.
+static double Measure(int floor, Action op)
+{
+    var count = Calibrate(op, floor);
+    Run(count, op);
     var best = double.MaxValue;
     for (var pass = 0; pass < passes; pass++)
     {
-        best = Math.Min(best, Run(iterations, op));
+        best = Math.Min(best, Run(count, op));
     }
     return best;
 }
