@@ -8,7 +8,7 @@
 #include <string.h>
 
 /* Limits mirrored from the protobuf reference implementations and from
- * enif_protobuf's codec: unbounded nesting is a stack-overflow vector. */
+ * pbwire's codec: unbounded nesting is a stack-overflow vector. */
 #if defined(__GNUC__) || defined(__clang__)
 #define PBW_INLINE __attribute__((always_inline)) static inline
 /* Branch and prefetch hints: no-ops on compilers without them, so the core

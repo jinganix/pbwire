@@ -1,7 +1,7 @@
 #ifndef __EP_NODE_H__
 #define __EP_NODE_H__
 
-#include "enif_protobuf.h"
+#include "pbwire.h"
 
 /* Dense field-number lookup table for the decoder. Above this many field
  * numbers per message the memory cost is not worth it and bsearch stays. */

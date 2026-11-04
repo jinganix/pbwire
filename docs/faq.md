@@ -69,7 +69,7 @@ the short version:
 | C# | `DllImport` + a resolver | `FileDescriptorSet` |
 | Rust | links `libpbwire.a` statically | `FileDescriptorSet` |
 | Go | cgo dynamic binding over the C core | `FileDescriptorSet` (hot-swappable) |
-| Erlang | NIF; gpb records via `enif_protobuf:load_cache/1` | gpb's `get_msg_defs/0` |
+| Erlang | NIF; gpb records via `pbwire:load_cache/1` | gpb's `get_msg_defs/0` |
 
 The C bindings check `PBW_ABI_VERSION` at load time, so a library built from a
 newer, incompatible tree fails fast instead of corrupting memory. The C ABI is

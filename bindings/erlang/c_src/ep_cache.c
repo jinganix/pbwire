@@ -1,4 +1,4 @@
-#include "enif_protobuf.h"
+#include "pbwire.h"
 
 int
 ep_cache_create(size_t size, ep_cache_t **cache)

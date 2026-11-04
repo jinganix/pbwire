@@ -1,7 +1,7 @@
 #ifndef EP_TEST_SCHEMA_H
 #define EP_TEST_SCHEMA_H
 
-#include "../c_src/enif_protobuf.h"
+#include "../c_src/pbwire.h"
 #include "stub/erl_nif_stub.h"
 
 int ep_test_load_m1_cache(ErlNifEnv *env);

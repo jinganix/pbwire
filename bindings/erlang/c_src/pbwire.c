@@ -1,4 +1,4 @@
-#include "enif_protobuf.h"
+#include "pbwire.h"
 
 #if defined(_MSC_VER)
 #include <intrin.h>
@@ -542,5 +542,5 @@ static ErlNifFunc funcs[] =
         {"encode", 1, encode_1},
         {"decode", 2, decode_2}};
 
-ERL_NIF_INIT(enif_protobuf, funcs, &load, &reload, &upgrade, &unload);
+ERL_NIF_INIT(pbwire, funcs, &load, &reload, &upgrade, &unload);
 #endif /* EPB_UNIT_TEST */

@@ -1,6 +1,6 @@
 /* Reusable per-caller workspace: one bump allocator for decoded messages and one
  * growable buffer for encoded output. This is the explicit, thread-safe-by-
- * construction version of enif_protobuf's per-scheduler thread data. */
+ * construction version of pbwire's per-scheduler thread data. */
 
 #include "internal.h"
 

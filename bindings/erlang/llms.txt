@@ -2,7 +2,7 @@
 
 > The Erlang/OTP binding of [pbwire](../../README.md): a C NIF over the shared C
 > core. gpb generates the record definitions (`get_msg_defs/0`, or
-> `get_proto_defs/0` on gpb 5+); `enif_protobuf:load_cache/1` consumes them and
+> `get_proto_defs/0` on gpb 5+); `pbwire:load_cache/1` consumes them and
 > `encode/1` / `decode/2` run in C. Same record tuples, same wire format,
 > byte-identical output, ~1.6–2.4x faster than pure-Erlang gpb, with no
 > libprotobuf dependency.
@@ -28,16 +28,16 @@ make erlang-bench   # from the repo root: epb vs gpb (+ gpb NIF when protoc + li
 
 ## API
 
-- `enif_protobuf:load_cache(Module:get_msg_defs())` -> `ok`; loads/replaces the global schema cache. On gpb 5+ pass `Module:get_proto_defs()` instead (compile with `introspect_get_proto_defs`) so the proto3 markers are included.
-- `enif_protobuf:purge_cache()` -> `ok`; clears the schema.
-- `enif_protobuf:set_opts([{string_as_list, boolean()} | {with_utf8, boolean()}])` -> `ok`; must be called before `load_cache/1`.
-- `enif_protobuf:encode(MsgRecordOrMapTuple)` -> `binary()`; raises `cache_not_exists` if no schema is loaded.
-- `enif_protobuf:decode(Binary, 'MessageName')` -> record/map tuple; raises `unknown_msg` for names missing from the schema.
-- `enif_protobuf:encode_msg(Msg, Defs)` / `enif_protobuf:decode_msg(Bin, Name, Defs)`: load the cache on each call.
-- `enif_protobuf:debug_term(Term)`: prints the internal schema term layout.
+- `pbwire:load_cache(Module:get_msg_defs())` -> `ok`; loads/replaces the global schema cache. On gpb 5+ pass `Module:get_proto_defs()` instead (compile with `introspect_get_proto_defs`) so the proto3 markers are included.
+- `pbwire:purge_cache()` -> `ok`; clears the schema.
+- `pbwire:set_opts([{string_as_list, boolean()} | {with_utf8, boolean()}])` -> `ok`; must be called before `load_cache/1`.
+- `pbwire:encode(MsgRecordOrMapTuple)` -> `binary()`; raises `cache_not_exists` if no schema is loaded.
+- `pbwire:decode(Binary, 'MessageName')` -> record/map tuple; raises `unknown_msg` for names missing from the schema.
+- `pbwire:encode_msg(Msg, Defs)` / `pbwire:decode_msg(Bin, Name, Defs)`: load the cache on each call.
+- `pbwire:debug_term(Term)`: prints the internal schema term layout.
 
-From Elixir the same calls are `:enif_protobuf.encode/1`, `:enif_protobuf.decode/2`, and
-`:enif_protobuf.load_cache/1` with the message atom written `:'Person'`.
+From Elixir the same calls are `:pbwire.encode/1`, `:pbwire.decode/2`, and
+`:pbwire.load_cache/1` with the message atom written `:'Person'`.
 
 ## Key facts
 
@@ -51,4 +51,4 @@ From Elixir the same calls are `:enif_protobuf.encode/1`, `:enif_protobuf.decode
 ## Optional
 
 - [test/ep_gpb_tests.erl](test/ep_gpb_tests.erl): byte-parity tests against gpb, useful as executable usage examples.
-- [c_src/](c_src/): implementation; `src/enif_protobuf.erl` holds the public API stubs.
+- [c_src/](c_src/): implementation; `src/pbwire.erl` holds the public API stubs.

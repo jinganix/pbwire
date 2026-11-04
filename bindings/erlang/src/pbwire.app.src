@@ -1,15 +1,15 @@
-{application, enif_protobuf, [
+{application, pbwire, [
     {description,
         "Fast Google Protobuf (proto2/proto3) encoder and decoder for Erlang/OTP, implemented as a C "
         "NIF. Drop-in replacement for gpb encode_msg/1 and decode_msg/2."},
-    {vsn, "1.1.0"},
+    {vsn, "0.1.0"},
     {registered, []},
     {applications, [kernel, stdlib]},
     {maintainers, ["gan.jin <jinganix@gmail.com>"]},
     {licenses, ["Apache-2.0"]},
     {links, [
-        {"GitHub", "https://github.com/jinganix/enif_protobuf"},
-        {"Hex", "https://hex.pm/packages/enif_protobuf"}
+        {"GitHub", "https://github.com/jinganix/pbwire"},
+        {"Hex", "https://hex.pm/packages/pbwire"}
     ]},
     {files, [
         "LICENSE",

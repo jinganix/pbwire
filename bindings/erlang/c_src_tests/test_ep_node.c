@@ -1,4 +1,4 @@
-#include "../c_src/enif_protobuf.h"
+#include "../c_src/pbwire.h"
 #include "ep_test_schema.h"
 #include "test.h"
 

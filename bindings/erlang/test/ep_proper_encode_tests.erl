@@ -10,7 +10,7 @@
 -import(ep_proper_gen, [ascii_string/0, sint32/0, sint64/0, uint32/0,
     uint64/0, utf8string/0, value/0]).
 
--import(enif_protobuf, [set_opts/1, load_cache/1, encode_msg/2, encode/1]).
+-import(pbwire, [set_opts/1, load_cache/1, encode_msg/2, encode/1]).
 
 -record(m1, {a}).
 -record(m2, {a, b}).
@@ -325,7 +325,7 @@ prop_encode_utf8_string() ->
         ]}
     ],
     ok = load_cache(Defs),
-    ok = enif_protobuf:set_opts([{with_utf8, true}]),
+    ok = pbwire:set_opts([{with_utf8, true}]),
     ?FORALL(Message,
         #m3{
             a = utf8string(),
@@ -345,7 +345,7 @@ prop_encode_bytes() ->
         ]}
     ],
     ok = load_cache(Defs),
-    ok = enif_protobuf:set_opts([{with_utf8, false}]),
+    ok = pbwire:set_opts([{with_utf8, false}]),
     ?FORALL(Message,
         #m3{
             a = binary(),

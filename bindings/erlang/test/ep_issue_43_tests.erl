@@ -7,7 +7,7 @@
 
 -define(DEFAULT_BENCH_SECONDS, 5).
 
-% https://github.com/jinganix/enif_protobuf/issues/43
+% https://github.com/jinganix/pbwire/issues/43
 issue_43_smoke_test_() ->
     case os:getenv("CI") of
         false ->
@@ -19,8 +19,8 @@ issue_43_smoke_test_() ->
 run_issue_43_smoke() ->
     Defs = issue_43_defs(),
     Bin = issue_43_bin(),
-    ok = enif_protobuf:set_opts([{with_utf8, true}]),
-    ok = enif_protobuf:load_cache(Defs),
+    ok = pbwire:set_opts([{with_utf8, true}]),
+    ok = pbwire:load_cache(Defs),
     _ = verify_codec_consistency_once(Bin, Defs),
     ok.
 
@@ -30,14 +30,14 @@ benchmark_issue_43() ->
 benchmark_issue_43(Seconds) when is_integer(Seconds), Seconds > 0 ->
     Defs = issue_43_defs(),
     Bin = issue_43_bin(),
-    ok = enif_protobuf:set_opts([{with_utf8, true}]),
-    ok = enif_protobuf:load_cache(Defs),
+    ok = pbwire:set_opts([{with_utf8, true}]),
+    ok = pbwire:load_cache(Defs),
     {GpbMsg, EpbMsg} = verify_codec_consistency_once(Bin, Defs),
     warmup(GpbMsg, Bin, Defs),
 
-    EpbEncodeResult = bench_for_seconds(Seconds, fun() -> enif_protobuf:encode(EpbMsg) end),
+    EpbEncodeResult = bench_for_seconds(Seconds, fun() -> pbwire:encode(EpbMsg) end),
     GpbEncodeResult = bench_for_seconds(Seconds, fun() -> gpb:encode_msg(GpbMsg, Defs) end),
-    EpbDecodeResult = bench_for_seconds(Seconds, fun() -> enif_protobuf:decode(Bin, auth2s) end),
+    EpbDecodeResult = bench_for_seconds(Seconds, fun() -> pbwire:decode(Bin, auth2s) end),
     GpbDecodeResult = bench_for_seconds(Seconds, fun() -> gpb:decode_msg(Bin, auth2s, Defs) end),
 
     EpbEncodeOps = maps:get(ops, EpbEncodeResult),
@@ -82,12 +82,12 @@ benchmark_issue_43(Seconds) when is_integer(Seconds), Seconds > 0 ->
 
 verify_codec_consistency_once(Bin, Defs) ->
     GpbMsg = gpb:decode_msg(Bin, auth2s, Defs),
-    EpbMsg = enif_protobuf:decode(Bin, auth2s),
+    EpbMsg = pbwire:decode(Bin, auth2s),
     GpbBin = gpb:encode_msg(GpbMsg, Defs),
-    EpbBin = enif_protobuf:encode(EpbMsg),
+    EpbBin = pbwire:encode(EpbMsg),
     ?assertEqual(GpbBin, EpbBin),
     ?assertEqual(GpbMsg, gpb:decode_msg(EpbBin, auth2s, Defs)),
-    ?assertEqual(EpbMsg, enif_protobuf:decode(GpbBin, auth2s)),
+    ?assertEqual(EpbMsg, pbwire:decode(GpbBin, auth2s)),
     {GpbMsg, EpbMsg}.
 
 warmup(Msg, Bin, Defs) ->
@@ -100,7 +100,7 @@ warmup(Msg, Bin, Defs) ->
 bench_encode_epb(0, _Msg) ->
     ok;
 bench_encode_epb(N, Msg) ->
-    _ = enif_protobuf:encode(Msg),
+    _ = pbwire:encode(Msg),
     bench_encode_epb(N - 1, Msg).
 
 bench_encode_gpb(0, _Msg, _Defs) ->
@@ -112,7 +112,7 @@ bench_encode_gpb(N, Msg, Defs) ->
 bench_decode_epb(0, _Bin) ->
     ok;
 bench_decode_epb(N, Bin) ->
-    _ = enif_protobuf:decode(Bin, auth2s),
+    _ = pbwire:decode(Bin, auth2s),
     bench_decode_epb(N - 1, Bin).
 
 bench_decode_gpb(0, _Bin, _Defs) ->

@@ -1,5 +1,5 @@
 #! /usr/bin/env escript
-%%! -pa ../_build/test/lib/gpb/ebin -pa ../_build/default/lib/enif_protobuf/ebin -pa tmp/
+%%! -pa ../_build/test/lib/gpb/ebin -pa ../_build/default/lib/pbwire/ebin -pa tmp/
 %% -*- erlang -*-
 %% Controlled A/B benchmark: same data, same iteration count, median of N rounds.
 %% Usage: ./ab-bench.escript [--iters N] [--rounds N] [--backend both|gpb|epb]
@@ -42,11 +42,11 @@ bench(gpb, Bin, Msg, Iters, Rounds) ->
       time(Iters, fun() -> msg_r:decode_msg(Bin, Msg) end)} || _ <- lists:seq(1, Rounds)];
 bench(epb, Bin, Msg, Iters, Rounds) ->
     setup(epb),
-    M = enif_protobuf:decode(Bin, Msg),
-    [{time(Iters, fun() -> enif_protobuf:encode(M) end),
-      time(Iters, fun() -> enif_protobuf:decode(Bin, Msg) end)} || _ <- lists:seq(1, Rounds)].
+    M = pbwire:decode(Bin, Msg),
+    [{time(Iters, fun() -> pbwire:encode(M) end),
+      time(Iters, fun() -> pbwire:decode(Bin, Msg) end)} || _ <- lists:seq(1, Rounds)].
 
-setup(epb) -> ok = enif_protobuf:load_cache(msg_r:get_msg_defs()), ok;
+setup(epb) -> ok = pbwire:load_cache(msg_r:get_msg_defs()), ok;
 setup(gpb) -> ok.
 
 time(N, Fun) ->

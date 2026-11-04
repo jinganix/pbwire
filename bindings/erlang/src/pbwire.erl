@@ -8,9 +8,9 @@
 %% Load a schema once with {@link load_cache/1}, then call {@link encode/1} and {@link decode/2}:
 %%
 %% ```
-%% ok = enif_protobuf:load_cache(x:get_msg_defs()),   %% gpb 5+: x:get_proto_defs()
-%% Bin = enif_protobuf:encode(#'Person'{name = "abc", id = 345}),
-%% #'Person'{} = enif_protobuf:decode(Bin, 'Person').
+%% ok = pbwire:load_cache(x:get_msg_defs()),   %% gpb 5+: x:get_proto_defs()
+%% Bin = pbwire:encode(#'Person'{name = "abc", id = 345}),
+%% #'Person'{} = pbwire:decode(Bin, 'Person').
 %% '''
 %%
 %% The schema cache is global to the BEAM node and shared by all processes; encode and decode take a
@@ -18,7 +18,7 @@
 %%
 %% Only `{string_as_list, boolean()}' and `{with_utf8, boolean()}' options exist, see
 %% {@link set_opts/1}.
--module(enif_protobuf).
+-module(pbwire).
 
 -export([
     set_opts/1,
@@ -49,7 +49,7 @@ init() ->
     %% One state slot per thread that can run a NIF: dirty CPU schedulers
     %% included, so two threads never share a slot.
     Threads = erlang:system_info(schedulers) + erlang:system_info(dirty_cpu_schedulers),
-    ok = erlang:load_nif(filename:join(PrivDir, "enif_protobuf"), Threads).
+    ok = erlang:load_nif(filename:join(PrivDir, "pbwire"), Threads).
 
 not_loaded(Line) ->
     erlang:nif_error({not_loaded, [{module, ?MODULE}, {line, Line}]}).

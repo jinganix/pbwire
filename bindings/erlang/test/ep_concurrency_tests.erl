@@ -50,10 +50,10 @@ maybe_reload() ->
     end.
 
 encoding() ->
-    enif_protobuf:encode({'Person', "abc def", 345, "a@example.com"}).
+    pbwire:encode({'Person', "abc def", 345, "a@example.com"}).
 
 decoding() ->
-    enif_protobuf:decode(person_wire(), 'Person').
+    pbwire:decode(person_wire(), 'Person').
 
 person_wire() ->
     <<10, 7, 97, 98, 99, 32, 100, 101, 102, 16, 217, 2, 26, 13, 97, 64,

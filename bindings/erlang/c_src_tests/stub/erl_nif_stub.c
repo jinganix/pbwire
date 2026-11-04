@@ -1,5 +1,5 @@
 #define _POSIX_C_SOURCE 200809L
-#include "../../c_src/enif_protobuf.h"
+#include "../../c_src/pbwire.h"
 
 #include <stdarg.h>
 #include <stdio.h>

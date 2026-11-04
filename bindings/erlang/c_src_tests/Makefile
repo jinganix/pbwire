@@ -7,14 +7,16 @@ COVERAGE_DIR := $(CURDIR)/coverage
 
 CC ?= cc
 CFLAGS ?= -O0 -g -std=c99 -Wall -Wextra -Wno-unused-parameter
-CFLAGS += -I$(C_SRC) -I$(CURDIR)/stub -I$(PBW_ROOT)/include -DEPB_UNIT_TEST
+# PBW include first: c_src/pbwire.h shares its name with the public header,
+# so <pbwire.h> must resolve to the core, not to the NIF's own header.
+CFLAGS += -I$(PBW_ROOT)/include -I$(C_SRC) -I$(CURDIR)/stub -DEPB_UNIT_TEST
 
 LIB_SRCS := \
 	$(C_SRC)/ep_cache.c \
 	$(C_SRC)/ep_node.c \
 	$(C_SRC)/ep_encoder.c \
 	$(C_SRC)/ep_decoder.c \
-	$(C_SRC)/enif_protobuf.c
+	$(C_SRC)/pbwire.c
 
 TEST_SRCS := \
 	$(CURDIR)/stub/erl_nif_stub.c \
@@ -23,7 +25,7 @@ TEST_SRCS := \
 	$(CURDIR)/test_ep_node.c \
 	$(CURDIR)/test_ep_encoder.c \
 	$(CURDIR)/test_ep_decoder.c \
-	$(CURDIR)/test_enif_protobuf.c \
+	$(CURDIR)/test_pbwire.c \
 	$(CURDIR)/ep_test_schema.c \
 	$(CURDIR)/test_integration.c \
 	$(CURDIR)/test_wire_codec.c \
@@ -86,7 +88,7 @@ $(BUILD)/tests_test_ep_encoder.o: $(CURDIR)/test_ep_encoder.c | $(BUILD)
 $(BUILD)/tests_test_ep_decoder.o: $(CURDIR)/test_ep_decoder.c | $(BUILD)
 	$(CC) $(CFLAGS) -c -o $@ $<
 
-$(BUILD)/tests_test_enif_protobuf.o: $(CURDIR)/test_enif_protobuf.c | $(BUILD)
+$(BUILD)/tests_test_pbwire.o: $(CURDIR)/test_pbwire.c | $(BUILD)
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 $(BUILD)/tests_ep_test_schema.o: $(CURDIR)/ep_test_schema.c | $(BUILD)

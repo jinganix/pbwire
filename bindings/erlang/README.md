@@ -1,14 +1,15 @@
 # pbwire Erlang binding
 
 A NIF over the C core for Erlang/OTP (and Elixir): gpb generates the record
-definitions as usual, `enif_protobuf:load_cache/1` consumes them, and
-`enif_protobuf:encode/1` / `decode/2` run in C instead of Erlang — same record
+definitions as usual, `pbwire:load_cache/1` consumes them, and
+`pbwire:encode/1` / `decode/2` run in C instead of Erlang — same record
 tuples, same wire format, byte-identical output. No libprotobuf, no per-message
 native build.
 
-Previously published standalone; it is now developed here as `bindings/erlang`.
-If you depended on the old repository, point your checkout at this one — the
-API and the wire format are unchanged.
+Previously published standalone as `enif_protobuf`; it is now developed here
+as `bindings/erlang` and published to Hex as `pbwire`. If you depended on the
+old repository, point your checkout at this one and replace `enif_protobuf:`
+with `pbwire:` — the API and the wire format are unchanged.
 
 | Piece | Path | Role |
 |---|---|---|
@@ -66,20 +67,20 @@ Load the schema cache once, then encode and decode:
 ['Person']
 2> Msg = #'Person'{name = "abc def", id = 345, email = "a@example.com"}.
 3> gpb_bin = x:encode_msg(Msg).
-4> enif_protobuf:load_cache(x:get_msg_defs()).
+4> pbwire:load_cache(x:get_msg_defs()).
 ok
-5> epb_bin = enif_protobuf:encode(Msg).
+5> epb_bin = pbwire:encode(Msg).
 6> gpb_bin =:= epb_bin.
 true
-7> enif_protobuf:decode(epb_bin, 'Person').
+7> pbwire:decode(epb_bin, 'Person').
 #'Person'{name = <<"abc def">>, id = 345, email = <<"a@example.com">>}
 ```
 
 Convenience wrappers that load the cache on each call:
 
 ```erlang
-enif_protobuf:encode_msg(Msg, x:get_msg_defs()).
-enif_protobuf:decode_msg(Bin, 'Person', x:get_msg_defs()).
+pbwire:encode_msg(Msg, x:get_msg_defs()).
+pbwire:decode_msg(Bin, 'Person', x:get_msg_defs()).
 ```
 
 On gpb 5+ the introspection list was split: `get_msg_defs/0` keeps only
@@ -94,14 +95,14 @@ proto2.
 
 | Function | Returns | Notes |
 |---|---|---|
-| `enif_protobuf:load_cache(Defs)` | `ok` | `Defs` is `Module:get_msg_defs()`, or `Module:get_proto_defs()` on gpb 5+ (it adds the proto3 markers); replaces any previously loaded schema for the whole node |
-| `enif_protobuf:purge_cache()` | `ok` | Frees the loaded schema; later `encode/1` / `decode/2` raise `cache_not_exists` |
-| `enif_protobuf:set_opts(Opts)` | `ok` | Call before `load_cache/1`; unknown options or non-boolean values raise `badarg` |
-| `enif_protobuf:encode(Msg)` | `binary()` | `Msg` is a gpb record or map tuple; raises `badarg` if it is not a tuple |
-| `enif_protobuf:decode(Bin, MsgName)` | record/map tuple | `MsgName` is the message atom, e.g. `'Person'`; raises `unknown_msg` if the schema has no such message |
-| `enif_protobuf:encode_msg(Msg, Defs)` | `binary()` | `load_cache(Defs)` + `encode(Msg)` |
-| `enif_protobuf:decode_msg(Bin, Name, Defs)` | tuple | `load_cache(Defs)` + `decode(Bin, Name)` |
-| `enif_protobuf:debug_term(Term)` | term | Prints the internal node layout of the loaded schema (debugging aid) |
+| `pbwire:load_cache(Defs)` | `ok` | `Defs` is `Module:get_msg_defs()`, or `Module:get_proto_defs()` on gpb 5+ (it adds the proto3 markers); replaces any previously loaded schema for the whole node |
+| `pbwire:purge_cache()` | `ok` | Frees the loaded schema; later `encode/1` / `decode/2` raise `cache_not_exists` |
+| `pbwire:set_opts(Opts)` | `ok` | Call before `load_cache/1`; unknown options or non-boolean values raise `badarg` |
+| `pbwire:encode(Msg)` | `binary()` | `Msg` is a gpb record or map tuple; raises `badarg` if it is not a tuple |
+| `pbwire:decode(Bin, MsgName)` | record/map tuple | `MsgName` is the message atom, e.g. `'Person'`; raises `unknown_msg` if the schema has no such message |
+| `pbwire:encode_msg(Msg, Defs)` | `binary()` | `load_cache(Defs)` + `encode(Msg)` |
+| `pbwire:decode_msg(Bin, Name, Defs)` | tuple | `load_cache(Defs)` + `decode(Bin, Name)` |
+| `pbwire:debug_term(Term)` | term | Prints the internal node layout of the loaded schema (debugging aid) |
 
 Calling `encode/1` or `decode/2` before `load_cache/1` raises `cache_not_exists`. All functions are
 safe to call concurrently from many processes: the schema cache is shared and read-locked, and each
@@ -120,7 +121,7 @@ scheduler gets its own scratch buffers.
 
 ## Options
 
-Call `enif_protobuf:set_opts/1` before `load_cache/1`:
+Call `pbwire:set_opts/1` before `load_cache/1`:
 
 | Option                   | Default | Effect                                                 |
 |--------------------------|---------|--------------------------------------------------------|
@@ -190,12 +191,12 @@ the protobuf wire format, so any conforming decoder reads either.
 ### Can I use it from Elixir?
 
 Yes. It is an Erlang library with no non-Erlang API: generate the schema module with gpb's
-`protoc-erl`, load it once with `:enif_protobuf.load_cache(X.get_msg_defs())`, and call
-`:enif_protobuf.decode(bin, :'Person')` instead of the generated decode.
+`protoc-erl`, load it once with `:pbwire.load_cache(X.get_msg_defs())`, and call
+`:pbwire.decode(bin, :'Person')` instead of the generated decode.
 
 ### Why does `encode/1` or `decode/2` raise `cache_not_exists`?
 
-No schema is loaded yet (or `purge_cache/0` was called). Call `enif_protobuf:load_cache/1` first, or
+No schema is loaded yet (or `purge_cache/0` was called). Call `pbwire:load_cache/1` first, or
 use `encode_msg/2` / `decode_msg/3`.
 
 ### Why do I get `badarg` from `set_opts/1`?
@@ -236,7 +237,7 @@ make c-tests            # C unit tests
 make c-format           # clang-format >= 19 applied to c_src/ and c_src_tests/
 ```
 
-Layout: `src/enif_protobuf.erl` (public API + NIF stubs) → `c_src/enif_protobuf.c` (NIF entry
+Layout: `src/pbwire.erl` (public API + NIF stubs) → `c_src/pbwire.c` (NIF entry
 points, per-thread contexts, cache swap), `c_src/ep_encoder.c` / `c_src/ep_decoder.c`
 (single-pass wire codec over the schema cache), `test/` (EUnit, gpb parity, PropEr fuzzing),
 `benchmarks/` (proto-bench suite). Each thread also owns a core `pbw_ctx` (arena +

@@ -1,4 +1,4 @@
-#include "../c_src/enif_protobuf.h"
+#include "../c_src/pbwire.h"
 #include "stub/erl_nif_stub.h"
 #include "test.h"
 
@@ -36,7 +36,7 @@ test_make_atom_new(void)
 }
 
 int
-run_test_enif_protobuf(void)
+run_test_pbwire(void)
 {
     TEST_RUN(test_make_atom_existing);
     TEST_RUN(test_make_atom_new);

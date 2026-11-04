@@ -47,11 +47,11 @@ prop_decode_int32() ->
             d = list(sint32())
         },
         begin
-            ok = enif_protobuf:load_cache(Defs),
+            ok = pbwire:load_cache(Defs),
             Bin = gpb:encode_msg(Message, Defs),
-            Ret = enif_protobuf:decode(Bin, m4) =:= gpb:decode_msg(Bin, m4, Defs),
-            ok = enif_protobuf:load_cache(Defs2),
-            Ret and (enif_protobuf:decode(Bin, m4) =:= gpb:decode_msg(Bin, m4, Defs2))
+            Ret = pbwire:decode(Bin, m4) =:= gpb:decode_msg(Bin, m4, Defs),
+            ok = pbwire:load_cache(Defs2),
+            Ret and (pbwire:decode(Bin, m4) =:= gpb:decode_msg(Bin, m4, Defs2))
         end).
 
 prop_decode_int64() ->
@@ -79,11 +79,11 @@ prop_decode_int64() ->
             d = list(sint64())
         },
         begin
-            ok = enif_protobuf:load_cache(Defs),
+            ok = pbwire:load_cache(Defs),
             Bin = gpb:encode_msg(Message, Defs),
-            Ret = enif_protobuf:decode(Bin, m4) =:= gpb:decode_msg(Bin, m4, Defs),
-            ok = enif_protobuf:load_cache(Defs2),
-            Ret and (enif_protobuf:decode(Bin, m4) =:= gpb:decode_msg(Bin, m4, Defs2))
+            Ret = pbwire:decode(Bin, m4) =:= gpb:decode_msg(Bin, m4, Defs),
+            ok = pbwire:load_cache(Defs2),
+            Ret and (pbwire:decode(Bin, m4) =:= gpb:decode_msg(Bin, m4, Defs2))
         end).
 
 prop_decode_uint32() ->
@@ -111,11 +111,11 @@ prop_decode_uint32() ->
             d = list(uint32())
         },
         begin
-            ok = enif_protobuf:load_cache(Defs),
+            ok = pbwire:load_cache(Defs),
             Bin = gpb:encode_msg(Message, Defs),
-            Ret = enif_protobuf:decode(Bin, m4) =:= gpb:decode_msg(Bin, m4, Defs),
-            ok = enif_protobuf:load_cache(Defs2),
-            Ret and (enif_protobuf:decode(Bin, m4) =:= gpb:decode_msg(Bin, m4, Defs2))
+            Ret = pbwire:decode(Bin, m4) =:= gpb:decode_msg(Bin, m4, Defs),
+            ok = pbwire:load_cache(Defs2),
+            Ret and (pbwire:decode(Bin, m4) =:= gpb:decode_msg(Bin, m4, Defs2))
         end).
 
 prop_decode_uint64() ->
@@ -143,11 +143,11 @@ prop_decode_uint64() ->
             d = list(uint64())
         },
         begin
-            ok = enif_protobuf:load_cache(Defs),
+            ok = pbwire:load_cache(Defs),
             Bin = gpb:encode_msg(Message, Defs),
-            Ret = enif_protobuf:decode(Bin, m4) =:= gpb:decode_msg(Bin, m4, Defs),
-            ok = enif_protobuf:load_cache(Defs2),
-            Ret and (enif_protobuf:decode(Bin, m4) =:= gpb:decode_msg(Bin, m4, Defs2))
+            Ret = pbwire:decode(Bin, m4) =:= gpb:decode_msg(Bin, m4, Defs),
+            ok = pbwire:load_cache(Defs2),
+            Ret and (pbwire:decode(Bin, m4) =:= gpb:decode_msg(Bin, m4, Defs2))
         end).
 
 prop_decode_sint32() ->
@@ -175,11 +175,11 @@ prop_decode_sint32() ->
             d = list(sint32())
         },
         begin
-            ok = enif_protobuf:load_cache(Defs),
+            ok = pbwire:load_cache(Defs),
             Bin = gpb:encode_msg(Message, Defs),
-            Ret = enif_protobuf:decode(Bin, m4) =:= gpb:decode_msg(Bin, m4, Defs),
-            ok = enif_protobuf:load_cache(Defs2),
-            Ret and (enif_protobuf:decode(Bin, m4) =:= gpb:decode_msg(Bin, m4, Defs2))
+            Ret = pbwire:decode(Bin, m4) =:= gpb:decode_msg(Bin, m4, Defs),
+            ok = pbwire:load_cache(Defs2),
+            Ret and (pbwire:decode(Bin, m4) =:= gpb:decode_msg(Bin, m4, Defs2))
         end).
 
 prop_decode_sint64() ->
@@ -207,11 +207,11 @@ prop_decode_sint64() ->
             d = list(sint64())
         },
         begin
-            ok = enif_protobuf:load_cache(Defs),
+            ok = pbwire:load_cache(Defs),
             Bin = gpb:encode_msg(Message, Defs),
-            Ret = enif_protobuf:decode(Bin, m4) =:= gpb:decode_msg(Bin, m4, Defs),
-            ok = enif_protobuf:load_cache(Defs2),
-            Ret and (enif_protobuf:decode(Bin, m4) =:= gpb:decode_msg(Bin, m4, Defs2))
+            Ret = pbwire:decode(Bin, m4) =:= gpb:decode_msg(Bin, m4, Defs),
+            ok = pbwire:load_cache(Defs2),
+            Ret and (pbwire:decode(Bin, m4) =:= gpb:decode_msg(Bin, m4, Defs2))
         end).
 
 prop_decode_fixed32() ->
@@ -239,11 +239,11 @@ prop_decode_fixed32() ->
             d = list(uint32())
         },
         begin
-            ok = enif_protobuf:load_cache(Defs),
+            ok = pbwire:load_cache(Defs),
             Bin = gpb:encode_msg(Message, Defs),
-            Ret = enif_protobuf:decode(Bin, m4) =:= gpb:decode_msg(Bin, m4, Defs),
-            ok = enif_protobuf:load_cache(Defs2),
-            Ret and (enif_protobuf:decode(Bin, m4) =:= gpb:decode_msg(Bin, m4, Defs2))
+            Ret = pbwire:decode(Bin, m4) =:= gpb:decode_msg(Bin, m4, Defs),
+            ok = pbwire:load_cache(Defs2),
+            Ret and (pbwire:decode(Bin, m4) =:= gpb:decode_msg(Bin, m4, Defs2))
         end).
 
 prop_decode_fixed64() ->
@@ -271,11 +271,11 @@ prop_decode_fixed64() ->
             d = list(uint64())
         },
         begin
-            ok = enif_protobuf:load_cache(Defs),
+            ok = pbwire:load_cache(Defs),
             Bin = gpb:encode_msg(Message, Defs),
-            Ret = enif_protobuf:decode(Bin, m4) =:= gpb:decode_msg(Bin, m4, Defs),
-            ok = enif_protobuf:load_cache(Defs2),
-            Ret and (enif_protobuf:decode(Bin, m4) =:= gpb:decode_msg(Bin, m4, Defs2))
+            Ret = pbwire:decode(Bin, m4) =:= gpb:decode_msg(Bin, m4, Defs),
+            ok = pbwire:load_cache(Defs2),
+            Ret and (pbwire:decode(Bin, m4) =:= gpb:decode_msg(Bin, m4, Defs2))
         end).
 
 prop_decode_sfixed32() ->
@@ -303,11 +303,11 @@ prop_decode_sfixed32() ->
             d = list(sint32())
         },
         begin
-            ok = enif_protobuf:load_cache(Defs),
+            ok = pbwire:load_cache(Defs),
             Bin = gpb:encode_msg(Message, Defs),
-            Ret = enif_protobuf:decode(Bin, m4) =:= gpb:decode_msg(Bin, m4, Defs),
-            ok = enif_protobuf:load_cache(Defs2),
-            Ret and (enif_protobuf:decode(Bin, m4) =:= gpb:decode_msg(Bin, m4, Defs2))
+            Ret = pbwire:decode(Bin, m4) =:= gpb:decode_msg(Bin, m4, Defs),
+            ok = pbwire:load_cache(Defs2),
+            Ret and (pbwire:decode(Bin, m4) =:= gpb:decode_msg(Bin, m4, Defs2))
         end).
 
 prop_decode_sfixed64() ->
@@ -335,11 +335,11 @@ prop_decode_sfixed64() ->
             d = list(sint64())
         },
         begin
-            ok = enif_protobuf:load_cache(Defs),
+            ok = pbwire:load_cache(Defs),
             Bin = gpb:encode_msg(Message, Defs),
-            Ret = enif_protobuf:decode(Bin, m4) =:= gpb:decode_msg(Bin, m4, Defs),
-            ok = enif_protobuf:load_cache(Defs2),
-            Ret and (enif_protobuf:decode(Bin, m4) =:= gpb:decode_msg(Bin, m4, Defs2))
+            Ret = pbwire:decode(Bin, m4) =:= gpb:decode_msg(Bin, m4, Defs),
+            ok = pbwire:load_cache(Defs2),
+            Ret and (pbwire:decode(Bin, m4) =:= gpb:decode_msg(Bin, m4, Defs2))
         end).
 
 prop_decode_float() ->
@@ -367,11 +367,11 @@ prop_decode_float() ->
             d = list(oneof([infinity, '-infinity', nan, float(), integer()]))
         },
         begin
-            ok = enif_protobuf:load_cache(Defs),
+            ok = pbwire:load_cache(Defs),
             Bin = gpb:encode_msg(Message, Defs),
-            Ret = enif_protobuf:decode(Bin, m4) =:= gpb:decode_msg(Bin, m4, Defs),
-            ok = enif_protobuf:load_cache(Defs2),
-            Ret and (enif_protobuf:decode(Bin, m4) =:= gpb:decode_msg(Bin, m4, Defs2))
+            Ret = pbwire:decode(Bin, m4) =:= gpb:decode_msg(Bin, m4, Defs),
+            ok = pbwire:load_cache(Defs2),
+            Ret and (pbwire:decode(Bin, m4) =:= gpb:decode_msg(Bin, m4, Defs2))
         end).
 
 prop_decode_double() ->
@@ -399,11 +399,11 @@ prop_decode_double() ->
             d = list(oneof([infinity, '-infinity', nan, float(), integer()]))
         },
         begin
-            ok = enif_protobuf:load_cache(Defs),
+            ok = pbwire:load_cache(Defs),
             Bin = gpb:encode_msg(Message, Defs),
-            Ret = enif_protobuf:decode(Bin, m4) =:= gpb:decode_msg(Bin, m4, Defs),
-            ok = enif_protobuf:load_cache(Defs2),
-            Ret and (enif_protobuf:decode(Bin, m4) =:= gpb:decode_msg(Bin, m4, Defs2))
+            Ret = pbwire:decode(Bin, m4) =:= gpb:decode_msg(Bin, m4, Defs),
+            ok = pbwire:load_cache(Defs2),
+            Ret and (pbwire:decode(Bin, m4) =:= gpb:decode_msg(Bin, m4, Defs2))
         end).
 
 prop_decode_bool() ->
@@ -423,7 +423,7 @@ prop_decode_bool() ->
             #?gpb_field{name = d, fnum = 4, rnum = #m4.d, type = bool, occurrence = repeated, opts = []}
         ]}
     ],
-    ok = enif_protobuf:load_cache(Defs),
+    ok = pbwire:load_cache(Defs),
     ?FORALL(Message,
         #m4{
             a = oneof([true, false, 1, 0]),
@@ -433,9 +433,9 @@ prop_decode_bool() ->
         },
         begin
             Bin = gpb:encode_msg(Message, Defs),
-            Ret = enif_protobuf:decode(Bin, m4) =:= gpb:decode_msg(Bin, m4, Defs),
-            ok = enif_protobuf:load_cache(Defs2),
-            Ret and (enif_protobuf:decode(Bin, m4) =:= gpb:decode_msg(Bin, m4, Defs2))
+            Ret = pbwire:decode(Bin, m4) =:= gpb:decode_msg(Bin, m4, Defs),
+            ok = pbwire:load_cache(Defs2),
+            Ret and (pbwire:decode(Bin, m4) =:= gpb:decode_msg(Bin, m4, Defs2))
         end).
 
 prop_decode_ascii_string() ->
@@ -446,8 +446,8 @@ prop_decode_ascii_string() ->
             #?gpb_field{name = c, fnum = 3, rnum = #m3.c, type = string, occurrence = repeated, opts = []}
         ]}
     ],
-    ok = enif_protobuf:load_cache(Defs),
-    ok = enif_protobuf:set_opts([{string_as_list, true}]),
+    ok = pbwire:load_cache(Defs),
+    ok = pbwire:set_opts([{string_as_list, true}]),
     ?FORALL(Message,
         #m3{
             a = ascii_string(),
@@ -456,7 +456,7 @@ prop_decode_ascii_string() ->
         },
         begin
             Bin = gpb:encode_msg(Message, Defs),
-            enif_protobuf:decode(Bin, m3) =:= gpb:decode_msg(Bin, m3, Defs)
+            pbwire:decode(Bin, m3) =:= gpb:decode_msg(Bin, m3, Defs)
         end).
 
 prop_decode_utf8_string() ->
@@ -467,8 +467,8 @@ prop_decode_utf8_string() ->
             #?gpb_field{name = c, fnum = 3, rnum = #m3.c, type = string, occurrence = repeated, opts = []}
         ]}
     ],
-    ok = enif_protobuf:load_cache(Defs),
-    ok = enif_protobuf:set_opts([{with_utf8, true}, {string_as_list, true}]),
+    ok = pbwire:load_cache(Defs),
+    ok = pbwire:set_opts([{with_utf8, true}, {string_as_list, true}]),
     ?FORALL(Message,
         #m3{
             a = utf8string(),
@@ -477,7 +477,7 @@ prop_decode_utf8_string() ->
         },
         begin
             Bin = gpb:encode_msg(Message, Defs),
-            enif_protobuf:decode(Bin, m3) =:= gpb:decode_msg(Bin, m3, Defs)
+            pbwire:decode(Bin, m3) =:= gpb:decode_msg(Bin, m3, Defs)
         end).
 
 prop_encode_bytes() ->
@@ -488,7 +488,7 @@ prop_encode_bytes() ->
             #?gpb_field{name = c, fnum = 3, rnum = #m3.c, type = bytes, occurrence = repeated, opts = []}
         ]}
     ],
-    ok = enif_protobuf:load_cache(Defs),
+    ok = pbwire:load_cache(Defs),
     ?FORALL(Message,
         #m3{
             a = binary(),
@@ -497,7 +497,7 @@ prop_encode_bytes() ->
         },
         begin
             Bin = gpb:encode_msg(Message, Defs),
-            enif_protobuf:decode(Bin, m3) =:= gpb:decode_msg(Bin, m3, Defs)
+            pbwire:decode(Bin, m3) =:= gpb:decode_msg(Bin, m3, Defs)
         end).
 
 prop_decode_map() ->
@@ -509,8 +509,8 @@ prop_decode_map() ->
             #?gpb_field{name = c, fnum = 3, rnum = #m3.c, type = Type, occurrence = repeated, opts = []}
         ]}
     ],
-    ok = enif_protobuf:load_cache(Defs),
-    ok = enif_protobuf:set_opts([{string_as_list, true}, {with_utf8, false}]),
+    ok = pbwire:load_cache(Defs),
+    ok = pbwire:set_opts([{string_as_list, true}, {with_utf8, false}]),
     ?FORALL(Message,
         #m3{
             a = {ascii_string(), integer()},
@@ -519,7 +519,7 @@ prop_decode_map() ->
         },
         begin
             Bin = gpb:encode_msg(Message, Defs),
-            Decoded = enif_protobuf:decode(Bin, m3),
+            Decoded = pbwire:decode(Bin, m3),
             Decoded#m3{c = lists:reverse(Decoded#m3.c)} =:= gpb:decode_msg(Bin, m3, Defs)
         end).
 
@@ -550,11 +550,11 @@ prop_decode_enum() ->
             d = list(oneof([v1, v2, sint32()]))
         },
         begin
-            ok = enif_protobuf:load_cache(Defs),
+            ok = pbwire:load_cache(Defs),
             Bin = gpb:encode_msg(Message, Defs),
-            Ret = enif_protobuf:decode(Bin, m4) =:= gpb:decode_msg(Bin, m4, Defs),
-            ok = enif_protobuf:load_cache(Defs2),
-            Ret and (enif_protobuf:decode(Bin, m4) =:= gpb:decode_msg(Bin, m4, Defs2))
+            Ret = pbwire:decode(Bin, m4) =:= gpb:decode_msg(Bin, m4, Defs),
+            ok = pbwire:load_cache(Defs2),
+            Ret and (pbwire:decode(Bin, m4) =:= gpb:decode_msg(Bin, m4, Defs2))
         end).
 
 prop_decode_enum_aliases() ->
@@ -584,11 +584,11 @@ prop_decode_enum_aliases() ->
             d = list(oneof([v1, v2, v3, sint32()]))
         },
         begin
-            ok = enif_protobuf:load_cache(Defs),
+            ok = pbwire:load_cache(Defs),
             Bin = gpb:encode_msg(Message, Defs),
-            Ret = enif_protobuf:decode(Bin, m4) =:= gpb:decode_msg(Bin, m4, Defs),
-            ok = enif_protobuf:load_cache(Defs2),
-            Ret and (enif_protobuf:decode(Bin, m4) =:= gpb:decode_msg(Bin, m4, Defs2))
+            Ret = pbwire:decode(Bin, m4) =:= gpb:decode_msg(Bin, m4, Defs),
+            ok = pbwire:load_cache(Defs2),
+            Ret and (pbwire:decode(Bin, m4) =:= gpb:decode_msg(Bin, m4, Defs2))
         end).
 
 prop_decode_oneof() ->
@@ -599,12 +599,12 @@ prop_decode_oneof() ->
                 #?gpb_field{name = a2, fnum = 2, rnum = #m1.a, type = int32, occurrence = optional, opts = []}
             ]}]}
     ],
-    ok = enif_protobuf:load_cache(Defs),
+    ok = pbwire:load_cache(Defs),
     ?FORALL(Message,
         #m1{a = oneof([undefined, {a1, integer()}, {a2, integer()}])},
         begin
             Bin = gpb:encode_msg(Message, Defs),
-            enif_protobuf:decode(Bin, m1) =:= gpb:decode_msg(Bin, m1, Defs)
+            pbwire:decode(Bin, m1) =:= gpb:decode_msg(Bin, m1, Defs)
         end).
 
 prop_decode_sub_msg() ->
@@ -619,7 +619,7 @@ prop_decode_sub_msg() ->
             #?gpb_field{name = b, fnum = 2, rnum = #m2.b, type = uint64, occurrence = required, opts = []}
         ]}
     ],
-    ok = enif_protobuf:load_cache(Defs),
+    ok = pbwire:load_cache(Defs),
     ?FORALL(Message,
         #m3{
             a = #m2{a = uint32(), b = uint64()},
@@ -628,6 +628,6 @@ prop_decode_sub_msg() ->
         },
         begin
             Bin = gpb:encode_msg(Message, Defs),
-            enif_protobuf:decode(Bin, m3) =:= gpb:decode_msg(Bin, m3, Defs)
+            pbwire:decode(Bin, m3) =:= gpb:decode_msg(Bin, m3, Defs)
         end).
 -endif.

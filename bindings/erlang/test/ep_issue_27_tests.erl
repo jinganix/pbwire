@@ -19,7 +19,7 @@
     gnum = 0 :: non_neg_integer() | undefined % = 7, optional, 32 bits
 }).
 
-% https://github.com/jinganix/enif_protobuf/issues/27
+% https://github.com/jinganix/pbwire/issues/27
 get_proto_defs() ->
     [
         {syntax, "proto3"},
@@ -46,13 +46,13 @@ get_proto_defs_02() ->
 
 issue_27_test() ->
     Defs = get_proto_defs_02() ++ get_proto_defs(),
-    enif_protobuf:load_cache(Defs),
+    pbwire:load_cache(Defs),
     Msg1 = #default_uint32_msg{},
     Bin1 = <<8, 0>>,
     Bin1 = gpb:encode_msg(Msg1, Defs),
-    Bin1 = enif_protobuf:encode_msg(Msg1, Defs),
+    Bin1 = pbwire:encode_msg(Msg1, Defs),
 
     Bin2 = <<8, 99, 18, 4, 116, 101, 115, 116, 24, 0, 40, 0, 90, 0, 96, 0>>,
     Msg2 = #default_string_mix_msg{count_num = 99, rname = <<"test">>, py_id = 0, status_arr = [], gname = <<>>},
     Bin2 = gpb:encode_msg(Msg2, Defs),
-    Bin2 = enif_protobuf:encode_msg(Msg2, Defs).
+    Bin2 = pbwire:encode_msg(Msg2, Defs).

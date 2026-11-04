@@ -3,7 +3,7 @@
 CURDIR := $(shell pwd)
 BASEDIR := $(abspath $(CURDIR)/..)
 
-PROJECT ?= enif_protobuf
+PROJECT ?= pbwire
 PROJECT := $(strip $(PROJECT))
 
 ERTS_INCLUDE_DIR ?= $(shell erl -noshell -eval "io:format(\"~ts/erts-~ts/include/\", [code:root_dir(), erlang:system_info(version)])." -s erlang halt)
@@ -21,7 +21,7 @@ PBW_LIB := $(PBW_ROOT)/build/libpbwire.a
 PBW_INCLUDE := $(PBW_ROOT)/include
 
 NIF_SOURCES = \
-	$(C_SRC_DIR)/enif_protobuf.c \
+	$(C_SRC_DIR)/pbwire.c \
 	$(C_SRC_DIR)/ep_pbw_schema.c \
 	$(C_SRC_DIR)/ep_pbw_decode.c \
 	$(C_SRC_DIR)/ep_pbw_encode.c

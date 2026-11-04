@@ -85,8 +85,8 @@ nested_oneof_test() ->
             }
         }
     },
-    Bin = enif_protobuf:encode(Msg),
-    Msg = enif_protobuf:decode(Bin, 'ServerMessage').
+    Bin = pbwire:encode(Msg),
+    Msg = pbwire:decode(Bin, 'ServerMessage').
 
 person_roundtrip_test() ->
     ok = ep_test_helpers:load_cache(ep_test_helpers:person_defs()),
@@ -146,9 +146,9 @@ loop_decoding(N) ->
     loop_decoding(N - 1).
 
 encoding() ->
-    enif_protobuf:encode({'Person', "abc def", 345, "a@example.com"}).
+    pbwire:encode({'Person', "abc def", 345, "a@example.com"}).
 
 decoding() ->
     Bin = <<10, 7, 97, 98, 99, 32, 100, 101, 102, 16, 217, 2, 26, 13, 97, 64,
         101, 120, 97, 109, 112, 108, 101, 46, 99, 111, 109>>,
-    enif_protobuf:decode(Bin, 'Person').
+    pbwire:decode(Bin, 'Person').

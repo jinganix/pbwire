@@ -58,7 +58,7 @@ anything else:
   is (protoc `--kotlin_out` generates Kotlin over protobuf-java).
 - **Erlang needs neither.** gpb already is that plugin: `gpb_compile` /
   `protoc-erl` generates the record definitions plus `get_msg_defs/0`, and
-  `enif_protobuf:load_cache/1` consumes exactly that. Adding a second
+  `pbwire:load_cache/1` consumes exactly that. Adding a second
   generator or a descriptor loader would duplicate gpb.
 
 ## What each binding solves
@@ -100,7 +100,7 @@ side by side with the absolute MB/s.
 | C++ | the C runtime and its generated headers, unchanged | ✅ | inherits C |
 | Python | `pbwire.Schema.from_file/load` on a `FileDescriptorSet` | ✅ | the extension is compiled but the schema is always loaded; `decode()` returns a parsed message, `to_dict()`/`encode(dict)` are the dict path |
 | Go | `dynamic.Registry` on a `FileDescriptorSet`, cgo downcalls into the C core | ✅ | explicit `Close` per root (no finalizer); failed loads never disturb the live version |
-| Erlang | `gpb_compile` → records + `get_msg_defs/0` → `enif_protobuf:load_cache/1` | ✅ | gpb is the plugin, epb needs no descriptor path |
+| Erlang | `gpb_compile` → records + `get_msg_defs/0` → `pbwire:load_cache/1` | ✅ | gpb is the plugin, epb needs no descriptor path |
 | Java | `FileDescriptorSet` at run time, `java.lang.foreign` downcalls (JDK 22+) | ✅ | no JNI, no C glue, no generator |
 | Ruby | `FileDescriptorSet` at run time, a C extension linked against the core | ✅ | no gems, no generator; binary-only conformance testee |
 | Node | `FileDescriptorSet` at run time, hand-written N-API addon | ✅ | no npm deps, node headers only |

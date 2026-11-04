@@ -5,9 +5,9 @@ writing code against the library.
 
 ## What this repo is
 
-`enif_protobuf` is a Google Protobuf encoder/decoder for Erlang/OTP implemented as a C NIF. Users
+`pbwire` is a Google Protobuf encoder/decoder for Erlang/OTP implemented as a C NIF. Users
 generate Erlang modules with [gpb](https://github.com/tomas-abrahamsson/gpb) (`protoc-erl`), then call
-`enif_protobuf` instead of the generated `encode_msg/1` / `decode_msg/2`.
+`pbwire` instead of the generated `encode_msg/1` / `decode_msg/2`.
 
 ## Commands
 
@@ -27,8 +27,8 @@ Run `make tests` and `make c-tests` after any C or Erlang change; run `make c-fo
 
 | Path | Contents |
 |---|---|
-| `src/enif_protobuf.erl` | Public API; each function is an `erlang:nif_error` stub replaced by the NIF |
-| `c_src/enif_protobuf.c` | NIF entry points, schema (`get_msg_defs/0` / `get_proto_defs/0`) parsing, global cache, per-thread core contexts |
+| `src/pbwire.erl` | Public API; each function is an `erlang:nif_error` stub replaced by the NIF |
+| `c_src/pbwire.c` | NIF entry points, schema (`get_msg_defs/0` / `get_proto_defs/0`) parsing, global cache, per-thread core contexts |
 | `c_src/ep_cache.c` | Schema node cache (lookup by message id / name) |
 | `c_src/ep_encoder.c` / `c_src/ep_decoder.c` | Wire format codec |
 | `c_src/ep_node.c` | Schema node tree, reference counting |
@@ -59,7 +59,7 @@ segfault; raising an Erlang exception is always acceptable.
 
 - C: clang-format with `.clang-format` (requires clang-format >= 19); 4-space indent, `snake_case`,
   static helpers for file-local functions, `ep_` / `EP_` prefixes.
-- Erlang: keep the public surface exactly as in `src/enif_protobuf.erl` plus `encode_msg/2`,
+- Erlang: keep the public surface exactly as in `src/pbwire.erl` plus `encode_msg/2`,
   `decode_msg/3`; do not add options without updating README and tests.
 - Tests: add the case to the topical module under `test/` — `ep_api_tests` (public API),
   `ep_schema_tests` (load_cache/1 and defs shapes), `ep_validation_tests` (bad arguments, improper
@@ -72,10 +72,10 @@ segfault; raising an Erlang exception is always acceptable.
 ## Writing code that uses this library
 
 ```erlang
-ok = enif_protobuf:set_opts([{with_utf8, true}]),   %% optional, before load_cache
-ok = enif_protobuf:load_cache(x:get_msg_defs()),    %% once per node; gpb 5+: x:get_proto_defs()
-Bin = enif_protobuf:encode(Msg),                    %% Msg is a gpb record/map tuple
-Msg = enif_protobuf:decode(Bin, 'Person').
+ok = pbwire:set_opts([{with_utf8, true}]),   %% optional, before load_cache
+ok = pbwire:load_cache(x:get_msg_defs()),    %% once per node; gpb 5+: x:get_proto_defs()
+Bin = pbwire:encode(Msg),                    %% Msg is a gpb record/map tuple
+Msg = pbwire:decode(Bin, 'Person').
 ```
 
 Pitfalls to avoid:

@@ -85,7 +85,7 @@ after touching `bindings/go`.
 | `tests/data/*.proto` | Fixtures the pinned descriptor set was generated from |
 | `tests/protoc/` | Importer self-check and its `.proto` fixtures (CMake only) |
 | `bench/bench.cc` | Differential test and benchmark against libprotobuf C++ |
-| `bindings/erlang/` | Erlang/OTP NIF binding (`enif_protobuf` app, own rebar3 build, see its AGENTS.md) |
+| `bindings/erlang/` | Erlang/OTP NIF binding (`pbwire` app, own rebar3 build, see its AGENTS.md) |
 | `bench/msg.proto` | proto3 message used by both; `bench/gen/` is generated, never committed |
 | `bench/msg2.proto` | proto2 counterpart: explicit presence, groups, required fields, closed enums, extensions |
 | `BENCHMARKS.md` | the performance document: the four standard payload tiers, every binding vs its baseline, the cross-binding table |
@@ -118,7 +118,7 @@ This decides how a binding gets its schema, and it is not negotiable:
 3. **Erlang needs neither.** gpb already is the plugin: `gpb_compile` /
    `protoc-erl` emits the record definitions plus `get_msg_defs/0` (gpb 5+:
    `get_proto_defs/0`, which keeps the proto3 markers), and
-   `enif_protobuf:load_cache/1` consumes exactly that. Do not add a second
+   `pbwire:load_cache/1` consumes exactly that. Do not add a second
    generator or a descriptor loader to the Erlang binding.
 4. **The typed model is ergonomics over the same codec.** `bindings/typed` may
    emit typed fields, presence flags and `encode`/`decode` wrappers, but those

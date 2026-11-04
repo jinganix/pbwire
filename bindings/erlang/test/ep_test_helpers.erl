@@ -20,22 +20,22 @@ load_cache(Defs) ->
     load_cache(Defs, default_opts()).
 
 load_cache(Defs, Opts) ->
-    ok = enif_protobuf:set_opts(Opts),
-    enif_protobuf:load_cache(Defs).
+    ok = pbwire:set_opts(Opts),
+    pbwire:load_cache(Defs).
 
 encode_msg(Msg, Defs) ->
     encode_msg(Msg, Defs, default_opts()).
 
 encode_msg(Msg, Defs, Opts) ->
     ok = load_cache(Defs, Opts),
-    enif_protobuf:encode(Msg).
+    pbwire:encode(Msg).
 
 decode_msg(Bin, Name, Defs) ->
     decode_msg(Bin, Name, Defs, default_opts()).
 
 decode_msg(Bin, Name, Defs, Opts) ->
     ok = load_cache(Defs, Opts),
-    enif_protobuf:decode(Bin, Name).
+    pbwire:decode(Bin, Name).
 
 roundtrip(Msg, Defs) ->
     Name = element(1, Msg),

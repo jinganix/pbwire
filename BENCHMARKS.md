@@ -118,7 +118,7 @@ payload, the boundary cost and the baseline all differ.
 | Dart | `dart:ffi` | 74913 B | 1273.8 (12.2x) | 555.9 (3.3x) |
 | Rust | static link | 74913 B | 1423.0 (1.57x) | 575.8 (1.45x) |
 | C# | P/Invoke | 74913 B | 1393.5 (2.90x) | 547.1 (1.07x) |
-| Erlang | NIF (`enif_protobuf`) | 74913 B | 251.2 (2.04x) | 365.2 (1.68x) |
+| Erlang | NIF (`pbwire`) | 74913 B | 251.2 (2.04x) | 365.2 (1.68x) |
 
 Read it as: the in-process dynamic core sets the pace (1.4x the C++
 generated code at this size), a binding that links the core in (Ruby, Rust)
@@ -712,7 +712,7 @@ is the C core's own number: by 2.5 KB the per-call boundary is invisible and onl
 the baseline's own codec is being measured. That is the point of the schema-at-
 runtime design -- the binding owns ergonomics, the core owns the format.
 
-### Erlang: `enif_protobuf` vs gpb vs gpb NIF
+### Erlang: `pbwire` vs gpb vs gpb NIF
 
 `matrix3.proto`, all four tiers, best of three samples per op. Same payload / op /
 MB/s layout as every other table: the `pbwire-erlang` column carries the ratio

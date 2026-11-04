@@ -16,4 +16,4 @@ load_cache_improper_defs_list_should_fail_test() ->
         ]}
         | not_a_proper_list
     ],
-    ?assertError(_, enif_protobuf:load_cache(Defs)).
+    ?assertError(_, pbwire:load_cache(Defs)).

@@ -12,9 +12,9 @@ repeated_int32_improper_list_should_fail_test() ->
             #field{name = a, fnum = 1, rnum = 2, type = int32, occurrence = repeated, opts = []}
         ]}
     ],
-    ok = enif_protobuf:load_cache(Defs),
+    ok = pbwire:load_cache(Defs),
     Msg = {m1, [1, 2 | not_proper]},
-    ?assertError(_, enif_protobuf:encode(Msg)).
+    ?assertError(_, pbwire:encode(Msg)).
 
 %% encode/1 must reject a non-list value for the '$unknown' field instead of
 %% silently dropping it (gpb raises too).
@@ -25,6 +25,6 @@ unknown_fields_not_a_list_should_fail_test() ->
             #field{name = '$unknown', fnum = undefined, rnum = 3, type = unknown, occurrence = repeated, opts = []}
         ]}
     ],
-    ok = enif_protobuf:load_cache(Defs),
-    ?assertError(_, enif_protobuf:encode({m1, 1, not_a_list})),
-    ?assertError(_, enif_protobuf:encode({m1, 1, [{varint, 2, 3} | improper_tail]})).
+    ok = pbwire:load_cache(Defs),
+    ?assertError(_, pbwire:encode({m1, 1, not_a_list})),
+    ?assertError(_, pbwire:encode({m1, 1, [{varint, 2, 3} | improper_tail]})).

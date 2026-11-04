@@ -1,10 +1,10 @@
 #! /usr/bin/env escript
 %% -*- erlang -*-
-%%! -pa ../_build/test/lib/gpb/ebin -pa ../_build/default/lib/enif_protobuf/ebin -pa tmp/
+%%! -pa ../_build/test/lib/gpb/ebin -pa ../_build/default/lib/pbwire/ebin -pa tmp/
 
 %% Unified Erlang benchmark: `bindings/c/tests/data/matrix3.proto`, the same
 %% message and payload every other binding measures (BENCHMARKS.md at the repo
-%% root), for enif_protobuf (pbwire-erlang) against gpb (pure Erlang) and the
+%% root), for pbwire (pbwire-erlang) against gpb (pure Erlang) and the
 %% gpb libprotobuf NIF when it was built.
 %%
 %%   ./proto-bench [--backend gpb|epb|nif] ...
@@ -48,7 +48,7 @@ main(Args) ->
 
 run(Backends) ->
     case lists:keymember(epb, 1, Backends) of
-        true -> ok = enif_protobuf:load_cache(matrix3_r:get_proto_defs());
+        true -> ok = pbwire:load_cache(matrix3_r:get_proto_defs());
         false -> ok
     end,
     [run_case(Label, Repeats, Want, Backends) || {Label, Repeats, Want} <- ?TIERS],
@@ -91,8 +91,8 @@ usage(What) ->
     halt(2).
 
 backend(epb) ->
-    {epb, fun enif_protobuf:encode/1,
-        fun(Bin) -> enif_protobuf:decode(Bin, ?MSG) end};
+    {epb, fun pbwire:encode/1,
+        fun(Bin) -> pbwire:decode(Bin, ?MSG) end};
 backend(gpb) ->
     {gpb, fun matrix3_r:encode_msg/1,
         fun(Bin) -> matrix3_r:decode_msg(Bin, ?MSG) end};

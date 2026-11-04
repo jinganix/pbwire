@@ -1,4 +1,4 @@
-#include "enif_protobuf.h"
+#include "pbwire.h"
 
 #if 0
 #define enc_ensure(env, enc, size)                              \

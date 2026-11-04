@@ -1,4 +1,4 @@
-#include "enif_protobuf.h"
+#include "pbwire.h"
 
 static inline ERL_NIF_TERM
 skip_field(ErlNifEnv *env, ep_dec_t *dec, wire_type_e wire_type);

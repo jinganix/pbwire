@@ -18,4 +18,4 @@ load_cache_field_opts_improper_list_should_fail_test() ->
             }
         ]}
     ],
-    ?assertError(_, enif_protobuf:load_cache(Defs)).
+    ?assertError(_, pbwire:load_cache(Defs)).

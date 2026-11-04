@@ -1,6 +1,6 @@
 # Benchmarks
 
-`enif_protobuf` (the Erlang/OTP NIF) against **gpb** (pure Erlang) and the
+`pbwire` (the Erlang/OTP NIF) against **gpb** (pure Erlang) and the
 **gpb NIF** (libprotobuf behind gpb's own NIF generator), on the same schema and
 payload as every other binding in this repo: `bindings/c/tests/data/matrix3.proto`
 with the four standard tiers from [BENCHMARKS.md](../../../BENCHMARKS.md).
@@ -54,7 +54,7 @@ BENCHMARKS.md hold for this suite too.
 
    All benchmark `make` targets run Erlang through `scripts/with_tool_versions.sh` and fail if the active OTP major version does not match `.tool-versions`.
 
-2. Build the parent project (NIF + `enif_protobuf`):
+2. Build the parent project (NIF + `pbwire`):
 
    ```shell
    make build
@@ -105,7 +105,7 @@ BENCH_TARGET_TIME=0.05 ../scripts/with_tool_versions.sh ./proto-bench
 
 The gpb modules are generated with gpb's `-introspect-get_proto_defs` option:
 `get_proto_defs/0` carries the proto3 markers and the defs-format-3 enum values
-that `enif_protobuf:load_cache/1` consumes.
+that `pbwire:load_cache/1` consumes.
 
 ## Results
 

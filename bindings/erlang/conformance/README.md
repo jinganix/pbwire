@@ -3,7 +3,7 @@
 Not runnable yet; the blocker is how epb learns a schema.
 
 `conformance/testee.c` (repo root) passes Google's suite because the dynamic
-core loads any `FileDescriptorSet`. `enif_protobuf` instead takes gpb-style
+core loads any `FileDescriptorSet`. `pbwire` instead takes gpb-style
 definitions (`load_cache(Defs)`) from a generated module, so a testee needs the
 conformance protos compiled by gpb — and one module cannot hold both
 `protobuf_test_messages.proto2.TestAllTypesProto2` and

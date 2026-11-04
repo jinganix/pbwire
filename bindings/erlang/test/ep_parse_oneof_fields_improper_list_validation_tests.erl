@@ -6,7 +6,7 @@
 %% parse_oneof_fields/3 walks gpb_oneof member lists with enif_get_list_cell/3;
 %% the final tail must be [] (see fill_oneof_field/3 and require_proper_list/2).
 load_cache_oneof_fields_improper_list_should_fail_test() ->
-    ok = enif_protobuf:purge_cache(),
+    ok = pbwire:purge_cache(),
     Defs = [
         {{msg, m1}, [
             #gpb_oneof{
@@ -19,19 +19,19 @@ load_cache_oneof_fields_improper_list_should_fail_test() ->
             }
         ]}
     ],
-    ?assertError(_, enif_protobuf:load_cache(Defs)).
+    ?assertError(_, pbwire:load_cache(Defs)).
 
 load_cache_oneof_tuple_with_wrong_arity_should_fail_test() ->
-    ok = enif_protobuf:purge_cache(),
+    ok = pbwire:purge_cache(),
     Defs = [
         {{msg, m1}, [
             {gpb_oneof, a, 2}
         ]}
     ],
-    ?assertError(_, enif_protobuf:load_cache(Defs)).
+    ?assertError(_, pbwire:load_cache(Defs)).
 
 load_cache_oneof_non_atom_name_should_fail_test() ->
-    ok = enif_protobuf:purge_cache(),
+    ok = pbwire:purge_cache(),
     Defs = [
         {{msg, m1}, [
             #gpb_oneof{
@@ -43,10 +43,10 @@ load_cache_oneof_non_atom_name_should_fail_test() ->
             }
         ]}
     ],
-    ?assertError(_, enif_protobuf:load_cache(Defs)).
+    ?assertError(_, pbwire:load_cache(Defs)).
 
 load_cache_oneof_tuple_with_extra_elements_should_fail_test() ->
-    ok = enif_protobuf:purge_cache(),
+    ok = pbwire:purge_cache(),
     Defs = [
         {{msg, m1}, [
             {gpb_oneof, a, 2, [
@@ -54,10 +54,10 @@ load_cache_oneof_tuple_with_extra_elements_should_fail_test() ->
             ], [], unexpected_extra}
         ]}
     ],
-    ?assertError(_, enif_protobuf:load_cache(Defs)).
+    ?assertError(_, pbwire:load_cache(Defs)).
 
 load_cache_oneof_invalid_opts_should_fail_test() ->
-    ok = enif_protobuf:purge_cache(),
+    ok = pbwire:purge_cache(),
     Defs = [
         {{msg, m1}, [
             {gpb_oneof, a, 2, [
@@ -65,4 +65,4 @@ load_cache_oneof_invalid_opts_should_fail_test() ->
             ], invalid_opts_type}
         ]}
     ],
-    ?assertError(_, enif_protobuf:load_cache(Defs)).
+    ?assertError(_, pbwire:load_cache(Defs)).
