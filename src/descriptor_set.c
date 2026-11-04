@@ -339,6 +339,13 @@ ds_add_field(pbw_schema *schema, pbw_descriptor *msg, int proto3,
                  pbw_descriptor_name(msg), info->name);
         return PBW_ERR_INVALID;
     }
+    if (info->has_oneof && info->oneof == 0) {
+        /* Wire oneof_index is 0-based and stored 1-based, so 0 only comes
+         * from a 2^32-1 wrap. */
+        ds_error(schema, "invalid oneof index for %s.%s",
+                 pbw_descriptor_name(msg), info->name);
+        return PBW_ERR_INVALID;
+    }
     /* proto3 packs repeated primitives unless the schema says otherwise */
     if (packed < 0) {
         packed = proto3 && info->label == PBW_LABEL_REPEATED &&
@@ -389,6 +396,12 @@ ds_queue_extension(pbw_schema *schema, ds_pending_ext **exts, size_t *count,
 
     if (*count == *cap) {
         size_t ncap = *cap ? *cap * 2 : 8;
+        /* Extension counts are bounded by the input length, which reaches
+         * the 32-bit wrap with tens of MB of hostile input. */
+        if (ncap < *cap || ncap > SIZE_MAX / sizeof(*grown)) {
+            ds_error(schema, "out of memory");
+            return PBW_ERR_NOMEM;
+        }
         grown = (ds_pending_ext *)realloc(*exts, ncap * sizeof(*grown));
         if (grown == NULL) {
             ds_error(schema, "out of memory");

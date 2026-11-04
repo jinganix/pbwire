@@ -1427,7 +1427,25 @@ test_duplicate_occurrences(pbw_schema *schema)
         }
         pbw_message_free(decoded);
     }
-    /* oneof: the second member replaces the first */
+    /* merged singular message followed by another outer field: the outer
+     * decode keeps going after the merge (one-byte-tag fast path). */
+    {
+        static const uint8_t wire[] = {0x0a, 0x03, 0x0a, 0x01, 'k',
+                                       0x0a, 0x02, 0x10, 0x2a, 0x10, 0x07};
+        CHECK_OK(pbw_decode(parent, wire, sizeof(wire), &decoded));
+        {
+            pbw_message *merged =
+                pbw_value_get_message(pbw_message_get(decoded, 1));
+            CHECK(merged != NULL);
+            CHECK(strcmp(pbw_value_get_string(pbw_message_get(merged, 1)), "k") ==
+                  0);
+            CHECK(pbw_value_get_int32(pbw_message_get(merged, 2)) == 42);
+        }
+        CHECK(pbw_value_count(pbw_message_get(decoded, 2)) == 1);
+        CHECK(pbw_value_get_int32(pbw_value_at(pbw_message_get(decoded, 2), 0)) ==
+              7);
+        pbw_message_free(decoded);
+    }
     {
         static const uint8_t wire[] = {0x0a, 0x01, 'x', 0x10, 0x05};
         CHECK_OK(pbw_decode(oneof, wire, sizeof(wire), &decoded));

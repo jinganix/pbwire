@@ -1759,6 +1759,9 @@ t_skip_value(text_in *t, uint32_t depth)
     }
     if (*t->cur.p == '[') {
         /* a list: skip comma-separated values */
+        if (depth >= PBW_MAX_DEPTH) {
+            return PBW_ERR_LIMIT;
+        }
         t->cur.p++;
         t_skip(&t->cur);
         if (t->cur.p < t->cur.end && *t->cur.p == ']') {

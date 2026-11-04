@@ -817,8 +817,12 @@ decode_fields(pbw_message *msg, const uint8_t *buf, size_t len, uint32_t depth, 
                         msg->values[index].kind == PBW_VALUE_MESSAGE &&
                         msg->values[index].as.msg != NULL &&
                         msg->values[index].as.msg->desc == field->sub) {
-                        return decode_fields(msg->values[index].as.msg, data,
-                                             data_len, depth + 1, dlim);
+                        status = decode_fields(msg->values[index].as.msg, data,
+                                               data_len, depth + 1, dlim);
+                        if (status != PBW_OK) {
+                            return status;
+                        }
+                        continue;
                     }
                     status = decode_message(msg->arena, field->sub, data,
                                             data_len, &nested, depth + 1, dlim);

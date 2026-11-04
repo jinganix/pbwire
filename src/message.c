@@ -27,6 +27,12 @@ pbw_message_new_a(pbw_arena *arena, const pbw_descriptor *desc)
     values_off = sizeof(pbw_message);
     present_off = values_off + desc->field_count * sizeof(pbw_value);
     words = (desc->field_count + 31u) / 32u;
+    /* The bitmap plus alignment slack must fit past present_off: words * 4
+     * cannot wrap on its own (field_count is bounded above), so this
+     * subtraction sequence is well-defined and rejects the wrap. */
+    if (present_off > SIZE_MAX - words * sizeof(uint32_t) - (size_t)3) {
+        return NULL;
+    }
     oneof_off = (present_off + words * sizeof(uint32_t) + 3u) & ~(size_t)3u;
     if ((size_t)desc->oneof_count + 1u >
         (SIZE_MAX - oneof_off) / sizeof(uint32_t)) {
@@ -546,6 +552,10 @@ pbw_value_list_push(pbw_value *list, pbw_value *item, pbw_arena *arena)
             return 0;
         }
         bytes = (size_t)cap * sizeof(*items);
+        if (bytes / sizeof(*items) != cap) {
+            /* 32-bit size_t: the byte count wrapped. */
+            return 0;
+        }
         if (arena != NULL) {
             /* No realloc in an arena: move to a bigger block, the old one is
              * recycled by pbw_ctx_reset(). */

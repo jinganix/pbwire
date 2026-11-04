@@ -50,8 +50,14 @@ pbw_arena_alloc_slow(pbw_arena *arena, size_t size)
     if (size > large_at) {
         /* Oversized single allocation: one malloc on the large list, freed on
          * reset/free instead of pinning the reusable head chunk. */
-        pbw_arena_chunk *big =
-            (pbw_arena_chunk *)malloc(sizeof(*big) + size);
+        pbw_arena_chunk *big;
+
+        /* new_packed guards the same addition; sizes here can approach
+         * SIZE_MAX - 7 through the public bytes constructors. */
+        if (size > SIZE_MAX - sizeof(*big)) {
+            return NULL;
+        }
+        big = (pbw_arena_chunk *)malloc(sizeof(*big) + size);
 
         if (big == NULL) {
             return NULL;
