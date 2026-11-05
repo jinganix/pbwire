@@ -140,3 +140,23 @@
     (try
       (->clj msg)
       (finally (close! msg)))))
+
+(defn new-message
+  "A new mutable message of this type; close it when done. Fill once with fill-message!, then encode-message reuses it without a map walk."
+  [t]
+  (.newMessage ^MessageType t))
+
+(defn fill-message!
+  "Fills a mutable message from a map (schema order, canonical bytes). For hot loops: fill once, encode-message many times."
+  [msg m]
+  (fill! msg m))
+
+(defn encode-message
+  "Encodes an already-filled mutable message. No map walk."
+  [msg]
+  (.encode ^Message msg))
+
+(defn decode-message
+  "Decodes wire bytes to a mutable message. No map materialization. Close it when done."
+  [t wire]
+  (.decode ^MessageType t ^bytes wire))

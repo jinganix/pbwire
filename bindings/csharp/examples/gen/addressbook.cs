@@ -10,7 +10,7 @@ using Pbwire;
 
 namespace Tutorial {
 
-    internal static class PbwireFile {
+    internal static class PbwireFile_Addressbook {
         internal static readonly Schema Schema = Schema.FromBytes(Convert.FromBase64String(string.Concat(
             "Cr8KChFhZGRyZXNzYm9vay5wcm90bxIIdHV0b3JpYWwiggIKBlBlcnNvbhIS",
             "CgRuYW1lGAEgAigJUgRuYW1lEg4KAmlkGAIgAigFUgJpZBIUCgVlbWFpbBgD",
@@ -45,9 +45,9 @@ namespace Tutorial {
     }
 
     /// <summary>Minimal parser: ParseFrom over the C core. Not pb::MessageParser.</summary>
-    public sealed class Parser<T> where T : new() {
+    public sealed class Parser_Addressbook<T> where T : new() {
         private readonly Action<T, byte[]> _merge;
-        public Parser(Action<T, byte[]> merge) { _merge = merge; }
+        public Parser_Addressbook(Action<T, byte[]> merge) { _merge = merge; }
         public T ParseFrom(byte[] data) { var m = new T(); _merge(m, data); return m; }
         public T ParseFrom(ByteString data) => ParseFrom(data.ToByteArray());
         public T ParseFrom(Stream input) { using var ms = new MemoryStream(); input.CopyTo(ms); return ParseFrom(ms.ToArray()); }
@@ -74,7 +74,7 @@ namespace Tutorial {
         private readonly global::Google.Protobuf.Collections.RepeatedField<Types.PhoneNumber> phones_ = new global::Google.Protobuf.Collections.RepeatedField<Types.PhoneNumber>();
         public global::Google.Protobuf.Collections.RepeatedField<Types.PhoneNumber> Phones { get { return phones_; } }
         private int _hasBits0;
-        public static Parser<Person> Parser { get; } = new Parser<Person>((m, b) => m.MergeFromBytes(b));
+        public static Parser_Addressbook<Person> Parser { get; } = new Parser_Addressbook<Person>((m, b) => m.MergeFromBytes(b));
         public Person() { }
         public Person(Person other) : this() {
             Name = other.Name;
@@ -105,7 +105,7 @@ namespace Tutorial {
             return "Person {{ " + "Name = " + Name + ", " + "Id = " + Id + ", " + "Email = " + Email + " }}";
         }
         public byte[] ToByteArray() {
-            using Pbwire.Message msg = PbwireFile.Schema.Message("tutorial.Person").NewMessage();
+            using Pbwire.Message msg = PbwireFile_Addressbook.Schema.Message("tutorial.Person").NewMessage();
             EncodeInto(msg);
             return msg.Encode();
         }
@@ -119,7 +119,7 @@ namespace Tutorial {
         }
         public int CalculateSize() => ToByteArray().Length;
          internal void MergeFromBytes(byte[] wire) {
-            using Pbwire.Message msg = PbwireFile.Schema.Message("tutorial.Person").Decode(wire);
+            using Pbwire.Message msg = PbwireFile_Addressbook.Schema.Message("tutorial.Person").Decode(wire);
             LoadFrom(msg);
         }
         public void MergeFrom(Person other) {
@@ -172,7 +172,7 @@ namespace Tutorial {
                 /// <summary>Clears the value of the "type" field</summary>
                 public void ClearType() { _hasBits0 &= ~1; }
                 private int _hasBits0;
-                public static Parser<PhoneNumber> Parser { get; } = new Parser<PhoneNumber>((m, b) => m.MergeFromBytes(b));
+                public static Parser_Addressbook<PhoneNumber> Parser { get; } = new Parser_Addressbook<PhoneNumber>((m, b) => m.MergeFromBytes(b));
                 public PhoneNumber() { }
                 public PhoneNumber(PhoneNumber other) : this() {
                     Number = other.Number;
@@ -197,7 +197,7 @@ namespace Tutorial {
                     return "PhoneNumber {{ " + "Number = " + Number + ", " + "Type = " + Type + " }}";
                 }
                 public byte[] ToByteArray() {
-                    using Pbwire.Message msg = PbwireFile.Schema.Message("tutorial.Person.PhoneNumber").NewMessage();
+                    using Pbwire.Message msg = PbwireFile_Addressbook.Schema.Message("tutorial.Person.PhoneNumber").NewMessage();
                     EncodeInto(msg);
                     return msg.Encode();
                 }
@@ -211,7 +211,7 @@ namespace Tutorial {
                 }
                 public int CalculateSize() => ToByteArray().Length;
                  internal void MergeFromBytes(byte[] wire) {
-                    using Pbwire.Message msg = PbwireFile.Schema.Message("tutorial.Person.PhoneNumber").Decode(wire);
+                    using Pbwire.Message msg = PbwireFile_Addressbook.Schema.Message("tutorial.Person.PhoneNumber").Decode(wire);
                     LoadFrom(msg);
                 }
                 public void MergeFrom(PhoneNumber other) {
@@ -240,7 +240,7 @@ namespace Tutorial {
         public const int PeopleFieldNumber = 1;
         private readonly global::Google.Protobuf.Collections.RepeatedField<Person> people_ = new global::Google.Protobuf.Collections.RepeatedField<Person>();
         public global::Google.Protobuf.Collections.RepeatedField<Person> People { get { return people_; } }
-        public static Parser<AddressBook> Parser { get; } = new Parser<AddressBook>((m, b) => m.MergeFromBytes(b));
+        public static Parser_Addressbook<AddressBook> Parser { get; } = new Parser_Addressbook<AddressBook>((m, b) => m.MergeFromBytes(b));
         public AddressBook() { }
         public AddressBook(AddressBook other) : this() {
             People.Add(other.People);
@@ -262,7 +262,7 @@ namespace Tutorial {
             return "AddressBook {{ }}";
         }
         public byte[] ToByteArray() {
-            using Pbwire.Message msg = PbwireFile.Schema.Message("tutorial.AddressBook").NewMessage();
+            using Pbwire.Message msg = PbwireFile_Addressbook.Schema.Message("tutorial.AddressBook").NewMessage();
             EncodeInto(msg);
             return msg.Encode();
         }
@@ -276,7 +276,7 @@ namespace Tutorial {
         }
         public int CalculateSize() => ToByteArray().Length;
          internal void MergeFromBytes(byte[] wire) {
-            using Pbwire.Message msg = PbwireFile.Schema.Message("tutorial.AddressBook").Decode(wire);
+            using Pbwire.Message msg = PbwireFile_Addressbook.Schema.Message("tutorial.AddressBook").Decode(wire);
             LoadFrom(msg);
         }
         public void MergeFrom(AddressBook other) {

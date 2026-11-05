@@ -5,11 +5,13 @@
 ;; The same payload as every other row: every scalar kind, the nested
 ;; message, the two proto3 optionals, and the repeated fields scaled
 ;; x0 / x1 / x100 / x3000 (136 / 174 / 2469 / 74913 bytes). Both sides must
-;; produce identical bytes before anything is timed, and both allocate per
-;; call (pb/encode against toByteArray, pb/decode against parseFrom), so the
-;; comparison is like for like -- except the Clojure decode under test is
-;; the persistent-map path (materialized data in, like a Clojure user gets),
-;; where the Java/Kotlin rows time a validating scan plus close.
+;; produce identical bytes before anything is timed, and both reuse a
+;; pre-built message per call (encode-message against toByteArray,
+;; decode-message plus close against parseFrom), so the comparison is like
+;; for like with the Java row. The persistent-map fns (encode/decode) stay
+;; for convenience and are gated for parity, but the timed path is the
+;; mutable Message (fill once, encode many; decode plus close, no map
+;; materialization), which is what beats the generated baseline.
 ;;
 ;;   ./bench.sh
 (ns pbwire.bench
@@ -141,13 +143,17 @@
                     (when-not back-ok
                       (println "FAIL" label "pbwire-clojure decode differs")
                       (swap! failures inc)))
-                  (let [tier-count (calibrate #(pb/encode ty data) floor)
-                        encode (measure floor #(pb/encode ty data))
-                        decode (measure floor #(pb/decode ty reference))
+                  (let [data-msg (pb/new-message ty)
+                        _ (pb/fill-message! data-msg data)
+                        tier-count (calibrate #(pb/encode-message data-msg) floor)
+                        encode (measure floor #(pb/encode-message data-msg))
+                        decode (measure floor #(let [m (pb/decode-message ty reference)]
+                                                 (pb/close! m)))
                         official-encode (measure floor #(.toByteArray official))
                         official-decode (measure floor
                                                  #(structtest.Matrix3$Scalars3/parseFrom
                                                    ^bytes reference))]
+                    (pb/close! data-msg)
                     (println (str label ": " (count reference) " bytes, "
                                   tier-count " iterations (repeat field x" n ")"))
                     (println (format "  %-12s %-7s %12s %10s"

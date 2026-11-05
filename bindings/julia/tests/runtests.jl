@@ -69,7 +69,11 @@ end
     @test get_double(decoded, "f64") == -123456.789
     @test get_int(decoded, "color") == 2
     @test get_int(decoded, "opt_i32") == -7
-    @test has(decoded, "opt_str") && !has(new_message(ty), "i32")
+    @test has(decoded, "opt_str")
+    let tmp = new_message(ty)
+        @test !has(tmp, "i32")
+        close(tmp)
+    end
     @test Pbwire.count(decoded, "nums") == 3
     @test as_int(at(decoded, "nums", 2)) == -5
     @test as_string(at(decoded, "tags", 2)) == "bb"
@@ -139,7 +143,10 @@ end
     @test decode_dict(inner_ty, encode_dict(inner_ty, small)) == small
 
     # A default message is zero bytes both ways.
-    @test isempty(encode(new_message(edge_ty)))
+    let tmp = new_message(edge_ty)
+        @test isempty(encode(tmp))
+        close(tmp)
+    end
     empty = decode(edge_ty, UInt8[])
     @test isempty(encode(empty))
     @test !has(empty, "text")

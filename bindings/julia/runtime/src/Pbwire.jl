@@ -9,11 +9,11 @@
 # materialises plain Julia values. There is no `.proto` parser and no second
 # wire implementation anywhere in this binding.
 #
-# Ownership: a `Schema` or a root `Message` owns native memory and is released
-# by `close` (or the finalizer); a nested message is a view of its parent and
-# never frees anything. One message tree belongs to one thread, like the C
-# core. A rejected value stays owned by the caller, so every setter frees it
-# before throwing.
+# Ownership: a `Schema` is freed by its GC finalizer once no message reaches
+# it; a root `Message` must be closed explicitly (no finalizer on the hot
+# path) and a nested message is a view of its parent that never frees anything. One message tree belongs
+# to one thread, like the C core. A rejected value stays owned by the caller,
+# so every setter frees it before throwing.
 #
 # The library is `ENV["PBWIRE_LIB"]`, else `build/libpbwire.{dylib,so}` found
 # by walking up from the working directory or from this file.
@@ -66,33 +66,56 @@ function _libpath()
 end
 
 # `ccall` in recent Julia needs a compile-time library name, so every C
-# entry point is resolved once via `dlsym` and called through a raw pointer
-# (`@libcall(:pbw_x, Ret, (Args...), args...)`). The handle is retained for
-# the life of the module so the library is never unloaded under us.
+# entry point is resolved once via `dlsym` into its own Ref and called
+# through a raw pointer. One pointer load per call, no Dict hash.
 const _handle = Ref{Ptr{Cvoid}}(C_NULL)
-const _syms = Dict{Symbol,Ptr{Cvoid}}()
-
-const _SYMBOLS = (
-    :pbw_decode, :pbw_descriptor_find_field_name, :pbw_descriptor_name,
-    :pbw_descriptor_set_load, :pbw_encode, :pbw_field_label,
-    :pbw_field_message_type, :pbw_field_name, :pbw_field_number,
-    :pbw_field_type, :pbw_free, :pbw_message_clear, :pbw_message_field_at,
-    :pbw_message_field_count, :pbw_message_free, :pbw_message_get_field,
-    :pbw_message_new, :pbw_message_set_field, :pbw_message_set_message,
-    :pbw_schema_error, :pbw_schema_find, :pbw_schema_free, :pbw_strerror,
-    :pbw_value_at, :pbw_value_count, :pbw_value_free, :pbw_value_get_bool,
-    :pbw_value_get_bytes, :pbw_value_get_double, :pbw_value_get_float,
-    :pbw_value_get_int, :pbw_value_get_kind, :pbw_value_get_message,
-    :pbw_value_get_string, :pbw_value_new_bool, :pbw_value_new_bytes,
-    :pbw_value_new_double, :pbw_value_new_float, :pbw_value_new_int,
-    :pbw_value_new_string,
-)
+const _p_pbw_decode = Ref{Ptr{Cvoid}}(C_NULL)
+const _p_pbw_descriptor_find_field_name = Ref{Ptr{Cvoid}}(C_NULL)
+const _p_pbw_descriptor_name = Ref{Ptr{Cvoid}}(C_NULL)
+const _p_pbw_descriptor_set_load = Ref{Ptr{Cvoid}}(C_NULL)
+const _p_pbw_encode = Ref{Ptr{Cvoid}}(C_NULL)
+const _p_pbw_field_label = Ref{Ptr{Cvoid}}(C_NULL)
+const _p_pbw_field_message_type = Ref{Ptr{Cvoid}}(C_NULL)
+const _p_pbw_field_name = Ref{Ptr{Cvoid}}(C_NULL)
+const _p_pbw_field_number = Ref{Ptr{Cvoid}}(C_NULL)
+const _p_pbw_field_type = Ref{Ptr{Cvoid}}(C_NULL)
+const _p_pbw_free = Ref{Ptr{Cvoid}}(C_NULL)
+const _p_pbw_message_clear = Ref{Ptr{Cvoid}}(C_NULL)
+const _p_pbw_message_field_at = Ref{Ptr{Cvoid}}(C_NULL)
+const _p_pbw_message_field_count = Ref{Ptr{Cvoid}}(C_NULL)
+const _p_pbw_message_free = Ref{Ptr{Cvoid}}(C_NULL)
+const _p_pbw_message_get_field = Ref{Ptr{Cvoid}}(C_NULL)
+const _p_pbw_message_new = Ref{Ptr{Cvoid}}(C_NULL)
+const _p_pbw_message_set_field = Ref{Ptr{Cvoid}}(C_NULL)
+const _p_pbw_message_set_message = Ref{Ptr{Cvoid}}(C_NULL)
+const _p_pbw_schema_error = Ref{Ptr{Cvoid}}(C_NULL)
+const _p_pbw_schema_find = Ref{Ptr{Cvoid}}(C_NULL)
+const _p_pbw_schema_free = Ref{Ptr{Cvoid}}(C_NULL)
+const _p_pbw_strerror = Ref{Ptr{Cvoid}}(C_NULL)
+const _p_pbw_value_at = Ref{Ptr{Cvoid}}(C_NULL)
+const _p_pbw_value_count = Ref{Ptr{Cvoid}}(C_NULL)
+const _p_pbw_value_free = Ref{Ptr{Cvoid}}(C_NULL)
+const _p_pbw_value_get_bool = Ref{Ptr{Cvoid}}(C_NULL)
+const _p_pbw_value_get_bytes = Ref{Ptr{Cvoid}}(C_NULL)
+const _p_pbw_value_get_double = Ref{Ptr{Cvoid}}(C_NULL)
+const _p_pbw_value_get_float = Ref{Ptr{Cvoid}}(C_NULL)
+const _p_pbw_value_get_int = Ref{Ptr{Cvoid}}(C_NULL)
+const _p_pbw_value_get_kind = Ref{Ptr{Cvoid}}(C_NULL)
+const _p_pbw_value_get_message = Ref{Ptr{Cvoid}}(C_NULL)
+const _p_pbw_value_get_string = Ref{Ptr{Cvoid}}(C_NULL)
+const _p_pbw_value_new_bool = Ref{Ptr{Cvoid}}(C_NULL)
+const _p_pbw_value_new_bytes = Ref{Ptr{Cvoid}}(C_NULL)
+const _p_pbw_value_new_double = Ref{Ptr{Cvoid}}(C_NULL)
+const _p_pbw_value_new_float = Ref{Ptr{Cvoid}}(C_NULL)
+const _p_pbw_value_new_int = Ref{Ptr{Cvoid}}(C_NULL)
+const _p_pbw_value_new_string = Ref{Ptr{Cvoid}}(C_NULL)
 
 macro libcall(fname, Ret, ArgT, args...)
     if !(fname isa QuoteNode)
         error("@libcall function name must be a literal symbol")
     end
-    :(ccall(_syms[$(fname)], $(esc(Ret)), $(esc(ArgT)), $(map(esc, args)...)))
+    ptr = Symbol("_p_", fname.value)
+    :(ccall($(esc(ptr))[], $(esc(Ret)), $(esc(ArgT)), $(map(esc, args)...)))
 end
 
 _strerror(status::Integer) =
@@ -107,7 +130,13 @@ end
 
 # ---------------------------------------------------------------- the schema
 
-"""A loaded `FileDescriptorSet`: the schema every [`MsgType`](@ref) comes from."""
+"""A loaded `FileDescriptorSet`: the schema every [`MsgType`](@ref) comes from.
+
+Native memory is owned by the GC finalizer, not by explicit `close`: a
+`Message` keeps its `MsgType` (and through it the `Schema` object) reachable,
+so the collector cannot free the schema while messages live. Explicit
+`close(::Schema)` is a no-op kept for symmetry; prompt freeing would need a
+live count on the hot path and is not worth it."""
 mutable struct Schema
     handle::Ptr{Cvoid}
     function Schema(handle::Ptr{Cvoid})
@@ -116,17 +145,18 @@ mutable struct Schema
         end
         s = new(handle)
         finalizer(s) do x
-            close(x)
+            if x.handle != C_NULL
+                @libcall(:pbw_schema_free, Cvoid, (Ptr{Cvoid},), x.handle)
+                x.handle = C_NULL
+            end
         end
         return s
     end
 end
 
 function Base.close(s::Schema)
-    if s.handle != C_NULL
-        @libcall(:pbw_schema_free, Cvoid, (Ptr{Cvoid},), s.handle)
-        s.handle = C_NULL
-    end
+    # No-op: freeing here would dangle live messages' descriptors. The
+    # finalizer above releases native memory once no message reaches it.
     return nothing
 end
 
@@ -215,7 +245,8 @@ end
 
 # ---------------------------------------------------------------- the message
 
-"""One dynamic message. A root owns its tree; a nested message borrows it."""
+"""One dynamic message. A root owns its tree and must be closed explicitly;
+a nested message is a view of its parent and never frees anything."""
 mutable struct Message
     ty::MsgType
     handle::Ptr{Cvoid}
@@ -226,13 +257,7 @@ mutable struct Message
         if handle == C_NULL
             throw(PbwireError(-1, "pbw_message_new: out of memory"))
         end
-        m = new(ty, handle, owned, parent)
-        if owned
-            finalizer(m) do x
-                close(x)
-            end
-        end
-        return m
+        return new(ty, handle, owned, parent)
     end
 end
 
@@ -244,7 +269,7 @@ function Base.close(m::Message)
     return nothing
 end
 
-"""A new empty message; freed by [`close`](@ref) (or the finalizer)."""
+"""A new empty message; freed by [`close`](@ref)."""
 new_message(ty::MsgType) = Message(ty,
     @libcall(:pbw_message_new, Ptr{Cvoid}, (Ptr{Cvoid},), ty.desc), true, nothing)
 
@@ -482,7 +507,8 @@ function encode_dict!(m::Message, d::AbstractDict)
 end
 
 """Builds a new message of type `ty` from a `Dict{String,Any}` and encodes it."""
-encode_dict(ty::MsgType, d::AbstractDict) = encode(encode_dict!(new_message(ty), d))
+encode_dict(ty::MsgType, d::AbstractDict) = (m = encode_dict!(new_message(ty), d);
+    w = encode(m); close(m); w)
 
 function _value_to_julia(f::Field, v::Ptr{Cvoid})
     t = f.type
@@ -567,9 +593,46 @@ decode_dict(ty::MsgType, wire::Vector{UInt8}) = (m = decode(ty, wire);
 function __init__()
     # Eagerly fail on a missing/unloadable library, then pin every symbol.
     _handle[] = Libdl.dlopen(_libpath())
-    for f in _SYMBOLS
-        _syms[f] = Libdl.dlsym(_handle[], f)
-    end
+    _p_pbw_decode[] = Libdl.dlsym(_handle[], :pbw_decode)
+    _p_pbw_descriptor_find_field_name[] = Libdl.dlsym(_handle[], :pbw_descriptor_find_field_name)
+    _p_pbw_descriptor_name[] = Libdl.dlsym(_handle[], :pbw_descriptor_name)
+    _p_pbw_descriptor_set_load[] = Libdl.dlsym(_handle[], :pbw_descriptor_set_load)
+    _p_pbw_encode[] = Libdl.dlsym(_handle[], :pbw_encode)
+    _p_pbw_field_label[] = Libdl.dlsym(_handle[], :pbw_field_label)
+    _p_pbw_field_message_type[] = Libdl.dlsym(_handle[], :pbw_field_message_type)
+    _p_pbw_field_name[] = Libdl.dlsym(_handle[], :pbw_field_name)
+    _p_pbw_field_number[] = Libdl.dlsym(_handle[], :pbw_field_number)
+    _p_pbw_field_type[] = Libdl.dlsym(_handle[], :pbw_field_type)
+    _p_pbw_free[] = Libdl.dlsym(_handle[], :pbw_free)
+    _p_pbw_message_clear[] = Libdl.dlsym(_handle[], :pbw_message_clear)
+    _p_pbw_message_field_at[] = Libdl.dlsym(_handle[], :pbw_message_field_at)
+    _p_pbw_message_field_count[] = Libdl.dlsym(_handle[], :pbw_message_field_count)
+    _p_pbw_message_free[] = Libdl.dlsym(_handle[], :pbw_message_free)
+    _p_pbw_message_get_field[] = Libdl.dlsym(_handle[], :pbw_message_get_field)
+    _p_pbw_message_new[] = Libdl.dlsym(_handle[], :pbw_message_new)
+    _p_pbw_message_set_field[] = Libdl.dlsym(_handle[], :pbw_message_set_field)
+    _p_pbw_message_set_message[] = Libdl.dlsym(_handle[], :pbw_message_set_message)
+    _p_pbw_schema_error[] = Libdl.dlsym(_handle[], :pbw_schema_error)
+    _p_pbw_schema_find[] = Libdl.dlsym(_handle[], :pbw_schema_find)
+    _p_pbw_schema_free[] = Libdl.dlsym(_handle[], :pbw_schema_free)
+    _p_pbw_strerror[] = Libdl.dlsym(_handle[], :pbw_strerror)
+    _p_pbw_value_at[] = Libdl.dlsym(_handle[], :pbw_value_at)
+    _p_pbw_value_count[] = Libdl.dlsym(_handle[], :pbw_value_count)
+    _p_pbw_value_free[] = Libdl.dlsym(_handle[], :pbw_value_free)
+    _p_pbw_value_get_bool[] = Libdl.dlsym(_handle[], :pbw_value_get_bool)
+    _p_pbw_value_get_bytes[] = Libdl.dlsym(_handle[], :pbw_value_get_bytes)
+    _p_pbw_value_get_double[] = Libdl.dlsym(_handle[], :pbw_value_get_double)
+    _p_pbw_value_get_float[] = Libdl.dlsym(_handle[], :pbw_value_get_float)
+    _p_pbw_value_get_int[] = Libdl.dlsym(_handle[], :pbw_value_get_int)
+    _p_pbw_value_get_kind[] = Libdl.dlsym(_handle[], :pbw_value_get_kind)
+    _p_pbw_value_get_message[] = Libdl.dlsym(_handle[], :pbw_value_get_message)
+    _p_pbw_value_get_string[] = Libdl.dlsym(_handle[], :pbw_value_get_string)
+    _p_pbw_value_new_bool[] = Libdl.dlsym(_handle[], :pbw_value_new_bool)
+    _p_pbw_value_new_bytes[] = Libdl.dlsym(_handle[], :pbw_value_new_bytes)
+    _p_pbw_value_new_double[] = Libdl.dlsym(_handle[], :pbw_value_new_double)
+    _p_pbw_value_new_float[] = Libdl.dlsym(_handle[], :pbw_value_new_float)
+    _p_pbw_value_new_int[] = Libdl.dlsym(_handle[], :pbw_value_new_int)
+    _p_pbw_value_new_string[] = Libdl.dlsym(_handle[], :pbw_value_new_string)
 end
 
 end # module

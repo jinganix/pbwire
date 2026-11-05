@@ -42,13 +42,17 @@ func csharpFiles(f *model.File, opt Options) []File {
 		chunks = append(chunks, fmt.Sprintf("%q", enc[:n]))
 		enc = enc[n:]
 	}
-	b.WriteString("    internal static class PbwireFile {\n")
+	// Same .proto package can span files (spectest: oneof1 + maptest share
+	// namespace Spectest), so the holder and mini-parser carry the file stem.
+	holder := "PbwireFile_" + csPascal(base(f))
+	parser := "Parser_" + csPascal(base(f))
+	b.WriteString("    internal static class " + holder + " {\n")
 	fmt.Fprintf(&b, "        internal static readonly Schema Schema = Schema.FromBytes(Convert.FromBase64String(string.Concat(\n            %s)));\n", strings.Join(chunks, ",\n            "))
 	b.WriteString("    }\n\n")
 	b.WriteString("    /// <summary>Minimal parser: ParseFrom over the C core. Not pb::MessageParser.</summary>\n")
-	b.WriteString("    public sealed class Parser<T> where T : new() {\n")
+	b.WriteString("    public sealed class " + parser + "<T> where T : new() {\n")
 	b.WriteString("        private readonly Action<T, byte[]> _merge;\n")
-	b.WriteString("        public Parser(Action<T, byte[]> merge) { _merge = merge; }\n")
+	b.WriteString("        public " + parser + "(Action<T, byte[]> merge) { _merge = merge; }\n")
 	b.WriteString("        public T ParseFrom(byte[] data) { var m = new T(); _merge(m, data); return m; }\n")
 	b.WriteString("        public T ParseFrom(ByteString data) => ParseFrom(data.ToByteArray());\n")
 	b.WriteString("        public T ParseFrom(Stream input) { using var ms = new MemoryStream(); input.CopyTo(ms); return ParseFrom(ms.ToArray()); }\n")
@@ -71,7 +75,7 @@ func csharpFiles(f *model.File, opt Options) []File {
 		}
 	}
 	for _, r := range csTree(f) {
-		writeCsharpMessage(&b, f, r, "    ", byLocal)
+		writeCsharpMessage(&b, f, r, "    ", byLocal, holder, parser)
 	}
 	b.WriteString("}\n")
 	return []File{{Name: base(f) + ".cs", Content: b.String()}}
@@ -360,7 +364,7 @@ func csCur(n *csNode) []string {
 	return cur
 }
 
-func writeCsharpMessage(b *strings.Builder, f *model.File, n *csNode, indent string, byLocal map[string]*csNode) {
+func writeCsharpMessage(b *strings.Builder, f *model.File, n *csNode, indent string, byLocal map[string]*csNode, holder, parser string) {
 	m := n.msg
 	oneofs := csOneofs(m)
 	curobj := csCur(n)
@@ -380,7 +384,7 @@ func writeCsharpMessage(b *strings.Builder, f *model.File, n *csNode, indent str
 	for _, o := range oneofs {
 		writeCsharpOneof(b, f, n, o, sub, curobj, byLocal)
 	}
-	writeCsharpCodec(b, f, n, sub, curobj, byLocal)
+	writeCsharpCodec(b, f, n, sub, curobj, byLocal, holder, parser)
 	if len(n.children) == 0 && len(n.enums) == 0 {
 		fmt.Fprintf(b, "%s}\n\n", indent)
 		return
@@ -391,7 +395,7 @@ func writeCsharpMessage(b *strings.Builder, f *model.File, n *csNode, indent str
 		writeCsharpEnum(b, e, tindent)
 	}
 	for _, c := range n.children {
-		writeCsharpMessage(b, f, c, tindent, byLocal)
+		writeCsharpMessage(b, f, c, tindent, byLocal, holder, parser)
 	}
 	fmt.Fprintf(b, "%s    }\n%s}\n\n", indent, indent)
 }
@@ -532,13 +536,13 @@ func csOneofDefault(field model.Field) string {
 	}
 }
 
-func writeCsharpCodec(b *strings.Builder, f *model.File, n *csNode, indent string, cur []string, byLocal map[string]*csNode) {
+func writeCsharpCodec(b *strings.Builder, f *model.File, n *csNode, indent string, cur []string, byLocal map[string]*csNode, holder, parser string) {
 	m := n.msg
 	full := m.Full
 	for i := 0; i < csHasBits(m); i++ {
 		fmt.Fprintf(b, "%sprivate int _hasBits%d;\n", indent, i)
 	}
-	fmt.Fprintf(b, "%spublic static Parser<%s> Parser { get; } = new Parser<%s>((m, b) => m.MergeFromBytes(b));\n", indent, n.self, n.self)
+	fmt.Fprintf(b, "%spublic static "+parser+"<%s> Parser { get; } = new "+parser+"<%s>((m, b) => m.MergeFromBytes(b));\n", indent, n.self, n.self)
 	fmt.Fprintf(b, "%spublic %s() { }\n", indent, n.self)
 	fmt.Fprintf(b, "%spublic %s(%s other) : this() {\n", indent, n.self, n.self)
 	for _, field := range m.Fields {
@@ -596,7 +600,7 @@ func writeCsharpCodec(b *strings.Builder, f *model.File, n *csNode, indent strin
 	}
 	fmt.Fprintf(b, "%s}\n", indent)
 	fmt.Fprintf(b, "%spublic byte[] ToByteArray() {\n", indent)
-	fmt.Fprintf(b, "%s    using Pbwire.Message msg = PbwireFile.Schema.Message(%q).NewMessage();\n", indent, full)
+	fmt.Fprintf(b, "%s    using Pbwire.Message msg = "+holder+".Schema.Message(%q).NewMessage();\n", indent, full)
 	fmt.Fprintf(b, "%s    EncodeInto(msg);\n", indent)
 	fmt.Fprintf(b, "%s    return msg.Encode();\n%s}\n", indent, indent)
 	fmt.Fprintf(b, "%spublic ByteString ToByteString() => ByteString.CopyFrom(ToByteArray());\n", indent)
@@ -609,7 +613,7 @@ func writeCsharpCodec(b *strings.Builder, f *model.File, n *csNode, indent strin
 	fmt.Fprintf(b, "%s}\n", indent)
 	fmt.Fprintf(b, "%spublic int CalculateSize() => ToByteArray().Length;\n", indent)
 	fmt.Fprintf(b, "%s internal void MergeFromBytes(byte[] wire) {\n", indent)
-	fmt.Fprintf(b, "%s    using Pbwire.Message msg = PbwireFile.Schema.Message(%q).Decode(wire);\n", indent, full)
+	fmt.Fprintf(b, "%s    using Pbwire.Message msg = "+holder+".Schema.Message(%q).Decode(wire);\n", indent, full)
 	fmt.Fprintf(b, "%s    LoadFrom(msg);\n%s}\n", indent, indent)
 	fmt.Fprintf(b, "%spublic void MergeFrom(%s other) {\n", indent, n.self)
 	fmt.Fprintf(b, "%s    if (other == null) { return; }\n", indent)

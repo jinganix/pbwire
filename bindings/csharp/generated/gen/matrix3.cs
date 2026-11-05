@@ -10,7 +10,7 @@ using Pbwire;
 
 namespace Structtest {
 
-    internal static class PbwireFile {
+    internal static class PbwireFile_Matrix3 {
         internal static readonly Schema Schema = Schema.FromBytes(Convert.FromBase64String(string.Concat(
             "CrcVCg1tYXRyaXgzLnByb3RvEgpzdHJ1Y3R0ZXN0IjIKBklubmVyMxISCgRu",
             "YW1lGAEgASgJUgRuYW1lEhQKBXZhbHVlGAIgASgFUgV2YWx1ZSKmBAoIU2Nh",
@@ -77,9 +77,9 @@ namespace Structtest {
     }
 
     /// <summary>Minimal parser: ParseFrom over the C core. Not pb::MessageParser.</summary>
-    public sealed class Parser<T> where T : new() {
+    public sealed class Parser_Matrix3<T> where T : new() {
         private readonly Action<T, byte[]> _merge;
-        public Parser(Action<T, byte[]> merge) { _merge = merge; }
+        public Parser_Matrix3(Action<T, byte[]> merge) { _merge = merge; }
         public T ParseFrom(byte[] data) { var m = new T(); _merge(m, data); return m; }
         public T ParseFrom(ByteString data) => ParseFrom(data.ToByteArray());
         public T ParseFrom(Stream input) { using var ms = new MemoryStream(); input.CopyTo(ms); return ParseFrom(ms.ToArray()); }
@@ -100,7 +100,7 @@ namespace Structtest {
         /// <summary>Field number for the "value" field.</summary>
         public const int ValueFieldNumber = 2;
         public int Value { get; set; }
-        public static Parser<Inner3> Parser { get; } = new Parser<Inner3>((m, b) => m.MergeFromBytes(b));
+        public static Parser_Matrix3<Inner3> Parser { get; } = new Parser_Matrix3<Inner3>((m, b) => m.MergeFromBytes(b));
         public Inner3() { }
         public Inner3(Inner3 other) : this() {
             Name = other.Name;
@@ -125,7 +125,7 @@ namespace Structtest {
             return "Inner3 {{ " + "Name = " + Name + ", " + "Value = " + Value + " }}";
         }
         public byte[] ToByteArray() {
-            using Pbwire.Message msg = PbwireFile.Schema.Message("structtest.Inner3").NewMessage();
+            using Pbwire.Message msg = PbwireFile_Matrix3.Schema.Message("structtest.Inner3").NewMessage();
             EncodeInto(msg);
             return msg.Encode();
         }
@@ -139,7 +139,7 @@ namespace Structtest {
         }
         public int CalculateSize() => ToByteArray().Length;
          internal void MergeFromBytes(byte[] wire) {
-            using Pbwire.Message msg = PbwireFile.Schema.Message("structtest.Inner3").Decode(wire);
+            using Pbwire.Message msg = PbwireFile_Matrix3.Schema.Message("structtest.Inner3").Decode(wire);
             LoadFrom(msg);
         }
         public void MergeFrom(Inner3 other) {
@@ -244,7 +244,7 @@ namespace Structtest {
         private readonly global::Google.Protobuf.Collections.RepeatedField<bool> flags_ = new global::Google.Protobuf.Collections.RepeatedField<bool>();
         public global::Google.Protobuf.Collections.RepeatedField<bool> Flags { get { return flags_; } }
         private int _hasBits0;
-        public static Parser<Scalars3> Parser { get; } = new Parser<Scalars3>((m, b) => m.MergeFromBytes(b));
+        public static Parser_Matrix3<Scalars3> Parser { get; } = new Parser_Matrix3<Scalars3>((m, b) => m.MergeFromBytes(b));
         public Scalars3() { }
         public Scalars3(Scalars3 other) : this() {
             I32 = other.I32;
@@ -329,7 +329,7 @@ namespace Structtest {
             return "Scalars3 {{ " + "I32 = " + I32 + ", " + "I64 = " + I64 + ", " + "U32 = " + U32 + ", " + "U64 = " + U64 + ", " + "S32 = " + S32 + ", " + "S64 = " + S64 + ", " + "Fx32 = " + Fx32 + ", " + "Fx64 = " + Fx64 + ", " + "Sfx32 = " + Sfx32 + ", " + "Sfx64 = " + Sfx64 + ", " + "F32 = " + F32 + ", " + "F64 = " + F64 + ", " + "Flag = " + Flag + ", " + "Str = " + Str + ", " + "Color = " + Color + ", " + "OptI32 = " + OptI32 + ", " + "OptStr = " + OptStr + " }}";
         }
         public byte[] ToByteArray() {
-            using Pbwire.Message msg = PbwireFile.Schema.Message("structtest.Scalars3").NewMessage();
+            using Pbwire.Message msg = PbwireFile_Matrix3.Schema.Message("structtest.Scalars3").NewMessage();
             EncodeInto(msg);
             return msg.Encode();
         }
@@ -343,7 +343,7 @@ namespace Structtest {
         }
         public int CalculateSize() => ToByteArray().Length;
          internal void MergeFromBytes(byte[] wire) {
-            using Pbwire.Message msg = PbwireFile.Schema.Message("structtest.Scalars3").Decode(wire);
+            using Pbwire.Message msg = PbwireFile_Matrix3.Schema.Message("structtest.Scalars3").Decode(wire);
             LoadFrom(msg);
         }
         public void MergeFrom(Scalars3 other) {

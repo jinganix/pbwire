@@ -142,7 +142,9 @@ function main(args::Vector{String})
     failures = 0
     for tier in 1:4
         label, n, want, floor = CASES[tier], REPEATS[tier], WANT[tier], FLOORS[tier]
-        got = encode(fill_pbwire!(ty, n))
+        tmp = fill_pbwire!(ty, n)
+        got = encode(tmp)
+        close(tmp)
         if length(got) != want
             println("FAIL $label: pbwire wrote $(length(got)) bytes, expected $want")
             failures += 1

@@ -10,7 +10,7 @@ using Pbwire;
 
 namespace Spectest {
 
-    internal static class PbwireFile {
+    internal static class PbwireFile_Oneof1 {
         internal static readonly Schema Schema = Schema.FromBytes(Convert.FromBase64String(string.Concat(
             "CvUFCgxvbmVvZjEucHJvdG8SCHNwZWN0ZXN0IpUBCgZPbmVvZjESEgoEbmFt",
             "ZRgBIAEoCVIEbmFtZRISCgNudW0YAiABKAVIAFIDbnVtEhQKBHRleHQYAyAB",
@@ -32,9 +32,9 @@ namespace Spectest {
     }
 
     /// <summary>Minimal parser: ParseFrom over the C core. Not pb::MessageParser.</summary>
-    public sealed class Parser<T> where T : new() {
+    public sealed class Parser_Oneof1<T> where T : new() {
         private readonly Action<T, byte[]> _merge;
-        public Parser(Action<T, byte[]> merge) { _merge = merge; }
+        public Parser_Oneof1(Action<T, byte[]> merge) { _merge = merge; }
         public T ParseFrom(byte[] data) { var m = new T(); _merge(m, data); return m; }
         public T ParseFrom(ByteString data) => ParseFrom(data.ToByteArray());
         public T ParseFrom(Stream input) { using var ms = new MemoryStream(); input.CopyTo(ms); return ParseFrom(ms.ToArray()); }
@@ -86,7 +86,7 @@ namespace Spectest {
         public bool HasInner { get { return kindCase_ == KindOneofCase.Inner; } }
         /// <summary> Clears the value of the oneof if it's currently set to "inner" </summary>
         public void ClearInner() { if (HasInner) { ClearKind(); } }
-        public static Parser<Oneof1> Parser { get; } = new Parser<Oneof1>((m, b) => m.MergeFromBytes(b));
+        public static Parser_Oneof1<Oneof1> Parser { get; } = new Parser_Oneof1<Oneof1>((m, b) => m.MergeFromBytes(b));
         public Oneof1() { }
         public Oneof1(Oneof1 other) : this() {
             Name = other.Name;
@@ -117,7 +117,7 @@ namespace Spectest {
             return "Oneof1 {{ " + "Name = " + Name + ", " + "kind = " + KindCase + " }}";
         }
         public byte[] ToByteArray() {
-            using Pbwire.Message msg = PbwireFile.Schema.Message("spectest.Oneof1").NewMessage();
+            using Pbwire.Message msg = PbwireFile_Oneof1.Schema.Message("spectest.Oneof1").NewMessage();
             EncodeInto(msg);
             return msg.Encode();
         }
@@ -131,7 +131,7 @@ namespace Spectest {
         }
         public int CalculateSize() => ToByteArray().Length;
          internal void MergeFromBytes(byte[] wire) {
-            using Pbwire.Message msg = PbwireFile.Schema.Message("spectest.Oneof1").Decode(wire);
+            using Pbwire.Message msg = PbwireFile_Oneof1.Schema.Message("spectest.Oneof1").Decode(wire);
             LoadFrom(msg);
         }
         public void MergeFrom(Oneof1 other) {
@@ -172,7 +172,7 @@ namespace Spectest {
                 /// <summary>Field number for the "v" field.</summary>
                 public const int VFieldNumber = 1;
                 public int V { get; set; }
-                public static Parser<Inner> Parser { get; } = new Parser<Inner>((m, b) => m.MergeFromBytes(b));
+                public static Parser_Oneof1<Inner> Parser { get; } = new Parser_Oneof1<Inner>((m, b) => m.MergeFromBytes(b));
                 public Inner() { }
                 public Inner(Inner other) : this() {
                     V = other.V;
@@ -194,7 +194,7 @@ namespace Spectest {
                     return "Inner {{ " + "V = " + V + " }}";
                 }
                 public byte[] ToByteArray() {
-                    using Pbwire.Message msg = PbwireFile.Schema.Message("spectest.Oneof1.Inner").NewMessage();
+                    using Pbwire.Message msg = PbwireFile_Oneof1.Schema.Message("spectest.Oneof1.Inner").NewMessage();
                     EncodeInto(msg);
                     return msg.Encode();
                 }
@@ -208,7 +208,7 @@ namespace Spectest {
                 }
                 public int CalculateSize() => ToByteArray().Length;
                  internal void MergeFromBytes(byte[] wire) {
-                    using Pbwire.Message msg = PbwireFile.Schema.Message("spectest.Oneof1.Inner").Decode(wire);
+                    using Pbwire.Message msg = PbwireFile_Oneof1.Schema.Message("spectest.Oneof1.Inner").Decode(wire);
                     LoadFrom(msg);
                 }
                 public void MergeFrom(Inner other) {
