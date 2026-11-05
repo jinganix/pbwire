@@ -32,4 +32,6 @@ message Probe {
   bytes blob = 10;
   Color color = 11;
   Inner inner = 12;
+  repeated int32 nums = 13;
+  map<string, int32> attrs = 14;
 }

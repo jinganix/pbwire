@@ -21,6 +21,7 @@
 #include "pbwire.h"
 
 @class PBWSchema;
+@class PBWContext;
 
 NS_ASSUME_NONNULL_BEGIN
 
@@ -62,6 +63,28 @@ NS_ASSUME_NONNULL_BEGIN
 /* Items in a repeated field, 0 when the field is absent or singular. */
 - (NSUInteger)countForField:(NSString *)name;
 
+/* Every item of a repeated field as an NSArray (same objects as
+ * valueForField:atIndex:); nil when the field is not repeated. */
+- (nullable NSArray *)valuesForField:(NSString *)name;
+
+/* Replaces a repeated field with the items of an array (nil clears it).
+ * Same value classes as addValue:forField:error:. */
+- (BOOL)setValues:(nullable NSArray *)values
+         forField:(NSString *)name
+            error:(NSError **)error;
+
+/* A map field as an NSDictionary: entry keys (NSString for string keys,
+ * NSNumber otherwise) to entry values (same objects as valueForField:).
+ * nil when the field is not a map. */
+- (nullable NSDictionary *)entriesForField:(NSString *)name;
+
+/* Replaces a map field with the entries of a dictionary (nil clears it).
+ * Keys are NSString for string keys and NSNumber otherwise; values follow
+ * setValue:forField:error:. */
+- (BOOL)setEntries:(nullable NSDictionary *)entries
+          forField:(NSString *)name
+             error:(NSError **)error;
+
 /* One item of a repeated field: NSNumber for numeric/bool/enum, NSString for
  * string, NSData for bytes, PBWMessage for a message field; nil when the field
  * is not repeated or the index is out of range. */
@@ -79,8 +102,35 @@ NS_ASSUME_NONNULL_BEGIN
 /* Wire bytes of this message. */
 - (nullable NSData *)encode:(NSError **)error;
 
+/* Wire bytes through a workspace's reusable buffer (copied out, so the
+ * result outlives the next use of the context). */
+- (nullable NSData *)encodeWithContext:(PBWContext *)context
+                                 error:(NSError **)error;
+
+/* JSON mapping text of this message. */
+- (nullable NSString *)JSONString:(NSError **)error;
+
+/* Parses JSON mapping text into a message of the same type. */
+- (nullable PBWMessage *)parseJSONString:(NSString *)text
+                                   error:(NSError **)error;
+
+/* Protobuf text format of this message. */
+- (nullable NSString *)textFormat:(NSError **)error;
+
+/* Parses text format into a message of the same type. */
+- (nullable PBWMessage *)parseTextFormat:(NSString *)text
+                                   error:(NSError **)error;
+
 /* Decode data as a message of the same type. */
 - (nullable PBWMessage *)decode:(NSData *)data error:(NSError **)error;
+
+/* Decode into a workspace: the message lives in its allocator (no per-value
+ * malloc after warmup), so it retains the context, frees nothing itself, and
+ * becomes invalid on the context's next reset. It is read-only: setters
+ * fail the way the C API fails them. */
+- (nullable PBWMessage *)decode:(NSData *)data
+                    withContext:(PBWContext *)context
+                          error:(NSError **)error;
 
 @end
 

@@ -1,14 +1,18 @@
 #import "PBWMessage.h"
 
+#import "PBWContext.h"
 #import "PBWError.h"
 #import "PBWSchema.h"
+
+#include <string.h>
 
 @implementation PBWMessage {
     PBWSchema *_schema; /* strong: owns the descriptor below */
     const pbw_descriptor *_descriptor;
     pbw_message *_message; /* the C tree; freed here when _ownsMessage */
     BOOL _ownsMessage;
-    PBWMessage *_parent; /* strong: a view must not outlive its storage */
+    PBWMessage *_parent;  /* strong: a view must not outlive its storage */
+    PBWContext *_context; /* strong when decoded with one: it owns the tree */
 }
 
 + (nullable instancetype)messageWithDescriptor:(const pbw_descriptor *)descriptor
@@ -25,7 +29,8 @@
                                      schema:schema
                                     message:message
                                       owned:YES
-                                     parent:nil];
+                                     parent:nil
+                                    context:nil];
 }
 
 - (instancetype)initWithDescriptor:(const pbw_descriptor *)descriptor
@@ -33,6 +38,7 @@
                            message:(pbw_message *)message
                              owned:(BOOL)owned
                             parent:(PBWMessage *)parent
+                           context:(PBWContext *)context
 {
     self = [super init];
     if (self == nil) {
@@ -43,6 +49,7 @@
     _message = message;
     _ownsMessage = owned;
     _parent = parent;
+    _context = context;
     return self;
 }
 
@@ -114,6 +121,155 @@
     return [self objectForValue:pbw_value_at(value, index) field:field];
 }
 
+- (nullable NSArray *)valuesForField:(NSString *)name
+{
+    const pbw_field *field = [self fieldForName:name];
+    pbw_value *value;
+    size_t count, i;
+    NSMutableArray *out;
+
+    if (field == NULL || pbw_field_label(field) != PBW_LABEL_REPEATED) {
+        return nil;
+    }
+    value = pbw_message_get(_message, pbw_field_number(field));
+    count = value == NULL ? 0 : pbw_value_count(value);
+    out = [NSMutableArray arrayWithCapacity:count];
+    for (i = 0; i < count; i++) {
+        id item = [self objectForValue:pbw_value_at(value, i) field:field];
+        if (item != nil) {
+            [out addObject:item];
+        }
+    }
+    return out;
+}
+
+- (BOOL)setValues:(nullable NSArray *)values
+         forField:(NSString *)name
+            error:(NSError **)error
+{
+    const pbw_field *field = [self fieldForName:name];
+
+    if (field == NULL) {
+        return PBWSetError(error, PBW_ERR_NOT_FOUND, name);
+    }
+    if (pbw_field_label(field) != PBW_LABEL_REPEATED) {
+        return PBWSetError(error, PBW_ERR_INVALID, @"singular field (use setValue:forField:error:)");
+    }
+    pbw_message_clear(_message, pbw_field_number(field));
+    for (id item in values ?: @[]) {
+        if (![self storeValue:item forField:name allowRepeated:YES error:error]) {
+            return NO;
+        }
+    }
+    return YES;
+}
+
+/* A map entry field (always "key" = 1, "value" = 2) as objects. */
+- (nullable id)objectForMapKey:(pbw_value *)key keyField:(const pbw_field *)keyField
+{
+    if (key == NULL) {
+        return nil;
+    }
+    switch (pbw_field_type(keyField)) {
+    case PBW_TYPE_STRING: {
+        const void *bytes;
+        size_t len = 0;
+
+        bytes = pbw_value_get_bytes(key, &len);
+        return [[NSString alloc] initWithBytes:bytes length:len encoding:NSUTF8StringEncoding];
+    }
+    case PBW_TYPE_BOOL:
+        return @(pbw_value_get_bool(key) != 0);
+    case PBW_TYPE_INT32:
+    case PBW_TYPE_SINT32:
+    case PBW_TYPE_SFIXED32:
+    case PBW_TYPE_ENUM:
+        return @(pbw_value_get_int32(key));
+    case PBW_TYPE_UINT32:
+    case PBW_TYPE_FIXED32:
+        return @(pbw_value_get_uint32(key));
+    default: /* 64-bit integers read back as NSNumber, like objectForValue: */
+        return @(pbw_value_get_int(key));
+    }
+}
+
+- (nullable NSDictionary *)entriesForField:(NSString *)name
+{
+    const pbw_field *field = [self fieldForName:name];
+    const pbw_descriptor *entry;
+    const pbw_field *keyField;
+    const pbw_field *valueField;
+    pbw_value *value;
+    size_t count, i;
+    NSMutableDictionary *out;
+
+    if (field == NULL || pbw_field_type(field) != PBW_TYPE_MESSAGE ||
+        pbw_field_label(field) != PBW_LABEL_REPEATED) {
+        return nil;
+    }
+    /* Only real map entries read as dictionaries; a repeated message with
+     * coincidentally numbered fields is not a map. */
+    entry = pbw_field_message_type(field);
+    if (!pbw_descriptor_is_map_entry(entry)) {
+        return nil;
+    }
+    keyField = pbw_descriptor_find_field(entry, 1);
+    valueField = pbw_descriptor_find_field(entry, 2);
+    if (entry == NULL || keyField == NULL || valueField == NULL) {
+        return nil;
+    }
+    value = pbw_message_get(_message, pbw_field_number(field));
+    count = value == NULL ? 0 : pbw_value_count(value);
+    out = [NSMutableDictionary dictionaryWithCapacity:count];
+    for (i = 0; i < count; i++) {
+        pbw_message *item = pbw_value_get_message(pbw_value_at(value, i));
+        id key;
+        id itemValue;
+
+        if (item == NULL) {
+            continue;
+        }
+        key = [self objectForMapKey:pbw_message_get(item, 1) keyField:keyField];
+        itemValue = [self objectForValue:pbw_message_get(item, 2) field:valueField];
+        if (key != nil && itemValue != nil) {
+            out[key] = itemValue;
+        }
+    }
+    return out;
+}
+
+- (BOOL)setEntries:(nullable NSDictionary *)entries
+          forField:(NSString *)name
+             error:(NSError **)error
+{
+    const pbw_field *field = [self fieldForName:name];
+
+    if (field == NULL) {
+        return PBWSetError(error, PBW_ERR_NOT_FOUND, name);
+    }
+    if (pbw_field_type(field) != PBW_TYPE_MESSAGE ||
+        pbw_field_label(field) != PBW_LABEL_REPEATED ||
+        !pbw_descriptor_is_map_entry(pbw_field_message_type(field))) {
+        return PBWSetError(error, PBW_ERR_TYPE, name);
+    }
+    pbw_message_clear(_message, pbw_field_number(field));
+    for (id key in entries) {
+        PBWMessage *item = [self addMessageForField:name error:error];
+        id itemValue = entries[key];
+
+        if (item == nil) {
+            return NO;
+        }
+        if (![item setValue:key forField:@"key" error:error]) {
+            return NO;
+        }
+        if (![item setValue:itemValue forField:@"value" error:error]) {
+            return NO;
+        }
+    }
+    return YES;
+}
+
 /* One pbw_value as the Objective-C object valueForField: returns. The value
  * may belong to a repeated field's list; it is read only. */
 - (nullable id)objectForValue:(pbw_value *)value field:(const pbw_field *)field
@@ -139,7 +295,8 @@
                                                schema:_schema
                                               message:pbw_value_get_message(value)
                                                 owned:NO
-                                               parent:self];
+                                               parent:self
+                                              context:_context];
     case PBW_TYPE_BOOL:
         return @(pbw_value_get_bool(value) != 0);
     case PBW_TYPE_FLOAT:
@@ -328,7 +485,8 @@
                                            schema:_schema
                                           message:nested
                                             owned:NO
-                                           parent:self];
+                                           parent:self
+                                          context:_context];
 }
 
 - (nullable NSData *)encode:(NSError **)error
@@ -367,7 +525,130 @@
                                            schema:_schema
                                           message:decoded
                                             owned:YES
-                                           parent:nil];
+                                           parent:nil
+                                          context:nil];
+}
+
+- (nullable PBWMessage *)decode:(NSData *)data
+                    withContext:(PBWContext *)context
+                          error:(NSError **)error
+{
+    pbw_message *decoded = NULL;
+    pbw_status status =
+        pbw_decode_ctx(context.ctx, _descriptor, data.bytes, data.length, &decoded);
+
+    if (status != PBW_OK) {
+        PBWSetError(error, status, nil);
+        return nil;
+    }
+    return [[PBWMessage alloc] initWithDescriptor:_descriptor
+                                           schema:_schema
+                                          message:decoded
+                                            owned:NO
+                                           parent:nil
+                                          context:context];
+}
+
+- (nullable NSData *)encodeWithContext:(PBWContext *)context
+                                 error:(NSError **)error
+{
+    const uint8_t *bytes = NULL;
+    size_t len = 0;
+    pbw_status status = pbw_encode_ctx(context.ctx, _message, &bytes, &len);
+
+    if (status != PBW_OK) {
+        PBWSetError(error, status, nil);
+        return nil;
+    }
+    /* The buffer is reused by the next context call: copy it out. */
+    return [NSData dataWithBytes:bytes length:len];
+}
+
+/* malloc'd C text (JSON or text format) as an NSString, freed here. */
+- (nullable NSString *)stringFromTextStatus:(pbw_status)status
+                                       text:(char *)text
+                                        len:(size_t)len
+                                      error:(NSError **)error
+{
+    NSString *out;
+
+    if (status != PBW_OK) {
+        PBWSetError(error, status, nil);
+        return nil;
+    }
+    out = [[NSString alloc] initWithBytes:text length:len encoding:NSUTF8StringEncoding];
+    pbw_free(text);
+    if (out == nil) {
+        PBWSetError(error, PBW_ERR_INVALID, nil);
+        return nil;
+    }
+    return out;
+}
+
+- (nullable NSString *)JSONString:(NSError **)error
+{
+    char *text = NULL;
+    size_t len = 0;
+    pbw_status status = pbw_json_print(_message, &text, &len);
+
+    return [self stringFromTextStatus:status text:text len:len error:error];
+}
+
+- (nullable PBWMessage *)parseJSONString:(NSString *)text
+                                   error:(NSError **)error
+{
+    const char *utf8 = text.UTF8String;
+    pbw_message *parsed = NULL;
+    pbw_status status;
+
+    if (utf8 == NULL) {
+        PBWSetError(error, PBW_ERR_INVALID, nil);
+        return nil;
+    }
+    status = pbw_json_parse(_descriptor, utf8, strlen(utf8), &parsed);
+    if (status != PBW_OK) {
+        PBWSetError(error, status, nil);
+        return nil;
+    }
+    return [[PBWMessage alloc] initWithDescriptor:_descriptor
+                                           schema:_schema
+                                          message:parsed
+                                            owned:YES
+                                           parent:nil
+                                          context:nil];
+}
+
+- (nullable NSString *)textFormat:(NSError **)error
+{
+    char *text = NULL;
+    size_t len = 0;
+    pbw_status status = pbw_text_print(_message, &text, &len);
+
+    return [self stringFromTextStatus:status text:text len:len error:error];
+}
+
+- (nullable PBWMessage *)parseTextFormat:(NSString *)text
+                                   error:(NSError **)error
+{
+    const char *utf8 = text.UTF8String;
+    pbw_message *parsed = NULL;
+    pbw_status status;
+
+    if (utf8 == NULL) {
+        PBWSetError(error, PBW_ERR_INVALID, nil);
+        return nil;
+    }
+    status = pbw_text_parse(_descriptor, utf8, strlen(utf8), &parsed);
+    if (status != PBW_OK) {
+        PBWSetError(error, status, nil);
+        return nil;
+    }
+    return [[PBWMessage alloc] initWithDescriptor:_descriptor
+                                           schema:_schema
+                                          message:parsed
+                                            owned:YES
+                                           parent:nil
+                                          context:nil];
 }
 
 @end

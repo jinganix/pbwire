@@ -9,6 +9,8 @@
 
 #import "PBWMessage.h"
 #import "PBWSchema.h"
+#import "PBWContext.h"
+#import "PBWPool.h"
 
 #include <stdio.h>
 
@@ -426,6 +428,159 @@ testLifetime(void)
     }
 }
 
+static void
+testRepeatedHelpers(void)
+{
+    PBWSchema *schema = loadSchema();
+    PBWMessage *probe;
+    PBWMessage *decoded;
+    NSData *wire;
+    NSError *error = nil;
+
+    if (schema == nil) {
+        return;
+    }
+    probe = [schema messageByName:@"pbwobjc.Probe"];
+    CHECK(probe != nil);
+    CHECK([[probe valuesForField:@"nums"] count] == 0);
+    NSArray *three = @[ @(1), @(-5), @(300) ];
+    CHECK([probe setValues:three forField:@"nums" error:&error]);
+    CHECK([[probe valuesForField:@"nums"] count] == 3);
+    CHECK_NUMBER([probe valueForField:@"nums" atIndex:1], @(-5));
+    CHECK([probe setValue:@(9) forField:@"i32" error:&error]);
+    /* Singular fields read no array, and arrays reject singular setters. */
+    CHECK([probe valuesForField:@"i32"] == nil);
+    CHECK(![probe setValue:@(1) forField:@"nums" error:&error]);
+    CHECK([probe setValues:nil forField:@"nums" error:&error]);
+    CHECK([[probe valuesForField:@"nums"] count] == 0);
+    NSArray *two = @[ @(4), @(6) ];
+    CHECK([probe setValues:two forField:@"nums" error:&error]);
+    wire = [probe encode:&error];
+    CHECK(wire != nil);
+    decoded = [probe decode:wire error:&error];
+    CHECK(decoded != nil);
+    CHECK(([[decoded valuesForField:@"nums"] isEqualToArray:@[ @(4), @(6) ]]));
+    /* Unknown and singular names read no array. */
+    CHECK([decoded valuesForField:@"nope"] == nil);
+}
+
+static void
+testMapHelpers(void)
+{
+    PBWSchema *schema = loadSchema();
+    PBWMessage *probe;
+    PBWMessage *decoded;
+    NSData *wire;
+    NSError *error = nil;
+
+    if (schema == nil) {
+        return;
+    }
+    probe = [schema messageByName:@"pbwobjc.Probe"];
+    CHECK(probe != nil);
+    NSDictionary *pair = @{@"a" : @(1),
+                           @"b" : @(-2)};
+    CHECK([probe setEntries:pair forField:@"attrs" error:&error]);
+    CHECK([[[probe entriesForField:@"attrs"] allKeys] count] == 2);
+    CHECK_NUMBER([probe entriesForField:@"attrs"][@"b"], @(-2));
+    /* A repeated message that is not a map reads no dictionary. */
+    CHECK([probe entriesForField:@"inner"] == nil);
+    NSDictionary *oneEntry = @{@"a" : @(1)};
+    CHECK(![probe setEntries:oneEntry forField:@"inner" error:&error]);
+    wire = [probe encode:&error];
+    CHECK(wire != nil);
+    decoded = [probe decode:wire error:&error];
+    CHECK(decoded != nil);
+    CHECK(([[decoded entriesForField:@"attrs"] isEqualToDictionary:@{@"a" : @(1),
+                                                                     @"b" : @(-2)}]));
+    CHECK([decoded countForField:@"attrs"] == 2);
+    /* Replacing drops the old entries. */
+    NSDictionary *solo = @{@"c" : @(3)};
+    CHECK([decoded setEntries:solo forField:@"attrs" error:&error]);
+    CHECK(([[decoded entriesForField:@"attrs"] isEqualToDictionary:@{@"c" : @(3)}]));
+    CHECK([decoded setEntries:nil forField:@"attrs" error:&error]);
+    CHECK([[[decoded entriesForField:@"attrs"] allKeys] count] == 0);
+}
+
+static void
+testJSONText(void)
+{
+    PBWSchema *schema = loadSchema();
+    PBWMessage *probe;
+    NSData *wire;
+    NSString *json;
+    NSString *text;
+    PBWMessage *back;
+    NSError *error = nil;
+
+    if (schema == nil) {
+        return;
+    }
+    probe = filledProbe(schema);
+    wire = [probe encode:&error];
+    CHECK(wire != nil);
+    json = [probe JSONString:&error];
+    CHECK(json != nil);
+    CHECK([json containsString:@"\"text\":\"h\u00e9llo\""] || [json containsString:@"\"text\": \"h\u00e9llo\""]);
+    back = [probe parseJSONString:json error:&error];
+    CHECK(back != nil);
+    CHECK([[back encode:&error] isEqualToData:wire]);
+    CHECK([probe parseJSONString:@"{oops" error:&error] == nil);
+    text = [probe textFormat:&error];
+    CHECK(text != nil);
+    CHECK([text containsString:@"label: \"nested\""]);
+    back = [probe parseTextFormat:text error:&error];
+    CHECK(back != nil);
+    CHECK([[back encode:&error] isEqualToData:wire]);
+    CHECK([probe parseTextFormat:@"text: " error:&error] == nil);
+}
+
+static void
+testContextPool(void)
+{
+    PBWSchema *schema = loadSchema();
+    PBWMessage *probe;
+    NSData *wire;
+    NSError *error = nil;
+    PBWContext *ctx;
+    PBWMessage *held;
+    PBWPool *pool;
+    PBWContext *pooled;
+    PBWMessage *pooledBack;
+
+    if (schema == nil) {
+        return;
+    }
+    probe = filledProbe(schema);
+    wire = [probe encode:&error];
+    CHECK(wire != nil);
+    ctx = [[PBWContext alloc] init];
+    CHECK(ctx != nil);
+    ctx.retainCap = 1 << 20;
+    CHECK(ctx.retainCap == 1 << 20);
+    held = [probe decode:wire withContext:ctx error:&error];
+    CHECK(held != nil);
+    CHECK_STRING([held valueForField:@"text"], @"h\u00e9llo");
+    CHECK([[[held encodeWithContext:ctx error:&error] copy] isEqualToData:wire]);
+    /* A second decode through the same workspace agrees as well. */
+    CHECK([[[[probe decode:wire withContext:ctx error:&error] encode:&error] copy] isEqualToData:wire]);
+    CHECK(ctx.usedBytes > 0);
+    [ctx reset];
+    /* A pooled workspace round-trips the same bytes. */
+    pool = [[PBWPool alloc] initWithMaxIdle:2 retainCap:0];
+    CHECK(pool != nil);
+    CHECK([pool idleCount] == 0);
+    pooled = [pool acquire];
+    CHECK(pooled != nil);
+    pooledBack = [probe decode:wire withContext:pooled error:&error];
+    CHECK(pooledBack != nil);
+    CHECK([[[pooledBack encode:&error] copy] isEqualToData:wire]);
+    pooledBack = nil;
+    [pool releaseContext:pooled];
+    CHECK([pool idleCount] == 1);
+    pooled = nil;
+}
+
 int
 main(int argc, char **argv)
 {
@@ -440,6 +595,10 @@ main(int argc, char **argv)
         testNestedMessage();
         testErrors();
         testLifetime();
+        testRepeatedHelpers();
+        testMapHelpers();
+        testJSONText();
+        testContextPool();
 
         if (failures == 0) {
             printf("test_objc: all checks passed (%s)\n",

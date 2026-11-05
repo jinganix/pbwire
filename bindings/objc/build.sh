@@ -16,7 +16,7 @@ lib="$root/build/libpbwire.a"
 out="$here/build"
 cc=${CC:-clang}
 flags="-fobjc-arc -O2 -Wall -Wextra -I$root/include -I$here"
-runtime="$here/PBWSchema.m $here/PBWMessage.m"
+runtime="$here/PBWSchema.m $here/PBWMessage.m $here/PBWContext.m $here/PBWPool.m"
 
 if [ ! -f "$lib" ]; then
     echo "build.sh: $lib is missing, running 'make all' in $root"
