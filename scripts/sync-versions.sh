@@ -57,6 +57,7 @@ if [[ $CHECK == 1 ]]; then
   expect bindings/scala/build.sbt "ThisBuild / version := \"$VER\"" "scala build.sbt"
   expect bindings/julia/runtime/Project.toml "^version = \"$VER\"$" "julia Project.toml"
   expect bindings/clojure/deps.edn ":artifact \"target/pbwire-clojure-$VER.jar\"" "clojure deps.edn"
+  expect bindings/clojure/pom.xml "^  <version>$VER</version>" "clojure pom template"
   expect bindings/r/runtime/DESCRIPTION "^Version: $VER\$" "r DESCRIPTION"
   # Plugin versions must never track VERSION (a blanket rewrite once
   # shipped maven-compiler-plugin:0.1.1 to every user of the file).
@@ -97,6 +98,7 @@ setver bindings/fsharp/runtime/Pbwire.FSharp.fsproj -e "s|<Version>[^<]*</Versio
 setver bindings/scala/build.sbt -e "s|ThisBuild / version := \"[0-9.]*\"|ThisBuild / version := \"$VER\"|"
 setver bindings/julia/runtime/Project.toml -e "s/^version = \".*\"/version = \"$VER\"/"
 setver bindings/clojure/deps.edn -e "s|target/pbwire-clojure-[0-9.]*.jar|target/pbwire-clojure-$VER.jar|"
+setver bindings/clojure/pom.xml -e "s|^  <version>[0-9.]*</version>|  <version>$VER</version>|"
 setver bindings/r/runtime/DESCRIPTION -e "s/^Version: .*/Version: $VER/"
 # Kotlin pins its pbwire-java dependency to the same release line.
 setver bindings/kotlin/pom.xml -e "/<artifactId>pbwire-java<\/artifactId>/,/<\/dependency>/s|<version>[0-9.]*</version>|<version>$VER</version>|"

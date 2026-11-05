@@ -28,24 +28,8 @@
                 :version version
                 :basis @basis
                 :src-dirs ["runtime/src"]
-                :pom-data [[:description "Dynamic protobuf over the pbwire C ABI, schema at runtime, no generated code"]
-                           [:url "https://github.com/jinganix/pbwire"]
-                           [:licenses
-                            [:license
-                             [:name "Apache-2.0"]
-                             [:url "https://www.apache.org/licenses/LICENSE-2.0"]]]
-                           [:developers
-                            [:developer
-                             [:id "gan.jin"]
-                             [:name "JinGan"]
-                             [:email "jinganix@gmail.com"]]]
-                           [:scm
-                            [:url "https://github.com/jinganix/pbwire"]
-                            [:connection "scm:git:git://github.com/jinganix/pbwire.git"]
-                            [:developerConnection "scm:git:ssh://github.com/jinganix/pbwire.git"]]]})
+                ;; 0.9.2 has no :pom-data: metadata comes from the ./pom.xml
+                ;; template, coordinates/deps are synced in from here.
+                })
   (b/copy-dir {:src-dirs ["runtime/src"] :target-dir class-dir})
-  (b/jar {:class-dir class-dir :jar-file jar-file})
-  ;; deps-deploy reads artifact name/version from ./pom.xml, so leave a copy
-  ;; at the project root (build output, gitignored).
-  (b/copy-file {:src (b/pom-path {:lib lib :class-dir class-dir})
-                :target "pom.xml"}))
+  (b/jar {:class-dir class-dir :jar-file jar-file}))
