@@ -1,10 +1,33 @@
 # pbwire Ruby binding
 
 `lib/pbwire.rb` loads a compiled C extension (`ext/pbwire_ext/`) that links the
-pbwire C core statically. No gems, no `protoc` plugin, no generated code: a
-`FileDescriptorSet` (`protoc --descriptor_set_out`) is loaded at runtime and
-drives every field lookup, so the field numbers, types and presence rules are the
-descriptor's, not a hand-written copy.
+pbwire C core statically. No gems at run time.
+
+Most code never touches the dynamic surface: generate a gem-shaped facade
+once (`make -C bindings/typed gen-ruby`) and use it like the library it
+mirrors — same `new`/`encode`/`decode`/`to_h` calls, same observable
+behavior, but the wire format stays in the C core:
+
+```ruby
+require 'addressbook'   # generated; embeds its own FileDescriptorSet
+
+person = Pbwire::Gen::Tutorial_Person.new(name: 'alice', id: 7)
+Pbwire::Gen::Tutorial_Person.encode(person)  # => binary String, no schema
+back = Pbwire::Gen::Tutorial_Person.decode(wire)
+back.name                                     # => "alice"
+back.to_h                                     # => {name: "alice", id: 7, ...}
+back.has_email?                               # => false
+```
+
+Presence follows the value: a non-nil assignment marks the field, so
+`new(opt_i32: 0)` is written while `new` leaves it absent; oneof keeps
+only its last member. `to_h` uses proto-name symbols and renders enums
+as name symbols, exactly like the gem. The one deliberate difference:
+validation happens at the encode boundary (plain Ruby objects until
+then), where a mistyped field raises `TypeError`.
+
+The dynamic API is still there for gateways and schemas known only at
+runtime:
 
 ```ruby
 require 'pbwire'

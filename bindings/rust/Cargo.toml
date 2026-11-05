@@ -11,3 +11,6 @@ repository = "https://github.com/jinganix/pbwire"
 [workspace]
 members = ["benchmarks"]
 exclude = []
+
+[dev-dependencies]
+prost = "0.14"

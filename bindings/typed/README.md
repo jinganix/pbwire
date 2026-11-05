@@ -20,18 +20,19 @@ Every language gets the same shape, spelled the way that language spells things:
 |---|---|---|
 | Java | class per message | `public int i32; public String str; public List<Inner3> inners;` + `encode(Schema)` / `static decode(Schema, byte[])` |
 | Kotlin | `data class` | same fields as `var`, `fun encode(schema)`, `companion object { fun decode(...) }` |
-| C# | `sealed class` | `public int I32 { get; set; }` `public uint U32 { get; set; }` `public List<Inner3> Inners { get; set; }` + `Encode(Schema)` / `static Decode` |
+| C# | `sealed class`, Google.Protobuf shape | `Parser.ParseFrom` / `ToByteArray` / `RepeatedField<T>` / `KindOneofCase` / `Has`+`Clear` for optional, over the embedded schema (no `IMessage`, no `Descriptor`) |
 | Dart | class | `int i32 = 0;` `List<Inner3> inners = [];` + `encode(schema)` / `static decode` |
 | PHP | `final class` | typed properties `public int $i32;` + `encode(Schema)` / `static decode` |
-| Ruby | class + kwargs | `attr_accessor :i32` + `#encode(schema)` / `.decode(schema, wire)` |
+| Ruby | class + kwargs, gem-shaped | `Klass.new` / `.encode(msg)` / `.decode(bytes)` / `#to_proto` / `#to_h` / `#has_x?`; schema embedded, zero arguments |
 | Python | dataclass, official `_pb2` shape | `i32: int = 0` + `.SerializeToString()` / `.FromString()` / `.CopyFrom()` / `.HasField()`; schema embedded, zero arguments |
 | Node | protobufjs-static shape | `Cls.create()` / `.encode(m).finish()` / `.decode()` / `.verify()` / `.fromObject()` / `.toObject()`; schema embedded, `.d.ts` included |
-| Rust | struct | `pub i32: i32; pub u32: u32` + `encode(&Schema)` / `decode(&Schema, &[u8])` |
+| Rust | struct, prost shape | `pub i32: i32` + `pub opt_i32: Option<i32>` + oneof `Option<Kind>` + `i32` enums + `encode_to_vec` / `decode` over the embedded schema |
 | Lua | table + constructor | `M.Scalars3.new{i32 = 1}` + `encode(schema, t)` / `decode(schema, wire)` |
+| Go | struct, protoc-gen-go shape | `I32 int32` + `OptI32 *int32` + oneof wrappers + nil-safe getters + `Marshal`/`Unmarshal` over the embedded schema |
 | Objective-C | NSObject subclass | `@property int32_t i32; @property uint32_t u32;` + `-encodeWithSchema:error:` / `+decodeWithSchema:data:error:` |
 
 C is not in this table twice: the C plugin already generates the typed
-struct layer. Go is dynamic-API only and has no typed model for now.
+struct layer.
 Erlang gets typed records from gpb (`get_msg_defs/0`), which is its existing
 schema source; adding a second generator there would duplicate gpb.
 
@@ -66,6 +67,7 @@ bindings/php/tests/gen/         matrix3.php
 bindings/ruby/test/gen/         matrix3.rb
 bindings/python/tests/gen/      matrix3_pbwire.py
 bindings/node/tests/gen/        matrix3.d.ts, matrix3.js
+bindings/go/tests/gen/matrix3/  matrix3_pbwire.go (package matrix3)
 bindings/rust/tests/gen/        matrix3_pbwire.rs
 bindings/objc/tests/gen/        matrix3.h, matrix3.m
 bindings/lua/tests/gen/         matrix3.lua

@@ -7,6 +7,10 @@ own PR: bump the pin, run the binding's full T1–T6, all green to merge.
 |---|---|---|---|
 | node | `protobufjs` | 8.8.1 | `make oracle-update LANG=node` (see below) |
 | python | `protobuf` (`google.protobuf`) | 7.36.2 | `make oracle-update LANG=python` |
+| ruby | `google-protobuf` gem | 4.36.2 | `gem update google-protobuf`, regenerate `tests/gen_oracle`, run T1–T6 |
+| go | `google.golang.org/protobuf` | v1.36.12 | `go get google.golang.org/protobuf@latest`, regenerate `tests/gen_oracle`, run T1–T6 |
+| rust | `prost` / `prost-build` | 0.14.4 (Cargo.lock) | `cargo update -p prost`, regenerate `tests/gen_oracle`, run T1–T6 |
+| csharp | `Google.Protobuf` (NuGet) | 3.36.2 | update `PackageReference`, regenerate `oracle/gen_oracle`, run T1–T6 |
 
 ## node
 

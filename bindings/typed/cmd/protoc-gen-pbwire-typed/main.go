@@ -121,7 +121,7 @@ func parseOptions(param string) (gen.Options, error) {
 		}
 	}
 	if opt.Lang == "" {
-		return opt, fmt.Errorf("missing lang= (java, kotlin, csharp, dart, php, ruby, python, typescript, javascript, rust, objc, lua)")
+		return opt, fmt.Errorf("missing lang= (java, kotlin, csharp, dart, php, ruby, python, typescript, javascript, rust, objc, lua or go)")
 	}
 	return opt, nil
 }
