@@ -1,0 +1,7 @@
+# The C core compiles in statically (same source list as the Lua
+# rockspec), so the installed package needs no library path at run time.
+# Paths are relative to this src/ directory: ../../../.. is the repo root.
+PKG_CPPFLAGS = -I../../../../include -I../../../../src
+VPATH = ../../../../src
+OBJECTS = pbwire_r.o wire.o arena.o schema.o message.o encode.o decode.o \
+	ctx.o descriptor_set.o json.o stream.o

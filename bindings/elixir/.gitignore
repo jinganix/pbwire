@@ -1,0 +1,10 @@
+# Elixir build outputs (mirrors bindings/erlang/.gitignore for the rebar3 layout)
+/_build/
+/deps/
+*.beam
+*.plt
+erl_crash.dump
+# Built by make: the compiled C core and a link at the repo headers.
+/build/
+/include
+erl_crash.dump

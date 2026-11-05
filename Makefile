@@ -405,6 +405,38 @@ rust-test: shared
 csharp-test: shared
 	cd bindings/csharp && $(DOTNET) run --project tests -- ../c/tests/data/matrix3.desc
 
+SWIFT ?= swift
+SCALAC ?= scalac
+ELIXIR ?= elixir
+ZIG ?= zig
+CLOJURE ?= clojure
+JULIA ?= julia
+RSCRIPT ?= Rscript
+
+swift-test: $(LIB)
+	cd bindings/swift && ./build.sh test
+
+scala-test: shared
+	cd bindings/scala && ./build.sh
+
+elixir-test:
+	cd bindings/elixir && make test
+
+zig-test:
+	cd bindings/zig && $(ZIG) build test
+
+fsharp-test: shared
+	cd bindings/fsharp && $(DOTNET) run --project tests -- ../c/tests/data/matrix3.desc
+
+clojure-test:
+	cd bindings/clojure && ./build.sh
+
+julia-test:
+	cd bindings/julia && $(JULIA) --project=runtime tests/runtests.jl
+
+r-test:
+	cd bindings/r && ./build.sh && $(RSCRIPT) tests/test_pbwire.R && $(RSCRIPT) tests/test.R
+
 # Each binding benchmarks itself against its language's official runtime on
 # matrix3.proto (same four tiers as `bench`/`bench-c`). Optional like those:
 # they need protoc plus that runtime (a Maven jar, npm, the google-protobuf
@@ -439,6 +471,30 @@ rust-bench:
 
 csharp-bench:
 	./scripts/bench-run.sh --binding csharp -- ./bindings/csharp/benchmarks/bench.sh
+
+swift-bench:
+	./scripts/bench-run.sh --binding swift -- ./bindings/swift/benchmarks/bench.sh
+
+scala-bench:
+	./scripts/bench-run.sh --binding scala -- ./bindings/scala/benchmarks/bench.sh
+
+elixir-bench:
+	./scripts/bench-run.sh --binding elixir -- make -C bindings/elixir bench
+
+zig-bench:
+	./scripts/bench-run.sh --binding zig -- ./bindings/zig/benchmarks/bench.sh
+
+fsharp-bench:
+	./scripts/bench-run.sh --binding fsharp -- ./bindings/fsharp/benchmarks/bench.sh
+
+clojure-bench:
+	./scripts/bench-run.sh --binding clojure -- ./bindings/clojure/benchmarks/bench.sh
+
+julia-bench:
+	./scripts/bench-run.sh --binding julia -- $(JULIA) --project=bindings/julia/runtime bindings/julia/benchmarks/bench.jl
+
+r-bench:
+	./scripts/bench-run.sh --binding r -- ./bindings/r/benchmarks/bench.sh
 
 # The benchmark compares against the official Python runtime, so it needs
 # protoc --python_out plus `pip install protobuf`.
@@ -484,5 +540,7 @@ clean:
 	java-bench ruby-bench node-bench objc-bench \
 	kotlin-test php-test dart-test rust-test csharp-test \
 	kotlin-bench php-bench dart-bench rust-bench csharp-bench \
+	swift-test scala-test elixir-test zig-test fsharp-test clojure-test julia-test r-test \
+	swift-bench scala-bench elixir-bench zig-bench fsharp-bench clojure-bench julia-bench r-bench \
 	desc-fixture test-cpp clean plugin-c go-test \
 	codegen codegen-test codegen-conformance

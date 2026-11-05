@@ -1,0 +1,8 @@
+{
+  "invocations": [
+    {
+      "protoFiles": ["matrix3.proto"],
+      "visibility": "Public"
+    }
+  ]
+}
