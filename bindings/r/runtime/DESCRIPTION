@@ -1,6 +1,6 @@
 Package: pbwire
 Title: Protobuf Wire Codec over the pbwire C Core
-Version: 0.1.7
+Version: 0.1.8
 Authors@R: person("pbwire", "contributors", role = c("aut", "cre"),
     email = "pbwire@example.com")
 Description: Dynamic protobuf codec: named lists convert through the pbwire

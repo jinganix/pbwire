@@ -8,7 +8,7 @@
   <artifactId>pbwire-kotlin</artifactId>
   <!-- Release version: kept in sync with the repo-root VERSION file by
        scripts/sync-versions.sh; never edit by hand. -->
-  <version>0.1.7</version>
+  <version>0.1.8</version>
   <packaging>jar</packaging>
 
   <name>pbwire-kotlin</name>
@@ -47,7 +47,7 @@
       <groupId>io.github.jinganix</groupId>
       <artifactId>pbwire-java</artifactId>
       <!-- Same release line: the sync script keeps this aligned with VERSION. -->
-      <version>0.1.7</version>
+      <version>0.1.8</version>
     </dependency>
     <dependency>
       <groupId>org.jetbrains.kotlin</groupId>

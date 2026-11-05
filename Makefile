@@ -26,7 +26,7 @@ ifeq ($(UNAME_S),Darwin)
 SHLIB := build/libpbwire.1.dylib
 SHLIB_LINK := build/libpbwire.dylib
 SHLIB_FLAGS := -dynamiclib -install_name @rpath/libpbwire.1.dylib \
-	-compatibility_version 1 -current_version 0.1.7
+	-compatibility_version 1 -current_version 0.1.8
 else
 SHLIB := build/libpbwire.so.1
 SHLIB_LINK := build/libpbwire.so
@@ -559,11 +559,12 @@ clean:
 		bindings/rust/target bindings/rust/benchmarks/gen \
 	bindings/lua/pbwire.so bindings/lua/pbwire.o
 
-.PHONY: all test examples format format-check bench bench-c erlang-bench \
-	python-bind python-test python-bench difftest conformance conformance-python \
+.PHONY: all test examples shared format format-check bench bench-c erlang-test erlang-bench \
+	python-bind python-test python-bench difftest conformance conformance-setup conformance-python \
 	conformance-ruby conformance-java conformance-lua conformance-r conformance-node ruby-bind java-test ruby-test node-test objc-test r-bind \
 	lua-bind lua-test lua-bench \
-	java-bench ruby-bench node-bench objc-bench \
+	java-bench ruby-bench node-bench objc-bench go-bench \
+	kotlin-test php-test dart-test rust-test csharp-test \
 	kotlin-test php-test dart-test rust-test csharp-test \
 	kotlin-bench php-bench dart-bench rust-bench csharp-bench \
 	swift-test scala-test elixir-test zig-test fsharp-test clojure-test julia-test r-test \
