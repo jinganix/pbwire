@@ -77,6 +77,20 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run the self-check (zig test)");
     test_step.dependOn(&run_unit.step);
 
+    // zig build generated-test: matrix3 oracle through the generated structs.
+    const gen_mod = b.createModule(.{
+        .root_source_file = b.path("tests/generated_test.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+        .imports = &.{.{ .name = "pbwire", .module = pbwire_mod }},
+    });
+    const gen_test = b.addTest(.{ .name = "generatedtest", .root_module = gen_mod });
+    gen_test.root_module.linkLibrary(lib);
+    const run_gen = b.addRunArtifact(gen_test);
+    const gen_step = b.step("generated-test", "Run the generated-model check");
+    gen_step.dependOn(&run_gen.step);
+
     // zig build example [-- <descriptor-set>]
     const example_mod = b.createModule(.{
         .root_source_file = b.path("examples/roundtrip.zig"),

@@ -1,35 +1,40 @@
 /*
- * The runnable round trip: builds a structtest.Scalars3 through the
- * dynamic API, encodes it, decodes it back and prints both. Run after
- * ./build.sh, from bindings/scala:
- *   java -cp out/classes Roundtrip [matrix3.desc]
+ * The C example (examples/addressbook.c), in Scala, through the generated
+ * case classes: assign fields, encode, decode, compare. The encoded bytes
+ * must equal the pinned reference examples/addressbook.bin.
+ *
+ * Run after ./build.sh, from bindings/scala:
+ *   java -cp out/classes RoundtripGen ../../examples/addressbook.bin
  */
-import Pbwire._
+import java.nio.file.{Files, Paths}
+import java.util.Arrays
+import addressbookGen._
 
 object Roundtrip {
   def main(args: Array[String]): Unit = {
-    val desc = if (args.length > 0) args(0) else "../c/tests/data/matrix3.desc"
-    using(schema(desc)) { schema =>
-      val ty = schema.message("structtest.Scalars3")
-      using(ty.build { m =>
-        m.set("i32", -42L)
-        m.set("str", "alice")
-        List("a", "bb").foreach(v => m.set("tags", v))
-        m.message("inner") { c => c.set("name", "kid"); c.set("value", 42L) }
-      }) { msg =>
-        val wire = msg.encode()
-        println("encoded: " + wire.length + " bytes")
-        using(ty.parse(wire)) { back =>
-          assert(back.getLong("i32") == -42L)
-          assert(back.getString("str") == "alice")
-          assert(back.getMessage("inner").getString("name") == "kid")
-          assert(java.util.Arrays.equals(back.encode(), wire))
-          println("round trip ok: i32=" + back.getLong("i32") +
-            " str=" + back.getString("str") +
-            " inner=" + back.getMessage("inner").getString("name") +
-            " tags=" + back.getList("tags"))
-        }
-      }
+    val bin = Paths.get(if (args.length > 0) args(0) else "../../examples/addressbook.bin")
+
+    def phone(number: String, kind: Int): Tutorial_Person_PhoneNumber =
+      Tutorial_Person_PhoneNumber(number = number, `type` = Some(kind))
+
+    val book = Tutorial_AddressBook(people = List(
+      Tutorial_Person(name = "Alice", id = 1,
+        phones = List(phone("555-0100", Tutorial_Person_PhoneType.MOBILE))),
+      Tutorial_Person(name = "Bob", id = 2, email = Some("bob@example.com"),
+        phones = List(phone("555-0200", Tutorial_Person_PhoneType.HOME)))
+    ))
+
+    val wire = Tutorial_AddressBook.encode(book)
+    if (Files.exists(bin)) {
+      val reference = Files.readAllBytes(bin)
+      assert(Arrays.equals(wire, reference), "encode does not match " + bin)
+    }
+
+    val back = Tutorial_AddressBook.decode(wire)
+    println("addressbook: " + wire.length + " bytes, " + back.people.length + " people")
+    back.people.foreach { p =>
+      println("  " + p.name + " (" + p.id + ") " + p.email.getOrElse(""))
+      p.phones.foreach { ph => println("    " + ph.number) }
     }
   }
 }

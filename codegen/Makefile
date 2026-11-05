@@ -18,7 +18,7 @@ all: build
 build:
 	$(GO) build -o $(PLUGIN) ./cmd/protoc-gen-pbwire
 
-gen: gen-java gen-kotlin gen-csharp gen-dart gen-php gen-ruby gen-python gen-node gen-rust gen-objc gen-lua gen-examples
+gen: gen-java gen-kotlin gen-csharp gen-dart gen-php gen-ruby gen-python gen-node gen-rust gen-objc gen-lua gen-swift gen-zig gen-scala gen-clojure gen-fsharp gen-elixir gen-julia gen-r gen-examples
 
 # The examples all speak the C example's addressbook.proto: same schema, same
 # bytes, one generated walkthrough per language.
@@ -29,7 +29,10 @@ gen-examples: build
 	mkdir -p ../bindings/java/examples/gen ../bindings/kotlin/examples/gen ../bindings/csharp/examples/gen \
 		../bindings/dart/examples/gen ../bindings/php/examples/gen ../bindings/ruby/examples/gen \
 		../bindings/python/examples/gen ../bindings/node/examples/gen ../bindings/rust/examples/gen \
-		../bindings/objc/examples/gen ../bindings/lua/examples/gen ../bindings/go/examples/gen/addressbook
+		../bindings/objc/examples/gen ../bindings/lua/examples/gen ../bindings/go/examples/gen/addressbook \
+		../bindings/swift/examples/gen ../bindings/zig/examples/gen ../bindings/scala/examples/gen \
+		../bindings/clojure/examples/gen ../bindings/fsharp/examples/gen ../bindings/elixir/examples/gen \
+		../bindings/julia/examples/gen ../bindings/r/examples/gen
 	$(PROTOC) $(EXAMPLE_OPTS) --pbwire_out=../bindings/java/examples/gen --pbwire_opt=lang=java $(EXAMPLE)
 	$(PROTOC) $(EXAMPLE_OPTS) --pbwire_out=../bindings/kotlin/examples/gen --pbwire_opt=lang=kotlin $(EXAMPLE)
 	$(PROTOC) $(EXAMPLE_OPTS) --pbwire_out=../bindings/csharp/examples/gen --pbwire_opt=lang=csharp $(EXAMPLE)
@@ -43,6 +46,14 @@ gen-examples: build
 	$(PROTOC) $(EXAMPLE_OPTS) --pbwire_out=../bindings/objc/examples/gen --pbwire_opt=lang=objc $(EXAMPLE)
 	$(PROTOC) $(EXAMPLE_OPTS) --pbwire_out=../bindings/lua/examples/gen --pbwire_opt=lang=lua $(EXAMPLE)
 	$(PROTOC) $(EXAMPLE_OPTS) --pbwire_out=../bindings/go/examples/gen/addressbook --pbwire_opt=lang=go $(EXAMPLE)
+	$(PROTOC) $(EXAMPLE_OPTS) --pbwire_out=../bindings/swift/examples/gen --pbwire_opt=lang=swift $(EXAMPLE)
+	$(PROTOC) $(EXAMPLE_OPTS) --pbwire_out=../bindings/zig/examples/gen --pbwire_opt=lang=zig $(EXAMPLE)
+	$(PROTOC) $(EXAMPLE_OPTS) --pbwire_out=../bindings/scala/examples/gen --pbwire_opt=lang=scala $(EXAMPLE)
+	$(PROTOC) $(EXAMPLE_OPTS) --pbwire_out=../bindings/clojure/examples/gen --pbwire_opt=lang=clojure $(EXAMPLE)
+	$(PROTOC) $(EXAMPLE_OPTS) --pbwire_out=../bindings/fsharp/examples/gen --pbwire_opt=lang=fsharp $(EXAMPLE)
+	$(PROTOC) $(EXAMPLE_OPTS) --pbwire_out=../bindings/elixir/examples/gen --pbwire_opt=lang=elixir $(EXAMPLE)
+	$(PROTOC) $(EXAMPLE_OPTS) --pbwire_out=../bindings/julia/examples/gen --pbwire_opt=lang=julia $(EXAMPLE)
+	$(PROTOC) $(EXAMPLE_OPTS) --pbwire_out=../bindings/r/examples/gen --pbwire_opt=lang=r $(EXAMPLE)
 
 gen-java: build
 	mkdir -p ../bindings/java/tests/gen
@@ -116,9 +127,44 @@ gen-lua: build
 	mkdir -p ../bindings/lua/tests/gen
 	$(PROTOC) $(OPTS) --pbwire_out=../bindings/lua/tests/gen --pbwire_opt=lang=lua $(PROTO)
 
+gen-swift: build
+	mkdir -p ../bindings/swift/Tests/PbwireTests/gen
+	$(PROTOC) $(OPTS) --pbwire_out=../bindings/swift/Tests/PbwireTests/gen --pbwire_opt=lang=swift $(PROTO)
+
+# shortcut: oneof1 omitted (new emitters treat oneof members as plain
+# optionals); covered by the matrix3 round trip plus the shared oneof1.bin
+# oracle in each binding's dynamic self-test.
+gen-zig: build
+	mkdir -p ../bindings/zig/tests/gen
+	$(PROTOC) $(OPTS) --pbwire_out=../bindings/zig/tests/gen --pbwire_opt=lang=zig $(PROTO)
+
+gen-scala: build
+	mkdir -p ../bindings/scala/tests/gen
+	$(PROTOC) $(OPTS) --pbwire_out=../bindings/scala/tests/gen --pbwire_opt=lang=scala $(PROTO)
+
+gen-clojure: build
+	mkdir -p ../bindings/clojure/tests/gen
+	$(PROTOC) $(OPTS) --pbwire_out=../bindings/clojure/tests/gen --pbwire_opt=lang=clojure $(PROTO)
+
+gen-fsharp: build
+	mkdir -p ../bindings/fsharp/tests/gen
+	$(PROTOC) $(OPTS) --pbwire_out=../bindings/fsharp/tests/gen --pbwire_opt=lang=fsharp $(PROTO)
+
+gen-elixir: build
+	mkdir -p ../bindings/elixir/test/gen
+	$(PROTOC) $(OPTS) --pbwire_out=../bindings/elixir/test/gen --pbwire_opt=lang=elixir $(PROTO)
+
+gen-julia: build
+	mkdir -p ../bindings/julia/tests/gen
+	$(PROTOC) $(OPTS) --pbwire_out=../bindings/julia/tests/gen --pbwire_opt=lang=julia $(PROTO)
+
+gen-r: build
+	mkdir -p ../bindings/r/tests/gen
+	$(PROTOC) $(OPTS) --pbwire_out=../bindings/r/tests/gen --pbwire_opt=lang=r $(PROTO)
+
 # Each target needs its language's toolchain plus the shared library, which is
 # why `make codegen-test` at the repo root is not part of the C commit gate.
-test: test-java test-kotlin test-csharp test-dart test-php test-ruby test-python test-node test-rust test-objc test-lua test-go
+test: test-java test-kotlin test-csharp test-dart test-php test-ruby test-python test-node test-rust test-objc test-lua test-go test-swift test-zig test-scala test-clojure test-fsharp test-elixir test-julia test-r
 
 JAVA ?= java
 RUBY ?= ruby
@@ -128,6 +174,9 @@ DART ?= dart
 DOTNET ?= dotnet
 NODE ?= node
 CARGO ?= cargo
+ZIG ?= zig
+JULIA ?= julia
+RSCRIPT ?= Rscript
 UNAME_S := $(shell uname -s)
 ifeq ($(UNAME_S),Darwin)
 LIB := $(CURDIR)/../build/libpbwire.dylib
@@ -182,6 +231,37 @@ test-lua: build
 	LUA=$(LUA) $(MAKE) -C .. lua-bind >/dev/null
 	cd ../bindings/lua && $(LUA) tests/test_generated.lua
 
+SWIFT ?= swift
+ZIG ?= zig
+SCALAC ?= scalac
+ELIXIR ?= elixir
+JULIA ?= julia
+RSCRIPT ?= Rscript
+
+test-swift: build
+	cd ../bindings/swift && $(SWIFT) test --filter GeneratedTest
+
+test-zig: build
+	cd ../bindings/zig && $(ZIG) build generated-test
+
+test-scala: build
+	cd ../bindings/scala && ./build.sh >/dev/null
+
+test-clojure: build
+	cd ../bindings/clojure && ./build.sh >/dev/null
+
+test-fsharp: build
+	cd ../bindings/fsharp && $(DOTNET) run --project generated -- ../c/tests/data/matrix3.bin
+
+test-elixir: build
+	cd ../bindings/elixir && mix test test/generated_test.exs
+
+test-julia: build
+	cd ../bindings/julia && $(JULIA) --project=runtime tests/generated_test.jl
+
+test-r: build
+	cd ../bindings/r && ./build.sh >/dev/null && $(RSCRIPT) tests/generated_test.R
+
 # The real conformance proto (google/protobuf/test_messages_proto3.proto) is
 # the hardest schema the generator meets: maps, oneofs, deep nesting, every
 # scalar kind. Generating models for it must succeed and compile in every
@@ -219,6 +299,22 @@ conformance: build
 		--pbwire_out=build/conformance --pbwire_opt=lang=lua $(CONFORMANCE_PROTO)
 	$(PROTOC) -I../.tmp/protobuf-v36.2/src $(OPTS) \
 		--pbwire_out=build/conformance/go --pbwire_opt=lang=go $(CONFORMANCE_PROTO)
+	$(PROTOC) -I../.tmp/protobuf-v36.2/src $(OPTS) \
+		--pbwire_out=build/conformance --pbwire_opt=lang=swift $(CONFORMANCE_PROTO)
+	$(PROTOC) -I../.tmp/protobuf-v36.2/src $(OPTS) \
+		--pbwire_out=build/conformance --pbwire_opt=lang=zig $(CONFORMANCE_PROTO)
+	$(PROTOC) -I../.tmp/protobuf-v36.2/src $(OPTS) \
+		--pbwire_out=build/conformance --pbwire_opt=lang=scala $(CONFORMANCE_PROTO)
+	$(PROTOC) -I../.tmp/protobuf-v36.2/src $(OPTS) \
+		--pbwire_out=build/conformance --pbwire_opt=lang=clojure $(CONFORMANCE_PROTO)
+	$(PROTOC) -I../.tmp/protobuf-v36.2/src $(OPTS) \
+		--pbwire_out=build/conformance --pbwire_opt=lang=fsharp $(CONFORMANCE_PROTO)
+	$(PROTOC) -I../.tmp/protobuf-v36.2/src $(OPTS) \
+		--pbwire_out=build/conformance --pbwire_opt=lang=elixir $(CONFORMANCE_PROTO)
+	$(PROTOC) -I../.tmp/protobuf-v36.2/src $(OPTS) \
+		--pbwire_out=build/conformance --pbwire_opt=lang=julia $(CONFORMANCE_PROTO)
+	$(PROTOC) -I../.tmp/protobuf-v36.2/src $(OPTS) \
+		--pbwire_out=build/conformance --pbwire_opt=lang=r $(CONFORMANCE_PROTO)
 	@echo "generated models for test_messages_proto3.proto: build/conformance"
 	$(MAKE) conformance-check
 
@@ -249,8 +345,23 @@ conformance-check: build
 	printf '#[path = "../../../codegen/build/conformance/test_messages_proto3_pbwire.rs"]\nmod conf;\n#[test]\nfn conformance_models_compile() { let _ = conf::TestAllTypesProto3::FULL_NAME; }\n' > ../bindings/rust/tests/conf_gen.rs
 	cd ../bindings/rust && $(CARGO) test --test conf_gen
 	rm -f ../bindings/rust/tests/conf_gen.rs
-	@echo "conformance models compile in java, kotlin, c#, dart, php, ruby, python, node, objc, rust, lua, go"
+	$(ZIG) ast-check build/conformance/test_messages_proto3.zig
+	swiftc -parse build/conformance/test_messages_proto3.swift
+	$(RSCRIPT) -e 'invisible(parse("build/conformance/test_messages_proto3_pbwire.R"))'
+	cd ../bindings/julia && $(JULIA) --project=runtime -e 'Meta.parseall(read("../../codegen/build/conformance/test_messages_proto3_pbwire.jl", String))'
+	cd ../bindings/elixir && MIX_ENV=test mix run -e '"../../codegen/build/conformance/test_messages_proto3.ex" |> File.read!() |> Code.string_to_quoted!() |> is_tuple() |> IO.inspect(label: :parses)'
+	mkdir -p build/conformance/scala-out build/conformance/scala-classes
+	javac -nowarn -d build/conformance/scala-out ../bindings/java/runtime/*.java
+	scalac -nowarn -cp build/conformance/scala-out -d build/conformance/scala-classes build/conformance/test_messages_proto3.scala
+	mkdir -p build/conformance/fsharp
+	cp build/conformance/test_messages_proto3.fs build/conformance/fsharp/
+	printf '%s\n' '<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net10.0</TargetFramework><Nullable>enable</Nullable><InvariantGlobalization>true</InvariantGlobalization></PropertyGroup><ItemGroup><Compile Include="test_messages_proto3.fs" /><ProjectReference Include="$(CURDIR)/../bindings/fsharp/runtime/Pbwire.FSharp.fsproj" /></ItemGroup></Project>' > build/conformance/fsharp/conf.fsproj
+	$(DOTNET) build build/conformance/fsharp/conf.fsproj
+	@echo "conformance models compile in java, kotlin, c#, dart, php, ruby, python, node, objc, rust, lua, go, swift, zig, scala, clojure, fsharp, elixir, julia, r"
+	@echo "shortcut: clojure parses but does not compile here (needs the fetched jars); test-clojure compiles the same shape"
 
 .PHONY: all build gen gen-examples test conformance conformance-check $(addprefix gen-,$(LANGS)) \
 	gen-java gen-kotlin gen-csharp gen-dart gen-php gen-ruby gen-python gen-node gen-rust gen-objc gen-lua gen-go \
-	test-java test-kotlin test-csharp test-dart test-php test-ruby test-python test-node test-rust test-objc test-lua test-go
+	gen-swift gen-zig gen-scala gen-clojure gen-fsharp gen-elixir gen-julia gen-r \
+	test-java test-kotlin test-csharp test-dart test-php test-ruby test-python test-node test-rust test-objc test-lua test-go \
+	test-swift test-zig test-scala test-clojure test-fsharp test-elixir test-julia test-r

@@ -6,7 +6,7 @@
 //	protoc --plugin=protoc-gen-pbwire=... \
 //	    --pbwire_out=. --pbwire_opt=lang=java demo.proto
 //
-// Options: lang=java|kotlin|csharp|dart|php|ruby|python|typescript|javascript|rust|objc|lua,
+// Options: lang=java|kotlin|csharp|dart|php|ruby|python|typescript|javascript|rust|objc|lua|go|swift|zig|scala|clojure|fsharp|elixir|julia|r,
 // prefix=<ClassPrefix> (default: CamelCase of the proto package) and
 // dir=<subdir> (place the generated files under a subdirectory).
 package main
@@ -121,7 +121,7 @@ func parseOptions(param string) (gen.Options, error) {
 		}
 	}
 	if opt.Lang == "" {
-		return opt, fmt.Errorf("missing lang= (java, kotlin, csharp, dart, php, ruby, python, typescript, javascript, rust, objc, lua or go)")
+		return opt, fmt.Errorf("missing lang= (java, kotlin, csharp, dart, php, ruby, python, typescript, javascript, rust, objc, lua, go, swift, zig, scala, clojure, fsharp, elixir, julia or r)")
 	}
 	return opt, nil
 }

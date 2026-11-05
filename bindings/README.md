@@ -153,9 +153,10 @@ side by side with the absolute MB/s.
 Every row above also has a generated model from `codegen`: typed
 fields plus `encode`/`decode` over that binding's dynamic API. C keeps
 its own generator (it is ahead-of-time compiled); Go is dynamic-API only
-for now; Erlang keeps gpb. The eight new bindings are dynamic-API only too:
-Elixir keeps `elixir-protobuf`, the rest load a `FileDescriptorSet` — none
-of them has a `codegen` emitter yet.
+for now; Erlang keeps gpb; Elixir keeps `elixir-protobuf` (which is also
+what its `codegen` emitter emits). Every other binding — including Swift,
+Zig, Scala, F#, Clojure, Julia and R — has a `codegen` emitter whose
+output is committed under `tests/gen` and `examples/gen`.
 
 ## Memory: what each binding keeps, and the one rule per row
 
