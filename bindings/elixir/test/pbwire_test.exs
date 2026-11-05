@@ -9,8 +9,9 @@ defmodule PbwireTest do
 
   alias Pbwire.Test.Addressbook.{Person, PhoneNumber, PhoneType}
   alias Pbwire.Test.{Doc, DocKind, Scalars}
+  alias Pbwire.Test.Nested.Doc, as: NestedDoc
 
-  @mods [Person, PhoneNumber, PhoneType, Scalars, Doc, DocKind]
+  @mods [Person, PhoneNumber, PhoneType, Scalars, Doc, DocKind, NestedDoc]
 
   setup do
     :ok = Pbwire.load_schema(@mods)
@@ -155,6 +156,16 @@ defmodule PbwireTest do
     assert Pbwire.decode(bin, Doc) == msg
   end
 
+  test "nested maps round trip, byte-identical to elixir-protobuf" do
+    msg = %NestedDoc{nested: %{"a" => %{"x" => 1, "y" => 2}, "b" => %{}}}
+
+    bin = Pbwire.encode(msg)
+    assert bin == Protobuf.encode(msg)
+    assert Pbwire.decode(bin, NestedDoc) == Protobuf.decode(bin, NestedDoc)
+    assert Pbwire.decode(bin, NestedDoc).nested == msg.nested
+    assert Pbwire.encode(Pbwire.decode(bin, NestedDoc)) == bin
+  end
+
   test "proto3 explicit optional keeps presence of zero" do
     msg = %Doc{comment: "", level: 0}
     bin = Pbwire.encode(msg)
@@ -238,6 +249,12 @@ defmodule PbwireTest do
     assert {:field, :nums, 10, _, :int32, :repeated, [:packed]} = by_name[:nums]
     assert {:field, :kind, 7, _, {:enum, DocKind}, :defaulty, []} = by_name[:kind]
     assert {:field, :attrs, 11, _, {:map, :string, :int32}, :repeated, []} = by_name[:attrs]
+    {:ok, {nested_defs, _}} = Pbwire.Schema.build([NestedDoc])
+    {{:msg, NestedDoc}, [nested_field]} = List.keyfind(nested_defs, {:msg, NestedDoc}, 0)
+
+    assert {:field, :nested, 1, _, {:map, :string, {:map, :string, :int32}}, :repeated, []} =
+             nested_field
+
     assert {:gpb_oneof, :choice, _, members} = by_name[:choice]
     assert Enum.map(members, &elem(&1, 1)) == [:pick_a, :pick_b, :pick_m]
   end

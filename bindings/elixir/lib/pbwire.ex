@@ -176,6 +176,11 @@ defmodule Pbwire do
   defp encode_map_value({:scalar, type}, value, _spec), do: encode_scalar(type, value)
   defp encode_map_value({:enum, _}, value, _spec), do: value
 
+  defp encode_map_value({:map, _, inner_val}, value, spec) do
+    items = if is_map(value), do: Map.to_list(value), else: value || []
+    Enum.map(items, fn {k, v} -> {encode_map_key(k), encode_map_value(inner_val, v, spec)} end)
+  end
+
   defp encode_scalar(:string, value) when is_binary(value) or is_list(value), do: value
   defp encode_scalar(:bytes, value) when is_binary(value) or is_list(value), do: value
   defp encode_scalar(type, :negative_infinity) when type in [:float, :double], do: :"-infinity"
@@ -236,6 +241,10 @@ defmodule Pbwire do
 
   defp decode_map_value({:scalar, type}, :"-infinity", _spec) when type in [:float, :double],
     do: :negative_infinity
+
+  defp decode_map_value({:map, _, inner_val}, values, spec) when is_list(values) do
+    Map.new(values, fn {k, v} -> {decode_map_key(k), decode_map_value(inner_val, v, spec)} end)
+  end
 
   defp decode_map_value(_kind, value, _spec), do: value
 

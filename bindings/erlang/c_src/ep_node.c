@@ -400,11 +400,19 @@ parse_map_type(ErlNifEnv *env, ERL_NIF_TERM term, ep_field_t *field)
         raise_exception(env, array[1]);
     }
 
-    if (enif_get_tuple(env, array[2], &value_arity, to_const(value_array)) && value_arity == 3 && value_array[0] == state->atom_map) {
-        raise_exception(env, array[2]);
-    }
+    /* A map value may itself be a map. The synthesized "v" field is repeated
+     * then, so inner entries merge by key and complete in wire order through
+     * the same paths as any repeated field (fill_default seeds [], the
+     * completion reverses, the encoder iterates the list). A non-map value
+     * keeps occurrence_optional, exactly as before. */
+    {
+        ERL_NIF_TERM v_occ = state->atom_optional;
 
-    return parse_msg_fields(env, enif_make_list2(env, enif_make_tuple7(env, state->atom_field, make_atom(env, "k"), enif_make_uint(env, 1), enif_make_uint(env, 2), array[1], state->atom_optional, enif_make_list(env, 0)), enif_make_tuple7(env, state->atom_field, make_atom(env, "v"), enif_make_uint(env, 2), enif_make_uint(env, 3), array[2], state->atom_optional, enif_make_list(env, 0))), node);
+        if (enif_get_tuple(env, array[2], &value_arity, to_const(value_array)) && value_arity == 3 && value_array[0] == state->atom_map) {
+            v_occ = state->atom_repeated;
+        }
+        return parse_msg_fields(env, enif_make_list2(env, enif_make_tuple7(env, state->atom_field, make_atom(env, "k"), enif_make_uint(env, 1), enif_make_uint(env, 2), array[1], state->atom_optional, enif_make_list(env, 0)), enif_make_tuple7(env, state->atom_field, make_atom(env, "v"), enif_make_uint(env, 2), enif_make_uint(env, 3), array[2], v_occ, enif_make_list(env, 0))), node);
+    }
 }
 
 ERL_NIF_TERM

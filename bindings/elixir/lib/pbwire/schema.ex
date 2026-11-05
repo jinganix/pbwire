@@ -255,7 +255,9 @@ defmodule Pbwire.Schema do
   end
 
   defp value_kind(%{enum?: true, type: {:enum, mod}}), do: {:ok, {{:enum, mod}, [mod]}}
-  defp value_kind(%{map?: true}), do: {:error, "nested maps are not supported"}
+  # A map value may itself be a map: recurse, the NIF synthesizes a repeated
+  # entry field for the inner level (wire shape is entries in entries).
+  defp value_kind(%{map?: true, type: entry}), do: map_kind(entry)
 
   defp value_kind(%{embedded?: true, type: mod}) when is_atom(mod),
     do: {:ok, {{:message, mod}, [mod]}}
@@ -343,4 +345,5 @@ defmodule Pbwire.Schema do
   defp nif_map_value({:scalar, type}), do: type
   defp nif_map_value({:enum, mod}), do: {:enum, mod}
   defp nif_map_value({:message, mod}), do: {:msg, mod}
+  defp nif_map_value({:map, key, val}), do: {:map, key_scalar(key), nif_map_value(val)}
 end
