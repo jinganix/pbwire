@@ -69,6 +69,36 @@ impl std::error::Error for Error {}
 
 pub type Result<T> = std::result::Result<T, Error>;
 
+/// What a generated message's `decode` returns on bad wire bytes: the
+/// prost `DecodeError` shape (`failed to decode Protobuf message: ...`)
+/// over this crate's dynamic errors, so business code treats both alike.
+#[derive(Debug, Clone)]
+pub struct DecodeError {
+    message: String,
+}
+
+impl DecodeError {
+    pub fn new(message: impl Into<String>) -> Self {
+        DecodeError {
+            message: message.into(),
+        }
+    }
+}
+
+impl From<Error> for DecodeError {
+    fn from(err: Error) -> Self {
+        DecodeError::new(err.message)
+    }
+}
+
+impl fmt::Display for DecodeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "failed to decode Protobuf message: {}", self.message)
+    }
+}
+
+impl std::error::Error for DecodeError {}
+
 fn cstr(ptr: *const c_char) -> String {
     if ptr.is_null() {
         String::new()

@@ -4,6 +4,9 @@
 # Typed classes over the dynamic Pbwire runtime: accessors, one encode/decode.
 # Do not edit; regenerate from the .proto instead.
 
+require_relative '../../lib/pbwire'
+require 'base64'
+
 module Pbwire
   module Gen
     # A decoded 32-bit signed field arrives as unsigned 64-bit bits.
@@ -12,11 +15,30 @@ module Pbwire
       value >= 2**31 ? value - 2**32 : value
     end
 
+    # The embedded FileDescriptorSet: no .desc file at use time.
+    DESC_B64_MATRIX3 = "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"
+    @_schemas = {}
+    @_types = {}
+    # Schemas and types are cached per descriptor set, so any number
+    # of generated files share this module without collisions.
+    def self._schema(desc_b64)
+      @_schemas[desc_b64] ||= Pbwire::Schema.from_bytes(Base64.strict_decode64(desc_b64))
+    end
+    def self._type(desc_b64, full)
+      @_types[desc_b64] ||= {}
+      @_types[desc_b64][full] ||= _schema(desc_b64).message(full)
+    end
+
     # structtest.Color3
     module Structtest_Color3
       COLOR3_UNSPECIFIED = 0
       COLOR3_RED = 1
       COLOR3_GREEN = 2
+      REVMAP = {
+        0 => :COLOR3_UNSPECIFIED,
+        1 => :COLOR3_RED,
+        2 => :COLOR3_GREEN,
+      }.freeze
     end
 
     # structtest.Inner3
@@ -39,6 +61,35 @@ module Pbwire
         to_message(schema).encode
       end
 
+      # Embedded-schema facade (no schema argument), mirroring the
+      # google-protobuf gem's Message.encode/decode. One schema object
+      # per file, so nested messages never cross schemas.
+      def self.encode(msg)
+        msg.to_message(Pbwire::Gen._schema(DESC_B64_MATRIX3)).encode
+      rescue NoMethodError => e
+        # A mistyped field trips a presence predicate (.empty?/.zero?)
+        # before the extension sees it; report it as a type error.
+        raise TypeError, e.message
+      end
+
+      # One argument decodes with the embedded schema; two keep
+      # the old (schema, wire) form.
+      def self.decode(a, b = nil)
+        return from_message(Pbwire::Gen._type(DESC_B64_MATRIX3, "structtest.Inner3").decode(a)) if b.nil?
+        from_message(a.message("structtest.Inner3").decode(b))
+      end
+
+      def to_proto
+        self.class.encode(self)
+      end
+
+      def to_h
+        h = {}
+        h[:name] = @name if !name.nil? && !name.empty?
+        h[:value] = @value if !value.zero?
+        h
+      end
+
       def self.from_message(msg)
         new(
           name: msg["name"],
@@ -46,16 +97,13 @@ module Pbwire
         )
       end
 
-      def self.decode(schema, wire)
-        from_message(schema.message("structtest.Inner3").decode(wire))
-      end
     end
 
     # structtest.Scalars3
     class Structtest_Scalars3
       attr_accessor :i32, :i64, :u32, :u64, :s32, :s64, :fx32, :fx64, :sfx32, :sfx64, :f32, :f64, :flag, :str, :color, :inner, :nums, :tags, :inners, :opt_i32, :has_opt_i32, :opt_str, :has_opt_str, :flags
 
-      def initialize(i32: 0, i64: 0, u32: 0, u64: 0, s32: 0, s64: 0, fx32: 0, fx64: 0, sfx32: 0, sfx64: 0, f32: 0.0, f64: 0.0, flag: false, str: nil, color: 0, inner: nil, nums: nil, tags: nil, inners: nil, has_opt_i32: false, opt_i32: 0, has_opt_str: false, opt_str: nil, flags: nil)
+      def initialize(i32: 0, i64: 0, u32: 0, u64: 0, s32: 0, s64: 0, fx32: 0, fx64: 0, sfx32: 0, sfx64: 0, f32: 0.0, f64: 0.0, flag: false, str: nil, color: 0, inner: nil, nums: nil, tags: nil, inners: nil, has_opt_i32: false, opt_i32: nil, has_opt_str: false, opt_str: nil, flags: nil)
         @i32 = i32
         @i64 = i64
         @u32 = u32
@@ -75,9 +123,9 @@ module Pbwire
         @nums = nums || []
         @tags = tags || []
         @inners = inners || []
-        @has_opt_i32 = has_opt_i32
+        @has_opt_i32 = has_opt_i32 || !opt_i32.nil?
         @opt_i32 = opt_i32
-        @has_opt_str = has_opt_str
+        @has_opt_str = has_opt_str || !opt_str.nil?
         @opt_str = opt_str
         @flags = flags || []
       end
@@ -113,6 +161,71 @@ module Pbwire
         to_message(schema).encode
       end
 
+      # Embedded-schema facade (no schema argument), mirroring the
+      # google-protobuf gem's Message.encode/decode. One schema object
+      # per file, so nested messages never cross schemas.
+      def self.encode(msg)
+        msg.to_message(Pbwire::Gen._schema(DESC_B64_MATRIX3)).encode
+      rescue NoMethodError => e
+        # A mistyped field trips a presence predicate (.empty?/.zero?)
+        # before the extension sees it; report it as a type error.
+        raise TypeError, e.message
+      end
+
+      # One argument decodes with the embedded schema; two keep
+      # the old (schema, wire) form.
+      def self.decode(a, b = nil)
+        return from_message(Pbwire::Gen._type(DESC_B64_MATRIX3, "structtest.Scalars3").decode(a)) if b.nil?
+        from_message(a.message("structtest.Scalars3").decode(b))
+      end
+
+      def to_proto
+        self.class.encode(self)
+      end
+
+      def to_h
+        h = {}
+        h[:i32] = @i32 if !i32.zero?
+        h[:i64] = @i64 if !i64.zero?
+        h[:u32] = @u32 if !u32.zero?
+        h[:u64] = @u64 if !u64.zero?
+        h[:s32] = @s32 if !s32.zero?
+        h[:s64] = @s64 if !s64.zero?
+        h[:fx32] = @fx32 if !fx32.zero?
+        h[:fx64] = @fx64 if !fx64.zero?
+        h[:sfx32] = @sfx32 if !sfx32.zero?
+        h[:sfx64] = @sfx64 if !sfx64.zero?
+        h[:f32] = @f32 if !f32.zero?
+        h[:f64] = @f64 if !f64.zero?
+        h[:flag] = @flag if @flag
+        h[:str] = @str if !str.nil? && !str.empty?
+        h[:color] = (Structtest_Color3::REVMAP[@color] || @color) if !color.zero?
+        h[:inner] = @inner.to_h if !inner.nil?
+        h[:nums] = @nums.dup if !nums.empty?
+        h[:tags] = @tags.dup if !tags.empty?
+        h[:inners] = @inners.map(&:to_h) if !inners.empty?
+        h[:opt_i32] = @opt_i32 if @has_opt_i32
+        h[:opt_str] = @opt_str if @has_opt_str
+        h[:flags] = @flags.dup if !flags.empty?
+        h
+      end
+
+      def has_inner?
+        !@inner.nil?
+      end
+
+      def has_inners?
+        !@inners.nil?
+      end
+
+      def has_opt_i32?
+        @has_opt_i32
+      end
+
+      def has_opt_str?
+        @has_opt_str
+      end
+
       def self.from_message(msg)
         new(
           i32: Pbwire::Gen.i32(msg["i32"]),
@@ -135,16 +248,13 @@ module Pbwire
           tags: msg["tags"] || [],
           inners: (msg["inners"] || []).map { |v| Structtest_Inner3.from_message(v) },
           has_opt_i32: !msg["opt_i32"].nil?,
-          opt_i32: Pbwire::Gen.i32(msg["opt_i32"]),
+          opt_i32: (msg["opt_i32"].nil? ? nil : Pbwire::Gen.i32(msg["opt_i32"])),
           has_opt_str: !msg["opt_str"].nil?,
-          opt_str: msg["opt_str"],
+          opt_str: (msg["opt_str"].nil? ? nil : msg["opt_str"]),
           flags: msg["flags"] || [],
         )
       end
 
-      def self.decode(schema, wire)
-        from_message(schema.message("structtest.Scalars3").decode(wire))
-      end
     end
 
   end

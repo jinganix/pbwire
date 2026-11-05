@@ -91,7 +91,14 @@ anything. Nothing is shared, so one tree belongs to one thread, like the C core.
 
 ## Typed models
 
-`protoc-gen-pbwire-typed` (in `../typed`) generates sealed classes with typed
-fields, `Encode(Schema)` and `static Decode`. The committed output is
-`typed/gen/` for tests and `examples/gen/` for the example; `examples/Roundtrip.cs`
-assigns typed fields only. See `../typed/README.md`.
+`protoc-gen-pbwire-typed` (in `../typed`) generates Google.Protobuf-shaped
+sealed classes: the same property names, `RepeatedField<T>` for repeated,
+`KindOneofCase` for oneofs, `Has`+`Clear` for optional, and
+`Parser.ParseFrom` / `ToByteArray` / `WriteTo` / `CalculateSize` /
+`Clone` / `Equals` over the embedded schema — no schema argument at use
+sites. Deliberate deltas from protoc output: no `IMessage` (a streaming
+`MergeFrom` would need a second wire reader) and no `Descriptor`; use the
+dynamic `Schema` for reflection. The committed output is `typed/gen/` (tests)
+and `examples/gen/` (example); `oracle/gen_oracle/` holds the pinned
+protoc output (`extern alias Oracle` in `TypedTest.cs` proves byte and field
+parity, T1–T6). See `../typed/README.md`.

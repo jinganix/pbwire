@@ -9,25 +9,91 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
-func rubyFiles(f *model.File) []File {
+func rubyFiles(f *model.File, opt Options) []File {
 	var b strings.Builder
 	b.WriteString("# frozen_string_literal: true\n\n")
 	b.WriteString(headerP(f, "#", "Typed classes over the dynamic Pbwire runtime: accessors, one encode/decode."))
+	b.WriteString("require_relative '../../lib/pbwire'\n")
+	b.WriteString("require 'base64'\n\n")
 	b.WriteString("module Pbwire\n  module Gen\n")
 	b.WriteString("    # A decoded 32-bit signed field arrives as unsigned 64-bit bits.\n")
 	b.WriteString("    def self.i32(value)\n      value = value.to_i\n      value >= 2**31 ? value - 2**32 : value\n    end\n\n")
+	fmt.Fprintf(&b, "    # The embedded FileDescriptorSet: no .desc file at use time.\n")
+	fmt.Fprintf(&b, "    DESC_B64_%s = %q\n", strings.ToUpper(base(f)), opt.DescSetB64)
+	b.WriteString("    @_schemas = {}\n")
+	b.WriteString("    @_types = {}\n")
+	b.WriteString("    # Schemas and types are cached per descriptor set, so any number\n")
+	b.WriteString("    # of generated files share this module without collisions.\n")
+	b.WriteString("    def self._schema(desc_b64)\n")
+	b.WriteString("      @_schemas[desc_b64] ||= Pbwire::Schema.from_bytes(Base64.strict_decode64(desc_b64))\n")
+	b.WriteString("    end\n")
+	b.WriteString("    def self._type(desc_b64, full)\n")
+	b.WriteString("      @_types[desc_b64] ||= {}\n")
+	b.WriteString("      @_types[desc_b64][full] ||= _schema(desc_b64).message(full)\n")
+	b.WriteString("    end\n\n")
 	for _, e := range f.Enums {
 		fmt.Fprintf(&b, "    # %s\n    module %s\n", e.Full, className(f, e.Name))
 		for _, v := range e.Values {
 			fmt.Fprintf(&b, "      %s = %d\n", v.Name, v.Number)
 		}
+		b.WriteString("      REVMAP = {\n")
+		for _, v := range e.Values {
+			fmt.Fprintf(&b, "        %d => :%s,\n", v.Number, v.Name)
+		}
+		b.WriteString("      }.freeze\n")
 		b.WriteString("    end\n\n")
 	}
 	for _, m := range f.Messages {
 		writeRubyMessage(&b, f, m)
 	}
+	// Nested types are reachable through their parents (Oneof1::Inner),
+	// the way protoc's ruby_out nests them.
+	known := map[string]bool{}
+	for _, m := range f.Messages {
+		known[m.Name] = true
+	}
+	for _, e := range f.Enums {
+		known[e.Name] = true
+	}
+	for _, m := range f.Messages {
+		aliasRuby(&b, f, known, m.Name)
+	}
+	for _, e := range f.Enums {
+		aliasRuby(&b, f, known, e.Name)
+	}
 	b.WriteString("  end\nend\n")
 	return []File{{Name: base(f) + ".rb", Content: b.String()}}
+}
+
+// aliasRuby re-attaches nested types to their parents. Both sides carry
+// the package prefix (className), since that is the declared variable.
+func aliasRuby(b *strings.Builder, f *model.File, known map[string]bool, flat string) {
+	varOf := func(local string) string {
+		for _, m := range f.Messages {
+			if m.Name == local {
+				return className(f, local)
+			}
+		}
+		for _, e := range f.Enums {
+			if e.Name == local {
+				return className(f, local)
+			}
+		}
+		return local
+	}
+	name := flat
+	for {
+		idx := strings.LastIndex(name, "_")
+		if idx < 0 {
+			return
+		}
+		parent, child := name[:idx], name[idx+1:]
+		if known[parent] {
+			fmt.Fprintf(b, "    %s::%s = %s\n", varOf(parent), child, varOf(flat))
+			return
+		}
+		name = parent
+	}
 }
 
 func writeRubyMessage(b *strings.Builder, f *model.File, m model.Message) {
@@ -46,7 +112,9 @@ func writeRubyMessage(b *strings.Builder, f *model.File, m model.Message) {
 		if field.NeedsHas {
 			names = append(names, ":has_"+name)
 			params = append(params, fmt.Sprintf("has_%s: false", name))
-			assigns = append(assigns, fmt.Sprintf("@has_%s = has_%s", name, name))
+			// A non-nil value implies presence (the gem's rule); the flag
+			// only matters to spell it out. Oneof members work the same way.
+			assigns = append(assigns, fmt.Sprintf("@has_%s = has_%s || !%s.nil?", name, name, name))
 		}
 		switch {
 		case field.Repeated:
@@ -56,6 +124,9 @@ func writeRubyMessage(b *strings.Builder, f *model.File, m model.Message) {
 			assigns = append(assigns, fmt.Sprintf("@%s = %s || []", name, name))
 			continue
 		case field.Message != "":
+			params = append(params, fmt.Sprintf("%s: nil", name))
+		case field.NeedsHas:
+			/* Optional value: nil default, presence follows the value. */
 			params = append(params, fmt.Sprintf("%s: nil", name))
 		case field.Kind == protoreflect.BoolKind:
 			params = append(params, fmt.Sprintf("%s: false", name))
@@ -79,6 +150,39 @@ func writeRubyMessage(b *strings.Builder, f *model.File, m model.Message) {
 	for _, line := range assigns {
 		fmt.Fprintf(b, "        %s\n", line)
 	}
+	// Oneof: at most one member is set; the last one in declaration order wins,
+	// matching the wire merge and the gem's assignment semantics.
+	oneofs := map[string][]model.Field{}
+	var order []string
+	for _, field := range m.Fields {
+		if field.Skip != "" || field.Oneof == "" {
+			continue
+		}
+		if _, ok := oneofs[field.Oneof]; !ok {
+			order = append(order, field.Oneof)
+		}
+		oneofs[field.Oneof] = append(oneofs[field.Oneof], field)
+	}
+	for _, o := range order {
+		members := oneofs[o]
+		if len(members) < 2 {
+			continue
+		}
+		fmt.Fprintf(b, "        _last_%s = nil\n", o)
+		for _, field := range members {
+			name := rubyName(field.Name)
+			fmt.Fprintf(b, "        _last_%s = :%s unless @%s.nil?\n", o, name, name)
+		}
+		for _, field := range members {
+			name := rubyName(field.Name)
+			fmt.Fprintf(b, "        if _last_%s && _last_%s != :%s\n", o, o, name)
+			fmt.Fprintf(b, "          @%s = nil\n", name)
+			if field.NeedsHas {
+				fmt.Fprintf(b, "          @has_%s = false\n", name)
+			}
+			b.WriteString("        end\n")
+		}
+	}
 	b.WriteString("      end\n\n")
 
 	fmt.Fprintf(b, "      def to_message(schema)\n")
@@ -91,17 +195,33 @@ func writeRubyMessage(b *strings.Builder, f *model.File, m model.Message) {
 		cond := rubyPresent(field, name)
 		switch {
 		case field.Repeated && field.Message != "":
-			fmt.Fprintf(b, "        msg[%q] = @%s.map { |v| v.to_message(schema) } if %s\n", name, name, cond)
+			fmt.Fprintf(b, "        msg[%q] = @%s.map { |v| v.to_message(schema) } if %s\n", field.Name, name, cond)
 		case field.Repeated:
-			fmt.Fprintf(b, "        msg[%q] = @%s if %s\n", name, name, cond)
+			fmt.Fprintf(b, "        msg[%q] = @%s if %s\n", field.Name, name, cond)
 		case field.Message != "":
-			fmt.Fprintf(b, "        msg[%q] = @%s.to_message(schema) if %s\n", name, name, cond)
+			fmt.Fprintf(b, "        msg[%q] = @%s.to_message(schema) if %s\n", field.Name, name, cond)
 		default:
-			fmt.Fprintf(b, "        msg[%q] = @%s if %s\n", name, name, cond)
+			fmt.Fprintf(b, "        msg[%q] = @%s if %s\n", field.Name, name, cond)
 		}
 	}
 	b.WriteString("        msg\n      end\n\n")
 	b.WriteString("      def encode(schema)\n        to_message(schema).encode\n      end\n\n")
+	b.WriteString("      # Embedded-schema facade (no schema argument), mirroring the\n")
+	b.WriteString("      # google-protobuf gem's Message.encode/decode. One schema object\n")
+	b.WriteString("      # per file, so nested messages never cross schemas.\n")
+	descConst := "DESC_B64_" + strings.ToUpper(base(f))
+	b.WriteString("      def self.encode(msg)\n        msg.to_message(Pbwire::Gen._schema(" + descConst + ")).encode\n      rescue NoMethodError => e\n")
+	b.WriteString("        # A mistyped field trips a presence predicate (.empty?/.zero?)\n")
+	b.WriteString("        # before the extension sees it; report it as a type error.\n")
+	b.WriteString("        raise TypeError, e.message\n      end\n\n")
+	b.WriteString("      # One argument decodes with the embedded schema; two keep\n")
+	b.WriteString("      # the old (schema, wire) form.\n")
+	fmt.Fprintf(b, "      def self.decode(a, b = nil)\n")
+	fmt.Fprintf(b, "        return from_message(Pbwire::Gen._type(%s, %q).decode(a)) if b.nil?\n", descConst, m.Full)
+	fmt.Fprintf(b, "        from_message(a.message(%q).decode(b))\n      end\n\n", m.Full)
+	b.WriteString("      def to_proto\n        self.class.encode(self)\n      end\n\n")
+	writeRubyToH(b, f, m)
+	writeRubyHas(b, m)
 
 	fmt.Fprintf(b, "      def self.from_message(msg)\n")
 	fmt.Fprintf(b, "        new(\n")
@@ -120,9 +240,59 @@ func writeRubyMessage(b *strings.Builder, f *model.File, m model.Message) {
 		fmt.Fprintf(b, "          %s,\n", strings.Join(args, ",\n          "))
 	}
 	b.WriteString("        )\n      end\n\n")
-	fmt.Fprintf(b, "      def self.decode(schema, wire)\n")
-	fmt.Fprintf(b, "        from_message(schema.message(%q).decode(wire))\n      end\n", m.Full)
 	b.WriteString("    end\n\n")
+}
+
+// writeRubyToH emits #to_h: present fields only, proto-name symbol keys,
+// enums as name Symbols, nested messages as hashes. Mirrors the gem's to_h.
+func writeRubyToH(b *strings.Builder, f *model.File, m model.Message) {
+	b.WriteString("      def to_h\n        h = {}\n")
+	for _, field := range m.Fields {
+		if field.Skip != "" {
+			continue
+		}
+		name := rubyName(field.Name)
+		cond := rubyPresent(field, name)
+		key := fmt.Sprintf(":%s", field.Name)
+		switch {
+		case field.Repeated && field.Message != "":
+			fmt.Fprintf(b, "        h[%s] = @%s.map(&:to_h) if %s\n", key, name, cond)
+		case field.Repeated:
+			fmt.Fprintf(b, "        h[%s] = @%s.dup if %s\n", key, name, cond)
+		case field.Message != "":
+			fmt.Fprintf(b, "        h[%s] = @%s.to_h if %s\n", key, name, cond)
+		case field.Kind == protoreflect.EnumKind && field.Enum != "":
+			fmt.Fprintf(b, "        h[%s] = (%s::REVMAP[@%s] || @%s) if %s\n",
+				key, className(f, field.Enum), name, name, cond)
+		case field.Kind == protoreflect.EnumKind:
+			fmt.Fprintf(b, "        h[%s] = @%s if %s\n", key, name, cond)
+		default:
+			fmt.Fprintf(b, "        h[%s] = @%s if %s\n", key, name, cond)
+		}
+	}
+	b.WriteString("        h\n      end\n\n")
+}
+
+// writeRubyHas emits has_<field>? for presence-carrying fields only, like
+// the gem (implicit-presence fields have no predicate). Presence answers the
+// write semantic: the has_ flag the constructor took.
+func writeRubyHas(b *strings.Builder, m model.Message) {
+	for _, field := range m.Fields {
+		if field.Skip != "" {
+			continue
+		}
+		if field.Message == "" && !field.NeedsHas && !field.Required {
+			continue
+		}
+		name := rubyName(field.Name)
+		if field.Required {
+			fmt.Fprintf(b, "      def has_%s?\n        true\n      end\n\n", name)
+		} else if field.NeedsHas {
+			fmt.Fprintf(b, "      def has_%s?\n        @has_%s\n      end\n\n", name, name)
+		} else {
+			fmt.Fprintf(b, "      def has_%s?\n        !@%s.nil?\n      end\n\n", name, name)
+		}
+	}
 }
 
 // rubyName keeps a proto field name usable as a Ruby method and keyword
@@ -161,6 +331,12 @@ func rubyPresent(field model.Field, name string) string {
 func rubyFromMessage(f *model.File, field model.Field) string {
 	key := fmt.Sprintf("msg[%q]", field.Name)
 	switch {
+	case field.NeedsHas:
+		conv := key
+		if rubySigned32(field) {
+			conv = fmt.Sprintf("Pbwire::Gen.i32(%s)", key)
+		}
+		return fmt.Sprintf("(%s.nil? ? nil : %s)", key, conv)
 	case field.Repeated && field.Message != "":
 		return fmt.Sprintf("(%s || []).map { |v| %s.from_message(v) }", key, className(f, field.Message))
 	case field.Repeated && rubySigned32(field):
