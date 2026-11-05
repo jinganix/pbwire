@@ -20,6 +20,19 @@
       <url>https://www.apache.org/licenses/LICENSE-2.0</url>
     </license>
   </licenses>
+  <developers>
+    <developer>
+      <id>jinganix</id>
+      <name>jinganix</name>
+      <url>https://github.com/jinganix</url>
+    </developer>
+  </developers>
+  <scm>
+    <url>https://github.com/jinganix/pbwire</url>
+    <connection>scm:git:git://github.com/jinganix/pbwire.git</connection>
+    <developerConnection>scm:git:ssh://github.com/jinganix/pbwire.git</developerConnection>
+    <tag>HEAD</tag>
+  </scm>
 
   <!-- No maven.compiler.release here: the Kotlin compiler does not read it,
        and the javadoc plugin would inherit it and fail on a JDK older than
