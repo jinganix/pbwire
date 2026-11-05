@@ -26,7 +26,7 @@ llms.txt export-ignore
 /bindings/python export-ignore
 /bindings/ruby export-ignore
 /bindings/rust export-ignore
-/bindings/typed export-ignore
+/codegen export-ignore
 
 # The C binding minus its test oracle: tests/data/matrix3.* is what the PHP
 # self-checks compare against, so it stays.

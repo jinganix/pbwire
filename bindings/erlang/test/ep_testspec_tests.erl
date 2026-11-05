@@ -1,6 +1,6 @@
 %% TESTSPEC T1-T6 for the Erlang binding, see
-%% bindings/typed/testdata/TESTSPEC.md. Every mode is asserted explicitly
-%% against the shared fixtures in bindings/typed/testdata:
+%% codegen/testdata/TESTSPEC.md. Every mode is asserted explicitly
+%% against the shared fixtures in codegen/testdata:
 %%
 %%   T1  encode of the vectors-built message == pinned matrix3.bin bytes
 %%   T2  decode of matrix3.bin == vectors.json, field by field
@@ -54,7 +54,7 @@ ancestors(Dir, N) ->
     end.
 
 vectors_path() ->
-    find_fixture(["bindings/typed/testdata/vectors.json",
+    find_fixture(["codegen/testdata/vectors.json",
         "typed/testdata/vectors.json"]).
 
 %% matrix3.bin lives next to matrix3.proto; vectors.json only records it as

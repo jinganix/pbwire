@@ -1,4 +1,4 @@
-// Typed-compat check for the Go binding (TESTSPEC T1–T6, vectors.json as
+// Generated-compat check for the Go binding (TESTSPEC T1–T6, vectors.json as
 // the single source of truth):
 //
 //	T1  generated Marshal == pinned protoc reference bytes
@@ -47,12 +47,12 @@ var reference []byte
 
 func testdata(t *testing.T, rel string) string {
 	t.Helper()
-	return filepath.Join(filepath.Dir(callerFile(t)), "..", "..", "typed", "testdata", rel)
+	return filepath.Join(filepath.Dir(callerFile(t)), "..", "..", "..", "codegen", "testdata", rel)
 }
 
 func loadVectors(t *testing.T) {
 	t.Helper()
-	td := filepath.Join(filepath.Dir(callerFile(t)), "..", "..", "typed", "testdata")
+	td := filepath.Join(filepath.Dir(callerFile(t)), "..", "..", "..", "codegen", "testdata")
 	raw, err := os.ReadFile(filepath.Join(td, "vectors.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -62,8 +62,8 @@ func loadVectors(t *testing.T) {
 	}
 	ref, err := os.ReadFile(filepath.Join(td, "matrix3.bin"))
 	if err != nil {
-		// vectors.json references ../../c/tests/data from the testdata dir
-		ref, err = os.ReadFile(filepath.Join(td, "..", "..", "c", "tests", "data", "matrix3.bin"))
+		// vectors.json references ../../bindings/c/tests/data from the testdata dir
+		ref, err = os.ReadFile(filepath.Join(td, "..", "..", "bindings", "c", "tests", "data", "matrix3.bin"))
 		if err != nil {
 			t.Fatal(err)
 		}

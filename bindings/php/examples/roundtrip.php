@@ -11,7 +11,7 @@ declare(strict_types=1);
  */
 
 require_once __DIR__ . '/../runtime/pbwire.php';
-require_once __DIR__ . '/../runtime/typed.php';
+require_once __DIR__ . '/../runtime/generated.php';
 require_once __DIR__ . '/gen/addressbook.php';
 
 use Pbwire\Gen\Tutorial_AddressBook;

@@ -167,10 +167,10 @@ Known limits:
 - `float` values are stored as 32-bit floats, `double` as 64-bit; nothing is
   widened silently.
 
-## Typed models
+## Generated models
 
-`protoc-gen-pbwire-typed` (in `../typed`) generates `NSObject` subclasses with
+`protoc-gen-pbwire` (in `../../codegen`) generates `NSObject` subclasses with
 typed properties (including `NSArray` for repeated fields), enum constants and
 `-encodeWithSchema:error:` / `+decodeWithSchema:data:error:`. The committed
 output is `tests/gen/` and `examples/gen/`; `examples/roundtrip.m` assigns typed
-properties only. See `../typed/README.md`.
+properties only. See `../../codegen/README.md`.

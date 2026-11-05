@@ -79,9 +79,9 @@ marshalling cost, and the JVM is the same host either way. The ownership and
 threading rules are the Java binding's: a `Schema` or `Message` belongs to one
 thread, `use`/`close` frees a root, and a nested message is a view of its parent.
 
-## Typed models
+## Generated models
 
-`protoc-gen-pbwire-typed` (in `../typed`) generates Kotlin `data class`es with
+`protoc-gen-pbwire` (in `../../codegen`) generates Kotlin `data class`es with
 typed properties, `fun encode(schema)` and a `companion object { fun decode }`.
 The committed output is `tests/gen/`; `examples/Roundtrip.kt` uses only typed
-assignments. See `../typed/README.md`.
+assignments. See `../../codegen/README.md`.

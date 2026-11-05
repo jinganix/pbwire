@@ -1,6 +1,6 @@
 'use strict';
 
-/* Typed-compat check for the Node binding (TESTSPEC T1–T6, vectors.json as
+/* Generated-compat check for the Node binding (TESTSPEC T1–T6, vectors.json as
  * the single source of truth):
  *
  *   T1  generated encode == pinned protoc reference bytes
@@ -22,7 +22,7 @@ const test = require('node:test');
 
 const HERE = __dirname;
 const VECTORS = JSON.parse(fs.readFileSync(
-  path.join(HERE, '..', '..', 'typed', 'testdata', 'vectors.json'), 'utf8'));
+  path.join(HERE, '..', '..', '..', 'codegen', 'testdata', 'vectors.json'), 'utf8'));
 const ORACLE_PIN = '8.8.1';
 
 const protobufjs = require(path.join('..', 'benchmarks', 'node_modules', 'protobufjs'));
@@ -30,7 +30,7 @@ assert.equal(require(path.join('..', 'benchmarks', 'node_modules', 'protobufjs',
   ORACLE_PIN, 'protobufjs oracle pin drifted; see testdata/ORACLES.md');
 
 function vectorsBin(rel) {
-  return fs.readFileSync(path.join(HERE, '..', '..', 'typed', 'testdata', rel));
+  return fs.readFileSync(path.join(HERE, '..', '..', '..', 'codegen', 'testdata', rel));
 }
 
 function buildScalars(gen, v) {
@@ -158,7 +158,7 @@ test('T1+T2+T4 oneof1 extra through the generated facade', () => {
 test('T4 differential vs protobufjs', () => {
   const gen = require(path.join(HERE, 'gen', 'matrix3.js'));
   const root = protobufjs.parse(fs.readFileSync(
-    path.join(HERE, '..', '..', 'typed', 'testdata', '..', '..', 'c', 'tests', 'data', 'matrix3.proto'),
+    path.join(HERE, '..', '..', '..', 'codegen', 'testdata', '..', '..', 'bindings', 'c', 'tests', 'data', 'matrix3.proto'),
     'utf8')).root;
   const PType = root.lookupType('structtest.Scalars3');
   const ref = vectorsBin(VECTORS.reference.bin);

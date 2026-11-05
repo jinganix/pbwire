@@ -4,7 +4,7 @@
 pbwire C core statically. No gems at run time.
 
 Most code never touches the dynamic surface: generate a gem-shaped facade
-once (`make -C bindings/typed gen-ruby`) and use it like the library it
+once (`make -C codegen gen-ruby`) and use it like the library it
 mirrors — same `new`/`encode`/`decode`/`to_h` calls, same observable
 behavior, but the wire format stays in the C core:
 
@@ -238,9 +238,9 @@ tests need no `protoc`):
 (cd bindings/ruby/test/data && protoc --descriptor_set_out=sample.desc sample.proto)
 ```
 
-## Typed models
+## Generated models
 
-`protoc-gen-pbwire-typed` (in `../typed`) generates classes with keyword-argument
+`protoc-gen-pbwire` (in `../../codegen`) generates classes with keyword-argument
 constructors and accessors, `#encode(schema)` and `.decode(schema, wire)`. The
 committed output is `test/gen/` and `examples/gen/`; `examples/roundtrip.rb`
-uses typed assignments only. See `../typed/README.md`.
+uses typed assignments only. See `../../codegen/README.md`.

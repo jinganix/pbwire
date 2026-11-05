@@ -161,10 +161,10 @@ its serialization re-encodes every field from its own structs where a parsed
 sides pay for every dict, string and int; that cost is `malloc`-bound and
 nobody can avoid it.
 
-## Typed models
+## Generated models
 
-`protoc-gen-pbwire-typed` (in `../typed`) generates dataclasses with type
+`protoc-gen-pbwire` (in `../../codegen`) generates dataclasses with type
 annotations plus `to_dict()`/`from_dict()`, and `encode(msg_type)` /
 `decode(msg_type, wire)` on top of the dict API. The committed output is
 `tests/gen/` and `examples/gen/`; `examples/addressbook.py` uses the dataclasses
-only. See `../typed/README.md`.
+only. See `../../codegen/README.md`.

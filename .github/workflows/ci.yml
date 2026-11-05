@@ -92,8 +92,8 @@ jobs:
           sudo ln -sf /usr/bin/clang-format-20 /usr/local/bin/clang-format
           make format-check
 
-  typed:
-    name: Typed models (regenerate + Python, Node, Ruby, PHP checks)
+  codegen:
+    name: Generated models (regenerate + Python, Node, Ruby, PHP checks)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -103,16 +103,16 @@ jobs:
           cache: false
       - name: Install protoc
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
-      - name: Check the typed plugin's formatting
+      - name: Check the codegen plugin's formatting
         run: |
-          out=$(gofmt -l bindings/typed)
+          out=$(gofmt -l codegen)
           if [ -n "$out" ]; then echo "$out"; exit 1; fi
       - name: Committed models are up to date
         run: |
-          make typed-gen
+          make codegen
           git diff --exit-code
-      - name: Typed model tests (Ruby, PHP, Node, Python)
-        run: make -C bindings/typed test-ruby test-php test-node test-python
+      - name: Generated model tests (Ruby, PHP, Node, Python)
+        run: make -C codegen test-ruby test-php test-node test-python
 
   go:
     name: Go binding

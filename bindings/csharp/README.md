@@ -89,16 +89,16 @@ still the caller's promise that nothing else uses it. A nested message is a view
 of its parent, holds it alive through a `Parent` reference, and never frees
 anything. Nothing is shared, so one tree belongs to one thread, like the C core.
 
-## Typed models
+## Generated models
 
-`protoc-gen-pbwire-typed` (in `../typed`) generates Google.Protobuf-shaped
+`protoc-gen-pbwire` (in `../../codegen`) generates Google.Protobuf-shaped
 sealed classes: the same property names, `RepeatedField<T>` for repeated,
 `KindOneofCase` for oneofs, `Has`+`Clear` for optional, and
 `Parser.ParseFrom` / `ToByteArray` / `WriteTo` / `CalculateSize` /
 `Clone` / `Equals` over the embedded schema — no schema argument at use
 sites. Deliberate deltas from protoc output: no `IMessage` (a streaming
 `MergeFrom` would need a second wire reader) and no `Descriptor`; use the
-dynamic `Schema` for reflection. The committed output is `typed/gen/` (tests)
+dynamic `Schema` for reflection. The committed output is `generated/gen/` (tests)
 and `examples/gen/` (example); `oracle/gen_oracle/` holds the pinned
-protoc output (`extern alias Oracle` in `TypedTest.cs` proves byte and field
-parity, T1–T6). See `../typed/README.md`.
+protoc output (`extern alias Oracle` in `GeneratedTest.cs` proves byte and field
+parity, T1–T6). See `../../codegen/README.md`.
