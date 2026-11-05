@@ -2,7 +2,7 @@
 //!
 //! T1  generated `encode_to_vec` == pinned protoc reference bytes
 //! T2  `decode` of the reference reads every fixture value back
-//!     (literals mirror `bindings/typed/testdata/vectors.json`; the
+//!     (literals mirror `codegen/testdata/vectors.json`; the
 //!     binary reference is the authority, asserted byte-for-byte in T1)
 //! T3  `default()` encodes empty; explicit optional zero round-trips
 //! T4  differential vs the pinned prost oracle: same bytes, same fields,
@@ -32,7 +32,7 @@ mod oracle1 {
 use matrix3::{Color3, Inner3, Scalars3};
 
 const ORACLE: &[u8] = include_bytes!("../../c/tests/data/matrix3.bin");
-const ORACLE_ONEOF: &[u8] = include_bytes!("../../typed/testdata/oneof1.bin");
+const ORACLE_ONEOF: &[u8] = include_bytes!("../../../codegen/testdata/oneof1.bin");
 
 fn build() -> Scalars3 {
     Scalars3 {

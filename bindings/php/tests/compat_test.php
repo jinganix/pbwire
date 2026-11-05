@@ -40,7 +40,7 @@ spl_autoload_register(static function (string $class) use ($protoSrc): void {
 });
 
 require_once __DIR__ . '/../runtime/pbwire.php';
-require_once __DIR__ . '/../runtime/typed.php';
+require_once __DIR__ . '/../runtime/generated.php';
 require_once __DIR__ . '/gen/matrix3.php';
 require_once __DIR__ . '/gen/oneof1.php';
 
@@ -86,7 +86,7 @@ check($tag === ORACLE_PIN, "oracle checkout tag is " . ORACLE_PIN . " (got $tag)
 $protoc = trim((string) shell_exec('protoc --version 2>/dev/null'));
 check(str_contains($protoc, '36.2'), "protoc is 36.2 (got $protoc)");
 
-$testdata = __DIR__ . '/../../typed/testdata';
+$testdata = __DIR__ . '/../../../codegen/testdata';
 $vectors = json_decode((string) file_get_contents($testdata . '/vectors.json'), true);
 $reference = (string) file_get_contents(dirname(__DIR__, 2) . '/c/tests/data/matrix3.bin');
 $referenceOneof = (string) file_get_contents($testdata . '/oneof1.bin');

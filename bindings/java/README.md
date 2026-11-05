@@ -147,7 +147,7 @@ while a dynamic codec pays a presence gate, a type dispatch and tag loads per
 field (~80 ns including the `byte[]` copy). That floor is structural, not
 tuning: the per-field work left -- loads, one `switch`, one call -- is what a
 generated writer avoids by knowing every field at compile time, a trade the
-typed models (`bindings/typed`) also make by wrapping this same dynamic API.
+generated models (`codegen`) also make by wrapping this same dynamic API.
 
 ## Layout
 
@@ -202,12 +202,12 @@ protoc --descriptor_set_out=tests/data/sample.desc --include_imports \
 handled) until the thread dies. Keep request threads off the binding or reuse
   a fixed pool.
 
-## Typed models
+## Generated models
 
-`protoc-gen-pbwire-typed` (in `../typed`) generates one Java class per message:
+`protoc-gen-pbwire` (in `../../codegen`) generates one Java class per message:
 typed public fields plus `encode(Schema)` / `static decode(Schema, byte[])`.
 The committed output is `tests/gen/`; `examples/Roundtrip.java` and
-`tests/TestTyped.java` use only typed assignments:
+`tests/TestGenerated.java` use only typed assignments:
 
 ```java
 Tutorial_Person person = new Tutorial_Person();
@@ -216,5 +216,5 @@ person.id = 1;
 byte[] wire = person.encode(schema);
 ```
 
-See `../typed/README.md` for regeneration (`make typed-gen`) and tests
-(`make typed-test`).
+See `../../codegen/README.md` for regeneration (`make codegen`) and tests
+(`make codegen-test`).

@@ -159,7 +159,7 @@ available, the same four benchmark tiers — see
 ```bash
 make python-test ruby-test node-test objc-test java-test kotlin-test php-test dart-test rust-test csharp-test
 make erlang-test                 # EUnit + NIF C tests
-make typed-test                  # the typed model test of every binding
+make codegen-test                  # the generated model test of every binding
 make conformance-python          # official suite through the Python binding
 make conformance-ruby            # official binary suite through the Ruby binding
 make conformance-java            # official binary suite through the Java binding

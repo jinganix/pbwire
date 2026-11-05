@@ -1,4 +1,4 @@
-"""Typed-compat check for the Python binding (TESTSPEC T1–T6, vectors.json as
+"""Generated-compat check for the Python binding (TESTSPEC T1–T6, vectors.json as
 the single source of truth):
 
   T1  generated SerializeToString == pinned protoc reference bytes
@@ -33,7 +33,7 @@ import oneof1_pbwire as t1  # noqa: E402
 
 ORACLE_PIN = "7.36.2"
 
-TESTDATA = os.path.join(HERE, "..", "..", "typed", "testdata")
+TESTDATA = os.path.join(HERE, "..", "..", "..", "codegen", "testdata")
 with open(os.path.join(TESTDATA, "vectors.json")) as f:
     VECTORS = json.load(f)
 

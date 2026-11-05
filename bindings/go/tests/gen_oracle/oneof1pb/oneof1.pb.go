@@ -1,4 +1,4 @@
-// Small oneof + nesting fixture for the typed compat tests (TESTSPEC T1-T5
+// Small oneof + nesting fixture for the generated compat tests (TESTSPEC T1-T5
 // extras). Kept in testdata so every binding shares the same schema, values
 // and reference bytes.
 

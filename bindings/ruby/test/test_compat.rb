@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-# Typed-compat check for the Ruby binding (TESTSPEC T1–T6, vectors.json as
+# Generated-compat check for the Ruby binding (TESTSPEC T1–T6, vectors.json as
 # the single source of truth):
 #
 #   T1  generated encode == pinned protoc reference bytes
@@ -25,7 +25,7 @@ require 'oneof1'
 
 ORACLE_PIN = '4.36.2'
 
-TESTDATA = File.expand_path('../../typed/testdata', __dir__)
+TESTDATA = File.expand_path('../../../codegen/testdata', __dir__)
 VECTORS = JSON.parse(File.read(File.join(TESTDATA, 'vectors.json')))
 
 CHECKS = [0]

@@ -393,7 +393,7 @@ php-ext:
 
 php-ext-test: php-ext shared
 	$(PHP) -d extension=$(CURDIR)/bindings/php/ext/modules/pbwire.so bindings/php/tests/test.php
-	$(PHP) -d extension=$(CURDIR)/bindings/php/ext/modules/pbwire.so bindings/php/tests/typed_test.php
+	$(PHP) -d extension=$(CURDIR)/bindings/php/ext/modules/pbwire.so bindings/php/tests/generated_test.php
 
 dart-test: shared
 	cd bindings/dart && $(DART) pub get >/dev/null
@@ -452,22 +452,22 @@ python-bench: python-bind bindings/python/benchmarks/gen/matrix3_pb2.py
 difftest: $(BENCH_BIN)
 	./$(BENCH_BIN) difftest
 
-# Typed message models (bindings/typed): one protoc plugin that emits typed
+# Generated message models (codegen): one protoc plugin that emits generated
 # message definitions per language, on top of each binding's dynamic API (no
-# second wire implementation). `typed-gen` regenerates the committed models,
-# `typed-test` runs every binding's typed test, `typed-conformance` generates
+# second wire implementation). `codegen` regenerates the committed models,
+# `codegen-test` runs every binding's generated test, `codegen-conformance` generates
 # models for the real conformance proto (needs `make conformance-setup`).
-typed-gen:
-	$(MAKE) -C bindings/typed gen
+codegen:
+	$(MAKE) -C codegen gen
 
-typed-test:
-	$(MAKE) -C bindings/typed test
+codegen-test:
+	$(MAKE) -C codegen test
 
-typed-conformance:
-	$(MAKE) -C bindings/typed conformance
+codegen-conformance:
+	$(MAKE) -C codegen conformance
 
 clean:
-	rm -rf build bindings/typed/build bench/gen bindings/go/benchmarks/gen \
+	rm -rf build codegen/build bench/gen bindings/go/benchmarks/gen \
 		bindings/java/benchmarks/gen bindings/java/benchmarks/out \
 		bindings/node/benchmarks/gen bindings/ruby/benchmarks/gen \
 		bindings/ruby/lib/pbwire_ext.* bindings/objc/benchmarks/gen \
@@ -485,4 +485,4 @@ clean:
 	kotlin-test php-test dart-test rust-test csharp-test \
 	kotlin-bench php-bench dart-bench rust-bench csharp-bench \
 	desc-fixture test-cpp clean plugin-c go-test \
-	typed-gen typed-test typed-conformance
+	codegen codegen-test codegen-conformance

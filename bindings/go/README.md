@@ -22,7 +22,7 @@ back.Close()
 ```
 
 Most code never touches that surface: generate protoc-gen-go-shaped structs
-once (`make -C bindings/typed gen-go`) and use them like the library they
+once (`make -C codegen gen-go`) and use them like the library they
 mirror — same field names, same getters, same observable behavior, but the
 wire format stays in the C core:
 
