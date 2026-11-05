@@ -21,7 +21,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"runtime/debug"
+	"strings"
 	"testing"
 
 	"google.golang.org/protobuf/proto"
@@ -208,11 +208,25 @@ func buildOracle() *pb1.Scalars3 {
 }
 
 func protobufVersion() string {
-	if bi, ok := debug.ReadBuildInfo(); ok {
-		for _, d := range bi.Deps {
-			if d.Path == "google.golang.org/protobuf" {
-				return d.Version
-			}
+	// The pin lives in go.mod, read from the file: test binaries built by
+	// older toolchains (go1.23) embed no Deps in debug.ReadBuildInfo, so a
+	// runtime lookup reports "unknown" there while newer toolchains find
+	// the module. Reading the module file works on every toolchain.
+	_, file, _, ok := runtime.Caller(0)
+	if !ok {
+		return "unknown"
+	}
+	data, err := os.ReadFile(filepath.Join(filepath.Dir(file), "..", "go.mod"))
+	if err != nil {
+		return "unknown"
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		f := strings.Fields(line)
+		if len(f) == 3 && f[0] == "require" && f[1] == "google.golang.org/protobuf" {
+			return f[2]
+		}
+		if len(f) >= 2 && f[0] == "google.golang.org/protobuf" {
+			return f[1]
 		}
 	}
 	return "unknown"
