@@ -11,6 +11,10 @@ include(GNUInstallDirs)
 # warnings fail the build on every compiler. MSVC needs its own spelling.
 if(MSVC)
     add_compile_options(/W4 /WX)
+    # UTF-8 source and execution charset: universal-character names like
+    # \u00e9 in narrow literals must compile to UTF-8 bytes, as they do
+    # under GCC/Clang, or text/JSON goldens diverge on Windows.
+    add_compile_options(/utf-8)
 else()
     add_compile_options(-Wall -Wextra -Werror -pedantic)
 endif()

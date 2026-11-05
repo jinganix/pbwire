@@ -675,6 +675,7 @@ ds_message_proto(pbw_schema *schema, int proto3, const char *parent,
                     return PBW_ERR_NOMEM;
                 }
                 memcpy(copy, name, len);
+                copy[len] = '\0';
                 grown[msg->reserved_count] = copy;
             }
             msg->reserved_count++;
