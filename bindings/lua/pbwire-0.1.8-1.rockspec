@@ -8,6 +8,7 @@ source = {
   url = "https://github.com/jinganix/pbwire/archive/refs/tags/v0.1.8.tar.gz",
   dir = "pbwire-0.1.8",
 }
+}
 description = {
   summary = "Protobuf wire codec: Lua tables through the pbwire C core",
   detailed = [[
