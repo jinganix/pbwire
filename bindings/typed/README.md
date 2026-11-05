@@ -18,23 +18,28 @@ Every language gets the same shape, spelled the way that language spells things:
 
 | C (`bindings/c`) | typed struct | `structtest_scalars3_t`, `structtest_scalars3_encode/decode` |
 |---|---|---|
-| Java | class per message | `public int i32; public String str; public List<Inner3> inners;` + `encode(Schema)` / `static decode(Schema, byte[])` |
-| Kotlin | `data class` | same fields as `var`, `fun encode(schema)`, `companion object { fun decode(...) }` |
+| Java | class + Builder, protobuf-java shape | `newBuilder().setI32(1)...build()` / `toByteArray()` / `parseFrom()` / `hasX()` + `KindCase` oneof, over the embedded schema |
+| Kotlin | thin DSL over the Java classes | `scalars3 { setI32(1) }` constructors; types and codec are the Java facade |
 | C# | `sealed class`, Google.Protobuf shape | `Parser.ParseFrom` / `ToByteArray` / `RepeatedField<T>` / `KindOneofCase` / `Has`+`Clear` for optional, over the embedded schema (no `IMessage`, no `Descriptor`) |
-| Dart | class | `int i32 = 0;` `List<Inner3> inners = [];` + `encode(schema)` / `static decode` |
-| PHP | `final class` | typed properties `public int $i32;` + `encode(Schema)` / `static decode` |
+| Dart | class, protobuf-dart shape | `create()..i32 = 1` / `writeToBuffer()` / `fromBuffer()` / `hasX()` / `whichX()` oneof, over the embedded schema |
+| PHP | class, protobuf-PHP shape | `getX()/setX()/hasX()/clearX()` + `RepeatedField` + `serializeToString()/mergeFromString()`, over the embedded schema |
 | Ruby | class + kwargs, gem-shaped | `Klass.new` / `.encode(msg)` / `.decode(bytes)` / `#to_proto` / `#to_h` / `#has_x?`; schema embedded, zero arguments |
 | Python | dataclass, official `_pb2` shape | `i32: int = 0` + `.SerializeToString()` / `.FromString()` / `.CopyFrom()` / `.HasField()`; schema embedded, zero arguments |
 | Node | protobufjs-static shape | `Cls.create()` / `.encode(m).finish()` / `.decode()` / `.verify()` / `.fromObject()` / `.toObject()`; schema embedded, `.d.ts` included |
 | Rust | struct, prost shape | `pub i32: i32` + `pub opt_i32: Option<i32>` + oneof `Option<Kind>` + `i32` enums + `encode_to_vec` / `decode` over the embedded schema |
-| Lua | table + constructor | `M.Scalars3.new{i32 = 1}` + `encode(schema, t)` / `decode(schema, wire)` |
+| Lua | table + constructor (no dominant lib; T1–T4 only) | `M.Scalars3.new{i32 = 1}` + `encode(t)` / `decode(wire)` with embedded schema (legacy `(schema, …)` form kept) |
 | Go | struct, protoc-gen-go shape | `I32 int32` + `OptI32 *int32` + oneof wrappers + nil-safe getters + `Marshal`/`Unmarshal` over the embedded schema |
-| Objective-C | NSObject subclass | `@property int32_t i32; @property uint32_t u32;` + `-encodeWithSchema:error:` / `+decodeWithSchema:data:error:` |
+| Objective-C | GPBMessage-shaped | `@property` fields + `hasX` + `XArray` repeated + `Kind_OneOfCase` + `-data` / `+parseFromData:error:`, over the embedded schema |
 
 C is not in this table twice: the C plugin already generates the typed
 struct layer.
 Erlang gets typed records from gpb (`get_msg_defs/0`), which is its existing
 schema source; adding a second generator there would duplicate gpb.
+
+Where a pinned oracle exists (every row with a shape above), the model follows
+that library's conventions instead — including its presence spelling, enum
+storage and oneof API. The rules below are the default for languages without
+a dominant library, which every facade still honors where its oracle agrees:
 
 Rules the model follows, per field:
 

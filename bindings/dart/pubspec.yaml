@@ -8,3 +8,7 @@ environment:
 
 dependencies:
   ffi: ^2.1.0
+  # Typed facades (tests/gen): Int64 fields and ProtobufEnum enums mirror
+  # protoc-gen-dart exactly; the wire itself stays in the C core.
+  fixnum: ^1.1.0
+  protobuf: ^6.1.0

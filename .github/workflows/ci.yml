@@ -45,6 +45,20 @@ jobs:
       - name: Build and self-check
         run: make test
 
+  warnings:
+    name: warnings as errors (${{ matrix.cc }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        cc: [gcc, clang]
+    steps:
+      - uses: actions/checkout@v5
+      - name: Build and self-check with ${{ matrix.cc }}
+        # Same -Werror gate as the Makefile, on a second compiler so
+        # Linux-only gcc/clang warnings fail here instead of on macOS.
+        run: CC=${{ matrix.cc }} make test
+
   cmake:
     name: CMake build + ctest
     runs-on: ubuntu-latest

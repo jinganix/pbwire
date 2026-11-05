@@ -47,10 +47,12 @@ gen-examples: build
 gen-java: build
 	mkdir -p ../java/tests/gen
 	$(PROTOC) $(OPTS) --pbwire-typed_out=../java/tests/gen --pbwire-typed_opt=lang=java $(PROTO)
+	$(PROTOC) $(TESTDATA_OPTS) --pbwire-typed_out=../java/tests/gen --pbwire-typed_opt=lang=java $(TESTDATA)/oneof1.proto
 
 gen-kotlin: build
 	mkdir -p ../kotlin/tests/gen
 	$(PROTOC) $(OPTS) --pbwire-typed_out=../kotlin/tests/gen --pbwire-typed_opt=lang=kotlin $(PROTO)
+	$(PROTOC) $(TESTDATA_OPTS) --pbwire-typed_out=../kotlin/tests/gen --pbwire-typed_opt=lang=kotlin $(TESTDATA)/oneof1.proto
 
 gen-csharp: build
 	mkdir -p ../csharp/typed/gen
@@ -60,10 +62,12 @@ gen-csharp: build
 gen-dart: build
 	mkdir -p ../dart/tests/gen
 	$(PROTOC) $(OPTS) --pbwire-typed_out=../dart/tests/gen --pbwire-typed_opt=lang=dart $(PROTO)
+	$(PROTOC) $(TESTDATA_OPTS) --pbwire-typed_out=../dart/tests/gen --pbwire-typed_opt=lang=dart $(TESTDATA)/oneof1.proto
 
 gen-php: build
 	mkdir -p ../php/tests/gen
 	$(PROTOC) $(OPTS) --pbwire-typed_out=../php/tests/gen --pbwire-typed_opt=lang=php $(PROTO)
+	$(PROTOC) $(TESTDATA_OPTS) --pbwire-typed_out=../php/tests/gen --pbwire-typed_opt=lang=php $(TESTDATA)/oneof1.proto
 
 gen-ruby: build
 	mkdir -p ../ruby/test/gen ../ruby/test/gen_oracle
@@ -106,6 +110,7 @@ gen-rust: build
 gen-objc: build
 	mkdir -p ../objc/tests/gen
 	$(PROTOC) $(OPTS) --pbwire-typed_out=../objc/tests/gen --pbwire-typed_opt=lang=objc $(PROTO)
+	$(PROTOC) $(TESTDATA_OPTS) --pbwire-typed_out=../objc/tests/gen --pbwire-typed_opt=lang=objc $(TESTDATA)/oneof1.proto
 
 gen-lua: build
 	mkdir -p ../lua/tests/gen
@@ -147,6 +152,7 @@ test-dart: build
 test-php: build
 	$(MAKE) -C ../.. shared >/dev/null
 	php ../php/tests/typed_test.php
+	php ../php/tests/compat_test.php
 
 test-ruby: build
 	$(MAKE) -C ../.. ruby-bind >/dev/null
@@ -222,7 +228,7 @@ conformance-check: build
 	@test -f build/conformance/test_messages_proto3_pbwire.rs || { echo "run 'make conformance' first"; exit 1; }
 	mkdir -p build/conformance/java-out
 	javac -nowarn -d build/conformance/java-out -cp ../java/out build/conformance/*.java
-	kotlinc -nowarn -cp ../java/out -d build/conformance/conf.jar build/conformance/test_messages_proto3.kt
+	kotlinc -nowarn -cp ../java/out:build/conformance/java-out -d build/conformance/conf.jar build/conformance/test_messages_proto3.kt
 	@mkdir -p build/conformance/csharp
 	printf '%s\n' '<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net10.0</TargetFramework><Nullable>enable</Nullable><AllowUnsafeBlocks>true</AllowUnsafeBlocks></PropertyGroup><ItemGroup><ProjectReference Include="$(CURDIR)/../csharp/Pbwire/Pbwire.csproj" /><PackageReference Include="Google.Protobuf" Version="3.36.2" /><Compile Include="$(CURDIR)/build/conformance/test_messages_proto3.cs" /></ItemGroup></Project>' > build/conformance/csharp/conf.csproj
 	$(DOTNET) build build/conformance/csharp/conf.csproj

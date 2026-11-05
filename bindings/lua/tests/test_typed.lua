@@ -1,12 +1,26 @@
--- Typed-model check for the Lua binding: build matrix3.proto's Scalars3
--- through the generated tables, encode, require the protoc reference bytes
--- (matrix3.bin), then decode those bytes back and check every field.
+-- Typed-model check for the Lua binding (TESTSPEC T1-T4, deliberately no
+-- T5-T6: Lua has no dominant protobuf library to be bug-compatible with):
+--
+--   T1  build Scalars3 from vectors.json through the generated model only,
+--       encode, require byte equality with the pinned protoc bytes
+--       (bindings/c/tests/data/matrix3.bin)
+--   T2  decode matrix3.bin through the generated model, check every field
+--       (including presence) against vectors.json
+--   T3  an empty message encodes to empty bytes; an explicit zero with
+--       presence (opt_i32: 0) round-trips as present
+--   T4  self-consistency cross-check: the same object through the dynamic
+--       API and the typed facade agrees byte-for-byte and field-for-field
+--
+-- No .desc file at use time: the generated module embeds its own
+-- FileDescriptorSet (gen.schema()). Fixture values below mirror
+-- bindings/typed/testdata/vectors.json, the single source of truth (int64
+-- as decimals, f32 as Infinity, u64 max); the binary reference is the
+-- authority, asserted byte-for-byte in T1.
 --
 --   lua tests/test_typed.lua   (from bindings/lua, after ./build.sh)
 
 package.cpath = "./?.so;" .. package.cpath
 
-local pbwire = require("pbwire")
 local gen = dofile("tests/gen/matrix3.lua")
 
 local failures = 0
@@ -21,17 +35,14 @@ end
 
 -- Exact 64-bit integers need Lua 5.3+; below that every number is a double,
 -- so the two extremes past 2^53 take their nearest doubles and only the
--- integer path asserts byte equality (the same caveat test.lua documents,
--- and the one lua-protobuf documents).
+-- dynamic-equivalence leg of T1/T4 asserts byte equality (the same caveat
+-- test.lua documents, and the one lua-protobuf documents).
 local HASINT = math.type ~= nil
 local I64MAX = HASINT and 9223372036854775807 or 2 ^ 63
 local FX64 = HASINT and 72623859790382856 or 72623859790382848
 local S64MIN = (-9223372036854775807) - 1 -- mininteger, exactly
 
 local DATA = "../c/tests/data/"
-local schema = pbwire.loadfile(DATA .. "matrix3.desc")
-ok(schema ~= nil, "loadfile returns a schema")
-
 local MSG = "structtest.Scalars3"
 local Scalars = gen.Structtest_Scalars3
 local Inner = gen.Structtest_Inner3
@@ -45,6 +56,7 @@ local function reffile(name)
 end
 local REFERENCE = reffile("matrix3.bin")
 
+-- vectors.json values, through the generated model only.
 local function build()
     return Scalars.new({
         i32 = -2147483648, i64 = I64MAX,
@@ -64,56 +76,92 @@ local function build()
     })
 end
 
-local function verify(m)
-    ok(m.i32 == -2147483648, "i32")
-    ok(m.i64 == I64MAX, "i64")
-    ok(m.u32 == 4294967295, "u32")
-    ok(m.u64 == 2 ^ 64, "u64 is nearest double")
-    ok(m.s32 == -2147483648, "s32")
-    ok(m.s64 == S64MIN, "s64")
-    ok(m.fx32 == 3735928559, "fx32")
-    ok(m.fx64 == FX64, "fx64")
-    ok(m.sfx32 == -2147483648, "sfx32")
-    ok(m.sfx64 == S64MIN, "sfx64")
-    ok(m.f32 == math.huge, "f32")
-    ok(m.f64 == -123456.789, "f64")
-    ok(m.flag == true, "flag")
-    ok(m.str == "hello", "str")
-    ok(m.color == Color.COLOR3_GREEN, "color")
-    ok(m.inner.name == "kid" and m.inner.value == 42, "inner")
-    ok(#m.nums == 3 and m.nums[1] == 1 and m.nums[2] == -5 and
-       m.nums[3] == 300, "nums")
-    ok(#m.tags == 2 and m.tags[1] == "a" and m.tags[2] == "bb", "tags")
-    ok(#m.inners == 2 and m.inners[2].value == -2, "inners")
-    ok(m.has_opt_i32 and m.opt_i32 == -7, "opt_i32")
-    ok(m.has_opt_str and m.opt_str == "opt", "opt_str")
-    ok(#m.flags == 3 and m.flags[1] and not m.flags[2] and
-       m.flags[3], "flags")
-end
-
-local wire = Scalars.encode(schema, build())
+-- T1 wire: generated model only -> byte equality with the protoc reference.
+local wire = Scalars.encode(build())
 if HASINT then
-    ok(wire == REFERENCE, "typed encode equals the protoc reference bytes")
+    ok(wire == REFERENCE, "T1 typed encode equals the protoc reference bytes")
 else
     -- The two extremes are unrepresentable without integers: assert the
     -- typed path converts exactly like the dynamic path on the same values.
-    local raw = Scalars.to_table(build())
-    ok(wire == schema:encode(MSG, raw), "typed encode matches dynamic encode")
+    local schema = gen.schema()
+    ok(schema ~= nil, "T1 embedded schema loads")
+    ok(wire == schema:encode(MSG, Scalars.to_table(build())),
+       "T1 typed encode matches dynamic encode")
 end
-verify(Scalars.decode(schema, REFERENCE))
-ok(Scalars.encode(schema, Scalars.new()) == "", "empty typed message is empty")
 
+-- T2 decode: every field (including presence) against vectors.json.
+local function verify(m, tag)
+    ok(m.i32 == -2147483648, tag .. " i32")
+    ok(m.i64 == I64MAX, tag .. " i64")
+    ok(m.u32 == 4294967295, tag .. " u32")
+    -- uint64 max is past LUA_MAXINTEGER: decode pushes the nearest double.
+    ok(m.u64 == 2 ^ 64, tag .. " u64 is nearest double")
+    ok(m.s32 == -2147483648, tag .. " s32")
+    ok(m.s64 == S64MIN, tag .. " s64")
+    ok(m.fx32 == 3735928559, tag .. " fx32")
+    ok(m.fx64 == FX64, tag .. " fx64")
+    ok(m.sfx32 == -2147483648, tag .. " sfx32")
+    ok(m.sfx64 == S64MIN, tag .. " sfx64")
+    ok(m.f32 == math.huge, tag .. " f32")
+    ok(m.f64 == -123456.789, tag .. " f64")
+    ok(m.flag == true, tag .. " flag")
+    ok(m.str == "hello", tag .. " str")
+    ok(m.color == Color.COLOR3_GREEN, tag .. " color")
+    ok(m.inner.name == "kid" and m.inner.value == 42, tag .. " inner")
+    ok(#m.nums == 3 and m.nums[1] == 1 and m.nums[2] == -5 and
+       m.nums[3] == 300, tag .. " nums")
+    ok(#m.tags == 2 and m.tags[1] == "a" and m.tags[2] == "bb",
+       tag .. " tags")
+    ok(#m.inners == 2 and m.inners[1].name == "x" and
+       m.inners[2].value == -2, tag .. " inners")
+    ok(m.has_opt_i32 and m.opt_i32 == -7, tag .. " opt_i32")
+    ok(m.has_opt_str and m.opt_str == "opt", tag .. " opt_str")
+    ok(#m.flags == 3 and m.flags[1] and not m.flags[2] and
+       m.flags[3], tag .. " flags")
+end
+verify(Scalars.decode(REFERENCE), "T2")
+
+-- T3 empty/zero: empty encodes empty; an explicit zero keeps presence.
+ok(Scalars.encode(Scalars.new()) == "", "T3 empty typed message is empty")
 local zero = Scalars.new({ has_opt_i32 = true, opt_i32 = 0 })
-local zero_back = Scalars.decode(schema, Scalars.encode(schema, zero))
+local zero_back = Scalars.decode(Scalars.encode(zero))
 ok(zero_back.has_opt_i32 and zero_back.opt_i32 == 0,
-   "explicit zero presence round-trips")
+   "T3 explicit zero presence round-trips")
 
-local nested = Scalars.new({ inner = Inner.new({ name = "kid", value = 42 }) })
-ok(Scalars.decode(schema, Scalars.encode(schema, nested)).inner.value == 42,
-   "nested typed message")
-
-local inner_wire = Inner.encode(schema, Inner.new({ name = "kid" }))
-ok(Inner.decode(schema, inner_wire).name == "kid", "inner encodes standalone")
+-- T4 self-consistency: dynamic API vs typed facade on the same object.
+local schema = gen.schema()
+local raw = Scalars.to_table(build())
+local dyn_wire = schema:encode(MSG, raw)
+ok(Scalars.encode(build()) == dyn_wire,
+   "T4 typed bytes equal dynamic bytes")
+local from_dyn = Scalars.from_table(schema:decode(MSG, REFERENCE))
+local from_typed = Scalars.decode(REFERENCE)
+ok(from_dyn.i32 == from_typed.i32 and from_dyn.i64 == from_typed.i64 and
+   from_dyn.str == from_typed.str and from_dyn.color == from_typed.color and
+   from_dyn.inner.name == from_typed.inner.name and
+   from_dyn.inner.value == from_typed.inner.value and
+   #from_dyn.nums == #from_typed.nums and
+   from_dyn.has_opt_i32 == from_typed.has_opt_i32 and
+   from_dyn.opt_i32 == from_typed.opt_i32 and
+   from_dyn.has_opt_str == from_typed.has_opt_str and
+   from_dyn.opt_str == from_typed.opt_str,
+   "T4 cross-decode agrees field-for-field")
+local rt = schema:decode(MSG, schema:encode(MSG, Scalars.to_table(from_typed)))
+ok(rt.str == from_typed.str and rt.i32 == from_typed.i32 and
+   rt.inner.value == from_typed.inner.value and
+   (rt.opt_i32 ~= nil) == from_typed.has_opt_i32 and
+   rt.opt_i32 == from_typed.opt_i32 and #rt.nums == #from_typed.nums,
+   "T4 typed table re-encodes through the dynamic API")
+-- A raw dynamic table carries no has_* flags (presence is non-nil), so
+-- presence compares against nil here, not against the typed flag.
+-- No decode->re-encode byte check: u64 max decodes as the nearest double
+-- (past LUA_MAXINTEGER, per the README) and re-encodes as 0, so bytes
+-- cannot survive that leg; T2 pins the decoded value instead.
+local inner_wire = Inner.encode(Inner.new({ name = "kid" }))
+ok(Inner.decode(inner_wire).name == "kid",
+   "T4 nested message encodes standalone")
+ok(Inner.decode(schema, inner_wire).name == "kid",
+   "T4 old (schema, wire) form still works")
 
 print(failures == 0 and "all typed tests passed" or (failures .. " failures"))
 
