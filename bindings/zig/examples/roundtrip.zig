@@ -1,66 +1,61 @@
-//! Round trip through the dynamic API: builds a `structtest.Scalars3`, encodes
-//! it, decodes it back and prints it. Compares against the pinned reference
-//! bytes when they are available.
+//! The C example (examples/addressbook.c), in Zig, through the generated
+//! structs: assign fields, encode, decode, compare. The encoded bytes
+//! must equal the pinned reference examples/addressbook.bin.
 //!
-//!   zig build example [-- <matrix3.desc>]
+//!   zig build example
 const std = @import("std");
 const pbwire = @import("pbwire");
+const ab = @import("gen/addressbook.zig");
+
+const BIN_PATH = "../../examples/addressbook.bin";
 
 pub fn main(init: std.process.Init.Minimal) !void {
     var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
 
-    var arg_it = std.process.Args.Iterator.init(init.args);
-    _ = arg_it.next();
-    const desc_path = arg_it.next() orelse "../c/tests/data/matrix3.desc";
+    _ = init;
 
-    var schema = pbwire.Schema.fromFile(alloc, desc_path) catch |err| {
-        std.debug.print("load {s}: {s}\n", .{ desc_path, @errorName(err) });
-        std.process.exit(2);
-    };
+    var schema = try ab.loadSchema();
     defer schema.deinit();
-    const ty = try schema.messageType("structtest.Scalars3");
-    const inner_ty = try schema.messageType("structtest.Inner3");
 
-    var msg = try ty.newMessage();
-    defer msg.deinit();
-    try msg.setI64(try ty.field("i32"), -42);
-    try msg.setStr(try ty.field("str"), "alice");
-    for ([_][]const u8{ "a", "bb" }) |tag| try msg.setStr(try ty.field("tags"), tag);
-    var inner = try msg.setMessage(try ty.field("inner"));
-    try inner.setStr(try inner_ty.field("name"), "kid");
-    try inner.setI64(try inner_ty.field("value"), 42);
+    var alice = ab.Tutorial_Person{ .name = "Alice", .id = 1 };
+    alice.phones = &[_]ab.Tutorial_Person_PhoneNumber{
+        .{ .number = "555-0100", .type_ = .MOBILE },
+    };
+    var bob = ab.Tutorial_Person{ .name = "Bob", .id = 2, .email = "bob@example.com" };
+    bob.phones = &[_]ab.Tutorial_Person_PhoneNumber{
+        .{ .number = "555-0200", .type_ = .HOME },
+    };
+    const book = ab.Tutorial_AddressBook{ .people = &[_]ab.Tutorial_Person{ alice, bob } };
 
-    const wire = try msg.encode(alloc);
+    const wire = try book.encode(alloc, &schema);
     defer alloc.free(wire);
 
-    if (pbwire.readFile(alloc, "../c/tests/data/matrix3.bin")) |ref| {
+    if (pbwire.readFile(alloc, BIN_PATH)) |ref| {
         defer alloc.free(ref);
+        if (!std.mem.eql(u8, wire, ref)) {
+            std.debug.print("encode does not match {s}\n", .{BIN_PATH});
+            std.process.exit(1);
+        }
     } else |_| {}
 
-    var decoded = try ty.decode(wire);
-    defer decoded.deinit();
-    const back = try decoded.encode(alloc);
-    defer alloc.free(back);
-    if (!std.mem.eql(u8, wire, back)) {
-        std.debug.print("round trip mismatch\n", .{});
-        std.process.exit(1);
+    const back = try ab.Tutorial_AddressBook.decode(alloc, &schema, wire);
+    defer {
+        // decoded slices are owned by the caller: free inner slices first.
+        for (back.people) |p| {
+            for (p.phones) |ph| alloc.free(ph.number);
+            alloc.free(p.phones);
+            alloc.free(p.name);
+            if (p.email) |e| alloc.free(e);
+        }
+        alloc.free(back.people);
     }
-
-    const f_str = try ty.field("str");
-    const f_inner = try ty.field("inner");
-    const f_name = try inner_ty.field("name");
-    const f_value = try inner_ty.field("value");
-    std.debug.print("roundtrip: {d} bytes, str={s}", .{
-        wire.len,
-        decoded.getStr(f_str) orelse "(missing)",
-    });
-    if (decoded.getMessage(f_inner)) |got| {
-        std.debug.print(", inner={s}/{d}", .{
-            got.getStr(f_name) orelse "(missing)",
-            got.getI64(f_value),
-        });
+    std.debug.print("addressbook: {d} bytes, {d} people\n", .{ wire.len, back.people.len });
+    for (back.people) |p| {
+        std.debug.print("  {s} ({d}) {s}\n", .{ p.name, p.id, p.email orelse "" });
+        for (p.phones) |ph| {
+            std.debug.print("    {s}\n", .{ph.number});
+        }
     }
-    std.debug.print("\n", .{});
 }

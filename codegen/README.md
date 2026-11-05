@@ -30,11 +30,22 @@ Every language gets the same shape, spelled the way that language spells things:
 | Lua | table + constructor (no dominant lib; T1–T4 only) | `M.Scalars3.new{i32 = 1}` + `encode(t)` / `decode(wire)` with embedded schema (legacy `(schema, …)` form kept) |
 | Go | struct, protoc-gen-go shape | `I32 int32` + `OptI32 *int32` + oneof wrappers + nil-safe getters + `Marshal`/`Unmarshal` over the embedded schema |
 | Objective-C | GPBMessage-shaped | `@property` fields + `hasX` + `XArray` repeated + `Kind_OneOfCase` + `-data` / `+parseFromData:error:`, over the embedded schema |
+| Swift | struct, Swift-idiomatic | `var i32: Int64` + `optI32: Int64?` + `Int64` enums + `encode()` / `decode(_:)` over the embedded schema |
+| Zig | struct over the static-link runtime | `i32`/`u64` fields + `?T` presence + `enum(i32)` enums + `encode` / `decode` / `load` over the embedded schema |
+| Scala | case class over the Java runtime | `copy(name = ...)`, `Option[T]` presence, `Int` enums, `encode` / `decode` over the embedded schema |
+| Clojure | map + constructor fns over the interop runtime | `(tutorial-person :name "x")` / `encode-tutorial-person` / `decode-tutorial-person` over the embedded schema |
+| F# | record over the C# runtime | `{ name = ... }`, `T option` presence, `int` enums, `encode` / `decode` over the embedded schema |
+| Elixir | `elixir-protobuf` modules (the binding's schema source) | `field(:name, 1, ...)` / `%Tutorial.Person{}` + `Pbwire.encode` / `Pbwire.decode`; no embedded schema — the modules are the schema |
+| Julia | mutable struct over the ccall runtime | `field::Int64` + `Union{Nothing,T}` presence + `to_dict` / `from_dict` + `encode` / `decode` over the embedded schema |
+| R | named-list constructors over the C-extension runtime | `Tutorial_Person_new(...)` + `Tutorial_Person_encode` / `Tutorial_Person_decode` over the embedded schema |
 
 C is not in this table twice: the C plugin already generates the
 struct layer.
 Erlang gets records from gpb (`get_msg_defs/0`), which is its existing
 schema source; adding a second generator there would duplicate gpb.
+Go is dynamic-API only for now (its emitter exists and the addressbook
+example uses it, but `make codegen` does not yet refresh its matrix3
+models).
 
 Where a pinned oracle exists (every row with a shape above), the model follows
 that library's conventions instead — including its presence spelling, enum
@@ -76,7 +87,17 @@ bindings/go/tests/gen/matrix3/  matrix3_pbwire.go (package matrix3)
 bindings/rust/tests/gen/        matrix3_pbwire.rs
 bindings/objc/tests/gen/        matrix3.h, matrix3.m
 bindings/lua/tests/gen/         matrix3.lua
-bindings/*/examples/gen/        addressbook.* (the C example's schema)
+bindings/swift/Tests/PbwireTests/gen/  matrix3.swift (SPM layout: inside the test target)
+bindings/zig/tests/gen/        matrix3.zig
+bindings/scala/tests/gen/      matrix3.scala
+bindings/clojure/tests/gen/    matrix3.clj
+bindings/fsharp/tests/gen/     matrix3.fs
+bindings/elixir/test/gen/      matrix3.ex
+bindings/julia/tests/gen/      matrix3_pbwire.jl
+bindings/r/tests/gen/          matrix3_pbwire.R
+bindings/*/examples/gen/        addressbook.* (the C example's schema;
+                                Swift's lives in Sources/Roundtrip/gen: SPM
+                                compiles only its target dirs)
 ```
 
 `make codegen` rewrites all of them from `bindings/c/tests/data/matrix3.proto`
@@ -101,6 +122,11 @@ decode checks, differential tests against the pinned对照 libraries
 (`testdata/ORACLES.md`), a zero-change business snippet that runs
 against both the对照 library and our facade, and loud error paths.
 New languages copy that pattern instead of inventing their own.
+The eight newer bindings (Swift, Zig, Scala, Clojure, F#, Elixir, Julia,
+R) start with the byte-equality generated test above; the T1–T6
+compat expansion is future work (R documents its own `shortcut:` —
+doubles hold integers exactly only to 2^53, so its test uses moderate
+values instead of the extreme `matrix3.bin` bytes).
 
 `bindings/*/examples/` run the same flow on the C example's `addressbook.proto`
 and print the address book; every language produces the same 65 bytes
@@ -111,6 +137,9 @@ and print the address book; every language produces the same 65 bytes
 conformance suite uses: maps, oneofs, deep nesting and every scalar kind. The
 generated code must compile in every binding (it is the hardest schema the
 generator meets); the value flow is covered by the matrix3 tests.
+Swift/Zig/R/Julia/Elixir check in with a parse (their compilers need a
+package build the suite does not do); Scala and F# do a real compile;
+Clojure loads its namespace (needs the fetched jars, like `test-clojure`).
 
 ## Cost
 

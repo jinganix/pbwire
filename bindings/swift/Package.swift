@@ -25,10 +25,16 @@ let package = Package(
             name: "Pbwire",
             dependencies: ["CPbwire"],
             path: "Sources/Pbwire"),
+        // Generated addressbook models over the Pbwire runtime (codegen:
+        // `make -C codegen gen-examples`). No .desc file at use time.
+        .target(
+            name: "AddressbookGen",
+            dependencies: ["Pbwire"],
+            path: "examples/gen"),
         // Runnable round trip through the dynamic API.
         .executableTarget(
             name: "Roundtrip",
-            dependencies: ["Pbwire"],
+            dependencies: ["Pbwire", "AddressbookGen"],
             path: "Sources/Roundtrip",
             linkerSettings: [pbwireLink]),
         // The four standard tiers (see BENCHMARKS.md) on matrix3.desc.
