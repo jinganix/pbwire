@@ -92,29 +92,29 @@ the full tables are.
 
 | binding | the pain it removes | what it does instead | encode / decode vs official |
 |---|---|---|---|
-| C | dynamic messages cost a libprotobuf dependency, or hand-written wire code per message | struct codec compiled from layout tables over the shared core, schema loaded at run time | 1.58x / 2.26x (vs protoc C++) |
-| C++ | generated classes pin the schema at compile time; `DynamicMessage` is 10x slower | the same C runtime and header, no extra layer | 1.58x / 2.26x (vs protoc C++) |
-| Python | `google.protobuf` needs a generated module per `.proto`, and dict conversion is seconds at 75 KB | CPython extension: dict↔wire in C, `decode()` returns a parsed message that keeps one slice per wire field | 6.5x / 1.69x (vs upb) |
-| Ruby | the `google-protobuf` gem materializes and re-encodes every field; a Fiddle bridge costs ~3 µs per downcall | C extension over the core: builder tree for writes, validating wire view for reads | 1.22x / 1.67x (vs the gem) |
-| Java | JNI glue, or protobuf-java re-deriving sizes before every write | pure-Java codec: columnar values, lazy decode, `Unsafe` stores (no JNI, no native lib, no generator) | 1.21x / 2.40x (vs protobuf-java) |
-| Kotlin | official Kotlin is Kotlin over protobuf-java | reuses the Java runtime, adds a DSL | 1.60x / 1.19x (vs protobuf-kotlin) |
-| Node | jspb resolves a code/type table per field and hands every repeated element to a closure | N-API addon (node headers only), reusable buffer, wire view for decoded messages | 22.3x / 20.0x (vs jspb; 2.7x / 4.1x vs [protobufjs](https://www.npmjs.com/package/protobufjs)) |
-| Objective-C | the ObjC runtime allocates and copies per field | ARC wrapper: the encoder's buffer is handed to `NSData` with no copy | 1.8x / 2.7x (vs protobuf-objc) |
-| PHP | the official runtime is pure PHP, all per-field bookkeeping in the interpreter | native C extension over the core (`ext-ffi` wrapper without a compiler) | 1.11x / 1.15x (vs C ext; 374x / 127x vs pure PHP) |
+| C | dynamic messages cost a libprotobuf dependency, or hand-written wire code per message | struct codec compiled from layout tables over the shared core, schema loaded at run time | 1.31x / 2.33x (vs protoc C++) |
+| C++ | generated classes pin the schema at compile time; `DynamicMessage` is 10x slower | the same C runtime and header, no extra layer | 1.31x / 2.33x (vs protoc C++) |
+| Python | `google.protobuf` needs a generated module per `.proto`, and dict conversion is seconds at 75 KB | CPython extension: dict↔wire in C, `decode()` returns a parsed message that keeps one slice per wire field | 6.7x / 1.72x (vs upb) |
+| Ruby | the `google-protobuf` gem materializes and re-encodes every field; a Fiddle bridge costs ~3 µs per downcall | C extension over the core: builder tree for writes, validating wire view for reads | 1.42x / 1.75x (vs the gem) |
+| Java | JNI glue, or protobuf-java re-deriving sizes before every write | pure-Java codec: columnar values, lazy decode, `Unsafe` stores (no JNI, no native lib, no generator) | 1.15x / 2.40x (vs protobuf-java) |
+| Kotlin | official Kotlin is Kotlin over protobuf-java | reuses the Java runtime, adds a DSL | 1.10x / 2.01x (vs protobuf-kotlin) |
+| Node | jspb resolves a code/type table per field and hands every repeated element to a closure | N-API addon (node headers only), reusable buffer, wire view for decoded messages | 25.7x / 18.6x (vs jspb; 3.1x / 4.0x vs [protobufjs](https://www.npmjs.com/package/protobufjs)) |
+| Objective-C | the ObjC runtime allocates and copies per field | ARC wrapper: the encoder's buffer is handed to `NSData` with no copy | 2.0x / 2.8x (vs protobuf-objc) |
+| PHP | the official runtime is pure PHP, all per-field bookkeeping in the interpreter | native C extension over the core (`ext-ffi` wrapper without a compiler) | 1.10x / 1.25x (vs C ext; 344x / 134x vs pure PHP) |
 | Dart | a pure-Dart field loop dominates, and FFI adds copies | `dart:ffi` plus the core's arena | 12.2x / 3.3x (vs protobuf-dart) |
 | Rust | rust-protobuf generated codecs | links `libpbwire.a` statically behind a safe wrapper | 1.84x / 1.69x (vs rust-protobuf; 1.09x / 1.64x vs prost) |
-| C# | Google.Protobuf is already a fast tree codec — the closest race of the set | P/Invoke plus a resolver, no packages | 2.90x / 1.07x (vs Google.Protobuf; 3.6x / 1.62x vs protobuf-net) |
-| Go | the official runtime walks `protoreflect`/`protowire` per field | cgo dynamic binding over the C core: one downcall per op, zero-copy decode in, hot-swappable registry | 2.6x / 2.1x (vs official, xlarge; 1.0x / 1.1x small) |
-| Erlang | gpb is pure Erlang; gpb NIF binds libprotobuf per message | NIF over the core, consuming gpb's own definitions — no second generator | 4.21x / 1.98x (vs gpb) |
-| Swift | Apple moved to Swift while the binding set still spoke ObjC; `swift-protobuf` generates a struct per message | SwiftPM package: FFI host over the C ABI (`FileDescriptorSet` at run time, static `libpbwire.a`, no wire code) | 5.38x / 2.62x (vs swift-protobuf) |
-| Scala | data teams write Scala against Java protobuf | same Java runtime as Kotlin plus an idiomatic DSL — one runtime, three JVM languages | 1.29x / 1.47x (vs ScalaPB) |
-| Elixir | `elixir-protobuf` is pure Elixir, every field through the interpreter | struct↔tuple translation over the shared NIF (no C of its own) | 2.27x / 1.46x (vs elixir-protobuf) |
-| Zig | `zig-protobuf` codegen per message, fragmented across forks | `@cImport`-free static link (`translate-c` + `libpbwire.a` compiled in) | no baseline wired yet — 1638.4 / 693.2 MB/s pbwire-only |
-| F# | .NET protobuf means C# SDK style even in F# code | facade over the C# project (`ProjectReference`, same P/Invoke core) | 2.92x / 1.32x (vs Google.Protobuf) |
-| Clojure | the Clojure wrappers are thin shells over protobuf-java | persistent maps in/out over the Java runtime via plain interop | 0.11x / 0.19x (vs protobuf-java — boundary cost, bytes are identical) |
-| Julia | `ProtoBuf.jl` is pure Julia, per-field interpreter overhead | `dlopen` + `ccall` FFI host (`FileDescriptorSet` at run time, `Dict` boundary) | 119x / 0.95x (vs ProtoBuf.jl; baseline encode collapses with size) |
-| R | `RProtoBuf` binds the C++ runtime per message | C extension over the core (`.Call`, named lists in/out, statically linked) | no baseline installed — 188.5 / 134.7 MB/s pbwire-only (1393.7 via builder) |
-| Lua | game servers hand tables to `pbc`/`lua-protobuf`, each with its own schema story | C module over the core: tables convert through the schema's arena, builders encode hot | 0.79x / 1.15x (vs lua-protobuf; 8.17x via builder encode) |
+| C# | Google.Protobuf is already a fast tree codec — the closest race of the set | P/Invoke plus a resolver, no packages | 3.19x / 1.34x (vs Google.Protobuf; 4.01x / 2.09x vs protobuf-net) |
+| Go | the official runtime walks `protoreflect`/`protowire` per field | cgo dynamic binding over the C core: one downcall per op, zero-copy decode in, hot-swappable registry | 2.63x / 2.03x (vs official, xlarge; 0.99x / 1.27x small) |
+| Erlang | gpb is pure Erlang; gpb NIF binds libprotobuf per message | NIF over the core, consuming gpb's own definitions — no second generator | 4.03x / 1.68x (vs gpb) |
+| Swift | Apple moved to Swift while the binding set still spoke ObjC; `swift-protobuf` generates a struct per message | SwiftPM package: FFI host over the C ABI (`FileDescriptorSet` at run time, static `libpbwire.a`, no wire code) | 5.63x / 2.61x (vs swift-protobuf) |
+| Scala | data teams write Scala against Java protobuf | same Java runtime as Kotlin plus an idiomatic DSL — one runtime, three JVM languages | 1.28x / 1.65x (vs ScalaPB) |
+| Elixir | `elixir-protobuf` is pure Elixir, every field through the interpreter | struct↔tuple translation over the shared NIF (no C of its own) | 2.56x / 1.43x (vs elixir-protobuf) |
+| Zig | `zig-protobuf` codegen per message, fragmented across forks | `@cImport`-free static link (`translate-c` + `libpbwire.a` compiled in) | no baseline wired yet — 1576.3 / 739.1 MB/s pbwire-only |
+| F# | .NET protobuf means C# SDK style even in F# code | facade over the C# project (`ProjectReference`, same P/Invoke core) | 3.24x / 1.42x (vs Google.Protobuf) |
+| Clojure | protobuf-java interop per message, maps materialized per field | mutable-message fast path over the Java runtime (maps stay for convenience) | 1.30x / 2.07x (vs protobuf-java; mutable-message fast path) |
+| Julia | `ProtoBuf.jl` is pure Julia, per-field interpreter overhead | `dlopen` + `ccall` FFI host (`FileDescriptorSet` at run time, `Dict` boundary) | 137x / 1.02x (vs ProtoBuf.jl; baseline encode collapses with size) |
+| R | `RProtoBuf` binds the C++ runtime per message | C extension over the core (`.Call`, named lists in/out, statically linked) | no baseline installed — 185.9 / 134.1 MB/s pbwire-only (1490.8 via builder) |
+| Lua | game servers hand tables to `pbc`/`lua-protobuf`, each with its own schema story | C module over the core: tables convert through the schema's arena, builders encode hot | 1.05x / 1.10x (vs lua-protobuf; 7.94x via builder encode) |
 
 Read the ratios as "what this binding buys its host language", not as a
 cross-language speed ranking: the payload and the boundary cost differ per row,

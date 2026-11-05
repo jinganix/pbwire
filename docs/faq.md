@@ -117,7 +117,7 @@ so the in-process `pbw_ctx` API is 1.1-1.7x the generated codec on every tier.
 The gap only shows up in two places: the plain `pbw_encode` API, which allocates
 a tree per call (about parity with generated code at the small tiers, either way
 within run noise), and a dynamic codec meeting generated straight-line writes on
-a tiny message (Java, 0.75x at 136 B). Numbers
+a tiny message (Java/Kotlin, 0.69x/0.82x at 136 B). Numbers
 and the per-language
 reasons are in [BENCHMARKS.md](../BENCHMARKS.md).
 
