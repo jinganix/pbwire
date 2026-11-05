@@ -29,7 +29,8 @@
  * numeric, string <-> string, bytes <-> raw, message <-> named list,
  * repeated <-> atomic vector (scalars) or list (messages, bytes). An absent
  * singular field decodes as a missing list element (NULL); an absent
- * repeated field decodes as a zero-length vector/list. Groups raise; maps
+ * repeated field decodes as a zero-length vector/list. Groups map like
+ * messages (START_GROUP framing on the wire); maps
  * are lists of list(key, value) entries.
  *
  * shortcut: doubles hold integers exactly only to 2^53, so int64/uint64
@@ -224,9 +225,6 @@ pbwr_scalar_value(SEXP v, R_xlen_t i, const pbw_field *field, pbw_ctx *ctx)
     pbw_type type = pbw_field_type(field);
     const char *fname = pbw_field_name(field);
 
-    if (type == PBW_TYPE_GROUP) {
-        Rf_error("pbwire: group field %s is not supported", fname);
-    }
     switch (type) {
     case PBW_TYPE_STRING: {
         SEXP s;
@@ -329,7 +327,8 @@ static void
 pbwr_append(pbw_message *msg, const pbw_field *field, SEXP v, R_xlen_t i,
             pbw_ctx *ctx, unsigned depth)
 {
-    if (pbw_field_type(field) == PBW_TYPE_MESSAGE) {
+    if (pbw_field_type(field) == PBW_TYPE_MESSAGE ||
+        pbw_field_type(field) == PBW_TYPE_GROUP) {
         const pbw_descriptor *sub = pbw_field_message_type(field);
         pbw_message *child;
 
@@ -404,7 +403,8 @@ pbwr_fill(SEXP list, pbw_ctx *ctx, const pbw_descriptor *desc,
             continue; /* NULL = absent, like an unset optional. */
         }
         if (pbw_field_label(field) != PBW_LABEL_REPEATED) {
-            if (pbw_field_type(field) == PBW_TYPE_MESSAGE) {
+            if (pbw_field_type(field) == PBW_TYPE_MESSAGE ||
+                pbw_field_type(field) == PBW_TYPE_GROUP) {
                 const pbw_descriptor *sub =
                     pbw_field_message_type(field);
                 pbw_message *child;
@@ -535,7 +535,7 @@ pbwr_repeated_sexp(const pbw_field *field, const pbw_value *list,
         return out;
     }
 
-    if (type == PBW_TYPE_MESSAGE) {
+    if (type == PBW_TYPE_MESSAGE || type == PBW_TYPE_GROUP) {
         PROTECT(out = allocVector(VECSXP, (R_xlen_t)count));
         for (k = 0; k < count; k++) {
             SEXP item =
@@ -903,6 +903,246 @@ pbwr_roundtrip(SEXP schema_sexp, SEXP type, SEXP wire)
     return ans;
 }
 
+/* Text in: an R string (NA and empty vectors fail, like a bad type). */
+static const char *
+pbwr_text_in(SEXP v, size_t *len, const char *what)
+{
+    SEXP s;
+
+    if (TYPEOF(v) != STRSXP || Rf_xlength(v) < 1) {
+        Rf_error("pbwire: %s expects a string", what);
+    }
+    s = STRING_ELT(v, 0);
+    if (s == NA_STRING) {
+        Rf_error("pbwire: %s: NA is not valid text", what);
+    }
+    *len = (size_t)LENGTH(s);
+    return CHAR(s);
+}
+
+/* Text out: a one-element string vector (NA-safe by construction). */
+static SEXP
+pbwr_text_out(const char *text, size_t len)
+{
+    SEXP ans;
+
+    PROTECT(ans = allocVector(STRSXP, 1));
+    SET_STRING_ELT(ans, 0, Rf_mkCharLen(text, (int)len));
+    UNPROTECT(1);
+    return ans;
+}
+
+/* JSON mapping text of a named list. */
+static SEXP
+pbwr_to_json(SEXP schema_sexp, SEXP type, SEXP list)
+{
+    pbwr_schema *s = pbwr_check_schema(schema_sexp);
+    const char *name = pbwr_type_name(type);
+    const pbw_descriptor *desc = pbwr_find(s->schema, name);
+    pbw_message *msg;
+    char *text = NULL;
+    size_t len = 0;
+    pbw_status status;
+    SEXP ans;
+
+    pbw_ctx_reset(s->ctx);
+    msg = pbw_message_new_ctx(s->ctx, desc);
+    if (msg == NULL) {
+        Rf_error("pbwire: out of memory");
+    }
+    pbwr_fill(list, s->ctx, desc, msg, 0);
+    status = pbw_json_print(msg, &text, &len);
+    if (status != PBW_OK) {
+        pbwr_fail(status, "to_json", name);
+    }
+    ans = pbwr_text_out(text, len);
+    pbw_free(text);
+    return ans;
+}
+
+/* Parses JSON mapping text into a named list; a fourth TRUE argument skips
+ * unknown field names instead of failing. */
+static SEXP
+pbwr_from_json(SEXP schema_sexp, SEXP type, SEXP text, SEXP ignore)
+{
+    pbwr_schema *s = pbwr_check_schema(schema_sexp);
+    const char *name = pbwr_type_name(type);
+    const pbw_descriptor *desc = pbwr_find(s->schema, name);
+    size_t len = 0;
+    const char *data = pbwr_text_in(text, &len, "from_json");
+    pbw_message *msg = NULL;
+    pbw_status status;
+    pbw_json_parse_options opts;
+    SEXP ans;
+
+    opts.ignore_unknown_fields =
+        (TYPEOF(ignore) == LGLSXP && Rf_xlength(ignore) > 0 &&
+         LOGICAL(ignore)[0] == TRUE);
+    status = pbw_json_parse_opts(desc, data, len, &opts, &msg);
+    if (status != PBW_OK) {
+        pbwr_fail(status, "from_json", name);
+    }
+    ans = pbwr_message_sexp(msg, 0);
+    pbw_message_free(msg);
+    return ans;
+}
+
+/* Text format of a named list. */
+static SEXP
+pbwr_to_text(SEXP schema_sexp, SEXP type, SEXP list)
+{
+    pbwr_schema *s = pbwr_check_schema(schema_sexp);
+    const char *name = pbwr_type_name(type);
+    const pbw_descriptor *desc = pbwr_find(s->schema, name);
+    pbw_message *msg;
+    char *text = NULL;
+    size_t len = 0;
+    pbw_status status;
+    SEXP ans;
+
+    pbw_ctx_reset(s->ctx);
+    msg = pbw_message_new_ctx(s->ctx, desc);
+    if (msg == NULL) {
+        Rf_error("pbwire: out of memory");
+    }
+    pbwr_fill(list, s->ctx, desc, msg, 0);
+    status = pbw_text_print(msg, &text, &len);
+    if (status != PBW_OK) {
+        pbwr_fail(status, "to_text", name);
+    }
+    ans = pbwr_text_out(text, len);
+    pbw_free(text);
+    return ans;
+}
+
+/* Parses text format into a named list. */
+static SEXP
+pbwr_from_text(SEXP schema_sexp, SEXP type, SEXP text)
+{
+    pbwr_schema *s = pbwr_check_schema(schema_sexp);
+    const char *name = pbwr_type_name(type);
+    const pbw_descriptor *desc = pbwr_find(s->schema, name);
+    size_t len = 0;
+    const char *data = pbwr_text_in(text, &len, "from_text");
+    pbw_message *msg = NULL;
+    pbw_status status;
+    SEXP ans;
+
+    status = pbw_text_parse(desc, data, len, &msg);
+    if (status != PBW_OK) {
+        pbwr_fail(status, "from_text", name);
+    }
+    ans = pbwr_message_sexp(msg, 0);
+    pbw_message_free(msg);
+    return ans;
+}
+
+/* Canonical encoding: map entries sorted by key, like the reference. */
+static SEXP
+pbwr_encode_deterministic(SEXP schema_sexp, SEXP type, SEXP list)
+{
+    pbwr_schema *s = pbwr_check_schema(schema_sexp);
+    const char *name = pbwr_type_name(type);
+    const pbw_descriptor *desc = pbwr_find(s->schema, name);
+    pbw_message *msg;
+    uint8_t *out = NULL;
+    size_t len = 0;
+    pbw_status status;
+    SEXP ans;
+
+    pbw_ctx_reset(s->ctx);
+    msg = pbw_message_new_ctx(s->ctx, desc);
+    if (msg == NULL) {
+        Rf_error("pbwire: out of memory");
+    }
+    pbwr_fill(list, s->ctx, desc, msg, 0);
+    status = pbw_encode_deterministic(msg, &out, &len);
+    if (status != PBW_OK) {
+        pbwr_fail(status, "encode_deterministic", name);
+    }
+    ans = allocVector(RAWSXP, (R_xlen_t)len);
+    if (len > 0) {
+        memcpy(RAW(ans), out, len);
+    }
+    pbw_free(out);
+    return ans;
+}
+
+/* One length-delimited frame (varint length + message). */
+static SEXP
+pbwr_encode_delimited(SEXP schema_sexp, SEXP type, SEXP list)
+{
+    pbwr_schema *s = pbwr_check_schema(schema_sexp);
+    const char *name = pbwr_type_name(type);
+    const pbw_descriptor *desc = pbwr_find(s->schema, name);
+    pbw_message *msg;
+    uint8_t *out = NULL;
+    size_t len = 0;
+    pbw_status status;
+    SEXP ans;
+
+    pbw_ctx_reset(s->ctx);
+    msg = pbw_message_new_ctx(s->ctx, desc);
+    if (msg == NULL) {
+        Rf_error("pbwire: out of memory");
+    }
+    pbwr_fill(list, s->ctx, desc, msg, 0);
+    status = pbw_encode_delimited(msg, &out, &len);
+    if (status != PBW_OK) {
+        pbwr_fail(status, "encode_delimited", name);
+    }
+    ans = allocVector(RAWSXP, (R_xlen_t)len);
+    if (len > 0) {
+        memcpy(RAW(ans), out, len);
+    }
+    pbw_free(out);
+    return ans;
+}
+
+/* One frame from wire input: list(message, read), so concatenated frames
+ * decode in a loop. */
+static SEXP
+pbwr_decode_delimited(SEXP schema_sexp, SEXP type, SEXP wire)
+{
+    pbwr_schema *s = pbwr_check_schema(schema_sexp);
+    const char *name = pbwr_type_name(type);
+    const pbw_descriptor *desc = pbwr_find(s->schema, name);
+    const void *bytes;
+    size_t len;
+    pbw_message *msg = NULL;
+    size_t consumed = 0;
+    pbw_status status;
+    SEXP ans, names, item, read;
+
+    pbwr_wire_in(wire, &bytes, &len);
+    status = pbw_decode_delimited(desc, bytes, len, &msg, &consumed);
+    if (status != PBW_OK) {
+        pbwr_fail(status, "decode_delimited", name);
+    }
+    PROTECT(ans = allocVector(VECSXP, 2));
+    PROTECT(names = allocVector(STRSXP, 2));
+    item = pbwr_message_sexp(msg, 0);
+    PROTECT(item);
+    pbw_message_free(msg);
+    read = allocVector(INTSXP, 1);
+    PROTECT(read);
+    if (consumed > (size_t)INT32_MAX) {
+        UNPROTECT(4);
+        Rf_error("pbwire: frame too large");
+    }
+    INTEGER(read)[0] = (int)consumed;
+    SET_VECTOR_ELT(ans, 0, item);
+    SET_VECTOR_ELT(ans, 1, read);
+    SET_STRING_ELT(names, 0, mkChar("message"));
+    SET_STRING_ELT(names, 1, mkChar("read"));
+    setAttrib(ans, R_NamesSymbol, names);
+    UNPROTECT(4);
+    return ans;
+}
+
+static SEXP pbwr_push_builder(SEXP schema_sexp, const pbw_descriptor *desc,
+                              pbw_message *tree, pbwr_message *m);
+
 /* A builder: an empty plain tree of the type, for hot loops that encode
  * far more often than they rebuild. Build once with set(), then encode()
  * is one core walk plus one buffer malloc. */
@@ -913,7 +1153,6 @@ pbwr_message_new(SEXP schema_sexp, SEXP type)
     const char *name = pbwr_type_name(type);
     const pbw_descriptor *desc = pbwr_find(s->schema, name);
     pbwr_message *m = (pbwr_message *)malloc(sizeof(*m));
-    SEXP ans;
 
     if (m == NULL) {
         Rf_error("pbwire: out of memory");
@@ -924,6 +1163,26 @@ pbwr_message_new(SEXP schema_sexp, SEXP type)
         free(m);
         Rf_error("pbwire: out of memory");
     }
+    return pbwr_push_builder(schema_sexp, desc, m->tree, m);
+}
+
+/* Wraps a plain tree (freshly parsed or built) in a builder. Takes over
+ * m (frees it on failure); the schema is preserved until the finalizer. */
+static SEXP
+pbwr_push_builder(SEXP schema_sexp, const pbw_descriptor *desc,
+                  pbw_message *tree, pbwr_message *m)
+{
+    SEXP ans;
+
+    if (m == NULL) {
+        m = (pbwr_message *)malloc(sizeof(*m));
+        if (m == NULL) {
+            pbw_message_free(tree);
+            Rf_error("pbwire: out of memory");
+        }
+    }
+    m->desc = desc;
+    m->tree = tree;
     /* Anchor the schema: the tree reads its descriptor until the
      * finalizer runs. */
     m->schema_sexp = schema_sexp;
@@ -931,6 +1190,109 @@ pbwr_message_new(SEXP schema_sexp, SEXP type)
     PROTECT(ans = R_MakeExternalPtr(m, pbwr_message_tag(), R_NilValue));
     R_RegisterCFinalizerEx(ans, pbwr_message_finalizer, FALSE);
     UNPROTECT(1);
+    return ans;
+}
+
+/* Parses input straight into a builder tree, skipping lists: exact for
+ * 64-bit integers past 2^53, which lists carry as doubles. */
+static SEXP
+pbwr_parse_json(SEXP schema_sexp, SEXP type, SEXP text, SEXP ignore)
+{
+    pbwr_schema *s = pbwr_check_schema(schema_sexp);
+    const char *name = pbwr_type_name(type);
+    const pbw_descriptor *desc = pbwr_find(s->schema, name);
+    size_t len = 0;
+    const char *data = pbwr_text_in(text, &len, "parse_json");
+    pbw_message *msg = NULL;
+    pbw_status status;
+    pbw_json_parse_options opts;
+
+    opts.ignore_unknown_fields =
+        (TYPEOF(ignore) == LGLSXP && Rf_xlength(ignore) > 0 &&
+         LOGICAL(ignore)[0] == TRUE);
+    status = pbw_json_parse_opts(desc, data, len, &opts, &msg);
+    if (status != PBW_OK) {
+        pbwr_fail(status, "parse_json", name);
+    }
+    return pbwr_push_builder(schema_sexp, desc, msg, NULL);
+}
+
+static SEXP
+pbwr_parse_text(SEXP schema_sexp, SEXP type, SEXP text)
+{
+    pbwr_schema *s = pbwr_check_schema(schema_sexp);
+    const char *name = pbwr_type_name(type);
+    const pbw_descriptor *desc = pbwr_find(s->schema, name);
+    size_t len = 0;
+    const char *data = pbwr_text_in(text, &len, "parse_text");
+    pbw_message *msg = NULL;
+    pbw_status status;
+
+    status = pbw_text_parse(desc, data, len, &msg);
+    if (status != PBW_OK) {
+        pbwr_fail(status, "parse_text", name);
+    }
+    return pbwr_push_builder(schema_sexp, desc, msg, NULL);
+}
+
+static SEXP
+pbwr_parse_binary(SEXP schema_sexp, SEXP type, SEXP wire)
+{
+    pbwr_schema *s = pbwr_check_schema(schema_sexp);
+    const char *name = pbwr_type_name(type);
+    const pbw_descriptor *desc = pbwr_find(s->schema, name);
+    const void *bytes;
+    size_t len;
+    pbw_message *msg = NULL;
+    pbw_status status;
+
+    pbwr_wire_in(wire, &bytes, &len);
+    status = pbw_decode(desc, bytes, len, &msg);
+    if (status != PBW_OK) {
+        pbwr_fail(status, "parse_binary", name);
+    }
+    return pbwr_push_builder(schema_sexp, desc, msg, NULL);
+}
+
+/* Prints a builder's own tree: exact, no list in between. */
+static SEXP
+pbwr_msg_to_json(SEXP msg_sexp)
+{
+    pbwr_message *m = pbwr_check_message(msg_sexp);
+    char *text = NULL;
+    size_t len = 0;
+    pbw_status status;
+    SEXP ans;
+
+    status = pbw_json_print(m->tree, &text, &len);
+    if (status != PBW_OK) {
+        pbwr_fail(status, "to_json", pbw_descriptor_name(m->desc));
+    }
+    ans = pbwr_text_out(text, len);
+    pbw_free(text);
+    return ans;
+}
+
+/* Prints a builder's own tree; a second FALSE argument drops unknown
+ * fields (the runner's print_unknown_fields flag), TRUE prints them. */
+static SEXP
+pbwr_msg_to_text(SEXP msg_sexp, SEXP print_unknown)
+{
+    pbwr_message *m = pbwr_check_message(msg_sexp);
+    int print = TYPEOF(print_unknown) != LGLSXP ||
+                Rf_xlength(print_unknown) < 1 ||
+                LOGICAL(print_unknown)[0] != FALSE;
+    char *text = NULL;
+    size_t len = 0;
+    pbw_status status;
+    SEXP ans;
+
+    status = pbw_text_print_opts(m->tree, print, &text, &len);
+    if (status != PBW_OK) {
+        pbwr_fail(status, "to_text", pbw_descriptor_name(m->desc));
+    }
+    ans = pbwr_text_out(text, len);
+    pbw_free(text);
     return ans;
 }
 
@@ -969,6 +1331,18 @@ static const R_CallMethodDef pbwr_calls[] = {
     {"pbwr_encode", (DL_FUNC)&pbwr_encode, 3},
     {"pbwr_decode", (DL_FUNC)&pbwr_decode, 3},
     {"pbwr_roundtrip", (DL_FUNC)&pbwr_roundtrip, 3},
+    {"pbwr_to_json", (DL_FUNC)&pbwr_to_json, 3},
+    {"pbwr_from_json", (DL_FUNC)&pbwr_from_json, 4},
+    {"pbwr_to_text", (DL_FUNC)&pbwr_to_text, 3},
+    {"pbwr_from_text", (DL_FUNC)&pbwr_from_text, 3},
+    {"pbwr_encode_deterministic", (DL_FUNC)&pbwr_encode_deterministic, 3},
+    {"pbwr_encode_delimited", (DL_FUNC)&pbwr_encode_delimited, 3},
+    {"pbwr_decode_delimited", (DL_FUNC)&pbwr_decode_delimited, 3},
+    {"pbwr_parse_json", (DL_FUNC)&pbwr_parse_json, 4},
+    {"pbwr_parse_text", (DL_FUNC)&pbwr_parse_text, 3},
+    {"pbwr_parse_binary", (DL_FUNC)&pbwr_parse_binary, 3},
+    {"pbwr_msg_to_json", (DL_FUNC)&pbwr_msg_to_json, 1},
+    {"pbwr_msg_to_text", (DL_FUNC)&pbwr_msg_to_text, 2},
     {"pbwr_message_new", (DL_FUNC)&pbwr_message_new, 2},
     {"pbwr_message_set", (DL_FUNC)&pbwr_message_set, 2},
     {"pbwr_message_encode", (DL_FUNC)&pbwr_message_encode, 1},

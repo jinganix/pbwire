@@ -180,11 +180,31 @@ wu <- as.raw(c(0x08, 0x01, 0x18, 99))
 ok(is.null(pbwire_decode(s2, m2, wu)$color), "unknown closed enum drops")
 wue <- pbwire_encode(s2, m2, list(need = 1L, color = 99L))
 ok(is.null(pbwire_decode(s2, m2, wue)$color), "unknown closed enum re-drops")
-ok(fails(function() pbwire_encode(s2, m2, list(need = 1L, mygroup = list()))),
-   "group set fails")
+# Groups encode like messages (START_GROUP framing) and decode to lists.
+wge <- pbwire_encode(s2, m2, list(need = 1L, mygroup = list(gv = 7L)))
 wg <- as.raw(c(0x08, 0x01, 0x23, 0x28, 0x07, 0x24))
+ok(identical(wge, wg), "group encode is START_GROUP framing")
 gback <- pbwire_decode(s2, m2, wg)
-ok(isTRUE(gback$need == 1L), "group bytes skipped, rest intact")
+ok(isTRUE(gback$need == 1L), "group bytes keep the rest intact")
+ok(isTRUE(gback$mygroup$gv == 7L), "group decodes")
+ok(identical(pbwire_encode(s2, m2, gback), wg),
+   "group decode/encode byte-exact")
+
+# Reference bytes: protoc --encode agrees with the binding.
+gschema <- pbwire_loadfile("../c/tests/data/grouptest.desc")
+gmsg <- "structtest.GroupTest"
+gfull <- list(inner = list(x = 5L, s = "g"),
+              item = list(list(v = 1L), list(v = -2L)), id = 9L)
+gwire <- pbwire_encode(gschema, gmsg, gfull)
+gref <- file("../c/tests/data/grouptest.bin", "rb")
+gexpect <- readBin(gref, "raw", n = 1e6)
+close(gref)
+ok(identical(gwire, gexpect), "group encode equals protoc reference bytes")
+gback2 <- pbwire_decode(gschema, gmsg, gexpect)
+ok(isTRUE(gback2$inner$x == 5L && gback2$inner$s == "g"),
+   "reference singular group decodes")
+ok(length(gback2$item) == 2 && isTRUE(gback2$item[[2]]$v == -2L),
+   "reference repeated group decodes")
 
 # Builder: build once, encode hot. Matches the list API byte for byte.
 ok(fails(function() pbwire_message(schema, "pbwire.lua.Nope")),
@@ -265,6 +285,74 @@ ok(fails(function() pbwire_roundtrip(schema, msg, as.raw(c(0xff, 0xff, 0xff)))),
    "roundtrip malformed fails")
 ok(fails(function() pbwire_roundtrip(schema, "pbwire.lua.Nope", wire)),
    "roundtrip unknown type fails")
+
+# JSON/text mapping through the binding (lists and builders agree).
+jsample <- list(i32 = -7L, name = "alice")
+jstr <- pbwire_to_json(schema, msg, jsample)
+ok(identical(jstr, '{"i32":-7,"name":"alice"}'), "to_json prints")
+jback <- pbwire_from_json(schema, msg, jstr)
+ok(isTRUE(jback$i32 == -7L) && identical(jback$name, "alice"),
+   "from_json round trip")
+ok(identical(pbwire_encode(schema, msg, jback),
+             pbwire_encode(schema, msg, jsample)),
+   "JSON round trip is wire-equal")
+ok(fails(function() pbwire_from_json(schema, msg, "{oops")),
+   "malformed JSON fails")
+ok(fails(function() pbwire_from_json(schema, msg, '{"nope":1}')), "unknown JSON field fails")
+ok(is.null(pbwire_from_json(schema, msg, '{"nope":1}', TRUE)$name),
+   "ignored unknown JSON field reads as absent")
+tstr <- pbwire_to_text(schema, msg, jsample)
+ok(grepl('name: "alice"', tstr, fixed = TRUE), "to_text prints")
+tback <- pbwire_from_text(schema, msg, tstr)
+ok(identical(pbwire_encode(schema, msg, tback),
+             pbwire_encode(schema, msg, jsample)),
+   "text round trip is wire-equal")
+ok(fails(function() pbwire_from_text(schema, msg, "name: ")),
+   "malformed text fails")
+# Builders parse exactly (64-bit integers past 2^53 survive, unlike lists).
+big <- pbwire_parse_json(schema, msg, '{"u64":18446744073709551615}')
+ok(grepl("18446744073709551615", pbwire_msg_to_json(big), fixed = TRUE),
+   "builder JSON keeps uint64 max")
+bigbin <- pbwire_parse_binary(schema, msg,
+                              pbwire_encode(schema, msg, list(u64 = -1)))
+ok(grepl("18446744073709551615", pbwire_msg_to_json(bigbin), fixed = TRUE),
+   "builder binary keeps uint64 max")
+# Builder to_text drops unknown fields on request (conformance flag).
+wparsed <- pbwire_parse_binary(schema, msg,
+                              c(pbwire_encode(schema, msg, jsample),
+                                as.raw(c(0x98, 0x06, 0x07))))
+ok(grepl("99", pbwire_msg_to_text(wparsed), fixed = TRUE),
+   "builder to_text prints unknowns by default")
+ok(!grepl("99", pbwire_msg_to_text(wparsed, FALSE), fixed = TRUE),
+   "builder to_text(FALSE) drops unknowns")
+# Deterministic encoding sorts map entries by key.
+mschema <- pbwire_loadfile("../c/tests/data/maptest.desc")
+mmsg <- "structtest.Maps"
+mentry <- function(k, v) as.raw(c(0x0a, 0x05, 0x08, k, 0x12, 0x01, v))
+unordered <- c(mentry(2L, 0x62), mentry(1L, 0x61))
+expected <- c(mentry(1L, 0x61), mentry(2L, 0x62))
+det <- pbwire_encode_deterministic(mschema, mmsg,
+                                   pbwire_decode(mschema, mmsg, unordered))
+ok(identical(det, expected), "deterministic encoding sorts map entries")
+# Delimited frames concatenate and decode in a loop.
+f1 <- pbwire_encode_delimited(schema, msg, jsample)
+f2 <- pbwire_encode_delimited(schema, msg, list(name = "bob"))
+frames <- c(f1, f2)
+at <- 1L
+names <- c()
+while (at <= length(frames)) {
+  fr <- pbwire_decode_delimited(schema, msg, frames[at:length(frames)])
+  ok(fr$read > 0L, "frame reports its size")
+  names <- c(names, fr$message$name)
+  at <- at + fr$read
+}
+ok(identical(names, c("alice", "bob")), "delimited frames decode in order")
+ok(fails(function() pbwire_decode_delimited(schema, msg, frames[1:2])),
+   "truncated frame fails")
+# Unknown fields survive byte for byte through roundtrip (gateway
+# passthrough); lists carry known fields only, like the JSON mapping.
+ok(identical(pbwire_roundtrip(schema, msg, with_unknown), with_unknown),
+   "unknown fields survive byte round trip")
 
 cat(if (failures == 0) "all tests passed\n" else
     paste0(failures, " failures\n"))

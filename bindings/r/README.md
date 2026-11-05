@@ -91,7 +91,8 @@ An absent singular field decodes as `NULL`, and a field set to `FALSE`/`0` is
 present and round trips as such (explicit presence, like the C API and the Lua
 binding: the reference encoder would omit an explicit proto3 zero, both parsers
 read it back the same). Oneof: the last member in descriptor order wins on
-encode; decode carries the live member only. Groups raise. Maps are lists of
+encode; decode carries the live member only. Groups map like messages
+(START_GROUP framing on the wire). Maps are lists of
 `list(key=, value=)` entries. `NA` is rejected: protobuf has no null number.
 
 ## Deliberately skipped
@@ -99,17 +100,33 @@ encode; decode carries the live member only. Groups raise. Maps are lists of
 - **No `protoc` plugin, no codegen, no second wire implementation.** The
   descriptor set is the schema; lists convert through the C core's message
   tree, builders encode it directly.
-- **No JSON/text format, no deterministic encoding, no streaming.** All of
-  those exist in the C API; this binding stays the smallest thing that
-  reads and writes binary messages (plus gateway passthrough).
+- **Formats beyond binary/JSON/text lists.** `pbwire_to_json`/`from_json`
+  (with an optional ignore-unknown flag), `pbwire_to_text`/`from_text`,
+  deterministic encoding (`pbwire_encode_deterministic`, map entries sorted
+  by key) and delimited framing (`pbwire_encode_delimited`,
+  `pbwire_decode_delimited` returning `list(message, read)`) wrap the C API.
+  Lists carry doubles past 2^53 approximately (see below); builders
+  (`pbwire_parse_json`/`parse_text`/`parse_binary` plus `pbwire_msg_to_json`/
+  `msg_to_text`) skip lists and stay exact.
 
 ## Conformance
 
-`conformance/testee.R` drives the binary wire format of the official
-`conformance_test_runner` through this binding (binary in -> binary out via
-`pbwire_roundtrip()`, so unknown fields survive and a request is accepted
-exactly when the core accepts it; JSON/text/JSPB requests answer `skipped`,
-the binding has no printers). Not yet run: R is not installed on this machine.
+`conformance/testee.R` drives the official `conformance_test_runner`
+through this binding (`make conformance-r`):
+
+```
+CONFORMANCE SUITE PASSED: 2742 successes, 0 skipped, 2 expected failures,
+0 unexpected failures.
+CONFORMANCE SUITE PASSED: 445 successes, 0 skipped, 0 expected failures,
+0 unexpected failures.
+```
+
+Binary in -> binary out goes through `pbwire_roundtrip()`, so unknown fields
+survive and a request is accepted exactly when the core accepts it; JSON/text
+travel through builder trees (exact, including 64-bit integers). The 2
+expected failures are the shared `conformance/failure_list_pbwire.txt` (tag
+varints the reference C++ testee truncates identically); only JSPB answers
+`skipped`.
 
 ## Benchmark
 
@@ -129,7 +146,7 @@ check. Not yet run: R is not installed on this machine.
 | example | [`examples/roundtrip.R`](examples/roundtrip.R) |
 | self-check | [`tests/test_pbwire.R`](tests/test_pbwire.R) |
 | benchmark | [`benchmarks/bench.R`](benchmarks/bench.R) | the four standard tiers against RProtoBuf |
-| conformance | [`conformance/testee.R`](conformance/testee.R) | binary wire format through the official runner |
+| conformance | [`conformance/testee.R`](conformance/testee.R) | binary, JSON and text through the official runner |
 | fixture | [`tests/data/sample.proto`](tests/data/sample.proto) and the checked-in `sample.desc` |
 
 Regenerate the descriptor set after editing the fixture (it is checked in, so the
