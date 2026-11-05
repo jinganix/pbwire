@@ -191,14 +191,24 @@ conformance-python: python-bind $(CONFORMANCE_DESC)
 		$(PY_ABS) bindings/python/conformance/testee.py \
 		$(CURDIR)/$(CONFORMANCE_DESC)
 
-# Same suite through the Lua binding (binary wire format; JSON/text answer
-# "skipped" because the binding has no printers).
+# Same suite through the Lua binding (binary, JSON and text; only JSPB
+# answers "skipped").
 conformance-lua: $(CONFORMANCE_DESC) lua-bind
 	@test -x "$(CONFORMANCE_RUNNER)" || { \
 		echo "conformance_test_runner not found: $(CONFORMANCE_RUNNER)"; \
 		echo "run 'make conformance-setup' first"; exit 1; }
 	$(CONFORMANCE_RUNNER) --failure_list $(CURDIR)/conformance/failure_list_pbwire.txt \
 		$(LUA_ABS) bindings/lua/conformance/testee.lua \
+		$(CURDIR)/$(CONFORMANCE_DESC)
+
+# Same suite through the R binding (binary, JSON and text; only JSPB
+# answers "skipped").
+conformance-r: $(CONFORMANCE_DESC) r-bind
+	@test -x "$(CONFORMANCE_RUNNER)" || { \
+		echo "conformance_test_runner not found: $(CONFORMANCE_RUNNER)"; \
+		echo "run 'make conformance-setup' first"; exit 1; }
+	$(CONFORMANCE_RUNNER) --failure_list $(CURDIR)/conformance/failure_list_pbwire.txt \
+		$(RSCRIPT_ABS) bindings/r/conformance/testee.R \
 		$(CURDIR)/$(CONFORMANCE_DESC)
 conformance-ruby: $(CONFORMANCE_DESC) ruby-bind
 	@test -x "$(CONFORMANCE_RUNNER)" || { \
@@ -364,6 +374,19 @@ lua-test: lua-bind
 node-test:
 	./bindings/node/build.sh
 
+NODE ?= node
+NODE_ABS := $(shell command -v $(NODE) 2>/dev/null || echo $(NODE))
+
+# Same suite through the Node binding (binary, JSON and text; only JSPB
+# answers "skipped").
+conformance-node: $(CONFORMANCE_DESC) node-test
+	@test -x "$(CONFORMANCE_RUNNER)" || { \
+		echo "conformance_test_runner not found: $(CONFORMANCE_RUNNER)"; \
+		echo "run 'make conformance-setup' first"; exit 1; }
+	$(CONFORMANCE_RUNNER) --failure_list $(CURDIR)/conformance/failure_list_pbwire.txt \
+		$(NODE_ABS) bindings/node/conformance/testee.js \
+		$(CURDIR)/$(CONFORMANCE_DESC)
+
 objc-test:
 	./bindings/objc/build.sh test
 
@@ -412,6 +435,9 @@ ZIG ?= zig
 CLOJURE ?= clojure
 JULIA ?= julia
 RSCRIPT ?= Rscript
+RSCRIPT_ABS := $(shell command -v $(RSCRIPT) 2>/dev/null || echo $(RSCRIPT))
+r-bind:
+	cd bindings/r && ./build.sh
 
 swift-test: $(LIB)
 	cd bindings/swift && ./build.sh test
@@ -434,8 +460,8 @@ clojure-test:
 julia-test:
 	cd bindings/julia && $(JULIA) --project=runtime tests/runtests.jl
 
-r-test:
-	cd bindings/r && ./build.sh && $(RSCRIPT) tests/test_pbwire.R && $(RSCRIPT) tests/test.R
+r-test: r-bind
+	cd bindings/r && $(RSCRIPT) tests/test_pbwire.R && $(RSCRIPT) tests/test.R
 
 # Each binding benchmarks itself against its language's official runtime on
 # matrix3.proto (same four tiers as `bench`/`bench-c`). Optional like those:
@@ -535,7 +561,7 @@ clean:
 
 .PHONY: all test examples format format-check bench bench-c erlang-bench \
 	python-bind python-test python-bench difftest conformance conformance-python \
-	conformance-ruby conformance-java conformance-lua ruby-bind java-test ruby-test node-test objc-test \
+	conformance-ruby conformance-java conformance-lua conformance-r conformance-node ruby-bind java-test ruby-test node-test objc-test r-bind \
 	lua-bind lua-test lua-bench \
 	java-bench ruby-bench node-bench objc-bench \
 	kotlin-test php-test dart-test rust-test csharp-test \
