@@ -208,13 +208,31 @@ per-message finalizer.
 - **No protoc plugin / code generation.** The schema is always loaded at run
   time, like the Python binding: a `FileDescriptorSet` is the only schema
   source, and there is no generated layout to keep in sync.
-- **No conformance testee.** The official suite is covered through the C core
-  and `conformance/`, not through this binding. The differential test above is
-  what keeps the addon's wire reader honest against the core's.
+Also exported: JSON/text format (`messageToJson`/`jsonToMessage` — the latter
+with an optional ignore-unknown flag, `messageToText`/`textToMessage` — the
+former with an optional print-unknown flag), field presence (`has`), and
+delimited framing (`encodeDelimited`/`decodeDelimited`, returning
+`{message, read}` so concatenated frames decode in a loop).
+See `test/test_pbwire.js`.
 
-Also out of scope here: JSON/text format (`pbw_json_print`/`pbw_text_print`),
-field presence introspection (`pbw_message_field_count`), and delimited framing.
-Each is one addon export away when a consumer needs it.
+## Conformance
+
+`conformance/testee.js` drives the official `conformance_test_runner`
+through this binding (`make conformance-node`):
+
+```
+CONFORMANCE SUITE PASSED: 2742 successes, 0 skipped, 2 expected failures,
+0 unexpected failures.
+CONFORMANCE SUITE PASSED: 445 successes, 0 skipped, 0 expected failures,
+0 unexpected failures.
+```
+
+Binary input decodes to a tree (unknown fields survive, oneof collapses to
+the last member) and every output renders that same tree; JSON input with
+unknown fields only parses when the test category asks to ignore them, and
+text output honors the runner's `print_unknown_fields` flag. The 2 expected
+failures are the shared `conformance/failure_list_pbwire.txt` (tag varints
+the reference C++ testee truncates identically); only JSPB answers `skipped`.
 
 ## Generated models
 

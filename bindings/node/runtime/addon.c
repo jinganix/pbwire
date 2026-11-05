@@ -2528,6 +2528,279 @@ message_free(napi_env env, napi_callback_info info)
     return out;
 }
 
+/* JSON text of a tree (protobuf JSON mapping). */
+static napi_value
+message_to_json(napi_env env, napi_callback_info info)
+{
+    napi_value argv[1];
+    napi_value out = NULL;
+    message_handle *handle;
+    char *text = NULL;
+    size_t len = 0;
+    pbw_status status;
+
+    if (!get_args(env, info, argv, 1)) {
+        return NULL;
+    }
+    if (!unwrap_message(env, argv[0], &handle)) {
+        return NULL;
+    }
+    status = pbw_json_print(handle->msg, &text, &len);
+    if (status != PBW_OK) {
+        return fail_status(env, "messageToJson", status);
+    }
+    if (napi_create_string_utf8(env, text, len, &out) != napi_ok) {
+        pbw_free(text);
+        return NULL;
+    }
+    pbw_free(text);
+    return out;
+}
+
+/* Parses JSON mapping text into a new tree; an optional third boolean
+ * argument skips unknown field names instead of failing. */
+static napi_value
+json_to_message(napi_env env, napi_callback_info info)
+{
+    napi_value argv[3];
+    size_t argc = 3;
+    desc_handle *desc;
+    message_handle *handle;
+    pbw_message *msg = NULL;
+    string_buf buf;
+    const char *text;
+    pbw_status status;
+    pbw_json_parse_options opts;
+    bool ignore = false;
+
+    if (napi_get_cb_info(env, info, &argc, argv, NULL, NULL) != napi_ok ||
+        argc < 2) {
+        napi_throw_type_error(env, NULL, "pbwire: expected (desc, json)");
+        return NULL;
+    }
+    if (!unwrap(env, argv[0], (void **)&desc, "message descriptor handle")) {
+        return NULL;
+    }
+    if (argc > 2) {
+        napi_valuetype want = napi_undefined;
+
+        if (napi_typeof(env, argv[2], &want) != napi_ok ||
+            want != napi_boolean ||
+            napi_get_value_bool(env, argv[2], &ignore) != napi_ok) {
+            napi_throw_type_error(env, NULL,
+                                  "pbwire: ignore flag must be a boolean");
+            return NULL;
+        }
+    }
+    text = string_bytes(env, argv[1], &buf);
+    if (text == NULL) {
+        return NULL;
+    }
+    opts.ignore_unknown_fields = ignore;
+    status = pbw_json_parse_opts(desc->table->desc, text, buf.len, &opts,
+                                 &msg);
+    string_free(&buf, text);
+    if (status != PBW_OK) {
+        return fail_status(env, "jsonToMessage", status);
+    }
+    handle = calloc(1, sizeof(*handle));
+    if (handle == NULL) {
+        pbw_message_free(msg);
+        return fail_memory(env);
+    }
+    handle->msg = msg;
+    return new_message_value(env, desc, argv[0], handle);
+}
+
+/* Text format of a tree. */
+static napi_value
+message_to_text(napi_env env, napi_callback_info info)
+{
+    napi_value argv[2];
+    size_t argc = 2;
+    napi_value out = NULL;
+    message_handle *handle;
+    char *text = NULL;
+    size_t len = 0;
+    pbw_status status;
+    /* Absent means print (the binding's standing behavior); the testee
+     * passes the runner's print_unknown_fields flag explicitly. */
+    bool print_unknown = true;
+
+    if (napi_get_cb_info(env, info, &argc, argv, NULL, NULL) != napi_ok ||
+        argc < 1) {
+        napi_throw_type_error(env, NULL, "pbwire: expected (message)");
+        return NULL;
+    }
+    if (!unwrap_message(env, argv[0], &handle)) {
+        return NULL;
+    }
+    if (argc > 1) {
+        napi_valuetype want = napi_undefined;
+
+        if (napi_typeof(env, argv[1], &want) != napi_ok ||
+            want != napi_boolean ||
+            napi_get_value_bool(env, argv[1], &print_unknown) != napi_ok) {
+            napi_throw_type_error(env, NULL,
+                                  "pbwire: print flag must be a boolean");
+            return NULL;
+        }
+    }
+    status = pbw_text_print_opts(handle->msg, print_unknown, &text, &len);
+    if (status != PBW_OK) {
+        return fail_status(env, "messageToText", status);
+    }
+    if (napi_create_string_utf8(env, text, len, &out) != napi_ok) {
+        pbw_free(text);
+        return NULL;
+    }
+    pbw_free(text);
+    return out;
+}
+
+/* Parses text format into a new tree. */
+static napi_value
+text_to_message(napi_env env, napi_callback_info info)
+{
+    napi_value argv[2];
+    desc_handle *desc;
+    message_handle *handle;
+    pbw_message *msg = NULL;
+    string_buf buf;
+    const char *text;
+    pbw_status status;
+
+    if (!get_args(env, info, argv, 2)) {
+        return NULL;
+    }
+    if (!unwrap(env, argv[0], (void **)&desc, "message descriptor handle")) {
+        return NULL;
+    }
+    text = string_bytes(env, argv[1], &buf);
+    if (text == NULL) {
+        return NULL;
+    }
+    status = pbw_text_parse(desc->table->desc, text, buf.len, &msg);
+    string_free(&buf, text);
+    if (status != PBW_OK) {
+        return fail_status(env, "textToMessage", status);
+    }
+    handle = calloc(1, sizeof(*handle));
+    if (handle == NULL) {
+        pbw_message_free(msg);
+        return fail_memory(env);
+    }
+    handle->msg = msg;
+    return new_message_value(env, desc, argv[0], handle);
+}
+
+/* Presence of one field by name: set (even to a zero) reads true. */
+static napi_value
+message_has(napi_env env, napi_callback_info info)
+{
+    napi_value argv[2];
+    napi_value out = NULL;
+    message_handle *handle;
+    field_entry *entry;
+    int present;
+
+    if (!get_args(env, info, argv, 2)) {
+        return NULL;
+    }
+    if (!unwrap_message(env, argv[0], &handle)) {
+        return NULL;
+    }
+    entry = field_by_name(env, handle, argv[1]);
+    if (entry == NULL) {
+        return NULL;
+    }
+    present = pbw_message_get_field(handle->msg, entry->field) != NULL;
+    if (napi_get_boolean(env, present, &out) != napi_ok) {
+        return NULL;
+    }
+    return out;
+}
+
+/* One length-delimited frame (varint length + message) as a Buffer. */
+static napi_value
+encode_delimited(napi_env env, napi_callback_info info)
+{
+    napi_value argv[1];
+    napi_value out = NULL;
+    message_handle *handle;
+    uint8_t *wire = NULL;
+    size_t wire_len = 0;
+    pbw_status status;
+
+    if (!get_args(env, info, argv, 1)) {
+        return NULL;
+    }
+    if (!unwrap_message(env, argv[0], &handle)) {
+        return NULL;
+    }
+    status = pbw_encode_delimited(handle->msg, &wire, &wire_len);
+    if (status != PBW_OK) {
+        return fail_status(env, "encodeDelimited", status);
+    }
+    if (napi_create_buffer_copy(env, wire_len, wire, NULL, &out) != napi_ok) {
+        pbw_free(wire);
+        return NULL;
+    }
+    pbw_free(wire);
+    return out;
+}
+
+/* One frame from a Buffer: {message, read}, where read counts the length
+ * prefix plus the frame, so concatenated frames decode in a loop. */
+static napi_value
+decode_delimited(napi_env env, napi_callback_info info)
+{
+    napi_value argv[2];
+    napi_value out = NULL;
+    napi_value message_value = NULL;
+    napi_value read_value = NULL;
+    desc_handle *desc;
+    message_handle *handle;
+    pbw_message *msg = NULL;
+    void *data = NULL;
+    size_t len = 0;
+    size_t consumed = 0;
+    pbw_status status;
+
+    if (!get_args(env, info, argv, 2)) {
+        return NULL;
+    }
+    if (!unwrap(env, argv[0], (void **)&desc, "message descriptor handle")) {
+        return NULL;
+    }
+    if (napi_get_buffer_info(env, argv[1], &data, &len) != napi_ok) {
+        return fail_argument(env, "decodeDelimited expects a Buffer");
+    }
+    status = pbw_decode_delimited(desc->table->desc, data, len, &msg,
+                                  &consumed);
+    if (status != PBW_OK) {
+        return fail_status(env, "decodeDelimited", status);
+    }
+    handle = calloc(1, sizeof(*handle));
+    if (handle == NULL) {
+        pbw_message_free(msg);
+        return fail_memory(env);
+    }
+    handle->msg = msg;
+    message_value = new_message_value(env, desc, argv[0], handle);
+    if (message_value == NULL) {
+        return NULL;
+    }
+    if (napi_create_object(env, &out) != napi_ok ||
+        napi_set_named_property(env, out, "message", message_value) !=
+            napi_ok ||
+        napi_create_uint32(env, (uint32_t)consumed, &read_value) != napi_ok ||
+        napi_set_named_property(env, out, "read", read_value) != napi_ok) {
+        return NULL;
+    }
+    return out;
+}
+
 NAPI_MODULE_INIT()
 {
     napi_property_descriptor properties[] = {
@@ -2554,6 +2827,19 @@ NAPI_MODULE_INIT()
         {"copyEncoded", NULL, copy_encoded, NULL, NULL, NULL, napi_enumerable,
          NULL},
         {"free", NULL, message_free, NULL, NULL, NULL, napi_enumerable, NULL},
+        {"messageToJson", NULL, message_to_json, NULL, NULL, NULL,
+         napi_enumerable, NULL},
+        {"jsonToMessage", NULL, json_to_message, NULL, NULL, NULL,
+         napi_enumerable, NULL},
+        {"messageToText", NULL, message_to_text, NULL, NULL, NULL,
+         napi_enumerable, NULL},
+        {"textToMessage", NULL, text_to_message, NULL, NULL, NULL,
+         napi_enumerable, NULL},
+        {"has", NULL, message_has, NULL, NULL, NULL, napi_enumerable, NULL},
+        {"encodeDelimited", NULL, encode_delimited, NULL, NULL, NULL,
+         napi_enumerable, NULL},
+        {"decodeDelimited", NULL, decode_delimited, NULL, NULL, NULL,
+         napi_enumerable, NULL},
     };
 
     if (napi_define_properties(env, exports,
