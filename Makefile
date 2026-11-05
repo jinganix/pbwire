@@ -170,7 +170,10 @@ $(CONFORMANCE_DESC): | build
 	@test -d "$(PROTOBUF_SRC)/src" || { \
 		echo "protobuf checkout not found: $(PROTOBUF_SRC)"; \
 		echo "run 'make conformance-setup' first (clones once, then reuses it)"; exit 1; }
-	cd $(PROTOBUF_SRC) && $(PROTOC) -Isrc -I. -Ieditions/golden --include_imports \
+	# No cd: PROTOC may be relative to the repo root (CI exports an
+	# absolute path, developers often rely on PATH), and protoc resolves
+	# the inputs through -I either way.
+	$(PROTOC) -I$(PROTOBUF_SRC)/src -I$(PROTOBUF_SRC) -I$(PROTOBUF_SRC)/editions/golden --include_imports \
 		--descriptor_set_out=$(CURDIR)/$(CONFORMANCE_DESC) \
 		google/protobuf/test_messages_proto3.proto \
 		google/protobuf/test_messages_proto2.proto \
