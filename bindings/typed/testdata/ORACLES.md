@@ -11,6 +11,13 @@ own PR: bump the pin, run the binding's full T1–T6, all green to merge.
 | go | `google.golang.org/protobuf` | v1.36.12 | `go get google.golang.org/protobuf@latest`, regenerate `tests/gen_oracle`, run T1–T6 |
 | rust | `prost` / `prost-build` | 0.14.4 (Cargo.lock) | `cargo update -p prost`, regenerate `tests/gen_oracle`, run T1–T6 |
 | csharp | `Google.Protobuf` (NuGet) | 3.36.2 | update `PackageReference`, regenerate `oracle/gen_oracle`, run T1–T6 |
+| php | official PHP runtime (`php/src`) + `protoc --php_out` oracle | v36.2 | regenerate `tests/gen_oracle` with repo protoc, run T1–T6 |
+| dart | `protobuf` pub package (protoc-gen-dart oracle) | 6.1.0 (pubspec.lock), protoc-gen-dart from protoc_plugin 25.1.0 | `dart pub upgrade`, regenerate `tests/gen_oracle`, run T1–T6 |
+| objc | protobuf ObjC runtime + `protoc --objc_out` (cached checkout) | v36.2 (`GOOGLE_PROTOBUF_OBJC_VERSION` 40311) | re-run `bindings/objc/build.sh` typed; pin asserted at compile time in `tests/typed_test.m` |
+| java | `protobuf-java` | 4.36.2 (locked in `bindings/java/build.sh` + `RuntimeVersion` assert) | re-fetch jar, re-`protoc` oracle, run T1–T6 |
+| kotlin | `protobuf-java` (same jar, thin DSL over Java classes) | 4.36.2 (locked in `bindings/kotlin/build.sh`) | same as java |
+| c | libprotobuf (`protoc --cpp_out`), 36.2.0 | compile-time `GOOGLE_PROTOBUF_VERSION` check in `bindings/cpp/tests/compat_oracle.cc` | re-run `make compat-oracle` |
+| cpp | same as C (shared struct codec), 36.2.0 | same TU | same as C |
 
 ## node
 

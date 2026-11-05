@@ -25,6 +25,7 @@ node_modules/
 # Build artifacts
 build/
 build-*/
+bindings/cpp/tests/gen_oracle/
 results/
 dist/
 *.egg-info/

@@ -4,6 +4,25 @@
  * reference bytes protoc produced (--encode from the checked-in .txt).
  * No test framework, no dependencies; run from the repo root so the
  * relative fixture paths resolve.
+ *
+ * Typed-compat coverage (TESTSPEC T1-T6, adapted: the struct codec IS the
+ * typed model, so vectors.json lives here as C literals in fill_scalars3;
+ * the oracle half runs through the dynamic tree API below plus the live
+ * libprotobuf differential in bindings/cpp/tests/compat_oracle.cc):
+ *
+ *   T1  struct encode == matrix3.bin / matrix2.bin / addressbook.bin
+ *   T2  decode of each reference reads every field back (incl. presence)
+ *   T3  empty/explicit-zero round-trips (implicit-presence zeros are still
+ *       emitted: the struct has no has-flag to omit them by, and the bytes
+ *       stay valid protobuf; explicit-presence absence omits exactly)
+ *   T4  dynamic-tree cross-decode of matrix3.bin agrees field by field,
+ *       and re-encodes to the same bytes
+ *   T5  one workflow through the one-shot calls and the compiled codec
+ *       gives identical bytes and identical fields
+ *   T6  bad wire, overlong varints, wrong kinds and missing required
+ *       fields fail loudly; unknown open-enum values are kept like the
+ *       reference keeps them. Oneof messages never reach the codec: the
+ *       plugin rejects them at generation time (cgen.go).
  */
 
 #include <stdint.h>
@@ -873,6 +892,346 @@ test_schema_load_errors(void)
     }
 }
 
+/* T3: a zeroed struct round-trips to zero and re-encodes identically.
+ * Adaptation pin: proto3 implicit-presence scalars have no has-flag, so the
+ * encoder still emits them as zeros (valid protobuf: parsers read explicit
+ * defaults as zero, and libprotobuf parses these bytes back to the same
+ * zeros). Only explicit-presence (optional), repeated, string and message
+ * fields vanish when absent. */
+static void
+test_t3_empty_and_explicit_zero(void)
+{
+    structtest_scalars3_t zero;
+    structtest_scalars3_t back;
+    structtest_scalars3_t explicit_zero;
+    structtest_scalars3_t back2;
+    pbw_schema *schema = NULL;
+    uint8_t *wire = NULL;
+    uint8_t *wire2 = NULL;
+    size_t wire_len = 0;
+    size_t wire2_len = 0;
+
+    CHECK_OK(pbw_struct_schema_load(MATRIX3_DESC_PATH, &schema));
+    if (schema == NULL) {
+        return;
+    }
+    memset(&zero, 0, sizeof(zero));
+    CHECK_OK(structtest_scalars3_encode(schema, &zero, &wire, &wire_len));
+    CHECK_OK(structtest_scalars3_decode(schema, wire, wire_len, &back));
+    CHECK(back.i32 == 0 && back.i64 == 0 && back.u32 == 0 && back.u64 == 0);
+    CHECK(back.s32 == 0 && back.s64 == 0 && back.fx32 == 0 && back.fx64 == 0);
+    CHECK(back.sfx32 == 0 && back.sfx64 == 0 && back.f32 == 0.0f);
+    CHECK(back.f64 == 0.0 && back.flag == 0 && back.str == NULL);
+    CHECK(back.color == STRUCTTEST_COLOR3_COLOR3_UNSPECIFIED);
+    CHECK(back.inner == NULL);
+    CHECK(back.n_nums == 0 && back.n_tags == 0 && back.n_inners == 0);
+    CHECK(back.has_opt_i32 == 0 && back.opt_i32 == 0);
+    CHECK(back.opt_str == NULL && back.n_flags == 0);
+    CHECK_OK(structtest_scalars3_encode(schema, &back, &wire2, &wire2_len));
+    CHECK(wire2_len == wire_len && memcmp(wire2, wire, wire_len) == 0);
+    structtest_scalars3_free(&back);
+    pbw_free(wire2);
+    wire2 = NULL;
+
+    /* Explicit zero with presence: field 20 (tag 0xa0 0x01) carrying 0x00 is
+     * the last row of the pinned layout, so it lands as a 3-byte suffix.
+     * Absent opt_str stays absent: no field 21 tag anywhere after it. */
+    memset(&explicit_zero, 0, sizeof(explicit_zero));
+    explicit_zero.opt_i32 = 0;
+    explicit_zero.has_opt_i32 = 1;
+    CHECK_OK(structtest_scalars3_encode(schema, &explicit_zero, &wire2,
+                                        &wire2_len));
+    CHECK(wire2_len == wire_len + 3);
+    if (wire2_len == wire_len + 3) {
+        CHECK(memcmp(wire2, wire, wire_len) == 0);
+        CHECK(wire2[wire_len] == 0xa0 && wire2[wire_len + 1] == 0x01 &&
+              wire2[wire_len + 2] == 0x00);
+    }
+    CHECK_OK(structtest_scalars3_decode(schema, wire2, wire2_len, &back2));
+    CHECK(back2.has_opt_i32 == 1 && back2.opt_i32 == 0);
+    CHECK(back2.opt_str == NULL && back2.n_flags == 0);
+    structtest_scalars3_free(&back2);
+    pbw_free(wire2);
+    pbw_free(wire);
+    pbw_schema_free(schema);
+}
+
+/* T4 in-gate: the same matrix3.bin through the dynamic tree API. Two
+ * independent codecs over one descriptor must agree field by field, and the
+ * dynamic tree must re-encode to the same bytes (the live libprotobuf half
+ * of T4 is compat_oracle.cc, which also pins the oracle version). */
+static void
+test_t4_dynamic_crosscheck(void)
+{
+    pbw_schema *dyn = NULL;
+    const pbw_descriptor *desc;
+    pbw_message *msg = NULL;
+    pbw_value *v;
+    pbw_message *inner;
+    uint8_t *desc_bytes = NULL;
+    uint8_t *expect = NULL;
+    uint8_t *wire = NULL;
+    size_t desc_len = 0;
+    size_t expect_len = 0;
+    size_t wire_len = 0;
+    size_t i;
+    uint32_t color_bits;
+
+    CHECK(read_file("bindings/c/tests/data/matrix3.desc", &desc_bytes,
+                    &desc_len) == 0);
+    CHECK(read_file("bindings/c/tests/data/matrix3.bin", &expect,
+                    &expect_len) == 0);
+    if (desc_bytes == NULL || expect == NULL) {
+        goto done;
+    }
+    CHECK_OK(pbw_descriptor_set_load(desc_bytes, desc_len, &dyn));
+    if (dyn == NULL) {
+        goto done;
+    }
+    desc = pbw_schema_find(dyn, "structtest.Scalars3");
+    CHECK(desc != NULL);
+    if (desc == NULL) {
+        goto done;
+    }
+    CHECK_OK(pbw_decode(desc, expect, expect_len, &msg));
+    if (msg == NULL) {
+        goto done;
+    }
+    v = pbw_message_get(msg, 1);
+    CHECK(v != NULL && pbw_value_get_int32(v) == INT32_MIN);
+    v = pbw_message_get(msg, 2);
+    CHECK(v != NULL && pbw_value_get_int(v) == INT64_MAX);
+    v = pbw_message_get(msg, 3);
+    CHECK(v != NULL && pbw_value_get_uint32(v) == UINT32_MAX);
+    v = pbw_message_get(msg, 4);
+    CHECK(v != NULL && pbw_value_get_uint(v) == UINT64_MAX);
+    v = pbw_message_get(msg, 5);
+    CHECK(v != NULL && pbw_value_get_int32(v) == INT32_MIN);
+    v = pbw_message_get(msg, 6);
+    CHECK(v != NULL && pbw_value_get_int(v) == INT64_MIN);
+    v = pbw_message_get(msg, 7);
+    CHECK(v != NULL && pbw_value_get_uint32(v) == UINT32_C(0xdeadbeef));
+    v = pbw_message_get(msg, 8);
+    CHECK(v != NULL &&
+          pbw_value_get_uint(v) == UINT64_C(72623859790382856));
+    v = pbw_message_get(msg, 9);
+    CHECK(v != NULL && pbw_value_get_int32(v) == INT32_MIN);
+    v = pbw_message_get(msg, 10);
+    CHECK(v != NULL && pbw_value_get_int(v) == INT64_MIN);
+    v = pbw_message_get(msg, 11);
+    CHECK(v != NULL);
+    if (v != NULL) {
+        float f32 = pbw_value_get_float(v);
+
+        memcpy(&color_bits, &f32, sizeof(color_bits));
+        CHECK(color_bits == UINT32_C(0x7f800000)); /* inf */
+    }
+    v = pbw_message_get(msg, 12);
+    CHECK(v != NULL && pbw_value_get_double(v) == -123456.789);
+    v = pbw_message_get(msg, 13);
+    CHECK(v != NULL && pbw_value_get_bool(v) != 0);
+    v = pbw_message_get(msg, 14);
+    CHECK(v != NULL && strcmp(pbw_value_get_string(v), "hello") == 0);
+    v = pbw_message_get(msg, 15);
+    CHECK(v != NULL && pbw_value_get_int32(v) == 2); /* GREEN */
+    v = pbw_message_get(msg, 16);
+    CHECK(v != NULL);
+    inner = v != NULL ? pbw_value_get_message(v) : NULL;
+    CHECK(inner != NULL);
+    if (inner != NULL) {
+        pbw_value *name = pbw_message_get(inner, 1);
+        pbw_value *value = pbw_message_get(inner, 2);
+        CHECK(name != NULL && strcmp(pbw_value_get_string(name), "kid") == 0);
+        CHECK(value != NULL && pbw_value_get_int32(value) == 42);
+    }
+    v = pbw_message_get(msg, 17);
+    CHECK(v != NULL && pbw_value_count(v) == 3);
+    if (v != NULL && pbw_value_count(v) == 3) {
+        CHECK(pbw_value_get_int32(pbw_value_at(v, 0)) == 1);
+        CHECK(pbw_value_get_int32(pbw_value_at(v, 1)) == -5);
+        CHECK(pbw_value_get_int32(pbw_value_at(v, 2)) == 300);
+    }
+    v = pbw_message_get(msg, 18);
+    CHECK(v != NULL && pbw_value_count(v) == 2);
+    if (v != NULL && pbw_value_count(v) == 2) {
+        CHECK(strcmp(pbw_value_get_string(pbw_value_at(v, 0)), "a") == 0);
+        CHECK(strcmp(pbw_value_get_string(pbw_value_at(v, 1)), "bb") == 0);
+    }
+    v = pbw_message_get(msg, 19);
+    CHECK(v != NULL && pbw_value_count(v) == 2);
+    if (v != NULL && pbw_value_count(v) == 2) {
+        pbw_message *first = pbw_value_get_message(pbw_value_at(v, 0));
+        pbw_message *second = pbw_value_get_message(pbw_value_at(v, 1));
+        CHECK(first != NULL && second != NULL);
+        if (first != NULL) {
+            CHECK(strcmp(pbw_value_get_string(pbw_message_get(first, 1)),
+                         "x") == 0);
+        }
+        if (second != NULL) {
+            CHECK(pbw_value_get_int32(pbw_message_get(second, 2)) == -2);
+        }
+    }
+    v = pbw_message_get(msg, 20);
+    CHECK(v != NULL && pbw_value_get_int32(v) == -7);
+    v = pbw_message_get(msg, 21);
+    CHECK(v != NULL && strcmp(pbw_value_get_string(v), "opt") == 0);
+    v = pbw_message_get(msg, 22);
+    CHECK(v != NULL && pbw_value_count(v) == 3);
+    if (v != NULL && pbw_value_count(v) == 3) {
+        CHECK(pbw_value_get_bool(pbw_value_at(v, 0)) != 0);
+        CHECK(pbw_value_get_bool(pbw_value_at(v, 1)) == 0);
+        CHECK(pbw_value_get_bool(pbw_value_at(v, 2)) != 0);
+    }
+    /* Same tree back to bytes: byte equality with the protoc reference. */
+    CHECK_OK(pbw_encode(msg, &wire, &wire_len));
+    CHECK(wire_len == expect_len && memcmp(wire, expect, expect_len) == 0);
+    for (i = 0; i < expect_len; i++) {
+        if (wire_len != expect_len || wire[i] != expect[i]) {
+            break;
+        }
+    }
+done:
+    pbw_free(wire);
+    pbw_message_free(msg);
+    free(expect);
+    free(desc_bytes);
+    pbw_schema_free(dyn);
+}
+
+/* T5: one workflow (the vectors.json business values) through the one-shot
+ * calls and through the compiled codec: identical bytes, identical fields.
+ * The cross-library half (same steps against libprotobuf generated code) is
+ * compat_oracle.cc, where the snippet is shared, not duplicated. */
+static void
+test_t5_entry_point_parity(void)
+{
+    structtest_scalars3_t s;
+    structtest_inner3_t inner;
+    int32_t nums[3];
+    const char *tags[2];
+    structtest_inner3_t inners[2];
+    bool flags[3];
+    structtest_scalars3_t via_calls;
+    structtest_scalars3_t via_codec;
+    pbw_schema *schema = NULL;
+    pbw_struct_codec *codec = NULL;
+    pbw_struct_buf buf = {NULL, 0, 0};
+    uint8_t *wire = NULL;
+    size_t wire_len = 0;
+
+    CHECK_OK(pbw_struct_schema_load(MATRIX3_DESC_PATH, &schema));
+    if (schema == NULL) {
+        return;
+    }
+    fill_scalars3(&s, &inner, nums, tags, inners);
+    fill_flags(&s, flags);
+    CHECK_OK(pbw_struct_codec_init(&codec, schema, "structtest.Scalars3",
+                                   structtest_scalars3_fields, 22));
+    if (codec == NULL) {
+        goto done;
+    }
+    /* Same literals, two entry points, one byte string. */
+    CHECK_OK(structtest_scalars3_encode(schema, &s, &wire, &wire_len));
+    CHECK_OK(pbw_struct_codec_encode(codec, &s, &buf));
+    CHECK(buf.len == wire_len && memcmp(buf.data, wire, wire_len) == 0);
+    /* Same bytes back through both decoders: the same observable struct. */
+    CHECK_OK(structtest_scalars3_decode(schema, wire, wire_len, &via_calls));
+    memset(&via_codec, 0, sizeof(via_codec));
+    CHECK_OK(pbw_struct_codec_decode(codec, buf.data, buf.len, NULL,
+                                     &via_codec));
+    CHECK(via_calls.i32 == via_codec.i32 && via_calls.i64 == via_codec.i64);
+    CHECK(via_calls.u32 == via_codec.u32 && via_calls.u64 == via_codec.u64);
+    CHECK(float_bits(via_calls.f32) == float_bits(via_codec.f32));
+    CHECK(via_calls.f64 == via_codec.f64);
+    CHECK(via_calls.flag == via_codec.flag);
+    CHECK(strcmp(via_calls.str, via_codec.str) == 0);
+    CHECK(via_calls.color == via_codec.color);
+    CHECK(strcmp(via_calls.inner->name, via_codec.inner->name) == 0);
+    CHECK(via_calls.inner->value == via_codec.inner->value);
+    CHECK(via_calls.n_nums == via_codec.n_nums);
+    CHECK(via_calls.n_tags == via_codec.n_tags && via_calls.n_tags == 2);
+    CHECK(via_calls.nums[2] == via_codec.nums[2]);
+    CHECK(via_calls.n_inners == via_codec.n_inners);
+    CHECK(via_calls.inners[1].value == via_codec.inners[1].value);
+    CHECK(via_calls.has_opt_i32 == via_codec.has_opt_i32);
+    CHECK(via_calls.opt_i32 == via_codec.opt_i32);
+    CHECK(strcmp(via_calls.opt_str, via_codec.opt_str) == 0);
+    CHECK(via_calls.n_flags == via_codec.n_flags);
+    CHECK(via_calls.flags[0] == via_codec.flags[0]);
+    structtest_scalars3_free(&via_calls);
+    structtest_scalars3_free(&via_codec);
+done:
+    pbw_struct_codec_free(codec);
+    pbw_struct_buf_free(&buf);
+    pbw_free(wire);
+    pbw_schema_free(schema);
+}
+
+/* T6, wire level: truncated and overlong varints fail loudly, and an unknown
+ * open-enum value is kept (proto3 enums are open; the reference parses 99
+ * into the field too, so the codec stores it and re-emits it stably). */
+static void
+test_t6_wire_errors(void)
+{
+    structtest_scalars3_t got;
+    pbw_schema *schema = NULL;
+    uint8_t *wire = NULL;
+    size_t wire_len = 0;
+    /* Field 1 tag with the payload cut off. */
+    static const uint8_t truncated[] = {0x08};
+    /* Field 1 tag plus 11 continuation bytes: no varint is that long. */
+    static const uint8_t overlong[] = {0x08, 0xff, 0xff, 0xff, 0xff, 0xff,
+                                       0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
+    /* Field 15 (color) carrying unknown value 99. */
+    static const uint8_t unknown_enum[] = {0x78, 0x63};
+
+    CHECK_OK(pbw_struct_schema_load(MATRIX3_DESC_PATH, &schema));
+    if (schema == NULL) {
+        return;
+    }
+    memset(&got, 0, sizeof(got));
+    CHECK(pbw_struct_decode(schema, "structtest.Scalars3",
+                            structtest_scalars3_fields, 22, truncated,
+                            sizeof(truncated), &got) != PBW_OK);
+    memset(&got, 0, sizeof(got));
+    CHECK(pbw_struct_decode(schema, "structtest.Scalars3",
+                            structtest_scalars3_fields, 22, overlong,
+                            sizeof(overlong), &got) != PBW_OK);
+    CHECK_OK(structtest_scalars3_decode(schema, unknown_enum,
+                                        sizeof(unknown_enum), &got));
+    CHECK(got.color == 99);
+    CHECK(got.i32 == 0 && got.str == NULL && got.has_opt_i32 == 0);
+    /* Re-encode keeps the unknown value: every other implicit scalar rides
+     * along as zero, so find field 15's tag/value pair in the bytes. */
+    CHECK_OK(structtest_scalars3_encode(schema, &got, &wire, &wire_len));
+    {
+        size_t at = 0;
+        int found = 0;
+        size_t k;
+
+        for (k = 0; k + 1 < wire_len; k++) {
+            if (wire[k] == 0x78 && wire[k + 1] == 0x63) {
+                at = k;
+                found = 1;
+            }
+        }
+        CHECK(found != 0);
+        if (found) {
+            structtest_scalars3_t again;
+
+            CHECK_OK(structtest_scalars3_decode(schema, wire, wire_len,
+                                                &again));
+            CHECK(again.color == 99);
+            CHECK(again.i32 == 0 && again.has_opt_i32 == 0);
+            CHECK(at + 2 <= wire_len);
+            structtest_scalars3_free(&again);
+        }
+    }
+    structtest_scalars3_free(&got);
+    pbw_free(wire);
+    pbw_schema_free(schema);
+}
+
 int
 main(void)
 {
@@ -888,6 +1247,10 @@ main(void)
     test_layout_mismatch();
     test_bad_arguments();
     test_schema_load_errors();
+    test_t3_empty_and_explicit_zero();
+    test_t4_dynamic_crosscheck();
+    test_t5_entry_point_parity();
+    test_t6_wire_errors();
     if (failures != 0) {
         fprintf(stderr, "%d check(s) failed\n", failures);
         return 1;

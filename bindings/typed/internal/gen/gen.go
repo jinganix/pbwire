@@ -39,15 +39,15 @@ func Generate(fd protoreflect.FileDescriptor, opt Options) ([]File, error) {
 	var files []File
 	switch opt.Lang {
 	case "java":
-		files = javaFiles(f)
+		files = javaFiles(f, opt)
 	case "kotlin":
 		files = kotlinFiles(f)
 	case "csharp":
 		files = csharpFiles(f, opt)
 	case "dart":
-		files = dartFiles(f)
+		files = dartFiles(f, opt)
 	case "php":
-		files = phpFiles(f)
+		files = phpFiles(f, opt)
 	case "ruby":
 		files = rubyFiles(f, opt)
 	case "python":
@@ -59,9 +59,9 @@ func Generate(fd protoreflect.FileDescriptor, opt Options) ([]File, error) {
 	case "rust":
 		files = rustFiles(f, opt)
 	case "objc":
-		files = objcFiles(f)
+		files = objcFiles(f, opt)
 	case "lua":
-		files = luaFiles(f)
+		files = luaFiles(f, opt)
 	case "go":
 		files = goFiles(f, opt)
 	default:

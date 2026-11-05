@@ -38,17 +38,17 @@ Build(void)
     PBWGen_Person *alice = [PBWGen_Person new];
     alice.name = @"Alice";
     alice.id = 1;
-    alice.phones = @[ Phone(@"555-0100", PBWGen_Person_PhoneType_MOBILE) ];
+    alice.phonesArray = [NSMutableArray arrayWithArray:@[ Phone(@"555-0100", PBWGen_Person_PhoneType_MOBILE) ]];
 
     PBWGen_Person *bob = [PBWGen_Person new];
     bob.name = @"Bob";
     bob.id = 2;
     bob.hasEmail = YES;
     bob.email = @"bob@example.com";
-    bob.phones = @[ Phone(@"555-0200", PBWGen_Person_PhoneType_HOME) ];
+    bob.phonesArray = [NSMutableArray arrayWithArray:@[ Phone(@"555-0200", PBWGen_Person_PhoneType_HOME) ]];
 
     PBWGen_AddressBook *book = [PBWGen_AddressBook new];
-    book.people = @[ alice, bob ];
+    book.peopleArray = [NSMutableArray arrayWithArray:@[ alice, bob ]];
     return book;
 }
 
@@ -72,13 +72,13 @@ main(int argc, char **argv)
             [PBWGen_AddressBook decodeWithSchema:schema
                                             data:wire
                                            error:&error];
-        CHECK(back.people.count == 2);
+        CHECK(back.peopleArray.count == 2);
         printf("addressbook: %lu bytes, %lu people\n", (unsigned long)wire.length,
-               (unsigned long)back.people.count);
-        for (PBWGen_Person *person in back.people) {
+               (unsigned long)back.peopleArray.count);
+        for (PBWGen_Person *person in back.peopleArray) {
             printf("  %s (%d) %s\n", person.name.UTF8String, person.id,
                    person.hasEmail ? person.email.UTF8String : "");
-            for (PBWGen_Person_PhoneNumber *phone in person.phones) {
+            for (PBWGen_Person_PhoneNumber *phone in person.phonesArray) {
                 printf("    %s\n", phone.number.UTF8String);
             }
         }

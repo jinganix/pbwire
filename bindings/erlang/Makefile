@@ -31,6 +31,15 @@ c-format-check:
 release:
 	$(REBAR) hex publish
 
+# Regenerate the committed TESTSPEC oracle (test/matrix3_tspec.erl + .hrl)
+# from the shared matrix3.proto, with gpb itself as the schema source.
+TSPEC_PROTO := ../c/tests/data/matrix3.proto
+
+tspec-gen: $(REBAR)
+	$(REBAR) as test compile
+	erl -noshell -pa _build/test/lib/gpb/ebin \
+		-eval 'ok = gpb_compile:file("$(TSPEC_PROTO)", [{module_name_suffix, "_tspec"}, {o, "test"}, include_as_lib, introspect_get_proto_defs]), halt().'
+
 clean: $(REBAR)
 	$(REBAR) clean
 	$(MAKE) -C c_src_tests clean
