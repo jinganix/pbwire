@@ -144,7 +144,7 @@ jobs:
         # else prints a diff and fails the gate below.
         run: |
           CMAKE_BUILD_PARALLEL_LEVEL=$(nproc) make conformance-setup
-          PB_SRC=$(echo .tmp/protobuf-*)
+          PB_SRC=$(echo $PWD/.tmp/protobuf-*)
           CMAKE_BUILD_PARALLEL_LEVEL=$(nproc) cmake --build "$PB_SRC/build" --target protoc
           echo "PB_SRC=$PB_SRC" >> "$GITHUB_ENV"
       - name: Check the codegen plugin's formatting
