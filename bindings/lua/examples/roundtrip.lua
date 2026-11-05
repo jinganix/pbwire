@@ -1,12 +1,12 @@
 -- The C example (examples/addressbook.c), in Lua, through the generated
--- typed tables: assign fields, encode, decode, compare. The encoded bytes
--- must equal the pinned reference examples/addressbook.bin.
+-- typed tables: assign fields, encode, decode, compare. The schema travels
+-- embedded in the generated module; no .desc file is read. The encoded
+-- bytes must equal the pinned reference examples/addressbook.bin.
 --
 --   lua examples/roundtrip.lua   (from bindings/lua, after ./build.sh)
 
 package.cpath = "./?.so;" .. package.cpath
 
-local pbwire = require("pbwire")
 local gen = dofile("examples/gen/addressbook.lua")
 
 local Person = gen.Tutorial_Person
@@ -30,11 +30,9 @@ local function build()
     } })
 end
 
-local desc = arg and arg[1] or "../../examples/addressbook.desc"
-local bin = arg and arg[2] or "../../examples/addressbook.bin"
+local bin = arg and arg[1] or "../../examples/addressbook.bin"
 
-local schema = pbwire.loadfile(desc)
-local wire = Book.encode(schema, build())
+local wire = Book.encode(build())
 
 local f = io.open(bin, "rb")
 if f ~= nil then
@@ -43,7 +41,7 @@ if f ~= nil then
     assert(wire == ref, "encode does not match " .. bin)
 end
 
-local back = Book.decode(schema, wire)
+local back = Book.decode(wire)
 print(string.format("addressbook: %d bytes, %d people", #wire, #back.people))
 for _, person in ipairs(back.people) do
     print(string.format("  %s (%d) %s", person.name, person.id,
