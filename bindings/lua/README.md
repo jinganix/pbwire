@@ -99,7 +99,8 @@ An absent singular field decodes as `nil`, and a field set to `false`/`0` is
 present and round trips as such (explicit presence, like the C API and the Ruby
 binding: the reference encoder would omit an explicit proto3 zero, both parsers
 read it back the same). Oneof: the last member in descriptor order wins on
-encode; decode carries the live member only. Groups raise. Maps are arrays of
+encode; decode carries the live member only. Groups map like messages
+(START_GROUP framing on the wire). Maps are arrays of
 `{key=, value=}` entry tables.
 
 64-bit integers need Lua 5.3+ integers for exactness; on Lua 5.1/LuaJIT (all
@@ -141,9 +142,13 @@ equivalence on the same values instead. `examples/roundtrip.lua` walks the
 - **No `protoc` plugin, no codegen, no second wire implementation.** The
   descriptor set is the schema; tables convert through the C core's message
   tree, builders encode it directly.
-- **No JSON/text format, no deterministic encoding, no streaming.** All of
-  those exist in the C API; this binding stays the smallest thing that
-  reads and writes binary messages (plus gateway passthrough).
+- **Formats beyond binary/JSON/text tables.** `to_json`/`from_json` (with an
+  optional ignore-unknown flag), `to_text`/`from_text`, deterministic
+  encoding (`encode_deterministic`, map entries sorted by key) and delimited
+  framing (`encode_delimited`, `decode_delimited` returning table + bytes
+  consumed) wrap the C API. Tables carry doubles past 2^53 approximately
+  (see below); builders (`parse_json`/`parse_text`/`parse_binary` plus
+  `to_json`/`to_text`) skip tables and stay exact.
 
 ## Conformance
 
@@ -152,16 +157,18 @@ equivalence on the same values instead. `examples/roundtrip.lua` walks the
 reusing the cached protobuf checkout from `make conformance-setup`):
 
 ```
-CONFORMANCE SUITE PASSED: 1389 successes, 1403 skipped, 2 expected failures,
+CONFORMANCE SUITE PASSED: 2742 successes, 0 skipped, 2 expected failures,
+0 unexpected failures.
+CONFORMANCE SUITE PASSED: 445 successes, 0 skipped, 0 expected failures,
 0 unexpected failures.
 ```
 
 Binary in -> binary out goes through `schema:roundtrip()`, so unknown fields
-survive and a request is accepted exactly when the core accepts it. The 2
+survive and a request is accepted exactly when the core accepts it; JSON/text
+travel through builder trees (exact, including 64-bit integers). The 2
 expected failures are the shared `conformance/failure_list_pbwire.txt` (tag
-varints the reference C++ testee truncates identically); JSON/text/JSPB
-requests answer `skipped` (the binding has no printers), and the text suite
-passes 445/445 skipped the same way.
+varints the reference C++ testee truncates identically); only JSPB answers
+`skipped`.
 
 ## Benchmark
 

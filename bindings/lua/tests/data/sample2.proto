@@ -1,6 +1,6 @@
 // Fixture for the Lua binding's proto2 paths: required fields, closed
-// enums (unknown numbers are dropped on decode) and legacy groups (kept as
-// unknown bytes by the core, so decode skips them without failing).
+// enums (unknown numbers are dropped on decode) and legacy groups (mapped
+// like messages).
 syntax = "proto2";
 
 package pbwire.lua2;

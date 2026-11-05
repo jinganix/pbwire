@@ -28,7 +28,8 @@
  * unsigned and fixed-width integers <-> Lua numbers, bool <-> boolean, float/double <->
  * number, string/bytes <-> Lua string, message <-> nested table, repeated <->
  * array table (1-based; assign {} to clear). An absent singular field
- * decodes as nil. Groups raise; maps are arrays of {key=, value=} entries.
+ * decodes as nil. Groups map like messages (START_GROUP framing on the
+ * wire); maps are arrays of {key=, value=} entries.
  *
  * shortcut: 64-bit integers need Lua 5.3+ integers for exactness; on
  * Lua 5.1/LuaJIT (all numbers are doubles) values past 2^53 round-trip
@@ -202,11 +203,7 @@ pbwlua_set_one(lua_State *L, pbw_ctx *ctx, pbw_message *msg,
     pbw_type type = pbw_field_type(field);
     pbw_status status;
 
-    if (type == PBW_TYPE_GROUP) {
-        luaL_error(L, "pbwire: group field %s is not supported",
-                   pbw_field_name(field));
-    }
-    if (type == PBW_TYPE_MESSAGE) {
+    if (type == PBW_TYPE_MESSAGE || type == PBW_TYPE_GROUP) {
         pbw_message *child;
 
         if (pbw_field_message_type(field) == NULL) {
@@ -321,7 +318,8 @@ pbwlua_fill(lua_State *L, pbw_ctx *ctx, const pbw_descriptor *desc,
             count = PBWLUA_LEN(L, lua_gettop(L));
             for (k = 1; k <= count; k++) {
                 lua_rawgeti(L, -1, (int)k);
-                if (pbw_field_type(field) == PBW_TYPE_MESSAGE) {
+                if (pbw_field_type(field) == PBW_TYPE_MESSAGE ||
+                    pbw_field_type(field) == PBW_TYPE_GROUP) {
                     pbw_message *child;
 
                     if (pbw_field_message_type(field) == NULL) {
@@ -637,6 +635,209 @@ pbwlua_decode(lua_State *L)
     return 1;
 }
 
+/* JSON mapping text of a table (built and printed through one reset). */
+static int
+pbwlua_to_json(lua_State *L)
+{
+    pbwlua_schema *s = pbwlua_check_schema(L, 1);
+    const char *name = luaL_checkstring(L, 2);
+    const pbw_descriptor *desc = pbwlua_find(L, s->schema, name);
+    pbw_message *msg;
+    char *text = NULL;
+    size_t len = 0;
+    pbw_status status;
+
+    pbw_ctx_reset(s->ctx);
+    msg = pbw_message_new_ctx(s->ctx, desc);
+    if (msg == NULL) {
+        luaL_error(L, "pbwire: out of memory");
+    }
+    luaL_checktype(L, 3, LUA_TTABLE);
+    pbwlua_fill(L, s->ctx, desc, msg, 3, 0);
+    status = pbw_json_print(msg, &text, &len);
+    if (status != PBW_OK) {
+        luaL_error(L, "pbwire: to_json %s: %s", name, pbw_strerror(status));
+    }
+    lua_pushlstring(L, text, len);
+    pbw_free(text);
+    return 1;
+}
+
+/* Parses JSON mapping text into a table; an optional third argument skips
+ * unknown field names instead of failing (the conformance ignore-unknown
+ * category). */
+static int
+pbwlua_from_json(lua_State *L)
+{
+    pbwlua_schema *s = pbwlua_check_schema(L, 1);
+    const char *name = luaL_checkstring(L, 2);
+    const pbw_descriptor *desc = pbwlua_find(L, s->schema, name);
+    size_t len = 0;
+    const char *data = luaL_checklstring(L, 3, &len);
+    pbw_message *msg = NULL;
+    pbw_status status;
+    pbw_json_parse_options opts;
+
+    opts.ignore_unknown_fields = lua_toboolean(L, 4);
+    status = pbw_json_parse_opts(desc, data, len, &opts, &msg);
+    if (status != PBW_OK) {
+        luaL_error(L, "pbwire: from_json %s: %s", name, pbw_strerror(status));
+    }
+    pbwlua_push_message(L, msg, 0);
+    pbw_message_free(msg);
+    return 1;
+}
+
+/* Text format of a table. */
+static int
+pbwlua_to_text(lua_State *L)
+{
+    pbwlua_schema *s = pbwlua_check_schema(L, 1);
+    const char *name = luaL_checkstring(L, 2);
+    const pbw_descriptor *desc = pbwlua_find(L, s->schema, name);
+    pbw_message *msg;
+    char *text = NULL;
+    size_t len = 0;
+    pbw_status status;
+
+    pbw_ctx_reset(s->ctx);
+    msg = pbw_message_new_ctx(s->ctx, desc);
+    if (msg == NULL) {
+        luaL_error(L, "pbwire: out of memory");
+    }
+    luaL_checktype(L, 3, LUA_TTABLE);
+    pbwlua_fill(L, s->ctx, desc, msg, 3, 0);
+    status = pbw_text_print(msg, &text, &len);
+    if (status != PBW_OK) {
+        luaL_error(L, "pbwire: to_text %s: %s", name, pbw_strerror(status));
+    }
+    lua_pushlstring(L, text, len);
+    pbw_free(text);
+    return 1;
+}
+
+/* Parses text format into a table. */
+static int
+pbwlua_from_text(lua_State *L)
+{
+    pbwlua_schema *s = pbwlua_check_schema(L, 1);
+    const char *name = luaL_checkstring(L, 2);
+    const pbw_descriptor *desc = pbwlua_find(L, s->schema, name);
+    size_t len = 0;
+    const char *data = luaL_checklstring(L, 3, &len);
+    pbw_message *msg = NULL;
+    pbw_status status;
+
+    status = pbw_text_parse(desc, data, len, &msg);
+    if (status != PBW_OK) {
+        luaL_error(L, "pbwire: from_text %s: %s", name, pbw_strerror(status));
+    }
+    pbwlua_push_message(L, msg, 0);
+    pbw_message_free(msg);
+    return 1;
+}
+
+/* Canonical encoding: map entries sorted by key, like the reference. */
+static int
+pbwlua_encode_deterministic(lua_State *L)
+{
+    pbwlua_schema *s = pbwlua_check_schema(L, 1);
+    const char *name = luaL_checkstring(L, 2);
+    const pbw_descriptor *desc = pbwlua_find(L, s->schema, name);
+    pbw_message *msg;
+    uint8_t *out = NULL;
+    size_t len = 0;
+    pbw_status status;
+
+    pbw_ctx_reset(s->ctx);
+    msg = pbw_message_new_ctx(s->ctx, desc);
+    if (msg == NULL) {
+        luaL_error(L, "pbwire: out of memory");
+    }
+    luaL_checktype(L, 3, LUA_TTABLE);
+    pbwlua_fill(L, s->ctx, desc, msg, 3, 0);
+    status = pbw_encode_deterministic(msg, &out, &len);
+    if (status != PBW_OK) {
+        luaL_error(L, "pbwire: encode_deterministic %s: %s", name,
+                   pbw_strerror(status));
+    }
+    lua_pushlstring(L, (const char *)out, len);
+    pbw_free(out);
+    return 1;
+}
+
+/* One length-delimited frame (varint length + message). */
+static int
+pbwlua_encode_delimited(lua_State *L)
+{
+    pbwlua_schema *s = pbwlua_check_schema(L, 1);
+    const char *name = luaL_checkstring(L, 2);
+    const pbw_descriptor *desc = pbwlua_find(L, s->schema, name);
+    pbw_message *msg;
+    uint8_t *out = NULL;
+    size_t len = 0;
+    pbw_status status;
+
+    pbw_ctx_reset(s->ctx);
+    msg = pbw_message_new_ctx(s->ctx, desc);
+    if (msg == NULL) {
+        luaL_error(L, "pbwire: out of memory");
+    }
+    luaL_checktype(L, 3, LUA_TTABLE);
+    pbwlua_fill(L, s->ctx, desc, msg, 3, 0);
+    status = pbw_encode_delimited(msg, &out, &len);
+    if (status != PBW_OK) {
+        luaL_error(L, "pbwire: encode_delimited %s: %s", name,
+                   pbw_strerror(status));
+    }
+    lua_pushlstring(L, (const char *)out, len);
+    pbw_free(out);
+    return 1;
+}
+
+/* One frame from a string: the table plus bytes consumed, so concatenated
+ * frames decode in a loop. */
+static int
+pbwlua_decode_delimited(lua_State *L)
+{
+    pbwlua_schema *s = pbwlua_check_schema(L, 1);
+    const char *name = luaL_checkstring(L, 2);
+    const pbw_descriptor *desc = pbwlua_find(L, s->schema, name);
+    size_t len = 0;
+    const char *data = luaL_checklstring(L, 3, &len);
+    pbw_message *msg = NULL;
+    size_t consumed = 0;
+    pbw_status status;
+
+    status = pbw_decode_delimited(desc, data, len, &msg, &consumed);
+    if (status != PBW_OK) {
+        luaL_error(L, "pbwire: decode_delimited %s: %s", name,
+                   pbw_strerror(status));
+    }
+    pbwlua_push_message(L, msg, 0);
+    pbw_message_free(msg);
+    lua_pushinteger(L, (lua_Integer)consumed);
+    return 2;
+}
+
+/* Pushes a builder holding tree (schema lives at index 1, anchored until
+ * __gc). Plain trees only: arena trees die with the context's reset. */
+static int
+pbwlua_push_builder(lua_State *L, const pbw_descriptor *desc,
+                    pbw_message *tree)
+{
+    pbwlua_message *m = (pbwlua_message *)lua_newuserdata(L, sizeof(*m));
+
+    m->desc = desc;
+    m->tree = tree;
+    /* Anchor the schema: the tree reads its descriptor until __gc. */
+    lua_pushvalue(L, 1);
+    m->schema_ref = luaL_ref(L, LUA_REGISTRYINDEX);
+    luaL_getmetatable(L, PBWLUA_MESSAGE_MT);
+    lua_setmetatable(L, -2);
+    return 1;
+}
+
 /* A builder: an empty plain tree of the type, for hot loops that encode
  * far more often than they rebuild (game broadcasts). Build once with
  * set(), then encode() is one core walk plus one buffer malloc. */
@@ -646,18 +847,111 @@ pbwlua_message_new(lua_State *L)
     pbwlua_schema *s = pbwlua_check_schema(L, 1);
     const char *name = luaL_checkstring(L, 2);
     const pbw_descriptor *desc = pbwlua_find(L, s->schema, name);
-    pbwlua_message *m = (pbwlua_message *)lua_newuserdata(L, sizeof(*m));
+    pbw_message *tree = pbw_message_new(desc);
 
-    m->desc = desc;
-    m->tree = pbw_message_new(desc);
-    if (m->tree == NULL) {
+    if (tree == NULL) {
         luaL_error(L, "pbwire: out of memory");
     }
-    /* Anchor the schema: the tree reads its descriptor until __gc. */
-    lua_pushvalue(L, 1);
-    m->schema_ref = luaL_ref(L, LUA_REGISTRYINDEX);
-    luaL_getmetatable(L, PBWLUA_MESSAGE_MT);
-    lua_setmetatable(L, -2);
+    return pbwlua_push_builder(L, desc, tree);
+}
+
+/* Parses input straight into a builder tree, skipping tables: exact for
+ * 64-bit integers past 2^53, which tables carry as doubles. */
+static int
+pbwlua_parse_json(lua_State *L)
+{
+    pbwlua_schema *s = pbwlua_check_schema(L, 1);
+    const char *name = luaL_checkstring(L, 2);
+    const pbw_descriptor *desc = pbwlua_find(L, s->schema, name);
+    size_t len = 0;
+    const char *data = luaL_checklstring(L, 3, &len);
+    pbw_message *msg = NULL;
+    pbw_status status;
+    pbw_json_parse_options opts;
+
+    opts.ignore_unknown_fields = lua_toboolean(L, 4);
+    status = pbw_json_parse_opts(desc, data, len, &opts, &msg);
+    if (status != PBW_OK) {
+        luaL_error(L, "pbwire: parse_json %s: %s", name,
+                   pbw_strerror(status));
+    }
+    return pbwlua_push_builder(L, desc, msg);
+}
+
+static int
+pbwlua_parse_text(lua_State *L)
+{
+    pbwlua_schema *s = pbwlua_check_schema(L, 1);
+    const char *name = luaL_checkstring(L, 2);
+    const pbw_descriptor *desc = pbwlua_find(L, s->schema, name);
+    size_t len = 0;
+    const char *data = luaL_checklstring(L, 3, &len);
+    pbw_message *msg = NULL;
+    pbw_status status;
+
+    status = pbw_text_parse(desc, data, len, &msg);
+    if (status != PBW_OK) {
+        luaL_error(L, "pbwire: parse_text %s: %s", name,
+                   pbw_strerror(status));
+    }
+    return pbwlua_push_builder(L, desc, msg);
+}
+
+static int
+pbwlua_parse_binary(lua_State *L)
+{
+    pbwlua_schema *s = pbwlua_check_schema(L, 1);
+    const char *name = luaL_checkstring(L, 2);
+    const pbw_descriptor *desc = pbwlua_find(L, s->schema, name);
+    size_t len = 0;
+    const char *data = luaL_checklstring(L, 3, &len);
+    pbw_message *msg = NULL;
+    pbw_status status;
+
+    status = pbw_decode(desc, data, len, &msg);
+    if (status != PBW_OK) {
+        luaL_error(L, "pbwire: parse_binary %s: %s", name,
+                   pbw_strerror(status));
+    }
+    return pbwlua_push_builder(L, desc, msg);
+}
+
+/* Prints a builder's own tree: exact, no table in between. An optional
+ * second boolean drops unknown fields (the runner's print_unknown_fields
+ * flag); by default they print numerically. */
+static int
+pbwlua_message_to_json(lua_State *L)
+{
+    pbwlua_message *m = pbwlua_check_message(L, 1);
+    char *text = NULL;
+    size_t len = 0;
+    pbw_status status = pbw_json_print(m->tree, &text, &len);
+
+    if (status != PBW_OK) {
+        luaL_error(L, "pbwire: to_json: %s", pbw_strerror(status));
+    }
+    lua_pushlstring(L, text, len);
+    pbw_free(text);
+    return 1;
+}
+
+static int
+pbwlua_message_to_text(lua_State *L)
+{
+    pbwlua_message *m = pbwlua_check_message(L, 1);
+    /* Absent means print (the binding's standing behavior); the testee
+     * passes the runner's print_unknown_fields flag explicitly. */
+    int print_unknown = lua_gettop(L) < 2 || lua_toboolean(L, 2);
+    char *text = NULL;
+    size_t len = 0;
+    pbw_status status =
+        pbw_text_print_opts(m->tree, print_unknown, &text, &len);
+
+    if (status != PBW_OK) {
+        luaL_error(L, "pbwire: to_text: %s", pbw_strerror(status));
+    }
+    lua_pushlstring(L, text, len);
+    pbw_free(text);
     return 1;
 }
 
@@ -709,6 +1003,8 @@ pbwlua_message_gc(lua_State *L)
 static const luaL_Reg pbwlua_message_methods[] = {
     {"set", pbwlua_message_set},
     {"encode", pbwlua_message_encode},
+    {"to_json", pbwlua_message_to_json},
+    {"to_text", pbwlua_message_to_text},
     {NULL, NULL},
 };
 
@@ -734,6 +1030,16 @@ static const luaL_Reg pbwlua_schema_methods[] = {
     {"decode", pbwlua_decode},
     {"roundtrip", pbwlua_roundtrip},
     {"message", pbwlua_message_new},
+    {"to_json", pbwlua_to_json},
+    {"from_json", pbwlua_from_json},
+    {"to_text", pbwlua_to_text},
+    {"from_text", pbwlua_from_text},
+    {"encode_deterministic", pbwlua_encode_deterministic},
+    {"encode_delimited", pbwlua_encode_delimited},
+    {"decode_delimited", pbwlua_decode_delimited},
+    {"parse_json", pbwlua_parse_json},
+    {"parse_text", pbwlua_parse_text},
+    {"parse_binary", pbwlua_parse_binary},
     {NULL, NULL},
 };
 
