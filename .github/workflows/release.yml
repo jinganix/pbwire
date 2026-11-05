@@ -111,17 +111,26 @@ jobs:
     name: npm (bindings/node)
     needs: validate
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          registry-url: "https://registry.npmjs.org"
       - name: Publish
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
-          [ -n "$NPM_TOKEN" ] || { echo "NPM_TOKEN unset, skipping"; exit 0; }
+          # Trusted publishing (OIDC) needs npm >= 11.5.1; node 22 ships 10.x.
+          npm install -g npm@latest
+          printf -- "registry=https://registry.npmjs.org/\n" >> ~/.npmrc
+          # A classic token still wins when present; otherwise npm falls back
+          # to the trusted-publisher OIDC exchange (id-token: write above).
+          if [ -n "$NPM_TOKEN" ]; then
+            printf -- "//registry.npmjs.org/:_authToken=%s\n" "$NPM_TOKEN" >> ~/.npmrc
+          fi
           (cd bindings/node && npm publish --access public)
 
   rubygems:
@@ -175,6 +184,26 @@ jobs:
           # as every local build; hex_core picks the key up from HEX_API_KEY.
           (cd bindings/erlang && make ./rebar3 >/dev/null && ./rebar3 hex publish --yes)
 
+  elixir:
+    name: Hex (bindings/elixir)
+    # pbwire_elixir depends on the :pbwire NIF (~> 0.1), so it publishes
+    # after the Erlang job puts the same VERSION on Hex.
+    needs: hex
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: erlef/setup-beam@v1.24.0
+        with:
+          otp-version: "29"
+          elixir-version: "1.17"
+          version-type: loose
+      - name: Publish
+        env:
+          HEX_API_KEY: ${{ secrets.HEX_API_KEY }}
+        run: |
+          [ -n "$HEX_API_KEY" ] || { echo "HEX_API_KEY unset, skipping"; exit 0; }
+          (cd bindings/elixir && mix local.hex --force && mix hex.publish --yes)
+
   luarocks:
     name: LuaRocks (bindings/lua)
     needs: validate
@@ -209,6 +238,27 @@ jobs:
           [ -n "$NUGET_API_KEY" ] || { echo "NUGET_API_KEY unset, skipping"; exit 0; }
           dotnet pack bindings/csharp/Pbwire/Pbwire.csproj -c Release
           dotnet nuget push "bindings/csharp/Pbwire/bin/Release/*.nupkg" \
+            --api-key "$NUGET_API_KEY" --source https://api.nuget.org/v3/index.json \
+            --skip-duplicate
+
+  fsharp:
+    name: NuGet (bindings/fsharp)
+    # Pbwire.FSharp takes a ProjectReference on the C# project, so it packs
+    # a dependency on the same VERSION of Pbwire: publish after it.
+    needs: nuget
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+      - name: Pack and push
+        env:
+          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+        run: |
+          [ -n "$NUGET_API_KEY" ] || { echo "NUGET_API_KEY unset, skipping"; exit 0; }
+          dotnet pack bindings/fsharp/runtime/Pbwire.FSharp.fsproj -c Release
+          dotnet nuget push "bindings/fsharp/runtime/bin/Release/*.nupkg" \
             --api-key "$NUGET_API_KEY" --source https://api.nuget.org/v3/index.json \
             --skip-duplicate
 
