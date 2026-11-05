@@ -1,7 +1,7 @@
 /* C++ binding self-check: struct -> wire -> struct, plus the failure paths a
  * C++ caller hits. No framework, no dependencies beyond the C runtime.
  *
- * Typed-compat coverage (TESTSPEC T1-T6, dependency-free half: the same
+ * Generated-compat coverage (TESTSPEC T1-T6, dependency-free half: the same
  * matrix3.bin reference bytes and vectors.json values the C self-check
  * pins, written the C++ way). The live libprotobuf half of T4 plus the
  * shared-snippet T5 live in compat_oracle.cc, which needs protoc and stays

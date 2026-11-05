@@ -44,9 +44,18 @@ typedef enum {
     PBW_SF_FLOAT,
     PBW_SF_DOUBLE,
     PBW_SF_STRING, /* const char *, NULL means absent */
+    PBW_SF_BYTES,  /* pbw_bytes_t inline, data == NULL means absent */
     PBW_SF_ENUM,   /* int32_t, needs a has flag unless always present */
     PBW_SF_MESSAGE
 } pbw_struct_kind_t;
+
+/* Byte string: arbitrary bytes, may contain NUL. len is the truth;
+ * data points at len bytes (plus a NUL guard the decoder appends for
+ * convenience, not counted in len). Absent when data == NULL. */
+typedef struct pbw_bytes {
+    uint8_t *data;
+    size_t len;
+} pbw_bytes_t;
 
 typedef struct pbw_struct_field {
     uint32_t fnum;
@@ -67,6 +76,14 @@ typedef struct pbw_struct_field {
     uint8_t wire;     /* wire type of one element */
     uint8_t packed;   /* repeated and packed on the wire */
     uint8_t required; /* proto2 required */
+    /* Oneof membership: 1 when the field is in a real oneof, 0 otherwise.
+     * With oneof set, cs is the offset of the uint32_t case word holding
+     * the selected field number (0 = none). The encoder emits the member
+     * only when the case matches; the decoder sets the case and clears the
+     * previous member. Tables written before these members existed leave
+     * them 0, which means no oneof. */
+    uint8_t oneof;
+    size_t cs;
 } pbw_struct_field_t;
 
 /* A reusable encode buffer. Zero-initialize it before the first call;

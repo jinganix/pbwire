@@ -1,7 +1,7 @@
-/* Typed-compat oracle differential for the C/C++ struct codec (TESTSPEC T4
+/* Generated-compat oracle differential for the C/C++ struct codec (TESTSPEC T4
  * live half, plus the shared-snippet T5 and the oracle pin).
  *
- * The struct codec IS the typed model for C and C++, so T1-T3 and the
+ * The struct codec IS the generated model for C and C++, so T1-T3 and the
  * dependency-free halves of T5-T6 live in bindings/c/tests/test_struct.c
  * and bindings/cpp/tests/roundtrip.cc. This file covers what those cannot:
  * the same business values through the official C++ runtime (protoc

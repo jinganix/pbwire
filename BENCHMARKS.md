@@ -1114,11 +1114,14 @@ make benchmarks-quick  # same suite with BENCH_TARGET_TIME=0.05
 
 The core tables (single-thread and threads) are `scripts/perf.sh` output (same
 layout, MB/s only); the C,
-Python, Java, Kotlin, Node, Ruby, Objective-C, PHP, Dart, Rust, C#, Lua and Go tables are
+Python, Java, Kotlin, Node, Ruby, Objective-C, PHP, Dart, Rust, C#, Lua, Go,
+Swift, Scala, Elixir, Zig, F#, Clojure, Julia and R tables are
 `make bench-c` / `make python-bench` / `make java-bench` /
 `make kotlin-bench` / `make node-bench` / `make ruby-bench` / `make objc-bench` /
 `make php-bench` / `make dart-bench` / `make rust-bench` / `make csharp-bench` /
-`make lua-bench` / `make go-bench`
+`make lua-bench` / `make go-bench` / `make swift-bench` / `make scala-bench` /
+`make elixir-bench` / `make zig-bench` / `make fsharp-bench` /
+`make clojure-bench` / `make julia-bench` / `make r-bench`
 output reformatted the same way; the
 Erlang table is copied from
 `bindings/erlang/benchmarks/README.md` (`make update-readme` there). The

@@ -54,15 +54,13 @@ ancestors(Dir, N) ->
     end.
 
 vectors_path() ->
-    find_fixture(["codegen/testdata/vectors.json",
-        "typed/testdata/vectors.json"]).
+    find_fixture(["codegen/testdata/vectors.json"]).
 
 %% matrix3.bin lives next to matrix3.proto; vectors.json only records it as
-%% ../../c/tests/data/matrix3.bin relative to the testdata dir, so resolve
-%% it the same way as any other fixture.
+%% ../../bindings/c/tests/data/matrix3.bin relative to the testdata dir,
+%% so resolve it the same way as any other fixture.
 reference_path() ->
-    find_fixture(["bindings/c/tests/data/matrix3.bin",
-        "c/tests/data/matrix3.bin"]).
+    find_fixture(["bindings/c/tests/data/matrix3.bin"]).
 
 load_vectors() ->
     {ok, Raw} = file:read_file(vectors_path()),

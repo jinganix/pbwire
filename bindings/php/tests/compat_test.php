@@ -3,7 +3,7 @@
 declare(strict_types=1);
 
 /**
- * Typed-compat check for the PHP binding (TESTSPEC T1–T6, vectors.json as
+ * Generated-compat check for the PHP binding (TESTSPEC T1–T6, vectors.json as
  * the single source of truth):
  *
  *   T1  generated serializeToString == pinned protoc reference bytes

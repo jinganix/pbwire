@@ -1,4 +1,4 @@
-//! Typed-compat check for the Rust binding (TESTSPEC T1–T6):
+//! Generated-compat check for the Rust binding (TESTSPEC T1–T6):
 //!
 //! T1  generated `encode_to_vec` == pinned protoc reference bytes
 //! T2  `decode` of the reference reads every fixture value back

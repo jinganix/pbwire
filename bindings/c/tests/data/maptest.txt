@@ -1,0 +1,3 @@
+by_int: [{key: 1, value: "one"}, {key: -5, value: "neg"}]
+by_str: [{key: "a", value: 10}, {key: "b", value: -3}]
+by_msg: [{key: "k", value: {name: "n", value: 42}}]

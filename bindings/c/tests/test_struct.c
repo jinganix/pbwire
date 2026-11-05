@@ -5,12 +5,13 @@
  * No test framework, no dependencies; run from the repo root so the
  * relative fixture paths resolve.
  *
- * Typed-compat coverage (TESTSPEC T1-T6, adapted: the struct codec IS the
+ * Generated-compat coverage (TESTSPEC T1-T6, adapted: the struct codec IS the
  * typed model, so vectors.json lives here as C literals in fill_scalars3;
  * the oracle half runs through the dynamic tree API below plus the live
  * libprotobuf differential in bindings/cpp/tests/compat_oracle.cc):
  *
- *   T1  struct encode == matrix3.bin / matrix2.bin / addressbook.bin
+ *   T1  struct encode == matrix3.bin / matrix2.bin / addressbook.bin /
+ *       maptest.bin / grouptest.bin / oneoftest.bin
  *   T2  decode of each reference reads every field back (incl. presence)
  *   T3  empty/explicit-zero round-trips (implicit-presence zeros are still
  *       emitted: the struct has no has-flag to omit them by, and the bytes
@@ -19,10 +20,9 @@
  *       and re-encodes to the same bytes
  *   T5  one workflow through the one-shot calls and the compiled codec
  *       gives identical bytes and identical fields
- *   T6  bad wire, overlong varints, wrong kinds and missing required
- *       fields fail loudly; unknown open-enum values are kept like the
- *       reference keeps them. Oneof messages never reach the codec: the
- *       plugin rejects them at generation time (cgen.go).
+ *   T6  bad wire, overlong varints, wrong kinds, stray END_GROUP and
+ *       missing required fields fail loudly; unknown open-enum values
+ *       are kept like the reference keeps them.
  */
 
 #include <stdint.h>
@@ -34,6 +34,9 @@
 
 #include "gen/matrix2.h"
 #include "gen/matrix3.h"
+#include "gen/maptest.h"
+#include "gen/grouptest.h"
+#include "gen/oneoftest.h"
 #include "gen/addressbook.h"
 
 static int failures;
@@ -1232,6 +1235,545 @@ test_t6_wire_errors(void)
     pbw_schema_free(schema);
 }
 
+/* Bytes coverage: singular + repeated bytes round-trip through the
+ * one-shot calls and the compiled codec, including NUL bytes, empty vs
+ * absent, and proto2 required. Hand-built schema so no protoc regen is
+ * needed for the pinned fixtures. */
+typedef struct {
+    pbw_bytes_t payload;
+    pbw_bytes_t *chunks;
+    size_t n_chunks;
+} bytes_msg_t;
+
+static const pbw_struct_field_t bytes_msg_fields[] = {
+    {1, PBW_SF_BYTES, 0, offsetof(bytes_msg_t, payload), 0, 0, 0, 0, NULL, 0, PBW_TYPE_BYTES, 2, 0, 0, 0, 0},
+    {2, PBW_SF_BYTES, 1, offsetof(bytes_msg_t, chunks), 0, offsetof(bytes_msg_t, n_chunks), 0, 0, NULL, 0, PBW_TYPE_BYTES, 2, 0, 0, 0, 0},
+};
+
+static void
+test_bytes(void)
+{
+    static const uint8_t raw[] = {0x00, 0x01, 0xff, 0x00, 0x61};
+    static const uint8_t c0[] = {0x01, 0x00, 0x02};
+    pbw_schema *schema = pbw_schema_new();
+    pbw_descriptor *msg;
+    bytes_msg_t s;
+    bytes_msg_t got;
+    bytes_msg_t via_codec;
+    uint8_t *wire = NULL;
+    size_t wire_len = 0;
+    pbw_struct_codec *codec = NULL;
+    pbw_struct_buf buf = {NULL, 0, 0};
+    pbw_struct_arena *arena = NULL;
+
+    CHECK(schema != NULL);
+    if (schema == NULL) {
+        return;
+    }
+    msg = pbw_schema_add_message(schema, "t.Bytes");
+    CHECK(msg != NULL);
+    /* Setters run before the next add: add_field reallocs per field. */
+    CHECK(pbw_message_add_field(msg, "payload", 1, PBW_TYPE_BYTES,
+                                PBW_LABEL_OPTIONAL) != NULL);
+    CHECK(pbw_message_add_field(msg, "chunks", 2, PBW_TYPE_BYTES,
+                                PBW_LABEL_REPEATED) != NULL);
+    CHECK_OK(pbw_schema_link(schema));
+
+    memset(&s, 0, sizeof(s));
+    s.payload.data = (uint8_t *)raw;
+    s.payload.len = sizeof(raw);
+    {
+        static pbw_bytes_t chunks[2];
+
+        chunks[0].data = (uint8_t *)c0;
+        chunks[0].len = sizeof(c0);
+        chunks[1].data = (uint8_t *)""; /* empty, but present */
+        chunks[1].len = 0;
+        s.chunks = chunks;
+        s.n_chunks = 2;
+        CHECK_OK(pbw_struct_encode(schema, "t.Bytes", bytes_msg_fields, 2,
+                                   &s, &wire, &wire_len));
+        s.chunks = NULL;
+        s.n_chunks = 0;
+    }
+    memset(&got, 0, sizeof(got));
+    CHECK_OK(pbw_struct_decode(schema, "t.Bytes", bytes_msg_fields, 2,
+                               wire, wire_len, &got));
+    CHECK(got.payload.len == sizeof(raw) &&
+          memcmp(got.payload.data, raw, sizeof(raw)) == 0);
+    CHECK(got.n_chunks == 2);
+    CHECK(got.chunks[0].len == sizeof(c0) &&
+          memcmp(got.chunks[0].data, c0, sizeof(c0)) == 0);
+    CHECK(got.chunks[1].len == 0 && got.chunks[1].data != NULL);
+    /* NUL guard is convenience, not counted. */
+    CHECK(got.payload.data[got.payload.len] == '\0');
+    pbw_struct_free(bytes_msg_fields, 2, &got);
+
+    /* Absent payload encodes to nothing. */
+    memset(&s, 0, sizeof(s));
+    pbw_free(wire);
+    wire = NULL;
+    wire_len = 0;
+    CHECK_OK(pbw_struct_encode(schema, "t.Bytes", bytes_msg_fields, 2,
+                               &s, &wire, &wire_len));
+    CHECK(wire_len == 0);
+    memset(&got, 0, sizeof(got));
+    CHECK_OK(pbw_struct_decode(schema, "t.Bytes", bytes_msg_fields, 2,
+                               wire, wire_len, &got));
+    CHECK(got.payload.data == NULL && got.n_chunks == 0);
+    pbw_struct_free(bytes_msg_fields, 2, &got);
+
+    /* Same bytes through the compiled codec + arena. */
+    memset(&s, 0, sizeof(s));
+    s.payload.data = (uint8_t *)raw;
+    s.payload.len = sizeof(raw);
+    pbw_free(wire);
+    wire = NULL;
+    wire_len = 0;
+    CHECK_OK(pbw_struct_encode(schema, "t.Bytes", bytes_msg_fields, 2,
+                               &s, &wire, &wire_len));
+    /* Dynamic-tree oracle: the core already matches protoc byte for byte
+     * (conformance), so struct bytes must equal dynamic bytes. */
+    {
+        pbw_message *dm = pbw_message_new(msg);
+        pbw_value *dv;
+        uint8_t *dwire = NULL;
+        size_t dwire_len = 0;
+        pbw_message *back = NULL;
+
+        CHECK(dm != NULL);
+        dv = pbw_value_new_bytes(raw, sizeof(raw));
+        CHECK(dv != NULL);
+        CHECK_OK(pbw_message_set(dm, 1, dv));
+        CHECK_OK(pbw_encode(dm, &dwire, &dwire_len));
+        CHECK(dwire_len == wire_len &&
+              memcmp(dwire, wire, wire_len) == 0);
+        /* Struct decodes what the dynamic encoder wrote. */
+        memset(&got, 0, sizeof(got));
+        CHECK_OK(pbw_struct_decode(schema, "t.Bytes", bytes_msg_fields, 2,
+                                   dwire, dwire_len, &got));
+        CHECK(got.payload.len == sizeof(raw) &&
+              memcmp(got.payload.data, raw, sizeof(raw)) == 0);
+        pbw_struct_free(bytes_msg_fields, 2, &got);
+        /* Dynamic decodes what the struct encoder wrote. */
+        CHECK_OK(pbw_decode(msg, wire, wire_len, &back));
+        dv = pbw_message_get(back, 1);
+        CHECK(dv != NULL);
+        if (dv != NULL) {
+            size_t blen = 0;
+            const void *bdata = pbw_value_get_bytes(dv, &blen);
+            CHECK(blen == sizeof(raw) &&
+                  memcmp(bdata, raw, sizeof(raw)) == 0);
+        }
+        pbw_message_free(back);
+        pbw_message_free(dm);
+        pbw_free(dwire);
+    }
+    CHECK_OK(pbw_struct_codec_init(&codec, schema, "t.Bytes",
+                                   bytes_msg_fields, 2));
+    CHECK_OK(pbw_struct_codec_encode(codec, &s, &buf));
+    CHECK(buf.len == wire_len &&
+          (buf.len == 0 || memcmp(buf.data, wire, buf.len) == 0));
+    memset(&via_codec, 0, sizeof(via_codec));
+    CHECK_OK(pbw_struct_codec_decode(codec, buf.data, buf.len, &arena,
+                                     &via_codec));
+    CHECK(via_codec.payload.len == sizeof(raw) &&
+          memcmp(via_codec.payload.data, raw, sizeof(raw)) == 0);
+    pbw_struct_codec_free(codec);
+    pbw_struct_arena_free(arena);
+    pbw_struct_buf_free(&buf);
+    pbw_free(wire);
+    pbw_schema_free(schema);
+}
+
+/* Gap pins: union-less layouts (cs == 0) never participate in oneof
+ * tracking: two separate fields decode independently while the dynamic
+ * core keeps the last. Real oneofs ride union + case (proven byte-equal by
+ * test_oneoftest_reference). Map wire shape works as repeated entry structs
+ * (proven byte-equal to the dynamic tree above and to protoc). */
+typedef struct {
+    int32_t key;
+    const char *value;
+} map_entry_t;
+
+static const pbw_struct_field_t map_entry_fields[] = {
+    {1, PBW_SF_INT32, 0, offsetof(map_entry_t, key), 0, 0, 0, 0, NULL, 0, PBW_TYPE_INT32, 0, 0, 0, 0, 0},
+    {2, PBW_SF_STRING, 0, offsetof(map_entry_t, value), 0, 0, 0, 0, NULL, 0, PBW_TYPE_STRING, 2, 0, 0, 0, 0},
+};
+
+typedef struct {
+    map_entry_t *m;
+    size_t n_m;
+} map_msg_t;
+
+static const pbw_struct_field_t map_msg_fields[] = {
+    {1, PBW_SF_MESSAGE, 1, offsetof(map_msg_t, m), 0, offsetof(map_msg_t, n_m), sizeof(map_entry_t), 0, map_entry_fields, 2, PBW_TYPE_MESSAGE, 2, 0, 0, 0, 0},
+};
+
+typedef struct {
+    int32_t a;
+    int has_a;
+    const char *b;
+} oneof_msg_t;
+
+static const pbw_struct_field_t oneof_msg_fields[] = {
+    {1, PBW_SF_INT32, 0, offsetof(oneof_msg_t, a), offsetof(oneof_msg_t, has_a), 0, 0, 0, NULL, 0, PBW_TYPE_INT32, 0, 0, 0, 0, 0},
+    {2, PBW_SF_STRING, 0, offsetof(oneof_msg_t, b), 0, 0, 0, 0, NULL, 0, PBW_TYPE_STRING, 2, 0, 0, 0, 0},
+};
+
+static void
+test_gap_pins(void)
+{
+    /* Map shape: two entries through struct == two entries dynamic. */
+    {
+        pbw_schema *schema = pbw_schema_new();
+        pbw_descriptor *entry;
+        pbw_descriptor *parent;
+        map_msg_t s;
+        map_entry_t entries[2];
+        uint8_t *wire = NULL;
+        size_t wire_len = 0;
+        pbw_message *dm = NULL;
+        pbw_message *pm = NULL;
+        uint8_t *dwire = NULL;
+        size_t dwire_len = 0;
+
+        CHECK(schema != NULL);
+        if (schema == NULL) {
+            return;
+        }
+        entry = pbw_schema_add_message(schema, "t.Entry");
+        CHECK(entry != NULL);
+        pbw_message_add_field(entry, "key", 1, PBW_TYPE_INT32,
+                              PBW_LABEL_OPTIONAL);
+        {
+            pbw_field *vf = pbw_message_add_field(entry, "value", 2,
+                                                  PBW_TYPE_STRING,
+                                                  PBW_LABEL_OPTIONAL);
+            CHECK(vf != NULL);
+        }
+        parent = pbw_schema_add_message(schema, "t.Map");
+        CHECK(parent != NULL);
+        {
+            pbw_field *mf = pbw_message_add_field(parent, "m", 1,
+                                                  PBW_TYPE_MESSAGE,
+                                                  PBW_LABEL_REPEATED);
+            CHECK(mf != NULL);
+            pbw_field_set_type_name(mf, "t.Entry");
+        }
+        CHECK_OK(pbw_schema_link(schema));
+        memset(&s, 0, sizeof(s));
+        entries[0].key = 1;
+        entries[0].value = "one";
+        entries[1].key = 2;
+        entries[1].value = "two";
+        s.m = entries;
+        s.n_m = 2;
+        CHECK_OK(pbw_struct_encode(schema, "t.Map", map_msg_fields, 1,
+                                   &s, &wire, &wire_len));
+        /* Same entries through the dynamic tree. */
+        pm = pbw_message_new(parent);
+        CHECK(pm != NULL);
+        {
+            pbw_message *e1 = pbw_message_new(entry);
+            pbw_message *e2 = pbw_message_new(entry);
+            pbw_value *l = NULL;
+            CHECK(e1 != NULL && e2 != NULL);
+            CHECK_OK(pbw_message_set(e1, 1, pbw_value_new_int(1)));
+            CHECK_OK(pbw_message_set(e1, 2, pbw_value_new_string("one")));
+            CHECK_OK(pbw_message_set(e2, 1, pbw_value_new_int(2)));
+            CHECK_OK(pbw_message_set(e2, 2, pbw_value_new_string("two")));
+            CHECK_OK(pbw_message_set(pm, 1, pbw_value_new_message(e1)));
+            CHECK_OK(pbw_message_set(pm, 1, pbw_value_new_message(e2)));
+            l = pbw_message_get(pm, 1);
+            CHECK(l != NULL && pbw_value_count(l) == 2);
+        }
+        CHECK_OK(pbw_encode(pm, &dwire, &dwire_len));
+        CHECK(dwire_len == wire_len && memcmp(dwire, wire, wire_len) == 0);
+        dm = NULL;
+        CHECK_OK(pbw_decode(parent, wire, wire_len, &dm));
+        {
+            pbw_value *l = pbw_message_get(dm, 1);
+            CHECK(l != NULL && pbw_value_count(l) == 2);
+        }
+        pbw_message_free(dm);
+        pbw_message_free(pm);
+        pbw_free(dwire);
+        pbw_free(wire);
+        pbw_schema_free(schema);
+    }
+    /* Oneof: single member matches dynamic; dual-member wire sets BOTH
+     * struct fields (no case word) while dynamic keeps the last. */
+    {
+        pbw_schema *schema = pbw_schema_new();
+        pbw_descriptor *o;
+        pbw_field *f1;
+        pbw_field *f2;
+        oneof_msg_t s;
+        uint8_t *wire = NULL;
+        size_t wire_len = 0;
+        /* field 1 (varint 7) then field 2 ("x"): both present. */
+        static const uint8_t both[] = {0x08, 0x07, 0x12, 0x01, 0x78};
+
+        CHECK(schema != NULL);
+        if (schema == NULL) {
+            return;
+        }
+        o = pbw_schema_add_message(schema, "t.One");
+        CHECK(o != NULL);
+        /* Setters run before the next add: add_field reallocs. */
+        f1 = pbw_message_add_field(o, "a", 1, PBW_TYPE_INT32,
+                                   PBW_LABEL_OPTIONAL);
+        CHECK(f1 != NULL);
+        pbw_field_set_oneof(f1, 1);
+        f2 = pbw_message_add_field(o, "b", 2, PBW_TYPE_STRING,
+                                   PBW_LABEL_OPTIONAL);
+        CHECK(f2 != NULL);
+        pbw_field_set_oneof(f2, 1);
+        CHECK_OK(pbw_schema_link(schema));
+        memset(&s, 0, sizeof(s));
+        s.a = 7;
+        s.has_a = 1;
+        CHECK_OK(pbw_struct_encode(schema, "t.One", oneof_msg_fields, 2,
+                                   &s, &wire, &wire_len));
+        CHECK(wire_len == 2 && wire[0] == 0x08 && wire[1] == 0x07);
+        pbw_free(wire);
+        wire = NULL;
+        /* Struct decode sets both fields; dynamic keeps last ("x"). */
+        memset(&s, 0, sizeof(s));
+        CHECK_OK(pbw_struct_decode(schema, "t.One", oneof_msg_fields, 2,
+                                   both, sizeof(both), &s));
+        CHECK(s.has_a == 1 && s.a == 7 && s.b != NULL);
+        {
+            pbw_message *dm = NULL;
+
+            CHECK_OK(pbw_decode(o, both, sizeof(both), &dm));
+            /* Dynamic oneof: last member wins, first is cleared. */
+            CHECK(pbw_message_get(dm, 1) == NULL);
+            CHECK(pbw_message_get(dm, 2) != NULL);
+            pbw_message_free(dm);
+        }
+        pbw_struct_free(oneof_msg_fields, 2, &s);
+        pbw_schema_free(schema);
+    }
+    /* Group: proven byte-equal by test_grouptest_reference; the dynamic
+     * core round-trips groups as submessages (see design.md). */
+}
+
+/* Map reference: generated entry structs encode to the protoc bytes and
+ * decode back, in the .txt order (plain encode preserves array order). */
+static void
+test_maptest_reference(void)
+{
+    structtest_maps_t s;
+    structtest_maps_by_int_entry_t by_int[2];
+    structtest_maps_by_str_entry_t by_str[2];
+    structtest_maps_by_msg_entry_t by_msg[1];
+    structtest_map_value_t kv = {"n", 42};
+    structtest_maps_t got;
+    pbw_schema *schema = NULL;
+    uint8_t *expect = NULL;
+    size_t expect_len = 0;
+    uint8_t *wire = NULL;
+    size_t wire_len = 0;
+
+    CHECK_OK(pbw_struct_schema_load(MAPTEST_DESC_PATH, &schema));
+    if (schema == NULL) {
+        return;
+    }
+    CHECK(read_file("bindings/c/tests/data/maptest.bin", &expect,
+                    &expect_len) == 0);
+    if (expect == NULL) {
+        goto done;
+    }
+    memset(&s, 0, sizeof(s));
+    by_int[0].key = 1;
+    by_int[0].value = "one";
+    by_int[1].key = -5;
+    by_int[1].value = "neg";
+    by_str[0].key = "a";
+    by_str[0].value = 10;
+    by_str[1].key = "b";
+    by_str[1].value = -3;
+    by_msg[0].key = "k";
+    by_msg[0].value = &kv;
+    s.by_int = by_int;
+    s.n_by_int = 2;
+    s.by_str = by_str;
+    s.n_by_str = 2;
+    s.by_msg = by_msg;
+    s.n_by_msg = 1;
+    CHECK_OK(structtest_maps_encode(schema, &s, &wire, &wire_len));
+    CHECK(wire_len == expect_len && memcmp(wire, expect, expect_len) == 0);
+    memset(&got, 0, sizeof(got));
+    CHECK_OK(structtest_maps_decode(schema, expect, expect_len, &got));
+    CHECK(got.n_by_int == 2 && got.by_int[0].key == 1 &&
+          strcmp(got.by_int[0].value, "one") == 0 &&
+          got.by_int[1].key == -5 &&
+          strcmp(got.by_int[1].value, "neg") == 0);
+    CHECK(got.n_by_str == 2 && strcmp(got.by_str[0].key, "a") == 0 &&
+          got.by_str[0].value == 10 && strcmp(got.by_str[1].key, "b") == 0 &&
+          got.by_str[1].value == -3);
+    CHECK(got.n_by_msg == 1 && strcmp(got.by_msg[0].key, "k") == 0 &&
+          got.by_msg[0].value != NULL &&
+          strcmp(got.by_msg[0].value->name, "n") == 0 &&
+          got.by_msg[0].value->value == 42);
+    structtest_maps_free(&got);
+done:
+    pbw_free(wire);
+    free(expect);
+    pbw_schema_free(schema);
+}
+
+/* Group reference: generated group structs encode to the protoc bytes
+ * (START_GROUP ... END_GROUP) and decode back. */
+static void
+test_grouptest_reference(void)
+{
+    structtest_group_test_t s;
+    structtest_group_test_inner_t inner;
+    structtest_group_test_item_t items[2];
+    structtest_group_test_t got;
+    pbw_schema *schema = NULL;
+    uint8_t *expect = NULL;
+    size_t expect_len = 0;
+    uint8_t *wire = NULL;
+    size_t wire_len = 0;
+
+    CHECK_OK(pbw_struct_schema_load(GROUPTEST_DESC_PATH, &schema));
+    if (schema == NULL) {
+        return;
+    }
+    CHECK(read_file("bindings/c/tests/data/grouptest.bin", &expect,
+                    &expect_len) == 0);
+    if (expect == NULL) {
+        goto done;
+    }
+    memset(&s, 0, sizeof(s));
+    inner.x = 5;
+    inner.has_x = 1;
+    inner.s = "g";
+    items[0].v = 1;
+    items[0].has_v = 1;
+    items[1].v = -2;
+    items[1].has_v = 1;
+    s.inner = &inner;
+    s.item = items;
+    s.n_item = 2;
+    s.id = 9;
+    s.has_id = 1;
+    CHECK_OK(structtest_group_test_encode(schema, &s, &wire, &wire_len));
+    CHECK(wire_len == expect_len && memcmp(wire, expect, expect_len) == 0);
+    memset(&got, 0, sizeof(got));
+    CHECK_OK(structtest_group_test_decode(schema, expect, expect_len, &got));
+    CHECK(got.inner != NULL && got.inner->has_x && got.inner->x == 5 &&
+          got.inner->s != NULL && strcmp(got.inner->s, "g") == 0);
+    CHECK(got.n_item == 2 && got.item[0].v == 1 && got.item[1].v == -2);
+    CHECK(got.has_id && got.id == 9);
+    /* Stray END_GROUP fails loudly. */
+    {
+        static const uint8_t stray[] = {0x0c};
+        structtest_group_test_t bad;
+
+        memset(&bad, 0, sizeof(bad));
+        CHECK(structtest_group_test_decode(schema, stray, sizeof(stray),
+                                           &bad) != PBW_OK);
+        structtest_group_test_free(&bad);
+    }
+    structtest_group_test_free(&got);
+done:
+    pbw_free(wire);
+    free(expect);
+    pbw_schema_free(schema);
+}
+
+/* Oneof reference: the text member encodes to the protoc bytes; every
+ * member round-trips through the dynamic tree as oracle; dual-member wire
+ * keeps the last (case set + previous cleared); encode emits only the
+ * selected member. */
+static void
+test_oneoftest_reference(void)
+{
+    structtest_one_of_test_t s;
+    structtest_one_of_test_t got;
+    pbw_schema *schema = NULL;
+    uint8_t *expect = NULL;
+    size_t expect_len = 0;
+    uint8_t *wire = NULL;
+    size_t wire_len = 0;
+
+    CHECK_OK(pbw_struct_schema_load(ONEOFTEST_DESC_PATH, &schema));
+    if (schema == NULL) {
+        return;
+    }
+    CHECK(read_file("bindings/c/tests/data/oneoftest.bin", &expect,
+                    &expect_len) == 0);
+    if (expect == NULL) {
+        goto done;
+    }
+    /* Text member pins the protoc bytes. */
+    memset(&s, 0, sizeof(s));
+    s.kind_case = 2;
+    s.kind.text = "hi";
+    s.id = 1;
+    CHECK_OK(structtest_one_of_test_encode(schema, &s, &wire, &wire_len));
+    CHECK(wire_len == expect_len && memcmp(wire, expect, expect_len) == 0);
+    memset(&got, 0, sizeof(got));
+    CHECK_OK(structtest_one_of_test_decode(schema, expect, expect_len,
+                                           &got));
+    CHECK(got.kind_case == 2 && got.kind.text != NULL &&
+          strcmp(got.kind.text, "hi") == 0 && got.id == 1);
+    structtest_one_of_test_free(&got);
+    /* Num member through the dynamic oracle. */
+    memset(&s, 0, sizeof(s));
+    s.kind_case = 1;
+    s.kind.num = -7;
+    s.id = 2;
+    pbw_free(wire);
+    wire = NULL;
+    CHECK_OK(structtest_one_of_test_encode(schema, &s, &wire, &wire_len));
+    {
+        pbw_descriptor *desc = pbw_schema_find(schema, "structtest.OneOfTest");
+        pbw_message *dm = NULL;
+        pbw_value *v;
+
+        CHECK(desc != NULL);
+        CHECK_OK(pbw_decode(desc, wire, wire_len, &dm));
+        v = pbw_message_get(dm, 1);
+        CHECK(v != NULL && pbw_value_get_int32(v) == -7);
+        CHECK(pbw_message_get(dm, 2) == NULL);
+        v = pbw_message_get(dm, 5);
+        CHECK(v != NULL && pbw_value_get_int32(v) == 2);
+        pbw_message_free(dm);
+    }
+    /* Dual-member wire: last wins, previous cleared. */
+    {
+        static const uint8_t both[] = {0x08, 0x07, 0x12, 0x01, 0x78};
+
+        memset(&got, 0, sizeof(got));
+        CHECK_OK(structtest_one_of_test_decode(schema, both, sizeof(both),
+                                               &got));
+        CHECK(got.kind_case == 2 && got.kind.text != NULL &&
+              strcmp(got.kind.text, "x") == 0);
+        structtest_one_of_test_free(&got);
+    }
+    /* Encode emits only the selected member even when the union holds
+     * stale storage for another (id rides along: implicit proto3 zero,
+     * see T3). */
+    memset(&s, 0, sizeof(s));
+    s.kind_case = 1;
+    s.kind.num = 7;
+    pbw_free(wire);
+    wire = NULL;
+    CHECK_OK(structtest_one_of_test_encode(schema, &s, &wire, &wire_len));
+    CHECK(wire_len == 4 && wire[0] == 0x08 && wire[1] == 0x07 &&
+          wire[2] == 0x28 && wire[3] == 0x00);
+done:
+    pbw_free(wire);
+    free(expect);
+    pbw_schema_free(schema);
+}
+
 int
 main(void)
 {
@@ -1251,6 +1793,11 @@ main(void)
     test_t4_dynamic_crosscheck();
     test_t5_entry_point_parity();
     test_t6_wire_errors();
+    test_bytes();
+    test_maptest_reference();
+    test_grouptest_reference();
+    test_oneoftest_reference();
+    test_gap_pins();
     if (failures != 0) {
         fprintf(stderr, "%d check(s) failed\n", failures);
         return 1;

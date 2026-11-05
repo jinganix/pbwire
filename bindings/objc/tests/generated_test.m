@@ -1,4 +1,4 @@
-/* Typed-compat check for the Objective-C binding (TESTSPEC T1-T6, vectors.json
+/* Generated-compat check for the Objective-C binding (TESTSPEC T1-T6, vectors.json
  * as the single source of truth):
  *
  *   T1  generated `data` == pinned protoc reference bytes (matrix3.bin,
@@ -20,10 +20,10 @@
  *       round-trip
  *
  * The oracle side links the official runtime plus protoc --objc_out for the
- * three fixtures (build.sh typed); the facade classes carry the PBWGen_
+ * three fixtures (build.sh generated); the facade classes carry the PBWGen_
  * prefix so both sides link into one binary.
  *
- * Run it with ./build.sh typed. */
+ * Run it with ./build.sh generated. */
 
 #import <Foundation/Foundation.h>
 

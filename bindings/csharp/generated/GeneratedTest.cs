@@ -1,4 +1,4 @@
-// Typed-compat check for the C# binding (TESTSPEC T1–T6, vectors.json as the
+// Generated-compat check for the C# binding (TESTSPEC T1–T6, vectors.json as the
 // single source of truth):
 //
 //   T1  generated ToByteArray == pinned protoc reference bytes
@@ -10,7 +10,7 @@
 //       identical observable results (import swap only)
 //   T6  errors are loud, not crashes: bad wire throws on both sides
 //
-//   dotnet run --project typed
+//   dotnet run --project generated
 
 extern alias Oracle;
 
