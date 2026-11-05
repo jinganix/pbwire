@@ -65,9 +65,9 @@ defmodule Pbwire.Schema do
   # -- collection ------------------------------------------------------
 
   defp collect(modules) do
-    Enum.reduce_while(modules, {:ok, {%{}, []}}, fn mod, {:ok, {specs, _queue}} ->
+    Enum.reduce_while(modules, {:ok, {%{}, []}}, fn mod, {:ok, {specs, queue}} ->
       case collect_module(mod, specs) do
-        {:ok, specs, queue} -> {:cont, {:ok, {specs, queue}}}
+        {:ok, specs, more} -> {:cont, {:ok, {specs, queue ++ more}}}
         {:error, _} = err -> {:halt, err}
       end
     end)
