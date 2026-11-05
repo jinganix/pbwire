@@ -73,7 +73,9 @@ jobs:
       - name: Build
         run: cmake --build build-cmake
       - name: Test
-        run: ctest --test-dir build-cmake --output-on-failure
+        # -C selects the configuration for multi-config generators
+        # (Visual Studio); single-config generators ignore it.
+        run: ctest --test-dir build-cmake --output-on-failure -C Debug
 
   conformance:
     name: Official conformance suite
