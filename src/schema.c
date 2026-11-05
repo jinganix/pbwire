@@ -737,6 +737,12 @@ pbw_descriptor_is_enum(const pbw_descriptor *desc)
 }
 
 int
+pbw_descriptor_is_map_entry(const pbw_descriptor *desc)
+{
+    return desc != NULL && desc->map_entry;
+}
+
+int
 pbw_descriptor_is_proto3(const pbw_descriptor *desc)
 {
     return desc != NULL && desc->proto3;

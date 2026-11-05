@@ -165,6 +165,8 @@ pbw_status pbw_descriptor_set_load(const void *data, size_t len,
 
 const char *pbw_descriptor_name(const pbw_descriptor *desc);
 int pbw_descriptor_is_enum(const pbw_descriptor *desc);
+/* Nonzero when the descriptor is a map entry (MessageOptions.map_entry). */
+int pbw_descriptor_is_map_entry(const pbw_descriptor *desc);
 /* 1 for proto3/editions semantics (open enums, no `required` fields), 0 for
  * proto2 syntax. Decides whether an unknown enum number stays in the field or
  * moves to the unknown fields, so a decoder that materializes values itself
