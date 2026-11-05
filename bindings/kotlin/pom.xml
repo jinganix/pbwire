@@ -111,6 +111,19 @@
           </execution>
         </executions>
       </plugin>
+      <!-- Portal publishing: intercepts `mvn deploy`, uploads the bundle,
+           validates it and publishes (server id matches distributionManagement
+           and the setup-java server-username/password env). -->
+      <plugin>
+        <groupId>org.sonatype.central</groupId>
+        <artifactId>central-publishing-maven-plugin</artifactId>
+        <version>0.12.0</version>
+        <extensions>true</extensions>
+        <configuration>
+          <publishingServerId>central</publishingServerId>
+          <autoPublish>true</autoPublish>
+        </configuration>
+      </plugin>
     </plugins>
   </build>
 
