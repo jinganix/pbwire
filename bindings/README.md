@@ -67,11 +67,20 @@ anything else:
   cgo and adds a hot-swappable schema registry on top.
 - **Kotlin needs no separate layer.** Kotlin runs on the JVM, so it uses the
   Java binding's runtime and adds only the DSL that official Kotlin support
-  is (protoc `--kotlin_out` generates Kotlin over protobuf-java).
+  is (protoc `--kotlin_out` generates Kotlin over protobuf-java). Scala and
+  Clojure are the same move: Scala adds an idiomatic DSL over the Java
+  runtime, Clojure adds persistent-map in/out over plain interop — one Java
+  runtime for three languages, no second codec anywhere.
 - **Erlang needs neither.** gpb already is that plugin: `gpb_compile` /
   `protoc-erl` generates the record definitions plus `get_msg_defs/0`, and
   `pbwire:load_cache/1` consumes exactly that. Adding a second
-  generator or a descriptor loader would duplicate gpb.
+  generator or a descriptor loader would duplicate gpb. Elixir rides the same
+  NIF: `elixir-protobuf` generates the structs plus `__message_props__/0`,
+  and the binding translates those to the NIF's tuple form — it owns no C
+  of its own (it reuses the published `:pbwire` Hex NIF, the same C core).
+- **F# needs no separate layer either.** It references the C# binding's
+  project and adds only an F#-idiomatic facade over the same P/Invoke
+  runtime, exactly like Kotlin reuses Java.
 
 ## What each binding solves
 
@@ -97,6 +106,14 @@ the full tables are.
 | C# | Google.Protobuf is already a fast tree codec — the closest race of the set | P/Invoke plus a resolver, no packages | 2.90x / 1.07x (vs Google.Protobuf; 3.6x / 1.62x vs protobuf-net) |
 | Go | the official runtime walks `protoreflect`/`protowire` per field | cgo dynamic binding over the C core: one downcall per op, zero-copy decode in, hot-swappable registry | 2.6x / 2.1x (vs official, xlarge; 1.0x / 1.1x small) |
 | Erlang | gpb is pure Erlang; gpb NIF binds libprotobuf per message | NIF over the core, consuming gpb's own definitions — no second generator | 4.21x / 1.98x (vs gpb) |
+| Swift | Apple moved to Swift while the binding set still spoke ObjC; `swift-protobuf` generates a struct per message | SwiftPM package: FFI host over the C ABI (`FileDescriptorSet` at run time, static `libpbwire.a`, no wire code) | 5.38x / 2.62x (vs swift-protobuf) |
+| Scala | data teams write Scala against Java protobuf | same Java runtime as Kotlin plus an idiomatic DSL — one runtime, three JVM languages | 1.29x / 1.47x (vs ScalaPB) |
+| Elixir | `elixir-protobuf` is pure Elixir, every field through the interpreter | struct↔tuple translation over the shared NIF (no C of its own) | 2.27x / 1.46x (vs elixir-protobuf) |
+| Zig | `zig-protobuf` codegen per message, fragmented across forks | `@cImport`-free static link (`translate-c` + `libpbwire.a` compiled in) | no baseline wired yet — 1638.4 / 693.2 MB/s pbwire-only |
+| F# | .NET protobuf means C# SDK style even in F# code | facade over the C# project (`ProjectReference`, same P/Invoke core) | 2.92x / 1.32x (vs Google.Protobuf) |
+| Clojure | the Clojure wrappers are thin shells over protobuf-java | persistent maps in/out over the Java runtime via plain interop | 0.11x / 0.19x (vs protobuf-java — boundary cost, bytes are identical) |
+| Julia | `ProtoBuf.jl` is pure Julia, per-field interpreter overhead | `dlopen` + `ccall` FFI host (`FileDescriptorSet` at run time, `Dict` boundary) | 119x / 0.95x (vs ProtoBuf.jl; baseline encode collapses with size) |
+| R | `RProtoBuf` binds the C++ runtime per message | C extension over the core (`.Call`, named lists in/out, statically linked) | no baseline installed — 188.5 / 134.7 MB/s pbwire-only (1393.7 via builder) |
 | Lua | game servers hand tables to `pbc`/`lua-protobuf`, each with its own schema story | C module over the core: tables convert through the schema's arena, builders encode hot | 0.79x / 1.20x (vs lua-protobuf; 8.17x via builder encode) |
 
 Read the ratios as "what this binding buys its host language", not as a
@@ -124,11 +141,21 @@ side by side with the absolute MB/s.
 | Dart | `Schema.load` on a `FileDescriptorSet`, `dart:ffi` | ✅ | `package:ffi` only (malloc, strings) |
 | Rust | `Schema::from_file` on a `FileDescriptorSet`, core linked in statically | ✅ | no bindgen, no external crate |
 | C# | `Schema.FromFile` on a `FileDescriptorSet`, P/Invoke + `DllImportResolver` | ✅ | no packages in the binding project |
+| Swift | `Schema(contentsOfFile:)` on a `FileDescriptorSet`, SwiftPM + C ABI | ✅ | links `build/libpbwire.a` via `unsafeFlags`; baseline is a separate package, no checked-in generated code |
+| Scala | the Java binding's runtime: `FileDescriptorSet` at run time | ✅ | DSL over the same runtime as Java/Kotlin; baseline needs `scalapbc` once |
+| Elixir | `elixir-protobuf` structs + `__message_props__/0` → the shared `:pbwire` NIF | ✅ | no C of its own; Hex `:pbwire` 0.1.7 is the same core version as `bindings/erlang` |
+| Zig | `Schema.fromFile` on a `FileDescriptorSet`, core sources compiled in statically | ✅ | `build.zig` API targets Zig 0.17; baseline not wired (needs network) |
+| F# | the C# binding's project: `FileDescriptorSet` at run time | ✅ | `ProjectReference`, no second runtime; baseline is generated C# (F# cannot compile `.cs`) |
+| Clojure | the Java binding's runtime via plain interop, `FileDescriptorSet` at run time | ✅ | persistent maps in/out; `benchmarks/deps` jars are fetched, not committed |
+| Julia | `Libdl.dlopen` + `ccall`, `FileDescriptorSet` at run time | ✅ | stdlib-only package; baseline oracle is generated with `protojl`, not committed |
+| R | `.Call` C extension on a `FileDescriptorSet`, core linked in statically | ✅ | named lists in/out; INT32_MIN reads back as `NA`, doubles clamp at the 64-bit limits |
 
 Every row above also has a generated model from `codegen`: typed
 fields plus `encode`/`decode` over that binding's dynamic API. C keeps
 its own generator (it is ahead-of-time compiled); Go is dynamic-API only
-for now; Erlang keeps gpb.
+for now; Erlang keeps gpb. The eight new bindings are dynamic-API only too:
+Elixir keeps `elixir-protobuf`, the rest load a `FileDescriptorSet` — none
+of them has a `codegen` emitter yet.
 
 ## Memory: what each binding keeps, and the one rule per row
 
@@ -145,10 +172,16 @@ the default cap and the table gives the ceiling plus the workaround.
 | Ruby | builder = C tree, `encode` writes straight into the returned `String`; a wire view pins the bytes | retained views | same as Python: `set` on a view raises, and holding a view holds its bytes |
 | Java / Kotlin | one `ThreadLocal` workspace: a reusable encode buffer + a string-image cache, never freed until thread exit | live + dead threads x largest message each | thread-per-request plus one xlarge message pins its buffer per dead thread; keep request threads off the binding or reuse a fixed pool |
 | Node | single-threaded: one reusable encode `pbw_ctx` per message type (freed with the type) + decoded message = JS `Buffer` + slice array | types x largest encoding each + retained messages | drop decoded messages; a type's buffer stays at its largest encoding |
-| Objective-C / Dart / Rust / C# / Go | plain `pbw_encode`/`pbw_decode` per call (`NSData` takes the malloc'd buffer over with no copy; Go passes the input slice straight in) | none, except retained Go roots | nothing to tune; Go roots need an explicit `Close` |
+| Objective-C / Dart / Rust / C# / Go / Swift / Zig / F# | plain `pbw_encode`/`pbw_decode` per call (`NSData` takes the malloc'd buffer over with no copy; Go passes the input slice straight in) | none, except retained Go roots | nothing to tune; Go roots need an explicit `Close` |
 | PHP | built trees live in one `pbw_ctx` each (freed with the message, never decoded into so always mutable); decoded trees are single-malloc arenas | retained messages | drop the message; nested views hold the parent, `close()` frees either kind |
 | Erlang | one `pbw_ctx` per scheduler + a geometrically grown encode buffer, never shrunk (see its README FAQ) | schedulers x largest message | bounded by the scheduler count; keep individual messages reasonably sized |
 | Lua | one `pbw_ctx` per schema (arena + encode buffer, reset per call; builders own plain trees) | largest message handled | nothing to tune; idle schemas keep up to the retain cap |
+| Scala / Clojure | one `ThreadLocal` workspace inherited from the Java runtime (reusable buffer, never freed until thread exit) | live + dead threads x largest message each | same rule as Java: fixed pool, not thread-per-request |
+| Elixir | one `pbw_ctx` per scheduler via the shared NIF (BEAM-global schema cache, like Erlang) | schedulers x largest message | same rule as Erlang |
+| Zig | plain `pbw_encode`/`pbw_decode` per call, caller-owned buffers | none | nothing to tune |
+| F# | same P/Invoke core as C#: plain per-call encode/decode | none, except retained roots | nothing to tune |
+| Julia | `ccall` per call; decoded messages hold the input bytes via finalizers | retained messages | drop the message; `close()` frees either kind |
+| R | built trees live in one `pbw_ctx` each; decoded trees are single-malloc arenas | retained messages | drop the message; nested views hold the parent, builders anchor the schema |
 
 Compiler-level code generation is never hand-written: C's layout tables come
 from the same descriptor `protoc` parsed, so field numbers, wire types and

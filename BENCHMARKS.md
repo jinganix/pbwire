@@ -96,6 +96,14 @@ Last full refresh, all rows below unless a table says otherwise:
 | Rust | 1.99.1 |
 | C# | .NET 10.0.403 |
 | Lua | 5.5.1, `lua-protobuf` 0.6.0 |
+| Swift | 6.4.2, `swift-protobuf` 1.39.0 |
+| Scala | 3.10.0, ScalaPB 0.11.18, `protobuf-java` 4.36.2 |
+| Elixir | 1.20.5 / OTP 29, `protobuf` 0.17.1, `pbwire` 0.1.7 (Hex) |
+| Zig | 0.17.1 (`-Doptimize=ReleaseFast`) |
+| F# | .NET 10.0.403 (Google.Protobuf baseline via C#) |
+| Clojure | 1.12.0, `protobuf-java` 4.36.2 |
+| Julia | 1.13.3, ProtoBuf.jl 1.3.0 |
+| R | 4.6.2 (no RProtoBuf baseline installed) |
 
 ## Bindings vs their baselines
 
@@ -117,6 +125,14 @@ Last full refresh, all rows below unless a table says otherwise:
 | Rust (static link) | `make rust-bench` (`bindings/rust/benchmarks`) | rust-protobuf 3.x generated code + prost (fastest) | all 4 | 1.84x / 1.69x vs rust-protobuf (1.09x / 1.64x vs prost) ✅ |
 | C# (P/Invoke) | `make csharp-bench` (`bindings/csharp/benchmarks`) | Google.Protobuf C# generated code + protobuf-net (fastest) | all 4 | 2.90x / 1.07x vs official (3.6x / 1.62x vs protobuf-net) ✅ |
 | Lua (C module, tables) | `make lua-bench` (`bindings/lua/benchmarks`) | `lua-protobuf` 0.6.0 | all 4 | 0.79x / 1.20x ❌/✅ (8.17x via builder encode) |
+| Swift (SwiftPM, static link) | `make swift-bench` (`bindings/swift/benchmarks`) | `apple/swift-protobuf` 1.39.0 generated code from the same `matrix3.proto` | all 4 | 5.38x / 2.62x ✅ |
+| Scala (Java runtime + DSL) | `make scala-bench` (`bindings/scala/benchmarks`) | ScalaPB 0.11.18 generated code from the same `matrix3.proto` | all 4 | 1.29x / 1.47x ✅ |
+| Elixir (NIF over the shared core) | `make elixir-bench` (`bindings/elixir/benchmarks`) | `elixir-protobuf` 0.17.1 structs from the same `matrix3.proto` | all 4 | 2.27x / 1.46x ✅ |
+| Zig (static link) | `make zig-bench` (`bindings/zig/benchmarks`, `-Doptimize=ReleaseFast`) | Arwalk/zig-protobuf (not wired: needs network for its package + plugin) | all 4 | no baseline yet — 1638.4 / 693.2 MB/s pbwire-only |
+| F# (facade over the C# runtime) | `make fsharp-bench` (`bindings/fsharp/benchmarks`) | Google.Protobuf C# generated code from the same `matrix3.proto` | all 4 | 2.92x / 1.32x ✅ |
+| Clojure (Java runtime + interop) | `make clojure-bench` (`bindings/clojure/benchmarks`) | `protobuf-java` generated code from the same `matrix3.proto` | all 4 | 0.11x / 0.19x ❌ (persistent maps per message + per-field interop vs generated straight-line code) |
+| Julia (`ccall` FFI) | `make julia-bench` (`bindings/julia/benchmarks`) | JuliaIO/ProtoBuf.jl 1.3.0 generated code from the same `matrix3.proto` | all 4 | 119x / 0.95x ✅/❌ (baseline encode collapses with size; decode is a wash) |
+| R (C extension, named lists) | `make r-bench` (`bindings/r/benchmarks`) | RProtoBuf (not installed here: baseline columns print `-`) | all 4 | no baseline yet — 188.5 / 134.7 MB/s pbwire-only (1393.7 MB/s via builder encode) |
 
 "vs baseline" is encode / decode throughput relative to the baseline on the
 largest case the binding runs. `encode` is Python data to wire bytes and
@@ -128,9 +144,13 @@ against `FromString`. Every binding is ahead of its baseline on that column now.
 Correctness first everywhere: the core bench verifies byte-for-byte equality
 before timing, the C and Python benches check their bytes against the
 `protoc`-produced reference (plus a decode→encode round trip) before timing,
-the Java, Kotlin, Node, Ruby, Objective-C, PHP, Dart, Rust, C# and Go harnesses
+the Java, Kotlin, Ruby, Rust, C# and PHP harnesses
 require their bytes to equal the official encoder's bytes before timing
-anything, and the Erlang harness requires gpb's pinned wire size and byte
+anything, the Swift, Scala, Elixir, F#, Clojure, Julia and Zig harnesses do
+the same against swift-protobuf / ScalaPB / elixir-protobuf / Google.Protobuf /
+protobuf-java / ProtoBuf.jl / the pinned `matrix3.bin` oracle respectively
+(the R harness gates on the tier sizes plus a full decode round trip, since
+R cannot spell INT32_MIN distinctly from NA), and the Erlang harness requires gpb's pinned wire size and byte
 equality (encode, plus re-encoding a decoded reference) from every backend
 before timing.
 
@@ -159,6 +179,14 @@ payload, the boundary cost and the baseline all differ.
 | C# | P/Invoke | 74913 B | 1393.5 (2.90x ✅) | 547.1 (1.07x ✅) |
 | Lua | C module, tables | 74913 B | 150.0 (0.79x ❌) | 108.0 (1.15x ✅) |
 | Erlang | NIF (`pbwire`) | 74913 B | 441.7 (4.21x ✅) | 354.1 (1.98x ✅) |
+| Swift | static link (SwiftPM) | 74913 B | 1485.5 (5.38x ✅) | 583.7 (2.62x ✅) |
+| Scala | the Java runtime + DSL | 74913 B | 1096.6 (1.29x ✅) | 959.6 (1.47x ✅) |
+| Elixir | NIF (Hex `:pbwire`, same core as Erlang) | 74913 B | 144.0 (2.27x ✅) | 84.2 (1.46x ✅) |
+| Zig | static link | 74913 B | 1638.4 (no baseline yet) | 693.2 (no baseline yet) |
+| F# | P/Invoke over the C# runtime | 74913 B | 1499.0 (2.92x ✅) | 680.7 (1.32x ✅) |
+| Clojure | the Java runtime + interop | 74913 B | 110.2 (0.11x ❌) | 82.7 (0.19x ❌) |
+| Julia | `dlopen` + `ccall` | 74913 B | 1395.9 (119x ✅) | 670.5 (0.95x ❌) |
+| R | C extension, named lists | 74913 B | 188.5 (no baseline yet) | 134.7 (no baseline yet) |
 
 Read it as: the in-process dynamic core sets the pace (1.4x the C++
 generated code at this size), a binding that links the core in (Ruby, Rust)
@@ -170,7 +198,10 @@ effects: Python's encode column is the dict path (3000 sub-messages, 12000
 ints), and the Objective-C tier is a memcpy race over one 74 KB string.
 Node's ~22x and PHP's ~374x are against legacy baselines (jspb, pure-PHP
 runtime); against the fastest baselines it is 2.7x / 4.1x over protobufjs
-and 1.11x / 1.15x over the PHP C extension — see their sections.
+and 1.11x / 1.15x over the PHP C extension — see their sections. Swift,
+Scala, F#, Zig and Julia join the ~1.1-1.6 GB/s encode club on xlarge
+(Swift 5.38x and Julia 119x encode are baseline effects: swift-protobuf and
+ProtoBuf.jl encode much slower than their own decode).
 
 ## Measurement notes: the core fast path
 
@@ -852,6 +883,170 @@ against gpb, the third column is the gpb NIF (libprotobuf) second baseline.
 | 74913 B | encode | 441.7 (4.21x ✅) | 104.9 | 109.6 |
 | 74913 B | decode | 354.1 (1.98x ✅) | 178.8 | 182.8 |
 
+### Swift (SwiftPM, static link) vs `apple/swift-protobuf`
+
+| payload | op | pbwire-swift (MB/s, x swift-protobuf) | swift-protobuf (MB/s) |
+|---|---|---|---|
+| 136 B | encode | 1051.3 (2.41x ✅) | 436.5 |
+| 136 B | decode | 792.5 (3.28x ✅) | 241.3 |
+| 174 B | encode | 1103.3 (3.41x ✅) | 323.8 |
+| 174 B | decode | 737.7 (3.70x ✅) | 199.6 |
+| 2469 B | encode | 1299.4 (4.92x ✅) | 264.1 |
+| 2469 B | decode | 651.9 (3.41x ✅) | 191.1 |
+| 74913 B | encode | 1485.5 (5.38x ✅) | 276.0 |
+| 74913 B | decode | 583.7 (2.62x ✅) | 222.6 |
+
+FFI host like Objective-C/Dart: `FileDescriptorSet` at run time, C ABI calls
+only, no wire code, no plugin. SwiftPM links `build/libpbwire.a` via
+`unsafeFlags` (so plain `swift test` works offline); the baseline is a
+separate package using swift-protobuf's own build plugin, so no generated
+code is checked in. The gate is byte parity per tier plus the pinned
+`matrix3.bin` oracle.
+
+### Scala (Java runtime + DSL) vs ScalaPB
+
+| payload | op | pbwire-scala (MB/s, x ScalaPB) | ScalaPB (MB/s) |
+|---|---|---|---|
+| 136 B | encode | 1728.8 (1.60x ✅) | 1078.3 |
+| 136 B | decode | 923.3 (1.12x ✅) | 821.1 |
+| 174 B | encode | 1481.7 (1.10x ✅) | 1353.0 |
+| 174 B | decode | 798.9 (1.03x ✅) | 776.0 |
+| 2469 B | encode | 1028.6 (1.34x ✅) | 765.0 |
+| 2469 B | decode | 856.7 (1.41x ✅) | 608.2 |
+| 74913 B | encode | 1096.6 (1.29x ✅) | 853.3 |
+| 74913 B | decode | 959.6 (1.47x ✅) | 653.8 |
+
+Same class as Kotlin: the JVM binding reuses the Java runtime and adds only
+an idiomatic DSL — no second codec, no JNI, schema from a `FileDescriptorSet`
+at run time. The baseline is `scalapbc`-generated code (needs `cs install
+scalapbc` once); the jars land in `benchmarks/deps`. Byte parity per tier
+before timing, like every other row.
+
+### Elixir (NIF over the shared core) vs `elixir-protobuf`
+
+| payload | op | pbwire-elixir (MB/s, x elixir-protobuf) | elixir-protobuf (MB/s) |
+|---|---|---|---|
+| 136 B | encode | 148.6 (3.21x ✅) | 46.3 |
+| 136 B | decode | 104.9 (1.86x ✅) | 56.3 |
+| 174 B | encode | 154.3 (3.12x ✅) | 49.5 |
+| 174 B | decode | 101.3 (1.71x ✅) | 59.3 |
+| 2469 B | encode | 156.9 (2.70x ✅) | 58.2 |
+| 2469 B | decode | 99.6 (1.82x ✅) | 54.8 |
+| 74913 B | encode | 144.0 (2.27x ✅) | 63.3 |
+| 74913 B | decode | 84.2 (1.46x ✅) | 57.8 |
+
+Same class as Erlang: the BEAM binding reuses the published `:pbwire` Hex
+NIF (the same C core as `bindings/erlang`) and owns only the struct↔tuple
+translation; `elixir-protobuf` is the schema plugin, like gpb is for Erlang.
+Every encode is byte-identical to `Protobuf.encode/1` before timing. Known
+deliberate divergences from the oracle: NaN bit identity, unknown-field drop
+(the NIF tuple form has no storage), raise on missing `required`.
+
+### Zig (static link), pbwire column only
+
+| payload | op | pbwire-zig (MB/s, ReleaseFast) |
+|---|---|---|
+| 136 B | encode | 1834.2 |
+| 136 B | decode | 941.6 |
+| 174 B | encode | 1740.1 |
+| 174 B | decode | 837.4 |
+| 2469 B | encode | 1623.3 |
+| 2469 B | decode | 656.7 |
+| 74913 B | encode | 1638.4 |
+| 74913 B | decode | 693.2 |
+
+Same class as Rust: the core sources compile into a static `libpbwire.a`
+that links into every artifact, one self-contained binary, schema from a
+`FileDescriptorSet` at run time. The baseline (Arwalk/zig-protobuf) is not
+wired: it needs network for its package plus its protoc plugin; the WANT
+sizes and block format already match, so its numbers drop straight in. The
+gate is tier size plus byte parity against the pinned `matrix3.bin` oracle.
+At `-Doptimize=ReleaseFast` (what `bench.sh` runs) the binding sits at the
+core's own pace; the default debug build is ~20x slower and is not timed.
+
+### F# (facade over the C# runtime) vs Google.Protobuf
+
+| payload | op | pbwire-fsharp (MB/s, x Google.Protobuf) | Google.Protobuf (MB/s) |
+|---|---|---|---|
+| 136 B | encode | 1387.4 (3.01x ✅) | 461.1 |
+| 136 B | decode | 930.9 (1.88x ✅) | 495.1 |
+| 174 B | encode | 1343.7 (3.31x ✅) | 406.6 |
+| 174 B | decode | 807.2 (2.04x ✅) | 394.7 |
+| 2469 B | encode | 1240.5 (2.15x ✅) | 576.0 |
+| 2469 B | decode | 649.4 (1.35x ✅) | 479.6 |
+| 74913 B | encode | 1499.0 (2.92x ✅) | 513.2 |
+| 74913 B | decode | 680.7 (1.32x ✅) | 513.9 |
+
+Same class as Kotlin: F# reuses the C# binding's project via
+`ProjectReference` and adds only an F#-idiomatic facade — no second runtime,
+no packages, schema from a `FileDescriptorSet` at run time. The baseline is
+`protoc`-generated C# compiled in a sibling project (F# cannot compile
+`.cs`). Byte parity per tier before timing.
+
+### Clojure (Java runtime + interop) vs `protobuf-java`
+
+| payload | op | pbwire-clj (MB/s, x protobuf-java) | protobuf-java (MB/s) |
+|---|---|---|---|
+| 136 B | encode | 98.8 (0.55x ❌) | 178.7 |
+| 136 B | decode | 88.5 (0.13x ❌) | 670.0 |
+| 174 B | encode | 102.3 (0.46x ❌) | 222.5 |
+| 174 B | decode | 70.7 (0.12x ❌) | 589.3 |
+| 2469 B | encode | 103.2 (0.14x ❌) | 759.1 |
+| 2469 B | decode | 72.2 (0.16x ❌) | 458.6 |
+| 74913 B | encode | 110.2 (0.11x ❌) | 1028.3 |
+| 74913 B | decode | 82.7 (0.19x ❌) | 440.4 |
+
+The one binding that trails its baseline, structurally: every message
+materializes as a persistent map and every field crosses one interop call,
+against generated straight-line code. Same codec as Java/Scala underneath
+(plain interop over the Java runtime, no second wire implementation), byte
+parity per tier, so the gap is boundary cost, not bytes — the honest row the
+`x baseline` column exists for.
+
+### Julia (`dlopen` + `ccall`) vs ProtoBuf.jl
+
+| payload | op | pbwire-julia (MB/s, x ProtoBuf.jl) | ProtoBuf.jl (MB/s) |
+|---|---|---|---|
+| 136 B | encode | 1136.0 (2.87x ✅) | 396.2 |
+| 136 B | decode | 697.3 (0.59x ❌) | 1180.1 |
+| 174 B | encode | 1211.3 (3.60x ✅) | 336.1 |
+| 174 B | decode | 652.3 (0.87x ❌) | 749.3 |
+| 2469 B | encode | 1239.1 (11.6x ✅) | 107.0 |
+| 2469 B | decode | 638.4 (1.06x ✅) | 604.3 |
+| 74913 B | encode | 1395.9 (119x ✅) | 11.7 |
+| 74913 B | decode | 670.5 (0.95x ❌) | 705.3 |
+
+FFI host like Dart/C#: `Libdl.dlopen` + `ccall` into the C ABI (function
+pointers resolved once via `dlsym`, since recent Julia needs a compile-time
+library name), `Dict`-based messages convert through the C ABI, no wire
+code, no `.proto` parser. The baseline is `protojl`-generated code
+(`benchmarks/oracle/matrix3_pb.jl`, produced by `protojl("matrix3.proto",
+"<proto dir>", "benchmarks/oracle")`). Its encode collapses with size
+(pure-Julia per-field appends); its decode is a wash with pbwire's.
+
+### R (C extension, named lists), pbwire column only
+
+| payload | op | pbwire-r (MB/s) | builder `encode_msg` (MB/s) |
+|---|---|---|---|
+| 136 B | encode | 69.4 | 317.2 |
+| 136 B | decode | 75.6 | — |
+| 174 B | encode | 82.3 | 366.3 |
+| 174 B | decode | 84.3 | — |
+| 2469 B | encode | 155.8 | 1085.3 |
+| 2469 B | decode | 124.4 | — |
+| 74913 B | encode | 188.5 | 1393.7 |
+| 74913 B | decode | 134.7 | — |
+
+Same class as Lua/Ruby: a C extension over the core (`.Call`, named lists
+in/out through one transient tree per call, statically linked), schema from
+a `FileDescriptorSet` at run time. No RProtoBuf baseline was installed here,
+so the baseline columns print `-`; the gate is tier size plus a full decode
+round trip. Like Lua, the one-shot dict path pays a conversion per field
+while the builder path (`pbwire_message` once, `encode` per send) runs at
+the core's ~1.0-1.4 GB/s. Two R spellings to know: `INT32_MIN` reads back
+as `NA` (it *is* `NA_INTEGER`), and doubles past 2^63 clamp to the int/uint
+limits — both documented in the binding README.
+
 ## Run them
 
 ```bash
@@ -870,6 +1065,14 @@ make dart-bench   # dart:ffi binding vs the protobuf Dart package (needs `dart p
 make rust-bench   # static-link binding vs rust-protobuf (needs `cargo install protobuf-codegen`)
 make csharp-bench # P/Invoke binding vs Google.Protobuf (NuGet restore on first run)
 make lua-bench    # C-module binding vs lua-protobuf (luarocks install lua-protobuf for the baseline)
+make swift-bench  # SwiftPM binding vs apple/swift-protobuf (needs swift-protobuf 1.39.0 once, pinned)
+make scala-bench  # Scala DSL vs ScalaPB (fetches ScalaPB + protobuf-java jars once, needs scalapbc)
+make elixir-bench # Elixir NIF wrapper vs elixir-protobuf (mix fetches hex deps once)
+make zig-bench    # static-link binding, pbwire column only (Arwalk baseline needs network; runs ReleaseFast)
+make fsharp-bench # F# facade vs Google.Protobuf (NuGet restore on first run)
+make clojure-bench # Clojure interop vs protobuf-java (fetches jars from Maven Central once)
+make julia-bench  # ccall binding vs ProtoBuf.jl (generate benchmarks/oracle with protojl once)
+make r-bench      # R C extension, pbwire column only (install RProtoBuf for the baseline columns)
 ./build/bench bench 2000          # fixed-count smoke run (default calibrates from 200000; xlarge floor scales /100)
 ./build/bench_struct_c bench 2000 # fixed-count smoke run (same scaling)
 ```

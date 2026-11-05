@@ -1,0 +1,9 @@
+useDynLib(pbwire, .registration = TRUE)
+export(pbwire_load,
+       pbwire_loadfile,
+       pbwire_encode,
+       pbwire_decode,
+       pbwire_roundtrip,
+       pbwire_message,
+       pbwire_msg_set,
+       pbwire_msg_encode)
