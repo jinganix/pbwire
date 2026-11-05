@@ -1,0 +1,8 @@
+{:paths ["runtime/src"]
+ :deps {org.clojure/clojure {:mvn/version "1.12.0"}}
+ :aliases {;; java -cp $(clojure -Spath):../../java/out/classes ...
+           ;; (the Java runtime is plain javac output, see build.sh)
+           :test {:extra-paths ["tests"]}
+           :examples {:extra-paths ["examples"]}
+           :bench {:extra-paths ["benchmarks"]}
+           :conformance {:extra-paths ["conformance"]}}}

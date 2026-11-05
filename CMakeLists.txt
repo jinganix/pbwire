@@ -7,6 +7,14 @@ option(PBW_BUILD_TESTS "Build the self-checks" ON)
 
 include(GNUInstallDirs)
 
+# Same gate as the Makefile (CFLAGS=-Wall -Wextra -Werror -pedantic):
+# warnings fail the build on every compiler. MSVC needs its own spelling.
+if(MSVC)
+    add_compile_options(/W4 /WX)
+else()
+    add_compile_options(-Wall -Wextra -Werror -pedantic)
+endif()
+
 # Keep in sync with SRC in the Makefile, which stays the development gate.
 set(PBW_CORE_SOURCES
     src/wire.c
@@ -60,7 +68,9 @@ endif()
 
 if(PBW_BUILD_TESTS)
     enable_testing()
-    find_package(Threads REQUIRED)
+    # Optional on purpose: without pthreads (e.g. bare MSVC) test_threads is
+    # skipped but everything else still builds, so Windows can configure.
+    find_package(Threads)
 
     add_executable(test_pbwire tests/test_pbwire.c)
     target_link_libraries(test_pbwire PRIVATE pbwire)
@@ -69,9 +79,13 @@ if(PBW_BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/src)
     add_test(NAME test_pbwire COMMAND test_pbwire)
 
-    add_executable(test_threads tests/test_threads.c)
-    target_link_libraries(test_threads PRIVATE pbwire Threads::Threads)
-    add_test(NAME test_threads COMMAND test_threads)
+    if(Threads_FOUND)
+        add_executable(test_threads tests/test_threads.c)
+        target_link_libraries(test_threads PRIVATE pbwire Threads::Threads)
+        add_test(NAME test_threads COMMAND test_threads)
+    else()
+        message(STATUS "Threads not found: skipping test_threads")
+    endif()
 
     add_executable(test_descriptor tests/test_descriptor.c)
     target_link_libraries(test_descriptor PRIVATE pbwire)

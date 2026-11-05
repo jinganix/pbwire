@@ -1,0 +1,55 @@
+# Pbwire Elixir binding (`bindings/elixir`)
+
+> The Elixir binding of [pbwire](../../README.md): `elixir-protobuf` structs
+> through the Erlang NIF (`:pbwire`) over the shared C core. The generated
+> `__message_props__/0` is the schema source the way gpb's `get_msg_defs/0`
+> is for Erlang; `Pbwire.load_schema/1` consumes it and `Pbwire.encode/1` /
+> `decode/2` run in C. Same structs, same wire format, byte-identical
+> output to `Protobuf.encode/1`, ~1.4-3.2x faster than pure-Elixir
+> elixir-protobuf, with no `FileDescriptorSet` and no second wire
+> implementation.
+
+Facts: developed in this repo as `bindings/elixir`, license Apache-2.0 (see
+the repo root). Hex package `pbwire_elixir`; the NIF itself ships in the
+Erlang `pbwire` package. Requirements: Elixir per
+[`.tool-versions`](.tool-versions), a C compiler, `make`, Hex access. `make`
+compiles the repo's C core into `build/` here (nothing is written outside
+`bindings/elixir/`); `mix` then compiles the `:pbwire` dep against it.
+
+## Build
+
+```shell
+make          # from bindings/elixir: core lib + deps + compile
+make test     # ExUnit: byte-identity with Protobuf.encode, struct equality with Protobuf.decode
+make bench    # four standard tiers vs elixir-protobuf on matrix3.proto
+```
+
+## Docs
+
+- [README](README.md): build, quick start, full API reference, supported protobuf features, options, benchmark table, FAQ.
+- [benchmarks/bench.exs](benchmarks/bench.exs): byte-gated harness (pinned 136 / 174 / 2469 / 74913 bytes) before timing.
+- [conformance/README.md](conformance/README.md): status and plan (blocked on test-message module-name collisions).
+
+## API
+
+- `Pbwire.load_schema([MyApp.Person])` -> `:ok`; loads/replaces the global schema cache (transitive: referenced messages and enums come along). Options `with_utf8: true` (default) and `string_as_list: true` go to `:pbwire.set_opts/1` first.
+- `Pbwire.purge_schema()` -> `:ok`; clears the schema.
+- `Pbwire.encode(%MyApp.Person{})` -> `binary()`; byte-identical to `Protobuf.encode/1`.
+- `Pbwire.decode(bin, MyApp.Person)` -> struct; equal to `Protobuf.decode(bin, MyApp.Person)`.
+- `Pbwire.encode_msg(struct, mods)` / `Pbwire.decode_msg(bin, mod, mods)`: load the schema on each call.
+
+Unknown fields are dropped on decode; missing `required` fields raise
+instead of filling defaults; `NaN` bit-identity is not preserved (any
+NaN bits decode to `:nan`).
+
+## Key facts
+
+- Supports all scalar types, enums (unknown numbers decode to integers), repeated/packed fields, nested messages, oneof (`{member, value}`), maps (Elixir maps), proto3 zero-omission and `proto3_optional` presence. No groups or extensions (`elixir-protobuf` generates neither).
+- Struct names in the NIF cache are the Elixir module atoms, so schemas cannot collide the way unqualified record names do.
+- The schema cache is global to the BEAM node; encode/decode are concurrency-safe; calls run on normal schedulers.
+- `elixir-protobuf` structs are the generated model: there is no `codegen` output for Elixir.
+
+## Optional
+
+- [test/pbwire_test.exs](test/pbwire_test.exs): parity tests against the oracle, useful as executable usage examples.
+- [lib/pbwire/schema.ex](lib/pbwire/schema.ex): the generated-module to NIF-defs translator.

@@ -9,7 +9,7 @@ and how much they can catch.
 | Self-check | `make test` | a C99 compiler | yes (`scripts/check.sh`) |
 | Pinned reference bytes | `make test` | a C99 compiler | yes |
 | Differential test | `make difftest` | `protoc` + libprotobuf C++ | no |
-| Official conformance suite | `make conformance` | cached protobuf checkout | no |
+| Official conformance suite | `make conformance` | cached protobuf checkout | yes (CI, ubuntu) |
 | Binding tests | `make <lang>-test`, `make erlang-test` | that language's toolchain | no |
 
 ## 1. Self-check (`make test`)

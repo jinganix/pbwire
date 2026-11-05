@@ -55,7 +55,7 @@ pbw_free(buf);
 - **Built for embedding.** Stable C ABI, no globals, caller-confined
   schema/message objects, arena-backed `pbw_ctx` for per-thread hot loops, wire
   input validated at the boundary.
-- **One core, fifteen host languages.** [C](bindings/c/), [C++](bindings/cpp/), [Python](bindings/python/), [Ruby](bindings/ruby/), [Java](bindings/java/), [Kotlin](bindings/kotlin/), [Node](bindings/node/), [Objective-C](bindings/objc/), [PHP](bindings/php/), [Dart](bindings/dart/), [C#](bindings/csharp/), [Rust](bindings/rust/), [Go](bindings/go/), [Erlang](bindings/erlang/) and [Lua](bindings/lua/) all speak the same wire
+- **One core, twenty-three host languages.** [C](bindings/c/), [C++](bindings/cpp/), [Python](bindings/python/), [Ruby](bindings/ruby/), [Java](bindings/java/), [Kotlin](bindings/kotlin/), [Node](bindings/node/), [Objective-C](bindings/objc/), [PHP](bindings/php/), [Dart](bindings/dart/), [C#](bindings/csharp/), [Rust](bindings/rust/), [Go](bindings/go/), [Erlang](bindings/erlang/), [Lua](bindings/lua/), [Swift](bindings/swift/), [Scala](bindings/scala/), [Elixir](bindings/elixir/), [Zig](bindings/zig/), [F#](bindings/fsharp/), [Clojure](bindings/clojure/), [Julia](bindings/julia/) and [R](bindings/r/) all speak the same wire
   format, each with a measured answer to its runtime's own pain point — see
   [what each binding solves](bindings/README.md#what-each-binding-solves).
 
@@ -161,7 +161,7 @@ or where a dynamic codec meets generated straight-line writes on a tiny message
 
 The per-language tables — the same four payload tiers for every binding against
 its official runtime (Python, Java, Kotlin, Node, Ruby, Objective-C, PHP,
-Dart, Rust, C#, Erlang), plus the fastest third-party runtime wherever one
+Dart, Rust, C#, Erlang, Swift, Scala, Elixir, F#, Clojure, Julia), plus the fastest third-party runtime wherever one
 meaningfully exists (Node, Rust, C#, PHP), the C struct codec, 1-vs-8-thread
 scaling, and the reason behind each gap — live in [BENCHMARKS.md](BENCHMARKS.md).
 The one-row summary is here; the detail is there.
@@ -183,6 +183,14 @@ The one-row summary is here; the detail is there.
 | [Go](bindings/go/) | cgo dynamic (hot-swappable registry) | 2.57x (xlarge) / 2.13x (xlarge) | [google.golang.org/protobuf](https://pkg.go.dev/google.golang.org/protobuf) |
 | [Erlang](bindings/erlang/) | NIF | 4.21x (xlarge) / 2.21x (medium) | [gpb](https://github.com/tomas-abrahamsson/gpb) |
 | [Lua](bindings/lua/) | C module, tables + builder | 8.17x (xlarge, builder) / 1.20x (large) | [lua-protobuf](https://github.com/starwing/lua-protobuf) |
+| [Swift](bindings/swift/) | SwiftPM, static link | 5.38x (xlarge) / 3.70x (medium) | [swift-protobuf](https://github.com/apple/swift-protobuf) |
+| [Scala](bindings/scala/) | Java runtime + DSL | 1.60x (small) / 1.47x (xlarge) | [ScalaPB](https://github.com/scalapb/ScalaPB) |
+| [Elixir](bindings/elixir/) | NIF (shared core) | 3.21x (small) / 1.86x (small) | [elixir-protobuf](https://github.com/elixir-protobuf/protobuf) |
+| [Zig](bindings/zig/) | static link | no baseline wired yet | [zig-protobuf](https://github.com/Arwalk/zig-protobuf) |
+| [F#](bindings/fsharp/) | C# runtime + facade | 3.31x (medium) / 2.04x (medium) | [Google.Protobuf](https://www.nuget.org/packages/Google.Protobuf) |
+| [Clojure](bindings/clojure/) | Java runtime + interop | 0.55x (small) / 0.19x (xlarge) — boundary cost, bytes identical | [protobuf-java](https://github.com/protocolbuffers/protobuf/tree/main/java) |
+| [Julia](bindings/julia/) | `dlopen` + `ccall` | 119x (xlarge) / 1.06x (large) | [ProtoBuf.jl](https://github.com/JuliaIO/ProtoBuf.jl) |
+| [R](bindings/r/) | C extension, named lists | no baseline installed | [RProtoBuf](https://github.com/eddelbuettel/rprotobuf) |
 
 ¹ C++ has no separate bench; same engine as the C struct codec. Best columns take the highest tier each for encode/decode separately (Apple M4 Pro, `protoc 36.2`); tiers and absolute MB/s are in [BENCHMARKS.md](BENCHMARKS.md).
 

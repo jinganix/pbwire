@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>Pbwire.FSharp</RootNamespace>
+    <AssemblyName>Pbwire.FSharp</AssemblyName>
+    <!-- Release metadata: Version is kept in sync with the repo-root VERSION
+         file by scripts/sync-versions.sh; never edit by hand. -->
+    <Version>0.1.7</Version>
+    <Description>Idiomatic F# facade over the Pbwire C# dynamic binding, schema at runtime, no wire code</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="Pbwire.fs" />
+    <ProjectReference Include="../../csharp/Pbwire/Pbwire.csproj" />
+  </ItemGroup>
+
+</Project>
