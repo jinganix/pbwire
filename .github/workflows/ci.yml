@@ -129,15 +129,29 @@ jobs:
         with:
           go-version: '1.23'
           cache: false
-      - name: Install protoc
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - name: Cache pinned protobuf checkout and protoc
+        uses: actions/cache@v4
+        with:
+          path: .tmp/
+          # PROTOBUF_VERSION is pinned in the Makefile, so any bump
+          # naturally invalidates the cache.
+          key: conformance-${{ hashFiles('Makefile') }}
+      - name: Build pinned protoc
+        # The committed oracle files (gen_oracle) are produced by the pinned
+        # protobuf release, not by apt's protoc: regenerating with anything
+        # else prints a diff and fails the gate below.
+        run: |
+          CMAKE_BUILD_PARALLEL_LEVEL=$(nproc) make conformance-setup
+          PB_SRC=$(echo .tmp/protobuf-*)
+          CMAKE_BUILD_PARALLEL_LEVEL=$(nproc) cmake --build "$PB_SRC/build" --target protoc
+          echo "PB_SRC=$PB_SRC" >> "$GITHUB_ENV"
       - name: Check the codegen plugin's formatting
         run: |
           out=$(gofmt -l codegen)
           if [ -n "$out" ]; then echo "$out"; exit 1; fi
       - name: Committed models are up to date
         run: |
-          make codegen
+          PROTOC="$PB_SRC/build/protoc" make codegen
           git diff --exit-code
       - name: Generated model tests (Ruby, PHP, Node, Python)
         run: make -C codegen test-ruby test-php test-node test-python
