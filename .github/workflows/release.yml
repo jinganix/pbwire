@@ -226,19 +226,26 @@ jobs:
     name: NuGet (bindings/csharp)
     needs: validate
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: "10.0.x"
+      # Trusted publishing: exchanges the OIDC token for a short-lived key,
+      # no stored secret. The policy on nuget.org must allow Pbwire*.
+      - name: NuGet login (OIDC)
+        id: login
+        uses: NuGet/login@v1
+        with:
+          user: jinganix
       - name: Pack and push
-        env:
-          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
         run: |
-          [ -n "$NUGET_API_KEY" ] || { echo "NUGET_API_KEY unset, skipping"; exit 0; }
           dotnet pack bindings/csharp/Pbwire/Pbwire.csproj -c Release
           dotnet nuget push "bindings/csharp/Pbwire/bin/Release/*.nupkg" \
-            --api-key "$NUGET_API_KEY" --source https://api.nuget.org/v3/index.json \
+            --api-key "${{ steps.login.outputs.NUGET_API_KEY }}" --source https://api.nuget.org/v3/index.json \
             --skip-duplicate
 
   fsharp:
@@ -247,19 +254,24 @@ jobs:
     # a dependency on the same VERSION of Pbwire: publish after it.
     needs: nuget
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: "10.0.x"
+      - name: NuGet login (OIDC)
+        id: login
+        uses: NuGet/login@v1
+        with:
+          user: jinganix
       - name: Pack and push
-        env:
-          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
         run: |
-          [ -n "$NUGET_API_KEY" ] || { echo "NUGET_API_KEY unset, skipping"; exit 0; }
           dotnet pack bindings/fsharp/runtime/Pbwire.FSharp.fsproj -c Release
           dotnet nuget push "bindings/fsharp/runtime/bin/Release/*.nupkg" \
-            --api-key "$NUGET_API_KEY" --source https://api.nuget.org/v3/index.json \
+            --api-key "${{ steps.login.outputs.NUGET_API_KEY }}" --source https://api.nuget.org/v3/index.json \
             --skip-duplicate
 
   pub:
