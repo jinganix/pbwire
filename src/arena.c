@@ -119,6 +119,7 @@ pbw_arena_reset(pbw_arena *arena)
     /* A reset context is a blank slate: trees built into it afterwards are
      * mutable until a decode seals it read-only again. */
     arena->readonly = 0;
+    arena->has_heap = 0;
     /* Large single allocations never become resident. */
     for (chunk = arena->large; chunk != NULL;) {
         pbw_arena_chunk *next = chunk->next;
@@ -173,6 +174,7 @@ pbw_arena_new_packed(size_t first_chunk)
                                                           : first_chunk;
     arena->readonly = 0;
     arena->block = block;
+    arena->has_heap = 0;
     return arena;
 }
 

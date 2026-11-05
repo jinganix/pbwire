@@ -1,0 +1,19 @@
+// Small oneof + nesting fixture for the generated compat tests (TESTSPEC T1-T5
+// extras). Kept in testdata so every binding shares the same schema, values
+// and reference bytes.
+syntax = "proto3";
+
+package spectest;
+
+message Oneof1 {
+  message Inner {
+    int32 v = 1;
+  }
+
+  string name = 1;
+  oneof kind {
+    int32 num = 2;
+    string text = 3;
+    Inner inner = 4;
+  }
+}

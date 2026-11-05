@@ -1,39 +1,35 @@
-// The C example (examples/addressbook.c), in C#, through the generated typed
-// classes: assign typed fields, encode, decode, compare. The encoded bytes must
-// equal the pinned reference examples/addressbook.bin.
+// The C example (examples/addressbook.c), in C#, through the generated
+// Google.Protobuf-shaped classes: assign typed fields, encode, decode,
+// compare. The encoded bytes must equal the pinned reference
+// examples/addressbook.bin.
 //
 //   dotnet run --project examples
 
-using Pbwire;
-using Pbwire.Generated;
+using Tutorial;
 
-var desc = args.Length > 0 ? args[0] : "examples/addressbook.desc";
-var bin = args.Length > 1 ? args[1] : "examples/addressbook.bin";
+var bin = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "examples", "addressbook.bin");
 
-using var schema = Schema.FromFile(desc);
-
-var book = new Tutorial_AddressBook
+var book = new AddressBook
 {
     People =
     {
-        new Tutorial_Person
+        new Person
         {
             Name = "Alice",
             Id = 1,
-            Phones = { Phone("555-0100", Tutorial_Person_PhoneType.MOBILE) },
+            Phones = { Phone("555-0100", Person.Types.PhoneType.Mobile) },
         },
-        new Tutorial_Person
+        new Person
         {
             Name = "Bob",
             Id = 2,
-            HasEmail = true,
             Email = "bob@example.com",
-            Phones = { Phone("555-0200", Tutorial_Person_PhoneType.HOME) },
+            Phones = { Phone("555-0200", Person.Types.PhoneType.Home) },
         },
     },
 };
 
-var wire = book.Encode(schema);
+var wire = book.ToByteArray();
 if (File.Exists(bin))
 {
     var reference = File.ReadAllBytes(bin);
@@ -43,20 +39,19 @@ if (File.Exists(bin))
     }
 }
 
-var back = Tutorial_AddressBook.Decode(schema, wire);
+var back = AddressBook.Parser.ParseFrom(wire);
 Console.WriteLine($"addressbook: {wire.Length} bytes, {back.People.Count} people");
 foreach (var person in back.People)
 {
-    Console.WriteLine($"  {person.Name} ({person.Id}) {person.Email ?? ""}");
+    Console.WriteLine($"  {person.Name} ({person.Id}) {person.Email}");
     foreach (var phone in person.Phones)
     {
         Console.WriteLine($"    {phone.Number}");
     }
 }
 
-static Tutorial_Person_PhoneNumber Phone(string number, int type) => new()
+static Person.Types.PhoneNumber Phone(string number, Person.Types.PhoneType type) => new()
 {
     Number = number,
-    HasType = true,
     Type = type,
 };

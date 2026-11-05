@@ -1,0 +1,23 @@
+// Struct-binding oneof coverage: members ride a union + case word (the case
+// holds the selected field number, 0 = none). The encoder emits only the
+// selected member; the decoder sets the case and clears the previous member
+// (last wins, like the reference). The reference bytes (protoc --encode from
+// oneoftest.txt) pin the text-member shape; the C test additionally
+// round-trips every member through the dynamic tree as oracle.
+syntax = "proto3";
+
+package structtest;
+
+message Sub {
+  int32 v = 1;
+}
+
+message OneOfTest {
+  oneof kind {
+    int32 num = 1;
+    string text = 2;
+    Sub sub = 3;
+    bytes blob = 4;
+  }
+  int32 id = 5;
+}

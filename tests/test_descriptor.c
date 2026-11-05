@@ -128,7 +128,7 @@ test_schema(void)
     {
         const pbw_descriptor *grouped =
             pbw_schema_find(schema, "pbwire.test.Grouped");
-        const pbw_field *inner = NULL;
+        const pbw_field *group_field = NULL;
         const pbw_descriptor *inner_msg = NULL;
         static const uint8_t wire[] = {0x0b, 0x10, 0x07, 0x0c, 0x18, 0x09};
         pbw_message *decoded = NULL;
@@ -138,10 +138,10 @@ test_schema(void)
 
         CHECK(grouped != NULL);
         CHECK(pbw_descriptor_field_count(grouped) == 2);
-        inner = pbw_descriptor_find_field(grouped, 1);
-        CHECK(inner != NULL && pbw_field_type(inner) == PBW_TYPE_GROUP);
-        CHECK(!pbw_field_is_extension(inner));
-        inner_msg = pbw_field_message_type(inner);
+        group_field = pbw_descriptor_find_field(grouped, 1);
+        CHECK(group_field != NULL && pbw_field_type(group_field) == PBW_TYPE_GROUP);
+        CHECK(!pbw_field_is_extension(group_field));
+        inner_msg = pbw_field_message_type(group_field);
         CHECK(inner_msg != NULL &&
               strcmp(pbw_descriptor_name(inner_msg),
                      "pbwire.test.Grouped.Inner") == 0);

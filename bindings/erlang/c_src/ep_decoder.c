@@ -1259,6 +1259,22 @@ decode(ErlNifEnv *env, ep_tdata_t *tdata, ep_node_t *node)
                     t++;
                     field++;
                 }
+            } else {
+                /* A map entry accumulates its own slots: with a nested map
+                 * value the inner entries prepend into one list, so restore
+                 * wire order for repeated value fields. Plain maps have no
+                 * repeated fields, making this a no-op for them. */
+                t = spot->t_arr + 1;
+                t_used_end = spot->t_arr + spot->t_used;
+                field = (ep_field_t *)(spot->node->fields);
+
+                while (t < t_used_end) {
+                    if (field->o_type == occurrence_repeated && enif_is_list(env, *t)) {
+                        enif_make_reverse_list(env, *t, t);
+                    }
+                    t++;
+                    field++;
+                }
             }
 
             if (spot->group_field != NULL) {

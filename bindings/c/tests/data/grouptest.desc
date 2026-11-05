@@ -1,0 +1,15 @@
+
+ï
+%bindings/c/tests/data/grouptest.proto
+structtest"¹
+	GroupTest1
+inner (
+2.structtest.GroupTest.InnerRinner.
+item (
+2.structtest.GroupTest.ItemRitem
+id (Rid#
+Inner
+x (Rx
+s (	Rs
+Item
+v (Rv

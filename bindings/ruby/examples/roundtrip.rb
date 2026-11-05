@@ -1,8 +1,9 @@
 # frozen_string_literal: true
 
-# The C example (examples/addressbook.c), in Ruby, through the generated typed
+# The C example (examples/addressbook.c), in Ruby, through the generated
 # classes: assign fields, encode, decode, compare. The encoded bytes must equal
-# the pinned reference examples/addressbook.bin.
+# the pinned reference examples/addressbook.bin. The schema travels embedded
+# in the generated code; no .desc file is read.
 #
 #   ruby -Ibindings/ruby/lib bindings/ruby/examples/roundtrip.rb
 
@@ -26,19 +27,14 @@ def phone(number, type)
   Pbwire::Gen::Tutorial_Person_PhoneNumber.new(number: number, has_type: true, type: type)
 end
 
-desc = ARGV[0] || File.expand_path('../../../examples/addressbook.desc', __dir__)
-bin = ARGV[1] || File.expand_path('../../../examples/addressbook.bin', __dir__)
+bin = ARGV[0] || File.expand_path('../../../examples/addressbook.bin', __dir__)
 
-# Block form closes the schema even on exception, like File.open;
-# without a block the caller owns it and closes explicitly.
-Pbwire::Schema.from_file(desc) do |schema|
-  wire = build.encode(schema)
-  raise "encode does not match #{bin}" if File.exist?(bin) && wire != File.binread(bin)
+wire = build.to_proto
+raise "encode does not match #{bin}" if File.exist?(bin) && wire != File.binread(bin)
 
-  back = Pbwire::Gen::Tutorial_AddressBook.decode(schema, wire)
-  puts "addressbook: #{wire.bytesize} bytes, #{back.people.length} people"
-  back.people.each do |person|
-    puts "  #{person.name} (#{person.id}) #{person.has_email ? person.email : ''}"
-    person.phones.each { |phone| puts "    #{phone.number}" }
-  end
+back = Pbwire::Gen::Tutorial_AddressBook.decode(wire)
+puts "addressbook: #{wire.bytesize} bytes, #{back.people.length} people"
+back.people.each do |person|
+  puts "  #{person.name} (#{person.id}) #{person.has_email ? person.email : ''}"
+  person.phones.each { |phone| puts "    #{phone.number}" }
 end

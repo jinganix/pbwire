@@ -1,0 +1,35 @@
+// Fixture for the Swift binding self-check: one scalar of every type the
+// wrapper sets and reads, an enum, and a nested message. Regenerate the
+// descriptor set next to it with:
+//   protoc -Ibindings/swift/tests/data \
+//       --descriptor_set_out=bindings/swift/tests/data/probe.desc \
+//       bindings/swift/tests/data/probe.proto
+syntax = "proto3";
+
+package pbwswift;
+
+enum Color {
+  COLOR_UNSPECIFIED = 0;
+  COLOR_RED = 1;
+  COLOR_BLUE = 2;
+}
+
+message Inner {
+  string label = 1;
+  int32 n = 2;
+}
+
+message Probe {
+  int32 i32 = 1;
+  sint32 s32 = 2;
+  int64 i64 = 3;
+  uint32 u32 = 4;
+  uint64 u64 = 5;
+  bool flag = 6;
+  float f32 = 7;
+  double f64 = 8;
+  string text = 9;
+  bytes blob = 10;
+  Color color = 11;
+  Inner inner = 12;
+}

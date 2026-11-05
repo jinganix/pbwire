@@ -2259,8 +2259,8 @@ t_parse_message_body(text_in *t, pbw_message *msg, uint32_t depth,
         return PBW_ERR_LIMIT;
     }
     for (;;) {
-        const char *name;
-        size_t name_len;
+        const char *name = NULL;
+        size_t name_len = 0;
         const pbw_field *field = NULL;
         int is_bracket = 0;
         pbw_status status;

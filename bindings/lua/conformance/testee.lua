@@ -6,10 +6,12 @@
 -- is schema-driven, needs no per-message code: the request names the message
 -- type and the descriptor set answers with the schema.
 --
--- Supported: binary in -> binary out, through schema:roundtrip(), which
--- decodes and re-encodes in the C core: unknown fields survive, and a request
--- is accepted exactly when the core accepts it. JSON/text output needs
--- printers the binding does not expose, so those requests answer `skipped`.
+-- Supported: binary, JSON and text in -> binary, JSON or text out, all
+-- through builder trees (exact, including 64-bit integers past 2^53 that
+-- tables carry as doubles): binary parses with parse_binary, JSON with
+-- parse_json, text with parse_text, and every output encodes or prints the
+-- same tree. Unknown fields survive binary (the core keeps them); JSON
+-- drops them per the mapping. JSPB answers `skipped`.
 --
 --   lua testee.lua build/conformance.desc   # from the repo root
 --   LUA=luajit lua testee.lua ...           # any 5.1+ interpreter works
@@ -25,6 +27,13 @@ end
 local pbwire = require("pbwire")
 
 local PROTOBUF = 1
+local JSON = 2
+local JSPB = 3
+local TEXT = 4
+
+-- Test categories the runner sends: JSON input with unknown fields only
+-- parses when the category asks to ignore them.
+local JSON_IGNORE_UNKNOWN = 3
 
 if not arg[1] then
     io.stderr:write("usage: testee.lua <conformance.desc>\n")
@@ -88,20 +97,74 @@ while true do
     else
         local wanted = request.requested_output_format or 0
         local name = request.message_type
-        if wanted ~= PROTOBUF then
+        if wanted ~= PROTOBUF and wanted ~= JSON and wanted ~= TEXT then
             response = { skipped = "output format " .. tostring(wanted) ..
                                     " is not supported" }
-        elseif request.protobuf_payload == nil then
-            response = { skipped = "only binary input is supported" }
         else
-            local ok2, out = pcall(schema.roundtrip, schema, name,
-                                   request.protobuf_payload)
-            if ok2 then
-                response = { protobuf_payload = out }
-            elseif out:match("^pbwire: no message ") then
-                response = { runtime_error = "unknown message type " .. name }
+            -- One input payload wins: binary beats JSON beats text. Every
+            -- input parses into a builder tree; every output renders it.
+            local t, perr
+            if request.protobuf_payload ~= nil then
+                local ok2, b = pcall(schema.parse_binary, schema, name,
+                                      request.protobuf_payload)
+                if ok2 then
+                    t = b
+                else
+                    perr = b
+                end
+            elseif request.json_payload ~= nil then
+                local ignore = request.test_category == JSON_IGNORE_UNKNOWN
+                local ok2, b = pcall(schema.parse_json, schema, name,
+                                      request.json_payload, ignore)
+                if ok2 then
+                    t = b
+                else
+                    perr = b
+                end
+            elseif request.text_payload ~= nil then
+                local ok2, b = pcall(schema.parse_text, schema, name,
+                                      request.text_payload)
+                if ok2 then
+                    t = b
+                else
+                    perr = b
+                end
             else
-                response = { parse_error = out }
+                perr = "pbwire: no input payload in the request"
+            end
+            if t ~= nil then
+                if wanted == PROTOBUF then
+                    local ok3, out = pcall(function() return t:encode() end)
+                    if ok3 then
+                        response = { protobuf_payload = out }
+                    else
+                        response = { serialize_error = out }
+                    end
+                elseif wanted == JSON then
+                    local ok3, out = pcall(function() return t:to_json() end)
+                    if ok3 then
+                        response = { json_payload = out }
+                    else
+                        response = { serialize_error = out }
+                    end
+                else
+                    -- The runner's print_unknown_fields flag (field 9) decides
+                    -- whether unknown fields print; absent means drop them.
+                    local ok3, out = pcall(function()
+                        return t:to_text(request.print_unknown_fields)
+                    end)
+                    if ok3 then
+                        response = { text_payload = out }
+                    else
+                        response = { serialize_error = out }
+                    end
+                end
+            elseif response == nil then
+                if perr ~= nil and perr:match("^pbwire: no message ") then
+                    response = { runtime_error = "unknown message type " .. name }
+                else
+                    response = { parse_error = perr or "unreachable" }
+                end
             end
         end
     end

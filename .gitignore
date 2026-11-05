@@ -25,6 +25,7 @@ node_modules/
 # Build artifacts
 build/
 build-*/
+bindings/cpp/tests/gen_oracle/
 results/
 dist/
 *.egg-info/
@@ -51,6 +52,22 @@ bindings/objc/benchmarks/gen/
 bindings/php/benchmarks/gen/
 bindings/kotlin/benchmarks/gen/
 bindings/kotlin/benchmarks/deps/
+bindings/scala/benchmarks/gen/
+bindings/scala/benchmarks/gen/
+bindings/scala/benchmarks/deps/
+bindings/scala/benchmarks/out/
+bindings/scala/target/
+bindings/fsharp/benchmarks/gen/
+bindings/fsharp/*/bin/
+bindings/fsharp/*/obj/
+bindings/fsharp/benchmarks/baseline/bin/
+bindings/fsharp/benchmarks/baseline/obj/
+bindings/clojure/benchmarks/deps/
+bindings/clojure/.cpcache/
+bindings/r/pbwire.so
+bindings/julia/benchmarks/oracle/
+bindings/zig/zig-out/
+bindings/zig/.zig-cache/
 bindings/dart/benchmarks/gen/
 bindings/dart/.dart_tool/
 bindings/dart/benchmarks/.dart_tool/

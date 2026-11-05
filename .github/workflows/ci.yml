@@ -45,9 +45,27 @@ jobs:
       - name: Build and self-check
         run: make test
 
-  cmake:
-    name: CMake build + ctest
+  warnings:
+    name: warnings as errors (${{ matrix.cc }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        cc: [gcc, clang]
+    steps:
+      - uses: actions/checkout@v5
+      - name: Build and self-check with ${{ matrix.cc }}
+        # Same -Werror gate as the Makefile, on a second compiler so
+        # Linux-only gcc/clang warnings fail here instead of on macOS.
+        run: CC=${{ matrix.cc }} make test
+
+  cmake:
+    name: CMake build + ctest (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
       - uses: actions/checkout@v5
       - name: Configure
@@ -55,7 +73,33 @@ jobs:
       - name: Build
         run: cmake --build build-cmake
       - name: Test
-        run: ctest --test-dir build-cmake --output-on-failure
+        # -C selects the configuration for multi-config generators
+        # (Visual Studio); single-config generators ignore it.
+        run: ctest --test-dir build-cmake --output-on-failure -C Debug
+
+  conformance:
+    name: Official conformance suite
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Cache pinned protobuf checkout and runner
+        uses: actions/cache@v4
+        with:
+          path: .tmp/
+          # PROTOBUF_VERSION is pinned in the Makefile, so any bump
+          # naturally invalidates the cache.
+          key: conformance-${{ hashFiles('Makefile') }}
+      - name: Clone pinned protobuf, build runner + protoc
+        # CMAKE_BUILD_PARALLEL_LEVEL is honored by cmake --build, so the
+        # Makefile stays untouched. protoc comes from the same checkout,
+        # so it always understands the edition golden files.
+        run: |
+          CMAKE_BUILD_PARALLEL_LEVEL=$(nproc) make conformance-setup
+          PB_SRC=$(echo .tmp/protobuf-*)
+          CMAKE_BUILD_PARALLEL_LEVEL=$(nproc) cmake --build "$PB_SRC/build" --target protoc
+          echo "PB_SRC=$PB_SRC" >> "$GITHUB_ENV"
+      - name: Run the suite through the C testee
+        run: PROTOC="$PB_SRC/build/protoc" make conformance
 
   versions:
     name: Versions consistent with VERSION
@@ -78,8 +122,8 @@ jobs:
           sudo ln -sf /usr/bin/clang-format-20 /usr/local/bin/clang-format
           make format-check
 
-  typed:
-    name: Typed models (regenerate + Python, Node, Ruby, PHP checks)
+  codegen:
+    name: Generated models (regenerate + Python, Node, Ruby, PHP checks)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -87,18 +131,49 @@ jobs:
         with:
           go-version: '1.23'
           cache: false
-      - name: Install protoc
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
-      - name: Check the typed plugin's formatting
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.4'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Cache pinned protobuf checkout and protoc
+        uses: actions/cache@v4
+        with:
+          path: .tmp/
+          # PROTOBUF_VERSION is pinned in the Makefile, so any bump
+          # naturally invalidates the cache.
+          key: conformance-${{ hashFiles('Makefile') }}
+      - name: Build pinned protoc
+        # The committed oracle files (gen_oracle) are produced by the pinned
+        # protobuf release, not by apt's protoc: regenerating with anything
+        # else prints a diff and fails the gate below.
         run: |
-          out=$(gofmt -l bindings/typed)
+          CMAKE_BUILD_PARALLEL_LEVEL=$(nproc) make conformance-setup
+          PB_SRC=$(echo $PWD/.tmp/protobuf-*)
+          CMAKE_BUILD_PARALLEL_LEVEL=$(nproc) cmake --build "$PB_SRC/build" --target protoc
+          echo "PB_SRC=$PB_SRC" >> "$GITHUB_ENV"
+          # The PHP compat test shells out to bare `protoc --version`;
+          # point PATH at the pinned build so it sees 36.2, not apt's.
+          echo "$PB_SRC/build" >> "$GITHUB_PATH"
+      - name: Install language baselines
+        # The compat tests pin their baselines (see each binding's
+        # testdata/ORACLES.md); the runner image does not provide them.
+        run: |
+          gem install google-protobuf -v 4.36.2 --no-document
+          pip install "protobuf==7.36.2"
+          (cd bindings/node && npm install --prefix benchmarks --no-save --no-package-lock --no-audit --no-fund protobufjs@8.8.1)
+          sudo apt-get update && sudo apt-get install -y php-cli
+      - name: Check the codegen plugin's formatting
+        run: |
+          out=$(gofmt -l codegen)
           if [ -n "$out" ]; then echo "$out"; exit 1; fi
       - name: Committed models are up to date
         run: |
-          make typed-gen
+          PROTOC="$PB_SRC/build/protoc" make codegen
           git diff --exit-code
-      - name: Typed model tests (Ruby, PHP, Node, Python)
-        run: make -C bindings/typed test-ruby test-php test-node test-python
+      - name: Generated model tests (Ruby, PHP, Node, Python)
+        run: make -C codegen test-ruby test-php test-node test-python
 
   go:
     name: Go binding

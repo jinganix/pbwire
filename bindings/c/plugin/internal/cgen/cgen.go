@@ -40,6 +40,7 @@ type generator struct {
 	output   string                           // output file name, guards derive from it
 	messages []protoreflect.MessageDescriptor // post-order: nested first
 	enums    []protoreflect.EnumDescriptor
+	exts map[string][]protoreflect.FieldDescriptor // extendee full name -> extensions, by number
 }
 
 func (g *generator) collect() error {
@@ -63,26 +64,114 @@ func (g *generator) collect() error {
 	for i := 0; i < g.fd.Enums().Len(); i++ {
 		g.enums = append(g.enums, g.fd.Enums().Get(i))
 	}
-	return walk(g.fd.Messages())
+	if err := walk(g.fd.Messages()); err != nil {
+		return err
+	}
+	return g.collectExtensions()
+}
+
+// collectExtensions groups the file's extensions by extendee. Extension rows
+// hang off the extended message's struct and layout table, in field-number
+// order, so the runtime resolves them by number like any field (the schema
+// already merges them into the extendee's field list).
+// shortcut: extendee in another file is rejected, regenerating that file's
+// header cannot gain members for this file's extensions; lift by emitting
+// an extern table into the extending file when cross-file extend blocks
+// are needed.
+func (g *generator) collectExtensions() error {
+	exts := g.fd.Extensions()
+	if exts.Len() == 0 {
+		return nil
+	}
+	local := map[string]protoreflect.MessageDescriptor{}
+	var mark func(msgs protoreflect.MessageDescriptors)
+	mark = func(msgs protoreflect.MessageDescriptors) {
+		for i := 0; i < msgs.Len(); i++ {
+			m := msgs.Get(i)
+			local[string(m.FullName())] = m
+			mark(m.Messages())
+		}
+	}
+	mark(g.fd.Messages())
+	grouped := map[string][]protoreflect.FieldDescriptor{}
+	for i := 0; i < exts.Len(); i++ {
+		ext := exts.Get(i)
+		ee := ext.ContainingMessage()
+		if ee.ParentFile() == nil || ee.ParentFile().Path() != g.fd.Path() {
+			return fmt.Errorf("%s: extension of foreign message %s: regenerate that file instead", ext.FullName(), ee.FullName())
+		}
+		if _, ok := local[string(ee.FullName())]; !ok {
+			return fmt.Errorf("%s: unknown extendee %s", ext.FullName(), ee.FullName())
+		}
+		key := string(ee.FullName())
+		grouped[key] = append(grouped[key], ext)
+	}
+	for key, list := range grouped {
+		m := local[key]
+		taken := map[string]bool{}
+		fields := m.Fields()
+		for i := 0; i < fields.Len(); i++ {
+			taken[snake(string(fields.Get(i).Name()))] = true
+		}
+		for i := 1; i < len(list); i++ {
+			for j := i; j > 0 && list[j].Number() < list[j-1].Number(); j-- {
+				list[j], list[j-1] = list[j-1], list[j]
+			}
+		}
+		for _, ext := range list {
+			if name := snake(string(ext.Name())); taken[name] {
+				return fmt.Errorf("%s: extension member %q collides with a field of %s", ext.FullName(), name, m.FullName())
+			}
+			taken[snake(string(ext.Name()))] = true
+		}
+		grouped[key] = list
+	}
+	g.exts = grouped
+	return nil
+}
+
+// extFields returns the extensions of m in field-number order, or nil.
+func (g *generator) extFields(m protoreflect.MessageDescriptor) []protoreflect.FieldDescriptor {
+	return g.exts[string(m.FullName())]
+}
+
+// tableLen is the layout row count: regular fields plus extensions. It must
+// match the schema's field count (the descriptor merges extensions into the
+// extendee), or the codec rejects the table.
+func (g *generator) tableLen(m protoreflect.MessageDescriptor) int {
+	return m.Fields().Len() + len(g.extFields(m))
+}
+
+// realOneof returns the oneof a field belongs to, or nil for plain fields
+// and proto3-optional synthetics (those keep their has-flag spelling).
+func realOneof(f protoreflect.FieldDescriptor) protoreflect.OneofDescriptor {
+	if od := f.ContainingOneof(); od != nil && !od.IsSynthetic() {
+		return od
+	}
+	return nil
 }
 
 // checkMessage rejects what the struct engine cannot represent.
 func checkMessage(m protoreflect.MessageDescriptor) error {
-	if m.IsMapEntry() {
-		return nil // map entries are handled through their field
-	}
 	fields := m.Fields()
 	for i := 0; i < fields.Len(); i++ {
 		f := fields.Get(i)
 		if f.IsMap() {
-			return fmt.Errorf("%s: map fields are not supported", f.FullName())
+			if k := f.MapKey().Kind(); k != protoreflect.Int32Kind && k != protoreflect.Int64Kind &&
+				k != protoreflect.Uint32Kind && k != protoreflect.Uint64Kind &&
+				k != protoreflect.BoolKind && k != protoreflect.StringKind {
+				return fmt.Errorf("%s: unsupported map key %s", f.FullName(), k)
+			}
+			if v := f.MapValue(); v.IsMap() || v.Kind() == protoreflect.GroupKind {
+				return fmt.Errorf("%s: unsupported map value %s", f.FullName(), v.Kind())
+			}
+			continue
 		}
-		if od := f.ContainingOneof(); od != nil && !od.IsSynthetic() {
-			return fmt.Errorf("%s: oneof fields are not supported", f.FullName())
-		}
+		// Oneof members ride a union + case word; repeated members are
+		// rejected by protoc itself, map members likewise.
 		switch f.Kind() {
-		case protoreflect.BytesKind, protoreflect.GroupKind:
-			return fmt.Errorf("%s: %s fields are not supported", f.FullName(), f.Kind())
+		case protoreflect.GroupKind:
+			continue // groups encode as START_GROUP + message + END_GROUP
 		}
 	}
 	return nil
@@ -191,9 +280,19 @@ func comma(i, n int) string {
 }
 
 // fieldCType maps a field to its C member type and engine kind.
+// Maps are repeated entry structs: the wire shape is N length-delimited
+// entry messages, so the engine needs no hash table (linear entries match
+// the core byte for byte; insertion order is the wire order).
 func fieldCType(f protoreflect.FieldDescriptor) (ctype, kind string, err error) {
-	if f.IsMap() || f.Kind() == protoreflect.BytesKind || f.Kind() == protoreflect.GroupKind {
-		return "", "", fmt.Errorf("%s: unsupported field type", f.FullName())
+	if f.IsMap() {
+		elem := cname(f.Message()) + "_t"
+		if f.MapValue().Kind() == protoreflect.MessageKind {
+			return elem + " *", "PBW_SF_MESSAGE", nil
+		}
+		return elem + " *", "PBW_SF_MESSAGE", nil
+	}
+	if f.Kind() == protoreflect.GroupKind {
+		return cname(f.Message()) + "_t *", "PBW_SF_MESSAGE", nil
 	}
 	if f.IsList() {
 		elem, k, err := elemCType(f)
@@ -229,9 +328,13 @@ func elemCType(f protoreflect.FieldDescriptor) (string, string, error) {
 		return "double", "PBW_SF_DOUBLE", nil
 	case protoreflect.StringKind:
 		return "const char *", "PBW_SF_STRING", nil
+	case protoreflect.BytesKind:
+		return "pbw_bytes_t", "PBW_SF_BYTES", nil
 	case protoreflect.EnumKind:
 		return "int32_t", "PBW_SF_ENUM", nil
 	case protoreflect.MessageKind:
+		return cname(f.Message()) + "_t", "PBW_SF_MESSAGE", nil
+	case protoreflect.GroupKind:
 		return cname(f.Message()) + "_t", "PBW_SF_MESSAGE", nil
 	}
 	return "", "", fmt.Errorf("%s: unsupported kind %s", f.FullName(), f.Kind())
@@ -239,7 +342,10 @@ func elemCType(f protoreflect.FieldDescriptor) (string, string, error) {
 
 // needsHas reports whether a singular scalar/enum field gets a has_ flag.
 func (g *generator) needsHas(f protoreflect.FieldDescriptor) bool {
-	if f.IsList() || f.Kind() == protoreflect.MessageKind || f.Kind() == protoreflect.StringKind {
+	if realOneof(f) != nil {
+		return false /* the case word is the presence */
+	}
+	if f.IsList() || f.IsMap() || f.Kind() == protoreflect.MessageKind || f.Kind() == protoreflect.GroupKind || f.Kind() == protoreflect.StringKind || f.Kind() == protoreflect.BytesKind {
 		return false
 	}
 	if f.Cardinality() == protoreflect.Required {
@@ -264,20 +370,57 @@ func (g *generator) needsHas(f protoreflect.FieldDescriptor) bool {
 
 func (g *generator) writeMessages(b *strings.Builder) error {
 	for _, m := range g.messages {
-		if m.IsMapEntry() {
-			continue
-		}
+		/* Map entries are plain structs: key/value rows like any message. */
 		fmt.Fprintf(b, "/* %s */\n", m.FullName())
+		/* Oneof unions come before the struct: rows address members by
+		 * offsetof(union) + offsetof(member), so the type needs a name. */
+		for i := 0; i < m.Oneofs().Len(); i++ {
+			od := m.Oneofs().Get(i)
+			if od.IsSynthetic() {
+				continue
+			}
+			oname := snake(string(od.Name()))
+			uname := cname(m) + "_" + oname + "_u"
+			fmt.Fprintf(b, "/* oneof %s */\n", od.FullName())
+			fmt.Fprintf(b, "typedef union {\n")
+			for j := 0; j < od.Fields().Len(); j++ {
+				f := od.Fields().Get(j)
+				ctype, _, err := fieldCType(f)
+				if err != nil {
+					return err
+				}
+				member := snake(string(f.Name()))
+				if strings.HasSuffix(ctype, "*") {
+					member = ctype + member
+				} else {
+					member = ctype + " " + member
+				}
+				fmt.Fprintf(b, "    %s;\n", member)
+			}
+			fmt.Fprintf(b, "} %s;\n", uname)
+		}
 		fmt.Fprintf(b, "typedef struct {\n")
 		fields := m.Fields()
+		emitted := map[protoreflect.OneofDescriptor]bool{}
 		for i := 0; i < fields.Len(); i++ {
 			f := fields.Get(i)
+			if od := realOneof(f); od != nil {
+				if emitted[od] {
+					continue
+				}
+				emitted[od] = true
+				oname := snake(string(od.Name()))
+				uname := cname(m) + "_" + oname + "_u"
+				fmt.Fprintf(b, "    uint32_t %s_case; /* oneof %s: selected field number, 0 = none */\n", oname, od.Name())
+				fmt.Fprintf(b, "    %s %s;\n", uname, oname)
+				continue
+			}
 			ctype, _, err := fieldCType(f)
 			if err != nil {
 				return err
 			}
 			comment := "optional"
-			if f.IsList() {
+			if f.IsList() || f.IsMap() {
 				comment = "repeated"
 			} else if f.Cardinality() == protoreflect.Required {
 				comment = "required"
@@ -296,13 +439,37 @@ func (g *generator) writeMessages(b *strings.Builder) error {
 			} else {
 				member = ctype + " " + member
 			}
-			if f.IsList() {
+			if f.IsList() || f.IsMap() {
 				fmt.Fprintf(b, "    %s;\n", member)
 				fmt.Fprintf(b, "    size_t n_%s;\n", snake(string(f.Name())))
 			} else {
 				fmt.Fprintf(b, "    %s; /* %s */\n", member, comment)
 				if g.needsHas(f) {
 					fmt.Fprintf(b, "    int has_%s;\n", snake(string(f.Name())))
+				}
+			}
+		}
+		/* Extensions ride the extendee struct as trailing members; the
+		 * comment names the extension so same-named fields elsewhere
+		 * stay distinguishable. */
+		for _, x := range g.extFields(m) {
+			ctype, _, err := fieldCType(x)
+			if err != nil {
+				return err
+			}
+			member := snake(string(x.Name()))
+			if strings.HasSuffix(ctype, "*") {
+				member = ctype + member
+			} else {
+				member = ctype + " " + member
+			}
+			if x.IsList() {
+				fmt.Fprintf(b, "    %s; /* extension %s */\n", member, x.FullName())
+				fmt.Fprintf(b, "    size_t n_%s;\n", snake(string(x.Name())))
+			} else {
+				fmt.Fprintf(b, "    %s; /* extension %s */\n", member, x.FullName())
+				if g.needsHas(x) {
+					fmt.Fprintf(b, "    int has_%s;\n", snake(string(x.Name())))
 				}
 			}
 		}
@@ -314,13 +481,15 @@ func (g *generator) writeMessages(b *strings.Builder) error {
 
 func (g *generator) writeTables(b *strings.Builder) error {
 	for _, m := range g.messages {
-		if m.IsMapEntry() {
-			continue
-		}
 		fmt.Fprintf(b, "static const pbw_struct_field_t %s_fields[] = {\n", cname(m))
 		fields := m.Fields()
 		for i := 0; i < fields.Len(); i++ {
 			if err := g.writeRow(b, m, fields.Get(i)); err != nil {
+				return err
+			}
+		}
+		for _, x := range g.extFields(m) {
+			if err := g.writeRow(b, m, x); err != nil {
 				return err
 			}
 		}
@@ -336,18 +505,27 @@ func (g *generator) writeRow(b *strings.Builder, m protoreflect.MessageDescripto
 		return err
 	}
 	rep := 0
-	if f.IsList() {
+	if f.IsList() || f.IsMap() {
 		rep = 1
 	}
 	member := snake(string(f.Name()))
 	tname := cname(m) + "_t"
 	off := fmt.Sprintf("offsetof(%s, %s)", tname, member)
+	oneof := 0
+	cs := "0"
+	if od := realOneof(f); od != nil {
+		oname := snake(string(od.Name()))
+		uname := cname(m) + "_" + oname + "_u"
+		off = fmt.Sprintf("offsetof(%s, %s) + offsetof(%s, %s)", tname, oname, uname, member)
+		oneof = 1
+		cs = fmt.Sprintf("offsetof(%s, %s_case)", tname, oname)
+	}
 	has := "0"
-	if !f.IsList() && g.needsHas(f) {
+	if !f.IsList() && !f.IsMap() && g.needsHas(f) {
 		has = fmt.Sprintf("offsetof(%s, has_%s)", tname, member)
 	}
 	count, elem := "0", "0"
-	if f.IsList() {
+	if f.IsList() || f.IsMap() {
 		count = fmt.Sprintf("offsetof(%s, n_%s)", tname, member)
 		if kind == "PBW_SF_MESSAGE" {
 			elem = fmt.Sprintf("sizeof(%s_t)", cname(f.Message()))
@@ -356,7 +534,7 @@ func (g *generator) writeRow(b *strings.Builder, m protoreflect.MessageDescripto
 		elem = fmt.Sprintf("sizeof(%s_t)", cname(f.Message()))
 	}
 	dflt := "0"
-	if kind == "PBW_SF_ENUM" && !f.IsList() {
+	if kind == "PBW_SF_ENUM" && !f.IsList() && realOneof(f) == nil {
 		// Proto3 implicit-presence enums carry no default; the
 		// zero value applies and DefaultEnumValue() is nil.
 		if dv := f.DefaultEnumValue(); dv != nil {
@@ -366,7 +544,7 @@ func (g *generator) writeRow(b *strings.Builder, m protoreflect.MessageDescripto
 	sub, nsub := "NULL", "0"
 	if kind == "PBW_SF_MESSAGE" {
 		sub = cname(f.Message()) + "_fields"
-		nsub = fmt.Sprintf("%d", messageFieldCount(f.Message()))
+		nsub = fmt.Sprintf("%d", g.tableLen(f.Message()))
 	}
 	ptype, wire, err := pbwType(f)
 	if err != nil {
@@ -380,11 +558,11 @@ func (g *generator) writeRow(b *strings.Builder, m protoreflect.MessageDescripto
 	if f.Cardinality() == protoreflect.Required {
 		required = 1
 	}
-	// The trailing type/wire/packed/required members let the runtime codec
-	// work without looking anything up in the schema.
-	fmt.Fprintf(b, "    {%d, %s, %d, %s, %s, %s, %s, %s, %s, %s, %s, %d, %d, %d},\n",
+	// The trailing type/wire/packed/required/oneof/cs members let the runtime
+	// codec work without looking anything up in the schema.
+	fmt.Fprintf(b, "    {%d, %s, %d, %s, %s, %s, %s, %s, %s, %s, %s, %d, %d, %d, %d, %s},\n",
 		f.Number(), kind, rep, off, has, count, elem, dflt, sub, nsub,
-		ptype, wire, packed, required)
+		ptype, wire, packed, required, oneof, cs)
 	return nil
 }
 
@@ -410,6 +588,8 @@ func pbwType(f protoreflect.FieldDescriptor) (string, int, error) {
 		return "PBW_TYPE_BOOL", 0, nil
 	case protoreflect.StringKind:
 		return "PBW_TYPE_STRING", 2, nil
+	case protoreflect.BytesKind:
+		return "PBW_TYPE_BYTES", 2, nil
 	case protoreflect.GroupKind:
 		return "PBW_TYPE_GROUP", 3, nil
 	case protoreflect.MessageKind:
@@ -430,12 +610,7 @@ func pbwType(f protoreflect.FieldDescriptor) (string, int, error) {
 	return "", 0, fmt.Errorf("%s: unsupported kind %s", f.FullName(), f.Kind())
 }
 
-func messageFieldCount(m protoreflect.MessageDescriptor) int {
-	if m.IsMapEntry() {
-		return 0
-	}
-	return m.Fields().Len()
-}
+
 
 // writeSchema emits the descriptor-set path: the FileDescriptorSet lives
 // in its own file (protoc --descriptor_set_out, see `make -C bindings/c/plugin
@@ -459,7 +634,7 @@ func (g *generator) writeWrappers(b *strings.Builder) {
 			continue
 		}
 		t := cname(m) + "_t"
-		n := m.Fields().Len()
+		n := g.tableLen(m)
 		fmt.Fprintf(b, "static inline pbw_status\n")
 		fmt.Fprintf(b, "%s_encode(const pbw_schema *schema, const %s *in, uint8_t **wire, size_t *wire_len)\n", cname(m), t)
 		fmt.Fprintf(b, "{\n")

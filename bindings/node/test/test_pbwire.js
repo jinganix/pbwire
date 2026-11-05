@@ -412,6 +412,84 @@ test('messages stay valid when their schema is collected first', () => {
   }
 });
 
+test('JSON mapping round-trips through the addon', () => {
+  const message = person.decode(person.encode(VALUES));
+  const json = message.toJson();
+  assert.strictEqual(typeof json, 'string');
+  assert.ok(json.includes('"name":"alice"'), 'string field prints');
+  assert.ok(json.includes('"big":"9223372036854775807"'), 'int64 prints quoted');
+  const back = person.fromJson(json);
+  assert.deepStrictEqual(back.get('inner'), VALUES.inner);
+  assert.strictEqual(back.get('big'), 9223372036854775807n);
+  assert.ok(back.encode().equals(message.encode()), 'JSON round-trip is wire-equal');
+  assert.throws(() => person.fromJson('{nope'), /./, 'malformed JSON throws');
+  assert.throws(() => person.fromJson('{"unknown_field":1}'), /./, 'unknown JSON field throws');
+  const ignored = person.fromJson('{"unknown_field":1}', true);
+  assert.strictEqual(ignored.get('name'), undefined, 'ignored unknown field reads as absent');
+  message.free();
+  back.free();
+  ignored.free();
+});
+
+test('text format round-trips through the addon', () => {
+  const message = person.decode(person.encode(VALUES));
+  const text = message.toText();
+  assert.strictEqual(typeof text, 'string');
+  assert.ok(text.includes('name: "alice"'), 'string field prints');
+  const back = person.fromText(text);
+  assert.ok(back.encode().equals(message.encode()), 'text round-trip is wire-equal');
+  assert.throws(() => person.fromText('name: '), /./, 'malformed text throws');
+  message.free();
+  back.free();
+
+  // Groups print and parse like nested messages.
+  const g = ancient.decode(ancient.encode({ color: 1, items: { x: 3, y: 'g' }, plain: 9 }));
+  const gback = ancient.fromText(g.toText());
+  assert.ok(gback.encode().equals(g.encode()), 'group text round-trip is wire-equal');
+
+  // Unknown fields print by default and drop on request.
+  const withUnknown = person.decode(Buffer.concat([person.encode(VALUES), Buffer.from([0x98, 0x06, 0x07])]));
+  assert.ok(withUnknown.toText().includes('99'), 'toText prints unknowns by default');
+  assert.ok(!withUnknown.toText(false).includes('99'), 'toText(false) drops unknowns');
+  withUnknown.free();
+  g.free();
+  gback.free();
+});
+
+test('field presence reads what was set, even zeros', () => {
+  const message = person.newMessage();
+  assert.strictEqual(message.has('name'), false, 'absent reads false');
+  message.set('name', 'x');
+  assert.strictEqual(message.has('name'), true, 'set reads true');
+  message.set('id', 0);
+  assert.strictEqual(message.has('id'), true, 'explicit zero is present');
+  assert.throws(() => message.has('nope'), /has no field/, 'unknown field throws');
+  const decoded = person.decode(person.encode(VALUES));
+  assert.strictEqual(decoded.has('name'), true, 'decoded present field reads true');
+  assert.strictEqual(decoded.has('active'), true, 'decoded bool reads true');
+  message.free();
+  decoded.free();
+});
+
+test('delimited frames concatenate and decode in a loop', () => {
+  const first = person.decode(person.encode(VALUES));
+  const second = person.decode(person.encode({ name: 'bob', id: 1 }));
+  const frames = Buffer.concat([first.encodeDelimited(), second.encodeDelimited()]);
+  let at = 0;
+  const names = [];
+  while (at < frames.length) {
+    const { message, read } = person.decodeDelimited(frames.subarray(at));
+    assert.ok(read > 0, 'frame reports its size');
+    names.push(message.get('name'));
+    at += read;
+    message.free();
+  }
+  assert.deepStrictEqual(names, ['alice', 'bob']);
+  assert.throws(() => person.decodeDelimited(frames.subarray(0, 2)), /./, 'truncated frame throws');
+  first.free();
+  second.free();
+});
+
 test('the addon rejects a slice array it did not produce', () => {
   const addon = require(path.join(__dirname, '..', 'build', 'pbwire_node.node'));
   const wire = one.encode(ONE_VALUES);

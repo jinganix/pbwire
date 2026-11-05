@@ -1,11 +1,23 @@
 cmake_minimum_required(VERSION 3.16)
 
-project(pbwire VERSION 0.1.7 LANGUAGES C)
+project(pbwire VERSION 0.1.8 LANGUAGES C)
 
 option(PBW_BUILD_PROTOC "Build the optional .proto importer (needs libprotobuf)" OFF)
 option(PBW_BUILD_TESTS "Build the self-checks" ON)
 
 include(GNUInstallDirs)
+
+# Same gate as the Makefile (CFLAGS=-Wall -Wextra -Werror -pedantic):
+# warnings fail the build on every compiler. MSVC needs its own spelling.
+if(MSVC)
+    add_compile_options(/W4 /WX)
+    # UTF-8 source and execution charset: universal-character names like
+    # \u00e9 in narrow literals must compile to UTF-8 bytes, as they do
+    # under GCC/Clang, or text/JSON goldens diverge on Windows.
+    add_compile_options(/utf-8)
+else()
+    add_compile_options(-Wall -Wextra -Werror -pedantic)
+endif()
 
 # Keep in sync with SRC in the Makefile, which stays the development gate.
 set(PBW_CORE_SOURCES
@@ -60,7 +72,13 @@ endif()
 
 if(PBW_BUILD_TESTS)
     enable_testing()
-    find_package(Threads REQUIRED)
+    # Optional on purpose: without pthreads (e.g. bare MSVC) test_threads is
+    # skipped but everything else still builds, so Windows can configure.
+    # The header check matters: FindThreads can report TRUE on MSVC while
+    # pthread.h is absent, and the stress test includes it unconditionally.
+    find_package(Threads)
+    include(CheckIncludeFile)
+    check_include_file(pthread.h HAVE_PTHREAD_H)
 
     add_executable(test_pbwire tests/test_pbwire.c)
     target_link_libraries(test_pbwire PRIVATE pbwire)
@@ -69,9 +87,13 @@ if(PBW_BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/src)
     add_test(NAME test_pbwire COMMAND test_pbwire)
 
-    add_executable(test_threads tests/test_threads.c)
-    target_link_libraries(test_threads PRIVATE pbwire Threads::Threads)
-    add_test(NAME test_threads COMMAND test_threads)
+    if(Threads_FOUND AND HAVE_PTHREAD_H)
+        add_executable(test_threads tests/test_threads.c)
+        target_link_libraries(test_threads PRIVATE pbwire Threads::Threads)
+        add_test(NAME test_threads COMMAND test_threads)
+    else()
+        message(STATUS "Threads/pthreads unavailable: skipping test_threads")
+    endif()
 
     add_executable(test_descriptor tests/test_descriptor.c)
     target_link_libraries(test_descriptor PRIVATE pbwire)

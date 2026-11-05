@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>Testee</AssemblyName>
+    <RootNamespace>Pbwire.FSharp.Conformance</RootNamespace>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="Testee.fs" />
+    <ProjectReference Include="../runtime/Pbwire.FSharp.fsproj" />
+  </ItemGroup>
+
+</Project>

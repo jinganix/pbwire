@@ -56,8 +56,8 @@ load_cache_proto3_msgs_improper_list_should_fail_test() ->
     ],
     ?assertError(_, pbwire:load_cache(Defs)).
 
-%% A map key has to be a scalar protobuf allows, and the value cannot itself be
-%% a map.
+%% A map key has to be a scalar protobuf allows. A map value may itself be
+%% a map (wire shape is entries in entries); see ep_nested_map_tests.
 load_cache_unsupported_map_key_should_fail_test() ->
     Defs = [{{msg, m1}, [
         #field{name = m, fnum = 1, rnum = 2, type = {map, double, int32},
@@ -65,12 +65,12 @@ load_cache_unsupported_map_key_should_fail_test() ->
     ]}],
     ?assertError(_, pbwire:load_cache(Defs)).
 
-load_cache_nested_map_value_should_fail_test() ->
+load_cache_nested_map_value_loads_test() ->
     Defs = [{{msg, m1}, [
         #field{name = m, fnum = 1, rnum = 2, type = {map, string, {map, int32, int32}},
             occurrence = repeated, opts = []}
     ]}],
-    ?assertError(_, pbwire:load_cache(Defs)).
+    ?assertEqual(ok, pbwire:load_cache(Defs)).
 
 %% -------------------------------------------------------------
 %% load_cache/1: enums and oneofs

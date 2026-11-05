@@ -21,6 +21,28 @@ back, _ := typ.Decode(wire)
 back.Close()
 ```
 
+Most code never touches that surface: generate protoc-gen-go-shaped structs
+once (`make -C codegen gen-go`) and use them like the library they
+mirror — same field names, same getters, same observable behavior, but the
+wire format stays in the C core:
+
+```go
+import gen "pbwire/tests/gen/matrix3"
+
+m := &gen.Scalars3{I32: -7, Str: "kid", Inner: &gen.Inner3{Name: "x", Value: 1}}
+wire, _ := m.Marshal()                // no schema argument; embedded set
+back := &gen.Scalars3{}
+back.Unmarshal(wire)
+back.GetStr()                          // "kid" (nil-safe, like protoc-gen-go)
+back.OptI32                            // nil when absent: optionals are pointers
+```
+
+Optional fields are pointers (`nil` = absent), oneofs are interface
+wrappers (`isOneof1_Kind`), repeated fields are slices — the same shapes
+`protoc-gen-go` emits. Unknown wire fields are preserved through the C
+core; a `proto.Message` interface is deliberately not implemented (maps
+and cross-file references stay on the dynamic API, as in every binding).
+
 | Piece | Path | Role |
 |---|---|---|
 | dynamic | [`dynamic/`](dynamic/) | the binding: `Registry` (hot-swap), `Schema`, `MessageType`, `Message` |

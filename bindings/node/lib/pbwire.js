@@ -107,6 +107,40 @@ class MessageType {
     return this._copy(addon.encodeObject(this._handle, value));
   }
 
+  /** Parse JSON mapping text into a Message; throws on malformed input.
+   * A second true argument skips unknown field names instead of failing. */
+  fromJson(json, ignore = false) {
+    if (typeof json !== 'string') {
+      throw new TypeError('pbwire: fromJson expects a string');
+    }
+    const message = new Message(this);
+    message._handle = addon.jsonToMessage(this._handle, json, ignore);
+    return message;
+  }
+
+  /** Parse text format into a Message; throws on malformed input. */
+  fromText(text) {
+    if (typeof text !== 'string') {
+      throw new TypeError('pbwire: fromText expects a string');
+    }
+    const message = new Message(this);
+    message._handle = addon.textToMessage(this._handle, text);
+    return message;
+  }
+
+  /** Decode one length-delimited frame: {message, read}, where read counts
+   * the length prefix plus the frame, so concatenated frames decode in a
+   * loop. Throws on a truncated frame. */
+  decodeDelimited(bytes) {
+    if (!Buffer.isBuffer(bytes)) {
+      throw new TypeError('pbwire: decodeDelimited expects a Buffer');
+    }
+    const res = addon.decodeDelimited(this._handle, bytes);
+    const message = new Message(this);
+    message._handle = res.message;
+    return { message, read: res.read };
+  }
+
   /** Decode wire bytes into a Message; throws on malformed input. */
   decode(bytes) {
     if (!Buffer.isBuffer(bytes)) {
@@ -152,6 +186,12 @@ class Message {
 
   /** Store a field value by name; `undefined`/`null` clears the field. */
   set(name, value) {
+    addon.set(this._tree(), name, value);
+    return this;
+  }
+
+  /** The mutable tree, decoding the retained bytes once when needed. */
+  _tree() {
     this._live();
     if (this._wire !== null) {
       // Writing needs a mutable tree: decode the retained bytes once.
@@ -159,8 +199,28 @@ class Message {
       this._wire = null;
       this._slices = null;
     }
-    addon.set(this._handle, name, value);
-    return this;
+    return this._handle;
+  }
+
+  /** JSON mapping text of this message. */
+  toJson() {
+    return addon.messageToJson(this._tree());
+  }
+
+  /** Protobuf text format of this message; a false argument drops unknown
+   * fields instead of printing them numerically. */
+  toText(printUnknown = true) {
+    return addon.messageToText(this._tree(), printUnknown);
+  }
+
+  /** Field presence by name: set (even to a zero) reads true. */
+  has(name) {
+    return addon.has(this._tree(), name);
+  }
+
+  /** One length-delimited frame (varint length + message). */
+  encodeDelimited() {
+    return addon.encodeDelimited(this._tree());
   }
 
   /** Wire bytes of this message. */

@@ -98,6 +98,10 @@ wire_type_of(pbw_type type)
     case PBW_TYPE_SFIXED32:
         return 5;
     case PBW_TYPE_STRING:
+    case PBW_TYPE_BYTES:
+        return 2;
+    case PBW_TYPE_GROUP:
+        return 3;
     case PBW_TYPE_MESSAGE:
         return 2;
     default:
@@ -108,8 +112,8 @@ wire_type_of(pbw_type type)
 static int
 packable(pbw_type type)
 {
-    return type != PBW_TYPE_STRING && type != PBW_TYPE_MESSAGE &&
-           type != PBW_TYPE_GROUP;
+    return type != PBW_TYPE_STRING && type != PBW_TYPE_BYTES &&
+           type != PBW_TYPE_MESSAGE && type != PBW_TYPE_GROUP;
 }
 
 static uint64_t
@@ -132,6 +136,8 @@ static const uint8_t expected_kind[PBW_TYPE_SINT64 + 1] = {
     [PBW_TYPE_FIXED32] = PBW_SF_UINT32,
     [PBW_TYPE_BOOL] = PBW_SF_BOOL,
     [PBW_TYPE_STRING] = PBW_SF_STRING,
+    [PBW_TYPE_BYTES] = PBW_SF_BYTES,
+    [PBW_TYPE_GROUP] = PBW_SF_MESSAGE,
     [PBW_TYPE_MESSAGE] = PBW_SF_MESSAGE,
     [PBW_TYPE_UINT32] = PBW_SF_UINT32,
     [PBW_TYPE_ENUM] = PBW_SF_ENUM,
@@ -166,8 +172,10 @@ kind_accepts(pbw_struct_kind_t kind, pbw_type type)
         return type == PBW_TYPE_ENUM;
     case PBW_SF_STRING:
         return type == PBW_TYPE_STRING;
+    case PBW_SF_BYTES:
+        return type == PBW_TYPE_BYTES;
     case PBW_SF_MESSAGE:
-        return type == PBW_TYPE_MESSAGE;
+        return type == PBW_TYPE_MESSAGE || type == PBW_TYPE_GROUP;
     }
     return 0;
 }
@@ -227,6 +235,8 @@ enum {
     SC_OP_F32, /* 4-byte little-endian: float, fixed32, sfixed32 */
     SC_OP_F64, /* 8-byte little-endian: double, fixed64, sfixed64 */
     SC_OP_STR,
+    SC_OP_BYTES, /* length-counted bytes, may contain NUL */
+    SC_OP_GRP,   /* legacy group: START_GROUP + message + END_GROUP */
     SC_OP_MSG
 };
 
@@ -240,16 +250,22 @@ typedef struct sc_plan sc_plan;
 
 typedef struct sc_entry {
     uint8_t op;
-    uint8_t wire;   /* wire type of one element */
-    uint8_t taglen; /* 1..5, precomputed */
-    uint8_t tag[8]; /* tag bytes, then zero padding for one wide store */
+    uint8_t wire;    /* wire type of one element */
+    uint8_t taglen;  /* 1..5, precomputed */
+    uint8_t tag[8];  /* tag bytes, then zero padding for one wide store */
+    uint8_t etaglen; /* END_GROUP tag length (groups only) */
+    uint8_t etag[8]; /* END_GROUP tag bytes (groups only) */
     uint32_t fnum;
-    int32_t dflt; /* enum default (SC_DFLT) */
-    size_t off;   /* value offset */
-    size_t has;   /* has-flag offset, 0 = none */
-    size_t cnt;   /* count offset (SC_RPT), 0 = singular */
-    size_t elem;  /* element size in memory: struct stride or scalar width */
-    sc_plan *sub; /* SC_OP_MSG */
+    int32_t dflt;                   /* enum default (SC_DFLT) */
+    size_t off;                     /* value offset */
+    size_t has;                     /* has-flag offset, 0 = none */
+    size_t cnt;                     /* count offset (SC_RPT), 0 = singular */
+    size_t elem;                    /* element size in memory: struct stride or scalar width */
+    uint8_t oneof;                  /* 1 when the field is in a real oneof (cs selects) */
+    size_t cs;                      /* oneof case-word offset */
+    const pbw_struct_field_t *rows; /* sub-layout rows (MSG/GRP), else NULL */
+    size_t nrows;                   /* sub-layout row count */
+    sc_plan *sub;                   /* SC_OP_MSG */
 } sc_entry;
 
 struct sc_plan {
@@ -280,7 +296,10 @@ entry_bounded(const sc_entry *e)
     case SC_OP_F32:
     case SC_OP_F64:
         return (e->op & SC_RPT) ? 0 : 8 + 8;
+    case SC_OP_GRP:
+        return (e->op & SC_RPT) ? 0 : 16; /* START_GROUP + END_GROUP tags */
     case SC_OP_STR:
+    case SC_OP_BYTES:
         return (e->op & SC_RPT) ? 0 : 8 + 10;
     case SC_OP_MSG:
         return (e->op & SC_RPT) ? 0 : 8 + 1;
@@ -305,7 +324,10 @@ elem_size(const pbw_struct_field_t *row, const rinfo *info)
         return 4;
     case PBW_TYPE_STRING:
         return sizeof(const char *);
+    case PBW_TYPE_BYTES:
+        return sizeof(pbw_bytes_t);
     case PBW_TYPE_MESSAGE:
+    case PBW_TYPE_GROUP:
         return row->elem;
     default:
         return 8;
@@ -352,6 +374,12 @@ field_op(const pbw_struct_field_t *row, const rinfo *info)
         break;
     case PBW_TYPE_STRING:
         op = SC_OP_STR;
+        break;
+    case PBW_TYPE_BYTES:
+        op = SC_OP_BYTES;
+        break;
+    case PBW_TYPE_GROUP:
+        op = SC_OP_GRP;
         break;
     default:
         op = SC_OP_MSG;
@@ -433,8 +461,8 @@ plan_build(const pbw_descriptor *desc, const pbw_struct_field_t *fields,
         sc_entry *e = &p->e[i];
         rinfo info;
 
-        if (!row_info(row, desc, &info) || info.type == PBW_TYPE_GROUP) {
-            status = PBW_ERR_INVALID; /* no group support in a layout */
+        if (!row_info(row, desc, &info)) {
+            status = PBW_ERR_INVALID;
             goto fail;
         }
         e->op = field_op(row, &info);
@@ -450,9 +478,18 @@ plan_build(const pbw_descriptor *desc, const pbw_struct_field_t *fields,
         e->has = row->has;
         e->cnt = row->count;
         e->elem = elem_size(row, &info);
+        e->oneof = row->oneof;
+        e->cs = row->cs;
         e->taglen = (uint8_t)varint_size(tag_value(row->fnum, info.wire));
         put_varint(e->tag, tag_value(row->fnum, info.wire));
-        if ((e->op & SC_OP_MASK) == SC_OP_MSG) {
+        if ((e->op & SC_OP_MASK) == SC_OP_GRP) {
+            e->etaglen = (uint8_t)varint_size(tag_value(row->fnum, 4));
+            put_varint(e->etag, tag_value(row->fnum, 4));
+        }
+        if ((e->op & SC_OP_MASK) == SC_OP_MSG ||
+            (e->op & SC_OP_MASK) == SC_OP_GRP) {
+            e->rows = row->fields;
+            e->nrows = row->nfields;
             pbw_status sub = plan_build(desc, row->fields, row->nfields,
                                         depth + 1, &e->sub);
 
@@ -810,6 +847,13 @@ enc_msg(const sc_plan *p, sbuf *b, const char *base, unsigned depth)
         const char *data = v;
         size_t n = 1;
 
+        /* Oneof members ride only when the case selects them; anything else
+         * in the union is stale storage, never wire content. */
+        if (e->oneof != 0 &&
+            *(const uint32_t *)(base + e->cs) != e->fnum) {
+            continue;
+        }
+
         switch (op & SC_OP_MASK) {
         case SC_OP_STR:
             if ((op & SC_RPT) == 0) {
@@ -856,6 +900,122 @@ enc_msg(const sc_plan *p, sbuf *b, const char *base, unsigned depth)
                     } else {
                         enc_bytes(b, e, *items, strlen(*items));
                     }
+                }
+                out = b->data + b->len;
+                if (!sb_reserve(b, p->tail[i + 1])) {
+                    out = b->data + b->len;
+                    continue;
+                }
+                out = b->data + b->len;
+            }
+            continue;
+        case SC_OP_BYTES:
+            if ((op & SC_RPT) == 0) {
+                const pbw_bytes_t *bytes = (const pbw_bytes_t *)v;
+                size_t len;
+
+                if (bytes->data == NULL) {
+                    if (op & SC_REQ) {
+                        b->status = PBW_ERR_REQUIRED;
+                    }
+                    continue;
+                }
+                len = bytes->len;
+                b->len = (size_t)(out - b->data);
+                if (!sb_reserve(b, len + p->tail[i + 1])) {
+                    out = b->data + b->len;
+                    continue;
+                }
+                out = b->data + b->len;
+                memcpy(out, e->tag, sizeof(e->tag));
+                out += e->taglen;
+                out = put_varint(out, (uint64_t)len);
+                if (len > 0) {
+                    memcpy(out, bytes->data, len);
+                    out += len;
+                }
+                continue;
+            }
+            {
+                const pbw_bytes_t *items = *(const pbw_bytes_t *const *)v;
+
+                n = *(const size_t *)(base + e->cnt);
+                if (n == 0) {
+                    continue;
+                }
+                if (items == NULL) {
+                    b->status = PBW_ERR_INVALID;
+                    continue;
+                }
+                b->len = (size_t)(out - b->data);
+                for (; n > 0; n--, items++) {
+                    if (items->data == NULL) {
+                        enc_bytes(b, e, "", 0);
+                    } else {
+                        enc_bytes(b, e, (const char *)items->data,
+                                  items->len);
+                    }
+                }
+                out = b->data + b->len;
+                if (!sb_reserve(b, p->tail[i + 1])) {
+                    out = b->data + b->len;
+                    continue;
+                }
+                out = b->data + b->len;
+            }
+            continue;
+        case SC_OP_GRP:
+            if ((op & SC_RPT) == 0) {
+                const char *item = *(const char *const *)v;
+
+                if (item == NULL) {
+                    if (op & SC_REQ) {
+                        b->status = PBW_ERR_REQUIRED;
+                    }
+                    continue;
+                }
+                /* START_GROUP covered by tail[i]; the sub-message reserves
+                 * its own budget on entry. */
+                memcpy(out, e->tag, sizeof(e->tag));
+                out += e->taglen;
+                b->len = (size_t)(out - b->data);
+                enc_msg(e->sub, b, item, depth + 1);
+                out = b->data + b->len;
+                if (!sb_reserve(b, 8 + p->tail[i + 1])) {
+                    out = b->data + b->len;
+                    continue;
+                }
+                out = b->data + b->len;
+                memcpy(out, e->etag, sizeof(e->etag));
+                out += e->etaglen;
+                continue;
+            }
+            {
+                const char *items = *(const char *const *)v;
+
+                n = *(const size_t *)(base + e->cnt);
+                if (n == 0) {
+                    continue;
+                }
+                if (items == NULL) {
+                    b->status = PBW_ERR_INVALID;
+                    continue;
+                }
+                b->len = (size_t)(out - b->data);
+                for (; n > 0 && b->status == PBW_OK; n--, items += e->elem) {
+                    if (!sb_reserve(b, 8)) {
+                        break;
+                    }
+                    sb_tag(b, e);
+                    enc_msg(e->sub, b, items, depth + 1);
+                    if (b->status != PBW_OK) {
+                        break;
+                    }
+                    if (!sb_reserve(b, 8)) {
+                        break;
+                    }
+                    memcpy(b->data + b->len, e->etag, sizeof(e->etag));
+                    b->len += e->etaglen;
                 }
                 out = b->data + b->len;
                 if (!sb_reserve(b, p->tail[i + 1])) {
@@ -1320,7 +1480,8 @@ check_required(const sc_plan *p, const char *base)
             }
             continue;
         }
-        if ((op == SC_OP_STR || op == SC_OP_MSG) &&
+        if ((op == SC_OP_STR || op == SC_OP_BYTES || op == SC_OP_MSG ||
+             op == SC_OP_GRP) &&
             *(const void *const *)(base + e->off) == NULL) {
             return PBW_ERR_REQUIRED;
         }
@@ -1343,9 +1504,67 @@ rd_payload(rdr *r, rdr *inner)
     return 1;
 }
 
+/* Wire type of END_GROUP; START_GROUP is 3 (see wire_type_of). */
+#define SC_WT_END_GROUP 4
+
+/* Releases what a oneof member holds so a case change cannot leak it.
+ * Arena trees are abandoned, not freed: their pointers do not own
+ * individual allocations. Plain trees free through the layout rows. */
+static void
+clear_oneof_prev(const sc_entry *e, char *base, pbw_struct_arena *a)
+{
+    char *v = base + e->off;
+
+    if (e->op & SC_RPT) { /* invalid in a oneof; stay safe anyway */
+        free(*(void **)v);
+        *(void **)v = NULL;
+        if (e->cnt != 0) {
+            *(size_t *)(base + e->cnt) = 0;
+        }
+        return;
+    }
+    switch (e->op & SC_OP_MASK) {
+    case SC_OP_STR:
+        if (a == NULL) {
+            free(*(void **)v);
+        }
+        *(void **)v = NULL;
+        break;
+    case SC_OP_BYTES: {
+        pbw_bytes_t *bytes = (pbw_bytes_t *)v;
+
+        if (a == NULL) {
+            free(bytes->data);
+        }
+        bytes->data = NULL;
+        bytes->len = 0;
+        break;
+    }
+    case SC_OP_MSG:
+    case SC_OP_GRP: {
+        void *item = *(void **)v;
+
+        if (item != NULL) {
+            if (a == NULL && e->rows != NULL) {
+                pbw_struct_free(e->rows, e->nrows, item);
+                free(item);
+            }
+            *(void **)v = NULL;
+        }
+        break;
+    }
+    default:
+        memset(v, 0, e->elem);
+        break;
+    }
+    if (e->has != 0) {
+        *(int *)(base + e->has) = 0;
+    }
+}
+
 static pbw_status
 dec_msg(const sc_plan *p, rdr *r, char *base, pbw_struct_arena *a,
-        unsigned depth)
+        unsigned depth, uint32_t stop)
 {
     size_t i;
 
@@ -1368,6 +1587,14 @@ dec_msg(const sc_plan *p, rdr *r, char *base, pbw_struct_arena *a,
         if (!rd_tag(r, &fnum, &wt)) {
             return PBW_ERR_INVALID;
         }
+        if (stop != 0 && wt == SC_WT_END_GROUP) {
+            /* Group contents end at the matching END_GROUP; any other
+             * END_GROUP inside is malformed. */
+            if (fnum == stop) {
+                return p->nreqs == 0 ? PBW_OK : check_required(p, base);
+            }
+            return PBW_ERR_INVALID;
+        }
         e = sc_lookup(p, fnum);
         if (e == NULL) {
             if (!rd_skip(r, fnum, wt, depth)) {
@@ -1377,6 +1604,23 @@ dec_msg(const sc_plan *p, rdr *r, char *base, pbw_struct_arena *a,
         }
         op = e->op;
         v = base + e->off;
+
+        /* Oneof: a new member clears the previous one (last wins, like the
+         * reference decoders); the case is set before the store so a later
+         * failure cannot leave a half-moved union. A failed decode discards
+         * the tree either way. */
+        if (e->oneof != 0) {
+            uint32_t *csp = (uint32_t *)(base + e->cs);
+
+            if (*csp != 0 && *csp != e->fnum) {
+                const sc_entry *prev = sc_lookup(p, *csp);
+
+                if (prev != NULL) {
+                    clear_oneof_prev(prev, base, a);
+                }
+            }
+            *csp = e->fnum;
+        }
 
         switch (op & SC_OP_MASK) {
         case SC_OP_I32:
@@ -1523,6 +1767,48 @@ dec_msg(const sc_plan *p, rdr *r, char *base, pbw_struct_arena *a,
             }
             continue;
         }
+        case SC_OP_BYTES: {
+            rdr inner;
+            size_t len;
+            uint8_t *dup;
+
+            if (wt != e->wire) {
+                if (!rd_skip(r, fnum, wt, depth)) {
+                    return PBW_ERR_INVALID;
+                }
+                continue;
+            }
+            if (!rd_payload(r, &inner)) {
+                return PBW_ERR_INVALID;
+            }
+            len = (size_t)(inner.end - inner.p);
+            dup = (uint8_t *)sc_alloc(a, len + 1);
+            if (dup == NULL) {
+                return PBW_ERR_NOMEM;
+            }
+            if (len > 0) {
+                memcpy(dup, inner.p, len);
+            }
+            dup[len] = '\0'; /* NUL guard, not counted in len */
+            if (op & SC_RPT) {
+                pbw_bytes_t *slot = (pbw_bytes_t *)sc_slot(e, base, a);
+
+                if (slot == NULL) {
+                    if (a == NULL) {
+                        free(dup);
+                    }
+                    return PBW_ERR_NOMEM;
+                }
+                slot->data = dup;
+                slot->len = len;
+            } else {
+                pbw_bytes_t *dst = (pbw_bytes_t *)v;
+
+                dst->data = dup;
+                dst->len = len;
+            }
+            continue;
+        }
         case SC_OP_MSG: {
             rdr inner;
             char *slot;
@@ -1548,7 +1834,40 @@ dec_msg(const sc_plan *p, rdr *r, char *base, pbw_struct_arena *a,
                 return PBW_ERR_NOMEM;
             }
             {
-                pbw_status status = dec_msg(e->sub, &inner, slot, a, depth + 1);
+                pbw_status status = dec_msg(e->sub, &inner, slot, a, depth + 1, 0);
+
+                if (status != PBW_OK) {
+                    return status;
+                }
+            }
+            if ((op & SC_RPT) == 0) {
+                *(char **)v = slot;
+            }
+            continue;
+        }
+        case SC_OP_GRP: {
+            char *slot;
+
+            if (wt != e->wire) {
+                if (!rd_skip(r, fnum, wt, depth)) {
+                    return PBW_ERR_INVALID;
+                }
+                continue;
+            }
+            if (op & SC_RPT) {
+                slot = (char *)sc_slot(e, base, a);
+                if (slot != NULL) {
+                    memset(slot, 0, e->elem);
+                }
+            } else {
+                slot = (char *)sc_alloc0(a, e->elem);
+            }
+            if (slot == NULL) {
+                return PBW_ERR_NOMEM;
+            }
+            /* Same reader: contents run to the matching END_GROUP. */
+            {
+                pbw_status status = dec_msg(e->sub, r, slot, a, depth + 1, e->fnum);
 
                 if (status != PBW_OK) {
                     return status;
@@ -1657,7 +1976,7 @@ pbw_struct_codec_decode(const pbw_struct_codec *codec, const uint8_t *wire,
     }
     r.p = wire;
     r.end = wire + wire_len;
-    status = dec_msg(codec->root, &r, (char *)base, a, 0);
+    status = dec_msg(codec->root, &r, (char *)base, a, 0, 0);
     if (status != PBW_OK && a == NULL) {
         /* Per-object allocations belong to the caller: hand them back so a
          * failed decode leaks nothing. */
@@ -1771,6 +2090,23 @@ pbw_struct_free(const pbw_struct_field_t *fields, size_t nfields, void *base)
                 for (j = 0; j < n; j++) {
                     pbw_struct_free(row->fields, row->nfields,
                                     (char *)items + j * row->elem);
+                }
+                free(items);
+                *(void **)p = NULL;
+            }
+        } else if (row->kind == PBW_SF_BYTES) {
+            if (!row->repeated) {
+                pbw_bytes_t *bytes = (pbw_bytes_t *)p;
+
+                free(bytes->data);
+                bytes->data = NULL;
+                bytes->len = 0;
+            } else {
+                pbw_bytes_t *items = *(pbw_bytes_t **)p;
+                size_t n = *(size_t *)((char *)base + row->count);
+
+                for (j = 0; j < n; j++) {
+                    free(items[j].data);
                 }
                 free(items);
                 *(void **)p = NULL;

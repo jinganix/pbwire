@@ -1,9 +1,36 @@
 # pbwire Node.js binding
 
-A `FileDescriptorSet` (`protoc --descriptor_set_out`) becomes a schema at
-runtime; no code generation, no `protoc` plugin, no npm dependencies. The
-runtime is `runtime/addon.c`, an N-API addon in C over `libpbwire.a`; the
-`Schema`/`Message` surface is `lib/pbwire.js`.
+The runtime is `runtime/addon.c`, an N-API addon in C over `libpbwire.a`;
+the `Schema`/`Message` surface is `lib/pbwire.js`. No npm dependencies.
+
+Most code never touches that surface: generate a protobufjs-static-shaped
+facade once (`make -C codegen gen-node`) and use it like the
+library it mirrors — same `create`/`encode`/`decode`/`verify` calls,
+same observable behavior, but the wire format stays in the C core:
+
+```js
+const { Person } = require('./tests/gen/addressbook.js');
+
+const msg = Person.create({name: 'alice', id: 7});
+Person.verify(msg);                       // null: valid
+const wire = Person.encode(msg).finish(); // Buffer
+const back = Person.decode(wire);
+back.name;                                // 'alice'
+back.toJSON();                            // {name: 'alice', id: 7, ...}
+```
+
+The generated file embeds its own `FileDescriptorSet`, so there is no
+`.desc` to ship: `require` it and go. int64 reads as `BigInt`; `create`/
+`fromObject` also take `number|string|Long-like`. `toObject()` keys are
+camelCase (protobufjs convention); pass `{keepCase: true}` for proto
+names. `fromObject` rejects bad shapes with `TypeError`; `verify`
+returns the same reason strings as protobufjs. The one deliberate
+difference: direct post-hoc writes of an implicit zero (`m.i32 = 0`)
+are not marked present — set values through `create`/`fromObject` to
+write explicit zeros.
+
+The dynamic API is still there for gateways and schemas known only at
+runtime:
 
 ```js
 const { Schema } = require('./lib/pbwire');
@@ -11,18 +38,12 @@ const { Schema } = require('./lib/pbwire');
 const schema = Schema.fromFile('tests/data/demo.desc');
 const person = schema.message('demo.Person');
 
-const wire = person.encode({name: 'alice', id: 7, inner: {x: 42}});
-// or, by hand:
-const msg = person.newMessage();
-msg.set('name', 'alice').set('inner', {x: 42});
-msg.encode();          // Buffer
-msg.free();
-
-const back = person.decode(wire);
-back.get('name');      // 'alice'
-back.get('inner').x;   // 42
-back.encode().equals(wire);   // true: byte-exact re-encode
-back.free();
+const wire2 = person.encode({name: 'alice', id: 7, inner: {x: 42}});
+const back2 = person.decode(wire2);
+back2.get('name');      // 'alice'
+back2.get('inner').x;   // 42
+back2.encode().equals(wire2);   // true: byte-exact re-encode
+back2.free();
 ```
 
 ## How it works
@@ -187,19 +208,37 @@ per-message finalizer.
 - **No protoc plugin / code generation.** The schema is always loaded at run
   time, like the Python binding: a `FileDescriptorSet` is the only schema
   source, and there is no generated layout to keep in sync.
-- **No conformance testee.** The official suite is covered through the C core
-  and `conformance/`, not through this binding. The differential test above is
-  what keeps the addon's wire reader honest against the core's.
+Also exported: JSON/text format (`messageToJson`/`jsonToMessage` — the latter
+with an optional ignore-unknown flag, `messageToText`/`textToMessage` — the
+former with an optional print-unknown flag), field presence (`has`), and
+delimited framing (`encodeDelimited`/`decodeDelimited`, returning
+`{message, read}` so concatenated frames decode in a loop).
+See `test/test_pbwire.js`.
 
-Also out of scope here: JSON/text format (`pbw_json_print`/`pbw_text_print`),
-field presence introspection (`pbw_message_field_count`), and delimited framing.
-Each is one addon export away when a consumer needs it.
+## Conformance
 
-## Typed models
+`conformance/testee.js` drives the official `conformance_test_runner`
+through this binding (`make conformance-node`):
 
-`protoc-gen-pbwire-typed` (in `../typed`) generates `matrix3.d.ts` interfaces
+```
+CONFORMANCE SUITE PASSED: 2742 successes, 0 skipped, 2 expected failures,
+0 unexpected failures.
+CONFORMANCE SUITE PASSED: 445 successes, 0 skipped, 0 expected failures,
+0 unexpected failures.
+```
+
+Binary input decodes to a tree (unknown fields survive, oneof collapses to
+the last member) and every output renders that same tree; JSON input with
+unknown fields only parses when the test category asks to ignore them, and
+text output honors the runner's `print_unknown_fields` flag. The 2 expected
+failures are the shared `conformance/failure_list_pbwire.txt` (tag varints
+the reference C++ testee truncates identically); only JSPB answers `skipped`.
+
+## Generated models
+
+`protoc-gen-pbwire` (in `../../codegen`) generates `matrix3.d.ts` interfaces
 (for TypeScript) and a JSDoc/`@ts-check` `.js` with the same shapes plus the enum
 constants, describing exactly the plain objects `MessageType.encode()` accepts
 and `Message.get()` returns. The committed output is `tests/gen/` and
-`examples/gen/`; the typed test type-checks with `tsc --strict --checkJs`.
-See `../typed/README.md`.
+`examples/gen/`; the generated test type-checks with `tsc --strict --checkJs`.
+See `../../codegen/README.md`.

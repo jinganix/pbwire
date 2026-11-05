@@ -1,6 +1,6 @@
 name: pbwire
 description: Dynamic protobuf over the pbwire C ABI, schema at runtime, no generated code.
-version: 0.1.7
+version: 0.1.8
 repository: https://github.com/jinganix/pbwire
 
 environment:
@@ -8,3 +8,7 @@ environment:
 
 dependencies:
   ffi: ^2.1.0
+  # Generated facades (tests/gen): Int64 fields and ProtobufEnum enums mirror
+  # protoc-gen-dart exactly; the wire itself stays in the C core.
+  fixnum: ^1.1.0
+  protobuf: ^6.1.0

@@ -8,7 +8,7 @@
   <artifactId>pbwire-kotlin</artifactId>
   <!-- Release version: kept in sync with the repo-root VERSION file by
        scripts/sync-versions.sh; never edit by hand. -->
-  <version>0.1.7</version>
+  <version>0.1.8</version>
   <packaging>jar</packaging>
 
   <name>pbwire-kotlin</name>
@@ -20,6 +20,19 @@
       <url>https://www.apache.org/licenses/LICENSE-2.0</url>
     </license>
   </licenses>
+  <developers>
+    <developer>
+      <id>gan.jin</id>
+      <name>JinGan</name>
+      <email>jinganix@gmail.com</email>
+    </developer>
+  </developers>
+  <scm>
+    <url>https://github.com/jinganix/pbwire</url>
+    <connection>scm:git:git://github.com/jinganix/pbwire.git</connection>
+    <developerConnection>scm:git:ssh://github.com/jinganix/pbwire.git</developerConnection>
+    <tag>HEAD</tag>
+  </scm>
 
   <!-- No maven.compiler.release here: the Kotlin compiler does not read it,
        and the javadoc plugin would inherit it and fail on a JDK older than
@@ -34,7 +47,7 @@
       <groupId>io.github.jinganix</groupId>
       <artifactId>pbwire-java</artifactId>
       <!-- Same release line: the sync script keeps this aligned with VERSION. -->
-      <version>0.1.7</version>
+      <version>0.1.8</version>
     </dependency>
     <dependency>
       <groupId>org.jetbrains.kotlin</groupId>
@@ -96,7 +109,7 @@
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-gpg-plugin</artifactId>
-        <version>3.0.1</version>
+        <version>3.2.8</version>
         <executions>
           <execution>
             <id>sign-artifacts</id>
@@ -110,6 +123,19 @@
             </configuration>
           </execution>
         </executions>
+      </plugin>
+      <!-- Portal publishing: intercepts `mvn deploy`, uploads the bundle,
+           validates it and publishes (server id matches distributionManagement
+           and the setup-java server-username/password env). -->
+      <plugin>
+        <groupId>org.sonatype.central</groupId>
+        <artifactId>central-publishing-maven-plugin</artifactId>
+        <version>0.12.0</version>
+        <extensions>true</extensions>
+        <configuration>
+          <publishingServerId>central</publishingServerId>
+          <autoPublish>true</autoPublish>
+        </configuration>
       </plugin>
     </plugins>
   </build>

@@ -46,4 +46,4 @@ if [ "${1:-all}" = build ]; then
 fi
 
 # --expose-gc so the finalizer test can force the collections it checks.
-exec node --expose-gc --test "$here/test/test_pbwire.js" "$here/tests/typed_test.js"
+exec node --expose-gc --test "$here/test/test_pbwire.js" "$here/tests/generated_test.js" "$here/tests/compat_test.js"

@@ -188,6 +188,34 @@ check 'nested message round trip' do
   assert_equal 'nested', back['inner']['s'], 'decoded nested field'
 end
 
+check 'groups encode with START_GROUP framing and decode as messages' do
+  gschema = Pbwire::Schema.from_file('bindings/c/tests/data/grouptest.desc')
+  gtype = 'structtest.GroupTest'
+  inner = gschema.message('structtest.GroupTest.Inner')
+  inner['x'] = 5
+  inner['s'] = 'g'
+  item1 = gschema.message('structtest.GroupTest.Item')
+  item1['v'] = 1
+  item2 = gschema.message('structtest.GroupTest.Item')
+  item2['v'] = -2
+  msg = gschema.message(gtype)
+  msg['item'] = [item1, item2]
+  msg['id'] = 9
+  msg['inner'] = inner
+  wire = msg.encode
+  assert_equal File.binread('bindings/c/tests/data/grouptest.bin'), wire,
+               'group bytes equal protoc'
+  back = gschema.message(gtype).decode(wire)
+  assert_equal 5, back['inner']['x'], 'singular group'
+  assert_equal 'g', back['inner']['s'], 'singular group string'
+  assert_equal [1, -2], back['item'].map { |m| m['v'] }, 'repeated group'
+  assert_equal 9, back['id'], 'sibling field'
+  assert_equal wire, back.encode, 'group re-encode byte exact'
+  merged = gschema.message(gtype).decode("\x0b\x10\x05\x0c\x0b\x1a\x01g\x0c".b)
+  assert_equal 5, merged['inner']['x'], 'singular group merges x'
+  assert_equal 'g', merged['inner']['s'], 'singular group merges s'
+end
+
 check 'explicit false survives the wire' do
   msg = schema.message(SAMPLE)
   msg['flag'] = false
@@ -328,6 +356,75 @@ check 'a schema closes once its last message is gone' do
   assert_equal 'still usable', msg.decode(msg.encode)['name'],
                'decode through a live message after schema close'
   msg.close
+end
+
+check 'JSON mapping round-trips through the binding' do
+  msg = reference_message
+  json = msg.to_json
+  assert json.include?('"name":"alice"'), 'string field prints'
+  back = schema.message(SAMPLE).from_json(json)
+  assert_equal msg.encode, back.encode, 'JSON round trip is wire-equal'
+  assert_equal 'alice', back['name'], 'JSON field reads back'
+  assert raised(Pbwire::Error) { schema.message(SAMPLE).from_json('{oops') }, 'malformed JSON raises'
+  assert raised(Pbwire::Error) { schema.message(SAMPLE).from_json('{"nope":1}') }, 'unknown JSON field raises'
+  strict = schema.message(SAMPLE).from_json('{"nope":1}', true)
+  assert strict['name'].nil?, 'ignored unknown field reads as absent'
+end
+
+check 'text format round-trips through the binding' do
+  msg = reference_message
+  text = msg.to_text
+  assert text.include?('name: "alice"'), 'string field prints'
+  with_unknown = schema.message(SAMPLE).decode(msg.encode + "\x98\x06\x07".b)
+  assert with_unknown.to_text.include?('99'), 'to_text prints unknowns by default'
+  assert !with_unknown.to_text(false).include?('99'), 'to_text(false) drops unknowns'
+  back = schema.message(SAMPLE).from_text(text)
+  assert_equal msg.encode, back.encode, 'text round trip is wire-equal'
+  assert raised(Pbwire::Error) { schema.message(SAMPLE).from_text('name: ') }, 'malformed text raises'
+end
+
+check 'to_builder materializes a canonical tree' do
+  inner = schema.message(INNER)
+  oneof = inner.decode("\x0a\x01a\x0a\x01b")
+  built = oneof.to_builder
+  assert_equal 'b', built['s'], 'last value wins after materialize'
+  assert_equal built.encode, oneof.to_builder.encode, 'idempotent'
+end
+
+check 'deterministic encoding sorts map entries by key' do
+  map_schema = Pbwire::Schema.from_file('bindings/c/tests/data/maptest.desc')
+  maps = map_schema.message('structtest.Maps')
+  unordered = maps.decode("\x0a\x05\x08\x02\x12\x01b\x0a\x05\x08\x01\x12\x01a")
+  assert_equal "\x0a\x05\x08\x01\x12\x01a\x0a\x05\x08\x02\x12\x01b",
+               unordered.encode_deterministic, 'entries sort by key'
+  assert_equal unordered.encode, unordered.decode(unordered.encode).encode,
+               'plain encode stable'
+end
+
+check 'delimited frames concatenate and decode in a loop' do
+  first = reference_message
+  second = schema.message(SAMPLE)
+  second['name'] = 'bob'
+  frames = first.encode_delimited + second.encode_delimited
+  names = []
+  rest = frames
+  until rest.empty?
+    decoded, read = schema.message(SAMPLE).decode_delimited(rest)
+    assert read.positive?, 'frame reports its size'
+    names << decoded['name']
+    rest = rest.byteslice(read..)
+  end
+  assert_equal %w[alice bob], names, 'framed names in order'
+  assert raised(Pbwire::Error) { schema.message(SAMPLE).decode_delimited(frames.byteslice(0, 2)) },
+              'truncated frame raises'
+end
+
+check 'unknown fields survive a decode/encode round trip byte for byte' do
+  msg = reference_message
+  wire = msg.encode + "\xF8\x06\x01".b
+  back = schema.message(SAMPLE).decode(wire)
+  assert_equal wire, back.encode, 'unknown field bytes preserved'
+  assert_equal wire, schema.message(SAMPLE).decode(wire).to_builder.encode, 'unknown fields survive materialize'
 end
 
 failures = 0

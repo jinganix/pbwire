@@ -50,11 +50,13 @@ truth for field numbers and proto2/proto3 semantics: the row count must match
 the descriptor, and a row whose kind/wire type disagrees with its own `type`
 is `PBW_ERR_INVALID`.
 
-`decode` allocates (strings, arrays, sub-messages) into a zeroed struct.
+`decode` allocates (strings, bytes, arrays, sub-messages) into a zeroed struct.
 Repeated fields grow by doubling from the count member, so a message with
-empty repeated fields allocates nothing. Unsupported kinds (bytes, groups,
-maps, oneofs) fail with `PBW_ERR_INVALID`; extend the codec when a user
-needs them.
+empty repeated fields allocates nothing. Maps are repeated entry structs
+(no hash table: insertion order is the wire order); oneof members share a
+union gated by a case word (last one wins, like the reference); groups
+encode as `START_GROUP` + message + `END_GROUP`. Extensions and MessageSet
+members are not generated yet (the plugin walks message fields only).
 
 ### Two levels: one-shot calls and a compiled codec
 
@@ -217,13 +219,13 @@ the layout on every call and mallocs every value. It is 3-5x slower, which is
 the price of that convenience — the point of the extra block is to keep the
 trade-off visible rather than hidden.
 
-## Typed models
+## Generated models
 
-The struct binding *is* the typed model: `plugin/` generates the C structs, the
+The struct binding *is* the generated model: `plugin/` generates the C structs, the
 enum typedefs and the layout tables, with the `.proto` type named in each field
 comment (`int32_t color; /* optional, structtest.Color3 */`). `tests/gen/` and
 `examples/gen/` hold the pinned output; `examples/addressbook.c` assigns struct
 literals and calls the generated `*_encode`/`*_decode` wrappers only.
 
-For every other language, `../typed/` generates the same kind of typed layer;
-see `../typed/README.md`.
+For every other language, `../../codegen/` generates the same kind of generated layer;
+see `../../codegen/README.md`.

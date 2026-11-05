@@ -9,12 +9,12 @@ and how much they can catch.
 | Self-check | `make test` | a C99 compiler | yes (`scripts/check.sh`) |
 | Pinned reference bytes | `make test` | a C99 compiler | yes |
 | Differential test | `make difftest` | `protoc` + libprotobuf C++ | no |
-| Official conformance suite | `make conformance` | cached protobuf checkout | no |
-| Binding tests | `make <lang>-test`, `make erlang-test` | that language's toolchain | no |
+| Official conformance suite | `make conformance` | cached protobuf checkout | yes (CI, ubuntu) |
+| Binding tests | `make <lang>-test` (plus `make erlang-test`, `make test-cpp`, `make go-test`) | that language's toolchain | no |
 
 ## 1. Self-check (`make test`)
 
-`make test` builds and runs four assert-based binaries plus the C address-book
+`make test` builds and runs five assert-based binaries plus the C address-book
 example. Dependency-free.
 
 `test_pbwire` covers every scalar type at its edges (varint width boundaries,
@@ -157,12 +157,16 @@ available, the same four benchmark tiers — see
 [BENCHMARKS.md](../BENCHMARKS.md) for the numbers.
 
 ```bash
-make python-test ruby-test node-test objc-test java-test kotlin-test php-test dart-test rust-test csharp-test
+make python-test ruby-test node-test objc-test java-test kotlin-test php-test dart-test rust-test csharp-test \
+     lua-test swift-test scala-test elixir-test zig-test fsharp-test clojure-test julia-test r-test
 make erlang-test                 # EUnit + NIF C tests
-make typed-test                  # the typed model test of every binding
+make go-test                     # cgo dynamic binding (parity + hot-swap)
+make test-cpp                    # C++ binding self-check
+make codegen-test                  # the generated model test of every binding
 make conformance-python          # official suite through the Python binding
 make conformance-ruby            # official binary suite through the Ruby binding
 make conformance-java            # official binary suite through the Java binding
+make conformance-lua conformance-r conformance-node  # same suite through those bindings
 ```
 
 ## What the differential test found

@@ -116,9 +116,17 @@ dropping your own reference does not free the native schema under them. An
 explicit `close()` is still the caller's promise that nothing else uses it --
 close messages and types first, like any arena.
 
-## Typed models
+## Generated models
 
-`protoc-gen-pbwire-typed` (in `../typed`) generates classes with typed
-properties, `encode(Schema)` and `static decode`. The committed output is
-`tests/gen/` and `examples/gen/`; `examples/roundtrip.php` assigns typed
-properties only. See `../typed/README.md`.
+`protoc-gen-pbwire` (in `../../codegen`) generates official-runtime-shaped
+classes over this dynamic API: `getX()`/`setX()`, `hasX()`/`clearX()` for
+optional and message fields, `RepeatedField` for repeated, `getKind()` /
+`whichOneof()` for oneofs, enums as class constants, and
+`serializeToString()`/`mergeFromString()`. Each file embeds its own
+`FileDescriptorSet`, so no `.desc` is needed at use time; the wire format
+stays in the C core. The committed output is `tests/gen/` and
+`examples/gen/` plus the protoc `--php_out` oracle in `tests/gen_oracle/`;
+`tests/compat_test.php` runs TESTSPEC T1–T6 against the pinned runtime
+(protobuf v36.2 `php/src`), `tests/generated_test.php` is the oracle-free
+smoke, and `examples/roundtrip.php` assigns typed fields only. See
+`../../codegen/README.md`.

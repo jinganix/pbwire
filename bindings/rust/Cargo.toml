@@ -1,6 +1,6 @@
 [package]
 name = "pbwire"
-version = "0.1.7"
+version = "0.1.8"
 edition = "2021"
 description = "Rust binding over the pbwire C ABI: dynamic protobuf without generated code"
 license = "MIT"
@@ -11,3 +11,6 @@ repository = "https://github.com/jinganix/pbwire"
 [workspace]
 members = ["benchmarks"]
 exclude = []
+
+[dev-dependencies]
+prost = "0.14"

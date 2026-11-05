@@ -1,0 +1,13 @@
+Package: pbwire
+Title: Protobuf Wire Codec over the pbwire C Core
+Version: 0.1.8
+Authors@R: person("pbwire", "contributors", role = c("aut", "cre"),
+    email = "pbwire@example.com")
+Description: Dynamic protobuf codec: named lists convert through the pbwire
+    schema arena, builders encode hot loops without rebuilding. Loads a
+    FileDescriptorSet at run time; the C core compiles in statically, so
+    there are no runtime dependencies and no generated code.
+License: Apache License (>= 2)
+URL: https://github.com/jinganix/pbwire
+NeedsCompilation: yes
+Encoding: UTF-8

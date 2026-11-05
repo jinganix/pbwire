@@ -49,7 +49,7 @@ because `*.pb.go` added tens of MB of unneeded runtime to the binary.
 pbwire generates nothing at runtime. Descriptors go in (hand-built or a
 standard `FileDescriptorSet`), dynamic messages come out — adding a message
 type never requires a rebuild unless you embedded the descriptor bytes in the
-binary. Typed models exist (`bindings/typed`, plus the C struct plugin) for
+binary. Generated models exist (`codegen`, plus the C struct plugin) for
 ergonomics, but they are thin wrappers over the dynamic API, never a second
 wire implementation. See [Is pbwire a Protobuf code generator?](faq.md#is-pbwire-a-protobuf-code-generator)
 and [Do I have to recompile when a `.proto` changes?](faq.md#do-i-have-to-recompile-when-a-proto-changes).
@@ -118,7 +118,7 @@ migration guide keeps growing).
 pbwire keeps the C ABI versioned (`PBW_ABI_VERSION` + `pbw_abi_version()` +
 SONAME move together; additive changes keep the number) and the bindings
 check it at load time, so an incompatible mix fails fast instead of
-corrupting memory. Caveat stated plainly: the project is young (`0.1.0`), so
+corrupting memory. Caveat stated plainly: the project is young (`0.1.7`), so
 the stability promise is a mechanism plus a policy, not a decade of history.
 
 ## How to handle Protobuf JSON, int64, Any and special fields?

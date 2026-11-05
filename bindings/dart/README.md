@@ -85,9 +85,14 @@ promise that nothing else uses it. A nested message is a view of its parent,
 holds it alive, and never frees anything. `dart:ffi` state is per-isolate, and a
 message tree is not shared: one tree belongs to one isolate, like the C core.
 
-## Typed models
+## Generated models
 
-`protoc-gen-pbwire-typed` (in `../typed`) generates Dart classes with typed
-fields, `Uint8List encode(schema)` and `static decode`. The committed output is
-`tests/gen/` and `examples/gen/`; `examples/roundtrip.dart` assigns typed fields
-only. See `../typed/README.md`.
+`protoc-gen-pbwire` (in `../../codegen`) generates Dart classes with typed
+fields in protobuf-dart shape (`create`, `writeToBuffer`/`fromBuffer`,
+`hasX`/`clearX`/`ensureX`, `whichX` for oneofs, `ProtobufEnum` enums, `Int64`
+for 64-bit fields) over the dynamic API, with the `FileDescriptorSet`
+embedded: no `.desc` file at use time, and the wire stays in the C core. The
+committed output is `tests/gen/` (plus the protoc-gen-dart oracle in
+`tests/gen_oracle/`, pinned in `pubspec.lock`) and `examples/gen/`;
+`examples/roundtrip.dart` assigns typed fields only. See `../../codegen/README.md`
+and `../../codegen/testdata/TESTSPEC.md` (T1–T6, run by `tests/generated_test.dart`).

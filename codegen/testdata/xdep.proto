@@ -1,0 +1,11 @@
+// Shared dependency for the cross-file fixture: xfile.proto imports this
+// file and references DepMsg. Generated once per language next to xfile's
+// own model; the reference bytes live with xfile.
+syntax = "proto3";
+
+package xdep;
+
+message DepMsg {
+  string name = 1;
+  int32 value = 2;
+}

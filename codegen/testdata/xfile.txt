@@ -1,0 +1,3 @@
+single: {name: "one", value: 7}
+many: [{name: "a"}, {name: "b", value: -1}]
+note: "hi"

@@ -197,6 +197,28 @@ def main():
         check(merged.c.to_dict() == {"x": 8}, "oneof sub-message last wins")
         check(merged.to_dict() == {"c": {"x": 8}}, "oneof sub-message as dict")
 
+    # Groups map like messages: the same dicts encode through START_GROUP
+    # framing and must equal the protoc reference bytes.
+    with pbw.Schema.from_file(os.path.join(DATA, "grouptest.desc")) as schema:
+        gtest = schema.message("structtest.GroupTest")
+        with open(os.path.join(DATA, "grouptest.bin"), "rb") as handle:
+            greference = handle.read()
+        gvalues = {"inner": {"x": 5, "s": "g"},
+                   "item": [{"v": 1}, {"v": -2}], "id": 9}
+        got = gtest.encode(gvalues)
+        check(got == greference, "group encode equals protoc reference")
+        message = gtest.decode(greference)
+        check(message.to_dict() == gvalues, "group decode(to_dict)")
+        check(message.inner.x == 5 and message.inner.s == "g",
+              "singular group attribute")
+        check(message.item[1].v == -2, "repeated group attribute")
+        check(gtest.encode(message) == greference, "group Message round trip")
+        # A singular group seen twice merges, like a singular message.
+        merged = gtest.decode(b"\x0b\x10\x05\x0c\x0b\x1a\x01g\x0c")
+        check(merged.inner.to_dict() == {"x": 5, "s": "g"},
+              "singular group seen twice merges")
+        check(gtest.encode({}) == b"", "empty group message is empty")
+
     with pbw.Schema.from_file("examples/addressbook.desc") as schema:
         person = schema.message("tutorial.Person")
         values = {"name": "alice", "id": 1, "email": "a@example.com",

@@ -5,6 +5,20 @@
 
 #include <stdio.h>
 
+/* FNV-1a 32-bit for field names: one multiply-xor per byte, good enough for
+ * a few dozen keys and branch-free to compute. */
+static uint32_t
+name_hash(const char *s)
+{
+    uint32_t h = 2166136261u;
+
+    while (*s) {
+        h ^= (uint8_t)*s++;
+        h *= 16777619u;
+    }
+    return h;
+}
+
 static char *
 dup_str(const char *s)
 {
@@ -47,6 +61,7 @@ pbw_descriptor_free(pbw_descriptor *desc)
     free(desc->enum_values);
     free(desc->fnum_map);
     free(desc->tag_map);
+    free((void *)desc->name_map);
     for (i = 0; i < desc->reserved_count; i++) {
         free(desc->reserved[i]);
     }
@@ -658,6 +673,34 @@ link_message(pbw_schema *schema, pbw_descriptor *msg)
         }
         msg->tag_map = map;
     }
+    /* Name dispatch for table/dict bindings: open-addressed hash, power of
+     * two sized at 2x field count so probes stay short. */
+    free((void *)msg->name_map);
+    msg->name_map = NULL;
+    msg->name_map_size = 0;
+    if (msg->field_count > 0) {
+        size_t size = 8;
+        const pbw_field **map;
+
+        while (size < msg->field_count * 2) {
+            size *= 2;
+        }
+        map = (const pbw_field **)calloc(size, sizeof(*map));
+        if (map == NULL) {
+            return PBW_ERR_NOMEM;
+        }
+        for (i = 0; i < msg->field_count; i++) {
+            const pbw_field *field = &msg->fields[i];
+            size_t slot = (size_t)(name_hash(field->name) & (uint32_t)(size - 1));
+
+            while (map[slot] != NULL) {
+                slot = (slot + 1) & (size - 1);
+            }
+            map[slot] = field;
+        }
+        msg->name_map = map;
+        msg->name_map_size = size;
+    }
     return PBW_OK;
 }
 
@@ -737,6 +780,12 @@ pbw_descriptor_is_enum(const pbw_descriptor *desc)
 }
 
 int
+pbw_descriptor_is_map_entry(const pbw_descriptor *desc)
+{
+    return desc != NULL && desc->map_entry;
+}
+
+int
 pbw_descriptor_is_proto3(const pbw_descriptor *desc)
 {
     return desc != NULL && desc->proto3;
@@ -772,14 +821,32 @@ const pbw_field *
 pbw_descriptor_find_field_name(const pbw_descriptor *desc,
                                const char *name)
 {
-    size_t i;
-
     if (desc == NULL || desc->is_enum || name == NULL) {
         return NULL;
     }
-    for (i = 0; i < desc->field_count; i++) {
-        if (strcmp(desc->fields[i].name, name) == 0) {
-            return &desc->fields[i];
+    if (desc->name_map != NULL) {
+        size_t mask = desc->name_map_size - 1;
+        size_t slot = (size_t)(name_hash(name) & (uint32_t)mask);
+
+        for (;;) {
+            const pbw_field *field = desc->name_map[slot];
+
+            if (field == NULL) {
+                return NULL;
+            }
+            if (strcmp(field->name, name) == 0) {
+                return field;
+            }
+            slot = (slot + 1) & mask;
+        }
+    }
+    {
+        size_t i;
+
+        for (i = 0; i < desc->field_count; i++) {
+            if (strcmp(desc->fields[i].name, name) == 0) {
+                return &desc->fields[i];
+            }
         }
     }
     return NULL;

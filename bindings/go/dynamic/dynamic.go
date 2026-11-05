@@ -268,6 +268,33 @@ func (m *Message) SetBytes(name string, v []byte) error {
 	return m.store(f, v2)
 }
 
+// SetMessageBytes parses wire bytes as the MESSAGE or GROUP field name and
+// stores the result. It bridges generated packages: a foreign value marshals
+// to bytes through its own package, then lands here without either package
+// calling the other's unexported fill methods.
+func (m *Message) SetMessageBytes(name string, wire []byte) error {
+	f, err := m.typ.field(name)
+	if err != nil {
+		return err
+	}
+	if C.pbw_field_message_type(f) == nil {
+		return fmt.Errorf("dynamic: field %s is not a message", name)
+	}
+	tmp, err := m.typ.subtype(f).Decode(wire)
+	if err != nil {
+		return err
+	}
+	v := C.pbw_value_new_message(tmp.c)
+	if v == nil {
+		tmp.Close()
+		return errors.New("dynamic: value allocation failed")
+	}
+	// Ownership (tree and schema pin) moves into v; Close below is a no-op.
+	tmp.c = nil
+	tmp.typ.s.release()
+	return m.store(f, v)
+}
+
 // NewMessage creates (or returns the existing) nested message for a MESSAGE
 // field: singular replaces, repeated appends. The view writes straight into
 // the root tree; never Close it separately.
@@ -288,6 +315,225 @@ func (m *Message) rootOrSelf() *Message {
 		return m.root
 	}
 	return m
+}
+
+// getValue resolves a field and returns its present value, or nil when the
+// field is absent (never an error for absent: check Has first when it
+// matters). Views into the tree keep the root alive through the caller.
+func (m *Message) getValue(name string) (*C.pbw_value, error) {
+	f, err := m.typ.field(name)
+	if err != nil {
+		return nil, err
+	}
+	return C.pbw_message_get_field(m.c, f), nil
+}
+
+// Has reports whether the field carries a value on the wire.
+func (m *Message) Has(name string) (bool, error) {
+	v, err := m.getValue(name)
+	if err != nil {
+		return false, err
+	}
+	return v != nil, nil
+}
+
+// GetInt reads a signed integer/enum field (raw bits, like the setters).
+func (m *Message) GetInt(name string) (int64, bool, error) {
+	v, err := m.getValue(name)
+	if err != nil || v == nil {
+		return 0, false, err
+	}
+	return int64(C.pbw_value_get_int(v)), true, nil
+}
+
+// GetUint reads an unsigned integer field (raw bits).
+func (m *Message) GetUint(name string) (uint64, bool, error) {
+	v, err := m.getValue(name)
+	if err != nil || v == nil {
+		return 0, false, err
+	}
+	return uint64(C.pbw_value_get_uint(v)), true, nil
+}
+
+// GetBool reads a bool field.
+func (m *Message) GetBool(name string) (bool, bool, error) {
+	v, err := m.getValue(name)
+	if err != nil || v == nil {
+		return false, false, err
+	}
+	return C.pbw_value_get_bool(v) != 0, true, nil
+}
+
+// GetFloat reads a float field.
+func (m *Message) GetFloat(name string) (float32, bool, error) {
+	v, err := m.getValue(name)
+	if err != nil || v == nil {
+		return 0, false, err
+	}
+	return float32(C.pbw_value_get_float(v)), true, nil
+}
+
+// GetDouble reads a double field.
+func (m *Message) GetDouble(name string) (float64, bool, error) {
+	v, err := m.getValue(name)
+	if err != nil || v == nil {
+		return 0, false, err
+	}
+	return float64(C.pbw_value_get_double(v)), true, nil
+}
+
+// GetString reads a string field (copied out).
+func (m *Message) GetString(name string) (string, bool, error) {
+	v, err := m.getValue(name)
+	if err != nil || v == nil {
+		return "", false, err
+	}
+	return C.GoString(C.pbw_value_get_string(v)), true, nil
+}
+
+// GetBytes reads a bytes field (copied out).
+func (m *Message) GetBytes(name string) ([]byte, bool, error) {
+	v, err := m.getValue(name)
+	if err != nil || v == nil {
+		return nil, false, err
+	}
+	var l C.size_t
+	p := C.pbw_value_get_bytes(v, &l)
+	return C.GoBytes(unsafe.Pointer(p), C.int(l)), true, nil
+}
+
+// GetMessage reads a sub-message field as a view: Close is a no-op, the
+// root keeps it alive.
+func (m *Message) GetMessage(name string) (*Message, bool, error) {
+	f, err := m.typ.field(name)
+	if err != nil {
+		return nil, false, err
+	}
+	v := C.pbw_message_get_field(m.c, f)
+	if v == nil {
+		return nil, false, nil
+	}
+	return &Message{typ: m.typ.subtype(f), c: C.pbw_value_get_message(v), root: m.rootOrSelf()}, true, nil
+}
+
+func (m *Message) getSlice(name string) (*C.pbw_value, int, error) {
+	v, err := m.getValue(name)
+	if err != nil || v == nil {
+		return nil, 0, err
+	}
+	return v, int(C.pbw_value_count(v)), nil
+}
+
+// GetIntSlice reads a repeated signed integer/enum field.
+func (m *Message) GetIntSlice(name string) ([]int64, error) {
+	v, n, err := m.getSlice(name)
+	if err != nil || v == nil {
+		return nil, err
+	}
+	out := make([]int64, n)
+	for i := range out {
+		out[i] = int64(C.pbw_value_get_int(C.pbw_value_at(v, C.size_t(i))))
+	}
+	return out, nil
+}
+
+// GetUintSlice reads a repeated unsigned integer field.
+func (m *Message) GetUintSlice(name string) ([]uint64, error) {
+	v, n, err := m.getSlice(name)
+	if err != nil || v == nil {
+		return nil, err
+	}
+	out := make([]uint64, n)
+	for i := range out {
+		out[i] = uint64(C.pbw_value_get_uint(C.pbw_value_at(v, C.size_t(i))))
+	}
+	return out, nil
+}
+
+// GetBoolSlice reads a repeated bool field.
+func (m *Message) GetBoolSlice(name string) ([]bool, error) {
+	v, n, err := m.getSlice(name)
+	if err != nil || v == nil {
+		return nil, err
+	}
+	out := make([]bool, n)
+	for i := range out {
+		out[i] = C.pbw_value_get_bool(C.pbw_value_at(v, C.size_t(i))) != 0
+	}
+	return out, nil
+}
+
+// GetFloatSlice reads a repeated float field.
+func (m *Message) GetFloatSlice(name string) ([]float32, error) {
+	v, n, err := m.getSlice(name)
+	if err != nil || v == nil {
+		return nil, err
+	}
+	out := make([]float32, n)
+	for i := range out {
+		out[i] = float32(C.pbw_value_get_float(C.pbw_value_at(v, C.size_t(i))))
+	}
+	return out, nil
+}
+
+// GetDoubleSlice reads a repeated double field.
+func (m *Message) GetDoubleSlice(name string) ([]float64, error) {
+	v, n, err := m.getSlice(name)
+	if err != nil || v == nil {
+		return nil, err
+	}
+	out := make([]float64, n)
+	for i := range out {
+		out[i] = float64(C.pbw_value_get_double(C.pbw_value_at(v, C.size_t(i))))
+	}
+	return out, nil
+}
+
+// GetStringSlice reads a repeated string field.
+func (m *Message) GetStringSlice(name string) ([]string, error) {
+	v, n, err := m.getSlice(name)
+	if err != nil || v == nil {
+		return nil, err
+	}
+	out := make([]string, n)
+	for i := range out {
+		out[i] = C.GoString(C.pbw_value_get_string(C.pbw_value_at(v, C.size_t(i))))
+	}
+	return out, nil
+}
+
+// GetBytesSlice reads a repeated bytes field.
+func (m *Message) GetBytesSlice(name string) ([][]byte, error) {
+	v, n, err := m.getSlice(name)
+	if err != nil || v == nil {
+		return nil, err
+	}
+	out := make([][]byte, n)
+	for i := range out {
+		var l C.size_t
+		p := C.pbw_value_get_bytes(C.pbw_value_at(v, C.size_t(i)), &l)
+		out[i] = C.GoBytes(unsafe.Pointer(p), C.int(l))
+	}
+	return out, nil
+}
+
+// GetMessageSlice reads a repeated sub-message field as views.
+func (m *Message) GetMessageSlice(name string) ([]*Message, error) {
+	f, err := m.typ.field(name)
+	if err != nil {
+		return nil, err
+	}
+	v := C.pbw_message_get_field(m.c, f)
+	if v == nil {
+		return nil, nil
+	}
+	n := int(C.pbw_value_count(v))
+	out := make([]*Message, n)
+	for i := range out {
+		sub := C.pbw_value_get_message(C.pbw_value_at(v, C.size_t(i)))
+		out[i] = &Message{typ: m.typ.subtype(f), c: sub, root: m.rootOrSelf()}
+	}
+	return out, nil
 }
 
 // Encode serializes the tree; one cgo downcall plus one heap copy out.

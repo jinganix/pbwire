@@ -151,12 +151,17 @@ twice.
 - **No conformance testee.** The official suite drives the C core through
   `conformance/testee.c`; an Objective-C testee would test the same core code and
   the wrapper adds no wire behavior of its own.
-- **No repeated/map field helpers.** `valueForField:` returns `nil` and
-  `setValue:forField:` fails with `PBW_ERR_INVALID` for a repeated field; the C
-  ABI's `pbw_value_at()` list walk is what a caller needs when it wants the whole
-  list, and no caller here asked for it yet.
-- **No JSON/text format or context/pool APIs** on the wrapper; call
-  `pbw_json_print` / `pbw_decode_ctx` from Objective-C if you need them.
+- **Repeated/map field helpers.** `valuesForField:` / `setValues:forField:error:`
+  move whole arrays; `entriesForField:` / `setEntries:forField:error:` move a
+  map as an `NSDictionary` (entry keys are `NSString` for string keys and
+  `NSNumber` otherwise). A repeated message that is not a map reads no
+  dictionary.
+- **JSON/text format and context/pool APIs.** `-JSONString` /
+  `-parseJSONString:error:` and `-textFormat` / `-parseTextFormat:error:`
+  round-trip through the C mapping; `PBWContext` (with `retainCap`) backs
+  `-decode:withContext:error:` / `-encodeWithContext:error:`, and `PBWPool`
+  hands out exclusive contexts (`acquire` / `releaseContext:` / `idleCount`).
+  Context messages are read-only and die on the next reset.
 
 Known limits:
 
@@ -167,10 +172,10 @@ Known limits:
 - `float` values are stored as 32-bit floats, `double` as 64-bit; nothing is
   widened silently.
 
-## Typed models
+## Generated models
 
-`protoc-gen-pbwire-typed` (in `../typed`) generates `NSObject` subclasses with
+`protoc-gen-pbwire` (in `../../codegen`) generates `NSObject` subclasses with
 typed properties (including `NSArray` for repeated fields), enum constants and
 `-encodeWithSchema:error:` / `+decodeWithSchema:data:error:`. The committed
 output is `tests/gen/` and `examples/gen/`; `examples/roundtrip.m` assigns typed
-properties only. See `../typed/README.md`.
+properties only. See `../../codegen/README.md`.

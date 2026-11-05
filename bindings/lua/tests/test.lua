@@ -183,12 +183,14 @@ local wu = string.char(0x08, 0x01, 0x18, 99)
 ok(s2:decode(m2, wu).color == nil, "unknown closed enum drops")
 local wue = s2:encode(m2, { need = 1, color = 99 })
 ok(s2:decode(m2, wue).color == nil, "unknown closed enum re-drops")
-ok(fails(function()
-    s2:encode(m2, { need = 1, mygroup = {} })
-end), "group set fails")
+-- Groups encode like messages (START_GROUP framing) and decode to tables.
+local wge = s2:encode(m2, { need = 1, mygroup = { gv = 7 } })
 local wg = string.char(0x08, 0x01, 0x23, 0x28, 0x07, 0x24)
+ok(wge == wg, "group encode is START_GROUP framing")
 local gback = s2:decode(m2, wg)
-ok(gback.need == 1, "group bytes skipped, rest intact")
+ok(gback.need == 1, "group bytes keep the rest intact")
+ok(gback.mygroup ~= nil and gback.mygroup.gv == 7, "group decodes")
+ok(s2:encode(m2, gback) == wg, "group decode/encode byte-exact")
 
 -- Builder: build once, encode hot. Matches the table API byte for byte.
 ok(fails(function() schema:message("pbwire.lua.Nope") end),
@@ -259,6 +261,90 @@ ok(fails(function() schema:roundtrip(msg, "\255\255\255") end),
    "roundtrip malformed fails")
 ok(fails(function() schema:roundtrip("pbwire.lua.Nope", wire) end),
    "roundtrip unknown type fails")
+
+-- Groups map like messages: the same tables encode through START_GROUP
+-- framing and must equal the protoc reference bytes.
+local gschema = pbwire.loadfile("../c/tests/data/grouptest.desc")
+local gmsg = "structtest.GroupTest"
+local gfull = { inner = { x = 5, s = "g" }, item = { { v = 1 }, { v = -2 } }, id = 9 }
+local gwire = gschema:encode(gmsg, gfull)
+local gref = io.open("../c/tests/data/grouptest.bin", "rb")
+local gexpect = gref:read("*a")
+gref:close()
+ok(gwire == gexpect, "group encode equals protoc reference bytes")
+local gback = gschema:decode(gmsg, gexpect)
+ok(gback.inner.x == 5 and gback.inner.s == "g", "singular group decodes")
+ok(#gback.item == 2 and gback.item[1].v == 1 and gback.item[2].v == -2,
+   "repeated group decodes")
+ok(gback.id == 9, "sibling field decodes")
+ok(gschema:encode(gmsg, gback) == gexpect, "group decode/encode byte-exact")
+
+-- JSON/text mapping through the binding (tables and builders agree).
+local jsample = { i32 = -7, name = "alice" }
+local jstr = schema:to_json(msg, jsample)
+ok(jstr == '{"i32":-7,"name":"alice"}', "to_json prints the mapping")
+local jback = schema:from_json(msg, jstr)
+ok(jback.i32 == -7 and jback.name == "alice", "from_json round trip")
+ok(schema:encode(msg, jback) == schema:encode(msg, jsample),
+   "JSON round trip is wire-equal")
+ok(fails(function() schema:from_json(msg, "{oops") end),
+   "malformed JSON fails")
+ok(fails(function() schema:from_json(msg, '{"nope":1}') end),
+   "unknown JSON field fails")
+ok(schema:from_json(msg, '{"nope":1}', true).name == nil,
+   "ignored unknown JSON field reads as absent")
+local tstr = schema:to_text(msg, jsample)
+ok(tstr:find('name: "alice"', 1, true) ~= nil, "to_text prints")
+-- Builder to_text drops unknown fields on request (conformance flag).
+local wbuilder = schema:message(msg)
+wbuilder:set({ name = "alice" })
+local wunknown = schema:encode(msg, { name = "alice" }) .. "\152\006\007"
+local wparsed = schema:parse_binary(msg, wunknown)
+ok(wparsed:to_text():find("99", 1, true) ~= nil,
+   "builder to_text prints unknowns by default")
+ok(wparsed:to_text(false):find("99", 1, true) == nil,
+   "builder to_text(false) drops unknowns")
+local tback = schema:from_text(msg, tstr)
+ok(schema:encode(msg, tback) == schema:encode(msg, jsample),
+   "text round trip is wire-equal")
+ok(fails(function() schema:from_text(msg, "name: ") end),
+   "malformed text fails")
+-- Builders parse exactly (64-bit integers past 2^53 survive, unlike tables).
+local big = schema:parse_json(msg, '{"u64":18446744073709551615}')
+ok(big:to_json():find("18446744073709551615", 1, true) ~= nil,
+   "builder JSON keeps uint64 max")
+local bigbin = schema:parse_binary(msg, schema:encode(msg, { u64 = -1 }))
+ok(bigbin:to_json():find("18446744073709551615", 1, true) ~= nil,
+   "builder binary keeps uint64 max")
+-- Deterministic encoding sorts map entries by key.
+local mschema = pbwire.loadfile("../c/tests/data/maptest.desc")
+local mmsg = "structtest.Maps"
+local unordered = "\010\005\008\002\018\001b\010\005\008\001\018\001a"
+local det = mschema:encode_deterministic(mmsg, mschema:decode(mmsg, unordered))
+ok(det == "\010\005\008\001\018\001a\010\005\008\002\018\001b",
+   "deterministic encoding sorts map entries")
+-- Delimited frames concatenate and decode in a loop.
+local f1 = schema:encode_delimited(msg, jsample)
+local f2 = schema:encode_delimited(msg, { name = "bob" })
+local frames = f1 .. f2
+local at, names = 1, {}
+while at <= #frames do
+    local m, read = schema:decode_delimited(msg, frames:sub(at))
+    ok(read > 0, "frame reports its size")
+    names[#names + 1] = m.name
+    at = at + read
+end
+ok(#names == 2 and names[1] == "alice" and names[2] == "bob",
+   "delimited frames decode in order")
+ok(fails(function() schema:decode_delimited(msg, frames:sub(1, 2)) end),
+   "truncated frame fails")
+-- Unknown fields survive byte for byte through roundtrip (gateway
+-- passthrough); tables carry known fields only, like the JSON mapping.
+local with_unknown = wire .. "\152\006\007"
+ok(schema:roundtrip(msg, with_unknown) == with_unknown,
+   "unknown fields survive byte round trip")
+local kept = schema:decode(msg, with_unknown)
+ok(kept.name == back.name, "known fields survive table round trip")
 
 ok(eq(failures, 0) and true or true, "summary")
 print(failures == 0 and "all tests passed" or (failures .. " failures"))

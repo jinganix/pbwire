@@ -232,3 +232,49 @@ pbw_encode_delimited(const pbw_message *msg, uint8_t **out, size_t *len)
     *len = prefix + body_len;
     return PBW_OK;
 }
+
+pbw_status
+pbw_decode_delimited_limits(const pbw_descriptor *desc, const void *buf,
+                            size_t len, const pbw_limits *limits,
+                            pbw_message **out, size_t *consumed)
+{
+    const uint8_t *base;
+    size_t frame = 0;
+    size_t used = 0;
+    pbw_status status;
+
+    if (out != NULL) {
+        *out = NULL;
+    }
+    if (consumed != NULL) {
+        *consumed = 0;
+    }
+    if (desc == NULL || out == NULL || consumed == NULL ||
+        (buf == NULL && len > 0)) {
+        return PBW_ERR_INVALID;
+    }
+    if (len == 0) {
+        return PBW_ERR_INVALID;
+    }
+    base = (const uint8_t *)buf;
+    if (!pbw_len_read(base, base + len, &frame, &used)) {
+        return PBW_ERR_INVALID;
+    }
+    if (used > len || frame > len - used) {
+        /* A truncated frame has nowhere to wait for more bytes one-shot. */
+        return PBW_ERR_INVALID;
+    }
+    status = pbw_decode_limits(desc, base + used, frame, limits, out);
+    if (status != PBW_OK) {
+        return status;
+    }
+    *consumed = used + frame;
+    return PBW_OK;
+}
+
+pbw_status
+pbw_decode_delimited(const pbw_descriptor *desc, const void *buf, size_t len,
+                     pbw_message **out, size_t *consumed)
+{
+    return pbw_decode_delimited_limits(desc, buf, len, NULL, out, consumed);
+}

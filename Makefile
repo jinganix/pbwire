@@ -26,7 +26,7 @@ ifeq ($(UNAME_S),Darwin)
 SHLIB := build/libpbwire.1.dylib
 SHLIB_LINK := build/libpbwire.dylib
 SHLIB_FLAGS := -dynamiclib -install_name @rpath/libpbwire.1.dylib \
-	-compatibility_version 1 -current_version 0.1.7
+	-compatibility_version 1 -current_version 0.1.8
 else
 SHLIB := build/libpbwire.so.1
 SHLIB_LINK := build/libpbwire.so
@@ -123,6 +123,18 @@ $(CPP_TEST_BIN): bindings/cpp/tests/roundtrip.cc $(CPP_RUNTIME_OBJ) $(LIB) | bui
 test-cpp: $(CPP_TEST_BIN)
 	./$(CPP_TEST_BIN)
 
+COMPAT_ORACLE_PB := bindings/cpp/tests/gen_oracle/matrix3.pb.cc
+bindings/cpp/tests/gen_oracle/%.pb.cc: bindings/c/tests/data/%.proto
+	@mkdir -p bindings/cpp/tests/gen_oracle
+	$(PROTOC) -Ibindings/c/tests/data --cpp_out=bindings/cpp/tests/gen_oracle $<
+COMPAT_ORACLE_BIN := build/compat_oracle
+$(COMPAT_ORACLE_BIN): bindings/cpp/tests/compat_oracle.cc $(COMPAT_ORACLE_PB) $(CPP_RUNTIME_OBJ) $(LIB) | build
+	$(BENCH_CXX) -std=c++17 -O2 -pthread -Iinclude -Ibindings/c/runtime \
+		-Ibindings/c/tests -Ibindings/cpp/tests/gen_oracle $(PB_CXXFLAGS) \
+		-o $@ bindings/cpp/tests/compat_oracle.cc $(COMPAT_ORACLE_PB) $(CPP_RUNTIME_OBJ) $(LIB) $(PB_LIBS)
+compat-oracle: $(COMPAT_ORACLE_BIN)
+	./$(COMPAT_ORACLE_BIN)
+
 $(CPP_EXAMPLE_BIN): bindings/cpp/examples/addressbook.cc $(CPP_RUNTIME_OBJ) $(LIB) | build
 	$(CXX) $(CXXFLAGS) $(CPPFLAGS) -Ibindings/c/runtime -Ibindings/c/examples -o $@ bindings/cpp/examples/addressbook.cc $(CPP_RUNTIME_OBJ) $(LIB)
 
@@ -158,7 +170,10 @@ $(CONFORMANCE_DESC): | build
 	@test -d "$(PROTOBUF_SRC)/src" || { \
 		echo "protobuf checkout not found: $(PROTOBUF_SRC)"; \
 		echo "run 'make conformance-setup' first (clones once, then reuses it)"; exit 1; }
-	cd $(PROTOBUF_SRC) && $(PROTOC) -Isrc -I. -Ieditions/golden --include_imports \
+	# No cd: PROTOC may be relative to the repo root (CI exports an
+	# absolute path, developers often rely on PATH), and protoc resolves
+	# the inputs through -I either way.
+	$(PROTOC) -I$(PROTOBUF_SRC)/src -I$(PROTOBUF_SRC) -I$(PROTOBUF_SRC)/editions/golden --include_imports \
 		--descriptor_set_out=$(CURDIR)/$(CONFORMANCE_DESC) \
 		google/protobuf/test_messages_proto3.proto \
 		google/protobuf/test_messages_proto2.proto \
@@ -179,14 +194,24 @@ conformance-python: python-bind $(CONFORMANCE_DESC)
 		$(PY_ABS) bindings/python/conformance/testee.py \
 		$(CURDIR)/$(CONFORMANCE_DESC)
 
-# Same suite through the Lua binding (binary wire format; JSON/text answer
-# "skipped" because the binding has no printers).
+# Same suite through the Lua binding (binary, JSON and text; only JSPB
+# answers "skipped").
 conformance-lua: $(CONFORMANCE_DESC) lua-bind
 	@test -x "$(CONFORMANCE_RUNNER)" || { \
 		echo "conformance_test_runner not found: $(CONFORMANCE_RUNNER)"; \
 		echo "run 'make conformance-setup' first"; exit 1; }
 	$(CONFORMANCE_RUNNER) --failure_list $(CURDIR)/conformance/failure_list_pbwire.txt \
 		$(LUA_ABS) bindings/lua/conformance/testee.lua \
+		$(CURDIR)/$(CONFORMANCE_DESC)
+
+# Same suite through the R binding (binary, JSON and text; only JSPB
+# answers "skipped").
+conformance-r: $(CONFORMANCE_DESC) r-bind
+	@test -x "$(CONFORMANCE_RUNNER)" || { \
+		echo "conformance_test_runner not found: $(CONFORMANCE_RUNNER)"; \
+		echo "run 'make conformance-setup' first"; exit 1; }
+	$(CONFORMANCE_RUNNER) --failure_list $(CURDIR)/conformance/failure_list_pbwire.txt \
+		$(RSCRIPT_ABS) bindings/r/conformance/testee.R \
 		$(CURDIR)/$(CONFORMANCE_DESC)
 conformance-ruby: $(CONFORMANCE_DESC) ruby-bind
 	@test -x "$(CONFORMANCE_RUNNER)" || { \
@@ -352,6 +377,19 @@ lua-test: lua-bind
 node-test:
 	./bindings/node/build.sh
 
+NODE ?= node
+NODE_ABS := $(shell command -v $(NODE) 2>/dev/null || echo $(NODE))
+
+# Same suite through the Node binding (binary, JSON and text; only JSPB
+# answers "skipped").
+conformance-node: $(CONFORMANCE_DESC) node-test
+	@test -x "$(CONFORMANCE_RUNNER)" || { \
+		echo "conformance_test_runner not found: $(CONFORMANCE_RUNNER)"; \
+		echo "run 'make conformance-setup' first"; exit 1; }
+	$(CONFORMANCE_RUNNER) --failure_list $(CURDIR)/conformance/failure_list_pbwire.txt \
+		$(NODE_ABS) bindings/node/conformance/testee.js \
+		$(CURDIR)/$(CONFORMANCE_DESC)
+
 objc-test:
 	./bindings/objc/build.sh test
 
@@ -381,7 +419,7 @@ php-ext:
 
 php-ext-test: php-ext shared
 	$(PHP) -d extension=$(CURDIR)/bindings/php/ext/modules/pbwire.so bindings/php/tests/test.php
-	$(PHP) -d extension=$(CURDIR)/bindings/php/ext/modules/pbwire.so bindings/php/tests/typed_test.php
+	$(PHP) -d extension=$(CURDIR)/bindings/php/ext/modules/pbwire.so bindings/php/tests/generated_test.php
 
 dart-test: shared
 	cd bindings/dart && $(DART) pub get >/dev/null
@@ -392,6 +430,41 @@ rust-test: shared
 
 csharp-test: shared
 	cd bindings/csharp && $(DOTNET) run --project tests -- ../c/tests/data/matrix3.desc
+
+SWIFT ?= swift
+SCALAC ?= scalac
+ELIXIR ?= elixir
+ZIG ?= zig
+CLOJURE ?= clojure
+JULIA ?= julia
+RSCRIPT ?= Rscript
+RSCRIPT_ABS := $(shell command -v $(RSCRIPT) 2>/dev/null || echo $(RSCRIPT))
+r-bind:
+	cd bindings/r && ./build.sh
+
+swift-test: $(LIB)
+	cd bindings/swift && ./build.sh test
+
+scala-test: shared
+	cd bindings/scala && ./build.sh
+
+elixir-test:
+	cd bindings/elixir && make test
+
+zig-test:
+	cd bindings/zig && $(ZIG) build test
+
+fsharp-test: shared
+	cd bindings/fsharp && $(DOTNET) run --project tests -- ../c/tests/data/matrix3.desc
+
+clojure-test:
+	cd bindings/clojure && ./build.sh
+
+julia-test:
+	cd bindings/julia && $(JULIA) --project=runtime tests/runtests.jl
+
+r-test: r-bind
+	cd bindings/r && $(RSCRIPT) tests/test_pbwire.R && $(RSCRIPT) tests/test.R
 
 # Each binding benchmarks itself against its language's official runtime on
 # matrix3.proto (same four tiers as `bench`/`bench-c`). Optional like those:
@@ -428,6 +501,30 @@ rust-bench:
 csharp-bench:
 	./scripts/bench-run.sh --binding csharp -- ./bindings/csharp/benchmarks/bench.sh
 
+swift-bench:
+	./scripts/bench-run.sh --binding swift -- ./bindings/swift/benchmarks/bench.sh
+
+scala-bench:
+	./scripts/bench-run.sh --binding scala -- ./bindings/scala/benchmarks/bench.sh
+
+elixir-bench:
+	./scripts/bench-run.sh --binding elixir -- make -C bindings/elixir bench
+
+zig-bench:
+	./scripts/bench-run.sh --binding zig -- ./bindings/zig/benchmarks/bench.sh
+
+fsharp-bench:
+	./scripts/bench-run.sh --binding fsharp -- ./bindings/fsharp/benchmarks/bench.sh
+
+clojure-bench:
+	./scripts/bench-run.sh --binding clojure -- ./bindings/clojure/benchmarks/bench.sh
+
+julia-bench:
+	./scripts/bench-run.sh --binding julia -- $(JULIA) --project=bindings/julia/runtime bindings/julia/benchmarks/bench.jl
+
+r-bench:
+	./scripts/bench-run.sh --binding r -- ./bindings/r/benchmarks/bench.sh
+
 # The benchmark compares against the official Python runtime, so it needs
 # protoc --python_out plus `pip install protobuf`.
 bindings/python/benchmarks/gen/matrix3_pb2.py: bindings/c/tests/data/matrix3.proto
@@ -440,22 +537,22 @@ python-bench: python-bind bindings/python/benchmarks/gen/matrix3_pb2.py
 difftest: $(BENCH_BIN)
 	./$(BENCH_BIN) difftest
 
-# Typed message models (bindings/typed): one protoc plugin that emits typed
+# Generated message models (codegen): one protoc plugin that emits generated
 # message definitions per language, on top of each binding's dynamic API (no
-# second wire implementation). `typed-gen` regenerates the committed models,
-# `typed-test` runs every binding's typed test, `typed-conformance` generates
+# second wire implementation). `codegen` regenerates the committed models,
+# `codegen-test` runs every binding's generated test, `codegen-conformance` generates
 # models for the real conformance proto (needs `make conformance-setup`).
-typed-gen:
-	$(MAKE) -C bindings/typed gen
+codegen:
+	$(MAKE) -C codegen gen
 
-typed-test:
-	$(MAKE) -C bindings/typed test
+codegen-test:
+	$(MAKE) -C codegen test
 
-typed-conformance:
-	$(MAKE) -C bindings/typed conformance
+codegen-conformance:
+	$(MAKE) -C codegen conformance
 
 clean:
-	rm -rf build bindings/typed/build bench/gen bindings/go/benchmarks/gen \
+	rm -rf build codegen/build bench/gen bindings/go/benchmarks/gen \
 		bindings/java/benchmarks/gen bindings/java/benchmarks/out \
 		bindings/node/benchmarks/gen bindings/ruby/benchmarks/gen \
 		bindings/ruby/lib/pbwire_ext.* bindings/objc/benchmarks/gen \
@@ -465,12 +562,15 @@ clean:
 		bindings/rust/target bindings/rust/benchmarks/gen \
 	bindings/lua/pbwire.so bindings/lua/pbwire.o
 
-.PHONY: all test examples format format-check bench bench-c erlang-bench \
-	python-bind python-test python-bench difftest conformance conformance-python \
-	conformance-ruby conformance-java conformance-lua ruby-bind java-test ruby-test node-test objc-test \
+.PHONY: all test examples shared format format-check bench bench-c erlang-test erlang-bench \
+	python-bind python-test python-bench difftest conformance conformance-setup conformance-python \
+	conformance-ruby conformance-java conformance-lua conformance-r conformance-node ruby-bind java-test ruby-test node-test objc-test r-bind \
 	lua-bind lua-test lua-bench \
-	java-bench ruby-bench node-bench objc-bench \
+	java-bench ruby-bench node-bench objc-bench go-bench \
+	kotlin-test php-test dart-test rust-test csharp-test \
 	kotlin-test php-test dart-test rust-test csharp-test \
 	kotlin-bench php-bench dart-bench rust-bench csharp-bench \
+	swift-test scala-test elixir-test zig-test fsharp-test clojure-test julia-test r-test \
+	swift-bench scala-bench elixir-bench zig-bench fsharp-bench clojure-bench julia-bench r-bench \
 	desc-fixture test-cpp clean plugin-c go-test \
-	typed-gen typed-test typed-conformance
+	codegen codegen-test codegen-conformance

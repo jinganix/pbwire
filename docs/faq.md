@@ -4,7 +4,7 @@
 - [Does it need `protoc` at runtime?](#does-it-need-protoc-at-runtime)
 - [Which Protobuf syntaxes are supported?](#which-protobuf-syntaxes-are-supported)
 - [Does pbwire support JSON or text format?](#does-pbwire-support-json-or-text-format)
-- [Can I use it from Python, Erlang, Go, Java, Ruby, Node, Objective-C, Kotlin, PHP, Dart, Rust or C#?](#can-i-use-it-from-python-erlang-go-java-ruby-node-objective-c-kotlin-php-dart-rust-or-c)
+- [Can I use it from another language?](#can-i-use-it-from-another-language)
 - [When should I *not* use pbwire?](#when-should-i-not-use-pbwire)
 - [Is it thread-safe?](#is-it-thread-safe)
 - [What happens to fields the schema does not declare?](#what-happens-to-fields-the-schema-does-not-declare)
@@ -45,10 +45,9 @@ verdicts as the reference parser on 40,000 mutated inputs, all well-known types,
 extensions as `[full.name]`, strict base64 and number rules). See
 [guide.md](guide.md).
 
-### Can I use it from Python, Erlang, Go, Java, Ruby, Node, Objective-C, Kotlin, PHP, Dart, Rust or C#?
+### Can I use it from another language?
 
-Yes — that is the intended use. Every language the official `protoc` supports
-has a binding under [`bindings/`](../bindings/README.md), each with a round-trip
+Yes — that is the intended use. All twenty-three bindings live under [`bindings/`](../bindings/README.md), each with a round-trip
 test, a benchmark against its official runtime and, where it applies, the
 conformance testee. The per-language pain point each one removes is the
 [table in bindings/README.md](../bindings/README.md#what-each-binding-solves);
@@ -70,10 +69,19 @@ the short version:
 | Rust | links `libpbwire.a` statically | `FileDescriptorSet` |
 | Go | cgo dynamic binding over the C core | `FileDescriptorSet` (hot-swappable) |
 | Erlang | NIF; gpb records via `pbwire:load_cache/1` | gpb's `get_msg_defs/0` |
+| Lua | C module over the core, tables in/out | `FileDescriptorSet` |
+| Swift | SwiftPM package, FFI host over the C ABI | `FileDescriptorSet` |
+| Scala | the Java runtime + a DSL | `FileDescriptorSet` |
+| Elixir | struct translation over the shared NIF | `elixir-protobuf` structs |
+| Zig | static link, core sources compiled in | `FileDescriptorSet` |
+| F# | facade over the C# project | `FileDescriptorSet` |
+| Clojure | persistent maps over the Java runtime | `FileDescriptorSet` |
+| Julia | `dlopen` + `ccall` FFI host | `FileDescriptorSet` |
+| R | C extension, named lists in/out | `FileDescriptorSet` |
 
 The C bindings check `PBW_ABI_VERSION` at load time, so a library built from a
 newer, incompatible tree fails fast instead of corrupting memory. The C ABI is
-the product; richer host bindings live on top of it. `bindings/typed` adds typed
+the product; richer host bindings live on top of it. `codegen` adds generated
 message models per language over the same dynamic API.
 
 ### When should I *not* use pbwire?
@@ -109,7 +117,7 @@ so the in-process `pbw_ctx` API is 1.1-1.7x the generated codec on every tier.
 The gap only shows up in two places: the plain `pbw_encode` API, which allocates
 a tree per call (about parity with generated code at the small tiers, either way
 within run noise), and a dynamic codec meeting generated straight-line writes on
-a tiny message (Java, 0.75x at 136 B). Numbers
+a tiny message (Java/Kotlin, 0.69x/0.82x at 136 B). Numbers
 and the per-language
 reasons are in [BENCHMARKS.md](../BENCHMARKS.md).
 

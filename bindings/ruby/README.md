@@ -1,10 +1,33 @@
 # pbwire Ruby binding
 
 `lib/pbwire.rb` loads a compiled C extension (`ext/pbwire_ext/`) that links the
-pbwire C core statically. No gems, no `protoc` plugin, no generated code: a
-`FileDescriptorSet` (`protoc --descriptor_set_out`) is loaded at runtime and
-drives every field lookup, so the field numbers, types and presence rules are the
-descriptor's, not a hand-written copy.
+pbwire C core statically. No gems at run time.
+
+Most code never touches the dynamic surface: generate a gem-shaped facade
+once (`make -C codegen gen-ruby`) and use it like the library it
+mirrors — same `new`/`encode`/`decode`/`to_h` calls, same observable
+behavior, but the wire format stays in the C core:
+
+```ruby
+require 'addressbook'   # generated; embeds its own FileDescriptorSet
+
+person = Pbwire::Gen::Tutorial_Person.new(name: 'alice', id: 7)
+Pbwire::Gen::Tutorial_Person.encode(person)  # => binary String, no schema
+back = Pbwire::Gen::Tutorial_Person.decode(wire)
+back.name                                     # => "alice"
+back.to_h                                     # => {name: "alice", id: 7, ...}
+back.has_email?                               # => false
+```
+
+Presence follows the value: a non-nil assignment marks the field, so
+`new(opt_i32: 0)` is written while `new` leaves it absent; oneof keeps
+only its last member. `to_h` uses proto-name symbols and renders enums
+as name symbols, exactly like the gem. The one deliberate difference:
+validation happens at the encode boundary (plain Ruby objects until
+then), where a mistyped field raises `TypeError`.
+
+The dynamic API is still there for gateways and schemas known only at
+runtime:
 
 ```ruby
 require 'pbwire'
@@ -135,17 +158,19 @@ parent is closed.
 
 Repeated scalars (packed or unpacked on the wire), repeated strings/bytes and
 repeated messages are supported; a map field reads as an Array of entry
-messages. Groups (proto2 legacy) are not exposed: `get`/`set` raise, and the wire
-view keeps their bytes as unknown fields (so a round trip still preserves them).
-Extensions are read by number, not name.
+messages. Groups (proto2 legacy) map like messages (START_GROUP framing on
+the wire). Extensions are read by number, not name.
 
 ## Deliberately skipped
 
 - **No `protoc` plugin, no codegen.** The descriptor set is the schema; nothing
   is generated and there is no hand-built schema path.
-- **No JSON/text format, no deterministic encoding, no streaming.** All of those
-  exist in the C API and other bindings; this one stays the smallest thing that
-  reads and writes binary messages.
+- **Formats beyond binary/JSON/text.** `to_json`/`from_json` (with an
+  optional ignore-unknown flag), `to_text`/`from_text`, deterministic
+  encoding (`encode_deterministic`, map entries sorted by key) and delimited
+  framing (`encode_delimited`, `decode_delimited` returning `[message, read]`)
+  wrap the C API; `to_builder` materializes a decoded view into a canonical
+  tree. Unknown fields round-trip byte for byte in every form.
 
 ## Benchmark
 
@@ -183,17 +208,23 @@ The win is architectural, not a micro-optimization:
 
 ## Conformance
 
-`conformance/testee.rb` drives the binary wire format of the official
-`conformance_test_runner` through this binding (`make conformance-ruby`, reusing
-the cached protobuf checkout from `make conformance-setup`):
+`conformance/testee.rb` drives the binary, JSON and text formats of the
+official `conformance_test_runner` through this binding
+(`make conformance-ruby`, reusing the cached protobuf checkout from
+`make conformance-setup`):
 
 ```
-CONFORMANCE SUITE PASSED: 1199 successes, 1403 skipped, 0 expected failures,
+CONFORMANCE SUITE PASSED: 2744 successes, 0 skipped, 0 expected failures,
+0 unexpected failures.
+CONFORMANCE SUITE PASSED: 445 successes, 0 skipped, 0 expected failures,
 0 unexpected failures.
 ```
 
-JSON/text/JSPB requests answer `skipped` (the binding has no printers); the
-binary verdicts match the reference implementation exactly.
+Only JSPB answers `skipped`; every other verdict matches the reference
+implementation exactly. (The binary suite runs without the shared failure
+list: the wire reader's validation rejects the overlong tag varints the
+core tree decoder truncates, so the two listed cases parse-fail like the
+reference. Text output honors the runner's `print_unknown_fields` flag.)
 
 ## Layout
 
@@ -205,7 +236,7 @@ binary verdicts match the reference implementation exactly.
 | example | [`examples/roundtrip.rb`](examples/roundtrip.rb) |
 | self-check | [`test/test_pbwire.rb`](test/test_pbwire.rb) |
 | benchmark | [`benchmarks/bench.rb`](benchmarks/bench.rb) | the four standard tiers against the `google-protobuf` gem |
-| conformance | [`conformance/testee.rb`](conformance/testee.rb) | binary wire format through the official runner |
+| conformance | [`conformance/testee.rb`](conformance/testee.rb) | binary, JSON and text through the official runner |
 | fixture | [`test/data/sample.proto`](test/data/sample.proto) and the checked-in `sample.desc` |
 
 Regenerate the descriptor set after editing the fixture (it is checked in, so the
@@ -215,9 +246,9 @@ tests need no `protoc`):
 (cd bindings/ruby/test/data && protoc --descriptor_set_out=sample.desc sample.proto)
 ```
 
-## Typed models
+## Generated models
 
-`protoc-gen-pbwire-typed` (in `../typed`) generates classes with keyword-argument
+`protoc-gen-pbwire` (in `../../codegen`) generates classes with keyword-argument
 constructors and accessors, `#encode(schema)` and `.decode(schema, wire)`. The
 committed output is `test/gen/` and `examples/gen/`; `examples/roundtrip.rb`
-uses typed assignments only. See `../typed/README.md`.
+uses typed assignments only. See `../../codegen/README.md`.

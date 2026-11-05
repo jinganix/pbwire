@@ -110,6 +110,8 @@ wire_type(pbw_type type)
     case PBW_TYPE_BYTES:
     case PBW_TYPE_MESSAGE:
         return 2;
+    case PBW_TYPE_GROUP:
+        return 3;
     default:
         return 0;
     }
@@ -343,6 +345,40 @@ rd_skip(rdr *r, uint32_t fnum, unsigned wt, unsigned depth)
     }
 }
 
+/* Body of a group field: bytes from here to the matching END_GROUP tag.
+ * Nested groups (known or skipped) are consumed whole by rd_skip; an
+ * END_GROUP for another number is malformed. */
+static int
+rd_group_body(rdr *r, uint32_t fnum, unsigned depth, const uint8_t **body,
+              size_t *body_len)
+{
+    const uint8_t *start = r->p;
+
+    if (depth >= PY_MAX_DEPTH) {
+        return 0;
+    }
+    for (;;) {
+        const uint8_t *tag_start = r->p;
+        uint32_t inner_fnum;
+        unsigned inner_wt;
+
+        if (!rd_tag(r, &inner_fnum, &inner_wt)) {
+            return 0;
+        }
+        if (inner_wt == 4) {
+            if (inner_fnum != fnum) {
+                return 0;
+            }
+            *body = start;
+            *body_len = (size_t)(tag_start - start);
+            return 1;
+        }
+        if (!rd_skip(r, inner_fnum, inner_wt, depth + 1)) {
+            return 0;
+        }
+    }
+}
+
 /* --------------------------------------------------------------- types */
 
 typedef struct {
@@ -354,9 +390,8 @@ typedef struct {
     uint8_t repeated;
     uint8_t packed;
     uint8_t required;
-    uint8_t unsupported; /* group: skipped on decode, rejected on encode */
-    uint32_t oneof;      /* 1-based oneof group, 0 = not in a oneof */
-    PyObject *sub;       /* owned MessageType for MESSAGE fields */
+    uint32_t oneof; /* 1-based oneof group, 0 = not in a oneof */
+    PyObject *sub;  /* owned MessageType for MESSAGE fields */
 } field_t;
 
 typedef struct {
@@ -581,12 +616,11 @@ static int enc_message(MessageType *mt, PyObject *obj, sbuf *b, unsigned depth);
 static int
 enc_field(field_t *f, PyObject *v, sbuf *b, unsigned depth)
 {
-    if (f->unsupported) {
-        PyErr_Format(PyExc_TypeError, "field %s: groups are unsupported",
-                     f->cname);
-        return 0;
-    }
-    if (f->type == PBW_TYPE_MESSAGE) {
+    /* Messages and groups share the body encoder: messages frame it with a
+     * length prefix, groups with START_GROUP/END_GROUP tags. */
+    if (f->type == PBW_TYPE_MESSAGE || f->type == PBW_TYPE_GROUP) {
+        int group = f->type == PBW_TYPE_GROUP;
+
         if (f->repeated) {
             PyObject *seq = SEQ_FAST(v, "repeated field needs a sequence");
             Py_ssize_t i, n;
@@ -596,31 +630,37 @@ enc_field(field_t *f, PyObject *v, sbuf *b, unsigned depth)
             }
             n = SEQ_SIZE(seq);
             for (i = 0; i < n; i++) {
-                size_t mark;
+                size_t mark = 0;
 
                 /* The sub-message may grow the buffer: reserve per element. */
-                if (!sb_reserve(b, 6)) {
+                if (!sb_reserve(b, group ? 10u : 6u)) {
                     Py_DECREF(seq);
                     return 0;
                 }
-                sb_tag_raw(b, f->number, 2);
-                mark = b->len;
-                b->data[b->len++] = 0;
+                sb_tag_raw(b, f->number, group ? 3u : 2u);
+                if (!group) {
+                    mark = b->len;
+                    b->data[b->len++] = 0;
+                }
                 if (!enc_message((MessageType *)f->sub, SEQ_ITEM(seq, i), b,
                                  depth + 1)) {
                     Py_DECREF(seq);
                     return 0;
                 }
-                sb_len_end(b, mark);
+                if (group) {
+                    sb_tag_raw(b, f->number, 4u);
+                } else {
+                    sb_len_end(b, mark);
+                }
             }
             Py_DECREF(seq);
             return 1;
         }
-        if (!sb_reserve(b, 6)) {
+        if (!sb_reserve(b, group ? 10u : 6u)) {
             return 0;
         }
-        sb_tag_raw(b, f->number, 2);
-        {
+        sb_tag_raw(b, f->number, group ? 3u : 2u);
+        if (!group) {
             size_t mark = b->len;
 
             b->data[b->len++] = 0;
@@ -628,6 +668,11 @@ enc_field(field_t *f, PyObject *v, sbuf *b, unsigned depth)
                 return 0;
             }
             sb_len_end(b, mark);
+        } else {
+            if (!enc_message((MessageType *)f->sub, v, b, depth + 1)) {
+                return 0;
+            }
+            sb_tag_raw(b, f->number, 4u);
         }
         return 1;
     }
@@ -987,7 +1032,7 @@ store_singular(MessageType *mt, PyObject *dict, size_t fidx, PyObject *value)
         Py_DECREF(value);
         return 0;
     }
-    if (f->type == PBW_TYPE_MESSAGE) {
+    if (f->type == PBW_TYPE_MESSAGE || f->type == PBW_TYPE_GROUP) {
         PyObject *prev = PyDict_GetItemWithError(dict, f->name);
 
         if (prev == NULL && PyErr_Occurred()) {
@@ -1070,11 +1115,35 @@ dec_message(MessageType *mt, const uint8_t *wire, size_t wire_len,
                 break;
             }
         }
-        if (f == NULL || f->unsupported ||
+        if (f == NULL ||
             (wt != f->wire && !(wt == 2 && f->repeated &&
                                 packable((pbw_type)f->type)))) {
             if (!rd_skip(&r, fnum, wt, depth)) {
                 PyErr_SetString(PyExc_ValueError, "truncated field");
+                goto fail;
+            }
+            continue;
+        }
+
+        if (f->type == PBW_TYPE_GROUP) {
+            const uint8_t *body;
+            size_t body_len;
+            PyObject *value;
+
+            if (!rd_group_body(&r, fnum, depth, &body, &body_len)) {
+                PyErr_SetString(PyExc_ValueError, "truncated field");
+                goto fail;
+            }
+            value = dec_message((MessageType *)f->sub, body, body_len,
+                                depth + 1);
+            if (value == NULL) {
+                goto fail;
+            }
+            if (f->repeated) {
+                if (!append_list(dict, &lists[fidx], f->name, value)) {
+                    goto fail;
+                }
+            } else if (!store_singular(mt, dict, fidx, value)) {
                 goto fail;
             }
             continue;
@@ -1409,11 +1478,32 @@ scan_message(Message *m, MessageType *mt, const uint8_t *data, size_t off,
                 break;
             }
         }
-        if (f == NULL || f->unsupported ||
+        if (f == NULL ||
             (wt != f->wire &&
              !(wt == 2 && f->repeated && packable((pbw_type)f->type)))) {
             if (!rd_skip(&r, fnum, wt, depth)) {
                 PyErr_SetString(PyExc_ValueError, "truncated field");
+                goto fail;
+            }
+            continue;
+        }
+        if (f->type == PBW_TYPE_GROUP) {
+            const uint8_t *body;
+            size_t body_len;
+
+            if (!rd_group_body(&r, fnum, depth, &body, &body_len) ||
+                (uint64_t)(body - data) > 0xffffffffull ||
+                (uint64_t)body_len > 0xffffffffull) {
+                PyErr_SetString(PyExc_ValueError, "truncated field");
+                goto fail;
+            }
+            if (!scan_message(NULL, (MessageType *)f->sub, body, 0,
+                              body_len, depth + 1)) {
+                goto fail;
+            }
+            if (m != NULL &&
+                !msg_add(m, mt, f, (uint32_t)(body - data),
+                         (uint32_t)body_len, 1, oneof_last)) {
                 goto fail;
             }
             continue;
@@ -1684,7 +1774,7 @@ field_value(Message *m, uint32_t fidx)
         if (i < 0) {
             Py_RETURN_NONE;
         }
-        if (f->type == PBW_TYPE_MESSAGE) {
+        if (f->type == PBW_TYPE_MESSAGE || f->type == PBW_TYPE_GROUP) {
             if (slices_of(m, fidx) > 1) {
                 return joined_message(m, f, fidx);
             }
@@ -1699,8 +1789,8 @@ field_value(Message *m, uint32_t fidx)
         if (n == 0) {
             Py_RETURN_NONE;
         }
-        if (f->type == PBW_TYPE_MESSAGE || f->type == PBW_TYPE_STRING ||
-            f->type == PBW_TYPE_BYTES) {
+        if (f->type == PBW_TYPE_MESSAGE || f->type == PBW_TYPE_GROUP ||
+            f->type == PBW_TYPE_STRING || f->type == PBW_TYPE_BYTES) {
             Py_ssize_t k = 0;
             uint32_t i;
 
@@ -1714,7 +1804,8 @@ field_value(Message *m, uint32_t fidx)
                 if (m->slices[i].fidx != fidx) {
                     continue;
                 }
-                if (f->type == PBW_TYPE_MESSAGE) {
+                if (f->type == PBW_TYPE_MESSAGE ||
+                    f->type == PBW_TYPE_GROUP) {
                     value = sub_message(m, f, m->slices[i].off,
                                         m->slices[i].len);
                 } else {
@@ -2285,7 +2376,6 @@ make_message(PyObject *schema_obj, const pbw_descriptor *desc, PyObject *cache)
         f->repeated = pbw_field_label(field) == PBW_LABEL_REPEATED;
         f->packed = pbw_field_is_packed(field) != 0;
         f->required = pbw_field_label(field) == PBW_LABEL_REQUIRED;
-        f->unsupported = f->type == PBW_TYPE_GROUP;
         f->oneof = pbw_field_oneof_index(field);
         mt->has_required |= f->required;
         if (f->oneof > mt->n_oneofs) {
@@ -2312,7 +2402,7 @@ make_message(PyObject *schema_obj, const pbw_descriptor *desc, PyObject *cache)
         const pbw_field *field = pbw_descriptor_field_at(desc, i);
         field_t *f = &mt->fields[i];
 
-        if (f->type == PBW_TYPE_MESSAGE) {
+        if (f->type == PBW_TYPE_MESSAGE || f->type == PBW_TYPE_GROUP) {
             const pbw_descriptor *sub = pbw_field_message_type(field);
 
             if (sub == NULL) {

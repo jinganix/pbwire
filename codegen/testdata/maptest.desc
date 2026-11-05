@@ -1,0 +1,22 @@
+
+Ä
+maptest.protospectest"4
+MapValue
+name (	Rname
+value (Rvalue"ê
+MapTest3
+by_int (2.spectest.MapTest.ByIntEntryRbyInt3
+by_str (2.spectest.MapTest.ByStrEntryRbyStr3
+by_msg (2.spectest.MapTest.ByMsgEntryRbyMsg8
+
+ByIntEntry
+key (Rkey
+value (	Rvalue:88
+
+ByStrEntry
+key (	Rkey
+value (Rvalue:8L
+
+ByMsgEntry
+key (	Rkey(
+value (2.spectest.MapValueRvalue:8bproto3

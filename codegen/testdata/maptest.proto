@@ -1,0 +1,18 @@
+// Small map fixture for the generated compat tests: scalar, int-keyed and
+// message-valued maps ride as repeated entry structs in every language.
+// Kept in testdata so every binding shares the same schema, values and
+// reference bytes (maptest.bin from protoc --encode of maptest.txt).
+syntax = "proto3";
+
+package spectest;
+
+message MapValue {
+  string name = 1;
+  int32 value = 2;
+}
+
+message MapTest {
+  map<int32, string> by_int = 1;
+  map<string, int32> by_str = 2;
+  map<string, MapValue> by_msg = 3;
+}

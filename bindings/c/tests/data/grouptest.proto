@@ -1,0 +1,19 @@
+// Struct-binding group coverage: legacy proto2 groups encode as
+// START_GROUP + message + END_GROUP. The struct encoder writes them through
+// the same sub-plan as messages; the reference bytes (protoc --encode from
+// grouptest.txt) must match. Group field numbers live in the parent scope,
+// member numbers in the group scope.
+syntax = "proto2";
+
+package structtest;
+
+message GroupTest {
+  optional group Inner = 1 {
+    optional int32 x = 2;
+    optional string s = 3;
+  }
+  repeated group Item = 2 {
+    optional int32 v = 1;
+  }
+  optional int32 id = 3;
+}
