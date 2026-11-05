@@ -61,7 +61,9 @@ pbw_schema_free(schema);
 Hand-built schemas default to proto3; `pbw_schema_set_proto3(schema, 0)` makes
 one proto2. `pbw_schema_link()` resolves type names and builds the lookup
 tables, so call it once after adding fields, and treat the schema as read-only
-afterwards.
+afterwards. Field setters (`pbw_field_set_type_name/oneof/packed`) run before
+the next `pbw_message_add_field`: each add reallocates the field array, so a
+`pbw_field *` held across adds dangles.
 
 ## Load a schema at runtime
 

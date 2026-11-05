@@ -1,5 +1,5 @@
 /*
- * The C example (examples/addressbook.c), in Kotlin, through the generated typed
+ * The C example (examples/addressbook.c), in Kotlin, through the generated
  * classes: build with the protobuf-java-shaped Builder (or the thin
  * `addressBook { }` DSL), encode, decode, compare. The encoded bytes must
  * equal the pinned reference examples/addressbook.bin. The schema travels

@@ -3,7 +3,7 @@ import java.nio.file.Path;
 import java.util.Arrays;
 
 /**
- * The C example (examples/addressbook.c), in Java, through the generated typed
+ * The C example (examples/addressbook.c), in Java, through the generated
  * classes: build with the protobuf-java-shaped Builder, encode, decode,
  * compare. The encoded bytes must equal the pinned reference
  * {@code examples/addressbook.bin}, so the example doubles as a

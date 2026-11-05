@@ -50,11 +50,13 @@ truth for field numbers and proto2/proto3 semantics: the row count must match
 the descriptor, and a row whose kind/wire type disagrees with its own `type`
 is `PBW_ERR_INVALID`.
 
-`decode` allocates (strings, arrays, sub-messages) into a zeroed struct.
+`decode` allocates (strings, bytes, arrays, sub-messages) into a zeroed struct.
 Repeated fields grow by doubling from the count member, so a message with
-empty repeated fields allocates nothing. Unsupported kinds (bytes, groups,
-maps, oneofs) fail with `PBW_ERR_INVALID`; extend the codec when a user
-needs them.
+empty repeated fields allocates nothing. Maps are repeated entry structs
+(no hash table: insertion order is the wire order); oneof members share a
+union gated by a case word (last one wins, like the reference); groups
+encode as `START_GROUP` + message + `END_GROUP`. Extensions and MessageSet
+members are not generated yet (the plugin walks message fields only).
 
 ### Two levels: one-shot calls and a compiled codec
 

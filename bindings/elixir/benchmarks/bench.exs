@@ -84,7 +84,10 @@ defmodule Bench do
         fail("#{label}: decode/re-encode round trip differs")
       end
 
-      IO.puts("#{label}: #{want} bytes (repeat field x#{n})")
+      ref_iters = calibrate(floor, fn -> Pbwire.encode(msg) end)
+
+      IO.puts("#{label}: #{want} bytes, #{ref_iters} iterations (repeat field x#{n})")
+      IO.puts("  impl       op           ns/op       MB/s")
       time("pbwire", "encode", floor, fn -> Pbwire.encode(msg) end, want)
       time("protobuf", "encode", floor, fn -> Protobuf.encode(msg) end, want)
       time("pbwire", "decode", floor, fn -> Pbwire.decode(ref, Scalars3) end, want)
@@ -128,12 +131,11 @@ defmodule Bench do
     ns_per_op = best / iters
     mbs = bytes / ns_per_op * 1000
 
-    :io.format("  ~-10s ~-8s ~12.1f ns/op ~10.1f MB/s (~w iterations)~n", [
+    :io.format("  ~-10s ~-8s ~12.1f ~10.1f~n", [
       impl,
       op,
       ns_per_op,
-      mbs,
-      iters
+      mbs
     ])
   end
 
