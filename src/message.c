@@ -54,6 +54,7 @@ pbw_message_new_a(pbw_arena *arena, const pbw_descriptor *desc)
     msg->desc = desc;
     msg->arena = arena;
     msg->own = NULL;
+    msg->nfields = desc->field_count;
     msg->values = (pbw_value *)(void *)(block + values_off);
     msg->present = (uint32_t *)(void *)(block + present_off);
     msg->oneof_case = (uint32_t *)(void *)(block + oneof_off);
@@ -86,7 +87,9 @@ message_release(pbw_message *msg)
 {
     size_t i;
 
-    for (i = 0; i < msg->desc->field_count; i++) {
+    /* nfields, not desc->field_count: freeing after pbw_schema_free must
+     * not touch the freed descriptor. */
+    for (i = 0; i < msg->nfields; i++) {
         if (pbw_msg_present(msg, i)) {
             pbw_value_destroy(&msg->values[i]);
         }
@@ -106,12 +109,16 @@ pbw_message_free(pbw_message *msg)
         return;
     }
     if (msg->own != NULL) {
-        /* Root of a decoded tree: release what the caller added, then the arena
-         * that holds this very struct. */
+        /* Root of a decoded tree: when nothing heap was stored into it
+         * (the pure decode fast path, including every bench decode), the
+         * whole tree lives in the arena and a bulk free is enough. Only a
+         * mutated tree needs the slot walk to release heap payloads. */
         pbw_arena *own = msg->own;
         int packed = own->block != NULL;
 
-        message_release(msg);
+        if (own->has_heap) {
+            message_release(msg);
+        }
         pbw_arena_free(own);
         if (!packed) {
             free(own);
@@ -817,6 +824,11 @@ pbw_message_put(pbw_message *msg, size_t index, const pbw_value *value)
 int
 pbw_message_store(pbw_message *msg, const pbw_field *field, pbw_value *value)
 {
+    if (msg->arena != NULL && (value->flags & PBW_VF_ARENA) == 0) {
+        /* Heap payload entering an arena tree: the bulk free fast path no
+         * longer applies, the release walk must run. */
+        msg->arena->has_heap = 1;
+    }
     if (field->label == PBW_LABEL_REPEATED) {
         pbw_value *list = pbw_message_list_for(msg, field);
 

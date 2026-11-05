@@ -103,6 +103,7 @@ typedef struct {
     size_t chunk_size;
     int readonly; /* a context arena: messages decoded into it are read-only */
     void *block;  /* non-NULL: the arena and its first chunk share one malloc */
+    int has_heap; /* a heap value was stored into this arena tree: free must walk */
 } pbw_arena;
 
 /* Single allocations above this bypass the bump chunk (nginx-style large
@@ -180,6 +181,11 @@ struct pbw_descriptor {
      * tag. The decode action lives on the field itself (see dec_action),
      * so this table is lookup-only. */
     pbw_field **tag_map;
+    /* Fast name dispatch for table/dict bindings: open-addressed hash of
+     * field name -> field, NULL when the message has no fields. Lookup is
+     * one hash plus probes instead of a linear strcmp scan. */
+    const pbw_field **name_map;
+    size_t name_map_size; /* power of two, 0 when empty */
 };
 
 struct pbw_schema {
@@ -221,9 +227,10 @@ struct pbw_message {
     const pbw_descriptor *desc;
     pbw_arena *arena;     /* non-NULL: the tree is allocated from an arena */
     pbw_arena *own;       /* non-NULL: this message frees that arena */
-    pbw_value *values;    /* desc->field_count inline slots, see `present` */
+    pbw_value *values;    /* nfields inline slots, see `present` */
     uint32_t *present;    /* field_count bits: the slot holds a value */
     uint32_t *oneof_case; /* 1-based oneof index -> field number, 0 = unset */
+    size_t nfields;       /* desc->field_count at creation: free needs no desc */
     uint8_t *unknown;
     size_t unknown_len;
     size_t unknown_cap;
