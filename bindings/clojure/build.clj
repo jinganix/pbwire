@@ -44,4 +44,8 @@
                             [:connection "scm:git:git://github.com/jinganix/pbwire.git"]
                             [:developerConnection "scm:git:ssh://github.com/jinganix/pbwire.git"]]]})
   (b/copy-dir {:src-dirs ["runtime/src"] :target-dir class-dir})
-  (b/jar {:class-dir class-dir :jar-file jar-file}))
+  (b/jar {:class-dir class-dir :jar-file jar-file})
+  ;; deps-deploy reads artifact name/version from ./pom.xml, so leave a copy
+  ;; at the project root (build output, gitignored).
+  (b/copy-file {:src (b/pom-path {:lib lib :class-dir class-dir})
+                :target "pom.xml"}))
