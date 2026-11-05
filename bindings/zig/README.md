@@ -54,16 +54,20 @@ truncate on the way to C); use `setBytes` for binary payloads, including on a
 ## Benchmarks
 
 ```shell
-./benchmarks/bench.sh [matrix3.desc]   # vs Arwalk/zig-protobuf (baseline pending)
+./benchmarks/bench.sh [matrix3.desc]             # pbwire column only, offline-safe
+./benchmarks/bench.sh --baseline [matrix3.desc]  # vs Arwalk/zig-protobuf (network once)
 ```
 
 The four tiers are small / medium / large / xlarge (the repeated fields scaled
 x0 / x1 / x100 / x3000, landing on 136 / 174 / 2469 / 74913 bytes), the same
-payload as every other binding (see `BENCHMARKS.md`). The baseline is not wired
-in yet: Arwalk/zig-protobuf needs network access (a package fetch plus its
-protoc plugin) that this checkout does not assume. `bench.sh` documents the
-hookup; the harness already prints the repo-wide block format and gates every
-tier on byte parity before timing.
+payload as every other binding (see `BENCHMARKS.md`). The baseline is
+Arwalk/zig-protobuf generated code from the same `matrix3.proto`: the tarball
+is pinned in `build.zig.zon` and fetched on first run (then cached), the
+generator runs under the system `protoc`, and `zig build test` plus the plain
+`bench` step never resolve the dependency, so they stay offline-safe. The
+comparison harness (`benchmarks/bench_vs_baseline.zig`, `zig build
+-Dbaseline=true bench-baseline`) times both sides with shared iteration
+counts and gates every tier on byte-identical output before timing.
 
 ## Threads
 

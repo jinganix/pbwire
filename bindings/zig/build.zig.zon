@@ -3,7 +3,15 @@
     .version = "0.1.0",
     .fingerprint = 0x653457e32b749842,
     .minimum_zig_version = "0.14.0",
-    .dependencies = .{},
+    // Baseline only (`zig build -Dbaseline=true bench-baseline`): Arwalk's
+    // protobuf runtime + protoc plugin, pinned by tarball. Never resolved
+    // for `test` / `bench` / `example`, so those stay offline-safe.
+    .dependencies = .{
+        .zig_protobuf = .{
+            .url = "https://github.com/Arwalk/zig-protobuf/archive/83e402d07d0de80f25336b7a99bb751ba1008e71.tar.gz",
+            .hash = "protobuf-7.0.0-0e82akowOwBt9kGJyQm9839yrGtJ-4WY3z7-X9D-oiWO",
+        },
+    },
     .paths = .{
         "build.zig",
         "build.zig.zon",

@@ -511,7 +511,7 @@ elixir-bench:
 	./scripts/bench-run.sh --binding elixir -- make -C bindings/elixir bench
 
 zig-bench:
-	./scripts/bench-run.sh --binding zig -- ./bindings/zig/benchmarks/bench.sh
+	./scripts/bench-run.sh --binding zig -- ./bindings/zig/benchmarks/bench.sh --baseline
 
 fsharp-bench:
 	./scripts/bench-run.sh --binding fsharp -- ./bindings/fsharp/benchmarks/bench.sh

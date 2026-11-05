@@ -153,18 +153,18 @@ for all performance numbers; higher is better, MB/s over wire bytes. See
 runs, quick mode, the gpb NIF baseline).
 
 <!-- BENCHMARK_RESULTS_START -->
-Last run: 2026-11-04 10:29:33 UTC (matrix3.proto, the four standard tiers; Erlang 29.0.1 per `.tool-versions`; machine Apple M4 Pro)
+Last run: 2026-11-05 19:41:41 UTC (matrix3.proto, the four standard tiers; Erlang 29.0.1 per `.tool-versions`; machine Apple M4 Pro)
 
 | payload | op | pbwire-erlang (MB/s, x gpb) | gpb (MB/s) | gpb-nif (MB/s) |
 |---|---|---|---|---|
-| 136 B | encode | 491.2 (2.47x) | 198.9 | 56.5 |
-| 136 B | decode | 512.0 (2.18x) | 234.9 | 60.9 |
-| 174 B | encode | 472.0 (2.44x) | 193.5 | 63.7 |
-| 174 B | decode | 525.6 (2.21x) | 238.2 | 80.3 |
-| 2469 B | encode | 407.9 (3.60x) | 113.4 | 43.9 |
-| 2469 B | decode | 326.1 (1.81x) | 180.0 | 135.5 |
-| 74913 B | encode | 441.7 (4.21x) | 104.9 | 109.6 |
-| 74913 B | decode | 354.1 (1.98x) | 178.8 | 182.8 |
+| 136 B | encode | 471.2 (2.33x) | 202.0 | 61.1 |
+| 136 B | decode | 519.1 (2.28x) | 227.6 | 67.5 |
+| 174 B | encode | 455.7 (3.26x) | 139.7 | 82.0 |
+| 174 B | decode | 482.2 (2.17x) | 221.9 | 98.1 |
+| 2469 B | encode | 423.4 (3.68x) | 114.9 | 94.3 |
+| 2469 B | decode | 327.9 (1.67x) | 196.3 | 170.1 |
+| 74913 B | encode | 477.8 (3.94x) | 121.3 | 122.2 |
+| 74913 B | decode | 364.6 (1.66x) | 220.2 | 212.3 |
 
 Higher is better. Throughput in MB/s on serialized wire size. Case names are the
 four standard tiers at the repo root ([BENCHMARKS.md](../../BENCHMARKS.md)).

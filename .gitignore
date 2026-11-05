@@ -68,6 +68,7 @@ bindings/r/pbwire.so
 bindings/julia/benchmarks/oracle/
 bindings/zig/zig-out/
 bindings/zig/.zig-cache/
+bindings/zig/zig-pkg/
 bindings/dart/benchmarks/gen/
 bindings/dart/.dart_tool/
 bindings/dart/benchmarks/.dart_tool/

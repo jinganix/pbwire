@@ -168,29 +168,29 @@ The one-row summary is here; the detail is there.
 
 | Language | How it talks to the core | Best encode / decode vs official | Baseline |
 |---|---|---|---|
-| [C](bindings/c/) | static link, struct codec | 1.31x (xlarge) / 2.33x (xlarge) | [protoc C++](https://github.com/protocolbuffers/protobuf) |
-| [C++](bindings/cpp/) | same C runtime, same header | 1.31x (xlarge) / 2.33x (xlarge)¹ | [protoc C++](https://github.com/protocolbuffers/protobuf) |
-| [Python](bindings/python/) | CPython extension | 6.7x (xlarge) / 1.72x (xlarge) | [google.protobuf (upb)](https://pypi.org/project/protobuf/) |
-| [Ruby](bindings/ruby/) | C extension, linked | 1.42x (small) / 1.86x (large) | [google-protobuf gem](https://rubygems.org/gems/google-protobuf) |
-| [Java](bindings/java/) | pure-Java codec, no native code | 1.24x (medium) / 2.40x (xlarge) | [protobuf-java](https://github.com/protocolbuffers/protobuf/tree/main/java) |
-| [Kotlin](bindings/kotlin/) | Java runtime + DSL | 1.27x (medium) / 2.01x (xlarge) | [protobuf-kotlin](https://github.com/protocolbuffers/protobuf/tree/main/java/kotlin) |
-| [Node](bindings/node/) | N-API addon | 25.7x (xlarge) / 18.6x (xlarge) | [jspb](https://www.npmjs.com/package/google-protobuf) + [protobufjs](https://www.npmjs.com/package/protobufjs) |
-| [Objective-C](bindings/objc/) | ARC wrapper | 6.5x (small) / 3.2x (large) | [protobuf-objc](https://github.com/protocolbuffers/protobuf/tree/main/objectivec) |
-| [PHP](bindings/php/) | C extension | 1.10x (xlarge) / 1.25x (xlarge) vs C ext (344x / 134x vs pure PHP) | [protobuf-php](https://github.com/protocolbuffers/protobuf/tree/main/php) |
-| [Dart](bindings/dart/) | `dart:ffi` | 12.2x (xlarge) / 3.3x (xlarge) | [protobuf-dart](https://pub.dev/packages/protobuf) |
-| [Rust](bindings/rust/) | static link | 2.05x (large) / 1.70x (large) | [rust-protobuf 3.x](https://github.com/stepancheg/rust-protobuf) + [prost](https://github.com/tokio-rs/prost) |
-| [C#](bindings/csharp/) | P/Invoke | 3.32x (medium) / 2.40x (small) | [Google.Protobuf](https://www.nuget.org/packages/Google.Protobuf) + [protobuf-net](https://github.com/protobuf-net/protobuf-net) |
-| [Go](bindings/go/) | cgo dynamic (hot-swappable registry) | 2.63x (xlarge) / 2.06x (large) | [google.golang.org/protobuf](https://pkg.go.dev/google.golang.org/protobuf) |
-| [Erlang](bindings/erlang/) | NIF | 4.03x (xlarge) / 2.21x (medium) | [gpb](https://github.com/tomas-abrahamsson/gpb) |
-| [Lua](bindings/lua/) | C module, tables + builder | 7.94x (xlarge, builder) / 1.16x (large) | [lua-protobuf](https://github.com/starwing/lua-protobuf) |
-| [Swift](bindings/swift/) | SwiftPM, static link | 5.63x (xlarge) / 4.44x (medium) | [swift-protobuf](https://github.com/apple/swift-protobuf) |
-| [Scala](bindings/scala/) | Java runtime + DSL | 1.43x (small) / 1.65x (xlarge) | [ScalaPB](https://github.com/scalapb/ScalaPB) |
-| [Elixir](bindings/elixir/) | NIF (shared core) | 3.16x (small) / 1.68x (large) | [elixir-protobuf](https://github.com/elixir-protobuf/protobuf) |
-| [Zig](bindings/zig/) | static link | no baseline wired yet | [zig-protobuf](https://github.com/Arwalk/zig-protobuf) |
-| [F#](bindings/fsharp/) | C# runtime + facade | 3.30x (medium) / 2.46x (medium) | [Google.Protobuf](https://www.nuget.org/packages/Google.Protobuf) |
-| [Clojure](bindings/clojure/) | Java runtime + interop | 1.30x (xlarge) / 2.07x (xlarge) | [protobuf-java](https://github.com/protocolbuffers/protobuf/tree/main/java) |
-| [Julia](bindings/julia/) | `dlopen` + `ccall` | 137x (xlarge) / 1.10x (large) | [ProtoBuf.jl](https://github.com/JuliaIO/ProtoBuf.jl) |
-| [R](bindings/r/) | C extension, named lists | no baseline installed | [RProtoBuf](https://github.com/eddelbuettel/rprotobuf) |
+| [C](bindings/c/) | static link, struct codec | 1.32x (xlarge) / 2.39x (xlarge) | [protoc C++](https://github.com/protocolbuffers/protobuf) |
+| [C++](bindings/cpp/) | same C runtime, same header | 1.32x (xlarge) / 2.39x (xlarge)¹ | [protoc C++](https://github.com/protocolbuffers/protobuf) |
+| [Python](bindings/python/) | CPython extension | 7.03x (xlarge) / 1.72x (xlarge) | [google.protobuf (upb)](https://pypi.org/project/protobuf/) |
+| [Ruby](bindings/ruby/) | C extension, linked | 1.38x (small) / 1.95x (large) | [google-protobuf gem](https://rubygems.org/gems/google-protobuf) |
+| [Java](bindings/java/) | pure-Java codec, no native code | 1.28x (medium) / 2.47x (xlarge) | [protobuf-java](https://github.com/protocolbuffers/protobuf/tree/main/java) |
+| [Kotlin](bindings/kotlin/) | Java runtime + DSL | 1.28x (medium) / 2.08x (xlarge) | [protobuf-kotlin](https://github.com/protocolbuffers/protobuf/tree/main/java/kotlin) |
+| [Node](bindings/node/) | N-API addon | 3.07x (xlarge) / 4.20x (xlarge) vs protobufjs | [jspb](https://www.npmjs.com/package/google-protobuf) + [protobufjs](https://www.npmjs.com/package/protobufjs) |
+| [Objective-C](bindings/objc/) | ARC wrapper | 6.57x (medium) / 3.18x (large) | [protobuf-objc](https://github.com/protocolbuffers/protobuf/tree/main/objectivec) |
+| [PHP](bindings/php/) | C extension | 1.56x (small) / 1.90x (small) vs C ext (356x / 132x vs pure PHP) | [protobuf-php](https://github.com/protocolbuffers/protobuf/tree/main/php) |
+| [Dart](bindings/dart/) | `dart:ffi` | 16.4x (xlarge) / 4.29x (large) | [protobuf-dart](https://pub.dev/packages/protobuf) |
+| [Rust](bindings/rust/) | static link | 1.18x (large) / 1.87x (large) vs prost | [rust-protobuf 3.x](https://github.com/stepancheg/rust-protobuf) + [prost](https://github.com/tokio-rs/prost) |
+| [C#](bindings/csharp/) | P/Invoke | 3.34x (medium) / 2.44x (medium) | [Google.Protobuf](https://www.nuget.org/packages/Google.Protobuf) + [protobuf-net](https://github.com/protobuf-net/protobuf-net) |
+| [Go](bindings/go/) | cgo dynamic (hot-swappable registry) | 2.58x (xlarge) / 2.07x (xlarge) | [google.golang.org/protobuf](https://pkg.go.dev/google.golang.org/protobuf) |
+| [Erlang](bindings/erlang/) | NIF | 3.91x (xlarge) / 2.28x (small) | [gpb](https://github.com/tomas-abrahamsson/gpb) |
+| [Lua](bindings/lua/) | C module, tables + builder | 8.47x (xlarge, builder) / 1.19x (large) | [lua-protobuf](https://github.com/starwing/lua-protobuf) |
+| [Swift](bindings/swift/) | SwiftPM, static link | 5.57x (xlarge) / 4.41x (medium) | [swift-protobuf](https://github.com/apple/swift-protobuf) |
+| [Scala](bindings/scala/) | Java runtime + DSL | 1.44x (medium) / 1.62x (xlarge) | [ScalaPB](https://github.com/scalapb/ScalaPB) |
+| [Elixir](bindings/elixir/) | NIF (shared core) | 3.08x (small) / 1.75x (medium) | [elixir-protobuf](https://github.com/elixir-protobuf/protobuf) |
+| [Zig](bindings/zig/) | static link | 1.89x (large) / 51.2x (medium) | [zig-protobuf](https://github.com/Arwalk/zig-protobuf) |
+| [F#](bindings/fsharp/) | C# runtime + facade | 3.33x (medium) / 2.42x (medium) | [Google.Protobuf](https://www.nuget.org/packages/Google.Protobuf) |
+| [Clojure](bindings/clojure/) | Java runtime + interop | 9.66x (small) / 2.19x (xlarge) | [protobuf-java](https://github.com/protocolbuffers/protobuf/tree/main/java) |
+| [Julia](bindings/julia/) | `dlopen` + `ccall` | 126.8x (xlarge) / 1.32x (medium) | [ProtoBuf.jl](https://github.com/JuliaIO/ProtoBuf.jl) |
+| [R](bindings/r/) | C extension, named lists | 66.5x (xlarge) / 52.3x (xlarge) | [RProtoBuf](https://github.com/eddelbuettel/rprotobuf) |
 
 ¹ C++ has no separate bench; same engine as the C struct codec. Best columns take the best ratio across the four tiers for encode/decode separately, tier in parentheses (Apple M4 Pro, `protoc 36.2`); tiers and absolute MB/s are in [BENCHMARKS.md](BENCHMARKS.md).
 
