@@ -3,7 +3,7 @@
 declare(strict_types=1);
 
 /*
- * Typed-model support: the pieces a protoc-gen-pbwire class needs to
+ * Generated-model support: the pieces a protoc-gen-pbwire class needs to
  * look like the official google/protobuf runtime (RepeatedField, GPBUtil
  * range checks) while every byte still goes through the dynamic API.
  *

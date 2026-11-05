@@ -43,14 +43,23 @@ regen: build
 	PATH="$(CURDIR)/build:$$PATH" $(PROTOC) -I$(ROOT) \
 		--plugin=protoc-gen-pbwire-c=$(BIN) \
 		--pbwire-c_out=$(CURDIR)/build/regen \
-		bindings/c/tests/data/matrix3.proto bindings/c/tests/data/matrix2.proto
-	cp build/regen/matrix3.h build/regen/matrix2.h ../tests/gen/
+		bindings/c/tests/data/matrix3.proto bindings/c/tests/data/matrix2.proto bindings/c/tests/data/maptest.proto bindings/c/tests/data/grouptest.proto bindings/c/tests/data/oneoftest.proto
+	cp build/regen/matrix3.h build/regen/matrix2.h build/regen/maptest.h build/regen/grouptest.h build/regen/oneoftest.h ../tests/gen/
 	$(PROTOC) -I$(ROOT) --include_imports \
 		--descriptor_set_out=$(ROOT)/bindings/c/tests/data/matrix3.desc \
 		bindings/c/tests/data/matrix3.proto
 	$(PROTOC) -I$(ROOT) --include_imports \
 		--descriptor_set_out=$(ROOT)/bindings/c/tests/data/matrix2.desc \
 		bindings/c/tests/data/matrix2.proto
+	$(PROTOC) -I$(ROOT) --include_imports \
+		--descriptor_set_out=$(ROOT)/bindings/c/tests/data/maptest.desc \
+		bindings/c/tests/data/maptest.proto
+	$(PROTOC) -I$(ROOT) --include_imports \
+		--descriptor_set_out=$(ROOT)/bindings/c/tests/data/grouptest.desc \
+		bindings/c/tests/data/grouptest.proto
+	$(PROTOC) -I$(ROOT) --include_imports \
+		--descriptor_set_out=$(ROOT)/bindings/c/tests/data/oneoftest.desc \
+		bindings/c/tests/data/oneoftest.proto
 	@echo "regenerated headers and descriptor sets; run (cd ../../.. && make test)"
 
 # Re-capture the CodeGeneratorRequest dumps golden tests replay.
@@ -67,5 +76,17 @@ dump: build
 		--plugin=protoc-gen-dump=$(DUMP) \
 		--dump_out=$(CURDIR)/testdata/c/matrix2 \
 		bindings/c/tests/data/matrix2.proto
+	PATH="$(CURDIR)/build:$$PATH" $(PROTOC) -I$(ROOT) \
+		--plugin=protoc-gen-dump=$(DUMP) \
+		--dump_out=$(CURDIR)/testdata/c/maptest \
+		bindings/c/tests/data/maptest.proto
+	PATH="$(CURDIR)/build:$$PATH" $(PROTOC) -I$(ROOT) \
+		--plugin=protoc-gen-dump=$(DUMP) \
+		--dump_out=$(CURDIR)/testdata/c/grouptest \
+		bindings/c/tests/data/grouptest.proto
+	PATH="$(CURDIR)/build:$$PATH" $(PROTOC) -I$(ROOT) \
+		--plugin=protoc-gen-dump=$(DUMP) \
+		--dump_out=$(CURDIR)/testdata/c/oneoftest \
+		bindings/c/tests/data/oneoftest.proto
 
 .PHONY: build test regen dump

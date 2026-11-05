@@ -1,5 +1,5 @@
 /* The C example (examples/addressbook.c), in Objective-C, through the generated
- * typed classes: assign fields, encode, decode, compare. The encoded bytes must
+ * classes: assign fields, encode, decode, compare. The encoded bytes must
  * equal the pinned reference examples/addressbook.bin.
  *
  * Run it with ./build.sh example. */

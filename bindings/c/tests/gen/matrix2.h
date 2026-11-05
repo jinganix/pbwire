@@ -53,23 +53,23 @@ typedef struct {
 } structtest_scalars2_t;
 
 static const pbw_struct_field_t structtest_inner2_fields[] = {
-    {1, PBW_SF_STRING, 0, offsetof(structtest_inner2_t, name), 0, 0, 0, 0, NULL, 0, PBW_TYPE_STRING, 2, 0, 1},
-    {2, PBW_SF_INT32, 0, offsetof(structtest_inner2_t, value), offsetof(structtest_inner2_t, has_value), 0, 0, 0, NULL, 0, PBW_TYPE_INT32, 0, 0, 0},
+    {1, PBW_SF_STRING, 0, offsetof(structtest_inner2_t, name), 0, 0, 0, 0, NULL, 0, PBW_TYPE_STRING, 2, 0, 1, 0, 0},
+    {2, PBW_SF_INT32, 0, offsetof(structtest_inner2_t, value), offsetof(structtest_inner2_t, has_value), 0, 0, 0, NULL, 0, PBW_TYPE_INT32, 0, 0, 0, 0, 0},
 };
 
 static const pbw_struct_field_t structtest_scalars2_fields[] = {
-    {1, PBW_SF_INT32, 0, offsetof(structtest_scalars2_t, id), 0, 0, 0, 0, NULL, 0, PBW_TYPE_INT32, 0, 0, 1},
-    {2, PBW_SF_INT32, 0, offsetof(structtest_scalars2_t, i32), offsetof(structtest_scalars2_t, has_i32), 0, 0, 0, NULL, 0, PBW_TYPE_INT32, 0, 0, 0},
-    {3, PBW_SF_INT64, 0, offsetof(structtest_scalars2_t, s64), offsetof(structtest_scalars2_t, has_s64), 0, 0, 0, NULL, 0, PBW_TYPE_SINT64, 0, 0, 0},
-    {4, PBW_SF_UINT32, 0, offsetof(structtest_scalars2_t, fx32), offsetof(structtest_scalars2_t, has_fx32), 0, 0, 0, NULL, 0, PBW_TYPE_FIXED32, 5, 0, 0},
-    {5, PBW_SF_DOUBLE, 0, offsetof(structtest_scalars2_t, dbl), offsetof(structtest_scalars2_t, has_dbl), 0, 0, 0, NULL, 0, PBW_TYPE_DOUBLE, 1, 0, 0},
-    {6, PBW_SF_BOOL, 0, offsetof(structtest_scalars2_t, flag), offsetof(structtest_scalars2_t, has_flag), 0, 0, 0, NULL, 0, PBW_TYPE_BOOL, 0, 0, 0},
-    {7, PBW_SF_STRING, 0, offsetof(structtest_scalars2_t, str), 0, 0, 0, 0, NULL, 0, PBW_TYPE_STRING, 2, 0, 0},
-    {8, PBW_SF_ENUM, 0, offsetof(structtest_scalars2_t, shade), offsetof(structtest_scalars2_t, has_shade), 0, 0, -2, NULL, 0, PBW_TYPE_ENUM, 0, 0, 0},
-    {9, PBW_SF_INT32, 1, offsetof(structtest_scalars2_t, nums), 0, offsetof(structtest_scalars2_t, n_nums), 0, 0, NULL, 0, PBW_TYPE_INT32, 0, 0, 0},
-    {10, PBW_SF_INT32, 1, offsetof(structtest_scalars2_t, packed_nums), 0, offsetof(structtest_scalars2_t, n_packed_nums), 0, 0, NULL, 0, PBW_TYPE_INT32, 0, 1, 0},
-    {11, PBW_SF_MESSAGE, 0, offsetof(structtest_scalars2_t, inner), 0, 0, sizeof(structtest_inner2_t), 0, structtest_inner2_fields, 2, PBW_TYPE_MESSAGE, 2, 0, 0},
-    {12, PBW_SF_MESSAGE, 1, offsetof(structtest_scalars2_t, inners), 0, offsetof(structtest_scalars2_t, n_inners), sizeof(structtest_inner2_t), 0, structtest_inner2_fields, 2, PBW_TYPE_MESSAGE, 2, 0, 0},
+    {1, PBW_SF_INT32, 0, offsetof(structtest_scalars2_t, id), 0, 0, 0, 0, NULL, 0, PBW_TYPE_INT32, 0, 0, 1, 0, 0},
+    {2, PBW_SF_INT32, 0, offsetof(structtest_scalars2_t, i32), offsetof(structtest_scalars2_t, has_i32), 0, 0, 0, NULL, 0, PBW_TYPE_INT32, 0, 0, 0, 0, 0},
+    {3, PBW_SF_INT64, 0, offsetof(structtest_scalars2_t, s64), offsetof(structtest_scalars2_t, has_s64), 0, 0, 0, NULL, 0, PBW_TYPE_SINT64, 0, 0, 0, 0, 0},
+    {4, PBW_SF_UINT32, 0, offsetof(structtest_scalars2_t, fx32), offsetof(structtest_scalars2_t, has_fx32), 0, 0, 0, NULL, 0, PBW_TYPE_FIXED32, 5, 0, 0, 0, 0},
+    {5, PBW_SF_DOUBLE, 0, offsetof(structtest_scalars2_t, dbl), offsetof(structtest_scalars2_t, has_dbl), 0, 0, 0, NULL, 0, PBW_TYPE_DOUBLE, 1, 0, 0, 0, 0},
+    {6, PBW_SF_BOOL, 0, offsetof(structtest_scalars2_t, flag), offsetof(structtest_scalars2_t, has_flag), 0, 0, 0, NULL, 0, PBW_TYPE_BOOL, 0, 0, 0, 0, 0},
+    {7, PBW_SF_STRING, 0, offsetof(structtest_scalars2_t, str), 0, 0, 0, 0, NULL, 0, PBW_TYPE_STRING, 2, 0, 0, 0, 0},
+    {8, PBW_SF_ENUM, 0, offsetof(structtest_scalars2_t, shade), offsetof(structtest_scalars2_t, has_shade), 0, 0, -2, NULL, 0, PBW_TYPE_ENUM, 0, 0, 0, 0, 0},
+    {9, PBW_SF_INT32, 1, offsetof(structtest_scalars2_t, nums), 0, offsetof(structtest_scalars2_t, n_nums), 0, 0, NULL, 0, PBW_TYPE_INT32, 0, 0, 0, 0, 0},
+    {10, PBW_SF_INT32, 1, offsetof(structtest_scalars2_t, packed_nums), 0, offsetof(structtest_scalars2_t, n_packed_nums), 0, 0, NULL, 0, PBW_TYPE_INT32, 0, 1, 0, 0, 0},
+    {11, PBW_SF_MESSAGE, 0, offsetof(structtest_scalars2_t, inner), 0, 0, sizeof(structtest_inner2_t), 0, structtest_inner2_fields, 2, PBW_TYPE_MESSAGE, 2, 0, 0, 0, 0},
+    {12, PBW_SF_MESSAGE, 1, offsetof(structtest_scalars2_t, inners), 0, offsetof(structtest_scalars2_t, n_inners), sizeof(structtest_inner2_t), 0, structtest_inner2_fields, 2, PBW_TYPE_MESSAGE, 2, 0, 0, 0, 0},
 };
 
 static inline pbw_status

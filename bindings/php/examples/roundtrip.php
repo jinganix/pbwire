@@ -3,7 +3,7 @@
 declare(strict_types=1);
 
 /*
- * The C example (examples/addressbook.c), in PHP, through the generated typed
+ * The C example (examples/addressbook.c), in PHP, through the generated
  * classes: assign fields, encode, decode, compare. The encoded bytes must equal
  * the pinned reference examples/addressbook.bin.
  *

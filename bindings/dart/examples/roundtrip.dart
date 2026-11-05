@@ -1,4 +1,4 @@
-// The C example (examples/addressbook.c), in Dart, through the generated typed
+// The C example (examples/addressbook.c), in Dart, through the generated
 // classes: assign fields, encode, decode, compare. The encoded bytes must equal
 // the pinned reference examples/addressbook.bin.
 //

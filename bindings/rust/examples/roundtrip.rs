@@ -1,5 +1,5 @@
 //! The C example (examples/addressbook.c), in Rust, through the generated
-//! typed structs: assign fields, encode, decode, compare. The encoded bytes
+//! structs: assign fields, encode, decode, compare. The encoded bytes
 //! must equal the pinned reference examples/addressbook.bin.
 //!
 //!   cd bindings/rust && cargo run --example roundtrip

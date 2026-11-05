@@ -145,7 +145,7 @@ private fun <B, M> workflow(
 }
 
 fun main(args: Array<String>) {
-    // The typed Makefile still passes the .desc path; resolve the sibling
+    // The codegen Makefile still passes the .desc path; resolve the sibling
     // reference bytes (and the shared oneof1 fixture) from it.
     val first = args.getOrNull(0)
     val matrixBin = when {
