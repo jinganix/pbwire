@@ -282,9 +282,9 @@ $facadeResult = $workflow(
 check($oracleResult === $facadeResult, 'T5 mismatch: same steps, different results');
 
 // T6: errors are loud.
-check(throws(static fn() => Structtest_Scalars3::fromString("\xff\xff\xff")), 'T6 bad wire fails');
+check(throws(static fn() => Structtest_Scalars3::fromString("\x0d\xff")), 'T6 bad wire fails');
 $oracleBad = new Structtest\Scalars3();
-check(throws(static function () use ($oracleBad): void { $oracleBad->mergeFromString("\xff\xff\xff"); }), 'T6 oracle bad wire fails');
+check(throws(static function () use ($oracleBad): void { $oracleBad->mergeFromString("\x0d\xff"); }), 'T6 oracle bad wire fails');
 check(throws(static fn() => (new Structtest_Scalars3())->setI32('nope')), 'T6 wrong field type fails');
 check(throws(static fn() => (new Structtest_Scalars3())->setI32(1 << 40)), 'T6 out-of-range integer fails');
 check(throws(static fn() => Structtest_Color3::value('NOPE')), 'T6 unknown enum name fails');
