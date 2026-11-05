@@ -24,8 +24,8 @@ Every language gets the same shape, spelled the way that language spells things:
 | Dart | class | `int i32 = 0;` `List<Inner3> inners = [];` + `encode(schema)` / `static decode` |
 | PHP | `final class` | typed properties `public int $i32;` + `encode(Schema)` / `static decode` |
 | Ruby | class + kwargs | `attr_accessor :i32` + `#encode(schema)` / `.decode(schema, wire)` |
-| Python | dataclass | `i32: int = 0` + `#encode(msg_type)` / `.decode(msg_type, wire)` |
-| Node | `.d.ts` + JSDoc | interfaces for the plain objects `MessageType.encode()` accepts |
+| Python | dataclass, official `_pb2` shape | `i32: int = 0` + `.SerializeToString()` / `.FromString()` / `.CopyFrom()` / `.HasField()`; schema embedded, zero arguments |
+| Node | protobufjs-static shape | `Cls.create()` / `.encode(m).finish()` / `.decode()` / `.verify()` / `.fromObject()` / `.toObject()`; schema embedded, `.d.ts` included |
 | Rust | struct | `pub i32: i32; pub u32: u32` + `encode(&Schema)` / `decode(&Schema, &[u8])` |
 | Lua | table + constructor | `M.Scalars3.new{i32 = 1}` + `encode(schema, t)` / `decode(schema, wire)` |
 | Objective-C | NSObject subclass | `@property int32_t i32; @property uint32_t u32;` + `-encodeWithSchema:error:` / `+decodeWithSchema:data:error:` |
@@ -86,6 +86,14 @@ the integration test this layer exists for:
 3. decode that reference and check every field, including presence flags,
 4. check that an empty typed message encodes to nothing and that an explicit
    zero with presence survives.
+
+Node and Python go further: `tests/compat_test.js` and
+`tests/test_compat.py` implement the shared modes T1–T6 from
+`testdata/TESTSPEC.md` against `testdata/vectors.json` — wire equality,
+decode checks, differential tests against the pinned对照 libraries
+(`testdata/ORACLES.md`), a zero-change business snippet that runs
+against both the对照 library and our facade, and loud error paths.
+New languages copy that pattern instead of inventing their own.
 
 `bindings/*/examples/` run the same flow on the C example's `addressbook.proto`
 and print the address book; every language produces the same 65 bytes

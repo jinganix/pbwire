@@ -22,6 +22,7 @@ type Field struct {
 	NeedsHas bool   // presence without a pointer: emit has<Field> next to it
 	Required bool   // proto2 required (NeedsHas is true as well)
 	Enum     string // local const class name, empty for an external enum
+	Closed   bool   // the enum is closed (proto2): unknown values are invalid
 	Message  string // local class name, empty for a foreign message
 	Oneof    string // containing oneof, empty when not in one
 	Skip     string // non-empty: the typed model omits this field, reason
@@ -164,6 +165,9 @@ func (f *File) buildField(fd protoreflect.FieldDescriptor) Field {
 		field.NeedsHas = false // a nil pointer is the absent state
 	case protoreflect.EnumKind:
 		field.Enum = f.enumLocal(fd)
+		if ed := fd.Enum(); ed != nil {
+			field.Closed = ed.IsClosed()
+		}
 		field.NeedsHas = fd.HasPresence() && !fd.IsList() && !field.Required
 	default:
 		field.NeedsHas = fd.HasPresence() && !fd.IsList() && !field.Required

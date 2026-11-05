@@ -524,6 +524,21 @@ void pbw_istream_reset(pbw_istream *s);
 pbw_status pbw_istream_feed(pbw_istream *s, const void *data, size_t len);
 pbw_status pbw_istream_next(pbw_istream *s, const pbw_descriptor *desc,
                             pbw_message **out);
+/* Decode one length-delimited frame (varint length + message) from buf: the
+ * one-shot twin of pbw_encode_delimited(). *consumed is the prefix + frame
+ * bytes, so a caller holding concatenated frames advances by it and decodes
+ * again. Trailing bytes are left for the caller; a truncated frame fails
+ * with PBW_ERR_INVALID (there is no "need more data" one-shot: use
+ * pbw_istream for that). */
+pbw_status pbw_decode_delimited(const pbw_descriptor *desc, const void *buf,
+                                size_t len, pbw_message **out,
+                                size_t *consumed);
+/* Same with explicit bounds; identical to pbw_decode_delimited() with NULL
+ * limits. */
+pbw_status pbw_decode_delimited_limits(const pbw_descriptor *desc,
+                                       const void *buf, size_t len,
+                                       const pbw_limits *limits,
+                                       pbw_message **out, size_t *consumed);
 void pbw_free(void *ptr);
 const char *pbw_strerror(pbw_status status);
 

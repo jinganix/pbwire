@@ -18,6 +18,10 @@ type Options struct {
 	Lang   string
 	Prefix string // class prefix override; empty means derive from the package
 	Dir    string // output subdirectory inside the protoc output tree
+	// DescSetB64 is the FileDescriptorSet for this file (transitive closure
+	// of its imports) encoded as base64. Emitters whose runtime embeds its
+	// own schema (no .desc file at use time) read it from here.
+	DescSetB64 string
 }
 
 // File is one generated file.
@@ -47,11 +51,11 @@ func Generate(fd protoreflect.FileDescriptor, opt Options) ([]File, error) {
 	case "ruby":
 		files = rubyFiles(f)
 	case "python":
-		files = pythonFiles(f)
+		files = pythonFiles(f, opt)
 	case "typescript":
-		files = typeScriptFiles(f)
+		files = typeScriptFiles(f, opt)
 	case "javascript":
-		files = javaScriptFiles(f)
+		files = javaScriptFiles(f, opt)
 	case "rust":
 		files = rustFiles(f)
 	case "objc":

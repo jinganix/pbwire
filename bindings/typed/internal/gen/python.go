@@ -46,12 +46,37 @@ func pythonType(field model.Field, prefix string) string {
 	}
 }
 
-func pythonFiles(f *model.File) []File {
+const pythonRuntime = `import base64 as _base64
+
+_SCHEMA = None
+_TYPES = {}
+
+def _schema():
+    """The embedded FileDescriptorSet as a pbwire schema (built once)."""
+    global _SCHEMA
+    if _SCHEMA is None:
+        import pbwire as _pbw
+        _SCHEMA = _pbw.Schema.load(_base64.b64decode(_DESC_B64))
+    return _SCHEMA
+
+
+def _type(full):
+    t = _TYPES.get(full)
+    if t is None:
+        t = _schema().message(full)
+        _TYPES[full] = t
+    return t
+
+`
+
+func pythonFiles(f *model.File, opt Options) []File {
 	var b strings.Builder
-	b.WriteString(headerP(f, "#", "Typed dataclasses over the pbwire dict API: assign fields, encode, decode."))
+	b.WriteString(headerP(f, "#", "Typed dataclasses over the pbwire dict API, official _pb2-shaped methods included."))
 	b.WriteString("from __future__ import annotations\n\n")
 	b.WriteString("from dataclasses import dataclass, field as dc_field\n")
-	b.WriteString("from typing import Any, Dict, List, Mapping, Optional\n\n")
+	b.WriteString("from typing import Any, Dict, List, Mapping, Optional, Tuple\n\n")
+	fmt.Fprintf(&b, "_DESC_B64 = \"%s\"\n\n", opt.DescSetB64)
+	b.WriteString(pythonRuntime)
 	for _, e := range f.Enums {
 		fmt.Fprintf(&b, "class %s:\n    \"\"\"%s\"\"\"\n", e.Name, e.Full)
 		for _, v := range e.Values {
@@ -60,28 +85,254 @@ func pythonFiles(f *model.File) []File {
 		b.WriteString("\n")
 	}
 	for _, m := range f.Messages {
-		fmt.Fprintf(&b, "@dataclass\nclass %s:\n    \"\"\"%s\"\"\"\n\n", m.Name, m.Full)
-		anyField := false
-		for _, field := range m.Fields {
-			if field.Skip != "" {
-				fmt.Fprintf(&b, "    # skipped %s: %s\n", field.Name, field.Skip)
-				continue
-			}
-			anyField = true
-			fmt.Fprintf(&b, "    %s: %s = %s\n", pythonName(field.Name), pythonAnn(field), pythonDefault(field))
-		}
-		if !anyField {
-			b.WriteString("    pass\n")
-		}
-		writePythonDict(&b, f, m)
-		fmt.Fprintf(&b, "    def encode(self, msg_type: Any) -> bytes:\n")
-		fmt.Fprintf(&b, "        \"\"\"Encode through a pbwire MessageType: msg_type.encode(self.to_dict()).\"\"\"\n")
-		fmt.Fprintf(&b, "        return msg_type.encode(self.to_dict())\n\n")
-		fmt.Fprintf(&b, "    @classmethod\n    def decode(cls, msg_type: Any, wire: bytes) -> %s:\n", m.Name)
-		fmt.Fprintf(&b, "        \"\"\"Decode wire bytes: cls.from_dict(msg_type.decode(wire).to_dict()).\"\"\"\n")
-		fmt.Fprintf(&b, "        return cls.from_dict(msg_type.decode(wire).to_dict())\n\n")
+		writePythonClass(&b, f, m)
 	}
+	writePythonAliases(&b, f)
+	b.WriteString("DESCRIPTOR = {\n")
+	fmt.Fprintf(&b, "    \"name\": %q,\n", f.Path)
+	fmt.Fprintf(&b, "    \"package\": %q,\n", f.Package)
+	b.WriteString("    \"messages\": [\n")
+	for _, m := range f.Messages {
+		fmt.Fprintf(&b, "        %q,\n", m.Full)
+	}
+	b.WriteString("    ],\n}\n")
 	return []File{{Name: base(f) + "_pbwire.py", Content: b.String()}}
+}
+
+func writePythonClass(b *strings.Builder, f *model.File, m model.Message) {
+	fmt.Fprintf(b, "@dataclass\nclass %s:\n    \"\"\"%s\"\"\"\n\n", m.Name, m.Full)
+	anyField := false
+	for _, field := range m.Fields {
+		if field.Skip != "" {
+			fmt.Fprintf(b, "    # skipped %s: %s\n", field.Name, field.Skip)
+			continue
+		}
+		anyField = true
+		fmt.Fprintf(b, "    %s: %s = %s\n", pythonName(field.Name), pythonAnn(field), pythonDefault(field))
+	}
+	if !anyField {
+		b.WriteString("    pass\n\n")
+	}
+	fmt.Fprintf(b, "    DESCRIPTOR = {\"fullName\": %q, \"fields\": {", m.Full)
+	sep := ""
+	for _, field := range m.Fields {
+		if field.Skip != "" {
+			continue
+		}
+		fmt.Fprintf(b, "%s%q: %d", sep, field.Name, field.Number)
+		sep = ", "
+	}
+	b.WriteString("}}\n\n")
+	oneofs := pythonOneofs(m)
+	if len(oneofs) > 0 {
+		b.WriteString("    _ONEOFS = {\n")
+		for _, o := range oneofs {
+			fmt.Fprintf(b, "        %q: [", o)
+			sep := ""
+			for _, field := range m.Fields {
+				if field.Skip == "" && field.Oneof == o {
+					fmt.Fprintf(b, "%s%q", sep, field.Name)
+					sep = ", "
+				}
+			}
+			b.WriteString("],\n")
+		}
+		b.WriteString("    }\n\n")
+	}
+	writePythonDict(b, f, m)
+	writePythonOfficial(b, f, m, oneofs)
+	fmt.Fprintf(b, "    def encode(self, msg_type: Any) -> bytes:\n")
+	fmt.Fprintf(b, "        \"\"\"Encode through a pbwire MessageType: msg_type.encode(self.to_dict()).\"\"\"\n")
+	fmt.Fprintf(b, "        return msg_type.encode(self.to_dict())\n\n")
+	fmt.Fprintf(b, "    @classmethod\n    def decode(cls, msg_type: Any, wire: bytes) -> %s:\n", m.Name)
+	fmt.Fprintf(b, "        \"\"\"Decode wire bytes: cls.from_dict(msg_type.decode(wire).to_dict()).\"\"\"\n")
+	fmt.Fprintf(b, "        return cls.from_dict(msg_type.decode(wire).to_dict())\n\n")
+}
+
+// writePythonAliases re-attaches nested types to their parents, so both
+// Oneof1_Inner and Oneof1.Inner resolve (the official _pb2 nests them).
+func writePythonAliases(b *strings.Builder, f *model.File) {
+	known := map[string]bool{}
+	for _, m := range f.Messages {
+		known[m.Name] = true
+	}
+	for _, e := range f.Enums {
+		known[e.Name] = true
+	}
+	alias := func(flat string) {
+		name := flat
+		for {
+			idx := strings.LastIndex(name, "_")
+			if idx < 0 {
+				return
+			}
+			parent, child := name[:idx], name[idx+1:]
+			if known[parent] {
+				fmt.Fprintf(b, "%s.%s = %s\n", parent, child, flat)
+				return
+			}
+			name = parent
+		}
+	}
+	for _, m := range f.Messages {
+		alias(m.Name)
+	}
+	for _, e := range f.Enums {
+		alias(e.Name)
+	}
+	b.WriteString("\n")
+}
+
+// pythonOneofs returns the distinct oneof names of a message in field order.
+func pythonOneofs(m model.Message) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, field := range m.Fields {
+		if field.Skip == "" && field.Oneof != "" && !seen[field.Oneof] {
+			seen[field.Oneof] = true
+			out = append(out, field.Oneof)
+		}
+	}
+	return out
+}
+
+// writePythonOfficial emits the official-runtime-shaped methods: zero-argument
+// SerializeToString/ParseFromString/FromString plus CopyFrom/MergeFrom/Clear,
+// HasField/WhichOneof/ListFields. The embedded schema feeds the C core.
+func writePythonOfficial(b *strings.Builder, f *model.File, m model.Message, oneofs []string) {
+	full := m.Full
+	b.WriteString("    def SerializeToString(self) -> bytes:\n")
+	b.WriteString("        \"\"\"Wire bytes; the embedded schema drives the C core.\"\"\"\n")
+	fmt.Fprintf(b, "        return _type(%q).encode(self.to_dict())\n\n", full)
+	b.WriteString("    def ParseFromString(self, wire: bytes) -> int:\n")
+	b.WriteString("        \"\"\"Merge wire bytes into this message; returns bytes consumed.\"\"\"\n")
+	fmt.Fprintf(b, "        other = %s.FromString(wire)\n", m.Name)
+	b.WriteString("        self.CopyFrom(other)\n")
+	b.WriteString("        return len(wire)\n\n")
+	b.WriteString("    @classmethod\n")
+	fmt.Fprintf(b, "    def FromString(cls, wire: bytes) -> %s:\n", m.Name)
+	fmt.Fprintf(b, "        return cls.from_dict(_type(%q).decode(bytes(wire)).to_dict())\n\n", full)
+	b.WriteString("    def CopyFrom(self, other) -> None:\n")
+	fmt.Fprintf(b, "        if not isinstance(other, %s):\n", m.Name)
+	fmt.Fprintf(b, "            raise TypeError(\"CopyFrom expects %s\")\n", m.Name)
+	b.WriteString("        self.Clear()\n")
+	b.WriteString("        self.MergeFrom(other)\n\n")
+	b.WriteString("    def MergeFrom(self, other) -> None:\n")
+	fmt.Fprintf(b, "        if not isinstance(other, %s):\n", m.Name)
+	fmt.Fprintf(b, "            raise TypeError(\"MergeFrom expects %s\")\n", m.Name)
+	hasMerge := false
+	for _, field := range m.Fields {
+		if field.Skip == "" {
+			hasMerge = true
+			break
+		}
+	}
+	if !hasMerge {
+		b.WriteString("        pass\n")
+	}
+	for _, field := range m.Fields {
+		if field.Skip != "" {
+			continue
+		}
+		name := pythonName(field.Name)
+		switch {
+		case field.Repeated && field.Message != "":
+			fmt.Fprintf(b, "        for _v in other.%s:\n", name)
+			fmt.Fprintf(b, "            _m = %s()\n", field.Message)
+			b.WriteString("            _m.MergeFrom(_v)\n")
+			fmt.Fprintf(b, "            self.%s.append(_m)\n", name)
+		case field.Repeated:
+			fmt.Fprintf(b, "        self.%s.extend(other.%s)\n", name, name)
+		case field.Message != "":
+			fmt.Fprintf(b, "        if other.%s is not None:\n", name)
+			fmt.Fprintf(b, "            if self.%s is None:\n", name)
+			fmt.Fprintf(b, "                self.%s = %s()\n", name, field.Message)
+			fmt.Fprintf(b, "            self.%s.MergeFrom(other.%s)\n", name, name)
+		case field.NeedsHas || field.Required:
+			// Presence (or required): copy when the source has it. A
+			// required field is always written, so it always lands here.
+			if field.Required {
+				fmt.Fprintf(b, "        self.%s = other.%s\n", name, name)
+			} else {
+				fmt.Fprintf(b, "        if other.%s is not None:\n", name)
+				fmt.Fprintf(b, "            self.%s = other.%s\n", name, name)
+			}
+		default:
+			// Implicit presence: proto3 MergeFrom copies unconditionally.
+			fmt.Fprintf(b, "        self.%s = other.%s\n", name, name)
+		}
+	}
+	b.WriteString("\n")
+	b.WriteString("    def Clear(self) -> None:\n")
+	hasClear := false
+	for _, field := range m.Fields {
+		if field.Skip == "" {
+			hasClear = true
+			break
+		}
+	}
+	if !hasClear {
+		b.WriteString("        pass\n")
+	}
+	for _, field := range m.Fields {
+		if field.Skip != "" {
+			continue
+		}
+		name := pythonName(field.Name)
+		fmt.Fprintf(b, "        self.%s = %s\n", name, pythonFresh(field))
+	}
+	b.WriteString("\n")
+	b.WriteString("    def HasField(self, name: str) -> bool:\n")
+	b.WriteString("        \"\"\"Presence of a field; raises ValueError without explicit presence.\"\"\"\n")
+	for _, field := range m.Fields {
+		if field.Skip != "" {
+			continue
+		}
+		if field.Message == "" && !field.NeedsHas && !field.Required {
+			continue
+		}
+		name := pythonName(field.Name)
+		if field.Required {
+			fmt.Fprintf(b, "        if name == %q:\n            return True\n", field.Name)
+		} else {
+			fmt.Fprintf(b, "        if name == %q:\n            return self.%s is not None\n", field.Name, name)
+		}
+	}
+	b.WriteString("        raise ValueError(\"no explicit presence for %r\" % (name,))\n\n")
+	if len(oneofs) > 0 {
+		b.WriteString("    def WhichOneof(self, name: str) -> Optional[str]:\n")
+		b.WriteString("        for _member in self._ONEOFS.get(name, []):\n")
+		b.WriteString("            if getattr(self, _member, None) is not None:\n")
+		b.WriteString("                _v = getattr(self, _member)\n")
+		b.WriteString("                if isinstance(_v, list) and not _v:\n")
+		b.WriteString("                    continue\n")
+		b.WriteString("                return _member\n")
+		b.WriteString("        if name not in self._ONEOFS:\n")
+		b.WriteString("            raise ValueError(\"unknown oneof %r\" % (name,))\n")
+		b.WriteString("        return None\n\n")
+	}
+	b.WriteString("    def ListFields(self) -> List[Tuple[str, Any]]:\n")
+	b.WriteString("        out: List[Tuple[str, Any]] = []\n")
+	for _, field := range m.Fields {
+		if field.Skip != "" {
+			continue
+		}
+		name := pythonName(field.Name)
+		cond := pythonPresent(field, "self."+name)
+		fmt.Fprintf(b, "        if %s:\n            out.append((%q, self.%s))\n", cond, field.Name, name)
+	}
+	b.WriteString("        return out\n\n")
+}
+
+// pythonFresh is the Clear() value: a new mutable for lists, the default else.
+func pythonFresh(field model.Field) string {
+	if field.Repeated {
+		return "[]"
+	}
+	if field.NeedsHas || field.Message != "" {
+		return "None"
+	}
+	return pythonDefault(field)
 }
 
 func pythonAnn(field model.Field) string {
@@ -126,7 +377,7 @@ func writePythonDict(b *strings.Builder, f *model.File, m model.Message) {
 			continue
 		}
 		name := pythonName(field.Name)
-		cond := pythonPresent(field, name)
+		cond := pythonPresent(field, "self."+name)
 		// Required fields are always present: emit a plain assignment so
 		// the generated code reads like hand-written Python, not a
 		// template leftover (`if True:`). Optional fields keep the guard.
@@ -178,17 +429,17 @@ func pythonPresent(field model.Field, name string) string {
 	}
 	switch {
 	case field.Repeated:
-		return "self." + name
+		return name
 	case field.Message != "":
-		return "self." + name + " is not None"
+		return name + " is not None"
 	case field.NeedsHas:
-		return "self." + name + " is not None"
+		return name + " is not None"
 	case field.Kind == protoreflect.BoolKind:
-		return "self." + name
+		return name
 	case field.Kind == protoreflect.StringKind, field.Kind == protoreflect.BytesKind:
-		return "self." + name
+		return name
 	default:
-		return "self." + name + " != 0"
+		return name + " != 0"
 	}
 }
 

@@ -67,14 +67,22 @@ gen-ruby: build
 	mkdir -p ../ruby/test/gen
 	$(PROTOC) $(OPTS) --pbwire-typed_out=../ruby/test/gen --pbwire-typed_opt=lang=ruby $(PROTO)
 
+TESTDATA := $(CURDIR)/testdata
+TESTDATA_OPTS = -I$(TESTDATA) --plugin=protoc-gen-pbwire-typed=$(PLUGIN)
+
 gen-python: build
-	mkdir -p ../python/tests/gen
+	mkdir -p ../python/tests/gen ../python/tests/gen_oracle
 	$(PROTOC) $(OPTS) --pbwire-typed_out=../python/tests/gen --pbwire-typed_opt=lang=python $(PROTO)
+	$(PROTOC) $(TESTDATA_OPTS) --pbwire-typed_out=../python/tests/gen --pbwire-typed_opt=lang=python $(TESTDATA)/oneof1.proto
+	$(PROTOC) -I$(DATA) --python_out=../python/tests/gen_oracle $(PROTO)
+	$(PROTOC) -I$(TESTDATA) --python_out=../python/tests/gen_oracle $(TESTDATA)/oneof1.proto
 
 gen-node: build
 	mkdir -p ../node/tests/gen
 	$(PROTOC) $(OPTS) --pbwire-typed_out=../node/tests/gen --pbwire-typed_opt=lang=typescript $(PROTO)
 	$(PROTOC) $(OPTS) --pbwire-typed_out=../node/tests/gen --pbwire-typed_opt=lang=javascript $(PROTO)
+	$(PROTOC) $(TESTDATA_OPTS) --pbwire-typed_out=../node/tests/gen --pbwire-typed_opt=lang=typescript $(TESTDATA)/oneof1.proto
+	$(PROTOC) $(TESTDATA_OPTS) --pbwire-typed_out=../node/tests/gen --pbwire-typed_opt=lang=javascript $(TESTDATA)/oneof1.proto
 
 gen-rust: build
 	mkdir -p ../rust/tests/gen
@@ -132,10 +140,11 @@ test-ruby: build
 test-python: build
 	$(MAKE) -C ../.. python-bind >/dev/null
 	$(PYTHON) ../python/tests/test_typed.py
+	$(PYTHON) ../python/tests/test_compat.py
 
 test-node:
 	cd ../node && ./build.sh build >/dev/null
-	$(NODE) --test ../node/tests/typed_test.js
+	$(NODE) --test ../node/tests/typed_test.js ../node/tests/compat_test.js
 
 test-rust:
 	cd ../rust && $(CARGO) test --test typed

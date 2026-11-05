@@ -1,0 +1,45 @@
+{
+  "$comment": "Canonical vectors for structtest.Scalars3 (bindings/c/tests/data/matrix3.proto). Single source of truth for every binding's typed test (TESTSPEC T1-T5). int64 values are strings (JSON cannot hold them exactly); f32 Infinity is a string; bytes (when present) are base64.",
+  "message": "structtest.Scalars3",
+  "reference": {
+    "proto": "../../c/tests/data/matrix3.proto",
+    "desc": "../../c/tests/data/matrix3.desc",
+    "bin": "../../c/tests/data/matrix3.bin",
+    "txt": "../../c/tests/data/matrix3.txt"
+  },
+  "values": {
+    "i32": -2147483648,
+    "i64": "9223372036854775807",
+    "u32": 4294967295,
+    "u64": "18446744073709551615",
+    "s32": -2147483648,
+    "s64": "-9223372036854775808",
+    "fx32": 3735928559,
+    "fx64": "72623859790382856",
+    "sfx32": -2147483648,
+    "sfx64": "-9223372036854775808",
+    "f32": "Infinity",
+    "f64": -123456.789,
+    "flag": true,
+    "str": "hello",
+    "color": "COLOR3_GREEN",
+    "inner": { "name": "kid", "value": 42 },
+    "nums": [1, -5, 300],
+    "tags": ["a", "bb"],
+    "inners": [{ "name": "x", "value": 1 }, { "name": "y", "value": -2 }],
+    "opt_i32": -7,
+    "opt_str": "opt",
+    "flags": [true, false, true]
+  },
+  "extra_messages": [
+    {
+      "message": "spectest.Oneof1",
+      "reference": {
+        "proto": "oneof1.proto",
+        "desc": "oneof1.desc",
+        "bin": "oneof1.bin"
+      },
+      "values": { "name": "a", "text": "hi" }
+    }
+  ]
+}

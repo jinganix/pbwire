@@ -1,9 +1,36 @@
 # pbwire Node.js binding
 
-A `FileDescriptorSet` (`protoc --descriptor_set_out`) becomes a schema at
-runtime; no code generation, no `protoc` plugin, no npm dependencies. The
-runtime is `runtime/addon.c`, an N-API addon in C over `libpbwire.a`; the
-`Schema`/`Message` surface is `lib/pbwire.js`.
+The runtime is `runtime/addon.c`, an N-API addon in C over `libpbwire.a`;
+the `Schema`/`Message` surface is `lib/pbwire.js`. No npm dependencies.
+
+Most code never touches that surface: generate a protobufjs-static-shaped
+facade once (`make -C bindings/typed gen-node`) and use it like the
+library it mirrors — same `create`/`encode`/`decode`/`verify` calls,
+same observable behavior, but the wire format stays in the C core:
+
+```js
+const { Person } = require('./tests/gen/addressbook.js');
+
+const msg = Person.create({name: 'alice', id: 7});
+Person.verify(msg);                       // null: valid
+const wire = Person.encode(msg).finish(); // Buffer
+const back = Person.decode(wire);
+back.name;                                // 'alice'
+back.toJSON();                            // {name: 'alice', id: 7, ...}
+```
+
+The generated file embeds its own `FileDescriptorSet`, so there is no
+`.desc` to ship: `require` it and go. int64 reads as `BigInt`; `create`/
+`fromObject` also take `number|string|Long-like`. `toObject()` keys are
+camelCase (protobufjs convention); pass `{keepCase: true}` for proto
+names. `fromObject` rejects bad shapes with `TypeError`; `verify`
+returns the same reason strings as protobufjs. The one deliberate
+difference: direct post-hoc writes of an implicit zero (`m.i32 = 0`)
+are not marked present — set values through `create`/`fromObject` to
+write explicit zeros.
+
+The dynamic API is still there for gateways and schemas known only at
+runtime:
 
 ```js
 const { Schema } = require('./lib/pbwire');
@@ -11,18 +38,12 @@ const { Schema } = require('./lib/pbwire');
 const schema = Schema.fromFile('tests/data/demo.desc');
 const person = schema.message('demo.Person');
 
-const wire = person.encode({name: 'alice', id: 7, inner: {x: 42}});
-// or, by hand:
-const msg = person.newMessage();
-msg.set('name', 'alice').set('inner', {x: 42});
-msg.encode();          // Buffer
-msg.free();
-
-const back = person.decode(wire);
-back.get('name');      // 'alice'
-back.get('inner').x;   // 42
-back.encode().equals(wire);   // true: byte-exact re-encode
-back.free();
+const wire2 = person.encode({name: 'alice', id: 7, inner: {x: 42}});
+const back2 = person.decode(wire2);
+back2.get('name');      // 'alice'
+back2.get('inner').x;   // 42
+back2.encode().equals(wire2);   // true: byte-exact re-encode
+back2.free();
 ```
 
 ## How it works

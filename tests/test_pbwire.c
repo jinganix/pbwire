@@ -3668,6 +3668,70 @@ test_streaming_edges(pbw_schema *schema)
 }
 
 static void
+test_decode_delimited(pbw_schema *schema)
+{
+    const pbw_descriptor *type = desc(schema, "Person");
+    pbw_message *m = pbw_message_new(type);
+    pbw_message *got = NULL;
+    uint8_t *f = NULL;
+    size_t f_len = 0;
+    size_t used = 0;
+    pbw_limits capped;
+
+    CHECK_OK(pbw_message_set(m, 1, pbw_value_new_string("hi")));
+    CHECK_OK(pbw_encode_delimited(m, &f, &f_len));
+
+    /* Exact frame: everything is consumed. */
+    CHECK_OK(pbw_decode_delimited(type, f, f_len, &got, &used));
+    CHECK(got != NULL && used == f_len);
+    CHECK(strcmp(pbw_value_get_string(pbw_message_get(got, 1)), "hi") ==
+          0);
+    pbw_message_free(got);
+    got = NULL;
+
+    /* Trailing bytes are left for the caller, not rejected. */
+    {
+        uint8_t *wire = (uint8_t *)malloc(f_len + 1);
+
+        CHECK(wire != NULL);
+        memcpy(wire, f, f_len);
+        wire[f_len] = 0x00; /* one more frame's worth of future bytes */
+        CHECK_OK(pbw_decode_delimited(type, wire, f_len + 1, &got, &used));
+        CHECK(got != NULL && used == f_len);
+        pbw_message_free(got);
+        got = NULL;
+        free(wire);
+    }
+
+    /* Truncated frame, bad arguments, tight limits. */
+    used = 999;
+    CHECK_STATUS(PBW_ERR_INVALID,
+                 pbw_decode_delimited(type, f, f_len - 1, &got, &used));
+    CHECK(got == NULL && used == 0);
+    CHECK_STATUS(PBW_ERR_INVALID,
+                 pbw_decode_delimited(NULL, f, f_len, &got, &used));
+    CHECK_STATUS(PBW_ERR_INVALID,
+                 pbw_decode_delimited(type, f, f_len, NULL, &used));
+    CHECK_STATUS(PBW_ERR_INVALID,
+                 pbw_decode_delimited(type, f, f_len, &got, NULL));
+    capped.max_bytes = 0;
+    capped.max_depth = 0;
+    CHECK_OK(pbw_decode_delimited_limits(type, f, f_len, &capped, &got,
+                                         &used));
+    CHECK(used == f_len);
+    pbw_message_free(got);
+    got = NULL;
+    capped.max_bytes = 1;
+    CHECK_STATUS(PBW_ERR_LIMIT,
+                 pbw_decode_delimited_limits(type, f, f_len, &capped,
+                                             &got, &used));
+    CHECK(got == NULL);
+
+    pbw_message_free(m);
+    pbw_free(f);
+}
+
+static void
 test_deterministic_edges(void)
 {
     pbw_schema *schema = pbw_schema_new();
@@ -3896,6 +3960,7 @@ main(void)
     test_visit(schema);
     test_streaming(schema);
     test_streaming_edges(schema);
+    test_decode_delimited(schema);
     test_schema_errors();
 
     pbw_schema_free(schema);
