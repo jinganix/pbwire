@@ -183,13 +183,13 @@ C++ runtime), `make bench`, `make bench-c` (C structs vs protoc C++). Optional, 
   Full per-row table in [bindings/README.md](bindings/README.md#memory-what-each-binding-keeps-and-the-one-rule-per-row).
 - Not implemented in the core: RPC/HTTP, MessageSet decoding into extensions, code generation (the
   C binding ships its own protoc plugin for layout tables).
-- Typed message models: `bindings/typed` is one protoc plugin (`protoc-gen-pbwire-typed`) that
+- Generated message models: `codegen` is one protoc plugin (`protoc-gen-pbwire`) that
   emits typed fields, presence flags and encode/decode wrappers per language (Java, Kotlin, C#,
   Dart, PHP, Ruby, Python, TypeScript/JavaScript, Rust, Objective-C, Lua). The wrappers call the
-  binding's dynamic API, so the typed layer never adds a second wire implementation. `make
-  typed-gen` regenerates the committed models, `make typed-test` runs one typed test per binding
+  binding's dynamic API, so the generated layer never adds a second wire implementation. `make
+  codegen` regenerates the committed models, `make codegen-test` runs one generated test per binding
   (typed fields -> encode -> compare with the pinned protoc bytes -> decode -> verify), and
-  `make typed-conformance` generates models for the official conformance proto.
+  `make codegen-conformance` generates models for the official conformance proto.
 - Text format (`pbw_text_print` / `pbw_text_parse`): printer output is byte-identical to the
   reference; the parser matches it (extensions as `[full.name]`, group type names, `Any`
   expansions, unknown fields as numeric lines with `print_unknown_fields`, strict rejections

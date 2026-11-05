@@ -7,18 +7,18 @@ it): a runtime, examples, tests, benchmarks and a conformance entry.
 bindings/<lang>/
     runtime/        the binding's codec (rebar3 layout: c_src/ + src/ + priv/)
     plugin/         optional: schema/code generator
-    examples/       a runnable round trip, through the typed model
+    examples/       a runnable round trip, through the generated model
     tests/          self-checks
     benchmarks/     the four standard tiers from ../BENCHMARKS.md
     conformance/    how the official suite covers this binding
 ```
 
-`bindings/typed/` holds one extra protoc plugin (`protoc-gen-pbwire-typed`) that
-emits a **typed message model** for every language from the same descriptor:
+The top-level `codegen/` holds one protoc plugin (`protoc-gen-pbwire`) that
+emits a **generated message model** for every language from the same descriptor:
 fields with the host language's types, names and presence flags, plus
 `encode`/`decode` that call the binding's dynamic API. It is pure ergonomics on
-top of one wire implementation — see `typed/README.md` for the per-language
-shape, the `make typed-gen` / `typed-test` / `typed-conformance` targets, and
+top of one wire implementation — see `../codegen/README.md` for the per-language
+shape, the `make codegen` / `codegen-test` / `codegen-conformance` targets, and
 the measured cost.
 
 ## Where the schema comes from
@@ -125,7 +125,7 @@ side by side with the absolute MB/s.
 | Rust | `Schema::from_file` on a `FileDescriptorSet`, core linked in statically | ✅ | no bindgen, no external crate |
 | C# | `Schema.FromFile` on a `FileDescriptorSet`, P/Invoke + `DllImportResolver` | ✅ | no packages in the binding project |
 
-Every row above also has a typed model from `bindings/typed`: generated typed
+Every row above also has a generated model from `codegen`: typed
 fields plus `encode`/`decode` over that binding's dynamic API. C keeps
 its own generator (it is ahead-of-time compiled); Go is dynamic-API only
 for now; Erlang keeps gpb.

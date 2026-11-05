@@ -246,8 +246,8 @@ reusable buffers) whose user slot points back at the thread data.
 See [`AGENTS.md`](AGENTS.md) for the invariants that must hold in this codebase — an uncaught C
 exception or a bad term handled in the NIF kills the whole VM.
 
-## Typed models
+## Generated models
 
-gpb records are the typed model: `protoc-erl` generates the record definitions and `get_msg_defs/0`,
+gpb records are the generated model: `protoc-erl` generates the record definitions and `get_msg_defs/0`,
 and the binding encodes/decodes those records directly. There is no second generator and no
-`bindings/typed` output for Erlang.
+`codegen` output for Erlang.

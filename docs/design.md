@@ -206,7 +206,7 @@ Scenarios, in the shape of the pain they remove:
 - **Embedding.** The Erlang NIF is the extreme case: a crash takes the host VM
   down, so every failure path returns a status, everything is bounds-checked,
   and ownership is explicit.
-- **Typed ergonomics where wanted.** `bindings/typed` generates typed message
+- **Generated ergonomics where wanted.** `codegen` generates message
   models per language from the same descriptor; the compiler checks host code,
   the wire format still comes from this core.
 
@@ -243,7 +243,7 @@ src/protoc/importer.cc      .proto -> FileDescriptorSet, via compiler::Importer
 src/protoc/descriptor_set.cc, error.cc
 
 bindings/README.md          binding layout + where each one's schema comes from
-bindings/typed/             protoc-gen-pbwire-typed: typed models for every language
+codegen/                  protoc-gen-pbwire: generated models for every language
 bindings/c/                 C binding: runtime/ (struct codec), plugin/, examples/, tests/, benchmarks/, conformance/
 bindings/cpp/               C++ binding: examples/, tests/, benchmarks/ over the shared C runtime (no plugin)
 bindings/python/            CPython extension: runtime/, examples/, tests/, benchmarks/, conformance/

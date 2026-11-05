@@ -1,5 +1,5 @@
 // The C example (examples/addressbook.c), in Go, through the generated
-// typed structs: assign fields, encode, decode, compare. The encoded bytes
+// structs: assign fields, encode, decode, compare. The encoded bytes
 // must equal the pinned reference examples/addressbook.bin.
 //
 //	go run ./examples/roundtrip.go (from bindings/go)

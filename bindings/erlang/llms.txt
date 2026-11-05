@@ -46,7 +46,7 @@ From Elixir the same calls are `:pbwire.encode/1`, `:pbwire.decode/2`, and
 - The schema cache is global to the BEAM node and shared by all processes; encode/decode take a read lock and are concurrency-safe.
 - Calls run on normal schedulers (no dirty NIF); use it for normal message sizes and shard very large payload work.
 - Requires gpb-generated modules (`get_msg_defs/0`, or `get_proto_defs/0` on gpb 5+) for the schema; records themselves are unchanged.
-- gpb records are the typed model: there is no `bindings/typed` output for Erlang.
+- gpb records are the generated model: there is no `codegen` output for Erlang.
 
 ## Optional
 

@@ -14,7 +14,7 @@ is the detail behind it.
 - [Bindings vs their baselines](#bindings-vs-their-baselines) — who is ahead and by how much
 - [Core](#core-pbw_ctx-vs-plain-vs-generated) — ctx vs plain vs generated vs `DynamicMessage`, threads, streaming
 - [Measurement notes](#measurement-notes-the-core-fast-path) — A/B numbers behind the core's fast paths
-- [Typed models](#typed-models-bindingstyped) — what the typed layer costs
+- [Generated models](#generated-models-codegen) — what the generated layer costs
 - [Per-binding tables](#cross-binding-comparison-last-run) — one section per language (✅ exceeds baseline ≥1.0x, ❌ below):
   - [Core](#core-pbw_ctx-vs-plain-vs-generated) · [C structs](#c-structs-vs-protoc-generated-same-matrix3proto) · [Go](#go-cgo-dynamic) · [Python](#python-vs-googleprotobuf-upb)
   - [Java](#java-vs-protobuf-java) · [Node](#node-vs-google-protobuf-jspb) · [Ruby](#ruby-c-extension-vs-the-google-protobuf-gem) · [Objective-C](#objective-c-vs-the-protobuf-objc-runtime)
@@ -249,21 +249,21 @@ and teardown paths. Re-measured with the same A/B method afterwards: every
 row inside the +/-3% noise floor (stream `fed`/`detenc` -1..-4%, `sink`
 -0.7%, `framed` -0.9%), so nothing was kept that costs throughput.
 
-## Typed models (bindings/typed)
+## Generated models (codegen)
 
-The generated typed models are ergonomics, not a second hot path: their
+The generated models are ergonomics, not a second hot path: their
 `encode`/`decode` call the same dynamic API the tables below measure. The cost
 is the per-call type lookup plus, in Python, the dataclass ⇄ dict conversion.
 Measured on this machine with `matrix3` x3000 (30 KB) and identical values
 through both paths:
 
-| language | encode, typed / dynamic | decode, typed / dynamic |
+| language | encode, generated / dynamic | decode, generated / dynamic |
 |---|---|---|
 | C (struct binding) | 1.00x (the struct path itself) | 1.00x |
 | Java | 1.00x | 1.09x |
 | Python (dataclass ⇄ dict) | 3.8x slower | 3.2x slower |
 
-So the numbers below still describe what a typed user pays on the wire; for
+So the numbers below still describe what a generated-model user pays on the wire; for
 Python hot loops the dict path (which the Python row measures) is the fast path.
 No binding gained a slower encode/decode path from this layer.
 

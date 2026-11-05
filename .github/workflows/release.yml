@@ -50,7 +50,7 @@ jobs:
           fi
 
   protoc-plugins:
-    name: protoc plugins (typed + C)
+    name: protoc plugins (codegen + C)
     needs: github-release
     runs-on: ubuntu-latest
     steps:
@@ -69,7 +69,7 @@ jobs:
             set -- $os_arch
             os=$1; arch=$2
             suffix=""; [ "$os" = windows ] && suffix=".exe"
-            (cd bindings/typed && GOOS=$os GOARCH=$arch go build -o "/tmp/plugins/protoc-gen-pbwire-typed-$os-$arch$suffix" ./cmd/protoc-gen-pbwire-typed)
+            (cd codegen && GOOS=$os GOARCH=$arch go build -o "/tmp/plugins/protoc-gen-pbwire-$os-$arch$suffix" ./cmd/protoc-gen-pbwire)
             (cd bindings/c/plugin && GOOS=$os GOARCH=$arch go build -o "/tmp/plugins/protoc-gen-pbwire-c-$os-$arch$suffix" ./cmd/protoc-gen-pbwire-c)
           done
           ls -la /tmp/plugins

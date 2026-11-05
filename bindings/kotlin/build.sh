@@ -6,7 +6,7 @@
 # protobuf-java runtime inside), so the run commands need no extra classpath.
 #
 # Needs JDK 17+, kotlinc and protoc. The protobuf-java jar below is the pinned
-# T4/T5 oracle (see bindings/typed/testdata/ORACLES.md); override with
+# T4/T5 oracle (see codegen/testdata/ORACLES.md); override with
 # PROTOBUF_JAVA_JAR / PROTOBUF_JAVA_VERSION.
 set -eu
 
@@ -17,12 +17,12 @@ jar=${PROTOBUF_JAVA_JAR:-$here/benchmarks/deps/protobuf-java-$version.jar}
 
 if [ ! -f "$jar" ]; then
     mkdir -p "$(dirname "$jar")"
-    echo "fetching protobuf-java $version (typed-test oracle only)"
+    echo "fetching protobuf-java $version (codegen-test oracle only)"
     curl -fsSL -o "$jar" \
         "https://repo1.maven.org/maven2/com/google/protobuf/protobuf-java/$version/protobuf-java-$version.jar"
 fi
 if ! command -v protoc >/dev/null 2>&1; then
-    echo "protoc is required for the typed-test oracle" >&2
+    echo "protoc is required for the codegen-test oracle" >&2
     exit 1
 fi
 
@@ -34,8 +34,8 @@ mkdir -p "$oracle"
 rm -rf "${oracle:?}/structtest" "${oracle:?}/spectest"
 protoc -I"$root/bindings/c/tests/data" --java_out="$oracle" \
     "$root/bindings/c/tests/data/matrix3.proto"
-protoc -I"$root/bindings/typed/testdata" --java_out="$oracle" \
-    "$root/bindings/typed/testdata/oneof1.proto"
+protoc -I"$root/codegen/testdata" --java_out="$oracle" \
+    "$root/codegen/testdata/oneof1.proto"
 
 rm -rf "$here/out/java-classes" "$here/out/oracle-classes"
 mkdir -p "$here/out/java-classes" "$here/out/oracle-classes"
@@ -72,8 +72,8 @@ java --enable-native-access=ALL-UNNAMED -Dpbwire.library="$lib" \
     -cp "$here/out/pbwire.jar:$here/out/java-classes" TestPbwireKt \
     "$root/bindings/c/tests/data/matrix3.desc"
 java --enable-native-access=ALL-UNNAMED -Dpbwire.library="$lib" \
-    -cp "$here/out/pbwire.jar:$here/out/java-classes" TypedTestKt \
-    "$root/bindings/c/tests/data/matrix3.bin" "$root/bindings/typed/testdata/oneof1.bin"
+    -cp "$here/out/pbwire.jar:$here/out/java-classes" GeneratedTestKt \
+    "$root/bindings/c/tests/data/matrix3.bin" "$root/codegen/testdata/oneof1.bin"
 java --enable-native-access=ALL-UNNAMED -Dpbwire.library="$lib" \
     -cp "$here/out/pbwire.jar:$here/out/java-classes" RoundtripKt \
     "$root/examples/addressbook.bin"

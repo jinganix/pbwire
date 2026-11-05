@@ -217,13 +217,13 @@ the layout on every call and mallocs every value. It is 3-5x slower, which is
 the price of that convenience — the point of the extra block is to keep the
 trade-off visible rather than hidden.
 
-## Typed models
+## Generated models
 
-The struct binding *is* the typed model: `plugin/` generates the C structs, the
+The struct binding *is* the generated model: `plugin/` generates the C structs, the
 enum typedefs and the layout tables, with the `.proto` type named in each field
 comment (`int32_t color; /* optional, structtest.Color3 */`). `tests/gen/` and
 `examples/gen/` hold the pinned output; `examples/addressbook.c` assigns struct
 literals and calls the generated `*_encode`/`*_decode` wrappers only.
 
-For every other language, `../typed/` generates the same kind of typed layer;
-see `../typed/README.md`.
+For every other language, `../../codegen/` generates the same kind of generated layer;
+see `../../codegen/README.md`.
