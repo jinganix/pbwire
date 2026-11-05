@@ -74,7 +74,6 @@ typedef struct {
     uint8_t packed;
     uint8_t required;
     uint8_t oneof; /* 1-based oneof group, 0 = none */
-    uint8_t unsupported;
     VALUE name; /* frozen UTF-8 String */
     VALUE sub;  /* Type of a MESSAGE field, else Qnil */
 } field_t;
@@ -455,7 +454,6 @@ type_for(VALUE schema_obj, const pbw_descriptor *desc)
         f->packed = pbw_field_is_packed(field) != 0;
         f->required = pbw_field_label(field) == PBW_LABEL_REQUIRED;
         f->oneof = (uint8_t)pbw_field_oneof_index(field);
-        f->unsupported = f->type == PBW_TYPE_GROUP;
         f->name = rb_utf8_str_new_cstr(pbw_field_name(field));
         rb_obj_freeze(f->name);
         f->sub = Qnil;
@@ -471,7 +469,7 @@ type_for(VALUE schema_obj, const pbw_descriptor *desc)
         const pbw_field *field = pbw_descriptor_field_at(desc, i);
         field_t *f = &type->fields[i];
 
-        if (f->type == PBW_TYPE_MESSAGE) {
+        if (f->type == PBW_TYPE_MESSAGE || f->type == PBW_TYPE_GROUP) {
             f->sub = type_for(schema_obj, pbw_field_message_type(field));
         }
     }
@@ -702,6 +700,40 @@ rd_skip(rdr *r, uint32_t fnum, unsigned wt, unsigned depth)
     }
 }
 
+/* Body of a group field: bytes from here to the matching END_GROUP tag.
+ * Nested groups (known or skipped) are consumed whole by rd_skip; an
+ * END_GROUP for another number is malformed. */
+static int
+rd_group_body(rdr *r, uint32_t fnum, unsigned depth, const uint8_t **body,
+              size_t *body_len)
+{
+    const uint8_t *start = r->p;
+
+    if (depth >= RB_PBW_MAX_DEPTH) {
+        return 0;
+    }
+    for (;;) {
+        const uint8_t *tag_start = r->p;
+        uint32_t inner_fnum;
+        unsigned inner_wt;
+
+        if (!rd_tag(r, &inner_fnum, &inner_wt)) {
+            return 0;
+        }
+        if (inner_wt == 4) {
+            if (inner_fnum != fnum) {
+                return 0;
+            }
+            *body = start;
+            *body_len = (size_t)(tag_start - start);
+            return 1;
+        }
+        if (!rd_skip(r, inner_fnum, inner_wt, depth + 1)) {
+            return 0;
+        }
+    }
+}
+
 /* A packed run must hold a whole number of complete values; returns the count
  * or -1. */
 static long
@@ -853,7 +885,7 @@ scan_message(message_t *m, type_t *type, const uint8_t *data, size_t off,
             continue;
         }
         f = type_field_by_number(type, fnum);
-        if (f == NULL || f->unsupported ||
+        if (f == NULL ||
             (wt != (unsigned)f->wire &&
              !(wt == 2 && f->repeated && packable((pbw_type)f->type)))) {
             if (!rd_skip(&r, fnum, wt, depth)) {
@@ -864,6 +896,34 @@ scan_message(message_t *m, type_t *type, const uint8_t *data, size_t off,
         }
         if (seen != NULL && f->required) {
             seen[f->index] = 1;
+        }
+        /* Groups share the sub-message scan: the body runs to the matching
+         * END_GROUP tag instead of a length prefix. */
+        if (f->type == PBW_TYPE_GROUP) {
+            const uint8_t *body;
+            size_t body_len;
+
+            if (!rd_group_body(&r, fnum, depth, &body, &body_len)) {
+                status = PBW_ERR_INVALID;
+                goto done;
+            }
+            {
+                type_t *sub = NULL;
+
+                TypedData_Get_Struct(f->sub, type_t, &type_data_type, sub);
+                status = scan_message(NULL, sub, body, 0, body_len,
+                                      depth + 1, missing);
+                if (status != PBW_OK) {
+                    goto done;
+                }
+            }
+            if (m != NULL &&
+                !slice_add(m, f, (size_t)(body - data), body_len, 1, 1,
+                           oneof_last)) {
+                status = PBW_ERR_NOMEM;
+                goto done;
+            }
+            continue;
         }
         if (wt == 2) {
             uint64_t plen;
@@ -1109,7 +1169,7 @@ field_value(message_t *m, field_t *f)
         if (last < 0) {
             return Qnil;
         }
-        if (f->type == PBW_TYPE_MESSAGE) {
+        if (f->type == PBW_TYPE_MESSAGE || f->type == PBW_TYPE_GROUP) {
             uint32_t n = 0;
 
             for (i = 0; i < m->nslices; i++) {
@@ -1152,7 +1212,8 @@ field_value(message_t *m, field_t *f)
                 if (s->fidx != f->index) {
                     continue;
                 }
-                if (f->type == PBW_TYPE_MESSAGE) {
+                if (f->type == PBW_TYPE_MESSAGE ||
+                    f->type == PBW_TYPE_GROUP) {
                     rb_ary_push(array, message_wire_new(f->sub, m->buffer,
                                                         s->off, s->len,
                                                         m->depth + 1));
@@ -1307,7 +1368,8 @@ validate_value(VALUE owner, field_t *f, VALUE value)
             value_error(owner, f, "a String");
         }
         return;
-    case PBW_TYPE_MESSAGE: {
+    case PBW_TYPE_MESSAGE:
+    case PBW_TYPE_GROUP: {
         message_t *sub;
 
         if (!rb_obj_is_kind_of(value, cMessage)) {
@@ -1335,10 +1397,6 @@ validate_value(VALUE owner, field_t *f, VALUE value)
         }
         return;
     }
-    case PBW_TYPE_GROUP:
-        rb_raise(eError, "%s: group fields are not supported",
-                 RSTRING_PTR(f->name));
-        return;
     case PBW_TYPE_FLOAT:
     case PBW_TYPE_DOUBLE:
         if (!RB_INTEGER_TYPE_P(value) && !RB_FLOAT_TYPE_P(value)) {
@@ -1370,7 +1428,8 @@ value_build(field_t *f, VALUE value, int *moved)
         StringValue(value);
         return pbw_value_new_bytes(RSTRING_PTR(value),
                                    (size_t)RSTRING_LEN(value));
-    case PBW_TYPE_MESSAGE: {
+    case PBW_TYPE_MESSAGE:
+    case PBW_TYPE_GROUP: {
         message_t *sub;
         pbw_message *tree;
         pbw_value *built;
@@ -1415,7 +1474,8 @@ static VALUE
 item_to_ruby(VALUE owner, field_t *f, pbw_value *value)
 {
     switch ((pbw_type)f->type) {
-    case PBW_TYPE_MESSAGE: {
+    case PBW_TYPE_MESSAGE:
+    case PBW_TYPE_GROUP: {
         pbw_message *child = pbw_value_get_message(value);
 
         return child == NULL ? Qnil : message_borrowed(owner, f->sub, child);
@@ -1640,10 +1700,6 @@ message_get(VALUE self, VALUE key)
         type_t *type = message_type_of(self);
         field_t *f = field_lookup(type, key);
 
-        if (f->unsupported) {
-            rb_raise(eError, "%s: group fields are not supported",
-                     RSTRING_PTR(f->name));
-        }
         if (message->kind == MSG_WIRE) {
             return field_value(message, f);
         }
@@ -1746,6 +1802,273 @@ message_decode(VALUE self, VALUE bytes)
                             (size_t)RSTRING_LEN(buffer), 0);
 }
 
+/* The tree behind a message for printing/encoding: builders hold one, wire
+ * views decode their bytes into a fresh tree the caller frees. */
+static pbw_message *
+message_print_tree(VALUE self, message_t *message, int *free_tree)
+{
+    if (message->kind == MSG_BUILDER) {
+        *free_tree = 0;
+        return message_tree(self, NULL);
+    }
+    {
+        type_t *type = message_type_of(self);
+        pbw_message *tree = NULL;
+        pbw_status status = pbw_decode(type->desc,
+                                       (const uint8_t *)message->data + message->off,
+                                       message->len, &tree);
+        if (status != PBW_OK) {
+            rb_raise(eError, "%s: %s", type_name(type),
+                     pbw_strerror(status));
+        }
+        *free_tree = 1;
+        return tree;
+    }
+}
+
+static VALUE
+message_to_json(VALUE self)
+{
+    message_t *message;
+    pbw_message *tree;
+    int free_tree = 0;
+    char *text = NULL;
+    size_t len = 0;
+    pbw_status status;
+    VALUE out;
+
+    TypedData_Get_Struct(self, message_t, &message_data_type, message);
+    if (message->kind == MSG_CLOSED) {
+        rb_raise(eError, "%s: message is closed",
+                 type_name(message_type_of(self)));
+    }
+    tree = message_print_tree(self, message, &free_tree);
+    status = pbw_json_print(tree, &text, &len);
+    if (free_tree) {
+        pbw_message_free(tree);
+    }
+    if (status != PBW_OK) {
+        rb_raise(eError, "%s: %s", type_name(message_type_of(self)),
+                 pbw_strerror(status));
+    }
+    out = rb_utf8_str_new(text, (long)len);
+    pbw_free(text);
+    return out;
+}
+
+/* Text format of a message; an optional false argument drops unknown
+ * fields (the runner's print_unknown_fields flag) instead of printing
+ * them numerically. */
+static VALUE
+message_to_text(int argc, VALUE *argv, VALUE self)
+{
+    message_t *message;
+    pbw_message *tree;
+    int free_tree = 0;
+    char *text = NULL;
+    size_t len = 0;
+    pbw_status status;
+    VALUE out;
+    /* Absent means print (the binding's standing behavior). */
+    int print_unknown = 1;
+    VALUE flag;
+
+    if (rb_scan_args(argc, argv, "01", &flag) == 1) {
+        print_unknown = RTEST(flag);
+    }
+    TypedData_Get_Struct(self, message_t, &message_data_type, message);
+    if (message->kind == MSG_CLOSED) {
+        rb_raise(eError, "%s: message is closed",
+                 type_name(message_type_of(self)));
+    }
+    tree = message_print_tree(self, message, &free_tree);
+    status = pbw_text_print_opts(tree, print_unknown, &text, &len);
+    if (free_tree) {
+        pbw_message_free(tree);
+    }
+    if (status != PBW_OK) {
+        rb_raise(eError, "%s: %s", type_name(message_type_of(self)),
+                 pbw_strerror(status));
+    }
+    out = rb_utf8_str_new(text, (long)len);
+    pbw_free(text);
+    return out;
+}
+
+/* Parses text (JSON mapping or text format) into a new builder tree. */
+static VALUE
+message_parse(VALUE self, VALUE text, int json, int ignore_unknown)
+{
+    message_t *message;
+    type_t *type;
+    pbw_message *tree = NULL;
+    pbw_status status;
+
+    TypedData_Get_Struct(self, message_t, &message_data_type, message);
+    if (message->kind == MSG_CLOSED) {
+        rb_raise(eError, "%s: message is closed",
+                 type_name(message_type_of(self)));
+    }
+    type = message_type_of(self);
+    StringValue(text);
+    if (json) {
+        pbw_json_parse_options opts;
+
+        opts.ignore_unknown_fields = ignore_unknown;
+        status = pbw_json_parse_opts(type->desc, RSTRING_PTR(text),
+                                     (size_t)RSTRING_LEN(text), &opts, &tree);
+    } else {
+        status = pbw_text_parse(type->desc, RSTRING_PTR(text),
+                                (size_t)RSTRING_LEN(text), &tree);
+    }
+    if (status != PBW_OK) {
+        rb_raise(eError, "%s: %s", type_name(type), pbw_strerror(status));
+    }
+    return message_builder_new(message->type, message->holder, tree, Qnil,
+                               1);
+}
+
+/* An optional trailing true ignores unknown JSON fields (the conformance
+ * JSON_IGNORE_UNKNOWN category); by default they fail, like text. */
+static VALUE
+message_from_json(int argc, VALUE *argv, VALUE self)
+{
+    VALUE text;
+    VALUE ignore = Qfalse;
+
+    rb_scan_args(argc, argv, "11", &text, &ignore);
+    return message_parse(self, text, 1, RTEST(ignore));
+}
+
+/* Materializes a decoded view into a builder holding the parsed tree, so
+ * re-encoding is canonical (oneof collapses to the last member, like the
+ * reference): wire views hand their own bytes back instead. */
+static VALUE
+message_to_builder(VALUE self)
+{
+    message_t *message;
+    type_t *type;
+    pbw_message *tree = NULL;
+    pbw_status status;
+
+    TypedData_Get_Struct(self, message_t, &message_data_type, message);
+    if (message->kind == MSG_CLOSED) {
+        rb_raise(eError, "%s: message is closed",
+                 type_name(message_type_of(self)));
+    }
+    if (message->kind == MSG_BUILDER) {
+        return self;
+    }
+    type = message_type_of(self);
+    status = pbw_decode(type->desc,
+                        (const uint8_t *)message->data + message->off,
+                        message->len, &tree);
+    if (status != PBW_OK) {
+        rb_raise(eError, "%s: %s", type_name(type), pbw_strerror(status));
+    }
+    return message_builder_new(message->type, message->holder, tree, Qnil,
+                               1);
+}
+
+static VALUE
+message_from_text(VALUE self, VALUE text)
+{
+    return message_parse(self, text, 0, 0);
+}
+
+static VALUE
+message_encode_deterministic(VALUE self)
+{
+    message_t *message;
+    pbw_message *tree;
+    int free_tree = 0;
+    uint8_t *wire = NULL;
+    size_t wire_len = 0;
+    pbw_status status;
+    VALUE out;
+
+    TypedData_Get_Struct(self, message_t, &message_data_type, message);
+    if (message->kind == MSG_CLOSED) {
+        rb_raise(eError, "%s: message is closed",
+                 type_name(message_type_of(self)));
+    }
+    tree = message_print_tree(self, message, &free_tree);
+    status = pbw_encode_deterministic(tree, &wire, &wire_len);
+    if (free_tree) {
+        pbw_message_free(tree);
+    }
+    if (status != PBW_OK) {
+        rb_raise(eError, "%s: %s", type_name(message_type_of(self)),
+                 pbw_strerror(status));
+    }
+    out = rb_str_new((const char *)wire, (long)wire_len);
+    pbw_free(wire);
+    return out;
+}
+
+static VALUE
+message_encode_delimited(VALUE self)
+{
+    message_t *message;
+    pbw_message *tree;
+    int free_tree = 0;
+    uint8_t *wire = NULL;
+    size_t wire_len = 0;
+    pbw_status status;
+    VALUE out;
+
+    TypedData_Get_Struct(self, message_t, &message_data_type, message);
+    if (message->kind == MSG_CLOSED) {
+        rb_raise(eError, "%s: message is closed",
+                 type_name(message_type_of(self)));
+    }
+    tree = message_print_tree(self, message, &free_tree);
+    status = pbw_encode_delimited(tree, &wire, &wire_len);
+    if (free_tree) {
+        pbw_message_free(tree);
+    }
+    if (status != PBW_OK) {
+        rb_raise(eError, "%s: %s", type_name(message_type_of(self)),
+                 pbw_strerror(status));
+    }
+    out = rb_str_new((const char *)wire, (long)wire_len);
+    pbw_free(wire);
+    return out;
+}
+
+/* One frame from a byte string: [message, bytes consumed]. The message is
+ * a builder holding the decoded tree. */
+static VALUE
+message_decode_delimited(VALUE self, VALUE bytes)
+{
+    message_t *message;
+    type_t *type;
+    pbw_message *tree = NULL;
+    size_t consumed = 0;
+    pbw_status status;
+    VALUE out;
+    VALUE pair[2];
+
+    TypedData_Get_Struct(self, message_t, &message_data_type, message);
+    if (message->kind == MSG_CLOSED) {
+        rb_raise(eError, "%s: message is closed",
+                 type_name(message_type_of(self)));
+    }
+    type = message_type_of(self);
+    StringValue(bytes);
+    status = pbw_decode_delimited(type->desc, RSTRING_PTR(bytes),
+                                  (size_t)RSTRING_LEN(bytes), &tree,
+                                  &consumed);
+    if (status != PBW_OK) {
+        rb_raise(eError, "%s: %s", type_name(type), pbw_strerror(status));
+    }
+    pair[0] = message_builder_new(message->type, message->holder, tree,
+                                  Qnil, 1);
+    pair[1] = SIZET2NUM(consumed);
+    out = rb_ary_new_from_values(2, pair);
+    return out;
+}
+
 static VALUE
 message_close(VALUE self)
 {
@@ -1828,6 +2151,14 @@ Init_pbwire_ext(void)
     rb_define_method(cMessage, "[]", message_get, 1);
     rb_define_method(cMessage, "encode", message_encode, 0);
     rb_define_method(cMessage, "decode", message_decode, 1);
+    rb_define_method(cMessage, "to_json", message_to_json, 0);
+    rb_define_method(cMessage, "to_text", message_to_text, -1);
+    rb_define_method(cMessage, "from_json", message_from_json, -1);
+    rb_define_method(cMessage, "to_builder", message_to_builder, 0);
+    rb_define_method(cMessage, "from_text", message_from_text, 1);
+    rb_define_method(cMessage, "encode_deterministic", message_encode_deterministic, 0);
+    rb_define_method(cMessage, "encode_delimited", message_encode_delimited, 0);
+    rb_define_method(cMessage, "decode_delimited", message_decode_delimited, 1);
     rb_define_method(cMessage, "close", message_close, 0);
     rb_define_method(cMessage, "release", message_close, 0);
     rb_define_method(cMessage, "closed?", message_closed_p, 0);

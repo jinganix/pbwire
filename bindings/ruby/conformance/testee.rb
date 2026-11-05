@@ -8,9 +8,9 @@
 # schema-driven, it needs no per-message code: the request names the message
 # type and the descriptor set answers with the schema.
 #
-# Supported: binary in -> binary out. JSON/text output needs printers the
-# binding does not expose, so those requests answer `skipped` and the runner
-# reports them as skipped rather than failed.
+# Supported: binary, JSON and text in -> binary, JSON or text out, through
+# the binding's printers and parsers (Message#to_json/to_text/from_json/
+# from_text). JSPB answers `skipped`, like every other testee here.
 #
 # decode() validates the whole payload in one scan and keeps the bytes it was
 # parsed from, so encode() hands them back byte for byte. Verdicts are therefore
@@ -22,6 +22,9 @@ $LOAD_PATH.unshift File.expand_path('../lib', __dir__)
 require 'pbwire'
 
 PROTOBUF = 1
+JSON = 2
+JSPB = 3
+TEXT = 4
 
 def read_request(stream)
   header = stream.read(4)
@@ -38,6 +41,30 @@ def write_response(stream, payload)
   stream.write([payload.bytesize].pack('V'))
   stream.write(payload)
   stream.flush
+end
+
+# Test categories the runner sends (conformance.proto): JSON input with
+# unknown fields only parses when the category asks to ignore them.
+JSON_IGNORE_UNKNOWN = 3
+
+# One input payload wins: binary beats JSON beats text, matching the
+# reference testee's precedence. Returns a message holding the parsed tree:
+# binary decodes materialize (canonical re-encode, like the C testee),
+# JSON/text parses already arrive as trees.
+def parse_input(message, request)
+  payload = request['protobuf_payload']
+  return message.decode(payload).to_builder unless payload.nil?
+
+  json = request['json_payload']
+  unless json.nil?
+    ignore = request['test_category'] == JSON_IGNORE_UNKNOWN
+    return message.from_json(json, ignore)
+  end
+
+  text = request['text_payload']
+  return message.from_text(text) unless text.nil?
+
+  raise Pbwire::Error, 'no input payload in the request'
 end
 
 if ARGV.empty?
@@ -58,10 +85,8 @@ loop do
     request = request_type.decode(body)
     wanted = request['requested_output_format'] || 0
     name = request['message_type']
-    if wanted != PROTOBUF
-      response_type['skipped'] = "output format #{wanted} is not supported"
-    elsif request['protobuf_payload'].nil?
-      response_type['skipped'] = 'only binary input is supported'
+    if wanted == JSPB
+      response_type['skipped'] = 'JSPB is not supported'
     else
       begin
         message = schema.message(name)
@@ -69,11 +94,25 @@ loop do
         response_type['runtime_error'] = "unknown message type #{name.inspect}"
       else
         begin
-          parsed = message.decode(request['protobuf_payload'])
+          parsed = parse_input(message, request)
         rescue Pbwire::Error => e
           response_type['parse_error'] = e.message
         else
-          response_type['protobuf_payload'] = parsed.encode
+          begin
+            case wanted
+            when PROTOBUF
+              response_type['protobuf_payload'] = parsed.encode
+            when JSON
+              response_type['json_payload'] = parsed.to_json
+            when TEXT
+              print_unknown = request['print_unknown_fields'] == true
+              response_type['text_payload'] = parsed.to_text(print_unknown)
+            else
+              response_type['skipped'] = "output format #{wanted} is not supported"
+            end
+          rescue Pbwire::Error => e
+            response_type['serialize_error'] = e.message
+          end
         end
       end
     end

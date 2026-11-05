@@ -158,17 +158,19 @@ parent is closed.
 
 Repeated scalars (packed or unpacked on the wire), repeated strings/bytes and
 repeated messages are supported; a map field reads as an Array of entry
-messages. Groups (proto2 legacy) are not exposed: `get`/`set` raise, and the wire
-view keeps their bytes as unknown fields (so a round trip still preserves them).
-Extensions are read by number, not name.
+messages. Groups (proto2 legacy) map like messages (START_GROUP framing on
+the wire). Extensions are read by number, not name.
 
 ## Deliberately skipped
 
 - **No `protoc` plugin, no codegen.** The descriptor set is the schema; nothing
   is generated and there is no hand-built schema path.
-- **No JSON/text format, no deterministic encoding, no streaming.** All of those
-  exist in the C API and other bindings; this one stays the smallest thing that
-  reads and writes binary messages.
+- **Formats beyond binary/JSON/text.** `to_json`/`from_json` (with an
+  optional ignore-unknown flag), `to_text`/`from_text`, deterministic
+  encoding (`encode_deterministic`, map entries sorted by key) and delimited
+  framing (`encode_delimited`, `decode_delimited` returning `[message, read]`)
+  wrap the C API; `to_builder` materializes a decoded view into a canonical
+  tree. Unknown fields round-trip byte for byte in every form.
 
 ## Benchmark
 
@@ -206,17 +208,23 @@ The win is architectural, not a micro-optimization:
 
 ## Conformance
 
-`conformance/testee.rb` drives the binary wire format of the official
-`conformance_test_runner` through this binding (`make conformance-ruby`, reusing
-the cached protobuf checkout from `make conformance-setup`):
+`conformance/testee.rb` drives the binary, JSON and text formats of the
+official `conformance_test_runner` through this binding
+(`make conformance-ruby`, reusing the cached protobuf checkout from
+`make conformance-setup`):
 
 ```
-CONFORMANCE SUITE PASSED: 1199 successes, 1403 skipped, 0 expected failures,
+CONFORMANCE SUITE PASSED: 2744 successes, 0 skipped, 0 expected failures,
+0 unexpected failures.
+CONFORMANCE SUITE PASSED: 445 successes, 0 skipped, 0 expected failures,
 0 unexpected failures.
 ```
 
-JSON/text/JSPB requests answer `skipped` (the binding has no printers); the
-binary verdicts match the reference implementation exactly.
+Only JSPB answers `skipped`; every other verdict matches the reference
+implementation exactly. (The binary suite runs without the shared failure
+list: the wire reader's validation rejects the overlong tag varints the
+core tree decoder truncates, so the two listed cases parse-fail like the
+reference. Text output honors the runner's `print_unknown_fields` flag.)
 
 ## Layout
 
@@ -228,7 +236,7 @@ binary verdicts match the reference implementation exactly.
 | example | [`examples/roundtrip.rb`](examples/roundtrip.rb) |
 | self-check | [`test/test_pbwire.rb`](test/test_pbwire.rb) |
 | benchmark | [`benchmarks/bench.rb`](benchmarks/bench.rb) | the four standard tiers against the `google-protobuf` gem |
-| conformance | [`conformance/testee.rb`](conformance/testee.rb) | binary wire format through the official runner |
+| conformance | [`conformance/testee.rb`](conformance/testee.rb) | binary, JSON and text through the official runner |
 | fixture | [`test/data/sample.proto`](test/data/sample.proto) and the checked-in `sample.desc` |
 
 Regenerate the descriptor set after editing the fixture (it is checked in, so the
