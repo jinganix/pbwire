@@ -1,6 +1,6 @@
 name: pbwire_bench
 description: pbwire Dart binding benchmark against the protobuf Dart runtime.
-version: 0.1.9
+version: 0.1.10
 publish_to: none
 
 environment:

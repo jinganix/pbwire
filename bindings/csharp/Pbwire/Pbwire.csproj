@@ -10,7 +10,7 @@
     <!-- Release metadata: Version is kept in sync with the repo-root VERSION
          file by scripts/sync-versions.sh; never edit by hand. -->
     <PackageId>Pbwire</PackageId>
-    <Version>0.1.9</Version>
+    <Version>0.1.10</Version>
     <Authors>jinganix</Authors>
     <Description>Dynamic protobuf over the pbwire C ABI, schema at runtime, no generated code</Description>
     <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
