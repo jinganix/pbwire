@@ -3,7 +3,7 @@
   <modelVersion>4.0.0</modelVersion>
   <groupId>io.github.jinganix</groupId>
   <artifactId>pbwire-clojure</artifactId>
-  <version>0.1.8</version>
+  <version>0.1.9</version>
   <packaging>jar</packaging>
   <name>pbwire-clojure</name>
   <description>Dynamic protobuf over the pbwire C ABI, schema at runtime, no generated code</description>

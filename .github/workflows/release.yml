@@ -202,6 +202,9 @@ jobs:
           HEX_API_KEY: ${{ secrets.HEX_API_KEY }}
         run: |
           [ -n "$HEX_API_KEY" ] || { echo "HEX_API_KEY unset, skipping"; exit 0; }
+          # The image ships its own Erlang/Elixir; setup-beam's pair must win
+          # or the freshly fetched hex archive (OTP 29 beams) will not load.
+          export PATH="$INSTALL_DIR_FOR_ELIXIR/bin:$INSTALL_DIR_FOR_OTP/bin:$PATH"
           (cd bindings/elixir && mix local.hex --force && mix hex.publish --yes)
 
   luarocks:
