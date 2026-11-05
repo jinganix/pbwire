@@ -37,15 +37,18 @@ mkdir -p "$here/out/java-classes"
 javac -nowarn -d "$here/out/java-classes" "$root"/bindings/java/runtime/*.java
 
 base="$clj_jar:$spec_jar:$core_specs_jar:$here/out/java-classes:$here/runtime/src"
-java -cp "$base:$here/tests" clojure.main -m pbwire.test-pbwire
-java -cp "$base:$here/examples" clojure.main -m roundtrip \
-    "$root/bindings/c/tests/data/matrix3.desc"
+java -cp "$base:$here/tests:$here/tests/gen" clojure.main -m pbwire.test-pbwire
+java -cp "$base:$here/tests:$here/tests/gen" clojure.main -m generated-test \
+    "$root/bindings/c/tests/data/matrix3.bin"
+java -cp "$base:$here/examples:$here/examples/gen" clojure.main -m roundtrip \
+    "$root/examples/addressbook.bin"
 
 cat <<EOF
 build ok: $here/out/java-classes (JDK 17+)
 
-self-check: cd $here && java -cp $base:$here/tests clojure.main -m pbwire.test-pbwire
-example:    cd $here && java -cp $base:$here/examples clojure.main -m roundtrip ../c/tests/data/matrix3.desc
+self-check: cd $here && java -cp $base:$here/tests:$here/tests/gen clojure.main -m pbwire.test-pbwire
+generated:  cd $here && java -cp $base:$here/tests:$here/tests/gen clojure.main -m generated-test ../../c/tests/data/matrix3.bin
+example:    cd $here && java -cp $base:$here/examples:$here/examples/gen clojure.main -m roundtrip ../../examples/addressbook.bin
 bench:      ./benchmarks/bench.sh
 conformance: cd $here/conformance && java -cp $base:$here/conformance clojure.main -m testee ../../build/conformance.desc
 EOF

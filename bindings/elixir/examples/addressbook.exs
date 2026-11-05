@@ -1,58 +1,64 @@
-# AddressBook example (Elixir): generated structs, then a plain round trip
+# AddressBook example (Elixir): generated modules, then a plain round trip
 # through Pbwire.
 #
 # Run from bindings/elixir (needs Elixir + OTP, `make setup` once):
 #
 #     mix run examples/addressbook.exs
 #
-# The modules below are what `protoc-gen-elixir` emits for an addressbook
-# proto (see test/support/proto2.ex for the shared copy); a real project
-# generates them from a `.proto` instead of writing them by hand.
+# The modules are what `protoc-gen-pbwire --pbwire_opt=lang=elixir` emits for
+# addressbook.proto (see examples/gen/addressbook.ex); they stay exactly as
+# the generator emits them, only the codec is swapped. struct/2 (instead of
+# %Struct{} literals) keeps the script compilable before the required file
+# below defines the modules.
 
-defmodule Addressbook.PhoneType do
-  use Protobuf, enum: true, syntax: :proto2
-  field(:MOBILE, 0)
-  field(:HOME, 1)
-  field(:WORK, 2)
-end
+Code.require_file("gen/addressbook.ex", __DIR__)
 
-defmodule Addressbook.PhoneNumber do
-  use Protobuf, syntax: :proto2
-  field(:number, 1, optional: true, type: :string)
-  field(:type, 2, optional: true, type: Addressbook.PhoneType, enum: true)
-end
+defmodule AddressbookExample do
+  def main(bin_path) do
+    mods = [Tutorial.Person, Tutorial.Person.PhoneNumber, Tutorial.AddressBook]
+    :ok = Pbwire.load_schema(mods)
 
-defmodule Addressbook.Person do
-  use Protobuf, syntax: :proto2
-  field(:name, 1, required: true, type: :string)
-  field(:id, 2, required: true, type: :int32)
-  field(:email, 3, optional: true, type: :string)
-  field(:phones, 4, repeated: true, type: Addressbook.PhoneNumber)
-end
+    book =
+      struct(Tutorial.AddressBook,
+        people: [
+          struct(Tutorial.Person,
+            name: "Alice",
+            id: 1,
+            phones: [
+              struct(Tutorial.Person.PhoneNumber, number: "555-0100", type: :MOBILE)
+            ]
+          ),
+          struct(Tutorial.Person,
+            name: "Bob",
+            id: 2,
+            email: "bob@example.com",
+            phones: [
+              struct(Tutorial.Person.PhoneNumber, number: "555-0200", type: :HOME)
+            ]
+          )
+        ]
+      )
 
-defmodule Addressbook do
-  alias Addressbook.{Person, PhoneNumber}
+    wire = Pbwire.encode(book)
 
-  def main do
-    :ok = Pbwire.load_schema([Person])
+    if File.exists?(bin_path) do
+      ^wire = File.read!(bin_path)
+    end
 
-    person = %Person{
-      name: "alice",
-      id: 1234,
-      phones: [%PhoneNumber{number: "555-1234", type: :MOBILE}]
-    }
+    decoded = Pbwire.decode(wire, Tutorial.AddressBook)
+    true = decoded == book
 
-    wire = Pbwire.encode(person)
+    IO.puts("#{byte_size(wire)} bytes, #{length(book.people)} people")
 
-    # Byte-identical to the official runtime on the same struct.
-    true = wire == Protobuf.encode(person)
+    Enum.each(book.people, fn person ->
+      IO.puts("  #{person.name} (#{person.id}) #{person.email || ""}")
 
-    ^person = Pbwire.decode(wire, Person)
-
-    IO.puts(
-      "#{byte_size(wire)} bytes, name=#{person.name}, id=#{person.id}, #{length(person.phones)} phone(s)"
-    )
+      Enum.each(person.phones, fn phone ->
+        IO.puts("    #{phone.number}")
+      end)
+    end)
   end
 end
 
-Addressbook.main()
+[path | _] = System.argv() ++ ["../../examples/addressbook.bin"]
+AddressbookExample.main(path)

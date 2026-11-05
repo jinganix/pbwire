@@ -64,8 +64,24 @@ func Generate(fd protoreflect.FileDescriptor, opt Options) ([]File, error) {
 		files = luaFiles(f, opt)
 	case "go":
 		files = goFiles(f, opt)
+	case "swift":
+		files = swiftFiles(f, opt)
+	case "zig":
+		files = zigFiles(f, opt)
+	case "scala":
+		files = scalaFiles(f, opt)
+	case "clojure":
+		files = clojureFiles(f, opt)
+	case "fsharp":
+		files = fsharpFiles(f, opt)
+	case "elixir":
+		files = elixirFiles(f)
+	case "julia":
+		files = juliaFiles(f, opt)
+	case "r":
+		files = rFiles(f, opt)
 	default:
-		return nil, fmt.Errorf("unknown lang=%q (want java, kotlin, csharp, dart, php, ruby, python, typescript, javascript, rust, objc, lua or go)", opt.Lang)
+		return nil, fmt.Errorf("unknown lang=%q (want java, kotlin, csharp, dart, php, ruby, python, typescript, javascript, rust, objc, lua, go, swift, zig, scala, clojure, fsharp, elixir, julia or r)", opt.Lang)
 	}
 	if opt.Dir == "" {
 		return files, nil

@@ -34,6 +34,6 @@ defmodule Pbwire.MixProject do
     [licenses: ["Apache-2.0"], links: %{"GitHub" => "https://github.com/jinganix/pbwire"}]
   end
 
-  defp elixirc_paths(:test), do: ["lib", "test/support"]
+  defp elixirc_paths(:test), do: ["lib", "test/support", "test/gen"]
   defp elixirc_paths(_), do: ["lib"]
 end

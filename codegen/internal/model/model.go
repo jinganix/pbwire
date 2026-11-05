@@ -25,7 +25,10 @@ type Field struct {
 	Closed   bool   // the enum is closed (proto2): unknown values are invalid
 	Message  string // local class name, empty for a foreign message
 	Oneof    string // containing oneof, empty when not in one
-	Skip     string // non-empty: the generated model omits this field, reason
+	// Elixir-shape facts (other emitters ignore them).
+	Proto3Optional bool   // proto3 `optional`: explicit presence without a oneof
+	Packed         bool   // packed repeated numerics (proto3 default)
+	Skip           string // non-empty: the generated model omits this field, reason
 }
 
 // Message is one message with its fields in declaration order.
@@ -54,6 +57,7 @@ type File struct {
 	Path     string
 	Package  string
 	Prefix   string // CamelCase of the proto package, used for class prefixes
+	Syntax   string // "proto2" or "proto3" (editions report as proto2)
 	Messages []Message
 	Enums    []Enum
 }
@@ -65,6 +69,12 @@ func Build(fd protoreflect.FileDescriptor) *File {
 		Path:    fd.Path(),
 		Package: string(fd.Package()),
 		Prefix:  Prefix(string(fd.Package())),
+	}
+	switch fd.Syntax() {
+	case protoreflect.Proto3:
+		f.Syntax = "proto3"
+	default:
+		f.Syntax = "proto2"
 	}
 	for i := 0; i < fd.Enums().Len(); i++ {
 		f.Enums = append(f.Enums, buildEnum(fd.Enums().Get(i), nil))
@@ -147,6 +157,12 @@ func (f *File) buildField(fd protoreflect.FieldDescriptor) Field {
 		Kind:     fd.Kind(),
 		Repeated: fd.IsList(),
 		Required: fd.Cardinality() == protoreflect.Required,
+	}
+	if fd.HasOptionalKeyword() {
+		field.Proto3Optional = true
+	}
+	if fd.IsPacked() {
+		field.Packed = true
 	}
 	if od := fd.ContainingOneof(); od != nil && !od.IsSynthetic() {
 		field.Oneof = string(od.Name())

@@ -43,21 +43,23 @@ javac -nowarn -d "$here/out/classes" "$root"/bindings/java/runtime/*.java
 # The Scala DSL (default package: the Java runtime is not importable from
 # a named package), the self-check, the example and the conformance testee.
 scalac -nowarn -cp "$here/out/classes" -d "$here/out/classes" \
-    "$here"/runtime/*.scala "$here"/tests/*.scala \
-    "$here"/examples/*.scala "$here"/conformance/*.scala
+    "$here"/runtime/*.scala "$here"/tests/*.scala "$here"/tests/gen/*.scala \
+    "$here"/examples/*.scala "$here"/examples/gen/*.scala "$here"/conformance/*.scala
 
 # Self-check: TestPbwire is the binding gate (matrix3 oracle bytes plus the
-# edge payload); Roundtrip is the runnable example.
+# edge payload); Roundtrip is the addressbook example (generated models).
 java -cp "$CP" TestPbwire \
     "$root/bindings/c/tests/data/matrix3.desc" "$root/tests/data/edge.desc"
 java -cp "$CP" Roundtrip \
-    "$root/bindings/c/tests/data/matrix3.desc"
+    "$root/examples/addressbook.bin"
+java -cp "$CP" GeneratedTestGen \
+    "$root/bindings/c/tests/data/matrix3.bin"
 
 cat <<EOF
 build ok: $here/out/classes (scalac $(scalac -version 2>&1))
 
 example:
-  java -cp $CP Roundtrip $root/bindings/c/tests/data/matrix3.desc
+  java -cp $CP Roundtrip $root/examples/addressbook.bin
 conformance:
   java -cp $CP Testee <conformance.desc>  # see conformance/ below
 EOF
