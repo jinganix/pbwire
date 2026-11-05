@@ -162,7 +162,7 @@ jobs:
         run: |
           gem install google-protobuf -v 4.36.2 --no-document
           pip install "protobuf==7.36.2"
-          (cd bindings/node/benchmarks && npm install --no-save --no-package-lock --no-audit --no-fund protobufjs@8.8.1)
+          (cd bindings/node && npm install --prefix benchmarks --no-save --no-package-lock --no-audit --no-fund protobufjs@8.8.1)
           sudo apt-get update && sudo apt-get install -y php-cli
       - name: Check the codegen plugin's formatting
         run: |
