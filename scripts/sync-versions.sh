@@ -52,6 +52,11 @@ if [[ $CHECK == 1 ]]; then
   expect bindings/node/package.json "\"version\": \"$VER\"" "node package.json"
   expect bindings/java/pom.xml "<version>$VER</version>" "java pom"
   expect bindings/kotlin/pom.xml "<version>$VER</version>" "kotlin pom"
+  expect bindings/elixir/mix.exs "version: \"$VER\"" "elixir mix.exs"
+  expect bindings/fsharp/runtime/Pbwire.FSharp.fsproj "<Version>$VER</Version>" "fsharp fsproj"
+  expect bindings/scala/build.sbt "ThisBuild / version := \"$VER\"" "scala build.sbt"
+  expect bindings/julia/runtime/Project.toml "^version = \"$VER\"$" "julia Project.toml"
+  expect bindings/r/runtime/DESCRIPTION "^Version: $VER\$" "r DESCRIPTION"
   # Plugin versions must never track VERSION (a blanket rewrite once
   # shipped maven-compiler-plugin:0.1.1 to every user of the file).
   if grep -A1 "maven-compiler-plugin" bindings/java/pom.xml | grep -q "<version>$VER</version>"; then
@@ -86,6 +91,11 @@ setver bindings/node/package.json -e "s/\"version\": \"[^\"]*\"/\"version\": \"$
 # shipped maven-compiler-plugin:0.1.1 to every user of the file).
 setver bindings/java/pom.xml -e "s|^  <version>[0-9.]*</version>|  <version>$VER</version>|"
 setver bindings/kotlin/pom.xml -e "s|^  <version>[0-9.]*</version>|  <version>$VER</version>|"
+setver bindings/elixir/mix.exs -e "s/version: \"[0-9.]*/version: \"$VER/"
+setver bindings/fsharp/runtime/Pbwire.FSharp.fsproj -e "s|<Version>[^<]*</Version>|<Version>$VER</Version>|"
+setver bindings/scala/build.sbt -e "s|ThisBuild / version := \"[0-9.]*\"|ThisBuild / version := \"$VER\"|"
+setver bindings/julia/runtime/Project.toml -e "s/^version = \".*\"/version = \"$VER\"/"
+setver bindings/r/runtime/DESCRIPTION -e "s/^Version: .*/Version: $VER/"
 # Kotlin pins its pbwire-java dependency to the same release line.
 setver bindings/kotlin/pom.xml -e "/<artifactId>pbwire-java<\/artifactId>/,/<\/dependency>/s|<version>[0-9.]*</version>|<version>$VER</version>|"
 setver README.md -e "s|releases/tag/v[0-9.]*|releases/tag/v$VER|g" \

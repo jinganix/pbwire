@@ -9,6 +9,9 @@
     <!-- Release metadata: Version is kept in sync with the repo-root VERSION
          file by scripts/sync-versions.sh; never edit by hand. -->
     <Version>0.1.7</Version>
+    <Authors>jinganix</Authors>
+    <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
+    <RepositoryUrl>https://github.com/jinganix/pbwire</RepositoryUrl>
     <Description>Idiomatic F# facade over the Pbwire C# dynamic binding, schema at runtime, no wire code</Description>
   </PropertyGroup>
 
