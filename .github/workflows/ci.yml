@@ -153,6 +153,9 @@ jobs:
           PB_SRC=$(echo $PWD/.tmp/protobuf-*)
           CMAKE_BUILD_PARALLEL_LEVEL=$(nproc) cmake --build "$PB_SRC/build" --target protoc
           echo "PB_SRC=$PB_SRC" >> "$GITHUB_ENV"
+          # The PHP compat test shells out to bare `protoc --version`;
+          # point PATH at the pinned build so it sees 36.2, not apt's.
+          echo "$PB_SRC/build" >> "$GITHUB_PATH"
       - name: Install language baselines
         # The compat tests pin their baselines (see each binding's
         # testdata/ORACLES.md); the runner image does not provide them.
