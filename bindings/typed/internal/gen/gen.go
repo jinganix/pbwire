@@ -43,13 +43,13 @@ func Generate(fd protoreflect.FileDescriptor, opt Options) ([]File, error) {
 	case "kotlin":
 		files = kotlinFiles(f)
 	case "csharp":
-		files = csharpFiles(f)
+		files = csharpFiles(f, opt)
 	case "dart":
 		files = dartFiles(f)
 	case "php":
 		files = phpFiles(f)
 	case "ruby":
-		files = rubyFiles(f)
+		files = rubyFiles(f, opt)
 	case "python":
 		files = pythonFiles(f, opt)
 	case "typescript":
@@ -57,13 +57,15 @@ func Generate(fd protoreflect.FileDescriptor, opt Options) ([]File, error) {
 	case "javascript":
 		files = javaScriptFiles(f, opt)
 	case "rust":
-		files = rustFiles(f)
+		files = rustFiles(f, opt)
 	case "objc":
 		files = objcFiles(f)
 	case "lua":
 		files = luaFiles(f)
+	case "go":
+		files = goFiles(f, opt)
 	default:
-		return nil, fmt.Errorf("unknown lang=%q (want java, kotlin, csharp, dart, php, ruby, python, typescript, javascript, rust, objc or lua)", opt.Lang)
+		return nil, fmt.Errorf("unknown lang=%q (want java, kotlin, csharp, dart, php, ruby, python, typescript, javascript, rust, objc, lua or go)", opt.Lang)
 	}
 	if opt.Dir == "" {
 		return files, nil

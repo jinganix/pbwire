@@ -82,8 +82,10 @@ not `Send`/`Sync` on purpose: like the C core, one tree belongs to one thread.
 
 ## Typed models
 
-`protoc-gen-pbwire-typed` (in `../typed`) generates structs with typed fields,
-`encode(&Schema)` / `decode(&Schema, &[u8])` and `encode_into` for nesting, all
-resolving fields through the schema. The committed output is `tests/gen/` and
-`examples/gen/`; `examples/roundtrip.rs` assigns typed fields only. See
-`../typed/README.md`.
+`protoc-gen-pbwire-typed` (in `../typed`) generates prost-shaped structs:
+the same field names, `Option` for optional/message/oneof fields, `i32` for
+enums, nested modules, and `encode_to_vec` / `decode` over the embedded
+schema — no schema argument at use sites. The committed output is
+`tests/gen/` and `examples/gen/`; `examples/roundtrip.rs` assigns typed
+fields only, and `tests/compat.rs` proves byte and field parity with the
+pinned prost oracle (T1–T6). See `../typed/README.md`.

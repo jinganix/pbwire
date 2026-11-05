@@ -29,7 +29,7 @@ gen-examples: build
 	mkdir -p ../java/examples/gen ../kotlin/examples/gen ../csharp/examples/gen \
 		../dart/examples/gen ../php/examples/gen ../ruby/examples/gen \
 		../python/examples/gen ../node/examples/gen ../rust/examples/gen \
-		../objc/examples/gen ../lua/examples/gen
+		../objc/examples/gen ../lua/examples/gen ../go/examples/gen/addressbook
 	$(PROTOC) $(EXAMPLE_OPTS) --pbwire-typed_out=../java/examples/gen --pbwire-typed_opt=lang=java $(EXAMPLE)
 	$(PROTOC) $(EXAMPLE_OPTS) --pbwire-typed_out=../kotlin/examples/gen --pbwire-typed_opt=lang=kotlin $(EXAMPLE)
 	$(PROTOC) $(EXAMPLE_OPTS) --pbwire-typed_out=../csharp/examples/gen --pbwire-typed_opt=lang=csharp $(EXAMPLE)
@@ -42,6 +42,7 @@ gen-examples: build
 	$(PROTOC) $(EXAMPLE_OPTS) --pbwire-typed_out=../rust/examples/gen --pbwire-typed_opt=lang=rust $(EXAMPLE)
 	$(PROTOC) $(EXAMPLE_OPTS) --pbwire-typed_out=../objc/examples/gen --pbwire-typed_opt=lang=objc $(EXAMPLE)
 	$(PROTOC) $(EXAMPLE_OPTS) --pbwire-typed_out=../lua/examples/gen --pbwire-typed_opt=lang=lua $(EXAMPLE)
+	$(PROTOC) $(EXAMPLE_OPTS) --pbwire-typed_out=../go/examples/gen/addressbook --pbwire-typed_opt=lang=go $(EXAMPLE)
 
 gen-java: build
 	mkdir -p ../java/tests/gen
@@ -54,6 +55,7 @@ gen-kotlin: build
 gen-csharp: build
 	mkdir -p ../csharp/typed/gen
 	$(PROTOC) $(OPTS) --pbwire-typed_out=../csharp/typed/gen --pbwire-typed_opt=lang=csharp $(PROTO)
+	$(PROTOC) $(TESTDATA_OPTS) --pbwire-typed_out=../csharp/typed/gen --pbwire-typed_opt=lang=csharp $(TESTDATA)/oneof1.proto
 
 gen-dart: build
 	mkdir -p ../dart/tests/gen
@@ -64,8 +66,11 @@ gen-php: build
 	$(PROTOC) $(OPTS) --pbwire-typed_out=../php/tests/gen --pbwire-typed_opt=lang=php $(PROTO)
 
 gen-ruby: build
-	mkdir -p ../ruby/test/gen
+	mkdir -p ../ruby/test/gen ../ruby/test/gen_oracle
 	$(PROTOC) $(OPTS) --pbwire-typed_out=../ruby/test/gen --pbwire-typed_opt=lang=ruby $(PROTO)
+	$(PROTOC) $(TESTDATA_OPTS) --pbwire-typed_out=../ruby/test/gen --pbwire-typed_opt=lang=ruby $(TESTDATA)/oneof1.proto
+	$(PROTOC) -I$(DATA) --ruby_out=../ruby/test/gen_oracle $(PROTO)
+	$(PROTOC) -I$(TESTDATA) --ruby_out=../ruby/test/gen_oracle $(TESTDATA)/oneof1.proto
 
 TESTDATA := $(CURDIR)/testdata
 TESTDATA_OPTS = -I$(TESTDATA) --plugin=protoc-gen-pbwire-typed=$(PLUGIN)
@@ -84,9 +89,19 @@ gen-node: build
 	$(PROTOC) $(TESTDATA_OPTS) --pbwire-typed_out=../node/tests/gen --pbwire-typed_opt=lang=typescript $(TESTDATA)/oneof1.proto
 	$(PROTOC) $(TESTDATA_OPTS) --pbwire-typed_out=../node/tests/gen --pbwire-typed_opt=lang=javascript $(TESTDATA)/oneof1.proto
 
+GO_ORACLE := pbwire/tests/gen_oracle
+
+gen-go: build
+	mkdir -p ../go/tests/gen/matrix3 ../go/tests/gen/oneof1 ../go/tests/gen_oracle/matrix3pb ../go/tests/gen_oracle/oneof1pb
+	$(PROTOC) $(OPTS) --pbwire-typed_out=../go/tests/gen/matrix3 --pbwire-typed_opt=lang=go $(PROTO)
+	$(PROTOC) $(TESTDATA_OPTS) --pbwire-typed_out=../go/tests/gen/oneof1 --pbwire-typed_opt=lang=go $(TESTDATA)/oneof1.proto
+	$(PROTOC) -I$(DATA) --go_out=../go/tests/gen_oracle/matrix3pb --go_opt=paths=source_relative '--go_opt=Mmatrix3.proto=$(GO_ORACLE)/matrix3pb' $(PROTO)
+	$(PROTOC) -I$(TESTDATA) --go_out=../go/tests/gen_oracle/oneof1pb --go_opt=paths=source_relative '--go_opt=Moneof1.proto=$(GO_ORACLE)/oneof1pb' $(TESTDATA)/oneof1.proto
+
 gen-rust: build
 	mkdir -p ../rust/tests/gen
 	$(PROTOC) $(OPTS) --pbwire-typed_out=../rust/tests/gen --pbwire-typed_opt=lang=rust $(PROTO)
+	$(PROTOC) $(TESTDATA_OPTS) --pbwire-typed_out=../rust/tests/gen --pbwire-typed_opt=lang=rust $(TESTDATA)/oneof1.proto
 
 gen-objc: build
 	mkdir -p ../objc/tests/gen
@@ -98,7 +113,7 @@ gen-lua: build
 
 # Each target needs its language's toolchain plus the shared library, which is
 # why `make typed-test` at the repo root is not part of the C commit gate.
-test: test-java test-kotlin test-csharp test-dart test-php test-ruby test-python test-node test-rust test-objc test-lua
+test: test-java test-kotlin test-csharp test-dart test-php test-ruby test-python test-node test-rust test-objc test-lua test-go
 
 JAVA ?= java
 RUBY ?= ruby
@@ -136,6 +151,7 @@ test-php: build
 test-ruby: build
 	$(MAKE) -C ../.. ruby-bind >/dev/null
 	$(RUBY) -I../ruby/lib ../ruby/test/typed_test.rb
+	$(RUBY) -I../ruby/lib ../ruby/test/test_compat.rb
 
 test-python: build
 	$(MAKE) -C ../.. python-bind >/dev/null
@@ -147,7 +163,11 @@ test-node:
 	$(NODE) --test ../node/tests/typed_test.js ../node/tests/compat_test.js
 
 test-rust:
-	cd ../rust && $(CARGO) test --test typed
+	cd ../rust && $(CARGO) test --test compat
+
+test-go: build
+	$(MAKE) -C ../.. build/libpbwire.a >/dev/null
+	cd ../go && $(GO) test ./...
 
 test-objc:
 	cd .. && ./objc/build.sh typed
@@ -166,7 +186,7 @@ conformance: build
 	@test -f $(CONFORMANCE_PROTO) || { \
 		echo "protobuf checkout not found: $(CONFORMANCE_PROTO)"; \
 		echo "run 'make conformance-setup' first"; exit 1; }
-	@mkdir -p build/conformance
+	@mkdir -p build/conformance build/conformance/go
 	$(PROTOC) -I../../.tmp/protobuf-v36.2/src $(OPTS) \
 		--pbwire-typed_out=build/conformance --pbwire-typed_opt=lang=java $(CONFORMANCE_PROTO)
 	$(PROTOC) -I../../.tmp/protobuf-v36.2/src $(OPTS) \
@@ -191,6 +211,8 @@ conformance: build
 		--pbwire-typed_out=build/conformance --pbwire-typed_opt=lang=objc $(CONFORMANCE_PROTO)
 	$(PROTOC) -I../../.tmp/protobuf-v36.2/src $(OPTS) \
 		--pbwire-typed_out=build/conformance --pbwire-typed_opt=lang=lua $(CONFORMANCE_PROTO)
+	$(PROTOC) -I../../.tmp/protobuf-v36.2/src $(OPTS) \
+		--pbwire-typed_out=build/conformance/go --pbwire-typed_opt=lang=go $(CONFORMANCE_PROTO)
 	@echo "typed models for test_messages_proto3.proto: build/conformance"
 	$(MAKE) conformance-check
 
@@ -202,7 +224,7 @@ conformance-check: build
 	javac -nowarn -d build/conformance/java-out -cp ../java/out build/conformance/*.java
 	kotlinc -nowarn -cp ../java/out -d build/conformance/conf.jar build/conformance/test_messages_proto3.kt
 	@mkdir -p build/conformance/csharp
-	printf '%s\n' '<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net10.0</TargetFramework><Nullable>enable</Nullable><AllowUnsafeBlocks>true</AllowUnsafeBlocks></PropertyGroup><ItemGroup><ProjectReference Include="$(CURDIR)/../csharp/Pbwire/Pbwire.csproj" /><Compile Include="$(CURDIR)/build/conformance/test_messages_proto3.cs" /></ItemGroup></Project>' > build/conformance/csharp/conf.csproj
+	printf '%s\n' '<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net10.0</TargetFramework><Nullable>enable</Nullable><AllowUnsafeBlocks>true</AllowUnsafeBlocks></PropertyGroup><ItemGroup><ProjectReference Include="$(CURDIR)/../csharp/Pbwire/Pbwire.csproj" /><PackageReference Include="Google.Protobuf" Version="3.36.2" /><Compile Include="$(CURDIR)/build/conformance/test_messages_proto3.cs" /></ItemGroup></Project>' > build/conformance/csharp/conf.csproj
 	$(DOTNET) build build/conformance/csharp/conf.csproj
 	cp build/conformance/test_messages_proto3.dart ../dart/tests/gen/conf_models.dart
 	cd ../dart && $(DART) analyze tests/gen/conf_models.dart
@@ -212,12 +234,17 @@ conformance-check: build
 	$(PYTHON) -m py_compile build/conformance/test_messages_proto3_pbwire.py
 	$(NODE) --check build/conformance/test_messages_proto3.js
 	$(LUA) -e 'assert(loadfile("build/conformance/test_messages_proto3.lua"))'
+	$(MAKE) -C ../.. build/libpbwire.a >/dev/null
+	mkdir -p ../go/conformancetmp
+	cp build/conformance/go/test_messages_proto3_pbwire.go ../go/conformancetmp/
+	cd ../go && $(GO) build ./conformancetmp/
+	rm -rf ../go/conformancetmp
 	clang -fsyntax-only -fobjc-arc -Wall -Wextra -I../../include -I../objc -Ibuild/conformance build/conformance/test_messages_proto3.m
 	printf '#[path = "../../typed/build/conformance/test_messages_proto3_pbwire.rs"]\nmod conf;\n#[test]\nfn conformance_models_compile() { let _ = conf::TestAllTypesProto3::FULL_NAME; }\n' > ../rust/tests/conf_gen.rs
 	cd ../rust && $(CARGO) test --test conf_gen
 	rm -f ../rust/tests/conf_gen.rs
-	@echo "conformance models compile in java, kotlin, c#, dart, php, ruby, python, node, objc, rust, lua"
+	@echo "conformance models compile in java, kotlin, c#, dart, php, ruby, python, node, objc, rust, lua, go"
 
 .PHONY: all build gen gen-examples test conformance conformance-check $(addprefix gen-,$(LANGS)) \
-	gen-java gen-kotlin gen-csharp gen-dart gen-php gen-ruby gen-python gen-node gen-rust gen-objc gen-lua \
-	test-java test-kotlin test-csharp test-dart test-php test-ruby test-python test-node test-rust test-objc test-lua
+	gen-java gen-kotlin gen-csharp gen-dart gen-php gen-ruby gen-python gen-node gen-rust gen-objc gen-lua gen-go \
+	test-java test-kotlin test-csharp test-dart test-php test-ruby test-python test-node test-rust test-objc test-lua test-go

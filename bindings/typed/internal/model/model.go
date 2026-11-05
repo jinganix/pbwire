@@ -194,17 +194,27 @@ func (f *File) messageLocal(fd protoreflect.FieldDescriptor) string {
 	return strings.Join(path, "_")
 }
 
+// enumLocal returns the generated name of an enum defined in this file, or
+// "" when it lives in an import. It walks the descriptor directly (like
+// messageLocal) instead of consulting f.Enums, whose nested entries are only
+// appended after the enclosing message's fields are built.
 func (f *File) enumLocal(fd protoreflect.FieldDescriptor) string {
 	ed := fd.Enum()
 	if ed == nil || ed.ParentFile() == nil || ed.ParentFile().Path() != f.Path {
 		return ""
 	}
-	for _, e := range f.Enums {
-		if e.Full == string(ed.FullName()) {
-			return e.Name
+	var path []string
+	for d := protoreflect.Descriptor(ed); d != nil; d = d.Parent() {
+		switch t := d.(type) {
+		case protoreflect.EnumDescriptor:
+			path = append([]string{string(t.Name())}, path...)
+		case protoreflect.MessageDescriptor:
+			path = append([]string{string(t.Name())}, path...)
+		default:
+			return strings.Join(path, "_")
 		}
 	}
-	return ""
+	return strings.Join(path, "_")
 }
 
 func buildEnum(ed protoreflect.EnumDescriptor, path []string) Enum {

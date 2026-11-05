@@ -36,7 +36,7 @@ const Person_PhoneNumber_FIELDS = [
   { n: 'number', js: 'number', k: 'str', rep: false, msg: null, en: null, oneof: null, req: true, has: false, closed: false },
   { n: 'type', js: 'type', k: 'enum', rep: false, msg: null, en: 'Tutorial_Person_PhoneType', oneof: null, req: false, has: true, closed: true },
 ];
-const Person_PhoneNumber = _makeClass('tutorial.Person.PhoneNumber', _DESC_B64, Person_PhoneNumber_FIELDS, (plain) => Person_PhoneNumber.fromObject(plain));
+const Person_PhoneNumber = _makeClass('tutorial.Person.PhoneNumber', _DESC_B64, Person_PhoneNumber_FIELDS);
 _CLASSES['Person_PhoneNumber'] = Person_PhoneNumber;
 Person_PhoneNumber._ENUMS = _ENUMS;
 Person_PhoneNumber._REVENUMS = _REVENUMS;
@@ -49,7 +49,7 @@ const Person_FIELDS = [
   { n: 'email', js: 'email', k: 'str', rep: false, msg: null, en: null, oneof: null, req: false, has: true, closed: false },
   { n: 'phones', js: 'phones', k: 'msg', rep: true, msg: 'Person_PhoneNumber', en: null, oneof: null, req: false, has: true, closed: false },
 ];
-const Person = _makeClass('tutorial.Person', _DESC_B64, Person_FIELDS, (plain) => Person.fromObject(plain));
+const Person = _makeClass('tutorial.Person', _DESC_B64, Person_FIELDS);
 _CLASSES['Person'] = Person;
 Person._ENUMS = _ENUMS;
 Person._REVENUMS = _REVENUMS;
@@ -59,7 +59,7 @@ Person._CLASSES = _CLASSES;
 const AddressBook_FIELDS = [
   { n: 'people', js: 'people', k: 'msg', rep: true, msg: 'Person', en: null, oneof: null, req: false, has: true, closed: false },
 ];
-const AddressBook = _makeClass('tutorial.AddressBook', _DESC_B64, AddressBook_FIELDS, (plain) => AddressBook.fromObject(plain));
+const AddressBook = _makeClass('tutorial.AddressBook', _DESC_B64, AddressBook_FIELDS);
 _CLASSES['AddressBook'] = AddressBook;
 AddressBook._ENUMS = _ENUMS;
 AddressBook._REVENUMS = _REVENUMS;
