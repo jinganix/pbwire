@@ -1,6 +1,7 @@
 package gen
 
 import (
+	"encoding/base64"
 	"fmt"
 	"strings"
 
@@ -9,10 +10,34 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
-func luaFiles(f *model.File) []File {
+func luaFiles(f *model.File, opt ...Options) []File {
+	// The FileDescriptorSet travels in opt.DescSetB64 (see gen.Generate).
+	// The call stays variadic so the old dispatcher luaFiles(f) keeps
+	// compiling (and keeps emitting the schema-argument form) until it
+	// forwards opt; with the set present the module is self-contained.
+	var desc []byte
+	if len(opt) > 0 && opt[0].DescSetB64 != "" {
+		if raw, err := base64.StdEncoding.DecodeString(opt[0].DescSetB64); err == nil {
+			desc = raw
+		}
+	}
 	var b strings.Builder
 	b.WriteString(headerP(f, "--", "Typed tables over the pbwire dynamic API: assign fields, encode, decode."))
+	if len(desc) > 0 {
+		b.WriteString("local pbwire = require(\"pbwire\")\n\n")
+		b.WriteString("-- The embedded FileDescriptorSet: no .desc file at use time.\n")
+		b.WriteString("local DESC = " + luaString(desc) + "\n\n")
+		b.WriteString("local _schema = nil\n")
+		b.WriteString("local function schema()\n")
+		b.WriteString("    if _schema == nil then _schema = pbwire.load(DESC) end\n")
+		b.WriteString("    return _schema\n")
+		b.WriteString("end\n\n")
+	}
 	b.WriteString("local M = {}\n\n")
+	if len(desc) > 0 {
+		b.WriteString("-- The embedded schema, for dynamic-API cross-checks (no .desc file).\n")
+		b.WriteString("M.schema = schema\n\n")
+	}
 	b.WriteString("-- merge overlays init onto dst; a nil init is a fresh default.\n")
 	b.WriteString("local function merge(dst, init)\n")
 	b.WriteString("    if init ~= nil then\n")
@@ -38,13 +63,13 @@ func luaFiles(f *model.File) []File {
 		b.WriteString("}\n\n")
 	}
 	for _, m := range f.Messages {
-		writeLuaMessage(&b, f, m)
+		writeLuaMessage(&b, f, m, len(desc) > 0)
 	}
 	b.WriteString("return M\n")
 	return []File{{Name: base(f) + ".lua", Content: b.String()}}
 }
 
-func writeLuaMessage(b *strings.Builder, f *model.File, m model.Message) {
+func writeLuaMessage(b *strings.Builder, f *model.File, m model.Message, embedded bool) {
 	cls := className(f, m.Name)
 	fmt.Fprintf(b, "-- %s\n", m.Full)
 	fmt.Fprintf(b, "M.%s = {}\n\n", cls)
@@ -122,11 +147,27 @@ func writeLuaMessage(b *strings.Builder, f *model.File, m model.Message) {
 	b.WriteString("    }\n")
 	b.WriteString("end\n\n")
 
-	fmt.Fprintf(b, "M.%s.encode = function(schema, t)\n", cls)
-	fmt.Fprintf(b, "    return schema:encode(%q, M.%s.to_table(t))\n", m.Full, cls)
+	fmt.Fprintf(b, "M.%s.encode = function(", cls)
+	if embedded {
+		b.WriteString("a, b)\n")
+		// One argument encodes through the embedded schema; two keep the
+		// old (schema, table) form, so existing callers keep working.
+		fmt.Fprintf(b, "    if b ~= nil then return a:encode(%q, M.%s.to_table(b)) end\n", m.Full, cls)
+		fmt.Fprintf(b, "    return schema():encode(%q, M.%s.to_table(a))\n", m.Full, cls)
+	} else {
+		b.WriteString("schema, t)\n")
+		fmt.Fprintf(b, "    return schema:encode(%q, M.%s.to_table(t))\n", m.Full, cls)
+	}
 	b.WriteString("end\n\n")
-	fmt.Fprintf(b, "M.%s.decode = function(schema, wire)\n", cls)
-	fmt.Fprintf(b, "    return M.%s.from_table(schema:decode(%q, wire))\n", cls, m.Full)
+	fmt.Fprintf(b, "M.%s.decode = function(", cls)
+	if embedded {
+		b.WriteString("a, b)\n")
+		fmt.Fprintf(b, "    if b ~= nil then return M.%s.from_table(a:decode(%q, b)) end\n", cls, m.Full)
+		fmt.Fprintf(b, "    return M.%s.from_table(schema():decode(%q, a))\n", cls, m.Full)
+	} else {
+		b.WriteString("schema, wire)\n")
+		fmt.Fprintf(b, "    return M.%s.from_table(schema:decode(%q, wire))\n", cls, m.Full)
+	}
 	b.WriteString("end\n\n")
 }
 
@@ -172,4 +213,27 @@ func luaFromTable(f *model.File, field model.Field) string {
 	default:
 		return fmt.Sprintf("%s or 0", key)
 	}
+}
+
+// luaString renders raw as a Lua string expression: one decimal escape per
+// byte (valid on 5.1 through 5.5 and LuaJIT) inside a table.concat. A flat
+// table keeps parsing iterative: a single ".." chain would nest one level
+// per chunk and overflow the C stack on large descriptor sets.
+func luaString(raw []byte) string {
+	const perLine = 256
+	var b strings.Builder
+	b.WriteString("table.concat({\n")
+	for i := 0; i < len(raw); i += perLine {
+		end := i + perLine
+		if end > len(raw) {
+			end = len(raw)
+		}
+		b.WriteString("    \"")
+		for _, v := range raw[i:end] {
+			fmt.Fprintf(&b, "\\%03d", v)
+		}
+		b.WriteString("\",\n")
+	}
+	b.WriteString("})")
+	return b.String()
 }

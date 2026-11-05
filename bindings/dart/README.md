@@ -88,6 +88,11 @@ message tree is not shared: one tree belongs to one isolate, like the C core.
 ## Typed models
 
 `protoc-gen-pbwire-typed` (in `../typed`) generates Dart classes with typed
-fields, `Uint8List encode(schema)` and `static decode`. The committed output is
-`tests/gen/` and `examples/gen/`; `examples/roundtrip.dart` assigns typed fields
-only. See `../typed/README.md`.
+fields in protobuf-dart shape (`create`, `writeToBuffer`/`fromBuffer`,
+`hasX`/`clearX`/`ensureX`, `whichX` for oneofs, `ProtobufEnum` enums, `Int64`
+for 64-bit fields) over the dynamic API, with the `FileDescriptorSet`
+embedded: no `.desc` file at use time, and the wire stays in the C core. The
+committed output is `tests/gen/` (plus the protoc-gen-dart oracle in
+`tests/gen_oracle/`, pinned in `pubspec.lock`) and `examples/gen/`;
+`examples/roundtrip.dart` assigns typed fields only. See `../typed/README.md`
+and `../typed/testdata/TESTSPEC.md` (T1–T6, run by `tests/typed_test.dart`).

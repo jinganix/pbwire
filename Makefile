@@ -123,6 +123,18 @@ $(CPP_TEST_BIN): bindings/cpp/tests/roundtrip.cc $(CPP_RUNTIME_OBJ) $(LIB) | bui
 test-cpp: $(CPP_TEST_BIN)
 	./$(CPP_TEST_BIN)
 
+COMPAT_ORACLE_PB := bindings/cpp/tests/gen_oracle/matrix3.pb.cc
+bindings/cpp/tests/gen_oracle/%.pb.cc: bindings/c/tests/data/%.proto
+	@mkdir -p bindings/cpp/tests/gen_oracle
+	$(PROTOC) -Ibindings/c/tests/data --cpp_out=bindings/cpp/tests/gen_oracle $<
+COMPAT_ORACLE_BIN := build/compat_oracle
+$(COMPAT_ORACLE_BIN): bindings/cpp/tests/compat_oracle.cc $(COMPAT_ORACLE_PB) $(CPP_RUNTIME_OBJ) $(LIB) | build
+	$(BENCH_CXX) -std=c++17 -O2 -pthread -Iinclude -Ibindings/c/runtime \
+		-Ibindings/c/tests -Ibindings/cpp/tests/gen_oracle $(PB_CXXFLAGS) \
+		-o $@ bindings/cpp/tests/compat_oracle.cc $(COMPAT_ORACLE_PB) $(CPP_RUNTIME_OBJ) $(LIB) $(PB_LIBS)
+compat-oracle: $(COMPAT_ORACLE_BIN)
+	./$(COMPAT_ORACLE_BIN)
+
 $(CPP_EXAMPLE_BIN): bindings/cpp/examples/addressbook.cc $(CPP_RUNTIME_OBJ) $(LIB) | build
 	$(CXX) $(CXXFLAGS) $(CPPFLAGS) -Ibindings/c/runtime -Ibindings/c/examples -o $@ bindings/cpp/examples/addressbook.cc $(CPP_RUNTIME_OBJ) $(LIB)
 
