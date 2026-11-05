@@ -76,7 +76,7 @@ public struct Structtest_Inner3 {
     public var value: Int64 = 0
     public init() {}
 
-    fileprivate func fill(_ msg: Message) throws {
+    func fill(_ msg: Message) throws {
         if !name.isEmpty { try msg.set(.string(name), "name") }
         if value != 0 { try msg.set(.int(value), "value") }
     }
@@ -96,7 +96,7 @@ public struct Structtest_Inner3 {
         return try fromMessage(ty.decode(data))
     }
 
-    fileprivate static func fromMessage(_ msg: Message) throws -> Structtest_Inner3 {
+    static func fromMessage(_ msg: Message) throws -> Structtest_Inner3 {
         var out = Structtest_Inner3()
         if case .string(let v)? = msg.get("name") { out.name = v }
         if case .int(let v)? = msg.get("value") { out.value = v }
@@ -130,7 +130,7 @@ public struct Structtest_Scalars3 {
     public var flags: [Bool] = []
     public init() {}
 
-    fileprivate func fill(_ msg: Message) throws {
+    func fill(_ msg: Message) throws {
         if i32 != 0 { try msg.set(.int(i32), "i32") }
         if i64 != 0 { try msg.set(.int(i64), "i64") }
         if u32 != 0 { try msg.set(.uint(u32), "u32") }
@@ -170,7 +170,7 @@ public struct Structtest_Scalars3 {
         return try fromMessage(ty.decode(data))
     }
 
-    fileprivate static func fromMessage(_ msg: Message) throws -> Structtest_Scalars3 {
+    static func fromMessage(_ msg: Message) throws -> Structtest_Scalars3 {
         var out = Structtest_Scalars3()
         if case .int(let v)? = msg.get("i32") { out.i32 = v }
         if case .int(let v)? = msg.get("i64") { out.i64 = v }

@@ -7,8 +7,10 @@
 //	    --pbwire_out=. --pbwire_opt=lang=java demo.proto
 //
 // Options: lang=java|kotlin|csharp|dart|php|ruby|python|typescript|javascript|rust|objc|lua|go|swift|zig|scala|clojure|fsharp|elixir|julia|r,
-// prefix=<ClassPrefix> (default: CamelCase of the proto package) and
-// dir=<subdir> (place the generated files under a subdirectory).
+// prefix=<ClassPrefix> (default: CamelCase of the proto package),
+// dir=<subdir> (place the generated files under a subdirectory) and
+// M<path>=<importpath> (sibling import override, protoc-gen-go style;
+// only languages with explicit module paths read it).
 package main
 
 import (
@@ -117,6 +119,13 @@ func parseOptions(param string) (gen.Options, error) {
 		case "dir":
 			opt.Dir = value
 		default:
+			if rest, ok := strings.CutPrefix(key, "M"); ok {
+				if opt.Mappings == nil {
+					opt.Mappings = map[string]string{}
+				}
+				opt.Mappings[rest] = value
+				continue
+			}
 			return opt, fmt.Errorf("unknown option %q", key)
 		}
 	}

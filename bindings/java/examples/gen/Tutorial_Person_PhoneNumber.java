@@ -52,7 +52,7 @@ public final class Tutorial_Person_PhoneNumber {
     }
 
     public byte[] toByteArray() {
-        Message msg = Tutorial_Pbwire.type("tutorial.Person.PhoneNumber").newMessage();
+        Message msg = Addressbook_Pbwire.type("tutorial.Person.PhoneNumber").newMessage();
         try {
             encodeInto(msg);
             return msg.encode();
@@ -62,7 +62,7 @@ public final class Tutorial_Person_PhoneNumber {
     }
 
     public static Tutorial_Person_PhoneNumber parseFrom(byte[] data) {
-        Message msg = Tutorial_Pbwire.type("tutorial.Person.PhoneNumber").decode(data);
+        Message msg = Addressbook_Pbwire.type("tutorial.Person.PhoneNumber").decode(data);
         try {
             return decode(msg);
         } finally {

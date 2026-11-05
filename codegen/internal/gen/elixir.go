@@ -38,8 +38,24 @@ func elixirFiles(f *model.File) []File {
 // elixirModule maps a local message/enum name to its Elixir alias:
 // package tutorial + Person_PhoneNumber -> Tutorial.Person.PhoneNumber.
 func elixirModule(f *model.File, local string) string {
+	return elixirModuleFor(f.Package, local)
+}
+
+// elixirMsg names the module for a message field: the defining file's
+// package when foreign (Elixir aliases are global, so no import line),
+// this file's own otherwise.
+func elixirMsg(f *model.File, field model.Field) string {
+	if field.Import != "" {
+		if imp := findImport(f, field.Import); imp != nil {
+			return elixirModuleFor(imp.Package, field.Message)
+		}
+	}
+	return elixirModule(f, field.Message)
+}
+
+func elixirModuleFor(pkg, local string) string {
 	var parts []string
-	for _, p := range strings.Split(f.Package, ".") {
+	for _, p := range strings.Split(pkg, ".") {
 		if p == "" {
 			continue
 		}
@@ -56,7 +72,7 @@ func elixirModule(f *model.File, local string) string {
 
 func elixirType(f *model.File, field model.Field) string {
 	if field.Message != "" {
-		return elixirModule(f, field.Message)
+		return elixirMsg(f, field)
 	}
 	switch field.Kind {
 	case protoreflect.Int32Kind:

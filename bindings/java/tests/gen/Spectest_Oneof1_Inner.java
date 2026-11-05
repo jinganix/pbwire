@@ -29,7 +29,7 @@ public final class Spectest_Oneof1_Inner {
     }
 
     public byte[] toByteArray() {
-        Message msg = Spectest_Pbwire.type("spectest.Oneof1.Inner").newMessage();
+        Message msg = Oneof1_Pbwire.type("spectest.Oneof1.Inner").newMessage();
         try {
             encodeInto(msg);
             return msg.encode();
@@ -39,7 +39,7 @@ public final class Spectest_Oneof1_Inner {
     }
 
     public static Spectest_Oneof1_Inner parseFrom(byte[] data) {
-        Message msg = Spectest_Pbwire.type("spectest.Oneof1.Inner").decode(data);
+        Message msg = Oneof1_Pbwire.type("spectest.Oneof1.Inner").decode(data);
         try {
             return decode(msg);
         } finally {

@@ -19,7 +19,11 @@ func zigFiles(f *model.File, opt Options) []File {
 	var b strings.Builder
 	b.WriteString(header(f, "Generated structs over the Zig static-link runtime (Schema/Message)."))
 	b.WriteString("const std = @import(\"std\");\n")
-	b.WriteString("const pbwire = @import(\"pbwire\");\n\n")
+	b.WriteString("const pbwire = @import(\"pbwire\");\n")
+	for _, imp := range f.Imports {
+		fmt.Fprintf(&b, "const %s = @import(\"%s.zig\");\n", stem(imp.Path), stem(imp.Path))
+	}
+	b.WriteString("\n")
 	b.WriteString("const DESC: []const u8 = \"")
 	raw, _ := base64.StdEncoding.DecodeString(opt.DescSetB64)
 	for _, v := range raw {
@@ -42,9 +46,20 @@ func zigFiles(f *model.File, opt Options) []File {
 	return []File{{Name: base(f) + ".zig", Content: b.String()}}
 }
 
+// zigMsg names the struct for a message field: the sibling module's type
+// when foreign (imported above), this file's own otherwise.
+func zigMsg(f *model.File, field model.Field) string {
+	if field.Import != "" {
+		if imp := findImport(f, field.Import); imp != nil {
+			return stem(imp.Path) + "." + imp.Prefix + "_" + field.Message
+		}
+	}
+	return className(f, field.Message)
+}
+
 func zigType(f *model.File, field model.Field) string {
 	if field.Message != "" {
-		return className(f, field.Message)
+		return zigMsg(f, field)
 	}
 	switch field.Kind {
 	case protoreflect.Int32Kind, protoreflect.Sint32Kind, protoreflect.Sfixed32Kind:
@@ -417,6 +432,11 @@ func zigFullName(f *model.File, field model.Field) string {
 		if m.Name == field.Message {
 			return m.Full
 		}
+	}
+	// Foreign refs resolve by fully qualified proto name in the embedded
+	// schema (the dep file carries the same shape).
+	if field.Full != "" {
+		return field.Full
 	}
 	return field.Message
 }

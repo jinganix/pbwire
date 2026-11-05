@@ -24,7 +24,11 @@ func luaFiles(f *model.File, opt ...Options) []File {
 	var b strings.Builder
 	b.WriteString(headerP(f, "--", "Generated tables over the pbwire dynamic API: assign fields, encode, decode."))
 	if len(desc) > 0 {
-		b.WriteString("local pbwire = require(\"pbwire\")\n\n")
+		b.WriteString("local pbwire = require(\"pbwire\")\n")
+		for _, imp := range f.Imports {
+			fmt.Fprintf(&b, "local %s = require(\"%s\")\n", stem(imp.Path), stem(imp.Path))
+		}
+		b.WriteString("\n")
 		b.WriteString("-- The embedded FileDescriptorSet: no .desc file at use time.\n")
 		b.WriteString("local DESC = " + luaString(desc) + "\n\n")
 		b.WriteString("local _schema = nil\n")
@@ -69,6 +73,17 @@ func luaFiles(f *model.File, opt ...Options) []File {
 	return []File{{Name: base(f) + ".lua", Content: b.String()}}
 }
 
+// luaMsg names the table for a message field: the sibling module's table
+// when foreign (required above), this module's M otherwise.
+func luaMsg(f *model.File, field model.Field) string {
+	if field.Import != "" {
+		if imp := findImport(f, field.Import); imp != nil {
+			return stem(imp.Path) + "." + imp.Prefix + "_" + field.Message
+		}
+	}
+	return "M." + className(f, field.Message)
+}
+
 func writeLuaMessage(b *strings.Builder, f *model.File, m model.Message, embedded bool) {
 	cls := className(f, m.Name)
 	fmt.Fprintf(b, "-- %s\n", m.Full)
@@ -103,22 +118,22 @@ func writeLuaMessage(b *strings.Builder, f *model.File, m model.Message, embedde
 			// the generated code reads like hand-written Lua.
 			switch {
 			case field.Repeated && field.Message != "":
-				fmt.Fprintf(b, "    out.%s = map_list(t.%s, M.%s.to_table)\n", name, name, className(f, field.Message))
+				fmt.Fprintf(b, "    out.%s = map_list(t.%s, %s.to_table)\n", name, name, luaMsg(f, field))
 			case field.Repeated:
 				fmt.Fprintf(b, "    out.%s = t.%s\n", name, name)
 			case field.Message != "":
-				fmt.Fprintf(b, "    out.%s = M.%s.to_table(t.%s)\n", name, className(f, field.Message), name)
+				fmt.Fprintf(b, "    out.%s = %s.to_table(t.%s)\n", name, luaMsg(f, field), name)
 			default:
 				fmt.Fprintf(b, "    out.%s = t.%s\n", name, name)
 			}
 		case field.Repeated && field.Message != "":
-			fmt.Fprintf(b, "    if t.%s ~= nil and #t.%s > 0 then out.%s = map_list(t.%s, M.%s.to_table) end\n",
-				name, name, name, name, className(f, field.Message))
+			fmt.Fprintf(b, "    if t.%s ~= nil and #t.%s > 0 then out.%s = map_list(t.%s, %s.to_table) end\n",
+				name, name, name, name, luaMsg(f, field))
 		case field.Repeated:
 			fmt.Fprintf(b, "    if t.%s ~= nil and #t.%s > 0 then out.%s = t.%s end\n", name, name, name, name)
 		case field.Message != "":
-			fmt.Fprintf(b, "    if t.%s ~= nil then out.%s = M.%s.to_table(t.%s) end\n",
-				name, name, className(f, field.Message), name)
+			fmt.Fprintf(b, "    if t.%s ~= nil then out.%s = %s.to_table(t.%s) end\n",
+				name, name, luaMsg(f, field), name)
 		case field.NeedsHas:
 			fmt.Fprintf(b, "    if t.has_%s then out.%s = t.%s end\n", name, name, name)
 		case field.Kind == protoreflect.BoolKind:
@@ -197,11 +212,11 @@ func luaFromTable(f *model.File, field model.Field) string {
 	key := "data." + field.Name
 	switch {
 	case field.Repeated && field.Message != "":
-		return fmt.Sprintf("map_list(%s, M.%s.from_table)", key, className(f, field.Message))
+		return fmt.Sprintf("map_list(%s, %s.from_table)", key, luaMsg(f, field))
 	case field.Repeated:
 		return fmt.Sprintf("map_list(%s, identity)", key)
 	case field.Message != "":
-		return fmt.Sprintf("%s ~= nil and M.%s.from_table(%s) or nil", key, className(f, field.Message), key)
+		return fmt.Sprintf("%s ~= nil and %s.from_table(%s) or nil", key, luaMsg(f, field), key)
 	case field.NeedsHas:
 		return key
 	case field.Kind == protoreflect.BoolKind:

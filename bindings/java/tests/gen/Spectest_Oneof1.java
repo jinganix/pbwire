@@ -61,7 +61,7 @@ public final class Spectest_Oneof1 {
     }
 
     public byte[] toByteArray() {
-        Message msg = Spectest_Pbwire.type("spectest.Oneof1").newMessage();
+        Message msg = Oneof1_Pbwire.type("spectest.Oneof1").newMessage();
         try {
             encodeInto(msg);
             return msg.encode();
@@ -71,7 +71,7 @@ public final class Spectest_Oneof1 {
     }
 
     public static Spectest_Oneof1 parseFrom(byte[] data) {
-        Message msg = Spectest_Pbwire.type("spectest.Oneof1").decode(data);
+        Message msg = Oneof1_Pbwire.type("spectest.Oneof1").decode(data);
         try {
             return decode(msg);
         } finally {

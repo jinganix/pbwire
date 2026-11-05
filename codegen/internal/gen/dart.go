@@ -172,7 +172,11 @@ func dartFiles(f *model.File, opt Options) []File {
 	if len(f.Enums) > 0 {
 		b.WriteString("import 'package:protobuf/protobuf.dart' as $pb;\n")
 	}
-	b.WriteString("import 'package:pbwire/pbwire.dart';\n\n")
+	b.WriteString("import 'package:pbwire/pbwire.dart';\n")
+	for _, imp := range f.Imports {
+		fmt.Fprintf(&b, "import '%s.dart';\n", stem(imp.Path))
+	}
+	b.WriteString("\n")
 	fmt.Fprintf(&b, "/// The FileDescriptorSet for %s, so messages encode with no .desc file.\n", f.Path)
 	b.WriteString("const _descB64 =\n    " + dartChunks(opt.DescSetB64) + ";\n\n")
 	b.WriteString("Schema? _schema;\n\n/// The embedded schema, loaded once per isolate.\n")
@@ -350,13 +354,23 @@ func dartOneofClear(field model.Field, back string) string {
 	return back + " = v;"
 }
 
+// dartCtor is the empty-instance expression for a message field: the
+// public create() when foreign (the ._() constructor is library-private),
+// the private ._() otherwise.
+func dartCtor(field model.Field) string {
+	if field.Import != "" {
+		return field.Message + ".create()"
+	}
+	return field.Message + "._()"
+}
+
 // dartEnsure is the ensureX implementation for message fields: a block body
 // for oneof members (setters clear the group first), an arrow otherwise.
 func dartEnsure(field model.Field, back, t string) string {
 	if field.Oneof != "" {
-		return fmt.Sprintf("{ clear%s(); return %s ??= %s._(); }", model.Pascal(field.Oneof), back, t)
+		return fmt.Sprintf("{ clear%s(); return %s ??= %s; }", model.Pascal(field.Oneof), back, dartCtor(field))
 	}
-	return "=> " + back + " ??= " + t + "._();"
+	return "=> " + back + " ??= " + dartCtor(field) + ";"
 }
 
 // dartHas is the hasX body for backed (message / oneof / optional) fields.
@@ -521,7 +535,7 @@ func writeDartLoad(b *strings.Builder, f *model.File, field model.Field) {
 		fmt.Fprintf(b, "    for (var i = 0; i < msg.count(%s); i++) {\n", key)
 		b.WriteString("      final v = msg.at(" + key + ", i);\n      if (v == null) continue;\n")
 		if field.Message != "" {
-			fmt.Fprintf(b, "      final sub = v.asMessage();\n      if (sub != null) %s.add(%s._()..loadFrom(sub));\n", name, field.Message)
+			fmt.Fprintf(b, "      final sub = v.asMessage();\n      if (sub != null) %s.add(%s..loadFrom(sub));\n", name, dartCtor(field))
 		} else {
 			fmt.Fprintf(b, "      %s.add(%s);\n", name, dartElem(f, field, "v"))
 		}
@@ -530,9 +544,9 @@ func writeDartLoad(b *strings.Builder, f *model.File, field model.Field) {
 		back := dartBacking(field)
 		fmt.Fprintf(b, "    final sub%s = msg.getMessage(%s);\n", field.Pascal, key)
 		if field.Oneof != "" {
-			fmt.Fprintf(b, "    if (sub%s != null) %s = %s._()..loadFrom(sub%s);\n", field.Pascal, name, field.Message, field.Pascal)
+			fmt.Fprintf(b, "    if (sub%s != null) %s = %s..loadFrom(sub%s);\n", field.Pascal, name, dartCtor(field), field.Pascal)
 		} else {
-			fmt.Fprintf(b, "    if (sub%s != null) (%s ??= %s._()).loadFrom(sub%s);\n", field.Pascal, back, field.Message, field.Pascal)
+			fmt.Fprintf(b, "    if (sub%s != null) (%s ??= %s).loadFrom(sub%s);\n", field.Pascal, back, dartCtor(field), field.Pascal)
 		}
 	case field.Oneof != "":
 		fmt.Fprintf(b, "    if (msg.has(%s)) %s = %s;\n", key, name, val)

@@ -162,6 +162,52 @@ gen-r: build
 	mkdir -p ../bindings/r/tests/gen
 	$(PROTOC) $(OPTS) --pbwire_out=../bindings/r/tests/gen --pbwire_opt=lang=r $(PROTO)
 
+# The cross-file fixture: xfile.proto imports xdep.proto, so every language
+# must import the sibling dep model instead of skipping the field. xdep goes
+# first (protoc topological order also guarantees it); Go needs an explicit
+# module mapping (M flag), every other language imports the sibling by name.
+GEN_XFILE_GO_M := Mxdep.proto=pbwire/tests/gen/xdep
+
+gen-xfile: build
+	mkdir -p ../bindings/go/tests/gen/xdep ../bindings/go/tests/gen/xfile
+	$(PROTOC) $(TESTDATA_OPTS) --pbwire_out=../bindings/go/tests/gen/xdep --pbwire_opt=lang=go $(TESTDATA)/xdep.proto
+	$(PROTOC) $(TESTDATA_OPTS) --pbwire_out=../bindings/go/tests/gen/xfile "--pbwire_opt=lang=go,$(GEN_XFILE_GO_M)" $(TESTDATA)/xfile.proto
+	for spec in "java:../bindings/java/tests/gen" "kotlin:../bindings/kotlin/tests/gen" \
+	    "csharp:../bindings/csharp/generated/gen" "dart:../bindings/dart/tests/gen" \
+	    "php:../bindings/php/tests/gen" "ruby:../bindings/ruby/test/gen" \
+	    "python:../bindings/python/tests/gen" "typescript:../bindings/node/tests/gen" \
+	    "javascript:../bindings/node/tests/gen" "rust:../bindings/rust/tests/gen" \
+	    "objc:../bindings/objc/tests/gen" "lua:../bindings/lua/tests/gen" \
+	    "swift:../bindings/swift/Tests/PbwireTests/gen" "zig:../bindings/zig/tests/gen" \
+	    "scala:../bindings/scala/tests/gen" "clojure:../bindings/clojure/tests/gen" \
+	    "fsharp:../bindings/fsharp/tests/gen" "elixir:../bindings/elixir/test/gen" \
+	    "julia:../bindings/julia/tests/gen" "r:../bindings/r/tests/gen"; do \
+		lang=$${spec%%:*}; dir=$${spec#*:}; \
+		mkdir -p $$dir; \
+		$(PROTOC) $(TESTDATA_OPTS) --pbwire_out=$$dir --pbwire_opt=lang=$$lang $(TESTDATA)/xdep.proto $(TESTDATA)/xfile.proto; \
+	done
+
+# The map fixture rides every language the same way (repeated entry structs),
+# so one target generates it everywhere; each binding's map test (where the
+# toolchain runs locally) reads its own file plus testdata/maptest.bin.
+gen-maptest: build
+	mkdir -p ../bindings/go/tests/gen/maptest
+	$(PROTOC) $(TESTDATA_OPTS) --pbwire_out=../bindings/go/tests/gen/maptest --pbwire_opt=lang=go $(TESTDATA)/maptest.proto
+	for spec in "java:../bindings/java/tests/gen" "kotlin:../bindings/kotlin/tests/gen" \
+	    "csharp:../bindings/csharp/generated/gen" "dart:../bindings/dart/tests/gen" \
+	    "php:../bindings/php/tests/gen" "ruby:../bindings/ruby/test/gen" \
+	    "python:../bindings/python/tests/gen" "typescript:../bindings/node/tests/gen" \
+	    "javascript:../bindings/node/tests/gen" "rust:../bindings/rust/tests/gen" \
+	    "objc:../bindings/objc/tests/gen" "lua:../bindings/lua/tests/gen" \
+	    "swift:../bindings/swift/Tests/PbwireTests/gen" "zig:../bindings/zig/tests/gen" \
+	    "scala:../bindings/scala/tests/gen" "clojure:../bindings/clojure/tests/gen" \
+	    "fsharp:../bindings/fsharp/tests/gen" "elixir:../bindings/elixir/test/gen" \
+	    "julia:../bindings/julia/tests/gen" "r:../bindings/r/tests/gen"; do \
+		lang=$${spec%%:*}; dir=$${spec#*:}; \
+		mkdir -p $$dir; \
+		$(PROTOC) $(TESTDATA_OPTS) --pbwire_out=$$dir --pbwire_opt=lang=$$lang $(TESTDATA)/maptest.proto; \
+	done
+
 # Each target needs its language's toolchain plus the shared library, which is
 # why `make codegen-test` at the repo root is not part of the C commit gate.
 test: test-java test-kotlin test-csharp test-dart test-php test-ruby test-python test-node test-rust test-objc test-lua test-go test-swift test-zig test-scala test-clojure test-fsharp test-elixir test-julia test-r
@@ -360,7 +406,7 @@ conformance-check: build
 	@echo "conformance models compile in java, kotlin, c#, dart, php, ruby, python, node, objc, rust, lua, go, swift, zig, scala, clojure, fsharp, elixir, julia, r"
 	@echo "shortcut: clojure parses but does not compile here (needs the fetched jars); test-clojure compiles the same shape"
 
-.PHONY: all build gen gen-examples test conformance conformance-check $(addprefix gen-,$(LANGS)) \
+.PHONY: all build gen gen-maptest gen-xfile gen-examples test conformance conformance-check $(addprefix gen-,$(LANGS)) \
 	gen-java gen-kotlin gen-csharp gen-dart gen-php gen-ruby gen-python gen-node gen-rust gen-objc gen-lua gen-go \
 	gen-swift gen-zig gen-scala gen-clojure gen-fsharp gen-elixir gen-julia gen-r \
 	test-java test-kotlin test-csharp test-dart test-php test-ruby test-python test-node test-rust test-objc test-lua test-go \

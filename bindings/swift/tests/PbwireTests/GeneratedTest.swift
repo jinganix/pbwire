@@ -87,4 +87,32 @@ final class GeneratedTest: XCTestCase {
         let back = try Structtest_Scalars3.decode(try zero.encode())
         XCTAssertEqual(back.optI32, 0, "explicit zero with presence survives")
     }
+
+    func testXfileCrossImport() throws {
+        let bin = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("codegen/testdata/xfile.bin").path
+        let reference = try Data(contentsOf: URL(fileURLWithPath: bin))
+        var one = Xdep_DepMsg()
+        one.name = "one"
+        one.value = 7
+        var a = Xdep_DepMsg()
+        a.name = "a"
+        var b = Xdep_DepMsg()
+        b.name = "b"
+        b.value = -1
+        var m = Xfile_UsesDep()
+        m.single = one
+        m.many = [a, b]
+        m.note = "hi"
+        XCTAssertEqual(try m.encode(), reference, "xfile encode equals the protoc reference bytes")
+        let back = try Xfile_UsesDep.decode(reference)
+        XCTAssertEqual(back.single?.name, "one")
+        XCTAssertEqual(back.single?.value, 7)
+        XCTAssertEqual(back.many.map { $0.name }, ["a", "b"])
+        XCTAssertEqual(back.many[1].value, -1)
+        XCTAssertEqual(back.note, "hi")
+    }
 }

@@ -20,7 +20,11 @@ func fsharpFiles(f *model.File, opt Options) []File {
 	// message can reference its parent), and F# needs declaration before
 	// use otherwise. External paths are unchanged.
 	b.WriteString("module rec " + fsharpModule(f) + "\n\n")
-	b.WriteString("open System\nopen Pbwire\n\n")
+	b.WriteString("open System\nopen Pbwire\n")
+	for _, imp := range f.Imports {
+		fmt.Fprintf(&b, "open %s\n", fsharpModuleName(stem(imp.Path)))
+	}
+	b.WriteString("\n")
 	b.WriteString("let private desc: byte[] = Convert.FromBase64String(\"\"\"\n")
 	for i := 0; i < len(opt.DescSetB64); i += 76 {
 		end := i + 76
@@ -47,8 +51,22 @@ func fsharpFiles(f *model.File, opt Options) []File {
 	return []File{{Name: base(f) + ".fs", Content: b.String()}}
 }
 
-func fsharpModule(f *model.File) string {
-	p := base(f)
+func fsharpModule(f *model.File) string { return fsharpModuleName(base(f)) }
+
+// fsharpModuleName maps a file stem to its module (xdep -> Xdep).
+// fsMsg names the record module for a message field: the owning file's
+// prefix when foreign (its module is opened above), this file's own
+// otherwise.
+func fsMsg(f *model.File, field model.Field) string {
+	if field.Import != "" {
+		if imp := findImport(f, field.Import); imp != nil {
+			return imp.Prefix + "_" + field.Message
+		}
+	}
+	return className(f, field.Message)
+}
+
+func fsharpModuleName(p string) string {
 	var b strings.Builder
 	upper := true
 	for _, r := range p {
@@ -71,7 +89,7 @@ func fsharpModule(f *model.File) string {
 
 func fsharpType(f *model.File, field model.Field) string {
 	if field.Message != "" {
-		return className(f, field.Message)
+		return fsMsg(f, field)
 	}
 	switch field.Kind {
 	case protoreflect.Int32Kind, protoreflect.Sint32Kind, protoreflect.Sfixed32Kind:
@@ -271,10 +289,10 @@ func writeFSharpFill(b *strings.Builder, f *model.File, field model.Field) {
 	proto := field.Name
 	switch {
 	case field.Message != "" && !field.Repeated:
-		sub := className(f, field.Message)
+		sub := fsMsg(f, field)
 		fmt.Fprintf(b, "        v.%s |> Option.iter (fun x -> %s.fill (msg.SetMessage(%q)) x)\n", name, sub, proto)
 	case field.Message != "" && field.Repeated:
-		sub := className(f, field.Message)
+		sub := fsMsg(f, field)
 		fmt.Fprintf(b, "        v.%s |> List.iter (fun x -> %s.fill (msg.SetMessage(%q)) x)\n", name, sub, proto)
 	case field.Repeated:
 		fmt.Fprintf(b, "        v.%s |> List.iter (fun x -> msg.Set(%q, %s) |> ignore)\n", name, proto, fsharpScalar(field, "x"))
@@ -344,10 +362,10 @@ func fsharpLoad(f *model.File, field model.Field) string {
 	proto := field.Name
 	switch {
 	case field.Message != "" && !field.Repeated:
-		sub := className(f, field.Message)
+		sub := fsMsg(f, field)
 		return fmt.Sprintf("match msg.GetMessage(%q) with null -> None | n -> Some (%s.load n)", proto, sub)
 	case field.Message != "" && field.Repeated:
-		sub := className(f, field.Message)
+		sub := fsMsg(f, field)
 		return fmt.Sprintf("[ for i in 0 .. msg.Count(%q) - 1 -> match msg.At(%q, i) with null -> failwith %q | v -> match v.AsMessage() with null -> failwith %q | n -> %s.load n ]", proto, proto, proto, proto, sub)
 	case field.Repeated:
 		return fmt.Sprintf("[ for i in 0 .. msg.Count(%q) - 1 -> match msg.At(%q, i) with null -> failwith %q | v -> %s ]", proto, proto, proto, fsharpItem(field))

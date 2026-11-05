@@ -236,7 +236,7 @@ fun main(args: Array<String>) {
         empty.inner == Structtest_Inner3.getDefaultInstance(), "T6 empty decodes to default")
     check(runCatching { Structtest_Scalars3.newBuilder().setStr(null) }.isFailure, "T6 null setter fails")
     check(runCatching { Tutorial_Person.newBuilder().setName("x").build() }.isFailure, "T6 missing required fails")
-    check(runCatching { Structtest_Pbwire.type("structtest.Scalars3").newMessage().set("i32", "not a number") }.isFailure, "T6 wrong dynamic type fails")
+    check(runCatching { Matrix3_Pbwire.type("structtest.Scalars3").newMessage().set("i32", "not a number") }.isFailure, "T6 wrong dynamic type fails")
 
     // Unknown enum values survive as UNRECOGNIZED on both sides, raw value kept.
     val mystery = scalars3 { setColorValue(99) }

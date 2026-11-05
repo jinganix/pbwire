@@ -1,10 +1,11 @@
 // Package model turns a file descriptor into the neutral message model every
-// language emitter consumes: names, kinds, repetition and presence, with maps
-// and foreign message types left out (a generated model cannot express them, and
-// the dynamic API still can).
+// language emitter consumes: names, kinds, repetition and presence. Maps ride
+// as repeated entry structs; foreign message types resolve through File.Imports
+// (the emitter renders an import of the sibling generated file).
 package model
 
 import (
+	"sort"
 	"strings"
 	"unicode"
 
@@ -21,9 +22,11 @@ type Field struct {
 	Repeated bool
 	NeedsHas bool   // presence without a pointer: emit has<Field> next to it
 	Required bool   // proto2 required (NeedsHas is true as well)
-	Enum     string // local const class name, empty for an external enum
+	Enum     string // const class name (local, or the defining file's when Import != "")
 	Closed   bool   // the enum is closed (proto2): unknown values are invalid
-	Message  string // local class name, empty for a foreign message
+	Message  string // class name (local, or the defining file's when Import != "")
+	Import   string // .proto path defining Message/Enum, "" when local
+	Full     string // fully qualified proto name of Message ("" unless message-typed)
 	Oneof    string // containing oneof, empty when not in one
 	// Elixir-shape facts (other emitters ignore them).
 	Proto3Optional bool   // proto3 `optional`: explicit presence without a oneof
@@ -52,6 +55,17 @@ type Enum struct {
 	Values []EnumValue
 }
 
+// Import is one .proto file this file references but does not define: a
+// field names a message or enum from it. Emitters render an import of the
+// sibling generated file (same directory, same language) and qualify the
+// reference with the import's prefix; Prefix derives from Package exactly
+// as the imported file's own generation would.
+type Import struct {
+	Path    string // .proto path, e.g. "dep.proto"
+	Package string // proto package of the imported file
+	Prefix  string // Prefix(Package)
+}
+
 // File is one .proto file prepared for an emitter.
 type File struct {
 	Path     string
@@ -60,6 +74,7 @@ type File struct {
 	Syntax   string // "proto2" or "proto3" (editions report as proto2)
 	Messages []Message
 	Enums    []Enum
+	Imports  []Import // sorted by Path, files referenced but defined elsewhere
 }
 
 // Build walks a file descriptor in post-order (nested types first) and returns
@@ -82,7 +97,21 @@ func Build(fd protoreflect.FileDescriptor) *File {
 	for i := 0; i < fd.Messages().Len(); i++ {
 		f.buildMessage(fd.Messages().Get(i), nil)
 	}
+	sort.Slice(f.Imports, func(i, j int) bool { return f.Imports[i].Path < f.Imports[j].Path })
 	return f
+}
+
+// addImport records the file defining a referenced foreign type. Called
+// from buildField, which sees both the field and the file being built.
+func (f *File) addImport(fd protoreflect.FileDescriptor) {
+	path := fd.Path()
+	for _, imp := range f.Imports {
+		if imp.Path == path {
+			return
+		}
+	}
+	pkg := string(fd.Package())
+	f.Imports = append(f.Imports, Import{Path: path, Package: pkg, Prefix: Prefix(pkg)})
 }
 
 // Prefix is the CamelCase form of a proto package: "protobuf_test_messages.proto3"
@@ -127,10 +156,10 @@ func LowerCamel(s string) string {
 	return strings.ToLower(p[:1]) + p[1:]
 }
 
+// Map entries are ordinary messages with key/value fields: the generated
+// model holds them as entry structs in arrays (one emitter shape for
+// every language), so they are built like any nested message.
 func (f *File) buildMessage(md protoreflect.MessageDescriptor, path []string) {
-	if md.IsMapEntry() {
-		return
-	}
 	path = append(path, string(md.Name()))
 	local := strings.Join(path, "_")
 	msg := Message{Name: local, Full: string(md.FullName())}
@@ -168,15 +197,29 @@ func (f *File) buildField(fd protoreflect.FieldDescriptor) Field {
 		field.Oneof = string(od.Name())
 	}
 	if fd.IsMap() {
-		field.Skip = "map field: use the dynamic API"
+		// A map rides as a repeated entry message (field.Message names the
+		// entry struct built above); the dynamic API reads the same shape.
+		// (IsList excludes maps in recent protobuf-go, so set it here.)
+		field.Repeated = true
+		field.Message = f.messageLocal(fd)
+		if field.Message == "" {
+			field.Skip = "map entry from another file: use the dynamic API"
+		}
 		return field
 	}
 	switch fd.Kind() {
 	case protoreflect.MessageKind, protoreflect.GroupKind:
-		if local := f.messageLocal(fd); local != "" {
-			field.Message = local
+		// A foreign message resolves through Imports: Message names the
+		// type as the imported file's own generation would, Import says
+		// which sibling file to import. Unresolved types (AllowUnresolvable)
+		// still skip, loudly.
+		if local, imp := f.messageRef(fd); local != "" {
+			field.Message, field.Import = local, imp
+			if md := fd.Message(); md != nil {
+				field.Full = string(md.FullName())
+			}
 		} else {
-			field.Skip = "message type from another file: use the dynamic API"
+			field.Skip = "unresolved message type: use the dynamic API"
 		}
 		field.NeedsHas = false // a nil pointer is the absent state
 	case protoreflect.EnumKind:
@@ -195,9 +238,22 @@ func (f *File) buildField(fd protoreflect.FieldDescriptor) Field {
 // this file, or "" when it lives in an import (or the request left the type
 // unresolved, which AllowUnresolvable permits).
 func (f *File) messageLocal(fd protoreflect.FieldDescriptor) string {
-	md := fd.Message()
-	if md == nil || md.ParentFile() == nil || md.ParentFile().Path() != f.Path {
+	local, imp := f.messageRef(fd)
+	if imp != "" {
 		return ""
+	}
+	return local
+}
+
+// messageRef returns the generated class name of a message type plus the
+// .proto path defining it ("" when local). A foreign type resolves exactly
+// as the imported file's own generation would name it (nested path joined
+// with "_"); the import is recorded for the emitter. Unresolved types
+// return ("", "").
+func (f *File) messageRef(fd protoreflect.FieldDescriptor) (string, string) {
+	md := fd.Message()
+	if md == nil || md.ParentFile() == nil {
+		return "", ""
 	}
 	var path []string
 	for d := protoreflect.Descriptor(md); d != nil; d = d.Parent() {
@@ -207,7 +263,15 @@ func (f *File) messageLocal(fd protoreflect.FieldDescriptor) string {
 		}
 		break
 	}
-	return strings.Join(path, "_")
+	if len(path) == 0 {
+		return "", ""
+	}
+	local := strings.Join(path, "_")
+	if src := md.ParentFile(); src.Path() != f.Path {
+		f.addImport(src)
+		return local, src.Path()
+	}
+	return local, ""
 }
 
 // enumLocal returns the generated name of an enum defined in this file, or

@@ -14,7 +14,11 @@ func rubyFiles(f *model.File, opt Options) []File {
 	b.WriteString("# frozen_string_literal: true\n\n")
 	b.WriteString(headerP(f, "#", "Generated classes over the dynamic Pbwire runtime: accessors, one encode/decode."))
 	b.WriteString("require_relative '../../lib/pbwire'\n")
-	b.WriteString("require 'base64'\n\n")
+	b.WriteString("require 'base64'\n")
+	for _, imp := range f.Imports {
+		fmt.Fprintf(&b, "require_relative '%s'\n", stem(imp.Path))
+	}
+	b.WriteString("\n")
 	b.WriteString("module Pbwire\n  module Gen\n")
 	b.WriteString("    # A decoded 32-bit signed field arrives as unsigned 64-bit bits.\n")
 	b.WriteString("    def self.i32(value)\n      value = value.to_i\n      value >= 2**31 ? value - 2**32 : value\n    end\n\n")
@@ -63,6 +67,18 @@ func rubyFiles(f *model.File, opt Options) []File {
 	}
 	b.WriteString("  end\nend\n")
 	return []File{{Name: base(f) + ".rb", Content: b.String()}}
+}
+
+// rubyMsg names the class for a message field: the owning file's prefix
+// when foreign (the sibling file is required above), this file's own
+// otherwise. Shared Pbwire::Gen modules make the reference resolve.
+func rubyMsg(f *model.File, field model.Field) string {
+	if field.Import != "" {
+		if imp := findImport(f, field.Import); imp != nil {
+			return imp.Prefix + "_" + field.Message
+		}
+	}
+	return className(f, field.Message)
 }
 
 // aliasRuby re-attaches nested types to their parents. Both sides carry
@@ -338,13 +354,13 @@ func rubyFromMessage(f *model.File, field model.Field) string {
 		}
 		return fmt.Sprintf("(%s.nil? ? nil : %s)", key, conv)
 	case field.Repeated && field.Message != "":
-		return fmt.Sprintf("(%s || []).map { |v| %s.from_message(v) }", key, className(f, field.Message))
+		return fmt.Sprintf("(%s || []).map { |v| %s.from_message(v) }", key, rubyMsg(f, field))
 	case field.Repeated && rubySigned32(field):
 		return fmt.Sprintf("(%s || []).map { |v| Pbwire::Gen.i32(v) }", key)
 	case field.Repeated:
 		return fmt.Sprintf("%s || []", key)
 	case field.Message != "":
-		return fmt.Sprintf("(v = %s) ? %s.from_message(v) : nil", key, className(f, field.Message))
+		return fmt.Sprintf("(v = %s) ? %s.from_message(v) : nil", key, rubyMsg(f, field))
 	case field.Kind == protoreflect.StringKind, field.Kind == protoreflect.BytesKind:
 		return key
 	case field.Kind == protoreflect.BoolKind:

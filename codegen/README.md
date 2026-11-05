@@ -65,9 +65,16 @@ Rules the model follows, per field:
   cycle is expressible in every language that has pointers.
 - **enums** are integer constants plus a constant holder. The field stays
   an integer so an unknown value from the wire round-trips unchanged.
-- **maps** and **message fields whose type lives in another file** are left out
-  of the generated model (`// skipped <field>: ...`); the dynamic API still handles
-  them. This keeps the generated code dependency-free.
+- **maps** ride as repeated entry structs (one array of `{key, value}` per
+  map field, the same shape the dynamic API reads).
+- **message fields whose type lives in another file** import the sibling
+  generated file (same directory; Go takes an explicit `M<path>=<importpath>`
+  mapping, protoc-gen-go style) and qualify the reference with the defining
+  file's prefix. Unresolvable types still skip loudly (`// skipped <field>:`).
+  This keeps each generated file to one import per referenced file.
+- **Java holders are per file** (`Maptest_Pbwire`, not per package): two
+  protos in one package (oneof1, maptest) would otherwise emit the same
+  holder and clobber each other's descriptor set.
 
 ## Where the models live
 

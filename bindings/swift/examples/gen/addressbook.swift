@@ -51,7 +51,7 @@ public struct Tutorial_Person_PhoneNumber {
     public var type: Int64? = nil
     public init() {}
 
-    fileprivate func fill(_ msg: Message) throws {
+    func fill(_ msg: Message) throws {
         try msg.set(.string(number), "number")
         if let v = type { try msg.set(.int(v), "type") }
     }
@@ -71,7 +71,7 @@ public struct Tutorial_Person_PhoneNumber {
         return try fromMessage(ty.decode(data))
     }
 
-    fileprivate static func fromMessage(_ msg: Message) throws -> Tutorial_Person_PhoneNumber {
+    static func fromMessage(_ msg: Message) throws -> Tutorial_Person_PhoneNumber {
         var out = Tutorial_Person_PhoneNumber()
         if case .string(let v)? = msg.get("number") { out.number = v }
         if case .int(let v)? = msg.get("type") { out.type = v }
@@ -87,7 +87,7 @@ public struct Tutorial_Person {
     public var phones: [Tutorial_Person_PhoneNumber] = []
     public init() {}
 
-    fileprivate func fill(_ msg: Message) throws {
+    func fill(_ msg: Message) throws {
         try msg.set(.string(name), "name")
         try msg.set(.int(id), "id")
         if let v = email { try msg.set(.string(v), "email") }
@@ -109,7 +109,7 @@ public struct Tutorial_Person {
         return try fromMessage(ty.decode(data))
     }
 
-    fileprivate static func fromMessage(_ msg: Message) throws -> Tutorial_Person {
+    static func fromMessage(_ msg: Message) throws -> Tutorial_Person {
         var out = Tutorial_Person()
         if case .string(let v)? = msg.get("name") { out.name = v }
         if case .int(let v)? = msg.get("id") { out.id = v }
@@ -126,7 +126,7 @@ public struct Tutorial_AddressBook {
     public var people: [Tutorial_Person] = []
     public init() {}
 
-    fileprivate func fill(_ msg: Message) throws {
+    func fill(_ msg: Message) throws {
         for v in people { try v.fill(msg.makeNested("people")) }
     }
 
@@ -145,7 +145,7 @@ public struct Tutorial_AddressBook {
         return try fromMessage(ty.decode(data))
     }
 
-    fileprivate static func fromMessage(_ msg: Message) throws -> Tutorial_AddressBook {
+    static func fromMessage(_ msg: Message) throws -> Tutorial_AddressBook {
         var out = Tutorial_AddressBook()
         for i in 0..<msg.count("people") {
             if case .message(let n)? = msg.at("people", i) { out.people.append(try Tutorial_Person.fromMessage(n)) }

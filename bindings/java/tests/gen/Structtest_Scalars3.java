@@ -208,7 +208,7 @@ public final class Structtest_Scalars3 {
     }
 
     public byte[] toByteArray() {
-        Message msg = Structtest_Pbwire.type("structtest.Scalars3").newMessage();
+        Message msg = Matrix3_Pbwire.type("structtest.Scalars3").newMessage();
         try {
             encodeInto(msg);
             return msg.encode();
@@ -218,7 +218,7 @@ public final class Structtest_Scalars3 {
     }
 
     public static Structtest_Scalars3 parseFrom(byte[] data) {
-        Message msg = Structtest_Pbwire.type("structtest.Scalars3").decode(data);
+        Message msg = Matrix3_Pbwire.type("structtest.Scalars3").decode(data);
         try {
             return decode(msg);
         } finally {

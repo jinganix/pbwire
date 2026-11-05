@@ -226,7 +226,14 @@ func rustFiles(f *model.File, opt Options) []File {
 		fmt.Fprintf(&nums, "%d", v)
 	}
 	fmt.Fprintf(&b, "static DESC: &[u8] = &[%s];\n\n", nums.String())
-	b.WriteString("std::thread_local! {\n    static SCHEMA: Schema = Schema::from_bytes(DESC).expect(\"embedded descriptor set\");\n}\n\n")
+	b.WriteString("std::thread_local! {\n    static SCHEMA: Schema = Schema::from_bytes(DESC).expect(\"embedded descriptor set\");\n}\n")
+	// Sibling imports ride inline modules (path-relative, so the include
+	// works however this file was pulled in); foreign refs point through
+	// them (see rustForeign).
+	for _, imp := range f.Imports {
+		fmt.Fprintf(&b, "\n#[path = \"%s_pbwire.rs\"]\npub mod %s;", stem(imp.Path), rustImpMod(imp.Path))
+	}
+	b.WriteString("\n")
 	byLocal := map[string]*rustNode{}
 	var walk func(n *rustNode)
 	walk = func(n *rustNode) {
@@ -267,6 +274,30 @@ func rustModuleName(f *model.File) string {
 }
 
 // rustMsgPath resolves a local message name to a path relative to cur.
+// rustImpMod is the inline module name for a sibling import: the dep file
+// lives next to this one, so #[path] resolves regardless of how this file
+// itself was included. Sanitized like rustModuleName.
+func rustImpMod(path string) string {
+	name := strings.ReplaceAll(stem(path), "-", "_")
+	return "_pbwire_imp_" + name
+}
+
+// rustForeign names a type from another file through its inline module.
+func rustForeign(imp model.Import, local string) string {
+	return rustImpMod(imp.Path) + "::" + strings.Join(strings.Split(local, "_"), "::")
+}
+
+// rustFieldPath renders a field's message type: the foreign path when the
+// type lives in an import, the nesting-relative path otherwise.
+func rustFieldPath(f *model.File, field model.Field, cur []string, byLocal map[string]*rustNode) string {
+	if field.Message != "" && field.Import != "" {
+		if imp := findImport(f, field.Import); imp != nil {
+			return rustForeign(*imp, field.Message)
+		}
+	}
+	return rustMsgPath(field.Message, cur, byLocal)
+}
+
 func rustMsgPath(local string, cur []string, byLocal map[string]*rustNode) string {
 	if n, ok := byLocal[local]; ok {
 		return rustRel(append(append([]string{}, n.segs...), n.self), cur)
@@ -417,7 +448,7 @@ func writeRustMessage(b *strings.Builder, f *model.File, n *rustNode, cur []stri
 func rustFieldType(f *model.File, owner model.Message, field model.Field, cur []string, byLocal map[string]*rustNode, g map[string]map[string]bool) string {
 	elem := rustScalar(field)
 	if field.Message != "" {
-		elem = rustMsgPath(field.Message, cur, byLocal)
+		elem = rustFieldPath(f, field, cur, byLocal)
 		if rustBoxed(g, owner.Name, field.Message) {
 			elem = "Box<" + elem + ">"
 		}
@@ -466,7 +497,7 @@ func writeRustOneof(b *strings.Builder, f *model.File, m *model.Message, o strin
 		}
 		payload := rustScalar(field)
 		if field.Message != "" {
-			payload = rustMsgPath(field.Message, cur, byLocal)
+			payload = rustFieldPath(f, field, cur, byLocal)
 			if rustBoxed(g, m.Name, field.Message) {
 				payload = "Box<" + payload + ">"
 			}
@@ -577,10 +608,10 @@ func writeRustImpl(b *strings.Builder, f *model.File, n *rustNode, cur []string,
 			continue
 		}
 		if field.Oneof != "" {
-			writeRustLoadOne(b, n, field, byLocal, g)
+			writeRustLoadOne(b, f, n, field, byLocal, g)
 			continue
 		}
-		writeRustLoad(b, *m, field, cur, byLocal, g)
+		writeRustLoad(b, f, *m, field, cur, byLocal, g)
 	}
 	b.WriteString("        Ok(o)\n    }\n}\n\n")
 }
@@ -629,10 +660,10 @@ func rustEncodeCond(field model.Field, name string) string {
 	}
 }
 
-func writeRustLoad(b *strings.Builder, owner model.Message, field model.Field, cur []string, byLocal map[string]*rustNode, g map[string]map[string]bool) {
+func writeRustLoad(b *strings.Builder, f *model.File, owner model.Message, field model.Field, cur []string, byLocal map[string]*rustNode, g map[string]map[string]bool) {
 	name := "o." + rustName(field.Name)
 	if field.Message != "" && rustBoxed(g, owner.Name, field.Message) {
-		writeRustLoadBoxed(b, field, cur, byLocal)
+		writeRustLoadBoxed(b, f, field, cur, byLocal)
 		return
 	}
 	if field.Repeated {
@@ -640,7 +671,7 @@ func writeRustLoad(b *strings.Builder, owner model.Message, field model.Field, c
 		fmt.Fprintf(b, "            for i in 0..v.len() {\n                if let Some(item) = v.at(i) {\n")
 		if field.Message != "" {
 			fmt.Fprintf(b, "                    if let Some(m) = item.as_message() { %s.push(%s::from_message(schema, &m)?); }\n",
-				name, rustMsgPath(field.Message, cur, byLocal))
+				name, rustFieldPath(f, field, cur, byLocal))
 		} else {
 			fmt.Fprintf(b, "                    %s.push(%s);\n", name, rustElem(field, "item"))
 		}
@@ -649,7 +680,7 @@ func writeRustLoad(b *strings.Builder, owner model.Message, field model.Field, c
 	}
 	if field.Message != "" {
 		fmt.Fprintf(b, "        if let Some(m) = msg.get_message(t.field(%q)?) {\n", field.Name)
-		fmt.Fprintf(b, "            %s = Some(%s::from_message(schema, &m)?);\n        }\n", name, rustMsgPath(field.Message, cur, byLocal))
+		fmt.Fprintf(b, "            %s = Some(%s::from_message(schema, &m)?);\n        }\n", name, rustFieldPath(f, field, cur, byLocal))
 		return
 	}
 	if field.NeedsHas {
@@ -660,9 +691,9 @@ func writeRustLoad(b *strings.Builder, owner model.Message, field model.Field, c
 }
 
 // writeRustLoadBoxed loads a recursive field whose struct type is boxed.
-func writeRustLoadBoxed(b *strings.Builder, field model.Field, cur []string, byLocal map[string]*rustNode) {
+func writeRustLoadBoxed(b *strings.Builder, f *model.File, field model.Field, cur []string, byLocal map[string]*rustNode) {
 	name := "o." + rustName(field.Name)
-	path := rustMsgPath(field.Message, cur, byLocal)
+	path := rustFieldPath(f, field, cur, byLocal)
 	if field.Repeated {
 		fmt.Fprintf(b, "        if let Some(v) = msg.value(t.field(%q)?) {\n", field.Name)
 		fmt.Fprintf(b, "            for i in 0..v.len() {\n                if let Some(item) = v.at(i) {\n")
@@ -674,20 +705,20 @@ func writeRustLoadBoxed(b *strings.Builder, field model.Field, cur []string, byL
 	fmt.Fprintf(b, "            %s = Some(Box::new(%s::from_message(schema, &m)?));\n        }\n", name, path)
 }
 
-func writeRustLoadOne(b *strings.Builder, n *rustNode, field model.Field, byLocal map[string]*rustNode, g map[string]map[string]bool) {
+func writeRustLoadOne(b *strings.Builder, f *model.File, n *rustNode, field model.Field, byLocal map[string]*rustNode, g map[string]map[string]bool) {
 	cur := append(append([]string{}, n.segs...), rustSnake(n.self))
 	kind := rustCamel(field.Oneof)
 	qkind := rustRel(append(append([]string{}, cur...), kind), n.segs)
 	variant := rustCamel(field.Name)
-	payload := rustOptPayload(field, n.segs, byLocal, *n.msg, g)
+	payload := rustOptPayload(f, field, n.segs, byLocal, *n.msg, g)
 	fmt.Fprintf(b, "        if msg.has(t.field(%q)?) { o.%s = Some(%s::%s(%s)); }\n",
 		field.Name, rustName(field.Oneof), qkind, variant, payload)
 }
 
-func rustOptPayload(field model.Field, cur []string, byLocal map[string]*rustNode, owner model.Message, g map[string]map[string]bool) string {
+func rustOptPayload(f *model.File, field model.Field, cur []string, byLocal map[string]*rustNode, owner model.Message, g map[string]map[string]bool) string {
 	if field.Message != "" {
 		ctor := fmt.Sprintf("%s::from_message(schema, &msg.get_message(t.field(%q)?).expect(\"generated model: oneof member\"))?",
-			rustMsgPath(field.Message, cur, byLocal), field.Name)
+			rustFieldPath(f, field, cur, byLocal), field.Name)
 		if rustBoxed(g, owner.Name, field.Message) {
 			return "Box::new(" + ctor + ")"
 		}

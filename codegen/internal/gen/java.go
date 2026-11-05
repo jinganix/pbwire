@@ -29,6 +29,13 @@ func javaFiles(f *model.File, opt Options) []File {
 	return files
 }
 
+// javaHolderName is the per-proto schema holder class: the file stem keeps
+// same-package protos (oneof1, maptest) in distinct holders.
+func javaHolderName(f *model.File) string {
+	s := base(f)
+	return strings.ToUpper(s[:1]) + s[1:] + "_Pbwire"
+}
+
 // javaHolder emits the per-proto schema holder: the embedded descriptor set
 // plus a type lookup. One holder per .proto keeps the big descriptor bytes
 // out of every message class.
@@ -36,8 +43,8 @@ func javaHolder(f *model.File, opt Options) File {
 	var b strings.Builder
 	b.WriteString(header(f, "Embedded FileDescriptorSet plus the type lookup the generated models decode through."))
 	b.WriteString("import java.util.Base64;\n\n")
-	fmt.Fprintf(&b, "public final class %s_Pbwire {\n", f.Prefix)
-	fmt.Fprintf(&b, "    private %s_Pbwire() {}\n\n", f.Prefix)
+	fmt.Fprintf(&b, "public final class %s {\n", javaHolderName(f))
+	fmt.Fprintf(&b, "    private %s() {}\n\n", javaHolderName(f))
 	b.WriteString("    private static final String[] DESC_B64 = {\n")
 	for _, chunk := range chunk64(opt.DescSetB64) {
 		fmt.Fprintf(&b, "        %q,\n", chunk)
@@ -55,7 +62,7 @@ func javaHolder(f *model.File, opt Options) File {
 	b.WriteString("        return SCHEMA.message(fullName);\n")
 	b.WriteString("    }\n")
 	b.WriteString("}\n")
-	return File{Name: fmt.Sprintf("%s_Pbwire.java", f.Prefix), Content: b.String()}
+	return File{Name: javaHolderName(f) + ".java", Content: b.String()}
 }
 
 // javaEnumFile emits one Java enum per proto enum, protobuf-java naming:
@@ -121,8 +128,20 @@ func javaType(f *model.File, field model.Field) string {
 		}
 		return "int" // external enum: keep the wire number
 	default:
-		return className(f, field.Message)
+		return javaMsg(f, field)
 	}
+}
+
+// javaMsg names the class for a message field: the owning file's prefix when
+// foreign (same default package, so no import line), this file's own
+// otherwise.
+func javaMsg(f *model.File, field model.Field) string {
+	if field.Import != "" {
+		if imp := findImport(f, field.Import); imp != nil {
+			return imp.Prefix + "_" + field.Message
+		}
+	}
+	return className(f, field.Message)
 }
 
 // javaBoxed is the element type of a repeated field's List.
@@ -150,7 +169,7 @@ func javaBoxed(f *model.File, field model.Field) string {
 		}
 		return "Integer"
 	default:
-		return className(f, field.Message)
+		return javaMsg(f, field)
 	}
 }
 
@@ -476,7 +495,7 @@ func writeJavaOneofGetter(b *strings.Builder, f *model.File, m model.Message, o 
 // writeJavaWire emits toByteArray/parseFrom/encodeInto/decode/isInitialized.
 func writeJavaWire(b *strings.Builder, f *model.File, m model.Message, cls string, oneofs []string) {
 	fmt.Fprintf(b, "    public byte[] toByteArray() {\n")
-	fmt.Fprintf(b, "        Message msg = %s_Pbwire.type(%q).newMessage();\n", f.Prefix, m.Full)
+	fmt.Fprintf(b, "        Message msg = %s.type(%q).newMessage();\n", javaHolderName(f), m.Full)
 	b.WriteString("        try {\n")
 	b.WriteString("            encodeInto(msg);\n")
 	b.WriteString("            return msg.encode();\n")
@@ -485,7 +504,7 @@ func writeJavaWire(b *strings.Builder, f *model.File, m model.Message, cls strin
 	b.WriteString("        }\n    }\n\n")
 
 	fmt.Fprintf(b, "    public static %s parseFrom(byte[] data) {\n", cls)
-	fmt.Fprintf(b, "        Message msg = %s_Pbwire.type(%q).decode(data);\n", f.Prefix, m.Full)
+	fmt.Fprintf(b, "        Message msg = %s.type(%q).decode(data);\n", javaHolderName(f), m.Full)
 	b.WriteString("        try {\n")
 	b.WriteString("            return decode(msg);\n")
 	b.WriteString("        } finally {\n")

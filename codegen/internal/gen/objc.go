@@ -124,7 +124,11 @@ func objcFiles(f *model.File, opt Options) []File {
 	h.WriteString(header(f, "GPBMessage-shaped generated classes over PBWSchema/PBWMessage (embedded FileDescriptorSet)."))
 	fmt.Fprintf(&h, "#ifndef %s\n#define %s\n\n#import <Foundation/Foundation.h>\n\n#import \"PBWMessage.h\"\n#import \"PBWSchema.h\"\n\nNS_ASSUME_NONNULL_BEGIN\n\n", guard, guard)
 	m.WriteString(header(f, "GPBMessage-shaped generated classes over PBWSchema/PBWMessage (embedded FileDescriptorSet)."))
-	fmt.Fprintf(&m, "#import %q\n#import \"PBWError.h\"\n\nNS_ASSUME_NONNULL_BEGIN\n\n", base(f)+".h")
+	fmt.Fprintf(&m, "#import %q\n", base(f)+".h")
+	for _, imp := range f.Imports {
+		fmt.Fprintf(&m, "#import \"%s.h\"\n", stem(imp.Path))
+	}
+	m.WriteString("#import \"PBWError.h\"\n\nNS_ASSUME_NONNULL_BEGIN\n\n")
 
 	// The embedded schema: this file plus its transitive imports, exactly
 	// what protoc --descriptor_set_out would write for it.
@@ -140,6 +144,13 @@ func objcFiles(f *model.File, opt Options) []File {
 
 	for _, msg := range f.Messages {
 		fmt.Fprintf(&h, "@class %s;\n", objcClass(msg.Name))
+	}
+	// Foreign classes resolve through the sibling header (same directory);
+	// a forward declaration covers the .h, the import in the .m covers use.
+	for _, imp := range f.Imports {
+		for _, name := range foreignMessageNames(f, imp.Path) {
+			fmt.Fprintf(&h, "@class %s;\n", objcClass(name))
+		}
 	}
 	h.WriteString("\n")
 	for _, e := range f.Enums {

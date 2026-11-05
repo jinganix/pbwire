@@ -73,7 +73,7 @@ public final class Tutorial_Person {
     }
 
     public byte[] toByteArray() {
-        Message msg = Tutorial_Pbwire.type("tutorial.Person").newMessage();
+        Message msg = Addressbook_Pbwire.type("tutorial.Person").newMessage();
         try {
             encodeInto(msg);
             return msg.encode();
@@ -83,7 +83,7 @@ public final class Tutorial_Person {
     }
 
     public static Tutorial_Person parseFrom(byte[] data) {
-        Message msg = Tutorial_Pbwire.type("tutorial.Person").decode(data);
+        Message msg = Addressbook_Pbwire.type("tutorial.Person").decode(data);
         try {
             return decode(msg);
         } finally {

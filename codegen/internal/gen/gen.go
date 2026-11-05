@@ -22,6 +22,11 @@ type Options struct {
 	// of its imports) encoded as base64. Emitters whose runtime embeds its
 	// own schema (no .desc file at use time) read it from here.
 	DescSetB64 string
+	// Mappings overrides sibling import paths per .proto file, protoc-gen-go
+	// style: Mdep.proto=example.com/mod/gen/dep. Only languages whose module
+	// system needs an explicit path (Go) read it; the rest import the sibling
+	// generated file by name.
+	Mappings map[string]string
 }
 
 // File is one generated file.
@@ -93,12 +98,62 @@ func Generate(fd protoreflect.FileDescriptor, opt Options) ([]File, error) {
 }
 
 // base is the file name without extension, used for generated file names.
-func base(f *model.File) string {
-	p := f.Path
+func base(f *model.File) string { return stem(f.Path) }
+
+// stem maps a .proto path to its output stem (no directory, no extension).
+// Sibling imports resolve through it: the generated file for dep.proto in
+// the same directory is stem(dep.proto) plus the language's suffix.
+func stem(path string) string {
+	p := path
 	if i := strings.LastIndex(p, "/"); i >= 0 {
 		p = p[i+1:]
 	}
 	return strings.TrimSuffix(p, ".proto")
+}
+
+// foreignMessageNames lists the distinct message types referenced from one
+// import, in first-use order. Emitters whose registry is name-keyed (Node)
+// import exactly these names from the sibling file.
+func foreignMessageNames(f *model.File, path string) []string {
+	var names []string
+	seen := map[string]bool{}
+	for _, m := range f.Messages {
+		for _, fl := range m.Fields {
+			if fl.Import == path && fl.Message != "" && !seen[fl.Message] {
+				seen[fl.Message] = true
+				names = append(names, fl.Message)
+			}
+		}
+	}
+	return names
+}
+
+// findImport returns the Imports entry for a .proto path, or nil.
+func findImport(f *model.File, path string) *model.Import {
+	for i := range f.Imports {
+		if f.Imports[i].Path == path {
+			return &f.Imports[i]
+		}
+	}
+	return nil
+}
+
+// qualifyFields rewrites foreign message refs in place: every field with
+// Import set gets qual(import, local) as its Message, so the emitter's
+// existing use sites print the qualified reference untouched. Local fields
+// keep their names.
+func qualifyFields(f *model.File, qual func(model.Import, string) string) {
+	for i := range f.Messages {
+		for j := range f.Messages[i].Fields {
+			fl := &f.Messages[i].Fields[j]
+			if fl.Import == "" || fl.Message == "" {
+				continue
+			}
+			if imp := findImport(f, fl.Import); imp != nil {
+				fl.Message = qual(*imp, fl.Message)
+			}
+		}
+	}
 }
 
 // className is the emitter's top-level name for a message or enum: the package

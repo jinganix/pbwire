@@ -71,3 +71,20 @@ end
     zero = decode(Structtest_Scalars3, encode(Structtest_Scalars3(opt_i32 = (0))))
     @test zero.opt_i32 == 0
 end
+
+@testset "xfile cross-file import" begin
+    include(joinpath(@__DIR__, "gen", "xdep_pbwire.jl"))
+    include(joinpath(@__DIR__, "gen", "xfile_pbwire.jl"))
+    xref = read(joinpath(@__DIR__, "..", "..", "..", "codegen", "testdata", "xfile.bin"))
+    xval = Xfile_UsesDep(
+        single = Xdep_DepMsg(name = "one", value = 7),
+        many = [Xdep_DepMsg(name = "a"), Xdep_DepMsg(name = "b", value = -1)],
+        note = "hi",
+    )
+    @test encode(xval) == xref
+    xback = decode(Xfile_UsesDep, xref)
+    @test xback.single.name == "one" && xback.single.value == 7
+    @test length(xback.many) == 2 && xback.many[2].value == -1
+    @test xback.note == "hi"
+    @test encode(xback) == xref
+end

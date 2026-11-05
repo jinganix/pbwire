@@ -127,15 +127,7 @@ func goZero(ft string) string {
 	}
 }
 
-const goRuntime = `import (
-	"encoding/base64"
-	"fmt"
-	"sync"
-
-	"pbwire/dynamic"
-)
-
-var fileDesc, _ = base64.StdEncoding.DecodeString(_DESC_B64)
+const goRuntime = `var fileDesc, _ = base64.StdEncoding.DecodeString(_DESC_B64)
 
 var schemaOnce sync.Once
 var schemaCached *dynamic.Schema
@@ -173,10 +165,47 @@ func getType(full string) (*dynamic.MessageType, error) {
 // goFiles emits one self-contained package: generated structs over the pbwire
 // dynamic API in protoc-gen-go shape (CamelCase fields, optional pointers,
 // oneof wrappers, Getters), with the FileDescriptorSet embedded.
+// goImportAlias derives the package alias from a mapped import path
+// (last segment, sanitized like goPackage): the dep file's own generation
+// uses the same rule, so the alias agrees without further options.
+func goImportAlias(importPath string) string {
+	seg := importPath
+	if i := strings.LastIndex(seg, "/"); i >= 0 {
+		seg = seg[i+1:]
+	}
+	var sb strings.Builder
+	for _, r := range seg {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
+			sb.WriteRune(r)
+		} else {
+			sb.WriteRune('_')
+		}
+	}
+	if sb.Len() == 0 {
+		return "gen"
+	}
+	return sb.String()
+}
+
 func goFiles(f *model.File, opt Options) []File {
 	var b strings.Builder
+	// Foreign message refs qualify as alias.Type (M mapping) or stay bare
+	// (same package); one rewrite up front, use sites untouched.
+	qualifyFields(f, func(imp model.Import, local string) string {
+		if path, ok := opt.Mappings[imp.Path]; ok {
+			return goImportAlias(path) + "." + local
+		}
+		return local
+	})
 	b.WriteString(headerP(f, "//", "Generated structs over the pbwire dynamic API, protoc-gen-go shape."))
 	fmt.Fprintf(&b, "package %s\n\n", goPackage(f))
+	b.WriteString("import (\n\t\"encoding/base64\"\n\t\"fmt\"\n\t\"sync\"\n\n\t\"pbwire/dynamic\"\n")
+	for _, imp := range f.Imports {
+		if path, ok := opt.Mappings[imp.Path]; ok {
+			fmt.Fprintf(&b, "\n\t%s %q\n", goImportAlias(path), path)
+		}
+	}
+	b.WriteString(")\n\n")
 	b.WriteString(goRuntime)
 	fmt.Fprintf(&b, "\nconst _DESC_B64 = %q\n\n", opt.DescSetB64)
 	for _, e := range f.Enums {
@@ -410,11 +439,26 @@ func goMarshalCond(name, typ string, field model.Field) (string, bool) {
 // writeGoSetValue emits one field assignment into a dynamic message.
 func writeGoSetValue(b *strings.Builder, f *model.File, field model.Field, src, key, msg string) {
 	_ = f
+	// Foreign values cross packages through bytes (SetMessageBytes): neither
+	// side calls the other's unexported fill methods.
+	if field.Message != "" && field.Import != "" {
+		if !field.Repeated {
+			fmt.Fprintf(b, "\t\tsubBytes, err := %s.Marshal()\n", src)
+			b.WriteString("\t\tif err != nil {\n\t\t\treturn err\n\t\t}\n")
+			fmt.Fprintf(b, "\t\tif err := %s.SetMessageBytes(%s, subBytes); err != nil {\n\t\t\treturn err\n\t\t}\n", msg, key)
+			return
+		}
+		fmt.Fprintf(b, "\t\tfor _, item := range %s {\n", src)
+		b.WriteString("\t\t\tsubBytes, err := item.Marshal()\n")
+		b.WriteString("\t\t\tif err != nil {\n\t\t\t\treturn err\n\t\t\t}\n")
+		fmt.Fprintf(b, "\t\t\tif err := %s.SetMessageBytes(%s, subBytes); err != nil {\n\t\t\t\treturn err\n\t\t\t}\n\t\t}\n", msg, key)
+		return
+	}
 	switch {
 	case field.Message != "" && !field.Repeated:
 		fmt.Fprintf(b, "\t\tsub, err := %s.NewMessage(%s)\n", msg, key)
 		b.WriteString("\t\tif err != nil {\n\t\t\treturn err\n\t\t}\n")
-		fmt.Fprintf(b, "\t\tif err := %s.marshalInto(sub); err != nil {\n\t\t\treturn err\n\t\t}\n", src)
+		fmt.Fprintf(b, "\t\tif err := %s.marshalInto(sub); err != nil {\n\t\t\treturn err\n\t\t\t}\n", src)
 	case field.Message != "" && field.Repeated:
 		fmt.Fprintf(b, "\t\tfor _, item := range %s {\n", src)
 		fmt.Fprintf(b, "\t\t\tsub, err := %s.NewMessage(%s)\n", msg, key)
@@ -481,6 +525,23 @@ func writeGoLoadField(b *strings.Builder, f *model.File, m model.Message, field 
 		b.WriteString("\t}\n")
 		return
 	}
+	// Foreign values arrive as bytes (sub.Encode) and parse through the
+	// dep package's own Unmarshal: no unexported cross-package calls.
+	if field.Message != "" && field.Import != "" {
+		if !field.Repeated {
+			fmt.Fprintf(b, "\tif sub, ok, err := msg.GetMessage(%s); err != nil {\n\t\treturn err\n\t} else if ok {\n", key)
+			fmt.Fprintf(b, "\t\tsubBytes, err := sub.Encode()\n\t\tif err != nil {\n\t\t\treturn err\n\t\t}\n")
+			fmt.Fprintf(b, "\t\tm.%s = &%s{}\n\t\tif err := m.%s.Unmarshal(subBytes); err != nil {\n\t\t\treturn err\n\t\t}\n\t}\n", name, field.Message, name)
+			return
+		}
+		fmt.Fprintf(b, "\tif subs, err := msg.GetMessageSlice(%s); err != nil {\n\t\treturn err\n\t} else if subs != nil {\n", key)
+		fmt.Fprintf(b, "\t\tm.%s = make([]*%s, len(subs))\n", name, field.Message)
+		fmt.Fprintf(b, "\t\tfor i, sub := range subs {\n")
+		fmt.Fprintf(b, "\t\t\tsubBytes, err := sub.Encode()\n\t\t\tif err != nil {\n\t\t\t\treturn err\n\t\t\t}\n")
+		fmt.Fprintf(b, "\t\t\tm.%s[i] = &%s{}\n\t\t\tif err := m.%s[i].Unmarshal(subBytes); err != nil {\n\t\t\t\treturn err\n\t\t\t}\n\t\t}\n", name, field.Message, name)
+		b.WriteString("\t}\n")
+		return
+	}
 	if field.Message != "" && !field.Repeated {
 		fmt.Fprintf(b, "\tif sub, ok, err := msg.GetMessage(%s); err != nil {\n\t\treturn err\n\t} else if ok {\n", key)
 		fmt.Fprintf(b, "\t\tm.%s = &%s{}\n\t\tif err := m.%s.load(sub); err != nil {\n\t\t\treturn err\n\t\t}\n\t}\n", name, field.Message, name)
@@ -511,6 +572,13 @@ func writeGoLoadOne(b *strings.Builder, f *model.File, m model.Message, field mo
 	name := goCamel(field.Name)
 	key := fmt.Sprintf("%q", field.Name)
 	kind := goCamel(field.Oneof)
+	if field.Message != "" && field.Import != "" {
+		fmt.Fprintf(b, "\t\tif sub, ok, err := msg.GetMessage(%s); err != nil {\n\t\t\treturn err\n\t\t} else if ok {\n", key)
+		fmt.Fprintf(b, "\t\t\tsubBytes, err := sub.Encode()\n\t\t\tif err != nil {\n\t\t\t\treturn err\n\t\t\t}\n")
+		fmt.Fprintf(b, "\t\t\tw := &%s{%s: &%s{}}\n\t\t\tif err := w.%s.Unmarshal(subBytes); err != nil {\n\t\t\t\treturn err\n\t\t\t}\n", wrap, name, field.Message, name)
+		fmt.Fprintf(b, "\t\t\tm.%s = w\n\t\t}\n", kind)
+		return
+	}
 	if field.Message != "" {
 		fmt.Fprintf(b, "\t\tif sub, ok, err := msg.GetMessage(%s); err != nil {\n\t\t\treturn err\n\t\t} else if ok {\n", key)
 		fmt.Fprintf(b, "\t\t\tw := &%s{%s: &%s{}}\n\t\t\tif err := w.%s.load(sub); err != nil {\n\t\t\t\treturn err\n\t\t\t}\n", wrap, name, field.Message, name)

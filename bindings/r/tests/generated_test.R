@@ -65,4 +65,26 @@ zero <- Structtest_Scalars3_decode(
   Structtest_Scalars3_encode(Structtest_Scalars3_new(opt_i32 = 0L)))
 check(zero$opt_i32 == 0L, "explicit zero with presence survives")
 
+# Cross-file references resolve to the sibling file's constructors (one
+# global environment, so no import line).
+source(file.path(here, "gen", "xdep_pbwire.R"))
+source(file.path(here, "gen", "xfile_pbwire.R"))
+xref <- readBin(file.path(here, "..", "..", "..", "codegen", "testdata", "xfile.bin"),
+                "raw", n = 1e6)
+xval <- Xfile_UsesDep_new(
+  single = Xdep_DepMsg_new(name = "one", value = 7L),
+  many = list(Xdep_DepMsg_new(name = "a"),
+              Xdep_DepMsg_new(name = "b", value = -1L)),
+  note = "hi")
+check(identical(Xfile_UsesDep_encode(xval), xref),
+      "xfile encode equals the protoc reference bytes")
+xback <- Xfile_UsesDep_decode(xref)
+check(isTRUE(xback$single$name == "one" && xback$single$value == 7L),
+      "xfile single")
+check(length(xback$many) == 2 && isTRUE(xback$many[[2]]$value == -1L),
+      "xfile many")
+check(isTRUE(xback$note == "hi"), "xfile note")
+check(identical(Xfile_UsesDep_encode(xback), xref),
+      "xfile decode/encode byte-exact")
+
 cat(sprintf("generated test ok: %d checks\n", checks))

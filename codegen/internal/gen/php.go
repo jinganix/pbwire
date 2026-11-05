@@ -89,6 +89,18 @@ func phpFiles(f *model.File, opt Options) []File {
 	return []File{{Name: base(f) + ".php", Content: b.String()}}
 }
 
+// phpMsg names the class for a message field: the owning file's prefix when
+// foreign (one shared Pbwire\Gen namespace, so no use line), this file's
+// own otherwise.
+func phpMsg(f *model.File, field model.Field) string {
+	if field.Import != "" {
+		if imp := findImport(f, field.Import); imp != nil {
+			return imp.Prefix + "_" + field.Message
+		}
+	}
+	return className(f, field.Message)
+}
+
 func writePhpEnum(b *strings.Builder, f *model.File, e model.Enum) {
 	fmt.Fprintf(b, "/** %s */\nfinal class %s\n{\n", e.Full, className(f, e.Name))
 	for _, v := range e.Values {
@@ -169,7 +181,7 @@ func phpPropType(f *model.File, field model.Field) string {
 		return "RepeatedField"
 	}
 	if field.Message != "" {
-		return "?" + className(f, field.Message)
+		return "?" + phpMsg(f, field)
 	}
 	if field.NeedsHas || field.Required {
 		return "?" + phpScalar(field)
@@ -222,7 +234,7 @@ func phpRepeatedArgs(f *model.File, field model.Field, items string) string {
 		items = "[]"
 	}
 	if field.Message != "" {
-		return fmt.Sprintf("'message', %s, %s::class", items, className(f, field.Message))
+		return fmt.Sprintf("'message', %s, %s::class", items, phpMsg(f, field))
 	}
 	tag, allowed := phpElemTag(f, field)
 	if allowed != "" {
@@ -336,7 +348,7 @@ func phpReturnType(f *model.File, field model.Field) string {
 		return "RepeatedField"
 	}
 	if field.Message != "" {
-		return "?" + className(f, field.Message)
+		return "?" + phpMsg(f, field)
 	}
 	return phpScalar(field)
 }
@@ -355,7 +367,7 @@ func writePhpArray(b *strings.Builder, f *model.File, m model.Message) {
 			fmt.Fprintf(b, "                %q => $this->%s($v),\n", field.Name, setter)
 		} else if field.Message != "" {
 			fmt.Fprintf(b, "                %q => $this->%s($v instanceof %s ? $v : new %s($v)),\n",
-				field.Name, setter, className(f, field.Message), className(f, field.Message))
+				field.Name, setter, phpMsg(f, field), phpMsg(f, field))
 		} else {
 			fmt.Fprintf(b, "                %q => $this->%s($v),\n", field.Name, setter)
 		}
@@ -398,7 +410,7 @@ func writePhpRepeated(b *strings.Builder, f *model.File, field model.Field) {
 	fmt.Fprintf(b, "    public function set%s(array|RepeatedField $var): self\n    {\n", pascal)
 	fmt.Fprintf(b, "        $items = $var instanceof RepeatedField ? iterator_to_array($var) : array_values($var);\n")
 	if field.Message != "" {
-		cls := className(f, field.Message)
+		cls := phpMsg(f, field)
 		b.WriteString("        $out = [];\n")
 		fmt.Fprintf(b, "        foreach ($items as $v) { $out[] = $v instanceof %s ? $v : new %s($v); }\n", cls, cls)
 		fmt.Fprintf(b, "        $this->%s = new RepeatedField(%s);\n", prop, phpRepeatedArgs(f, field, "$out"))
@@ -409,7 +421,7 @@ func writePhpRepeated(b *strings.Builder, f *model.File, field model.Field) {
 }
 
 func writePhpMessageField(b *strings.Builder, f *model.File, field model.Field) {
-	prop, pascal, cls := phpName(field.Lower), field.Pascal, className(f, field.Message)
+	prop, pascal, cls := phpName(field.Lower), field.Pascal, phpMsg(f, field)
 	fmt.Fprintf(b, "    public function get%s(): ?%s\n    {\n", pascal, cls)
 	if field.Oneof != "" {
 		fmt.Fprintf(b, "        return $this->%s === %q ? $this->%s : null;\n", phpOneofState(field.Oneof), field.Name, prop)
@@ -622,7 +634,7 @@ func writePhpLoad(b *strings.Builder, f *model.File, field model.Field) {
 		if field.Message != "" {
 			fmt.Fprintf(b, "            $child = $v->asMessage();\n")
 			fmt.Fprintf(b, "            if ($child !== null) { $m = new %s(); $m->mergeFromMessage($child); $this->%s[] = $m; }\n",
-				className(f, field.Message), prop)
+				phpMsg(f, field), prop)
 		} else if phpSigned32(field) {
 			fmt.Fprintf(b, "            $this->%s[] = GeneratedUtil::toSigned32($v->asInt());\n", prop)
 		} else {
@@ -635,11 +647,11 @@ func writePhpLoad(b *strings.Builder, f *model.File, field model.Field) {
 		fmt.Fprintf(b, "        $child = $msg->getMessage(%s);\n", key)
 		fmt.Fprintf(b, "        if ($child !== null) {\n")
 		if field.Oneof != "" {
-			fmt.Fprintf(b, "            $m = new %s(); $m->mergeFromMessage($child);\n", className(f, field.Message))
+			fmt.Fprintf(b, "            $m = new %s(); $m->mergeFromMessage($child);\n", phpMsg(f, field))
 			fmt.Fprintf(b, "            $this->%s = $m;\n", prop)
 			fmt.Fprintf(b, "            $this->%s = %q;\n", phpOneofState(field.Oneof), field.Name)
 		} else {
-			fmt.Fprintf(b, "            if ($this->%s === null) { $this->%s = new %s(); }\n", prop, prop, className(f, field.Message))
+			fmt.Fprintf(b, "            if ($this->%s === null) { $this->%s = new %s(); }\n", prop, prop, phpMsg(f, field))
 			fmt.Fprintf(b, "            $this->%s->mergeFromMessage($child);\n", prop)
 		}
 		b.WriteString("        }\n")

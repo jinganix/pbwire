@@ -51,7 +51,8 @@ javac -nowarn -cp "$jar" -d "$here/out/classes" \
 # (T1-T6 against the pinned reference bytes and the protobuf-java oracle).
 java -cp "$here/out/classes" TestPbwire "$desc"
 java -cp "$here/out/classes:$jar" TestGenerated \
-    "$root/bindings/c/tests/data/matrix3.bin" "$root/codegen/testdata/oneof1.bin"
+    "$root/bindings/c/tests/data/matrix3.bin" "$root/codegen/testdata/oneof1.bin" \
+    "$root/codegen/testdata/maptest.bin" "$root/codegen/testdata/xfile.bin"
 java -cp "$here/out/classes" Roundtrip "$root/examples/addressbook.bin"
 
 cat <<EOF

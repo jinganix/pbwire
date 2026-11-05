@@ -43,9 +43,21 @@ func juliaFiles(f *model.File, opt Options) []File {
 	return []File{{Name: base(f) + "_pbwire.jl", Content: b.String()}}
 }
 
+// juliaMsg names the struct for a message field: the owning file's prefix
+// when foreign (included files share one namespace, so no import line),
+// this file's own otherwise.
+func juliaMsg(f *model.File, field model.Field) string {
+	if field.Import != "" {
+		if imp := findImport(f, field.Import); imp != nil {
+			return imp.Prefix + "_" + field.Message
+		}
+	}
+	return className(f, field.Message)
+}
+
 func juliaType(f *model.File, field model.Field) string {
 	if field.Message != "" {
-		return className(f, field.Message)
+		return juliaMsg(f, field)
 	}
 	// Every integer kind and enums decode as Int64 raw bits and encode
 	// from any Integer, so the generated structs store Int64 throughout.
@@ -193,12 +205,12 @@ func writeJuliaFromDict(b *strings.Builder, f *model.File, field model.Field) {
 	name := field.Name
 	switch {
 	case field.Message != "" && !field.Repeated:
-		sub := className(f, field.Message)
+		sub := juliaMsg(f, field)
 		fmt.Fprintf(b, "    if haskey(d, %q)\n", name)
 		fmt.Fprintf(b, "        out.%s = from_dict(%s, d[%q])\n", name, sub, name)
 		b.WriteString("    end\n")
 	case field.Message != "" && field.Repeated:
-		sub := className(f, field.Message)
+		sub := juliaMsg(f, field)
 		fmt.Fprintf(b, "    if haskey(d, %q)\n", name)
 		fmt.Fprintf(b, "        out.%s = [from_dict(%s, x) for x in d[%q]]\n", name, sub, name)
 		b.WriteString("    end\n")

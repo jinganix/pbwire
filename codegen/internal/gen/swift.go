@@ -60,9 +60,21 @@ func swiftEnumCase(name string) string {
 	return out
 }
 
+// swiftMsg names the struct for a message field: the owning file's prefix
+// when foreign (one Swift module, so no import line), this file's own
+// otherwise.
+func swiftMsg(f *model.File, field model.Field) string {
+	if field.Import != "" {
+		if imp := findImport(f, field.Import); imp != nil {
+			return imp.Prefix + "_" + field.Message
+		}
+	}
+	return className(f, field.Message)
+}
+
 func swiftType(f *model.File, field model.Field) string {
 	if field.Message != "" {
-		return className(f, field.Message)
+		return swiftMsg(f, field)
 	}
 	// Enums stay integers (never narrowed): an unknown wire value
 	// round-trips unchanged. The generated enum holds the names.
@@ -121,7 +133,9 @@ func writeSwiftMessage(b *strings.Builder, f *model.File, m model.Message) {
 	}
 	fmt.Fprintf(b, "    public init() {}\n\n")
 	// fill writes fields into an existing Message (root or nested view).
-	b.WriteString("    fileprivate func fill(_ msg: Message) throws {\n")
+	// Internal (not fileprivate): sibling-file structs fill nested values
+	// of imported types.
+	b.WriteString("    func fill(_ msg: Message) throws {\n")
 	for _, field := range m.Fields {
 		if field.Skip != "" {
 			continue
@@ -140,7 +154,7 @@ func writeSwiftMessage(b *strings.Builder, f *model.File, m model.Message) {
 	fmt.Fprintf(b, "            throw NSError(domain: \"pbwire\", code: -1, userInfo: [NSLocalizedDescriptionKey: \"no such type: %s\"])\n", m.Full)
 	fmt.Fprintf(b, "        }\n")
 	b.WriteString("        return try fromMessage(ty.decode(data))\n    }\n\n")
-	fmt.Fprintf(b, "    fileprivate static func fromMessage(_ msg: Message) throws -> %s {\n", cls)
+	fmt.Fprintf(b, "    static func fromMessage(_ msg: Message) throws -> %s {\n", cls)
 	b.WriteString("        var out = " + cls + "()\n")
 	for _, field := range m.Fields {
 		if field.Skip != "" {

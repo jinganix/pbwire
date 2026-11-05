@@ -35,7 +35,7 @@ public final class Structtest_Inner3 {
     }
 
     public byte[] toByteArray() {
-        Message msg = Structtest_Pbwire.type("structtest.Inner3").newMessage();
+        Message msg = Matrix3_Pbwire.type("structtest.Inner3").newMessage();
         try {
             encodeInto(msg);
             return msg.encode();
@@ -45,7 +45,7 @@ public final class Structtest_Inner3 {
     }
 
     public static Structtest_Inner3 parseFrom(byte[] data) {
-        Message msg = Structtest_Pbwire.type("structtest.Inner3").decode(data);
+        Message msg = Matrix3_Pbwire.type("structtest.Inner3").decode(data);
         try {
             return decode(msg);
         } finally {

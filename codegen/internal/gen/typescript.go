@@ -95,7 +95,19 @@ func javaScriptFiles(f *model.File, opt Options) []File {
 		}
 		b.WriteString("});\n\n")
 	}
-	b.WriteString("const _ENUMS = {};\nconst _REVENUMS = {};\nconst _CLASSES = {};\n\n")
+	b.WriteString("const _ENUMS = {};\nconst _REVENUMS = {};\nconst _CLASSES = {};\n")
+	// Sibling models register their classes here by bare name (the dep
+	// file uses the same names); local classes below overwrite on
+	// collision, so locals win.
+	for _, imp := range f.Imports {
+		if names := foreignMessageNames(f, imp.Path); len(names) > 0 {
+			fmt.Fprintf(&b, "const _imp_%s = require('./%s.js');\n", stem(imp.Path), stem(imp.Path))
+			for _, n := range names {
+				fmt.Fprintf(&b, "_CLASSES['%s'] = _imp_%s.%s;\n", n, stem(imp.Path), n)
+			}
+		}
+	}
+	b.WriteString("\n")
 	for _, e := range f.Enums {
 		name := className(f, e.Name)
 		fmt.Fprintf(&b, "_ENUMS['%s'] = %s;\n_REVENUMS['%s'] = _REV_%s;\n", name, name, name, name)
@@ -255,6 +267,14 @@ func writeTSNamespace(b *strings.Builder, f *model.File, m model.Message) {
 func typeScriptFiles(f *model.File, opt Options) []File {
 	var b strings.Builder
 	b.WriteString(header(f, "TypeScript declarations for the protobufjs-static-shaped facade."))
+	for _, imp := range f.Imports {
+		if names := foreignMessageNames(f, imp.Path); len(names) > 0 {
+			fmt.Fprintf(&b, "import type { %s } from \"./%s\";\n", strings.Join(names, ", "), stem(imp.Path))
+		}
+	}
+	if len(f.Imports) > 0 {
+		b.WriteString("\n")
+	}
 	for _, e := range f.Enums {
 		fmt.Fprintf(&b, "/** %s */\nexport declare const %s: {\n", e.Full, className(f, e.Name))
 		for _, v := range e.Values {

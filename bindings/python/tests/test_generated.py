@@ -17,6 +17,7 @@ sys.path.insert(0, os.path.join(HERE, "gen"))
 import pbwire as pbw  # noqa: E402
 
 import matrix3_pbwire as t3  # noqa: E402
+import maptest_pbwire as tm  # noqa: E402
 
 DATA = os.path.join(HERE, "..", "..", "c", "tests", "data")
 DESC = os.path.join(DATA, "matrix3.desc")
@@ -81,6 +82,42 @@ def main():
         nested = t3.Scalars3(inner=t3.Inner3(name="kid", value=42))
         check(t3.Scalars3.decode(scalars, nested.encode(scalars)).inner.value == 42, "nested generated message")
         check(t3.Inner3.decode(inner, nested.inner.encode(inner)).name == "kid", "inner encodes standalone")
+
+    # Maps ride as repeated entry structs: entry order is the wire order.
+    mapdata = os.path.join(HERE, "..", "..", "..", "codegen", "testdata")
+    with open(os.path.join(mapdata, "maptest.bin"), "rb") as f:
+        map_reference = f.read()
+    with pbw.Schema.from_file(os.path.join(mapdata, "maptest.desc")) as schema:
+        maptest = schema.message("spectest.MapTest")
+        gen_map = tm.MapTest(
+            by_int=[tm.MapTest_ByIntEntry(key=1, value="one"),
+                    tm.MapTest_ByIntEntry(key=-5, value="neg")],
+            by_str=[tm.MapTest_ByStrEntry(key="a", value=10),
+                    tm.MapTest_ByStrEntry(key="b", value=-3)],
+            by_msg=[tm.MapTest_ByMsgEntry(key="k", value=tm.MapValue(name="n", value=42))],
+        )
+        wire = gen_map.encode(maptest)
+        check(wire == map_reference, "generated map encode equals protoc reference")
+        back = tm.MapTest.decode(maptest, map_reference)
+        check(back == gen_map, "map decode returns the same dataclass")
+        check(tm.MapTest().encode(maptest) == b"", "empty map message is empty")
+
+    # Cross-file references import the sibling model instead of skipping.
+    with open(os.path.join(mapdata, "xfile.bin"), "rb") as f:
+        xfile_reference = f.read()
+    with pbw.Schema.from_file(os.path.join(mapdata, "xfile.desc")) as schema:
+        uses = schema.message("xfile.UsesDep")
+        import xdep_pbwire as td  # noqa: E402
+        import xfile_pbwire as tx  # noqa: E402
+        gen_x = tx.UsesDep(
+            single=td.DepMsg(name="one", value=7),
+            many=[td.DepMsg(name="a"), td.DepMsg(name="b", value=-1)],
+            note="hi",
+        )
+        wire = gen_x.encode(uses)
+        check(wire == xfile_reference, "generated xfile encode equals protoc reference")
+        back_x = tx.UsesDep.decode(uses, xfile_reference)
+        check(back_x == gen_x, "xfile decode returns the same dataclass")
 
     print(f"test_generated: {checks} checks passed")
 

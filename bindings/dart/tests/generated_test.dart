@@ -20,6 +20,8 @@ import 'package:fixnum/fixnum.dart';
 
 import 'gen/matrix3.dart' as pb;
 import 'gen/oneof1.dart' as pb1;
+import 'gen/xdep.dart' as pxdep;
+import 'gen/xfile.dart' as px;
 import 'gen_oracle/matrix3.pb.dart' as oracle;
 import 'gen_oracle/oneof1.pb.dart' as oracle1;
 
@@ -314,6 +316,19 @@ void main() {
   check(opt.hasOptI32(), 'T6 has tracks set');
   opt.clearOptI32();
   check(!opt.hasOptI32() && opt.writeToBuffer().isEmpty, 'T6 clear drops');
+
+  // Cross-file references import the sibling model: UsesDep names DepMsg
+  // from xdep.dart (public create(), not the library-private _()).
+  final xref = File('$testdata/xfile.bin').readAsBytesSync();
+  final xbuilt = px.UsesDep.create()
+    ..single = (pxdep.DepMsg.create()..name = 'one'..value = 7)
+    ..many.addAll([(pxdep.DepMsg.create()..name = 'a'), (pxdep.DepMsg.create()..name = 'b'..value = -1)])
+    ..note = 'hi';
+  check(bytesEqual(xbuilt.writeToBuffer(), xref), 'xfile facade != reference');
+  final xback = px.UsesDep.fromBuffer(xref);
+  check(xback.single.name == 'one' && xback.single.value == 7, 'xfile single');
+  check(xback.many.length == 2 && xback.many[1].value == -1, 'xfile many');
+  check(xback.note == 'hi', 'xfile note');
 
   print('generated_test: $checks checks passed');
 }

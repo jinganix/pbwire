@@ -4,8 +4,8 @@
 
 import java.util.Base64;
 
-public final class Structtest_Pbwire {
-    private Structtest_Pbwire() {}
+public final class Matrix3_Pbwire {
+    private Matrix3_Pbwire() {}
 
     private static final String[] DESC_B64 = {
         "CrcVCg1tYXRyaXgzLnByb3RvEgpzdHJ1Y3R0ZXN0IjIKBklubmVyMxISCgRu",

@@ -40,9 +40,21 @@ func scalaFiles(f *model.File, opt Options) []File {
 	return []File{{Name: base(f) + ".scala", Content: b.String()}}
 }
 
+// scalaMsg names the case class for a message field: the sibling file's Gen
+// object member when foreign (same default package, no import line), this
+// file's own class otherwise.
+func scalaMsg(f *model.File, field model.Field) string {
+	if field.Import != "" {
+		if imp := findImport(f, field.Import); imp != nil {
+			return stem(imp.Path) + "Gen." + imp.Prefix + "_" + field.Message
+		}
+	}
+	return className(f, field.Message)
+}
+
 func scalaType(f *model.File, field model.Field) string {
 	if field.Message != "" {
-		return className(f, field.Message)
+		return scalaMsg(f, field)
 	}
 	switch field.Kind {
 	case protoreflect.Int32Kind, protoreflect.Sint32Kind, protoreflect.Sfixed32Kind:
@@ -185,10 +197,10 @@ func writeScalaFill(b *strings.Builder, f *model.File, field model.Field) {
 	proto := field.Name
 	switch {
 	case field.Message != "" && !field.Repeated:
-		sub := className(f, field.Message)
+		sub := scalaMsg(f, field)
 		fmt.Fprintf(b, "      v.%s.foreach(x => %s.fill(msg.newMessage(%q), x))\n", name, sub, proto)
 	case field.Message != "" && field.Repeated:
-		sub := className(f, field.Message)
+		sub := scalaMsg(f, field)
 		fmt.Fprintf(b, "      v.%s.foreach(x => %s.fill(msg.newMessage(%q), x))\n", name, sub, proto)
 	case field.Repeated:
 		fmt.Fprintf(b, "      v.%s.foreach(x => msg.set(%q, %s))\n", name, proto, scalaScalar(field, "x"))
@@ -238,10 +250,10 @@ func writeScalaLoad(b *strings.Builder, f *model.File, field model.Field) {
 	t := scalaType(f, field)
 	switch {
 	case field.Message != "" && !field.Repeated:
-		sub := className(f, field.Message)
+		sub := scalaMsg(f, field)
 		fmt.Fprintf(b, "      %s = Option(msg.getMessage(%q)).map(%s.load),\n", name, proto, sub)
 	case field.Message != "" && field.Repeated:
-		sub := className(f, field.Message)
+		sub := scalaMsg(f, field)
 		fmt.Fprintf(b, "      %s = msg.getList(%q).toArray.toList.collect { case m: Message => %s.load(m) },\n", name, proto, sub)
 	case field.Repeated:
 		fmt.Fprintf(b, "      %s = msg.getList(%q).toArray.toList.map(x => %s),\n", name, proto, scalaUnbox(t, "x"))

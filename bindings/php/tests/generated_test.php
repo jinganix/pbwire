@@ -15,10 +15,14 @@ declare(strict_types=1);
 require_once __DIR__ . '/../runtime/pbwire.php';
 require_once __DIR__ . '/../runtime/generated.php';
 require_once __DIR__ . '/gen/matrix3.php';
+require_once __DIR__ . '/gen/xdep.php';
+require_once __DIR__ . '/gen/xfile.php';
 
 use Pbwire\Gen\Structtest_Color3;
 use Pbwire\Gen\Structtest_Inner3;
 use Pbwire\Gen\Structtest_Scalars3;
+use Pbwire\Gen\Xdep_DepMsg;
+use Pbwire\Gen\Xfile_UsesDep;
 
 $reference = (string) file_get_contents(__DIR__ . '/../../c/tests/data/matrix3.bin');
 $checks = 0;
@@ -102,5 +106,19 @@ check($zeroBack->hasOptI32() && $zeroBack->getOptI32() === 0, 'explicit zero pre
 
 $nested = (new Structtest_Scalars3())->setInner((new Structtest_Inner3())->setName('kid'));
 check(Structtest_Scalars3::fromString($nested->serializeToString())->getInner()->getValue() === 0, 'nested generated message');
+
+// Cross-file references resolve to the sibling file's classes (one shared
+// Pbwire\Gen namespace): UsesDep names Xdep_DepMsg from xdep.php.
+$xreference = (string) file_get_contents(__DIR__ . '/../../../codegen/testdata/xfile.bin');
+$xbuilt = (new Xfile_UsesDep())
+    ->setSingle((new Xdep_DepMsg())->setName('one')->setValue(7))
+    ->setMany([(new Xdep_DepMsg())->setName('a'),
+               (new Xdep_DepMsg())->setName('b')->setValue(-1)])
+    ->setNote('hi');
+check($xbuilt->serializeToString() === $xreference, 'xfile encode equals the protoc reference bytes');
+$xback = Xfile_UsesDep::fromString($xreference);
+check($xback->getSingle()->getName() === 'one' && $xback->getSingle()->getValue() === 7, 'xfile single');
+check(count($xback->getMany()) === 2 && $xback->getMany()[1]->getValue() === -1, 'xfile many');
+check($xback->getNote() === 'hi', 'xfile note');
 
 printf("generated_test: %d checks passed\n", $checks);

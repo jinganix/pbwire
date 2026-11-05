@@ -268,6 +268,33 @@ func (m *Message) SetBytes(name string, v []byte) error {
 	return m.store(f, v2)
 }
 
+// SetMessageBytes parses wire bytes as the MESSAGE or GROUP field name and
+// stores the result. It bridges generated packages: a foreign value marshals
+// to bytes through its own package, then lands here without either package
+// calling the other's unexported fill methods.
+func (m *Message) SetMessageBytes(name string, wire []byte) error {
+	f, err := m.typ.field(name)
+	if err != nil {
+		return err
+	}
+	if C.pbw_field_message_type(f) == nil {
+		return fmt.Errorf("dynamic: field %s is not a message", name)
+	}
+	tmp, err := m.typ.subtype(f).Decode(wire)
+	if err != nil {
+		return err
+	}
+	v := C.pbw_value_new_message(tmp.c)
+	if v == nil {
+		tmp.Close()
+		return errors.New("dynamic: value allocation failed")
+	}
+	// Ownership (tree and schema pin) moves into v; Close below is a no-op.
+	tmp.c = nil
+	tmp.typ.s.release()
+	return m.store(f, v)
+}
+
 // NewMessage creates (or returns the existing) nested message for a MESSAGE
 // field: singular replaces, repeated appends. The view writes straight into
 // the root tree; never Close it separately.

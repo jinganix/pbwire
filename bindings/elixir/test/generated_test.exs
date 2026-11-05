@@ -31,7 +31,7 @@ defmodule Matrix3GeneratedTest do
       sfx32: -2_147_483_648,
       sfx64: -9_223_372_036_854_775_808,
       f32: :infinity,
-      f64: -123456.789,
+      f64: -123_456.789,
       flag: true,
       str: "hello",
       color: :COLOR3_GREEN,
@@ -71,5 +71,40 @@ defmodule Matrix3GeneratedTest do
 
   test "empty generated struct encodes to nothing" do
     assert Protobuf.encode(%Scalars3{}) == <<>>
+  end
+end
+
+defmodule XfileGeneratedTest do
+  use ExUnit.Case, async: false
+
+  # Cross-file references resolve to the sibling file's modules (global
+  # aliases, so no import): UsesDep names Xdep.DepMsg from xdep.ex.
+  # Sync: load_schema is node-global, like PbwireTest.
+
+  alias Xdep.DepMsg
+  alias Xfile.UsesDep
+
+  @bin Path.join([__DIR__, "..", "..", "..", "codegen", "testdata", "xfile.bin"])
+
+  setup_all do
+    :ok = Pbwire.load_schema([UsesDep])
+    :ok
+  end
+
+  test "cross-file struct encodes to the protoc reference bytes and back" do
+    reference = File.read!(@bin)
+
+    msg = %UsesDep{
+      single: %DepMsg{name: "one", value: 7},
+      many: [%DepMsg{name: "a"}, %DepMsg{name: "b", value: -1}],
+      note: "hi"
+    }
+
+    wire = Protobuf.encode(msg)
+    assert wire == reference
+    assert Protobuf.decode(reference, UsesDep) == msg
+
+    assert Pbwire.encode(msg) == reference
+    assert Pbwire.decode(reference, UsesDep) == msg
   end
 end

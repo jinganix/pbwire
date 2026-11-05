@@ -1,0 +1,15 @@
+// Cross-file fixture for the generated compat tests: UsesDep references
+// DepMsg from xdep.proto, so every language must import the sibling
+// generated file instead of skipping the field. Reference bytes
+// (xfile.bin) from protoc --encode of xfile.txt.
+syntax = "proto3";
+
+package xfile;
+
+import "xdep.proto";
+
+message UsesDep {
+  xdep.DepMsg single = 1;
+  repeated xdep.DepMsg many = 2;
+  string note = 3;
+}

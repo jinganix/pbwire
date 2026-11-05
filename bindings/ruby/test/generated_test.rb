@@ -9,6 +9,7 @@
 $LOAD_PATH.unshift File.expand_path('../lib', __dir__)
 require 'pbwire'
 require_relative 'gen/matrix3'
+require_relative 'gen/xfile'
 
 DATA = File.expand_path('../../c/tests/data', __dir__)
 REFERENCE = File.binread(File.join(DATA, 'matrix3.bin'))
@@ -79,6 +80,23 @@ check(scalars.decode(schema, nested.encode(schema)).inner.value == 42, 'nested g
 
 inner_wire = Pbwire::Gen::Structtest_Inner3.new(name: 'kid').encode(schema)
 check(Pbwire::Gen::Structtest_Inner3.decode(schema, inner_wire).name == 'kid', 'inner encodes standalone')
+
+xdata = File.expand_path('../../../codegen/testdata', __dir__)
+xreference = File.binread(File.join(xdata, 'xfile.bin'))
+xschema = Pbwire::Schema.from_file(File.join(xdata, 'xfile.desc'))
+xuses = Pbwire::Gen::Xfile_UsesDep
+xbuilt = xuses.new(
+  single: Pbwire::Gen::Xdep_DepMsg.new(name: 'one', value: 7),
+  many: [Pbwire::Gen::Xdep_DepMsg.new(name: 'a'),
+         Pbwire::Gen::Xdep_DepMsg.new(name: 'b', value: -1)],
+  note: 'hi'
+)
+check(xbuilt.encode(xschema) == xreference, 'xfile encode equals the protoc reference bytes')
+xback = xuses.decode(xschema, xreference)
+check(xback.single.name == 'one' && xback.single.value == 7, 'xfile single')
+check(xback.many.map(&:name) == %w[a b] && xback.many[1].value == -1, 'xfile many')
+check(xback.note == 'hi', 'xfile note')
+xschema.close
 
 schema.close
 puts "generated_test: #{CHECKS[0]} checks passed"

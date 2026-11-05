@@ -54,8 +54,14 @@ public final class TestGenerated {
         Path matrixBin = Path.of(args.length > 0 ? args[0] : "../c/tests/data/matrix3.bin");
         Path oneofBin = Path.of(args.length > 1 ? args[1]
                 : "../../codegen/testdata/oneof1.bin");
+        Path mapBin = Path.of(args.length > 2 ? args[2]
+                : "../../codegen/testdata/maptest.bin");
+        Path xfileBin = Path.of(args.length > 3 ? args[3]
+                : "../../codegen/testdata/xfile.bin");
         byte[] reference = Files.readAllBytes(matrixBin);
         byte[] referenceOneof = Files.readAllBytes(oneofBin);
+        byte[] referenceMap = Files.readAllBytes(mapBin);
+        byte[] referenceXfile = Files.readAllBytes(xfileBin);
 
         if (com.google.protobuf.RuntimeVersion.MAJOR != ORACLE_MAJOR
                 || com.google.protobuf.RuntimeVersion.MINOR != ORACLE_MINOR
@@ -157,7 +163,7 @@ public final class TestGenerated {
                 "T6 oracle null setter fails");
         checkThrows(() -> Tutorial_Person.newBuilder().setName("x").build(),
                 "T6 missing required fails");
-        checkThrows(() -> Structtest_Pbwire.type("structtest.Scalars3").newMessage()
+        checkThrows(() -> Matrix3_Pbwire.type("structtest.Scalars3").newMessage()
                         .set("i32", "not a number"),
                 "T6 wrong dynamic type fails");
 
@@ -186,6 +192,42 @@ public final class TestGenerated {
         check(both.getKindCase().name().equals(spectest.Oneof1OuterClass.Oneof1.newBuilder()
                         .setName("n").setNum(1).setText("hi").build().getKindCase().name()),
                 "T6 oneof case agrees with oracle");
+
+        // Map entries ride as repeated entry structs, byte-exact with protoc.
+        Spectest_MapTest maps = Spectest_MapTest.parseFrom(referenceMap);
+        check(maps.getByIntCount() == 2 && maps.getByInt(0).getKey() == 1
+                && maps.getByInt(0).getValue().equals("one")
+                && maps.getByInt(1).getKey() == -5, "map int entries decode");
+        check(maps.getByStrCount() == 2 && maps.getByStr(0).getKey().equals("a")
+                && maps.getByStr(0).getValue() == 10, "map string entries decode");
+        check(maps.getByMsgCount() == 1 && maps.getByMsg(0).getKey().equals("k")
+                && maps.getByMsg(0).getValue().getName().equals("n")
+                && maps.getByMsg(0).getValue().getValue() == 42,
+                "map message entries decode");
+        Spectest_MapTest builtMaps = Spectest_MapTest.newBuilder()
+                .addByInt(Spectest_MapTest_ByIntEntry.newBuilder().setKey(1).setValue("one"))
+                .addByInt(Spectest_MapTest_ByIntEntry.newBuilder().setKey(-5).setValue("neg"))
+                .addByStr(Spectest_MapTest_ByStrEntry.newBuilder().setKey("a").setValue(10))
+                .addByStr(Spectest_MapTest_ByStrEntry.newBuilder().setKey("b").setValue(-3))
+                .addByMsg(Spectest_MapTest_ByMsgEntry.newBuilder().setKey("k")
+                        .setValue(Spectest_MapValue.newBuilder().setName("n").setValue(42)))
+                .build();
+        check(Arrays.equals(builtMaps.toByteArray(), referenceMap), "map facade != reference");
+
+        // Cross-file references import the sibling model.
+        Xfile_UsesDep usesDep = Xfile_UsesDep.parseFrom(referenceXfile);
+        check(usesDep.getSingle().getName().equals("one")
+                && usesDep.getSingle().getValue() == 7, "xfile single decodes");
+        check(usesDep.getManyCount() == 2 && usesDep.getMany(0).getName().equals("a")
+                && usesDep.getMany(1).getValue() == -1, "xfile many decodes");
+        check(usesDep.getNote().equals("hi"), "xfile note decodes");
+        Xfile_UsesDep builtUsesDep = Xfile_UsesDep.newBuilder()
+                .setSingle(Xdep_DepMsg.newBuilder().setName("one").setValue(7))
+                .addMany(Xdep_DepMsg.newBuilder().setName("a"))
+                .addMany(Xdep_DepMsg.newBuilder().setName("b").setValue(-1))
+                .setNote("hi").build();
+        check(Arrays.equals(builtUsesDep.toByteArray(), referenceXfile),
+                "xfile facade != reference");
 
         System.out.println("TestGenerated: " + checks + " checks passed");
     }

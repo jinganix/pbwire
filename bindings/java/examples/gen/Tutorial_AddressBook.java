@@ -37,7 +37,7 @@ public final class Tutorial_AddressBook {
     }
 
     public byte[] toByteArray() {
-        Message msg = Tutorial_Pbwire.type("tutorial.AddressBook").newMessage();
+        Message msg = Addressbook_Pbwire.type("tutorial.AddressBook").newMessage();
         try {
             encodeInto(msg);
             return msg.encode();
@@ -47,7 +47,7 @@ public final class Tutorial_AddressBook {
     }
 
     public static Tutorial_AddressBook parseFrom(byte[] data) {
-        Message msg = Tutorial_Pbwire.type("tutorial.AddressBook").decode(data);
+        Message msg = Addressbook_Pbwire.type("tutorial.AddressBook").decode(data);
         try {
             return decode(msg);
         } finally {

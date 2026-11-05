@@ -139,6 +139,32 @@ func csEnumRoot(f *model.File, e *model.Enum) bool {
 	return true
 }
 
+// csForeign names a type from another file: its namespace plus the nesting
+// path the imported file's own generation renders (top-level classes carry
+// no prefix; nested ones hang under Types, like csPath with empty cur).
+func csForeign(imp model.Import, local string) string {
+	segs := strings.Split(local, "_")
+	var parts []string
+	for i, s := range segs {
+		if i > 0 {
+			parts = append(parts, "Types")
+		}
+		parts = append(parts, s)
+	}
+	return imp.Prefix + "." + strings.Join(parts, ".")
+}
+
+// csFieldPath renders a field's message type: the foreign name when the
+// type lives in an import, the nesting-relative path otherwise.
+func csFieldPath(f *model.File, field model.Field, cur []string, byLocal map[string]*csNode) string {
+	if field.Import != "" {
+		if imp := findImport(f, field.Import); imp != nil {
+			return csForeign(*imp, field.Message)
+		}
+	}
+	return csPath(field.Message, cur, byLocal)
+}
+
 // csPath renders a local message name relative to the current nesting level.
 // cur is the chain of enclosing classes; nested types live under Types.
 func csPath(local string, cur []string, byLocal map[string]*csNode) string {
@@ -352,7 +378,7 @@ func writeCsharpMessage(b *strings.Builder, f *model.File, n *csNode, indent str
 		writeCsharpField(b, f, n, field, sub, curobj, byLocal)
 	}
 	for _, o := range oneofs {
-		writeCsharpOneof(b, n, o, sub, curobj, byLocal)
+		writeCsharpOneof(b, f, n, o, sub, curobj, byLocal)
 	}
 	writeCsharpCodec(b, f, n, sub, curobj, byLocal)
 	if len(n.children) == 0 && len(n.enums) == 0 {
@@ -378,12 +404,12 @@ func writeCsharpField(b *strings.Builder, f *model.File, n *csNode, field model.
 	case field.Repeated:
 		elem := csScalar(field, cur, byLocal)
 		if field.Message != "" {
-			elem = csPath(field.Message, cur, byLocal)
+			elem = csFieldPath(f, field, cur, byLocal)
 		}
 		fmt.Fprintf(b, "%sprivate readonly global::Google.Protobuf.Collections.RepeatedField<%s> %s_ = new global::Google.Protobuf.Collections.RepeatedField<%s>();\n", indent, elem, strings.ToLower(prop[:1])+prop[1:], elem)
 		fmt.Fprintf(b, "%spublic global::Google.Protobuf.Collections.RepeatedField<%s> %s { get { return %s_; } }\n", indent, elem, prop, strings.ToLower(prop[:1])+prop[1:])
 	case field.Message != "":
-		fmt.Fprintf(b, "%spublic %s? %s { get; set; }\n", indent, csPath(field.Message, cur, byLocal), prop)
+		fmt.Fprintf(b, "%spublic %s? %s { get; set; }\n", indent, csFieldPath(f, field, cur, byLocal), prop)
 	case field.NeedsHas && !field.Required:
 		word, bit := csOptBit(n.msg, field)
 		bits := fmt.Sprintf("_hasBits%d", word)
@@ -439,7 +465,7 @@ func csDefault(field model.Field) string {
 	return ""
 }
 
-func writeCsharpOneof(b *strings.Builder, n *csNode, o string, indent string, cur []string, byLocal map[string]*csNode) {
+func writeCsharpOneof(b *strings.Builder, f *model.File, n *csNode, o string, indent string, cur []string, byLocal map[string]*csNode) {
 	m := n.msg
 	fmt.Fprintf(b, "%sprivate object %s_;\n", indent, o)
 	fmt.Fprintf(b, "%s/// <summary>Enum of possible cases for the %q oneof.</summary>\n", indent, o)
@@ -465,7 +491,7 @@ func writeCsharpOneof(b *strings.Builder, n *csNode, o string, indent string, cu
 		fmt.Fprintf(b, "%spublic const int %sFieldNumber = %d;\n", indent, p, field.Number)
 		payload := csScalar(field, cur, byLocal)
 		if field.Message != "" {
-			payload = csPath(field.Message, cur, byLocal)
+			payload = csFieldPath(f, field, cur, byLocal)
 		}
 		get := fmt.Sprintf("(%s) %s_", payload, o)
 		def := csOneofDefault(field)
@@ -519,7 +545,7 @@ func writeCsharpCodec(b *strings.Builder, f *model.File, n *csNode, indent strin
 		if field.Skip != "" {
 			continue
 		}
-		writeCsharpCopy(b, field, indent+"    ", cur, byLocal)
+		writeCsharpCopy(b, f, field, indent+"    ", cur, byLocal)
 	}
 	fmt.Fprintf(b, "%s}\n", indent)
 	fmt.Fprintf(b, "%spublic %s Clone() { return new %s(this); }\n", indent, n.self, n.self)
@@ -591,7 +617,7 @@ func writeCsharpCodec(b *strings.Builder, f *model.File, n *csNode, indent strin
 		if field.Skip != "" {
 			continue
 		}
-		writeCsharpCopy(b, field, indent+"    ", cur, byLocal)
+		writeCsharpCopy(b, f, field, indent+"    ", cur, byLocal)
 	}
 	fmt.Fprintf(b, "%s}\n", indent)
 	fmt.Fprintf(b, "%sinternal void EncodeInto(Pbwire.Message msg) {\n", indent)
@@ -622,22 +648,22 @@ func writeCsharpCodec(b *strings.Builder, f *model.File, n *csNode, indent strin
 			continue
 		}
 		if field.Oneof != "" {
-			writeCsharpLoadOne(b, field, indent+"    ", cur, byLocal)
+			writeCsharpLoadOne(b, f, field, indent+"    ", cur, byLocal)
 			continue
 		}
-		writeCsharpLoad(b, field, indent+"    ", cur, byLocal)
+		writeCsharpLoad(b, f, field, indent+"    ", cur, byLocal)
 	}
 	fmt.Fprintf(b, "%s}\n", indent)
 }
 
-func writeCsharpCopy(b *strings.Builder, field model.Field, indent string, cur []string, byLocal map[string]*csNode) {
+func writeCsharpCopy(b *strings.Builder, f *model.File, field model.Field, indent string, cur []string, byLocal map[string]*csNode) {
 	p := csProp(field)
 	switch {
 	case field.Repeated:
 		fmt.Fprintf(b, "%s%s.Add(other.%s);\n", indent, p, p)
 	case field.Message != "" && field.Oneof == "":
 		fmt.Fprintf(b, "%sif (other.%s != null) { if (%s == null) { %s = new %s(); } %s.MergeFrom(other.%s); }\n",
-			indent, p, p, p, csPath(field.Message, cur, byLocal), p, p)
+			indent, p, p, p, csFieldPath(f, field, cur, byLocal), p, p)
 	case field.Oneof != "":
 		fmt.Fprintf(b, "%s%s = other.%s;\n", indent, p, p)
 	default:
@@ -736,7 +762,7 @@ func csSetArg(field model.Field, expr string) string {
 	}
 }
 
-func writeCsharpLoad(b *strings.Builder, field model.Field, indent string, cur []string, byLocal map[string]*csNode) {
+func writeCsharpLoad(b *strings.Builder, f *model.File, field model.Field, indent string, cur []string, byLocal map[string]*csNode) {
 	p := csProp(field)
 	key := fmt.Sprintf("%q", field.Name)
 	switch {
@@ -744,7 +770,7 @@ func writeCsharpLoad(b *strings.Builder, field model.Field, indent string, cur [
 		fmt.Fprintf(b, "%sfor (int i = 0; i < msg.Count(%s); i++) {\n", indent, key)
 		fmt.Fprintf(b, "%s    var item = msg.At(%s, i);\n", indent, key)
 		fmt.Fprintf(b, "%s    var sub = item?.AsMessage();\n", indent)
-		fmt.Fprintf(b, "%s    if (sub != null) { var m = new %s(); m.LoadFrom(sub); %s.Add(m); }\n", indent, csPath(field.Message, cur, byLocal), p)
+		fmt.Fprintf(b, "%s    if (sub != null) { var m = new %s(); m.LoadFrom(sub); %s.Add(m); }\n", indent, csFieldPath(f, field, cur, byLocal), p)
 		fmt.Fprintf(b, "%s}\n", indent)
 	case field.Repeated:
 		fmt.Fprintf(b, "%sfor (int i = 0; i < msg.Count(%s); i++) {\n", indent, key)
@@ -753,7 +779,7 @@ func writeCsharpLoad(b *strings.Builder, field model.Field, indent string, cur [
 		fmt.Fprintf(b, "%s}\n", indent)
 	case field.Message != "":
 		fmt.Fprintf(b, "%svar sub%s = msg.GetMessage(%s);\n", indent, p, key)
-		fmt.Fprintf(b, "%sif (sub%s != null) { %s = new %s(); %s.LoadFrom(sub%s); }\n", indent, p, p, csPath(field.Message, cur, byLocal), p, p)
+		fmt.Fprintf(b, "%sif (sub%s != null) { %s = new %s(); %s.LoadFrom(sub%s); }\n", indent, p, p, csFieldPath(f, field, cur, byLocal), p, p)
 	case field.NeedsHas && !field.Required:
 		fmt.Fprintf(b, "%sif (msg.Has(%s)) { %s = %s; }\n", indent, key, p, csGetScalar(field, key, cur, byLocal))
 	default:
@@ -765,12 +791,12 @@ func writeCsharpLoad(b *strings.Builder, field model.Field, indent string, cur [
 	}
 }
 
-func writeCsharpLoadOne(b *strings.Builder, field model.Field, indent string, cur []string, byLocal map[string]*csNode) {
+func writeCsharpLoadOne(b *strings.Builder, f *model.File, field model.Field, indent string, cur []string, byLocal map[string]*csNode) {
 	p := csProp(field)
 	key := fmt.Sprintf("%q", field.Name)
 	if field.Message != "" {
 		fmt.Fprintf(b, "%svar sub%s = msg.GetMessage(%s);\n", indent, p, key)
-		fmt.Fprintf(b, "%sif (sub%s != null) { var m = new %s(); m.LoadFrom(sub%s); %s = m; }\n", indent, p, csPath(field.Message, cur, byLocal), p, p)
+		fmt.Fprintf(b, "%sif (sub%s != null) { var m = new %s(); m.LoadFrom(sub%s); %s = m; }\n", indent, p, csFieldPath(f, field, cur, byLocal), p, p)
 		return
 	}
 	fmt.Fprintf(b, "%sif (msg.Has(%s)) { %s = %s; }\n", indent, key, p, csGetScalar(field, key, cur, byLocal))

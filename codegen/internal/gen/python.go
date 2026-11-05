@@ -71,10 +71,19 @@ def _type(full):
 
 func pythonFiles(f *model.File, opt Options) []File {
 	var b strings.Builder
+	// Foreign message refs qualify as sibling_module.Class, so rewrite them
+	// once instead of touching every use site.
+	qualifyFields(f, func(imp model.Import, local string) string {
+		return stem(imp.Path) + "_pbwire." + local
+	})
 	b.WriteString(headerP(f, "#", "Generated dataclasses over the pbwire dict API, official _pb2-shaped methods included."))
 	b.WriteString("from __future__ import annotations\n\n")
 	b.WriteString("from dataclasses import dataclass, field as dc_field\n")
-	b.WriteString("from typing import Any, Dict, List, Mapping, Optional, Tuple\n\n")
+	b.WriteString("from typing import Any, Dict, List, Mapping, Optional, Tuple\n")
+	for _, imp := range f.Imports {
+		fmt.Fprintf(&b, "import %s_pbwire\n", stem(imp.Path))
+	}
+	b.WriteString("\n")
 	fmt.Fprintf(&b, "_DESC_B64 = \"%s\"\n\n", opt.DescSetB64)
 	b.WriteString(pythonRuntime)
 	for _, e := range f.Enums {

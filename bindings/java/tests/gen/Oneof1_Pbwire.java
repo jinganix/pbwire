@@ -4,8 +4,8 @@
 
 import java.util.Base64;
 
-public final class Spectest_Pbwire {
-    private Spectest_Pbwire() {}
+public final class Oneof1_Pbwire {
+    private Oneof1_Pbwire() {}
 
     private static final String[] DESC_B64 = {
         "CvUFCgxvbmVvZjEucHJvdG8SCHNwZWN0ZXN0IpUBCgZPbmVvZjESEgoEbmFt",

@@ -244,3 +244,21 @@ test('T6 verify/fromObject reject loudly', () => {
   const oneof = require(path.join(HERE, 'gen', 'oneof1.js'));
   assert.match(oneof.Oneof1.verify({ num: 1, text: 'x' }), /kind/);
 });
+
+test('cross-file references import the sibling model', () => {
+  const gen = require(path.join(HERE, 'gen', 'xfile.js'));
+  const ref = vectorsBin('xfile.bin');
+  const msg = gen.UsesDep.create({
+    single: { name: 'one', value: 7 },
+    many: [{ name: 'a' }, { name: 'b', value: -1 }],
+    note: 'hi',
+  });
+  const wire = Buffer.from(gen.UsesDep.encode(msg).finish());
+  assert.ok(wire.equals(ref), 'xfile encode equals the protoc reference bytes');
+  const back = gen.UsesDep.decode(ref);
+  assert.equal(back.single.name, 'one');
+  assert.equal(back.single.value, 7);
+  assert.deepEqual(back.many.map((m) => m.name), ['a', 'b']);
+  assert.equal(back.many[1].value, -1);
+  assert.equal(back.note, 'hi');
+});
