@@ -3,7 +3,7 @@
 [![Language](https://img.shields.io/badge/C-C99-blue.svg)](#requirements-and-build)
 [![Dependencies](https://img.shields.io/badge/runtime%20dependencies-none-brightgreen.svg)](#at-a-glance)
 
-> **Release [`v0.1.7`](https://github.com/jinganix/pbwire/releases/tag/v0.1.7)** — every binding ships this one version; [`VERSION`](VERSION) is the source of truth, `scripts/sync-versions.sh` propagates it.
+> **Release [`v0.1.8`](https://github.com/jinganix/pbwire/releases/tag/v0.1.8)** — every binding ships this one version; [`VERSION`](VERSION) is the source of truth, `scripts/sync-versions.sh` propagates it.
 
 # pbwire — a dynamic Protobuf runtime for C, no code generation
 
@@ -192,7 +192,7 @@ The one-row summary is here; the detail is there.
 | [Julia](bindings/julia/) | `dlopen` + `ccall` | 119x (xlarge) / 1.06x (large) | [ProtoBuf.jl](https://github.com/JuliaIO/ProtoBuf.jl) |
 | [R](bindings/r/) | C extension, named lists | no baseline installed | [RProtoBuf](https://github.com/eddelbuettel/rprotobuf) |
 
-¹ C++ has no separate bench; same engine as the C struct codec. Best columns take the highest tier each for encode/decode separately (Apple M4 Pro, `protoc 36.2`); tiers and absolute MB/s are in [BENCHMARKS.md](BENCHMARKS.md).
+¹ C++ has no separate bench; same engine as the C struct codec. Best columns take the best ratio across the four tiers for encode/decode separately, tier in parentheses (Apple M4 Pro, `protoc 36.2`); tiers and absolute MB/s are in [BENCHMARKS.md](BENCHMARKS.md).
 
 ## Comparison with generated code, `DynamicMessage` and upb
 

@@ -114,7 +114,7 @@ the full tables are.
 | Clojure | the Clojure wrappers are thin shells over protobuf-java | persistent maps in/out over the Java runtime via plain interop | 0.11x / 0.19x (vs protobuf-java — boundary cost, bytes are identical) |
 | Julia | `ProtoBuf.jl` is pure Julia, per-field interpreter overhead | `dlopen` + `ccall` FFI host (`FileDescriptorSet` at run time, `Dict` boundary) | 119x / 0.95x (vs ProtoBuf.jl; baseline encode collapses with size) |
 | R | `RProtoBuf` binds the C++ runtime per message | C extension over the core (`.Call`, named lists in/out, statically linked) | no baseline installed — 188.5 / 134.7 MB/s pbwire-only (1393.7 via builder) |
-| Lua | game servers hand tables to `pbc`/`lua-protobuf`, each with its own schema story | C module over the core: tables convert through the schema's arena, builders encode hot | 0.79x / 1.20x (vs lua-protobuf; 8.17x via builder encode) |
+| Lua | game servers hand tables to `pbc`/`lua-protobuf`, each with its own schema story | C module over the core: tables convert through the schema's arena, builders encode hot | 0.79x / 1.15x (vs lua-protobuf; 8.17x via builder encode) |
 
 Read the ratios as "what this binding buys its host language", not as a
 cross-language speed ranking: the payload and the boundary cost differ per row,
@@ -173,14 +173,12 @@ the default cap and the table gives the ceiling plus the workaround.
 | Ruby | builder = C tree, `encode` writes straight into the returned `String`; a wire view pins the bytes | retained views | same as Python: `set` on a view raises, and holding a view holds its bytes |
 | Java / Kotlin | one `ThreadLocal` workspace: a reusable encode buffer + a string-image cache, never freed until thread exit | live + dead threads x largest message each | thread-per-request plus one xlarge message pins its buffer per dead thread; keep request threads off the binding or reuse a fixed pool |
 | Node | single-threaded: one reusable encode `pbw_ctx` per message type (freed with the type) + decoded message = JS `Buffer` + slice array | types x largest encoding each + retained messages | drop decoded messages; a type's buffer stays at its largest encoding |
-| Objective-C / Dart / Rust / C# / Go / Swift / Zig / F# | plain `pbw_encode`/`pbw_decode` per call (`NSData` takes the malloc'd buffer over with no copy; Go passes the input slice straight in) | none, except retained Go roots | nothing to tune; Go roots need an explicit `Close` |
+| Objective-C / Dart / Rust / C# / Go / Swift / Zig / F# / Julia | plain `pbw_encode`/`pbw_decode` per call (`NSData` takes the malloc'd buffer over with no copy; Go passes the input slice straight in; Julia holds input bytes via finalizers) | none, except retained Go roots / Julia messages | nothing to tune; Go roots need an explicit `Close`, Julia messages a `close()` |
 | PHP | built trees live in one `pbw_ctx` each (freed with the message, never decoded into so always mutable); decoded trees are single-malloc arenas | retained messages | drop the message; nested views hold the parent, `close()` frees either kind |
 | Erlang | one `pbw_ctx` per scheduler + a geometrically grown encode buffer, never shrunk (see its README FAQ) | schedulers x largest message | bounded by the scheduler count; keep individual messages reasonably sized |
 | Lua | one `pbw_ctx` per schema (arena + encode buffer, reset per call; builders own plain trees) | largest message handled | nothing to tune; idle schemas keep up to the retain cap |
 | Scala / Clojure | one `ThreadLocal` workspace inherited from the Java runtime (reusable buffer, never freed until thread exit) | live + dead threads x largest message each | same rule as Java: fixed pool, not thread-per-request |
 | Elixir | one `pbw_ctx` per scheduler via the shared NIF (BEAM-global schema cache, like Erlang) | schedulers x largest message | same rule as Erlang |
-| Zig | plain `pbw_encode`/`pbw_decode` per call, caller-owned buffers | none | nothing to tune |
-| F# | same P/Invoke core as C#: plain per-call encode/decode | none, except retained roots | nothing to tune |
 | Julia | `ccall` per call; decoded messages hold the input bytes via finalizers | retained messages | drop the message; `close()` frees either kind |
 | R | built trees live in one `pbw_ctx` each; decoded trees are single-malloc arenas | retained messages | drop the message; nested views hold the parent, builders anchor the schema |
 

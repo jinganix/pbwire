@@ -29,7 +29,8 @@ make erlang-bench  # Erlang: epb, gpb, gpb NIF on matrix3.proto
 make test-cpp      # C++ binding self-check (C++17, no protobuf needed)
 make go-test       # Go cgo dynamic binding self-check (parity + hot-swap)
 make go-bench      # Go cgo dynamic binding vs protobuf-go on the four standard tiers
-make java-bench    # Java FFM binding vs protobuf-java on the four standard tiers
+make java-test     # Java pure-Java codec self-check (no JNI, no native library)
+make java-bench    # Java pure-Java codec vs protobuf-java on the four standard tiers
 make node-bench    # Node N-API addon vs google-protobuf (jspb)
 make ruby-bench    # Ruby C extension vs the google-protobuf gem
 make objc-bench    # Objective-C binding vs the protobuf ObjC runtime (needs the checkout)
@@ -38,7 +39,28 @@ make php-bench     # PHP binding vs the official PHP runtime (needs the checkout
 make dart-bench    # Dart binding vs the protobuf Dart package (needs protoc-gen-dart)
 make rust-bench    # Rust binding vs rust-protobuf (needs protoc-gen-rs)
 make csharp-bench  # C# binding vs Google.Protobuf (NuGet restore)
+make lua-test      # Lua binding self-check (C module, tables + builder)
+make lua-bench     # Lua binding vs lua-protobuf
+make swift-test    # Swift binding self-check (SwiftPM, FFI host)
+make swift-bench   # Swift binding vs swift-protobuf
+make scala-test    # Scala binding self-check (DSL over the Java runtime)
+make scala-bench   # Scala binding vs ScalaPB
+make elixir-test   # Elixir binding self-check (struct translation over the shared NIF)
+make elixir-bench  # Elixir binding vs elixir-protobuf
+make zig-test      # Zig binding self-check (static link)
+make zig-bench     # Zig binding, pbwire column only (baseline needs network)
+make fsharp-test   # F# binding self-check (facade over the C# project)
+make fsharp-bench  # F# binding vs Google.Protobuf
+make clojure-test  # Clojure binding self-check (persistent maps over the Java runtime)
+make clojure-bench # Clojure binding vs protobuf-java
+make julia-test    # Julia binding self-check (dlopen + ccall)
+make julia-bench   # Julia binding vs ProtoBuf.jl
+make r-test        # R binding self-check (C extension, named lists)
+make r-bench       # R binding, pbwire column only (no baseline installed)
 make conformance-python  # official suite through the Python binding
+make conformance-ruby    # official suite through the Ruby binding
+make conformance-java    # official suite through the Java binding
+make conformance-lua conformance-r conformance-node  # same suite through those bindings
 
 # Official conformance suite (binary wire format). Needs the cached reference
 # checkout: `make conformance-setup` clones it once, `make conformance`
@@ -54,9 +76,9 @@ cmake -B build-cmake -DPBW_BUILD_PROTOC=ON && cmake --build build-cmake
 
 Run `make test` after any C change; run `make format` after touching `include/`, `src/`, `tests/`,
 `bench/` or `conformance/`. Run `make python-test` after touching `bindings/python`, `make ruby-test`
-after touching `bindings/ruby`, and refresh
-`BENCHMARKS.md` after changing anything on the encode/decode hot path. Run `make go-test`
-after touching `bindings/go`.
+after touching `bindings/ruby`, `make go-test` after touching `bindings/go`, and the matching
+`<lang>-test` after touching any other `bindings/<lang>`, and refresh
+`BENCHMARKS.md` after changing anything on the encode/decode hot path.
 
 ## Layout
 
@@ -96,6 +118,23 @@ after touching `bindings/go`.
 | `bindings/ruby/` | Ruby binding: a C extension over the core (`ext/pbwire_ext`, builder tree + lazy wire view), `lib/`, `examples/`, `test/`, `benchmarks/`, `conformance/` (official runner testee) |
 | `bindings/go/` | Go binding: cgo dynamic binding over the C core (`dynamic/`), loads a `FileDescriptorSet` at runtime, hot-swappable registry, `make go-test` |
 | `bindings/cpp/` | C++ binding over the shared C runtime: `examples/`, `tests/`, `benchmarks/`, `conformance/` |
+| `bindings/java/` | Java binding: pure-Java codec (`runtime/`, no JNI), `examples/`, `tests/`, `benchmarks/`, `conformance/` |
+| `bindings/kotlin/` | Kotlin binding: DSL over the Java runtime, `tests/`, `benchmarks/` |
+| `bindings/scala/` | Scala binding: DSL over the Java runtime, `tests/`, `benchmarks/` |
+| `bindings/clojure/` | Clojure binding: persistent maps over the Java runtime, `tests/`, `benchmarks/` |
+| `bindings/node/` | Node binding: N-API addon (`lib/`, `runtime/`), `examples/`, `tests/`, `benchmarks/`, `conformance/` |
+| `bindings/objc/` | Objective-C binding: ARC wrapper, `examples/`, `tests/`, `benchmarks/` |
+| `bindings/php/` | PHP binding: native C extension + `ext-ffi` wrapper, `tests/`, `benchmarks/` |
+| `bindings/dart/` | Dart binding: `dart:ffi` host, `tests/`, `benchmarks/` |
+| `bindings/rust/` | Rust binding: static link over the C core, `tests/`, `benchmarks/` |
+| `bindings/csharp/` | C# binding: P/Invoke host, `tests/`, `benchmarks/` |
+| `bindings/fsharp/` | F# binding: facade over the C# project, `tests/`, `benchmarks/` |
+| `bindings/lua/` | Lua binding: C module over the core, `tests/`, `benchmarks/`, `conformance/` |
+| `bindings/swift/` | Swift binding: SwiftPM FFI host, `tests/`, `benchmarks/` |
+| `bindings/elixir/` | Elixir binding: struct translation over the shared NIF, `tests/`, `benchmarks/` |
+| `bindings/zig/` | Zig binding: static link, `tests/`, `benchmarks/` |
+| `bindings/julia/` | Julia binding: `dlopen` + `ccall` host, `tests/`, `benchmarks/` |
+| `bindings/r/` | R binding: C extension over the core, `tests/`, `benchmarks/`, `conformance/` |
 | `bindings/erlang/` | Erlang/OTP NIF binding with its own AGENTS.md |
 | `scripts/` | Gate scripts: `check.sh` (hooks), `validate-commit-msg.sh`, `setup-git-hooks.sh` |
 | `.github/workflows/ci.yml` | CI: `make test` on Linux + macOS, CMake/ctest, clang-format |

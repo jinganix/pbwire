@@ -192,9 +192,9 @@ denial-of-service risk.
 
 Scenarios, in the shape of the pain they remove:
 
-- **One runtime, many hosts.** A service written in Erlang, Python, Java, Node
-  or PHP that has to speak the same Protobuf dialect as its neighbours: one C
-  core, one set of bytes, no per-language reimplementation. The per-language
+- **One runtime, many hosts.** Twenty-three host languages from one C core — whether the service
+  is written in Erlang, Python, Java, Go, Node, Ruby or PHP — speaking the same Protobuf dialect
+  as its neighbours: one set of bytes, no per-language reimplementation. The per-language
   pain points and what each binding changes are in
   [bindings/README.md](../bindings/README.md#what-each-binding-solves).
 - **Protocol gateways and proxies.** Inspect, transform and forward messages for
@@ -255,6 +255,11 @@ bindings/ruby/              Ruby: a C extension over the core, ext/, lib/, examp
 bindings/node/              Node: N-API addon over the C ABI, lib/, examples/, test/ (no npm deps)
 bindings/objc/              Objective-C: ARC wrapper over the C ABI, examples/, tests/ (Foundation only)
 bindings/php/, dart/, rust/, csharp/   FFI/static-link hosts, same pieces
+bindings/lua/               Lua: C module over the core, tables in/out, same pieces
+bindings/swift/, zig/, julia/, r/   FFI/static-link hosts (SwiftPM / compiled-in C / dlopen+ccall / C extension), same pieces
+bindings/scala/, clojure/   DSL / persistent maps over the Java runtime, same pieces
+bindings/elixir/            struct translation over the shared NIF, same pieces
+bindings/fsharp/            facade over the C# project, same pieces
 
 examples/                   one tutorial schema (proto2 address book) + its .desc/.json/.bin data
 tests/                      assert-based self-checks (round-trip, golden bytes, limits)

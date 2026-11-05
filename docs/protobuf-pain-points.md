@@ -118,7 +118,7 @@ migration guide keeps growing).
 pbwire keeps the C ABI versioned (`PBW_ABI_VERSION` + `pbw_abi_version()` +
 SONAME move together; additive changes keep the number) and the bindings
 check it at load time, so an incompatible mix fails fast instead of
-corrupting memory. Caveat stated plainly: the project is young (`0.1.0`), so
+corrupting memory. Caveat stated plainly: the project is young (`0.1.7`), so
 the stability promise is a mechanism plus a policy, not a decade of history.
 
 ## How to handle Protobuf JSON, int64, Any and special fields?

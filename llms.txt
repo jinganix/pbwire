@@ -7,8 +7,8 @@
 > header, about 13k lines of C (roughly 7.5k binary codec, the rest the JSON mapping and text
 > format), zero runtime dependencies.
 
-Facts: source at <https://github.com/jinganix/pbwire>, license Apache-2.0, version `0.1.0`
-(`project(pbwire VERSION ...)` in `CMakeLists.txt`). Encodings are byte-identical to `protoc 36.2`
+Facts: source at <https://github.com/jinganix/pbwire>, license Apache-2.0, version `0.1.7`
+(`VERSION` is the source of truth, `project(pbwire VERSION ...)` in `CMakeLists.txt` matches it). Encodings are byte-identical to `protoc 36.2`
 and pass Google's official conformance suites: binary + JSON 2745 successes, 0 skipped (2 expected
 failures that the reference C++ testee fails identically:
 `Required.Proto2/Proto3.ProtobufInput.BadTag_FieldNumberSlightlyTooHigh`; pbwire additionally
@@ -31,7 +31,11 @@ make              # build/libpbwire.a
 make test         # core + threads + descriptor set + C structs + examples (required before commit)
 make format       # clang-format >= 19; make format-check for the gate
 
-# Host-language bindings over the C ABI, each needing only its own toolchain:
+# Host-language bindings, each needing only its own toolchain:
+make python-test  # Python (CPython extension, dict<->wire in C)
+make go-test      # Go (cgo dynamic, hot-swappable registry)
+make erlang-test  # Erlang (EUnit + NIF C tests, needs OTP)
+make test-cpp     # C++ (same C runtime, no protobuf needed)
 make java-test    # Java (pure-Java codec, no JNI, no native library)
 make ruby-test    # Ruby (C extension over the core)
 make node-test    # Node (N-API addon, no npm)
@@ -51,7 +55,7 @@ make clojure-test # Clojure (persistent maps over the Java runtime)
 make julia-test   # Julia (dlopen + ccall)
 make r-test       # R (C extension, named lists)
 
-make java-bench node-bench ruby-bench objc-bench \
+make java-bench node-bench ruby-bench objc-bench python-bench go-bench erlang-bench \
      kotlin-bench php-bench dart-bench rust-bench csharp-bench lua-bench \
      swift-bench scala-bench elixir-bench zig-bench fsharp-bench clojure-bench julia-bench r-bench  # each binding vs its official runtime
 
@@ -182,7 +186,7 @@ C++ runtime), `make bench`, `make bench-c` (C structs vs protoc C++). Optional, 
   extension), `bindings/ruby` (C extension), `bindings/node` (N-API addon) and `bindings/php`
   (`ext-ffi`) compare `pbw_abi_version()` with `PBW_ABI_VERSION` at load;
   `bindings/go` is a cgo dynamic binding with a hot-swappable schema registry.
-  `bindings/java` (pure-Java codec, and Kotlin through it) needs no ABI check:
+  `bindings/java` (pure-Java codec, and Kotlin/Scala/Clojure through it) needs no ABI check.
 - Binding memory ceilings (no binding exposes `pbw_ctx_set_retain_cap`/`pbw_pool_*`, so every
   `pbw_ctx` runs at the 1 MiB default): Java/Kotlin pin one never-freed encode workspace per
   thread,
@@ -194,8 +198,7 @@ C++ runtime), `make bench`, `make bench-c` (C structs vs protoc C++). Optional, 
 - Not implemented in the core: RPC/HTTP, MessageSet decoding into extensions, code generation (the
   C binding ships its own protoc plugin for layout tables).
 - Generated message models: `codegen` is one protoc plugin (`protoc-gen-pbwire`) that
-  emits typed fields, presence flags and encode/decode wrappers per language (Java, Kotlin, C#,
-  Dart, PHP, Ruby, Python, TypeScript/JavaScript, Rust, Objective-C, Lua). The wrappers call the
+  emits typed fields, presence flags and encode/decode wrappers per language (C, Java, Kotlin, C#, F#, Dart, PHP, Ruby, Python, Node, Rust, Objective-C, Lua, Swift, Zig, Scala, Clojure, Elixir, Julia, R; Go is dynamic-API only for now; Erlang keeps gpb). The wrappers call the
   binding's dynamic API, so the generated layer never adds a second wire implementation. `make
   codegen` regenerates the committed models, `make codegen-test` runs one generated test per binding
   (typed fields -> encode -> compare with the pinned protoc bytes -> decode -> verify), and
@@ -240,12 +243,13 @@ C++ runtime), `make bench`, `make bench-c` (C structs vs protoc C++). Optional, 
   [bindings/fsharp/README.md](bindings/fsharp/README.md), [bindings/clojure/README.md](bindings/clojure/README.md),
   [bindings/julia/README.md](bindings/julia/README.md), [bindings/r/README.md](bindings/r/README.md):
   the host bindings — no generator, no codegen, no new dependency; schema at run time. Node,
-  Objective-C, Dart and C# go through the C ABI (PHP does too, and adds a native
-  extension that links the core); Java (and Kotlin through it) encodes
-  with its own pure-Java codec; Ruby is a C
-  extension that links the core and keeps the message conversion in C; Rust links the archive in;
-  Go links it over cgo with a hot-swappable registry; Lua is a C module over the core with
-  tables in and tables out.
+  Objective-C, Dart, C#, Swift, Zig and Julia go through the C ABI (PHP does too, and adds a native
+  extension that links the core; R is a C extension with the same shape); Java (and Kotlin/Scala/Clojure through it) encodes
+  with its own pure-Java codec; Ruby and Lua are C
+  extensions that link the core and keep the message conversion in C (Ruby adds a lazy wire view,
+  Lua uses plain tables); Rust links the archive in statically (Zig compiles it in);
+  Go links it over cgo with a hot-swappable registry; Elixir translates structs for the shared NIF
+  (no C of its own); F# reuses the C# project.
 - [bindings/go/README.md](bindings/go/README.md): Go binding, cgo dynamic over the C core with
 a hot-swappable `Registry` (`go test ./...` covers parity plus hot-swap).
 - [bindings/python/runtime/pbwire.c](bindings/python/runtime/pbwire.c): Python binding, a CPython
