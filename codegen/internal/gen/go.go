@@ -2,6 +2,7 @@ package gen
 
 import (
 	"fmt"
+	"go/format"
 	"strings"
 
 	"pbwire-codegen/internal/model"
@@ -187,7 +188,7 @@ func goImportAlias(importPath string) string {
 	return sb.String()
 }
 
-func goFiles(f *model.File, opt Options) []File {
+func goFiles(f *model.File, opt Options) ([]File, error) {
 	var b strings.Builder
 	// Foreign message refs qualify as alias.Type (M mapping) or stay bare
 	// (same package); one rewrite up front, use sites untouched.
@@ -214,7 +215,13 @@ func goFiles(f *model.File, opt Options) []File {
 	for _, m := range f.Messages {
 		writeGoMessage(&b, f, m)
 	}
-	return []File{{Name: base(f) + "_pbwire.go", Content: b.String()}}
+	// Canonical gofmt output: struct alignment and indentation stay
+	// correct no matter how wide field names get.
+	src, err := format.Source([]byte(b.String()))
+	if err != nil {
+		return nil, err
+	}
+	return []File{{Name: base(f) + "_pbwire.go", Content: string(src)}}, nil
 }
 
 func writeGoEnum(b *strings.Builder, e model.Enum) {

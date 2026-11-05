@@ -50,7 +50,7 @@ const _DESC_B64 = "CsQICg1tYXB0ZXN0LnByb3RvEghzcGVjdGVzdCI0CghNYXBWYWx1ZRISCgRuY
 
 // spectest.MapValue
 type MapValue struct {
-	Name string
+	Name  string
 	Value int32
 }
 
@@ -137,7 +137,7 @@ func (m *MapValue) load(msg *dynamic.Message) error {
 
 // spectest.MapTest.ByIntEntry
 type MapTest_ByIntEntry struct {
-	Key int32
+	Key   int32
 	Value string
 }
 
@@ -224,7 +224,7 @@ func (m *MapTest_ByIntEntry) load(msg *dynamic.Message) error {
 
 // spectest.MapTest.ByStrEntry
 type MapTest_ByStrEntry struct {
-	Key string
+	Key   string
 	Value int32
 }
 
@@ -311,7 +311,7 @@ func (m *MapTest_ByStrEntry) load(msg *dynamic.Message) error {
 
 // spectest.MapTest.ByMsgEntry
 type MapTest_ByMsgEntry struct {
-	Key string
+	Key   string
 	Value *MapValue
 }
 
@@ -365,7 +365,7 @@ func (m *MapTest_ByMsgEntry) marshalInto(msg *dynamic.Message) error {
 		}
 		if err := m.Value.marshalInto(sub); err != nil {
 			return err
-			}
+		}
 	}
 	return nil
 }
@@ -543,4 +543,3 @@ func (m *MapTest) load(msg *dynamic.Message) error {
 	}
 	return nil
 }
-

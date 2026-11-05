@@ -50,7 +50,7 @@ const _DESC_B64 = "CrkDCgp4ZGVwLnByb3RvEgR4ZGVwIjIKBkRlcE1zZxISCgRuYW1lGAEgASgJU
 
 // xdep.DepMsg
 type DepMsg struct {
-	Name string
+	Name  string
 	Value int32
 }
 
@@ -134,4 +134,3 @@ func (m *DepMsg) load(msg *dynamic.Message) error {
 	}
 	return nil
 }
-

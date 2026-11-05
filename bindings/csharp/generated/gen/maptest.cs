@@ -10,7 +10,7 @@ using Pbwire;
 
 namespace Spectest {
 
-    internal static class PbwireFile {
+    internal static class PbwireFile_Maptest {
         internal static readonly Schema Schema = Schema.FromBytes(Convert.FromBase64String(string.Concat(
             "CsQICg1tYXB0ZXN0LnByb3RvEghzcGVjdGVzdCI0CghNYXBWYWx1ZRISCgRu",
             "YW1lGAEgASgJUgRuYW1lEhQKBXZhbHVlGAIgASgFUgV2YWx1ZSLqAgoHTWFw",
@@ -40,9 +40,9 @@ namespace Spectest {
     }
 
     /// <summary>Minimal parser: ParseFrom over the C core. Not pb::MessageParser.</summary>
-    public sealed class Parser<T> where T : new() {
+    public sealed class Parser_Maptest<T> where T : new() {
         private readonly Action<T, byte[]> _merge;
-        public Parser(Action<T, byte[]> merge) { _merge = merge; }
+        public Parser_Maptest(Action<T, byte[]> merge) { _merge = merge; }
         public T ParseFrom(byte[] data) { var m = new T(); _merge(m, data); return m; }
         public T ParseFrom(ByteString data) => ParseFrom(data.ToByteArray());
         public T ParseFrom(Stream input) { using var ms = new MemoryStream(); input.CopyTo(ms); return ParseFrom(ms.ToArray()); }
@@ -56,7 +56,7 @@ namespace Spectest {
         /// <summary>Field number for the "value" field.</summary>
         public const int ValueFieldNumber = 2;
         public int Value { get; set; }
-        public static Parser<MapValue> Parser { get; } = new Parser<MapValue>((m, b) => m.MergeFromBytes(b));
+        public static Parser_Maptest<MapValue> Parser { get; } = new Parser_Maptest<MapValue>((m, b) => m.MergeFromBytes(b));
         public MapValue() { }
         public MapValue(MapValue other) : this() {
             Name = other.Name;
@@ -81,7 +81,7 @@ namespace Spectest {
             return "MapValue {{ " + "Name = " + Name + ", " + "Value = " + Value + " }}";
         }
         public byte[] ToByteArray() {
-            using Pbwire.Message msg = PbwireFile.Schema.Message("spectest.MapValue").NewMessage();
+            using Pbwire.Message msg = PbwireFile_Maptest.Schema.Message("spectest.MapValue").NewMessage();
             EncodeInto(msg);
             return msg.Encode();
         }
@@ -95,7 +95,7 @@ namespace Spectest {
         }
         public int CalculateSize() => ToByteArray().Length;
          internal void MergeFromBytes(byte[] wire) {
-            using Pbwire.Message msg = PbwireFile.Schema.Message("spectest.MapValue").Decode(wire);
+            using Pbwire.Message msg = PbwireFile_Maptest.Schema.Message("spectest.MapValue").Decode(wire);
             LoadFrom(msg);
         }
         public void MergeFrom(MapValue other) {
@@ -131,7 +131,7 @@ namespace Spectest {
         public const int ByMsgFieldNumber = 3;
         private readonly global::Google.Protobuf.Collections.RepeatedField<Types.ByMsgEntry> byMsg_ = new global::Google.Protobuf.Collections.RepeatedField<Types.ByMsgEntry>();
         public global::Google.Protobuf.Collections.RepeatedField<Types.ByMsgEntry> ByMsg { get { return byMsg_; } }
-        public static Parser<MapTest> Parser { get; } = new Parser<MapTest>((m, b) => m.MergeFromBytes(b));
+        public static Parser_Maptest<MapTest> Parser { get; } = new Parser_Maptest<MapTest>((m, b) => m.MergeFromBytes(b));
         public MapTest() { }
         public MapTest(MapTest other) : this() {
             ByInt.Add(other.ByInt);
@@ -159,7 +159,7 @@ namespace Spectest {
             return "MapTest {{ }}";
         }
         public byte[] ToByteArray() {
-            using Pbwire.Message msg = PbwireFile.Schema.Message("spectest.MapTest").NewMessage();
+            using Pbwire.Message msg = PbwireFile_Maptest.Schema.Message("spectest.MapTest").NewMessage();
             EncodeInto(msg);
             return msg.Encode();
         }
@@ -173,7 +173,7 @@ namespace Spectest {
         }
         public int CalculateSize() => ToByteArray().Length;
          internal void MergeFromBytes(byte[] wire) {
-            using Pbwire.Message msg = PbwireFile.Schema.Message("spectest.MapTest").Decode(wire);
+            using Pbwire.Message msg = PbwireFile_Maptest.Schema.Message("spectest.MapTest").Decode(wire);
             LoadFrom(msg);
         }
         public void MergeFrom(MapTest other) {
@@ -220,7 +220,7 @@ namespace Spectest {
                 /// <summary>Field number for the "value" field.</summary>
                 public const int ValueFieldNumber = 2;
                 public string Value { get; set; }  = "";
-                public static Parser<ByIntEntry> Parser { get; } = new Parser<ByIntEntry>((m, b) => m.MergeFromBytes(b));
+                public static Parser_Maptest<ByIntEntry> Parser { get; } = new Parser_Maptest<ByIntEntry>((m, b) => m.MergeFromBytes(b));
                 public ByIntEntry() { }
                 public ByIntEntry(ByIntEntry other) : this() {
                     Key = other.Key;
@@ -245,7 +245,7 @@ namespace Spectest {
                     return "ByIntEntry {{ " + "Key = " + Key + ", " + "Value = " + Value + " }}";
                 }
                 public byte[] ToByteArray() {
-                    using Pbwire.Message msg = PbwireFile.Schema.Message("spectest.MapTest.ByIntEntry").NewMessage();
+                    using Pbwire.Message msg = PbwireFile_Maptest.Schema.Message("spectest.MapTest.ByIntEntry").NewMessage();
                     EncodeInto(msg);
                     return msg.Encode();
                 }
@@ -259,7 +259,7 @@ namespace Spectest {
                 }
                 public int CalculateSize() => ToByteArray().Length;
                  internal void MergeFromBytes(byte[] wire) {
-                    using Pbwire.Message msg = PbwireFile.Schema.Message("spectest.MapTest.ByIntEntry").Decode(wire);
+                    using Pbwire.Message msg = PbwireFile_Maptest.Schema.Message("spectest.MapTest.ByIntEntry").Decode(wire);
                     LoadFrom(msg);
                 }
                 public void MergeFrom(ByIntEntry other) {
@@ -289,7 +289,7 @@ namespace Spectest {
                 /// <summary>Field number for the "value" field.</summary>
                 public const int ValueFieldNumber = 2;
                 public int Value { get; set; }
-                public static Parser<ByStrEntry> Parser { get; } = new Parser<ByStrEntry>((m, b) => m.MergeFromBytes(b));
+                public static Parser_Maptest<ByStrEntry> Parser { get; } = new Parser_Maptest<ByStrEntry>((m, b) => m.MergeFromBytes(b));
                 public ByStrEntry() { }
                 public ByStrEntry(ByStrEntry other) : this() {
                     Key = other.Key;
@@ -314,7 +314,7 @@ namespace Spectest {
                     return "ByStrEntry {{ " + "Key = " + Key + ", " + "Value = " + Value + " }}";
                 }
                 public byte[] ToByteArray() {
-                    using Pbwire.Message msg = PbwireFile.Schema.Message("spectest.MapTest.ByStrEntry").NewMessage();
+                    using Pbwire.Message msg = PbwireFile_Maptest.Schema.Message("spectest.MapTest.ByStrEntry").NewMessage();
                     EncodeInto(msg);
                     return msg.Encode();
                 }
@@ -328,7 +328,7 @@ namespace Spectest {
                 }
                 public int CalculateSize() => ToByteArray().Length;
                  internal void MergeFromBytes(byte[] wire) {
-                    using Pbwire.Message msg = PbwireFile.Schema.Message("spectest.MapTest.ByStrEntry").Decode(wire);
+                    using Pbwire.Message msg = PbwireFile_Maptest.Schema.Message("spectest.MapTest.ByStrEntry").Decode(wire);
                     LoadFrom(msg);
                 }
                 public void MergeFrom(ByStrEntry other) {
@@ -358,7 +358,7 @@ namespace Spectest {
                 /// <summary>Field number for the "value" field.</summary>
                 public const int ValueFieldNumber = 2;
                 public MapValue? Value { get; set; }
-                public static Parser<ByMsgEntry> Parser { get; } = new Parser<ByMsgEntry>((m, b) => m.MergeFromBytes(b));
+                public static Parser_Maptest<ByMsgEntry> Parser { get; } = new Parser_Maptest<ByMsgEntry>((m, b) => m.MergeFromBytes(b));
                 public ByMsgEntry() { }
                 public ByMsgEntry(ByMsgEntry other) : this() {
                     Key = other.Key;
@@ -383,7 +383,7 @@ namespace Spectest {
                     return "ByMsgEntry {{ " + "Key = " + Key + " }}";
                 }
                 public byte[] ToByteArray() {
-                    using Pbwire.Message msg = PbwireFile.Schema.Message("spectest.MapTest.ByMsgEntry").NewMessage();
+                    using Pbwire.Message msg = PbwireFile_Maptest.Schema.Message("spectest.MapTest.ByMsgEntry").NewMessage();
                     EncodeInto(msg);
                     return msg.Encode();
                 }
@@ -397,7 +397,7 @@ namespace Spectest {
                 }
                 public int CalculateSize() => ToByteArray().Length;
                  internal void MergeFromBytes(byte[] wire) {
-                    using Pbwire.Message msg = PbwireFile.Schema.Message("spectest.MapTest.ByMsgEntry").Decode(wire);
+                    using Pbwire.Message msg = PbwireFile_Maptest.Schema.Message("spectest.MapTest.ByMsgEntry").Decode(wire);
                     LoadFrom(msg);
                 }
                 public void MergeFrom(ByMsgEntry other) {

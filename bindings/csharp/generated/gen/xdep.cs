@@ -10,7 +10,7 @@ using Pbwire;
 
 namespace Xdep {
 
-    internal static class PbwireFile {
+    internal static class PbwireFile_Xdep {
         internal static readonly Schema Schema = Schema.FromBytes(Convert.FromBase64String(string.Concat(
             "CrkDCgp4ZGVwLnByb3RvEgR4ZGVwIjIKBkRlcE1zZxISCgRuYW1lGAEgASgJ",
             "UgRuYW1lEhQKBXZhbHVlGAIgASgFUgV2YWx1ZUroAgoGEgQDAAoBCs0BCgEM",
@@ -25,9 +25,9 @@ namespace Xdep {
     }
 
     /// <summary>Minimal parser: ParseFrom over the C core. Not pb::MessageParser.</summary>
-    public sealed class Parser<T> where T : new() {
+    public sealed class Parser_Xdep<T> where T : new() {
         private readonly Action<T, byte[]> _merge;
-        public Parser(Action<T, byte[]> merge) { _merge = merge; }
+        public Parser_Xdep(Action<T, byte[]> merge) { _merge = merge; }
         public T ParseFrom(byte[] data) { var m = new T(); _merge(m, data); return m; }
         public T ParseFrom(ByteString data) => ParseFrom(data.ToByteArray());
         public T ParseFrom(Stream input) { using var ms = new MemoryStream(); input.CopyTo(ms); return ParseFrom(ms.ToArray()); }
@@ -41,7 +41,7 @@ namespace Xdep {
         /// <summary>Field number for the "value" field.</summary>
         public const int ValueFieldNumber = 2;
         public int Value { get; set; }
-        public static Parser<DepMsg> Parser { get; } = new Parser<DepMsg>((m, b) => m.MergeFromBytes(b));
+        public static Parser_Xdep<DepMsg> Parser { get; } = new Parser_Xdep<DepMsg>((m, b) => m.MergeFromBytes(b));
         public DepMsg() { }
         public DepMsg(DepMsg other) : this() {
             Name = other.Name;
@@ -66,7 +66,7 @@ namespace Xdep {
             return "DepMsg {{ " + "Name = " + Name + ", " + "Value = " + Value + " }}";
         }
         public byte[] ToByteArray() {
-            using Pbwire.Message msg = PbwireFile.Schema.Message("xdep.DepMsg").NewMessage();
+            using Pbwire.Message msg = PbwireFile_Xdep.Schema.Message("xdep.DepMsg").NewMessage();
             EncodeInto(msg);
             return msg.Encode();
         }
@@ -80,7 +80,7 @@ namespace Xdep {
         }
         public int CalculateSize() => ToByteArray().Length;
          internal void MergeFromBytes(byte[] wire) {
-            using Pbwire.Message msg = PbwireFile.Schema.Message("xdep.DepMsg").Decode(wire);
+            using Pbwire.Message msg = PbwireFile_Xdep.Schema.Message("xdep.DepMsg").Decode(wire);
             LoadFrom(msg);
         }
         public void MergeFrom(DepMsg other) {

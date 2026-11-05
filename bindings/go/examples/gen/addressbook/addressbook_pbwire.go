@@ -53,8 +53,8 @@ type Person_PhoneType int32
 
 const (
 	Person_PhoneType_MOBILE Person_PhoneType = 0
-	Person_PhoneType_HOME Person_PhoneType = 1
-	Person_PhoneType_WORK Person_PhoneType = 2
+	Person_PhoneType_HOME   Person_PhoneType = 1
+	Person_PhoneType_WORK   Person_PhoneType = 2
 )
 
 var Person_PhoneType_name = map[int32]string{
@@ -73,7 +73,7 @@ func (c Person_PhoneType) String() string {
 // tutorial.Person.PhoneNumber
 type Person_PhoneNumber struct {
 	Number string
-	Type *Person_PhoneType
+	Type   *Person_PhoneType
 }
 
 func (m *Person_PhoneNumber) GetNumber() string {
@@ -114,9 +114,9 @@ func (m *Person_PhoneNumber) Marshal() ([]byte, error) {
 }
 
 func (m *Person_PhoneNumber) marshalInto(msg *dynamic.Message) error {
-		if err := msg.SetString("number", m.Number); err != nil {
-			return err
-		}
+	if err := msg.SetString("number", m.Number); err != nil {
+		return err
+	}
 	if m.Type != nil {
 		if err := msg.SetInt("type", int64(*m.Type)); err != nil {
 			return err
@@ -158,9 +158,9 @@ func (m *Person_PhoneNumber) load(msg *dynamic.Message) error {
 
 // tutorial.Person
 type Person struct {
-	Name string
-	Id int32
-	Email *string
+	Name   string
+	Id     int32
+	Email  *string
 	Phones []*Person_PhoneNumber
 }
 
@@ -216,12 +216,12 @@ func (m *Person) Marshal() ([]byte, error) {
 }
 
 func (m *Person) marshalInto(msg *dynamic.Message) error {
-		if err := msg.SetString("name", m.Name); err != nil {
-			return err
-		}
-		if err := msg.SetInt("id", int64(m.Id)); err != nil {
-			return err
-		}
+	if err := msg.SetString("name", m.Name); err != nil {
+		return err
+	}
+	if err := msg.SetInt("id", int64(m.Id)); err != nil {
+		return err
+	}
 	if m.Email != nil {
 		if err := msg.SetString("email", *m.Email); err != nil {
 			return err
@@ -368,4 +368,3 @@ func (m *AddressBook) load(msg *dynamic.Message) error {
 	}
 	return nil
 }
-

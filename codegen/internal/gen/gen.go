@@ -42,6 +42,7 @@ func Generate(fd protoreflect.FileDescriptor, opt Options) ([]File, error) {
 		f.Prefix = opt.Prefix
 	}
 	var files []File
+	var err error
 	switch opt.Lang {
 	case "java":
 		files = javaFiles(f, opt)
@@ -68,7 +69,10 @@ func Generate(fd protoreflect.FileDescriptor, opt Options) ([]File, error) {
 	case "lua":
 		files = luaFiles(f, opt)
 	case "go":
-		files = goFiles(f, opt)
+		files, err = goFiles(f, opt)
+		if err != nil {
+			return nil, err
+		}
 	case "swift":
 		files = swiftFiles(f, opt)
 	case "zig":

@@ -53,8 +53,8 @@ const _DESC_B64 = "CrkDCgp4ZGVwLnByb3RvEgR4ZGVwIjIKBkRlcE1zZxISCgRuYW1lGAEgASgJU
 // xfile.UsesDep
 type UsesDep struct {
 	Single *xdep.DepMsg
-	Many []*xdep.DepMsg
-	Note string
+	Many   []*xdep.DepMsg
+	Note   string
 }
 
 func (m *UsesDep) GetSingle() *xdep.DepMsg {
@@ -181,4 +181,3 @@ func (m *UsesDep) load(msg *dynamic.Message) error {
 	}
 	return nil
 }
-

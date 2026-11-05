@@ -10,7 +10,7 @@ using Pbwire;
 
 namespace Xfile {
 
-    internal static class PbwireFile {
+    internal static class PbwireFile_Xfile {
         internal static readonly Schema Schema = Schema.FromBytes(Convert.FromBase64String(string.Concat(
             "CrkDCgp4ZGVwLnByb3RvEgR4ZGVwIjIKBkRlcE1zZxISCgRuYW1lGAEgASgJ",
             "UgRuYW1lEhQKBXZhbHVlGAIgASgFUgV2YWx1ZUroAgoGEgQDAAoBCs0BCgEM",
@@ -40,9 +40,9 @@ namespace Xfile {
     }
 
     /// <summary>Minimal parser: ParseFrom over the C core. Not pb::MessageParser.</summary>
-    public sealed class Parser<T> where T : new() {
+    public sealed class Parser_Xfile<T> where T : new() {
         private readonly Action<T, byte[]> _merge;
-        public Parser(Action<T, byte[]> merge) { _merge = merge; }
+        public Parser_Xfile(Action<T, byte[]> merge) { _merge = merge; }
         public T ParseFrom(byte[] data) { var m = new T(); _merge(m, data); return m; }
         public T ParseFrom(ByteString data) => ParseFrom(data.ToByteArray());
         public T ParseFrom(Stream input) { using var ms = new MemoryStream(); input.CopyTo(ms); return ParseFrom(ms.ToArray()); }
@@ -60,7 +60,7 @@ namespace Xfile {
         /// <summary>Field number for the "note" field.</summary>
         public const int NoteFieldNumber = 3;
         public string Note { get; set; }  = "";
-        public static Parser<UsesDep> Parser { get; } = new Parser<UsesDep>((m, b) => m.MergeFromBytes(b));
+        public static Parser_Xfile<UsesDep> Parser { get; } = new Parser_Xfile<UsesDep>((m, b) => m.MergeFromBytes(b));
         public UsesDep() { }
         public UsesDep(UsesDep other) : this() {
             if (other.Single != null) { if (Single == null) { Single = new Xdep.DepMsg(); } Single.MergeFrom(other.Single); }
@@ -88,7 +88,7 @@ namespace Xfile {
             return "UsesDep {{ " + "Note = " + Note + " }}";
         }
         public byte[] ToByteArray() {
-            using Pbwire.Message msg = PbwireFile.Schema.Message("xfile.UsesDep").NewMessage();
+            using Pbwire.Message msg = PbwireFile_Xfile.Schema.Message("xfile.UsesDep").NewMessage();
             EncodeInto(msg);
             return msg.Encode();
         }
@@ -102,7 +102,7 @@ namespace Xfile {
         }
         public int CalculateSize() => ToByteArray().Length;
          internal void MergeFromBytes(byte[] wire) {
-            using Pbwire.Message msg = PbwireFile.Schema.Message("xfile.UsesDep").Decode(wire);
+            using Pbwire.Message msg = PbwireFile_Xfile.Schema.Message("xfile.UsesDep").Decode(wire);
             LoadFrom(msg);
         }
         public void MergeFrom(UsesDep other) {
