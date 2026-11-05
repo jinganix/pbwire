@@ -1,0 +1,24 @@
+// Struct-binding extension coverage: proto2 extensions ride the extendee's
+// layout as trailing rows (field-number order), resolved by number at runtime
+// like any field. Reference bytes (extensiontest.bin) produced by
+// protoc --encode from extensiontest.txt; the C test encodes the same values
+// through the generated struct and must get identical bytes.
+syntax = "proto2";
+
+package exttest;
+
+message Inner {
+  optional string name = 1;
+}
+
+message HasExt {
+  optional int32 id = 1;
+  extensions 100 to 199;
+}
+
+extend HasExt {
+  optional int32 ext_int = 100 [default = 5];
+  optional string ext_str = 101;
+  repeated int32 ext_nums = 102;
+  optional Inner ext_inner = 103;
+}

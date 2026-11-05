@@ -11,7 +11,7 @@
  * libprotobuf differential in bindings/cpp/tests/compat_oracle.cc):
  *
  *   T1  struct encode == matrix3.bin / matrix2.bin / addressbook.bin /
- *       maptest.bin / grouptest.bin / oneoftest.bin
+ *       maptest.bin / grouptest.bin / oneoftest.bin / extensiontest.bin
  *   T2  decode of each reference reads every field back (incl. presence)
  *   T3  empty/explicit-zero round-trips (implicit-presence zeros are still
  *       emitted: the struct has no has-flag to omit them by, and the bytes
@@ -37,6 +37,7 @@
 #include "gen/maptest.h"
 #include "gen/grouptest.h"
 #include "gen/oneoftest.h"
+#include "gen/extensiontest.h"
 #include "gen/addressbook.h"
 
 static int failures;
@@ -1774,6 +1775,71 @@ done:
     pbw_schema_free(schema);
 }
 
+/* Extension reference: extension rows ride the extendee struct and encode to
+ * the protoc bytes (field-number order, like any field); absent proto2
+ * extensions are omitted. */
+static void
+test_extensiontest_reference(void)
+{
+    exttest_has_ext_t s;
+    exttest_inner_t inner;
+    int32_t nums[2] = {1, 2};
+    exttest_has_ext_t got;
+    pbw_schema *schema = NULL;
+    uint8_t *expect = NULL;
+    size_t expect_len = 0;
+    uint8_t *wire = NULL;
+    size_t wire_len = 0;
+
+    CHECK_OK(pbw_struct_schema_load(EXTENSIONTEST_DESC_PATH, &schema));
+    if (schema == NULL) {
+        return;
+    }
+    CHECK(read_file("bindings/c/tests/data/extensiontest.bin", &expect,
+                    &expect_len) == 0);
+    if (expect == NULL) {
+        goto done;
+    }
+    memset(&s, 0, sizeof(s));
+    inner.name = "in";
+    s.id = 7;
+    s.has_id = 1;
+    s.ext_int = 42;
+    s.has_ext_int = 1;
+    s.ext_str = "hi";
+    s.ext_nums = nums;
+    s.n_ext_nums = 2;
+    s.ext_inner = &inner;
+    CHECK_OK(exttest_has_ext_encode(schema, &s, &wire, &wire_len));
+    CHECK(wire_len == expect_len && memcmp(wire, expect, expect_len) == 0);
+    memset(&got, 0, sizeof(got));
+    CHECK_OK(exttest_has_ext_decode(schema, expect, expect_len, &got));
+    CHECK(got.has_id && got.id == 7);
+    CHECK(got.has_ext_int && got.ext_int == 42);
+    CHECK(got.ext_str != NULL && strcmp(got.ext_str, "hi") == 0);
+    CHECK(got.n_ext_nums == 2 && got.ext_nums[0] == 1 &&
+          got.ext_nums[1] == 2);
+    CHECK(got.ext_inner != NULL && got.ext_inner->name != NULL &&
+          strcmp(got.ext_inner->name, "in") == 0);
+    /* Absent extensions stay off the wire. */
+    {
+        exttest_has_ext_t bare;
+        uint8_t *bare_wire = NULL;
+        size_t bare_len = 0;
+
+        memset(&bare, 0, sizeof(bare));
+        CHECK_OK(exttest_has_ext_encode(schema, &bare, &bare_wire,
+                                        &bare_len));
+        CHECK(bare_len == 0);
+        pbw_free(bare_wire);
+    }
+    exttest_has_ext_free(&got);
+done:
+    pbw_free(wire);
+    free(expect);
+    pbw_schema_free(schema);
+}
+
 int
 main(void)
 {
@@ -1797,6 +1863,7 @@ main(void)
     test_maptest_reference();
     test_grouptest_reference();
     test_oneoftest_reference();
+    test_extensiontest_reference();
     test_gap_pins();
     if (failures != 0) {
         fprintf(stderr, "%d check(s) failed\n", failures);

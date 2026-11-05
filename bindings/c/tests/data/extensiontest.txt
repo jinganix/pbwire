@@ -1,0 +1,6 @@
+id: 7
+[exttest.ext_int]: 42
+[exttest.ext_str]: "hi"
+[exttest.ext_nums]: 1
+[exttest.ext_nums]: 2
+[exttest.ext_inner]: {name: "in"}

@@ -40,6 +40,7 @@ type generator struct {
 	output   string                           // output file name, guards derive from it
 	messages []protoreflect.MessageDescriptor // post-order: nested first
 	enums    []protoreflect.EnumDescriptor
+	exts map[string][]protoreflect.FieldDescriptor // extendee full name -> extensions, by number
 }
 
 func (g *generator) collect() error {
@@ -63,7 +64,82 @@ func (g *generator) collect() error {
 	for i := 0; i < g.fd.Enums().Len(); i++ {
 		g.enums = append(g.enums, g.fd.Enums().Get(i))
 	}
-	return walk(g.fd.Messages())
+	if err := walk(g.fd.Messages()); err != nil {
+		return err
+	}
+	return g.collectExtensions()
+}
+
+// collectExtensions groups the file's extensions by extendee. Extension rows
+// hang off the extended message's struct and layout table, in field-number
+// order, so the runtime resolves them by number like any field (the schema
+// already merges them into the extendee's field list).
+// shortcut: extendee in another file is rejected, regenerating that file's
+// header cannot gain members for this file's extensions; lift by emitting
+// an extern table into the extending file when cross-file extend blocks
+// are needed.
+func (g *generator) collectExtensions() error {
+	exts := g.fd.Extensions()
+	if exts.Len() == 0 {
+		return nil
+	}
+	local := map[string]protoreflect.MessageDescriptor{}
+	var mark func(msgs protoreflect.MessageDescriptors)
+	mark = func(msgs protoreflect.MessageDescriptors) {
+		for i := 0; i < msgs.Len(); i++ {
+			m := msgs.Get(i)
+			local[string(m.FullName())] = m
+			mark(m.Messages())
+		}
+	}
+	mark(g.fd.Messages())
+	grouped := map[string][]protoreflect.FieldDescriptor{}
+	for i := 0; i < exts.Len(); i++ {
+		ext := exts.Get(i)
+		ee := ext.ContainingMessage()
+		if ee.ParentFile() == nil || ee.ParentFile().Path() != g.fd.Path() {
+			return fmt.Errorf("%s: extension of foreign message %s: regenerate that file instead", ext.FullName(), ee.FullName())
+		}
+		if _, ok := local[string(ee.FullName())]; !ok {
+			return fmt.Errorf("%s: unknown extendee %s", ext.FullName(), ee.FullName())
+		}
+		key := string(ee.FullName())
+		grouped[key] = append(grouped[key], ext)
+	}
+	for key, list := range grouped {
+		m := local[key]
+		taken := map[string]bool{}
+		fields := m.Fields()
+		for i := 0; i < fields.Len(); i++ {
+			taken[snake(string(fields.Get(i).Name()))] = true
+		}
+		for i := 1; i < len(list); i++ {
+			for j := i; j > 0 && list[j].Number() < list[j-1].Number(); j-- {
+				list[j], list[j-1] = list[j-1], list[j]
+			}
+		}
+		for _, ext := range list {
+			if name := snake(string(ext.Name())); taken[name] {
+				return fmt.Errorf("%s: extension member %q collides with a field of %s", ext.FullName(), name, m.FullName())
+			}
+			taken[snake(string(ext.Name()))] = true
+		}
+		grouped[key] = list
+	}
+	g.exts = grouped
+	return nil
+}
+
+// extFields returns the extensions of m in field-number order, or nil.
+func (g *generator) extFields(m protoreflect.MessageDescriptor) []protoreflect.FieldDescriptor {
+	return g.exts[string(m.FullName())]
+}
+
+// tableLen is the layout row count: regular fields plus extensions. It must
+// match the schema's field count (the descriptor merges extensions into the
+// extendee), or the codec rejects the table.
+func (g *generator) tableLen(m protoreflect.MessageDescriptor) int {
+	return m.Fields().Len() + len(g.extFields(m))
 }
 
 // realOneof returns the oneof a field belongs to, or nil for plain fields
@@ -373,6 +449,30 @@ func (g *generator) writeMessages(b *strings.Builder) error {
 				}
 			}
 		}
+		/* Extensions ride the extendee struct as trailing members; the
+		 * comment names the extension so same-named fields elsewhere
+		 * stay distinguishable. */
+		for _, x := range g.extFields(m) {
+			ctype, _, err := fieldCType(x)
+			if err != nil {
+				return err
+			}
+			member := snake(string(x.Name()))
+			if strings.HasSuffix(ctype, "*") {
+				member = ctype + member
+			} else {
+				member = ctype + " " + member
+			}
+			if x.IsList() {
+				fmt.Fprintf(b, "    %s; /* extension %s */\n", member, x.FullName())
+				fmt.Fprintf(b, "    size_t n_%s;\n", snake(string(x.Name())))
+			} else {
+				fmt.Fprintf(b, "    %s; /* extension %s */\n", member, x.FullName())
+				if g.needsHas(x) {
+					fmt.Fprintf(b, "    int has_%s;\n", snake(string(x.Name())))
+				}
+			}
+		}
 		fmt.Fprintf(b, "} %s_t;\n", cname(m))
 		fmt.Fprintf(b, "\n")
 	}
@@ -385,6 +485,11 @@ func (g *generator) writeTables(b *strings.Builder) error {
 		fields := m.Fields()
 		for i := 0; i < fields.Len(); i++ {
 			if err := g.writeRow(b, m, fields.Get(i)); err != nil {
+				return err
+			}
+		}
+		for _, x := range g.extFields(m) {
+			if err := g.writeRow(b, m, x); err != nil {
 				return err
 			}
 		}
@@ -439,7 +544,7 @@ func (g *generator) writeRow(b *strings.Builder, m protoreflect.MessageDescripto
 	sub, nsub := "NULL", "0"
 	if kind == "PBW_SF_MESSAGE" {
 		sub = cname(f.Message()) + "_fields"
-		nsub = fmt.Sprintf("%d", messageFieldCount(f.Message()))
+		nsub = fmt.Sprintf("%d", g.tableLen(f.Message()))
 	}
 	ptype, wire, err := pbwType(f)
 	if err != nil {
@@ -505,9 +610,7 @@ func pbwType(f protoreflect.FieldDescriptor) (string, int, error) {
 	return "", 0, fmt.Errorf("%s: unsupported kind %s", f.FullName(), f.Kind())
 }
 
-func messageFieldCount(m protoreflect.MessageDescriptor) int {
-	return m.Fields().Len()
-}
+
 
 // writeSchema emits the descriptor-set path: the FileDescriptorSet lives
 // in its own file (protoc --descriptor_set_out, see `make -C bindings/c/plugin
@@ -531,7 +634,7 @@ func (g *generator) writeWrappers(b *strings.Builder) {
 			continue
 		}
 		t := cname(m) + "_t"
-		n := m.Fields().Len()
+		n := g.tableLen(m)
 		fmt.Fprintf(b, "static inline pbw_status\n")
 		fmt.Fprintf(b, "%s_encode(const pbw_schema *schema, const %s *in, uint8_t **wire, size_t *wire_len)\n", cname(m), t)
 		fmt.Fprintf(b, "{\n")

@@ -43,8 +43,8 @@ regen: build
 	PATH="$(CURDIR)/build:$$PATH" $(PROTOC) -I$(ROOT) \
 		--plugin=protoc-gen-pbwire-c=$(BIN) \
 		--pbwire-c_out=$(CURDIR)/build/regen \
-		bindings/c/tests/data/matrix3.proto bindings/c/tests/data/matrix2.proto bindings/c/tests/data/maptest.proto bindings/c/tests/data/grouptest.proto bindings/c/tests/data/oneoftest.proto
-	cp build/regen/matrix3.h build/regen/matrix2.h build/regen/maptest.h build/regen/grouptest.h build/regen/oneoftest.h ../tests/gen/
+		bindings/c/tests/data/matrix3.proto bindings/c/tests/data/matrix2.proto bindings/c/tests/data/maptest.proto bindings/c/tests/data/grouptest.proto bindings/c/tests/data/oneoftest.proto bindings/c/tests/data/extensiontest.proto
+	cp build/regen/matrix3.h build/regen/matrix2.h build/regen/maptest.h build/regen/grouptest.h build/regen/oneoftest.h build/regen/extensiontest.h ../tests/gen/
 	$(PROTOC) -I$(ROOT) --include_imports \
 		--descriptor_set_out=$(ROOT)/bindings/c/tests/data/matrix3.desc \
 		bindings/c/tests/data/matrix3.proto
@@ -60,6 +60,9 @@ regen: build
 	$(PROTOC) -I$(ROOT) --include_imports \
 		--descriptor_set_out=$(ROOT)/bindings/c/tests/data/oneoftest.desc \
 		bindings/c/tests/data/oneoftest.proto
+	$(PROTOC) -I$(ROOT) --include_imports \
+		--descriptor_set_out=$(ROOT)/bindings/c/tests/data/extensiontest.desc \
+		bindings/c/tests/data/extensiontest.proto
 	@echo "regenerated headers and descriptor sets; run (cd ../../.. && make test)"
 
 # Re-capture the CodeGeneratorRequest dumps golden tests replay.
@@ -88,5 +91,9 @@ dump: build
 		--plugin=protoc-gen-dump=$(DUMP) \
 		--dump_out=$(CURDIR)/testdata/c/oneoftest \
 		bindings/c/tests/data/oneoftest.proto
+	PATH="$(CURDIR)/build:$$PATH" $(PROTOC) -I$(ROOT) \
+		--plugin=protoc-gen-dump=$(DUMP) \
+		--dump_out=$(CURDIR)/testdata/c/extensiontest \
+		bindings/c/tests/data/extensiontest.proto
 
 .PHONY: build test regen dump

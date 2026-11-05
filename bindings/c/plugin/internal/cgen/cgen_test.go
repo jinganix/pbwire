@@ -25,6 +25,7 @@ func TestGoldens(t *testing.T) {
 		{"maptest", "maptest.h", filepath.Join("bindings", "c", "tests", "gen", "maptest.h")},
 		{"grouptest", "grouptest.h", filepath.Join("bindings", "c", "tests", "gen", "grouptest.h")},
 		{"oneoftest", "oneoftest.h", filepath.Join("bindings", "c", "tests", "gen", "oneoftest.h")},
+		{"extensiontest", "extensiontest.h", filepath.Join("bindings", "c", "tests", "gen", "extensiontest.h")},
 	}
 	for _, tc := range cases {
 		t.Run(tc.dump, func(t *testing.T) {

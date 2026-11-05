@@ -1,0 +1,11 @@
+
+³
+)bindings/c/tests/data/extensiontest.protoexttest"
+Inner
+name (	Rname"
+HasExt
+id (Rid*dÈ:+
+ext_int.exttest.HasExtd (:5RextInt:(
+ext_str.exttest.HasExte (	RextStr:*
+ext_nums.exttest.HasExtf (RextNums:<
+	ext_inner.exttest.HasExtg (2.exttest.InnerRextInner
