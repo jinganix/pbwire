@@ -163,6 +163,28 @@ ok(Inner.decode(inner_wire).name == "kid",
 ok(Inner.decode(schema, inner_wire).name == "kid",
    "T4 old (schema, wire) form still works")
 
+-- Cross-file references require the sibling model (same directory):
+-- xfile.lua requires xdep.lua, so the dep table resolves.
+package.path = "tests/gen/?.lua;" .. package.path
+local xfile = dofile("tests/gen/xfile.lua")
+local XUses = xfile.Xfile_UsesDep
+local XDep = dofile("tests/gen/xdep.lua").Xdep_DepMsg
+local xg = io.open("../../codegen/testdata/xfile.bin", "rb")
+local xref = xg:read("*a")
+xg:close()
+local xval = XUses.new({
+    single = XDep.new({ name = "one", value = 7 }),
+    many = { XDep.new({ name = "a" }), XDep.new({ name = "b", value = -1 }) },
+    note = "hi",
+})
+local xwire = XUses.encode(xval)
+ok(xwire == xref, "xfile encode equals protoc reference bytes")
+local xback = XUses.decode(xref)
+ok(xback.single.name == "one" and xback.single.value == 7, "xfile single")
+ok(#xback.many == 2 and xback.many[1].name == "a" and xback.many[2].value == -1, "xfile many")
+ok(xback.note == "hi", "xfile note")
+ok(XUses.encode(xback) == xref, "xfile decode/encode byte-exact")
+
 print(failures == 0 and "all generated tests passed" or (failures .. " failures"))
 
 os.exit(failures == 0 and 0 or 1)
