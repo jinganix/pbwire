@@ -761,6 +761,23 @@ test_locale_independence(pbw_schema *schema)
         CHECK_OK(pbw_text_print(msg, &out, &out_len));
         CHECK(out != NULL && strcmp(out, "db: 1.5\n") == 0);
         pbw_free(out);
+        /* an integer-valued double prints without a decimal point, and a
+         * long mantissa takes the heap path in the slow converter */
+        {
+            static const char big[] =
+                "db: 0.000000000000000000000000000000000000000000000000000000000000001";
+
+            CHECK_OK(pbw_message_set(msg, 12, pbw_value_new_double(2.0)));
+            CHECK_OK(pbw_text_print(msg, &out, &out_len));
+            CHECK(out != NULL && strcmp(out, "db: 2\n") == 0);
+            pbw_free(out);
+            out = NULL;
+            CHECK_OK(
+                pbw_text_parse(type, big, strlen(big), &parsed));
+            CHECK(parsed != NULL);
+            pbw_message_free(parsed);
+            parsed = NULL;
+        }
         pbw_message_free(msg);
 
         CHECK_OK(pbw_json_parse(type, "{\"db\":1.5}", strlen("{\"db\":1.5}"), &parsed));
@@ -1161,6 +1178,7 @@ test_pack_all_types(pbw_schema *schema)
             CHECK_OK(pbw_message_set(msg, 13, pbw_value_new_bool((int)value)));
             CHECK_OK(pbw_message_set(msg, 14, pbw_value_new_int(2)));
         }
+        check_encoded_size(msg);
         CHECK_OK(pbw_encode(msg, &buf, &len));
         /* The opposite descriptor must decode it: packedness is a hint. */
         CHECK_OK(pbw_decode(target, buf, len, &decoded));
@@ -1208,6 +1226,44 @@ test_packed_presize(pbw_schema *schema)
     pbw_message_free(decoded);
     pbw_message_free(empty);
     pbw_message_free(msg);
+}
+
+/* A value whose kind does not match the field is rejected with TYPE and
+ * leaves the message encodable. (Corrupt trees built by poking internals
+ * are not a supported state; only the public boundary is tested here.) */
+static void
+test_packed_hostile(pbw_schema *schema)
+{
+    const pbw_descriptor *packed = desc(schema, "PackAll");
+    /* varint, fixed-width, bool and enum representatives */
+    static const uint32_t fields[] = {1, 9, 13, 14};
+    size_t i;
+
+    for (i = 0; i < sizeof(fields) / sizeof(fields[0]); i++) {
+        pbw_message *msg = pbw_message_new(packed);
+        uint8_t *buf = NULL;
+        size_t len = 0;
+
+        CHECK(msg != NULL);
+        {
+            pbw_value *rejected = pbw_value_new_string("x");
+            pbw_value *rejected_msg = pbw_value_new_message(
+                pbw_message_new(packed));
+
+            CHECK_STATUS(PBW_ERR_TYPE,
+                         pbw_message_set(msg, fields[i], rejected));
+            pbw_value_free(rejected);
+            CHECK_STATUS(PBW_ERR_TYPE,
+                         pbw_message_set(msg, fields[i], rejected_msg));
+            pbw_value_free(rejected_msg);
+        }
+        /* the rejected stores left nothing behind: still encodable */
+        CHECK_OK(pbw_message_set(msg, fields[i],
+                                 pbw_value_new_uint(1)));
+        CHECK_OK(pbw_encode(msg, &buf, &len));
+        pbw_free(buf);
+        pbw_message_free(msg);
+    }
 }
 
 static void
@@ -1550,6 +1606,13 @@ test_unknown_only(pbw_schema *schema)
             CHECK_OK(pbw_encode_ctx(ctx, decoded, &encoded, &encoded_len));
             CHECK(encoded_len == sizeof(wire));
             CHECK(encoded != NULL && memcmp(encoded, wire, sizeof(wire)) == 0);
+            /* Empty input through a context decodes to an empty message. */
+            {
+                pbw_message *empty = NULL;
+
+                CHECK_OK(pbw_decode_ctx(ctx, person, NULL, 0, &empty));
+                CHECK(empty != NULL);
+            }
             pbw_ctx_free(ctx);
         }
     }
@@ -2199,6 +2262,16 @@ test_schema_errors(void)
     CHECK_STATUS(PBW_ERR_NOT_FOUND, pbw_schema_link(schema));
     pbw_schema_free(schema);
 
+    /* oneof index past the field count fails at link */
+    schema = pbw_schema_new();
+    msg = pbw_schema_add_message(schema, "M");
+    field = pbw_message_add_field(msg, "a", 1, PBW_TYPE_INT32,
+                                  PBW_LABEL_OPTIONAL);
+    CHECK(field != NULL);
+    pbw_field_set_oneof(field, 99);
+    CHECK_STATUS(PBW_ERR_INVALID, pbw_schema_link(schema));
+    pbw_schema_free(schema);
+
     /* field and descriptor name/number validation */
     schema = pbw_schema_new();
     msg = pbw_schema_add_message(schema, "M");
@@ -2390,6 +2463,37 @@ test_closed_enum(void)
     pbw_free(out);
     pbw_message_free(decoded);
     pbw_schema_free(schema);
+    /* Packed repeated enums shed unknown numbers into the unknown fields,
+     * packed and unpacked alike. */
+    {
+        static const uint8_t packed[] = {0x12, 0x02, 0xe7,
+                                         0x07}; /* rep = [999] */
+        static const uint8_t unpacked[] = {0x10, 0xe7,
+                                           0x07}; /* rep = 999 */
+        schema = pbw_schema_new();
+        CHECK(schema != NULL);
+        pbw_schema_set_proto3(schema, 0);
+        color = pbw_schema_add_enum(schema, "E");
+        pbw_enum_add_value(color, "E_ZERO", 0);
+        pbw_enum_add_value(color, "E_ONE", 1);
+        msg = pbw_schema_add_message(schema, "M");
+        f = pbw_message_add_field(msg, "rep", 2, PBW_TYPE_ENUM,
+                                  PBW_LABEL_REPEATED);
+        pbw_field_set_type_name(f, "E");
+        pbw_field_set_packed(f, 0); /* unpacked: packed bytes take the slow path */
+        CHECK_OK(pbw_schema_link(schema));
+        CHECK_OK(pbw_decode(msg, packed, sizeof(packed), &decoded));
+        CHECK(pbw_message_get(decoded, 2) == NULL);
+        CHECK(pbw_message_unknown_len(decoded) == sizeof(packed));
+        pbw_message_free(decoded);
+        decoded = NULL;
+        CHECK_OK(pbw_decode(msg, unpacked, sizeof(unpacked), &decoded));
+        CHECK(pbw_message_get(decoded, 2) == NULL);
+        CHECK(pbw_message_unknown_len(decoded) == sizeof(unpacked));
+        pbw_message_free(decoded);
+        decoded = NULL;
+        pbw_schema_free(schema);
+    }
 }
 
 /* Groups decode into their submessage and print by type name. */
@@ -2439,7 +2543,181 @@ test_group_fields(void)
         pbw_free(bytes);
     }
     pbw_message_free(decoded);
+    decoded = NULL;
     pbw_schema_free(schema);
+    /* A group holding a singular message: the inner message decodes through
+     * the slow field path, merges when repeated, and fails the group when
+     * truncated. Groups themselves merge when repeated. */
+    {
+        /* g { sub { a: 1 } sub { a: 2 } }: field 1 START_GROUP, field 2
+         * LEN (twice), field 1 END_GROUP */
+        static const uint8_t gwire[] = {
+            0x0b,
+            0x12,
+            0x02,
+            0x08,
+            0x01,
+            0x12,
+            0x02,
+            0x08,
+            0x02,
+            0x0c,
+        };
+        /* truncated inner message: LEN says 2, only 1 byte follows */
+        static const uint8_t gbad[] = {0x0b, 0x12, 0x02, 0x08, 0x0c};
+        /* length overruns the group: only 2 bytes for a 5-byte message */
+        static const uint8_t gcut[] = {0x0b, 0x12, 0x05, 0x08, 0x0c};
+        /* inner message is a truncated varint */
+        static const uint8_t gbad_inner[] = {0x0b, 0x12, 0x01, 0x80,
+                                             0x0c};
+        /* empty packed run, truncated scalar, unknown enum, valid string */
+        static const uint8_t gempty[] = {0x0b, 0x1a, 0x00, 0x0c};
+        static const uint8_t gtrunc[] = {0x0b, 0x08, 0x80, 0x0c};
+        static const uint8_t gunknown[] = {0x0b, 0x20, 0xe7, 0x07,
+                                           0x0c};
+        static const uint8_t gstr[] = {0x0b, 0x2a, 0x01, 0x41,
+                                       0x0c};
+        /* the group twice: contents merge */
+        static const uint8_t gdup[] = {
+            0x0b,
+            0x08,
+            0x01,
+            0x0c,
+            0x0b,
+            0x08,
+            0x02,
+            0x0c,
+        };
+        /* packed bytes for the group's unpacked run */
+        static const uint8_t gpacked[] = {0x0b, 0x1a, 0x02,
+                                          0x01, 0x02, 0x0c};
+        schema = pbw_schema_new();
+        CHECK(schema != NULL);
+        pbw_schema_set_proto3(schema, 0);
+        grp = pbw_schema_add_message(schema, "Grp2");
+        CHECK(grp != NULL);
+        CHECK(pbw_message_add_field(grp, "x", 1, PBW_TYPE_INT32,
+                                    PBW_LABEL_OPTIONAL) != NULL);
+        CHECK(pbw_message_add_field(grp, "s", 5, PBW_TYPE_STRING,
+                                    PBW_LABEL_OPTIONAL) != NULL);
+        {
+            pbw_descriptor *ev = pbw_schema_add_enum(schema, "Ev");
+            pbw_field *ef;
+
+            CHECK(ev != NULL);
+            pbw_enum_add_value(ev, "EV_ZERO", 0);
+            pbw_enum_add_value(ev, "EV_ONE", 1);
+            ef = pbw_message_add_field(grp, "e", 4, PBW_TYPE_ENUM,
+                                       PBW_LABEL_REPEATED);
+            CHECK(ef != NULL);
+            if (ef != NULL) {
+                pbw_field_set_type_name(ef, "Ev");
+                pbw_field_set_packed(ef, 0);
+            }
+        }
+        {
+            pbw_field *up = pbw_message_add_field(grp, "up", 3,
+                                                  PBW_TYPE_INT32,
+                                                  PBW_LABEL_REPEATED);
+
+            CHECK(up != NULL);
+            if (up != NULL) {
+                pbw_field_set_packed(up, 0);
+            }
+        }
+        msg = pbw_schema_add_message(schema, "Sub2");
+        CHECK(msg != NULL);
+        CHECK(pbw_message_add_field(msg, "a", 1, PBW_TYPE_INT32,
+                                    PBW_LABEL_OPTIONAL) != NULL);
+        f = pbw_message_add_field(grp, "sub", 2, PBW_TYPE_MESSAGE,
+                                  PBW_LABEL_OPTIONAL);
+        pbw_field_set_type_name(f, "Sub2");
+        msg = pbw_schema_add_message(schema, "M2");
+        CHECK(msg != NULL);
+        f = pbw_message_add_field(msg, "g", 1, PBW_TYPE_GROUP,
+                                  PBW_LABEL_OPTIONAL);
+        pbw_field_set_type_name(f, "Grp2");
+        CHECK_OK(pbw_schema_link(schema));
+        CHECK_OK(pbw_decode(msg, gwire, sizeof(gwire), &decoded));
+        {
+            const pbw_value *g = pbw_message_get(decoded, 1);
+            const pbw_value *s = NULL;
+
+            CHECK(g != NULL);
+            if (g != NULL) {
+                s = pbw_message_get(pbw_value_get_message(g), 2);
+            }
+            CHECK(s != NULL &&
+                  pbw_value_get_int32(pbw_message_get(
+                      pbw_value_get_message(s), 1)) == 2);
+        }
+        pbw_message_free(decoded);
+        decoded = NULL;
+        CHECK(pbw_decode(msg, gbad, sizeof(gbad), &decoded) !=
+              PBW_OK);
+        CHECK(decoded == NULL);
+        CHECK(pbw_decode(msg, gcut, sizeof(gcut), &decoded) !=
+              PBW_OK);
+        CHECK(decoded == NULL);
+        CHECK(pbw_decode(msg, gbad_inner, sizeof(gbad_inner),
+                         &decoded) != PBW_OK);
+        CHECK(decoded == NULL);
+        CHECK_OK(pbw_decode(msg, gempty, sizeof(gempty), &decoded));
+        pbw_message_free(decoded);
+        decoded = NULL;
+        CHECK(pbw_decode(msg, gtrunc, sizeof(gtrunc), &decoded) !=
+              PBW_OK);
+        CHECK(decoded == NULL);
+        CHECK_OK(pbw_decode(msg, gunknown, sizeof(gunknown), &decoded));
+        {
+            const pbw_value *g = pbw_message_get(decoded, 1);
+
+            CHECK(g != NULL);
+            if (g != NULL) {
+                CHECK(pbw_message_get(pbw_value_get_message(g), 4) ==
+                      NULL);
+            }
+        }
+        pbw_message_free(decoded);
+        decoded = NULL;
+        CHECK_OK(pbw_decode(msg, gstr, sizeof(gstr), &decoded));
+        {
+            const pbw_value *g = pbw_message_get(decoded, 1);
+            const pbw_value *s = NULL;
+
+            CHECK(g != NULL);
+            if (g != NULL) {
+                s = pbw_message_get(pbw_value_get_message(g), 5);
+            }
+            CHECK(s != NULL);
+        }
+        pbw_message_free(decoded);
+        decoded = NULL;
+        CHECK_OK(pbw_decode(msg, gpacked, sizeof(gpacked), &decoded));
+        {
+            const pbw_value *g = pbw_message_get(decoded, 1);
+            const pbw_value *u = NULL;
+
+            CHECK(g != NULL);
+            if (g != NULL) {
+                u = pbw_message_get(pbw_value_get_message(g), 3);
+            }
+            CHECK(u != NULL);
+        }
+        pbw_message_free(decoded);
+        decoded = NULL;
+        CHECK_OK(pbw_decode(msg, gdup, sizeof(gdup), &decoded));
+        {
+            const pbw_value *g = pbw_message_get(decoded, 1);
+
+            CHECK(g != NULL &&
+                  pbw_value_get_int32(pbw_message_get(
+                      pbw_value_get_message(g), 1)) == 2);
+        }
+        pbw_message_free(decoded);
+        decoded = NULL;
+        pbw_schema_free(schema);
+    }
 }
 
 /* Extensions attach by number and print under their full name. */
@@ -2474,6 +2752,32 @@ test_hand_built_extensions(void)
 
 /* Text format: printer goldens, accepted/rejected spellings, required
  * fields, unknown-field display. */
+/* Every strict prefix of a valid document parses safely: either it is
+ * itself valid, or it fails with no message out. */
+static void
+check_text_prefix_sweep(const pbw_descriptor *msg)
+{
+    static const char *docs[] = {
+        "a: 1 color: C_RED str: \"x\" flag: true h: -2 u: 3",
+        "kid { a: 1 } nums: [1, 2] grp { x: 1 } [t.x_int]: 5",
+        "subs { a: 1 } subs { a: 2 } o1: 1",
+    };
+    size_t i;
+
+    for (i = 0; i < sizeof(docs) / sizeof(docs[0]); i++) {
+        size_t full = strlen(docs[i]);
+        size_t k;
+
+        for (k = 0; k < full; k++) {
+            pbw_message *m = NULL;
+            pbw_status st = pbw_text_parse(msg, docs[i], k, &m);
+
+            CHECK(st == PBW_OK || m == NULL);
+            pbw_message_free(m);
+        }
+    }
+}
+
 static void
 test_text_format(void)
 {
@@ -2501,6 +2805,7 @@ test_text_format(void)
         "Grp {\n"
         "  x: 1\n"
         "}\n"
+        "str: \"a\\nb\\\"c\\\\d\\'e\"\n"
         "[t.x_int]: 5\n";
 
     CHECK(schema != NULL);
@@ -2539,6 +2844,25 @@ test_text_format(void)
     f = pbw_message_add_extension(msg, "x_int", 100, PBW_TYPE_INT32,
                                   PBW_LABEL_OPTIONAL);
     pbw_field_set_full_name(f, "t.x_int");
+    CHECK(pbw_message_add_field(msg, "str", 9, PBW_TYPE_STRING,
+                                PBW_LABEL_OPTIONAL) != NULL);
+    CHECK(pbw_message_add_field(msg, "flag", 10, PBW_TYPE_BOOL,
+                                PBW_LABEL_OPTIONAL) != NULL);
+    f = pbw_message_add_field(msg, "subs", 11, PBW_TYPE_MESSAGE,
+                              PBW_LABEL_REPEATED);
+    pbw_field_set_type_name(f, "Sub");
+    f = pbw_message_add_field(msg, "o1", 12, PBW_TYPE_INT32,
+                              PBW_LABEL_OPTIONAL);
+    pbw_field_set_oneof(f, 1);
+    f = pbw_message_add_field(msg, "o2", 13, PBW_TYPE_INT32,
+                              PBW_LABEL_OPTIONAL);
+    pbw_field_set_oneof(f, 1);
+    CHECK(pbw_message_add_field(msg, "h", 14, PBW_TYPE_INT64,
+                                PBW_LABEL_OPTIONAL) != NULL);
+    CHECK(pbw_message_add_field(msg, "u", 15, PBW_TYPE_UINT64,
+                                PBW_LABEL_OPTIONAL) != NULL);
+    CHECK(pbw_message_add_field(msg, "tags", 16, PBW_TYPE_STRING,
+                                PBW_LABEL_REPEATED) != NULL);
     CHECK_OK(pbw_schema_link(schema));
     /* The golden parses and prints back byte-identically. */
     out = NULL;
@@ -2549,20 +2873,70 @@ test_text_format(void)
     out = NULL;
     pbw_message_free(decoded);
     decoded = NULL;
+    /* 64-bit, enum-number, bool and unsigned integers print canonically. */
+    {
+        static const char input[] =
+            "a: 1 color: 2 str: \"x\" flag: true h: -2 u: 3";
+        static const char want[] =
+            "a: 1\ncolor: 2\nstr: \"x\"\nflag: true\nh: -2\nu: 3\n";
+
+        decoded = NULL;
+        CHECK_OK(pbw_text_parse(msg, input, sizeof(input) - 1, &decoded));
+        CHECK_OK(pbw_text_print(decoded, &out, &len));
+        CHECK(len == sizeof(want) - 1 && memcmp(out, want, len) == 0);
+        pbw_free(out);
+        out = NULL;
+        pbw_message_free(decoded);
+        decoded = NULL;
+    }
     /* Accepted spellings. */
     {
         static const char *ok[] = {
-            "a: 1, blob: \"x\";", /* separators */
-            "a: 1 # comment\n",   /* comments */
-            "a:0x10",             /* hex */
-            "a:010",              /* octal */
-            "nums: [1, 2]",       /* list */
-            "nums: []",           /* empty list */
-            "kid < a: 1 >",       /* angle brackets */
-            "kid: { a: 1 }",      /* colon before message */
-            "grp { x: 1 }",       /* lowercase group name */
-            "Grp: { x: 1 }",      /* colon with group */
-            "blob: \"a\" \"b\"",  /* adjacent strings */
+            "a: 1, blob: \"x\";",                                                                /* separators */
+            "a: 1 # comment\n",                                                                  /* comments */
+            "a:0x10",                                                                            /* hex */
+            "a:010",                                                                             /* octal */
+            "a: -5",                                                                             /* negative */
+            "f64: 1.00000000000000000000000000000000000000000000000000000000000000000000000001", /* long */
+            "nums: [1, 2]",                                                                      /* list */
+            "nums: []",                                                                          /* empty list */
+            "tags: [\"a\", \"b\"]",                                                              /* string list */
+            "subs [{ a: 1 }, < a: 2 >]",                                                         /* message list */
+            "blob: \"\\u00e9\\u4e2d\\U0001F600\"",                                               /* \u/\U escapes */
+            "f32: inf",                                                                          /* lowercase infinity */
+            "f64: -INFINITY",                                                                    /* long infinity */
+            "f32: nAn",                                                                          /* mixed-case NaN */
+            "kid < a: 1 >",                                                                      /* angle brackets */
+            "kid: { a: 1 }",                                                                     /* colon before message */
+            "grp { x: 1 }",                                                                      /* lowercase group name */
+            "Grp: { x: 1 }",                                                                     /* colon with group */
+            "blob: \"a\" \"b\"",                                                                 /* adjacent strings */
+            "str: \"hi\"",                                                                       /* string field */
+            "str: \"\\u4e2d\\U0001F600\"",                                                       /* multibyte escapes */
+            "str: \"a\\nb\\tc\\\\d\\'e\\\"f\\?g\\ah\\bi\\fj\\vk\"",
+            "a: 0x7fffffff",               /* hex int32 max */
+            "a: -2147483648",              /* int32 min */
+            "f32: .5",                     /* leading-dot float */
+            "f32: .5e5",                   /* leading-dot exponent */
+            "f32: .5e+5",                  /* signed leading-dot exponent */
+            "f32: .5f",                    /* leading-dot f suffix */
+            "f32: 5.",                     /* trailing-dot float */
+            "f32: 1e2",                    /* exponent */
+            "f32: 1f",                     /* f suffix */
+            "f32: 1e5",                    /* exponent */
+            "f32: 1e+5",                   /* signed exponent */
+            "f32: 1E-5",                   /* capital E */
+            "f64: -inf",                   /* lowercase infinity */
+            "f64: nan",                    /* lowercase NaN */
+            "color: 1",                    /* numeric enum */
+            "color: 0x1",                  /* hex enum */
+            "color: 2",                    /* unknown open-enum number */
+            "blob: \"\\xff\"",             /* bytes skip UTF-8 validation */
+            "flag: true",                  /* bool */
+            "flag: 1",                     /* int for bool */
+            "flag: f",                     /* short bool */
+            "subs { a: 1 } subs { a: 2 }", /* repeated messages */
+            "subs [ { a: 1 }, < a: 2 > ]", /* list of messages */
         };
         size_t i;
 
@@ -2575,16 +2949,61 @@ test_text_format(void)
     /* Rejected spellings. */
     {
         static const char *bad[] = {
-            "a: 2147483648", /* range */
-            "a: 0x",         /* empty hex */
-            "a: 1.5",        /* float for int */
-            "blob: \"\\x\"", /* bad escape */
-            "blob: \"abc",   /* unterminated */
-            "bogus: 1",      /* unknown name */
-            "[x_int]: 5",    /* short names never match extensions */
-            "color: BOGUS",  /* unknown enum */
-            "kid: 1",        /* scalar for message */
-            "a: 1 bogus",    /* trailing garbage */
+            "a: 2147483648",          /* range */
+            "a: 0x100000000",         /* hex range */
+            "h: 0x10000000000000000", /* hex range 64 */
+            "a: 0x",                  /* empty hex */
+            "a: 1.5",                 /* float for int */
+            "f64: 1e",                /* exponent without digits */
+            "f64: 1e+",
+            "f64: 1E-",
+            "f64: .5e",
+            "blob: \"\\x\"",                                                                                                                                             /* bad escape */
+            "blob: \"abc",                                                                                                                                               /* unterminated */
+            "bogus: 1",                                                                                                                                                  /* unknown name */
+            "[x_int]: 5",                                                                                                                                                /* short names never match extensions */
+            "color: BOGUS",                                                                                                                                              /* unknown enum */
+            "color: 1.5",                                                                                                                                                /* float for enum */
+            "f32: 0x10",                                                                                                                                                 /* hex float */
+            "f32: +1.5",                                                                                                                                                 /* leading plus */
+            "a: +1",                                                                                                                                                     /* leading plus on int */
+            "a: -2147483649",                                                                                                                                            /* int32 range */
+            "f32: 0x1p3",                                                                                                                                                /* hex float */
+            "a: 0b101",                                                                                                                                                  /* binary */
+            "a: 0108",                                                                                                                                                   /* bad octal digit */
+            "a: xyz",                                                                                                                                                    /* not a number */
+            "a: 12x",                                                                                                                                                    /* trailing garbage */
+            "f32: xyz",                                                                                                                                                  /* not a float */
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa: 1", /* name too long */
+            "str: \"\\u12xy\"",                                                                                                                                          /* bad hex in \\u */
+            "a: 1_000",                                                                                                                                                  /* underscores */
+            "str: \"\\xff\"",                                                                                                                                            /* invalid UTF-8 in string */
+            "str: \"\\uD800\"",                                                                                                                                          /* lone surrogate */
+            "str: \"\\U00110000\"",                                                                                                                                      /* out of range */
+            "str: \"\\x\"",                                                                                                                                              /* truncated hex escape */
+            "str: \"\\q\"",                                                                                                                                              /* unknown escape */
+            "str: \"\\777\"",                                                                                                                                            /* octal out of range */
+            "str: \"abc\\",                                                                                                                                              /* backslash at end */
+            "u: -1",                                                                                                                                                     /* negative for unsigned */
+            "u: 18446744073709551616",                                                                                                                                   /* uint64 overflow */
+            "str: \"\\xC0\\xAF\"",                                                                                                                                       /* overlong UTF-8 */
+            "str: \"\\xED\\xA0\\x80\"",                                                                                                                                  /* surrogate UTF-8 */
+            "str: \"\\xF4\\x90\\x80\\x80\"",                                                                                                                             /* out of range */
+            "str: \"\\xE2\\x82\"",                                                                                                                                       /* truncated UTF-8 */
+            "f32: 1e",                                                                                                                                                   /* exponent without digits */
+            "f32: 1e+",                                                                                                                                                  /* exponent without digits */
+            "f32: .e5",                                                                                                                                                  /* missing mantissa */
+            "flag: yes",                                                                                                                                                 /* not a bool */
+            "flag: 2",                                                                                                                                                   /* out of range for bool */
+            "subs [1]",                                                                                                                                                  /* scalar in a message list */
+            "subs [{ a: 1 },]",                                                                                                                                          /* trailing comma */
+            "subs [1",                                                                                                                                                   /* truncated list */
+            "subs { a: }",                                                                                                                                               /* missing value */
+            "[x_int",                                                                                                                                                    /* unterminated extension */
+            "[a b]: 1",                                                                                                                                                  /* bad extension name */
+            "o1: 1 o2: 2",                                                                                                                                               /* oneof conflict */
+            "kid: 1",                                                                                                                                                    /* scalar for message */
+            "a: 1 bogus",                                                                                                                                                /* trailing garbage */
         };
         size_t i;
 
@@ -2637,10 +3056,278 @@ test_text_format(void)
     /* ...while the text parser itself rejects the unknown name. */
     CHECK_STATUS(PBW_ERR_INVALID, pbw_text_parse(msg, "50: 42", 6, &decoded));
     CHECK(decoded == NULL);
+    /* An unknown that fails to scan as a message prints quoted: the
+     * outer field is complete, but its body holds a bad tag, a short
+     * value, an overrunning length or an unclosed group. */
+    {
+        static const struct {
+            const uint8_t *bytes;
+            size_t len;
+            const char *want;
+        } cases[] = {
+            /* field 1 varint, truncated */
+            {(const uint8_t *)"\xE2\x03\x04\x08\x80\x80\x80", 7,
+             "60: \"\\010\\200\\200\\200\"\n"},
+            /* field 1 fixed32, short */
+            {(const uint8_t *)"\xE2\x03\x03\x0D\x01\x02", 6,
+             "60: \"\\r\\001\\002\"\n"},
+            /* field 1 fixed64, short */
+            {(const uint8_t *)"\xE2\x03\x04\x09\x01\x02\x03", 7,
+             "60: \"\\t\\001\\002\\003\"\n"},
+            /* field 2 LEN overruns the body */
+            {(const uint8_t *)"\xE2\x03\x03\x12\x05\x41", 6,
+             "60: \"\\022\\005A\"\n"},
+            /* field number 0 */
+            {(const uint8_t *)"\xE2\x03\x02\x00\x01", 5,
+             "60: \"\\000\\001\"\n"},
+            /* wire type 6 */
+            {(const uint8_t *)"\xE2\x03\x01\x0E", 4,
+             "60: \"\\016\"\n"},
+            /* group opens but never closes */
+            {(const uint8_t *)"\xE2\x03\x02\xFB\x03", 5,
+             "60: \"\\373\\003\"\n"},
+            /* END_GROUP where a field belongs */
+            {(const uint8_t *)"\xE2\x03\x01\x1C", 4,
+             "60: \"\\034\"\n"},
+            /* fixed-width bodies scan as messages */
+            {(const uint8_t *)"\xE2\x03\x05\x0D\x78\x56\x34\x12",
+             8, "60 {\n  1: 0x12345678\n}\n"},
+            {(const uint8_t *)"\xE2\x03\x09\x09\x01\x02\x03\x04\x05\x06\x07\x08",
+             12, "60 {\n  1: 0x0807060504030201\n}\n"},
+            /* an empty body is not a message */
+            {(const uint8_t *)"\xE2\x03\x00", 3, "60: \"\"\n"},
+        };
+        size_t k;
+
+        for (k = 0; k < sizeof(cases) / sizeof(cases[0]); k++) {
+            decoded = NULL;
+            CHECK_OK(
+                pbw_decode(msg, cases[k].bytes, cases[k].len, &decoded));
+            CHECK_OK(pbw_text_print(decoded, &out, &len));
+            CHECK(len == strlen(cases[k].want) &&
+                  memcmp(out, cases[k].want, len) == 0);
+            pbw_free(out);
+            out = NULL;
+            pbw_message_free(decoded);
+            decoded = NULL;
+        }
+    }
+    /* Nested groups scan as messages, including fixed-width fields; a
+     * truncated or invalid group body falls back to quoted bytes. */
+    {
+        static const uint8_t nested_grp[] = {
+            0xE2,
+            0x03,
+            0x13,
+            0xFB,
+            0x03,
+            0x11,
+            0x01,
+            0x02,
+            0x03,
+            0x04,
+            0x05,
+            0x06,
+            0x07,
+            0x08,
+            0x83,
+            0x04,
+            0x08,
+            0x01,
+            0x84,
+            0x04,
+            0xFC,
+            0x03,
+        };
+        static const char nested_want[] =
+            "60 {\n  63 {\n    2: 0x0807060504030201\n"
+            "    64 {\n      1: 1\n    }\n  }\n}\n";
+        /* group body defects, each quoted verbatim */
+        static const uint8_t bad_field0[] = {0xE2, 0x03, 0x05,
+                                             0xFB, 0x03, 0x00, 0xFC,
+                                             0x03};
+        static const uint8_t bad_wire[] = {0xE2, 0x03, 0x05,
+                                           0xFB, 0x03, 0x0E, 0xFC,
+                                           0x03};
+        static const uint8_t trunc_varint[] = {0xE2, 0x03, 0x04,
+                                               0xFB, 0x03, 0x08,
+                                               0x80};
+        static const uint8_t trunc_fixed[] = {0xE2, 0x03, 0x05,
+                                              0xFB, 0x03, 0x0D, 0x01,
+                                              0x02};
+        static const uint8_t trunc_len[] = {0xE2, 0x03, 0x07,
+                                            0xFB, 0x03, 0x12, 0x05,
+                                            0x41, 0xFC, 0x03};
+        static const struct {
+            const uint8_t *bytes;
+            size_t len;
+            const char *want;
+        } grpcases[] = {
+            {nested_grp, sizeof(nested_grp), nested_want},
+            {bad_field0, sizeof(bad_field0),
+             "60: \"\\373\\003\\000\\374\\003\"\n"},
+            {bad_wire, sizeof(bad_wire),
+             "60: \"\\373\\003\\016\\374\\003\"\n"},
+            {trunc_varint, sizeof(trunc_varint),
+             "60: \"\\373\\003\\010\\200\"\n"},
+            {trunc_fixed, sizeof(trunc_fixed),
+             "60: \"\\373\\003\\r\\001\\002\"\n"},
+            {trunc_len, sizeof(trunc_len),
+             "60: \"\\373\\003\\022\\005A\\374\\003\"\n"},
+        };
+        size_t k;
+
+        for (k = 0; k < sizeof(grpcases) / sizeof(grpcases[0]); k++) {
+            decoded = NULL;
+            CHECK_OK(pbw_decode(msg, grpcases[k].bytes,
+                                grpcases[k].len, &decoded));
+            CHECK_OK(pbw_text_print(decoded, &out, &len));
+            CHECK(len == strlen(grpcases[k].want) &&
+                  memcmp(out, grpcases[k].want, len) == 0);
+            pbw_free(out);
+            out = NULL;
+            pbw_message_free(decoded);
+            decoded = NULL;
+        }
+    }
+    /* A length-delimited unknown that scans as a message prints nested. */
+    {
+        /* a:1, then unknown field 60 (LEN) holding bytes 08 01 */
+        static const uint8_t nested[] = {0x08, 0x01, 0xE2,
+                                         0x03, 0x02, 0x08, 0x01};
+        static const char want[] = "a: 1\n60 {\n  1: 1\n}\n";
+
+        decoded = NULL;
+        CHECK_OK(pbw_decode(msg, nested, sizeof(nested), &decoded));
+        CHECK_OK(pbw_text_print(decoded, &out, &len));
+        CHECK(len == sizeof(want) - 1 && memcmp(out, want, len) == 0);
+        pbw_free(out);
+        out = NULL;
+        pbw_message_free(decoded);
+        decoded = NULL;
+    }
+    /* Every other unknown wire type prints on one line. */
+    {
+        /* a:1, unknown 61 fixed64 DEADBEEFCAFEBABE, 62 fixed32
+         * 0x12345678, group 63 holding x:1 */
+        static const uint8_t mixed[] = {
+            0x08,
+            0x01,
+            0xE9,
+            0x03,
+            0xBE,
+            0xBA,
+            0xFE,
+            0xCA,
+            0xEF,
+            0xBE,
+            0xAD,
+            0xDE,
+            0xF5,
+            0x03,
+            0x78,
+            0x56,
+            0x34,
+            0x12,
+            0xFB,
+            0x03,
+            0x08,
+            0x01,
+            0xFC,
+            0x03,
+        };
+        static const char want[] =
+            "a: 1\n61: 0xdeadbeefcafebabe\n62: 0x12345678\n"
+            "63 {\n  1: 1\n}\n";
+
+        decoded = NULL;
+        CHECK_OK(pbw_decode(msg, mixed, sizeof(mixed), &decoded));
+        CHECK_OK(pbw_text_print(decoded, &out, &len));
+        CHECK(len == sizeof(want) - 1 && memcmp(out, want, len) == 0);
+        pbw_free(out);
+        out = NULL;
+        pbw_message_free(decoded);
+        decoded = NULL;
+    }
+    /* Unknown groups nest: fixed widths, a nested group and a length
+     * prefix all scan as message content. */
+    {
+        static const uint8_t nested_grp[] = {
+            0xE2,
+            0x03,
+            0x13,
+            0xFB,
+            0x03,
+            0x11,
+            0x01,
+            0x02,
+            0x03,
+            0x04,
+            0x05,
+            0x06,
+            0x07,
+            0x08,
+            0x83,
+            0x04,
+            0x08,
+            0x01,
+            0x84,
+            0x04,
+            0xFC,
+            0x03,
+        };
+        static const char want[] =
+            "60 {\n  63 {\n    2: 0x0807060504030201\n"
+            "    64 {\n      1: 1\n    }\n  }\n}\n";
+
+        decoded = NULL;
+        CHECK_OK(pbw_decode(msg, nested_grp, sizeof(nested_grp),
+                            &decoded));
+        CHECK_OK(pbw_text_print(decoded, &out, &len));
+        CHECK(len == sizeof(want) - 1 && memcmp(out, want, len) == 0);
+        pbw_free(out);
+        out = NULL;
+        pbw_message_free(decoded);
+        decoded = NULL;
+    }
+    check_text_prefix_sweep(msg);
     pbw_schema_free(schema);
 }
 
 /* JSON mapping: printer goldens, accepted/rejected spellings, WKT forms. */
+/* Every strict prefix of a valid document parses safely: either it is
+ * itself valid, or it fails with no message out. This walks the
+ * incomplete-input branches without asserting verdicts. */
+static void
+check_json_prefix_sweep(const pbw_descriptor *msg)
+{
+    static const char *docs[] = {
+        "{\"i32\":-5,\"flag\":true,\"name\":\"x\","
+        "\"nums\":[1],\"kid\":{\"a\":1}}",
+        "{\"when\":\"1970-01-01T00:00:00.5Z\","
+        "\"howLong\":\"-3.5s\",\"mask\":\"fooBar\"}",
+        "{\"props\":{\"k\":1,\"n\":null},"
+        "\"payload\":{\"a\":2,\"@type\":\"type.googleapis.com/Sub\"},"
+        "\"count\":7}",
+        "{\"scores\":{\"b\":2,\"a\":1},"
+        "\"ecol\":{\"x\":\"C_ONE\"},\"imap\":{\"1\":2}}",
+    };
+    size_t i;
+
+    for (i = 0; i < sizeof(docs) / sizeof(docs[0]); i++) {
+        size_t full = strlen(docs[i]);
+        size_t k;
+
+        for (k = 0; k < full; k++) {
+            pbw_message *m = NULL;
+            pbw_status st = pbw_json_parse(msg, docs[i], k, &m);
+
+            CHECK(st == PBW_OK || m == NULL);
+            pbw_message_free(m);
+        }
+    }
+}
+
 static void
 test_json_format(void)
 {
@@ -2667,6 +3354,7 @@ test_json_format(void)
         {"i32", 1, PBW_TYPE_INT32, PBW_LABEL_OPTIONAL},
         {"i64", 2, PBW_TYPE_INT64, PBW_LABEL_OPTIONAL},
         {"u64", 3, PBW_TYPE_UINT64, PBW_LABEL_OPTIONAL},
+        {"u32", 31, PBW_TYPE_UINT32, PBW_LABEL_OPTIONAL},
         {"flag", 4, PBW_TYPE_BOOL, PBW_LABEL_OPTIONAL},
         {"name", 5, PBW_TYPE_STRING, PBW_LABEL_OPTIONAL},
         {"blob", 6, PBW_TYPE_BYTES, PBW_LABEL_OPTIONAL},
@@ -2684,6 +3372,20 @@ test_json_format(void)
         {"count", 18, PBW_TYPE_MESSAGE, PBW_LABEL_OPTIONAL},
         {"alt", 19, PBW_TYPE_INT32, PBW_LABEL_OPTIONAL},
         {"scores", 20, PBW_TYPE_MESSAGE, PBW_LABEL_REPEATED},
+        {"ecol", 21, PBW_TYPE_MESSAGE, PBW_LABEL_REPEATED},
+        {"imap", 22, PBW_TYPE_MESSAGE, PBW_LABEL_REPEATED},
+        {"emsg", 23, PBW_TYPE_MESSAGE, PBW_LABEL_REPEATED},
+        {"bmap", 24, PBW_TYPE_MESSAGE, PBW_LABEL_REPEATED},
+        {"lmap", 25, PBW_TYPE_MESSAGE, PBW_LABEL_REPEATED},
+        {"umap", 26, PBW_TYPE_MESSAGE, PBW_LABEL_REPEATED},
+        {"lv", 27, PBW_TYPE_MESSAGE, PBW_LABEL_OPTIONAL},
+        {"em", 28, PBW_TYPE_MESSAGE, PBW_LABEL_OPTIONAL},
+        {"vv", 29, PBW_TYPE_MESSAGE, PBW_LABEL_OPTIONAL},
+        {"Ab_c", 30, PBW_TYPE_STRING, PBW_LABEL_OPTIONAL},
+        {"vmap", 32, PBW_TYPE_MESSAGE, PBW_LABEL_REPEATED},
+        {"ekey", 33, PBW_TYPE_MESSAGE, PBW_LABEL_REPEATED},
+        {"vrep", 34, PBW_TYPE_MESSAGE, PBW_LABEL_REPEATED},
+        {"my_field", 35, PBW_TYPE_INT32, PBW_LABEL_OPTIONAL},
     };
     /* \u00e9 in, raw UTF-8 out: the printer passes valid text through. */
     static const char *input =
@@ -2717,6 +3419,7 @@ test_json_format(void)
     pbw_enum_add_value(null, "NULL_VALUE", 0);
     any = pbw_schema_add_message(schema, "google.protobuf.Any");
     wrap = pbw_schema_add_message(schema, "google.protobuf.Int32Value");
+    CHECK(pbw_schema_add_message(schema, "google.protobuf.Empty") != NULL);
     CHECK(ts != NULL && dur != NULL && fm != NULL && st != NULL &&
           any != NULL && wrap != NULL);
     {
@@ -2755,6 +3458,89 @@ test_json_format(void)
     CHECK(pbw_message_add_field(mapentry, "value", 2, PBW_TYPE_INT32,
                                 PBW_LABEL_OPTIONAL) != NULL);
     pbw_descriptor_set_map_entry(mapentry);
+    /* message-, enum- and int-keyed maps for the map parser paths */
+    {
+        pbw_descriptor *ee;
+        pbw_descriptor *ie;
+        pbw_descriptor *me;
+        pbw_descriptor *ke;
+
+        ee = pbw_schema_add_message(schema, "M.EcolEntry");
+        CHECK(ee != NULL);
+        CHECK(pbw_message_add_field(ee, "key", 1, PBW_TYPE_STRING,
+                                    PBW_LABEL_OPTIONAL) != NULL);
+        f = pbw_message_add_field(ee, "value", 2, PBW_TYPE_ENUM,
+                                  PBW_LABEL_OPTIONAL);
+        pbw_field_set_type_name(f, "C");
+        pbw_descriptor_set_map_entry(ee);
+        ie = pbw_schema_add_message(schema, "M.ImapEntry");
+        CHECK(ie != NULL);
+        CHECK(pbw_message_add_field(ie, "key", 1, PBW_TYPE_INT32,
+                                    PBW_LABEL_OPTIONAL) != NULL);
+        CHECK(pbw_message_add_field(ie, "value", 2, PBW_TYPE_INT32,
+                                    PBW_LABEL_OPTIONAL) != NULL);
+        pbw_descriptor_set_map_entry(ie);
+        me = pbw_schema_add_message(schema, "M.EmsgEntry");
+        CHECK(me != NULL);
+        CHECK(pbw_message_add_field(me, "key", 1, PBW_TYPE_STRING,
+                                    PBW_LABEL_OPTIONAL) != NULL);
+        f = pbw_message_add_field(me, "value", 2, PBW_TYPE_MESSAGE,
+                                  PBW_LABEL_OPTIONAL);
+        pbw_field_set_type_name(f, "Sub");
+        pbw_descriptor_set_map_entry(me);
+        /* enum keys print by name when known, by number otherwise */
+        ke = pbw_schema_add_message(schema, "M.EkeyEntry");
+        CHECK(ke != NULL);
+        f = pbw_message_add_field(ke, "key", 1, PBW_TYPE_ENUM,
+                                  PBW_LABEL_OPTIONAL);
+        pbw_field_set_type_name(f, "C");
+        CHECK(pbw_message_add_field(ke, "value", 2, PBW_TYPE_INT32,
+                                    PBW_LABEL_OPTIONAL) != NULL);
+        pbw_descriptor_set_map_entry(ke);
+    }
+    /* bool- and int64-keyed maps for the key printer paths */
+    {
+        pbw_descriptor *be;
+        pbw_descriptor *le;
+
+        be = pbw_schema_add_message(schema, "M.BmapEntry");
+        CHECK(be != NULL);
+        CHECK(pbw_message_add_field(be, "key", 1, PBW_TYPE_BOOL,
+                                    PBW_LABEL_OPTIONAL) != NULL);
+        CHECK(pbw_message_add_field(be, "value", 2, PBW_TYPE_INT32,
+                                    PBW_LABEL_OPTIONAL) != NULL);
+        pbw_descriptor_set_map_entry(be);
+        le = pbw_schema_add_message(schema, "M.LmapEntry");
+        CHECK(le != NULL);
+        CHECK(pbw_message_add_field(le, "key", 1, PBW_TYPE_INT64,
+                                    PBW_LABEL_OPTIONAL) != NULL);
+        CHECK(pbw_message_add_field(le, "value", 2, PBW_TYPE_INT32,
+                                    PBW_LABEL_OPTIONAL) != NULL);
+        pbw_descriptor_set_map_entry(le);
+        {
+            pbw_descriptor *ue;
+
+            ue = pbw_schema_add_message(schema, "M.UmapEntry");
+            CHECK(ue != NULL);
+            CHECK(pbw_message_add_field(ue, "key", 1, PBW_TYPE_UINT32,
+                                        PBW_LABEL_OPTIONAL) != NULL);
+            CHECK(pbw_message_add_field(ue, "value", 2, PBW_TYPE_INT32,
+                                        PBW_LABEL_OPTIONAL) != NULL);
+            pbw_descriptor_set_map_entry(ue);
+        }
+        {
+            pbw_descriptor *ve;
+
+            ve = pbw_schema_add_message(schema, "M.VmapEntry");
+            CHECK(ve != NULL);
+            CHECK(pbw_message_add_field(ve, "key", 1, PBW_TYPE_STRING,
+                                        PBW_LABEL_OPTIONAL) != NULL);
+            f = pbw_message_add_field(ve, "value", 2, PBW_TYPE_MESSAGE,
+                                      PBW_LABEL_OPTIONAL);
+            pbw_field_set_type_name(f, "google.protobuf.Value");
+            pbw_descriptor_set_map_entry(ve);
+        }
+    }
     f = pbw_message_add_field(val, "struct_value", 5, PBW_TYPE_MESSAGE,
                               PBW_LABEL_OPTIONAL);
     pbw_field_set_type_name(f, "google.protobuf.Struct");
@@ -2796,6 +3582,30 @@ test_json_format(void)
     pbw_field_set_oneof(f, 1);
     f = (pbw_field *)pbw_descriptor_find_field_name(msg, "scores");
     pbw_field_set_type_name(f, "M.ScoresEntry");
+    f = (pbw_field *)pbw_descriptor_find_field_name(msg, "ecol");
+    pbw_field_set_type_name(f, "M.EcolEntry");
+    f = (pbw_field *)pbw_descriptor_find_field_name(msg, "imap");
+    pbw_field_set_type_name(f, "M.ImapEntry");
+    f = (pbw_field *)pbw_descriptor_find_field_name(msg, "emsg");
+    pbw_field_set_type_name(f, "M.EmsgEntry");
+    f = (pbw_field *)pbw_descriptor_find_field_name(msg, "bmap");
+    pbw_field_set_type_name(f, "M.BmapEntry");
+    f = (pbw_field *)pbw_descriptor_find_field_name(msg, "lmap");
+    pbw_field_set_type_name(f, "M.LmapEntry");
+    f = (pbw_field *)pbw_descriptor_find_field_name(msg, "umap");
+    pbw_field_set_type_name(f, "M.UmapEntry");
+    f = (pbw_field *)pbw_descriptor_find_field_name(msg, "lv");
+    pbw_field_set_type_name(f, "google.protobuf.ListValue");
+    f = (pbw_field *)pbw_descriptor_find_field_name(msg, "em");
+    pbw_field_set_type_name(f, "google.protobuf.Empty");
+    f = (pbw_field *)pbw_descriptor_find_field_name(msg, "vv");
+    pbw_field_set_type_name(f, "google.protobuf.Value");
+    f = (pbw_field *)pbw_descriptor_find_field_name(msg, "vmap");
+    pbw_field_set_type_name(f, "M.VmapEntry");
+    f = (pbw_field *)pbw_descriptor_find_field_name(msg, "ekey");
+    pbw_field_set_type_name(f, "M.EkeyEntry");
+    f = (pbw_field *)pbw_descriptor_find_field_name(msg, "vrep");
+    pbw_field_set_type_name(f, "google.protobuf.Value");
     f = (pbw_field *)pbw_descriptor_find_field_name(msg, "name");
     pbw_field_set_oneof(f, 1);
     CHECK_OK(pbw_schema_link(schema));
@@ -2808,17 +3618,155 @@ test_json_format(void)
     out = NULL;
     pbw_message_free(decoded);
     decoded = NULL;
+    /* Every short escape prints back identically. */
+    {
+        static const char *esc_in =
+            "{\"name\":\"a\\\"b\\\\c\\bd\\fe\\ng\\rh\\ti\\u0001\"}";
+
+        CHECK_OK(pbw_json_parse(msg, esc_in, strlen(esc_in), &decoded));
+        CHECK_OK(pbw_json_print(decoded, &out, &len));
+        CHECK(len == strlen(esc_in) && memcmp(out, esc_in, len) == 0);
+        pbw_free(out);
+        out = NULL;
+        pbw_message_free(decoded);
+        decoded = NULL;
+        /* A 3-byte escape prints as raw UTF-8. */
+        {
+            static const char esc3_in[] = "{\"name\":\"\\u4e2d\"}";
+            static const char esc3_want[] = "{\"name\":\"\xe4\xb8\xad\"}";
+
+            CHECK_OK(pbw_json_parse(msg, esc3_in, strlen(esc3_in),
+                                    &decoded));
+            CHECK_OK(pbw_json_print(decoded, &out, &len));
+            CHECK(len == sizeof(esc3_want) - 1 &&
+                  memcmp(out, esc3_want, len) == 0);
+            pbw_free(out);
+            out = NULL;
+            pbw_message_free(decoded);
+            decoded = NULL;
+        }
+    }
+    /* Binary input may carry bytes the text grammar forbids: `<` and `>`
+     * print as \u escapes, and invalid UTF-8 fails the print. */
+    {
+        /* name(5) = "a<b" */
+        static const uint8_t lt[] = {0x2A, 0x03, 0x61, 0x3C, 0x62};
+        static const char want[] = "{\"name\":\"a\\u003cb\"}";
+        /* name(5) = "a>b" */
+        static const uint8_t gt[] = {0x2A, 0x03, 0x61, 0x3E, 0x62};
+        static const char want_gt[] = "{\"name\":\"a\\u003eb\"}";
+        /* name(5) = single 0xFF byte */
+        static const uint8_t badutf8[] = {0x2A, 0x01, 0xFF};
+
+        decoded = NULL;
+        CHECK_OK(pbw_decode(msg, lt, sizeof(lt), &decoded));
+        CHECK_OK(pbw_json_print(decoded, &out, &len));
+        CHECK(len == sizeof(want) - 1 &&
+              memcmp(out, want, len) == 0);
+        pbw_free(out);
+        out = NULL;
+        pbw_message_free(decoded);
+        decoded = NULL;
+        decoded = NULL;
+        CHECK_OK(pbw_decode(msg, gt, sizeof(gt), &decoded));
+        CHECK_OK(pbw_json_print(decoded, &out, &len));
+        CHECK(len == sizeof(want_gt) - 1 &&
+              memcmp(out, want_gt, len) == 0);
+        pbw_free(out);
+        out = NULL;
+        pbw_message_free(decoded);
+        decoded = NULL;
+        CHECK_OK(pbw_decode(msg, badutf8, sizeof(badutf8), &decoded));
+        CHECK_STATUS(PBW_ERR_INVALID,
+                     pbw_json_print(decoded, &out, &len));
+        CHECK(out == NULL);
+        pbw_message_free(decoded);
+        decoded = NULL;
+    }
+    /* Astral characters print as raw UTF-8; malformed byte sequences
+     * fail the print instead of emitting garbage. */
+    {
+        /* name(5) = U+1F600, then truncated/bad/overlong forms */
+        static const uint8_t astral[] = {0x2A, 0x04, 0xF0,
+                                         0x9F, 0x98, 0x80};
+        static const char astral_want[] = "{\"name\":\"\xF0\x9F\x98\x80\"}";
+        static const uint8_t trunc3[] = {0x2A, 0x02, 0xE4, 0xB8};
+        static const uint8_t badcont[] = {0x2A, 0x02, 0xE4, 0x28};
+        static const uint8_t overlong[] = {0x2A, 0x02, 0xC0, 0xAF};
+        static const uint8_t surrogate[] = {0x2A, 0x03, 0xED,
+                                            0xA0, 0x80};
+        static const uint8_t toobig[] = {0x2A, 0x04, 0xF4,
+                                         0x90, 0x80, 0x80};
+        static const struct {
+            const uint8_t *bytes;
+            size_t len;
+        } bad[] = {{trunc3, sizeof(trunc3)},
+                   {badcont, sizeof(badcont)},
+                   {overlong, sizeof(overlong)},
+                   {surrogate, sizeof(surrogate)},
+                   {toobig, sizeof(toobig)}};
+        size_t k;
+
+        decoded = NULL;
+        CHECK_OK(pbw_decode(msg, astral, sizeof(astral), &decoded));
+        CHECK_OK(pbw_json_print(decoded, &out, &len));
+        CHECK(len == sizeof(astral_want) - 1 &&
+              memcmp(out, astral_want, len) == 0);
+        pbw_free(out);
+        out = NULL;
+        pbw_message_free(decoded);
+        decoded = NULL;
+        for (k = 0; k < sizeof(bad) / sizeof(bad[0]); k++) {
+            decoded = NULL;
+            CHECK_OK(
+                pbw_decode(msg, bad[k].bytes, bad[k].len, &decoded));
+            CHECK_STATUS(PBW_ERR_INVALID,
+                         pbw_json_print(decoded, &out, &len));
+            CHECK(out == NULL);
+            pbw_message_free(decoded);
+            decoded = NULL;
+        }
+    }
+    /* Raw multibyte UTF-8 in keys peeks (then fails as unknown). */
+    {
+        /* {"<U+4E2D>":1} and {"<U+1F600>":1} built from byte escapes
+         * so the source stays ASCII */
+        static const char k3[] = "{\"\xe4\xb8\xad\":1}";
+        static const char k4[] = "{\"\xf0\x9f\x98\x80\":1}";
+
+        CHECK_STATUS(PBW_ERR_INVALID,
+                     pbw_json_parse(msg, k3, sizeof(k3) - 1, &decoded));
+        CHECK(decoded == NULL);
+        CHECK_STATUS(PBW_ERR_INVALID,
+                     pbw_json_parse(msg, k4, sizeof(k4) - 1, &decoded));
+        CHECK(decoded == NULL);
+    }
+    /* A proto name starting uppercase prints its json name. */
+    {
+        static const char in[] = "{\"Ab_c\":\"v\"}";
+        static const char want[] = "{\"AbC\":\"v\"}";
+
+        CHECK_OK(pbw_json_parse(msg, in, strlen(in), &decoded));
+        CHECK_OK(pbw_json_print(decoded, &out, &len));
+        CHECK(len == strlen(want) && memcmp(out, want, len) == 0);
+        pbw_free(out);
+        out = NULL;
+        pbw_message_free(decoded);
+        decoded = NULL;
+    }
     /* Accepted spellings. */
     {
         static const char *ok[] = {
             "{}",
             "{\"i32\":\"5\"}",
+            "{\"u32\":4294967295}",
             "{\"i32\":\"5.0\"}",
             "{\"i32\":\"0x10\"}",
             "{\"i32\":5.0}",
             "{\"i32\":1e3}",
             "{\"flag\":\"true\"}",
             "{\"flag\":\"YES\"}",
+            "{\"flag\":null}",
             "{\"f64\":\"Infinity\"}",
             "{\"f64\":\"-Infinity\"}",
             "{\"color\":1}",
@@ -2826,23 +3774,51 @@ test_json_format(void)
             "{\"name\":null}",
             "{\"kid\":null}",
             "{\"nums\":null}",
+            "{\"nums\":[]}",
+            "{\"nums\":[[]]}",
+            "{\"lv\":[]}",
+            "{\"emsg\":{}}",
+            "{\"color\":99}",
+            "{\"myField\":7}",
+            "{\"my_field\":7}",
             "{\"nums\":[1,null,2]}",
             "{\"nums\":[[1,2]]}",
+            "{\"nums\":[1,null]}",
+            "{\"tags\":[null]}",
             "{'i32':1}",
             "{i32:1}",
             "{\"i32\":1,}",
             "{\"when\":\"1970-01-01T00:00:00Z\"}",
+            "{\"when\":\"1970-01-01T00:00:00.5Z\"}",
+            "{\"when\":\"1970-01-01T08:00:00+08:00\"}",
+            "{\"when\":null}",
             "{\"when\":{\"seconds\":\"5\"}}",
+            "{\"\\u0069\\u0033\\u0032\":5}",
+            "{\"\\u0063\\u006F\\u006C\\u006F\\u0072\":\"C_RED\"}",
+            "{\"name\":\"\\ud83d\\ude00\"}",
+            "{\"name\":\"\\ud83D\\uDE00\"}",
             "{\"howLong\":\"-3.5s\"}",
             "{\"mask\":\"fooBar,baz\"}",
             "{\"mask\":\"\"}",
             "{\"props\":{\"k\":1}}",
+            "{\"props\":{\"b\":false}}",
+            "{\"props\":{}}",
+            "{\"props\":null}",
+            "{\"props\":{\"l\":[1,]}}",
+            "{\"props\":{\"k\":1,}}",
             "{\"payload\":{\"a\":2,\"@type\":\"type.googleapis.com/Sub\"}}",
             "{\"payload\":{}}",
             "{\"count\":7}",
             "{\"count\":null}",
+            "{\"flag\":false}",
             "{\"scores\":{\"a\":1}}",
             "{\"scores\":{}}",
+            "{\"blob\":\"AP8-\"}",
+            "{\"blob\":\"AP8_\"}",
+            "{\"blob\":\"AP8\"}",
+            "{\"blob\":\"AQI=\"}",
+            "{\"blob\":\"AQ==\"}",
+            "{\"blob\":\"\"}",
         };
         size_t i;
 
@@ -2858,7 +3834,13 @@ test_json_format(void)
             "",
             " ",
             "{",
+            "123",
+            "[1]",
+            "\"x\"",
+            "null",
             "{\"i32\":}",
+            "{\"i32\":123null}",
+            "{\"i32\":1true}",
             "{\"i32\":01}",
             "{\"i32\":1.}",
             "{\"i32\":+1}",
@@ -2872,9 +3854,29 @@ test_json_format(void)
             "{\"f32\":1e400}",
             "{\"flag\":1}",
             "{\"flag\":\"2\"}",
+            "{\"flag\":1.5}",
+            "{\"flag\":\"x\"}",
+            "{\"f32\":\"abc\"}",
+            "{\"i32\":\"\"}",
+            "{\"howLong\":\"3s x\"}",
+            "{\"howLong\":\"s\"}",
+            "{\"howLong\":\"--3s\"}",
             "{\"name\":5}",
+            "{\"name\":\"\xff\"}",
+            "{\"name\":\"\\u12\"}",
+            "{\"name\":\"\\uDC00\"}",
+            "{\"i32\":1e}",
+            "{\"i32\":\"+\"}",
+            "{\"flag\":\"12345678\"}",
+            "{\"flag\":falseX}",
+            "{\"f32\":1e40}",
             "{\"blob\":\"!\"}",
+            "{\"blob\":\"AP8!\"}",
             "{\"blob\":\"A\"}",
+            "{\"blob\":\"A\"}",
+            "{\"blob\":\"A===\"}",
+            "{\"blob\":\"!!\"}",
+            "{\"blob\":\"!!!\"}",
             "{\"color\":\"BOGUS\"}",
             "{\"color\":9999999999}",
             "{\"nums\":1}",
@@ -2883,12 +3885,94 @@ test_json_format(void)
             "{\"bogus\":1}",
             "{\"name\":\"x\",\"alt\":1}",
             "{\"when\":\"10000-01-01T00:00:00Z\"}",
+            "{\"when\":\"1970-01-01T00:00:00+0800\"}",
+            "{\"when\":\"1970-01-01\"}",
+            "{\"when\":\"\"}",
             "{\"when\":\"1970-01-01T00:00:01+0800\"}",
             "{\"howLong\":\"3\"}",
             "{\"howLong\":\"3.0000000000s\"}",
             "{\"payload\":{\"a\":1}}",
+            "{\"payload\":{\"value\":{}}}",
+            "{\"payload\":{\"@type\":\"type.googleapis.com/google.protobuf.DoubleValue\",\"x\":1}}",
+            "{\"props\":1}",
+            "{\"props\":[]}",
+            "{\"props\":{\"k\":}}",
+            "{\"props\":{\"k\":undefined}}",
+            "{\"props\":{\"k\":1,\"k\":2}}",
+            "{\"kid\":{\"a\":}}",
+            "{\"scores\":1}",
+            "{\"scores\":{\"a\":1,\"b\":}}",
+            "{\"emsg\":{\"k\":{\"a\":}}}",
+            "{\"payload\":1}",
+            "{\"payload\":[]}",
+            "{\"payload\":{\"@type\":1}}",
+            "{\"payload\":{\"@type\":\"type.googleapis.com/\"}}",
+            "{\"payload\":{\"x\"}}",
+            "{\"payload\":{\"@type\":\"type.googleapis.com/Sub\",\"@type\":\"x\"}}",
+            "{\"payload\":{\"@type\":\"type.googleapis.com/Sub\",\"x\":}}",
+            "{\"payload\":{1:2}}",
+            "{\"payload\":{\"@type\"}}",
+            "{\"payload\":{\"@type\":\"foo\"}}",
+            "{\"payload\":{\"@type\":\"\"}}",
+            "{\"payload\":{1:2}}",
+            "{\"payload\":{\"@type\":\"type.googleapis.com/Sub\",\"value\":{\"a\":}}}",
+            "{\"payload\":{\"@type\":\"type.googleapis.com/Sub\",\"value\":1}}",
+            "{\"kid\":[1]}",
+            "{\"kid\":\"x\"}",
+            "{\"color\":{}}",
+            "{\"color\":{}}",
+            "{\"when\":123}",
+            "{\"howLong\":true}",
+            "{\"mask\":1}",
+            "{\"when\":\"1970-01-01T00:00:00+08:0\"}",
+            "{\"when\":\"1970-011-01T00:00:00Z\"}",
+            "{\"when\":\"1970-01-011T00:00:00Z\"}",
+            "{\"when\":\"1970-01-01T000:00:00Z\"}",
+            "{\"when\":\"1970-01-01T00:000:00Z\"}",
+            "{\"when\":\"1970-01-01T00:00:000Z\"}",
+            "{\"when\":\"1970/01/01T00:00:00Z\"}",
+            "{\"when\":\"1970-01-01T00:00:00\"}",
+            "{\"when\":\"1970-01-01T00:00:00.5xZ\"}",
+            "{\"when\":\"1970-01-01T00:00:00.1234567890Z\"}",
+            "{\"when\":\"1970-01-01T00:00:00+8:00\"}",
+            "{\"when\":\"1970-01-01T0:00:00Z\"}",
+            "{\"when\":\"1970-01-01T00:00:00.5+08\"}",
+            "{\"when\":\"1970-01-01T00:00:00.5+08:0X\"}",
+            "{\"when\":\"1970-01-01T00:00:006\"}",
+            "{\"when\":123}",
+            "{\"when\":true}",
+            "{\"howLong\":true}",
+            "{\"mask\":1}",
+            "{\"color\":{}}",
+            "{\"props\":{\"k\":undefined}}",
+            "{\"props\":{\"k\":1,\"k2\":}}",
+            "{\"props\":{\"k\":1,\"k\":}}",
+            "{\"props\":\"x\"}",
+            "{\"props\":{1:2}}",
+            "{\"props\":{\"k\"}}",
+            "{\"props\":{\"l\":}}",
+            "{\"props\":{\"l\":[tru]}}",
+            "{\"scores\":{\"a\":1}",
+            "{\"lv\":1}",
+            "{\"lv\":[1}",
+            "{\"lv\":nul}",
+            "{\"subs\":[null]}",
+            "{\"lv\":[1,tru]}",
+            "{\"em\":1}",
             "{\"payload\":{\"a\":1,\"@type\":\"type.googleapis.com/Nope\"}}",
             "{\"name\":\"\\ud800\"}",
+            "{\"name\":\"\\ude00\"}",
+            "{\"name\":\"\\ud83d\"}",
+            "{\"name\":\"\\ud83dx\"}",
+            "{\"name\":\"\\u00\"}",
+            "{\"name\":\"\\uzzzz\"}",
+            "{\"name\":\"\\ud83d\\ude0\"}",
+            "{\"props\":{\"k\":\"\\xff\"}}",
+            "{\"\\u00\":1}",
+            "{\"\\ud800\":1}",
+            "{\"a\\/b\":1}",
+            "{\"a\\'b\":1}",
+            "{\"true\":1}",
         };
         size_t i;
 
@@ -2897,6 +3981,386 @@ test_json_format(void)
                          pbw_json_parse(msg, bad[i], strlen(bad[i]),
                                         &decoded));
             CHECK(decoded == NULL);
+        }
+        /* Truncated escapes fail instead of reading past the end. */
+        CHECK_STATUS(PBW_ERR_INVALID,
+                     pbw_json_parse(msg, "{\"name\":\"\\u12", 12,
+                                    &decoded));
+        CHECK(decoded == NULL);
+    }
+    /* Deeply nested structs stop at the depth cap. */
+    {
+        char deep[4096];
+        size_t at = 0;
+        int i;
+        const char head[] = "{\"props\":{\"k\":";
+
+        memcpy(deep + at, head, sizeof(head) - 1);
+        at += sizeof(head) - 1;
+        for (i = 0; i < 300; i++) {
+            memcpy(deep + at, "{\"k\":", 5);
+            at += 5;
+        }
+        deep[at++] = '1';
+        for (i = 0; i < 302; i++) {
+            deep[at++] = '}';
+        }
+        deep[at] = '\0';
+        CHECK_STATUS(PBW_ERR_LIMIT,
+                     pbw_json_parse(msg, deep, at, &decoded));
+        CHECK(decoded == NULL);
+    }
+    /* Wrappers print their bare value, or nothing when null. */
+    {
+        static const char *in[] = {
+            "{\"count\":7}",
+            "{\"count\":null}",
+        };
+        static const char *want[] = {
+            "{\"count\":7}",
+            "{}",
+        };
+        size_t i;
+
+        for (i = 0; i < sizeof(in) / sizeof(in[0]); i++) {
+            CHECK_OK(
+                pbw_json_parse(msg, in[i], strlen(in[i]), &decoded));
+            CHECK_OK(pbw_json_print(decoded, &out, &len));
+            CHECK(len == strlen(want[i]) &&
+                  memcmp(out, want[i], len) == 0);
+            pbw_free(out);
+            out = NULL;
+            pbw_message_free(decoded);
+            decoded = NULL;
+        }
+        /* Enum keys (unrepresentable in .proto, buildable by hand) print
+         * by name when known, by number otherwise. */
+        {
+            const pbw_descriptor *ke = desc(schema, "M.EkeyEntry");
+            const pbw_field *kf;
+            pbw_message *m2 = NULL;
+            pbw_message *e1 = NULL;
+            pbw_message *e2 = NULL;
+            pbw_value *v = NULL;
+
+            CHECK(ke != NULL);
+            kf = pbw_descriptor_find_field(msg, 33);
+            CHECK(kf != NULL);
+            (void)kf;
+            m2 = pbw_message_new(msg);
+            CHECK(m2 != NULL);
+            e1 = pbw_message_new(ke);
+            e2 = pbw_message_new(ke);
+            CHECK(e1 != NULL && e2 != NULL);
+            if (m2 != NULL && e1 != NULL && e2 != NULL) {
+                CHECK_OK(pbw_message_set(e1, 1,
+                                         pbw_value_new_int(1)));
+                CHECK_OK(pbw_message_set(e1, 2,
+                                         pbw_value_new_int(10)));
+                CHECK_OK(pbw_message_set(e2, 1,
+                                         pbw_value_new_int(5)));
+                CHECK_OK(pbw_message_set(e2, 2,
+                                         pbw_value_new_int(20)));
+                v = pbw_value_new_message(e1);
+                e1 = NULL;
+                CHECK_OK(pbw_message_set(m2, 33, v));
+                v = pbw_value_new_message(e2);
+                e2 = NULL;
+                CHECK_OK(pbw_message_set(m2, 33, v));
+                CHECK_OK(pbw_json_print(m2, &out, &len));
+                CHECK(len == strlen("{\"ekey\":{\"C_RED\":10,\"5\":20}}") &&
+                      memcmp(out, "{\"ekey\":{\"C_RED\":10,\"5\":20}}",
+                             len) == 0);
+                pbw_free(out);
+                out = NULL;
+                pbw_message_free(m2);
+            } else {
+                pbw_message_free(e1);
+                pbw_message_free(e2);
+                pbw_message_free(m2);
+            }
+        }
+    }
+    /* 32-bit unsigned integers print without sign extension. */
+    {
+        static const char in[] = "{\"u32\":4294967295}";
+
+        CHECK_OK(pbw_json_parse(msg, in, strlen(in), &decoded));
+        CHECK_OK(pbw_json_print(decoded, &out, &len));
+        CHECK(len == strlen(in) && memcmp(out, in, len) == 0);
+        pbw_free(out);
+        out = NULL;
+        pbw_message_free(decoded);
+        decoded = NULL;
+    }
+    /* Trailing commas and empty objects are legacy-valid; they print in
+     * canonical form. */
+    {
+        static const char *in[] = {
+            "{\"props\":{\"l\":[1,]}}",
+            "{\"lv\":{}}",
+            "{\"props\":{\"k\":1,}}",
+            "{\"scores\":{\"a\":1,}}",
+        };
+        static const char *want[] = {
+            "{\"props\":{\"l\":[1]}}",
+            "{\"lv\":[]}",
+            "{\"props\":{\"k\":1}}",
+            "{\"scores\":{\"a\":1}}",
+        };
+        size_t i;
+
+        for (i = 0; i < sizeof(in) / sizeof(in[0]); i++) {
+            CHECK_OK(
+                pbw_json_parse(msg, in[i], strlen(in[i]), &decoded));
+            CHECK_OK(pbw_json_print(decoded, &out, &len));
+            CHECK(len == strlen(want[i]) &&
+                  memcmp(out, want[i], len) == 0);
+            pbw_free(out);
+            out = NULL;
+            pbw_message_free(decoded);
+            decoded = NULL;
+        }
+    }
+    /* Base64 prints canonically regardless of input alphabet. */
+    {
+        static const char *in[] = {
+            "{\"blob\":\"AP8-\"}",
+            "{\"blob\":\"AP8_\"}",
+            "{\"blob\":\"AQI=\"}",
+            "{\"blob\":\"AQ==\"}",
+            "{\"blob\":\"\"}",
+        };
+        static const char *want[] = {
+            "{\"blob\":\"AP8+\"}",
+            "{\"blob\":\"AP8/\"}",
+            "{\"blob\":\"AQI=\"}",
+            "{\"blob\":\"AQ==\"}",
+            "{\"blob\":\"\"}",
+        };
+        size_t i;
+
+        for (i = 0; i < sizeof(in) / sizeof(in[0]); i++) {
+            CHECK_OK(
+                pbw_json_parse(msg, in[i], strlen(in[i]), &decoded));
+            CHECK_OK(pbw_json_print(decoded, &out, &len));
+            CHECK(len == strlen(want[i]) &&
+                  memcmp(out, want[i], len) == 0);
+            pbw_free(out);
+            out = NULL;
+            pbw_message_free(decoded);
+            decoded = NULL;
+        }
+    }
+    /* An overlong type URL fails instead of truncating. */
+    {
+        char big[512];
+        size_t at = 0;
+        const char head[] = "{\"payload\":{\"@type\":\"type.googleapis.com/";
+        size_t i;
+
+        memcpy(big + at, head, sizeof(head) - 1);
+        at += sizeof(head) - 1;
+        for (i = 0; i < 300; i++) {
+            big[at++] = 'A';
+        }
+        memcpy(big + at, "\"}}", 3);
+        at += 3;
+        CHECK(at < sizeof(big));
+        CHECK_STATUS(PBW_ERR_INVALID,
+                     pbw_json_parse(msg, big, at, &decoded));
+        CHECK(decoded == NULL);
+    }
+    /* Trailing commas in Any objects are rejected. */
+    {
+        static const char in[] = "{\"payload\":{\"a\":1,}}";
+
+        decoded = NULL;
+        CHECK_STATUS(PBW_ERR_INVALID,
+                     pbw_json_parse(msg, in, strlen(in), &decoded));
+        CHECK(decoded == NULL);
+    }
+    /* An unresolved Any keeps its bytes; printing shows an empty object.
+     * Trailing commas are tolerated like elsewhere. */
+    {
+        pbw_json_parse_options opts;
+        static const char want[] = "{\"payload\":{}}";
+        static const char trailing[] =
+            "{\"payload\":{\"@type\":"
+            "\"type.googleapis.com/Sub\",\"a\":1,}}";
+
+        opts.ignore_unknown_fields = 1;
+        decoded = NULL;
+        CHECK_OK(pbw_json_parse_opts(
+            msg,
+            "{\"payload\":{\"@type\":\"type.googleapis.com/Nope\"}}",
+            strlen("{\"payload\":{\"@type\":\"type.googleapis.com/Nope\"}}"),
+            &opts, &decoded));
+        CHECK_OK(pbw_json_print(decoded, &out, &len));
+        CHECK(len == sizeof(want) - 1 &&
+              memcmp(out, want, len) == 0);
+        pbw_free(out);
+        out = NULL;
+        pbw_message_free(decoded);
+        decoded = NULL;
+        decoded = NULL;
+        CHECK_OK(pbw_json_parse_opts(msg, trailing, strlen(trailing),
+                                     &opts, &decoded));
+        CHECK_OK(pbw_json_print(decoded, &out, &len));
+        {
+            /* trailing comma dropped, value form preserved */
+            static const char want2[] =
+                "{\"payload\":{\"@type\":"
+                "\"type.googleapis.com/Sub\",\"a\":1}}";
+
+            CHECK(len == sizeof(want2) - 1 &&
+                  memcmp(out, want2, len) == 0);
+        }
+        pbw_free(out);
+        out = NULL;
+        pbw_message_free(decoded);
+        decoded = NULL;
+    }
+    /* value bytes without a type URL cannot print */
+    {
+        pbw_message *sub;
+
+        decoded = pbw_message_new(msg);
+        CHECK(decoded != NULL);
+        sub = pbw_message_set_message(decoded, 17);
+        CHECK(sub != NULL);
+        CHECK_OK(pbw_message_set(sub, 2,
+                                 pbw_value_new_bytes("x", 1)));
+        CHECK_STATUS(PBW_ERR_INVALID,
+                     pbw_json_print(decoded, &out, &len));
+        CHECK(out == NULL);
+        /* a read-only context tree rejects unknown bytes and stores */
+        {
+            pbw_ctx *ctx = pbw_ctx_new();
+            pbw_message *dctx = NULL;
+            uint8_t *dwire = NULL;
+            size_t dwire_len = 0;
+
+            CHECK(ctx != NULL);
+            CHECK_OK(pbw_encode(decoded, &dwire, &dwire_len));
+            CHECK_OK(
+                pbw_decode_ctx(ctx, msg, dwire, dwire_len, &dctx));
+            CHECK(dctx != NULL);
+            CHECK_STATUS(PBW_ERR_INVALID,
+                         pbw_message_add_unknown_bytes(dctx, "x", 1));
+            CHECK_STATUS(PBW_ERR_INVALID,
+                         pbw_message_set(dctx, 1,
+                                         pbw_value_new_int(1)));
+            pbw_ctx_free(ctx);
+            pbw_free(dwire);
+        }
+        pbw_message_free(decoded);
+        decoded = NULL;
+    }
+    /* A partial google.protobuf.Any (missing value field) fails cleanly. */
+    {
+        pbw_schema *s2 = pbw_schema_new();
+        pbw_descriptor *anymsg;
+        pbw_descriptor *holder;
+        pbw_field *f;
+
+        CHECK(s2 != NULL);
+        anymsg = pbw_schema_add_message(s2, "google.protobuf.Any");
+        CHECK(anymsg != NULL);
+        CHECK(pbw_message_add_field(anymsg, "type_url", 1,
+                                    PBW_TYPE_STRING,
+                                    PBW_LABEL_OPTIONAL) != NULL);
+        holder = pbw_schema_add_message(s2, "H");
+        CHECK(holder != NULL);
+        f = pbw_message_add_field(holder, "payload", 1,
+                                  PBW_TYPE_MESSAGE, PBW_LABEL_OPTIONAL);
+        CHECK(f != NULL);
+        pbw_field_set_type_name(f, "google.protobuf.Any");
+        CHECK_OK(pbw_schema_link(s2));
+        decoded = NULL;
+        CHECK_STATUS(PBW_ERR_INVALID,
+                     pbw_text_parse(holder,
+                                    "payload [type.googleapis.com/H] {}",
+                                    38, &decoded));
+        CHECK(decoded == NULL);
+        /* Bad percent-escapes in the type URL fail. */
+        CHECK_STATUS(PBW_ERR_INVALID,
+                     pbw_text_parse(holder,
+                                    "payload [type.googleapis.com/%ZZ] {}",
+                                    36, &decoded));
+        CHECK(decoded == NULL);
+        CHECK_STATUS(PBW_ERR_INVALID,
+                     pbw_text_parse(holder,
+                                    "payload [type.googleapis.com/%4] {}",
+                                    35, &decoded));
+        CHECK(decoded == NULL);
+        CHECK_STATUS(PBW_ERR_INVALID,
+                     pbw_json_parse(holder, "{\"payload\":{}}", 15,
+                                    &decoded));
+        CHECK(decoded == NULL);
+        pbw_schema_free(s2);
+    }
+    /* An empty Value in a map prints as an empty object. A truly empty
+     * Value (built programmatically, no fields set) is skipped. */
+    {
+        static const char in[] = "{\"vmap\":{\"a\":1,\"b\":{}}}";
+        static const char want[] = "{\"vmap\":{\"a\":1,\"b\":{}}}";
+        pbw_message *slot;
+
+        decoded = NULL;
+        CHECK_OK(pbw_json_parse(msg, in, strlen(in), &decoded));
+        CHECK_OK(pbw_json_print(decoded, &out, &len));
+        CHECK(len == strlen(want) && memcmp(out, want, len) == 0);
+        pbw_free(out);
+        out = NULL;
+        slot = pbw_message_set_message(decoded, 32);
+        CHECK(slot != NULL);
+        CHECK_OK(pbw_message_set(slot, 1, pbw_value_new_string("z")));
+        {
+            pbw_message *empty = pbw_message_new(
+                pbw_schema_find(schema, "google.protobuf.Value"));
+
+            CHECK(empty != NULL);
+            CHECK_OK(pbw_message_set(slot, 2,
+                                     pbw_value_new_message(empty)));
+        }
+        CHECK_OK(pbw_json_print(decoded, &out, &len));
+        CHECK(strstr(out, "\"z\":") == NULL);
+        CHECK(strstr(out, "\"a\":1") != NULL);
+        pbw_free(out);
+        out = NULL;
+        pbw_message_free(decoded);
+        decoded = NULL;
+        /* Empty Values in a repeated field are skipped when printing. */
+        {
+            pbw_message *m2 = pbw_message_new(msg);
+            pbw_message *one = NULL;
+            pbw_message *two = NULL;
+
+            CHECK(m2 != NULL);
+            one = pbw_message_new(
+                pbw_schema_find(schema, "google.protobuf.Value"));
+            two = pbw_message_new(
+                pbw_schema_find(schema, "google.protobuf.Value"));
+            CHECK(one != NULL && two != NULL);
+            if (m2 != NULL && one != NULL && two != NULL) {
+                CHECK_OK(pbw_message_set(one, 3,
+                                         pbw_value_new_string("x")));
+                CHECK_OK(pbw_message_set(m2, 34,
+                                         pbw_value_new_message(one)));
+                CHECK_OK(pbw_message_set(m2, 34,
+                                         pbw_value_new_message(two)));
+                CHECK_OK(pbw_json_print(m2, &out, &len));
+                CHECK(len == strlen("{\"vrep\":[\"x\"]}") &&
+                      memcmp(out, "{\"vrep\":[\"x\"]}", len) == 0);
+                pbw_free(out);
+                out = NULL;
+                pbw_message_free(m2);
+            } else {
+                pbw_message_free(one);
+                pbw_message_free(two);
+                pbw_message_free(m2);
+            }
         }
     }
     /* Unknown fields fail unless ignored; unknown Any types too. */
@@ -2919,6 +4383,141 @@ test_json_format(void)
         pbw_message_free(decoded);
         decoded = NULL;
     }
+    /* Durations and field masks print their canonical forms. */
+    {
+        static const char *in[] = {
+            "{\"howLong\":\"7s\"}",
+            "{\"howLong\":\"-3.5s\"}",
+            "{\"howLong\":\"0.000000001s\"}",
+            "{\"howLong\":null}",
+            "{\"mask\":\"fooBar,baz\"}",
+            "{\"mask\":\"\"}",
+            "{\"mask\":\"foo_bar\"}",
+            "{\"mask\":\"foo_-bar\"}",
+        };
+        /* millis precision is kept, not trimmed to one digit */
+        static const char *want[] = {
+            "{\"howLong\":\"7s\"}",
+            "{\"howLong\":\"-3.500s\"}",
+            "{\"howLong\":\"0.000000001s\"}",
+            "{}",
+            "{\"mask\":\"fooBar,baz\"}",
+            "{\"mask\":\"\"}",
+            "{\"mask\":\"fooBar\"}",
+            "{\"mask\":\"foo_-bar\"}",
+        };
+        size_t i;
+
+        for (i = 0; i < sizeof(in) / sizeof(in[0]); i++) {
+            CHECK_OK(
+                pbw_json_parse(msg, in[i], strlen(in[i]), &decoded));
+            CHECK_OK(pbw_json_print(decoded, &out, &len));
+            CHECK(len == strlen(want[i]) &&
+                  memcmp(out, want[i], len) == 0);
+            pbw_free(out);
+            out = NULL;
+            pbw_message_free(decoded);
+            decoded = NULL;
+        }
+    }
+    /* Ignored unknowns skip nested objects, arrays and strings. */
+    {
+        pbw_json_parse_options opts;
+
+        opts.ignore_unknown_fields = 1;
+        CHECK_OK(pbw_json_parse_opts(
+            msg,
+            "{\"u\":{\"a\":[1,{\"b\":2}],\"s\":\"x\"},"
+            "\"arr\":[[1]],\"i32\":1}",
+            strlen("{\"u\":{\"a\":[1,{\"b\":2}],\"s\":\"x\"},"
+                   "\"arr\":[[1]],\"i32\":1}"),
+            &opts, &decoded));
+        CHECK_OK(pbw_json_print(decoded, &out, &len));
+        CHECK(len == 9 && memcmp(out, "{\"i32\":1}", len) == 0);
+        pbw_free(out);
+        out = NULL;
+        pbw_message_free(decoded);
+        decoded = NULL;
+        /* truncated and mistyped unknowns still fail, even ignored */
+        {
+            static const char *badskip[] = {
+                "{\"u\":{\"a\":1",
+                "{\"u\":tru}",
+                "{\"u\":[1}",
+                "{\"u\":\"abc",
+                "{\"u\":12x}",
+                "{\"u\":nul}",
+                "{\"u\":]}",
+                "{\"u\":}",
+                "{\"u\":fals}",
+                "{\"u\":{\"a\":1,",
+                "{\"u\":[1,tru]",
+                "{\"u\":[[1]}",
+            };
+            size_t k;
+
+            for (k = 0; k < sizeof(badskip) / sizeof(badskip[0]); k++) {
+                CHECK_STATUS(PBW_ERR_INVALID,
+                             pbw_json_parse_opts(msg, badskip[k],
+                                                 strlen(badskip[k]),
+                                                 &opts, &decoded));
+                CHECK(decoded == NULL);
+            }
+        }
+        /* empty arrays and objects skip cleanly, as do false and null */
+        {
+            static const char skips[] =
+                "{\"u\":[],\"v\":{},\"w\":false,\"x\":null,\"i32\":2}";
+
+            CHECK_OK(pbw_json_parse_opts(msg, skips, strlen(skips),
+                                         &opts, &decoded));
+            CHECK_OK(pbw_json_print(decoded, &out, &len));
+            CHECK(len == 9 && memcmp(out, "{\"i32\":2}", len) == 0);
+            pbw_free(out);
+            out = NULL;
+            pbw_message_free(decoded);
+            decoded = NULL;
+        }
+        /* deeply nested unknowns stop at the depth cap */
+        {
+            char deep[4096];
+            size_t at = 0;
+            int i;
+
+            for (i = 0; i < 300; i++) {
+                memcpy(deep + at, "{\"u\":", 5);
+                at += 5;
+            }
+            deep[at++] = '1';
+            for (i = 0; i < 300; i++) {
+                deep[at++] = '}';
+            }
+            CHECK(at < sizeof(deep));
+            CHECK_STATUS(PBW_ERR_LIMIT,
+                         pbw_json_parse_opts(msg, deep, at, &opts,
+                                             &decoded));
+            CHECK(decoded == NULL);
+            /* deeply nested arrays stop at the depth cap too */
+            at = 0;
+            for (i = 0; i < 300; i++) {
+                memcpy(deep + at, "{\"u\":[", 6);
+                at += 6;
+            }
+            deep[at++] = '1';
+            for (i = 0; i < 300; i++) {
+                deep[at++] = ']';
+            }
+            for (i = 0; i < 300; i++) {
+                deep[at++] = '}';
+            }
+            CHECK(at < sizeof(deep));
+            decoded = NULL;
+            CHECK_STATUS(PBW_ERR_LIMIT,
+                         pbw_json_parse_opts(msg, deep, at, &opts,
+                                             &decoded));
+            CHECK(decoded == NULL);
+        }
+    }
     /* A map round-trips through parse and print. */
     CHECK_OK(pbw_json_parse(msg, "{\"scores\":{\"b\":2,\"a\":1}}", 24,
                             &decoded));
@@ -2929,6 +4528,284 @@ test_json_format(void)
     out = NULL;
     pbw_message_free(decoded);
     decoded = NULL;
+    /* Timestamps print whole and fractional seconds (civil-date path). */
+    {
+        static const char *ts[] = {
+            "{\"when\":\"1970-01-01T00:00:00Z\"}",
+            "{\"when\":\"1970-01-01T00:00:00.5Z\"}",
+            "{\"when\":\"2026-11-07T01:02:03.123456789Z\"}",
+        };
+        static const char *want[] = {
+            "{\"when\":\"1970-01-01T00:00:00Z\"}",
+            "{\"when\":\"1970-01-01T00:00:00.500Z\"}",
+            "{\"when\":\"2026-11-07T01:02:03.123456789Z\"}",
+        };
+        size_t i;
+
+        for (i = 0; i < sizeof(ts) / sizeof(ts[0]); i++) {
+            CHECK_OK(
+                pbw_json_parse(msg, ts[i], strlen(ts[i]), &decoded));
+            CHECK_OK(pbw_json_print(decoded, &out, &len));
+            CHECK(len == strlen(want[i]) &&
+                  memcmp(out, want[i], len) == 0);
+            pbw_free(out);
+            out = NULL;
+            pbw_message_free(decoded);
+            decoded = NULL;
+        }
+    }
+    /* Struct/Value/ListValue print every kind; printing parses back to
+     * the same bytes (covers null, nesting and the list path). */
+    {
+        static const char *stext =
+            "{\"props\":{\"k\":1,\"n\":null,\"s\":\"x\","
+            "\"b\":true,\"l\":[1,{\"z\":0}],\"o\":{\"w\":[]}}}";
+        char *again = NULL;
+        size_t again_len = 0;
+
+        CHECK_OK(pbw_json_parse(msg, stext, strlen(stext), &decoded));
+        CHECK_OK(pbw_json_print(decoded, &out, &len));
+        CHECK(strstr(out, "\"n\":null") != NULL);
+        pbw_message_free(decoded);
+        decoded = NULL;
+        CHECK_OK(pbw_json_parse(msg, out, len, &decoded));
+        CHECK_OK(pbw_json_print(decoded, &again, &again_len));
+        CHECK(again_len == len && memcmp(again, out, len) == 0);
+        pbw_free(out);
+        out = NULL;
+        pbw_free(again);
+        pbw_message_free(decoded);
+        decoded = NULL;
+    }
+    /* Message-, enum- and int-keyed maps round-trip. */
+    {
+        static const char *in[] = {
+            "{\"ecol\":{\"a\":\"C_RED\",\"b\":0}}",
+            "{\"ecol\":{\"a\":99}}",
+            "{\"imap\":{\"-1\":2,\"10\":3}}",
+            "{\"umap\":{\"1\":2,\"4294967295\":3}}",
+            "{\"emsg\":{\"k\":{\"a\":1}}}",
+            "{\"emsg\":{}}",
+            "{\"bmap\":{\"true\":1,\"false\":2}}",
+            "{\"lmap\":{\"-5\":1,\"42\":2}}",
+            "{\"lv\":[1,\"x\",true,null]}",
+            "{\"em\":{}}",
+            "{\"vv\":1}",
+            "{\"kid\":null}",
+            "{\"lv\":null}",
+        };
+        static const char *want[] = {
+            "{\"ecol\":{\"a\":\"C_RED\",\"b\":\"C_ZERO\"}}",
+            "{\"ecol\":{\"a\":99}}",
+            "{\"imap\":{\"-1\":2,\"10\":3}}",
+            "{\"umap\":{\"1\":2,\"4294967295\":3}}",
+            "{\"emsg\":{\"k\":{\"a\":1}}}",
+            "{}", /* empty maps stay out of the print */
+            "{\"bmap\":{\"true\":1,\"false\":2}}",
+            "{\"lmap\":{\"-5\":1,\"42\":2}}",
+            "{\"lv\":[1,\"x\",true,null]}",
+            "{\"em\":{}}",
+            "{\"vv\":1}",
+            "{}",
+            "{}",
+        };
+        size_t i;
+
+        for (i = 0; i < sizeof(in) / sizeof(in[0]); i++) {
+            CHECK_OK(
+                pbw_json_parse(msg, in[i], strlen(in[i]), &decoded));
+            CHECK_OK(pbw_json_print(decoded, &out, &len));
+            CHECK(len == strlen(want[i]) &&
+                  memcmp(out, want[i], len) == 0);
+            pbw_free(out);
+            out = NULL;
+            pbw_message_free(decoded);
+            decoded = NULL;
+        }
+        /* bad keys, bad values and duplicate keys fail */
+        {
+            static const char *badmap[] = {
+                "{\"imap\":{\"x\":1}}",
+                "{\"ecol\":{\"a\":\"BOGUS\"}}",
+                "{\"emsg\":{\"a\":1}}",
+                "{\"emsg\":{\"k\":{\"a\":1},\"k\":{\"a\":2}}}",
+                "{\"imap\":{\"1\":1,\"1\":2}}",
+                "{\"bmap\":{\"yes\":1}}",
+                "{\"bmap\":{\"True\":1}}",
+                "{\"lmap\":{\"0x10\":1}}",
+                "{\"umap\":{\"x\":1}}",
+                "{\"umap\":{\"4294967296\":1}}",
+                "{\"lv\":1}",
+                "{\"em\":1}",
+            };
+            size_t k;
+
+            for (k = 0; k < sizeof(badmap) / sizeof(badmap[0]); k++) {
+                CHECK_STATUS(PBW_ERR_INVALID,
+                             pbw_json_parse(msg, badmap[k],
+                                            strlen(badmap[k]), &decoded));
+                CHECK(decoded == NULL);
+            }
+        }
+    }
+    /* An unlinked schema prints through the malloc+sort path: field
+     * pointers (not numbers) put values in place, and printing still
+     * orders them by field number. */
+    {
+        pbw_schema *s2 = pbw_schema_new();
+        pbw_descriptor *um;
+        pbw_message *u = NULL;
+        static const char want[] = "{\"a\":\"x\",\"b\":7}";
+
+        CHECK(s2 != NULL);
+        um = pbw_schema_add_message(s2, "U");
+        CHECK(um != NULL);
+        CHECK(pbw_message_add_field(um, "b", 2, PBW_TYPE_INT32,
+                                    PBW_LABEL_OPTIONAL) != NULL);
+        CHECK(pbw_message_add_field(um, "a", 1, PBW_TYPE_STRING,
+                                    PBW_LABEL_OPTIONAL) != NULL);
+        u = pbw_message_new(um);
+        CHECK(u != NULL);
+        if (u != NULL) {
+            CHECK_OK(pbw_message_set_field(u, &um->fields[0],
+                                           pbw_value_new_int(7)));
+            CHECK_OK(pbw_message_set_field(u, &um->fields[1],
+                                           pbw_value_new_string("x")));
+            CHECK_OK(pbw_json_print(u, &out, &len));
+            CHECK(len == sizeof(want) - 1 &&
+                  memcmp(out, want, len) == 0);
+            pbw_free(out);
+            out = NULL;
+            pbw_message_free(u);
+        }
+        pbw_schema_free(s2);
+    }
+    /* Fields decode in wire order but print sorted by field number. */
+    {
+        /* name(5)="x" then i32(1)=7 on the wire */
+        static const uint8_t reversed[] = {0x2A, 0x01, 0x78, 0x08,
+                                           0x07};
+        static const char want[] = "{\"i32\":7,\"name\":\"x\"}";
+
+        decoded = NULL;
+        CHECK_OK(pbw_decode(msg, reversed, sizeof(reversed), &decoded));
+        CHECK_OK(pbw_json_print(decoded, &out, &len));
+        CHECK(len == sizeof(want) - 1 &&
+              memcmp(out, want, len) == 0);
+        pbw_free(out);
+        out = NULL;
+        pbw_message_free(decoded);
+        decoded = NULL;
+    }
+    /* Binary input may repeat a map key; printing keeps the last. */
+    {
+        static const uint8_t dupmap[] = {
+            0xA2,
+            0x01,
+            0x05,
+            0x0A,
+            0x01,
+            0x61,
+            0x10,
+            0x01,
+            0xA2,
+            0x01,
+            0x05,
+            0x0A,
+            0x01,
+            0x61,
+            0x10,
+            0x02,
+        };
+        static const char want[] = "{\"scores\":{\"a\":2}}";
+
+        decoded = NULL;
+        CHECK_OK(pbw_decode(msg, dupmap, sizeof(dupmap), &decoded));
+        CHECK_OK(pbw_json_print(decoded, &out, &len));
+        CHECK(len == sizeof(want) - 1 &&
+              memcmp(out, want, len) == 0);
+        pbw_free(out);
+        out = NULL;
+        /* a NULL entry fails the print instead of crashing */
+        {
+            pbw_value *list = pbw_message_get(decoded, 20);
+
+            CHECK(list != NULL && list->kind == PBW_VALUE_LIST);
+            list->as.list.items[0] = NULL;
+            CHECK_STATUS(PBW_ERR_INVALID,
+                         pbw_json_print(decoded, &out, &len));
+            CHECK(out == NULL);
+        }
+        pbw_message_free(decoded);
+        decoded = NULL;
+    }
+    /* Past 32 entries map printing takes the precomputed-winners path;
+     * distinct keys keep input order and survive a re-parse. */
+    {
+        char big[1600];
+        size_t off = 0;
+        int i;
+
+        off += (size_t)snprintf(big + off, sizeof(big) - off,
+                                "{\"scores\":{");
+        for (i = 0; i < 40; i++) {
+            off += (size_t)snprintf(big + off, sizeof(big) - off,
+                                    "%s\"k%d\":%d", i ? "," : "",
+                                    i, i);
+        }
+        off += (size_t)snprintf(big + off, sizeof(big) - off, "}}");
+        CHECK(off < sizeof(big));
+        CHECK_OK(pbw_json_parse(msg, big, off, &decoded));
+        /* a duplicate shadows the first occurrence; partial entries
+         * print with default keys and values */
+        {
+            pbw_message *slot;
+
+            slot = pbw_message_set_message(decoded, 20);
+            CHECK(slot != NULL);
+            CHECK_OK(pbw_message_set(slot, 1, pbw_value_new_string("k0")));
+            CHECK_OK(pbw_message_set(slot, 2, pbw_value_new_int(1000)));
+            slot = pbw_message_set_message(decoded, 20);
+            CHECK(slot != NULL);
+            CHECK_OK(pbw_message_set(slot, 2, pbw_value_new_int(7)));
+            slot = pbw_message_set_message(decoded, 20);
+            CHECK(slot != NULL);
+            CHECK_OK(
+                pbw_message_set(slot, 1, pbw_value_new_string("zz")));
+        }
+        CHECK_OK(pbw_json_print(decoded, &out, &len));
+        CHECK(strstr(out, "\"k39\":39") != NULL);
+        CHECK(strstr(out, "\"k0\":1000") != NULL);
+        CHECK(strstr(out, "\"zz\":0") != NULL);
+        CHECK(strstr(out, "\"\":7") != NULL);
+        pbw_free(out);
+        out = NULL;
+        pbw_message_free(decoded);
+        decoded = NULL;
+    }
+    /* All-unique large maps free the shadow table and scan as before. */
+    {
+        char big[1600];
+        size_t off = 0;
+        int i;
+
+        off += (size_t)snprintf(big + off, sizeof(big) - off,
+                                "{\"scores\":{");
+        for (i = 0; i < 40; i++) {
+            off += (size_t)snprintf(big + off, sizeof(big) - off,
+                                    "%s\"u%d\":%d", i ? "," : "",
+                                    i, i);
+        }
+        off += (size_t)snprintf(big + off, sizeof(big) - off, "}}");
+        CHECK(off < sizeof(big));
+        CHECK_OK(pbw_json_parse(msg, big, off, &decoded));
+        CHECK_OK(pbw_json_print(decoded, &out, &len));
+        CHECK(strstr(out, "\"u39\":39") != NULL);
+        pbw_free(out);
+        out = NULL;
+        pbw_message_free(decoded);
+        decoded = NULL;
+    }
     /* Proto3 zero fields stay out of the print. */
     CHECK_OK(pbw_json_parse(msg, "{\"i32\":0}", 9, &decoded));
     CHECK_OK(pbw_json_print(decoded, &out, &len));
@@ -2957,6 +4834,7 @@ test_json_format(void)
         decoded = NULL;
         pbw_schema_free(s2);
     }
+    check_json_prefix_sweep(msg);
     pbw_schema_free(schema);
 }
 
@@ -3058,6 +4936,20 @@ test_deterministic(void)
     field = pbw_message_add_field(iholder, "entries", 1, PBW_TYPE_MESSAGE,
                                   PBW_LABEL_REPEATED);
     pbw_field_set_type_name(field, "IEntry");
+    /* Keyless entries keep insertion order even when deterministic. */
+    {
+        pbw_descriptor *kentry = pbw_schema_add_message(schema, "KEntry");
+        pbw_descriptor *kholder;
+
+        pbw_message_add_field(kentry, "value", 2, PBW_TYPE_INT32,
+                              PBW_LABEL_OPTIONAL);
+        pbw_descriptor_set_map_entry(kentry);
+        kholder = pbw_schema_add_message(schema, "KMap");
+        field = pbw_message_add_field(kholder, "entries", 1,
+                                      PBW_TYPE_MESSAGE,
+                                      PBW_LABEL_REPEATED);
+        pbw_field_set_type_name(field, "KEntry");
+    }
     CHECK_OK(pbw_schema_link(schema));
 
     /* Insert out of order: plain encode keeps it, deterministic sorts it. */
@@ -3086,7 +4978,29 @@ test_deterministic(void)
     CHECK_OK(pbw_encode_deterministic(msg, &det2, &det2_len));
     CHECK(det_len == det2_len && memcmp(det, det2, det_len) == 0);
     pbw_free(det2);
+    pbw_free(det);
+    det = NULL;
     pbw_message_free(msg);
+    msg = NULL;
+
+    /* Keyless entries keep insertion order even when deterministic. */
+    msg = pbw_message_new(desc(schema, "KMap"));
+    for (i = 0; i < 2; i++) {
+        sub = pbw_message_set_message(msg, 1);
+        CHECK(sub != NULL);
+        CHECK_OK(pbw_message_set(sub, 2, pbw_value_new_int(7 - (int)i)));
+    }
+    CHECK_OK(pbw_encode_deterministic(msg, &det, &det_len));
+    CHECK_OK(pbw_decode(desc(schema, "KMap"), det, det_len, &decoded));
+    entries = pbw_message_get(decoded, 1);
+    CHECK(pbw_value_get_int32(pbw_message_get(
+              pbw_value_get_message(pbw_value_at(entries, 0)), 2)) == 7);
+    pbw_message_free(decoded);
+    decoded = NULL;
+    pbw_free(det);
+    det = NULL;
+    pbw_message_free(msg);
+    msg = NULL;
 
     /* Signed integer keys sort numerically, not by raw bits. */
     msg = pbw_message_new(desc(schema, "IMap"));
@@ -3425,6 +5339,18 @@ test_visit(pbw_schema *schema)
     {
         static const uint8_t cut_tag[] = {0x0a};
         static const uint8_t cut_val[] = {0x10};
+        /* Unknown fixed64 (field 99): 8 payload bytes visit, 3 fail. */
+        static const uint8_t fix64[] = {0x99, 0x06, 0x01, 0x02,
+                                        0x03, 0x04, 0x05, 0x06,
+                                        0x07, 0x08};
+        static const uint8_t fix64_cut[] = {0x99, 0x06, 0x01,
+                                            0x02, 0x03};
+        /* Unknown fixed32 (field 100): 4 payload bytes visit, 1 fails. */
+        static const uint8_t fix32[] = {0xA5, 0x06, 0x01, 0x02,
+                                        0x03, 0x04};
+        static const uint8_t fix32_cut[] = {0xA5, 0x06, 0x01};
+        /* Unknown LEN (field 101) claiming 4 bytes with 1: skip fails. */
+        static const uint8_t len_cut[] = {0xAA, 0x06, 0x04, 0x01};
 
         off = 999;
         CHECK_STATUS(PBW_ERR_INVALID,
@@ -3436,6 +5362,27 @@ test_visit(pbw_schema *schema)
                      pbw_visit(person, cut_val, sizeof(cut_val),
                                visit_collect, &log, &off));
         CHECK(off == 0);
+        memset(&log, 0, sizeof(log));
+        CHECK_OK(pbw_visit(person, fix64, sizeof(fix64),
+                           visit_collect, &log, NULL));
+        CHECK(log.count == 1 && log.hits[0].field == NULL);
+        CHECK(log.hits[0].number == 99 && log.hits[0].wire == 1);
+        CHECK(log.hits[0].u64 == 0x0807060504030201ull);
+        CHECK_STATUS(PBW_ERR_INVALID,
+                     pbw_visit(person, fix64_cut, sizeof(fix64_cut),
+                               visit_collect, &log, NULL));
+        memset(&log, 0, sizeof(log));
+        CHECK_OK(pbw_visit(person, fix32, sizeof(fix32),
+                           visit_collect, &log, NULL));
+        CHECK(log.count == 1 && log.hits[0].field == NULL);
+        CHECK(log.hits[0].number == 100 && log.hits[0].wire == 5);
+        CHECK(log.hits[0].u64 == 0x04030201u);
+        CHECK_STATUS(PBW_ERR_INVALID,
+                     pbw_visit(person, fix32_cut, sizeof(fix32_cut),
+                               visit_collect, &log, NULL));
+        CHECK_STATUS(PBW_ERR_INVALID,
+                     pbw_visit(person, len_cut, sizeof(len_cut),
+                               visit_collect, &log, NULL));
     }
 
     /* Bounds and argument checks mirror the decoder. */
@@ -3664,6 +5611,54 @@ test_streaming_edges(pbw_schema *schema)
         pbw_message_free(m);
         pbw_free(f);
         free(wire);
+    }
+    /* Empty feeds are no-ops; NULL data and missing descriptors fail. A
+     * fully consumed buffer compacts instead of growing on the next feed,
+     * and a corrupt length prefix fails only once five bytes are in. */
+    {
+        pbw_istream *s = pbw_istream_new(NULL);
+        pbw_message *m = pbw_message_new(type);
+        pbw_message *got = NULL;
+        uint8_t *f = NULL;
+        size_t f_len = 0;
+        static const uint8_t prefix5[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+        static const uint8_t prefix2[] = {0xFF, 0xFF};
+        char pad[200];
+
+        CHECK(s != NULL);
+        CHECK_OK(pbw_istream_feed(s, "x", 0));
+        CHECK_OK(pbw_istream_next(s, type, &got));
+        CHECK(got == NULL);
+        CHECK_STATUS(PBW_ERR_INVALID, pbw_istream_feed(s, NULL, 1));
+        CHECK_STATUS(PBW_ERR_INVALID, pbw_istream_next(s, NULL, &got));
+        memset(pad, 'y', sizeof(pad));
+        CHECK_OK(pbw_message_set(m, 1, pbw_value_new_bytes(pad, sizeof(pad))));
+        CHECK_OK(pbw_encode_delimited(m, &f, &f_len));
+        CHECK(f_len < 256 && f_len > 128);
+        CHECK_OK(pbw_istream_feed(s, f, f_len));
+        CHECK_OK(pbw_istream_next(s, type, &got));
+        CHECK(got != NULL);
+        pbw_message_free(got);
+        got = NULL;
+        /* buffer fully consumed: the next feed reuses it in place */
+        CHECK_OK(pbw_istream_feed(s, f, f_len));
+        CHECK_OK(pbw_istream_next(s, type, &got));
+        CHECK(got != NULL);
+        pbw_message_free(got);
+        pbw_istream_free(s);
+        /* corrupt length prefixes */
+        s = pbw_istream_new(NULL);
+        CHECK(s != NULL);
+        CHECK_OK(pbw_istream_feed(s, prefix5, sizeof(prefix5)));
+        CHECK_STATUS(PBW_ERR_INVALID, pbw_istream_next(s, type, &got));
+        CHECK(got == NULL);
+        pbw_istream_reset(s);
+        CHECK_OK(pbw_istream_feed(s, prefix2, sizeof(prefix2)));
+        CHECK_OK(pbw_istream_next(s, type, &got));
+        CHECK(got == NULL);
+        pbw_istream_free(s);
+        pbw_message_free(m);
+        pbw_free(f);
     }
 }
 
@@ -3902,6 +5897,294 @@ test_deterministic_edges(void)
     pbw_schema_free(schema);
 }
 
+/* Small API surfaces with no other home: strerror text, clear/get_field,
+ * the delimited one-shot twins and the initialized check. */
+static void
+test_api_misc(pbw_schema *schema)
+{
+    const pbw_descriptor *type = desc(schema, "Scalar");
+    const pbw_field *f1;
+    pbw_message *msg;
+    pbw_message *decoded = NULL;
+    uint8_t *frame = NULL;
+    size_t frame_len = 0;
+    size_t consumed = 0;
+    int s;
+
+    /* every status has text, including out-of-range codes */
+    for (s = PBW_OK; s <= PBW_ERR_REQUIRED; s++) {
+        CHECK(pbw_strerror((pbw_status)s) != NULL);
+    }
+    CHECK(pbw_strerror((pbw_status)999) != NULL);
+    CHECK(pbw_abi_version() == PBW_ABI_VERSION);
+    CHECK(pbw_message_new_ctx(NULL, type) == NULL);
+    CHECK(pbw_value_new_uint_ctx(NULL, 1) == NULL);
+    CHECK(pbw_value_new_bytes_ctx(NULL, "x", 1) == NULL);
+
+    msg = pbw_message_new(type);
+    CHECK(msg != NULL);
+    f1 = pbw_descriptor_find_field(type, 1);
+    CHECK(f1 != NULL);
+    /* unknown bytes: validation plus a growth path */
+    CHECK_STATUS(PBW_ERR_INVALID,
+                 pbw_message_add_unknown_bytes(NULL, "x", 1));
+    CHECK_STATUS(PBW_ERR_INVALID,
+                 pbw_message_add_unknown_bytes(msg, NULL, 1));
+    CHECK_OK(pbw_message_add_unknown_bytes(msg, NULL, 0));
+    CHECK_OK(pbw_message_add_unknown_bytes(msg, "x", 0));
+    {
+        /* a megabyte of unknowns forces the accumulator to grow; the
+         * bytes repeat one valid unknown field (500: 1) */
+        static uint8_t *big = NULL;
+        static size_t big_cap = 0;
+        size_t k;
+
+        if (big_cap < 1048576) {
+            free(big);
+            big = (uint8_t *)malloc(1048576);
+            big_cap = big != NULL ? 1048576 : 0;
+        }
+        CHECK(big != NULL);
+        if (big != NULL) {
+            for (k = 0; k + 3 <= 1048576; k += 3) {
+                big[k] = 0xA0;
+                big[k + 1] = 0x0F;
+                big[k + 2] = 0x01;
+            }
+            CHECK_OK(pbw_message_add_unknown_bytes(
+                msg, big, (1048576 / 3) * 3));
+            CHECK(pbw_message_unknown_len(msg) == (1048576 / 3) * 3);
+        }
+    }
+    /* a megabyte string field exercises the arena big-chunk paths on
+     * decode, and their release on free */
+    {
+        uint8_t *huge = (uint8_t *)malloc(1048576);
+        pbw_message *fat = NULL;
+        uint8_t *wire2 = NULL;
+        size_t wire2_len = 0;
+        pbw_message *back = NULL;
+
+        CHECK(huge != NULL);
+        if (huge != NULL) {
+            memset(huge, 'z', 1048576);
+            fat = pbw_message_new(type);
+            CHECK(fat != NULL);
+            CHECK_OK(
+                pbw_message_set(fat, 15, pbw_value_new_bytes(huge, 1048576)));
+            CHECK_OK(pbw_encode(fat, &wire2, &wire2_len));
+            CHECK_OK(pbw_decode(type, wire2, wire2_len, &back));
+            CHECK(back != NULL &&
+                  pbw_message_get(back, 15) != NULL);
+            /* storing into a decoded tree marks heap payloads for the
+             * release walk on free */
+            CHECK_OK(pbw_message_set(back, 1, pbw_value_new_int(1)));
+            pbw_message_free(back);
+            pbw_message_free(fat);
+            pbw_free(wire2);
+            free(huge);
+        }
+    }
+    /* clearing a oneof member resets the case */
+    {
+        const pbw_descriptor *oneof = desc(schema, "OneOf");
+        pbw_message *o = pbw_message_new(oneof);
+
+        CHECK(o != NULL);
+        CHECK_OK(pbw_message_set(o, 1, pbw_value_new_string("x")));
+        pbw_message_clear(o, 1);
+        CHECK(pbw_message_get(o, 1) == NULL);
+        pbw_message_clear(o, 2); /* absent and unknown numbers */
+        pbw_message_clear(o, 42);
+        pbw_message_free(o);
+    }
+    /* NULL-tolerant accessors */
+    CHECK(pbw_message_get_field(msg, f1) == NULL);
+    CHECK(pbw_message_get_field(msg, NULL) == NULL);
+    CHECK(pbw_message_get_field(NULL, f1) == NULL);
+    CHECK(pbw_message_get(NULL, 1) == NULL);
+    CHECK(pbw_value_get_bytes(pbw_message_get(msg, 1), NULL) == NULL);
+    {
+        /* a linked schema is frozen against new enum values */
+        pbw_schema *s2 = pbw_schema_new();
+        pbw_descriptor *e2;
+
+        CHECK(s2 != NULL);
+        e2 = pbw_schema_add_enum(s2, "E");
+        CHECK(e2 != NULL);
+        pbw_enum_add_value(e2, "A", 0);
+        CHECK_OK(pbw_schema_link(s2));
+        CHECK_STATUS(PBW_ERR_INVALID, pbw_enum_add_value(e2, "B", 1));
+        pbw_schema_free(s2);
+    }
+    {
+        size_t n = 99;
+        const uint8_t *p;
+
+        /* NULL value leaves the length alone; a value fills it in */
+        CHECK(pbw_value_get_bytes(NULL, &n) == NULL);
+        CHECK(n == 0);
+        CHECK_OK(pbw_message_set(msg, 15,
+                                 pbw_value_new_bytes("xy", 2)));
+        p = pbw_value_get_bytes(pbw_message_get(msg, 15), &n);
+        CHECK(p != NULL && n == 2 && memcmp(p, "xy", 2) == 0);
+        CHECK(pbw_value_get_bytes(pbw_message_get(msg, 15), NULL) != NULL);
+    }
+    CHECK(pbw_message_descriptor(NULL) == NULL);
+    CHECK(pbw_message_field_count(NULL) == 0);
+    CHECK(pbw_message_get(msg, 9999) == NULL);
+    CHECK(pbw_schema_link(NULL) != PBW_OK);
+    CHECK(pbw_schema_service_find(NULL, "x") == NULL);
+    CHECK(pbw_service_method_find(NULL, "x") == NULL);
+    CHECK(!pbw_descriptor_is_map_entry(NULL));
+    CHECK(pbw_schema_find_extension(schema, "no.such.Ext") == NULL);
+    pbw_descriptor_free(NULL);
+    /* present fields enumerate in field-index order */
+    {
+        uint32_t fnums[16];
+        const pbw_value *values[16];
+        size_t n;
+        const pbw_field *fa;
+        const pbw_field *fb;
+
+        CHECK_OK(pbw_message_set(msg, 1, pbw_value_new_int(-7)));
+        CHECK(pbw_message_field_count(msg) > 0);
+        n = pbw_message_present_list(msg, fnums, values, 16);
+        CHECK(n == pbw_message_field_count(msg));
+        CHECK(pbw_message_present_list(msg, NULL, values, 16) == 0);
+        CHECK(pbw_message_present_list(msg, fnums, NULL, 16) == 0);
+        CHECK(pbw_message_present_list(NULL, fnums, values, 16) == 0);
+        /* field pointers from another message do not resolve here */
+        fa = pbw_descriptor_find_field(desc(schema, "Parent"), 1);
+        CHECK(fa != NULL);
+        CHECK(pbw_message_get_field(msg, fa) == NULL);
+        {
+            pbw_value *rejected = pbw_value_new_int(1);
+
+            CHECK_STATUS(PBW_ERR_INVALID,
+                         pbw_message_set_field(msg, fa, rejected));
+            pbw_value_free(rejected);
+        }
+        fb = pbw_descriptor_find_field(type, 1);
+        CHECK(fb != NULL);
+        CHECK(pbw_message_get_field(msg, fb) != NULL);
+    }
+    /* reflection over present fields */
+    {
+        const pbw_field *f = NULL;
+        pbw_value *v = NULL;
+        size_t seen = 0;
+
+        CHECK(pbw_message_field_at(NULL, 0, &v) == NULL);
+        while ((f = pbw_message_field_at(msg, seen, &v)) != NULL) {
+            CHECK(v != NULL);
+            seen++;
+            if (seen > 64) {
+                break;
+            }
+        }
+        CHECK(seen == pbw_message_field_count(msg));
+    }
+    /* NULL-tolerant mutators and constructors */
+    pbw_field_set_type_name(NULL, "x");
+    pbw_field_set_full_name(NULL, "x");
+    pbw_descriptor_set_map_entry(NULL);
+    pbw_ctx_free(NULL);
+    pbw_ctx_reset(NULL);
+    pbw_pool_free(NULL);
+    pbw_istream_free(NULL);
+    pbw_istream_reset(NULL);
+    pbw_schema_free(NULL);
+    CHECK(pbw_istream_new(NULL) != NULL);
+    {
+        pbw_istream *tmp = pbw_istream_new(NULL);
+
+        pbw_istream_free(tmp);
+    }
+    CHECK(pbw_pool_new(0, 0) != NULL);
+    {
+        pbw_pool *none = pbw_pool_new(0, 0);
+        pbw_ctx *one;
+
+        CHECK(none != NULL);
+        one = pbw_pool_acquire(none);
+        CHECK(one != NULL);
+        /* max_idle 0 frees on release instead of keeping */
+        pbw_pool_release(none, one);
+        CHECK(pbw_pool_idle(none) == 0);
+        pbw_pool_free(none);
+    }
+    /* hand-built schemas carry no reserved names */
+    CHECK(!pbw_descriptor_is_reserved(type, "ancient"));
+    CHECK(!pbw_descriptor_is_reserved(NULL, "ancient"));
+    CHECK_OK(pbw_message_set(msg, 1, pbw_value_new_int(-7)));
+    CHECK(pbw_message_get_field(msg, f1) != NULL);
+    CHECK(pbw_value_get_int(pbw_message_get_field(msg, f1)) == -7);
+    CHECK(pbw_message_is_initialized(msg));
+    pbw_message_clear(msg, 1);
+    CHECK(pbw_message_get(msg, 1) == NULL);
+    CHECK(pbw_message_get_field(msg, f1) == NULL);
+    pbw_message_clear(msg, 1); /* clearing absent is a no-op */
+    pbw_message_clear(NULL, 1);
+    /* set_message creates (or returns) the owned submessage */
+    {
+        const pbw_descriptor *ptype = desc(schema, "Parent");
+        pbw_message *p = pbw_message_new(ptype);
+        pbw_message *kid;
+        pbw_message *kid2;
+
+        CHECK(p != NULL);
+        kid = pbw_message_set_message(p, 1);
+        CHECK(kid != NULL);
+        CHECK_OK(pbw_message_set(kid, 2, pbw_value_new_int(1)));
+        CHECK(pbw_value_get_int(pbw_message_get(
+                  pbw_value_get_message(pbw_message_get(p, 1)), 2)) ==
+              1);
+        /* setting the scalar inside again replaces just that value */
+        kid2 = pbw_message_set_message(p, 1);
+        CHECK(kid2 != NULL);
+        CHECK_OK(pbw_message_set(kid2, 2, pbw_value_new_int(2)));
+        CHECK(pbw_value_get_int(pbw_message_get(
+                  pbw_value_get_message(pbw_message_get(p, 1)), 2)) ==
+              2);
+        pbw_message_free(p);
+    }
+    /* delimited framing round-trips; two frames advance by consumed */
+    CHECK_OK(pbw_message_set(msg, 2, pbw_value_new_int(INT64_MIN)));
+    CHECK_OK(pbw_encode_delimited(msg, &frame, &frame_len));
+    {
+        uint8_t *two;
+        size_t two_len = frame_len * 2;
+        pbw_limits lim = {0, 0};
+
+        two = (uint8_t *)malloc(two_len);
+        CHECK(two != NULL);
+        memcpy(two, frame, frame_len);
+        memcpy(two + frame_len, frame, frame_len);
+        CHECK_OK(pbw_decode_delimited(type, two, two_len, &decoded,
+                                      &consumed));
+        CHECK(consumed == frame_len);
+        CHECK(pbw_value_get_int(pbw_message_get(decoded, 2)) ==
+              INT64_MIN);
+        pbw_message_free(decoded);
+        decoded = NULL;
+        CHECK_OK(pbw_decode_delimited_limits(type, two + consumed,
+                                             two_len - consumed, &lim,
+                                             &decoded, &consumed));
+        CHECK(consumed == frame_len);
+        pbw_message_free(decoded);
+        decoded = NULL;
+        /* a truncated frame fails with nothing out */
+        CHECK_STATUS(PBW_ERR_INVALID,
+                     pbw_decode_delimited(type, two, frame_len - 1,
+                                          &decoded, &consumed));
+        CHECK(decoded == NULL);
+        free(two);
+    }
+    pbw_free(frame);
+    pbw_message_free(msg);
+}
+
 int
 main(void)
 {
@@ -3929,6 +6212,7 @@ main(void)
     test_packed_wide_tag(schema);
     test_pack_all_types(schema);
     test_packed_presize(schema);
+    test_packed_hostile(schema);
     test_recursive_type(schema);
     test_bool_and_float_bits(schema);
     test_enum_edges(schema);
@@ -3954,6 +6238,7 @@ main(void)
     test_hand_built_extensions();
     test_text_format();
     test_json_format();
+    test_api_misc(schema);
     test_deterministic();
     test_deterministic_edges();
     test_limits(schema);

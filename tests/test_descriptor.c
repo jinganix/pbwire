@@ -233,7 +233,45 @@ test_messageset(void)
     CHECK(out_len == sizeof(merged_want) &&
           memcmp(out, merged_want, out_len) == 0);
     pbw_free(out);
+    out = NULL;
     pbw_message_free(msg);
+    msg = NULL;
+    /* Malformed items: a bad inner message and items missing their id
+     * or payload fall back to unknown bytes; a truncated item fails. */
+    {
+        /* type 4, inner message is a truncated varint */
+        static const unsigned char bad_inner[] = {0x0b, 0x10, 0x04,
+                                                  0x1a, 0x01, 0x80,
+                                                  0x0c};
+        /* type 4, payload missing */
+        static const unsigned char no_pay[] = {0x0b, 0x10, 0x04,
+                                               0x0c};
+        /* payload without a type id */
+        static const unsigned char no_id[] = {0x0b, 0x1a, 0x02,
+                                              0x08, 0x05, 0x0c};
+        /* truncated payload length: rejected, not preserved */
+        static const unsigned char cut[] = {0x0b, 0x10, 0x04, 0x1a,
+                                            0x02, 0x08};
+        const unsigned char *vecs[] = {bad_inner, no_pay, no_id};
+        size_t lens[] = {sizeof(bad_inner), sizeof(no_pay),
+                         sizeof(no_id)};
+        size_t k;
+
+        for (k = 0; k < 3; k++) {
+            CHECK_OK(pbw_decode(set, vecs[k], lens[k], &msg));
+            CHECK(pbw_message_get(msg, 4) == NULL);
+            CHECK(pbw_message_unknown_len(msg) == lens[k]);
+            CHECK_OK(pbw_encode(msg, &out, &out_len));
+            CHECK(out_len == lens[k] &&
+                  memcmp(out, vecs[k], out_len) == 0);
+            pbw_free(out);
+            out = NULL;
+            pbw_message_free(msg);
+            msg = NULL;
+        }
+        CHECK(pbw_decode(set, cut, sizeof(cut), &msg) != PBW_OK);
+        CHECK(msg == NULL);
+    }
     pbw_schema_free(schema);
 }
 
@@ -251,6 +289,164 @@ static const unsigned char svc_set[] = {
     0x12, 0x0b, 0x2e, 0x73, 0x68, 0x6f, 0x70, 0x2e, 0x4f, 0x72, 0x64, 0x65,
     0x72, 0x1a, 0x0b, 0x2e, 0x73, 0x68, 0x6f, 0x70, 0x2e, 0x4f, 0x72, 0x64,
     0x65, 0x72, 0x30, 0x01, 0x62, 0x06, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x33};
+
+/* protoc-generated FileDescriptorSet with all four streaming shapes plus an
+ * extension (tests/data/desc_service.proto). Regenerate with:
+ * protoc -Itests/data --descriptor_set_out=/tmp/svc.pb \
+ *     tests/data/desc_service.proto && xxd -i /tmp/svc.pb */
+static const unsigned char svc2_set[] = {
+
+    0x0a, 0xa6, 0x02, 0x0a, 0x12, 0x64, 0x65, 0x73, 0x63, 0x5f, 0x73, 0x65,
+    0x72, 0x76, 0x69, 0x63, 0x65, 0x2e, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x12,
+    0x0a, 0x70, 0x62, 0x77, 0x69, 0x72, 0x65, 0x2e, 0x73, 0x76, 0x63, 0x22,
+    0x1c, 0x0a, 0x03, 0x4a, 0x6f, 0x62, 0x12, 0x0e, 0x0a, 0x02, 0x69, 0x64,
+    0x18, 0x01, 0x20, 0x01, 0x28, 0x09, 0x52, 0x02, 0x69, 0x64, 0x2a, 0x05,
+    0x08, 0x64, 0x10, 0xc8, 0x01, 0x32, 0xb8, 0x01, 0x0a, 0x04, 0x4a, 0x6f,
+    0x62, 0x73, 0x12, 0x27, 0x0a, 0x03, 0x47, 0x65, 0x74, 0x12, 0x0f, 0x2e,
+    0x70, 0x62, 0x77, 0x69, 0x72, 0x65, 0x2e, 0x73, 0x76, 0x63, 0x2e, 0x4a,
+    0x6f, 0x62, 0x1a, 0x0f, 0x2e, 0x70, 0x62, 0x77, 0x69, 0x72, 0x65, 0x2e,
+    0x73, 0x76, 0x63, 0x2e, 0x4a, 0x6f, 0x62, 0x12, 0x2c, 0x0a, 0x06, 0x53,
+    0x75, 0x62, 0x6d, 0x69, 0x74, 0x12, 0x0f, 0x2e, 0x70, 0x62, 0x77, 0x69,
+    0x72, 0x65, 0x2e, 0x73, 0x76, 0x63, 0x2e, 0x4a, 0x6f, 0x62, 0x1a, 0x0f,
+    0x2e, 0x70, 0x62, 0x77, 0x69, 0x72, 0x65, 0x2e, 0x73, 0x76, 0x63, 0x2e,
+    0x4a, 0x6f, 0x62, 0x28, 0x01, 0x12, 0x2b, 0x0a, 0x05, 0x57, 0x61, 0x74,
+    0x63, 0x68, 0x12, 0x0f, 0x2e, 0x70, 0x62, 0x77, 0x69, 0x72, 0x65, 0x2e,
+    0x73, 0x76, 0x63, 0x2e, 0x4a, 0x6f, 0x62, 0x1a, 0x0f, 0x2e, 0x70, 0x62,
+    0x77, 0x69, 0x72, 0x65, 0x2e, 0x73, 0x76, 0x63, 0x2e, 0x4a, 0x6f, 0x62,
+    0x30, 0x01, 0x12, 0x2c, 0x0a, 0x04, 0x43, 0x68, 0x61, 0x74, 0x12, 0x0f,
+    0x2e, 0x70, 0x62, 0x77, 0x69, 0x72, 0x65, 0x2e, 0x73, 0x76, 0x63, 0x2e,
+    0x4a, 0x6f, 0x62, 0x1a, 0x0f, 0x2e, 0x70, 0x62, 0x77, 0x69, 0x72, 0x65,
+    0x2e, 0x73, 0x76, 0x63, 0x2e, 0x4a, 0x6f, 0x62, 0x28, 0x01, 0x30, 0x01,
+    0x3a, 0x2b, 0x0a, 0x08, 0x70, 0x72, 0x69, 0x6f, 0x72, 0x69, 0x74, 0x79,
+    0x12, 0x0f, 0x2e, 0x70, 0x62, 0x77, 0x69, 0x72, 0x65, 0x2e, 0x73, 0x76,
+    0x63, 0x2e, 0x4a, 0x6f, 0x62, 0x18, 0x64, 0x20, 0x01, 0x28, 0x05, 0x52,
+    0x08, 0x70, 0x72, 0x69, 0x6f, 0x72, 0x69, 0x74, 0x79};
+
+static void
+test_services_protoc(void)
+{
+    pbw_schema *schema = NULL;
+    const pbw_service *svc;
+    const pbw_method *get;
+    const pbw_method *submit;
+    const pbw_method *watch;
+    const pbw_method *chat;
+    const pbw_descriptor *job;
+    const pbw_field *pri;
+
+    CHECK_OK(pbw_descriptor_set_load(svc2_set, sizeof(svc2_set), &schema));
+    if (schema == NULL) {
+        return;
+    }
+    svc = pbw_schema_service_find(schema, "pbwire.svc.Jobs");
+    CHECK(svc != NULL);
+    if (svc == NULL) {
+        pbw_schema_free(schema);
+        return;
+    }
+    CHECK(pbw_service_method_count(svc) == 4);
+    get = pbw_service_method_find(svc, "Get");
+    submit = pbw_service_method_find(svc, "Submit");
+    watch = pbw_service_method_find(svc, "Watch");
+    chat = pbw_service_method_find(svc, "Chat");
+    CHECK(get != NULL && submit != NULL && watch != NULL && chat != NULL);
+    /* unary, client-streaming, server-streaming, bidirectional */
+    CHECK(pbw_method_client_streaming(get) == 0);
+    CHECK(pbw_method_server_streaming(get) == 0);
+    CHECK(pbw_method_client_streaming(submit) == 1);
+    CHECK(pbw_method_server_streaming(submit) == 0);
+    CHECK(pbw_method_client_streaming(watch) == 0);
+    CHECK(pbw_method_server_streaming(watch) == 1);
+    CHECK(pbw_method_client_streaming(chat) == 1);
+    CHECK(pbw_method_server_streaming(chat) == 1);
+    CHECK(strcmp(pbw_method_input_type(get), "pbwire.svc.Job") == 0);
+    CHECK(strcmp(pbw_method_output_type(chat), "pbwire.svc.Job") == 0);
+    /* the extension attached to its extendee */
+    job = pbw_schema_find(schema, "pbwire.svc.Job");
+    CHECK(job != NULL);
+    pri = job != NULL ? pbw_descriptor_find_field(job, 100) : NULL;
+    CHECK(pri != NULL);
+    if (pri != NULL) {
+        CHECK(pbw_field_type(pri) == PBW_TYPE_INT32);
+        CHECK(pbw_field_is_extension(pri));
+        /* JSON extensions parse by full name and print the same way. */
+        {
+            static const char ein[] = "{\"[pbwire.svc.priority]\":5}";
+            pbw_message *em = NULL;
+            char *eout = NULL;
+            size_t elen = 0;
+
+            CHECK_OK(pbw_json_parse(job, ein, strlen(ein), &em));
+            CHECK(pbw_message_get(em, 100) != NULL);
+            CHECK_OK(pbw_json_print(em, &eout, &elen));
+            CHECK(elen == strlen(ein) && memcmp(eout, ein, elen) == 0);
+            pbw_free(eout);
+            pbw_message_free(em);
+        }
+    }
+    pbw_schema_free(schema);
+    schema = NULL;
+    /* truncated inputs fail instead of loading partial services */
+    {
+        static const size_t cuts[] = {1, 10, 40, 100, 200};
+        size_t k;
+
+        for (k = 0; k < sizeof(cuts) / sizeof(cuts[0]); k++) {
+            CHECK(pbw_descriptor_set_load(svc2_set, cuts[k], &schema) !=
+                  PBW_OK);
+            pbw_schema_free(schema);
+            schema = NULL;
+        }
+    }
+    /* corrupting the extendee name breaks the load: the extension has no
+     * target. The extendee is the last occurrence of the message name. */
+    {
+        static const char target[] = "pbwire.svc.Job";
+        unsigned char *mut;
+        size_t i;
+        size_t at = 0;
+        int found = 0;
+
+        mut = (unsigned char *)malloc(sizeof(svc2_set));
+        CHECK(mut != NULL);
+        if (mut == NULL) {
+            return;
+        }
+        memcpy(mut, svc2_set, sizeof(svc2_set));
+        for (i = 0; i + sizeof(target) - 1 <= sizeof(svc2_set); i++) {
+            if (memcmp(mut + i, target, sizeof(target) - 1) == 0) {
+                at = i;
+                found = 1;
+            }
+        }
+        CHECK(found);
+        mut[at] = (unsigned char)'X';
+        CHECK_STATUS(PBW_ERR_NOT_FOUND,
+                     pbw_descriptor_set_load(mut, sizeof(svc2_set),
+                                             &schema));
+        pbw_schema_free(schema);
+        free(mut);
+    }
+}
+
+/* A hand-built FileDescriptorSet whose message declares field number 1
+ * twice. The loader accepts the bytes; linking rejects the duplicate. */
+static const unsigned char dupnum_set[] = {
+    0x0a, 0x24, 0x0a, 0x07, 0x64, 0x2e, 0x70, 0x72, 0x6f, 0x74, 0x6f,
+    0x22, 0x19, 0x0a, 0x01, 0x4d, 0x12, 0x09, 0x0a, 0x01, 0x61, 0x18,
+    0x01, 0x20, 0x01, 0x28, 0x05, 0x12, 0x09, 0x0a, 0x01, 0x62, 0x18,
+    0x01, 0x20, 0x01, 0x28, 0x05};
+
+static void
+test_duplicate_field_number(void)
+{
+    pbw_schema *schema = NULL;
+
+    CHECK_STATUS(PBW_ERR_INVALID,
+                 pbw_descriptor_set_load(dupnum_set, sizeof(dupnum_set),
+                                         &schema));
+    pbw_schema_free(schema);
+}
 
 static void
 test_services(void)
@@ -909,6 +1105,23 @@ test_text_loader(void)
     CHECK_STATUS(PBW_ERR_INVALID,
                  pbw_text_parse(old_msg, "ext_int: 1", 10, &decoded));
     CHECK(decoded == NULL);
+    /* malformed type URLs fail: no slash, leading slash, bad escape */
+    {
+        static const char *badurl[] = {
+            "id: 1 payload [foo] { id: 1 }",
+            "id: 1 payload [/pbwire.test.Old] { id: 1 }",
+            "id: 1 payload [type%2/foo] { id: 1 }",
+            "id: 1 payload [type%2Zapis.com/Old] { id: 1 }",
+        };
+        size_t k;
+
+        for (k = 0; k < sizeof(badurl) / sizeof(badurl[0]); k++) {
+            CHECK_STATUS(PBW_ERR_INVALID,
+                         pbw_text_parse(old_msg, badurl[k],
+                                        strlen(badurl[k]), &decoded));
+            CHECK(decoded == NULL);
+        }
+    }
     CHECK_STATUS(PBW_ERR_INVALID,
                  pbw_text_parse(old_msg, "id: 1 nope: 2",
                                 strlen("id: 1 nope: 2"), &decoded));
@@ -921,6 +1134,17 @@ test_text_loader(void)
                                 strlen("id: 1 payload { "
                                        "[type.googleapis.com/Nope]"
                                        " { id: 1 } }"),
+                                &decoded));
+    CHECK(decoded == NULL);
+    /* a broken inner message fails the expansion */
+    CHECK_STATUS(PBW_ERR_INVALID,
+                 pbw_text_parse(old_msg,
+                                "id: 1 payload { "
+                                "[type.googleapis.com/pbwire.test.Old]"
+                                " { id: } }",
+                                strlen("id: 1 payload { "
+                                       "[type.googleapis.com/pbwire.test.Old]"
+                                       " { id: } }"),
                                 &decoded));
     CHECK(decoded == NULL);
     /* deeply nested lists under a reserved name stop at the depth cap
@@ -948,6 +1172,84 @@ test_text_loader(void)
                                 strlen("id: 1 ancient: [[0]]"), &decoded));
         pbw_message_free(decoded);
         decoded = NULL;
+        /* reserved names skip every value shape: messages (both
+         * brackets), lists, strings with escapes and bare scalars */
+        CHECK_OK(pbw_text_parse(
+            old_msg,
+            "id: 1 ancient { id: 2 payload { } } "
+            "ancient < id: 3 > ancient: [1, \"x\\n\", { id: 4 }] "
+            "ancient: \"s\" ancient: 5",
+            strlen(
+                "id: 1 ancient { id: 2 payload { } } "
+                "ancient < id: 3 > ancient: [1, \"x\\n\", { id: 4 }] "
+                "ancient: \"s\" ancient: 5"),
+            &decoded));
+        CHECK(pbw_value_get_int32(pbw_message_get(decoded, 1)) == 1);
+        pbw_message_free(decoded);
+        decoded = NULL;
+        /* every skipped value shape, valid and truncated */
+        {
+            static const char *skip_ok[] = {
+                "id: 1 ancient { [foo.bar]: 1 }",
+                "id: 1 ancient { [foo.bar] { x: 1 } }",
+                "id: 1 ancient < id: { x: 1 } >",
+                "id: 1 ancient: \"a\\n\" \"b\"",
+                "id: 1 ancient: true",
+                "id: 1 ancient: -1.5",
+                "id: 1 ancient: 1e3",
+                "id: 1 ancient: inf",
+                "id: 1 ancient: [1, \"x\", { id: 1 }, [2]]",
+                "id: 1 ancient: { id: 1, name: \"x\"; vals: [1] }",
+                "id: 1 ancient: {}",
+                "id: 1 ancient: []",
+                ("id: 1 ancient { "
+                 "[type.googleapis.com/foo]: { a: 1 } }"),
+            };
+            static const char *skip_bad[] = {
+                "id: 1 ancient \"abc",
+                "id: 1 ancient { id: 1",
+                "id: 1 ancient < id: 2",
+                "id: 1 ancient [1,",
+                "id: 1 ancient { [unclosed: 1 }",
+                "id: 1 ancient { id }",
+                "id: 1 ancient { id: }",
+            };
+            size_t k;
+
+            for (k = 0; k < sizeof(skip_ok) / sizeof(skip_ok[0]); k++) {
+                CHECK_OK(pbw_text_parse(old_msg, skip_ok[k],
+                                        strlen(skip_ok[k]), &decoded));
+                if (decoded != NULL) {
+                    CHECK(pbw_value_get_int32(
+                              pbw_message_get(decoded, 1)) == 1);
+                    pbw_message_free(decoded);
+                    decoded = NULL;
+                }
+            }
+            for (k = 0; k < sizeof(skip_bad) / sizeof(skip_bad[0]); k++) {
+                CHECK_STATUS(PBW_ERR_INVALID,
+                             pbw_text_parse(old_msg, skip_bad[k],
+                                            strlen(skip_bad[k]), &decoded));
+                CHECK(decoded == NULL);
+            }
+        }
+        {
+            static const char *trunc[] = {
+                "id: 1 ancient: [1,",
+                "id: 1 ancient { id:",
+                "id: 1 ancient: \"abc",
+                "id: 1 ancient:",
+                "id: 1 ancient",
+            };
+            size_t k;
+
+            for (k = 0; k < sizeof(trunc) / sizeof(trunc[0]); k++) {
+                CHECK_STATUS(PBW_ERR_INVALID,
+                             pbw_text_parse(old_msg, trunc[k],
+                                            strlen(trunc[k]), &decoded));
+                CHECK(decoded == NULL);
+            }
+        }
     }
     pbw_schema_free(schema);
 }
@@ -1055,6 +1357,8 @@ main(void)
     test_load_tolerance();
     test_mutation_sweep();
     test_services();
+    test_duplicate_field_number();
+    test_services_protoc();
     test_editions();
     test_messageset();
 
