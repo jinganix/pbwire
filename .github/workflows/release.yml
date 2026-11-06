@@ -208,7 +208,7 @@ jobs:
           # setup-beam just installed: the old 2.0.6 pin ships beams OTP 29
           # refuses to load.
           MIX="$INSTALL_DIR_FOR_ELIXIR/bin/mix"
-          (cd bindings/elixir && "$MIX" hex.publish --yes)
+          (cd bindings/elixir && "$MIX" deps.get && "$MIX" hex.publish --yes)
 
   luarocks:
     name: LuaRocks (bindings/lua)
@@ -296,6 +296,9 @@ jobs:
 
   maven:
     name: Maven Central (bindings/java, bindings/kotlin)
+    # Paused: Central publishing quota exhausted; resume next month
+    # (unpausing still needs a single-binding run for the skipped VERSION).
+    if: false
     needs: validate
     runs-on: ubuntu-latest
     steps:
@@ -326,6 +329,8 @@ jobs:
 
   scala:
     name: Maven Central (bindings/scala)
+    # Paused: Central publishing quota exhausted; resume next month.
+    if: false
     needs: validate
     runs-on: ubuntu-latest
     steps:
