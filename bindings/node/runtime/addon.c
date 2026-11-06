@@ -279,7 +279,9 @@ typedef struct {
     slice_t *items;
     uint32_t count;
     uint32_t cap;
-    slice_t inline_[8];
+    /* Small messages record ~20 slices (matrix3 small tier: 18); keeping
+     * them on the stack avoids a malloc/realloc pair per decode. */
+    slice_t inline_[32];
 } slice_list;
 
 typedef struct {
@@ -1098,7 +1100,7 @@ static int
 slices_record(slice_list *list, uint32_t index, uint32_t off, uint32_t len)
 {
     if (list->count == list->cap) {
-        uint32_t cap = list->cap == 0 ? 8 : list->cap * 2;
+        uint32_t cap = list->cap == 0 ? 32 : list->cap * 2;
         slice_t *grown;
 
         if (list->items == list->inline_) {
@@ -1837,7 +1839,7 @@ wire_object_to_js(napi_env env, desc_table *table, const uint8_t *base,
 
     memset(&list, 0, sizeof(list));
     list.items = list.inline_;
-    list.cap = 8;
+    list.cap = 32;
     if (depth >= PBW_MAX_DEPTH) {
         return fail_argument(env, "nesting limit exceeded");
     }
@@ -2135,7 +2137,7 @@ decode(napi_env env, napi_callback_info info)
     }
     memset(&list, 0, sizeof(list));
     list.items = list.inline_;
-    list.cap = 8;
+    list.cap = 32;
     status = scan_range(desc->table, (const uint8_t *)data, 0, (uint32_t)len,
                         0, 0, &list, NULL);
     if (status != SCAN_OK) {
@@ -2199,6 +2201,47 @@ decode_eager(napi_env env, napi_callback_info info)
     }
     handle->msg = msg;
     return new_message_value(env, desc, argv[0], handle);
+}
+
+/* One validating scan straight into a plain object: no slice array, no
+ * retained bytes, one N-API call however many fields are read. Schemas with
+ * proto2 `required` fields go through the tree (the only decoder that
+ * checks them) and convert from there. */
+static napi_value
+decode_object(napi_env env, napi_callback_info info)
+{
+    napi_value argv[2];
+    desc_handle *desc;
+    void *data = NULL;
+    size_t len = 0;
+
+    if (!get_args(env, info, argv, 2)) {
+        return NULL;
+    }
+    if (!unwrap(env, argv[0], (void **)&desc, "message descriptor handle")) {
+        return NULL;
+    }
+    if (napi_get_buffer_info(env, argv[1], &data, &len) != napi_ok) {
+        return fail_argument(env, "decodeObject expects a Buffer");
+    }
+    if ((uint64_t)len > 0xffffffffull) {
+        return fail_argument(env, "decodeObject expects a message below 4 GiB");
+    }
+    if (table_is_eager(desc->table)) {
+        pbw_message *msg = NULL;
+        napi_value out;
+        pbw_status status =
+            pbw_decode(desc->table->desc, data, len, &msg);
+
+        if (status != PBW_OK) {
+            return fail_status(env, "decodeObject", status);
+        }
+        out = message_to_js(env, msg);
+        pbw_message_free(msg);
+        return out;
+    }
+    return wire_object_to_js(env, desc->table, (const uint8_t *)data, 0,
+                               (uint32_t)len, 0);
 }
 
 /* The value of one field of a decoded message. */
@@ -2816,6 +2859,8 @@ NAPI_MODULE_INIT()
          NULL},
         {"decode", NULL, decode, NULL, NULL, NULL, napi_enumerable, NULL},
         {"decodeEager", NULL, decode_eager, NULL, NULL, NULL,
+         napi_enumerable, NULL},
+        {"decodeObject", NULL, decode_object, NULL, NULL, NULL,
          napi_enumerable, NULL},
         {"wireGet", NULL, wire_get, NULL, NULL, NULL, napi_enumerable, NULL},
         {"promote", NULL, promote, NULL, NULL, NULL, napi_enumerable, NULL},

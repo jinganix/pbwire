@@ -45,8 +45,6 @@ public final class GenericCodec {
             K_SFIXED64 = 12, K_DOUBLE = 13, K_STRING = 14, K_BYTES = 15,
             K_MESSAGE = 16, K_GROUP = 17;
 
-    private static final int MAX_DEPTH = 100;
-
     public static final class Field {
         public int number;
         public Proto.Type type;
@@ -777,8 +775,8 @@ public final class GenericCodec {
 
     private static void encodeInto(DMsg m, Wire.Buf b, int depth,
             StrCache sc) {
-        if (depth > MAX_DEPTH) {
-            throw new IllegalArgumentException("nesting exceeds " + MAX_DEPTH);
+        if (depth > Wire.MAX_DEPTH) {
+            throw new IllegalArgumentException("nesting exceeds " + Wire.MAX_DEPTH);
         }
         MessageDef def = m.def;
         boolean noRequired = !def.hasRequired; // proto3: skip the check
@@ -1151,8 +1149,8 @@ public final class GenericCodec {
      * cached in place), so a lazy slice cannot smuggle in a missing field.
      */
     private static void checkRequired(DMsg m, int depth) {
-        if (depth > MAX_DEPTH) {
-            throw new IllegalArgumentException("nesting exceeds " + MAX_DEPTH);
+        if (depth > Wire.MAX_DEPTH) {
+            throw new IllegalArgumentException("nesting exceeds " + Wire.MAX_DEPTH);
         }
         MessageDef def = m.def;
         if (def.hasRequired) {
@@ -1203,8 +1201,8 @@ public final class GenericCodec {
      */
     private static DMsg decodeInto(DMsg m, Wire.Reader r, int end,
             int groupEnd, int depth) {
-        if (depth > MAX_DEPTH) {
-            throw new IllegalArgumentException("nesting exceeds " + MAX_DEPTH);
+        if (depth > Wire.MAX_DEPTH) {
+            throw new IllegalArgumentException("nesting exceeds " + Wire.MAX_DEPTH);
         }
         MessageDef def = m.def;
         int outerEnd = r.end;
@@ -1248,47 +1246,11 @@ public final class GenericCodec {
      */
     private static void retainUnknown(DMsg m, Wire.Reader r, int fieldStart,
             int fnum, int wt, int depth) {
-        if (wt == 3) {
-            skipGroup(r, fnum, depth + 1);
-        } else {
-            Wire.skip(r, wt);
-        }
+        Wire.skipUnknown(r, fnum, wt, depth);
         if (m.unknown == null) {
             m.unknown = new ArrayList<>(4); // lazy: most messages have none
         }
         m.unknown.add(Arrays.copyOfRange(r.b, fieldStart, r.pos));
-    }
-
-    /**
-     * Validates a group body up to its matching end tag, like the core's
-     * group skipper: every tag is strict, field 0 and wire types above 5
-     * are rejected, and an end tag only closes the group it names. Used for
-     * unknown groups and for recorded (lazy) group slices alike.
-     */
-    private static void skipGroup(Wire.Reader r, int number, int depth) {
-        if (depth > MAX_DEPTH) {
-            throw new IllegalArgumentException("nesting exceeds " + MAX_DEPTH);
-        }
-        for (;;) {
-            int tag = Wire.rTag(r);
-            int fnum = tag >>> 3;
-            int wt = tag & 7;
-            if (fnum == 0 || wt > Wire.WT_FIXED32) {
-                throw new IllegalArgumentException("bad tag " + tag);
-            }
-            if (wt == 4) {
-                if (fnum != number) {
-                    throw new IllegalArgumentException("mismatched end-group for "
-                            + fnum + ", want " + number);
-                }
-                return;
-            }
-            if (wt == 3) {
-                skipGroup(r, fnum, depth + 1);
-            } else {
-                Wire.skip(r, wt);
-            }
-        }
     }
 
     private static boolean wtIncompatible(Field f, int wt) {
@@ -1365,7 +1327,7 @@ public final class GenericCodec {
                 int len = Wire.rLen32(r);
                 validateInto(f.msgType, r, r.pos + len, depth + 1);
             } else if (f.kind == K_GROUP) {
-                skipGroup(r, f.number, depth + 1);
+                Wire.skipGroup(r, f.number, depth + 1);
             } else { // K_STRING / K_BYTES element
                 int len = Wire.rLen32(r);
                 r.pos += len;
@@ -1412,7 +1374,7 @@ public final class GenericCodec {
             if (sub != null) {
                 decodeInto(sub, r, r.end, f.number, depth + 1);
             } else {
-                skipGroup(r, f.number, depth + 1);
+                Wire.skipGroup(r, f.number, depth + 1);
                 m.ref[s] = new Slice(r.b, fieldStart, r.pos - fieldStart);
                 m.setPresent(s, f);
             }
@@ -1457,8 +1419,8 @@ public final class GenericCodec {
      */
     private static void validateInto(MessageDef def, Wire.Reader r, int end,
             int depth) {
-        if (depth > MAX_DEPTH) {
-            throw new IllegalArgumentException("nesting exceeds " + MAX_DEPTH);
+        if (depth > Wire.MAX_DEPTH) {
+            throw new IllegalArgumentException("nesting exceeds " + Wire.MAX_DEPTH);
         }
         int outerEnd = r.end;
         r.end = end;
@@ -1515,21 +1477,16 @@ public final class GenericCodec {
             return;
         }
         if (f.kind == K_GROUP) {
-            skipGroup(r, f.number, depth + 1);
+            Wire.skipGroup(r, f.number, depth + 1);
             return;
         }
         int len = Wire.rLen32(r); // K_STRING / K_BYTES
         r.pos += len;
     }
 
-    /** Unknown field shape check: groups must pair, LEN stays opaque. */
     private static void validateUnknown(Wire.Reader r, int fnum, int wt,
             int depth) {
-        if (wt == 3) {
-            skipGroup(r, fnum, depth + 1);
-        } else {
-            Wire.skip(r, wt);
-        }
+        Wire.skipUnknown(r, fnum, wt, depth);
     }
 
     private static long[] needLong(DMsg m, int s, int need) {

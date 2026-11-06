@@ -92,7 +92,7 @@ private fun verify(m: Structtest_Scalars3) {
     check(m.sfx64 == Long.MIN_VALUE, "T2 sfx64")
     check(m.f32 == Float.POSITIVE_INFINITY, "T2 f32")
     check(m.f64 == -123456.789, "T2 f64")
-    check(m.flag, "T2 flag")
+    check(m.isFlag, "T2 flag")
     check(m.str == "hello", "T2 str")
     check(m.color == Structtest_Color3.COLOR3_GREEN, "T2 color")
     check(m.inner.name == "kid" && m.inner.value == 42, "T2 inner")
@@ -199,7 +199,7 @@ fun main(args: Array<String>) {
     check(om.fx32 == fm.fx32 && om.fx64 == fm.fx64, "T4 fx32/fx64")
     check(om.sfx32 == fm.sfx32 && om.sfx64 == fm.sfx64, "T4 sfx32/sfx64")
     check(om.f32 == fm.f32 && om.f64 == fm.f64, "T4 f32/f64")
-    check(om.flag == fm.flag && om.str == fm.str, "T4 flag/str")
+    check(om.flag == fm.isFlag && om.str == fm.str, "T4 flag/str")
     check(om.colorValue == fm.colorValue, "T4 color")
     check(om.inner.name == fm.inner.name && om.inner.value == fm.inner.value, "T4 inner")
     check(om.numsList == fm.numsList, "T4 nums")
@@ -236,7 +236,6 @@ fun main(args: Array<String>) {
         empty.inner == Structtest_Inner3.getDefaultInstance(), "T6 empty decodes to default")
     check(runCatching { Structtest_Scalars3.newBuilder().setStr(null) }.isFailure, "T6 null setter fails")
     check(runCatching { Tutorial_Person.newBuilder().setName("x").build() }.isFailure, "T6 missing required fails")
-    check(runCatching { Matrix3_Pbwire.type("structtest.Scalars3").newMessage().set("i32", "not a number") }.isFailure, "T6 wrong dynamic type fails")
 
     // Unknown enum values survive as UNRECOGNIZED on both sides, raw value kept.
     val mystery = scalars3 { setColorValue(99) }

@@ -16,6 +16,14 @@ public final class Wire {
     public static final int WT_VARINT = 0, WT_FIXED64 = 1, WT_LEN = 2,
             WT_FIXED32 = 5;
 
+    /**
+     * Nesting cap the decoders enforce, like the core's PBW_MAX_DEPTH
+     * scaled to this binding's message depth (groups and messages share
+     * one budget). The dynamic codec and the generated models use the same
+     * bound, so the two decoders cannot diverge.
+     */
+    public static final int MAX_DEPTH = 100;
+
     /** Reusable growable output buffer (the ThreadLocal C-core-pbw_ctx twin). */
     public static final class Buf {
         public byte[] b = new byte[256];
@@ -275,6 +283,13 @@ public final class Wire {
         b.pos += v.length;
     }
 
+    /** Raw tag write for length-delimited shapes (string/bytes/message). */
+    public static void wTag(Buf b, byte[] tag) {
+        ensure(b, tag.length);
+        System.arraycopy(tag, 0, b.b, b.pos, tag.length);
+        b.pos += tag.length;
+    }
+
     /** Encodes the (field-number, wire-type) tag. */
     public static byte[] tagBytes(int fnum, int wt) {
         int tag = (fnum << 3) | wt;
@@ -352,6 +367,51 @@ public final class Wire {
         System.arraycopy(b.b, lp + 1, b.b, lp + n, len);
         System.arraycopy(lb, 0, b.b, lp, n);
         b.pos += n - 1;
+    }
+
+    /**
+     * Validates a group body up to its matching end tag, like the core's
+     * group skipper: every tag is strict, field 0 and wire types above 5
+     * are rejected, and an end tag only closes the group it names. Used for
+     * unknown groups and for recorded (lazy) group slices alike.
+     */
+    public static void skipGroup(Reader r, int number, int depth) {
+        if (depth > MAX_DEPTH) {
+            throw new IllegalArgumentException("nesting exceeds " + MAX_DEPTH);
+        }
+        for (;;) {
+            int tag = rTag(r);
+            int fnum = tag >>> 3;
+            int wt = tag & 7;
+            if (fnum == 0 || wt > WT_FIXED32) {
+                throw new IllegalArgumentException("bad tag " + tag);
+            }
+            if (wt == 4) {
+                if (fnum != number) {
+                    throw new IllegalArgumentException("mismatched end-group for "
+                            + fnum + ", want " + number);
+                }
+                return;
+            }
+            if (wt == 3) {
+                skipGroup(r, fnum, depth + 1);
+            } else {
+                skip(r, wt);
+            }
+        }
+    }
+
+    /**
+     * Skips one unknown field: groups validate to their matching end tag,
+     * anything else only checks value shape. End-group tags never reach
+     * here; the decoding loop owns them.
+     */
+    public static void skipUnknown(Reader r, int fnum, int wt, int depth) {
+        if (wt == 3) {
+            skipGroup(r, fnum, depth + 1);
+            return;
+        }
+        skip(r, wt);
     }
 
     public static long rVar(Reader r) {

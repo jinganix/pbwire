@@ -117,7 +117,7 @@ Last full refresh: 2026-11-06, all rows below:
 | C++ | same engine as C (`bindings/cpp` mirrors the C structs; `make bench-c` is the harness) | `protoc` C++ generated from the same `matrix3.proto` | all 4 | 1.30x / 2.31x ✅ |
 | Go (`cgo` dynamic) | `make go-bench` (`bindings/go/benchmarks`) | `protobuf-go` generated code from the same `matrix3.proto` | all 4 | 2.68x / 2.23x ✅ |
 | Java (pure-Java codec) | `make java-bench` (`bindings/java/benchmarks`) | `protobuf-java` generated code from the same `matrix3.proto` | all 4 | 1.17x / 2.36x ✅ (0.82x at 136 B) |
-| Node (N-API addon) | `make node-bench` (`bindings/node/benchmarks`) | [protobufjs](https://www.npmjs.com/package/protobufjs) (fastest) + `google-protobuf` (jspb) from the same `matrix3.proto` | all 4 | 3.01x / 3.98x vs protobufjs ✅ (0.98x small decode) |
+| Node (N-API addon) | `make node-bench` (`bindings/node/benchmarks`) | [protobufjs](https://www.npmjs.com/package/protobufjs) (fastest) + `google-protobuf` (jspb) from the same `matrix3.proto` | all 4 | 2.89x / 4.15x vs protobufjs ✅ |
 | Ruby (C extension) | `make ruby-bench` (`bindings/ruby/benchmarks`) | the `google-protobuf` gem (C extension) | all 4 | 1.21x / 1.68x ✅ |
 | Objective-C (ARC) | `make objc-bench` (`bindings/objc/benchmarks`) | the `protobuf` ObjC runtime + generated code from the same `matrix3.proto` | all 4 | 2.03x / 2.92x ✅ |
 | Kotlin (same FFM layer as Java) | `make kotlin-bench` (`bindings/kotlin/benchmarks`) | `protoc --kotlin_out` over `protobuf-java`, same `matrix3.proto` | all 4 | 1.09x / 2.07x ✅ (0.80x at 136 B) |
@@ -146,8 +146,8 @@ faster, but hands back no R data — see its section). Every binding with a
 wired baseline is ahead of it on the xlarge encode column now; bytes are
 identical everywhere. The remaining sub-1.0x cells are all small-tier
 boundary floors (FFI/downcall cost on 136-174 B payloads: Java/Kotlin
-small-tier encode 0.82x/0.80x, Julia small decode 0.92x, Node small decode
-0.98x vs protobufjs, Go small-tier encode near parity, the PHP FFI wrapper) —
+small-tier encode 0.82x/0.80x, Julia small decode 0.92x,
+Go small-tier encode near parity, the PHP FFI wrapper) —
 boundary cost on a tiny payload, not a
 byte gap, and every encode headline still wins.
 
@@ -180,7 +180,7 @@ payload, the boundary cost and the baseline all differ.
 | Python (dict path) | CPython extension | 74913 B | 593.1 (6.91x ✅) | 1376.6 (1.70x ✅) |
 | Java | pure-Java codec, no native code | 74913 B | 1061.4 (1.17x ✅) | 968.7 (2.36x ✅) |
 | Kotlin | the Java FFM layer + DSL | 74913 B | 1003.9 (1.09x ✅) | 973.2 (2.07x ✅) |
-| Node | N-API addon | 74913 B | 1487.6 (3.01x ✅) | 1644.6 (3.98x ✅) |
+| Node | N-API addon | 74913 B | 1446.4 (2.89x ✅) | 1584.5 (4.15x ✅) |
 | Ruby | C extension over the core | 74913 B | 1582.4 (1.21x ✅) | 1170.0 (1.68x ✅) |
 | Objective-C | ARC wrapper | 74913 B (one 74 KB string) | 79927.5 (2.03x ✅) | 81115.5 (2.92x ✅) |
 | PHP | C extension | 74913 B | 1378.4 (1.06x ✅) | 681.7 (1.21x ✅) |
@@ -293,16 +293,19 @@ row inside the +/-3% noise floor (stream `fed`/`detenc` -1..-4%, `sink`
 
 ## Generated models (codegen)
 
-The generated models are ergonomics, not a second hot path: their
-`encode`/`decode` call the same dynamic API the tables below measure. The cost
-is the per-call type lookup plus, in Python, the dataclass ⇄ dict conversion.
-Measured on this machine with `matrix3` x3000 (30 KB) and identical values
+The generated models are ergonomics, not a second hot path: all but Java
+`encode`/`decode` through the same dynamic API the tables below measure; Java
+POJOs write straight into a Wire buffer instead (reflection over the
+annotated fields, no Message tree). The cost is the per-call metadata
+lookup plus, in Python, the dataclass ⇄ dict conversion and, in Java, the
+reflective field access.
+Measured on this machine with `matrix3` x3000 (~33 KB) and identical values
 through both paths:
 
 | language | encode, generated / dynamic | decode, generated / dynamic |
 |---|---|---|
 | C (struct binding) | 1.00x (the struct path itself) | 1.00x |
-| Java | 1.00x | 1.09x |
+| Java (reflective POJOs, direct Wire codec) | 1.7x slower | 1.0x |
 | Python (dataclass ⇄ dict) | 3.8x slower | 3.2x slower |
 
 So the numbers below still describe what a generated-model user pays on the wire; for
@@ -628,24 +631,27 @@ costs more than the codec's dispatch does.
 
 | payload | op | pbwire-node (MB/s, x protobufjs) | protobufjs (MB/s) | jspb (MB/s) |
 |---|---|---|---|---|
-| 136 B | encode | 592.6 (2.36x ✅) | 251.1 | 61.5 |
-| 136 B | decode | 404.0 (0.98x ❌) | 410.8 | 122.0 |
-| 174 B | encode | 540.1 (1.79x ✅) | 301.0 | 64.9 |
-| 174 B | decode | 465.4 (1.17x ✅) | 396.9 | 115.5 |
-| 2469 B | encode | 1333.4 (3.15x ✅) | 423.6 | 59.3 |
-| 2469 B | decode | 1149.6 (3.05x ✅) | 377.4 | 80.8 |
-| 74913 B | encode | 1487.6 (3.01x ✅) | 494.4 | 63.7 |
-| 74913 B | decode | 1644.6 (3.98x ✅) | 412.9 | 86.6 |
+| 136 B | encode | 627.7 (2.56x ✅) | 245.5 | 58.7 |
+| 136 B | decode | 419.3 (1.06x ✅) | 396.1 | 121.1 |
+| 174 B | encode | 550.2 (1.84x ✅) | 298.8 | 62.4 |
+| 174 B | decode | 489.3 (1.25x ✅) | 392.2 | 110.1 |
+| 2469 B | encode | 1319.5 (3.21x ✅) | 410.5 | 57.8 |
+| 2469 B | decode | 1161.8 (2.71x ✅) | 429.2 | 80.5 |
+| 74913 B | encode | 1446.4 (2.89x ✅) | 499.8 | 56.0 |
+| 74913 B | decode | 1584.5 (4.15x ✅) | 381.5 | 81.7 |
 
 jspb's throughput does not move with payload size: its writer resolves a
 code/type table per field and hands every repeated element to a closure, where
 the C core writes one tag byte and one inline value, or memcpys an already
 validated slice. protobufjs, the fastest widely used JS runtime, is 4-8x
 faster than jspb on the same bytes (and the harness gates its bytes too):
-the ratio column above is against it — 3.15x on large encode and 3.98x on
+the ratio column above is against it — 3.21x on large encode and 4.15x on
 decode. The ~23x over jspb is the legacy-baseline gap; the ~3-4x is the codec
-gap. Only the small-tier decode still trails protobufjs (0.98x): one N-API
-downcall on a 136 B payload, where the boundary is the whole budget.
+gap. Every tier wins now, including the 136 B decode (1.06x): the slice list
+decode records lives on the stack up to 32 entries, so a small message scans
+with no native allocation at all, which is what closed the last sub-parity
+cell (one N-API downcall on a 136 B payload, where the boundary is the whole
+budget).
 
 What the gap is made of, and what the optimization pass changed:
 

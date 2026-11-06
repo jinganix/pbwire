@@ -9,60 +9,58 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
-// javaFiles emits protobuf-java-shaped immutable messages over the pbwire
-// dynamic API: one public class per message with a nested Builder
+// javaFiles emits protobuf-java-shaped immutable messages with a direct
+// Wire codec: one public class per message with a nested Builder
 // (newBuilder/setX/addX/clear/build), toByteArray/parseFrom,
 // hasX/getX accessors, unmodifiable List getters for repeated fields, a
-// KindCase enum for oneofs and Java enums for enum fields. Every codec call
-// goes through the binding's existing dynamic API, so the wire format stays
-// in the C core. The FileDescriptorSet travels embedded (no .desc file at
-// use time) in a per-proto holder class. No protobuf-java dependency: the
-// shape mirrors its method names, not its runtime.
+// KindCase enum for oneofs and Java enums for enum fields. toByteArray writes
+// straight into a Wire.Buf and parseFrom reads straight from a Wire.Reader:
+// no Message tree, no per-field map lookup, no schema at use time. Wire
+// bytes are the only shared contract with the dynamic binding. No
+// protobuf-java dependency: the shape mirrors its method names, not its
+// runtime.
 func javaFiles(f *model.File, opt Options) []File {
-	files := []File{javaHolder(f, opt)}
+	var files []File
+	_ = opt
 	for _, e := range f.Enums {
 		files = append(files, javaEnumFile(f, e))
 	}
 	for _, m := range f.Messages {
+		files = append(files, javaOrBuilderFile(f, m))
 		files = append(files, javaMessageFile(f, m))
+		files = append(files, javaMetaFile(f, m))
 	}
 	return files
 }
 
-// javaHolderName is the per-proto schema holder class: the file stem keeps
-// same-package protos (oneof1, maptest) in distinct holders.
-func javaHolderName(f *model.File) string {
-	s := base(f)
-	return strings.ToUpper(s[:1]) + s[1:] + "_Pbwire"
-}
-
-// javaHolder emits the per-proto schema holder: the embedded descriptor set
-// plus a type lookup. One holder per .proto keeps the big descriptor bytes
-// out of every message class.
-func javaHolder(f *model.File, opt Options) File {
+// javaOrBuilderFile emits the top-level read interface of one message: the
+// OrBuilder the message and its Builder share. A separate file because a
+// class cannot implement its own nested interface.
+func javaOrBuilderFile(f *model.File, m model.Message) File {
+	cls := className(f, m.Name)
 	var b strings.Builder
-	b.WriteString(header(f, "Embedded FileDescriptorSet plus the type lookup the generated models decode through."))
-	b.WriteString("import java.util.Base64;\n\n")
-	fmt.Fprintf(&b, "public final class %s {\n", javaHolderName(f))
-	fmt.Fprintf(&b, "    private %s() {}\n\n", javaHolderName(f))
-	b.WriteString("    private static final String[] DESC_B64 = {\n")
-	for _, chunk := range chunk64(opt.DescSetB64) {
-		fmt.Fprintf(&b, "        %q,\n", chunk)
+	b.WriteString(header(f, "Read interface of generated message "+m.Full+"."))
+	b.WriteString("import java.util.List;\n\n")
+	fmt.Fprintf(&b, "public interface %sOrBuilder {\n", cls)
+	oneofs := javaOneofs(m)
+	for _, field := range m.Fields {
+		if field.Skip != "" || field.Oneof != "" {
+			continue
+		}
+		writeJavaOrBuilderField(&b, f, field)
 	}
-	b.WriteString("    };\n\n")
-	fmt.Fprintf(&b, "    public static final Schema SCHEMA = load();\n\n")
-	b.WriteString("    private static Schema load() {\n")
-	b.WriteString("        StringBuilder sb = new StringBuilder();\n")
-	b.WriteString("        for (String chunk : DESC_B64) {\n")
-	b.WriteString("            sb.append(chunk);\n")
-	b.WriteString("        }\n")
-	b.WriteString("        return Schema.fromBytes(Base64.getDecoder().decode(sb.toString()));\n")
-	b.WriteString("    }\n\n")
-	b.WriteString("    public static MessageType type(String fullName) {\n")
-	b.WriteString("        return SCHEMA.message(fullName);\n")
-	b.WriteString("    }\n")
+	for _, o := range oneofs {
+		pascal := model.Pascal(o)
+		fmt.Fprintf(&b, "    %s.KindCase get%sCase();\n", cls, pascal)
+		for _, field := range m.Fields {
+			if field.Skip != "" || field.Oneof != o {
+				continue
+			}
+			writeJavaOrBuilderMember(&b, f, field)
+		}
+	}
 	b.WriteString("}\n")
-	return File{Name: javaHolderName(f) + ".java", Content: b.String()}
+	return File{Name: cls + "OrBuilder.java", Content: b.String()}
 }
 
 // javaEnumFile emits one Java enum per proto enum, protobuf-java naming:
@@ -209,9 +207,12 @@ func javaOneofs(m model.Message) []string {
 func javaMessageFile(f *model.File, m model.Message) File {
 	cls := className(f, m.Name)
 	var b strings.Builder
-	b.WriteString(header(f, "Generated message "+m.Full+" over the pbwire dynamic API."))
+	b.WriteString(header(f, "Generated message "+m.Full+" with a direct Wire codec."))
 	b.WriteString("import java.util.ArrayList;\nimport java.util.Collections;\nimport java.util.List;\nimport java.util.Objects;\n\n")
-	fmt.Fprintf(&b, "public final class %s {\n", cls)
+	fmt.Fprintf(&b, "public final class %s implements %sOrBuilder {\n", cls, cls)
+	b.WriteString("    // Self-registration: one call registers the message, its Builder\n")
+	b.WriteString("    // and the interface mapping (last registration wins).\n")
+	fmt.Fprintf(&b, "    static {{\n        %sMeta.register(%s.class, %s.Builder::new, %s.Builder::build);\n    }}\n\n", cls, cls, cls, cls)
 	fmt.Fprintf(&b, "    public static final %s DEFAULT_INSTANCE = new %s(new Builder());\n\n", cls, cls)
 	oneofs := javaOneofs(m)
 
@@ -257,7 +258,7 @@ func javaMessageFile(f *model.File, m model.Message) File {
 		writeJavaOneofGetter(&b, f, m, o)
 	}
 
-	writeJavaWire(&b, f, m, cls, oneofs)
+	writeJavaCodec(&b, f, m, cls, oneofs)
 	writeJavaBuilder(&b, f, m, cls, oneofs)
 	for _, o := range oneofs {
 		writeJavaKindCase(&b, m, o)
@@ -377,7 +378,7 @@ func writeJavaGetter(b *strings.Builder, f *model.File, field model.Field) {
 	case protoreflect.BytesKind:
 		fmt.Fprintf(b, "    public byte[] get%s() {\n        return %s.clone();\n    }\n\n", p, priv)
 	default:
-		fmt.Fprintf(b, "    public %s get%s() {\n        return %s;\n    }\n\n", t, p, priv)
+		fmt.Fprintf(b, "    public %s %s() {\n        return %s;\n    }\n\n", t, javaGetterName(field), priv)
 	}
 }
 
@@ -479,7 +480,7 @@ func writeJavaOneofGetter(b *strings.Builder, f *model.File, m model.Message, o 
 			fmt.Fprintf(b, "    public double get%s() {\n", p)
 			fmt.Fprintf(b, "        return %sCase_ == %d ? (Double) %s_ : 0.0;\n    }\n\n", lower, num, lower)
 		case protoreflect.BoolKind:
-			fmt.Fprintf(b, "    public boolean get%s() {\n", p)
+			fmt.Fprintf(b, "    public boolean is%s() {\n", p)
 			fmt.Fprintf(b, "        return %sCase_ == %d ? (Boolean) %s_ : false;\n    }\n\n", lower, num, lower)
 		default:
 			fmt.Fprintf(b, "    public %s get%s() {\n", t, p)
@@ -492,57 +493,67 @@ func writeJavaOneofGetter(b *strings.Builder, f *model.File, m model.Message, o 
 	}
 }
 
-// writeJavaWire emits toByteArray/parseFrom/encodeInto/decode/isInitialized.
-func writeJavaWire(b *strings.Builder, f *model.File, m model.Message, cls string, oneofs []string) {
-	fmt.Fprintf(b, "    public byte[] toByteArray() {\n")
-	fmt.Fprintf(b, "        Message msg = %s.type(%q).newMessage();\n", javaHolderName(f), m.Full)
-	b.WriteString("        try {\n")
-	b.WriteString("            encodeInto(msg);\n")
-	b.WriteString("            return msg.encode();\n")
-	b.WriteString("        } finally {\n")
-	b.WriteString("            msg.close();\n")
-	b.WriteString("        }\n    }\n\n")
-
-	fmt.Fprintf(b, "    public static %s parseFrom(byte[] data) {\n", cls)
-	fmt.Fprintf(b, "        Message msg = %s.type(%q).decode(data);\n", javaHolderName(f), m.Full)
-	b.WriteString("        try {\n")
-	b.WriteString("            return decode(msg);\n")
-	b.WriteString("        } finally {\n")
-	b.WriteString("            msg.close();\n")
-	b.WriteString("        }\n    }\n\n")
-
-	fmt.Fprintf(b, "    public void encodeInto(Message msg) {\n")
-	for _, field := range m.Fields {
-		if field.Skip != "" || field.Oneof != "" {
-			continue
-		}
-		writeJavaEncodeField(b, f, field)
+// javaKindInt maps a proto kind to the table engine's Kind constant.
+func javaKindInt(kind protoreflect.Kind) string {
+	switch kind {
+	case protoreflect.Int32Kind:
+		return "Kind.INT32"
+	case protoreflect.Uint32Kind:
+		return "Kind.UINT32"
+	case protoreflect.Sint32Kind:
+		return "Kind.SINT32"
+	case protoreflect.Int64Kind:
+		return "Kind.INT64"
+	case protoreflect.Uint64Kind:
+		return "Kind.UINT64"
+	case protoreflect.Sint64Kind:
+		return "Kind.SINT64"
+	case protoreflect.BoolKind:
+		return "Kind.BOOL"
+	case protoreflect.EnumKind:
+		return "Kind.ENUM"
+	case protoreflect.Fixed32Kind:
+		return "Kind.FIXED32"
+	case protoreflect.Sfixed32Kind:
+		return "Kind.SFIXED32"
+	case protoreflect.FloatKind:
+		return "Kind.FLOAT"
+	case protoreflect.Fixed64Kind:
+		return "Kind.FIXED64"
+	case protoreflect.Sfixed64Kind:
+		return "Kind.SFIXED64"
+	case protoreflect.DoubleKind:
+		return "Kind.DOUBLE"
+	case protoreflect.StringKind:
+		return "Kind.STRING"
+	case protoreflect.BytesKind:
+		return "Kind.BYTES"
+	case protoreflect.GroupKind:
+		return "Kind.GROUP"
+	default:
+		return "Kind.MESSAGE"
 	}
-	for _, o := range oneofs {
-		lower := model.LowerCamel(o)
-		fmt.Fprintf(b, "        switch (%sCase_) {\n", lower)
-		for _, field := range m.Fields {
-			if field.Skip != "" || field.Oneof != o {
-				continue
-			}
-			fmt.Fprintf(b, "            case %d:\n", field.Number)
-			writeJavaEncodeOne(b, f, field, lower)
-			b.WriteString("                break;\n")
-		}
-		b.WriteString("            default:\n                break;\n        }\n")
+}
+
+// javaGetterName is the read accessor: isX for singular booleans (Lombok
+// style), getX otherwise. Repeated element access stays getX(i).
+func javaGetterName(field model.Field) string {
+	if field.Kind == protoreflect.BoolKind && !field.Repeated {
+		return "is" + field.Pascal
 	}
+	return "get" + field.Pascal
+}
+
+// writeJavaCodec emits the delegating toByteArray/parseFrom: one line each
+// through the PbCodec registry, so the message class carries no codec state.
+// The table lives in the sibling <Cls>Meta file; all wire logic in PbCodec.
+func writeJavaCodec(b *strings.Builder, f *model.File, m model.Message, cls string, oneofs []string) {
+	b.WriteString("    public byte[] toByteArray() {\n")
+	b.WriteString("        return PbCodec.encode(this);\n")
 	b.WriteString("    }\n\n")
-
-	fmt.Fprintf(b, "    public static %s decode(Message msg) {\n", cls)
-	b.WriteString("        Builder b = new Builder();\n")
-	for _, field := range m.Fields {
-		if field.Skip != "" {
-			continue
-		}
-		writeJavaLoadField(b, f, field)
-	}
-	b.WriteString("        return b.build();\n    }\n\n")
-
+	b.WriteString("    public static " + cls + " parseFrom(byte[] data) {\n")
+	b.WriteString("        return PbCodec.parseFrom(data, " + cls + ".class);\n")
+	b.WriteString("    }\n\n")
 	b.WriteString("    public boolean isInitialized() {\n")
 	need := false
 	for _, field := range m.Fields {
@@ -585,257 +596,342 @@ func writeJavaWire(b *strings.Builder, f *model.File, m model.Message, cls strin
 	b.WriteString("    }\n\n")
 }
 
-// writeJavaEncodeField emits one non-oneof field of encodeInto.
-func writeJavaEncodeField(b *strings.Builder, f *model.File, field model.Field) {
-	cond := javaEncodeCond(f, field)
-	if cond != "" {
-		fmt.Fprintf(b, "        if (%s) {\n", cond)
-		writeJavaEncodeOne(b, f, field, "")
-		b.WriteString("        }\n")
+// writeJavaOrBuilderField emits one non-oneof member of the interface.
+func writeJavaOrBuilderField(b *strings.Builder, f *model.File, field model.Field) {
+	p := field.Pascal
+	if field.Repeated {
+		writeJavaOrBuilderRepeated(b, f, field, p)
 		return
 	}
-	// Required: always written; presence was validated by build().
-	fmt.Fprintf(b, "        // required %s\n", field.Name)
-	writeJavaEncodeOneIndent(b, f, field, "", "        ")
-}
-
-// javaEncodeCond is the implicit/explicit presence gate; "" means always.
-func javaEncodeCond(f *model.File, field model.Field) string {
-	priv := field.Lower + "_"
-	if field.Required {
-		return ""
-	}
-	if field.Repeated {
-		return "!" + priv + ".isEmpty()"
-	}
 	if field.Message != "" {
-		return priv + " != null"
+		fmt.Fprintf(b, "    boolean has%s();\n", p)
+		fmt.Fprintf(b, "    %s get%s();\n", javaType(f, field), p)
+		return
 	}
-	if field.NeedsHas {
-		// Explicit presence (optional, required): the has-bit decides, even
-		// for an empty string or bytes payload. Implicit fields below stay
-		// off the wire at their zero value, like protoc.
-		return "has" + field.Pascal
+	if field.Kind == protoreflect.EnumKind && field.Enum != "" {
+		if field.NeedsHas || field.Required {
+			fmt.Fprintf(b, "    boolean has%s();\n", p)
+		}
+		fmt.Fprintf(b, "    int get%sValue();\n", p)
+		fmt.Fprintf(b, "    %s get%s();\n", javaType(f, field), p)
+		return
 	}
-	if field.Kind == protoreflect.StringKind {
-		return "!" + priv + ".isEmpty()"
+	if field.NeedsHas || field.Required {
+		fmt.Fprintf(b, "    boolean has%s();\n", p)
 	}
+	fmt.Fprintf(b, "    %s %s();\n", javaType(f, field), javaGetterName(field))
+}
+
+// writeJavaOrBuilderRepeated emits one repeated member of the interface.
+func writeJavaOrBuilderRepeated(b *strings.Builder, f *model.File, field model.Field, p string) {
 	if field.Kind == protoreflect.BytesKind {
-		return priv + ".length != 0"
+		fmt.Fprintf(b, "    List<byte[]> get%sList();\n", p)
+		fmt.Fprintf(b, "    int get%sCount();\n", p)
+		fmt.Fprintf(b, "    byte[] get%s(int index);\n", p)
+		return
 	}
-	if field.Kind == protoreflect.BoolKind {
-		return priv
+	if field.Kind == protoreflect.EnumKind && field.Enum != "" {
+		t := javaType(f, field)
+		fmt.Fprintf(b, "    List<%s> get%sList();\n", t, p)
+		fmt.Fprintf(b, "    List<Integer> get%sValueList();\n", p)
+		fmt.Fprintf(b, "    int get%sCount();\n", p)
+		fmt.Fprintf(b, "    %s get%s(int index);\n", t, p)
+		fmt.Fprintf(b, "    int get%sValue(int index);\n", p)
+		return
 	}
-	if field.Kind == protoreflect.FloatKind {
-		return priv + " != 0f"
-	}
-	if field.Kind == protoreflect.DoubleKind {
-		return priv + " != 0.0"
-	}
-	return priv + " != 0"
+	t := javaBoxed(f, field)
+	fmt.Fprintf(b, "    List<%s> get%sList();\n", t, p)
+	fmt.Fprintf(b, "    int get%sCount();\n", p)
+	fmt.Fprintf(b, "    %s get%s(int index);\n", unbox(t), p)
 }
 
-// writeJavaEncodeOne emits the set/newMessage call for a present field.
-// oneofLower is the oneof payload holder for oneof members, "" otherwise.
-func writeJavaEncodeOne(b *strings.Builder, f *model.File, field model.Field, oneofLower string) {
-	writeJavaEncodeOneIndent(b, f, field, oneofLower, "            ")
+// writeJavaOrBuilderMember emits one oneof member of the interface.
+func writeJavaOrBuilderMember(b *strings.Builder, f *model.File, field model.Field) {
+	p := field.Pascal
+	fmt.Fprintf(b, "    boolean has%s();\n", p)
+	if field.Message != "" {
+		fmt.Fprintf(b, "    %s get%s();\n", javaType(f, field), p)
+		return
+	}
+	if field.Kind == protoreflect.EnumKind && field.Enum != "" {
+		fmt.Fprintf(b, "    int get%sValue();\n", p)
+		fmt.Fprintf(b, "    %s get%s();\n", javaType(f, field), p)
+		return
+	}
+	fmt.Fprintf(b, "    %s %s();\n", javaType(f, field), javaGetterName(field))
 }
 
-// writeJavaEncodeOneIndent is writeJavaEncodeOne with a chosen indent.
-func writeJavaEncodeOneIndent(b *strings.Builder, f *model.File, field model.Field, oneofLower, indent string) {
-	key := fmt.Sprintf("%q", field.Name)
-	src := field.Lower + "_"
-	if oneofLower != "" {
-		src = oneofLower + "_"
+// javaMetaFile emits the codec table of one message as a sibling file: the
+// message class stays a plain OrBuilder implementation, and this file binds
+// it to the PbCodec engine with one register call in its static initializer.
+// The rows read through the OrBuilder interface and decode through the
+// Builder, so a hand-written class implementing the same interface replaces
+// the message with one PbCodec.register call. The interface registration
+// lets unregistered implementations encode with no per-class call, and
+// parseFrom through the OrBuilder decode into the registered Builder's
+// product (a later registerInterface call swaps in the custom Builder).
+func javaMetaFile(f *model.File, m model.Message) File {
+	cls := className(f, m.Name)
+	var b strings.Builder
+	b.WriteString(header(f, "Codec table of generated message "+m.Full+"."))
+	b.WriteString("import java.util.function.Function;\nimport java.util.function.Supplier;\n\n")
+	fmt.Fprintf(&b, "final class %sMeta {\n", cls)
+	writeJavaMeta(&b, f, m)
+	writeJavaRegister(&b, f, m, cls)
+	b.WriteString("}\n")
+	return File{Name: cls + "Meta.java", Content: b.String()}
+}
+
+// writeJavaMeta emits the compiled field table into the sibling <Cls>Meta
+// file as a forBuilder factory: one row per field binding the OrBuilder
+// getters to setter lookups on the passed Builder class, sub-message
+// tables via their own <Sub>Meta files. The default META binds the
+// generated Builder; a hand-written Builder with the canonical shape
+// shares the exact same rows with no hand-written table.
+func writeJavaMeta(b *strings.Builder, f *model.File, m model.Message) {
+	cls := className(f, m.Name)
+	b.WriteString("    @SuppressWarnings({\"unchecked\", \"rawtypes\"})\n")
+	fmt.Fprintf(b, "    static final Meta<%sOrBuilder, %s.Builder> META = forBuilder(%s.Builder.class);\n\n", cls, cls, cls)
+	b.WriteString("    @SuppressWarnings({\"unchecked\", \"rawtypes\"})\n")
+	fmt.Fprintf(b, "    static <B> Meta<%sOrBuilder, B> forBuilder(Class<B> builderClass) {\n", cls)
+	fmt.Fprintf(b, "        return new Meta<>(\n")
+	fmt.Fprintf(b, "                %q,\n", m.Full)
+	b.WriteString("                new FieldMeta[] {\n")
+	ob := cls + "OrBuilder"
+	for _, field := range m.Fields {
+		if field.Skip != "" {
+			continue
+		}
+		writeJavaMetaRow(b, f, field, ob)
+	}
+	b.WriteString("                });\n")
+	b.WriteString("    }\n\n")
+}
+
+// writeJavaRegister emits the one-call registration: the generated Builder
+// (or any hand-written one with the canonical shape) is bound through
+// forBuilder above, then registered under the message class and the
+// OrBuilder interface alike, so a later registration wins everywhere.
+// The factory and finish are passed straight through; the product and
+// presence checks fail fast on a misshapen Builder.
+func writeJavaRegister(b *strings.Builder, f *model.File, m model.Message, cls string) {
+	ob := cls + "OrBuilder"
+	b.WriteString("    /**\n")
+	b.WriteString("     * One call registers a hand-written Builder with the canonical shape:\n")
+	b.WriteString("     * a nested {@code Builder} with a public no-arg constructor and\n")
+	b.WriteString("     * {@code build()}, plus the same setters the generated Builder has\n")
+	b.WriteString("     * (and {@code hasX} for required fields). Registers the message\n")
+	b.WriteString("     * class and re-points the OrBuilder interface at the same pair,\n")
+	b.WriteString("     * so a later registration wins everywhere: encode, decode by\n")
+	b.WriteString("     * class and decode by interface. Fails fast.\n")
+	b.WriteString("     */\n")
+	b.WriteString("    @SuppressWarnings({\"unchecked\", \"rawtypes\"})\n")
+	b.WriteString("    static <M, B> void register(Class<M> messageClass, Supplier<B> factory, Function<B, M> finish) {\n")
+	b.WriteString("        Class<B> builderClass = Bind.nestedBuilder(messageClass);\n")
+	fmt.Fprintf(b, "        Meta<%s, B> meta = forBuilder(builderClass);\n", ob)
+	fmt.Fprintf(b, "        Bind.checkProduct(builderClass, messageClass, %s.class);\n", ob)
+	b.WriteString("        PbCodec.register(messageClass, meta, factory, finish);\n")
+	fmt.Fprintf(b, "        PbCodec.registerInterface(%s.class, meta, factory, finish);\n", ob)
+	b.WriteString("    }\n")
+}
+
+// javaHasLambdas renders the presence gate of one row: the OrBuilder
+// has-method, plus the Builder has-method name for required fields (only
+// required rows are ever presence-checked, so anything else stays null
+// and a custom Builder needs no has-methods except for required fields).
+func javaHasLambdas(ob string, field model.Field) (string, string) {
+	hasM := "null"
+	if field.NeedsHas || field.Required || field.Message != "" {
+		hasM = ob + "::has" + field.Pascal
+	}
+	hasB := ""
+	if field.Required {
+		hasB = "has" + field.Pascal
+	}
+	return hasM, hasB
+}
+
+// writeJavaMetaRow emits one table row: the setters resolve against the
+// passed Builder class by canonical name, so the rows depend only on the
+// field shape, never on hand-written code.
+func writeJavaMetaRow(b *strings.Builder, f *model.File, field model.Field, ob string) {
+	num := field.Number
+	hasM, hasBMethod := javaHasLambdas(ob, field)
+	req := "false"
+	if field.Required {
+		req = "true"
+	}
+	hasB := "null"
+	if hasBMethod != "" {
+		hasB = "Bind.checker(builderClass, \"" + hasBMethod + "\")"
+	}
+	bindInt := func(name string) string {
+		return "Bind.intSetter(builderClass, \"" + name + "\")"
+	}
+	bindLong := func(name string) string {
+		return "Bind.longSetter(builderClass, \"" + name + "\")"
+	}
+	bindDouble := func(name string) string {
+		return "Bind.doubleSetter(builderClass, \"" + name + "\")"
+	}
+	bindRef := func(name, vtype string) string {
+		return "Bind.setter(builderClass, \"" + name + "\", " + vtype + ".class)"
+	}
+	setV := func(name, vtype string) string {
+		switch vtype {
+		case "int":
+			return bindInt(name)
+		case "long":
+			return bindLong(name)
+		case "double":
+			return bindDouble(name)
+		default:
+			return bindRef(name, vtype)
+		}
+	}
+	if field.Oneof != "" {
+		caseOf := "(" + ob + " o) -> o.get" + model.Pascal(field.Oneof) + "Case().getNumber()"
+		switch {
+		case field.Message != "":
+			emitOneofMsgRow(b, f, field, num, caseOf, ob)
+			return
+		case field.Kind == protoreflect.StringKind:
+			fmt.Fprintf(b, "                FieldMeta.ofOneofString(%d, %s::%s, %s, %s),\n",
+				num, ob, javaGetterName(field), setV("set"+field.Pascal, "String"), caseOf)
+			return
+		case field.Kind == protoreflect.BytesKind:
+			fmt.Fprintf(b, "                FieldMeta.ofOneofBytes(%d, %s::%s, %s, %s),\n",
+				num, ob, javaGetterName(field), setV("set"+field.Pascal, "byte[]"), caseOf)
+			return
+		case field.Kind == protoreflect.BoolKind:
+			fmt.Fprintf(b, "                FieldMeta.ofOneofBool(%d, %s::%s, %s, %s),\n",
+				num, ob, javaGetterName(field), setV("set"+field.Pascal, "Boolean"), caseOf)
+			return
+		case field.Kind == protoreflect.FloatKind:
+			fmt.Fprintf(b, "                FieldMeta.ofOneofFloat(%d, %s::%s, %s, %s),\n",
+				num, ob, javaGetterName(field), setV("set"+field.Pascal, "Float"), caseOf)
+			return
+		case field.Kind == protoreflect.DoubleKind:
+			fmt.Fprintf(b, "                FieldMeta.ofOneofDouble(%d, %s::%s, %s, %s),\n",
+				num, ob, javaGetterName(field), setV("set"+field.Pascal, "double"), caseOf)
+			return
+		case field.Kind == protoreflect.Int64Kind, field.Kind == protoreflect.Uint64Kind,
+			field.Kind == protoreflect.Sint64Kind, field.Kind == protoreflect.Fixed64Kind,
+			field.Kind == protoreflect.Sfixed64Kind:
+			fmt.Fprintf(b, "                FieldMeta.ofOneofLong(%d, %s, %s::%s, %s, %s),\n",
+				num, javaKindInt(field.Kind), ob, javaGetterName(field), setV("set"+field.Pascal, "long"), caseOf)
+			return
+		default:
+			fmt.Fprintf(b, "                FieldMeta.ofOneofInt(%d, %s, %s::%s, %s, %s),\n",
+				num, javaKindInt(field.Kind), ob, javaGetterName(field), setV("set"+field.Pascal, "int"), caseOf)
+			return
+		}
 	}
 	switch {
 	case field.Message != "" && !field.Repeated:
-		if oneofLower != "" {
-			fmt.Fprintf(b, "%s((%s) %s).encodeInto(msg.newMessage(%s));\n", indent, javaType(f, field), src, key)
-		} else {
-			fmt.Fprintf(b, "%s%s.encodeInto(msg.newMessage(%s));\n", indent, src, key)
+		t := javaType(f, field)
+		fac := t + ".Builder::new"
+		fin := t + ".Builder::buildPartial"
+		if field.Kind == protoreflect.GroupKind {
+			fmt.Fprintf(b, "                FieldMeta.ofGroup(%d, %s::get%s, %s, %s, %sMeta.META, %s, %s, %s),\n",
+				num, ob, field.Pascal, bindRef("set"+field.Pascal, t), fac, t, fin, hasM, hasB)
+			return
 		}
+		fmt.Fprintf(b, "                FieldMeta.ofMessage(%d, %s::get%s, %s, %s, %sMeta.META, %s, %s, %s, %s),\n",
+			num, ob, field.Pascal, bindRef("set"+field.Pascal, t), fac, t, fin, hasM, hasB, req)
+		return
 	case field.Message != "" && field.Repeated:
-		fmt.Fprintf(b, "%sfor (%s v : %s) {\n", indent, javaType(f, field), src)
-		fmt.Fprintf(b, "%s    v.encodeInto(msg.newMessage(%s));\n", indent, key)
-		fmt.Fprintf(b, "%s}\n", indent)
+		t := javaType(f, field)
+		fac := t + ".Builder::new"
+		fin := t + ".Builder::buildPartial"
+		if field.Kind == protoreflect.GroupKind {
+			fmt.Fprintf(b, "                FieldMeta.ofRepGroup(%d, %s::get%sList, %s, %s, %sMeta.META, %s),\n",
+				num, ob, field.Pascal, bindRef("add"+field.Pascal, t), fac, t, fin)
+			return
+		}
+		fmt.Fprintf(b, "                FieldMeta.ofRepMessage(%d, %s::get%sList, %s, %s, %sMeta.META, %s),\n",
+			num, ob, field.Pascal, bindRef("add"+field.Pascal, t), fac, t, fin)
+		return
 	case field.Repeated:
-		elem := unbox(javaBoxed(f, field))
-		if field.Kind == protoreflect.EnumKind && field.Enum != "" {
-			elem = "int" // enums ride raw; getters map to the enum type
+		pack := "false"
+		if field.Packed {
+			pack = "true"
 		}
-		if field.Kind == protoreflect.BytesKind {
-			fmt.Fprintf(b, "%sfor (byte[] v : %s) {\n", indent, src)
-		} else {
-			fmt.Fprintf(b, "%sfor (%s v : %s) {\n", indent, elem, src)
-		}
-		fmt.Fprintf(b, "%s    msg.set(%s, %s);\n", indent, key, javaEncodeArg(f, field, "v"))
-		fmt.Fprintf(b, "%s}\n", indent)
-	default:
-		fmt.Fprintf(b, "%smsg.set(%s, %s);\n", indent, key, javaEncodeArg(f, field, src))
-	}
-}
-
-// javaEncodeArg renders the dynamic-set value: integers ride as long, floats
-// narrow through double, oneof payloads unbox from Object.
-func javaEncodeArg(f *model.File, field model.Field, expr string) string {
-	if field.Oneof != "" && field.Message == "" {
-		switch field.Kind {
-		case protoreflect.FloatKind:
-			return "(double) (Float) " + expr
-		case protoreflect.DoubleKind:
-			return "(Double) " + expr
-		case protoreflect.BoolKind:
-			return "(Boolean) " + expr
-		case protoreflect.StringKind:
-			return "(String) " + expr
-		case protoreflect.BytesKind:
-			return "(byte[]) " + expr
-		default:
-			return "(long) (Integer) " + expr
-		}
-	}
-	switch field.Kind {
-	case protoreflect.Int32Kind, protoreflect.Sint32Kind, protoreflect.Sfixed32Kind,
-		protoreflect.Uint32Kind, protoreflect.Fixed32Kind, protoreflect.EnumKind,
-		protoreflect.Int64Kind, protoreflect.Sint64Kind, protoreflect.Sfixed64Kind,
-		protoreflect.Uint64Kind, protoreflect.Fixed64Kind:
-		return "(long) " + expr
-	case protoreflect.FloatKind, protoreflect.DoubleKind:
-		return "(double) " + expr
-	default:
-		return expr
-	}
-}
-
-// writeJavaLoadField emits one field of decode(Message).
-func writeJavaLoadField(b *strings.Builder, f *model.File, field model.Field) {
-	priv := "b." + field.Lower + "_"
-	key := fmt.Sprintf("%q", field.Name)
-	if field.Repeated {
-		if field.Message != "" {
-			fmt.Fprintf(b, "        for (Object o : msg.getList(%s)) {\n", key)
-			fmt.Fprintf(b, "            %s.add(%s.decode((Message) o));\n", priv, javaType(f, field))
-			b.WriteString("        }\n")
-			return
-		}
-		var conv string
 		switch field.Kind {
 		case protoreflect.StringKind:
-			conv = "(String) o"
+			fmt.Fprintf(b, "                FieldMeta.ofRepString(%d, %s::get%sList, %s),\n",
+				num, ob, field.Pascal, setV("add"+field.Pascal, "String"))
 		case protoreflect.BytesKind:
-			conv = "((byte[]) o).clone()"
+			fmt.Fprintf(b, "                FieldMeta.ofRepBytes(%d, %s::get%sList, %s),\n",
+				num, ob, field.Pascal, setV("add"+field.Pascal, "byte[]"))
 		case protoreflect.BoolKind:
-			conv = "(Boolean) o"
+			fmt.Fprintf(b, "                FieldMeta.ofRepBool(%d, %s, %s::get%sList, %s),\n",
+				num, pack, ob, field.Pascal, setV("add"+field.Pascal, "Boolean"))
 		case protoreflect.FloatKind:
-			conv = "((Number) o).floatValue()"
+			fmt.Fprintf(b, "                FieldMeta.ofRepFloat(%d, %s, %s, %s::get%sList, %s),\n",
+				num, javaKindInt(field.Kind), pack, ob, field.Pascal, setV("add"+field.Pascal, "Float"))
 		case protoreflect.DoubleKind:
-			conv = "((Number) o).doubleValue()"
-		case protoreflect.Int64Kind, protoreflect.Sint64Kind, protoreflect.Sfixed64Kind,
-			protoreflect.Uint64Kind, protoreflect.Fixed64Kind:
-			conv = "((Number) o).longValue()"
+			fmt.Fprintf(b, "                FieldMeta.ofRepDouble(%d, %s, %s, %s::get%sList, %s),\n",
+				num, javaKindInt(field.Kind), pack, ob, field.Pascal, setV("add"+field.Pascal, "double"))
+		case protoreflect.Int64Kind, protoreflect.Uint64Kind, protoreflect.Sint64Kind,
+			protoreflect.Fixed64Kind, protoreflect.Sfixed64Kind:
+			fmt.Fprintf(b, "                FieldMeta.ofRepLong(%d, %s, %s, %s::get%sList, %s),\n",
+				num, javaKindInt(field.Kind), pack, ob, field.Pascal, setV("add"+field.Pascal, "long"))
 		default:
-			conv = "((Number) o).intValue()"
+			fmt.Fprintf(b, "                FieldMeta.ofRepInt(%d, %s, %s, %s::get%sList, %s),\n",
+				num, javaKindInt(field.Kind), pack, ob, field.Pascal, setV("add"+field.Pascal, "int"))
 		}
-		fmt.Fprintf(b, "        for (Object o : msg.getList(%s)) {\n", key)
-		fmt.Fprintf(b, "            %s.add(%s);\n", priv, conv)
-		b.WriteString("        }\n")
 		return
 	}
-	if field.Message != "" {
-		if field.Oneof != "" {
-			fmt.Fprintf(b, "        if (msg.has(%s)) {\n", key)
-			fmt.Fprintf(b, "            b.%sCase_ = %d;\n", model.LowerCamel(field.Oneof), field.Number)
-			fmt.Fprintf(b, "            b.%s_ = %s.decode(msg.getMessage(%s));\n", model.LowerCamel(field.Oneof), javaType(f, field), key)
-			b.WriteString("        }\n")
-			return
-		}
-		fmt.Fprintf(b, "        { Message child = msg.getMessage(%s); if (child != null) { %s = %s.decode(child); } }\n",
-			key, priv, javaType(f, field))
+	if field.Kind == protoreflect.EnumKind && field.Enum != "" {
+		fmt.Fprintf(b, "                FieldMeta.ofInt(%d, Kind.ENUM, %s::get%sValue, %s, %s, %s, %s),\n",
+			num, ob, field.Pascal, setV("set"+field.Pascal+"Value", "int"), hasM, hasB, req)
 		return
 	}
-	if field.Oneof != "" {
-		fmt.Fprintf(b, "        if (msg.has(%s)) {\n", key)
-		fmt.Fprintf(b, "            b.%sCase_ = %d;\n", model.LowerCamel(field.Oneof), field.Number)
-		fmt.Fprintf(b, "            b.%s_ = %s;\n", model.LowerCamel(field.Oneof), javaLoadBox(field, key))
-		b.WriteString("        }\n")
-		return
-	}
-	read := javaRead(f, field, key)
-	if field.NeedsHas || field.Required {
-		fmt.Fprintf(b, "        if (msg.has(%s)) {\n", key)
-		fmt.Fprintf(b, "            b.has%s = true;\n", field.Pascal)
-		fmt.Fprintf(b, "            %s = %s;\n", priv, read)
-		b.WriteString("        }\n")
-		return
-	}
-	fmt.Fprintf(b, "        %s = %s;\n", priv, javaReadDefault(f, field, key))
-}
-
-// javaRead renders the typed getter call for a present field.
-func javaRead(f *model.File, field model.Field, key string) string {
 	switch field.Kind {
-	case protoreflect.Int32Kind, protoreflect.Sint32Kind, protoreflect.Sfixed32Kind,
-		protoreflect.Uint32Kind, protoreflect.Fixed32Kind, protoreflect.EnumKind:
-		return fmt.Sprintf("msg.getInt(%s)", key)
-	case protoreflect.Int64Kind, protoreflect.Sint64Kind, protoreflect.Sfixed64Kind,
-		protoreflect.Uint64Kind, protoreflect.Fixed64Kind:
-		return fmt.Sprintf("msg.getLong(%s)", key)
-	case protoreflect.FloatKind:
-		return fmt.Sprintf("msg.getFloat(%s)", key)
-	case protoreflect.DoubleKind:
-		return fmt.Sprintf("msg.getDouble(%s)", key)
+	case protoreflect.StringKind:
+		fmt.Fprintf(b, "                FieldMeta.ofString(%d, %s::%s, %s, %s, %s, %s),\n",
+			num, ob, javaGetterName(field), setV("set"+field.Pascal, "String"), hasM, hasB, req)
+	case protoreflect.BytesKind:
+		fmt.Fprintf(b, "                FieldMeta.ofBytes(%d, %s::%s, %s, %s, %s, %s),\n",
+			num, ob, javaGetterName(field), setV("set"+field.Pascal, "byte[]"), hasM, hasB, req)
 	case protoreflect.BoolKind:
-		return fmt.Sprintf("msg.getBool(%s)", key)
-	case protoreflect.StringKind:
-		return fmt.Sprintf("msg.getString(%s)", key)
-	case protoreflect.BytesKind:
-		return fmt.Sprintf("msg.getBytes(%s)", key)
-	default:
-		return fmt.Sprintf("msg.getLong(%s)", key)
-	}
-}
-
-// javaReadDefault reads an implicit field, keeping the default when absent
-// (getString/getBytes return null then).
-func javaReadDefault(f *model.File, field model.Field, key string) string {
-	switch field.Kind {
-	case protoreflect.StringKind:
-		return fmt.Sprintf("orEmpty(msg.getString(%s))", key)
-	case protoreflect.BytesKind:
-		return fmt.Sprintf("orEmpty(msg.getBytes(%s))", key)
-	default:
-		return javaRead(f, field, key)
-	}
-}
-
-// javaLoadBox boxes a present oneof member into the Object payload.
-func javaLoadBox(field model.Field, key string) string {
-	switch field.Kind {
-	case protoreflect.Int32Kind, protoreflect.Sint32Kind, protoreflect.Sfixed32Kind,
-		protoreflect.Uint32Kind, protoreflect.Fixed32Kind, protoreflect.EnumKind:
-		return fmt.Sprintf("msg.getInt(%s)", key)
-	case protoreflect.Int64Kind, protoreflect.Sint64Kind, protoreflect.Sfixed64Kind,
-		protoreflect.Uint64Kind, protoreflect.Fixed64Kind:
-		return fmt.Sprintf("msg.getLong(%s)", key)
+		fmt.Fprintf(b, "                FieldMeta.ofBool(%d, %s::%s, %s, %s, %s, %s),\n",
+			num, ob, javaGetterName(field), setV("set"+field.Pascal, "Boolean"), hasM, hasB, req)
 	case protoreflect.FloatKind:
-		return fmt.Sprintf("msg.getFloat(%s)", key)
+		fmt.Fprintf(b, "                FieldMeta.ofFloat(%d, %s::%s, %s, %s, %s, %s),\n",
+			num, ob, javaGetterName(field), setV("set"+field.Pascal, "Float"), hasM, hasB, req)
 	case protoreflect.DoubleKind:
-		return fmt.Sprintf("msg.getDouble(%s)", key)
-	case protoreflect.BoolKind:
-		return fmt.Sprintf("msg.getBool(%s)", key)
-	case protoreflect.StringKind:
-		return fmt.Sprintf("msg.getString(%s)", key)
-	case protoreflect.BytesKind:
-		return fmt.Sprintf("msg.getBytes(%s)", key)
+		fmt.Fprintf(b, "                FieldMeta.ofDouble(%d, %s::%s, %s, %s, %s, %s),\n",
+			num, ob, javaGetterName(field), setV("set"+field.Pascal, "double"), hasM, hasB, req)
+	case protoreflect.Int64Kind, protoreflect.Uint64Kind, protoreflect.Sint64Kind,
+		protoreflect.Fixed64Kind, protoreflect.Sfixed64Kind:
+		fmt.Fprintf(b, "                FieldMeta.ofLong(%d, %s, %s::%s, %s, %s, %s, %s),\n",
+			num, javaKindInt(field.Kind), ob, javaGetterName(field), setV("set"+field.Pascal, "long"), hasM, hasB, req)
 	default:
-		return fmt.Sprintf("msg.getLong(%s)", key)
+		fmt.Fprintf(b, "                FieldMeta.ofInt(%d, %s, %s::%s, %s, %s, %s, %s),\n",
+			num, javaKindInt(field.Kind), ob, javaGetterName(field), setV("set"+field.Pascal, "int"), hasM, hasB, req)
 	}
+}
+
+// emitOneofMsgRow emits the table row of one oneof message/group member.
+// The setter resolves against the passed Builder class like every row.
+func emitOneofMsgRow(b *strings.Builder, f *model.File, field model.Field, num int32, caseOf string, ob string) {
+	t := javaType(f, field)
+	fac := t + ".Builder::new"
+	fin := t + ".Builder::buildPartial"
+	if field.Kind == protoreflect.GroupKind {
+		fmt.Fprintf(b, "                FieldMeta.ofOneofGroup(%d, %s::get%s, %s, %s, %sMeta.META, %s, %s),\n",
+			num, ob, field.Pascal, "Bind.setter(builderClass, \"set"+field.Pascal+"\", "+t+".class)", fac, t, fin, caseOf)
+		return
+	}
+	fmt.Fprintf(b, "                FieldMeta.ofOneofMessage(%d, %s::get%s, %s, %s, %sMeta.META, %s, %s),\n",
+		num, ob, field.Pascal, "Bind.setter(builderClass, \"set"+field.Pascal+"\", "+t+".class)", fac, t, fin, caseOf)
 }
 
 // writeJavaBuilder emits the nested Builder class.
 func writeJavaBuilder(b *strings.Builder, f *model.File, m model.Message, cls string, oneofs []string) {
-	b.WriteString("\n    public static final class Builder {\n")
+	fmt.Fprintf(b, "\n    public static final class Builder implements %sOrBuilder {\n", cls)
 	for _, field := range m.Fields {
 		if field.Skip != "" || field.Oneof != "" {
 			continue
@@ -875,11 +971,7 @@ func writeJavaBuilder(b *strings.Builder, f *model.File, m model.Message, cls st
 	b.WriteString("            return result;\n        }\n\n")
 	fmt.Fprintf(b, "        public %s buildPartial() {\n", cls)
 	fmt.Fprintf(b, "            return new %s(this);\n        }\n", cls)
-	b.WriteString("    }\n\n")
-	b.WriteString("    private static String orEmpty(String s) {\n")
-	b.WriteString("        return s == null ? \"\" : s;\n    }\n\n")
-	b.WriteString("    private static byte[] orEmpty(byte[] b) {\n")
-	b.WriteString("        return b == null ? new byte[0] : b;\n    }\n")
+	b.WriteString("    }\n")
 }
 
 // writeJavaBuilderField emits one mutable Builder slot.
@@ -1045,7 +1137,7 @@ func writeJavaSetter(b *strings.Builder, f *model.File, field model.Field) {
 	if field.NeedsHas || field.Required {
 		fmt.Fprintf(b, "        public boolean has%s() {\n            return has%s;\n        }\n\n", p, p)
 	}
-	fmt.Fprintf(b, "        public %s get%s() {\n            return %s;\n        }\n\n", t, p, priv)
+	fmt.Fprintf(b, "        public %s %s() {\n            return %s;\n        }\n\n", t, javaGetterName(field), priv)
 	fmt.Fprintf(b, "        public Builder set%s(%s value) {\n", p, t)
 	fmt.Fprintf(b, "            %s = value;\n", priv)
 	if field.NeedsHas || field.Required {
@@ -1237,7 +1329,7 @@ func writeJavaOneofBuilder(b *strings.Builder, f *model.File, m model.Message, o
 			fmt.Fprintf(b, "                %s_ = null;\n", lower)
 			b.WriteString("            }\n            return this;\n        }\n\n")
 		default:
-			fmt.Fprintf(b, "        public %s get%s() {\n", t, p)
+			fmt.Fprintf(b, "        public %s %s() {\n", t, javaGetterName(field))
 			if t == "long" {
 				fmt.Fprintf(b, "            return %sCase_ == %d ? (Long) %s_ : 0L;\n        }\n\n", lower, num, lower)
 			} else if t == "float" {

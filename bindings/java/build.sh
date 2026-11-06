@@ -54,6 +54,7 @@ java -cp "$here/out/classes:$jar" TestGenerated \
     "$root/bindings/c/tests/data/matrix3.bin" "$root/codegen/testdata/oneof1.bin" \
     "$root/codegen/testdata/maptest.bin" "$root/codegen/testdata/xfile.bin"
 java -cp "$here/out/classes" Roundtrip "$root/examples/addressbook.bin"
+java -cp "$here/out/classes" TestSwap
 
 cat <<EOF
 build ok: $here/out/classes  (JDK 17+)

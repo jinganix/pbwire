@@ -50,8 +50,9 @@ pbwire generates nothing at runtime. Descriptors go in (hand-built or a
 standard `FileDescriptorSet`), dynamic messages come out — adding a message
 type never requires a rebuild unless you embedded the descriptor bytes in the
 binary. Generated models exist (`codegen`, plus the C struct plugin) for
-ergonomics, but they are thin wrappers over the dynamic API, never a second
-wire implementation. See [Is pbwire a Protobuf code generator?](faq.md#is-pbwire-a-protobuf-code-generator)
+ergonomics, but they reuse the binding's codec instead of a second wire
+implementation: most wrap the dynamic API, Java and C emit straight-line
+Wire code. See [Is pbwire a Protobuf code generator?](faq.md#is-pbwire-a-protobuf-code-generator)
 and [Do I have to recompile when a `.proto` changes?](faq.md#do-i-have-to-recompile-when-a-proto-changes).
 
 ## How to simplify the protoc toolchain?
