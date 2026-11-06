@@ -132,7 +132,7 @@ pbwire implements the full JSON mapping and text format with no dependencies
 including all well-known types, extensions as `[full.name]`, strict
 base64/number rules, and closed-enum unknowns kept as unknown fields.
 Verdict: same results as the reference parser on 40,000 mutated inputs;
-official conformance binary + JSON 2745/2745 runnable (2 expected failures
+official conformance binary + JSON 2742/2742 runnable (2 expected failures
 the reference C++ testee fails identically; 4 JSON cases pass that the
 reference itself fails) and text 445/445 (including 4 the reference fails).
 Details in [testing.md](testing.md) and [guide.md](guide.md#json-and-text-format).

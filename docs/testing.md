@@ -111,7 +111,7 @@ PBWIRE_PROTOBUF_SRC=/path/to/protobuf make conformance   # use an existing check
 ```
 
 ```
-CONFORMANCE SUITE PASSED: 2745 successes, 0 skipped, 2 expected failures, 0 unexpected failures.
+CONFORMANCE SUITE PASSED: 2742 successes, 0 skipped, 2 expected failures, 0 unexpected failures.
 CONFORMANCE SUITE PASSED: 445 successes, 0 skipped, 0 expected failures, 0 unexpected failures.
 ```
 

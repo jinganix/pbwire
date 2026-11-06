@@ -1,0 +1,64 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="728" height="500" font-family="Helvetica, Arial, sans-serif">
+<rect width="728" height="500" fill="#ffffff"/>
+<text x="364.0" y="26" text-anchor="middle" font-size="15" font-weight="bold">Kotlin vs protoc --kotlin_out over protobuf-java — MB/s by tier (log scale)</text>
+<rect x="64" y="40" width="6" height="12" fill="#2da44e"/>
+<rect x="70" y="40" width="6" height="12" fill="#cf222e"/>
+<text x="80" y="51" font-size="12">pbwire-kotlin</text>
+<rect x="186.5" y="40" width="12" height="12" fill="#57606a"/>
+<text x="202.5" y="51" font-size="12">protobuf-kotlin</text>
+<line x1="64" y1="393.2" x2="704" y2="393.2" stroke="#e1e4e8"/>
+<text x="56" y="397.2" text-anchor="end" font-size="10" fill="#57606a">500</text>
+<line x1="64" y1="273.0" x2="704" y2="273.0" stroke="#e1e4e8"/>
+<text x="56" y="277.0" text-anchor="end" font-size="10" fill="#57606a">1000</text>
+<line x1="64" y1="152.7" x2="704" y2="152.7" stroke="#e1e4e8"/>
+<text x="56" y="156.7" text-anchor="end" font-size="10" fill="#57606a">2000</text>
+<text x="101.0" y="448" text-anchor="middle" font-size="10">136 B</text>
+<text x="101.0" y="462" text-anchor="middle" font-size="10" fill="#57606a">encode</text>
+<rect x="74.0" y="166.3" width="24" height="261.7" rx="2" fill="#cf222e"/>
+<text x="86.0" y="161.3" text-anchor="middle" font-size="10" fill="#24292f">1849.3</text>
+<rect x="104.0" y="127.6" width="24" height="300.4" rx="2" fill="#57606a"/>
+<text x="116.0" y="122.6" text-anchor="middle" font-size="10" fill="#24292f">2311.1</text>
+<text x="181.0" y="448" text-anchor="middle" font-size="10">174 B</text>
+<text x="181.0" y="462" text-anchor="middle" font-size="10" fill="#57606a">encode</text>
+<rect x="154.0" y="196.6" width="24" height="231.4" rx="2" fill="#2da44e"/>
+<text x="166.0" y="191.6" text-anchor="middle" font-size="10" fill="#24292f">1552.8</text>
+<rect x="184.0" y="236.7" width="24" height="191.3" rx="2" fill="#57606a"/>
+<text x="196.0" y="231.7" text-anchor="middle" font-size="10" fill="#24292f">1232.6</text>
+<text x="261.0" y="448" text-anchor="middle" font-size="10">2469 B</text>
+<text x="261.0" y="462" text-anchor="middle" font-size="10" fill="#57606a">encode</text>
+<rect x="234.0" y="278.7" width="24" height="149.3" rx="2" fill="#2da44e"/>
+<text x="246.0" y="273.7" text-anchor="middle" font-size="10" fill="#24292f">967.3</text>
+<rect x="264.0" y="297.1" width="24" height="130.9" rx="2" fill="#57606a"/>
+<text x="276.0" y="292.1" text-anchor="middle" font-size="10" fill="#24292f">870</text>
+<text x="341.0" y="448" text-anchor="middle" font-size="10">74913 B</text>
+<text x="341.0" y="462" text-anchor="middle" font-size="10" fill="#57606a">encode</text>
+<rect x="314.0" y="272.3" width="24" height="155.7" rx="2" fill="#2da44e"/>
+<text x="326.0" y="267.3" text-anchor="middle" font-size="10" fill="#24292f">1003.9</text>
+<rect x="344.0" y="287.6" width="24" height="140.4" rx="2" fill="#57606a"/>
+<text x="356.0" y="282.6" text-anchor="middle" font-size="10" fill="#24292f">919.4</text>
+<text x="421.0" y="448" text-anchor="middle" font-size="10">136 B</text>
+<text x="421.0" y="462" text-anchor="middle" font-size="10" fill="#57606a">decode</text>
+<rect x="394.0" y="276.8" width="24" height="151.2" rx="2" fill="#2da44e"/>
+<text x="406.0" y="271.8" text-anchor="middle" font-size="10" fill="#24292f">978.2</text>
+<rect x="424.0" y="340.1" width="24" height="87.9" rx="2" fill="#57606a"/>
+<text x="436.0" y="335.1" text-anchor="middle" font-size="10" fill="#24292f">679.3</text>
+<text x="501.0" y="448" text-anchor="middle" font-size="10">174 B</text>
+<text x="501.0" y="462" text-anchor="middle" font-size="10" fill="#57606a">decode</text>
+<rect x="474.0" y="304.9" width="24" height="123.1" rx="2" fill="#2da44e"/>
+<text x="486.0" y="299.9" text-anchor="middle" font-size="10" fill="#24292f">832.1</text>
+<rect x="504.0" y="372.8" width="24" height="55.2" rx="2" fill="#57606a"/>
+<text x="516.0" y="367.8" text-anchor="middle" font-size="10" fill="#24292f">562.4</text>
+<text x="581.0" y="448" text-anchor="middle" font-size="10">2469 B</text>
+<text x="581.0" y="462" text-anchor="middle" font-size="10" fill="#57606a">decode</text>
+<rect x="554.0" y="298.7" width="24" height="129.3" rx="2" fill="#2da44e"/>
+<text x="566.0" y="293.7" text-anchor="middle" font-size="10" fill="#24292f">862.1</text>
+<rect x="584.0" y="400.0" width="24" height="28.0" rx="2" fill="#57606a"/>
+<text x="596.0" y="395.0" text-anchor="middle" font-size="10" fill="#24292f">481</text>
+<text x="661.0" y="448" text-anchor="middle" font-size="10">74913 B</text>
+<text x="661.0" y="462" text-anchor="middle" font-size="10" fill="#57606a">decode</text>
+<rect x="634.0" y="277.7" width="24" height="150.3" rx="2" fill="#2da44e"/>
+<text x="646.0" y="272.7" text-anchor="middle" font-size="10" fill="#24292f">973.2</text>
+<rect x="664.0" y="403.8" width="24" height="24.2" rx="2" fill="#57606a"/>
+<text x="676.0" y="398.8" text-anchor="middle" font-size="10" fill="#24292f">470.6</text>
+<text x="64" y="490" font-size="10" fill="#57606a">green = ✅ beats baseline · red = ❌ trails</text>
+</svg>
