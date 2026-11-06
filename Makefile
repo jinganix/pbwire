@@ -11,12 +11,14 @@ OBJ := $(SRC:src/%.c=build/%.o)
 LIB := build/libpbwire.a
 TEST_BIN := build/test_pbwire
 MALFORMED_BIN := build/test_malformed
+FUZZ_BIN := build/fuzz_decode
 THREAD_BIN := build/test_threads
 DESC_BIN := build/test_descriptor
 STRUCT_BIN := build/test_struct
 EMBEDDED_BIN := build/test_embedded
 EMBEDDED_EXAMPLE_BIN := build/example_embedded
 EXAMPLE_BIN := build/example_addressbook
+GATEWAY_BIN := build/example_gateway
 CPP_EXAMPLE_BIN := build/example_addressbook_cpp
 HDRS := include/pbwire.h src/internal.h
 TEST_HDRS := tests/desc_set.h
@@ -60,13 +62,35 @@ $(TEST_BIN): tests/test_pbwire.c $(LIB) | build
 $(MALFORMED_BIN): tests/test_malformed.c $(LIB) | build
 	$(CC) $(CFLAGS) $(CPPFLAGS) -o $@ $< $(LIB)
 
+$(FUZZ_BIN): tests/fuzz_decode.c $(LIB) | build
+	$(CC) $(CFLAGS) $(CPPFLAGS) -o $@ $< $(LIB)
+
+# Stdin fuzz harness (tests/fuzz_decode.c): deterministic replay of the
+# fixed corpus in tests/data/fuzz/. Any crash or sanitizer trap is a bug.
+# Longer/mutating runs belong to nightly infra; this is the gate shape.
+fuzz: $(FUZZ_BIN)
+	for f in tests/data/fuzz/*.bin; do ./build/fuzz_decode < "$$f" || exit 1; done
+	@echo "fuzz: corpus replay OK"
+
+# Core-only coverage floor (gcov): fails when line coverage drops below 80%.
+# Bindings stay out; the core is the shared trusted base.
+coverage:
+	$(MAKE) test CFLAGS="-O0 -std=c99 -Wall -Wextra -fPIC --coverage -g"
+	gcov --object-directory build src/*.c > build/coverage.txt
+	@awk '/Lines executed/{gsub(/%/,"",$$2); s+=$$2; n++} END{printf "lines=%.1f%% over %d files\n", (n?s/n:0), n; exit (n>0 && s/n<80)}' build/coverage.txt
+
+# Release dry-run: everything `git tag vX.Y.Z` assumes, without tagging.
+release-check:
+	chmod +x scripts/release-check.sh
+	./scripts/release-check.sh --offline
+
 build:
 	mkdir -p build
 
 $(THREAD_BIN): tests/test_threads.c $(TEST_HDRS) $(LIB) | build
 	$(CC) $(CFLAGS) $(CPPFLAGS) -pthread -o $@ $< $(LIB)
 
-test: $(TEST_BIN) $(MALFORMED_BIN) $(THREAD_BIN) $(DESC_BIN) $(STRUCT_BIN) $(EMBEDDED_BIN) $(EXAMPLE_BIN) $(EMBEDDED_EXAMPLE_BIN)
+test: $(TEST_BIN) $(MALFORMED_BIN) $(THREAD_BIN) $(DESC_BIN) $(STRUCT_BIN) $(EMBEDDED_BIN) $(EXAMPLE_BIN) $(GATEWAY_BIN) $(EMBEDDED_EXAMPLE_BIN)
 	./$(TEST_BIN)
 	./$(MALFORMED_BIN)
 	./$(THREAD_BIN)
@@ -74,6 +98,7 @@ test: $(TEST_BIN) $(MALFORMED_BIN) $(THREAD_BIN) $(DESC_BIN) $(STRUCT_BIN) $(EMB
 	./$(STRUCT_BIN)
 	./$(EMBEDDED_BIN)
 	./$(EXAMPLE_BIN)
+	./$(GATEWAY_BIN)
 	./$(EMBEDDED_EXAMPLE_BIN)
 
 # Erlang binding (bindings/erlang): OTP app with its own rebar3 build.
@@ -119,6 +144,9 @@ $(EMBEDDED_EXAMPLE_BIN): bindings/embedded/examples/roundtrip.c bindings/embedde
 $(EXAMPLE_BIN): bindings/c/examples/addressbook.c $(C_RUNTIME) $(LIB) | build
 	$(CC) $(CFLAGS) $(CPPFLAGS) -Ibindings/c/runtime -o $@ bindings/c/examples/addressbook.c $(C_RUNTIME) $(LIB)
 
+$(GATEWAY_BIN): bindings/c/examples/gateway.c $(LIB) | build
+	$(CC) $(CFLAGS) $(CPPFLAGS) -o $@ $< $(LIB)
+
 # C++ binding example (bindings/cpp): same addressbook round-trip as the
 # C example, reusing the C runtime (compiled as C, linked into the C++
 # binary). Stays out of `make test` (that gate is C99-only).
@@ -148,8 +176,9 @@ compat-oracle: $(COMPAT_ORACLE_BIN)
 $(CPP_EXAMPLE_BIN): bindings/cpp/examples/addressbook.cc $(CPP_RUNTIME_OBJ) $(LIB) | build
 	$(CXX) $(CXXFLAGS) $(CPPFLAGS) -Ibindings/c/runtime -Ibindings/c/examples -o $@ bindings/cpp/examples/addressbook.cc $(CPP_RUNTIME_OBJ) $(LIB)
 
-examples: $(EXAMPLE_BIN) $(CPP_EXAMPLE_BIN)
+examples: $(EXAMPLE_BIN) $(GATEWAY_BIN) $(CPP_EXAMPLE_BIN)
 	./$(EXAMPLE_BIN)
+	./$(GATEWAY_BIN)
 	./$(CPP_EXAMPLE_BIN)
 
 # Regenerates the pinned descriptor set embedded in tests/test_descriptor.c.
@@ -547,6 +576,12 @@ python-bench: python-bind bindings/python/benchmarks/gen/matrix3_pb2.py
 difftest: $(BENCH_BIN)
 	./$(BENCH_BIN) difftest
 
+# Fixed-seed short differential run for PR gates; `make difftest` (20000
+# cases) stays the thorough pre-release shape. Same seed as the default so
+# a short-run failure reproduces in the full run.
+difftest-short: $(BENCH_BIN)
+	./$(BENCH_BIN) difftest 2000 20260219
+
 # Generated message models (codegen): one protoc plugin that emits generated
 # message definitions per language, on top of each binding's dynamic API (no
 # second wire implementation). `codegen` regenerates the committed models,
@@ -572,8 +607,8 @@ clean:
 		bindings/rust/target bindings/rust/benchmarks/gen \
 	bindings/lua/pbwire.so bindings/lua/pbwire.o
 
-.PHONY: all test examples shared format format-check bench bench-c erlang-test erlang-bench \
-	python-bind python-test python-bench difftest conformance conformance-setup conformance-python \
+.PHONY: all test fuzz coverage release-check examples shared format format-check bench bench-c erlang-test erlang-bench \
+	python-bind python-test python-bench difftest difftest-short conformance conformance-setup conformance-python \
 	conformance-ruby conformance-java conformance-lua conformance-r conformance-node ruby-bind java-test ruby-test node-test objc-test r-bind \
 	lua-bind lua-test lua-bench \
 	java-bench ruby-bench node-bench objc-bench go-bench \

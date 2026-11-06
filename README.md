@@ -68,7 +68,7 @@ pbw_free(buf);
 | Schema input | hand-built descriptors, or a standard `FileDescriptorSet` |
 | Message handling | dynamic value tree with reflection; no generated code |
 | Runtime dependencies | none (optional importer `pbwire-protoc` needs libprotobuf, C++17) |
-| Not implemented | RPC, MessageSet decoding into extensions |
+| Not implemented | RPC transport and stubs (service descriptors load and are queryable for routing) |
 | Memory model | one allocation per decoded tree, or one reusable arena `pbw_ctx` per thread |
 | Limits | nesting depth 256, field numbers up to 2^29-1 |
 | Platforms | Linux, macOS, anywhere with a C99 compiler |

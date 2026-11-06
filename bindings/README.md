@@ -124,6 +124,9 @@ side by side with the absolute MB/s.
 
 ## Status
 
+Migrating from an official runtime? Start at [MIGRATING.md](MIGRATING.md):
+the three mental-model shifts plus one row per language.
+
 | binding | schema source | compliant | note |
 |---|---|---|---|
 | C | `pbw_struct_schema_load(path)` on a `FileDescriptorSet`; `plugin/` additionally emits structs + layout tables for the compile-time side | ✅ | struct layout is codegen, the schema itself is loaded |

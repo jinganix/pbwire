@@ -103,10 +103,13 @@ const pbw_descriptor *person = pbw_schema_find(schema, "example.Person");
   `unknown type ... for field ...` in `pbw_schema_error()`.
 - **What the loader reads:** names, field numbers, types, labels, oneofs, the
   `packed` option, proto2 defaults and the file syntax (proto2, proto3, or an
-  edition), plus extensions with their extendee. Services, reserved ranges and
-  source code info are ignored.
+  edition), plus extensions with their extendee and services with their
+  methods (`pbw_schema_service_*`, query-only; the core does no RPC).
+  Reserved ranges and source code info are ignored.
 - **Dialect defaults are applied:** proto3 and edition-2023 sets get packed
-  repetition by default, proto2 sets keep explicit `packed`. Presence is
+  repetition by default, proto2 sets keep explicit `packed`. Editions files
+  additionally resolve their FeatureSet per file, message and field
+  (packed/required/closed-enum/delimited overrides). Presence is
   explicit either way — nothing is defaulted in.
 - **Failure is not fatal and not silent:** `*out` is always written, so free it
   on both paths; the reason lands in `pbw_schema_error()`.

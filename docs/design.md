@@ -223,8 +223,8 @@ can come from a `.proto` at build time (`protoc --descriptor_set_out`) or from
 `pbwire-protoc` at runtime.
 
 Documented limits, pinned by tests rather than silently ignored: MessageSet
-encoding stays byte-identical through the unknown fields instead of populating
-the extensions. Proto2 semantics are followed where the reference
+items decode into their extension fields and encode back byte-identically
+(an undeclared type id stays unknown, as before). Proto2 semantics are followed where the reference
 implementations agree: a closed enum's unknown number leaves the field and comes
 back as an unknown field, and `pbw_decode()` rejects a message whose `required`
 field is missing while `pbw_encode()` writes the tree as it stands (the

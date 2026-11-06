@@ -1,0 +1,26 @@
+// Gateway tutorial schema (examples/gateway.proto): proto3, self-contained
+// (no imports). A shop order with a nested message, a map and an enum —
+// the three shapes a protocol gateway touches when it inspects, converts
+// and forwards payloads for a schema it only partly knows.
+syntax = "proto3";
+
+package shop;
+
+message Item {
+  string sku = 1;
+  int32 qty = 2;
+}
+
+message Order {
+  string id = 1;
+  repeated Item items = 2;
+  map<string, string> attrs = 3;
+
+  enum Status {
+    UNKNOWN = 0;
+    PLACED = 1;
+    SHIPPED = 2;
+  }
+
+  Status status = 4;
+}

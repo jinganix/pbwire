@@ -221,3 +221,54 @@ jobs:
         run: make -C bindings/erlang tests
       - name: NIF C unit tests
         run: make -C bindings/erlang c-tests
+
+  sanitizers:
+    name: ASan+UBSan self-check + fuzz corpus
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: make test under ASan/UBSan
+        run: >
+          make test
+          CFLAGS="-O1 -std=c99 -Wall -Wextra -Werror -pedantic -fPIC -g
+          -fsanitize=address,undefined -fno-omit-frame-pointer"
+      - name: fuzz corpus under ASan/UBSan
+        run: >
+          make build/fuzz_decode
+          CFLAGS="-O1 -std=c99 -Wall -Wextra -Werror -pedantic -fPIC -g
+          -fsanitize=address,undefined -fno-omit-frame-pointer"
+          && make fuzz
+
+  difftest-short:
+    name: Differential test (fixed seed, 2000 cases)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install protobuf dev files
+        run: sudo apt-get update && sudo apt-get install -y libprotobuf-dev protobuf-compiler
+      - name: Short differential run
+        run: make difftest-short
+
+  fuzz-short:
+    name: Fuzz corpus replay
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Replay the fixed corpus
+        run: make fuzz
+
+  coverage:
+    name: Core coverage floor (80%)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: gcov over the core
+        run: make coverage
+
+  release-check:
+    name: Release dry-run
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Dry-run the release gate
+        run: ./scripts/release-check.sh --offline

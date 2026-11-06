@@ -1,6 +1,6 @@
 # Testing and conformance
 
-Five layers verify the wire format, the JSON mapping and the text format
+Nine layers verify the wire format, the JSON mapping and the text format
 against Google's own implementations. They differ in what they need installed
 and how much they can catch.
 
@@ -8,14 +8,18 @@ and how much they can catch.
 |---|---|---|---|
 | Self-check | `make test` | a C99 compiler | yes (`scripts/check.sh`) |
 | Pinned reference bytes | `make test` | a C99 compiler | yes |
-| Differential test | `make difftest` | `protoc` + libprotobuf C++ | no |
-| Official conformance suite | `make conformance` | cached protobuf checkout | yes (CI, ubuntu) |
+| Sanitizers + fuzz corpus | `make fuzz` under ASan/UBSan | clang/gcc | yes (CI `sanitizers` + `fuzz-short` jobs) |
+| Differential test (short) | `make difftest-short` | `protoc` + libprotobuf C++ | yes (CI, fixed seed) |
+| Differential test (full) | `make difftest` | `protoc` + libprotobuf C++ | nightly |
+| Official conformance suite | `make conformance` | cached protobuf checkout | yes (CI, ubuntu) + nightly |
+| Core coverage floor (80%) | `make coverage` | gcov | yes (CI) |
+| x86_64 bench baseline | nightly `bench-baseline` | `protoc` + libprotobuf C++ | nightly (artifact) |
 | Binding tests | `make <lang>-test` (plus `make erlang-test`, `make test-cpp`, `make go-test`) | that language's toolchain | no |
 
 ## 1. Self-check (`make test`)
 
-`make test` builds and runs five assert-based binaries plus the C address-book
-example. Dependency-free.
+`make test` builds and runs the assert-based binaries plus the runnable
+tutorials (address-book, gateway, embedded). Dependency-free.
 
 `test_pbwire` covers every scalar type at its edges (varint width boundaries,
 zigzag/fixed/NaN/Inf/-0 bit patterns, open enums, any-non-zero `bool`), field
@@ -34,6 +38,11 @@ it produces (packed defaults per syntax, oneofs, maps, nested and cross-file
 types, required fields, extension full names, reserved names, Any) plus the
 bytes encoded through it and text and JSON parsing through it (extensions,
 reserved skipping, Any round trip, unknown-field policy, required).
+Hand-built descriptor sets beside it pin services (`shop.Orders`:
+`pbw_schema_service_*`), editions FeatureSets (`tests/data/editions_feat.proto`:
+packed override, `LEGACY_REQUIRED`, closed/open enums, delimited messages) and
+MessageSets (`tests/data/messageset.proto`: items decode into extensions and
+encode back byte-identically, unknown type ids stay unknown).
 
 `test_struct` pins the C binding: plugin-generated structs encode to the exact
 bytes `protoc --encode` produces (a proto3 and a proto2 matrix covering every

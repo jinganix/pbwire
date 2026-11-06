@@ -1,0 +1,19 @@
+pbwire — https://github.com/jinganix/pbwire — Apache-2.0 (see LICENSE).
+
+Third-party components vendored or referenced by this repository:
+
+- `src/descriptor_set.c` reads the wire shape of
+  `google/protobuf/descriptor.proto` (FileDescriptorSet / FileDescriptorProto
+  / DescriptorProto / FieldDescriptorProto / EnumDescriptorProto /
+  ServiceDescriptorProto / MethodDescriptorProto). That file is
+  Copyright 2008 Google Inc., BSD-3-Clause. pbwire re-implements the reader
+  from the documented field numbers; no protobuf source is vendored and the
+  core never links libprotobuf.
+- `tests/desc_set.h` and `bench/gen/` fixtures are produced by `protoc`
+  (protobuf v36.2, BSD-3-Clause) and committed as data.
+- `conformance/testee.c` speaks the protocol of Google's
+  `conformance_test_runner` (protobuf repository, BSD-3-Clause); the runner
+  itself is cloned once by `make conformance-setup` and never committed.
+- Benchmark baselines (`BENCHMARKS.md`, per-binding `benchmarks/`) compare
+  against the official runtimes of each language; each baseline keeps its own
+  license (see the per-binding README where a baseline is vendored).

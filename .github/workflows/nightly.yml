@@ -1,0 +1,55 @@
+# Nightly: the thorough shapes that are too slow for PR gates — the full
+# differential run (20000 cases), the official conformance suite, and the
+# x86_64 core bench baseline (BENCHMARKS.md numbers are Apple-silicon; this
+# records the server-side pace where regressions actually hurt).
+name: Nightly
+
+on:
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+
+jobs:
+  difftest-full:
+    name: Differential test (full, 20000 cases)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install protobuf dev files
+        run: sudo apt-get update && sudo apt-get install -y libprotobuf-dev protobuf-compiler
+      - name: Full differential run
+        run: make difftest
+
+  conformance:
+    name: Official conformance suite
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Cache pinned protobuf checkout and runner
+        uses: actions/cache@v4
+        with:
+          path: .tmp/
+          key: conformance-${{ hashFiles('Makefile') }}
+      - name: Clone pinned protobuf, build runner + protoc
+        run: |
+          CMAKE_BUILD_PARALLEL_LEVEL=$(nproc) make conformance-setup
+          PB_SRC=$(echo .tmp/protobuf-*)
+          CMAKE_BUILD_PARALLEL_LEVEL=$(nproc) cmake --build "$PB_SRC/build" --target protoc
+          echo "PB_SRC=$PB_SRC" >> "$GITHUB_ENV"
+      - name: Run the suite through the C testee
+        run: PROTOC="$PB_SRC/build/protoc" make conformance
+
+  bench-baseline:
+    name: Core bench baseline (x86_64)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install protobuf dev files
+        run: sudo apt-get update && sudo apt-get install -y libprotobuf-dev protobuf-compiler
+      - name: Record the x86_64 baseline
+        run: ./scripts/bench-run.sh --binding core -- make bench
+      - name: Upload the versioned record
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-baseline-x86_64
+          path: results/

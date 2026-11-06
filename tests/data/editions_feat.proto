@@ -1,0 +1,30 @@
+// Editions FeatureSet fixture (see test_editions in tests/test_descriptor.c).
+// Regenerate the embedded bytes with:
+//   <pinned-protoc> -Itests/data --descriptor_set_out=/tmp/ed.pb tests/data/editions_feat.proto
+edition = "2023";
+
+package ed;
+
+enum E {
+  option features.enum_type = CLOSED;
+  A = 0;
+  B = 1;
+}
+
+enum F {
+  FA = 0;
+  FB = 1;
+}
+
+message Sub {
+  int32 x = 1;
+}
+
+message M {
+  repeated int32 unpacked = 1 [features.repeated_field_encoding = EXPANDED];
+  int32 req = 2 [features.field_presence = LEGACY_REQUIRED];
+  E closed = 3;
+  Sub delim = 4 [features.message_encoding = DELIMITED];
+  repeated int32 packed = 5;
+  F opened = 6;
+}

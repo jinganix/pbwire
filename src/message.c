@@ -258,7 +258,7 @@ is_initialized(const pbw_message *msg, uint32_t depth)
         const pbw_value *value = &msg->values[i];
 
         if (!pbw_msg_present(msg, i)) {
-            if (!msg->desc->proto3 && field->label == PBW_LABEL_REQUIRED) {
+            if (pbw_field_is_required(field, msg->desc)) {
                 return 0;
             }
             continue;

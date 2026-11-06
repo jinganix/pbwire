@@ -3,9 +3,10 @@
  * and without pbwire depending on protobuf.
  *
  * Only the fields that carry runtime semantics are read: names, numbers, types,
- * labels, oneofs, the `packed` option and the file syntax. Everything else
- * (services, extensions, reserved ranges, source code info, other options) is
- * skipped like any unknown field.
+ * labels, oneofs, the `packed` option, the file syntax and services (names
+ * plus method input/output types, for routing; the core does no RPC).
+ * Everything else (extensions, reserved ranges, source code info, other
+ * options) is skipped like any unknown field.
  *
  * Names are stored fully qualified without the leading dot: a message `Inner`
  * nested in `Outer` in package `a.b` is "a.b.Outer.Inner". Field type names are
@@ -22,6 +23,20 @@
 /* proto2 defaults are short literals; longer ones are rejected */
 #define DS_MAX_DEFAULT 4096
 
+/* Editions FeatureSet resolution: file > message/enum > field, explicit
+ * FieldOptions.packed still wins over every repeated_field_encoding.
+ * Values are the FeatureSet enum numbers (0 = unset/unknown):
+ * presence 1 EXPLICIT, 2 IMPLICIT, 3 LEGACY_REQUIRED; enum_open 1 OPEN,
+ * 2 CLOSED; repack 1 PACKED, 2 EXPANDED; msg_enc 1 LENGTH_PREFIXED,
+ * 2 DELIMITED. Loader-internal: presence/repack/msg_enc resolve to
+ * single values at load, enum_open stays per-field (inherit = 0). */
+typedef struct {
+    int presence;
+    int enum_open;
+    int repack;
+    int msg_enc;
+} ds_features;
+
 /* One parsed FieldDescriptorProto: regular fields and extensions share the
  * wire shape, only the presence of `extendee` tells them apart. */
 typedef struct {
@@ -37,7 +52,8 @@ typedef struct {
     int has_type;
     int has_oneof;
     int has_default;
-    int packed; /* -1 when the options do not say */
+    int packed;       /* -1 when the options do not say */
+    ds_features feat; /* per-field FeatureSet override, zeros when absent */
 } ds_field_info;
 
 /* An extension waiting for its extendee: attach after every file is read, so
@@ -47,6 +63,9 @@ typedef struct {
     char extendee[DS_MAX_NAME];
     char scope[DS_MAX_NAME];
     ds_field_info info;
+    /* file/message FeatureSet defaults of the declaring file, resolved at
+     * queue time (the extendee may live in another file). */
+    ds_features file;
 } ds_pending_ext;
 
 typedef struct {
@@ -202,9 +221,59 @@ ds_fqname(pbw_schema *schema, char *out, size_t cap, const char *parent,
     return PBW_OK;
 }
 
-/* FieldOptions.packed, when the schema spells it out. */
+/* Parses a FeatureSet message (fields 1,2,3,5); utf8_validation and
+ * json_format carry no codec semantics here. */
 static pbw_status
-ds_field_options(const uint8_t *p, const uint8_t *end, int *packed)
+ds_parse_featureset(const uint8_t *p, const uint8_t *end, ds_features *out)
+{
+    ds_field f;
+
+    for (;;) {
+        int rc = ds_next(&p, end, &f);
+        uint64_t v;
+
+        if (rc < 0) {
+            return PBW_ERR_INVALID;
+        }
+        if (rc == 0) {
+            return PBW_OK;
+        }
+        if (f.wire != PBW_WIRE_VARINT) {
+            continue;
+        }
+        v = f.varint;
+        switch (f.field) {
+        case 1: /* field_presence */
+            if (v >= 1 && v <= 3) {
+                out->presence = (int)v;
+            }
+            break;
+        case 2: /* enum_type */
+            if (v >= 1 && v <= 2) {
+                out->enum_open = (int)v;
+            }
+            break;
+        case 3: /* repeated_field_encoding */
+            if (v >= 1 && v <= 2) {
+                out->repack = (int)v;
+            }
+            break;
+        case 5: /* message_encoding */
+            if (v >= 1 && v <= 2) {
+                out->msg_enc = (int)v;
+            }
+            break;
+        default:
+            break;
+        }
+    }
+}
+
+/* FieldOptions.packed (field 2), when the schema spells it out, plus the
+ * per-field FeatureSet override (field 21). */
+static pbw_status
+ds_field_options(const uint8_t *p, const uint8_t *end, int *packed,
+                 ds_features *feat)
 {
     ds_field f;
 
@@ -218,6 +287,12 @@ ds_field_options(const uint8_t *p, const uint8_t *end, int *packed)
         }
         if (f.field == 2 && f.wire == PBW_WIRE_VARINT) {
             *packed = f.varint != 0;
+        } else if (f.field == 21 && f.wire == PBW_WIRE_LEN) {
+            pbw_status status =
+                ds_parse_featureset(f.data, f.data + f.len, feat);
+            if (status != PBW_OK) {
+                return status;
+            }
         }
     }
 }
@@ -289,7 +364,8 @@ ds_parse_field(ds_field_info *out, const uint8_t *p, const uint8_t *end)
             break;
         case 8: /* options */
             if ((status = ds_field_options(f.data, f.data + f.len,
-                                           &out->packed)) != PBW_OK) {
+                                           &out->packed, &out->feat)) !=
+                PBW_OK) {
                 return status;
             }
             break;
@@ -329,12 +405,13 @@ ds_set_default(pbw_schema *schema, pbw_field *field, const char *def)
 }
 
 static pbw_status
-ds_add_field(pbw_schema *schema, pbw_descriptor *msg, int proto3,
-             const ds_field_info *info, int is_extension)
+ds_add_field(pbw_schema *schema, pbw_descriptor *msg,
+             const ds_field_info *info, int is_extension,
+             const ds_features *file)
 {
     pbw_field *field;
     pbw_status status;
-    int packed = info->packed;
+    int repack = file->repack;
 
     if (info->name[0] == '\0' || !info->has_number || !info->has_type ||
         info->number < 1 || info->number > PBW_MAX_FIELD_NUMBER ||
@@ -356,10 +433,14 @@ ds_add_field(pbw_schema *schema, pbw_descriptor *msg, int proto3,
                  pbw_descriptor_name(msg), info->name);
         return PBW_ERR_INVALID;
     }
-    /* proto3 packs repeated primitives unless the schema says otherwise */
-    if (packed < 0) {
-        packed = proto3 && info->label == PBW_LABEL_REPEATED &&
-                 pbw_is_packable((pbw_type)info->type);
+    /* Packing default: explicit `packed` wins, then the field FeatureSet,
+     * then the file/message default (PACKED for proto3/editions files,
+     * EXPANDED for proto2). Unchanged when no editions features exist. */
+    if (info->feat.repack != 0) {
+        repack = info->feat.repack == 1;
+    }
+    if (info->packed >= 0) {
+        repack = info->packed;
     }
     if (is_extension) {
         field = pbw_message_add_extension(msg, info->name, info->number,
@@ -388,9 +469,18 @@ ds_add_field(pbw_schema *schema, pbw_descriptor *msg, int proto3,
             return status;
         }
     }
-    if (packed) {
+    if (repack && info->label == PBW_LABEL_REPEATED &&
+        pbw_is_packable((pbw_type)info->type)) {
         pbw_field_set_packed(field, 1);
     }
+    /* Editions resolution: field FeatureSet wins, file/message default
+     * fills the rest. Non-editions files resolve to zeros (dialect-wide
+     * behavior, as before). */
+    field->presence =
+        (uint8_t)(info->feat.presence ? info->feat.presence : file->presence);
+    field->enum_open = (uint8_t)info->feat.enum_open;
+    field->msg_enc =
+        (uint8_t)(info->feat.msg_enc ? info->feat.msg_enc : file->msg_enc);
     if (info->has_oneof) {
         pbw_field_set_oneof(field, info->oneof);
     }
@@ -400,7 +490,8 @@ ds_add_field(pbw_schema *schema, pbw_descriptor *msg, int proto3,
 /* Queues an extension for attachment after every file is read. */
 static pbw_status
 ds_queue_extension(pbw_schema *schema, ds_pending_ext **exts, size_t *count,
-                   size_t *cap, const ds_field_info *info, const char *scope)
+                   size_t *cap, const ds_field_info *info, const char *scope,
+                   const ds_features *file)
 {
     ds_pending_ext *grown;
 
@@ -425,6 +516,7 @@ ds_queue_extension(pbw_schema *schema, ds_pending_ext **exts, size_t *count,
         return PBW_ERR_INVALID;
     }
     (*exts)[*count].info = *info;
+    (*exts)[*count].file = *file;
     {
         const char *src =
             info->extendee[0] == '.' ? info->extendee + 1 : info->extendee;
@@ -467,8 +559,8 @@ ds_attach_extensions(pbw_schema *schema, ds_pending_ext *exts, size_t count)
                      exts[i].extendee, exts[i].info.name);
             return PBW_ERR_NOT_FOUND;
         }
-        status = ds_add_field(schema, target, target->proto3, &exts[i].info,
-                              1);
+        status = ds_add_field(schema, target, &exts[i].info, 1,
+                              &exts[i].file);
         if (status != PBW_OK) {
             return status;
         }
@@ -511,23 +603,77 @@ ds_attach_extensions(pbw_schema *schema, ds_pending_ext *exts, size_t count)
 
 static pbw_status
 ds_enum_proto(pbw_schema *schema, const char *parent, const uint8_t *p,
-              const uint8_t *end)
+              const uint8_t *end, int file_closed, int file_proto3)
 {
     char fqname[DS_MAX_NAME];
     char value_name[DS_MAX_NAME] = "";
     pbw_descriptor *desc;
     pbw_status status;
+    /* Editions enum_type: explicit EnumOptions.features wins, the file
+     * default fills the rest. Options may follow the values on the wire,
+     * so resolve first: openness only matters at link time. */
+    int closed = file_closed;
     ds_field f;
 
     if ((status = ds_fqname(schema, fqname, sizeof(fqname), parent, p, end)) !=
         PBW_OK) {
         return status;
     }
+    {
+        const uint8_t *o = p;
+        ds_field of;
+
+        for (;;) {
+            int orc = ds_next(&o, end, &of);
+
+            if (orc < 0) {
+                return PBW_ERR_INVALID;
+            }
+            if (orc == 0) {
+                break;
+            }
+            if (of.field != 3 || of.wire != PBW_WIRE_LEN) { /* options */
+                continue;
+            }
+            {
+                const uint8_t *q = of.data;
+                const uint8_t *qend = of.data + of.len;
+                ds_field qf;
+
+                for (;;) {
+                    int qrc = ds_next(&q, qend, &qf);
+                    ds_features feat;
+
+                    if (qrc < 0) {
+                        return PBW_ERR_INVALID;
+                    }
+                    if (qrc == 0) {
+                        break;
+                    }
+                    if (qf.field != 7 || qf.wire != PBW_WIRE_LEN) {
+                        continue;
+                    }
+                    memset(&feat, 0, sizeof(feat));
+                    status = ds_parse_featureset(qf.data, qf.data + qf.len,
+                                                 &feat);
+                    if (status != PBW_OK) {
+                        return status;
+                    }
+                    if (feat.enum_open != 0) {
+                        closed = feat.enum_open == 2;
+                    }
+                }
+            }
+        }
+    }
     desc = pbw_schema_add_enum(schema, fqname);
     if (desc == NULL) {
         ds_error(schema, "duplicate or invalid enum %s", fqname);
         return PBW_ERR_INVALID;
     }
+    /* Openness rides the dialect flag: a closed enum rejects unknown
+     * numbers exactly like a proto2 one. */
+    desc->proto3 = closed ? 0 : file_proto3;
     for (;;) {
         const uint8_t *vp;
         const uint8_t *vend;
@@ -576,13 +722,17 @@ ds_enum_proto(pbw_schema *schema, const char *parent, const uint8_t *p,
 }
 
 static pbw_status
-ds_message_proto(pbw_schema *schema, int proto3, const char *parent,
-                 const uint8_t *p, const uint8_t *end, uint32_t depth,
-                 ds_pending_ext **exts, size_t *ext_count, size_t *ext_cap)
+ds_message_proto(pbw_schema *schema, const ds_features *file,
+                 const char *parent, const uint8_t *p, const uint8_t *end,
+                 uint32_t depth, ds_pending_ext **exts, size_t *ext_count,
+                 size_t *ext_cap)
 {
     char fqname[DS_MAX_NAME];
     pbw_descriptor *msg;
     pbw_status status;
+    /* Message-level FeatureSet overrides the file default for the fields
+     * declared here; nested messages resolve against the file again. */
+    ds_features feat = *file;
     ds_field f;
 
     if (depth >= PBW_MAX_DEPTH) {
@@ -596,6 +746,50 @@ ds_message_proto(pbw_schema *schema, int proto3, const char *parent,
     if (msg == NULL) {
         ds_error(schema, "duplicate or invalid message %s", fqname);
         return PBW_ERR_INVALID;
+    }
+    /* Pre-scan for options: fields may precede them on the wire, but the
+     * message-level FeatureSet must apply to every field declared here. */
+    {
+        const uint8_t *o = p;
+        ds_field of;
+
+        for (;;) {
+            int orc = ds_next(&o, end, &of);
+
+            if (orc < 0) {
+                return PBW_ERR_INVALID;
+            }
+            if (orc == 0) {
+                break;
+            }
+            if (of.field != 7 || of.wire != PBW_WIRE_LEN) {
+                continue;
+            }
+            {
+                const uint8_t *q = of.data;
+                const uint8_t *qend = of.data + of.len;
+                ds_field qf;
+
+                for (;;) {
+                    int qrc = ds_next(&q, qend, &qf);
+
+                    if (qrc < 0) {
+                        return PBW_ERR_INVALID;
+                    }
+                    if (qrc == 0) {
+                        break;
+                    }
+                    if (qf.field == 12 && qf.wire == PBW_WIRE_LEN) {
+                        status = ds_parse_featureset(qf.data,
+                                                     qf.data + qf.len,
+                                                     &feat);
+                        if (status != PBW_OK) {
+                            return status;
+                        }
+                    }
+                }
+            }
+        }
     }
     for (;;) {
         int rc = ds_next(&p, end, &f);
@@ -628,9 +822,11 @@ ds_message_proto(pbw_schema *schema, int proto3, const char *parent,
             if (status == PBW_OK) {
                 if (f.field == 6 || info->extendee[0] != '\0') {
                     status = ds_queue_extension(schema, exts, ext_count,
-                                                ext_cap, info, fqname);
+                                                ext_cap, info, fqname,
+                                                &feat);
                 } else {
-                    status = ds_add_field(schema, msg, proto3, info, 0);
+                    status =
+                        ds_add_field(schema, msg, info, 0, &feat);
                 }
             }
             free(info);
@@ -682,7 +878,7 @@ ds_message_proto(pbw_schema *schema, int proto3, const char *parent,
             status = PBW_OK;
             break;
         }
-        case 7: /* options: only map_entry matters here */
+        case 7: /* options: map_entry plus the message-level FeatureSet */
         {
             const uint8_t *o = f.data;
             const uint8_t *oend = f.data + f.len;
@@ -700,18 +896,29 @@ ds_message_proto(pbw_schema *schema, int proto3, const char *parent,
                 if (of.field == 7 && of.wire == PBW_WIRE_VARINT &&
                     of.varint != 0) {
                     msg->map_entry = 1;
+                } else if (of.field == 12 && of.wire == PBW_WIRE_LEN) {
+                    status = ds_parse_featureset(of.data, of.data + of.len,
+                                                 &feat);
+                    if (status != PBW_OK) {
+                        return status;
+                    }
+                } else if (of.field == 1 && of.wire == PBW_WIRE_VARINT &&
+                           of.varint != 0) {
+                    /* MessageOptions.message_set_wire_format */
+                    msg->is_messageset = 1;
                 }
             }
             status = PBW_OK;
             break;
         }
-        case 3: /* nested_type */
-            status = ds_message_proto(schema, proto3, fqname, f.data,
+        case 3: /* nested_type: fresh scope, back to the file default */
+            status = ds_message_proto(schema, file, fqname, f.data,
                                       f.data + f.len, depth + 1, exts,
                                       ext_count, ext_cap);
             break;
         case 4: /* enum_type */
-            status = ds_enum_proto(schema, fqname, f.data, f.data + f.len);
+            status = ds_enum_proto(schema, fqname, f.data, f.data + f.len,
+                                   file->enum_open == 2, schema->proto3);
             break;
         default:
             status = PBW_OK;
@@ -723,6 +930,237 @@ ds_message_proto(pbw_schema *schema, int proto3, const char *parent,
     }
 }
 
+/* One parsed MethodDescriptorProto: names only, no transport. */
+typedef struct {
+    char name[DS_MAX_NAME];
+    char input[DS_MAX_NAME];
+    char output[DS_MAX_NAME];
+    int client_streaming;
+    int server_streaming;
+} ds_method_info;
+
+static char *
+ds_dup(const char *s)
+{
+    size_t len;
+    char *copy;
+
+    if (s == NULL) {
+        return NULL;
+    }
+    len = strlen(s) + 1;
+    copy = (char *)malloc(len);
+    if (copy == NULL) {
+        return NULL;
+    }
+    memcpy(copy, s, len);
+    return copy;
+}
+
+/* Without the leading dot: ".pkg.Msg" -> "pkg.Msg", like field types. */
+static const char *
+ds_unroot(const char *s)
+{
+    return s[0] == '.' ? s + 1 : s;
+}
+
+static pbw_status
+ds_method_proto(ds_method_info *out, const uint8_t *p, const uint8_t *end)
+{
+    ds_field f;
+
+    memset(out, 0, sizeof(*out));
+    for (;;) {
+        int rc = ds_next(&p, end, &f);
+        pbw_status status;
+
+        if (rc < 0) {
+            return PBW_ERR_INVALID;
+        }
+        if (rc == 0) {
+            break;
+        }
+        switch (f.field) {
+        case 1: /* name */
+            if ((status = ds_str(out->name, sizeof(out->name), &f)) !=
+                PBW_OK) {
+                return status;
+            }
+            break;
+        case 2: /* input_type */
+        case 3: /* output_type */
+        {
+            char tmp[DS_MAX_NAME];
+            const char *bare;
+            size_t len;
+
+            if ((status = ds_str(tmp, sizeof(tmp), &f)) != PBW_OK) {
+                return status;
+            }
+            bare = ds_unroot(tmp);
+            len = strlen(bare) + 1;
+            if (len > sizeof(out->input)) {
+                return PBW_ERR_LIMIT;
+            }
+            memcpy(f.field == 2 ? out->input : out->output, bare, len);
+            break;
+        }
+        case 5: /* client_streaming */
+            if (f.wire != PBW_WIRE_VARINT) {
+                return PBW_ERR_INVALID;
+            }
+            out->client_streaming = f.varint != 0;
+            break;
+        case 6: /* server_streaming */
+            if (f.wire != PBW_WIRE_VARINT) {
+                return PBW_ERR_INVALID;
+            }
+            out->server_streaming = f.varint != 0;
+            break;
+        default:
+            break;
+        }
+    }
+    return PBW_OK;
+}
+
+/* Releases a service the loader built but cannot keep (load failure). */
+static void
+ds_free_service(pbw_service *svc)
+{
+    size_t m;
+
+    if (svc == NULL) {
+        return;
+    }
+    /* method_count only counts stored methods, so this frees exactly
+     * what the parse loop committed. */
+    for (m = 0; m < svc->method_count; m++) {
+        free(svc->methods[m].name);
+        free(svc->methods[m].input_type);
+        free(svc->methods[m].output_type);
+    }
+    free(svc->methods);
+    free(svc->name);
+    free(svc);
+}
+
+/* One ServiceDescriptorProto: the service joins the schema, its methods join
+ * the service in wire order. Unknown method entries fail the load: a
+ * routing table that silently drops an rpc is worse than no table. */
+static pbw_status
+ds_service_proto(pbw_schema *schema, const char *package, const uint8_t *p,
+                 const uint8_t *end)
+{
+    char fqname[DS_MAX_NAME];
+    pbw_service *svc;
+    pbw_status status;
+    ds_field f;
+
+    if ((status = ds_fqname(schema, fqname, sizeof(fqname), package, p,
+                            end)) != PBW_OK) {
+        return status;
+    }
+    svc = (pbw_service *)calloc(1, sizeof(*svc));
+    if (svc == NULL) {
+        ds_error(schema, "out of memory");
+        return PBW_ERR_NOMEM;
+    }
+    svc->name = ds_dup(fqname);
+    if (svc->name == NULL) {
+        free(svc);
+        ds_error(schema, "out of memory");
+        return PBW_ERR_NOMEM;
+    }
+    svc->schema = schema;
+    for (;;) {
+        int rc = ds_next(&p, end, &f);
+
+        if (rc < 0) {
+            status = PBW_ERR_INVALID;
+            break;
+        }
+        if (rc == 0) {
+            status = PBW_OK;
+            break;
+        }
+        if (f.field != 2 || f.wire != PBW_WIRE_LEN) { /* method */
+            continue;
+        }
+        {
+            ds_method_info info;
+            pbw_method *grown;
+            pbw_method *m;
+
+            status =
+                ds_method_proto(&info, f.data, f.data + f.len);
+            if (status != PBW_OK) {
+                break;
+            }
+            if (info.name[0] == '\0' || info.input[0] == '\0' ||
+                info.output[0] == '\0') {
+                status = PBW_ERR_INVALID;
+                break;
+            }
+            if (svc->method_count == SIZE_MAX ||
+                (svc->method_count + 1) > SIZE_MAX / sizeof(*grown)) {
+                ds_error(schema, "out of memory");
+                status = PBW_ERR_NOMEM;
+                break;
+            }
+            grown = (pbw_method *)realloc(svc->methods,
+                                          (svc->method_count + 1) *
+                                              sizeof(*grown));
+            if (grown == NULL) {
+                ds_error(schema, "out of memory");
+                status = PBW_ERR_NOMEM;
+                break;
+            }
+            svc->methods = grown;
+            m = &grown[svc->method_count];
+            memset(m, 0, sizeof(*m));
+            m->name = ds_dup(info.name);
+            m->input_type = ds_dup(info.input);
+            m->output_type = ds_dup(info.output);
+            if (m->name == NULL || m->input_type == NULL ||
+                m->output_type == NULL) {
+                free(m->name);
+                free(m->input_type);
+                free(m->output_type);
+                ds_error(schema, "out of memory");
+                status = PBW_ERR_NOMEM;
+                break;
+            }
+            m->client_streaming = info.client_streaming;
+            m->server_streaming = info.server_streaming;
+            svc->method_count++;
+        }
+    }
+    if (status == PBW_OK) {
+        pbw_service **grown;
+
+        if (schema->service_count == SIZE_MAX ||
+            (schema->service_count + 1) > SIZE_MAX / sizeof(*grown)) {
+            ds_error(schema, "out of memory");
+            status = PBW_ERR_NOMEM;
+        } else {
+            grown = (pbw_service **)realloc(schema->services,
+                                            (schema->service_count + 1) *
+                                                sizeof(*grown));
+            if (grown == NULL) {
+                ds_error(schema, "out of memory");
+                status = PBW_ERR_NOMEM;
+            } else {
+                schema->services = grown;
+                grown[schema->service_count++] = svc;
+                return PBW_OK;
+            }
+        }
+    }
+    ds_free_service(svc);
+    return status;
+}
+
 static pbw_status
 ds_file_proto(pbw_schema *schema, const uint8_t *p, const uint8_t *end,
               ds_pending_ext **exts, size_t *ext_count, size_t *ext_cap)
@@ -731,7 +1169,9 @@ ds_file_proto(pbw_schema *schema, const uint8_t *p, const uint8_t *end,
     char syntax[DS_MAX_NAME] = "";
     pbw_status status;
     ds_field f;
+    ds_features feat;
     int proto3 = 0;
+    int edition = 0;
     int has_edition = 0;
     const uint8_t *walk;
 
@@ -755,12 +1195,61 @@ ds_file_proto(pbw_schema *schema, const uint8_t *p, const uint8_t *end,
             }
         } else if (f.field == 14 && f.wire == PBW_WIRE_VARINT) {
             has_edition = 1;
+            edition = (int)(f.varint > INT32_MAX ? INT32_MAX : f.varint);
         }
     }
-    proto3 = has_edition || strcmp(syntax, "proto3") == 0;
+    /* An editions file with the proto2 edition keeps proto2 semantics;
+     * every other edition behaves like proto3 unless told otherwise by
+     * its FeatureSet. */
+    proto3 = has_edition ? edition != 998 : strcmp(syntax, "proto3") == 0;
     /* Descriptors created below inherit the dialect of the file they came
      * from, so one set may hold proto2 and proto3 files at once. */
     schema->proto3 = proto3;
+    schema->edition = has_edition ? edition : 0;
+    /* File FeatureSet over the syntax defaults. FileOptions.features is
+     * field 50; options may sit anywhere, so re-walk for them. */
+    memset(&feat, 0, sizeof(feat));
+    feat.presence = has_edition ? 1 : 0;            /* EXPLICIT unless overridden */
+    feat.enum_open = has_edition || proto3 ? 1 : 0; /* OPEN unless proto2 */
+    feat.repack = proto3 || has_edition;            /* PACKED for proto3/editions */
+    feat.msg_enc = has_edition ? 1 : 0;             /* LENGTH_PREFIXED for editions */
+    walk = p;
+    for (;;) {
+        int rc = ds_next(&walk, end, &f);
+        if (rc < 0) {
+            return PBW_ERR_INVALID;
+        }
+        if (rc == 0) {
+            break;
+        }
+        if (f.field != 8 || f.wire != PBW_WIRE_LEN) { /* options */
+            continue;
+        }
+        {
+            const uint8_t *o = f.data;
+            const uint8_t *oend = f.data + f.len;
+            ds_field of;
+
+            for (;;) {
+                int orc = ds_next(&o, oend, &of);
+
+                if (orc < 0) {
+                    return PBW_ERR_INVALID;
+                }
+                if (orc == 0) {
+                    break;
+                }
+                if (of.field != 50 || of.wire != PBW_WIRE_LEN) {
+                    continue;
+                }
+                status = ds_parse_featureset(of.data, of.data + of.len,
+                                             &feat);
+                if (status != PBW_OK) {
+                    return status;
+                }
+            }
+        }
+    }
 
     /* pass 2: declarations */
     walk = p;
@@ -776,11 +1265,15 @@ ds_file_proto(pbw_schema *schema, const uint8_t *p, const uint8_t *end,
             continue;
         }
         if (f.field == 4) { /* message_type */
-            status = ds_message_proto(schema, proto3, package, f.data,
+            status = ds_message_proto(schema, &feat, package, f.data,
                                       f.data + f.len, 0, exts, ext_count,
                                       ext_cap);
         } else if (f.field == 5) { /* enum_type */
-            status = ds_enum_proto(schema, package, f.data, f.data + f.len);
+            status = ds_enum_proto(schema, package, f.data, f.data + f.len,
+                                   feat.enum_open == 2, proto3);
+        } else if (f.field == 6) { /* service */
+            status = ds_service_proto(schema, package, f.data,
+                                      f.data + f.len);
         } else if (f.field == 7) { /* extension */
             /* Heap, not stack: see the field/extension case above. */
             ds_field_info *info = (ds_field_info *)malloc(sizeof(*info));
@@ -792,7 +1285,7 @@ ds_file_proto(pbw_schema *schema, const uint8_t *p, const uint8_t *end,
             status = ds_parse_field(info, f.data, f.data + f.len);
             if (status == PBW_OK) {
                 status = ds_queue_extension(schema, exts, ext_count, ext_cap,
-                                            info, package);
+                                            info, package, &feat);
             }
             free(info);
         } else {

@@ -71,6 +71,10 @@ static pbw_status skip_group(reader *r, uint32_t number, uint32_t depth, uint32_
 static pbw_status skip_field(reader *r, pbw_message *msg, uint32_t number,
                              uint32_t wire_type, uint32_t depth, uint32_t dlim,
                              const uint8_t *start);
+static pbw_status decode_message(pbw_arena *arena, const pbw_descriptor *desc,
+                                 const uint8_t *buf, size_t len,
+                                 pbw_message **out, uint32_t depth,
+                                 uint32_t dlim);
 
 static pbw_status
 skip_value(reader *r, uint32_t number, uint32_t wire_type,
@@ -748,6 +752,14 @@ read_field(reader *r, const pbw_field *field, pbw_message *msg,
         return read_string_field(r, field, msg, rep);
     }
     if (field->type == PBW_TYPE_MESSAGE) {
+        /* Editions message_encoding = DELIMITED: the body runs to the
+         * matching END_GROUP, so it decodes like a group. Only fields
+         * that opted in take this path; anything else carrying group
+         * tags stays an unknown field, which keeps MessageSet passthrough
+         * byte-identical (see descriptor_set.c). */
+        if (field->msg_enc == 2) {
+            return read_group_field(r, field, msg, depth, dlim, rep);
+        }
         return read_message_field(r, field, msg, depth, dlim, rep);
     }
     if (field->type == PBW_TYPE_GROUP) {
@@ -783,6 +795,139 @@ read_field(reader *r, const pbw_field *field, pbw_message *msg,
     }
     return rep_append(msg, field, pbw_value_new_uint_a(msg->arena, bits),
                       rep);
+}
+
+/* A MessageSet item: START_GROUP(1) was consumed; the body holds type_id
+ * (field 2, varint) and message (field 3, bytes). The walk runs on a copy
+ * of the reader: anything anomalous (no id, no payload, unknown id, a
+ * non-message extension, undecodable bytes) falls back to unknown
+ * preservation from `start`, so verdicts never change — only successfully
+ * parsed items populate their extension field, like the reference parsers. */
+static pbw_status
+read_messageset_item(reader *r, pbw_message *msg, uint32_t depth,
+                     uint32_t dlim, const uint8_t *start)
+{
+    const pbw_descriptor *desc = msg->desc;
+    reader t = *r;
+    uint32_t type_id = 0;
+    int has_id = 0;
+    const uint8_t *payload = NULL;
+    size_t payload_len = 0;
+    int has_pay = 0;
+    const pbw_field *ext;
+    pbw_message *nested = NULL;
+    pbw_status status;
+    size_t index;
+    uint32_t closer = 0;
+
+    for (;;) {
+        uint32_t tag;
+        size_t used;
+        uint32_t number;
+        uint32_t wire_type;
+
+        if (t.p >= t.end || !pbw_tag_read(t.p, t.end, &tag, &used)) {
+            return skip_field(r, msg, 1, PBW_WIRE_START_GROUP, depth, dlim,
+                              start);
+        }
+        t.p += used;
+        number = tag >> 3;
+        wire_type = tag & 7;
+        if (number == 0) {
+            return skip_field(r, msg, 1, PBW_WIRE_START_GROUP, depth, dlim,
+                              start);
+        }
+        if (wire_type == PBW_WIRE_END_GROUP) {
+            closer = number;
+            break;
+        }
+        if (number == 2 && wire_type == PBW_WIRE_VARINT) {
+            uint64_t id;
+            size_t vused;
+
+            if (!pbw_varint_read(t.p, t.end, &id, &vused)) {
+                return skip_field(r, msg, 1, PBW_WIRE_START_GROUP, depth,
+                                  dlim, start);
+            }
+            t.p += vused;
+            /* Last one wins, like every singular field. */
+            if (id >= 1 && id <= PBW_MAX_FIELD_NUMBER) {
+                type_id = (uint32_t)id;
+                has_id = 1;
+            }
+            continue;
+        }
+        if (number == 3 && wire_type == PBW_WIRE_LEN) {
+            size_t len;
+
+            if (!pbw_len_read(t.p, t.end, &len, &used)) {
+                return skip_field(r, msg, 1, PBW_WIRE_START_GROUP, depth,
+                                  dlim, start);
+            }
+            t.p += used;
+            if (len > pbw_remaining(t.end, t.p)) {
+                return skip_field(r, msg, 1, PBW_WIRE_START_GROUP, depth,
+                                  dlim, start);
+            }
+            payload = t.p;
+            payload_len = len;
+            has_pay = 1;
+            t.p += len;
+            continue;
+        }
+        if (depth + 1 >= dlim && wire_type == PBW_WIRE_START_GROUP) {
+            return skip_field(r, msg, 1, PBW_WIRE_START_GROUP, depth, dlim,
+                              start);
+        }
+        status = skip_value(&t, number, wire_type, depth + 1, dlim);
+        if (status != PBW_OK) {
+            return skip_field(r, msg, 1, PBW_WIRE_START_GROUP, depth, dlim,
+                              start);
+        }
+    }
+    /* The closer must be END_GROUP(1); t.p already passed it. */
+    if (closer != 1 || !has_id || !has_pay) {
+        return skip_field(r, msg, 1, PBW_WIRE_START_GROUP, depth, dlim,
+                          start);
+    }
+    ext = pbw_find_field(desc, type_id);
+    if (ext == NULL || !ext->is_extension ||
+        ext->type != PBW_TYPE_MESSAGE ||
+        ext->label == PBW_LABEL_REPEATED) {
+        return skip_field(r, msg, 1, PBW_WIRE_START_GROUP, depth, dlim,
+                          start);
+    }
+    if (depth >= dlim) {
+        return PBW_ERR_LIMIT;
+    }
+    index = (size_t)(ext - desc->fields);
+    if (pbw_msg_present(msg, index) &&
+        msg->values[index].kind == PBW_VALUE_MESSAGE &&
+        msg->values[index].as.msg != NULL &&
+        msg->values[index].as.msg->desc == ext->sub) {
+        /* Singular messages merge, MessageSet items included. */
+        status = decode_fields(msg->values[index].as.msg, payload,
+                               payload_len, depth + 1, dlim);
+    } else {
+        status = decode_message(msg->arena, ext->sub, payload, payload_len,
+                                &nested, depth + 1, dlim);
+        if (status == PBW_OK) {
+            pbw_value value;
+
+            value.kind = PBW_VALUE_MESSAGE;
+            value.flags = msg->arena != NULL ? PBW_VF_ARENA : 0;
+            value.as.msg = nested;
+            pbw_message_put(msg, index, &value);
+        }
+    }
+    if (status != PBW_OK) {
+        /* Undecodable payload: keep today's verdict (accept as unknown). */
+        pbw_message_free(nested);
+        return skip_field(r, msg, 1, PBW_WIRE_START_GROUP, depth, dlim,
+                          start);
+    }
+    *r = t;
+    return PBW_OK;
 }
 
 static pbw_status
@@ -872,7 +1017,15 @@ decode_fields(pbw_message *msg, const uint8_t *buf, size_t len, uint32_t depth, 
             return PBW_ERR_INVALID;
         }
         if (field == NULL) {
-            status = skip_field(&r, msg, number, wire_type, depth, dlim, start);
+            if (wire_type == PBW_WIRE_START_GROUP && number == 1 &&
+                desc->is_messageset) {
+                /* A MessageSet item decodes into its extension; anything
+                 * anomalous stays unknown, as before. */
+                status = read_messageset_item(&r, msg, depth, dlim, start);
+            } else {
+                status =
+                    skip_field(&r, msg, number, wire_type, depth, dlim, start);
+            }
         } else if (wire_type == field->wire_type) {
             /* One action switch for every tag size. The link-time action
              * already encodes eligibility (oneof members, groups and closed

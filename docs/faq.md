@@ -29,11 +29,12 @@ No. `protoc` (or `buf`, or the optional `pbwire-protoc` library) produces a
 
 ### Which Protobuf syntaxes are supported?
 
-proto2 and proto3, including edition-2023 descriptor sets (treated as proto3
-semantics). Groups decode into their submessage like message fields, including
+proto2 and proto3, including edition-2023 descriptor sets (editions resolve
+their FeatureSet per file/message/field: packed default, required, closed
+enums, delimited messages). Groups decode into their submessage like message fields, including
 `required` checks inside them. Extensions attach to their extendee
-(`pbw_field_is_extension()` tells them apart; MessageSet members keep their wire
-bytes as unknown fields). A proto2 closed enum's unknown number is kept as an
+(`pbw_field_is_extension()` tells them apart; MessageSet items decode into
+their extension and encode back byte-identically). A proto2 closed enum's unknown number is kept as an
 unknown field, and `pbw_decode` refuses a message missing a `required` field.
 
 ### Does pbwire support JSON or text format?

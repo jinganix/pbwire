@@ -354,6 +354,72 @@ w_fixed(writer *w, uint64_t value, size_t size)
 static void encode_message(writer *w, const pbw_message *msg, uint32_t depth,
                            int det);
 
+/* Group framing shared by PBW_TYPE_GROUP and editions DELIMITED message
+ * fields: START tag, message body, END tag. Groups are rare either way, so
+ * the END tag is formatted per write instead of precomputed. */
+static void
+write_group_body(writer *w, const pbw_field *field, const pbw_value *value,
+                 uint32_t depth, int det)
+{
+    uint8_t end[5];
+    size_t end_len;
+
+    if (value->as.msg == NULL) {
+        w->status = PBW_ERR_INVALID;
+        return;
+    }
+    if (depth == PBW_MAX_DEPTH) {
+        w->status = PBW_ERR_LIMIT;
+        return;
+    }
+    w_field_tag(w, field, 0);
+    encode_message(w, value->as.msg, depth + 1, det);
+    if (w->status != PBW_OK) {
+        return;
+    }
+    end_len = pbw_varint_write(end, ((uint64_t)field->number << 3) |
+                                        PBW_WIRE_END_GROUP);
+    w_put(w, end, end_len);
+}
+
+/* One MessageSet item: START_GROUP(1), type_id (field 2), the extension
+ * payload (field 3, length-prefixed), END_GROUP(1). Tags are constants:
+ * the item number is always 1 on the wire, never the extension number. */
+static void
+write_messageset_item(writer *w, const pbw_field *field,
+                      const pbw_message *sub, uint32_t depth, int det)
+{
+    size_t mark;
+    uint8_t tag[2];
+
+    if (depth == PBW_MAX_DEPTH) {
+        w->status = PBW_ERR_LIMIT;
+        return;
+    }
+    /* START_GROUP(1) */
+    tag[0] = (1u << 3) | PBW_WIRE_START_GROUP;
+    w_put(w, tag, 1);
+    /* field 2: type_id */
+    tag[0] = (2u << 3) | PBW_WIRE_VARINT;
+    w_put(w, tag, 1);
+    w_varint(w, field->number);
+    /* field 3: message bytes, length patched like every LEN field */
+    tag[0] = (3u << 3) | PBW_WIRE_LEN;
+    w_put(w, tag, 1);
+    w_len_begin(w, &mark);
+    if (w->status != PBW_OK) {
+        return;
+    }
+    encode_message(w, sub, depth + 1, det);
+    if (w->status != PBW_OK) {
+        return;
+    }
+    w_len_end(w, mark);
+    /* END_GROUP(1) */
+    tag[0] = (1u << 3) | PBW_WIRE_END_GROUP;
+    w_put(w, tag, 1);
+}
+
 PBW_INLINE void
 write_element(writer *w, const pbw_field *field, const pbw_value *value,
               uint32_t depth, int det)
@@ -388,31 +454,17 @@ write_element(writer *w, const pbw_field *field, const pbw_value *value,
         return;
     }
     case PBW_TYPE_GROUP: {
-        uint8_t end[5];
-        size_t end_len;
-
-        if (value->as.msg == NULL) {
-            w->status = PBW_ERR_INVALID;
-            return;
-        }
-        if (depth == PBW_MAX_DEPTH) {
-            w->status = PBW_ERR_LIMIT;
-            return;
-        }
-        /* Groups are rare: format the END_GROUP tag instead of precomputing
-         * one more tag per field. */
-        w_field_tag(w, field, 0);
-        encode_message(w, value->as.msg, depth + 1, det);
-        if (w->status != PBW_OK) {
-            return;
-        }
-        end_len = pbw_varint_write(end, ((uint64_t)field->number << 3) |
-                                            PBW_WIRE_END_GROUP);
-        w_put(w, end, end_len);
+        write_group_body(w, field, value, depth, det);
         return;
     }
     case PBW_TYPE_MESSAGE: {
         size_t mark;
+
+        /* Editions message_encoding = DELIMITED travels as group tags. */
+        if (field->msg_enc == 2) {
+            write_group_body(w, field, value, depth, det);
+            return;
+        }
 
         if (value->as.msg == NULL) {
             w->status = PBW_ERR_INVALID;
@@ -892,14 +944,21 @@ write_map_sorted(writer *w, const pbw_field *field, const pbw_value *list,
         }
         return;
     }
-    items = (pbw_value **)malloc(n * sizeof(*items));
-    tmp = (pbw_value **)malloc(n * sizeof(*tmp));
-    if (items == NULL || tmp == NULL) {
-        free(items);
-        free(tmp);
+    if (n == 0) {
+        return;
+    }
+    if (n > SIZE_MAX / (2 * sizeof(*items))) {
         w->status = PBW_ERR_NOMEM;
         return;
     }
+    /* One allocation split in two: halves the malloc/free calls on the
+     * deterministic path with no behavior change. */
+    items = (pbw_value **)malloc(2 * n * sizeof(*items));
+    if (items == NULL) {
+        w->status = PBW_ERR_NOMEM;
+        return;
+    }
+    tmp = items + n;
     memcpy(items, list->as.list.items, n * sizeof(*items));
     map_sort(kf, items, tmp, n);
     for (j = 0; j < n; j++) {
@@ -909,7 +968,6 @@ write_map_sorted(writer *w, const pbw_field *field, const pbw_value *list,
         }
     }
     free(items);
-    free(tmp);
 }
 
 static void
@@ -961,7 +1019,12 @@ encode_message(writer *w, const pbw_message *msg, uint32_t depth, int det)
             }
             continue;
         }
-        write_element(w, field, value, depth, det);
+        if (pbw_is_messageset_item(field, msg) &&
+            value->kind == PBW_VALUE_MESSAGE && value->as.msg != NULL) {
+            write_messageset_item(w, field, value->as.msg, depth, det);
+        } else {
+            write_element(w, field, value, depth, det);
+        }
         if (w->status != PBW_OK) {
             return;
         }
@@ -1029,6 +1092,17 @@ size_element(const pbw_field *field, const pbw_value *value, uint32_t depth,
         status = size_message(value->as.msg, depth + 1, &body);
         if (status != PBW_OK) {
             return status;
+        }
+        if (field->msg_enc == 2) {
+            /* Delimited: START tag + body + END tag, like a group. */
+            if (!size_add(&body, pbw_varint_size(((uint64_t)field->number
+                                                  << 3) |
+                                                 PBW_WIRE_END_GROUP)) ||
+                !size_add(&body, field->tag_len)) {
+                return PBW_ERR_LIMIT;
+            }
+            *out = body;
+            return PBW_OK;
         }
         return size_len_prefixed(out, field->tag_len, body);
     case PBW_TYPE_GROUP:
@@ -1133,10 +1207,30 @@ size_message(const pbw_message *msg, uint32_t depth, size_t *out)
                 }
             }
         } else {
-            pbw_status status = size_element(field, value, depth, &part);
+            pbw_status status;
 
-            if (status != PBW_OK) {
-                return status;
+            if (field->type == PBW_TYPE_MESSAGE &&
+                pbw_is_messageset_item(field, msg) &&
+                value->kind == PBW_VALUE_MESSAGE &&
+                value->as.msg != NULL) {
+                /* START + field2 tag + varint(id) + field3 tag +
+                 * varint(body) + body + END. */
+                size_t body = 0;
+
+                status = size_message(value->as.msg, depth + 1, &body);
+                if (status != PBW_OK) {
+                    return status;
+                }
+                part = 4 + pbw_varint_size(field->number);
+                if (!size_add(&part, pbw_varint_size(body)) ||
+                    !size_add(&part, body)) {
+                    return PBW_ERR_LIMIT;
+                }
+            } else {
+                status = size_element(field, value, depth, &part);
+                if (status != PBW_OK) {
+                    return status;
+                }
             }
         }
         if (!size_add(&total, part)) {

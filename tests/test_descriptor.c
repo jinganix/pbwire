@@ -45,6 +45,250 @@ static int failures;
 /* The pinned FileDescriptorSet this test loads (shared with test_threads.c). */
 #include "desc_set.h"
 
+/* Editions FeatureSet fixture: `protoc --descriptor_set_out` output for
+ * tests/data/editions_feat.proto (edition 2023, see the .proto for the
+ * regeneration command). Pinned so no protoc is needed at build time. */
+static const unsigned char ed_set[] = {
+    0x0a, 0xa7, 0x02, 0x0a, 0x13, 0x65, 0x64, 0x69, 0x74, 0x69, 0x6f, 0x6e,
+    0x73, 0x5f, 0x66, 0x65, 0x61, 0x74, 0x2e, 0x70, 0x72, 0x6f, 0x74, 0x6f,
+    0x12, 0x02, 0x65, 0x64, 0x22, 0x13, 0x0a, 0x03, 0x53, 0x75, 0x62, 0x12,
+    0x0c, 0x0a, 0x01, 0x78, 0x18, 0x01, 0x20, 0x01, 0x28, 0x05, 0x52, 0x01,
+    0x78, 0x22, 0xbb, 0x01, 0x0a, 0x01, 0x4d, 0x12, 0x21, 0x0a, 0x08, 0x75,
+    0x6e, 0x70, 0x61, 0x63, 0x6b, 0x65, 0x64, 0x18, 0x01, 0x20, 0x03, 0x28,
+    0x05, 0x42, 0x05, 0xaa, 0x01, 0x02, 0x18, 0x02, 0x52, 0x08, 0x75, 0x6e,
+    0x70, 0x61, 0x63, 0x6b, 0x65, 0x64, 0x12, 0x17, 0x0a, 0x03, 0x72, 0x65,
+    0x71, 0x18, 0x02, 0x20, 0x01, 0x28, 0x05, 0x42, 0x05, 0xaa, 0x01, 0x02,
+    0x08, 0x03, 0x52, 0x03, 0x72, 0x65, 0x71, 0x12, 0x1d, 0x0a, 0x06, 0x63,
+    0x6c, 0x6f, 0x73, 0x65, 0x64, 0x18, 0x03, 0x20, 0x01, 0x28, 0x0e, 0x32,
+    0x05, 0x2e, 0x65, 0x64, 0x2e, 0x45, 0x52, 0x06, 0x63, 0x6c, 0x6f, 0x73,
+    0x65, 0x64, 0x12, 0x24, 0x0a, 0x05, 0x64, 0x65, 0x6c, 0x69, 0x6d, 0x18,
+    0x04, 0x20, 0x01, 0x28, 0x0b, 0x32, 0x07, 0x2e, 0x65, 0x64, 0x2e, 0x53,
+    0x75, 0x62, 0x42, 0x05, 0xaa, 0x01, 0x02, 0x28, 0x02, 0x52, 0x05, 0x64,
+    0x65, 0x6c, 0x69, 0x6d, 0x12, 0x16, 0x0a, 0x06, 0x70, 0x61, 0x63, 0x6b,
+    0x65, 0x64, 0x18, 0x05, 0x20, 0x03, 0x28, 0x05, 0x52, 0x06, 0x70, 0x61,
+    0x63, 0x6b, 0x65, 0x64, 0x12, 0x1d, 0x0a, 0x06, 0x6f, 0x70, 0x65, 0x6e,
+    0x65, 0x64, 0x18, 0x06, 0x20, 0x01, 0x28, 0x0e, 0x32, 0x05, 0x2e, 0x65,
+    0x64, 0x2e, 0x46, 0x52, 0x06, 0x6f, 0x70, 0x65, 0x6e, 0x65, 0x64, 0x2a,
+    0x17, 0x0a, 0x01, 0x45, 0x12, 0x05, 0x0a, 0x01, 0x41, 0x10, 0x00, 0x12,
+    0x05, 0x0a, 0x01, 0x42, 0x10, 0x01, 0x1a, 0x04, 0x3a, 0x02, 0x10, 0x02,
+    0x2a, 0x13, 0x0a, 0x01, 0x46, 0x12, 0x06, 0x0a, 0x02, 0x46, 0x41, 0x10,
+    0x00, 0x12, 0x06, 0x0a, 0x02, 0x46, 0x42, 0x10, 0x01, 0x62, 0x08, 0x65,
+    0x64, 0x69, 0x74, 0x69, 0x6f, 0x6e, 0x73, 0x70, 0xe8, 0x07};
+
+/* Editions FeatureSet: file/message/field resolution plus the codec shapes
+ * it selects (packed default, required, closed enum, delimited message). */
+static void
+test_editions(void)
+{
+    /* field 1 unpacked x2, field 2 req, field 5 packed x2 (field order) */
+    static const unsigned char rep[] = {0x08, 0x01, 0x08, 0x02, 0x10, 0x07,
+                                        0x2a, 0x02, 0x01, 0x02};
+    /* same, without the required field */
+    static const unsigned char rep_noreq[] = {0x08, 0x01, 0x2a, 0x01, 0x01};
+    static const unsigned char closed_unknown[] = {0x18, 0x63, 0x10, 0x07};
+    static const unsigned char opened_unknown[] = {0x30, 0x63, 0x10, 0x07};
+    /* field 2 req, field 4 delimited: START_GROUP(4) { x = 5 } END_GROUP(4) */
+    static const unsigned char delim[] = {0x10, 0x07, 0x23, 0x08, 0x05,
+                                          0x24};
+    pbw_schema *schema = NULL;
+    const pbw_descriptor *m;
+    const pbw_descriptor *e;
+    const pbw_descriptor *f;
+    pbw_message *msg = NULL;
+    uint8_t *out = NULL;
+    size_t out_len = 0;
+
+    CHECK_OK(pbw_descriptor_set_load(ed_set, sizeof(ed_set), &schema));
+    m = pbw_schema_find(schema, "ed.M");
+    e = pbw_schema_find(schema, "ed.E");
+    f = pbw_schema_find(schema, "ed.F");
+    CHECK(m != NULL && e != NULL && f != NULL);
+    /* editions 2023 reads as proto3, except the CLOSED enum type */
+    CHECK(pbw_descriptor_is_proto3(m) == 1);
+    CHECK(pbw_descriptor_is_proto3(e) == 0);
+    CHECK(pbw_descriptor_is_proto3(f) == 1);
+    /* packing: field override wins, the sibling keeps the file default */
+    CHECK(pbw_field_is_packed(pbw_descriptor_find_field(m, 1)) == 0);
+    CHECK(pbw_field_is_packed(pbw_descriptor_find_field(m, 5)) == 1);
+    /* the packed/unpacked shapes encode exactly as declared */
+    CHECK_OK(pbw_decode(m, rep, sizeof(rep), &msg));
+    CHECK_OK(pbw_message_encoded_size(msg, &out_len));
+    CHECK(out_len == sizeof(rep));
+    CHECK_OK(pbw_encode(msg, &out, &out_len));
+    CHECK(out_len == sizeof(rep) && memcmp(out, rep, out_len) == 0);
+    pbw_free(out);
+    out = NULL;
+    pbw_message_free(msg);
+    msg = NULL;
+    /* LEGACY_REQUIRED: missing fails, present passes */
+    CHECK_STATUS(PBW_ERR_REQUIRED, pbw_decode(m, rep_noreq,
+                                              sizeof(rep_noreq), &msg));
+    CHECK(msg == NULL);
+    pbw_schema_free(schema);
+    CHECK_OK(pbw_descriptor_set_load(ed_set, sizeof(ed_set), &schema));
+    m = pbw_schema_find(schema, "ed.M");
+    /* CLOSED enum: unknown number leaves the field for the unknowns */
+    CHECK_OK(pbw_decode(m, closed_unknown, sizeof(closed_unknown), &msg));
+    CHECK(pbw_message_get(msg, 3) == NULL);
+    CHECK(pbw_message_unknown_len(msg) == 2);
+    pbw_message_free(msg);
+    msg = NULL;
+    /* OPEN enum in the same file: unknown number stays in the field */
+    CHECK_OK(pbw_decode(m, opened_unknown, sizeof(opened_unknown), &msg));
+    CHECK(pbw_message_get(msg, 6) != NULL);
+    CHECK(pbw_value_get_int(pbw_message_get(msg, 6)) == 99);
+    pbw_message_free(msg);
+    msg = NULL;
+    /* DELIMITED message: group tags decode into the submessage ... */
+    CHECK_OK(pbw_decode(m, delim, sizeof(delim), &msg));
+    CHECK(pbw_message_get(msg, 4) != NULL);
+    CHECK(pbw_value_get_int(pbw_message_get(
+              pbw_value_get_message(pbw_message_get(msg, 4)), 1)) == 5);
+    /* ... and encode back to the same group tags */
+    CHECK_OK(pbw_encode(msg, &out, &out_len));
+    CHECK(out_len == sizeof(delim) && memcmp(out, delim, out_len) == 0);
+    pbw_free(out);
+    pbw_message_free(msg);
+    pbw_schema_free(schema);
+}
+
+/* A hand-built FileDescriptorSet with a MessageSet (ms.Set, extension
+ * ms.item = 4). protoc output for tests/data/messageset.proto, pinned so
+ * no protoc is needed at build time. */
+static const unsigned char ms_set[] = {
+    0x0a, 0x68, 0x0a, 0x10, 0x6d, 0x65, 0x73, 0x73, 0x61, 0x67, 0x65, 0x73,
+    0x65, 0x74, 0x2e, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x12, 0x02, 0x6d, 0x73,
+    0x22, 0x14, 0x0a, 0x04, 0x49, 0x74, 0x65, 0x6d, 0x12, 0x0c, 0x0a, 0x01,
+    0x78, 0x18, 0x01, 0x20, 0x01, 0x28, 0x05, 0x52, 0x01, 0x78, 0x22, 0x13,
+    0x0a, 0x03, 0x53, 0x65, 0x74, 0x2a, 0x08, 0x08, 0x04, 0x10, 0xff, 0xff,
+    0xff, 0xff, 0x07, 0x3a, 0x02, 0x08, 0x01, 0x3a, 0x25, 0x0a, 0x04, 0x69,
+    0x74, 0x65, 0x6d, 0x12, 0x07, 0x2e, 0x6d, 0x73, 0x2e, 0x53, 0x65, 0x74,
+    0x18, 0x04, 0x20, 0x01, 0x28, 0x0b, 0x32, 0x08, 0x2e, 0x6d, 0x73, 0x2e,
+    0x49, 0x74, 0x65, 0x6d, 0x52, 0x04, 0x69, 0x74, 0x65, 0x6d};
+
+/* MessageSet: group items decode into their extension fields and encode
+ * back to identical group bytes (verified against the official runtime:
+ * Set{item{x:5}} is 0b 10 04 1a 02 08 05 0c). Unknown type ids stay
+ * unknown, like any other undeclared field. */
+static void
+test_messageset(void)
+{
+    /* Set{item{x:5}} in MessageSet wire form */
+    static const unsigned char item[] = {0x0b, 0x10, 0x04, 0x1a, 0x02,
+                                         0x08, 0x05, 0x0c};
+    /* same shape, undeclared type id 9 */
+    static const unsigned char foreign[] = {0x0b, 0x10, 0x09, 0x1a, 0x02,
+                                            0x08, 0x05, 0x0c};
+    /* two items for the same extension merge, like singular messages */
+    static const unsigned char merged[] = {0x0b, 0x10, 0x04, 0x1a, 0x02,
+                                           0x08, 0x05, 0x0c, 0x0b, 0x10,
+                                           0x04, 0x1a, 0x02, 0x08, 0x07,
+                                           0x0c};
+    static const unsigned char merged_want[] = {0x0b, 0x10, 0x04, 0x1a,
+                                                0x02, 0x08, 0x07, 0x0c};
+    pbw_schema *schema = NULL;
+    const pbw_descriptor *set;
+    const pbw_field *ext;
+    pbw_message *msg = NULL;
+    pbw_value *v;
+    uint8_t *out = NULL;
+    size_t out_len = 0;
+
+    CHECK_OK(pbw_descriptor_set_load(ms_set, sizeof(ms_set), &schema));
+    set = pbw_schema_find(schema, "ms.Set");
+    CHECK(set != NULL);
+    ext = pbw_descriptor_find_field(set, 4);
+    CHECK(ext != NULL && pbw_field_is_extension(ext) == 1);
+    CHECK_OK(pbw_decode(set, item, sizeof(item), &msg));
+    v = pbw_message_get(msg, 4);
+    CHECK(v != NULL && pbw_value_get_kind(v) == PBW_VALUE_MESSAGE);
+    CHECK(pbw_value_get_int(pbw_message_get(pbw_value_get_message(v), 1)) ==
+          5);
+    CHECK(pbw_message_unknown_len(msg) == 0);
+    CHECK_OK(pbw_message_encoded_size(msg, &out_len));
+    CHECK(out_len == sizeof(item));
+    CHECK_OK(pbw_encode(msg, &out, &out_len));
+    CHECK(out_len == sizeof(item) && memcmp(out, item, out_len) == 0);
+    pbw_free(out);
+    out = NULL;
+    pbw_message_free(msg);
+    msg = NULL;
+    /* undeclared type id: kept as unknown bytes, byte-identical */
+    CHECK_OK(pbw_decode(set, foreign, sizeof(foreign), &msg));
+    CHECK(pbw_message_get(msg, 4) == NULL);
+    CHECK(pbw_message_unknown_len(msg) == sizeof(foreign));
+    CHECK_OK(pbw_encode(msg, &out, &out_len));
+    CHECK(out_len == sizeof(foreign) && memcmp(out, foreign, out_len) == 0);
+    pbw_free(out);
+    out = NULL;
+    pbw_message_free(msg);
+    msg = NULL;
+    /* repeated items merge; re-encode is the one merged item */
+    CHECK_OK(pbw_decode(set, merged, sizeof(merged), &msg));
+    v = pbw_message_get(msg, 4);
+    CHECK(v != NULL);
+    CHECK(pbw_value_get_int(pbw_message_get(pbw_value_get_message(v), 1)) ==
+          7);
+    CHECK_OK(pbw_encode(msg, &out, &out_len));
+    CHECK(out_len == sizeof(merged_want) &&
+          memcmp(out, merged_want, out_len) == 0);
+    pbw_free(out);
+    pbw_message_free(msg);
+    pbw_schema_free(schema);
+}
+
+/* A hand-built FileDescriptorSet with one service (shop.Orders: Place is
+ * client-streaming, Watch is server-streaming). Written by hand so the
+ * service loader is covered without protoc at build time. */
+static const unsigned char svc_set[] = {
+    0x0a, 0x76, 0x0a, 0x09, 0x73, 0x76, 0x63, 0x2e, 0x70, 0x72, 0x6f, 0x74,
+    0x6f, 0x12, 0x04, 0x73, 0x68, 0x6f, 0x70, 0x22, 0x07, 0x0a, 0x05, 0x4f,
+    0x72, 0x64, 0x65, 0x72, 0x32, 0x52, 0x0a, 0x06, 0x4f, 0x72, 0x64, 0x65,
+    0x72, 0x73, 0x12, 0x23, 0x0a, 0x05, 0x50, 0x6c, 0x61, 0x63, 0x65, 0x12,
+    0x0b, 0x2e, 0x73, 0x68, 0x6f, 0x70, 0x2e, 0x4f, 0x72, 0x64, 0x65, 0x72,
+    0x1a, 0x0b, 0x2e, 0x73, 0x68, 0x6f, 0x70, 0x2e, 0x4f, 0x72, 0x64, 0x65,
+    0x72, 0x28, 0x01, 0x12, 0x23, 0x0a, 0x05, 0x57, 0x61, 0x74, 0x63, 0x68,
+    0x12, 0x0b, 0x2e, 0x73, 0x68, 0x6f, 0x70, 0x2e, 0x4f, 0x72, 0x64, 0x65,
+    0x72, 0x1a, 0x0b, 0x2e, 0x73, 0x68, 0x6f, 0x70, 0x2e, 0x4f, 0x72, 0x64,
+    0x65, 0x72, 0x30, 0x01, 0x62, 0x06, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x33};
+
+static void
+test_services(void)
+{
+    pbw_schema *schema = NULL;
+    const pbw_service *svc;
+    const pbw_method *place;
+    const pbw_method *watch;
+
+    CHECK_OK(pbw_descriptor_set_load(svc_set, sizeof(svc_set), &schema));
+    CHECK(pbw_schema_service_count(schema) == 1);
+    CHECK(pbw_schema_service_count(NULL) == 0);
+    svc = pbw_schema_service_find(schema, "shop.Orders");
+    CHECK(svc != NULL);
+    CHECK(svc == pbw_schema_service_at(schema, 0));
+    CHECK(pbw_schema_service_at(schema, 1) == NULL);
+    CHECK(pbw_schema_service_find(schema, "shop.Missing") == NULL);
+    CHECK(strcmp(pbw_service_name(svc), "shop.Orders") == 0);
+    CHECK(pbw_service_method_count(svc) == 2);
+    place = pbw_service_method_find(svc, "Place");
+    watch = pbw_service_method_find(svc, "Watch");
+    CHECK(place != NULL && watch != NULL);
+    CHECK(place == pbw_service_method_at(svc, 0));
+    CHECK(watch == pbw_service_method_at(svc, 1));
+    CHECK(pbw_service_method_at(svc, 2) == NULL);
+    CHECK(pbw_service_method_find(svc, "Cancel") == NULL);
+    CHECK(strcmp(pbw_method_name(place), "Place") == 0);
+    CHECK(strcmp(pbw_method_input_type(place), "shop.Order") == 0);
+    CHECK(strcmp(pbw_method_output_type(place), "shop.Order") == 0);
+    CHECK(pbw_method_client_streaming(place) == 1);
+    CHECK(pbw_method_server_streaming(place) == 0);
+    CHECK(pbw_method_client_streaming(watch) == 0);
+    CHECK(pbw_method_server_streaming(watch) == 1);
+    /* the message in the same file still loads beside the service */
+    CHECK(pbw_schema_find(schema, "shop.Order") != NULL);
+    pbw_schema_free(schema);
+}
+
 static void
 test_schema(void)
 {
@@ -810,6 +1054,9 @@ main(void)
     test_lookup_tables();
     test_load_tolerance();
     test_mutation_sweep();
+    test_services();
+    test_editions();
+    test_messageset();
 
     if (failures != 0) {
         fprintf(stderr, "%d check(s) failed\n", failures);

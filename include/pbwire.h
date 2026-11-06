@@ -89,6 +89,8 @@ typedef struct pbw_descriptor pbw_descriptor;
 typedef struct pbw_field pbw_field;
 typedef struct pbw_value pbw_value;
 typedef struct pbw_message pbw_message;
+typedef struct pbw_service pbw_service;
+typedef struct pbw_method pbw_method;
 
 /* ---------------------------------------------------------------- schema */
 
@@ -181,6 +183,28 @@ const pbw_field *pbw_descriptor_find_field_name(const pbw_descriptor *desc,
                                                 const char *name);
 
 const char *pbw_field_name(const pbw_field *field);
+/* Services: loaded from a FileDescriptorSet, queryable for routing. The
+ * core does no RPC; a transport (gRPC, Twirp, plain HTTP) uses these to
+ * resolve method names to input/output types. Services live in the schema
+ * and die with it. Hand-built schemas carry no services. */
+size_t pbw_schema_service_count(const pbw_schema *schema);
+const pbw_service *pbw_schema_service_at(const pbw_schema *schema,
+                                         size_t index);
+const pbw_service *pbw_schema_service_find(const pbw_schema *schema,
+                                           const char *name);
+/* Fully qualified without the leading dot ("pkg.Service"), like descriptors. */
+const char *pbw_service_name(const pbw_service *svc);
+size_t pbw_service_method_count(const pbw_service *svc);
+const pbw_method *pbw_service_method_at(const pbw_service *svc, size_t index);
+const pbw_method *pbw_service_method_find(const pbw_service *svc,
+                                          const char *name);
+const char *pbw_method_name(const pbw_method *method);
+/* Fully qualified input/output message names, without the leading dot. */
+const char *pbw_method_input_type(const pbw_method *method);
+const char *pbw_method_output_type(const pbw_method *method);
+/* Streaming flags from MethodDescriptorProto; both 0 is unary. */
+int pbw_method_client_streaming(const pbw_method *method);
+int pbw_method_server_streaming(const pbw_method *method);
 /* proto2 default as written in the .proto, or NULL when the field has none. */
 const char *pbw_field_default_value(const pbw_field *field);
 /* 1 when the field was declared as an extension of its message. */
