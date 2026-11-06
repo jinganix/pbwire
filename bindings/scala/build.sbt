@@ -7,7 +7,7 @@
 // syntax), so any recent Scala line builds it.
 
 ThisBuild / organization := "io.github.jinganix"
-ThisBuild / version := "0.1.11"
+ThisBuild / version := "0.1.12"
 ThisBuild / scalaVersion := "3.3.6"
 
 import xerial.sbt.Sonatype.{sonatypeCentralHost, GitHubHosting}

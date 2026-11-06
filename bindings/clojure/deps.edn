@@ -13,4 +13,4 @@
            :deploy {:extra-deps {slipset/deps-deploy {:mvn/version "0.2.5"}}
                     :exec-fn deps-deploy.deps-deploy/deploy
                     :exec-args {:installer :remote
-                                :artifact "target/pbwire-clojure-0.1.11.jar"}}}}
+                                :artifact "target/pbwire-clojure-0.1.12.jar"}}}}
