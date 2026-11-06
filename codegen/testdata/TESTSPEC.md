@@ -10,7 +10,7 @@ re-invent what to test.
 |---|---|
 | `vectors.json` | canonical `Scalars3` values; the single source of truth |
 | `../../bindings/c/tests/data/matrix3.{proto,desc,bin,txt}` | schema + pinned `protoc` reference bytes (the wire oracle) |
-| `ORACLES.md` | each language's对照 library, pinned version, update command |
+| `ORACLES.md` | each language's reference library, pinned version, update command |
 | `errors/` | invalid `CodeGeneratorRequest` samples + expected plugin error/skip |
 
 Value encodings in `vectors.json`: int64 as decimal strings, non-finite
@@ -25,11 +25,11 @@ floats as `"Infinity"`/`"-Infinity"`/`"NaN"`, bytes as base64, enums as the
   every field (including presence) against `vectors.json`.
 - **T3 empty/zero**: an empty message encodes to empty bytes; an explicit
   zero with presence (`opt_i32: 0`) round-trips as present.
-- **T4 differential**: same object through the对照 library (protobufjs,
+- **T4 differential**: same object through the reference library (protobufjs,
   `protobuf`, …): `verify` agrees (both accept / both reject), encoded
   bytes are equal, `toObject`/`MessageToDict` agree after canonicalization
   (int64→string, bytes→base64, enum→number).
-- **T5 switch**: one business-logic snippet written against the对照
+- **T5 switch**: one business-logic snippet written against the reference
   library's static API runs unchanged against our generated code
   (import path is the only difference) with identical observable results.
 - **T6 errors**: `verify()` (or the language's equivalent) rejects bad
@@ -42,5 +42,7 @@ floats as `"Infinity"`/`"-Infinity"`/`"NaN"`, bytes as base64, enums as the
 - The official conformance proto is generation-compile only
   (`make codegen-conformance`): the wire is already proven at the C core,
   the generated layer proves delegation (T1), not a second full run.
-- `map` fields and cross-file message references stay outside the generated
-  model (`// skipped …`); the dynamic API covers them.
+- `map` fields ride as repeated entry structs and cross-file message
+  references import the sibling generated file (see the field rules in
+  `../README.md`); only a map entry from another file or an unresolvable
+  type skips loudly (`// skipped …`), and the dynamic API covers those.

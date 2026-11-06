@@ -1,4 +1,4 @@
-# Oracle pins (对照 libraries)
+# Oracle pins (reference libraries)
 
 CI only recognizes the locked versions below. Upgrading an oracle is its
 own PR: bump the pin, run the binding's full T1–T6, all green to merge.

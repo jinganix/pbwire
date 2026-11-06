@@ -43,9 +43,40 @@ C is not in this table twice: the C plugin already generates the
 struct layer.
 Erlang gets records from gpb (`get_msg_defs/0`), which is its existing
 schema source; adding a second generator there would duplicate gpb.
-Go is dynamic-API only for now (its emitter exists and the addressbook
-example uses it, but `make codegen` does not yet refresh its matrix3
-models).
+Go's models are refreshed by `make codegen` like every other language
+(its cross-file imports take the protoc-style `M<path>=<importpath>`
+mapping, per the sibling-import rule below).
+
+## Embedded schemas
+
+A generated model carries its own schema. `protoc-gen-pbwire` serializes
+the file's `FileDescriptorSet` — the transitive closure of its imports, so
+imported files ride along — as base64 into the generated output
+(`_DESC_B64`, `DESC_B64`, `k…DescB64`: one per file, beside the models,
+never a `.desc` file at use time). The first `encode`/`decode` builds the
+binding's schema from those bytes once and keeps it; there is nothing to
+load and no setup call to make:
+
+```python
+from matrix3_pbwire import Scalars3
+wire = Scalars3.encode(Scalars3(i32=1))  # schema comes from the module itself
+msg = Scalars3.decode(wire)
+```
+
+The loader behind that call is the same in every language, with three
+knobs (see `--pbwire_opt` under "Codegen options" below):
+
+- lazy by default: the schema builds on first use, and `preload()` warms
+every `MESSAGE_NAMES` entry up front so hot loops pay no lookup;
+- `register=false` drops the lazy load for hosts that want explicit
+startup: call `init_schema()` (embedded bytes) or `use_schema(schema)`
+(an externally loaded schema, dual registration) first, or the model
+fails loudly instead of guessing;
+- `registry=false` drops the whole-file message list + preload.
+
+Two languages deviate, and only there: elixir embeds no descriptor set
+(the `elixir-protobuf` modules are the schema), and R keeps one dotted
+holder per file instead of a single shared global.
 
 Where a pinned oracle exists (every row with a shape above), the model follows
 that library's conventions instead — including its presence spelling, enum
@@ -142,9 +173,9 @@ the integration test this layer exists for:
 Node and Python go further: `tests/compat_test.js` and
 `tests/test_compat.py` implement the shared modes T1–T6 from
 `testdata/TESTSPEC.md` against `testdata/vectors.json` — wire equality,
-decode checks, differential tests against the pinned对照 libraries
+decode checks, differential tests against the pinned reference libraries
 (`testdata/ORACLES.md`), a zero-change business snippet that runs
-against both the对照 library and our facade, and loud error paths.
+against both the reference library and our facade, and loud error paths.
 New languages copy that pattern instead of inventing their own.
 The eight newer bindings (Swift, Zig, Scala, Clojure, F#, Elixir, Julia,
 R) start with the byte-equality generated test above; the T1–T6
