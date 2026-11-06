@@ -13,31 +13,71 @@ import (
 // same runtime Kotlin reuses: Schema/Message in the default package).
 // The descriptor set travels embedded as base64, so no .desc file is needed
 // at use time. Oneof members are plain Options.
-func scalaFiles(f *model.File, opt Options) []File {
-	var b strings.Builder
-	b.WriteString(header(f, "Case classes over the Java runtime (Schema/Message, no codegen at use time)."))
+func scalaFiles(f *model.File, opt Options) ([]File, error) {
+	// Models and schema part ways: case classes in one file, the embedded
+	// descriptor set plus its loader in the other. model=false leaves the
+	// schema file for dynamic-only users.
+	var files []File
+	if opt.Model {
+		var b strings.Builder
+		b.WriteString(header(f, "Case classes over the Java runtime (Schema/Message, no codegen at use time)."))
+		b.WriteString("import java.util.Base64\n\n")
+		b.WriteString("object " + base(f) + "Gen {\n")
+		for _, e := range f.Enums {
+			fmt.Fprintf(&b, "  // %s\n", e.Full)
+			fmt.Fprintf(&b, "  object %s {\n", className(f, e.Name))
+			for _, v := range e.Values {
+				fmt.Fprintf(&b, "    val %s: Int = %d\n", v.Name, v.Number)
+			}
+			b.WriteString("  }\n\n")
+		}
+		for _, m := range f.Messages {
+			writeScalaMessage(&b, f, m)
+		}
+		b.WriteString("}\n")
+		files = append(files, File{Name: base(f) + ".scala", Content: b.String()})
+	}
+	var meta strings.Builder
+	writeScalaMeta(&meta, f, opt)
+	files = append(files, File{Name: base(f) + "_meta.scala", Content: meta.String()})
+	return files, nil
+}
+
+// writeScalaMeta emits the schema object: the embedded descriptor set plus
+// an explicit loader. register=true loads eagerly (as before); otherwise
+// initSchema (embedded bytes by default, external bytes for the descriptor
+// mode) must run first, loudly otherwise. registry adds the whole-file
+// message list plus a preload that warms every type.
+func writeScalaMeta(b *strings.Builder, f *model.File, opt Options) {
+	meta := base(f) + "Meta"
+	b.WriteString(header(f, "Embedded descriptor set plus its loader: the schema side of the generated model."))
 	b.WriteString("import java.util.Base64\n\n")
-	b.WriteString("object " + base(f) + "Gen {\n")
+	fmt.Fprintf(b, "object %s {\n", meta)
 	// Triple-quoted chunks joined once: a single literal would exceed the
 	// JVM's 64 KB string-constant limit, and a thousand-way `+` chain
 	// overflows scalac (the conformance descriptor set is ~100 KB).
 	b.WriteString("  private val desc: Array[Byte] = Base64.getDecoder.decode(\n")
 	b.WriteString("    List(" + scalaChunks(opt.DescSetB64) + ").mkString.filterNot(_.isWhitespace)\n")
 	b.WriteString("  )\n\n")
-	b.WriteString("  private val schema: Schema = Schema.fromBytes(desc)\n\n")
-	for _, e := range f.Enums {
-		fmt.Fprintf(&b, "  // %s\n", e.Full)
-		fmt.Fprintf(&b, "  object %s {\n", className(f, e.Name))
-		for _, v := range e.Values {
-			fmt.Fprintf(&b, "    val %s: Int = %d\n", v.Name, v.Number)
-		}
-		b.WriteString("  }\n\n")
+	b.WriteString("  private var _schema: Schema = _\n\n")
+	b.WriteString("  def initSchema(bytes: Array[Byte] = desc): Unit = _schema = Schema.fromBytes(bytes)\n\n")
+	if opt.Register {
+		b.WriteString("  initSchema()\n\n")
 	}
-	for _, m := range f.Messages {
-		writeScalaMessage(&b, f, m)
+	b.WriteString("  def schema: Schema = {\n")
+	b.WriteString("    if (_schema == null)\n")
+	b.WriteString("      throw new IllegalStateException(\"call initSchema first (generated with register=false)\")\n")
+	b.WriteString("    _schema\n")
+	b.WriteString("  }\n")
+	if opt.Registry {
+		b.WriteString("\n  val messageNames: List[String] = List(\n")
+		for _, m := range f.Messages {
+			fmt.Fprintf(b, "    %q,\n", m.Full)
+		}
+		b.WriteString("  )\n\n")
+		b.WriteString("  def preload(): Unit = messageNames.foreach(schema.message)\n")
 	}
 	b.WriteString("}\n")
-	return []File{{Name: base(f) + ".scala", Content: b.String()}}
 }
 
 // scalaMsg names the case class for a message field: the sibling file's Gen
@@ -166,7 +206,7 @@ func writeScalaMessage(b *strings.Builder, f *model.File, m model.Message) {
 	fmt.Fprintf(b, "    def encode: Array[Byte] = %s.encode(this)\n", cls)
 	b.WriteString("  }\n\n")
 	fmt.Fprintf(b, "  object %s {\n", cls)
-	fmt.Fprintf(b, "    private val ty: MessageType = schema.message(%q)\n\n", m.Full)
+	fmt.Fprintf(b, "    private val ty: MessageType = %sMeta.schema.message(%q)\n\n", base(f), m.Full)
 	fmt.Fprintf(b, "    def encode(v: %s): Array[Byte] = {\n", cls)
 	b.WriteString("      val msg = ty.newMessage()\n")
 	b.WriteString("      fill(msg, v)\n")

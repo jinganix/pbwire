@@ -405,7 +405,14 @@ function _fromWire(cls, plain) {
   return inst;
 }
 
-function _makeClass(full, descB64, fields) {
+function _makeClass(full, schemaOrDesc, fields) {
+  // schemaOrDesc is either a legacy descriptor-set string (auto-loaded and
+  // cached, as before) or a zero-arg getter returning the Schema to use.
+  // Generated code passes its meta file's getter, so use_schema/init_schema
+  // (register=false: explicit first) take effect per operation.
+  const typeOf = (typeof schemaOrDesc === 'string')
+    ? (() => _type(schemaOrDesc, full))
+    : (() => schemaOrDesc().message(full));
   class Compat {
     constructor(props) {
       props = props || {};
@@ -428,7 +435,7 @@ function _makeClass(full, descB64, fields) {
       const inst = (message instanceof this) ? message : this.fromObject(message);
       // The dynamic encoder takes proto names; toObject() shows camelCase.
       const plain = _toPlain(this, inst, { keepCase: true }, this._ENUMS, this._REVENUMS);
-      const wire = _type(descB64, full).encode(plain);
+      const wire = typeOf().encode(plain);
       return { finish: () => wire };
     }
     static encodeDelimited(message) {
@@ -438,7 +445,7 @@ function _makeClass(full, descB64, fields) {
     }
     static decode(bytes) {
       const buf = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes);
-      const m = _type(descB64, full).decode(buf);
+      const m = typeOf().decode(buf);
       const plain = {};
       for (const fd of fields) {
         const v = m.get(fd.n);

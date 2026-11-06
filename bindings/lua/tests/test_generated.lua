@@ -20,6 +20,9 @@
 --   lua tests/test_generated.lua   (from bindings/lua, after ./build.sh)
 
 package.cpath = "./?.so;" .. package.cpath
+-- Generated models require their schema module by name, like sibling
+-- imports: the gen dir stays on package.path.
+package.path = "tests/gen/?.lua;" .. package.path
 
 local gen = dofile("tests/gen/matrix3.lua")
 
@@ -77,10 +80,8 @@ local function build()
 end
 
 -- T1 wire: generated model only -> byte equality with the protoc reference.
-local wire = Scalars.encode(build())
-if HASINT then
-    ok(wire == REFERENCE, "T1 generated encode equals the protoc reference bytes")
-else
+local wire = Scalars.encode(build())if HASINT then
+    ok(wire == REFERENCE, "T1 generated encode equals the protoc reference bytes")else
     -- The two extremes are unrepresentable without integers: assert the
     -- generated path converts exactly like the dynamic path on the same values.
     local schema = gen.schema()
@@ -88,6 +89,21 @@ else
     ok(wire == schema:encode(MSG, Scalars.to_table(build())),
        "T1 generated encode matches dynamic encode")
 end
+
+-- Dual registration: embedded set by default, explicit init/use_schema.
+local meta = require("matrix3_meta")
+ok(#meta.MESSAGE_NAMES > 0, "registry lists every message")
+meta.preload()
+local back_pre = Scalars.decode(REFERENCE)
+ok(back_pre.str == "hello", "decode after preload")
+local xdep_meta = require("xdep_meta")
+meta.use_schema(xdep_meta.schema())
+local loud_ok = pcall(Scalars.encode, build())
+ok(not loud_ok, "foreign schema fails loudly")
+meta.use_schema(nil)
+ok(Scalars.decode(REFERENCE).str == "hello", "cleared override restores embedded")
+meta.init_schema()
+ok(Scalars.decode(REFERENCE).str == "hello", "init keeps embedded")
 
 -- T2 decode: every field (including presence) against vectors.json.
 local function verify(m, tag)
@@ -165,7 +181,6 @@ ok(Inner.decode(schema, inner_wire).name == "kid",
 
 -- Cross-file references require the sibling model (same directory):
 -- xfile.lua requires xdep.lua, so the dep table resolves.
-package.path = "tests/gen/?.lua;" .. package.path
 local xfile = dofile("tests/gen/xfile.lua")
 local XUses = xfile.Xfile_UsesDep
 local XDep = dofile("tests/gen/xdep.lua").Xdep_DepMsg

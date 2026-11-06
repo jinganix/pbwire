@@ -8,31 +8,6 @@ open System
 open Pbwire
 open Xdep
 
-let private desc: byte[] = Convert.FromBase64String("""
-CrkDCgp4ZGVwLnByb3RvEgR4ZGVwIjIKBkRlcE1zZxISCgRuYW1lGAEgASgJUgRuYW1lEhQKBXZh
-bHVlGAIgASgFUgV2YWx1ZUroAgoGEgQDAAoBCs0BCgEMEgMDABIawgEgU2hhcmVkIGRlcGVuZGVu
-Y3kgZm9yIHRoZSBjcm9zcy1maWxlIGZpeHR1cmU6IHhmaWxlLnByb3RvIGltcG9ydHMgdGhpcwog
-ZmlsZSBhbmQgcmVmZXJlbmNlcyBEZXBNc2cuIEdlbmVyYXRlZCBvbmNlIHBlciBsYW5ndWFnZSBu
-ZXh0IHRvIHhmaWxlJ3MKIG93biBtb2RlbDsgdGhlIHJlZmVyZW5jZSBieXRlcyBsaXZlIHdpdGgg
-eGZpbGUuCgoICgECEgMFAA0KCgoCBAASBAcACgEKCgoDBAABEgMHCA4KCwoEBAACABIDCAISCgwK
-BQQAAgAFEgMIAggKDAoFBAACAAESAwgJDQoMCgUEAAIAAxIDCBARCgsKBAQAAgESAwkCEgoMCgUE
-AAIBBRIDCQIHCgwKBQQAAgEBEgMJCA0KDAoFBAACAQMSAwkQEWIGcHJvdG8zCoEFCgt4ZmlsZS5w
-cm90bxIFeGZpbGUaCnhkZXAucHJvdG8iZQoHVXNlc0RlcBIkCgZzaW5nbGUYASABKAsyDC54ZGVw
-LkRlcE1zZ1IGc2luZ2xlEiAKBG1hbnkYAiADKAsyDC54ZGVwLkRlcE1zZ1IEbWFueRISCgRub3Rl
-GAMgASgJUgRub3RlSu8DCgYSBAQADgEKhAIKAQwSAwQAEhr5ASBDcm9zcy1maWxlIGZpeHR1cmUg
-Zm9yIHRoZSBnZW5lcmF0ZWQgY29tcGF0IHRlc3RzOiBVc2VzRGVwIHJlZmVyZW5jZXMKIERlcE1z
-ZyBmcm9tIHhkZXAucHJvdG8sIHNvIGV2ZXJ5IGxhbmd1YWdlIG11c3QgaW1wb3J0IHRoZSBzaWJs
-aW5nCiBnZW5lcmF0ZWQgZmlsZSBpbnN0ZWFkIG9mIHNraXBwaW5nIHRoZSBmaWVsZC4gUmVmZXJl
-bmNlIGJ5dGVzCiAoeGZpbGUuYmluKSBmcm9tIHByb3RvYyAtLWVuY29kZSBvZiB4ZmlsZS50eHQu
-CgoICgECEgMGAA4KCQoCAwASAwgAFAoKCgIEABIECgAOAQoKCgMEAAESAwoIDwoLCgQEAAIAEgML
-AhkKDAoFBAACAAYSAwsCDQoMCgUEAAIAARIDCw4UCgwKBQQAAgADEgMLFxgKCwoEBAACARIDDAIg
-CgwKBQQAAgEEEgMMAgoKDAoFBAACAQYSAwwLFgoMCgUEAAIBARIDDBcbCgwKBQQAAgEDEgMMHh8K
-CwoEBAACAhIDDQISCgwKBQQAAgIFEgMNAggKDAoFBAACAgESAw0JDQoMCgUEAAICAxIDDRARYgZw
-cm90bzM=
-""")
-
-let private schema: Schema = Schema.FromBytes(desc)
-
 /// xfile.UsesDep
 type Xfile_UsesDep =
     {
@@ -42,7 +17,7 @@ type Xfile_UsesDep =
     }
 
 module Xfile_UsesDep =
-    let private ty: MessageType = schema.Message("xfile.UsesDep")
+    let private ty (): MessageType = XfileMeta.getSchema().Message("xfile.UsesDep")
 
     let defaultValue : Xfile_UsesDep =
         {
@@ -57,7 +32,7 @@ module Xfile_UsesDep =
         if v.note <> "" then msg.Set("note", v.note) |> ignore
 
     let encode (v: Xfile_UsesDep) : byte[] =
-        use msg = ty.NewMessage()
+        use msg = ty().NewMessage()
         fill msg v
         msg.Encode()
 
@@ -69,6 +44,6 @@ module Xfile_UsesDep =
         }
 
     let decode (wire: byte[]) : Xfile_UsesDep =
-        use msg = ty.Decode(ReadOnlySpan wire)
+        use msg = ty().Decode(ReadOnlySpan wire)
         load msg
 

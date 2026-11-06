@@ -96,7 +96,14 @@ sealed classes: the same property names, `RepeatedField<T>` for repeated,
 `KindOneofCase` for oneofs, `Has`+`Clear` for optional, and
 `Parser.ParseFrom` / `ToByteArray` / `WriteTo` / `CalculateSize` /
 `Clone` / `Equals` over the embedded schema — no schema argument at use
-sites. Deliberate deltas from protoc output: no `IMessage` (a streaming
+sites. Each file splits in two: `<base>.cs` (models) and
+`PbwireFile_<Stem>.cs` (the holder: embedded set plus its loader).
+`--pbwire_opt=lang=csharp[,model=bool][,register=bool][,registry=bool]`
+(all default `true`): `model=false` leaves the holder for dynamic-only
+users; `register=false` drops the eager static constructor so `Init()`
+(embedded) or `UseSchema()` (external `Schema`, dual registration) must run
+first; `registry=false` drops `MessageNames` + `Preload()`.
+Deliberate deltas from protoc output: no `IMessage` (a streaming
 `MergeFrom` would need a second wire reader) and no `Descriptor`; use the
 dynamic `Schema` for reflection. The committed output is `generated/gen/` (tests)
 and `examples/gen/` (example); `oracle/gen_oracle/` holds the pinned

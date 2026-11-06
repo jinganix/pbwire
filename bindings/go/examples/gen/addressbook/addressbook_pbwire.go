@@ -5,48 +5,9 @@
 package addressbook
 
 import (
-	"encoding/base64"
 	"fmt"
-	"sync"
-
 	"pbwire/dynamic"
 )
-
-var fileDesc, _ = base64.StdEncoding.DecodeString(_DESC_B64)
-
-var schemaOnce sync.Once
-var schemaCached *dynamic.Schema
-var schemaErr error
-
-func getSchema() (*dynamic.Schema, error) {
-	schemaOnce.Do(func() {
-		schemaCached, schemaErr = dynamic.Load(fileDesc)
-	})
-	return schemaCached, schemaErr
-}
-
-var typesMu sync.Mutex
-var typesCache = map[string]*dynamic.MessageType{}
-
-func getType(full string) (*dynamic.MessageType, error) {
-	s, err := getSchema()
-	if err != nil {
-		return nil, err
-	}
-	typesMu.Lock()
-	defer typesMu.Unlock()
-	t, ok := typesCache[full]
-	if !ok {
-		t, err = s.Message(full)
-		if err != nil {
-			return nil, err
-		}
-		typesCache[full] = t
-	}
-	return t, nil
-}
-
-const _DESC_B64 = "Cr8KChFhZGRyZXNzYm9vay5wcm90bxIIdHV0b3JpYWwiggIKBlBlcnNvbhISCgRuYW1lGAEgAigJUgRuYW1lEg4KAmlkGAIgAigFUgJpZBIUCgVlbWFpbBgDIAEoCVIFZW1haWwSNAoGcGhvbmVzGAQgAygLMhwudHV0b3JpYWwuUGVyc29uLlBob25lTnVtYmVyUgZwaG9uZXMaWwoLUGhvbmVOdW1iZXISFgoGbnVtYmVyGAEgAigJUgZudW1iZXISNAoEdHlwZRgCIAEoDjIaLnR1dG9yaWFsLlBlcnNvbi5QaG9uZVR5cGU6BEhPTUVSBHR5cGUiKwoJUGhvbmVUeXBlEgoKBk1PQklMRRAAEggKBEhPTUUQARIICgRXT1JLEAIiNwoLQWRkcmVzc0Jvb2sSKAoGcGVvcGxlGAEgAygLMhAudHV0b3JpYWwuUGVyc29uUgZwZW9wbGVK4QcKBhIEAwAcAQrAAQoBDBIDAwASGrUBIFRoZSBjbGFzc2ljIHByb3RvY29sLWJ1ZmZlcnMgdHV0b3JpYWwgc2NoZW1hIChhZGRyZXNzYm9vay5wcm90byksIGtlcHQKIHNlbGYtY29udGFpbmVkIChubyBpbXBvcnRzKSBzbyB0aGUgQyBleGFtcGxlIGJlbG93IGNhbiBtaXJyb3IgaXQgYnkgaGFuZAogd2l0aG91dCBwcm90b2Mgb3IgZ2VuZXJhdGVkIGNvZGUuCgoICgECEgMFABEKCgoCBAASBAcAGAEKCgoDBAABEgMHCA4KCwoEBAACABIDCAIbCgwKBQQAAgAEEgMIAgoKDAoFBAACAAUSAwgLEQoMCgUEAAIAARIDCBIWCgwKBQQAAgADEgMIGRoKCwoEBAACARIDCQIYCgwKBQQAAgEEEgMJAgoKDAoFBAACAQUSAwkLEAoMCgUEAAIBARIDCRETCgwKBQQAAgEDEgMJFhcKCwoEBAACAhIDCgIcCgwKBQQAAgIEEgMKAgoKDAoFBAACAgUSAwoLEQoMCgUEAAICARIDChIXCgwKBQQAAgIDEgMKGhsKDAoEBAAEABIEDAIQAwoMCgUEAAQAARIDDAcQCg0KBgQABAACABIDDQQPCg4KBwQABAACAAESAw0ECgoOCgcEAAQAAgACEgMNDQ4KDQoGBAAEAAIBEgMOBA0KDgoHBAAEAAIBARIDDgQICg4KBwQABAACAQISAw4LDAoNCgYEAAQAAgISAw8EDQoOCgcEAAQAAgIBEgMPBAgKDgoHBAAEAAICAhIDDwsMCgwKBAQAAwASBBICFQMKDAoFBAADAAESAxIKFQoNCgYEAAMAAgASAxMEHwoOCgcEAAMAAgAEEgMTBAwKDgoHBAADAAIABRIDEw0TCg4KBwQAAwACAAESAxMUGgoOCgcEAAMAAgADEgMTHR4KDQoGBAADAAIBEgMUBDEKDgoHBAADAAIBBBIDFAQMCg4KBwQAAwACAQYSAxQNFgoOCgcEAAMAAgEBEgMUFxsKDgoHBAADAAIBAxIDFB4fCg4KBwQAAwACAQgSAxQgMAoOCgcEAAMAAgEHEgMUKy8KCwoEBAACAxIDFwIiCgwKBQQAAgMEEgMXAgoKDAoFBAACAwYSAxcLFgoMCgUEAAIDARIDFxcdCgwKBQQAAgMDEgMXICEKCgoCBAESBBoAHAEKCgoDBAEBEgMaCBMKCwoEBAECABIDGwIdCgwKBQQBAgAEEgMbAgoKDAoFBAECAAYSAxsLEQoMCgUEAQIAARIDGxIYCgwKBQQBAgADEgMbGxw="
 
 // tutorial.Person.PhoneType
 type Person_PhoneType int32

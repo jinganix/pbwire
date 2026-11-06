@@ -18,6 +18,19 @@ type Options struct {
 	Lang   string
 	Prefix string // class prefix override; empty means derive from the package
 	Dir    string // output subdirectory inside the protoc output tree
+	// Model selects the message implementation files (message + Builder).
+	// Off leaves the read interfaces plus the codec tables: a hand-written
+	// class with the canonical shape shares the rows through forBuilder.
+	Model bool
+	// Register selects the static self-registration block in each message:
+	// off leaves registration to an explicit register call (deferred or
+	// custom Builder), failing loudly until then.
+	Register bool
+	// Registry selects the whole-file message list (<Prefix>_Registry):
+	// pure data (class literals, no init), so referencing it costs nothing.
+	// Schema.fromClasses(<Prefix>_Registry.MESSAGES) is whole-schema
+	// registration with no descriptor file. Needs Model.
+	Registry bool
 	// DescSetB64 is the FileDescriptorSet for this file (transitive closure
 	// of its imports) encoded as base64. Emitters whose runtime embeds its
 	// own schema (no .desc file at use time) read it from here.
@@ -45,19 +58,37 @@ func Generate(fd protoreflect.FileDescriptor, opt Options) ([]File, error) {
 	var err error
 	switch opt.Lang {
 	case "java":
-		files = javaFiles(f, opt)
+		files, err = javaFiles(f, opt)
+		if err != nil {
+			return nil, err
+		}
 	case "kotlin":
 		files = kotlinFiles(f)
 	case "csharp":
-		files = csharpFiles(f, opt)
+		files, err = csharpFiles(f, opt)
+		if err != nil {
+			return nil, err
+		}
 	case "dart":
-		files = dartFiles(f, opt)
+		files, err = dartFiles(f, opt)
+		if err != nil {
+			return nil, err
+		}
 	case "php":
-		files = phpFiles(f, opt)
+		files, err = phpFiles(f, opt)
+		if err != nil {
+			return nil, err
+		}
 	case "ruby":
-		files = rubyFiles(f, opt)
+		files, err = rubyFiles(f, opt)
+		if err != nil {
+			return nil, err
+		}
 	case "python":
-		files = pythonFiles(f, opt)
+		files, err = pythonFiles(f, opt)
+		if err != nil {
+			return nil, err
+		}
 	case "typescript":
 		files = typeScriptFiles(f, opt)
 	case "javascript":
@@ -65,30 +96,57 @@ func Generate(fd protoreflect.FileDescriptor, opt Options) ([]File, error) {
 	case "rust":
 		files = rustFiles(f, opt)
 	case "objc":
-		files = objcFiles(f, opt)
+		files, err = objcFiles(f, opt)
+		if err != nil {
+			return nil, err
+		}
 	case "lua":
-		files = luaFiles(f, opt)
+		files, err = luaFiles(f, opt)
+		if err != nil {
+			return nil, err
+		}
 	case "go":
 		files, err = goFiles(f, opt)
 		if err != nil {
 			return nil, err
 		}
 	case "swift":
-		files = swiftFiles(f, opt)
+		files, err = swiftFiles(f, opt)
+		if err != nil {
+			return nil, err
+		}
 	case "zig":
 		files = zigFiles(f, opt)
 	case "scala":
-		files = scalaFiles(f, opt)
+		files, err = scalaFiles(f, opt)
+		if err != nil {
+			return nil, err
+		}
 	case "clojure":
-		files = clojureFiles(f, opt)
+		files, err = clojureFiles(f, opt)
+		if err != nil {
+			return nil, err
+		}
 	case "fsharp":
-		files = fsharpFiles(f, opt)
+		files, err = fsharpFiles(f, opt)
+		if err != nil {
+			return nil, err
+		}
 	case "elixir":
-		files = elixirFiles(f)
+		files, err = elixirFiles(f, opt)
+		if err != nil {
+			return nil, err
+		}
 	case "julia":
-		files = juliaFiles(f, opt)
+		files, err = juliaFiles(f, opt)
+		if err != nil {
+			return nil, err
+		}
 	case "r":
-		files = rFiles(f, opt)
+		files, err = rFiles(f, opt)
+		if err != nil {
+			return nil, err
+		}
 	default:
 		return nil, fmt.Errorf("unknown lang=%q (want java, kotlin, csharp, dart, php, ruby, python, typescript, javascript, rust, objc, lua, go, swift, zig, scala, clojure, fsharp, elixir, julia or r)", opt.Lang)
 	}

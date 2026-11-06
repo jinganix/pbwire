@@ -183,4 +183,19 @@ Check(Scalars3.Parser.ParseFrom(Array.Empty<byte>()).Equals(new Scalars3()), "T6
     Check(Oneof1.Parser.ParseFrom(one.ToByteArray()).Num == 1, "T6 oneof member round-trips");
 }
 
+// Dual registration: embedded set by default, external file via UseSchema.
+Spectest.PbwireFile_Oneof1.Preload();
+Check(Spectest.PbwireFile_Oneof1.MessageNames.Length == 2, "oneof registry lists every message");
+{
+    using var ext = Pbwire.Schema.FromFile(Path.Combine(testdata, "oneof1.desc"));
+    Spectest.PbwireFile_Oneof1.UseSchema(ext);
+    var back = Spectest.Oneof1.Parser.ParseFrom(referenceOneof);
+    Check(back.Name == "a" && back.Text == "hi", "external schema decodes");
+    Check(back.ToByteArray().SequenceEqual(referenceOneof), "external schema re-encodes");
+    Spectest.PbwireFile_Oneof1.UseSchema(null);
+    Check(Throws(() => Spectest.Oneof1.Parser.ParseFrom(referenceOneof)), "cleared override fails loudly");
+    Spectest.PbwireFile_Oneof1.Init();
+    Check(Spectest.Oneof1.Parser.ParseFrom(referenceOneof).Name == "a", "Init restores embedded");
+}
+
 Console.WriteLine($"compat: {checks} checks passed");

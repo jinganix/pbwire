@@ -13,19 +13,55 @@ import (
 // same runtime F# reuses: Schema/Message/MessageType). The descriptor set
 // travels embedded as base64, so no .desc file is needed at use time.
 // Oneof members are plain options.
-func fsharpFiles(f *model.File, opt Options) []File {
-	var b strings.Builder
-	b.WriteString(header(f, "Records over the C# P/Invoke runtime (Schema/Message, no codegen at use time)."))
-	// `module rec`: message graphs can be mutually recursive (a nested
-	// message can reference its parent), and F# needs declaration before
-	// use otherwise. External paths are unchanged.
-	b.WriteString("module rec " + fsharpModule(f) + "\n\n")
-	b.WriteString("open System\nopen Pbwire\n")
-	for _, imp := range f.Imports {
-		fmt.Fprintf(&b, "open %s\n", fsharpModuleName(stem(imp.Path)))
+func fsharpFiles(f *model.File, opt Options) ([]File, error) {
+	// Models and schema part ways: records in one module, the embedded
+	// descriptor set plus its loader in another. model=false leaves the
+	// schema module for dynamic-only users.
+	var files []File
+	if opt.Model {
+		var b strings.Builder
+		b.WriteString(header(f, "Records over the C# P/Invoke runtime (Schema/Message, no codegen at use time)."))
+		// `module rec`: message graphs can be mutually recursive (a nested
+		// message can reference its parent), and F# needs declaration before
+		// use otherwise. External paths are unchanged.
+		b.WriteString("module rec " + fsharpModule(f) + "\n\n")
+		b.WriteString("open System\nopen Pbwire\n")
+		for _, imp := range f.Imports {
+			fmt.Fprintf(&b, "open %s\n", fsharpModuleName(stem(imp.Path)))
+		}
+		b.WriteString("\n")
+		for _, e := range f.Enums {
+			fmt.Fprintf(&b, "/// %s\n", e.Full)
+			fmt.Fprintf(&b, "module %s =\n", className(f, e.Name))
+			for _, v := range e.Values {
+				fmt.Fprintf(&b, "    let %s: int = %d\n", v.Name, v.Number)
+			}
+			b.WriteString("\n")
+		}
+		// F# needs declaration before use, so messages go out in dependency
+		// order (nested types already come first; siblings are sorted here).
+		for _, m := range fsharpOrder(f) {
+			writeFSharpMessage(&b, f, m)
+		}
+		files = append(files, File{Name: base(f) + ".fs", Content: b.String()})
 	}
-	b.WriteString("\n")
-	b.WriteString("let private desc: byte[] = Convert.FromBase64String(\"\"\"\n")
+	var meta strings.Builder
+	writeFSharpMeta(&meta, f, opt)
+	files = append(files, File{Name: base(f) + "_meta.fs", Content: meta.String()})
+	return files, nil
+}
+
+// writeFSharpMeta emits the schema module: the embedded descriptor set plus
+// an explicit loader. register=true loads eagerly (as before); otherwise
+// initSchema (embedded bytes) or useSchema (an external schema) must run
+// first, loudly otherwise. registry adds the whole-file message list plus
+// a preload that warms every type.
+func writeFSharpMeta(b *strings.Builder, f *model.File, opt Options) {
+	meta := fsharpModule(f) + "Meta"
+	b.WriteString(header(f, "Embedded descriptor set plus its loader: the schema side of the generated model."))
+	fmt.Fprintf(b, "module %s\n\n", meta)
+	b.WriteString("open System\nopen Pbwire\n\n")
+	b.WriteString("let desc: byte[] = Convert.FromBase64String(\"\"\"\n")
 	for i := 0; i < len(opt.DescSetB64); i += 76 {
 		end := i + 76
 		if end > len(opt.DescSetB64) {
@@ -34,21 +70,29 @@ func fsharpFiles(f *model.File, opt Options) []File {
 		b.WriteString(opt.DescSetB64[i:end] + "\n")
 	}
 	b.WriteString("\"\"\")\n\n")
-	b.WriteString("let private schema: Schema = Schema.FromBytes(desc)\n\n")
-	for _, e := range f.Enums {
-		fmt.Fprintf(&b, "/// %s\n", e.Full)
-		fmt.Fprintf(&b, "module %s =\n", className(f, e.Name))
-		for _, v := range e.Values {
-			fmt.Fprintf(&b, "    let %s: int = %d\n", v.Name, v.Number)
+	b.WriteString("let mutable private _schema: Schema = null\n\n")
+	b.WriteString("let initSchema (bytes: byte[]): unit = _schema <- Schema.FromBytes(bytes)\n\n")
+	b.WriteString("/// Registers an externally loaded schema: models encode/decode through it\n")
+	b.WriteString("/// instead of the embedded set. The caller owns it; null restores the\n")
+	b.WriteString("/// embedded set (call initSchema to reload).\n")
+	b.WriteString("let useSchema (s: Schema): unit = _schema <- s\n\n")
+	b.WriteString("let getSchema (): Schema =\n")
+	b.WriteString("    match _schema with\n")
+	b.WriteString("    | null -> failwith \"call initSchema or useSchema first (generated with register=false)\"\n")
+	b.WriteString("    | s -> s\n")
+	if opt.Register {
+		b.WriteString("\ndo initSchema desc\n")
+	}
+	if opt.Registry {
+		b.WriteString("\n/// Every message in this file, for whole-schema pre-registration.\n")
+		b.WriteString("let messageNames: string list = [\n")
+		for _, m := range f.Messages {
+			fmt.Fprintf(b, "    %q\n", m.Full)
 		}
-		b.WriteString("\n")
+		b.WriteString("]\n\n")
+		b.WriteString("/// Warms every message type, so later calls pay no lookup.\n")
+		b.WriteString("let preload (): unit = messageNames |> List.iter (fun full -> getSchema().Message(full) |> ignore)\n")
 	}
-	// F# needs declaration before use, so messages go out in dependency
-	// order (nested types already come first; siblings are sorted here).
-	for _, m := range fsharpOrder(f) {
-		writeFSharpMessage(&b, f, m)
-	}
-	return []File{{Name: base(f) + ".fs", Content: b.String()}}
 }
 
 func fsharpModule(f *model.File) string { return fsharpModuleName(base(f)) }
@@ -175,16 +219,16 @@ func writeFSharpMessage(b *strings.Builder, f *model.File, m model.Message) {
 		// wire behavior is identical (encode always empty, decode drops).
 		fmt.Fprintf(b, "type %s = unit\n\n", cls)
 		fmt.Fprintf(b, "module %s =\n", cls)
-		fmt.Fprintf(b, "    let private ty: MessageType = schema.Message(%q)\n\n", m.Full)
+		fmt.Fprintf(b, "    let private ty (): MessageType = %s.getSchema().Message(%q)\n\n", fsharpModule(f)+"Meta", m.Full)
 		fmt.Fprintf(b, "    let defaultValue : %s = ()\n\n", cls)
 		fmt.Fprintf(b, "    let fill (_msg: Message) (_v: %s) : unit = ()\n\n", cls)
 		fmt.Fprintf(b, "    let encode (v: %s) : byte[] =\n", cls)
-		b.WriteString("        use msg = ty.NewMessage()\n")
+		b.WriteString("        use msg = ty().NewMessage()\n")
 		b.WriteString("        fill msg v\n")
 		b.WriteString("        msg.Encode()\n\n")
 		fmt.Fprintf(b, "    let load (_msg: Message) : %s = ()\n\n", cls)
 		fmt.Fprintf(b, "    let decode (wire: byte[]) : %s =\n", cls)
-		b.WriteString("        use msg = ty.Decode(ReadOnlySpan wire)\n")
+		b.WriteString("        use msg = ty().Decode(ReadOnlySpan wire)\n")
 		b.WriteString("        load msg\n\n")
 		return
 	}
@@ -199,7 +243,7 @@ func writeFSharpMessage(b *strings.Builder, f *model.File, m model.Message) {
 	}
 	b.WriteString("\n    }\n\n")
 	fmt.Fprintf(b, "module %s =\n", cls)
-	fmt.Fprintf(b, "    let private ty: MessageType = schema.Message(%q)\n\n", m.Full)
+	fmt.Fprintf(b, "    let private ty (): MessageType = %s.getSchema().Message(%q)\n\n", fsharpModule(f)+"Meta", m.Full)
 	fmt.Fprintf(b, "    let defaultValue : %s =\n", cls)
 	b.WriteString("        {")
 	for i, field := range fields {
@@ -215,7 +259,7 @@ func writeFSharpMessage(b *strings.Builder, f *model.File, m model.Message) {
 		writeFSharpFill(b, f, field)
 	}
 	fmt.Fprintf(b, "\n    let encode (v: %s) : byte[] =\n", cls)
-	b.WriteString("        use msg = ty.NewMessage()\n")
+	b.WriteString("        use msg = ty().NewMessage()\n")
 	b.WriteString("        fill msg v\n")
 	b.WriteString("        msg.Encode()\n\n")
 	fmt.Fprintf(b, "    let rec load (msg: Message) : %s =\n", cls)
@@ -229,7 +273,7 @@ func writeFSharpMessage(b *strings.Builder, f *model.File, m model.Message) {
 	}
 	b.WriteString("\n        }\n\n")
 	fmt.Fprintf(b, "    let decode (wire: byte[]) : %s =\n", cls)
-	b.WriteString("        use msg = ty.Decode(ReadOnlySpan wire)\n")
+	b.WriteString("        use msg = ty().Decode(ReadOnlySpan wire)\n")
 	b.WriteString("        load msg\n\n")
 }
 

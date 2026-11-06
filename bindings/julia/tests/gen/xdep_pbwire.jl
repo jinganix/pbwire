@@ -2,19 +2,7 @@
 # Generated structs over the Pbwire ccall runtime: to/from Dict, encode/decode.
 # Do not edit; regenerate from the .proto instead.
 
-import Base64: base64decode
-push!(LOAD_PATH, joinpath(@__DIR__, "..", "runtime", "src"))
-using Pbwire
-
-const _DESC = base64decode("CrkDCgp4ZGVwLnByb3RvEgR4ZGVwIjIKBkRlcE1zZxISCgRuYW1lGAEgASgJUgRuYW1lEhQKBXZhbHVlGAIgASgFUgV2YWx1ZUroAgoGEgQDAAoBCs0BCgEMEgMDABIawgEgU2hhcmVkIGRlcGVuZGVuY3kgZm9yIHRoZSBjcm9zcy1maWxlIGZpeHR1cmU6IHhmaWxlLnByb3RvIGltcG9ydHMgdGhpcwogZmlsZSBhbmQgcmVmZXJlbmNlcyBEZXBNc2cuIEdlbmVyYXRlZCBvbmNlIHBlciBsYW5ndWFnZSBuZXh0IHRvIHhmaWxlJ3MKIG93biBtb2RlbDsgdGhlIHJlZmVyZW5jZSBieXRlcyBsaXZlIHdpdGggeGZpbGUuCgoICgECEgMFAA0KCgoCBAASBAcACgEKCgoDBAABEgMHCA4KCwoEBAACABIDCAISCgwKBQQAAgAFEgMIAggKDAoFBAACAAESAwgJDQoMCgUEAAIAAxIDCBARCgsKBAQAAgESAwkCEgoMCgUEAAIBBRIDCQIHCgwKBQQAAgEBEgMJCA0KDAoFBAACAQMSAwkQEWIGcHJvdG8z")
-
-const _SCHEMA = Ref{Any}(nothing)
-function _schema()
-    if _SCHEMA[] === nothing
-        _SCHEMA[] = Pbwire.from_bytes(Vector{UInt8}(_DESC))
-    end
-    return _SCHEMA[]
-end
+include(joinpath(@__DIR__, "xdep_meta.jl"))
 
 # xdep.DepMsg
 mutable struct Xdep_DepMsg

@@ -8,14 +8,27 @@
 //
 // Options: lang=java|kotlin|csharp|dart|php|ruby|python|typescript|javascript|rust|objc|lua|go|swift|zig|scala|clojure|fsharp|elixir|julia|r,
 // prefix=<ClassPrefix> (default: CamelCase of the proto package),
-// dir=<subdir> (place the generated files under a subdirectory) and
+// dir=<subdir> (place the generated files under a subdirectory),
+// model=<true|false> (default true: emit the message implementation files;
+// false leaves only the schema sidecar for dynamic-only users),
+// register=<true|false> (default true: load the embedded schema lazily on
+// first use; false leaves it to an explicit init/use_schema call, failing
+// loudly otherwise) and registry=<true|false> (default true: emit the
+// whole-file message list plus a preload that warms every type; pure data,
+// no runtime cost) and
 // M<path>=<importpath> (sibling import override, protoc-gen-go style;
 // only languages with explicit module paths read it).
+//
+// Per-language notes: elixir has no embedded descriptor set (the modules are
+// the schema), so there is no second file and register is a no-op — loading
+// stays explicit via Pbwire.load_schema/1; r keeps one dotted holder per file
+// instead of the old single shared global.
 package main
 
 import (
 	"encoding/base64"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"pbwire-codegen/internal/core"
@@ -103,6 +116,9 @@ func closureSet(req *pluginpb.CodeGeneratorRequest, path string) (string, error)
 
 func parseOptions(param string) (gen.Options, error) {
 	var opt gen.Options
+	// The shipping shape: implementation models that self-register, plus the
+	// whole-file list for whole-schema registration.
+	opt.Model, opt.Register, opt.Registry = true, true, true
 	for _, part := range strings.Split(param, ",") {
 		if part == "" {
 			continue
@@ -118,6 +134,24 @@ func parseOptions(param string) (gen.Options, error) {
 			opt.Prefix = value
 		case "dir":
 			opt.Dir = value
+		case "model":
+			b, err := strconv.ParseBool(value)
+			if err != nil {
+				return opt, fmt.Errorf("bad option %q (want true or false)", part)
+			}
+			opt.Model = b
+		case "register":
+			b, err := strconv.ParseBool(value)
+			if err != nil {
+				return opt, fmt.Errorf("bad option %q (want true or false)", part)
+			}
+			opt.Register = b
+		case "registry":
+			b, err := strconv.ParseBool(value)
+			if err != nil {
+				return opt, fmt.Errorf("bad option %q (want true or false)", part)
+			}
+			opt.Registry = b
 		default:
 			if rest, ok := strings.CutPrefix(key, "M"); ok {
 				if opt.Mappings == nil {

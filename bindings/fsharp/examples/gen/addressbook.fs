@@ -7,35 +7,6 @@ module rec Addressbook
 open System
 open Pbwire
 
-let private desc: byte[] = Convert.FromBase64String("""
-Cr8KChFhZGRyZXNzYm9vay5wcm90bxIIdHV0b3JpYWwiggIKBlBlcnNvbhISCgRuYW1lGAEgAigJ
-UgRuYW1lEg4KAmlkGAIgAigFUgJpZBIUCgVlbWFpbBgDIAEoCVIFZW1haWwSNAoGcGhvbmVzGAQg
-AygLMhwudHV0b3JpYWwuUGVyc29uLlBob25lTnVtYmVyUgZwaG9uZXMaWwoLUGhvbmVOdW1iZXIS
-FgoGbnVtYmVyGAEgAigJUgZudW1iZXISNAoEdHlwZRgCIAEoDjIaLnR1dG9yaWFsLlBlcnNvbi5Q
-aG9uZVR5cGU6BEhPTUVSBHR5cGUiKwoJUGhvbmVUeXBlEgoKBk1PQklMRRAAEggKBEhPTUUQARII
-CgRXT1JLEAIiNwoLQWRkcmVzc0Jvb2sSKAoGcGVvcGxlGAEgAygLMhAudHV0b3JpYWwuUGVyc29u
-UgZwZW9wbGVK4QcKBhIEAwAcAQrAAQoBDBIDAwASGrUBIFRoZSBjbGFzc2ljIHByb3RvY29sLWJ1
-ZmZlcnMgdHV0b3JpYWwgc2NoZW1hIChhZGRyZXNzYm9vay5wcm90byksIGtlcHQKIHNlbGYtY29u
-dGFpbmVkIChubyBpbXBvcnRzKSBzbyB0aGUgQyBleGFtcGxlIGJlbG93IGNhbiBtaXJyb3IgaXQg
-YnkgaGFuZAogd2l0aG91dCBwcm90b2Mgb3IgZ2VuZXJhdGVkIGNvZGUuCgoICgECEgMFABEKCgoC
-BAASBAcAGAEKCgoDBAABEgMHCA4KCwoEBAACABIDCAIbCgwKBQQAAgAEEgMIAgoKDAoFBAACAAUS
-AwgLEQoMCgUEAAIAARIDCBIWCgwKBQQAAgADEgMIGRoKCwoEBAACARIDCQIYCgwKBQQAAgEEEgMJ
-AgoKDAoFBAACAQUSAwkLEAoMCgUEAAIBARIDCRETCgwKBQQAAgEDEgMJFhcKCwoEBAACAhIDCgIc
-CgwKBQQAAgIEEgMKAgoKDAoFBAACAgUSAwoLEQoMCgUEAAICARIDChIXCgwKBQQAAgIDEgMKGhsK
-DAoEBAAEABIEDAIQAwoMCgUEAAQAARIDDAcQCg0KBgQABAACABIDDQQPCg4KBwQABAACAAESAw0E
-CgoOCgcEAAQAAgACEgMNDQ4KDQoGBAAEAAIBEgMOBA0KDgoHBAAEAAIBARIDDgQICg4KBwQABAAC
-AQISAw4LDAoNCgYEAAQAAgISAw8EDQoOCgcEAAQAAgIBEgMPBAgKDgoHBAAEAAICAhIDDwsMCgwK
-BAQAAwASBBICFQMKDAoFBAADAAESAxIKFQoNCgYEAAMAAgASAxMEHwoOCgcEAAMAAgAEEgMTBAwK
-DgoHBAADAAIABRIDEw0TCg4KBwQAAwACAAESAxMUGgoOCgcEAAMAAgADEgMTHR4KDQoGBAADAAIB
-EgMUBDEKDgoHBAADAAIBBBIDFAQMCg4KBwQAAwACAQYSAxQNFgoOCgcEAAMAAgEBEgMUFxsKDgoH
-BAADAAIBAxIDFB4fCg4KBwQAAwACAQgSAxQgMAoOCgcEAAMAAgEHEgMUKy8KCwoEBAACAxIDFwIi
-CgwKBQQAAgMEEgMXAgoKDAoFBAACAwYSAxcLFgoMCgUEAAIDARIDFxcdCgwKBQQAAgMDEgMXICEK
-CgoCBAESBBoAHAEKCgoDBAEBEgMaCBMKCwoEBAECABIDGwIdCgwKBQQBAgAEEgMbAgoKDAoFBAEC
-AAYSAxsLEQoMCgUEAQIAARIDGxIYCgwKBQQBAgADEgMbGxw=
-""")
-
-let private schema: Schema = Schema.FromBytes(desc)
-
 /// tutorial.Person.PhoneType
 module Tutorial_Person_PhoneType =
     let MOBILE: int = 0
@@ -50,7 +21,7 @@ type Tutorial_Person_PhoneNumber =
     }
 
 module Tutorial_Person_PhoneNumber =
-    let private ty: MessageType = schema.Message("tutorial.Person.PhoneNumber")
+    let private ty (): MessageType = AddressbookMeta.getSchema().Message("tutorial.Person.PhoneNumber")
 
     let defaultValue : Tutorial_Person_PhoneNumber =
         {
@@ -63,7 +34,7 @@ module Tutorial_Person_PhoneNumber =
         v.``type`` |> Option.iter (fun x -> msg.Set("type", int64 x) |> ignore)
 
     let encode (v: Tutorial_Person_PhoneNumber) : byte[] =
-        use msg = ty.NewMessage()
+        use msg = ty().NewMessage()
         fill msg v
         msg.Encode()
 
@@ -74,7 +45,7 @@ module Tutorial_Person_PhoneNumber =
         }
 
     let decode (wire: byte[]) : Tutorial_Person_PhoneNumber =
-        use msg = ty.Decode(ReadOnlySpan wire)
+        use msg = ty().Decode(ReadOnlySpan wire)
         load msg
 
 /// tutorial.Person
@@ -87,7 +58,7 @@ type Tutorial_Person =
     }
 
 module Tutorial_Person =
-    let private ty: MessageType = schema.Message("tutorial.Person")
+    let private ty (): MessageType = AddressbookMeta.getSchema().Message("tutorial.Person")
 
     let defaultValue : Tutorial_Person =
         {
@@ -104,7 +75,7 @@ module Tutorial_Person =
         v.phones |> List.iter (fun x -> Tutorial_Person_PhoneNumber.fill (msg.SetMessage("phones")) x)
 
     let encode (v: Tutorial_Person) : byte[] =
-        use msg = ty.NewMessage()
+        use msg = ty().NewMessage()
         fill msg v
         msg.Encode()
 
@@ -117,7 +88,7 @@ module Tutorial_Person =
         }
 
     let decode (wire: byte[]) : Tutorial_Person =
-        use msg = ty.Decode(ReadOnlySpan wire)
+        use msg = ty().Decode(ReadOnlySpan wire)
         load msg
 
 /// tutorial.AddressBook
@@ -127,7 +98,7 @@ type Tutorial_AddressBook =
     }
 
 module Tutorial_AddressBook =
-    let private ty: MessageType = schema.Message("tutorial.AddressBook")
+    let private ty (): MessageType = AddressbookMeta.getSchema().Message("tutorial.AddressBook")
 
     let defaultValue : Tutorial_AddressBook =
         {
@@ -138,7 +109,7 @@ module Tutorial_AddressBook =
         v.people |> List.iter (fun x -> Tutorial_Person.fill (msg.SetMessage("people")) x)
 
     let encode (v: Tutorial_AddressBook) : byte[] =
-        use msg = ty.NewMessage()
+        use msg = ty().NewMessage()
         fill msg v
         msg.Encode()
 
@@ -148,6 +119,6 @@ module Tutorial_AddressBook =
         }
 
     let decode (wire: byte[]) : Tutorial_AddressBook =
-        use msg = ty.Decode(ReadOnlySpan wire)
+        use msg = ty().Decode(ReadOnlySpan wire)
         load msg
 

@@ -7,19 +7,6 @@ module rec Xdep
 open System
 open Pbwire
 
-let private desc: byte[] = Convert.FromBase64String("""
-CrkDCgp4ZGVwLnByb3RvEgR4ZGVwIjIKBkRlcE1zZxISCgRuYW1lGAEgASgJUgRuYW1lEhQKBXZh
-bHVlGAIgASgFUgV2YWx1ZUroAgoGEgQDAAoBCs0BCgEMEgMDABIawgEgU2hhcmVkIGRlcGVuZGVu
-Y3kgZm9yIHRoZSBjcm9zcy1maWxlIGZpeHR1cmU6IHhmaWxlLnByb3RvIGltcG9ydHMgdGhpcwog
-ZmlsZSBhbmQgcmVmZXJlbmNlcyBEZXBNc2cuIEdlbmVyYXRlZCBvbmNlIHBlciBsYW5ndWFnZSBu
-ZXh0IHRvIHhmaWxlJ3MKIG93biBtb2RlbDsgdGhlIHJlZmVyZW5jZSBieXRlcyBsaXZlIHdpdGgg
-eGZpbGUuCgoICgECEgMFAA0KCgoCBAASBAcACgEKCgoDBAABEgMHCA4KCwoEBAACABIDCAISCgwK
-BQQAAgAFEgMIAggKDAoFBAACAAESAwgJDQoMCgUEAAIAAxIDCBARCgsKBAQAAgESAwkCEgoMCgUE
-AAIBBRIDCQIHCgwKBQQAAgEBEgMJCA0KDAoFBAACAQMSAwkQEWIGcHJvdG8z
-""")
-
-let private schema: Schema = Schema.FromBytes(desc)
-
 /// xdep.DepMsg
 type Xdep_DepMsg =
     {
@@ -28,7 +15,7 @@ type Xdep_DepMsg =
     }
 
 module Xdep_DepMsg =
-    let private ty: MessageType = schema.Message("xdep.DepMsg")
+    let private ty (): MessageType = XdepMeta.getSchema().Message("xdep.DepMsg")
 
     let defaultValue : Xdep_DepMsg =
         {
@@ -41,7 +28,7 @@ module Xdep_DepMsg =
         if v.value <> 0 then msg.Set("value", int64 v.value) |> ignore
 
     let encode (v: Xdep_DepMsg) : byte[] =
-        use msg = ty.NewMessage()
+        use msg = ty().NewMessage()
         fill msg v
         msg.Encode()
 
@@ -52,6 +39,6 @@ module Xdep_DepMsg =
         }
 
     let decode (wire: byte[]) : Xdep_DepMsg =
-        use msg = ty.Decode(ReadOnlySpan wire)
+        use msg = ty().Decode(ReadOnlySpan wire)
         load msg
 

@@ -5,12 +5,6 @@
 import java.util.Base64
 
 object addressbookGen {
-  private val desc: Array[Byte] = Base64.getDecoder.decode(
-    List("""Cr8KChFhZGRyZXNzYm9vay5wcm90bxIIdHV0b3JpYWwiggIKBlBlcnNvbhISCgRuYW1lGAEgAigJUgRuYW1lEg4KAmlkGAIgAigFUgJpZBIUCgVlbWFpbBgDIAEoCVIFZW1haWwSNAoGcGhvbmVzGAQgAygLMhwudHV0b3JpYWwuUGVyc29uLlBob25lTnVtYmVyUgZwaG9uZXMaWwoLUGhvbmVOdW1iZXISFgoGbnVtYmVyGAEgAigJUgZudW1iZXISNAoEdHlwZRgCIAEoDjIaLnR1dG9yaWFsLlBlcnNvbi5QaG9uZVR5cGU6BEhPTUVSBHR5cGUiKwoJUGhvbmVUeXBlEgoKBk1PQklMRRAAEggKBEhPTUUQARIICgRXT1JLEAIiNwoLQWRkcmVzc0Jvb2sSKAoGcGVvcGxlGAEgAygLMhAudHV0b3JpYWwuUGVyc29uUgZwZW9wbGVK4QcKBhIEAwAcAQrAAQoBDBIDAwASGrUBIFRoZSBjbGFzc2ljIHByb3RvY29sLWJ1ZmZlcnMgdHV0b3JpYWwgc2NoZW1hIChhZGRyZXNzYm9vay5wcm90byksIGtlcHQKIHNlbGYtY29udGFpbmVkIChubyBpbXBvcnRzKSBzbyB0aGUgQyBleGFtcGxlIGJlbG93IGNhbiBtaXJyb3IgaXQgYnkgaGFuZAogd2l0aG91dCBwcm90b2Mgb3IgZ2VuZXJhdGVkIGNvZGUuCgoICgECEgMFABEKCgoCBAASBAcAGAEKCgoDBAABEgMHCA4KCwoEBAACABIDCAIbCgwKBQQAAgAEEgMIAgoKDAoFBAACAAUSAwgLEQoMCgUEAAIAARIDCBIWCgwKBQQAAgADEgMIGRoKCwoEBAACARIDCQIYCgwKBQQAAgEEEgMJAgoKDAoFBAACAQUSAwkLEAoMCgUEAAIBARIDCRETCgwKBQQAAgEDEgMJFhcKCwoEBAACAhIDCgIcCgwKBQQAAgIEEgMKAgoKDAoFBAACAgUSAwoLEQoMCgUEAAICARIDChIXCgwKBQQAAgIDEgMKGhsKDAoEBAAEABIEDAIQAwoMCgUEAAQAARIDDAcQCg0KBgQABAACABIDDQQPCg4KBwQABAACAAESAw0ECgoOCgcEAAQAAgACEgMNDQ4KDQoGBAAEAAIBEgMOBA0KDgoHBAAEAAIBARIDDgQICg4KBwQABAACAQISAw4LDAoNCgYEAAQAAgISAw8EDQoOCgcEAAQAAgIBEgMPBAgKDgoHBAAEAAICAhIDDwsMCgwKBAQAAwASBBICFQMKDAoFBAADAAESAxIKFQoNCgYEAAMAAgASAxMEHwoOCgcEAAMAAgAEEgMTBAwKDgoHBAADAAIABRIDEw0TCg4KBwQAAwACAAESAxMUGgoOCgcEAAMAAgADEgMTHR4KDQoGBAADAAIBEgMUBDEKDgoHBAADAAIBBBIDFAQMCg4KBwQAAwACAQYSAxQNFgoOCgcEAAMAAgEBEgMUFxsKDgoHBAADAAIBAxIDFB4fCg4KBwQAAwACAQgSAxQgMAoOCgcEAAMAAgEHEgMUKy8KCwoEBAACAxIDFwIiCgwKBQQAAgMEEgMXAgoKDAoFBAACAwYSAxcLFgoMCgUEAAIDARIDFxcdCgwKBQQAAgMDEgMXICEKCgoCBAESBBoAHAEKCgoDBAEBEgMaCBMKCwoEBAECABIDGwIdCgwKBQQBAgAEEgMbAgoKDAoFBAECAAYSAxsLEQoMCgUEAQIAARIDGxIYCgwKBQQBAgADEgMbGxw=""").mkString.filterNot(_.isWhitespace)
-  )
-
-  private val schema: Schema = Schema.fromBytes(desc)
-
   // tutorial.Person.PhoneType
   object Tutorial_Person_PhoneType {
     val MOBILE: Int = 0
@@ -27,7 +21,7 @@ object addressbookGen {
   }
 
   object Tutorial_Person_PhoneNumber {
-    private val ty: MessageType = schema.message("tutorial.Person.PhoneNumber")
+    private val ty: MessageType = addressbookMeta.schema.message("tutorial.Person.PhoneNumber")
 
     def encode(v: Tutorial_Person_PhoneNumber): Array[Byte] = {
       val msg = ty.newMessage()
@@ -59,7 +53,7 @@ object addressbookGen {
   }
 
   object Tutorial_Person {
-    private val ty: MessageType = schema.message("tutorial.Person")
+    private val ty: MessageType = addressbookMeta.schema.message("tutorial.Person")
 
     def encode(v: Tutorial_Person): Array[Byte] = {
       val msg = ty.newMessage()
@@ -92,7 +86,7 @@ object addressbookGen {
   }
 
   object Tutorial_AddressBook {
-    private val ty: MessageType = schema.message("tutorial.AddressBook")
+    private val ty: MessageType = addressbookMeta.schema.message("tutorial.AddressBook")
 
     def encode(v: Tutorial_AddressBook): Array[Byte] = {
       val msg = ty.newMessage()

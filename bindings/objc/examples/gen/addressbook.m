@@ -3,61 +3,18 @@
 // Do not edit; regenerate from the .proto instead.
 
 #import "addressbook.h"
+#import "addressbook.h"
+#import "addressbook_schema.h"
 #import "PBWError.h"
 
 NS_ASSUME_NONNULL_BEGIN
-
-static NSString * const kPBWGenDescB64 =
-    @"Cr8KChFhZGRyZXNzYm9vay5wcm90bxIIdHV0b3JpYWwiggIKBlBlcnNvbhIS"
-    @"CgRuYW1lGAEgAigJUgRuYW1lEg4KAmlkGAIgAigFUgJpZBIUCgVlbWFpbBgD"
-    @"IAEoCVIFZW1haWwSNAoGcGhvbmVzGAQgAygLMhwudHV0b3JpYWwuUGVyc29u"
-    @"LlBob25lTnVtYmVyUgZwaG9uZXMaWwoLUGhvbmVOdW1iZXISFgoGbnVtYmVy"
-    @"GAEgAigJUgZudW1iZXISNAoEdHlwZRgCIAEoDjIaLnR1dG9yaWFsLlBlcnNv"
-    @"bi5QaG9uZVR5cGU6BEhPTUVSBHR5cGUiKwoJUGhvbmVUeXBlEgoKBk1PQklM"
-    @"RRAAEggKBEhPTUUQARIICgRXT1JLEAIiNwoLQWRkcmVzc0Jvb2sSKAoGcGVv"
-    @"cGxlGAEgAygLMhAudHV0b3JpYWwuUGVyc29uUgZwZW9wbGVK4QcKBhIEAwAc"
-    @"AQrAAQoBDBIDAwASGrUBIFRoZSBjbGFzc2ljIHByb3RvY29sLWJ1ZmZlcnMg"
-    @"dHV0b3JpYWwgc2NoZW1hIChhZGRyZXNzYm9vay5wcm90byksIGtlcHQKIHNl"
-    @"bGYtY29udGFpbmVkIChubyBpbXBvcnRzKSBzbyB0aGUgQyBleGFtcGxlIGJl"
-    @"bG93IGNhbiBtaXJyb3IgaXQgYnkgaGFuZAogd2l0aG91dCBwcm90b2Mgb3Ig"
-    @"Z2VuZXJhdGVkIGNvZGUuCgoICgECEgMFABEKCgoCBAASBAcAGAEKCgoDBAAB"
-    @"EgMHCA4KCwoEBAACABIDCAIbCgwKBQQAAgAEEgMIAgoKDAoFBAACAAUSAwgL"
-    @"EQoMCgUEAAIAARIDCBIWCgwKBQQAAgADEgMIGRoKCwoEBAACARIDCQIYCgwK"
-    @"BQQAAgEEEgMJAgoKDAoFBAACAQUSAwkLEAoMCgUEAAIBARIDCRETCgwKBQQA"
-    @"AgEDEgMJFhcKCwoEBAACAhIDCgIcCgwKBQQAAgIEEgMKAgoKDAoFBAACAgUS"
-    @"AwoLEQoMCgUEAAICARIDChIXCgwKBQQAAgIDEgMKGhsKDAoEBAAEABIEDAIQ"
-    @"AwoMCgUEAAQAARIDDAcQCg0KBgQABAACABIDDQQPCg4KBwQABAACAAESAw0E"
-    @"CgoOCgcEAAQAAgACEgMNDQ4KDQoGBAAEAAIBEgMOBA0KDgoHBAAEAAIBARID"
-    @"DgQICg4KBwQABAACAQISAw4LDAoNCgYEAAQAAgISAw8EDQoOCgcEAAQAAgIB"
-    @"EgMPBAgKDgoHBAAEAAICAhIDDwsMCgwKBAQAAwASBBICFQMKDAoFBAADAAES"
-    @"AxIKFQoNCgYEAAMAAgASAxMEHwoOCgcEAAMAAgAEEgMTBAwKDgoHBAADAAIA"
-    @"BRIDEw0TCg4KBwQAAwACAAESAxMUGgoOCgcEAAMAAgADEgMTHR4KDQoGBAAD"
-    @"AAIBEgMUBDEKDgoHBAADAAIBBBIDFAQMCg4KBwQAAwACAQYSAxQNFgoOCgcE"
-    @"AAMAAgEBEgMUFxsKDgoHBAADAAIBAxIDFB4fCg4KBwQAAwACAQgSAxQgMAoO"
-    @"CgcEAAMAAgEHEgMUKy8KCwoEBAACAxIDFwIiCgwKBQQAAgMEEgMXAgoKDAoF"
-    @"BAACAwYSAxcLFgoMCgUEAAIDARIDFxcdCgwKBQQAAgMDEgMXICEKCgoCBAES"
-    @"BBoAHAEKCgoDBAEBEgMaCBMKCwoEBAECABIDGwIdCgwKBQQBAgAEEgMbAgoK"
-    @"DAoFBAECAAYSAxsLEQoMCgUEAQIAARIDGxIYCgwKBQQBAgADEgMbGxw="
-    ;
-
-static PBWSchema *PBWGenFileSchema(void)
-{
-    static PBWSchema *schema = nil;
-    static dispatch_once_t onceToken;
-    dispatch_once(&onceToken, ^{
-        NSData *raw = [[NSData alloc] initWithBase64EncodedString:kPBWGenDescB64 options:0];
-        NSError *error = nil;
-        schema = [PBWSchema schemaFromData:raw error:&error];
-    });
-    return schema;
-}
 
 @implementation PBWGen_Person_PhoneNumber
 
 
 + (nullable PBWSchema *)pbw_schema
 {
-    return PBWGenFileSchema();
+    return PBWGenAddressbookFileSchema();
 }
 
 + (instancetype)message
@@ -158,7 +115,7 @@ static PBWSchema *PBWGenFileSchema(void)
 
 + (nullable PBWSchema *)pbw_schema
 {
-    return PBWGenFileSchema();
+    return PBWGenAddressbookFileSchema();
 }
 
 + (instancetype)message
@@ -296,7 +253,7 @@ static PBWSchema *PBWGenFileSchema(void)
 
 + (nullable PBWSchema *)pbw_schema
 {
-    return PBWGenFileSchema();
+    return PBWGenAddressbookFileSchema();
 }
 
 + (instancetype)message

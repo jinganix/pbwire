@@ -5,64 +5,6 @@
 import Foundation
 import Pbwire
 
-private let _descData = Data(base64Encoded: """
-CrcVCg1tYXRyaXgzLnByb3RvEgpzdHJ1Y3R0ZXN0IjIKBklubmVyMxISCgRuYW1lGAEgASgJUgRu
-YW1lEhQKBXZhbHVlGAIgASgFUgV2YWx1ZSKmBAoIU2NhbGFyczMSEAoDaTMyGAEgASgFUgNpMzIS
-EAoDaTY0GAIgASgDUgNpNjQSEAoDdTMyGAMgASgNUgN1MzISEAoDdTY0GAQgASgEUgN1NjQSEAoD
-czMyGAUgASgRUgNzMzISEAoDczY0GAYgASgSUgNzNjQSEgoEZngzMhgHIAEoB1IEZngzMhISCgRm
-eDY0GAggASgGUgRmeDY0EhQKBXNmeDMyGAkgASgPUgVzZngzMhIUCgVzZng2NBgKIAEoEFIFc2Z4
-NjQSEAoDZjMyGAsgASgCUgNmMzISEAoDZjY0GAwgASgBUgNmNjQSEgoEZmxhZxgNIAEoCFIEZmxh
-ZxIQCgNzdHIYDiABKAlSA3N0chIoCgVjb2xvchgPIAEoDjISLnN0cnVjdHRlc3QuQ29sb3IzUgVj
-b2xvchIoCgVpbm5lchgQIAEoCzISLnN0cnVjdHRlc3QuSW5uZXIzUgVpbm5lchISCgRudW1zGBEg
-AygFUgRudW1zEhIKBHRhZ3MYEiADKAlSBHRhZ3MSKgoGaW5uZXJzGBMgAygLMhIuc3RydWN0dGVz
-dC5Jbm5lcjNSBmlubmVycxIcCgdvcHRfaTMyGBQgASgFSABSBm9wdEkzMogBARIcCgdvcHRfc3Ry
-GBUgASgJSAFSBm9wdFN0cogBARIUCgVmbGFncxgWIAMoCFIFZmxhZ3NCCgoIX29wdF9pMzJCCgoI
-X29wdF9zdHIqQgoGQ29sb3IzEhYKEkNPTE9SM19VTlNQRUNJRklFRBAAEg4KCkNPTE9SM19SRUQQ
-ARIQCgxDT0xPUjNfR1JFRU4QAkrwDwoGEgQGACwBCpwDCgEMEgMGABIakQMgU3RydWN0LWJpbmRp
-bmcgY292ZXJhZ2UgbWF0cml4IChwcm90bzMpOiBldmVyeSBzY2FsYXIga2luZCB0aGUKIHBid19z
-dHJ1Y3QgZW5naW5lIHN1cHBvcnRzLCBwbHVzIHN0cmluZy9lbnVtL21lc3NhZ2UsIHJlcGV0aXRp
-b24gYW5kCiBwcm90bzMgb3B0aW9uYWwuIEFsbCBzaW5ndWxhciBzY2FsYXJzIGNhcnJ5IG5vbi16
-ZXJvIHZhbHVlcyBpbgogbWF0cml4My50eHQgb24gcHVycG9zZTogcHJvdG8zIGltcGxpY2l0IHBy
-ZXNlbmNlIGhhcyBubyBoYXMtZmxhZywgc28KIHRoZSBzdHJ1Y3QgZW5jb2RlciBhbHdheXMgZW1p
-dHMgdGhlbSBhbmQgdGhlIHJlZmVyZW5jZSBieXRlcwogKHByb3RvYyAtLWVuY29kZSwgdGhlIHNh
-bWUgb3JhY2xlIGFzIHRoZSBjb25mb3JtYW5jZSBzdWl0ZSkgbXVzdCB0b28uCgoICgECEgMIABMK
-CgoCBQASBAoADgEKCgoDBQABEgMKBQsKCwoEBQACABIDCwIZCgwKBQUAAgABEgMLAhQKDAoFBQAC
-AAISAwsXGAoLCgQFAAIBEgMMAhEKDAoFBQACAQESAwwCDAoMCgUFAAIBAhIDDA8QCgsKBAUAAgIS
-Aw0CEwoMCgUFAAICARIDDQIOCgwKBQUAAgICEgMNERIKCgoCBAASBBAAEwEKCgoDBAABEgMQCA4K
-CwoEBAACABIDEQISCgwKBQQAAgAFEgMRAggKDAoFBAACAAESAxEJDQoMCgUEAAIAAxIDERARCgsK
-BAQAAgESAxICEgoMCgUEAAIBBRIDEgIHCgwKBQQAAgEBEgMSCA0KDAoFBAACAQMSAxIQEQoKCgIE
-ARIEFQAsAQoKCgMEAQESAxUIEAoLCgQEAQIAEgMWAhAKDAoFBAECAAUSAxYCBwoMCgUEAQIAARID
-FggLCgwKBQQBAgADEgMWDg8KCwoEBAECARIDFwIQCgwKBQQBAgEFEgMXAgcKDAoFBAECAQESAxcI
-CwoMCgUEAQIBAxIDFw4PCgsKBAQBAgISAxgCEQoMCgUEAQICBRIDGAIICgwKBQQBAgIBEgMYCQwK
-DAoFBAECAgMSAxgPEAoLCgQEAQIDEgMZAhEKDAoFBAECAwUSAxkCCAoMCgUEAQIDARIDGQkMCgwK
-BQQBAgMDEgMZDxAKCwoEBAECBBIDGgIRCgwKBQQBAgQFEgMaAggKDAoFBAECBAESAxoJDAoMCgUE
-AQIEAxIDGg8QCgsKBAQBAgUSAxsCEQoMCgUEAQIFBRIDGwIICgwKBQQBAgUBEgMbCQwKDAoFBAEC
-BQMSAxsPEAoLCgQEAQIGEgMcAhMKDAoFBAECBgUSAxwCCQoMCgUEAQIGARIDHAoOCgwKBQQBAgYD
-EgMcERIKCwoEBAECBxIDHQITCgwKBQQBAgcFEgMdAgkKDAoFBAECBwESAx0KDgoMCgUEAQIHAxID
-HRESCgsKBAQBAggSAx4CFQoMCgUEAQIIBRIDHgIKCgwKBQQBAggBEgMeCxAKDAoFBAECCAMSAx4T
-FAoLCgQEAQIJEgMfAhYKDAoFBAECCQUSAx8CCgoMCgUEAQIJARIDHwsQCgwKBQQBAgkDEgMfExUK
-CwoEBAECChIDIAIRCgwKBQQBAgoFEgMgAgcKDAoFBAECCgESAyAICwoMCgUEAQIKAxIDIA4QCgsK
-BAQBAgsSAyECEgoMCgUEAQILBRIDIQIICgwKBQQBAgsBEgMhCQwKDAoFBAECCwMSAyEPEQoLCgQE
-AQIMEgMiAhEKDAoFBAECDAUSAyICBgoMCgUEAQIMARIDIgcLCgwKBQQBAgwDEgMiDhAKCwoEBAEC
-DRIDIwISCgwKBQQBAg0FEgMjAggKDAoFBAECDQESAyMJDAoMCgUEAQINAxIDIw8RCgsKBAQBAg4S
-AyQCFAoMCgUEAQIOBhIDJAIICgwKBQQBAg4BEgMkCQ4KDAoFBAECDgMSAyQREwoLCgQEAQIPEgMl
-AhQKDAoFBAECDwYSAyUCCAoMCgUEAQIPARIDJQkOCgwKBQQBAg8DEgMlERMKCwoEBAECEBIDJgIb
-CgwKBQQBAhAEEgMmAgoKDAoFBAECEAUSAyYLEAoMCgUEAQIQARIDJhEVCgwKBQQBAhADEgMmGBoK
-CwoEBAECERIDJwIcCgwKBQQBAhEEEgMnAgoKDAoFBAECEQUSAycLEQoMCgUEAQIRARIDJxIWCgwK
-BQQBAhEDEgMnGRsKCwoEBAECEhIDKAIeCgwKBQQBAhIEEgMoAgoKDAoFBAECEgYSAygLEQoMCgUE
-AQISARIDKBIYCgwKBQQBAhIDEgMoGx0KCwoEBAECExIDKQIeCgwKBQQBAhMEEgMpAgoKDAoFBAEC
-EwUSAykLEAoMCgUEAQITARIDKREYCgwKBQQBAhMDEgMpGx0KCwoEBAECFBIDKgIfCgwKBQQBAhQE
-EgMqAgoKDAoFBAECFAUSAyoLEQoMCgUEAQIUARIDKhIZCgwKBQQBAhQDEgMqHB4KCwoEBAECFRID
-KwIbCgwKBQQBAhUEEgMrAgoKDAoFBAECFQUSAysLDwoMCgUEAQIVARIDKxAVCgwKBQQBAhUDEgMr
-GBpiBnByb3RvMw==
-""".filter { !$0.isWhitespace })!
-
-private let _schema: Schema = {
-    do { return try Schema(bytes: _descData) } catch {
-        fatalError("pbwire: embedded descriptor set: \(error)")
-    }
-}()
-
 /// structtest.Color3
 public enum Structtest_Color3: Int64 {
     case color3Unspecified = 0
@@ -82,7 +24,7 @@ public struct Structtest_Inner3 {
     }
 
     public func encode() throws -> Data {
-        guard let msg = _schema.message("structtest.Inner3") else {
+        guard let msg = matrix3_schema.message("structtest.Inner3") else {
             throw NSError(domain: "pbwire", code: -1, userInfo: [NSLocalizedDescriptionKey: "no such type: structtest.Inner3"])
         }
         try fill(msg)
@@ -90,7 +32,7 @@ public struct Structtest_Inner3 {
     }
 
     public static func decode(_ data: Data) throws -> Structtest_Inner3 {
-        guard let ty = _schema.message("structtest.Inner3") else {
+        guard let ty = matrix3_schema.message("structtest.Inner3") else {
             throw NSError(domain: "pbwire", code: -1, userInfo: [NSLocalizedDescriptionKey: "no such type: structtest.Inner3"])
         }
         return try fromMessage(ty.decode(data))
@@ -156,7 +98,7 @@ public struct Structtest_Scalars3 {
     }
 
     public func encode() throws -> Data {
-        guard let msg = _schema.message("structtest.Scalars3") else {
+        guard let msg = matrix3_schema.message("structtest.Scalars3") else {
             throw NSError(domain: "pbwire", code: -1, userInfo: [NSLocalizedDescriptionKey: "no such type: structtest.Scalars3"])
         }
         try fill(msg)
@@ -164,7 +106,7 @@ public struct Structtest_Scalars3 {
     }
 
     public static func decode(_ data: Data) throws -> Structtest_Scalars3 {
-        guard let ty = _schema.message("structtest.Scalars3") else {
+        guard let ty = matrix3_schema.message("structtest.Scalars3") else {
             throw NSError(domain: "pbwire", code: -1, userInfo: [NSLocalizedDescriptionKey: "no such type: structtest.Scalars3"])
         }
         return try fromMessage(ty.decode(data))

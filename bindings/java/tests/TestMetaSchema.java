@@ -25,12 +25,29 @@ public final class TestMetaSchema {
         checks++;
     }
 
+    private static Class<?>[] concat(Class<?>[]... lists) {
+        int n = 0;
+        for (Class<?>[] l : lists) {
+            n += l.length;
+        }
+        Class<?>[] out = new Class<?>[n];
+        int p = 0;
+        for (Class<?>[] l : lists) {
+            System.arraycopy(l, 0, out, p, l.length);
+            p += l.length;
+        }
+        return out;
+    }
+
     public static void main(String[] args) throws Exception {
         byte[] matrix = Files.readAllBytes(Path.of(args[0]));
         byte[] oneof = Files.readAllBytes(Path.of(args[1]));
 
-        // Roots only: Inner3 arrives through the Scalars3 table link.
-        try (Schema schema = Schema.fromClasses(Structtest_Scalars3.class)) {
+        // Whole-file lists: every message class, roots and nested alike.
+        // fromClasses initializes them (typed side) and builds the dynamic
+        // schema (Meta side) in one call -- no descriptor file.
+        // One file's list is enough: Inner3 follows the Scalars3 table link.
+        try (Schema schema = Schema.fromClasses(Structtest_Matrix3_Registry.MESSAGES)) {
             MessageType scalars = schema.message("structtest.Scalars3");
             check(scalars.name().equals("structtest.Scalars3"), "type name");
             // The sub-table joined the same schema through the Meta link.
@@ -89,7 +106,7 @@ public final class TestMetaSchema {
             }
         }
 
-        try (Schema schema = Schema.fromClasses(Spectest_Oneof1.class)) {
+        try (Schema schema = Schema.fromClasses(Spectest_Oneof1_Registry.MESSAGES)) {
             MessageType oneof1 = schema.message("spectest.Oneof1");
             try (Message m = oneof1.decode(oneof)) {
                 check("a".equals(m.getString("name")), "oneof name");
@@ -98,6 +115,14 @@ public final class TestMetaSchema {
                 check(m.getMessage("inner") == null, "oneof message absent");
                 check(Arrays.equals(m.encode(), oneof), "oneof re-encode exact");
             }
+        }
+
+        // Cross-file assembly is explicit: concatenate the registries.
+        // UsesDep names DepMsg across the import; the link resolves.
+        try (Schema schema = Schema.fromClasses(concat(
+                Xdep_Registry.MESSAGES, Xfile_Registry.MESSAGES))) {
+            check(schema.message("xfile.UsesDep") != null, "cross-file message");
+            check(schema.message("xdep.DepMsg") != null, "cross-file dep");
         }
 
         try {

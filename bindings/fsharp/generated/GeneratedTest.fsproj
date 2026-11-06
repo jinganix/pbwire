@@ -11,6 +11,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Compile Include="../tests/gen/matrix3_meta.fs" />
     <Compile Include="../tests/gen/matrix3.fs" />
     <Compile Include="GeneratedTest.fs" />
     <ProjectReference Include="../runtime/Pbwire.FSharp.fsproj" />

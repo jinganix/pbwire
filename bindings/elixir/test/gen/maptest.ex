@@ -48,3 +48,16 @@ defmodule Spectest.MapTest do
   field(:by_msg, 3, repeated: true, type: Spectest.MapTest.ByMsgEntry)
 end
 
+# Every message in this file, for whole-schema pre-registration.
+defmodule Spectest.Maptest.Registry do
+  @moduledoc false
+  def message_modules do
+    [
+      Spectest.MapValue,
+      Spectest.MapTest.ByIntEntry,
+      Spectest.MapTest.ByStrEntry,
+      Spectest.MapTest.ByMsgEntry,
+      Spectest.MapTest
+    ]
+  end
+end

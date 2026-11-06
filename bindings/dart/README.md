@@ -94,5 +94,13 @@ for 64-bit fields) over the dynamic API, with the `FileDescriptorSet`
 embedded: no `.desc` file at use time, and the wire stays in the C core. The
 committed output is `tests/gen/` (plus the protoc-gen-dart oracle in
 `tests/gen_oracle/`, pinned in `pubspec.lock`) and `examples/gen/`;
-`examples/roundtrip.dart` assigns typed fields only. See `../../codegen/README.md`
+`examples/roundtrip.dart` assigns typed fields only. Each file splits in two:
+`<base>.dart` (facades) and `<base>_meta.dart` (the embedded descriptor set
+plus its loader, imported by the models file).
+`--pbwire_opt=lang=dart[,model=bool][,register=bool][,registry=bool]`
+(all default `true`): `model=false` leaves the schema library for
+dynamic-only users; `register=false` drops the lazy per-isolate load so
+`initSchema()` (embedded bytes) or `useSchema()` (an external `Schema`,
+dual registration) must run first; `registry=false` drops `messageNames` +
+`preload()`. See `../../codegen/README.md`
 and `../../codegen/testdata/TESTSPEC.md` (T1–T6, run by `tests/generated_test.dart`).

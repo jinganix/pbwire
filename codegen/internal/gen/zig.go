@@ -16,34 +16,61 @@ import (
 // optionals. Slices decoded from the wire are dupe'd with the caller's
 // allocator.
 func zigFiles(f *model.File, opt Options) []File {
-	var b strings.Builder
-	b.WriteString(header(f, "Generated structs over the Zig static-link runtime (Schema/Message)."))
-	b.WriteString("const std = @import(\"std\");\n")
-	b.WriteString("const pbwire = @import(\"pbwire\");\n")
-	for _, imp := range f.Imports {
-		fmt.Fprintf(&b, "const %s = @import(\"%s.zig\");\n", stem(imp.Path), stem(imp.Path))
+	// Models and schema part ways: structs in one file, the embedded
+	// descriptor set plus its loader in the other. model=false leaves the
+	// schema file for dynamic-only users. Loading stays explicit (there is
+	// no implicit registry to gate), so register is accepted and ignored;
+	// registry gates the whole-file message list plus a preload check.
+	var files []File
+	if opt.Model {
+		var b strings.Builder
+		b.WriteString(header(f, "Generated structs over the Zig static-link runtime (Schema/Message)."))
+		b.WriteString("const std = @import(\"std\");\n")
+		b.WriteString("const pbwire = @import(\"pbwire\");\n")
+		for _, imp := range f.Imports {
+			fmt.Fprintf(&b, "const %s = @import(\"%s.zig\");\n", stem(imp.Path), stem(imp.Path))
+		}
+		b.WriteString("\n")
+		for _, e := range f.Enums {
+			fmt.Fprintf(&b, "// %s\n", e.Full)
+			fmt.Fprintf(&b, "pub const %s = enum(i32) {\n", className(f, e.Name))
+			for _, v := range e.Values {
+				fmt.Fprintf(&b, "    %s = %d,\n", v.Name, v.Number)
+			}
+			b.WriteString("};\n\n")
+		}
+		for _, m := range f.Messages {
+			writeZigMessage(&b, f, m)
+		}
+		files = append(files, File{Name: base(f) + ".zig", Content: b.String()})
 	}
-	b.WriteString("\n")
-	b.WriteString("const DESC: []const u8 = \"")
+	var meta strings.Builder
+	meta.WriteString(header(f, "Embedded descriptor set plus its loader: the schema side of the generated model."))
+	meta.WriteString("const pbwire = @import(\"pbwire\");\n\n")
+	meta.WriteString("const DESC: []const u8 = \"")
 	raw, _ := base64.StdEncoding.DecodeString(opt.DescSetB64)
 	for _, v := range raw {
-		fmt.Fprintf(&b, "\\x%02x", v)
+		fmt.Fprintf(&meta, "\\x%02x", v)
 	}
-	b.WriteString("\";\n\n")
-	b.WriteString("pub fn loadSchema() pbwire.Error!pbwire.Schema {\n")
-	b.WriteString("    return pbwire.Schema.fromBytes(DESC);\n}\n\n")
-	for _, e := range f.Enums {
-		fmt.Fprintf(&b, "// %s\n", e.Full)
-		fmt.Fprintf(&b, "pub const %s = enum(i32) {\n", className(f, e.Name))
-		for _, v := range e.Values {
-			fmt.Fprintf(&b, "    %s = %d,\n", v.Name, v.Number)
+	meta.WriteString("\";\n\n")
+	meta.WriteString("pub fn loadSchema() pbwire.Error!pbwire.Schema {\n")
+	meta.WriteString("    return pbwire.Schema.fromBytes(DESC);\n}\n")
+	if opt.Registry {
+		meta.WriteString("\n/// Every message in this file, for whole-schema pre-registration.\n")
+		meta.WriteString("pub const MESSAGE_NAMES: []const []const u8 = &.{\n")
+		for _, m := range f.Messages {
+			fmt.Fprintf(&meta, "    \"%s\",\n", m.Full)
 		}
-		b.WriteString("};\n\n")
+		meta.WriteString("};\n\n")
+		meta.WriteString("/// Resolves every message type, so a broken set fails fast.\n")
+		meta.WriteString("pub fn preload(schema: *const pbwire.Schema) pbwire.Error!void {\n")
+		meta.WriteString("    for (MESSAGE_NAMES) |n| {\n")
+		meta.WriteString("        _ = try schema.messageType(n);\n")
+		meta.WriteString("    }\n")
+		meta.WriteString("}\n")
 	}
-	for _, m := range f.Messages {
-		writeZigMessage(&b, f, m)
-	}
-	return []File{{Name: base(f) + ".zig", Content: b.String()}}
+	files = append(files, File{Name: base(f) + "_meta.zig", Content: meta.String()})
+	return files
 }
 
 // zigMsg names the struct for a message field: the sibling module's type

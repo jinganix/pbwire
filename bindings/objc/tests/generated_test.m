@@ -30,8 +30,11 @@
 #import "PBWMessage.h"
 #import "PBWSchema.h"
 #import "gen/matrix3.h"
+#import "gen/matrix3_schema.h"
 #import "gen/oneof1.h"
+#import "gen/oneof1_schema.h"
 #import "gen/addressbook.h"
+#import "gen/addressbook_schema.h"
 
 #import "Matrix3.pbobjc.h"
 #import "Oneof1.pbobjc.h"
@@ -429,11 +432,33 @@ main(int argc, char **argv)
         CHECK(Scalars3_Color_RawValue(oracleColor) == 99);
         CHECK([[oracleColor data] isEqualToData:colorWire]);
 
+        /* T7  the schema sidecar: the whole-file list covers every
+         * message, preload warms them, and an external schema swaps in
+         * (dual registration) with byte-identical output. */
+        CHECK([PBWGenMatrix3FileSchemaMessageNames()
+            containsObject:@"structtest.Scalars3"]);
+        CHECK([PBWGenMatrix3FileSchemaMessageNames()
+            containsObject:@"structtest.Inner3"]);
+        PBWGenMatrix3FileSchemaPreload();
+        PBWGen_Scalars3 *preBack =
+            [PBWGen_Scalars3 parseFromData:colorWire error:&error];
+        CHECK(preBack != nil && preBack.color == 99);
+        PBWSchema *extSchema =
+            [PBWSchema schemaFromFile:@"tests/data/probe.desc"
+                                error:&error];
+        CHECK(extSchema != nil);
+        PBWGenMatrix3FileSchemaUse(extSchema);
+        CHECK(PBWGenMatrix3FileSchema() == extSchema);
+        PBWGenMatrix3FileSchemaInit();
+        PBWGen_Scalars3 *restored =
+            [PBWGen_Scalars3 parseFromData:colorWire error:&error];
+        CHECK(restored != nil && restored.color == 99);
+
         if (failures != 0) {
             fprintf(stderr, "generated_test: %d checks failed\n", failures);
             return 1;
         }
-        printf("generated_test: all checks passed (T1-T6, oracle v36.2)\n");
+        printf("generated_test: all checks passed (T1-T7, oracle v36.2)\n");
     }
     return 0;
 }

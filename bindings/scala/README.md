@@ -86,10 +86,15 @@ its parent.
 
 ## Generated models
 
-`protoc-gen-pbwire` (in `../../codegen`) emits the per-language message
-model; the Scala shape is still to be wired up (the parent integrates
-`codegen/`). Until then the committed `tests/` use the dynamic API only.
-See `../../codegen/README.md`.
+`protoc-gen-pbwire` (in `../../codegen`) emits `<base>.scala` (case classes
+plus companions over the Java runtime, `object <base>Gen`) and
+`<base>_meta.scala` (the embedded descriptor set plus its loader,
+`object <base>Meta`). `--pbwire_opt=lang=scala[,model=bool]`
+`[,register=bool][,registry=bool]` (all default `true`): `model=false`
+skips the case classes for dynamic-only users; `register=false` drops the
+eager load so `initSchema` (embedded bytes by default, external bytes for
+the descriptor mode) must run first; `registry=false` drops `messageNames`
++ `preload`. See `../../codegen/README.md`.
 
 ## Deliberately skipped
 

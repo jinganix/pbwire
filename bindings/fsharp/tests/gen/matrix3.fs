@@ -7,60 +7,6 @@ module rec Matrix3
 open System
 open Pbwire
 
-let private desc: byte[] = Convert.FromBase64String("""
-CrcVCg1tYXRyaXgzLnByb3RvEgpzdHJ1Y3R0ZXN0IjIKBklubmVyMxISCgRuYW1lGAEgASgJUgRu
-YW1lEhQKBXZhbHVlGAIgASgFUgV2YWx1ZSKmBAoIU2NhbGFyczMSEAoDaTMyGAEgASgFUgNpMzIS
-EAoDaTY0GAIgASgDUgNpNjQSEAoDdTMyGAMgASgNUgN1MzISEAoDdTY0GAQgASgEUgN1NjQSEAoD
-czMyGAUgASgRUgNzMzISEAoDczY0GAYgASgSUgNzNjQSEgoEZngzMhgHIAEoB1IEZngzMhISCgRm
-eDY0GAggASgGUgRmeDY0EhQKBXNmeDMyGAkgASgPUgVzZngzMhIUCgVzZng2NBgKIAEoEFIFc2Z4
-NjQSEAoDZjMyGAsgASgCUgNmMzISEAoDZjY0GAwgASgBUgNmNjQSEgoEZmxhZxgNIAEoCFIEZmxh
-ZxIQCgNzdHIYDiABKAlSA3N0chIoCgVjb2xvchgPIAEoDjISLnN0cnVjdHRlc3QuQ29sb3IzUgVj
-b2xvchIoCgVpbm5lchgQIAEoCzISLnN0cnVjdHRlc3QuSW5uZXIzUgVpbm5lchISCgRudW1zGBEg
-AygFUgRudW1zEhIKBHRhZ3MYEiADKAlSBHRhZ3MSKgoGaW5uZXJzGBMgAygLMhIuc3RydWN0dGVz
-dC5Jbm5lcjNSBmlubmVycxIcCgdvcHRfaTMyGBQgASgFSABSBm9wdEkzMogBARIcCgdvcHRfc3Ry
-GBUgASgJSAFSBm9wdFN0cogBARIUCgVmbGFncxgWIAMoCFIFZmxhZ3NCCgoIX29wdF9pMzJCCgoI
-X29wdF9zdHIqQgoGQ29sb3IzEhYKEkNPTE9SM19VTlNQRUNJRklFRBAAEg4KCkNPTE9SM19SRUQQ
-ARIQCgxDT0xPUjNfR1JFRU4QAkrwDwoGEgQGACwBCpwDCgEMEgMGABIakQMgU3RydWN0LWJpbmRp
-bmcgY292ZXJhZ2UgbWF0cml4IChwcm90bzMpOiBldmVyeSBzY2FsYXIga2luZCB0aGUKIHBid19z
-dHJ1Y3QgZW5naW5lIHN1cHBvcnRzLCBwbHVzIHN0cmluZy9lbnVtL21lc3NhZ2UsIHJlcGV0aXRp
-b24gYW5kCiBwcm90bzMgb3B0aW9uYWwuIEFsbCBzaW5ndWxhciBzY2FsYXJzIGNhcnJ5IG5vbi16
-ZXJvIHZhbHVlcyBpbgogbWF0cml4My50eHQgb24gcHVycG9zZTogcHJvdG8zIGltcGxpY2l0IHBy
-ZXNlbmNlIGhhcyBubyBoYXMtZmxhZywgc28KIHRoZSBzdHJ1Y3QgZW5jb2RlciBhbHdheXMgZW1p
-dHMgdGhlbSBhbmQgdGhlIHJlZmVyZW5jZSBieXRlcwogKHByb3RvYyAtLWVuY29kZSwgdGhlIHNh
-bWUgb3JhY2xlIGFzIHRoZSBjb25mb3JtYW5jZSBzdWl0ZSkgbXVzdCB0b28uCgoICgECEgMIABMK
-CgoCBQASBAoADgEKCgoDBQABEgMKBQsKCwoEBQACABIDCwIZCgwKBQUAAgABEgMLAhQKDAoFBQAC
-AAISAwsXGAoLCgQFAAIBEgMMAhEKDAoFBQACAQESAwwCDAoMCgUFAAIBAhIDDA8QCgsKBAUAAgIS
-Aw0CEwoMCgUFAAICARIDDQIOCgwKBQUAAgICEgMNERIKCgoCBAASBBAAEwEKCgoDBAABEgMQCA4K
-CwoEBAACABIDEQISCgwKBQQAAgAFEgMRAggKDAoFBAACAAESAxEJDQoMCgUEAAIAAxIDERARCgsK
-BAQAAgESAxICEgoMCgUEAAIBBRIDEgIHCgwKBQQAAgEBEgMSCA0KDAoFBAACAQMSAxIQEQoKCgIE
-ARIEFQAsAQoKCgMEAQESAxUIEAoLCgQEAQIAEgMWAhAKDAoFBAECAAUSAxYCBwoMCgUEAQIAARID
-FggLCgwKBQQBAgADEgMWDg8KCwoEBAECARIDFwIQCgwKBQQBAgEFEgMXAgcKDAoFBAECAQESAxcI
-CwoMCgUEAQIBAxIDFw4PCgsKBAQBAgISAxgCEQoMCgUEAQICBRIDGAIICgwKBQQBAgIBEgMYCQwK
-DAoFBAECAgMSAxgPEAoLCgQEAQIDEgMZAhEKDAoFBAECAwUSAxkCCAoMCgUEAQIDARIDGQkMCgwK
-BQQBAgMDEgMZDxAKCwoEBAECBBIDGgIRCgwKBQQBAgQFEgMaAggKDAoFBAECBAESAxoJDAoMCgUE
-AQIEAxIDGg8QCgsKBAQBAgUSAxsCEQoMCgUEAQIFBRIDGwIICgwKBQQBAgUBEgMbCQwKDAoFBAEC
-BQMSAxsPEAoLCgQEAQIGEgMcAhMKDAoFBAECBgUSAxwCCQoMCgUEAQIGARIDHAoOCgwKBQQBAgYD
-EgMcERIKCwoEBAECBxIDHQITCgwKBQQBAgcFEgMdAgkKDAoFBAECBwESAx0KDgoMCgUEAQIHAxID
-HRESCgsKBAQBAggSAx4CFQoMCgUEAQIIBRIDHgIKCgwKBQQBAggBEgMeCxAKDAoFBAECCAMSAx4T
-FAoLCgQEAQIJEgMfAhYKDAoFBAECCQUSAx8CCgoMCgUEAQIJARIDHwsQCgwKBQQBAgkDEgMfExUK
-CwoEBAECChIDIAIRCgwKBQQBAgoFEgMgAgcKDAoFBAECCgESAyAICwoMCgUEAQIKAxIDIA4QCgsK
-BAQBAgsSAyECEgoMCgUEAQILBRIDIQIICgwKBQQBAgsBEgMhCQwKDAoFBAECCwMSAyEPEQoLCgQE
-AQIMEgMiAhEKDAoFBAECDAUSAyICBgoMCgUEAQIMARIDIgcLCgwKBQQBAgwDEgMiDhAKCwoEBAEC
-DRIDIwISCgwKBQQBAg0FEgMjAggKDAoFBAECDQESAyMJDAoMCgUEAQINAxIDIw8RCgsKBAQBAg4S
-AyQCFAoMCgUEAQIOBhIDJAIICgwKBQQBAg4BEgMkCQ4KDAoFBAECDgMSAyQREwoLCgQEAQIPEgMl
-AhQKDAoFBAECDwYSAyUCCAoMCgUEAQIPARIDJQkOCgwKBQQBAg8DEgMlERMKCwoEBAECEBIDJgIb
-CgwKBQQBAhAEEgMmAgoKDAoFBAECEAUSAyYLEAoMCgUEAQIQARIDJhEVCgwKBQQBAhADEgMmGBoK
-CwoEBAECERIDJwIcCgwKBQQBAhEEEgMnAgoKDAoFBAECEQUSAycLEQoMCgUEAQIRARIDJxIWCgwK
-BQQBAhEDEgMnGRsKCwoEBAECEhIDKAIeCgwKBQQBAhIEEgMoAgoKDAoFBAECEgYSAygLEQoMCgUE
-AQISARIDKBIYCgwKBQQBAhIDEgMoGx0KCwoEBAECExIDKQIeCgwKBQQBAhMEEgMpAgoKDAoFBAEC
-EwUSAykLEAoMCgUEAQITARIDKREYCgwKBQQBAhMDEgMpGx0KCwoEBAECFBIDKgIfCgwKBQQBAhQE
-EgMqAgoKDAoFBAECFAUSAyoLEQoMCgUEAQIUARIDKhIZCgwKBQQBAhQDEgMqHB4KCwoEBAECFRID
-KwIbCgwKBQQBAhUEEgMrAgoKDAoFBAECFQUSAysLDwoMCgUEAQIVARIDKxAVCgwKBQQBAhUDEgMr
-GBpiBnByb3RvMw==
-""")
-
-let private schema: Schema = Schema.FromBytes(desc)
-
 /// structtest.Color3
 module Structtest_Color3 =
     let COLOR3_UNSPECIFIED: int = 0
@@ -75,7 +21,7 @@ type Structtest_Inner3 =
     }
 
 module Structtest_Inner3 =
-    let private ty: MessageType = schema.Message("structtest.Inner3")
+    let private ty (): MessageType = Matrix3Meta.getSchema().Message("structtest.Inner3")
 
     let defaultValue : Structtest_Inner3 =
         {
@@ -88,7 +34,7 @@ module Structtest_Inner3 =
         if v.value <> 0 then msg.Set("value", int64 v.value) |> ignore
 
     let encode (v: Structtest_Inner3) : byte[] =
-        use msg = ty.NewMessage()
+        use msg = ty().NewMessage()
         fill msg v
         msg.Encode()
 
@@ -99,7 +45,7 @@ module Structtest_Inner3 =
         }
 
     let decode (wire: byte[]) : Structtest_Inner3 =
-        use msg = ty.Decode(ReadOnlySpan wire)
+        use msg = ty().Decode(ReadOnlySpan wire)
         load msg
 
 /// structtest.Scalars3
@@ -130,7 +76,7 @@ type Structtest_Scalars3 =
     }
 
 module Structtest_Scalars3 =
-    let private ty: MessageType = schema.Message("structtest.Scalars3")
+    let private ty (): MessageType = Matrix3Meta.getSchema().Message("structtest.Scalars3")
 
     let defaultValue : Structtest_Scalars3 =
         {
@@ -183,7 +129,7 @@ module Structtest_Scalars3 =
         v.flags |> List.iter (fun x -> msg.Set("flags", x) |> ignore)
 
     let encode (v: Structtest_Scalars3) : byte[] =
-        use msg = ty.NewMessage()
+        use msg = ty().NewMessage()
         fill msg v
         msg.Encode()
 
@@ -214,6 +160,6 @@ module Structtest_Scalars3 =
         }
 
     let decode (wire: byte[]) : Structtest_Scalars3 =
-        use msg = ty.Decode(ReadOnlySpan wire)
+        use msg = ty().Decode(ReadOnlySpan wire)
         load msg
 

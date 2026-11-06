@@ -5,39 +5,6 @@
 import Foundation
 import Pbwire
 
-private let _descData = Data(base64Encoded: """
-Cr8KChFhZGRyZXNzYm9vay5wcm90bxIIdHV0b3JpYWwiggIKBlBlcnNvbhISCgRuYW1lGAEgAigJ
-UgRuYW1lEg4KAmlkGAIgAigFUgJpZBIUCgVlbWFpbBgDIAEoCVIFZW1haWwSNAoGcGhvbmVzGAQg
-AygLMhwudHV0b3JpYWwuUGVyc29uLlBob25lTnVtYmVyUgZwaG9uZXMaWwoLUGhvbmVOdW1iZXIS
-FgoGbnVtYmVyGAEgAigJUgZudW1iZXISNAoEdHlwZRgCIAEoDjIaLnR1dG9yaWFsLlBlcnNvbi5Q
-aG9uZVR5cGU6BEhPTUVSBHR5cGUiKwoJUGhvbmVUeXBlEgoKBk1PQklMRRAAEggKBEhPTUUQARII
-CgRXT1JLEAIiNwoLQWRkcmVzc0Jvb2sSKAoGcGVvcGxlGAEgAygLMhAudHV0b3JpYWwuUGVyc29u
-UgZwZW9wbGVK4QcKBhIEAwAcAQrAAQoBDBIDAwASGrUBIFRoZSBjbGFzc2ljIHByb3RvY29sLWJ1
-ZmZlcnMgdHV0b3JpYWwgc2NoZW1hIChhZGRyZXNzYm9vay5wcm90byksIGtlcHQKIHNlbGYtY29u
-dGFpbmVkIChubyBpbXBvcnRzKSBzbyB0aGUgQyBleGFtcGxlIGJlbG93IGNhbiBtaXJyb3IgaXQg
-YnkgaGFuZAogd2l0aG91dCBwcm90b2Mgb3IgZ2VuZXJhdGVkIGNvZGUuCgoICgECEgMFABEKCgoC
-BAASBAcAGAEKCgoDBAABEgMHCA4KCwoEBAACABIDCAIbCgwKBQQAAgAEEgMIAgoKDAoFBAACAAUS
-AwgLEQoMCgUEAAIAARIDCBIWCgwKBQQAAgADEgMIGRoKCwoEBAACARIDCQIYCgwKBQQAAgEEEgMJ
-AgoKDAoFBAACAQUSAwkLEAoMCgUEAAIBARIDCRETCgwKBQQAAgEDEgMJFhcKCwoEBAACAhIDCgIc
-CgwKBQQAAgIEEgMKAgoKDAoFBAACAgUSAwoLEQoMCgUEAAICARIDChIXCgwKBQQAAgIDEgMKGhsK
-DAoEBAAEABIEDAIQAwoMCgUEAAQAARIDDAcQCg0KBgQABAACABIDDQQPCg4KBwQABAACAAESAw0E
-CgoOCgcEAAQAAgACEgMNDQ4KDQoGBAAEAAIBEgMOBA0KDgoHBAAEAAIBARIDDgQICg4KBwQABAAC
-AQISAw4LDAoNCgYEAAQAAgISAw8EDQoOCgcEAAQAAgIBEgMPBAgKDgoHBAAEAAICAhIDDwsMCgwK
-BAQAAwASBBICFQMKDAoFBAADAAESAxIKFQoNCgYEAAMAAgASAxMEHwoOCgcEAAMAAgAEEgMTBAwK
-DgoHBAADAAIABRIDEw0TCg4KBwQAAwACAAESAxMUGgoOCgcEAAMAAgADEgMTHR4KDQoGBAADAAIB
-EgMUBDEKDgoHBAADAAIBBBIDFAQMCg4KBwQAAwACAQYSAxQNFgoOCgcEAAMAAgEBEgMUFxsKDgoH
-BAADAAIBAxIDFB4fCg4KBwQAAwACAQgSAxQgMAoOCgcEAAMAAgEHEgMUKy8KCwoEBAACAxIDFwIi
-CgwKBQQAAgMEEgMXAgoKDAoFBAACAwYSAxcLFgoMCgUEAAIDARIDFxcdCgwKBQQAAgMDEgMXICEK
-CgoCBAESBBoAHAEKCgoDBAEBEgMaCBMKCwoEBAECABIDGwIdCgwKBQQBAgAEEgMbAgoKDAoFBAEC
-AAYSAxsLEQoMCgUEAQIAARIDGxIYCgwKBQQBAgADEgMbGxw=
-""".filter { !$0.isWhitespace })!
-
-private let _schema: Schema = {
-    do { return try Schema(bytes: _descData) } catch {
-        fatalError("pbwire: embedded descriptor set: \(error)")
-    }
-}()
-
 /// tutorial.Person.PhoneType
 public enum Tutorial_Person_PhoneType: Int64 {
     case mobile = 0
@@ -57,7 +24,7 @@ public struct Tutorial_Person_PhoneNumber {
     }
 
     public func encode() throws -> Data {
-        guard let msg = _schema.message("tutorial.Person.PhoneNumber") else {
+        guard let msg = addressbook_schema.message("tutorial.Person.PhoneNumber") else {
             throw NSError(domain: "pbwire", code: -1, userInfo: [NSLocalizedDescriptionKey: "no such type: tutorial.Person.PhoneNumber"])
         }
         try fill(msg)
@@ -65,7 +32,7 @@ public struct Tutorial_Person_PhoneNumber {
     }
 
     public static func decode(_ data: Data) throws -> Tutorial_Person_PhoneNumber {
-        guard let ty = _schema.message("tutorial.Person.PhoneNumber") else {
+        guard let ty = addressbook_schema.message("tutorial.Person.PhoneNumber") else {
             throw NSError(domain: "pbwire", code: -1, userInfo: [NSLocalizedDescriptionKey: "no such type: tutorial.Person.PhoneNumber"])
         }
         return try fromMessage(ty.decode(data))
@@ -95,7 +62,7 @@ public struct Tutorial_Person {
     }
 
     public func encode() throws -> Data {
-        guard let msg = _schema.message("tutorial.Person") else {
+        guard let msg = addressbook_schema.message("tutorial.Person") else {
             throw NSError(domain: "pbwire", code: -1, userInfo: [NSLocalizedDescriptionKey: "no such type: tutorial.Person"])
         }
         try fill(msg)
@@ -103,7 +70,7 @@ public struct Tutorial_Person {
     }
 
     public static func decode(_ data: Data) throws -> Tutorial_Person {
-        guard let ty = _schema.message("tutorial.Person") else {
+        guard let ty = addressbook_schema.message("tutorial.Person") else {
             throw NSError(domain: "pbwire", code: -1, userInfo: [NSLocalizedDescriptionKey: "no such type: tutorial.Person"])
         }
         return try fromMessage(ty.decode(data))
@@ -131,7 +98,7 @@ public struct Tutorial_AddressBook {
     }
 
     public func encode() throws -> Data {
-        guard let msg = _schema.message("tutorial.AddressBook") else {
+        guard let msg = addressbook_schema.message("tutorial.AddressBook") else {
             throw NSError(domain: "pbwire", code: -1, userInfo: [NSLocalizedDescriptionKey: "no such type: tutorial.AddressBook"])
         }
         try fill(msg)
@@ -139,7 +106,7 @@ public struct Tutorial_AddressBook {
     }
 
     public static func decode(_ data: Data) throws -> Tutorial_AddressBook {
-        guard let ty = _schema.message("tutorial.AddressBook") else {
+        guard let ty = addressbook_schema.message("tutorial.AddressBook") else {
             throw NSError(domain: "pbwire", code: -1, userInfo: [NSLocalizedDescriptionKey: "no such type: tutorial.AddressBook"])
         }
         return try fromMessage(ty.decode(data))

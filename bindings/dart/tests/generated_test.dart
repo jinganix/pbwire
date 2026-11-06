@@ -17,9 +17,12 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:fixnum/fixnum.dart';
+import 'package:pbwire/pbwire.dart';
 
 import 'gen/matrix3.dart' as pb;
+import 'gen/matrix3_meta.dart' as pbm;
 import 'gen/oneof1.dart' as pb1;
+import 'gen/oneof1_meta.dart' as pb1m;
 import 'gen/xdep.dart' as pxdep;
 import 'gen/xfile.dart' as px;
 import 'gen_oracle/matrix3.pb.dart' as oracle;
@@ -329,6 +332,31 @@ void main() {
   check(xback.single.name == 'one' && xback.single.value == 7, 'xfile single');
   check(xback.many.length == 2 && xback.many[1].value == -1, 'xfile many');
   check(xback.note == 'hi', 'xfile note');
+
+  // Dual registration: embedded set by default, external file via useSchema.
+  pbm.matrix3_preload();
+  check(pbm.matrix3_messageNames.contains('structtest.Scalars3'),
+      'registry lists every message');
+  final ext = Schema.fromBytes(File('$testdata/oneof1.desc').readAsBytesSync());
+  pb1m.oneof1_useSchema(ext);
+  final backExt = pb1.Oneof1.fromBuffer(referenceOneof);
+  check(backExt.name == 'a' && backExt.text == 'hi', 'external schema decodes');
+  check(bytesEqual(backExt.writeToBuffer(), referenceOneof), 'external re-encodes');
+  // A foreign schema resolves nothing here: decode fails loudly.
+  pb1m.oneof1_useSchema(pbm.matrix3_schema);
+  var loud = false;
+  try {
+    pb1.Oneof1.fromBuffer(referenceOneof);
+  } catch (_) {
+    loud = true;
+  }
+  check(loud, 'foreign override fails loudly');
+  // Clearing the override restores the embedded set.
+  pb1m.oneof1_useSchema(null);
+  check(pb1.Oneof1.fromBuffer(referenceOneof).name == 'a',
+      'cleared override restores embedded');
+  pb1m.oneof1_initSchema();
+  check(pb1.Oneof1.fromBuffer(referenceOneof).name == 'a', 'init keeps embedded');
 
   print('generated_test: $checks checks passed');
 }

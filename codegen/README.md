@@ -76,29 +76,30 @@ Rules the model follows, per field:
 ## Where the models live
 
 The models are committed next to the tests that use them, so a test run needs
-no protoc:
+no protoc. Each file's schema travels beside its models — either a second
+generated file or a per-file registry module — never a `.desc` file:
 
 ```
-bindings/java/tests/gen/        Structtest_Scalars3.java, ...
-bindings/kotlin/tests/gen/      matrix3.kt
-bindings/csharp/generated/gen/      matrix3.cs
-bindings/dart/tests/gen/        matrix3.dart
-bindings/php/tests/gen/         matrix3.php
-bindings/ruby/test/gen/         matrix3.rb
-bindings/python/tests/gen/      matrix3_pbwire.py
-bindings/node/tests/gen/        matrix3.d.ts, matrix3.js
-bindings/go/tests/gen/matrix3/  matrix3_pbwire.go (package matrix3)
-bindings/rust/tests/gen/        matrix3_pbwire.rs
-bindings/objc/tests/gen/        matrix3.h, matrix3.m
-bindings/lua/tests/gen/         matrix3.lua
-bindings/swift/Tests/PbwireTests/gen/  matrix3.swift (SPM layout: inside the test target)
-bindings/zig/tests/gen/        matrix3.zig
-bindings/scala/tests/gen/      matrix3.scala
-bindings/clojure/tests/gen/    matrix3.clj
-bindings/fsharp/tests/gen/     matrix3.fs
-bindings/elixir/test/gen/      matrix3.ex
-bindings/julia/tests/gen/      matrix3_pbwire.jl
-bindings/r/tests/gen/          matrix3_pbwire.R
+bindings/java/tests/gen/        Structtest_Scalars3.java, ... + per-file *_Registry.java
+bindings/kotlin/tests/gen/      matrix3.kt (consumes the Java runtime)
+bindings/csharp/generated/gen/      matrix3.cs + PbwireFile_Matrix3.cs
+bindings/dart/tests/gen/        matrix3.dart + matrix3_meta.dart
+bindings/php/tests/gen/         matrix3.php + PbwireFile_Matrix3.php
+bindings/ruby/test/gen/         matrix3.rb + matrix3_meta.rb
+bindings/python/tests/gen/      matrix3_pbwire.py + matrix3_pbwire_meta.py
+bindings/node/tests/gen/        matrix3.d.ts, matrix3.js + matrix3_meta.js
+bindings/go/tests/gen/matrix3/  matrix3_pbwire.go + matrix3_pbwire_meta.go (package matrix3)
+bindings/rust/tests/gen/        matrix3_pbwire.rs + matrix3_pbwire_meta.rs
+bindings/objc/tests/gen/        matrix3.h, matrix3.m + matrix3_schema.h, matrix3_schema.m
+bindings/lua/tests/gen/         matrix3.lua + matrix3_meta.lua
+bindings/swift/Tests/PbwireTests/gen/  matrix3.swift + matrix3_meta.swift (SPM layout: inside the test target)
+bindings/zig/tests/gen/        matrix3.zig + matrix3_meta.zig
+bindings/scala/tests/gen/      matrix3.scala + matrix3_meta.scala
+bindings/clojure/tests/gen/    matrix3.clj + matrix3_meta.clj
+bindings/fsharp/tests/gen/     matrix3.fs + matrix3_meta.fs
+bindings/elixir/test/gen/      matrix3.ex (Registry module appended in-file)
+bindings/julia/tests/gen/      matrix3_pbwire.jl + matrix3_meta.jl
+bindings/r/tests/gen/          matrix3_pbwire.R + matrix3_meta.R
 bindings/*/examples/gen/        addressbook.* (the C example's schema;
                                 Swift's lives in Sources/Roundtrip/gen: SPM
                                 compiles only its target dirs)
@@ -106,6 +107,25 @@ bindings/*/examples/gen/        addressbook.* (the C example's schema;
 
 `make codegen` rewrites all of them from `bindings/c/tests/data/matrix3.proto`
 and `examples/addressbook.proto`.
+
+## Codegen options
+
+`--pbwire_opt=model=bool,register=bool,registry=bool` (all default `true`)
+means the same thing in every language:
+
+- `model=false` leaves the schema sidecar for dynamic-only users — the
+  message files are not emitted.
+- `register=false` drops the lazy load: an explicit init (embedded bytes)
+  or `use_schema` (an external schema, dual registration) must run first,
+  failing loudly otherwise.
+- `registry=false` drops the whole-file message list + preload. The list is
+  pure data, so `registry=true` is the default: open-ended registration
+  with no runtime cost.
+
+Two languages deviate, and only there: elixir embeds no descriptor set
+(the modules are the schema), so there is no second file and `register` is
+a no-op; r keeps one dotted holder per file instead of the old single
+shared global.
 
 ## The tests
 

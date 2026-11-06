@@ -21,11 +21,68 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
-func csharpFiles(f *model.File, opt Options) []File {
-	var b strings.Builder
-	b.WriteString(header(f, "Google.Protobuf-shaped classes over the pbwire runtime; the wire format stays in the C core."))
-	b.WriteString("using System;\nusing System.IO;\nusing Google.Protobuf;\nusing Google.Protobuf.Collections;\nusing Pbwire;\n\n")
-	fmt.Fprintf(&b, "namespace %s {\n\n", f.Prefix)
+func csharpFiles(f *model.File, opt Options) ([]File, error) {
+	// Models and schema part ways: classes over the dynamic API in one file,
+	// the embedded descriptor set plus its loader in the other (named after
+	// the holder, already file-stem-scoped). model=false leaves the schema
+	// file for dynamic-only users.
+	holder := "PbwireFile_" + csPascal(base(f))
+	// Same .proto package can span files (spectest: oneof1 + maptest share
+	// namespace Spectest), so the holder and mini-parser carry the file stem.
+	parser := "Parser_" + csPascal(base(f))
+	byLocal := map[string]*csNode{}
+	var walk func(n *csNode)
+	walk = func(n *csNode) {
+		byLocal[n.msg.Name] = n
+		for _, c := range n.children {
+			walk(c)
+		}
+	}
+	for _, r := range csTree(f) {
+		walk(r)
+	}
+	var files []File
+	if opt.Model {
+		var b strings.Builder
+		b.WriteString(header(f, "Google.Protobuf-shaped classes over the pbwire runtime; the wire format stays in the C core."))
+		b.WriteString("using System;\nusing System.IO;\nusing Google.Protobuf;\nusing Google.Protobuf.Collections;\nusing Pbwire;\n\n")
+		fmt.Fprintf(&b, "namespace %s {\n\n", f.Prefix)
+		b.WriteString("    /// <summary>Minimal parser: ParseFrom over the C core. Not pb::MessageParser.</summary>\n")
+		b.WriteString("    public sealed class " + parser + "<T> where T : new() {\n")
+		b.WriteString("        private readonly Action<T, byte[]> _merge;\n")
+		b.WriteString("        public " + parser + "(Action<T, byte[]> merge) { _merge = merge; }\n")
+		b.WriteString("        public T ParseFrom(byte[] data) { var m = new T(); _merge(m, data); return m; }\n")
+		b.WriteString("        public T ParseFrom(ByteString data) => ParseFrom(data.ToByteArray());\n")
+		b.WriteString("        public T ParseFrom(Stream input) { using var ms = new MemoryStream(); input.CopyTo(ms); return ParseFrom(ms.ToArray()); }\n")
+		b.WriteString("    }\n\n")
+		for i := range f.Enums {
+			e := &f.Enums[i]
+			if csEnumRoot(f, e) {
+				writeCsharpEnum(&b, e, "    ")
+			}
+		}
+		for _, r := range csTree(f) {
+			writeCsharpMessage(&b, f, r, "    ", byLocal, holder, parser)
+		}
+		b.WriteString("}\n")
+		files = append(files, File{Name: base(f) + ".cs", Content: b.String()})
+	}
+	var meta strings.Builder
+	meta.WriteString(header(f, "Embedded descriptor set plus its loader: the schema side of the generated model."))
+	meta.WriteString("using System;\nusing Pbwire;\n\n")
+	fmt.Fprintf(&meta, "namespace %s {\n\n", f.Prefix)
+	writeCsharpHolder(&meta, f, opt, holder)
+	meta.WriteString("}\n")
+	files = append(files, File{Name: holder + ".cs", Content: meta.String()})
+	return files, nil
+}
+
+// writeCsharpHolder emits the schema holder: the embedded descriptor set plus
+// an explicit loader. register=true keeps the eager static constructor (as
+// before); otherwise Init (embedded) or UseSchema (external) must run first,
+// loudly otherwise. registry adds the whole-file message list plus a preload
+// that warms every type.
+func writeCsharpHolder(b *strings.Builder, f *model.File, opt Options, holder string) {
 	raw, err := base64.StdEncoding.DecodeString(opt.DescSetB64)
 	if err != nil {
 		raw = nil
@@ -42,43 +99,46 @@ func csharpFiles(f *model.File, opt Options) []File {
 		chunks = append(chunks, fmt.Sprintf("%q", enc[:n]))
 		enc = enc[n:]
 	}
-	// Same .proto package can span files (spectest: oneof1 + maptest share
-	// namespace Spectest), so the holder and mini-parser carry the file stem.
-	holder := "PbwireFile_" + csPascal(base(f))
-	parser := "Parser_" + csPascal(base(f))
-	b.WriteString("    internal static class " + holder + " {\n")
-	fmt.Fprintf(&b, "        internal static readonly Schema Schema = Schema.FromBytes(Convert.FromBase64String(string.Concat(\n            %s)));\n", strings.Join(chunks, ",\n            "))
-	b.WriteString("    }\n\n")
-	b.WriteString("    /// <summary>Minimal parser: ParseFrom over the C core. Not pb::MessageParser.</summary>\n")
-	b.WriteString("    public sealed class " + parser + "<T> where T : new() {\n")
-	b.WriteString("        private readonly Action<T, byte[]> _merge;\n")
-	b.WriteString("        public " + parser + "(Action<T, byte[]> merge) { _merge = merge; }\n")
-	b.WriteString("        public T ParseFrom(byte[] data) { var m = new T(); _merge(m, data); return m; }\n")
-	b.WriteString("        public T ParseFrom(ByteString data) => ParseFrom(data.ToByteArray());\n")
-	b.WriteString("        public T ParseFrom(Stream input) { using var ms = new MemoryStream(); input.CopyTo(ms); return ParseFrom(ms.ToArray()); }\n")
-	b.WriteString("    }\n\n")
-	byLocal := map[string]*csNode{}
-	var walk func(n *csNode)
-	walk = func(n *csNode) {
-		byLocal[n.msg.Name] = n
-		for _, c := range n.children {
-			walk(c)
+	b.WriteString("    public static class " + holder + " {\n")
+	b.WriteString("        private static volatile Schema _schema;\n")
+	b.WriteString("        private static readonly object _lock = new object();\n\n")
+	if opt.Register {
+		fmt.Fprintf(b, "        static %s() { Init(); }\n\n", holder)
+	}
+	b.WriteString("        /// <summary>Loads the embedded set. With register=true the static constructor already ran it.</summary>\n")
+	b.WriteString("        public static void Init() {\n")
+	b.WriteString("            if (_schema == null) {\n")
+	b.WriteString("                lock (_lock) {\n")
+	b.WriteString("                    if (_schema == null) {\n")
+	b.WriteString("                        _schema = Schema.FromBytes(Convert.FromBase64String(DescBase64()));\n")
+	b.WriteString("                    }\n")
+	b.WriteString("                }\n")
+	b.WriteString("            }\n")
+	b.WriteString("        }\n\n")
+	b.WriteString("        /// <summary>Registers an externally loaded schema: models encode/decode through it instead of the embedded set. The caller owns it; null restores the embedded set (call Init to reload).</summary>\n")
+	b.WriteString("        public static void UseSchema(Schema? s) {\n")
+	b.WriteString("            lock (_lock) { _schema = s; }\n")
+	b.WriteString("        }\n\n")
+	b.WriteString("        internal static Schema Schema => _schema ?? throw new InvalidOperationException(\"call Init or UseSchema first (generated with register=false)\");\n\n")
+	b.WriteString("        private static string DescBase64() {\n")
+	b.WriteString("            return string.Concat(\n            " + strings.Join(chunks, ",\n            ") + ");\n")
+	b.WriteString("        }\n")
+	if opt.Registry {
+		b.WriteString("\n        /// <summary>Every message in this file, for whole-schema pre-registration.</summary>\n")
+		b.WriteString("        public static readonly string[] MessageNames = {\n")
+		for _, m := range f.Messages {
+			fmt.Fprintf(b, "            %q,\n", m.Full)
 		}
+		b.WriteString("        };\n\n")
+		b.WriteString("        /// <summary>Warms every message type, so later calls pay no lookup.</summary>\n")
+		b.WriteString("        public static void Preload() {\n")
+		b.WriteString("            var s = Schema;\n")
+		b.WriteString("            foreach (var n in MessageNames) {\n")
+		b.WriteString("                s.Message(n);\n")
+		b.WriteString("            }\n")
+		b.WriteString("        }\n")
 	}
-	for _, r := range csTree(f) {
-		walk(r)
-	}
-	for i := range f.Enums {
-		e := &f.Enums[i]
-		if csEnumRoot(f, e) {
-			writeCsharpEnum(&b, e, "    ")
-		}
-	}
-	for _, r := range csTree(f) {
-		writeCsharpMessage(&b, f, r, "    ", byLocal, holder, parser)
-	}
-	b.WriteString("}\n")
-	return []File{{Name: base(f) + ".cs", Content: b.String()}}
+	b.WriteString("    }\n\n")
 }
 
 // csNode is a message with its nested types attached (same tree shape as the

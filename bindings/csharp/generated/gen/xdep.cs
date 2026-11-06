@@ -10,20 +10,6 @@ using Pbwire;
 
 namespace Xdep {
 
-    internal static class PbwireFile_Xdep {
-        internal static readonly Schema Schema = Schema.FromBytes(Convert.FromBase64String(string.Concat(
-            "CrkDCgp4ZGVwLnByb3RvEgR4ZGVwIjIKBkRlcE1zZxISCgRuYW1lGAEgASgJ",
-            "UgRuYW1lEhQKBXZhbHVlGAIgASgFUgV2YWx1ZUroAgoGEgQDAAoBCs0BCgEM",
-            "EgMDABIawgEgU2hhcmVkIGRlcGVuZGVuY3kgZm9yIHRoZSBjcm9zcy1maWxl",
-            "IGZpeHR1cmU6IHhmaWxlLnByb3RvIGltcG9ydHMgdGhpcwogZmlsZSBhbmQg",
-            "cmVmZXJlbmNlcyBEZXBNc2cuIEdlbmVyYXRlZCBvbmNlIHBlciBsYW5ndWFn",
-            "ZSBuZXh0IHRvIHhmaWxlJ3MKIG93biBtb2RlbDsgdGhlIHJlZmVyZW5jZSBi",
-            "eXRlcyBsaXZlIHdpdGggeGZpbGUuCgoICgECEgMFAA0KCgoCBAASBAcACgEK",
-            "CgoDBAABEgMHCA4KCwoEBAACABIDCAISCgwKBQQAAgAFEgMIAggKDAoFBAAC",
-            "AAESAwgJDQoMCgUEAAIAAxIDCBARCgsKBAQAAgESAwkCEgoMCgUEAAIBBRID",
-            "CQIHCgwKBQQAAgEBEgMJCA0KDAoFBAACAQMSAwkQEWIGcHJvdG8z")));
-    }
-
     /// <summary>Minimal parser: ParseFrom over the C core. Not pb::MessageParser.</summary>
     public sealed class Parser_Xdep<T> where T : new() {
         private readonly Action<T, byte[]> _merge;

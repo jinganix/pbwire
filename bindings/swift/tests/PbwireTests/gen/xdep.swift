@@ -5,23 +5,6 @@
 import Foundation
 import Pbwire
 
-private let _descData = Data(base64Encoded: """
-CrkDCgp4ZGVwLnByb3RvEgR4ZGVwIjIKBkRlcE1zZxISCgRuYW1lGAEgASgJUgRuYW1lEhQKBXZh
-bHVlGAIgASgFUgV2YWx1ZUroAgoGEgQDAAoBCs0BCgEMEgMDABIawgEgU2hhcmVkIGRlcGVuZGVu
-Y3kgZm9yIHRoZSBjcm9zcy1maWxlIGZpeHR1cmU6IHhmaWxlLnByb3RvIGltcG9ydHMgdGhpcwog
-ZmlsZSBhbmQgcmVmZXJlbmNlcyBEZXBNc2cuIEdlbmVyYXRlZCBvbmNlIHBlciBsYW5ndWFnZSBu
-ZXh0IHRvIHhmaWxlJ3MKIG93biBtb2RlbDsgdGhlIHJlZmVyZW5jZSBieXRlcyBsaXZlIHdpdGgg
-eGZpbGUuCgoICgECEgMFAA0KCgoCBAASBAcACgEKCgoDBAABEgMHCA4KCwoEBAACABIDCAISCgwK
-BQQAAgAFEgMIAggKDAoFBAACAAESAwgJDQoMCgUEAAIAAxIDCBARCgsKBAQAAgESAwkCEgoMCgUE
-AAIBBRIDCQIHCgwKBQQAAgEBEgMJCA0KDAoFBAACAQMSAwkQEWIGcHJvdG8z
-""".filter { !$0.isWhitespace })!
-
-private let _schema: Schema = {
-    do { return try Schema(bytes: _descData) } catch {
-        fatalError("pbwire: embedded descriptor set: \(error)")
-    }
-}()
-
 /// xdep.DepMsg
 public struct Xdep_DepMsg {
     public var name: String = ""
@@ -34,7 +17,7 @@ public struct Xdep_DepMsg {
     }
 
     public func encode() throws -> Data {
-        guard let msg = _schema.message("xdep.DepMsg") else {
+        guard let msg = xdep_schema.message("xdep.DepMsg") else {
             throw NSError(domain: "pbwire", code: -1, userInfo: [NSLocalizedDescriptionKey: "no such type: xdep.DepMsg"])
         }
         try fill(msg)
@@ -42,7 +25,7 @@ public struct Xdep_DepMsg {
     }
 
     public static func decode(_ data: Data) throws -> Xdep_DepMsg {
-        guard let ty = _schema.message("xdep.DepMsg") else {
+        guard let ty = xdep_schema.message("xdep.DepMsg") else {
             throw NSError(domain: "pbwire", code: -1, userInfo: [NSLocalizedDescriptionKey: "no such type: xdep.DepMsg"])
         }
         return try fromMessage(ty.decode(data))

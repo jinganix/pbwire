@@ -7,7 +7,8 @@
 ;;     clojure.main -m generated-test [matrix3.bin]
 (ns generated-test
   (:require [clojure.java.io :as io]
-            [matrix3 :as m])
+            [matrix3 :as m]
+            [matrix3-meta :as mm])
   (:import (java.nio.file Files)
            (java.util Arrays)))
 
@@ -67,4 +68,8 @@
     (let [zero (m/decode-structtest-scalars3
                 (m/encode-structtest-scalars3 {:opt_i32 0}))]
       (check (= (:opt_i32 zero) 0) "explicit zero with presence survives"))
+    ;; Registry: whole-file list plus preload; models keep working.
+    (check (some #{"structtest.Scalars3"} mm/message-names) "registry lists every message")
+    (mm/preload)
+    (check (= (:str (m/decode-structtest-scalars3 reference)) "hello") "decode after preload")
     (println (str "generated test ok: " @checks " checks"))))

@@ -174,8 +174,17 @@ Known limits:
 
 ## Generated models
 
-`protoc-gen-pbwire` (in `../../codegen`) generates `NSObject` subclasses with
-typed properties (including `NSArray` for repeated fields), enum constants and
-`-encodeWithSchema:error:` / `+decodeWithSchema:data:error:`. The committed
-output is `tests/gen/` and `examples/gen/`; `examples/roundtrip.m` assigns typed
-properties only. See `../../codegen/README.md`.
+`protoc-gen-pbwire` (in `../../codegen`, `--pbwire_opt=lang=objc`) generates
+`NSObject` subclasses with typed properties (including `NSArray` for
+repeated fields), enum constants and `-encodeWithSchema:error:` /
+`+decodeWithSchema:data:error:` in `<base>.h`/`<base>.m`, plus the schema
+holder `<base>_schema.h`/`<base>_schema.m` (the embedded descriptor set
+plus its loader, imported by the models file). `[,model=bool]`
+`[,register=bool][,registry=bool]` (all default `true`): `model=false`
+leaves the holder for dynamic-only users; `register=false` drops the
+`dispatch_once` load so `<Fn>Init()` (embedded bytes) or `<Fn>Use()` (an
+external schema, dual registration) must run first (`<Fn>()` throws
+otherwise); `registry=false` drops `<Fn>MessageNames` +
+`<Fn>Preload`. The committed output is `tests/gen/` and `examples/gen/`;
+`examples/roundtrip.m` assigns typed properties only. See
+`../../codegen/README.md`.

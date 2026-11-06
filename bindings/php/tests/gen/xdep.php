@@ -13,25 +13,7 @@ use Pbwire\RepeatedField;
 use Pbwire\Schema;
 use Pbwire\GeneratedUtil;
 
-/** The embedded descriptor set: no .desc file at use time. */
-final class PbwireFile_Xdep
-{
-    private const DESC_B64 = 'CrkDCgp4ZGVwLnByb3RvEgR4ZGVwIjIKBkRlcE1zZxISCgRuYW1lGAEgASgJUgRuYW1lEhQKBXZhbHVlGAIgASgFUgV2YWx1ZUroAgoGEgQDAAoBCs0BCgEMEgMDABIawgEgU2hhcmVkIGRlcGVuZGVuY3kgZm9yIHRoZSBjcm9zcy1maWxlIGZpeHR1cmU6IHhmaWxlLnByb3RvIGltcG9ydHMgdGhpcwogZmlsZSBhbmQgcmVmZXJlbmNlcyBEZXBNc2cuIEdlbmVyYXRlZCBvbmNlIHBlciBsYW5ndWFnZSBuZXh0IHRvIHhmaWxlJ3MKIG93biBtb2RlbDsgdGhlIHJlZmVyZW5jZSBieXRlcyBsaXZlIHdpdGggeGZpbGUuCgoICgECEgMFAA0KCgoCBAASBAcACgEKCgoDBAABEgMHCA4KCwoEBAACABIDCAISCgwKBQQAAgAFEgMIAggKDAoFBAACAAESAwgJDQoMCgUEAAIAAxIDCBARCgsKBAQAAgESAwkCEgoMCgUEAAIBBRIDCQIHCgwKBQQAAgEBEgMJCA0KDAoFBAACAQMSAwkQEWIGcHJvdG8z';
-
-    private static ?Schema $schema = null;
-
-    public static function schema(): Schema
-    {
-        if (self::$schema === null) {
-            $raw = base64_decode(self::DESC_B64, true);
-            if ($raw === false) {
-                throw new \RuntimeException('generated model: bad embedded descriptor set');
-            }
-            self::$schema = Schema::fromBytes($raw);
-        }
-        return self::$schema;
-    }
-}
+require_once __DIR__ . '/PbwireFile_Xdep.php';
 
 /** xdep.DepMsg */
 final class Xdep_DepMsg

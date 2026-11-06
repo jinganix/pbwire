@@ -118,29 +118,30 @@ func objcOneofCaseProp(oneof string) string {
 // objcFiles emits one header and one implementation per proto file: generated
 // GPBMessage-shaped classes over PBWSchema/PBWMessage with the file's
 // FileDescriptorSet embedded.
-func objcFiles(f *model.File, opt Options) []File {
+func objcFiles(f *model.File, opt Options) ([]File, error) {
+	// Models and schema part ways: interfaces + implementations in one pair,
+	// the embedded descriptor set plus its loader in another. model=false
+	// leaves the schema pair for dynamic-only users.
 	var h, m strings.Builder
 	guard := "PBWGEN_" + strings.ToUpper(strings.ReplaceAll(base(f), "-", "_")) + "_H"
 	h.WriteString(header(f, "GPBMessage-shaped generated classes over PBWSchema/PBWMessage (embedded FileDescriptorSet)."))
 	fmt.Fprintf(&h, "#ifndef %s\n#define %s\n\n#import <Foundation/Foundation.h>\n\n#import \"PBWMessage.h\"\n#import \"PBWSchema.h\"\n\nNS_ASSUME_NONNULL_BEGIN\n\n", guard, guard)
-	m.WriteString(header(f, "GPBMessage-shaped generated classes over PBWSchema/PBWMessage (embedded FileDescriptorSet)."))
-	fmt.Fprintf(&m, "#import %q\n", base(f)+".h")
+	schemaBase := base(f) + "_schema"
+	schemaFn := "PBWGen" + model.Pascal(base(f)) + "FileSchema"
+	if opt.Model {
+		m.WriteString(header(f, "GPBMessage-shaped generated classes over PBWSchema/PBWMessage (embedded FileDescriptorSet)."))
+	} else {
+		m.WriteString(header(f, "Schema holder for the generated classes (emitted with model=false)."))
+	}
+	if opt.Model {
+		fmt.Fprintf(&m, "#import %q\n", base(f)+".h")
+		fmt.Fprintf(&m, "#import %q\n", base(f)+".h")
+		fmt.Fprintf(&m, "#import %q\n", schemaBase+".h")
+	}
 	for _, imp := range f.Imports {
 		fmt.Fprintf(&m, "#import \"%s.h\"\n", stem(imp.Path))
 	}
 	m.WriteString("#import \"PBWError.h\"\n\nNS_ASSUME_NONNULL_BEGIN\n\n")
-
-	// The embedded schema: this file plus its transitive imports, exactly
-	// what protoc --descriptor_set_out would write for it.
-	fmt.Fprintf(&m, "static NSString * const kPBWGenDescB64 =\n")
-	chunks := chunk64(opt.DescSetB64)
-	if len(chunks) == 0 {
-		chunks = []string{""}
-	}
-	for _, c := range chunks {
-		fmt.Fprintf(&m, "    @%q\n", c)
-	}
-	m.WriteString("    ;\n\nstatic PBWSchema *PBWGenFileSchema(void)\n{\n    static PBWSchema *schema = nil;\n    static dispatch_once_t onceToken;\n    dispatch_once(&onceToken, ^{\n        NSData *raw = [[NSData alloc] initWithBase64EncodedString:kPBWGenDescB64 options:0];\n        NSError *error = nil;\n        schema = [PBWSchema schemaFromData:raw error:&error];\n    });\n    return schema;\n}\n\n")
 
 	for _, msg := range f.Messages {
 		fmt.Fprintf(&h, "@class %s;\n", objcClass(msg.Name))
@@ -161,14 +162,87 @@ func objcFiles(f *model.File, opt Options) []File {
 		h.WriteString("};\n\n")
 	}
 	for _, msg := range f.Messages {
-		writeObjcMessage(&h, &m, f, msg)
+		writeObjcMessage(&h, &m, f, msg, schemaFn)
 	}
 	h.WriteString("NS_ASSUME_NONNULL_END\n\n#endif /* " + guard + " */\n")
 	m.WriteString("NS_ASSUME_NONNULL_END\n")
-	return []File{
-		{Name: base(f) + ".h", Content: h.String()},
-		{Name: base(f) + ".m", Content: m.String()},
+	var files []File
+	if opt.Model {
+		files = append(files,
+			File{Name: base(f) + ".h", Content: h.String()},
+			File{Name: base(f) + ".m", Content: m.String()})
 	}
+	sh, sm := objcSchemaFiles(f, opt, schemaBase, schemaFn)
+	files = append(files,
+		File{Name: schemaBase + ".h", Content: sh},
+		File{Name: schemaBase + ".m", Content: sm})
+	return files, nil
+}
+
+// objcSchemaFiles emits the schema holder: the embedded descriptor set plus
+// an explicit loader, one pair per file. register=true loads lazily on first
+// use (dispatch_once, as before); otherwise Init (embedded bytes) or Use (an
+// external schema) must run first, loudly otherwise. registry adds the
+// whole-file message-name list plus a preload that warms every type.
+func objcSchemaFiles(f *model.File, opt Options, schemaBase, schemaFn string) (string, string) {
+	var h, m strings.Builder
+	guard := "PBWGEN_" + strings.ToUpper(strings.ReplaceAll(schemaBase, "-", "_")) + "_H"
+	h.WriteString(header(f, "Embedded descriptor set plus its loader: the schema side of the generated model."))
+	fmt.Fprintf(&h, "#ifndef %s\n#define %s\n\n#import <Foundation/Foundation.h>\n\n#import \"PBWSchema.h\"\n\nNS_ASSUME_NONNULL_BEGIN\n\n", guard, guard)
+	fmt.Fprintf(&h, "PBWSchema *%s(void);\n", schemaFn)
+	fmt.Fprintf(&h, "void %sInit(void);\n", schemaFn)
+	fmt.Fprintf(&h, "void %sUse(PBWSchema *schema);\n", schemaFn)
+	if opt.Registry {
+		fmt.Fprintf(&h, "NSArray<NSString *> *%sMessageNames(void);\n", schemaFn)
+		fmt.Fprintf(&h, "void %sPreload(void);\n", schemaFn)
+	}
+	h.WriteString("\nNS_ASSUME_NONNULL_END\n\n#endif /* " + guard + " */\n")
+	m.WriteString(header(f, "Embedded descriptor set plus its loader: the schema side of the generated model."))
+	fmt.Fprintf(&m, "#import %q\n", schemaBase+".h")
+	m.WriteString("\nNS_ASSUME_NONNULL_BEGIN\n\n")
+	fmt.Fprintf(&m, "static NSString * const k%sDescB64 =\n", schemaFn)
+	chunks := chunk64(opt.DescSetB64)
+	if len(chunks) == 0 {
+		chunks = []string{""}
+	}
+	for _, c := range chunks {
+		fmt.Fprintf(&m, "    @%q\n", c)
+	}
+	m.WriteString("    ;\n\nstatic PBWSchema *gSchema = nil;\n\n")
+	fmt.Fprintf(&m, "void %sInit(void)\n{\n", schemaFn)
+	m.WriteString("    NSData *raw = [[NSData alloc] initWithBase64EncodedString:k" + schemaFn + "DescB64 options:0];\n")
+	m.WriteString("    NSError *error = nil;\n")
+	m.WriteString("    gSchema = [PBWSchema schemaFromData:raw error:&error];\n}\n\n")
+	fmt.Fprintf(&m, "void %sUse(PBWSchema *schema)\n{\n    gSchema = schema;\n}\n\n", schemaFn)
+	if opt.Register {
+		fmt.Fprintf(&m, "PBWSchema *%s(void)\n{\n", schemaFn)
+		m.WriteString("    static dispatch_once_t onceToken;\n")
+		fmt.Fprintf(&m, "    dispatch_once(&onceToken, ^{ %sInit(); });\n", schemaFn)
+		m.WriteString("    return gSchema;\n}\n")
+	} else {
+		fmt.Fprintf(&m, "PBWSchema *%s(void)\n{\n", schemaFn)
+		m.WriteString("    if (gSchema == nil) {\n")
+		fmt.Fprintf(&m, "        @throw [NSException exceptionWithName:@\"%sNotLoaded\"\n", schemaFn)
+		fmt.Fprintf(&m, "                                           reason:@\"call %sInit() first (generated with register=false)\"\n", schemaFn)
+		m.WriteString("                                         userInfo:nil];\n    }\n")
+		m.WriteString("    return gSchema;\n}\n")
+	}
+	if opt.Registry {
+		fmt.Fprintf(&m, "\nNSArray<NSString *> *%sMessageNames(void)\n{\n    return @[", schemaFn)
+		for i, msg := range f.Messages {
+			if i > 0 {
+				m.WriteString(", ")
+			}
+			fmt.Fprintf(&m, "@%q", msg.Full)
+		}
+		m.WriteString("];\n}\n\n")
+		fmt.Fprintf(&m, "void %sPreload(void)\n{\n", schemaFn)
+		fmt.Fprintf(&m, "    PBWSchema *schema = %s();\n", schemaFn)
+		fmt.Fprintf(&m, "    for (NSString *name in %sMessageNames()) {\n", schemaFn)
+		m.WriteString("        [schema messageByName:name];\n    }\n}\n")
+	}
+	m.WriteString("\nNS_ASSUME_NONNULL_END\n")
+	return h.String(), m.String()
 }
 
 // chunk64 splits s into 60-character quoted chunks (plain literals cannot
@@ -188,7 +262,7 @@ func chunk64(s string) []string {
 
 func objcEnum(local string) string { return "PBWGen_" + local }
 
-func writeObjcMessage(h, m *strings.Builder, f *model.File, msg model.Message) {
+func writeObjcMessage(h, m *strings.Builder, f *model.File, msg model.Message, schemaFn string) {
 	cls := objcClass(msg.Name)
 	kept := false
 	for _, field := range msg.Fields {
@@ -264,7 +338,7 @@ func writeObjcMessage(h, m *strings.Builder, f *model.File, msg model.Message) {
 	if len(msg.Fields) > 0 {
 		m.WriteString("\n")
 	}
-	fmt.Fprintf(m, "+ (nullable PBWSchema *)pbw_schema\n{\n    return PBWGenFileSchema();\n}\n\n")
+	fmt.Fprintf(m, "+ (nullable PBWSchema *)pbw_schema\n{\n    return "+schemaFn+"();\n}\n\n")
 	fmt.Fprintf(m, "+ (instancetype)message\n{\n    return [[self alloc] init];\n}\n\n")
 	fmt.Fprintf(m, "- (nullable NSData *)data\n{\n")
 	fmt.Fprintf(m, "    PBWSchema *schema = [[self class] pbw_schema];\n")

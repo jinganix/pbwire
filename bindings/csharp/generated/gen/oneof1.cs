@@ -10,27 +10,6 @@ using Pbwire;
 
 namespace Spectest {
 
-    internal static class PbwireFile_Oneof1 {
-        internal static readonly Schema Schema = Schema.FromBytes(Convert.FromBase64String(string.Concat(
-            "CvUFCgxvbmVvZjEucHJvdG8SCHNwZWN0ZXN0IpUBCgZPbmVvZjESEgoEbmFt",
-            "ZRgBIAEoCVIEbmFtZRISCgNudW0YAiABKAVIAFIDbnVtEhQKBHRleHQYAyAB",
-            "KAlIAFIEdGV4dBIuCgVpbm5lchgEIAEoCzIWLnNwZWN0ZXN0Lk9uZW9mMS5J",
-            "bm5lckgAUgVpbm5lchoVCgVJbm5lchIMCgF2GAEgASgFUgF2QgYKBGtpbmRK",
-            "ugQKBhIEAwASAQq6AQoBDBIDAwASGq8BIFNtYWxsIG9uZW9mICsgbmVzdGlu",
-            "ZyBmaXh0dXJlIGZvciB0aGUgZ2VuZXJhdGVkIGNvbXBhdCB0ZXN0cyAoVEVT",
-            "VFNQRUMgVDEtVDUKIGV4dHJhcykuIEtlcHQgaW4gdGVzdGRhdGEgc28gZXZl",
-            "cnkgYmluZGluZyBzaGFyZXMgdGhlIHNhbWUgc2NoZW1hLCB2YWx1ZXMKIGFu",
-            "ZCByZWZlcmVuY2UgYnl0ZXMuCgoICgECEgMFABEKCgoCBAASBAcAEgEKCgoD",
-            "BAABEgMHCA4KDAoEBAADABIECAIKAwoMCgUEAAMAARIDCAoPCg0KBgQAAwAC",
-            "ABIDCQQQCg4KBwQAAwACAAUSAwkECQoOCgcEAAMAAgABEgMJCgsKDgoHBAAD",
-            "AAIAAxIDCQ4PCgsKBAQAAgASAwwCEgoMCgUEAAIABRIDDAIICgwKBQQAAgAB",
-            "EgMMCQ0KDAoFBAACAAMSAwwQEQoMCgQEAAgAEgQNAhEDCgwKBQQACAABEgMN",
-            "CAwKCwoEBAACARIDDgQSCgwKBQQAAgEFEgMOBAkKDAoFBAACAQESAw4KDQoM",
-            "CgUEAAIBAxIDDhARCgsKBAQAAgISAw8EFAoMCgUEAAICBRIDDwQKCgwKBQQA",
-            "AgIBEgMPCw8KDAoFBAACAgMSAw8SEwoLCgQEAAIDEgMQBBQKDAoFBAACAwYS",
-            "AxAECQoMCgUEAAIDARIDEAoPCgwKBQQAAgMDEgMQEhNiBnByb3RvMw==")));
-    }
-
     /// <summary>Minimal parser: ParseFrom over the C core. Not pb::MessageParser.</summary>
     public sealed class Parser_Oneof1<T> where T : new() {
         private readonly Action<T, byte[]> _merge;

@@ -211,9 +211,60 @@ func rustBoxed(g map[string]map[string]bool, owner, target string) bool {
 }
 
 func rustFiles(f *model.File, opt Options) []File {
-	var b strings.Builder
-	b.WriteString(header(f, "Prost-shaped structs over the pbwire runtime; the wire format stays in the C core."))
-	b.WriteString("use pbwire::{DecodeError, Message, Schema};\n\n")
+	// Models and schema part ways: structs in one file, the embedded
+	// descriptor set plus its loader in the other (included by path, like
+	// sibling files). model=false leaves the schema file for dynamic users.
+	metaName := rustModuleName(f) + "_meta"
+	var files []File
+	if opt.Model {
+		var b strings.Builder
+		b.WriteString(header(f, "Prost-shaped structs over the pbwire runtime; the wire format stays in the C core."))
+		b.WriteString("use pbwire::{DecodeError, Message, Schema};\n\n")
+		fmt.Fprintf(&b, "#[path = \"%s.rs\"]\npub mod meta;\n\n", metaName)
+		// Sibling imports ride inline modules (path-relative, so the include
+		// works however this file was pulled in); foreign refs point through
+		// them (see rustForeign).
+		for _, imp := range f.Imports {
+			fmt.Fprintf(&b, "\n#[path = \"%s_pbwire.rs\"]\npub mod %s;", stem(imp.Path), rustImpMod(imp.Path))
+		}
+		b.WriteString("\n")
+		byLocal := map[string]*rustNode{}
+		var walk func(n *rustNode)
+		walk = func(n *rustNode) {
+			byLocal[n.msg.Name] = n
+			for _, c := range n.children {
+				walk(c)
+			}
+		}
+		roots := rustTree(f)
+		for _, r := range roots {
+			walk(r)
+		}
+		g := rustRefs(f)
+		for _, r := range roots {
+			writeRustMessage(&b, f, r, nil, byLocal, g, opt)
+		}
+		for i := range f.Enums {
+			e := &f.Enums[i]
+			if rustEnumRoot(f, e) {
+				writeRustEnum(&b, e)
+			}
+		}
+		files = append(files, File{Name: rustModuleName(f) + ".rs", Content: b.String()})
+	}
+	var meta strings.Builder
+	writeRustMeta(&meta, f, opt)
+	files = append(files, File{Name: metaName + ".rs", Content: meta.String()})
+	return files
+}
+
+// writeRustMeta emits the schema file: the embedded descriptor set plus its
+// loader. register=true keeps the lazy per-thread schema (as before);
+// otherwise init() must run first on the thread, loudly otherwise. registry
+// adds the whole-file message list plus a preload that warms every type.
+func writeRustMeta(b *strings.Builder, f *model.File, opt Options) {
+	b.WriteString(header(f, "Embedded descriptor set plus its loader: the schema side of the generated model."))
+	b.WriteString("use pbwire::Schema;\n\n")
 	raw, err := base64.StdEncoding.DecodeString(opt.DescSetB64)
 	if err != nil {
 		raw = nil
@@ -225,38 +276,46 @@ func rustFiles(f *model.File, opt Options) []File {
 		}
 		fmt.Fprintf(&nums, "%d", v)
 	}
-	fmt.Fprintf(&b, "static DESC: &[u8] = &[%s];\n\n", nums.String())
-	b.WriteString("std::thread_local! {\n    static SCHEMA: Schema = Schema::from_bytes(DESC).expect(\"embedded descriptor set\");\n}\n")
-	// Sibling imports ride inline modules (path-relative, so the include
-	// works however this file was pulled in); foreign refs point through
-	// them (see rustForeign).
-	for _, imp := range f.Imports {
-		fmt.Fprintf(&b, "\n#[path = \"%s_pbwire.rs\"]\npub mod %s;", stem(imp.Path), rustImpMod(imp.Path))
+	fmt.Fprintf(b, "static DESC: &[u8] = &[%s];\n\n", nums.String())
+	if opt.Register {
+		b.WriteString("std::thread_local! {\n    pub(crate) static SCHEMA: Schema = Schema::from_bytes(DESC).expect(\"embedded descriptor set\");\n}\n")
+	} else {
+		b.WriteString("std::thread_local! {\n    pub(crate) static SCHEMA: std::cell::RefCell<Option<Schema>> = std::cell::RefCell::new(None);\n}\n\n")
+		b.WriteString("/// Loads the embedded set on this thread. With register=false every\n")
+		b.WriteString("/// thread calls this before first use (encode panics loudly otherwise).\n")
+		b.WriteString("pub fn init() {\n")
+		b.WriteString("    SCHEMA.with(|s| {\n")
+		b.WriteString("        *s.borrow_mut() = Some(Schema::from_bytes(DESC).expect(\"embedded descriptor set\"));\n")
+		b.WriteString("    })\n")
+		b.WriteString("}\n\n")
+		b.WriteString("pub(crate) fn schema<R>(f: impl FnOnce(&Schema) -> R) -> R {\n")
+		b.WriteString("    SCHEMA.with(|s| {\n")
+		b.WriteString("        let s = s.borrow();\n")
+		b.WriteString("        let s = s.as_ref().expect(\"call init() first (generated with register=false)\");\n")
+		b.WriteString("        f(s)\n")
+		b.WriteString("    })\n")
+		b.WriteString("}\n")
 	}
-	b.WriteString("\n")
-	byLocal := map[string]*rustNode{}
-	var walk func(n *rustNode)
-	walk = func(n *rustNode) {
-		byLocal[n.msg.Name] = n
-		for _, c := range n.children {
-			walk(c)
+	if opt.Registry {
+		b.WriteString("\n/// Every message in this file, for whole-schema pre-registration.\n")
+		b.WriteString("pub const MESSAGE_NAMES: &[&str] = &[\n")
+		for _, m := range f.Messages {
+			fmt.Fprintf(b, "    %q,\n", m.Full)
 		}
-	}
-	roots := rustTree(f)
-	for _, r := range roots {
-		walk(r)
-	}
-	g := rustRefs(f)
-	for _, r := range roots {
-		writeRustMessage(&b, f, r, nil, byLocal, g)
-	}
-	for i := range f.Enums {
-		e := &f.Enums[i]
-		if rustEnumRoot(f, e) {
-			writeRustEnum(&b, e)
+		b.WriteString("];\n\n")
+		b.WriteString("/// Warms every message type on this thread, so later calls pay no lookup.\n")
+		b.WriteString("pub fn preload() {\n")
+		if opt.Register {
+			b.WriteString("    SCHEMA.with(|s| {\n")
+		} else {
+			b.WriteString("    schema(|s| {\n")
 		}
+		b.WriteString("        for n in MESSAGE_NAMES {\n")
+		b.WriteString("            s.message(n).expect(\"embedded type missing\");\n")
+		b.WriteString("        }\n")
+		b.WriteString("    })\n")
+		b.WriteString("}\n")
 	}
-	return []File{{Name: rustModuleName(f) + ".rs", Content: b.String()}}
 }
 
 func rustEnumRoot(f *model.File, e *model.Enum) bool {
@@ -396,7 +455,7 @@ func rustDerives(m *model.Message, byLocal map[string]*rustNode) string {
 	return "Clone, PartialEq, Debug, Default"
 }
 
-func writeRustMessage(b *strings.Builder, f *model.File, n *rustNode, cur []string, byLocal map[string]*rustNode, g map[string]map[string]bool) {
+func writeRustMessage(b *strings.Builder, f *model.File, n *rustNode, cur []string, byLocal map[string]*rustNode, g map[string]map[string]bool, opt Options) {
 	m := n.msg
 	oneofs := rustOneofs(m)
 	fmt.Fprintf(b, "/// %s\n#[derive(%s)]\npub struct %s {\n", m.Full, rustDerives(m, byLocal), n.self)
@@ -417,7 +476,7 @@ func writeRustMessage(b *strings.Builder, f *model.File, n *rustNode, cur []stri
 		fmt.Fprintf(b, "    pub %s: ::core::option::Option<%s>,\n", rustName(o), qkind)
 	}
 	b.WriteString("}\n\n")
-	writeRustImpl(b, f, n, cur, byLocal, g)
+	writeRustImpl(b, f, n, cur, byLocal, g, opt)
 	if len(n.children) == 0 && len(n.enums) == 0 && len(oneofs) == 0 {
 		return
 	}
@@ -427,7 +486,7 @@ func writeRustMessage(b *strings.Builder, f *model.File, n *rustNode, cur []stri
 	var inner strings.Builder
 	inner.WriteString("#[allow(unused_imports)]\nuse super::*;\n\n")
 	for _, c := range n.children {
-		writeRustMessage(&inner, f, c, sub, byLocal, g)
+		writeRustMessage(&inner, f, c, sub, byLocal, g, opt)
 	}
 	for _, e := range n.enums {
 		writeRustEnum(&inner, e)
@@ -554,18 +613,26 @@ func rustEnumName(local string) string {
 	return segs[len(segs)-1]
 }
 
-func writeRustImpl(b *strings.Builder, f *model.File, n *rustNode, cur []string, byLocal map[string]*rustNode, g map[string]map[string]bool) {
+func writeRustImpl(b *strings.Builder, f *model.File, n *rustNode, cur []string, byLocal map[string]*rustNode, g map[string]map[string]bool, opt Options) {
 	m := n.msg
 	fmt.Fprintf(b, "impl %s {\n    pub const FULL_NAME: &'static str = %q;\n\n", n.self, m.Full)
 	fmt.Fprintf(b, "    pub fn encode_to_vec(&self) -> Vec<u8> {\n")
-	fmt.Fprintf(b, "        SCHEMA.with(|s| {\n")
+	if opt.Register {
+		fmt.Fprintf(b, "        meta::SCHEMA.with(|s| {\n")
+	} else {
+		fmt.Fprintf(b, "        meta::schema(|s| {\n")
+	}
 	fmt.Fprintf(b, "            let t = s.message(Self::FULL_NAME).expect(\"generated model: embedded type missing\");\n")
 	fmt.Fprintf(b, "            let mut msg = t.new_message();\n")
 	fmt.Fprintf(b, "            self.encode_into(s, &mut msg).expect(\"generated model: encode failed\");\n")
 	fmt.Fprintf(b, "            msg.encode().expect(\"generated model: encode failed\")\n")
 	fmt.Fprintf(b, "        })\n    }\n\n")
 	fmt.Fprintf(b, "    pub fn decode(bytes: &[u8]) -> Result<Self, DecodeError> {\n")
-	fmt.Fprintf(b, "        SCHEMA.with(|s| {\n")
+	if opt.Register {
+		fmt.Fprintf(b, "        meta::SCHEMA.with(|s| {\n")
+	} else {
+		fmt.Fprintf(b, "        meta::schema(|s| {\n")
+	}
 	fmt.Fprintf(b, "            let t = s.message(Self::FULL_NAME)?;\n")
 	fmt.Fprintf(b, "            let msg = t.decode(bytes)?;\n")
 	fmt.Fprintf(b, "            Self::from_message(s, &msg)\n")

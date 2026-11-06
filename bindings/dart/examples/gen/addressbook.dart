@@ -2,43 +2,11 @@
 // Generated facades over the pbwire dynamic API, protobuf-dart shape.
 // Do not edit; regenerate from the .proto instead.
 
-import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:protobuf/protobuf.dart' as $pb;
 import 'package:pbwire/pbwire.dart';
-
-/// The FileDescriptorSet for addressbook.proto, so messages encode with no .desc file.
-const _descB64 =
-    "Cr8KChFhZGRyZXNzYm9vay5wcm90bxIIdHV0b3JpYWwiggIKBlBlcnNvbhISCgRuYW1lGAEgAigJ"
-    "UgRuYW1lEg4KAmlkGAIgAigFUgJpZBIUCgVlbWFpbBgDIAEoCVIFZW1haWwSNAoGcGhvbmVzGAQg"
-    "AygLMhwudHV0b3JpYWwuUGVyc29uLlBob25lTnVtYmVyUgZwaG9uZXMaWwoLUGhvbmVOdW1iZXIS"
-    "FgoGbnVtYmVyGAEgAigJUgZudW1iZXISNAoEdHlwZRgCIAEoDjIaLnR1dG9yaWFsLlBlcnNvbi5Q"
-    "aG9uZVR5cGU6BEhPTUVSBHR5cGUiKwoJUGhvbmVUeXBlEgoKBk1PQklMRRAAEggKBEhPTUUQARII"
-    "CgRXT1JLEAIiNwoLQWRkcmVzc0Jvb2sSKAoGcGVvcGxlGAEgAygLMhAudHV0b3JpYWwuUGVyc29u"
-    "UgZwZW9wbGVK4QcKBhIEAwAcAQrAAQoBDBIDAwASGrUBIFRoZSBjbGFzc2ljIHByb3RvY29sLWJ1"
-    "ZmZlcnMgdHV0b3JpYWwgc2NoZW1hIChhZGRyZXNzYm9vay5wcm90byksIGtlcHQKIHNlbGYtY29u"
-    "dGFpbmVkIChubyBpbXBvcnRzKSBzbyB0aGUgQyBleGFtcGxlIGJlbG93IGNhbiBtaXJyb3IgaXQg"
-    "YnkgaGFuZAogd2l0aG91dCBwcm90b2Mgb3IgZ2VuZXJhdGVkIGNvZGUuCgoICgECEgMFABEKCgoC"
-    "BAASBAcAGAEKCgoDBAABEgMHCA4KCwoEBAACABIDCAIbCgwKBQQAAgAEEgMIAgoKDAoFBAACAAUS"
-    "AwgLEQoMCgUEAAIAARIDCBIWCgwKBQQAAgADEgMIGRoKCwoEBAACARIDCQIYCgwKBQQAAgEEEgMJ"
-    "AgoKDAoFBAACAQUSAwkLEAoMCgUEAAIBARIDCRETCgwKBQQAAgEDEgMJFhcKCwoEBAACAhIDCgIc"
-    "CgwKBQQAAgIEEgMKAgoKDAoFBAACAgUSAwoLEQoMCgUEAAICARIDChIXCgwKBQQAAgIDEgMKGhsK"
-    "DAoEBAAEABIEDAIQAwoMCgUEAAQAARIDDAcQCg0KBgQABAACABIDDQQPCg4KBwQABAACAAESAw0E"
-    "CgoOCgcEAAQAAgACEgMNDQ4KDQoGBAAEAAIBEgMOBA0KDgoHBAAEAAIBARIDDgQICg4KBwQABAAC"
-    "AQISAw4LDAoNCgYEAAQAAgISAw8EDQoOCgcEAAQAAgIBEgMPBAgKDgoHBAAEAAICAhIDDwsMCgwK"
-    "BAQAAwASBBICFQMKDAoFBAADAAESAxIKFQoNCgYEAAMAAgASAxMEHwoOCgcEAAMAAgAEEgMTBAwK"
-    "DgoHBAADAAIABRIDEw0TCg4KBwQAAwACAAESAxMUGgoOCgcEAAMAAgADEgMTHR4KDQoGBAADAAIB"
-    "EgMUBDEKDgoHBAADAAIBBBIDFAQMCg4KBwQAAwACAQYSAxQNFgoOCgcEAAMAAgEBEgMUFxsKDgoH"
-    "BAADAAIBAxIDFB4fCg4KBwQAAwACAQgSAxQgMAoOCgcEAAMAAgEHEgMUKy8KCwoEBAACAxIDFwIi"
-    "CgwKBQQAAgMEEgMXAgoKDAoFBAACAwYSAxcLFgoMCgUEAAIDARIDFxcdCgwKBQQAAgMDEgMXICEK"
-    "CgoCBAESBBoAHAEKCgoDBAEBEgMaCBMKCwoEBAECABIDGwIdCgwKBQQBAgAEEgMbAgoKDAoFBAEC"
-    "AAYSAxsLEQoMCgUEAQIAARIDGxIYCgwKBQQBAgADEgMbGxw=";
-
-Schema? _schema;
-
-/// The embedded schema, loaded once per isolate.
-Schema get schemaCached => _schema ??= Schema.fromBytes(base64Decode(_descB64));
+import 'addressbook_meta.dart';
 
 /// tutorial.Person.PhoneType
 class Person_PhoneType extends $pb.ProtobufEnum {
@@ -90,7 +58,7 @@ class Person_PhoneNumber {
   void clearType() { _type_ = Person_PhoneType.MOBILE; _hasType = false; }
 
   Uint8List writeToBuffer() {
-    final msg = schemaCached.message("tutorial.Person.PhoneNumber").newMessage();
+    final msg = addressbook_schema.message("tutorial.Person.PhoneNumber").newMessage();
     try {
       encodeInto(msg);
       return msg.encode();
@@ -100,7 +68,7 @@ class Person_PhoneNumber {
   }
 
   void mergeFromBuffer(List<int> wire) {
-    final msg = schemaCached.message("tutorial.Person.PhoneNumber").decode(wire);
+    final msg = addressbook_schema.message("tutorial.Person.PhoneNumber").decode(wire);
     try {
       loadFrom(msg);
     } finally {
@@ -162,7 +130,7 @@ class Person {
   final List<Person_PhoneNumber> phones = <Person_PhoneNumber>[]; // phones = 4
 
   Uint8List writeToBuffer() {
-    final msg = schemaCached.message("tutorial.Person").newMessage();
+    final msg = addressbook_schema.message("tutorial.Person").newMessage();
     try {
       encodeInto(msg);
       return msg.encode();
@@ -172,7 +140,7 @@ class Person {
   }
 
   void mergeFromBuffer(List<int> wire) {
-    final msg = schemaCached.message("tutorial.Person").decode(wire);
+    final msg = addressbook_schema.message("tutorial.Person").decode(wire);
     try {
       loadFrom(msg);
     } finally {
@@ -231,7 +199,7 @@ class AddressBook {
   final List<Person> people = <Person>[]; // people = 1
 
   Uint8List writeToBuffer() {
-    final msg = schemaCached.message("tutorial.AddressBook").newMessage();
+    final msg = addressbook_schema.message("tutorial.AddressBook").newMessage();
     try {
       encodeInto(msg);
       return msg.encode();
@@ -241,7 +209,7 @@ class AddressBook {
   }
 
   void mergeFromBuffer(List<int> wire) {
-    final msg = schemaCached.message("tutorial.AddressBook").decode(wire);
+    final msg = addressbook_schema.message("tutorial.AddressBook").decode(wire);
     try {
       loadFrom(msg);
     } finally {

@@ -214,7 +214,15 @@ Layout: `lib/pbwire.ex` (public API + struct↔tuple translation),
 
 ## Generated models
 
-`elixir-protobuf` structs are the generated model: `protoc-gen-elixir`
-generates the structs and `__message_props__/0`, and the binding
-encodes/decodes those structs directly. There is no second generator and no
-`codegen` output for Elixir.
+`protoc-gen-pbwire` (in `../../codegen`, `--pbwire_opt=lang=elixir`) emits
+one `.ex` file per `.proto`: `elixir-protobuf` modules (the binding's schema
+source, no descriptor set embedded — the modules are the schema) plus a
+per-file `Registry` module holding `message_modules/0`, the whole-file
+list to pass straight to `Pbwire.load_schema/1` (`load_schema` resolves
+referenced modules transitively). `[,model=bool][,register=bool]`
+`[,registry=bool]` (all default `true`): `model=false` leaves the list
+without modules; `registry=false` drops it; `register` is a no-op (loading
+is always explicit). The Registry is per-file — qualified
+(`Spectest.Maptest.Registry`) when the file stem differs from the package
+prefix, short (`Xdep.Registry`) otherwise — so two files in one package
+never share one.

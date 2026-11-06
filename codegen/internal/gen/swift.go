@@ -13,11 +13,45 @@ import (
 // (Sources/Pbwire: Schema/Message/PbwireValue, FileDescriptorSet at run
 // time). The descriptor set travels embedded as base64, so no .desc file is
 // needed at use time. Oneof members are plain optionals (no enum wrapper).
-func swiftFiles(f *model.File, opt Options) []File {
-	var b strings.Builder
-	b.WriteString(header(f, "Generated structs over the Swift FFI runtime (Schema/Message/PbwireValue)."))
+func swiftFiles(f *model.File, opt Options) ([]File, error) {
+	// Models and schema part ways: structs in one file, the embedded
+	// descriptor set plus its loader in the other. model=false leaves the
+	// schema file for dynamic-only users. The schema lets are stem-prefixed:
+	// same-module files share globals, so one flat _schema would collide.
+	stem := base(f)
+	var files []File
+	if opt.Model {
+		var b strings.Builder
+		b.WriteString(header(f, "Generated structs over the Swift FFI runtime (Schema/Message/PbwireValue)."))
+		b.WriteString("import Foundation\nimport Pbwire\n\n")
+		for _, e := range f.Enums {
+			fmt.Fprintf(&b, "/// %s\n", e.Full)
+			fmt.Fprintf(&b, "public enum %s: Int64 {\n", className(f, e.Name))
+			for _, v := range e.Values {
+				fmt.Fprintf(&b, "    case %s = %d\n", swiftEnumCase(v.Name), v.Number)
+			}
+			b.WriteString("}\n\n")
+		}
+		for _, m := range f.Messages {
+			writeSwiftMessage(&b, f, m, stem)
+		}
+		files = append(files, File{Name: stem + ".swift", Content: b.String()})
+	}
+	var meta strings.Builder
+	writeSwiftMeta(&meta, f, opt, stem)
+	files = append(files, File{Name: stem + "_meta.swift", Content: meta.String()})
+	return files, nil
+}
+
+// writeSwiftMeta emits the schema file: the embedded descriptor set plus an
+// explicit loader. register=true keeps the lazy schema (as before) with an
+// override slot; otherwise initSchema (embedded) or useSchema (external) must
+// run first, loudly otherwise. registry adds the whole-file message list
+// plus a preload that warms every type.
+func writeSwiftMeta(b *strings.Builder, f *model.File, opt Options, stem string) {
+	b.WriteString(header(f, "Embedded descriptor set plus its loader: the schema side of the generated model."))
 	b.WriteString("import Foundation\nimport Pbwire\n\n")
-	b.WriteString("private let _descData = Data(base64Encoded: \"\"\"\n")
+	fmt.Fprintf(b, "private let %s_descData = Data(base64Encoded: \"\"\"\n", stem)
 	for i := 0; i < len(opt.DescSetB64); i += 76 {
 		end := i + 76
 		if end > len(opt.DescSetB64) {
@@ -26,22 +60,51 @@ func swiftFiles(f *model.File, opt Options) []File {
 		b.WriteString(opt.DescSetB64[i:end] + "\n")
 	}
 	b.WriteString("\"\"\".filter { !$0.isWhitespace })!\n\n")
-	b.WriteString("private let _schema: Schema = {\n")
-	b.WriteString("    do { return try Schema(bytes: _descData) } catch {\n")
-	b.WriteString("        fatalError(\"pbwire: embedded descriptor set: \\(error)\")\n")
-	b.WriteString("    }\n}()\n\n")
-	for _, e := range f.Enums {
-		fmt.Fprintf(&b, "/// %s\n", e.Full)
-		fmt.Fprintf(&b, "public enum %s: Int64 {\n", className(f, e.Name))
-		for _, v := range e.Values {
-			fmt.Fprintf(&b, "    case %s = %d\n", swiftEnumCase(v.Name), v.Number)
+	if opt.Register {
+		fmt.Fprintf(b, "private let _%s_embedded: Schema = {\n", stem)
+		b.WriteString("    do { return try Schema(bytes: " + stem + "_descData) } catch {\n")
+		b.WriteString("        fatalError(\"pbwire: embedded descriptor set: \\(error)\")\n")
+		b.WriteString("    }\n}()\n\n")
+	}
+	fmt.Fprintf(b, "private let %s_lock = NSLock()\n", stem)
+	fmt.Fprintf(b, "private var _%s_override: Schema? = nil\n\n", stem)
+	fmt.Fprintf(b, "internal func %s_initSchema(_ bytes: Data = %s_descData) {\n", stem, stem)
+	fmt.Fprintf(b, "    %s_lock.lock(); defer { %s_lock.unlock() }\n", stem, stem)
+	fmt.Fprintf(b, "    _%s_override = try! Schema(bytes: bytes)\n", stem)
+	b.WriteString("}\n\n")
+	fmt.Fprintf(b, "/// Registers an externally loaded schema: models encode/decode through it instead of the embedded set. A nil call clears the override.\n")
+	fmt.Fprintf(b, "internal func %s_useSchema(_ s: Schema?) {\n", stem)
+	fmt.Fprintf(b, "    %s_lock.lock(); defer { %s_lock.unlock() }\n", stem, stem)
+	fmt.Fprintf(b, "    _%s_override = s\n", stem)
+	b.WriteString("}\n\n")
+	fmt.Fprintf(b, "internal var %s_schema: Schema {\n", stem)
+	fmt.Fprintf(b, "    %s_lock.lock(); defer { %s_lock.unlock() }\n", stem, stem)
+	if opt.Register {
+		fmt.Fprintf(b, "    return _%s_override ?? _%s_embedded\n", stem, stem)
+	} else {
+		b.WriteString("    guard let s = _" + stem + "_override else {\n")
+		b.WriteString("        fatalError(\"call " + stem + "_initSchema() first (generated with register=false)\")\n")
+		b.WriteString("    }\n")
+		b.WriteString("    return s\n")
+	}
+	b.WriteString("}\n")
+	if opt.Registry {
+		fmt.Fprintf(b, "\n/// Every message in this file, for whole-schema pre-registration.\n")
+		fmt.Fprintf(b, "internal let %s_messageNames: [String] = [\n", stem)
+		for _, m := range f.Messages {
+			fmt.Fprintf(b, "    %q,\n", m.Full)
 		}
-		b.WriteString("}\n\n")
+		b.WriteString("]\n\n")
+		fmt.Fprintf(b, "/// Warms every message type, so later calls pay no lookup.\n")
+		fmt.Fprintf(b, "internal func %s_preload() {\n", stem)
+		fmt.Fprintf(b, "    let s = %s_schema\n", stem)
+		fmt.Fprintf(b, "    for n in %s_messageNames {\n", stem)
+		b.WriteString("        guard s.message(n) != nil else {\n")
+		b.WriteString("            fatalError(\"pbwire: embedded type missing: \\(n)\")\n")
+		b.WriteString("        }\n")
+		b.WriteString("    }\n")
+		b.WriteString("}\n")
 	}
-	for _, m := range f.Messages {
-		writeSwiftMessage(&b, f, m)
-	}
-	return []File{{Name: base(f) + ".swift", Content: b.String()}}
 }
 
 func swiftEnumCase(name string) string {
@@ -113,7 +176,7 @@ func swiftFieldType(f *model.File, field model.Field) string {
 	return t
 }
 
-func writeSwiftMessage(b *strings.Builder, f *model.File, m model.Message) {
+func writeSwiftMessage(b *strings.Builder, f *model.File, m model.Message, stem string) {
 	cls := className(f, m.Name)
 	fmt.Fprintf(b, "/// %s\n", m.Full)
 	fmt.Fprintf(b, "public struct %s {\n", cls)
@@ -144,13 +207,13 @@ func writeSwiftMessage(b *strings.Builder, f *model.File, m model.Message) {
 	}
 	b.WriteString("    }\n\n")
 	fmt.Fprintf(b, "    public func encode() throws -> Data {\n")
-	fmt.Fprintf(b, "        guard let msg = _schema.message(%q) else {\n", m.Full)
+	fmt.Fprintf(b, "        guard let msg = %s_schema.message(%q) else {\n", stem, m.Full)
 	fmt.Fprintf(b, "            throw NSError(domain: \"pbwire\", code: -1, userInfo: [NSLocalizedDescriptionKey: \"no such type: %s\"])\n", m.Full)
 	fmt.Fprintf(b, "        }\n")
 	b.WriteString("        try fill(msg)\n")
 	b.WriteString("        return try msg.encode()\n    }\n\n")
 	fmt.Fprintf(b, "    public static func decode(_ data: Data) throws -> %s {\n", cls)
-	fmt.Fprintf(b, "        guard let ty = _schema.message(%q) else {\n", m.Full)
+	fmt.Fprintf(b, "        guard let ty = %s_schema.message(%q) else {\n", stem, m.Full)
 	fmt.Fprintf(b, "            throw NSError(domain: \"pbwire\", code: -1, userInfo: [NSLocalizedDescriptionKey: \"no such type: %s\"])\n", m.Full)
 	fmt.Fprintf(b, "        }\n")
 	b.WriteString("        return try fromMessage(ty.decode(data))\n    }\n\n")

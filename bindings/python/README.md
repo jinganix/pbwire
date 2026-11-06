@@ -165,6 +165,14 @@ nobody can avoid it.
 
 `protoc-gen-pbwire` (in `../../codegen`) generates dataclasses with type
 annotations plus `to_dict()`/`from_dict()`, and `encode(msg_type)` /
-`decode(msg_type, wire)` on top of the dict API. The committed output is
+`decode(msg_type, wire)` on top of the dict API. Each file splits in two:
+`<base>_pbwire.py` (dataclasses) and `<base>_pbwire_meta.py` (the embedded
+descriptor set plus its loader, imported by the models file).
+`--pbwire_opt=lang=python[,model=bool][,register=bool][,registry=bool]`
+(all default `true`): `model=false` leaves the schema module for
+dynamic-only users; `register=false` drops the lazy load so
+`init_schema()` (embedded bytes) or `use_schema()` (an external schema,
+dual registration) must run first; `registry=false` drops
+`MESSAGE_NAMES` + `preload()`. The committed output is
 `tests/gen/` and `examples/gen/`; `examples/addressbook.py` uses the dataclasses
 only. See `../../codegen/README.md`.

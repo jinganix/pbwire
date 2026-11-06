@@ -77,86 +77,145 @@ func jsFieldName(field model.Field) string {
 // message (create/encode/decode/verify/fromObject/toObject), enum constants,
 // and the embedded FileDescriptorSet so no .desc file is needed at use time.
 func javaScriptFiles(f *model.File, opt Options) []File {
-	var b strings.Builder
-	b.WriteString(header(f, "protobufjs-static-shaped facade over the pbwire dynamic API."))
-	b.WriteString(jsRuntime)
-	b.WriteString("\n")
-	fmt.Fprintf(&b, "const _DESC_B64 = '%s';\n\n", opt.DescSetB64)
-	for _, e := range f.Enums {
-		fmt.Fprintf(&b, "/** %s @enum {number} */\n", e.Full)
-		fmt.Fprintf(&b, "const %s = Object.freeze({\n", className(f, e.Name))
-		for _, v := range e.Values {
-			fmt.Fprintf(&b, "  %s: %d,\n", v.Name, v.Number)
+	// Models and schema part ways: the facade module requires its schema
+	// module for the descriptor set and loader. model=false leaves the
+	// schema module for dynamic-only users.
+	var files []File
+	if opt.Model {
+		var b strings.Builder
+		b.WriteString(header(f, "protobufjs-static-shaped facade over the pbwire dynamic API."))
+		b.WriteString(jsRuntime)
+		b.WriteString("\n")
+		fmt.Fprintf(&b, "const { get_schema } = require('./%s_meta.js');\n\n", base(f))
+		for _, e := range f.Enums {
+			fmt.Fprintf(&b, "/** %s @enum {number} */\n", e.Full)
+			fmt.Fprintf(&b, "const %s = Object.freeze({\n", className(f, e.Name))
+			for _, v := range e.Values {
+				fmt.Fprintf(&b, "  %s: %d,\n", v.Name, v.Number)
+			}
+			b.WriteString("});\n")
+			fmt.Fprintf(&b, "const _REV_%s = Object.freeze({\n", className(f, e.Name))
+			for _, v := range e.Values {
+				fmt.Fprintf(&b, "  '%d': '%s',\n", v.Number, v.Name)
+			}
+			b.WriteString("});\n\n")
 		}
-		b.WriteString("});\n")
-		fmt.Fprintf(&b, "const _REV_%s = Object.freeze({\n", className(f, e.Name))
-		for _, v := range e.Values {
-			fmt.Fprintf(&b, "  '%d': '%s',\n", v.Number, v.Name)
-		}
-		b.WriteString("});\n\n")
-	}
-	b.WriteString("const _ENUMS = {};\nconst _REVENUMS = {};\nconst _CLASSES = {};\n")
-	// Sibling models register their classes here by bare name (the dep
-	// file uses the same names); local classes below overwrite on
-	// collision, so locals win.
-	for _, imp := range f.Imports {
-		if names := foreignMessageNames(f, imp.Path); len(names) > 0 {
-			fmt.Fprintf(&b, "const _imp_%s = require('./%s.js');\n", stem(imp.Path), stem(imp.Path))
-			for _, n := range names {
-				fmt.Fprintf(&b, "_CLASSES['%s'] = _imp_%s.%s;\n", n, stem(imp.Path), n)
+		b.WriteString("const _ENUMS = {};\nconst _REVENUMS = {};\nconst _CLASSES = {};\n")
+		// Sibling models register their classes here by bare name (the dep
+		// file uses the same names); local classes below overwrite on
+		// collision, so locals win.
+		for _, imp := range f.Imports {
+			if names := foreignMessageNames(f, imp.Path); len(names) > 0 {
+				fmt.Fprintf(&b, "const _imp_%s = require('./%s.js');\n", stem(imp.Path), stem(imp.Path))
+				for _, n := range names {
+					fmt.Fprintf(&b, "_CLASSES['%s'] = _imp_%s.%s;\n", n, stem(imp.Path), n)
+				}
 			}
 		}
-	}
-	b.WriteString("\n")
-	for _, e := range f.Enums {
-		name := className(f, e.Name)
-		fmt.Fprintf(&b, "_ENUMS['%s'] = %s;\n_REVENUMS['%s'] = _REV_%s;\n", name, name, name, name)
-	}
-	b.WriteString("\n")
-	for _, m := range f.Messages {
-		writeJSClass(&b, f, m)
-	}
-	// Nested types are also reachable through their parents (Oneof1.Inner),
-	// the way protobufjs static modules nest them. Message variables are
-	// bare, enum variables carry the package prefix (see className).
-	varOf := map[string]string{}
-	for _, m := range f.Messages {
-		varOf[m.Name] = m.Name
-	}
-	for _, e := range f.Enums {
-		varOf[e.Name] = className(f, e.Name)
-	}
-	alias := func(flat string) {
-		name := flat
-		for {
-			idx := strings.LastIndex(name, "_")
-			if idx < 0 {
-				return
-			}
-			parent, child := name[:idx], name[idx+1:]
-			if pvar, ok := varOf[parent]; ok {
-				fmt.Fprintf(&b, "%s.%s = %s;\n", pvar, child, varOf[flat])
-				return
-			}
-			name = parent
+		b.WriteString("\n")
+		for _, e := range f.Enums {
+			name := className(f, e.Name)
+			fmt.Fprintf(&b, "_ENUMS['%s'] = %s;\n_REVENUMS['%s'] = _REV_%s;\n", name, name, name, name)
 		}
+		b.WriteString("\n")
+		for _, m := range f.Messages {
+			writeJSClass(&b, f, m)
+		}
+		// Nested types are also reachable through their parents (Oneof1.Inner),
+		// the way protobufjs static modules nest them. Message variables are
+		// bare, enum variables carry the package prefix (see className).
+		varOf := map[string]string{}
+		for _, m := range f.Messages {
+			varOf[m.Name] = m.Name
+		}
+		for _, e := range f.Enums {
+			varOf[e.Name] = className(f, e.Name)
+		}
+		alias := func(flat string) {
+			name := flat
+			for {
+				idx := strings.LastIndex(name, "_")
+				if idx < 0 {
+					return
+				}
+				parent, child := name[:idx], name[idx+1:]
+				if pvar, ok := varOf[parent]; ok {
+					fmt.Fprintf(&b, "%s.%s = %s;\n", pvar, child, varOf[flat])
+					return
+				}
+				name = parent
+			}
+		}
+		for _, m := range f.Messages {
+			alias(m.Name)
+		}
+		for _, e := range f.Enums {
+			alias(e.Name)
+		}
+		b.WriteString("\n")
+		b.WriteString("module.exports = {\n")
+		for _, e := range f.Enums {
+			fmt.Fprintf(&b, "  %s,\n", className(f, e.Name))
+		}
+		for _, m := range f.Messages {
+			fmt.Fprintf(&b, "  %s,\n", m.Name)
+		}
+		b.WriteString("};\n")
+		files = append(files, File{Name: base(f) + ".js", Content: b.String()})
 	}
-	for _, m := range f.Messages {
-		alias(m.Name)
+	var meta strings.Builder
+	writeJSFaceMeta(&meta, f, opt)
+	files = append(files, File{Name: base(f) + "_meta.js", Content: meta.String()})
+	return files
+}
+
+// writeJSFaceMeta emits the schema module: the embedded descriptor set plus
+// an explicit loader. register=true loads lazily on first use (as before)
+// with an override slot; otherwise init_schema (embedded bytes) or
+// use_schema (external) must run first, loudly otherwise. registry adds the
+// whole-file message list plus a preload that warms every type.
+func writeJSFaceMeta(b *strings.Builder, f *model.File, opt Options) {
+	b.WriteString(header(f, "Embedded descriptor set plus its loader: the schema side of the generated facade."))
+	b.WriteString("'use strict';\n\n")
+	b.WriteString("const { Schema } = require('../../lib/pbwire.js');\n\n")
+	fmt.Fprintf(b, "const _DESC_B64 = '%s';\n\n", opt.DescSetB64)
+	b.WriteString("let _schema;\n")
+	b.WriteString("let _override;\n\n")
+	b.WriteString("function init_schema(bytes) {\n")
+	b.WriteString("  _schema = Schema.fromBytes(bytes || Buffer.from(_DESC_B64, 'base64'));\n")
+	b.WriteString("}\n\n")
+	b.WriteString("function use_schema(s) {\n")
+	b.WriteString("  _override = (s == null ? undefined : s);\n")
+	b.WriteString("}\n\n")
+	if opt.Register {
+		b.WriteString("function get_schema() {\n")
+		b.WriteString("  if (_override !== undefined) return _override;\n")
+		b.WriteString("  if (_schema === undefined) _schema = Schema.fromBytes(Buffer.from(_DESC_B64, 'base64'));\n")
+		b.WriteString("  return _schema;\n")
+		b.WriteString("}\n")
+	} else {
+		b.WriteString("function get_schema() {\n")
+		b.WriteString("  if (_override !== undefined) return _override;\n")
+		b.WriteString("  if (_schema !== undefined) return _schema;\n")
+		b.WriteString("  throw new Error('call init_schema() first (generated with register=false)');\n")
+		b.WriteString("}\n")
 	}
-	for _, e := range f.Enums {
-		alias(e.Name)
+	if opt.Registry {
+		b.WriteString("\nconst MESSAGE_NAMES = [\n")
+		for _, m := range f.Messages {
+			fmt.Fprintf(b, "  '%s',\n", m.Full)
+		}
+		b.WriteString("];\n\n")
+		b.WriteString("function preload() {\n")
+		b.WriteString("  const s = get_schema();\n")
+		b.WriteString("  for (const n of MESSAGE_NAMES) s.message(n);\n")
+		b.WriteString("}\n")
 	}
-	b.WriteString("\n")
-	b.WriteString("module.exports = {\n")
-	for _, e := range f.Enums {
-		fmt.Fprintf(&b, "  %s,\n", className(f, e.Name))
+	b.WriteString("\nmodule.exports = { get_schema, init_schema, use_schema")
+	if opt.Registry {
+		b.WriteString(", MESSAGE_NAMES, preload")
 	}
-	for _, m := range f.Messages {
-		fmt.Fprintf(&b, "  %s,\n", m.Name)
-	}
-	b.WriteString("};\n")
-	return []File{{Name: base(f) + ".js", Content: b.String()}}
+	b.WriteString(" };\n")
 }
 
 func writeJSClass(b *strings.Builder, f *model.File, m model.Message) {
@@ -195,7 +254,7 @@ func writeJSClass(b *strings.Builder, f *model.File, m model.Message) {
 			field.Name, jsFieldName(field), jsKind(field), field.Repeated, msg, en, oneof, req, has, closed)
 	}
 	fmt.Fprintf(b, "];\n")
-	fmt.Fprintf(b, "const %s = _makeClass('%s', _DESC_B64, %s_FIELDS);\n",
+	fmt.Fprintf(b, "const %s = _makeClass('%s', get_schema, %s_FIELDS);\n",
 		m.Name, m.Full, m.Name)
 	fmt.Fprintf(b, "_CLASSES['%s'] = %s;\n", m.Name, m.Name)
 	fmt.Fprintf(b, "%s._ENUMS = _ENUMS;\n%s._REVENUMS = _REVENUMS;\n%s._CLASSES = _CLASSES;\n\n", m.Name, m.Name, m.Name)
@@ -265,6 +324,10 @@ func writeTSNamespace(b *strings.Builder, f *model.File, m model.Message) {
 // typeScriptFiles emits the .d.ts for the facade: classes with static
 // create/encode/decode/verify/fromObject/toObject plus the enum constants.
 func typeScriptFiles(f *model.File, opt Options) []File {
+	// Declarations describe the models; without them there is nothing to declare.
+	if !opt.Model {
+		return nil
+	}
 	var b strings.Builder
 	b.WriteString(header(f, "TypeScript declarations for the protobufjs-static-shaped facade."))
 	for _, imp := range f.Imports {

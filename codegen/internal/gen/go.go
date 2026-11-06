@@ -128,40 +128,98 @@ func goZero(ft string) string {
 	}
 }
 
-const goRuntime = `var fileDesc, _ = base64.StdEncoding.DecodeString(_DESC_B64)
-
-var schemaOnce sync.Once
-var schemaCached *dynamic.Schema
-var schemaErr error
-
-func getSchema() (*dynamic.Schema, error) {
-	schemaOnce.Do(func() {
-		schemaCached, schemaErr = dynamic.Load(fileDesc)
-	})
-	return schemaCached, schemaErr
-}
-
-var typesMu sync.Mutex
-var typesCache = map[string]*dynamic.MessageType{}
-
-func getType(full string) (*dynamic.MessageType, error) {
-	s, err := getSchema()
-	if err != nil {
-		return nil, err
+// The per-file schema: the embedded descriptor set plus its loader. Models
+// call getType; Init/UseSchema/Preload select when the load happens.
+func writeGoMetaRuntime(b *strings.Builder, f *model.File, opt Options) {
+	b.WriteString("var fileDesc, _ = base64.StdEncoding.DecodeString(_DESC_B64)\n\n")
+	b.WriteString("var schemaMu sync.Mutex\n")
+	b.WriteString("var schemaOnce sync.Once\n")
+	b.WriteString("var schemaCached *dynamic.Schema\n")
+	b.WriteString("var schemaErr error\n")
+	b.WriteString("var schemaOverride *dynamic.Schema\n\n")
+	b.WriteString("// UseSchema registers an externally loaded schema (dynamic.Load of a\n")
+	b.WriteString("// descriptor file): models encode/decode through it instead of the\n")
+	b.WriteString("// embedded set. The caller owns s and keeps it alive; a nil call\n")
+	b.WriteString("// restores the embedded set. Later calls replace earlier ones.\n")
+	b.WriteString("func UseSchema(s *dynamic.Schema) {\n")
+	b.WriteString("\tschemaMu.Lock()\n")
+	b.WriteString("\tschemaOverride = s\n")
+	b.WriteString("\tschemaMu.Unlock()\n")
+	b.WriteString("\ttypesMu.Lock()\n")
+	b.WriteString("\ttypesCache = map[string]*dynamic.MessageType{}\n")
+	b.WriteString("\ttypesMu.Unlock()\n")
+	b.WriteString("}\n\n")
+	b.WriteString("// Init loads the embedded descriptor set now (fail fast at startup).\n")
+	b.WriteString("// With the default flags the first Marshal/Unmarshal does this once.\n")
+	b.WriteString("func Init() error {\n")
+	b.WriteString("\t_, err := getSchema()\n")
+	b.WriteString("\treturn err\n")
+	b.WriteString("}\n\n")
+	if opt.Register {
+		b.WriteString("func getSchema() (*dynamic.Schema, error) {\n")
+		b.WriteString("\tschemaMu.Lock()\n")
+		b.WriteString("\tov := schemaOverride\n")
+		b.WriteString("\tschemaMu.Unlock()\n")
+		b.WriteString("\tif ov != nil {\n")
+		b.WriteString("\t\treturn ov, nil\n")
+		b.WriteString("\t}\n")
+		b.WriteString("\tschemaOnce.Do(func() {\n")
+		b.WriteString("\t\tschemaCached, schemaErr = dynamic.Load(fileDesc)\n")
+		b.WriteString("\t})\n")
+		b.WriteString("\treturn schemaCached, schemaErr\n")
+		b.WriteString("}\n\n")
+	} else {
+		// No implicit load: Init or UseSchema first, loudly otherwise.
+		b.WriteString("func getSchema() (*dynamic.Schema, error) {\n")
+		b.WriteString("\tschemaMu.Lock()\n")
+		b.WriteString("\tdefer schemaMu.Unlock()\n")
+		b.WriteString("\tif schemaOverride != nil {\n")
+		b.WriteString("\t\treturn schemaOverride, nil\n")
+		b.WriteString("\t}\n")
+		b.WriteString("\treturn nil, errors.New(\"pbwire: call Init or UseSchema first (generated with register=false)\")\n")
+		b.WriteString("}\n\n")
 	}
-	typesMu.Lock()
-	defer typesMu.Unlock()
-	t, ok := typesCache[full]
-	if !ok {
-		t, err = s.Message(full)
-		if err != nil {
-			return nil, err
+	b.WriteString("var typesMu sync.Mutex\n")
+	b.WriteString("var typesCache = map[string]*dynamic.MessageType{}\n\n")
+	b.WriteString("func getType(full string) (*dynamic.MessageType, error) {\n")
+	b.WriteString("\ts, err := getSchema()\n")
+	b.WriteString("\tif err != nil {\n")
+	b.WriteString("\t\treturn nil, err\n")
+	b.WriteString("\t}\n")
+	b.WriteString("\ttypesMu.Lock()\n")
+	b.WriteString("\tdefer typesMu.Unlock()\n")
+	b.WriteString("\tt, ok := typesCache[full]\n")
+	b.WriteString("\tif !ok {\n")
+	b.WriteString("\t\tt, err = s.Message(full)\n")
+	b.WriteString("\t\tif err != nil {\n")
+	b.WriteString("\t\t\treturn nil, err\n")
+	b.WriteString("\t\t}\n")
+	b.WriteString("\t\ttypesCache[full] = t\n")
+	b.WriteString("\t}\n")
+	b.WriteString("\treturn t, nil\n")
+	b.WriteString("}\n\n")
+	if opt.Registry {
+		b.WriteString("// MessageNames lists every message in this file, in declaration\n")
+		b.WriteString("// order: the whole-file list for whole-schema pre-registration.\n")
+		b.WriteString("var MessageNames = []string{\n")
+		for _, m := range f.Messages {
+			fmt.Fprintf(b, "\t%q,\n", m.Full)
 		}
-		typesCache[full] = t
+		b.WriteString("}\n\n")
+		b.WriteString("// Preload warms every message type, so later calls pay no lookup.\n")
+		b.WriteString("func Preload() error {\n")
+		b.WriteString("\tif _, err := getSchema(); err != nil {\n")
+		b.WriteString("\t\treturn err\n")
+		b.WriteString("\t}\n")
+		b.WriteString("\tfor _, full := range MessageNames {\n")
+		b.WriteString("\t\tif _, err := getType(full); err != nil {\n")
+		b.WriteString("\t\t\treturn err\n")
+		b.WriteString("\t\t}\n")
+		b.WriteString("\t}\n")
+		b.WriteString("\treturn nil\n")
+		b.WriteString("}\n\n")
 	}
-	return t, nil
 }
-`
 
 // goFiles emits one self-contained package: generated structs over the pbwire
 // dynamic API in protoc-gen-go shape (CamelCase fields, optional pointers,
@@ -189,7 +247,6 @@ func goImportAlias(importPath string) string {
 }
 
 func goFiles(f *model.File, opt Options) ([]File, error) {
-	var b strings.Builder
 	// Foreign message refs qualify as alias.Type (M mapping) or stay bare
 	// (same package); one rewrite up front, use sites untouched.
 	qualifyFields(f, func(imp model.Import, local string) string {
@@ -198,30 +255,74 @@ func goFiles(f *model.File, opt Options) ([]File, error) {
 		}
 		return local
 	})
-	b.WriteString(headerP(f, "//", "Generated structs over the pbwire dynamic API, protoc-gen-go shape."))
-	fmt.Fprintf(&b, "package %s\n\n", goPackage(f))
-	b.WriteString("import (\n\t\"encoding/base64\"\n\t\"fmt\"\n\t\"sync\"\n\n\t\"pbwire/dynamic\"\n")
-	for _, imp := range f.Imports {
-		if path, ok := opt.Mappings[imp.Path]; ok {
-			fmt.Fprintf(&b, "\n\t%s %q\n", goImportAlias(path), path)
+	// Models and schema part ways: structs and enums in one file, the
+	// embedded descriptor set plus its loader in the other. model=false
+	// leaves the schema file for dynamic-only users.
+	var models strings.Builder
+	if opt.Model {
+		writeGoModelHeader(&models, f, opt)
+		for _, e := range f.Enums {
+			writeGoEnum(&models, e)
+		}
+		for _, m := range f.Messages {
+			writeGoMessage(&models, f, m)
 		}
 	}
-	b.WriteString(")\n\n")
-	b.WriteString(goRuntime)
-	fmt.Fprintf(&b, "\nconst _DESC_B64 = %q\n\n", opt.DescSetB64)
-	for _, e := range f.Enums {
-		writeGoEnum(&b, e)
-	}
-	for _, m := range f.Messages {
-		writeGoMessage(&b, f, m)
-	}
+	var meta strings.Builder
+	writeGoMetaHeader(&meta, f, opt)
+	writeGoMetaRuntime(&meta, f, opt)
+	fmt.Fprintf(&meta, "const _DESC_B64 = %q\n", opt.DescSetB64)
 	// Canonical gofmt output: struct alignment and indentation stay
 	// correct no matter how wide field names get.
-	src, err := format.Source([]byte(b.String()))
+	var files []File
+	if opt.Model {
+		src, err := format.Source([]byte(models.String()))
+		if err != nil {
+			return nil, err
+		}
+		files = append(files, File{Name: base(f) + "_pbwire.go", Content: string(src)})
+	}
+	src, err := format.Source([]byte(meta.String()))
 	if err != nil {
 		return nil, err
 	}
-	return []File{{Name: base(f) + "_pbwire.go", Content: string(src)}}, nil
+	files = append(files, File{Name: base(f) + "_pbwire_meta.go", Content: string(src)})
+	return files, nil
+}
+
+// writeGoModelHeader emits the package clause plus exactly the imports the
+// models use: dynamic for the fill methods, fmt for enum strings and the
+// nil guards, mapped deps for foreign field types.
+func writeGoModelHeader(b *strings.Builder, f *model.File, opt Options) {
+	b.WriteString(headerP(f, "//", "Generated structs over the pbwire dynamic API, protoc-gen-go shape."))
+	fmt.Fprintf(b, "package %s\n\n", goPackage(f))
+	if len(f.Messages) == 0 && len(f.Enums) == 0 {
+		return // package clause only: nothing to import
+	}
+	b.WriteString("import (\n")
+	if len(f.Messages) > 0 {
+		b.WriteString("\t\"pbwire/dynamic\"\n")
+	}
+	b.WriteString("\t\"fmt\"\n")
+	for _, imp := range f.Imports {
+		if path, ok := opt.Mappings[imp.Path]; ok {
+			fmt.Fprintf(b, "\n\t%s %q\n", goImportAlias(path), path)
+		}
+	}
+	b.WriteString(")\n\n")
+}
+
+// writeGoMetaHeader emits the package clause plus exactly the imports the
+// schema file uses. errors only rides along when register=false leaves
+// loading to an explicit Init/UseSchema call.
+func writeGoMetaHeader(b *strings.Builder, f *model.File, opt Options) {
+	b.WriteString(headerP(f, "//", "Embedded descriptor set plus its loader: the schema side of the generated model."))
+	fmt.Fprintf(b, "package %s\n\n", goPackage(f))
+	b.WriteString("import (\n\t\"encoding/base64\"\n\t\"sync\"\n")
+	if !opt.Register {
+		b.WriteString("\t\"errors\"\n")
+	}
+	b.WriteString("\n\t\"pbwire/dynamic\"\n)\n\n")
 }
 
 func writeGoEnum(b *strings.Builder, e model.Enum) {

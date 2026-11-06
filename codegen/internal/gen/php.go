@@ -63,30 +63,94 @@ func phpIdent(s string) string {
 	return strings.ToUpper(out[:1]) + out[1:]
 }
 
-func phpFiles(f *model.File, opt Options) []File {
-	var b strings.Builder
-	b.WriteString("<?php\n\ndeclare(strict_types=1);\n\n")
-	b.WriteString(headerP(f, "//", "Google.Protobuf-shaped classes over the pbwire runtime; the wire format stays in the C core."))
-	b.WriteString("namespace Pbwire\\Gen;\n\nuse Pbwire\\Message;\nuse Pbwire\\RepeatedField;\nuse Pbwire\\Schema;\nuse Pbwire\\GeneratedUtil;\n\n")
+func phpFiles(f *model.File, opt Options) ([]File, error) {
+	// Models and schema part ways: classes in one file, the embedded
+	// descriptor set plus its loader in the holder file (already named per
+	// file). model=false leaves the schema holder for dynamic-only users.
 	holder := "PbwireFile_" + phpIdent(base(f))
-	fmt.Fprintf(&b, "/** The embedded descriptor set: no .desc file at use time. */\nfinal class %s\n{\n", holder)
-	fmt.Fprintf(&b, "    private const DESC_B64 = '%s';\n\n", opt.DescSetB64)
+	var files []File
+	if opt.Model {
+		var b strings.Builder
+		b.WriteString("<?php\n\ndeclare(strict_types=1);\n\n")
+		b.WriteString(headerP(f, "//", "Google.Protobuf-shaped classes over the pbwire runtime; the wire format stays in the C core."))
+		b.WriteString("namespace Pbwire\\Gen;\n\nuse Pbwire\\Message;\nuse Pbwire\\RepeatedField;\nuse Pbwire\\Schema;\nuse Pbwire\\GeneratedUtil;\n\n")
+		fmt.Fprintf(&b, "require_once __DIR__ . '/%s.php';\n\n", holder)
+		for _, e := range f.Enums {
+			writePhpEnum(&b, f, e)
+		}
+		for _, m := range f.Messages {
+			writePhpMessage(&b, f, holder, m)
+		}
+		files = append(files, File{Name: base(f) + ".php", Content: b.String()})
+	}
+	var meta strings.Builder
+	writePhpHolder(&meta, f, opt, holder)
+	files = append(files, File{Name: holder + ".php", Content: meta.String()})
+	return files, nil
+}
+
+// writePhpHolder emits the schema holder: the embedded descriptor set plus
+// an explicit loader. register=true loads lazily on first use (as before)
+// with an override slot; otherwise init (embedded bytes) or use_schema
+// (external) must run first, loudly otherwise. registry adds the whole-file
+// message list plus a preload that warms every type.
+func writePhpHolder(b *strings.Builder, f *model.File, opt Options, holder string) {
+	b.WriteString("<?php\n\ndeclare(strict_types=1);\n\n")
+	b.WriteString(headerP(f, "//", "Embedded descriptor set plus its loader: the schema side of the generated model."))
+	b.WriteString("namespace Pbwire\\Gen;\n\nuse Pbwire\\Schema;\n\n")
+	fmt.Fprintf(b, "/** The embedded descriptor set: no .desc file at use time. */\nfinal class %s\n{\n", holder)
+	fmt.Fprintf(b, "    private const DESC_B64 = '%s';\n\n", opt.DescSetB64)
 	b.WriteString("    private static ?Schema $schema = null;\n\n")
-	b.WriteString("    public static function schema(): Schema\n    {\n")
+	b.WriteString("    public static function init(): void\n")
+	b.WriteString("    {\n")
 	b.WriteString("        if (self::$schema === null) {\n")
 	b.WriteString("            $raw = base64_decode(self::DESC_B64, true);\n")
 	b.WriteString("            if ($raw === false) {\n")
 	b.WriteString("                throw new \\RuntimeException('generated model: bad embedded descriptor set');\n")
 	b.WriteString("            }\n")
 	b.WriteString("            self::$schema = Schema::fromBytes($raw);\n")
-	b.WriteString("        }\n        return self::$schema;\n    }\n}\n\n")
-	for _, e := range f.Enums {
-		writePhpEnum(&b, f, e)
+	b.WriteString("        }\n")
+	b.WriteString("    }\n\n")
+	b.WriteString("    /// Registers an externally loaded schema: models encode/decode through it\n")
+	b.WriteString("    /// instead of the embedded set. The caller owns it; null clears the override.\n")
+	b.WriteString("    public static function use_schema(?Schema $s): void\n")
+	b.WriteString("    {\n")
+	b.WriteString("        self::$schema = $s;\n")
+	b.WriteString("    }\n\n")
+	if opt.Register {
+		b.WriteString("    public static function schema(): Schema\n")
+		b.WriteString("    {\n")
+		b.WriteString("        if (self::$schema === null) {\n")
+		b.WriteString("            self::init();\n")
+		b.WriteString("        }\n")
+		b.WriteString("        return self::$schema;\n")
+		b.WriteString("    }\n")
+	} else {
+		b.WriteString("    public static function schema(): Schema\n")
+		b.WriteString("    {\n")
+		b.WriteString("        if (self::$schema === null) {\n")
+		b.WriteString("            throw new \\RuntimeException('call init() first (generated with register=false)');\n")
+		b.WriteString("        }\n")
+		b.WriteString("        return self::$schema;\n")
+		b.WriteString("    }\n")
 	}
-	for _, m := range f.Messages {
-		writePhpMessage(&b, f, holder, m)
+	if opt.Registry {
+		b.WriteString("\n    /** Every message in this file, for whole-schema pre-registration. */\n")
+		b.WriteString("    public const MESSAGE_NAMES = [\n")
+		for _, m := range f.Messages {
+			fmt.Fprintf(b, "        %q,\n", m.Full)
+		}
+		b.WriteString("    ];\n\n")
+		b.WriteString("    /** Warms every message type, so later calls pay no lookup. */\n")
+		b.WriteString("    public static function preload(): void\n")
+		b.WriteString("    {\n")
+		b.WriteString("        $s = self::schema();\n")
+		b.WriteString("        foreach (self::MESSAGE_NAMES as $n) {\n")
+		b.WriteString("            $s->message($n);\n")
+		b.WriteString("        }\n")
+		b.WriteString("    }\n")
 	}
-	return []File{{Name: base(f) + ".php", Content: b.String()}}
+	b.WriteString("}\n")
 }
 
 // phpMsg names the class for a message field: the owning file's prefix when

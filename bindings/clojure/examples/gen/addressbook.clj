@@ -3,14 +3,9 @@
 ;; Do not edit; regenerate from the .proto instead.
 (ns addressbook
   (:require [clojure.java.io :as io]
-            [pbwire.core :as pb])
+            [pbwire.core :as pb]
+            [addressbook-meta :as meta])
   (:import (java.util Base64)))
-
-(def ^:private desc-bytes
-  (.decode (Base64/getDecoder)
-    "Cr8KChFhZGRyZXNzYm9vay5wcm90bxIIdHV0b3JpYWwiggIKBlBlcnNvbhISCgRuYW1lGAEgAigJUgRuYW1lEg4KAmlkGAIgAigFUgJpZBIUCgVlbWFpbBgDIAEoCVIFZW1haWwSNAoGcGhvbmVzGAQgAygLMhwudHV0b3JpYWwuUGVyc29uLlBob25lTnVtYmVyUgZwaG9uZXMaWwoLUGhvbmVOdW1iZXISFgoGbnVtYmVyGAEgAigJUgZudW1iZXISNAoEdHlwZRgCIAEoDjIaLnR1dG9yaWFsLlBlcnNvbi5QaG9uZVR5cGU6BEhPTUVSBHR5cGUiKwoJUGhvbmVUeXBlEgoKBk1PQklMRRAAEggKBEhPTUUQARIICgRXT1JLEAIiNwoLQWRkcmVzc0Jvb2sSKAoGcGVvcGxlGAEgAygLMhAudHV0b3JpYWwuUGVyc29uUgZwZW9wbGVK4QcKBhIEAwAcAQrAAQoBDBIDAwASGrUBIFRoZSBjbGFzc2ljIHByb3RvY29sLWJ1ZmZlcnMgdHV0b3JpYWwgc2NoZW1hIChhZGRyZXNzYm9vay5wcm90byksIGtlcHQKIHNlbGYtY29udGFpbmVkIChubyBpbXBvcnRzKSBzbyB0aGUgQyBleGFtcGxlIGJlbG93IGNhbiBtaXJyb3IgaXQgYnkgaGFuZAogd2l0aG91dCBwcm90b2Mgb3IgZ2VuZXJhdGVkIGNvZGUuCgoICgECEgMFABEKCgoCBAASBAcAGAEKCgoDBAABEgMHCA4KCwoEBAACABIDCAIbCgwKBQQAAgAEEgMIAgoKDAoFBAACAAUSAwgLEQoMCgUEAAIAARIDCBIWCgwKBQQAAgADEgMIGRoKCwoEBAACARIDCQIYCgwKBQQAAgEEEgMJAgoKDAoFBAACAQUSAwkLEAoMCgUEAAIBARIDCRETCgwKBQQAAgEDEgMJFhcKCwoEBAACAhIDCgIcCgwKBQQAAgIEEgMKAgoKDAoFBAACAgUSAwoLEQoMCgUEAAICARIDChIXCgwKBQQAAgIDEgMKGhsKDAoEBAAEABIEDAIQAwoMCgUEAAQAARIDDAcQCg0KBgQABAACABIDDQQPCg4KBwQABAACAAESAw0ECgoOCgcEAAQAAgACEgMNDQ4KDQoGBAAEAAIBEgMOBA0KDgoHBAAEAAIBARIDDgQICg4KBwQABAACAQISAw4LDAoNCgYEAAQAAgISAw8EDQoOCgcEAAQAAgIBEgMPBAgKDgoHBAAEAAICAhIDDwsMCgwKBAQAAwASBBICFQMKDAoFBAADAAESAxIKFQoNCgYEAAMAAgASAxMEHwoOCgcEAAMAAgAEEgMTBAwKDgoHBAADAAIABRIDEw0TCg4KBwQAAwACAAESAxMUGgoOCgcEAAMAAgADEgMTHR4KDQoGBAADAAIBEgMUBDEKDgoHBAADAAIBBBIDFAQMCg4KBwQAAwACAQYSAxQNFgoOCgcEAAMAAgEBEgMUFxsKDgoHBAADAAIBAxIDFB4fCg4KBwQAAwACAQgSAxQgMAoOCgcEAAMAAgEHEgMUKy8KCwoEBAACAxIDFwIiCgwKBQQAAgMEEgMXAgoKDAoFBAACAwYSAxcLFgoMCgUEAAIDARIDFxcdCgwKBQQAAgMDEgMXICEKCgoCBAESBBoAHAEKCgoDBAEBEgMaCBMKCwoEBAECABIDGwIdCgwKBQQBAgAEEgMbAgoKDAoFBAECAAYSAxsLEQoMCgUEAQIAARIDGxIYCgwKBQQBAgADEgMbGxw="))
-
-(def ^:private schema (pb/load-schema-bytes desc-bytes))
 
 ;; tutorial.Person.PhoneType
 (def tutorial-person-phonetype-MOBILE 0)
@@ -18,7 +13,11 @@
 (def tutorial-person-phonetype-WORK 2)
 
 ;; tutorial.Person.PhoneNumber
-(def tutorial-person-phonenumber-type (pb/message-type schema "tutorial.Person.PhoneNumber"))
+(def tutorial-person-phonenumber-type (pb/message-type meta/schema "tutorial.Person.PhoneNumber"))
+
+(defn encode-tutorial-person-phonenumber [m] (pb/encode tutorial-person-phonenumber-type m))
+
+(defn decode-tutorial-person-phonenumber [wire] (pb/decode tutorial-person-phonenumber-type wire))
 
 (defn tutorial-person-phonenumber
   "Constructor map for tutorial.Person.PhoneNumber; absent optionals stay absent."
@@ -28,12 +27,12 @@
     (some? type) (assoc :type type)
   ))
 
-(defn encode-tutorial-person-phonenumber [m] (pb/encode tutorial-person-phonenumber-type m))
-
-(defn decode-tutorial-person-phonenumber [wire] (pb/decode tutorial-person-phonenumber-type wire))
-
 ;; tutorial.Person
-(def tutorial-person-type (pb/message-type schema "tutorial.Person"))
+(def tutorial-person-type (pb/message-type meta/schema "tutorial.Person"))
+
+(defn encode-tutorial-person [m] (pb/encode tutorial-person-type m))
+
+(defn decode-tutorial-person [wire] (pb/decode tutorial-person-type wire))
 
 (defn tutorial-person
   "Constructor map for tutorial.Person; absent optionals stay absent."
@@ -45,12 +44,12 @@
     (some? phones) (assoc :phones phones)
   ))
 
-(defn encode-tutorial-person [m] (pb/encode tutorial-person-type m))
-
-(defn decode-tutorial-person [wire] (pb/decode tutorial-person-type wire))
-
 ;; tutorial.AddressBook
-(def tutorial-addressbook-type (pb/message-type schema "tutorial.AddressBook"))
+(def tutorial-addressbook-type (pb/message-type meta/schema "tutorial.AddressBook"))
+
+(defn encode-tutorial-addressbook [m] (pb/encode tutorial-addressbook-type m))
+
+(defn decode-tutorial-addressbook [wire] (pb/decode tutorial-addressbook-type wire))
 
 (defn tutorial-addressbook
   "Constructor map for tutorial.AddressBook; absent optionals stay absent."
@@ -58,8 +57,4 @@
   (cond-> {}
     (some? people) (assoc :people people)
   ))
-
-(defn encode-tutorial-addressbook [m] (pb/encode tutorial-addressbook-type m))
-
-(defn decode-tutorial-addressbook [wire] (pb/decode tutorial-addressbook-type wire))
 

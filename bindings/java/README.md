@@ -219,6 +219,23 @@ protoc --descriptor_set_out=tests/data/sample.desc --include_imports \
 handled) until the thread dies. Keep request threads off the binding or reuse
   a fixed pool.
 
+## Codegen options
+
+`--pbwire_opt=lang=java[,model=bool][,register=bool][,registry=bool]`
+(all default `true`; `registry=true` needs `model=true`):
+
+- `model=false` skips the message/Builder files: only the `OrBuilder`
+  interfaces plus the `*Meta` tables ship, for hand-written models through
+  `forBuilder` + `register`.
+- `register=false` drops the static self-registration block: nothing
+  encodes until an explicit `register` call (deferred or custom Builder),
+  failing loudly otherwise.
+- `registry=false` drops the `<File>_Registry` whole-file class list.
+  The list is pure data (class literals, no init cost); passing it to
+  `Schema.fromClasses` registers every message (typed side) and builds the
+  dynamic schema (Meta side) with no descriptor file. Cross-file schemas
+  concatenate the lists explicitly.
+
 ## Typed POJOs: your own message classes
 
 `protoc-gen-pbwire` (in `../../codegen`) generates one annotated POJO per

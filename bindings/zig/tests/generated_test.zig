@@ -88,3 +88,23 @@ test "empty generated message encodes to nothing" {
     defer alloc.free(wire);
     try std.testing.expectEqual(@as(usize, 0), wire.len);
 }
+
+test "dual registration: external schema and preload" {
+    const alloc = std.testing.allocator;
+    const mmeta = @import("gen/maptest_meta.zig");
+    var found = false;
+    for (mmeta.MESSAGE_NAMES) |n| {
+        if (std.mem.eql(u8, n, "spectest.MapTest")) found = true;
+    }
+    try std.testing.expect(found);
+    var embedded = try mmeta.loadSchema();
+    defer embedded.deinit();
+    try mmeta.preload(&embedded);
+    const raw = try pbwire.readFile(alloc, "../../../codegen/testdata/maptest.desc");
+    defer alloc.free(raw);
+    var ext = try pbwire.Schema.fromBytes(raw);
+    defer ext.deinit();
+    const ty = try ext.messageType("spectest.MapTest");
+    _ = ty;
+    try mmeta.preload(&ext);
+}

@@ -115,4 +115,17 @@ final class GeneratedTest: XCTestCase {
         XCTAssertEqual(back.many[1].value, -1)
         XCTAssertEqual(back.note, "hi")
     }
+
+    func testDualRegistration() throws {
+        XCTAssertEqual(matrix3_messageNames.count, 2)
+        matrix3_preload()
+        // A foreign schema resolves nothing here: decode throws loudly.
+        matrix3_useSchema(maptest_schema)
+        let data = try Data(contentsOf: URL(fileURLWithPath: Self.bin))
+        XCTAssertThrowsError(try Structtest_Scalars3.decode(data))
+        // Clearing the override restores the embedded set.
+        matrix3_useSchema(nil)
+        let back = try Structtest_Scalars3.decode(data)
+        XCTAssertEqual(back.str, "hello")
+    }
 }

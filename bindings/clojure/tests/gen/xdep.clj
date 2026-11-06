@@ -3,17 +3,16 @@
 ;; Do not edit; regenerate from the .proto instead.
 (ns xdep
   (:require [clojure.java.io :as io]
-            [pbwire.core :as pb])
+            [pbwire.core :as pb]
+            [xdep-meta :as meta])
   (:import (java.util Base64)))
 
-(def ^:private desc-bytes
-  (.decode (Base64/getDecoder)
-    "CrkDCgp4ZGVwLnByb3RvEgR4ZGVwIjIKBkRlcE1zZxISCgRuYW1lGAEgASgJUgRuYW1lEhQKBXZhbHVlGAIgASgFUgV2YWx1ZUroAgoGEgQDAAoBCs0BCgEMEgMDABIawgEgU2hhcmVkIGRlcGVuZGVuY3kgZm9yIHRoZSBjcm9zcy1maWxlIGZpeHR1cmU6IHhmaWxlLnByb3RvIGltcG9ydHMgdGhpcwogZmlsZSBhbmQgcmVmZXJlbmNlcyBEZXBNc2cuIEdlbmVyYXRlZCBvbmNlIHBlciBsYW5ndWFnZSBuZXh0IHRvIHhmaWxlJ3MKIG93biBtb2RlbDsgdGhlIHJlZmVyZW5jZSBieXRlcyBsaXZlIHdpdGggeGZpbGUuCgoICgECEgMFAA0KCgoCBAASBAcACgEKCgoDBAABEgMHCA4KCwoEBAACABIDCAISCgwKBQQAAgAFEgMIAggKDAoFBAACAAESAwgJDQoMCgUEAAIAAxIDCBARCgsKBAQAAgESAwkCEgoMCgUEAAIBBRIDCQIHCgwKBQQAAgEBEgMJCA0KDAoFBAACAQMSAwkQEWIGcHJvdG8z"))
-
-(def ^:private schema (pb/load-schema-bytes desc-bytes))
-
 ;; xdep.DepMsg
-(def xdep-depmsg-type (pb/message-type schema "xdep.DepMsg"))
+(def xdep-depmsg-type (pb/message-type meta/schema "xdep.DepMsg"))
+
+(defn encode-xdep-depmsg [m] (pb/encode xdep-depmsg-type m))
+
+(defn decode-xdep-depmsg [wire] (pb/decode xdep-depmsg-type wire))
 
 (defn xdep-depmsg
   "Constructor map for xdep.DepMsg; absent optionals stay absent."
@@ -22,8 +21,4 @@
     (some? name) (assoc :name name)
     (some? value) (assoc :value value)
   ))
-
-(defn encode-xdep-depmsg [m] (pb/encode xdep-depmsg-type m))
-
-(defn decode-xdep-depmsg [wire] (pb/decode xdep-depmsg-type wire))
 

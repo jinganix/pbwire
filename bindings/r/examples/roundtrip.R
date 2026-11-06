@@ -8,6 +8,7 @@ here <- dirname(sub("^--file=", "", grep("^--file=", commandArgs(),
                                          value = TRUE)[1L]))
 dyn.load(file.path(here, "..", "pbwire.so"))
 source(file.path(here, "..", "runtime", "R", "pbwire.R"))
+source(file.path(here, "gen", "addressbook_meta.R"))
 source(file.path(here, "gen", "addressbook_pbwire.R"))
 
 args <- commandArgs(trailingOnly = TRUE)

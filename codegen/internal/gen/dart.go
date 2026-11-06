@@ -162,35 +162,93 @@ func dartChunks(s string) string {
 	return strings.Join(parts, "\n    ")
 }
 
-func dartFiles(f *model.File, opt Options) []File {
-	var b strings.Builder
-	b.WriteString(header(f, "Generated facades over the pbwire dynamic API, protobuf-dart shape."))
-	b.WriteString("import 'dart:convert';\nimport 'dart:typed_data';\n\n")
-	if dartNeedsFixnum(f) {
-		b.WriteString("import 'package:fixnum/fixnum.dart';\n")
-	}
-	if len(f.Enums) > 0 {
-		b.WriteString("import 'package:protobuf/protobuf.dart' as $pb;\n")
-	}
-	b.WriteString("import 'package:pbwire/pbwire.dart';\n")
-	for _, imp := range f.Imports {
-		fmt.Fprintf(&b, "import '%s.dart';\n", stem(imp.Path))
-	}
-	b.WriteString("\n")
-	fmt.Fprintf(&b, "/// The FileDescriptorSet for %s, so messages encode with no .desc file.\n", f.Path)
-	b.WriteString("const _descB64 =\n    " + dartChunks(opt.DescSetB64) + ";\n\n")
-	b.WriteString("Schema? _schema;\n\n/// The embedded schema, loaded once per isolate.\n")
-	b.WriteString("Schema get schemaCached => _schema ??= Schema.fromBytes(base64Decode(_descB64));\n\n")
-	for _, e := range f.Enums {
-		writeDartEnum(&b, e)
-	}
-	for _, m := range f.Messages {
-		for _, o := range dartOneofs(m) {
-			writeDartOneofKind(&b, m, o)
+func dartFiles(f *model.File, opt Options) ([]File, error) {
+	// Models and schema part ways: facades in one library, the embedded
+	// descriptor set plus its loader in another. model=false leaves the
+	// schema library for dynamic-only users. Public members carry the file
+	// stem: libraries share one namespace per package when imported together.
+	fileStem := base(f)
+	var files []File
+	if opt.Model {
+		var b strings.Builder
+		b.WriteString(header(f, "Generated facades over the pbwire dynamic API, protobuf-dart shape."))
+		b.WriteString("import 'dart:typed_data';\n\n")
+		if dartNeedsFixnum(f) {
+			b.WriteString("import 'package:fixnum/fixnum.dart';\n")
 		}
-		writeDartMessage(&b, f, m)
+		if len(f.Enums) > 0 {
+			b.WriteString("import 'package:protobuf/protobuf.dart' as $pb;\n")
+		}
+		b.WriteString("import 'package:pbwire/pbwire.dart';\n")
+		for _, imp := range f.Imports {
+			fmt.Fprintf(&b, "import '%s.dart';\n", stem(imp.Path))
+		}
+		fmt.Fprintf(&b, "import '%s_meta.dart';\n\n", fileStem)
+		for _, e := range f.Enums {
+			writeDartEnum(&b, e)
+		}
+		for _, m := range f.Messages {
+			for _, o := range dartOneofs(m) {
+				writeDartOneofKind(&b, m, o)
+			}
+			writeDartMessage(&b, f, m, fileStem)
+		}
+		files = append(files, File{Name: fileStem + ".dart", Content: b.String()})
 	}
-	return []File{{Name: base(f) + ".dart", Content: b.String()}}
+	var meta strings.Builder
+	writeDartMeta(&meta, f, opt, fileStem)
+	files = append(files, File{Name: fileStem + "_meta.dart", Content: meta.String()})
+	return files, nil
+}
+
+// writeDartMeta emits the schema library: the embedded descriptor set plus
+// an explicit loader. register=true keeps the lazy per-isolate load (as
+// before) with an override slot; otherwise initSchema (embedded bytes) or
+// useSchema (external) must run first, loudly otherwise. registry adds the
+// whole-file message list plus a preload that warms every type.
+func writeDartMeta(b *strings.Builder, f *model.File, opt Options, stem string) {
+	b.WriteString(header(f, "Embedded descriptor set plus its loader: the schema side of the generated model."))
+	b.WriteString("import 'dart:convert';\n\n")
+	b.WriteString("import 'package:pbwire/pbwire.dart';\n\n")
+	fmt.Fprintf(b, "/// The FileDescriptorSet for %s, so messages encode with no .desc file.\n", f.Path)
+	b.WriteString("const _descB64 =\n    " + dartChunks(opt.DescSetB64) + ";\n\n")
+	b.WriteString("Schema? _schema;\n\nSchema? _schemaOverride;\n\n")
+	fmt.Fprintf(b, "/// Loads the embedded set, or the given bytes for the descriptor mode.\n")
+	fmt.Fprintf(b, "void %s_initSchema([List<int>? bytes]) {\n", stem)
+	b.WriteString("  _schema = Schema.fromBytes(bytes ?? base64Decode(_descB64));\n")
+	b.WriteString("}\n\n")
+	fmt.Fprintf(b, "/// Registers an externally loaded schema: models encode/decode through it instead of the embedded set. A nil call clears the override.\n")
+	fmt.Fprintf(b, "void %s_useSchema(Schema? s) {\n", stem)
+	b.WriteString("  _schemaOverride = s;\n")
+	b.WriteString("}\n\n")
+	if opt.Register {
+		fmt.Fprintf(b, "/// The embedded schema, loaded once per isolate.\n")
+		fmt.Fprintf(b, "Schema get %s_schema => _schemaOverride ?? (_schema ??= Schema.fromBytes(base64Decode(_descB64)));\n", stem)
+	} else {
+		fmt.Fprintf(b, "/// The loaded schema, loudly unless initSchema ran.\n")
+		fmt.Fprintf(b, "Schema get %s_schema {\n", stem)
+		b.WriteString("  final o = _schemaOverride;\n")
+		b.WriteString("  if (o != null) return o;\n")
+		b.WriteString("  final s = _schema;\n")
+		fmt.Fprintf(b, "  if (s == null) throw StateError('call %s_initSchema() first (generated with register=false)');\n", stem)
+		b.WriteString("  return s;\n")
+		b.WriteString("}\n")
+	}
+	if opt.Registry {
+		fmt.Fprintf(b, "\n/// Every message in this file, for whole-schema pre-registration.\n")
+		fmt.Fprintf(b, "const %s_messageNames = <String>[\n", stem)
+		for _, m := range f.Messages {
+			fmt.Fprintf(b, "  %q,\n", m.Full)
+		}
+		b.WriteString("];\n\n")
+		fmt.Fprintf(b, "/// Warms every message type, so later calls pay no lookup.\n")
+		fmt.Fprintf(b, "void %s_preload() {\n", stem)
+		fmt.Fprintf(b, "  final s = %s_schema;\n", stem)
+		fmt.Fprintf(b, "  for (final n in %s_messageNames) {\n", stem)
+		b.WriteString("    s.message(n);\n")
+		b.WriteString("  }\n")
+		b.WriteString("}\n")
+	}
 }
 
 // dartEnumMax is the highest value number: valueOf builds a by-value list.
@@ -237,7 +295,7 @@ func writeDartOneofKind(b *strings.Builder, m model.Message, o string) {
 	b.WriteString("  notSet,\n}\n\n")
 }
 
-func writeDartMessage(b *strings.Builder, f *model.File, m model.Message) {
+func writeDartMessage(b *strings.Builder, f *model.File, m model.Message, stem string) {
 	fmt.Fprintf(b, "/// %s\nclass %s {\n", m.Full, m.Name)
 	writeDartCtor(b, f, m)
 	for _, field := range m.Fields {
@@ -248,7 +306,7 @@ func writeDartMessage(b *strings.Builder, f *model.File, m model.Message) {
 		writeDartField(b, f, m, field)
 	}
 	writeDartWhich(b, m)
-	writeDartCodec(b, f, m)
+	writeDartCodec(b, f, m, stem)
 	b.WriteString("}\n\n")
 }
 
@@ -437,12 +495,12 @@ func writeDartWhich(b *strings.Builder, m model.Message) {
 	}
 }
 
-func writeDartCodec(b *strings.Builder, f *model.File, m model.Message) {
+func writeDartCodec(b *strings.Builder, f *model.File, m model.Message, stem string) {
 	fmt.Fprintf(b, "\n  Uint8List writeToBuffer() {\n")
-	fmt.Fprintf(b, "    final msg = schemaCached.message(%q).newMessage();\n", m.Full)
+	fmt.Fprintf(b, "    final msg = %s_schema.message(%q).newMessage();\n", stem, m.Full)
 	b.WriteString("    try {\n      encodeInto(msg);\n      return msg.encode();\n    } finally {\n      msg.close();\n    }\n  }\n\n")
 	b.WriteString("  void mergeFromBuffer(List<int> wire) {\n")
-	fmt.Fprintf(b, "    final msg = schemaCached.message(%q).decode(wire);\n", m.Full)
+	fmt.Fprintf(b, "    final msg = %s_schema.message(%q).decode(wire);\n", stem, m.Full)
 	b.WriteString("    try {\n      loadFrom(msg);\n    } finally {\n      msg.close();\n    }\n  }\n\n")
 	b.WriteString("  void encodeInto(Message msg) {\n")
 	for _, field := range m.Fields {

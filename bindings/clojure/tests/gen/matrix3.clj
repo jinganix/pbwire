@@ -3,14 +3,9 @@
 ;; Do not edit; regenerate from the .proto instead.
 (ns matrix3
   (:require [clojure.java.io :as io]
-            [pbwire.core :as pb])
+            [pbwire.core :as pb]
+            [matrix3-meta :as meta])
   (:import (java.util Base64)))
-
-(def ^:private desc-bytes
-  (.decode (Base64/getDecoder)
-    "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"))
-
-(def ^:private schema (pb/load-schema-bytes desc-bytes))
 
 ;; structtest.Color3
 (def structtest-color3-COLOR3_UNSPECIFIED 0)
@@ -18,7 +13,11 @@
 (def structtest-color3-COLOR3_GREEN 2)
 
 ;; structtest.Inner3
-(def structtest-inner3-type (pb/message-type schema "structtest.Inner3"))
+(def structtest-inner3-type (pb/message-type meta/schema "structtest.Inner3"))
+
+(defn encode-structtest-inner3 [m] (pb/encode structtest-inner3-type m))
+
+(defn decode-structtest-inner3 [wire] (pb/decode structtest-inner3-type wire))
 
 (defn structtest-inner3
   "Constructor map for structtest.Inner3; absent optionals stay absent."
@@ -28,12 +27,12 @@
     (some? value) (assoc :value value)
   ))
 
-(defn encode-structtest-inner3 [m] (pb/encode structtest-inner3-type m))
-
-(defn decode-structtest-inner3 [wire] (pb/decode structtest-inner3-type wire))
-
 ;; structtest.Scalars3
-(def structtest-scalars3-type (pb/message-type schema "structtest.Scalars3"))
+(def structtest-scalars3-type (pb/message-type meta/schema "structtest.Scalars3"))
+
+(defn encode-structtest-scalars3 [m] (pb/encode structtest-scalars3-type m))
+
+(defn decode-structtest-scalars3 [wire] (pb/decode structtest-scalars3-type wire))
 
 (defn structtest-scalars3
   "Constructor map for structtest.Scalars3; absent optionals stay absent."
@@ -62,8 +61,4 @@
     (some? opt_str) (assoc :opt_str opt_str)
     (some? flags) (assoc :flags flags)
   ))
-
-(defn encode-structtest-scalars3 [m] (pb/encode structtest-scalars3-type m))
-
-(defn decode-structtest-scalars3 [wire] (pb/decode structtest-scalars3-type wire))
 

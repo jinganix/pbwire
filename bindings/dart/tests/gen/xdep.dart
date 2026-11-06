@@ -2,26 +2,10 @@
 // Generated facades over the pbwire dynamic API, protobuf-dart shape.
 // Do not edit; regenerate from the .proto instead.
 
-import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:pbwire/pbwire.dart';
-
-/// The FileDescriptorSet for xdep.proto, so messages encode with no .desc file.
-const _descB64 =
-    "CrkDCgp4ZGVwLnByb3RvEgR4ZGVwIjIKBkRlcE1zZxISCgRuYW1lGAEgASgJUgRuYW1lEhQKBXZh"
-    "bHVlGAIgASgFUgV2YWx1ZUroAgoGEgQDAAoBCs0BCgEMEgMDABIawgEgU2hhcmVkIGRlcGVuZGVu"
-    "Y3kgZm9yIHRoZSBjcm9zcy1maWxlIGZpeHR1cmU6IHhmaWxlLnByb3RvIGltcG9ydHMgdGhpcwog"
-    "ZmlsZSBhbmQgcmVmZXJlbmNlcyBEZXBNc2cuIEdlbmVyYXRlZCBvbmNlIHBlciBsYW5ndWFnZSBu"
-    "ZXh0IHRvIHhmaWxlJ3MKIG93biBtb2RlbDsgdGhlIHJlZmVyZW5jZSBieXRlcyBsaXZlIHdpdGgg"
-    "eGZpbGUuCgoICgECEgMFAA0KCgoCBAASBAcACgEKCgoDBAABEgMHCA4KCwoEBAACABIDCAISCgwK"
-    "BQQAAgAFEgMIAggKDAoFBAACAAESAwgJDQoMCgUEAAIAAxIDCBARCgsKBAQAAgESAwkCEgoMCgUE"
-    "AAIBBRIDCQIHCgwKBQQAAgEBEgMJCA0KDAoFBAACAQMSAwkQEWIGcHJvdG8z";
-
-Schema? _schema;
-
-/// The embedded schema, loaded once per isolate.
-Schema get schemaCached => _schema ??= Schema.fromBytes(base64Decode(_descB64));
+import 'xdep_meta.dart';
 
 /// xdep.DepMsg
 class DepMsg {
@@ -51,7 +35,7 @@ class DepMsg {
   void clearValue() { value = 0; }
 
   Uint8List writeToBuffer() {
-    final msg = schemaCached.message("xdep.DepMsg").newMessage();
+    final msg = xdep_schema.message("xdep.DepMsg").newMessage();
     try {
       encodeInto(msg);
       return msg.encode();
@@ -61,7 +45,7 @@ class DepMsg {
   }
 
   void mergeFromBuffer(List<int> wire) {
-    final msg = schemaCached.message("xdep.DepMsg").decode(wire);
+    final msg = xdep_schema.message("xdep.DepMsg").decode(wire);
     try {
       loadFrom(msg);
     } finally {

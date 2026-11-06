@@ -19,18 +19,57 @@ import (
 // bytes are the only shared contract with the dynamic binding. No
 // protobuf-java dependency: the shape mirrors its method names, not its
 // runtime.
-func javaFiles(f *model.File, opt Options) []File {
+func javaFiles(f *model.File, opt Options) ([]File, error) {
+	if opt.Registry && !opt.Model {
+		return nil, fmt.Errorf("java: registry=true needs model=true (no message classes to list)")
+	}
 	var files []File
-	_ = opt
 	for _, e := range f.Enums {
 		files = append(files, javaEnumFile(f, e))
 	}
 	for _, m := range f.Messages {
 		files = append(files, javaOrBuilderFile(f, m))
-		files = append(files, javaMessageFile(f, m))
-		files = append(files, javaMetaFile(f, m))
+		if opt.Model {
+			files = append(files, javaMessageFile(f, m, opt))
+		}
+		files = append(files, javaMetaFile(f, m, opt))
 	}
-	return files
+	if opt.Registry {
+		files = append(files, javaRegistryFile(f))
+	}
+	return files, nil
+}
+
+// registryName is the registry class of one proto file. The file stem keeps
+// registries distinct when a package spans files (oneof1 vs maptest share
+// spectest); a file named after its package keeps the short form
+// (xdep.proto in package xdep -> Xdep_Registry).
+func registryName(f *model.File) string {
+	stemPascal := model.Pascal(stem(f.Path))
+	if stemPascal == f.Prefix {
+		return className(f, "Registry")
+	}
+	return className(f, stemPascal+"_Registry")
+}
+
+// javaRegistryFile emits the whole-file message list: pure data, no behavior.
+// Class literals never initialize, so referencing it costs nothing until used.
+// Schema.fromClasses(<Registry>.MESSAGES) is whole-schema registration
+// with no descriptor file: every message class initializes (typed side) and
+// every Meta table joins the dynamic schema. Cross-file schemas concatenate
+// the registries; the plugin stays per-file.
+func javaRegistryFile(f *model.File) File {
+	cls := registryName(f)
+	var b strings.Builder
+	b.WriteString(header(f, "Whole-file message list for whole-schema registration."))
+	fmt.Fprintf(&b, "public final class %s {\n", cls)
+	fmt.Fprintf(&b, "    private %s() {\n    }\n\n", cls)
+	b.WriteString("    public static final Class<?>[] MESSAGES = {\n")
+	for _, m := range f.Messages {
+		fmt.Fprintf(&b, "        %s.class,\n", className(f, m.Name))
+	}
+	b.WriteString("    };\n}\n")
+	return File{Name: cls + ".java", Content: b.String()}
 }
 
 // javaOrBuilderFile emits the top-level read interface of one message: the
@@ -204,15 +243,17 @@ func javaOneofs(m model.Message) []string {
 }
 
 // javaMessageFile emits one immutable message class with its Builder.
-func javaMessageFile(f *model.File, m model.Message) File {
+func javaMessageFile(f *model.File, m model.Message, opt Options) File {
 	cls := className(f, m.Name)
 	var b strings.Builder
 	b.WriteString(header(f, "Generated message "+m.Full+" with a direct Wire codec."))
 	b.WriteString("import java.util.ArrayList;\nimport java.util.Collections;\nimport java.util.List;\nimport java.util.Objects;\n\n")
 	fmt.Fprintf(&b, "public final class %s implements %sOrBuilder {\n", cls, cls)
-	b.WriteString("    // Self-registration: one call registers the message, its Builder\n")
-	b.WriteString("    // and the interface mapping (last registration wins).\n")
-	fmt.Fprintf(&b, "    static {{\n        %sMeta.register(%s.class, %s.Builder::new, %s.Builder::build);\n    }}\n\n", cls, cls, cls, cls)
+	if opt.Register {
+		b.WriteString("    // Self-registration: one call registers the message, its Builder\n")
+		b.WriteString("    // and the interface mapping (last registration wins).\n")
+		fmt.Fprintf(&b, "    static {{\n        %sMeta.register(%s.class, %s.Builder::new, %s.Builder::build);\n    }}\n\n", cls, cls, cls, cls)
+	}
 	fmt.Fprintf(&b, "    public static final %s DEFAULT_INSTANCE = new %s(new Builder());\n\n", cls, cls)
 	oneofs := javaOneofs(m)
 
@@ -670,13 +711,13 @@ func writeJavaOrBuilderMember(b *strings.Builder, f *model.File, field model.Fie
 // lets unregistered implementations encode with no per-class call, and
 // parseFrom through the OrBuilder decode into the registered Builder's
 // product (a later registerInterface call swaps in the custom Builder).
-func javaMetaFile(f *model.File, m model.Message) File {
+func javaMetaFile(f *model.File, m model.Message, opt Options) File {
 	cls := className(f, m.Name)
 	var b strings.Builder
 	b.WriteString(header(f, "Codec table of generated message "+m.Full+"."))
 	b.WriteString("import java.util.function.Function;\nimport java.util.function.Supplier;\n\n")
 	fmt.Fprintf(&b, "final class %sMeta {\n", cls)
-	writeJavaMeta(&b, f, m)
+	writeJavaMeta(&b, f, m, opt)
 	writeJavaRegister(&b, f, m, cls)
 	b.WriteString("}\n")
 	return File{Name: cls + "Meta.java", Content: b.String()}
@@ -699,10 +740,14 @@ func javaOneofIndex(oneofs []string, name string) int {
 // tables via their own <Sub>Meta files. The default META binds the
 // generated Builder; a hand-written Builder with the canonical shape
 // shares the exact same rows with no hand-written table.
-func writeJavaMeta(b *strings.Builder, f *model.File, m model.Message) {
+func writeJavaMeta(b *strings.Builder, f *model.File, m model.Message, opt Options) {
 	cls := className(f, m.Name)
-	b.WriteString("    @SuppressWarnings({\"unchecked\", \"rawtypes\"})\n")
-	fmt.Fprintf(b, "    static final Meta<%sOrBuilder, %s.Builder> META = forBuilder(%s.Builder.class);\n\n", cls, cls, cls)
+	// Without the message model there is no generated Builder to bind: only
+	// forBuilder plus the register helper ship, for hand-written models.
+	if opt.Model {
+		b.WriteString("    @SuppressWarnings({\"unchecked\", \"rawtypes\"})\n")
+		fmt.Fprintf(b, "    static final Meta<%sOrBuilder, %s.Builder> META = forBuilder(%s.Builder.class);\n\n", cls, cls, cls)
+	}
 	b.WriteString("    @SuppressWarnings({\"unchecked\", \"rawtypes\"})\n")
 	fmt.Fprintf(b, "    static <B> Meta<%sOrBuilder, B> forBuilder(Class<B> builderClass) {\n", cls)
 	fmt.Fprintf(b, "        return new Meta<>(\n")

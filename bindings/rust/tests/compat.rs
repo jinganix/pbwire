@@ -284,3 +284,14 @@ fn t6_errors_are_loud() {
     let back = spectest::Oneof1::decode(&one.encode_to_vec()).expect("T6 oneof member");
     assert!(matches!(back.kind, Some(spectest::oneof1::Kind::Num(1))));
 }
+
+#[test]
+fn t7_registry_and_preload() {
+    // The whole-file list covers every message; preload warms them so
+    // later calls pay no lookup. Models keep working afterwards.
+    assert!(matrix3::meta::MESSAGE_NAMES.contains(&"structtest.Scalars3"));
+    assert!(matrix3::meta::MESSAGE_NAMES.contains(&"structtest.Inner3"));
+    matrix3::meta::preload();
+    let back = Scalars3::decode(ORACLE).expect("T7 decode after preload");
+    assert_eq!(back.i32, i32::MIN);
+}

@@ -95,3 +95,14 @@ identically apply here too (same core decoder), so the shared
 | `tests/selftest.zig` | self-check (`zig build test`): oracle bytes, round trip, rejects, text/JSON |
 | `benchmarks/bench.zig` + `bench.sh` | the four standard tiers |
 | `conformance/testee.zig` | official-suite testee (binary + JSON + text, JSPB skipped) |
+
+## Generated models
+
+`protoc-gen-pbwire` (in `../../codegen`) emits `<base>.zig` (structs whose
+`encode`/`decode` take an explicit `schema`) and `<base>_meta.zig` (the
+embedded descriptor set, `loadSchema`, `MESSAGE_NAMES` + `preload`).
+`--pbwire_opt=lang=zig[,model=bool][,registry=bool]` (both default `true`):
+`model=false` leaves the schema file for dynamic-only users;
+`registry=false` drops the name list and preload. Loading stays explicit
+(the caller passes the schema), so there is no implicit registry for
+`register` to gate.

@@ -9,64 +9,114 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
-func rubyFiles(f *model.File, opt Options) []File {
-	var b strings.Builder
-	b.WriteString("# frozen_string_literal: true\n\n")
-	b.WriteString(headerP(f, "#", "Generated classes over the dynamic Pbwire runtime: accessors, one encode/decode."))
-	b.WriteString("require_relative '../../lib/pbwire'\n")
-	b.WriteString("require 'base64'\n")
-	for _, imp := range f.Imports {
-		fmt.Fprintf(&b, "require_relative '%s'\n", stem(imp.Path))
+func rubyFiles(f *model.File, opt Options) ([]File, error) {
+	// Models and schema part ways: classes in one file, the embedded
+	// descriptor set plus its loader in the other. model=false leaves the
+	// schema file for dynamic-only users. Everything stays inside the shared
+	// Pbwire::Gen module, so the models call the same qualified helpers.
+	var files []File
+	if opt.Model {
+		var b strings.Builder
+		b.WriteString("# frozen_string_literal: true\n\n")
+		b.WriteString(headerP(f, "#", "Generated classes over the dynamic Pbwire runtime: accessors, one encode/decode."))
+		b.WriteString("require_relative '../../lib/pbwire'\n")
+		fmt.Fprintf(&b, "require_relative '%s_meta'\n", base(f))
+		for _, imp := range f.Imports {
+			fmt.Fprintf(&b, "require_relative '%s'\n", stem(imp.Path))
+		}
+		b.WriteString("\n")
+		b.WriteString("module Pbwire\n  module Gen\n")
+		for _, e := range f.Enums {
+			fmt.Fprintf(&b, "    # %s\n    module %s\n", e.Full, className(f, e.Name))
+			for _, v := range e.Values {
+				fmt.Fprintf(&b, "      %s = %d\n", v.Name, v.Number)
+			}
+			b.WriteString("      REVMAP = {\n")
+			for _, v := range e.Values {
+				fmt.Fprintf(&b, "        %d => :%s,\n", v.Number, v.Name)
+			}
+			b.WriteString("      }.freeze\n")
+			b.WriteString("    end\n\n")
+		}
+		for _, m := range f.Messages {
+			writeRubyMessage(&b, f, m)
+		}
+		// Nested types are reachable through their parents (Oneof1::Inner),
+		// the way protoc's ruby_out nests them.
+		known := map[string]bool{}
+		for _, m := range f.Messages {
+			known[m.Name] = true
+		}
+		for _, e := range f.Enums {
+			known[e.Name] = true
+		}
+		for _, m := range f.Messages {
+			aliasRuby(&b, f, known, m.Name)
+		}
+		for _, e := range f.Enums {
+			aliasRuby(&b, f, known, e.Name)
+		}
+		b.WriteString("  end\nend\n")
+		files = append(files, File{Name: base(f) + ".rb", Content: b.String()})
 	}
-	b.WriteString("\n")
+	var meta strings.Builder
+	writeRubyMeta(&meta, f, opt)
+	files = append(files, File{Name: base(f) + "_meta.rb", Content: meta.String()})
+	return files, nil
+}
+
+// writeRubyMeta emits the schema file: the embedded descriptor set plus an
+// explicit loader, inside the shared Pbwire::Gen module. Schemas and types
+// stay cached per descriptor set, so any number of generated files share
+// this module without collisions. register=true loads lazily on first use
+// (as before); otherwise init_schema (embedded bytes) or use_schema (an
+// external schema) must run first, loudly otherwise. registry adds the
+// whole-file message list plus a preload that warms every type.
+func writeRubyMeta(b *strings.Builder, f *model.File, opt Options) {
+	descConst := "DESC_B64_" + strings.ToUpper(base(f))
+	b.WriteString("# frozen_string_literal: true\n\n")
+	b.WriteString(headerP(f, "#", "Embedded descriptor set plus its loader: the schema side of the generated model."))
+	b.WriteString("require_relative '../../lib/pbwire'\n")
+	b.WriteString("require 'base64'\n\n")
 	b.WriteString("module Pbwire\n  module Gen\n")
 	b.WriteString("    # A decoded 32-bit signed field arrives as unsigned 64-bit bits.\n")
 	b.WriteString("    def self.i32(value)\n      value = value.to_i\n      value >= 2**31 ? value - 2**32 : value\n    end\n\n")
-	fmt.Fprintf(&b, "    # The embedded FileDescriptorSet: no .desc file at use time.\n")
-	fmt.Fprintf(&b, "    DESC_B64_%s = %q\n", strings.ToUpper(base(f)), opt.DescSetB64)
+	fmt.Fprintf(b, "    # The embedded FileDescriptorSet: no .desc file at use time.\n")
+	fmt.Fprintf(b, "    %s = %q\n", descConst, opt.DescSetB64)
 	b.WriteString("    @_schemas = {}\n")
 	b.WriteString("    @_types = {}\n")
-	b.WriteString("    # Schemas and types are cached per descriptor set, so any number\n")
-	b.WriteString("    # of generated files share this module without collisions.\n")
-	b.WriteString("    def self._schema(desc_b64)\n")
+	b.WriteString("    def self.init_schema(desc_b64 = " + descConst + ")\n")
 	b.WriteString("      @_schemas[desc_b64] ||= Pbwire::Schema.from_bytes(Base64.strict_decode64(desc_b64))\n")
 	b.WriteString("    end\n")
+	b.WriteString("    def self.use_schema(desc_b64, schema)\n")
+	b.WriteString("      @_schemas[desc_b64] = schema\n")
+	b.WriteString("      @_types.delete(desc_b64)\n")
+	b.WriteString("    end\n")
+	if opt.Register {
+		b.WriteString("    def self._schema(desc_b64)\n")
+		b.WriteString("      @_schemas[desc_b64] ||= Pbwire::Schema.from_bytes(Base64.strict_decode64(desc_b64))\n")
+		b.WriteString("    end\n")
+	} else {
+		b.WriteString("    def self._schema(desc_b64)\n")
+		b.WriteString("      @_schemas[desc_b64] or raise \"call init_schema first (generated with register=false)\"\n")
+		b.WriteString("    end\n")
+	}
 	b.WriteString("    def self._type(desc_b64, full)\n")
 	b.WriteString("      @_types[desc_b64] ||= {}\n")
 	b.WriteString("      @_types[desc_b64][full] ||= _schema(desc_b64).message(full)\n")
-	b.WriteString("    end\n\n")
-	for _, e := range f.Enums {
-		fmt.Fprintf(&b, "    # %s\n    module %s\n", e.Full, className(f, e.Name))
-		for _, v := range e.Values {
-			fmt.Fprintf(&b, "      %s = %d\n", v.Name, v.Number)
+	b.WriteString("    end\n")
+	if opt.Registry {
+		fmt.Fprintf(b, "\n    # Every message in this file, for whole-schema pre-registration.\n")
+		fmt.Fprintf(b, "    MESSAGE_NAMES_%s = [\n", strings.ToUpper(base(f)))
+		for _, m := range f.Messages {
+			fmt.Fprintf(b, "      %q,\n", m.Full)
 		}
-		b.WriteString("      REVMAP = {\n")
-		for _, v := range e.Values {
-			fmt.Fprintf(&b, "        %d => :%s,\n", v.Number, v.Name)
-		}
-		b.WriteString("      }.freeze\n")
-		b.WriteString("    end\n\n")
-	}
-	for _, m := range f.Messages {
-		writeRubyMessage(&b, f, m)
-	}
-	// Nested types are reachable through their parents (Oneof1::Inner),
-	// the way protoc's ruby_out nests them.
-	known := map[string]bool{}
-	for _, m := range f.Messages {
-		known[m.Name] = true
-	}
-	for _, e := range f.Enums {
-		known[e.Name] = true
-	}
-	for _, m := range f.Messages {
-		aliasRuby(&b, f, known, m.Name)
-	}
-	for _, e := range f.Enums {
-		aliasRuby(&b, f, known, e.Name)
+		b.WriteString("    ].freeze\n\n")
+		fmt.Fprintf(b, "    def self.preload(desc_b64 = %s)\n", descConst)
+		fmt.Fprintf(b, "      MESSAGE_NAMES_%s.each { |n| _type(desc_b64, n) }\n", strings.ToUpper(base(f)))
+		b.WriteString("    end\n")
 	}
 	b.WriteString("  end\nend\n")
-	return []File{{Name: base(f) + ".rb", Content: b.String()}}
 }
 
 // rubyMsg names the class for a message field: the owning file's prefix
