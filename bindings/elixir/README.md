@@ -139,21 +139,21 @@ Last run: 2026-11-05 (matrix3.proto, the four standard tiers; Elixir 1.20.5 / OT
 
 | payload | op | pbwire-elixir (MB/s, x protobuf) | protobuf (MB/s) |
 |---|---|---|---|
-| 136 B | encode | 146.1 (3.09x) | 47.3 |
-| 136 B | decode | 102.0 (1.74x) | 58.7 |
-| 174 B | encode | 148.1 (3.10x) | 47.8 |
-| 174 B | decode | 98.3 (1.59x) | 62.0 |
-| 2469 B | encode | 151.3 (2.59x) | 58.5 |
-| 2469 B | decode | 95.9 (1.68x) | 57.2 |
-| 74913 B | encode | 146.3 (2.63x) | 55.6 |
-| 74913 B | decode | 84.8 (1.41x) | 60.3 |
+| 136 B | encode | 154.1 (3.3x) | 47.3 |
+| 136 B | decode | 84.8 (1.4x) | 59.5 |
+| 174 B | encode | 157.3 (3.0x) | 51.6 |
+| 174 B | decode | 102.0 (1.6x) | 63.4 |
+| 2469 B | encode | 166.8 (2.8x) | 60.2 |
+| 2469 B | decode | 99.0 (1.7x) | 57.8 |
+| 74913 B | encode | 145.6 (2.3x) | 63.2 |
+| 74913 B | decode | 84.7 (1.4x) | 60.6 |
 
 Higher is better. Throughput in MB/s on serialized wire size.
 <!-- BENCHMARK_RESULTS_END -->
 
 The baseline is pure Elixir (~50 MB/s flat across tiers: per-field
 bookkeeping in the interpreter), so the NIF wins every cell; xlarge
-decode is the closest race (1.41x), where the struct↔tuple translation the
+decode is the closest race (1.40x), where the struct↔tuple translation the
 Elixir half owns is most visible. Rerun with `make bench` and paste the new
 table over the block above.
 

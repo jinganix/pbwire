@@ -130,18 +130,18 @@ over wire bytes:
 
 | payload | op | pbwire-java (MB/s, x protobuf-java) | protobuf-java (MB/s) |
 |---|---|---|---|
-| 136 B | encode | 1717.6 (0.75x) | 2275.6 |
-| 136 B | decode | 929.6 (1.46x) | 637.1 |
-| 174 B | encode | 1523.3 (1.19x) | 1284.8 |
-| 174 B | decode | 833.1 (1.46x) | 572.1 |
-| 2469 B | encode | 1002.2 (1.17x) | 856.4 |
-| 2469 B | decode | 866.6 (1.98x) | 437.6 |
-| 74913 B | encode | 1082.8 (1.21x) | 896.7 |
-| 74913 B | decode | 953.1 (2.40x) | 397.8 |
+| 136 B | encode | 1831.6 (0.8x) | 2243.7 |
+| 136 B | decode | 939.2 (1.5x) | 633.9 |
+| 174 B | encode | 1575.1 (1.2x) | 1264.2 |
+| 174 B | decode | 845.7 (1.5x) | 550.5 |
+| 2469 B | encode | 1023.6 (1.2x) | 873.3 |
+| 2469 B | decode | 892.9 (2.0x) | 446.3 |
+| 74913 B | encode | 1061.4 (1.2x) | 904.7 |
+| 74913 B | decode | 968.7 (2.4x) | 411.0 |
 
 `pbwire-java` wins from 174 B up on encode and wins every decode tier: 1.2x
 at 174 B, 1.2x at 2469 B, 1.2x at 74913 B on encode; 1.5x, 2.0x and 2.4x on
-decode. The one cell it loses is the 136 B encode (0.75x): `protobuf-java`'s
+decode. The one cell it loses is the 136 B encode (0.82x): `protobuf-java`'s
 generated writer is one straight-line block of known tags and values (~60 ns),
 while a dynamic codec pays a presence gate, a type dispatch and tag loads per
 field (~80 ns including the `byte[]` copy). That floor is structural, not

@@ -62,14 +62,14 @@ performance numbers; higher is better, MB/s over wire bytes:
 
 | payload | op | pbwire-dart (MB/s, x protobuf-dart) | protobuf-dart (MB/s) |
 |---|---|---|---|
-| 136 B | encode | 775.8 (3.7x) | 207.8 |
-| 136 B | decode | 383.8 (1.8x) | 218.3 |
-| 174 B | encode | 709.9 (3.8x) | 185.6 |
-| 174 B | decode | 395.5 (2.0x) | 196.2 |
-| 2469 B | encode | 1113.7 (8.7x) | 127.4 |
-| 2469 B | decode | 492.3 (3.2x) | 151.6 |
-| 74913 B | encode | 1273.8 (12.2x) | 104.0 |
-| 74913 B | decode | 555.9 (3.3x) | 166.3 |
+| 136 B | encode | 783.4 (3.6x) | 217.5 |
+| 136 B | decode | 401.6 (1.9x) | 206.6 |
+| 174 B | encode | 689.2 (3.8x) | 179.2 |
+| 174 B | decode | 411.7 (2.2x) | 187.3 |
+| 2469 B | encode | 1237.0 (11.5x) | 107.3 |
+| 2469 B | decode | 624.1 (4.4x) | 141.3 |
+| 74913 B | encode | 1430.7 (15.4x) | 92.8 |
+| 74913 B | decode | 694.0 (4.3x) | 162.4 |
 
 Strings cross as NUL-terminated C strings, so `setString()` stops at the first
 NUL byte: use `setBytes()` for binary payloads (a `string` field accepts them

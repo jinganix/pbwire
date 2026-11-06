@@ -185,14 +185,14 @@ for `pbwire-node`, jspb and protobufjs side by side:
 
 | payload | op | pbwire-node (MB/s, x jspb) | jspb (MB/s) | protobufjs (MB/s) |
 |---|---|---|---|---|
-| 136 B | encode | 608.5 (10.9x) | 56.0 | 243.3 |
-| 136 B | decode | 375.3 (3.1x) | 119.5 | 395.7 |
-| 174 B | encode | 568.6 (9.0x) | 62.9 | 300.8 |
-| 174 B | decode | 431.9 (3.8x) | 112.7 | 391.1 |
-| 2469 B | encode | 1201.6 (20.8x) | 57.9 | 445.6 |
-| 2469 B | decode | 1122.9 (14.0x) | 80.3 | 375.4 |
-| 74913 B | encode | 1350.2 (22.3x) | 60.6 | 496.5 |
-| 74913 B | decode | 1655.0 (20.0x) | 82.9 | 402.0 |
+| 136 B | encode | 592.6 (9.6x) | 61.5 | 251.1 |
+| 136 B | decode | 404.0 (3.3x) | 122.0 | 410.8 |
+| 174 B | encode | 540.1 (8.3x) | 64.9 | 301.0 |
+| 174 B | decode | 465.4 (4.0x) | 115.5 | 396.9 |
+| 2469 B | encode | 1333.4 (22.5x) | 59.3 | 423.6 |
+| 2469 B | decode | 1149.6 (14.2x) | 80.8 | 377.4 |
+| 74913 B | encode | 1487.6 (23.4x) | 63.7 | 494.4 |
+| 74913 B | decode | 1644.6 (19.0x) | 86.6 | 412.9 |
 
 jspb's throughput does not move with payload size: its writer resolves a
 code/type table per field and hands every repeated element to a closure, where

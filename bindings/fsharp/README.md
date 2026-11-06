@@ -68,14 +68,14 @@ runs, so the ratios are in-run):
 
 | payload | op | pbwire-fsharp (MB/s, x protobuf-csharp) | protobuf-csharp (MB/s) |
 |---|---|---|---|
-| 136 B | encode | 1363.7 (3.0x) | 452.8 |
-| 136 B | decode | 911.6 (1.9x) | 482.1 |
-| 174 B | encode | 1353.3 (4.0x) | 338.5 |
-| 174 B | decode | 811.6 (2.1x) | 390.9 |
-| 2469 B | encode | 1237.7 (2.2x) | 560.8 |
-| 2469 B | decode | 649.5 (1.5x) | 431.2 |
-| 74913 B | encode | 1480.3 (3.1x) | 473.3 |
-| 74913 B | decode | 673.7 (1.9x) | 364.0 |
+| 136 B | encode | 1382.3 (3.0x) | 458.1 |
+| 136 B | decode | 1145.8 (2.3x) | 494.4 |
+| 174 B | encode | 1379.4 (3.3x) | 412.3 |
+| 174 B | decode | 976.0 (2.5x) | 396.9 |
+| 2469 B | encode | 1331.3 (2.4x) | 559.5 |
+| 2469 B | decode | 669.4 (1.4x) | 466.4 |
+| 74913 B | encode | 1441.6 (2.9x) | 492.2 |
+| 74913 B | decode | 728.3 (1.4x) | 510.7 |
 
 Every tier is gated before timing: the official bytes must land on the pinned
 size, `pbwire-fsharp` must encode byte-identical bytes, and decoding the

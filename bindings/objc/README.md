@@ -126,14 +126,14 @@ performance numbers; higher is better, MB/s over wire bytes:
 
 | payload | op | pbwire-objc (MB/s, x protobuf-objc) | protobuf-objc (MB/s) |
 |---|---|---|---|
-| 136 B | encode | 1088.9 (6.4x) | 169.6 |
-| 136 B | decode | 670.8 (2.5x) | 266.3 |
-| 174 B | encode | 1391.3 (6.6x) | 211.6 |
-| 174 B | decode | 876.2 (2.8x) | 307.5 |
-| 2469 B | encode | 13639.6 (4.7x) | 2889.9 |
-| 2469 B | decode | 11046.0 (2.9x) | 3806.2 |
-| 74913 B | encode | 71739.6 (1.8x) | 38862.9 |
-| 74913 B | decode | 76007.7 (2.7x) | 27919.2 |
+| 136 B | encode | 1162.0 (6.9x) | 168.8 |
+| 136 B | decode | 766.0 (2.9x) | 261.7 |
+| 174 B | encode | 1509.9 (7.0x) | 215.6 |
+| 174 B | decode | 984.5 (3.2x) | 304.3 |
+| 2469 B | encode | 14200.6 (4.9x) | 2908.1 |
+| 2469 B | decode | 11862.8 (3.0x) | 3893.8 |
+| 74913 B | encode | 79927.5 (2.0x) | 39423.8 |
+| 74913 B | decode | 81115.5 (2.9x) | 27736.1 |
 
 `pbwire-objc` therefore beats the generated runtime on every tier and both ops.
 The
