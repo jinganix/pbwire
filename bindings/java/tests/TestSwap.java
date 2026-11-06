@@ -65,8 +65,8 @@ public final class TestSwap {
     static final Meta<Structtest_Inner3OrBuilder, MiniBuilder> MINI_META = new Meta<>(
             "structtest.Inner3",
             new FieldMeta[] {
-                FieldMeta.ofString(1, Structtest_Inner3OrBuilder::getName, (MiniBuilder b, String v) -> b.setName(v), null, null, false),
-                FieldMeta.ofInt(2, Kind.INT32, Structtest_Inner3OrBuilder::getValue, (MiniBuilder b, int v) -> b.setValue(v), null, null, false),
+                FieldMeta.ofString(1, Structtest_Inner3OrBuilder::getName, (MiniBuilder b, String v) -> b.setName(v), null, null, false, "name"),
+                FieldMeta.ofInt(2, Kind.INT32, Structtest_Inner3OrBuilder::getValue, (MiniBuilder b, int v) -> b.setValue(v), null, null, false, "value"),
             });
 
     public static void main(String[] args) {

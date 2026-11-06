@@ -14,9 +14,10 @@ final class Structtest_Inner3Meta {
         return new Meta<>(
                 "structtest.Inner3",
                 new FieldMeta[] {
-                FieldMeta.ofString(1, Structtest_Inner3OrBuilder::getName, Bind.setter(builderClass, "setName", String.class), null, null, false),
-                FieldMeta.ofInt(2, Kind.INT32, Structtest_Inner3OrBuilder::getValue, Bind.intSetter(builderClass, "setValue"), null, null, false),
-                });
+                FieldMeta.ofString(1, Structtest_Inner3OrBuilder::getName, Bind.setter(builderClass, "setName", String.class), null, null, false, "name"),
+                FieldMeta.ofInt(2, Kind.INT32, Structtest_Inner3OrBuilder::getValue, Bind.intSetter(builderClass, "setValue"), null, null, false, "value"),
+                },
+                new String[0]);
     }
 
     /**

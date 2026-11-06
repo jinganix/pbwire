@@ -14,11 +14,12 @@ final class Spectest_Oneof1Meta {
         return new Meta<>(
                 "spectest.Oneof1",
                 new FieldMeta[] {
-                FieldMeta.ofString(1, Spectest_Oneof1OrBuilder::getName, Bind.setter(builderClass, "setName", String.class), null, null, false),
-                FieldMeta.ofOneofInt(2, Kind.INT32, Spectest_Oneof1OrBuilder::getNum, Bind.intSetter(builderClass, "setNum"), (Spectest_Oneof1OrBuilder o) -> o.getKindCase().getNumber()),
-                FieldMeta.ofOneofString(3, Spectest_Oneof1OrBuilder::getText, Bind.setter(builderClass, "setText", String.class), (Spectest_Oneof1OrBuilder o) -> o.getKindCase().getNumber()),
-                FieldMeta.ofOneofMessage(4, Spectest_Oneof1OrBuilder::getInner, Bind.setter(builderClass, "setInner", Spectest_Oneof1_Inner.class), Spectest_Oneof1_Inner.Builder::new, Spectest_Oneof1_InnerMeta.META, Spectest_Oneof1_Inner.Builder::buildPartial, (Spectest_Oneof1OrBuilder o) -> o.getKindCase().getNumber()),
-                });
+                FieldMeta.ofString(1, Spectest_Oneof1OrBuilder::getName, Bind.setter(builderClass, "setName", String.class), null, null, false, "name"),
+                FieldMeta.ofOneofInt(2, Kind.INT32, Spectest_Oneof1OrBuilder::getNum, Bind.intSetter(builderClass, "setNum"), (Spectest_Oneof1OrBuilder o) -> o.getKindCase().getNumber(), 0, "num"),
+                FieldMeta.ofOneofString(3, Spectest_Oneof1OrBuilder::getText, Bind.setter(builderClass, "setText", String.class), (Spectest_Oneof1OrBuilder o) -> o.getKindCase().getNumber(), 0, "text"),
+                FieldMeta.ofOneofMessage(4, Spectest_Oneof1OrBuilder::getInner, Bind.setter(builderClass, "setInner", Spectest_Oneof1_Inner.class), Spectest_Oneof1_Inner.Builder::new, Spectest_Oneof1_InnerMeta.META, Spectest_Oneof1_Inner.Builder::buildPartial, (Spectest_Oneof1OrBuilder o) -> o.getKindCase().getNumber(), 0, "inner"),
+                },
+                new String[] {"kind"});
     }
 
     /**

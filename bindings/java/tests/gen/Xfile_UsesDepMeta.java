@@ -14,10 +14,11 @@ final class Xfile_UsesDepMeta {
         return new Meta<>(
                 "xfile.UsesDep",
                 new FieldMeta[] {
-                FieldMeta.ofMessage(1, Xfile_UsesDepOrBuilder::getSingle, Bind.setter(builderClass, "setSingle", Xdep_DepMsg.class), Xdep_DepMsg.Builder::new, Xdep_DepMsgMeta.META, Xdep_DepMsg.Builder::buildPartial, Xfile_UsesDepOrBuilder::hasSingle, null, false),
-                FieldMeta.ofRepMessage(2, Xfile_UsesDepOrBuilder::getManyList, Bind.setter(builderClass, "addMany", Xdep_DepMsg.class), Xdep_DepMsg.Builder::new, Xdep_DepMsgMeta.META, Xdep_DepMsg.Builder::buildPartial),
-                FieldMeta.ofString(3, Xfile_UsesDepOrBuilder::getNote, Bind.setter(builderClass, "setNote", String.class), null, null, false),
-                });
+                FieldMeta.ofMessage(1, Xfile_UsesDepOrBuilder::getSingle, Bind.setter(builderClass, "setSingle", Xdep_DepMsg.class), Xdep_DepMsg.Builder::new, Xdep_DepMsgMeta.META, Xdep_DepMsg.Builder::buildPartial, Xfile_UsesDepOrBuilder::hasSingle, null, false, "single"),
+                FieldMeta.ofRepMessage(2, Xfile_UsesDepOrBuilder::getManyList, Bind.setter(builderClass, "addMany", Xdep_DepMsg.class), Xdep_DepMsg.Builder::new, Xdep_DepMsgMeta.META, Xdep_DepMsg.Builder::buildPartial, "many"),
+                FieldMeta.ofString(3, Xfile_UsesDepOrBuilder::getNote, Bind.setter(builderClass, "setNote", String.class), null, null, false, "note"),
+                },
+                new String[0]);
     }
 
     /**

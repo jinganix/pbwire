@@ -14,8 +14,9 @@ final class Spectest_Oneof1_InnerMeta {
         return new Meta<>(
                 "spectest.Oneof1.Inner",
                 new FieldMeta[] {
-                FieldMeta.ofInt(1, Kind.INT32, Spectest_Oneof1_InnerOrBuilder::getV, Bind.intSetter(builderClass, "setV"), null, null, false),
-                });
+                FieldMeta.ofInt(1, Kind.INT32, Spectest_Oneof1_InnerOrBuilder::getV, Bind.intSetter(builderClass, "setV"), null, null, false, "v"),
+                },
+                new String[0]);
     }
 
     /**

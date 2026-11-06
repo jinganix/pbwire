@@ -14,9 +14,10 @@ final class Xdep_DepMsgMeta {
         return new Meta<>(
                 "xdep.DepMsg",
                 new FieldMeta[] {
-                FieldMeta.ofString(1, Xdep_DepMsgOrBuilder::getName, Bind.setter(builderClass, "setName", String.class), null, null, false),
-                FieldMeta.ofInt(2, Kind.INT32, Xdep_DepMsgOrBuilder::getValue, Bind.intSetter(builderClass, "setValue"), null, null, false),
-                });
+                FieldMeta.ofString(1, Xdep_DepMsgOrBuilder::getName, Bind.setter(builderClass, "setName", String.class), null, null, false, "name"),
+                FieldMeta.ofInt(2, Kind.INT32, Xdep_DepMsgOrBuilder::getValue, Bind.intSetter(builderClass, "setValue"), null, null, false, "value"),
+                },
+                new String[0]);
     }
 
     /**

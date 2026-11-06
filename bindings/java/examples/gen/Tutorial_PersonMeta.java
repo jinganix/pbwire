@@ -14,11 +14,12 @@ final class Tutorial_PersonMeta {
         return new Meta<>(
                 "tutorial.Person",
                 new FieldMeta[] {
-                FieldMeta.ofString(1, Tutorial_PersonOrBuilder::getName, Bind.setter(builderClass, "setName", String.class), Tutorial_PersonOrBuilder::hasName, Bind.checker(builderClass, "hasName"), true),
-                FieldMeta.ofInt(2, Kind.INT32, Tutorial_PersonOrBuilder::getId, Bind.intSetter(builderClass, "setId"), Tutorial_PersonOrBuilder::hasId, Bind.checker(builderClass, "hasId"), true),
-                FieldMeta.ofString(3, Tutorial_PersonOrBuilder::getEmail, Bind.setter(builderClass, "setEmail", String.class), Tutorial_PersonOrBuilder::hasEmail, null, false),
-                FieldMeta.ofRepMessage(4, Tutorial_PersonOrBuilder::getPhonesList, Bind.setter(builderClass, "addPhones", Tutorial_Person_PhoneNumber.class), Tutorial_Person_PhoneNumber.Builder::new, Tutorial_Person_PhoneNumberMeta.META, Tutorial_Person_PhoneNumber.Builder::buildPartial),
-                });
+                FieldMeta.ofString(1, Tutorial_PersonOrBuilder::getName, Bind.setter(builderClass, "setName", String.class), Tutorial_PersonOrBuilder::hasName, Bind.checker(builderClass, "hasName"), true, "name"),
+                FieldMeta.ofInt(2, Kind.INT32, Tutorial_PersonOrBuilder::getId, Bind.intSetter(builderClass, "setId"), Tutorial_PersonOrBuilder::hasId, Bind.checker(builderClass, "hasId"), true, "id"),
+                FieldMeta.ofString(3, Tutorial_PersonOrBuilder::getEmail, Bind.setter(builderClass, "setEmail", String.class), Tutorial_PersonOrBuilder::hasEmail, null, false, "email"),
+                FieldMeta.ofRepMessage(4, Tutorial_PersonOrBuilder::getPhonesList, Bind.setter(builderClass, "addPhones", Tutorial_Person_PhoneNumber.class), Tutorial_Person_PhoneNumber.Builder::new, Tutorial_Person_PhoneNumberMeta.META, Tutorial_Person_PhoneNumber.Builder::buildPartial, "phones"),
+                },
+                new String[0]);
     }
 
     /**

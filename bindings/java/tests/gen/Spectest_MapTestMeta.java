@@ -14,10 +14,11 @@ final class Spectest_MapTestMeta {
         return new Meta<>(
                 "spectest.MapTest",
                 new FieldMeta[] {
-                FieldMeta.ofRepMessage(1, Spectest_MapTestOrBuilder::getByIntList, Bind.setter(builderClass, "addByInt", Spectest_MapTest_ByIntEntry.class), Spectest_MapTest_ByIntEntry.Builder::new, Spectest_MapTest_ByIntEntryMeta.META, Spectest_MapTest_ByIntEntry.Builder::buildPartial),
-                FieldMeta.ofRepMessage(2, Spectest_MapTestOrBuilder::getByStrList, Bind.setter(builderClass, "addByStr", Spectest_MapTest_ByStrEntry.class), Spectest_MapTest_ByStrEntry.Builder::new, Spectest_MapTest_ByStrEntryMeta.META, Spectest_MapTest_ByStrEntry.Builder::buildPartial),
-                FieldMeta.ofRepMessage(3, Spectest_MapTestOrBuilder::getByMsgList, Bind.setter(builderClass, "addByMsg", Spectest_MapTest_ByMsgEntry.class), Spectest_MapTest_ByMsgEntry.Builder::new, Spectest_MapTest_ByMsgEntryMeta.META, Spectest_MapTest_ByMsgEntry.Builder::buildPartial),
-                });
+                FieldMeta.ofRepMessage(1, Spectest_MapTestOrBuilder::getByIntList, Bind.setter(builderClass, "addByInt", Spectest_MapTest_ByIntEntry.class), Spectest_MapTest_ByIntEntry.Builder::new, Spectest_MapTest_ByIntEntryMeta.META, Spectest_MapTest_ByIntEntry.Builder::buildPartial, "by_int"),
+                FieldMeta.ofRepMessage(2, Spectest_MapTestOrBuilder::getByStrList, Bind.setter(builderClass, "addByStr", Spectest_MapTest_ByStrEntry.class), Spectest_MapTest_ByStrEntry.Builder::new, Spectest_MapTest_ByStrEntryMeta.META, Spectest_MapTest_ByStrEntry.Builder::buildPartial, "by_str"),
+                FieldMeta.ofRepMessage(3, Spectest_MapTestOrBuilder::getByMsgList, Bind.setter(builderClass, "addByMsg", Spectest_MapTest_ByMsgEntry.class), Spectest_MapTest_ByMsgEntry.Builder::new, Spectest_MapTest_ByMsgEntryMeta.META, Spectest_MapTest_ByMsgEntry.Builder::buildPartial, "by_msg"),
+                },
+                new String[0]);
     }
 
     /**

@@ -682,6 +682,17 @@ func javaMetaFile(f *model.File, m model.Message) File {
 	return File{Name: cls + "Meta.java", Content: b.String()}
 }
 
+// javaOneofIndex returns the position of a oneof in the message's oneof
+// list: the FieldMeta.oneof value the dynamic schema reads back.
+func javaOneofIndex(oneofs []string, name string) int {
+	for i, o := range oneofs {
+		if o == name {
+			return i
+		}
+	}
+	return -1
+}
+
 // writeJavaMeta emits the compiled field table into the sibling <Cls>Meta
 // file as a forBuilder factory: one row per field binding the OrBuilder
 // getters to setter lookups on the passed Builder class, sub-message
@@ -698,13 +709,25 @@ func writeJavaMeta(b *strings.Builder, f *model.File, m model.Message) {
 	fmt.Fprintf(b, "                %q,\n", m.Full)
 	b.WriteString("                new FieldMeta[] {\n")
 	ob := cls + "OrBuilder"
+	oneofs := javaOneofs(m)
 	for _, field := range m.Fields {
 		if field.Skip != "" {
 			continue
 		}
-		writeJavaMetaRow(b, f, field, ob)
+		writeJavaMetaRow(b, f, field, ob, oneofs)
 	}
-	b.WriteString("                });\n")
+	if len(oneofs) == 0 {
+		b.WriteString("                },\n                new String[0]);\n")
+	} else {
+		b.WriteString("                },\n                new String[] {")
+		for i, o := range oneofs {
+			if i > 0 {
+				b.WriteString(", ")
+			}
+			fmt.Fprintf(b, "%q", o)
+		}
+		b.WriteString("});\n")
+	}
 	b.WriteString("    }\n\n")
 }
 
@@ -754,7 +777,7 @@ func javaHasLambdas(ob string, field model.Field) (string, string) {
 // writeJavaMetaRow emits one table row: the setters resolve against the
 // passed Builder class by canonical name, so the rows depend only on the
 // field shape, never on hand-written code.
-func writeJavaMetaRow(b *strings.Builder, f *model.File, field model.Field, ob string) {
+func writeJavaMetaRow(b *strings.Builder, f *model.File, field model.Field, ob string, oneofs []string) {
 	num := field.Number
 	hasM, hasBMethod := javaHasLambdas(ob, field)
 	req := "false"
@@ -791,39 +814,40 @@ func writeJavaMetaRow(b *strings.Builder, f *model.File, field model.Field, ob s
 	}
 	if field.Oneof != "" {
 		caseOf := "(" + ob + " o) -> o.get" + model.Pascal(field.Oneof) + "Case().getNumber()"
+		idx := javaOneofIndex(oneofs, field.Oneof)
 		switch {
 		case field.Message != "":
-			emitOneofMsgRow(b, f, field, num, caseOf, ob)
+			emitOneofMsgRow(b, f, field, num, caseOf, ob, idx)
 			return
 		case field.Kind == protoreflect.StringKind:
-			fmt.Fprintf(b, "                FieldMeta.ofOneofString(%d, %s::%s, %s, %s),\n",
-				num, ob, javaGetterName(field), setV("set"+field.Pascal, "String"), caseOf)
+			fmt.Fprintf(b, "                FieldMeta.ofOneofString(%d, %s::%s, %s, %s, %d, %q),\n",
+				num, ob, javaGetterName(field), setV("set"+field.Pascal, "String"), caseOf, idx, field.Name)
 			return
 		case field.Kind == protoreflect.BytesKind:
-			fmt.Fprintf(b, "                FieldMeta.ofOneofBytes(%d, %s::%s, %s, %s),\n",
-				num, ob, javaGetterName(field), setV("set"+field.Pascal, "byte[]"), caseOf)
+			fmt.Fprintf(b, "                FieldMeta.ofOneofBytes(%d, %s::%s, %s, %s, %d, %q),\n",
+				num, ob, javaGetterName(field), setV("set"+field.Pascal, "byte[]"), caseOf, idx, field.Name)
 			return
 		case field.Kind == protoreflect.BoolKind:
-			fmt.Fprintf(b, "                FieldMeta.ofOneofBool(%d, %s::%s, %s, %s),\n",
-				num, ob, javaGetterName(field), setV("set"+field.Pascal, "Boolean"), caseOf)
+			fmt.Fprintf(b, "                FieldMeta.ofOneofBool(%d, %s::%s, %s, %s, %d, %q),\n",
+				num, ob, javaGetterName(field), setV("set"+field.Pascal, "Boolean"), caseOf, idx, field.Name)
 			return
 		case field.Kind == protoreflect.FloatKind:
-			fmt.Fprintf(b, "                FieldMeta.ofOneofFloat(%d, %s::%s, %s, %s),\n",
-				num, ob, javaGetterName(field), setV("set"+field.Pascal, "Float"), caseOf)
+			fmt.Fprintf(b, "                FieldMeta.ofOneofFloat(%d, %s::%s, %s, %s, %d, %q),\n",
+				num, ob, javaGetterName(field), setV("set"+field.Pascal, "Float"), caseOf, idx, field.Name)
 			return
 		case field.Kind == protoreflect.DoubleKind:
-			fmt.Fprintf(b, "                FieldMeta.ofOneofDouble(%d, %s::%s, %s, %s),\n",
-				num, ob, javaGetterName(field), setV("set"+field.Pascal, "double"), caseOf)
+			fmt.Fprintf(b, "                FieldMeta.ofOneofDouble(%d, %s::%s, %s, %s, %d, %q),\n",
+				num, ob, javaGetterName(field), setV("set"+field.Pascal, "double"), caseOf, idx, field.Name)
 			return
 		case field.Kind == protoreflect.Int64Kind, field.Kind == protoreflect.Uint64Kind,
 			field.Kind == protoreflect.Sint64Kind, field.Kind == protoreflect.Fixed64Kind,
 			field.Kind == protoreflect.Sfixed64Kind:
-			fmt.Fprintf(b, "                FieldMeta.ofOneofLong(%d, %s, %s::%s, %s, %s),\n",
-				num, javaKindInt(field.Kind), ob, javaGetterName(field), setV("set"+field.Pascal, "long"), caseOf)
+			fmt.Fprintf(b, "                FieldMeta.ofOneofLong(%d, %s, %s::%s, %s, %s, %d, %q),\n",
+				num, javaKindInt(field.Kind), ob, javaGetterName(field), setV("set"+field.Pascal, "long"), caseOf, idx, field.Name)
 			return
 		default:
-			fmt.Fprintf(b, "                FieldMeta.ofOneofInt(%d, %s, %s::%s, %s, %s),\n",
-				num, javaKindInt(field.Kind), ob, javaGetterName(field), setV("set"+field.Pascal, "int"), caseOf)
+			fmt.Fprintf(b, "                FieldMeta.ofOneofInt(%d, %s, %s::%s, %s, %s, %d, %q),\n",
+				num, javaKindInt(field.Kind), ob, javaGetterName(field), setV("set"+field.Pascal, "int"), caseOf, idx, field.Name)
 			return
 		}
 	}
@@ -833,24 +857,24 @@ func writeJavaMetaRow(b *strings.Builder, f *model.File, field model.Field, ob s
 		fac := t + ".Builder::new"
 		fin := t + ".Builder::buildPartial"
 		if field.Kind == protoreflect.GroupKind {
-			fmt.Fprintf(b, "                FieldMeta.ofGroup(%d, %s::get%s, %s, %s, %sMeta.META, %s, %s, %s),\n",
-				num, ob, field.Pascal, bindRef("set"+field.Pascal, t), fac, t, fin, hasM, hasB)
+			fmt.Fprintf(b, "                FieldMeta.ofGroup(%d, %s::get%s, %s, %s, %sMeta.META, %s, %s, %s, %q),\n",
+				num, ob, field.Pascal, bindRef("set"+field.Pascal, t), fac, t, fin, hasM, hasB, field.Name)
 			return
 		}
-		fmt.Fprintf(b, "                FieldMeta.ofMessage(%d, %s::get%s, %s, %s, %sMeta.META, %s, %s, %s, %s),\n",
-			num, ob, field.Pascal, bindRef("set"+field.Pascal, t), fac, t, fin, hasM, hasB, req)
+		fmt.Fprintf(b, "                FieldMeta.ofMessage(%d, %s::get%s, %s, %s, %sMeta.META, %s, %s, %s, %s, %q),\n",
+			num, ob, field.Pascal, bindRef("set"+field.Pascal, t), fac, t, fin, hasM, hasB, req, field.Name)
 		return
 	case field.Message != "" && field.Repeated:
 		t := javaType(f, field)
 		fac := t + ".Builder::new"
 		fin := t + ".Builder::buildPartial"
 		if field.Kind == protoreflect.GroupKind {
-			fmt.Fprintf(b, "                FieldMeta.ofRepGroup(%d, %s::get%sList, %s, %s, %sMeta.META, %s),\n",
-				num, ob, field.Pascal, bindRef("add"+field.Pascal, t), fac, t, fin)
+			fmt.Fprintf(b, "                FieldMeta.ofRepGroup(%d, %s::get%sList, %s, %s, %sMeta.META, %s, %q),\n",
+				num, ob, field.Pascal, bindRef("add"+field.Pascal, t), fac, t, fin, field.Name)
 			return
 		}
-		fmt.Fprintf(b, "                FieldMeta.ofRepMessage(%d, %s::get%sList, %s, %s, %sMeta.META, %s),\n",
-			num, ob, field.Pascal, bindRef("add"+field.Pascal, t), fac, t, fin)
+		fmt.Fprintf(b, "                FieldMeta.ofRepMessage(%d, %s::get%sList, %s, %s, %sMeta.META, %s, %q),\n",
+			num, ob, field.Pascal, bindRef("add"+field.Pascal, t), fac, t, fin, field.Name)
 		return
 	case field.Repeated:
 		pack := "false"
@@ -859,74 +883,74 @@ func writeJavaMetaRow(b *strings.Builder, f *model.File, field model.Field, ob s
 		}
 		switch field.Kind {
 		case protoreflect.StringKind:
-			fmt.Fprintf(b, "                FieldMeta.ofRepString(%d, %s::get%sList, %s),\n",
-				num, ob, field.Pascal, setV("add"+field.Pascal, "String"))
+			fmt.Fprintf(b, "                FieldMeta.ofRepString(%d, %s::get%sList, %s, %q),\n",
+				num, ob, field.Pascal, setV("add"+field.Pascal, "String"), field.Name)
 		case protoreflect.BytesKind:
-			fmt.Fprintf(b, "                FieldMeta.ofRepBytes(%d, %s::get%sList, %s),\n",
-				num, ob, field.Pascal, setV("add"+field.Pascal, "byte[]"))
+			fmt.Fprintf(b, "                FieldMeta.ofRepBytes(%d, %s::get%sList, %s, %q),\n",
+				num, ob, field.Pascal, setV("add"+field.Pascal, "byte[]"), field.Name)
 		case protoreflect.BoolKind:
-			fmt.Fprintf(b, "                FieldMeta.ofRepBool(%d, %s, %s::get%sList, %s),\n",
-				num, pack, ob, field.Pascal, setV("add"+field.Pascal, "Boolean"))
+			fmt.Fprintf(b, "                FieldMeta.ofRepBool(%d, %s, %s::get%sList, %s, %q),\n",
+				num, pack, ob, field.Pascal, setV("add"+field.Pascal, "Boolean"), field.Name)
 		case protoreflect.FloatKind:
-			fmt.Fprintf(b, "                FieldMeta.ofRepFloat(%d, %s, %s, %s::get%sList, %s),\n",
-				num, javaKindInt(field.Kind), pack, ob, field.Pascal, setV("add"+field.Pascal, "Float"))
+			fmt.Fprintf(b, "                FieldMeta.ofRepFloat(%d, %s, %s, %s::get%sList, %s, %q),\n",
+				num, javaKindInt(field.Kind), pack, ob, field.Pascal, setV("add"+field.Pascal, "Float"), field.Name)
 		case protoreflect.DoubleKind:
-			fmt.Fprintf(b, "                FieldMeta.ofRepDouble(%d, %s, %s, %s::get%sList, %s),\n",
-				num, javaKindInt(field.Kind), pack, ob, field.Pascal, setV("add"+field.Pascal, "double"))
+			fmt.Fprintf(b, "                FieldMeta.ofRepDouble(%d, %s, %s, %s::get%sList, %s, %q),\n",
+				num, javaKindInt(field.Kind), pack, ob, field.Pascal, setV("add"+field.Pascal, "double"), field.Name)
 		case protoreflect.Int64Kind, protoreflect.Uint64Kind, protoreflect.Sint64Kind,
 			protoreflect.Fixed64Kind, protoreflect.Sfixed64Kind:
-			fmt.Fprintf(b, "                FieldMeta.ofRepLong(%d, %s, %s, %s::get%sList, %s),\n",
-				num, javaKindInt(field.Kind), pack, ob, field.Pascal, setV("add"+field.Pascal, "long"))
+			fmt.Fprintf(b, "                FieldMeta.ofRepLong(%d, %s, %s, %s::get%sList, %s, %q),\n",
+				num, javaKindInt(field.Kind), pack, ob, field.Pascal, setV("add"+field.Pascal, "long"), field.Name)
 		default:
-			fmt.Fprintf(b, "                FieldMeta.ofRepInt(%d, %s, %s, %s::get%sList, %s),\n",
-				num, javaKindInt(field.Kind), pack, ob, field.Pascal, setV("add"+field.Pascal, "int"))
+			fmt.Fprintf(b, "                FieldMeta.ofRepInt(%d, %s, %s, %s::get%sList, %s, %q),\n",
+				num, javaKindInt(field.Kind), pack, ob, field.Pascal, setV("add"+field.Pascal, "int"), field.Name)
 		}
 		return
 	}
 	if field.Kind == protoreflect.EnumKind && field.Enum != "" {
-		fmt.Fprintf(b, "                FieldMeta.ofInt(%d, Kind.ENUM, %s::get%sValue, %s, %s, %s, %s),\n",
-			num, ob, field.Pascal, setV("set"+field.Pascal+"Value", "int"), hasM, hasB, req)
+		fmt.Fprintf(b, "                FieldMeta.ofInt(%d, Kind.ENUM, %s::get%sValue, %s, %s, %s, %s, %q),\n",
+			num, ob, field.Pascal, setV("set"+field.Pascal+"Value", "int"), hasM, hasB, req, field.Name)
 		return
 	}
 	switch field.Kind {
 	case protoreflect.StringKind:
-		fmt.Fprintf(b, "                FieldMeta.ofString(%d, %s::%s, %s, %s, %s, %s),\n",
-			num, ob, javaGetterName(field), setV("set"+field.Pascal, "String"), hasM, hasB, req)
+		fmt.Fprintf(b, "                FieldMeta.ofString(%d, %s::%s, %s, %s, %s, %s, %q),\n",
+			num, ob, javaGetterName(field), setV("set"+field.Pascal, "String"), hasM, hasB, req, field.Name)
 	case protoreflect.BytesKind:
-		fmt.Fprintf(b, "                FieldMeta.ofBytes(%d, %s::%s, %s, %s, %s, %s),\n",
-			num, ob, javaGetterName(field), setV("set"+field.Pascal, "byte[]"), hasM, hasB, req)
+		fmt.Fprintf(b, "                FieldMeta.ofBytes(%d, %s::%s, %s, %s, %s, %s, %q),\n",
+			num, ob, javaGetterName(field), setV("set"+field.Pascal, "byte[]"), hasM, hasB, req, field.Name)
 	case protoreflect.BoolKind:
-		fmt.Fprintf(b, "                FieldMeta.ofBool(%d, %s::%s, %s, %s, %s, %s),\n",
-			num, ob, javaGetterName(field), setV("set"+field.Pascal, "Boolean"), hasM, hasB, req)
+		fmt.Fprintf(b, "                FieldMeta.ofBool(%d, %s::%s, %s, %s, %s, %s, %q),\n",
+			num, ob, javaGetterName(field), setV("set"+field.Pascal, "Boolean"), hasM, hasB, req, field.Name)
 	case protoreflect.FloatKind:
-		fmt.Fprintf(b, "                FieldMeta.ofFloat(%d, %s::%s, %s, %s, %s, %s),\n",
-			num, ob, javaGetterName(field), setV("set"+field.Pascal, "Float"), hasM, hasB, req)
+		fmt.Fprintf(b, "                FieldMeta.ofFloat(%d, %s::%s, %s, %s, %s, %s, %q),\n",
+			num, ob, javaGetterName(field), setV("set"+field.Pascal, "Float"), hasM, hasB, req, field.Name)
 	case protoreflect.DoubleKind:
-		fmt.Fprintf(b, "                FieldMeta.ofDouble(%d, %s::%s, %s, %s, %s, %s),\n",
-			num, ob, javaGetterName(field), setV("set"+field.Pascal, "double"), hasM, hasB, req)
+		fmt.Fprintf(b, "                FieldMeta.ofDouble(%d, %s::%s, %s, %s, %s, %s, %q),\n",
+			num, ob, javaGetterName(field), setV("set"+field.Pascal, "double"), hasM, hasB, req, field.Name)
 	case protoreflect.Int64Kind, protoreflect.Uint64Kind, protoreflect.Sint64Kind,
 		protoreflect.Fixed64Kind, protoreflect.Sfixed64Kind:
-		fmt.Fprintf(b, "                FieldMeta.ofLong(%d, %s, %s::%s, %s, %s, %s, %s),\n",
-			num, javaKindInt(field.Kind), ob, javaGetterName(field), setV("set"+field.Pascal, "long"), hasM, hasB, req)
+		fmt.Fprintf(b, "                FieldMeta.ofLong(%d, %s, %s::%s, %s, %s, %s, %s, %q),\n",
+			num, javaKindInt(field.Kind), ob, javaGetterName(field), setV("set"+field.Pascal, "long"), hasM, hasB, req, field.Name)
 	default:
-		fmt.Fprintf(b, "                FieldMeta.ofInt(%d, %s, %s::%s, %s, %s, %s, %s),\n",
-			num, javaKindInt(field.Kind), ob, javaGetterName(field), setV("set"+field.Pascal, "int"), hasM, hasB, req)
+		fmt.Fprintf(b, "                FieldMeta.ofInt(%d, %s, %s::%s, %s, %s, %s, %s, %q),\n",
+			num, javaKindInt(field.Kind), ob, javaGetterName(field), setV("set"+field.Pascal, "int"), hasM, hasB, req, field.Name)
 	}
 }
 
 // emitOneofMsgRow emits the table row of one oneof message/group member.
 // The setter resolves against the passed Builder class like every row.
-func emitOneofMsgRow(b *strings.Builder, f *model.File, field model.Field, num int32, caseOf string, ob string) {
+func emitOneofMsgRow(b *strings.Builder, f *model.File, field model.Field, num int32, caseOf string, ob string, idx int) {
 	t := javaType(f, field)
 	fac := t + ".Builder::new"
 	fin := t + ".Builder::buildPartial"
 	if field.Kind == protoreflect.GroupKind {
-		fmt.Fprintf(b, "                FieldMeta.ofOneofGroup(%d, %s::get%s, %s, %s, %sMeta.META, %s, %s),\n",
-			num, ob, field.Pascal, "Bind.setter(builderClass, \"set"+field.Pascal+"\", "+t+".class)", fac, t, fin, caseOf)
+		fmt.Fprintf(b, "                FieldMeta.ofOneofGroup(%d, %s::get%s, %s, %s, %sMeta.META, %s, %s, %d, %q),\n",
+			num, ob, field.Pascal, "Bind.setter(builderClass, \"set"+field.Pascal+"\", "+t+".class)", fac, t, fin, caseOf, idx, field.Name)
 		return
 	}
-	fmt.Fprintf(b, "                FieldMeta.ofOneofMessage(%d, %s::get%s, %s, %s, %sMeta.META, %s, %s),\n",
-		num, ob, field.Pascal, "Bind.setter(builderClass, \"set"+field.Pascal+"\", "+t+".class)", fac, t, fin, caseOf)
+	fmt.Fprintf(b, "                FieldMeta.ofOneofMessage(%d, %s::get%s, %s, %s, %sMeta.META, %s, %s, %d, %q),\n",
+		num, ob, field.Pascal, "Bind.setter(builderClass, \"set"+field.Pascal+"\", "+t+".class)", fac, t, fin, caseOf, idx, field.Name)
 }
 
 // writeJavaBuilder emits the nested Builder class.

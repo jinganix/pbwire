@@ -50,7 +50,7 @@ in, so a build needs no `protoc` either.
 |---|---|
 | `PbCodec` | `encode(pojo)`, `parseFrom(bytes, MyClass.class)`, `isInitialized(pojo)` — any `@PbField` class, no registration |
 | `PbMessage` / `PbField` / `PbKind` | the two annotations plus the kind enum (`AUTO` infers from the Java type; set it for `UINT32`/`SINT32`/`FIXED32`/`ENUM`/`GROUP` and friends) |
-| `Schema` | `fromFile(path)`, `fromBytes(byte[])`, `message(fullName)`, `close()` |
+| `Schema` | `fromFile(path)`, `fromBytes(byte[])`, `fromClasses(Class...)`, `message(fullName)`, `close()` |
 | `MessageType` | `name()`, `newMessage()`, `decode(byte[])` |
 | `Message` | `set(name\|number, …)`, `newMessage(name\|number)`, `clear(…)`, `has(…)`, `get(…)`, typed getters, `getList(…)`, `encode()`, `close()` |
 | `PbwireException` | unchecked; `decode`/`encode` failures and unknown fields/types name the message and field |
@@ -60,6 +60,13 @@ in, so a build needs no `protoc` either.
 `byte[]`. `set` replaces a singular field and appends to a repeated one; there
 is no separate `add`. `newMessage` returns a child `Message` that writes
 straight into the tree (append for a repeated message field).
+
+`fromClasses` builds the same schema out of generated message classes instead
+of a descriptor file: the codegen tables carry every field fact the dynamic
+codec needs (names, numbers, kinds, packed/oneof), so generated and dynamic
+code read the same bytes. Pass only the roots; sub-messages follow the table
+links. A descriptor schema and a `fromClasses` schema coexist in one process
+— they share nothing but the wire format.
 
 Getters: `get(name\|number)` returns the boxed value and `null` when absent;
 `getLong/getInt/getBool/getDouble/getFloat/getString/getBytes/getMessage`

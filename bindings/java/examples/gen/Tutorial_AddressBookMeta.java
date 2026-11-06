@@ -14,8 +14,9 @@ final class Tutorial_AddressBookMeta {
         return new Meta<>(
                 "tutorial.AddressBook",
                 new FieldMeta[] {
-                FieldMeta.ofRepMessage(1, Tutorial_AddressBookOrBuilder::getPeopleList, Bind.setter(builderClass, "addPeople", Tutorial_Person.class), Tutorial_Person.Builder::new, Tutorial_PersonMeta.META, Tutorial_Person.Builder::buildPartial),
-                });
+                FieldMeta.ofRepMessage(1, Tutorial_AddressBookOrBuilder::getPeopleList, Bind.setter(builderClass, "addPeople", Tutorial_Person.class), Tutorial_Person.Builder::new, Tutorial_PersonMeta.META, Tutorial_Person.Builder::buildPartial, "people"),
+                },
+                new String[0]);
     }
 
     /**

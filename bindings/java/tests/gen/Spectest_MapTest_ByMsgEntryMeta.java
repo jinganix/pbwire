@@ -14,9 +14,10 @@ final class Spectest_MapTest_ByMsgEntryMeta {
         return new Meta<>(
                 "spectest.MapTest.ByMsgEntry",
                 new FieldMeta[] {
-                FieldMeta.ofString(1, Spectest_MapTest_ByMsgEntryOrBuilder::getKey, Bind.setter(builderClass, "setKey", String.class), null, null, false),
-                FieldMeta.ofMessage(2, Spectest_MapTest_ByMsgEntryOrBuilder::getValue, Bind.setter(builderClass, "setValue", Spectest_MapValue.class), Spectest_MapValue.Builder::new, Spectest_MapValueMeta.META, Spectest_MapValue.Builder::buildPartial, Spectest_MapTest_ByMsgEntryOrBuilder::hasValue, null, false),
-                });
+                FieldMeta.ofString(1, Spectest_MapTest_ByMsgEntryOrBuilder::getKey, Bind.setter(builderClass, "setKey", String.class), null, null, false, "key"),
+                FieldMeta.ofMessage(2, Spectest_MapTest_ByMsgEntryOrBuilder::getValue, Bind.setter(builderClass, "setValue", Spectest_MapValue.class), Spectest_MapValue.Builder::new, Spectest_MapValueMeta.META, Spectest_MapValue.Builder::buildPartial, Spectest_MapTest_ByMsgEntryOrBuilder::hasValue, null, false, "value"),
+                },
+                new String[0]);
     }
 
     /**

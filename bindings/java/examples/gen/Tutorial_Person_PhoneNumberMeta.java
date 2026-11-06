@@ -14,9 +14,10 @@ final class Tutorial_Person_PhoneNumberMeta {
         return new Meta<>(
                 "tutorial.Person.PhoneNumber",
                 new FieldMeta[] {
-                FieldMeta.ofString(1, Tutorial_Person_PhoneNumberOrBuilder::getNumber, Bind.setter(builderClass, "setNumber", String.class), Tutorial_Person_PhoneNumberOrBuilder::hasNumber, Bind.checker(builderClass, "hasNumber"), true),
-                FieldMeta.ofInt(2, Kind.ENUM, Tutorial_Person_PhoneNumberOrBuilder::getTypeValue, Bind.intSetter(builderClass, "setTypeValue"), Tutorial_Person_PhoneNumberOrBuilder::hasType, null, false),
-                });
+                FieldMeta.ofString(1, Tutorial_Person_PhoneNumberOrBuilder::getNumber, Bind.setter(builderClass, "setNumber", String.class), Tutorial_Person_PhoneNumberOrBuilder::hasNumber, Bind.checker(builderClass, "hasNumber"), true, "number"),
+                FieldMeta.ofInt(2, Kind.ENUM, Tutorial_Person_PhoneNumberOrBuilder::getTypeValue, Bind.intSetter(builderClass, "setTypeValue"), Tutorial_Person_PhoneNumberOrBuilder::hasType, null, false, "type"),
+                },
+                new String[0]);
     }
 
     /**

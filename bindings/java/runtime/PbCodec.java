@@ -81,6 +81,11 @@ public final class PbCodec {
         return (M) parseFrom(data, (Supplier) e.factory, (Meta) e.meta, (Function) e.finish);
     }
 
+    /** The table behind a registered message class or interface. */
+    static Meta<?, ?> metaOf(Class<?> c) {
+        return lookup(c).meta;
+    }
+
     private static Entry lookup(Class<?> c) {
         Entry e = REGISTRY.get(c);
         if (e != null) {

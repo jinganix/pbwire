@@ -14,9 +14,10 @@ final class Spectest_MapTest_ByStrEntryMeta {
         return new Meta<>(
                 "spectest.MapTest.ByStrEntry",
                 new FieldMeta[] {
-                FieldMeta.ofString(1, Spectest_MapTest_ByStrEntryOrBuilder::getKey, Bind.setter(builderClass, "setKey", String.class), null, null, false),
-                FieldMeta.ofInt(2, Kind.INT32, Spectest_MapTest_ByStrEntryOrBuilder::getValue, Bind.intSetter(builderClass, "setValue"), null, null, false),
-                });
+                FieldMeta.ofString(1, Spectest_MapTest_ByStrEntryOrBuilder::getKey, Bind.setter(builderClass, "setKey", String.class), null, null, false, "key"),
+                FieldMeta.ofInt(2, Kind.INT32, Spectest_MapTest_ByStrEntryOrBuilder::getValue, Bind.intSetter(builderClass, "setValue"), null, null, false, "value"),
+                },
+                new String[0]);
     }
 
     /**
