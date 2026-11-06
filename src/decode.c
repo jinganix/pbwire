@@ -1317,13 +1317,6 @@ pbw_decode_arena_lim(pbw_arena *arena, const pbw_descriptor *desc,
     return status;
 }
 
-pbw_status
-pbw_decode_arena(pbw_arena *arena, const pbw_descriptor *desc, const void *buf,
-                 size_t len, pbw_message **out)
-{
-    return pbw_decode_arena_lim(arena, desc, buf, len, PBW_MAX_DEPTH, out);
-}
-
 /* Plain decoding owns one arena per message tree: the whole decode is a single
  * malloc instead of one per field, and pbw_message_free() releases it at once.
  * Wire length is a fair proxy for the tree size, so the first chunk is sized

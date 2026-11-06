@@ -390,9 +390,7 @@ void pbw_buf_init_fixed(pbw_buf *buf, void *data, size_t cap);
 void pbw_buf_free(pbw_buf *buf);
 /* Grows buf so that `extra` more bytes fit; capacity survives across calls. */
 int pbw_buf_reserve(pbw_buf *buf, size_t extra);
-void pbw_write_le32(uint8_t *out, uint32_t value);
 uint32_t pbw_read_le32(const uint8_t *in);
-uint64_t pbw_read_le64(const uint8_t *in);
 
 /* arena.c */
 void *pbw_arena_alloc_slow(pbw_arena *arena, size_t size);
@@ -429,8 +427,6 @@ void pbw_arena_free(pbw_arena *arena);
 size_t pbw_arena_used(const pbw_arena *arena);
 
 /* decode.c / encode.c */
-pbw_status pbw_decode_arena(pbw_arena *arena, const pbw_descriptor *desc,
-                            const void *buf, size_t len, pbw_message **out);
 /* Same with an explicit nesting cap (PBW_MAX_DEPTH when limits are default). */
 pbw_status pbw_decode_arena_lim(pbw_arena *arena, const pbw_descriptor *desc,
                                 const void *buf, size_t len, uint32_t dlim,
@@ -493,14 +489,13 @@ int pbw_value_init_bytes(pbw_value *value, pbw_arena *arena, const void *data,
                          size_t len);
 /* Copies value into the field slot and marks it present (decoder storage). */
 void pbw_message_put(pbw_message *msg, size_t index, const pbw_value *value);
-pbw_value *pbw_value_new_list_a(pbw_arena *arena);
-pbw_value *pbw_value_new_uint_a(pbw_arena *arena, uint64_t bits);
+pbw_value *
+pbw_value_new_uint_a(pbw_arena *arena, uint64_t bits);
 pbw_value *pbw_value_new_bytes_a(pbw_arena *arena, const void *data,
                                  size_t len);
 pbw_value *pbw_value_new_message_a(pbw_arena *arena, pbw_message *msg);
 pbw_message *pbw_message_new_a(pbw_arena *arena, const pbw_descriptor *desc);
 pbw_value *pbw_message_list_for(pbw_message *msg, const pbw_field *field);
-pbw_value *pbw_value_new_list(void);
 /* Appends item to list; the items array comes from `arena` when it is not
  * NULL. Takes ownership of item. */
 int pbw_value_list_push(pbw_value *list, pbw_value *item, pbw_arena *arena);
