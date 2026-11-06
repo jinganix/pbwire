@@ -1981,6 +1981,8 @@ t_valid_type_name(const char *s)
 
 static pbw_status t_parse_message_body(text_in *t, pbw_message *msg,
                                        uint32_t depth, char closer);
+static pbw_status t_parse_list(text_in *t, pbw_message *msg,
+                               const pbw_field *field, uint32_t depth);
 
 /* Any expansion when the parser already consumed nothing: reads [url]{...}
  * and fills the Any message `msg` itself (no field: the message IS the Any). */
@@ -2120,6 +2122,12 @@ t_parse_message_value(text_in *t, pbw_message *msg, const pbw_field *field,
         t->cur.p++;
         t_skip(&t->cur);
     }
+    /* Like the reference, a repeated message or group also accepts the
+     * list form (`subs [{...}, ...]`); a singular one never does. */
+    if (field->label == PBW_LABEL_REPEATED &&
+        t->cur.p < t->cur.end && *t->cur.p == '[') {
+        return t_parse_list(t, msg, field, depth);
+    }
     if (t->cur.p >= t->cur.end ||
         (*t->cur.p != '{' && *t->cur.p != '<')) {
         return PBW_ERR_INVALID;
@@ -2168,7 +2176,8 @@ t_parse_message_value(text_in *t, pbw_message *msg, const pbw_field *field,
 
 /* Parses a `[a, b]` list for a repeated scalar field. */
 static pbw_status
-t_parse_list(text_in *t, pbw_message *msg, const pbw_field *field)
+t_parse_list(text_in *t, pbw_message *msg, const pbw_field *field,
+             uint32_t depth)
 {
     t_skip(&t->cur);
     if (t->cur.p >= t->cur.end || *t->cur.p != '[') {
@@ -2200,7 +2209,8 @@ t_parse_list(text_in *t, pbw_message *msg, const pbw_field *field)
                     if (slot == NULL) {
                         return PBW_ERR_NOMEM;
                     }
-                    status = t_parse_message_body(t, slot, 0, closer);
+                    status = t_parse_message_body(t, slot, depth + 1,
+                                                  closer);
                     if (status != PBW_OK) {
                         pbw_message_free(slot);
                         return status;
@@ -2449,7 +2459,7 @@ t_parse_message_body(text_in *t, pbw_message *msg, uint32_t depth,
                 t_skip(&t->cur);
                 if (t->cur.p < t->cur.end && *t->cur.p == '[') {
                     t->cur = save;
-                    status = t_parse_list(t, msg, field);
+                    status = t_parse_list(t, msg, field, depth);
                 } else {
                     t->cur = save;
                     status = t_parse_scalar_value(t, msg, field);

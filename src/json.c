@@ -89,28 +89,13 @@ j_camel_name(const char *name, char *out, size_t cap)
     return n;
 }
 
-/* The reference printer's PascalCase fix: when the proto name starts with an
- * uppercase letter but its json name does not, the printed key is the proto
- * name with its first letter uppercased. Otherwise the json name wins. */
+/* Field names print as their jsonName: protoc's ToCamelCase with a
+ * lowercased first letter is j_camel_name() below, used for parsing;
+ * printing keeps the mapping j_json_name() computes. */
 static void
 j_print_name(const pbw_field *field, char *out, size_t cap)
 {
     j_json_name(field->name, out, cap);
-    if (field->name[0] != '\0' && isupper((unsigned char)field->name[0]) &&
-        out[0] != '\0' && !isupper((unsigned char)out[0])) {
-        size_t i;
-
-        for (i = 0; field->name[i] != '\0'; i++) {
-            if (i + 1 >= cap) {
-                break;
-            }
-            out[i] = field->name[i];
-        }
-        if (i < cap) {
-            out[i] = '\0';
-        }
-        out[0] = (char)toupper((unsigned char)out[0]);
-    }
 }
 
 /* The reference parser matches camelCase names, then proto names, then json
@@ -2265,10 +2250,14 @@ j_skip_value(j_in *j)
                 j->depth--;
                 return st;
             }
-            if (j_expect_ch(j, ':') != PBW_OK ||
-                j_skip_value(j) != PBW_OK) {
+            if (j_expect_ch(j, ':') != PBW_OK) {
                 j->depth--;
                 return PBW_ERR_INVALID;
+            }
+            st = j_skip_value(j);
+            if (st != PBW_OK) {
+                j->depth--;
+                return st == PBW_ERR_LIMIT ? st : PBW_ERR_INVALID;
             }
             j_skip(&j->cur);
             if (j->cur.p < j->cur.end && *j->cur.p == ',') {
@@ -3324,25 +3313,31 @@ j_parse_value_msg(j_in *j, pbw_message *msg)
         return j_store_uint(j, msg, f4, 0);
     case JK_OBJ: {
         pbw_message *sub = pbw_message_new(f5->sub);
+        pbw_status st;
 
         if (sub == NULL) {
             return PBW_ERR_NOMEM;
         }
-        if (j_parse_message(j, sub) != PBW_OK) {
+        /* A depth-limit breach stays LIMIT so callers (and users) can
+         * tell unbounded input from malformed input. */
+        st = j_parse_message(j, sub);
+        if (st != PBW_OK) {
             pbw_message_free(sub);
-            return PBW_ERR_INVALID;
+            return st == PBW_ERR_LIMIT ? st : PBW_ERR_INVALID;
         }
         return j_store_message(j, msg, f5, sub);
     }
     case JK_ARR: {
         pbw_message *sub = pbw_message_new(f6->sub);
+        pbw_status st;
 
         if (sub == NULL) {
             return PBW_ERR_NOMEM;
         }
-        if (j_parse_message(j, sub) != PBW_OK) {
+        st = j_parse_message(j, sub);
+        if (st != PBW_OK) {
             pbw_message_free(sub);
-            return PBW_ERR_INVALID;
+            return st == PBW_ERR_LIMIT ? st : PBW_ERR_INVALID;
         }
         return j_store_message(j, msg, f6, sub);
     }
@@ -3450,11 +3445,12 @@ j_parse_struct(j_in *j, pbw_message *msg)
             return PBW_ERR_NOMEM;
         }
         /* The value parses as a Value message, like a map value would. */
-        if (j_parse_message(j, val) != PBW_OK) {
+        st = j_parse_message(j, val);
+        if (st != PBW_OK) {
             pbw_message_free(val);
             pbw_message_free(item);
             j->depth--;
-            return PBW_ERR_INVALID;
+            return st == PBW_ERR_LIMIT ? st : PBW_ERR_INVALID;
         }
         st = j_store_message(j, item, value_field, val);
         if (st != PBW_OK) {
@@ -3742,40 +3738,14 @@ j_parse_map(j_in *j, pbw_message *msg, const pbw_field *field)
             j->depth--;
             return PBW_ERR_INVALID;
         }
-        /* Duplicate map keys fail. */
-        {
-            pbw_value *list = pbw_message_list_for(msg, field);
-
-            if (list == NULL) {
-                pbw_buf_free(&key);
-                j->depth--;
-                return PBW_ERR_NOMEM;
-            }
-            for (i = 0; i < list->as.list.len; i++) {
-                const pbw_value *e = list->as.list.items[i];
-                const pbw_value *k;
-
-                if (e == NULL || e->kind != PBW_VALUE_MESSAGE ||
-                    e->as.msg == NULL) {
-                    continue;
-                }
-                k = pbw_message_get(e->as.msg, 1);
-                if (k != NULL && k->kind == PBW_VALUE_BYTES &&
-                    k->as.bytes.len == key.len &&
-                    memcmp(k->as.bytes.data, key.data, key.len) == 0) {
-                    pbw_buf_free(&key);
-                    j->depth--;
-                    return PBW_ERR_INVALID;
-                }
-            }
-        }
         item = pbw_message_new(entry);
         if (item == NULL) {
             pbw_buf_free(&key);
             j->depth--;
-            return PBW_ERR_NOMEM;
+            return PBW_ERR_INVALID;
         }
-        /* Keys compare by their stored form; integers normalize first. */
+        /* Keys compare by their stored form; integers normalize first, so
+         * "1" and "01" collide exactly like two identical strings. */
         if (j_parse_map_key((const char *)key.data, key.len, key_field,
                             item) != PBW_OK) {
             pbw_message_free(item);
@@ -3784,6 +3754,51 @@ j_parse_map(j_in *j, pbw_message *msg, const pbw_field *field)
             return PBW_ERR_INVALID;
         }
         pbw_buf_free(&key);
+        /* Duplicate map keys fail. Keys compare by their stored form;
+         * integers normalize first, so "1" and "01" collide exactly
+         * like two identical strings. The loop stays inline (no helper
+         * call): large maps scan this per key. */
+        {
+            pbw_value *list = pbw_message_list_for(msg, field);
+            const pbw_value *knew;
+
+            if (list == NULL) {
+                pbw_message_free(item);
+                j->depth--;
+                return PBW_ERR_NOMEM;
+            }
+            knew = pbw_message_get(item, 1);
+            if (knew != NULL &&
+                (knew->kind == PBW_VALUE_BYTES ||
+                 knew->kind == PBW_VALUE_UINT)) {
+                for (i = 0; i < list->as.list.len; i++) {
+                    const pbw_value *e = list->as.list.items[i];
+                    const pbw_value *k;
+
+                    if (e == NULL || e->kind != PBW_VALUE_MESSAGE ||
+                        e->as.msg == NULL) {
+                        continue;
+                    }
+                    k = pbw_message_get(e->as.msg, 1);
+                    if (k == NULL || k->kind != knew->kind) {
+                        continue;
+                    }
+                    if (k->kind == PBW_VALUE_BYTES) {
+                        if (k->as.bytes.len == knew->as.bytes.len &&
+                            memcmp(k->as.bytes.data, knew->as.bytes.data,
+                                   k->as.bytes.len) == 0) {
+                            pbw_message_free(item);
+                            j->depth--;
+                            return PBW_ERR_INVALID;
+                        }
+                    } else if (k->as.u64 == knew->as.u64) {
+                        pbw_message_free(item);
+                        j->depth--;
+                        return PBW_ERR_INVALID;
+                    }
+                }
+            }
+        }
         if (value_field->type == PBW_TYPE_ENUM) {
             int stored = 0;
 
@@ -4227,13 +4242,16 @@ j_parse_field_value(j_in *j, pbw_message *msg, const pbw_field *field,
         }
         {
             pbw_message *sub = pbw_message_new(field->sub);
+            pbw_status st;
 
             if (sub == NULL) {
                 return PBW_ERR_NOMEM;
             }
-            if (j_parse_message(j, sub) != PBW_OK) {
+            /* Like j_parse_value_msg: a depth breach stays LIMIT. */
+            st = j_parse_message(j, sub);
+            if (st != PBW_OK) {
                 pbw_message_free(sub);
-                return PBW_ERR_INVALID;
+                return st == PBW_ERR_LIMIT ? st : PBW_ERR_INVALID;
             }
             return j_store_message(j, msg, field, sub);
         }
@@ -4356,10 +4374,11 @@ j_parse_list_of(j_in *j, pbw_message *msg)
             j->depth--;
             return PBW_ERR_NOMEM;
         }
-        if (j_parse_value_msg(j, item) != PBW_OK) {
+        st = j_parse_value_msg(j, item);
+        if (st != PBW_OK) {
             pbw_message_free(item);
             j->depth--;
-            return PBW_ERR_INVALID;
+            return st == PBW_ERR_LIMIT ? st : PBW_ERR_INVALID;
         }
         st = j_store_message(j, msg, entry_field, item);
         if (st != PBW_OK) {
@@ -4420,9 +4439,13 @@ pbw_json_parse_opts(const pbw_descriptor *desc, const char *text,
         options != NULL && options->ignore_unknown_fields;
     j.depth = 0;
     j.dot = pbw_locale_dot();
-    if (j_parse_message(&j, msg) != PBW_OK) {
-        pbw_message_free(msg);
-        return PBW_ERR_INVALID;
+    {
+        pbw_status st = j_parse_message(&j, msg);
+
+        if (st != PBW_OK) {
+            pbw_message_free(msg);
+            return st;
+        }
     }
     j_skip(&j.cur);
     if (j.cur.p != j.cur.end) {
