@@ -32,6 +32,7 @@ Run `make tests` and `make c-tests` after any C or Erlang change; run `make c-fo
 | `c_src/ep_cache.c` | Schema node cache (lookup by message id / name) |
 | `c_src/ep_encoder.c` / `c_src/ep_decoder.c` | Wire format codec |
 | `c_src/ep_node.c` | Schema node tree, reference counting |
+| `c_src/core/` | Vendored copy of the C core (`include/` + `src/*.c/*.h`); the NIF builds from it so the Hex package compiles standalone. Keep byte-identical to the repo root: the NIF build fails on drift (`core-sync-check`) |
 | `test/` | EUnit, one module per concern: `ep_api_tests`, `ep_schema_tests`, `ep_validation_tests`, `ep_gpb_tests`, `ep_gpb_compile_parity_tests`, `ep_wire_parity_tests`, `ep_wire_edge_case_tests`, `ep_concurrency_tests`, `ep_proper_encode_tests` / `ep_proper_decode_tests` (+ shared `ep_test_helpers`, `ep_proper_gen`) |
 | `c_src_tests/` | C unit tests (built with `EPB_UNIT_TEST`) |
 | `benchmarks/` | `proto-bench` suite on `bindings/c/tests/data/matrix3.proto` against gpb and gpb NIF |

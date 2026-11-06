@@ -1,0 +1,75 @@
+name: Publish hotfix
+
+# One-off single-binding publish for a tag whose normal Release already ran.
+# Failed jobs cannot use `gh run rerun` once the fix lands after the tag
+# (reruns reuse the tag's workflow file), and dispatching Release would
+# republish every registry. Dispatch with the tag and exactly one binding;
+# nothing else runs. The tree published is the dispatch ref, so VERSION must
+# still equal the tag (cut no release in between). If the NIF package
+# changed, dispatch binding=erlang first, then binding=elixir.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to publish for (VERSION must still equal it)"
+        required: true
+        default: "v0.1.12"
+      binding:
+        description: "Binding to publish"
+        required: true
+        default: "elixir"
+        type: choice
+        options: [elixir, erlang]
+
+jobs:
+  erlang:
+    name: Hex (bindings/erlang, replace)
+    if: inputs.binding == 'erlang'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Tree must still be the tag's version
+        run: |
+          ver="$(tr -d ' \t\n' < VERSION)"
+          [ "v$ver" = "${{ inputs.tag }}" ] || { echo "VERSION $ver != ${{ inputs.tag }}, refusing" >&2; exit 1; }
+          ./scripts/sync-versions.sh --check
+      - uses: erlef/setup-beam@v1.24.0
+        with:
+          otp-version: "29"
+          version-type: loose
+      - name: Publish (replace the broken tarball)
+        env:
+          HEX_API_KEY: ${{ secrets.HEX_API_KEY }}
+        run: |
+          [ -n "$HEX_API_KEY" ] || { echo "HEX_API_KEY unset, skipping"; exit 0; }
+          # --replace overwrites the already-published VERSION with the fixed
+          # tree (vendored C core); a no-op when the version is not on Hex yet.
+          (cd bindings/erlang && make ./rebar3 >/dev/null && ./rebar3 hex publish --replace --yes)
+
+  elixir:
+    name: Hex (bindings/elixir)
+    if: inputs.binding == 'elixir'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Tree must still be the tag's version
+        run: |
+          ver="$(tr -d ' \t\n' < VERSION)"
+          [ "v$ver" = "${{ inputs.tag }}" ] || { echo "VERSION $ver != ${{ inputs.tag }}, refusing" >&2; exit 1; }
+          ./scripts/sync-versions.sh --check
+      - uses: erlef/setup-beam@v1.24.0
+        with:
+          otp-version: "29"
+          elixir-version: "1.20"
+          version-type: loose
+      - name: Publish
+        env:
+          HEX_API_KEY: ${{ secrets.HEX_API_KEY }}
+        run: |
+          [ -n "$HEX_API_KEY" ] || { echo "HEX_API_KEY unset, skipping"; exit 0; }
+          # The image ships its own Erlang/Elixir; setup-beam's pair must win.
+          # Absolute paths leave no doubt which mix runs. The committed
+          # mix.lock pins :pbwire to an older line, so update to the
+          # just-published VERSION instead of fetching the lock.
+          MIX="$INSTALL_DIR_FOR_ELIXIR/bin/mix"
+          (cd bindings/elixir && "$MIX" deps.update pbwire && "$MIX" hex.publish --yes)
