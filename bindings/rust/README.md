@@ -63,14 +63,14 @@ performance numbers; higher is better, MB/s over wire bytes:
 
 | payload | op | pbwire-rust (MB/s, x protobuf-rust) | protobuf-rust (MB/s) | prost (MB/s) |
 |---|---|---|---|---|
-| 136 B | encode | 1830.6 (1.39x) | 1319.7 | 1592.0 |
-| 136 B | decode | 943.2 (1.24x) | 760.7 | 924.6 |
-| 174 B | encode | 1736.3 (1.28x) | 1358.7 | 1545.9 |
-| 174 B | decode | 821.0 (1.40x) | 587.5 | 657.6 |
-| 2469 B | encode | 1696.1 (2.05x) | 828.5 | 1470.1 |
-| 2469 B | decode | 637.1 (1.70x) | 374.0 | 355.6 |
-| 74913 B | encode | 1596.5 (1.84x) | 866.2 | 1468.1 |
-| 74913 B | decode | 669.0 (1.69x) | 396.4 | 407.7 |
+| 136 B | encode | 1962.9 (1.5x) | 1288.1 | 1601.8 |
+| 136 B | decode | 1169.9 (1.5x) | 775.2 | 941.0 |
+| 174 B | encode | 1870.2 (1.4x) | 1338.7 | 1470.4 |
+| 174 B | decode | 963.1 (1.7x) | 570.7 | 655.5 |
+| 2469 B | encode | 1532.9 (1.8x) | 838.7 | 1248.4 |
+| 2469 B | decode | 682.0 (1.8x) | 370.2 | 365.5 |
+| 74913 B | encode | 1398.4 (1.6x) | 849.5 | 1296.6 |
+| 74913 B | decode | 729.1 (1.8x) | 406.1 | 390.3 |
 
 `set_str` rejects a string containing a NUL byte (it would truncate on the way
 to C); use `set_bytes` for binary payloads, including on a `string` field.

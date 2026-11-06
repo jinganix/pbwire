@@ -205,14 +205,14 @@ the struct encoder writes in one pass:
 
 | payload | op | pbwire-c (MB/s, x gen) | protoc gen (MB/s) |
 |---|---|---|---|
-| 136 B | encode | 1669.6 (1.22x) | 1364.9 |
-| 136 B | decode | 1120.9 (1.39x) | 809.1 |
-| 174 B | encode | 1637.2 (1.22x) | 1338.4 |
-| 174 B | decode | 1017.4 (1.33x) | 765.1 |
-| 2469 B | encode | 1187.7 (1.35x) | 877.8 |
-| 2469 B | decode | 779.6 (1.95x) | 399.7 |
-| 74913 B | encode | 1444.7 (1.58x) | 911.5 |
-| 74913 B | decode | 865.1 (2.26x) | 383.3 |
+| 136 B | encode | 1476.8 (1.0x) | 1416.4 |
+| 136 B | decode | 1090.8 (1.2x) | 894.2 |
+| 174 B | encode | 1441.1 (1.0x) | 1407.5 |
+| 174 B | decode | 1025.0 (1.3x) | 799.8 |
+| 2469 B | encode | 1064.7 (1.2x) | 919.3 |
+| 2469 B | decode | 812.4 (2.0x) | 401.8 |
+| 74913 B | encode | 1213.2 (1.3x) | 931.8 |
+| 74913 B | decode | 899.1 (2.3x) | 389.2 |
 
 The harness also prints a `pbwire-c1` block: the one-shot API, which compiles
 the layout on every call and mallocs every value. It is 3-5x slower, which is

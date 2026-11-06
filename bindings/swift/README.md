@@ -136,14 +136,14 @@ MB/s over wire bytes:
 
 | payload | op | pbwire-swift (MB/s, x swift-protobuf) | swift-protobuf (MB/s) |
 |---|---|---|---|
-| 136 B | encode | 974.5 (2.3x) | 430.5 |
-| 136 B | decode | 788.7 (3.3x) | 241.9 |
-| 174 B | encode | 1051.0 (3.3x) | 316.5 |
-| 174 B | decode | 717.3 (3.7x) | 195.8 |
-| 2469 B | encode | 1044.9 (4.0x) | 264.5 |
-| 2469 B | decode | 622.1 (3.2x) | 191.9 |
-| 74913 B | encode | 1272.7 (4.6x) | 277.5 |
-| 74913 B | decode | 537.9 (2.5x) | 217.1 |
+| 136 B | encode | 1148.0 (2.5x) | 452.5 |
+| 136 B | decode | 974.2 (3.9x) | 251.1 |
+| 174 B | encode | 1199.0 (3.6x) | 329.0 |
+| 174 B | decode | 873.0 (4.4x) | 197.9 |
+| 2469 B | encode | 1339.3 (5.0x) | 268.1 |
+| 2469 B | decode | 662.5 (3.3x) | 201.3 |
+| 74913 B | encode | 1543.2 (5.5x) | 283.0 |
+| 74913 B | decode | 623.9 (2.7x) | 232.1 |
 
 The wrapper adds one Swift object per call and no copy: `encode` hands the
 malloc'd buffer the C encoder already filled to `Data` with a free

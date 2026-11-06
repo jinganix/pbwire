@@ -184,24 +184,24 @@ Lua 5.5.1); higher is better, MB/s over wire bytes:
 
 | payload | op | pbwire-lua (MB/s, x lua-protobuf) | lua-protobuf (MB/s) |
 |---|---|---|---|
-| 136 B | encode | 84.7 (0.64x) | 132.3 |
-| 136 B | encode_msg | 933.9 (7.06x) | 132.3 |
-| 136 B | decode | 101.2 (1.14x) | 88.6 |
-| 174 B | encode | 97.3 (0.68x) | 144.0 |
-| 174 B | encode_msg | 995.0 (6.91x) | 144.0 |
-| 174 B | decode | 101.6 (1.14x) | 89.3 |
-| 2469 B | encode | 135.3 (0.79x) | 170.4 |
-| 2469 B | encode_msg | 1209.5 (7.10x) | 170.4 |
-| 2469 B | decode | 108.3 (1.20x) | 90.3 |
-| 74913 B | encode | 150.0 (0.79x) | 189.9 |
-| 74913 B | encode_msg | 1550.3 (8.17x) | 189.9 |
-| 74913 B | decode | 108.0 (1.15x) | 94.0 |
+| 136 B | encode | 133.7 (1.1x) | 126.6 |
+| 136 B | encode_msg | 912.5 (7.2x) | 126.6 |
+| 136 B | decode | 99.8 (1.1x) | 89.8 |
+| 174 B | encode | 150.5 (1.1x) | 141.6 |
+| 174 B | encode_msg | 995.0 (7.0x) | 141.6 |
+| 174 B | decode | 100.4 (1.1x) | 92.0 |
+| 2469 B | encode | 180.9 (1.1x) | 172.0 |
+| 2469 B | encode_msg | 1200.1 (7.0x) | 172.0 |
+| 2469 B | decode | 105.6 (1.2x) | 88.0 |
+| 74913 B | encode | 198.4 (1.0x) | 191.7 |
+| 74913 B | encode_msg | 1544.4 (8.1x) | 191.7 |
+| 74913 B | decode | 106.3 (1.2x) | 91.5 |
 
 `encode_msg` is the builder hot path: one core walk plus one buffer malloc
 per send, no table conversion, which is why it runs at the core's own
 ~1.0-1.5 GB/s. The table path converts table→tree→wire (two passes where
-the baseline writes one), so it trails ~0.6-0.8x -- the same structural
-reason the Python dict path trails upb. Decode wins at every tier because it
+the baseline writes one); it used to trail ~0.6-0.8x and now leads 1.0x-1.2x
+across tiers. Decode wins at every tier because it
 is one validating parse straight into tables with no tree kept.
 
 ## Layout

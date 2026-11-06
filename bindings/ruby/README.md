@@ -185,14 +185,14 @@ source for all performance numbers; higher is better, MB/s over wire bytes:
 
 | payload | op | pbwire-ruby (MB/s, x gem) | gem (MB/s) |
 |---|---|---|---|
-| 136 B | encode | 896.1 (1.29x) | 695.9 |
-| 136 B | decode | 392.8 (1.61x) | 243.4 |
-| 174 B | encode | 858.1 (1.11x) | 771.0 |
-| 174 B | decode | 416.4 (1.68x) | 247.5 |
-| 2469 B | encode | 1418.6 (1.16x) | 1222.6 |
-| 2469 B | decode | 924.3 (1.88x) | 492.1 |
-| 74913 B | encode | 1607.8 (1.22x) | 1312.4 |
-| 74913 B | decode | 1122.2 (1.67x) | 673.3 |
+| 136 B | encode | 1015.0 (1.4x) | 741.1 |
+| 136 B | decode | 462.9 (1.8x) | 263.5 |
+| 174 B | encode | 956.9 (1.2x) | 803.2 |
+| 174 B | decode | 514.3 (1.9x) | 267.4 |
+| 2469 B | encode | 1473.1 (1.2x) | 1256.4 |
+| 2469 B | decode | 970.6 (1.8x) | 528.9 |
+| 74913 B | encode | 1582.4 (1.2x) | 1310.6 |
+| 74913 B | decode | 1170.0 (1.7x) | 694.7 |
 
 ```shell
 gem install google-protobuf
@@ -204,7 +204,7 @@ The win is architectural, not a micro-optimization:
 - **Encoding** writes one pass from the C tree straight into the String that is
   returned; there is no intermediate buffer and no per-field Ruby call.
 - **Decoding** is one validating scan that records where each wire field lives;
-  the gem materializes every field, which is what the 0.44-0.69x numbers mean.
+  the gem materializes every field.
 
 ## Conformance
 

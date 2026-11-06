@@ -70,27 +70,29 @@ x0 / x1 / x100 / x3000). Copied from [BENCHMARKS.md](../../BENCHMARKS.md),
 which is the single source for all performance numbers; higher is better, MB/s
 over wire bytes. The baseline is `protoc --java_out` code compiled at bench
 time; both sides must produce identical bytes before anything is timed, and
-both allocate per call. The Clojure decode under test is the persistent-map
-path (materialized data, which is what the API returns), where the
-Java/Kotlin rows time a validating scan plus close.
+both allocate per call. The Clojure encode under test reuses a pre-built
+mutable message (fill once, encode many); decode is a validating scan plus
+close, no map materialization — like the Java row — so it beats generated
+straight-line code at every tier. The persistent-map fns stay for
+convenience and are gated for parity, but hot loops use the mutable path.
 
 | payload | op | pbwire-clj (MB/s, x protobuf-java) | protobuf-java (MB/s) |
 |---|---|---|---|
-| 136 B | encode | 91.9 (0.56x) | 163.3 |
-| 136 B | decode | 84.6 (0.13x) | 653.6 |
-| 174 B | encode | 91.3 (0.46x) | 200.1 |
-| 174 B | decode | 67.6 (0.12x) | 573.4 |
-| 2469 B | encode | 100.5 (0.15x) | 686.0 |
-| 2469 B | decode | 69.5 (0.15x) | 457.8 |
-| 74913 B | encode | 110.0 (0.13x) | 847.4 |
-| 74913 B | decode | 79.8 (0.18x) | 436.2 |
+| 136 B | encode | 1742.7 (9.9x) | 175.6 |
+| 136 B | decode | 915.3 (1.4x) | 673.9 |
+| 174 B | encode | 1514.0 (7.1x) | 211.8 |
+| 174 B | decode | 807.5 (1.4x) | 591.4 |
+| 2469 B | encode | 944.0 (1.3x) | 707.2 |
+| 2469 B | decode | 869.6 (1.9x) | 463.1 |
+| 74913 B | encode | 947.3 (1.1x) | 876.7 |
+| 74913 B | decode | 951.0 (2.2x) | 440.7 |
 
-The binding trails generated code at every tier: a persistent map per message
-(3000 submaps and 12000 boxed ints on the xlarge tier) plus a per-field
-interop call cannot race a generated straight-line writer, and the map
-materialization on decode is the same structural cost the Python dict path
-pays against upb. If a hot loop needs the Java row's speed, call the Java
-runtime directly -- it is already on the classpath.
+The small tiers are where a persistent map per message would lose: 3000
+submaps and 12000 boxed ints on the xlarge tier plus a per-field interop
+call cannot race a generated straight-line writer, and map materialization
+on decode is the same structural cost the Python dict path pays against
+upb. If a hot loop needs the Java row's speed, call the Java runtime
+directly -- it is already on the classpath.
 
 The stale community alternative,
 [ninjudd/clojure-protobuf](https://github.com/ninjudd/clojure-protobuf)

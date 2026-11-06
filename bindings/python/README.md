@@ -131,22 +131,22 @@ both dict representations before timing.
 
 | payload | op | pbwire-py (MB/s, x upb) | upb (MB/s) |
 |---|---|---|---|
-| 136 B | encode(data) | 298.9 (5.7x) | 52.3 |
-| 136 B | decode(bytes) | 689.3 (1.20x) | 575.5 |
-| 136 B | to_dict(bytes) | 162.0 (4.9x) | 33.3 |
-| 136 B | encode(parsed) | 3099.8 (4.1x) | 747.6 |
-| 174 B | encode(data) | 342.2 (5.6x) | 60.6 |
-| 174 B | decode(bytes) | 724.9 (1.25x) | 580.8 |
-| 174 B | to_dict(bytes) | 156.7 (5.7x) | 27.6 |
-| 174 B | encode(parsed) | 4005.2 (4.7x) | 860.8 |
-| 2469 B | encode(data) | 495.3 (6.5x) | 76.5 |
-| 2469 B | decode(bytes) | 1167.1 (1.60x) | 730.5 |
-| 2469 B | to_dict(bytes) | 195.9 (4.8x) | 40.4 |
-| 2469 B | encode(parsed) | 30710.1 (22x) | 1400.5 |
-| 74913 B | encode(data) | 564.4 (6.5x) | 86.6 |
-| 74913 B | decode(bytes) | 1366.0 (1.69x) | 810.0 |
-| 74913 B | to_dict(bytes) | 170.6 (3.8x) | 44.6 |
-| 74913 B | encode(parsed) | 97683.0 (63x) | 1540.4 |
+| 136 B | encode(data) | 291.4 (5.7x) | 51.5 |
+| 136 B | decode(bytes) | 663.7 (1.2x) | 568.6 |
+| 136 B | to_dict(bytes) | 161.4 (4.8x) | 33.3 |
+| 136 B | encode(parsed) | 3087.4 (4.1x) | 751.3 |
+| 174 B | encode(data) | 334.7 (5.7x) | 58.4 |
+| 174 B | decode(bytes) | 727.6 (1.3x) | 573.3 |
+| 174 B | to_dict(bytes) | 154.5 (5.6x) | 27.6 |
+| 174 B | encode(parsed) | 3897.8 (4.8x) | 819.8 |
+| 2469 B | encode(data) | 497.8 (6.6x) | 75.2 |
+| 2469 B | decode(bytes) | 1127.3 (1.6x) | 717.7 |
+| 2469 B | to_dict(bytes) | 200.3 (4.8x) | 41.4 |
+| 2469 B | encode(parsed) | 31535.5 (22x) | 1430.8 |
+| 74913 B | encode(data) | 593.1 (6.9x) | 85.8 |
+| 74913 B | decode(bytes) | 1376.6 (1.7x) | 810.5 |
+| 74913 B | to_dict(bytes) | 173.2 (4.0x) | 43.5 |
+| 74913 B | encode(parsed) | 94176.6 (63x) | 1500.0 |
 
 Rows are the same user-visible task on both sides: `encode(data)` starts from
 the same dict, `decode(bytes)` ends with an in-memory message, `to_dict(bytes)`

@@ -82,19 +82,19 @@ performance numbers; higher is better, MB/s over wire bytes:
 
 | payload | op | pbwire-php-c (MB/s, x protobuf-php-c) | protobuf-php-c (MB/s) |
 |---|---|---|---|
-| 136 B | encode | 1370.4 (1.63x) | 842.4 |
-| 136 B | decode | 683.6 (1.65x) | 414.6 |
-| 174 B | encode | 1299.6 (1.41x) | 921.4 |
-| 174 B | decode | 637.9 (1.56x) | 407.8 |
-| 2469 B | encode | 1618.7 (1.24x) | 1300.5 |
-| 2469 B | decode | 607.8 (1.21x) | 501.0 |
-| 74913 B | encode | 1478.3 (1.11x) | 1326.1 |
-| 74913 B | decode | 661.1 (1.15x) | 572.7 |
+| 136 B | encode | 1493.8 (1.7x) | 864.1 |
+| 136 B | decode | 860.6 (2.0x) | 435.3 |
+| 174 B | encode | 1349.9 (1.5x) | 922.8 |
+| 174 B | decode | 772.1 (1.8x) | 422.9 |
+| 2469 B | encode | 1406.4 (1.1x) | 1280.4 |
+| 2469 B | decode | 624.3 (1.2x) | 503.9 |
+| 74913 B | encode | 1378.4 (1.1x) | 1295.8 |
+| 74913 B | decode | 681.7 (1.2x) | 561.4 |
 
 The rows above are the C extension (`pbwire-php-c`); `bench.sh` times the
 FFI wrapper first (`pbwire-php` rows) when `phpize` is missing or the build
 fails. The FFI version pays one trampoline per call, so it trails on the
-small tiers and converges as the payload grows (xlarge 1.09x / 1.23x vs the
+small tiers and converges as the payload grows (xlarge 0.90x / 1.30x vs the
 same C-extension baseline in the same harness).
 
 Without the C extension the same harness measures the pure-PHP runtime
