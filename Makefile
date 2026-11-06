@@ -26,7 +26,7 @@ ifeq ($(UNAME_S),Darwin)
 SHLIB := build/libpbwire.1.dylib
 SHLIB_LINK := build/libpbwire.dylib
 SHLIB_FLAGS := -dynamiclib -install_name @rpath/libpbwire.1.dylib \
-	-compatibility_version 1 -current_version 0.1.10
+	-compatibility_version 1 -current_version 0.1.11
 else
 SHLIB := build/libpbwire.so.1
 SHLIB_LINK := build/libpbwire.so
@@ -511,7 +511,7 @@ elixir-bench:
 	./scripts/bench-run.sh --binding elixir -- make -C bindings/elixir bench
 
 zig-bench:
-	./scripts/bench-run.sh --binding zig -- ./bindings/zig/benchmarks/bench.sh
+	./scripts/bench-run.sh --binding zig -- ./bindings/zig/benchmarks/bench.sh --baseline
 
 fsharp-bench:
 	./scripts/bench-run.sh --binding fsharp -- ./bindings/fsharp/benchmarks/bench.sh

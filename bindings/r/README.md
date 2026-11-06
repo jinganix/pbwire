@@ -132,9 +132,9 @@ varints the reference C++ testee truncates identically); only JSPB answers
 
 `benchmarks/bench.R` runs the four standard tiers from
 [`BENCHMARKS.md`](../../BENCHMARKS.md) against RProtoBuf when it is installed
-(any API mismatch skips the baseline columns instead of failing the run).
-The gate is tier size (the bytes are canonical) plus a full-field expectation
-check. Not yet run: R is not installed on this machine.
+(any load failure skips the baseline columns instead of failing the run).
+The gate is tier size (the bytes are canonical), byte equality with the
+baseline, plus a full-field expectation check.
 
 ## Layout
 

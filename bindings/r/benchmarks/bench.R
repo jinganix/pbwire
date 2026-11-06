@@ -43,15 +43,58 @@ fill <- function(repeats) {
 }
 
 # Optional baseline: RProtoBuf on the same matrix3.proto (best effort: any
-# load failure just disables the baseline columns).
+# load failure just disables the baseline columns). R has no uint64, so the
+# u64 max the payload carries as -1 is set from its decimal string, which
+# serializes to the same 10-byte varint; every other field is the same R
+# value pbwire encodes (verified identical on all four tiers before timing).
+# Decode is compared like for like: RProtoBuf::read parses lazily into a
+# Message, while pbwire_decode returns a fully materialized named list, so
+# the baseline side reads every field into the same plain-list shape (a bare
+# read() is faster but hands back no R data; see BENCHMARKS.md). `[[` avoids
+# the `str` field colliding with the Message method of the same name, and
+# absent repeated fields materialize as empty lists, exactly like pbwire.
 has_pb <- FALSE
 pb_encode <- NULL
 pb_decode <- NULL
 tryCatch({
   if (requireNamespace("RProtoBuf", quietly = TRUE)) {
     RProtoBuf::readProtoFiles("../../c/tests/data/matrix3.proto")
-    cls <- "structtest.Scalars3"
-    tib <- RProtoBuf::new(structtest.Scalars3)
+    scalars3 <- RProtoBuf::P("structtest.Scalars3")
+    inner3 <- RProtoBuf::P("structtest.Inner3")
+    pb_encode <- function(tbl) {
+      m <- RProtoBuf::new(scalars3)
+      m$i32 <- tbl$i32; m$i64 <- tbl$i64; m$u32 <- tbl$u32
+      m$u64 <- "18446744073709551615"
+      m$s32 <- tbl$s32; m$s64 <- tbl$s64; m$fx32 <- tbl$fx32; m$fx64 <- tbl$fx64
+      m$sfx32 <- tbl$sfx32; m$sfx64 <- tbl$sfx64; m$f32 <- tbl$f32
+      m$f64 <- tbl$f64; m$flag <- tbl$flag; m$str <- tbl$str
+      m$color <- tbl$color
+      m$inner <- RProtoBuf::new(inner3, name = tbl$inner$name,
+                                value = tbl$inner$value)
+      m$opt_i32 <- tbl$opt_i32; m$opt_str <- tbl$opt_str
+      m$nums <- tbl$nums; m$tags <- tbl$tags
+      m$inners <- lapply(tbl$inners,
+                          function(x) RProtoBuf::new(inner3, name = x$name,
+                                                    value = x$value))
+      m$flags <- tbl$flags
+      RProtoBuf::serialize(m, NULL)
+    }
+    pb_mat_inner <- function(x) list(name = x[["name"]], value = x[["value"]])
+    pb_present <- function(x) if (length(x) == 0) list() else x
+    pb_materialize <- function(m) {
+      list(i32 = m[["i32"]], i64 = m[["i64"]], u32 = m[["u32"]],
+        u64 = m[["u64"]], s32 = m[["s32"]], s64 = m[["s64"]],
+        fx32 = m[["fx32"]], fx64 = m[["fx64"]],
+        sfx32 = m[["sfx32"]], sfx64 = m[["sfx64"]],
+        f32 = m[["f32"]], f64 = m[["f64"]], flag = m[["flag"]],
+        str = m[["str"]], color = m[["color"]],
+        inner = pb_mat_inner(m[["inner"]]),
+        opt_i32 = m[["opt_i32"]], opt_str = m[["opt_str"]],
+        nums = pb_present(m[["nums"]]), tags = pb_present(m[["tags"]]),
+        inners = pb_present(lapply(m[["inners"]], pb_mat_inner)),
+        flags = pb_present(m[["flags"]]))
+    }
+    pb_decode <- function(wire) pb_materialize(RProtoBuf::read(scalars3, wire))
     has_pb <- TRUE
   }
 }, error = function(e) has_pb <<- FALSE)
@@ -111,6 +154,15 @@ for (c in cases) {
     stopifnot(back$inners[[repeats]]$value == repeats)
   }
   stopifnot(identical(bench_encode(back), wire))
+  # Gate the baseline too: same bytes before anything is timed.
+  # Gate the baseline too: same bytes before anything is timed, and the
+  # same materialized list (u64 has no exact R spelling on either side).
+  if (has_pb) {
+    stopifnot(identical(pb_encode(tbl), wire))
+    ref <- bench_decode(wire); got <- pb_decode(wire)
+    ref$u64 <- NULL; got$u64 <- NULL
+    stopifnot(identical(got[names(ref)], ref))
+  }
 
   ec <- calibrate(function() bench_encode(tbl), floor)
   dc <- calibrate(function() bench_decode(wire), floor)

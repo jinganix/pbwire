@@ -4,7 +4,7 @@ defmodule Pbwire.MixProject do
   def project do
     [
       app: :pbwire_elixir,
-      version: "0.1.10",
+      version: "0.1.11",
       elixir: "~> 1.17",
       start_permanent: Mix.env() == :prod,
       deps: deps(),

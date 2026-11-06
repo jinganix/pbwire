@@ -48,7 +48,7 @@ make scala-bench   # Scala binding vs ScalaPB
 make elixir-test   # Elixir binding self-check (struct translation over the shared NIF)
 make elixir-bench  # Elixir binding vs elixir-protobuf
 make zig-test      # Zig binding self-check (static link)
-make zig-bench     # Zig binding, pbwire column only (baseline needs network)
+make zig-bench      # Zig static-link binding vs Arwalk/zig-protobuf
 make fsharp-test   # F# binding self-check (facade over the C# project)
 make fsharp-bench  # F# binding vs Google.Protobuf
 make clojure-test  # Clojure binding self-check (persistent maps over the Java runtime)
@@ -56,7 +56,7 @@ make clojure-bench # Clojure binding vs protobuf-java
 make julia-test    # Julia binding self-check (dlopen + ccall)
 make julia-bench   # Julia binding vs ProtoBuf.jl
 make r-test        # R binding self-check (C extension, named lists)
-make r-bench       # R binding, pbwire column only (no baseline installed)
+make r-bench       # R binding vs RProtoBuf
 make conformance-python  # official suite through the Python binding
 make conformance-ruby    # official suite through the Ruby binding
 make conformance-java    # official suite through the Java binding

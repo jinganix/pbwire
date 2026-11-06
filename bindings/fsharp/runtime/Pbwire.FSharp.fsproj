@@ -8,7 +8,7 @@
     <AssemblyName>Pbwire.FSharp</AssemblyName>
     <!-- Release metadata: Version is kept in sync with the repo-root VERSION
          file by scripts/sync-versions.sh; never edit by hand. -->
-    <Version>0.1.10</Version>
+    <Version>0.1.11</Version>
     <Authors>jinganix</Authors>
     <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
     <RepositoryUrl>https://github.com/jinganix/pbwire</RepositoryUrl>

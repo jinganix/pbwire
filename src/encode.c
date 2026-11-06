@@ -85,22 +85,6 @@ wire_value(pbw_type type, uint64_t u)
     }
 }
 
-/* Local packable check for the encode hot path (the global
- * pbw_is_packable stays for the other translation units). */
-PBW_INLINE int
-enc_packable(pbw_type type)
-{
-    switch (type) {
-    case PBW_TYPE_STRING:
-    case PBW_TYPE_BYTES:
-    case PBW_TYPE_MESSAGE:
-    case PBW_TYPE_GROUP:
-        return 0;
-    default:
-        return 1;
-    }
-}
-
 /* ---------------------------------------------------------------- writing */
 
 /* Rare path of w_reserve(): the buffer has to grow. */
@@ -213,6 +197,37 @@ w_varint_noreserve(writer *w, uint64_t value)
         out[0] = (uint8_t)((value & 0x7f) | 0x80);
         out[1] = (uint8_t)(value >> 7);
         w->pos += 2;
+        return;
+    }
+    /* Unrolled 5-byte and 10-byte stores: 5 bytes cover 35 bits, 10 bytes
+     * are exactly values with bit 63 set; 6-9 bytes keep the loop. */
+    if (value < ((uint64_t)1 << 35)) {
+        uint64_t v = value;
+        size_t nb = v < ((uint64_t)1 << 21) ? 3 : (v < ((uint64_t)1 << 28) ? 4 : 5);
+        out[0] = (uint8_t)((v & 0x7f) | 0x80);
+        out[1] = (uint8_t)(((v >> 7) & 0x7f) | 0x80);
+        out[2] = (uint8_t)(((v >> 14) & 0x7f) | (nb > 3 ? 0x80 : 0));
+        if (nb > 3) {
+            out[3] = (uint8_t)(((v >> 21) & 0x7f) | (nb > 4 ? 0x80 : 0));
+            if (nb > 4) {
+                out[4] = (uint8_t)(v >> 28);
+            }
+        }
+        w->pos += nb;
+        return;
+    }
+    if (value >> 63) {
+        out[0] = (uint8_t)((value & 0x7f) | 0x80);
+        out[1] = (uint8_t)(((value >> 7) & 0x7f) | 0x80);
+        out[2] = (uint8_t)(((value >> 14) & 0x7f) | 0x80);
+        out[3] = (uint8_t)(((value >> 21) & 0x7f) | 0x80);
+        out[4] = (uint8_t)(((value >> 28) & 0x7f) | 0x80);
+        out[5] = (uint8_t)(((value >> 35) & 0x7f) | 0x80);
+        out[6] = (uint8_t)(((value >> 42) & 0x7f) | 0x80);
+        out[7] = (uint8_t)(((value >> 49) & 0x7f) | 0x80);
+        out[8] = (uint8_t)(((value >> 56) & 0x7f) | 0x80);
+        out[9] = (uint8_t)(value >> 63);
+        w->pos += 10;
         return;
     }
     while (value >= 0x80) {
@@ -926,7 +941,7 @@ encode_message(writer *w, const pbw_message *msg, uint32_t depth, int det)
             if (value->kind != PBW_VALUE_LIST || value->as.list.len == 0) {
                 continue;
             }
-            if (field->packed && enc_packable(field->type)) {
+            if (field->packed) {
                 write_packed(w, field, value);
                 continue;
             }
@@ -1088,7 +1103,7 @@ size_message(const pbw_message *msg, uint32_t depth, size_t *out)
                 continue;
             }
             n = value->as.list.len;
-            if (field->packed && enc_packable(field->type)) {
+            if (field->packed) {
                 size_t payload = 0;
 
                 for (j = 0; j < n; j++) {
