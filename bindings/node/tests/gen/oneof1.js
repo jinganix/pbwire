@@ -10,7 +10,7 @@
 // dynamic runtime in <binding>/lib.
 const { _makeClass } = require('../../lib/pbwire-compat.js');
 
-const _DESC_B64 = 'CvUFCgxvbmVvZjEucHJvdG8SCHNwZWN0ZXN0IpUBCgZPbmVvZjESEgoEbmFtZRgBIAEoCVIEbmFtZRISCgNudW0YAiABKAVIAFIDbnVtEhQKBHRleHQYAyABKAlIAFIEdGV4dBIuCgVpbm5lchgEIAEoCzIWLnNwZWN0ZXN0Lk9uZW9mMS5Jbm5lckgAUgVpbm5lchoVCgVJbm5lchIMCgF2GAEgASgFUgF2QgYKBGtpbmRKugQKBhIEAwASAQq6AQoBDBIDAwASGq8BIFNtYWxsIG9uZW9mICsgbmVzdGluZyBmaXh0dXJlIGZvciB0aGUgZ2VuZXJhdGVkIGNvbXBhdCB0ZXN0cyAoVEVTVFNQRUMgVDEtVDUKIGV4dHJhcykuIEtlcHQgaW4gdGVzdGRhdGEgc28gZXZlcnkgYmluZGluZyBzaGFyZXMgdGhlIHNhbWUgc2NoZW1hLCB2YWx1ZXMKIGFuZCByZWZlcmVuY2UgYnl0ZXMuCgoICgECEgMFABEKCgoCBAASBAcAEgEKCgoDBAABEgMHCA4KDAoEBAADABIECAIKAwoMCgUEAAMAARIDCAoPCg0KBgQAAwACABIDCQQQCg4KBwQAAwACAAUSAwkECQoOCgcEAAMAAgABEgMJCgsKDgoHBAADAAIAAxIDCQ4PCgsKBAQAAgASAwwCEgoMCgUEAAIABRIDDAIICgwKBQQAAgABEgMMCQ0KDAoFBAACAAMSAwwQEQoMCgQEAAgAEgQNAhEDCgwKBQQACAABEgMNCAwKCwoEBAACARIDDgQSCgwKBQQAAgEFEgMOBAkKDAoFBAACAQESAw4KDQoMCgUEAAIBAxIDDhARCgsKBAQAAgISAw8EFAoMCgUEAAICBRIDDwQKCgwKBQQAAgIBEgMPCw8KDAoFBAACAgMSAw8SEwoLCgQEAAIDEgMQBBQKDAoFBAACAwYSAxAECQoMCgUEAAIDARIDEAoPCgwKBQQAAgMDEgMQEhNiBnByb3RvMw==';
+const { get_schema } = require('./oneof1_meta.js');
 
 const _ENUMS = {};
 const _REVENUMS = {};
@@ -21,7 +21,7 @@ const _CLASSES = {};
 const Oneof1_Inner_FIELDS = [
   { n: 'v', js: 'v', k: 'i32', rep: false, msg: null, en: null, oneof: null, req: false, has: false, closed: false },
 ];
-const Oneof1_Inner = _makeClass('spectest.Oneof1.Inner', _DESC_B64, Oneof1_Inner_FIELDS);
+const Oneof1_Inner = _makeClass('spectest.Oneof1.Inner', get_schema, Oneof1_Inner_FIELDS);
 _CLASSES['Oneof1_Inner'] = Oneof1_Inner;
 Oneof1_Inner._ENUMS = _ENUMS;
 Oneof1_Inner._REVENUMS = _REVENUMS;
@@ -34,7 +34,7 @@ const Oneof1_FIELDS = [
   { n: 'text', js: 'text', k: 'str', rep: false, msg: null, en: null, oneof: 'kind', req: false, has: true, closed: false },
   { n: 'inner', js: 'inner', k: 'msg', rep: false, msg: 'Oneof1_Inner', en: null, oneof: 'kind', req: false, has: true, closed: false },
 ];
-const Oneof1 = _makeClass('spectest.Oneof1', _DESC_B64, Oneof1_FIELDS);
+const Oneof1 = _makeClass('spectest.Oneof1', get_schema, Oneof1_FIELDS);
 _CLASSES['Oneof1'] = Oneof1;
 Oneof1._ENUMS = _ENUMS;
 Oneof1._REVENUMS = _REVENUMS;

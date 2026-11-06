@@ -441,7 +441,8 @@ main(int argc, char **argv)
             containsObject:@"structtest.Inner3"]);
         PBWGenMatrix3FileSchemaPreload();
         PBWGen_Scalars3 *preBack =
-            [PBWGen_Scalars3 parseFromData:colorWire error:&error];
+            [PBWGen_Scalars3 parseFromData:colorWire
+                                     error:&error];
         CHECK(preBack != nil && preBack.color == 99);
         PBWSchema *extSchema =
             [PBWSchema schemaFromFile:@"tests/data/probe.desc"
@@ -451,7 +452,8 @@ main(int argc, char **argv)
         CHECK(PBWGenMatrix3FileSchema() == extSchema);
         PBWGenMatrix3FileSchemaInit();
         PBWGen_Scalars3 *restored =
-            [PBWGen_Scalars3 parseFromData:colorWire error:&error];
+            [PBWGen_Scalars3 parseFromData:colorWire
+                                     error:&error];
         CHECK(restored != nil && restored.color == 99);
 
         if (failures != 0) {

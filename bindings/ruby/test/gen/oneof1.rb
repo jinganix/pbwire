@@ -5,30 +5,10 @@
 # Do not edit; regenerate from the .proto instead.
 
 require_relative '../../lib/pbwire'
-require 'base64'
+require_relative 'oneof1_meta'
 
 module Pbwire
   module Gen
-    # A decoded 32-bit signed field arrives as unsigned 64-bit bits.
-    def self.i32(value)
-      value = value.to_i
-      value >= 2**31 ? value - 2**32 : value
-    end
-
-    # The embedded FileDescriptorSet: no .desc file at use time.
-    DESC_B64_ONEOF1 = "CvUFCgxvbmVvZjEucHJvdG8SCHNwZWN0ZXN0IpUBCgZPbmVvZjESEgoEbmFtZRgBIAEoCVIEbmFtZRISCgNudW0YAiABKAVIAFIDbnVtEhQKBHRleHQYAyABKAlIAFIEdGV4dBIuCgVpbm5lchgEIAEoCzIWLnNwZWN0ZXN0Lk9uZW9mMS5Jbm5lckgAUgVpbm5lchoVCgVJbm5lchIMCgF2GAEgASgFUgF2QgYKBGtpbmRKugQKBhIEAwASAQq6AQoBDBIDAwASGq8BIFNtYWxsIG9uZW9mICsgbmVzdGluZyBmaXh0dXJlIGZvciB0aGUgZ2VuZXJhdGVkIGNvbXBhdCB0ZXN0cyAoVEVTVFNQRUMgVDEtVDUKIGV4dHJhcykuIEtlcHQgaW4gdGVzdGRhdGEgc28gZXZlcnkgYmluZGluZyBzaGFyZXMgdGhlIHNhbWUgc2NoZW1hLCB2YWx1ZXMKIGFuZCByZWZlcmVuY2UgYnl0ZXMuCgoICgECEgMFABEKCgoCBAASBAcAEgEKCgoDBAABEgMHCA4KDAoEBAADABIECAIKAwoMCgUEAAMAARIDCAoPCg0KBgQAAwACABIDCQQQCg4KBwQAAwACAAUSAwkECQoOCgcEAAMAAgABEgMJCgsKDgoHBAADAAIAAxIDCQ4PCgsKBAQAAgASAwwCEgoMCgUEAAIABRIDDAIICgwKBQQAAgABEgMMCQ0KDAoFBAACAAMSAwwQEQoMCgQEAAgAEgQNAhEDCgwKBQQACAABEgMNCAwKCwoEBAACARIDDgQSCgwKBQQAAgEFEgMOBAkKDAoFBAACAQESAw4KDQoMCgUEAAIBAxIDDhARCgsKBAQAAgISAw8EFAoMCgUEAAICBRIDDwQKCgwKBQQAAgIBEgMPCw8KDAoFBAACAgMSAw8SEwoLCgQEAAIDEgMQBBQKDAoFBAACAwYSAxAECQoMCgUEAAIDARIDEAoPCgwKBQQAAgMDEgMQEhNiBnByb3RvMw=="
-    @_schemas = {}
-    @_types = {}
-    # Schemas and types are cached per descriptor set, so any number
-    # of generated files share this module without collisions.
-    def self._schema(desc_b64)
-      @_schemas[desc_b64] ||= Pbwire::Schema.from_bytes(Base64.strict_decode64(desc_b64))
-    end
-    def self._type(desc_b64, full)
-      @_types[desc_b64] ||= {}
-      @_types[desc_b64][full] ||= _schema(desc_b64).message(full)
-    end
-
     # spectest.Oneof1.Inner
     class Spectest_Oneof1_Inner
       attr_accessor :v

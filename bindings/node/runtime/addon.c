@@ -2241,7 +2241,7 @@ decode_object(napi_env env, napi_callback_info info)
         return out;
     }
     return wire_object_to_js(env, desc->table, (const uint8_t *)data, 0,
-                               (uint32_t)len, 0);
+                             (uint32_t)len, 0);
 }
 
 /* The value of one field of a decoded message. */
