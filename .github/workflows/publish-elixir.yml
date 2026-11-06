@@ -1,0 +1,43 @@
+name: Publish elixir hotfix
+
+# One-off single-binding publish: fixes that land after a tag (e.g. a missing
+# `mix deps.get`) cannot use `gh run rerun` (failed jobs reuse the tag's
+# workflow file), and dispatching Release would republish every registry.
+# Dispatch this with the tag to publish; nothing else runs.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to publish (mix.exs version must match)"
+        required: true
+        default: "v0.1.12"
+
+jobs:
+  elixir:
+    name: Hex (bindings/elixir)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tag }}
+      - name: Version must match the tag
+        run: |
+          ver="$(tr -d ' \t\n' < VERSION)"
+          [ "v$ver" = "${{ inputs.tag }}" ] || { echo "tag ${{ inputs.tag }} != VERSION v$ver" >&2; exit 1; }
+          grep -q "version: \"$ver\"" bindings/elixir/mix.exs || { echo "mix.exs is not $ver" >&2; exit 1; }
+      - uses: erlef/setup-beam@v1.24.0
+        with:
+          otp-version: "29"
+          elixir-version: "1.20"
+          version-type: loose
+      - name: Publish
+        env:
+          HEX_API_KEY: ${{ secrets.HEX_API_KEY }}
+        run: |
+          [ -n "$HEX_API_KEY" ] || { echo "HEX_API_KEY unset, skipping"; exit 0; }
+          # The image ships its own Erlang/Elixir; setup-beam's pair must win.
+          # Absolute paths leave no doubt which mix runs. Use the hex archive
+          # setup-beam just installed: the old 2.0.6 pin ships beams OTP 29
+          # refuses to load.
+          MIX="$INSTALL_DIR_FOR_ELIXIR/bin/mix"
+          (cd bindings/elixir && "$MIX" deps.get && "$MIX" hex.publish --yes)
