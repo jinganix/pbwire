@@ -20,6 +20,9 @@
         "c_src/Makefile",
         "c_src/*.c",
         "c_src/*.h",
+        "c_src/core/include/pbwire.h",
+        "c_src/core/src/*.c",
+        "c_src/core/src/*.h",
         "priv/.gitignore",
         "src/*.app.src",
         "src/*.erl"
