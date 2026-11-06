@@ -14,6 +14,8 @@ MALFORMED_BIN := build/test_malformed
 THREAD_BIN := build/test_threads
 DESC_BIN := build/test_descriptor
 STRUCT_BIN := build/test_struct
+EMBEDDED_BIN := build/test_embedded
+EMBEDDED_EXAMPLE_BIN := build/example_embedded
 EXAMPLE_BIN := build/example_addressbook
 CPP_EXAMPLE_BIN := build/example_addressbook_cpp
 HDRS := include/pbwire.h src/internal.h
@@ -64,13 +66,15 @@ build:
 $(THREAD_BIN): tests/test_threads.c $(TEST_HDRS) $(LIB) | build
 	$(CC) $(CFLAGS) $(CPPFLAGS) -pthread -o $@ $< $(LIB)
 
-test: $(TEST_BIN) $(MALFORMED_BIN) $(THREAD_BIN) $(DESC_BIN) $(STRUCT_BIN) $(EXAMPLE_BIN)
+test: $(TEST_BIN) $(MALFORMED_BIN) $(THREAD_BIN) $(DESC_BIN) $(STRUCT_BIN) $(EMBEDDED_BIN) $(EXAMPLE_BIN) $(EMBEDDED_EXAMPLE_BIN)
 	./$(TEST_BIN)
 	./$(MALFORMED_BIN)
 	./$(THREAD_BIN)
 	./$(DESC_BIN)
 	./$(STRUCT_BIN)
+	./$(EMBEDDED_BIN)
 	./$(EXAMPLE_BIN)
+	./$(EMBEDDED_EXAMPLE_BIN)
 
 # Erlang binding (bindings/erlang): OTP app with its own rebar3 build.
 # Needs Erlang/OTP (CI installs it); rebar3 is bootstrapped by its Makefile.
@@ -106,6 +110,12 @@ $(DESC_BIN): tests/test_descriptor.c $(TEST_HDRS) $(LIB) | build
 C_RUNTIME := bindings/c/runtime/pbw_struct.c
 $(STRUCT_BIN): bindings/c/tests/test_struct.c $(C_RUNTIME) $(LIB) | build
 	$(CC) $(CFLAGS) $(CPPFLAGS) -Ibindings/c/runtime -Ibindings/c/tests -Ibindings/c/examples -o $@ bindings/c/tests/test_struct.c $(C_RUNTIME) $(LIB)
+
+$(EMBEDDED_BIN): bindings/embedded/tests/test_embedded.c bindings/embedded/runtime/pbwe.c $(LIB) | build
+	$(CC) $(CFLAGS) $(CPPFLAGS) -Iinclude -Ibindings/embedded/runtime -o $@ bindings/embedded/tests/test_embedded.c bindings/embedded/runtime/pbwe.c $(LIB)
+
+$(EMBEDDED_EXAMPLE_BIN): bindings/embedded/examples/roundtrip.c bindings/embedded/runtime/pbwe.c $(LIB) | build
+	$(CC) $(CFLAGS) $(CPPFLAGS) -Iinclude -Ibindings/embedded/runtime -o $@ bindings/embedded/examples/roundtrip.c bindings/embedded/runtime/pbwe.c $(LIB)
 $(EXAMPLE_BIN): bindings/c/examples/addressbook.c $(C_RUNTIME) $(LIB) | build
 	$(CC) $(CFLAGS) $(CPPFLAGS) -Ibindings/c/runtime -o $@ bindings/c/examples/addressbook.c $(C_RUNTIME) $(LIB)
 

@@ -147,16 +147,20 @@ side by side with the absolute MB/s.
 | Zig | `Schema.fromFile` on a `FileDescriptorSet`, core sources compiled in statically | ✅ | `build.zig` API targets Zig 0.17; baseline not wired (needs network) |
 | F# | the C# binding's project: `FileDescriptorSet` at run time | ✅ | `ProjectReference`, no second runtime; baseline is generated C# (F# cannot compile `.cs`) |
 | Clojure | the Java binding's runtime via plain interop, `FileDescriptorSet` at run time | ✅ | persistent maps in/out; `benchmarks/deps` jars are fetched, not committed |
+| Embedded | `pbwe_open` on a `FileDescriptorSet`, static facade over the C core | ✅ | one malloc phase, then bounded steady state; caller-owned buffers, no per-message allocation |
 | Julia | `Libdl.dlopen` + `ccall`, `FileDescriptorSet` at run time | ✅ | stdlib-only package; baseline oracle is generated with `protojl`, not committed |
 | R | `.Call` C extension on a `FileDescriptorSet`, core linked in statically | ✅ | named lists in/out; INT32_MIN reads back as `NA`, doubles clamp at the 64-bit limits |
 
 Every row above also has a generated model from `codegen`: typed
 fields plus `encode`/`decode` over that binding's dynamic API. C keeps
-its own generator (it is ahead-of-time compiled); Go is dynamic-API only
-for now; Erlang keeps gpb; Elixir keeps `elixir-protobuf` (which is also
-what its `codegen` emitter emits). Every other binding — including Swift,
-Zig, Scala, F#, Clojure, Julia and R — has a `codegen` emitter whose
-output is committed under `tests/gen` and `examples/gen`.
+its own generator (it is ahead-of-time compiled); Go's models are refreshed
+by `make codegen` like every other language; Erlang keeps gpb; Elixir keeps
+`elixir-protobuf` (which is also what its `codegen` emitter emits). Every
+other binding — including Swift, Zig, Scala, F#, Clojure, Julia and R — has a
+`codegen` emitter whose output is committed under `tests/gen` and
+`examples/gen`. Embedded needs no emitter: it encodes and decodes through
+the existing dynamic API (`pbw_encode_to`/`pbw_decode_ctx`) with no generated
+types of its own.
 
 ## Memory: what each binding keeps, and the one rule per row
 
