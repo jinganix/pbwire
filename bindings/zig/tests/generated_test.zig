@@ -7,6 +7,7 @@
 const std = @import("std");
 const pbwire = @import("pbwire");
 const m3 = @import("gen/matrix3.zig");
+const m3meta = @import("gen/matrix3_meta.zig");
 
 const BIN_PATH = "../c/tests/data/matrix3.bin";
 
@@ -42,7 +43,7 @@ fn build() m3.Structtest_Scalars3 {
 
 test "generated model encodes to the protoc reference bytes and back" {
     const alloc = std.testing.allocator;
-    var schema = try m3.loadSchema();
+    var schema = try m3meta.loadSchema();
     defer schema.deinit();
 
     const wire = try (build()).encode(alloc, &schema);
@@ -81,10 +82,30 @@ test "generated model encodes to the protoc reference bytes and back" {
 
 test "empty generated message encodes to nothing" {
     const alloc = std.testing.allocator;
-    var schema = try m3.loadSchema();
+    var schema = try m3meta.loadSchema();
     defer schema.deinit();
     const empty: m3.Structtest_Scalars3 = .{};
     const wire = try empty.encode(alloc, &schema);
     defer alloc.free(wire);
     try std.testing.expectEqual(@as(usize, 0), wire.len);
+}
+
+test "dual registration: external schema and preload" {
+    const alloc = std.testing.allocator;
+    const mmeta = @import("gen/maptest_meta.zig");
+    var found = false;
+    for (mmeta.MESSAGE_NAMES) |n| {
+        if (std.mem.eql(u8, n, "spectest.MapTest")) found = true;
+    }
+    try std.testing.expect(found);
+    var embedded = try mmeta.loadSchema();
+    defer embedded.deinit();
+    try mmeta.preload(&embedded);
+    const raw = try pbwire.readFile(alloc, "../../codegen/testdata/maptest.desc");
+    defer alloc.free(raw);
+    var ext = try pbwire.Schema.fromBytes(raw);
+    defer ext.deinit();
+    const ty = try ext.messageType("spectest.MapTest");
+    _ = ty;
+    try mmeta.preload(&ext);
 }

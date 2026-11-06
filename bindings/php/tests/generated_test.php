@@ -15,6 +15,7 @@ declare(strict_types=1);
 require_once __DIR__ . '/../runtime/pbwire.php';
 require_once __DIR__ . '/../runtime/generated.php';
 require_once __DIR__ . '/gen/matrix3.php';
+require_once __DIR__ . '/gen/oneof1.php';
 require_once __DIR__ . '/gen/xdep.php';
 require_once __DIR__ . '/gen/xfile.php';
 
@@ -22,6 +23,9 @@ use Pbwire\Gen\Structtest_Color3;
 use Pbwire\Gen\Structtest_Inner3;
 use Pbwire\Gen\Structtest_Scalars3;
 use Pbwire\Gen\Xdep_DepMsg;
+use Pbwire\Gen\Spectest_Oneof1;
+use Pbwire\Gen\PbwireFile_Oneof1;
+use Pbwire\Gen\PbwireFile_Matrix3;
 use Pbwire\Gen\Xfile_UsesDep;
 
 $reference = (string) file_get_contents(__DIR__ . '/../../c/tests/data/matrix3.bin');
@@ -120,5 +124,29 @@ $xback = Xfile_UsesDep::fromString($xreference);
 check($xback->getSingle()->getName() === 'one' && $xback->getSingle()->getValue() === 7, 'xfile single');
 check(count($xback->getMany()) === 2 && $xback->getMany()[1]->getValue() === -1, 'xfile many');
 check($xback->getNote() === 'hi', 'xfile note');
+
+// Dual registration: embedded set by default, external file via use_schema.
+PbwireFile_Matrix3::preload();
+check(in_array('structtest.Scalars3', PbwireFile_Matrix3::MESSAGE_NAMES, true), 'registry lists every message');
+$reference_oneof = (string) file_get_contents(__DIR__ . '/../../../codegen/testdata/oneof1.bin');
+$ext = \Pbwire\Schema::fromFile(__DIR__ . '/../../../codegen/testdata/oneof1.desc');
+PbwireFile_Oneof1::use_schema($ext);
+$back = Spectest_Oneof1::fromString($reference_oneof);
+check($back->getName() === 'a' && $back->getText() === 'hi', 'external schema decodes');
+check($back->serializeToString() === $reference_oneof, 'external re-encodes');
+// A foreign schema resolves nothing here: decode fails loudly.
+PbwireFile_Oneof1::use_schema(PbwireFile_Matrix3::schema());
+$thrown = false;
+try {
+    Spectest_Oneof1::fromString($reference_oneof);
+} catch (\Throwable $e) {
+    $thrown = true;
+}
+check($thrown, 'foreign schema fails loudly');
+// Clearing the override restores the embedded set.
+PbwireFile_Oneof1::use_schema(null);
+check(Spectest_Oneof1::fromString($reference_oneof)->getName() === 'a', 'cleared override restores embedded');
+PbwireFile_Oneof1::init();
+check(Spectest_Oneof1::fromString($reference_oneof)->getName() === 'a', 'init keeps embedded');
 
 printf("generated_test: %d checks passed\n", $checks);

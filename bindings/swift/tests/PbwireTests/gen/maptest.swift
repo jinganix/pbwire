@@ -5,35 +5,6 @@
 import Foundation
 import Pbwire
 
-private let _descData = Data(base64Encoded: """
-CsQICg1tYXB0ZXN0LnByb3RvEghzcGVjdGVzdCI0CghNYXBWYWx1ZRISCgRuYW1lGAEgASgJUgRu
-YW1lEhQKBXZhbHVlGAIgASgFUgV2YWx1ZSLqAgoHTWFwVGVzdBIzCgZieV9pbnQYASADKAsyHC5z
-cGVjdGVzdC5NYXBUZXN0LkJ5SW50RW50cnlSBWJ5SW50EjMKBmJ5X3N0chgCIAMoCzIcLnNwZWN0
-ZXN0Lk1hcFRlc3QuQnlTdHJFbnRyeVIFYnlTdHISMwoGYnlfbXNnGAMgAygLMhwuc3BlY3Rlc3Qu
-TWFwVGVzdC5CeU1zZ0VudHJ5UgVieU1zZxo4CgpCeUludEVudHJ5EhAKA2tleRgBIAEoBVIDa2V5
-EhQKBXZhbHVlGAIgASgJUgV2YWx1ZToCOAEaOAoKQnlTdHJFbnRyeRIQCgNrZXkYASABKAlSA2tl
-eRIUCgV2YWx1ZRgCIAEoBVIFdmFsdWU6AjgBGkwKCkJ5TXNnRW50cnkSEAoDa2V5GAEgASgJUgNr
-ZXkSKAoFdmFsdWUYAiABKAsyEi5zcGVjdGVzdC5NYXBWYWx1ZVIFdmFsdWU6AjgBSv0ECgYSBAQA
-EQEKpQIKAQwSAwQAEhqaAiBTbWFsbCBtYXAgZml4dHVyZSBmb3IgdGhlIGdlbmVyYXRlZCBjb21w
-YXQgdGVzdHM6IHNjYWxhciwgaW50LWtleWVkIGFuZAogbWVzc2FnZS12YWx1ZWQgbWFwcyByaWRl
-IGFzIHJlcGVhdGVkIGVudHJ5IHN0cnVjdHMgaW4gZXZlcnkgbGFuZ3VhZ2UuCiBLZXB0IGluIHRl
-c3RkYXRhIHNvIGV2ZXJ5IGJpbmRpbmcgc2hhcmVzIHRoZSBzYW1lIHNjaGVtYSwgdmFsdWVzIGFu
-ZAogcmVmZXJlbmNlIGJ5dGVzIChtYXB0ZXN0LmJpbiBmcm9tIHByb3RvYyAtLWVuY29kZSBvZiBt
-YXB0ZXN0LnR4dCkuCgoICgECEgMGABEKCgoCBAASBAgACwEKCgoDBAABEgMICBAKCwoEBAACABID
-CQISCgwKBQQAAgAFEgMJAggKDAoFBAACAAESAwkJDQoMCgUEAAIAAxIDCRARCgsKBAQAAgESAwoC
-EgoMCgUEAAIBBRIDCgIHCgwKBQQAAgEBEgMKCA0KDAoFBAACAQMSAwoQEQoKCgIEARIEDQARAQoK
-CgMEAQESAw0IDwoLCgQEAQIAEgMOAiAKDAoFBAECAAYSAw4CFAoMCgUEAQIAARIDDhUbCgwKBQQB
-AgADEgMOHh8KCwoEBAECARIDDwIgCgwKBQQBAgEGEgMPAhQKDAoFBAECAQESAw8VGwoMCgUEAQIB
-AxIDDx4fCgsKBAQBAgISAxACIwoMCgUEAQICBhIDEAIXCgwKBQQBAgIBEgMQGB4KDAoFBAECAgMS
-AxAhImIGcHJvdG8z
-""".filter { !$0.isWhitespace })!
-
-private let _schema: Schema = {
-    do { return try Schema(bytes: _descData) } catch {
-        fatalError("pbwire: embedded descriptor set: \(error)")
-    }
-}()
-
 /// spectest.MapValue
 public struct Spectest_MapValue {
     public var name: String = ""
@@ -46,7 +17,7 @@ public struct Spectest_MapValue {
     }
 
     public func encode() throws -> Data {
-        guard let msg = _schema.message("spectest.MapValue") else {
+        guard let msg = maptest_schema.message("spectest.MapValue") else {
             throw NSError(domain: "pbwire", code: -1, userInfo: [NSLocalizedDescriptionKey: "no such type: spectest.MapValue"])
         }
         try fill(msg)
@@ -54,7 +25,7 @@ public struct Spectest_MapValue {
     }
 
     public static func decode(_ data: Data) throws -> Spectest_MapValue {
-        guard let ty = _schema.message("spectest.MapValue") else {
+        guard let ty = maptest_schema.message("spectest.MapValue") else {
             throw NSError(domain: "pbwire", code: -1, userInfo: [NSLocalizedDescriptionKey: "no such type: spectest.MapValue"])
         }
         return try fromMessage(ty.decode(data))
@@ -80,7 +51,7 @@ public struct Spectest_MapTest_ByIntEntry {
     }
 
     public func encode() throws -> Data {
-        guard let msg = _schema.message("spectest.MapTest.ByIntEntry") else {
+        guard let msg = maptest_schema.message("spectest.MapTest.ByIntEntry") else {
             throw NSError(domain: "pbwire", code: -1, userInfo: [NSLocalizedDescriptionKey: "no such type: spectest.MapTest.ByIntEntry"])
         }
         try fill(msg)
@@ -88,7 +59,7 @@ public struct Spectest_MapTest_ByIntEntry {
     }
 
     public static func decode(_ data: Data) throws -> Spectest_MapTest_ByIntEntry {
-        guard let ty = _schema.message("spectest.MapTest.ByIntEntry") else {
+        guard let ty = maptest_schema.message("spectest.MapTest.ByIntEntry") else {
             throw NSError(domain: "pbwire", code: -1, userInfo: [NSLocalizedDescriptionKey: "no such type: spectest.MapTest.ByIntEntry"])
         }
         return try fromMessage(ty.decode(data))
@@ -114,7 +85,7 @@ public struct Spectest_MapTest_ByStrEntry {
     }
 
     public func encode() throws -> Data {
-        guard let msg = _schema.message("spectest.MapTest.ByStrEntry") else {
+        guard let msg = maptest_schema.message("spectest.MapTest.ByStrEntry") else {
             throw NSError(domain: "pbwire", code: -1, userInfo: [NSLocalizedDescriptionKey: "no such type: spectest.MapTest.ByStrEntry"])
         }
         try fill(msg)
@@ -122,7 +93,7 @@ public struct Spectest_MapTest_ByStrEntry {
     }
 
     public static func decode(_ data: Data) throws -> Spectest_MapTest_ByStrEntry {
-        guard let ty = _schema.message("spectest.MapTest.ByStrEntry") else {
+        guard let ty = maptest_schema.message("spectest.MapTest.ByStrEntry") else {
             throw NSError(domain: "pbwire", code: -1, userInfo: [NSLocalizedDescriptionKey: "no such type: spectest.MapTest.ByStrEntry"])
         }
         return try fromMessage(ty.decode(data))
@@ -148,7 +119,7 @@ public struct Spectest_MapTest_ByMsgEntry {
     }
 
     public func encode() throws -> Data {
-        guard let msg = _schema.message("spectest.MapTest.ByMsgEntry") else {
+        guard let msg = maptest_schema.message("spectest.MapTest.ByMsgEntry") else {
             throw NSError(domain: "pbwire", code: -1, userInfo: [NSLocalizedDescriptionKey: "no such type: spectest.MapTest.ByMsgEntry"])
         }
         try fill(msg)
@@ -156,7 +127,7 @@ public struct Spectest_MapTest_ByMsgEntry {
     }
 
     public static func decode(_ data: Data) throws -> Spectest_MapTest_ByMsgEntry {
-        guard let ty = _schema.message("spectest.MapTest.ByMsgEntry") else {
+        guard let ty = maptest_schema.message("spectest.MapTest.ByMsgEntry") else {
             throw NSError(domain: "pbwire", code: -1, userInfo: [NSLocalizedDescriptionKey: "no such type: spectest.MapTest.ByMsgEntry"])
         }
         return try fromMessage(ty.decode(data))
@@ -184,7 +155,7 @@ public struct Spectest_MapTest {
     }
 
     public func encode() throws -> Data {
-        guard let msg = _schema.message("spectest.MapTest") else {
+        guard let msg = maptest_schema.message("spectest.MapTest") else {
             throw NSError(domain: "pbwire", code: -1, userInfo: [NSLocalizedDescriptionKey: "no such type: spectest.MapTest"])
         }
         try fill(msg)
@@ -192,7 +163,7 @@ public struct Spectest_MapTest {
     }
 
     public static func decode(_ data: Data) throws -> Spectest_MapTest {
-        guard let ty = _schema.message("spectest.MapTest") else {
+        guard let ty = maptest_schema.message("spectest.MapTest") else {
             throw NSError(domain: "pbwire", code: -1, userInfo: [NSLocalizedDescriptionKey: "no such type: spectest.MapTest"])
         }
         return try fromMessage(ty.decode(data))

@@ -141,6 +141,17 @@ class MessageType {
     return { message, read: res.read };
   }
 
+  /** Decode wire bytes into a plain object in one call; throws on malformed
+   * input. Same values `get()` would return, without the per-field round
+   * trip: the fast path when most fields are read. Nothing is retained, so
+   * unlike `decode()` the result cannot re-encode. */
+  decodeObject(bytes) {
+    if (!Buffer.isBuffer(bytes)) {
+      throw new TypeError('pbwire: decodeObject expects a Buffer');
+    }
+    return addon.decodeObject(this._handle, bytes);
+  }
+
   /** Decode wire bytes into a Message; throws on malformed input. */
   decode(bytes) {
     if (!Buffer.isBuffer(bytes)) {

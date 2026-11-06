@@ -3,17 +3,16 @@
 ;; Do not edit; regenerate from the .proto instead.
 (ns xfile
   (:require [clojure.java.io :as io]
-            [pbwire.core :as pb])
+            [pbwire.core :as pb]
+            [xfile-meta :as meta])
   (:import (java.util Base64)))
 
-(def ^:private desc-bytes
-  (.decode (Base64/getDecoder)
-    "CrkDCgp4ZGVwLnByb3RvEgR4ZGVwIjIKBkRlcE1zZxISCgRuYW1lGAEgASgJUgRuYW1lEhQKBXZhbHVlGAIgASgFUgV2YWx1ZUroAgoGEgQDAAoBCs0BCgEMEgMDABIawgEgU2hhcmVkIGRlcGVuZGVuY3kgZm9yIHRoZSBjcm9zcy1maWxlIGZpeHR1cmU6IHhmaWxlLnByb3RvIGltcG9ydHMgdGhpcwogZmlsZSBhbmQgcmVmZXJlbmNlcyBEZXBNc2cuIEdlbmVyYXRlZCBvbmNlIHBlciBsYW5ndWFnZSBuZXh0IHRvIHhmaWxlJ3MKIG93biBtb2RlbDsgdGhlIHJlZmVyZW5jZSBieXRlcyBsaXZlIHdpdGggeGZpbGUuCgoICgECEgMFAA0KCgoCBAASBAcACgEKCgoDBAABEgMHCA4KCwoEBAACABIDCAISCgwKBQQAAgAFEgMIAggKDAoFBAACAAESAwgJDQoMCgUEAAIAAxIDCBARCgsKBAQAAgESAwkCEgoMCgUEAAIBBRIDCQIHCgwKBQQAAgEBEgMJCA0KDAoFBAACAQMSAwkQEWIGcHJvdG8zCoEFCgt4ZmlsZS5wcm90bxIFeGZpbGUaCnhkZXAucHJvdG8iZQoHVXNlc0RlcBIkCgZzaW5nbGUYASABKAsyDC54ZGVwLkRlcE1zZ1IGc2luZ2xlEiAKBG1hbnkYAiADKAsyDC54ZGVwLkRlcE1zZ1IEbWFueRISCgRub3RlGAMgASgJUgRub3RlSu8DCgYSBAQADgEKhAIKAQwSAwQAEhr5ASBDcm9zcy1maWxlIGZpeHR1cmUgZm9yIHRoZSBnZW5lcmF0ZWQgY29tcGF0IHRlc3RzOiBVc2VzRGVwIHJlZmVyZW5jZXMKIERlcE1zZyBmcm9tIHhkZXAucHJvdG8sIHNvIGV2ZXJ5IGxhbmd1YWdlIG11c3QgaW1wb3J0IHRoZSBzaWJsaW5nCiBnZW5lcmF0ZWQgZmlsZSBpbnN0ZWFkIG9mIHNraXBwaW5nIHRoZSBmaWVsZC4gUmVmZXJlbmNlIGJ5dGVzCiAoeGZpbGUuYmluKSBmcm9tIHByb3RvYyAtLWVuY29kZSBvZiB4ZmlsZS50eHQuCgoICgECEgMGAA4KCQoCAwASAwgAFAoKCgIEABIECgAOAQoKCgMEAAESAwoIDwoLCgQEAAIAEgMLAhkKDAoFBAACAAYSAwsCDQoMCgUEAAIAARIDCw4UCgwKBQQAAgADEgMLFxgKCwoEBAACARIDDAIgCgwKBQQAAgEEEgMMAgoKDAoFBAACAQYSAwwLFgoMCgUEAAIBARIDDBcbCgwKBQQAAgEDEgMMHh8KCwoEBAACAhIDDQISCgwKBQQAAgIFEgMNAggKDAoFBAACAgESAw0JDQoMCgUEAAICAxIDDRARYgZwcm90bzM="))
-
-(def ^:private schema (pb/load-schema-bytes desc-bytes))
-
 ;; xfile.UsesDep
-(def xfile-usesdep-type (pb/message-type schema "xfile.UsesDep"))
+(def xfile-usesdep-type (pb/message-type meta/schema "xfile.UsesDep"))
+
+(defn encode-xfile-usesdep [m] (pb/encode xfile-usesdep-type m))
+
+(defn decode-xfile-usesdep [wire] (pb/decode xfile-usesdep-type wire))
 
 (defn xfile-usesdep
   "Constructor map for xfile.UsesDep; absent optionals stay absent."
@@ -23,8 +22,4 @@
     (some? many) (assoc :many many)
     (some? note) (assoc :note note)
   ))
-
-(defn encode-xfile-usesdep [m] (pb/encode xfile-usesdep-type m))
-
-(defn decode-xfile-usesdep [wire] (pb/decode xfile-usesdep-type wire))
 

@@ -38,6 +38,39 @@ public final class Schema implements AutoCloseable {
         }
     }
 
+    /**
+     * Builds a schema from generated message classes: no descriptor set file.
+     * Each class (or its OrBuilder interface) resolves to its generated Meta
+     * table, so the dynamic Message API runs on the same facts the typed codec
+     * uses; sub-messages follow Meta links, so callers pass only the roots.
+     */
+    public static Schema fromClasses(Class<?>... classes) {
+        if (classes == null || classes.length == 0) {
+            throw new PbwireException("fromClasses needs at least one message class");
+        }
+        java.util.List<Meta<?, ?>> metas = new java.util.ArrayList<>(classes.length);
+        for (Class<?> c : classes) {
+            if (c == null) {
+                throw new PbwireException("fromClasses got a null class");
+            }
+            try {
+                // .class literals do not run static initializers, but the
+                // generated register calls live there: force them first.
+                Class.forName(c.getName(), true, c.getClassLoader());
+            } catch (ClassNotFoundException e) {
+                throw new PbwireException("no such class: " + c.getName());
+            } catch (ExceptionInInitializerError e) {
+                throw new PbwireException("codec init failed for " + c.getName());
+            }
+            try {
+                metas.add(PbCodec.metaOf(c));
+            } catch (IllegalArgumentException e) {
+                throw new PbwireException("no codec registered for " + c.getName());
+            }
+        }
+        return new Schema(GenericCodec.Schema.fromMetas(metas));
+    }
+
     /** Looks up a message by its fully qualified name, e.g. {@code "pbwire.test.Sample"}. */
     public MessageType message(String fullName) {
         checkOpen();

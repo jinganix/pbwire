@@ -130,6 +130,12 @@ Java binding ever exposes its field list, that reflection (five lines in
 
 ## Generated models
 
-`protoc-gen-pbwire` (in `../../codegen`) does not emit Clojure yet; when it
-does, the shape will be maps plus `encode`/`decode` over this same dynamic
-API, like every other generated model. The parent tracks that work.
+`protoc-gen-pbwire` (in `../../codegen`) emits `<base>.clj` (map
+constructors plus `encode`/`decode` over this same dynamic API) and
+`<base>_meta.clj` (the embedded descriptor set plus its loader).
+`--pbwire_opt=lang=clojure[,model=bool][,register=bool][,registry=bool]`
+(all default `true`): `model=false` skips the constructors for
+dynamic-only users; `register=false` delays type resolution so
+`init-schema` (embedded bytes by default, external bytes for the
+descriptor mode) must run first; `registry=false` drops `message-names`
++ `preload`.

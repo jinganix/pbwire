@@ -40,3 +40,15 @@ defmodule Tutorial.AddressBook do
   field(:people, 1, repeated: true, type: Tutorial.Person)
 end
 
+# Every message in this file, for whole-schema pre-registration.
+defmodule Tutorial.Addressbook.Registry do
+  @moduledoc false
+  def message_modules do
+    [
+      Tutorial.Person.PhoneNumber,
+      Tutorial.Person,
+      Tutorial.AddressBook,
+      Tutorial.Person.PhoneType
+    ]
+  end
+end

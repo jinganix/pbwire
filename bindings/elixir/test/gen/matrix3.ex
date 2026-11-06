@@ -50,3 +50,14 @@ defmodule Structtest.Scalars3 do
   field(:flags, 22, repeated: true, type: :bool, packed: true)
 end
 
+# Every message in this file, for whole-schema pre-registration.
+defmodule Structtest.Matrix3.Registry do
+  @moduledoc false
+  def message_modules do
+    [
+      Structtest.Inner3,
+      Structtest.Scalars3,
+      Structtest.Color3
+    ]
+  end
+end

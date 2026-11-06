@@ -109,6 +109,7 @@ from the binary. Output: `bindings/node/build/pbwire_node.node`.
 | `type.newMessage()` | empty `Message` (the mutable tree form) |
 | `type.encode(object \| Message)` | encode a plain object or an existing `Message` |
 | `type.decode(buffer)` | decode wire bytes into a `Message`; throws on malformed input |
+| `type.decodeObject(buffer)` | decode wire bytes into a plain object in one call; same values `get()` returns, but the result holds no bytes and cannot re-encode — the fast path when most fields are read |
 
 `Message`
 | member | meaning |

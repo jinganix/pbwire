@@ -10,7 +10,7 @@
 // dynamic runtime in <binding>/lib.
 const { _makeClass } = require('../../lib/pbwire-compat.js');
 
-const _DESC_B64 = 'Cr8KChFhZGRyZXNzYm9vay5wcm90bxIIdHV0b3JpYWwiggIKBlBlcnNvbhISCgRuYW1lGAEgAigJUgRuYW1lEg4KAmlkGAIgAigFUgJpZBIUCgVlbWFpbBgDIAEoCVIFZW1haWwSNAoGcGhvbmVzGAQgAygLMhwudHV0b3JpYWwuUGVyc29uLlBob25lTnVtYmVyUgZwaG9uZXMaWwoLUGhvbmVOdW1iZXISFgoGbnVtYmVyGAEgAigJUgZudW1iZXISNAoEdHlwZRgCIAEoDjIaLnR1dG9yaWFsLlBlcnNvbi5QaG9uZVR5cGU6BEhPTUVSBHR5cGUiKwoJUGhvbmVUeXBlEgoKBk1PQklMRRAAEggKBEhPTUUQARIICgRXT1JLEAIiNwoLQWRkcmVzc0Jvb2sSKAoGcGVvcGxlGAEgAygLMhAudHV0b3JpYWwuUGVyc29uUgZwZW9wbGVK4QcKBhIEAwAcAQrAAQoBDBIDAwASGrUBIFRoZSBjbGFzc2ljIHByb3RvY29sLWJ1ZmZlcnMgdHV0b3JpYWwgc2NoZW1hIChhZGRyZXNzYm9vay5wcm90byksIGtlcHQKIHNlbGYtY29udGFpbmVkIChubyBpbXBvcnRzKSBzbyB0aGUgQyBleGFtcGxlIGJlbG93IGNhbiBtaXJyb3IgaXQgYnkgaGFuZAogd2l0aG91dCBwcm90b2Mgb3IgZ2VuZXJhdGVkIGNvZGUuCgoICgECEgMFABEKCgoCBAASBAcAGAEKCgoDBAABEgMHCA4KCwoEBAACABIDCAIbCgwKBQQAAgAEEgMIAgoKDAoFBAACAAUSAwgLEQoMCgUEAAIAARIDCBIWCgwKBQQAAgADEgMIGRoKCwoEBAACARIDCQIYCgwKBQQAAgEEEgMJAgoKDAoFBAACAQUSAwkLEAoMCgUEAAIBARIDCRETCgwKBQQAAgEDEgMJFhcKCwoEBAACAhIDCgIcCgwKBQQAAgIEEgMKAgoKDAoFBAACAgUSAwoLEQoMCgUEAAICARIDChIXCgwKBQQAAgIDEgMKGhsKDAoEBAAEABIEDAIQAwoMCgUEAAQAARIDDAcQCg0KBgQABAACABIDDQQPCg4KBwQABAACAAESAw0ECgoOCgcEAAQAAgACEgMNDQ4KDQoGBAAEAAIBEgMOBA0KDgoHBAAEAAIBARIDDgQICg4KBwQABAACAQISAw4LDAoNCgYEAAQAAgISAw8EDQoOCgcEAAQAAgIBEgMPBAgKDgoHBAAEAAICAhIDDwsMCgwKBAQAAwASBBICFQMKDAoFBAADAAESAxIKFQoNCgYEAAMAAgASAxMEHwoOCgcEAAMAAgAEEgMTBAwKDgoHBAADAAIABRIDEw0TCg4KBwQAAwACAAESAxMUGgoOCgcEAAMAAgADEgMTHR4KDQoGBAADAAIBEgMUBDEKDgoHBAADAAIBBBIDFAQMCg4KBwQAAwACAQYSAxQNFgoOCgcEAAMAAgEBEgMUFxsKDgoHBAADAAIBAxIDFB4fCg4KBwQAAwACAQgSAxQgMAoOCgcEAAMAAgEHEgMUKy8KCwoEBAACAxIDFwIiCgwKBQQAAgMEEgMXAgoKDAoFBAACAwYSAxcLFgoMCgUEAAIDARIDFxcdCgwKBQQAAgMDEgMXICEKCgoCBAESBBoAHAEKCgoDBAEBEgMaCBMKCwoEBAECABIDGwIdCgwKBQQBAgAEEgMbAgoKDAoFBAECAAYSAxsLEQoMCgUEAQIAARIDGxIYCgwKBQQBAgADEgMbGxw=';
+const { get_schema } = require('./addressbook_meta.js');
 
 /** tutorial.Person.PhoneType @enum {number} */
 const Tutorial_Person_PhoneType = Object.freeze({
@@ -36,7 +36,7 @@ const Person_PhoneNumber_FIELDS = [
   { n: 'number', js: 'number', k: 'str', rep: false, msg: null, en: null, oneof: null, req: true, has: false, closed: false },
   { n: 'type', js: 'type', k: 'enum', rep: false, msg: null, en: 'Tutorial_Person_PhoneType', oneof: null, req: false, has: true, closed: true },
 ];
-const Person_PhoneNumber = _makeClass('tutorial.Person.PhoneNumber', _DESC_B64, Person_PhoneNumber_FIELDS);
+const Person_PhoneNumber = _makeClass('tutorial.Person.PhoneNumber', get_schema, Person_PhoneNumber_FIELDS);
 _CLASSES['Person_PhoneNumber'] = Person_PhoneNumber;
 Person_PhoneNumber._ENUMS = _ENUMS;
 Person_PhoneNumber._REVENUMS = _REVENUMS;
@@ -49,7 +49,7 @@ const Person_FIELDS = [
   { n: 'email', js: 'email', k: 'str', rep: false, msg: null, en: null, oneof: null, req: false, has: true, closed: false },
   { n: 'phones', js: 'phones', k: 'msg', rep: true, msg: 'Person_PhoneNumber', en: null, oneof: null, req: false, has: true, closed: false },
 ];
-const Person = _makeClass('tutorial.Person', _DESC_B64, Person_FIELDS);
+const Person = _makeClass('tutorial.Person', get_schema, Person_FIELDS);
 _CLASSES['Person'] = Person;
 Person._ENUMS = _ENUMS;
 Person._REVENUMS = _REVENUMS;
@@ -59,7 +59,7 @@ Person._CLASSES = _CLASSES;
 const AddressBook_FIELDS = [
   { n: 'people', js: 'people', k: 'msg', rep: true, msg: 'Person', en: null, oneof: null, req: false, has: true, closed: false },
 ];
-const AddressBook = _makeClass('tutorial.AddressBook', _DESC_B64, AddressBook_FIELDS);
+const AddressBook = _makeClass('tutorial.AddressBook', get_schema, AddressBook_FIELDS);
 _CLASSES['AddressBook'] = AddressBook;
 AddressBook._ENUMS = _ENUMS;
 AddressBook._REVENUMS = _REVENUMS;

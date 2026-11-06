@@ -2,7 +2,7 @@
  * Generated-conformance check for the Scala binding: build matrix3.proto's
  * Scalars3 through the generated case classes, encode, require the protoc
  * reference bytes (matrix3.bin), then decode those bytes back and check
- * every field. The schema travels embedded in tests/gen/matrix3.scala.
+ * every field. The schema travels embedded in tests/gen/matrix3_meta.scala.
  *
  * Run after ./build.sh, from bindings/scala:
  *   java -cp out/classes GeneratedTestGen ../c/tests/data/matrix3.bin
@@ -67,6 +67,11 @@ object GeneratedTestGen {
     val zero = Structtest_Scalars3.decode(
       Structtest_Scalars3.encode(Structtest_Scalars3(optI32 = Some(0))))
     check(zero.optI32.contains(0L), "explicit zero with presence survives")
+
+    // Registry: whole-file list plus preload; models keep working.
+    check(matrix3Meta.messageNames.contains("structtest.Scalars3"), "registry lists every message")
+    matrix3Meta.preload()
+    check(Structtest_Scalars3.decode(reference).str == "hello", "decode after preload")
 
     println("generated test ok: " + checks + " checks")
   }

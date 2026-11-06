@@ -2,39 +2,11 @@
 // Generated facades over the pbwire dynamic API, protobuf-dart shape.
 // Do not edit; regenerate from the .proto instead.
 
-import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:pbwire/pbwire.dart';
 import 'xdep.dart';
-
-/// The FileDescriptorSet for xfile.proto, so messages encode with no .desc file.
-const _descB64 =
-    "CrkDCgp4ZGVwLnByb3RvEgR4ZGVwIjIKBkRlcE1zZxISCgRuYW1lGAEgASgJUgRuYW1lEhQKBXZh"
-    "bHVlGAIgASgFUgV2YWx1ZUroAgoGEgQDAAoBCs0BCgEMEgMDABIawgEgU2hhcmVkIGRlcGVuZGVu"
-    "Y3kgZm9yIHRoZSBjcm9zcy1maWxlIGZpeHR1cmU6IHhmaWxlLnByb3RvIGltcG9ydHMgdGhpcwog"
-    "ZmlsZSBhbmQgcmVmZXJlbmNlcyBEZXBNc2cuIEdlbmVyYXRlZCBvbmNlIHBlciBsYW5ndWFnZSBu"
-    "ZXh0IHRvIHhmaWxlJ3MKIG93biBtb2RlbDsgdGhlIHJlZmVyZW5jZSBieXRlcyBsaXZlIHdpdGgg"
-    "eGZpbGUuCgoICgECEgMFAA0KCgoCBAASBAcACgEKCgoDBAABEgMHCA4KCwoEBAACABIDCAISCgwK"
-    "BQQAAgAFEgMIAggKDAoFBAACAAESAwgJDQoMCgUEAAIAAxIDCBARCgsKBAQAAgESAwkCEgoMCgUE"
-    "AAIBBRIDCQIHCgwKBQQAAgEBEgMJCA0KDAoFBAACAQMSAwkQEWIGcHJvdG8zCoEFCgt4ZmlsZS5w"
-    "cm90bxIFeGZpbGUaCnhkZXAucHJvdG8iZQoHVXNlc0RlcBIkCgZzaW5nbGUYASABKAsyDC54ZGVw"
-    "LkRlcE1zZ1IGc2luZ2xlEiAKBG1hbnkYAiADKAsyDC54ZGVwLkRlcE1zZ1IEbWFueRISCgRub3Rl"
-    "GAMgASgJUgRub3RlSu8DCgYSBAQADgEKhAIKAQwSAwQAEhr5ASBDcm9zcy1maWxlIGZpeHR1cmUg"
-    "Zm9yIHRoZSBnZW5lcmF0ZWQgY29tcGF0IHRlc3RzOiBVc2VzRGVwIHJlZmVyZW5jZXMKIERlcE1z"
-    "ZyBmcm9tIHhkZXAucHJvdG8sIHNvIGV2ZXJ5IGxhbmd1YWdlIG11c3QgaW1wb3J0IHRoZSBzaWJs"
-    "aW5nCiBnZW5lcmF0ZWQgZmlsZSBpbnN0ZWFkIG9mIHNraXBwaW5nIHRoZSBmaWVsZC4gUmVmZXJl"
-    "bmNlIGJ5dGVzCiAoeGZpbGUuYmluKSBmcm9tIHByb3RvYyAtLWVuY29kZSBvZiB4ZmlsZS50eHQu"
-    "CgoICgECEgMGAA4KCQoCAwASAwgAFAoKCgIEABIECgAOAQoKCgMEAAESAwoIDwoLCgQEAAIAEgML"
-    "AhkKDAoFBAACAAYSAwsCDQoMCgUEAAIAARIDCw4UCgwKBQQAAgADEgMLFxgKCwoEBAACARIDDAIg"
-    "CgwKBQQAAgEEEgMMAgoKDAoFBAACAQYSAwwLFgoMCgUEAAIBARIDDBcbCgwKBQQAAgEDEgMMHh8K"
-    "CwoEBAACAhIDDQISCgwKBQQAAgIFEgMNAggKDAoFBAACAgESAw0JDQoMCgUEAAICAxIDDRARYgZw"
-    "cm90bzM=";
-
-Schema? _schema;
-
-/// The embedded schema, loaded once per isolate.
-Schema get schemaCached => _schema ??= Schema.fromBytes(base64Decode(_descB64));
+import 'xfile_meta.dart';
 
 /// xfile.UsesDep
 class UsesDep {
@@ -70,7 +42,7 @@ class UsesDep {
   void clearNote() { note = ''; }
 
   Uint8List writeToBuffer() {
-    final msg = schemaCached.message("xfile.UsesDep").newMessage();
+    final msg = xfile_schema.message("xfile.UsesDep").newMessage();
     try {
       encodeInto(msg);
       return msg.encode();
@@ -80,7 +52,7 @@ class UsesDep {
   }
 
   void mergeFromBuffer(List<int> wire) {
-    final msg = schemaCached.message("xfile.UsesDep").decode(wire);
+    final msg = xfile_schema.message("xfile.UsesDep").decode(wire);
     try {
       loadFrom(msg);
     } finally {

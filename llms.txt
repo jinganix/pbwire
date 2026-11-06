@@ -199,7 +199,8 @@ C++ runtime), `make bench`, `make bench-c` (C structs vs protoc C++). Optional, 
   C binding ships its own protoc plugin for layout tables).
 - Generated message models: `codegen` is one protoc plugin (`protoc-gen-pbwire`) that
   emits typed fields, presence flags and encode/decode wrappers per language (C, Java, Kotlin, C#, F#, Dart, PHP, Ruby, Python, Node, Rust, Objective-C, Lua, Swift, Zig, Scala, Clojure, Elixir, Julia, R; Go is dynamic-API only for now; Erlang keeps gpb). The wrappers call the
-  binding's dynamic API, so the generated layer never adds a second wire implementation. `make
+  binding's dynamic API (Java POJOs write straight into the shared Wire primitives
+  instead, same bytes, no Message tree), so the generated layer never adds a second wire format. `make
   codegen` regenerates the committed models, `make codegen-test` runs one generated test per binding
   (typed fields -> encode -> compare with the pinned protoc bytes -> decode -> verify), and
   `make codegen-conformance` generates models for the official conformance proto.

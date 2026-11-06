@@ -10,35 +10,6 @@ using Pbwire;
 
 namespace Xfile {
 
-    internal static class PbwireFile_Xfile {
-        internal static readonly Schema Schema = Schema.FromBytes(Convert.FromBase64String(string.Concat(
-            "CrkDCgp4ZGVwLnByb3RvEgR4ZGVwIjIKBkRlcE1zZxISCgRuYW1lGAEgASgJ",
-            "UgRuYW1lEhQKBXZhbHVlGAIgASgFUgV2YWx1ZUroAgoGEgQDAAoBCs0BCgEM",
-            "EgMDABIawgEgU2hhcmVkIGRlcGVuZGVuY3kgZm9yIHRoZSBjcm9zcy1maWxl",
-            "IGZpeHR1cmU6IHhmaWxlLnByb3RvIGltcG9ydHMgdGhpcwogZmlsZSBhbmQg",
-            "cmVmZXJlbmNlcyBEZXBNc2cuIEdlbmVyYXRlZCBvbmNlIHBlciBsYW5ndWFn",
-            "ZSBuZXh0IHRvIHhmaWxlJ3MKIG93biBtb2RlbDsgdGhlIHJlZmVyZW5jZSBi",
-            "eXRlcyBsaXZlIHdpdGggeGZpbGUuCgoICgECEgMFAA0KCgoCBAASBAcACgEK",
-            "CgoDBAABEgMHCA4KCwoEBAACABIDCAISCgwKBQQAAgAFEgMIAggKDAoFBAAC",
-            "AAESAwgJDQoMCgUEAAIAAxIDCBARCgsKBAQAAgESAwkCEgoMCgUEAAIBBRID",
-            "CQIHCgwKBQQAAgEBEgMJCA0KDAoFBAACAQMSAwkQEWIGcHJvdG8zCoEFCgt4",
-            "ZmlsZS5wcm90bxIFeGZpbGUaCnhkZXAucHJvdG8iZQoHVXNlc0RlcBIkCgZz",
-            "aW5nbGUYASABKAsyDC54ZGVwLkRlcE1zZ1IGc2luZ2xlEiAKBG1hbnkYAiAD",
-            "KAsyDC54ZGVwLkRlcE1zZ1IEbWFueRISCgRub3RlGAMgASgJUgRub3RlSu8D",
-            "CgYSBAQADgEKhAIKAQwSAwQAEhr5ASBDcm9zcy1maWxlIGZpeHR1cmUgZm9y",
-            "IHRoZSBnZW5lcmF0ZWQgY29tcGF0IHRlc3RzOiBVc2VzRGVwIHJlZmVyZW5j",
-            "ZXMKIERlcE1zZyBmcm9tIHhkZXAucHJvdG8sIHNvIGV2ZXJ5IGxhbmd1YWdl",
-            "IG11c3QgaW1wb3J0IHRoZSBzaWJsaW5nCiBnZW5lcmF0ZWQgZmlsZSBpbnN0",
-            "ZWFkIG9mIHNraXBwaW5nIHRoZSBmaWVsZC4gUmVmZXJlbmNlIGJ5dGVzCiAo",
-            "eGZpbGUuYmluKSBmcm9tIHByb3RvYyAtLWVuY29kZSBvZiB4ZmlsZS50eHQu",
-            "CgoICgECEgMGAA4KCQoCAwASAwgAFAoKCgIEABIECgAOAQoKCgMEAAESAwoI",
-            "DwoLCgQEAAIAEgMLAhkKDAoFBAACAAYSAwsCDQoMCgUEAAIAARIDCw4UCgwK",
-            "BQQAAgADEgMLFxgKCwoEBAACARIDDAIgCgwKBQQAAgEEEgMMAgoKDAoFBAAC",
-            "AQYSAwwLFgoMCgUEAAIBARIDDBcbCgwKBQQAAgEDEgMMHh8KCwoEBAACAhID",
-            "DQISCgwKBQQAAgIFEgMNAggKDAoFBAACAgESAw0JDQoMCgUEAAICAxIDDRAR",
-            "YgZwcm90bzM=")));
-    }
-
     /// <summary>Minimal parser: ParseFrom over the C core. Not pb::MessageParser.</summary>
     public sealed class Parser_Xfile<T> where T : new() {
         private readonly Action<T, byte[]> _merge;

@@ -5,50 +5,11 @@
 package xfile
 
 import (
-	"encoding/base64"
 	"fmt"
-	"sync"
-
 	"pbwire/dynamic"
 
 	xdep "pbwire/tests/gen/xdep"
 )
-
-var fileDesc, _ = base64.StdEncoding.DecodeString(_DESC_B64)
-
-var schemaOnce sync.Once
-var schemaCached *dynamic.Schema
-var schemaErr error
-
-func getSchema() (*dynamic.Schema, error) {
-	schemaOnce.Do(func() {
-		schemaCached, schemaErr = dynamic.Load(fileDesc)
-	})
-	return schemaCached, schemaErr
-}
-
-var typesMu sync.Mutex
-var typesCache = map[string]*dynamic.MessageType{}
-
-func getType(full string) (*dynamic.MessageType, error) {
-	s, err := getSchema()
-	if err != nil {
-		return nil, err
-	}
-	typesMu.Lock()
-	defer typesMu.Unlock()
-	t, ok := typesCache[full]
-	if !ok {
-		t, err = s.Message(full)
-		if err != nil {
-			return nil, err
-		}
-		typesCache[full] = t
-	}
-	return t, nil
-}
-
-const _DESC_B64 = "CrkDCgp4ZGVwLnByb3RvEgR4ZGVwIjIKBkRlcE1zZxISCgRuYW1lGAEgASgJUgRuYW1lEhQKBXZhbHVlGAIgASgFUgV2YWx1ZUroAgoGEgQDAAoBCs0BCgEMEgMDABIawgEgU2hhcmVkIGRlcGVuZGVuY3kgZm9yIHRoZSBjcm9zcy1maWxlIGZpeHR1cmU6IHhmaWxlLnByb3RvIGltcG9ydHMgdGhpcwogZmlsZSBhbmQgcmVmZXJlbmNlcyBEZXBNc2cuIEdlbmVyYXRlZCBvbmNlIHBlciBsYW5ndWFnZSBuZXh0IHRvIHhmaWxlJ3MKIG93biBtb2RlbDsgdGhlIHJlZmVyZW5jZSBieXRlcyBsaXZlIHdpdGggeGZpbGUuCgoICgECEgMFAA0KCgoCBAASBAcACgEKCgoDBAABEgMHCA4KCwoEBAACABIDCAISCgwKBQQAAgAFEgMIAggKDAoFBAACAAESAwgJDQoMCgUEAAIAAxIDCBARCgsKBAQAAgESAwkCEgoMCgUEAAIBBRIDCQIHCgwKBQQAAgEBEgMJCA0KDAoFBAACAQMSAwkQEWIGcHJvdG8zCoEFCgt4ZmlsZS5wcm90bxIFeGZpbGUaCnhkZXAucHJvdG8iZQoHVXNlc0RlcBIkCgZzaW5nbGUYASABKAsyDC54ZGVwLkRlcE1zZ1IGc2luZ2xlEiAKBG1hbnkYAiADKAsyDC54ZGVwLkRlcE1zZ1IEbWFueRISCgRub3RlGAMgASgJUgRub3RlSu8DCgYSBAQADgEKhAIKAQwSAwQAEhr5ASBDcm9zcy1maWxlIGZpeHR1cmUgZm9yIHRoZSBnZW5lcmF0ZWQgY29tcGF0IHRlc3RzOiBVc2VzRGVwIHJlZmVyZW5jZXMKIERlcE1zZyBmcm9tIHhkZXAucHJvdG8sIHNvIGV2ZXJ5IGxhbmd1YWdlIG11c3QgaW1wb3J0IHRoZSBzaWJsaW5nCiBnZW5lcmF0ZWQgZmlsZSBpbnN0ZWFkIG9mIHNraXBwaW5nIHRoZSBmaWVsZC4gUmVmZXJlbmNlIGJ5dGVzCiAoeGZpbGUuYmluKSBmcm9tIHByb3RvYyAtLWVuY29kZSBvZiB4ZmlsZS50eHQuCgoICgECEgMGAA4KCQoCAwASAwgAFAoKCgIEABIECgAOAQoKCgMEAAESAwoIDwoLCgQEAAIAEgMLAhkKDAoFBAACAAYSAwsCDQoMCgUEAAIAARIDCw4UCgwKBQQAAgADEgMLFxgKCwoEBAACARIDDAIgCgwKBQQAAgEEEgMMAgoKDAoFBAACAQYSAwwLFgoMCgUEAAIBARIDDBcbCgwKBQQAAgEDEgMMHh8KCwoEBAACAhIDDQISCgwKBQQAAgIFEgMNAggKDAoFBAACAgESAw0JDQoMCgUEAAICAxIDDRARYgZwcm90bzM="
 
 // xfile.UsesDep
 type UsesDep struct {

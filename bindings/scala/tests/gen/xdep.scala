@@ -5,12 +5,6 @@
 import java.util.Base64
 
 object xdepGen {
-  private val desc: Array[Byte] = Base64.getDecoder.decode(
-    List("""CrkDCgp4ZGVwLnByb3RvEgR4ZGVwIjIKBkRlcE1zZxISCgRuYW1lGAEgASgJUgRuYW1lEhQKBXZhbHVlGAIgASgFUgV2YWx1ZUroAgoGEgQDAAoBCs0BCgEMEgMDABIawgEgU2hhcmVkIGRlcGVuZGVuY3kgZm9yIHRoZSBjcm9zcy1maWxlIGZpeHR1cmU6IHhmaWxlLnByb3RvIGltcG9ydHMgdGhpcwogZmlsZSBhbmQgcmVmZXJlbmNlcyBEZXBNc2cuIEdlbmVyYXRlZCBvbmNlIHBlciBsYW5ndWFnZSBuZXh0IHRvIHhmaWxlJ3MKIG93biBtb2RlbDsgdGhlIHJlZmVyZW5jZSBieXRlcyBsaXZlIHdpdGggeGZpbGUuCgoICgECEgMFAA0KCgoCBAASBAcACgEKCgoDBAABEgMHCA4KCwoEBAACABIDCAISCgwKBQQAAgAFEgMIAggKDAoFBAACAAESAwgJDQoMCgUEAAIAAxIDCBARCgsKBAQAAgESAwkCEgoMCgUEAAIBBRIDCQIHCgwKBQQAAgEBEgMJCA0KDAoFBAACAQMSAwkQEWIGcHJvdG8z""").mkString.filterNot(_.isWhitespace)
-  )
-
-  private val schema: Schema = Schema.fromBytes(desc)
-
   // xdep.DepMsg
   case class Xdep_DepMsg(
     name: String = "",
@@ -20,7 +14,7 @@ object xdepGen {
   }
 
   object Xdep_DepMsg {
-    private val ty: MessageType = schema.message("xdep.DepMsg")
+    private val ty: MessageType = xdepMeta.schema.message("xdep.DepMsg")
 
     def encode(v: Xdep_DepMsg): Array[Byte] = {
       val msg = ty.newMessage()

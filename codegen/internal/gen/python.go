@@ -46,66 +46,108 @@ func pythonType(field model.Field, prefix string) string {
 	}
 }
 
-const pythonRuntime = `import base64 as _base64
-
-_SCHEMA = None
-_TYPES = {}
-
-def _schema():
-    """The embedded FileDescriptorSet as a pbwire schema (built once)."""
-    global _SCHEMA
-    if _SCHEMA is None:
-        import pbwire as _pbw
-        _SCHEMA = _pbw.Schema.load(_base64.b64decode(_DESC_B64))
-    return _SCHEMA
-
-
-def _type(full):
-    t = _TYPES.get(full)
-    if t is None:
-        t = _schema().message(full)
-        _TYPES[full] = t
-    return t
-
-`
-
-func pythonFiles(f *model.File, opt Options) []File {
-	var b strings.Builder
-	// Foreign message refs qualify as sibling_module.Class, so rewrite them
-	// once instead of touching every use site.
-	qualifyFields(f, func(imp model.Import, local string) string {
-		return stem(imp.Path) + "_pbwire." + local
-	})
-	b.WriteString(headerP(f, "#", "Generated dataclasses over the pbwire dict API, official _pb2-shaped methods included."))
-	b.WriteString("from __future__ import annotations\n\n")
-	b.WriteString("from dataclasses import dataclass, field as dc_field\n")
-	b.WriteString("from typing import Any, Dict, List, Mapping, Optional, Tuple\n")
-	for _, imp := range f.Imports {
-		fmt.Fprintf(&b, "import %s_pbwire\n", stem(imp.Path))
-	}
-	b.WriteString("\n")
-	fmt.Fprintf(&b, "_DESC_B64 = \"%s\"\n\n", opt.DescSetB64)
-	b.WriteString(pythonRuntime)
-	for _, e := range f.Enums {
-		fmt.Fprintf(&b, "class %s:\n    \"\"\"%s\"\"\"\n", e.Name, e.Full)
-		for _, v := range e.Values {
-			fmt.Fprintf(&b, "    %s = %d\n", v.Name, v.Number)
+func pythonFiles(f *model.File, opt Options) ([]File, error) {
+	var files []File
+	// Models and schema part ways: dataclasses in one module, the embedded
+	// descriptor set plus its loader in the other. model=false leaves the
+	// schema module for dynamic-only users.
+	if opt.Model {
+		var b strings.Builder
+		// Foreign message refs qualify as sibling_module.Class, so rewrite them
+		// once instead of touching every use site.
+		qualifyFields(f, func(imp model.Import, local string) string {
+			return stem(imp.Path) + "_pbwire." + local
+		})
+		b.WriteString(headerP(f, "#", "Generated dataclasses over the pbwire dict API, official _pb2-shaped methods included."))
+		b.WriteString("from __future__ import annotations\n\n")
+		b.WriteString("from dataclasses import dataclass, field as dc_field\n")
+		b.WriteString("from typing import Any, Dict, List, Mapping, Optional, Tuple\n")
+		for _, imp := range f.Imports {
+			fmt.Fprintf(&b, "import %s_pbwire\n", stem(imp.Path))
 		}
+		fmt.Fprintf(&b, "import %s_pbwire_meta as _meta\n", base(f))
 		b.WriteString("\n")
+		for _, e := range f.Enums {
+			fmt.Fprintf(&b, "class %s:\n    \"\"\"%s\"\"\"\n", e.Name, e.Full)
+			for _, v := range e.Values {
+				fmt.Fprintf(&b, "    %s = %d\n", v.Name, v.Number)
+			}
+			b.WriteString("\n")
+		}
+		for _, m := range f.Messages {
+			writePythonClass(&b, f, m)
+		}
+		writePythonAliases(&b, f)
+		b.WriteString("DESCRIPTOR = {\n")
+		fmt.Fprintf(&b, "    \"name\": %q,\n", f.Path)
+		fmt.Fprintf(&b, "    \"package\": %q,\n", f.Package)
+		b.WriteString("    \"messages\": [\n")
+		for _, m := range f.Messages {
+			fmt.Fprintf(&b, "        %q,\n", m.Full)
+		}
+		b.WriteString("    ],\n}\n")
+		files = append(files, File{Name: base(f) + "_pbwire.py", Content: b.String()})
 	}
-	for _, m := range f.Messages {
-		writePythonClass(&b, f, m)
+	var meta strings.Builder
+	writePythonMeta(&meta, f, opt)
+	files = append(files, File{Name: base(f) + "_pbwire_meta.py", Content: meta.String()})
+	return files, nil
+}
+
+// writePythonMeta emits the schema module: the embedded descriptor set plus
+// an explicit loader. register=true loads lazily on first use (as before);
+// otherwise init_schema (embedded bytes) or use_schema (an external schema)
+// must run first, loudly otherwise. registry adds the whole-file message
+// list plus a preload that warms every type.
+func writePythonMeta(b *strings.Builder, f *model.File, opt Options) {
+	b.WriteString(headerP(f, "#", "Embedded descriptor set plus its loader: the schema side of the generated model."))
+	b.WriteString("import base64 as _base64\n\n")
+	fmt.Fprintf(b, "_DESC_B64 = %q\n\n", opt.DescSetB64)
+	b.WriteString("_SCHEMA = None\n")
+	b.WriteString("_TYPES = {}\n\n")
+	b.WriteString("def init_schema(data=None):\n")
+	b.WriteString("    \"\"\"Loads the embedded set, or the given bytes for the descriptor mode.\"\"\"\n")
+	b.WriteString("    global _SCHEMA, _TYPES\n")
+	b.WriteString("    import pbwire as _pbw\n")
+	b.WriteString("    _SCHEMA = _pbw.Schema.load(bytes(data) if data is not None else _base64.b64decode(_DESC_B64))\n")
+	b.WriteString("    _TYPES = {}\n\n")
+	b.WriteString("def use_schema(schema):\n")
+	b.WriteString("    \"\"\"Registers an externally loaded schema: models encode/decode through it\n")
+	b.WriteString("    instead of the embedded set. The caller owns it; None clears the\n")
+	b.WriteString("    override (call init_schema to reload).\"\"\"\n")
+	b.WriteString("    global _SCHEMA, _TYPES\n")
+	b.WriteString("    _SCHEMA = schema\n")
+	b.WriteString("    _TYPES = {}\n\n")
+	if opt.Register {
+		b.WriteString("def _schema():\n")
+		b.WriteString("    \"\"\"The embedded FileDescriptorSet as a pbwire schema (built once).\"\"\"\n")
+		b.WriteString("    if _SCHEMA is None:\n")
+		b.WriteString("        init_schema()\n")
+		b.WriteString("    return _SCHEMA\n\n")
+	} else {
+		b.WriteString("def _schema():\n")
+		b.WriteString("    if _SCHEMA is None:\n")
+		b.WriteString("        raise RuntimeError(\"call init_schema() first (generated with register=false)\")\n")
+		b.WriteString("    return _SCHEMA\n\n")
 	}
-	writePythonAliases(&b, f)
-	b.WriteString("DESCRIPTOR = {\n")
-	fmt.Fprintf(&b, "    \"name\": %q,\n", f.Path)
-	fmt.Fprintf(&b, "    \"package\": %q,\n", f.Package)
-	b.WriteString("    \"messages\": [\n")
-	for _, m := range f.Messages {
-		fmt.Fprintf(&b, "        %q,\n", m.Full)
+	b.WriteString("def _type(full):\n")
+	b.WriteString("    t = _TYPES.get(full)\n")
+	b.WriteString("    if t is None:\n")
+	b.WriteString("        t = _schema().message(full)\n")
+	b.WriteString("        _TYPES[full] = t\n")
+	b.WriteString("    return t\n")
+	if opt.Registry {
+		b.WriteString("\nMESSAGE_NAMES = [\n")
+		for _, m := range f.Messages {
+			fmt.Fprintf(b, "    %q,\n", m.Full)
+		}
+		b.WriteString("]\n\n")
+		b.WriteString("def preload():\n")
+		b.WriteString("    \"\"\"Warms every message type, so later calls pay no lookup.\"\"\"\n")
+		b.WriteString("    for full in MESSAGE_NAMES:\n")
+		b.WriteString("        _type(full)\n")
+		b.WriteString("    return MESSAGE_NAMES\n")
 	}
-	b.WriteString("    ],\n}\n")
-	return []File{{Name: base(f) + "_pbwire.py", Content: b.String()}}
 }
 
 func writePythonClass(b *strings.Builder, f *model.File, m model.Message) {
@@ -212,7 +254,7 @@ func writePythonOfficial(b *strings.Builder, f *model.File, m model.Message, one
 	full := m.Full
 	b.WriteString("    def SerializeToString(self) -> bytes:\n")
 	b.WriteString("        \"\"\"Wire bytes; the embedded schema drives the C core.\"\"\"\n")
-	fmt.Fprintf(b, "        return _type(%q).encode(self.to_dict())\n\n", full)
+	fmt.Fprintf(b, "        return _meta._type(%q).encode(self.to_dict())\n\n", full)
 	b.WriteString("    def ParseFromString(self, wire: bytes) -> int:\n")
 	b.WriteString("        \"\"\"Merge wire bytes into this message; returns bytes consumed.\"\"\"\n")
 	fmt.Fprintf(b, "        other = %s.FromString(wire)\n", m.Name)
@@ -220,7 +262,7 @@ func writePythonOfficial(b *strings.Builder, f *model.File, m model.Message, one
 	b.WriteString("        return len(wire)\n\n")
 	b.WriteString("    @classmethod\n")
 	fmt.Fprintf(b, "    def FromString(cls, wire: bytes) -> %s:\n", m.Name)
-	fmt.Fprintf(b, "        return cls.from_dict(_type(%q).decode(bytes(wire)).to_dict())\n\n", full)
+	fmt.Fprintf(b, "        return cls.from_dict(_meta._type(%q).decode(bytes(wire)).to_dict())\n\n", full)
 	b.WriteString("    def CopyFrom(self, other) -> None:\n")
 	fmt.Fprintf(b, "        if not isinstance(other, %s):\n", m.Name)
 	fmt.Fprintf(b, "            raise TypeError(\"CopyFrom expects %s\")\n", m.Name)

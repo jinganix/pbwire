@@ -43,6 +43,23 @@ wrappers (`isOneof1_Kind`), repeated fields are slices — the same shapes
 core; a `proto.Message` interface is deliberately not implemented (maps
 and cross-file references stay on the dynamic API, as in every binding).
 
+## Codegen options
+
+`--pbwire_opt=lang=go[,model=bool][,register=bool][,registry=bool]`
+(all default `true`):
+
+- Each file generates two halves: `<base>_pbwire.go` (structs) and
+  `<base>_pbwire_meta.go` (embedded descriptor set plus its loader).
+  `model=false` leaves the meta half for dynamic-only users.
+- `register=false` drops the implicit once-load: call `Init()` (embedded)
+  or `UseSchema()` (external) first, failing loudly otherwise.
+- `registry=false` drops `MessageNames` + `Preload()`; the loader stays.
+
+Two registrations, one model. By default structs load the embedded set
+on first use. `UseSchema(dynamic.Load(descBytes))` points them at an
+external descriptor file instead (nil restores embedded); `Preload()`
+warms every generated type so later calls pay no lookup.
+
 | Piece | Path | Role |
 |---|---|---|
 | dynamic | [`dynamic/`](dynamic/) | the binding: `Registry` (hot-swap), `Schema`, `MessageType`, `Message` |

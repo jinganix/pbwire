@@ -14,6 +14,7 @@ here <- dirname(sub("^--file=", "", grep("^--file=", commandArgs(),
                                          value = TRUE)[1L]))
 dyn.load(file.path(here, "..", "pbwire.so"))
 source(file.path(here, "..", "runtime", "R", "pbwire.R"))
+source(file.path(here, "gen", "matrix3_meta.R"))
 source(file.path(here, "gen", "matrix3_pbwire.R"))
 
 checks <- 0
@@ -67,7 +68,9 @@ check(zero$opt_i32 == 0L, "explicit zero with presence survives")
 
 # Cross-file references resolve to the sibling file's constructors (one
 # global environment, so no import line).
+source(file.path(here, "gen", "xdep_meta.R"))
 source(file.path(here, "gen", "xdep_pbwire.R"))
+source(file.path(here, "gen", "xfile_meta.R"))
 source(file.path(here, "gen", "xfile_pbwire.R"))
 xref <- readBin(file.path(here, "..", "..", "..", "codegen", "testdata", "xfile.bin"),
                 "raw", n = 1e6)
@@ -86,5 +89,12 @@ check(length(xback$many) == 2 && isTRUE(xback$many[[2]]$value == -1L),
 check(isTRUE(xback$note == "hi"), "xfile note")
 check(identical(Xfile_UsesDep_encode(xback), xref),
       "xfile decode/encode byte-exact")
+
+# Dual registration: embedded set by default, explicit init/use_schema.
+check("structtest.Scalars3" %in% .pbwire_message_names_matrix3,
+      "registry lists every message")
+.pbwire_preload_matrix3()
+check(isTRUE(Structtest_Scalars3_decode(Structtest_Scalars3_encode(build()))$str == "hello"),
+      "decode after preload")
 
 cat(sprintf("generated test ok: %d checks\n", checks))

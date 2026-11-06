@@ -12,3 +12,12 @@ defmodule Xfile.UsesDep do
   field(:note, 3, type: :string)
 end
 
+# Every message in this file, for whole-schema pre-registration.
+defmodule Xfile.Registry do
+  @moduledoc false
+  def message_modules do
+    [
+      Xfile.UsesDep
+    ]
+  end
+end

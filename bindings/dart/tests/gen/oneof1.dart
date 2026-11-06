@@ -2,32 +2,10 @@
 // Generated facades over the pbwire dynamic API, protobuf-dart shape.
 // Do not edit; regenerate from the .proto instead.
 
-import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:pbwire/pbwire.dart';
-
-/// The FileDescriptorSet for oneof1.proto, so messages encode with no .desc file.
-const _descB64 =
-    "CvUFCgxvbmVvZjEucHJvdG8SCHNwZWN0ZXN0IpUBCgZPbmVvZjESEgoEbmFtZRgBIAEoCVIEbmFt"
-    "ZRISCgNudW0YAiABKAVIAFIDbnVtEhQKBHRleHQYAyABKAlIAFIEdGV4dBIuCgVpbm5lchgEIAEo"
-    "CzIWLnNwZWN0ZXN0Lk9uZW9mMS5Jbm5lckgAUgVpbm5lchoVCgVJbm5lchIMCgF2GAEgASgFUgF2"
-    "QgYKBGtpbmRKugQKBhIEAwASAQq6AQoBDBIDAwASGq8BIFNtYWxsIG9uZW9mICsgbmVzdGluZyBm"
-    "aXh0dXJlIGZvciB0aGUgZ2VuZXJhdGVkIGNvbXBhdCB0ZXN0cyAoVEVTVFNQRUMgVDEtVDUKIGV4"
-    "dHJhcykuIEtlcHQgaW4gdGVzdGRhdGEgc28gZXZlcnkgYmluZGluZyBzaGFyZXMgdGhlIHNhbWUg"
-    "c2NoZW1hLCB2YWx1ZXMKIGFuZCByZWZlcmVuY2UgYnl0ZXMuCgoICgECEgMFABEKCgoCBAASBAcA"
-    "EgEKCgoDBAABEgMHCA4KDAoEBAADABIECAIKAwoMCgUEAAMAARIDCAoPCg0KBgQAAwACABIDCQQQ"
-    "Cg4KBwQAAwACAAUSAwkECQoOCgcEAAMAAgABEgMJCgsKDgoHBAADAAIAAxIDCQ4PCgsKBAQAAgAS"
-    "AwwCEgoMCgUEAAIABRIDDAIICgwKBQQAAgABEgMMCQ0KDAoFBAACAAMSAwwQEQoMCgQEAAgAEgQN"
-    "AhEDCgwKBQQACAABEgMNCAwKCwoEBAACARIDDgQSCgwKBQQAAgEFEgMOBAkKDAoFBAACAQESAw4K"
-    "DQoMCgUEAAIBAxIDDhARCgsKBAQAAgISAw8EFAoMCgUEAAICBRIDDwQKCgwKBQQAAgIBEgMPCw8K"
-    "DAoFBAACAgMSAw8SEwoLCgQEAAIDEgMQBBQKDAoFBAACAwYSAxAECQoMCgUEAAIDARIDEAoPCgwK"
-    "BQQAAgMDEgMQEhNiBnByb3RvMw==";
-
-Schema? _schema;
-
-/// The embedded schema, loaded once per isolate.
-Schema get schemaCached => _schema ??= Schema.fromBytes(base64Decode(_descB64));
+import 'oneof1_meta.dart';
 
 /// spectest.Oneof1.Inner
 class Oneof1_Inner {
@@ -52,7 +30,7 @@ class Oneof1_Inner {
   void clearV() { v = 0; }
 
   Uint8List writeToBuffer() {
-    final msg = schemaCached.message("spectest.Oneof1.Inner").newMessage();
+    final msg = oneof1_schema.message("spectest.Oneof1.Inner").newMessage();
     try {
       encodeInto(msg);
       return msg.encode();
@@ -62,7 +40,7 @@ class Oneof1_Inner {
   }
 
   void mergeFromBuffer(List<int> wire) {
-    final msg = schemaCached.message("spectest.Oneof1.Inner").decode(wire);
+    final msg = oneof1_schema.message("spectest.Oneof1.Inner").decode(wire);
     try {
       loadFrom(msg);
     } finally {
@@ -146,7 +124,7 @@ class Oneof1 {
   }
 
   Uint8List writeToBuffer() {
-    final msg = schemaCached.message("spectest.Oneof1").newMessage();
+    final msg = oneof1_schema.message("spectest.Oneof1").newMessage();
     try {
       encodeInto(msg);
       return msg.encode();
@@ -156,7 +134,7 @@ class Oneof1 {
   }
 
   void mergeFromBuffer(List<int> wire) {
-    final msg = schemaCached.message("spectest.Oneof1").decode(wire);
+    final msg = oneof1_schema.message("spectest.Oneof1").decode(wire);
     try {
       loadFrom(msg);
     } finally {

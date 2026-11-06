@@ -6,6 +6,7 @@
 --   lua examples/roundtrip.lua   (from bindings/lua, after ./build.sh)
 
 package.cpath = "./?.so;" .. package.cpath
+package.path = "examples/gen/?.lua;" .. package.path
 
 local gen = dofile("examples/gen/addressbook.lua")
 

@@ -5,48 +5,9 @@
 package oneof1
 
 import (
-	"encoding/base64"
 	"fmt"
-	"sync"
-
 	"pbwire/dynamic"
 )
-
-var fileDesc, _ = base64.StdEncoding.DecodeString(_DESC_B64)
-
-var schemaOnce sync.Once
-var schemaCached *dynamic.Schema
-var schemaErr error
-
-func getSchema() (*dynamic.Schema, error) {
-	schemaOnce.Do(func() {
-		schemaCached, schemaErr = dynamic.Load(fileDesc)
-	})
-	return schemaCached, schemaErr
-}
-
-var typesMu sync.Mutex
-var typesCache = map[string]*dynamic.MessageType{}
-
-func getType(full string) (*dynamic.MessageType, error) {
-	s, err := getSchema()
-	if err != nil {
-		return nil, err
-	}
-	typesMu.Lock()
-	defer typesMu.Unlock()
-	t, ok := typesCache[full]
-	if !ok {
-		t, err = s.Message(full)
-		if err != nil {
-			return nil, err
-		}
-		typesCache[full] = t
-	}
-	return t, nil
-}
-
-const _DESC_B64 = "CvEFCgxvbmVvZjEucHJvdG8SCHNwZWN0ZXN0IpUBCgZPbmVvZjESEgoEbmFtZRgBIAEoCVIEbmFtZRISCgNudW0YAiABKAVIAFIDbnVtEhQKBHRleHQYAyABKAlIAFIEdGV4dBIuCgVpbm5lchgEIAEoCzIWLnNwZWN0ZXN0Lk9uZW9mMS5Jbm5lckgAUgVpbm5lchoVCgVJbm5lchIMCgF2GAEgASgFUgF2QgYKBGtpbmRKtgQKBhIEAwASAQq2AQoBDBIDAwASGqsBIFNtYWxsIG9uZW9mICsgbmVzdGluZyBmaXh0dXJlIGZvciB0aGUgdHlwZWQgY29tcGF0IHRlc3RzIChURVNUU1BFQyBUMS1UNQogZXh0cmFzKS4gS2VwdCBpbiB0ZXN0ZGF0YSBzbyBldmVyeSBiaW5kaW5nIHNoYXJlcyB0aGUgc2FtZSBzY2hlbWEsIHZhbHVlcwogYW5kIHJlZmVyZW5jZSBieXRlcy4KCggKAQISAwUAEQoKCgIEABIEBwASAQoKCgMEAAESAwcIDgoMCgQEAAMAEgQIAgoDCgwKBQQAAwABEgMICg8KDQoGBAADAAIAEgMJBBAKDgoHBAADAAIABRIDCQQJCg4KBwQAAwACAAESAwkKCwoOCgcEAAMAAgADEgMJDg8KCwoEBAACABIDDAISCgwKBQQAAgAFEgMMAggKDAoFBAACAAESAwwJDQoMCgUEAAIAAxIDDBARCgwKBAQACAASBA0CEQMKDAoFBAAIAAESAw0IDAoLCgQEAAIBEgMOBBIKDAoFBAACAQUSAw4ECQoMCgUEAAIBARIDDgoNCgwKBQQAAgEDEgMOEBEKCwoEBAACAhIDDwQUCgwKBQQAAgIFEgMPBAoKDAoFBAACAgESAw8LDwoMCgUEAAICAxIDDxITCgsKBAQAAgMSAxAEFAoMCgUEAAIDBhIDEAQJCgwKBQQAAgMBEgMQCg8KDAoFBAACAwMSAxASE2IGcHJvdG8z"
 
 // spectest.Oneof1.Inner
 type Oneof1_Inner struct {

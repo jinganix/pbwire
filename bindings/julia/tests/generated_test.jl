@@ -72,6 +72,14 @@ end
     @test zero.opt_i32 == 0
 end
 
+@testset "registry and preload" begin
+    # The whole-file list covers every message; preload warms them.
+    @test "structtest.Scalars3" in MESSAGE_NAMES
+    @test "structtest.Inner3" in MESSAGE_NAMES
+    preload()
+    @test decode(Structtest_Scalars3, read(REFERENCE)).str == "hello"
+end
+
 @testset "xfile cross-file import" begin
     include(joinpath(@__DIR__, "gen", "xdep_pbwire.jl"))
     include(joinpath(@__DIR__, "gen", "xfile_pbwire.jl"))

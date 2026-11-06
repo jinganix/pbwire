@@ -85,7 +85,17 @@ not `Send`/`Sync` on purpose: like the C core, one tree belongs to one thread.
 `protoc-gen-pbwire` (in `../../codegen`) generates prost-shaped structs:
 the same field names, `Option` for optional/message/oneof fields, `i32` for
 enums, nested modules, and `encode_to_vec` / `decode` over the embedded
-schema — no schema argument at use sites. The committed output is
+schema — no schema argument at use sites. Each file splits in two:
+`<mod>.rs` (models, including the sibling file as `pub mod meta`) and
+`<mod>_meta.rs` (the embedded `DESC` plus the per-thread lazy `SCHEMA`).
+`--pbwire_opt=lang=rust[,model=bool][,register=bool][,registry=bool]`
+(all default `true`): `model=false` leaves the schema file for
+dynamic-only users; `register=false` replaces the implicit schema with an
+explicit per-thread `init()` (loud otherwise); `registry=false` drops
+`MESSAGE_NAMES` + `preload()`. External descriptor sets keep working
+through the raw runtime API (`Schema::from_file`); `Schema` stays
+`!Sync` by design (one thread per schema, like the C core), so models
+follow the embedded set. The committed output is
 `tests/gen/` and `examples/gen/`; `examples/roundtrip.rs` assigns typed
 fields only, and `tests/compat.rs` proves byte and field parity with the
 pinned prost oracle (T1–T6). See `../../codegen/README.md`.

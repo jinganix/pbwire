@@ -6,29 +6,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field as dc_field
 from typing import Any, Dict, List, Mapping, Optional, Tuple
-
-_DESC_B64 = "CvUFCgxvbmVvZjEucHJvdG8SCHNwZWN0ZXN0IpUBCgZPbmVvZjESEgoEbmFtZRgBIAEoCVIEbmFtZRISCgNudW0YAiABKAVIAFIDbnVtEhQKBHRleHQYAyABKAlIAFIEdGV4dBIuCgVpbm5lchgEIAEoCzIWLnNwZWN0ZXN0Lk9uZW9mMS5Jbm5lckgAUgVpbm5lchoVCgVJbm5lchIMCgF2GAEgASgFUgF2QgYKBGtpbmRKugQKBhIEAwASAQq6AQoBDBIDAwASGq8BIFNtYWxsIG9uZW9mICsgbmVzdGluZyBmaXh0dXJlIGZvciB0aGUgZ2VuZXJhdGVkIGNvbXBhdCB0ZXN0cyAoVEVTVFNQRUMgVDEtVDUKIGV4dHJhcykuIEtlcHQgaW4gdGVzdGRhdGEgc28gZXZlcnkgYmluZGluZyBzaGFyZXMgdGhlIHNhbWUgc2NoZW1hLCB2YWx1ZXMKIGFuZCByZWZlcmVuY2UgYnl0ZXMuCgoICgECEgMFABEKCgoCBAASBAcAEgEKCgoDBAABEgMHCA4KDAoEBAADABIECAIKAwoMCgUEAAMAARIDCAoPCg0KBgQAAwACABIDCQQQCg4KBwQAAwACAAUSAwkECQoOCgcEAAMAAgABEgMJCgsKDgoHBAADAAIAAxIDCQ4PCgsKBAQAAgASAwwCEgoMCgUEAAIABRIDDAIICgwKBQQAAgABEgMMCQ0KDAoFBAACAAMSAwwQEQoMCgQEAAgAEgQNAhEDCgwKBQQACAABEgMNCAwKCwoEBAACARIDDgQSCgwKBQQAAgEFEgMOBAkKDAoFBAACAQESAw4KDQoMCgUEAAIBAxIDDhARCgsKBAQAAgISAw8EFAoMCgUEAAICBRIDDwQKCgwKBQQAAgIBEgMPCw8KDAoFBAACAgMSAw8SEwoLCgQEAAIDEgMQBBQKDAoFBAACAwYSAxAECQoMCgUEAAIDARIDEAoPCgwKBQQAAgMDEgMQEhNiBnByb3RvMw=="
-
-import base64 as _base64
-
-_SCHEMA = None
-_TYPES = {}
-
-def _schema():
-    """The embedded FileDescriptorSet as a pbwire schema (built once)."""
-    global _SCHEMA
-    if _SCHEMA is None:
-        import pbwire as _pbw
-        _SCHEMA = _pbw.Schema.load(_base64.b64decode(_DESC_B64))
-    return _SCHEMA
-
-
-def _type(full):
-    t = _TYPES.get(full)
-    if t is None:
-        t = _schema().message(full)
-        _TYPES[full] = t
-    return t
+import oneof1_pbwire_meta as _meta
 
 @dataclass
 class Oneof1_Inner:
@@ -52,7 +30,7 @@ class Oneof1_Inner:
 
     def SerializeToString(self) -> bytes:
         """Wire bytes; the embedded schema drives the C core."""
-        return _type("spectest.Oneof1.Inner").encode(self.to_dict())
+        return _meta._type("spectest.Oneof1.Inner").encode(self.to_dict())
 
     def ParseFromString(self, wire: bytes) -> int:
         """Merge wire bytes into this message; returns bytes consumed."""
@@ -62,7 +40,7 @@ class Oneof1_Inner:
 
     @classmethod
     def FromString(cls, wire: bytes) -> Oneof1_Inner:
-        return cls.from_dict(_type("spectest.Oneof1.Inner").decode(bytes(wire)).to_dict())
+        return cls.from_dict(_meta._type("spectest.Oneof1.Inner").decode(bytes(wire)).to_dict())
 
     def CopyFrom(self, other) -> None:
         if not isinstance(other, Oneof1_Inner):
@@ -138,7 +116,7 @@ class Oneof1:
 
     def SerializeToString(self) -> bytes:
         """Wire bytes; the embedded schema drives the C core."""
-        return _type("spectest.Oneof1").encode(self.to_dict())
+        return _meta._type("spectest.Oneof1").encode(self.to_dict())
 
     def ParseFromString(self, wire: bytes) -> int:
         """Merge wire bytes into this message; returns bytes consumed."""
@@ -148,7 +126,7 @@ class Oneof1:
 
     @classmethod
     def FromString(cls, wire: bytes) -> Oneof1:
-        return cls.from_dict(_type("spectest.Oneof1").decode(bytes(wire)).to_dict())
+        return cls.from_dict(_meta._type("spectest.Oneof1").decode(bytes(wire)).to_dict())
 
     def CopyFrom(self, other) -> None:
         if not isinstance(other, Oneof1):

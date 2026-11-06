@@ -84,5 +84,13 @@ let main argv =
             (Matrix3.Structtest_Scalars3.encode { Matrix3.Structtest_Scalars3.defaultValue with opt_i32 = Some 0 })
     check (zero.opt_i32 = Some 0) "explicit zero with presence survives"
 
+    // Dual registration: embedded set by default, explicit init/override.
+    Matrix3Meta.preload ()
+    check (Matrix3Meta.messageNames.Length = 2) "registry lists every message"
+    Matrix3Meta.useSchema null
+    check (try Matrix3.Structtest_Scalars3.decode reference |> ignore; false with _ -> true) "cleared schema fails loudly"
+    Matrix3Meta.initSchema Matrix3Meta.desc
+    check ((Matrix3.Structtest_Scalars3.decode reference).str = "hello") "initSchema restores embedded"
+
     printfn $"generated test ok: %d{checks} checks"
     0

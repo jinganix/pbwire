@@ -103,3 +103,13 @@ the runner's path (`DOTNET_ROOT_ARM64` when `dotnet` lives outside
 A `Schema` and a root `Message` own native memory: `Dispose()` (`use`) frees
 it. A nested message is a view of its parent and never frees anything. Nothing
 is shared, so one tree belongs to one thread, like the C core.
+
+## Generated models
+
+`protoc-gen-pbwire` (in `../../codegen`) emits `<base>.fs` (records) and
+`<base>_meta.fs` (the embedded descriptor set plus its loader).
+`--pbwire_opt=lang=fsharp[,model=bool][,register=bool][,registry=bool]`
+(all default `true`): `model=false` leaves the schema module for
+dynamic-only users; `register=false` drops the eager load so `initSchema`
+(embedded bytes) or `useSchema` (an external `Schema`, dual registration)
+must run first; `registry=false` drops `messageNames` + `preload`.

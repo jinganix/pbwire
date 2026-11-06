@@ -3,41 +3,18 @@
 // Do not edit; regenerate from the .proto instead.
 
 #import "xdep.h"
+#import "xdep.h"
+#import "xdep_schema.h"
 #import "PBWError.h"
 
 NS_ASSUME_NONNULL_BEGIN
-
-static NSString * const kPBWGenDescB64 =
-    @"CrkDCgp4ZGVwLnByb3RvEgR4ZGVwIjIKBkRlcE1zZxISCgRuYW1lGAEgASgJ"
-    @"UgRuYW1lEhQKBXZhbHVlGAIgASgFUgV2YWx1ZUroAgoGEgQDAAoBCs0BCgEM"
-    @"EgMDABIawgEgU2hhcmVkIGRlcGVuZGVuY3kgZm9yIHRoZSBjcm9zcy1maWxl"
-    @"IGZpeHR1cmU6IHhmaWxlLnByb3RvIGltcG9ydHMgdGhpcwogZmlsZSBhbmQg"
-    @"cmVmZXJlbmNlcyBEZXBNc2cuIEdlbmVyYXRlZCBvbmNlIHBlciBsYW5ndWFn"
-    @"ZSBuZXh0IHRvIHhmaWxlJ3MKIG93biBtb2RlbDsgdGhlIHJlZmVyZW5jZSBi"
-    @"eXRlcyBsaXZlIHdpdGggeGZpbGUuCgoICgECEgMFAA0KCgoCBAASBAcACgEK"
-    @"CgoDBAABEgMHCA4KCwoEBAACABIDCAISCgwKBQQAAgAFEgMIAggKDAoFBAAC"
-    @"AAESAwgJDQoMCgUEAAIAAxIDCBARCgsKBAQAAgESAwkCEgoMCgUEAAIBBRID"
-    @"CQIHCgwKBQQAAgEBEgMJCA0KDAoFBAACAQMSAwkQEWIGcHJvdG8z"
-    ;
-
-static PBWSchema *PBWGenFileSchema(void)
-{
-    static PBWSchema *schema = nil;
-    static dispatch_once_t onceToken;
-    dispatch_once(&onceToken, ^{
-        NSData *raw = [[NSData alloc] initWithBase64EncodedString:kPBWGenDescB64 options:0];
-        NSError *error = nil;
-        schema = [PBWSchema schemaFromData:raw error:&error];
-    });
-    return schema;
-}
 
 @implementation PBWGen_DepMsg
 
 
 + (nullable PBWSchema *)pbw_schema
 {
-    return PBWGenFileSchema();
+    return PBWGenXdepFileSchema();
 }
 
 + (instancetype)message

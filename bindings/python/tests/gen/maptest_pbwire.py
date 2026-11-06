@@ -6,29 +6,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field as dc_field
 from typing import Any, Dict, List, Mapping, Optional, Tuple
-
-_DESC_B64 = "CsQICg1tYXB0ZXN0LnByb3RvEghzcGVjdGVzdCI0CghNYXBWYWx1ZRISCgRuYW1lGAEgASgJUgRuYW1lEhQKBXZhbHVlGAIgASgFUgV2YWx1ZSLqAgoHTWFwVGVzdBIzCgZieV9pbnQYASADKAsyHC5zcGVjdGVzdC5NYXBUZXN0LkJ5SW50RW50cnlSBWJ5SW50EjMKBmJ5X3N0chgCIAMoCzIcLnNwZWN0ZXN0Lk1hcFRlc3QuQnlTdHJFbnRyeVIFYnlTdHISMwoGYnlfbXNnGAMgAygLMhwuc3BlY3Rlc3QuTWFwVGVzdC5CeU1zZ0VudHJ5UgVieU1zZxo4CgpCeUludEVudHJ5EhAKA2tleRgBIAEoBVIDa2V5EhQKBXZhbHVlGAIgASgJUgV2YWx1ZToCOAEaOAoKQnlTdHJFbnRyeRIQCgNrZXkYASABKAlSA2tleRIUCgV2YWx1ZRgCIAEoBVIFdmFsdWU6AjgBGkwKCkJ5TXNnRW50cnkSEAoDa2V5GAEgASgJUgNrZXkSKAoFdmFsdWUYAiABKAsyEi5zcGVjdGVzdC5NYXBWYWx1ZVIFdmFsdWU6AjgBSv0ECgYSBAQAEQEKpQIKAQwSAwQAEhqaAiBTbWFsbCBtYXAgZml4dHVyZSBmb3IgdGhlIGdlbmVyYXRlZCBjb21wYXQgdGVzdHM6IHNjYWxhciwgaW50LWtleWVkIGFuZAogbWVzc2FnZS12YWx1ZWQgbWFwcyByaWRlIGFzIHJlcGVhdGVkIGVudHJ5IHN0cnVjdHMgaW4gZXZlcnkgbGFuZ3VhZ2UuCiBLZXB0IGluIHRlc3RkYXRhIHNvIGV2ZXJ5IGJpbmRpbmcgc2hhcmVzIHRoZSBzYW1lIHNjaGVtYSwgdmFsdWVzIGFuZAogcmVmZXJlbmNlIGJ5dGVzIChtYXB0ZXN0LmJpbiBmcm9tIHByb3RvYyAtLWVuY29kZSBvZiBtYXB0ZXN0LnR4dCkuCgoICgECEgMGABEKCgoCBAASBAgACwEKCgoDBAABEgMICBAKCwoEBAACABIDCQISCgwKBQQAAgAFEgMJAggKDAoFBAACAAESAwkJDQoMCgUEAAIAAxIDCRARCgsKBAQAAgESAwoCEgoMCgUEAAIBBRIDCgIHCgwKBQQAAgEBEgMKCA0KDAoFBAACAQMSAwoQEQoKCgIEARIEDQARAQoKCgMEAQESAw0IDwoLCgQEAQIAEgMOAiAKDAoFBAECAAYSAw4CFAoMCgUEAQIAARIDDhUbCgwKBQQBAgADEgMOHh8KCwoEBAECARIDDwIgCgwKBQQBAgEGEgMPAhQKDAoFBAECAQESAw8VGwoMCgUEAQIBAxIDDx4fCgsKBAQBAgISAxACIwoMCgUEAQICBhIDEAIXCgwKBQQBAgIBEgMQGB4KDAoFBAECAgMSAxAhImIGcHJvdG8z"
-
-import base64 as _base64
-
-_SCHEMA = None
-_TYPES = {}
-
-def _schema():
-    """The embedded FileDescriptorSet as a pbwire schema (built once)."""
-    global _SCHEMA
-    if _SCHEMA is None:
-        import pbwire as _pbw
-        _SCHEMA = _pbw.Schema.load(_base64.b64decode(_DESC_B64))
-    return _SCHEMA
-
-
-def _type(full):
-    t = _TYPES.get(full)
-    if t is None:
-        t = _schema().message(full)
-        _TYPES[full] = t
-    return t
+import maptest_pbwire_meta as _meta
 
 @dataclass
 class MapValue:
@@ -57,7 +35,7 @@ class MapValue:
 
     def SerializeToString(self) -> bytes:
         """Wire bytes; the embedded schema drives the C core."""
-        return _type("spectest.MapValue").encode(self.to_dict())
+        return _meta._type("spectest.MapValue").encode(self.to_dict())
 
     def ParseFromString(self, wire: bytes) -> int:
         """Merge wire bytes into this message; returns bytes consumed."""
@@ -67,7 +45,7 @@ class MapValue:
 
     @classmethod
     def FromString(cls, wire: bytes) -> MapValue:
-        return cls.from_dict(_type("spectest.MapValue").decode(bytes(wire)).to_dict())
+        return cls.from_dict(_meta._type("spectest.MapValue").decode(bytes(wire)).to_dict())
 
     def CopyFrom(self, other) -> None:
         if not isinstance(other, MapValue):
@@ -133,7 +111,7 @@ class MapTest_ByIntEntry:
 
     def SerializeToString(self) -> bytes:
         """Wire bytes; the embedded schema drives the C core."""
-        return _type("spectest.MapTest.ByIntEntry").encode(self.to_dict())
+        return _meta._type("spectest.MapTest.ByIntEntry").encode(self.to_dict())
 
     def ParseFromString(self, wire: bytes) -> int:
         """Merge wire bytes into this message; returns bytes consumed."""
@@ -143,7 +121,7 @@ class MapTest_ByIntEntry:
 
     @classmethod
     def FromString(cls, wire: bytes) -> MapTest_ByIntEntry:
-        return cls.from_dict(_type("spectest.MapTest.ByIntEntry").decode(bytes(wire)).to_dict())
+        return cls.from_dict(_meta._type("spectest.MapTest.ByIntEntry").decode(bytes(wire)).to_dict())
 
     def CopyFrom(self, other) -> None:
         if not isinstance(other, MapTest_ByIntEntry):
@@ -209,7 +187,7 @@ class MapTest_ByStrEntry:
 
     def SerializeToString(self) -> bytes:
         """Wire bytes; the embedded schema drives the C core."""
-        return _type("spectest.MapTest.ByStrEntry").encode(self.to_dict())
+        return _meta._type("spectest.MapTest.ByStrEntry").encode(self.to_dict())
 
     def ParseFromString(self, wire: bytes) -> int:
         """Merge wire bytes into this message; returns bytes consumed."""
@@ -219,7 +197,7 @@ class MapTest_ByStrEntry:
 
     @classmethod
     def FromString(cls, wire: bytes) -> MapTest_ByStrEntry:
-        return cls.from_dict(_type("spectest.MapTest.ByStrEntry").decode(bytes(wire)).to_dict())
+        return cls.from_dict(_meta._type("spectest.MapTest.ByStrEntry").decode(bytes(wire)).to_dict())
 
     def CopyFrom(self, other) -> None:
         if not isinstance(other, MapTest_ByStrEntry):
@@ -285,7 +263,7 @@ class MapTest_ByMsgEntry:
 
     def SerializeToString(self) -> bytes:
         """Wire bytes; the embedded schema drives the C core."""
-        return _type("spectest.MapTest.ByMsgEntry").encode(self.to_dict())
+        return _meta._type("spectest.MapTest.ByMsgEntry").encode(self.to_dict())
 
     def ParseFromString(self, wire: bytes) -> int:
         """Merge wire bytes into this message; returns bytes consumed."""
@@ -295,7 +273,7 @@ class MapTest_ByMsgEntry:
 
     @classmethod
     def FromString(cls, wire: bytes) -> MapTest_ByMsgEntry:
-        return cls.from_dict(_type("spectest.MapTest.ByMsgEntry").decode(bytes(wire)).to_dict())
+        return cls.from_dict(_meta._type("spectest.MapTest.ByMsgEntry").decode(bytes(wire)).to_dict())
 
     def CopyFrom(self, other) -> None:
         if not isinstance(other, MapTest_ByMsgEntry):
@@ -371,7 +349,7 @@ class MapTest:
 
     def SerializeToString(self) -> bytes:
         """Wire bytes; the embedded schema drives the C core."""
-        return _type("spectest.MapTest").encode(self.to_dict())
+        return _meta._type("spectest.MapTest").encode(self.to_dict())
 
     def ParseFromString(self, wire: bytes) -> int:
         """Merge wire bytes into this message; returns bytes consumed."""
@@ -381,7 +359,7 @@ class MapTest:
 
     @classmethod
     def FromString(cls, wire: bytes) -> MapTest:
-        return cls.from_dict(_type("spectest.MapTest").decode(bytes(wire)).to_dict())
+        return cls.from_dict(_meta._type("spectest.MapTest").decode(bytes(wire)).to_dict())
 
     def CopyFrom(self, other) -> None:
         if not isinstance(other, MapTest):

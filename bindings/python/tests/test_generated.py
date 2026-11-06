@@ -17,7 +17,10 @@ sys.path.insert(0, os.path.join(HERE, "gen"))
 import pbwire as pbw  # noqa: E402
 
 import matrix3_pbwire as t3  # noqa: E402
+import matrix3_pbwire_meta as t3meta  # noqa: E402
 import maptest_pbwire as tm  # noqa: E402
+import oneof1_pbwire as t1  # noqa: E402
+import oneof1_pbwire_meta as t1meta  # noqa: E402
 
 DATA = os.path.join(HERE, "..", "..", "c", "tests", "data")
 DESC = os.path.join(DATA, "matrix3.desc")
@@ -118,6 +121,25 @@ def main():
         check(wire == xfile_reference, "generated xfile encode equals protoc reference")
         back_x = tx.UsesDep.decode(uses, xfile_reference)
         check(back_x == gen_x, "xfile decode returns the same dataclass")
+
+    # Dual registration: embedded set by default, external file via use_schema.
+    t3meta.preload()
+    check("structtest.Scalars3" in t3meta.MESSAGE_NAMES, "registry lists every message")
+    testdata = os.path.join(HERE, "..", "..", "..", "codegen", "testdata")
+    with open(os.path.join(testdata, "oneof1.bin"), "rb") as f:
+        reference_oneof = f.read()
+    with open(os.path.join(testdata, "oneof1.desc"), "rb") as f:
+        ext = pbw.Schema.load(f.read())
+    t1meta.use_schema(ext)
+    try:
+        back_one = t1.Oneof1.FromString(reference_oneof)
+        check(back_one.name == "a" and back_one.text == "hi", "external schema decodes")
+        check(back_one.SerializeToString() == reference_oneof, "external re-encodes")
+    finally:
+        t1meta.use_schema(None)
+    check(t1.Oneof1.FromString(reference_oneof).name == "a", "cleared override restores embedded")
+    t1meta.init_schema()
+    check(t1.Oneof1.FromString(reference_oneof).name == "a", "init keeps embedded")
 
     print(f"test_generated: {checks} checks passed")
 

@@ -45,8 +45,6 @@ public final class GenericCodec {
             K_SFIXED64 = 12, K_DOUBLE = 13, K_STRING = 14, K_BYTES = 15,
             K_MESSAGE = 16, K_GROUP = 17;
 
-    private static final int MAX_DEPTH = 100;
-
     public static final class Field {
         public int number;
         public Proto.Type type;
@@ -118,6 +116,26 @@ public final class GenericCodec {
             }
             // Transitive required closure, monotone fixpoint so recursive
             // messages terminate: a cycle with no REQUIRED field stays false.
+            finishTransitive(s);
+            return s;
+        }
+
+        /**
+         * Builds a schema from generated Meta tables: the same facts the
+         * typed codec runs on, reused as a dynamic schema. No descriptor
+         * set on this path; sub-messages follow Meta.sub links, so callers
+         * pass only the roots. Kind numbering matches Kind.* one to one.
+         */
+        static Schema fromMetas(java.util.Collection<Meta<?, ?>> roots) {
+            Schema s = new Schema();
+            for (Meta<?, ?> m : roots) {
+                s.buildFromMeta(m);
+            }
+            finishTransitive(s);
+            return s;
+        }
+
+        private static void finishTransitive(Schema s) {
             boolean changed = true;
             while (changed) {
                 changed = false;
@@ -128,7 +146,6 @@ public final class GenericCodec {
                     }
                 }
             }
-            return s;
         }
 
         private static boolean needsRequired(MessageDef d) {
@@ -162,6 +179,126 @@ public final class GenericCodec {
                 buildDef(n);
             }
             return d;
+        }
+
+        private MessageDef buildFromMeta(Meta<?, ?> m) {
+            MessageDef done = byName.get(m.fullName);
+            if (done != null) {
+                return done;
+            }
+            MessageDef d = new MessageDef();
+            d.fullName = m.fullName;
+            byName.put(m.fullName, d); // before fields: recursion-safe
+            List<Field> fs = new ArrayList<>(m.fields.length);
+            for (FieldMeta<?, ?> f : m.fields) {
+                fs.add(buildFieldFromMeta(f));
+            }
+            finishFromMeta(d, fs, m.oneofNames);
+            return d;
+        }
+
+        private Field buildFieldFromMeta(FieldMeta<?, ?> f) {
+            Field s = new Field();
+            s.number = f.number;
+            s.type = typeOf(f.kind);
+            // Kind.* numbering matches K_* one to one; keep them in sync.
+            s.kind = f.kind;
+            s.repeated = f.repeated;
+            s.packed = f.packed;
+            s.fieldName = f.name;
+            if (f.oneof >= 0) {
+                s.oneof = f.oneof;
+                s.presence = EXPLICIT; // reads/writes go through the oneof case
+            } else if (f.required) {
+                s.presence = REQUIRED;
+            } else if (f.kind == Kind.MESSAGE || f.kind == Kind.GROUP) {
+                s.presence = MESSAGE;
+            } else if (f.explicit) {
+                s.presence = EXPLICIT;
+            } else {
+                s.presence = IMPLICIT;
+            }
+            if (f.kind == Kind.MESSAGE || f.kind == Kind.GROUP) {
+                s.msgType = buildFromMeta(f.sub);
+            }
+            // Packed numerics encode under the LEN tag, like the descriptor
+            // path (wireType(type, repeated && packed)); ptag is set exactly then.
+            boolean packed = f.repeated && f.packed;
+            s.wt = packed ? Wire.WT_LEN : f.wt;
+            s.tag = packed ? f.ptag : f.tag; // shared, never mutated on either path
+            return s;
+        }
+
+        private static Proto.Type typeOf(int kind) {
+            switch (kind) {
+                case Kind.INT32:
+                    return Proto.Type.INT32;
+                case Kind.UINT32:
+                    return Proto.Type.UINT32;
+                case Kind.SINT32:
+                    return Proto.Type.SINT32;
+                case Kind.INT64:
+                    return Proto.Type.INT64;
+                case Kind.UINT64:
+                    return Proto.Type.UINT64;
+                case Kind.SINT64:
+                    return Proto.Type.SINT64;
+                case Kind.BOOL:
+                    return Proto.Type.BOOL;
+                case Kind.ENUM:
+                    return Proto.Type.ENUM;
+                case Kind.FIXED32:
+                    return Proto.Type.FIXED32;
+                case Kind.SFIXED32:
+                    return Proto.Type.SFIXED32;
+                case Kind.FLOAT:
+                    return Proto.Type.FLOAT;
+                case Kind.FIXED64:
+                    return Proto.Type.FIXED64;
+                case Kind.SFIXED64:
+                    return Proto.Type.SFIXED64;
+                case Kind.DOUBLE:
+                    return Proto.Type.DOUBLE;
+                case Kind.STRING:
+                    return Proto.Type.STRING;
+                case Kind.BYTES:
+                    return Proto.Type.BYTES;
+                case Kind.MESSAGE:
+                    return Proto.Type.MESSAGE;
+                case Kind.GROUP:
+                    return Proto.Type.GROUP;
+                default:
+                    throw new IllegalArgumentException("no type for kind " + kind);
+            }
+        }
+
+        private void finishFromMeta(MessageDef d, List<Field> fs, String[] oneofNames) {
+            fs.sort((a, b) -> Integer.compare(a.number, b.number));
+            int max = 0;
+            boolean req = false;
+            for (Field f : fs) {
+                max = Math.max(max, f.number);
+                req = req || f.presence == REQUIRED;
+            }
+            d.hasRequired = req;
+            d.fields = fs.toArray(new Field[0]);
+            d.slotByFnum = new int[max + 1];
+            Arrays.fill(d.slotByFnum, -1);
+            d.byName.clear();
+            for (int i = 0; i < d.fields.length; i++) {
+                d.slotByFnum[d.fields[i].number] = i;
+                d.byName.put(d.fields[i].fieldName, i);
+            }
+            d.oneofByName.clear();
+            if (oneofNames != null) {
+                for (int i = 0; i < oneofNames.length; i++) {
+                    d.oneofByName.put(oneofNames[i], i);
+                }
+            }
+            // shortcut: same-name tables from two sources keep the first;
+            // pass each root once, from one source.
+            d.oneofCount = Math.max(d.oneofCount,
+                    oneofNames == null ? 0 : oneofNames.length);
         }
 
         private Field buildField(Proto.Field f,
@@ -777,8 +914,8 @@ public final class GenericCodec {
 
     private static void encodeInto(DMsg m, Wire.Buf b, int depth,
             StrCache sc) {
-        if (depth > MAX_DEPTH) {
-            throw new IllegalArgumentException("nesting exceeds " + MAX_DEPTH);
+        if (depth > Wire.MAX_DEPTH) {
+            throw new IllegalArgumentException("nesting exceeds " + Wire.MAX_DEPTH);
         }
         MessageDef def = m.def;
         boolean noRequired = !def.hasRequired; // proto3: skip the check
@@ -1151,8 +1288,8 @@ public final class GenericCodec {
      * cached in place), so a lazy slice cannot smuggle in a missing field.
      */
     private static void checkRequired(DMsg m, int depth) {
-        if (depth > MAX_DEPTH) {
-            throw new IllegalArgumentException("nesting exceeds " + MAX_DEPTH);
+        if (depth > Wire.MAX_DEPTH) {
+            throw new IllegalArgumentException("nesting exceeds " + Wire.MAX_DEPTH);
         }
         MessageDef def = m.def;
         if (def.hasRequired) {
@@ -1203,8 +1340,8 @@ public final class GenericCodec {
      */
     private static DMsg decodeInto(DMsg m, Wire.Reader r, int end,
             int groupEnd, int depth) {
-        if (depth > MAX_DEPTH) {
-            throw new IllegalArgumentException("nesting exceeds " + MAX_DEPTH);
+        if (depth > Wire.MAX_DEPTH) {
+            throw new IllegalArgumentException("nesting exceeds " + Wire.MAX_DEPTH);
         }
         MessageDef def = m.def;
         int outerEnd = r.end;
@@ -1248,47 +1385,11 @@ public final class GenericCodec {
      */
     private static void retainUnknown(DMsg m, Wire.Reader r, int fieldStart,
             int fnum, int wt, int depth) {
-        if (wt == 3) {
-            skipGroup(r, fnum, depth + 1);
-        } else {
-            Wire.skip(r, wt);
-        }
+        Wire.skipUnknown(r, fnum, wt, depth);
         if (m.unknown == null) {
             m.unknown = new ArrayList<>(4); // lazy: most messages have none
         }
         m.unknown.add(Arrays.copyOfRange(r.b, fieldStart, r.pos));
-    }
-
-    /**
-     * Validates a group body up to its matching end tag, like the core's
-     * group skipper: every tag is strict, field 0 and wire types above 5
-     * are rejected, and an end tag only closes the group it names. Used for
-     * unknown groups and for recorded (lazy) group slices alike.
-     */
-    private static void skipGroup(Wire.Reader r, int number, int depth) {
-        if (depth > MAX_DEPTH) {
-            throw new IllegalArgumentException("nesting exceeds " + MAX_DEPTH);
-        }
-        for (;;) {
-            int tag = Wire.rTag(r);
-            int fnum = tag >>> 3;
-            int wt = tag & 7;
-            if (fnum == 0 || wt > Wire.WT_FIXED32) {
-                throw new IllegalArgumentException("bad tag " + tag);
-            }
-            if (wt == 4) {
-                if (fnum != number) {
-                    throw new IllegalArgumentException("mismatched end-group for "
-                            + fnum + ", want " + number);
-                }
-                return;
-            }
-            if (wt == 3) {
-                skipGroup(r, fnum, depth + 1);
-            } else {
-                Wire.skip(r, wt);
-            }
-        }
     }
 
     private static boolean wtIncompatible(Field f, int wt) {
@@ -1365,7 +1466,7 @@ public final class GenericCodec {
                 int len = Wire.rLen32(r);
                 validateInto(f.msgType, r, r.pos + len, depth + 1);
             } else if (f.kind == K_GROUP) {
-                skipGroup(r, f.number, depth + 1);
+                Wire.skipGroup(r, f.number, depth + 1);
             } else { // K_STRING / K_BYTES element
                 int len = Wire.rLen32(r);
                 r.pos += len;
@@ -1412,7 +1513,7 @@ public final class GenericCodec {
             if (sub != null) {
                 decodeInto(sub, r, r.end, f.number, depth + 1);
             } else {
-                skipGroup(r, f.number, depth + 1);
+                Wire.skipGroup(r, f.number, depth + 1);
                 m.ref[s] = new Slice(r.b, fieldStart, r.pos - fieldStart);
                 m.setPresent(s, f);
             }
@@ -1457,8 +1558,8 @@ public final class GenericCodec {
      */
     private static void validateInto(MessageDef def, Wire.Reader r, int end,
             int depth) {
-        if (depth > MAX_DEPTH) {
-            throw new IllegalArgumentException("nesting exceeds " + MAX_DEPTH);
+        if (depth > Wire.MAX_DEPTH) {
+            throw new IllegalArgumentException("nesting exceeds " + Wire.MAX_DEPTH);
         }
         int outerEnd = r.end;
         r.end = end;
@@ -1515,21 +1616,16 @@ public final class GenericCodec {
             return;
         }
         if (f.kind == K_GROUP) {
-            skipGroup(r, f.number, depth + 1);
+            Wire.skipGroup(r, f.number, depth + 1);
             return;
         }
         int len = Wire.rLen32(r); // K_STRING / K_BYTES
         r.pos += len;
     }
 
-    /** Unknown field shape check: groups must pair, LEN stays opaque. */
     private static void validateUnknown(Wire.Reader r, int fnum, int wt,
             int depth) {
-        if (wt == 3) {
-            skipGroup(r, fnum, depth + 1);
-        } else {
-            Wire.skip(r, wt);
-        }
+        Wire.skipUnknown(r, fnum, wt, depth);
     }
 
     private static long[] needLong(DMsg m, int s, int need) {

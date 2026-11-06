@@ -7,31 +7,6 @@ module rec Maptest
 open System
 open Pbwire
 
-let private desc: byte[] = Convert.FromBase64String("""
-CsQICg1tYXB0ZXN0LnByb3RvEghzcGVjdGVzdCI0CghNYXBWYWx1ZRISCgRuYW1lGAEgASgJUgRu
-YW1lEhQKBXZhbHVlGAIgASgFUgV2YWx1ZSLqAgoHTWFwVGVzdBIzCgZieV9pbnQYASADKAsyHC5z
-cGVjdGVzdC5NYXBUZXN0LkJ5SW50RW50cnlSBWJ5SW50EjMKBmJ5X3N0chgCIAMoCzIcLnNwZWN0
-ZXN0Lk1hcFRlc3QuQnlTdHJFbnRyeVIFYnlTdHISMwoGYnlfbXNnGAMgAygLMhwuc3BlY3Rlc3Qu
-TWFwVGVzdC5CeU1zZ0VudHJ5UgVieU1zZxo4CgpCeUludEVudHJ5EhAKA2tleRgBIAEoBVIDa2V5
-EhQKBXZhbHVlGAIgASgJUgV2YWx1ZToCOAEaOAoKQnlTdHJFbnRyeRIQCgNrZXkYASABKAlSA2tl
-eRIUCgV2YWx1ZRgCIAEoBVIFdmFsdWU6AjgBGkwKCkJ5TXNnRW50cnkSEAoDa2V5GAEgASgJUgNr
-ZXkSKAoFdmFsdWUYAiABKAsyEi5zcGVjdGVzdC5NYXBWYWx1ZVIFdmFsdWU6AjgBSv0ECgYSBAQA
-EQEKpQIKAQwSAwQAEhqaAiBTbWFsbCBtYXAgZml4dHVyZSBmb3IgdGhlIGdlbmVyYXRlZCBjb21w
-YXQgdGVzdHM6IHNjYWxhciwgaW50LWtleWVkIGFuZAogbWVzc2FnZS12YWx1ZWQgbWFwcyByaWRl
-IGFzIHJlcGVhdGVkIGVudHJ5IHN0cnVjdHMgaW4gZXZlcnkgbGFuZ3VhZ2UuCiBLZXB0IGluIHRl
-c3RkYXRhIHNvIGV2ZXJ5IGJpbmRpbmcgc2hhcmVzIHRoZSBzYW1lIHNjaGVtYSwgdmFsdWVzIGFu
-ZAogcmVmZXJlbmNlIGJ5dGVzIChtYXB0ZXN0LmJpbiBmcm9tIHByb3RvYyAtLWVuY29kZSBvZiBt
-YXB0ZXN0LnR4dCkuCgoICgECEgMGABEKCgoCBAASBAgACwEKCgoDBAABEgMICBAKCwoEBAACABID
-CQISCgwKBQQAAgAFEgMJAggKDAoFBAACAAESAwkJDQoMCgUEAAIAAxIDCRARCgsKBAQAAgESAwoC
-EgoMCgUEAAIBBRIDCgIHCgwKBQQAAgEBEgMKCA0KDAoFBAACAQMSAwoQEQoKCgIEARIEDQARAQoK
-CgMEAQESAw0IDwoLCgQEAQIAEgMOAiAKDAoFBAECAAYSAw4CFAoMCgUEAQIAARIDDhUbCgwKBQQB
-AgADEgMOHh8KCwoEBAECARIDDwIgCgwKBQQBAgEGEgMPAhQKDAoFBAECAQESAw8VGwoMCgUEAQIB
-AxIDDx4fCgsKBAQBAgISAxACIwoMCgUEAQICBhIDEAIXCgwKBQQBAgIBEgMQGB4KDAoFBAECAgMS
-AxAhImIGcHJvdG8z
-""")
-
-let private schema: Schema = Schema.FromBytes(desc)
-
 /// spectest.MapValue
 type Spectest_MapValue =
     {
@@ -40,7 +15,7 @@ type Spectest_MapValue =
     }
 
 module Spectest_MapValue =
-    let private ty: MessageType = schema.Message("spectest.MapValue")
+    let private ty (): MessageType = MaptestMeta.getSchema().Message("spectest.MapValue")
 
     let defaultValue : Spectest_MapValue =
         {
@@ -53,7 +28,7 @@ module Spectest_MapValue =
         if v.value <> 0 then msg.Set("value", int64 v.value) |> ignore
 
     let encode (v: Spectest_MapValue) : byte[] =
-        use msg = ty.NewMessage()
+        use msg = ty().NewMessage()
         fill msg v
         msg.Encode()
 
@@ -64,7 +39,7 @@ module Spectest_MapValue =
         }
 
     let decode (wire: byte[]) : Spectest_MapValue =
-        use msg = ty.Decode(ReadOnlySpan wire)
+        use msg = ty().Decode(ReadOnlySpan wire)
         load msg
 
 /// spectest.MapTest.ByIntEntry
@@ -75,7 +50,7 @@ type Spectest_MapTest_ByIntEntry =
     }
 
 module Spectest_MapTest_ByIntEntry =
-    let private ty: MessageType = schema.Message("spectest.MapTest.ByIntEntry")
+    let private ty (): MessageType = MaptestMeta.getSchema().Message("spectest.MapTest.ByIntEntry")
 
     let defaultValue : Spectest_MapTest_ByIntEntry =
         {
@@ -88,7 +63,7 @@ module Spectest_MapTest_ByIntEntry =
         if v.value <> "" then msg.Set("value", v.value) |> ignore
 
     let encode (v: Spectest_MapTest_ByIntEntry) : byte[] =
-        use msg = ty.NewMessage()
+        use msg = ty().NewMessage()
         fill msg v
         msg.Encode()
 
@@ -99,7 +74,7 @@ module Spectest_MapTest_ByIntEntry =
         }
 
     let decode (wire: byte[]) : Spectest_MapTest_ByIntEntry =
-        use msg = ty.Decode(ReadOnlySpan wire)
+        use msg = ty().Decode(ReadOnlySpan wire)
         load msg
 
 /// spectest.MapTest.ByStrEntry
@@ -110,7 +85,7 @@ type Spectest_MapTest_ByStrEntry =
     }
 
 module Spectest_MapTest_ByStrEntry =
-    let private ty: MessageType = schema.Message("spectest.MapTest.ByStrEntry")
+    let private ty (): MessageType = MaptestMeta.getSchema().Message("spectest.MapTest.ByStrEntry")
 
     let defaultValue : Spectest_MapTest_ByStrEntry =
         {
@@ -123,7 +98,7 @@ module Spectest_MapTest_ByStrEntry =
         if v.value <> 0 then msg.Set("value", int64 v.value) |> ignore
 
     let encode (v: Spectest_MapTest_ByStrEntry) : byte[] =
-        use msg = ty.NewMessage()
+        use msg = ty().NewMessage()
         fill msg v
         msg.Encode()
 
@@ -134,7 +109,7 @@ module Spectest_MapTest_ByStrEntry =
         }
 
     let decode (wire: byte[]) : Spectest_MapTest_ByStrEntry =
-        use msg = ty.Decode(ReadOnlySpan wire)
+        use msg = ty().Decode(ReadOnlySpan wire)
         load msg
 
 /// spectest.MapTest.ByMsgEntry
@@ -145,7 +120,7 @@ type Spectest_MapTest_ByMsgEntry =
     }
 
 module Spectest_MapTest_ByMsgEntry =
-    let private ty: MessageType = schema.Message("spectest.MapTest.ByMsgEntry")
+    let private ty (): MessageType = MaptestMeta.getSchema().Message("spectest.MapTest.ByMsgEntry")
 
     let defaultValue : Spectest_MapTest_ByMsgEntry =
         {
@@ -158,7 +133,7 @@ module Spectest_MapTest_ByMsgEntry =
         v.value |> Option.iter (fun x -> Spectest_MapValue.fill (msg.SetMessage("value")) x)
 
     let encode (v: Spectest_MapTest_ByMsgEntry) : byte[] =
-        use msg = ty.NewMessage()
+        use msg = ty().NewMessage()
         fill msg v
         msg.Encode()
 
@@ -169,7 +144,7 @@ module Spectest_MapTest_ByMsgEntry =
         }
 
     let decode (wire: byte[]) : Spectest_MapTest_ByMsgEntry =
-        use msg = ty.Decode(ReadOnlySpan wire)
+        use msg = ty().Decode(ReadOnlySpan wire)
         load msg
 
 /// spectest.MapTest
@@ -181,7 +156,7 @@ type Spectest_MapTest =
     }
 
 module Spectest_MapTest =
-    let private ty: MessageType = schema.Message("spectest.MapTest")
+    let private ty (): MessageType = MaptestMeta.getSchema().Message("spectest.MapTest")
 
     let defaultValue : Spectest_MapTest =
         {
@@ -196,7 +171,7 @@ module Spectest_MapTest =
         v.by_msg |> List.iter (fun x -> Spectest_MapTest_ByMsgEntry.fill (msg.SetMessage("by_msg")) x)
 
     let encode (v: Spectest_MapTest) : byte[] =
-        use msg = ty.NewMessage()
+        use msg = ty().NewMessage()
         fill msg v
         msg.Encode()
 
@@ -208,6 +183,6 @@ module Spectest_MapTest =
         }
 
     let decode (wire: byte[]) : Spectest_MapTest =
-        use msg = ty.Decode(ReadOnlySpan wire)
+        use msg = ty().Decode(ReadOnlySpan wire)
         load msg
 

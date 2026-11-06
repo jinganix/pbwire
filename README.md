@@ -3,7 +3,7 @@
 [![Language](https://img.shields.io/badge/C-C99-blue.svg)](#requirements-and-build)
 [![Dependencies](https://img.shields.io/badge/runtime%20dependencies-none-brightgreen.svg)](#at-a-glance)
 
-> **Release [`v0.1.11`](https://github.com/jinganix/pbwire/releases/tag/v0.1.11)** — every binding ships this one version; [`VERSION`](VERSION) is the source of truth, `scripts/sync-versions.sh` propagates it.
+> **Release [`v0.1.12`](https://github.com/jinganix/pbwire/releases/tag/v0.1.12)** — every binding ships this one version; [`VERSION`](VERSION) is the source of truth, `scripts/sync-versions.sh` propagates it.
 
 # pbwire — a dynamic Protobuf runtime for C, no code generation
 
@@ -174,7 +174,7 @@ The one-row summary is here; the detail is there.
 | [Ruby](bindings/ruby/) | C extension, linked | 1.37x (small) / 1.92x (medium) | [google-protobuf gem](https://rubygems.org/gems/google-protobuf) |
 | [Java](bindings/java/) | pure-Java codec, no native code | 1.25x (medium) / 2.36x (xlarge) | [protobuf-java](https://github.com/protocolbuffers/protobuf/tree/main/java) |
 | [Kotlin](bindings/kotlin/) | Java runtime + DSL | 1.26x (medium) / 2.07x (xlarge) | [protobuf-kotlin](https://github.com/protocolbuffers/protobuf/tree/main/java/kotlin) |
-| [Node](bindings/node/) | N-API addon | 3.15x (large) / 3.98x (xlarge) vs protobufjs | [jspb](https://www.npmjs.com/package/google-protobuf) + [protobufjs](https://www.npmjs.com/package/protobufjs) |
+| [Node](bindings/node/) | N-API addon | 3.21x (large) / 4.15x (xlarge) vs protobufjs | [jspb](https://www.npmjs.com/package/google-protobuf) + [protobufjs](https://www.npmjs.com/package/protobufjs) |
 | [Objective-C](bindings/objc/) | ARC wrapper | 7.00x (medium) / 3.24x (medium) | [protobuf-objc](https://github.com/protocolbuffers/protobuf/tree/main/objectivec) |
 | [PHP](bindings/php/) | C extension | 1.73x (small) / 1.98x (small) vs C ext (342x / 130x vs pure PHP) | [protobuf-php](https://github.com/protocolbuffers/protobuf/tree/main/php) |
 | [Dart](bindings/dart/) | `dart:ffi` | 15.4x (xlarge) / 4.42x (large) | [protobuf-dart](https://pub.dev/packages/protobuf) |

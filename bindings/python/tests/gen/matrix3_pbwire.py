@@ -6,29 +6,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field as dc_field
 from typing import Any, Dict, List, Mapping, Optional, Tuple
-
-_DESC_B64 = "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"
-
-import base64 as _base64
-
-_SCHEMA = None
-_TYPES = {}
-
-def _schema():
-    """The embedded FileDescriptorSet as a pbwire schema (built once)."""
-    global _SCHEMA
-    if _SCHEMA is None:
-        import pbwire as _pbw
-        _SCHEMA = _pbw.Schema.load(_base64.b64decode(_DESC_B64))
-    return _SCHEMA
-
-
-def _type(full):
-    t = _TYPES.get(full)
-    if t is None:
-        t = _schema().message(full)
-        _TYPES[full] = t
-    return t
+import matrix3_pbwire_meta as _meta
 
 class Color3:
     """structtest.Color3"""
@@ -63,7 +41,7 @@ class Inner3:
 
     def SerializeToString(self) -> bytes:
         """Wire bytes; the embedded schema drives the C core."""
-        return _type("structtest.Inner3").encode(self.to_dict())
+        return _meta._type("structtest.Inner3").encode(self.to_dict())
 
     def ParseFromString(self, wire: bytes) -> int:
         """Merge wire bytes into this message; returns bytes consumed."""
@@ -73,7 +51,7 @@ class Inner3:
 
     @classmethod
     def FromString(cls, wire: bytes) -> Inner3:
-        return cls.from_dict(_type("structtest.Inner3").decode(bytes(wire)).to_dict())
+        return cls.from_dict(_meta._type("structtest.Inner3").decode(bytes(wire)).to_dict())
 
     def CopyFrom(self, other) -> None:
         if not isinstance(other, Inner3):
@@ -239,7 +217,7 @@ class Scalars3:
 
     def SerializeToString(self) -> bytes:
         """Wire bytes; the embedded schema drives the C core."""
-        return _type("structtest.Scalars3").encode(self.to_dict())
+        return _meta._type("structtest.Scalars3").encode(self.to_dict())
 
     def ParseFromString(self, wire: bytes) -> int:
         """Merge wire bytes into this message; returns bytes consumed."""
@@ -249,7 +227,7 @@ class Scalars3:
 
     @classmethod
     def FromString(cls, wire: bytes) -> Scalars3:
-        return cls.from_dict(_type("structtest.Scalars3").decode(bytes(wire)).to_dict())
+        return cls.from_dict(_meta._type("structtest.Scalars3").decode(bytes(wire)).to_dict())
 
     def CopyFrom(self, other) -> None:
         if not isinstance(other, Scalars3):

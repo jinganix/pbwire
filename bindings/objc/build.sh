@@ -66,8 +66,10 @@ run_generated() {
     # shellcheck disable=SC2086 # flags and runtime are word lists on purpose
     $cc $flags -I"$here/tests" -I"$here/examples" -I"$gen" \
         -I"$src/objectivec" -o "$out/generated_test" $runtime \
-        "$here/tests/gen/matrix3.m" "$here/tests/gen/oneof1.m" \
-        "$here/examples/gen/addressbook.m" "$here/tests/generated_test.m" \
+        "$here/tests/gen/matrix3.m" "$here/tests/gen/matrix3_schema.m" \
+        "$here/tests/gen/oneof1.m" "$here/tests/gen/oneof1_schema.m" \
+        "$here/examples/gen/addressbook.m" "$here/examples/gen/addressbook_schema.m" \
+        "$here/tests/generated_test.m" \
         "$gen/Matrix3.pbobjc.o" "$gen/Oneof1.pbobjc.o" \
         "$gen/Addressbook.pbobjc.o" "$gen/GPBProtocolBuffers.o" \
         "$lib" -framework Foundation -lpthread
@@ -79,7 +81,8 @@ run_generated() {
 run_example() {
     # shellcheck disable=SC2086 # flags and runtime are word lists on purpose
     $cc $flags -I"$here/examples" -o "$out/roundtrip" $runtime \
-        "$here/examples/gen/addressbook.m" "$here/examples/roundtrip.m" "$lib" \
+        "$here/examples/gen/addressbook.m" "$here/examples/gen/addressbook_schema.m" \
+        "$here/examples/roundtrip.m" "$lib" \
         -framework Foundation -lpthread
     "$out/roundtrip"
 }

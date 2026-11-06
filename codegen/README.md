@@ -18,8 +18,8 @@ Every language gets the same shape, spelled the way that language spells things:
 
 | C (`bindings/c`) | struct | `structtest_scalars3_t`, `structtest_scalars3_encode/decode` |
 |---|---|---|
-| Java | class + Builder, protobuf-java shape | `newBuilder().setI32(1)...build()` / `toByteArray()` / `parseFrom()` / `hasX()` + `KindCase` oneof, over the embedded schema |
-| Kotlin | thin DSL over the Java classes | `scalars3 { setI32(1) }` constructors; types and codec are the Java facade |
+| Java | annotated POJO, your own class shape | `@PbField(1) int i32` / `toByteArray()` / `parseFrom()` / `Map` maps + nullable oneof members + `getKindCase()`, direct Wire codec, no schema; Lombok and validation annotations ride along |
+| Kotlin | thin DSL over the Java POJOs | `scalars3 { i32 = 1 }` constructors; types and codec are the Java POJOs |
 | C# | `sealed class`, Google.Protobuf shape | `Parser.ParseFrom` / `ToByteArray` / `RepeatedField<T>` / `KindOneofCase` / `Has`+`Clear` for optional, over the embedded schema (no `IMessage`, no `Descriptor`) |
 | Dart | class, protobuf-dart shape | `create()..i32 = 1` / `writeToBuffer()` / `fromBuffer()` / `hasX()` / `whichX()` oneof, over the embedded schema |
 | PHP | class, protobuf-PHP shape | `getX()/setX()/hasX()/clearX()` + `RepeatedField` + `serializeToString()/mergeFromString()`, over the embedded schema |
@@ -72,36 +72,34 @@ Rules the model follows, per field:
   mapping, protoc-gen-go style) and qualify the reference with the defining
   file's prefix. Unresolvable types still skip loudly (`// skipped <field>:`).
   This keeps each generated file to one import per referenced file.
-- **Java holders are per file** (`Maptest_Pbwire`, not per package): two
-  protos in one package (oneof1, maptest) would otherwise emit the same
-  holder and clobber each other's descriptor set.
 
 ## Where the models live
 
 The models are committed next to the tests that use them, so a test run needs
-no protoc:
+no protoc. Each file's schema travels beside its models — either a second
+generated file or a per-file registry module — never a `.desc` file:
 
 ```
-bindings/java/tests/gen/        Structtest_Scalars3.java, ...
-bindings/kotlin/tests/gen/      matrix3.kt
-bindings/csharp/generated/gen/      matrix3.cs
-bindings/dart/tests/gen/        matrix3.dart
-bindings/php/tests/gen/         matrix3.php
-bindings/ruby/test/gen/         matrix3.rb
-bindings/python/tests/gen/      matrix3_pbwire.py
-bindings/node/tests/gen/        matrix3.d.ts, matrix3.js
-bindings/go/tests/gen/matrix3/  matrix3_pbwire.go (package matrix3)
-bindings/rust/tests/gen/        matrix3_pbwire.rs
-bindings/objc/tests/gen/        matrix3.h, matrix3.m
-bindings/lua/tests/gen/         matrix3.lua
-bindings/swift/Tests/PbwireTests/gen/  matrix3.swift (SPM layout: inside the test target)
-bindings/zig/tests/gen/        matrix3.zig
-bindings/scala/tests/gen/      matrix3.scala
-bindings/clojure/tests/gen/    matrix3.clj
-bindings/fsharp/tests/gen/     matrix3.fs
-bindings/elixir/test/gen/      matrix3.ex
-bindings/julia/tests/gen/      matrix3_pbwire.jl
-bindings/r/tests/gen/          matrix3_pbwire.R
+bindings/java/tests/gen/        Structtest_Scalars3.java, ... + per-file *_Registry.java
+bindings/kotlin/tests/gen/      matrix3.kt (consumes the Java runtime)
+bindings/csharp/generated/gen/      matrix3.cs + PbwireFile_Matrix3.cs
+bindings/dart/tests/gen/        matrix3.dart + matrix3_meta.dart
+bindings/php/tests/gen/         matrix3.php + PbwireFile_Matrix3.php
+bindings/ruby/test/gen/         matrix3.rb + matrix3_meta.rb
+bindings/python/tests/gen/      matrix3_pbwire.py + matrix3_pbwire_meta.py
+bindings/node/tests/gen/        matrix3.d.ts, matrix3.js + matrix3_meta.js
+bindings/go/tests/gen/matrix3/  matrix3_pbwire.go + matrix3_pbwire_meta.go (package matrix3)
+bindings/rust/tests/gen/        matrix3_pbwire.rs + matrix3_pbwire_meta.rs
+bindings/objc/tests/gen/        matrix3.h, matrix3.m + matrix3_schema.h, matrix3_schema.m
+bindings/lua/tests/gen/         matrix3.lua + matrix3_meta.lua
+bindings/swift/Tests/PbwireTests/gen/  matrix3.swift + matrix3_meta.swift (SPM layout: inside the test target)
+bindings/zig/tests/gen/        matrix3.zig + matrix3_meta.zig
+bindings/scala/tests/gen/      matrix3.scala + matrix3_meta.scala
+bindings/clojure/tests/gen/    matrix3.clj + matrix3_meta.clj
+bindings/fsharp/tests/gen/     matrix3.fs + matrix3_meta.fs
+bindings/elixir/test/gen/      matrix3.ex (Registry module appended in-file)
+bindings/julia/tests/gen/      matrix3_pbwire.jl + matrix3_meta.jl
+bindings/r/tests/gen/          matrix3_pbwire.R + matrix3_meta.R
 bindings/*/examples/gen/        addressbook.* (the C example's schema;
                                 Swift's lives in Sources/Roundtrip/gen: SPM
                                 compiles only its target dirs)
@@ -109,6 +107,25 @@ bindings/*/examples/gen/        addressbook.* (the C example's schema;
 
 `make codegen` rewrites all of them from `bindings/c/tests/data/matrix3.proto`
 and `examples/addressbook.proto`.
+
+## Codegen options
+
+`--pbwire_opt=model=bool,register=bool,registry=bool` (all default `true`)
+means the same thing in every language:
+
+- `model=false` leaves the schema sidecar for dynamic-only users — the
+  message files are not emitted.
+- `register=false` drops the lazy load: an explicit init (embedded bytes)
+  or `use_schema` (an external schema, dual registration) must run first,
+  failing loudly otherwise.
+- `registry=false` drops the whole-file message list + preload. The list is
+  pure data, so `registry=true` is the default: open-ended registration
+  with no runtime cost.
+
+Two languages deviate, and only there: elixir embeds no descriptor set
+(the modules are the schema), so there is no second file and `register` is
+a no-op; r keeps one dotted holder per file instead of the old single
+shared global.
 
 ## The tests
 
@@ -151,14 +168,19 @@ Clojure loads its namespace (needs the fetched jars, like `test-clojure`).
 ## Cost
 
 The generated layer is ergonomics, not a second hot path: encode/decode call the
-binding's dynamic API. Positions measured on this machine with `matrix3`
-x3000 (30 KB) and the same values through both paths:
+binding's dynamic API, except Java, whose POJOs write straight into a Wire
+buffer through reflection over the annotated fields (no Message tree, no
+schema at use time). Positions measured on this machine with `matrix3`
+x3000 (~33 KB) and the same values through both paths:
 
 | language | generated encode vs dynamic | generated decode vs dynamic |
 |---|---|---|
 | C (struct binding) | 1.00x (it *is* the struct path) | 1.00x |
-| Java | 1.00x | 1.09x |
+| Java (reflective POJOs, direct Wire codec) | 1.7x slower | 1.0x |
 | Python (dataclass ⇄ dict) | 3.8x slower | 3.2x slower |
+
+Like Python, Java's typed path trades encode speed for ergonomics (your own
+classes, Lombok, validation); the dynamic `Message` path stays the fast path.
 
 Python pays for the dataclass ⇄ dict conversion; the extension's dict path is
 the fast path and stays the one the Python benchmark measures. For hot loops in

@@ -2,38 +2,10 @@
 // Generated facades over the pbwire dynamic API, protobuf-dart shape.
 // Do not edit; regenerate from the .proto instead.
 
-import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:pbwire/pbwire.dart';
-
-/// The FileDescriptorSet for maptest.proto, so messages encode with no .desc file.
-const _descB64 =
-    "CsQICg1tYXB0ZXN0LnByb3RvEghzcGVjdGVzdCI0CghNYXBWYWx1ZRISCgRuYW1lGAEgASgJUgRu"
-    "YW1lEhQKBXZhbHVlGAIgASgFUgV2YWx1ZSLqAgoHTWFwVGVzdBIzCgZieV9pbnQYASADKAsyHC5z"
-    "cGVjdGVzdC5NYXBUZXN0LkJ5SW50RW50cnlSBWJ5SW50EjMKBmJ5X3N0chgCIAMoCzIcLnNwZWN0"
-    "ZXN0Lk1hcFRlc3QuQnlTdHJFbnRyeVIFYnlTdHISMwoGYnlfbXNnGAMgAygLMhwuc3BlY3Rlc3Qu"
-    "TWFwVGVzdC5CeU1zZ0VudHJ5UgVieU1zZxo4CgpCeUludEVudHJ5EhAKA2tleRgBIAEoBVIDa2V5"
-    "EhQKBXZhbHVlGAIgASgJUgV2YWx1ZToCOAEaOAoKQnlTdHJFbnRyeRIQCgNrZXkYASABKAlSA2tl"
-    "eRIUCgV2YWx1ZRgCIAEoBVIFdmFsdWU6AjgBGkwKCkJ5TXNnRW50cnkSEAoDa2V5GAEgASgJUgNr"
-    "ZXkSKAoFdmFsdWUYAiABKAsyEi5zcGVjdGVzdC5NYXBWYWx1ZVIFdmFsdWU6AjgBSv0ECgYSBAQA"
-    "EQEKpQIKAQwSAwQAEhqaAiBTbWFsbCBtYXAgZml4dHVyZSBmb3IgdGhlIGdlbmVyYXRlZCBjb21w"
-    "YXQgdGVzdHM6IHNjYWxhciwgaW50LWtleWVkIGFuZAogbWVzc2FnZS12YWx1ZWQgbWFwcyByaWRl"
-    "IGFzIHJlcGVhdGVkIGVudHJ5IHN0cnVjdHMgaW4gZXZlcnkgbGFuZ3VhZ2UuCiBLZXB0IGluIHRl"
-    "c3RkYXRhIHNvIGV2ZXJ5IGJpbmRpbmcgc2hhcmVzIHRoZSBzYW1lIHNjaGVtYSwgdmFsdWVzIGFu"
-    "ZAogcmVmZXJlbmNlIGJ5dGVzIChtYXB0ZXN0LmJpbiBmcm9tIHByb3RvYyAtLWVuY29kZSBvZiBt"
-    "YXB0ZXN0LnR4dCkuCgoICgECEgMGABEKCgoCBAASBAgACwEKCgoDBAABEgMICBAKCwoEBAACABID"
-    "CQISCgwKBQQAAgAFEgMJAggKDAoFBAACAAESAwkJDQoMCgUEAAIAAxIDCRARCgsKBAQAAgESAwoC"
-    "EgoMCgUEAAIBBRIDCgIHCgwKBQQAAgEBEgMKCA0KDAoFBAACAQMSAwoQEQoKCgIEARIEDQARAQoK"
-    "CgMEAQESAw0IDwoLCgQEAQIAEgMOAiAKDAoFBAECAAYSAw4CFAoMCgUEAQIAARIDDhUbCgwKBQQB"
-    "AgADEgMOHh8KCwoEBAECARIDDwIgCgwKBQQBAgEGEgMPAhQKDAoFBAECAQESAw8VGwoMCgUEAQIB"
-    "AxIDDx4fCgsKBAQBAgISAxACIwoMCgUEAQICBhIDEAIXCgwKBQQBAgIBEgMQGB4KDAoFBAECAgMS"
-    "AxAhImIGcHJvdG8z";
-
-Schema? _schema;
-
-/// The embedded schema, loaded once per isolate.
-Schema get schemaCached => _schema ??= Schema.fromBytes(base64Decode(_descB64));
+import 'maptest_meta.dart';
 
 /// spectest.MapValue
 class MapValue {
@@ -63,7 +35,7 @@ class MapValue {
   void clearValue() { value = 0; }
 
   Uint8List writeToBuffer() {
-    final msg = schemaCached.message("spectest.MapValue").newMessage();
+    final msg = maptest_schema.message("spectest.MapValue").newMessage();
     try {
       encodeInto(msg);
       return msg.encode();
@@ -73,7 +45,7 @@ class MapValue {
   }
 
   void mergeFromBuffer(List<int> wire) {
-    final msg = schemaCached.message("spectest.MapValue").decode(wire);
+    final msg = maptest_schema.message("spectest.MapValue").decode(wire);
     try {
       loadFrom(msg);
     } finally {
@@ -124,7 +96,7 @@ class MapTest_ByIntEntry {
   void clearValue() { value = ''; }
 
   Uint8List writeToBuffer() {
-    final msg = schemaCached.message("spectest.MapTest.ByIntEntry").newMessage();
+    final msg = maptest_schema.message("spectest.MapTest.ByIntEntry").newMessage();
     try {
       encodeInto(msg);
       return msg.encode();
@@ -134,7 +106,7 @@ class MapTest_ByIntEntry {
   }
 
   void mergeFromBuffer(List<int> wire) {
-    final msg = schemaCached.message("spectest.MapTest.ByIntEntry").decode(wire);
+    final msg = maptest_schema.message("spectest.MapTest.ByIntEntry").decode(wire);
     try {
       loadFrom(msg);
     } finally {
@@ -185,7 +157,7 @@ class MapTest_ByStrEntry {
   void clearValue() { value = 0; }
 
   Uint8List writeToBuffer() {
-    final msg = schemaCached.message("spectest.MapTest.ByStrEntry").newMessage();
+    final msg = maptest_schema.message("spectest.MapTest.ByStrEntry").newMessage();
     try {
       encodeInto(msg);
       return msg.encode();
@@ -195,7 +167,7 @@ class MapTest_ByStrEntry {
   }
 
   void mergeFromBuffer(List<int> wire) {
-    final msg = schemaCached.message("spectest.MapTest.ByStrEntry").decode(wire);
+    final msg = maptest_schema.message("spectest.MapTest.ByStrEntry").decode(wire);
     try {
       loadFrom(msg);
     } finally {
@@ -249,7 +221,7 @@ class MapTest_ByMsgEntry {
   MapValue ensureValue() => _value ??= MapValue._();
 
   Uint8List writeToBuffer() {
-    final msg = schemaCached.message("spectest.MapTest.ByMsgEntry").newMessage();
+    final msg = maptest_schema.message("spectest.MapTest.ByMsgEntry").newMessage();
     try {
       encodeInto(msg);
       return msg.encode();
@@ -259,7 +231,7 @@ class MapTest_ByMsgEntry {
   }
 
   void mergeFromBuffer(List<int> wire) {
-    final msg = schemaCached.message("spectest.MapTest.ByMsgEntry").decode(wire);
+    final msg = maptest_schema.message("spectest.MapTest.ByMsgEntry").decode(wire);
     try {
       loadFrom(msg);
     } finally {
@@ -308,7 +280,7 @@ class MapTest {
   final List<MapTest_ByMsgEntry> byMsg = <MapTest_ByMsgEntry>[]; // by_msg = 3
 
   Uint8List writeToBuffer() {
-    final msg = schemaCached.message("spectest.MapTest").newMessage();
+    final msg = maptest_schema.message("spectest.MapTest").newMessage();
     try {
       encodeInto(msg);
       return msg.encode();
@@ -318,7 +290,7 @@ class MapTest {
   }
 
   void mergeFromBuffer(List<int> wire) {
-    final msg = schemaCached.message("spectest.MapTest").decode(wire);
+    final msg = maptest_schema.message("spectest.MapTest").decode(wire);
     try {
       loadFrom(msg);
     } finally {

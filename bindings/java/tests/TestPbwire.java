@@ -173,6 +173,12 @@ public final class TestPbwire {
             } catch (PbwireException expected) {
                 check(expected.getMessage().contains("no_such_field"), "the error names the field: " + expected);
             }
+            try {
+                message.set("int32_field", "not a number");
+                check(false, "a wrong value type must fail");
+            } catch (PbwireException expected) {
+                check(expected.getMessage().contains("needs a string"), "the error names the want: " + expected);
+            }
         }
     }
 

@@ -11,3 +11,12 @@ defmodule Xdep.DepMsg do
   field(:value, 2, type: :int32)
 end
 
+# Every message in this file, for whole-schema pre-registration.
+defmodule Xdep.Registry do
+  @moduledoc false
+  def message_modules do
+    [
+      Xdep.DepMsg
+    ]
+  end
+end

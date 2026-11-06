@@ -6,29 +6,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field as dc_field
 from typing import Any, Dict, List, Mapping, Optional, Tuple
-
-_DESC_B64 = "Cr8KChFhZGRyZXNzYm9vay5wcm90bxIIdHV0b3JpYWwiggIKBlBlcnNvbhISCgRuYW1lGAEgAigJUgRuYW1lEg4KAmlkGAIgAigFUgJpZBIUCgVlbWFpbBgDIAEoCVIFZW1haWwSNAoGcGhvbmVzGAQgAygLMhwudHV0b3JpYWwuUGVyc29uLlBob25lTnVtYmVyUgZwaG9uZXMaWwoLUGhvbmVOdW1iZXISFgoGbnVtYmVyGAEgAigJUgZudW1iZXISNAoEdHlwZRgCIAEoDjIaLnR1dG9yaWFsLlBlcnNvbi5QaG9uZVR5cGU6BEhPTUVSBHR5cGUiKwoJUGhvbmVUeXBlEgoKBk1PQklMRRAAEggKBEhPTUUQARIICgRXT1JLEAIiNwoLQWRkcmVzc0Jvb2sSKAoGcGVvcGxlGAEgAygLMhAudHV0b3JpYWwuUGVyc29uUgZwZW9wbGVK4QcKBhIEAwAcAQrAAQoBDBIDAwASGrUBIFRoZSBjbGFzc2ljIHByb3RvY29sLWJ1ZmZlcnMgdHV0b3JpYWwgc2NoZW1hIChhZGRyZXNzYm9vay5wcm90byksIGtlcHQKIHNlbGYtY29udGFpbmVkIChubyBpbXBvcnRzKSBzbyB0aGUgQyBleGFtcGxlIGJlbG93IGNhbiBtaXJyb3IgaXQgYnkgaGFuZAogd2l0aG91dCBwcm90b2Mgb3IgZ2VuZXJhdGVkIGNvZGUuCgoICgECEgMFABEKCgoCBAASBAcAGAEKCgoDBAABEgMHCA4KCwoEBAACABIDCAIbCgwKBQQAAgAEEgMIAgoKDAoFBAACAAUSAwgLEQoMCgUEAAIAARIDCBIWCgwKBQQAAgADEgMIGRoKCwoEBAACARIDCQIYCgwKBQQAAgEEEgMJAgoKDAoFBAACAQUSAwkLEAoMCgUEAAIBARIDCRETCgwKBQQAAgEDEgMJFhcKCwoEBAACAhIDCgIcCgwKBQQAAgIEEgMKAgoKDAoFBAACAgUSAwoLEQoMCgUEAAICARIDChIXCgwKBQQAAgIDEgMKGhsKDAoEBAAEABIEDAIQAwoMCgUEAAQAARIDDAcQCg0KBgQABAACABIDDQQPCg4KBwQABAACAAESAw0ECgoOCgcEAAQAAgACEgMNDQ4KDQoGBAAEAAIBEgMOBA0KDgoHBAAEAAIBARIDDgQICg4KBwQABAACAQISAw4LDAoNCgYEAAQAAgISAw8EDQoOCgcEAAQAAgIBEgMPBAgKDgoHBAAEAAICAhIDDwsMCgwKBAQAAwASBBICFQMKDAoFBAADAAESAxIKFQoNCgYEAAMAAgASAxMEHwoOCgcEAAMAAgAEEgMTBAwKDgoHBAADAAIABRIDEw0TCg4KBwQAAwACAAESAxMUGgoOCgcEAAMAAgADEgMTHR4KDQoGBAADAAIBEgMUBDEKDgoHBAADAAIBBBIDFAQMCg4KBwQAAwACAQYSAxQNFgoOCgcEAAMAAgEBEgMUFxsKDgoHBAADAAIBAxIDFB4fCg4KBwQAAwACAQgSAxQgMAoOCgcEAAMAAgEHEgMUKy8KCwoEBAACAxIDFwIiCgwKBQQAAgMEEgMXAgoKDAoFBAACAwYSAxcLFgoMCgUEAAIDARIDFxcdCgwKBQQAAgMDEgMXICEKCgoCBAESBBoAHAEKCgoDBAEBEgMaCBMKCwoEBAECABIDGwIdCgwKBQQBAgAEEgMbAgoKDAoFBAECAAYSAxsLEQoMCgUEAQIAARIDGxIYCgwKBQQBAgADEgMbGxw="
-
-import base64 as _base64
-
-_SCHEMA = None
-_TYPES = {}
-
-def _schema():
-    """The embedded FileDescriptorSet as a pbwire schema (built once)."""
-    global _SCHEMA
-    if _SCHEMA is None:
-        import pbwire as _pbw
-        _SCHEMA = _pbw.Schema.load(_base64.b64decode(_DESC_B64))
-    return _SCHEMA
-
-
-def _type(full):
-    t = _TYPES.get(full)
-    if t is None:
-        t = _schema().message(full)
-        _TYPES[full] = t
-    return t
+import addressbook_pbwire_meta as _meta
 
 class Person_PhoneType:
     """tutorial.Person.PhoneType"""
@@ -62,7 +40,7 @@ class Person_PhoneNumber:
 
     def SerializeToString(self) -> bytes:
         """Wire bytes; the embedded schema drives the C core."""
-        return _type("tutorial.Person.PhoneNumber").encode(self.to_dict())
+        return _meta._type("tutorial.Person.PhoneNumber").encode(self.to_dict())
 
     def ParseFromString(self, wire: bytes) -> int:
         """Merge wire bytes into this message; returns bytes consumed."""
@@ -72,7 +50,7 @@ class Person_PhoneNumber:
 
     @classmethod
     def FromString(cls, wire: bytes) -> Person_PhoneNumber:
-        return cls.from_dict(_type("tutorial.Person.PhoneNumber").decode(bytes(wire)).to_dict())
+        return cls.from_dict(_meta._type("tutorial.Person.PhoneNumber").decode(bytes(wire)).to_dict())
 
     def CopyFrom(self, other) -> None:
         if not isinstance(other, Person_PhoneNumber):
@@ -151,7 +129,7 @@ class Person:
 
     def SerializeToString(self) -> bytes:
         """Wire bytes; the embedded schema drives the C core."""
-        return _type("tutorial.Person").encode(self.to_dict())
+        return _meta._type("tutorial.Person").encode(self.to_dict())
 
     def ParseFromString(self, wire: bytes) -> int:
         """Merge wire bytes into this message; returns bytes consumed."""
@@ -161,7 +139,7 @@ class Person:
 
     @classmethod
     def FromString(cls, wire: bytes) -> Person:
-        return cls.from_dict(_type("tutorial.Person").decode(bytes(wire)).to_dict())
+        return cls.from_dict(_meta._type("tutorial.Person").decode(bytes(wire)).to_dict())
 
     def CopyFrom(self, other) -> None:
         if not isinstance(other, Person):
@@ -242,7 +220,7 @@ class AddressBook:
 
     def SerializeToString(self) -> bytes:
         """Wire bytes; the embedded schema drives the C core."""
-        return _type("tutorial.AddressBook").encode(self.to_dict())
+        return _meta._type("tutorial.AddressBook").encode(self.to_dict())
 
     def ParseFromString(self, wire: bytes) -> int:
         """Merge wire bytes into this message; returns bytes consumed."""
@@ -252,7 +230,7 @@ class AddressBook:
 
     @classmethod
     def FromString(cls, wire: bytes) -> AddressBook:
-        return cls.from_dict(_type("tutorial.AddressBook").decode(bytes(wire)).to_dict())
+        return cls.from_dict(_meta._type("tutorial.AddressBook").decode(bytes(wire)).to_dict())
 
     def CopyFrom(self, other) -> None:
         if not isinstance(other, AddressBook):

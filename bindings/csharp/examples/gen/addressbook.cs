@@ -10,40 +10,6 @@ using Pbwire;
 
 namespace Tutorial {
 
-    internal static class PbwireFile_Addressbook {
-        internal static readonly Schema Schema = Schema.FromBytes(Convert.FromBase64String(string.Concat(
-            "Cr8KChFhZGRyZXNzYm9vay5wcm90bxIIdHV0b3JpYWwiggIKBlBlcnNvbhIS",
-            "CgRuYW1lGAEgAigJUgRuYW1lEg4KAmlkGAIgAigFUgJpZBIUCgVlbWFpbBgD",
-            "IAEoCVIFZW1haWwSNAoGcGhvbmVzGAQgAygLMhwudHV0b3JpYWwuUGVyc29u",
-            "LlBob25lTnVtYmVyUgZwaG9uZXMaWwoLUGhvbmVOdW1iZXISFgoGbnVtYmVy",
-            "GAEgAigJUgZudW1iZXISNAoEdHlwZRgCIAEoDjIaLnR1dG9yaWFsLlBlcnNv",
-            "bi5QaG9uZVR5cGU6BEhPTUVSBHR5cGUiKwoJUGhvbmVUeXBlEgoKBk1PQklM",
-            "RRAAEggKBEhPTUUQARIICgRXT1JLEAIiNwoLQWRkcmVzc0Jvb2sSKAoGcGVv",
-            "cGxlGAEgAygLMhAudHV0b3JpYWwuUGVyc29uUgZwZW9wbGVK4QcKBhIEAwAc",
-            "AQrAAQoBDBIDAwASGrUBIFRoZSBjbGFzc2ljIHByb3RvY29sLWJ1ZmZlcnMg",
-            "dHV0b3JpYWwgc2NoZW1hIChhZGRyZXNzYm9vay5wcm90byksIGtlcHQKIHNl",
-            "bGYtY29udGFpbmVkIChubyBpbXBvcnRzKSBzbyB0aGUgQyBleGFtcGxlIGJl",
-            "bG93IGNhbiBtaXJyb3IgaXQgYnkgaGFuZAogd2l0aG91dCBwcm90b2Mgb3Ig",
-            "Z2VuZXJhdGVkIGNvZGUuCgoICgECEgMFABEKCgoCBAASBAcAGAEKCgoDBAAB",
-            "EgMHCA4KCwoEBAACABIDCAIbCgwKBQQAAgAEEgMIAgoKDAoFBAACAAUSAwgL",
-            "EQoMCgUEAAIAARIDCBIWCgwKBQQAAgADEgMIGRoKCwoEBAACARIDCQIYCgwK",
-            "BQQAAgEEEgMJAgoKDAoFBAACAQUSAwkLEAoMCgUEAAIBARIDCRETCgwKBQQA",
-            "AgEDEgMJFhcKCwoEBAACAhIDCgIcCgwKBQQAAgIEEgMKAgoKDAoFBAACAgUS",
-            "AwoLEQoMCgUEAAICARIDChIXCgwKBQQAAgIDEgMKGhsKDAoEBAAEABIEDAIQ",
-            "AwoMCgUEAAQAARIDDAcQCg0KBgQABAACABIDDQQPCg4KBwQABAACAAESAw0E",
-            "CgoOCgcEAAQAAgACEgMNDQ4KDQoGBAAEAAIBEgMOBA0KDgoHBAAEAAIBARID",
-            "DgQICg4KBwQABAACAQISAw4LDAoNCgYEAAQAAgISAw8EDQoOCgcEAAQAAgIB",
-            "EgMPBAgKDgoHBAAEAAICAhIDDwsMCgwKBAQAAwASBBICFQMKDAoFBAADAAES",
-            "AxIKFQoNCgYEAAMAAgASAxMEHwoOCgcEAAMAAgAEEgMTBAwKDgoHBAADAAIA",
-            "BRIDEw0TCg4KBwQAAwACAAESAxMUGgoOCgcEAAMAAgADEgMTHR4KDQoGBAAD",
-            "AAIBEgMUBDEKDgoHBAADAAIBBBIDFAQMCg4KBwQAAwACAQYSAxQNFgoOCgcE",
-            "AAMAAgEBEgMUFxsKDgoHBAADAAIBAxIDFB4fCg4KBwQAAwACAQgSAxQgMAoO",
-            "CgcEAAMAAgEHEgMUKy8KCwoEBAACAxIDFwIiCgwKBQQAAgMEEgMXAgoKDAoF",
-            "BAACAwYSAxcLFgoMCgUEAAIDARIDFxcdCgwKBQQAAgMDEgMXICEKCgoCBAES",
-            "BBoAHAEKCgoDBAEBEgMaCBMKCwoEBAECABIDGwIdCgwKBQQBAgAEEgMbAgoK",
-            "DAoFBAECAAYSAxsLEQoMCgUEAQIAARIDGxIYCgwKBQQBAgADEgMbGxw=")));
-    }
-
     /// <summary>Minimal parser: ParseFrom over the C core. Not pb::MessageParser.</summary>
     public sealed class Parser_Addressbook<T> where T : new() {
         private readonly Action<T, byte[]> _merge;

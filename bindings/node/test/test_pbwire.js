@@ -110,6 +110,46 @@ test('a decoded message re-encodes to the same bytes', () => {
   passthrough.free();
 });
 
+test('decodeObject materializes every field in one call', () => {
+  const wire = person.encode(VALUES);
+  assert.deepStrictEqual(person.decodeObject(wire), {
+    name: 'alice',
+    id: 7,
+    active: true,
+    blob: Buffer.from([0x00, 0xff, 0x10]),
+    big: 9223372036854775807n,
+    inner: { x: 42, tag: 'first' },
+    nums: [1, -5, 300],
+    kids: [{ x: 1, tag: 'a' }, { x: 2 }],
+  });
+
+  // Same values the per-field path returns, unknown fields skipped silently.
+  const message = person.decode(wire);
+  const names = ['name', 'id', 'active', 'blob', 'big', 'inner', 'nums',
+                 'kids'];
+  const viaGet = {};
+  for (const name of names) {
+    viaGet[name] = message.get(name);
+  }
+  message.free();
+  assert.deepStrictEqual(person.decodeObject(wire), viaGet);
+  const withUnknown = Buffer.concat([wire, Buffer.from([0x98, 0x06, 0x2a])]);
+  assert.deepStrictEqual(person.decodeObject(withUnknown), viaGet);
+
+  // Empty input means an empty object, and bad input throws like decode.
+  assert.deepStrictEqual(person.decodeObject(Buffer.alloc(0)), {});
+  assert.throws(() => person.decodeObject(Buffer.from([0x08, 0x80])),
+                /pbwire:/, 'truncated varint');
+  assert.throws(() => person.decodeObject('not a buffer'),
+                /expects a Buffer/);
+
+  // A schema with `required` fields decodes through the tree instead.
+  const made = strict.newMessage();
+  made.set('id', 1);
+  assert.strictEqual(strict.decodeObject(made.encode()).id, 1);
+  made.free();
+});
+
 test('absent fields read as undefined and are not written', () => {
   const empty = person.newMessage();
   for (const name of ['name', 'id', 'inner', 'nums', 'blob', 'big']) {

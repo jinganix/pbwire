@@ -43,6 +43,20 @@ The test prints one `ok`/`FAIL` line per check and exits non-zero on a failure;
 archive); `build.sh` compiles the same sources straight to a `dyn.load`-able
 `pbwire.so` for development without a package install.
 
+## Generated models
+
+`protoc-gen-pbwire` (in `../../codegen`, `--pbwire_opt=lang=r`) emits
+`<base>_pbwire.R` (named-list constructors over the runtime above) and
+`<base>_meta.R` (the embedded descriptor set plus its loader, saved next to
+it; the models call that file's own dotted holder). Both files are plain
+scripts: `source()` the one(s) you need, no package install required.
+`[,model=bool][,register=bool][,registry=bool]` (all default `true`):
+`model=false` leaves the schema file for dynamic-only users;
+`register=false` drops the lazy load so `.pbwire_init_schema_<stem>()`
+(embedded bytes) or `.pbwire_use_schema_<stem>()` (an external schema, dual
+registration) must run first; `registry=false` drops
+`.pbwire_message_names_<stem>` + `.pbwire_preload_<stem>()`.
+
 ## Design: named lists, one arena per schema, builders for hot loops
 
 The schema owns one `pbw_ctx` (arena + encode buffer, reset per call), so

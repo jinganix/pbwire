@@ -137,6 +137,15 @@ comparison needs Lua 5.3+ integers, below that the test asserts typed/dynamic
 equivalence on the same values instead. `examples/roundtrip.lua` walks the
 `addressbook` example through its generated model.
 
+Each file splits in two: `<base>.lua` (tables) and `<base>_meta.lua` (the
+embedded descriptor set plus its loader, required by name like sibling
+imports — keep the gen dir on `package.path`).
+`--pbwire_opt=lang=lua[,model=bool][,register=bool][,registry=bool]`
+(all default `true`): `model=false` leaves the schema module for
+dynamic-only users; `register=false` drops the lazy load so `init_schema()`
+(embedded bytes) or `use_schema()` (an external schema, dual registration)
+must run first; `registry=false` drops `MESSAGE_NAMES` + `preload()`.
+
 ## Deliberately skipped
 
 - **No `protoc` plugin, no codegen, no second wire implementation.** The

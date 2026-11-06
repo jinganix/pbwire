@@ -80,9 +80,14 @@ anything. One message tree belongs to one thread, like the C core.
 
 ## Generated models
 
-There is no Julia generator in `codegen` yet; the `Dict` path above is the
-whole API. If one lands, its `encode`/`decode` will call this dynamic API and
-the wire will stay in the C core, like every other binding.
+`protoc-gen-pbwire` (in `../../codegen`) emits `<base>_pbwire.jl`
+(structs over this dynamic API) and `<base>_meta.jl` (the embedded
+descriptor set plus its loader, included by path). `--pbwire_opt=lang=julia`
+`[,model=bool][,register=bool][,registry=bool]` (all default `true`):
+`model=false` leaves the schema file for dynamic-only users;
+`register=false` drops the lazy load so `init_schema()` (embedded bytes)
+or `use_schema()` (an external schema, dual registration) must run first;
+`registry=false` drops `MESSAGE_NAMES` + `preload()`.
 
 ## Conformance
 

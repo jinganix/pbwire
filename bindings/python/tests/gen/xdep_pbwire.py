@@ -6,29 +6,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field as dc_field
 from typing import Any, Dict, List, Mapping, Optional, Tuple
-
-_DESC_B64 = "CrkDCgp4ZGVwLnByb3RvEgR4ZGVwIjIKBkRlcE1zZxISCgRuYW1lGAEgASgJUgRuYW1lEhQKBXZhbHVlGAIgASgFUgV2YWx1ZUroAgoGEgQDAAoBCs0BCgEMEgMDABIawgEgU2hhcmVkIGRlcGVuZGVuY3kgZm9yIHRoZSBjcm9zcy1maWxlIGZpeHR1cmU6IHhmaWxlLnByb3RvIGltcG9ydHMgdGhpcwogZmlsZSBhbmQgcmVmZXJlbmNlcyBEZXBNc2cuIEdlbmVyYXRlZCBvbmNlIHBlciBsYW5ndWFnZSBuZXh0IHRvIHhmaWxlJ3MKIG93biBtb2RlbDsgdGhlIHJlZmVyZW5jZSBieXRlcyBsaXZlIHdpdGggeGZpbGUuCgoICgECEgMFAA0KCgoCBAASBAcACgEKCgoDBAABEgMHCA4KCwoEBAACABIDCAISCgwKBQQAAgAFEgMIAggKDAoFBAACAAESAwgJDQoMCgUEAAIAAxIDCBARCgsKBAQAAgESAwkCEgoMCgUEAAIBBRIDCQIHCgwKBQQAAgEBEgMJCA0KDAoFBAACAQMSAwkQEWIGcHJvdG8z"
-
-import base64 as _base64
-
-_SCHEMA = None
-_TYPES = {}
-
-def _schema():
-    """The embedded FileDescriptorSet as a pbwire schema (built once)."""
-    global _SCHEMA
-    if _SCHEMA is None:
-        import pbwire as _pbw
-        _SCHEMA = _pbw.Schema.load(_base64.b64decode(_DESC_B64))
-    return _SCHEMA
-
-
-def _type(full):
-    t = _TYPES.get(full)
-    if t is None:
-        t = _schema().message(full)
-        _TYPES[full] = t
-    return t
+import xdep_pbwire_meta as _meta
 
 @dataclass
 class DepMsg:
@@ -57,7 +35,7 @@ class DepMsg:
 
     def SerializeToString(self) -> bytes:
         """Wire bytes; the embedded schema drives the C core."""
-        return _type("xdep.DepMsg").encode(self.to_dict())
+        return _meta._type("xdep.DepMsg").encode(self.to_dict())
 
     def ParseFromString(self, wire: bytes) -> int:
         """Merge wire bytes into this message; returns bytes consumed."""
@@ -67,7 +45,7 @@ class DepMsg:
 
     @classmethod
     def FromString(cls, wire: bytes) -> DepMsg:
-        return cls.from_dict(_type("xdep.DepMsg").decode(bytes(wire)).to_dict())
+        return cls.from_dict(_meta._type("xdep.DepMsg").decode(bytes(wire)).to_dict())
 
     def CopyFrom(self, other) -> None:
         if not isinstance(other, DepMsg):

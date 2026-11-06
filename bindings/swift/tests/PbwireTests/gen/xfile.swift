@@ -5,35 +5,6 @@
 import Foundation
 import Pbwire
 
-private let _descData = Data(base64Encoded: """
-CrkDCgp4ZGVwLnByb3RvEgR4ZGVwIjIKBkRlcE1zZxISCgRuYW1lGAEgASgJUgRuYW1lEhQKBXZh
-bHVlGAIgASgFUgV2YWx1ZUroAgoGEgQDAAoBCs0BCgEMEgMDABIawgEgU2hhcmVkIGRlcGVuZGVu
-Y3kgZm9yIHRoZSBjcm9zcy1maWxlIGZpeHR1cmU6IHhmaWxlLnByb3RvIGltcG9ydHMgdGhpcwog
-ZmlsZSBhbmQgcmVmZXJlbmNlcyBEZXBNc2cuIEdlbmVyYXRlZCBvbmNlIHBlciBsYW5ndWFnZSBu
-ZXh0IHRvIHhmaWxlJ3MKIG93biBtb2RlbDsgdGhlIHJlZmVyZW5jZSBieXRlcyBsaXZlIHdpdGgg
-eGZpbGUuCgoICgECEgMFAA0KCgoCBAASBAcACgEKCgoDBAABEgMHCA4KCwoEBAACABIDCAISCgwK
-BQQAAgAFEgMIAggKDAoFBAACAAESAwgJDQoMCgUEAAIAAxIDCBARCgsKBAQAAgESAwkCEgoMCgUE
-AAIBBRIDCQIHCgwKBQQAAgEBEgMJCA0KDAoFBAACAQMSAwkQEWIGcHJvdG8zCoEFCgt4ZmlsZS5w
-cm90bxIFeGZpbGUaCnhkZXAucHJvdG8iZQoHVXNlc0RlcBIkCgZzaW5nbGUYASABKAsyDC54ZGVw
-LkRlcE1zZ1IGc2luZ2xlEiAKBG1hbnkYAiADKAsyDC54ZGVwLkRlcE1zZ1IEbWFueRISCgRub3Rl
-GAMgASgJUgRub3RlSu8DCgYSBAQADgEKhAIKAQwSAwQAEhr5ASBDcm9zcy1maWxlIGZpeHR1cmUg
-Zm9yIHRoZSBnZW5lcmF0ZWQgY29tcGF0IHRlc3RzOiBVc2VzRGVwIHJlZmVyZW5jZXMKIERlcE1z
-ZyBmcm9tIHhkZXAucHJvdG8sIHNvIGV2ZXJ5IGxhbmd1YWdlIG11c3QgaW1wb3J0IHRoZSBzaWJs
-aW5nCiBnZW5lcmF0ZWQgZmlsZSBpbnN0ZWFkIG9mIHNraXBwaW5nIHRoZSBmaWVsZC4gUmVmZXJl
-bmNlIGJ5dGVzCiAoeGZpbGUuYmluKSBmcm9tIHByb3RvYyAtLWVuY29kZSBvZiB4ZmlsZS50eHQu
-CgoICgECEgMGAA4KCQoCAwASAwgAFAoKCgIEABIECgAOAQoKCgMEAAESAwoIDwoLCgQEAAIAEgML
-AhkKDAoFBAACAAYSAwsCDQoMCgUEAAIAARIDCw4UCgwKBQQAAgADEgMLFxgKCwoEBAACARIDDAIg
-CgwKBQQAAgEEEgMMAgoKDAoFBAACAQYSAwwLFgoMCgUEAAIBARIDDBcbCgwKBQQAAgEDEgMMHh8K
-CwoEBAACAhIDDQISCgwKBQQAAgIFEgMNAggKDAoFBAACAgESAw0JDQoMCgUEAAICAxIDDRARYgZw
-cm90bzM=
-""".filter { !$0.isWhitespace })!
-
-private let _schema: Schema = {
-    do { return try Schema(bytes: _descData) } catch {
-        fatalError("pbwire: embedded descriptor set: \(error)")
-    }
-}()
-
 /// xfile.UsesDep
 public struct Xfile_UsesDep {
     public var single: Xdep_DepMsg? = nil
@@ -48,7 +19,7 @@ public struct Xfile_UsesDep {
     }
 
     public func encode() throws -> Data {
-        guard let msg = _schema.message("xfile.UsesDep") else {
+        guard let msg = xfile_schema.message("xfile.UsesDep") else {
             throw NSError(domain: "pbwire", code: -1, userInfo: [NSLocalizedDescriptionKey: "no such type: xfile.UsesDep"])
         }
         try fill(msg)
@@ -56,7 +27,7 @@ public struct Xfile_UsesDep {
     }
 
     public static func decode(_ data: Data) throws -> Xfile_UsesDep {
-        guard let ty = _schema.message("xfile.UsesDep") else {
+        guard let ty = xfile_schema.message("xfile.UsesDep") else {
             throw NSError(domain: "pbwire", code: -1, userInfo: [NSLocalizedDescriptionKey: "no such type: xfile.UsesDep"])
         }
         return try fromMessage(ty.decode(data))

@@ -122,9 +122,14 @@ close messages and types first, like any arena.
 classes over this dynamic API: `getX()`/`setX()`, `hasX()`/`clearX()` for
 optional and message fields, `RepeatedField` for repeated, `getKind()` /
 `whichOneof()` for oneofs, enums as class constants, and
-`serializeToString()`/`mergeFromString()`. Each file embeds its own
-`FileDescriptorSet`, so no `.desc` is needed at use time; the wire format
-stays in the C core. The committed output is `tests/gen/` and
+`serializeToString()`/`mergeFromString()`. Each file splits in two:
+`<base>.php` (models) and `PbwireFile_<Stem>.php` (the holder: embedded
+set plus its loader). `--pbwire_opt=lang=php[,model=bool][,register=bool]`
+`[,registry=bool]` (all default `true`): `model=false` leaves the holder
+for dynamic-only users; `register=false` drops the lazy load so `init()`
+(embedded bytes) or `use_schema()` (an external `Schema`, dual
+registration) must run first; `registry=false` drops `MESSAGE_NAMES` +
+`preload()`. The committed output is `tests/gen/` and
 `examples/gen/` plus the protoc `--php_out` oracle in `tests/gen_oracle/`;
 `tests/compat_test.php` runs TESTSPEC T1–T6 against the pinned runtime
 (protobuf v36.2 `php/src`), `tests/generated_test.php` is the oracle-free

@@ -161,8 +161,16 @@ deallocator, and `decode` wraps the decoder's arena in one `Message`.
 - **No JSON/text format wrappers.** The C ABI's `pbw_json_*` / `pbw_text_*`
   entry points are one import away (`import CPbwire`); no caller here asked
   for them yet.
-- **No generated model.** `protoc-gen-pbwire` (in `../../codegen`) emits no
-  Swift output today; the dynamic API above is the whole surface.
+
+## Generated models
+
+`protoc-gen-pbwire` (in `../../codegen`) emits `<base>.swift` (structs)
+and `<base>_meta.swift` (the embedded descriptor set plus its loader).
+`--pbwire_opt=lang=swift[,model=bool][,register=bool][,registry=bool]`
+(all default `true`): `model=false` leaves the meta file for dynamic-only
+users; `register=false` drops the lazy load so `initSchema()` (embedded)
+or `useSchema()` (an external `Schema`, dual registration) must run first;
+`registry=false` drops `messageNames` + `preload()`.
 
 Known limits (same as the Objective-C wrapper):
 

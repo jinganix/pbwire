@@ -10,67 +10,120 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
-func luaFiles(f *model.File, opt ...Options) []File {
-	// The FileDescriptorSet travels in opt.DescSetB64 (see gen.Generate).
-	// The call stays variadic so the old dispatcher luaFiles(f) keeps
-	// compiling (and keeps emitting the schema-argument form) until it
-	// forwards opt; with the set present the module is self-contained.
+func luaFiles(f *model.File, opt Options) ([]File, error) {
+	// Models and schema part ways: tables in one module, the embedded
+	// descriptor set plus its loader in the other (required by name, like
+	// sibling imports: callers keep the gen dir on package.path). model=false
+	// leaves the schema module for dynamic-only users.
 	var desc []byte
-	if len(opt) > 0 && opt[0].DescSetB64 != "" {
-		if raw, err := base64.StdEncoding.DecodeString(opt[0].DescSetB64); err == nil {
+	if opt.DescSetB64 != "" {
+		if raw, err := base64.StdEncoding.DecodeString(opt.DescSetB64); err == nil {
 			desc = raw
 		}
 	}
-	var b strings.Builder
-	b.WriteString(headerP(f, "--", "Generated tables over the pbwire dynamic API: assign fields, encode, decode."))
-	if len(desc) > 0 {
-		b.WriteString("local pbwire = require(\"pbwire\")\n")
+	var files []File
+	if opt.Model {
+		var b strings.Builder
+		b.WriteString(headerP(f, "--", "Generated tables over the pbwire dynamic API: assign fields, encode, decode."))
+		b.WriteString("local meta = require(\"" + base(f) + "_meta\")\n")
 		for _, imp := range f.Imports {
 			fmt.Fprintf(&b, "local %s = require(\"%s\")\n", stem(imp.Path), stem(imp.Path))
 		}
 		b.WriteString("\n")
+		b.WriteString("local M = {}\n\n")
+		if len(desc) > 0 {
+			b.WriteString("-- The embedded schema, for dynamic-API cross-checks (no .desc file).\n")
+			b.WriteString("M.schema = meta.schema\n\n")
+		}
+		b.WriteString("-- merge overlays init onto dst; a nil init is a fresh default.\n")
+		b.WriteString("local function merge(dst, init)\n")
+		b.WriteString("    if init ~= nil then\n")
+		b.WriteString("        for k, v in pairs(init) do dst[k] = v end\n")
+		b.WriteString("    end\n")
+		b.WriteString("    return dst\n")
+		b.WriteString("end\n\n")
+		b.WriteString("-- map_list copies an array through f; a nil array maps to {}.\n")
+		b.WriteString("local function map_list(xs, f)\n")
+		b.WriteString("    local out = {}\n")
+		b.WriteString("    if xs ~= nil then\n")
+		b.WriteString("        for i = 1, #xs do out[i] = f(xs[i]) end\n")
+		b.WriteString("    end\n")
+		b.WriteString("    return out\n")
+		b.WriteString("end\n\n")
+		b.WriteString("local function identity(v) return v end\n\n")
+		for _, e := range f.Enums {
+			fmt.Fprintf(&b, "-- %s\n", e.Full)
+			fmt.Fprintf(&b, "M.%s = {\n", className(f, e.Name))
+			for _, v := range e.Values {
+				fmt.Fprintf(&b, "    %s = %d,\n", v.Name, v.Number)
+			}
+			b.WriteString("}\n\n")
+		}
+		for _, m := range f.Messages {
+			writeLuaMessage(&b, f, m, len(desc) > 0)
+		}
+		b.WriteString("return M\n")
+		files = append(files, File{Name: base(f) + ".lua", Content: b.String()})
+	}
+	var meta strings.Builder
+	writeLuaMeta(&meta, f, opt, desc)
+	files = append(files, File{Name: base(f) + "_meta.lua", Content: meta.String()})
+	return files, nil
+}
+
+// writeLuaMeta emits the schema module: the embedded descriptor set plus an
+// explicit loader. register=true loads lazily on first use (as before);
+// otherwise init_schema (embedded bytes) or use_schema (an external schema)
+// must run first, loudly otherwise. registry adds the whole-file message
+// list plus a preload that warms every type.
+func writeLuaMeta(b *strings.Builder, f *model.File, opt Options, desc []byte) {
+	b.WriteString(headerP(f, "--", "Embedded descriptor set plus its loader: the schema side of the generated model."))
+	if len(desc) > 0 {
+		b.WriteString("local pbwire = require(\"pbwire\")\n\n")
 		b.WriteString("-- The embedded FileDescriptorSet: no .desc file at use time.\n")
 		b.WriteString("local DESC = " + luaString(desc) + "\n\n")
-		b.WriteString("local _schema = nil\n")
-		b.WriteString("local function schema()\n")
-		b.WriteString("    if _schema == nil then _schema = pbwire.load(DESC) end\n")
+		b.WriteString("local _schema = nil\n\n")
+		b.WriteString("local function init_schema(desc_bytes)\n")
+		b.WriteString("    _schema = pbwire.load(desc_bytes or DESC)\n")
 		b.WriteString("    return _schema\n")
 		b.WriteString("end\n\n")
-	}
-	b.WriteString("local M = {}\n\n")
-	if len(desc) > 0 {
-		b.WriteString("-- The embedded schema, for dynamic-API cross-checks (no .desc file).\n")
-		b.WriteString("M.schema = schema\n\n")
-	}
-	b.WriteString("-- merge overlays init onto dst; a nil init is a fresh default.\n")
-	b.WriteString("local function merge(dst, init)\n")
-	b.WriteString("    if init ~= nil then\n")
-	b.WriteString("        for k, v in pairs(init) do dst[k] = v end\n")
-	b.WriteString("    end\n")
-	b.WriteString("    return dst\n")
-	b.WriteString("end\n\n")
-	b.WriteString("-- map_list copies an array through f; a nil array maps to {}.\n")
-	b.WriteString("local function map_list(xs, f)\n")
-	b.WriteString("    local out = {}\n")
-	b.WriteString("    if xs ~= nil then\n")
-	b.WriteString("        for i = 1, #xs do out[i] = f(xs[i]) end\n")
-	b.WriteString("    end\n")
-	b.WriteString("    return out\n")
-	b.WriteString("end\n\n")
-	b.WriteString("local function identity(v) return v end\n\n")
-	for _, e := range f.Enums {
-		fmt.Fprintf(&b, "-- %s\n", e.Full)
-		fmt.Fprintf(&b, "M.%s = {\n", className(f, e.Name))
-		for _, v := range e.Values {
-			fmt.Fprintf(&b, "    %s = %d,\n", v.Name, v.Number)
+		b.WriteString("local function use_schema(s)\n")
+		b.WriteString("    _schema = s\n")
+		b.WriteString("end\n\n")
+		if opt.Register {
+			b.WriteString("local function schema()\n")
+			b.WriteString("    if _schema == nil then _schema = pbwire.load(DESC) end\n")
+			b.WriteString("    return _schema\n")
+			b.WriteString("end\n")
+		} else {
+			b.WriteString("local function schema()\n")
+			b.WriteString("    if _schema == nil then error(\"call init_schema() first (generated with register=false)\") end\n")
+			b.WriteString("    return _schema\n")
+			b.WriteString("end\n")
 		}
-		b.WriteString("}\n\n")
+		if opt.Registry {
+			b.WriteString("\n-- Every message in this file, for whole-schema pre-registration.\n")
+			b.WriteString("local MESSAGE_NAMES = {\n")
+			for _, m := range f.Messages {
+				fmt.Fprintf(b, "    %q,\n", m.Full)
+			}
+			b.WriteString("}\n\n")
+			b.WriteString("local function preload()\n")
+			b.WriteString("    local s = schema()\n")
+			b.WriteString("    for _, n in ipairs(MESSAGE_NAMES) do s:message(n) end\n")
+			b.WriteString("    return MESSAGE_NAMES\n")
+			b.WriteString("end\n")
+		}
+		b.WriteString("\nreturn {\n")
+		b.WriteString("    schema = schema,\n")
+		b.WriteString("    init_schema = init_schema,\n")
+		b.WriteString("    use_schema = use_schema,\n")
+		if opt.Registry {
+			b.WriteString("    MESSAGE_NAMES = MESSAGE_NAMES,\n")
+			b.WriteString("    preload = preload,\n")
+		}
+		b.WriteString("}\n")
 	}
-	for _, m := range f.Messages {
-		writeLuaMessage(&b, f, m, len(desc) > 0)
-	}
-	b.WriteString("return M\n")
-	return []File{{Name: base(f) + ".lua", Content: b.String()}}
 }
 
 // luaMsg names the table for a message field: the sibling module's table
@@ -168,7 +221,7 @@ func writeLuaMessage(b *strings.Builder, f *model.File, m model.Message, embedde
 		// One argument encodes through the embedded schema; two keep the
 		// old (schema, table) form, so existing callers keep working.
 		fmt.Fprintf(b, "    if b ~= nil then return a:encode(%q, M.%s.to_table(b)) end\n", m.Full, cls)
-		fmt.Fprintf(b, "    return schema():encode(%q, M.%s.to_table(a))\n", m.Full, cls)
+		fmt.Fprintf(b, "    return meta.schema():encode(%q, M.%s.to_table(a))\n", m.Full, cls)
 	} else {
 		b.WriteString("schema, t)\n")
 		fmt.Fprintf(b, "    return schema:encode(%q, M.%s.to_table(t))\n", m.Full, cls)
@@ -178,7 +231,7 @@ func writeLuaMessage(b *strings.Builder, f *model.File, m model.Message, embedde
 	if embedded {
 		b.WriteString("a, b)\n")
 		fmt.Fprintf(b, "    if b ~= nil then return M.%s.from_table(a:decode(%q, b)) end\n", cls, m.Full)
-		fmt.Fprintf(b, "    return M.%s.from_table(schema():decode(%q, a))\n", cls, m.Full)
+		fmt.Fprintf(b, "    return M.%s.from_table(meta.schema():decode(%q, a))\n", cls, m.Full)
 	} else {
 		b.WriteString("schema, wire)\n")
 		fmt.Fprintf(b, "    return M.%s.from_table(schema:decode(%q, wire))\n", cls, m.Full)

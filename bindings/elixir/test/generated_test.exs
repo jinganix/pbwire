@@ -9,13 +9,21 @@ defmodule Matrix3GeneratedTest do
   @moduletag :generated
 
   alias Structtest.{Scalars3, Inner3}
+  alias Structtest.Matrix3.Registry
 
   @bin Path.join([__DIR__, "..", "..", "c", "tests", "data", "matrix3.bin"])
 
   setup_all do
-    mods = [Scalars3, Inner3, Structtest.Color3]
+    mods = Registry.message_modules()
     :ok = Pbwire.load_schema(mods)
     :ok
+  end
+
+  test "registry lists every top-level message and enum" do
+    mods = Registry.message_modules()
+    assert Scalars3 in mods
+    assert Inner3 in mods
+    assert Structtest.Color3 in mods
   end
 
   defp build do
@@ -82,12 +90,12 @@ defmodule XfileGeneratedTest do
   # Sync: load_schema is node-global, like PbwireTest.
 
   alias Xdep.DepMsg
-  alias Xfile.UsesDep
+  alias Xfile.{UsesDep, Registry}
 
   @bin Path.join([__DIR__, "..", "..", "..", "codegen", "testdata", "xfile.bin"])
 
   setup_all do
-    :ok = Pbwire.load_schema([UsesDep])
+    :ok = Pbwire.load_schema(Registry.message_modules())
     :ok
   end
 

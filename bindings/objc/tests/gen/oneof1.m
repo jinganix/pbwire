@@ -3,48 +3,18 @@
 // Do not edit; regenerate from the .proto instead.
 
 #import "oneof1.h"
+#import "oneof1.h"
+#import "oneof1_schema.h"
 #import "PBWError.h"
 
 NS_ASSUME_NONNULL_BEGIN
-
-static NSString * const kPBWGenDescB64 =
-    @"CvUFCgxvbmVvZjEucHJvdG8SCHNwZWN0ZXN0IpUBCgZPbmVvZjESEgoEbmFt"
-    @"ZRgBIAEoCVIEbmFtZRISCgNudW0YAiABKAVIAFIDbnVtEhQKBHRleHQYAyAB"
-    @"KAlIAFIEdGV4dBIuCgVpbm5lchgEIAEoCzIWLnNwZWN0ZXN0Lk9uZW9mMS5J"
-    @"bm5lckgAUgVpbm5lchoVCgVJbm5lchIMCgF2GAEgASgFUgF2QgYKBGtpbmRK"
-    @"ugQKBhIEAwASAQq6AQoBDBIDAwASGq8BIFNtYWxsIG9uZW9mICsgbmVzdGlu"
-    @"ZyBmaXh0dXJlIGZvciB0aGUgZ2VuZXJhdGVkIGNvbXBhdCB0ZXN0cyAoVEVT"
-    @"VFNQRUMgVDEtVDUKIGV4dHJhcykuIEtlcHQgaW4gdGVzdGRhdGEgc28gZXZl"
-    @"cnkgYmluZGluZyBzaGFyZXMgdGhlIHNhbWUgc2NoZW1hLCB2YWx1ZXMKIGFu"
-    @"ZCByZWZlcmVuY2UgYnl0ZXMuCgoICgECEgMFABEKCgoCBAASBAcAEgEKCgoD"
-    @"BAABEgMHCA4KDAoEBAADABIECAIKAwoMCgUEAAMAARIDCAoPCg0KBgQAAwAC"
-    @"ABIDCQQQCg4KBwQAAwACAAUSAwkECQoOCgcEAAMAAgABEgMJCgsKDgoHBAAD"
-    @"AAIAAxIDCQ4PCgsKBAQAAgASAwwCEgoMCgUEAAIABRIDDAIICgwKBQQAAgAB"
-    @"EgMMCQ0KDAoFBAACAAMSAwwQEQoMCgQEAAgAEgQNAhEDCgwKBQQACAABEgMN"
-    @"CAwKCwoEBAACARIDDgQSCgwKBQQAAgEFEgMOBAkKDAoFBAACAQESAw4KDQoM"
-    @"CgUEAAIBAxIDDhARCgsKBAQAAgISAw8EFAoMCgUEAAICBRIDDwQKCgwKBQQA"
-    @"AgIBEgMPCw8KDAoFBAACAgMSAw8SEwoLCgQEAAIDEgMQBBQKDAoFBAACAwYS"
-    @"AxAECQoMCgUEAAIDARIDEAoPCgwKBQQAAgMDEgMQEhNiBnByb3RvMw=="
-    ;
-
-static PBWSchema *PBWGenFileSchema(void)
-{
-    static PBWSchema *schema = nil;
-    static dispatch_once_t onceToken;
-    dispatch_once(&onceToken, ^{
-        NSData *raw = [[NSData alloc] initWithBase64EncodedString:kPBWGenDescB64 options:0];
-        NSError *error = nil;
-        schema = [PBWSchema schemaFromData:raw error:&error];
-    });
-    return schema;
-}
 
 @implementation PBWGen_Oneof1_Inner
 
 
 + (nullable PBWSchema *)pbw_schema
 {
-    return PBWGenFileSchema();
+    return PBWGenOneof1FileSchema();
 }
 
 + (instancetype)message
@@ -132,7 +102,7 @@ static PBWSchema *PBWGenFileSchema(void)
 
 + (nullable PBWSchema *)pbw_schema
 {
-    return PBWGenFileSchema();
+    return PBWGenOneof1FileSchema();
 }
 
 + (instancetype)message

@@ -1,6 +1,6 @@
 [package]
 name = "pbwire"
-version = "0.1.11"
+version = "0.1.12"
 edition = "2021"
 description = "Rust binding over the pbwire C ABI: dynamic protobuf without generated code"
 license = "MIT"

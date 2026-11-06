@@ -5,12 +5,6 @@
 import java.util.Base64
 
 object maptestGen {
-  private val desc: Array[Byte] = Base64.getDecoder.decode(
-    List("""CsQICg1tYXB0ZXN0LnByb3RvEghzcGVjdGVzdCI0CghNYXBWYWx1ZRISCgRuYW1lGAEgASgJUgRuYW1lEhQKBXZhbHVlGAIgASgFUgV2YWx1ZSLqAgoHTWFwVGVzdBIzCgZieV9pbnQYASADKAsyHC5zcGVjdGVzdC5NYXBUZXN0LkJ5SW50RW50cnlSBWJ5SW50EjMKBmJ5X3N0chgCIAMoCzIcLnNwZWN0ZXN0Lk1hcFRlc3QuQnlTdHJFbnRyeVIFYnlTdHISMwoGYnlfbXNnGAMgAygLMhwuc3BlY3Rlc3QuTWFwVGVzdC5CeU1zZ0VudHJ5UgVieU1zZxo4CgpCeUludEVudHJ5EhAKA2tleRgBIAEoBVIDa2V5EhQKBXZhbHVlGAIgASgJUgV2YWx1ZToCOAEaOAoKQnlTdHJFbnRyeRIQCgNrZXkYASABKAlSA2tleRIUCgV2YWx1ZRgCIAEoBVIFdmFsdWU6AjgBGkwKCkJ5TXNnRW50cnkSEAoDa2V5GAEgASgJUgNrZXkSKAoFdmFsdWUYAiABKAsyEi5zcGVjdGVzdC5NYXBWYWx1ZVIFdmFsdWU6AjgBSv0ECgYSBAQAEQEKpQIKAQwSAwQAEhqaAiBTbWFsbCBtYXAgZml4dHVyZSBmb3IgdGhlIGdlbmVyYXRlZCBjb21wYXQgdGVzdHM6IHNjYWxhciwgaW50LWtleWVkIGFuZAogbWVzc2FnZS12YWx1ZWQgbWFwcyByaWRlIGFzIHJlcGVhdGVkIGVudHJ5IHN0cnVjdHMgaW4gZXZlcnkgbGFuZ3VhZ2UuCiBLZXB0IGluIHRlc3RkYXRhIHNvIGV2ZXJ5IGJpbmRpbmcgc2hhcmVzIHRoZSBzYW1lIHNjaGVtYSwgdmFsdWVzIGFuZAogcmVmZXJlbmNlIGJ5dGVzIChtYXB0ZXN0LmJpbiBmcm9tIHByb3RvYyAtLWVuY29kZSBvZiBtYXB0ZXN0LnR4dCkuCgoICgECEgMGABEKCgoCBAASBAgACwEKCgoDBAABEgMICBAKCwoEBAACABIDCQISCgwKBQQAAgAFEgMJAggKDAoFBAACAAESAwkJDQoMCgUEAAIAAxIDCRARCgsKBAQAAgESAwoCEgoMCgUEAAIBBRIDCgIHCgwKBQQAAgEBEgMKCA0KDAoFBAACAQMSAwoQEQoKCgIEARIEDQARAQoKCgMEAQESAw0IDwoLCgQEAQIAEgMOAiAKDAoFBAECAAYSAw4CFAoMCgUEAQIAARIDDhUbCgwKBQQBAgADEgMOHh8KCwoEBAECARIDDwIgCgwKBQQBAgEGEgMPAhQKDAoFBAECAQESAw8VGwoMCgUEAQIBAxIDDx4fCgsKBAQBAgISAxACIwoMCgUEAQICBhIDEAIXCgwKBQQBAgIBEgMQGB4KDAoFBAECAgMSAxAhImIGcHJvdG8z""").mkString.filterNot(_.isWhitespace)
-  )
-
-  private val schema: Schema = Schema.fromBytes(desc)
-
   // spectest.MapValue
   case class Spectest_MapValue(
     name: String = "",
@@ -20,7 +14,7 @@ object maptestGen {
   }
 
   object Spectest_MapValue {
-    private val ty: MessageType = schema.message("spectest.MapValue")
+    private val ty: MessageType = maptestMeta.schema.message("spectest.MapValue")
 
     def encode(v: Spectest_MapValue): Array[Byte] = {
       val msg = ty.newMessage()
@@ -50,7 +44,7 @@ object maptestGen {
   }
 
   object Spectest_MapTest_ByIntEntry {
-    private val ty: MessageType = schema.message("spectest.MapTest.ByIntEntry")
+    private val ty: MessageType = maptestMeta.schema.message("spectest.MapTest.ByIntEntry")
 
     def encode(v: Spectest_MapTest_ByIntEntry): Array[Byte] = {
       val msg = ty.newMessage()
@@ -80,7 +74,7 @@ object maptestGen {
   }
 
   object Spectest_MapTest_ByStrEntry {
-    private val ty: MessageType = schema.message("spectest.MapTest.ByStrEntry")
+    private val ty: MessageType = maptestMeta.schema.message("spectest.MapTest.ByStrEntry")
 
     def encode(v: Spectest_MapTest_ByStrEntry): Array[Byte] = {
       val msg = ty.newMessage()
@@ -110,7 +104,7 @@ object maptestGen {
   }
 
   object Spectest_MapTest_ByMsgEntry {
-    private val ty: MessageType = schema.message("spectest.MapTest.ByMsgEntry")
+    private val ty: MessageType = maptestMeta.schema.message("spectest.MapTest.ByMsgEntry")
 
     def encode(v: Spectest_MapTest_ByMsgEntry): Array[Byte] = {
       val msg = ty.newMessage()
@@ -141,7 +135,7 @@ object maptestGen {
   }
 
   object Spectest_MapTest {
-    private val ty: MessageType = schema.message("spectest.MapTest")
+    private val ty: MessageType = maptestMeta.schema.message("spectest.MapTest")
 
     def encode(v: Spectest_MapTest): Array[Byte] = {
       val msg = ty.newMessage()

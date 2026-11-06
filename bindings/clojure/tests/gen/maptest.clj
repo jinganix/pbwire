@@ -3,17 +3,16 @@
 ;; Do not edit; regenerate from the .proto instead.
 (ns maptest
   (:require [clojure.java.io :as io]
-            [pbwire.core :as pb])
+            [pbwire.core :as pb]
+            [maptest-meta :as meta])
   (:import (java.util Base64)))
 
-(def ^:private desc-bytes
-  (.decode (Base64/getDecoder)
-    "CsQICg1tYXB0ZXN0LnByb3RvEghzcGVjdGVzdCI0CghNYXBWYWx1ZRISCgRuYW1lGAEgASgJUgRuYW1lEhQKBXZhbHVlGAIgASgFUgV2YWx1ZSLqAgoHTWFwVGVzdBIzCgZieV9pbnQYASADKAsyHC5zcGVjdGVzdC5NYXBUZXN0LkJ5SW50RW50cnlSBWJ5SW50EjMKBmJ5X3N0chgCIAMoCzIcLnNwZWN0ZXN0Lk1hcFRlc3QuQnlTdHJFbnRyeVIFYnlTdHISMwoGYnlfbXNnGAMgAygLMhwuc3BlY3Rlc3QuTWFwVGVzdC5CeU1zZ0VudHJ5UgVieU1zZxo4CgpCeUludEVudHJ5EhAKA2tleRgBIAEoBVIDa2V5EhQKBXZhbHVlGAIgASgJUgV2YWx1ZToCOAEaOAoKQnlTdHJFbnRyeRIQCgNrZXkYASABKAlSA2tleRIUCgV2YWx1ZRgCIAEoBVIFdmFsdWU6AjgBGkwKCkJ5TXNnRW50cnkSEAoDa2V5GAEgASgJUgNrZXkSKAoFdmFsdWUYAiABKAsyEi5zcGVjdGVzdC5NYXBWYWx1ZVIFdmFsdWU6AjgBSv0ECgYSBAQAEQEKpQIKAQwSAwQAEhqaAiBTbWFsbCBtYXAgZml4dHVyZSBmb3IgdGhlIGdlbmVyYXRlZCBjb21wYXQgdGVzdHM6IHNjYWxhciwgaW50LWtleWVkIGFuZAogbWVzc2FnZS12YWx1ZWQgbWFwcyByaWRlIGFzIHJlcGVhdGVkIGVudHJ5IHN0cnVjdHMgaW4gZXZlcnkgbGFuZ3VhZ2UuCiBLZXB0IGluIHRlc3RkYXRhIHNvIGV2ZXJ5IGJpbmRpbmcgc2hhcmVzIHRoZSBzYW1lIHNjaGVtYSwgdmFsdWVzIGFuZAogcmVmZXJlbmNlIGJ5dGVzIChtYXB0ZXN0LmJpbiBmcm9tIHByb3RvYyAtLWVuY29kZSBvZiBtYXB0ZXN0LnR4dCkuCgoICgECEgMGABEKCgoCBAASBAgACwEKCgoDBAABEgMICBAKCwoEBAACABIDCQISCgwKBQQAAgAFEgMJAggKDAoFBAACAAESAwkJDQoMCgUEAAIAAxIDCRARCgsKBAQAAgESAwoCEgoMCgUEAAIBBRIDCgIHCgwKBQQAAgEBEgMKCA0KDAoFBAACAQMSAwoQEQoKCgIEARIEDQARAQoKCgMEAQESAw0IDwoLCgQEAQIAEgMOAiAKDAoFBAECAAYSAw4CFAoMCgUEAQIAARIDDhUbCgwKBQQBAgADEgMOHh8KCwoEBAECARIDDwIgCgwKBQQBAgEGEgMPAhQKDAoFBAECAQESAw8VGwoMCgUEAQIBAxIDDx4fCgsKBAQBAgISAxACIwoMCgUEAQICBhIDEAIXCgwKBQQBAgIBEgMQGB4KDAoFBAECAgMSAxAhImIGcHJvdG8z"))
-
-(def ^:private schema (pb/load-schema-bytes desc-bytes))
-
 ;; spectest.MapValue
-(def spectest-mapvalue-type (pb/message-type schema "spectest.MapValue"))
+(def spectest-mapvalue-type (pb/message-type meta/schema "spectest.MapValue"))
+
+(defn encode-spectest-mapvalue [m] (pb/encode spectest-mapvalue-type m))
+
+(defn decode-spectest-mapvalue [wire] (pb/decode spectest-mapvalue-type wire))
 
 (defn spectest-mapvalue
   "Constructor map for spectest.MapValue; absent optionals stay absent."
@@ -23,12 +22,12 @@
     (some? value) (assoc :value value)
   ))
 
-(defn encode-spectest-mapvalue [m] (pb/encode spectest-mapvalue-type m))
-
-(defn decode-spectest-mapvalue [wire] (pb/decode spectest-mapvalue-type wire))
-
 ;; spectest.MapTest.ByIntEntry
-(def spectest-maptest-byintentry-type (pb/message-type schema "spectest.MapTest.ByIntEntry"))
+(def spectest-maptest-byintentry-type (pb/message-type meta/schema "spectest.MapTest.ByIntEntry"))
+
+(defn encode-spectest-maptest-byintentry [m] (pb/encode spectest-maptest-byintentry-type m))
+
+(defn decode-spectest-maptest-byintentry [wire] (pb/decode spectest-maptest-byintentry-type wire))
 
 (defn spectest-maptest-byintentry
   "Constructor map for spectest.MapTest.ByIntEntry; absent optionals stay absent."
@@ -38,12 +37,12 @@
     (some? value) (assoc :value value)
   ))
 
-(defn encode-spectest-maptest-byintentry [m] (pb/encode spectest-maptest-byintentry-type m))
-
-(defn decode-spectest-maptest-byintentry [wire] (pb/decode spectest-maptest-byintentry-type wire))
-
 ;; spectest.MapTest.ByStrEntry
-(def spectest-maptest-bystrentry-type (pb/message-type schema "spectest.MapTest.ByStrEntry"))
+(def spectest-maptest-bystrentry-type (pb/message-type meta/schema "spectest.MapTest.ByStrEntry"))
+
+(defn encode-spectest-maptest-bystrentry [m] (pb/encode spectest-maptest-bystrentry-type m))
+
+(defn decode-spectest-maptest-bystrentry [wire] (pb/decode spectest-maptest-bystrentry-type wire))
 
 (defn spectest-maptest-bystrentry
   "Constructor map for spectest.MapTest.ByStrEntry; absent optionals stay absent."
@@ -53,12 +52,12 @@
     (some? value) (assoc :value value)
   ))
 
-(defn encode-spectest-maptest-bystrentry [m] (pb/encode spectest-maptest-bystrentry-type m))
-
-(defn decode-spectest-maptest-bystrentry [wire] (pb/decode spectest-maptest-bystrentry-type wire))
-
 ;; spectest.MapTest.ByMsgEntry
-(def spectest-maptest-bymsgentry-type (pb/message-type schema "spectest.MapTest.ByMsgEntry"))
+(def spectest-maptest-bymsgentry-type (pb/message-type meta/schema "spectest.MapTest.ByMsgEntry"))
+
+(defn encode-spectest-maptest-bymsgentry [m] (pb/encode spectest-maptest-bymsgentry-type m))
+
+(defn decode-spectest-maptest-bymsgentry [wire] (pb/decode spectest-maptest-bymsgentry-type wire))
 
 (defn spectest-maptest-bymsgentry
   "Constructor map for spectest.MapTest.ByMsgEntry; absent optionals stay absent."
@@ -68,12 +67,12 @@
     (some? value) (assoc :value value)
   ))
 
-(defn encode-spectest-maptest-bymsgentry [m] (pb/encode spectest-maptest-bymsgentry-type m))
-
-(defn decode-spectest-maptest-bymsgentry [wire] (pb/decode spectest-maptest-bymsgentry-type wire))
-
 ;; spectest.MapTest
-(def spectest-maptest-type (pb/message-type schema "spectest.MapTest"))
+(def spectest-maptest-type (pb/message-type meta/schema "spectest.MapTest"))
+
+(defn encode-spectest-maptest [m] (pb/encode spectest-maptest-type m))
+
+(defn decode-spectest-maptest [wire] (pb/decode spectest-maptest-type wire))
 
 (defn spectest-maptest
   "Constructor map for spectest.MapTest; absent optionals stay absent."
@@ -83,8 +82,4 @@
     (some? by_str) (assoc :by_str by_str)
     (some? by_msg) (assoc :by_msg by_msg)
   ))
-
-(defn encode-spectest-maptest [m] (pb/encode spectest-maptest-type m))
-
-(defn decode-spectest-maptest [wire] (pb/decode spectest-maptest-type wire))
 

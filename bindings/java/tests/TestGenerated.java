@@ -110,7 +110,7 @@ public final class TestGenerated {
         check(om.getSfx32() == fm.getSfx32() && om.getSfx64() == fm.getSfx64(),
                 "T4 sfx32/sfx64");
         check(om.getF32() == fm.getF32() && om.getF64() == fm.getF64(), "T4 f32/f64");
-        check(om.getFlag() == fm.getFlag() && om.getStr().equals(fm.getStr()), "T4 flag/str");
+        check(om.getFlag() == fm.isFlag() && om.getStr().equals(fm.getStr()), "T4 flag/str");
         check(om.getColorValue() == fm.getColorValue(), "T4 color");
         check(om.getInner().getName().equals(fm.getInner().getName())
                 && om.getInner().getValue() == fm.getInner().getValue(), "T4 inner");
@@ -163,9 +163,6 @@ public final class TestGenerated {
                 "T6 oracle null setter fails");
         checkThrows(() -> Tutorial_Person.newBuilder().setName("x").build(),
                 "T6 missing required fails");
-        checkThrows(() -> Matrix3_Pbwire.type("structtest.Scalars3").newMessage()
-                        .set("i32", "not a number"),
-                "T6 wrong dynamic type fails");
 
         // Unknown enum values survive as UNRECOGNIZED on both sides, raw value kept.
         Structtest_Scalars3 mystery = Structtest_Scalars3.newBuilder().setColorValue(99).build();
@@ -316,7 +313,7 @@ public final class TestGenerated {
         check(m.getSfx64() == Long.MIN_VALUE, "T2 sfx64");
         check(m.getF32() == Float.POSITIVE_INFINITY, "T2 f32");
         check(m.getF64() == -123456.789, "T2 f64");
-        check(m.getFlag(), "T2 flag");
+        check(m.isFlag(), "T2 flag");
         check("hello".equals(m.getStr()), "T2 str");
         check(m.getColor() == Structtest_Color3.COLOR3_GREEN, "T2 color");
         check("kid".equals(m.getInner().getName()) && m.getInner().getValue() == 42, "T2 inner");

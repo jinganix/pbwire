@@ -13,25 +13,7 @@ use Pbwire\RepeatedField;
 use Pbwire\Schema;
 use Pbwire\GeneratedUtil;
 
-/** The embedded descriptor set: no .desc file at use time. */
-final class PbwireFile_Oneof1
-{
-    private const DESC_B64 = 'CvUFCgxvbmVvZjEucHJvdG8SCHNwZWN0ZXN0IpUBCgZPbmVvZjESEgoEbmFtZRgBIAEoCVIEbmFtZRISCgNudW0YAiABKAVIAFIDbnVtEhQKBHRleHQYAyABKAlIAFIEdGV4dBIuCgVpbm5lchgEIAEoCzIWLnNwZWN0ZXN0Lk9uZW9mMS5Jbm5lckgAUgVpbm5lchoVCgVJbm5lchIMCgF2GAEgASgFUgF2QgYKBGtpbmRKugQKBhIEAwASAQq6AQoBDBIDAwASGq8BIFNtYWxsIG9uZW9mICsgbmVzdGluZyBmaXh0dXJlIGZvciB0aGUgZ2VuZXJhdGVkIGNvbXBhdCB0ZXN0cyAoVEVTVFNQRUMgVDEtVDUKIGV4dHJhcykuIEtlcHQgaW4gdGVzdGRhdGEgc28gZXZlcnkgYmluZGluZyBzaGFyZXMgdGhlIHNhbWUgc2NoZW1hLCB2YWx1ZXMKIGFuZCByZWZlcmVuY2UgYnl0ZXMuCgoICgECEgMFABEKCgoCBAASBAcAEgEKCgoDBAABEgMHCA4KDAoEBAADABIECAIKAwoMCgUEAAMAARIDCAoPCg0KBgQAAwACABIDCQQQCg4KBwQAAwACAAUSAwkECQoOCgcEAAMAAgABEgMJCgsKDgoHBAADAAIAAxIDCQ4PCgsKBAQAAgASAwwCEgoMCgUEAAIABRIDDAIICgwKBQQAAgABEgMMCQ0KDAoFBAACAAMSAwwQEQoMCgQEAAgAEgQNAhEDCgwKBQQACAABEgMNCAwKCwoEBAACARIDDgQSCgwKBQQAAgEFEgMOBAkKDAoFBAACAQESAw4KDQoMCgUEAAIBAxIDDhARCgsKBAQAAgISAw8EFAoMCgUEAAICBRIDDwQKCgwKBQQAAgIBEgMPCw8KDAoFBAACAgMSAw8SEwoLCgQEAAIDEgMQBBQKDAoFBAACAwYSAxAECQoMCgUEAAIDARIDEAoPCgwKBQQAAgMDEgMQEhNiBnByb3RvMw==';
-
-    private static ?Schema $schema = null;
-
-    public static function schema(): Schema
-    {
-        if (self::$schema === null) {
-            $raw = base64_decode(self::DESC_B64, true);
-            if ($raw === false) {
-                throw new \RuntimeException('generated model: bad embedded descriptor set');
-            }
-            self::$schema = Schema::fromBytes($raw);
-        }
-        return self::$schema;
-    }
-}
+require_once __DIR__ . '/PbwireFile_Oneof1.php';
 
 /** spectest.Oneof1.Inner */
 final class Spectest_Oneof1_Inner

@@ -82,7 +82,8 @@ the short version:
 The C bindings check `PBW_ABI_VERSION` at load time, so a library built from a
 newer, incompatible tree fails fast instead of corrupting memory. The C ABI is
 the product; richer host bindings live on top of it. `codegen` adds generated
-message models per language over the same dynamic API.
+message models per language: all but Java ride the same dynamic API (Java
+emits a direct Wire codec).
 
 ### When should I *not* use pbwire?
 
