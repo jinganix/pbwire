@@ -281,9 +281,12 @@ jobs:
         # leak on their own (even `ruby -e exit`), so they run ASan-only.
         run: |
           ASAN="-O1 -std=c99 -Wall -Wextra -Werror -pedantic -fPIC -g -fsanitize=address -fno-omit-frame-pointer"
-          export LD_PRELOAD=$(gcc -print-file-name=libasan.so)
           make build/libpbwire.a CC=gcc CFLAGS="$ASAN"
           make python-bind CC=gcc CFLAGS="$ASAN"
+          # Preload only for the interpreter that loads the extension: a global
+          # LD_PRELOAD also instruments gcc/cc1, which then fails its own
+          # leak check.
+          export LD_PRELOAD=$(gcc -print-file-name=libasan.so)
           python3 bindings/python/tests/test_pbwire.py
           export ASAN_OPTIONS=detect_leaks=0
           PBW_EXTRA_CFLAGS="$ASAN" make ruby-test
