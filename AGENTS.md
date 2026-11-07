@@ -8,6 +8,11 @@ make test     # self-checks: core + threads + descriptor set + C structs + examp
 make erlang-test # Erlang binding: EUnit + NIF C tests (needs OTP, rebar3 bootstrapped)
 make format   # clang-format (>= 19) over include/, src/, tests/, bench/
 make format-check
+make api-docs # Doxygen over include/ -> build/doxygen/html (needs doxygen)
+
+# Environment gates: CI runs these, and a laptop with the toolchains can too.
+make port-test-32          # the whole gate with -m32 (needs gcc-multilib)
+./scripts/check-ports.sh   # big-endian suites under qemu-user (s390x default)
 
 # Optional, requires protoc + libprotobuf C++ (brew install protobuf).
 # Never part of the commit gate; run them after wire-format changes.
@@ -91,6 +96,7 @@ after touching `bindings/ruby`, `make go-test` after touching `bindings/go`, and
 | `src/arena.c` | Bump allocator behind `pbw_ctx` (reset = pointer move) |
 | `src/ctx.c` | `pbw_ctx`: reusable arena + encode buffer, decode/encode entry points |
 | `src/stream.c` | delimited framing reader (`pbw_istream`), encode sink, deterministic map sort |
+| `src/wkt.c` | well-known-type helpers (Any pack/unpack, Timestamp/Duration millis) |
 | `src/encode.c` | Message tree -> wire bytes |
 | `src/decode.c` | Wire bytes -> message tree, unknown field preservation |
 | `src/descriptor_set.c` | `FileDescriptorSet` (protoc/buf output) -> schema; the only reader of descriptor.proto |
@@ -136,7 +142,8 @@ after touching `bindings/ruby`, `make go-test` after touching `bindings/go`, and
 | `bindings/julia/` | Julia binding: `dlopen` + `ccall` host, `tests/`, `benchmarks/` |
 | `bindings/r/` | R binding: C extension over the core, `tests/`, `benchmarks/`, `conformance/` |
 | `bindings/erlang/` | Erlang/OTP NIF binding with its own AGENTS.md |
-| `scripts/` | Gate scripts: `check.sh` (hooks), `validate-commit-msg.sh`, `setup-git-hooks.sh` |
+| `scripts/` | Gate scripts: `check.sh` (hooks), `check-llms.sh`, `check-ports.sh`, `validate-commit-msg.sh`, `setup-git-hooks.sh` |
+| `Doxyfile` | `make api-docs`: the public headers rendered to HTML |
 | `.github/workflows/ci.yml` | CI: `make test` on Linux + macOS, CMake/ctest, clang-format |
 | `docs/` | User-facing prose: `design.md` (how it works, semantics, scope, limits), `guide.md` (the C API walk-through), `testing.md` (the five verification layers), `faq.md` |
 | `README.md`, `llms.txt` | Landing page + docs index, and the AI-retrieval summary; keep them in sync with behavior and with `docs/` |

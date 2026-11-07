@@ -67,6 +67,7 @@ src/message.c        dynamic message and value tree, ownership, oneof handling
 src/arena.c          bump allocator behind pbw_ctx (reset = pointer move)
 src/ctx.c            pbw_ctx: reusable arena + encode buffer, decode/encode entry points
 src/stream.c         delimited framing reader, encode sink, deterministic map sort
+src/wkt.c            well-known-type helpers (Any pack/unpack, Timestamp/Duration millis)
 src/encode.c         message tree -> wire bytes
 src/decode.c         wire bytes -> message tree, unknown field preservation
 src/descriptor_set.c FileDescriptorSet -> schema; the only reader of descriptor.proto
@@ -174,12 +175,19 @@ The core library provides: pure C with no external runtime dependencies, no
 messages and reflection, compliance with the standard Protobuf wire format, the
 JSON mapping and the text format, and a stable, easy-to-bind C ABI.
 
-Out of scope for the core library:
+Out of scope for the core library, permanently:
 
 - `.proto` text parsing (the optional `pbwire-protoc` library does it, and only
-  writes bytes: core and importer share no type and no link dependency)
+  writes bytes: core and importer share no type and no link dependency).
+  The core will never learn `.proto` syntax: the `FileDescriptorSet` is the
+  schema format, and producing it once with `protoc`/`buf` stays the workflow.
 - Code generation
-- Networking / RPC / HTTP / gRPC
+- Networking / RPC / HTTP / gRPC transports and stubs. Services load from
+  the set, are queryable, and resolve to input/output descriptors with
+  `pbw_service_resolve()` for routing; the bytes on the socket stay
+  official gRPC/Twirp/plain HTTP.
+- A CLI: inspection and debugging stay `protoc --decode/--encode`; no pbwire
+  CLI is planned.
 - Business-level validation frameworks
 
 **Security premise:** descriptors are trusted input. Wire data is untrusted and
@@ -223,8 +231,8 @@ can come from a `.proto` at build time (`protoc --descriptor_set_out`) or from
 `pbwire-protoc` at runtime.
 
 Documented limits, pinned by tests rather than silently ignored: MessageSet
-encoding stays byte-identical through the unknown fields instead of populating
-the extensions. Proto2 semantics are followed where the reference
+items decode into their extension fields and encode back byte-identically
+(an undeclared type id stays unknown, as before). Proto2 semantics are followed where the reference
 implementations agree: a closed enum's unknown number leaves the field and comes
 back as an unknown field, and `pbw_decode()` rejects a message whose `required`
 field is missing while `pbw_encode()` writes the tree as it stands (the

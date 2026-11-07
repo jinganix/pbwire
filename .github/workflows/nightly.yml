@@ -1,0 +1,249 @@
+# Nightly: the thorough shapes that are too slow for PR gates — the full
+# differential run (20000 cases), the official conformance suite, and the
+# Linux bench baseline from the same docker image `make bench-docker` uses
+# (BENCHMARKS.md numbers are Apple-silicon; this records the server-side pace
+# where regressions actually hurt).
+name: Nightly
+
+on:
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+
+jobs:
+  difftest-full:
+    name: Differential test (full, 20000 cases)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install protobuf dev files
+        run: sudo apt-get update && sudo apt-get install -y libprotobuf-dev protobuf-compiler
+      - name: Full differential run
+        run: make difftest
+
+  conformance:
+    name: Official conformance suite
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Cache pinned protobuf checkout and runner
+        uses: actions/cache@v4
+        with:
+          path: .tmp/
+          key: conformance-${{ hashFiles('Makefile') }}
+      - name: Clone pinned protobuf, build runner + protoc
+        run: |
+          CMAKE_BUILD_PARALLEL_LEVEL=$(nproc) make conformance-setup
+          PB_SRC=$(echo .tmp/protobuf-*)
+          CMAKE_BUILD_PARALLEL_LEVEL=$(nproc) cmake --build "$PB_SRC/build" --target protoc
+          echo "PB_SRC=$PB_SRC" >> "$GITHUB_ENV"
+      - name: Run the suite through the C testee
+        run: PROTOC="$PB_SRC/build/protoc" make conformance
+
+  bench-baseline:
+    name: Linux bench baseline (docker image, x86_64)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      # Same image as `make bench-docker`, so the nightly artifact and a local
+      # run are the same measurement. Keep the set small: the image build is
+      # minutes and every harness runs its full four tiers.
+      - name: Record the Linux baseline (core + C structs)
+        run: ./scripts/bench-docker.sh --bindings core,c
+      - name: Upload the versioned record
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-baseline-x86_64
+          path: results/
+
+  # Every host binding's self-check on one image. Toolchains that cannot run
+  # on ubuntu are excluded: Swift and Objective-C need Apple toolchains
+  # (covered by `make swift-test` / `make objc-test` on macOS), Scala needs a
+  # scalac install the repo does not pin. Failing steps fail the job: nightly
+  # red means a binding broke, not the core (the core gate is `make test`).
+  bindings:
+    name: All host bindings (ubuntu)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Core shared library for the FFI bindings
+        run: make shared
+      - name: C++ binding
+        run: make test-cpp
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.27'
+          cache: false
+      - name: Go binding
+        run: make go-test
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.15'
+      - name: Python binding
+        run: make python-test
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '4.0'
+      - name: Ruby binding
+        run: make ruby-test
+      - name: Install Lua
+        run: sudo apt-get update && sudo apt-get install -y lua5.4 liblua5.4-dev pkg-config
+      - name: Lua binding
+        run: make lua-test
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 26
+      - name: Node binding
+        run: make node-test
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 25
+      - name: Install protoc (Kotlin oracle)
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - name: Java binding
+        run: make java-test
+      - name: Install kotlinc
+        run: |
+          curl -fsSL -o /tmp/kotlin.zip \
+            https://github.com/JetBrains/kotlin/releases/download/v2.2.20/kotlin-compiler-2.2.20.zip
+          unzip -q /tmp/kotlin.zip -d /tmp/kotlin
+          echo "/tmp/kotlin/kotlinc/bin" >> "$GITHUB_PATH"
+      - name: Kotlin and Clojure bindings
+        run: |
+          make kotlin-test
+          make clojure-test
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.5'
+          coverage: none
+      - name: PHP binding
+        run: make php-test PHP="php -d ffi.enable=1"
+      - uses: dart-lang/setup-dart@v1
+      - name: Dart binding
+        run: make dart-test
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Rust binding
+        run: make rust-test
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: C# and F# bindings
+        run: |
+          make csharp-test
+          make fsharp-test
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: '1'
+      - name: Julia binding
+        run: make julia-test
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          r-version: release
+      - name: R binding
+        run: make r-test
+      - uses: goto-bus-stop/setup-zig@v2
+        with:
+          version: 0.17.1
+      - name: Zig binding
+        run: make zig-test
+      - uses: erlef/setup-beam@v1.24.0
+        with:
+          otp-version: '29'
+          elixir-version: '1.20'
+          version-type: loose
+      - name: Erlang and Elixir bindings
+        run: |
+          make erlang-test
+          make elixir-test
+
+  # Every binding's generated-model test (codegen/test-ci-linux): the
+  # committed models must encode the pinned protoc bytes and decode them
+  # back, on top of each binding's own self-check (already in `bindings`).
+  # Split from the Apple pair below because Swift/ObjC need macOS.
+  codegen-linux:
+    name: Generated models (linux bindings)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Cache pinned protobuf checkout
+        uses: actions/cache@v4
+        with:
+          path: .tmp/
+          key: conformance-${{ hashFiles('Makefile') }}
+      - name: Pinned protoc (the committed oracle's version)
+        run: |
+          CMAKE_BUILD_PARALLEL_LEVEL=$(nproc) make conformance-setup
+          PB_SRC=$(echo .tmp/protobuf-*)
+          CMAKE_BUILD_PARALLEL_LEVEL=$(nproc) cmake --build "$PB_SRC/build" --target protoc
+          echo "$PB_SRC/build" >> "$GITHUB_PATH"
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.27'
+          cache: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.15'
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '4.0'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 26
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 25
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - uses: dart-lang/setup-dart@v1
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: '1'
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          r-version: release
+      - uses: goto-bus-stop/setup-zig@v2
+        with:
+          version: 0.17.1
+      - uses: erlef/setup-beam@v1.24.0
+        with:
+          otp-version: '29'
+          elixir-version: '1.20'
+          version-type: loose
+      - name: Install language baselines (compat tests pin them)
+        run: |
+          gem install google-protobuf -v 4.36.2 --no-document
+          pip install "protobuf==7.36.2"
+          (cd bindings/node && npm install --prefix benchmarks --no-save --no-package-lock --no-audit --no-fund protobufjs@8.8.1)
+          sudo apt-get update && sudo apt-get install -y php-cli lua5.4 liblua5.4-dev pkg-config
+      - name: Install kotlinc, scalac and Clojure deps
+        run: |
+          curl -fsSL -o /tmp/kotlin.zip \
+            https://github.com/JetBrains/kotlin/releases/download/v2.2.20/kotlin-compiler-2.2.20.zip
+          unzip -q /tmp/kotlin.zip -d /tmp/kotlin
+          echo "/tmp/kotlin/kotlinc/bin" >> "$GITHUB_PATH"
+          sudo apt-get install -y scala
+      - name: Shared library for the FFI bindings
+        run: make shared
+      - name: Generated-model tests (linux toolchains)
+        run: make codegen-test-ci-linux
+
+  codegen-apple:
+    name: Generated models (ObjC + Swift, macOS)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Cache pinned protobuf source (ObjC oracle runtime)
+        uses: actions/cache@v4
+        with:
+          path: .tmp/
+          key: conformance-${{ hashFiles('Makefile') }}
+      - name: Clone the pinned protobuf checkout
+        # Only the source is needed: the ObjC oracle compiles
+        # GPBProtocolBuffers.m from it directly.
+        run: make conformance-setup
+      - name: Generated-model tests (Apple toolchains)
+        run: make codegen-test-ci-macos

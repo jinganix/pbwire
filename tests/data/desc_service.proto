@@ -1,0 +1,22 @@
+// Service fixture: all four streaming shapes plus an extension, compiled
+// once with protoc --descriptor_set_out and pasted into test_descriptor.c.
+// Covers the service/method loader paths the proto2/proto3 fixtures lack.
+syntax = "proto2";
+
+package pbwire.svc;
+
+message Job {
+  optional string id = 1;
+  extensions 100 to 199;
+}
+
+extend Job {
+  optional int32 priority = 100;
+}
+
+service Jobs {
+  rpc Get(Job) returns (Job);
+  rpc Submit(stream Job) returns (Job);
+  rpc Watch(Job) returns (stream Job);
+  rpc Chat(stream Job) returns (stream Job);
+}

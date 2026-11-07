@@ -214,9 +214,12 @@ t_print_scalar(text_out *t, const pbw_field *field, const pbw_value *value)
         return;
     }
     case PBW_TYPE_FLOAT: {
+        /* Same mask as the JSON printer: the 4 float bytes are the low half
+         * of the stored bit pattern, not its first 4 memory bytes. */
+        uint32_t bits32 = (uint32_t)value->as.u64;
         float f;
 
-        memcpy(&f, &value->as.u64, sizeof(f));
+        memcpy(&f, &bits32, sizeof(f));
         t_double(t, (double)f, 1);
         return;
     }
@@ -1183,6 +1186,25 @@ t_unescape(pbw_buf *out, const char *start, size_t len)
                 /* the tokenizer already limits \U to 00[01]......; values
                  * above the planes and surrogates fail here */
             }
+            if (c == 'u' && v >= 0xd800 && v <= 0xdbff && p + 5 < end &&
+                p[0] == '\\' && p[1] == 'u') {
+                /* a lead surrogate followed by \uXXXX: combine the pair
+                 * into the scalar, like the reference; a lone surrogate
+                 * stays invalid (bad UTF-8, which this parser rejects). */
+                uint32_t trail = 0;
+                int k;
+
+                for (k = 0; k < 4; k++) {
+                    if (!t_is_hex(p[2 + k])) {
+                        break;
+                    }
+                    trail = trail * 16 + (uint32_t)t_hex_val(p[2 + k]);
+                }
+                if (k == 4 && trail >= 0xdc00 && trail <= 0xdfff) {
+                    v = 0x10000u + ((v - 0xd800u) << 10) + (trail - 0xdc00u);
+                    p += 6;
+                }
+            }
             if (v > 0x10ffff || (v >= 0xd800 && v <= 0xdfff)) {
                 return PBW_ERR_INVALID;
             }
@@ -1584,11 +1606,13 @@ t_parse_float_value(text_in *t, pbw_message *msg, const pbw_field *field,
         value = -value;
     }
     if (is_float) {
+        /* Through a uint32: a 4-byte copy into a uint64 fills its high half
+         * on a big-endian host, where the float bits must live in the low. */
+        uint32_t bits32;
         float f = (float)value;
-        uint64_t bits = 0;
 
-        memcpy(&bits, &f, sizeof(f));
-        return t_store_uint(t, msg, field, bits);
+        memcpy(&bits32, &f, sizeof(bits32));
+        return t_store_uint(t, msg, field, bits32);
     } else {
         uint64_t bits = 0;
 
@@ -1981,6 +2005,8 @@ t_valid_type_name(const char *s)
 
 static pbw_status t_parse_message_body(text_in *t, pbw_message *msg,
                                        uint32_t depth, char closer);
+static pbw_status t_parse_list(text_in *t, pbw_message *msg,
+                               const pbw_field *field, uint32_t depth);
 
 /* Any expansion when the parser already consumed nothing: reads [url]{...}
  * and fills the Any message `msg` itself (no field: the message IS the Any). */
@@ -2093,7 +2119,11 @@ t_parse_any_inner(text_in *t, pbw_message *msg, uint32_t depth)
         if (status != PBW_OK) {
             pbw_value_free(url_v);
             pbw_value_free(val_v);
-            return status;
+            /* like the message body above: malformed content is
+             * INVALID, only resource failures propagate */
+            return status == PBW_ERR_LIMIT || status == PBW_ERR_NOMEM
+                       ? status
+                       : PBW_ERR_INVALID;
         }
         return PBW_OK;
     }
@@ -2119,6 +2149,12 @@ t_parse_message_value(text_in *t, pbw_message *msg, const pbw_field *field,
     if (t->cur.p < t->cur.end && *t->cur.p == ':') {
         t->cur.p++;
         t_skip(&t->cur);
+    }
+    /* Like the reference, a repeated message or group also accepts the
+     * list form (`subs [{...}, ...]`); a singular one never does. */
+    if (field->label == PBW_LABEL_REPEATED &&
+        t->cur.p < t->cur.end && *t->cur.p == '[') {
+        return t_parse_list(t, msg, field, depth);
     }
     if (t->cur.p >= t->cur.end ||
         (*t->cur.p != '{' && *t->cur.p != '<')) {
@@ -2168,7 +2204,8 @@ t_parse_message_value(text_in *t, pbw_message *msg, const pbw_field *field,
 
 /* Parses a `[a, b]` list for a repeated scalar field. */
 static pbw_status
-t_parse_list(text_in *t, pbw_message *msg, const pbw_field *field)
+t_parse_list(text_in *t, pbw_message *msg, const pbw_field *field,
+             uint32_t depth)
 {
     t_skip(&t->cur);
     if (t->cur.p >= t->cur.end || *t->cur.p != '[') {
@@ -2200,7 +2237,8 @@ t_parse_list(text_in *t, pbw_message *msg, const pbw_field *field)
                     if (slot == NULL) {
                         return PBW_ERR_NOMEM;
                     }
-                    status = t_parse_message_body(t, slot, 0, closer);
+                    status = t_parse_message_body(t, slot, depth + 1,
+                                                  closer);
                     if (status != PBW_OK) {
                         pbw_message_free(slot);
                         return status;
@@ -2449,7 +2487,7 @@ t_parse_message_body(text_in *t, pbw_message *msg, uint32_t depth,
                 t_skip(&t->cur);
                 if (t->cur.p < t->cur.end && *t->cur.p == '[') {
                     t->cur = save;
-                    status = t_parse_list(t, msg, field);
+                    status = t_parse_list(t, msg, field, depth);
                 } else {
                     t->cur = save;
                     status = t_parse_scalar_value(t, msg, field);

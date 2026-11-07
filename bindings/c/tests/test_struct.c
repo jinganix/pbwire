@@ -105,13 +105,36 @@ read_file(const char *path, uint8_t **data, size_t *len)
     return 0;
 }
 
-/* Float bit pattern without math.h: inf must survive the round trip. */
+/* Float/double bit patterns without math.h: inf must survive the round trip.
+ * Doubles compare by bits because an exact `==` against a decimal literal is
+ * unreliable on x87 (i386 keeps the literal at 80-bit precision while the
+ * loaded value is 64-bit). */
+/* inf by bit pattern, so MSVC does not fold a constant divide-by-zero. */
+static float
+float_inf(void)
+{
+    uint32_t u = 0x7f800000u;
+    float f;
+
+    memcpy(&f, &u, sizeof(f));
+    return f;
+}
+
 static uint32_t
 float_bits(float f)
 {
     uint32_t u;
 
     memcpy(&u, &f, sizeof(u));
+    return u;
+}
+
+static uint64_t
+double_bits(double d)
+{
+    uint64_t u;
+
+    memcpy(&u, &d, sizeof(u));
     return u;
 }
 
@@ -131,7 +154,7 @@ fill_scalars3(structtest_scalars3_t *s, structtest_inner3_t *inner,
     s->fx64 = UINT64_C(72623859790382856);
     s->sfx32 = INT32_MIN;
     s->sfx64 = INT64_MIN;
-    s->f32 = 1.0f / 0.0f; /* inf, matches `f32: inf` in matrix3.txt */
+    s->f32 = float_inf(); /* matches `f32: inf` in matrix3.txt */
     s->f64 = -123456.789;
     s->flag = 1;
     s->str = "hello";
@@ -213,7 +236,7 @@ test_matrix3_reference(void)
     CHECK(got.sfx32 == INT32_MIN);
     CHECK(got.sfx64 == INT64_MIN);
     CHECK(float_bits(got.f32) == UINT32_C(0x7f800000));
-    CHECK(got.f64 == -123456.789);
+    CHECK(double_bits(got.f64) == double_bits(-123456.789));
     CHECK(got.flag == 1);
     CHECK(got.str != NULL && strcmp(got.str, "hello") == 0);
     CHECK(got.color == STRUCTTEST_COLOR3_COLOR3_GREEN);
@@ -878,7 +901,7 @@ test_schema_load_errors(void)
     CHECK(schema == NULL);
     CHECK_STATUS(PBW_ERR_INVALID,
                  pbw_struct_schema_load(MATRIX3_DESC_PATH, NULL));
-    f = fopen("build/corrupt.desc", "wb");
+    f = fopen("corrupt_test.desc", "wb");
     CHECK(f != NULL);
     if (f != NULL) {
         static const uint8_t garbage[] = {0xde, 0xad, 0xbe, 0xef};
@@ -887,12 +910,12 @@ test_schema_load_errors(void)
         /* Garbage propagates descriptor_set_load's contract: a status
          * plus a schema carrying the reason, freed on both paths. */
         schema = (pbw_schema *)0x1;
-        if (pbw_struct_schema_load("build/corrupt.desc", &schema) == PBW_OK) {
+        if (pbw_struct_schema_load("corrupt_test.desc", &schema) == PBW_OK) {
             CHECK(0); /* garbage must not load */
         }
         CHECK(schema != (pbw_schema *)0x1);
         pbw_schema_free(schema);
-        remove("build/corrupt.desc");
+        remove("corrupt_test.desc");
     }
 }
 
@@ -1031,7 +1054,8 @@ test_t4_dynamic_crosscheck(void)
         CHECK(color_bits == UINT32_C(0x7f800000)); /* inf */
     }
     v = pbw_message_get(msg, 12);
-    CHECK(v != NULL && pbw_value_get_double(v) == -123456.789);
+    CHECK(v != NULL &&
+          double_bits(pbw_value_get_double(v)) == double_bits(-123456.789));
     v = pbw_message_get(msg, 13);
     CHECK(v != NULL && pbw_value_get_bool(v) != 0);
     v = pbw_message_get(msg, 14);

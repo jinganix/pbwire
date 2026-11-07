@@ -33,6 +33,10 @@ jobs:
     name: GitHub release + C tarball
     needs: validate
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@v5
       - name: Create release and upload tarball
@@ -48,11 +52,19 @@ jobs:
             gh release create "v$ver" "/tmp/pbwire-$ver.tar.gz" \
               --title "v$ver" --generate-notes
           fi
+      - name: Attest the tarball provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: '/tmp/pbwire-*.tar.gz'
 
   protoc-plugins:
     name: protoc plugins (codegen + C)
     needs: github-release
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-go@v6
@@ -79,6 +91,10 @@ jobs:
         run: |
           ver="$(tr -d ' \t\n' < VERSION)"
           gh release upload "v$ver" /tmp/plugins/* --clobber
+      - name: Attest the plugin provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: '/tmp/plugins/*'
 
   pypi:
     name: PyPI (bindings/python, OIDC)

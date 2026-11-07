@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.16)
 
-project(pbwire VERSION 0.1.12 LANGUAGES C)
+project(pbwire VERSION 0.1.13 LANGUAGES C)
 
 option(PBW_BUILD_PROTOC "Build the optional .proto importer (needs libprotobuf)" OFF)
 option(PBW_BUILD_TESTS "Build the self-checks" ON)
@@ -11,10 +11,15 @@ include(GNUInstallDirs)
 # warnings fail the build on every compiler. MSVC needs its own spelling.
 if(MSVC)
     add_compile_options(/W4 /WX)
+    # C4456 (a local hiding an outer local) is -Wshadow, which the
+    # GCC/Clang gate does not enable either; keep MSVC to the same set.
+    add_compile_options(/wd4456)
     # UTF-8 source and execution charset: universal-character names like
     # \u00e9 in narrow literals must compile to UTF-8 bytes, as they do
     # under GCC/Clang, or text/JSON goldens diverge on Windows.
     add_compile_options(/utf-8)
+    # fopen is used for descriptor-set files; MSVC flags it as deprecated.
+    add_compile_definitions(_CRT_SECURE_NO_WARNINGS)
 else()
     add_compile_options(-Wall -Wextra -Werror -pedantic)
 endif()
@@ -31,7 +36,8 @@ set(PBW_CORE_SOURCES
     src/descriptor_set.c
     src/text.c
     src/json.c
-    src/stream.c)
+    src/stream.c
+    src/wkt.c)
 
 add_library(pbwire ${PBW_CORE_SOURCES})
 add_library(pbwire::pbwire ALIAS pbwire)
@@ -72,6 +78,16 @@ endif()
 
 if(PBW_BUILD_TESTS)
     enable_testing()
+    # The C struct codec and the embedded facade are separate sources the
+    # Makefile compiles per test; as object libraries every target that needs
+    # them links them once (MSVC has no -I/-o flags to hand them).
+    add_library(pbwire_struct_runtime OBJECT bindings/c/runtime/pbw_struct.c)
+    target_include_directories(pbwire_struct_runtime PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include)
+    add_library(pbwe_runtime OBJECT bindings/embedded/runtime/pbwe.c)
+    target_include_directories(pbwe_runtime PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/bindings/embedded/runtime)
     # Optional on purpose: without pthreads (e.g. bare MSVC) test_threads is
     # skipped but everything else still builds, so Windows can configure.
     # The header check matters: FindThreads can report TRUE on MSVC while
@@ -98,6 +114,56 @@ if(PBW_BUILD_TESTS)
     add_executable(test_descriptor tests/test_descriptor.c)
     target_link_libraries(test_descriptor PRIVATE pbwire)
     add_test(NAME test_descriptor COMMAND test_descriptor)
+
+    # The remaining suites the Makefile gate runs, so `ctest` is the same
+    # gate on every platform (including MSVC, where `make test` cannot run).
+    add_executable(test_malformed tests/test_malformed.c)
+    target_link_libraries(test_malformed PRIVATE pbwire)
+    add_test(NAME test_malformed COMMAND test_malformed)
+
+    add_executable(test_struct bindings/c/tests/test_struct.c)
+    target_include_directories(test_struct PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/bindings/c/runtime
+        ${CMAKE_CURRENT_SOURCE_DIR}/bindings/c/tests
+        ${CMAKE_CURRENT_SOURCE_DIR}/bindings/c/examples)
+    target_link_libraries(test_struct PRIVATE pbwire
+        $<TARGET_OBJECTS:pbwire_struct_runtime>)
+    add_test(NAME test_struct COMMAND test_struct)
+    set_tests_properties(test_struct PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+
+    add_executable(test_embedded bindings/embedded/tests/test_embedded.c)
+    target_include_directories(test_embedded PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/bindings/embedded/runtime)
+    target_link_libraries(test_embedded PRIVATE pbwire
+        $<TARGET_OBJECTS:pbwe_runtime>)
+    add_test(NAME test_embedded COMMAND test_embedded)
+    set_tests_properties(test_embedded PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+
+    add_executable(example_addressbook bindings/c/examples/addressbook.c)
+    target_include_directories(example_addressbook PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/bindings/c/runtime)
+    target_link_libraries(example_addressbook PRIVATE pbwire
+        $<TARGET_OBJECTS:pbwire_struct_runtime>)
+    add_test(NAME example_addressbook COMMAND example_addressbook)
+    set_tests_properties(example_addressbook PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+
+    add_executable(example_gateway bindings/c/examples/gateway.c)
+    target_link_libraries(example_gateway PRIVATE pbwire)
+    add_test(NAME example_gateway COMMAND example_gateway)
+    set_tests_properties(example_gateway PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+
+    add_executable(example_embedded bindings/embedded/examples/roundtrip.c)
+    target_include_directories(example_embedded PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/bindings/embedded/runtime)
+    target_link_libraries(example_embedded PRIVATE pbwire
+        $<TARGET_OBJECTS:pbwe_runtime>)
+    add_test(NAME example_embedded COMMAND example_embedded)
+    set_tests_properties(example_embedded PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
 
     if(PBW_BUILD_PROTOC)
         add_executable(test_importer tests/protoc/test_importer.cc)

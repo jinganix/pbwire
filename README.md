@@ -3,7 +3,7 @@
 [![Language](https://img.shields.io/badge/C-C99-blue.svg)](#requirements-and-build)
 [![Dependencies](https://img.shields.io/badge/runtime%20dependencies-none-brightgreen.svg)](#at-a-glance)
 
-> **Release [`v0.1.12`](https://github.com/jinganix/pbwire/releases/tag/v0.1.12)** — every binding ships this one version; [`VERSION`](VERSION) is the source of truth, `scripts/sync-versions.sh` propagates it.
+> **Release [`v0.1.13`](https://github.com/jinganix/pbwire/releases/tag/v0.1.13)** — every binding ships this one version; [`VERSION`](VERSION) is the source of truth, `scripts/sync-versions.sh` propagates it.
 
 # pbwire — a dynamic Protobuf runtime for C, no code generation
 
@@ -32,12 +32,15 @@ pbw_free(buf);
 | [C API guide](docs/guide.md) | the tutorial, hand-built schema, `FileDescriptorSet` load, `pbw_ctx` loop, ownership rules, streaming, unknown fields, JSON/text, ABI |
 | [Design and architecture](docs/design.md) | how it works, dynamic message semantics, the two allocation strategies, scope, limits, use cases, repository layout |
 | [Performance benchmarks](BENCHMARKS.md) | **the performance document**: the four standard tiers, every binding against its official runtime, and the cross-binding comparison |
+| [Performance attempts ledger](docs/perf-attempts.md) | every optimization tried against a still-below-baseline cell, its A/B number, and why it was kept or rejected |
+| [Examples index](docs/examples.md) | one runnable round trip per binding, with the exact command |
 | [Testing and conformance](docs/testing.md) | the self-check, pinned reference bytes, `difftest`, the official conformance suite |
 | [FAQ](docs/faq.md) | syntax support, thread safety, unknown fields, untrusted input, `.proto` at runtime |
 | [Protobuf pain points](docs/protobuf-pain-points.md) | which official-library complaints pbwire solves, eases or leaves alone — the searchable index |
 | [Bindings](bindings/README.md) | every host binding, where its schema comes from, and the per-language pain point each one removes |
 | [include/pbwire.h](include/pbwire.h) | the whole public API with per-function contracts |
 | [AGENTS.md](AGENTS.md) · [CONTRIBUTING.md](CONTRIBUTING.md) · [llms.txt](llms.txt) | working on this repo, commit rules, a one-page factual summary |
+| [ROADMAP.md](ROADMAP.md) | what is done, what is never, what is next |
 
 ## Why use pbwire
 
@@ -54,7 +57,10 @@ pbw_free(buf);
   messages; pinned bytes in the test suite keep parity from regressing silently.
 - **Built for embedding.** Stable C ABI, no globals, caller-confined
   schema/message objects, arena-backed `pbw_ctx` for per-thread hot loops, wire
-  input validated at the boundary.
+  input validated at the boundary. [`bindings/embedded`](bindings/embedded/README.md)
+  packages that as one `pbwe_box`: one arena, caller-owned encode buffers
+  (bare or length-prefixed frames), and both inputs (frames and the startup
+  descriptor set) capped by `pbw_limits`.
 - **One core, twenty-three host languages.** [C](bindings/c/), [C++](bindings/cpp/), [Python](bindings/python/), [Ruby](bindings/ruby/), [Java](bindings/java/), [Kotlin](bindings/kotlin/), [Node](bindings/node/), [Objective-C](bindings/objc/), [PHP](bindings/php/), [Dart](bindings/dart/), [C#](bindings/csharp/), [Rust](bindings/rust/), [Go](bindings/go/), [Erlang](bindings/erlang/), [Lua](bindings/lua/), [Swift](bindings/swift/), [Scala](bindings/scala/), [Elixir](bindings/elixir/), [Zig](bindings/zig/), [F#](bindings/fsharp/), [Clojure](bindings/clojure/), [Julia](bindings/julia/) and [R](bindings/r/) all speak the same wire
   format, each with a measured answer to its runtime's own pain point — see
   [what each binding solves](bindings/README.md#what-each-binding-solves).
@@ -68,10 +74,10 @@ pbw_free(buf);
 | Schema input | hand-built descriptors, or a standard `FileDescriptorSet` |
 | Message handling | dynamic value tree with reflection; no generated code |
 | Runtime dependencies | none (optional importer `pbwire-protoc` needs libprotobuf, C++17) |
-| Not implemented | RPC, MessageSet decoding into extensions |
+| Not implemented | `.proto` text parsing in the core (deliberately never: build the set once with `protoc`/`buf`/`pbwire-protoc`); RPC transport and stubs (services load, are queryable, and resolve to descriptors with `pbw_service_resolve` for routing — the transport itself stays official gRPC/Twirp/plain HTTP); no CLI (inspect with `protoc --decode/--encode`) |
 | Memory model | one allocation per decoded tree, or one reusable arena `pbw_ctx` per thread |
 | Limits | nesting depth 256, field numbers up to 2^29-1 |
-| Platforms | Linux, macOS, anywhere with a C99 compiler |
+| Platforms | Linux, macOS, Windows (MSVC through CMake/ctest); any C99 compiler; 32-bit (ILP32) and big-endian are CI-verified |
 | License | Apache-2.0 |
 
 ## Requirements and build
@@ -157,7 +163,10 @@ and 1.5-1.7x on decode, on every tier
 `DynamicMessage` on encode and 1.7-3.2x on decode. Generated code only wins where
 a dynamic codec meets generated straight-line writes on a tiny message
 (Java/Kotlin, 136 B, 0.82x/0.80x); the arena API wins every tier, and the plain
-API now beats generated code on every tier too.
+API now beats generated code on every tier too. `make bench-docker` runs the
+same harnesses in a Linux container and `make bench-compare` pairs the two runs
+row by row, so the numbers above hold off Apple silicon as well
+([BENCHMARKS.md](BENCHMARKS.md#linux-docker-the-same-harnesses-one-container-away)).
 
 The per-language tables — the same four payload tiers for every binding against
 its official runtime (Python, Java, Kotlin, Node, Ruby, Objective-C, PHP,

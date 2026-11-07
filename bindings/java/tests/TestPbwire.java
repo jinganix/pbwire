@@ -36,6 +36,7 @@ public final class TestPbwire {
             unknownPreserved(schema);
             unpackedRepeated(schema);
             singularMerge(schema);
+            retainCap(schema);
             threads(schema);
         }
 
@@ -249,10 +250,36 @@ public final class TestPbwire {
         }
     }
 
+    private static void retainCap(Schema schema) {
+        MessageType sample = schema.message("pbwire.test.Sample");
+        char[] big = new char[4096];
+        java.util.Arrays.fill(big, 'x');
+        String payload = new String(big);
+        byte[] before;
+        byte[] after;
+
+        try (Message message = sample.newMessage().set("string_field", payload)) {
+            before = message.encode();
+        }
+        // A 64-byte ceiling drops the 4 KB buffer yet encodes identical bytes.
+        PbCodec.setRetainCap(64);
+        try (Message message = sample.newMessage().set("string_field", payload)) {
+            after = message.encode();
+            check(java.util.Arrays.equals(before, after), "retain cap keeps bytes exact");
+        }
+        // Zero keeps nothing and still encodes.
+        PbCodec.setRetainCap(0);
+        try (Message message = sample.newMessage().set("string_field", payload)) {
+            check(java.util.Arrays.equals(before, message.encode()), "retain cap 0 keeps nothing yet encodes");
+        }
+        PbCodec.setRetainCap(1 << 20);
+    }
+
     /**
      * A loaded schema and its message types are read-only, so threads can share
      * them; only a message (and the per-thread encode workspace) is confined.
-     */    private static void threads(Schema schema) {
+     */
+    private static void threads(Schema schema) {
         MessageType sample = schema.message("pbwire.test.Sample");
         byte[] reference;
         try (Message message = sampleMessage(sample)) {

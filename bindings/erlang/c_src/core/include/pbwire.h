@@ -89,6 +89,8 @@ typedef struct pbw_descriptor pbw_descriptor;
 typedef struct pbw_field pbw_field;
 typedef struct pbw_value pbw_value;
 typedef struct pbw_message pbw_message;
+typedef struct pbw_service pbw_service;
+typedef struct pbw_method pbw_method;
 
 /* ---------------------------------------------------------------- schema */
 
@@ -181,6 +183,66 @@ const pbw_field *pbw_descriptor_find_field_name(const pbw_descriptor *desc,
                                                 const char *name);
 
 const char *pbw_field_name(const pbw_field *field);
+/* Services: loaded from a FileDescriptorSet, queryable for routing. The
+ * core does no RPC; a transport (gRPC, Twirp, plain HTTP) uses these to
+ * resolve method names to input/output types. Services live in the schema
+ * and die with it. Hand-built schemas carry no services. */
+size_t pbw_schema_service_count(const pbw_schema *schema);
+const pbw_service *pbw_schema_service_at(const pbw_schema *schema,
+                                         size_t index);
+const pbw_service *pbw_schema_service_find(const pbw_schema *schema,
+                                           const char *name);
+/* Fully qualified without the leading dot ("pkg.Service"), like descriptors. */
+const char *pbw_service_name(const pbw_service *svc);
+size_t pbw_service_method_count(const pbw_service *svc);
+const pbw_method *pbw_service_method_at(const pbw_service *svc, size_t index);
+const pbw_method *pbw_service_method_find(const pbw_service *svc,
+                                          const char *name);
+const char *pbw_method_name(const pbw_method *method);
+/* Fully qualified input/output message names, without the leading dot. */
+const char *pbw_method_input_type(const pbw_method *method);
+const char *pbw_method_output_type(const pbw_method *method);
+/* Resolve a method to its input/output descriptors for routing: finds
+ * service `service`, then method `method`, then both message types by the
+ * method's input/output names. A transport (gRPC, Twirp, plain HTTP) decodes
+ * with *in_desc and encodes with *out_desc; the core still does no RPC.
+ * NULL for any missing piece, PBW_ERR_INVALID when anything is unknown. */
+pbw_status pbw_service_resolve(const pbw_schema *schema, const char *service,
+                               const char *method,
+                               const pbw_descriptor **in_desc,
+                               const pbw_descriptor **out_desc);
+/* Well-known-type helpers over the dynamic API. The caller loads the
+ * descriptors (google/protobuf/any.proto etc. via a FileDescriptorSet);
+ * these only read/write fields 1 and 2, so a hand-built mirror with the
+ * same numbers works too. The core never special-cases WKTs elsewhere. */
+/* Pack payload (already encoded bytes of the message named by type_url, e.g.
+ * "type.googleapis.com/pkg.Msg") into a new google.protobuf.Any tree. */
+pbw_status pbw_any_pack(const pbw_descriptor *any_desc, const char *type_url,
+                        const void *payload, size_t len, pbw_message **out);
+/* type_url (field 1) of an Any tree, or NULL when absent. Owned by the tree. */
+const char *pbw_any_type_url(const pbw_message *any_msg);
+/* value bytes (field 2) of an Any tree; *len is 0 and NULL returns when
+ * absent. Owned by the tree. */
+const void *pbw_any_payload(const pbw_message *any_msg, size_t *len);
+/* google.protobuf.Timestamp / Duration as milliseconds: field 1 (seconds,
+ * int64) and field 2 (nanos, int32); nanos must be within +/-999,999,999.
+ * PBW_ERR_INVALID on out-of-range nanos or a missing seconds field,
+ * PBW_ERR_LIMIT when seconds overflow int64 milliseconds. */
+pbw_status pbw_timestamp_to_millis(const pbw_message *ts, int64_t *out);
+pbw_status pbw_duration_to_millis(const pbw_message *dur, int64_t *out);
+/* The pack direction: a new Timestamp/Duration tree holding ms. Nanos keep
+ * the millisecond remainder, so the value round-trips through *_to_millis. */
+pbw_status pbw_timestamp_from_millis(const pbw_descriptor *ts_desc, int64_t ms,
+                                     pbw_message **out);
+pbw_status pbw_duration_from_millis(const pbw_descriptor *dur_desc, int64_t ms,
+                                    pbw_message **out);
+/* google.protobuf.FieldMask paths (field 1, repeated string) without
+ * materializing the list: count and indexed access, NULL past the end. */
+size_t pbw_fieldmask_path_count(const pbw_message *mask);
+const char *pbw_fieldmask_path_at(const pbw_message *mask, size_t index);
+/* Streaming flags from MethodDescriptorProto; both 0 is unary. */
+int pbw_method_client_streaming(const pbw_method *method);
+int pbw_method_server_streaming(const pbw_method *method);
 /* proto2 default as written in the .proto, or NULL when the field has none. */
 const char *pbw_field_default_value(const pbw_field *field);
 /* 1 when the field was declared as an extension of its message. */
@@ -454,6 +516,15 @@ pbw_status pbw_decode_limits(const pbw_descriptor *desc, const void *buf,
 pbw_status pbw_decode_ctx_limits(pbw_ctx *ctx, const pbw_descriptor *desc,
                                  const void *buf, size_t len,
                                  const pbw_limits *limits, pbw_message **out);
+/* Bounded descriptor load: like pbw_descriptor_set_load(), but rejects
+ * inputs larger than limits->max_bytes with PBW_ERR_LIMIT and caps message
+ * nesting at limits->max_depth (0 = PBW_MAX_DEPTH, above clamps to it).
+ * Descriptors stay trusted input; the bounds only cap resource use from
+ * oversized or hostile sets. NULL limits behaves exactly like
+ * pbw_descriptor_set_load(). */
+pbw_status pbw_descriptor_set_load_limits(const void *data, size_t len,
+                                          const pbw_limits *limits,
+                                          pbw_schema **out);
 
 /* Encode with map entries sorted by key, so equal messages encode to equal
  * bytes regardless of insertion order. Non-map fields encode exactly as
@@ -513,6 +584,13 @@ pbw_status pbw_encode_sink(const pbw_message *msg, pbw_sink_fn sink,
  * for a stream of messages. */
 pbw_status pbw_encode_delimited(const pbw_message *msg, uint8_t **out,
                                 size_t *len);
+/* Same framing into caller memory: no allocation, `cap` is the hard limit.
+ * The writer over-reserves like pbw_encode_to(), so the guaranteed-fit cap is
+ * pbw_message_encoded_size(msg) + its length prefix + PBW_ENCODE_SLACK (the
+ * prefix is one byte under 128 bytes, one more per 7 bits above). *len is the
+ * whole frame, 0 after any failure. */
+pbw_status pbw_encode_delimited_to(const pbw_message *msg, void *out,
+                                   size_t cap, size_t *len);
 
 typedef struct pbw_istream pbw_istream;
 
@@ -541,6 +619,22 @@ pbw_status pbw_decode_delimited_limits(const pbw_descriptor *desc,
                                        const void *buf, size_t len,
                                        const pbw_limits *limits,
                                        pbw_message **out, size_t *consumed);
+/* The pbw_ctx twin: the tree lands in the context's arena (read-only, like
+ * pbw_decode_ctx_limits()) instead of one malloc block, so a framed stream
+ * decoded in a loop stops allocating. The context is not reset here -- reset
+ * it first, as with pbw_decode_ctx(). A declared frame length past
+ * limits->max_bytes is PBW_ERR_LIMIT before the body is decoded. */
+pbw_status pbw_decode_delimited_ctx_limits(pbw_ctx *ctx,
+                                           const pbw_descriptor *desc,
+                                           const void *buf, size_t len,
+                                           const pbw_limits *limits,
+                                           pbw_message **out,
+                                           size_t *consumed);
+/* Same with default bounds; identical to pbw_decode_delimited_ctx_limits()
+ * with NULL limits. */
+pbw_status pbw_decode_delimited_ctx(pbw_ctx *ctx, const pbw_descriptor *desc,
+                                    const void *buf, size_t len,
+                                    pbw_message **out, size_t *consumed);
 void pbw_free(void *ptr);
 const char *pbw_strerror(pbw_status status);
 

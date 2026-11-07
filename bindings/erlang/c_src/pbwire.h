@@ -258,6 +258,10 @@ struct ep_state_s {
     struct opts_s {
         uint32_t with_utf8;
         uint32_t string_as_list;
+        /* retain_cap_set: apply retain_cap to every scheduler context
+         * (existing and future). Unset means the core default. */
+        int retain_cap_set;
+        size_t retain_cap;
     } opts;
 
     ERL_NIF_TERM atom_ok;

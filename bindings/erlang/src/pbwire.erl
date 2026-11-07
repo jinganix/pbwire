@@ -59,10 +59,13 @@ not_loaded(Line) ->
 %%
 %% `{string_as_list, true}' makes string fields decode to lists instead of binaries (default
 %% `false'). `{with_utf8, true}' allows non-Latin-1 UTF-8 in string fields when encoding (default
-%% `false').
+%% `false'). `{retain_cap, Bytes}' caps the resident encode buffer per scheduler (like the C
+%% core's `pbw_ctx_set_retain_cap', same 1 MiB default when unset, 0 keeps nothing); it applies
+%% to live scheduler contexts as well as future ones.
 %%
-%% Raises `badarg' for unknown options, non-boolean values or an improper list.
--spec set_opts([{string_as_list, boolean()} | {with_utf8, boolean()}]) -> ok.
+%% Raises `badarg' for unknown options, non-boolean values, a negative cap or an improper list.
+-spec set_opts([{string_as_list, boolean()} | {with_utf8, boolean()} |
+                 {retain_cap, non_neg_integer()}]) -> ok.
 set_opts(_Opts) ->
     ?NOT_LOADED.
 

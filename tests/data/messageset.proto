@@ -1,0 +1,19 @@
+// MessageSet fixture (see test_messageset in tests/test_descriptor.c).
+// Regenerate the embedded bytes with:
+//   <pinned-protoc> -Itests/data --descriptor_set_out=/tmp/ms.pb tests/data/messageset.proto
+syntax = "proto2";
+
+package ms;
+
+message Item {
+  optional int32 x = 1;
+}
+
+message Set {
+  option message_set_wire_format = true;
+  extensions 4 to max;
+}
+
+extend Set {
+  optional Item item = 4;
+}

@@ -6,15 +6,24 @@ CPPFLAGS += -Iinclude -Isrc
 AR ?= ar
 
 SRC := src/wire.c src/arena.c src/schema.c src/message.c src/encode.c src/decode.c \
-	src/ctx.c src/descriptor_set.c src/text.c src/json.c src/stream.c
+	src/ctx.c src/descriptor_set.c src/text.c src/json.c src/stream.c src/wkt.c
 OBJ := $(SRC:src/%.c=build/%.o)
 LIB := build/libpbwire.a
 TEST_BIN := build/test_pbwire
 MALFORMED_BIN := build/test_malformed
+NOFAIL_BIN := build/test_nofail
+# Allocation-failure hooks for test_nofail (see the file header): the core
+# is built a second time with every allocation site renamed to a counting
+# hook, so each iteration fails exactly one allocation.
+FUZZ_BIN := build/fuzz_decode
 THREAD_BIN := build/test_threads
 DESC_BIN := build/test_descriptor
 STRUCT_BIN := build/test_struct
+EMBEDDED_BIN := build/test_embedded
+EMBEDDED_NOFAIL_BIN := build/test_embedded_nofail
+EMBEDDED_EXAMPLE_BIN := build/example_embedded
 EXAMPLE_BIN := build/example_addressbook
+GATEWAY_BIN := build/example_gateway
 CPP_EXAMPLE_BIN := build/example_addressbook_cpp
 HDRS := include/pbwire.h src/internal.h
 TEST_HDRS := tests/desc_set.h
@@ -26,7 +35,7 @@ ifeq ($(UNAME_S),Darwin)
 SHLIB := build/libpbwire.1.dylib
 SHLIB_LINK := build/libpbwire.dylib
 SHLIB_FLAGS := -dynamiclib -install_name @rpath/libpbwire.1.dylib \
-	-compatibility_version 1 -current_version 0.1.12
+	-compatibility_version 1 -current_version 0.1.13
 else
 SHLIB := build/libpbwire.so.1
 SHLIB_LINK := build/libpbwire.so
@@ -58,19 +67,105 @@ $(TEST_BIN): tests/test_pbwire.c $(LIB) | build
 $(MALFORMED_BIN): tests/test_malformed.c $(LIB) | build
 	$(CC) $(CFLAGS) $(CPPFLAGS) -o $@ $< $(LIB)
 
+$(FUZZ_BIN): tests/fuzz_decode.c $(LIB) | build
+	$(CC) $(CFLAGS) $(CPPFLAGS) -o $@ $< $(LIB)
+
+# Stdin fuzz harness (tests/fuzz_decode.c): deterministic replay of the
+# fixed corpus in tests/data/fuzz/. Any crash or sanitizer trap is a bug.
+# Longer/mutating runs belong to nightly infra; this is the gate shape.
+fuzz: $(FUZZ_BIN)
+	for f in tests/data/fuzz/*.bin; do ./build/fuzz_decode < "$$f" || exit 1; done
+	for f in tests/data/fuzz-desc/*.desc; do ./build/fuzz_decode desc < "$$f" || exit 1; done
+	for f in tests/data/fuzz-json/*.json; do ./build/fuzz_decode json < "$$f" || exit 1; done
+	for f in tests/data/fuzz-text/*.text; do ./build/fuzz_decode text < "$$f" || exit 1; done
+	@echo "fuzz: corpus replay OK"
+
+# Core coverage floor (gcov): fails when the weighted line coverage of
+# src/*.c drops below the floor. Only src/*.c entries count (never headers
+# or system files), and the build starts from fresh objects: an incremental
+# tree may hold non-instrumented .o files, which would silently measure
+# nothing. The scale check in test_threads is skipped here (PBW_SKIP_SCALE):
+# gcov edge counters serialize threads, so throughput under instrumentation
+# says nothing about locks; plain `make test` still enforces it.
+# The allocation-failure sweep (test_nofail) builds the core a second time
+# with hooked mallocs, so its counters live in separate .gcda files;
+# scripts/gcov-merge.py sums both runs per line. Merging (instead of
+# rebuilding the same objects with different flags) keeps every gcov graph
+# consistent with the data files it reads.
+# Floor history: 65% (2026-11, gcov on macOS) -> 85% (2026-11: hostile
+# JSON/text/wire/descriptor edge tests closed the parser gaps; the rest is
+# mostly NOMEM injection lines plus defensive branches). Raise it as those
+# close; lower it only with a reason in the commit message.
+COVFLAGS := -O0 -std=c99 -Wall -Wextra -fPIC --coverage -g
+COVFLOOR := 85
+coverage:
+	rm -f build/*.o build/*.gcda build/*.gcno ./*.gcov
+	rm -rf build/gcov-normal build/gcov-nofail build/gcov-merged
+	mkdir -p build/gcov-normal build/gcov-nofail build/gcov-merged
+	PBW_SKIP_SCALE=1 $(MAKE) test CFLAGS="$(COVFLAGS)"
+	gcov --object-directory build src/*.c > /dev/null
+	mv ./*.gcov build/gcov-normal/
+	$(MAKE) $(NOFAIL_OBJ) $(NOFAIL_BIN) CFLAGS="$(COVFLAGS)"
+	./build/test_nofail
+	for f in src/*.c; do b=$$(basename $$f .c); gcov --object-directory build -o build/nofail_$$b.o $$f > /dev/null; done
+	mv ./*.gcov build/gcov-nofail/
+	python3 scripts/gcov-merge.py --floor $(COVFLOOR) \
+		build/gcov-normal build/gcov-nofail build/gcov-merged $(SRC) \
+		> build/coverage.txt; st=$$?; cat build/coverage.txt; \
+		rm -f build/*.o build/*.gcda build/*.gcno; exit $$st
+
+# Release dry-run: everything `git tag vX.Y.Z` assumes, without tagging.
+release-check:
+	chmod +x scripts/release-check.sh
+	./scripts/release-check.sh --offline
+
 build:
 	mkdir -p build
 
 $(THREAD_BIN): tests/test_threads.c $(TEST_HDRS) $(LIB) | build
 	$(CC) $(CFLAGS) $(CPPFLAGS) -pthread -o $@ $< $(LIB)
 
-test: $(TEST_BIN) $(MALFORMED_BIN) $(THREAD_BIN) $(DESC_BIN) $(STRUCT_BIN) $(EXAMPLE_BIN)
+HOOKDEFS := -Dmalloc=pbw_fail_malloc -Dcalloc=pbw_fail_calloc -Drealloc=pbw_fail_realloc -Dfree=pbw_fail_free
+build/nofail_%.o: src/%.c $(HDRS) | build
+	$(CC) $(CFLAGS) $(CPPFLAGS) $(HOOKDEFS) -c -o $@ $<
+
+NOFAIL_OBJ := $(SRC:src/%.c=build/nofail_%.o)
+$(NOFAIL_BIN): tests/test_nofail.c $(NOFAIL_OBJ) | build
+	$(CC) $(CFLAGS) $(CPPFLAGS) -o $@ tests/test_nofail.c $(NOFAIL_OBJ)
+
+# Same hooked core, different subject: the embedded box must allocate nothing
+# once its arena is warm, and only a counting build can assert that.
+$(EMBEDDED_NOFAIL_BIN): bindings/embedded/tests/test_embedded.c bindings/embedded/runtime/pbwe.c $(NOFAIL_OBJ) | build
+	$(CC) $(CFLAGS) $(CPPFLAGS) -DPBWE_HAVE_ALLOC_HOOKS -Ibindings/embedded/runtime -o $@ bindings/embedded/tests/test_embedded.c bindings/embedded/runtime/pbwe.c $(NOFAIL_OBJ)
+
+test: $(TEST_BIN) $(MALFORMED_BIN) $(NOFAIL_BIN) $(EMBEDDED_NOFAIL_BIN) $(THREAD_BIN) $(DESC_BIN) $(STRUCT_BIN) $(EMBEDDED_BIN) $(EXAMPLE_BIN) $(GATEWAY_BIN) $(EMBEDDED_EXAMPLE_BIN)
 	./$(TEST_BIN)
 	./$(MALFORMED_BIN)
+	./$(NOFAIL_BIN)
+	./$(EMBEDDED_NOFAIL_BIN)
 	./$(THREAD_BIN)
 	./$(DESC_BIN)
 	./$(STRUCT_BIN)
+	./$(EMBEDDED_BIN)
 	./$(EXAMPLE_BIN)
+	./$(GATEWAY_BIN)
+	./$(EMBEDDED_EXAMPLE_BIN)
+
+# API reference (Doxygen): renders the public headers to HTML. Needs doxygen
+# installed; CI uploads the artifact and nightly can publish it.
+api-docs:
+	mkdir -p build/doxygen
+	doxygen Doxyfile
+
+# Cross-architecture gate (CI): big-endian core + suites under qemu-user.
+# Needs a cross toolchain and qemu; see scripts/check-ports.sh.
+port-test:
+	./scripts/check-ports.sh
+
+# 32-bit gate (CI): an x86_64 host with gcc-multilib runs the whole gate with
+# -m32, so ILP32 size/alignment assumptions surface before a release.
+port-test-32:
+	$(MAKE) test CFLAGS="-O2 -std=c99 -Wall -Wextra -Werror -pedantic -fPIC -m32"
 
 # Erlang binding (bindings/erlang): OTP app with its own rebar3 build.
 # Needs Erlang/OTP (CI installs it); rebar3 is bootstrapped by its Makefile.
@@ -106,8 +201,17 @@ $(DESC_BIN): tests/test_descriptor.c $(TEST_HDRS) $(LIB) | build
 C_RUNTIME := bindings/c/runtime/pbw_struct.c
 $(STRUCT_BIN): bindings/c/tests/test_struct.c $(C_RUNTIME) $(LIB) | build
 	$(CC) $(CFLAGS) $(CPPFLAGS) -Ibindings/c/runtime -Ibindings/c/tests -Ibindings/c/examples -o $@ bindings/c/tests/test_struct.c $(C_RUNTIME) $(LIB)
+
+$(EMBEDDED_BIN): bindings/embedded/tests/test_embedded.c bindings/embedded/runtime/pbwe.c $(LIB) | build
+	$(CC) $(CFLAGS) $(CPPFLAGS) -Iinclude -Ibindings/embedded/runtime -o $@ bindings/embedded/tests/test_embedded.c bindings/embedded/runtime/pbwe.c $(LIB)
+
+$(EMBEDDED_EXAMPLE_BIN): bindings/embedded/examples/roundtrip.c bindings/embedded/runtime/pbwe.c $(LIB) | build
+	$(CC) $(CFLAGS) $(CPPFLAGS) -Iinclude -Ibindings/embedded/runtime -o $@ bindings/embedded/examples/roundtrip.c bindings/embedded/runtime/pbwe.c $(LIB)
 $(EXAMPLE_BIN): bindings/c/examples/addressbook.c $(C_RUNTIME) $(LIB) | build
 	$(CC) $(CFLAGS) $(CPPFLAGS) -Ibindings/c/runtime -o $@ bindings/c/examples/addressbook.c $(C_RUNTIME) $(LIB)
+
+$(GATEWAY_BIN): bindings/c/examples/gateway.c $(LIB) | build
+	$(CC) $(CFLAGS) $(CPPFLAGS) -o $@ $< $(LIB)
 
 # C++ binding example (bindings/cpp): same addressbook round-trip as the
 # C example, reusing the C runtime (compiled as C, linked into the C++
@@ -138,8 +242,9 @@ compat-oracle: $(COMPAT_ORACLE_BIN)
 $(CPP_EXAMPLE_BIN): bindings/cpp/examples/addressbook.cc $(CPP_RUNTIME_OBJ) $(LIB) | build
 	$(CXX) $(CXXFLAGS) $(CPPFLAGS) -Ibindings/c/runtime -Ibindings/c/examples -o $@ bindings/cpp/examples/addressbook.cc $(CPP_RUNTIME_OBJ) $(LIB)
 
-examples: $(EXAMPLE_BIN) $(CPP_EXAMPLE_BIN)
+examples: $(EXAMPLE_BIN) $(GATEWAY_BIN) $(CPP_EXAMPLE_BIN)
 	./$(EXAMPLE_BIN)
+	./$(GATEWAY_BIN)
 	./$(CPP_EXAMPLE_BIN)
 
 # Regenerates the pinned descriptor set embedded in tests/test_descriptor.c.
@@ -272,6 +377,8 @@ CFILES := include/*.h include/pbwire-protoc/*.h src/*.c src/*.h \
 	bindings/c/benchmarks/*.cc bindings/python/runtime/*.c \
 	bindings/c/runtime/*.c bindings/c/runtime/*.h \
 	bindings/c/examples/*.c bindings/c/tests/*.c bindings/cpp/examples/*.cc \
+	bindings/embedded/runtime/*.c bindings/embedded/runtime/*.h \
+	bindings/embedded/examples/*.c bindings/embedded/tests/*.c \
 	bindings/erlang/c_src/*.c bindings/erlang/c_src/*.h \
 	bindings/erlang/c_src_tests/*.c bindings/erlang/c_src_tests/*.h \
 	bindings/erlang/c_src_tests/stub/*.c bindings/erlang/c_src_tests/stub/*.h \
@@ -298,6 +405,20 @@ $(BENCH_BIN): bench/bench.cc $(BENCH_PB) $(BENCH_DESC) $(LIB) | build
 
 bench: $(BENCH_BIN)
 	./scripts/bench-run.sh --binding core -- ./$(BENCH_BIN) bench
+
+# Linux bench node (docker/bench.Dockerfile): the same harnesses as the host,
+# run in a container, so Linux rows compare with the macOS tables in
+# BENCHMARKS.md. Records land in results/ like every other `*-bench` target;
+# `make bench-compare` pairs them. Override the set with BENCH_DOCKER_BINDINGS.
+BENCH_DOCKER_BINDINGS ?= core,c,go,rust,node,ruby,lua,java,python
+bench-docker:
+	./scripts/bench-docker.sh --bindings $(BENCH_DOCKER_BINDINGS)
+
+# Newest record per binding/platform in results/, paired row by row; --tier
+# keeps the table short. Same script, explicit files:
+#   ./scripts/bench-compare.py results/bench-core-<stamp>.json ...
+bench-compare:
+	./scripts/bench-compare.py --tier xlarge --latest results
 
 # C binding benchmark (bindings/c/benchmarks): generated structs vs the
 # official C++ generated code on matrix3.proto. Same optional deps as
@@ -537,6 +658,12 @@ python-bench: python-bind bindings/python/benchmarks/gen/matrix3_pb2.py
 difftest: $(BENCH_BIN)
 	./$(BENCH_BIN) difftest
 
+# Fixed-seed short differential run for PR gates; `make difftest` (20000
+# cases) stays the thorough pre-release shape. Same seed as the default so
+# a short-run failure reproduces in the full run.
+difftest-short: $(BENCH_BIN)
+	./$(BENCH_BIN) difftest 2000 20260219
+
 # Generated message models (codegen): one protoc plugin that emits generated
 # message definitions per language, on top of each binding's dynamic API (no
 # second wire implementation). `codegen` regenerates the committed models,
@@ -548,11 +675,19 @@ codegen:
 codegen-test:
 	$(MAKE) -C codegen test
 
+# CI split: Linux cannot run the Apple toolchains (ObjC/Swift), so those run
+# on the macOS runner and everything else on the Linux one.
+codegen-test-ci-linux:
+	$(MAKE) -C codegen test-ci-linux
+
+codegen-test-ci-macos:
+	$(MAKE) -C codegen test-ci-macos
+
 codegen-conformance:
 	$(MAKE) -C codegen conformance
 
 clean:
-	rm -rf build codegen/build bench/gen bindings/go/benchmarks/gen \
+	rm -rf build codegen/build bench/gen bindings/go/benchmarks/gen build/doxygen \
 		bindings/java/benchmarks/gen bindings/java/benchmarks/out \
 		bindings/node/benchmarks/gen bindings/ruby/benchmarks/gen \
 		bindings/ruby/lib/pbwire_ext.* bindings/objc/benchmarks/gen \
@@ -562,8 +697,8 @@ clean:
 		bindings/rust/target bindings/rust/benchmarks/gen \
 	bindings/lua/pbwire.so bindings/lua/pbwire.o
 
-.PHONY: all test examples shared format format-check bench bench-c erlang-test erlang-bench \
-	python-bind python-test python-bench difftest conformance conformance-setup conformance-python \
+.PHONY: all test fuzz coverage release-check examples shared format format-check bench bench-c erlang-test erlang-bench \
+	python-bind python-test python-bench difftest difftest-short conformance conformance-setup conformance-python \
 	conformance-ruby conformance-java conformance-lua conformance-r conformance-node ruby-bind java-test ruby-test node-test objc-test r-bind \
 	lua-bind lua-test lua-bench \
 	java-bench ruby-bench node-bench objc-bench go-bench \
@@ -573,4 +708,4 @@ clean:
 	swift-test scala-test elixir-test zig-test fsharp-test clojure-test julia-test r-test \
 	swift-bench scala-bench elixir-bench zig-bench fsharp-bench clojure-bench julia-bench r-bench \
 	desc-fixture test-cpp clean plugin-c go-test \
-	codegen codegen-test codegen-conformance
+	codegen codegen-test codegen-conformance bench-docker bench-compare

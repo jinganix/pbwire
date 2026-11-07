@@ -68,6 +68,25 @@ set_opts_test() ->
     ok = pbwire:set_opts([{string_as_list, false}]),
     {m1, <<"abc">>} = pbwire:decode(Bin, m1).
 
+set_opts_retain_cap_test() ->
+    Defs = ep_test_helpers:person_defs(),
+    Name = binary:copy(<<"x">>, 4096),
+    Msg = {'Person', Name, 1, undefined},
+    ok = pbwire:set_opts([{retain_cap, 64}]),
+    ok = ep_test_helpers:load_cache(Defs),
+    Bin = pbwire:encode(Msg),
+    %% string_as_list is on by default: the name comes back a list
+    {'Person', Back, 1, undefined} = pbwire:decode(Bin, 'Person'),
+    true = Back =:= binary_to_list(Name),
+    %% zero keeps nothing yet still encodes byte-identical output
+    ok = pbwire:set_opts([{retain_cap, 0}]),
+    Bin = pbwire:encode(Msg),
+    %% restore the core default and reject bad values
+    ok = pbwire:set_opts([{retain_cap, 1048576}]),
+    ?assertError(badarg, pbwire:set_opts([{retain_cap, -1}])),
+    ?assertError(badarg, pbwire:set_opts([{retain_cap, x}])),
+    ok = pbwire:purge_cache().
+
 set_opts_utf8_test() ->
     Defs = ep_test_helpers:person_defs(),
     Msg = {'Person', "你好", 1, undefined},

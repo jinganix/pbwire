@@ -19,8 +19,9 @@ def render(path):
     dirty = " (dirty)" if git.get("dirty") else ""
     print("## %s — %s" % (r.get("binding", "?"), r.get("timestamp", "?")))
     print()
-    print("git %s%s, %s / %s, %s; protoc %s; command exit %s in %ss" % (
-        git.get("sha"), dirty, host.get("os"), host.get("arch"),
+    print("git %s%s, %s%s / %s, %s; protoc %s; command exit %s in %ss" % (
+        git.get("sha"), dirty, host.get("os"),
+        " (container)" if host.get("container") else "", host.get("arch"),
         host.get("cpu"), tool.get("protoc"), r.get("status"),
         r.get("elapsed_s")))
     for block in r.get("cases", []):

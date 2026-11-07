@@ -109,6 +109,14 @@ jobs:
       - name: Every manifest matches VERSION
         run: ./scripts/sync-versions.sh --check
 
+  docs-sync:
+    name: llms.txt names every public API
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: API index in sync
+        run: ./scripts/check-llms.sh
+
   format:
     name: clang-format
     runs-on: ubuntu-latest
@@ -221,3 +229,162 @@ jobs:
         run: make -C bindings/erlang tests
       - name: NIF C unit tests
         run: make -C bindings/erlang c-tests
+
+  sanitizers:
+    name: ASan+UBSan self-check + fuzz corpus
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: make test under ASan/UBSan
+        run: >
+          make test
+          CFLAGS="-O1 -std=c99 -Wall -Wextra -Werror -pedantic -fPIC -g
+          -fsanitize=address,undefined -fno-omit-frame-pointer"
+      - name: fuzz corpus under ASan/UBSan
+        run: >
+          make build/fuzz_decode
+          CFLAGS="-O1 -std=c99 -Wall -Wextra -Werror -pedantic -fPIC -g
+          -fsanitize=address,undefined -fno-omit-frame-pointer"
+          && make fuzz
+
+  tsan:
+    name: ThreadSanitizer threads gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: test_threads under TSan
+        run: >
+          make build/test_threads
+          CFLAGS="-O1 -std=c99 -Wall -Wextra -Werror -pedantic -fPIC -g
+          -fsanitize=thread -fno-omit-frame-pointer"
+          && PBW_SKIP_SCALE=1 ./build/test_threads
+
+  binding-asan:
+    name: Binding extensions under ASan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.15'
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '4.0'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 26
+      - name: Install the Node compat oracle
+        run: (cd bindings/node && npm install --prefix benchmarks --no-save --no-package-lock --no-audit --no-fund protobufjs@8.8.1)
+      - name: ASan core + extensions, run their suites
+        # The recipe is verified in docs (local docker): the core archive is
+        # built instrumented first, then each extension links it in and runs
+        # under LD_PRELOAD. Python's interpreter is LSan-clean so leaks stay
+        # on there (it caught a Schema/MessageType cycle); Ruby and Node
+        # leak on their own (even `ruby -e exit`), so they run ASan-only.
+        run: |
+          ASAN="-O1 -std=c99 -Wall -Wextra -Werror -pedantic -fPIC -g -fsanitize=address -fno-omit-frame-pointer"
+          make build/libpbwire.a CC=gcc CFLAGS="$ASAN"
+          make python-bind CC=gcc CFLAGS="$ASAN"
+          # Preload only for the interpreter that loads the extension: a global
+          # LD_PRELOAD also instruments gcc/cc1, which then fails its own
+          # leak check.
+          export LD_PRELOAD=$(gcc -print-file-name=libasan.so)
+          python3 bindings/python/tests/test_pbwire.py
+          export ASAN_OPTIONS=detect_leaks=0
+          # Interpreter headers are C2X; no -std/-pedantic/-Werror here.
+          EXTRA="-fsanitize=address -fno-omit-frame-pointer -g"
+          PBW_EXTRA_CFLAGS="$EXTRA" make ruby-test
+          PBW_EXTRA_CFLAGS="$EXTRA" CC=gcc make node-test
+
+  ports:
+    name: 32-bit and big-endian (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [i386, s390x]
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install the toolchain
+        run: |
+          sudo apt-get update
+          if [ "${{ matrix.target }}" = i386 ]; then
+            sudo apt-get install -y gcc-multilib libc6-dev-i386
+          else
+            sudo apt-get install -y gcc-s390x-linux-gnu qemu-user-static
+          fi
+      - name: 32-bit self-check (ILP32, native)
+        if: matrix.target == 'i386'
+        run: make port-test-32
+      - name: Big-endian self-check (s390x, qemu-user)
+        if: matrix.target == 's390x'
+        run: ./scripts/check-ports.sh
+
+  api-docs:
+    name: API reference (Doxygen)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install doxygen
+        run: sudo apt-get update && sudo apt-get install -y doxygen
+      - name: Render the public headers
+        run: make api-docs
+      - name: Upload the HTML reference
+        uses: actions/upload-artifact@v4
+        with:
+          name: api-docs
+          path: build/doxygen/html
+
+  difftest-short:
+    name: Differential test (fixed seed, 2000 cases)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Cache pinned protobuf checkout and runner
+        uses: actions/cache@v4
+        with:
+          path: .tmp/
+          key: conformance-${{ hashFiles('Makefile') }}
+      - name: Install the pinned reference (protoc + libprotobuf + abseil)
+        # The baseline is the pinned checkout, not the distro's protobuf: the
+        # verdict-parity checks are calibrated against PROTOBUF_VERSION. The
+        # bench needs abseil and utf8_range on its own link line, which the
+        # installed protobuf.pc pulls in.
+        run: |
+          CMAKE_BUILD_PARALLEL_LEVEL=$(nproc) make conformance-setup
+          PB_SRC=$(echo .tmp/protobuf-*)
+          cmake -S "$PB_SRC" -B "$PB_SRC/build" \
+            -DCMAKE_INSTALL_PREFIX="$PWD/.tmp/pbprefix" \
+            -Dprotobuf_BUILD_CONFORMANCE=ON -DBUILD_SHARED_LIBS=ON \
+            -Dprotobuf_BUILD_TESTS=OFF -Dprotobuf_BUILD_EXAMPLES=OFF
+          CMAKE_BUILD_PARALLEL_LEVEL=$(nproc) cmake --build "$PB_SRC/build" \
+            --target install
+      - name: Short differential run
+        env:
+          PKG_CONFIG_PATH: ${{ github.workspace }}/.tmp/pbprefix/lib/pkgconfig
+          LD_LIBRARY_PATH: ${{ github.workspace }}/.tmp/pbprefix/lib
+        run: make difftest-short PROTOC=${{ github.workspace }}/.tmp/pbprefix/bin/protoc
+
+  fuzz-short:
+    name: Fuzz corpus replay
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Replay the fixed corpus
+        run: make fuzz
+
+  coverage:
+    name: Core coverage floor (floor lives in the Makefile)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: gcov over the core
+        run: make coverage
+
+  release-check:
+    name: Release dry-run
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Dry-run the release gate
+        run: ./scripts/release-check.sh --offline

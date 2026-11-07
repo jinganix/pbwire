@@ -820,8 +820,14 @@ main(void)
     failures += run(schema, "reflect", run_reflect, NULL);
     failures += run(schema, "load", run_dynamic_load, NULL);
     failures += run(schema, "loaded-shared", run_shared_loaded, outer);
-    failures += run_scale(schema, "ctx decode", 0);
-    failures += run_scale(schema, "ctx encode", 1);
+    /* PBW_SKIP_SCALE=1 (used by `make coverage`): gcov edge counters are
+     * shared globals, so instrumented threads serialize on them and any
+     * throughput ratio is noise. The detector still runs under plain
+     * `make test`, where it is meaningful. */
+    if (getenv("PBW_SKIP_SCALE") == NULL) {
+        failures += run_scale(schema, "ctx decode", 0);
+        failures += run_scale(schema, "ctx encode", 1);
+    }
 
     pbw_schema_free(loaded);
     pbw_schema_free(schema);

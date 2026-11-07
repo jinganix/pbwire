@@ -44,6 +44,10 @@ ep_get_tdata(ep_state_t *state)
         ep_tls_tdata->ctx = pbw_ctx_new();
         if (ep_tls_tdata->ctx != NULL) {
             pbw_ctx_set_user(ep_tls_tdata->ctx, (void *)ep_tls_tdata);
+            if (state->opts.retain_cap_set) {
+                pbw_ctx_set_retain_cap(ep_tls_tdata->ctx,
+                                       state->opts.retain_cap);
+            }
         }
     }
     return ep_tls_tdata;
@@ -463,7 +467,7 @@ set_opts_1(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     ep_state_t *state = (ep_state_t *)enif_priv_data(env);
     int32_t arity;
     ERL_NIF_TERM head, tail, *array;
-    ERL_NIF_TERM opt_with_utf8, opt_string_as_list;
+    ERL_NIF_TERM opt_with_utf8, opt_string_as_list, opt_retain_cap;
 
     if (argc != 1 || !enif_is_list(env, argv[0])) {
         return enif_make_badarg(env);
@@ -475,6 +479,7 @@ set_opts_1(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
      */
     opt_with_utf8 = make_atom(env, "with_utf8");
     opt_string_as_list = make_atom(env, "string_as_list");
+    opt_retain_cap = make_atom(env, "retain_cap");
 
     head = argv[0];
     while (enif_get_list_cell(env, head, &head, &tail)) {
@@ -495,6 +500,26 @@ set_opts_1(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
                 } else {
                     return enif_make_badarg(env);
                 }
+            } else if (array[0] == opt_retain_cap) {
+                long cap;
+                uint32_t i;
+
+                if (!enif_get_long(env, array[1], &cap) || cap < 0) {
+                    return enif_make_badarg(env);
+                }
+                state->opts.retain_cap = (size_t)cap;
+                state->opts.retain_cap_set = 1;
+                /* Live scheduler contexts hold the old ceiling: reapply
+                 * under the write lock, which excludes concurrent
+                 * encode/decode readers. */
+                enif_rwlock_rwlock(state->cache_lock);
+                for (i = 0; i < state->lock_n; i++) {
+                    if (state->tdata[i].ctx != NULL) {
+                        pbw_ctx_set_retain_cap(state->tdata[i].ctx,
+                                               (size_t)cap);
+                    }
+                }
+                enif_rwlock_rwunlock(state->cache_lock);
             } else {
                 return enif_make_badarg(env);
             }

@@ -12,9 +12,11 @@ tier table with a chart (see the [per-binding index](#cross-binding-comparison-l
 - [Output format](#output-format) — what one harness block means
 - [Test environment](#test-environment) — the machine and toolchain behind every number below
 - [At a glance](#at-a-glance-every-binding-one-tier) — every binding, one tier
+- [Linux (docker)](#linux-docker-the-same-harnesses-one-container-away) — the same harnesses in a Linux container, paired with the host run
 - [Bindings vs their baselines](#bindings-vs-their-baselines) — who is ahead and by how much
 - [Core](#core-pbw_ctx-vs-plain-vs-generated) — ctx vs plain vs generated vs `DynamicMessage`, threads, streaming
 - [Measurement notes](#measurement-notes-the-core-fast-path) — A/B numbers behind the core's fast paths
+- [Attempts ledger](docs/perf-attempts.md) — every optimization tried against a below-baseline cell, kept or rejected, with its numbers
 - [Generated models](#generated-models-codegen) — what the generated layer costs
 - [Per-binding tables](#cross-binding-comparison-last-run) — one section per language (✅ exceeds baseline ≥1.0x, ❌ below):
   - [Core](#core-pbw_ctx-vs-plain-vs-generated) · [C structs](#c-structs-vs-protoc-generated-same-matrix3proto) · [Go](#go-cgo-dynamic) · [Python](#python-vs-googleprotobuf-upb)
@@ -213,6 +215,139 @@ protobufjs (jspb, the legacy baseline, trails it by ~23x / ~19x), PHP's 1.06x /
 the ~1.0-1.6 GB/s encode club on xlarge (Swift 5.45x and Julia 124x encode
 are baseline effects: swift-protobuf and ProtoBuf.jl encode much slower than
 their own decode).
+
+## Linux (docker): the same harnesses, one container away
+
+Every table above is Apple-silicon. The claims have to hold on the other
+architecture too, so `make bench-docker` runs the same harnesses — same
+payloads, same baselines, same measurement standard — inside
+`docker/bench.Dockerfile`, and `make bench-compare` pairs the newest record
+per binding/platform in `results/`, row by row:
+
+```bash
+make bench            # the macOS side (or whatever host you are benching)
+make bench-docker     # the Linux side: core, c, go, rust, node, ruby, lua, java, python
+make bench-compare    # newest pair per binding, xlarge tier, speedup per row
+```
+
+The image installs the pinned protobuf (so the generated baseline is the same
+version as the tables above) plus the Go, Rust, Node, Ruby, Lua, Java and
+Python toolchains. It covers what runs without an Apple toolchain:
+Objective-C and Swift stay host-only, PHP needs the official C extension as its
+baseline (Ubuntu packages none, and building it from source needs a generated
+`utf8_range` amalgamation only protobuf's own build produces — a pure-PHP
+baseline would be a ~300x different comparison), and the toolchains the image
+does not install (Dart, Zig, C#/F#, Julia, R, Erlang/Elixir,
+Kotlin/Scala/Clojure) run on the host only. `--bindings core,c` narrows a run,
+`--rebuild` rebuilds the image, and the container always benches a *copy* of the
+tree, so ELF objects never land in the host's `build/`.
+
+Last run: 2026-11-07, `make bench-docker` on the image in the repo, `make
+bench-compare` for the pairing. Absolute MB/s per row is what `--absolute`
+prints; the speedup against the same baseline on the same side is what travels.
+
+### core
+
+- macOS: 2026-11-07T02:43:13+00:00 (Darwin 27.0.0, arm64, Apple M4 Pro, 14 cores, libprotoc 36.2)
+- Linux: 2026-11-07T04:20:36+00:00 (Linux 6.8.0-64-generic container, aarch64, ?, 4 cores, libprotoc 36.2)
+
+| case | op | macOS x baseline | Linux x baseline |
+|---|---|---|---|
+| xlarge | encode | 1.45x (pb gen) | 1.17x (pb gen) |
+| xlarge | decode | 1.58x (pb gen) | 1.89x (pb gen) |
+
+### c
+
+- macOS: 2026-11-07T02:56:19+00:00 (Darwin 27.0.0, arm64, Apple M4 Pro, 14 cores, libprotoc 36.2)
+- Linux: 2026-11-07T04:21:50+00:00 (Linux 6.8.0-64-generic container, aarch64, ?, 4 cores, libprotoc 36.2)
+
+| case | op | macOS x baseline | Linux x baseline |
+|---|---|---|---|
+| xlarge | encode | 1.47x (pb gen) | 1.42x (pb gen) |
+| xlarge | decode | 2.31x (pb gen) | 3.35x (pb gen) |
+
+### go
+
+- macOS: 2026-11-06T23:47:50+00:00 (Darwin 27.0.0, arm64, Apple M4 Pro, 14 cores, libprotoc 36.2)
+- Linux: 2026-11-07T04:22:34+00:00 (Linux 6.8.0-64-generic container, aarch64, ?, 4 cores, libprotoc 36.2)
+
+| case | op | macOS x baseline | Linux x baseline |
+|---|---|---|---|
+| xlarge | encode | 2.68x (protobuf-go) | 2.38x (protobuf-go) |
+| xlarge | decode | 2.23x (protobuf-go) | 2.57x (protobuf-go) |
+
+### python
+
+- macOS: 2026-11-06T23:47:46+00:00 (Darwin 27.0.0, arm64, Apple M4 Pro, 14 cores, libprotoc 36.2)
+- Linux: 2026-11-07T04:29:30+00:00 (Linux 6.8.0-64-generic container, aarch64, ?, 4 cores, libprotoc 36.2)
+
+| case | op | macOS x baseline | Linux x baseline |
+|---|---|---|---|
+| xlarge | encode(data) | 7.24x (pb upb) | 7.49x (pb upb) |
+| xlarge | decode(bytes) | 1.68x (pb upb) | 2.11x (pb upb) |
+| xlarge | to_dict(bytes) | 3.89x (pb upb) | 5.17x (pb upb) |
+| xlarge | encode(parsed) | 63.32x (pb upb) | 66.84x (pb upb) |
+
+### java
+
+- macOS: 2026-11-06T23:50:47+00:00 (Darwin 27.0.0, arm64, Apple M4 Pro, 14 cores, libprotoc 36.2)
+- Linux: 2026-11-07T04:28:29+00:00 (Linux 6.8.0-64-generic container, aarch64, ?, 4 cores, libprotoc 36.2)
+
+| case | op | macOS x baseline | Linux x baseline |
+|---|---|---|---|
+| xlarge | encode | 1.08x (protobuf-java) | 1.67x (protobuf-java) |
+| xlarge | decode | 2.40x (protobuf-java) | 2.00x (protobuf-java) |
+
+### node
+
+- macOS: 2026-11-06T23:49:02+00:00 (Darwin 27.0.0, arm64, Apple M4 Pro, 14 cores, libprotoc 36.2)
+- Linux: 2026-11-07T04:26:11+00:00 (Linux 6.8.0-64-generic container, aarch64, ?, 4 cores, libprotoc 36.2)
+
+| case | op | macOS x baseline | Linux x baseline |
+|---|---|---|---|
+| xlarge | encode | 3.07x (protobufjs) | 5.22x (protobufjs) |
+| xlarge | decode | 3.73x (protobufjs) | 2.74x (protobufjs) |
+
+### ruby
+
+- macOS: 2026-11-07T00:03:03+00:00 (Darwin 27.0.0, arm64, Apple M4 Pro, 14 cores, libprotoc 36.2)
+- Linux: 2026-11-07T04:26:56+00:00 (Linux 6.8.0-64-generic container, aarch64, ?, 4 cores, libprotoc 36.2)
+
+| case | op | macOS x baseline | Linux x baseline |
+|---|---|---|---|
+| xlarge | encode | 1.18x (google-protobuf) | 0.98x (google-protobuf) |
+| xlarge | decode | 1.72x (google-protobuf) | 1.84x (google-protobuf) |
+
+### rust
+
+- macOS: 2026-11-07T00:08:28+00:00 (Darwin 27.0.0, arm64, Apple M4 Pro, 14 cores, libprotoc 36.2)
+- Linux: 2026-11-07T04:23:57+00:00 (Linux 6.8.0-64-generic container, aarch64, ?, 4 cores, libprotoc 36.2)
+
+| case | op | macOS x baseline | Linux x baseline |
+|---|---|---|---|
+| xlarge | encode | 1.12x (prost) | 1.15x (prost) |
+| xlarge | decode | 1.71x (prost) | 1.04x (prost) |
+
+### lua
+
+- macOS: 2026-11-07T00:03:42+00:00 (Darwin 27.0.0, arm64, Apple M4 Pro, 14 cores, libprotoc 36.2)
+- Linux: 2026-11-07T04:27:36+00:00 (Linux 6.8.0-64-generic container, aarch64, ?, 4 cores, libprotoc 36.2)
+
+no comparable row for xlarge
+
+Two caveats when reading it:
+
+- On macOS the container runs in a Linux VM, so this column is *virtualized*
+  pace (aarch64, 4 vCPU, a generic `virt` CPU model), not a server's: podman,
+  docker, CI and a bare-metal Linux box each produce their own absolute numbers,
+  and on this VM the speedup itself moves ~10% run to run. The ratio to the same
+  baseline on the same side is the part that reproduces.
+- Two rows do not reproduce here. Rust decode is 1.71x on the host and 1.04x in
+  the VM (stable across two runs, with the absolute rate roughly halved, so the
+  VM's cores are part of the story); Ruby's encode advantage sits at the run-to-run
+  noise floor (1.18x host, 0.98x VM). The nightly job records `core` and `c` from
+  this same image on real `ubuntu-latest` x86_64 (artifact
+  `bench-baseline-x86_64`), and that is the Linux side to trust for a decision.
 
 ## Measurement notes: the core fast path
 
@@ -1169,6 +1304,8 @@ make clojure-bench # Clojure interop vs protobuf-java (fetches jars from Maven C
 make julia-bench  # ccall binding vs ProtoBuf.jl (generate benchmarks/oracle with protojl once)
 make r-bench      # R C extension vs RProtoBuf (install RProtoBuf for the baseline columns)
 ./build/bench bench 2000          # fixed-count smoke run (default calibrates from 200000; xlarge floor scales /100)
+make bench-docker                 # the same harnesses in a Linux container (docker/bench.Dockerfile)
+make bench-compare                # newest record per binding/platform in results/, paired
 ./build/bench_struct_c bench 2000 # fixed-count smoke run (same scaling)
 ```
 
@@ -1233,6 +1370,11 @@ each binding take the best encode ratio and the best decode ratio across its
 four tiers, with the tier in parentheses (`small`/`medium`/`large`/`xlarge`),
 and keep the machine note (CPU, `protoc` version) next to it. Paste all runs from the same machine and note the date, CPU, `protoc`
 version and iteration counts above.
+
+The [Linux (docker)](#linux-docker-the-same-harnesses-one-container-away)
+section is `make bench-compare` output (stdout only, so it pastes clean):
+re-run `make bench` on the host and `make bench-docker` on the same tree, then
+paste the xlarge tier table.
 
 `make bench` and `make difftest` are correctness-checked before they report a
 number, so a stale or hand-edited row is worse than a missing one: paste the

@@ -263,26 +263,11 @@ pbw_buf_reserve(pbw_buf *buf, size_t extra)
     return 1;
 }
 
-void
-pbw_write_le32(uint8_t *out, uint32_t value)
-{
-    out[0] = (uint8_t)(value & 0xff);
-    out[1] = (uint8_t)((value >> 8) & 0xff);
-    out[2] = (uint8_t)((value >> 16) & 0xff);
-    out[3] = (uint8_t)((value >> 24) & 0xff);
-}
-
 uint32_t
 pbw_read_le32(const uint8_t *in)
 {
     return (uint32_t)in[0] | ((uint32_t)in[1] << 8) | ((uint32_t)in[2] << 16) |
            ((uint32_t)in[3] << 24);
-}
-
-uint64_t
-pbw_read_le64(const uint8_t *in)
-{
-    return (uint64_t)pbw_read_le32(in) | ((uint64_t)pbw_read_le32(in + 4) << 32);
 }
 
 /* JSON and text format define '.' as the decimal separator, but strtod and

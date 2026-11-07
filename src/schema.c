@@ -103,6 +103,23 @@ pbw_schema_free(pbw_schema *schema)
         pbw_descriptor_free(schema->descs[i]);
     }
     free(schema->descs);
+    for (i = 0; i < schema->service_count; i++) {
+        pbw_service *svc = schema->services[i];
+        size_t m;
+
+        if (svc == NULL) {
+            continue;
+        }
+        for (m = 0; m < svc->method_count; m++) {
+            free(svc->methods[m].name);
+            free(svc->methods[m].input_type);
+            free(svc->methods[m].output_type);
+        }
+        free(svc->methods);
+        free(svc->name);
+        free(svc);
+    }
+    free(schema->services);
     free(schema);
 }
 
@@ -145,6 +162,7 @@ add_descriptor(pbw_schema *schema, const char *name,
     }
     desc->is_enum = is_enum;
     desc->proto3 = schema->proto3;
+    desc->edition = schema->edition;
     desc->schema = schema;
     schema->descs[schema->count++] = desc;
     schema->linked = 0;
@@ -424,7 +442,13 @@ compare_fields(const void *a, const void *b)
 static void
 link_field_tags(pbw_field *field)
 {
-    field->wire_type = (uint8_t)pbw_expected_wire_type(field->type);
+    /* Editions message_encoding = DELIMITED: a MESSAGE field travels as
+     * group tags, so the tag bytes (and the decoder dispatch built on
+     * them) use the group wire type. Everything else keeps its type's. */
+    field->wire_type = (uint8_t)((field->type == PBW_TYPE_MESSAGE &&
+                                  field->msg_enc == 2)
+                                     ? PBW_WIRE_START_GROUP
+                                     : pbw_expected_wire_type(field->type));
     field->tag_len =
         (uint8_t)pbw_varint_write(field->tag, ((uint64_t)field->number << 3) |
                                                   field->wire_type);
@@ -491,7 +515,7 @@ link_message(pbw_schema *schema, pbw_descriptor *msg)
             return PBW_ERR_INVALID;
         }
         link_field_tags(field);
-        if (!msg->proto3 && field->label == PBW_LABEL_REQUIRED) {
+        if (pbw_field_is_required(field, msg)) {
             msg->has_required = 1;
         }
         if (field->oneof_index > msg->oneof_count) {
@@ -506,14 +530,17 @@ link_message(pbw_schema *schema, pbw_descriptor *msg)
     for (i = 0; i < msg->field_count; i++) {
         const pbw_field *field = &msg->fields[i];
 
-        if (field->type == PBW_TYPE_ENUM && field->sub != NULL &&
-            !field->sub->proto3) {
+        if (pbw_enum_is_closed(field)) {
             msg->has_closed_enum = 1;
             break;
         }
     }
 
-    qsort(msg->fields, msg->field_count, sizeof(*msg->fields), compare_fields);
+    /* A zero-element qsort with a NULL base is undefined behavior. */
+    if (msg->field_count > 1) {
+        qsort(msg->fields, msg->field_count, sizeof(*msg->fields),
+              compare_fields);
+    }
     for (i = 1; i < msg->field_count; i++) {
         if (msg->fields[i - 1].number == msg->fields[i].number) {
             snprintf(schema->error, sizeof(schema->error),
@@ -552,11 +579,14 @@ link_message(pbw_schema *schema, pbw_descriptor *msg)
      * a fast action. */
     for (i = 0; i < msg->field_count; i++) {
         pbw_field *field = &msg->fields[i];
-        int closed = field->type == PBW_TYPE_ENUM && field->sub != NULL &&
-                     !field->sub->proto3;
+        int closed = pbw_enum_is_closed(field);
+        /* A delimited message field travels as group tags: the LEN fast
+         * paths do not apply, so it keeps the generic logic like groups. */
+        int delimited =
+            field->type == PBW_TYPE_MESSAGE && field->msg_enc == 2;
         uint8_t action = PBW_ACT_GENERIC;
         if (field->oneof_index == 0 && field->type != PBW_TYPE_GROUP &&
-            !closed) {
+            !closed && !delimited) {
             if (field->label != PBW_LABEL_REPEATED) {
                 switch (field->type) {
                 case PBW_TYPE_INT32:
@@ -655,8 +685,7 @@ link_message(pbw_schema *schema, pbw_descriptor *msg)
         }
         for (i = 0; i < msg->field_count; i++) {
             pbw_field *field = &msg->fields[i];
-            int closed = field->type == PBW_TYPE_ENUM &&
-                         field->sub != NULL && !field->sub->proto3;
+            int closed = pbw_enum_is_closed(field);
             if (field->tag_len == 1) {
                 map[field->tag[0]] = field;
             }
@@ -953,4 +982,147 @@ pbw_schema_find_extension(const pbw_schema *schema, const char *name)
         }
     }
     return NULL;
+}
+
+/* ------------------------------------------------------------- services */
+
+size_t
+pbw_schema_service_count(const pbw_schema *schema)
+{
+    return schema == NULL ? 0 : schema->service_count;
+}
+
+const pbw_service *
+pbw_schema_service_at(const pbw_schema *schema, size_t index)
+{
+    if (schema == NULL || index >= schema->service_count) {
+        return NULL;
+    }
+    return schema->services[index];
+}
+
+const pbw_service *
+pbw_schema_service_find(const pbw_schema *schema, const char *name)
+{
+    size_t i;
+
+    if (schema == NULL || name == NULL) {
+        return NULL;
+    }
+    for (i = 0; i < schema->service_count; i++) {
+        if (schema->services[i] != NULL &&
+            strcmp(schema->services[i]->name, name) == 0) {
+            return schema->services[i];
+        }
+    }
+    return NULL;
+}
+
+const char *
+pbw_service_name(const pbw_service *svc)
+{
+    return svc == NULL ? NULL : svc->name;
+}
+
+size_t
+pbw_service_method_count(const pbw_service *svc)
+{
+    return svc == NULL ? 0 : svc->method_count;
+}
+
+const pbw_method *
+pbw_service_method_at(const pbw_service *svc, size_t index)
+{
+    if (svc == NULL || index >= svc->method_count) {
+        return NULL;
+    }
+    return &svc->methods[index];
+}
+
+const pbw_method *
+pbw_service_method_find(const pbw_service *svc, const char *name)
+{
+    size_t i;
+
+    if (svc == NULL || name == NULL) {
+        return NULL;
+    }
+    for (i = 0; i < svc->method_count; i++) {
+        if (svc->methods[i].name != NULL &&
+            strcmp(svc->methods[i].name, name) == 0) {
+            return &svc->methods[i];
+        }
+    }
+    return NULL;
+}
+
+const char *
+pbw_method_name(const pbw_method *method)
+{
+    return method == NULL ? NULL : method->name;
+}
+
+const char *
+pbw_method_input_type(const pbw_method *method)
+{
+    return method == NULL ? NULL : method->input_type;
+}
+
+const char *
+pbw_method_output_type(const pbw_method *method)
+{
+    return method == NULL ? NULL : method->output_type;
+}
+
+int
+pbw_method_client_streaming(const pbw_method *method)
+{
+    return method == NULL ? 0 : method->client_streaming;
+}
+
+int
+pbw_method_server_streaming(const pbw_method *method)
+{
+    return method == NULL ? 0 : method->server_streaming;
+}
+
+pbw_status
+pbw_service_resolve(const pbw_schema *schema, const char *service,
+                    const char *method, const pbw_descriptor **in_desc,
+                    const pbw_descriptor **out_desc)
+{
+    const pbw_service *svc;
+    const pbw_method *m;
+    const pbw_descriptor *in;
+    const pbw_descriptor *out;
+
+    if (in_desc != NULL) {
+        *in_desc = NULL;
+    }
+    if (out_desc != NULL) {
+        *out_desc = NULL;
+    }
+    if (schema == NULL || service == NULL || method == NULL) {
+        return PBW_ERR_INVALID;
+    }
+    svc = pbw_schema_service_find(schema, service);
+    if (svc == NULL) {
+        return PBW_ERR_INVALID;
+    }
+    m = pbw_service_method_find(svc, method);
+    if (m == NULL) {
+        return PBW_ERR_INVALID;
+    }
+    in = pbw_schema_find(schema, pbw_method_input_type(m));
+    out = pbw_schema_find(schema, pbw_method_output_type(m));
+    if (in == NULL || out == NULL) {
+        return PBW_ERR_INVALID;
+    }
+    if (in_desc != NULL) {
+        *in_desc = in;
+    }
+    if (out_desc != NULL) {
+        *out_desc = out;
+    }
+    return PBW_OK;
 }

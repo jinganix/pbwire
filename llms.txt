@@ -54,10 +54,15 @@ make fsharp-test  # F# (facade over the C# project)
 make clojure-test # Clojure (persistent maps over the Java runtime)
 make julia-test   # Julia (dlopen + ccall)
 make r-test       # R (C extension, named lists)
+# bindings/embedded (static-memory facade for microcontrollers, C99) needs no
+# separate target: `make test` builds and runs it. API: pbwe_open, pbwe_build,
+# pbwe_decode, pbwe_decode_desc, pbwe_decode_delimited, pbwe_decode_delimited_desc,
+# pbwe_set_limits, pbwe_encode, pbwe_encode_delimited, pbwe_reset, pbwe_close.
 
 make java-bench node-bench ruby-bench objc-bench python-bench go-bench erlang-bench \
      kotlin-bench php-bench dart-bench rust-bench csharp-bench lua-bench \
      swift-bench scala-bench elixir-bench zig-bench fsharp-bench clojure-bench julia-bench r-bench  # each binding vs its official runtime
+make bench-docker bench-compare  # the same harnesses in a Linux container (docker/bench.Dockerfile), paired row by row with the host records
 
 cmake -B build-cmake && cmake --build build-cmake && (cd build-cmake && ctest)
 cmake -B build-cmake -DPBW_BUILD_PROTOC=ON   # adds the .proto importer (needs libprotobuf)
@@ -89,8 +94,13 @@ C++ runtime), `make bench`, `make bench-c` (C structs vs protoc C++). Optional, 
 - [BENCHMARKS.md](BENCHMARKS.md): the performance document — the four standard tiers, an
   at-a-glance table of every binding against its baseline, the core tables (ctx vs plain vs
   protoc/DynamicMessage, 1 vs 8 threads, streaming), and one detailed section per binding.
+- [docs/perf-attempts.md](docs/perf-attempts.md): the attempts ledger for the cells that are still
+  below their baseline (Java/Kotlin 136 B encode, Julia 136 B decode) — every candidate change,
+  its A/B number, and why it was rejected.
 - [AGENTS.md](AGENTS.md): commands, layout and the hard invariants for agents changing this code.
 - [CONTRIBUTING.md](CONTRIBUTING.md): Conventional Commits scopes, hooks, commit gate.
+- [ROADMAP.md](ROADMAP.md): what is done, what is never, what is next.
+- [docs/examples.md](docs/examples.md): one runnable round trip per binding, with the exact command.
 - [include/pbwire.h](include/pbwire.h): the whole public API with per-function contracts.
 
 ## API
@@ -102,15 +112,43 @@ C++ runtime), `make bench`, `make bench-c` (C structs vs protoc C++). Optional, 
   pbw_type type, pbw_label label)`; `pbw_message_add_extension` (same, but only the number must
   be unique); `pbw_field_set_type_name`, `pbw_field_set_packed`, `pbw_field_set_oneof`;
   `pbw_field_default_value`, `pbw_field_is_extension`.
+- Descriptor/field/enum reflection: `pbw_descriptor_name`, `pbw_descriptor_is_enum`,
+  `pbw_descriptor_is_map_entry`, `pbw_descriptor_is_proto3`, `pbw_descriptor_field_count`,
+  `pbw_descriptor_field_at`, `pbw_descriptor_find_field`, `pbw_descriptor_find_field_name`,
+  `pbw_descriptor_set_map_entry`; field facts via `pbw_field_name`, `pbw_field_number`,
+  `pbw_field_type`, `pbw_field_label`, `pbw_field_is_packed`, `pbw_field_oneof_index`,
+  `pbw_field_message_type`, `pbw_field_set_full_name`; enum facts via `pbw_enum_add_value`,
+  `pbw_enum_find_name`, `pbw_enum_find_value`.
+- Services: `pbw_schema_service_count`, `pbw_schema_service_at`, `pbw_schema_service_find`,
+  `pbw_service_name`, `pbw_service_method_count`, `pbw_service_method_at`,
+  `pbw_service_method_find`, `pbw_method_name`, `pbw_method_input_type`, `pbw_method_output_type`,
+  `pbw_method_client_streaming`, `pbw_method_server_streaming`.
 - `pbw_status pbw_descriptor_set_load(const void *data, size_t len, pbw_schema **out)`: standard
   `FileDescriptorSet` -> linked schema; `pbw_schema_error()` explains a failure.
+  `pbw_descriptor_set_load_limits(data, len, limits, out)` (NULL limits == plain load) caps set
+  bytes and nesting for hosts that accept sets over the network.
+- `pbw_service_resolve(schema, service, method, in, out)`: method name -> input/output
+  descriptors for transport routing (the core still does no RPC).
+- `pbw_message_descriptor`, `pbw_strerror`, `pbw_schema_set_proto3` (proto2 for hand-built
+  schemas).
+- WKT helpers over field numbers only: `pbw_any_pack`, `pbw_any_type_url`, `pbw_any_payload`,
+  `pbw_timestamp_to_millis`, `pbw_duration_to_millis`, `pbw_timestamp_from_millis`,
+  `pbw_duration_from_millis`, `pbw_fieldmask_path_count`, `pbw_fieldmask_path_at`.
 - `pbw_message *pbw_message_new(const pbw_descriptor *)`, `pbw_message_free`;
   `pbw_message_is_initialized` (proto2 `required` check; `pbw_decode` already enforces it);
   `pbw_message_set(pbw_message *, uint32_t number, pbw_value *)` takes ownership of the value on
-  success only; `pbw_message_get`, `pbw_message_clear`, `pbw_message_set_message`.
-- `pbw_value_new_{int,uint,bool,float,double,string,bytes,message}`, typed getters
-  (`pbw_value_get_int32`, `pbw_value_get_string`, ...), repeated access with `pbw_value_count` /
-  `pbw_value_at`.
+  success only; `pbw_message_get`, `pbw_message_get_field`, `pbw_message_clear`,
+  `pbw_message_set_message`, `pbw_message_set_field`, `pbw_message_new_ctx`; visit present fields
+  with `pbw_message_field_count`, `pbw_message_field_at`, `pbw_message_present_list`, wire size with
+  `pbw_message_wire_size`; raw unknowns via `pbw_message_add_unknown_bytes`,
+  `pbw_message_unknown_bytes`, `pbw_message_unknown_len`.
+- Values: `pbw_value_new_int`, `pbw_value_new_uint`, `pbw_value_new_bool`, `pbw_value_new_float`,
+  `pbw_value_new_double`, `pbw_value_new_string`, `pbw_value_new_bytes`, `pbw_value_new_message`
+  (+ `pbw_value_new_int_ctx`, `pbw_value_new_uint_ctx`, `pbw_value_new_bytes_ctx` arena twins),
+  `pbw_value_free`; typed getters `pbw_value_get_int32`, `pbw_value_get_uint`,
+  `pbw_value_get_uint32`, `pbw_value_get_bool`, `pbw_value_get_float`, `pbw_value_get_double`,
+  `pbw_value_get_string`, `pbw_value_get_bytes`, `pbw_value_get_message`, `pbw_value_get_kind`;
+  repeated access with `pbw_value_count` / `pbw_value_at`.
 - `pbw_status pbw_encode(const pbw_message *, uint8_t **out, size_t *len)` ->
   `pbw_free()`; `pbw_status pbw_decode(const pbw_descriptor *, const void *buf, size_t len,
   pbw_message **out)` -> `pbw_message_free()`.
@@ -118,20 +156,31 @@ C++ runtime), `make bench`, `make bench-c` (C structs vs protoc C++). Optional, 
   `pbw_encode_ctx`, `pbw_ctx_reset` (frees the whole tree at once), `pbw_ctx_used`, `pbw_ctx_free`,
   `pbw_ctx_set_retain_cap` (resident budget across resets, default 1 MiB, 0 keeps nothing),
   `pbw_ctx_set_user`/`pbw_ctx_user` (one opaque binding pointer per context, kept across resets),
-  `pbw_pool_*` (bounded freelist: acquire/release/idle, one pool per worker, no locks).
-- `pbw_limits { max_bytes, max_depth }` (0 = default) with `pbw_decode_limits` and
-  `pbw_decode_ctx_limits`; over-large `max_depth` clamps to `PBW_MAX_DEPTH`.
+  `pbw_pool_new`, `pbw_pool_free`, `pbw_pool_acquire`, `pbw_pool_release`, `pbw_pool_idle`
+  (bounded freelist, one pool per worker, no locks).
+- `pbw_limits { max_bytes, max_depth }` (0 = default) with `pbw_decode_limits`,
+  `pbw_decode_ctx_limits`, `pbw_decode_delimited`, `pbw_decode_delimited_limits`,
+  `pbw_decode_delimited_ctx`, `pbw_decode_delimited_ctx_limits`; over-large
+  `max_depth` clamps to `PBW_MAX_DEPTH`.
 - `pbw_encode_deterministic`: map entries sorted by key, everything else byte-identical to
   `pbw_encode`.
 - `pbw_status pbw_message_encoded_size(const pbw_message *, size_t *len)`: exact wire length
   without allocating or writing bytes (one walk; measured at ~0.75x of an encode), for callers that
   must frame a message before encoding it. `pbw_encode_to()` over-reserves tag/varint space, so its
   smallest guaranteed cap is `size + PBW_ENCODE_SLACK` (12), not `size`.
-- Streaming: `pbw_encode_delimited` (varint length + message), `pbw_istream_new/feed/next/reset/free`
+- Scan without a tree: `pbw_visit`, `pbw_visit_limits` (one callback per field, `pbw_visit_value`
+  raw bits).
+- Streaming: `pbw_encode_delimited` (varint length + message), `pbw_encode_delimited_to`
+  (same framing into caller memory, no allocation), `pbw_istream_new`,
+  `pbw_istream_feed`, `pbw_istream_next`, `pbw_istream_reset`, `pbw_istream_free`
   (`*out == NULL` + `PBW_OK` means need more data), `pbw_encode_sink(msg, sink, opaque)` in 8 KiB
   chunks with a `pbw_status`-returning sink.
+- Text/JSON: `pbw_text_print`, `pbw_text_print_opts`, `pbw_text_parse`, `pbw_json_print`,
+  `pbw_json_parse`, `pbw_json_parse_opts` (unknown fields fail unless ignored; closed-enum
+  unknowns stay unknown).
 - `PBW_ABI_VERSION` (== 1) with `pbw_abi_version()`; the shared library SONAME carries the same
   number. Additive C API changes keep it; breaking changes bump it and the SONAME together.
+  `pbw_strerror()` explains every status.
 
 ## Key facts
 
@@ -144,14 +193,16 @@ C++ runtime), `make bench`, `make bench-c` (C structs vs protoc C++). Optional, 
   serializer.
 - Wire data is untrusted input: lengths bounds-checked, field number 0 and wire types above 5
   rejected, nesting capped at 256 (`PBW_MAX_DEPTH`), every failure returns a `pbw_status`.
-- Descriptors are trusted input; loading adversarial descriptor sets is out of scope.
+- Descriptors are trusted input; hosts that accept sets over the network cap them with
+  `pbw_descriptor_set_load_limits()`.
 - Dynamic schema loading: `pbw_descriptor_set_load()` reads a standard `FileDescriptorSet` produced by
   `protoc --include_imports --descriptor_set_out`, `buf build -o`, or the optional `pbwire-protoc`
   library. Every imported file must be in the set (types resolve by name), otherwise the load fails
   with `unknown type ... for field ...` in `pbw_schema_error()`. The loader reads names, numbers,
   types, labels, oneofs, `packed`, defaults and the file syntax, plus extensions with their
-  extendee; services, reserved ranges and source info are ignored. proto3/edition-2023 sets get
-  packed repetition by default.
+  extendee and services with their methods (query-only, no RPC). proto3/edition-2023 sets get
+  packed repetition by default, and editions files resolve their FeatureSet per file, message
+  and field.
 - The schema owns its descriptors and must outlive every message, value and `pbw_ctx` tree built from
   it; treat a linked schema as read-only while other threads use it.
 - Unknown fields (including a known field with the wrong wire type) are preserved as raw wire bytes
@@ -187,15 +238,21 @@ C++ runtime), `make bench`, `make bench-c` (C structs vs protoc C++). Optional, 
   (`ext-ffi`) compare `pbw_abi_version()` with `PBW_ABI_VERSION` at load;
   `bindings/go` is a cgo dynamic binding with a hot-swappable schema registry.
   `bindings/java` (pure-Java codec, and Kotlin/Scala/Clojure through it) needs no ABI check.
-- Binding memory ceilings (no binding exposes `pbw_ctx_set_retain_cap`/`pbw_pool_*`, so every
-  `pbw_ctx` runs at the 1 MiB default): Java/Kotlin pin one never-freed encode workspace per
+- Binding memory ceilings (`pbw_ctx_set_retain_cap` is reachable from Java/Kotlin/Scala/Clojure
+  (`setRetainCap`), Erlang/Elixir (`set_opts` / `retain_cap:`) and the embedded box's
+  `pbwe_open` argument; `pbw_pool_*` from none): Java/Kotlin pin one never-freed encode workspace per
   thread,
   Erlang one per scheduler, Node one encode buffer per type, Python/Ruby/Node views pin the input
   bytes, C needs `pbw_struct_free` only for non-arena trees, plain-FFI rows (Swift, Zig, F#,
   Julia via ccall) keep nothing resident
-  (Go excepted: retained roots live until `Close`).
+  (Go excepted: retained roots live until `Close`), and `bindings/embedded` keeps one capped
+  arena per box, rejects input past `pbwe_set_limits` and bounds the startup descriptor load
+  with `pbwe_open`'s last argument.
   Full per-row table in [bindings/README.md](bindings/README.md#memory-what-each-binding-keeps-and-the-one-rule-per-row).
-- Not implemented in the core: RPC/HTTP, MessageSet decoding into extensions, code generation (the
+- Not implemented in the core, permanently: `.proto` text parsing (build the set once with
+  `protoc`/`buf`/`pbwire-protoc`); no CLI (use `protoc --decode/--encode`); RPC/HTTP transport
+  and stubs (services load, are queryable, and resolve via `pbw_service_resolve`; the transport
+  stays official), code generation (the
   C binding ships its own protoc plugin for layout tables).
 - Generated message models: `codegen` is one protoc plugin (`protoc-gen-pbwire`) that
   emits typed fields, presence flags and encode/decode wrappers per language (C, Java, Kotlin, C#, F#, Dart, PHP, Ruby, Python, Node, Rust, Objective-C, Lua, Swift, Zig, Scala, Clojure, Elixir, Julia, R; Go is dynamic-API only for now; Erlang keeps gpb). The wrappers call the
@@ -258,5 +315,10 @@ a hot-swappable `Registry` (`go test ./...` covers parity plus hot-swap).
   `decode()` returns a parsed message that records one slice per wire field (fields materialize on
   read, `to_dict()` for the eager form, `encode(message)` for a byte-exact round trip), tests +
   benchmark against `google.protobuf` (`bindings/python/benchmarks/bench.py`).
+- [docker/bench.Dockerfile](docker/bench.Dockerfile): the Linux bench node —
+  pinned protobuf plus the Go, Rust, Node, Ruby, Lua, Java and Python toolchains, source copied in
+  under `/work` so a run needs no bind mount; drivers are
+  [scripts/bench-docker.sh](scripts/bench-docker.sh) and
+  [scripts/bench-compare.py](scripts/bench-compare.py) (`make bench-docker` / `make bench-compare`).
 - [conformance/testee.c](conformance/testee.c): testee for Google's `conformance_test_runner`, binary
   wire format plus the JSON mapping and the text format.
