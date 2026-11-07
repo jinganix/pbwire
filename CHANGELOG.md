@@ -4,7 +4,7 @@ All notable changes to pbwire. Versions follow SemVer; `VERSION` is the
 source of truth and `scripts/sync-versions.sh` propagates it to every
 binding manifest.
 
-## [Unreleased]
+## [0.1.14] - 2026-11-07
 
 ### Added
 
