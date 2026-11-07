@@ -45,6 +45,7 @@ service talks to an official-runtime service with no flag day.
 | ProtoBuf.jl (Julia) | `bindings/julia/` | replace `@proto` modules with `dlopen`/`ccall` + set; `Dict` boundary |
 | RProtoBuf (R) | `bindings/r/` | replace generated descriptors with the C extension; named lists in/out |
 | lua-protobuf / pbc (Lua) | `bindings/lua/` | replace `protobuf.register` blobs with the C module + set; tables unchanged |
+| nanopb (generated C, compile-time schema) | `bindings/embedded/` | replace the generated structs and accessors with `pbwe_decode`/`pbwe_encode` over one box per thread; the schema becomes a `FileDescriptorSet` at startup, `pbwe_set_limits` replaces the compile-time size caps |
 
 ## What intentionally has no equivalent
 

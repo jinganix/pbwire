@@ -212,6 +212,14 @@ gen-maptest: build
 # why `make codegen-test` at the repo root is not part of the C commit gate.
 test: test-java test-kotlin test-csharp test-dart test-php test-ruby test-python test-node test-rust test-objc test-lua test-go test-swift test-zig test-scala test-clojure test-fsharp test-elixir test-julia test-r
 
+# Aggregates for CI: Linux cannot run the Apple toolchains, so the two are
+# split there and joined on the macOS runner. Everything else runs on both.
+test-ci-linux: test-java test-kotlin test-csharp test-dart test-php test-ruby \
+	test-python test-node test-rust test-lua test-go test-zig test-scala \
+	test-clojure test-fsharp test-elixir test-julia test-r
+
+test-ci-macos: test-objc test-swift
+
 JAVA ?= java
 RUBY ?= ruby
 PYTHON ?= python3

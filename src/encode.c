@@ -157,6 +157,39 @@ w_varint(writer *w, uint64_t value)
 
 /* Copies a precomputed tag. Tag lengths are one or two bytes for almost every
  * schema, so avoid a memcpy call for those. */
+/* Writes a precomputed tag word (little-endian by definition) as `len`
+ * bytes. A 32-bit store is the fast path, but only where the host byte
+ * order matches the wire: on big-endian the word would come out reversed,
+ * so those builds (and any unknown order) spell it byte by byte. */
+PBW_INLINE void
+w_tag_word_le(writer *w, uint32_t word, size_t len)
+{
+#if defined(__BYTE_ORDER__) && defined(__ORDER_BIG_ENDIAN__) && \
+    __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+    uint8_t *out = w->buf->data + w->pos;
+    size_t i;
+
+    for (i = 0; i < len; i++) {
+        out[i] = (uint8_t)(word >> (8 * i));
+    }
+#elif defined(_MSC_VER) ||                                          \
+    (defined(__BYTE_ORDER__) && defined(__ORDER_LITTLE_ENDIAN__) && \
+     __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__)
+    /* memcpy of a fixed size compiles to one store and does not assume the
+     * output offset is aligned. */
+    memcpy(w->buf->data + w->pos, &word, sizeof(word));
+#else
+    /* Unknown byte order: the portable spelling. */
+    uint8_t *out = w->buf->data + w->pos;
+    size_t i;
+
+    for (i = 0; i < len; i++) {
+        out[i] = (uint8_t)(word >> (8 * i));
+    }
+#endif
+    w->pos += len;
+}
+
 /* Writes a precomputed tag. Tags are at most five bytes and the buffer is
  * reserved for five, so the four-byte word can be stored unconditionally and
  * the slack is overwritten by the next write. */
@@ -166,10 +199,7 @@ w_tag(writer *w, uint32_t word, size_t len)
     if (!w_reserve(w, 5)) {
         return;
     }
-    /* memcpy of a fixed size compiles to one store and does not assume the
-     * output offset is aligned. */
-    memcpy(w->buf->data + w->pos, &word, sizeof(word));
-    w->pos += len;
+    w_tag_word_le(w, word, len);
 }
 
 /* Same writes without a capacity check, for callers that reserved once for
@@ -178,8 +208,7 @@ w_tag(writer *w, uint32_t word, size_t len)
 PBW_INLINE void
 w_tag_noreserve(writer *w, uint32_t word, size_t len)
 {
-    memcpy(w->buf->data + w->pos, &word, sizeof(word));
-    w->pos += len;
+    w_tag_word_le(w, word, len);
 }
 
 PBW_INLINE void

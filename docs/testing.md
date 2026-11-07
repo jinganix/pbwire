@@ -1,8 +1,9 @@
 # Testing and conformance
 
 Nine layers verify the wire format, the JSON mapping and the text format
-against Google's own implementations. They differ in what they need installed
-and how much they can catch.
+against Google's own implementations, and four more cover the environments a
+laptop cannot. They differ in what they need installed and how much they
+can catch.
 
 | layer | command | needs | part of the commit gate |
 |---|---|---|---|
@@ -12,9 +13,15 @@ and how much they can catch.
 | Differential test (short) | `make difftest-short` | `protoc` + libprotobuf C++ | yes (CI, fixed seed) |
 | Differential test (full) | `make difftest` | `protoc` + libprotobuf C++ | nightly |
 | Official conformance suite | `make conformance` | cached protobuf checkout | yes (CI, ubuntu) + nightly |
-| Core coverage floor (80%) | `make coverage` | gcov | yes (CI) |
-| x86_64 bench baseline | nightly `bench-baseline` | `protoc` + libprotobuf C++ | nightly (artifact) |
-| Binding tests | `make <lang>-test` (plus `make erlang-test`, `make test-cpp`, `make go-test`) | that language's toolchain | no |
+| Core coverage floor (floor lives in the Makefile) | `make coverage` | gcov | yes (CI) |
+| Linux bench node (docker) | `make bench-docker` | docker | no (nightly `bench-baseline` records core + C structs) |
+| Binding tests | `make <lang>-test` (plus `make erlang-test`, `make test-cpp`, `make go-test`) | that language's toolchain | no (nightly `bindings` job) |
+| Extension sanitizers | CI `binding-asan` job | Python/Ruby/Node + `libasan` | yes (CI) |
+| Thread sanitizer | CI `tsan` job (`test_threads`) | `libtsan` | yes (CI) |
+| 32-bit (ILP32) | `make port-test-32` | an x86_64 host + `gcc-multilib` | yes (CI `ports` job) |
+| Big-endian | `./scripts/check-ports.sh` | `gcc-s390x-linux-gnu` + `qemu-user-static` | yes (CI `ports` job) |
+| Generated models | `make codegen-test` (`codegen-test-ci-linux` / `-macos` in CI) | every binding's toolchain | nightly (`codegen-linux` + `codegen-apple`) |
+| API reference | `make api-docs` | doxygen | yes (CI `api-docs` job, uploaded as an artifact) |
 
 ## 1. Self-check (`make test`)
 
@@ -60,6 +67,18 @@ path), and decode/encode against one shared loaded schema. It also prints a
 1-thread vs 8-thread throughput comparison and fails if the aggregate collapses,
 which a hidden lock would cause; the suite is run under ThreadSanitizer and
 ASan/UBSan during development. This is what the commit gate runs.
+
+`test_embedded` pins the embedded facade (and `test_embedded_nofail` runs the
+same source against the core built with counting allocation hooks): the pinned
+`matrix3` decode, byte-equal re-encode into a caller buffer, the
+length-delimited framing both ways (prefix, `*consumed` through two frames in
+one buffer, a truncated frame, a frame past the byte cap), both lookup paths,
+a build-then-encode round trip in the box arena, a reset that empties the arena,
+the short-buffer, byte-cap and nesting-cap, unknown-type and malformed-input
+error paths with `*msg`/`*len` cleared, a refused descriptor load and a
+descriptor set past its startup cap, plus a thousand-round loop that must
+allocate nothing once the arena is warm — and must allocate again under a
+one-byte retain cap.
 
 `make test` then builds and runs the C address-book example
 (`bindings/c/examples/addressbook.c`), so the tutorial program stays working
@@ -177,6 +196,24 @@ make conformance-ruby            # official binary suite through the Ruby bindin
 make conformance-java            # official binary suite through the Java binding
 make conformance-lua conformance-r conformance-node  # same suite through those bindings
 ```
+
+## 6. Environments a laptop cannot cover
+
+Four PR jobs and two nightly jobs exist for shapes that need another machine:
+
+| job | what it runs | what it catches |
+|---|---|---|
+| `binding-asan` | the Python, Ruby and Node extensions built with `-fsanitize=address`, under their own suites | heap bugs in the embedding boundary, where a crash takes the host process down. Python keeps leak detection on (its interpreter is clean) and caught a `Schema`/`MessageType` reference cycle; Ruby and Node leak on their own, so those two run ASan-only, and Ruby's run found a use-after-free reading `pbw_schema_error()` after the schema was freed. |
+| `tsan` | `test_threads` under ThreadSanitizer | a data race in the shared-schema / per-thread-context model |
+| `ports` (i386) | `make port-test-32`, the whole gate with `-m32` | ILP32 size/alignment assumptions, and x87 float comparison traps in the tests |
+| `ports` (s390x) | `scripts/check-ports.sh` under `qemu-user` | byte-order assumptions. This job found three real big-endian bugs: tag words written with a 32-bit store, floats read from the wrong half of the 64-bit bit pattern (JSON and text), and fixed-width struct members copied through a `uint64_t`. |
+| `codegen-linux` / `codegen-apple` | every binding's generated-model test (the Apple pair on macOS) | a generated emitter that drifts from the binding's codec on a platform whose toolchain PR CI does not install |
+| `api-docs` | `make api-docs` (Doxygen over `include/`) | an undocumented or misparsed public header |
+
+The 32-bit and s390x jobs are the reason `scripts/check-ports.sh` exists: it
+compiles the dependency-free suites with a cross compiler and runs them under
+`qemu-user`, so the same script works for any target
+(`CROSS=... RUN=... ./scripts/check-ports.sh`).
 
 ## What the differential test found
 

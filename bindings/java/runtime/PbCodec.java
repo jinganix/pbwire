@@ -52,6 +52,12 @@ public final class PbCodec {
     // registerInterface call replaces the earlier one (custom types win).
     private static final Map<Class<?>, Entry> IFACES = new ConcurrentHashMap<>();
 
+    /** Sets the per-thread encode-buffer ceiling (see
+     *  {@link GenericCodec#setRetainCap}); same 1 MiB default. */
+    public static void setRetainCap(int bytes) {
+        GenericCodec.setRetainCap(bytes);
+    }
+
     public static <O, B> void register(Class<?> msgClass, Meta<O, B> meta,
             Supplier<B> factory, Function<B, ?> finish) {
         if (msgClass == null || meta == null || factory == null || finish == null) {
@@ -149,11 +155,11 @@ public final class PbCodec {
     }
 
     public static <O, B> byte[] encode(O msg, Meta<O, B> meta) {
-        Wire.Buf b = new Wire.Buf();
+        // Same per-thread buffer as the dynamic codec: one ThreadLocal
+        // lookup, no per-call allocation, same retain cap.
+        Wire.Buf b = GenericCodec.takeBuf();
         encodeInto(msg, meta, b, 0);
-        byte[] out = new byte[b.pos];
-        System.arraycopy(b.b, 0, out, 0, b.pos);
-        return out;
+        return GenericCodec.copyOut(b);
     }
 
     @SuppressWarnings("unchecked")

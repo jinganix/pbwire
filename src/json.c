@@ -521,10 +521,13 @@ j_print_scalar(j_out *j, const pbw_field *field, const pbw_value *value)
         double v;
 
         if (field->type == PBW_TYPE_FLOAT) {
-            /* Floats are stored as their 4 raw bytes (like the wire). */
+            /* Floats live in the low 32 bits of the raw bit pattern: mask
+             * first, so the memcpy below never reads the high half (which
+             * is meaningless, and byte-reversed on a big-endian host). */
+            uint32_t bits32 = (uint32_t)bits;
             float f;
 
-            memcpy(&f, &bits, sizeof(f));
+            memcpy(&f, &bits32, sizeof(f));
             v = (double)f;
         } else {
             memcpy(&v, &bits, sizeof(v));
@@ -2692,10 +2695,14 @@ j_parse_scalar_value(j_in *j, pbw_message *msg, const pbw_field *field)
             return st;
         }
         if (field->type == PBW_TYPE_FLOAT) {
+            /* Copy through a uint32 so the float lands in the low half of
+             * `bits` on every host (a 4-byte memcpy into a uint64 fills the
+             * high half on a big-endian one). */
+            uint32_t bits32;
             float f = (float)v;
 
-            memcpy(&bits, &f, 4);
-            bits &= 0xffffffffull;
+            memcpy(&bits32, &f, sizeof(bits32));
+            bits = bits32;
         } else {
             memcpy(&bits, &v, 8);
         }

@@ -30,10 +30,14 @@ src=$here/ext/pbwire_ext/pbwire_ext.c
 obj=$here/lib/pbwire_ext.o
 out=$here/lib/pbwire_ext.$dlext
 
+# PBW_EXTRA_CFLAGS appends to both lines (empty by default): sanitizer
+# builds pass -fsanitize=address without touching the default flags.
+# shellcheck disable=SC2086
 $cc -O2 -fPIC -Wall -Wextra -Wno-missing-field-initializers \
     -Wno-unused-parameter -I"$root/include" -I"$inc1" -I"$inc2" \
+    ${PBW_EXTRA_CFLAGS:-} \
     -c -o "$obj" "$src"
 # shellcheck disable=SC2086
-$ldshared $extra_ldflags -o "$out" "$obj" "$root/build/libpbwire.a"
+$ldshared $extra_ldflags ${PBW_EXTRA_CFLAGS:-} -o "$out" "$obj" "$root/build/libpbwire.a"
 rm -f "$obj"
 echo "built $out"

@@ -714,6 +714,118 @@ test_deep_binary(const pbw_descriptor *d)
     }
 }
 
+static pbw_status
+count_cb(void *ud, const pbw_field *field, uint32_t number,
+         uint32_t wire_type, const pbw_visit_value *value)
+{
+    size_t *n = (size_t *)ud;
+
+    (void)field;
+    (void)number;
+    (void)wire_type;
+    (void)value;
+    (*n)++;
+    return PBW_OK;
+}
+
+/* The validating scan over hostile bytes: no crash, fail_off always
+ * written, bounded variants agree with the unbounded one. */
+static void
+test_visit_vectors(const pbw_descriptor *d)
+{
+    static const uint8_t field0[] = {0x00};
+    static const uint8_t wire6[] = {0x0E, 0x01};
+    static const uint8_t wire7[] = {0x0F, 0x01};
+    static const uint8_t tag5[] = {0xFF, 0xFF, 0xFF, 0xFF, 0x7F, 0x01};
+    static const uint8_t open_group[] = {0x2B, 0x08, 0x01};
+    static const uint8_t bad_end[] = {0x2B, 0x08, 0x01, 0x2C};
+    static const uint8_t valid[] = {0x08, 0x01, 0x12, 0x02, 0x68, 0x69};
+    /* unknown field numbers scan fine: the callback sees a NULL field */
+    static const uint8_t unknown_ok[] = {0x98, 0x06, 0x01};
+    const struct {
+        const uint8_t *buf;
+        size_t len;
+        int ok;
+    } cases[] = {
+        /* wire types 6/7 are reserved and always invalid; a closed
+         * unknown group scans fine */
+        {field0, sizeof(field0), 0},
+        {wire6, sizeof(wire6), 0},
+        {wire7, sizeof(wire7), 0},
+        {tag5, sizeof(tag5), 0},
+        {open_group, sizeof(open_group), 0},
+        {bad_end, sizeof(bad_end), 1},
+        {valid, sizeof(valid), 1},
+        {unknown_ok, sizeof(unknown_ok), 1},
+        {NULL, 0, 1},
+    };
+    size_t i;
+
+    for (i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        size_t n = 0;
+        size_t off = 0;
+        size_t n_null = 0;
+        size_t n_lim = 0;
+        size_t off_lim = 0;
+        pbw_status st;
+        pbw_limits lim = {0, 0};
+        pbw_limits tiny = {1, 0};
+
+        st = pbw_visit(d, cases[i].buf, cases[i].len, count_cb, &n, &off);
+        if (cases[i].ok) {
+            CHECK_STATUS(PBW_OK, st);
+            CHECK(off == cases[i].len);
+        } else {
+            CHECK(st != PBW_OK);
+        }
+        /* NULL fail_off is allowed; bounded defaults agree */
+        CHECK(pbw_visit(d, cases[i].buf, cases[i].len, count_cb, &n_null,
+                        NULL) == st);
+        CHECK(pbw_visit_limits(d, cases[i].buf, cases[i].len, &lim,
+                               count_cb, &n_lim, &off_lim) == st);
+        if (st == PBW_OK) {
+            CHECK(n_null == n && n_lim == n && off_lim == off);
+        }
+        /* a byte cap below the input fails cleanly */
+        if (cases[i].len > 1) {
+            size_t n_tiny = 0;
+            size_t off_tiny = 0;
+
+            CHECK(pbw_visit_limits(d, cases[i].buf, cases[i].len, &tiny,
+                                   count_cb, &n_tiny, &off_tiny) ==
+                  PBW_ERR_LIMIT);
+        }
+    }
+    /* two top-level fields visited; the depth cap only bites groups,
+     * which the single-level scan skips without recursing */
+    {
+        size_t n = 0;
+        size_t off = 0;
+        pbw_limits shallow = {0, 1};
+        pbw_limits roomy = {0, 100};
+        /* ten nested unknown groups, closed: field 99 START_GROUP x10
+         * then END_GROUP x10 (0x9C 0x06). Unclosed groups always fail. */
+        uint8_t groups[40];
+        size_t g;
+
+        CHECK_STATUS(PBW_OK,
+                     pbw_visit(d, valid, sizeof(valid), count_cb, &n, &off));
+        CHECK(n == 2 && off == sizeof(valid));
+        for (g = 0; g < 10; g++) {
+            groups[2 * g] = 0x9B;
+            groups[2 * g + 1] = 0x06;
+            groups[20 + 2 * g] = 0x9C;
+            groups[20 + 2 * g + 1] = 0x06;
+        }
+        CHECK_STATUS(PBW_ERR_LIMIT,
+                     pbw_visit_limits(d, groups, sizeof(groups), &shallow,
+                                      count_cb, &n, &off));
+        CHECK_STATUS(PBW_OK,
+                     pbw_visit_limits(d, groups, sizeof(groups), &roomy,
+                                      count_cb, &n, &off));
+    }
+}
+
 int
 main(void)
 {
@@ -731,6 +843,7 @@ main(void)
             test_prefix_sweep(d);
             test_huge_tags(d);
             test_deep_binary(d);
+            test_visit_vectors(d);
             test_random(d);
         }
         pbw_schema_free(s);

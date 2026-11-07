@@ -5201,6 +5201,744 @@ visit_collect(void *ud, const pbw_field *field, uint32_t number,
     return PBW_OK;
 }
 
+/* Well-known-type helpers: Any pack/unpack plus Timestamp/Duration millis.
+ * Mirrors with the same field numbers stand in for the real WKTs. */
+static void
+test_wkt(void)
+{
+    pbw_schema *schema = pbw_schema_new();
+    pbw_descriptor *any;
+    pbw_descriptor *ts;
+    pbw_descriptor *dur;
+    pbw_message *packed = NULL;
+    pbw_message *decoded = NULL;
+    pbw_message *empty = NULL;
+    pbw_message *stamp = NULL;
+    uint8_t *buf = NULL;
+    size_t len = 0;
+    size_t pay_len = 0;
+    const void *payload;
+    int64_t millis = 0;
+    static const uint8_t inner[] = {0x0a, 0x03, 'a', 'b', 'c'};
+
+    CHECK(schema != NULL);
+    if (schema == NULL) {
+        return;
+    }
+    any = pbw_schema_add_message(schema, "google.protobuf.Any");
+    ts = pbw_schema_add_message(schema, "google.protobuf.Timestamp");
+    dur = pbw_schema_add_message(schema, "google.protobuf.Duration");
+    CHECK(any != NULL && ts != NULL && dur != NULL);
+    pbw_message_add_field(any, "type_url", 1, PBW_TYPE_STRING,
+                          PBW_LABEL_OPTIONAL);
+    pbw_message_add_field(any, "value", 2, PBW_TYPE_BYTES,
+                          PBW_LABEL_OPTIONAL);
+    pbw_message_add_field(ts, "seconds", 1, PBW_TYPE_INT64,
+                          PBW_LABEL_OPTIONAL);
+    pbw_message_add_field(ts, "nanos", 2, PBW_TYPE_INT32,
+                          PBW_LABEL_OPTIONAL);
+    pbw_message_add_field(dur, "seconds", 1, PBW_TYPE_INT64,
+                          PBW_LABEL_OPTIONAL);
+    pbw_message_add_field(dur, "nanos", 2, PBW_TYPE_INT32,
+                          PBW_LABEL_OPTIONAL);
+    CHECK_OK(pbw_schema_link(schema));
+    any = (pbw_descriptor *)pbw_schema_find(schema, "google.protobuf.Any");
+    ts = (pbw_descriptor *)pbw_schema_find(schema,
+                                           "google.protobuf.Timestamp");
+    dur = (pbw_descriptor *)pbw_schema_find(schema,
+                                            "google.protobuf.Duration");
+
+    /* pack, wire round trip, unpack */
+    CHECK_OK(pbw_any_pack(any, "type.googleapis.com/pkg.Msg", inner,
+                          sizeof(inner), &packed));
+    CHECK(strcmp(pbw_any_type_url(packed), "type.googleapis.com/pkg.Msg") ==
+          0);
+    payload = pbw_any_payload(packed, &pay_len);
+    CHECK(payload != NULL && pay_len == sizeof(inner) &&
+          memcmp(payload, inner, pay_len) == 0);
+    CHECK_OK(pbw_encode(packed, &buf, &len));
+    CHECK_OK(pbw_decode(any, buf, len, &decoded));
+    CHECK(strcmp(pbw_any_type_url(decoded), "type.googleapis.com/pkg.Msg") ==
+          0);
+    payload = pbw_any_payload(decoded, &pay_len);
+    CHECK(payload != NULL && pay_len == sizeof(inner) &&
+          memcmp(payload, inner, pay_len) == 0);
+    pbw_free(buf);
+    buf = NULL;
+    pbw_message_free(decoded);
+    decoded = NULL;
+    pbw_message_free(packed);
+    packed = NULL;
+
+    /* absent fields read back empty, hostile arguments fail */
+    empty = pbw_message_new(any);
+    CHECK(empty != NULL);
+    CHECK(pbw_any_type_url(empty) == NULL);
+    CHECK(pbw_any_payload(empty, &pay_len) == NULL && pay_len == 0);
+    CHECK(pbw_any_type_url(NULL) == NULL);
+    CHECK(pbw_any_payload(NULL, NULL) == NULL);
+    CHECK_STATUS(PBW_ERR_INVALID,
+                 pbw_any_pack(NULL, "x", inner, sizeof(inner), &packed));
+    CHECK_STATUS(PBW_ERR_INVALID,
+                 pbw_any_pack(any, NULL, inner, sizeof(inner), &packed));
+    CHECK_STATUS(PBW_ERR_INVALID, pbw_any_pack(any, "x", NULL, 1, &packed));
+    CHECK_STATUS(PBW_ERR_INVALID, pbw_any_pack(any, "x", inner,
+                                               sizeof(inner), NULL));
+    pbw_message_free(empty);
+
+    /* a descriptor whose field 1 is not a string is not an Any */
+    CHECK_STATUS(PBW_ERR_TYPE,
+                 pbw_any_pack(ts, "x", inner, sizeof(inner), &packed));
+    /* set() rejects the value: the half-built tree is released, nothing out */
+    CHECK(packed == NULL);
+    CHECK_STATUS(PBW_ERR_TYPE, pbw_timestamp_from_millis(any, 7, &stamp));
+    CHECK(stamp == NULL);
+
+    /* timestamps: 1.5s, -1.5s, missing seconds, bad nanos, overflow */
+    stamp = pbw_message_new(ts);
+    CHECK(stamp != NULL);
+    CHECK_OK(pbw_message_set(stamp, 1, pbw_value_new_int(1)));
+    CHECK_OK(pbw_message_set(stamp, 2, pbw_value_new_int(500000000)));
+    CHECK_OK(pbw_timestamp_to_millis(stamp, &millis));
+    CHECK(millis == 1500);
+    pbw_message_free(stamp);
+    stamp = pbw_message_new(ts);
+    CHECK_OK(pbw_message_set(stamp, 1, pbw_value_new_int(-1)));
+    CHECK_OK(pbw_message_set(stamp, 2, pbw_value_new_int(-500000000)));
+    CHECK_OK(pbw_timestamp_to_millis(stamp, &millis));
+    CHECK(millis == -1500);
+    pbw_message_clear(stamp, 2);
+    CHECK_OK(pbw_timestamp_to_millis(stamp, &millis));
+    CHECK(millis == -1000);
+    pbw_message_free(stamp);
+    stamp = pbw_message_new(ts);
+    CHECK_STATUS(PBW_ERR_INVALID, pbw_timestamp_to_millis(stamp, &millis));
+    CHECK_OK(pbw_message_set(stamp, 1, pbw_value_new_int(0)));
+    CHECK_OK(pbw_message_set(stamp, 2, pbw_value_new_int(1000000000)));
+    CHECK_STATUS(PBW_ERR_INVALID, pbw_timestamp_to_millis(stamp, &millis));
+    CHECK_STATUS(PBW_ERR_INVALID, pbw_timestamp_to_millis(NULL, &millis));
+    CHECK_STATUS(PBW_ERR_INVALID, pbw_timestamp_to_millis(stamp, NULL));
+    pbw_message_free(stamp);
+    stamp = pbw_message_new(dur);
+    CHECK(stamp != NULL);
+    CHECK_OK(pbw_message_set(stamp, 1, pbw_value_new_int(INT64_MAX)));
+    CHECK_STATUS(PBW_ERR_LIMIT, pbw_duration_to_millis(stamp, &millis));
+    CHECK_OK(pbw_message_set(stamp, 1, pbw_value_new_int(90)));
+    CHECK_OK(pbw_duration_to_millis(stamp, &millis));
+    CHECK(millis == 90000);
+    pbw_message_free(stamp);
+    /* pack direction round-trips, including negatives */
+    CHECK_OK(pbw_timestamp_from_millis(ts, 1500, &stamp));
+    CHECK_OK(pbw_timestamp_to_millis(stamp, &millis));
+    CHECK(millis == 1500);
+    pbw_message_free(stamp);
+    CHECK_OK(pbw_duration_from_millis(dur, -1501, &stamp));
+    CHECK_OK(pbw_duration_to_millis(stamp, &millis));
+    CHECK(millis == -1501);
+    pbw_message_free(stamp);
+    stamp = NULL;
+    CHECK_STATUS(PBW_ERR_INVALID,
+                 pbw_timestamp_from_millis(NULL, 0, &stamp));
+    CHECK_STATUS(PBW_ERR_INVALID,
+                 pbw_duration_from_millis(dur, 0, NULL));
+    CHECK(stamp == NULL);
+    /* FieldMask paths without materializing the list */
+    {
+        /* the shared schema already linked, so masks get a fresh one */
+        pbw_schema *s2 = pbw_schema_new();
+        pbw_descriptor *fm2;
+        pbw_message *mask = NULL;
+        CHECK(s2 != NULL);
+        if (s2 != NULL) {
+            fm2 = pbw_schema_add_message(s2, "google.protobuf.FieldMask");
+            pbw_message_add_field(fm2, "paths", 1, PBW_TYPE_STRING,
+                                  PBW_LABEL_REPEATED);
+            CHECK_OK(pbw_schema_link(s2));
+            fm2 = (pbw_descriptor *)pbw_schema_find(s2,
+                                                    "google.protobuf.FieldMask");
+            mask = pbw_message_new(fm2);
+            CHECK(mask != NULL);
+            CHECK(pbw_fieldmask_path_count(mask) == 0);
+            CHECK(pbw_fieldmask_path_at(mask, 0) == NULL);
+            /* repeated set() appends: two paths land in one list */
+            CHECK_OK(
+                pbw_message_set(mask, 1, pbw_value_new_string("a.b")));
+            CHECK_OK(pbw_message_set(mask, 1, pbw_value_new_string("c")));
+            CHECK(pbw_fieldmask_path_count(mask) == 2);
+            CHECK(strcmp(pbw_fieldmask_path_at(mask, 0), "a.b") == 0);
+            CHECK(strcmp(pbw_fieldmask_path_at(mask, 1), "c") == 0);
+            CHECK(pbw_fieldmask_path_at(mask, 2) == NULL);
+            pbw_message_free(mask);
+            pbw_schema_free(s2);
+        }
+        CHECK(pbw_fieldmask_path_count(NULL) == 0);
+        CHECK(pbw_fieldmask_path_at(NULL, 0) == NULL);
+    }
+    pbw_schema_free(schema);
+}
+
+/* Hostile and edge JSON: every WKT error spelling, map key rules, enum
+ * edges and the lenient forms the mapping allows. */
+static void
+test_json_edges(void)
+{
+    pbw_schema *schema = pbw_schema_new();
+    pbw_descriptor *color;
+    pbw_descriptor *msg;
+    pbw_descriptor *sub;
+    pbw_descriptor *entry;
+    pbw_descriptor *ientry;
+    pbw_descriptor *ts;
+    pbw_descriptor *dur;
+    pbw_descriptor *fm;
+    pbw_descriptor *st;
+    pbw_descriptor *sentry;
+    pbw_descriptor *val;
+    pbw_descriptor *lv;
+    pbw_descriptor *nll;
+    pbw_descriptor *any;
+    pbw_field *f;
+    pbw_message *decoded = NULL;
+    pbw_value *got = NULL;
+    int64_t millis = 0;
+    /* NOTE: message/enum fields are added individually below so their
+     * pbw_field handles survive for set_type_name: find_field only works
+     * after link, which is too late to resolve type names. */
+    static const struct field_def defs[] = {
+        {"nums", 11, PBW_TYPE_INT32, PBW_LABEL_REPEATED},
+        {"i64", 12, PBW_TYPE_INT64, PBW_LABEL_OPTIONAL},
+        {"flag", 13, PBW_TYPE_BOOL, PBW_LABEL_OPTIONAL},
+    };
+#define JP(json) \
+    pbw_json_parse(msg, json, strlen(json), &decoded)
+
+    CHECK(schema != NULL);
+    if (schema == NULL) {
+        return;
+    }
+    color = pbw_schema_add_enum(schema, "C");
+    pbw_enum_add_value(color, "C_ZERO", 0);
+    pbw_enum_add_value(color, "C_ONE", 1);
+    msg = pbw_schema_add_message(schema, "M");
+    sub = pbw_schema_add_message(schema, "Sub");
+    ts = pbw_schema_add_message(schema, "google.protobuf.Timestamp");
+    dur = pbw_schema_add_message(schema, "google.protobuf.Duration");
+    fm = pbw_schema_add_message(schema, "google.protobuf.FieldMask");
+    st = pbw_schema_add_message(schema, "google.protobuf.Struct");
+    sentry =
+        pbw_schema_add_message(schema, "google.protobuf.Struct.FieldsEntry");
+    val = pbw_schema_add_message(schema, "google.protobuf.Value");
+    lv = pbw_schema_add_message(schema, "google.protobuf.ListValue");
+    nll = pbw_schema_add_enum(schema, "google.protobuf.NullValue");
+    any = pbw_schema_add_message(schema, "google.protobuf.Any");
+    entry = pbw_schema_add_message(schema, "M.SMapEntry");
+    ientry = pbw_schema_add_message(schema, "M.ISMapEntry");
+    add_fields(msg, defs, sizeof(defs) / sizeof(defs[0]));
+    /* capture every handle up front: the field array may move on the next
+     * add, so no pointer survives another add (see fuzz_decode.c). */
+    f = pbw_message_add_field(msg, "when", 1, PBW_TYPE_MESSAGE,
+                              PBW_LABEL_OPTIONAL);
+    if (f != NULL) {
+        pbw_field_set_type_name(f, "google.protobuf.Timestamp");
+    }
+    f = pbw_message_add_field(msg, "howLong", 2, PBW_TYPE_MESSAGE,
+                              PBW_LABEL_OPTIONAL);
+    if (f != NULL) {
+        pbw_field_set_type_name(f, "google.protobuf.Duration");
+    }
+    f = pbw_message_add_field(msg, "mask", 3, PBW_TYPE_MESSAGE,
+                              PBW_LABEL_OPTIONAL);
+    if (f != NULL) {
+        pbw_field_set_type_name(f, "google.protobuf.FieldMask");
+    }
+    f = pbw_message_add_field(msg, "props", 4, PBW_TYPE_MESSAGE,
+                              PBW_LABEL_OPTIONAL);
+    if (f != NULL) {
+        pbw_field_set_type_name(f, "google.protobuf.Struct");
+    }
+    f = pbw_message_add_field(msg, "payload", 5, PBW_TYPE_MESSAGE,
+                              PBW_LABEL_OPTIONAL);
+    if (f != NULL) {
+        pbw_field_set_type_name(f, "google.protobuf.Any");
+    }
+    f = pbw_message_add_field(msg, "lv", 6, PBW_TYPE_MESSAGE,
+                              PBW_LABEL_OPTIONAL);
+    if (f != NULL) {
+        pbw_field_set_type_name(f, "google.protobuf.ListValue");
+    }
+    f = pbw_message_add_field(msg, "vv", 7, PBW_TYPE_MESSAGE,
+                              PBW_LABEL_OPTIONAL);
+    if (f != NULL) {
+        pbw_field_set_type_name(f, "google.protobuf.Value");
+    }
+    f = pbw_message_add_field(msg, "smap", 8, PBW_TYPE_MESSAGE,
+                              PBW_LABEL_REPEATED);
+    if (f != NULL) {
+        pbw_field_set_type_name(f, "M.SMapEntry");
+    }
+    f = pbw_message_add_field(msg, "ismap", 9, PBW_TYPE_MESSAGE,
+                              PBW_LABEL_REPEATED);
+    if (f != NULL) {
+        pbw_field_set_type_name(f, "M.ISMapEntry");
+    }
+    f = pbw_message_add_field(msg, "color", 10, PBW_TYPE_ENUM,
+                              PBW_LABEL_OPTIONAL);
+    if (f != NULL) {
+        pbw_field_set_type_name(f, "C");
+    }
+    f = pbw_message_add_field(msg, "sub", 14, PBW_TYPE_MESSAGE,
+                              PBW_LABEL_OPTIONAL);
+    if (f != NULL) {
+        pbw_field_set_type_name(f, "Sub");
+    }
+    f = NULL;
+    pbw_message_add_field(sub, "a", 1, PBW_TYPE_INT32, PBW_LABEL_OPTIONAL);
+    pbw_message_add_field(ts, "seconds", 1, PBW_TYPE_INT64,
+                          PBW_LABEL_OPTIONAL);
+    pbw_message_add_field(ts, "nanos", 2, PBW_TYPE_INT32,
+                          PBW_LABEL_OPTIONAL);
+    pbw_message_add_field(dur, "seconds", 1, PBW_TYPE_INT64,
+                          PBW_LABEL_OPTIONAL);
+    pbw_message_add_field(dur, "nanos", 2, PBW_TYPE_INT32,
+                          PBW_LABEL_OPTIONAL);
+    pbw_message_add_field(fm, "paths", 1, PBW_TYPE_STRING,
+                          PBW_LABEL_REPEATED);
+    f = pbw_message_add_field(val, "null_value", 1, PBW_TYPE_ENUM,
+                              PBW_LABEL_OPTIONAL);
+    if (f != NULL) {
+        pbw_field_set_type_name(f, "google.protobuf.NullValue");
+    }
+    pbw_message_add_field(val, "number_value", 2, PBW_TYPE_DOUBLE,
+                          PBW_LABEL_OPTIONAL);
+    pbw_message_add_field(val, "string_value", 3, PBW_TYPE_STRING,
+                          PBW_LABEL_OPTIONAL);
+    pbw_message_add_field(val, "bool_value", 4, PBW_TYPE_BOOL,
+                          PBW_LABEL_OPTIONAL);
+    f = pbw_message_add_field(val, "struct_value", 5, PBW_TYPE_MESSAGE,
+                              PBW_LABEL_OPTIONAL);
+    if (f != NULL) {
+        pbw_field_set_type_name(f, "google.protobuf.Struct");
+    }
+    f = pbw_message_add_field(val, "list_value", 6, PBW_TYPE_MESSAGE,
+                              PBW_LABEL_OPTIONAL);
+    if (f != NULL) {
+        pbw_field_set_type_name(f, "google.protobuf.ListValue");
+    }
+    pbw_message_add_field(sentry, "key", 1, PBW_TYPE_STRING,
+                          PBW_LABEL_OPTIONAL);
+    f = pbw_message_add_field(sentry, "value", 2, PBW_TYPE_MESSAGE,
+                              PBW_LABEL_OPTIONAL);
+    pbw_field_set_type_name(f, "google.protobuf.Value");
+    f = pbw_message_add_field(st, "fields", 1, PBW_TYPE_MESSAGE,
+                              PBW_LABEL_REPEATED);
+    pbw_field_set_type_name(f, "google.protobuf.Struct.FieldsEntry");
+    f = pbw_message_add_field(lv, "values", 1, PBW_TYPE_MESSAGE,
+                              PBW_LABEL_REPEATED);
+    pbw_field_set_type_name(f, "google.protobuf.Value");
+    pbw_enum_add_value(nll, "NULL_VALUE", 0);
+    pbw_message_add_field(any, "type_url", 1, PBW_TYPE_STRING,
+                          PBW_LABEL_OPTIONAL);
+    pbw_message_add_field(any, "value", 2, PBW_TYPE_BYTES,
+                          PBW_LABEL_OPTIONAL);
+    pbw_message_add_field(entry, "key", 1, PBW_TYPE_STRING,
+                          PBW_LABEL_OPTIONAL);
+    pbw_message_add_field(entry, "value", 2, PBW_TYPE_INT32,
+                          PBW_LABEL_OPTIONAL);
+    pbw_message_add_field(ientry, "key", 1, PBW_TYPE_INT32,
+                          PBW_LABEL_OPTIONAL);
+    pbw_message_add_field(ientry, "value", 2, PBW_TYPE_STRING,
+                          PBW_LABEL_OPTIONAL);
+    pbw_descriptor_set_map_entry(entry);
+    pbw_descriptor_set_map_entry(ientry);
+    pbw_descriptor_set_map_entry(sentry);
+    CHECK_OK(pbw_schema_link(schema));
+    msg = (pbw_descriptor *)pbw_schema_find(schema, "M");
+
+    /* timestamps: null skips, epoch parses, bad shapes fail */
+    CHECK_OK(JP("{\"when\":null}"));
+    CHECK(pbw_message_get(decoded, 1) == NULL);
+    pbw_message_free(decoded);
+    decoded = NULL;
+    CHECK_OK(JP("{\"when\":\"1970-01-01T00:00:00Z\"}"));
+    got = pbw_message_get(decoded, 1);
+    CHECK(got != NULL);
+    if (got != NULL) {
+        CHECK_OK(
+            pbw_timestamp_to_millis(pbw_value_get_message(got), &millis));
+        CHECK(millis == 0);
+    }
+    pbw_message_free(decoded);
+    decoded = NULL;
+    CHECK_STATUS(PBW_ERR_INVALID, JP("{\"when\":\"\"}"));
+    CHECK_STATUS(PBW_ERR_INVALID, JP("{\"when\":\"1970-01-01 00:00:00Z\"}"));
+    CHECK_STATUS(PBW_ERR_INVALID, JP("{\"when\":\"1970-01-01T00:00:00\"}"));
+    /* the reference accepts out-of-range offsets verbatim (verified against
+     * protobuf 6.33: +25:00 lands at -90000s), so the parser does too */
+    CHECK_OK(JP("{\"when\":\"1970-01-01T00:00:00+25:00\"}"));
+    got = pbw_message_get(decoded, 1);
+    CHECK(got != NULL);
+    if (got != NULL) {
+        CHECK_OK(
+            pbw_timestamp_to_millis(pbw_value_get_message(got), &millis));
+        CHECK(millis == -90000000);
+    }
+    pbw_message_free(decoded);
+    decoded = NULL;
+    CHECK_STATUS(
+        PBW_ERR_INVALID,
+        JP("{\"when\":\"1970-01-01T00:00:00.1234567890Z\"}"));
+    CHECK_STATUS(PBW_ERR_INVALID, JP("{\"when\":\"0000-01-01T00:00:00Z\"}"));
+    CHECK_STATUS(PBW_ERR_INVALID, JP("{\"when\":\"1970-00-10T00:00:00Z\"}"));
+    /* durations: null skips, suffix-less and unit-less fail */
+    CHECK_OK(JP("{\"howLong\":null}"));
+    CHECK(pbw_message_get(decoded, 2) == NULL);
+    pbw_message_free(decoded);
+    decoded = NULL;
+    CHECK_OK(JP("{\"howLong\":\"3.5s\"}"));
+    CHECK_OK(JP("{\"howLong\":\"-3s\"}"));
+    pbw_message_free(decoded);
+    decoded = NULL;
+    CHECK_STATUS(PBW_ERR_INVALID, JP("{\"howLong\":\"3.5\"}"));
+    CHECK_STATUS(PBW_ERR_INVALID, JP("{\"howLong\":\"3.5x\"}"));
+    CHECK_STATUS(PBW_ERR_INVALID, JP("{\"howLong\":\"s\"}"));
+    /* field masks: null skips, arrays fail, camelCase folds */
+    CHECK_OK(JP("{\"mask\":null}"));
+    CHECK(pbw_message_get(decoded, 3) == NULL);
+    pbw_message_free(decoded);
+    decoded = NULL;
+    CHECK_OK(JP("{\"mask\":\"aB,cdEf\"}"));
+    got = pbw_message_get(decoded, 3);
+    CHECK(got != NULL);
+    {
+        const pbw_message *fmm =
+            got == NULL ? NULL : pbw_value_get_message(got);
+
+        CHECK(fmm != NULL);
+        if (fmm != NULL) {
+            CHECK(pbw_fieldmask_path_count(fmm) == 2);
+            CHECK(strcmp(pbw_fieldmask_path_at(fmm, 0), "a_b") == 0);
+            CHECK(strcmp(pbw_fieldmask_path_at(fmm, 1), "cd_ef") == 0);
+        }
+    }
+    pbw_message_free(decoded);
+    decoded = NULL;
+    CHECK_STATUS(PBW_ERR_INVALID, JP("{\"mask\":[\"a\"]}"));
+    /* structs: null skips, objects and every Value shape parse */
+    CHECK_OK(JP("{\"props\":null}"));
+    CHECK(pbw_message_get(decoded, 4) == NULL);
+    pbw_message_free(decoded);
+    decoded = NULL;
+    CHECK_OK(JP("{\"props\":{\"a\":1,\"b\":null,\"c\":[true,\"x\"],\"d\":{}}}"));
+    pbw_message_free(decoded);
+    decoded = NULL;
+    CHECK_STATUS(PBW_ERR_INVALID, JP("{\"props\":[]}"));
+    CHECK_STATUS(PBW_ERR_INVALID, JP("{\"props\":5}"));
+    CHECK_OK(JP("{\"lv\":[1,null,\"x\"]}"));
+    pbw_message_free(decoded);
+    decoded = NULL;
+    CHECK_OK(JP("{\"vv\":null}"));
+    pbw_message_free(decoded);
+    decoded = NULL;
+    /* Any: resolved @type parses, missing/unknown/mistyped @type fails */
+    CHECK_OK(JP("{\"payload\":{\"@type\":\"type.googleapis.com/Sub\",\"a\":1}}"));
+    pbw_message_free(decoded);
+    decoded = NULL;
+    CHECK_STATUS(PBW_ERR_INVALID, JP("{\"payload\":{\"a\":1}}"));
+    CHECK_STATUS(
+        PBW_ERR_INVALID,
+        JP("{\"payload\":{\"@type\":\"type.googleapis.com/Nope\",\"a\":1}}"));
+    CHECK_STATUS(PBW_ERR_INVALID, JP("{\"payload\":{\"@type\":5}}"));
+    /* maps: duplicates (incl. normalized ints) and mistyped keys fail */
+    CHECK_OK(JP("{\"smap\":{\"a\":1}}"));
+    pbw_message_free(decoded);
+    decoded = NULL;
+    CHECK_STATUS(PBW_ERR_INVALID, JP("{\"smap\":{\"a\":1,\"a\":2}}"));
+    CHECK_STATUS(PBW_ERR_INVALID,
+                 JP("{\"ismap\":{\"1\":\"a\",\"01\":\"b\"}}"));
+    CHECK_STATUS(PBW_ERR_INVALID, JP("{\"ismap\":{\"x\":\"a\"}}"));
+    CHECK_STATUS(PBW_ERR_INVALID, JP("{\"smap\":[1]}"));
+    /* enums: unknown names fail, open numbers land on the field */
+    CHECK_STATUS(PBW_ERR_INVALID, JP("{\"color\":\"C_NOPE\"}"));
+    CHECK_OK(JP("{\"color\":99}"));
+    pbw_message_free(decoded);
+    decoded = NULL;
+    /* the lenient spellings the mapping allows */
+    CHECK_OK(JP("{\"i64\":5}"));
+    pbw_message_free(decoded);
+    decoded = NULL;
+    CHECK_OK(JP("{\"flag\":\"true\"}"));
+    pbw_message_free(decoded);
+    decoded = NULL;
+    CHECK_OK(JP("{'i64':'5'}"));
+    pbw_message_free(decoded);
+    decoded = NULL;
+    CHECK_OK(JP("{nums:[1,2]}"));
+    pbw_message_free(decoded);
+    decoded = NULL;
+    CHECK(decoded == NULL);
+    /* proto2 closed enums: unknown numbers stay out of the field (kept as
+     * unknown), unknown names fail */
+    {
+        pbw_schema *s2 = pbw_schema_new();
+        pbw_descriptor *ce;
+        pbw_descriptor *m2;
+        pbw_field *cf;
+        pbw_message *dd = NULL;
+
+        CHECK(s2 != NULL);
+        if (s2 != NULL) {
+            ce = pbw_schema_add_enum(s2, "CE");
+            pbw_enum_add_value(ce, "CE_ZERO", 0);
+            pbw_enum_add_value(ce, "CE_ONE", 1);
+            m2 = pbw_schema_add_message(s2, "M2");
+            cf = pbw_message_add_field(m2, "ec", 1, PBW_TYPE_ENUM,
+                                       PBW_LABEL_OPTIONAL);
+            if (cf != NULL) {
+                pbw_field_set_type_name(cf, "CE");
+            }
+            pbw_schema_set_proto3(s2, 0);
+            CHECK_OK(pbw_schema_link(s2));
+            m2 = (pbw_descriptor *)pbw_schema_find(s2, "M2");
+            /* unlike the binary wire, JSON has no unknown-enum keeping:
+             * the reference rejects both spellings */
+            CHECK_STATUS(PBW_ERR_INVALID,
+                         pbw_json_parse(m2, "{\"ec\":99}", 10, &dd));
+            CHECK_STATUS(PBW_ERR_INVALID,
+                         pbw_json_parse(m2, "{\"ec\":\"CE_NOPE\"}", 16, &dd));
+            CHECK_OK(pbw_json_parse(m2, "{\"ec\":\"CE_ONE\"}", 15, &dd));
+            pbw_message_free(dd);
+            dd = NULL;
+            pbw_schema_free(s2);
+        }
+    }
+    pbw_schema_free(schema);
+#undef JP
+}
+
+/* Hostile and edge text format: unknown-field printing (every wire type),
+ * float spellings, Any blocks, escapes, numeric enums, bracket lists. */
+static void
+test_text_edges(void)
+{
+    pbw_schema *schema = pbw_schema_new();
+    pbw_descriptor *color;
+    pbw_descriptor *msg;
+    pbw_descriptor *sub;
+    pbw_descriptor *any;
+    pbw_field *f;
+    pbw_message *m = NULL;
+    pbw_message *decoded = NULL;
+    pbw_value *got = NULL;
+    char *out = NULL;
+    size_t len = 0;
+    /* field 99 varint 7, 100 fixed64, 101 fixed32, 102 LEN "hi",
+     * 103 group { 1:1 }: every unknown wire type in one blob. */
+    static const uint8_t unknowns[] = {
+        0x98,
+        0x06,
+        0x07,
+        0xa1,
+        0x06,
+        0x01,
+        0x02,
+        0x03,
+        0x04,
+        0x05,
+        0x06,
+        0x07,
+        0x08,
+        0xad,
+        0x06,
+        0x09,
+        0x0a,
+        0x0b,
+        0x0c,
+        0xb2,
+        0x06,
+        0x02,
+        0x68,
+        0x69,
+        0xbb,
+        0x06,
+        0x08,
+        0x01,
+        0xbc,
+        0x06,
+    };
+    static const uint8_t short_len[] = {0xb2, 0x06, 0x05, 0x68, 0x69};
+
+    CHECK(schema != NULL);
+    if (schema == NULL) {
+        return;
+    }
+    color = pbw_schema_add_enum(schema, "C");
+    pbw_enum_add_value(color, "C_ZERO", 0);
+    pbw_enum_add_value(color, "C_ONE", 1);
+    msg = pbw_schema_add_message(schema, "T");
+    sub = pbw_schema_add_message(schema, "Sub");
+    any = pbw_schema_add_message(schema, "google.protobuf.Any");
+    pbw_message_add_field(sub, "a", 1, PBW_TYPE_INT32, PBW_LABEL_OPTIONAL);
+    pbw_message_add_field(any, "type_url", 1, PBW_TYPE_STRING,
+                          PBW_LABEL_OPTIONAL);
+    pbw_message_add_field(any, "value", 2, PBW_TYPE_BYTES,
+                          PBW_LABEL_OPTIONAL);
+    f = pbw_message_add_field(msg, "sub", 1, PBW_TYPE_MESSAGE,
+                              PBW_LABEL_OPTIONAL);
+    if (f != NULL) {
+        pbw_field_set_type_name(f, "Sub");
+    }
+    pbw_message_add_field(msg, "flt", 2, PBW_TYPE_FLOAT, PBW_LABEL_OPTIONAL);
+    pbw_message_add_field(msg, "dbl", 3, PBW_TYPE_DOUBLE,
+                          PBW_LABEL_OPTIONAL);
+    pbw_message_add_field(msg, "nums", 4, PBW_TYPE_INT32, PBW_LABEL_REPEATED);
+    f = pbw_message_add_field(msg, "color", 5, PBW_TYPE_ENUM,
+                              PBW_LABEL_OPTIONAL);
+    if (f != NULL) {
+        pbw_field_set_type_name(f, "C");
+    }
+    f = pbw_message_add_field(msg, "payload", 6, PBW_TYPE_MESSAGE,
+                              PBW_LABEL_OPTIONAL);
+    if (f != NULL) {
+        pbw_field_set_type_name(f, "google.protobuf.Any");
+    }
+    pbw_message_add_field(msg, "s", 7, PBW_TYPE_STRING, PBW_LABEL_OPTIONAL);
+    CHECK_OK(pbw_schema_link(schema));
+    msg = (pbw_descriptor *)pbw_schema_find(schema, "T");
+#define TP(text) pbw_text_parse(msg, text, strlen(text), &decoded)
+    m = pbw_message_new(msg);
+    CHECK(m != NULL);
+    CHECK_OK(pbw_message_add_unknown_bytes(m, unknowns, sizeof(unknowns)));
+    /* every wire type prints as a numeric line, hidden by default */
+    CHECK_OK(pbw_text_print_opts(m, 1, &out, &len));
+    CHECK(strstr(out, "99:") != NULL);
+    CHECK(strstr(out, "100:") != NULL);
+    CHECK(strstr(out, "101:") != NULL);
+    CHECK(strstr(out, "102") != NULL); /* LEN with message bytes: brace form */
+    CHECK(strstr(out, "103") != NULL);
+    pbw_free(out);
+    out = NULL;
+    CHECK_OK(pbw_text_print_opts(m, 0, &out, &len));
+    CHECK(strstr(out, "99:") == NULL);
+    pbw_free(out);
+    out = NULL;
+    pbw_message_free(m);
+    m = pbw_message_new(msg);
+    CHECK_OK(pbw_message_add_unknown_bytes(m, short_len, sizeof(short_len)));
+    CHECK_STATUS(PBW_ERR_INVALID, pbw_text_print_opts(m, 1, &out, &len));
+    pbw_message_free(m);
+    /* float spellings: inf/nan families, trailing f, no hex */
+    CHECK_OK(TP("flt: inf"));
+    pbw_message_free(decoded);
+    decoded = NULL;
+    CHECK_OK(TP("flt: -inf"));
+    pbw_message_free(decoded);
+    decoded = NULL;
+    CHECK_OK(TP("flt: nan"));
+    pbw_message_free(decoded);
+    decoded = NULL;
+    CHECK_STATUS(PBW_ERR_INVALID, TP("flt: NAN"));
+    CHECK_STATUS(PBW_ERR_INVALID, TP("flt: inFiniTy"));
+    CHECK_STATUS(PBW_ERR_INVALID, TP("flt: 0x10"));
+    CHECK_OK(TP("flt: 1.5f"));
+    pbw_message_free(decoded);
+    decoded = NULL;
+    CHECK_STATUS(PBW_ERR_INVALID, TP("flt: 1e"));
+    /* Any blocks live inside the Any value: resolved type parses,
+     * bad/unknown/truncated fails */
+    CHECK_OK(TP("payload { [type.googleapis.com/Sub] { a: 1 } }"));
+    pbw_message_free(decoded);
+    decoded = NULL;
+    CHECK_OK(TP("payload { [type.googleapis.com/Sub]: { a: 1 } }"));
+    pbw_message_free(decoded);
+    decoded = NULL;
+    CHECK_OK(TP("payload { [a%20b/Sub] { a: 1 } }"));
+    pbw_message_free(decoded);
+    decoded = NULL;
+    CHECK_STATUS(PBW_ERR_INVALID, TP("payload { [bad] }"));
+    CHECK_STATUS(PBW_ERR_INVALID, TP("payload { [x/Bad-Name] { } }"));
+    CHECK_STATUS(PBW_ERR_INVALID, TP("payload { [a%2x/Sub] { } }"));
+    CHECK_STATUS(PBW_ERR_INVALID, TP("payload { [a%2/Sub] { } }"));
+    CHECK_STATUS(PBW_ERR_INVALID,
+                 TP("payload { [type.googleapis.com/Nope] { } }"));
+    CHECK_STATUS(PBW_ERR_INVALID,
+                 TP("payload { [type.googleapis.com/Sub] xyz }"));
+    CHECK_STATUS(PBW_ERR_INVALID, TP("[type.googleapis.com/Sub"));
+    /* escapes: \u0041 passes, a surrogate pair combines to U+1F600,
+     * lone parts fail (bad UTF-8, which this parser rejects) */
+    CHECK_OK(TP("s: \"\\u0041\""));
+    pbw_message_free(decoded);
+    decoded = NULL;
+    CHECK_OK(TP("s: \"\\uD83D\\uDE00\""));
+    got = pbw_message_get(decoded, 7);
+    CHECK(got != NULL);
+    if (got != NULL) {
+        size_t slen = 0;
+        const void *sval = pbw_value_get_bytes(got, &slen);
+        static const uint8_t smile[] = {0xf0, 0x9f, 0x98, 0x80};
+
+        CHECK(sval != NULL && slen == sizeof(smile) &&
+              memcmp(sval, smile, slen) == 0);
+    }
+    pbw_message_free(decoded);
+    decoded = NULL;
+    CHECK_STATUS(PBW_ERR_INVALID, TP("s: \"\\uD800\""));
+    CHECK_STATUS(PBW_ERR_INVALID, TP("s: \"\\x\""));
+    CHECK_STATUS(PBW_ERR_INVALID, TP("s: \"abc\\"));
+    /* enums take numbers, unknown names fail; lists take brackets */
+    CHECK_OK(TP("color: 1"));
+    pbw_message_free(decoded);
+    decoded = NULL;
+    CHECK_STATUS(PBW_ERR_INVALID, TP("color: NOPE"));
+    CHECK_OK(TP("nums: [1, 2]"));
+    pbw_message_free(decoded);
+    decoded = NULL;
+    CHECK_STATUS(PBW_ERR_INVALID, TP("nums: [1,"));
+    CHECK_STATUS(PBW_ERR_INVALID, TP("nope: 1"));
+    CHECK(decoded == NULL);
+    /* an Any-shaped imposter whose field 1 is not a string: the expansion
+     * parses, then the store rejects it */
+    {
+        pbw_schema *s2 = pbw_schema_new();
+        pbw_descriptor *t2;
+        pbw_descriptor *fake;
+        pbw_descriptor *sub2;
+        pbw_field *ff;
+        pbw_message *dd = NULL;
+
+        CHECK(s2 != NULL);
+        if (s2 != NULL) {
+            t2 = pbw_schema_add_message(s2, "T2");
+            fake = pbw_schema_add_message(s2, "google.protobuf.Any");
+            sub2 = pbw_schema_add_message(s2, "Sub");
+            pbw_message_add_field(sub2, "a", 1, PBW_TYPE_INT32,
+                                  PBW_LABEL_OPTIONAL);
+            pbw_message_add_field(fake, "type_url", 1, PBW_TYPE_INT32,
+                                  PBW_LABEL_OPTIONAL);
+            pbw_message_add_field(fake, "value", 2, PBW_TYPE_BYTES,
+                                  PBW_LABEL_OPTIONAL);
+            ff = pbw_message_add_field(t2, "payload", 6, PBW_TYPE_MESSAGE,
+                                       PBW_LABEL_OPTIONAL);
+            if (ff != NULL) {
+                pbw_field_set_type_name(ff, "google.protobuf.Any");
+            }
+            CHECK_OK(pbw_schema_link(s2));
+            t2 = (pbw_descriptor *)pbw_schema_find(s2, "T2");
+            {
+                static const char *anytext =
+                    "payload { [type.googleapis.com/Sub] { a: 1 } }";
+
+                CHECK_STATUS(PBW_ERR_INVALID,
+                             pbw_text_parse(t2, anytext, strlen(anytext),
+                                            &dd));
+            }
+            CHECK(dd == NULL);
+            pbw_schema_free(s2);
+        }
+    }
+    pbw_schema_free(schema);
+#undef TP
+}
+
 static void
 test_visit(pbw_schema *schema)
 {
@@ -5721,6 +6459,78 @@ test_decode_delimited(pbw_schema *schema)
                  pbw_decode_delimited_limits(type, f, f_len, &capped,
                                              &got, &used));
     CHECK(got == NULL);
+
+    /* The caller-buffer encoder writes the same frame the allocating one does,
+     * and the context twin decodes it into the arena instead of one block. */
+    {
+        size_t need = 0;
+        size_t framed = 0;
+        pbw_ctx *ctx;
+        size_t budget;
+
+        CHECK_OK(pbw_message_encoded_size(m, &need));
+        budget = need + PBW_ENCODE_SLACK + 2; /* + the length prefix */
+        {
+            uint8_t *out = (uint8_t *)malloc(budget);
+
+            CHECK(out != NULL);
+            CHECK_OK(pbw_encode_delimited_to(m, out, budget, &framed));
+            CHECK(framed == f_len && memcmp(out, f, f_len) == 0);
+            /* One byte short now: the frame needs framing + slack headroom. */
+            framed = 99;
+            CHECK_STATUS(PBW_ERR_LIMIT,
+                         pbw_encode_delimited_to(m, out, f_len - 1, &framed));
+            CHECK(framed == 0);
+            CHECK_STATUS(PBW_ERR_INVALID,
+                         pbw_encode_delimited_to(m, out, budget, NULL));
+            CHECK_STATUS(PBW_ERR_INVALID,
+                         pbw_encode_delimited_to(NULL, out, budget, &framed));
+            CHECK_STATUS(PBW_ERR_LIMIT,
+                         pbw_encode_delimited_to(m, NULL, 0, &framed));
+            CHECK(framed == 0);
+            /* An empty message still needs its one-byte prefix. */
+            {
+                pbw_message *empty = pbw_message_new(type);
+
+                CHECK(empty != NULL);
+                CHECK_OK(pbw_encode_delimited_to(empty, out, budget, &framed));
+                CHECK(framed == 1 && out[0] == 0x00);
+                pbw_message_free(empty);
+            }
+            free(out);
+        }
+
+        ctx = pbw_ctx_new();
+        CHECK(ctx != NULL);
+        CHECK_OK(pbw_decode_delimited_ctx(ctx, type, f, f_len, &got, &used));
+        CHECK(got != NULL && used == f_len);
+        CHECK(ctx == NULL || pbw_ctx_used(ctx) > 0);
+        CHECK(strcmp(pbw_value_get_string(pbw_message_get(got, 1)), "hi") ==
+              0);
+        /* A decoded arena tree is read-only, like pbw_decode_ctx(). */
+        CHECK_STATUS(PBW_ERR_INVALID,
+                     pbw_message_set(got, 1, pbw_value_new_string("no")));
+        pbw_ctx_reset(ctx);
+        got = NULL;
+        capped.max_bytes = 1;
+        CHECK_STATUS(PBW_ERR_LIMIT,
+                     pbw_decode_delimited_ctx_limits(ctx, type, f, f_len,
+                                                     &capped, &got, &used));
+        CHECK(got == NULL && used == 0);
+        capped.max_bytes = 0;
+        CHECK_STATUS(PBW_ERR_INVALID,
+                     pbw_decode_delimited_ctx(NULL, type, f, f_len, &got,
+                                              &used));
+        CHECK_STATUS(PBW_ERR_INVALID,
+                     pbw_decode_delimited_ctx(ctx, type, f, f_len - 1, &got,
+                                              &used));
+        CHECK_STATUS(PBW_ERR_INVALID,
+                     pbw_decode_delimited_ctx(ctx, type, f, f_len, &got, NULL));
+        CHECK_STATUS(PBW_ERR_INVALID,
+                     pbw_decode_delimited_ctx(ctx, type, NULL, 0, &got,
+                                              &used));
+        pbw_ctx_free(ctx);
+    }
 
     pbw_message_free(m);
     pbw_free(f);
@@ -6243,6 +7053,9 @@ main(void)
     test_deterministic_edges();
     test_limits(schema);
     test_visit(schema);
+    test_wkt();
+    test_json_edges();
+    test_text_edges();
     test_streaming(schema);
     test_streaming_edges(schema);
     test_decode_delimited(schema);

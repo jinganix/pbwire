@@ -38,6 +38,8 @@ defmodule Pbwire do
       unless you need the Erlang default (`false`).
     * `:string_as_list` — when `true`, decode string fields as charlists
       instead of binaries. Leave it off: Elixir strings are binaries.
+    * `:retain_cap` — resident encode-buffer ceiling per scheduler, like
+      the C core's retain cap (1 MiB default when unset, 0 keeps nothing).
 
   Raises `ArgumentError` when a module is not an `elixir-protobuf` generated
   module or carries a field this binding does not cover.

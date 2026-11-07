@@ -120,6 +120,11 @@ def _cpu():
     return None
 
 
+def _in_container():
+    """Docker/podman marker: the CPU and memory facts are then the VM's."""
+    return os.path.exists("/.dockerenv") or os.path.exists("/run/.containerenv")
+
+
 def _mem_mb():
     system = platform.system()
     if system == "Darwin":
@@ -156,6 +161,7 @@ def collect_env(root):
             "cpu": _cpu(),
             "cores": os.cpu_count(),
             "mem_mb": _mem_mb(),
+            "container": _in_container(),
         },
         "toolchain": {
             "protoc": _run(["protoc", "--version"]),

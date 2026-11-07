@@ -34,6 +34,7 @@
 #include <pbwire.h>
 
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -1518,11 +1519,15 @@ schema_s_load(VALUE klass, VALUE bytes)
     status = pbw_descriptor_set_load(RSTRING_PTR(bytes),
                                      (size_t)RSTRING_LEN(bytes), &schema);
     if (status != PBW_OK) {
-        const char *reason = pbw_schema_error(schema);
+        /* the reason lives inside the schema: copy it before freeing */
+        char reason[192];
+        const char *why = pbw_schema_error(schema);
+
+        snprintf(reason, sizeof(reason), "%s",
+                 why != NULL ? why : "");
         pbw_schema_free(schema);
         rb_raise(eError, "descriptor set rejected: %s",
-                 reason != NULL && reason[0] != '\0' ? reason
-                                                     : pbw_strerror(status));
+                 reason[0] != '\0' ? reason : pbw_strerror(status));
     }
     obj = typed_object_alloc(klass, &schema_data_type, (void **)&self);
     self->holder = holder_new(schema);

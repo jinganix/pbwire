@@ -724,8 +724,8 @@ ds_enum_proto(pbw_schema *schema, const char *parent, const uint8_t *p,
 static pbw_status
 ds_message_proto(pbw_schema *schema, const ds_features *file,
                  const char *parent, const uint8_t *p, const uint8_t *end,
-                 uint32_t depth, ds_pending_ext **exts, size_t *ext_count,
-                 size_t *ext_cap)
+                 uint32_t depth, uint32_t dlim, ds_pending_ext **exts,
+                 size_t *ext_count, size_t *ext_cap)
 {
     char fqname[DS_MAX_NAME];
     pbw_descriptor *msg;
@@ -735,7 +735,7 @@ ds_message_proto(pbw_schema *schema, const ds_features *file,
     ds_features feat = *file;
     ds_field f;
 
-    if (depth >= PBW_MAX_DEPTH) {
+    if (depth >= dlim) {
         return PBW_ERR_LIMIT;
     }
     if ((status = ds_fqname(schema, fqname, sizeof(fqname), parent, p, end)) !=
@@ -913,7 +913,7 @@ ds_message_proto(pbw_schema *schema, const ds_features *file,
         }
         case 3: /* nested_type: fresh scope, back to the file default */
             status = ds_message_proto(schema, file, fqname, f.data,
-                                      f.data + f.len, depth + 1, exts,
+                                      f.data + f.len, depth + 1, dlim, exts,
                                       ext_count, ext_cap);
             break;
         case 4: /* enum_type */
@@ -1163,7 +1163,8 @@ ds_service_proto(pbw_schema *schema, const char *package, const uint8_t *p,
 
 static pbw_status
 ds_file_proto(pbw_schema *schema, const uint8_t *p, const uint8_t *end,
-              ds_pending_ext **exts, size_t *ext_count, size_t *ext_cap)
+              uint32_t dlim, ds_pending_ext **exts, size_t *ext_count,
+              size_t *ext_cap)
 {
     char package[DS_MAX_NAME] = "";
     char syntax[DS_MAX_NAME] = "";
@@ -1266,8 +1267,8 @@ ds_file_proto(pbw_schema *schema, const uint8_t *p, const uint8_t *end,
         }
         if (f.field == 4) { /* message_type */
             status = ds_message_proto(schema, &feat, package, f.data,
-                                      f.data + f.len, 0, exts, ext_count,
-                                      ext_cap);
+                                      f.data + f.len, 0, dlim, exts,
+                                      ext_count, ext_cap);
         } else if (f.field == 5) { /* enum_type */
             status = ds_enum_proto(schema, package, f.data, f.data + f.len,
                                    feat.enum_open == 2, proto3);
@@ -1297,8 +1298,9 @@ ds_file_proto(pbw_schema *schema, const uint8_t *p, const uint8_t *end,
     }
 }
 
-pbw_status
-pbw_descriptor_set_load(const void *data, size_t len, pbw_schema **out)
+static pbw_status
+ds_load_impl(const void *data, size_t len, uint32_t dlim, size_t max_bytes,
+             pbw_schema **out)
 {
     const uint8_t *p;
     const uint8_t *end;
@@ -1320,6 +1322,11 @@ pbw_descriptor_set_load(const void *data, size_t len, pbw_schema **out)
     if (schema == NULL) {
         return PBW_ERR_NOMEM;
     }
+    if (max_bytes > 0 && len > max_bytes) {
+        ds_error(schema, "FileDescriptorSet exceeds max_bytes");
+        *out = schema;
+        return PBW_ERR_LIMIT;
+    }
     p = pbw_normalize_input(data, len);
     end = p + len;
     for (;;) {
@@ -1333,8 +1340,8 @@ pbw_descriptor_set_load(const void *data, size_t len, pbw_schema **out)
             break;
         }
         if (f.field == 1 && f.wire == PBW_WIRE_LEN) { /* file */
-            status = ds_file_proto(schema, f.data, f.data + f.len, &exts,
-                                   &ext_count, &ext_cap);
+            status = ds_file_proto(schema, f.data, f.data + f.len, dlim,
+                                   &exts, &ext_count, &ext_cap);
             if (status != PBW_OK) {
                 break;
             }
@@ -1353,4 +1360,27 @@ pbw_descriptor_set_load(const void *data, size_t len, pbw_schema **out)
     }
     *out = schema; /* on failure the reason is in pbw_schema_error() */
     return status;
+}
+
+pbw_status
+pbw_descriptor_set_load(const void *data, size_t len, pbw_schema **out)
+{
+    return ds_load_impl(data, len, PBW_MAX_DEPTH, 0, out);
+}
+
+pbw_status
+pbw_descriptor_set_load_limits(const void *data, size_t len,
+                               const pbw_limits *limits, pbw_schema **out)
+{
+    uint32_t dlim = PBW_MAX_DEPTH;
+    size_t max_bytes = 0;
+
+    if (limits != NULL) {
+        /* Above PBW_MAX_DEPTH clamps, like the wire decoder. */
+        if (limits->max_depth > 0 && limits->max_depth < dlim) {
+            dlim = limits->max_depth;
+        }
+        max_bytes = limits->max_bytes;
+    }
+    return ds_load_impl(data, len, dlim, max_bytes, out);
 }

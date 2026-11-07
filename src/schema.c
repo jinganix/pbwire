@@ -1081,3 +1081,44 @@ pbw_method_server_streaming(const pbw_method *method)
 {
     return method == NULL ? 0 : method->server_streaming;
 }
+
+pbw_status
+pbw_service_resolve(const pbw_schema *schema, const char *service,
+                    const char *method, const pbw_descriptor **in_desc,
+                    const pbw_descriptor **out_desc)
+{
+    const pbw_service *svc;
+    const pbw_method *m;
+    const pbw_descriptor *in;
+    const pbw_descriptor *out;
+
+    if (in_desc != NULL) {
+        *in_desc = NULL;
+    }
+    if (out_desc != NULL) {
+        *out_desc = NULL;
+    }
+    if (schema == NULL || service == NULL || method == NULL) {
+        return PBW_ERR_INVALID;
+    }
+    svc = pbw_schema_service_find(schema, service);
+    if (svc == NULL) {
+        return PBW_ERR_INVALID;
+    }
+    m = pbw_service_method_find(svc, method);
+    if (m == NULL) {
+        return PBW_ERR_INVALID;
+    }
+    in = pbw_schema_find(schema, pbw_method_input_type(m));
+    out = pbw_schema_find(schema, pbw_method_output_type(m));
+    if (in == NULL || out == NULL) {
+        return PBW_ERR_INVALID;
+    }
+    if (in_desc != NULL) {
+        *in_desc = in;
+    }
+    if (out_desc != NULL) {
+        *out_desc = out;
+    }
+    return PBW_OK;
+}

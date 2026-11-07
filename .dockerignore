@@ -1,0 +1,22 @@
+# Build context for docker/bench.Dockerfile: only what the bench harnesses
+# read. Everything the build regenerates (generated protos, npm modules,
+# compiled archives, fetched jars, toolchain checkouts) is filtered out, so the
+# per-run source layer stays small.
+build/
+build-*/
+results/
+.tmp/
+**/node_modules/
+bindings/swift/.build/
+bindings/zig/zig-pkg/
+**/target/
+bindings/java/benchmarks/deps/
+bindings/*/benchmarks/gen/
+bindings/*/benchmarks/out/
+bindings/lua/pbwire.so
+bindings/lua/pbwire.o
+bindings/ruby/lib/pbwire_ext.*
+*.o
+*.a
+*.class
+*.jar

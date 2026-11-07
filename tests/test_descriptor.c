@@ -485,6 +485,318 @@ test_services(void)
     pbw_schema_free(schema);
 }
 
+/* Minimal FileDescriptorSet writer for hostile-input tests: no protoc,
+ * fixed buffers (the longest hostile name below is 600 bytes). */
+typedef struct {
+    uint8_t *p;
+    size_t len;
+} ds_w;
+
+static void
+w_varint(ds_w *w, uint64_t v)
+{
+    do {
+        w->p[w->len++] = (uint8_t)((v & 0x7f) | (v > 0x7f ? 0x80 : 0));
+        v >>= 7;
+    } while (v > 0);
+}
+
+static void
+w_tag(ds_w *w, uint32_t field, uint32_t wire)
+{
+    w_varint(w, ((uint64_t)field << 3) | wire);
+}
+
+static void
+w_bytes(ds_w *w, const void *data, size_t n)
+{
+    memcpy(w->p + w->len, data, n);
+    w->len += n;
+}
+
+static void
+w_str(ds_w *w, uint32_t field, const char *s)
+{
+    w_tag(w, field, 2);
+    w_varint(w, strlen(s));
+    w_bytes(w, s, strlen(s));
+}
+
+static void
+w_sub(ds_w *w, uint32_t field, const uint8_t *body, size_t n)
+{
+    w_tag(w, field, 2);
+    w_varint(w, n);
+    w_bytes(w, body, n);
+}
+
+static void
+w_int(ds_w *w, uint32_t field, uint64_t v)
+{
+    w_tag(w, field, 0);
+    w_varint(w, v);
+}
+
+/* Hostile descriptor bytes: over-long names (LIMIT), extensions in oneofs
+ * and wrapped oneof indexes (INVALID). Built by hand, so the loader's
+ * hostile paths are covered without protoc. */
+static void
+test_load_hostile(void)
+{
+    pbw_schema *schema = NULL;
+    uint8_t file[2048];
+    uint8_t inner[1600];
+    uint8_t method[1400];
+    uint8_t set[2200];
+    static char big[601];
+    ds_w w;
+    ds_w iw;
+    ds_w mw;
+    ds_w sw;
+    size_t i;
+
+    for (i = 0; i < sizeof(big) - 1; i++) {
+        big[i] = 'A';
+    }
+    big[sizeof(big) - 1] = '\0';
+    /* 1. a 600-byte message name exceeds DS_MAX_NAME: LIMIT with a reason
+     * (bare file names are unused by the loader, so they never fail). */
+    iw.p = inner;
+    iw.len = 0;
+    w_str(&iw, 1, big);
+    w.p = file;
+    w.len = 0;
+    w_str(&w, 1, "n.proto");
+    w_str(&w, 2, "p");
+    w_sub(&w, 4, inner, iw.len);
+    w_str(&w, 12, "proto3");
+    sw.p = set;
+    sw.len = 0;
+    w_sub(&sw, 1, file, w.len);
+    CHECK_STATUS(PBW_ERR_LIMIT,
+                 pbw_descriptor_set_load(set, sw.len, &schema));
+    CHECK(schema != NULL && strlen(pbw_schema_error(schema)) > 0);
+    pbw_schema_free(schema);
+    schema = NULL;
+    /* 2. a 600-byte method input type: LIMIT as well */
+    mw.p = method;
+    mw.len = 0;
+    w_str(&mw, 1, "Go");
+    w_str(&mw, 2, big);
+    w_str(&mw, 3, ".p.M");
+    w.p = file;
+    w.len = 0;
+    w_str(&w, 1, "s.proto");
+    w_str(&w, 2, "p");
+    {
+        uint8_t msg[32];
+        ds_w mwb;
+
+        mwb.p = msg;
+        mwb.len = 0;
+        w_str(&mwb, 1, "M");
+        w_sub(&w, 4, msg, mwb.len);
+    }
+    {
+        uint8_t svc[1500];
+        ds_w svw;
+
+        svw.p = svc;
+        svw.len = 0;
+        w_str(&svw, 1, "S");
+        w_sub(&svw, 2, method, mw.len);
+        w_sub(&w, 6, svc, svw.len);
+    }
+    w_str(&w, 12, "proto3");
+    sw.len = 0;
+    w_sub(&sw, 1, file, w.len);
+    CHECK_STATUS(PBW_ERR_LIMIT,
+                 pbw_descriptor_set_load(set, sw.len, &schema));
+    pbw_schema_free(schema);
+    schema = NULL;
+    /* 3. an extension carrying oneof_index: INVALID */
+    iw.len = 0;
+    w_str(&iw, 1, "M");
+    w.len = 0;
+    w_str(&w, 1, "e.proto");
+    w_str(&w, 2, "p");
+    w_sub(&w, 4, inner, iw.len);
+    mw.len = 0;
+    w_str(&mw, 1, "e");
+    w_str(&mw, 2, ".p.M");
+    w_int(&mw, 3, 100);
+    w_int(&mw, 4, 1);
+    w_int(&mw, 5, 9);
+    w_int(&mw, 9, 0);
+    w_sub(&w, 7, method, mw.len);
+    w_str(&w, 12, "proto3");
+    sw.len = 0;
+    w_sub(&sw, 1, file, w.len);
+    CHECK_STATUS(PBW_ERR_INVALID,
+                 pbw_descriptor_set_load(set, sw.len, &schema));
+    CHECK(schema != NULL && strlen(pbw_schema_error(schema)) > 0);
+    pbw_schema_free(schema);
+    schema = NULL;
+    /* 4. a field oneof_index of UINT32_MAX wraps to 0: INVALID */
+    iw.len = 0;
+    w_str(&iw, 1, "M");
+    {
+        uint8_t oneof[16];
+        ds_w ow;
+        uint8_t fld[64];
+        ds_w fw;
+
+        ow.p = oneof;
+        ow.len = 0;
+        w_str(&ow, 1, "o");
+        w_sub(&iw, 8, oneof, ow.len);
+        fw.p = fld;
+        fw.len = 0;
+        w_str(&fw, 1, "f");
+        w_int(&fw, 3, 1);
+        w_int(&fw, 4, 1);
+        w_int(&fw, 5, 9);
+        w_int(&fw, 9, 0xffffffffull);
+        w_sub(&iw, 2, fld, fw.len);
+    }
+    w.len = 0;
+    w_str(&w, 1, "o.proto");
+    w_str(&w, 2, "p");
+    w_sub(&w, 4, inner, iw.len);
+    w_str(&w, 12, "proto3");
+    sw.len = 0;
+    w_sub(&sw, 1, file, w.len);
+    CHECK_STATUS(PBW_ERR_INVALID,
+                 pbw_descriptor_set_load(set, sw.len, &schema));
+    pbw_schema_free(schema);
+    schema = NULL;
+    /* 5. an enum value without a name: INVALID */
+    iw.len = 0;
+    w_str(&iw, 1, "E");
+    {
+        uint8_t val[16];
+        ds_w vw;
+
+        vw.p = val;
+        vw.len = 0;
+        w_int(&vw, 2, 1);
+        w_sub(&iw, 2, val, vw.len);
+    }
+    w.len = 0;
+    w_str(&w, 1, "n.proto");
+    w_str(&w, 2, "p");
+    w_sub(&w, 5, inner, iw.len);
+    w_str(&w, 12, "proto3");
+    sw.len = 0;
+    w_sub(&sw, 1, file, w.len);
+    CHECK_STATUS(PBW_ERR_INVALID,
+                 pbw_descriptor_set_load(set, sw.len, &schema));
+    pbw_schema_free(schema);
+    schema = NULL;
+    /* 6. a 600-byte enum value name: LIMIT */
+    iw.len = 0;
+    w_str(&iw, 1, "E");
+    {
+        uint8_t val[700];
+        ds_w vw;
+
+        vw.p = val;
+        vw.len = 0;
+        w_str(&vw, 1, big);
+        w_int(&vw, 2, 1);
+        w_sub(&iw, 2, val, vw.len);
+    }
+    w.len = 0;
+    w_str(&w, 1, "n.proto");
+    w_str(&w, 2, "p");
+    w_sub(&w, 5, inner, iw.len);
+    w_str(&w, 12, "proto3");
+    sw.len = 0;
+    w_sub(&sw, 1, file, w.len);
+    CHECK_STATUS(PBW_ERR_LIMIT,
+                 pbw_descriptor_set_load(set, sw.len, &schema));
+    pbw_schema_free(schema);
+}
+
+static void
+test_service_resolve(void)
+{
+    pbw_schema *schema = NULL;
+    const pbw_descriptor *in = (const pbw_descriptor *)0x1;
+    const pbw_descriptor *out = (const pbw_descriptor *)0x1;
+
+    CHECK_OK(pbw_descriptor_set_load(svc_set, sizeof(svc_set), &schema));
+    CHECK_OK(pbw_service_resolve(schema, "shop.Orders", "Place", &in, &out));
+    CHECK(in == pbw_schema_find(schema, "shop.Order"));
+    CHECK(out == pbw_schema_find(schema, "shop.Order"));
+    /* NULL slots are allowed; unknown names and NULLs fail loudly */
+    CHECK_OK(pbw_service_resolve(schema, "shop.Orders", "Place", NULL, NULL));
+    CHECK_STATUS(PBW_ERR_INVALID,
+                 pbw_service_resolve(schema, "shop.Missing", "Place", &in,
+                                     &out));
+    CHECK_STATUS(PBW_ERR_INVALID,
+                 pbw_service_resolve(schema, "shop.Orders", "Cancel", &in,
+                                     &out));
+    CHECK_STATUS(PBW_ERR_INVALID,
+                 pbw_service_resolve(NULL, "shop.Orders", "Place", &in,
+                                     &out));
+    CHECK_STATUS(PBW_ERR_INVALID,
+                 pbw_service_resolve(schema, NULL, "Place", &in, &out));
+    CHECK_STATUS(PBW_ERR_INVALID,
+                 pbw_service_resolve(schema, "shop.Orders", NULL, &in, &out));
+    CHECK(in == NULL && out == NULL);
+    pbw_schema_free(schema);
+}
+
+static void
+test_load_limits(void)
+{
+    pbw_schema *schema = NULL;
+    pbw_limits lim = {0, 0};
+
+    /* NULL or zeroed limits behave exactly like the plain loader */
+    CHECK_OK(
+        pbw_descriptor_set_load_limits(svc_set, sizeof(svc_set), NULL, &schema));
+    CHECK(pbw_schema_find(schema, "shop.Order") != NULL);
+    pbw_schema_free(schema);
+    CHECK_OK(
+        pbw_descriptor_set_load_limits(svc_set, sizeof(svc_set), &lim, &schema));
+    pbw_schema_free(schema);
+    CHECK_STATUS(PBW_ERR_INVALID,
+                 pbw_descriptor_set_load_limits(NULL, 0, &lim, &schema));
+    CHECK_STATUS(PBW_ERR_INVALID,
+                 pbw_descriptor_set_load_limits(svc_set, sizeof(svc_set), &lim,
+                                                NULL));
+    /* a byte cap below the input fails with an explainable schema */
+    lim.max_bytes = sizeof(svc_set) - 1;
+    CHECK_STATUS(PBW_ERR_LIMIT,
+                 pbw_descriptor_set_load_limits(svc_set, sizeof(svc_set), &lim,
+                                                &schema));
+    CHECK(schema != NULL && strlen(pbw_schema_error(schema)) > 0);
+    pbw_schema_free(schema);
+    lim.max_bytes = sizeof(svc_set);
+    CHECK_OK(
+        pbw_descriptor_set_load_limits(svc_set, sizeof(svc_set), &lim, &schema));
+    pbw_schema_free(schema);
+    lim.max_bytes = 0;
+    /* above PBW_MAX_DEPTH clamps: a flat set still loads */
+    lim.max_depth = PBW_MAX_DEPTH + 100;
+    CHECK_OK(
+        pbw_descriptor_set_load_limits(svc_set, sizeof(svc_set), &lim, &schema));
+    pbw_schema_free(schema);
+    /* desc_set nests Outer.Inner one level deep: depth 1 rejects it */
+    lim.max_depth = 1;
+    CHECK_STATUS(PBW_ERR_LIMIT,
+                 pbw_descriptor_set_load_limits(desc_set, sizeof(desc_set),
+                                                &lim, &schema));
+    pbw_schema_free(schema);
+    lim.max_depth = 2;
+    CHECK_OK(
+        pbw_descriptor_set_load_limits(desc_set, sizeof(desc_set), &lim, &schema));
+    CHECK(pbw_schema_find(schema, "pbwire.test.Outer.Inner") != NULL);
+    pbw_schema_free(schema);
+}
+
 static void
 test_schema(void)
 {
@@ -1357,6 +1669,9 @@ main(void)
     test_load_tolerance();
     test_mutation_sweep();
     test_services();
+    test_load_hostile();
+    test_service_resolve();
+    test_load_limits();
     test_duplicate_field_number();
     test_services_protoc();
     test_editions();

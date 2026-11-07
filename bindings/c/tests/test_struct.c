@@ -105,13 +105,25 @@ read_file(const char *path, uint8_t **data, size_t *len)
     return 0;
 }
 
-/* Float bit pattern without math.h: inf must survive the round trip. */
+/* Float/double bit patterns without math.h: inf must survive the round trip.
+ * Doubles compare by bits because an exact `==` against a decimal literal is
+ * unreliable on x87 (i386 keeps the literal at 80-bit precision while the
+ * loaded value is 64-bit). */
 static uint32_t
 float_bits(float f)
 {
     uint32_t u;
 
     memcpy(&u, &f, sizeof(u));
+    return u;
+}
+
+static uint64_t
+double_bits(double d)
+{
+    uint64_t u;
+
+    memcpy(&u, &d, sizeof(u));
     return u;
 }
 
@@ -213,7 +225,7 @@ test_matrix3_reference(void)
     CHECK(got.sfx32 == INT32_MIN);
     CHECK(got.sfx64 == INT64_MIN);
     CHECK(float_bits(got.f32) == UINT32_C(0x7f800000));
-    CHECK(got.f64 == -123456.789);
+    CHECK(double_bits(got.f64) == double_bits(-123456.789));
     CHECK(got.flag == 1);
     CHECK(got.str != NULL && strcmp(got.str, "hello") == 0);
     CHECK(got.color == STRUCTTEST_COLOR3_COLOR3_GREEN);
@@ -1031,7 +1043,8 @@ test_t4_dynamic_crosscheck(void)
         CHECK(color_bits == UINT32_C(0x7f800000)); /* inf */
     }
     v = pbw_message_get(msg, 12);
-    CHECK(v != NULL && pbw_value_get_double(v) == -123456.789);
+    CHECK(v != NULL &&
+          double_bits(pbw_value_get_double(v)) == double_bits(-123456.789));
     v = pbw_message_get(msg, 13);
     CHECK(v != NULL && pbw_value_get_bool(v) != 0);
     v = pbw_message_get(msg, 14);

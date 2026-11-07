@@ -1558,15 +1558,41 @@ fail:
     return 0;
 }
 
-static void
-Message_dealloc(Message *self)
+/* GC support: MessageType points back at its Schema (which caches the
+ * types), so dropped schemas would otherwise leak as uncollectable
+ * cycles. Messages cannot start a cycle (their targets never point
+ * back), but they are tracked anyway so a cycle reachable through
+ * `mtype` stays collectable. */
+static int
+Message_traverse(Message *self, visitproc visit, void *arg)
+{
+    Py_VISIT(self->mtype);
+    Py_VISIT(self->buffer);
+    return 0;
+}
+
+static int
+Message_clear(Message *self)
 {
     if (self->slices != self->inline_slices) {
         free(self->slices);
+        self->slices = self->inline_slices;
+        self->cap = MSG_INLINE_SLICES;
     }
-    Py_XDECREF(self->mtype);
-    Py_XDECREF(self->buffer);
-    PyObject_Del(self);
+    Py_CLEAR(self->mtype);
+    Py_CLEAR(self->buffer);
+    return 0;
+}
+
+static void
+Message_dealloc(Message *self)
+{
+    PyObject_GC_UnTrack(self);
+    Message_clear(self);
+    if (self->slices != self->inline_slices) {
+        free(self->slices);
+    }
+    PyObject_GC_Del(self);
 }
 
 /* A Message that shares this one's buffer over `off`..`off + len`. */
@@ -1579,10 +1605,11 @@ sub_message(Message *parent, field_t *f, uint32_t off, uint32_t len)
         PyErr_SetString(PyExc_ValueError, "nesting limit exceeded");
         return NULL;
     }
-    sub = PyObject_New(Message, &MessagePyType);
+    sub = PyObject_GC_New(Message, &MessagePyType);
     if (sub == NULL) {
         return NULL;
     }
+    PyObject_GC_Track(sub);
     sub->mtype = f->sub;
     Py_INCREF(f->sub);
     sub->buffer = parent->buffer;
@@ -1633,11 +1660,12 @@ joined_message(Message *m, field_t *f, uint32_t fidx)
             dst += m->slices[i].len;
         }
     }
-    out = PyObject_New(Message, &MessagePyType);
+    out = PyObject_GC_New(Message, &MessagePyType);
     if (out == NULL) {
         Py_DECREF(buffer);
         return NULL;
     }
+    PyObject_GC_Track(out);
     out->mtype = f->sub;
     Py_INCREF(f->sub);
     out->buffer = buffer;
@@ -2163,7 +2191,9 @@ static PyTypeObject MessagePyType = {
         .tp_name = "pbwire.Message",
     .tp_basicsize = sizeof(Message),
     .tp_dealloc = (destructor)Message_dealloc,
-    .tp_flags = Py_TPFLAGS_DEFAULT,
+    .tp_traverse = (traverseproc)Message_traverse,
+    .tp_clear = (inquiry)Message_clear,
+    .tp_flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_GC,
     .tp_doc = "A parsed message: fields are read from the wire on demand.",
     .tp_methods = Message_methods,
     .tp_getattro = (getattrofunc)Message_getattro,
@@ -2175,22 +2205,47 @@ static PyTypeObject MessagePyType = {
 
 /* ------------------------------------------------------------ type methods */
 
-static void
-MessageType_dealloc(MessageType *self)
+static int
+MessageType_traverse(MessageType *self, visitproc visit, void *arg)
+{
+    size_t i;
+
+    Py_VISIT(self->schema_obj);
+    Py_VISIT(self->by_name);
+    Py_VISIT(self->name);
+    if (self->fields != NULL) {
+        for (i = 0; i < self->nfields; i++) {
+            Py_VISIT(self->fields[i].name);
+            Py_VISIT(self->fields[i].sub);
+        }
+    }
+    return 0;
+}
+
+static int
+MessageType_clear(MessageType *self)
 {
     size_t i;
 
     if (self->fields != NULL) {
         for (i = 0; i < self->nfields; i++) {
-            Py_XDECREF(self->fields[i].name);
-            Py_XDECREF(self->fields[i].sub);
+            Py_CLEAR(self->fields[i].name);
+            Py_CLEAR(self->fields[i].sub);
         }
     }
+    Py_CLEAR(self->by_name);
+    Py_CLEAR(self->name);
+    Py_CLEAR(self->schema_obj);
+    return 0;
+}
+
+static void
+MessageType_dealloc(MessageType *self)
+{
+    PyObject_GC_UnTrack(self);
+    MessageType_clear(self);
     free(self->fields);
-    Py_XDECREF(self->by_name);
-    Py_XDECREF(self->name);
-    Py_XDECREF(self->schema_obj);
-    PyObject_Del(self);
+    PyObject_GC_Del(self);
 }
 
 static PyObject *
@@ -2264,11 +2319,12 @@ MessageType_decode(MessageType *self, PyObject *args)
         PyErr_SetString(PyExc_ValueError, "message is too large");
         return NULL;
     }
-    m = PyObject_New(Message, &MessagePyType);
+    m = PyObject_GC_New(Message, &MessagePyType);
     if (m == NULL) {
         Py_DECREF(buffer);
         return NULL;
     }
+    PyObject_GC_Track(m);
     m->mtype = (PyObject *)self;
     Py_INCREF(self);
     m->buffer = buffer;
@@ -2335,7 +2391,7 @@ make_message(PyObject *schema_obj, const pbw_descriptor *desc, PyObject *cache)
     }
 
     count = pbw_descriptor_field_count(desc);
-    mt = PyObject_New(MessageType, &MessageTypeType);
+    mt = PyObject_GC_New(MessageType, &MessageTypeType);
     if (mt == NULL) {
         Py_DECREF(key);
         return NULL;
@@ -2416,19 +2472,35 @@ make_message(PyObject *schema_obj, const pbw_descriptor *desc, PyObject *cache)
             }
         }
     }
+    PyObject_GC_Track(self);
     return self;
 }
 
 /* ---------------------------------------------------------------- schema */
 
+static int
+Schema_traverse(Schema *self, visitproc visit, void *arg)
+{
+    Py_VISIT(self->cache);
+    return 0;
+}
+
+static int
+Schema_clear(Schema *self)
+{
+    Py_CLEAR(self->cache);
+    return 0;
+}
+
 static void
 Schema_dealloc(Schema *self)
 {
-    Py_XDECREF(self->cache);
+    PyObject_GC_UnTrack(self);
+    Schema_clear(self);
     if (self->schema != NULL) {
         pbw_schema_free(self->schema);
     }
-    PyObject_Del(self);
+    PyObject_GC_Del(self);
 }
 
 static PyObject *
@@ -2515,7 +2587,7 @@ new_schema(const void *data, size_t len, const char *what)
         set_status(status, what);
         return NULL;
     }
-    self = PyObject_New(Schema, &SchemaType);
+    self = PyObject_GC_New(Schema, &SchemaType);
     if (self == NULL) {
         pbw_schema_free(schema);
         return NULL;
@@ -2526,6 +2598,7 @@ new_schema(const void *data, size_t len, const char *what)
         Py_DECREF(self);
         return NULL;
     }
+    PyObject_GC_Track(self);
     return (PyObject *)self;
 }
 
@@ -2597,7 +2670,9 @@ static PyTypeObject SchemaType = {
         .tp_name = "pbwire.Schema",
     .tp_basicsize = sizeof(Schema),
     .tp_dealloc = (destructor)Schema_dealloc,
-    .tp_flags = Py_TPFLAGS_DEFAULT,
+    .tp_traverse = (traverseproc)Schema_traverse,
+    .tp_clear = (inquiry)Schema_clear,
+    .tp_flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_GC,
     .tp_doc = "A FileDescriptorSet loaded into a pbwire schema.",
     .tp_methods = Schema_methods,
 };
@@ -2607,7 +2682,9 @@ static PyTypeObject MessageTypeType = {
         .tp_name = "pbwire.MessageType",
     .tp_basicsize = sizeof(MessageType),
     .tp_dealloc = (destructor)MessageType_dealloc,
-    .tp_flags = Py_TPFLAGS_DEFAULT,
+    .tp_traverse = (traverseproc)MessageType_traverse,
+    .tp_clear = (inquiry)MessageType_clear,
+    .tp_flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_GC,
     .tp_doc = "One message type of a pbwire schema.",
     .tp_methods = MessageType_methods,
     .tp_getset = MessageType_getset,

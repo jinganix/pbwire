@@ -123,6 +123,15 @@ struct pbw_field {
     uint32_t packed;
     uint32_t oneof_index;
     uint8_t is_extension;
+    /* Editions FeatureSet resolution (0 = inherit / not an editions file).
+     * presence: 1 EXPLICIT, 2 IMPLICIT, 3 LEGACY_REQUIRED (required).
+     * enum_open: 1 OPEN, 2 CLOSED (unknown enum numbers move to unknowns).
+     * msg_enc: 1 LENGTH_PREFIXED, 2 DELIMITED (group tags on the wire).
+     * Only the descriptor-set loader sets these; hand-built schemas stay 0
+     * and keep the dialect-wide behavior. */
+    uint8_t presence;
+    uint8_t enum_open;
+    uint8_t msg_enc;
     pbw_type type;
     pbw_label label;
     pbw_descriptor *sub;
@@ -150,11 +159,37 @@ struct pbw_enum_value {
     int32_t number;
 };
 
+/* One rpc method: resolved names only, no transport. Streaming flags are
+ * plain ints (0/1) so bindings read them without an enum. */
+struct pbw_method {
+    char *name;
+    char *input_type;  /* fully qualified, no leading dot */
+    char *output_type; /* fully qualified, no leading dot */
+    int client_streaming;
+    int server_streaming;
+};
+
+/* One service: the ordered method list from ServiceDescriptorProto. */
+struct pbw_service {
+    char *name; /* fully qualified, no leading dot ("pkg.Service") */
+    pbw_method *methods;
+    size_t method_count;
+    pbw_schema *schema;
+};
+
 struct pbw_descriptor {
     char *name;
     int is_enum;
     /* proto3/editions semantics: open enums, no required enforcement */
     int proto3;
+    /* MessageSet wire format (MessageOptions.message_set_wire_format):
+     * group items decode into their extension fields instead of staying
+     * unknown. Only the descriptor-set loader sets this. */
+    int is_messageset;
+    /* Editions file (FileDescriptorProto.edition value, e.g. 1000 for
+     * EDITION_2023); 0 for syntax proto2/proto3 files and hand-built
+     * schemas. Field FeatureSet overrides only exist when this is set. */
+    int edition;
     pbw_schema *schema;
     size_t field_count;
     pbw_field *fields; /* sorted by number after link */
@@ -192,6 +227,12 @@ struct pbw_schema {
     pbw_descriptor **descs;
     size_t count;
     size_t cap;
+    struct pbw_service **services;
+    size_t service_count;
+    size_t service_cap;
+    /* Edition of the file currently being loaded (0 = syntax proto2/proto3);
+     * descriptors copy it at creation, like the proto3 dialect below. */
+    int edition;
     int linked;
     /* Set once a link has succeeded: field counts can no longer change, so a
      * message's value slots always match its descriptor. */
@@ -349,9 +390,7 @@ void pbw_buf_init_fixed(pbw_buf *buf, void *data, size_t cap);
 void pbw_buf_free(pbw_buf *buf);
 /* Grows buf so that `extra` more bytes fit; capacity survives across calls. */
 int pbw_buf_reserve(pbw_buf *buf, size_t extra);
-void pbw_write_le32(uint8_t *out, uint32_t value);
 uint32_t pbw_read_le32(const uint8_t *in);
-uint64_t pbw_read_le64(const uint8_t *in);
 
 /* arena.c */
 void *pbw_arena_alloc_slow(pbw_arena *arena, size_t size);
@@ -388,8 +427,6 @@ void pbw_arena_free(pbw_arena *arena);
 size_t pbw_arena_used(const pbw_arena *arena);
 
 /* decode.c / encode.c */
-pbw_status pbw_decode_arena(pbw_arena *arena, const pbw_descriptor *desc,
-                            const void *buf, size_t len, pbw_message **out);
 /* Same with an explicit nesting cap (PBW_MAX_DEPTH when limits are default). */
 pbw_status pbw_decode_arena_lim(pbw_arena *arena, const pbw_descriptor *desc,
                                 const void *buf, size_t len, uint32_t dlim,
@@ -452,14 +489,13 @@ int pbw_value_init_bytes(pbw_value *value, pbw_arena *arena, const void *data,
                          size_t len);
 /* Copies value into the field slot and marks it present (decoder storage). */
 void pbw_message_put(pbw_message *msg, size_t index, const pbw_value *value);
-pbw_value *pbw_value_new_list_a(pbw_arena *arena);
-pbw_value *pbw_value_new_uint_a(pbw_arena *arena, uint64_t bits);
+pbw_value *
+pbw_value_new_uint_a(pbw_arena *arena, uint64_t bits);
 pbw_value *pbw_value_new_bytes_a(pbw_arena *arena, const void *data,
                                  size_t len);
 pbw_value *pbw_value_new_message_a(pbw_arena *arena, pbw_message *msg);
 pbw_message *pbw_message_new_a(pbw_arena *arena, const pbw_descriptor *desc);
 pbw_value *pbw_message_list_for(pbw_message *msg, const pbw_field *field);
-pbw_value *pbw_value_new_list(void);
 /* Appends item to list; the items array comes from `arena` when it is not
  * NULL. Takes ownership of item. */
 int pbw_value_list_push(pbw_value *list, pbw_value *item, pbw_arena *arena);
@@ -478,13 +514,44 @@ int pbw_message_store(pbw_message *msg, const pbw_field *field,
 int pbw_is_packable(pbw_type type);
 uint32_t pbw_expected_wire_type(pbw_type type);
 
+/* A MessageSet item on the encode path: a singular message extension of a
+ * message_set_wire_format parent travels as one group item, not as its own
+ * field number. */
+static inline int
+pbw_is_messageset_item(const pbw_field *field, const pbw_message *msg)
+{
+    return msg->desc->is_messageset && field->is_extension &&
+           field->type == PBW_TYPE_MESSAGE &&
+           field->label != PBW_LABEL_REPEATED;
+}
+
 /* A proto2 (closed) enum rejects unknown numbers: the reference parsers move
- * them into the unknown fields instead of the field. */
+ * them into the unknown fields instead of the field. Editions may close one
+ * enum field (or one enum type) in an otherwise open file; the per-field
+ * override wins, otherwise the enum type's dialect decides. */
 static inline int
 pbw_enum_is_closed(const pbw_field *field)
 {
+    if (field->enum_open == 2) {
+        return 1;
+    }
+    if (field->enum_open == 1) {
+        return 0;
+    }
     return field->type == PBW_TYPE_ENUM && field->sub != NULL &&
            !field->sub->proto3;
+}
+
+/* A field whose absence fails decoding (PBW_ERR_REQUIRED). Proto2 spells it
+ * with the REQUIRED label; editions spell it with field_presence =
+ * LEGACY_REQUIRED (the label stays OPTIONAL there, by spec). */
+static inline int
+pbw_field_is_required(const pbw_field *field, const pbw_descriptor *msg)
+{
+    if (field->label == PBW_LABEL_REQUIRED && !msg->proto3) {
+        return 1;
+    }
+    return msg->edition != 0 && field->presence == 3;
 }
 
 #endif /* PBWIRE_INTERNAL_H */

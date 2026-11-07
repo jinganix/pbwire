@@ -132,17 +132,69 @@ run_frame(const uint8_t *buf, size_t len, unsigned frame)
     printf("len=%zu\n", len);
 }
 
+/* JSON mode (`fuzz_decode json < file`): the bytes are parsed as the JSON
+ * mapping of the built-in Fuzz tree. Text mode (`fuzz_decode text`) does
+ * the same through the text format. Both exit 0 unless ASan/UBSan traps. */
+static void
+run_json_frame(const char *text, size_t len, unsigned frame)
+{
+    pbw_message *msg = NULL;
+    pbw_status st = pbw_json_parse(g_msg, text, len, &msg);
+
+    printf("[%u] json=%d len=%zu\n", frame, (int)st, len);
+    pbw_message_free(msg);
+}
+
+static void
+run_text_frame(const char *text, size_t len, unsigned frame)
+{
+    pbw_message *msg = NULL;
+    pbw_status st = pbw_text_parse(g_msg, text, len, &msg);
+
+    printf("[%u] text=%d len=%zu\n", frame, (int)st, len);
+    pbw_message_free(msg);
+}
+
+/* Descriptor mode (`fuzz_decode desc < set.desc`): every frame is fed to
+ * the bounded descriptor loader. Exit 0 unless ASan/UBSan traps. */
+static void
+run_desc_frame(const uint8_t *buf, size_t len, unsigned frame)
+{
+    pbw_schema *schema = NULL;
+    pbw_limits lim = {1024 * 1024, 64};
+    pbw_status st =
+        pbw_descriptor_set_load_limits(buf, len, &lim, &schema);
+
+    printf("[%u] desc=%d len=%zu\n", frame, (int)st, len);
+    pbw_schema_free(schema);
+}
+
 /* Stdin is a run of frames: [u16 LE length][payload]*. A bare payload
  * without a length header is one frame, so `... < raw.bin` keeps working. */
 int
-main(void)
+main(int argc, char **argv)
 {
     static uint8_t input[1 << 20];
     size_t total = fread(input, 1, sizeof(input), stdin);
     size_t pos = 0;
     unsigned frame = 0;
 
+    if (argc > 1 && strcmp(argv[1], "desc") == 0) {
+        /* No length header here: one file is one frame. */
+        run_desc_frame(input, total, 0);
+        return 0;
+    }
     build_schema();
+    if (argc > 1 && strcmp(argv[1], "json") == 0) {
+        run_json_frame((const char *)input, total, 0);
+        pbw_schema_free(g_schema);
+        return 0;
+    }
+    if (argc > 1 && strcmp(argv[1], "text") == 0) {
+        run_text_frame((const char *)input, total, 0);
+        pbw_schema_free(g_schema);
+        return 0;
+    }
     if (total >= 2) {
         size_t probe = (size_t)input[0] | ((size_t)input[1] << 8);
         if (probe + 2 <= total) {

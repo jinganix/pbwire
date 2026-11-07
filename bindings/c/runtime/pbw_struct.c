@@ -627,6 +627,39 @@ sb_varint(sbuf *b, uint64_t value)
     b->len = (size_t)(put_varint(b->data + b->len, value) - b->data);
 }
 
+/* A width-by-width member copy has to go through the matching integer type:
+ * `memcpy(&u64, member, 4)` fills the high half of the u64 on a big-endian
+ * host, where the value belongs in the low half. On little-endian these
+ * compile to the same single load/store. */
+static uint64_t
+ld_member(const char *p, size_t width)
+{
+    if (width == 4) {
+        uint32_t u32;
+
+        memcpy(&u32, p, 4);
+        return u32;
+    }
+    {
+        uint64_t u64;
+
+        memcpy(&u64, p, 8);
+        return u64;
+    }
+}
+
+static void
+st_member(char *p, uint64_t value, size_t width)
+{
+    if (width == 4) {
+        uint32_t u32 = (uint32_t)value;
+
+        memcpy(p, &u32, 4);
+        return;
+    }
+    memcpy(p, &value, 8);
+}
+
 static void
 sb_fixed(sbuf *b, uint64_t value, size_t width)
 {
@@ -754,9 +787,7 @@ enc_scalars(const sc_entry *e, sbuf *b, const char *data, size_t n)
             size_t mark = sb_len_begin(b, e->fnum);
 
             for (j = 0; j < n && b->status == PBW_OK; j++) {
-                uint64_t bits = 0;
-
-                memcpy(&bits, data + j * e->elem, width);
+                uint64_t bits = ld_member(data + j * e->elem, width);
                 if (!sb_reserve(b, width)) {
                     return;
                 }
@@ -766,9 +797,7 @@ enc_scalars(const sc_entry *e, sbuf *b, const char *data, size_t n)
             return;
         }
         for (j = 0; j < n; j++) {
-            uint64_t bits = 0;
-
-            memcpy(&bits, data + j * e->elem, width);
+            uint64_t bits = ld_member(data + j * e->elem, width);
             if (!sb_reserve(b, 16)) {
                 return;
             }
@@ -1089,10 +1118,10 @@ enc_msg(const sc_plan *p, sbuf *b, const char *base, unsigned depth)
             }
             /* No capacity check: tail[i] covers tag plus value. */
             if ((op & SC_OP_MASK) >= SC_OP_F32) {
-                uint64_t bits = 0;
+                uint64_t bits;
                 size_t width = (op & SC_OP_MASK) == SC_OP_F32 ? 4 : 8;
 
-                memcpy(&bits, v, width);
+                bits = ld_member(v, width);
                 memcpy(out, e->tag, sizeof(e->tag));
                 out += e->taglen;
                 out = out_fixed(out, bits, width);
@@ -1700,7 +1729,7 @@ dec_msg(const sc_plan *p, rdr *r, char *base, pbw_struct_arena *a,
                         if (slot == NULL) {
                             return PBW_ERR_NOMEM;
                         }
-                        memcpy(slot, &value, width);
+                        st_member(slot, value, width);
                     }
                 } else if (wt == e->wire) {
                     char *slot;
@@ -1712,7 +1741,7 @@ dec_msg(const sc_plan *p, rdr *r, char *base, pbw_struct_arena *a,
                     if (slot == NULL) {
                         return PBW_ERR_NOMEM;
                     }
-                    memcpy(slot, &value, width);
+                    st_member(slot, value, width);
                 } else if (!rd_skip(r, fnum, wt, depth)) {
                     return PBW_ERR_INVALID;
                 }
@@ -1727,7 +1756,7 @@ dec_msg(const sc_plan *p, rdr *r, char *base, pbw_struct_arena *a,
             if (!rd_fixed(r, &value, width)) {
                 return PBW_ERR_INVALID;
             }
-            memcpy(v, &value, width);
+            st_member(v, value, width);
             if (e->has != 0) {
                 *(int *)(base + e->has) = 1;
             }

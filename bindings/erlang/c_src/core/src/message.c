@@ -258,7 +258,7 @@ is_initialized(const pbw_message *msg, uint32_t depth)
         const pbw_value *value = &msg->values[i];
 
         if (!pbw_msg_present(msg, i)) {
-            if (!msg->desc->proto3 && field->label == PBW_LABEL_REQUIRED) {
+            if (pbw_field_is_required(field, msg->desc)) {
                 return 0;
             }
             continue;
@@ -559,25 +559,6 @@ pbw_value *
 pbw_value_new_message(pbw_message *msg)
 {
     return pbw_value_new_message_a(NULL, msg);
-}
-
-pbw_value *
-pbw_value_new_list_a(pbw_arena *arena)
-{
-    pbw_value *value = pbw_value_new_a(arena, PBW_VALUE_LIST);
-
-    if (value != NULL) {
-        value->as.list.items = NULL;
-        value->as.list.len = 0;
-        value->as.list.cap = 0;
-    }
-    return value;
-}
-
-pbw_value *
-pbw_value_new_list(void)
-{
-    return pbw_value_new_list_a(NULL);
 }
 
 int

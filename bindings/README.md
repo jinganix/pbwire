@@ -13,6 +13,10 @@ bindings/<lang>/
     conformance/    how the official suite covers this binding
 ```
 
+`bindings/embedded` is the one exception: it is a pass-through facade over the C
+core, so it ships `runtime/`, `tests/` and `examples/` only. The core's bench and
+conformance suite already cover the wire it speaks.
+
 The top-level `codegen/` holds one protoc plugin (`protoc-gen-pbwire`) that
 emits a **generated message model** for every language from the same descriptor:
 fields with the host language's types, names and presence flags, plus
@@ -71,6 +75,15 @@ anything else:
   Clojure are the same move: Scala adds an idiomatic DSL over the Java
   runtime, Clojure adds persistent-map in/out over plain interop — one Java
   runtime for three languages, no second codec anywhere.
+- **Embedded is the C core behind a smaller surface.** `bindings/embedded`
+  ships no codec and no generated code: `pbwe_open/encode/decode` are thin
+  wrappers over `pbw_ctx`/`pbw_encode_to`, with `pbwe_encode_delimited` and
+  `pbwe_decode_delimited` covering length-prefixed frames the same way, so a
+  firmware image links the same static `libpbwire.a` and loads the same
+  `FileDescriptorSet`. Its budget is the box, not the language: `retain_cap`
+  plus `pbwe_set_limits` bound what a decode may allocate. Being a pass-through,
+  it has no benchmarks or conformance entry of its own; the core's cover the
+  wire and `make test` covers the facade.
 - **Erlang needs neither.** gpb already is that plugin: `gpb_compile` /
   `protoc-erl` generates the record definitions plus `get_msg_defs/0`, and
   `pbwire:load_cache/1` consumes exactly that. Adding a second
@@ -94,6 +107,7 @@ the full tables are.
 |---|---|---|---|
 | C | dynamic messages cost a libprotobuf dependency, or hand-written wire code per message | struct codec compiled from layout tables over the shared core, schema loaded at run time | 1.30x / 2.31x (vs protoc C++) |
 | C++ | generated classes pin the schema at compile time; `DynamicMessage` is 10x slower | the same C runtime and header, no extra layer | 1.30x / 2.31x (vs protoc C++) |
+| Embedded | generated C codecs pin the schema at compile time and need a struct per message; a full runtime drags a heap in | static-memory facade over the same core: one box, one arena, caller-owned encode buffers, input bounded by `pbw_limits` | no separate bench — the facade is a pass-through, so the C row and the core bench measure the wire it speaks |
 | Python | `google.protobuf` needs a generated module per `.proto`, and dict conversion is seconds at 75 KB | CPython extension: dict↔wire in C, `decode()` returns a parsed message that keeps one slice per wire field | 6.91x / 1.70x (vs upb) |
 | Ruby | the `google-protobuf` gem materializes and re-encodes every field; a Fiddle bridge costs ~3 µs per downcall | C extension over the core: builder tree for writes, validating wire view for reads | 1.21x / 1.68x (vs the gem) |
 | Java | JNI glue, or protobuf-java re-deriving sizes before every write | pure-Java codec: columnar values, lazy decode, `Unsafe` stores (no JNI, no native lib, no generator) | 1.17x / 2.36x (vs protobuf-java) |
@@ -169,23 +183,26 @@ types of its own.
 
 A context's resident ceiling is `retain_cap` (1 MiB default) for the arena
 head plus the encode buffer; anything above it is freed on reset instead of
-kept (see `../docs/guide.md#reuse-one-arena`). No binding currently exposes
-`pbw_ctx_set_retain_cap` or `pbw_pool_*`, so every `pbw_ctx` below runs at
-the default cap and the table gives the ceiling plus the workaround.
+kept (see `../docs/guide.md#reuse-one-arena`). Java, Erlang and Elixir expose
+it (`GenericCodec`/`PbCodec.setRetainCap`, `pbwire:set_opts([{retain_cap,
+Bytes}])`, `Pbwire.load_schema(mods, retain_cap: Bytes)`); every other
+`pbw_ctx` below runs at the default cap and the table gives the ceiling
+plus the workaround. No binding exposes `pbw_pool_*` yet.
 
 | binding | what stays resident | ceiling | rule |
 |---|---|---|---|
 | C / C++ | caller-owned `pbw_struct_buf` (keeps capacity) + `pbw_struct_arena` (each decode resets it) | largest message handled | an arena decode invalidates the previous tree; never `pbw_struct_free` an arena tree (`NULL` arena = per-message malloc + `pbw_struct_free`) |
+| Embedded | one `pbw_ctx` inside the box (arena + encode buffer, reset per decode, `retain_cap` caps it) + the loaded schema | `retain_cap` | the next decode invalidates the previous tree; `pbwe_set_limits` rejects oversized input before it allocates; `pbwe_open`'s descriptor limit bounds the startup load; `pbwe_close` releases both |
 | Python | own C codec, no `pbw_ctx`; a decoded `Message` pins the whole input buffer | retained `Message`s | drop the `Message` after materializing (`to_dict()` output does not free it) |
 | Ruby | builder = C tree, `encode` writes straight into the returned `String`; a wire view pins the bytes | retained views | same as Python: `set` on a view raises, and holding a view holds its bytes |
-| Java / Kotlin | one `ThreadLocal` workspace: a reusable encode buffer + a string-image cache, never freed until thread exit | live + dead threads x largest message each | thread-per-request plus one xlarge message pins its buffer per dead thread; keep request threads off the binding or reuse a fixed pool |
+| Java / Kotlin | one `ThreadLocal` workspace: a reusable encode buffer (capped by `setRetainCap`, 1 MiB default) + a fixed 8-slot string-image cache | live + dead threads x capped buffer each | lower the cap for thread-per-request pools, or reuse a fixed pool |
 | Node | single-threaded: one reusable encode `pbw_ctx` per message type (freed with the type) + decoded message = JS `Buffer` + slice array | types x largest encoding each + retained messages | drop decoded messages; a type's buffer stays at its largest encoding |
 | Objective-C / Dart / Rust / C# / Go / Swift / Zig / F# / Julia | plain `pbw_encode`/`pbw_decode` per call (`NSData` takes the malloc'd buffer over with no copy; Go passes the input slice straight in; Julia holds input bytes via finalizers) | none, except retained Go roots / Julia messages | nothing to tune; Go roots need an explicit `Close`, Julia messages a `close()` |
 | PHP | built trees live in one `pbw_ctx` each (freed with the message, never decoded into so always mutable); decoded trees are single-malloc arenas | retained messages | drop the message; nested views hold the parent, `close()` frees either kind |
-| Erlang | one `pbw_ctx` per scheduler + a geometrically grown encode buffer, never shrunk (see its README FAQ) | schedulers x largest message | bounded by the scheduler count; keep individual messages reasonably sized |
+| Erlang | one `pbw_ctx` per scheduler + a geometrically grown encode buffer, capped by `set_opts([{retain_cap, Bytes}])` (1 MiB default) | schedulers x capped buffer each | bounded by the scheduler count; lower the cap when messages vary wildly in size |
 | Lua | one `pbw_ctx` per schema (arena + encode buffer, reset per call; builders own plain trees) | largest message handled | nothing to tune; idle schemas keep up to the retain cap |
 | Scala / Clojure | one `ThreadLocal` workspace inherited from the Java runtime (reusable buffer, never freed until thread exit) | live + dead threads x largest message each | same rule as Java: fixed pool, not thread-per-request |
-| Elixir | one `pbw_ctx` per scheduler via the shared NIF (BEAM-global schema cache, like Erlang) | schedulers x largest message | same rule as Erlang |
+| Elixir | one `pbw_ctx` per scheduler via the shared NIF (BEAM-global schema cache, like Erlang) | schedulers x capped buffer each | same rule as Erlang (`load_schema(mods, retain_cap: Bytes)`) |
 | Julia | `ccall` per call; decoded messages hold the input bytes via finalizers | retained messages | drop the message; `close()` frees either kind |
 | R | built trees live in one `pbw_ctx` each; decoded trees are single-malloc arenas | retained messages | drop the message; nested views hold the parent, builders anchor the schema |
 

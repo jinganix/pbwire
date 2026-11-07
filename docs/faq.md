@@ -7,6 +7,7 @@
 - [Can I use it from another language?](#can-i-use-it-from-another-language)
 - [When should I *not* use pbwire?](#when-should-i-not-use-pbwire)
 - [Is it thread-safe?](#is-it-thread-safe)
+- [Does it work on 32-bit and big-endian hosts?](#does-it-work-on-32-bit-and-big-endian-hosts)
 - [What happens to fields the schema does not declare?](#what-happens-to-fields-the-schema-does-not-declare)
 - [Why does it walk a descriptor instead of compiling field offsets in?](#why-does-it-walk-a-descriptor-instead-of-compiling-field-offsets-in)
 - [Can I decode untrusted bytes with it?](#can-i-decode-untrusted-bytes-with-it)
@@ -103,6 +104,16 @@ There is no global state. A schema or message must be confined to one thread by
 the caller, and one `pbw_ctx` per thread keeps arena reuse local. No locks, no
 thread-local buffers.
 
+### Does it work on 32-bit and big-endian hosts?
+
+Yes, and CI proves it: the whole gate runs with `-m32` (ILP32) on an x86_64
+runner, and the dependency-free suites run on s390x under `qemu-user` for
+big-endian. Both jobs exist because they found real bugs the little-endian
+64-bit default hides — a tag word stored with a 32-bit write, floats read
+from the wrong half of a 64-bit bit pattern, and fixed-width struct members
+copied through a `uint64_t`. See
+[testing.md](testing.md#6-environments-a-laptop-cannot-cover).
+
 ### What happens to fields the schema does not declare?
 
 They are preserved as raw wire bytes and re-emitted after the known fields, in
@@ -127,8 +138,10 @@ reasons are in [BENCHMARKS.md](../BENCHMARKS.md).
 Yes: lengths are bounds-checked, field number 0 and wire types above 5 are
 rejected, nesting is capped at 256 (`PBW_MAX_DEPTH`), and every failure returns a
 `pbw_status` instead of aborting. `pbw_limits` lowers the caps per call
-(`max_bytes`, `max_depth`) for stricter hosts. Descriptors, by contrast, are
-trusted input — see [design.md](design.md).
+(`max_bytes`, `max_depth`) for stricter hosts. Descriptor sets stay trusted
+input, but `pbw_descriptor_set_load_limits()` applies the same two caps to
+the set itself (oversized/hostile sets fail with `PBW_ERR_LIMIT`) for hosts
+that accept sets over the network — see [design.md](design.md).
 
 ### How do I load a `.proto` file at runtime?
 
@@ -136,6 +149,11 @@ Convert it to a `FileDescriptorSet` once (`protoc --include_imports
 --descriptor_set_out`, `buf build -o`, or the optional `pbwire-protoc` library),
 then call `pbw_descriptor_set_load()` and `pbw_schema_link()` is already done for
 you. All imported files must be in the set. See [guide.md](guide.md).
+
+The core will never parse `.proto` text directly — that is a permanent
+decision, not a gap: the `FileDescriptorSet` is the schema format. For
+inspection and debugging use the official CLI (`protoc --decode`,
+`protoc --encode`); no pbwire CLI is planned.
 
 ### Do I have to recompile when a `.proto` changes?
 

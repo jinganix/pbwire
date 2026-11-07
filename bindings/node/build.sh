@@ -33,9 +33,12 @@ Darwin) link="-dynamiclib -undefined dynamic_lookup" ;;
 esac
 
 mkdir -p "$here/build"
+# PBW_EXTRA_CFLAGS appends to the build (empty by default): sanitizer
+# builds pass -fsanitize=address without touching the default flags.
 # shellcheck disable=SC2086 # $link is a flag list
 $cc -std=c99 -O2 -fPIC -Wall -Wextra \
     -I"$NODE_INCLUDE" -I"$root/include" \
+    ${PBW_EXTRA_CFLAGS:-} \
     $link -o "$here/build/pbwire_node.node" \
     "$here/runtime/addon.c" "$root/build/libpbwire.a"
 

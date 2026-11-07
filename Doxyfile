@@ -1,0 +1,36 @@
+# API reference generation: the public headers are the source of truth, and
+# `make api-docs` renders them to HTML (CI uploads the artifact).
+#
+#   apt install doxygen   # or brew install doxygen
+#   make api-docs         # -> build/doxygen/html/index.html
+#
+# Only the public headers are processed: src/ is internal, and doctool output
+# for it would promise stability the ABI does not carry.
+
+PROJECT_NAME           = "pbwire"
+PROJECT_BRIEF          = "Dynamic Protobuf runtime for C"
+OUTPUT_DIRECTORY       = build/doxygen
+INPUT                  = include/pbwire.h \
+                         include/pbwire-protoc/importer.h \
+                         include/pbwire-protoc/descriptor_set.h \
+                         include/pbwire-protoc/error.h
+FILE_PATTERNS          = *.h
+RECURSIVE              = NO
+EXTRACT_ALL            = YES
+EXTRACT_STATIC         = NO
+JAVADOC_AUTOBRIEF      = YES
+QT_AUTOBRIEF           = YES
+OPTIMIZE_OUTPUT_FOR_C  = YES
+GENERATE_HTML          = YES
+GENERATE_LATEX         = NO
+GENERATE_XML           = NO
+SEARCHENGINE           = YES
+SOURCE_BROWSER         = NO
+INLINE_SOURCES         = NO
+HAVE_DOT               = NO
+REFERENCED_BY_RELATION = NO
+REFERENCES_RELATION    = NO
+WARN_IF_UNDOCUMENTED   = YES
+WARN_IF_DOC_ERROR      = YES
+WARN_AS_ERROR          = NO
+QUIET                  = YES

@@ -15,6 +15,9 @@ fi
 echo "== versions =="
 ./scripts/sync-versions.sh --check
 
+echo "== llms.txt sync =="
+./scripts/check-llms.sh
+
 echo "== build + test =="
 make -s test
 echo "check: OK"
