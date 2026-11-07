@@ -109,7 +109,10 @@ coverage:
 	./build/test_nofail
 	for f in src/*.c; do b=$$(basename $$f .c); gcov --object-directory build -o build/nofail_$$b.o $$f > /dev/null; done
 	mv ./*.gcov build/gcov-nofail/
-	python3 scripts/gcov-merge.py --floor $(COVFLOOR) build/gcov-normal build/gcov-nofail build/gcov-merged $(SRC) | tee build/coverage.txt; st=$${PIPESTATUS[0]}; rm -f build/*.o build/*.gcda build/*.gcno; exit $$st
+	python3 scripts/gcov-merge.py --floor $(COVFLOOR) \
+		build/gcov-normal build/gcov-nofail build/gcov-merged $(SRC) \
+		> build/coverage.txt; st=$$?; cat build/coverage.txt; \
+		rm -f build/*.o build/*.gcda build/*.gcno; exit $$st
 
 # Release dry-run: everything `git tag vX.Y.Z` assumes, without tagging.
 release-check:
@@ -151,6 +154,7 @@ test: $(TEST_BIN) $(MALFORMED_BIN) $(NOFAIL_BIN) $(EMBEDDED_NOFAIL_BIN) $(THREAD
 # API reference (Doxygen): renders the public headers to HTML. Needs doxygen
 # installed; CI uploads the artifact and nightly can publish it.
 api-docs:
+	mkdir -p build/doxygen
 	doxygen Doxyfile
 
 # Cross-architecture gate (CI): big-endian core + suites under qemu-user.

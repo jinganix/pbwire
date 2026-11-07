@@ -15,6 +15,8 @@ if(MSVC)
     # \u00e9 in narrow literals must compile to UTF-8 bytes, as they do
     # under GCC/Clang, or text/JSON goldens diverge on Windows.
     add_compile_options(/utf-8)
+    # fopen is used for descriptor-set files; MSVC flags it as deprecated.
+    add_compile_definitions(_CRT_SECURE_NO_WARNINGS)
 else()
     add_compile_options(-Wall -Wextra -Werror -pedantic)
 endif()

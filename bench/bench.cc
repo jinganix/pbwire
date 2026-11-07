@@ -26,9 +26,18 @@
 #include "google/protobuf/descriptor.pb.h"
 #include "google/protobuf/dynamic_message.h"
 #include "google/protobuf/message.h"
-#include "google/protobuf/json/json.h"
 #include "google/protobuf/text_format.h"
 #include "google/protobuf/unknown_field_set.h"
+#if __has_include(<google/protobuf/json/json.h>)
+#include "google/protobuf/json/json.h"
+#else
+/* Older libprotobuf packages ship only util/json_util.h. */
+#include "google/protobuf/util/json_util.h"
+namespace google::protobuf::json {
+using google::protobuf::util::JsonStringToMessage;
+using google::protobuf::util::MessageToJsonString;
+} // namespace google::protobuf::json
+#endif
 #include "msg.pb.h"
 #include "msg2.pb.h"
 #include "pbwire.h"
