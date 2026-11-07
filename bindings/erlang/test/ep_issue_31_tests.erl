@@ -9,9 +9,12 @@
 % A 100k-value enum takes seconds to link; the default 5 s EUnit timeout
 % flakes on slower runners.
 issue_31_test_() ->
-    {timeout, 60, fun issue_31_test/0}.
+    {timeout, 60, fun issue_31/0}.
 
-issue_31_test() ->
+%% Not named issue_31_test/0: EUnit auto-discovers *_test/0 functions with the
+%% default 5 s timeout, so the same workload ran twice and the second run timed
+%% out whenever the machine took longer than 5 s to link the enum.
+issue_31() ->
     Defs = [
         {{enum, very_long}, defs_enum_gen(100000, [])}
     ],

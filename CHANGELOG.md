@@ -111,6 +111,12 @@ binding manifest.
   tree deep enough to pass `pbw_message_new`'s checks could overflow the stack
   in `pbw_json_print()`. It now reports `PBW_ERR_LIMIT` at the same depth as
   every other formatter.
+- Elixir: `pbwire_elixir` never reached Hex in any release, because
+  `mix hex.publish` runs `mix docs` first and the `docs` task aborts when
+  ExDoc is not a dependency. ExDoc is a `only: :dev, runtime: false`
+  dependency now, so the published package carries HexDocs without costing
+  consumers a dependency. The nested `else:` inside `Pbwire.Schema.nif_opts/1`
+  is parenthesized (Elixir 1.20 warns about the keyword ambiguity).
 - Python: `Schema.load()` / `Schema.from_file()` leaked the partially built
   schema `pbw_descriptor_set_load()` hands back on failure, and reported only
   "invalid data" instead of the loader's reason (every other binding already
