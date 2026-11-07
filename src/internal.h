@@ -661,8 +661,9 @@ pbw_value_new_bytes_a(pbw_arena *arena, const void *data, size_t len)
         return value;
     }
     /* Arena: the value struct and its payload are one bump, so a decoded
-     * string or bytes item costs one allocation instead of two. sizeof is a
-     * multiple of 8, so the payload that follows stays aligned. */
+     * string or bytes item costs one allocation instead of two. The payload
+     * is a byte string, so it needs no stronger alignment than the arena
+     * already provides. */
     if (len > SIZE_MAX - sizeof(*value) - 8) {
         return NULL;
     }

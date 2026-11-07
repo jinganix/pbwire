@@ -533,6 +533,9 @@ read_packed(reader *r, const pbw_field *field, pbw_message *msg, int closed,
     uint32_t batched = 0;
     uint32_t len;
     uint32_t cap;
+    /* A closed enum drops items whose number it does not know, so a batched
+     * node block would hold nodes nothing uses: keep that case per-item. */
+    int batchable;
 
     status = read_length(r, &data, &data_len);
     if (status != PBW_OK) {
@@ -545,6 +548,7 @@ read_packed(reader *r, const pbw_field *field, pbw_message *msg, int closed,
         /* An empty packed field stays absent: no list is created for it. */
         return PBW_OK;
     }
+    batchable = !(closed && pbw_enum_is_closed(field));
     /* Fixed-width items divide the length exactly, so the count is known
      * before the first item: reserve it and skip the push growth chain.
      * Varint runs count their items the same way: every value ends on a
@@ -572,9 +576,10 @@ read_packed(reader *r, const pbw_field *field, pbw_message *msg, int closed,
             return PBW_ERR_NOMEM;
         }
         /* The scan counted the items: one bump for every node of this run
-         * instead of one allocation per item. A closed enum keeps fewer
-         * nodes than this and simply leaves the rest unused. */
-        if (n > 0 && n <= UINT32_MAX && n <= SIZE_MAX / sizeof(pbw_value)) {
+         * instead of one allocation per item. A closed enum is excluded
+         * above, so every node allocated here is used. */
+        if (batchable && n > 0 && n <= UINT32_MAX &&
+            n <= SIZE_MAX / sizeof(pbw_value)) {
             batch = (pbw_value *)pbw_arena_alloc(
                 msg->arena, n * sizeof(pbw_value));
         }
@@ -589,14 +594,21 @@ read_packed(reader *r, const pbw_field *field, pbw_message *msg, int closed,
                         field->type == PBW_TYPE_DOUBLE)
                            ? 8u
                            : 4u;
+        size_t count = data_len / width;
 
         if (!pbw_value_list_reserve(
-                vlist,
-                data_len / width > UINT32_MAX
-                    ? UINT32_MAX
-                    : (uint32_t)(data_len / width),
+                vlist, count > UINT32_MAX ? UINT32_MAX : (uint32_t)count,
                 msg->arena)) {
             return PBW_ERR_NOMEM;
+        }
+        /* Fixed-width items need no scan: the payload length divides exactly,
+         * so the node block comes from one bump like a varint run's. A
+         * truncated tail fails in read_scalar() before it can index past the
+         * block: each successful read consumes `width` bytes. */
+        if (batchable && count > 0 && count <= UINT32_MAX &&
+            count <= SIZE_MAX / sizeof(pbw_value)) {
+            batch = (pbw_value *)pbw_arena_alloc(
+                msg->arena, count * sizeof(pbw_value));
         }
     }
     items = vlist->as.list.items;
@@ -605,8 +617,7 @@ read_packed(reader *r, const pbw_field *field, pbw_message *msg, int closed,
     sub.p = data;
     sub.end = data + data_len;
     {
-        int closed_enum =
-            closed && pbw_enum_is_closed(field); /* loop-invariant */
+        int closed_enum = !batchable; /* loop-invariant */
         while (sub.p < sub.end) {
             const uint8_t *item = sub.p;
             uint64_t bits;
