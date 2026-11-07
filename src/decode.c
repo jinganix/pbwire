@@ -529,6 +529,8 @@ read_packed(reader *r, const pbw_field *field, pbw_message *msg, int closed,
     reader sub;
     pbw_value *vlist;
     pbw_value **items;
+    pbw_value *batch = NULL;
+    uint32_t batched = 0;
     uint32_t len;
     uint32_t cap;
 
@@ -568,6 +570,13 @@ read_packed(reader *r, const pbw_field *field, pbw_message *msg, int closed,
                 vlist, n > UINT32_MAX ? UINT32_MAX : (uint32_t)n,
                 msg->arena)) {
             return PBW_ERR_NOMEM;
+        }
+        /* The scan counted the items: one bump for every node of this run
+         * instead of one allocation per item. A closed enum keeps fewer
+         * nodes than this and simply leaves the rest unused. */
+        if (n > 0 && n <= UINT32_MAX && n <= SIZE_MAX / sizeof(pbw_value)) {
+            batch = (pbw_value *)pbw_arena_alloc(
+                msg->arena, n * sizeof(pbw_value));
         }
     } else if (field->type == PBW_TYPE_FIXED32 ||
                field->type == PBW_TYPE_SFIXED32 ||
@@ -626,9 +635,16 @@ read_packed(reader *r, const pbw_field *field, pbw_message *msg, int closed,
                 }
                 continue;
             }
-            node = pbw_value_new_uint_a(msg->arena, bits);
-            if (node == NULL) {
-                return PBW_ERR_NOMEM;
+            if (batch != NULL) {
+                node = &batch[batched++];
+                node->kind = PBW_VALUE_UINT;
+                node->flags = PBW_VF_ARENA;
+                node->as.u64 = bits;
+            } else {
+                node = pbw_value_new_uint_a(msg->arena, bits);
+                if (node == NULL) {
+                    return PBW_ERR_NOMEM;
+                }
             }
             if (len == cap) {
                 /* Same doubling as pbw_value_list_push, through the shared

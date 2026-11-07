@@ -82,11 +82,29 @@ typedef struct {
     struct pbwlua_namecache *ncache;
 } pbwlua_schema;
 
+/* One prepared field (the Erlang binding's "spot"): every wire fact the
+ * encode loop needs, resolved once per descriptor, so a per-encode loop
+ * costs no pbw_field_* calls at all. */
+struct pbwlua_fentry {
+    const pbw_field *field;
+    const pbw_descriptor *sub; /* message/group type, NULL otherwise */
+    const void *ptr;           /* interned key pointer, for the key check */
+    int ref;                   /* registry ref to the interned key string */
+    uint32_t number;
+    unsigned char type;  /* pbw_type */
+    unsigned char wt;    /* wire type for the tag */
+    unsigned char repeated;
+    unsigned char packed;
+};
+
 struct pbwlua_namecache {
     const pbw_descriptor *desc;
-    int *refs;
-    const void **ptrs;
+    struct pbwlua_fentry *f;
     size_t n;
+    /* Interned-key pointer -> field index, open addressing: the unknown-key
+     * check is one probe per key instead of a linear scan over n. */
+    int *idx;
+    size_t mask;
     struct pbwlua_namecache *next;
 };
 
@@ -97,6 +115,7 @@ typedef struct {
     const pbw_descriptor *desc;
     pbw_message *tree;
     int schema_ref;
+    pbwlua_schema *s; /* for the schema's reusable encode buffer */
 } pbwlua_message;
 
 static pbw_value *
@@ -886,41 +905,82 @@ pbwlua_name_cache(lua_State *L, pbwlua_schema *s,
                   const pbw_descriptor *desc, size_t n)
 {
     struct pbwlua_namecache *c;
-    for (c = s->ncache; c != NULL; c = c->next) {
+    size_t i;    for (c = s->ncache; c != NULL; c = c->next) {
         if (c->desc == desc) {
             return c;
         }
     }
     {
-        int *refs = (int *)malloc(n == 0 ? 1 : n * sizeof(*refs));
-        const void **ptrs = (const void **)malloc(n == 0 ? 1 : n * sizeof(*ptrs));
-        size_t i;
-        if (refs == NULL || ptrs == NULL) {
-            free(refs);
-            free((void *)ptrs);
+        struct pbwlua_fentry *f =
+            (struct pbwlua_fentry *)malloc(n == 0 ? 1 : n * sizeof(*f));
+        size_t done = 0;
+        if (f == NULL) {
             luaL_error(L, "pbwire: out of memory");
         }
         for (i = 0; i < n; i++) {
-            const pbw_field *f = pbw_descriptor_field_at(desc, i);
-            lua_pushstring(L, f != NULL ? pbw_field_name(f) : "");
-            ptrs[i] = lua_topointer(L, -1);
-            refs[i] = luaL_ref(L, LUA_REGISTRYINDEX);
+            const pbw_field *field = pbw_descriptor_field_at(desc, i);
+            pbw_type type;
+
+            f[i].field = field;
+            f[i].ref = LUA_NOREF;
+            f[i].ptr = NULL;
+            if (field == NULL) {
+                continue;
+            }
+            type = pbw_field_type(field);
+            lua_pushstring(L, pbw_field_name(field));
+            f[i].ptr = lua_topointer(L, -1);
+            f[i].ref = luaL_ref(L, LUA_REGISTRYINDEX);
+            f[i].number = pbw_field_number(field);
+            f[i].type = (unsigned char)type;
+            f[i].wt = (unsigned char)pbwlua_wire_type(type);
+            f[i].repeated = pbw_field_label(field) == PBW_LABEL_REPEATED;
+            f[i].sub = pbw_field_message_type(field);
+            f[i].packed = pbw_field_is_packed(field) &&
+                                  pbwlua_is_packable(type)
+                              ? 1
+                              : 0;
+            done = i + 1;
         }
         {
             struct pbwlua_namecache *nc =
                 (struct pbwlua_namecache *)malloc(sizeof(*nc));
-            if (nc == NULL) {
-                for (i = 0; i < n; i++) {
-                    luaL_unref(L, LUA_REGISTRYINDEX, refs[i]);
+            size_t cap = 2;
+            int *idx;
+
+            while (cap < n * 2) {
+                cap *= 2;
+            }
+            idx = (int *)malloc(cap * sizeof(*idx));
+            if (nc == NULL || idx == NULL) {
+                for (i = 0; i < done; i++) {
+                    if (f[i].ref != LUA_NOREF) {
+                        luaL_unref(L, LUA_REGISTRYINDEX, f[i].ref);
+                    }
                 }
-                free(refs);
-                free((void *)ptrs);
+                free(f);
+                free(nc);
+                free(idx);
                 luaL_error(L, "pbwire: out of memory");
             }
+            for (i = 0; i < cap; i++) {
+                idx[i] = -1;
+            }
+            for (i = 0; i < n; i++) {
+                if (f[i].ptr != NULL) {
+                    size_t j = ((size_t)(uintptr_t)f[i].ptr >> 4) & (cap - 1);
+
+                    while (idx[j] >= 0) {
+                        j = (j + 1) & (cap - 1);
+                    }
+                    idx[j] = (int)i;
+                }
+            }
             nc->desc = desc;
-            nc->refs = refs;
-            nc->ptrs = ptrs;
+            nc->f = f;
             nc->n = n;
+            nc->idx = idx;
+            nc->mask = cap - 1;
             nc->next = s->ncache;
             s->ncache = nc;
             return nc;
@@ -930,22 +990,22 @@ pbwlua_name_cache(lua_State *L, pbwlua_schema *s,
 
 static void
 pbwlua_write_message(lua_State *L, pbwlua_buf *b, pbwlua_schema *s,
-                     const pbw_field *field, int index, unsigned depth)
+                     const struct pbwlua_fentry *f, int index, unsigned depth)
 {
-    const pbw_descriptor *sub = pbw_field_message_type(field);
+    const pbw_descriptor *sub = f->sub;
 
     if (sub == NULL) {
         luaL_error(L, "pbwire: unresolved message type for field %s",
-                   pbw_field_name(field));
+                   pbw_field_name(f->field));
     }
     luaL_checktype(L, index, LUA_TTABLE);
-    if (pbw_field_type(field) == PBW_TYPE_GROUP) {
-        pbwlua_buf_tag(L, b, pbw_field_number(field), 3);
+    if (f->type == PBW_TYPE_GROUP) {
+        pbwlua_buf_tag(L, b, f->number, 3);
         pbwlua_encode_table(L, b, s, sub, index, depth + 1);
-        pbwlua_buf_tag(L, b, pbw_field_number(field), 4);
+        pbwlua_buf_tag(L, b, f->number, 4);
         return;
     }
-    pbwlua_buf_tag(L, b, pbw_field_number(field), 2);
+    pbwlua_buf_tag(L, b, f->number, 2);
     {
         size_t lp;
         size_t base;
@@ -979,20 +1039,19 @@ pbwlua_encode_table(lua_State *L, pbwlua_buf *b, pbwlua_schema *s,
         nc = pbwlua_name_cache(L, s, desc, nfields);
     }
     for (i = 0; i < nfields; i++) {
-        const pbw_field *field = pbw_descriptor_field_at(desc, i);
-        pbw_type type;
-        int is_repeated;
+        const struct pbwlua_fentry *f = &nc->f[i];
+        const pbw_field *field = f->field;
+        pbw_type type = (pbw_type)f->type;
+        int is_repeated = f->repeated;
 
         if (field == NULL) {
             continue;
         }
-        type = pbw_field_type(field);
-        is_repeated = pbw_field_label(field) == PBW_LABEL_REPEATED;
         /* Raw access via a cached string: lua_getfield would consult
          * __index, letting a metamethod inject values mid-encode (and
          * reenter the schema). The tree path uses lua_next (raw) for the
          * same reason. Pushing the cached string avoids re-interning. */
-        lua_rawgeti(L, LUA_REGISTRYINDEX, nc->refs[i]);
+        lua_rawgeti(L, LUA_REGISTRYINDEX, f->ref);
         lua_rawget(L, table);
         if (lua_isnil(L, -1)) {
             lua_pop(L, 1);
@@ -1000,20 +1059,19 @@ pbwlua_encode_table(lua_State *L, pbwlua_buf *b, pbwlua_schema *s,
         }
         if (!is_repeated) {
             if (type == PBW_TYPE_MESSAGE || type == PBW_TYPE_GROUP) {
-                pbwlua_write_message(L, b, s, field, lua_gettop(L), depth);
+                pbwlua_write_message(L, b, s, f, lua_gettop(L), depth);
             } else if (type == PBW_TYPE_STRING ||
                        type == PBW_TYPE_BYTES) {
                 size_t len = 0;
                 const char *data = luaL_checklstring(L, -1, &len);
 
-                pbwlua_buf_tag(L, b, pbw_field_number(field), 2);
+                pbwlua_buf_tag(L, b, f->number, 2);
                 pbwlua_buf_varint(L, b, (uint64_t)len);
                 pbwlua_buf_bytes(L, b, data, len);
             } else {
                 uint64_t bits = pbwlua_to_bits(L, field, lua_gettop(L));
 
-                pbwlua_buf_tag(L, b, pbw_field_number(field),
-                               pbwlua_wire_type(type));
+                pbwlua_buf_tag(L, b, f->number, f->wt);
                 pbwlua_put_scalar(L, b, type, bits);
             }
             lua_pop(L, 1);
@@ -1035,7 +1093,7 @@ pbwlua_encode_table(lua_State *L, pbwlua_buf *b, pbwlua_schema *s,
             if (type == PBW_TYPE_MESSAGE || type == PBW_TYPE_GROUP) {
                 for (k = 1; k <= count; k++) {
                     lua_rawgeti(L, -1, (int)k);
-                    pbwlua_write_message(L, b, s, field, lua_gettop(L), depth);
+                    pbwlua_write_message(L, b, s, f, lua_gettop(L), depth);
                     lua_pop(L, 1);
                 }
                 lua_pop(L, 1);
@@ -1056,9 +1114,8 @@ pbwlua_encode_table(lua_State *L, pbwlua_buf *b, pbwlua_schema *s,
                 lua_pop(L, 1);
                 continue;
             }
-            if (pbw_field_is_packed(field) &&
-                pbwlua_is_packable(type)) {
-                pbwlua_buf_tag(L, b, pbw_field_number(field), 2);
+            if (f->packed) {
+                pbwlua_buf_tag(L, b, f->number, 2);
                 {
                     size_t lp;
                     size_t base;
@@ -1101,8 +1158,7 @@ pbwlua_encode_table(lua_State *L, pbwlua_buf *b, pbwlua_schema *s,
                 lua_rawgeti(L, -1, (int)k);
                 bits = pbwlua_to_bits(L, field, lua_gettop(L));
                 lua_pop(L, 1);
-                pbwlua_buf_tag(L, b, pbw_field_number(field),
-                               pbwlua_wire_type(type));
+                pbwlua_buf_tag(L, b, f->number, f->wt);
                 pbwlua_put_scalar(L, b, type, bits);
             }
             lua_pop(L, 1);
@@ -1119,13 +1175,15 @@ pbwlua_encode_table(lua_State *L, pbwlua_buf *b, pbwlua_schema *s,
         }
         {
             const void *kp = lua_topointer(L, -2);
-            size_t k;
+            size_t j = ((size_t)(uintptr_t)kp >> 4) & nc->mask;
             int known = 0;
-            for (k = 0; k < nfields; k++) {
-                if (nc->ptrs[k] == kp) {
+
+            while (nc->idx[j] >= 0) {
+                if (nc->f[nc->idx[j]].ptr == kp) {
                     known = 1;
                     break;
                 }
+                j = (j + 1) & nc->mask;
             }
             if (!known) {
                 luaL_error(L, "pbwire: %s has no field %s",
@@ -1414,6 +1472,7 @@ pbwlua_push_builder(lua_State *L, const pbw_descriptor *desc,
 
     m->desc = desc;
     m->tree = tree;
+    m->s = pbwlua_check_schema(L, 1);
     /* Anchor the schema: the tree reads its descriptor until __gc. */
     lua_pushvalue(L, 1);
     m->schema_ref = luaL_ref(L, LUA_REGISTRYINDEX);
@@ -1555,15 +1614,19 @@ static int
 pbwlua_message_encode(lua_State *L)
 {
     pbwlua_message *m = pbwlua_check_message(L, 1);
-    uint8_t *out = NULL;
+    const uint8_t *out = NULL;
     size_t len = 0;
-    pbw_status status = pbw_encode(m->tree, &out, &len);
 
-    if (status != PBW_OK) {
-        luaL_error(L, "pbwire: encode: %s", pbw_strerror(status));
+    /* Same reused encode buffer as the table path: no malloc per send. */
+    pbw_ctx_reset(m->s->ctx);
+    {
+        pbw_status status = pbw_encode_ctx(m->s->ctx, m->tree, &out, &len);
+
+        if (status != PBW_OK) {
+            luaL_error(L, "pbwire: encode: %s", pbw_strerror(status));
+        }
     }
     lua_pushlstring(L, (const char *)out, len);
-    pbw_free(out);
     return 1;
 }
 
@@ -1616,10 +1679,12 @@ pbwlua_gc(lua_State *L)
             struct pbwlua_namecache *next = c->next;
             size_t k;
             for (k = 0; k < c->n; k++) {
-                luaL_unref(L, LUA_REGISTRYINDEX, c->refs[k]);
+                if (c->f[k].ref != LUA_NOREF) {
+                    luaL_unref(L, LUA_REGISTRYINDEX, c->f[k].ref);
+                }
             }
-            free(c->refs);
-            free((void *)c->ptrs);
+            free(c->f);
+            free(c->idx);
             free(c);
             c = next;
         }

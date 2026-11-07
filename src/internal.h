@@ -483,22 +483,12 @@ const pbw_field *pbw_schema_find_extension(const pbw_schema *schema,
                                            const char *name);
 
 /* message.c */
-pbw_value *pbw_value_new_a(pbw_arena *arena, pbw_value_kind kind);
 /* Fills value with a NUL-terminated copy of data; 0 on allocation failure. */
 int pbw_value_init_bytes(pbw_value *value, pbw_arena *arena, const void *data,
                          size_t len);
 /* Copies value into the field slot and marks it present (decoder storage). */
 void pbw_message_put(pbw_message *msg, size_t index, const pbw_value *value);
-pbw_value *
-pbw_value_new_uint_a(pbw_arena *arena, uint64_t bits);
-pbw_value *pbw_value_new_bytes_a(pbw_arena *arena, const void *data,
-                                 size_t len);
-pbw_value *pbw_value_new_message_a(pbw_arena *arena, pbw_message *msg);
-pbw_message *pbw_message_new_a(pbw_arena *arena, const pbw_descriptor *desc);
 pbw_value *pbw_message_list_for(pbw_message *msg, const pbw_field *field);
-/* Appends item to list; the items array comes from `arena` when it is not
- * NULL. Takes ownership of item. */
-int pbw_value_list_push(pbw_value *list, pbw_value *item, pbw_arena *arena);
 /* Grows list capacity to `cap` without adding items, for inputs whose item
  * count is known upfront (packed fixed-width fields). Mirrors the growth
  * policy of pbw_value_list_push; 1 on success (or when already big enough). */
@@ -552,6 +542,209 @@ pbw_field_is_required(const pbw_field *field, const pbw_descriptor *msg)
         return 1;
     }
     return msg->edition != 0 && field->presence == 3;
+}
+
+/* The tree builders below are inline: the decoder runs one per decoded value
+ * (or nested message), and the call alone is a measurable slice of a decode.
+ * One definition, no copy per caller; a translation unit that never calls one
+ * emits nothing for it. They sit after arena.c because they allocate. */
+
+/* A message is one allocation: the struct, its value slots, the presence bitmap
+ * and the oneof cases follow each other in the same block. Only the bitmap and
+ * the oneof cases are zeroed; a value slot is written before it is marked
+ * present. */
+PBW_INLINE pbw_message *
+pbw_message_new_a(pbw_arena *arena, const pbw_descriptor *desc)
+{
+    pbw_message *msg;
+    size_t values_off;
+    size_t present_off;
+    size_t oneof_off;
+    size_t size;
+    size_t words;
+    uint8_t *block;
+
+    if (desc == NULL || desc->is_enum) {
+        return NULL;
+    }
+    if (desc->field_count > (SIZE_MAX - sizeof(pbw_message)) / sizeof(pbw_value)) {
+        return NULL;
+    }
+    values_off = sizeof(pbw_message);
+    present_off = values_off + desc->field_count * sizeof(pbw_value);
+    words = (desc->field_count + 31u) / 32u;
+    /* The bitmap plus alignment slack must fit past present_off: words * 4
+     * cannot wrap on its own (field_count is bounded above), so this
+     * subtraction sequence is well-defined and rejects the wrap. */
+    if (present_off > SIZE_MAX - words * sizeof(uint32_t) - (size_t)3) {
+        return NULL;
+    }
+    oneof_off = (present_off + words * sizeof(uint32_t) + 3u) & ~(size_t)3u;
+    if ((size_t)desc->oneof_count + 1u >
+        (SIZE_MAX - oneof_off) / sizeof(uint32_t)) {
+        return NULL;
+    }
+    size = oneof_off + ((size_t)desc->oneof_count + 1u) * sizeof(uint32_t);
+
+    if (arena != NULL) {
+        block = (uint8_t *)pbw_arena_alloc(arena, size);
+    } else {
+        block = (uint8_t *)malloc(size);
+    }
+    if (block == NULL) {
+        return NULL;
+    }
+    /* Every member is assigned below: the struct needs no blanket zeroing,
+     * only the presence bitmap and the oneof cases start cleared. */
+    msg = (pbw_message *)block;
+    msg->desc = desc;
+    msg->arena = arena;
+    msg->own = NULL;
+    msg->nfields = desc->field_count;
+    msg->values = (pbw_value *)(void *)(block + values_off);
+    msg->present = (uint32_t *)(void *)(block + present_off);
+    msg->oneof_case = (uint32_t *)(void *)(block + oneof_off);
+    msg->unknown = NULL;
+    msg->unknown_len = 0;
+    msg->unknown_cap = 0;
+    msg->wire_len = 0;
+    if (words > 0) {
+        memset(msg->present, 0, words * sizeof(uint32_t));
+    }
+    if (desc->oneof_count > 0) {
+        memset(msg->oneof_case, 0,
+               ((size_t)desc->oneof_count + 1u) * sizeof(uint32_t));
+    }
+    return msg;
+}
+
+PBW_INLINE pbw_value *
+pbw_value_new_a(pbw_arena *arena, pbw_value_kind kind)
+{
+    pbw_value *value;
+
+    if (arena != NULL) {
+        value = (pbw_value *)pbw_arena_alloc(arena, sizeof(pbw_value));
+    } else {
+        value = (pbw_value *)malloc(sizeof(pbw_value));
+    }
+    if (value != NULL) {
+        value->kind = kind;
+        value->flags = arena != NULL ? PBW_VF_ARENA : 0;
+    }
+    return value;
+}
+
+PBW_INLINE pbw_value *
+pbw_value_new_uint_a(pbw_arena *arena, uint64_t bits)
+{
+    pbw_value *value = pbw_value_new_a(arena, PBW_VALUE_UINT);
+
+    if (value != NULL) {
+        value->as.u64 = bits;
+    }
+    return value;
+}
+
+PBW_INLINE pbw_value *
+pbw_value_new_bytes_a(pbw_arena *arena, const void *data, size_t len)
+{
+    pbw_value *value;
+    uint8_t *payload;
+
+    if (arena == NULL) {
+        value = pbw_value_new_a(NULL, PBW_VALUE_BYTES);
+        if (value == NULL || !pbw_value_init_bytes(value, NULL, data, len)) {
+            pbw_value_free(value);
+            return NULL;
+        }
+        return value;
+    }
+    /* Arena: the value struct and its payload are one bump, so a decoded
+     * string or bytes item costs one allocation instead of two. sizeof is a
+     * multiple of 8, so the payload that follows stays aligned. */
+    if (len > SIZE_MAX - sizeof(*value) - 8) {
+        return NULL;
+    }
+    value = (pbw_value *)pbw_arena_alloc(arena, sizeof(*value) + len + 1);
+    if (value == NULL) {
+        return NULL;
+    }
+    if (len > 0 && data == NULL) {
+        data = pbw_empty_input;
+    }
+    payload = (uint8_t *)(value + 1);
+    if (len > 0) {
+        if (data != pbw_empty_input) {
+            memcpy(payload, data, len);
+        } else {
+            memset(payload, 0, len);
+        }
+    }
+    payload[len] = '\0';
+    value->kind = PBW_VALUE_BYTES;
+    value->flags = PBW_VF_ARENA;
+    value->as.bytes.data = payload;
+    value->as.bytes.len = len;
+    return value;
+}
+
+PBW_INLINE pbw_value *
+pbw_value_new_message_a(pbw_arena *arena, pbw_message *msg)
+{
+    pbw_value *value = pbw_value_new_a(arena, PBW_VALUE_MESSAGE);
+
+    if (value == NULL) {
+        return NULL;
+    }
+    value->as.msg = msg;
+    return value;
+}
+
+PBW_INLINE int
+pbw_value_list_push(pbw_value *list, pbw_value *item, pbw_arena *arena)
+{
+    pbw_value **items;
+
+    if (list == NULL || item == NULL || list->kind != PBW_VALUE_LIST ||
+        list->as.list.len == UINT32_MAX) {
+        return 0;
+    }
+    if (list->as.list.len == list->as.list.cap) {
+        uint32_t cap = list->as.list.cap ? list->as.list.cap * 2u : 8u;
+        size_t bytes;
+
+        if (cap < list->as.list.cap) {
+            /* Doubling overflowed: the list cannot grow any further. */
+            return 0;
+        }
+        bytes = (size_t)cap * sizeof(*items);
+        if (bytes / sizeof(*items) != cap) {
+            /* 32-bit size_t: the byte count wrapped. */
+            return 0;
+        }
+        if (arena != NULL) {
+            /* No realloc in an arena: move to a bigger block, the old one is
+             * recycled by pbw_ctx_reset(). */
+            items = (pbw_value **)pbw_arena_alloc(arena, bytes);
+            if (items == NULL) {
+                return 0;
+            }
+            if (list->as.list.len > 0) {
+                memcpy(items, list->as.list.items,
+                       list->as.list.len * sizeof(*items));
+            }
+        } else {
+            items = (pbw_value **)realloc(list->as.list.items, bytes);
+            if (items == NULL) {
+                return 0;
+            }
+        }
+        list->as.list.items = items;
+        list->as.list.cap = cap;
+    }
+    list->as.list.items[list->as.list.len++] = item;
+    return 1;
 }
 
 #endif /* PBWIRE_INTERNAL_H */

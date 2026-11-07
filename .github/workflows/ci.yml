@@ -345,21 +345,25 @@ jobs:
         with:
           path: .tmp/
           key: conformance-${{ hashFiles('Makefile') }}
-      - name: Build the pinned reference (protoc + libprotobuf)
+      - name: Install the pinned reference (protoc + libprotobuf + abseil)
         # The baseline is the pinned checkout, not the distro's protobuf: the
-        # verdict-parity checks are calibrated against PROTOBUF_VERSION.
+        # verdict-parity checks are calibrated against PROTOBUF_VERSION. The
+        # bench needs abseil and utf8_range on its own link line, which the
+        # installed protobuf.pc pulls in.
         run: |
           CMAKE_BUILD_PARALLEL_LEVEL=$(nproc) make conformance-setup
           PB_SRC=$(echo .tmp/protobuf-*)
+          cmake -S "$PB_SRC" -B "$PB_SRC/build" \
+            -DCMAKE_INSTALL_PREFIX="$PWD/.tmp/pbprefix" \
+            -Dprotobuf_BUILD_CONFORMANCE=ON -DBUILD_SHARED_LIBS=ON \
+            -Dprotobuf_BUILD_TESTS=OFF -Dprotobuf_BUILD_EXAMPLES=OFF
           CMAKE_BUILD_PARALLEL_LEVEL=$(nproc) cmake --build "$PB_SRC/build" \
-            --target protoc libprotobuf
-          echo "PB_SRC=$PB_SRC" >> "$GITHUB_ENV"
+            --target install
       - name: Short differential run
-        # Abseil is not vendored: protobuf's configure FetchContent's it into
-        # build/_deps/absl-src, which is what the pinned headers include.
-        run: make difftest-short PROTOC="$PB_SRC/build/protoc" PB_CXXFLAGS="-I$PB_SRC/src -I$PB_SRC/third_party/utf8_range -I$PB_SRC/build/_deps/absl-src" PB_LIBS="-L$PB_SRC/build -lprotobuf"
         env:
-          LD_LIBRARY_PATH: ${{ env.PB_SRC }}/build
+          PKG_CONFIG_PATH: ${{ github.workspace }}/.tmp/pbprefix/lib/pkgconfig
+          LD_LIBRARY_PATH: ${{ github.workspace }}/.tmp/pbprefix/lib
+        run: make difftest-short PROTOC=${{ github.workspace }}/.tmp/pbprefix/bin/protoc
 
   fuzz-short:
     name: Fuzz corpus replay
