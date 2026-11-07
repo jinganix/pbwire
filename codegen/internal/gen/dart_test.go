@@ -120,3 +120,19 @@ func TestDartFilesNoRegistry(t *testing.T) {
 		t.Error("loader stays without the registry")
 	}
 }
+
+// Sibling imports are prefixed: the generated file shares its namespace with
+// the pbwire runtime, so a message named Value in a dep file would otherwise
+// make every reference ambiguous.
+func TestDartImpPrefix(t *testing.T) {
+	cases := map[string]string{
+		"xdep.proto":       "_imp_xdep",
+		"a-dir/a-b.proto":  "_imp_a_b",
+		"google/x_1.proto": "_imp_x_1",
+	}
+	for in, want := range cases {
+		if got := dartImpPrefix(in); got != want {
+			t.Errorf("dartImpPrefix(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

@@ -106,9 +106,9 @@ func javaScriptFiles(f *model.File, opt Options) []File {
 		// collision, so locals win.
 		for _, imp := range f.Imports {
 			if names := foreignMessageNames(f, imp.Path); len(names) > 0 {
-				fmt.Fprintf(&b, "const _imp_%s = require('./%s.js');\n", stem(imp.Path), stem(imp.Path))
+				fmt.Fprintf(&b, "const _imp_%s = require('./%s.js');\n", ident(stem(imp.Path)), stem(imp.Path))
 				for _, n := range names {
-					fmt.Fprintf(&b, "_CLASSES['%s'] = _imp_%s.%s;\n", n, stem(imp.Path), n)
+					fmt.Fprintf(&b, "_CLASSES['%s'] = _imp_%s.%s;\n", n, ident(stem(imp.Path)), n)
 				}
 			}
 		}

@@ -10,7 +10,7 @@
 // dynamic runtime in <binding>/lib.
 const { _makeClass } = require('../../lib/pbwire-compat.js');
 
-const _DESC_B64 = 'CrkDCgp4ZGVwLnByb3RvEgR4ZGVwIjIKBkRlcE1zZxISCgRuYW1lGAEgASgJUgRuYW1lEhQKBXZhbHVlGAIgASgFUgV2YWx1ZUroAgoGEgQDAAoBCs0BCgEMEgMDABIawgEgU2hhcmVkIGRlcGVuZGVuY3kgZm9yIHRoZSBjcm9zcy1maWxlIGZpeHR1cmU6IHhmaWxlLnByb3RvIGltcG9ydHMgdGhpcwogZmlsZSBhbmQgcmVmZXJlbmNlcyBEZXBNc2cuIEdlbmVyYXRlZCBvbmNlIHBlciBsYW5ndWFnZSBuZXh0IHRvIHhmaWxlJ3MKIG93biBtb2RlbDsgdGhlIHJlZmVyZW5jZSBieXRlcyBsaXZlIHdpdGggeGZpbGUuCgoICgECEgMFAA0KCgoCBAASBAcACgEKCgoDBAABEgMHCA4KCwoEBAACABIDCAISCgwKBQQAAgAFEgMIAggKDAoFBAACAAESAwgJDQoMCgUEAAIAAxIDCBARCgsKBAQAAgESAwkCEgoMCgUEAAIBBRIDCQIHCgwKBQQAAgEBEgMJCA0KDAoFBAACAQMSAwkQEWIGcHJvdG8z';
+const { get_schema } = require('./xdep_meta.js');
 
 const _ENUMS = {};
 const _REVENUMS = {};
@@ -22,7 +22,7 @@ const DepMsg_FIELDS = [
   { n: 'name', js: 'name', k: 'str', rep: false, msg: null, en: null, oneof: null, req: false, has: false, closed: false },
   { n: 'value', js: 'value', k: 'i32', rep: false, msg: null, en: null, oneof: null, req: false, has: false, closed: false },
 ];
-const DepMsg = _makeClass('xdep.DepMsg', _DESC_B64, DepMsg_FIELDS);
+const DepMsg = _makeClass('xdep.DepMsg', get_schema, DepMsg_FIELDS);
 _CLASSES['DepMsg'] = DepMsg;
 DepMsg._ENUMS = _ENUMS;
 DepMsg._REVENUMS = _REVENUMS;

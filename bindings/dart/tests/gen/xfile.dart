@@ -5,7 +5,7 @@
 import 'dart:typed_data';
 
 import 'package:pbwire/pbwire.dart';
-import 'xdep.dart';
+import 'xdep.dart' as _imp_xdep;
 import 'xfile_meta.dart';
 
 /// xfile.UsesDep
@@ -14,7 +14,7 @@ class UsesDep {
 
   static UsesDep create() => UsesDep._();
 
-  factory UsesDep({DepMsg? single, List<DepMsg>? many, String? note}) {
+  factory UsesDep({_imp_xdep.DepMsg? single, List<_imp_xdep.DepMsg>? many, String? note}) {
     final o = UsesDep._();
     if (single != null) o.single = single;
     if (many != null) o.many.addAll(many);
@@ -28,14 +28,14 @@ class UsesDep {
   static UsesDep getDefault() => _defaultInstance ??= UsesDep._();
 
 
-  DepMsg? _single; // single = 1
-  DepMsg get single => _single ?? DepMsg.getDefault();
-  set single(DepMsg v) { _single = v; }
+  _imp_xdep.DepMsg? _single; // single = 1
+  _imp_xdep.DepMsg get single => _single ?? _imp_xdep.DepMsg.getDefault();
+  set single(_imp_xdep.DepMsg v) { _single = v; }
   bool hasSingle() => _single != null;
   void clearSingle() { _single = null; }
-  DepMsg ensureSingle() => _single ??= DepMsg.create();
+  _imp_xdep.DepMsg ensureSingle() => _single ??= _imp_xdep.DepMsg.create();
 
-  final List<DepMsg> many = <DepMsg>[]; // many = 2
+  final List<_imp_xdep.DepMsg> many = <_imp_xdep.DepMsg>[]; // many = 2
 
   String note = ''; // note = 3
   bool hasNote() => note.isNotEmpty;
@@ -74,12 +74,12 @@ class UsesDep {
 
   void loadFrom(Message msg) {
     final subSingle = msg.getMessage("single");
-    if (subSingle != null) (_single ??= DepMsg.create()).loadFrom(subSingle);
+    if (subSingle != null) (_single ??= _imp_xdep.DepMsg.create()).loadFrom(subSingle);
     for (var i = 0; i < msg.count("many"); i++) {
       final v = msg.at("many", i);
       if (v == null) continue;
       final sub = v.asMessage();
-      if (sub != null) many.add(DepMsg.create()..loadFrom(sub));
+      if (sub != null) many.add(_imp_xdep.DepMsg.create()..loadFrom(sub));
     }
     note = msg.getString("note") ?? '';
   }

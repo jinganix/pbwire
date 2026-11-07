@@ -3,7 +3,7 @@
 -- Do not edit; regenerate from the .proto instead.
 
 local meta = require("xfile_meta")
-local xdep = require("xdep")
+local _imp_xdep = require("xdep")
 
 local M = {}
 
@@ -41,16 +41,16 @@ end
 
 M.Xfile_UsesDep.to_table = function(t)
     local out = {}
-    if t.single ~= nil then out.single = xdep.Xdep_DepMsg.to_table(t.single) end
-    if t.many ~= nil and #t.many > 0 then out.many = map_list(t.many, xdep.Xdep_DepMsg.to_table) end
+    if t.single ~= nil then out.single = _imp_xdep.Xdep_DepMsg.to_table(t.single) end
+    if t.many ~= nil and #t.many > 0 then out.many = map_list(t.many, _imp_xdep.Xdep_DepMsg.to_table) end
     if t.note ~= nil and t.note ~= "" then out.note = t.note end
     return out
 end
 
 M.Xfile_UsesDep.from_table = function(data)
     return {
-        single = data.single ~= nil and xdep.Xdep_DepMsg.from_table(data.single) or nil,
-        many = map_list(data.many, xdep.Xdep_DepMsg.from_table),
+        single = data.single ~= nil and _imp_xdep.Xdep_DepMsg.from_table(data.single) or nil,
+        many = map_list(data.many, _imp_xdep.Xdep_DepMsg.from_table),
         note = data.note or "",
     }
 end

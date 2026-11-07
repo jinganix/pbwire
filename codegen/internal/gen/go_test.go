@@ -107,3 +107,22 @@ func TestGoFilesNoRegistry(t *testing.T) {
 		t.Error("loader stays without the registry")
 	}
 }
+
+// A dep file named after a Go keyword would emit `package struct` and fail
+// gofmt; goIdent suffixes it, and the import alias goes through the same
+// function so the two stay in sync.
+func TestGoIdent(t *testing.T) {
+	cases := map[string]string{
+		"struct": "struct_pbwire",
+		"type":   "type_pbwire",
+		"go":     "go_pbwire",
+		"xfile":  "xfile",
+		"a-b":    "a_b",
+		"":       "gen",
+	}
+	for in, want := range cases {
+		if got := goIdent(in); got != want {
+			t.Errorf("goIdent(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

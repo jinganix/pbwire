@@ -90,7 +90,7 @@ func javaOrBuilderFile(f *model.File, m model.Message) File {
 	}
 	for _, o := range oneofs {
 		pascal := model.Pascal(o)
-		fmt.Fprintf(&b, "    %s.KindCase get%sCase();\n", cls, pascal)
+		fmt.Fprintf(&b, "    %s.%sCase get%sCase();\n", cls, pascal, pascal)
 		for _, field := range m.Fields {
 			if field.Skip != "" || field.Oneof != o {
 				continue
@@ -871,6 +871,10 @@ func writeJavaMetaRow(b *strings.Builder, f *model.File, field model.Field, ob s
 		case field.Kind == protoreflect.BytesKind:
 			fmt.Fprintf(b, "                FieldMeta.ofOneofBytes(%d, %s::%s, %s, %s, %d, %q),\n",
 				num, ob, javaGetterName(field), setV("set"+field.Pascal, "byte[]"), caseOf, idx, field.Name)
+			return
+		case field.Kind == protoreflect.EnumKind && field.Enum != "":
+			fmt.Fprintf(b, "                FieldMeta.ofOneofInt(%d, Kind.ENUM, %s::get%sValue, %s, %s, %d, %q),\n",
+				num, ob, field.Pascal, setV("set"+field.Pascal+"Value", "int"), caseOf, idx, field.Name)
 			return
 		case field.Kind == protoreflect.BoolKind:
 			fmt.Fprintf(b, "                FieldMeta.ofOneofBool(%d, %s::%s, %s, %s, %d, %q),\n",

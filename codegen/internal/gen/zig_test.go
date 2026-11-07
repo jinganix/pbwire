@@ -86,3 +86,21 @@ func TestZigFilesNoRegistry(t *testing.T) {
 		t.Error("loader stays without the registry")
 	}
 }
+
+// Zig has no raw identifiers, so a keyword (or one of the two runtime
+// aliases) gets a suffix and non-identifier bytes become underscores.
+func TestZigIdent(t *testing.T) {
+	cases := map[string]string{
+		"struct": "struct_pbwire",
+		"std":    "std_pbwire",
+		"pbwire": "pbwire_pbwire",
+		"a-b":    "a_b",
+		"x_file": "x_file",
+		"":       "gen",
+	}
+	for in, want := range cases {
+		if got := zigIdent(in); got != want {
+			t.Errorf("zigIdent(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

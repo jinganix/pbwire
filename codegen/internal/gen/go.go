@@ -10,10 +10,22 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
-// goPackage derives the Go package name from the proto base file name.
-func goPackage(f *model.File) string {
+// goKeywords are the identifiers a package clause cannot carry.
+var goKeywords = map[string]bool{
+	"break": true, "case": true, "chan": true, "const": true,
+	"continue": true, "default": true, "defer": true, "else": true,
+	"fallthrough": true, "for": true, "func": true, "go": true,
+	"goto": true, "if": true, "import": true, "interface": true,
+	"map": true, "package": true, "range": true, "return": true,
+	"select": true, "struct": true, "switch": true, "type": true,
+	"var": true,
+}
+
+// goIdent turns a derived name into a valid Go identifier: a dep file named
+// struct.proto would otherwise emit "package struct" and fail gofmt.
+func goIdent(name string) string {
 	var b strings.Builder
-	for _, r := range base(f) {
+	for _, r := range name {
 		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
 			b.WriteRune(r)
 		} else {
@@ -24,7 +36,15 @@ func goPackage(f *model.File) string {
 	if s == "" {
 		return "gen"
 	}
+	if goKeywords[s] {
+		return s + "_pbwire"
+	}
 	return s
+}
+
+// goPackage derives the Go package name from the proto base file name.
+func goPackage(f *model.File) string {
+	return goIdent(base(f))
 }
 
 // goCamel converts a proto field name to a Go struct field name:
@@ -232,18 +252,7 @@ func goImportAlias(importPath string) string {
 	if i := strings.LastIndex(seg, "/"); i >= 0 {
 		seg = seg[i+1:]
 	}
-	var sb strings.Builder
-	for _, r := range seg {
-		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
-			sb.WriteRune(r)
-		} else {
-			sb.WriteRune('_')
-		}
-	}
-	if sb.Len() == 0 {
-		return "gen"
-	}
-	return sb.String()
+	return goIdent(seg)
 }
 
 func goFiles(f *model.File, opt Options) ([]File, error) {

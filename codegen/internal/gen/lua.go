@@ -27,7 +27,7 @@ func luaFiles(f *model.File, opt Options) ([]File, error) {
 		b.WriteString(headerP(f, "--", "Generated tables over the pbwire dynamic API: assign fields, encode, decode."))
 		b.WriteString("local meta = require(\"" + base(f) + "_meta\")\n")
 		for _, imp := range f.Imports {
-			fmt.Fprintf(&b, "local %s = require(\"%s\")\n", stem(imp.Path), stem(imp.Path))
+			fmt.Fprintf(&b, "local %s = require(\"%s\")\n", luaDepAlias(imp.Path), stem(imp.Path))
 		}
 		b.WriteString("\n")
 		b.WriteString("local M = {}\n\n")
@@ -126,12 +126,33 @@ func writeLuaMeta(b *strings.Builder, f *model.File, opt Options, desc []byte) {
 	}
 }
 
+// luaDepAlias is the local name of one required sibling module. The prefix
+// keeps it clear of the file's own locals (meta, M, merge, map_list,
+// identity) and of the Lua keywords, which a dep file could be named after.
+func luaDepAlias(path string) string {
+	var b strings.Builder
+
+	b.WriteString("_imp_")
+	for _, r := range stem(path) {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') ||
+			(r >= '0' && r <= '9') || r == '_' {
+			b.WriteRune(r)
+		} else {
+			b.WriteRune('_')
+		}
+	}
+	if b.Len() == len("_imp_") {
+		b.WriteString("gen")
+	}
+	return b.String()
+}
+
 // luaMsg names the table for a message field: the sibling module's table
 // when foreign (required above), this module's M otherwise.
 func luaMsg(f *model.File, field model.Field) string {
 	if field.Import != "" {
 		if imp := findImport(f, field.Import); imp != nil {
-			return stem(imp.Path) + "." + imp.Prefix + "_" + field.Message
+			return luaDepAlias(imp.Path) + "." + imp.Prefix + "_" + field.Message
 		}
 	}
 	return "M." + className(f, field.Message)
