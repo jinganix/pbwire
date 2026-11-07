@@ -333,7 +333,9 @@ add_field(pbw_descriptor *msg, const char *name, uint32_t number, pbw_type type,
     field->label = label;
     field->is_extension = is_extension ? 1u : 0u;
     msg->field_count++;
-    msg->schema->linked = 0;
+    if (msg->schema != NULL) {
+        msg->schema->linked = 0;
+    }
     return field;
 }
 

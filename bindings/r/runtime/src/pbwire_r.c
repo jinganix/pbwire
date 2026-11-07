@@ -55,8 +55,8 @@ typedef struct {
     pbw_schema *schema;
     /* One arena + encode buffer for every call. */
     pbw_ctx *ctx;
-    /* Per-descriptor field cache for the decode->named-list walk: field
-     * pointer, label and the interned CHARSXP name, resolved once. */
+    /* Per-descriptor interned field names for the decode->named-list walk,
+     * resolved once per message type. */
     struct pbwr_fields *fields;
     /* Last one used: a decode loop usually repeats the same message type, so
      * this skips the list walk. */
@@ -72,19 +72,12 @@ typedef struct {
     SEXP schema_sexp;
 } pbwr_message;
 
-/* One prepared field of a message type: everything the decode->list walk
- * needs, so it costs one presence check and one interned-string store
- * instead of a mkChar hash lookup per field per message. */
-typedef struct {
-    const pbw_field *field;
-    SEXP name; /* CHARSXP, kept alive by the cache's own names vector */
-    int repeated;
-} pbwr_fentry;
-
+/* A message type's interned field names, in descriptor order: the
+ * decode->list walk stores these instead of paying a mkChar hash lookup per
+ * field per message. */
 typedef struct pbwr_fields {
     const pbw_descriptor *desc;
     size_t nfields;
-    pbwr_fentry *f;
     SEXP names; /* STRSXP, R_PreserveObject'd */
     struct pbwr_fields *next;
 } pbwr_fields;
@@ -547,7 +540,7 @@ static SEXP
 pbwr_name(pbwr_fields *cache, size_t index, const pbw_field *field)
 {
     if (cache != NULL && index < cache->nfields) {
-        return cache->f[index].name;
+        return STRING_ELT(cache->names, (R_xlen_t)index);
     }
     return mkChar(pbw_field_name(field));
 }
@@ -574,20 +567,11 @@ pbwr_fields_get(pbwr_schema *s, const pbw_descriptor *desc)
     if (c == NULL) {
         return NULL;
     }
-    c->f = (pbwr_fentry *)calloc(nfields == 0 ? 1 : nfields, sizeof(*c->f));
-    if (c->f == NULL) {
-        free(c);
-        return NULL;
-    }
     c->names = PROTECT(allocVector(STRSXP, (R_xlen_t)nfields));
     for (i = 0; i < nfields; i++) {
-        const pbw_field *field = pbw_descriptor_field_at(desc, i);
-        SEXP name = mkChar(pbw_field_name(field));
-
-        SET_STRING_ELT(c->names, (R_xlen_t)i, name);
-        c->f[i].field = field;
-        c->f[i].name = name;
-        c->f[i].repeated = pbw_field_label(field) == PBW_LABEL_REPEATED;
+        SET_STRING_ELT(
+            c->names, (R_xlen_t)i,
+            mkChar(pbw_field_name(pbw_descriptor_field_at(desc, i))));
     }
     c->desc = desc;
     c->nfields = nfields;
@@ -791,7 +775,6 @@ pbwr_schema_finalizer(SEXP s)
             pbwr_fields *next = c->next;
 
             R_ReleaseObject(c->names);
-            free(c->f);
             free(c);
             c = next;
         }
@@ -858,7 +841,9 @@ pbwr_load(SEXP data)
                  reason != NULL && reason[0] != '\0' ? reason
                                                      : pbw_strerror(status));
     }
-    p = (pbwr_schema *)malloc(sizeof(*p));
+    /* calloc: fields/last are only touched later, and the finalizer walks
+     * them, so they must start NULL. */
+    p = (pbwr_schema *)calloc(1, sizeof(*p));
     if (p == NULL) {
         pbw_schema_free(schema);
         Rf_error("pbwire: out of memory");
