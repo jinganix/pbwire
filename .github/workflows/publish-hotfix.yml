@@ -93,9 +93,16 @@ jobs:
           COCOAPODS_TRUNK_TOKEN: ${{ secrets.COCOAPODS_TRUNK_TOKEN }}
         run: |
           [ -n "$COCOAPODS_TRUNK_TOKEN" ] || { echo "COCOAPODS_TRUNK_TOKEN unset, skipping"; exit 0; }
+          # pod trunk push validates the podspec through the GitHub commit
+          # API, which times out now and then; retry before failing the job.
+          # A duplicate means an earlier attempt already landed it.
           for i in 1 2 3; do
-            (cd bindings/objc && pod trunk push PBWire.podspec --allow-warnings) && exit 0
-            echo "pod trunk push failed (attempt $i), retrying" >&2
+            out=$(cd bindings/objc && pod trunk push PBWire.podspec --allow-warnings 2>&1) && { printf '%s\n' "$out"; exit 0; }
+            printf '%s\n' "$out" >&2
+            case "$out" in
+              *"duplicate entry"*) echo "PBWire $(tr -d ' \t\n' < VERSION) already published"; exit 0 ;;
+            esac
+            echo "retrying (attempt $i)" >&2
             sleep 60
           done
           exit 1

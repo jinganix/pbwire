@@ -127,7 +127,7 @@ Last full refresh: 2026-11-06, all rows below:
 | Dart (`dart:ffi`) | `make dart-bench` (`bindings/dart/benchmarks`) | the `protobuf` Dart package + generated code | all 4 | 15.4x / 4.27x ✅ |
 | Rust (static link) | `make rust-bench` (`bindings/rust/benchmarks`) | prost (fastest) + rust-protobuf 3.x generated code | all 4 | 1.08x / 1.87x vs prost ✅ |
 | C# (P/Invoke) | `make csharp-bench` (`bindings/csharp/benchmarks`) | Google.Protobuf C# generated code (fastest) + protobuf-net | all 4 | 2.91x / 1.42x vs official ✅ |
-| Lua (C module, tables) | `make lua-bench` (`bindings/lua/benchmarks`) | `lua-protobuf` 0.6.0 | all 4 | 1.03x / 1.16x ✅ (8.06x via builder encode) |
+| Lua (C module, tables) | `make lua-bench` (`bindings/lua/benchmarks`) | `lua-protobuf` 0.6.0 | all 4 | 1.10x / 1.44x ✅ (8.21x via builder encode) |
 | Swift (SwiftPM, static link) | `make swift-bench` (`bindings/swift/benchmarks`) | `apple/swift-protobuf` 1.39.0 generated code from the same `matrix3.proto` | all 4 | 5.45x / 2.69x ✅ |
 | Scala (Java runtime + DSL) | `make scala-bench` (`bindings/scala/benchmarks`) | ScalaPB 0.11.18 generated code from the same `matrix3.proto` | all 4 | 1.20x / 1.46x ✅ |
 | Elixir (NIF over the shared core) | `make elixir-bench` (`bindings/elixir/benchmarks`) | `elixir-protobuf` 0.17.1 structs from the same `matrix3.proto` | all 4 | 2.30x / 1.40x ✅ |
@@ -189,7 +189,7 @@ payload, the boundary cost and the baseline all differ.
 | Dart | `dart:ffi` | 74913 B | 1430.7 (15.4x ✅) | 694.0 (4.27x ✅) |
 | Rust | static link | 74913 B | 1398.4 (1.08x ✅) | 729.1 (1.87x ✅) |
 | C# | P/Invoke | 74913 B | 1532.7 (2.91x ✅) | 745.6 (1.42x ✅) |
-| Lua | C module, tables | 74913 B | 198.4 (1.03x ✅) | 106.3 (1.16x ✅) |
+| Lua | C module, tables | 74913 B | 218.5 (1.10x ✅) | 141.2 (1.44x ✅) |
 | Erlang | NIF (`pbwire`) | 74913 B | 428.9 (3.92x ✅) | 322.1 (1.68x ✅) |
 | Swift | static link (SwiftPM) | 74913 B | 1543.2 (5.45x ✅) | 623.9 (2.69x ✅) |
 | Scala | the Java runtime + DSL | 74913 B | 997.2 (1.20x ✅) | 947.3 (1.46x ✅) |
@@ -466,6 +466,39 @@ encode rows stayed inside the noise floor in every round. An LTO build limited t
 same tier, which is what identified the cross-TU call cost; LTO as a default
 build flag would change every binding's link step, so the helpers moved
 instead.
+
+Packed *fixed-width* runs still allocated one node per item: the list was
+reserved (the payload length divides exactly by the item width) but the nodes
+were not batched. `read_packed()` now takes the same one-bump node block for
+fixed-width runs that the varint scan enables, which covers packed double /
+fixed32 / sfixed / float arrays. A/B on a hand-built message with one packed
+field (generic shape, not the tier message), alternating runs, best-of-5,
+decode+free, median ns:
+
+| case | before | after | delta |
+|---|---|---|---|
+| packed double x3000, 24 KB | 8666.2 | 6815.0 | -21.4% |
+| packed fixed32 x3000, 12 KB | 7383.3 | 6163.9 | -16.5% |
+| packed double x64, 515 B | 221.7 | 188.0 | -15.2% |
+| packed double x8, 66 B | 53.2 | 51.3 | -3.6% |
+| packed sint32 x3000 (control, same varint path) | 11974.9 | 12183.3 | noise |
+
+Three candidates were measured and rejected in the same pass:
+
+- **3-byte varint window in `read_varint()`** (the 1- and 2-byte windows are
+  inline already): -4..5% on the 85933-byte tier, but +3..5% on 132 and 169 B,
+  where the extra inline copy costs more in the per-field dispatch than the
+  call it removes. Same conclusion as the Julia-cell note in
+  [docs/perf-attempts.md](docs/perf-attempts.md); the small tiers are the
+  common real case, so it stays out.
+- **Presence-bitmap hoist in `decode_fields()`** (keep one word in a register
+  and flush at the end): measured with a write-skipping ablation, which is
+  upper-bound only - 132 B decode moved -3% plain / -0.6% ctx, i.e. at the
+  noise floor, and the hoist would need every storing path to cooperate
+  (`pbw_message_put`, `pbw_message_list_for`). Not built.
+- **`pbw_ctx` retention for trees above the 1 MiB budget**: raising the cap to
+  8 MiB on the 85933-byte tier changed nothing, so the arena's growth
+  mallocs are not a cost worth touching; the documented knob is enough.
 
 ## Generated models (codegen)
 
@@ -1065,18 +1098,18 @@ runtime design -- the binding owns ergonomics, the core owns the format.
 
 | payload | op | pbwire-lua (MB/s, x lua-protobuf) | lua-protobuf (MB/s) |
 |---|---|---|---|
-| 136 B | encode | 133.7 (1.06x ✅) | 126.6 |
-| 136 B | encode_msg | 912.5 (7.21x ✅) | 126.6 |
-| 136 B | decode | 99.8 (1.11x ✅) | 89.8 |
-| 174 B | encode | 150.5 (1.06x ✅) | 141.6 |
-| 174 B | encode_msg | 995.0 (7.03x ✅) | 141.6 |
-| 174 B | decode | 100.4 (1.09x ✅) | 92.0 |
-| 2469 B | encode | 180.9 (1.05x ✅) | 172.0 |
-| 2469 B | encode_msg | 1200.1 (6.98x ✅) | 172.0 |
-| 2469 B | decode | 105.6 (1.20x ✅) | 88.0 |
-| 74913 B | encode | 198.4 (1.03x ✅) | 191.7 |
-| 74913 B | encode_msg | 1544.4 (8.06x ✅) | 191.7 |
-| 74913 B | decode | 106.3 (1.16x ✅) | 91.5 |
+| 136 B | encode | 151.4 (1.14x ✅) | 132.5 |
+| 136 B | encode_msg | 1051.4 (7.93x ✅) | 132.5 |
+| 136 B | decode | 157.1 (1.76x ✅) | 89.5 |
+| 174 B | encode | 165.2 (1.15x ✅) | 144.1 |
+| 174 B | encode_msg | 1087.1 (7.54x ✅) | 144.1 |
+| 174 B | decode | 153.2 (1.70x ✅) | 90.2 |
+| 2469 B | encode | 202.8 (1.13x ✅) | 179.2 |
+| 2469 B | encode_msg | 1498.5 (8.36x ✅) | 179.2 |
+| 2469 B | decode | 148.4 (1.59x ✅) | 93.6 |
+| 74913 B | encode | 218.5 (1.10x ✅) | 198.0 |
+| 74913 B | encode_msg | 1626.7 (8.21x ✅) | 198.0 |
+| 74913 B | decode | 141.2 (1.44x ✅) | 97.9 |
 
 `encode_msg` is the builder hot path (`schema:message()` once, then
 `encode()` per send): one core walk plus one buffer malloc, no table
@@ -1084,7 +1117,11 @@ conversion, which is why it runs at the core's own ~1.0-1.5 GB/s. The table
 path writes straight from the Lua table into the wire buffer (one pass over
 schema fields in descriptor order, no intermediate tree, no per-value
 allocation), so it beats the baseline at every tier. Decode wins at every tier because
-it is one validating parse straight into tables with no tree kept. The gate
+it is one validating parse straight into tables with no tree kept. Both
+directions walk one prepared per-descriptor cache, so a decoded table costs
+no field-name interning, no descriptor lookup and no hash growth per field
+(each table is created with its exact hash size, and an absent repeated
+field's empty table is written in the same pass). The gate
 is tier size (the bytes are canonical and match `protoc --encode` on the
 small tier) plus a full-field expectation check; the baseline only has to
 agree on size and decode, because `lua-protobuf` writes nested messages in
