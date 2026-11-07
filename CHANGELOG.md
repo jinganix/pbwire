@@ -108,6 +108,16 @@ Big-endian correctness, found by the new s390x gate:
   `pbwe_decode_desc` for a type fixed at build time. Covered by `make test`
   and `ctest`, formatted and gated with the rest of the C sources.
 
+- Binary wire format: a packed (`LEN`) run for a repeated *closed* (proto2)
+  enum whose field number is 1..15 was swallowed whole into the unknown bytes,
+  because the link-time one-byte tag map omitted the packed-form entry for
+  closed enums. The reference parser keeps known values in the field and moves
+  each unknown value into the unknown set as one unpacked item; the map now
+  routes that form to `read_packed()`, which does the same. (Multi-byte tags,
+  resolved through `fnum_map`, always took this path.) An all-unknown run now
+  leaves the field absent, like an empty packed run, instead of presenting an
+  empty list.
+
 ### Changed
 
 - CI: added `sanitizers` (ASan+UBSan `make test`), `difftest-short`

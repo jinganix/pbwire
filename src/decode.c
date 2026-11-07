@@ -548,6 +548,9 @@ read_packed(reader *r, const pbw_field *field, pbw_message *msg, int closed,
         /* An empty packed field stays absent: no list is created for it. */
         return PBW_OK;
     }
+    /* A closed enum drops unknown values, so the scan count would over-reserve
+     * and the node block would hold nodes nothing uses: that case keeps the
+     * per-item path (and no scan, no reserve). */
     batchable = !(closed && pbw_enum_is_closed(field));
     /* Fixed-width items divide the length exactly, so the count is known
      * before the first item: reserve it and skip the push growth chain.
@@ -560,7 +563,7 @@ read_packed(reader *r, const pbw_field *field, pbw_message *msg, int closed,
     }
     rep->field = field;
     rep->list = vlist;
-    if (data_len > 64 && field->type != PBW_TYPE_FIXED32 &&
+    if (batchable && data_len > 64 && field->type != PBW_TYPE_FIXED32 &&
         field->type != PBW_TYPE_SFIXED32 && field->type != PBW_TYPE_FLOAT &&
         field->type != PBW_TYPE_FIXED64 &&
         field->type != PBW_TYPE_SFIXED64 && field->type != PBW_TYPE_DOUBLE) {
@@ -576,9 +579,8 @@ read_packed(reader *r, const pbw_field *field, pbw_message *msg, int closed,
             return PBW_ERR_NOMEM;
         }
         /* The scan counted the items: one bump for every node of this run
-         * instead of one allocation per item. A closed enum is excluded
-         * above, so every node allocated here is used. */
-        if (batchable && n > 0 && n <= UINT32_MAX &&
+         * instead of one allocation per item. */
+        if (n > 0 && n <= UINT32_MAX &&
             n <= SIZE_MAX / sizeof(pbw_value)) {
             batch = (pbw_value *)pbw_arena_alloc(
                 msg->arena, n * sizeof(pbw_value));
@@ -676,6 +678,14 @@ read_packed(reader *r, const pbw_field *field, pbw_message *msg, int closed,
     }
     vlist->as.list.items = items;
     vlist->as.list.len = len;
+    if (len == 0) {
+        /* A closed-enum run whose values were all unknown stored nothing: the
+         * field stays absent, like an empty packed run, and the cached slot is
+         * dropped so the next occurrence creates a fresh list. */
+        pbw_msg_set_present(msg, (size_t)(field - msg->desc->fields), 0);
+        rep->field = NULL;
+        rep->list = NULL;
+    }
     return PBW_OK;
 }
 

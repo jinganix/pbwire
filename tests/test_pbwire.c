@@ -2467,13 +2467,26 @@ test_closed_enum(void)
     pbw_free(out);
     pbw_message_free(decoded);
     pbw_schema_free(schema);
-    /* Packed repeated enums shed unknown numbers into the unknown fields,
-     * packed and unpacked alike. */
+    /* Packed bytes for a repeated closed enum: the reference parser accepts
+     * the packed form for an unpacked-declared field, keeps known values in
+     * the field and moves each unknown value into the unknown set as one
+     * unpacked item. Field 2 has a one-byte tag, which routes the packed form
+     * through the link-time tag map. */
     {
         static const uint8_t packed[] = {0x12, 0x02, 0xe7,
                                          0x07}; /* rep = [999] */
         static const uint8_t unpacked[] = {0x10, 0xe7,
                                            0x07}; /* rep = 999 */
+        static const uint8_t mixed[] = {0x12, 0x04, 0x00, 0xe7, 0x07,
+                                        0x01};       /* rep = [0, 999, 1] */
+        static const uint8_t empty[] = {0x12, 0x00}; /* rep = [] */
+        /* the unknown value keeps the field's varint tag, unpacked */
+        static const uint8_t unknown_item[] = {0x10, 0xe7, 0x07};
+        /* mixed, re-encoded: known values unpacked, then the unknown item */
+        static const uint8_t mixed_out[] = {0x10, 0x00, 0x10, 0x01,
+                                            0x10, 0xe7, 0x07};
+        pbw_value *list;
+
         schema = pbw_schema_new();
         CHECK(schema != NULL);
         pbw_schema_set_proto3(schema, 0);
@@ -2484,16 +2497,75 @@ test_closed_enum(void)
         f = pbw_message_add_field(msg, "rep", 2, PBW_TYPE_ENUM,
                                   PBW_LABEL_REPEATED);
         pbw_field_set_type_name(f, "E");
-        pbw_field_set_packed(f, 0); /* unpacked: packed bytes take the slow path */
+        pbw_field_set_packed(f, 0); /* unpacked: packed bytes still parse */
         CHECK_OK(pbw_schema_link(schema));
+
+        /* one unknown value: the field stays absent, the item is unknown */
         CHECK_OK(pbw_decode(msg, packed, sizeof(packed), &decoded));
         CHECK(pbw_message_get(decoded, 2) == NULL);
-        CHECK(pbw_message_unknown_len(decoded) == sizeof(packed));
+        CHECK(pbw_message_unknown_len(decoded) == sizeof(unknown_item));
+        CHECK(memcmp(pbw_message_unknown_bytes(decoded), unknown_item,
+                     sizeof(unknown_item)) == 0);
+        bytes = NULL;
+        CHECK_OK(pbw_encode(decoded, &bytes, &len));
+        CHECK(len == sizeof(unknown_item) &&
+              memcmp(bytes, unknown_item, len) == 0);
+        pbw_free(bytes);
         pbw_message_free(decoded);
         decoded = NULL;
+
+        /* the unpacked form of the same value behaves identically */
         CHECK_OK(pbw_decode(msg, unpacked, sizeof(unpacked), &decoded));
         CHECK(pbw_message_get(decoded, 2) == NULL);
         CHECK(pbw_message_unknown_len(decoded) == sizeof(unpacked));
+        pbw_message_free(decoded);
+        decoded = NULL;
+
+        /* known values land in the field, the unknown one stays out */
+        CHECK_OK(pbw_decode(msg, mixed, sizeof(mixed), &decoded));
+        list = pbw_message_get(decoded, 2);
+        CHECK(list != NULL && pbw_value_get_kind(list) == PBW_VALUE_LIST);
+        CHECK(pbw_value_count(list) == 2);
+        CHECK(pbw_value_get_int32(pbw_value_at(list, 0)) == 0);
+        CHECK(pbw_value_get_int32(pbw_value_at(list, 1)) == 1);
+        CHECK(pbw_message_unknown_len(decoded) == sizeof(unknown_item));
+        bytes = NULL;
+        CHECK_OK(pbw_encode(decoded, &bytes, &len));
+        CHECK(len == sizeof(mixed_out) && memcmp(bytes, mixed_out, len) == 0);
+        pbw_free(bytes);
+        pbw_message_free(decoded);
+        decoded = NULL;
+
+        /* two runs: the first all unknown (absent), the second stores values */
+        {
+            static const uint8_t two_runs[] = {0x12, 0x01, 0x63, 0x12, 0x02,
+                                               0x00, 0x01};
+            static const uint8_t two_out[] = {0x10, 0x00, 0x10, 0x01, 0x10,
+                                              0x63};
+
+            CHECK_OK(pbw_decode(msg, two_runs, sizeof(two_runs), &decoded));
+            list = pbw_message_get(decoded, 2);
+            CHECK(list != NULL && pbw_value_get_kind(list) == PBW_VALUE_LIST);
+            CHECK(pbw_value_count(list) == 2);
+            CHECK(pbw_value_get_int32(pbw_value_at(list, 0)) == 0);
+            CHECK(pbw_value_get_int32(pbw_value_at(list, 1)) == 1);
+            CHECK(pbw_message_unknown_len(decoded) == 2);
+            bytes = NULL;
+            CHECK_OK(pbw_encode(decoded, &bytes, &len));
+            CHECK(len == sizeof(two_out) && memcmp(bytes, two_out, len) == 0);
+            pbw_free(bytes);
+            pbw_message_free(decoded);
+            decoded = NULL;
+        }
+
+        /* an empty packed run stays absent and leaves no unknown bytes */
+        CHECK_OK(pbw_decode(msg, empty, sizeof(empty), &decoded));
+        CHECK(pbw_message_get(decoded, 2) == NULL);
+        CHECK(pbw_message_unknown_len(decoded) == 0);
+        bytes = NULL;
+        CHECK_OK(pbw_encode(decoded, &bytes, &len));
+        CHECK(len == 0);
+        pbw_free(bytes);
         pbw_message_free(decoded);
         decoded = NULL;
         pbw_schema_free(schema);
