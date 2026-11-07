@@ -1307,6 +1307,37 @@ test_recursive_type(pbw_schema *schema)
     pbw_message_free(root);
 }
 
+/* A hand-built tree deeper than the nesting cap must fail loudly in every
+ * formatter instead of recursing until the stack gives out: the binary
+ * encoder, the JSON printer and the text printer share the same
+ * PBW_MAX_DEPTH rule as the decoder. */
+static void
+test_print_depth_limit(pbw_schema *schema)
+{
+    const pbw_descriptor *type = desc(schema, "Tree");
+    pbw_message *root = pbw_message_new(type);
+    pbw_message *cur = root;
+    char *text = NULL;
+    size_t text_len = 0;
+    uint8_t *buf = NULL;
+    size_t len = 0;
+    int i;
+
+    CHECK(root != NULL);
+    for (i = 0; i <= (int)PBW_MAX_DEPTH; i++) {
+        /* kids (field 2) is repeated: every call appends one level */
+        cur = pbw_message_set_message(cur, 2);
+        CHECK(cur != NULL);
+    }
+    CHECK_STATUS(PBW_ERR_LIMIT, pbw_encode(root, &buf, &len));
+    CHECK(buf == NULL && len == 0);
+    CHECK_STATUS(PBW_ERR_LIMIT, pbw_json_print(root, &text, &text_len));
+    CHECK(text == NULL && text_len == 0);
+    CHECK_STATUS(PBW_ERR_LIMIT, pbw_text_print(root, &text, &text_len));
+    CHECK(text == NULL && text_len == 0);
+    pbw_message_free(root);
+}
+
 /* bool accepts any non-zero varint; float/double keep their exact bit pattern. */
 static void
 test_bool_and_float_bits(pbw_schema *schema)
@@ -5407,6 +5438,27 @@ test_wkt(void)
     CHECK_OK(pbw_duration_to_millis(stamp, &millis));
     CHECK(millis == 90000);
     pbw_message_free(stamp);
+    /* seconds at the int64/1000 edge: adding the sub-second part must report
+     * an overflow instead of wrapping the int64 multiply. */
+    stamp = pbw_message_new(dur);
+    CHECK(stamp != NULL);
+    CHECK_OK(pbw_message_set(stamp, 1,
+                             pbw_value_new_int(INT64_MAX / 1000)));
+    CHECK_OK(pbw_message_set(stamp, 2, pbw_value_new_int(999999999)));
+    CHECK_STATUS(PBW_ERR_LIMIT, pbw_duration_to_millis(stamp, &millis));
+    CHECK_OK(pbw_message_set(stamp, 1,
+                             pbw_value_new_int((INT64_MAX - 999) / 1000)));
+    CHECK_OK(pbw_duration_to_millis(stamp, &millis));
+    CHECK(millis == (INT64_MAX - 999) / 1000 * 1000 + 999);
+    CHECK_OK(pbw_message_set(stamp, 1,
+                             pbw_value_new_int(INT64_MIN / 1000)));
+    CHECK_OK(pbw_message_set(stamp, 2, pbw_value_new_int(-999999999)));
+    CHECK_STATUS(PBW_ERR_LIMIT, pbw_duration_to_millis(stamp, &millis));
+    CHECK_OK(pbw_message_set(stamp, 1,
+                             pbw_value_new_int((INT64_MIN + 999) / 1000)));
+    CHECK_OK(pbw_duration_to_millis(stamp, &millis));
+    CHECK(millis == (INT64_MIN + 999) / 1000 * 1000 - 999);
+    pbw_message_free(stamp);
     /* pack direction round-trips, including negatives */
     CHECK_OK(pbw_timestamp_from_millis(ts, 1500, &stamp));
     CHECK_OK(pbw_timestamp_to_millis(stamp, &millis));
@@ -7108,6 +7160,7 @@ main(void)
     test_packed_presize(schema);
     test_packed_hostile(schema);
     test_recursive_type(schema);
+    test_print_depth_limit(schema);
     test_bool_and_float_bits(schema);
     test_enum_edges(schema);
     test_explicit_presence(schema);

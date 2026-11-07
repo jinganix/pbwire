@@ -201,7 +201,8 @@ j_classify(const pbw_descriptor *desc)
 typedef struct {
     pbw_buf buf;
     pbw_status status;
-    int dot; /* the host locale's decimal point is '.' (checked once per call) */
+    uint32_t depth; /* message nesting, capped at PBW_MAX_DEPTH */
+    int dot;        /* the host locale's decimal point is '.' (checked once per call) */
 } j_out;
 
 static void
@@ -1522,7 +1523,7 @@ j_print_fields(j_out *j, const pbw_message *msg)
 }
 
 static void
-j_print_message(j_out *j, const pbw_message *msg)
+j_print_message_body(j_out *j, const pbw_message *msg)
 {
     if (j == NULL || j->status != PBW_OK || msg == NULL ||
         msg->desc == NULL) {
@@ -1586,6 +1587,23 @@ j_print_message(j_out *j, const pbw_message *msg)
     j_ch(j, '}');
 }
 
+/* Nesting is capped like the decoder's: a hand-built tree deeper than
+ * PBW_MAX_DEPTH reports PBW_ERR_LIMIT instead of overflowing the stack. */
+static void
+j_print_message(j_out *j, const pbw_message *msg)
+{
+    if (j == NULL || j->status != PBW_OK) {
+        return;
+    }
+    if (j->depth >= PBW_MAX_DEPTH) {
+        j->status = PBW_ERR_LIMIT;
+        return;
+    }
+    j->depth++;
+    j_print_message_body(j, msg);
+    j->depth--;
+}
+
 pbw_status
 pbw_json_print(const pbw_message *msg, char **out, size_t *len)
 {
@@ -1596,6 +1614,7 @@ pbw_json_print(const pbw_message *msg, char **out, size_t *len)
     }
     pbw_buf_init(&j.buf);
     j.status = PBW_OK;
+    j.depth = 0;
     j.dot = pbw_locale_dot();
     if (!pbw_buf_reserve(&j.buf, 64)) {
         return PBW_ERR_NOMEM;
@@ -2177,7 +2196,7 @@ j_parse_key(j_in *j, pbw_buf *out)
         return j_parse_string(j, out);
     }
     {
-        const char *p = j->cur.p;
+        const char *p;
         size_t n = 0;
 
         j_skip(&j->cur);
@@ -3012,7 +3031,6 @@ j_parse_timestamp(j_in *j, pbw_message *msg)
     m_adj = mon - 3;
     carry = m_adj > mon ? 1 : 0;
     y_adj = year + 4800 - carry;
-    secs = 0;
     /* March-based epoch days, exactly like the reference. */
     month_days = ((m_adj + carry * 12) * 62719 + 769) / 2048;
     leap_days = y_adj / 4 - y_adj / 100 + y_adj / 400;
