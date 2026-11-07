@@ -19,7 +19,7 @@ on:
         required: true
         default: "elixir"
         type: choice
-        options: [elixir, erlang]
+        options: [elixir, erlang, cocoapods]
 
 jobs:
   erlang:
@@ -72,4 +72,30 @@ jobs:
           # mix.lock pins :pbwire to an older line, so update to the
           # just-published VERSION instead of fetching the lock.
           MIX="$INSTALL_DIR_FOR_ELIXIR/bin/mix"
-          (cd bindings/elixir && "$MIX" deps.update pbwire && "$MIX" hex.publish --yes)
+          # deps.get first: deps.update only touches :pbwire, and Hex refuses
+          # to publish while any other dependency is unfetched.
+          (cd bindings/elixir && "$MIX" deps.get && "$MIX" deps.update pbwire &&
+            "$MIX" hex.publish --yes)
+
+  cocoapods:
+    name: CocoaPods (bindings/objc)
+    if: inputs.binding == 'cocoapods'
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Tree must still be the tag's version
+        run: |
+          ver="$(tr -d ' \t\n' < VERSION)"
+          [ "v$ver" = "${{ inputs.tag }}" ] || { echo "VERSION $ver != ${{ inputs.tag }}, refusing" >&2; exit 1; }
+          ./scripts/sync-versions.sh --check
+      - name: Push podspec
+        env:
+          COCOAPODS_TRUNK_TOKEN: ${{ secrets.COCOAPODS_TRUNK_TOKEN }}
+        run: |
+          [ -n "$COCOAPODS_TRUNK_TOKEN" ] || { echo "COCOAPODS_TRUNK_TOKEN unset, skipping"; exit 0; }
+          for i in 1 2 3; do
+            (cd bindings/objc && pod trunk push PBWire.podspec --allow-warnings) && exit 0
+            echo "pod trunk push failed (attempt $i), retrying" >&2
+            sleep 60
+          done
+          exit 1

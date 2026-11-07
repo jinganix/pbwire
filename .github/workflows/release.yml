@@ -224,11 +224,13 @@ jobs:
           # setup-beam just installed: the old 2.0.6 pin ships beams OTP 29
           # refuses to load.
           MIX="$INSTALL_DIR_FOR_ELIXIR/bin/mix"
-          # The committed mix.lock pins :pbwire to whatever was current when
-          # it was last refreshed, so update to the just-published VERSION
-          # instead of fetching the lock (same reason the Erlang job must
-          # run first). :protobuf stays on its pinned line.
-          (cd bindings/elixir && "$MIX" deps.update pbwire && "$MIX" hex.publish --yes)
+          # deps.get first: deps.update only touches :pbwire, and Hex refuses
+          # to publish while any other dependency is unfetched. Then update
+          # :pbwire to the just-published VERSION instead of keeping the
+          # lock's older line (same reason the Erlang job must run first).
+          # :protobuf stays on its pinned line.
+          (cd bindings/elixir && "$MIX" deps.get && "$MIX" deps.update pbwire &&
+            "$MIX" hex.publish --yes)
 
   luarocks:
     name: LuaRocks (bindings/lua)
@@ -409,4 +411,11 @@ jobs:
           COCOAPODS_TRUNK_TOKEN: ${{ secrets.COCOAPODS_TRUNK_TOKEN }}
         run: |
           [ -n "$COCOAPODS_TRUNK_TOKEN" ] || { echo "COCOAPODS_TRUNK_TOKEN unset, skipping"; exit 0; }
-          (cd bindings/objc && pod trunk push PBWire.podspec --allow-warnings)
+          # pod trunk push validates the podspec through the GitHub commit
+          # API, which times out now and then; retry before failing the job.
+          for i in 1 2 3; do
+            (cd bindings/objc && pod trunk push PBWire.podspec --allow-warnings) && exit 0
+            echo "pod trunk push failed (attempt $i), retrying" >&2
+            sleep 60
+          done
+          exit 1
