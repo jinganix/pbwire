@@ -114,6 +114,20 @@ Big-endian correctness, found by the new s390x gate:
   (fixed-seed differential run), `fuzz-short`, and `coverage` (core-only
   `gcov` floor) jobs; conformance also runs on a nightly schedule.
 
+## [0.1.13] - 2026-11-07
+
+- `bindings/embedded`: static-schema facade over the C core, including the
+  length-delimited encode/decode entry points.
+- Framing and limits: `pbw_encode_delimited_to()`,
+  `pbw_decode_delimited_ctx[_limits]()`, and
+  `pbw_descriptor_set_load_limits()` for hostile descriptor sets.
+- Descriptor sets: services, editions `FeatureSet` and MessageSet wire format
+  are loaded and queryable; the core still does no RPC.
+- Core fixes: `pbw_limits` depth propagation through JSON and text parsing,
+  list form accepted in text format, unused internal helpers removed.
+- Gates: allocation-failure sweep, merged coverage floor, wider malformed and
+  descriptor tests.
+
 ## [0.1.12] - 2026-11-06
 
 - Erlang Hex package vendors the C core.
