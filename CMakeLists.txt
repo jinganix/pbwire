@@ -11,6 +11,9 @@ include(GNUInstallDirs)
 # warnings fail the build on every compiler. MSVC needs its own spelling.
 if(MSVC)
     add_compile_options(/W4 /WX)
+    # C4456 (a local hiding an outer local) is -Wshadow, which the
+    # GCC/Clang gate does not enable either; keep MSVC to the same set.
+    add_compile_options(/wd4456)
     # UTF-8 source and execution charset: universal-character names like
     # \u00e9 in narrow literals must compile to UTF-8 bytes, as they do
     # under GCC/Clang, or text/JSON goldens diverge on Windows.

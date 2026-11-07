@@ -273,6 +273,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 26
+      - name: Install the Node compat oracle
+        run: (cd bindings/node && npm install --prefix benchmarks --no-save \
+          --no-package-lock --no-audit --no-fund protobufjs@8.8.1)
       - name: ASan core + extensions, run their suites
         # The recipe is verified in docs (local docker): the core archive is
         # built instrumented first, then each extension links it in and runs
@@ -338,10 +341,24 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - name: Install protobuf dev files
-        run: sudo apt-get update && sudo apt-get install -y libprotobuf-dev protobuf-compiler
+      - name: Cache pinned protobuf checkout and runner
+        uses: actions/cache@v4
+        with:
+          path: .tmp/
+          key: conformance-${{ hashFiles('Makefile') }}
+      - name: Build the pinned reference (protoc + libprotobuf)
+        # The baseline is the pinned checkout, not the distro's protobuf: the
+        # verdict-parity checks are calibrated against PROTOBUF_VERSION.
+        run: |
+          CMAKE_BUILD_PARALLEL_LEVEL=$(nproc) make conformance-setup
+          PB_SRC=$(echo .tmp/protobuf-*)
+          CMAKE_BUILD_PARALLEL_LEVEL=$(nproc) cmake --build "$PB_SRC/build" \
+            --target protoc libprotobuf
+          echo "PB_SRC=$PB_SRC" >> "$GITHUB_ENV"
       - name: Short differential run
-        run: make difftest-short
+        run: make difftest-short PROTOC="$PB_SRC/build/protoc" PB_CXXFLAGS="-I$PB_SRC/src" PB_LIBS="-L$PB_SRC/build -lprotobuf"
+        env:
+          LD_LIBRARY_PATH: ${{ env.PB_SRC }}/build
 
   fuzz-short:
     name: Fuzz corpus replay
