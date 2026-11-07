@@ -426,6 +426,47 @@ and teardown paths. Re-measured with the same A/B method afterwards: every
 row inside the +/-3% noise floor (stream `fed`/`detenc` -1..-4%, `sink`
 -0.7%, `framed` -0.9%), so nothing was kept that costs throughput.
 
+Decoding materializes a tree, and two structural costs sat on that path: a
+decoded string or bytes item took two allocations (the value struct and its
+payload), and every decoded item crossed a translation unit into `message.c`
+(`pbw_value_new_uint_a`, `pbw_value_new_bytes_a`, `pbw_value_new_message_a`,
+`pbw_value_list_push`, `pbw_message_new_a`) — `make` compiles each `src/*.c`
+with no LTO, so those were real calls, one or two per decoded value. Three
+changes removed them:
+
+- an arena string/bytes value puts its payload in the same bump as the value
+  struct (`pbw_value_new_bytes_a`); the heap path keeps its two allocations,
+  which `pbw_value_free` releases separately;
+- a packed varint run allocates all of its item nodes in one bump, using the
+  item count the >64-byte pre-scan already computed (a closed enum leaves the
+  unused tail to the arena);
+- the tree builders are `PBW_INLINE` in `internal.h` (the same pattern as
+  `pbw_arena_alloc` and `pbw_find_field`). They stay one definition, moved and
+  not copied, so a translation unit that never calls one emits nothing for it.
+
+A/B measured on the settled tree with two binaries built from the same sources,
+one with the change reverted, alternating in one session (C probe, best-of-5,
+`bench.Msg` against the generated payload, `pbw_decode` + `pbw_message_free`,
+median ns per decode; 60000 iterations at 132 B, 20000 at 169 B, 2000 at
+2755 B, 400 at 85933 B):
+
+| case | before | after | delta |
+|---|---|---|---|
+| 132 B | 101.1 | 100.1 | -1.0% (noise) |
+| 169 B | 158.3 | 155.1 | -2.0% |
+| 2755 B | 4076.6 | 3713.3 | -8.9% |
+| 85933 B | 119472.8 | 107836.5 | -9.7% |
+
+The win scales with the number of decoded values, which is where the two costs
+were; a small message is dominated by the one tree allocation and the call
+overhead into the API instead. Encode is untouched: `encode.o` built from the
+reverted tree and from the changed tree is byte-identical, and the probe's
+encode rows stayed inside the noise floor in every round. An LTO build limited to
+`message.c`, `decode.c` and `wire.c` measured the same decode gain on the
+same tier, which is what identified the cross-TU call cost; LTO as a default
+build flag would change every binding's link step, so the helpers moved
+instead.
+
 ## Generated models (codegen)
 
 The generated models are ergonomics, not a second hot path: all but Java

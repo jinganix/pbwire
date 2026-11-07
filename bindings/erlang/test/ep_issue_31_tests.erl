@@ -6,6 +6,11 @@
 -include_lib("gpb/include/gpb.hrl").
 
 % https://github.com/jinganix/pbwire/issues/31
+% A 100k-value enum takes seconds to link; the default 5 s EUnit timeout
+% flakes on slower runners.
+issue_31_test_() ->
+    {timeout, 60, fun issue_31_test/0}.
+
 issue_31_test() ->
     Defs = [
         {{enum, very_long}, defs_enum_gen(100000, [])}

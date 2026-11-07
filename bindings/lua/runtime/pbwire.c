@@ -386,8 +386,13 @@ pbwlua_fill(lua_State *L, pbw_ctx *ctx, const pbw_descriptor *desc,
 
 /* ------------------------------------------------------------ C -> table */
 
-static void pbwlua_push_value(lua_State *L, const pbw_field *field,
-                              const pbw_value *value, unsigned depth);
+static void pbwlua_push_value(lua_State *L, pbwlua_schema *s,
+                              const pbw_field *field, const pbw_value *value,
+                              unsigned depth);
+static struct pbwlua_namecache *pbwlua_name_cache(lua_State *L,
+                                                  pbwlua_schema *s,
+                                                  const pbw_descriptor *desc,
+                                                  size_t n);
 
 static void
 pbwlua_push_uint(lua_State *L, uint64_t bits)
@@ -449,10 +454,19 @@ pbwlua_push_scalar(lua_State *L, pbw_type type, const pbw_value *value)
     }
 }
 
+/* Wire tree -> Lua table. Walks the descriptor through the same prepared
+ * cache the encode side uses, so a decoded table costs no string interning,
+ * no descriptor lookup and no hash growth per field: name, type and
+ * repetition are already resolved, and presence is one O(1) check. */
 static void
-pbwlua_push_message(lua_State *L, const pbw_message *msg, unsigned depth)
+pbwlua_push_message(lua_State *L, pbwlua_schema *s, const pbw_message *msg,
+                    unsigned depth)
 {
+    const pbw_descriptor *desc;
+    struct pbwlua_namecache *nc;
+    size_t nfields;
     size_t i;
+    size_t nkeys = 0;
 
     if (depth > PBWLUA_MAX_DEPTH) {
         luaL_error(L, "pbwire: nesting limit exceeded");
@@ -460,55 +474,58 @@ pbwlua_push_message(lua_State *L, const pbw_message *msg, unsigned depth)
     /* Same guarantee as the fill side: one table plus one value per level
      * with room for the nested call beneath. */
     luaL_checkstack(L, 6, "pbwire: message too deep");
-    lua_newtable(L);
-    for (i = 0;; i++) {
-        pbw_value *value = NULL;
-        const pbw_field *field = pbw_message_field_at(msg, i, &value);
+    desc = pbw_message_descriptor(msg);
+    nfields = pbw_descriptor_field_count(desc);
+    nc = nfields > 0 ? pbwlua_name_cache(L, s, desc, nfields) : NULL;
+    /* Exact hash part: present fields plus the empty table an absent
+     * repeated field still owes. No rehash while filling, no over-
+     * allocation either (a sparse message keeps a small hash). */
+    for (i = 0; i < nfields; i++) {
+        const struct pbwlua_fentry *f = &nc->f[i];
 
-        if (field == NULL) {
-            break;
-        }
-        if (pbw_value_get_kind(value) == PBW_VALUE_LIST) {
+        nkeys += (size_t)(f->repeated ||
+                          pbw_message_get_field(msg, f->field) != NULL);
+    }
+    lua_createtable(L, 0, (int)nkeys);
+    for (i = 0; i < nfields; i++) {
+        const struct pbwlua_fentry *f = &nc->f[i];
+        pbw_value *value = pbw_message_get_field(msg, f->field);
+
+        if (value == NULL) {
+            if (!f->repeated) {
+                continue;
+            }
+            /* An absent repeated field reads as an empty table, like the
+             * other bindings (Ruby reads []): game code can always
+             * #/ipairs it. */
+            lua_createtable(L, 0, 0);
+        } else if (pbw_value_get_kind(value) == PBW_VALUE_LIST) {
             size_t count = pbw_value_count(value);
             size_t k;
 
             /* Exact array size: no rehash while filling. */
             lua_createtable(L, (int)count, 0);
             for (k = 0; k < count; k++) {
-                pbwlua_push_value(L, field, pbw_value_at(value, k),
+                pbwlua_push_value(L, s, f->field, pbw_value_at(value, k),
                                   depth + 1);
                 lua_rawseti(L, -2, (int)k + 1);
             }
         } else {
-            pbwlua_push_value(L, field, value, depth + 1);
+            pbwlua_push_value(L, s, f->field, value, depth + 1);
         }
-        lua_setfield(L, -2, pbw_field_name(field));
-    }
-    /* An absent repeated field reads as an empty table, like the other
-     * bindings (Ruby reads []): game code can always #/ipairs it. */
-    {
-        const pbw_descriptor *desc = pbw_message_descriptor(msg);
-        size_t nfields = pbw_descriptor_field_count(desc);
-        size_t f;
-
-        for (f = 0; f < nfields; f++) {
-            const pbw_field *field = pbw_descriptor_field_at(desc, f);
-
-            if (pbw_field_label(field) == PBW_LABEL_REPEATED &&
-                pbw_message_get(msg, pbw_field_number(field)) == NULL) {
-                lua_newtable(L);
-                lua_setfield(L, -2, pbw_field_name(field));
-            }
-        }
+        /* Cached key under the value: one rawset, no interning. */
+        lua_rawgeti(L, LUA_REGISTRYINDEX, f->ref);
+        lua_insert(L, -2);
+        lua_rawset(L, -3);
     }
 }
 
 static void
-pbwlua_push_value(lua_State *L, const pbw_field *field,
+pbwlua_push_value(lua_State *L, pbwlua_schema *s, const pbw_field *field,
                   const pbw_value *value, unsigned depth)
 {
     if (pbw_value_get_kind(value) == PBW_VALUE_MESSAGE) {
-        pbwlua_push_message(L, pbw_value_get_message(value), depth);
+        pbwlua_push_message(L, s, pbw_value_get_message(value), depth);
     } else {
         pbwlua_push_scalar(L, pbw_field_type(field), value);
     }
@@ -905,7 +922,9 @@ pbwlua_name_cache(lua_State *L, pbwlua_schema *s,
                   const pbw_descriptor *desc, size_t n)
 {
     struct pbwlua_namecache *c;
-    size_t i;    for (c = s->ncache; c != NULL; c = c->next) {
+    size_t i;
+
+    for (c = s->ncache; c != NULL; c = c->next) {
         if (c->desc == desc) {
             return c;
         }
@@ -1273,7 +1292,7 @@ pbwlua_decode(lua_State *L)
     if (status != PBW_OK) {
         luaL_error(L, "pbwire: decode %s: %s", name, pbw_strerror(status));
     }
-    pbwlua_push_message(L, msg, 0);
+    pbwlua_push_message(L, s, msg, 0);
     return 1;
 }
 
@@ -1325,7 +1344,7 @@ pbwlua_from_json(lua_State *L)
     if (status != PBW_OK) {
         luaL_error(L, "pbwire: from_json %s: %s", name, pbw_strerror(status));
     }
-    pbwlua_push_message(L, msg, 0);
+    pbwlua_push_message(L, s, msg, 0);
     pbw_message_free(msg);
     return 1;
 }
@@ -1374,7 +1393,7 @@ pbwlua_from_text(lua_State *L)
     if (status != PBW_OK) {
         luaL_error(L, "pbwire: from_text %s: %s", name, pbw_strerror(status));
     }
-    pbwlua_push_message(L, msg, 0);
+    pbwlua_push_message(L, s, msg, 0);
     pbw_message_free(msg);
     return 1;
 }
@@ -1456,7 +1475,7 @@ pbwlua_decode_delimited(lua_State *L)
         luaL_error(L, "pbwire: decode_delimited %s: %s", name,
                    pbw_strerror(status));
     }
-    pbwlua_push_message(L, msg, 0);
+    pbwlua_push_message(L, s, msg, 0);
     pbw_message_free(msg);
     lua_pushinteger(L, (lua_Integer)consumed);
     return 2;
