@@ -8,3 +8,6 @@ erl_crash.dump
 /build/
 /include
 erl_crash.dump
+
+# `mix docs` (HexDocs) output
+/doc/

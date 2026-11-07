@@ -26,7 +26,11 @@ defmodule Pbwire.MixProject do
       {:pbwire, "~> 0.1"},
       # The schema plugin, like gpb is for the Erlang binding: the generated
       # structs plus __message_props__/0 that Pbwire.Schema consumes.
-      {:protobuf, "~> 0.17"}
+      {:protobuf, "~> 0.17"},
+      # `mix hex.publish` runs `mix docs` first and aborts when ExDoc is
+      # missing, which is why this package never reached Hex. dev-only, so
+      # consumers never fetch it.
+      {:ex_doc, "~> 0.38", only: :dev, runtime: false}
     ]
   end
 
