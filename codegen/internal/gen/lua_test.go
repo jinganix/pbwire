@@ -120,3 +120,20 @@ func TestLuaFilesNoRegistry(t *testing.T) {
 		t.Error("loader stays without the registry")
 	}
 }
+
+// Sibling modules are required under a prefixed alias: a dep file named after
+// a Lua keyword (or after one of the file's own locals, e.g. meta) would
+// otherwise shadow it or fail to parse.
+func TestLuaDepAlias(t *testing.T) {
+	cases := map[string]string{
+		"xdep.proto":      "_imp_xdep",
+		"a-dir/a-b.proto": "_imp_a_b",
+		"end.proto":       "_imp_end",
+		"meta.proto":      "_imp_meta",
+	}
+	for in, want := range cases {
+		if got := luaDepAlias(in); got != want {
+			t.Errorf("luaDepAlias(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

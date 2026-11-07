@@ -40,6 +40,8 @@ coverage/
 *.a
 *.dSYM/
 *.tsbuildinfo
+# macOS clang writes per-source diagnostic plists for some toolchains
+/*.plist
 bench/gen/
 bindings/c/benchmarks/gen/
 bindings/go/benchmarks/gen/

@@ -714,6 +714,113 @@ test_deep_binary(const pbw_descriptor *d)
     }
 }
 
+static size_t
+wire_varint(uint8_t *p, size_t v)
+{
+    size_t n = 0;
+
+    while (v >= 0x80) {
+        p[n++] = (uint8_t)((v & 0x7f) | 0x80);
+        v >>= 7;
+    }
+    p[n++] = (uint8_t)v;
+    return n;
+}
+
+/* One packed field: tag, length prefix, payload. Returns bytes written. */
+static size_t
+packed_block(uint8_t *out, uint32_t number, const uint8_t *data, size_t len)
+{
+    size_t tag_len = wire_varint(out, ((size_t)number << 3) | 2u);
+    size_t len_len = wire_varint(out + tag_len, len);
+
+    if (len > 0) {
+        memcpy(out + tag_len + len_len, data, len);
+    }
+    return tag_len + len_len + len;
+}
+
+/* Bounds of the packed-run node batches: a truncated fixed-width tail, an
+ * unterminated varint run and a declared length past the buffer must all be
+ * rejected, and a run past the >64-byte scan threshold must decode to exactly
+ * its item count (so the batch never hands out more nodes than the run holds,
+ * nor fewer than it uses). */
+static void
+test_packed_batches(const pbw_descriptor *d)
+{
+    enum {
+        kRepInt32 = 33554434u,   /* packed int32, huge 5-byte tag */
+        kRepFixed32 = 33554436u, /* packed fixed32 */
+        kRepDouble = 33554437u   /* packed double */
+    };
+    uint8_t wire[2048];
+    uint8_t payload[1024];
+    pbw_message *m = NULL;
+    pbw_value *list;
+    size_t i;
+    size_t len;
+
+    /* fixed32: 13 payload bytes are three items plus a one-byte tail */
+    memset(payload, 0x11, 13);
+    len = packed_block(wire, kRepFixed32, payload, 13);
+    CHECK_STATUS(PBW_ERR_INVALID, pbw_decode(d, wire, len, &m));
+    CHECK(m == NULL);
+
+    /* double: 9 bytes are one item plus a tail, 7 bytes are a short item */
+    memset(payload, 0x22, 9);
+    len = packed_block(wire, kRepDouble, payload, 9);
+    CHECK_STATUS(PBW_ERR_INVALID, pbw_decode(d, wire, len, &m));
+    len = packed_block(wire, kRepDouble, payload, 7);
+    CHECK_STATUS(PBW_ERR_INVALID, pbw_decode(d, wire, len, &m));
+    CHECK(m == NULL);
+
+    /* a 200-byte varint is overlong: the reference rejects it */
+    memset(payload, 0x80, 200);
+    payload[199] = 0x00;
+    len = packed_block(wire, kRepInt32, payload, 200);
+    CHECK_STATUS(PBW_ERR_INVALID, pbw_decode(d, wire, len, &m));
+    CHECK(m == NULL);
+
+    /* a run of only continuation bytes has no items at all */
+    memset(payload, 0x80, 200);
+    len = packed_block(wire, kRepInt32, payload, 200);
+    CHECK_STATUS(PBW_ERR_INVALID, pbw_decode(d, wire, len, &m));
+    CHECK(m == NULL);
+
+    /* the declared length runs past the buffer: Fuzz.rep (3) is declared
+     * unpacked, so packed bytes for it still take the packed path */
+    wire[0] = 0x1A;
+    wire[1] = 0xFF;
+    CHECK_STATUS(PBW_ERR_INVALID, pbw_decode(d, wire, 2, &m));
+    CHECK(m == NULL);
+
+    /* 65 two-byte varints: past the scan threshold, batch of 65 nodes */
+    for (i = 0; i < 65; i++) {
+        payload[i * 2] = 0x80;
+        payload[i * 2 + 1] = 0x01;
+    }
+    len = packed_block(wire, kRepInt32, payload, 130);
+    CHECK_STATUS(PBW_OK, pbw_decode(d, wire, len, &m));
+    CHECK(m != NULL);
+    list = m != NULL ? pbw_message_get(m, kRepInt32) : NULL;
+    CHECK(list != NULL && pbw_value_get_kind(list) == PBW_VALUE_LIST);
+    CHECK(list != NULL && pbw_value_count(list) == 65);
+    pbw_message_free(m);
+    m = NULL;
+
+    /* 200 fixed32 items: every node in the batch is used exactly once */
+    for (i = 0; i < 800; i++) {
+        payload[i] = 0x33;
+    }
+    len = packed_block(wire, kRepFixed32, payload, 800);
+    CHECK_STATUS(PBW_OK, pbw_decode(d, wire, len, &m));
+    CHECK(m != NULL);
+    list = m != NULL ? pbw_message_get(m, kRepFixed32) : NULL;
+    CHECK(list != NULL && pbw_value_get_kind(list) == PBW_VALUE_LIST);
+    CHECK(list != NULL && pbw_value_count(list) == 200);
+    pbw_message_free(m);
+}
+
 static pbw_status
 count_cb(void *ud, const pbw_field *field, uint32_t number,
          uint32_t wire_type, const pbw_visit_value *value)
@@ -838,6 +945,7 @@ main(void)
         CHECK(d != NULL);
         if (d != NULL) {
             test_vectors(d);
+            test_packed_batches(d);
             test_api_robustness(d);
             test_istream_split(d);
             test_prefix_sweep(d);

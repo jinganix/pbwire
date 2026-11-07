@@ -55,6 +55,12 @@ typedef struct {
     pbw_schema *schema;
     /* One arena + encode buffer for every call. */
     pbw_ctx *ctx;
+    /* Per-descriptor interned field names for the decode->named-list walk,
+     * resolved once per message type. */
+    struct pbwr_fields *fields;
+    /* Last one used: a decode loop usually repeats the same message type, so
+     * this skips the list walk. */
+    struct pbwr_fields *last;
 } pbwr_schema;
 
 /* A builder owns a plain malloc tree. It preserves its schema SEXP
@@ -65,6 +71,16 @@ typedef struct {
     pbw_message *tree;
     SEXP schema_sexp;
 } pbwr_message;
+
+/* A message type's interned field names, in descriptor order: the
+ * decode->list walk stores these instead of paying a mkChar hash lookup per
+ * field per message. */
+typedef struct pbwr_fields {
+    const pbw_descriptor *desc;
+    size_t nfields;
+    SEXP names; /* STRSXP, R_PreserveObject'd */
+    struct pbwr_fields *next;
+} pbwr_fields;
 
 static SEXP pbwr_schema_tag(void)
 {
@@ -515,13 +531,63 @@ pbwr_scalar_sexp(pbw_type type, const pbw_value *value)
     }
 }
 
-static SEXP pbwr_message_sexp(const pbw_message *msg, unsigned depth);
+static SEXP pbwr_message_sexp(const pbw_message *msg, pbwr_schema *s,
+                              unsigned depth);
+
+/* The interned key for field f: from the cache when it was built, from
+ * mkChar otherwise (allocation failure, or a descriptor with no cache). */
+static SEXP
+pbwr_name(pbwr_fields *cache, size_t index, const pbw_field *field)
+{
+    if (cache != NULL && index < cache->nfields) {
+        return STRING_ELT(cache->names, (R_xlen_t)index);
+    }
+    return mkChar(pbw_field_name(field));
+}
+
+/* Cache of a message type's prepared fields, built on first decode. NULL
+ * when memory is short: the walk then falls back to mkChar per field. */
+static pbwr_fields *
+pbwr_fields_get(pbwr_schema *s, const pbw_descriptor *desc)
+{
+    pbwr_fields *c;
+    size_t nfields, i;
+
+    if (s->last != NULL && s->last->desc == desc) {
+        return s->last;
+    }
+    for (c = s->fields; c != NULL; c = c->next) {
+        if (c->desc == desc) {
+            s->last = c;
+            return c;
+        }
+    }
+    nfields = pbw_descriptor_field_count(desc);
+    c = (pbwr_fields *)calloc(1, sizeof(*c));
+    if (c == NULL) {
+        return NULL;
+    }
+    c->names = PROTECT(allocVector(STRSXP, (R_xlen_t)nfields));
+    for (i = 0; i < nfields; i++) {
+        SET_STRING_ELT(
+            c->names, (R_xlen_t)i,
+            mkChar(pbw_field_name(pbw_descriptor_field_at(desc, i))));
+    }
+    c->desc = desc;
+    c->nfields = nfields;
+    R_PreserveObject(c->names);
+    UNPROTECT(1);
+    c->next = s->fields;
+    s->fields = c;
+    s->last = c;
+    return c;
+}
 
 /* Repeated scalars decode as atomic vectors (what R code already maps
  * over); messages and bytes decode as lists. */
 static SEXP
-pbwr_repeated_sexp(const pbw_field *field, const pbw_value *list,
-                   unsigned depth)
+pbwr_repeated_sexp(pbwr_schema *s, const pbw_field *field,
+                   const pbw_value *list, unsigned depth)
 {
     size_t count = (list != NULL) ? pbw_value_count(list) : 0;
     pbw_type type = pbw_field_type(field);
@@ -541,7 +607,7 @@ pbwr_repeated_sexp(const pbw_field *field, const pbw_value *list,
             SEXP item =
                 pbwr_message_sexp(pbw_value_get_message(
                                       pbw_value_at(list, k)),
-                                  depth + 1);
+                                  s, depth + 1);
 
             PROTECT(item);
             SET_VECTOR_ELT(out, (R_xlen_t)k, item);
@@ -626,10 +692,12 @@ pbwr_repeated_sexp(const pbw_field *field, const pbw_value *list,
 }
 
 static SEXP
-pbwr_message_sexp(const pbw_message *msg, unsigned depth)
+pbwr_message_sexp(const pbw_message *msg, pbwr_schema *s, unsigned depth)
 {
     const pbw_descriptor *desc = pbw_message_descriptor(msg);
     size_t nfields = pbw_descriptor_field_count(desc);
+    /* The cache is per descriptor: a nested message needs its own. */
+    pbwr_fields *cache = s != NULL ? pbwr_fields_get(s, desc) : NULL;
     /* Present fields first, then one empty vector/list per absent
      * repeated field, so R code can always length()/lapply() it. */
     size_t total = 0;
@@ -639,43 +707,37 @@ pbwr_message_sexp(const pbw_message *msg, unsigned depth)
     if (depth > PBWR_MAX_DEPTH) {
         Rf_error("pbwire: nesting limit exceeded");
     }
-    for (;;) {
-        pbw_value *ignored = NULL;
-
-        if (pbw_message_field_at(msg, total, &ignored) == NULL) {
-            break;
-        }
-        total++;
-    }
+    /* One walk of the descriptor, not of the present fields through
+     * pbw_message_field_at(): that call scans the field table from the start,
+     * so counting that way was quadratic per message. pbw_message_get_field()
+     * is one index and one presence bit. */
     for (f = 0; f < nfields; f++) {
         const pbw_field *field = pbw_descriptor_field_at(desc, f);
 
-        if (pbw_field_label(field) == PBW_LABEL_REPEATED &&
-            pbw_message_get(msg, pbw_field_number(field)) == NULL) {
-            total++;
-        }
+        total += (size_t)(pbw_message_get_field(msg, field) != NULL ||
+                          pbw_field_label(field) == PBW_LABEL_REPEATED);
     }
     PROTECT(out = allocVector(VECSXP, (R_xlen_t)total));
     PROTECT(names = allocVector(STRSXP, (R_xlen_t)total));
-    for (;;) {
-        pbw_value *value = NULL;
-        const pbw_field *field = pbw_message_field_at(msg, i, &value);
+    for (f = 0; f < nfields; f++) {
+        const pbw_field *field = pbw_descriptor_field_at(desc, f);
+        pbw_value *value = pbw_message_get_field(msg, field);
         SEXP item;
 
-        if (field == NULL) {
-            break;
+        if (value == NULL) {
+            continue;
         }
         if (pbw_value_get_kind(value) == PBW_VALUE_LIST) {
-            item = pbwr_repeated_sexp(field, value, depth);
+            item = pbwr_repeated_sexp(s, field, value, depth);
         } else if (pbw_value_get_kind(value) == PBW_VALUE_MESSAGE) {
-            item = pbwr_message_sexp(pbw_value_get_message(value),
+            item = pbwr_message_sexp(pbw_value_get_message(value), s,
                                      depth + 1);
         } else {
             item = pbwr_scalar_sexp(pbw_field_type(field), value);
         }
         PROTECT(item);
         SET_VECTOR_ELT(out, (R_xlen_t)i, item);
-        SET_STRING_ELT(names, (R_xlen_t)i, mkChar(pbw_field_name(field)));
+        SET_STRING_ELT(names, (R_xlen_t)i, pbwr_name(cache, f, field));
         UNPROTECT(1);
         i++;
     }
@@ -684,13 +746,13 @@ pbwr_message_sexp(const pbw_message *msg, unsigned depth)
         SEXP item;
 
         if (pbw_field_label(field) != PBW_LABEL_REPEATED ||
-            pbw_message_get(msg, pbw_field_number(field)) != NULL) {
+            pbw_message_get_field(msg, field) != NULL) {
             continue;
         }
-        item = pbwr_repeated_sexp(field, NULL, depth);
+        item = pbwr_repeated_sexp(s, field, NULL, depth);
         PROTECT(item);
         SET_VECTOR_ELT(out, (R_xlen_t)i, item);
-        SET_STRING_ELT(names, (R_xlen_t)i, mkChar(pbw_field_name(field)));
+        SET_STRING_ELT(names, (R_xlen_t)i, pbwr_name(cache, f, field));
         UNPROTECT(1);
         i++;
     }
@@ -707,6 +769,15 @@ pbwr_schema_finalizer(SEXP s)
     pbwr_schema *p = (pbwr_schema *)R_ExternalPtrAddr(s);
 
     if (p != NULL) {
+        pbwr_fields *c = p->fields;
+
+        while (c != NULL) {
+            pbwr_fields *next = c->next;
+
+            R_ReleaseObject(c->names);
+            free(c);
+            c = next;
+        }
         if (p->ctx != NULL) {
             pbw_ctx_free(p->ctx);
         }
@@ -770,7 +841,9 @@ pbwr_load(SEXP data)
                  reason != NULL && reason[0] != '\0' ? reason
                                                      : pbw_strerror(status));
     }
-    p = (pbwr_schema *)malloc(sizeof(*p));
+    /* calloc: fields/last are only touched later, and the finalizer walks
+     * them, so they must start NULL. */
+    p = (pbwr_schema *)calloc(1, sizeof(*p));
     if (p == NULL) {
         pbw_schema_free(schema);
         Rf_error("pbwire: out of memory");
@@ -867,7 +940,7 @@ pbwr_decode(SEXP schema_sexp, SEXP type, SEXP wire)
     if (status != PBW_OK) {
         pbwr_fail(status, "decode", name);
     }
-    return pbwr_message_sexp(msg, 0);
+    return pbwr_message_sexp(msg, s, 0);
 }
 
 /* Gateway passthrough (and the conformance binary path): decode and
@@ -982,7 +1055,7 @@ pbwr_from_json(SEXP schema_sexp, SEXP type, SEXP text, SEXP ignore)
     if (status != PBW_OK) {
         pbwr_fail(status, "from_json", name);
     }
-    ans = pbwr_message_sexp(msg, 0);
+    ans = pbwr_message_sexp(msg, s, 0);
     pbw_message_free(msg);
     return ans;
 }
@@ -1032,7 +1105,7 @@ pbwr_from_text(SEXP schema_sexp, SEXP type, SEXP text)
     if (status != PBW_OK) {
         pbwr_fail(status, "from_text", name);
     }
-    ans = pbwr_message_sexp(msg, 0);
+    ans = pbwr_message_sexp(msg, s, 0);
     pbw_message_free(msg);
     return ans;
 }
@@ -1121,7 +1194,7 @@ pbwr_decode_delimited(SEXP schema_sexp, SEXP type, SEXP wire)
     }
     PROTECT(ans = allocVector(VECSXP, 2));
     PROTECT(names = allocVector(STRSXP, 2));
-    item = pbwr_message_sexp(msg, 0);
+    item = pbwr_message_sexp(msg, s, 0);
     PROTECT(item);
     pbw_message_free(msg);
     read = allocVector(INTSXP, 1);

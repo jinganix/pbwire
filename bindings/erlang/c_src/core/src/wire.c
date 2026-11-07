@@ -316,13 +316,19 @@ pbw_strtod_slow(const char *text, char **end, double value, char *stop)
     memcpy(buf + before + dpsize, stop + 1, len - before - 1);
     {
         char *translated_stop = NULL;
+        size_t used = before;
 
         value = strtod(buf, &translated_stop);
+        /* Map the translated end offset back onto the original text. A parse
+         * that stopped inside the translated decimal separator keeps `before`
+         * (the '.' position): subtracting the separator width there would
+         * underflow and hand back an end pointer outside the buffer. */
+        if (translated_stop != NULL &&
+            translated_stop >= buf + (dpsize - 1)) {
+            used = (size_t)(translated_stop - buf) - (dpsize - 1);
+        }
         if (end != NULL) {
-            *end = (char *)text + (translated_stop != NULL
-                                       ? (size_t)(translated_stop - buf) -
-                                             (dpsize - 1)
-                                       : before);
+            *end = (char *)text + used;
         }
     }
     if (buf != stack) {

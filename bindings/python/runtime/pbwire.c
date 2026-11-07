@@ -2584,7 +2584,17 @@ new_schema(const void *data, size_t len, const char *what)
     Schema *self;
 
     if (status != PBW_OK) {
-        set_status(status, what);
+        /* The loader hands back the partial schema on failure too, so its
+         * reason is the only useful message; release the schema after
+         * copying the text out (set_status() would only say "invalid data"). */
+        const char *why = schema != NULL ? pbw_schema_error(schema) : NULL;
+
+        if (why != NULL && why[0] != '\0') {
+            PyErr_Format(PyExc_ValueError, "%s: %s", what, why);
+        } else {
+            set_status(status, what);
+        }
+        pbw_schema_free(schema);
         return NULL;
     }
     self = PyObject_GC_New(Schema, &SchemaType);

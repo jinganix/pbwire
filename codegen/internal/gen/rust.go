@@ -39,6 +39,35 @@ func rustName(name string) string {
 	return name
 }
 
+// rustRawKeywords are the keywords a raw identifier can still name. A message
+// named Struct/Type/Match yields a module segment that is one of them; the
+// crate/self/super trio is not a legal raw identifier and gets a suffix.
+var rustRawKeywords = map[string]bool{
+	"abstract": true, "as": true, "async": true, "await": true, "become": true,
+	"box": true, "break": true, "const": true, "continue": true, "do": true,
+	"dyn": true, "else": true, "enum": true, "extern": true, "false": true,
+	"final": true, "fn": true, "for": true, "if": true, "impl": true,
+	"in": true, "let": true, "loop": true, "macro": true, "match": true,
+	"mod": true, "move": true, "mut": true, "override": true, "priv": true,
+	"pub": true, "ref": true, "return": true, "static": true, "struct": true,
+	"trait": true, "true": true, "try": true, "type": true, "typeof": true,
+	"unsafe": true, "unsized": true, "use": true, "virtual": true,
+	"where": true, "while": true, "yield": true,
+}
+
+// rustModSegment keeps a snake_case module name usable: a keyword needs a raw
+// identifier, the crate/self/super trio a suffix (they cannot be raw).
+func rustModSegment(name string) string {
+	switch name {
+	case "crate", "self", "super":
+		return name + "_pbwire"
+	}
+	if rustRawKeywords[name] {
+		return "r#" + name
+	}
+	return name
+}
+
 // rustSnake is prost's module naming: CamelCase message name to snake_case.
 func rustSnake(s string) string {
 	var b strings.Builder
@@ -48,7 +77,7 @@ func rustSnake(s string) string {
 		}
 		b.WriteRune(r)
 	}
-	return strings.ToLower(b.String())
+	return rustModSegment(strings.ToLower(b.String()))
 }
 
 // rustCamel is prost's oneof/variant naming: SCREAMING or snake_case to

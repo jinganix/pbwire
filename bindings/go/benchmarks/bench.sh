@@ -32,4 +32,4 @@ protoc -I"$(dirname "$proto")" \
     --go_out="$gen" --go_opt=Mmatrix3.proto=pbwire/benchmarks/gen,paths=source_relative \
     --descriptor_set_out="$gen/matrix3.desc" --include_imports "$proto"
 
-cd "$here/.." && exec go test -tags bench -run TestMatrix3Bench -v ./benchmarks/
+cd "$here/.." && exec go test -count=1 -tags bench -run TestMatrix3Bench -v ./benchmarks/

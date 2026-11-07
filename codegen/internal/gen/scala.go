@@ -22,7 +22,7 @@ func scalaFiles(f *model.File, opt Options) ([]File, error) {
 		var b strings.Builder
 		b.WriteString(header(f, "Case classes over the Java runtime (Schema/Message, no codegen at use time)."))
 		b.WriteString("import java.util.Base64\n\n")
-		b.WriteString("object " + base(f) + "Gen {\n")
+		b.WriteString("object " + ident(base(f)) + "Gen {\n")
 		for _, e := range f.Enums {
 			fmt.Fprintf(&b, "  // %s\n", e.Full)
 			fmt.Fprintf(&b, "  object %s {\n", className(f, e.Name))
@@ -49,7 +49,7 @@ func scalaFiles(f *model.File, opt Options) ([]File, error) {
 // mode) must run first, loudly otherwise. registry adds the whole-file
 // message list plus a preload that warms every type.
 func writeScalaMeta(b *strings.Builder, f *model.File, opt Options) {
-	meta := base(f) + "Meta"
+	meta := ident(base(f)) + "Meta"
 	b.WriteString(header(f, "Embedded descriptor set plus its loader: the schema side of the generated model."))
 	b.WriteString("import java.util.Base64\n\n")
 	fmt.Fprintf(b, "object %s {\n", meta)
@@ -86,7 +86,7 @@ func writeScalaMeta(b *strings.Builder, f *model.File, opt Options) {
 func scalaMsg(f *model.File, field model.Field) string {
 	if field.Import != "" {
 		if imp := findImport(f, field.Import); imp != nil {
-			return stem(imp.Path) + "Gen." + imp.Prefix + "_" + field.Message
+			return ident(stem(imp.Path)) + "Gen." + imp.Prefix + "_" + field.Message
 		}
 	}
 	return className(f, field.Message)
@@ -206,7 +206,7 @@ func writeScalaMessage(b *strings.Builder, f *model.File, m model.Message) {
 	fmt.Fprintf(b, "    def encode: Array[Byte] = %s.encode(this)\n", cls)
 	b.WriteString("  }\n\n")
 	fmt.Fprintf(b, "  object %s {\n", cls)
-	fmt.Fprintf(b, "    private val ty: MessageType = %sMeta.schema.message(%q)\n\n", base(f), m.Full)
+	fmt.Fprintf(b, "    private val ty: MessageType = %sMeta.schema.message(%q)\n\n", ident(base(f)), m.Full)
 	fmt.Fprintf(b, "    def encode(v: %s): Array[Byte] = {\n", cls)
 	b.WriteString("      val msg = ty.newMessage()\n")
 	b.WriteString("      fill(msg, v)\n")

@@ -106,3 +106,23 @@ func TestRustFilesNoRegistry(t *testing.T) {
 		t.Error("loader stays without the registry")
 	}
 }
+
+// A message or dep file named after a Rust keyword yields a module segment
+// that needs a raw identifier; crate/self/super cannot be raw and get a
+// suffix instead.
+func TestRustModSegment(t *testing.T) {
+	cases := map[string]string{
+		"struct": "r#struct",
+		"match":  "r#match",
+		"type":   "r#type",
+		"crate":  "crate_pbwire",
+		"self":   "self_pbwire",
+		"super":  "super_pbwire",
+		"order":  "order",
+	}
+	for in, want := range cases {
+		if got := rustModSegment(in); got != want {
+			t.Errorf("rustModSegment(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

@@ -10,7 +10,7 @@
 // dynamic runtime in <binding>/lib.
 const { _makeClass } = require('../../lib/pbwire-compat.js');
 
-const _DESC_B64 = 'CrkDCgp4ZGVwLnByb3RvEgR4ZGVwIjIKBkRlcE1zZxISCgRuYW1lGAEgASgJUgRuYW1lEhQKBXZhbHVlGAIgASgFUgV2YWx1ZUroAgoGEgQDAAoBCs0BCgEMEgMDABIawgEgU2hhcmVkIGRlcGVuZGVuY3kgZm9yIHRoZSBjcm9zcy1maWxlIGZpeHR1cmU6IHhmaWxlLnByb3RvIGltcG9ydHMgdGhpcwogZmlsZSBhbmQgcmVmZXJlbmNlcyBEZXBNc2cuIEdlbmVyYXRlZCBvbmNlIHBlciBsYW5ndWFnZSBuZXh0IHRvIHhmaWxlJ3MKIG93biBtb2RlbDsgdGhlIHJlZmVyZW5jZSBieXRlcyBsaXZlIHdpdGggeGZpbGUuCgoICgECEgMFAA0KCgoCBAASBAcACgEKCgoDBAABEgMHCA4KCwoEBAACABIDCAISCgwKBQQAAgAFEgMIAggKDAoFBAACAAESAwgJDQoMCgUEAAIAAxIDCBARCgsKBAQAAgESAwkCEgoMCgUEAAIBBRIDCQIHCgwKBQQAAgEBEgMJCA0KDAoFBAACAQMSAwkQEWIGcHJvdG8zCoEFCgt4ZmlsZS5wcm90bxIFeGZpbGUaCnhkZXAucHJvdG8iZQoHVXNlc0RlcBIkCgZzaW5nbGUYASABKAsyDC54ZGVwLkRlcE1zZ1IGc2luZ2xlEiAKBG1hbnkYAiADKAsyDC54ZGVwLkRlcE1zZ1IEbWFueRISCgRub3RlGAMgASgJUgRub3RlSu8DCgYSBAQADgEKhAIKAQwSAwQAEhr5ASBDcm9zcy1maWxlIGZpeHR1cmUgZm9yIHRoZSBnZW5lcmF0ZWQgY29tcGF0IHRlc3RzOiBVc2VzRGVwIHJlZmVyZW5jZXMKIERlcE1zZyBmcm9tIHhkZXAucHJvdG8sIHNvIGV2ZXJ5IGxhbmd1YWdlIG11c3QgaW1wb3J0IHRoZSBzaWJsaW5nCiBnZW5lcmF0ZWQgZmlsZSBpbnN0ZWFkIG9mIHNraXBwaW5nIHRoZSBmaWVsZC4gUmVmZXJlbmNlIGJ5dGVzCiAoeGZpbGUuYmluKSBmcm9tIHByb3RvYyAtLWVuY29kZSBvZiB4ZmlsZS50eHQuCgoICgECEgMGAA4KCQoCAwASAwgAFAoKCgIEABIECgAOAQoKCgMEAAESAwoIDwoLCgQEAAIAEgMLAhkKDAoFBAACAAYSAwsCDQoMCgUEAAIAARIDCw4UCgwKBQQAAgADEgMLFxgKCwoEBAACARIDDAIgCgwKBQQAAgEEEgMMAgoKDAoFBAACAQYSAwwLFgoMCgUEAAIBARIDDBcbCgwKBQQAAgEDEgMMHh8KCwoEBAACAhIDDQISCgwKBQQAAgIFEgMNAggKDAoFBAACAgESAw0JDQoMCgUEAAICAxIDDRARYgZwcm90bzM=';
+const { get_schema } = require('./xfile_meta.js');
 
 const _ENUMS = {};
 const _REVENUMS = {};
@@ -25,7 +25,7 @@ const UsesDep_FIELDS = [
   { n: 'many', js: 'many', k: 'msg', rep: true, msg: 'DepMsg', en: null, oneof: null, req: false, has: true, closed: false },
   { n: 'note', js: 'note', k: 'str', rep: false, msg: null, en: null, oneof: null, req: false, has: false, closed: false },
 ];
-const UsesDep = _makeClass('xfile.UsesDep', _DESC_B64, UsesDep_FIELDS);
+const UsesDep = _makeClass('xfile.UsesDep', get_schema, UsesDep_FIELDS);
 _CLASSES['UsesDep'] = UsesDep;
 UsesDep._ENUMS = _ENUMS;
 UsesDep._REVENUMS = _REVENUMS;

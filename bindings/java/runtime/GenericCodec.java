@@ -479,6 +479,25 @@ public final class GenericCodec {
         }
     }
 
+    /** Repeated storage, allocated on the first repeated write. A message
+     *  that never carries a repeated element (most of them, and every nested
+     *  one) used to pay four more arrays per decode: -432 B, ~10% of a 136 B
+     *  decode. Reads with no holder are empty by definition, and encode only
+     *  reads it after `has[]` gates the slot on. */
+    static final class Rep {
+        final long[][] num;
+        final int[] numLen;
+        final Object[][] ref;
+        final int[] refLen;
+
+        Rep(int n) {
+            num = new long[n][];
+            numLen = new int[n];
+            ref = new Object[n][];
+            refLen = new int[n];
+        }
+    }
+
     /**
      * Columnar dynamic message. Numerics live eager and decoded in long[]
      * (float/double as raw bits, bool as 0/1); MESSAGE/GROUP/STRING/BYTES
@@ -490,10 +509,7 @@ public final class GenericCodec {
         public final long[] num;
         public final Object[] ref; // String/byte[]/DMsg/Slice, singular
         public final boolean[] has;
-        public final long[][] repNum;
-        public final int[] repNumLen;
-        public final Object[][] repRef; // String/byte[]/DMsg/Slice elements
-        public final int[] repRefLen;
+        Rep rep; // null until the first repeated write (see Rep)
         public final int[] oneofCase; // slot+1 per oneof, 0 = none set
         public List<byte[]> unknown; // lazy: null until the first one
 
@@ -503,11 +519,14 @@ public final class GenericCodec {
             this.num = new long[n];
             this.ref = new Object[n];
             this.has = new boolean[n];
-            this.repNum = new long[n][];
-            this.repNumLen = new int[n];
-            this.repRef = new Object[n][];
-            this.repRefLen = new int[n];
             this.oneofCase = new int[def.oneofCount];
+        }
+
+        private Rep rep() {
+            if (rep == null) {
+                rep = new Rep(def.fields.length);
+            }
+            return rep;
         }
 
         private int slot(int fnum) {
@@ -625,29 +644,30 @@ public final class GenericCodec {
             // Repeated presence lives in has[], like singular fields: the
             // encode loop gates every slot on it (see encodeInto).
             has[s] = true;
+            Rep rp = rep();
             if (f.kind <= K_DOUBLE) {
-                long[] a = repNum[s];
-                int n = repNumLen[s];
+                long[] a = rp.num[s];
+                int n = rp.numLen[s];
                 if (a == null || n == a.length) {
                     a = growLong(a, n + 1);
-                    repNum[s] = a;
+                    rp.num[s] = a;
                 }
                 a[n] = toNum(f, v);
-                repNumLen[s] = n + 1;
+                rp.numLen[s] = n + 1;
                 return this;
             }
-            Object[] a = repRef[s];
-            int n = repRefLen[s];
+            Object[] a = rp.ref[s];
+            int n = rp.refLen[s];
             if (a == null || n == a.length) {
                 a = growObj(a, n + 1);
-                repRef[s] = a;
+                rp.ref[s] = a;
             }
             if (f.kind >= K_MESSAGE && !(v instanceof DMsg)) {
                 throw new IllegalArgumentException("field " + fnum
                         + " needs DMsg");
             }
             a[n] = v;
-            repRefLen[s] = n + 1;
+            rp.refLen[s] = n + 1;
             return this;
         }
 
@@ -684,8 +704,10 @@ public final class GenericCodec {
                 oneofCase[f.oneof] = 0;
             }
             if (f.repeated) {
-                repNumLen[s] = 0;
-                repRefLen[s] = 0;
+                if (rep != null) { // empty either way
+                    rep.numLen[s] = 0;
+                    rep.refLen[s] = 0;
+                }
             } else if (f.kind <= K_DOUBLE) {
                 num[s] = 0;
             } else {
@@ -731,18 +753,22 @@ public final class GenericCodec {
         public List<Object> getList(int fnum) {
             int s = slot(fnum);
             Field f = def.fields[s];
+            Rep rp = rep;
+            if (rp == null) {
+                return new ArrayList<>(); // nothing was ever added
+            }
             ArrayList<Object> l = new ArrayList<>(
-                    f.kind <= K_DOUBLE ? repNumLen[s] : repRefLen[s]);
+                    f.kind <= K_DOUBLE ? rp.numLen[s] : rp.refLen[s]);
             if (f.kind <= K_DOUBLE) {
-                for (int i = 0; i < repNumLen[s]; i++) {
-                    l.add(box(f, repNum[s][i]));
+                for (int i = 0; i < rp.numLen[s]; i++) {
+                    l.add(box(f, rp.num[s][i]));
                 }
             } else {
-                for (int i = 0; i < repRefLen[s]; i++) {
-                    Object v = repRef[s][i];
+                for (int i = 0; i < rp.refLen[s]; i++) {
+                    Object v = rp.ref[s][i];
                     if (v instanceof Slice) {
                         v = materialize(f, (Slice) v);
-                        repRef[s][i] = v;
+                        rp.ref[s][i] = v;
                     }
                     l.add(v);
                 }
@@ -994,14 +1020,15 @@ public final class GenericCodec {
             }
             Field f = def.fields[s];
             if (f.repeated) {
-                int n = f.kind <= K_DOUBLE ? m.repNumLen[s] : m.repRefLen[s];
+                Rep rp = m.rep; // non-null: has[] gated this slot on
+                int n = f.kind <= K_DOUBLE ? rp.numLen[s] : rp.refLen[s];
                 if (n == 0) {
                     continue;
                 }
                 if (f.kind <= K_DOUBLE) {
-                    encodeRepNum(b, f, m.repNum[s], n);
+                    encodeRepNum(b, f, rp.num[s], n);
                 } else {
-                    Object[] a = m.repRef[s];
+                    Object[] a = rp.ref[s];
                     for (int i = 0; i < n; i++) {
                         writeRefVal(b, f, a[i], depth, sc);
                     }
@@ -1367,11 +1394,12 @@ public final class GenericCodec {
                 continue;
             }
             if (f.repeated) {
-                for (int i = 0; i < m.repRefLen[s]; i++) {
-                    Object v = m.repRef[s][i];
+                Rep rp = m.rep; // non-null: has[] gated this slot on
+                for (int i = 0; i < rp.refLen[s]; i++) {
+                    Object v = rp.ref[s][i];
                     if (v instanceof Slice) {
                         v = materialize(f, (Slice) v);
-                        m.repRef[s][i] = v;
+                        rp.ref[s][i] = v;
                     }
                     if (v instanceof DMsg) {
                         checkRequired((DMsg) v, depth + 1);
@@ -1474,8 +1502,9 @@ public final class GenericCodec {
             int wt, int fieldStart, int depth) {
         if (f.repeated) {
             if (f.kind <= K_DOUBLE) {
-                long[] a = m.repNum[s];
-                int n = m.repNumLen[s];
+                Rep rp = m.rep;
+                long[] a = rp == null ? null : rp.num[s];
+                int n = rp == null ? 0 : rp.numLen[s];
                 if (wt == Wire.WT_LEN && isPackableKind(f.kind)) { // packed run
                     int len = Wire.rLen32(r);
                     int end = r.pos + len;
@@ -1503,7 +1532,7 @@ public final class GenericCodec {
                         while (r.pos < end) {
                             if (n == a.length) {
                                 a = growLong(a, n + 1);
-                                m.repNum[s] = a;
+                                m.rep.num[s] = a;
                             }
                             a[n++] = readPackedVar(r, f.kind);
                         }
@@ -1511,14 +1540,14 @@ public final class GenericCodec {
                     if (r.pos != end) {
                         throw new IllegalArgumentException("packed overrun");
                     }
-                    m.repNumLen[s] = n;
+                    m.rep.numLen[s] = n;
                     // An empty packed run adds nothing: presence follows length.
                     m.has[s] = n > 0;
                     return;
                 }
                 a = needLong(m, s, n + 1); // unpacked element
                 a[n] = readNumSingle(r, f.kind);
-                m.repNumLen[s] = n + 1;
+                m.rep.numLen[s] = n + 1;
                 m.has[s] = true;
                 return;
             }
@@ -1532,14 +1561,15 @@ public final class GenericCodec {
                 int len = Wire.rLen32(r);
                 r.pos += len;
             }
-            Object[] a = m.repRef[s];
-            int n = m.repRefLen[s];
+            Rep rp = m.rep();
+            Object[] a = rp.ref[s];
+            int n = rp.refLen[s];
             if (a == null || n == a.length) {
                 a = growObj(a, n + 1);
-                m.repRef[s] = a;
+                rp.ref[s] = a;
             }
             a[n] = new Slice(r.b, fieldStart, r.pos - fieldStart);
-            m.repRefLen[s] = n + 1;
+            rp.refLen[s] = n + 1;
             m.has[s] = true;
             return;
         }
@@ -1690,10 +1720,11 @@ public final class GenericCodec {
     }
 
     private static long[] needLong(DMsg m, int s, int need) {
-        long[] a = m.repNum[s];
+        Rep rp = m.rep();
+        long[] a = rp.num[s];
         if (a == null || a.length < need) {
             a = growLong(a, need);
-            m.repNum[s] = a;
+            rp.num[s] = a;
         }
         return a;
     }

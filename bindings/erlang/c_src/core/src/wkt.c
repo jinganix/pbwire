@@ -102,7 +102,10 @@ wkt_to_millis(const pbw_message *msg, int64_t *out)
     if (nanos > 999999999 || nanos < -999999999) {
         return PBW_ERR_INVALID;
     }
-    if (sec > INT64_MAX / 1000 || sec < INT64_MIN / 1000) {
+    /* The sub-second part moves the result by at most 999 ms either way, so
+     * bound the multiply tightly enough that adding it cannot overflow:
+     * sec*1000 + nanos/1000000 stays inside int64 for every accepted sec. */
+    if (sec > (INT64_MAX - 999) / 1000 || sec < (INT64_MIN + 999) / 1000) {
         return PBW_ERR_LIMIT;
     }
     *out = sec * 1000 + nanos / 1000000;

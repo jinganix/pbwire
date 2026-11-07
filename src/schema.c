@@ -333,7 +333,9 @@ add_field(pbw_descriptor *msg, const char *name, uint32_t number, pbw_type type,
     field->label = label;
     field->is_extension = is_extension ? 1u : 0u;
     msg->field_count++;
-    msg->schema->linked = 0;
+    if (msg->schema != NULL) {
+        msg->schema->linked = 0;
+    }
     return field;
 }
 
@@ -685,18 +687,19 @@ link_message(pbw_schema *schema, pbw_descriptor *msg)
         }
         for (i = 0; i < msg->field_count; i++) {
             pbw_field *field = &msg->fields[i];
-            int closed = pbw_enum_is_closed(field);
             if (field->tag_len == 1) {
                 map[field->tag[0]] = field;
             }
-            /* The packed-form entry keeps the old table's scope: only
-             * fields the generic logic would not already route there.
-             * Oneof members, groups and closed enums arriving packed
-             * stay on the generic/unknown path exactly as before. */
+            /* The packed-form entry: a repeated packable field accepts the
+             * LEN (packed) form whatever its declared packedness, closed
+             * enums included -- read_packed() moves unknown enum values to
+             * the unknown fields one item at a time, like the reference
+             * parsers. Omitting it here made a packed closed-enum field with
+             * a one-byte tag skip wholesale into the unknown bytes (multi-byte
+             * tags, which resolve through fnum_map, decoded it correctly). */
             if (field->len_tag_len == 1 &&
                 field->label == PBW_LABEL_REPEATED &&
-                pbw_is_packable(field->type) && !closed &&
-                field->oneof_index == 0) {
+                pbw_is_packable(field->type) && field->oneof_index == 0) {
                 map[field->len_tag[0]] = field;
             }
         }

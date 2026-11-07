@@ -173,6 +173,30 @@ func stem(path string) string {
 	return strings.TrimSuffix(p, ".proto")
 }
 
+// ident sanitizes a name derived from a file path for hosts that need a plain
+// identifier: `my-file.proto` must not emit `import my-file_pbwire`. Bytes
+// outside [A-Za-z0-9_] become '_' and a leading digit gets a '_' prefix.
+func ident(name string) string {
+	var b strings.Builder
+
+	for _, r := range name {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') ||
+			(r >= '0' && r <= '9') || r == '_' {
+			b.WriteRune(r)
+		} else {
+			b.WriteRune('_')
+		}
+	}
+	s := b.String()
+	if s == "" {
+		return "_"
+	}
+	if s[0] >= '0' && s[0] <= '9' {
+		return "_" + s
+	}
+	return s
+}
+
 // foreignMessageNames lists the distinct message types referenced from one
 // import, in first-use order. Emitters whose registry is name-keyed (Node)
 // import exactly these names from the sibling file.

@@ -188,10 +188,12 @@ and print the address book; every language produces the same 65 bytes
 (`examples/addressbook.bin`).
 
 `make codegen-conformance` generates models for
-`google/protobuf/test_messages_proto3.proto` — the schema the official
-conformance suite uses: maps, oneofs, deep nesting and every scalar kind. The
-generated code must compile in every binding (it is the hardest schema the
-generator meets); the value flow is covered by the matrix3 tests.
+`google/protobuf/test_messages_proto3.proto` and the seven well-known-type
+files it imports (the whole closure, so a cross-file reference resolves) — the
+schema the official conformance suite uses: maps, oneofs, deep nesting and
+every scalar kind. The generated code must compile in every binding (it is the
+hardest schema the generator meets); the value flow is covered by the matrix3
+tests.
 Swift/Zig/R/Julia/Elixir check in with a parse (their compilers need a
 package build the suite does not do); Scala and F# do a real compile;
 Clojure loads its namespace (needs the fetched jars, like `test-clojure`).

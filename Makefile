@@ -35,7 +35,7 @@ ifeq ($(UNAME_S),Darwin)
 SHLIB := build/libpbwire.1.dylib
 SHLIB_LINK := build/libpbwire.dylib
 SHLIB_FLAGS := -dynamiclib -install_name @rpath/libpbwire.1.dylib \
-	-compatibility_version 1 -current_version 0.1.13
+	-compatibility_version 1 -current_version 0.1.14
 else
 SHLIB := build/libpbwire.so.1
 SHLIB_LINK := build/libpbwire.so
@@ -334,7 +334,7 @@ conformance-java: java-test $(CONFORMANCE_DESC)
 		echo "conformance_test_runner not found: $(CONFORMANCE_RUNNER)"; \
 		echo "run 'make conformance-setup' first"; exit 1; }
 	$(CONFORMANCE_RUNNER) --failure_list $(CURDIR)/conformance/failure_list_pbwire.txt \
-		$(JAVA_ABS) -cp $(CURDIR)/bindings/java/out Testee \
+		$(JAVA_ABS) -cp $(CURDIR)/bindings/java/out/classes Testee \
 		$(CURDIR)/$(CONFORMANCE_DESC)
 
 conformance: $(CONFORMANCE_DESC) $(CONFORMANCE_TESTEE)
@@ -527,7 +527,7 @@ kotlin-test: shared
 	cd bindings/kotlin && ./build.sh
 	cd bindings/kotlin && $(JAVA) --enable-native-access=ALL-UNNAMED \
 		-Dpbwire.library=$(CURDIR)/$(SHLIB_LINK) \
-		-cp out/pbwire.jar:../java/out TestPbwireKt ../c/tests/data/matrix3.desc
+		-cp out/pbwire.jar:../java/out/classes TestPbwireKt ../c/tests/data/matrix3.desc
 
 php-test: shared
 	$(PHP) bindings/php/tests/test.php
@@ -702,7 +702,6 @@ clean:
 	conformance-ruby conformance-java conformance-lua conformance-r conformance-node ruby-bind java-test ruby-test node-test objc-test r-bind \
 	lua-bind lua-test lua-bench \
 	java-bench ruby-bench node-bench objc-bench go-bench \
-	kotlin-test php-test dart-test rust-test csharp-test \
 	kotlin-test php-test dart-test rust-test csharp-test \
 	kotlin-bench php-bench dart-bench rust-bench csharp-bench \
 	swift-test scala-test elixir-test zig-test fsharp-test clojure-test julia-test r-test \

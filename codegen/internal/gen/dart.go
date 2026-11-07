@@ -162,6 +162,22 @@ func dartChunks(s string) string {
 	return strings.Join(parts, "\n    ")
 }
 
+// dartImpPrefix is the import prefix for one sibling model file: generated
+// classes share the file namespace with the pbwire runtime, so a proto message
+// named Value would make every reference to it ambiguous.
+func dartImpPrefix(path string) string {
+	var b strings.Builder
+	b.WriteString("_imp_")
+	for _, r := range stem(path) {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+		} else {
+			b.WriteRune('_')
+		}
+	}
+	return b.String()
+}
+
 func dartFiles(f *model.File, opt Options) ([]File, error) {
 	// Models and schema part ways: facades in one library, the embedded
 	// descriptor set plus its loader in another. model=false leaves the
@@ -170,6 +186,12 @@ func dartFiles(f *model.File, opt Options) ([]File, error) {
 	fileStem := base(f)
 	var files []File
 	if opt.Model {
+		// Sibling models are imported prefixed, like protoc-gen-dart: the local
+		// name space already holds the pbwire runtime, so a foreign message
+		// named Value would otherwise be ambiguous.
+		qualifyFields(f, func(imp model.Import, local string) string {
+			return dartImpPrefix(imp.Path) + "." + local
+		})
 		var b strings.Builder
 		b.WriteString(header(f, "Generated facades over the pbwire dynamic API, protobuf-dart shape."))
 		b.WriteString("import 'dart:typed_data';\n\n")
@@ -181,7 +203,7 @@ func dartFiles(f *model.File, opt Options) ([]File, error) {
 		}
 		b.WriteString("import 'package:pbwire/pbwire.dart';\n")
 		for _, imp := range f.Imports {
-			fmt.Fprintf(&b, "import '%s.dart';\n", stem(imp.Path))
+			fmt.Fprintf(&b, "import '%s.dart' as %s;\n", stem(imp.Path), dartImpPrefix(imp.Path))
 		}
 		fmt.Fprintf(&b, "import '%s_meta.dart';\n\n", fileStem)
 		for _, e := range f.Enums {

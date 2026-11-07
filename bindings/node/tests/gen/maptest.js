@@ -10,7 +10,7 @@
 // dynamic runtime in <binding>/lib.
 const { _makeClass } = require('../../lib/pbwire-compat.js');
 
-const _DESC_B64 = 'CsQICg1tYXB0ZXN0LnByb3RvEghzcGVjdGVzdCI0CghNYXBWYWx1ZRISCgRuYW1lGAEgASgJUgRuYW1lEhQKBXZhbHVlGAIgASgFUgV2YWx1ZSLqAgoHTWFwVGVzdBIzCgZieV9pbnQYASADKAsyHC5zcGVjdGVzdC5NYXBUZXN0LkJ5SW50RW50cnlSBWJ5SW50EjMKBmJ5X3N0chgCIAMoCzIcLnNwZWN0ZXN0Lk1hcFRlc3QuQnlTdHJFbnRyeVIFYnlTdHISMwoGYnlfbXNnGAMgAygLMhwuc3BlY3Rlc3QuTWFwVGVzdC5CeU1zZ0VudHJ5UgVieU1zZxo4CgpCeUludEVudHJ5EhAKA2tleRgBIAEoBVIDa2V5EhQKBXZhbHVlGAIgASgJUgV2YWx1ZToCOAEaOAoKQnlTdHJFbnRyeRIQCgNrZXkYASABKAlSA2tleRIUCgV2YWx1ZRgCIAEoBVIFdmFsdWU6AjgBGkwKCkJ5TXNnRW50cnkSEAoDa2V5GAEgASgJUgNrZXkSKAoFdmFsdWUYAiABKAsyEi5zcGVjdGVzdC5NYXBWYWx1ZVIFdmFsdWU6AjgBSv0ECgYSBAQAEQEKpQIKAQwSAwQAEhqaAiBTbWFsbCBtYXAgZml4dHVyZSBmb3IgdGhlIGdlbmVyYXRlZCBjb21wYXQgdGVzdHM6IHNjYWxhciwgaW50LWtleWVkIGFuZAogbWVzc2FnZS12YWx1ZWQgbWFwcyByaWRlIGFzIHJlcGVhdGVkIGVudHJ5IHN0cnVjdHMgaW4gZXZlcnkgbGFuZ3VhZ2UuCiBLZXB0IGluIHRlc3RkYXRhIHNvIGV2ZXJ5IGJpbmRpbmcgc2hhcmVzIHRoZSBzYW1lIHNjaGVtYSwgdmFsdWVzIGFuZAogcmVmZXJlbmNlIGJ5dGVzIChtYXB0ZXN0LmJpbiBmcm9tIHByb3RvYyAtLWVuY29kZSBvZiBtYXB0ZXN0LnR4dCkuCgoICgECEgMGABEKCgoCBAASBAgACwEKCgoDBAABEgMICBAKCwoEBAACABIDCQISCgwKBQQAAgAFEgMJAggKDAoFBAACAAESAwkJDQoMCgUEAAIAAxIDCRARCgsKBAQAAgESAwoCEgoMCgUEAAIBBRIDCgIHCgwKBQQAAgEBEgMKCA0KDAoFBAACAQMSAwoQEQoKCgIEARIEDQARAQoKCgMEAQESAw0IDwoLCgQEAQIAEgMOAiAKDAoFBAECAAYSAw4CFAoMCgUEAQIAARIDDhUbCgwKBQQBAgADEgMOHh8KCwoEBAECARIDDwIgCgwKBQQBAgEGEgMPAhQKDAoFBAECAQESAw8VGwoMCgUEAQIBAxIDDx4fCgsKBAQBAgISAxACIwoMCgUEAQICBhIDEAIXCgwKBQQBAgIBEgMQGB4KDAoFBAECAgMSAxAhImIGcHJvdG8z';
+const { get_schema } = require('./maptest_meta.js');
 
 const _ENUMS = {};
 const _REVENUMS = {};
@@ -22,7 +22,7 @@ const MapValue_FIELDS = [
   { n: 'name', js: 'name', k: 'str', rep: false, msg: null, en: null, oneof: null, req: false, has: false, closed: false },
   { n: 'value', js: 'value', k: 'i32', rep: false, msg: null, en: null, oneof: null, req: false, has: false, closed: false },
 ];
-const MapValue = _makeClass('spectest.MapValue', _DESC_B64, MapValue_FIELDS);
+const MapValue = _makeClass('spectest.MapValue', get_schema, MapValue_FIELDS);
 _CLASSES['MapValue'] = MapValue;
 MapValue._ENUMS = _ENUMS;
 MapValue._REVENUMS = _REVENUMS;
@@ -33,7 +33,7 @@ const MapTest_ByIntEntry_FIELDS = [
   { n: 'key', js: 'key', k: 'i32', rep: false, msg: null, en: null, oneof: null, req: false, has: false, closed: false },
   { n: 'value', js: 'value', k: 'str', rep: false, msg: null, en: null, oneof: null, req: false, has: false, closed: false },
 ];
-const MapTest_ByIntEntry = _makeClass('spectest.MapTest.ByIntEntry', _DESC_B64, MapTest_ByIntEntry_FIELDS);
+const MapTest_ByIntEntry = _makeClass('spectest.MapTest.ByIntEntry', get_schema, MapTest_ByIntEntry_FIELDS);
 _CLASSES['MapTest_ByIntEntry'] = MapTest_ByIntEntry;
 MapTest_ByIntEntry._ENUMS = _ENUMS;
 MapTest_ByIntEntry._REVENUMS = _REVENUMS;
@@ -44,7 +44,7 @@ const MapTest_ByStrEntry_FIELDS = [
   { n: 'key', js: 'key', k: 'str', rep: false, msg: null, en: null, oneof: null, req: false, has: false, closed: false },
   { n: 'value', js: 'value', k: 'i32', rep: false, msg: null, en: null, oneof: null, req: false, has: false, closed: false },
 ];
-const MapTest_ByStrEntry = _makeClass('spectest.MapTest.ByStrEntry', _DESC_B64, MapTest_ByStrEntry_FIELDS);
+const MapTest_ByStrEntry = _makeClass('spectest.MapTest.ByStrEntry', get_schema, MapTest_ByStrEntry_FIELDS);
 _CLASSES['MapTest_ByStrEntry'] = MapTest_ByStrEntry;
 MapTest_ByStrEntry._ENUMS = _ENUMS;
 MapTest_ByStrEntry._REVENUMS = _REVENUMS;
@@ -55,7 +55,7 @@ const MapTest_ByMsgEntry_FIELDS = [
   { n: 'key', js: 'key', k: 'str', rep: false, msg: null, en: null, oneof: null, req: false, has: false, closed: false },
   { n: 'value', js: 'value', k: 'msg', rep: false, msg: 'MapValue', en: null, oneof: null, req: false, has: true, closed: false },
 ];
-const MapTest_ByMsgEntry = _makeClass('spectest.MapTest.ByMsgEntry', _DESC_B64, MapTest_ByMsgEntry_FIELDS);
+const MapTest_ByMsgEntry = _makeClass('spectest.MapTest.ByMsgEntry', get_schema, MapTest_ByMsgEntry_FIELDS);
 _CLASSES['MapTest_ByMsgEntry'] = MapTest_ByMsgEntry;
 MapTest_ByMsgEntry._ENUMS = _ENUMS;
 MapTest_ByMsgEntry._REVENUMS = _REVENUMS;
@@ -67,7 +67,7 @@ const MapTest_FIELDS = [
   { n: 'by_str', js: 'byStr', k: 'msg', rep: true, msg: 'MapTest_ByStrEntry', en: null, oneof: null, req: false, has: true, closed: false },
   { n: 'by_msg', js: 'byMsg', k: 'msg', rep: true, msg: 'MapTest_ByMsgEntry', en: null, oneof: null, req: false, has: true, closed: false },
 ];
-const MapTest = _makeClass('spectest.MapTest', _DESC_B64, MapTest_FIELDS);
+const MapTest = _makeClass('spectest.MapTest', get_schema, MapTest_FIELDS);
 _CLASSES['MapTest'] = MapTest;
 MapTest._ENUMS = _ENUMS;
 MapTest._REVENUMS = _REVENUMS;

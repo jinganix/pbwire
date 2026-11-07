@@ -438,8 +438,14 @@ changes removed them:
   struct (`pbw_value_new_bytes_a`); the heap path keeps its two allocations,
   which `pbw_value_free` releases separately;
 - a packed varint run allocates all of its item nodes in one bump, using the
-  item count the >64-byte pre-scan already computed (a closed enum leaves the
-  unused tail to the arena);
+  item count the >64-byte pre-scan already computed; a packed closed-enum run
+  keeps the per-item node path (no scan, no node block), because it drops
+  unknown values and the block would hold nodes nothing uses. A/B against the
+  scan+reserve form on a 100k-value packed closed enum (C probe,
+  `pbw_decode_ctx` + reset, median of 15, three interleaved rounds) put every
+  row inside the +/-3% noise floor (all-known 442 vs 442 ns, mixed-unknown 578
+  vs 583 ns at 100/125 KB), so this one is allocation locality, not a
+  throughput win, and the smaller diff was kept;
 - the tree builders are `PBW_INLINE` in `internal.h` (the same pattern as
   `pbw_arena_alloc` and `pbw_find_field`). They stay one definition, moved and
   not copied, so a translation unit that never calls one emits nothing for it.

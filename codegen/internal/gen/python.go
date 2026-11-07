@@ -56,16 +56,16 @@ func pythonFiles(f *model.File, opt Options) ([]File, error) {
 		// Foreign message refs qualify as sibling_module.Class, so rewrite them
 		// once instead of touching every use site.
 		qualifyFields(f, func(imp model.Import, local string) string {
-			return stem(imp.Path) + "_pbwire." + local
+			return ident(stem(imp.Path)) + "_pbwire." + local
 		})
 		b.WriteString(headerP(f, "#", "Generated dataclasses over the pbwire dict API, official _pb2-shaped methods included."))
 		b.WriteString("from __future__ import annotations\n\n")
 		b.WriteString("from dataclasses import dataclass, field as dc_field\n")
 		b.WriteString("from typing import Any, Dict, List, Mapping, Optional, Tuple\n")
 		for _, imp := range f.Imports {
-			fmt.Fprintf(&b, "import %s_pbwire\n", stem(imp.Path))
+			fmt.Fprintf(&b, "import %s_pbwire\n", ident(stem(imp.Path)))
 		}
-		fmt.Fprintf(&b, "import %s_pbwire_meta as _meta\n", base(f))
+		fmt.Fprintf(&b, "import %s_pbwire_meta as _meta\n", ident(base(f)))
 		b.WriteString("\n")
 		for _, e := range f.Enums {
 			fmt.Fprintf(&b, "class %s:\n    \"\"\"%s\"\"\"\n", e.Name, e.Full)
@@ -86,11 +86,11 @@ func pythonFiles(f *model.File, opt Options) ([]File, error) {
 			fmt.Fprintf(&b, "        %q,\n", m.Full)
 		}
 		b.WriteString("    ],\n}\n")
-		files = append(files, File{Name: base(f) + "_pbwire.py", Content: b.String()})
+		files = append(files, File{Name: ident(base(f)) + "_pbwire.py", Content: b.String()})
 	}
 	var meta strings.Builder
 	writePythonMeta(&meta, f, opt)
-	files = append(files, File{Name: base(f) + "_pbwire_meta.py", Content: meta.String()})
+	files = append(files, File{Name: ident(base(f)) + "_pbwire_meta.py", Content: meta.String()})
 	return files, nil
 }
 

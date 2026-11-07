@@ -5,31 +5,11 @@
 # Do not edit; regenerate from the .proto instead.
 
 require_relative '../../lib/pbwire'
-require 'base64'
+require_relative 'xfile_meta'
 require_relative 'xdep'
 
 module Pbwire
   module Gen
-    # A decoded 32-bit signed field arrives as unsigned 64-bit bits.
-    def self.i32(value)
-      value = value.to_i
-      value >= 2**31 ? value - 2**32 : value
-    end
-
-    # The embedded FileDescriptorSet: no .desc file at use time.
-    DESC_B64_XFILE = "CrkDCgp4ZGVwLnByb3RvEgR4ZGVwIjIKBkRlcE1zZxISCgRuYW1lGAEgASgJUgRuYW1lEhQKBXZhbHVlGAIgASgFUgV2YWx1ZUroAgoGEgQDAAoBCs0BCgEMEgMDABIawgEgU2hhcmVkIGRlcGVuZGVuY3kgZm9yIHRoZSBjcm9zcy1maWxlIGZpeHR1cmU6IHhmaWxlLnByb3RvIGltcG9ydHMgdGhpcwogZmlsZSBhbmQgcmVmZXJlbmNlcyBEZXBNc2cuIEdlbmVyYXRlZCBvbmNlIHBlciBsYW5ndWFnZSBuZXh0IHRvIHhmaWxlJ3MKIG93biBtb2RlbDsgdGhlIHJlZmVyZW5jZSBieXRlcyBsaXZlIHdpdGggeGZpbGUuCgoICgECEgMFAA0KCgoCBAASBAcACgEKCgoDBAABEgMHCA4KCwoEBAACABIDCAISCgwKBQQAAgAFEgMIAggKDAoFBAACAAESAwgJDQoMCgUEAAIAAxIDCBARCgsKBAQAAgESAwkCEgoMCgUEAAIBBRIDCQIHCgwKBQQAAgEBEgMJCA0KDAoFBAACAQMSAwkQEWIGcHJvdG8zCoEFCgt4ZmlsZS5wcm90bxIFeGZpbGUaCnhkZXAucHJvdG8iZQoHVXNlc0RlcBIkCgZzaW5nbGUYASABKAsyDC54ZGVwLkRlcE1zZ1IGc2luZ2xlEiAKBG1hbnkYAiADKAsyDC54ZGVwLkRlcE1zZ1IEbWFueRISCgRub3RlGAMgASgJUgRub3RlSu8DCgYSBAQADgEKhAIKAQwSAwQAEhr5ASBDcm9zcy1maWxlIGZpeHR1cmUgZm9yIHRoZSBnZW5lcmF0ZWQgY29tcGF0IHRlc3RzOiBVc2VzRGVwIHJlZmVyZW5jZXMKIERlcE1zZyBmcm9tIHhkZXAucHJvdG8sIHNvIGV2ZXJ5IGxhbmd1YWdlIG11c3QgaW1wb3J0IHRoZSBzaWJsaW5nCiBnZW5lcmF0ZWQgZmlsZSBpbnN0ZWFkIG9mIHNraXBwaW5nIHRoZSBmaWVsZC4gUmVmZXJlbmNlIGJ5dGVzCiAoeGZpbGUuYmluKSBmcm9tIHByb3RvYyAtLWVuY29kZSBvZiB4ZmlsZS50eHQuCgoICgECEgMGAA4KCQoCAwASAwgAFAoKCgIEABIECgAOAQoKCgMEAAESAwoIDwoLCgQEAAIAEgMLAhkKDAoFBAACAAYSAwsCDQoMCgUEAAIAARIDCw4UCgwKBQQAAgADEgMLFxgKCwoEBAACARIDDAIgCgwKBQQAAgEEEgMMAgoKDAoFBAACAQYSAwwLFgoMCgUEAAIBARIDDBcbCgwKBQQAAgEDEgMMHh8KCwoEBAACAhIDDQISCgwKBQQAAgIFEgMNAggKDAoFBAACAgESAw0JDQoMCgUEAAICAxIDDRARYgZwcm90bzM="
-    @_schemas = {}
-    @_types = {}
-    # Schemas and types are cached per descriptor set, so any number
-    # of generated files share this module without collisions.
-    def self._schema(desc_b64)
-      @_schemas[desc_b64] ||= Pbwire::Schema.from_bytes(Base64.strict_decode64(desc_b64))
-    end
-    def self._type(desc_b64, full)
-      @_types[desc_b64] ||= {}
-      @_types[desc_b64][full] ||= _schema(desc_b64).message(full)
-    end
-
     # xfile.UsesDep
     class Xfile_UsesDep
       attr_accessor :single, :many, :note

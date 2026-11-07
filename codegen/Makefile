@@ -18,7 +18,9 @@ all: build
 build:
 	$(GO) build -o $(PLUGIN) ./cmd/protoc-gen-pbwire
 
-gen: gen-java gen-kotlin gen-csharp gen-dart gen-php gen-ruby gen-python gen-node gen-rust gen-objc gen-lua gen-swift gen-zig gen-scala gen-clojure gen-fsharp gen-elixir gen-julia gen-r gen-examples
+# gen-xfile and gen-maptest ride along so the fixtures stay what the current
+# plugin emits (they were skipped once and drifted from the meta-sidecar split).
+gen: gen-java gen-kotlin gen-csharp gen-dart gen-php gen-ruby gen-python gen-node gen-rust gen-objc gen-lua gen-swift gen-zig gen-scala gen-clojure gen-fsharp gen-elixir gen-julia gen-r gen-examples gen-xfile gen-maptest
 
 # The examples all speak the C example's addressbook.proto: same schema, same
 # bytes, one generated walkthrough per language.
@@ -244,7 +246,7 @@ test-java: build
 test-kotlin: build
 	cd ../bindings/kotlin && ./build.sh >/dev/null
 	cd ../bindings/kotlin && $(JAVA) --enable-native-access=ALL-UNNAMED -Dpbwire.library=$(LIB) \
-		-cp out/pbwire.jar:../java/out GeneratedTestKt ../c/tests/data/matrix3.desc
+		-cp out/pbwire.jar:../java/out/classes GeneratedTestKt ../c/tests/data/matrix3.desc
 
 test-csharp: build
 	$(DOTNET) run --project ../bindings/csharp/generated -- ../bindings/c/tests/data/matrix3.desc
@@ -263,7 +265,7 @@ test-ruby: build
 	$(RUBY) -I../bindings/ruby/lib ../bindings/ruby/test/test_compat.rb
 
 test-python: build
-	$(MAKE) -C .. python-bind >/dev/null
+	$(MAKE) -C .. python-bind PY=$(PYTHON) >/dev/null
 	$(PYTHON) ../bindings/python/tests/test_generated.py
 	$(PYTHON) ../bindings/python/tests/test_compat.py
 
@@ -321,55 +323,41 @@ test-r: build
 # scalar kind. Generating models for it must succeed and compile in every
 # binding; the value flow is covered by the matrix3 generated tests above.
 CONFORMANCE_PROTO := ../.tmp/protobuf-v36.2/src/google/protobuf/test_messages_proto3.proto
+CONFORMANCE_WKT := any duration empty field_mask struct timestamp wrappers
+CONFORMANCE_INPUTS := $(CONFORMANCE_PROTO) \
+	$(addprefix $(dir $(CONFORMANCE_PROTO)),$(addsuffix .proto,$(CONFORMANCE_WKT)))
+CONFORMANCE_LANGS := java kotlin csharp dart php ruby python typescript javascript \
+	rust objc lua swift zig scala clojure fsharp elixir julia r
+# Go gets one package per file (the generator derives the package from the
+# file name), so each dep goes to its own dir and the model imports it by
+# module path.
+comma := ,
+space := $(empty) $(empty)
+CONFORMANCE_GO_M := $(subst $(space),$(comma),$(foreach w,$(CONFORMANCE_WKT),\
+	Mgoogle/protobuf/$(w).proto=pbwire/conformance/go/$(w)))
 
 conformance: build
 	@test -f $(CONFORMANCE_PROTO) || { \
 		echo "protobuf checkout not found: $(CONFORMANCE_PROTO)"; \
 		echo "run 'make conformance-setup' first"; exit 1; }
-	@mkdir -p build/conformance build/conformance/go
+	rm -rf build/conformance
+	@mkdir -p build/conformance
+	for lang in $(CONFORMANCE_LANGS); do \
+		$(PROTOC) -I../.tmp/protobuf-v36.2/src $(OPTS) \
+			--pbwire_out=build/conformance --pbwire_opt=lang=$$lang \
+			$(CONFORMANCE_INPUTS) || exit 1; \
+	done
+	for w in $(CONFORMANCE_WKT); do \
+		mkdir -p build/conformance/go/$$w; \
+		$(PROTOC) -I../.tmp/protobuf-v36.2/src $(OPTS) \
+			--pbwire_out=build/conformance/go/$$w --pbwire_opt=lang=go \
+			$(dir $(CONFORMANCE_PROTO))$$w.proto || exit 1; \
+	done
+	mkdir -p build/conformance/go/test_messages_proto3
 	$(PROTOC) -I../.tmp/protobuf-v36.2/src $(OPTS) \
-		--pbwire_out=build/conformance --pbwire_opt=lang=java $(CONFORMANCE_PROTO)
-	$(PROTOC) -I../.tmp/protobuf-v36.2/src $(OPTS) \
-		--pbwire_out=build/conformance --pbwire_opt=lang=kotlin $(CONFORMANCE_PROTO)
-	$(PROTOC) -I../.tmp/protobuf-v36.2/src $(OPTS) \
-		--pbwire_out=build/conformance --pbwire_opt=lang=csharp $(CONFORMANCE_PROTO)
-	$(PROTOC) -I../.tmp/protobuf-v36.2/src $(OPTS) \
-		--pbwire_out=build/conformance --pbwire_opt=lang=dart $(CONFORMANCE_PROTO)
-	$(PROTOC) -I../.tmp/protobuf-v36.2/src $(OPTS) \
-		--pbwire_out=build/conformance --pbwire_opt=lang=php $(CONFORMANCE_PROTO)
-	$(PROTOC) -I../.tmp/protobuf-v36.2/src $(OPTS) \
-		--pbwire_out=build/conformance --pbwire_opt=lang=ruby $(CONFORMANCE_PROTO)
-	$(PROTOC) -I../.tmp/protobuf-v36.2/src $(OPTS) \
-		--pbwire_out=build/conformance --pbwire_opt=lang=python $(CONFORMANCE_PROTO)
-	$(PROTOC) -I../.tmp/protobuf-v36.2/src $(OPTS) \
-		--pbwire_out=build/conformance --pbwire_opt=lang=typescript $(CONFORMANCE_PROTO)
-	$(PROTOC) -I../.tmp/protobuf-v36.2/src $(OPTS) \
-		--pbwire_out=build/conformance --pbwire_opt=lang=javascript $(CONFORMANCE_PROTO)
-	$(PROTOC) -I../.tmp/protobuf-v36.2/src $(OPTS) \
-		--pbwire_out=build/conformance --pbwire_opt=lang=rust $(CONFORMANCE_PROTO)
-	$(PROTOC) -I../.tmp/protobuf-v36.2/src $(OPTS) \
-		--pbwire_out=build/conformance --pbwire_opt=lang=objc $(CONFORMANCE_PROTO)
-	$(PROTOC) -I../.tmp/protobuf-v36.2/src $(OPTS) \
-		--pbwire_out=build/conformance --pbwire_opt=lang=lua $(CONFORMANCE_PROTO)
-	$(PROTOC) -I../.tmp/protobuf-v36.2/src $(OPTS) \
-		--pbwire_out=build/conformance/go --pbwire_opt=lang=go $(CONFORMANCE_PROTO)
-	$(PROTOC) -I../.tmp/protobuf-v36.2/src $(OPTS) \
-		--pbwire_out=build/conformance --pbwire_opt=lang=swift $(CONFORMANCE_PROTO)
-	$(PROTOC) -I../.tmp/protobuf-v36.2/src $(OPTS) \
-		--pbwire_out=build/conformance --pbwire_opt=lang=zig $(CONFORMANCE_PROTO)
-	$(PROTOC) -I../.tmp/protobuf-v36.2/src $(OPTS) \
-		--pbwire_out=build/conformance --pbwire_opt=lang=scala $(CONFORMANCE_PROTO)
-	$(PROTOC) -I../.tmp/protobuf-v36.2/src $(OPTS) \
-		--pbwire_out=build/conformance --pbwire_opt=lang=clojure $(CONFORMANCE_PROTO)
-	$(PROTOC) -I../.tmp/protobuf-v36.2/src $(OPTS) \
-		--pbwire_out=build/conformance --pbwire_opt=lang=fsharp $(CONFORMANCE_PROTO)
-	$(PROTOC) -I../.tmp/protobuf-v36.2/src $(OPTS) \
-		--pbwire_out=build/conformance --pbwire_opt=lang=elixir $(CONFORMANCE_PROTO)
-	$(PROTOC) -I../.tmp/protobuf-v36.2/src $(OPTS) \
-		--pbwire_out=build/conformance --pbwire_opt=lang=julia $(CONFORMANCE_PROTO)
-	$(PROTOC) -I../.tmp/protobuf-v36.2/src $(OPTS) \
-		--pbwire_out=build/conformance --pbwire_opt=lang=r $(CONFORMANCE_PROTO)
-	@echo "generated models for test_messages_proto3.proto: build/conformance"
+		--pbwire_out=build/conformance/go/test_messages_proto3 \
+		"--pbwire_opt=lang=go,$(CONFORMANCE_GO_M)" $(CONFORMANCE_PROTO)
+	@echo "generated models for test_messages_proto3.proto + its WKT closure: build/conformance"
 	$(MAKE) conformance-check
 
 # The generated conformance models must compile. TypeScript has no compiler in
@@ -377,24 +365,27 @@ conformance: build
 conformance-check: build
 	@test -f build/conformance/test_messages_proto3_pbwire.rs || { echo "run 'make conformance' first"; exit 1; }
 	mkdir -p build/conformance/java-out
-	javac -nowarn -d build/conformance/java-out -cp ../bindings/java/out build/conformance/*.java
-	kotlinc -nowarn -cp ../bindings/java/out:build/conformance/java-out -d build/conformance/conf.jar build/conformance/test_messages_proto3.kt
+	javac -nowarn -d build/conformance/java-out -cp ../bindings/java/out/classes build/conformance/*.java
+	kotlinc -nowarn -cp ../bindings/java/out/classes:build/conformance/java-out -d build/conformance/conf.jar build/conformance/test_messages_proto3.kt
 	@mkdir -p build/conformance/csharp
-	printf '%s\n' '<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net10.0</TargetFramework><Nullable>enable</Nullable><AllowUnsafeBlocks>true</AllowUnsafeBlocks></PropertyGroup><ItemGroup><ProjectReference Include="$(CURDIR)/../bindings/csharp/Pbwire/Pbwire.csproj" /><PackageReference Include="Google.Protobuf" Version="3.36.2" /><Compile Include="$(CURDIR)/build/conformance/test_messages_proto3.cs" /></ItemGroup></Project>' > build/conformance/csharp/conf.csproj
+	printf '%s\n' '<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net10.0</TargetFramework><Nullable>enable</Nullable><AllowUnsafeBlocks>true</AllowUnsafeBlocks></PropertyGroup><ItemGroup><ProjectReference Include="$(CURDIR)/../bindings/csharp/Pbwire/Pbwire.csproj" /><PackageReference Include="Google.Protobuf" Version="3.36.2" /><Compile Include="$(CURDIR)/build/conformance/*.cs" /></ItemGroup></Project>' > build/conformance/csharp/conf.csproj
 	$(DOTNET) build build/conformance/csharp/conf.csproj
-	cp build/conformance/test_messages_proto3.dart ../bindings/dart/tests/gen/conf_models.dart
-	cd ../bindings/dart && $(DART) analyze tests/gen/conf_models.dart
-	rm -f ../bindings/dart/tests/gen/conf_models.dart
+	rm -rf ../bindings/dart/tests/gen/conf
+	mkdir -p ../bindings/dart/tests/gen/conf
+	cp build/conformance/*.dart ../bindings/dart/tests/gen/conf/
+	cd ../bindings/dart && $(DART) analyze tests/gen/conf
+	rm -rf ../bindings/dart/tests/gen/conf
 	php -l build/conformance/test_messages_proto3.php
 	ruby -c build/conformance/test_messages_proto3.rb
 	$(PYTHON) -m py_compile build/conformance/test_messages_proto3_pbwire.py
 	$(NODE) --check build/conformance/test_messages_proto3.js
 	$(LUA) -e 'assert(loadfile("build/conformance/test_messages_proto3.lua"))'
 	$(MAKE) -C .. build/libpbwire.a >/dev/null
-	mkdir -p ../bindings/go/conformancetmp
-	cp build/conformance/go/test_messages_proto3_pbwire.go ../bindings/go/conformancetmp/
-	cd ../bindings/go && $(GO) build ./conformancetmp/
-	rm -rf ../bindings/go/conformancetmp
+	rm -rf ../bindings/go/conformance
+	mkdir -p ../bindings/go/conformance
+	cp -R build/conformance/go ../bindings/go/conformance/
+	cd ../bindings/go && $(GO) build ./conformance/go/...
+	rm -rf ../bindings/go/conformance
 	clang -fsyntax-only -fobjc-arc -Wall -Wextra -I../include -I../bindings/objc -Ibuild/conformance build/conformance/test_messages_proto3.m
 	printf '#[path = "../../../codegen/build/conformance/test_messages_proto3_pbwire.rs"]\nmod conf;\n#[test]\nfn conformance_models_compile() { let _ = conf::TestAllTypesProto3::FULL_NAME; }\n' > ../bindings/rust/tests/conf_gen.rs
 	cd ../bindings/rust && $(CARGO) test --test conf_gen
@@ -406,13 +397,22 @@ conformance-check: build
 	cd ../bindings/elixir && MIX_ENV=test mix run -e '"../../codegen/build/conformance/test_messages_proto3.ex" |> File.read!() |> Code.string_to_quoted!() |> is_tuple() |> IO.inspect(label: :parses)'
 	mkdir -p build/conformance/scala-out build/conformance/scala-classes
 	javac -nowarn -d build/conformance/scala-out ../bindings/java/runtime/*.java
-	scalac -nowarn -cp build/conformance/scala-out -d build/conformance/scala-classes build/conformance/test_messages_proto3.scala
+	scalac -nowarn -cp build/conformance/scala-out -d build/conformance/scala-classes build/conformance/*.scala
+	rm -rf build/conformance/fsharp
 	mkdir -p build/conformance/fsharp
-	cp build/conformance/test_messages_proto3.fs build/conformance/fsharp/
-	printf '%s\n' '<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net10.0</TargetFramework><Nullable>enable</Nullable><InvariantGlobalization>true</InvariantGlobalization></PropertyGroup><ItemGroup><Compile Include="test_messages_proto3.fs" /><ProjectReference Include="$(CURDIR)/../bindings/fsharp/runtime/Pbwire.FSharp.fsproj" /></ItemGroup></Project>' > build/conformance/fsharp/conf.fsproj
+	cp build/conformance/*.fs build/conformance/fsharp/
+	@# F# compiles in file order: every schema module before the model module
+	@# that opens it, and the imported files before the importer.
+	{ printf '%s\n' '<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net10.0</TargetFramework><Nullable>enable</Nullable><InvariantGlobalization>true</InvariantGlobalization></PropertyGroup><ItemGroup>'; \
+	  for w in $(CONFORMANCE_WKT); do \
+		printf '    <Compile Include="%s_meta.fs" />\n    <Compile Include="%s.fs" />\n' $$w $$w; \
+	  done; \
+	  printf '%s\n' '    <Compile Include="test_messages_proto3_meta.fs" />' '    <Compile Include="test_messages_proto3.fs" />' '    <ProjectReference Include="$(CURDIR)/../bindings/fsharp/runtime/Pbwire.FSharp.fsproj" />' '  </ItemGroup></Project>'; } > build/conformance/fsharp/conf.fsproj
 	$(DOTNET) build build/conformance/fsharp/conf.fsproj
+	cd ../bindings/clojure && ./build.sh >/dev/null
+	cd ../bindings/clojure && $(JAVA) -cp "benchmarks/deps/*:out/java-classes:runtime/src:$(CURDIR)/build/conformance" \
+		clojure.main -e "(require 'test-messages-proto3)"
 	@echo "conformance models compile in java, kotlin, c#, dart, php, ruby, python, node, objc, rust, lua, go, swift, zig, scala, clojure, fsharp, elixir, julia, r"
-	@echo "shortcut: clojure parses but does not compile here (needs the fetched jars); test-clojure compiles the same shape"
 
 .PHONY: all build gen gen-maptest gen-xfile gen-examples test conformance conformance-check $(addprefix gen-,$(LANGS)) \
 	gen-java gen-kotlin gen-csharp gen-dart gen-php gen-ruby gen-python gen-node gen-rust gen-objc gen-lua gen-go \

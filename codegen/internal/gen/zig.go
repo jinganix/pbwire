@@ -28,7 +28,7 @@ func zigFiles(f *model.File, opt Options) []File {
 		b.WriteString("const std = @import(\"std\");\n")
 		b.WriteString("const pbwire = @import(\"pbwire\");\n")
 		for _, imp := range f.Imports {
-			fmt.Fprintf(&b, "const %s = @import(\"%s.zig\");\n", stem(imp.Path), stem(imp.Path))
+			fmt.Fprintf(&b, "const %s = @import(\"%s.zig\");\n", zigIdent(stem(imp.Path)), stem(imp.Path))
 		}
 		b.WriteString("\n")
 		for _, e := range f.Enums {
@@ -73,12 +73,51 @@ func zigFiles(f *model.File, opt Options) []File {
 	return files
 }
 
+// zigReserved are the identifiers a sibling import alias cannot take: the Zig
+// keywords (a dep file named struct.proto) and the two runtime aliases.
+var zigReserved = map[string]bool{
+	"addrspace": true, "align": true, "allowzero": true, "and": true,
+	"anyframe": true, "anytype": true, "asm": true, "async": true,
+	"await": true, "break": true, "callconv": true, "catch": true,
+	"comptime": true, "const": true, "continue": true, "defer": true,
+	"else": true, "enum": true, "errdefer": true, "error": true,
+	"export": true, "extern": true, "fn": true, "for": true, "if": true,
+	"inline": true, "linksection": true, "noalias": true, "noinline": true,
+	"nosuspend": true, "opaque": true, "or": true, "orelse": true,
+	"packed": true, "pbwire": true, "pub": true, "resume": true,
+	"return": true, "std": true, "struct": true, "suspend": true,
+	"switch": true, "test": true, "threadlocal": true, "try": true,
+	"union": true, "unreachable": true, "usingnamespace": true,
+	"var": true, "volatile": true, "while": true,
+}
+
+// zigIdent keeps a derived identifier usable (Zig has no raw identifiers).
+func zigIdent(name string) string {
+	var b strings.Builder
+	for _, r := range name {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') ||
+			(r >= '0' && r <= '9') || r == '_' {
+			b.WriteRune(r)
+		} else {
+			b.WriteRune('_')
+		}
+	}
+	s := b.String()
+	if s == "" {
+		return "gen"
+	}
+	if zigReserved[s] {
+		return s + "_pbwire"
+	}
+	return s
+}
+
 // zigMsg names the struct for a message field: the sibling module's type
 // when foreign (imported above), this file's own otherwise.
 func zigMsg(f *model.File, field model.Field) string {
 	if field.Import != "" {
 		if imp := findImport(f, field.Import); imp != nil {
-			return stem(imp.Path) + "." + imp.Prefix + "_" + field.Message
+			return zigIdent(stem(imp.Path)) + "." + imp.Prefix + "_" + field.Message
 		}
 	}
 	return className(f, field.Message)
