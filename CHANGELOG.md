@@ -75,8 +75,55 @@ binding manifest.
     generated-model test, split by toolchain family.
 - `make api-docs` (`Doxyfile`): API reference from `include/`, the protobuf
   importer headers included; output lands in `build/doxygen/html`.
+- `ROADMAP.md`: what is done, what is never, what is next.
+- `docs/examples.md`: one runnable round trip per binding, with the exact command.
+- Well-known-type helpers in `src/wkt.c` (`pbw_any_pack`,
+  `pbw_any_type_url/payload`, `pbw_timestamp/duration_to_millis`) over field
+  numbers only; the core still special-cases no WKT.
+- `bindings/embedded/`: static-memory facade over the C core for
+  microcontrollers — `pbwe_open/build/decode/encode` over one `pbw_ctx`,
+  caller-owned encode buffers, `pbwe_set_limits` for bounded input,
+  `pbwe_open`'s descriptor limit for the startup allocation and
+  `pbwe_decode_desc` for a type fixed at build time. Covered by `make test`
+  and `ctest`, formatted and gated with the rest of the C sources.
 
 ### Fixed
+
+- Generated models: a `.proto` file or message named after a host keyword
+  produced code that did not compile. Go, Rust and Zig now sanitize the
+  derived package/module identifiers (`struct.proto` becomes package
+  `struct_pbwire`, module `r#struct`, alias `struct_pbwire`), Dart imports
+  sibling models under an `_imp_` prefix (a dep message named `Value` was
+  ambiguous with the runtime), Lua requires siblings under `_imp_<stem>` (a dep
+  file named `meta` shadowed the file's own schema module and a dep named after
+  a Lua keyword was a syntax error), and a oneof enum member in the Java model
+  emitted `Kind.KindCase` instead of `Kind<Prop>Case`.
+- `src/wkt.c`: `pbw_timestamp/duration_to_millis()` could overflow `int64`
+  when the nanosecond remainder pushed a seconds value at the edge of the
+  representable millisecond range over the bound (signed-integer overflow is
+  undefined behaviour). The range check now leaves room for the sub-second
+  part and reports `PBW_ERR_LIMIT`.
+- `src/wire.c`: the non-'.' decimal-separator fallback could return an end
+  pointer before the start of the number when the host locale's separator is
+  multi-byte and the parse stopped inside it.
+- `src/json.c`: the JSON printer recursed over nested messages without the
+  `PBW_MAX_DEPTH` cap the text printer and both codecs apply, so a hand-built
+  tree deep enough to pass `pbw_message_new`'s checks could overflow the stack
+  in `pbw_json_print()`. It now reports `PBW_ERR_LIMIT` at the same depth as
+  every other formatter.
+- Python: `Schema.load()` / `Schema.from_file()` leaked the partially built
+  schema `pbw_descriptor_set_load()` hands back on failure, and reported only
+  "invalid data" instead of the loader's reason (every other binding already
+  frees and surfaces it).
+- Binary wire format: a packed (`LEN`) run for a repeated *closed* (proto2)
+  enum whose field number is 1..15 was swallowed whole into the unknown bytes,
+  because the link-time one-byte tag map omitted the packed-form entry for
+  closed enums. The reference parser keeps known values in the field and moves
+  each unknown value into the unknown set as one unpacked item; the map now
+  routes that form to `read_packed()`, which does the same. (Multi-byte tags,
+  resolved through `fnum_map`, always took this path.) An all-unknown run now
+  leaves the field absent, like an empty packed run, instead of presenting an
+  empty list.
 
 Big-endian correctness, found by the new s390x gate:
 
@@ -93,33 +140,12 @@ Big-endian correctness, found by the new s390x gate:
 - 32-bit (`-m32`) correctness: the struct self-check compared doubles with
   `==`, which x87 excess precision makes unreliable; it compares bit patterns
   now (`double_bits`).
-- Core coverage floor 65% -> 85% (hostile JSON/text/wire/descriptor edge tests;
-  two reference-parity fixes found along the way: text `\\u` surrogate-pair
-  combining and Any store-error normalization).
-- `ROADMAP.md`: what is done, what is never, what is next.
-- `docs/examples.md`: one runnable round trip per binding, with the exact command.
-- Well-known-type helpers in `src/wkt.c` (`pbw_any_pack`,
-  `pbw_any_type_url/payload`, `pbw_timestamp/duration_to_millis`) over field
-  numbers only; the core still special-cases no WKT.
-- `bindings/embedded/`: static-memory facade over the C core for
-  microcontrollers — `pbwe_open/build/decode/encode` over one `pbw_ctx`,
-  caller-owned encode buffers, `pbwe_set_limits` for bounded input,
-  `pbwe_open`'s descriptor limit for the startup allocation and
-  `pbwe_decode_desc` for a type fixed at build time. Covered by `make test`
-  and `ctest`, formatted and gated with the rest of the C sources.
-
-- Binary wire format: a packed (`LEN`) run for a repeated *closed* (proto2)
-  enum whose field number is 1..15 was swallowed whole into the unknown bytes,
-  because the link-time one-byte tag map omitted the packed-form entry for
-  closed enums. The reference parser keeps known values in the field and moves
-  each unknown value into the unknown set as one unpacked item; the map now
-  routes that form to `read_packed()`, which does the same. (Multi-byte tags,
-  resolved through `fnum_map`, always took this path.) An all-unknown run now
-  leaves the field absent, like an empty packed run, instead of presenting an
-  empty list.
 
 ### Changed
 
+- Core coverage floor 65% -> 85% (hostile JSON/text/wire/descriptor edge tests;
+  two reference-parity fixes found along the way: text `\\u` surrogate-pair
+  combining and Any store-error normalization).
 - CI: added `sanitizers` (ASan+UBSan `make test`), `difftest-short`
   (fixed-seed differential run), `fuzz-short`, and `coverage` (core-only
   `gcov` floor) jobs; conformance also runs on a nightly schedule.
