@@ -357,7 +357,7 @@ jobs:
       - name: Short differential run
         # Abseil is not vendored: protobuf's configure FetchContent's it into
         # build/_deps/absl-src, which is what the pinned headers include.
-        run: make difftest-short PROTOC="$PB_SRC/build/protoc" PB_CXXFLAGS="-I$PB_SRC/src -I$PB_SRC/build/_deps/absl-src -I$PB_SRC/third_party/abseil-cpp" PB_LIBS="-L$PB_SRC/build -lprotobuf"
+        run: make difftest-short PROTOC="$PB_SRC/build/protoc" PB_CXXFLAGS="-I$PB_SRC/src -I$PB_SRC/third_party/utf8_range -I$PB_SRC/build/_deps/absl-src" PB_LIBS="-L$PB_SRC/build -lprotobuf"
         env:
           LD_LIBRARY_PATH: ${{ env.PB_SRC }}/build
 
