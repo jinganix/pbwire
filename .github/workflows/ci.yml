@@ -274,8 +274,7 @@ jobs:
         with:
           node-version: 26
       - name: Install the Node compat oracle
-        run: (cd bindings/node && npm install --prefix benchmarks --no-save \
-          --no-package-lock --no-audit --no-fund protobufjs@8.8.1)
+        run: (cd bindings/node && npm install --prefix benchmarks --no-save --no-package-lock --no-audit --no-fund protobufjs@8.8.1)
       - name: ASan core + extensions, run their suites
         # The recipe is verified in docs (local docker): the core archive is
         # built instrumented first, then each extension links it in and runs
@@ -356,7 +355,8 @@ jobs:
             --target protoc libprotobuf
           echo "PB_SRC=$PB_SRC" >> "$GITHUB_ENV"
       - name: Short differential run
-        run: make difftest-short PROTOC="$PB_SRC/build/protoc" PB_CXXFLAGS="-I$PB_SRC/src" PB_LIBS="-L$PB_SRC/build -lprotobuf"
+        # abseil ships inside the checkout, not as a system include.
+        run: make difftest-short PROTOC="$PB_SRC/build/protoc" PB_CXXFLAGS="-I$PB_SRC/src -I$PB_SRC/third_party/abseil-cpp" PB_LIBS="-L$PB_SRC/build -lprotobuf"
         env:
           LD_LIBRARY_PATH: ${{ env.PB_SRC }}/build
 
