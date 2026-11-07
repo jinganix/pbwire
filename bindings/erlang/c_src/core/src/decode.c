@@ -550,7 +550,8 @@ read_packed(reader *r, const pbw_field *field, pbw_message *msg, int closed,
     }
     /* A closed enum drops unknown values, so the scan count would over-reserve
      * and the node block would hold nodes nothing uses: that case keeps the
-     * per-item path (and no scan, no reserve). */
+     * per-item path (and no scan, no reserve). Measured neutral against the
+     * scan+reserve form on a 100k-value run, so the smaller diff wins. */
     batchable = !(closed && pbw_enum_is_closed(field));
     /* Fixed-width items divide the length exactly, so the count is known
      * before the first item: reserve it and skip the push growth chain.
