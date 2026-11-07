@@ -536,7 +536,11 @@ link_message(pbw_schema *schema, pbw_descriptor *msg)
         }
     }
 
-    qsort(msg->fields, msg->field_count, sizeof(*msg->fields), compare_fields);
+    /* A zero-element qsort with a NULL base is undefined behavior. */
+    if (msg->field_count > 1) {
+        qsort(msg->fields, msg->field_count, sizeof(*msg->fields),
+              compare_fields);
+    }
     for (i = 1; i < msg->field_count; i++) {
         if (msg->fields[i - 1].number == msg->fields[i].number) {
             snprintf(schema->error, sizeof(schema->error),

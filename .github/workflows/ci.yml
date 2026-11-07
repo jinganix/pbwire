@@ -289,8 +289,10 @@ jobs:
           export LD_PRELOAD=$(gcc -print-file-name=libasan.so)
           python3 bindings/python/tests/test_pbwire.py
           export ASAN_OPTIONS=detect_leaks=0
-          PBW_EXTRA_CFLAGS="$ASAN" make ruby-test
-          PBW_EXTRA_CFLAGS="$ASAN" CC=gcc make node-test
+          # Interpreter headers are C2X; no -std/-pedantic/-Werror here.
+          EXTRA="-fsanitize=address -fno-omit-frame-pointer -g"
+          PBW_EXTRA_CFLAGS="$EXTRA" make ruby-test
+          PBW_EXTRA_CFLAGS="$EXTRA" CC=gcc make node-test
 
   ports:
     name: 32-bit and big-endian (${{ matrix.target }})

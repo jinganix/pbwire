@@ -4227,13 +4227,13 @@ test_json_format(void)
     }
     /* value bytes without a type URL cannot print */
     {
-        pbw_message *sub;
+        pbw_message *submsg;
 
         decoded = pbw_message_new(msg);
         CHECK(decoded != NULL);
-        sub = pbw_message_set_message(decoded, 17);
-        CHECK(sub != NULL);
-        CHECK_OK(pbw_message_set(sub, 2,
+        submsg = pbw_message_set_message(decoded, 17);
+        CHECK(submsg != NULL);
+        CHECK_OK(pbw_message_set(submsg, 2,
                                  pbw_value_new_bytes("x", 1)));
         CHECK_STATUS(PBW_ERR_INVALID,
                      pbw_json_print(decoded, &out, &len));

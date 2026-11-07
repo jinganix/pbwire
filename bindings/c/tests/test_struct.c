@@ -109,6 +109,17 @@ read_file(const char *path, uint8_t **data, size_t *len)
  * Doubles compare by bits because an exact `==` against a decimal literal is
  * unreliable on x87 (i386 keeps the literal at 80-bit precision while the
  * loaded value is 64-bit). */
+/* inf by bit pattern, so MSVC does not fold a constant divide-by-zero. */
+static float
+float_inf(void)
+{
+    uint32_t u = 0x7f800000u;
+    float f;
+
+    memcpy(&f, &u, sizeof(f));
+    return f;
+}
+
 static uint32_t
 float_bits(float f)
 {
@@ -143,7 +154,7 @@ fill_scalars3(structtest_scalars3_t *s, structtest_inner3_t *inner,
     s->fx64 = UINT64_C(72623859790382856);
     s->sfx32 = INT32_MIN;
     s->sfx64 = INT64_MIN;
-    s->f32 = 1.0f / 0.0f; /* inf, matches `f32: inf` in matrix3.txt */
+    s->f32 = float_inf(); /* matches `f32: inf` in matrix3.txt */
     s->f64 = -123456.789;
     s->flag = 1;
     s->str = "hello";

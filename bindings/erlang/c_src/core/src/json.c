@@ -3960,7 +3960,9 @@ j_parse_any(j_in *j, pbw_message *msg)
                 j->depth = depth0;
                 return PBW_ERR_INVALID;
             }
-            memcpy(type_name, url.data, url.len);
+            if (url.len > 0) { /* source may be NULL when empty */
+                memcpy(type_name, url.data, url.len);
+            }
             type_len = url.len;
             type_name[type_len] = '\0';
             pbw_buf_free(&url);

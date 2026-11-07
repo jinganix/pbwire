@@ -82,6 +82,41 @@ pbw_fail_free(void *ptr)
     free(ptr);
 }
 
+/* Store a fresh value and free it when the store is rejected (the value
+ * stays caller-owned then) or when the constructor itself failed. */
+static pbw_status
+set_value(pbw_message *msg, uint32_t number, pbw_value *value)
+{
+    pbw_status st;
+
+    if (value == NULL) {
+        return PBW_ERR_NOMEM;
+    }
+    st = pbw_message_set(msg, number, value);
+    if (st != PBW_OK) {
+        pbw_value_free(value);
+    }
+    return st;
+}
+
+/* Store a fresh child message: the value owns it once built, and both are
+ * freed here when the value or the store fails. */
+static pbw_status
+set_child(pbw_message *msg, uint32_t number, pbw_message *child)
+{
+    pbw_value *value;
+
+    if (child == NULL) {
+        return PBW_ERR_NOMEM;
+    }
+    value = pbw_value_new_message(child);
+    if (value == NULL) {
+        pbw_message_free(child);
+        return PBW_ERR_NOMEM;
+    }
+    return set_value(msg, number, value);
+}
+
 /* Growable sink buffer for the encode_sink path. */
 struct sink_buf {
     uint8_t *data;
@@ -419,22 +454,23 @@ workload(void)
         return;
     }
     /* Failures below just leave fields unset; every call is NULL-safe. */
-    (void)pbw_message_set(msg, 1, pbw_value_new_int(-1));
-    (void)pbw_message_set(msg, 2, pbw_value_new_string("x"));
-    (void)pbw_message_set(msg, 3, pbw_value_new_bytes(hostile, sizeof(hostile)));
-    (void)pbw_message_set(msg, 7, pbw_value_new_uint(1));
+    (void)set_value(msg, 1, pbw_value_new_int(-1));
+    (void)set_value(msg, 2, pbw_value_new_string("x"));
+    (void)set_value(msg, 3,
+                    pbw_value_new_bytes(hostile, sizeof(hostile)));
+    (void)set_value(msg, 7, pbw_value_new_uint(1));
     subm = pbw_message_set_message(msg, 4);
     if (subm != NULL) {
-        (void)pbw_message_set(subm, 1, pbw_value_new_int(2));
+        (void)set_value(subm, 1, pbw_value_new_int(2));
     }
     {
         pbw_message *g = pbw_message_set_message(msg, 10);
 
         if (g != NULL) {
-            (void)pbw_message_set(g, 1, pbw_value_new_int(3));
+            (void)set_value(g, 1, pbw_value_new_int(3));
         }
     }
-    (void)pbw_message_set(msg, 11, pbw_value_new_int(4));
+    (void)set_value(msg, 11, pbw_value_new_int(4));
     {
         /* A Struct entry and an Any exercise the WKT parse/store paths,
          * including their NOMEM branches, on every injection iteration. */
@@ -446,22 +482,16 @@ workload(void)
         if (stm != NULL && fed != NULL) {
             pbw_message *kv = pbw_message_new(fed);
             pbw_message *vv = NULL;
-            pbw_value *v = NULL;
 
             if (kv != NULL) {
                 vv = pbw_message_new(
                     pbw_schema_find(s, "google.protobuf.Value"));
             }
             if (kv != NULL && vv != NULL) {
-                (void)pbw_message_set(kv, 1,
-                                      pbw_value_new_string("k"));
-                (void)pbw_message_set(vv, 2,
-                                      pbw_value_new_double(1.5));
-                (void)pbw_message_set(kv, 2,
-                                      pbw_value_new_message(vv));
-                v = pbw_value_new_message(kv);
-                if (v != NULL) {
-                    (void)pbw_message_set(stm, 1, v);
+                (void)set_value(kv, 1, pbw_value_new_string("k"));
+                (void)set_value(vv, 2, pbw_value_new_double(1.5));
+                if (set_child(kv, 2, vv) == PBW_OK) {
+                    (void)set_child(stm, 1, kv);
                 } else {
                     pbw_message_free(kv);
                 }
@@ -471,10 +501,11 @@ workload(void)
             }
         }
         if (avm != NULL) {
-            (void)pbw_message_set(avm, 1,
-                                  pbw_value_new_string("type.googleapis.com/Sub"));
-            (void)pbw_message_set(avm, 2,
-                                  pbw_value_new_bytes((const uint8_t *)"\x08\x01", 2));
+            (void)set_value(
+                avm, 1,
+                pbw_value_new_string("type.googleapis.com/Sub"));
+            (void)set_value(avm, 2,
+                            pbw_value_new_bytes((const uint8_t *)"\x08\x01", 2));
         }
     }
     {
@@ -487,20 +518,14 @@ workload(void)
             pbw_message *kv = entry != NULL ? pbw_message_new(entry)
                                             : NULL;
             char ks[16];
-            pbw_value *v = NULL;
 
             if (kv == NULL) {
                 break;
             }
             snprintf(ks, sizeof(ks), "k%d", k);
-            (void)pbw_message_set(kv, 1, pbw_value_new_string(ks));
-            (void)pbw_message_set(kv, 2, pbw_value_new_int(k));
-            v = pbw_value_new_message(kv);
-            if (v == NULL) {
-                pbw_message_free(kv);
-                break;
-            }
-            if (pbw_message_set(msg, 6, v) != PBW_OK) {
+            (void)set_value(kv, 1, pbw_value_new_string(ks));
+            (void)set_value(kv, 2, pbw_value_new_int(k));
+            if (set_child(msg, 6, kv) != PBW_OK) {
                 break;
             }
         }
@@ -509,7 +534,7 @@ workload(void)
         pbw_message *s1 = pbw_message_set_message(msg, 13);
 
         if (s1 != NULL) {
-            (void)pbw_message_set(s1, 1, pbw_value_new_int(5));
+            (void)set_value(s1, 1, pbw_value_new_int(5));
         }
     }
     /* 64 appends force repeated-list growth through reserve. */
@@ -517,27 +542,27 @@ workload(void)
         pbw_message *slot = NULL;
         char key[16];
 
-        (void)pbw_message_set(msg, 5, pbw_value_new_int(i));
-        (void)pbw_message_set(msg, 8, pbw_value_new_int(i));
+        (void)set_value(msg, 5, pbw_value_new_int(i));
+        (void)set_value(msg, 8, pbw_value_new_int(i));
         snprintf(key, sizeof(key), "k%d", i);
         slot = pbw_message_set_message(msg, 6);
         if (slot == NULL) {
             break;
         }
-        if (pbw_message_set(slot, 1, pbw_value_new_string(key)) != PBW_OK ||
-            pbw_message_set(slot, 2, pbw_value_new_int(i)) != PBW_OK) {
+        if (set_value(slot, 1, pbw_value_new_string(key)) != PBW_OK ||
+            set_value(slot, 2, pbw_value_new_int(i)) != PBW_OK) {
             break;
         }
     }
-    (void)pbw_message_set(msg, 9, pbw_value_new_float(1.5f));
-    (void)pbw_message_set(msg, 15,
-                          pbw_value_new_uint(0x0102030405060708ull));
+    (void)set_value(msg, 9, pbw_value_new_float(1.5f));
+    (void)set_value(msg, 15,
+                    pbw_value_new_uint(0x0102030405060708ull));
     {
         int j;
 
         for (j = 0; j < 16; j++) {
-            (void)pbw_message_set(msg, 16, pbw_value_new_uint((uint32_t)j));
-            (void)pbw_message_set(msg, 17, pbw_value_new_bool(j & 1));
+            (void)set_value(msg, 16, pbw_value_new_uint((uint32_t)j));
+            (void)set_value(msg, 17, pbw_value_new_bool(j & 1));
         }
     }
     if (pbw_encode(msg, &wire, &wire_len) == PBW_OK) {
@@ -627,8 +652,9 @@ workload(void)
             pbw_message *dctx = NULL;
 
             if (built != NULL) {
-                (void)pbw_message_set(
-                    built, 2, pbw_value_new_bytes_ctx(ctx, hostile, sizeof(hostile)));
+                (void)set_value(
+                    built, 2,
+                    pbw_value_new_bytes_ctx(ctx, hostile, sizeof(hostile)));
                 if (pbw_encode(msg, &wire, &wire_len) == PBW_OK) {
                     (void)pbw_decode_ctx(ctx, m, wire, wire_len, &dctx);
                     pbw_free(wire);

@@ -476,7 +476,9 @@ check_proto2(pbw_descriptor *desc, pbw_descriptor *group,
         bool parsed =
             check.ParseFromArray(wire.data(), static_cast<int>(wire.size()));
         std::string gen_out;
-        bool gen_serialized = r.SerializeToString(&gen_out);
+        /* Partial on purpose: older protobuf aborts inside SerializeToString
+         * when a required field is missing. */
+        bool gen_serialized = r.SerializePartialToString(&gen_out);
 
         pbw_message *dm = nullptr;
         pbw_status st = pbw_decode(required, wire.data(), wire.size(), &dm);
