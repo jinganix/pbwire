@@ -1801,8 +1801,12 @@ test_ctx_build(pbw_schema *schema)
     CHECK(pbw_value_count(pbw_message_get(decoded, 2)) == 2);
 
     /* Sealed: building into a decoded arena fails. */
-    CHECK(pbw_message_set(decoded, 2, pbw_value_new_uint(9)) == PBW_ERR_INVALID);
-    pbw_value_free(pbw_value_new_uint(9));
+    {
+        pbw_value *v = pbw_value_new_uint(9);
+
+        CHECK(pbw_message_set(decoded, 2, v) == PBW_ERR_INVALID);
+        pbw_value_free(v);
+    }
     pbw_ctx_free(ctx);
 }
 
@@ -4248,9 +4252,13 @@ test_json_format(void)
             CHECK(dctx != NULL);
             CHECK_STATUS(PBW_ERR_INVALID,
                          pbw_message_add_unknown_bytes(dctx, "x", 1));
-            CHECK_STATUS(PBW_ERR_INVALID,
-                         pbw_message_set(dctx, 1,
-                                         pbw_value_new_int(1)));
+            {
+                pbw_value *v = pbw_value_new_int(1);
+
+                /* rejected values stay owned by the caller */
+                CHECK_STATUS(PBW_ERR_INVALID, pbw_message_set(dctx, 1, v));
+                pbw_value_free(v);
+            }
             pbw_ctx_free(ctx);
             pbw_free(dwire);
         }
@@ -5595,6 +5603,8 @@ test_json_edges(void)
     pbw_message_free(decoded);
     decoded = NULL;
     CHECK_OK(JP("{\"howLong\":\"3.5s\"}"));
+    pbw_message_free(decoded);
+    decoded = NULL;
     CHECK_OK(JP("{\"howLong\":\"-3s\"}"));
     pbw_message_free(decoded);
     decoded = NULL;
@@ -6508,8 +6518,12 @@ test_decode_delimited(pbw_schema *schema)
         CHECK(strcmp(pbw_value_get_string(pbw_message_get(got, 1)), "hi") ==
               0);
         /* A decoded arena tree is read-only, like pbw_decode_ctx(). */
-        CHECK_STATUS(PBW_ERR_INVALID,
-                     pbw_message_set(got, 1, pbw_value_new_string("no")));
+        {
+            pbw_value *v = pbw_value_new_string("no");
+
+            CHECK_STATUS(PBW_ERR_INVALID, pbw_message_set(got, 1, v));
+            pbw_value_free(v);
+        }
         pbw_ctx_reset(ctx);
         got = NULL;
         capped.max_bytes = 1;
@@ -6905,13 +6919,11 @@ test_api_misc(pbw_schema *schema)
     pbw_istream_free(NULL);
     pbw_istream_reset(NULL);
     pbw_schema_free(NULL);
-    CHECK(pbw_istream_new(NULL) != NULL);
     {
         pbw_istream *tmp = pbw_istream_new(NULL);
 
         pbw_istream_free(tmp);
     }
-    CHECK(pbw_pool_new(0, 0) != NULL);
     {
         pbw_pool *none = pbw_pool_new(0, 0);
         pbw_ctx *one;

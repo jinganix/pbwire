@@ -890,7 +890,7 @@ test_schema_load_errors(void)
     CHECK(schema == NULL);
     CHECK_STATUS(PBW_ERR_INVALID,
                  pbw_struct_schema_load(MATRIX3_DESC_PATH, NULL));
-    f = fopen("build/corrupt.desc", "wb");
+    f = fopen("corrupt_test.desc", "wb");
     CHECK(f != NULL);
     if (f != NULL) {
         static const uint8_t garbage[] = {0xde, 0xad, 0xbe, 0xef};
@@ -899,12 +899,12 @@ test_schema_load_errors(void)
         /* Garbage propagates descriptor_set_load's contract: a status
          * plus a schema carrying the reason, freed on both paths. */
         schema = (pbw_schema *)0x1;
-        if (pbw_struct_schema_load("build/corrupt.desc", &schema) == PBW_OK) {
+        if (pbw_struct_schema_load("corrupt_test.desc", &schema) == PBW_OK) {
             CHECK(0); /* garbage must not load */
         }
         CHECK(schema != (pbw_schema *)0x1);
         pbw_schema_free(schema);
-        remove("build/corrupt.desc");
+        remove("corrupt_test.desc");
     }
 }
 
