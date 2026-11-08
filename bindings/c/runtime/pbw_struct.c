@@ -1502,8 +1502,16 @@ sc_slot(const sc_entry *e, char *base, pbw_struct_arena *a)
         if (*arr == NULL) {
             return NULL;
         }
-    } else if ((i & (i - 1)) == 0 && i >= 8) {
-        char *grown = (char *)sc_grow(a, *arr, i * e->elem, 2 * i * e->elem);
+    } else if (i >= 8 && (i & (i - 1)) == 0) {
+        char *grown;
+
+        /* Doubling must not wrap: a hostile 32-bit payload can carry
+         * millions of one-byte items, and a wrapped size would mean copying
+         * `old_bytes` into a far smaller block. */
+        if (e->elem > SIZE_MAX / i || i * e->elem > SIZE_MAX / 2) {
+            return NULL;
+        }
+        grown = (char *)sc_grow(a, *arr, i * e->elem, 2 * i * e->elem);
 
         if (grown == NULL) {
             return NULL;
@@ -2098,6 +2106,11 @@ pbw_struct_codec_decode(const pbw_struct_codec *codec, const uint8_t *wire,
     }
     if (a != NULL) {
         arena_reset(a);
+    }
+    /* NULL + 0 is undefined even when nothing is read: normalize the empty
+     * input like the core does. */
+    if (wire == NULL) {
+        wire = (const uint8_t *)"";
     }
     r.p = wire;
     r.end = wire + wire_len;
