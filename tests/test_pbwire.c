@@ -1228,6 +1228,12 @@ test_pack_all_types(pbw_schema *schema)
         CHECK(pbw_value_get_int32(pbw_value_at(pbw_message_get(decoded, 3), 0)) == -3);
         CHECK(pbw_value_get_float(pbw_value_at(pbw_message_get(decoded, 2), 0)) ==
               4.5f);
+        /* Signed fixed-width repeated items are sign extended, packed and
+         * unpacked alike: the same representation as a singular field. */
+        CHECK(pbw_value_get_int(pbw_value_at(pbw_message_get(decoded, 11), 0)) ==
+              -3);
+        CHECK(pbw_value_get_int(pbw_value_at(pbw_message_get(decoded, 12), 0)) ==
+              -3);
         pbw_free(buf);
         pbw_message_free(decoded);
         pbw_message_free(msg);
@@ -3270,6 +3276,8 @@ test_text_format(void)
             "f32: 1e",                                                                                                                                                   /* exponent without digits */
             "f32: 1e+",                                                                                                                                                  /* exponent without digits */
             "f32: .e5",                                                                                                                                                  /* missing mantissa */
+            "f32: 03.5",                                                                                                                                                 /* leading zero is octal */
+            "f32: 01e5",                                                                                                                                                 /* octal with an exponent */
             "flag: yes",                                                                                                                                                 /* not a bool */
             "flag: 2",                                                                                                                                                   /* out of range for bool */
             "subs [1]",                                                                                                                                                  /* scalar in a message list */

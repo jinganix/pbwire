@@ -952,6 +952,12 @@ t_lex_number(text_cur *c, t_number *out)
         if (q == p) {
             return 0;
         }
+        if (out->is_oct && is_float) {
+            /* "0" followed by a digit is an octal token for the reference
+             * tokenizer, where a decimal point or an exponent is an error
+             * (03.5, 01e5). A lone leading zero (0.5) stays a float. */
+            return 0;
+        }
         out->kind = is_float ? T_NUM_FLOAT : T_NUM_INT;
         out->start = p;
         out->len = (size_t)(q - p);

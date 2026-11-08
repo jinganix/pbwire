@@ -1211,6 +1211,12 @@ decode_fields(pbw_message *msg, const uint8_t *buf, size_t len, uint32_t depth, 
                     return PBW_ERR_INVALID;
                 }
                 bits = dec_le32(r.p);
+                if (field->type == PBW_TYPE_SFIXED32) {
+                    /* Sign extended like the singular path: the API hands
+                     * back every signed value in the same representation,
+                     * list items included. */
+                    bits = (uint64_t)(int64_t)(int32_t)bits;
+                }
                 r.p += 4;
                 status = rep_append(msg, field,
                                     pbw_value_new_uint_a(msg->arena, bits),
@@ -1224,6 +1230,9 @@ decode_fields(pbw_message *msg, const uint8_t *buf, size_t len, uint32_t depth, 
                     return PBW_ERR_INVALID;
                 }
                 bits = dec_le64(r.p);
+                if (field->type == PBW_TYPE_SFIXED64) {
+                    bits = (uint64_t)(int64_t)bits;
+                }
                 r.p += 8;
                 status = rep_append(msg, field,
                                     pbw_value_new_uint_a(msg->arena, bits),
