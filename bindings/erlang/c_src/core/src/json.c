@@ -1650,6 +1650,10 @@ pbw_json_print(const pbw_message *msg, char **out, size_t *len)
     if (msg == NULL || out == NULL || len == NULL) {
         return PBW_ERR_INVALID;
     }
+    /* Zeroed on every failure path, like pbw_encode() and the text printer:
+     * a caller that reuses its buffer never keeps a stale pointer. */
+    *out = NULL;
+    *len = 0;
     pbw_buf_init(&j.buf);
     j.status = PBW_OK;
     j.depth = 0;

@@ -1380,8 +1380,12 @@ test_print_depth_limit(pbw_schema *schema)
     len = 99;
     CHECK_STATUS(PBW_ERR_LIMIT, pbw_encode(root, &buf, &len));
     CHECK(buf == NULL && len == 0);
+    text = (char *)&text_len;
+    text_len = 99;
     CHECK_STATUS(PBW_ERR_LIMIT, pbw_json_print(root, &text, &text_len));
     CHECK(text == NULL && text_len == 0);
+    text = (char *)&text_len;
+    text_len = 99;
     CHECK_STATUS(PBW_ERR_LIMIT, pbw_text_print(root, &text, &text_len));
     CHECK(text == NULL && text_len == 0);
     pbw_message_free(root);
