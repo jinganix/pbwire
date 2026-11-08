@@ -188,7 +188,12 @@
     case PBW_TYPE_UINT32:
     case PBW_TYPE_FIXED32:
         return @(pbw_value_get_uint32(key));
-    default: /* 64-bit integers read back as NSNumber, like objectForValue: */
+    case PBW_TYPE_UINT64:
+    case PBW_TYPE_FIXED64:
+        /* Unsigned 64-bit keys keep their full range: get_int would report a
+         * key >= 2^63 as negative. */
+        return @(pbw_value_get_uint(key));
+    default: /* 64-bit signed integers, like objectForValue: */
         return @(pbw_value_get_int(key));
     }
 }
@@ -476,9 +481,10 @@
     }
     nested = pbw_message_set_message(_message, pbw_field_number(field));
     if (nested == NULL) {
-        /* This wrapper never builds in a context arena, so the only failure is
-         * an allocation failure. */
-        PBWSetError(error, PBW_ERR_NOMEM, name);
+        /* A message decoded into a context is read-only, so "cannot build" is
+         * a type/state error there, not an allocation failure. */
+        PBWSetError(error, _context != nil ? PBW_ERR_INVALID : PBW_ERR_NOMEM,
+                    name);
         return nil;
     }
     return [[PBWMessage alloc] initWithDescriptor:pbw_field_message_type(field)

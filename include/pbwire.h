@@ -436,8 +436,6 @@ pbw_status pbw_encode_ctx(pbw_ctx *ctx, const pbw_message *msg,
 
 /* ------------------------------------------------------------------ wire */
 
-/* Encode msg; *out is replaced with a malloc'd buffer owned by the caller
- * (pbw_free). */
 /* Print msg in protobuf text format. *out is malloc'd, NUL-terminated and owned
  * by the caller (pbw_free); *len excludes the NUL. Unknown fields are shown
  * as numeric `field: value` lines, like the reference printer. */
@@ -475,13 +473,15 @@ pbw_status pbw_json_parse_opts(const pbw_descriptor *desc, const char *text,
 pbw_status pbw_json_parse(const pbw_descriptor *desc, const char *text,
                           size_t len, pbw_message **out);
 
+/* Encode msg; *out is replaced with a malloc'd buffer owned by the caller
+ * (pbw_free). *out and *len are 0 on failure. */
 pbw_status pbw_encode(const pbw_message *msg, uint8_t **out, size_t *len);
 /* Encode into caller memory of `cap` bytes, so a binding can write straight
  * into its own buffer. No allocation happens and nothing is freed; `cap` is
  * the hard limit and the writer over-reserves up to 10 bytes per write, so
  * `pbw_message_encoded_size(msg) + PBW_ENCODE_SLACK` may be needed even when
- * the exact size is known. *len is the bytes written. PBW_ERR_LIMIT when the
- * message does not fit. */
+ * the exact size is known. *len is the bytes written, 0 after any failure.
+ * PBW_ERR_LIMIT when the message does not fit. */
 pbw_status pbw_encode_to(const pbw_message *msg, void *out, size_t cap,
                          size_t *len);
 /* Decode buf into a new message of the given type. Unknown fields are kept.

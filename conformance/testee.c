@@ -340,6 +340,7 @@ serve_one(void)
          * failure; report it and stop so the runner shows something useful. */
         fprintf(stderr, "testee: unparseable request (%u bytes)\n", len);
         free(buf);
+        pbw_message_free(request);
         pbw_message_free(response);
         return 0;
     }
@@ -368,7 +369,6 @@ main(int argc, char **argv)
     FILE *file;
     long size;
     uint8_t *bytes;
-    int running;
 
     if (argc < 2) {
         fprintf(stderr, "usage: %s <descriptor-set>\n", argv[0]);
@@ -404,8 +404,8 @@ main(int argc, char **argv)
         return 2;
     }
 
-    while ((running = serve_one()) != 0) {
-        /* serve_one() loops until stdin closes */
+    /* serve_one() loops until stdin closes and then returns 0. */
+    while (serve_one() != 0) {
     }
     pbw_schema_free(requests);
     pbw_schema_free(responses);

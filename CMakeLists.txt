@@ -115,11 +115,42 @@ if(PBW_BUILD_TESTS)
     target_link_libraries(test_descriptor PRIVATE pbwire)
     add_test(NAME test_descriptor COMMAND test_descriptor)
 
-    # The remaining suites the Makefile gate runs, so `ctest` is the same
-    # gate on every platform (including MSVC, where `make test` cannot run).
+    # The remaining suites the Makefile gate runs, so `ctest` covers the same
+    # checks on every platform (including MSVC, where `make test` cannot run).
+    # The optional protoc importer test below stays out unless PBW_BUILD_PROTOC
+    # is ON (it needs libprotobuf).
     add_executable(test_malformed tests/test_malformed.c)
     target_link_libraries(test_malformed PRIVATE pbwire)
     add_test(NAME test_malformed COMMAND test_malformed)
+
+    # Allocation-failure sweep: the core is built a second time with every
+    # allocation site renamed to a counting hook (tests/test_nofail.c), so each
+    # iteration fails exactly one allocation. test_embedded_nofail runs the
+    # same hooked core through the embedded facade and asserts the
+    # no-allocation steady state.
+    add_library(pbwire_nofail STATIC ${PBW_CORE_SOURCES})
+    target_include_directories(pbwire_nofail
+        PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    target_compile_definitions(pbwire_nofail PRIVATE
+        malloc=pbw_fail_malloc calloc=pbw_fail_calloc
+        realloc=pbw_fail_realloc free=pbw_fail_free)
+
+    add_executable(test_nofail tests/test_nofail.c)
+    target_link_libraries(test_nofail PRIVATE pbwire_nofail)
+    add_test(NAME test_nofail COMMAND test_nofail)
+
+    add_executable(test_embedded_nofail
+        bindings/embedded/tests/test_embedded.c
+        bindings/embedded/runtime/pbwe.c)
+    target_compile_definitions(test_embedded_nofail PRIVATE
+        PBWE_HAVE_ALLOC_HOOKS)
+    target_include_directories(test_embedded_nofail PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/bindings/embedded/runtime)
+    target_link_libraries(test_embedded_nofail PRIVATE pbwire_nofail)
+    add_test(NAME test_embedded_nofail COMMAND test_embedded_nofail)
+    set_tests_properties(test_embedded_nofail PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
 
     add_executable(test_struct bindings/c/tests/test_struct.c)
     target_include_directories(test_struct PRIVATE

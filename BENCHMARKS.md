@@ -122,7 +122,7 @@ Last full refresh: 2026-11-06, all rows below:
 | Node (N-API addon) | `make node-bench` (`bindings/node/benchmarks`) | [protobufjs](https://www.npmjs.com/package/protobufjs) (fastest) + `google-protobuf` (jspb) from the same `matrix3.proto` | all 4 | 2.89x / 4.15x vs protobufjs ✅ |
 | Ruby (C extension) | `make ruby-bench` (`bindings/ruby/benchmarks`) | the `google-protobuf` gem (C extension) | all 4 | 1.21x / 1.68x ✅ |
 | Objective-C (ARC) | `make objc-bench` (`bindings/objc/benchmarks`) | the `protobuf` ObjC runtime + generated code from the same `matrix3.proto` | all 4 | 2.03x / 2.92x ✅ |
-| Kotlin (same FFM layer as Java) | `make kotlin-bench` (`bindings/kotlin/benchmarks`) | `protoc --kotlin_out` over `protobuf-java`, same `matrix3.proto` | all 4 | 1.09x / 2.07x ✅ (0.80x at 136 B) |
+| Kotlin (pure-Java codec + DSL) | `make kotlin-bench` (`bindings/kotlin/benchmarks`) | `protoc --kotlin_out` over `protobuf-java`, same `matrix3.proto` | all 4 | 1.09x / 2.07x ✅ (0.80x at 136 B) |
 | PHP (`ext-ffi` + C extension) | `make php-bench` (`bindings/php/benchmarks`) | the official PHP runtime (`protobuf/php/src`): C extension (fastest) + pure-PHP | all 4 | 1.06x / 1.21x vs C ext ✅ (342x / 130x vs pure) |
 | Dart (`dart:ffi`) | `make dart-bench` (`bindings/dart/benchmarks`) | the `protobuf` Dart package + generated code | all 4 | 15.4x / 4.27x ✅ |
 | Rust (static link) | `make rust-bench` (`bindings/rust/benchmarks`) | prost (fastest) + rust-protobuf 3.x generated code | all 4 | 1.08x / 1.87x vs prost ✅ |
@@ -181,7 +181,7 @@ payload, the boundary cost and the baseline all differ.
 | Go | `cgo` dynamic over the C core | 74913 B | 1508.7 (2.68x ✅) | 709.6 (2.23x ✅) |
 | Python (dict path) | CPython extension | 74913 B | 593.1 (6.91x ✅) | 1376.6 (1.70x ✅) |
 | Java | pure-Java codec, no native code | 74913 B | 1061.4 (1.17x ✅) | 968.7 (2.36x ✅) |
-| Kotlin | the Java FFM layer + DSL | 74913 B | 1003.9 (1.09x ✅) | 973.2 (2.07x ✅) |
+| Kotlin | the pure-Java codec + DSL | 74913 B | 1003.9 (1.09x ✅) | 973.2 (2.07x ✅) |
 | Node | N-API addon | 74913 B | 1446.4 (2.89x ✅) | 1584.5 (4.15x ✅) |
 | Ruby | C extension over the core | 74913 B | 1582.4 (1.21x ✅) | 1170.0 (1.68x ✅) |
 | Objective-C | ARC wrapper | 74913 B (one 74 KB string) | 79927.5 (2.03x ✅) | 81115.5 (2.92x ✅) |
@@ -208,8 +208,8 @@ until the payload is large — Java, Kotlin, Ruby, Rust, C# and PHP all land at
 near the core's own number. The outliers are baseline or unit effects, not pbwire
 effects: Python's encode column is the dict path (3000 sub-messages, 12000
 ints), and the Objective-C tier is a memcpy race over one 74 KB string.
-The headline always names the fastest baseline: Node's 3.01x / 3.98x is over
-protobufjs (jspb, the legacy baseline, trails it by ~23x / ~19x), PHP's 1.06x /
+The headline always names the fastest baseline: Node's 2.89x / 4.15x is over
+protobufjs (jspb, the legacy baseline, trails it by ~26x / ~19x), PHP's 1.06x /
 1.21x is over the official C extension (the pure-PHP runtime trails it by
 ~342x / ~130x) — see their sections. Swift, Scala, F#, Zig and Julia join
 the ~1.0-1.6 GB/s encode club on xlarge (Swift 5.45x and Julia 124x encode
@@ -596,8 +596,8 @@ Read it as:
   straight-line writer beats it outright, because the C++ serializer walks the
   message twice (size, then write) while pbwire writes one pass.
 - **Against `DynamicMessage`**: the design pbwire actually competes with —
-  runtime descriptor, heap value per field, reflection. pbwire is 1.7-3.2x
-  faster there (decode) and 8.0-15.2x on encode.
+  runtime descriptor, heap value per field, reflection. pbwire is 2.7-5.2x
+  faster there (decode) and 11.4-19.3x on encode.
 - **The plain column** pays exactly one `malloc`/`free` pair per call (decoded
   tree, output buffer), which is why it sits ~0.1-0.2x behind ctx on the small
   tiers yet still beats generated code everywhere now (the 169 B encode moved
@@ -1369,7 +1369,7 @@ make bench-c      # C structs vs protoc C++ on matrix3.proto (same deps)
 make python-bench # Python extension vs google.protobuf (needs protobuf + protoc)
 make erlang-bench # Erlang binding: epb, gpb, gpb NIF on matrix3.proto (needs OTP + gpb)
 make go-bench     # Go cgo dynamic vs protobuf-go generated code (needs Go + protoc-gen-go)
-make java-bench   # Java FFM vs protobuf-java (fetches the jar from Maven Central once)
+make java-bench   # pure-Java codec vs protobuf-java (fetches the jar from Maven Central once)
 make node-bench   # N-API addon vs google-protobuf/jspb (npm installs into the harness)
 make ruby-bench   # Ruby C extension vs the google-protobuf gem (`RUBY=...` picks the interpreter)
 make objc-bench   # ARC wrapper vs the protobuf ObjC runtime (needs `make conformance-setup`)

@@ -244,6 +244,7 @@ pbwr_scalar_value(SEXP v, R_xlen_t i, const pbw_field *field, pbw_ctx *ctx)
     switch (type) {
     case PBW_TYPE_STRING: {
         SEXP s;
+        const char *utf8;
 
         if (TYPEOF(v) != STRSXP || i >= Rf_xlength(v)) {
             Rf_error("pbwire: field %s expects a string", fname);
@@ -252,8 +253,11 @@ pbwr_scalar_value(SEXP v, R_xlen_t i, const pbw_field *field, pbw_ctx *ctx)
         if (s == NA_STRING) {
             Rf_error("pbwire: field %s: NA is not a valid string", fname);
         }
-        /* CHAR + LENGTH: raw bytes as stored, no encoding translation. */
-        return pbwr_bytes_copy(ctx, CHAR(s), (size_t)LENGTH(s));
+        /* protobuf `string` is UTF-8 on the wire: translate an R string
+         * marked latin1 (or native in a non-UTF-8 locale) instead of
+         * shipping its bytes as-is, which no peer could read as UTF-8. */
+        utf8 = Rf_translateCharUTF8(s);
+        return pbwr_bytes_copy(ctx, utf8, strlen(utf8));
     }
     case PBW_TYPE_BYTES: {
         if (TYPEOF(v) == RAWSXP) {
@@ -328,10 +332,28 @@ pbwr_scalar_value(SEXP v, R_xlen_t i, const pbw_field *field, pbw_ctx *ctx)
     case PBW_TYPE_SFIXED64:
         return pbwr_uint_bits(
             ctx, (uint64_t)pbwr_to_i64(pbwr_as_double(v, i, fname)));
-    default: /* unsigned and fixed-width integers: raw bit pattern */
+    case PBW_TYPE_UINT32:
+    case PBW_TYPE_FIXED32: {
+        uint64_t n = pbwr_to_u64(pbwr_as_double(v, i, fname), fname);
+
+        /* The wire field is 32 bits wide: clamp like int32 rather than
+         * silently truncating 2^32 to 0. */
+        return pbwr_uint_bits(ctx, n > UINT32_MAX ? UINT32_MAX : n);
+    }
+    default: /* 64-bit unsigned and fixed: raw bit pattern */
         return pbwr_uint_bits(ctx,
                               pbwr_to_u64(pbwr_as_double(v, i, fname), fname));
     }
+}
+
+/* R's CHARSXP length is an int: a >2 GiB payload would wrap negative. */
+static SEXP
+pbwr_charsxp(const char *text, size_t len)
+{
+    if (len > (size_t)INT32_MAX) {
+        Rf_error("pbwire: text payload exceeds R's string limit");
+    }
+    return Rf_mkCharLenCE(text, (int)len, CE_UTF8);
 }
 
 static void pbwr_fill(SEXP list, pbw_ctx *ctx, const pbw_descriptor *desc,
@@ -493,7 +515,9 @@ pbwr_scalar_sexp(pbw_type type, const pbw_value *value)
         SEXP s;
 
         PROTECT(s = allocVector(STRSXP, 1));
-        SET_STRING_ELT(s, 0, Rf_mkCharLen((const char *)data, (int)len));
+        /* Marked UTF-8: protobuf strings are UTF-8, and an unmarked CHARSXP
+         * reads as "unknown" in a non-UTF-8 locale (no `==` with literals). */
+        SET_STRING_ELT(s, 0, pbwr_charsxp((const char *)data, len));
         UNPROTECT(1);
         return s;
     }
@@ -654,8 +678,7 @@ pbwr_repeated_sexp(pbwr_schema *s, const pbw_field *field,
             size_t len = 0;
             const void *data = pbw_value_get_bytes(item, &len);
 
-            SET_STRING_ELT(out, j,
-                           Rf_mkCharLen((const char *)data, (int)len));
+            SET_STRING_ELT(out, j, pbwr_charsxp((const char *)data, len));
             break;
         }
         case PBW_TYPE_BOOL:
@@ -689,6 +712,49 @@ pbwr_repeated_sexp(pbwr_schema *s, const pbw_field *field,
     }
     UNPROTECT(1);
     return out;
+}
+
+/* pbwr_message_sexp raises through R's longjmp, which skips the caller's
+ * pbw_message_free. Walk the tree first so a too-deep message (peer
+ * controlled) is rejected while the caller still owns and can free it. */
+static int
+pbwr_depth_ok(const pbw_message *msg, unsigned depth)
+{
+    const pbw_descriptor *desc = pbw_message_descriptor(msg);
+    size_t nfields = pbw_descriptor_field_count(desc);
+    size_t f;
+
+    if (msg == NULL || desc == NULL) {
+        return 0;
+    }
+    if (depth > PBWR_MAX_DEPTH) {
+        return 0;
+    }
+    for (f = 0; f < nfields; f++) {
+        const pbw_field *field = pbw_descriptor_field_at(desc, f);
+        pbw_value *value = pbw_message_get_field(msg, field);
+
+        if (value == NULL) {
+            continue;
+        }
+        if (pbw_value_get_kind(value) == PBW_VALUE_LIST) {
+            size_t i, n = pbw_value_count(value);
+
+            for (i = 0; i < n; i++) {
+                pbw_value *item = pbw_value_at(value, i);
+
+                if (item != NULL &&
+                    pbw_value_get_kind(item) == PBW_VALUE_MESSAGE &&
+                    !pbwr_depth_ok(pbw_value_get_message(item), depth + 1)) {
+                    return 0;
+                }
+            }
+        } else if (pbw_value_get_kind(value) == PBW_VALUE_MESSAGE &&
+                   !pbwr_depth_ok(pbw_value_get_message(value), depth + 1)) {
+            return 0;
+        }
+    }
+    return 1;
 }
 
 static SEXP
@@ -833,13 +899,15 @@ pbwr_load(SEXP data)
     }
     status = pbw_descriptor_set_load(bytes, len, &schema);
     if (status != PBW_OK) {
-        const char *reason =
-            schema != NULL ? pbw_schema_error(schema) : "";
+        /* The reason lives inside the schema: copy it before freeing it
+         * (Rf_error longjmps after the free, so a pointer would be stale). */
+        char reason[256];
+        const char *why = schema != NULL ? pbw_schema_error(schema) : NULL;
 
+        snprintf(reason, sizeof(reason), "%s", why != NULL ? why : "");
         pbw_schema_free(schema);
         Rf_error("pbwire: descriptor set rejected: %s",
-                 reason != NULL && reason[0] != '\0' ? reason
-                                                     : pbw_strerror(status));
+                 reason[0] != '\0' ? reason : pbw_strerror(status));
     }
     /* calloc: fields/last are only touched later, and the finalizer walks
      * them, so they must start NULL. */
@@ -976,11 +1044,14 @@ pbwr_roundtrip(SEXP schema_sexp, SEXP type, SEXP wire)
     return ans;
 }
 
-/* Text in: an R string (NA and empty vectors fail, like a bad type). */
+/* Text in: an R string (NA and empty vectors fail, like a bad type). The
+ * parser and the printer both speak UTF-8, so a string marked latin1 is
+ * translated instead of parsed byte for byte. */
 static const char *
 pbwr_text_in(SEXP v, size_t *len, const char *what)
 {
     SEXP s;
+    const char *utf8;
 
     if (TYPEOF(v) != STRSXP || Rf_xlength(v) < 1) {
         Rf_error("pbwire: %s expects a string", what);
@@ -989,18 +1060,20 @@ pbwr_text_in(SEXP v, size_t *len, const char *what)
     if (s == NA_STRING) {
         Rf_error("pbwire: %s: NA is not valid text", what);
     }
-    *len = (size_t)LENGTH(s);
-    return CHAR(s);
+    utf8 = Rf_translateCharUTF8(s);
+    *len = strlen(utf8);
+    return utf8;
 }
 
-/* Text out: a one-element string vector (NA-safe by construction). */
+/* Text out: a one-element string vector (NA-safe by construction). Marked
+ * UTF-8 so a non-UTF-8 locale still reads it as text, not as unknown bytes. */
 static SEXP
 pbwr_text_out(const char *text, size_t len)
 {
     SEXP ans;
 
     PROTECT(ans = allocVector(STRSXP, 1));
-    SET_STRING_ELT(ans, 0, Rf_mkCharLen(text, (int)len));
+    SET_STRING_ELT(ans, 0, pbwr_charsxp(text, len));
     UNPROTECT(1);
     return ans;
 }
@@ -1054,6 +1127,14 @@ pbwr_from_json(SEXP schema_sexp, SEXP type, SEXP text, SEXP ignore)
     status = pbw_json_parse_opts(desc, data, len, &opts, &msg);
     if (status != PBW_OK) {
         pbwr_fail(status, "from_json", name);
+    }
+    if (!pbwr_depth_ok(msg, 0)) {
+        pbw_message_free(msg);
+        pbwr_fail(PBW_ERR_LIMIT, "from_json", name);
+    }
+    if (!pbwr_depth_ok(msg, 0)) {
+        pbw_message_free(msg);
+        pbwr_fail(PBW_ERR_LIMIT, "from_text", name);
     }
     ans = pbwr_message_sexp(msg, s, 0);
     pbw_message_free(msg);
@@ -1191,6 +1272,10 @@ pbwr_decode_delimited(SEXP schema_sexp, SEXP type, SEXP wire)
     status = pbw_decode_delimited(desc, bytes, len, &msg, &consumed);
     if (status != PBW_OK) {
         pbwr_fail(status, "decode_delimited", name);
+    }
+    if (!pbwr_depth_ok(msg, 0)) {
+        pbw_message_free(msg);
+        pbwr_fail(PBW_ERR_LIMIT, "decode_delimited", name);
     }
     PROTECT(ans = allocVector(VECSXP, 2));
     PROTECT(names = allocVector(STRSXP, 2));

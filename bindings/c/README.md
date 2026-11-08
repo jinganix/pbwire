@@ -53,10 +53,13 @@ is `PBW_ERR_INVALID`.
 `decode` allocates (strings, bytes, arrays, sub-messages) into a zeroed struct.
 Repeated fields grow by doubling from the count member, so a message with
 empty repeated fields allocates nothing. Maps are repeated entry structs
-(no hash table: insertion order is the wire order); oneof members share a
-union gated by a case word (last one wins, like the reference); groups
-encode as `START_GROUP` + message + `END_GROUP`. Extensions and MessageSet
-members are not generated yet (the plugin walks message fields only).
+into (no hash table: insertion order is the wire order, and a repeated key
+is kept as two entries -- protobuf map semantics say last-wins, which this
+array model does not collapse for you); oneof members share a union gated by
+a case word (last one wins, like the reference); groups encode as
+`START_GROUP` + message + `END_GROUP`. Extensions do get generated rows (see
+`tests/gen/extensiontest.h`); `message_set_wire_format` extendees are
+rejected at generation time because their framing is not representable.
 
 ### Two levels: one-shot calls and a compiled codec
 

@@ -50,7 +50,7 @@ namespace Xfile {
         }
         public override int GetHashCode() {
             int hash = 1;
-            hash ^= Single.GetHashCode();
+            hash ^= (Single == null ? 0 : Single.GetHashCode());
             hash ^= Many.GetHashCode();
             hash ^= Note.GetHashCode();
             return hash;

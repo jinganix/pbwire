@@ -125,16 +125,24 @@ pbw_duration_to_millis(const pbw_message *dur, int64_t *out)
 }
 
 /* Pack direction for the two time shapes: field 1 holds whole seconds,
- * field 2 the sub-second remainder in nanos (same sign as ms). int64
- * milliseconds always fit: seconds stay within ms/1000 either way. */
+ * field 2 the sub-second remainder. Duration keeps the same sign in both
+ * fields; Timestamp requires nanos in [0, 1e9), so a negative millisecond
+ * remainder borrows a second. int64 milliseconds always fit. */
 static pbw_status
-wkt_from_millis(const pbw_descriptor *desc, int64_t ms, pbw_message **out)
+wkt_from_millis(const pbw_descriptor *desc, int64_t ms, int floor_nanos,
+                pbw_message **out)
 {
     pbw_message *msg;
     pbw_value *vsec;
     pbw_value *vnano;
     pbw_status status;
+    int64_t secs = ms / 1000;
+    int64_t nanos = (ms % 1000) * 1000000;
 
+    if (floor_nanos && nanos < 0) {
+        secs -= 1;
+        nanos += 1000000000;
+    }
     if (out == NULL) {
         return PBW_ERR_INVALID;
     }
@@ -143,8 +151,8 @@ wkt_from_millis(const pbw_descriptor *desc, int64_t ms, pbw_message **out)
         return PBW_ERR_INVALID;
     }
     msg = pbw_message_new(desc);
-    vsec = pbw_value_new_int(ms / 1000);
-    vnano = pbw_value_new_int((int64_t)(ms % 1000) * 1000000);
+    vsec = pbw_value_new_int(secs);
+    vnano = pbw_value_new_int(nanos);
     if (msg == NULL || vsec == NULL || vnano == NULL) {
         pbw_message_free(msg);
         pbw_value_free(vsec);
@@ -172,14 +180,14 @@ pbw_status
 pbw_timestamp_from_millis(const pbw_descriptor *ts_desc, int64_t ms,
                           pbw_message **out)
 {
-    return wkt_from_millis(ts_desc, ms, out);
+    return wkt_from_millis(ts_desc, ms, 1, out);
 }
 
 pbw_status
 pbw_duration_from_millis(const pbw_descriptor *dur_desc, int64_t ms,
                          pbw_message **out)
 {
-    return wkt_from_millis(dur_desc, ms, out);
+    return wkt_from_millis(dur_desc, ms, 0, out);
 }
 
 size_t

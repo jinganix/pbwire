@@ -21,6 +21,11 @@ defmodule Pbwire do
   The schema cache is global to the BEAM node (it lives in the NIF), so one
   VM holds one schema: two applications with different `.proto` schemas
   need separate nodes, exactly like the Erlang binding.
+
+  `load_schema/2` and `purge_schema/0` publish the struct specs and the NIF
+  cache as two separate stores, so call them at startup (or with no encoder
+  running): swapping the schema while another process sits between its spec
+  lookup and its NIF call can encode against the new cache with old fields.
   """
 
   alias Pbwire.Schema

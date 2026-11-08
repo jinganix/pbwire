@@ -128,7 +128,7 @@ the full tables are.
 | Clojure | protobuf-java interop per message, maps materialized per field | mutable-message fast path over the Java runtime (maps stay for convenience) | 1.08x / 2.16x (vs protobuf-java; mutable-message fast path) |
 | Julia | `ProtoBuf.jl` is pure Julia, per-field interpreter overhead | `dlopen` + `ccall` FFI host (`FileDescriptorSet` at run time, `Dict` boundary) | 124x / 1.01x (vs ProtoBuf.jl; baseline encode collapses with size) |
 | R | `RProtoBuf` binds the C++ runtime per message | C extension over the core (`.Call`, named lists in/out, statically linked) | 59.7x / 45.3x (vs RProtoBuf) |
-| Lua | game servers hand tables to `pbc`/`lua-protobuf`, each with its own schema story | C module over the core: tables convert through the schema's arena, builders encode hot | 1.03x / 1.16x (vs lua-protobuf; 8.06x via builder encode) |
+| Lua | game servers hand tables to `pbc`/`lua-protobuf`, each with its own schema story | C module over the core: tables convert through the schema's arena, builders encode hot | 1.10x / 1.44x (vs lua-protobuf; 8.21x via builder encode) |
 
 Read the ratios as "what this binding buys its host language", not as a
 cross-language speed ranking: the payload and the boundary cost differ per row,
@@ -160,7 +160,7 @@ the three mental-model shifts plus one row per language.
 | C# | `Schema.FromFile` on a `FileDescriptorSet`, P/Invoke + `DllImportResolver` | ✅ | no packages in the binding project |
 | Swift | `Schema(contentsOfFile:)` on a `FileDescriptorSet`, SwiftPM + C ABI | ✅ | links `build/libpbwire.a` via `unsafeFlags`; baseline is a separate package, no checked-in generated code |
 | Scala | the Java binding's runtime: `FileDescriptorSet` at run time | ✅ | DSL over the same runtime as Java/Kotlin; baseline needs `scalapbc` once |
-| Elixir | `elixir-protobuf` structs + `__message_props__/0` → the shared `:pbwire` NIF | ✅ | no C of its own; Hex `:pbwire` 0.1.7 is the same core version as `bindings/erlang` |
+| Elixir | `elixir-protobuf` structs + `__message_props__/0` → the shared `:pbwire` NIF | ✅ | no C of its own; Hex `:pbwire` 0.1.7 wraps the same core as `bindings/erlang` (0.1.14; the NIF package lags one release) |
 | Zig | `Schema.fromFile` on a `FileDescriptorSet`, core sources compiled in statically | ✅ | `build.zig` API targets Zig 0.17; baseline not wired (needs network) |
 | F# | the C# binding's project: `FileDescriptorSet` at run time | ✅ | `ProjectReference`, no second runtime; baseline is generated C# (F# cannot compile `.cs`) |
 | Clojure | the Java binding's runtime via plain interop, `FileDescriptorSet` at run time | ✅ | persistent maps in/out; `benchmarks/deps` jars are fetched, not committed |

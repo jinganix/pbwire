@@ -275,6 +275,10 @@ parse_enum_fields(ErlNifEnv *env, ERL_NIF_TERM term, ep_node_t *node)
     }
 
     check_proper_list_tail(env, term);
+    /* `option` entries were skipped, so the real count is what `field` reached:
+     * sorting `node->size` (the raw list length) would order zeroed tail slots,
+     * and fields[0] (the implicit default) would be garbage. */
+    node->size = (uint32_t)(field - (ep_enum_field_t *)node->fields);
 
     qsort(node->fields, node->size, sizeof(ep_enum_field_t), sort_compare_enum_field);
     node->v_size = (uint32_t)(v_field - (ep_enum_field_t *)node->v_fields);
@@ -708,6 +712,11 @@ parse_msg_fields(ErlNifEnv *env, ERL_NIF_TERM term, ep_node_t *node)
             raise_exception(env, head);
         }
 
+        if (field->rnum > node->size) {
+            /* rnum is the record slot the decoder writes; the spot array is
+             * sized node->size + 1, so anything past it is a heap write. */
+            raise_exception(env, head);
+        }
         field->proto_v = node->proto_v;
         field++;
         term = tail;

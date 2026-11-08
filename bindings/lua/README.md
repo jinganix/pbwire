@@ -166,9 +166,9 @@ must run first; `registry=false` drops `MESSAGE_NAMES` + `preload()`.
 reusing the cached protobuf checkout from `make conformance-setup`):
 
 ```
-CONFORMANCE SUITE PASSED: 2742 successes, 0 skipped, 2 expected failures,
+CONFORMANCE SUITE PASSED: 2745 successes, 0 skipped, 2 expected failures,
 0 unexpected failures.
-CONFORMANCE SUITE PASSED: 445 successes, 0 skipped, 0 expected failures,
+CONFORMANCE SUITE PASSED: 443 successes, 0 skipped, 0 expected failures,
 0 unexpected failures.
 ```
 

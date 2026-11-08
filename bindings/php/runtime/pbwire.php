@@ -152,6 +152,12 @@ final class Lib
 final class Schema
 {
     private ?CData $handle;
+    /** Reference count: this object plus every Type it handed out. `close()`
+     * drops the object's own reference; the last Type frees the native
+     * schema, so a Type (and its Field/Message objects) never points into
+     * freed memory. */
+    private int $refs = 1;
+    private bool $closed = false;
 
     private function __construct(CData $handle)
     {
@@ -197,6 +203,9 @@ final class Schema
     /** Looks up a message by fully qualified name, e.g. "structtest.Scalars3". */
     public function message(string $fullName): Type
     {
+        if ($this->closed) {
+            throw new Error('schema is closed');
+        }
         $desc = Lib::ffi()->pbw_schema_find($this->cdata(), $fullName);
 
         if ($desc === null) {
@@ -210,19 +219,39 @@ final class Schema
 
     public function cdata(): CData
     {
-        if ($this->handle === null) {
-            throw new \LogicException('schema is closed');
+        if ($this->handle === null || $this->closed) {
+            throw new Error('schema is closed');
         }
 
         return $this->handle;
     }
 
-    public function close(): void
+    /** @internal A Type takes a reference on construction. */
+    public function retain(): void
     {
-        if ($this->handle !== null) {
+        $this->refs++;
+    }
+
+    /** @internal A Type drops its reference on destruction. */
+    public function release(): void
+    {
+        if ($this->refs <= 0) {
+            return;
+        }
+        if (--$this->refs === 0 && $this->handle !== null) {
             Lib::ffi()->pbw_schema_free($this->handle);
             $this->handle = null;
         }
+    }
+
+    public function close(): void
+    {
+        if ($this->closed) {
+            return;
+        }
+        $this->closed = true;
+        /* With a Type alive this only drops the object's own reference. */
+        $this->release();
     }
 
     public function __destruct()
@@ -248,8 +277,14 @@ final class Type
     /** @internal Holds $schema so the descriptor cannot outlive its schema. */
     public function __construct(Schema $schema, CData $desc)
     {
+        $schema->retain();
         $this->schema = $schema;
         $this->desc = $desc;
+    }
+
+    public function __destruct()
+    {
+        $this->schema->release();
     }
 
     public function name(): string
@@ -267,7 +302,7 @@ final class Type
                 throw new Error("{$this->name()}: no such field: $name");
             }
 
-            $this->fields[$name] = new Field($ptr);
+            $this->fields[$name] = new Field($ptr, $this);
         }
 
         return $this->fields[$name];
@@ -281,7 +316,7 @@ final class Type
             throw new Error("{$this->name()}: no field $number");
         }
 
-        return new Field($ptr);
+        return new Field($ptr, $this);
     }
 
     public function newMessage(): Message
@@ -349,9 +384,14 @@ final class Type
  */
 final class Field
 {
+    /** Keeps the Type (and through it the Schema) alive while the Field is in
+     * use: the C field pointer points into the schema. */
+    private Type $type;
+
     /** @internal */
-    public function __construct(private CData $ptr)
+    public function __construct(private CData $ptr, Type $type)
     {
+        $this->type = $type;
     }
 
     public function name(): string
@@ -656,8 +696,16 @@ final class Message
 
     public function cdata(): CData
     {
+        /* A nested view lives inside its root's arena: closing any ancestor
+         * frees the memory the child points into, so refuse before touching
+         * the handle. */
+        for ($p = $this->parent; $p !== null; $p = $p->parent) {
+            if ($p->handle === null) {
+                throw new Error('parent message is closed');
+            }
+        }
         if ($this->handle === null) {
-            throw new \LogicException('message is closed');
+            throw new Error('message is closed');
         }
 
         return $this->handle;
@@ -674,9 +722,11 @@ final class Message
         } elseif ($this->handle !== null && $this->owned) {
             Lib::ffi()->pbw_message_free($this->handle);
             $this->handle = null;
+        } else {
+            /* A borrowed view: close only itself. Keep the ancestor link so
+             * cdata() can still tell that the parent was closed. */
+            $this->handle = null;
         }
-
-        $this->parent = null;
     }
 
     public function __destruct()
@@ -703,31 +753,39 @@ final class Value
     ) {
     }
 
+    /** The value pointer, after proving its owner is still live. */
+    private function native(): CData
+    {
+        $this->owner->cdata();
+
+        return $this->ptr;
+    }
+
     public function asInt(): int
     {
-        return Lib::ffi()->pbw_value_get_int($this->ptr);
+        return Lib::ffi()->pbw_value_get_int($this->native());
     }
 
     public function asBool(): bool
     {
-        return Lib::ffi()->pbw_value_get_bool($this->ptr) !== 0;
+        return Lib::ffi()->pbw_value_get_bool($this->native()) !== 0;
     }
 
     public function asFloat(): float
     {
-        return Lib::ffi()->pbw_value_get_float($this->ptr);
+        return Lib::ffi()->pbw_value_get_float($this->native());
     }
 
     public function asDouble(): float
     {
-        return Lib::ffi()->pbw_value_get_double($this->ptr);
+        return Lib::ffi()->pbw_value_get_double($this->native());
     }
 
     public function asString(): ?string
     {
         /* Length-based: values with embedded NUL bytes round-trip intact. */
         $len = Lib::slot('size_t');
-        $ptr = Lib::ffi()->pbw_value_get_bytes($this->ptr, FFI::addr($len));
+        $ptr = Lib::ffi()->pbw_value_get_bytes($this->native(), FFI::addr($len));
 
         return $ptr === null ? null : FFI::string($ptr, $len->cdata);
     }
@@ -735,14 +793,14 @@ final class Value
     public function asBytes(): ?string
     {
         $len = Lib::slot('size_t');
-        $ptr = Lib::ffi()->pbw_value_get_bytes($this->ptr, FFI::addr($len));
+        $ptr = Lib::ffi()->pbw_value_get_bytes($this->native(), FFI::addr($len));
 
         return $ptr === null ? null : FFI::string($ptr, $len->cdata);
     }
 
     public function asMessage(): ?Message
     {
-        $ptr = Lib::ffi()->pbw_value_get_message($this->ptr);
+        $ptr = Lib::ffi()->pbw_value_get_message($this->native());
 
         if ($ptr === null || $this->type === null) {
             return null;

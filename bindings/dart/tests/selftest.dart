@@ -155,6 +155,41 @@ void main(List<String> args) {
   );
 
   edgeSchema.close();
+  /* Lifetime: closing the schema makes every Type/Field/Message throw instead
+   * of reading freed descriptor memory, and a view refuses to touch the arena
+   * once its root closed. */
+  {
+    final closeSchema = Schema.load(desc);
+    final closeTy = closeSchema.message('structtest.Inner3');
+    final closeField = closeTy.field('value');
+    final closeMsg = closeTy.newMessage()..setInt('value', 3);
+    closeSchema.close();
+    check(_rejects(() => closeTy.newMessage(), 'schema is closed'),
+        'Type after Schema.close throws');
+    check(_rejects(() => closeTy.field('value'), 'schema is closed'),
+        'Type.field after Schema.close throws');
+    check(_rejects(() => closeField.number, 'schema is closed'),
+        'Field after Schema.close throws');
+    check(_rejects(() => closeMsg.encode(), 'schema is closed'),
+        'Message encode after Schema.close throws');
+    closeMsg.close();
+
+  }
+
+  {
+    final s2 = Schema.load(desc);
+    final t2 = s2.message('structtest.Scalars3');
+    final root = t2.newMessage();
+    final view = root.setMessage('inner');
+    root.close();
+    check(_rejects(() => view.setInt('value', 1), 'parent message is closed'),
+        'view after root close rejects writes');
+    view.close();
+    check(_rejects(() => view.setInt('value', 1), 'message is closed'),
+        'closed view rejects writes');
+    s2.close();
+  }
+
   schema.close();
   print('OK   $_checks checks passed');
 }

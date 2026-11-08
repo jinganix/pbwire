@@ -186,11 +186,22 @@ public sealed class MessageType
 
     internal IntPtr Desc => _desc;
 
-    public string Name => Native.Text(Native.pbw_descriptor_name(_desc));
+    /// <summary>A disposed Schema frees the descriptors this type points into.</summary>
+    internal void EnsureOpen() => _ = _schema.Handle;
+
+    public string Name
+    {
+        get
+        {
+            EnsureOpen();
+            return Native.Text(Native.pbw_descriptor_name(_desc));
+        }
+    }
 
     /// <summary>Resolves a field once and caches it: a later set/get costs one native call.</summary>
     public Field Field(string name)
     {
+        EnsureOpen();
         if (_fields.TryGetValue(name, out var cached))
         {
             return cached;
@@ -200,15 +211,19 @@ public sealed class MessageType
         {
             throw new PbwireException(-1, $"{Name}: no such field: {name}");
         }
-        return _fields[name] = new Field(ptr);
+        return _fields[name] = new Field(this, ptr);
     }
 
-    public Message NewMessage() =>
-        Message.Root(this, Native.NotNull(Native.pbw_message_new(_desc), "pbw_message_new: out of memory"));
+    public Message NewMessage()
+    {
+        EnsureOpen();
+        return Message.Root(this, Native.NotNull(Native.pbw_message_new(_desc), "pbw_message_new: out of memory"));
+    }
 
     /// <summary>Decodes wire bytes; unknown fields are preserved and re-encoded.</summary>
     public unsafe Message Decode(ReadOnlySpan<byte> wire)
     {
+        EnsureOpen();
         fixed (byte* data = wire)
         {
             Native.Check(Native.pbw_decode(_desc, (IntPtr)data, (nuint)wire.Length, out var msg));
@@ -219,6 +234,7 @@ public sealed class MessageType
     /// <summary>The message type of a MESSAGE/GROUP field, for nested access.</summary>
     public MessageType? NestedType(Field field)
     {
+        EnsureOpen();
         var desc = Native.pbw_field_message_type(field.Ptr);
         return desc == IntPtr.Zero ? null : new MessageType(_schema, desc);
     }
@@ -227,19 +243,53 @@ public sealed class MessageType
 /// <summary>A resolved field handle.</summary>
 public readonly struct Field
 {
-    internal Field(IntPtr ptr) => Ptr = ptr;
+    private readonly MessageType _owner;
+
+    internal Field(MessageType owner, IntPtr ptr)
+    {
+        _owner = owner;
+        Ptr = ptr;
+    }
 
     internal IntPtr Ptr { get; }
 
-    public string Name => Native.Text(Native.pbw_field_name(Ptr));
+    public string Name
+    {
+        get
+        {
+            _owner.EnsureOpen();
+            return Native.Text(Native.pbw_field_name(Ptr));
+        }
+    }
 
-    public uint Number => Native.pbw_field_number(Ptr);
+    public uint Number
+    {
+        get
+        {
+            _owner.EnsureOpen();
+            return Native.pbw_field_number(Ptr);
+        }
+    }
 
     /// <summary>pbw_type: 5 = int32, 11 = message, ...</summary>
-    public int Type => Native.pbw_field_type(Ptr);
+    public int Type
+    {
+        get
+        {
+            _owner.EnsureOpen();
+            return Native.pbw_field_type(Ptr);
+        }
+    }
 
     /// <summary>3 = repeated.</summary>
-    public int Label => Native.pbw_field_label(Ptr);
+    public int Label
+    {
+        get
+        {
+            _owner.EnsureOpen();
+            return Native.pbw_field_label(Ptr);
+        }
+    }
 }
 
 /// <summary>One dynamic message. A root owns its tree; a nested message borrows it.</summary>
@@ -269,8 +319,25 @@ public sealed class Message : IDisposable
     /// <summary>Keeps the owning message reachable; null for a root.</summary>
     internal Message? Parent => _parent;
 
-    internal IntPtr Handle =>
-        _handle != IntPtr.Zero ? _handle : throw new ObjectDisposedException(nameof(Message));
+    internal IntPtr Handle
+    {
+        get
+        {
+            _type.EnsureOpen();
+            // A view lives inside its root's arena: disposing any ancestor
+            // frees the memory it points into.
+            for (var p = _parent; p != null; p = p._parent)
+            {
+                if (p._handle == IntPtr.Zero)
+                {
+                    throw new ObjectDisposedException(nameof(Message), "parent message is disposed");
+                }
+            }
+            return _handle != IntPtr.Zero
+                ? _handle
+                : throw new ObjectDisposedException(nameof(Message));
+        }
+    }
 
     /* ------------------------------------------------------------ setting */
 
@@ -283,7 +350,10 @@ public sealed class Message : IDisposable
 
     public Message Set(string field, double value) => Store(_type.Field(field), Native.pbw_value_new_double(value));
 
-    public Message Set(string field, string value) => Store(_type.Field(field), Native.pbw_value_new_string(value));
+    public Message Set(string field, string value) =>
+        Store(_type.Field(field),
+              value == null ? throw new ArgumentNullException(nameof(value), "pbwire: string value is null")
+                            : Native.pbw_value_new_string(value));
 
     public unsafe Message Set(string field, ReadOnlySpan<byte> value)
     {
@@ -465,27 +535,45 @@ public sealed class Value
         _type = type;
     }
 
-    public long AsLong() => Native.pbw_value_get_int(_ptr);
+    /* The value lives in the owner's arena: prove it is still live first. */
+    private IntPtr Ptr
+    {
+        get
+        {
+            _ = _owner.Handle;
+            return _ptr;
+        }
+    }
+
+    public long AsLong() => Native.pbw_value_get_int(Ptr);
 
     public int AsInt() => (int)AsLong();
 
-    public bool AsBool() => Native.pbw_value_get_bool(_ptr) != 0;
+    public bool AsBool() => Native.pbw_value_get_bool(Ptr) != 0;
 
-    public float AsFloat() => Native.pbw_value_get_float(_ptr);
+    public float AsFloat() => Native.pbw_value_get_float(Ptr);
 
-    public double AsDouble() => Native.pbw_value_get_double(_ptr);
+    public double AsDouble() => Native.pbw_value_get_double(Ptr);
 
-    public string? AsString() => Marshal.PtrToStringUTF8(Native.pbw_value_get_string(_ptr));
+    public string? AsString() => Marshal.PtrToStringUTF8(Native.pbw_value_get_string(Ptr));
 
     public unsafe byte[]? AsBytes()
     {
-        var ptr = Native.pbw_value_get_bytes(_ptr, out var len);
-        return ptr == IntPtr.Zero ? null : new ReadOnlySpan<byte>((void*)ptr, (int)len).ToArray();
+        var ptr = Native.pbw_value_get_bytes(Ptr, out var len);
+        if (ptr == IntPtr.Zero)
+        {
+            return null;
+        }
+        if ((ulong)len > int.MaxValue)
+        {
+            throw new PbwireException(-1, "pbwire: bytes payload exceeds the span limit");
+        }
+        return new ReadOnlySpan<byte>((void*)ptr, (int)len).ToArray();
     }
 
     public Message? AsMessage()
     {
-        var ptr = Native.pbw_value_get_message(_ptr);
+        var ptr = Native.pbw_value_get_message(Ptr);
         if (ptr == IntPtr.Zero || _type == null)
         {
             return null;

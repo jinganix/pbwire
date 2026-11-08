@@ -69,9 +69,9 @@ namespace Spectest {
         public Oneof1() { }
         public Oneof1(Oneof1 other) : this() {
             Name = other.Name;
-            Num = other.Num;
-            Text = other.Text;
-            Inner = other.Inner;
+            if (other.KindCase == KindOneofCase.Num) { Num = other.Num; }
+            if (other.KindCase == KindOneofCase.Text) { Text = other.Text; }
+            if (other.KindCase == KindOneofCase.Inner) { Inner = other.Inner?.Clone(); }
         }
         public Oneof1 Clone() { return new Oneof1(this); }
         public override bool Equals(object? other) { return Equals(other as Oneof1); }
@@ -116,9 +116,9 @@ namespace Spectest {
         public void MergeFrom(Oneof1 other) {
             if (other == null) { return; }
             Name = other.Name;
-            Num = other.Num;
-            Text = other.Text;
-            Inner = other.Inner;
+            if (other.KindCase == KindOneofCase.Num) { Num = other.Num; }
+            if (other.KindCase == KindOneofCase.Text) { Text = other.Text; }
+            if (other.KindCase == KindOneofCase.Inner) { Inner = other.Inner?.Clone(); }
         }
         internal void EncodeInto(Pbwire.Message msg) {
             if (Name.Length != 0) {

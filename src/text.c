@@ -534,10 +534,17 @@ t_print_unknown_value(text_out *t, uint32_t number, uint32_t wire,
                         return;
                     }
                     q += nn;
-                } else if (w == PBW_WIRE_64BIT) {
-                    q += 8;
-                } else if (w == PBW_WIRE_32BIT) {
-                    q += 4;
+                } else if (w == PBW_WIRE_64BIT || w == PBW_WIRE_32BIT) {
+                    size_t need = w == PBW_WIRE_64BIT ? 8u : 4u;
+
+                    /* Bounds-check before advancing: q + 8 past one-past-end
+                     * is undefined even when nothing is read. */
+                    if (pbw_remaining((const uint8_t *)end,
+                                      (const uint8_t *)q) < need) {
+                        t->status = PBW_ERR_INVALID;
+                        return;
+                    }
+                    q += need;
                 } else if (w == PBW_WIRE_LEN) {
                     size_t ilen;
                     size_t nn;
@@ -546,12 +553,14 @@ t_print_unknown_value(text_out *t, uint32_t number, uint32_t wire,
                         t->status = PBW_ERR_INVALID;
                         return;
                     }
-                    q += nn + ilen;
+                    q += nn;
+                    if (ilen > pbw_remaining((const uint8_t *)end,
+                                             (const uint8_t *)q)) {
+                        t->status = PBW_ERR_INVALID;
+                        return;
+                    }
+                    q += ilen;
                 } else {
-                    t->status = PBW_ERR_INVALID;
-                    return;
-                }
-                if (q > end) {
                     t->status = PBW_ERR_INVALID;
                     return;
                 }
@@ -722,10 +731,17 @@ t_print_message(text_out *t, const pbw_message *msg, uint32_t depth)
     /* Any values print as their raw type_url/value fields, like the reference
      * printer; the expanded form is only accepted on input. */
     for (i = 0; i < msg->desc->field_count; i++) {
+        const pbw_field *field = &msg->desc->fields[i];
+
         if (!pbw_msg_present(msg, i)) {
             continue;
         }
-        t_print_field(t, &msg->desc->fields[i], &msg->values[i], depth);
+        /* proto3 implicit presence: the reference printer omits defaults. */
+        if (pbw_field_implicit_presence(field, msg->desc) &&
+            pbw_value_is_default(&msg->values[i])) {
+            continue;
+        }
+        t_print_field(t, field, &msg->values[i], depth);
         if (t->status != PBW_OK) {
             return;
         }
@@ -1368,6 +1384,30 @@ t_ident_is(const char *start, size_t len, const char *word)
     return len == n && memcmp(start, word, n) == 0;
 }
 
+/* Case-insensitive spelling match: the reference lowercases the identifier
+ * before comparing, so `Inf`, `iNfinity` and `nAN` all parse. */
+static int
+t_ident_case_is(const char *start, size_t len, const char *word)
+{
+    size_t i;
+    size_t n = strlen(word);
+
+    if (len != n) {
+        return 0;
+    }
+    for (i = 0; i < n; i++) {
+        char c = start[i];
+
+        if (c >= 'A' && c <= 'Z') {
+            c = (char)(c + ('a' - 'A'));
+        }
+        if (c != word[i]) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
 typedef struct {
     text_cur cur;
     pbw_status status;
@@ -1583,16 +1623,11 @@ t_parse_float_value(text_in *t, pbw_message *msg, const pbw_field *field,
         if (!t_ident(&t->cur, &start, &len)) {
             return PBW_ERR_INVALID;
         }
-        if (t_ident_is(start, len, "inf") || t_ident_is(start, len, "INF") ||
-            t_ident_is(start, len, "iNF") ||
-            t_ident_is(start, len, "inFINITY") ||
-            t_ident_is(start, len, "INFINITY") ||
-            t_ident_is(start, len, "infinity")) {
+        if (t_ident_case_is(start, len, "inf") ||
+            t_ident_case_is(start, len, "infinity")) {
             value = HUGE_VAL;
             have = 1;
-        } else if (t_ident_is(start, len, "nan") ||
-                   t_ident_is(start, len, "NaN") ||
-                   t_ident_is(start, len, "nAn")) {
+        } else if (t_ident_case_is(start, len, "nan")) {
             value = strtod("NAN", NULL);
             have = 1;
         } else {
@@ -1693,8 +1728,10 @@ t_parse_enum_value(text_in *t, pbw_message *msg, const pbw_field *field)
         pbw_enum_find_name(field->sub, number, NULL)) {
         return t_store_uint(t, msg, field, (uint64_t)(int64_t)number);
     }
-    /* unknown numbers are kept only by open enums, like on the wire */
-    if (field->sub == NULL || !field->sub->proto3) {
+    /* unknown numbers are kept only by open enums, like on the wire and in
+     * the JSON mapping. Closed-ness can come from the enum type's dialect or
+     * from an editions per-field override, so ask the shared predicate. */
+    if (field->sub == NULL || pbw_enum_is_closed(field)) {
         return PBW_ERR_INVALID;
     }
     return t_store_uint(t, msg, field, (uint64_t)(int64_t)number);
@@ -2112,13 +2149,20 @@ t_parse_any_inner(text_in *t, pbw_message *msg, uint32_t depth)
             pbw_value_free(val_v);
             return PBW_ERR_NOMEM;
         }
+        /* set() owns the value on success only, so each one is released on
+         * its own failure path: freeing url_v after a successful set would
+         * touch memory the message already owns. */
         status = pbw_message_set(msg, 1, url_v);
-        if (status == PBW_OK) {
-            status = pbw_message_set(msg, 2, val_v);
-        }
         if (status != PBW_OK) {
             pbw_value_free(url_v);
             pbw_value_free(val_v);
+        } else {
+            status = pbw_message_set(msg, 2, val_v);
+            if (status != PBW_OK) {
+                pbw_value_free(val_v);
+            }
+        }
+        if (status != PBW_OK) {
             /* like the message body above: malformed content is
              * INVALID, only resource failures propagate */
             return status == PBW_ERR_LIMIT || status == PBW_ERR_NOMEM

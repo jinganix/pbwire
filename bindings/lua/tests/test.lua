@@ -91,6 +91,9 @@ local function fails(fn)
 end
 ok(fails(function() schema:encode("pbwire.lua.Nope", {}) end),
    "unknown message type fails")
+ok(schema:encode("pbwire.lua.Empty", {}) == "", "a message with no fields encodes empty")
+ok(fails(function() schema:encode("pbwire.lua.Empty", { nope = 1 }) end),
+   "a message with no fields rejects keys instead of crashing")
 ok(fails(function() schema:encode(msg, { nope = 1 }) end),
    "unknown field fails")
 ok(fails(function() schema:encode(msg, { i32 = "seven" }) end),

@@ -344,7 +344,7 @@ The C ABI is the product, so it is versioned explicitly:
 
 - `PBW_ABI_VERSION` (currently `1`) is in the header; `pbw_abi_version()` returns
 the same number at runtime, so a binding that `dlopen`s the library can refuse a
-mismatch instead of guessing. The Python extension, the Java/Kotlin FFM layer,
+mismatch instead of guessing. The Python extension, the Node addon,
 Node, Ruby and PHP compare the two at load time.
 - `make shared` produces `libpbwire.so.1` / `libpbwire.1.dylib`; the CMake
 `SOVERSION` carries the same number, so the SONAME and the macro always agree.

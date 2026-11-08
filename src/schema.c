@@ -40,6 +40,82 @@ dup_str(const char *s)
     return copy;
 }
 
+/* Drops the schema-wide name index; pbw_schema_find() then scans descs. */
+static void
+name_index_drop(pbw_schema *schema)
+{
+    free(schema->name_index);
+    schema->name_index = NULL;
+    schema->name_index_size = 0;
+    schema->name_index_count = 0;
+}
+
+/* Builds the index over every descriptor added so far (doubling amortizes the
+ * rebuilds, so loading stays linear). 0 on allocation failure. */
+static int
+name_index_build(pbw_schema *schema, size_t want)
+{
+    pbw_descriptor **index;
+    size_t i;
+
+    if (want < 16) {
+        want = 16;
+    }
+    while (want < schema->count * 2) {
+        if (want > SIZE_MAX / 2) {
+            return 0;
+        }
+        want *= 2;
+    }
+    if (want > SIZE_MAX / sizeof(*index)) {
+        return 0;
+    }
+    index = (pbw_descriptor **)calloc(want, sizeof(*index));
+    if (index == NULL) {
+        return 0;
+    }
+    for (i = 0; i < schema->count; i++) {
+        size_t slot =
+            (size_t)(name_hash(schema->descs[i]->name) & (uint32_t)(want - 1));
+
+        while (index[slot] != NULL) {
+            slot = (slot + 1) & (want - 1);
+        }
+        index[slot] = schema->descs[i];
+    }
+    free(schema->name_index);
+    schema->name_index = index;
+    schema->name_index_size = want;
+    schema->name_index_count = schema->count;
+    return 1;
+}
+
+/* Indexes the descriptor just appended. Losing the index is not an error:
+ * lookups fall back to the scan, so the schema stays correct. */
+static void
+name_index_add(pbw_schema *schema, pbw_descriptor *desc)
+{
+    size_t mask;
+    size_t slot;
+
+    if (schema->name_index_size == 0 ||
+        (schema->name_index_count + 1) * 2 > schema->name_index_size) {
+        if (!name_index_build(schema, schema->name_index_size
+                                          ? schema->name_index_size * 2
+                                          : 16)) {
+            name_index_drop(schema);
+        }
+        return; /* the rebuild already holds this descriptor */
+    }
+    mask = schema->name_index_size - 1;
+    slot = (size_t)(name_hash(desc->name) & (uint32_t)mask);
+    while (schema->name_index[slot] != NULL) {
+        slot = (slot + 1) & mask;
+    }
+    schema->name_index[slot] = desc;
+    schema->name_index_count++;
+}
+
 void
 pbw_descriptor_free(pbw_descriptor *desc)
 {
@@ -103,6 +179,7 @@ pbw_schema_free(pbw_schema *schema)
         pbw_descriptor_free(schema->descs[i]);
     }
     free(schema->descs);
+    free(schema->name_index);
     for (i = 0; i < schema->service_count; i++) {
         pbw_service *svc = schema->services[i];
         size_t m;
@@ -165,6 +242,7 @@ add_descriptor(pbw_schema *schema, const char *name,
     desc->edition = schema->edition;
     desc->schema = schema;
     schema->descs[schema->count++] = desc;
+    name_index_add(schema, desc);
     schema->linked = 0;
     return desc;
 }
@@ -189,6 +267,22 @@ pbw_schema_find(const pbw_schema *schema, const char *name)
     if (schema == NULL || name == NULL) {
         return NULL;
     }
+    if (schema->name_index != NULL) {
+        size_t mask = schema->name_index_size - 1;
+        size_t slot = (size_t)(name_hash(name) & (uint32_t)mask);
+
+        for (;;) {
+            pbw_descriptor *desc = schema->name_index[slot];
+
+            if (desc == NULL) {
+                return NULL;
+            }
+            if (strcmp(desc->name, name) == 0) {
+                return desc;
+            }
+            slot = (slot + 1) & mask;
+        }
+    }
     for (i = 0; i < schema->count; i++) {
         if (strcmp(schema->descs[i]->name, name) == 0) {
             return schema->descs[i];
@@ -204,12 +298,19 @@ pbw_enum_add_value(pbw_descriptor *enum_desc, const char *name,
     struct pbw_enum_value *values;
     char *copy;
     size_t bytes;
+    size_t i;
 
     if (enum_desc == NULL || !enum_desc->is_enum || name == NULL) {
         return PBW_ERR_INVALID;
     }
     if (enum_desc->schema != NULL && enum_desc->schema->frozen) {
         return PBW_ERR_INVALID;
+    }
+    for (i = 0; i < enum_desc->enum_count; i++) {
+        if (strcmp(enum_desc->enum_values[i].name, name) == 0) {
+            /* Numbers may alias (allow_alias); names may not. */
+            return PBW_ERR_INVALID;
+        }
     }
     if (enum_desc->enum_count == SIZE_MAX) {
         return PBW_ERR_NOMEM;
@@ -419,11 +520,17 @@ pbw_field_set_packed(pbw_field *field, int packed)
 void
 pbw_field_set_oneof(pbw_field *field, uint32_t oneof_index)
 {
-    if (field != NULL) {
-        field->oneof_index = oneof_index;
-        if (field->schema != NULL) {
-            field->schema->linked = 0;
-        }
+    if (field == NULL) {
+        return;
+    }
+    if (field->schema != NULL && field->schema->frozen) {
+        /* Growing oneof_count after a link would leave existing messages
+         * with a oneof_case array shorter than the index they use. */
+        return;
+    }
+    field->oneof_index = oneof_index;
+    if (field->schema != NULL) {
+        field->schema->linked = 0;
     }
 }
 

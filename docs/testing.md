@@ -1,9 +1,9 @@
 # Testing and conformance
 
-Nine layers verify the wire format, the JSON mapping and the text format
-against Google's own implementations, and four more cover the environments a
-laptop cannot. They differ in what they need installed and how much they
-can catch.
+Fifteen layers verify the wire format, the JSON mapping and the text format
+against Google's own implementations. They differ in what they need installed
+and how much they can catch; the last few cover environments a laptop cannot
+provide (docker, a 32-bit or big-endian host, every binding's toolchain).
 
 | layer | command | needs | part of the commit gate |
 |---|---|---|---|
@@ -139,17 +139,18 @@ PBWIRE_PROTOBUF_SRC=/path/to/protobuf make conformance   # use an existing check
 ```
 
 ```
-CONFORMANCE SUITE PASSED: 2742 successes, 0 skipped, 2 expected failures, 0 unexpected failures.
-CONFORMANCE SUITE PASSED: 445 successes, 0 skipped, 0 expected failures, 0 unexpected failures.
+CONFORMANCE SUITE PASSED: 2745 successes, 0 skipped, 2 expected failures, 0 unexpected failures.
+CONFORMANCE SUITE PASSED: 443 successes, 0 skipped, 0 expected failures, 0 unexpected failures.
 ```
 
 The first line is the binary + JSON suite, where every test passes — including
 four JSON tests the reference C++ testee itself fails
 (`SingleValueForRepeatedFieldInt32/Message`, proto2 and proto3: C++ still accepts
 a bare value for a repeated field, pbwire rejects it per spec); the second is
-the text suite, where every test passes — including four the reference C++
-testee itself fails (bad-UTF-8 strings and out-of-range `\U` escapes, which
-pbwire rejects and C++ accepts).
+the text suite, where every required test passes. Two recommended text cases
+(`StringLiteralShortUnicodeEscapeSurrogatePair{String,Bytes}`: pbwire accepts a
+`\ud8xx\udcxx` pair and decodes it to the character it stands for, the strict
+suite wants the escapes rejected) are reported as warnings, not failures.
 
 The two failures are `Required.Proto2.ProtobufInput.BadTag_FieldNumberSlightlyTooHigh`
 and the proto3 variant, and they are not pbwire's: the official C++ testee
@@ -158,9 +159,9 @@ response — both truncate a 5-byte tag varint whose value exceeds `UINT32_MAX` 
 `field = 1, wire type = 0` instead of rejecting it, which is what
 `CodedInputStream::ReadVarint32FromArray` does. Its run reports
 `2765 successes, 0 skipped, 0 expected failures, 6 unexpected failures`: the same
-two binary tests plus four JSON tests that pbwire skips. So the binary verdicts
-agree with the reference test by test, including the two the reference itself
-does not satisfy.
+two binary tests plus the four JSON tests pbwire passes and the reference does
+not. So the verdicts agree with the reference test by test, including the two
+the reference itself does not satisfy.
 
 The suite runs against `TestAllTypesProto3`, `TestAllTypesProto2` (groups,
 required fields, MessageSet encodings, extensions) and the two edition-2023

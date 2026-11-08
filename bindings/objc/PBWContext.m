@@ -3,6 +3,7 @@
 @implementation PBWContext {
     pbw_ctx *_ctx;
     BOOL _ownsCtx;
+    BOOL _released;
 }
 
 @synthesize retainCap = _retainCap;
@@ -61,6 +62,18 @@
 - (void)reset
 {
     pbw_ctx_reset(_ctx);
+}
+
+/* One-shot claim for -[PBWPool releaseContext:]: a second release of the same
+ * wrapper must not push the same workspace into the freelist twice (that is a
+ * double free the pool cannot see). */
+- (BOOL)markReleased
+{
+    if (_released) {
+        return NO;
+    }
+    _released = YES;
+    return YES;
 }
 
 @end

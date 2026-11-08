@@ -68,7 +68,8 @@ NS_ASSUME_NONNULL_BEGIN
 - (nullable NSArray *)valuesForField:(NSString *)name;
 
 /* Replaces a repeated field with the items of an array (nil clears it).
- * Same value classes as addValue:forField:error:. */
+ * Same value classes as addValue:forField:error:. A NO return can leave the
+ * field partially written (the old items are cleared first). */
 - (BOOL)setValues:(nullable NSArray *)values
          forField:(NSString *)name
             error:(NSError **)error;
@@ -80,7 +81,8 @@ NS_ASSUME_NONNULL_BEGIN
 
 /* Replaces a map field with the entries of a dictionary (nil clears it).
  * Keys are NSString for string keys and NSNumber otherwise; values follow
- * setValue:forField:error:. */
+ * setValue:forField:error:. A NO return can leave the field partially
+ * written (the old entries are cleared first). */
 - (BOOL)setEntries:(nullable NSDictionary *)entries
           forField:(NSString *)name
              error:(NSError **)error;
@@ -125,9 +127,11 @@ NS_ASSUME_NONNULL_BEGIN
 - (nullable PBWMessage *)decode:(NSData *)data error:(NSError **)error;
 
 /* Decode into a workspace: the message lives in its allocator (no per-value
- * malloc after warmup), so it retains the context, frees nothing itself, and
- * becomes invalid on the context's next reset. It is read-only: setters
- * fail the way the C API fails them. */
+ * malloc after warmup), so it retains the context and frees nothing itself.
+ * The retained wrapper keeps the workspace alive, but NOT its contents: the
+ * message becomes invalid on the context's next reset (including the implicit
+ * reset of -[PBWPool releaseContext:]), which frees the chunks it points into.
+ * It is read-only: setters fail the way the C API fails them. */
 - (nullable PBWMessage *)decode:(NSData *)data
                     withContext:(PBWContext *)context
                           error:(NSError **)error;

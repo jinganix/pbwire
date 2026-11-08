@@ -20,6 +20,7 @@ import "C"
 import (
 	"errors"
 	"fmt"
+	"math"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -165,10 +166,11 @@ func (t *MessageType) field(name string) (*C.pbw_field, error) {
 // an explicit Close: no finalizer on the hot path (explicit-close discipline).
 // Nested views from NewMessage read into the root and must not be freed.
 type Message struct {
-	typ  *MessageType
-	c    *C.pbw_message
-	root *Message // non-nil for views: keeps the root (and schema) alive
-	own  bool
+	typ    *MessageType
+	c      *C.pbw_message
+	root   *Message // non-nil for views: keeps the root (and schema) alive
+	own    bool
+	closed bool // roots only: a view must not touch the freed arena
 }
 
 // New builds an empty root message.
@@ -185,11 +187,16 @@ func (m *Message) Close() {
 	}
 	h := m.c
 	m.c = nil
+	m.closed = true
 	m.typ.s.release()
 	C.pbw_message_free(h)
 }
 
 func (m *Message) store(f *C.pbw_field, v *C.pbw_value) error {
+	if err := m.check(); err != nil {
+		C.pbw_value_free(v)
+		return err
+	}
 	if v == nil {
 		return errors.New("dynamic: value allocation failed")
 	}
@@ -299,6 +306,9 @@ func (m *Message) SetMessageBytes(name string, wire []byte) error {
 // field: singular replaces, repeated appends. The view writes straight into
 // the root tree; never Close it separately.
 func (m *Message) NewMessage(name string) (*Message, error) {
+	if err := m.check(); err != nil {
+		return nil, err
+	}
 	f, err := m.typ.field(name)
 	if err != nil {
 		return nil, err
@@ -320,7 +330,23 @@ func (m *Message) rootOrSelf() *Message {
 // getValue resolves a field and returns its present value, or nil when the
 // field is absent (never an error for absent: check Has first when it
 // matters). Views into the tree keep the root alive through the caller.
+// check reports a root that has already been closed. A view holds its root
+// alive as a Go pointer, so the arena only goes away when Close runs; without
+// this check a view would read freed memory.
+func (m *Message) check() error {
+	if m == nil {
+		return errors.New("dynamic: nil message")
+	}
+	if r := m.rootOrSelf(); r.closed || r.c == nil {
+		return errors.New("dynamic: message is closed")
+	}
+	return nil
+}
+
 func (m *Message) getValue(name string) (*C.pbw_value, error) {
+	if err := m.check(); err != nil {
+		return nil, err
+	}
 	f, err := m.typ.field(name)
 	if err != nil {
 		return nil, err
@@ -382,11 +408,23 @@ func (m *Message) GetDouble(name string) (float64, bool, error) {
 	return float64(C.pbw_value_get_double(v)), true, nil
 }
 
+// copyBytes copies a C buffer into Go, refusing a length that C.int cannot
+// carry (a >2 GiB message would otherwise silently copy zero bytes).
+func copyBytes(p unsafe.Pointer, l C.size_t) ([]byte, error) {
+	if uint64(l) > math.MaxInt32 {
+		return nil, fmt.Errorf("dynamic: %d bytes exceeds the cgo copy limit", uint64(l))
+	}
+	return C.GoBytes(p, C.int(l)), nil
+}
+
 // GetString reads a string field (copied out).
 func (m *Message) GetString(name string) (string, bool, error) {
 	v, err := m.getValue(name)
 	if err != nil || v == nil {
 		return "", false, err
+	}
+	if C.pbw_value_get_kind(v) != C.PBW_VALUE_BYTES {
+		return "", false, fmt.Errorf("dynamic: field %q is not a string", name)
 	}
 	return C.GoString(C.pbw_value_get_string(v)), true, nil
 }
@@ -399,12 +437,22 @@ func (m *Message) GetBytes(name string) ([]byte, bool, error) {
 	}
 	var l C.size_t
 	p := C.pbw_value_get_bytes(v, &l)
-	return C.GoBytes(unsafe.Pointer(p), C.int(l)), true, nil
+	if C.pbw_value_get_kind(v) != C.PBW_VALUE_BYTES {
+		return nil, false, fmt.Errorf("dynamic: field %q is not bytes", name)
+	}
+	out, err := copyBytes(unsafe.Pointer(p), l)
+	if err != nil {
+		return nil, false, err
+	}
+	return out, true, nil
 }
 
 // GetMessage reads a sub-message field as a view: Close is a no-op, the
 // root keeps it alive.
 func (m *Message) GetMessage(name string) (*Message, bool, error) {
+	if err := m.check(); err != nil {
+		return nil, false, err
+	}
 	f, err := m.typ.field(name)
 	if err != nil {
 		return nil, false, err
@@ -497,7 +545,11 @@ func (m *Message) GetStringSlice(name string) ([]string, error) {
 	}
 	out := make([]string, n)
 	for i := range out {
-		out[i] = C.GoString(C.pbw_value_get_string(C.pbw_value_at(v, C.size_t(i))))
+		item := C.pbw_value_at(v, C.size_t(i))
+		if C.pbw_value_get_kind(item) != C.PBW_VALUE_BYTES {
+			return nil, fmt.Errorf("dynamic: field %q is not a string list", name)
+		}
+		out[i] = C.GoString(C.pbw_value_get_string(item))
 	}
 	return out, nil
 }
@@ -511,14 +563,25 @@ func (m *Message) GetBytesSlice(name string) ([][]byte, error) {
 	out := make([][]byte, n)
 	for i := range out {
 		var l C.size_t
-		p := C.pbw_value_get_bytes(C.pbw_value_at(v, C.size_t(i)), &l)
-		out[i] = C.GoBytes(unsafe.Pointer(p), C.int(l))
+		item := C.pbw_value_at(v, C.size_t(i))
+		p := C.pbw_value_get_bytes(item, &l)
+		if C.pbw_value_get_kind(item) != C.PBW_VALUE_BYTES {
+			return nil, fmt.Errorf("dynamic: field %q is not a bytes list", name)
+		}
+		b, err := copyBytes(unsafe.Pointer(p), l)
+		if err != nil {
+			return nil, err
+		}
+		out[i] = b
 	}
 	return out, nil
 }
 
 // GetMessageSlice reads a repeated sub-message field as views.
 func (m *Message) GetMessageSlice(name string) ([]*Message, error) {
+	if err := m.check(); err != nil {
+		return nil, err
+	}
 	f, err := m.typ.field(name)
 	if err != nil {
 		return nil, err
@@ -538,13 +601,16 @@ func (m *Message) GetMessageSlice(name string) ([]*Message, error) {
 
 // Encode serializes the tree; one cgo downcall plus one heap copy out.
 func (m *Message) Encode() ([]byte, error) {
+	if err := m.check(); err != nil {
+		return nil, err
+	}
 	var out *C.uchar
 	var l C.size_t
 	if st := C.pbw_encode(m.c, &out, &l); st != C.PBW_OK {
 		return nil, statusErr("dynamic: encode", st)
 	}
 	defer C.pbw_free(unsafe.Pointer(out))
-	return C.GoBytes(unsafe.Pointer(out), C.int(l)), nil
+	return copyBytes(unsafe.Pointer(out), l)
 }
 
 // Decode parses wire bytes into a new root tree; zero-copy in, one downcall.

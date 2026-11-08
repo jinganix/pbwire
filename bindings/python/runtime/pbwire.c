@@ -1198,6 +1198,13 @@ dec_message(MessageType *mt, const uint8_t *wire, size_t wire_len,
                                     "elements");
                     goto fail;
                 }
+                if (n == 0) {
+                    /* An empty run carries no element: the field stays absent
+                     * (a later non-empty run still creates the list), so the
+                     * eager dict agrees with the lazy view. */
+                    r.p += (size_t)len;
+                    continue;
+                }
                 list = PyList_New(n);
                 if (list == NULL ||
                     PyDict_SetItem(dict, f->name, list) < 0) {
@@ -1528,7 +1535,11 @@ scan_message(Message *m, MessageType *mt, const uint8_t *data, size_t off,
                 goto fail;
             }
             r.p += (size_t)plen;
-            if (m != NULL &&
+            /* An empty packed run carries no element: recording it would size
+             * the lazy list by slices (PyList_New(1)) while put_run fills
+             * nothing, leaving a NULL item behind. Strings/bytes (wire 2) keep
+             * their zero-length value. */
+            if (m != NULL && (plen != 0 || f->wire == 2) &&
                 !msg_add(m, mt, f, payload, (uint32_t)plen, 1, oneof_last)) {
                 goto fail;
             }

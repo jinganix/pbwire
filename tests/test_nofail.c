@@ -645,6 +645,27 @@ workload(void)
         pbw_message_free(d2);
     }
     {
+        /* Any expansion in text format: its two pbw_message_set() calls are
+         * separate allocation steps, so injection fails the second one and
+         * the value it rejects must be released exactly once. */
+        pbw_descriptor *ad = pbw_schema_find(s, "google.protobuf.Any");
+
+        if (ad != NULL) {
+            pbw_message *any = NULL;
+
+            if (pbw_text_parse(ad, "[type.googleapis.com/Sub] { a: 1 }",
+                               strlen("[type.googleapis.com/Sub] { a: 1 }"),
+                               &any) == PBW_OK &&
+                any != NULL &&
+                pbw_message_get(any, 1) != NULL) {
+                CHECK(strcmp(
+                          pbw_value_get_string(pbw_message_get(any, 1)),
+                          "type.googleapis.com/Sub") == 0);
+            }
+            pbw_message_free(any);
+        }
+    }
+    {
         pbw_ctx *ctx = pbw_ctx_new();
 
         if (ctx != NULL) {

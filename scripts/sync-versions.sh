@@ -45,6 +45,7 @@ if [[ $CHECK == 1 ]]; then
   expect Makefile "-current_version $VER" "Makefile (darwin -current_version)"
   expect bindings/dart/pubspec.yaml "^version: $VER\$" "dart pubspec"
   expect bindings/dart/benchmarks/pubspec.yaml "^version: $VER\$" "dart bench pubspec"
+  expect bindings/dart/benchmarks/pubspec.lock "version: \"$VER\"" "dart bench lock path dep"
   expect bindings/rust/Cargo.toml "^version = \"$VER\"\$" "rust Cargo.toml"
   expect bindings/rust/benchmarks/Cargo.toml "^version = \"$VER\"\$" "rust bench Cargo.toml"
   expect bindings/erlang/src/pbwire.app.src "{vsn, \"$VER\"}" "erlang .app.src"
@@ -65,6 +66,7 @@ if [[ $CHECK == 1 ]]; then
     fail "java pom: plugin version must not track VERSION"
   fi
   expect README.md "releases/tag/v$VER" "README release line"
+  expect llms.txt "version \`$VER\`" "llms.txt version"
   rock="bindings/lua/pbwire-$VER-1.rockspec"
   [ -f "$rock" ] || fail "lua rockspec missing ($rock)"
   expect "$rock" "^version = \"$VER-1\"$" "lua rockspec version"
@@ -104,6 +106,7 @@ setver bindings/r/runtime/DESCRIPTION -e "s/^Version: .*/Version: $VER/"
 setver bindings/kotlin/pom.xml -e "/<artifactId>pbwire-java<\/artifactId>/,/<\/dependency>/s|<version>[0-9.]*</version>|<version>$VER</version>|"
 setver README.md -e "s|releases/tag/v[0-9.]*|releases/tag/v$VER|g" \
   -e "s|\*\*Release \[\`v[0-9.]*\`\]|**Release [\`v$VER\`]|"
+setver llms.txt -e "s|version \`[0-9.]*\`|version \`$VER\`|"
 # The rockspec filename carries the version, so a bump renames it.
 old_rock=$(echo bindings/lua/pbwire-*-*.rockspec)
 new_rock="bindings/lua/pbwire-$VER-1.rockspec"

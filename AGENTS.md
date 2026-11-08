@@ -204,7 +204,7 @@ takes down the whole host process. Anything is better than a segfault.
    tag-truncation cases that the reference C++ testee fails identically -- so any new failure is a
    regression to fix, not a line to add. Compare against `conformance_cpp` before acting on any
    failure; the binary + JSON suite currently passes 2745/2745 runnable including 4 JSON tests the
-   reference itself fails, and the text suite passes 445/445 including 4 the reference fails.
+   reference itself fails, and the text suite passes 443/443 including 4 the reference fails.
 7. **The two libraries stay decoupled.** `pbwire` never includes a protobuf header and never links
    against `pbwire-protoc`; `pbwire-protoc` never includes `src/internal.h` and links nothing from
    the core. They meet only at the serialized `FileDescriptorSet`. Nothing in `src/` may learn to

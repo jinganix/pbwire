@@ -106,6 +106,15 @@ typedef struct {
     int has_heap; /* a heap value was stored into this arena tree: free must walk */
 } pbw_arena;
 
+/* Payload offsets keep every arena allocation 8-byte aligned. malloc returns
+ * 8-aligned memory on the 32-bit targets this runs on, but sizeof of these
+ * headers is 12 and 28 bytes on ILP32, so (chunk + 1) would land 4 bytes off
+ * and a 64-bit value slot there would fault where 8-byte alignment is
+ * required (arm/aarch32). Rounding up costs a few bytes per chunk and
+ * nothing per allocation. */
+#define PBW_CHUNK_HDR ((sizeof(pbw_arena_chunk) + 7u) & ~(size_t)7u)
+#define PBW_ARENA_HDR ((sizeof(pbw_arena) + 7u) & ~(size_t)7u)
+
 /* Single allocations above this bypass the bump chunk (nginx-style large
  * handling) and are freed on reset, so one outlier never pins the context.
  * Matches the chunk-growth cap so steady reuse still converges. */
@@ -227,6 +236,14 @@ struct pbw_schema {
     pbw_descriptor **descs;
     size_t count;
     size_t cap;
+    /* Open-addressed name index over descs (power of two), so
+     * pbw_schema_find() is O(1): loading a FileDescriptorSet resolves one
+     * name per message/enum field and per extension, and a linear scan made
+     * that quadratic in the schema size. NULL when the index could not be
+     * built (out of memory), which falls back to the scan. */
+    pbw_descriptor **name_index;
+    size_t name_index_size;
+    size_t name_index_count;
     struct pbw_service **services;
     size_t service_count;
     size_t service_cap;
@@ -415,7 +432,7 @@ pbw_arena_alloc(pbw_arena *arena, size_t size)
         chunk->cap - chunk->used < size) {
         return pbw_arena_alloc_slow(arena, size);
     }
-    ptr = (char *)(chunk + 1) + chunk->used;
+    ptr = (char *)chunk + PBW_CHUNK_HDR + chunk->used;
     chunk->used += size;
     return ptr;
 }
@@ -541,7 +558,36 @@ pbw_field_is_required(const pbw_field *field, const pbw_descriptor *msg)
     if (field->label == PBW_LABEL_REQUIRED && !msg->proto3) {
         return 1;
     }
-    return msg->edition != 0 && field->presence == 3;
+    return msg->edition != 0 && field->presence == 3 &&
+           field->label != PBW_LABEL_REPEATED;
+}
+
+/* A plain proto3 field with neither a oneof nor explicit presence: the
+ * JSON/text printers omit it when it holds the default value, like the
+ * reference printers. `presence` 1 is EXPLICIT (editions, proto3 `optional`),
+ * 3 is LEGACY_REQUIRED. */
+static inline int
+pbw_field_implicit_presence(const pbw_field *field, const pbw_descriptor *msg)
+{
+    if (!msg->proto3 || field->oneof_index != 0) {
+        return 0;
+    }
+    return field->presence != 1 && field->presence != 3;
+}
+
+/* The default value of a present scalar, as the proto3 printers define it:
+ * an empty string/bytes, or all-zero bits (`-0.0` has a non-zero sign bit and
+ * prints, exactly like the reference). Messages and lists are never default. */
+static inline int
+pbw_value_is_default(const pbw_value *value)
+{
+    if (value->kind == PBW_VALUE_BYTES) {
+        return value->as.bytes.len == 0;
+    }
+    if (value->kind == PBW_VALUE_UINT) {
+        return value->as.u64 == 0;
+    }
+    return 0;
 }
 
 /* The tree builders below are inline: the decoder runs one per decoded value
@@ -570,7 +616,10 @@ pbw_message_new_a(pbw_arena *arena, const pbw_descriptor *desc)
     if (desc->field_count > (SIZE_MAX - sizeof(pbw_message)) / sizeof(pbw_value)) {
         return NULL;
     }
-    values_off = sizeof(pbw_message);
+    /* sizeof(pbw_message) is 44 bytes on ILP32, so a slot array that simply
+     * follows it would put every 64-bit value 4 bytes off alignment where
+     * 8-byte alignment is required (arm/aarch32). Round up: free on LP64. */
+    values_off = (sizeof(pbw_message) + 7u) & ~(size_t)7u;
     present_off = values_off + desc->field_count * sizeof(pbw_value);
     words = (desc->field_count + 31u) / 32u;
     /* The bitmap plus alignment slack must fit past present_off: words * 4
@@ -744,6 +793,10 @@ pbw_value_list_push(pbw_value *list, pbw_value *item, pbw_arena *arena)
         list->as.list.items = items;
         list->as.list.cap = cap;
     }
+    /* The list owns the wrapper from here on: pbw_value_free() on an item
+     * handed out by pbw_value_at() is the documented no-op, and the list
+     * destroy path releases the wrapper itself. */
+    item->flags |= PBW_VF_EMBEDDED;
     list->as.list.items[list->as.list.len++] = item;
     return 1;
 }

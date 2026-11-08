@@ -9,7 +9,9 @@ cd "$ROOT"
 
 missing=0
 for sym in $(grep -o 'pbw_[a-z_0-9]*(' include/pbwire.h | tr -d '(' | sort -u); do
-    if ! grep -q "$sym" llms.txt; then
+    # Whole token, not a substring: "pbw_value_get_int" must be documented on
+    # its own, not merely as a prefix of "pbw_value_get_int32".
+    if ! grep -qE "(^|[^a-zA-Z0-9_])$sym([^a-zA-Z0-9_]|\$)" llms.txt; then
         echo "check-llms: $sym missing from llms.txt"
         missing=1
     fi

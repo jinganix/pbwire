@@ -52,8 +52,9 @@ typedef struct {
     int has_type;
     int has_oneof;
     int has_default;
-    int packed;       /* -1 when the options do not say */
-    ds_features feat; /* per-field FeatureSet override, zeros when absent */
+    int proto3_optional; /* FieldDescriptorProto.proto3_optional: explicit presence */
+    int packed;          /* -1 when the options do not say */
+    ds_features feat;    /* per-field FeatureSet override, zeros when absent */
 } ds_field_info;
 
 /* An extension waiting for its extendee: attach after every file is read, so
@@ -363,11 +364,20 @@ ds_parse_field(ds_field_info *out, const uint8_t *p, const uint8_t *end)
             out->has_default = 1;
             break;
         case 8: /* options */
+            if (f.wire != PBW_WIRE_LEN) {
+                break; /* wrong wire type: ignore, like the sibling cases */
+            }
             if ((status = ds_field_options(f.data, f.data + f.len,
                                            &out->packed, &out->feat)) !=
                 PBW_OK) {
                 return status;
             }
+            break;
+        case 17: /* proto3_optional: explicit presence, no synthetic oneof */
+            if (f.wire != PBW_WIRE_VARINT) {
+                break;
+            }
+            out->proto3_optional = f.varint != 0;
             break;
         case 9: /* oneof_index is 0-based on the wire, 1-based here */
             if (f.wire != PBW_WIRE_VARINT) {
@@ -478,7 +488,14 @@ ds_add_field(pbw_schema *schema, pbw_descriptor *msg,
      * behavior, as before). */
     field->presence =
         (uint8_t)(info->feat.presence ? info->feat.presence : file->presence);
-    field->enum_open = (uint8_t)info->feat.enum_open;
+    if (info->proto3_optional) {
+        /* proto3 `optional` spells explicit presence without an editions
+         * FeatureSet; it is what keeps a set default value in the JSON/text
+         * output. */
+        field->presence = 1;
+    }
+    field->enum_open =
+        (uint8_t)info->feat.enum_open; /* closed-ness lives on the enum type */
     field->msg_enc =
         (uint8_t)(info->feat.msg_enc ? info->feat.msg_enc : file->msg_enc);
     if (info->has_oneof) {
@@ -731,9 +748,11 @@ ds_message_proto(pbw_schema *schema, const ds_features *file,
     pbw_descriptor *msg;
     pbw_status status;
     /* Message-level FeatureSet overrides the file default for the fields
-     * declared here; nested messages resolve against the file again. */
+     * declared here; nested messages inherit it in turn. */
     ds_features feat = *file;
     ds_field f;
+    uint32_t oneof_decls = 0;
+    size_t i;
 
     if (depth >= dlim) {
         return PBW_ERR_LIMIT;
@@ -911,14 +930,18 @@ ds_message_proto(pbw_schema *schema, const ds_features *file,
             status = PBW_OK;
             break;
         }
-        case 3: /* nested_type: fresh scope, back to the file default */
-            status = ds_message_proto(schema, file, fqname, f.data,
+        case 8: /* oneof_decl: only the count matters, oneof_index is 1-based */
+            oneof_decls++;
+            status = PBW_OK;
+            break;
+        case 3: /* nested_type: inherits the enclosing message's features */
+            status = ds_message_proto(schema, &feat, fqname, f.data,
                                       f.data + f.len, depth + 1, dlim, exts,
                                       ext_count, ext_cap);
             break;
         case 4: /* enum_type */
             status = ds_enum_proto(schema, fqname, f.data, f.data + f.len,
-                                   file->enum_open == 2, schema->proto3);
+                                   feat.enum_open == 2, schema->proto3);
             break;
         default:
             status = PBW_OK;
@@ -928,6 +951,45 @@ ds_message_proto(pbw_schema *schema, const ds_features *file,
             return status;
         }
     }
+    /* oneof_index is only bounded by the field count in link_message; the
+     * real bound is the number of oneof_decl entries this message declared.
+     * A field pointing at an undeclared oneof silently drops the other
+     * fields sharing it, so reject the shape protoc would never emit. */
+    for (i = 0; i < msg->field_count; i++) {
+        const pbw_field *field = &msg->fields[i];
+
+        if (field->oneof_index > oneof_decls) {
+            ds_error(schema, "oneof index %u out of range in %s.%s",
+                     field->oneof_index, pbw_descriptor_name(msg), field->name);
+            return PBW_ERR_INVALID;
+        }
+    }
+    /* A map entry protoc synthesizes has exactly key #1 and value #2, and the
+     * JSON/text map printers read those two fields by number. Reject any
+     * other shape here instead of failing the whole print much later. */
+    if (msg->map_entry) {
+        const pbw_field *key = NULL;
+        const pbw_field *value = NULL;
+
+        for (i = 0; i < msg->field_count; i++) {
+            if (msg->fields[i].number == 1) {
+                key = &msg->fields[i];
+            } else if (msg->fields[i].number == 2) {
+                value = &msg->fields[i];
+            }
+        }
+        if (msg->field_count != 2 || key == NULL || value == NULL ||
+            key->label != PBW_LABEL_OPTIONAL ||
+            value->label != PBW_LABEL_OPTIONAL ||
+            key->type == PBW_TYPE_MESSAGE || key->type == PBW_TYPE_GROUP ||
+            key->type == PBW_TYPE_ENUM || key->type == PBW_TYPE_BYTES ||
+            key->type == PBW_TYPE_FLOAT || key->type == PBW_TYPE_DOUBLE) {
+            ds_error(schema, "invalid map entry %s",
+                     pbw_descriptor_name(msg));
+            return PBW_ERR_INVALID;
+        }
+    }
+    return PBW_OK;
 }
 
 /* One parsed MethodDescriptorProto: names only, no transport. */
@@ -1353,10 +1415,14 @@ ds_load_impl(const void *data, size_t len, uint32_t dlim, size_t max_bytes,
     free(exts);
     if (status == PBW_OK) {
         status = pbw_schema_link(schema);
-    } else if (schema->error[0] == '\0') {
+    }
+    if (status != PBW_OK && schema->error[0] == '\0') {
         /* Every failure must be explainable through pbw_schema_error(), also
-         * the ones deep in the per-file parsers. */
-        ds_error(schema, "malformed FileDescriptorSet");
+         * the ones deep in the per-file parsers and the OOM paths of the
+         * link step. */
+        ds_error(schema,
+                 status == PBW_ERR_NOMEM ? "out of memory"
+                                         : "malformed FileDescriptorSet");
     }
     *out = schema; /* on failure the reason is in pbw_schema_error() */
     return status;

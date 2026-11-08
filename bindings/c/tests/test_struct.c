@@ -12,7 +12,9 @@
  *
  *   T1  struct encode == matrix3.bin / matrix2.bin / addressbook.bin /
  *       maptest.bin / grouptest.bin / oneoftest.bin / extensiontest.bin
- *   T2  decode of each reference reads every field back (incl. presence)
+ *   T2  decode of each reference reads every field back (incl. presence),
+ *       and a singular sub-message that arrives twice merges like the
+ *       reference parsers
  *   T3  empty/explicit-zero round-trips (implicit-presence zeros are still
  *       emitted: the struct has no has-flag to omit them by, and the bytes
  *       stay valid protobuf; explicit-presence absence omits exactly)
@@ -22,7 +24,10 @@
  *       gives identical bytes and identical fields
  *   T6  bad wire, overlong varints, wrong kinds, stray END_GROUP and
  *       missing required fields fail loudly; unknown open-enum values
- *       are kept like the reference keeps them.
+ *       are kept like the reference keeps them; a wrong-typed tag is an
+ *       unknown field, so it selects no oneof member.
+ *   T7  a layout that drops, duplicates or invents a field number, or
+ *       disagrees on a kind, is rejected at codec_init.
  */
 
 #include <stdint.h>
@@ -776,6 +781,146 @@ done:
     pbw_schema_free(schema2);
 }
 
+/* A singular sub-message that arrives twice merges, like the reference
+ * parsers and the dynamic decoder: the fields of the first copy stay, the
+ * second copy's fields are added to the same tree. */
+static void
+test_merge_duplicate_message(void)
+{
+    structtest_scalars3_t s;
+    /* field 16 (LEN) twice: {name: "a"} then {value: 5} */
+    static const uint8_t wire[] = {
+        0x82,
+        0x01,
+        0x03,
+        0x0A,
+        0x01,
+        'a',
+        0x82,
+        0x01,
+        0x02,
+        0x10,
+        0x05,
+    };
+    pbw_schema *schema = NULL;
+
+    memset(&s, 0, sizeof(s));
+    CHECK_OK(pbw_struct_schema_load(MATRIX3_DESC_PATH, &schema));
+    if (schema == NULL) {
+        return;
+    }
+    CHECK_OK(pbw_struct_decode(schema, "structtest.Scalars3",
+                               structtest_scalars3_fields, 22, wire,
+                               sizeof(wire), &s));
+    CHECK(s.inner != NULL);
+    if (s.inner != NULL) {
+        CHECK(s.inner->name != NULL && strcmp(s.inner->name, "a") == 0);
+        CHECK(s.inner->value == 5);
+    }
+    pbw_struct_free(structtest_scalars3_fields, 22, &s);
+    pbw_schema_free(schema);
+}
+
+/* A singular sub-message that arrives twice merges: a value the first copy
+ * set must survive the second copy's decode, which would otherwise re-seed
+ * the layout's non-zero defaults. */
+typedef struct {
+    int32_t v;
+    int32_t shade; /* default STRUCTTEST_SHADE_SHADE_NEG */
+    int has_shade;
+} merge_tiny_t;
+
+typedef struct {
+    merge_tiny_t *inner;
+} merge_outer_t;
+
+static const pbw_struct_field_t merge_tiny_fields[] = {
+    {1, PBW_SF_INT32, 0, offsetof(merge_tiny_t, v), 0, 0, 0, 0, NULL, 0,
+     PBW_TYPE_INT32, 0, 0, 0, 0, 0},
+    {3, PBW_SF_ENUM, 0, offsetof(merge_tiny_t, shade),
+     offsetof(merge_tiny_t, has_shade), 0, 0, -2, NULL, 0, PBW_TYPE_ENUM, 0,
+     0, 0, 0, 0},
+};
+
+static const pbw_struct_field_t merge_outer_fields[] = {
+    {1, PBW_SF_MESSAGE, 0, offsetof(merge_outer_t, inner), 0, 0,
+     sizeof(merge_tiny_t), 0, merge_tiny_fields, 2, PBW_TYPE_MESSAGE, 2, 0, 0,
+     0, 0},
+};
+
+static void
+test_merge_keeps_defaults(void)
+{
+    /* inner{shade:1} then inner{v:5}: the merge must keep shade 1, not
+     * re-seed the -2 default. */
+    static const uint8_t wire[] = {0x0a, 0x02, 0x18, 0x01, 0x0a, 0x02, 0x08, 0x05};
+    pbw_schema *schema = pbw_schema_new();
+    pbw_descriptor *e = pbw_schema_add_enum(schema, "E");
+    pbw_descriptor *tiny = pbw_schema_add_message(schema, "Tiny");
+    pbw_descriptor *outer = pbw_schema_add_message(schema, "Outer");
+    pbw_field *f;
+    merge_outer_t out;
+
+    CHECK(schema != NULL && e != NULL && tiny != NULL && outer != NULL);
+    if (schema == NULL || e == NULL || tiny == NULL || outer == NULL) {
+        return;
+    }
+    pbw_schema_set_proto3(schema, 0);
+    pbw_enum_add_value(e, "NEG", -2);
+    pbw_enum_add_value(e, "ONE", 1);
+    pbw_message_add_field(tiny, "v", 1, PBW_TYPE_INT32, PBW_LABEL_OPTIONAL);
+    f = pbw_message_add_field(tiny, "shade", 3, PBW_TYPE_ENUM,
+                              PBW_LABEL_OPTIONAL);
+    pbw_field_set_type_name(f, "E");
+    f = pbw_message_add_field(outer, "inner", 1, PBW_TYPE_MESSAGE,
+                              PBW_LABEL_OPTIONAL);
+    pbw_field_set_type_name(f, "Tiny");
+    CHECK_OK(pbw_schema_link(schema));
+
+    memset(&out, 0, sizeof(out));
+    CHECK_OK(pbw_struct_decode(schema, "Outer", merge_outer_fields, 1, wire,
+                               sizeof(wire), &out));
+    CHECK(out.inner != NULL);
+    if (out.inner != NULL) {
+        CHECK(out.inner->v == 5);
+        CHECK(out.inner->has_shade == 1);
+        CHECK(out.inner->shade == 1);
+    }
+    pbw_struct_free(merge_outer_fields, 1, &out);
+    pbw_schema_free(schema);
+}
+
+/* A decode that fails halfway must leave a struct that the generated free
+ * (or a retried decode) can handle: the repeated array is NULLed and its
+ * count reset together. */
+static void
+test_failed_decode_cleanup(void)
+{
+    static const uint8_t wire[] = {0x92, 0x01, 0x01, 'a', 0x06};
+    structtest_scalars3_t s;
+    pbw_schema *schema = NULL;
+
+    CHECK_OK(pbw_struct_schema_load(MATRIX3_DESC_PATH, &schema));
+    if (schema == NULL) {
+        return;
+    }
+    memset(&s, 0, sizeof(s));
+    /* one tags entry lands, then field 0 aborts the decode */
+    CHECK_STATUS(PBW_ERR_INVALID,
+                 pbw_struct_decode(schema, "structtest.Scalars3",
+                                   structtest_scalars3_fields, 22, wire,
+                                   sizeof(wire), &s));
+    pbw_struct_free(structtest_scalars3_fields, 22, &s);
+    /* and a retry over the same struct starts clean */
+    s.n_tags = 0;
+    CHECK_STATUS(PBW_ERR_INVALID,
+                 pbw_struct_decode(schema, "structtest.Scalars3",
+                                   structtest_scalars3_fields, 22, wire,
+                                   sizeof(wire), &s));
+    pbw_struct_free(structtest_scalars3_fields, 22, &s);
+    pbw_schema_free(schema);
+}
+
 /* The schema drives: a layout that drops a field, changes a kind or
  * flips repetition must fail instead of silently dropping data. */
 static void
@@ -828,6 +973,23 @@ test_layout_mismatch(void)
     /* Repetition flipped (repeated field marked singular). */
     memcpy(fields, structtest_scalars3_fields, sizeof(fields));
     fields[16].repeated = 0; /* nums */
+    CHECK_STATUS(PBW_ERR_INVALID,
+                 pbw_struct_encode(schema, "structtest.Scalars3", fields, 22,
+                                   &s, &wire, &wire_len));
+    CHECK(wire == NULL);
+
+    /* Field number the schema does not declare. */
+    memcpy(fields, structtest_scalars3_fields, sizeof(fields));
+    fields[0].fnum = 99;
+    CHECK_STATUS(PBW_ERR_INVALID,
+                 pbw_struct_encode(schema, "structtest.Scalars3", fields, 22,
+                                   &s, &wire, &wire_len));
+    CHECK(wire == NULL);
+
+    /* Two rows for one field: the count still matches, but field 1 lost its
+     * row, so the plan must reject it instead of encoding field 2 twice. */
+    memcpy(fields, structtest_scalars3_fields, sizeof(fields));
+    fields[1].fnum = 1;
     CHECK_STATUS(PBW_ERR_INVALID,
                  pbw_struct_encode(schema, "structtest.Scalars3", fields, 22,
                                    &s, &wire, &wire_len));
@@ -1782,6 +1944,49 @@ test_oneoftest_reference(void)
               strcmp(got.kind.text, "x") == 0);
         structtest_one_of_test_free(&got);
     }
+    /* The same member arriving twice keeps the last copy and releases the
+     * earlier one (heap mode), which is the replacement path in dec_msg. */
+    {
+        static const uint8_t twice[] = {0x12, 0x01, 'a', 0x12, 0x01, 'b'};
+        /* blob = "aa" then blob = "b": same wire shape, last copy wins. */
+        static const uint8_t blobs[] = {0x22, 0x02, 'a', 'a', 0x22, 0x01, 'b'};
+
+        memset(&got, 0, sizeof(got));
+        CHECK_OK(structtest_one_of_test_decode(schema, twice, sizeof(twice),
+                                               &got));
+        CHECK(got.kind_case == 2 && got.kind.text != NULL &&
+              strcmp(got.kind.text, "b") == 0);
+        structtest_one_of_test_free(&got);
+        memset(&got, 0, sizeof(got));
+        CHECK_OK(structtest_one_of_test_decode(schema, blobs, sizeof(blobs),
+                                               &got));
+        CHECK(got.kind_case == 4 && got.kind.blob.data != NULL &&
+              got.kind.blob.len == 1 && got.kind.blob.data[0] == 'b');
+        structtest_one_of_test_free(&got);
+    }
+    /* A scalar member selects the union too, so freeing must not read the
+     * stored number as a pointer (every oneof row aliases the same slot). */
+    {
+        static const uint8_t num[] = {0x08, 0x05};
+
+        memset(&got, 0, sizeof(got));
+        CHECK_OK(structtest_one_of_test_decode(schema, num, sizeof(num),
+                                               &got));
+        CHECK(got.kind_case == 1 && got.kind.num == 5);
+        structtest_one_of_test_free(&got);
+    }
+    /* A known number with a wire type it cannot carry is an unknown field,
+     * not a oneof member: the case word keeps the member the wire held (the
+     * reference parsers skip a wrong-typed tag too). */
+    {
+        static const uint8_t bogus[] = {0x0a, 0x02, 0x1a, 0x02};
+
+        memset(&got, 0, sizeof(got));
+        CHECK_OK(structtest_one_of_test_decode(schema, bogus, sizeof(bogus),
+                                               &got));
+        CHECK(got.kind_case == 0);
+        structtest_one_of_test_free(&got);
+    }
     /* Encode emits only the selected member even when the union holds
      * stale storage for another (id rides along: implicit proto3 zero,
      * see T3). */
@@ -1876,6 +2081,9 @@ main(void)
     test_wrong_wire_type_tolerated();
     test_missing_required();
     test_truncated_and_garbage();
+    test_merge_duplicate_message();
+    test_merge_keeps_defaults();
+    test_failed_decode_cleanup();
     test_layout_mismatch();
     test_bad_arguments();
     test_schema_load_errors();

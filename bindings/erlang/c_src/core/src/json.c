@@ -111,7 +111,10 @@ j_field_by_name(const pbw_descriptor *desc, const char *key, size_t len,
         const pbw_field *f = &desc->fields[i];
         size_t n = strlen(f->name);
 
-        if (n != len) {
+        /* Camelizing drops underscores, so the JSON spelling can be shorter
+         * than the proto name; only a name without one is length-checked,
+         * which keeps the hot path at one compare. */
+        if (n != len && strchr(f->name, '_') == NULL) {
             continue;
         }
         j_camel_name(f->name, tmp, sizeof(tmp));
@@ -484,11 +487,8 @@ j_should_print(const pbw_message *msg, size_t index)
     if (field->oneof_index != 0) {
         return msg->oneof_case[field->oneof_index] == field->number;
     }
-    if (msg->desc->proto3) {
-        if (value->kind != PBW_VALUE_UINT) {
-            return 1;
-        }
-        return value->as.u64 != 0;
+    if (pbw_field_implicit_presence(field, msg->desc)) {
+        return !pbw_value_is_default(value);
     }
     return 1;
 }
@@ -592,6 +592,13 @@ j_print_scalar(j_out *j, const pbw_field *field, const pbw_value *value)
     case PBW_TYPE_ENUM: {
         const char *name = NULL;
 
+        if (field->sub != NULL && j_classify(field->sub) == J_NULLVALUE) {
+            /* google.protobuf.NullValue prints as JSON null, never as its
+             * name: that null is the canonical spelling, also inside a oneof
+             * and as a repeated element. */
+            j_str(j, "null");
+            break;
+        }
         if (field->sub != NULL &&
             pbw_enum_find_name(field->sub, (int32_t)bits, &name)) {
             j_quoted(j, (const uint8_t *)name, strlen(name));
@@ -1176,11 +1183,35 @@ static void
 j_print_struct_value(j_out *j, const pbw_message *msg);
 static void
 j_print_list_value(j_out *j, const pbw_message *msg);
+static void
+j_print_value_body(j_out *j, const pbw_message *msg);
+
+/* Value -> Struct -> Value and Value -> ListValue -> Value recurse through
+ * message fields the depth-guarded printer path does not walk field by field,
+ * so a hand-built deep chain is capped here instead of overflowing the stack. */
+static void
+j_print_value(j_out *j, const pbw_message *msg)
+{
+    if (j == NULL || j->status != PBW_OK) {
+        return;
+    }
+    if (msg == NULL || msg->desc == NULL) {
+        j->status = PBW_ERR_INVALID;
+        return;
+    }
+    if (j->depth >= PBW_MAX_DEPTH) {
+        j->status = PBW_ERR_LIMIT;
+        return;
+    }
+    j->depth++;
+    j_print_value_body(j, msg);
+    j->depth--;
+}
 
 /* google.protobuf.Value: exactly one of its six fields is set. An empty
  * Value never reaches here (the caller skips it); NaN/Inf fail. */
 static void
-j_print_value(j_out *j, const pbw_message *msg)
+j_print_value_body(j_out *j, const pbw_message *msg)
 {
     const pbw_value *v;
 
@@ -1389,7 +1420,9 @@ j_print_any(j_out *j, const pbw_message *msg)
         return;
     }
     if (pbw_decode(resolved, payload, payload_len, &decoded) != PBW_OK) {
-        j->status = PBW_ERR_NOMEM;
+        /* The payload is peer data, not this process's memory: report it as
+         * invalid instead of claiming the host ran out of memory. */
+        j->status = PBW_ERR_INVALID;
         return;
     }
     j_str(j, "{\"@type\":");
@@ -1465,6 +1498,7 @@ j_print_fields(j_out *j, const pbw_message *msg)
     /* Fields print in field-number order, extensions interleaved. */
     const pbw_field **order = NULL;
     size_t count = 0;
+    size_t capacity = 0;
     size_t i;
     size_t k;
     int first = 1;
@@ -1489,8 +1523,9 @@ j_print_fields(j_out *j, const pbw_message *msg)
             count++;
         }
     }
-    if (count > 0) {
-        order = (const pbw_field **)malloc(count * sizeof(*order));
+    capacity = count;
+    if (capacity > 0) {
+        order = (const pbw_field **)malloc(capacity * sizeof(*order));
         if (order == NULL) {
             j->status = PBW_ERR_NOMEM;
             return;
@@ -1500,6 +1535,9 @@ j_print_fields(j_out *j, const pbw_message *msg)
     for (i = 0; i < msg->desc->field_count; i++) {
         if (!j_should_print(msg, i)) {
             continue;
+        }
+        if (count >= capacity) {
+            break; /* the two passes disagree: never write past the array */
         }
         order[count] = &msg->desc->fields[i];
         /* insertion sort by number; a hand-built schema is not sorted yet */
@@ -1631,7 +1669,6 @@ pbw_json_print(const pbw_message *msg, char **out, size_t *len)
     }
     j.buf.data[j.buf.len] = '\0';
     *out = (char *)j.buf.data;
-    (void)0;
     *len = j.buf.len;
     return PBW_OK;
 }
@@ -2903,6 +2940,14 @@ j_parse_enum_value(j_in *j, pbw_message *msg, const pbw_field *field,
             return PBW_ERR_INVALID;
         }
         number = (int32_t)bits;
+    } else if (kind == JK_NULL && field->sub != NULL &&
+               j_classify(field->sub) == J_NULLVALUE) {
+        /* `null` is the canonical JSON spelling of google.protobuf.NullValue,
+         * the only enum that takes a non-string token: it means NULL_VALUE
+         * (number 0), so a oneof member counts as selected. */
+        if (j_expect_lit(j, "null") != PBW_OK) {
+            return PBW_ERR_INVALID;
+        }
     } else {
         return PBW_ERR_INVALID;
     }
@@ -3371,6 +3416,112 @@ j_parse_value_msg(j_in *j, pbw_message *msg)
     }
 }
 
+/* Duplicate-key detection for JSON maps and Struct. One hash table over the
+ * stored key values: scanning the whole entry list per key is quadratic in
+ * the object size, and an object size is peer controlled. Runs after the object
+ * has parsed, so an error simply drops the message. */
+static uint32_t
+j_key_hash(const pbw_value *k)
+{
+    uint32_t h = 2166136261u;
+    size_t i;
+
+    if (k->kind == PBW_VALUE_BYTES) {
+        for (i = 0; i < k->as.bytes.len; i++) {
+            h = (h ^ k->as.bytes.data[i]) * 16777619u;
+        }
+        return h;
+    }
+    {
+        uint64_t v = k->as.u64;
+
+        for (i = 0; i < 8; i++) {
+            h = (h ^ (uint32_t)(v & 0xffu)) * 16777619u;
+            v >>= 8;
+        }
+    }
+    return h;
+}
+
+static int
+j_key_eq(const pbw_value *a, const pbw_value *b)
+{
+    if (a->kind != b->kind) {
+        return 0;
+    }
+    if (a->kind == PBW_VALUE_BYTES) {
+        return a->as.bytes.len == b->as.bytes.len &&
+               (a->as.bytes.len == 0 ||
+                memcmp(a->as.bytes.data, b->as.bytes.data, a->as.bytes.len) ==
+                    0);
+    }
+    return a->as.u64 == b->as.u64;
+}
+
+/* The key value of one stored entry, or NULL when it has none. */
+static const pbw_value *
+j_entry_key(const pbw_value *entry)
+{
+    if (entry == NULL || entry->kind != PBW_VALUE_MESSAGE ||
+        entry->as.msg == NULL) {
+        return NULL;
+    }
+    return pbw_message_get(entry->as.msg, 1);
+}
+
+static pbw_status
+j_check_duplicate_keys(const pbw_value *list)
+{
+    size_t n, cap = 16, i;
+    size_t *slots;
+
+    if (list == NULL || list->kind != PBW_VALUE_LIST || list->as.list.len < 2) {
+        return PBW_OK;
+    }
+    n = list->as.list.len;
+    while (cap < n * 2) {
+        if (cap > SIZE_MAX / 2) {
+            return PBW_ERR_NOMEM;
+        }
+        cap *= 2;
+    }
+    if (cap > SIZE_MAX / sizeof(*slots)) {
+        return PBW_ERR_NOMEM;
+    }
+    slots = (size_t *)calloc(cap, sizeof(*slots));
+    if (slots == NULL) {
+        return PBW_ERR_NOMEM;
+    }
+    for (i = 0; i < n; i++) {
+        const pbw_value *k = j_entry_key(list->as.list.items[i]);
+        size_t slot;
+
+        if (k == NULL ||
+            (k->kind != PBW_VALUE_BYTES && k->kind != PBW_VALUE_UINT)) {
+            continue;
+        }
+        slot = (size_t)j_key_hash(k) & (cap - 1);
+        for (;;) {
+            if (slots[slot] == 0) {
+                slots[slot] = i + 1;
+                break;
+            }
+            {
+                const pbw_value *k2 =
+                    j_entry_key(list->as.list.items[slots[slot] - 1]);
+
+                if (k2 != NULL && j_key_eq(k2, k)) {
+                    free(slots);
+                    return PBW_ERR_INVALID;
+                }
+            }
+            slot = (slot + 1) & (cap - 1);
+        }
+    }
+    free(slots);
+    return PBW_OK;
+}
+
 /* google.protobuf.Struct: a map<string, Value> in disguise. */
 static pbw_status
 j_parse_struct(j_in *j, pbw_message *msg)
@@ -3422,34 +3573,6 @@ j_parse_struct(j_in *j, pbw_message *msg)
             j->depth--;
             return PBW_ERR_INVALID;
         }
-        /* Duplicate struct keys fail, like map keys. */
-        {
-            pbw_value *list = pbw_message_list_for(msg, entry_field);
-            size_t i;
-
-            if (list == NULL) {
-                pbw_buf_free(&key);
-                j->depth--;
-                return PBW_ERR_NOMEM;
-            }
-            for (i = 0; i < list->as.list.len; i++) {
-                const pbw_value *e = list->as.list.items[i];
-                const pbw_value *k;
-
-                if (e == NULL || e->kind != PBW_VALUE_MESSAGE ||
-                    e->as.msg == NULL) {
-                    continue;
-                }
-                k = pbw_message_get(e->as.msg, 1);
-                if (k != NULL && k->kind == PBW_VALUE_BYTES &&
-                    k->as.bytes.len == key.len &&
-                    memcmp(k->as.bytes.data, key.data, key.len) == 0) {
-                    pbw_buf_free(&key);
-                    j->depth--;
-                    return PBW_ERR_INVALID;
-                }
-            }
-        }
         item = pbw_message_new(entry);
         if (item == NULL) {
             pbw_buf_free(&key);
@@ -3494,9 +3617,13 @@ j_parse_struct(j_in *j, pbw_message *msg)
             /* Trailing commas are accepted in legacy mode. */
             j_skip(&j->cur);
             if (j->cur.p < j->cur.end && *j->cur.p == '}') {
+                pbw_status dup;
+
                 j->cur.p++;
                 j->depth--;
-                return PBW_OK;
+                dup = j_check_duplicate_keys(
+                    pbw_message_get(msg, entry_field->number));
+                return dup;
             }
             continue;
         }
@@ -3504,8 +3631,13 @@ j_parse_struct(j_in *j, pbw_message *msg)
             j->depth--;
             return PBW_ERR_INVALID;
         }
-        j->depth--;
-        return PBW_OK;
+        {
+            pbw_status dup = j_check_duplicate_keys(
+                pbw_message_get(msg, entry_field->number));
+
+            j->depth--;
+            return dup;
+        }
     }
 }
 
@@ -3750,7 +3882,6 @@ j_parse_map(j_in *j, pbw_message *msg, const pbw_field *field)
         pbw_buf key;
         pbw_message *item;
         pbw_status st;
-        size_t i;
 
         pbw_buf_init(&key);
         if (j_parse_key(j, &key) != PBW_OK) {
@@ -3779,51 +3910,6 @@ j_parse_map(j_in *j, pbw_message *msg, const pbw_field *field)
             return PBW_ERR_INVALID;
         }
         pbw_buf_free(&key);
-        /* Duplicate map keys fail. Keys compare by their stored form;
-         * integers normalize first, so "1" and "01" collide exactly
-         * like two identical strings. The loop stays inline (no helper
-         * call): large maps scan this per key. */
-        {
-            pbw_value *list = pbw_message_list_for(msg, field);
-            const pbw_value *knew;
-
-            if (list == NULL) {
-                pbw_message_free(item);
-                j->depth--;
-                return PBW_ERR_NOMEM;
-            }
-            knew = pbw_message_get(item, 1);
-            if (knew != NULL &&
-                (knew->kind == PBW_VALUE_BYTES ||
-                 knew->kind == PBW_VALUE_UINT)) {
-                for (i = 0; i < list->as.list.len; i++) {
-                    const pbw_value *e = list->as.list.items[i];
-                    const pbw_value *k;
-
-                    if (e == NULL || e->kind != PBW_VALUE_MESSAGE ||
-                        e->as.msg == NULL) {
-                        continue;
-                    }
-                    k = pbw_message_get(e->as.msg, 1);
-                    if (k == NULL || k->kind != knew->kind) {
-                        continue;
-                    }
-                    if (k->kind == PBW_VALUE_BYTES) {
-                        if (k->as.bytes.len == knew->as.bytes.len &&
-                            memcmp(k->as.bytes.data, knew->as.bytes.data,
-                                   k->as.bytes.len) == 0) {
-                            pbw_message_free(item);
-                            j->depth--;
-                            return PBW_ERR_INVALID;
-                        }
-                    } else if (k->as.u64 == knew->as.u64) {
-                        pbw_message_free(item);
-                        j->depth--;
-                        return PBW_ERR_INVALID;
-                    }
-                }
-            }
-        }
         if (value_field->type == PBW_TYPE_ENUM) {
             int stored = 0;
 
@@ -3887,9 +3973,13 @@ j_parse_map(j_in *j, pbw_message *msg, const pbw_field *field)
             /* Trailing commas are accepted in legacy mode. */
             j_skip(&j->cur);
             if (j->cur.p < j->cur.end && *j->cur.p == '}') {
+                pbw_status dup;
+
                 j->cur.p++;
                 j->depth--;
-                return PBW_OK;
+                dup = j_check_duplicate_keys(
+                    pbw_message_get(msg, field->number));
+                return dup;
             }
             continue;
         }
@@ -3897,8 +3987,12 @@ j_parse_map(j_in *j, pbw_message *msg, const pbw_field *field)
             j->depth--;
             return PBW_ERR_INVALID;
         }
-        j->depth--;
-        return PBW_OK;
+        {
+            pbw_status dup =
+                j_check_duplicate_keys(pbw_message_get(msg, field->number));
+            j->depth--;
+            return dup;
+        }
     }
 }
 
@@ -4054,6 +4148,7 @@ j_parse_any(j_in *j, pbw_message *msg)
         inner.cur.end = end;
         inner.ignore_unknown = j->ignore_unknown;
         inner.depth = j->depth + 1;
+        inner.dot = j->dot;
         /* start already points past the '{' the scan consumed. */
         for (;;) {
             pbw_buf key;
@@ -4268,9 +4363,21 @@ j_parse_field_value(j_in *j, pbw_message *msg, const pbw_field *field,
             }
         }
         {
-            pbw_message *sub = pbw_message_new(field->sub);
+            pbw_message *sub = NULL;
             pbw_status st;
+            size_t index = (size_t)(field - msg->desc->fields);
 
+            if (field->oneof_index == 0 && pbw_msg_present(msg, index) &&
+                msg->values[index].kind == PBW_VALUE_MESSAGE &&
+                msg->values[index].as.msg != NULL &&
+                msg->values[index].as.msg->desc == field->sub) {
+                /* Legacy mode allows a duplicate singular key; the reference
+                 * merges it into the submessage already parsed instead of
+                 * replacing it (so fields of the first copy survive). */
+                st = j_parse_message(j, msg->values[index].as.msg);
+                return st == PBW_ERR_LIMIT ? st : (st == PBW_OK ? PBW_OK : PBW_ERR_INVALID);
+            }
+            sub = pbw_message_new(field->sub);
             if (sub == NULL) {
                 return PBW_ERR_NOMEM;
             }
@@ -4317,12 +4424,16 @@ j_parse_field_value(j_in *j, pbw_message *msg, const pbw_field *field,
 static pbw_status
 j_parse_message(j_in *j, pbw_message *msg)
 {
-    j_wkt wkt = j_classify(msg->desc);
+    j_wkt wkt;
     j_kind kind;
 
+    if (msg == NULL || msg->desc == NULL) {
+        return PBW_ERR_INVALID;
+    }
     if (msg->desc->is_enum) {
         return PBW_ERR_INVALID;
     }
+    wkt = j_classify(msg->desc);
     switch (wkt) {
     case J_ANY:
         if (j_peek_kind(j) == JK_NULL) {

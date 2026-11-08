@@ -174,7 +174,9 @@ is_initialized(const pbw_message *msg, uint32_t depth)
 {
     size_t i;
 
-    if (msg == NULL || msg->desc == NULL || depth >= PBW_MAX_DEPTH) {
+    /* Read `>` like the decoder: a message at depth PBW_MAX_DEPTH is
+     * accepted on the wire, so the required-field walk must judge it too. */
+    if (msg == NULL || msg->desc == NULL || depth > PBW_MAX_DEPTH) {
         return 0;
     }
     /* The flag is computed by pbw_schema_link(); an unlinked descriptor is
@@ -310,8 +312,18 @@ pbw_value_destroy(pbw_value *value)
         }
         break;
     case PBW_VALUE_LIST:
+        /* Items pushed into a list carry PBW_VF_EMBEDDED (pbw_value_free on
+         * a borrowed item is the documented no-op), so their wrappers are
+         * released here instead of through pbw_value_free. Arena items die
+         * with their arena. */
         for (i = 0; i < value->as.list.len; i++) {
-            pbw_value_free(value->as.list.items[i]);
+            pbw_value *item = value->as.list.items[i];
+
+            if (item == NULL || (item->flags & PBW_VF_ARENA) != 0) {
+                continue;
+            }
+            pbw_value_destroy(item);
+            free(item);
         }
         if ((value->flags & PBW_VF_ARENA) == 0) {
             free(value->as.list.items);
@@ -696,7 +708,10 @@ pbw_message_clear(pbw_message *msg, uint32_t number)
     }
     index = value_field_index(msg, field);
     clear_slot(msg, index);
-    if (field->oneof_index > 0) {
+    if (field->oneof_index > 0 &&
+        msg->oneof_case[field->oneof_index] == field->number) {
+        /* Only the member that is actually set clears the case: clearing
+         * an unset sibling must leave the active member addressable. */
         msg->oneof_case[field->oneof_index] = 0;
     }
 }

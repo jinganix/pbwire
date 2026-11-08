@@ -132,10 +132,12 @@ void pbw_struct_free(const pbw_struct_field_t *fields, size_t nfields,
  * status with its *out contract (written on both paths, free on both). */
 pbw_status pbw_struct_schema_load(const char *path, pbw_schema **out);
 
-/* Compile a message layout. Every schema field must have a row, and a row
- * whose kind/wire type disagrees with the schema is PBW_ERR_INVALID. The
- * layout table and the schema are referenced, not copied, so both must
- * outlive the codec. *out is NULL on failure; release with
+/* Compile a message layout. Every schema field must have a row, a row whose
+ * number the schema does not declare (or that repeats another row's number)
+ * and a row whose kind/wire type disagrees with the schema are
+ * PBW_ERR_INVALID. The layout table and the schema are referenced, not
+ * copied, so both must outlive the codec. *out is NULL on failure; release
+ * with
  * pbw_struct_codec_free(). */
 pbw_status pbw_struct_codec_init(pbw_struct_codec **out,
                                  const pbw_schema *schema, const char *message,

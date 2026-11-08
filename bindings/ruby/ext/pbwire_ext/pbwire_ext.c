@@ -258,6 +258,8 @@ type_free(void *ptr)
     if (type == NULL) {
         return;
     }
+    holder_release(type->holder);
+    type->holder = NULL;
     xfree(type->fields);
     xfree(type->by_number);
     xfree(type);
@@ -438,6 +440,10 @@ type_for(VALUE schema_obj, const pbw_descriptor *desc)
     count = pbw_descriptor_field_count(desc);
     obj = typed_object_alloc(cType, &type_data_type, (void **)&type);
     type->desc = desc;
+    /* A Type outlives the Schema object it came from: it keeps the C schema
+     * alive (the descriptor pointers it holds point into it). */
+    type->holder = schema->holder;
+    holder_ref(type->holder);
     type->count = count;
     type->fields = count == 0 ? NULL : ZALLOC_N(field_t, count);
     type->by_name = rb_hash_new();
@@ -1248,6 +1254,10 @@ message_wire_new(VALUE type, VALUE buffer, size_t off, size_t len,
                                     (void **)&message);
     message->kind = MSG_WIRE;
     message->type = type;
+    /* A decoded message reads its descriptor on every call, so it must keep
+     * the C schema alive exactly like a builder does. */
+    message->holder = t->holder;
+    holder_ref(t->holder);
     message->buffer = buffer;
     message->data = (const uint8_t *)RSTRING_PTR(buffer);
     message->off = off;

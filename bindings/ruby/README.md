@@ -214,9 +214,9 @@ official `conformance_test_runner` through this binding
 `make conformance-setup`):
 
 ```
-CONFORMANCE SUITE PASSED: 2744 successes, 0 skipped, 0 expected failures,
+CONFORMANCE SUITE PASSED: 2747 successes, 0 skipped, 0 expected failures,
 0 unexpected failures.
-CONFORMANCE SUITE PASSED: 445 successes, 0 skipped, 0 expected failures,
+CONFORMANCE SUITE PASSED: 443 successes, 0 skipped, 0 expected failures,
 0 unexpected failures.
 ```
 

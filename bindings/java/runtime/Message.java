@@ -153,7 +153,9 @@ public final class Message implements AutoCloseable {
 
     private Message setAt(int slot, byte[] value) {
         GenericCodec.Field f = type.def.fields[slot];
-        if (f.kind != GenericCodec.K_BYTES && f.kind != GenericCodec.K_STRING) {
+        if (f.kind != GenericCodec.K_BYTES) {
+            // Only a bytes field takes a byte[]: a string field would store the
+            // array and blow up later when the codec casts it to String.
             throw new PbwireException(type.name() + ": field " + f.number
                     + " needs bytes");
         }

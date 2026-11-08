@@ -120,7 +120,13 @@ pub const Schema = struct {
     pub fn fromBytes(bytes: []const u8) Error!Schema {
         var out: ?*c.pbw_schema = null;
         const st = c.pbw_descriptor_set_load(@ptrCast(dataPtr(bytes)), bytes.len, &out);
-        try check(st);
+        if (st != c.PBW_OK) {
+            // The core hands back the partially built schema on failure so the
+            // error text can be read; the caller must free it as usual.
+            if (out) |p| c.pbw_schema_free(p);
+            try check(st);
+            return Error.UnknownStatus; // unreachable: a failed status always errors
+        }
         if (out == null) return Error.UnknownStatus;
         return .{ .ptr = @ptrCast(out) };
     }
@@ -249,6 +255,8 @@ pub const JsonOptions = struct {
 };
 
 /// A resolved field handle: the number, wire type and storage the schema says.
+/// A resolved field handle. The pointer lives in the schema, so the owning
+/// `Schema` (normally reached through the `MessageType`) must outlive it.
 pub const Field = struct {
     ptr: *const c.pbw_field,
 

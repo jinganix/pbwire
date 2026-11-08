@@ -18,8 +18,8 @@ Every language gets the same shape, spelled the way that language spells things:
 
 | C (`bindings/c`) | struct | `structtest_scalars3_t`, `structtest_scalars3_encode/decode` |
 |---|---|---|
-| Java | annotated POJO, your own class shape | `@PbField(1) int i32` / `toByteArray()` / `parseFrom()` / `Map` maps + nullable oneof members + `getKindCase()`, direct Wire codec, no schema; Lombok and validation annotations ride along |
-| Kotlin | thin DSL over the Java POJOs | `scalars3 { i32 = 1 }` constructors; types and codec are the Java POJOs |
+| Java | final class + Builder, protobuf-java-shaped API | `newBuilder().setI32(1)`, `has…()`, `getKindCase()`, `toByteArray()` / `parseFrom()` through `PbCodec`, no schema at use time |
+| Kotlin | thin DSL over the generated Java models | `scalars3 { i32 = 1 }` constructors; types and codec are the Java models |
 | C# | `sealed class`, Google.Protobuf shape | `Parser.ParseFrom` / `ToByteArray` / `RepeatedField<T>` / `KindOneofCase` / `Has`+`Clear` for optional, over the embedded schema (no `IMessage`, no `Descriptor`) |
 | Dart | class, protobuf-dart shape | `create()..i32 = 1` / `writeToBuffer()` / `fromBuffer()` / `hasX()` / `whichX()` oneof, over the embedded schema |
 | PHP | class, protobuf-PHP shape | `getX()/setX()/hasX()/clearX()` + `RepeatedField` + `serializeToString()/mergeFromString()`, over the embedded schema |
@@ -201,19 +201,20 @@ Clojure loads its namespace (needs the fetched jars, like `test-clojure`).
 ## Cost
 
 The generated layer is ergonomics, not a second hot path: encode/decode call the
-binding's dynamic API, except Java, whose POJOs write straight into a Wire
-buffer through reflection over the annotated fields (no Message tree, no
-schema at use time). Positions measured on this machine with `matrix3`
+binding's dynamic API, except Java, whose generated models write straight
+into a Wire buffer through their compiled `PbCodec` tables (no Message tree,
+no schema at use time). Positions measured on this machine with `matrix3`
 x3000 (~33 KB) and the same values through both paths:
 
 | language | generated encode vs dynamic | generated decode vs dynamic |
 |---|---|---|
 | C (struct binding) | 1.00x (it *is* the struct path) | 1.00x |
-| Java (reflective POJOs, direct Wire codec) | 1.7x slower | 1.0x |
 | Python (dataclass ⇄ dict) | 3.8x slower | 3.2x slower |
 
-Like Python, Java's typed path trades encode speed for ergonomics (your own
-classes, Lombok, validation); the dynamic `Message` path stays the fast path.
+Like Python, Java's typed path trades encode speed for the typed API; the
+dynamic `Message` path stays the fast path. Java's generated models are not
+part of `make java-bench` (it measures the dynamic path against
+protobuf-java), so no generated-vs-dynamic row is published.
 
 Python pays for the dataclass ⇄ dict conversion; the extension's dict path is
 the fast path and stays the one the Python benchmark measures. For hot loops in

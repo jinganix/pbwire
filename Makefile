@@ -42,6 +42,10 @@ SHLIB_LINK := build/libpbwire.so
 SHLIB_FLAGS := -shared -Wl,-soname,libpbwire.so.1
 endif
 
+# Plain `make` builds the static library, as the docs promise (`make` has the
+# first target in this file to itself otherwise, which is `shared`).
+.DEFAULT_GOAL := all
+
 shared: $(SHLIB)
 
 $(SHLIB): $(OBJ) | build
@@ -165,6 +169,11 @@ port-test:
 # 32-bit gate (CI): an x86_64 host with gcc-multilib runs the whole gate with
 # -m32, so ILP32 size/alignment assumptions surface before a release.
 port-test-32:
+	rm -f build/*.o build/libpbwire.a build/libpbwire.*.dylib build/libpbwire.so* \
+		build/test_pbwire build/test_malformed build/test_nofail build/test_threads \
+		build/test_descriptor build/test_struct build/test_embedded \
+		build/test_embedded_nofail build/example_addressbook build/example_gateway \
+		build/example_embedded
 	$(MAKE) test CFLAGS="-O2 -std=c99 -Wall -Wextra -Werror -pedantic -fPIC -m32"
 
 # Erlang binding (bindings/erlang): OTP app with its own rebar3 build.
@@ -260,8 +269,7 @@ desc-fixture:
 # `make conformance-setup` clones it once (shallow, pinned version) and builds
 # the runner; later runs only rebuild incrementally. Override the location
 # with PBWIRE_PROTOBUF_SRC=/path/to/protobuf.
-# The testee answers binary and text requests and reports every JSON test as
-# skipped. Two binary tests fail and are expected to: the reference C++ testee
+# The testee answers binary, JSON and text requests. Two binary tests fail and are expected to: the reference C++ testee
 # from the same checkout fails them identically (a 5-byte tag varint above
 # UINT32_MAX is truncated instead of rejected). They are listed so the runner
 # proceeds to the text suite instead of stopping after binary.

@@ -178,11 +178,14 @@ public final class PbCodec {
             if (f.explicit && !((Predicate<O>) f.hasM).test(msg)) {
                 continue;
             }
+            // A oneof member prints whatever is set, zero and empty included:
+            // the case word is its presence bit.
+            boolean present = f.explicit || f.oneof >= 0;
             switch (f.kind) {
                 case Kind.INT32:
                 case Kind.ENUM: {
                     int v = ((ToIntFunction<O>) f.get).applyAsInt(msg);
-                    if (v == 0 && !f.explicit) {
+                    if (v == 0 && !present) {
                         break;
                     }
                     if (v >= 0) {
@@ -194,7 +197,7 @@ public final class PbCodec {
                 }
                 case Kind.UINT32: {
                     int v = ((ToIntFunction<O>) f.get).applyAsInt(msg);
-                    if (v == 0 && !f.explicit) {
+                    if (v == 0 && !present) {
                         break;
                     }
                     Wire.wTagVar32(b, f.tag, v);
@@ -202,7 +205,7 @@ public final class PbCodec {
                 }
                 case Kind.SINT32: {
                     int v = ((ToIntFunction<O>) f.get).applyAsInt(msg);
-                    if (v == 0 && !f.explicit) {
+                    if (v == 0 && !present) {
                         break;
                     }
                     Wire.wTagVar32(b, f.tag, Wire.zig32(v));
@@ -211,7 +214,7 @@ public final class PbCodec {
                 case Kind.INT64:
                 case Kind.UINT64: {
                     long v = ((ToLongFunction<O>) f.get).applyAsLong(msg);
-                    if (v == 0 && !f.explicit) {
+                    if (v == 0 && !present) {
                         break;
                     }
                     Wire.wTagVar64(b, f.tag, v);
@@ -219,7 +222,7 @@ public final class PbCodec {
                 }
                 case Kind.SINT64: {
                     long v = ((ToLongFunction<O>) f.get).applyAsLong(msg);
-                    if (v == 0 && !f.explicit) {
+                    if (v == 0 && !present) {
                         break;
                     }
                     Wire.wTagVar64(b, f.tag, Wire.zig64(v));
@@ -227,7 +230,7 @@ public final class PbCodec {
                 }
                 case Kind.BOOL: {
                     boolean v = ((Predicate<O>) f.get).test(msg);
-                    if (!v && !f.explicit) {
+                    if (!v && !present) {
                         break;
                     }
                     Wire.wTagVar32(b, f.tag, v ? 1 : 0);
@@ -236,7 +239,7 @@ public final class PbCodec {
                 case Kind.FIXED32:
                 case Kind.SFIXED32: {
                     int v = ((ToIntFunction<O>) f.get).applyAsInt(msg);
-                    if (v == 0 && !f.explicit) {
+                    if (v == 0 && !present) {
                         break;
                     }
                     Wire.wTagFixed32(b, f.tag, v);
@@ -244,7 +247,7 @@ public final class PbCodec {
                 }
                 case Kind.FLOAT: {
                     float v = ((Function<O, Float>) f.get).apply(msg);
-                    if (v == 0f && !f.explicit) {
+                    if (v == 0f && !present) {
                         break;
                     }
                     Wire.wTagFixed32(b, f.tag, Float.floatToRawIntBits(v));
@@ -253,7 +256,7 @@ public final class PbCodec {
                 case Kind.FIXED64:
                 case Kind.SFIXED64: {
                     long v = ((ToLongFunction<O>) f.get).applyAsLong(msg);
-                    if (v == 0 && !f.explicit) {
+                    if (v == 0 && !present) {
                         break;
                     }
                     Wire.wTagFixed64(b, f.tag, v);
@@ -261,7 +264,7 @@ public final class PbCodec {
                 }
                 case Kind.DOUBLE: {
                     double v = ((ToDoubleFunction<O>) f.get).applyAsDouble(msg);
-                    if (v == 0.0 && !f.explicit) {
+                    if (v == 0.0 && !present) {
                         break;
                     }
                     Wire.wTagFixed64(b, f.tag, Double.doubleToRawLongBits(v));
@@ -269,7 +272,7 @@ public final class PbCodec {
                 }
                 case Kind.STRING: {
                     String s = ((Function<O, String>) f.get).apply(msg);
-                    if (s.isEmpty() && !f.explicit) {
+                    if (s.isEmpty() && !present) {
                         break;
                     }
                     Wire.wTag(b, f.tag);
@@ -278,7 +281,7 @@ public final class PbCodec {
                 }
                 case Kind.BYTES: {
                     byte[] v = ((Function<O, byte[]>) f.get).apply(msg);
-                    if (v.length == 0 && !f.explicit) {
+                    if (v.length == 0 && !present) {
                         break;
                     }
                     Wire.wTag(b, f.tag);
@@ -612,6 +615,10 @@ public final class PbCodec {
         // Singular message/group builders pending assignment: repeat
         // occurrences merge into the same builder, like the reference.
         Map<Integer, Object> pend = null;
+        // Last member of each oneof seen on the wire: pending submessage
+        // builders are flushed after the loop, and one flushed late must not
+        // resurrect a member a later scalar already replaced.
+        int[] lastOneof = null;
         int outerEnd = r.end;
         r.end = end;
         boolean closed = groupEnd < 0;
@@ -635,6 +642,12 @@ public final class PbCodec {
                 continue;
             }
             FieldMeta<O, B> f = meta.fields[slot];
+            if (f.oneof >= 0 && !f.repeated) {
+                if (lastOneof == null) {
+                    lastOneof = new int[meta.oneofNames.length];
+                }
+                lastOneof[f.oneof] = f.number;
+            }
             switch (f.kind) {
                 case Kind.INT32:
                 case Kind.UINT32:
@@ -643,7 +656,7 @@ public final class PbCodec {
                 case Kind.FIXED32:
                 case Kind.SFIXED32: {
                     if (f.repeated) {
-                        if (wt == 2 && f.packed) {
+                        if (wt == 2) {
                             int len = Wire.rLen32(r);
                             int stop = r.pos + len;
                             ObjIntConsumer<B> add = (ObjIntConsumer<B>) f.set;
@@ -673,7 +686,7 @@ public final class PbCodec {
                 case Kind.FIXED64:
                 case Kind.SFIXED64: {
                     if (f.repeated) {
-                        if (wt == 2 && f.packed) {
+                        if (wt == 2) {
                             int len = Wire.rLen32(r);
                             int stop = r.pos + len;
                             ObjLongConsumer<B> add = (ObjLongConsumer<B>) f.set;
@@ -699,7 +712,7 @@ public final class PbCodec {
                 }
                 case Kind.FLOAT: {
                     if (f.repeated) {
-                        if (wt == 2 && f.packed) {
+                        if (wt == 2) {
                             int len = Wire.rLen32(r);
                             int stop = r.pos + len;
                             BiConsumer<B, Float> add = (BiConsumer<B, Float>) f.set;
@@ -725,7 +738,7 @@ public final class PbCodec {
                 }
                 case Kind.DOUBLE: {
                     if (f.repeated) {
-                        if (wt == 2 && f.packed) {
+                        if (wt == 2) {
                             int len = Wire.rLen32(r);
                             int stop = r.pos + len;
                             ObjDoubleConsumer<B> add = (ObjDoubleConsumer<B>) f.set;
@@ -753,7 +766,7 @@ public final class PbCodec {
                 }
                 case Kind.BOOL: {
                     if (f.repeated) {
-                        if (wt == 2 && f.packed) {
+                        if (wt == 2) {
                             int len = Wire.rLen32(r);
                             int stop = r.pos + len;
                             BiConsumer<B, Boolean> add = (BiConsumer<B, Boolean>) f.set;
@@ -850,6 +863,10 @@ public final class PbCodec {
         if (pend != null) {
             for (Map.Entry<Integer, Object> e : pend.entrySet()) {
                 FieldMeta<O, B> f = meta.fields[e.getKey()];
+                if (f.oneof >= 0 && lastOneof != null
+                        && lastOneof[f.oneof] != f.number) {
+                    continue; // a later member of the same oneof won
+                }
                 Object built = ((Function<Object, Object>) f.finish).apply(e.getValue());
                 ((BiConsumer<B, Object>) f.set).accept(b, built);
             }

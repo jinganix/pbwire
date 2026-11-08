@@ -31,7 +31,15 @@ ep_get_tdata(ep_state_t *state)
         return ep_tls_tdata;
     }
 
+    /* One slot per NIF-calling thread class. lock_n is sized from the normal +
+     * dirty-CPU schedulers (the only threads that can call this NIF), so two
+     * threads never share a slot. A surplus thread maps onto the last slot
+     * rather than addressing out of bounds; add dirty-IO schedulers to lock_n
+     * before flagging any function ERL_NIF_DIRTY_JOB_IO_BOUND. */
     uint32_t slot = ep_atomic_fetch_add_u32(&state->slot_next, 1);
+    if (state->lock_n == 0) {
+        return NULL;
+    }
     if (slot >= state->lock_n) {
         slot = state->lock_n - 1;
     }
@@ -239,6 +247,32 @@ ep_load_cache(ErlNifEnv *env, ERL_NIF_TERM list)
 /*
  * nif library callbacks
  */
+
+/* Releases a partially built state (load failure) or the whole state. */
+static void
+free_state(ep_state_t *state, uint32_t upto)
+{
+    uint32_t i;
+
+    if (state == NULL) {
+        return;
+    }
+    if (state->tdata != NULL) {
+        for (i = 0; i < upto; i++) {
+            _free(state->tdata[i].stack.spots);
+            _free(state->tdata[i].enc.mem);
+            if (state->tdata[i].ctx != NULL) {
+                pbw_ctx_free(state->tdata[i].ctx);
+            }
+        }
+        _free(state->tdata);
+    }
+    if (state->cache_lock != NULL) {
+        enif_rwlock_destroy(state->cache_lock);
+    }
+    _free(state);
+}
+
 static int
 load(ErlNifEnv *env, void **priv, ERL_NIF_TERM info)
 {
@@ -258,12 +292,17 @@ load(ErlNifEnv *env, void **priv, ERL_NIF_TERM info)
         state->lock_n = lock_n;
         state->cache_lock = enif_rwlock_create("CACHE_LOCK");
         state->slot_next = 0;
+        if (state->cache_lock == NULL) {
+            free_state(state, 0);
+            return RET_ERROR;
+        }
 
         /*
          * init state->tdata
          */
         state->tdata = _calloc(sizeof(ep_tdata_t), state->lock_n);
         if (state->tdata == NULL) {
+            free_state(state, 0);
             return RET_ERROR;
         }
 
@@ -273,6 +312,7 @@ load(ErlNifEnv *env, void **priv, ERL_NIF_TERM info)
             stack->size = STACK_INIT_SIZE;
             stack->spots = _calloc(sizeof(ep_spot_t), stack->size);
             if (stack->spots == NULL) {
+                free_state(state, i);
                 return RET_ERROR;
             }
             stack->end = stack->spots + stack->size;
@@ -343,6 +383,13 @@ upgrade(ErlNifEnv *env, void **priv, void **old_priv, ERL_NIF_TERM info)
 static void
 unload(ErlNifEnv *env, void *priv)
 {
+    (void)env;
+    (void)priv;
+    /* Deliberately a no-op: the per-thread pointers ep_tls_state/ep_tls_tdata
+     * are __thread variables, and the emulator may still call this NIF from a
+     * thread that never runs again. Freeing the state here would leave those
+     * pointers dangling, so the NIF image's state lives until the VM exits
+     * (one per loaded module, not per request). */
 #if 0
     if (priv != NULL) {
         state = (ep_state_t *) enif_priv_data(env);
@@ -397,19 +444,31 @@ encode_1(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
         return enif_make_badarg(env);
     }
 
-    if (state->cache == NULL) {
-        raise_exception(env, make_atom(env, "cache_not_exists"));
-    }
-
     tdata = ep_get_tdata(state);
     if (tdata->enc.mem == NULL) {
-        tdata->enc.mem = _calloc(ENC_INIT_SIZE, 1);
+        size_t init = ENC_INIT_SIZE;
+
+        /* retain_cap is the documented ceiling for the encoder buffer too,
+         * not just for the core context: start smaller and shrink after each
+         * encode when the cap is below the default. */
+        if (state->opts.retain_cap_set && state->opts.retain_cap < init) {
+            init = state->opts.retain_cap;
+        }
+        if (init < 256) {
+            init = 256;
+        }
+        tdata->enc.mem = _calloc(init, 1);
         if (tdata->enc.mem == NULL) {
             raise_exception(env, make_atom(env, "alloc"));
         }
-        tdata->enc.size = ENC_INIT_SIZE;
+        tdata->enc.size = init;
     }
     enif_rwlock_rlock(state->cache_lock);
+    if (state->cache == NULL) {
+        /* purge_cache swapped it out between the fast check and this lock. */
+        enif_rwlock_runlock(state->cache_lock);
+        raise_exception(env, make_atom(env, "cache_not_exists"));
+    }
     tdata->enc.p = tdata->enc.mem;
     tdata->enc.end = tdata->enc.mem + tdata->enc.size;
 
@@ -417,6 +476,15 @@ encode_1(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
         ret = tdata->enc.result;
     }
     enif_rwlock_runlock(state->cache_lock);
+    if (state->opts.retain_cap_set &&
+        (state->opts.retain_cap == 0 ||
+         tdata->enc.size > state->opts.retain_cap)) {
+        /* The result binary owns a copy; drop the oversized scratch buffer so
+         * one big message does not pin memory on this scheduler forever. */
+        _free(tdata->enc.mem);
+        tdata->enc.mem = NULL;
+        tdata->enc.size = 0;
+    }
 
     return ret;
 }
@@ -433,12 +501,12 @@ decode_2(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
         return enif_make_badarg(env);
     }
 
-    if (state->cache == NULL) {
-        raise_exception(env, make_atom(env, "cache_not_exists"));
-    }
-
     tdata = ep_get_tdata(state);
     enif_rwlock_rlock(state->cache_lock);
+    if (state->cache == NULL) {
+        enif_rwlock_runlock(state->cache_lock);
+        raise_exception(env, make_atom(env, "cache_not_exists"));
+    }
     if (!enif_inspect_binary(env, argv[0], &(tdata->dec.bin))) {
         enif_rwlock_runlock(state->cache_lock);
         raise_exception(env, argv[0]);
@@ -448,7 +516,7 @@ decode_2(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     tdata->dec.end = tdata->dec.p + tdata->dec.bin.size;
     tdata->dec.term = argv[0];
 
-    node = get_node_by_name(argv[1], state->cache);
+    node = state->cache != NULL ? get_node_by_name(argv[1], state->cache) : NULL;
     if (node == NULL) {
         enif_rwlock_runlock(state->cache_lock);
         raise_exception(env, argv[1]);

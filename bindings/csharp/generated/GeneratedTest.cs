@@ -121,6 +121,27 @@ Check(Build().ToByteArray().SequenceEqual(reference), "T1 facade != reference");
     var nested = new Oneof1 { Name = "n", Inner = new Oneof1.Types.Inner { V = 7 } };
     var nb = Oneof1.Parser.ParseFrom(nested.ToByteArray());
     Check(nb.Inner != null && nb.Inner.V == 7, "T2 nested oneof member");
+    // Clone/MergeFrom must copy the active oneof member (each setter resets
+    // the case word, so assigning all members would clear it), and cloning a
+    // message member must not alias it.
+    var cloned = one.Clone();
+    Check(cloned.KindCase == Oneof1.KindOneofCase.Text && cloned.Text == "hi",
+          "T2 clone keeps the oneof member");
+    var merged = new Oneof1();
+    merged.MergeFrom(one);
+    Check(merged.KindCase == Oneof1.KindOneofCase.Text && merged.Text == "hi",
+          "T2 MergeFrom keeps the oneof member");
+    var innerClone = nested.Clone();
+    Check(innerClone.Inner != null && innerClone.Inner.V == 7
+          && !ReferenceEquals(innerClone.Inner, nested.Inner),
+          "T2 clone deep-copies a oneof message member");
+    // An absent singular message field must hash without a NullReference.
+    Check(new Scalars3().GetHashCode() != 0, "T2 hash of an absent message field");
+    // Float equality is bitwise, like protoc: NaN equals NaN, +0.0 != -0.0.
+    var nanA = new Scalars3 { F32 = float.NaN };
+    var nanB = new Scalars3 { F32 = float.NaN };
+    Check(nanA.Equals(nanB) && nanA.GetHashCode() == nanB.GetHashCode(),
+          "T2 NaN equals and hashes");
 }
 
 // T3: empty encodes empty; explicit optional zero round-trips.

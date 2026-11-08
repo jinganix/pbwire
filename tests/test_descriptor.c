@@ -139,6 +139,30 @@ test_editions(void)
     CHECK(pbw_value_get_int(pbw_message_get(msg, 6)) == 99);
     pbw_message_free(msg);
     msg = NULL;
+    /* Text and JSON apply the same openness rule as the binary decoder:
+     * unknown numbers fail for the CLOSED enum, stay for the OPEN one. `req`
+     * is LEGACY_REQUIRED, so every valid text/JSON input spells it. */
+    {
+        pbw_message *tm = NULL;
+
+        CHECK_STATUS(PBW_ERR_INVALID,
+                     pbw_text_parse(m, "req: 7 closed: 99", 17, &tm));
+        CHECK(tm == NULL);
+        /* JSON mirrors the binary decoder instead: the unknown number moves
+         * into the unknown fields and the field stays absent. */
+        CHECK_OK(pbw_json_parse(m, "{\"req\":7,\"closed\":99}", 21, &tm));
+        CHECK(tm != NULL && pbw_message_get(tm, 3) == NULL);
+        CHECK(pbw_message_unknown_len(tm) == 2);
+        pbw_message_free(tm);
+        tm = NULL;
+        CHECK_OK(pbw_text_parse(m, "req: 7 opened: 99", 17, &tm));
+        CHECK(tm != NULL && pbw_value_get_int(pbw_message_get(tm, 6)) == 99);
+        pbw_message_free(tm);
+        tm = NULL;
+        CHECK_OK(pbw_json_parse(m, "{\"req\":7,\"opened\":99}", 21, &tm));
+        CHECK(tm != NULL && pbw_value_get_int(pbw_message_get(tm, 6)) == 99);
+        pbw_message_free(tm);
+    }
     /* DELIMITED message: group tags decode into the submessage ... */
     CHECK_OK(pbw_decode(m, delim, sizeof(delim), &msg));
     CHECK(pbw_message_get(msg, 4) != NULL);

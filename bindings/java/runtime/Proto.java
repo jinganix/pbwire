@@ -279,7 +279,7 @@ final class Proto {
             if (wt == Wire.WT_LEN) {
                 int n = Wire.rLen(r);
                 if (num == 4) {
-                    f.messages.add(parseMessage(r.b, r.pos, n));
+                    f.messages.add(parseMessage(r.b, r.pos, n, 1));
                 } else if (num == 7) {
                     f.extensions.add(parseField(r.b, r.pos, n, true));
                 } else if (num == 1) {
@@ -299,7 +299,14 @@ final class Proto {
         return f;
     }
 
-    private static Message parseMessage(byte[] b, int off, int len) {
+    private static Message parseMessage(byte[] b, int off, int len, int depth) {
+        // Descriptor nesting is peer data too: a FileDescriptorSet a few tens
+        // of KB can nest thousands of DescriptorProtos, so cap it instead of
+        // letting the recursion overflow the JVM stack.
+        if (depth > Wire.MAX_DEPTH) {
+            throw new IllegalArgumentException("descriptor nesting exceeds "
+                    + Wire.MAX_DEPTH);
+        }
         Wire.Reader r = sub(b, off, len);
         Message m = new Message();
         while (r.pos < r.end) {
@@ -315,7 +322,7 @@ final class Proto {
             } else if (num == 2) {
                 m.fields.add(parseField(r.b, r.pos, n, false));
             } else if (num == 3) {
-                m.nested.add(parseMessage(r.b, r.pos, n));
+                m.nested.add(parseMessage(r.b, r.pos, n, depth + 1));
             } else if (num == 6) {
                 m.extensions.add(parseField(r.b, r.pos, n, true));
             } else if (num == 8) {

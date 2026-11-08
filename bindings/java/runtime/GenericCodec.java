@@ -65,7 +65,20 @@ public final class GenericCodec {
     public static final class MessageDef {
         public String fullName;
         public Field[] fields; // sorted by number
-        public int[] slotByFnum; // dense
+        public int[] slotByFnum; // dense, or null when field numbers are sparse
+
+        /** Slot of a field number, -1 when the message has no such field. */
+        public int lookup(int fnum) {
+            if (slotByFnum != null) {
+                return fnum >= 0 && fnum < slotByFnum.length ? slotByFnum[fnum] : -1;
+            }
+            for (int i = 0; i < fields.length; i++) {
+                if (fields[i].number == fnum) {
+                    return i;
+                }
+            }
+            return -1;
+        }
         public Map<String, Integer> byName = new HashMap<>();
         public Map<String, Integer> oneofByName = new HashMap<>();
         public int oneofCount;
@@ -165,6 +178,14 @@ public final class GenericCodec {
         }
 
         private MessageDef buildDef(Proto.Message m) {
+            return buildDef(m, 1);
+        }
+
+        private MessageDef buildDef(Proto.Message m, int depth) {
+            if (depth > Wire.MAX_DEPTH) {
+                throw new IllegalArgumentException("descriptor nesting exceeds "
+                        + Wire.MAX_DEPTH);
+            }
             MessageDef done = byName.get(m.fullName);
             if (done != null) {
                 return done;
@@ -179,7 +200,7 @@ public final class GenericCodec {
             }
             finishDef(d, fs, oneofs);
             for (Proto.Message n : m.nested) {
-                buildDef(n);
+                buildDef(n, depth + 1);
             }
             return d;
         }
@@ -285,11 +306,19 @@ public final class GenericCodec {
             }
             d.hasRequired = req;
             d.fields = fs.toArray(new Field[0]);
-            d.slotByFnum = new int[max + 1];
-            Arrays.fill(d.slotByFnum, -1);
+            if (max <= 512 && max <= fs.size() * 8 + 8) {
+                d.slotByFnum = new int[max + 1];
+                Arrays.fill(d.slotByFnum, -1);
+            } else {
+                // Dense only when bounded, like the C core's fnum map: one
+                // field numbered 536870911 must not allocate a 2 GiB array.
+                d.slotByFnum = null;
+            }
             d.byName.clear();
             for (int i = 0; i < d.fields.length; i++) {
-                d.slotByFnum[d.fields[i].number] = i;
+                if (d.slotByFnum != null) {
+                    d.slotByFnum[d.fields[i].number] = i;
+                }
                 d.byName.put(d.fields[i].fieldName, i);
             }
             d.oneofByName.clear();
@@ -370,11 +399,19 @@ public final class GenericCodec {
             }
             d.hasRequired = req;
             d.fields = fs.toArray(new Field[0]);
-            d.slotByFnum = new int[max + 1];
-            Arrays.fill(d.slotByFnum, -1);
+            if (max <= 512 && max <= fs.size() * 8 + 8) {
+                d.slotByFnum = new int[max + 1];
+                Arrays.fill(d.slotByFnum, -1);
+            } else {
+                // Dense only when bounded, like the C core's fnum map: one
+                // field numbered 536870911 must not allocate a 2 GiB array.
+                d.slotByFnum = null;
+            }
             d.byName.clear();
             for (int i = 0; i < d.fields.length; i++) {
-                d.slotByFnum[d.fields[i].number] = i;
+                if (d.slotByFnum != null) {
+                    d.slotByFnum[d.fields[i].number] = i;
+                }
                 d.byName.put(d.fields[i].fieldName, i);
             }
             d.oneofByName.clear();
@@ -530,12 +567,12 @@ public final class GenericCodec {
         }
 
         private int slot(int fnum) {
-            if (fnum < 0 || fnum >= def.slotByFnum.length
-                    || def.slotByFnum[fnum] < 0) {
+            int s = def.lookup(fnum);
+            if (s < 0) {
                 throw new IllegalArgumentException(def.fullName
                         + " has no field " + fnum);
             }
-            return def.slotByFnum[fnum];
+            return s;
         }
 
         private int slotByName(String name) {
@@ -1452,7 +1489,7 @@ public final class GenericCodec {
                 closed = true; // our end-group; tag already consumed
                 break;
             }
-            int s = fnum < def.slotByFnum.length ? def.slotByFnum[fnum] : -1;
+            int s = def.lookup(fnum);
             if (s < 0 || wtIncompatible(def.fields[s], wt)) {
                 retainUnknown(m, r, fieldStart, fnum, wt, depth);
                 continue;
@@ -1661,7 +1698,7 @@ public final class GenericCodec {
             if (fnum == 0 || wt > Wire.WT_FIXED32 || wt == 4) {
                 throw new IllegalArgumentException("bad tag " + tag);
             }
-            int s = fnum < def.slotByFnum.length ? def.slotByFnum[fnum] : -1;
+            int s = def.lookup(fnum);
             if (s < 0 || wtIncompatible(def.fields[s], wt)) {
                 validateUnknown(r, fnum, wt, depth);
                 continue;

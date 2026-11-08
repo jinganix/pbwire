@@ -7,8 +7,9 @@
  *   ./build/fuzz_decode < corpus.bin        # one input
  *   make fuzz                               # fixed corpus + mutation burst
  *
- * Exit 0 unless an ASan/UBSan trap fires: any nonzero status or crash is a
- * bug. Output is a one-line verdict summary for corpus bookkeeping.
+ * Exit 0 unless an ASan/UBSan trap fires or the two decode paths disagree
+ * (bounded vs unbounded verdict); a crash is always a bug. Output is a one-line
+ * verdict summary for corpus bookkeeping.
  */
 
 #include "pbwire.h"
@@ -20,6 +21,8 @@
 
 static pbw_schema *g_schema;
 static const pbw_descriptor *g_msg;
+/* Cases where the two decode entry points disagreed: the gate must fail. */
+static int g_verdict_mismatch;
 
 static void
 build_schema(void)
@@ -119,13 +122,13 @@ run_frame(const uint8_t *buf, size_t len, unsigned frame)
         /* path 3: bounded decode agrees on the verdict class */
         {
             pbw_message *m2 = NULL;
-            pbw_status st2 =
-                pbw_decode_limits(g_msg, buf, len, &lim, &m2);
+            pbw_status st2 = pbw_decode_limits(g_msg, buf, len, &lim, &m2);
+
             if ((st2 == PBW_OK) != 1) {
                 printf("LIMIT-MISMATCH ");
-            } else {
-                pbw_message_free(m2);
+                g_verdict_mismatch = 1;
             }
+            pbw_message_free(m2);
         }
         pbw_message_free(msg);
     }
@@ -176,7 +179,6 @@ main(int argc, char **argv)
 {
     static uint8_t input[1 << 20];
     size_t total = fread(input, 1, sizeof(input), stdin);
-    size_t pos = 0;
     unsigned frame = 0;
 
     if (argc > 1 && strcmp(argv[1], "desc") == 0) {
@@ -188,32 +190,48 @@ main(int argc, char **argv)
     if (argc > 1 && strcmp(argv[1], "json") == 0) {
         run_json_frame((const char *)input, total, 0);
         pbw_schema_free(g_schema);
-        return 0;
+        return g_verdict_mismatch ? 1 : 0;
     }
     if (argc > 1 && strcmp(argv[1], "text") == 0) {
         run_text_frame((const char *)input, total, 0);
         pbw_schema_free(g_schema);
-        return 0;
+        return g_verdict_mismatch ? 1 : 0;
     }
+    /* A file may be a [u16 len][payload]* frame stream, but only accept that
+     * reading when it consumes every byte: a corpus file that merely starts
+     * with frame-looking bytes must reach the decoder whole, and a truncated
+     * tail must not be swallowed. */
     if (total >= 2) {
-        size_t probe = (size_t)input[0] | ((size_t)input[1] << 8);
-        if (probe + 2 <= total) {
-            while (pos + 2 <= total && frame < 4096) {
-                size_t len =
-                    (size_t)input[pos] | ((size_t)input[pos + 1] << 8);
-                pos += 2;
-                if (len > total - pos) {
-                    break; /* truncated tail: not a bug, stop */
-                }
-                run_frame(input + pos, len, frame++);
-                pos += len;
+        size_t q = 0;
+        size_t nframes = 0;
+        int framed = 1;
+
+        while (q + 2 <= total) {
+            size_t len = (size_t)input[q] | ((size_t)input[q + 1] << 8);
+
+            q += 2;
+            if (len > total - q) {
+                framed = 0;
+                break;
+            }
+            q += len;
+            nframes++;
+        }
+        if (framed && nframes > 0 && q == total) {
+            q = 0;
+            while (q + 2 <= total && frame < 4096) {
+                size_t len = (size_t)input[q] | ((size_t)input[q + 1] << 8);
+
+                q += 2;
+                run_frame(input + q, len, frame++);
+                q += len;
             }
             printf("frames=%u\n", frame);
             pbw_schema_free(g_schema);
-            return 0;
+            return g_verdict_mismatch ? 1 : 0;
         }
     }
     run_frame(input, total, 0);
     pbw_schema_free(g_schema);
-    return 0;
+    return g_verdict_mismatch ? 1 : 0;
 }

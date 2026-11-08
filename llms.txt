@@ -7,14 +7,14 @@
 > header, about 13k lines of C (roughly 7.5k binary codec, the rest the JSON mapping and text
 > format), zero runtime dependencies.
 
-Facts: source at <https://github.com/jinganix/pbwire>, license Apache-2.0, version `0.1.11`
+Facts: source at <https://github.com/jinganix/pbwire>, license Apache-2.0, version `0.1.14`
 (`VERSION` is the source of truth, `project(pbwire VERSION ...)` in `CMakeLists.txt` matches it). Encodings are byte-identical to `protoc 36.2`
-and pass Google's official conformance suites: binary + JSON 2742 successes, 0 skipped (2 expected
+and pass Google's official conformance suites: binary + JSON 2745 successes, 0 skipped (2 expected
 failures that the reference C++ testee fails identically:
 `Required.Proto2/Proto3.ProtobufInput.BadTag_FieldNumberSlightlyTooHigh`; pbwire additionally
 passes 4 JSON tests the reference fails, `SingleValueForRepeatedFieldInt32/Message` on both
-syntaxes) and text 445 successes with 0 failures — including 4 the reference itself fails
-(bad-UTF-8 strings, `\U` past the planes).
+syntaxes) and text 443 successes with 0 failures (2 recommended cases where a surrogate-pair
+`\u` escape is accepted instead of rejected are warnings, not failures).
 Requirements: a C99 compiler for the core;
 CMake + C++17 + libprotobuf only for the optional `.proto` importer `pbwire-protoc`.
 
@@ -83,7 +83,7 @@ C++ runtime), `make bench`, `make bench-c` (C structs vs protoc C++). Optional, 
 - [docs/guide.md](docs/guide.md): the C API walk-through — hand-built schema, `FileDescriptorSet`
   loading with its rules, the `pbw_ctx` loop and retain cap, `pbw_pool`, length-delimited
   framing, `pbw_limits`, deterministic encode, JSON and text entry points.
-- [docs/testing.md](docs/testing.md): the five verification layers (self-check, pinned reference
+- [docs/testing.md](docs/testing.md): the fifteen verification layers (self-check, pinned reference
   bytes, `make difftest`, the official conformance suite with its exact pass counts and the two
   expected failures, per-binding tests) and what each one can catch.
 - [docs/faq.md](docs/faq.md): syntax support, JSON/text, thread safety, unknown fields, untrusted
@@ -144,8 +144,9 @@ C++ runtime), `make bench`, `make bench-c` (C structs vs protoc C++). Optional, 
   `pbw_message_unknown_bytes`, `pbw_message_unknown_len`.
 - Values: `pbw_value_new_int`, `pbw_value_new_uint`, `pbw_value_new_bool`, `pbw_value_new_float`,
   `pbw_value_new_double`, `pbw_value_new_string`, `pbw_value_new_bytes`, `pbw_value_new_message`
-  (+ `pbw_value_new_int_ctx`, `pbw_value_new_uint_ctx`, `pbw_value_new_bytes_ctx` arena twins),
-  `pbw_value_free`; typed getters `pbw_value_get_int32`, `pbw_value_get_uint`,
+  (+ `pbw_value_new_uint_ctx`, `pbw_value_new_bytes_ctx` arena twins),
+  `pbw_value_free`; typed getters `pbw_value_get_int` (sign-extended 64-bit view of every signed width),
+  `pbw_value_get_int32`, `pbw_value_get_uint`,
   `pbw_value_get_uint32`, `pbw_value_get_bool`, `pbw_value_get_float`, `pbw_value_get_double`,
   `pbw_value_get_string`, `pbw_value_get_bytes`, `pbw_value_get_message`, `pbw_value_get_kind`;
   repeated access with `pbw_value_count` / `pbw_value_at`.

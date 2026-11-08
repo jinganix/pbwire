@@ -477,8 +477,19 @@ func writeCsharpField(b *strings.Builder, f *model.File, n *csNode, field model.
 	case field.NeedsHas && !field.Required:
 		word, bit := csOptBit(n.msg, field)
 		bits := fmt.Sprintf("_hasBits%d", word)
-		mask := 1 << bit
-		fmt.Fprintf(b, "%sprivate %s %s_;\n", indent, csScalar(field, cur, byLocal), strings.ToLower(prop[:1])+prop[1:])
+		// int32, not untyped Go int: bit 31 is a legal has-bit position, and
+		// `1 << 31` would print 2147483648, which no int in C# can hold.
+		mask := int32(1) << uint(bit)
+		// A string/bytes field needs a non-null default: GetHashCode and
+		// Equals run on a message where it was never set.
+		init := ""
+		switch field.Kind {
+		case protoreflect.StringKind:
+			init = " = \"\""
+		case protoreflect.BytesKind:
+			init = " = global::Google.Protobuf.ByteString.Empty"
+		}
+		fmt.Fprintf(b, "%sprivate %s %s_%s;\n", indent, csScalar(field, cur, byLocal), strings.ToLower(prop[:1])+prop[1:], init)
 		fmt.Fprintf(b, "%spublic %s %s { get { return %s_; } set { %s_ = value; %s |= %d; } }\n", indent, csScalar(field, cur, byLocal), prop, strings.ToLower(prop[:1])+prop[1:], strings.ToLower(prop[:1])+prop[1:], bits, mask)
 		fmt.Fprintf(b, "%s/// <summary>Gets whether the %q field is set</summary>\n", indent, field.Name)
 		fmt.Fprintf(b, "%spublic bool Has%s { get { return (%s & %d) != 0; } }\n", indent, prop, bits, mask)
@@ -570,6 +581,8 @@ func writeCsharpOneof(b *strings.Builder, f *model.File, n *csNode, o string, in
 			fmt.Fprintf(b, "%s    set { %s_ = global::Google.Protobuf.ProtoPreconditions.CheckNotNull(value, \"value\"); %sCase_ = %s.%s; }\n", indent, o, o, caseName, p)
 		} else if field.Message != "" {
 			fmt.Fprintf(b, "%s    set { %s_ = value; %sCase_ = value == null ? %s.None : %s.%s; }\n", indent, o, o, caseName, caseName, p)
+		} else if field.Kind == protoreflect.BytesKind {
+			fmt.Fprintf(b, "%s    set { %s_ = global::Google.Protobuf.ProtoPreconditions.CheckNotNull(value, \"value\"); %sCase_ = %s.%s; }\n", indent, o, o, caseName, p)
 		} else {
 			fmt.Fprintf(b, "%s    set { %s_ = value; %sCase_ = %s.%s; }\n", indent, o, o, caseName, p)
 		}
@@ -634,7 +647,17 @@ func writeCsharpCodec(b *strings.Builder, f *model.File, n *csNode, indent strin
 			continue
 		}
 		p := csProp(field)
-		fmt.Fprintf(b, "%s    hash ^= %s.GetHashCode();\n", indent, p)
+		switch {
+		case field.Message != "" && !field.Repeated:
+			// An absent singular message field is null; protoc hashes 0.
+			fmt.Fprintf(b, "%s    hash ^= (%s == null ? 0 : %s.GetHashCode());\n", indent, p, p)
+		case field.Kind == protoreflect.FloatKind:
+			fmt.Fprintf(b, "%s    hash ^= global::Google.Protobuf.Collections.ProtobufEqualityComparers.BitwiseSingleEqualityComparer.GetHashCode(%s);\n", indent, p)
+		case field.Kind == protoreflect.DoubleKind:
+			fmt.Fprintf(b, "%s    hash ^= global::Google.Protobuf.Collections.ProtobufEqualityComparers.BitwiseDoubleEqualityComparer.GetHashCode(%s);\n", indent, p)
+		default:
+			fmt.Fprintf(b, "%s    hash ^= %s.GetHashCode();\n", indent, p)
+		}
 	}
 	for _, o := range csOneofs(m) {
 		fmt.Fprintf(b, "%s    hash ^= %sCase.GetHashCode();\n", indent, csPascal(o))
@@ -729,7 +752,18 @@ func writeCsharpCopy(b *strings.Builder, f *model.File, field model.Field, inden
 		fmt.Fprintf(b, "%sif (other.%s != null) { if (%s == null) { %s = new %s(); } %s.MergeFrom(other.%s); }\n",
 			indent, p, p, p, csFieldPath(f, field, cur, byLocal), p, p)
 	case field.Oneof != "":
-		fmt.Fprintf(b, "%s%s = other.%s;\n", indent, p, p)
+		/* Copy the member the source actually set: assigning every member
+		 * would reset the case word to None (each setter clears it). */
+		{
+			caseName := csPascal(field.Oneof) + "OneofCase"
+			if field.Message != "" {
+				fmt.Fprintf(b, "%sif (other.%sCase == %s.%s) { %s = other.%s?.Clone(); }\n",
+					indent, csPascal(field.Oneof), caseName, p, p, p)
+			} else {
+				fmt.Fprintf(b, "%sif (other.%sCase == %s.%s) { %s = other.%s; }\n",
+					indent, csPascal(field.Oneof), caseName, p, p, p)
+			}
+		}
 	default:
 		if field.NeedsHas && !field.Required {
 			fmt.Fprintf(b, "%sif (other.Has%s) { %s = other.%s; }\n", indent, p, p, p)
@@ -748,6 +782,18 @@ func writeCsharpEquals(b *strings.Builder, n *csNode, field model.Field, indent 
 		fmt.Fprintf(b, "%sif (!object.Equals(%s, other.%s)) { return false; }\n", indent, p, p)
 	case field.Repeated:
 		fmt.Fprintf(b, "%sif (!%s.Equals(other.%s)) { return false; }\n", indent, p, p)
+	case field.Kind == protoreflect.FloatKind:
+		if field.NeedsHas && !field.Required {
+			fmt.Fprintf(b, "%sif (Has%s != other.Has%s || (Has%s && !global::Google.Protobuf.Collections.ProtobufEqualityComparers.BitwiseSingleEqualityComparer.Equals(%s, other.%s))) { return false; }\n", indent, p, p, p, p, p)
+		} else {
+			fmt.Fprintf(b, "%sif (!global::Google.Protobuf.Collections.ProtobufEqualityComparers.BitwiseSingleEqualityComparer.Equals(%s, other.%s)) { return false; }\n", indent, p, p)
+		}
+	case field.Kind == protoreflect.DoubleKind:
+		if field.NeedsHas && !field.Required {
+			fmt.Fprintf(b, "%sif (Has%s != other.Has%s || (Has%s && !global::Google.Protobuf.Collections.ProtobufEqualityComparers.BitwiseDoubleEqualityComparer.Equals(%s, other.%s))) { return false; }\n", indent, p, p, p, p, p)
+		} else {
+			fmt.Fprintf(b, "%sif (!global::Google.Protobuf.Collections.ProtobufEqualityComparers.BitwiseDoubleEqualityComparer.Equals(%s, other.%s)) { return false; }\n", indent, p, p)
+		}
 	default:
 		if field.NeedsHas && !field.Required {
 			fmt.Fprintf(b, "%sif (Has%s != other.Has%s || (Has%s && %s != other.%s)) { return false; }\n", indent, p, p, p, p, p)
@@ -759,6 +805,10 @@ func writeCsharpEquals(b *strings.Builder, n *csNode, field model.Field, indent 
 
 func writeCsharpEncode(b *strings.Builder, field model.Field, indent string) {
 	p := csProp(field)
+	if field.Required && field.Message != "" {
+		fmt.Fprintf(b, "%sif (%s == null) { throw new global::System.InvalidOperationException(\"required field %s is not set\"); }\n",
+			indent, p, field.Name)
+	}
 	cond := csEncodeCond(field, p)
 	if cond != "" {
 		fmt.Fprintf(b, "%sif (%s) {\n", indent, cond)
@@ -798,7 +848,8 @@ func writeCsharpEncodeOne(b *strings.Builder, field model.Field, p string, inden
 	case field.Repeated && field.Message != "":
 		fmt.Fprintf(b, "%sforeach (var v in %s) { v.EncodeInto(msg.SetMessage(%s)); }\n", indent, p, key)
 	case field.Repeated:
-		fmt.Fprintf(b, "%sforeach (var v in %s) { %s }\n", indent, p, strings.Replace(call, p, "v", 1))
+		fmt.Fprintf(b, "%sforeach (var v in %s) { msg.Set(%s, %s); }\n", indent, p,
+			key, csSetArg(field, "v"))
 	case field.Message != "":
 		fmt.Fprintf(b, "%s%s.EncodeInto(msg.SetMessage(%s));\n", indent, p, key)
 	default:

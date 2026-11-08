@@ -269,6 +269,13 @@ final class Schema {
   static final _finalizer = Finalizer<Pointer<Void>>(_lib.schemaFree);
 
   Pointer<Void> _handle;
+  bool _closed = false;
+
+  void _ensureOpen() {
+    if (_closed || _handle == nullptr) {
+      throw PbwireException(-1, 'schema is closed');
+    }
+  }
 
   /// Loads a descriptor set written by `protoc --descriptor_set_out`.
   factory Schema.load(String path) {
@@ -307,6 +314,7 @@ final class Schema {
 
   /// Looks up a message by fully qualified name, e.g. `structtest.Scalars3`.
   Type message(String fullName) {
+    _ensureOpen();
     final name = fullName.toNativeUtf8();
     try {
       final desc = _lib.schemaFind(_handle, name);
@@ -321,6 +329,7 @@ final class Schema {
 
   void close() {
     if (_handle != nullptr) {
+      _closed = true;
       _finalizer.detach(this);
       _lib.schemaFree(_handle);
       _handle = nullptr;
@@ -338,10 +347,16 @@ final class Type {
   final Pointer<Void> _desc;
   final Map<String, Field> _fields = {};
 
-  String get name => _lib.descriptorName(_desc).toDartString();
+  void _ensureOpen() => _schema._ensureOpen();
+
+  String get name {
+    _ensureOpen();
+    return _lib.descriptorName(_desc).toDartString();
+  }
 
   /// Resolves a field once and caches it: a later set/get costs one native call.
   Field field(String name) {
+    _ensureOpen();
     final cached = _fields[name];
     if (cached != null) {
       return cached;
@@ -352,7 +367,7 @@ final class Type {
       if (ptr == nullptr) {
         throw PbwireException(-1, '$name: no such field on ${this.name}');
       }
-      return _fields[name] = Field._(ptr);
+      return _fields[name] = Field._(ptr, this);
     } finally {
       malloc.free(native);
     }
@@ -360,6 +375,7 @@ final class Type {
 
   /// A new empty message; freed by [Message.close] (or the finalizer).
   Message newMessage() {
+    _ensureOpen();
     final ptr = _lib.messageNew(_desc);
     if (ptr == nullptr) {
       throw PbwireException(-1, 'pbw_message_new: out of memory');
@@ -369,6 +385,7 @@ final class Type {
 
   /// Decodes wire bytes; unknown fields are preserved and re-encoded.
   Message decode(List<int> wire) {
+    _ensureOpen();
     final data = _copyIn(wire);
     final out = calloc<Pointer<Void>>();
     try {
@@ -390,6 +407,7 @@ final class Type {
 
   /// The message type of a MESSAGE/GROUP field, for nested access.
   Type? nestedType(Field field) {
+    _ensureOpen();
     final desc = _lib.fieldMessageType(field._ptr);
     return desc == nullptr ? null : Type._(_schema, desc);
   }
@@ -397,16 +415,35 @@ final class Type {
 
 /// A resolved field handle.
 final class Field {
-  Field._(this._ptr);
+  Field._(this._ptr, this._type);
 
   final Pointer<Void> _ptr;
 
-  String get name => _lib.fieldName(_ptr).toDartString();
-  int get number => _lib.fieldNumber(_ptr);
-  int get type => _lib.fieldType(_ptr);
+  /// Keeps the Type (and through it the Schema) alive while the field is used.
+  final Type _type;
+
+  void _check() => _type._ensureOpen();
+
+  String get name {
+    _check();
+    return _lib.fieldName(_ptr).toDartString();
+  }
+
+  int get number {
+    _check();
+    return _lib.fieldNumber(_ptr);
+  }
+
+  int get type {
+    _check();
+    return _lib.fieldType(_ptr);
+  }
 
   /// 3 for repeated.
-  int get label => _lib.fieldLabel(_ptr);
+  int get label {
+    _check();
+    return _lib.fieldLabel(_ptr);
+  }
 }
 
 /* --------------------------------------------------------------- the message */
@@ -436,6 +473,22 @@ final class Message {
       Message._(type, handle, false, parent);
 
   Type get type => _type;
+
+  /// A root owns the arena; a view only borrows a slice of it. Closing any
+  /// ancestor frees the memory a view points into, so every access checks the
+  /// whole parent chain first (the Dart object alone does not keep it alive --
+  /// the native tree does).
+  void _check() {
+    _type._ensureOpen();
+    if (_handle == nullptr) {
+      throw PbwireException(-1, 'message is closed');
+    }
+    for (Message? p = _parent; p != null; p = p._parent) {
+      if (p._handle == nullptr) {
+        throw PbwireException(-1, 'parent message is closed');
+      }
+    }
+  }
 
   /* ---------------------------------------------------------------- setting */
 
@@ -474,6 +527,7 @@ final class Message {
 
   /// Nested message for a MESSAGE field, created in place (or returned as it is).
   Message setMessage(Object field) {
+    _check();
     final resolved = _resolve(field);
     final ptr = _lib.messageSetMessage(_handle, resolved.number);
     final type = _type.nestedType(resolved);
@@ -485,6 +539,8 @@ final class Message {
 
   /// Appends to a repeated field or replaces a singular one.
   Message _store(Field field, Pointer<Void> value) {
+    _check();
+    field._check();
     if (value == nullptr) {
       throw PbwireException(-1, 'set ${field.name}: out of memory');
     }
@@ -497,11 +553,16 @@ final class Message {
     return this;
   }
 
-  void clear(Object field) => _lib.messageClear(_handle, _resolve(field).number);
+  void clear(Object field) {
+    _check();
+    _lib.messageClear(_handle, _resolve(field).number);
+  }
 
   /* ---------------------------------------------------------------- reading */
 
   Pointer<Void>? _value(Field field) {
+    _check();
+    field._check();
     final ptr = _lib.messageGet(_handle, field._ptr);
     return ptr == nullptr ? null : ptr;
   }
@@ -592,6 +653,7 @@ final class Message {
 
   /// Encoded bytes (one allocation by the core, one copy into a Dart list).
   Uint8List encode() {
+    _check();
     final out = calloc<Pointer<Uint8>>();
     final len = malloc<IntPtr>();
     try {
@@ -609,11 +671,15 @@ final class Message {
   }
 
   void close() {
-    if (_handle != nullptr && _owned) {
+    if (_handle == nullptr) {
+      return;
+    }
+    if (_owned) {
       _finalizer.detach(this);
       _lib.messageFree(_handle);
-      _handle = nullptr;
     }
+    /* A view closes itself too (its parent link stays for the ancestor check). */
+    _handle = nullptr;
   }
 
   Field _resolve(Object field) => switch (field) {
@@ -631,20 +697,26 @@ final class Value {
   final Message _owner;
   final Type? _type;
 
-  int asInt() => _lib.valueInt(_ptr);
-  bool asBool() => _lib.valueBool(_ptr) != 0;
-  double asFloat() => _lib.valueFloat(_ptr);
-  double asDouble() => _lib.valueDouble(_ptr);
+  /* The value lives in the owner's arena: check it before every read. */
+  Pointer<Void> get _handle {
+    _owner._check();
+    return _ptr;
+  }
+
+  int asInt() => _lib.valueInt(_handle);
+  bool asBool() => _lib.valueBool(_handle) != 0;
+  double asFloat() => _lib.valueFloat(_handle);
+  double asDouble() => _lib.valueDouble(_handle);
 
   String? asString() {
-    final ptr = _lib.valueString(_ptr);
+    final ptr = _lib.valueString(_handle);
     return ptr == nullptr ? null : ptr.toDartString();
   }
 
   Uint8List? asBytes() {
     final len = malloc<IntPtr>();
     try {
-      final ptr = _lib.valueBytes(_ptr, len);
+      final ptr = _lib.valueBytes(_handle, len);
       return ptr == nullptr ? null : Uint8List.fromList(ptr.cast<Uint8>().asTypedList(len.value));
     } finally {
       malloc.free(len);
@@ -652,7 +724,7 @@ final class Value {
   }
 
   Message? asMessage() {
-    final ptr = _lib.valueMessage(_ptr);
+    final ptr = _lib.valueMessage(_handle);
     final type = _type;
     if (ptr == nullptr || type == null) {
       return null;

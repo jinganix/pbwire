@@ -14,6 +14,10 @@ message Inner {
   string s = 1;
 }
 
+// No fields on purpose: the table encoder must reject every key instead of
+// walking a NULL name cache.
+message Empty {}
+
 message Sample {
   int32 i32 = 1;
   int64 i64 = 2;

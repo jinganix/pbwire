@@ -269,6 +269,10 @@ typedef struct sc_entry {
 } sc_entry;
 
 struct sc_plan {
+    /* The plan, its entries and its tail sums in one allocation: init is a
+     * handful of mallocs today (plan, entries, tail, then the optional
+     * tables) and that dominates a one-shot init. */
+    void *mem;
     sc_entry *e; /* ascending field number = canonical wire order */
     size_t n;
     uint32_t *byfnum; /* fnum -> index + 1, 0 = unknown; NULL = binary search */
@@ -408,12 +412,9 @@ plan_free(sc_plan *p)
     for (i = 0; i < p->n; i++) {
         plan_free(p->e[i].sub);
     }
-    free(p->e);
-    free(p->tail);
-    free(p->byfnum);
     free(p->dflts);
     free(p->reqs);
-    free(p);
+    free(p->mem); /* byfnum, entries, tail and the sc_plan itself */
 }
 
 /* Insertion sort: layouts are written in field order, so this is close to
@@ -439,23 +440,49 @@ plan_build(const pbw_descriptor *desc, const pbw_struct_field_t *fields,
            size_t nfields, unsigned depth, sc_plan **out)
 {
     sc_plan *p;
-    size_t i, ndflts = 0, nreqs = 0, maxfnum = 0;
+    size_t i, ebytes, tbytes, bynum, ndflts = 0, nreqs = 0, maxfnum = 0;
     pbw_status status = PBW_ERR_INVALID;
 
     *out = NULL;
     if (depth >= SC_MAX_DEPTH) {
         return PBW_ERR_LIMIT;
     }
-    p = (sc_plan *)calloc(1, sizeof(*p));
+    /* Each level validates its rows against its own descriptor: the root
+     * gets it from the caller, a sub-message from its field below. */
+    if (desc == NULL || pbw_descriptor_field_count(desc) != nfields) {
+        return PBW_ERR_INVALID;
+    }
+    /* One allocation for the plan, its entries, the tail sums and (when the
+     * numbers are dense) the fnum table; the block is zeroed, so the tail's
+     * terminator and the table start out 0. */
+    if (nfields > SIZE_MAX / (sizeof(sc_entry) + sizeof(size_t))) {
+        return PBW_ERR_NOMEM;
+    }
+    for (i = 0; i < nfields; i++) {
+        maxfnum = fields[i].fnum > maxfnum ? fields[i].fnum : maxfnum;
+    }
+    /* A direct fnum -> entry map is one load per field on decode, which is
+     * what a generated switch does; for sparse field numbers it would be a
+     * big table for few fields, so fall back to binary search there. */
+    bynum = 0;
+    if (maxfnum < 8 * (nfields + 1)) {
+        bynum = maxfnum + 1;
+    }
+    ebytes = nfields * sizeof(sc_entry);
+    tbytes = (nfields + 1) * sizeof(size_t);
+    if (ebytes > SIZE_MAX - sizeof(*p) - tbytes ||
+        bynum > (SIZE_MAX - sizeof(*p) - ebytes - tbytes) / sizeof(uint32_t)) {
+        return PBW_ERR_NOMEM;
+    }
+    p = (sc_plan *)calloc(1, sizeof(*p) + ebytes + tbytes +
+                                 bynum * sizeof(uint32_t));
     if (p == NULL) {
         return PBW_ERR_NOMEM;
     }
+    p->mem = p;
+    p->e = (sc_entry *)(void *)((char *)p + sizeof(*p));
+    p->tail = (size_t *)(void *)((char *)p + sizeof(*p) + ebytes);
     p->n = nfields;
-    p->e = (sc_entry *)calloc(nfields ? nfields : 1, sizeof(*p->e));
-    if (p->e == NULL) {
-        plan_free(p);
-        return PBW_ERR_NOMEM;
-    }
     for (i = 0; i < nfields; i++) {
         const pbw_struct_field_t *row = &fields[i];
         sc_entry *e = &p->e[i];
@@ -488,41 +515,53 @@ plan_build(const pbw_descriptor *desc, const pbw_struct_field_t *fields,
         }
         if ((e->op & SC_OP_MASK) == SC_OP_MSG ||
             (e->op & SC_OP_MASK) == SC_OP_GRP) {
-            e->rows = row->fields;
-            e->nrows = row->nfields;
-            pbw_status sub = plan_build(desc, row->fields, row->nfields,
-                                        depth + 1, &e->sub);
-
-            if (sub != PBW_OK) {
-                status = sub;
+            if (e->elem == 0) {
+                /* A zero elem for a sub-message row allocates a malloc(0)
+                 * block that the decoder then writes a whole struct into. */
+                status = PBW_ERR_INVALID;
                 goto fail;
             }
+            e->rows = row->fields;
+            e->nrows = row->nfields;
         }
-        maxfnum = row->fnum > maxfnum ? row->fnum : maxfnum;
         ndflts += (e->op & SC_DFLT) != 0;
         nreqs += (e->op & SC_REQ) != 0;
     }
     plan_sort(p->e, p->n);
+    /* The schema is the truth for field numbers: a linked descriptor is
+     * sorted by number too, so one compare per entry proves the layout holds
+     * every field exactly once. A dropped, unknown or duplicated number
+     * fails here instead of encoding a field the message does not have (and
+     * keeps the fnum table below inside the schema's number range). */
+    for (i = 0; i < p->n; i++) {
+        const pbw_field *schema_field = pbw_descriptor_field_at(desc, i);
+        pbw_status sub;
+
+        if (schema_field == NULL ||
+            pbw_field_number(schema_field) != p->e[i].fnum) {
+            status = PBW_ERR_INVALID;
+            goto fail;
+        }
+        if ((p->e[i].op & SC_OP_MASK) != SC_OP_MSG &&
+            (p->e[i].op & SC_OP_MASK) != SC_OP_GRP) {
+            continue;
+        }
+        sub = plan_build(pbw_field_message_type(schema_field), p->e[i].rows,
+                         p->e[i].nrows, depth + 1, &p->e[i].sub);
+        if (sub != PBW_OK) {
+            status = sub;
+            goto fail;
+        }
+    }
     p->maxfnum = maxfnum;
     /* Suffix worst-case bytes for the unchecked encode path (see enc_msg).
      * Computed after the sort; order does not matter to the sum. */
-    p->tail = (size_t *)calloc(p->n + 1, sizeof(*p->tail));
-    if (p->tail == NULL) {
-        status = PBW_ERR_NOMEM;
-        goto fail;
-    }
     for (i = p->n; i > 0; i--) {
         p->tail[i - 1] = p->tail[i] + entry_bounded(&p->e[i - 1]);
     }
-    /* A direct fnum -> entry map is one load per field on decode, which is
-     * what a generated switch does; for sparse field numbers it would be a
-     * big table for few fields, so fall back to binary search there. */
-    if (maxfnum + 1 <= 8 * (p->n + 1)) {
-        p->byfnum = (uint32_t *)calloc(maxfnum + 1, sizeof(*p->byfnum));
-        if (p->byfnum == NULL) {
-            status = PBW_ERR_NOMEM;
-            goto fail;
-        }
+    if (bynum > 0) {
+        p->byfnum = (uint32_t *)(void *)((char *)p + sizeof(*p) + ebytes +
+                                         tbytes);
         for (i = 0; i < p->n; i++) {
             if (p->byfnum[p->e[i].fnum] == 0) {
                 p->byfnum[p->e[i].fnum] = (uint32_t)i + 1;
@@ -589,6 +628,12 @@ sb_reserve(sbuf *b, size_t extra)
     uint8_t *data;
 
     if (b->status != PBW_OK) {
+        return 0;
+    }
+    if (extra > SIZE_MAX - b->len) {
+        /* A wrapped total would reserve a small block and then write past
+         * it; a caller-supplied length is untrusted input. */
+        b->status = PBW_ERR_LIMIT;
         return 0;
     }
     need = b->len + extra;
@@ -1175,8 +1220,13 @@ static sc_block *
 block_new(size_t cap)
 {
     sc_block *b;
-    size_t total = sizeof(*b) + cap + 15;
+    size_t total;
 
+    /* +15 for the 16-byte alignment of block_data(), refused if it wraps. */
+    if (cap > SIZE_MAX - sizeof(sc_block) - 15) {
+        return NULL;
+    }
+    total = sizeof(*b) + cap + 15;
     b = (sc_block *)malloc(total);
     if (b == NULL) {
         return NULL;
@@ -1593,17 +1643,22 @@ clear_oneof_prev(const sc_entry *e, char *base, pbw_struct_arena *a)
 
 static pbw_status
 dec_msg(const sc_plan *p, rdr *r, char *base, pbw_struct_arena *a,
-        unsigned depth, uint32_t stop)
+        unsigned depth, uint32_t stop, int seed)
 {
     size_t i;
 
     if (depth >= SC_MAX_DEPTH) {
         return PBW_ERR_LIMIT;
     }
-    for (i = 0; i < p->ndflts; i++) {
-        const sc_entry *e = p->dflts[i];
+    /* `seed` is 0 when parsing into a slot that already holds an earlier copy
+     * of the same sub-message: re-seeding would overwrite decoded values (an
+     * enum default, for instance) that the second copy did not spell out. */
+    if (seed) {
+        for (i = 0; i < p->ndflts; i++) {
+            const sc_entry *e = p->dflts[i];
 
-        memcpy(base + e->off, &e->dflt, 4);
+            memcpy(base + e->off, &e->dflt, 4);
+        }
     }
     while (r->p < r->end) {
         uint32_t fnum;
@@ -1633,6 +1688,17 @@ dec_msg(const sc_plan *p, rdr *r, char *base, pbw_struct_arena *a,
         }
         op = e->op;
         v = base + e->off;
+
+        /* A known number with a wire type it cannot carry is an unknown field
+         * for the reference parsers too: skipping it must not touch the oneof
+         * case, or a bogus tag would select (and clear) a member. Oneof
+         * members are never packed, so the plain wire type is the only match. */
+        if (e->oneof != 0 && wt != e->wire) {
+            if (!rd_skip(r, fnum, wt, depth)) {
+                return PBW_ERR_INVALID;
+            }
+            continue;
+        }
 
         /* Oneof: a new member clears the previous one (last wins, like the
          * reference decoders); the case is set before the store so a later
@@ -1792,7 +1858,14 @@ dec_msg(const sc_plan *p, rdr *r, char *base, pbw_struct_arena *a,
                 }
                 *(char **)slot = dup;
             } else {
-                *(char **)v = dup;
+                char **dst = (char **)v;
+
+                /* Last wins: a repeated occurrence replaces the earlier copy,
+                 * which the caller's memory owns (an arena drops it). */
+                if (a == NULL) {
+                    free(*dst);
+                }
+                *dst = dup;
             }
             continue;
         }
@@ -1833,6 +1906,9 @@ dec_msg(const sc_plan *p, rdr *r, char *base, pbw_struct_arena *a,
             } else {
                 pbw_bytes_t *dst = (pbw_bytes_t *)v;
 
+                if (a == NULL) {
+                    free(dst->data);
+                }
                 dst->data = dup;
                 dst->len = len;
             }
@@ -1841,6 +1917,7 @@ dec_msg(const sc_plan *p, rdr *r, char *base, pbw_struct_arena *a,
         case SC_OP_MSG: {
             rdr inner;
             char *slot;
+            int fresh = seed;
 
             if (wt != e->wire) {
                 if (!rd_skip(r, fnum, wt, depth)) {
@@ -1857,25 +1934,36 @@ dec_msg(const sc_plan *p, rdr *r, char *base, pbw_struct_arena *a,
                     memset(slot, 0, e->elem);
                 }
             } else {
-                slot = (char *)sc_alloc0(a, e->elem);
+                /* A singular sub-message seen twice merges into the tree that
+                 * is already there, like the dynamic decoder and the
+                 * reference parsers (fields of the first copy are kept). */
+                slot = *(char **)v;
+                if (slot == NULL) {
+                    slot = (char *)sc_alloc0(a, e->elem);
+                    if (slot == NULL) {
+                        return PBW_ERR_NOMEM;
+                    }
+                    *(char **)v = slot;
+                } else {
+                    fresh = 0; /* merge into an existing copy */
+                }
             }
             if (slot == NULL) {
                 return PBW_ERR_NOMEM;
             }
             {
-                pbw_status status = dec_msg(e->sub, &inner, slot, a, depth + 1, 0);
+                pbw_status status = dec_msg(e->sub, &inner, slot, a, depth + 1,
+                                            0, fresh);
 
                 if (status != PBW_OK) {
                     return status;
                 }
             }
-            if ((op & SC_RPT) == 0) {
-                *(char **)v = slot;
-            }
             continue;
         }
         case SC_OP_GRP: {
             char *slot;
+            int fresh = seed;
 
             if (wt != e->wire) {
                 if (!rd_skip(r, fnum, wt, depth)) {
@@ -1889,21 +1977,29 @@ dec_msg(const sc_plan *p, rdr *r, char *base, pbw_struct_arena *a,
                     memset(slot, 0, e->elem);
                 }
             } else {
-                slot = (char *)sc_alloc0(a, e->elem);
+                /* Groups merge like message fields (same rule as SC_OP_MSG). */
+                slot = *(char **)v;
+                if (slot == NULL) {
+                    slot = (char *)sc_alloc0(a, e->elem);
+                    if (slot == NULL) {
+                        return PBW_ERR_NOMEM;
+                    }
+                    *(char **)v = slot;
+                } else {
+                    fresh = 0; /* merge into an existing copy */
+                }
             }
             if (slot == NULL) {
                 return PBW_ERR_NOMEM;
             }
             /* Same reader: contents run to the matching END_GROUP. */
             {
-                pbw_status status = dec_msg(e->sub, r, slot, a, depth + 1, e->fnum);
+                pbw_status status =
+                    dec_msg(e->sub, r, slot, a, depth + 1, e->fnum, fresh);
 
                 if (status != PBW_OK) {
                     return status;
                 }
-            }
-            if ((op & SC_RPT) == 0) {
-                *(char **)v = slot;
             }
             continue;
         }
@@ -2005,7 +2101,7 @@ pbw_struct_codec_decode(const pbw_struct_codec *codec, const uint8_t *wire,
     }
     r.p = wire;
     r.end = wire + wire_len;
-    status = dec_msg(codec->root, &r, (char *)base, a, 0, 0);
+    status = dec_msg(codec->root, &r, (char *)base, a, 0, 0, 1);
     if (status != PBW_OK && a == NULL) {
         /* Per-object allocations belong to the caller: hand them back so a
          * failed decode leaks nothing. */
@@ -2103,6 +2199,14 @@ pbw_struct_free(const pbw_struct_field_t *fields, size_t nfields, void *base)
         const pbw_struct_field_t *row = &fields[i];
         char *p = (char *)base + row->offset;
 
+        /* Oneof members alias one union slot: only the member the case word
+         * selects may release it, and it must release it as its own kind (a
+         * message member recurses into its sub-tree). Freeing every member's
+         * row would free a scalar's value as a pointer. */
+        if (row->oneof != 0 &&
+            *(const uint32_t *)((char *)base + row->cs) != row->fnum) {
+            continue;
+        }
         if (row->kind == PBW_SF_MESSAGE) {
             if (!row->repeated) {
                 void *item = *(void **)p;
@@ -2122,6 +2226,9 @@ pbw_struct_free(const pbw_struct_field_t *fields, size_t nfields, void *base)
                 }
                 free(items);
                 *(void **)p = NULL;
+                /* The array is gone: a retried decode or a second free would
+                 * otherwise walk a NULL array with the old count. */
+                *(size_t *)((char *)base + row->count) = 0;
             }
         } else if (row->kind == PBW_SF_BYTES) {
             if (!row->repeated) {
@@ -2139,6 +2246,7 @@ pbw_struct_free(const pbw_struct_field_t *fields, size_t nfields, void *base)
                 }
                 free(items);
                 *(void **)p = NULL;
+                *(size_t *)((char *)base + row->count) = 0;
             }
         } else if (row->kind == PBW_SF_STRING) {
             if (!row->repeated) {
@@ -2153,10 +2261,12 @@ pbw_struct_free(const pbw_struct_field_t *fields, size_t nfields, void *base)
                 }
                 free(items);
                 *(void **)p = NULL;
+                *(size_t *)((char *)base + row->count) = 0;
             }
         } else if (row->repeated) {
             free(*(void **)p);
             *(void **)p = NULL;
+            *(size_t *)((char *)base + row->count) = 0;
         }
     }
 }

@@ -40,6 +40,9 @@
 
 - (void)releaseContext:(PBWContext *)context
 {
+    if (![context markReleased]) {
+        return; /* second release of one wrapper: nothing to do */
+    }
     pbw_pool_release(_pool, context.ctx);
 }
 
