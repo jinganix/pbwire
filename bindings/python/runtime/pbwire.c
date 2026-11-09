@@ -142,6 +142,12 @@ sb_reserve(sbuf *b, size_t extra)
     if (b->failed) {
         return 0;
     }
+    if (extra > SIZE_MAX - b->len) {
+        /* A wrapped total would reserve a small block and then write past
+         * it. */
+        b->failed = 1;
+        return 0;
+    }
     need = b->len + extra;
     if (need <= b->cap) {
         return 1;
@@ -2432,8 +2438,7 @@ make_message(PyObject *schema_obj, const pbw_descriptor *desc, PyObject *cache)
         field_t *f = &mt->fields[i];
 
         if (field == NULL) {
-            Py_DECREF(self);
-            return NULL;
+            goto fail_built;
         }
         f->type = (uint8_t)pbw_field_type(field);
         f->name = PyUnicode_FromString(pbw_field_name(field));
@@ -2449,16 +2454,14 @@ make_message(PyObject *schema_obj, const pbw_descriptor *desc, PyObject *cache)
             mt->n_oneofs = f->oneof;
         }
         if (f->name == NULL) {
-            Py_DECREF(self);
-            return NULL;
+            goto fail_built;
         }
         {
             PyObject *idx = PyLong_FromSize_t(i);
 
             if (idx == NULL || PyDict_SetItem(mt->by_name, f->name, idx) < 0) {
                 Py_XDECREF(idx);
-                Py_DECREF(self);
-                return NULL;
+                goto fail_built;
             }
             Py_DECREF(idx);
         }
@@ -2473,18 +2476,33 @@ make_message(PyObject *schema_obj, const pbw_descriptor *desc, PyObject *cache)
             const pbw_descriptor *sub = pbw_field_message_type(field);
 
             if (sub == NULL) {
-                Py_DECREF(self);
-                return NULL;
+                goto fail_built;
             }
             f->sub = make_message(schema_obj, sub, cache);
             if (f->sub == NULL) {
-                Py_DECREF(self);
-                return NULL;
+                goto fail_built;
             }
         }
     }
     PyObject_GC_Track(self);
     return self;
+
+fail_built:
+    /* The cache was filled early to break recursive schemas, so a type that
+     * could not be completed has to be dropped from it: a later lookup would
+     * otherwise hand out a half-built type whose `sub` fields are still NULL,
+     * and the codec would dereference them. The original exception is kept
+     * across the delete. */
+    {
+        PyObject *etype = NULL, *evalue = NULL, *etb = NULL;
+
+        PyErr_Fetch(&etype, &evalue, &etb);
+        (void)PyDict_DelItem(cache, key);
+        PyErr_Clear();
+        PyErr_Restore(etype, evalue, etb);
+    }
+    Py_DECREF(self);
+    return NULL;
 }
 
 /* ---------------------------------------------------------------- schema */
@@ -2759,11 +2777,22 @@ PyInit_pbwire(void)
         Py_DECREF(m);
         return NULL;
     }
+    /* AddObject steals the reference on success and releases it on failure
+     * (3.10+), so a failure here only needs the module dropped. */
     Py_INCREF(&SchemaType);
-    PyModule_AddObject(m, "Schema", (PyObject *)&SchemaType);
+    if (PyModule_AddObject(m, "Schema", (PyObject *)&SchemaType) < 0) {
+        Py_DECREF(m);
+        return NULL;
+    }
     Py_INCREF(&MessageTypeType);
-    PyModule_AddObject(m, "MessageType", (PyObject *)&MessageTypeType);
+    if (PyModule_AddObject(m, "MessageType", (PyObject *)&MessageTypeType) < 0) {
+        Py_DECREF(m);
+        return NULL;
+    }
     Py_INCREF(&MessagePyType);
-    PyModule_AddObject(m, "Message", (PyObject *)&MessagePyType);
+    if (PyModule_AddObject(m, "Message", (PyObject *)&MessagePyType) < 0) {
+        Py_DECREF(m);
+        return NULL;
+    }
     return m;
 }
