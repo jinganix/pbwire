@@ -8,7 +8,7 @@ using Pbwire;
 namespace Xfile {
 
     public static class PbwireFile_Xfile {
-        private static volatile Schema _schema;
+        private static volatile Schema? _schema;
         private static readonly object _lock = new object();
 
         static PbwireFile_Xfile() { Init(); }

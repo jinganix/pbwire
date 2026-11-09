@@ -100,7 +100,7 @@ func writeCsharpHolder(b *strings.Builder, f *model.File, opt Options, holder st
 		enc = enc[n:]
 	}
 	b.WriteString("    public static class " + holder + " {\n")
-	b.WriteString("        private static volatile Schema _schema;\n")
+	b.WriteString("        private static volatile Schema? _schema;\n")
 	b.WriteString("        private static readonly object _lock = new object();\n\n")
 	if opt.Register {
 		fmt.Fprintf(b, "        static %s() { Init(); }\n\n", holder)
@@ -542,7 +542,8 @@ func csDefault(field model.Field) string {
 
 func writeCsharpOneof(b *strings.Builder, f *model.File, n *csNode, o string, indent string, cur []string, byLocal map[string]*csNode) {
 	m := n.msg
-	fmt.Fprintf(b, "%sprivate object %s_;\n", indent, o)
+	// null! so a never-set oneof satisfies the non-nullable storage type.
+	fmt.Fprintf(b, "%sprivate object %s_ = null!;\n", indent, o)
 	fmt.Fprintf(b, "%s/// <summary>Enum of possible cases for the %q oneof.</summary>\n", indent, o)
 	fmt.Fprintf(b, "%spublic enum %sOneofCase {\n", indent, csPascal(o))
 	fmt.Fprintf(b, "%s    None = 0,\n", indent)
@@ -580,7 +581,7 @@ func writeCsharpOneof(b *strings.Builder, f *model.File, n *csNode, o string, in
 		if field.Kind == protoreflect.StringKind {
 			fmt.Fprintf(b, "%s    set { %s_ = global::Google.Protobuf.ProtoPreconditions.CheckNotNull(value, \"value\"); %sCase_ = %s.%s; }\n", indent, o, o, caseName, p)
 		} else if field.Message != "" {
-			fmt.Fprintf(b, "%s    set { %s_ = value; %sCase_ = value == null ? %s.None : %s.%s; }\n", indent, o, o, caseName, caseName, p)
+			fmt.Fprintf(b, "%s    set { %s_ = value!; %sCase_ = value == null ? %s.None : %s.%s; }\n", indent, o, o, caseName, caseName, p)
 		} else if field.Kind == protoreflect.BytesKind {
 			fmt.Fprintf(b, "%s    set { %s_ = global::Google.Protobuf.ProtoPreconditions.CheckNotNull(value, \"value\"); %sCase_ = %s.%s; }\n", indent, o, o, caseName, p)
 		} else {
@@ -651,9 +652,12 @@ func writeCsharpCodec(b *strings.Builder, f *model.File, n *csNode, indent strin
 		case field.Message != "" && !field.Repeated:
 			// An absent singular message field is null; protoc hashes 0.
 			fmt.Fprintf(b, "%s    hash ^= (%s == null ? 0 : %s.GetHashCode());\n", indent, p, p)
-		case field.Kind == protoreflect.FloatKind:
+		/* Bitwise so that two NaN payloads hash alike, which is what the
+		 * reference does for a singular float/double. A repeated one is a
+		 * RepeatedField and hashes as the collection. */
+		case field.Kind == protoreflect.FloatKind && !field.Repeated:
 			fmt.Fprintf(b, "%s    hash ^= global::Google.Protobuf.Collections.ProtobufEqualityComparers.BitwiseSingleEqualityComparer.GetHashCode(%s);\n", indent, p)
-		case field.Kind == protoreflect.DoubleKind:
+		case field.Kind == protoreflect.DoubleKind && !field.Repeated:
 			fmt.Fprintf(b, "%s    hash ^= global::Google.Protobuf.Collections.ProtobufEqualityComparers.BitwiseDoubleEqualityComparer.GetHashCode(%s);\n", indent, p)
 		default:
 			fmt.Fprintf(b, "%s    hash ^= %s.GetHashCode();\n", indent, p)
@@ -851,7 +855,7 @@ func writeCsharpEncodeOne(b *strings.Builder, field model.Field, p string, inden
 		fmt.Fprintf(b, "%sforeach (var v in %s) { msg.Set(%s, %s); }\n", indent, p,
 			key, csSetArg(field, "v"))
 	case field.Message != "":
-		fmt.Fprintf(b, "%s%s.EncodeInto(msg.SetMessage(%s));\n", indent, p, key)
+		fmt.Fprintf(b, "%s%s!.EncodeInto(msg.SetMessage(%s));\n", indent, p, key)
 	default:
 		fmt.Fprintf(b, "%s%s\n", indent, call)
 	}

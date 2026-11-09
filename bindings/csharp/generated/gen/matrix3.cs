@@ -352,7 +352,7 @@ namespace Structtest {
                 msg.Set("color", (long)Color);
             }
             if (Inner != null) {
-                Inner.EncodeInto(msg.SetMessage("inner"));
+                Inner!.EncodeInto(msg.SetMessage("inner"));
             }
             if (Nums.Count != 0) {
                 foreach (var v in Nums) { msg.Set("nums", (long)v); }

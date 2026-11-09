@@ -8,7 +8,7 @@ using Pbwire;
 namespace Structtest {
 
     public static class PbwireFile_Matrix3 {
-        private static volatile Schema _schema;
+        private static volatile Schema? _schema;
         private static readonly object _lock = new object();
 
         static PbwireFile_Matrix3() { Init(); }

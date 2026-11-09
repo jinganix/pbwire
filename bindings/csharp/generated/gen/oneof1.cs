@@ -24,7 +24,7 @@ namespace Spectest {
         /// <summary>Field number for the "name" field.</summary>
         public const int NameFieldNumber = 1;
         public string Name { get; set; }  = "";
-        private object kind_;
+        private object kind_ = null!;
         /// <summary>Enum of possible cases for the "kind" oneof.</summary>
         public enum KindOneofCase {
             None = 0,
@@ -59,7 +59,7 @@ namespace Spectest {
         public const int InnerFieldNumber = 4;
         public Types.Inner? Inner {
             get { return kindCase_ == KindOneofCase.Inner ? (Types.Inner) kind_ : null; }
-            set { kind_ = value; kindCase_ = value == null ? KindOneofCase.None : KindOneofCase.Inner; }
+            set { kind_ = value!; kindCase_ = value == null ? KindOneofCase.None : KindOneofCase.Inner; }
         }
         /// <summary>Gets whether the "inner" field is set</summary>
         public bool HasInner { get { return kindCase_ == KindOneofCase.Inner; } }
@@ -132,7 +132,7 @@ namespace Spectest {
                     msg.Set("text", Text);
                     break;
                 case KindOneofCase.Inner:
-                    Inner.EncodeInto(msg.SetMessage("inner"));
+                    Inner!.EncodeInto(msg.SetMessage("inner"));
                     break;
                 default: break;
             }

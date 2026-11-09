@@ -381,7 +381,7 @@ namespace Spectest {
                         msg.Set("key", Key);
                     }
                     if (Value != null) {
-                        Value.EncodeInto(msg.SetMessage("value"));
+                        Value!.EncodeInto(msg.SetMessage("value"));
                     }
                 }
                 internal void LoadFrom(Pbwire.Message msg) {
