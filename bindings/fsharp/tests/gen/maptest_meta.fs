@@ -31,8 +31,16 @@ AxAhImIGcHJvdG8z
 """)
 
 let mutable private _schema: Schema = null
+let private _schemaLock = obj()
 
-let initSchema (bytes: byte[]): unit = _schema <- Schema.FromBytes(bytes)
+/// Loads the embedded descriptor set and owns the resulting schema; a
+/// previous one loaded here is disposed.
+let initSchema (bytes: byte[]): unit =
+    let fresh = Schema.FromBytes(bytes)
+    lock _schemaLock (fun () ->
+        let old = _schema
+        _schema <- fresh
+        if not (isNull old) then old.Dispose())
 
 /// Registers an externally loaded schema: models encode/decode through it
 /// instead of the embedded set. The caller owns it; null restores the

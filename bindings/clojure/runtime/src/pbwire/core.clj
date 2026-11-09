@@ -22,20 +22,24 @@
 (defonce ^:private def-slot
   (doto (.getDeclaredField MessageType "def") (.setAccessible true)))
 
-(defonce ^:private field-cache (atom {}))
+;; Weak keys: the cache must not keep a dropped schema's field tables alive,
+;; and keying on the MessageDef (not the type name) keeps two schemas that
+;; share a type name from reading each other's table.
+(defonce ^:private field-cache
+  (java.util.Collections/synchronizedMap (java.util.WeakHashMap.)))
 
 (defn- type-info
   "Cached {:defs :by-name} for a MessageType: the field table in schema
    order plus a name -> field map, so filling a message never rebuilds it."
   [^MessageType t]
-  (let [k (.name t)]
-    (or (get @field-cache k)
+  (let [d (.get def-slot t)]
+    (or (.get field-cache d)
         (let [defs (mapv (fn [f] {:name (.-fieldName f)
                                   :repeated (.-repeated f)})
-                         (.-fields (.get def-slot t)))
+                         (.-fields d))
               info {:defs defs
                       :by-name (into {} (map (juxt :name identity) defs))}]
-          (swap! field-cache assoc k info)
+          (.put field-cache d info)
           info))))
 
 (defn load-schema

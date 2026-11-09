@@ -1019,9 +1019,17 @@ merge_group_values(ErlNifEnv *env, ERL_NIF_TERM prev, ERL_NIF_TERM newer, ep_nod
         } else if (new_arr[i] == state->atom_undefined) {
             merged[i] = prev_arr[i];
         } else if (gf->type == field_msg && prev_arr[i] != state->atom_undefined) {
-            check_ret(ret, merge_group_values(env, prev_arr[i], new_arr[i], gf->sub_node, state, &merged[i]));
+            ret = merge_group_values(env, prev_arr[i], new_arr[i], gf->sub_node, state, &merged[i]);
+            if (ret != RET_OK) {
+                _free(merged);
+                return ret;
+            }
         } else if (gf->type == field_group && prev_arr[i] != state->atom_undefined) {
-            check_ret(ret, merge_group_values(env, prev_arr[i], new_arr[i], gf->sub_node, state, &merged[i]));
+            ret = merge_group_values(env, prev_arr[i], new_arr[i], gf->sub_node, state, &merged[i]);
+            if (ret != RET_OK) {
+                _free(merged);
+                return ret;
+            }
         } else {
             merged[i] = new_arr[i];
         }
@@ -1042,6 +1050,9 @@ begin_group_decode(ErlNifEnv *env, ep_dec_t *dec, ep_stack_t *stack, ep_spot_t *
         raise_exception(env, dec->term);
     }
 
+    if ((size_t)(*spot - stack->spots) + 1 >= EP_MAX_DECODE_DEPTH) {
+        raise_exception(env, dec->term);
+    }
     (*spot)->pos = field->rnum;
     (*spot)->field = field;
     (*spot)++;
@@ -1445,6 +1456,12 @@ decode(ErlNifEnv *env, ep_tdata_t *tdata, ep_node_t *node)
                         }
 
                         parent_idx = (size_t)(spot - stack->spots);
+                        if (parent_idx + 1 >= EP_MAX_DECODE_DEPTH) {
+                            /* The core caps nesting at PBW_MAX_DEPTH; without
+                             * this the spot stack (and the group-merge
+                             * recursion) would follow a hostile payload. */
+                            raise_exception(env, dec->term);
+                        }
                         spot->pos = field->rnum;
                         spot++;
                         check_ret(ret, stack_ensure(env, stack, &spot));

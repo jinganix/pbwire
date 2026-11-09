@@ -56,8 +56,8 @@ void pbwe_set_limits(pbwe_box *box, const pbw_limits *limits);
 
 /* Encode msg into out[0:cap]: no allocation, cap is the hard limit
  * (PBW_ERR_LIMIT when the message does not fit). Thin wrapper over
- * pbw_encode_to, here so *len is zeroed on every failure and a caller never
- * reads a stale length. */
+ * pbw_encode_to, kept so embedded callers have one box-shaped entry point;
+ * *len is 0 after any failure. */
 pbw_status pbwe_encode(const pbw_message *msg, void *out, size_t cap, size_t *len);
 
 /* pbwe_encode() with the varint length prefix in front: writes the whole frame

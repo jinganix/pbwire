@@ -347,7 +347,7 @@ namespace Spectest {
                 public override int GetHashCode() {
                     int hash = 1;
                     hash ^= Key.GetHashCode();
-                    hash ^= Value.GetHashCode();
+                    hash ^= (Value == null ? 0 : Value.GetHashCode());
                     return hash;
                 }
                 public override string ToString() {
@@ -381,7 +381,7 @@ namespace Spectest {
                         msg.Set("key", Key);
                     }
                     if (Value != null) {
-                        Value.EncodeInto(msg.SetMessage("value"));
+                        Value!.EncodeInto(msg.SetMessage("value"));
                     }
                 }
                 internal void LoadFrom(Pbwire.Message msg) {

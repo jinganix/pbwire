@@ -262,6 +262,15 @@ ok(isTRUE(pbwire_decode(schema, msg,
                         pbwire_encode(schema, msg,
                                       list(name = "h\u00e9llo")))$name ==
           "h\u00e9llo"), "unicode round trip")
+# protobuf `string` is UTF-8 on the wire: a latin1-marked R string is
+# translated on encode, and decoded strings come back marked UTF-8, so they
+# compare equal to literals even where the native encoding is not UTF-8.
+lat <- iconv("h\u00e9llo", "UTF-8", "latin1")
+Encoding(lat) <- "latin1"
+lat_rt <- pbwire_decode(schema, msg,
+                        pbwire_encode(schema, msg, list(name = lat)))$name
+ok(identical(charToRaw(lat_rt), charToRaw("h\u00e9llo")) &&
+   Encoding(lat_rt) == "UTF-8", "latin1 string encodes as UTF-8")
 i64min <- -9223372036854775807 - 1
 extremes <- pbwire_decode(schema, msg,
                           pbwire_encode(schema, msg,
@@ -353,6 +362,18 @@ ok(fails(function() pbwire_decode_delimited(schema, msg, frames[1:2])),
 # passthrough); lists carry known fields only, like the JSON mapping.
 ok(identical(pbwire_roundtrip(schema, msg, with_unknown), with_unknown),
    "unknown fields survive byte round trip")
+
+# 32-bit unsigned inputs clamp (the core truncates raw bits) instead of
+# wrapping: 2^32 must encode as UINT32_MAX, like int32 clamps.
+big <- pbwire_encode(schema, msg, modifyList(full, list(u32 = 2^32)))
+big_back <- pbwire_decode(schema, msg, big)
+ok(isTRUE(big_back$u32 == 4294967295), "out-of-range uint32 clamps")
+
+# A too-deep JSON tree is rejected before the list conversion, not by R's
+# error path after the native tree was built.
+deep <- paste0(strrep('{"inner":', 300), "{}", strrep("}", 300))
+ok(fails(function() pbwire_from_json(schema, msg, deep)),
+   "too-deep JSON fails")
 
 cat(if (failures == 0) "all tests passed\n" else
     paste0(failures, " failures\n"))

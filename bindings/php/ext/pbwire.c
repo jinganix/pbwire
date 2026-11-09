@@ -39,6 +39,15 @@ static zend_class_entry *pbwire_value_ce;
 
 typedef struct {
     pbw_schema *schema;
+    /* The Schema object plus every live Type. `Schema::close` frees the C
+     * schema at once only when it is the last reference; otherwise the last
+     * Type releases it, so no Type/Field/Message ever points into freed
+     * memory. */
+    size_t refs;
+} schema_holder;
+
+typedef struct {
+    schema_holder *holder;
     bool closed;
     zend_object std;
 } schema_obj;
@@ -51,7 +60,7 @@ typedef struct {
 } type_obj;
 
 typedef struct {
-    zval type_zv; /* Pbwire\Type, kept alive */
+    zval schema_zv; /* Pbwire\Schema, kept alive (a holder reference too) */
     const pbw_field *field;
     zend_object std;
 } field_obj;
@@ -61,6 +70,7 @@ typedef struct {
     zval parent_zv; /* Pbwire\Message or IS_UNDEF for roots */
     pbw_message *msg;
     pbw_ctx *ctx;   /* non-NULL: root built here, tree lives in it */
+    pbw_ctx *arena; /* borrowed: context a nested object builds values into */
     bool owned;
     bool closed;
     size_t encode_hint; /* last encoded size: next encode_to cap, 0 = none */
@@ -148,7 +158,7 @@ static const pbw_field *resolve_field(zval *type_zv, zval *zv) {
 
 /* Forward declarations for cross-constructors. */
 static int type_create(zval *out, zval *schema_zv, const pbw_descriptor *desc);
-static int field_create(zval *out, zval *type_zv, const pbw_field *field);
+static int field_create(zval *out, zval *schema_zv, const pbw_field *field);
 static int message_create(zval *out, zval *type_zv, zval *parent_zv,
                           pbw_message *msg, pbw_ctx *ctx, bool owned);
 
@@ -160,16 +170,36 @@ static zend_object *schema_create(zend_class_entry *ce) {
     zend_object_std_init(&o->std, ce);
     object_properties_init(&o->std, ce);
     o->std.handlers = &schema_handlers;
-    o->schema = NULL;
+    o->holder = NULL;
     o->closed = false;
     return &o->std;
 }
 
+/* Frees the C schema when its last reference goes away; the holder itself
+ * lives as long as the Schema object that owns it. */
+static void holder_release(schema_holder *holder) {
+    if (holder == NULL) {
+        return;
+    }
+    if (--holder->refs == 0 && holder->schema != NULL) {
+        pbw_schema_free(holder->schema);
+        holder->schema = NULL;
+    }
+}
+
 static void schema_free(zend_object *o) {
     schema_obj *s = schema_from(o);
-    if (s->schema != NULL && !s->closed) {
-        pbw_schema_free(s->schema);
-        s->schema = NULL;
+    if (s->holder != NULL) {
+        /* No Type is alive here: a Type keeps the Schema object (and this
+         * object cannot be destroyed while one does). Without close() the
+         * holder still carries the Schema's own reference, which frees the
+         * C schema; close() already released it. */
+        if (!s->closed) {
+            holder_release(s->holder);
+        }
+        s->holder->schema = NULL;
+        efree(s->holder);
+        s->holder = NULL;
     }
     zend_object_std_dtor(&s->std);
 }
@@ -249,7 +279,13 @@ PHP_METHOD(Schema, fromFile) {
     }
 
     object_init_ex(return_value, pbwire_schema_ce);
-    schema_from(Z_OBJ_P(return_value))->schema = schema;
+    {
+        schema_obj *s = schema_from(Z_OBJ_P(return_value));
+
+        s->holder = ecalloc(1, sizeof(*s->holder));
+        s->holder->schema = schema;
+        s->holder->refs = 1;
+    }
 }
 
 PHP_METHOD(Schema, fromBytes) {
@@ -282,7 +318,13 @@ PHP_METHOD(Schema, fromBytes) {
     }
 
     object_init_ex(return_value, pbwire_schema_ce);
-    schema_from(Z_OBJ_P(return_value))->schema = schema;
+    {
+        schema_obj *s = schema_from(Z_OBJ_P(return_value));
+
+        s->holder = ecalloc(1, sizeof(*s->holder));
+        s->holder->schema = schema;
+        s->holder->refs = 1;
+    }
 }
 
 PHP_METHOD(Schema, message) {
@@ -293,11 +335,11 @@ PHP_METHOD(Schema, message) {
     ZEND_PARSE_PARAMETERS_END();
 
     schema_obj *s = schema_from(Z_OBJ_P(ZEND_THIS));
-    if (s->schema == NULL || s->closed) {
-        zend_throw_exception(NULL, "schema is closed", 0);
+    if (s->holder == NULL || s->holder->schema == NULL || s->closed) {
+        throw_error("schema is closed");
         RETURN_THROWS();
     }
-    const pbw_descriptor *desc = pbw_schema_find(s->schema, name);
+    const pbw_descriptor *desc = pbw_schema_find(s->holder->schema, name);
     if (desc == NULL) {
         char buf[512];
         snprintf(buf, sizeof buf, "no such message type: %s", name);
@@ -312,9 +354,11 @@ PHP_METHOD(Schema, message) {
 PHP_METHOD(Schema, close) {
     ZEND_PARSE_PARAMETERS_NONE();
     schema_obj *s = schema_from(Z_OBJ_P(ZEND_THIS));
-    if (s->schema != NULL && !s->closed) {
-        pbw_schema_free(s->schema);
-        s->schema = NULL;
+    if (s->holder != NULL && !s->closed) {
+        /* The last side releases the C schema: with a Type (or a Message
+         * through its Type) still alive, closing only drains the Schema's own
+         * reference so those objects keep valid descriptor pointers. */
+        holder_release(s->holder);
     }
     s->closed = true;
 }
@@ -336,6 +380,9 @@ static zend_object *type_create_obj(zend_class_entry *ce) {
 static void type_free(zend_object *o) {
     type_obj *t = type_from(o);
     if (Z_TYPE(t->schema_zv) != IS_UNDEF) {
+        schema_obj *s = schema_from(Z_OBJ(t->schema_zv));
+
+        holder_release(s->holder);
         zval_ptr_dtor(&t->schema_zv);
     }
     if (Z_TYPE(t->fields) == IS_ARRAY) {
@@ -344,10 +391,27 @@ static void type_free(zend_object *o) {
     zend_object_std_dtor(&t->std);
 }
 
+/* The field cache lives in the struct, not in the properties table, so the
+ * Type <-> Field reference cycle (Field keeps its Type alive) is invisible to
+ * the Zend collector without this handler: an unreachable schema would then
+ * never be freed. Reporting the array lets gc_collect_cycles walk it. */
+static HashTable *type_get_gc(zend_object *o, zval **table, int *n) {
+    type_obj *t = type_from(o);
+
+    if (Z_TYPE(t->fields) == IS_ARRAY) {
+        *table = Z_ARRVAL(t->fields);
+        *n = 1;
+    } else {
+        *n = 0;
+    }
+    return zend_std_get_properties(o);
+}
+
 static int type_create(zval *out, zval *schema_zv, const pbw_descriptor *desc) {
     object_init_ex(out, pbwire_type_ce);
     type_obj *t = type_from(Z_OBJ_P(out));
     ZVAL_COPY(&t->schema_zv, schema_zv);
+    schema_from(Z_OBJ_P(schema_zv))->holder->refs++;
     array_init(&t->fields);
     t->desc = desc;
     return 0;
@@ -377,7 +441,7 @@ static const pbw_field *type_field_cached(zval *type_zv, const char *name,
     if (Z_TYPE(t->fields) != IS_ARRAY) {
         array_init(&t->fields);
     }
-    field_create(&handle, type_zv, f);
+    field_create(&handle, &t->schema_zv, f);
     if (zend_hash_str_update(Z_ARRVAL(t->fields), name, len, &handle) ==
         NULL) {
         zval_ptr_dtor(&handle);
@@ -386,7 +450,7 @@ static const pbw_field *type_field_cached(zval *type_zv, const char *name,
 }
 
 ZEND_BEGIN_ARG_INFO_EX(arginfo_type_field, 0, 0, 1)
-ZEND_ARG_INFO(0, field)
+ZEND_ARG_TYPE_INFO(0, name, IS_STRING, 0)
 ZEND_END_ARG_INFO()
 
 ZEND_BEGIN_ARG_INFO_EX(arginfo_type_fieldbynumber, 0, 0, 1)
@@ -412,40 +476,33 @@ PHP_METHOD(Type, name) {
 }
 
 PHP_METHOD(Type, field) {
-    zval *field_zv;
+    zend_string *name;
     ZEND_PARSE_PARAMETERS_START(1, 1)
-    Z_PARAM_ZVAL(field_zv)
+    Z_PARAM_STR(name)
     ZEND_PARSE_PARAMETERS_END();
 
     type_obj *t = type_from(Z_OBJ_P(ZEND_THIS));
-    if (Z_TYPE_P(field_zv) == IS_STRING) {
-        const char *name = Z_STRVAL_P(field_zv);
-        size_t len = Z_STRLEN_P(field_zv);
+    {
+        const char *cname = ZSTR_VAL(name);
+        size_t len = ZSTR_LEN(name);
         zval *found = Z_TYPE(t->fields) == IS_ARRAY
-                          ? zend_hash_str_find(Z_ARRVAL(t->fields), name, len)
+                          ? zend_hash_str_find(Z_ARRVAL(t->fields), cname, len)
                           : NULL;
         if (found == NULL) {
-            if (type_field_cached(ZEND_THIS, name, len) == NULL) {
+            if (type_field_cached(ZEND_THIS, cname, len) == NULL) {
                 char buf[512];
                 snprintf(buf, sizeof buf, "%s: no such field: %s",
-                         pbw_descriptor_name(t->desc), name);
+                         pbw_descriptor_name(t->desc), cname);
                 throw_error(buf);
                 RETURN_THROWS();
             }
-            found = zend_hash_str_find(Z_ARRVAL(t->fields), name, len);
+            found = zend_hash_str_find(Z_ARRVAL(t->fields), cname, len);
             if (found == NULL) {
                 throw_error("out of memory");
                 RETURN_THROWS();
             }
         }
         RETURN_COPY(found);
-    }
-    field_obj *fo = fetch_field(field_zv);
-    if (fo == NULL) {
-        RETURN_THROWS();
-    }
-    if (field_create(return_value, ZEND_THIS, fo->field) != 0) {
-        RETURN_THROWS();
     }
 }
 
@@ -535,8 +592,8 @@ PHP_METHOD(Type, nestedType) {
     if (sub == NULL) {
         RETURN_NULL();
     }
-    /* The Field keeps its Type (and so the Schema) alive; reuse it. */
-    if (type_create(return_value, &fo->type_zv, sub) != 0) {
+    /* The Field keeps the Schema alive; reuse that reference. */
+    if (type_create(return_value, &fo->schema_zv, sub) != 0) {
         RETURN_THROWS();
     }
 }
@@ -560,23 +617,30 @@ static zend_object *field_create_obj(zend_class_entry *ce) {
     zend_object_std_init(&o->std, ce);
     object_properties_init(&o->std, ce);
     o->std.handlers = &field_handlers;
-    ZVAL_UNDEF(&o->type_zv);
+    ZVAL_UNDEF(&o->schema_zv);
     o->field = NULL;
     return &o->std;
 }
 
 static void field_free(zend_object *o) {
     field_obj *f = field_from(o);
-    if (Z_TYPE(f->type_zv) != IS_UNDEF) {
-        zval_ptr_dtor(&f->type_zv);
+    if (Z_TYPE(f->schema_zv) != IS_UNDEF) {
+        schema_obj *s = schema_from(Z_OBJ(f->schema_zv));
+
+        holder_release(s->holder);
+        zval_ptr_dtor(&f->schema_zv);
     }
     zend_object_std_dtor(&f->std);
 }
 
-static int field_create(zval *out, zval *type_zv, const pbw_field *field) {
+/* A Field keeps the Schema (and one holder reference), not the Type: the Type
+ * holds its field cache, so keeping the Type would form a reference cycle the
+ * Zend collector has to chase. */
+static int field_create(zval *out, zval *schema_zv, const pbw_field *field) {
     object_init_ex(out, pbwire_field_ce);
     field_obj *f = field_from(Z_OBJ_P(out));
-    ZVAL_COPY(&f->type_zv, type_zv);
+    ZVAL_COPY(&f->schema_zv, schema_zv);
+    schema_from(Z_OBJ_P(schema_zv))->holder->refs++;
     f->field = field;
     return 0;
 }
@@ -621,6 +685,7 @@ static zend_object *message_create_obj(zend_class_entry *ce) {
     ZVAL_UNDEF(&o->parent_zv);
     o->msg = NULL;
     o->ctx = NULL;
+    o->arena = NULL;
     o->owned = false;
     o->closed = false;
     o->encode_hint = 0;
@@ -660,6 +725,16 @@ static int message_create(zval *out, zval *type_zv, zval *parent_zv,
     }
     m->msg = msg;
     m->ctx = ctx;
+    /* A nested object never owns the context, but its setters still have to
+     * build values in the same arena as the root: inherit it from the parent
+     * (every nested object is created from its parent, so the chain holds).
+     * An inherited arena is borrowed, never freed here. */
+    m->arena = ctx;
+    if (m->arena == NULL && parent_zv != NULL &&
+        Z_TYPE_P(parent_zv) == IS_OBJECT &&
+        instanceof_function(Z_OBJCE_P(parent_zv), pbwire_message_ce)) {
+        m->arena = message_from(Z_OBJ_P(parent_zv))->arena;
+    }
     m->owned = owned;
     m->closed = false;
     m->encode_hint = 0;
@@ -668,9 +743,24 @@ static int message_create(zval *out, zval *type_zv, zval *parent_zv,
 
 static message_obj *check_message(zval *self) {
     message_obj *m = message_from(Z_OBJ_P(self));
+    zval *parent;
+
     if (m->msg == NULL || m->closed) {
-        zend_throw_exception(NULL, "message is closed", 0);
+        throw_error("message is closed");
         return NULL;
+    }
+    /* A nested view lives inside its root's arena: closing the root (or any
+     * ancestor) frees the memory the child points into, so a child call must
+     * refuse once an ancestor is closed. */
+    parent = &m->parent_zv;
+    while (Z_TYPE_P(parent) == IS_OBJECT) {
+        message_obj *owner = message_from(Z_OBJ_P(parent));
+
+        if (owner->msg == NULL || owner->closed) {
+            throw_error("parent message is closed");
+            return NULL;
+        }
+        parent = &owner->parent_zv;
     }
     return m;
 }
@@ -679,15 +769,15 @@ static message_obj *check_message(zval *self) {
  * one (context-built roots), or fall back to the plain heap constructors for
  * decoded trees. Bit patterns match the plain constructors exactly. */
 static pbw_value *new_uint(message_obj *m, uint64_t bits) {
-    if (m->ctx != NULL) {
-        return pbw_value_new_uint_ctx(m->ctx, bits);
+    if (m->arena != NULL) {
+        return pbw_value_new_uint_ctx(m->arena, bits);
     }
     return pbw_value_new_uint(bits);
 }
 
 static pbw_value *new_bytes(message_obj *m, const char *data, size_t len) {
-    if (m->ctx != NULL) {
-        return pbw_value_new_bytes_ctx(m->ctx, data, len);
+    if (m->arena != NULL) {
+        return pbw_value_new_bytes_ctx(m->arena, data, len);
     }
     return pbw_value_new_bytes(data, len);
 }
@@ -1327,33 +1417,54 @@ PHP_METHOD(Value, __construct) {
     throw_error("use Message::at()");
 }
 
+/* A Value points into its owner message's arena: once that message is closed
+ * the bytes are gone, so every getter goes through this check. */
+static int value_live(value_obj *v) {
+    return check_message(&v->owner_zv) != NULL;
+}
+
 PHP_METHOD(Value, asInt) {
     ZEND_PARSE_PARAMETERS_NONE();
     value_obj *v = value_from(Z_OBJ_P(ZEND_THIS));
+    if (!value_live(v)) {
+        RETURN_THROWS();
+    }
     RETURN_LONG((zend_long)pbw_value_get_int(v->val));
 }
 
 PHP_METHOD(Value, asBool) {
     ZEND_PARSE_PARAMETERS_NONE();
     value_obj *v = value_from(Z_OBJ_P(ZEND_THIS));
+    if (!value_live(v)) {
+        RETURN_THROWS();
+    }
     RETURN_BOOL(pbw_value_get_bool(v->val) != 0);
 }
 
 PHP_METHOD(Value, asFloat) {
     ZEND_PARSE_PARAMETERS_NONE();
     value_obj *v = value_from(Z_OBJ_P(ZEND_THIS));
+    if (!value_live(v)) {
+        RETURN_THROWS();
+    }
     RETURN_DOUBLE((double)pbw_value_get_float(v->val));
 }
 
 PHP_METHOD(Value, asDouble) {
     ZEND_PARSE_PARAMETERS_NONE();
     value_obj *v = value_from(Z_OBJ_P(ZEND_THIS));
+    if (!value_live(v)) {
+        RETURN_THROWS();
+    }
     RETURN_DOUBLE(pbw_value_get_double(v->val));
 }
 
 PHP_METHOD(Value, asString) {
     ZEND_PARSE_PARAMETERS_NONE();
     value_obj *v = value_from(Z_OBJ_P(ZEND_THIS));
+    if (!value_live(v)) {
+        RETURN_THROWS();
+    }
     size_t len = 0;
     const void *p = pbw_value_get_bytes(v->val, &len);
     if (p == NULL) {
@@ -1365,6 +1476,9 @@ PHP_METHOD(Value, asString) {
 PHP_METHOD(Value, asBytes) {
     ZEND_PARSE_PARAMETERS_NONE();
     value_obj *v = value_from(Z_OBJ_P(ZEND_THIS));
+    if (!value_live(v)) {
+        RETURN_THROWS();
+    }
     size_t len = 0;
     const void *p = pbw_value_get_bytes(v->val, &len);
     if (p == NULL) {
@@ -1376,6 +1490,9 @@ PHP_METHOD(Value, asBytes) {
 PHP_METHOD(Value, asMessage) {
     ZEND_PARSE_PARAMETERS_NONE();
     value_obj *v = value_from(Z_OBJ_P(ZEND_THIS));
+    if (!value_live(v)) {
+        RETURN_THROWS();
+    }
     if (Z_TYPE(v->type_zv) == IS_UNDEF) {
         RETURN_NULL();
     }
@@ -1489,6 +1606,7 @@ PHP_MINIT_FUNCTION(pbwire) {
            sizeof(zend_object_handlers));
     type_handlers.offset = XtOffsetOf(type_obj, std);
     type_handlers.free_obj = type_free;
+    type_handlers.get_gc = type_get_gc;
 
     INIT_CLASS_ENTRY(ce, "Pbwire\\Field", field_methods);
     pbwire_field_ce = zend_register_internal_class(&ce);
@@ -1497,6 +1615,7 @@ PHP_MINIT_FUNCTION(pbwire) {
            sizeof(zend_object_handlers));
     field_handlers.offset = XtOffsetOf(field_obj, std);
     field_handlers.free_obj = field_free;
+
 
     INIT_CLASS_ENTRY(ce, "Pbwire\\Message", message_methods);
     pbwire_message_ce = zend_register_internal_class(&ce);

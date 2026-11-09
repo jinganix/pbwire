@@ -191,7 +191,11 @@ values, submessages and payloads at once; `pbw_value_free()` on a value taken
 from a decoded tree is a no-op on purpose (the `PBW_VF_ARENA` flag).
 3. **Context messages belong to the context.** `pbw_decode_ctx` trees are
 read-only and die with the next `pbw_ctx_reset()`/`pbw_ctx_free()`, never with
-`pbw_message_free` (that is a no-op there too).
+`pbw_message_free` (that is a no-op there too). A tree built with
+`pbw_message_new_ctx()` is mutable until a decode seals it, but it only takes
+values built in that same arena (`pbw_value_new_*_ctx`): a heap value
+(`pbw_value_new_string()`, ...) is rejected with `PBW_ERR_INVALID`, because the
+reset could not free it.
 4. **The schema outlives every message built from it.** Messages, values and
 context trees hold pointers into the schema's descriptors; free the schema last
 and treat a linked schema as read-only while other threads use it.
@@ -344,7 +348,7 @@ The C ABI is the product, so it is versioned explicitly:
 
 - `PBW_ABI_VERSION` (currently `1`) is in the header; `pbw_abi_version()` returns
 the same number at runtime, so a binding that `dlopen`s the library can refuse a
-mismatch instead of guessing. The Python extension, the Java/Kotlin FFM layer,
+mismatch instead of guessing. The Python extension, the Node addon,
 Node, Ruby and PHP compare the two at load time.
 - `make shared` produces `libpbwire.so.1` / `libpbwire.1.dylib`; the CMake
 `SOVERSION` carries the same number, so the SONAME and the macro always agree.

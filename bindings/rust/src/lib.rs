@@ -198,7 +198,7 @@ impl<'s> Type<'s> {
     }
 
     /// Resolves a field once; reuse the handle in hot loops.
-    pub fn field(&self, name: &str) -> Result<Field> {
+    pub fn field(&self, name: &str) -> Result<Field<'_>> {
         let name = CString::new(name).map_err(|_| Error {
             status: -1,
             message: "field name contains a NUL byte".into(),
@@ -206,7 +206,10 @@ impl<'s> Type<'s> {
         match NonNull::new(unsafe {
             ffi::pbw_descriptor_find_field_name(self.desc.as_ptr(), name.as_ptr())
         } as *mut ffi::pbw_field) {
-            Some(ptr) => Ok(Field { ptr }),
+            Some(ptr) => Ok(Field {
+                ptr,
+                _schema: PhantomData,
+            }),
             None => Err(Error {
                 status: -1,
                 message: format!("{}: no such field", name.to_string_lossy()),
@@ -214,11 +217,14 @@ impl<'s> Type<'s> {
         }
     }
 
-    pub fn field_by_number(&self, number: u32) -> Result<Field> {
+    pub fn field_by_number(&self, number: u32) -> Result<Field<'_>> {
         match NonNull::new(unsafe { ffi::pbw_descriptor_find_field(self.desc.as_ptr(), number) }
             as *mut ffi::pbw_field)
         {
-            Some(ptr) => Ok(Field { ptr }),
+            Some(ptr) => Ok(Field {
+                ptr,
+                _schema: PhantomData,
+            }),
             None => Err(Error {
                 status: -1,
                 message: format!("no field {number}"),
@@ -253,12 +259,15 @@ impl<'s> Type<'s> {
 }
 
 /// A resolved field handle: the number, wire type and storage the schema says.
+/// Tied to the [`Type`] (and so the [`Schema`]) it came from: a handle cannot
+/// outlive the descriptor it points into.
 #[derive(Copy, Clone)]
-pub struct Field {
+pub struct Field<'s> {
     ptr: NonNull<ffi::pbw_field>,
+    _schema: PhantomData<&'s ()>,
 }
 
-impl Field {
+impl Field<'_> {
     /* The C ABI hands out const field pointers; the handle is only ever read. */
     fn as_const(&self) -> *const ffi::pbw_field {
         self.ptr.as_ptr() as *const ffi::pbw_field
@@ -296,35 +305,43 @@ impl Message<'_> {
     /* ------------------------------------------------------------ setting */
 
     /// Any integer or enum field; the value is stored as raw 64-bit bits.
-    pub fn set_i64(&mut self, field: Field, value: i64) -> &mut Self {
+    pub fn set_i64(&mut self, field: Field<'_>, value: i64) -> &mut Self {
         self.store(field, unsafe { ffi::pbw_value_new_int(value) })
     }
 
-    pub fn set_bool(&mut self, field: Field, value: bool) -> &mut Self {
+    pub fn set_bool(&mut self, field: Field<'_>, value: bool) -> &mut Self {
         self.store(field, unsafe { ffi::pbw_value_new_bool(value as c_int) })
     }
 
-    pub fn set_f32(&mut self, field: Field, value: f32) -> &mut Self {
+    pub fn set_f32(&mut self, field: Field<'_>, value: f32) -> &mut Self {
         self.store(field, unsafe { ffi::pbw_value_new_float(value) })
     }
 
-    pub fn set_f64(&mut self, field: Field, value: f64) -> &mut Self {
+    pub fn set_f64(&mut self, field: Field<'_>, value: f64) -> &mut Self {
         self.store(field, unsafe { ffi::pbw_value_new_double(value) })
     }
 
-    pub fn set_str(&mut self, field: Field, value: &str) -> &mut Self {
+    /// Sets a string field.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `value` contains a NUL byte: the C ABI takes a
+    /// NUL-terminated `const char *` for strings. protobuf strings may legally
+    /// contain one, so use [`Message::set_bytes`] for those (a string field
+    /// accepts a bytes value).
+    pub fn set_str(&mut self, field: Field<'_>, value: &str) -> &mut Self {
         let text = CString::new(value).expect("set_str: string contains a NUL byte (use set_bytes)");
         self.store(field, unsafe { ffi::pbw_value_new_string(text.as_ptr()) })
     }
 
-    pub fn set_bytes(&mut self, field: Field, value: &[u8]) -> &mut Self {
+    pub fn set_bytes(&mut self, field: Field<'_>, value: &[u8]) -> &mut Self {
         self.store(field, unsafe {
             ffi::pbw_value_new_bytes(value.as_ptr().cast(), value.len())
         })
     }
 
     /// Nested message for a MESSAGE field, created in place (or returned as it is).
-    pub fn set_message(&mut self, field: Field) -> Message<'_> {
+    pub fn set_message(&mut self, field: Field<'_>) -> Message<'_> {
         let ptr = unsafe { ffi::pbw_message_set_message(self.ptr.as_ptr(), field.number()) };
         let ptr = NonNull::new(ptr)
             .unwrap_or_else(|| panic!("set {}: not a message field", field.name()));
@@ -336,7 +353,7 @@ impl Message<'_> {
     }
 
     /// Appends to a repeated field or replaces a singular one.
-    fn store(&mut self, field: Field, value: *mut ffi::pbw_value) -> &mut Self {
+    fn store(&mut self, field: Field<'_>, value: *mut ffi::pbw_value) -> &mut Self {
         if value.is_null() {
             panic!("pbw_value_new_*: out of memory");
         }
@@ -350,13 +367,13 @@ impl Message<'_> {
         self
     }
 
-    pub fn clear(&mut self, field: Field) {
+    pub fn clear(&mut self, field: Field<'_>) {
         unsafe { ffi::pbw_message_clear(self.ptr.as_ptr(), field.number()) }
     }
 
     /* ------------------------------------------------------------ reading */
 
-    pub fn value(&self, field: Field) -> Option<Value<'_>> {
+    pub fn value(&self, field: Field<'_>) -> Option<Value<'_>> {
         let ptr = unsafe { ffi::pbw_message_get_field(self.ptr.as_ptr(), field.as_const()) };
         NonNull::new(ptr).map(|ptr| Value {
             ptr,
@@ -364,35 +381,35 @@ impl Message<'_> {
         })
     }
 
-    pub fn has(&self, field: Field) -> bool {
+    pub fn has(&self, field: Field<'_>) -> bool {
         self.value(field).is_some()
     }
 
-    pub fn get_i64(&self, field: Field) -> i64 {
+    pub fn get_i64(&self, field: Field<'_>) -> i64 {
         self.value(field).map_or(0, |v| unsafe {
             ffi::pbw_value_get_int(v.ptr.as_ptr())
         })
     }
 
-    pub fn get_bool(&self, field: Field) -> bool {
+    pub fn get_bool(&self, field: Field<'_>) -> bool {
         self.value(field).is_some_and(|v| unsafe {
             ffi::pbw_value_get_bool(v.ptr.as_ptr()) != 0
         })
     }
 
-    pub fn get_f32(&self, field: Field) -> f32 {
+    pub fn get_f32(&self, field: Field<'_>) -> f32 {
         self.value(field).map_or(0.0, |v| unsafe {
             ffi::pbw_value_get_float(v.ptr.as_ptr())
         })
     }
 
-    pub fn get_f64(&self, field: Field) -> f64 {
+    pub fn get_f64(&self, field: Field<'_>) -> f64 {
         self.value(field).map_or(0.0, |v| unsafe {
             ffi::pbw_value_get_double(v.ptr.as_ptr())
         })
     }
 
-    pub fn get_str(&self, field: Field) -> Option<&str> {
+    pub fn get_str(&self, field: Field<'_>) -> Option<&str> {
         let value = self.value(field)?;
         let ptr = unsafe { ffi::pbw_value_get_string(value.ptr.as_ptr()) };
         if ptr.is_null() {
@@ -401,7 +418,7 @@ impl Message<'_> {
         unsafe { CStr::from_ptr(ptr) }.to_str().ok()
     }
 
-    pub fn get_bytes(&self, field: Field) -> Option<&[u8]> {
+    pub fn get_bytes(&self, field: Field<'_>) -> Option<&[u8]> {
         let value = self.value(field)?;
         let mut len = 0usize;
         let ptr = unsafe { ffi::pbw_value_get_bytes(value.ptr.as_ptr(), &mut len) };
@@ -411,7 +428,7 @@ impl Message<'_> {
         Some(unsafe { std::slice::from_raw_parts(ptr.cast::<u8>(), len) })
     }
 
-    pub fn get_message(&self, field: Field) -> Option<Message<'_>> {
+    pub fn get_message(&self, field: Field<'_>) -> Option<Message<'_>> {
         let value = self.value(field)?;
         let ptr = unsafe { ffi::pbw_value_get_message(value.ptr.as_ptr()) };
         NonNull::new(ptr).map(|ptr| Message {
@@ -455,14 +472,17 @@ impl Message<'_> {
     }
 
     /// Encodes into `buf`'s spare capacity: the buffer is grown once and reused,
-    /// so a hot loop allocates nothing. Doubling on `PBW_ERR_LIMIT` keeps the
-    /// first call simple (the core has no "size this message" call).
+    /// so a hot loop allocates nothing. The caller's buffer is tried first, so a
+    /// steady-state loop walks the tree exactly once; only a buffer that does
+    /// not fit triggers a `pbw_message_encoded_size` walk (which also reports a
+    /// depth-overflow tree as LIMIT instead of growing the buffer forever), and
+    /// the core's writer over-reserves up to 12 bytes per write, hence the
+    /// slack.
     pub fn encode_to<'b>(&self, buf: &'b mut Vec<u8>) -> Result<&'b [u8]> {
-        let mut want = self.wire_size() + 32;
-        loop {
-            if buf.capacity() < want {
-                buf.reserve(want - buf.len());
-            }
+        /* Fast path: one walk. A buffer that is already big enough (the steady
+         * state after the first call) never pays the sizing walk, so a hot loop
+         * encodes once per call instead of twice. */
+        if buf.capacity() > 0 {
             let mut len = 0usize;
             let status = unsafe {
                 ffi::pbw_encode_to(
@@ -477,10 +497,38 @@ impl Message<'_> {
                     unsafe { buf.set_len(len) };
                     return Ok(buf.as_slice());
                 }
-                ffi::PBW_ERR_LIMIT => want = buf.capacity().saturating_mul(2) + 16,
+                /* The buffer did not fit: size it below and try once more. */
+                ffi::PBW_ERR_LIMIT => {}
                 _ => return Err(status_error(status)),
             }
         }
+        /* Slow path: the exact size comes from `pbw_message_encoded_size`
+         * (a depth-overflow tree reports LIMIT there and returns, instead of
+         * growing the buffer forever); the core's writer over-reserves up to
+         * 12 bytes per write, hence the slack. */
+        let mut size = 0usize;
+        let status = unsafe { ffi::pbw_message_encoded_size(self.ptr.as_ptr(), &mut size) };
+        if status != ffi::PBW_OK {
+            return Err(status_error(status));
+        }
+        let want = size.saturating_add(12);
+        if buf.capacity() < want {
+            buf.reserve(want - buf.len());
+        }
+        let mut len = 0usize;
+        let status = unsafe {
+            ffi::pbw_encode_to(
+                self.ptr.as_ptr(),
+                buf.as_mut_ptr().cast(),
+                buf.capacity(),
+                &mut len,
+            )
+        };
+        if status != ffi::PBW_OK {
+            return Err(status_error(status));
+        }
+        unsafe { buf.set_len(len) };
+        Ok(buf.as_slice())
     }
 }
 

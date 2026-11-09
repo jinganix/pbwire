@@ -530,6 +530,21 @@ test('delimited frames concatenate and decode in a loop', () => {
   second.free();
 });
 
+test('a singular submessage repeated more often than the table has fields', () => {
+  // Wrap.leaf is one field; the wire may carry it any number of times. The
+  // pending list must stay per field, never per occurrence.
+  const wire = Buffer.from([
+    0x12, 0x02, 0x08, 0x01, // leaf{n:1}
+    0x12, 0x02, 0x08, 0x02, // leaf{n:2}
+    0x12, 0x02, 0x08, 0x03, // leaf{n:3}
+  ]);
+  assert.deepStrictEqual(wrap.decodeObject(wire), { leaf: { n: 3 } });
+  const message = wrap.decode(wire);
+  assert.deepStrictEqual(message.get('leaf'), { n: 3 });
+  assert.ok(message.encode().equals(wire), 'merge keeps every occurrence on the wire');
+  message.free();
+});
+
 test('the addon rejects a slice array it did not produce', () => {
   const addon = require(path.join(__dirname, '..', 'build', 'pbwire_node.node'));
   const wire = one.encode(ONE_VALUES);

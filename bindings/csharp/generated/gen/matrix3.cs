@@ -167,7 +167,7 @@ namespace Structtest {
         public void ClearOptI32() { _hasBits0 &= ~1; }
         /// <summary>Field number for the "opt_str" field.</summary>
         public const int OptStrFieldNumber = 21;
-        private string optStr_;
+        private string optStr_ = "";
         public string OptStr { get { return optStr_; } set { optStr_ = value; _hasBits0 |= 2; } }
         /// <summary>Gets whether the "opt_str" field is set</summary>
         public bool HasOptStr { get { return (_hasBits0 & 2) != 0; } }
@@ -219,8 +219,8 @@ namespace Structtest {
             if (Fx64 != other.Fx64) { return false; }
             if (Sfx32 != other.Sfx32) { return false; }
             if (Sfx64 != other.Sfx64) { return false; }
-            if (F32 != other.F32) { return false; }
-            if (F64 != other.F64) { return false; }
+            if (!global::Google.Protobuf.Collections.ProtobufEqualityComparers.BitwiseSingleEqualityComparer.Equals(F32, other.F32)) { return false; }
+            if (!global::Google.Protobuf.Collections.ProtobufEqualityComparers.BitwiseDoubleEqualityComparer.Equals(F64, other.F64)) { return false; }
             if (Flag != other.Flag) { return false; }
             if (Str != other.Str) { return false; }
             if (Color != other.Color) { return false; }
@@ -245,12 +245,12 @@ namespace Structtest {
             hash ^= Fx64.GetHashCode();
             hash ^= Sfx32.GetHashCode();
             hash ^= Sfx64.GetHashCode();
-            hash ^= F32.GetHashCode();
-            hash ^= F64.GetHashCode();
+            hash ^= global::Google.Protobuf.Collections.ProtobufEqualityComparers.BitwiseSingleEqualityComparer.GetHashCode(F32);
+            hash ^= global::Google.Protobuf.Collections.ProtobufEqualityComparers.BitwiseDoubleEqualityComparer.GetHashCode(F64);
             hash ^= Flag.GetHashCode();
             hash ^= Str.GetHashCode();
             hash ^= Color.GetHashCode();
-            hash ^= Inner.GetHashCode();
+            hash ^= (Inner == null ? 0 : Inner.GetHashCode());
             hash ^= Nums.GetHashCode();
             hash ^= Tags.GetHashCode();
             hash ^= Inners.GetHashCode();
@@ -352,7 +352,7 @@ namespace Structtest {
                 msg.Set("color", (long)Color);
             }
             if (Inner != null) {
-                Inner.EncodeInto(msg.SetMessage("inner"));
+                Inner!.EncodeInto(msg.SetMessage("inner"));
             }
             if (Nums.Count != 0) {
                 foreach (var v in Nums) { msg.Set("nums", (long)v); }

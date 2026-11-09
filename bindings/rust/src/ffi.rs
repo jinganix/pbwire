@@ -51,6 +51,7 @@ extern "C" {
     pub fn pbw_message_set_message(msg: *mut pbw_message, number: u32) -> *mut pbw_message;
     pub fn pbw_message_clear(msg: *mut pbw_message, number: u32);
     pub fn pbw_message_wire_size(msg: *const pbw_message) -> usize;
+    pub fn pbw_message_encoded_size(msg: *const pbw_message, out: *mut usize) -> c_int;
     pub fn pbw_message_is_initialized(msg: *const pbw_message) -> c_int;
 
     /* value */

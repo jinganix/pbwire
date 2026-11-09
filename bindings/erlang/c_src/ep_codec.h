@@ -8,6 +8,10 @@
 /* Group nesting limit, same idea as the protobuf reference implementations.
  * Group skipping is recursive, so unbounded nesting would overflow the C stack. */
 #define EP_MAX_GROUP_DEPTH 100
+/* Decoder spot-stack cap: deep enough for the pinned 400-level recursive test,
+ * bounded so a hostile payload cannot grow the retained per-scheduler stack
+ * (and the group-merge recursion) without limit. */
+#define EP_MAX_DECODE_DEPTH 1024
 
 enum {
     spot_default,

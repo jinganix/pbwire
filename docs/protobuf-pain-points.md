@@ -119,7 +119,7 @@ migration guide keeps growing).
 pbwire keeps the C ABI versioned (`PBW_ABI_VERSION` + `pbw_abi_version()` +
 SONAME move together; additive changes keep the number) and the bindings
 check it at load time, so an incompatible mix fails fast instead of
-corrupting memory. Caveat stated plainly: the project is young (`0.1.7`), so
+corrupting memory. Caveat stated plainly: the project is young (`0.1.14`), so
 the stability promise is a mechanism plus a policy, not a decade of history.
 
 ## How to handle Protobuf JSON, int64, Any and special fields?
@@ -133,9 +133,9 @@ pbwire implements the full JSON mapping and text format with no dependencies
 including all well-known types, extensions as `[full.name]`, strict
 base64/number rules, and closed-enum unknowns kept as unknown fields.
 Verdict: same results as the reference parser on 40,000 mutated inputs;
-official conformance binary + JSON 2742/2742 runnable (2 expected failures
+official conformance binary + JSON 2745 successes (plus 2 expected failures
 the reference C++ testee fails identically; 4 JSON cases pass that the
-reference itself fails) and text 445/445 (including 4 the reference fails).
+reference itself fails) and text 443/443 with 2 recommended-case warnings.
 Details in [testing.md](testing.md) and [guide.md](guide.md#json-and-text-format).
 
 ## How to forward messages without losing unknown fields?

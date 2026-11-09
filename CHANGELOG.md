@@ -4,6 +4,56 @@ All notable changes to pbwire. Versions follow SemVer; `VERSION` is the
 source of truth and `scripts/sync-versions.sh` propagates it to every
 binding manifest.
 
+## [Unreleased]
+
+### Fixed
+
+- JSON `Timestamp` parsing rejects a date or time a real calendar cannot spell
+  (month 13, hour 25, minute or second 61, February 30, and a leap day in a
+  common year). The reference implementations reject them too; before this the
+  epoch-day arithmetic rolled the value over silently.
+- The C struct codec enforces a proto2 `required` scalar on decode: the
+  generated layout now carries a `has_` flag for such a field, so a wire that
+  omits one fails with `PBW_ERR_REQUIRED` instead of decoding as zero. A layout
+  with a required scalar and no flag is rejected at codec init.
+- A legacy group whose END_GROUP never arrives, or closes a different field,
+  fails the decode (both in the dynamic decoder and in the direct struct
+  codec) instead of being accepted.
+- The PHP FFI runtime builds nested values in the root's arena (a
+  context-built tree could not set a nested field at all), and closing a nested
+  view no longer frees the context the root owns.
+- The Python and Ruby binding caches drop a half-built message type when an
+  allocation fails mid-construction; a later lookup used to hand that type out
+  and the codec dereferenced a NULL sub-type.
+- The Java encode buffer grows with long arithmetic: past 1 GiB the int
+  doubling wrapped to zero and looped forever, and a wrapped size request now
+  fails with `PbwireException` instead of writing past the array.
+- Generated C# models hash a repeated `float`/`double` field as a collection
+  (the singular bitwise-comparer overload did not even compile), and the
+  generated models are warning-free.
+- Rust `encode_to()` tries the caller's buffer first and only walks the tree a
+  second time to size it when it does not fit: the unconditional sizing walk
+  had halved encode throughput (0.52x prost on the largest tier).
+- Node's lazy slice list refuses a capacity that would wrap to zero.
+- `conformance/testee.c` reads a JSON/text payload at its exact field length
+  instead of `strlen()`, matching the reference testee when the payload carries
+  a NUL byte.
+- JSON legacy bare keys compare the literal words at their own length (a field
+  named `nulls` was rejected as if it were `null`), and the name buffers hold
+  the 512/1024-byte names the descriptor loader accepts.
+- `bindings/erlang/c_src/core` is a byte-identical copy of the core again
+  (`make erlang-core-sync` refreshes it; the NIF build compares).
+
+### Changed
+
+- `pbw_message_add_field()` indexes field numbers and names as it goes, so
+  building a very wide message is linear: 8000 fields went from 61 ms of
+  comparing to 0.5 ms.
+- `test_nofail` compiles the direct struct codec with the same allocation hooks
+  and sweeps its error paths too, and `CMakeLists.txt` builds that variant.
+- Generated models validate against the official conformance proto
+  (`make codegen-conformance`) in all twenty languages.
+
 ## [0.1.14] - 2026-11-07
 
 ### Added

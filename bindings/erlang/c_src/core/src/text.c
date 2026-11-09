@@ -534,10 +534,17 @@ t_print_unknown_value(text_out *t, uint32_t number, uint32_t wire,
                         return;
                     }
                     q += nn;
-                } else if (w == PBW_WIRE_64BIT) {
-                    q += 8;
-                } else if (w == PBW_WIRE_32BIT) {
-                    q += 4;
+                } else if (w == PBW_WIRE_64BIT || w == PBW_WIRE_32BIT) {
+                    size_t need = w == PBW_WIRE_64BIT ? 8u : 4u;
+
+                    /* Bounds-check before advancing: q + 8 past one-past-end
+                     * is undefined even when nothing is read. */
+                    if (pbw_remaining((const uint8_t *)end,
+                                      (const uint8_t *)q) < need) {
+                        t->status = PBW_ERR_INVALID;
+                        return;
+                    }
+                    q += need;
                 } else if (w == PBW_WIRE_LEN) {
                     size_t ilen;
                     size_t nn;
@@ -546,12 +553,14 @@ t_print_unknown_value(text_out *t, uint32_t number, uint32_t wire,
                         t->status = PBW_ERR_INVALID;
                         return;
                     }
-                    q += nn + ilen;
+                    q += nn;
+                    if (ilen > pbw_remaining((const uint8_t *)end,
+                                             (const uint8_t *)q)) {
+                        t->status = PBW_ERR_INVALID;
+                        return;
+                    }
+                    q += ilen;
                 } else {
-                    t->status = PBW_ERR_INVALID;
-                    return;
-                }
-                if (q > end) {
                     t->status = PBW_ERR_INVALID;
                     return;
                 }
@@ -722,10 +731,17 @@ t_print_message(text_out *t, const pbw_message *msg, uint32_t depth)
     /* Any values print as their raw type_url/value fields, like the reference
      * printer; the expanded form is only accepted on input. */
     for (i = 0; i < msg->desc->field_count; i++) {
+        const pbw_field *field = &msg->desc->fields[i];
+
         if (!pbw_msg_present(msg, i)) {
             continue;
         }
-        t_print_field(t, &msg->desc->fields[i], &msg->values[i], depth);
+        /* proto3 implicit presence: the reference printer omits defaults. */
+        if (pbw_field_implicit_presence(field, msg->desc) &&
+            pbw_value_is_default(&msg->values[i])) {
+            continue;
+        }
+        t_print_field(t, field, &msg->values[i], depth);
         if (t->status != PBW_OK) {
             return;
         }
@@ -934,6 +950,12 @@ t_lex_number(text_cur *c, t_number *out)
             is_float = 1;
         }
         if (q == p) {
+            return 0;
+        }
+        if (out->is_oct && is_float) {
+            /* "0" followed by a digit is an octal token for the reference
+             * tokenizer, where a decimal point or an exponent is an error
+             * (03.5, 01e5). A lone leading zero (0.5) stays a float. */
             return 0;
         }
         out->kind = is_float ? T_NUM_FLOAT : T_NUM_INT;
@@ -1182,10 +1204,8 @@ t_unescape(pbw_buf *out, const char *start, size_t len)
                 }
                 v = v * 16 + (uint32_t)t_hex_val(*p++);
             }
-            if (c == 'U' && (start[0] != 0)) {
-                /* the tokenizer already limits \U to 00[01]......; values
-                 * above the planes and surrogates fail here */
-            }
+            /* The tokenizer already limits \U to 00[01]......; values above
+             * the planes and surrogates fail here. */
             if (c == 'u' && v >= 0xd800 && v <= 0xdbff && p + 5 < end &&
                 p[0] == '\\' && p[1] == 'u') {
                 /* a lead surrogate followed by \uXXXX: combine the pair
@@ -1366,6 +1386,30 @@ t_ident_is(const char *start, size_t len, const char *word)
     size_t n = strlen(word);
 
     return len == n && memcmp(start, word, n) == 0;
+}
+
+/* Case-insensitive spelling match: the reference lowercases the identifier
+ * before comparing, so `Inf`, `iNfinity` and `nAN` all parse. */
+static int
+t_ident_case_is(const char *start, size_t len, const char *word)
+{
+    size_t i;
+    size_t n = strlen(word);
+
+    if (len != n) {
+        return 0;
+    }
+    for (i = 0; i < n; i++) {
+        char c = start[i];
+
+        if (c >= 'A' && c <= 'Z') {
+            c = (char)(c + ('a' - 'A'));
+        }
+        if (c != word[i]) {
+            return 0;
+        }
+    }
+    return 1;
 }
 
 typedef struct {
@@ -1583,16 +1627,11 @@ t_parse_float_value(text_in *t, pbw_message *msg, const pbw_field *field,
         if (!t_ident(&t->cur, &start, &len)) {
             return PBW_ERR_INVALID;
         }
-        if (t_ident_is(start, len, "inf") || t_ident_is(start, len, "INF") ||
-            t_ident_is(start, len, "iNF") ||
-            t_ident_is(start, len, "inFINITY") ||
-            t_ident_is(start, len, "INFINITY") ||
-            t_ident_is(start, len, "infinity")) {
+        if (t_ident_case_is(start, len, "inf") ||
+            t_ident_case_is(start, len, "infinity")) {
             value = HUGE_VAL;
             have = 1;
-        } else if (t_ident_is(start, len, "nan") ||
-                   t_ident_is(start, len, "NaN") ||
-                   t_ident_is(start, len, "nAn")) {
+        } else if (t_ident_case_is(start, len, "nan")) {
             value = strtod("NAN", NULL);
             have = 1;
         } else {
@@ -1673,7 +1712,7 @@ t_parse_enum_value(text_in *t, pbw_message *msg, const pbw_field *field)
     } else {
         const char *start;
         size_t len;
-        char name[128];
+        char name[520];
 
         if (!t_ident(&t->cur, &start, &len)) {
             return PBW_ERR_INVALID;
@@ -1693,8 +1732,10 @@ t_parse_enum_value(text_in *t, pbw_message *msg, const pbw_field *field)
         pbw_enum_find_name(field->sub, number, NULL)) {
         return t_store_uint(t, msg, field, (uint64_t)(int64_t)number);
     }
-    /* unknown numbers are kept only by open enums, like on the wire */
-    if (field->sub == NULL || !field->sub->proto3) {
+    /* unknown numbers are kept only by open enums, like on the wire and in
+     * the JSON mapping. Closed-ness can come from the enum type's dialect or
+     * from an editions per-field override, so ask the shared predicate. */
+    if (field->sub == NULL || pbw_enum_is_closed(field)) {
         return PBW_ERR_INVALID;
     }
     return t_store_uint(t, msg, field, (uint64_t)(int64_t)number);
@@ -2005,6 +2046,69 @@ t_valid_type_name(const char *s)
 
 static pbw_status t_parse_message_body(text_in *t, pbw_message *msg,
                                        uint32_t depth, char closer);
+
+/* Field name lookup for the text format: the plain name, then the lowercase
+ * form (groups only, when it matches the lowercased type name), then a group's
+ * unqualified type name (the printer emits that, so the parse has to accept
+ * it). `reserved` reports a name the descriptor declared reserved, which the
+ * parser skips. The name buffers live in this non-recursive frame: the
+ * recursive body does not pay for them, and they are sized for the longest
+ * identifier the descriptor loader accepts (512 bytes). */
+static pbw_status
+t_lookup_field(const pbw_message *msg, const char *name, size_t name_len,
+               const pbw_field **out, int *reserved)
+{
+    char tmp[520];
+    char lower[520];
+    size_t i;
+
+    *out = NULL;
+    *reserved = 0;
+    if (name_len >= sizeof(tmp)) {
+        return PBW_ERR_INVALID;
+    }
+    memcpy(tmp, name, name_len);
+    tmp[name_len] = '\0';
+    *out = pbw_descriptor_find_field_name(msg->desc, tmp);
+    /* extensions are only addressable as [full.name] */
+    if (*out != NULL && (*out)->is_extension) {
+        *out = NULL;
+    }
+    if (*out == NULL) {
+        for (i = 0; i < name_len; i++) {
+            char c = tmp[i];
+
+            lower[i] = (c >= 'A' && c <= 'Z') ? (char)(c + 32) : c;
+        }
+        lower[name_len] = '\0';
+        *out = pbw_descriptor_find_field_name(msg->desc, lower);
+        if (*out != NULL &&
+            ((*out)->is_extension || (*out)->type != PBW_TYPE_GROUP ||
+             (*out)->sub == NULL ||
+             strcmp(short_name((*out)->sub->name), tmp) != 0)) {
+            *out = NULL;
+        }
+        for (i = 0; *out == NULL && i < msg->desc->field_count; i++) {
+            const pbw_field *g = &msg->desc->fields[i];
+            const char *short_sub;
+
+            if (g->is_extension || g->type != PBW_TYPE_GROUP ||
+                g->sub == NULL) {
+                continue;
+            }
+            short_sub = short_name(g->sub->name);
+            if (strlen(short_sub) == name_len &&
+                memcmp(short_sub, name, name_len) == 0) {
+                *out = g;
+                break;
+            }
+        }
+    }
+    if (*out == NULL && pbw_descriptor_is_reserved(msg->desc, tmp)) {
+        *reserved = 1;
+    }
+    return PBW_OK;
+}
 static pbw_status t_parse_list(text_in *t, pbw_message *msg,
                                const pbw_field *field, uint32_t depth);
 
@@ -2112,13 +2216,20 @@ t_parse_any_inner(text_in *t, pbw_message *msg, uint32_t depth)
             pbw_value_free(val_v);
             return PBW_ERR_NOMEM;
         }
+        /* set() owns the value on success only, so each one is released on
+         * its own failure path: freeing url_v after a successful set would
+         * touch memory the message already owns. */
         status = pbw_message_set(msg, 1, url_v);
-        if (status == PBW_OK) {
-            status = pbw_message_set(msg, 2, val_v);
-        }
         if (status != PBW_OK) {
             pbw_value_free(url_v);
             pbw_value_free(val_v);
+        } else {
+            status = pbw_message_set(msg, 2, val_v);
+            if (status != PBW_OK) {
+                pbw_value_free(val_v);
+            }
+        }
+        if (status != PBW_OK) {
             /* like the message body above: malformed content is
              * INVALID, only resource failures propagate */
             return status == PBW_ERR_LIMIT || status == PBW_ERR_NOMEM
@@ -2381,82 +2492,37 @@ t_parse_message_body(text_in *t, pbw_message *msg, uint32_t depth,
                 field = ext;
             }
         } else {
-            char tmp[256];
+            int reserved = 0;
 
-            if (name_len >= sizeof(tmp)) {
-                return PBW_ERR_INVALID;
-            }
-            memcpy(tmp, name, name_len);
-            tmp[name_len] = '\0';
-            field = pbw_descriptor_find_field_name(msg->desc, tmp);
-            /* extensions are only addressable as [full.name] */
-            if (field != NULL && field->is_extension) {
-                field = NULL;
+            status = t_lookup_field(msg, name, name_len, &field, &reserved);
+            if (status != PBW_OK) {
+                return status;
             }
             if (field == NULL) {
-                /* groups also accept their lowercase field name when it
-                 * matches the lowercased type name (the protoc
-                 * convention), or their type name outright (the printer
-                 * emits it, so the parse must round-trip whatever the
-                 * field is called) */
-                size_t i;
-                char lower[256];
-
-                for (i = 0; i < name_len; i++) {
-                    char c = tmp[i];
-
-                    lower[i] = (c >= 'A' && c <= 'Z') ? (char)(c + 32) : c;
-                }
-                lower[name_len] = '\0';
-                field = pbw_descriptor_find_field_name(msg->desc, lower);
-                if (field != NULL &&
-                    (field->is_extension ||
-                     field->type != PBW_TYPE_GROUP || field->sub == NULL ||
-                     strcmp(short_name(field->sub->name), tmp) != 0)) {
-                    field = NULL;
-                }
-                for (i = 0; field == NULL && i < msg->desc->field_count;
-                     i++) {
-                    const pbw_field *g = &msg->desc->fields[i];
-                    const char *short_sub;
-
-                    if (g->is_extension || g->type != PBW_TYPE_GROUP ||
-                        g->sub == NULL) {
-                        continue;
-                    }
-                    short_sub = short_name(g->sub->name);
-                    if (strlen(short_sub) == name_len &&
-                        memcmp(short_sub, name, name_len) == 0) {
-                        field = g;
-                        break;
-                    }
-                }
-                if (field == NULL) {
-                    if (pbw_descriptor_is_reserved(msg->desc, tmp)) {
-                        /* reserved names are skipped by guessing the value */
-                        t_skip(&t->cur);
-                        if (t->cur.p < t->cur.end &&
-                            (*t->cur.p == '{' || *t->cur.p == '<')) {
-                            status = t_skip_value(t, depth);
-                        } else {
-                            if (t->cur.p >= t->cur.end || *t->cur.p != ':') {
-                                return PBW_ERR_INVALID;
-                            }
-                            t->cur.p++;
-                            status = t_skip_value(t, depth);
+                if (reserved) {
+                    /* reserved names are skipped by guessing the value */
+                    t_skip(&t->cur);
+                    if (t->cur.p < t->cur.end &&
+                        (*t->cur.p == '{' || *t->cur.p == '<')) {
+                        status = t_skip_value(t, depth);
+                    } else {
+                        if (t->cur.p >= t->cur.end || *t->cur.p != ':') {
+                            return PBW_ERR_INVALID;
                         }
-                        if (status != PBW_OK) {
-                            return status;
-                        }
-                        t_skip(&t->cur);
-                        if (t->cur.p < t->cur.end &&
-                            (*t->cur.p == ',' || *t->cur.p == ';')) {
-                            t->cur.p++;
-                        }
-                        continue;
+                        t->cur.p++;
+                        status = t_skip_value(t, depth);
                     }
-                    return PBW_ERR_INVALID;
+                    if (status != PBW_OK) {
+                        return status;
+                    }
+                    t_skip(&t->cur);
+                    if (t->cur.p < t->cur.end &&
+                        (*t->cur.p == ',' || *t->cur.p == ';')) {
+                        t->cur.p++;
+                    }
+                    continue;
                 }
+                return PBW_ERR_INVALID;
             }
         }
         /* like the reference parser, singular fields and oneof members may

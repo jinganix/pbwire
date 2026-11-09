@@ -189,6 +189,28 @@ public final class TestGenerated {
         check(both.getKindCase().name().equals(spectest.Oneof1OuterClass.Oneof1.newBuilder()
                         .setName("n").setNum(1).setText("hi").build().getKindCase().name()),
                 "T6 oneof case agrees with oracle");
+        // A oneof member that holds the default value still counts as set on
+        // both sides (the case word is its presence bit).
+        check(Spectest_Oneof1.newBuilder().setNum(0).build().toByteArray().length == 2
+                && Spectest_Oneof1.parseFrom(new byte[] {0x10, 0x00}).getKindCase()
+                        == Spectest_Oneof1.KindCase.NUM,
+                "T6 zero-valued oneof member encodes");
+        check(Spectest_Oneof1.newBuilder().setText("").build().toByteArray().length == 2,
+                "T6 empty-string oneof member encodes");
+        check(Arrays.equals(
+                Spectest_Oneof1.newBuilder().setNum(0).build().toByteArray(),
+                spectest.Oneof1OuterClass.Oneof1.newBuilder().setNum(0).build().toByteArray()),
+                "T6 zero oneof bytes agree with oracle");
+        // Wire order decides the surviving oneof member, not declaration order.
+        Spectest_Oneof1 innerThenNum = Spectest_Oneof1.parseFrom(
+                new byte[] {0x22, 0x02, 0x08, 0x07, 0x10, 0x07});
+        check(innerThenNum.getKindCase() == Spectest_Oneof1.KindCase.NUM
+                && innerThenNum.getNum() == 7, "T6 oneof follows wire order");
+        check(spectest.Oneof1OuterClass.Oneof1
+                        .parseFrom(new byte[] {0x22, 0x02, 0x08, 0x07, 0x10, 0x07})
+                        .getKindCase()
+                        == spectest.Oneof1OuterClass.Oneof1.KindCase.NUM,
+                "T6 oneof wire order agrees with oracle");
 
         // Map entries ride as repeated entry structs, byte-exact with protoc.
         Spectest_MapTest maps = Spectest_MapTest.parseFrom(referenceMap);

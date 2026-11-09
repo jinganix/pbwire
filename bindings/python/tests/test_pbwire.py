@@ -100,6 +100,12 @@ def main():
         check(message.str == SCALARS3["str"], "string attribute")
         check(message.nums == SCALARS3["nums"], "packed repeated")
         check(message.flags == SCALARS3["flags"], "packed repeated bool")
+        # An empty packed run carries no element: the lazy list must be empty
+        # (no NULL slot behind PyList_New), and the eager view agrees.
+        empty_run = scalars.decode(b"\x8a\x01\x00\xb2\x01\x00")
+        check(empty_run.nums is None, "empty packed run leaves the field absent")
+        check(empty_run.flags is None, "empty packed bool run leaves it absent")
+        check(empty_run.to_dict() == {}, "empty packed run stays absent")
         check(message.inners[1].value == -2, "nested message")
         check(message.inners[1].to_dict() == {"name": "y", "value": -2},
               "nested message to_dict")
@@ -232,6 +238,14 @@ def main():
         check_raises(ValueError,
                      lambda: person.decode(b"\x08\x01").to_dict(),
                      "proto2 required field missing on materialize")
+        # decode() is lazy, but a missing required field still fails it: every
+        # other binding and the reference reject at parse time.
+        check_raises(ValueError, lambda: person.decode(b"\x08\x01"),
+                     "proto2 required field missing on decode")
+        check_raises(ValueError, lambda: person.decode(b"\x5a\x00"),
+                     "proto2 nested required field missing on decode")
+        check_raises(ValueError, lambda: person.decode(b"\x0a\x00"),
+                     "required field with the wrong wire type does not count")
 
     print("test_pbwire: %s" % ("all checks passed" if not failures
                                else "%d FAILURES" % failures))

@@ -27,15 +27,28 @@ final class Meta<O, B> {
             max = Math.max(max, f.number);
             req = req || f.required;
         }
-        slotByFnum = new int[max + 1];
-        Arrays.fill(slotByFnum, -1);
-        for (int i = 0; i < fields.length; i++) {
-            slotByFnum[fields[i].number] = i;
+        if (max <= 512 && max <= fields.length * 8 + 8) {
+            slotByFnum = new int[max + 1];
+            Arrays.fill(slotByFnum, -1);
+            for (int i = 0; i < fields.length; i++) {
+                slotByFnum[fields[i].number] = i;
+            }
+        } else {
+            // Sparse numbers: a 2 GiB dense array is worse than a scan.
+            slotByFnum = null;
         }
         hasRequired = req;
     }
 
     int slot(int fnum) {
-        return fnum < slotByFnum.length ? slotByFnum[fnum] : -1;
+        if (slotByFnum != null) {
+            return fnum >= 0 && fnum < slotByFnum.length ? slotByFnum[fnum] : -1;
+        }
+        for (int i = 0; i < fields.length; i++) {
+            if (fields[i].number == fnum) {
+                return i;
+            }
+        }
+        return -1;
     }
 }

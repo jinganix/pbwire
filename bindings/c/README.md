@@ -53,10 +53,13 @@ is `PBW_ERR_INVALID`.
 `decode` allocates (strings, bytes, arrays, sub-messages) into a zeroed struct.
 Repeated fields grow by doubling from the count member, so a message with
 empty repeated fields allocates nothing. Maps are repeated entry structs
-(no hash table: insertion order is the wire order); oneof members share a
-union gated by a case word (last one wins, like the reference); groups
-encode as `START_GROUP` + message + `END_GROUP`. Extensions and MessageSet
-members are not generated yet (the plugin walks message fields only).
+into (no hash table: insertion order is the wire order, and a repeated key
+is kept as two entries -- protobuf map semantics say last-wins, which this
+array model does not collapse for you); oneof members share a union gated by
+a case word (last one wins, like the reference); groups encode as
+`START_GROUP` + message + `END_GROUP`. Extensions do get generated rows (see
+`tests/gen/extensiontest.h`); `message_set_wire_format` extendees are
+rejected at generation time because their framing is not representable.
 
 ### Two levels: one-shot calls and a compiled codec
 
@@ -131,6 +134,14 @@ make test    # from the repo root: also runs bindings/c/tests/test_struct
 bytes `protoc --encode` produces (pinned `.bin` next to each `.proto`, from
 the checked-in `.txt`), decode recovers every field, and layout mismatches,
 missing required fields, truncated input and bad arguments all fail loudly.
+
+A proto2 `required` scalar carries a `has_` flag too (the generated header
+adds `int has_id;` next to `int32_t id`). The encoder still writes the value
+unconditionally — a struct is encoded as it stands — but the decoder sets the
+flag as the value arrives and a decode missing it fails with
+`PBW_ERR_REQUIRED`, so a wire that drops a required scalar cannot pass as
+complete. Pointer kinds (`required string`/`bytes`/message) need no flag:
+NULL is the absence signal, and repeated fields use their count.
 
 ## 3. Example
 

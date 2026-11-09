@@ -173,3 +173,36 @@ func TestHotSwap(t *testing.T) {
 		t.Fatal("v2 encodes differently from v1")
 	}
 }
+
+// A view into a tree must not touch the arena after the root was closed:
+// Close frees the whole tree, and the view only keeps the root alive as a
+// Go pointer.
+func TestViewAfterRootClose(t *testing.T) {
+	s, err := Load(testDesc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	typ, err := s.Message("structtest.Scalars3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := typ.New()
+	inner, err := root.NewMessage("inner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	root.Close()
+	if _, _, err := inner.GetInt("value"); err == nil {
+		t.Fatal("view read after root Close must fail")
+	}
+	if err := inner.SetInt("value", 1); err == nil {
+		t.Fatal("view write after root Close must fail")
+	}
+	if _, err := inner.Encode(); err == nil {
+		t.Fatal("view encode after root Close must fail")
+	}
+	// The root itself reports the same, instead of dereferencing nil.
+	if _, err := root.Encode(); err == nil {
+		t.Fatal("closed root encode must fail")
+	}
+}

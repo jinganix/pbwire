@@ -26,6 +26,9 @@ node_modules/
 build/
 build-*/
 bindings/cpp/tests/gen_oracle/
+# written by `make codegen-conformance` and removed on success; the ignore
+# entry keeps a failed run (no cargo, bad model) from leaving a stray file.
+bindings/rust/tests/conf_gen.rs
 results/
 dist/
 *.egg-info/

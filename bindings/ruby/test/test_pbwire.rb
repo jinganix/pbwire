@@ -358,6 +358,20 @@ check 'a schema closes once its last message is gone' do
   msg.close
 end
 
+check 'a decoded message keeps its schema alive too' do
+  wire = reference_message.encode
+  loaded = Pbwire::Schema.from_file(DATA)
+  ty = loaded.message(SAMPLE)
+  msg = ty.decode(wire)
+  loaded.close
+  assert loaded.closed?, 'schema reports closed'
+  assert_equal 'alice', msg['name'], 'decoded message survives schema close'
+  assert msg.to_json.include?('alice'), 'decoded message prints after schema close'
+  ty = nil
+  GC.start
+  assert_equal 'alice', msg['name'], 'decoded message survives schema GC'
+end
+
 check 'JSON mapping round-trips through the binding' do
   msg = reference_message
   json = msg.to_json

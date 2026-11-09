@@ -12,7 +12,7 @@ at runtime â€” a hand-built descriptor tree or a standard `FileDescriptorSet` â€
 then builds, reads, encodes and decodes messages dynamically through reflection.
 No `protoc` step, no generated message code, no libprotobuf in the process. It
 speaks proto2, proto3 and edition-2023 descriptor sets, the JSON mapping and the
-text format, and drives fifteen host-language bindings from that one core.
+text format, and drives twenty-three host-language bindings from that one core.
 
 The point is not to re-implement Protobuf encoding. It is to let every language
 with a C ABI share one dynamic Protobuf schema and one message-processing core
@@ -157,10 +157,10 @@ address book, loaded from `addressbook.desc` at runtime) is in
 `make bench` verifies byte-for-byte equality with libprotobuf before timing
 anything, so a speed number can never come from a wrong encoder. On an Apple
 M4 Pro with `-O2` and `protoc 36.2`, the in-process dynamic core with a
-`pbw_ctx` runs 1.2-1.4x the throughput of the generated C++ codec on encode
-and 1.5-1.7x on decode, on every tier
-(132 B to 86 KB), and 8-15x the speed of C++
-`DynamicMessage` on encode and 1.7-3.2x on decode. Generated code only wins where
+`pbw_ctx` runs 1.19-1.43x the throughput of the generated C++ codec on encode
+and 1.50-1.66x on decode, on every tier
+(132 B to 86 KB), and 11-19x the speed of C++
+`DynamicMessage` on encode and 2.7-5.2x on decode. Generated code only wins where
 a dynamic codec meets generated straight-line writes on a tiny message
 (Java/Kotlin, 136 B, 0.82x/0.80x); the arena API wins every tier, and the plain
 API now beats generated code on every tier too. `make bench-docker` runs the
@@ -191,7 +191,7 @@ The one-row summary is here; the detail is there.
 | [C#](bindings/csharp/) | P/Invoke | 3.31x (medium) / 2.46x (medium) | [Google.Protobuf](https://www.nuget.org/packages/Google.Protobuf) + [protobuf-net](https://github.com/protobuf-net/protobuf-net) |
 | [Go](bindings/go/) | cgo dynamic (hot-swappable registry) | 2.68x (xlarge) / 2.23x (xlarge) | [google.golang.org/protobuf](https://pkg.go.dev/google.golang.org/protobuf) |
 | [Erlang](bindings/erlang/) | NIF | 3.92x (xlarge) / 2.42x (small) | [gpb](https://github.com/tomas-abrahamsson/gpb) |
-| [Lua](bindings/lua/) | C module, tables + builder | 8.06x (xlarge, builder) / 1.20x (large) | [lua-protobuf](https://github.com/starwing/lua-protobuf) |
+| [Lua](bindings/lua/) | C module, tables + builder | 8.21x (xlarge, builder) / 1.10x (xlarge, tables) | [lua-protobuf](https://github.com/starwing/lua-protobuf) |
 | [Swift](bindings/swift/) | SwiftPM, static link | 5.45x (xlarge) / 4.41x (medium) | [swift-protobuf](https://github.com/apple/swift-protobuf) |
 | [Scala](bindings/scala/) | Java runtime + DSL | 1.62x (small) / 1.46x (xlarge) | [ScalaPB](https://github.com/scalapb/ScalaPB) |
 | [Elixir](bindings/elixir/) | NIF (shared core) | 3.26x (small) / 1.71x (large) | [elixir-protobuf](https://github.com/elixir-protobuf/protobuf) |

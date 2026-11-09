@@ -464,6 +464,13 @@ write_element(writer *w, const pbw_field *field, const pbw_value *value,
          * write stores a whole word, so reserve 4 for it. */
         size_t lb = pbw_varint_size(value->as.bytes.len);
         if (field->tag_len <= 4) {
+            if (value->as.bytes.len > SIZE_MAX - 4 - lb) {
+                /* A payload that big cannot exist (it would need SIZE_MAX
+                 * bytes of live memory); refuse rather than wrap the sum into
+                 * a tiny reserve and then copy past it. */
+                w->status = PBW_ERR_LIMIT;
+                return;
+            }
             if (!w_reserve(w, 4 + lb + value->as.bytes.len)) {
                 w->status = PBW_ERR_NOMEM;
                 return;
@@ -906,6 +913,8 @@ map_key_cmp(const pbw_field *kf, const pbw_value *a, const pbw_value *b)
     case PBW_TYPE_INT64:
     case PBW_TYPE_SINT32:
     case PBW_TYPE_SINT64:
+    case PBW_TYPE_SFIXED32:
+    case PBW_TYPE_SFIXED64:
         if ((int64_t)ka->as.u64 != (int64_t)kb->as.u64) {
             return (int64_t)ka->as.u64 < (int64_t)kb->as.u64 ? -1 : 1;
         }
@@ -1246,6 +1255,11 @@ size_message(const pbw_message *msg, uint32_t depth, size_t *out)
                  * varint(body) + body + END. */
                 size_t body = 0;
 
+                /* Same cap as write_messageset_item(): the sizing walk must
+                 * reject what the writer rejects, never recurse deeper. */
+                if (depth == PBW_MAX_DEPTH) {
+                    return PBW_ERR_LIMIT;
+                }
                 status = size_message(value->as.msg, depth + 1, &body);
                 if (status != PBW_OK) {
                     return status;
@@ -1277,7 +1291,7 @@ size_message(const pbw_message *msg, uint32_t depth, size_t *out)
 pbw_status
 pbw_message_encoded_size(const pbw_message *msg, size_t *len)
 {
-    if (msg == NULL || len == NULL) {
+    if (msg == NULL || msg->desc == NULL || len == NULL) {
         return PBW_ERR_INVALID;
     }
     return size_message(msg, 0, len);
@@ -1291,9 +1305,13 @@ pbw_encode_buf(pbw_buf *buf, const pbw_message *msg)
 {
     writer w;
 
-    if (msg == NULL || buf == NULL) {
+    if (msg == NULL || buf == NULL || msg->desc == NULL ||
+        (msg->desc->schema != NULL && !msg->desc->schema->linked)) {
         return PBW_ERR_INVALID;
     }
+    /* A failed reserve marks the buffer out of memory; this call gets its own
+     * status, so a retry after the caller freed memory must not inherit it. */
+    buf->oom = 0;
     buf->len = 0;
     w.buf = buf;
     w.pos = 0;
@@ -1309,7 +1327,16 @@ encode_alloc(const pbw_message *msg, int det, uint8_t **out, size_t *len)
     pbw_buf buf;
     writer w;
 
-    if (msg == NULL || out == NULL || len == NULL) {
+    if (out == NULL || len == NULL) {
+        return PBW_ERR_INVALID;
+    }
+    /* Written on both paths, like every other entry point that hands out a
+     * malloc'd buffer: a caller that reuses its pointer never keeps a stale
+     * one after a failure. */
+    *out = NULL;
+    *len = 0;
+    if (msg == NULL || msg->desc == NULL ||
+        (msg->desc->schema != NULL && !msg->desc->schema->linked)) {
         return PBW_ERR_INVALID;
     }
     pbw_buf_init(&buf);
@@ -1386,7 +1413,14 @@ pbw_encode_to(const pbw_message *msg, void *out, size_t cap, size_t *len)
     writer w;
     pbw_status status;
 
-    if (msg == NULL || len == NULL || (out == NULL && cap > 0)) {
+    if (len == NULL) {
+        return PBW_ERR_INVALID;
+    }
+    *len = 0; /* no bytes written yet: never leave a stale length behind */
+    if (msg == NULL || msg->desc == NULL || (out == NULL && cap > 0) ||
+        (msg->desc->schema != NULL && !msg->desc->schema->linked)) {
+        /* An unlinked descriptor has no tags yet: refuse instead of writing
+         * values with no field numbers. */
         return PBW_ERR_INVALID;
     }
     pbw_buf_init_fixed(&buf, out, cap);

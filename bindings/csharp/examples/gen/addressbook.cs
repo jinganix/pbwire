@@ -29,7 +29,7 @@ namespace Tutorial {
         public int Id { get; set; }
         /// <summary>Field number for the "email" field.</summary>
         public const int EmailFieldNumber = 3;
-        private string email_;
+        private string email_ = "";
         public string Email { get { return email_; } set { email_ = value; _hasBits0 |= 1; } }
         /// <summary>Gets whether the "email" field is set</summary>
         public bool HasEmail { get { return (_hasBits0 & 1) != 0; } }

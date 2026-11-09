@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"google.golang.org/protobuf/reflect/protoreflect"
+	"google.golang.org/protobuf/types/descriptorpb"
 )
 
 // Generate returns the output file name and content for one proto file.
@@ -40,7 +41,7 @@ type generator struct {
 	output   string                           // output file name, guards derive from it
 	messages []protoreflect.MessageDescriptor // post-order: nested first
 	enums    []protoreflect.EnumDescriptor
-	exts map[string][]protoreflect.FieldDescriptor // extendee full name -> extensions, by number
+	exts     map[string][]protoreflect.FieldDescriptor // extendee full name -> extensions, by number
 }
 
 func (g *generator) collect() error {
@@ -153,6 +154,12 @@ func realOneof(f protoreflect.FieldDescriptor) protoreflect.OneofDescriptor {
 
 // checkMessage rejects what the struct engine cannot represent.
 func checkMessage(m protoreflect.MessageDescriptor) error {
+	// A MessageSet extendee frames its extensions as 0b/0c items, which this
+	// layout cannot express; rejecting beats emitting the wrong bytes.
+	if mo, ok := m.Options().(*descriptorpb.MessageOptions); ok &&
+		mo.GetMessageSetWireFormat() {
+		return fmt.Errorf("%s: message_set_wire_format is not supported", m.FullName())
+	}
 	fields := m.Fields()
 	for i := 0; i < fields.Len(); i++ {
 		f := fields.Get(i)
@@ -204,7 +211,35 @@ func snake(s string) string {
 			b.WriteByte('_')
 		}
 	}
-	return b.String()
+	out := b.String()
+	if cKeywords[out] {
+		/* `switch`, `union`, `int` ... are legal proto identifiers but not C
+		 * member names. snake() is the single identifier source, so the
+		 * suffix applies to the struct member, the offsetof and the has_/n_
+		 * peers alike. shortcut: a schema that also declares `switch_` would
+		 * collide, protoc never pairs those two names in practice. */
+		out += "_"
+	}
+	return out
+}
+
+var cKeywords = map[string]bool{
+	"auto": true, "break": true, "case": true, "char": true, "const": true,
+	"continue": true, "default": true, "do": true, "double": true,
+	"else": true, "enum": true, "extern": true, "float": true, "for": true,
+	"goto": true, "if": true, "inline": true, "int": true, "long": true,
+	"register": true, "restrict": true, "return": true, "short": true,
+	"signed": true, "sizeof": true, "static": true, "struct": true,
+	"switch": true, "typedef": true, "union": true, "unsigned": true,
+	"void": true, "volatile": true, "while": true, "_Bool": true,
+	"_Complex": true, "_Imaginary": true,
+	/* C++ keywords, for headers included from a .cc (bindings/cpp). */
+	"bool": true, "catch": true, "class": true, "delete": true,
+	"explicit": true, "false": true, "friend": true, "mutable": true,
+	"namespace": true, "new": true, "operator": true, "private": true,
+	"protected": true, "public": true, "template": true, "this": true,
+	"throw": true, "true": true, "try": true, "typename": true,
+	"virtual": true, "nullptr": true,
 }
 
 // cname maps a descriptor to its C base name: full proto name,
@@ -348,9 +383,6 @@ func (g *generator) needsHas(f protoreflect.FieldDescriptor) bool {
 	if f.IsList() || f.IsMap() || f.Kind() == protoreflect.MessageKind || f.Kind() == protoreflect.GroupKind || f.Kind() == protoreflect.StringKind || f.Kind() == protoreflect.BytesKind {
 		return false
 	}
-	if f.Cardinality() == protoreflect.Required {
-		return false
-	}
 	if f.Kind() != protoreflect.EnumKind {
 		switch f.Kind() {
 		case protoreflect.Int32Kind, protoreflect.Sint32Kind, protoreflect.Sfixed32Kind,
@@ -362,6 +394,9 @@ func (g *generator) needsHas(f protoreflect.FieldDescriptor) bool {
 			return false
 		}
 	}
+	/* A required scalar needs the flag too: the struct decoder has no other way
+	 * to tell an absent required value from a zero one (the encoder always
+	 * writes it, so the flag only gates the decode-side required check). */
 	if f.HasOptionalKeyword() {
 		return true
 	}
@@ -401,6 +436,10 @@ func (g *generator) writeMessages(b *strings.Builder) error {
 		}
 		fmt.Fprintf(b, "typedef struct {\n")
 		fields := m.Fields()
+		if fields.Len() == 0 && len(g.extFields(m)) == 0 {
+			/* ISO C forbids an empty struct too: one placeholder member. */
+			fmt.Fprintf(b, "    uint8_t _pbwire_placeholder;\n")
+		}
 		emitted := map[protoreflect.OneofDescriptor]bool{}
 		for i := 0; i < fields.Len(); i++ {
 			f := fields.Get(i)
@@ -482,6 +521,11 @@ func (g *generator) writeMessages(b *strings.Builder) error {
 func (g *generator) writeTables(b *strings.Builder) error {
 	for _, m := range g.messages {
 		fmt.Fprintf(b, "static const pbw_struct_field_t %s_fields[] = {\n", cname(m))
+		if g.tableLen(m) == 0 {
+			/* ISO C forbids an empty initializer list: a message with no
+			 * field still gets one (unused) row, and the wrappers pass 0. */
+			fmt.Fprintf(b, "    {0, PBW_SF_INT32, 0, 0, 0, 0, 0, 0, NULL, 0, PBW_TYPE_INT32, 0, 0, 0, 0, 0},\n")
+		}
 		fields := m.Fields()
 		for i := 0; i < fields.Len(); i++ {
 			if err := g.writeRow(b, m, fields.Get(i)); err != nil {
@@ -609,8 +653,6 @@ func pbwType(f protoreflect.FieldDescriptor) (string, int, error) {
 	}
 	return "", 0, fmt.Errorf("%s: unsupported kind %s", f.FullName(), f.Kind())
 }
-
-
 
 // writeSchema emits the descriptor-set path: the FileDescriptorSet lives
 // in its own file (protoc --descriptor_set_out, see `make -C bindings/c/plugin

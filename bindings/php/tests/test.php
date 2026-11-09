@@ -200,4 +200,62 @@ try {
     check(str_contains($e->getMessage(), 'not a message field'), 'setMessage on a scalar rejected');
 }
 
+/* Lifetime: a Type keeps its Schema alive after Schema::close(), and a
+ * nested view refuses to write once its root is closed (the arena is gone
+ * with it). */
+$closeSchema = Schema::fromFile($desc);
+$closeTy = $closeSchema->message('structtest.Inner3');
+$closeSchema->close();
+$stillWorks = $closeTy->newMessage();
+$stillWorks->setInt('value', 3);
+check($closeTy->decode($stillWorks->encode())->getInt('value') === 3,
+    'a Type outlives Schema::close');
+unset($closeTy, $closeSchema);
+
+$root = $edgeTy->newMessage();
+$child = $root->setMessage('inner');
+$root->close();
+try {
+    $child->setInt('n', 1);
+    check(false, 'closed root still accepted a child write');
+} catch (Error $e) {
+    check(str_contains($e->getMessage(), 'closed'), 'closed root rejects child writes');
+}
+
+/* A borrowed view closes itself, not its parent: closing the view then writing
+ * reports "message is closed" instead of reaching the freed arena. */
+$root = $edgeTy->newMessage();
+$view = $root->setMessage('inner');
+$view->close();
+try {
+    $view->setInt('n', 1);
+    check(false, 'closed view still accepted a write');
+} catch (Error $e) {
+    check(str_contains($e->getMessage(), 'closed'), 'closed view rejects writes');
+}
+$root->close();
+
+/* A Value read after its owner message closed must throw, not read the arena. */
+$owner = $edgeTy->newMessage();
+$owner->setString('tags', 'x')->setString('tags', 'y');
+$val = $owner->at('tags', 1);
+$owner->close();
+try {
+    $val->asString();
+    check(false, 'Value read after owner close succeeded');
+} catch (Error $e) {
+    check(str_contains($e->getMessage(), 'closed'), 'Value after owner close throws');
+}
+
+/* A Type caches its Field handles; that cycle must be collectable, or the
+ * native schema behind an unreachable Type never goes away. */
+$cycleSchema = Schema::fromFile($desc);
+$cycleTy = $cycleSchema->message('structtest.Inner3');
+$cycleField = $cycleTy->field('value');
+$weakSchema = WeakReference::create($cycleSchema);
+$weakType = WeakReference::create($cycleTy);
+unset($cycleField, $cycleTy, $cycleSchema);
+gc_collect_cycles();
+check($weakType->get() === null, 'Type/Field cycle is collected');
+
 echo "OK   $checks checks passed\n";

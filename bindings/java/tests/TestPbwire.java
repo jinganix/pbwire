@@ -46,6 +46,7 @@ public final class TestPbwire {
         }
 
         schemaError();
+        bufferLimits();
         System.out.println(checks + " checks passed");
     }
 
@@ -345,6 +346,34 @@ public final class TestPbwire {
             check(expected.status() > 0, "the failure carries a pbw_status");
             check(expected.getMessage().length() > "descriptor set: ".length(),
                     "the failure explains itself: " + expected.getMessage());
+        }
+    }
+
+    /* The encode buffer must never spin or write past the array when a size
+     * computation wraps: growth uses long math now that a >1 GiB buffer used
+     * to double an int into zero and loop forever. */
+    private static void bufferLimits() {
+        Wire.Buf buf = new Wire.Buf();
+
+        Wire.ensure(buf, 1 << 20);
+        check(buf.b.length >= (1 << 20), "a 1 MiB reservation grows the buffer");
+
+        /* A wrapped (negative) request fails loudly instead of writing past
+         * the array. */
+        buf.pos = 1 << 20;
+        try {
+            Wire.ensure(buf, -1);
+            check(false, "a wrapped size request must fail");
+        } catch (PbwireException expected) {
+            check(expected.status() == -1, "the limit failure has no pbw_status");
+        }
+
+        /* A request past the array ceiling fails loudly too. */
+        try {
+            Wire.ensure(new Wire.Buf(), Integer.MAX_VALUE);
+            check(false, "an impossible reservation must fail");
+        } catch (PbwireException expected) {
+            check(expected.status() == -1, "the ceiling failure has no pbw_status");
         }
     }
 

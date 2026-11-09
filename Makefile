@@ -42,6 +42,10 @@ SHLIB_LINK := build/libpbwire.so
 SHLIB_FLAGS := -shared -Wl,-soname,libpbwire.so.1
 endif
 
+# Plain `make` builds the static library, as the docs promise (`make` has the
+# first target in this file to itself otherwise, which is `shared`).
+.DEFAULT_GOAL := all
+
 shared: $(SHLIB)
 
 $(SHLIB): $(OBJ) | build
@@ -130,8 +134,16 @@ build/nofail_%.o: src/%.c $(HDRS) | build
 	$(CC) $(CFLAGS) $(CPPFLAGS) $(HOOKDEFS) -c -o $@ $<
 
 NOFAIL_OBJ := $(SRC:src/%.c=build/nofail_%.o)
-$(NOFAIL_BIN): tests/test_nofail.c $(NOFAIL_OBJ) | build
-	$(CC) $(CFLAGS) $(CPPFLAGS) -o $@ tests/test_nofail.c $(NOFAIL_OBJ)
+# The struct codec allocates on its own paths, so it joins the injection sweep
+# (same malloc hooks, same count-then-fail-the-i-th-allocation shape).
+NOFAIL_STRUCT_OBJ := build/nofail_pbw_struct.o
+$(NOFAIL_STRUCT_OBJ): bindings/c/runtime/pbw_struct.c bindings/c/runtime/pbw_struct.h $(HDRS) | build
+	$(CC) $(CFLAGS) $(CPPFLAGS) -Ibindings/c/runtime -Dmalloc=pbw_fail_malloc \
+		-Dcalloc=pbw_fail_calloc -Drealloc=pbw_fail_realloc \
+		-Dfree=pbw_fail_free -c -o $@ $<
+$(NOFAIL_BIN): tests/test_nofail.c $(NOFAIL_OBJ) $(NOFAIL_STRUCT_OBJ) | build
+	$(CC) $(CFLAGS) $(CPPFLAGS) -Ibindings/c/runtime -o $@ tests/test_nofail.c \
+		$(NOFAIL_OBJ) $(NOFAIL_STRUCT_OBJ)
 
 # Same hooked core, different subject: the embedded box must allocate nothing
 # once its arena is warm, and only a counting build can assert that.
@@ -165,12 +177,25 @@ port-test:
 # 32-bit gate (CI): an x86_64 host with gcc-multilib runs the whole gate with
 # -m32, so ILP32 size/alignment assumptions surface before a release.
 port-test-32:
+	rm -f build/*.o build/libpbwire.a build/libpbwire.*.dylib build/libpbwire.so* \
+		build/test_pbwire build/test_malformed build/test_nofail build/test_threads \
+		build/test_descriptor build/test_struct build/test_embedded \
+		build/test_embedded_nofail build/example_addressbook build/example_gateway \
+		build/example_embedded
 	$(MAKE) test CFLAGS="-O2 -std=c99 -Wall -Wextra -Werror -pedantic -fPIC -m32"
 
 # Erlang binding (bindings/erlang): OTP app with its own rebar3 build.
 # Needs Erlang/OTP (CI installs it); rebar3 is bootstrapped by its Makefile.
 erlang-test:
 	$(MAKE) -C bindings/erlang tests c-tests
+
+# The Erlang binding vendors a byte-identical copy of the core (c_src/core,
+# so the Hex package compiles standalone). c_src/Makefile's core-sync-check
+# fails on drift; this refreshes it after a core change.
+erlang-core-sync:
+	mkdir -p bindings/erlang/c_src/core/src bindings/erlang/c_src/core/include
+	cp src/*.c src/*.h bindings/erlang/c_src/core/src/
+	cp include/pbwire.h bindings/erlang/c_src/core/include/pbwire.h
 
 # Erlang binding benchmark (bindings/erlang/benchmarks): epb, gpb and (when
 # protoc + libprotobuf are available) gpb NIF on matrix3.proto. Same optional
@@ -260,8 +285,7 @@ desc-fixture:
 # `make conformance-setup` clones it once (shallow, pinned version) and builds
 # the runner; later runs only rebuild incrementally. Override the location
 # with PBWIRE_PROTOBUF_SRC=/path/to/protobuf.
-# The testee answers binary and text requests and reports every JSON test as
-# skipped. Two binary tests fail and are expected to: the reference C++ testee
+# The testee answers binary, JSON and text requests. Two binary tests fail and are expected to: the reference C++ testee
 # from the same checkout fails them identically (a 5-byte tag varint above
 # UINT32_MAX is truncated instead of rejected). They are listed so the runner
 # proceeds to the text suite instead of stopping after binary.
@@ -687,6 +711,7 @@ codegen-conformance:
 	$(MAKE) -C codegen conformance
 
 clean:
+	rm -f src/*.o
 	rm -rf build codegen/build bench/gen bindings/go/benchmarks/gen build/doxygen \
 		bindings/java/benchmarks/gen bindings/java/benchmarks/out \
 		bindings/node/benchmarks/gen bindings/ruby/benchmarks/gen \
@@ -697,7 +722,7 @@ clean:
 		bindings/rust/target bindings/rust/benchmarks/gen \
 	bindings/lua/pbwire.so bindings/lua/pbwire.o
 
-.PHONY: all test fuzz coverage release-check examples shared format format-check bench bench-c erlang-test erlang-bench \
+.PHONY: all test fuzz coverage release-check examples shared format format-check bench bench-c erlang-test erlang-core-sync erlang-bench \
 	python-bind python-test python-bench difftest difftest-short conformance conformance-setup conformance-python \
 	conformance-ruby conformance-java conformance-lua conformance-r conformance-node ruby-bind java-test ruby-test node-test objc-test r-bind \
 	lua-bind lua-test lua-bench \

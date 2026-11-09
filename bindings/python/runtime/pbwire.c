@@ -142,6 +142,12 @@ sb_reserve(sbuf *b, size_t extra)
     if (b->failed) {
         return 0;
     }
+    if (extra > SIZE_MAX - b->len) {
+        /* A wrapped total would reserve a small block and then write past
+         * it. */
+        b->failed = 1;
+        return 0;
+    }
     need = b->len + extra;
     if (need <= b->cap) {
         return 1;
@@ -390,8 +396,9 @@ typedef struct {
     uint8_t repeated;
     uint8_t packed;
     uint8_t required;
-    uint32_t oneof; /* 1-based oneof group, 0 = not in a oneof */
-    PyObject *sub;  /* owned MessageType for MESSAGE fields */
+    uint32_t oneof;        /* 1-based oneof group, 0 = not in a oneof */
+    uint8_t required_slot; /* index among the required fields, 0xff = none */
+    PyObject *sub;         /* owned MessageType for MESSAGE fields */
 } field_t;
 
 typedef struct {
@@ -404,6 +411,11 @@ typedef struct {
     PyObject *by_name; /* owned dict: field name -> field index */
     uint32_t n_oneofs;
     int has_required;
+    /* Required-field presence tracking for the lazy scan: `required_slot` on a
+     * field is its index among the required ones (0xff = not required), and
+     * the scan keeps a bitmask over them. A message with more than 64 required
+     * fields falls back to the eager path's check on to_dict(). */
+    size_t n_required;
 } MessageType;
 
 typedef struct {
@@ -1198,6 +1210,13 @@ dec_message(MessageType *mt, const uint8_t *wire, size_t wire_len,
                                     "elements");
                     goto fail;
                 }
+                if (n == 0) {
+                    /* An empty run carries no element: the field stays absent
+                     * (a later non-empty run still creates the list), so the
+                     * eager dict agrees with the lazy view. */
+                    r.p += (size_t)len;
+                    continue;
+                }
                 list = PyList_New(n);
                 if (list == NULL ||
                     PyDict_SetItem(dict, f->name, list) < 0) {
@@ -1428,6 +1447,11 @@ scan_message(Message *m, MessageType *mt, const uint8_t *data, size_t off,
     uint32_t *oneof_last = oneof_stack;
     rdr r;
     size_t cursor = 0;
+    /* Presence of a proto2 `required` field, tracked whether or not the caller
+     * wants the slices: decode() must reject a wire that omits one, exactly
+     * like the eager path and every other binding. */
+    uint64_t required_seen = 0;
+    int check_required = mt->has_required && mt->n_required <= 64;
 
     if (depth >= PY_MAX_DEPTH) {
         PyErr_SetString(PyExc_ValueError, "nesting limit exceeded");
@@ -1457,15 +1481,6 @@ scan_message(Message *m, MessageType *mt, const uint8_t *data, size_t off,
             PyErr_SetString(PyExc_ValueError, "truncated or malformed tag");
             goto fail;
         }
-        if (m == NULL && wt != 2) {
-            /* Validating only: a non-delimited value holds no fields, so what
-             * the field is does not matter, only that its bytes are there. */
-            if (!rd_skip(&r, fnum, wt, depth)) {
-                PyErr_SetString(PyExc_ValueError, "truncated field");
-                goto fail;
-            }
-            continue;
-        }
         for (i = 0; i < mt->nfields; i++) {
             size_t k = cursor + i; /* < 2 * nfields: one conditional subtract */
 
@@ -1481,6 +1496,21 @@ scan_message(Message *m, MessageType *mt, const uint8_t *data, size_t off,
         if (f == NULL ||
             (wt != f->wire &&
              !(wt == 2 && f->repeated && packable((pbw_type)f->type)))) {
+            /* Unknown to this message, or a known number carrying another wire
+             * type: the reference keeps it as an unknown field, so it does not
+             * satisfy a required declaration either. */
+            if (!rd_skip(&r, fnum, wt, depth)) {
+                PyErr_SetString(PyExc_ValueError, "truncated field");
+                goto fail;
+            }
+            continue;
+        }
+        if (check_required && f->required_slot != 0xff) {
+            required_seen |= 1ull << f->required_slot;
+        }
+        if (m == NULL && wt != 2) {
+            /* Validating only: a non-delimited value holds no fields, so the
+             * rest of the field's identity does not matter here. */
             if (!rd_skip(&r, fnum, wt, depth)) {
                 PyErr_SetString(PyExc_ValueError, "truncated field");
                 goto fail;
@@ -1528,7 +1558,11 @@ scan_message(Message *m, MessageType *mt, const uint8_t *data, size_t off,
                 goto fail;
             }
             r.p += (size_t)plen;
-            if (m != NULL &&
+            /* An empty packed run carries no element: recording it would size
+             * the lazy list by slices (PyList_New(1)) while put_run fills
+             * nothing, leaving a NULL item behind. Strings/bytes (wire 2) keep
+             * their zero-length value. */
+            if (m != NULL && (plen != 0 || f->wire == 2) &&
                 !msg_add(m, mt, f, payload, (uint32_t)plen, 1, oneof_last)) {
                 goto fail;
             }
@@ -1542,6 +1576,19 @@ scan_message(Message *m, MessageType *mt, const uint8_t *data, size_t off,
                 goto fail;
             }
             if (m != NULL && !msg_add(m, mt, f, value, 0, 0, oneof_last)) {
+                goto fail;
+            }
+        }
+    }
+    if (check_required && required_seen != (1ull << mt->n_required) - 1) {
+        size_t k;
+
+        for (k = 0; k < mt->nfields; k++) {
+            if (mt->fields[k].required_slot != 0xff &&
+                (required_seen & (1ull << mt->fields[k].required_slot)) == 0) {
+                PyErr_Format(PyExc_ValueError,
+                             "%s: required field %s is missing",
+                             mt->name_utf8, mt->fields[k].cname);
                 goto fail;
             }
         }
@@ -2405,6 +2452,7 @@ make_message(PyObject *schema_obj, const pbw_descriptor *desc, PyObject *cache)
     mt->nfields = count;
     mt->n_oneofs = 0;
     mt->has_required = 0;
+    mt->n_required = 0;
     mt->by_name = PyDict_New();
     mt->fields = count == 0 ? NULL : calloc(count, sizeof(field_t));
     if (mt->by_name == NULL || (count != 0 && mt->fields == NULL)) {
@@ -2421,8 +2469,7 @@ make_message(PyObject *schema_obj, const pbw_descriptor *desc, PyObject *cache)
         field_t *f = &mt->fields[i];
 
         if (field == NULL) {
-            Py_DECREF(self);
-            return NULL;
+            goto fail_built;
         }
         f->type = (uint8_t)pbw_field_type(field);
         f->name = PyUnicode_FromString(pbw_field_name(field));
@@ -2432,22 +2479,25 @@ make_message(PyObject *schema_obj, const pbw_descriptor *desc, PyObject *cache)
         f->repeated = pbw_field_label(field) == PBW_LABEL_REPEATED;
         f->packed = pbw_field_is_packed(field) != 0;
         f->required = pbw_field_label(field) == PBW_LABEL_REQUIRED;
+        f->required_slot = 0xff;
+        if (f->required && mt->n_required < 64) {
+            f->required_slot = (uint8_t)mt->n_required;
+            mt->n_required++;
+        }
         f->oneof = pbw_field_oneof_index(field);
         mt->has_required |= f->required;
         if (f->oneof > mt->n_oneofs) {
             mt->n_oneofs = f->oneof;
         }
         if (f->name == NULL) {
-            Py_DECREF(self);
-            return NULL;
+            goto fail_built;
         }
         {
             PyObject *idx = PyLong_FromSize_t(i);
 
             if (idx == NULL || PyDict_SetItem(mt->by_name, f->name, idx) < 0) {
                 Py_XDECREF(idx);
-                Py_DECREF(self);
-                return NULL;
+                goto fail_built;
             }
             Py_DECREF(idx);
         }
@@ -2462,18 +2512,33 @@ make_message(PyObject *schema_obj, const pbw_descriptor *desc, PyObject *cache)
             const pbw_descriptor *sub = pbw_field_message_type(field);
 
             if (sub == NULL) {
-                Py_DECREF(self);
-                return NULL;
+                goto fail_built;
             }
             f->sub = make_message(schema_obj, sub, cache);
             if (f->sub == NULL) {
-                Py_DECREF(self);
-                return NULL;
+                goto fail_built;
             }
         }
     }
     PyObject_GC_Track(self);
     return self;
+
+fail_built:
+    /* The cache was filled early to break recursive schemas, so a type that
+     * could not be completed has to be dropped from it: a later lookup would
+     * otherwise hand out a half-built type whose `sub` fields are still NULL,
+     * and the codec would dereference them. The original exception is kept
+     * across the delete. */
+    {
+        PyObject *etype = NULL, *evalue = NULL, *etb = NULL;
+
+        PyErr_Fetch(&etype, &evalue, &etb);
+        (void)PyDict_DelItem(cache, key);
+        PyErr_Clear();
+        PyErr_Restore(etype, evalue, etb);
+    }
+    Py_DECREF(self);
+    return NULL;
 }
 
 /* ---------------------------------------------------------------- schema */
@@ -2748,11 +2813,22 @@ PyInit_pbwire(void)
         Py_DECREF(m);
         return NULL;
     }
+    /* AddObject steals the reference on success and releases it on failure
+     * (3.10+), so a failure here only needs the module dropped. */
     Py_INCREF(&SchemaType);
-    PyModule_AddObject(m, "Schema", (PyObject *)&SchemaType);
+    if (PyModule_AddObject(m, "Schema", (PyObject *)&SchemaType) < 0) {
+        Py_DECREF(m);
+        return NULL;
+    }
     Py_INCREF(&MessageTypeType);
-    PyModule_AddObject(m, "MessageType", (PyObject *)&MessageTypeType);
+    if (PyModule_AddObject(m, "MessageType", (PyObject *)&MessageTypeType) < 0) {
+        Py_DECREF(m);
+        return NULL;
+    }
     Py_INCREF(&MessagePyType);
-    PyModule_AddObject(m, "Message", (PyObject *)&MessagePyType);
+    if (PyModule_AddObject(m, "Message", (PyObject *)&MessagePyType) < 0) {
+        Py_DECREF(m);
+        return NULL;
+    }
     return m;
 }

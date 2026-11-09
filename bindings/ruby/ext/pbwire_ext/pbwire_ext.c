@@ -258,6 +258,8 @@ type_free(void *ptr)
     if (type == NULL) {
         return;
     }
+    holder_release(type->holder);
+    type->holder = NULL;
     xfree(type->fields);
     xfree(type->by_number);
     xfree(type);
@@ -410,38 +412,27 @@ packable(pbw_type type)
     }
 }
 
-/* A Type object for `desc`, cached on the Schema; recursive schemas resolve
- * because the Type is published before its sub-types are built. */
-static VALUE
-type_for(VALUE schema_obj, const pbw_descriptor *desc)
-{
-    schema_t *schema;
+static VALUE type_for(VALUE schema_obj, const pbw_descriptor *desc);
+
+/* Fill one Type's field table. Runs under rb_protect, so every rb_* call
+ * here may raise and type_for() can drop the half-built Type afterwards. */
+typedef struct {
+    VALUE schema_obj;
     VALUE types;
     VALUE key;
-    VALUE found;
-    VALUE obj;
-    type_t *type;
+    const pbw_descriptor *desc;
     size_t count;
-    size_t i;
+    type_t *type;
+} type_fill_args;
 
-    TypedData_Get_Struct(schema_obj, schema_t, &schema_data_type, schema);
-    types = schema->types;
-    if (NIL_P(types)) {
-        types = rb_hash_new();
-        schema->types = types;
-    }
-    key = rb_utf8_str_new_cstr(pbw_descriptor_name(desc));
-    found = rb_hash_aref(types, key);
-    if (!NIL_P(found)) {
-        return found;
-    }
-    count = pbw_descriptor_field_count(desc);
-    obj = typed_object_alloc(cType, &type_data_type, (void **)&type);
-    type->desc = desc;
-    type->count = count;
-    type->fields = count == 0 ? NULL : ZALLOC_N(field_t, count);
-    type->by_name = rb_hash_new();
-    rb_hash_aset(types, key, obj); /* before the subs: recursive schemas */
+static VALUE
+type_fill(VALUE argp)
+{
+    type_fill_args *a = (type_fill_args *)(void *)argp;
+    const pbw_descriptor *desc = a->desc;
+    type_t *type = a->type;
+    size_t count = a->count;
+    size_t i;
 
     for (i = 0; i < count; i++) {
         const pbw_field *field = pbw_descriptor_field_at(desc, i);
@@ -471,7 +462,7 @@ type_for(VALUE schema_obj, const pbw_descriptor *desc)
         field_t *f = &type->fields[i];
 
         if (f->type == PBW_TYPE_MESSAGE || f->type == PBW_TYPE_GROUP) {
-            f->sub = type_for(schema_obj, pbw_field_message_type(field));
+            f->sub = type_for(a->schema_obj, pbw_field_message_type(field));
         }
     }
     {
@@ -491,6 +482,65 @@ type_for(VALUE schema_obj, const pbw_descriptor *desc)
             for (i = 0; i < count; i++) {
                 type->by_number[type->fields[i].number] = (uint32_t)i;
             }
+        }
+    }
+    return Qnil;
+}
+
+/* A Type object for `desc`, cached on the Schema; recursive schemas resolve
+ * because the Type is published before its sub-types are built. */
+static VALUE
+type_for(VALUE schema_obj, const pbw_descriptor *desc)
+{
+    schema_t *schema;
+    VALUE types;
+    VALUE key;
+    VALUE found;
+    VALUE obj;
+    type_t *type;
+    size_t count;
+
+    TypedData_Get_Struct(schema_obj, schema_t, &schema_data_type, schema);
+    types = schema->types;
+    if (NIL_P(types)) {
+        types = rb_hash_new();
+        schema->types = types;
+    }
+    key = rb_utf8_str_new_cstr(pbw_descriptor_name(desc));
+    found = rb_hash_aref(types, key);
+    if (!NIL_P(found)) {
+        return found;
+    }
+    count = pbw_descriptor_field_count(desc);
+    obj = typed_object_alloc(cType, &type_data_type, (void **)&type);
+    type->desc = desc;
+    /* A Type outlives the Schema object it came from: it keeps the C schema
+     * alive (the descriptor pointers it holds point into it). */
+    type->holder = schema->holder;
+    holder_ref(type->holder);
+    type->count = count;
+    type->fields = count == 0 ? NULL : ZALLOC_N(field_t, count);
+    type->by_name = rb_hash_new();
+    rb_hash_aset(types, key, obj); /* before the subs: recursive schemas */
+    {
+        type_fill_args args;
+        int state = 0;
+
+        args.schema_obj = schema_obj;
+        args.types = types;
+        args.key = key;
+        args.desc = desc;
+        args.count = count;
+        args.type = type;
+        rb_protect(type_fill, (VALUE)(void *)&args, &state);
+        if (state != 0) {
+            /* A half-built Type must not stay reachable: a later lookup would
+             * hand out one whose field names or sub-types are still unset, and
+             * the codec would take those as real values. Drop the entry (the
+             * key stays, mapped to nil, so the next lookup rebuilds it) and
+             * carry on unwinding. */
+            rb_hash_aset(types, key, Qnil);
+            rb_jump_tag(state);
         }
     }
     return obj;
@@ -1248,6 +1298,10 @@ message_wire_new(VALUE type, VALUE buffer, size_t off, size_t len,
                                     (void **)&message);
     message->kind = MSG_WIRE;
     message->type = type;
+    /* A decoded message reads its descriptor on every call, so it must keep
+     * the C schema alive exactly like a builder does. */
+    message->holder = t->holder;
+    holder_ref(t->holder);
     message->buffer = buffer;
     message->data = (const uint8_t *)RSTRING_PTR(buffer);
     message->off = off;

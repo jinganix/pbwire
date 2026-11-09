@@ -148,6 +148,11 @@
             error:(NSError **)error
 {
     const pbw_field *field = [self fieldForName:name];
+    NSArray *items = values ?: @[];
+    size_t count = items.count;
+    pbw_value **built = NULL;
+    size_t i;
+    BOOL ok = YES;
 
     if (field == NULL) {
         return PBWSetError(error, PBW_ERR_NOT_FOUND, name);
@@ -155,13 +160,50 @@
     if (pbw_field_label(field) != PBW_LABEL_REPEATED) {
         return PBWSetError(error, PBW_ERR_INVALID, @"singular field (use setValue:forField:error:)");
     }
-    pbw_message_clear(_message, pbw_field_number(field));
-    for (id item in values ?: @[]) {
-        if (![self storeValue:item forField:name allowRepeated:YES error:error]) {
-            return NO;
+    /* Build every element before touching the field: a bad element used to
+     * leave a half-written repeated field behind. */
+    if (count > 0) {
+        built = (pbw_value **)calloc(count, sizeof(*built));
+        if (built == NULL) {
+            return PBWSetError(error, PBW_ERR_NOMEM, name);
         }
     }
-    return YES;
+    for (i = 0; i < count; i++) {
+        built[i] = [self newValueFor:items[i] field:field name:name error:error];
+        if (built[i] == NULL) {
+            ok = NO;
+            break;
+        }
+    }
+    if (ok) {
+        pbw_message_clear(_message, pbw_field_number(field));
+        for (i = 0; i < count; i++) {
+            pbw_status status =
+                pbw_message_set(_message, pbw_field_number(field), built[i]);
+
+            if (status != PBW_OK) {
+                pbw_value_free(built[i]);
+                built[i] = NULL;
+                ok = PBWSetError(error, status, name);
+                break;
+            }
+            built[i] = NULL; /* the message owns it now */
+        }
+        /* Store the rest that were not reached before a failure. */
+        for (size_t k = i + 1; k < count; k++) {
+            if (built[k] != NULL) {
+                pbw_value_free(built[k]);
+            }
+        }
+    } else {
+        for (i = 0; i < count; i++) {
+            if (built[i] != NULL) {
+                pbw_value_free(built[i]);
+            }
+        }
+    }
+    free(built);
+    return ok;
 }
 
 /* A map entry field (always "key" = 1, "value" = 2) as objects. */
@@ -188,7 +230,12 @@
     case PBW_TYPE_UINT32:
     case PBW_TYPE_FIXED32:
         return @(pbw_value_get_uint32(key));
-    default: /* 64-bit integers read back as NSNumber, like objectForValue: */
+    case PBW_TYPE_UINT64:
+    case PBW_TYPE_FIXED64:
+        /* Unsigned 64-bit keys keep their full range: get_int would report a
+         * key >= 2^63 as negative. */
+        return @(pbw_value_get_uint(key));
+    default: /* 64-bit signed integers, like objectForValue: */
         return @(pbw_value_get_int(key));
     }
 }
@@ -330,33 +377,25 @@
     return [self storeValue:value forField:name allowRepeated:YES error:error];
 }
 
-- (BOOL)storeValue:(nullable id)value
-          forField:(NSString *)name
-     allowRepeated:(BOOL)allowRepeated
-             error:(NSError **)error
+/* Builds (but does not store) the C value for one object: NULL with *error set
+ * when the object does not fit the field. Kept separate from storeValue: so a
+ * repeated assignment can build every element before it clears the field, and
+ * a bad element leaves the old contents alone. */
+- (pbw_value *)newValueFor:(id)value
+                     field:(const pbw_field *)field
+                      name:(NSString *)name
+                     error:(NSError **)error
 {
-    const pbw_field *field = [self fieldForName:name];
-    pbw_type type;
+    pbw_type type = pbw_field_type(field);
     pbw_value *stored = NULL;
-    pbw_status status;
 
-    if (field == NULL) {
-        return PBWSetError(error, PBW_ERR_NOT_FOUND, name);
-    }
-    type = pbw_field_type(field);
-    if (value == nil) {
-        pbw_message_clear(_message, pbw_field_number(field));
-        return YES;
-    }
-    if (pbw_field_label(field) == PBW_LABEL_REPEATED && !allowRepeated) {
-        return PBWSetError(error, PBW_ERR_INVALID, @"repeated field (use addValue:forField:error:)");
-    }
     switch (type) {
     case PBW_TYPE_STRING: {
         const char *utf8;
 
         if (![value isKindOfClass:[NSString class]]) {
-            return PBWSetError(error, PBW_ERR_TYPE, name);
+            PBWSetError(error, PBW_ERR_TYPE, name);
+            return NULL;
         }
         utf8 = ((NSString *)value).UTF8String;
         stored = pbw_value_new_string(utf8 != NULL ? utf8 : "");
@@ -366,7 +405,8 @@
         NSData *data;
 
         if (![value isKindOfClass:[NSData class]]) {
-            return PBWSetError(error, PBW_ERR_TYPE, name);
+            PBWSetError(error, PBW_ERR_TYPE, name);
+            return NULL;
         }
         data = value;
         stored = pbw_value_new_bytes(data.bytes, data.length);
@@ -374,19 +414,22 @@
     }
     case PBW_TYPE_BOOL:
         if (![value isKindOfClass:[NSNumber class]]) {
-            return PBWSetError(error, PBW_ERR_TYPE, name);
+            PBWSetError(error, PBW_ERR_TYPE, name);
+            return NULL;
         }
         stored = pbw_value_new_bool([value boolValue]);
         break;
     case PBW_TYPE_FLOAT:
         if (![value isKindOfClass:[NSNumber class]]) {
-            return PBWSetError(error, PBW_ERR_TYPE, name);
+            PBWSetError(error, PBW_ERR_TYPE, name);
+            return NULL;
         }
         stored = pbw_value_new_float([value floatValue]);
         break;
     case PBW_TYPE_DOUBLE:
         if (![value isKindOfClass:[NSNumber class]]) {
-            return PBWSetError(error, PBW_ERR_TYPE, name);
+            PBWSetError(error, PBW_ERR_TYPE, name);
+            return NULL;
         }
         stored = pbw_value_new_double([value doubleValue]);
         break;
@@ -397,11 +440,13 @@
         long long number;
 
         if (![value isKindOfClass:[NSNumber class]]) {
-            return PBWSetError(error, PBW_ERR_TYPE, name);
+            PBWSetError(error, PBW_ERR_TYPE, name);
+            return NULL;
         }
         number = [value longLongValue];
         if (number < INT32_MIN || number > INT32_MAX) {
-            return PBWSetError(error, PBW_ERR_TYPE, @"32-bit field out of range");
+            PBWSetError(error, PBW_ERR_TYPE, @"32-bit field out of range");
+            return NULL;
         }
         /* Signed types are stored sign extended, like the C ABI documents. */
         stored = pbw_value_new_uint((uint64_t)(int64_t)number);
@@ -412,11 +457,13 @@
         unsigned long long number;
 
         if (![value isKindOfClass:[NSNumber class]]) {
-            return PBWSetError(error, PBW_ERR_TYPE, name);
+            PBWSetError(error, PBW_ERR_TYPE, name);
+            return NULL;
         }
         number = [value unsignedLongLongValue];
         if (number > UINT32_MAX) {
-            return PBWSetError(error, PBW_ERR_TYPE, @"32-bit field out of range");
+            PBWSetError(error, PBW_ERR_TYPE, @"32-bit field out of range");
+            return NULL;
         }
         stored = pbw_value_new_uint(number);
         break;
@@ -425,23 +472,53 @@
     case PBW_TYPE_SINT64:
     case PBW_TYPE_SFIXED64:
         if (![value isKindOfClass:[NSNumber class]]) {
-            return PBWSetError(error, PBW_ERR_TYPE, name);
+            PBWSetError(error, PBW_ERR_TYPE, name);
+            return NULL;
         }
         stored = pbw_value_new_int([value longLongValue]);
         break;
     case PBW_TYPE_UINT64:
     case PBW_TYPE_FIXED64:
         if (![value isKindOfClass:[NSNumber class]]) {
-            return PBWSetError(error, PBW_ERR_TYPE, name);
+            PBWSetError(error, PBW_ERR_TYPE, name);
+            return NULL;
         }
         stored = pbw_value_new_uint([value unsignedLongLongValue]);
         break;
     case PBW_TYPE_MESSAGE:
     case PBW_TYPE_GROUP:
-        return PBWSetError(error, PBW_ERR_TYPE, @"use addMessageForField:");
+        PBWSetError(error, PBW_ERR_TYPE, @"use addMessageForField:");
+        return NULL;
     }
     if (stored == NULL) {
-        return PBWSetError(error, PBW_ERR_NOMEM, name);
+        PBWSetError(error, PBW_ERR_NOMEM, name);
+        return NULL;
+    }
+    return stored;
+}
+
+- (BOOL)storeValue:(nullable id)value
+          forField:(NSString *)name
+     allowRepeated:(BOOL)allowRepeated
+             error:(NSError **)error
+{
+    const pbw_field *field = [self fieldForName:name];
+    pbw_value *stored;
+    pbw_status status;
+
+    if (field == NULL) {
+        return PBWSetError(error, PBW_ERR_NOT_FOUND, name);
+    }
+    if (value == nil) {
+        pbw_message_clear(_message, pbw_field_number(field));
+        return YES;
+    }
+    if (pbw_field_label(field) == PBW_LABEL_REPEATED && !allowRepeated) {
+        return PBWSetError(error, PBW_ERR_INVALID, @"repeated field (use addValue:forField:error:)");
+    }
+    stored = [self newValueFor:value field:field name:name error:error];
+    if (stored == NULL) {
+        return NO;
     }
     status = pbw_message_set(_message, pbw_field_number(field), stored);
     if (status != PBW_OK) {
@@ -476,9 +553,10 @@
     }
     nested = pbw_message_set_message(_message, pbw_field_number(field));
     if (nested == NULL) {
-        /* This wrapper never builds in a context arena, so the only failure is
-         * an allocation failure. */
-        PBWSetError(error, PBW_ERR_NOMEM, name);
+        /* A message decoded into a context is read-only, so "cannot build" is
+         * a type/state error there, not an allocation failure. */
+        PBWSetError(error, _context != nil ? PBW_ERR_INVALID : PBW_ERR_NOMEM,
+                    name);
         return nil;
     }
     return [[PBWMessage alloc] initWithDescriptor:pbw_field_message_type(field)

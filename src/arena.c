@@ -16,19 +16,20 @@ align_up(size_t size)
 static int
 chunk_add(pbw_arena *arena, size_t need)
 {
-    size_t cap = arena->chunk_size;
+    size_t cap;
     pbw_arena_chunk *chunk;
 
     if (arena == NULL) {
         return 0;
     }
+    cap = arena->chunk_size;
     if (cap < need) {
         cap = need;
     }
-    if (cap > SIZE_MAX - sizeof(*chunk)) {
+    if (cap > SIZE_MAX - PBW_CHUNK_HDR) {
         return 0;
     }
-    chunk = (pbw_arena_chunk *)malloc(sizeof(*chunk) + cap);
+    chunk = (pbw_arena_chunk *)malloc(PBW_CHUNK_HDR + cap);
     if (chunk == NULL) {
         return 0;
     }
@@ -68,10 +69,10 @@ pbw_arena_alloc_slow(pbw_arena *arena, size_t size)
 
         /* new_packed guards the same addition; sizes here can approach
          * SIZE_MAX - 7 through the public bytes constructors. */
-        if (size > SIZE_MAX - sizeof(*big)) {
+        if (size > SIZE_MAX - PBW_CHUNK_HDR) {
             return NULL;
         }
-        big = (pbw_arena_chunk *)malloc(sizeof(*big) + size);
+        big = (pbw_arena_chunk *)malloc(PBW_CHUNK_HDR + size);
 
         if (big == NULL) {
             return NULL;
@@ -80,7 +81,7 @@ pbw_arena_alloc_slow(pbw_arena *arena, size_t size)
         big->used = size;
         big->cap = size;
         arena->large = big;
-        return (char *)(big + 1);
+        return (char *)big + PBW_CHUNK_HDR;
     }
     chunk = arena->head;
     if (chunk == NULL || !pbw_cap_holds(chunk->cap, chunk->used) ||
@@ -90,7 +91,7 @@ pbw_arena_alloc_slow(pbw_arena *arena, size_t size)
         }
         chunk = arena->head;
     }
-    ptr = (char *)(chunk + 1) + chunk->used;
+    ptr = (char *)chunk + PBW_CHUNK_HDR + chunk->used;
     chunk->used += size;
     return ptr;
 }
@@ -109,10 +110,9 @@ pbw_arena_reset(pbw_arena *arena)
     }
     head = arena->head;
 
-    if (head == NULL || arena->block != NULL) {
-        /* A packed arena belongs to one decoded tree and is never reset.
-         * A fresh context has no chunks yet: still return it to the blank
-         * (mutable) slate. */
+    if (arena->block != NULL) {
+        /* A packed arena belongs to one decoded tree and is never reset; it
+         * is released as a whole by pbw_message_free(). */
         arena->readonly = 0;
         return;
     }
@@ -120,7 +120,10 @@ pbw_arena_reset(pbw_arena *arena)
      * mutable until a decode seals it read-only again. */
     arena->readonly = 0;
     arena->has_heap = 0;
-    /* Large single allocations never become resident. */
+    /* Large single allocations never become resident. Free them even when no
+     * head chunk exists: a context that only ever held oversized payloads
+     * (pbw_value_new_bytes_ctx above the threshold, no small allocation)
+     * would otherwise pin every one of them until pbw_ctx_free(). */
     for (chunk = arena->large; chunk != NULL;) {
         pbw_arena_chunk *next = chunk->next;
 
@@ -128,6 +131,10 @@ pbw_arena_reset(pbw_arena *arena)
         chunk = next;
     }
     arena->large = NULL;
+    if (head == NULL) {
+        arena->chunk_size = PBW_ARENA_MIN_CHUNK;
+        return;
+    }
     /* An outlier that grew the head past the budget is dropped as well:
      * steady workloads under budget stay malloc-free, anything above pays
      * one malloc per reset instead of pinning the peak forever. */
@@ -154,16 +161,16 @@ pbw_arena_new_packed(size_t first_chunk)
     pbw_arena *arena;
     pbw_arena_chunk *chunk;
 
-    if (first_chunk > SIZE_MAX - sizeof(pbw_arena) - sizeof(pbw_arena_chunk)) {
+    if (first_chunk > SIZE_MAX - PBW_ARENA_HDR - PBW_CHUNK_HDR) {
         return NULL;
     }
-    total = sizeof(pbw_arena) + sizeof(pbw_arena_chunk) + first_chunk;
+    total = PBW_ARENA_HDR + PBW_CHUNK_HDR + first_chunk;
     block = (uint8_t *)malloc(total);
     if (block == NULL) {
         return NULL;
     }
     arena = (pbw_arena *)(void *)block;
-    chunk = (pbw_arena_chunk *)(void *)(block + sizeof(pbw_arena));
+    chunk = (pbw_arena_chunk *)(void *)(block + PBW_ARENA_HDR);
     chunk->next = NULL;
     chunk->used = 0;
     chunk->cap = first_chunk;
@@ -201,7 +208,7 @@ pbw_arena_free(pbw_arena *arena)
         /* The arena struct and its first chunk live in the block itself. */
         uint8_t *base = (uint8_t *)arena->block;
         pbw_arena_chunk *first =
-            (pbw_arena_chunk *)(void *)(base + sizeof(pbw_arena));
+            (pbw_arena_chunk *)(void *)(base + PBW_ARENA_HDR);
 
         for (chunk = arena->head; chunk != NULL && chunk != first;) {
             pbw_arena_chunk *next = chunk->next;

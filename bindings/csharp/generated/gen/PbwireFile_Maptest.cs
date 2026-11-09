@@ -8,7 +8,7 @@ using Pbwire;
 namespace Spectest {
 
     public static class PbwireFile_Maptest {
-        private static volatile Schema _schema;
+        private static volatile Schema? _schema;
         private static readonly object _lock = new object();
 
         static PbwireFile_Maptest() { Init(); }

@@ -97,8 +97,9 @@ encode(_Tuple) ->
 %% @doc Decode binary protobuf wire format into a message record or map tuple. `Name' is the message
 %% atom as written in the `.proto' file, e.g. `'Person''.
 %%
-%% Raises `unknown_msg' when the loaded schema has no message called `Name', `cache_not_exists' when
-%% no schema is loaded, and `badarg' on malformed wire data.
+%% Raises `cache_not_exists' when no schema is loaded. An unknown `Name' raises that atom as the
+%% exception reason (not the fixed atom `unknown_msg'), and malformed wire data raises the input
+%% binary; both match the upstream `:pbwire` NIF's behaviour.
 -spec decode(binary(), atom()) -> tuple().
 decode(_Binary, _Name) ->
     ?NOT_LOADED.

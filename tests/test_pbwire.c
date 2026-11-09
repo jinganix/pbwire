@@ -684,6 +684,30 @@ test_map(pbw_schema *schema)
         CHECK(pbw_value_get_int32(pbw_message_get(entry, 2)) == 1);
         pbw_message_free(decoded);
     }
+    /* A list item belongs to its list: freeing it through the public API is
+     * the documented no-op, and handing it to another message is rejected
+     * instead of moving one wrapper into two lists. */
+    {
+        pbw_message *heap = pbw_message_new(type);
+        pbw_message *kid = pbw_message_new(desc(schema, "MapEntry"));
+        pbw_message *other = pbw_message_new(type);
+        pbw_value *item;
+
+        CHECK(heap != NULL && kid != NULL && other != NULL);
+        CHECK_OK(pbw_message_set(kid, 1, pbw_value_new_string("a")));
+        CHECK_OK(pbw_message_set(heap, 1, pbw_value_new_message(kid)));
+        item = pbw_value_at(pbw_message_get(heap, 1), 0);
+        pbw_value_free(item);
+        CHECK(pbw_value_count(pbw_message_get(heap, 1)) == 1);
+        CHECK(strcmp(pbw_value_get_string(
+                         pbw_message_get(pbw_value_get_message(
+                                             pbw_value_at(pbw_message_get(heap, 1), 0)),
+                                         1)),
+                     "a") == 0);
+        CHECK_STATUS(PBW_ERR_INVALID, pbw_message_set(other, 1, item));
+        pbw_message_free(other);
+        pbw_message_free(heap); /* frees the item wrapper exactly once */
+    }
     pbw_message_free(msg);
 }
 
@@ -715,6 +739,19 @@ test_oneof(pbw_schema *schema)
         CHECK(pbw_message_get(decoded, 1) == NULL);
         CHECK(pbw_value_get_int32(pbw_message_get(decoded, 2)) == 5);
         pbw_message_free(decoded);
+    }
+    /* Clearing a member that is not the set case keeps the set one addressable
+     * (and the next set of the sibling still replaces it). */
+    {
+        pbw_message *m = pbw_message_new(type);
+
+        CHECK_OK(pbw_message_set(m, 2, pbw_value_new_int(5)));
+        pbw_message_clear(m, 1);
+        CHECK(pbw_message_get(m, 2) != NULL);
+        CHECK_OK(pbw_message_set(m, 1, pbw_value_new_string("y")));
+        CHECK(pbw_message_get(m, 2) == NULL);
+        CHECK(pbw_message_get(m, 1) != NULL);
+        pbw_message_free(m);
     }
     pbw_message_free(msg);
 }
@@ -1191,6 +1228,12 @@ test_pack_all_types(pbw_schema *schema)
         CHECK(pbw_value_get_int32(pbw_value_at(pbw_message_get(decoded, 3), 0)) == -3);
         CHECK(pbw_value_get_float(pbw_value_at(pbw_message_get(decoded, 2), 0)) ==
               4.5f);
+        /* Signed fixed-width repeated items are sign extended, packed and
+         * unpacked alike: the same representation as a singular field. */
+        CHECK(pbw_value_get_int(pbw_value_at(pbw_message_get(decoded, 11), 0)) ==
+              -3);
+        CHECK(pbw_value_get_int(pbw_value_at(pbw_message_get(decoded, 12), 0)) ==
+              -3);
         pbw_free(buf);
         pbw_message_free(decoded);
         pbw_message_free(msg);
@@ -1331,11 +1374,108 @@ test_print_depth_limit(pbw_schema *schema)
     }
     CHECK_STATUS(PBW_ERR_LIMIT, pbw_encode(root, &buf, &len));
     CHECK(buf == NULL && len == 0);
+    /* The buffer pointer is replaced on both paths: a caller reusing one
+     * never keeps a stale pointer after the failure. */
+    buf = (uint8_t *)&text_len;
+    len = 99;
+    CHECK_STATUS(PBW_ERR_LIMIT, pbw_encode(root, &buf, &len));
+    CHECK(buf == NULL && len == 0);
+    text = (char *)&text_len;
+    text_len = 99;
     CHECK_STATUS(PBW_ERR_LIMIT, pbw_json_print(root, &text, &text_len));
     CHECK(text == NULL && text_len == 0);
+    text = (char *)&text_len;
+    text_len = 99;
     CHECK_STATUS(PBW_ERR_LIMIT, pbw_text_print(root, &text, &text_len));
     CHECK(text == NULL && text_len == 0);
     pbw_message_free(root);
+}
+
+/* A group decodes exactly as deep as a message with the same cap: the group
+ * body must not spend an extra nesting level on its own check. */
+static void
+test_group_depth_limit(void)
+{
+    pbw_schema *schema = pbw_schema_new();
+    pbw_descriptor *grp;
+    pbw_descriptor *msg;
+    pbw_field *f;
+    pbw_message *root;
+    pbw_message *cur;
+    pbw_message *decoded = NULL;
+    pbw_limits lim;
+    uint8_t *buf = NULL;
+    size_t len = 0;
+    int i;
+
+    CHECK(schema != NULL);
+    if (schema == NULL) {
+        return;
+    }
+    pbw_schema_set_proto3(schema, 0);
+    grp = pbw_schema_add_message(schema, "G");
+    msg = pbw_schema_add_message(schema, "M");
+    f = pbw_message_add_field(grp, "n", 1, PBW_TYPE_GROUP, PBW_LABEL_OPTIONAL);
+    pbw_field_set_type_name(f, "G");
+    f = pbw_message_add_field(msg, "n", 1, PBW_TYPE_MESSAGE,
+                              PBW_LABEL_OPTIONAL);
+    pbw_field_set_type_name(f, "M");
+    CHECK_OK(pbw_schema_link(schema));
+
+    memset(&lim, 0, sizeof(lim));
+    lim.max_depth = 3;
+    root = pbw_message_new(grp);
+    CHECK(root != NULL);
+    cur = root;
+    for (i = 0; i < 2; i++) {
+        cur = pbw_message_set_message(cur, 1);
+        CHECK(cur != NULL);
+    }
+    CHECK_OK(pbw_encode(root, &buf, &len));
+    CHECK_OK(pbw_decode_limits(grp, buf, len, &lim, &decoded));
+    pbw_message_free(decoded);
+    decoded = NULL;
+    pbw_free(buf);
+    buf = NULL;
+    pbw_message_free(root);
+
+    root = pbw_message_new(msg);
+    CHECK(root != NULL);
+    cur = root;
+    for (i = 0; i < 2; i++) {
+        cur = pbw_message_set_message(cur, 1);
+        CHECK(cur != NULL);
+    }
+    CHECK_OK(pbw_encode(root, &buf, &len));
+    CHECK_OK(pbw_decode_limits(msg, buf, len, &lim, &decoded));
+    pbw_message_free(decoded);
+    decoded = NULL;
+    /* One level below the nesting: both shapes fail together. */
+    lim.max_depth = 1;
+    CHECK_STATUS(PBW_ERR_LIMIT,
+                 pbw_decode_limits(msg, buf, len, &lim, &decoded));
+    CHECK(decoded == NULL);
+    pbw_free(buf);
+    pbw_message_free(root);
+    pbw_schema_free(schema);
+
+    /* An unlinked descriptor has no tags yet: both directions refuse it. */
+    schema = pbw_schema_new();
+    msg = pbw_schema_add_message(schema, "U");
+    pbw_message_add_field(msg, "a", 1, PBW_TYPE_INT32, PBW_LABEL_OPTIONAL);
+    CHECK_OK(pbw_schema_link(schema));
+    root = pbw_message_new(msg);
+    CHECK(root != NULL);
+    CHECK_OK(pbw_message_set(root, 1, pbw_value_new_int(1)));
+    /* any schema edit after link drops the link (and the precomputed tags) */
+    pbw_field_set_type_name((pbw_field *)pbw_descriptor_field_at(msg, 0),
+                            NULL);
+    buf = (uint8_t *)&len;
+    len = 99;
+    CHECK_STATUS(PBW_ERR_INVALID, pbw_encode(root, &buf, &len));
+    CHECK(buf == NULL && len == 0);
+    pbw_message_free(root);
+    pbw_schema_free(schema);
 }
 
 /* bool accepts any non-zero varint; float/double keep their exact bit pattern. */
@@ -1479,6 +1619,37 @@ test_field_order(pbw_schema *schema)
     pbw_free(buf);
     pbw_message_free(decoded);
     pbw_message_free(msg);
+}
+
+/* The schema-wide name index: adding many descriptors must rebuild it (it
+ * doubles) and every name must stay findable, with a clean miss for an
+ * unknown one. Also the fallback scan (no index) must agree with it. */
+static void
+test_schema_name_index(void)
+{
+    enum { N = 200 };
+    pbw_schema *schema = pbw_schema_new();
+    char name[32];
+    int i;
+
+    CHECK(schema != NULL);
+    for (i = 0; i < N; i++) {
+        snprintf(name, sizeof(name), "pkg.M%d", i);
+        CHECK(pbw_schema_add_message(schema, name) != NULL);
+    }
+    CHECK(pbw_schema_add_message(schema, "pkg.M7") == NULL); /* duplicate */
+    CHECK_OK(pbw_schema_link(schema));
+    for (i = 0; i < N; i++) {
+        pbw_descriptor *found;
+
+        snprintf(name, sizeof(name), "pkg.M%d", i);
+        found = pbw_schema_find(schema, name);
+        CHECK(found != NULL && strcmp(pbw_descriptor_name(found), name) == 0);
+    }
+    CHECK(pbw_schema_find(schema, "pkg.M999") == NULL);
+    CHECK(pbw_schema_find(schema, "pkg.M1x") == NULL);
+    CHECK(pbw_schema_find(schema, "") == NULL);
+    pbw_schema_free(schema);
 }
 
 /* Duplicate occurrences: scalars last-one-wins, singular messages merge,
@@ -1856,6 +2027,21 @@ test_ctx(pbw_schema *schema)
     size_t used_before;
 
     CHECK(ctx != NULL);
+    /* A reusable context arena frees by reset, so it never takes a heap value:
+     * the setter refuses and the value stays the caller's. The ctx twin, which
+     * lives in the same arena, is accepted. */
+    {
+        pbw_message *built = pbw_message_new_ctx(ctx, person);
+        pbw_value *heap = pbw_value_new_string("ctx cannot own this");
+
+        CHECK(built != NULL && heap != NULL);
+        CHECK_STATUS(PBW_ERR_INVALID, pbw_message_set(built, 1, heap));
+        pbw_value_free(heap);
+        CHECK_OK(pbw_message_set(built, 1,
+                                 pbw_value_new_bytes_ctx(ctx, "abc", 3)));
+        CHECK(strcmp(pbw_value_get_string(pbw_message_get(built, 1)), "abc") ==
+              0);
+    }
     /* Binding slot: set once, preserved by reset, freed with the context. */
     CHECK(pbw_ctx_user(ctx) == NULL);
     pbw_ctx_set_user(ctx, &heap_len);
@@ -1912,6 +2098,12 @@ test_ctx(pbw_schema *schema)
         CHECK_OK(pbw_encode(src, &wire, &len));
         pbw_ctx_reset(ctx);
         CHECK_STATUS(PBW_OK, pbw_decode_ctx(ctx, parent, wire, len, &decoded));
+        /* Every arena allocation is 8-byte aligned: on ILP32 the chunk header
+         * is 12 bytes, so a payload that simply follows it would put these 4
+         * bytes off and fault where a 64-bit slot needs 8. */
+        CHECK(((uintptr_t)decoded & 7u) == 0);
+        CHECK(((uintptr_t)pbw_value_at(pbw_message_get(decoded, 2), 0) & 7u) ==
+              0);
         CHECK(pbw_value_count(pbw_message_get(decoded, 2)) == 40);
         CHECK(pbw_value_count(pbw_message_get(decoded, 3)) == 40);
         CHECK(pbw_value_get_int32(
@@ -1926,9 +2118,25 @@ test_ctx(pbw_schema *schema)
     CHECK(used_before == 0);
     CHECK_STATUS(PBW_OK,
                  pbw_decode_ctx(ctx, person, heap_bytes, heap_len, &decoded));
+    CHECK(((uintptr_t)decoded & 7u) == 0);
     CHECK(pbw_ctx_used(ctx) > 0);
     pbw_ctx_reset(ctx);
     CHECK(pbw_ctx_used(ctx) == 0);
+
+    /* A plain decode owns its tree through one packed arena and stays mutable:
+     * a heap value stored into it is released by the free walk (has_heap), so
+     * this must not leak or free it twice. */
+    {
+        pbw_message *plain = NULL;
+
+        CHECK_STATUS(PBW_OK, pbw_decode(person, heap_bytes, heap_len, &plain));
+        CHECK_OK(pbw_message_set(plain, 1, pbw_value_new_string("mutated")));
+        CHECK_OK(pbw_message_set(plain, 2, pbw_value_new_int(99)));
+        CHECK(strcmp(pbw_value_get_string(pbw_message_get(plain, 1)),
+                     "mutated") == 0);
+        CHECK(pbw_value_get_int32(pbw_message_get(plain, 2)) == 99);
+        pbw_message_free(plain);
+    }
 
     pbw_free(heap_bytes);
     pbw_message_free(msg);
@@ -2022,7 +2230,43 @@ test_ctx_retain_cap(pbw_schema *schema)
     CHECK(out_len > 0);
     pbw_message_free(msg);
 
+    /* Freeing (not resetting) a context releases its oversized single
+     * allocations too. */
+    CHECK_STATUS(PBW_OK,
+                 pbw_decode_ctx(ctx, person, big_wire, big_len, &decoded));
+    CHECK(pbw_ctx_used(ctx) > PBW_ARENA_LARGE_THRESHOLD);
+
     pbw_free(big_wire);
+    pbw_ctx_free(ctx); /* frees the pending large chunk */
+}
+
+/* A context that only ever holds oversized single allocations never grows a
+ * head chunk. Reset must still release those, or a steady workload of large
+ * payloads grows without bound until pbw_ctx_free(). */
+static void
+test_ctx_reset_oversized_only(void)
+{
+    pbw_ctx *ctx = pbw_ctx_new();
+    size_t big = ((size_t)2 << 20);
+    int i;
+
+    CHECK(ctx != NULL);
+    for (i = 0; i < 3; i++) {
+        pbw_value *value = pbw_value_new_bytes_ctx(ctx, NULL, big);
+
+        CHECK(value != NULL);
+        CHECK(pbw_ctx_used(ctx) > PBW_ARENA_LARGE_THRESHOLD);
+        pbw_ctx_reset(ctx);
+        CHECK(pbw_ctx_used(ctx) == 0);
+    }
+    /* The reset context still allocates normally afterwards. */
+    {
+        pbw_value *value = pbw_value_new_uint_ctx(ctx, 7);
+
+        CHECK(value != NULL);
+        CHECK(value->as.u64 == 7);
+        CHECK(pbw_ctx_used(ctx) > 0);
+    }
     pbw_ctx_free(ctx);
 }
 
@@ -2131,7 +2375,9 @@ test_encode_to(pbw_schema *schema)
         CHECK(memcmp(buf, wire, wire_len) == 0);
         CHECK(buf[wire_len + PBW_ENCODE_SLACK - 1] == 0xaa);
         CHECK_STATUS(PBW_ERR_LIMIT, pbw_encode_to(msg, buf, 4, &len));
+        CHECK(len == 0); /* *len is written on the failure path too */
         CHECK_STATUS(PBW_ERR_LIMIT, pbw_encode_to(msg, buf, wire_len, &len));
+        CHECK(len == 0);
         CHECK_STATUS(PBW_ERR_INVALID, pbw_encode_to(msg, NULL, wire_len + 16, &len));
         CHECK_STATUS(PBW_ERR_INVALID, pbw_encode_to(NULL, buf, wire_len + 16, &len));
         CHECK_STATUS(PBW_ERR_INVALID, pbw_encode_to(msg, buf, wire_len + 16, NULL));
@@ -2275,6 +2521,158 @@ test_enum(pbw_schema *schema)
     CHECK(number == 1);
     CHECK(pbw_enum_find_value(color, "PURPLE", &number) == 0);
     CHECK(pbw_enum_find_name(color, 42, &name) == 0);
+}
+
+/* A wide message must stay linear to build: add_field() indexes numbers and
+ * names instead of scanning every earlier field (8000 fields used to cost 64 ms
+ * of scanning). It also proves the index stays correct across the rebuilds that
+ * geometric growth triggers, by re-offering the very first field. */
+static void
+test_wide_message(void)
+{
+    enum { WIDE = 2000 };
+    pbw_schema *schema = pbw_schema_new();
+    pbw_descriptor *msg = pbw_schema_add_message(schema, "Wide");
+    size_t i;
+
+    CHECK(schema != NULL && msg != NULL);
+    for (i = 1; i <= WIDE; i++) {
+        char name[32];
+
+        snprintf(name, sizeof(name), "f%zu", i);
+        CHECK(pbw_message_add_field(msg, name, (uint32_t)i, PBW_TYPE_INT32,
+                                    PBW_LABEL_OPTIONAL) != NULL);
+    }
+    /* duplicates of a row added before several table rebuilds */
+    CHECK(pbw_message_add_field(msg, "f1", 1, PBW_TYPE_INT32,
+                                PBW_LABEL_OPTIONAL) == NULL);
+    CHECK(pbw_message_add_field(msg, "f1", (uint32_t)WIDE + 1, PBW_TYPE_INT32,
+                                PBW_LABEL_OPTIONAL) == NULL);
+    CHECK(pbw_message_add_field(msg, "new", 1, PBW_TYPE_INT32,
+                                PBW_LABEL_OPTIONAL) == NULL);
+    {
+        char name[32];
+
+        snprintf(name, sizeof(name), "f%u", (unsigned)WIDE);
+        CHECK(pbw_message_add_field(msg, "last", (uint32_t)WIDE,
+                                    PBW_TYPE_INT32, PBW_LABEL_OPTIONAL) == NULL);
+        /* A fresh number and a fresh name still fit. */
+        CHECK(pbw_message_add_field(msg, "tail", (uint32_t)WIDE + 1,
+                                    PBW_TYPE_INT32,
+                                    PBW_LABEL_OPTIONAL) != NULL);
+        (void)name;
+    }
+    CHECK_OK(pbw_schema_link(schema));
+    CHECK(pbw_descriptor_field_count(msg) == WIDE + 1);
+    CHECK(pbw_descriptor_find_field(msg, 1) != NULL);
+    CHECK(pbw_descriptor_find_field(msg, (uint32_t)WIDE + 1) != NULL);
+    CHECK(pbw_descriptor_find_field_name(msg, "f1") != NULL);
+    CHECK(pbw_descriptor_find_field_name(msg, "tail") != NULL);
+    pbw_schema_free(schema);
+}
+
+/* A message whose fields are all extensions must index them too. The add-time
+ * table grows by total rows; keying it on the regular-field name count instead
+ * would leave such a message with a full table and a probe that never finds a
+ * free slot (an infinite loop). */
+static void
+test_extension_only_message(void)
+{
+    enum { EXT = 100 };
+    pbw_schema *schema = pbw_schema_new();
+    pbw_descriptor *msg = pbw_schema_add_message(schema, "ExtOnly");
+    size_t i;
+
+    CHECK(schema != NULL && msg != NULL);
+    for (i = 1; i <= EXT; i++) {
+        /* Same short name every time: extensions are identified by number. */
+        CHECK(pbw_message_add_extension(msg, "e", (uint32_t)i,
+                                        PBW_TYPE_INT32,
+                                        PBW_LABEL_OPTIONAL) != NULL);
+    }
+    CHECK(pbw_message_add_extension(msg, "e", 1, PBW_TYPE_INT32,
+                                    PBW_LABEL_OPTIONAL) == NULL);
+    CHECK_OK(pbw_schema_link(schema));
+    CHECK(pbw_descriptor_field_count(msg) == EXT);
+    CHECK(pbw_descriptor_find_field(msg, EXT) != NULL);
+    pbw_schema_free(schema);
+}
+
+/* The printers and parsers must agree on the longest identifier the
+ * descriptor loader accepts (512 bytes per name component): a name that
+ * prints but cannot be parsed back breaks round-tripping a legal schema. */
+static void
+fill_name(char *out, size_t n)
+{
+    size_t i;
+
+    for (i = 0; i < n; i++) {
+        out[i] = (char)('a' + (int)(i % 26));
+    }
+    out[n] = '\0';
+}
+
+static void
+test_long_names(void)
+{
+    char field_name[301];
+    char enum_name[301];
+    char ext_name[301];
+    char ext_full[512];
+    pbw_schema *schema = pbw_schema_new();
+    pbw_descriptor *msg = pbw_schema_add_message(schema, "M");
+    pbw_descriptor *en = pbw_schema_add_enum(schema, "E");
+    pbw_field *field;
+    pbw_field *ext;
+    pbw_message *message;
+    pbw_message *back = NULL;
+    char *text = NULL;
+    size_t text_len = 0;
+    pbw_status status;
+
+    CHECK(schema != NULL && msg != NULL && en != NULL);
+    fill_name(field_name, sizeof(field_name) - 1);
+    fill_name(enum_name, sizeof(enum_name) - 1);
+    CHECK_OK(pbw_enum_add_value(en, enum_name, 1));
+    field = pbw_message_add_field(msg, "e", 1, PBW_TYPE_ENUM,
+                                  PBW_LABEL_OPTIONAL);
+    CHECK(field != NULL);
+    CHECK(pbw_message_add_field(msg, field_name, 2, PBW_TYPE_INT32,
+                                PBW_LABEL_OPTIONAL) != NULL);
+    ext = pbw_message_add_extension(msg, "ext", 100, PBW_TYPE_INT32,
+                                    PBW_LABEL_OPTIONAL);
+    CHECK(ext != NULL);
+    fill_name(ext_name, sizeof(ext_name) - 1);
+    snprintf(ext_full, sizeof(ext_full), "M.%s", ext_name);
+    pbw_field_set_full_name(ext, ext_full);
+    pbw_field_set_type_name(field, "E");
+    CHECK_OK(pbw_schema_link(schema));
+
+    message = pbw_message_new(msg);
+    CHECK(message != NULL);
+    CHECK_OK(pbw_message_set(message, 1, pbw_value_new_uint(1)));
+    CHECK_OK(pbw_message_set(message, 100, pbw_value_new_uint(7)));
+
+    CHECK_OK(pbw_text_print(message, &text, &text_len));
+    status = pbw_text_parse(msg, text, text_len, &back);
+    CHECK_STATUS(PBW_OK, status);
+    CHECK(back != NULL);
+    CHECK(pbw_message_get(back, 1) != NULL);
+    CHECK(pbw_message_get(back, 100) != NULL);
+    pbw_message_free(back);
+    pbw_free(text);
+
+    CHECK_OK(pbw_json_print(message, &text, &text_len));
+    back = NULL;
+    CHECK_STATUS(PBW_OK, pbw_json_parse(msg, text, text_len, &back));
+    CHECK(back != NULL);
+    CHECK(pbw_message_get(back, 1) != NULL);
+    CHECK(pbw_message_get(back, 100) != NULL);
+    pbw_message_free(back);
+    pbw_free(text);
+
+    pbw_message_free(message);
+    pbw_schema_free(schema);
 }
 
 static void
@@ -3100,6 +3498,8 @@ test_text_format(void)
             "f32: 1e",                                                                                                                                                   /* exponent without digits */
             "f32: 1e+",                                                                                                                                                  /* exponent without digits */
             "f32: .e5",                                                                                                                                                  /* missing mantissa */
+            "f32: 03.5",                                                                                                                                                 /* leading zero is octal */
+            "f32: 01e5",                                                                                                                                                 /* octal with an exponent */
             "flag: yes",                                                                                                                                                 /* not a bool */
             "flag: 2",                                                                                                                                                   /* out of range for bool */
             "subs [1]",                                                                                                                                                  /* scalar in a message list */
@@ -4243,7 +4643,9 @@ test_json_format(void)
             "{\"blob\":\"AP8/\"}",
             "{\"blob\":\"AQI=\"}",
             "{\"blob\":\"AQ==\"}",
-            "{\"blob\":\"\"}",
+            /* proto3 implicit presence: an empty bytes value is the default,
+             * so the reference printer omits it. */
+            "{}",
         };
         size_t i;
 
@@ -4664,6 +5066,37 @@ test_json_format(void)
             pbw_message_free(decoded);
             decoded = NULL;
         }
+    }
+    /* The reference rejects timestamps a real calendar cannot spell: without
+     * this the epoch-day arithmetic silently rolls the value over (month 13
+     * lands in the next year, February 30 in March). */
+    {
+        static const char *bad[] = {
+            "{\"when\":\"2020-13-01T00:00:00Z\"}",
+            "{\"when\":\"2020-01-01T25:00:00Z\"}",
+            "{\"when\":\"2020-01-01T00:61:00Z\"}",
+            "{\"when\":\"2020-01-01T00:00:61Z\"}",
+            "{\"when\":\"2019-02-29T00:00:00Z\"}",
+            "{\"when\":\"2020-02-30T00:00:00Z\"}",
+            "{\"when\":\"2020-04-31T00:00:00Z\"}",
+        };
+        size_t i;
+
+        for (i = 0; i < sizeof(bad) / sizeof(bad[0]); i++) {
+            decoded = NULL;
+            CHECK_STATUS(PBW_ERR_INVALID,
+                         pbw_json_parse(msg, bad[i], strlen(bad[i]),
+                                        &decoded));
+            CHECK(decoded == NULL);
+        }
+        /* The leap day of a leap year still parses. */
+        {
+            const char *leap = "{\"when\":\"2020-02-29T00:00:00Z\"}";
+
+            CHECK_OK(pbw_json_parse(msg, leap, strlen(leap), &decoded));
+        }
+        pbw_message_free(decoded);
+        decoded = NULL;
     }
     /* Struct/Value/ListValue print every kind; printing parses back to
      * the same bytes (covers null, nesting and the list path). */
@@ -5155,8 +5588,16 @@ test_deterministic(void)
     CHECK(plain_len == det_len && memcmp(plain, det, plain_len) == 0);
     pbw_message_free(msg);
 
-    CHECK_STATUS(PBW_ERR_INVALID,
-                 pbw_encode_deterministic(NULL, &det, &det_len));
+    /* A failing call still writes the out-parameters; use a scratch pair so
+     * the documented overwrite cannot drop the buffer encoded above. */
+    {
+        uint8_t *scratch = (uint8_t *)&det_len;
+        size_t scratch_len = 99;
+
+        CHECK_STATUS(PBW_ERR_INVALID,
+                     pbw_encode_deterministic(NULL, &scratch, &scratch_len));
+        CHECK(scratch == NULL && scratch_len == 0);
+    }
     pbw_free(plain);
     pbw_free(det);
     pbw_schema_free(schema);
@@ -5464,6 +5905,15 @@ test_wkt(void)
     CHECK_OK(pbw_timestamp_to_millis(stamp, &millis));
     CHECK(millis == 1500);
     pbw_message_free(stamp);
+    /* Timestamp nanos are never negative: a pre-epoch millisecond borrows a
+     * second instead of producing nanos -500000000. */
+    CHECK_OK(pbw_timestamp_from_millis(ts, -1500, &stamp));
+    CHECK(pbw_value_get_int(pbw_message_get(stamp, 1)) == -2);
+    CHECK(pbw_value_get_int(pbw_message_get(stamp, 2)) == 500000000);
+    CHECK_OK(pbw_timestamp_to_millis(stamp, &millis));
+    CHECK(millis == -1500);
+    pbw_message_free(stamp);
+    stamp = NULL;
     CHECK_OK(pbw_duration_from_millis(dur, -1501, &stamp));
     CHECK_OK(pbw_duration_to_millis(stamp, &millis));
     CHECK(millis == -1501);
@@ -5623,8 +6073,14 @@ test_json_edges(void)
     if (f != NULL) {
         pbw_field_set_type_name(f, "Sub");
     }
+    f = pbw_message_add_field(msg, "nullv", 15, PBW_TYPE_ENUM,
+                              PBW_LABEL_OPTIONAL);
+    if (f != NULL) {
+        pbw_field_set_type_name(f, "google.protobuf.NullValue");
+    }
     f = NULL;
     pbw_message_add_field(sub, "a", 1, PBW_TYPE_INT32, PBW_LABEL_OPTIONAL);
+    pbw_message_add_field(sub, "b", 2, PBW_TYPE_INT32, PBW_LABEL_OPTIONAL);
     pbw_message_add_field(ts, "seconds", 1, PBW_TYPE_INT64,
                           PBW_LABEL_OPTIONAL);
     pbw_message_add_field(ts, "nanos", 2, PBW_TYPE_INT32,
@@ -5773,6 +6229,36 @@ test_json_edges(void)
     CHECK_OK(JP("{\"vv\":null}"));
     pbw_message_free(decoded);
     decoded = NULL;
+    /* google.protobuf.NullValue is the one enum that takes JSON null: it means
+     * NULL_VALUE (0), and the printer drops the implicit-presence zero again. */
+    CHECK_OK(JP("{\"nullv\":null}"));
+    got = pbw_message_get(decoded, 15);
+    CHECK(got != NULL);
+    if (got != NULL) {
+        CHECK(pbw_value_get_kind(got) == PBW_VALUE_UINT);
+        CHECK(pbw_value_get_uint(got) == 0);
+    }
+    {
+        char *json = NULL;
+        size_t json_len = 0;
+
+        CHECK_OK(pbw_json_print(decoded, &json, &json_len));
+        CHECK(strcmp(json, "{}") == 0);
+        pbw_free(json);
+    }
+    pbw_message_free(decoded);
+    decoded = NULL;
+    /* Legacy duplicate singular message key: the reference merges into the
+     * submessage already parsed instead of dropping the first copy. */
+    CHECK_OK(JP("{\"sub\":{\"a\":1},\"sub\":{\"b\":2}}"));
+    got = pbw_message_get(decoded, 14);
+    CHECK(got != NULL);
+    CHECK(pbw_value_get_int32(
+              pbw_message_get(pbw_value_get_message(got), 1)) == 1);
+    CHECK(pbw_value_get_int32(
+              pbw_message_get(pbw_value_get_message(got), 2)) == 2);
+    pbw_message_free(decoded);
+    decoded = NULL;
     /* Any: resolved @type parses, missing/unknown/mistyped @type fails */
     CHECK_OK(JP("{\"payload\":{\"@type\":\"type.googleapis.com/Sub\",\"a\":1}}"));
     pbw_message_free(decoded);
@@ -5844,6 +6330,34 @@ test_json_edges(void)
             dd = NULL;
             pbw_schema_free(s2);
         }
+    }
+    /* A hand-built Value -> ListValue chain nests through message fields the
+     * printer does not walk field by field: the cap must still apply instead
+     * of overflowing the stack. */
+    {
+        pbw_message *root = pbw_message_new(val);
+        pbw_message *cur = root;
+        char *out = NULL;
+        size_t out_len = 0;
+        int i;
+
+        CHECK(root != NULL);
+        for (i = 0; i < (int)PBW_MAX_DEPTH + 2; i++) {
+            pbw_message *lv_next =
+                pbw_message_set_message(cur, 6 /* list_value */);
+            pbw_message *next;
+
+            CHECK(lv_next != NULL);
+            next = pbw_message_new(val);
+            CHECK(next != NULL);
+            CHECK_OK(pbw_message_set(lv_next, 1, pbw_value_new_message(next)));
+            cur = next;
+        }
+        CHECK_STATUS(PBW_ERR_LIMIT, pbw_json_print(root, &out, &out_len));
+        CHECK(out == NULL && out_len == 0);
+        CHECK_STATUS(PBW_ERR_LIMIT, pbw_text_print(root, &out, &out_len));
+        CHECK(out == NULL && out_len == 0);
+        pbw_message_free(root);
     }
     pbw_schema_free(schema);
 #undef JP
@@ -5970,8 +6484,17 @@ test_text_edges(void)
     CHECK_OK(TP("flt: nan"));
     pbw_message_free(decoded);
     decoded = NULL;
-    CHECK_STATUS(PBW_ERR_INVALID, TP("flt: NAN"));
-    CHECK_STATUS(PBW_ERR_INVALID, TP("flt: inFiniTy"));
+    /* the reference lowercases the identifier: any casing of inf/infinity/nan
+     * is a value */
+    CHECK_OK(TP("flt: NAN"));
+    pbw_message_free(decoded);
+    decoded = NULL;
+    CHECK_OK(TP("flt: inFiniTy"));
+    pbw_message_free(decoded);
+    decoded = NULL;
+    CHECK_OK(TP("flt: Inf"));
+    pbw_message_free(decoded);
+    decoded = NULL;
     CHECK_STATUS(PBW_ERR_INVALID, TP("flt: 0x10"));
     CHECK_OK(TP("flt: 1.5f"));
     pbw_message_free(decoded);
@@ -7161,10 +7684,12 @@ main(void)
     test_packed_hostile(schema);
     test_recursive_type(schema);
     test_print_depth_limit(schema);
+    test_group_depth_limit();
     test_bool_and_float_bits(schema);
     test_enum_edges(schema);
     test_explicit_presence(schema);
     test_field_order(schema);
+    test_schema_name_index();
     test_duplicate_occurrences(schema);
     test_groups(schema);
     test_unknown_only(schema);
@@ -7174,6 +7699,7 @@ main(void)
     test_ctx(schema);
     test_ctx_build(schema);
     test_ctx_retain_cap(schema);
+    test_ctx_reset_oversized_only();
     test_ctx_pool(schema);
     test_encode_to(schema);
     test_errors(schema);
@@ -7196,6 +7722,9 @@ main(void)
     test_streaming(schema);
     test_streaming_edges(schema);
     test_decode_delimited(schema);
+    test_wide_message();
+    test_extension_only_message();
+    test_long_names();
     test_schema_errors();
 
     pbw_schema_free(schema);

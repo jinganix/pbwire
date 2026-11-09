@@ -11,8 +11,8 @@
  * pbw_value_free().
  *   - Numeric values are stored as raw bit patterns: PBW_TYPE_FLOAT and
  *     PBW_TYPE_FIXED32/PBW_TYPE_SFIXED32 live in the low 32 bits,
- * PBW_TYPE_DOUBLE and the 64-bit fixed types use all 64 bits. Signed types are
- * sign extended.
+ *     PBW_TYPE_DOUBLE and the 64-bit fixed types use all 64 bits. Signed
+ *     types are sign extended.
  *   - Byte payloads are always NUL terminated so pbw_value_get_string() is safe
  * on decoded string fields (the extra byte is not part of the field length).
  *   - No defaults are filled in: a field that was not present on the wire is
@@ -278,8 +278,8 @@ pbw_status pbw_message_encoded_size(const pbw_message *msg, size_t *len);
  * smallest cap guaranteed to fit, while `size` alone may be rejected. */
 #define PBW_ENCODE_SLACK 12
 
-/* Present value of a field, or NULL. Repeated fields expose a PBW_VALUE_LIST.
- */
+/* Present value of a field, or NULL. Repeated fields expose a
+ * PBW_VALUE_LIST. */
 pbw_value *pbw_message_get(const pbw_message *msg, uint32_t number);
 /* Same as pbw_message_get() for an already-resolved field of the message's
  * descriptor (NULL when it belongs elsewhere); skips the number lookup for
@@ -318,7 +318,10 @@ pbw_status pbw_message_add_unknown_bytes(pbw_message *msg, const void *data,
 /* Store a value: appends for repeated fields, replaces otherwise. Takes
  * ownership of value on success only. Values owned by another message (see
  * pbw_message_get()) are rejected with PBW_ERR_INVALID; build a fresh value
- * instead. */
+ * instead. A message built with pbw_message_new_ctx() only accepts values
+ * built with the matching pbw_value_new_*_ctx() constructor (also
+ * PBW_ERR_INVALID): the context arena frees by reset, so it cannot own a heap
+ * payload. A plain-decoded tree accepts both. */
 pbw_status pbw_message_set(pbw_message *msg, uint32_t number, pbw_value *value);
 /* Same as pbw_message_set() for an already-resolved field of the message's
  * descriptor (PBW_ERR_INVALID when it belongs elsewhere); skips the number
@@ -332,7 +335,8 @@ pbw_message *pbw_message_set_message(pbw_message *msg, uint32_t number);
  * until the next pbw_decode_ctx() on the same context seals it; reset the
  * context before each build or decode. Values are built with the
  * pbw_value_new_*_ctx() constructors below so every payload lives in the
- * same arena and dies with the reset. */
+ * same arena and dies with the reset; a heap value (pbw_value_new_string(),
+ * ...) is rejected with PBW_ERR_INVALID because the reset could not free it. */
 pbw_message *pbw_message_new_ctx(pbw_ctx *ctx, const pbw_descriptor *desc);
 
 /* ----------------------------------------------------------------- value */
@@ -347,10 +351,10 @@ pbw_value *pbw_value_new_string(const char *str);
 pbw_value *pbw_value_new_message(pbw_message *msg); /* takes ownership of msg */
 /* Arena twins of the constructors above, for trees built with
  * pbw_message_new_ctx(): payload bytes are copied into the context so the
- * tree never points at caller memory (NULL data leaves the buffer
- * uninitialized for the caller to fill, read back via
- * pbw_value_get_bytes()). All scalars share the uint constructor
- * (float/double/int/bool pass their bit pattern, like the plain
+ * tree never points at caller memory. NULL data zero-fills the buffer for
+ * the caller to fill, read back via pbw_value_get_bytes() (a plain
+ * pbw_value_new_bytes(NULL, len) does the same). All scalars share the uint
+ * constructor (float/double/int/bool pass their bit pattern, like the plain
  * pbw_value_new_int/bool/float/double do). */
 pbw_value *pbw_value_new_uint_ctx(pbw_ctx *ctx, uint64_t bits);
 pbw_value *pbw_value_new_bytes_ctx(pbw_ctx *ctx, const void *data, size_t len);
@@ -436,8 +440,14 @@ pbw_status pbw_encode_ctx(pbw_ctx *ctx, const pbw_message *msg,
 
 /* ------------------------------------------------------------------ wire */
 
-/* Encode msg; *out is replaced with a malloc'd buffer owned by the caller
- * (pbw_free). */
+/* The text and JSON mappings define '.' as the decimal separator, but strtod
+ * and snprintf follow LC_NUMERIC, which the embedding host may have set to a
+ * comma-decimal locale. The printers and parsers therefore translate the
+ * locale's separator when it is not '.', so the output stays valid under both.
+ * That check reads localeconv(), which the C standard does not make safe
+ * against a concurrent setlocale(): set the locale once at startup, before
+ * another thread calls into this library. */
+
 /* Print msg in protobuf text format. *out is malloc'd, NUL-terminated and owned
  * by the caller (pbw_free); *len excludes the NUL. Unknown fields are shown
  * as numeric `field: value` lines, like the reference printer. */
@@ -475,13 +485,15 @@ pbw_status pbw_json_parse_opts(const pbw_descriptor *desc, const char *text,
 pbw_status pbw_json_parse(const pbw_descriptor *desc, const char *text,
                           size_t len, pbw_message **out);
 
+/* Encode msg; *out is replaced with a malloc'd buffer owned by the caller
+ * (pbw_free). *out and *len are 0 on failure. */
 pbw_status pbw_encode(const pbw_message *msg, uint8_t **out, size_t *len);
 /* Encode into caller memory of `cap` bytes, so a binding can write straight
  * into its own buffer. No allocation happens and nothing is freed; `cap` is
  * the hard limit and the writer over-reserves up to 10 bytes per write, so
  * `pbw_message_encoded_size(msg) + PBW_ENCODE_SLACK` may be needed even when
- * the exact size is known. *len is the bytes written. PBW_ERR_LIMIT when the
- * message does not fit. */
+ * the exact size is known. *len is the bytes written, 0 after any failure.
+ * PBW_ERR_LIMIT when the message does not fit. */
 pbw_status pbw_encode_to(const pbw_message *msg, void *out, size_t cap,
                          size_t *len);
 /* Decode buf into a new message of the given type. Unknown fields are kept.

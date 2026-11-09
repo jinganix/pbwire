@@ -156,8 +156,15 @@ end
     let m = new_message(edge_ty)
         @test_throws PbwireError set_string!(m, "pick_num", "not a number")
         @test_throws PbwireError set_message!(m, "text")
+        # An embedded NUL would be silently truncated by the C string
+        # constructor, so the binding refuses it instead.
+        @test_throws PbwireError set_string!(m, "text", "a\0b")
         close(m)
     end
+
+    # encode_dict closes its tree even when the conversion throws (no finalizer
+    # on Message by design, so a throw must not leak the native tree).
+    @test_throws PbwireError encode_dict(ty, Dict("nope" => 1))
 
     close(edge_schema)
     close(schema)

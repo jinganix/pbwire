@@ -175,6 +175,30 @@ Check(Rejects(() => edgeTy.NewMessage().Set("pick_num", "not a number"), "type m
 Check(Rejects(() => edgeTy.NewMessage().SetMessage("text"), "not a message field"),
     "setMessage on a scalar rejected");
 
+// Lifetime: a disposed Schema frees the descriptors every Type/Field points
+// into, and a disposed root frees the arena a nested view points into. Both
+// must throw instead of reading freed memory.
+{
+    var doomed = Schema.FromFile(desc);
+    var doomedTy = doomed.Message("structtest.Inner3");
+    var doomedField = doomedTy.Field("value");
+    var doomedMsg = doomedTy.NewMessage();
+    doomed.Dispose();
+    Check(Throws(() => doomedTy.NewMessage()), "disposed schema rejects NewMessage");
+    Check(Throws(() => { _ = doomedField.Number; }), "disposed schema rejects Field.Number");
+    Check(Throws(() => doomedMsg.Encode()), "disposed schema rejects encode");
+}
+{
+    var live = Schema.FromFile(desc);
+    var liveTy = live.Message("structtest.Scalars3");
+    var liveRoot = liveTy.NewMessage();
+    var view = liveRoot.SetMessage("inner");
+    liveRoot.Dispose();
+    Check(Throws(() => view.Set("name", "x")), "view after root dispose rejects writes");
+    view.Dispose();
+    live.Dispose();
+}
+
 Console.WriteLine($"OK   {checks} checks passed");
 
 static bool Rejects(Action op, string expected)
@@ -198,6 +222,10 @@ static bool Throws(Action op)
         return false;
     }
     catch (PbwireException)
+    {
+        return true;
+    }
+    catch (ObjectDisposedException)
     {
         return true;
     }

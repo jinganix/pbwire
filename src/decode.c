@@ -220,6 +220,10 @@ read_scalar(reader *r, pbw_type type, uint64_t *out)
             return PBW_ERR_INVALID;
         }
         *out = (uint64_t)dec_le32(r->p);
+        if (type == PBW_TYPE_SFIXED32) {
+            /* Signed fixed values are represented sign extended, like int32. */
+            *out = (uint64_t)(int64_t)(int32_t)*out;
+        }
         r->p += 4;
         return PBW_OK;
     case PBW_TYPE_FIXED64:
@@ -411,9 +415,9 @@ decode_group_contents(reader *r, pbw_message *group, uint32_t number,
     const pbw_descriptor *desc = group->desc;
     rep_cache rep = {NULL, NULL};
 
-    if (depth >= dlim) {
-        return PBW_ERR_LIMIT;
-    }
+    /* No depth check here: both callers (read_group_field, and its merge path)
+     * already applied the same cap before recursing, and a second check would
+     * cost groups one nesting level against messages and unknown groups. */
     for (;;) {
         uint32_t tag;
         size_t used = 1;
@@ -1114,14 +1118,22 @@ decode_fields(pbw_message *msg, const uint8_t *buf, size_t len, uint32_t depth, 
                 if (pbw_remaining(r.end, r.p) < 4) {
                     return PBW_ERR_INVALID;
                 }
-                store_first_or_put(msg, index, dec_le32(r.p));
+                bits = dec_le32(r.p);
+                if (field->type == PBW_TYPE_SFIXED32) {
+                    bits = (uint64_t)(int64_t)(int32_t)bits;
+                }
+                store_first_or_put(msg, index, bits);
                 r.p += 4;
                 continue;
             case PBW_ACT_F64:
                 if (pbw_remaining(r.end, r.p) < 8) {
                     return PBW_ERR_INVALID;
                 }
-                store_first_or_put(msg, index, dec_le64(r.p));
+                bits = dec_le64(r.p);
+                if (field->type == PBW_TYPE_SFIXED64) {
+                    bits = (uint64_t)(int64_t)bits;
+                }
+                store_first_or_put(msg, index, bits);
                 r.p += 8;
                 continue;
             case PBW_ACT_STR: {
@@ -1199,6 +1211,12 @@ decode_fields(pbw_message *msg, const uint8_t *buf, size_t len, uint32_t depth, 
                     return PBW_ERR_INVALID;
                 }
                 bits = dec_le32(r.p);
+                if (field->type == PBW_TYPE_SFIXED32) {
+                    /* Sign extended like the singular path: the API hands
+                     * back every signed value in the same representation,
+                     * list items included. */
+                    bits = (uint64_t)(int64_t)(int32_t)bits;
+                }
                 r.p += 4;
                 status = rep_append(msg, field,
                                     pbw_value_new_uint_a(msg->arena, bits),
@@ -1212,6 +1230,9 @@ decode_fields(pbw_message *msg, const uint8_t *buf, size_t len, uint32_t depth, 
                     return PBW_ERR_INVALID;
                 }
                 bits = dec_le64(r.p);
+                if (field->type == PBW_TYPE_SFIXED64) {
+                    bits = (uint64_t)(int64_t)bits;
+                }
                 r.p += 8;
                 status = rep_append(msg, field,
                                     pbw_value_new_uint_a(msg->arena, bits),
@@ -1303,6 +1324,9 @@ decode_message(pbw_arena *arena, const pbw_descriptor *desc, const uint8_t *buf,
     }
     *out = NULL;
     msg = pbw_message_new_a(arena, desc);
+    if (msg == NULL) {
+        return PBW_ERR_NOMEM;
+    }
     status = decode_fields(msg, buf, len, depth, dlim);
     if (status != PBW_OK) {
         pbw_message_free(msg);

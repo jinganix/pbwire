@@ -8,7 +8,7 @@ using Pbwire;
 namespace Tutorial {
 
     public static class PbwireFile_Addressbook {
-        private static volatile Schema _schema;
+        private static volatile Schema? _schema;
         private static readonly object _lock = new object();
 
         static PbwireFile_Addressbook() { Init(); }

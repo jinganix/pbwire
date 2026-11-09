@@ -560,6 +560,49 @@ test_decode_deep_recursive_message(void)
     ep_test_env_destroy(env);
     return 0;
 }
+/* The spot stack is capped (EP_MAX_DECODE_DEPTH): one level past the pinned
+ * 400-deep success case the decode must raise, not grow the stack forever. */
+static int
+test_decode_depth_cap(void)
+{
+    ErlNifEnv *env = ep_test_env_create();
+    ep_state_t *st;
+    unsigned char wire[16384];
+    size_t depth = 1100, i, n = 0;
+
+    TEST_ASSERT(env != NULL);
+    TEST_ASSERT(ep_test_init_state(env, 1) == RET_OK);
+    st = (ep_state_t *)enif_priv_data(env);
+    TEST_ASSERT(ep_test_load_single_field(env, "rec", "a", 1,
+                                          enif_make_tuple2(env, st->atom_msg, enif_make_atom(env, "rec")),
+                                          st->atom_optional, NULL, 0) == RET_OK);
+    for (i = 0; i < depth; i++) {
+        size_t old_n = n, j;
+        unsigned char len[2];
+        size_t len_n;
+
+        if (n < 2) {
+            len_n = 1;
+            len[0] = (unsigned char)n;
+        } else {
+            len[0] = (unsigned char)(0x80 | (n & 0x7f));
+            len[1] = (unsigned char)(n >> 7);
+            len_n = 2;
+        }
+        TEST_ASSERT(n + 1 + len_n <= sizeof(wire));
+        for (j = old_n; j > 0; j--) {
+            wire[j + 1 + len_n - 1] = wire[j - 1];
+        }
+        wire[0] = 0x0a;
+        memcpy(wire + 1, len, len_n);
+        n = old_n + 1 + len_n;
+    }
+    TEST_ASSERT(ep_test_decode_wire(env, "rec", wire, n) == RET_ERROR);
+
+    ep_test_env_destroy(env);
+    return 0;
+}
+
 static int
 test_decode_bool_accepts_any_non_zero_varint(void)
 {
@@ -703,6 +746,7 @@ run_test_ep_decoder(void)
     TEST_RUN(test_decode_collect_unknown_fields_manual_node);
     TEST_RUN(test_decode_repeated_msg_wrong_wire_type_fails);
     TEST_RUN(test_decode_deep_recursive_message);
+    TEST_RUN(test_decode_depth_cap);
     TEST_RUN(test_decode_bool_accepts_any_non_zero_varint);
     TEST_RUN(test_decode_sint32_masks_to_32_bits);
     TEST_RUN(test_decode_deep_recursive_oneof);

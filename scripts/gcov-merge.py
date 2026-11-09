@@ -87,7 +87,12 @@ def main():
         nfiles += 1
     pct = 100 * total_e / total_t if total_t else 0
     print("lines=%.1f%% over %d files" % (pct, nfiles))
-    return 0 if (nfiles == 0 or total_t == 0 or pct >= floor) else 1
+    if nfiles == 0 or total_t == 0:
+        # Nothing measured: that is a broken run (stale objects, a gcov format
+        # change, missing .gcda), never a pass.
+        print("gcov-merge: no coverage data parsed", file=sys.stderr)
+        return 1
+    return 0 if pct >= floor else 1
 
 
 if __name__ == "__main__":

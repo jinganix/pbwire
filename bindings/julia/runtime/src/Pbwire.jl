@@ -193,13 +193,14 @@ struct Field
     number::UInt32
     type::Int
     label::Int
+    schema::Schema # keeps the descriptor memory alive while the handle is used
 end
 
-function _field(ptr::Ptr{Cvoid})
+function _field(ty, ptr::Ptr{Cvoid})
     number = @libcall(:pbw_field_number, UInt32, (Ptr{Cvoid},), ptr)
     type = Int(@libcall(:pbw_field_type, Cint, (Ptr{Cvoid},), ptr))
     label = Int(@libcall(:pbw_field_label, Cint, (Ptr{Cvoid},), ptr))
-    return Field(ptr, number, type, label)
+    return Field(ptr, number, type, label, ty.schema)
 end
 
 """A message type from a [`Schema`](@ref)."""
@@ -225,21 +226,25 @@ function field(ty::MsgType, name::String)
     if cached !== nothing
         return cached
     end
-    ptr = @libcall(:pbw_descriptor_find_field_name, Ptr{Cvoid},
-        (Ptr{Cvoid}, Cstring), ty.desc, name)
+    GC.@preserve ty begin
+        ptr = @libcall(:pbw_descriptor_find_field_name, Ptr{Cvoid},
+            (Ptr{Cvoid}, Cstring), ty.desc, name)
+    end
     if ptr == C_NULL
         dname = unsafe_string(
             @libcall(:pbw_descriptor_name, Ptr{UInt8}, (Ptr{Cvoid},), ty.desc))
         throw(PbwireError(-1, "$name: no such field on $dname"))
     end
-    f = _field(ptr)
+    f = _field(ty, ptr)
     ty.fields[name] = f
     return f
 end
 
 """The message type of a MESSAGE/GROUP field, for nested access."""
 function _nested_type(ty::MsgType, f::Field)
-    desc = @libcall(:pbw_field_message_type, Ptr{Cvoid}, (Ptr{Cvoid},), f.ptr)
+    GC.@preserve ty f begin
+        desc = @libcall(:pbw_field_message_type, Ptr{Cvoid}, (Ptr{Cvoid},), f.ptr)
+    end
     return desc == C_NULL ? nothing : MsgType(ty.schema, desc, Dict{String,Field}())
 end
 
@@ -270,16 +275,23 @@ function Base.close(m::Message)
 end
 
 """A new empty message; freed by [`close`](@ref)."""
-new_message(ty::MsgType) = Message(ty,
-    @libcall(:pbw_message_new, Ptr{Cvoid}, (Ptr{Cvoid},), ty.desc), true, nothing)
+function new_message(ty::MsgType)
+    GC.@preserve ty begin
+        return Message(ty,
+            @libcall(:pbw_message_new, Ptr{Cvoid}, (Ptr{Cvoid},), ty.desc),
+            true, nothing)
+    end
+end
 
 """Decodes wire bytes; unknown fields are preserved and re-encoded."""
 function decode(ty::MsgType, wire::Vector{UInt8})
     out = Ref{Ptr{Cvoid}}(C_NULL)
-    status = @libcall(:pbw_decode, Cint,
-        (Ptr{Cvoid}, Ptr{UInt8}, Csize_t, Ptr{Ptr{Cvoid}}),
-        ty.desc, isempty(wire) ? C_NULL : wire, length(wire), out)
-    _check(status, "decode")
+    GC.@preserve ty begin
+        status = @libcall(:pbw_decode, Cint,
+            (Ptr{Cvoid}, Ptr{UInt8}, Csize_t, Ptr{Ptr{Cvoid}}),
+            ty.desc, isempty(wire) ? C_NULL : wire, length(wire), out)
+        _check(status, "decode")
+    end
     return Message(ty, out[], true, nothing)
 end
 
@@ -296,8 +308,10 @@ function _store(m::Message, f::Field, value::Ptr{Cvoid})
     if value == C_NULL
         throw(PbwireError(-1, "set $(_fname(f)): out of memory"))
     end
-    status = @libcall(:pbw_message_set_field, Cint,
-        (Ptr{Cvoid}, Ptr{Cvoid}, Ptr{Cvoid}), m.handle, f.ptr, value)
+    GC.@preserve m f begin
+        status = @libcall(:pbw_message_set_field, Cint,
+            (Ptr{Cvoid}, Ptr{Cvoid}, Ptr{Cvoid}), m.handle, f.ptr, value)
+    end
     if status != 0
         # A rejected value stays owned by the caller.
         @libcall(:pbw_value_free, Cvoid, (Ptr{Cvoid},), value)
@@ -306,8 +320,11 @@ function _store(m::Message, f::Field, value::Ptr{Cvoid})
     return m
 end
 
-_fname(f::Field) = unsafe_string(
-    @libcall(:pbw_field_name, Ptr{UInt8}, (Ptr{Cvoid},), f.ptr))
+function _fname(f::Field)
+    GC.@preserve f begin
+        return unsafe_string(@libcall(:pbw_field_name, Ptr{UInt8}, (Ptr{Cvoid},), f.ptr))
+    end
+end
 
 """Appends to a repeated field or replaces a singular one; returns `m`."""
 set_int!(m::Message, f::Union{Field,String}, v::Integer) =
@@ -322,9 +339,14 @@ set_float!(m::Message, f::Union{Field,String}, v::Real) =
 set_double!(m::Message, f::Union{Field,String}, v::Real) =
     _store(m, _resolve(m.ty, f),
         @libcall(:pbw_value_new_double, Ptr{Cvoid}, (Cdouble,), Float64(v)))
-set_string!(m::Message, f::Union{Field,String}, v::String) =
-    _store(m, _resolve(m.ty, f),
+function set_string!(m::Message, f::Union{Field,String}, v::String)
+    if occursin('\0', v)
+        throw(PbwireError(-1,
+            "set $(_fname(_resolve(m.ty, f))): string contains NUL (use set_bytes!)"))
+    end
+    return _store(m, _resolve(m.ty, f),
         @libcall(:pbw_value_new_string, Ptr{Cvoid}, (Cstring,), v))
+end
 function set_bytes!(m::Message, f::Union{Field,String}, v::Vector{UInt8})
     ff = _resolve(m.ty, f)
     ptr = @libcall(:pbw_value_new_bytes, Ptr{Cvoid},
@@ -348,9 +370,12 @@ clear!(m::Message, f::Union{Field,String}) =
     (@libcall(:pbw_message_clear, Cvoid, (Ptr{Cvoid}, UInt32),
         m.handle, _resolve(m.ty, f).number); m)
 
-_value(m::Message, f::Field) =
-    @libcall(:pbw_message_get_field, Ptr{Cvoid},
-        (Ptr{Cvoid}, Ptr{Cvoid}), m.handle, f.ptr)
+function _value(m::Message, f::Field)
+    GC.@preserve m f begin
+        return @libcall(:pbw_message_get_field, Ptr{Cvoid},
+            (Ptr{Cvoid}, Ptr{Cvoid}), m.handle, f.ptr)
+    end
+end
 
 has(m::Message, f::Union{Field,String}) = _value(m, _resolve(m.ty, f)) != C_NULL
 
@@ -446,9 +471,11 @@ end
 function encode(m::Message)
     out = Ref{Ptr{UInt8}}(C_NULL)
     len = Ref{Csize_t}(0)
-    status = @libcall(:pbw_encode, Cint,
-        (Ptr{Cvoid}, Ptr{Ptr{UInt8}}, Ptr{Csize_t}), m.handle, out, len)
-    _check(status, "encode")
+    GC.@preserve m begin
+        status = @libcall(:pbw_encode, Cint,
+            (Ptr{Cvoid}, Ptr{Ptr{UInt8}}, Ptr{Csize_t}), m.handle, out, len)
+        _check(status, "encode")
+    end
     wire = copy(unsafe_wrap(Array, out[], Int(len[]); own = false))
     @libcall(:pbw_free, Cvoid, (Ptr{Cvoid},), out[])
     return wire
@@ -507,8 +534,14 @@ function encode_dict!(m::Message, d::AbstractDict)
 end
 
 """Builds a new message of type `ty` from a `Dict{String,Any}` and encodes it."""
-encode_dict(ty::MsgType, d::AbstractDict) = (m = encode_dict!(new_message(ty), d);
-    w = encode(m); close(m); w)
+function encode_dict(ty::MsgType, d::AbstractDict)
+    m = new_message(ty)
+    try
+        return encode(encode_dict!(m, d))
+    finally
+        close(m)
+    end
+end
 
 function _value_to_julia(f::Field, v::Ptr{Cvoid})
     t = f.type
@@ -537,6 +570,7 @@ end
 """Materialises present fields as `Dict{String,Any}` (nested messages recurse)."""
 function to_dict(m::Message)
     d = Dict{String,Any}()
+    GC.@preserve m begin
     n = Int(@libcall(:pbw_message_field_count, Csize_t, (Ptr{Cvoid},), m.handle))
     for i in 0:(n - 1)
         vout = Ref{Ptr{Cvoid}}(C_NULL)
@@ -545,7 +579,7 @@ function to_dict(m::Message)
         if fptr == C_NULL || vout[] == C_NULL
             continue
         end
-        f = _field(fptr)
+        f = _field(m.ty, fptr)
         name = _fname(f)
         kind = Int(@libcall(:pbw_value_get_kind, Cint, (Ptr{Cvoid},), vout[]))
         if kind == 3 # PBW_VALUE_LIST: repeated field storage
@@ -562,10 +596,12 @@ function to_dict(m::Message)
             d[name] = _scalar_to_julia(m, f, vout[])
         end
     end
+    end
     return d
 end
 
 function _scalar_to_julia(m::Message, f::Field, v::Ptr{Cvoid})
+    GC.@preserve m f begin
     t = f.type
     if t == _T_MESSAGE || t == _T_GROUP
         ptr = @libcall(:pbw_value_get_message, Ptr{Cvoid}, (Ptr{Cvoid},), v)
@@ -574,9 +610,11 @@ function _scalar_to_julia(m::Message, f::Field, v::Ptr{Cvoid})
                to_dict(Message(sub, ptr, false, m))
     end
     return _value_to_julia(f, v)
+    end
 end
 
 function _item_to_julia(m::Message, f::Field, sub::Union{MsgType,Nothing}, item::Ptr{Cvoid})
+    GC.@preserve m f begin
     t = f.type
     if t == _T_MESSAGE || t == _T_GROUP
         ptr = @libcall(:pbw_value_get_message, Ptr{Cvoid}, (Ptr{Cvoid},), item)
@@ -584,11 +622,18 @@ function _item_to_julia(m::Message, f::Field, sub::Union{MsgType,Nothing}, item:
                to_dict(Message(sub, ptr, false, m))
     end
     return _value_to_julia(f, item)
+    end
 end
 
 """Decodes wire bytes straight into a `Dict{String,Any}`."""
-decode_dict(ty::MsgType, wire::Vector{UInt8}) = (m = decode(ty, wire);
-    d = to_dict(m); close(m); d)
+function decode_dict(ty::MsgType, wire::Vector{UInt8})
+    m = decode(ty, wire)
+    try
+        return to_dict(m)
+    finally
+        close(m)
+    end
+end
 
 function __init__()
     # Eagerly fail on a missing/unloadable library, then pin every symbol.

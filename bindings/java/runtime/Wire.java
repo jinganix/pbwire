@@ -40,19 +40,41 @@ public final class Wire {
         return s.getBytes(StandardCharsets.UTF_8);
     }
 
+    /** Largest byte[] the JVM can hold. */
+    private static final int MAX_ARRAY = Integer.MAX_VALUE - 8;
+
     public static void ensure(Buf b, int extra) {
+        if (extra < 0 || b.pos > MAX_ARRAY - extra) {
+            /* A negative request means the caller's size arithmetic wrapped
+             * (the repeated-field runs multiply before calling): no buffer
+             * that big can exist, so fail loudly instead of writing past the
+             * array. */
+            throw tooLarge();
+        }
         if (b.pos + extra > b.b.length) {
             grow(b, extra);
         }
     }
 
+    private static RuntimeException tooLarge() {
+        return new PbwireException(
+                "encoded message exceeds the " + MAX_ARRAY + "-byte array limit");
+    }
+
     /** Slow path behind every inlined capacity check: grows and reloads. */
     static void grow(Buf b, int extra) {
-        int n = b.b.length * 2;
-        while (n < b.pos + extra) {
+        long n = Math.max(2L * b.b.length, 256L);
+        long need = (long) b.pos + extra;
+
+        /* long math: doubling an int here wrapped to zero and looped forever
+         * once the buffer passed 1 GiB. */
+        while (n < need) {
             n *= 2;
         }
-        b.b = Arrays.copyOf(b.b, n);
+        if (n > MAX_ARRAY) {
+            throw tooLarge();
+        }
+        b.b = Arrays.copyOf(b.b, (int) n);
     }
 
     /** Unchecked little-endian stores: one capacity check per call, then

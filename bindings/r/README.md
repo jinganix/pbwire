@@ -96,8 +96,8 @@ segfaults on a bad call. Nesting is capped at `PBW_MAX_DEPTH` (256) both ways.
 | int64/sint64/sfixed64, uint32/uint64/fixed* | numeric (double); `u64` max is passed as `-1` (same bit pattern) |
 | bool | logical |
 | float/double | numeric |
-| string | string |
-| bytes | raw (string accepted on encode) |
+| string | string; translated to UTF-8 on encode, decoded strings are marked UTF-8 |
+| bytes | raw (string accepted on encode, taken byte for byte) |
 | message | named list |
 | repeated field | list (atomic vectors accepted on encode); `{}`/`list()` clears, absent reads as an empty list |
 
@@ -129,9 +129,9 @@ encode; decode carries the live member only. Groups map like messages
 through this binding (`make conformance-r`):
 
 ```
-CONFORMANCE SUITE PASSED: 2742 successes, 0 skipped, 2 expected failures,
+CONFORMANCE SUITE PASSED: 2745 successes, 0 skipped, 2 expected failures,
 0 unexpected failures.
-CONFORMANCE SUITE PASSED: 445 successes, 0 skipped, 0 expected failures,
+CONFORMANCE SUITE PASSED: 443 successes, 0 skipped, 0 expected failures,
 0 unexpected failures.
 ```
 

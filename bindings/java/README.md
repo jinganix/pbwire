@@ -4,11 +4,11 @@
 JNI, no `java.lang.foreign` and no native library. Two APIs share the wire
 primitives in `Wire`: the dynamic `Message` tree over a runtime schema (a
 `FileDescriptorSet` via `protoc --descriptor_set_out`, parsed by `Proto`
-and owned by `GenericCodec`), and typed POJOs with two annotations
-(`PbCodec.encode`/`parseFrom` straight into a `Wire` buffer, no tree, no
-schema file). The POJO is your own class: Lombok and bean-validation
-annotations ride along untouched because the codec reads fields directly
-and looks only at `@PbMessage`/`@PbField`.
+and owned by `GenericCodec`), and generated typed models (`codegen`)
+with the protobuf-java-shaped `newBuilder()`/`toByteArray()`/`parseFrom`
+API. A generated model is a thin typed wrapper over the same `Wire`
+primitives: no tree, no per-field lookup, and a schema file is needed only
+for the dynamic path.
 
 ```java
 try (Schema schema = Schema.fromFile("tests/data/sample.desc")) {
@@ -48,8 +48,7 @@ in, so a build needs no `protoc` either.
 
 | class | members |
 |---|---|
-| `PbCodec` | `encode(pojo)`, `parseFrom(bytes, MyClass.class)`, `isInitialized(pojo)` — any `@PbField` class, no registration |
-| `PbMessage` / `PbField` / `PbKind` | the two annotations plus the kind enum (`AUTO` infers from the Java type; set it for `UINT32`/`SINT32`/`FIXED32`/`ENUM`/`GROUP` and friends) |
+| generated models | `newBuilder()`, typed setters/getters, `has…` for explicit presence, `toByteArray()`, `parseFrom(byte[])`, `isInitialized()` — see `tests/gen/` |
 | `Schema` | `fromFile(path)`, `fromBytes(byte[])`, `fromClasses(Class...)`, `message(fullName)`, `close()` |
 | `MessageType` | `name()`, `newMessage()`, `decode(byte[])` |
 | `Message` | `set(name\|number, …)`, `newMessage(name\|number)`, `clear(…)`, `has(…)`, `get(…)`, typed getters, `getList(…)`, `encode()`, `close()` |
@@ -158,24 +157,24 @@ generated writer is one straight-line block of known tags and values (~60 ns),
 while a dynamic codec pays a presence gate, a type dispatch and tag loads per
 field (~80 ns including the `byte[]` copy). That floor is structural, not
 tuning: the per-field work left -- loads, one `switch`, one call -- is what a
-generated writer avoids by knowing every field at compile time. The typed
-POJOs (`codegen`) make the mirror trade: they skip the tree and write
-straight into the wire buffer, but reflection and boxed lists cost
-(1.7x the dynamic encode time, ~1.0x the decode time on the ~33 KB tier).
-Keep hot loops on the dynamic `Message` path; keep domain code on POJOs.
+generated writer avoids by knowing every field at compile time. The
+generated models (`codegen`) make the mirror trade: they skip the tree and
+write straight into the wire buffer with compiled per-field code.
+Keep hot loops on the dynamic `Message` path; keep domain code on the
+generated models.
 
 ## Layout
 
 | Piece | Path | Role |
 |---|---|---|
 | codec | [`runtime/GenericCodec.java`](runtime/GenericCodec.java) | columnar value tree, lazy decode slices, the single-pass encoder (the fast path) |
-| typed | [`runtime/PbCodec.java`](runtime/PbCodec.java), [`runtime/PbMessage.java`](runtime/PbMessage.java), [`runtime/PbField.java`](runtime/PbField.java), [`runtime/PbKind.java`](runtime/PbKind.java) | reflective POJO table (cached per class): fields in number order, direct `Wire` writes, no tree |
+| typed | [`runtime/PbCodec.java`](runtime/PbCodec.java), [`runtime/FieldMeta.java`](runtime/FieldMeta.java), [`runtime/Meta.java`](runtime/Meta.java), [`runtime/Kind.java`](runtime/Kind.java) | the generated models' table: fields in number order, direct `Wire` writes, no tree |
 | wire | [`runtime/Wire.java`](runtime/Wire.java) | varint/tag/little-endian read/write, reusable buffer, `Unsafe` fast path |
 | schema | [`runtime/Proto.java`](runtime/Proto.java), [`runtime/Schema.java`](runtime/Schema.java) | descriptor-set parser and linker, no protobuf dependency |
 | API | [`runtime/MessageType.java`](runtime/MessageType.java), [`runtime/Message.java`](runtime/Message.java), [`runtime/PbwireException.java`](runtime/PbwireException.java) | the dynamic wrapper: typed getters, views, presence, errors |
 | example | [`examples/Roundtrip.java`](examples/Roundtrip.java) | build → encode → decode → compare |
 | conformance | [`conformance/Testee.java`](conformance/Testee.java) | official suite testee (binary in → out, JSON/text skip) |
-| tests | [`tests/TestPbwire.java`](tests/TestPbwire.java), [`tests/TestGenerated.java`](tests/TestGenerated.java), [`tests/TestCustom.java`](tests/TestCustom.java) | assert-based self-checks, no framework: dynamic gate, generated-POJO compat (T1–T6), hand-written Lombok/validation shapes |
+| tests | [`tests/TestPbwire.java`](tests/TestPbwire.java), [`tests/TestGenerated.java`](tests/TestGenerated.java), [`tests/TestMetaSchema.java`](tests/TestMetaSchema.java), [`tests/TestSwap.java`](tests/TestSwap.java) | assert-based self-checks, no framework: dynamic gate, generated-model compat (T1–T6), Meta-schema and hot-swap checks |
 | fixture | [`tests/data/sample.proto`](tests/data/sample.proto) + `sample.desc` | `protoc --descriptor_set_out --include_imports` |
 | benchmark | [`benchmarks/Bench.java`](benchmarks/Bench.java) | the four standard tiers against `protobuf-java` |
 
@@ -189,9 +188,9 @@ protoc --descriptor_set_out=tests/data/sample.desc --include_imports \
 
 ## Deliberately skipped
 
-- **No second wire format in codegen.** The plugin emits annotated POJOs
-  only; every byte still comes from the `Wire` primitives the dynamic path
-  uses, so the two APIs cannot diverge.
+- **No second wire format in codegen.** The plugin emits Builder classes
+  that call `PbCodec`; every byte still comes from the `Wire` primitives the
+  dynamic path uses, so the two APIs cannot diverge.
 - **Binary-only conformance testee.** `make conformance-java` runs the official
   suite through the binding (same 2 expected tag-truncation failures as the C
   core, on the shared `conformance/failure_list_pbwire.txt`); JSON/text input
@@ -211,8 +210,8 @@ protoc --descriptor_set_out=tests/data/sample.desc --include_imports \
   gateway that only re-encodes never pays for parsing.
 - **No extension convenience API.** Extensions are ordinary fields through
   the dynamic tree; nothing is lost, nothing is sugar-coated. Maps and
-  oneofs are first-class in the typed POJOs (`Map` fields, nullable oneof
-  members with `getKindCase()`).
+  oneofs are first-class in the generated models (`Map` fields, a
+  `getKindCase()` on every oneof).
 - **No per-thread workspace release.** The encode buffer and the string-image
   cache live in one `ThreadLocal` per thread and are never freed: a thread
   that used the binding keeps one buffer (bounded by the largest message it
@@ -236,52 +235,29 @@ handled) until the thread dies. Keep request threads off the binding or reuse
   dynamic schema (Meta side) with no descriptor file. Cross-file schemas
   concatenate the lists explicitly.
 
-## Typed POJOs: your own message classes
+## Typed models
 
-`protoc-gen-pbwire` (in `../../codegen`) generates one annotated POJO per
-message: public fields with `@PbField` numbers, `Map` for maps, boxed
-nullables for explicit presence and oneof members, `toByteArray` straight
-into a `Wire.Buf` and `parseFrom` straight from a `Wire.Reader` — no
-`Message` tree, no per-field lookup, no schema file at use time. The
-committed output is `tests/gen/`; `examples/Roundtrip.java` fills fields
-directly:
-
-```java
-Tutorial_Person person = new Tutorial_Person();
-person.name = "Alice";
-person.id = 1;
-byte[] wire = person.toByteArray();
-```
-
-The generated class is a starting point, not a cage: delete it and write
-your own. Any class with `@PbField` numbers encodes with zero setup, so the
-Lombok and bean-validation stack you already use rides along — the codec
-reads fields directly and ignores every annotation except the two below:
+`protoc-gen-pbwire` (in `../../codegen`) generates one final class per
+message with a protobuf-java-shaped API: `newBuilder()`, per-field setters
+and getters, `hasX()` for explicit presence, oneof `getKindCase()`, plus
+`toByteArray()` / `parseFrom(byte[])`. The generated class is a thin typed
+wrapper over `PbCodec` and the same `Wire` primitives the dynamic codec uses,
+so the bytes are identical to `Message` and to `protoc --java_out`. The
+committed output is `tests/gen/`:
 
 ```java
-@PbMessage("tutorial.Person")
-@Data @NoArgsConstructor @AllArgsConstructor
-public class Person {
-    @PbField(value = 1, required = true) @NotBlank String name;
-    @PbField(value = 2, required = true) int id;
-    @PbField(value = 3, optional = true) @Email String email;
-    @PbField(value = 4) List<Phone> phones = new ArrayList<>();
-}
-
-byte[] wire = PbCodec.encode(person);
-Person back = PbCodec.parseFrom(wire, Person.class);
+Spectest_Oneof1 msg = Spectest_Oneof1.newBuilder()
+        .setName("n")
+        .setNum(0)
+        .build();
+byte[] wire = msg.toByteArray();       // 10 00: a zero-valued member is set
+Spectest_Oneof1 back = Spectest_Oneof1.parseFrom(wire);
 ```
 
-Presence follows the Java type: primitives are implicit (zero stays off the
-wire), boxed numerics, `Optional`, messages and `optional=true`
-strings/bytes are explicit (a set zero/empty stays on the wire), lists and
-maps are empty-absent. Oneof members share `oneof="..."` and must be
-nullable — setting two fails encode loudly, decode keeps the last one on
-the wire. Enums ride as `int` (raw wire values, unknowns preserved);
-`Map<K, V>` rides as a real map. Records work through their canonical
-constructor; anything else needs a no-arg constructor (Lombok
-`@NoArgsConstructor` supplies it). `tests/TestCustom.java` proves each
-shape with hand-written Lombok/validation stand-ins.
+A oneof member that holds the default value still encodes: the case word is
+its presence bit. Decode follows wire order, so the last member on the wire
+wins, like protobuf-java. Kotlin, Scala and Clojure models (same
+`codegen`) sit on the same runtime.
 
 See `../../codegen/README.md` for regeneration (`make codegen`) and tests
 (`make codegen-test`).

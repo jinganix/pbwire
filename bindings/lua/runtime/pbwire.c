@@ -544,12 +544,15 @@ pbwlua_load_bytes(lua_State *L)
 
     status = pbw_descriptor_set_load(data, len, &schema);
     if (status != PBW_OK) {
-        const char *reason = schema != NULL ? pbw_schema_error(schema) : "";
+        /* The reason lives inside the schema: copy it before freeing it
+         * (luaL_error longjmps after the free, so a pointer would be stale). */
+        char reason[256];
+        const char *why = schema != NULL ? pbw_schema_error(schema) : NULL;
+
+        snprintf(reason, sizeof(reason), "%s", why != NULL ? why : "");
         pbw_schema_free(schema);
         luaL_error(L, "pbwire: descriptor set rejected: %s",
-                   reason != NULL && reason[0] != '\0'
-                       ? reason
-                       : pbw_strerror(status));
+                   reason[0] != '\0' ? reason : pbw_strerror(status));
     }
     s = (pbwlua_schema *)lua_newuserdata(L, sizeof(*s));
     s->schema = schema;
@@ -626,6 +629,10 @@ typedef struct {
     size_t len;
     size_t cap;
     int borrowed; /* data is schema reuse buffer: grow by copy, not realloc */
+    /* Non-NULL for the table encoder: every growth is recorded in the schema
+     * userdata, so a luaL_error raised later frees it in the __gc instead of
+     * leaking one grown buffer per malformed request. */
+    pbwlua_schema *owner;
 } pbwlua_buf;
 
 static void
@@ -660,6 +667,11 @@ pbwlua_buf_reserve(lua_State *L, pbwlua_buf *b, size_t extra)
         b->data = data;
         b->cap = cap;
         b->borrowed = 0;
+        if (b->owner != NULL) {
+            free(b->owner->wdata); /* the borrowed buffer this copy replaces */
+            b->owner->wdata = data;
+            b->owner->wcap = cap;
+        }
         return;
     }
     data = (uint8_t *)realloc(b->data, cap);
@@ -668,6 +680,10 @@ pbwlua_buf_reserve(lua_State *L, pbwlua_buf *b, size_t extra)
     }
     b->data = data;
     b->cap = cap;
+    if (b->owner != NULL) {
+        b->owner->wdata = data;
+        b->owner->wcap = cap;
+    }
 }
 
 static void
@@ -940,9 +956,11 @@ pbwlua_name_cache(lua_State *L, pbwlua_schema *s,
             const pbw_field *field = pbw_descriptor_field_at(desc, i);
             pbw_type type;
 
+            /* Zero first: the loops below read type/repeated even for an
+             * entry whose field lookup came back NULL. */
+            memset(&f[i], 0, sizeof(f[i]));
             f[i].field = field;
             f[i].ref = LUA_NOREF;
-            f[i].ptr = NULL;
             if (field == NULL) {
                 continue;
             }
@@ -1192,6 +1210,11 @@ pbwlua_encode_table(lua_State *L, pbwlua_buf *b, pbwlua_schema *s,
             luaL_error(L, "pbwire: %s has no field %s",
                        pbw_descriptor_name(desc), "?");
         }
+        if (nc == NULL) {
+            /* A message with no fields: every key is unknown. */
+            luaL_error(L, "pbwire: %s has no field %s",
+                       pbw_descriptor_name(desc), lua_tostring(L, -2));
+        }
         {
             const void *kp = lua_topointer(L, -2);
             size_t j = ((size_t)(uintptr_t)kp >> 4) & nc->mask;
@@ -1203,6 +1226,20 @@ pbwlua_encode_table(lua_State *L, pbwlua_buf *b, pbwlua_schema *s,
                     break;
                 }
                 j = (j + 1) & nc->mask;
+            }
+            if (!known) {
+                /* Lua does not intern strings longer than LUAI_MAXSHORTLEN, so
+                 * the pointer probe misses a key that really is a field:
+                 * recheck by text (cold path, once per rejected key). */
+                const char *name = lua_tostring(L, -2);
+                size_t k;
+
+                for (k = 0; name != NULL && k < nc->n; k++) {
+                    if (strcmp(pbw_field_name(nc->f[k].field), name) == 0) {
+                        known = 1;
+                        break;
+                    }
+                }
             }
             if (!known) {
                 luaL_error(L, "pbwire: %s has no field %s",
@@ -1225,6 +1262,7 @@ pbwlua_encode(lua_State *L)
     b.len = 0;
     b.cap = s->wcap;
     b.borrowed = s->wdata != NULL;
+    b.owner = s;
     luaL_checktype(L, 3, LUA_TTABLE);
     pbwlua_encode_table(L, &b, s, desc, 3, 0);
     if (b.borrowed) {

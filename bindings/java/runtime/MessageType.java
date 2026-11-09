@@ -57,11 +57,11 @@ public final class MessageType {
 
     /** The field slot with this number; throws when the schema has no such field. */
     int field(int number) {
-        if (number < 0 || number >= def.slotByFnum.length
-                || def.slotByFnum[number] < 0) {
+        int slot = def.lookup(number);
+        if (slot < 0) {
             throw new PbwireException(name() + ": no such field number: " + number);
         }
-        return def.slotByFnum[number];
+        return slot;
     }
 
     /** The message type of a message/group field, resolved on first use. */

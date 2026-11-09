@@ -50,7 +50,7 @@ namespace Xfile {
         }
         public override int GetHashCode() {
             int hash = 1;
-            hash ^= Single.GetHashCode();
+            hash ^= (Single == null ? 0 : Single.GetHashCode());
             hash ^= Many.GetHashCode();
             hash ^= Note.GetHashCode();
             return hash;
@@ -84,7 +84,7 @@ namespace Xfile {
         }
         internal void EncodeInto(Pbwire.Message msg) {
             if (Single != null) {
-                Single.EncodeInto(msg.SetMessage("single"));
+                Single!.EncodeInto(msg.SetMessage("single"));
             }
             if (Many.Count != 0) {
                 foreach (var v in Many) { v.EncodeInto(msg.SetMessage("many")); }

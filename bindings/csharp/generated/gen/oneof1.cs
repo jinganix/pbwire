@@ -24,7 +24,7 @@ namespace Spectest {
         /// <summary>Field number for the "name" field.</summary>
         public const int NameFieldNumber = 1;
         public string Name { get; set; }  = "";
-        private object kind_;
+        private object kind_ = null!;
         /// <summary>Enum of possible cases for the "kind" oneof.</summary>
         public enum KindOneofCase {
             None = 0,
@@ -59,7 +59,7 @@ namespace Spectest {
         public const int InnerFieldNumber = 4;
         public Types.Inner? Inner {
             get { return kindCase_ == KindOneofCase.Inner ? (Types.Inner) kind_ : null; }
-            set { kind_ = value; kindCase_ = value == null ? KindOneofCase.None : KindOneofCase.Inner; }
+            set { kind_ = value!; kindCase_ = value == null ? KindOneofCase.None : KindOneofCase.Inner; }
         }
         /// <summary>Gets whether the "inner" field is set</summary>
         public bool HasInner { get { return kindCase_ == KindOneofCase.Inner; } }
@@ -69,9 +69,9 @@ namespace Spectest {
         public Oneof1() { }
         public Oneof1(Oneof1 other) : this() {
             Name = other.Name;
-            Num = other.Num;
-            Text = other.Text;
-            Inner = other.Inner;
+            if (other.KindCase == KindOneofCase.Num) { Num = other.Num; }
+            if (other.KindCase == KindOneofCase.Text) { Text = other.Text; }
+            if (other.KindCase == KindOneofCase.Inner) { Inner = other.Inner?.Clone(); }
         }
         public Oneof1 Clone() { return new Oneof1(this); }
         public override bool Equals(object? other) { return Equals(other as Oneof1); }
@@ -116,9 +116,9 @@ namespace Spectest {
         public void MergeFrom(Oneof1 other) {
             if (other == null) { return; }
             Name = other.Name;
-            Num = other.Num;
-            Text = other.Text;
-            Inner = other.Inner;
+            if (other.KindCase == KindOneofCase.Num) { Num = other.Num; }
+            if (other.KindCase == KindOneofCase.Text) { Text = other.Text; }
+            if (other.KindCase == KindOneofCase.Inner) { Inner = other.Inner?.Clone(); }
         }
         internal void EncodeInto(Pbwire.Message msg) {
             if (Name.Length != 0) {
@@ -132,7 +132,7 @@ namespace Spectest {
                     msg.Set("text", Text);
                     break;
                 case KindOneofCase.Inner:
-                    Inner.EncodeInto(msg.SetMessage("inner"));
+                    Inner!.EncodeInto(msg.SetMessage("inner"));
                     break;
                 default: break;
             }

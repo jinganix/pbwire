@@ -200,21 +200,6 @@ packable(pbw_type type)
     }
 }
 
-/* Bytes a tag for `number` occupies: START_GROUP and END_GROUP tags differ
- * only in their low three bits, so they are the same length. */
-static uint32_t
-tag_size(uint32_t number)
-{
-    uint32_t value = number << 3;
-    uint32_t size = 1;
-
-    while (value >= 0x80) {
-        value >>= 7;
-        size++;
-    }
-    return size;
-}
-
 /* --------------------------------------------------------- descriptor data */
 
 typedef struct desc_table desc_table;
@@ -1100,8 +1085,15 @@ static int
 slices_record(slice_list *list, uint32_t index, uint32_t off, uint32_t len)
 {
     if (list->count == list->cap) {
-        uint32_t cap = list->cap == 0 ? 32 : list->cap * 2;
+        uint32_t cap;
         slice_t *grown;
+
+        if (list->cap > UINT32_MAX / 2) {
+            /* Doubling would wrap the count to zero and the next store would
+             * run past a zero-sized block. */
+            return 0;
+        }
+        cap = list->cap == 0 ? 32 : list->cap * 2;
 
         if (list->items == list->inline_) {
             grown = malloc((size_t)cap * sizeof(*grown));
@@ -1254,6 +1246,7 @@ scan_range(desc_table *table, const uint8_t *base, uint32_t off, uint32_t len,
         uint32_t index;
         field_entry *entry;
         scan_status status;
+        const uint8_t *tag_at = p;
 
         if (!rb_tag(&p, end, &tag)) {
             return SCAN_INVALID;
@@ -1264,10 +1257,12 @@ scan_range(desc_table *table, const uint8_t *base, uint32_t off, uint32_t len,
             return SCAN_INVALID;
         }
         if (wire_type == 4) {
-            /* END_GROUP closes only the group that started it. */
+            /* END_GROUP closes only the group that started it. `consumed`
+             * stops before the tag itself: the caller slices the body, and the
+             * tag may be written as an overlong varint. */
             if (group_number != 0 && number == group_number) {
                 if (consumed != NULL) {
-                    *consumed = (size_t)(p - (base + off));
+                    *consumed = (size_t)(tag_at - (base + off));
                 }
                 return SCAN_OK;
             }
@@ -1311,7 +1306,6 @@ scan_range(desc_table *table, const uint8_t *base, uint32_t off, uint32_t len,
             if (entry->type == PBW_TYPE_GROUP) {
                 uint32_t body = (uint32_t)(p - base);
                 size_t body_len = 0;
-                uint32_t closing;
 
                 if (depth >= PBW_MAX_DEPTH) {
                     return SCAN_LIMIT;
@@ -1322,11 +1316,21 @@ scan_range(desc_table *table, const uint8_t *base, uint32_t off, uint32_t len,
                 if (status != SCAN_OK) {
                     return status;
                 }
-                closing = tag_size(number);
-                p = base + body + body_len;
+                {
+                    /* The slice is the group body (the END_GROUP tag is not
+                     * part of it), but the scan must resume after the tag --
+                     * which the writer may have spelled with an overlong
+                     * varint, so its width is read from the bytes. */
+                    const uint8_t *tagp = base + body + body_len;
+                    size_t ctag = 1;
+
+                    while ((tagp[ctag - 1] & 0x80) != 0 && tagp + ctag < end) {
+                        ctag++;
+                    }
+                    p = tagp + ctag;
+                }
                 if (out != NULL &&
-                    !slices_record(out, index, body,
-                                   (uint32_t)(body_len - closing))) {
+                    !slices_record(out, index, body, (uint32_t)body_len)) {
                     return SCAN_NOMEM;
                 }
                 continue;
@@ -1768,8 +1772,18 @@ slices_to_js(napi_env env, desc_table *table, const uint8_t *base,
         }
         if (entry->type == PBW_TYPE_MESSAGE || entry->type == PBW_TYPE_GROUP) {
             /* A singular message field merges across occurrences: materialize
-             * it once, after the loop, from all of its payloads. */
-            pending[npending++] = slice->index;
+             * it once, after the loop, from all of its payloads. The wire may
+             * repeat it more times than the table has fields, so the list is
+             * per field (deduped), never per slice. */
+            uint32_t k;
+            int seen = 0;
+
+            for (k = 0; k < npending; k++) {
+                seen |= pending[k] == slice->index;
+            }
+            if (!seen) {
+                pending[npending++] = slice->index;
+            }
             continue;
         }
         if (!slice_known(entry, base, wire_len, slice)) {

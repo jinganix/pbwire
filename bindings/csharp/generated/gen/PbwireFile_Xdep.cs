@@ -8,7 +8,7 @@ using Pbwire;
 namespace Xdep {
 
     public static class PbwireFile_Xdep {
-        private static volatile Schema _schema;
+        private static volatile Schema? _schema;
         private static readonly object _lock = new object();
 
         static PbwireFile_Xdep() { Init(); }

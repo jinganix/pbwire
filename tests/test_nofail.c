@@ -14,6 +14,7 @@
 #include "pbwire.h"
 
 #include "desc_set.h"
+#include "pbw_struct.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -235,6 +236,206 @@ static const uint8_t hostile[] = {
     0x7B,
     0x5B,
 };
+
+/* ---- struct codec -------------------------------------------------------
+ * The direct struct codec allocates on its own paths (plan build, encode
+ * buffer, decode values, repeated growth), and no other sweep reaches those
+ * NOMEM branches. Same invariant: no crash, never OK when it should fail,
+ * and the caller can always free what it got. */
+typedef struct nofail_sc_inner {
+    const char *name;
+    int32_t v;
+    int has_v;
+} nofail_sc_inner_t;
+
+typedef struct {
+    int32_t i;
+    int has_i;
+    const char *s;
+    pbw_bytes_t b;
+    int32_t *nums;
+    size_t n_nums;
+    nofail_sc_inner_t *inner;
+    nofail_sc_inner_t *subs;
+    size_t n_subs;
+} nofail_sc_msg_t;
+
+#define NOFAIL_SC_INNER_ROWS 2
+#define NOFAIL_SC_ROWS 6
+
+static const pbw_struct_field_t nofail_sc_inner_fields[NOFAIL_SC_INNER_ROWS] = {
+    {.fnum = 1,
+     .kind = PBW_SF_STRING,
+     .offset = offsetof(nofail_sc_inner_t, name),
+     .type = PBW_TYPE_STRING,
+     .wire = 2},
+    {.fnum = 2,
+     .kind = PBW_SF_INT32,
+     .offset = offsetof(nofail_sc_inner_t, v),
+     .has = offsetof(nofail_sc_inner_t, has_v),
+     .type = PBW_TYPE_INT32,
+     .wire = 0},
+};
+
+static const pbw_struct_field_t nofail_sc_fields[NOFAIL_SC_ROWS] = {
+    {.fnum = 1,
+     .kind = PBW_SF_INT32,
+     .offset = offsetof(nofail_sc_msg_t, i),
+     .has = offsetof(nofail_sc_msg_t, has_i),
+     .type = PBW_TYPE_INT32,
+     .wire = 0},
+    {.fnum = 2,
+     .kind = PBW_SF_STRING,
+     .offset = offsetof(nofail_sc_msg_t, s),
+     .type = PBW_TYPE_STRING,
+     .wire = 2},
+    {.fnum = 3,
+     .kind = PBW_SF_BYTES,
+     .offset = offsetof(nofail_sc_msg_t, b),
+     .type = PBW_TYPE_BYTES,
+     .wire = 2},
+    {.fnum = 4,
+     .kind = PBW_SF_INT32,
+     .repeated = 1,
+     .offset = offsetof(nofail_sc_msg_t, nums),
+     .count = offsetof(nofail_sc_msg_t, n_nums),
+     .type = PBW_TYPE_INT32,
+     .wire = 0,
+     .packed = 1},
+    {.fnum = 5,
+     .kind = PBW_SF_MESSAGE,
+     .offset = offsetof(nofail_sc_msg_t, inner),
+     .elem = sizeof(nofail_sc_inner_t),
+     .fields = nofail_sc_inner_fields,
+     .nfields = NOFAIL_SC_INNER_ROWS,
+     .type = PBW_TYPE_MESSAGE,
+     .wire = 2},
+    {.fnum = 6,
+     .kind = PBW_SF_MESSAGE,
+     .repeated = 1,
+     .offset = offsetof(nofail_sc_msg_t, subs),
+     .count = offsetof(nofail_sc_msg_t, n_subs),
+     .elem = sizeof(nofail_sc_inner_t),
+     .fields = nofail_sc_inner_fields,
+     .nfields = NOFAIL_SC_INNER_ROWS,
+     .type = PBW_TYPE_MESSAGE,
+     .wire = 2},
+};
+
+static void
+struct_codec_workload(void)
+{
+    pbw_schema *schema = pbw_schema_new();
+    pbw_descriptor *msg;
+    pbw_descriptor *inner;
+    pbw_field *f;
+    pbw_struct_codec *codec = NULL;
+    pbw_struct_buf buf = {NULL, 0, 0};
+    pbw_struct_arena *arena = NULL;
+    nofail_sc_msg_t src;
+    nofail_sc_msg_t got;
+    static const int32_t nums[3] = {1, 2, 3};
+    nofail_sc_inner_t subs[2];
+    pbw_status st;
+
+    if (schema == NULL) {
+        return;
+    }
+    msg = pbw_schema_add_message(schema, "NoFailSC");
+    inner = pbw_schema_add_message(schema, "NoFailSCI");
+    if (msg == NULL || inner == NULL) {
+        pbw_schema_free(schema);
+        return;
+    }
+    f = pbw_message_add_field(msg, "i", 1, PBW_TYPE_INT32, PBW_LABEL_OPTIONAL);
+    (void)f;
+    (void)pbw_message_add_field(msg, "s", 2, PBW_TYPE_STRING,
+                                PBW_LABEL_OPTIONAL);
+    (void)pbw_message_add_field(msg, "b", 3, PBW_TYPE_BYTES,
+                                PBW_LABEL_OPTIONAL);
+    f = pbw_message_add_field(msg, "nums", 4, PBW_TYPE_INT32,
+                              PBW_LABEL_REPEATED);
+    if (f != NULL) {
+        pbw_field_set_packed(f, 1);
+    }
+    f = pbw_message_add_field(msg, "inner", 5, PBW_TYPE_MESSAGE,
+                              PBW_LABEL_OPTIONAL);
+    if (f != NULL) {
+        pbw_field_set_type_name(f, "NoFailSCI");
+    }
+    f = pbw_message_add_field(msg, "subs", 6, PBW_TYPE_MESSAGE,
+                              PBW_LABEL_REPEATED);
+    if (f != NULL) {
+        pbw_field_set_type_name(f, "NoFailSCI");
+    }
+    (void)pbw_message_add_field(inner, "name", 1, PBW_TYPE_STRING,
+                                PBW_LABEL_OPTIONAL);
+    (void)pbw_message_add_field(inner, "v", 2, PBW_TYPE_INT32,
+                                PBW_LABEL_OPTIONAL);
+    if (pbw_schema_link(schema) != PBW_OK) {
+        pbw_schema_free(schema);
+        return;
+    }
+
+    memset(&src, 0, sizeof(src));
+    src.i = 7;
+    src.has_i = 1;
+    src.s = "hello";
+    src.b.data = (uint8_t *)"xy";
+    src.b.len = 2;
+    src.nums = (int32_t *)nums;
+    src.n_nums = 3;
+    memset(subs, 0, sizeof(subs));
+    subs[0].name = "a";
+    subs[0].v = 1;
+    subs[0].has_v = 1;
+    subs[1].name = "b b";
+    subs[1].v = -2;
+    subs[1].has_v = 1;
+    src.inner = &subs[0];
+    src.subs = subs;
+    src.n_subs = 2;
+
+    st = pbw_struct_codec_init(&codec, schema, "NoFailSC", nofail_sc_fields,
+                               NOFAIL_SC_ROWS);
+    if (st != PBW_OK) {
+        CHECK(st == PBW_ERR_NOMEM || st == PBW_ERR_INVALID);
+        pbw_schema_free(schema);
+        pbw_struct_buf_free(&buf);
+        return;
+    }
+    CHECK(codec != NULL);
+    st = pbw_struct_codec_encode(codec, &src, &buf);
+    CHECK(st == PBW_OK || st == PBW_ERR_NOMEM || st == PBW_ERR_LIMIT);
+    if (st == PBW_OK) {
+        /* heap path: one allocation per value, released by pbw_struct_free */
+        memset(&got, 0, sizeof(got));
+        st = pbw_struct_codec_decode(codec, buf.data, buf.len, NULL, &got);
+        CHECK(st == PBW_OK || st == PBW_ERR_NOMEM);
+        pbw_struct_free(nofail_sc_fields, NOFAIL_SC_ROWS, &got);
+        /* arena path: the tree dies with the arena, no free walk */
+        memset(&got, 0, sizeof(got));
+        st = pbw_struct_codec_decode(codec, buf.data, buf.len, &arena, &got);
+        CHECK(st == PBW_OK || st == PBW_ERR_NOMEM);
+        /* A failed arena allocation leaves *arena NULL: nothing to release. */
+        CHECK(arena != NULL || st == PBW_ERR_NOMEM);
+        pbw_struct_arena_free(arena);
+        /* the one-shot wrappers resolve the plan per call */
+        {
+            uint8_t *wire = NULL;
+            size_t wire_len = 0;
+
+            st = pbw_struct_encode(schema, "NoFailSC", nofail_sc_fields,
+                                   NOFAIL_SC_ROWS, &src, &wire, &wire_len);
+            CHECK(st == PBW_OK || st == PBW_ERR_NOMEM ||
+                  st == PBW_ERR_LIMIT);
+            pbw_free(wire);
+        }
+    }
+    pbw_struct_codec_free(codec);
+    pbw_struct_buf_free(&buf);
+    pbw_schema_free(schema);
+}
 
 static void
 workload(void)
@@ -645,6 +846,27 @@ workload(void)
         pbw_message_free(d2);
     }
     {
+        /* Any expansion in text format: its two pbw_message_set() calls are
+         * separate allocation steps, so injection fails the second one and
+         * the value it rejects must be released exactly once. */
+        pbw_descriptor *ad = pbw_schema_find(s, "google.protobuf.Any");
+
+        if (ad != NULL) {
+            pbw_message *any = NULL;
+
+            if (pbw_text_parse(ad, "[type.googleapis.com/Sub] { a: 1 }",
+                               strlen("[type.googleapis.com/Sub] { a: 1 }"),
+                               &any) == PBW_OK &&
+                any != NULL &&
+                pbw_message_get(any, 1) != NULL) {
+                CHECK(strcmp(
+                          pbw_value_get_string(pbw_message_get(any, 1)),
+                          "type.googleapis.com/Sub") == 0);
+            }
+            pbw_message_free(any);
+        }
+    }
+    {
         pbw_ctx *ctx = pbw_ctx_new();
 
         if (ctx != NULL) {
@@ -796,6 +1018,7 @@ workload(void)
     }
     pbw_message_free(msg);
     pbw_schema_free(s);
+    struct_codec_workload();
 }
 
 int

@@ -63,20 +63,12 @@ pbwe_set_limits(pbwe_box *box, const pbw_limits *limits)
 pbw_status
 pbwe_encode(const pbw_message *msg, void *out, size_t cap, size_t *len)
 {
-    if (len == NULL) {
-        return PBW_ERR_INVALID;
-    }
-    *len = 0; /* pbw_encode_to leaves it alone on failure; keep it clean */
     return pbw_encode_to(msg, out, cap, len);
 }
 
 pbw_status
 pbwe_encode_delimited(const pbw_message *msg, void *out, size_t cap, size_t *len)
 {
-    if (len == NULL) {
-        return PBW_ERR_INVALID;
-    }
-    *len = 0;
     return pbw_encode_delimited_to(msg, out, cap, len);
 }
 

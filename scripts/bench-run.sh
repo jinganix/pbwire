@@ -28,8 +28,11 @@ log="results/bench-$binding-$stamp.log"
 out="results/bench-$binding-$stamp.json"
 
 start=$(date +%s)
-"$@" >"$log" 2>&1
-st=$?
+if "$@" >"$log" 2>&1; then
+    st=0
+else
+    st=$?
+fi
 end=$(date +%s)
 cat "$log"
 

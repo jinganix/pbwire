@@ -80,9 +80,8 @@ pbw_istream_feed(pbw_istream *s, const void *data, size_t len)
             s->len -= s->off;
             s->off = 0;
         }
-        if (len <= s->cap - s->len) {
-            /* Compacting freed enough room; no realloc needed. */
-        } else {
+        if (len > s->cap - s->len) {
+            /* Compacting (or none needed): the tail still has to grow. */
             if (s->cap > SIZE_MAX - s->len) {
                 return PBW_ERR_NOMEM;
             }
@@ -106,10 +105,10 @@ pbw_istream_feed(pbw_istream *s, const void *data, size_t len)
     if (s->data == NULL) {
         return PBW_ERR_NOMEM;
     }
-    memcpy(s->data + s->len, data, len);
     if (s->len > SIZE_MAX - len) {
         return PBW_ERR_NOMEM;
     }
+    memcpy(s->data + s->len, data, len);
     s->len += len;
     return PBW_OK;
 }
@@ -242,10 +241,13 @@ pbw_encode_delimited_to(const pbw_message *msg, void *out, size_t cap,
     size_t written = 0;
     pbw_status status;
 
-    if (msg == NULL || len == NULL || (out == NULL && cap > 0)) {
+    if (len == NULL) {
         return PBW_ERR_INVALID;
     }
     *len = 0;
+    if (msg == NULL || (out == NULL && cap > 0)) {
+        return PBW_ERR_INVALID;
+    }
     status = pbw_message_encoded_size(msg, &body);
     if (status != PBW_OK) {
         return status;

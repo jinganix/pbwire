@@ -30,6 +30,7 @@ typedef struct {
 /* structtest.Scalars2 */
 typedef struct {
     int32_t id; /* required */
+    int has_id;
     int32_t i32; /* optional */
     int has_i32;
     int64_t s64; /* optional */
@@ -58,7 +59,7 @@ static const pbw_struct_field_t structtest_inner2_fields[] = {
 };
 
 static const pbw_struct_field_t structtest_scalars2_fields[] = {
-    {1, PBW_SF_INT32, 0, offsetof(structtest_scalars2_t, id), 0, 0, 0, 0, NULL, 0, PBW_TYPE_INT32, 0, 0, 1, 0, 0},
+    {1, PBW_SF_INT32, 0, offsetof(structtest_scalars2_t, id), offsetof(structtest_scalars2_t, has_id), 0, 0, 0, NULL, 0, PBW_TYPE_INT32, 0, 0, 1, 0, 0},
     {2, PBW_SF_INT32, 0, offsetof(structtest_scalars2_t, i32), offsetof(structtest_scalars2_t, has_i32), 0, 0, 0, NULL, 0, PBW_TYPE_INT32, 0, 0, 0, 0, 0},
     {3, PBW_SF_INT64, 0, offsetof(structtest_scalars2_t, s64), offsetof(structtest_scalars2_t, has_s64), 0, 0, 0, NULL, 0, PBW_TYPE_SINT64, 0, 0, 0, 0, 0},
     {4, PBW_SF_UINT32, 0, offsetof(structtest_scalars2_t, fx32), offsetof(structtest_scalars2_t, has_fx32), 0, 0, 0, NULL, 0, PBW_TYPE_FIXED32, 5, 0, 0, 0, 0},
