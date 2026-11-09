@@ -321,6 +321,14 @@ impl Message<'_> {
         self.store(field, unsafe { ffi::pbw_value_new_double(value) })
     }
 
+    /// Sets a string field.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `value` contains a NUL byte: the C ABI takes a
+    /// NUL-terminated `const char *` for strings. protobuf strings may legally
+    /// contain one, so use [`Message::set_bytes`] for those (a string field
+    /// accepts a bytes value).
     pub fn set_str(&mut self, field: Field<'_>, value: &str) -> &mut Self {
         let text = CString::new(value).expect("set_str: string contains a NUL byte (use set_bytes)");
         self.store(field, unsafe { ffi::pbw_value_new_string(text.as_ptr()) })
@@ -464,11 +472,40 @@ impl Message<'_> {
     }
 
     /// Encodes into `buf`'s spare capacity: the buffer is grown once and reused,
-    /// so a hot loop allocates nothing. The exact size comes from
-    /// `pbw_message_encoded_size` (a depth-overflow tree reports LIMIT there and
-    /// returns, instead of growing the buffer forever); the core's writer
-    /// over-reserves up to 12 bytes per write, hence the slack.
+    /// so a hot loop allocates nothing. The caller's buffer is tried first, so a
+    /// steady-state loop walks the tree exactly once; only a buffer that does
+    /// not fit triggers a `pbw_message_encoded_size` walk (which also reports a
+    /// depth-overflow tree as LIMIT instead of growing the buffer forever), and
+    /// the core's writer over-reserves up to 12 bytes per write, hence the
+    /// slack.
     pub fn encode_to<'b>(&self, buf: &'b mut Vec<u8>) -> Result<&'b [u8]> {
+        /* Fast path: one walk. A buffer that is already big enough (the steady
+         * state after the first call) never pays the sizing walk, so a hot loop
+         * encodes once per call instead of twice. */
+        if buf.capacity() > 0 {
+            let mut len = 0usize;
+            let status = unsafe {
+                ffi::pbw_encode_to(
+                    self.ptr.as_ptr(),
+                    buf.as_mut_ptr().cast(),
+                    buf.capacity(),
+                    &mut len,
+                )
+            };
+            match status {
+                ffi::PBW_OK => {
+                    unsafe { buf.set_len(len) };
+                    return Ok(buf.as_slice());
+                }
+                /* The buffer did not fit: size it below and try once more. */
+                ffi::PBW_ERR_LIMIT => {}
+                _ => return Err(status_error(status)),
+            }
+        }
+        /* Slow path: the exact size comes from `pbw_message_encoded_size`
+         * (a depth-overflow tree reports LIMIT there and returns, instead of
+         * growing the buffer forever); the core's writer over-reserves up to
+         * 12 bytes per write, hence the slack. */
         let mut size = 0usize;
         let status = unsafe { ffi::pbw_message_encoded_size(self.ptr.as_ptr(), &mut size) };
         if status != ffi::PBW_OK {
