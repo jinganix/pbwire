@@ -459,7 +459,10 @@ final class Message
     /** @internal A nested message: the owner's tree stays alive through $parent. */
     public static function viewFor(Type $type, CData $handle, Message $parent): self
     {
-        return new self($type, $handle, false, $parent, null);
+        /* The build arena is inherited from the root: a value set on a nested
+         * message has to live in the same arena as its parent (a context arena
+         * can only own arena payloads, and a plain decode takes either). */
+        return new self($type, $handle, false, $parent, $parent->ctx);
     }
 
     /* ---------------------------------------------------------------- setting */
@@ -468,6 +471,7 @@ final class Message
     private function newUint(int $bits): mixed
     {
         if ($this->ctx !== null) {
+            $this->cdata(); /* throws when an ancestor already closed */
             return Lib::ffi()->pbw_value_new_uint_ctx($this->ctx, $bits);
         }
 
@@ -478,6 +482,7 @@ final class Message
     private function newBytes(string $value): mixed
     {
         if ($this->ctx !== null) {
+            $this->cdata(); /* throws when an ancestor already closed */
             return Lib::ffi()->pbw_value_new_bytes_ctx($this->ctx, $value, strlen($value));
         }
 
@@ -713,13 +718,14 @@ final class Message
 
     public function close(): void
     {
-        if ($this->ctx !== null) {
+        if ($this->parent === null && $this->ctx !== null) {
             /* Context-built root: freeing the context releases the whole
-             * tree at once. */
+             * tree at once. A nested view inherits the context to build
+             * into, never to free: the root owns it. */
             Lib::ffi()->pbw_ctx_free($this->ctx);
             $this->ctx = null;
             $this->handle = null;
-        } elseif ($this->handle !== null && $this->owned) {
+        } elseif ($this->parent === null && $this->handle !== null && $this->owned) {
             Lib::ffi()->pbw_message_free($this->handle);
             $this->handle = null;
         } else {

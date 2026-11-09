@@ -70,6 +70,7 @@ typedef struct {
     zval parent_zv; /* Pbwire\Message or IS_UNDEF for roots */
     pbw_message *msg;
     pbw_ctx *ctx;   /* non-NULL: root built here, tree lives in it */
+    pbw_ctx *arena; /* borrowed: context a nested object builds values into */
     bool owned;
     bool closed;
     size_t encode_hint; /* last encoded size: next encode_to cap, 0 = none */
@@ -684,6 +685,7 @@ static zend_object *message_create_obj(zend_class_entry *ce) {
     ZVAL_UNDEF(&o->parent_zv);
     o->msg = NULL;
     o->ctx = NULL;
+    o->arena = NULL;
     o->owned = false;
     o->closed = false;
     o->encode_hint = 0;
@@ -723,6 +725,16 @@ static int message_create(zval *out, zval *type_zv, zval *parent_zv,
     }
     m->msg = msg;
     m->ctx = ctx;
+    /* A nested object never owns the context, but its setters still have to
+     * build values in the same arena as the root: inherit it from the parent
+     * (every nested object is created from its parent, so the chain holds).
+     * An inherited arena is borrowed, never freed here. */
+    m->arena = ctx;
+    if (m->arena == NULL && parent_zv != NULL &&
+        Z_TYPE_P(parent_zv) == IS_OBJECT &&
+        instanceof_function(Z_OBJCE_P(parent_zv), pbwire_message_ce)) {
+        m->arena = message_from(Z_OBJ_P(parent_zv))->arena;
+    }
     m->owned = owned;
     m->closed = false;
     m->encode_hint = 0;
@@ -757,15 +769,15 @@ static message_obj *check_message(zval *self) {
  * one (context-built roots), or fall back to the plain heap constructors for
  * decoded trees. Bit patterns match the plain constructors exactly. */
 static pbw_value *new_uint(message_obj *m, uint64_t bits) {
-    if (m->ctx != NULL) {
-        return pbw_value_new_uint_ctx(m->ctx, bits);
+    if (m->arena != NULL) {
+        return pbw_value_new_uint_ctx(m->arena, bits);
     }
     return pbw_value_new_uint(bits);
 }
 
 static pbw_value *new_bytes(message_obj *m, const char *data, size_t len) {
-    if (m->ctx != NULL) {
-        return pbw_value_new_bytes_ctx(m->ctx, data, len);
+    if (m->arena != NULL) {
+        return pbw_value_new_bytes_ctx(m->arena, data, len);
     }
     return pbw_value_new_bytes(data, len);
 }
