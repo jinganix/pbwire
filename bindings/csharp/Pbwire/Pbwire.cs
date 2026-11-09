@@ -168,7 +168,14 @@ public sealed class Schema : IDisposable
             Native.pbw_schema_free(_handle);
             _handle = IntPtr.Zero;
         }
+        GC.SuppressFinalize(this);
     }
+
+    // Fallback for a caller that never disposes: freeing native memory touches
+    // no managed state, so the finalizer thread can do it. Message views hold
+    // their parent alive, so a schema outlives every message that still needs
+    // its descriptors.
+    ~Schema() => Dispose();
 }
 
 /// <summary>A message type from a <see cref="Schema"/>.</summary>
@@ -518,7 +525,13 @@ public sealed class Message : IDisposable
             Native.pbw_message_free(_handle);
         }
         _handle = IntPtr.Zero;
+        GC.SuppressFinalize(this);
     }
+
+    // Same fallback as Schema: a root tree a caller forgot to dispose is
+    // released when it becomes unreachable. A view (owned == false) frees
+    // nothing; its _parent reference keeps the root alive until the view dies.
+    ~Message() => Dispose();
 }
 
 /// <summary>A field value; only repeated items need it, hence the tiny surface.</summary>
