@@ -2240,6 +2240,36 @@ test_ctx_retain_cap(pbw_schema *schema)
     pbw_ctx_free(ctx); /* frees the pending large chunk */
 }
 
+/* A context that only ever holds oversized single allocations never grows a
+ * head chunk. Reset must still release those, or a steady workload of large
+ * payloads grows without bound until pbw_ctx_free(). */
+static void
+test_ctx_reset_oversized_only(void)
+{
+    pbw_ctx *ctx = pbw_ctx_new();
+    size_t big = ((size_t)2 << 20);
+    int i;
+
+    CHECK(ctx != NULL);
+    for (i = 0; i < 3; i++) {
+        pbw_value *value = pbw_value_new_bytes_ctx(ctx, NULL, big);
+
+        CHECK(value != NULL);
+        CHECK(pbw_ctx_used(ctx) > PBW_ARENA_LARGE_THRESHOLD);
+        pbw_ctx_reset(ctx);
+        CHECK(pbw_ctx_used(ctx) == 0);
+    }
+    /* The reset context still allocates normally afterwards. */
+    {
+        pbw_value *value = pbw_value_new_uint_ctx(ctx, 7);
+
+        CHECK(value != NULL);
+        CHECK(value->as.u64 == 7);
+        CHECK(pbw_ctx_used(ctx) > 0);
+    }
+    pbw_ctx_free(ctx);
+}
+
 static void
 test_ctx_pool(pbw_schema *schema)
 {
@@ -7592,6 +7622,7 @@ main(void)
     test_ctx(schema);
     test_ctx_build(schema);
     test_ctx_retain_cap(schema);
+    test_ctx_reset_oversized_only();
     test_ctx_pool(schema);
     test_encode_to(schema);
     test_errors(schema);

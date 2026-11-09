@@ -110,10 +110,9 @@ pbw_arena_reset(pbw_arena *arena)
     }
     head = arena->head;
 
-    if (head == NULL || arena->block != NULL) {
-        /* A packed arena belongs to one decoded tree and is never reset.
-         * A fresh context has no chunks yet: still return it to the blank
-         * (mutable) slate. */
+    if (arena->block != NULL) {
+        /* A packed arena belongs to one decoded tree and is never reset; it
+         * is released as a whole by pbw_message_free(). */
         arena->readonly = 0;
         return;
     }
@@ -121,7 +120,10 @@ pbw_arena_reset(pbw_arena *arena)
      * mutable until a decode seals it read-only again. */
     arena->readonly = 0;
     arena->has_heap = 0;
-    /* Large single allocations never become resident. */
+    /* Large single allocations never become resident. Free them even when no
+     * head chunk exists: a context that only ever held oversized payloads
+     * (pbw_value_new_bytes_ctx above the threshold, no small allocation)
+     * would otherwise pin every one of them until pbw_ctx_free(). */
     for (chunk = arena->large; chunk != NULL;) {
         pbw_arena_chunk *next = chunk->next;
 
@@ -129,6 +131,10 @@ pbw_arena_reset(pbw_arena *arena)
         chunk = next;
     }
     arena->large = NULL;
+    if (head == NULL) {
+        arena->chunk_size = PBW_ARENA_MIN_CHUNK;
+        return;
+    }
     /* An outlier that grew the head past the budget is dropped as well:
      * steady workloads under budget stay malloc-free, anything above pays
      * one malloc per reset instead of pinning the peak forever. */
