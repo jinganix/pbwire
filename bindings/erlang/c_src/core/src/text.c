@@ -1712,7 +1712,7 @@ t_parse_enum_value(text_in *t, pbw_message *msg, const pbw_field *field)
     } else {
         const char *start;
         size_t len;
-        char name[128];
+        char name[520];
 
         if (!t_ident(&t->cur, &start, &len)) {
             return PBW_ERR_INVALID;
@@ -2046,6 +2046,69 @@ t_valid_type_name(const char *s)
 
 static pbw_status t_parse_message_body(text_in *t, pbw_message *msg,
                                        uint32_t depth, char closer);
+
+/* Field name lookup for the text format: the plain name, then the lowercase
+ * form (groups only, when it matches the lowercased type name), then a group's
+ * unqualified type name (the printer emits that, so the parse has to accept
+ * it). `reserved` reports a name the descriptor declared reserved, which the
+ * parser skips. The name buffers live in this non-recursive frame: the
+ * recursive body does not pay for them, and they are sized for the longest
+ * identifier the descriptor loader accepts (512 bytes). */
+static pbw_status
+t_lookup_field(const pbw_message *msg, const char *name, size_t name_len,
+               const pbw_field **out, int *reserved)
+{
+    char tmp[520];
+    char lower[520];
+    size_t i;
+
+    *out = NULL;
+    *reserved = 0;
+    if (name_len >= sizeof(tmp)) {
+        return PBW_ERR_INVALID;
+    }
+    memcpy(tmp, name, name_len);
+    tmp[name_len] = '\0';
+    *out = pbw_descriptor_find_field_name(msg->desc, tmp);
+    /* extensions are only addressable as [full.name] */
+    if (*out != NULL && (*out)->is_extension) {
+        *out = NULL;
+    }
+    if (*out == NULL) {
+        for (i = 0; i < name_len; i++) {
+            char c = tmp[i];
+
+            lower[i] = (c >= 'A' && c <= 'Z') ? (char)(c + 32) : c;
+        }
+        lower[name_len] = '\0';
+        *out = pbw_descriptor_find_field_name(msg->desc, lower);
+        if (*out != NULL &&
+            ((*out)->is_extension || (*out)->type != PBW_TYPE_GROUP ||
+             (*out)->sub == NULL ||
+             strcmp(short_name((*out)->sub->name), tmp) != 0)) {
+            *out = NULL;
+        }
+        for (i = 0; *out == NULL && i < msg->desc->field_count; i++) {
+            const pbw_field *g = &msg->desc->fields[i];
+            const char *short_sub;
+
+            if (g->is_extension || g->type != PBW_TYPE_GROUP ||
+                g->sub == NULL) {
+                continue;
+            }
+            short_sub = short_name(g->sub->name);
+            if (strlen(short_sub) == name_len &&
+                memcmp(short_sub, name, name_len) == 0) {
+                *out = g;
+                break;
+            }
+        }
+    }
+    if (*out == NULL && pbw_descriptor_is_reserved(msg->desc, tmp)) {
+        *reserved = 1;
+    }
+    return PBW_OK;
+}
 static pbw_status t_parse_list(text_in *t, pbw_message *msg,
                                const pbw_field *field, uint32_t depth);
 
@@ -2429,82 +2492,37 @@ t_parse_message_body(text_in *t, pbw_message *msg, uint32_t depth,
                 field = ext;
             }
         } else {
-            char tmp[256];
+            int reserved = 0;
 
-            if (name_len >= sizeof(tmp)) {
-                return PBW_ERR_INVALID;
-            }
-            memcpy(tmp, name, name_len);
-            tmp[name_len] = '\0';
-            field = pbw_descriptor_find_field_name(msg->desc, tmp);
-            /* extensions are only addressable as [full.name] */
-            if (field != NULL && field->is_extension) {
-                field = NULL;
+            status = t_lookup_field(msg, name, name_len, &field, &reserved);
+            if (status != PBW_OK) {
+                return status;
             }
             if (field == NULL) {
-                /* groups also accept their lowercase field name when it
-                 * matches the lowercased type name (the protoc
-                 * convention), or their type name outright (the printer
-                 * emits it, so the parse must round-trip whatever the
-                 * field is called) */
-                size_t i;
-                char lower[256];
-
-                for (i = 0; i < name_len; i++) {
-                    char c = tmp[i];
-
-                    lower[i] = (c >= 'A' && c <= 'Z') ? (char)(c + 32) : c;
-                }
-                lower[name_len] = '\0';
-                field = pbw_descriptor_find_field_name(msg->desc, lower);
-                if (field != NULL &&
-                    (field->is_extension ||
-                     field->type != PBW_TYPE_GROUP || field->sub == NULL ||
-                     strcmp(short_name(field->sub->name), tmp) != 0)) {
-                    field = NULL;
-                }
-                for (i = 0; field == NULL && i < msg->desc->field_count;
-                     i++) {
-                    const pbw_field *g = &msg->desc->fields[i];
-                    const char *short_sub;
-
-                    if (g->is_extension || g->type != PBW_TYPE_GROUP ||
-                        g->sub == NULL) {
-                        continue;
-                    }
-                    short_sub = short_name(g->sub->name);
-                    if (strlen(short_sub) == name_len &&
-                        memcmp(short_sub, name, name_len) == 0) {
-                        field = g;
-                        break;
-                    }
-                }
-                if (field == NULL) {
-                    if (pbw_descriptor_is_reserved(msg->desc, tmp)) {
-                        /* reserved names are skipped by guessing the value */
-                        t_skip(&t->cur);
-                        if (t->cur.p < t->cur.end &&
-                            (*t->cur.p == '{' || *t->cur.p == '<')) {
-                            status = t_skip_value(t, depth);
-                        } else {
-                            if (t->cur.p >= t->cur.end || *t->cur.p != ':') {
-                                return PBW_ERR_INVALID;
-                            }
-                            t->cur.p++;
-                            status = t_skip_value(t, depth);
+                if (reserved) {
+                    /* reserved names are skipped by guessing the value */
+                    t_skip(&t->cur);
+                    if (t->cur.p < t->cur.end &&
+                        (*t->cur.p == '{' || *t->cur.p == '<')) {
+                        status = t_skip_value(t, depth);
+                    } else {
+                        if (t->cur.p >= t->cur.end || *t->cur.p != ':') {
+                            return PBW_ERR_INVALID;
                         }
-                        if (status != PBW_OK) {
-                            return status;
-                        }
-                        t_skip(&t->cur);
-                        if (t->cur.p < t->cur.end &&
-                            (*t->cur.p == ',' || *t->cur.p == ';')) {
-                            t->cur.p++;
-                        }
-                        continue;
+                        t->cur.p++;
+                        status = t_skip_value(t, depth);
                     }
-                    return PBW_ERR_INVALID;
+                    if (status != PBW_OK) {
+                        return status;
+                    }
+                    t_skip(&t->cur);
+                    if (t->cur.p < t->cur.end &&
+                        (*t->cur.p == ',' || *t->cur.p == ';')) {
+                        t->cur.p++;
+                    }
+                    continue;
                 }
+                return PBW_ERR_INVALID;
             }
         }
         /* like the reference parser, singular fields and oneof members may

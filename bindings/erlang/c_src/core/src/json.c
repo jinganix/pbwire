@@ -1403,7 +1403,8 @@ j_print_any(j_out *j, const pbw_message *msg)
         }
     }
     {
-        char name[256];
+        /* Room for the longest message name the loader accepts (512). */
+        char name[520];
         size_t off = slash == NULL ? 0 : (size_t)(slash - (const char *)url) + 1;
         size_t n = url_len - off;
 
@@ -4142,7 +4143,8 @@ j_parse_any(j_in *j, pbw_message *msg)
      * keeps the full URL. */
     {
         const char *slash = NULL;
-        char name[256];
+        /* Room for the longest message name the loader accepts (512). */
+        char name[520];
         size_t off;
         size_t i;
 
@@ -4263,8 +4265,9 @@ j_parse_named_field(j_in *j, pbw_message *msg, const uint8_t *key,
     const pbw_field *field = NULL;
 
     if (len >= 2 && key[0] == '[' && key[len - 1] == ']') {
-        /* Extension names are dotted and global, like the text format. */
-        char name[256];
+        /* Extension names are dotted and global, like the text format:
+         * room for scope + '.' + name, both capped at 512 bytes. */
+        char name[1028];
         const pbw_field *ext;
 
         if (len - 2 >= sizeof(name)) {
