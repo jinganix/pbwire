@@ -1085,8 +1085,15 @@ static int
 slices_record(slice_list *list, uint32_t index, uint32_t off, uint32_t len)
 {
     if (list->count == list->cap) {
-        uint32_t cap = list->cap == 0 ? 32 : list->cap * 2;
+        uint32_t cap;
         slice_t *grown;
+
+        if (list->cap > UINT32_MAX / 2) {
+            /* Doubling would wrap the count to zero and the next store would
+             * run past a zero-sized block. */
+            return 0;
+        }
+        cap = list->cap == 0 ? 32 : list->cap * 2;
 
         if (list->items == list->inline_) {
             grown = malloc((size_t)cap * sizeof(*grown));
