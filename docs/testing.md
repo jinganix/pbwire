@@ -68,6 +68,16 @@ path), and decode/encode against one shared loaded schema. It also prints a
 which a hidden lock would cause; the suite is run under ThreadSanitizer and
 ASan/UBSan during development. This is what the commit gate runs.
 
+`test_nofail` sweeps allocation failure instead of input: the core is built a
+second time with every allocation site renamed to a counting hook, the
+workload is run once to count its allocations, and then once per allocation
+with exactly that one failing, so every `PBW_ERR_NOMEM` branch has to return a
+status and leave nothing owned. The direct struct codec
+(`bindings/c/runtime/pbw_struct.c`) is compiled with the same hooks and walked
+by the same sweep (plan build, encode, heap decode, arena decode, the one-shot
+API), so its error paths are covered too. The job runs under ASan/UBSan in the
+sanitizers CI layer, where LSan turns a leak into a failure.
+
 `test_embedded` pins the embedded facade (and `test_embedded_nofail` runs the
 same source against the core built with counting allocation hooks): the pinned
 `matrix3` decode, byte-equal re-encode into a caller buffer, the

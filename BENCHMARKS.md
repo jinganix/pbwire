@@ -1065,6 +1065,12 @@ one buffer per implementation (pbwire `encode_to()`, rust-protobuf
 malloc plus a 75 KB copy that neither baseline pays. pbwire-rust leads every
 cell against both (xlarge encode 1.11x / 1.80x, decode 1.83x / 1.88x).
 
+`encode_to()` tries the caller's buffer first and only asks for the exact size
+(a second tree walk) when the buffer does not fit, which is what keeps the
+measured loop at one walk per call. Sizing on every call instead halves the
+encode throughput (xlarge 624 MB/s, 0.52x prost): the number worth checking
+first if this row ever regresses.
+
 #### C# vs Google.Protobuf
 
 ![C# vs Google.Protobuf — MB/s by tier](docs/charts/bench-c-vs-google-protobuf.svg)
