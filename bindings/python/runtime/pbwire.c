@@ -396,8 +396,9 @@ typedef struct {
     uint8_t repeated;
     uint8_t packed;
     uint8_t required;
-    uint32_t oneof; /* 1-based oneof group, 0 = not in a oneof */
-    PyObject *sub;  /* owned MessageType for MESSAGE fields */
+    uint32_t oneof;        /* 1-based oneof group, 0 = not in a oneof */
+    uint8_t required_slot; /* index among the required fields, 0xff = none */
+    PyObject *sub;         /* owned MessageType for MESSAGE fields */
 } field_t;
 
 typedef struct {
@@ -410,6 +411,11 @@ typedef struct {
     PyObject *by_name; /* owned dict: field name -> field index */
     uint32_t n_oneofs;
     int has_required;
+    /* Required-field presence tracking for the lazy scan: `required_slot` on a
+     * field is its index among the required ones (0xff = not required), and
+     * the scan keeps a bitmask over them. A message with more than 64 required
+     * fields falls back to the eager path's check on to_dict(). */
+    size_t n_required;
 } MessageType;
 
 typedef struct {
@@ -1441,6 +1447,11 @@ scan_message(Message *m, MessageType *mt, const uint8_t *data, size_t off,
     uint32_t *oneof_last = oneof_stack;
     rdr r;
     size_t cursor = 0;
+    /* Presence of a proto2 `required` field, tracked whether or not the caller
+     * wants the slices: decode() must reject a wire that omits one, exactly
+     * like the eager path and every other binding. */
+    uint64_t required_seen = 0;
+    int check_required = mt->has_required && mt->n_required <= 64;
 
     if (depth >= PY_MAX_DEPTH) {
         PyErr_SetString(PyExc_ValueError, "nesting limit exceeded");
@@ -1470,15 +1481,6 @@ scan_message(Message *m, MessageType *mt, const uint8_t *data, size_t off,
             PyErr_SetString(PyExc_ValueError, "truncated or malformed tag");
             goto fail;
         }
-        if (m == NULL && wt != 2) {
-            /* Validating only: a non-delimited value holds no fields, so what
-             * the field is does not matter, only that its bytes are there. */
-            if (!rd_skip(&r, fnum, wt, depth)) {
-                PyErr_SetString(PyExc_ValueError, "truncated field");
-                goto fail;
-            }
-            continue;
-        }
         for (i = 0; i < mt->nfields; i++) {
             size_t k = cursor + i; /* < 2 * nfields: one conditional subtract */
 
@@ -1494,6 +1496,21 @@ scan_message(Message *m, MessageType *mt, const uint8_t *data, size_t off,
         if (f == NULL ||
             (wt != f->wire &&
              !(wt == 2 && f->repeated && packable((pbw_type)f->type)))) {
+            /* Unknown to this message, or a known number carrying another wire
+             * type: the reference keeps it as an unknown field, so it does not
+             * satisfy a required declaration either. */
+            if (!rd_skip(&r, fnum, wt, depth)) {
+                PyErr_SetString(PyExc_ValueError, "truncated field");
+                goto fail;
+            }
+            continue;
+        }
+        if (check_required && f->required_slot != 0xff) {
+            required_seen |= 1ull << f->required_slot;
+        }
+        if (m == NULL && wt != 2) {
+            /* Validating only: a non-delimited value holds no fields, so the
+             * rest of the field's identity does not matter here. */
             if (!rd_skip(&r, fnum, wt, depth)) {
                 PyErr_SetString(PyExc_ValueError, "truncated field");
                 goto fail;
@@ -1559,6 +1576,19 @@ scan_message(Message *m, MessageType *mt, const uint8_t *data, size_t off,
                 goto fail;
             }
             if (m != NULL && !msg_add(m, mt, f, value, 0, 0, oneof_last)) {
+                goto fail;
+            }
+        }
+    }
+    if (check_required && required_seen != (1ull << mt->n_required) - 1) {
+        size_t k;
+
+        for (k = 0; k < mt->nfields; k++) {
+            if (mt->fields[k].required_slot != 0xff &&
+                (required_seen & (1ull << mt->fields[k].required_slot)) == 0) {
+                PyErr_Format(PyExc_ValueError,
+                             "%s: required field %s is missing",
+                             mt->name_utf8, mt->fields[k].cname);
                 goto fail;
             }
         }
@@ -2422,6 +2452,7 @@ make_message(PyObject *schema_obj, const pbw_descriptor *desc, PyObject *cache)
     mt->nfields = count;
     mt->n_oneofs = 0;
     mt->has_required = 0;
+    mt->n_required = 0;
     mt->by_name = PyDict_New();
     mt->fields = count == 0 ? NULL : calloc(count, sizeof(field_t));
     if (mt->by_name == NULL || (count != 0 && mt->fields == NULL)) {
@@ -2448,6 +2479,11 @@ make_message(PyObject *schema_obj, const pbw_descriptor *desc, PyObject *cache)
         f->repeated = pbw_field_label(field) == PBW_LABEL_REPEATED;
         f->packed = pbw_field_is_packed(field) != 0;
         f->required = pbw_field_label(field) == PBW_LABEL_REQUIRED;
+        f->required_slot = 0xff;
+        if (f->required && mt->n_required < 64) {
+            f->required_slot = (uint8_t)mt->n_required;
+            mt->n_required++;
+        }
         f->oneof = pbw_field_oneof_index(field);
         mt->has_required |= f->required;
         if (f->oneof > mt->n_oneofs) {

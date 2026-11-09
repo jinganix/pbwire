@@ -238,6 +238,14 @@ def main():
         check_raises(ValueError,
                      lambda: person.decode(b"\x08\x01").to_dict(),
                      "proto2 required field missing on materialize")
+        # decode() is lazy, but a missing required field still fails it: every
+        # other binding and the reference reject at parse time.
+        check_raises(ValueError, lambda: person.decode(b"\x08\x01"),
+                     "proto2 required field missing on decode")
+        check_raises(ValueError, lambda: person.decode(b"\x5a\x00"),
+                     "proto2 nested required field missing on decode")
+        check_raises(ValueError, lambda: person.decode(b"\x0a\x00"),
+                     "required field with the wrong wire type does not count")
 
     print("test_pbwire: %s" % ("all checks passed" if not failures
                                else "%d FAILURES" % failures))
