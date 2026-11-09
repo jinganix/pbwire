@@ -1454,6 +1454,7 @@ bench_case(const char *label, int repeated, int iterations,
 
     delete dyn;
     pbw_message_free(pbw_msg);
+    pbw_ctx_free(ctx);
 }
 
 /* Text print/parse against the reference printer/parser. */
@@ -1780,10 +1781,15 @@ bench_stream(const char *label, int repeated, int iterations,
     size_t bytes = 0;
     std::vector<Row> rows;
     int iters = 0;
+    /* One stream, reused: a real feed/next loop does not build one per frame,
+     * so the row must not measure pbw_istream_new(). */
+    pbw_istream *is = pbw_istream_new(nullptr);
 
     fill_pbw(pbw_msg, repeated);
-    if (pbw_encode_delimited(pbw_msg, &framed, &framed_len) != PBW_OK) {
+    if (pbw_encode_delimited(pbw_msg, &framed, &framed_len) != PBW_OK ||
+        is == nullptr) {
         fail("delimited encode bench");
+        pbw_istream_free(is);
         pbw_message_free(pbw_msg);
         return;
     }
@@ -1817,12 +1823,11 @@ bench_stream(const char *label, int repeated, int iterations,
                                               iterations),
                     bytes});
     rows.push_back({"pbwire", "framed", time_it([&] {
-                        pbw_istream *s = pbw_istream_new(nullptr);
                         pbw_message *m = nullptr;
-                        (void)pbw_istream_feed(s, framed, framed_len);
-                        (void)pbw_istream_next(s, desc, &m);
+                        pbw_istream_reset(is);
+                        (void)pbw_istream_feed(is, framed, framed_len);
+                        (void)pbw_istream_next(is, desc, &m);
                         pbw_message_free(m);
-                        pbw_istream_free(s);
                     },
                                                 iterations),
                     bytes});
@@ -1835,6 +1840,7 @@ bench_stream(const char *label, int repeated, int iterations,
         std::printf("  %-9s %-7s %10.1f %10.1f\n", r.impl, r.op, r.ns, mbps);
     }
     pbw_free(framed);
+    pbw_istream_free(is);
     pbw_message_free(pbw_msg);
 }
 
