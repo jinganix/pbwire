@@ -31,6 +31,7 @@ typedef struct {
 typedef struct {
     const char *name; /* required */
     int32_t id; /* required */
+    int has_id;
     const char *email; /* optional */
     tutorial_person_phone_number_t *phones;
     size_t n_phones;
@@ -49,7 +50,7 @@ static const pbw_struct_field_t tutorial_person_phone_number_fields[] = {
 
 static const pbw_struct_field_t tutorial_person_fields[] = {
     {1, PBW_SF_STRING, 0, offsetof(tutorial_person_t, name), 0, 0, 0, 0, NULL, 0, PBW_TYPE_STRING, 2, 0, 1, 0, 0},
-    {2, PBW_SF_INT32, 0, offsetof(tutorial_person_t, id), 0, 0, 0, 0, NULL, 0, PBW_TYPE_INT32, 0, 0, 1, 0, 0},
+    {2, PBW_SF_INT32, 0, offsetof(tutorial_person_t, id), offsetof(tutorial_person_t, has_id), 0, 0, 0, NULL, 0, PBW_TYPE_INT32, 0, 0, 1, 0, 0},
     {3, PBW_SF_STRING, 0, offsetof(tutorial_person_t, email), 0, 0, 0, 0, NULL, 0, PBW_TYPE_STRING, 2, 0, 0, 0, 0},
     {4, PBW_SF_MESSAGE, 1, offsetof(tutorial_person_t, phones), 0, offsetof(tutorial_person_t, n_phones), sizeof(tutorial_person_phone_number_t), 0, tutorial_person_phone_number_fields, 2, PBW_TYPE_MESSAGE, 2, 0, 0, 0, 0},
 };

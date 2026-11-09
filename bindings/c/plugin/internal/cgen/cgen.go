@@ -383,9 +383,6 @@ func (g *generator) needsHas(f protoreflect.FieldDescriptor) bool {
 	if f.IsList() || f.IsMap() || f.Kind() == protoreflect.MessageKind || f.Kind() == protoreflect.GroupKind || f.Kind() == protoreflect.StringKind || f.Kind() == protoreflect.BytesKind {
 		return false
 	}
-	if f.Cardinality() == protoreflect.Required {
-		return false
-	}
 	if f.Kind() != protoreflect.EnumKind {
 		switch f.Kind() {
 		case protoreflect.Int32Kind, protoreflect.Sint32Kind, protoreflect.Sfixed32Kind,
@@ -397,6 +394,9 @@ func (g *generator) needsHas(f protoreflect.FieldDescriptor) bool {
 			return false
 		}
 	}
+	/* A required scalar needs the flag too: the struct decoder has no other way
+	 * to tell an absent required value from a zero one (the encoder always
+	 * writes it, so the flag only gates the decode-side required check). */
 	if f.HasOptionalKeyword() {
 		return true
 	}

@@ -26,6 +26,7 @@
 
 /* Relative so the test needs no new -I: the Makefile rule for this binary
  * only carries the runtime and the examples include paths. */
+#include "../../c/tests/gen/matrix2.h"
 #include "../../c/tests/gen/matrix3.h"
 
 #include "gen/addressbook.h"
@@ -371,6 +372,33 @@ test_wire_errors()
     pbw_schema_free(schema);
 }
 
+/* T6+: the decoder enforces a proto2 required scalar. The generated layout
+ * carries has_id for it, so a wire that never sends the field fails instead of
+ * decoding as "0". */
+static void
+test_required_scalar_decode()
+{
+    structtest_scalars2_t got = {};
+    pbw_schema *schema = nullptr;
+    /* field 2 (i32) only: the required id (#1) never arrives */
+    static const uint8_t no_id[] = {0x10, 0x05};
+    /* field 1 (id) present */
+    static const uint8_t with_id[] = {0x08, 0x01};
+
+    CHECK_OK(pbw_struct_schema_load(MATRIX2_DESC_PATH, &schema));
+    if (schema == nullptr) {
+        return;
+    }
+    CHECK(structtest_scalars2_decode(schema, no_id, sizeof(no_id), &got) ==
+          PBW_ERR_REQUIRED);
+    CHECK(got.id == 0 && got.has_id == 0);
+    got = {};
+    CHECK_OK(structtest_scalars2_decode(schema, with_id, sizeof(with_id), &got));
+    CHECK(got.id == 1 && got.has_id == 1);
+    structtest_scalars2_free(&got);
+    pbw_schema_free(schema);
+}
+
 int
 main(void)
 {
@@ -419,6 +447,7 @@ main(void)
     test_empty_and_explicit_zero();
     test_entry_point_parity();
     test_wire_errors();
+    test_required_scalar_decode();
 
     if (failures != 0) {
         std::fprintf(stderr, "%d check(s) failed\n", failures);

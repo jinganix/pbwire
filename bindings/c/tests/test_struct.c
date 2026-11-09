@@ -714,7 +714,8 @@ test_wrong_wire_type_tolerated(void)
     pbw_schema_free(schema);
 }
 
-/* A proto2 required string left NULL fails at encode time. */
+/* A proto2 required string left NULL fails at encode time, and a wire that
+ * omits a required scalar fails at decode time (its has-flag stays clear). */
 static void
 test_missing_required(void)
 {
@@ -723,6 +724,10 @@ test_missing_required(void)
     pbw_schema *schema = NULL;
     uint8_t *wire = NULL;
     size_t wire_len = 0;
+    /* field 2 (i32) only: the required id (#1) never arrives */
+    static const uint8_t no_id[] = {0x10, 0x05};
+    /* field 1 (id) present */
+    static const uint8_t with_id[] = {0x08, 0x01};
 
     CHECK_OK(pbw_struct_schema_load(MATRIX2_DESC_PATH, &schema));
     if (schema == NULL) {
@@ -735,6 +740,15 @@ test_missing_required(void)
     CHECK_STATUS(PBW_ERR_REQUIRED,
                  structtest_scalars2_encode(schema, &s, &wire, &wire_len));
     CHECK(wire == NULL);
+
+    memset(&s, 0, sizeof(s));
+    CHECK_STATUS(PBW_ERR_REQUIRED,
+                 structtest_scalars2_decode(schema, no_id, sizeof(no_id), &s));
+    CHECK(s.id == 0 && s.has_id == 0);
+
+    memset(&s, 0, sizeof(s));
+    CHECK_OK(structtest_scalars2_decode(schema, with_id, sizeof(with_id), &s));
+    CHECK(s.id == 1 && s.has_id == 1);
     pbw_schema_free(schema);
 }
 
@@ -773,6 +787,42 @@ test_truncated_and_garbage(void)
         PBW_OK) {
         CHECK(0);
         structtest_scalars3_free(&got3);
+    }
+    /* A legacy group body runs to its END_GROUP: a payload that stops early,
+     * or closes with another field's END_GROUP, is malformed. */
+    {
+        structtest_group_test_t g;
+        pbw_schema *gschema = NULL;
+        /* START_GROUP(1), x = 7, then no closer */
+        static const uint8_t open_group[] = {0x0b, 0x10, 0x07};
+        /* the same field, closed with END_GROUP(2) instead of (1) */
+        static const uint8_t wrong_closer[] = {0x0b, 0x10, 0x07, 0x14};
+        /* valid: START_GROUP(1), x = 7, END_GROUP(1) */
+        static const uint8_t closed_group[] = {0x0b, 0x10, 0x07, 0x0c};
+
+        CHECK_OK(pbw_struct_schema_load(GROUPTEST_DESC_PATH, &gschema));
+        if (gschema != NULL) {
+            memset(&g, 0, sizeof(g));
+            if (structtest_group_test_decode(gschema, open_group,
+                                             sizeof(open_group), &g) ==
+                PBW_OK) {
+                CHECK(0);
+                structtest_group_test_free(&g);
+            }
+            memset(&g, 0, sizeof(g));
+            if (structtest_group_test_decode(gschema, wrong_closer,
+                                             sizeof(wrong_closer), &g) ==
+                PBW_OK) {
+                CHECK(0);
+                structtest_group_test_free(&g);
+            }
+            memset(&g, 0, sizeof(g));
+            CHECK_OK(structtest_group_test_decode(gschema, closed_group,
+                                                  sizeof(closed_group), &g));
+            CHECK(g.inner != NULL && g.inner->x == 7);
+            structtest_group_test_free(&g);
+            pbw_schema_free(gschema);
+        }
     }
 done:
     free(bin3);

@@ -135,6 +135,14 @@ bytes `protoc --encode` produces (pinned `.bin` next to each `.proto`, from
 the checked-in `.txt`), decode recovers every field, and layout mismatches,
 missing required fields, truncated input and bad arguments all fail loudly.
 
+A proto2 `required` scalar carries a `has_` flag too (the generated header
+adds `int has_id;` next to `int32_t id`). The encoder still writes the value
+unconditionally — a struct is encoded as it stands — but the decoder sets the
+flag as the value arrives and a decode missing it fails with
+`PBW_ERR_REQUIRED`, so a wire that drops a required scalar cannot pass as
+complete. Pointer kinds (`required string`/`bytes`/message) need no flag:
+NULL is the absence signal, and repeated fields use their count.
+
 ## 3. Example
 
 [`example/addressbook.c`](examples/addressbook.c) mirrors the shared

@@ -499,6 +499,22 @@ plan_build(const pbw_descriptor *desc, const pbw_struct_field_t *fields,
             e->op |= SC_DFLT;
             e->dflt = row->dflt;
         }
+        /* A required scalar needs its presence bit: without it a decode
+         * cannot tell an absent value from a zero one, so the row cannot
+         * express what the schema requires. Pointer kinds need none (NULL
+         * is the absence signal) and repeated fields use their count. */
+        if ((e->op & SC_REQ) != 0 && (e->op & SC_RPT) == 0 && row->has == 0) {
+            switch (e->op & SC_OP_MASK) {
+            case SC_OP_STR:
+            case SC_OP_BYTES:
+            case SC_OP_MSG:
+            case SC_OP_GRP:
+                break;
+            default:
+                status = PBW_ERR_INVALID;
+                goto fail;
+            }
+        }
         e->fnum = row->fnum;
         e->wire = (uint8_t)info.wire;
         e->off = row->offset;
@@ -1158,7 +1174,11 @@ enc_msg(const sc_plan *p, sbuf *b, const char *base, unsigned depth)
             break;
         }
         if ((op & SC_RPT) == 0) {
-            if (e->has != 0 && *(const int *)(base + e->has) == 0) {
+            /* A required scalar is written even when its has-flag is clear:
+             * the encoder emits what the struct holds (presence is enforced
+             * on decode only), so a hand-filled struct still encodes. */
+            if (e->has != 0 && (op & SC_REQ) == 0 &&
+                *(const int *)(base + e->has) == 0) {
                 continue;
             }
             /* No capacity check: tail[i] covers tag plus value. */
@@ -1568,8 +1588,16 @@ check_required(const sc_plan *p, const char *base)
             continue;
         }
         if ((op == SC_OP_STR || op == SC_OP_BYTES || op == SC_OP_MSG ||
-             op == SC_OP_GRP) &&
-            *(const void *const *)(base + e->off) == NULL) {
+             op == SC_OP_GRP)) {
+            if (*(const void *const *)(base + e->off) == NULL) {
+                return PBW_ERR_REQUIRED;
+            }
+            continue;
+        }
+        /* A required scalar is always written by the encoder, so only its
+         * has-flag tells the decoder that the value arrived from the wire
+         * instead of staying at the zero/default the layout seeded. */
+        if (e->has != 0 && *(const int *)(base + e->has) == 0) {
             return PBW_ERR_REQUIRED;
         }
     }
@@ -2012,6 +2040,11 @@ dec_msg(const sc_plan *p, rdr *r, char *base, pbw_struct_arena *a,
             continue;
         }
         }
+    }
+    if (stop != 0) {
+        /* A group body ends at its END_GROUP tag: running out of input means
+         * the closer never came, which the reference parsers reject. */
+        return PBW_ERR_INVALID;
     }
     return p->nreqs == 0 ? PBW_OK : check_required(p, base);
 }
