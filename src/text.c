@@ -1204,10 +1204,8 @@ t_unescape(pbw_buf *out, const char *start, size_t len)
                 }
                 v = v * 16 + (uint32_t)t_hex_val(*p++);
             }
-            if (c == 'U' && (start[0] != 0)) {
-                /* the tokenizer already limits \U to 00[01]......; values
-                 * above the planes and surrogates fail here */
-            }
+            /* The tokenizer already limits \U to 00[01]......; values above
+             * the planes and surrogates fail here. */
             if (c == 'u' && v >= 0xd800 && v <= 0xdbff && p + 5 < end &&
                 p[0] == '\\' && p[1] == 'u') {
                 /* a lead surrogate followed by \uXXXX: combine the pair
