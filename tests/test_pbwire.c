@@ -2598,6 +2598,83 @@ test_extension_only_message(void)
     pbw_schema_free(schema);
 }
 
+/* The printers and parsers must agree on the longest identifier the
+ * descriptor loader accepts (512 bytes per name component): a name that
+ * prints but cannot be parsed back breaks round-tripping a legal schema. */
+static void
+fill_name(char *out, size_t n)
+{
+    size_t i;
+
+    for (i = 0; i < n; i++) {
+        out[i] = (char)('a' + (int)(i % 26));
+    }
+    out[n] = '\0';
+}
+
+static void
+test_long_names(void)
+{
+    char field_name[301];
+    char enum_name[301];
+    char ext_name[301];
+    char ext_full[512];
+    pbw_schema *schema = pbw_schema_new();
+    pbw_descriptor *msg = pbw_schema_add_message(schema, "M");
+    pbw_descriptor *en = pbw_schema_add_enum(schema, "E");
+    pbw_field *field;
+    pbw_field *ext;
+    pbw_message *message;
+    pbw_message *back = NULL;
+    char *text = NULL;
+    size_t text_len = 0;
+    pbw_status status;
+
+    CHECK(schema != NULL && msg != NULL && en != NULL);
+    fill_name(field_name, sizeof(field_name) - 1);
+    fill_name(enum_name, sizeof(enum_name) - 1);
+    CHECK_OK(pbw_enum_add_value(en, enum_name, 1));
+    field = pbw_message_add_field(msg, "e", 1, PBW_TYPE_ENUM,
+                                  PBW_LABEL_OPTIONAL);
+    CHECK(field != NULL);
+    CHECK(pbw_message_add_field(msg, field_name, 2, PBW_TYPE_INT32,
+                                PBW_LABEL_OPTIONAL) != NULL);
+    ext = pbw_message_add_extension(msg, "ext", 100, PBW_TYPE_INT32,
+                                    PBW_LABEL_OPTIONAL);
+    CHECK(ext != NULL);
+    fill_name(ext_name, sizeof(ext_name) - 1);
+    snprintf(ext_full, sizeof(ext_full), "M.%s", ext_name);
+    pbw_field_set_full_name(ext, ext_full);
+    pbw_field_set_type_name(field, "E");
+    CHECK_OK(pbw_schema_link(schema));
+
+    message = pbw_message_new(msg);
+    CHECK(message != NULL);
+    CHECK_OK(pbw_message_set(message, 1, pbw_value_new_uint(1)));
+    CHECK_OK(pbw_message_set(message, 100, pbw_value_new_uint(7)));
+
+    CHECK_OK(pbw_text_print(message, &text, &text_len));
+    status = pbw_text_parse(msg, text, text_len, &back);
+    CHECK_STATUS(PBW_OK, status);
+    CHECK(back != NULL);
+    CHECK(pbw_message_get(back, 1) != NULL);
+    CHECK(pbw_message_get(back, 100) != NULL);
+    pbw_message_free(back);
+    pbw_free(text);
+
+    CHECK_OK(pbw_json_print(message, &text, &text_len));
+    back = NULL;
+    CHECK_STATUS(PBW_OK, pbw_json_parse(msg, text, text_len, &back));
+    CHECK(back != NULL);
+    CHECK(pbw_message_get(back, 1) != NULL);
+    CHECK(pbw_message_get(back, 100) != NULL);
+    pbw_message_free(back);
+    pbw_free(text);
+
+    pbw_message_free(message);
+    pbw_schema_free(schema);
+}
+
 static void
 test_schema_errors(void)
 {
@@ -7647,6 +7724,7 @@ main(void)
     test_decode_delimited(schema);
     test_wide_message();
     test_extension_only_message();
+    test_long_names();
     test_schema_errors();
 
     pbw_schema_free(schema);
