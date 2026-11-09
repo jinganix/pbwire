@@ -104,7 +104,9 @@ static int
 j_field_by_name(const pbw_descriptor *desc, const char *key, size_t len,
                 const pbw_field **out)
 {
-    char tmp[256];
+    /* Room for the longest name pbw_descriptor_set_load() accepts (512
+     * bytes); a shorter buffer would truncate and could alias two names. */
+    char tmp[520];
     size_t i;
 
     for (i = 0; i < desc->field_count; i++) {
@@ -1456,7 +1458,9 @@ static void
 j_print_one(j_out *j, const pbw_message *msg, const pbw_field *field,
             int *first)
 {
-    char key[288];
+    /* "[scope.name]" of an extension: the loader caps scope and name at 512
+     * bytes each, plus the brackets. */
+    char key[2 * 512 + 4];
     const pbw_value *value = &msg->values[(size_t)(field - msg->desc->fields)];
 
     if (!*first) {
@@ -1780,6 +1784,10 @@ j_valid_utf8(const uint8_t *data, size_t len)
 {
     const uint8_t *p = data;
     const uint8_t *end = data + len;
+
+    if (len == 0) {
+        return 1; /* an empty buffer may have a NULL data pointer */
+    }
 
     while (p < end) {
         uint8_t c = *p;
@@ -2257,10 +2265,12 @@ j_parse_key(j_in *j, pbw_buf *out)
         if (j->cur.p >= j->cur.end || (j->cur.p[0] >= '0' && j->cur.p[0] <= '9')) {
             return PBW_ERR_INVALID;
         }
-        if ((n == 4 && memcmp(j->cur.p, "true", 4) == 0) ||
-            (n == 5 &&
-             (memcmp(j->cur.p, "false", 5) == 0 ||
-              memcmp(j->cur.p, "null", 4) == 0))) {
+        if ((n == 4 && (memcmp(j->cur.p, "true", 4) == 0 ||
+                        memcmp(j->cur.p, "null", 4) == 0)) ||
+            (n == 5 && memcmp(j->cur.p, "false", 5) == 0)) {
+            /* A bare JSON literal is not a key. Comparing each word at its
+             * own length keeps a real field called "nulls" or "trueish"
+             * addressable in the legacy bare-key form. */
             return PBW_ERR_INVALID;
         }
         if (out != NULL) {
@@ -3045,9 +3055,27 @@ j_parse_timestamp(j_in *j, pbw_message *msg)
     hour = parts[3];
     min = parts[4];
     sec = parts[5];
-    if (year == 0 || mon == 0 || day == 0) {
+    /* The reference rejects anything a real calendar would: month 13, hour
+     * 25, minute 61, February 30 and a leap day in a common year. Without
+     * this the epoch-day arithmetic silently rolls the value over. */
+    if (year == 0 || mon == 0 || day == 0 || mon > 12 || hour > 23 ||
+        min > 59 || sec > 59) {
         pbw_buf_free(&raw);
         return PBW_ERR_INVALID;
+    }
+    {
+        static const uint32_t month_days[13] = {0, 31, 28, 31, 30, 31, 30,
+                                                31, 31, 30, 31, 30, 31};
+        uint32_t days = month_days[mon];
+        int leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+
+        if (mon == 2 && leap) {
+            days = 29;
+        }
+        if (day > days) {
+            pbw_buf_free(&raw);
+            return PBW_ERR_INVALID;
+        }
     }
     /* Fractional seconds: '.' plus 1-9 digits. */
     if (left > 0 && *data == '.') {
