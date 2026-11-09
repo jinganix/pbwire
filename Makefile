@@ -134,8 +134,16 @@ build/nofail_%.o: src/%.c $(HDRS) | build
 	$(CC) $(CFLAGS) $(CPPFLAGS) $(HOOKDEFS) -c -o $@ $<
 
 NOFAIL_OBJ := $(SRC:src/%.c=build/nofail_%.o)
-$(NOFAIL_BIN): tests/test_nofail.c $(NOFAIL_OBJ) | build
-	$(CC) $(CFLAGS) $(CPPFLAGS) -o $@ tests/test_nofail.c $(NOFAIL_OBJ)
+# The struct codec allocates on its own paths, so it joins the injection sweep
+# (same malloc hooks, same count-then-fail-the-i-th-allocation shape).
+NOFAIL_STRUCT_OBJ := build/nofail_pbw_struct.o
+$(NOFAIL_STRUCT_OBJ): bindings/c/runtime/pbw_struct.c bindings/c/runtime/pbw_struct.h $(HDRS) | build
+	$(CC) $(CFLAGS) $(CPPFLAGS) -Ibindings/c/runtime -Dmalloc=pbw_fail_malloc \
+		-Dcalloc=pbw_fail_calloc -Drealloc=pbw_fail_realloc \
+		-Dfree=pbw_fail_free -c -o $@ $<
+$(NOFAIL_BIN): tests/test_nofail.c $(NOFAIL_OBJ) $(NOFAIL_STRUCT_OBJ) | build
+	$(CC) $(CFLAGS) $(CPPFLAGS) -Ibindings/c/runtime -o $@ tests/test_nofail.c \
+		$(NOFAIL_OBJ) $(NOFAIL_STRUCT_OBJ)
 
 # Same hooked core, different subject: the embedded box must allocate nothing
 # once its arena is warm, and only a counting build can assert that.
@@ -180,6 +188,14 @@ port-test-32:
 # Needs Erlang/OTP (CI installs it); rebar3 is bootstrapped by its Makefile.
 erlang-test:
 	$(MAKE) -C bindings/erlang tests c-tests
+
+# The Erlang binding vendors a byte-identical copy of the core (c_src/core,
+# so the Hex package compiles standalone). c_src/Makefile's core-sync-check
+# fails on drift; this refreshes it after a core change.
+erlang-core-sync:
+	mkdir -p bindings/erlang/c_src/core/src bindings/erlang/c_src/core/include
+	cp src/*.c src/*.h bindings/erlang/c_src/core/src/
+	cp include/pbwire.h bindings/erlang/c_src/core/include/pbwire.h
 
 # Erlang binding benchmark (bindings/erlang/benchmarks): epb, gpb and (when
 # protoc + libprotobuf are available) gpb NIF on matrix3.proto. Same optional
@@ -695,6 +711,7 @@ codegen-conformance:
 	$(MAKE) -C codegen conformance
 
 clean:
+	rm -f src/*.o
 	rm -rf build codegen/build bench/gen bindings/go/benchmarks/gen build/doxygen \
 		bindings/java/benchmarks/gen bindings/java/benchmarks/out \
 		bindings/node/benchmarks/gen bindings/ruby/benchmarks/gen \
@@ -705,7 +722,7 @@ clean:
 		bindings/rust/target bindings/rust/benchmarks/gen \
 	bindings/lua/pbwire.so bindings/lua/pbwire.o
 
-.PHONY: all test fuzz coverage release-check examples shared format format-check bench bench-c erlang-test erlang-bench \
+.PHONY: all test fuzz coverage release-check examples shared format format-check bench bench-c erlang-test erlang-core-sync erlang-bench \
 	python-bind python-test python-bench difftest difftest-short conformance conformance-setup conformance-python \
 	conformance-ruby conformance-java conformance-lua conformance-r conformance-node ruby-bind java-test ruby-test node-test objc-test r-bind \
 	lua-bind lua-test lua-bench \

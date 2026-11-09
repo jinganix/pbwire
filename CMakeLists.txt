@@ -84,6 +84,16 @@ if(PBW_BUILD_TESTS)
     add_library(pbwire_struct_runtime OBJECT bindings/c/runtime/pbw_struct.c)
     target_include_directories(pbwire_struct_runtime PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include)
+    # The same source again with the allocation hooks, so the struct codec's
+    # NOMEM paths join the test_nofail sweep (the Makefile does this with a
+    # second object file and the same -D renames).
+    add_library(pbwire_struct_nofail OBJECT bindings/c/runtime/pbw_struct.c)
+    target_include_directories(pbwire_struct_nofail PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/bindings/c/runtime)
+    target_compile_definitions(pbwire_struct_nofail PRIVATE
+        malloc=pbw_fail_malloc calloc=pbw_fail_calloc
+        realloc=pbw_fail_realloc free=pbw_fail_free)
     add_library(pbwe_runtime OBJECT bindings/embedded/runtime/pbwe.c)
     target_include_directories(pbwe_runtime PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -137,7 +147,10 @@ if(PBW_BUILD_TESTS)
         realloc=pbw_fail_realloc free=pbw_fail_free)
 
     add_executable(test_nofail tests/test_nofail.c)
-    target_link_libraries(test_nofail PRIVATE pbwire_nofail)
+    target_include_directories(test_nofail PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/bindings/c/runtime)
+    target_link_libraries(test_nofail PRIVATE pbwire_nofail
+        $<TARGET_OBJECTS:pbwire_struct_nofail>)
     add_test(NAME test_nofail COMMAND test_nofail)
 
     add_executable(test_embedded_nofail
