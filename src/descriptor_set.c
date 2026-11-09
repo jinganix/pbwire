@@ -817,7 +817,8 @@ ds_message_proto(pbw_schema *schema, const ds_features *file,
             return PBW_ERR_INVALID;
         }
         if (rc == 0) {
-            return PBW_OK;
+            status = PBW_OK;
+            break;
         }
         if (f.wire != PBW_WIRE_LEN) {
             continue;
