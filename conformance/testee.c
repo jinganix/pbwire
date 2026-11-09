@@ -184,18 +184,13 @@ conform(const pbw_message *request, pbw_message *out)
     const char *type = as_string(request, 4);
     size_t payload_len = 0;
     const void *payload = as_bytes(request, 1, &payload_len);
+    /* Exact lengths, not strlen(): a payload may legitimately carry a NUL
+     * byte, and the reference testee parses the field's full bytes. */
     size_t text_len = 0;
-    const char *text = as_string(request, 8);
+    const void *text = as_bytes(request, 8, &text_len);
     size_t json_len = 0;
-    const char *json = as_string(request, 2);
+    const void *json = as_bytes(request, 2, &json_len);
     int print_unknown = as_enum(request, 9);
-
-    if (text != NULL) {
-        text_len = strlen(text);
-    }
-    if (json != NULL) {
-        json_len = strlen(json);
-    }
     /* JSPB has no pbwire layer: reported as skipped. */
     if (format != WIRE_PROTOBUF && format != WIRE_JSON &&
         format != WIRE_TEXT) {
@@ -223,15 +218,16 @@ conform(const pbw_message *request, pbw_message *out)
 
             opts.ignore_unknown_fields =
                 category == CATEGORY_JSON_IGNORE_UNKNOWN;
-            status = pbw_json_parse_opts(desc, json, json_len, &opts,
-                                         &decoded);
+            status = pbw_json_parse_opts(desc, (const char *)json, json_len,
+                                         &opts, &decoded);
             if (status != PBW_OK) {
                 return pbw_message_set(out, 1,
                                        pbw_value_new_string(pbw_strerror(status))) ==
                        PBW_OK;
             }
         } else if (text != NULL) {
-            status = pbw_text_parse(desc, text, text_len, &decoded);
+            status = pbw_text_parse(desc, (const char *)text, text_len,
+                                    &decoded);
             if (status != PBW_OK) {
                 return pbw_message_set(out, 1,
                                        pbw_value_new_string(pbw_strerror(status))) ==
