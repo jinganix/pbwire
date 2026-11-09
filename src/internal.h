@@ -201,7 +201,23 @@ struct pbw_descriptor {
     int edition;
     pbw_schema *schema;
     size_t field_count;
+    /* Rows allocated in `fields`, grown geometrically by add_field(): a
+     * descriptor set with thousands of fields in one message would otherwise
+     * pay a memmove per field (quadratic in the field count). */
+    size_t fields_cap;
     pbw_field *fields; /* sorted by number after link */
+    /* Add-time duplicate index: open-addressed tables keyed by number and by
+     * name (values are field index + 1, 0 = empty), power-of-two sized. Without
+     * it pbw_message_add_field() compares against every earlier field, which is
+     * quadratic: 8000 fields cost 64 ms of scanning for 0.3 ms of work. Names
+     * index only non-extension rows (extensions may share a name by design).
+     * Growth is keyed on the total row count, because the number table holds
+     * every row: keying it on the name count would leave a message whose fields
+     * are all extensions with a full table and a probe that never finds a free
+     * slot. Dropped when an allocation fails, which falls back to the scan. */
+    uint32_t *add_nums;
+    uint32_t *add_names;
+    size_t add_size;
     size_t enum_count;
     struct pbw_enum_value *enum_values;
     uint32_t oneof_count;

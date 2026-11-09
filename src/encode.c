@@ -464,6 +464,13 @@ write_element(writer *w, const pbw_field *field, const pbw_value *value,
          * write stores a whole word, so reserve 4 for it. */
         size_t lb = pbw_varint_size(value->as.bytes.len);
         if (field->tag_len <= 4) {
+            if (value->as.bytes.len > SIZE_MAX - 4 - lb) {
+                /* A payload that big cannot exist (it would need SIZE_MAX
+                 * bytes of live memory); refuse rather than wrap the sum into
+                 * a tiny reserve and then copy past it. */
+                w->status = PBW_ERR_LIMIT;
+                return;
+            }
             if (!w_reserve(w, 4 + lb + value->as.bytes.len)) {
                 w->status = PBW_ERR_NOMEM;
                 return;
@@ -1248,6 +1255,11 @@ size_message(const pbw_message *msg, uint32_t depth, size_t *out)
                  * varint(body) + body + END. */
                 size_t body = 0;
 
+                /* Same cap as write_messageset_item(): the sizing walk must
+                 * reject what the writer rejects, never recurse deeper. */
+                if (depth == PBW_MAX_DEPTH) {
+                    return PBW_ERR_LIMIT;
+                }
                 status = size_message(value->as.msg, depth + 1, &body);
                 if (status != PBW_OK) {
                     return status;
