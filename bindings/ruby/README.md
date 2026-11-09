@@ -51,6 +51,11 @@ back["inner"]["s"]                # => "nested"
 back.encode == wire               # => true: byte-exact re-encode
 ```
 
+`Pbwire::Type` is not part of the Ruby API: it is the C-side holder for one
+message's field table (memoized per schema and kept alive by the messages that
+reference it). Reach a type through the schema — `schema.message("pkg.Msg")`
+returns a builder of that type, and `Message#type` returns its full name.
+
 ## Build and run
 
 The extension is compiled once per interpreter with `sh build.sh` (or
