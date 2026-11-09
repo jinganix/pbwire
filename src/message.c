@@ -769,8 +769,17 @@ pbw_message_set_field(pbw_message *msg, const pbw_field *field, pbw_value *value
         msg->desc == NULL || field == NULL) {
         return PBW_ERR_INVALID;
     }
-    if (msg->arena != NULL && msg->arena->readonly) {
-        return PBW_ERR_INVALID;
+    if (msg->arena != NULL) {
+        if (msg->arena->readonly) {
+            return PBW_ERR_INVALID;
+        }
+        if (msg->arena->block == NULL && (value->flags & PBW_VF_ARENA) == 0) {
+            /* A reusable context arena releases by reset, so it cannot free a
+             * heap payload: only values built in that arena
+             * (pbw_value_new_*_ctx) can be stored. A decoded tree's own packed
+             * arena can: pbw_message_free() walks its slots (has_heap). */
+            return PBW_ERR_INVALID;
+        }
     }
     base = msg->desc->fields;
     if (field < base || field >= base + msg->desc->field_count) {

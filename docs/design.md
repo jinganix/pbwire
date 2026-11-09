@@ -152,7 +152,7 @@ models. Pick per call site, not per program.
 | Allocation | one bump arena + one output buffer per context; no `malloc` after warm-up | one tree allocation + one output buffer per call |
 | Release | `pbw_ctx_reset()` moves a pointer back and recycles the whole tree; `pbw_ctx_free()` releases the context | caller frees: `pbw_message_free(tree)` / `pbw_free(buf)` |
 | Lifetime | valid until the next `reset`/`encode`/`free`; a reset invalidates every pointer into the tree | owned by the caller, valid for as long as it is kept |
-| Mutability | read-only: `pbw_message_set`/`set_message` fail, `clear` does nothing | mutable: `set`/`clear`/`set_message` work; values and submessages inside the tree still belong to it and are released with it |
+| Mutability | read-only after a decode: `pbw_message_set`/`set_message` fail, `clear` does nothing. A tree built with `pbw_message_new_ctx` is mutable until then, but only takes values from that arena (`pbw_value_new_*_ctx`): a heap value is rejected because the reset could not free it | mutable: `set`/`clear`/`set_message` work; values and submessages inside the tree still belong to it and are released with it |
 | Concurrency | one context per thread/goroutine, never shared | no shared state: each message is independent, threads need no workspace |
 | Output buffer | `pbw_encode_ctx` output valid until the next `encode`/`reset`/`free` | `*out` is `malloc`'d and handed to the caller (`pbw_free`) |
 

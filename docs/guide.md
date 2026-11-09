@@ -191,7 +191,11 @@ values, submessages and payloads at once; `pbw_value_free()` on a value taken
 from a decoded tree is a no-op on purpose (the `PBW_VF_ARENA` flag).
 3. **Context messages belong to the context.** `pbw_decode_ctx` trees are
 read-only and die with the next `pbw_ctx_reset()`/`pbw_ctx_free()`, never with
-`pbw_message_free` (that is a no-op there too).
+`pbw_message_free` (that is a no-op there too). A tree built with
+`pbw_message_new_ctx()` is mutable until a decode seals it, but it only takes
+values built in that same arena (`pbw_value_new_*_ctx`): a heap value
+(`pbw_value_new_string()`, ...) is rejected with `PBW_ERR_INVALID`, because the
+reset could not free it.
 4. **The schema outlives every message built from it.** Messages, values and
 context trees hold pointers into the schema's descriptors; free the schema last
 and treat a linked schema as read-only while other threads use it.

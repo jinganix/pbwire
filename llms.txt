@@ -138,7 +138,9 @@ C++ runtime), `make bench`, `make bench-c` (C structs vs protoc C++). Optional, 
   `pbw_message_is_initialized` (proto2 `required` check; `pbw_decode` already enforces it);
   `pbw_message_set(pbw_message *, uint32_t number, pbw_value *)` takes ownership of the value on
   success only; `pbw_message_get`, `pbw_message_get_field`, `pbw_message_clear`,
-  `pbw_message_set_message`, `pbw_message_set_field`, `pbw_message_new_ctx`; visit present fields
+  `pbw_message_set_message`, `pbw_message_set_field`, `pbw_message_new_ctx` (a ctx-built tree only
+  takes `pbw_value_new_*_ctx` values; a heap value is rejected, since the reset could not free it);
+  visit present fields
   with `pbw_message_field_count`, `pbw_message_field_at`, `pbw_message_present_list`, wire size with
   `pbw_message_wire_size`; raw unknowns via `pbw_message_add_unknown_bytes`,
   `pbw_message_unknown_bytes`, `pbw_message_unknown_len`.
