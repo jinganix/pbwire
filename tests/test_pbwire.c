@@ -2027,6 +2027,21 @@ test_ctx(pbw_schema *schema)
     size_t used_before;
 
     CHECK(ctx != NULL);
+    /* A reusable context arena frees by reset, so it never takes a heap value:
+     * the setter refuses and the value stays the caller's. The ctx twin, which
+     * lives in the same arena, is accepted. */
+    {
+        pbw_message *built = pbw_message_new_ctx(ctx, person);
+        pbw_value *heap = pbw_value_new_string("ctx cannot own this");
+
+        CHECK(built != NULL && heap != NULL);
+        CHECK_STATUS(PBW_ERR_INVALID, pbw_message_set(built, 1, heap));
+        pbw_value_free(heap);
+        CHECK_OK(pbw_message_set(built, 1,
+                                 pbw_value_new_bytes_ctx(ctx, "abc", 3)));
+        CHECK(strcmp(pbw_value_get_string(pbw_message_get(built, 1)), "abc") ==
+              0);
+    }
     /* Binding slot: set once, preserved by reset, freed with the context. */
     CHECK(pbw_ctx_user(ctx) == NULL);
     pbw_ctx_set_user(ctx, &heap_len);
@@ -2107,6 +2122,21 @@ test_ctx(pbw_schema *schema)
     CHECK(pbw_ctx_used(ctx) > 0);
     pbw_ctx_reset(ctx);
     CHECK(pbw_ctx_used(ctx) == 0);
+
+    /* A plain decode owns its tree through one packed arena and stays mutable:
+     * a heap value stored into it is released by the free walk (has_heap), so
+     * this must not leak or free it twice. */
+    {
+        pbw_message *plain = NULL;
+
+        CHECK_STATUS(PBW_OK, pbw_decode(person, heap_bytes, heap_len, &plain));
+        CHECK_OK(pbw_message_set(plain, 1, pbw_value_new_string("mutated")));
+        CHECK_OK(pbw_message_set(plain, 2, pbw_value_new_int(99)));
+        CHECK(strcmp(pbw_value_get_string(pbw_message_get(plain, 1)),
+                     "mutated") == 0);
+        CHECK(pbw_value_get_int32(pbw_message_get(plain, 2)) == 99);
+        pbw_message_free(plain);
+    }
 
     pbw_free(heap_bytes);
     pbw_message_free(msg);
@@ -2200,8 +2230,14 @@ test_ctx_retain_cap(pbw_schema *schema)
     CHECK(out_len > 0);
     pbw_message_free(msg);
 
+    /* Freeing (not resetting) a context releases its oversized single
+     * allocations too. */
+    CHECK_STATUS(PBW_OK,
+                 pbw_decode_ctx(ctx, person, big_wire, big_len, &decoded));
+    CHECK(pbw_ctx_used(ctx) > PBW_ARENA_LARGE_THRESHOLD);
+
     pbw_free(big_wire);
-    pbw_ctx_free(ctx);
+    pbw_ctx_free(ctx); /* frees the pending large chunk */
 }
 
 static void
@@ -2455,6 +2491,81 @@ test_enum(pbw_schema *schema)
     CHECK(number == 1);
     CHECK(pbw_enum_find_value(color, "PURPLE", &number) == 0);
     CHECK(pbw_enum_find_name(color, 42, &name) == 0);
+}
+
+/* A wide message must stay linear to build: add_field() indexes numbers and
+ * names instead of scanning every earlier field (8000 fields used to cost 64 ms
+ * of scanning). It also proves the index stays correct across the rebuilds that
+ * geometric growth triggers, by re-offering the very first field. */
+static void
+test_wide_message(void)
+{
+    enum { WIDE = 2000 };
+    pbw_schema *schema = pbw_schema_new();
+    pbw_descriptor *msg = pbw_schema_add_message(schema, "Wide");
+    size_t i;
+
+    CHECK(schema != NULL && msg != NULL);
+    for (i = 1; i <= WIDE; i++) {
+        char name[32];
+
+        snprintf(name, sizeof(name), "f%zu", i);
+        CHECK(pbw_message_add_field(msg, name, (uint32_t)i, PBW_TYPE_INT32,
+                                    PBW_LABEL_OPTIONAL) != NULL);
+    }
+    /* duplicates of a row added before several table rebuilds */
+    CHECK(pbw_message_add_field(msg, "f1", 1, PBW_TYPE_INT32,
+                                PBW_LABEL_OPTIONAL) == NULL);
+    CHECK(pbw_message_add_field(msg, "f1", (uint32_t)WIDE + 1, PBW_TYPE_INT32,
+                                PBW_LABEL_OPTIONAL) == NULL);
+    CHECK(pbw_message_add_field(msg, "new", 1, PBW_TYPE_INT32,
+                                PBW_LABEL_OPTIONAL) == NULL);
+    {
+        char name[32];
+
+        snprintf(name, sizeof(name), "f%u", (unsigned)WIDE);
+        CHECK(pbw_message_add_field(msg, "last", (uint32_t)WIDE,
+                                    PBW_TYPE_INT32, PBW_LABEL_OPTIONAL) == NULL);
+        /* A fresh number and a fresh name still fit. */
+        CHECK(pbw_message_add_field(msg, "tail", (uint32_t)WIDE + 1,
+                                    PBW_TYPE_INT32,
+                                    PBW_LABEL_OPTIONAL) != NULL);
+        (void)name;
+    }
+    CHECK_OK(pbw_schema_link(schema));
+    CHECK(pbw_descriptor_field_count(msg) == WIDE + 1);
+    CHECK(pbw_descriptor_find_field(msg, 1) != NULL);
+    CHECK(pbw_descriptor_find_field(msg, (uint32_t)WIDE + 1) != NULL);
+    CHECK(pbw_descriptor_find_field_name(msg, "f1") != NULL);
+    CHECK(pbw_descriptor_find_field_name(msg, "tail") != NULL);
+    pbw_schema_free(schema);
+}
+
+/* A message whose fields are all extensions must index them too. The add-time
+ * table grows by total rows; keying it on the regular-field name count instead
+ * would leave such a message with a full table and a probe that never finds a
+ * free slot (an infinite loop). */
+static void
+test_extension_only_message(void)
+{
+    enum { EXT = 100 };
+    pbw_schema *schema = pbw_schema_new();
+    pbw_descriptor *msg = pbw_schema_add_message(schema, "ExtOnly");
+    size_t i;
+
+    CHECK(schema != NULL && msg != NULL);
+    for (i = 1; i <= EXT; i++) {
+        /* Same short name every time: extensions are identified by number. */
+        CHECK(pbw_message_add_extension(msg, "e", (uint32_t)i,
+                                        PBW_TYPE_INT32,
+                                        PBW_LABEL_OPTIONAL) != NULL);
+    }
+    CHECK(pbw_message_add_extension(msg, "e", 1, PBW_TYPE_INT32,
+                                    PBW_LABEL_OPTIONAL) == NULL);
+    CHECK_OK(pbw_schema_link(schema));
+    CHECK(pbw_descriptor_field_count(msg) == EXT);
+    CHECK(pbw_descriptor_find_field(msg, EXT) != NULL);
+    pbw_schema_free(schema);
 }
 
 static void
@@ -4848,6 +4959,37 @@ test_json_format(void)
             pbw_message_free(decoded);
             decoded = NULL;
         }
+    }
+    /* The reference rejects timestamps a real calendar cannot spell: without
+     * this the epoch-day arithmetic silently rolls the value over (month 13
+     * lands in the next year, February 30 in March). */
+    {
+        static const char *bad[] = {
+            "{\"when\":\"2020-13-01T00:00:00Z\"}",
+            "{\"when\":\"2020-01-01T25:00:00Z\"}",
+            "{\"when\":\"2020-01-01T00:61:00Z\"}",
+            "{\"when\":\"2020-01-01T00:00:61Z\"}",
+            "{\"when\":\"2019-02-29T00:00:00Z\"}",
+            "{\"when\":\"2020-02-30T00:00:00Z\"}",
+            "{\"when\":\"2020-04-31T00:00:00Z\"}",
+        };
+        size_t i;
+
+        for (i = 0; i < sizeof(bad) / sizeof(bad[0]); i++) {
+            decoded = NULL;
+            CHECK_STATUS(PBW_ERR_INVALID,
+                         pbw_json_parse(msg, bad[i], strlen(bad[i]),
+                                        &decoded));
+            CHECK(decoded == NULL);
+        }
+        /* The leap day of a leap year still parses. */
+        {
+            const char *leap = "{\"when\":\"2020-02-29T00:00:00Z\"}";
+
+            CHECK_OK(pbw_json_parse(msg, leap, strlen(leap), &decoded));
+        }
+        pbw_message_free(decoded);
+        decoded = NULL;
     }
     /* Struct/Value/ListValue print every kind; printing parses back to
      * the same bytes (covers null, nesting and the list path). */
@@ -7472,6 +7614,8 @@ main(void)
     test_streaming(schema);
     test_streaming_edges(schema);
     test_decode_delimited(schema);
+    test_wide_message();
+    test_extension_only_message();
     test_schema_errors();
 
     pbw_schema_free(schema);
