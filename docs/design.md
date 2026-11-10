@@ -166,7 +166,11 @@ where the payload dominates — see the `ctx` vs `plain` columns in
 A context keeps at most `pbw_ctx_set_retain_cap` bytes resident across resets
 (1 MiB by default; single allocations above it bypass the reusable chunk and are
 freed on reset, so one outlier never pins the context). `0` keeps nothing.
-`pbw_pool` is a bounded freelist of contexts for short-lived workers.
+`pbw_pool` is a bounded freelist of contexts for short-lived workers. `pbw_ctx_new_mem`
+is the third shape: the context and its arena live in a caller-supplied block
+and never allocate, so an allocation that does not fit is `PBW_ERR_NOMEM` and
+`pbw_ctx_free` releases nothing. Same arena, same bytes; it exists for
+firmware images with a fixed RAM budget.
 
 ## Scope and boundaries
 

@@ -2012,6 +2012,104 @@ test_ctx_build(pbw_schema *schema)
     pbw_ctx_free(ctx);
 }
 
+/* Caller-memory context (pbw_ctx_new_mem): the block is the whole budget, so
+ * an allocation that does not fit is PBW_ERR_NOMEM instead of a malloc, reset is
+ * a pointer move on the same block, and closing owns nothing to free. */
+static void
+test_ctx_mem(pbw_schema *schema)
+{
+    const pbw_descriptor *parent = desc(schema, "Parent");
+    /* union keeps the block 8-byte aligned, which pbw_ctx_new_mem requires */
+    static union {
+        uint8_t bytes[16 * 1024];
+        size_t align;
+    } pool;
+    static union {
+        uint8_t bytes[512];
+        size_t align;
+    } tight;
+    static uint8_t wire[4096];
+    pbw_ctx *ctx;
+    pbw_message *msg;
+    pbw_message *decoded = NULL;
+    const uint8_t *bytes = NULL;
+    size_t bytes_len = 0;
+    size_t len = 0;
+    size_t used;
+
+    CHECK(pbw_ctx_new_mem(NULL, sizeof(pool)) == NULL);
+    CHECK(pbw_ctx_new_mem(pool.bytes + 1, sizeof(pool) - 1) == NULL); /* unaligned */
+    CHECK(pbw_ctx_new_mem(pool.bytes, 64) == NULL);                   /* too small */
+    ctx = pbw_ctx_new_mem(pool.bytes, sizeof(pool));
+    CHECK(ctx != NULL);
+
+    /* Build in the caller arena, encode into a caller buffer: the context's
+     * own encode buffer would need a heap and must refuse instead. */
+    msg = pbw_message_new_ctx(ctx, parent);
+    CHECK(msg != NULL);
+    CHECK(pbw_message_set_message(msg, 1) != NULL);
+    CHECK_OK(pbw_message_set(pbw_value_get_message(pbw_message_get(msg, 1)), 2,
+                             pbw_value_new_uint_ctx(ctx, 7)));
+    CHECK_OK(pbw_message_set(msg, 2, pbw_value_new_uint_ctx(ctx, 1)));
+    CHECK_OK(pbw_message_set(msg, 2, pbw_value_new_uint_ctx(ctx, 2)));
+    {
+        /* A payload big enough that the decode needs more than the tight block
+         * below, so "does not fit" is a deterministic NOMEM. */
+        static const uint8_t pad[1024] = {0};
+        pbw_message *kid = pbw_message_set_message(msg, 3);
+
+        CHECK(kid != NULL);
+        CHECK_OK(pbw_message_set(kid, 1, pbw_value_new_bytes_ctx(ctx, pad, sizeof(pad))));
+    }
+    CHECK_OK(pbw_encode_to(msg, wire, sizeof(wire), &len));
+    CHECK(len > 0);
+    CHECK_STATUS(PBW_ERR_NOMEM, pbw_encode_ctx(ctx, msg, &bytes, &bytes_len));
+
+    /* Decode the same bytes back into the block, then re-encode them from it. */
+    pbw_ctx_reset(ctx);
+    CHECK(pbw_ctx_used(ctx) == 0);
+    CHECK_OK(pbw_decode_ctx(ctx, parent, wire, len, &decoded));
+    CHECK(decoded != NULL);
+    CHECK(pbw_value_count(pbw_message_get(decoded, 2)) == 2);
+    used = pbw_ctx_used(ctx);
+    CHECK(used > 0);
+    {
+        static uint8_t again[4096];
+        size_t again_len = 0;
+
+        CHECK_OK(pbw_encode_to(decoded, again, sizeof(again), &again_len));
+        CHECK(again_len == len && memcmp(again, wire, len) == 0);
+    }
+    pbw_ctx_free(ctx);
+    ctx = pbw_ctx_new_mem(pool.bytes, sizeof(pool)); /* reusable as is */
+    CHECK(ctx != NULL);
+    pbw_ctx_free(ctx);
+
+    /* A block that cannot hold what the decode above needed (asserted > 1024)
+     * is a NOMEM, not a growing arena and never a malloc fallback. */
+    CHECK(used > 1024);
+    {
+        ctx = pbw_ctx_new_mem(tight.bytes, sizeof(tight));
+        CHECK(ctx != NULL);
+        decoded = msg; /* a stale non-NULL pointer must not survive the error */
+        CHECK_STATUS(PBW_ERR_NOMEM, pbw_decode_ctx(ctx, parent, wire, len, &decoded));
+        CHECK(decoded == NULL);
+        /* Failure paths may leave partial arena bytes behind (the facade resets
+         * before every decode), so rewind before the fitting case. */
+        pbw_ctx_reset(ctx);
+        CHECK(pbw_ctx_used(ctx) == 0);
+        /* The failed decode left the block alone: a message that does fit
+         * still decodes, and reset still rewinds it. */
+        CHECK_OK(pbw_decode_ctx(ctx, parent, NULL, 0, &decoded));
+        CHECK(decoded != NULL);
+        CHECK_OK(pbw_encode_to(decoded, wire, sizeof(wire), &len));
+        CHECK(len == 0);
+        pbw_ctx_reset(ctx);
+        CHECK(pbw_ctx_used(ctx) == 0);
+        pbw_ctx_free(ctx);
+    }
+}
+
 static void
 test_ctx(pbw_schema *schema)
 {
@@ -7698,6 +7796,7 @@ main(void)
     test_length_patch_boundaries(schema);
     test_ctx(schema);
     test_ctx_build(schema);
+    test_ctx_mem(schema);
     test_ctx_retain_cap(schema);
     test_ctx_reset_oversized_only();
     test_ctx_pool(schema);
