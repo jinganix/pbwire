@@ -642,6 +642,11 @@ pbwlua_buf_reserve(lua_State *L, pbwlua_buf *b, size_t extra)
     size_t cap;
     uint8_t *data;
 
+    if (need < b->len) {
+        /* Size arithmetic wrapped: no buffer can hold this, and returning
+         * would let the caller write past the capacity it has. */
+        luaL_error(L, "pbwire: string too long to encode");
+    }
     if (need <= b->cap) {
         return;
     }

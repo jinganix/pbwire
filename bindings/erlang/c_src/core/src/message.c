@@ -651,9 +651,17 @@ pbw_message_store(pbw_message *msg, const pbw_field *field, pbw_value *value)
         msg->arena->has_heap = 1;
     }
     if (field->label == PBW_LABEL_REPEATED) {
+        size_t index = value_field_index(msg, field);
+        int fresh = !pbw_msg_present(msg, index);
         pbw_value *list = pbw_message_list_for(msg, field);
 
-        if (list == NULL || !pbw_value_list_push(list, value, msg->arena)) {
+        if (!pbw_value_list_push(list, value, msg->arena)) {
+            /* Do not leave an empty list behind as a present field when the
+             * push is what failed: the caller keeps the value and the field
+             * stays absent, like a singular store that failed. */
+            if (fresh) {
+                clear_slot(msg, index);
+            }
             return 0;
         }
         return 1;
@@ -703,6 +711,20 @@ pbw_message_clear(pbw_message *msg, uint32_t number)
         return;
     }
     field = pbw_descriptor_find_field(msg->desc, number);
+    if (field == NULL && msg->desc != NULL && msg->desc->schema != NULL &&
+        !msg->desc->schema->linked) {
+        /* An unlinked descriptor has no sorted rows or number table, so the
+         * lookup above refuses it; set_field() still accepts a field pointer,
+         * so clear has to work there too. Linear scan over the added rows. */
+        size_t i;
+
+        for (i = 0; i < msg->desc->field_count; i++) {
+            if (msg->desc->fields[i].number == number) {
+                field = &msg->desc->fields[i];
+                break;
+            }
+        }
+    }
     if (field == NULL) {
         return;
     }
@@ -773,9 +795,10 @@ pbw_message_set_field(pbw_message *msg, const pbw_field *field, pbw_value *value
         if (msg->arena->readonly) {
             return PBW_ERR_INVALID;
         }
-        if (msg->arena->block == NULL && (value->flags & PBW_VF_ARENA) == 0) {
-            /* A reusable context arena releases by reset, so it cannot free a
-             * heap payload: only values built in that arena
+        if ((msg->arena->block == NULL || msg->arena->no_grow) &&
+            (value->flags & PBW_VF_ARENA) == 0) {
+            /* A context arena (heap-grown or caller memory) releases by reset,
+             * so it cannot free a heap payload: only values built in that arena
              * (pbw_value_new_*_ctx) can be stored. A decoded tree's own packed
              * arena can: pbw_message_free() walks its slots (has_heap). */
             return PBW_ERR_INVALID;

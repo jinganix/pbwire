@@ -463,6 +463,10 @@ main(void)
         memset(&mem_box, 0, sizeof(mem_box));
         CHECK_STATUS(pbwe_open_mem(&mem_box, desc_bytes, desc_len, NULL, 0, NULL),
                      PBW_ERR_INVALID);
+        /* An unaligned block is a caller error, not an undersized one. */
+        CHECK_STATUS(pbwe_open_mem(&mem_box, desc_bytes, desc_len,
+                                   (uint8_t *)pool + 1, pool_len - 1, NULL),
+                     PBW_ERR_INVALID);
         CHECK_STATUS(pbwe_open_mem(&mem_box, desc_bytes, desc_len, pool, 0, NULL),
                      PBW_ERR_NOMEM);
         CHECK(mem_box.schema == NULL && mem_box.ctx == NULL); /* stays closed */

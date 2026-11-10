@@ -168,14 +168,14 @@ public final class PbCodec {
             throw new IllegalArgumentException("nesting exceeds " + Wire.MAX_DEPTH);
         }
         for (FieldMeta<O, B> f : meta.fields) {
-            if (f.oneof >= 0 && ((ToIntFunction<O>) f.caseOf).applyAsInt(msg) != f.number) {
+            if (f.oneof >= 0 && f.caseOf.applyAsInt(msg) != f.number) {
                 continue;
             }
             if (f.repeated) {
                 encodeRepeated(msg, f, b, depth);
                 continue;
             }
-            if (f.explicit && !((Predicate<O>) f.hasM).test(msg)) {
+            if (f.explicit && !f.hasM.test(msg)) {
                 continue;
             }
             // A oneof member prints whatever is set, zero and empty included:
@@ -873,7 +873,7 @@ public final class PbCodec {
         }
         if (meta.hasRequired) {
             for (FieldMeta<O, B> f : meta.fields) {
-                if (f.required && !((Predicate<B>) f.hasB).test(b)) {
+                if (f.required && !f.hasB.test(b)) {
                     throw new IllegalStateException(meta.fullName + ": missing required fields");
                 }
             }

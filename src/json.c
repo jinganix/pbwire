@@ -2979,11 +2979,33 @@ j_parse_enum_value(j_in *j, pbw_message *msg, const pbw_field *field,
 
 /* ------------------------------------------------- message parsing */
 
+/* Timestamp/Duration are recognized by name and stored by field number, so a
+ * descriptor that carries those names without the real shape (a crafted or
+ * hand-built schema) must fail instead of storing a value into a slot of
+ * another kind. seconds is int64, nanos int32 in the real WKTs. */
+static const pbw_field *
+j_time_field(const pbw_descriptor *desc, uint32_t number, pbw_type type)
+{
+    const pbw_field *field;
+
+    if (desc == NULL) {
+        return NULL;
+    }
+    field = pbw_descriptor_find_field(desc, number);
+    if (field == NULL || field->label == PBW_LABEL_REPEATED ||
+        field->type != type) {
+        return NULL;
+    }
+    return field;
+}
+
 /* Well-known types with a string form. */
 static pbw_status
 j_parse_timestamp(j_in *j, pbw_message *msg)
 {
     pbw_buf raw;
+    const pbw_field *secs_field;
+    const pbw_field *nanos_field;
     const char *data;
     size_t left;
     uint32_t year = 0;
@@ -3004,6 +3026,11 @@ j_parse_timestamp(j_in *j, pbw_message *msg)
     uint32_t parts[6];
     const char *suffix[6] = {"-", "-", "T", ":", ":", ""};
 
+    secs_field = j_time_field(msg->desc, 1, PBW_TYPE_INT64);
+    nanos_field = j_time_field(msg->desc, 2, PBW_TYPE_INT32);
+    if (secs_field == NULL || nanos_field == NULL) {
+        return PBW_ERR_INVALID;
+    }
     if (j_peek_kind(j) == JK_NULL) {
         return j_expect_lit(j, "null");
     }
@@ -3065,9 +3092,9 @@ j_parse_timestamp(j_in *j, pbw_message *msg)
         return PBW_ERR_INVALID;
     }
     {
-        static const uint32_t month_days[13] = {0, 31, 28, 31, 30, 31, 30,
-                                                31, 31, 30, 31, 30, 31};
-        uint32_t days = month_days[mon];
+        static const uint32_t days_in_month[13] = {0, 31, 28, 31, 30, 31, 30,
+                                                   31, 31, 30, 31, 30, 31};
+        uint32_t days = days_in_month[mon];
         int leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
 
         if (mon == 2 && leap) {
@@ -3106,11 +3133,18 @@ j_parse_timestamp(j_in *j, pbw_message *msg)
         pbw_buf_free(&raw);
         return PBW_ERR_INVALID;
     }
-    m_adj = mon - 3;
-    carry = m_adj > mon ? 1 : 0;
+    /* March-based month index, exactly like the reference: January and
+     * February belong to the previous year. Spelled without the unsigned
+     * wrap that `mon - 3` relies on, so the arithmetic is plain. */
+    if (mon >= 3) {
+        m_adj = mon - 3;
+        carry = 0;
+    } else {
+        m_adj = mon + 9; /* January -> 10, February -> 11 */
+        carry = 1;
+    }
     y_adj = year + 4800 - carry;
-    /* March-based epoch days, exactly like the reference. */
-    month_days = ((m_adj + carry * 12) * 62719 + 769) / 2048;
+    month_days = (m_adj * 62719 + 769) / 2048;
     leap_days = y_adj / 4 - y_adj / 100 + y_adj / 400;
     epoch_days = (int32_t)(y_adj * 365 + leap_days + month_days + (day - 1) -
                            2472632);
@@ -3180,10 +3214,8 @@ j_parse_timestamp(j_in *j, pbw_message *msg)
         return PBW_ERR_INVALID;
     }
     pbw_buf_free(&raw);
-    if (j_store_uint(j, msg, pbw_descriptor_find_field(msg->desc, 1),
-                     (uint64_t)secs) != PBW_OK ||
-        j_store_uint(j, msg, pbw_descriptor_find_field(msg->desc, 2),
-                     frac) != PBW_OK) {
+    if (j_store_uint(j, msg, secs_field, (uint64_t)secs) != PBW_OK ||
+        j_store_uint(j, msg, nanos_field, frac) != PBW_OK) {
         return PBW_ERR_NOMEM;
     }
     return PBW_OK;
@@ -3202,7 +3234,14 @@ j_parse_duration(j_in *j, pbw_message *msg)
     const char *rest;
     size_t rest_len;
     size_t i;
+    const pbw_field *secs_field =
+        j_time_field(msg->desc, 1, PBW_TYPE_INT64);
+    const pbw_field *nanos_field =
+        j_time_field(msg->desc, 2, PBW_TYPE_INT32);
 
+    if (secs_field == NULL || nanos_field == NULL) {
+        return PBW_ERR_INVALID;
+    }
     if (j_peek_kind(j) == JK_NULL) {
         return j_expect_lit(j, "null");
     }
@@ -3274,10 +3313,9 @@ j_parse_duration(j_in *j, pbw_message *msg)
         return PBW_ERR_INVALID;
     }
     pbw_buf_free(&raw);
-    if (j_store_uint(j, msg, pbw_descriptor_find_field(msg->desc, 1),
-                     (uint64_t)secs) != PBW_OK ||
-        j_store_uint(j, msg, pbw_descriptor_find_field(msg->desc, 2),
-                     (uint64_t)(int64_t)nanos) != PBW_OK) {
+    if (j_store_uint(j, msg, secs_field, (uint64_t)secs) != PBW_OK ||
+        j_store_uint(j, msg, nanos_field, (uint64_t)(int64_t)nanos) !=
+            PBW_OK) {
         return PBW_ERR_NOMEM;
     }
     return PBW_OK;
@@ -4038,8 +4076,8 @@ j_parse_any(j_in *j, pbw_message *msg)
     const char *start;
     const char *end;
     int depth0;
-    char type_name[256];
-    size_t type_len = 0;
+    const uint8_t *url = NULL;
+    size_t url_len = 0;
     const pbw_descriptor *resolved = NULL;
     pbw_message *sub = NULL;
     pbw_buf buf;
@@ -4047,7 +4085,15 @@ j_parse_any(j_in *j, pbw_message *msg)
     size_t bytes_len = 0;
     pbw_status st;
 
-    if (url_field == NULL || value_field == NULL) {
+    /* The URL is stored verbatim (a type_url has no length limit, so it can
+     * be longer than any field name), so the shape of its two fields is
+     * checked here: a crafted Any must fail, not store a value of the wrong
+     * kind in a slot. */
+    if (url_field == NULL || value_field == NULL ||
+        url_field->type != PBW_TYPE_STRING ||
+        url_field->label == PBW_LABEL_REPEATED ||
+        value_field->type != PBW_TYPE_BYTES ||
+        value_field->label == PBW_LABEL_REPEATED) {
         return PBW_ERR_INVALID;
     }
     /* Scan the object once to find @type (values are skipped). */
@@ -4084,33 +4130,30 @@ j_parse_any(j_in *j, pbw_message *msg)
         }
         is_type = key.len == 5 && memcmp(key.data, "@type", 5) == 0;
         if (is_type) {
-            pbw_buf url;
+            pbw_buf raw;
+            pbw_status ust;
 
-            if (type_len != 0) {
+            if (pbw_message_get(msg, url_field->number) != NULL) {
+                /* like the reference, a second expansion is an error */
                 pbw_buf_free(&key);
                 j->depth = depth0;
                 return PBW_ERR_INVALID;
             }
-            pbw_buf_init(&url);
-            if (j_parse_string(j, &url) != PBW_OK) {
-                pbw_buf_free(&url);
+            pbw_buf_init(&raw);
+            if (j_parse_string(j, &raw) != PBW_OK) {
+                pbw_buf_free(&raw);
                 pbw_buf_free(&key);
                 j->depth = depth0;
                 return PBW_ERR_INVALID;
             }
             /* The stored type_url is the full URL; resolution strips it. */
-            if (url.len >= sizeof(type_name)) {
-                pbw_buf_free(&url);
+            ust = j_store_bytes(j, msg, url_field, raw.data, raw.len);
+            pbw_buf_free(&raw);
+            if (ust != PBW_OK) {
                 pbw_buf_free(&key);
                 j->depth = depth0;
-                return PBW_ERR_INVALID;
+                return ust;
             }
-            if (url.len > 0) { /* source may be NULL when empty */
-                memcpy(type_name, url.data, url.len);
-            }
-            type_len = url.len;
-            type_name[type_len] = '\0';
-            pbw_buf_free(&url);
         } else if (j_skip_value(j) != PBW_OK) {
             pbw_buf_free(&key);
             j->depth = depth0;
@@ -4135,36 +4178,40 @@ j_parse_any(j_in *j, pbw_message *msg)
     }
     end = j->cur.p;
     j->depth = depth0;
-    if (type_len == 0) {
+    url = pbw_value_get_bytes(pbw_message_get(msg, url_field->number),
+                              &url_len);
+    if (url == NULL || url_len == 0) {
         /* A non-empty object without @type fails. */
         return PBW_ERR_INVALID;
     }
     /* The type name is whatever follows the last '/'; the stored type_url
      * keeps the full URL. */
     {
-        const char *slash = NULL;
+        const uint8_t *slash = NULL;
         /* Room for the longest message name the loader accepts (512). */
         char name[520];
         size_t off;
         size_t i;
 
-        for (i = 0; i < type_len; i++) {
-            if (type_name[i] == '/') {
-                slash = type_name + i;
+        for (i = 0; i < url_len; i++) {
+            if (url[i] == '/') {
+                slash = url + i;
             }
         }
-        off = slash == NULL ? 0 : (size_t)(slash - type_name) + 1;
-        if (type_len - off >= sizeof(name)) {
+        off = slash == NULL ? 0 : (size_t)(slash - url) + 1;
+        if (url_len - off >= sizeof(name)) {
             return PBW_ERR_INVALID;
         }
-        memcpy(name, type_name + off, type_len - off);
-        name[type_len - off] = '\0';
+        memcpy(name, url + off, url_len - off);
+        name[url_len - off] = '\0';
         resolved = msg->desc->schema == NULL
                        ? NULL
                        : pbw_schema_find(msg->desc->schema, name);
     }
     if (resolved == NULL || resolved->is_enum) {
         if (j->ignore_unknown) {
+            /* The field is skipped whole, as before: drop the type_url. */
+            pbw_message_clear(msg, url_field->number);
             return PBW_OK;
         }
         return PBW_ERR_INVALID;
@@ -4246,10 +4293,8 @@ j_parse_any(j_in *j, pbw_message *msg)
     if (st != PBW_OK) {
         return st;
     }
-    if (j_store_bytes(j, msg, url_field, (const uint8_t *)type_name,
-                      type_len) != PBW_OK ||
-        (bytes_len > 0 &&
-         j_store_bytes(j, msg, value_field, bytes, bytes_len) != PBW_OK)) {
+    if (bytes_len > 0 &&
+        j_store_bytes(j, msg, value_field, bytes, bytes_len) != PBW_OK) {
         pbw_free(bytes);
         return PBW_ERR_NOMEM;
     }

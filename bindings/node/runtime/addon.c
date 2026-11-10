@@ -2282,6 +2282,11 @@ wire_get(napi_env env, napi_callback_info info)
     if (napi_get_buffer_info(env, argv[1], &wire, &wire_len) != napi_ok) {
         return fail_argument(env, "wireGet expects a Buffer");
     }
+    /* Same bound as decode(): the slices carry uint32 offsets, and a longer
+     * buffer would let a triple point past the truncated end used below. */
+    if ((uint64_t)wire_len > 0xffffffffull) {
+        return fail_argument(env, "wireGet expects a message below 4 GiB");
+    }
     if (napi_get_typedarray_info(env, argv[2], &array_type, &count, &words,
                                  NULL, NULL) != napi_ok ||
         array_type != napi_uint32_array || count % 3 != 0) {
@@ -2832,6 +2837,11 @@ decode_delimited(napi_env env, napi_callback_info info)
     }
     if (napi_get_buffer_info(env, argv[1], &data, &len) != napi_ok) {
         return fail_argument(env, "decodeDelimited expects a Buffer");
+    }
+    /* `read` is a JS uint32: past 4 GiB it would wrap and the caller's
+     * frame loop would stop making progress. */
+    if ((uint64_t)len > 0xffffffffull) {
+        return fail_argument(env, "decodeDelimited expects a message below 4 GiB");
     }
     status = pbw_decode_delimited(desc->table->desc, data, len, &msg,
                                   &consumed);

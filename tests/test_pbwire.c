@@ -774,12 +774,17 @@ test_locale_independence(pbw_schema *schema)
         return; /* no locale support: nothing to check */
     }
     memcpy(saved, current, strlen(current) + 1);
-    if (setlocale(LC_NUMERIC, "de_DE.UTF-8") == NULL &&
+    /* Multi-byte separators first: ar_SA/fa_IR use U+066B (two UTF-8 bytes),
+     * which is the case where the translated end offset has to be remapped
+     * (pbw_strtod_slow). The comma locales cover the one-byte form. */
+    if (setlocale(LC_NUMERIC, "ar_SA.UTF-8") == NULL &&
+        setlocale(LC_NUMERIC, "fa_IR.UTF-8") == NULL &&
+        setlocale(LC_NUMERIC, "de_DE.UTF-8") == NULL &&
         setlocale(LC_NUMERIC, "de_DE") == NULL &&
         setlocale(LC_NUMERIC, "fr_FR.UTF-8") == NULL) {
-        return; /* no comma locale installed on this machine */
+        return; /* no non-'.' numeric locale installed on this machine */
     }
-    if (!(localeconv()->decimal_point[0] == ',')) {
+    if (localeconv()->decimal_point[0] == '.') {
         setlocale(LC_NUMERIC, saved);
         return;
     }
@@ -2050,6 +2055,18 @@ test_ctx_mem(pbw_schema *schema)
     CHECK(pbw_message_set_message(msg, 1) != NULL);
     CHECK_OK(pbw_message_set(pbw_value_get_message(pbw_message_get(msg, 1)), 2,
                              pbw_value_new_uint_ctx(ctx, 7)));
+    /* Caller memory is a context arena too: a heap payload would leak, so the
+     * setter refuses it exactly like the heap-grown context above. */
+    {
+        pbw_value *heap = pbw_value_new_string("caller memory cannot own this");
+
+        CHECK(heap != NULL);
+        CHECK_STATUS(PBW_ERR_INVALID,
+                     pbw_message_set(pbw_value_get_message(
+                                         pbw_message_get(msg, 1)),
+                                     1, heap));
+        pbw_value_free(heap);
+    }
     CHECK_OK(pbw_message_set(msg, 2, pbw_value_new_uint_ctx(ctx, 1)));
     CHECK_OK(pbw_message_set(msg, 2, pbw_value_new_uint_ctx(ctx, 2)));
     {
@@ -2696,6 +2713,91 @@ test_extension_only_message(void)
     pbw_schema_free(schema);
 }
 
+/* A link that fails leaves the earlier descriptors half-built: adding a field
+ * afterwards can move the row array (name_map points into it) and the failed
+ * link already sorted the rows (the add-time index points at them). Neither
+ * may leave a stale reference behind, and a number that already exists must
+ * still be rejected. */
+static void
+test_add_after_failed_link(void)
+{
+    pbw_schema *schema = pbw_schema_new();
+    pbw_descriptor *first = pbw_schema_add_message(schema, "First");
+    pbw_descriptor *broken = pbw_schema_add_message(schema, "Broken");
+    pbw_field *field;
+    char name[16];
+    int i;
+
+    CHECK(schema != NULL && first != NULL && broken != NULL);
+    /* Added out of order: a successful link sorts these rows. */
+    CHECK(pbw_message_add_field(first, "five", 5, PBW_TYPE_INT32,
+                                PBW_LABEL_OPTIONAL) != NULL);
+    CHECK(pbw_message_add_field(first, "one", 1, PBW_TYPE_INT32,
+                                PBW_LABEL_OPTIONAL) != NULL);
+    field = pbw_message_add_field(broken, "x", 1, PBW_TYPE_MESSAGE,
+                                  PBW_LABEL_OPTIONAL);
+    CHECK(field != NULL);
+    pbw_field_set_type_name(field, "Missing");
+    CHECK_STATUS(PBW_ERR_NOT_FOUND, pbw_schema_link(schema));
+    /* Enough rows to grow, and so move, the field array (5 is taken). */
+    for (i = 3; i <= 20; i++) {
+        if (i == 5) {
+            continue;
+        }
+        snprintf(name, sizeof(name), "f%d", i);
+        CHECK(pbw_message_add_field(first, name, (uint32_t)i, PBW_TYPE_INT32,
+                                    PBW_LABEL_OPTIONAL) != NULL);
+    }
+    CHECK(pbw_descriptor_find_field_name(first, "five") != NULL);
+    CHECK(pbw_message_add_field(first, "one_again", 1, PBW_TYPE_INT32,
+                                PBW_LABEL_OPTIONAL) == NULL);
+    pbw_schema_free(schema);
+}
+
+/* An unlinked descriptor has no link-computed oneof_count, yet messages are
+ * built from one (the printers take a field pointer). The case table must be
+ * sized from the fields there, or the first oneof write lands past the block. */
+static void
+test_unlinked_oneof(void)
+{
+    pbw_schema *schema = pbw_schema_new();
+    pbw_descriptor *desc = pbw_schema_add_message(schema, "Inline");
+    pbw_field *one = pbw_message_add_field(desc, "one", 1, PBW_TYPE_INT32,
+                                           PBW_LABEL_OPTIONAL);
+    pbw_field *two = pbw_message_add_field(desc, "two", 2, PBW_TYPE_INT32,
+                                           PBW_LABEL_OPTIONAL);
+
+    CHECK(schema != NULL && desc != NULL && one != NULL && two != NULL);
+    pbw_field_set_oneof(one, 1);
+    pbw_field_set_oneof(two, 1);
+    {
+        pbw_message *msg = pbw_message_new(desc);
+
+        CHECK(msg != NULL);
+        if (msg != NULL) {
+            CHECK_OK(pbw_message_set_field(msg, one, pbw_value_new_int(7)));
+            CHECK_OK(pbw_message_set_field(msg, two, pbw_value_new_int(9)));
+            /* The oneof still works: the second member replaced the first. */
+            CHECK(pbw_message_get_field(msg, one) == NULL);
+            CHECK(pbw_value_get_int(pbw_message_get_field(msg, two)) == 9);
+            CHECK_OK(pbw_message_set_field(msg, one, pbw_value_new_int(7)));
+            CHECK(pbw_value_get_int(pbw_message_get_field(msg, one)) == 7);
+            CHECK(pbw_message_get_field(msg, two) == NULL);
+            /* clear() takes a field number, and an unlinked descriptor has no
+             * number table to look it up in: it must fall back to the rows
+             * instead of silently doing nothing. */
+            pbw_message_clear(msg, 1);
+            CHECK(pbw_message_get_field(msg, one) == NULL);
+            /* The cleared member is not the active oneof case any more, so
+             * the sibling can be set again. */
+            CHECK_OK(pbw_message_set_field(msg, two, pbw_value_new_int(9)));
+            CHECK(pbw_value_get_int(pbw_message_get_field(msg, two)) == 9);
+            pbw_message_free(msg);
+        }
+    }
+    pbw_schema_free(schema);
+}
+
 /* The printers and parsers must agree on the longest identifier the
  * descriptor loader accepts (512 bytes per name component): a name that
  * prints but cannot be parsed back breaks round-tripping a legal schema. */
@@ -2770,6 +2872,73 @@ test_long_names(void)
     pbw_free(text);
 
     pbw_message_free(message);
+    pbw_schema_free(schema);
+}
+
+/* A type_url is a plain string the reference stores and prints verbatim; the
+ * JSON parser must not cap it (only the message name after the last '/'
+ * resolves against the schema). */
+static void
+test_any_long_url(void)
+{
+    pbw_schema *schema = pbw_schema_new();
+    pbw_descriptor *any;
+    pbw_descriptor *inner;
+    pbw_message *packed = NULL;
+    pbw_message *back = NULL;
+    char url[301];
+    char *json = NULL;
+    size_t json_len = 0;
+    size_t i;
+    pbw_message *sub;
+
+    CHECK(schema != NULL);
+    if (schema == NULL) {
+        return;
+    }
+    any = pbw_schema_add_message(schema, "google.protobuf.Any");
+    inner = pbw_schema_add_message(schema, "Pkg");
+    CHECK(any != NULL && inner != NULL);
+    pbw_message_add_field(any, "type_url", 1, PBW_TYPE_STRING,
+                          PBW_LABEL_OPTIONAL);
+    pbw_message_add_field(any, "value", 2, PBW_TYPE_BYTES,
+                          PBW_LABEL_OPTIONAL);
+    CHECK(pbw_message_add_field(inner, "i", 1, PBW_TYPE_INT32,
+                                PBW_LABEL_OPTIONAL) != NULL);
+    CHECK_OK(pbw_schema_link(schema));
+    any = (pbw_descriptor *)pbw_schema_find(schema, "google.protobuf.Any");
+    inner = (pbw_descriptor *)pbw_schema_find(schema, "Pkg");
+
+    /* 284 bytes: longer than the old fixed URL buffer, with a resolvable
+     * message name after the last '/'. */
+    for (i = 0; i < 280; i++) {
+        url[i] = 'a';
+    }
+    memcpy(url + 280, "/Pkg", 5);
+
+    sub = pbw_message_new(inner);
+    CHECK(sub != NULL);
+    CHECK_OK(pbw_message_set(sub, 1, pbw_value_new_int(7)));
+    {
+        uint8_t *bytes = NULL;
+        size_t len = 0;
+
+        CHECK_OK(pbw_encode(sub, &bytes, &len));
+        CHECK_OK(pbw_any_pack(any, url, bytes, len, &packed));
+        pbw_free(bytes);
+    }
+    pbw_message_free(sub);
+    CHECK(packed != NULL);
+    CHECK_OK(pbw_json_print(packed, &json, &json_len));
+    CHECK_STATUS(PBW_OK, pbw_json_parse(any, json, json_len, &back));
+    CHECK(back != NULL);
+    if (back != NULL) {
+        CHECK(strcmp(pbw_any_type_url(back), url) == 0);
+        CHECK(pbw_message_get(back, 2) != NULL);
+    }
+    pbw_message_free(back);
+    pbw_free(json);
+    pbw_message_free(packed);
     pbw_schema_free(schema);
 }
 
@@ -6057,6 +6226,60 @@ test_wkt(void)
     pbw_schema_free(schema);
 }
 
+/* Timestamp/Duration are matched by message name and stored by field number.
+ * A descriptor that carries the name without the real shape (no seconds, a
+ * string in field 1) must be refused, not dereferenced: the JSON parser used
+ * to look the fields up without checking and crashed on a NULL field. */
+static void
+test_wkt_json_shape(void)
+{
+    pbw_schema *schema = pbw_schema_new();
+    pbw_descriptor *ts;
+    pbw_descriptor *dur;
+    pbw_message *m = NULL;
+    static const char *ts_ok = "\"1970-01-01T00:00:00Z\"";
+    static const char *du_ok = "\"3.2s\"";
+
+    CHECK(schema != NULL);
+    if (schema == NULL) {
+        return;
+    }
+    /* Name only, no fields at all. */
+    ts = pbw_schema_add_message(schema, "google.protobuf.Timestamp");
+    dur = pbw_schema_add_message(schema, "google.protobuf.Duration");
+    CHECK(ts != NULL && dur != NULL);
+    CHECK_OK(pbw_schema_link(schema));
+    CHECK_STATUS(PBW_ERR_INVALID,
+                 pbw_json_parse(ts, ts_ok, strlen(ts_ok), &m));
+    CHECK_STATUS(PBW_ERR_INVALID,
+                 pbw_json_parse(dur, du_ok, strlen(du_ok), &m));
+    CHECK(m == NULL);
+
+    /* Fresh schema: fields 1/2 present but of the wrong kind. */
+    {
+        pbw_schema *s2 = pbw_schema_new();
+        pbw_descriptor *t;
+
+        CHECK(s2 != NULL);
+        if (s2 != NULL) {
+            t = pbw_schema_add_message(s2, "google.protobuf.Timestamp");
+            CHECK(t != NULL);
+            CHECK(pbw_message_add_field(t, "seconds", 1, PBW_TYPE_STRING,
+                                        PBW_LABEL_OPTIONAL) != NULL);
+            CHECK(pbw_message_add_field(t, "nanos", 2, PBW_TYPE_INT32,
+                                        PBW_LABEL_OPTIONAL) != NULL);
+            CHECK_OK(pbw_schema_link(s2));
+            t = (pbw_descriptor *)pbw_schema_find(s2,
+                                                  "google.protobuf.Timestamp");
+            CHECK_STATUS(PBW_ERR_INVALID,
+                         pbw_json_parse(t, ts_ok, strlen(ts_ok), &m));
+            CHECK(m == NULL);
+            pbw_schema_free(s2);
+        }
+    }
+    pbw_schema_free(schema);
+}
+
 /* Hostile and edge JSON: every WKT error spelling, map key rules, enum
  * edges and the lenient forms the mapping allows. */
 static void
@@ -7816,6 +8039,7 @@ main(void)
     test_limits(schema);
     test_visit(schema);
     test_wkt();
+    test_wkt_json_shape();
     test_json_edges();
     test_text_edges();
     test_streaming(schema);
@@ -7823,7 +8047,10 @@ main(void)
     test_decode_delimited(schema);
     test_wide_message();
     test_extension_only_message();
+    test_add_after_failed_link();
+    test_unlinked_oneof();
     test_long_names();
+    test_any_long_url();
     test_schema_errors();
 
     pbw_schema_free(schema);

@@ -51,10 +51,14 @@ pbwe_open_mem(pbwe_box *box, const void *desc, size_t len, void *mem, size_t mem
     pbw_status st;
 
     /* The context is checked before anything is loaded: a block too small for
-     * a context leaves the box closed rather than half-open. */
+     * a context leaves the box closed rather than half-open. A misaligned or
+     * NULL block is a caller error, not a size one, so it says INVALID. */
+    if (mem == NULL || ((uintptr_t)mem & 7u) != 0u) {
+        return PBW_ERR_INVALID;
+    }
     ctx = pbw_ctx_new_mem(mem, mem_len);
     if (ctx == NULL) {
-        return mem == NULL ? PBW_ERR_INVALID : PBW_ERR_NOMEM;
+        return PBW_ERR_NOMEM;
     }
     st = box_load(box, desc, len, desc_limits);
     if (st != PBW_OK) {

@@ -426,7 +426,15 @@ func (m *Message) GetString(name string) (string, bool, error) {
 	if C.pbw_value_get_kind(v) != C.PBW_VALUE_BYTES {
 		return "", false, fmt.Errorf("dynamic: field %q is not a string", name)
 	}
-	return C.GoString(C.pbw_value_get_string(v)), true, nil
+	/* Exact bytes, not GoString: a protobuf string may contain NUL, and the
+	 * C accessor stops there. Go strings carry it fine. */
+	var l C.size_t
+	p := C.pbw_value_get_bytes(v, &l)
+	out, err := copyBytes(unsafe.Pointer(p), l)
+	if err != nil {
+		return "", false, err
+	}
+	return string(out), true, nil
 }
 
 // GetBytes reads a bytes field (copied out).
@@ -549,7 +557,13 @@ func (m *Message) GetStringSlice(name string) ([]string, error) {
 		if C.pbw_value_get_kind(item) != C.PBW_VALUE_BYTES {
 			return nil, fmt.Errorf("dynamic: field %q is not a string list", name)
 		}
-		out[i] = C.GoString(C.pbw_value_get_string(item))
+		var l C.size_t
+		p := C.pbw_value_get_bytes(item, &l)
+		b, err := copyBytes(unsafe.Pointer(p), l)
+		if err != nil {
+			return nil, err
+		}
+		out[i] = string(b)
 	}
 	return out, nil
 }

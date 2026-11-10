@@ -494,8 +494,6 @@ pbwr_fill(SEXP list, pbw_ctx *ctx, const pbw_descriptor *desc,
             for (k = 0; k < m; k++) {
                 pbwr_append(msg, field, v, k, ctx, depth);
             }
-        } else if (v == R_NilValue) {
-            continue;
         } else {
             Rf_error("pbwire: field %s expects a vector or list",
                      pbw_field_name(field));
@@ -1132,10 +1130,6 @@ pbwr_from_json(SEXP schema_sexp, SEXP type, SEXP text, SEXP ignore)
         pbw_message_free(msg);
         pbwr_fail(PBW_ERR_LIMIT, "from_json", name);
     }
-    if (!pbwr_depth_ok(msg, 0)) {
-        pbw_message_free(msg);
-        pbwr_fail(PBW_ERR_LIMIT, "from_text", name);
-    }
     ans = pbwr_message_sexp(msg, s, 0);
     pbw_message_free(msg);
     return ans;
@@ -1185,6 +1179,12 @@ pbwr_from_text(SEXP schema_sexp, SEXP type, SEXP text)
     status = pbw_text_parse(desc, data, len, &msg);
     if (status != PBW_OK) {
         pbwr_fail(status, "from_text", name);
+    }
+    /* Same guard as from_json(): raise while the caller still owns the tree
+     * (pbwr_message_sexp longjmps on a too-deep message). */
+    if (!pbwr_depth_ok(msg, 0)) {
+        pbw_message_free(msg);
+        pbwr_fail(PBW_ERR_LIMIT, "from_text", name);
     }
     ans = pbwr_message_sexp(msg, s, 0);
     pbw_message_free(msg);

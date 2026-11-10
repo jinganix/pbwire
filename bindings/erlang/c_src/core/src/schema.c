@@ -399,6 +399,24 @@ add_index_drop(pbw_descriptor *msg)
     msg->add_size = 0;
 }
 
+/* Drops the tables derived from the row layout of `fields`: name_map holds
+ * pointers into it, fnum_map/tag_map index its rows, and the add-time index
+ * stores row numbers. Growing the array can move it and a link sorts it, so
+ * both invalidate these. Only reachable after a *failed* link (a successful
+ * one freezes the descriptor), but a stale pointer there is a use-after-free. */
+static void
+row_tables_drop(pbw_descriptor *msg)
+{
+    free(msg->fnum_map);
+    msg->fnum_map = NULL;
+    msg->fnum_map_size = 0;
+    free(msg->tag_map);
+    msg->tag_map = NULL;
+    free((void *)msg->name_map);
+    msg->name_map = NULL;
+    msg->name_map_size = 0;
+}
+
 /* Indexes (or re-indexes) every field added so far at `want` slots. The caller
  * keeps the row it is about to add out of this call and inserts it itself. */
 static int
@@ -556,6 +574,13 @@ add_field(pbw_descriptor *msg, const char *name, uint32_t number, pbw_type type,
             }
         }
     }
+    /* A row is about to be added, so the tables derived from the row layout
+     * are stale from here on: name_map holds pointers into the array, and
+     * fnum_map/tag_map index its rows. Drop them before the growth block,
+     * because a grow that moves the array followed by a failed name
+     * allocation returns from below with the old tables already dangling; a
+     * grow that does not move it still leaves the new row out of name_map. */
+    row_tables_drop(msg);
     /* Geometric growth: doubling keeps one wide message linear in its field
      * count, where a realloc per field was quadratic (8000 fields: 61 ms of
      * memmove for 16 ms of work, measured). */
@@ -800,6 +825,9 @@ link_message(pbw_schema *schema, pbw_descriptor *msg)
     if (msg->field_count > 1) {
         qsort(msg->fields, msg->field_count, sizeof(*msg->fields),
               compare_fields);
+        /* Sorting permutes the rows the add-time index points at, so it has to
+         * go: the next add falls back to the linear scan and rebuilds it. */
+        add_index_drop(msg);
     }
     for (i = 1; i < msg->field_count; i++) {
         if (msg->fields[i - 1].number == msg->fields[i].number) {

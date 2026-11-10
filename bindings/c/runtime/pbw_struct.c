@@ -2190,14 +2190,16 @@ pbw_struct_arena_new_mem(void *mem, size_t len)
     }
     hdr = (sizeof(*a) + 15u) & ~(size_t)15u;
     b = (sc_block *)(void *)((uint8_t *)mem + hdr);
-    b->next = NULL;
-    b->used = 0;
-    b->cap = 0;
-    /* block_data() rounds the first byte up to 16: account for that slack. */
+    /* Geometry before any store: block_data() rounds the first byte up to 16,
+     * so a block too small for the headers must be refused instead of having
+     * the header written past the end of the caller's memory. */
     data_off = (size_t)((uint8_t *)block_data(b) - (uint8_t *)b);
     if (len < hdr + data_off + 16u) {
         return NULL;
     }
+    b->next = NULL;
+    b->used = 0;
+    b->cap = 0;
     a = (pbw_struct_arena *)mem;
     a->head = b;
     a->tail = b;

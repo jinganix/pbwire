@@ -116,6 +116,44 @@ func TestTiersParity(t *testing.T) {
 	}
 }
 
+// A protobuf string may contain NUL. The C accessor stops there (it is the
+// C-style view), so the Go getters must read the exact bytes instead of
+// going through GoString, or a value round-trips truncated in the caller.
+func TestStringWithNUL(t *testing.T) {
+	r, err := NewRegistry(testDesc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Purge()
+	typ, err := r.Current().Message("structtest.Scalars3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer typ.Close()
+	m := typ.New()
+	defer m.Close()
+	if err := m.SetString("str", "a\x00b"); err != nil {
+		t.Fatal(err)
+	}
+	got, ok, err := m.GetString("str")
+	if err != nil || !ok {
+		t.Fatalf("get: %v ok=%v", err, ok)
+	}
+	if got != "a\x00b" {
+		t.Fatalf("string came back as %q, want a\\x00b", got)
+	}
+	if err := m.SetString("tags", "c\x00d"); err != nil {
+		t.Fatal(err)
+	}
+	tags, err := m.GetStringSlice("tags")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tags) != 1 || tags[0] != "c\x00d" {
+		t.Fatalf("string slice came back as %q", tags)
+	}
+}
+
 func TestHotSwap(t *testing.T) {
 	r, err := NewRegistry(testDesc)
 	if err != nil {
