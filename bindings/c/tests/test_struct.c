@@ -1754,10 +1754,12 @@ test_arena_mem(void)
     s.payload.len = sizeof(raw);
     CHECK_OK(pbw_struct_codec_encode(codec, &s, &buf));
 
-    /* NULL, unaligned and too small are refused before anything is decoded. */
+    /* NULL, unaligned and too small are refused before anything is decoded.
+     * 8 bytes is below the arena header plus one allocation on ILP32 and LP64
+     * alike; 64 would still fit the 32-bit struct with its 4-byte pointers. */
     CHECK(pbw_struct_arena_new_mem(NULL, sizeof(pool)) == NULL);
     CHECK(pbw_struct_arena_new_mem(pool.bytes + 1, sizeof(pool) - 1) == NULL);
-    CHECK(pbw_struct_arena_new_mem(pool.bytes, 64) == NULL);
+    CHECK(pbw_struct_arena_new_mem(pool.bytes, 8) == NULL);
 
     arena = pbw_struct_arena_new_mem(pool.bytes, sizeof(pool));
     CHECK(arena != NULL);
