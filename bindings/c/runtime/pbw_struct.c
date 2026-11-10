@@ -934,7 +934,7 @@ enc_msg(const sc_plan *p, sbuf *b, const char *base, unsigned depth)
         const sc_entry *e = &p->e[i];
         uint8_t op = e->op;
         const char *v = base + e->off;
-        const char *data = v;
+        const char *data;
         size_t n = 1;
 
         /* Oneof members ride only when the case selects them; anything else
@@ -991,7 +991,6 @@ enc_msg(const sc_plan *p, sbuf *b, const char *base, unsigned depth)
                         enc_bytes(b, e, *items, strlen(*items));
                     }
                 }
-                out = b->data + b->len;
                 if (!sb_reserve(b, p->tail[i + 1])) {
                     out = b->data + b->len;
                     continue;
@@ -1046,7 +1045,6 @@ enc_msg(const sc_plan *p, sbuf *b, const char *base, unsigned depth)
                                   items->len);
                     }
                 }
-                out = b->data + b->len;
                 if (!sb_reserve(b, p->tail[i + 1])) {
                     out = b->data + b->len;
                     continue;
@@ -1070,7 +1068,6 @@ enc_msg(const sc_plan *p, sbuf *b, const char *base, unsigned depth)
                 out += e->taglen;
                 b->len = (size_t)(out - b->data);
                 enc_msg(e->sub, b, item, depth + 1);
-                out = b->data + b->len;
                 if (!sb_reserve(b, 8 + p->tail[i + 1])) {
                     out = b->data + b->len;
                     continue;
@@ -1107,7 +1104,6 @@ enc_msg(const sc_plan *p, sbuf *b, const char *base, unsigned depth)
                     memcpy(b->data + b->len, e->etag, sizeof(e->etag));
                     b->len += e->etaglen;
                 }
-                out = b->data + b->len;
                 if (!sb_reserve(b, p->tail[i + 1])) {
                     out = b->data + b->len;
                     continue;
@@ -1135,7 +1131,6 @@ enc_msg(const sc_plan *p, sbuf *b, const char *base, unsigned depth)
                 b->len = (size_t)(out - b->data);
                 enc_msg(e->sub, b, item, depth + 1);
                 sb_len_end(b, mark);
-                out = b->data + b->len;
                 if (!sb_reserve(b, p->tail[i + 1])) {
                     out = b->data + b->len;
                     continue;
@@ -1161,7 +1156,6 @@ enc_msg(const sc_plan *p, sbuf *b, const char *base, unsigned depth)
                     enc_msg(e->sub, b, items, depth + 1);
                     sb_len_end(b, mark);
                 }
-                out = b->data + b->len;
                 if (!sb_reserve(b, p->tail[i + 1])) {
                     out = b->data + b->len;
                     continue;
@@ -1208,7 +1202,6 @@ enc_msg(const sc_plan *p, sbuf *b, const char *base, unsigned depth)
         }
         b->len = (size_t)(out - b->data);
         enc_scalars(e, b, data, n);
-        out = b->data + b->len;
         if (!sb_reserve(b, p->tail[i + 1])) {
             out = b->data + b->len;
             continue;
@@ -1234,6 +1227,8 @@ struct pbw_struct_arena {
     sc_block *head;
     sc_block *tail;
     sc_block *cur;
+    int owned;   /* 0: the arena and its blocks are caller memory */
+    int no_grow; /* 1: never allocate another block, a fit miss is a NOMEM */
 };
 
 static sc_block *
@@ -1292,8 +1287,13 @@ arena_alloc(pbw_struct_arena *a, size_t n)
         b = b->next;
     }
     if (b == NULL) {
-        size_t cap = a->tail != NULL ? a->tail->cap * 2 : 8192;
+        size_t cap;
 
+        if (a->no_grow) {
+            /* Caller memory: the block is the whole capacity. */
+            return NULL;
+        }
+        cap = a->tail != NULL ? a->tail->cap * 2 : 8192;
         if (cap < n) {
             cap = n;
         }
@@ -1968,6 +1968,10 @@ dec_msg(const sc_plan *p, rdr *r, char *base, pbw_struct_arena *a,
                 slot = (char *)sc_slot(e, base, a);
                 if (slot != NULL) {
                     memset(slot, 0, e->elem);
+                    /* A fresh array element is a new message instance: it gets
+                     * the layout's defaults even while the parent is a merge
+                     * target (seed == 0). */
+                    fresh = 1;
                 }
             } else {
                 /* A singular sub-message seen twice merges into the tree that
@@ -2011,6 +2015,8 @@ dec_msg(const sc_plan *p, rdr *r, char *base, pbw_struct_arena *a,
                 slot = (char *)sc_slot(e, base, a);
                 if (slot != NULL) {
                     memset(slot, 0, e->elem);
+                    /* Same as SC_OP_MSG: a new element is a new instance. */
+                    fresh = 1;
                 }
             } else {
                 /* Groups merge like message fields (same rule as SC_OP_MSG). */
@@ -2135,6 +2141,7 @@ pbw_struct_codec_decode(const pbw_struct_codec *codec, const uint8_t *wire,
         if (a == NULL) {
             return PBW_ERR_NOMEM;
         }
+        a->owned = 1;
         *arena = a;
     }
     if (a != NULL) {
@@ -2168,13 +2175,47 @@ pbw_struct_buf_free(pbw_struct_buf *buf)
     buf->cap = 0;
 }
 
+/* Arena over caller memory: the arena struct and its only block live in mem,
+ * so a decode never allocates past it and free() releases nothing. */
+pbw_struct_arena *
+pbw_struct_arena_new_mem(void *mem, size_t len)
+{
+    pbw_struct_arena *a;
+    sc_block *b;
+    size_t hdr;
+    size_t data_off;
+
+    if (mem == NULL || ((uintptr_t)mem & 7u) != 0u) {
+        return NULL;
+    }
+    hdr = (sizeof(*a) + 15u) & ~(size_t)15u;
+    b = (sc_block *)(void *)((uint8_t *)mem + hdr);
+    b->next = NULL;
+    b->used = 0;
+    b->cap = 0;
+    /* block_data() rounds the first byte up to 16: account for that slack. */
+    data_off = (size_t)((uint8_t *)block_data(b) - (uint8_t *)b);
+    if (len < hdr + data_off + 16u) {
+        return NULL;
+    }
+    a = (pbw_struct_arena *)mem;
+    a->head = b;
+    a->tail = b;
+    a->cur = b;
+    a->owned = 0;
+    a->no_grow = 1;
+    b->cap = len - hdr - data_off;
+    return a;
+}
+
 void
 pbw_struct_arena_free(pbw_struct_arena *arena)
 {
     sc_block *b;
     sc_block *next;
 
-    if (arena == NULL) {
+    if (arena == NULL || !arena->owned) {
+        /* Caller memory (pbw_struct_arena_new_mem): nothing to release. */
         return;
     }
     for (b = arena->head; b != NULL; b = next) {

@@ -51,6 +51,11 @@ the descriptor, and a row whose kind/wire type disagrees with its own `type`
 is `PBW_ERR_INVALID`.
 
 `decode` allocates (strings, bytes, arrays, sub-messages) into a zeroed struct.
+`pbw_struct_arena_new_mem` gives that decode a caller-owned block instead of a
+growable one: the block is the whole budget, an allocation that does not fit is
+`PBW_ERR_NOMEM`, and freeing the arena releases nothing (the caller's memory
+stays reusable) — the heap-free shape for firmware, next to `pbw_ctx_new_mem`
+in the core.
 Repeated fields grow by doubling from the count member, so a message with
 empty repeated fields allocates nothing. Maps are repeated entry structs
 into (no hash table: insertion order is the wire order, and a repeated key

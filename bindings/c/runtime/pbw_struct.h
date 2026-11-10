@@ -164,7 +164,16 @@ pbw_status pbw_struct_codec_decode(const pbw_struct_codec *codec,
 /* Release an encode buffer (safe on a zeroed buffer). */
 void pbw_struct_buf_free(pbw_struct_buf *buf);
 
+/* Arena over caller memory: the arena and its single block live in mem (8-byte
+ * aligned), so a decode never allocates and an allocation that does not fit
+ * returns PBW_ERR_NOMEM. Reset it by decoding again; pbw_struct_arena_free()
+ * releases nothing, so the block stays the caller's and can be reused. NULL
+ * when mem is NULL, unaligned, or too small for the arena header (a few dozen
+ * bytes plus room for one allocation). */
+pbw_struct_arena *pbw_struct_arena_new_mem(void *mem, size_t len);
+
 /* Release a decode arena and everything allocated from it (NULL is a no-op).
+ * Caller-memory arenas (pbw_struct_arena_new_mem) are left untouched.
  * Any struct decoded with it becomes a dangling view. */
 void pbw_struct_arena_free(pbw_struct_arena *arena);
 
