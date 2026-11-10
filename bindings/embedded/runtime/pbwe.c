@@ -2,12 +2,12 @@
 
 #include "pbwe.h"
 
-pbw_status
-pbwe_open(pbwe_box *box, const void *desc, size_t len, size_t retain_cap,
-          const pbw_limits *desc_limits)
+/* Arg checks plus the startup load, shared by the heap and caller-memory
+ * opens. On failure box->schema holds the partial set so the box still
+ * explains itself; the caller closes it either way. */
+static pbw_status
+box_load(pbwe_box *box, const void *desc, size_t len, const pbw_limits *desc_limits)
 {
-    pbw_status st;
-
     if (box == NULL || desc == NULL || len == 0) {
         return PBW_ERR_INVALID;
     }
@@ -17,7 +17,16 @@ pbwe_open(pbwe_box *box, const void *desc, size_t len, size_t retain_cap,
     }
     box->limits.max_bytes = 0;
     box->limits.max_depth = 0;
-    st = pbw_descriptor_set_load_limits(desc, len, desc_limits, &box->schema);
+    return pbw_descriptor_set_load_limits(desc, len, desc_limits, &box->schema);
+}
+
+pbw_status
+pbwe_open(pbwe_box *box, const void *desc, size_t len, size_t retain_cap,
+          const pbw_limits *desc_limits)
+{
+    pbw_status st;
+
+    st = box_load(box, desc, len, desc_limits);
     if (st != PBW_OK) {
         /* box->schema holds the partial set, so pbw_schema_error() explains. */
         return st;
@@ -31,6 +40,27 @@ pbwe_open(pbwe_box *box, const void *desc, size_t len, size_t retain_cap,
     if (retain_cap > 0) {
         pbw_ctx_set_retain_cap(box->ctx, retain_cap);
     }
+    return PBW_OK;
+}
+
+pbw_status
+pbwe_open_mem(pbwe_box *box, const void *desc, size_t len, void *mem, size_t mem_len,
+              const pbw_limits *desc_limits)
+{
+    pbw_ctx *ctx;
+    pbw_status st;
+
+    /* The context is checked before anything is loaded: a block too small for
+     * a context leaves the box closed rather than half-open. */
+    ctx = pbw_ctx_new_mem(mem, mem_len);
+    if (ctx == NULL) {
+        return mem == NULL ? PBW_ERR_INVALID : PBW_ERR_NOMEM;
+    }
+    st = box_load(box, desc, len, desc_limits);
+    if (st != PBW_OK) {
+        return st;
+    }
+    box->ctx = ctx;
     return PBW_OK;
 }
 

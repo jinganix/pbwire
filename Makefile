@@ -403,6 +403,7 @@ CFILES := include/*.h include/pbwire-protoc/*.h src/*.c src/*.h \
 	bindings/c/examples/*.c bindings/c/tests/*.c bindings/cpp/examples/*.cc \
 	bindings/embedded/runtime/*.c bindings/embedded/runtime/*.h \
 	bindings/embedded/examples/*.c bindings/embedded/tests/*.c \
+	bindings/embedded/benchmarks/*.c \
 	bindings/erlang/c_src/*.c bindings/erlang/c_src/*.h \
 	bindings/erlang/c_src_tests/*.c bindings/erlang/c_src_tests/*.h \
 	bindings/erlang/c_src_tests/stub/*.c bindings/erlang/c_src_tests/stub/*.h \
@@ -458,6 +459,67 @@ $(BENCH_C_BIN): bindings/c/benchmarks/bench_struct.cc $(BENCH_C_PB) $(CPP_RUNTIM
 
 bench-c: $(BENCH_C_BIN)
 	./scripts/bench-run.sh --binding c -- ./$(BENCH_C_BIN) bench
+
+# Static footprint of the embedded profile: the codec objects a Cortex-M
+# firmware links, -Os -mthumb, no link and no libc. Needs arm-none-eabi-gcc;
+# not part of `make test`, but keep the numbers in bindings/embedded/README.md.
+# NANOPB_DIR=path adds nanopb's runtime plus its generated code for the
+# comparison message (see `make embedded-bench`) to the report.
+mcu-size:
+	./scripts/mcu-size.sh
+
+# Optional: the embedded tier against nanopb on one message, host throughput and
+# Cortex-M flash. Needs protoc, the Python protobuf package (nanopb's generator)
+# and a nanopb checkout: `make nanopb-setup` clones it once into .tmp/
+# Override with PBWIRE_NANOPB_SRC=/path/to/nanopb.
+NANOPB_VERSION := 0.4.9.1
+NANOPB_SRC = $(or $(PBWIRE_NANOPB_SRC),$(CURDIR)/.tmp/nanopb-$(NANOPB_VERSION))
+EMB_BENCH_DIR := build/embedded-bench
+EMB_BENCH := $(EMB_BENCH_DIR)/bench
+
+nanopb-setup:
+	@if [ ! -d "$(NANOPB_SRC)/generator" ]; then \
+		echo "cloning nanopb $(NANOPB_VERSION) (shallow) into $(NANOPB_SRC)"; \
+		git clone --depth 1 --branch $(NANOPB_VERSION) \
+			https://github.com/nanopb/nanopb $(NANOPB_SRC); \
+	else \
+		echo "nanopb checkout exists: $(NANOPB_SRC)"; \
+	fi
+
+$(EMB_BENCH_DIR)/msg.desc: bindings/embedded/benchmarks/msg.proto | build
+	@mkdir -p $(EMB_BENCH_DIR)
+	protoc --descriptor_set_out=$@ -Ibindings/embedded/benchmarks \
+		bindings/embedded/benchmarks/msg.proto
+
+$(EMB_BENCH_DIR)/msg.pb.c: bindings/embedded/benchmarks/msg.proto \
+	bindings/embedded/benchmarks/msg.options
+	@test -d "$(NANOPB_SRC)/generator" || { \
+		echo "run 'make nanopb-setup' first (clones nanopb into $(NANOPB_SRC))"; \
+		exit 1; }
+	@mkdir -p $(EMB_BENCH_DIR)
+	cp bindings/embedded/benchmarks/msg.proto bindings/embedded/benchmarks/msg.options \
+		$(EMB_BENCH_DIR)/
+	cd $(EMB_BENCH_DIR) && protoc --plugin=protoc-gen-nanopb=$(NANOPB_SRC)/generator/protoc-gen-nanopb \
+		--nanopb_out=. -I. msg.proto
+
+# nanopb's runtime is C11 (_Static_assert), so this one target builds with c11
+# instead of the repo's c99; everything else keeps the standard flags.
+EMB_BENCH_CFLAGS = $(filter-out -std=c99,$(CFLAGS)) -std=c11
+$(EMB_BENCH): bindings/embedded/benchmarks/bench.c $(EMB_BENCH_DIR)/msg.desc \
+	$(EMB_BENCH_DIR)/msg.pb.c $(LIB) | build
+	$(CC) $(EMB_BENCH_CFLAGS) $(CPPFLAGS) -Ibindings/embedded/runtime \
+		-I$(EMB_BENCH_DIR) -I$(NANOPB_SRC) -o $@ \
+		bindings/embedded/benchmarks/bench.c bindings/embedded/runtime/pbwe.c \
+		$(EMB_BENCH_DIR)/msg.pb.c $(NANOPB_SRC)/pb_common.c \
+		$(NANOPB_SRC)/pb_encode.c $(NANOPB_SRC)/pb_decode.c $(LIB)
+
+embedded-bench: $(EMB_BENCH)
+	./$(EMB_BENCH) $(EMB_BENCH_DIR)/msg.desc
+
+# Same flags and the same report, with nanopb's side added: pbwire codec vs
+# nanopb runtime + one generated message file.
+embedded-size: $(EMB_BENCH_DIR)/msg.pb.c
+	NANOPB_DIR=$(NANOPB_SRC) NANOPB_GEN=$(EMB_BENCH_DIR)/msg.pb.c ./scripts/mcu-size.sh
 
 # Python binding (bindings/python): a CPython extension that converts
 # dict <-> wire in C. Needs the core library and a C compiler; no generated

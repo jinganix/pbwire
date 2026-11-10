@@ -3,7 +3,7 @@
 [![Language](https://img.shields.io/badge/C-C99-blue.svg)](#requirements-and-build)
 [![Dependencies](https://img.shields.io/badge/runtime%20dependencies-none-brightgreen.svg)](#at-a-glance)
 
-> **Release [`v0.1.14`](https://github.com/jinganix/pbwire/releases/tag/v0.1.14)** — every binding ships this one version; [`VERSION`](VERSION) is the source of truth, `scripts/sync-versions.sh` propagates it.
+> **Release [`v0.1.15`](https://github.com/jinganix/pbwire/releases/tag/v0.1.15)** — every binding ships this one version; [`VERSION`](VERSION) is the source of truth, `scripts/sync-versions.sh` propagates it.
 
 # pbwire — a dynamic Protobuf runtime for C, no code generation
 
@@ -58,9 +58,11 @@ pbw_free(buf);
 - **Built for embedding.** Stable C ABI, no globals, caller-confined
   schema/message objects, arena-backed `pbw_ctx` for per-thread hot loops, wire
   input validated at the boundary. [`bindings/embedded`](bindings/embedded/README.md)
-  packages that as one `pbwe_box`: one arena, caller-owned encode buffers
-  (bare or length-prefixed frames), and both inputs (frames and the startup
-  descriptor set) capped by `pbw_limits`.
+  packages that as one `pbwe_box`: one arena (on the heap, or in caller memory
+  via `pbwe_open_mem`/`pbw_ctx_new_mem`, which never allocates), caller-owned
+  encode buffers (bare or length-prefixed frames), and both inputs (frames and
+  the startup descriptor set) capped by `pbw_limits`; `make embedded-bench`
+  measures it against nanopb, byte for byte and ns for ns.
 - **One core, twenty-three host languages.** [C](bindings/c/), [C++](bindings/cpp/), [Python](bindings/python/), [Ruby](bindings/ruby/), [Java](bindings/java/), [Kotlin](bindings/kotlin/), [Node](bindings/node/), [Objective-C](bindings/objc/), [PHP](bindings/php/), [Dart](bindings/dart/), [C#](bindings/csharp/), [Rust](bindings/rust/), [Go](bindings/go/), [Erlang](bindings/erlang/), [Lua](bindings/lua/), [Swift](bindings/swift/), [Scala](bindings/scala/), [Elixir](bindings/elixir/), [Zig](bindings/zig/), [F#](bindings/fsharp/), [Clojure](bindings/clojure/), [Julia](bindings/julia/) and [R](bindings/r/) all speak the same wire
   format, each with a measured answer to its runtime's own pain point — see
   [what each binding solves](bindings/README.md#what-each-binding-solves).

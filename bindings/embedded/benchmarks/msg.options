@@ -1,0 +1,4 @@
+# nanopb caps, mirroring the three tiers' largest payload (samples x3000).
+eb.Reading.label max_size:32
+eb.Reading.raw max_size:16
+eb.Reading.samples max_count:3000
