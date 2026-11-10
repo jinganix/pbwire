@@ -248,6 +248,10 @@ func rustFiles(f *model.File, opt Options) []File {
 	if opt.Model {
 		var b strings.Builder
 		b.WriteString(header(f, "Prost-shaped structs over the pbwire runtime; the wire format stays in the C core."))
+		// A generated module exposes every field, codec and enum helper; a
+		// consumer that uses a subset would otherwise compile it with clippy
+		// dead_code / field_reassign_with_default warnings.
+		b.WriteString("#![allow(dead_code, clippy::field_reassign_with_default)]\n")
 		b.WriteString("use pbwire::{DecodeError, Message, Schema};\n\n")
 		fmt.Fprintf(&b, "#[path = \"%s.rs\"]\npub mod meta;\n\n", metaName)
 		// Sibling imports ride inline modules (path-relative, so the include
@@ -293,6 +297,7 @@ func rustFiles(f *model.File, opt Options) []File {
 // adds the whole-file message list plus a preload that warms every type.
 func writeRustMeta(b *strings.Builder, f *model.File, opt Options) {
 	b.WriteString(header(f, "Embedded descriptor set plus its loader: the schema side of the generated model."))
+	b.WriteString("#![allow(dead_code, clippy::field_reassign_with_default)]\n")
 	b.WriteString("use pbwire::Schema;\n\n")
 	raw, err := base64.StdEncoding.DecodeString(opt.DescSetB64)
 	if err != nil {

@@ -1760,6 +1760,19 @@ test_arena_mem(void)
     CHECK(pbw_struct_arena_new_mem(NULL, sizeof(pool)) == NULL);
     CHECK(pbw_struct_arena_new_mem(pool.bytes + 1, sizeof(pool) - 1) == NULL);
     CHECK(pbw_struct_arena_new_mem(pool.bytes, 8) == NULL);
+    /* Refused before a single header byte lands in the block: heap blocks of
+     * exactly these sizes put an early store past the end (ASan says so). */
+    {
+        size_t probe;
+
+        for (probe = 8; probe < 64; probe++) {
+            uint8_t *small = (uint8_t *)malloc(probe);
+
+            CHECK(small != NULL);
+            CHECK(pbw_struct_arena_new_mem(small, probe) == NULL);
+            free(small);
+        }
+    }
 
     arena = pbw_struct_arena_new_mem(pool.bytes, sizeof(pool));
     CHECK(arena != NULL);

@@ -2,6 +2,7 @@
 // Prost-shaped structs over the pbwire runtime; the wire format stays in the C core.
 // Do not edit; regenerate from the .proto instead.
 
+#![allow(dead_code, clippy::field_reassign_with_default)]
 use pbwire::{DecodeError, Message, Schema};
 
 #[path = "xdep_pbwire_meta.rs"]

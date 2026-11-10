@@ -104,6 +104,7 @@ void main(List<String> args) {
   final edgeSchema = Schema.load('../../tests/data/edge.desc');
   final edgeTy = edgeSchema.message('edge.Edge');
   final edgeInner = edgeSchema.message('edge.Inner');
+  check(edgeInner.name == 'edge.Inner', 'nested message lookup returned another type');
 
   final edge = edgeTy.newMessage()
     ..setBytes('raw', [0x00, 0x01, 0xff])
