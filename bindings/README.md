@@ -81,9 +81,14 @@ anything else:
   `pbwe_decode_delimited` covering length-prefixed frames the same way, so a
   firmware image links the same static `libpbwire.a` and loads the same
   `FileDescriptorSet`. Its budget is the box, not the language: `retain_cap`
-  plus `pbwe_set_limits` bound what a decode may allocate. Being a pass-through,
-  it has no benchmarks or conformance entry of its own; the core's cover the
-  wire and `make test` covers the facade.
+  plus `pbwe_set_limits` bound what a decode may allocate, and
+  `pbwe_open_mem` puts the whole message workspace in a caller block so a
+  decode allocates nothing at all (`pbw_ctx_new_mem` in the core, and
+  `pbw_struct_arena_new_mem` for the C struct codec). `make embedded-bench`
+  and `make embedded-size` compare it against nanopb on one message: 5-8x
+  throughput on encode/decode with byte-identical wire, 39 KB of codec flash
+  (every message in the schema) against nanopb's 7 KB (one message), and no
+  per-message generated code.
 - **Erlang needs neither.** gpb already is that plugin: `gpb_compile` /
   `protoc-erl` generates the record definitions plus `get_msg_defs/0`, and
   `pbwire:load_cache/1` consumes exactly that. Adding a second

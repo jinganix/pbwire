@@ -58,6 +58,15 @@ main(void)
         fprintf(stderr, "open failed: %s\n", pbw_schema_error(box.schema));
         goto done;
     }
+    /* A byte cap is what makes an oversized frame fail before the arena grows;
+     * a firmware sets it once from the largest frame it accepts. */
+    {
+        pbw_limits limits;
+
+        limits.max_bytes = 8191; /* generous here: this fixture is 192 bytes */
+        limits.max_depth = 8;
+        pbwe_set_limits(&box, &limits);
+    }
     if (pbwe_decode(&box, "structtest.Scalars3", ref_bytes, ref_len, &msg) != PBW_OK) {
         fprintf(stderr, "decode failed\n");
         goto done;

@@ -7,7 +7,7 @@
 > header, about 13k lines of C (roughly 7.5k binary codec, the rest the JSON mapping and text
 > format), zero runtime dependencies.
 
-Facts: source at <https://github.com/jinganix/pbwire>, license Apache-2.0, version `0.1.14`
+Facts: source at <https://github.com/jinganix/pbwire>, license Apache-2.0, version `0.1.15`
 (`VERSION` is the source of truth, `project(pbwire VERSION ...)` in `CMakeLists.txt` matches it). Encodings are byte-identical to `protoc 36.2`
 and pass Google's official conformance suites: binary + JSON 2745 successes, 0 skipped (2 expected
 failures that the reference C++ testee fails identically:
@@ -155,7 +155,9 @@ C++ runtime), `make bench`, `make bench-c` (C structs vs protoc C++). Optional, 
 - `pbw_status pbw_encode(const pbw_message *, uint8_t **out, size_t *len)` ->
   `pbw_free()`; `pbw_status pbw_decode(const pbw_descriptor *, const void *buf, size_t len,
   pbw_message **out)` -> `pbw_message_free()`.
-- `pbw_ctx *pbw_ctx_new(void)`: one arena + encode buffer per thread; `pbw_decode_ctx`,
+- `pbw_ctx *pbw_ctx_new(void)` / `pbw_ctx *pbw_ctx_new_mem(void *mem, size_t len)`: one arena +
+  encode buffer per thread, or the same context inside a caller block that never allocates
+  (an allocation that does not fit is `PBW_ERR_NOMEM`, and close frees nothing); `pbw_decode_ctx`,
   `pbw_encode_ctx`, `pbw_ctx_reset` (frees the whole tree at once), `pbw_ctx_used`, `pbw_ctx_free`,
   `pbw_ctx_set_retain_cap` (resident budget across resets, default 1 MiB, 0 keeps nothing),
   `pbw_ctx_set_user`/`pbw_ctx_user` (one opaque binding pointer per context, kept across resets),

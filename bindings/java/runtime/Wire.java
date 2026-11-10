@@ -472,7 +472,10 @@ public final class Wire {
             throw new IllegalArgumentException("length overflow");
         }
         int n = (int) v;
-        if (n < 0 || r.pos + n > r.end) {
+        /* Wide arithmetic: r.pos + n can wrap a negative int for a hostile
+         * length near Integer.MAX_VALUE, which would make the truncation
+         * check pass and hand out a slice past the array. */
+        if (n < 0 || (long) r.pos + (long) n > (long) r.end) {
             throw new IllegalArgumentException("truncated length-delimited");
         }
         return n;

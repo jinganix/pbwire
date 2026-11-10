@@ -740,6 +740,124 @@ test_load_hostile(void)
     CHECK_STATUS(PBW_ERR_LIMIT,
                  pbw_descriptor_set_load(set, sw.len, &schema));
     pbw_schema_free(schema);
+    schema = NULL;
+    /* 7. a field pointing at a oneof that was never declared: INVALID. The
+     * shape protoc never emits silently aliases the members of that index,
+     * so the loader rejects it after the message body has been walked. */
+    iw.len = 0;
+    w_str(&iw, 1, "M");
+    {
+        uint8_t oneof[16];
+        ds_w ow;
+        uint8_t fld[64];
+        ds_w fw;
+
+        ow.p = oneof;
+        ow.len = 0;
+        w_str(&ow, 1, "o");
+        w_sub(&iw, 8, oneof, ow.len);
+        /* field a: oneof_index 0 on the wire = group 1, declared */
+        fw.p = fld;
+        fw.len = 0;
+        w_str(&fw, 1, "a");
+        w_int(&fw, 3, 1);
+        w_int(&fw, 4, 1);
+        w_int(&fw, 5, 9);
+        w_int(&fw, 9, 0);
+        w_sub(&iw, 2, fld, fw.len);
+        /* field b: oneof_index 1 on the wire = group 2, undeclared */
+        fw.len = 0;
+        w_str(&fw, 1, "b");
+        w_int(&fw, 3, 2);
+        w_int(&fw, 4, 1);
+        w_int(&fw, 5, 9);
+        w_int(&fw, 9, 1);
+        w_sub(&iw, 2, fld, fw.len);
+    }
+    w.len = 0;
+    w_str(&w, 1, "oo.proto");
+    w_str(&w, 2, "p");
+    w_sub(&w, 4, inner, iw.len);
+    w_str(&w, 12, "proto3");
+    sw.len = 0;
+    w_sub(&sw, 1, file, w.len);
+    CHECK_STATUS(PBW_ERR_INVALID,
+                 pbw_descriptor_set_load(set, sw.len, &schema));
+    CHECK(schema != NULL && strlen(pbw_schema_error(schema)) > 0);
+    pbw_schema_free(schema);
+    schema = NULL;
+    /* 8. a map entry that does not have exactly optional key #1 and value #2:
+     * INVALID. The JSON/text printers read those two numbers directly, so a
+     * other shape would fail the whole print much later. */
+    iw.len = 0;
+    w_str(&iw, 1, "E");
+    {
+        uint8_t opt[8];
+        ds_w ow;
+        uint8_t fld[64];
+        ds_w fw;
+
+        ow.p = opt;
+        ow.len = 0;
+        w_int(&ow, 7, 1); /* MessageOptions.map_entry */
+        w_sub(&iw, 7, opt, ow.len);
+        fw.p = fld;
+        fw.len = 0;
+        w_str(&fw, 1, "value");
+        w_int(&fw, 3, 2);
+        w_int(&fw, 4, 1);
+        w_int(&fw, 5, 9);
+        w_sub(&iw, 2, fld, fw.len);
+    }
+    w.len = 0;
+    w_str(&w, 1, "me.proto");
+    w_str(&w, 2, "p");
+    w_sub(&w, 4, inner, iw.len);
+    w_str(&w, 12, "proto3");
+    sw.len = 0;
+    w_sub(&sw, 1, file, w.len);
+    CHECK_STATUS(PBW_ERR_INVALID,
+                 pbw_descriptor_set_load(set, sw.len, &schema));
+    pbw_schema_free(schema);
+    schema = NULL;
+    /* 9. the shape protoc emits (key #1, value #2, both optional) loads and
+     * stays a map entry: the check above must not over-reject. */
+    iw.len = 0;
+    w_str(&iw, 1, "Good");
+    {
+        uint8_t opt[8];
+        ds_w ow;
+        uint8_t fld[64];
+        ds_w fw;
+
+        ow.p = opt;
+        ow.len = 0;
+        w_int(&ow, 7, 1);
+        w_sub(&iw, 7, opt, ow.len);
+        fw.p = fld;
+        fw.len = 0;
+        w_str(&fw, 1, "key");
+        w_int(&fw, 3, 1);
+        w_int(&fw, 4, 1);
+        w_int(&fw, 5, 5); /* int32 */
+        w_sub(&iw, 2, fld, fw.len);
+        fw.len = 0;
+        w_str(&fw, 1, "value");
+        w_int(&fw, 3, 2);
+        w_int(&fw, 4, 1);
+        w_int(&fw, 5, 9); /* string */
+        w_sub(&iw, 2, fld, fw.len);
+    }
+    w.len = 0;
+    w_str(&w, 1, "good.proto");
+    w_str(&w, 2, "p");
+    w_sub(&w, 4, inner, iw.len);
+    w_str(&w, 12, "proto3");
+    sw.len = 0;
+    w_sub(&sw, 1, file, w.len);
+    CHECK_OK(pbw_descriptor_set_load(set, sw.len, &schema));
+    CHECK(pbw_descriptor_is_map_entry(pbw_schema_find(schema, "p.Good")));
+    pbw_schema_free(schema);
 }
 
 static void

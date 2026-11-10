@@ -392,6 +392,14 @@ pbw_value *pbw_value_at(const pbw_value *value, size_t index);
  * below), so they need no workspace at all.
  */
 pbw_ctx *pbw_ctx_new(void);
+/* Same context on caller memory: the handle, its arena and the arena's one
+ * chunk all live in mem, so the context never allocates and closing it never
+ * frees (nothing is owned). mem must be 8-byte aligned and len must cover the
+ * handle plus a chunk header plus room for one allocation; NULL when it is not. An allocation that does not fit returns PBW_ERR_NOMEM from decode and
+ * PBW_ERR_LIMIT from pbw_encode_to: the block is the hard cap, so a steady
+ * workload never calls malloc. pbw_encode_ctx() needs a growable buffer and
+ * reports PBW_ERR_NOMEM here; use pbw_encode_to() instead. */
+pbw_ctx *pbw_ctx_new_mem(void *mem, size_t len);
 void pbw_ctx_free(pbw_ctx *ctx);
 /* Opaque binding slot, e.g. the language binding's per-thread state.
  * Untouched by the core (reads, writes, reset and pooling all preserve

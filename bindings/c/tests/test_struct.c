@@ -940,6 +940,94 @@ test_merge_keeps_defaults(void)
     pbw_schema_free(schema);
 }
 
+/* Same merge rule, one level down: a repeated sub-message element decoded
+ * while the parent is a merge target is still a new message instance, so the
+ * layout's non-zero enum default must be seeded into it. The element slot is
+ * zeroed right before the decode, and seeding it is what makes an absent
+ * proto2 enum read its `[default=]` value instead of 0. */
+typedef struct {
+    int32_t shade;
+    int has_shade;
+} rep_item_t;
+
+typedef struct {
+    rep_item_t *items;
+    size_t count;
+} rep_inner_t;
+
+typedef struct {
+    rep_inner_t *inner;
+} rep_outer_t;
+
+static const pbw_struct_field_t rep_item_fields[] = {
+    {3, PBW_SF_ENUM, 0, offsetof(rep_item_t, shade),
+     offsetof(rep_item_t, has_shade), 0, 0, -2, NULL, 0, PBW_TYPE_ENUM, 0, 0, 0,
+     0, 0},
+};
+
+static const pbw_struct_field_t rep_inner_fields[] = {
+    {1, PBW_SF_MESSAGE, 1, offsetof(rep_inner_t, items), 0,
+     offsetof(rep_inner_t, count), sizeof(rep_item_t), 0, rep_item_fields, 1,
+     PBW_TYPE_MESSAGE, 2, 0, 0, 0, 0},
+};
+
+static const pbw_struct_field_t rep_outer_fields[] = {
+    {1, PBW_SF_MESSAGE, 0, offsetof(rep_outer_t, inner), 0, 0,
+     sizeof(rep_inner_t), 0, rep_inner_fields, 1, PBW_TYPE_MESSAGE, 2, 0, 0, 0,
+     0},
+};
+
+static void
+test_merge_repeated_keeps_defaults(void)
+{
+    /* inner{items{}} twice: the second inner merges, its item element is new
+     * and must still read the -2 default. */
+    static const uint8_t wire[] = {0x0a, 0x02, 0x0a, 0x00,
+                                   0x0a, 0x02, 0x0a, 0x00};
+    pbw_schema *schema = pbw_schema_new();
+    pbw_descriptor *e = pbw_schema_add_enum(schema, "E");
+    pbw_descriptor *item = pbw_schema_add_message(schema, "Item");
+    pbw_descriptor *inner = pbw_schema_add_message(schema, "Inner");
+    pbw_descriptor *outer = pbw_schema_add_message(schema, "Outer");
+    pbw_field *f;
+    rep_outer_t out;
+
+    CHECK(schema != NULL && e != NULL && item != NULL && inner != NULL &&
+          outer != NULL);
+    if (schema == NULL || e == NULL || item == NULL || inner == NULL ||
+        outer == NULL) {
+        return;
+    }
+    pbw_schema_set_proto3(schema, 0);
+    pbw_enum_add_value(e, "NEG", -2);
+    f = pbw_message_add_field(item, "shade", 3, PBW_TYPE_ENUM,
+                              PBW_LABEL_OPTIONAL);
+    pbw_field_set_type_name(f, "E");
+    f = pbw_message_add_field(inner, "items", 1, PBW_TYPE_MESSAGE,
+                              PBW_LABEL_REPEATED);
+    pbw_field_set_type_name(f, "Item");
+    f = pbw_message_add_field(outer, "inner", 1, PBW_TYPE_MESSAGE,
+                              PBW_LABEL_OPTIONAL);
+    pbw_field_set_type_name(f, "Inner");
+    CHECK_OK(pbw_schema_link(schema));
+
+    memset(&out, 0, sizeof(out));
+    CHECK_OK(pbw_struct_decode(schema, "Outer", rep_outer_fields, 1, wire,
+                               sizeof(wire), &out));
+    CHECK(out.inner != NULL);
+    if (out.inner != NULL) {
+        CHECK(out.inner->count == 2);
+        CHECK(out.inner->items != NULL);
+        if (out.inner->items != NULL && out.inner->count == 2) {
+            CHECK(out.inner->items[0].shade == -2);
+            CHECK(out.inner->items[1].shade == -2);
+            CHECK(out.inner->items[0].has_shade == 0);
+        }
+    }
+    pbw_struct_free(rep_outer_fields, 1, &out);
+    pbw_schema_free(schema);
+}
+
 /* A decode that fails halfway must leave a struct that the generated free
  * (or a retried decode) can handle: the repeated array is NULLed and its
  * count reset together. */
@@ -1623,6 +1711,106 @@ test_bytes(void)
     pbw_schema_free(schema);
 }
 
+/* Caller-memory decode arena (pbw_struct_arena_new_mem): the whole decode
+ * comes out of the caller's block, an allocation that does not fit is a NOMEM,
+ * and free() leaves the block reusable. */
+static void
+test_arena_mem(void)
+{
+    /* unions keep the blocks 8-byte aligned, which the API requires */
+    static union {
+        uint8_t bytes[8 * 1024];
+        double align;
+    } pool;
+    static union {
+        uint8_t bytes[256];
+        double align;
+    } tiny;
+    static const uint8_t raw[1024] = {0x00, 0x01, 0xff};
+    pbw_schema *schema = pbw_schema_new();
+    pbw_descriptor *msg;
+    pbw_struct_codec *codec = NULL;
+    pbw_struct_buf buf = {NULL, 0, 0};
+    pbw_struct_arena *arena = NULL;
+    bytes_msg_t s;
+    bytes_msg_t got;
+
+    CHECK(schema != NULL);
+    if (schema == NULL) {
+        return;
+    }
+    msg = pbw_schema_add_message(schema, "t.Bytes");
+    CHECK(msg != NULL);
+    CHECK(pbw_message_add_field(msg, "payload", 1, PBW_TYPE_BYTES,
+                                PBW_LABEL_OPTIONAL) != NULL);
+    CHECK(pbw_message_add_field(msg, "chunks", 2, PBW_TYPE_BYTES,
+                                PBW_LABEL_REPEATED) != NULL);
+    CHECK_OK(pbw_schema_link(schema));
+    CHECK_OK(pbw_struct_codec_init(&codec, schema, "t.Bytes",
+                                   bytes_msg_fields, 2));
+
+    memset(&s, 0, sizeof(s));
+    s.payload.data = (uint8_t *)raw;
+    s.payload.len = sizeof(raw);
+    CHECK_OK(pbw_struct_codec_encode(codec, &s, &buf));
+
+    /* NULL, unaligned and too small are refused before anything is decoded.
+     * 8 bytes is below the arena header plus one allocation on ILP32 and LP64
+     * alike; 64 would still fit the 32-bit struct with its 4-byte pointers. */
+    CHECK(pbw_struct_arena_new_mem(NULL, sizeof(pool)) == NULL);
+    CHECK(pbw_struct_arena_new_mem(pool.bytes + 1, sizeof(pool) - 1) == NULL);
+    CHECK(pbw_struct_arena_new_mem(pool.bytes, 8) == NULL);
+
+    arena = pbw_struct_arena_new_mem(pool.bytes, sizeof(pool));
+    CHECK(arena != NULL);
+    memset(&got, 0, sizeof(got));
+    CHECK_OK(pbw_struct_codec_decode(codec, buf.data, buf.len, &arena, &got));
+    CHECK(got.payload.len == sizeof(raw) &&
+          memcmp(got.payload.data, raw, sizeof(raw)) == 0);
+    pbw_struct_arena_free(arena); /* caller memory: releases nothing */
+
+    /* The block is still the caller's: a fresh arena on the same memory
+     * decodes the same bytes. */
+    arena = pbw_struct_arena_new_mem(pool.bytes, sizeof(pool));
+    CHECK(arena != NULL);
+    {
+        bytes_msg_t again;
+
+        memset(&again, 0, sizeof(again));
+        CHECK_OK(pbw_struct_codec_decode(codec, buf.data, buf.len, &arena,
+                                         &again));
+        CHECK(again.payload.len == sizeof(raw) &&
+              memcmp(again.payload.data, raw, sizeof(raw)) == 0);
+        pbw_struct_arena_free(arena);
+    }
+
+    /* A block that cannot hold the payload fails with NOMEM instead of
+     * allocating a second block, and the arena stays usable. */
+    arena = pbw_struct_arena_new_mem(tiny.bytes, sizeof(tiny));
+    CHECK(arena != NULL);
+    memset(&got, 0, sizeof(got));
+    CHECK_STATUS(PBW_ERR_NOMEM,
+                 pbw_struct_codec_decode(codec, buf.data, buf.len, &arena,
+                                         &got));
+    {
+        pbw_struct_buf empty = {NULL, 0, 0};
+        bytes_msg_t none;
+
+        memset(&s, 0, sizeof(s));
+        CHECK_OK(pbw_struct_codec_encode(codec, &s, &empty));
+        memset(&none, 0, sizeof(none));
+        CHECK_OK(pbw_struct_codec_decode(codec, empty.data, empty.len, &arena,
+                                         &none));
+        CHECK(none.payload.data == NULL);
+        pbw_struct_buf_free(&empty);
+    }
+    pbw_struct_arena_free(arena);
+
+    pbw_struct_codec_free(codec);
+    pbw_struct_buf_free(&buf);
+    pbw_schema_free(schema);
+}
+
 /* Gap pins: union-less layouts (cs == 0) never participate in oneof
  * tracking: two separate fields decode independently while the dynamic
  * core keeps the last. Real oneofs ride union + case (proven byte-equal by
@@ -2133,6 +2321,7 @@ main(void)
     test_truncated_and_garbage();
     test_merge_duplicate_message();
     test_merge_keeps_defaults();
+    test_merge_repeated_keeps_defaults();
     test_failed_decode_cleanup();
     test_layout_mismatch();
     test_bad_arguments();
@@ -2142,6 +2331,7 @@ main(void)
     test_t5_entry_point_parity();
     test_t6_wire_errors();
     test_bytes();
+    test_arena_mem();
     test_maptest_reference();
     test_grouptest_reference();
     test_oneoftest_reference();
