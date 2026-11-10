@@ -63,6 +63,64 @@ def check_raises(exc, fn, what):
     failures += 1
 
 
+def _varint(value):
+    out = bytearray()
+    while value >= 0x80:
+        out.append((value & 0x7f) | 0x80)
+        value >>= 7
+    out.append(value)
+    return bytes(out)
+
+
+def _ld(field, payload):
+    return _varint((field << 3) | 2) + _varint(len(payload)) + payload
+
+
+def _required_desc(count):
+    """A FileDescriptorSet with one proto2 message of `count` required int32
+    fields, built here so the fixture needs no protoc and no binary file."""
+    message = _ld(1, b"Many")
+    for i in range(1, count + 1):
+        field = (_ld(1, b"r%d" % i) + _varint((3 << 3) | 0) + _varint(i)
+                 + _varint((4 << 3) | 0) + _varint(2)  # LABEL_REQUIRED
+                 + _varint((5 << 3) | 0) + _varint(5))  # TYPE_INT32
+        message += _ld(2, field)
+    file_desc = (_ld(1, b"many.proto") + _ld(2, b"p") + _ld(4, message)
+                 + _ld(12, b"proto2"))
+    return _ld(1, file_desc)
+
+
+def _required_wire(first, last):
+    return b"".join(_varint((i << 3) | 0) + _varint(i) for i in range(first, last + 1))
+
+
+def required_many():
+    """Required tracking uses a 64-slot mask; exactly 64 must not shift by 64
+    (undefined) and more than 64 must still be enforced, not silently
+    dropped."""
+    import tempfile
+
+    for count in (64, 65):
+        with tempfile.NamedTemporaryFile(suffix=".desc", delete=False) as out:
+            out.write(_required_desc(count))
+            path = out.name
+        try:
+            with pbw.Schema.from_file(path) as schema:
+                many = schema.message("p.Many")
+                check_raises(ValueError, lambda: many.decode(b""),
+                             "%d required fields: empty wire fails" % count)
+                # The last one missing: for 64 it is the highest mask slot,
+                # for 65 it is the field the mask cannot hold.
+                check_raises(ValueError,
+                             lambda: many.decode(_required_wire(1, count - 1)),
+                             "%d required fields: last field enforced" % count)
+                full = many.decode(_required_wire(1, count))
+                check(len(full.to_dict()) == count,
+                      "%d required fields decode fully" % count)
+        finally:
+            os.unlink(path)
+
+
 def main():
     check(pbw.abi_version() == 1, "ABI version matches the core")
 
@@ -246,6 +304,8 @@ def main():
                      "proto2 nested required field missing on decode")
         check_raises(ValueError, lambda: person.decode(b"\x0a\x00"),
                      "required field with the wrong wire type does not count")
+
+    required_many()
 
     print("test_pbwire: %s" % ("all checks passed" if not failures
                                else "%d FAILURES" % failures))

@@ -1451,7 +1451,10 @@ scan_message(Message *m, MessageType *mt, const uint8_t *data, size_t off,
      * wants the slices: decode() must reject a wire that omits one, exactly
      * like the eager path and every other binding. */
     uint64_t required_seen = 0;
-    int check_required = mt->has_required && mt->n_required <= 64;
+    /* The 64-bit mask covers the common case; a type with more required
+     * fields than slots falls back to one byte per field for this scan. */
+    unsigned char *required_fields = NULL;
+    int check_required = mt->has_required;
 
     if (depth >= PY_MAX_DEPTH) {
         PyErr_SetString(PyExc_ValueError, "nesting limit exceeded");
@@ -1469,6 +1472,18 @@ scan_message(Message *m, MessageType *mt, const uint8_t *data, size_t off,
             memset(oneof_stack, 0, mt->n_oneofs * sizeof(*oneof_last));
         }
     }
+    if (check_required && mt->n_required > 64) {
+        required_fields = (unsigned char *)calloc(
+            mt->nfields == 0 ? 1 : mt->nfields, 1);
+        if (required_fields == NULL) {
+            if (oneof_last != oneof_stack) {
+                free(oneof_last);
+            }
+            PyErr_NoMemory();
+            return 0;
+        }
+    }
+
     r.p = data + off;
     r.end = r.p + len;
     while (r.p < r.end) {
@@ -1505,8 +1520,12 @@ scan_message(Message *m, MessageType *mt, const uint8_t *data, size_t off,
             }
             continue;
         }
-        if (check_required && f->required_slot != 0xff) {
-            required_seen |= 1ull << f->required_slot;
+        if (check_required && f->required) {
+            if (required_fields != NULL) {
+                required_fields[(size_t)(f - mt->fields)] = 1;
+            } else {
+                required_seen |= 1ull << f->required_slot;
+            }
         }
         if (m == NULL && wt != 2) {
             /* Validating only: a non-delimited value holds no fields, so the
@@ -1580,12 +1599,26 @@ scan_message(Message *m, MessageType *mt, const uint8_t *data, size_t off,
             }
         }
     }
-    if (check_required && required_seen != (1ull << mt->n_required) - 1) {
+    if (check_required) {
+        /* `1ull << 64` would be undefined: clamp instead. */
+        uint64_t required_all = mt->n_required >= 64
+                                    ? ~0ull
+                                    : (1ull << mt->n_required) - 1;
         size_t k;
-
+        if (required_fields == NULL && required_seen == required_all) {
+            goto done;
+        }
         for (k = 0; k < mt->nfields; k++) {
-            if (mt->fields[k].required_slot != 0xff &&
-                (required_seen & (1ull << mt->fields[k].required_slot)) == 0) {
+            int missing;
+
+            if (required_fields != NULL) {
+                missing = mt->fields[k].required && !required_fields[k];
+            } else {
+                missing = mt->fields[k].required_slot != 0xff &&
+                          (required_seen &
+                           (1ull << mt->fields[k].required_slot)) == 0;
+            }
+            if (missing) {
                 PyErr_Format(PyExc_ValueError,
                              "%s: required field %s is missing",
                              mt->name_utf8, mt->fields[k].cname);
@@ -1593,15 +1626,18 @@ scan_message(Message *m, MessageType *mt, const uint8_t *data, size_t off,
             }
         }
     }
+done:
     if (oneof_last != oneof_stack) {
         free(oneof_last);
     }
+    free(required_fields);
     return 1;
 
 fail:
     if (oneof_last != oneof_stack) {
         free(oneof_last);
     }
+    free(required_fields);
     return 0;
 }
 
@@ -2480,8 +2516,10 @@ make_message(PyObject *schema_obj, const pbw_descriptor *desc, PyObject *cache)
         f->packed = pbw_field_is_packed(field) != 0;
         f->required = pbw_field_label(field) == PBW_LABEL_REQUIRED;
         f->required_slot = 0xff;
-        if (f->required && mt->n_required < 64) {
-            f->required_slot = (uint8_t)mt->n_required;
+        if (f->required) {
+            if (mt->n_required < 64) {
+                f->required_slot = (uint8_t)mt->n_required;
+            }
             mt->n_required++;
         }
         f->oneof = pbw_field_oneof_index(field);
