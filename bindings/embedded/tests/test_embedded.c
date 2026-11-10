@@ -447,6 +447,92 @@ main(void)
         pbwe_close(&capped);
     }
 
+    /* Caller-memory box (pbwe_open_mem): the block is the whole message budget,
+     * so decode never allocates past it, an oversized message is a NOMEM, and
+     * reset/close leave the caller's block untouched. */
+    {
+        pbwe_box mem_box;
+        static uint8_t raw[8 * 1024 + 8];
+        static uint8_t tiny[1024 + 8];
+        void *pool = (void *)(((uintptr_t)raw + 7u) & ~(uintptr_t)7u);
+        void *tiny_pool = (void *)(((uintptr_t)tiny + 7u) & ~(uintptr_t)7u);
+        size_t pool_len = (size_t)(raw + sizeof(raw) - (uint8_t *)pool);
+        size_t tiny_len = (size_t)(tiny + sizeof(tiny) - (uint8_t *)tiny_pool);
+        const pbw_descriptor *mem_desc;
+
+        memset(&mem_box, 0, sizeof(mem_box));
+        CHECK_STATUS(pbwe_open_mem(&mem_box, desc_bytes, desc_len, NULL, 0, NULL),
+                     PBW_ERR_INVALID);
+        CHECK_STATUS(pbwe_open_mem(&mem_box, desc_bytes, desc_len, pool, 0, NULL),
+                     PBW_ERR_NOMEM);
+        CHECK(mem_box.schema == NULL && mem_box.ctx == NULL); /* stays closed */
+        CHECK_OK(pbwe_open_mem(&mem_box, desc_bytes, desc_len, pool, pool_len, NULL));
+        mem_desc = pbw_schema_find(mem_box.schema, "structtest.Scalars3");
+        CHECK(mem_desc != NULL);
+        CHECK_OK(pbwe_decode_desc(&mem_box, mem_desc, ref_bytes, ref_len, &msg));
+        CHECK_OK(pbwe_encode(msg, wire, sizeof(wire), &len));
+        CHECK(len == ref_len && memcmp(wire, ref_bytes, len) == 0);
+        /* Above the tiny block below: the NOMEM case is deterministic. */
+        CHECK(pbw_ctx_used(mem_box.ctx) > 1024);
+        {
+            size_t framed = 0, consumed = 0;
+
+            CHECK_OK(pbwe_encode_delimited(msg, frame, sizeof(frame), &framed));
+            CHECK_OK(pbwe_decode_delimited_desc(&mem_box, mem_desc, frame, framed, &msg,
+                                                &consumed));
+            CHECK(consumed == framed);
+            CHECK_OK(pbwe_encode(msg, wire, sizeof(wire), &len));
+            CHECK(len == ref_len && memcmp(wire, ref_bytes, len) == 0);
+        }
+        /* Re-opening the live box is refused and leaks nothing; reset rewinds
+         * the same block instead of releasing it. */
+        CHECK_STATUS(pbwe_open_mem(&mem_box, desc_bytes, desc_len, pool, pool_len, NULL),
+                     PBW_ERR_INVALID);
+        pbwe_reset(&mem_box);
+        CHECK(pbw_ctx_used(mem_box.ctx) == 0);
+        /* Encode-only firmware builds in the caller block too. */
+        {
+            pbw_message *built = pbwe_build(&mem_box, mem_desc);
+
+            CHECK(built != NULL);
+            CHECK_OK(pbw_message_set(built, 3, pbw_value_new_uint_ctx(mem_box.ctx, 42)));
+            CHECK_OK(pbwe_encode(built, wire, sizeof(wire), &len));
+        }
+#ifdef PBWE_HAVE_ALLOC_HOOKS
+        hook_calls = 0;
+#endif
+        for (i = 0; i < 100; i++) {
+            CHECK_OK(pbwe_decode_desc(&mem_box, mem_desc, ref_bytes, ref_len, &msg));
+            CHECK_OK(pbwe_encode(msg, wire, sizeof(wire), &len));
+        }
+#ifdef PBWE_HAVE_ALLOC_HOOKS
+        CHECK(hook_calls == 0); /* steady state never touches the heap */
+#endif
+        pbwe_close(&mem_box);
+        CHECK(mem_box.schema == NULL && mem_box.ctx == NULL);
+        /* Closing released nothing, so the same block opens the box again. */
+        CHECK_OK(pbwe_open_mem(&mem_box, desc_bytes, desc_len, pool, pool_len, NULL));
+        pbwe_close(&mem_box);
+
+        /* A block too small for the pinned frame fails with NOMEM (no growth,
+         * no malloc fallback) and still decodes a frame that fits. */
+        memset(&mem_box, 0, sizeof(mem_box));
+        CHECK_OK(pbwe_open_mem(&mem_box, desc_bytes, desc_len, tiny_pool, tiny_len, NULL));
+        mem_desc = pbw_schema_find(mem_box.schema, "structtest.Scalars3");
+#ifdef PBWE_HAVE_ALLOC_HOOKS
+        hook_calls = 0;
+#endif
+        CHECK_STATUS(pbwe_decode_desc(&mem_box, mem_desc, ref_bytes, ref_len, &msg),
+                     PBW_ERR_NOMEM);
+        CHECK(msg == NULL);
+        CHECK_OK(pbwe_decode_desc(&mem_box, mem_desc, NULL, 0, &msg));
+        CHECK(msg != NULL);
+        pbwe_close(&mem_box);
+#ifdef PBWE_HAVE_ALLOC_HOOKS
+        CHECK(hook_calls == 0); /* the failing path never fell back to malloc */
+#endif
+    }
+
     /* A rejected call leaves a zeroed box closed instead of half-open. */
     {
         pbwe_box empty;

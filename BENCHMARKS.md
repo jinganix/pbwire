@@ -22,6 +22,7 @@ tier table with a chart (see the [per-binding index](#cross-binding-comparison-l
   - [Core](#core-pbw_ctx-vs-plain-vs-generated) · [C structs](#c-structs-vs-protoc-generated-same-matrix3proto) · [Go](#go-cgo-dynamic) · [Python](#python-vs-googleprotobuf-upb)
   - [Java](#java-vs-protobuf-java) · [Node](#node-vs-google-protobuf-jspb-and-protobufjs) · [Ruby](#ruby-c-extension-vs-the-google-protobuf-gem) · [Objective-C](#objective-c-vs-the-protobuf-objc-runtime)
   - [Kotlin](#kotlin-vs-protoc---kotlin_out-over-protobuf-java) · [PHP](#php-vs-the-official-php-runtime-pure--c-extension) · [Dart](#dart-vs-the-protobuf-dart-package) · [Rust](#rust-vs-prost-and-rust-protobuf-3x) · [C#](#c-vs-googleprotobuf) · [Lua](#lua-c-module-tables-vs-lua-protobuf) · [Erlang](#erlang-pbwire-vs-gpb-vs-gpb-nif)
+- [Embedded vs nanopb](#embedded-nanopb-same-message-both-sides) — the microcontroller tier, footprint and throughput
 - [Run them](#run-them) / [Regenerate this file](#regenerate-this-file)
 
 ## Standard cases
@@ -1367,11 +1368,36 @@ reads back
 as `NA` (it *is* `NA_INTEGER`), and doubles past 2^63 clamp to the int/uint
 limits — both documented in the binding README.
 
+## Embedded: nanopb, same message, both sides
+
+The embedded facade has its own paired harness, because nanopb is the baseline
+that matters on that target: one fixed-size message (`bindings/embedded/benchmarks/msg.proto`),
+four tiers, pbwire through `pbwe_open_mem` (caller-memory arena) against
+nanopb's generated static struct. Encoders produce byte-identical wire on every
+tier (asserted in the run).
+
+| tier | bytes | pbwire enc | nanopb enc | pbwire dec | nanopb dec |
+|---|---|---|---|---|---|
+| x0 | 52 | 23.3 ns | 131.0 ns | 35.7 ns | 264.6 ns |
+| x1 | 55 | 26.1 ns | 141.6 ns | 45.3 ns | 280.1 ns |
+| x100 | 154 | 87.9 ns | 753.0 ns | 338.4 ns | 723.9 ns |
+| x3000 | 5928 | 3100.0 ns | 23506.0 ns | 9924.5 ns | 18768.0 ns |
+
+Flash for the same message, `arm-none-eabi-gcc -Os -mthumb` (no libc, no LTO):
+pbwire's generic codec is 39211 B for **every** type in the schema, nanopb's
+runtime + generated code is 7021 B for **one** message type. The full tables,
+the RAM model and the reasoning (including the static-schema option that was
+evaluated and left out) are in
+[bindings/embedded/README.md](bindings/embedded/README.md#footprint-and-the-nanopb-comparison).
+
 ## Run them
 
 ```bash
 make bench        # core: 4 cases + text/json/stream/threads (needs protoc + libprotobuf)
 make bench-c      # C structs vs protoc C++ on matrix3.proto (same deps)
+make nanopb-setup # once: shallow nanopb clone for the embedded comparison
+make embedded-bench  # embedded facade vs nanopb (host throughput, byte check)
+make embedded-size   # embedded facade vs nanopb (Cortex-M flash)
 make python-bench # Python extension vs google.protobuf (needs protobuf + protoc)
 make erlang-bench # Erlang binding: epb, gpb, gpb NIF on matrix3.proto (needs OTP + gpb)
 make go-bench     # Go cgo dynamic vs protobuf-go generated code (needs Go + protoc-gen-go)

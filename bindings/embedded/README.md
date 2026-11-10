@@ -5,7 +5,12 @@ A static-memory facade over the C core for resource-constrained targets
 happens at `pbwe_open` (descriptor set + context) and again when the first
 decode grows the arena; after that the steady state allocates nothing for
 messages that fit the retained budget, encode writes into caller memory, and
-oversized input fails instead of growing.
+oversized input fails instead of growing. `pbwe_open_mem` goes one step
+further and puts the whole message workspace in a caller-owned block, so
+**decode never allocates at all** — an oversized message is a `PBW_ERR_NOMEM`.
+The startup path (loading the descriptor set) still uses the heap; a firmware
+with no heap at all supplies the allocator the way `tests/test_nofail.c`
+redirects it (`-Dmalloc=...`), or uses the frozen-schema path once it exists.
 
 This is not a second codec: `pbwe_decode`/`pbwe_encode` are thin wrappers
 over `pbw_decode_ctx_limits`/`pbw_encode_to`, so the wire format stays the C
@@ -28,6 +33,16 @@ static pbwe_box box; /* zero-initialized */
 
 /* 4096 = resident cap; the last argument bounds the descriptor-set load. */
 if (pbwe_open(&box, desc_bytes, desc_len, 4096, NULL) != PBW_OK) { /* ... */ }
+
+/* Or heap-free messages: mem backs the whole context (arena + handle), so
+ * decode allocates nothing and a message that does not fit is PBW_ERR_NOMEM.
+ * 8-byte aligned; leave room for the context header (a few dozen bytes) on
+ * top of the message budget you size. */
+static uint8_t pool[8192 + 8];
+void *block = (void *)(((uintptr_t)pool + 7u) & ~(uintptr_t)7u);
+if (pbwe_open_mem(&box, desc_bytes, desc_len, block, sizeof(pool) - 8, NULL) != PBW_OK) {
+    /* PBW_ERR_NOMEM means the block is too small for a context */
+}
 
 /* Firmware that decodes one fixed type resolves it once and skips the per-call
  * name scan (pbw_schema_find walks every descriptor in the schema). */
@@ -140,7 +155,125 @@ Footprint, in the two numbers a linker script cares about:
   is decoded, and `*consumed` lets one buffer carry several frames.
   `pbw_istream` is the incremental reader for bytes that arrive in pieces,
   and it buffers, so it is the one piece of framing this facade leaves out.
+- `pbwe_open_mem` replaces `retain_cap` with the block itself: the context and
+  its arena live in the caller's memory, nothing is ever allocated for a
+  message, and `pbwe_reset`/`pbwe_close` leave the block untouched (it stays
+  the caller's, so the same memory reopens the box). The trade is that an
+  oversized message fails with `PBW_ERR_NOMEM` at the point it runs out
+  instead of a bigger arena absorbing it: set `pbwe_set_limits(&box, ...)`
+  with `max_bytes` so the rejection happens before the decode, not halfway
+  through it.
 
-<!-- shortcut: no binding-level benchmarks or conformance entry yet; the
-     facade is a pass-through, so the core bench and conformance suite
-     cover the wire. Add them when the facade grows logic of its own. -->
+## Footprint and the nanopb comparison
+
+Two numbers matter on a target: flash and RAM. Both are measured for the same
+comparison message (`benchmarks/msg.proto`, four payload tiers), and both are
+reproducible:
+
+```bash
+make nanopb-setup    # once: shallow clone of nanopb into .tmp/
+make embedded-bench  # host throughput, both sides, byte equality check
+make embedded-size   # Cortex-M flash, both sides
+```
+
+### Flash (Cortex-M, `-Os -mthumb`, no libc, no LTO)
+
+pbwire, the generic codec (every type the descriptor set declares):
+
+| object | text (bytes) |
+|---|---|
+| `wire` | 1284 |
+| `arena` + `ctx` | 1643 |
+| `schema` | 4707 |
+| `message` | 3310 |
+| `descriptor_set` | 5879 |
+| `encode` | 12906 |
+| `decode` | 8798 |
+| `pbwe` | 684 |
+| **codec total** | **39211** |
+| optional: `json` / `text` / `stream` / `wkt` | 18765 / 10228 / 1180 / 754 |
+
+nanopb, the same message (its runtime plus its generated code):
+
+| object | text (bytes) |
+|---|---|
+| `pb_common` | 708 |
+| `pb_encode` | 2367 |
+| `pb_decode` | 3786 |
+| `msg.pb` (generated) | 160 |
+| **total** | **7021** |
+
+Read the totals for what they are: nanopb's 7 KB covers *one* message type
+(6.9 KB runtime + 160 B generated code), pbwire's 39 KB covers every type in
+the schema. Add a message on nanopb and flash grows by its generated code; on
+pbwire it grows by the descriptor bytes only (about 40 B per field: the pinned
+fixtures are 733 B for `matrix3`, 475 B for `maptest`, 423 B for `edge`), and
+the same bytes drive a runtime-swappable schema. A firmware with one fixed
+message and a 32 KB part is still nanopb's win; a firmware with several
+messages, or one whose schema changes in the field, is where the fixed codec
+starts paying for itself.
+
+A decode-only firmware can drop `encode` when it links with
+`-ffunction-sections -Wl,--gc-sections` and nothing calls `pbwe_encode` (those
+wrappers and `pbw_ctx`'s encode entry points are `encode.o`'s only entry
+path). JSON, text, `stream` and `wkt` are separate objects and are only linked
+when a firmware calls them; `descriptor_set` is the price of loading a schema
+from bytes at startup.
+
+RAM per decoded message is the tree (`pbw_value` per present field, 24 bytes on
+a 64-bit target, ~20 on a 32-bit one, plus payload copies and 8-byte
+alignment) in the arena. `pbwe_open_mem`'s block is therefore the number to
+size: it is the peak of one message plus the context header, not a doubling
+arena. The `bindings/c` struct codec (`pbw_struct_*` + `pbw_struct_arena_new_mem`)
+is the lower-RAM option when the message types are fixed: decode goes straight
+into a caller struct with no tree, and its caller-memory arena allocates
+nothing. nanopb's per-message struct is the same idea with the caps compiled
+into the struct type.
+
+### Host throughput (Apple M4 Pro, same message, identical bytes)
+
+`make embedded-bench`: pbwire through the embedded facade (`pbwe_open_mem`,
+caller-sized arena) against nanopb's generated static struct, same loop shape.
+Both encoders produce byte-identical wire on every tier (the harness asserts
+it). ns/op, lower is better:
+
+| tier | bytes | pbwire enc | nanopb enc | ratio | pbwire dec | nanopb dec | ratio |
+|---|---|---|---|---|---|---|---|
+| x0 | 52 | 23.3 | 131.0 | 5.6x | 35.7 | 264.6 | 7.4x |
+| x1 | 55 | 26.1 | 141.6 | 5.4x | 45.3 | 280.1 | 6.2x |
+| x100 | 154 | 87.9 | 753.0 | 8.6x | 338.4 | 723.9 | 2.1x |
+| x3000 | 5928 | 3100.0 | 23506.0 | 7.6x | 9924.5 | 18768.0 | 1.9x |
+
+Two costs are inside both decode columns on purpose, because every caller pays
+them: pbwire resets its arena before a decode, nanopb zeroes its struct (a
+12 KB memset at x3000). pbwire's decode then builds a tree, which is the RAM
+trade in the paragraph above; nanopb writes straight into its struct.
+
+### Static schema: considered, not done
+
+The 5.9 KB `descriptor_set` object and the startup parse are the remaining
+fixed cost for a schema that never changes. Two ways to remove them were
+evaluated and rejected for now, each for a structural reason:
+
+- A **binary image** of the parsed schema would be generated on the build host
+  and mapped on the device, but the image contains struct bytes and pointer
+  offsets, so it is only valid for the ABI it was generated for: a 64-bit host
+  cannot emit an image for a 32-bit Cortex-M.
+- A **generated C initializer** of the same structures would let the target
+  compiler place them in `.rodata` (zero RAM, no loader, no parse), but the
+  generated file has to include `src/internal.h` and the generator has to
+  re-print every derived table (`tag_map`, `name_map`, `fnum_map`, `name_index`,
+  the `add_*` indexes) exactly; that publishes the private schema layout to a
+  second artifact and adds a divergence surface the project's "one schema
+  source" rule exists to prevent.
+
+What keeps the startup heap-free today is redirecting the core's allocator
+(`-Dmalloc=...`, the pattern `tests/test_nofail.c` uses), which is one function
+in the firmware. Revisit the generated-image option if a firmware's flash
+budget makes 5.9 KB decisive *and* the schema is genuinely frozen forever.
+
+<!-- shortcut: throughput here is host-only (no MCU cycle counting), and the
+     paired harness covers one message shape. The bytes are checked against
+     nanopb's encoder in the same run, and the core bench plus the conformance
+     suite cover the format itself. A Cortex-M cycle run is the missing
+     measurement. -->

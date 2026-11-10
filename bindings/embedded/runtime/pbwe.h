@@ -47,6 +47,17 @@ typedef struct {
  * pbw_schema_error(box.schema) says why and pbwe_close() frees it. */
 pbw_status pbwe_open(pbwe_box *box, const void *desc, size_t len, size_t retain_cap,
                      const pbw_limits *desc_limits);
+
+/* Same, with the message workspace on caller memory: mem/len back the whole
+ * context (pbw_ctx_new_mem), so decode never allocates and an oversized
+ * message is a NOMEM instead of a growing arena. mem must be 8-byte aligned;
+ * len minus the context header is the resident budget (no retain_cap: the
+ * block is the cap, and it survives pbwe_reset). The descriptor set is still
+ * loaded with the heap, so this makes the message path heap-free, not the
+ * startup path. PBW_ERR_NOMEM when len is too small for a context; the box
+ * stays closed in that case, so a bigger block can be retried. */
+pbw_status pbwe_open_mem(pbwe_box *box, const void *desc, size_t len, void *mem, size_t mem_len,
+                         const pbw_limits *desc_limits);
 void pbwe_close(pbwe_box *box);
 
 /* Cap every later decode (see pbw_limits): max_bytes rejects a frame before
