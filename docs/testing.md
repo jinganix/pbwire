@@ -38,7 +38,11 @@ to 70 KB, schema validation, the workspace API, the text format (printing
 goldens, parse goldens, separator/escape/range/nesting failures,
 unknown-field show/hide), the JSON mapping (print goldens, accept/reject
 spellings, well-known-type forms, extensions, maps, strict base64 and number
-rules), and the length-patch boundaries (127/128, 16383/16384).
+rules), and the length-patch boundaries (127/128, 16383/16384). It also runs
+the JSON and text formats under a non-`.` `LC_NUMERIC` when the machine has one
+(`de_DE`/`fr_FR`, and `ar_SA`/`fa_IR` whose decimal separator is two UTF-8
+bytes), so the locale translation behind `pbw_strtod`/`pbw_format_g` is tested
+wherever such a locale is installed.
 
 `test_descriptor` loads a pinned `protoc` descriptor set and checks the metadata
 it produces (packed defaults per syntax, oneofs, maps, nested and cross-file

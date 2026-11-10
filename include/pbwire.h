@@ -480,7 +480,11 @@ pbw_status pbw_text_parse(const pbw_descriptor *desc, const char *text,
 pbw_status pbw_json_print(const pbw_message *msg, char **out, size_t *len);
 /* Parse JSON mapping into a new message tree. Unknown fields fail unless
  * `ignore_unknown_fields` is set (the conformance JSON_IGNORE_UNKNOWN
- * category). A missing proto2 `required` field fails with PBW_ERR_REQUIRED. */
+ * category). A missing proto2 `required` field fails with PBW_ERR_REQUIRED.
+ * The well-known types are recognized by full message name and then require
+ * their real shape (`Any` 1=string `type_url`, 2=bytes `value`; Timestamp
+ * and Duration 1=int64 `seconds`, 2=int32 `nanos`); a schema that carries
+ * only the name is PBW_ERR_INVALID rather than a crash. */
 typedef struct pbw_json_parse_options {
     /* Skip unknown field names and unknown `Any` types instead of failing. */
     int ignore_unknown_fields;

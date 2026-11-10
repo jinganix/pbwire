@@ -4,6 +4,38 @@ All notable changes to pbwire. Versions follow SemVer; `VERSION` is the
 source of truth and `scripts/sync-versions.sh` propagates it to every
 binding manifest.
 
+## [Unreleased]
+
+### Fixed
+
+- An unlinked descriptor no longer leaves the oneof case table out of the
+  message block: `pbw_message_new()` sizes it from the fields themselves when
+  the link has not run, which is the path the JSON/text printers take. Before
+  this, setting a oneof member of such a message wrote one word past its
+  allocation.
+- A failed `pbw_schema_link()` followed by another `pbw_message_add_field()`
+  no longer leaves stale references behind: the add drops the per-descriptor
+  lookup tables the sort and the array growth invalidated.
+- `pbw_message_set()` on a caller-memory context (`pbw_ctx_new_mem`) refuses a
+  heap-owning value, like the heap-grown context always did: the reset releases
+  the arena, so a stored heap payload could never be freed.
+- `pbw_message_add_field()` drops the descriptor lookup tables before it grows
+  the field array, so a failed `pbw_schema_link()` followed by an add cannot
+  leave `pbw_descriptor_find_field_name()` reading a freed row (reachable when
+  the name allocation fails right after the row array moved).
+- The JSON parser refuses a message that only carries a well-known-type name
+  without the real shape, instead of storing or dereferencing a field that is
+  not there: `google.protobuf.Timestamp` and `Duration` require singular
+  `int64` seconds and `int32` nanos (a descriptor with no `seconds` crashed the
+  parser), and `Any` requires a singular string `type_url` and a singular
+  bytes `value`.
+- `Any` no longer truncates a `type_url` at 255 bytes: the URL is stored
+  verbatim, so a printed `Any` whose URL is longer than a field-name buffer can
+  be parsed back.
+- `pbw_struct_arena_new_mem()` (`bindings/c`) checks the caller's block size
+  before writing the arena and block headers: a block too small for them used
+  to be refused only after the headers had been written past its end.
+
 ## [0.1.15] - 2026-11-10
 
 ### Added

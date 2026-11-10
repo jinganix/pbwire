@@ -437,6 +437,74 @@ struct_codec_workload(void)
     pbw_schema_free(schema);
 }
 
+/* A link that fails part way leaves the earlier descriptors linked: their row
+ * tables (name_map/fnum_map/tag_map) point into the field array, and the link
+ * has sorted that array. Adding a field afterwards may also move it, so the
+ * stale tables have to go -- including on the failure path where the grow
+ * succeeded and the following name allocation did not. The lookup after every
+ * add is what catches a dangling table (ASan reports it). */
+static void
+failed_link_grow_workload(void)
+{
+    pbw_schema *s = pbw_schema_new();
+    pbw_descriptor *a;
+    pbw_descriptor *broken;
+    pbw_field *f;
+    char name[16];
+    int i;
+
+    if (s == NULL) {
+        return;
+    }
+    a = pbw_schema_add_message(s, "FLA");
+    broken = pbw_schema_add_message(s, "FLB");
+    if (a == NULL || broken == NULL) {
+        pbw_schema_free(s);
+        return;
+    }
+    /* Exactly the first growth step's field count (8), added out of order so
+     * the failed link has both sorted the rows and built the name table: the
+     * very next add then grows the array, which is the window that matters.
+     * p1 carries number 8 and p8 number 1. */
+    for (i = 0; i < 8; i++) {
+        snprintf(name, sizeof(name), "p%d", i + 1);
+        if (pbw_message_add_field(a, name, (uint32_t)(8 - i), PBW_TYPE_INT32,
+                                  PBW_LABEL_OPTIONAL) == NULL) {
+            pbw_schema_free(s);
+            return;
+        }
+    }
+    f = pbw_message_add_field(broken, "x", 1, PBW_TYPE_MESSAGE,
+                              PBW_LABEL_OPTIONAL);
+    if (f == NULL) {
+        pbw_schema_free(s);
+        return;
+    }
+    pbw_field_set_type_name(f, "Missing");
+    /* NOT_FOUND is the clean verdict; an injected allocation failure inside the
+     * link is the other honest one. Either way the descriptors are unlinked,
+     * which is the state this workload needs. */
+    {
+        pbw_status link = pbw_schema_link(s);
+
+        CHECK(link == PBW_ERR_NOT_FOUND || link == PBW_ERR_NOMEM ||
+              link == PBW_ERR_INVALID);
+    }
+    for (i = 9; i <= 40; i++) {
+        pbw_field *added;
+
+        snprintf(name, sizeof(name), "q%d", i);
+        added = pbw_message_add_field(a, name, (uint32_t)i, PBW_TYPE_INT32,
+                                      PBW_LABEL_OPTIONAL);
+        /* The sorted, pre-growth row and the newest one both stay findable. */
+        CHECK(pbw_descriptor_find_field_name(a, "p8") != NULL);
+        if (added != NULL) {
+            CHECK(pbw_descriptor_find_field_name(a, name) != NULL);
+        }
+    }
+    pbw_schema_free(s);
+}
+
 static void
 workload(void)
 {
@@ -455,6 +523,7 @@ workload(void)
     size_t text_len = 0;
     int i;
 
+    failed_link_grow_workload();
     if (s == NULL) {
         return;
     }
@@ -598,6 +667,11 @@ workload(void)
             return;
         }
         pbw_field_set_packed(r, 1);
+        if (pbw_message_add_field(m, "repx", 20, PBW_TYPE_INT32,
+                                  PBW_LABEL_REPEATED) == NULL) {
+            pbw_schema_free(s);
+            return;
+        }
         r = pbw_message_add_field(m, "rep4", 17, PBW_TYPE_BOOL,
                                   PBW_LABEL_REPEATED);
         if (r == NULL) {
@@ -753,6 +827,19 @@ workload(void)
         if (set_value(slot, 1, pbw_value_new_string(key)) != PBW_OK ||
             set_value(slot, 2, pbw_value_new_int(i)) != PBW_OK) {
             break;
+        }
+    }
+    {
+        /* A failed repeated store must leave the field absent, not present with
+         * an empty list: the sweep fails exactly one allocation per run, so one
+         * of these iterations pushes the failure into 20's first list push. */
+        pbw_value *rv = pbw_value_new_int(5);
+
+        if (rv != NULL) {
+            if (pbw_message_set(msg, 20, rv) != PBW_OK) {
+                CHECK(pbw_message_get(msg, 20) == NULL);
+                pbw_value_free(rv);
+            }
         }
     }
     (void)set_value(msg, 9, pbw_value_new_float(1.5f));

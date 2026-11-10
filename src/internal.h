@@ -630,10 +630,26 @@ pbw_message_new_a(pbw_arena *arena, const pbw_descriptor *desc)
     size_t oneof_off;
     size_t size;
     size_t words;
+    uint32_t oneof_max;
     uint8_t *block;
 
     if (desc == NULL || desc->is_enum) {
         return NULL;
+    }
+    /* oneof_count is computed by the link; an unlinked descriptor still
+     * builds messages (pbw_message_set_field with a field pointer is how the
+     * printers take one), so size the case table from the fields themselves
+     * there: a oneof member would otherwise index past the block. */
+    oneof_max = desc->oneof_count;
+    if (desc->schema == NULL || !desc->schema->linked) {
+        size_t k;
+
+        oneof_max = 0;
+        for (k = 0; k < desc->field_count; k++) {
+            if (desc->fields[k].oneof_index > oneof_max) {
+                oneof_max = desc->fields[k].oneof_index;
+            }
+        }
     }
     if (desc->field_count > (SIZE_MAX - sizeof(pbw_message)) / sizeof(pbw_value)) {
         return NULL;
@@ -651,11 +667,11 @@ pbw_message_new_a(pbw_arena *arena, const pbw_descriptor *desc)
         return NULL;
     }
     oneof_off = (present_off + words * sizeof(uint32_t) + 3u) & ~(size_t)3u;
-    if ((size_t)desc->oneof_count + 1u >
+    if ((size_t)oneof_max + 1u >
         (SIZE_MAX - oneof_off) / sizeof(uint32_t)) {
         return NULL;
     }
-    size = oneof_off + ((size_t)desc->oneof_count + 1u) * sizeof(uint32_t);
+    size = oneof_off + ((size_t)oneof_max + 1u) * sizeof(uint32_t);
 
     if (arena != NULL) {
         block = (uint8_t *)pbw_arena_alloc(arena, size);
@@ -682,9 +698,9 @@ pbw_message_new_a(pbw_arena *arena, const pbw_descriptor *desc)
     if (words > 0) {
         memset(msg->present, 0, words * sizeof(uint32_t));
     }
-    if (desc->oneof_count > 0) {
+    if (oneof_max > 0) {
         memset(msg->oneof_case, 0,
-               ((size_t)desc->oneof_count + 1u) * sizeof(uint32_t));
+               ((size_t)oneof_max + 1u) * sizeof(uint32_t));
     }
     return msg;
 }
