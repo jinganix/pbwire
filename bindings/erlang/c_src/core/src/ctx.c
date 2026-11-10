@@ -47,10 +47,41 @@ pbw_ctx_new(void)
     return ctx;
 }
 
+pbw_ctx *
+pbw_ctx_new_mem(void *mem, size_t len)
+{
+    pbw_ctx *ctx;
+    size_t hdr;
+
+    if (mem == NULL || ((uintptr_t)mem & 7u) != 0u) {
+        /* 8-byte alignment keeps every value slot naturally aligned. */
+        return NULL;
+    }
+    hdr = (sizeof(*ctx) + 7u) & ~(size_t)7u;
+    if (len < hdr + PBW_CHUNK_HDR + 8u) {
+        return NULL;
+    }
+    ctx = (pbw_ctx *)mem;
+    memset(ctx, 0, sizeof(*ctx));
+    pbw_buf_init(&ctx->out);
+    /* No heap here: pbw_encode_ctx() reports NOMEM instead of allocating; the
+     * encoder for this kind of context is pbw_encode_to(caller memory). */
+    ctx->out.fixed = 1;
+    if (!pbw_arena_init_mem(&ctx->arena, (uint8_t *)mem + hdr, len - hdr)) {
+        return NULL;
+    }
+    return ctx;
+}
+
 void
 pbw_ctx_free(pbw_ctx *ctx)
 {
     if (ctx == NULL) {
+        return;
+    }
+    if (ctx->arena.no_grow) {
+        /* Caller memory (pbw_ctx_new_mem): the handle and the arena belong to
+         * the caller, so closing releases nothing and the block stays valid. */
         return;
     }
     pbw_arena_free(&ctx->arena);
