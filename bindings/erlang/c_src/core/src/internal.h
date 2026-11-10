@@ -104,6 +104,8 @@ typedef struct {
     int readonly; /* a context arena: messages decoded into it are read-only */
     void *block;  /* non-NULL: the arena and its first chunk share one malloc */
     int has_heap; /* a heap value was stored into this arena tree: free must walk */
+    int no_grow;  /* 1: block is caller memory. Never malloc, never free it: an
+                   * allocation that does not fit the head chunk is a NOMEM. */
 } pbw_arena;
 
 /* Payload offsets keep every arena allocation 8-byte aligned. malloc returns
@@ -455,6 +457,10 @@ pbw_arena_alloc(pbw_arena *arena, size_t size)
 /* Allocates an arena whose struct, first chunk and chunk header are one malloc,
  * for a tree that is decoded and freed as a whole. */
 pbw_arena *pbw_arena_new_packed(size_t first_chunk);
+/* Same layout on caller memory: the struct and its only chunk live in mem, so
+ * the arena never allocates and never frees. mem must be 8-byte aligned and
+ * len must cover PBW_CHUNK_HDR plus room for one allocation. 0 = too small. */
+int pbw_arena_init_mem(pbw_arena *arena, void *mem, size_t len);
 void pbw_arena_reset(pbw_arena *arena);
 void pbw_arena_free(pbw_arena *arena);
 size_t pbw_arena_used(const pbw_arena *arena);
