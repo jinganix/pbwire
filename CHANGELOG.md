@@ -4,7 +4,27 @@ All notable changes to pbwire. Versions follow SemVer; `VERSION` is the
 source of truth and `scripts/sync-versions.sh` propagates it to every
 binding manifest.
 
-## [Unreleased]
+## [0.1.15] - 2026-11-10
+
+### Added
+
+- `pbw_ctx_new_mem()`: a `pbw_ctx` whose handle, arena and head chunk live in
+  a caller-supplied block, so a decode never allocates. An allocation that
+  does not fit is `PBW_ERR_NOMEM`, `pbw_ctx_reset` rewinds the same block and
+  `pbw_ctx_free` releases nothing (the block stays the caller's). The encode
+  buffer cannot grow either, so such a context pairs with `pbw_encode_to()`;
+  `pbw_encode_ctx()` reports `PBW_ERR_NOMEM`.
+- `pbwe_open_mem()` in `bindings/embedded`: the caller-memory context behind
+  the facade, so the message path of a firmware image never touches the heap
+  (the descriptor set is still loaded at startup). There is no `retain_cap`:
+  the block is the cap, and it survives `pbwe_reset` and `pbwe_close`.
+- `pbw_struct_arena_new_mem()` in `bindings/c`: the struct codec's decode
+  arena on caller memory, same contract (a fit miss is `PBW_ERR_NOMEM`, free
+  releases nothing), so the direct struct codec decodes without allocating.
+- `make embedded-bench` / `make embedded-size` (+ `scripts/mcu-size.sh`): the
+  embedded tier against nanopb on one message, four-tier throughput with a
+  byte-equality assertion and Cortex-M flash for both codecs. `BENCHMARKS.md`
+  and `bindings/embedded/README.md` carry the tables and the RAM model.
 
 ### Fixed
 
@@ -16,6 +36,10 @@ binding manifest.
   generated layout now carries a `has_` flag for such a field, so a wire that
   omits one fails with `PBW_ERR_REQUIRED` instead of decoding as zero. A layout
   with a required scalar and no flag is rejected at codec init.
+- The C struct codec seeds a repeated sub-message element with the layout's
+  non-zero defaults even when the parent message is a merge target: the
+  element slot is zeroed right before its decode, so an absent proto2 enum
+  used to read 0 instead of its `[default=]` value.
 - A legacy group whose END_GROUP never arrives, or closes a different field,
   fails the decode (both in the dynamic decoder and in the direct struct
   codec) instead of being accepted.
@@ -25,9 +49,16 @@ binding manifest.
 - The Python and Ruby binding caches drop a half-built message type when an
   allocation fails mid-construction; a later lookup used to hand that type out
   and the codec dereferenced a NULL sub-type.
+- The Python binding's required-field check is no longer skipped for a proto2
+  type with more than 64 `required` fields (the presence mask was 64 bits
+  wide): above that it tracks one byte per field and still rejects a wire that
+  omits one.
 - The Java encode buffer grows with long arithmetic: past 1 GiB the int
   doubling wrapped to zero and looped forever, and a wrapped size request now
-  fails with `PbwireException` instead of writing past the array.
+  fails with `PbwireException` instead of writing past the array. The
+  length-delimited reader compares `pos + len` in `long` too: a hostile length
+  near `Integer.MAX_VALUE` wrapped negative, passed the truncation check and
+  produced a slice past the array.
 - Generated C# models hash a repeated `float`/`double` field as a collection
   (the singular bitwise-comparer overload did not even compile), and the
   generated models are warning-free.
@@ -53,6 +84,9 @@ binding manifest.
   and sweeps its error paths too, and `CMakeLists.txt` builds that variant.
 - Generated models validate against the official conformance proto
   (`make codegen-conformance`) in all twenty languages.
+- `tests/test_descriptor.c` covers the descriptor-set loader's oneof-index
+  and map-entry rejections with hostile `FileDescriptorSet` fixtures, and
+  `tests/test_pbwire.c` covers the caller-memory context.
 
 ## [0.1.14] - 2026-11-07
 
