@@ -46,6 +46,7 @@ public final class TestPbwire {
         }
 
         schemaError();
+        hostileLength();
         bufferLimits();
         System.out.println(checks + " checks passed");
     }
@@ -352,6 +353,22 @@ public final class TestPbwire {
     /* The encode buffer must never spin or write past the array when a size
      * computation wraps: growth uses long math now that a >1 GiB buffer used
      * to double an int into zero and loop forever. */
+    /* A length varint near Integer.MAX_VALUE must fail the load as a parse
+     * error: r.pos + n wraps a negative int, which used to make the truncation
+     * check pass and hand the parser a slice past the array (a raw
+     * ArrayIndexOutOfBoundsException instead of PbwireException). */
+    private static void hostileLength() {
+        byte[] set = {0x0a, (byte) 0xff, (byte) 0xff, (byte) 0xff, (byte) 0xff, 0x07};
+        try {
+            Schema.fromBytes(set);
+            check(false, "a length past the array must fail the load");
+        } catch (PbwireException expected) {
+            check(expected.status() > 0, "the hostile length carries a pbw_status");
+            check(expected.getMessage().contains("length"),
+                    "the failure explains itself: " + expected.getMessage());
+        }
+    }
+
     private static void bufferLimits() {
         Wire.Buf buf = new Wire.Buf();
 
