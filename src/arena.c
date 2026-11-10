@@ -19,7 +19,7 @@ chunk_add(pbw_arena *arena, size_t need)
     size_t cap;
     pbw_arena_chunk *chunk;
 
-    if (arena == NULL) {
+    if (arena == NULL || arena->no_grow) {
         return 0;
     }
     cap = arena->chunk_size;
@@ -62,6 +62,18 @@ pbw_arena_alloc_slow(pbw_arena *arena, size_t size)
         return NULL;
     }
     size = align_up(size == 0 ? 1 : size);
+    if (arena->no_grow) {
+        /* Caller memory: the head chunk is the whole capacity and there is no
+         * large list to fall back to, so a fit miss is the caller's NOMEM. */
+        chunk = arena->head;
+        if (chunk == NULL || !pbw_cap_holds(chunk->cap, chunk->used) ||
+            chunk->cap - chunk->used < size) {
+            return NULL;
+        }
+        ptr = (char *)chunk + PBW_CHUNK_HDR + chunk->used;
+        chunk->used += size;
+        return ptr;
+    }
     if (size > large_at) {
         /* Oversized single allocation: one malloc on the large list, freed on
          * reset/free instead of pinning the reusable head chunk. */
@@ -110,6 +122,16 @@ pbw_arena_reset(pbw_arena *arena)
     }
     head = arena->head;
 
+    if (arena->no_grow) {
+        /* Caller memory: nothing can be given back, so a reset is a pointer
+         * move and the block stays exactly where the caller put it. */
+        arena->readonly = 0;
+        arena->has_heap = 0;
+        if (head != NULL) {
+            head->used = 0;
+        }
+        return;
+    }
     if (arena->block != NULL) {
         /* A packed arena belongs to one decoded tree and is never reset; it
          * is released as a whole by pbw_message_free(). */
@@ -182,7 +204,28 @@ pbw_arena_new_packed(size_t first_chunk)
     arena->readonly = 0;
     arena->block = block;
     arena->has_heap = 0;
+    arena->no_grow = 0;
     return arena;
+}
+
+int
+pbw_arena_init_mem(pbw_arena *arena, void *mem, size_t len)
+{
+    pbw_arena_chunk *chunk;
+
+    if (arena == NULL || mem == NULL || len < PBW_CHUNK_HDR + 8u) {
+        return 0;
+    }
+    memset(arena, 0, sizeof(*arena));
+    chunk = (pbw_arena_chunk *)mem;
+    chunk->next = NULL;
+    chunk->used = 0;
+    chunk->cap = len - PBW_CHUNK_HDR;
+    arena->head = chunk;
+    arena->chunk_size = chunk->cap;
+    arena->block = mem;
+    arena->no_grow = 1;
+    return 1;
 }
 
 void
@@ -192,6 +235,11 @@ pbw_arena_free(pbw_arena *arena)
     pbw_arena_chunk *big;
 
     if (arena == NULL) {
+        return;
+    }
+    if (arena->no_grow) {
+        /* Caller memory: the arena never allocated, so it owns nothing to
+         * free and the caller's block stays valid after this call. */
         return;
     }
     chunk = arena->head;

@@ -174,6 +174,22 @@ a small cap for many-goroutine hosts, a larger one for a few scheduler threads.
 the idle count for your own logging. `pbw_ctx_set_user`/`pbw_ctx_user` carry one
 opaque binding pointer per context (untouched by resets and pooling).
 
+Where there is no heap to give a context (a firmware image with a static
+budget), `pbw_ctx_new_mem` builds the same workspace inside a block you own:
+
+```c
+static uint8_t pool[8192 + 8];
+void *block = (void *)(((uintptr_t)pool + 7u) & ~(uintptr_t)7u);
+pbw_ctx *ctx = pbw_ctx_new_mem(block, 8192);  /* handle + arena in 8 KiB */
+```
+
+It is the same arena and the same decode path, with growth replaced by
+failure: a message that does not fit returns `PBW_ERR_NOMEM` instead of
+allocating, `pbw_ctx_reset` rewinds the block, and `pbw_ctx_free` leaves it
+to you. The context cannot grow its encode buffer either, so pair it with
+`pbw_encode_to`/`pbw_encode_delimited_to` (caller memory) rather than
+`pbw_encode_ctx`.
+
 Which API to use per call site is a table in
 [design.md](design.md#two-allocation-strategies).
 
