@@ -50,6 +50,9 @@ optional descriptor-set path as its first argument.
 | `+ schemaFromFile:error:` | load a serialized `FileDescriptorSet`; Foundation handles the file read (`NSCocoaErrorDomain`), the schema error is `PBWErrorDomain` |
 | `+ schemaFromData:error:` | same from bytes, e.g. embedded in the app bundle |
 | `- messageByName:` | an empty `PBWMessage` of that fully qualified type (`"pkg.Outer.Inner"`), or `nil` for an unknown name or an enum |
+| `- serviceNames` | every service in the set, in descriptor order (empty when there are none) |
+| `- methodNamesForService:` | every method of that service, or `nil` when unknown |
+| `- inputTypeForService:method:` / `- outputTypeForService:method:` | fully qualified input/output message names, or `nil` when unknown (feed them to `messageByName:`) |
 
 Use `protoc --include_imports` so every referenced type is in the set, and hold
 nothing else: a message retains its schema, so keeping a message alive keeps the
@@ -66,7 +69,21 @@ descriptors valid.
 | `messageForField:` | the nested message of a singular message field, or `nil` |
 | `addMessageForField:error:` | get-or-create the nested message and fill it in place |
 | `encode:` | wire bytes |
+| `encodeDeterministic:error:` | wire bytes with map entries sorted by key |
+| `encodeDelimited:error:` | one length-delimited frame (varint length + message) |
 | `decode:error:` | decode bytes as a message of the same type |
+| `decode:limits:error:` | decode with explicit bounds (`pbw_limits`; zeros are the defaults) |
+| `decodeDelimited:consumed:error:` | decode one frame; `*consumed` is the prefix + frame bytes, so concatenated frames decode in a loop |
+| `decodeDelimited:consumed:limits:error:` | same with explicit bounds |
+| `JSONString:` / `parseJSONString:error:` | JSON mapping round trip |
+| `parseJSONString:ignoreUnknownFields:limits:error:` | JSON parse that can skip unknown fields, with explicit bounds |
+| `textFormat` / `parseTextFormat:error:` | text format round trip |
+| `parseTextFormat:limits:error:` | text parse with explicit bounds |
+| `anyTypeURL` / `anyPayload` | fields 1/2 of an Any-shaped message (`nil` when absent) |
+| `packAnyWithTypeURL:payload:error:` | a new message of the same type holding type URL + payload |
+| `timestampMillis:error:` / `messageWithTimestampMillis:error:` | Timestamp as milliseconds, both directions |
+| `durationMillis:error:` / `messageWithDurationMillis:error:` | Duration as milliseconds, both directions |
+| `fieldMaskPaths` | FieldMask paths (field 1) without materializing the list |
 
 Value mapping (the field's schema type decides the wire type, so an `NSNumber`
 is written as whatever the `.proto` declared):
@@ -102,9 +119,9 @@ points into, and editing a view edits the parent's tree. ARC is required.
 |---|---|---|
 | runtime | `PBWSchema.h/.m`, `PBWMessage.h/.m`, `PBWError.h` | the wrapper classes and the `NSError` helper |
 | example | [`examples/roundtrip.m`](examples/roundtrip.m) | build, encode, decode, assert, print |
-| tests | [`tests/test_objc.m`](tests/test_objc.m) | assert-based self-check: descriptor load, full round trip, byte-exact re-encode, absent and zero fields, nested messages, schema/API errors, lifetime loop |
+| tests | [`tests/test_objc.m`](tests/test_objc.m) | assert-based self-check: descriptor load, full round trip, byte-exact re-encode, absent and zero fields, nested messages, schema/API errors, lifetime loop, JSON/text (options + bounds), deterministic encoding, delimited framing, explicit limits, WKT/service helpers |
 | benchmark | [`benchmarks/bench_objc.m`](benchmarks/bench_objc.m) | the four standard tiers against the protobuf ObjC runtime |
-| fixture | [`tests/data/probe.proto`](tests/data/probe.proto) + committed `probe.desc` | regenerate with `protoc -Ibindings/objc/tests/data --descriptor_set_out=bindings/objc/tests/data/probe.desc bindings/objc/tests/data/probe.proto` |
+| fixture | [`tests/data/probe.proto`](tests/data/probe.proto) + committed `probe.desc`, [`tests/data/cover.proto`](tests/data/cover.proto) + committed `cover.desc` (WKT mirrors + one service) | regenerate with `protoc -Ibindings/objc/tests/data --descriptor_set_out=bindings/objc/tests/data/probe.desc bindings/objc/tests/data/probe.proto` (same for `cover`) |
 
 ## Benchmark
 

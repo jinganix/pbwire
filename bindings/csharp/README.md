@@ -109,3 +109,18 @@ dynamic `Schema` for reflection. The committed output is `generated/gen/` (tests
 and `examples/gen/` (example); `oracle/gen_oracle/` holds the pinned
 protoc output (`extern alias Oracle` in `GeneratedTest.cs` proves byte and field
 parity, T1–T6). See `../../codegen/README.md`.
+
+## Core coverage
+
+P/Invoke reaches the whole core through the binding; nothing is re-implemented:
+
+| member | what it does |
+|---|---|
+| `MessageType.ParseJson(text, ignoreUnknown, maxBytes, maxDepth)` / `Message.PrintJson()` | JSON mapping, bounded |
+| `MessageType.ParseText(text, maxBytes, maxDepth)` / `Message.PrintText(printUnknown)` | text format, bounded |
+| `Message.EncodeDeterministic()` | map entries sorted by key |
+| `Message.EncodeDelimited()` / `MessageType.DecodeDelimited(wire)` | framing, returns `consumed` |
+| `Message.EncodedSize()` | exact size without writing |
+| `MessageType.Visit(wire, callback)` | single-level scan; `false` stops it without throwing |
+| `MessageType.AnyPack(url, payload)`, `Message.AnyTypeUrl()`/`AnyPayload()`, `MessageType.TimestampFromMillis(ms)` (+ duration), `Message.TimestampMillis()`/`DurationMillis()`, `Message.FieldMaskPaths()` | WKT helpers |
+| `Schema.ServiceCount()`/`ServiceAt(i)`/`Service(name)`, `Schema.ResolveMethod(service, method)` | routing metadata |

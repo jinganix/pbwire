@@ -545,6 +545,128 @@ test('a singular submessage repeated more often than the table has fields', () =
   message.free();
 });
 
+test('deterministic encoding matches the plain encoding', () => {
+  const message = person.decode(person.encode(VALUES));
+  assert.ok(message.encodeDeterministic().equals(message.encode()),
+              'same bytes without maps to sort');
+  assert.strictEqual(message.encodedSize(), message.encode().length,
+                       'encoded_size matches');
+  message.free();
+});
+
+test('visit scans fields without a tree', () => {
+  const wire = person.encode(VALUES);
+  const events = person.visit(wire);
+  const byNumber = new Map(events.map((e) => [e.number, e]));
+  assert.strictEqual(byNumber.get(1).wireType, 2, 'name is LEN');
+  assert.strictEqual(byNumber.get(1).name, 'name', 'number resolves');
+  assert.ok(byNumber.get(1).value.equals(Buffer.from('alice')), 'LEN payload');
+  assert.strictEqual(byNumber.get(2).wireType, 0, 'id is a varint');
+  assert.strictEqual(byNumber.get(2).value, 7n, 'scalar reads as a BigInt');
+  assert.strictEqual(byNumber.get(5).value, 9223372036854775807n, 'int64 exact');
+  assert.throws(() => person.visit(wire, { maxBytes: 4 }), /./,
+                'visit honors max_bytes');
+});
+
+test('encoded_size matches and encode_to honors a fixed cap', () => {
+  const message = person.decode(person.encode(VALUES));
+  const wire = message.encode();
+  assert.strictEqual(message.encodedSize(), wire.length, 'encoded_size');
+  assert.ok(message.encodeTo().equals(wire), 'encode_to sized cap works');
+  const addon = require(path.join(__dirname, '..', 'build',
+                                  'pbwire_node.node'));
+  assert.throws(() => addon.encodeTo(message._tree(), Buffer.alloc(4)), /./,
+                'encode_to rejects a short cap');
+  const frame = message.encodeDelimited();
+  assert.ok(message.encodeDelimitedTo().equals(frame),
+              'encode_delimited_to matches');
+  assert.throws(() => addon.encodeDelimitedTo(message._tree(),
+                                              Buffer.alloc(4)), /./,
+                'encode_delimited_to rejects a short cap');
+  message.free();
+});
+
+test('encode_sink streams chunks to the callback', () => {
+  const message = person.decode(person.encode(VALUES));
+  const wire = message.encode();
+  const chunks = [];
+  message.encodeSink((c) => { chunks.push(c); return true; });
+  assert.ok(Buffer.concat(chunks).equals(wire), 'sink gets every byte');
+  assert.throws(() => message.encodeSink(() => false), /aborted/,
+                'sink abort throws');
+  message.free();
+});
+
+test('limits reject oversized input on every entry point', () => {
+  const wire = person.encode(VALUES);
+  const tiny = { maxBytes: 4 };
+  assert.throws(() => person.decode(wire, tiny), /./, 'decode max_bytes');
+  assert.throws(() => person.decodeObject(wire, tiny), /./,
+                'decodeObject max_bytes');
+  assert.throws(() => person.fromJson('{"name":"x"}', false, tiny), /./,
+                'fromJson max_bytes');
+  assert.throws(() => person.fromText('name: "x"', tiny), /./,
+                'fromText max_bytes');
+  const frame = person.decode(person.encode(VALUES)).encodeDelimited();
+  assert.throws(() => person.decodeDelimited(frame, { maxBytes: 2 }), /./,
+                'decodeDelimited max_bytes');
+  assert.throws(() => Schema.fromBytes(require('node:fs').readFileSync(
+    path.join(DATA, 'demo.desc')), tiny), /./, 'fromBytes max_bytes');
+  // An empty object means the defaults: everything still decodes.
+  assert.strictEqual(person.decode(wire, {}).get('name'), 'alice');
+});
+
+test('services resolve and streaming flags decode', () => {
+  const aschema = Schema.fromFile(
+    path.join(DATA, '..', '..', '..', '..', 'tests', 'data', 'adv.desc'));
+  assert.deepStrictEqual(aschema.services(), ['pbwire.adv.Jobs']);
+  const jobs = aschema.service('pbwire.adv.Jobs');
+  assert.strictEqual(jobs.name, 'pbwire.adv.Jobs', 'service name');
+  assert.strictEqual(jobs.methods.length, 2, 'two methods');
+  assert.deepStrictEqual(jobs.methods[0], {
+    name: 'Get',
+    inputType: 'pbwire.adv.Job',
+    outputType: 'pbwire.adv.Job',
+    clientStreaming: false,
+    serverStreaming: false,
+  });
+  assert.strictEqual(jobs.methods[1].name, 'Watch', 'method name');
+  assert.strictEqual(jobs.methods[1].clientStreaming, true, 'client streams');
+  assert.strictEqual(jobs.methods[1].serverStreaming, true, 'server streams');
+  const routed = aschema.resolve('pbwire.adv.Jobs', 'Get');
+  assert.strictEqual(routed.input.name, 'pbwire.adv.Job', 'resolve input');
+  assert.strictEqual(routed.output.name, 'pbwire.adv.Job', 'resolve output');
+  assert.throws(() => aschema.service('pbwire.adv.Nope'), /./,
+                'unknown service throws');
+  assert.throws(() => aschema.resolve('pbwire.adv.Jobs', 'Nope'), /./,
+                'unknown method throws');
+});
+
+test('well-known-type helpers round trip', () => {
+  const aschema = Schema.fromFile(
+    path.join(DATA, '..', '..', '..', '..', 'tests', 'data', 'adv.desc'));
+  const job = aschema.resolve('pbwire.adv.Jobs', 'Get').input
+    .encode({ id: '7' });
+  const packed = aschema.message('google.protobuf.Any')
+    .anyPack('type.googleapis.com/pbwire.adv.Job', job);
+  assert.strictEqual(packed.anyTypeUrl(),
+                     'type.googleapis.com/pbwire.adv.Job', 'any type url');
+  assert.strictEqual(
+    aschema.message('pbwire.adv.Job').decode(packed.anyPayload()).get('id'),
+    '7', 'any payload');
+  const ts = aschema.message('google.protobuf.Timestamp')
+    .timestampFromMillis(1501n);
+  assert.strictEqual(ts.timestampMillis(), 1501n, 'timestamp round trip');
+  const du = aschema.message('google.protobuf.Duration')
+    .durationFromMillis(-2500);
+  assert.strictEqual(du.durationMillis(), -2500n, 'duration round trip');
+  const fm = aschema.message('google.protobuf.FieldMask')
+    .fromJson('{"paths":["a.b","c"]}');
+  assert.deepStrictEqual(fm.fieldmaskPaths(), ['a.b', 'c'], 'fieldmask paths');
+  assert.throws(() => person.anyPack('t', job), /./,
+                'anyPack rejects a non-Any type');
+});
+
 test('the addon rejects a slice array it did not produce', () => {
   const addon = require(path.join(__dirname, '..', 'build', 'pbwire_node.node'));
   const wire = one.encode(ONE_VALUES);

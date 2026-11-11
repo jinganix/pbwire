@@ -150,27 +150,27 @@ the three mental-model shifts plus one row per language.
 |---|---|---|---|
 | C | `pbw_struct_schema_load(path)` on a `FileDescriptorSet`; `plugin/` additionally emits structs + layout tables for the compile-time side | ✅ | struct layout is codegen, the schema itself is loaded |
 | C++ | the C runtime and its generated headers, unchanged | ✅ | inherits C |
-| Python | `pbwire.Schema.from_file/load` on a `FileDescriptorSet` | ✅ | the extension is compiled but the schema is always loaded; `decode()` returns a parsed message, `to_dict()`/`encode(dict)` are the dict path |
+| Python | `pbwire.Schema.from_file/load` on a `FileDescriptorSet` | ✅ | the extension is compiled but the schema is always loaded; `decode()` returns a parsed message, `to_dict()`/`encode(dict)` are the dict path; binary + JSON + text testee |
 | Go | `dynamic.Registry` on a `FileDescriptorSet`, cgo downcalls into the C core | ✅ | explicit `Close` per root (no finalizer); failed loads never disturb the live version |
 | Erlang | `gpb_compile` → records + `get_msg_defs/0` → `pbwire:load_cache/1` | ✅ | gpb is the plugin, epb needs no descriptor path |
 | Lua | `pbwire.loadfile` on a `FileDescriptorSet` | ✅ | tables in, tables out; arena per schema, builders anchor it |
-| Java | `FileDescriptorSet` at run time, own pure-Java reader (JDK 17+) | ✅ | no JNI, no C glue, no generator, no native library; binary-only conformance testee |
-| Ruby | `FileDescriptorSet` at run time, a C extension linked against the core | ✅ | no gems, no generator; binary-only conformance testee |
+| Java | `FileDescriptorSet` at run time, own pure-Java reader (JDK 17+) | ✅ | no JNI, no C glue, no generator, no native library; binary + JSON + text conformance testee |
+| Ruby | `FileDescriptorSet` at run time, a C extension linked against the core | ✅ | no gems, no generator; binary + JSON + text conformance testee |
 | Node | `FileDescriptorSet` at run time, hand-written N-API addon | ✅ | no npm deps, node headers only |
 | Objective-C | `FileDescriptorSet` at run time, ARC wrapper over the C API | ✅ | Foundation only, no codegen |
-| Kotlin | the Java binding's runtime: `FileDescriptorSet` at run time, one Java runtime for both | ✅ | four DSL helpers, no second codec |
+| Kotlin | the Java binding's runtime: `FileDescriptorSet` at run time, one Java runtime for both | ✅ | four DSL helpers, no second codec; JSON/text/delimited arrive with the Java runtime |
 | PHP | `Pbwire\Schema::fromFile` on a `FileDescriptorSet`, native C extension or `ext-ffi` | ✅ | no composer; the C extension needs only its `.so` |
 | Dart | `Schema.load` on a `FileDescriptorSet`, `dart:ffi` | ✅ | `package:ffi` only (malloc, strings) |
 | Rust | `Schema::from_file` on a `FileDescriptorSet`, core linked in statically | ✅ | no bindgen, no external crate |
 | C# | `Schema.FromFile` on a `FileDescriptorSet`, P/Invoke + `DllImportResolver` | ✅ | no packages in the binding project |
 | Swift | `Schema(contentsOfFile:)` on a `FileDescriptorSet`, SwiftPM + C ABI | ✅ | links `build/libpbwire.a` via `unsafeFlags`; baseline is a separate package, no checked-in generated code |
-| Scala | the Java binding's runtime: `FileDescriptorSet` at run time | ✅ | DSL over the same runtime as Java/Kotlin; baseline needs `scalapbc` once |
+| Scala | the Java binding's runtime: `FileDescriptorSet` at run time | ✅ | DSL over the same runtime as Java/Kotlin; binary + JSON + text testee; baseline needs `scalapbc` once |
 | Elixir | `elixir-protobuf` structs + `__message_props__/0` → the shared `:pbwire` NIF | ✅ | no C of its own; Hex `:pbwire` 0.1.7 wraps the same core as `bindings/erlang` (0.1.14; the NIF package lags one release) |
-| Zig | `Schema.fromFile` on a `FileDescriptorSet`, core sources compiled in statically | ✅ | `build.zig` API targets Zig 0.17; baseline not wired (needs network) |
-| F# | the C# binding's project: `FileDescriptorSet` at run time | ✅ | `ProjectReference`, no second runtime; baseline is generated C# (F# cannot compile `.cs`) |
-| Clojure | the Java binding's runtime via plain interop, `FileDescriptorSet` at run time | ✅ | persistent maps in/out; `benchmarks/deps` jars are fetched, not committed |
+| Zig | `Schema.fromFile` on a `FileDescriptorSet`, core sources compiled in statically | ✅ | `build.zig` API targets Zig 0.17; binary + JSON + text testee (`make conformance-zig`); baseline not wired (needs network) |
+| F# | the C# binding's project: `FileDescriptorSet` at run time | ✅ | `ProjectReference`, no second runtime; JSON/text/visit come from the C# binding; binary + JSON + text testee |
+| Clojure | the Java binding's runtime via plain interop, `FileDescriptorSet` at run time | ✅ | persistent maps in/out, plus `to-json`/`from-json`/`to-text`/`from-text`; binary + JSON + text testee; `benchmarks/deps` jars are fetched, not committed |
 | Embedded | `pbwe_open` on a `FileDescriptorSet`, static facade over the C core | ✅ | one malloc phase, then bounded steady state; caller-owned buffers, no per-message allocation |
-| Julia | `Libdl.dlopen` + `ccall`, `FileDescriptorSet` at run time | ✅ | stdlib-only package; baseline oracle is generated with `protojl`, not committed |
+| Julia | `Libdl.dlopen` + `ccall`, `FileDescriptorSet` at run time | ✅ | stdlib-only package; binary + JSON + text testee; baseline oracle is generated with `protojl`, not committed |
 | R | `.Call` C extension on a `FileDescriptorSet`, core linked in statically | ✅ | named lists in/out; INT32_MIN reads back as `NA`, doubles clamp at the 64-bit limits |
 
 Every row above also has a generated model from `codegen`: typed
@@ -189,27 +189,31 @@ types of its own.
 A context's resident ceiling is `retain_cap` (1 MiB default) for the arena
 head plus the encode buffer; anything above it is freed on reset instead of
 kept (see `../docs/guide.md#reuse-one-arena`). Java, Erlang and Elixir expose
-it (`GenericCodec`/`PbCodec.setRetainCap`, `pbwire:set_opts([{retain_cap,
-Bytes}])`, `Pbwire.load_schema(mods, retain_cap: Bytes)`); every other
-`pbw_ctx` below runs at the default cap and the table gives the ceiling
-plus the workaround. No binding exposes `pbw_pool_*` yet.
+it as a setting (`GenericCodec`/`PbCodec.setRetainCap`,
+`pbwire:set_opts([{retain_cap, Bytes}])`, `Pbwire.load_schema(mods,
+retain_cap: Bytes)`), and Ruby (`Pbwire::Context`/`Pbwire::Pool`), Objective-C
+(`PBWContext`/`PBWPool`), Lua (`new_context`/`new_pool`) and R
+(`pbwire_context_*`/`pbwire_pool_*`) expose the context and pool APIs
+themselves. Every other `pbw_ctx` below runs at the default cap; the table
+gives the ceiling and the workaround.
 
 | binding | what stays resident | ceiling | rule |
 |---|---|---|---|
 | C / C++ | caller-owned `pbw_struct_buf` (keeps capacity) + `pbw_struct_arena` (each decode resets it) | largest message handled | an arena decode invalidates the previous tree; never `pbw_struct_free` an arena tree (`NULL` arena = per-message malloc + `pbw_struct_free`) |
 | Embedded | one `pbw_ctx` inside the box (arena + encode buffer, reset per decode, `retain_cap` caps it) + the loaded schema | `retain_cap` | the next decode invalidates the previous tree; `pbwe_set_limits` rejects oversized input before it allocates; `pbwe_open`'s descriptor limit bounds the startup load; `pbwe_close` releases both |
 | Python | own C codec, no `pbw_ctx`; a decoded `Message` pins the whole input buffer | retained `Message`s | drop the `Message` after materializing (`to_dict()` output does not free it) |
-| Ruby | builder = C tree, `encode` writes straight into the returned `String`; a wire view pins the bytes | retained views | same as Python: `set` on a view raises, and holding a view holds its bytes |
+| Ruby | builder = C tree, `encode` writes straight into the returned `String`; a wire view pins the bytes; optional `Context`/`Pool` workspace | retained views, plus the context's `retain_cap` when one is used | same as Python: `set` on a view raises, and holding a view holds its bytes; a context borrow dies with the next reset |
 | Java / Kotlin | one `ThreadLocal` workspace: a reusable encode buffer (capped by `setRetainCap`, 1 MiB default) + a fixed 8-slot string-image cache | live + dead threads x capped buffer each | lower the cap for thread-per-request pools, or reuse a fixed pool |
 | Node | single-threaded: one reusable encode `pbw_ctx` per message type (freed with the type) + decoded message = JS `Buffer` + slice array | types x largest encoding each + retained messages | drop decoded messages; a type's buffer stays at its largest encoding |
-| Objective-C / Dart / Rust / C# / Go / Swift / Zig / F# / Julia | plain `pbw_encode`/`pbw_decode` per call (`NSData` takes the malloc'd buffer over with no copy; Go passes the input slice straight in; Julia holds input bytes via finalizers) | none, except retained Go roots / Julia messages | nothing to tune; Go roots need an explicit `Close`, Julia messages a `close()` |
+| Objective-C | `PBWContext` (with `retainCap`) backs `-decode:withContext:error:`, `PBWPool` hands contexts out | the context's capped buffer | an arena decode invalidates the previous tree; a pool `release` resets it |
+| Dart / Rust / C# / Go / Swift / Zig / F# / Julia | plain `pbw_encode`/`pbw_decode` per call (`NSData` takes the malloc'd buffer over with no copy; Go passes the input slice straight in; Julia holds input bytes via finalizers) | none, except retained Go roots / Julia messages | nothing to tune; Go roots need an explicit `Close`, Julia messages a `close()` |
 | PHP | built trees live in one `pbw_ctx` each (freed with the message, never decoded into so always mutable); decoded trees are single-malloc arenas | retained messages | drop the message; nested views hold the parent, `close()` frees either kind |
 | Erlang | one `pbw_ctx` per scheduler + a geometrically grown encode buffer, capped by `set_opts([{retain_cap, Bytes}])` (1 MiB default) | schedulers x capped buffer each | bounded by the scheduler count; lower the cap when messages vary wildly in size |
-| Lua | one `pbw_ctx` per schema (arena + encode buffer, reset per call; builders own plain trees) | largest message handled | nothing to tune; idle schemas keep up to the retain cap |
+| Lua | one `pbw_ctx` per schema (arena + encode buffer, reset per call; builders own plain trees); `new_context`/`new_pool` expose the arena API | largest message handled, plus the context's `retain_cap` | nothing to tune; idle schemas keep up to the retain cap; a context borrow dies with the next reset |
 | Scala / Clojure | one `ThreadLocal` workspace inherited from the Java runtime (reusable buffer, never freed until thread exit) | live + dead threads x largest message each | same rule as Java: fixed pool, not thread-per-request |
 | Elixir | one `pbw_ctx` per scheduler via the shared NIF (BEAM-global schema cache, like Erlang) | schedulers x capped buffer each | same rule as Erlang (`load_schema(mods, retain_cap: Bytes)`) |
 | Julia | `ccall` per call; decoded messages hold the input bytes via finalizers | retained messages | drop the message; `close()` frees either kind |
-| R | built trees live in one `pbw_ctx` each; decoded trees are single-malloc arenas | retained messages | drop the message; nested views hold the parent, builders anchor the schema |
+| R | built trees live in one `pbw_ctx` each; decoded trees are single-malloc arenas; `pbwire_context_*`/`pbwire_pool_*` expose the arena API | retained messages, plus the context's `retain_cap` | drop the message; nested views hold the parent, builders anchor the schema; a context borrow dies with the next reset |
 
 Compiler-level code generation is never hand-written: C's layout tables come
 from the same descriptor `protoc` parsed, so field numbers, wire types and

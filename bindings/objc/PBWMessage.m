@@ -590,14 +590,99 @@
     return [NSData dataWithBytesNoCopy:bytes length:len freeWhenDone:YES];
 }
 
-- (nullable PBWMessage *)decode:(NSData *)data error:(NSError **)error
+- (nullable NSData *)encodeDeterministic:(NSError **)error
 {
-    pbw_message *decoded = NULL;
-    pbw_status status = pbw_decode(_descriptor, data.bytes, data.length, &decoded);
+    uint8_t *bytes = NULL;
+    size_t len = 0;
+    pbw_status status = pbw_encode_deterministic(_message, &bytes, &len);
 
     if (status != PBW_OK) {
         PBWSetError(error, status, nil);
         return nil;
+    }
+    if (len == 0) {
+        /* Same empty-data rule as -encode:: no zero-length transfer. */
+        pbw_free(bytes);
+        return [NSData data];
+    }
+    return [NSData dataWithBytesNoCopy:bytes length:len freeWhenDone:YES];
+}
+
+- (nullable NSData *)encodeDelimited:(NSError **)error
+{
+    uint8_t *bytes = NULL;
+    size_t len = 0;
+    pbw_status status = pbw_encode_delimited(_message, &bytes, &len);
+
+    if (status != PBW_OK) {
+        PBWSetError(error, status, nil);
+        return nil;
+    }
+    if (len == 0) {
+        pbw_free(bytes);
+        return [NSData data];
+    }
+    return [NSData dataWithBytesNoCopy:bytes length:len freeWhenDone:YES];
+}
+
+- (nullable PBWMessage *)decode:(NSData *)data error:(NSError **)error
+{
+    pbw_limits defaults = {0, 0};
+
+    return [self decode:data limits:defaults error:error];
+}
+
+- (nullable PBWMessage *)decode:(NSData *)data
+                         limits:(pbw_limits)limits
+                          error:(NSError **)error
+{
+    pbw_message *decoded = NULL;
+    pbw_status status =
+        pbw_decode_limits(_descriptor, data.bytes, data.length, &limits, &decoded);
+
+    if (status != PBW_OK) {
+        PBWSetError(error, status, nil);
+        return nil;
+    }
+    return [[PBWMessage alloc] initWithDescriptor:_descriptor
+                                           schema:_schema
+                                          message:decoded
+                                            owned:YES
+                                           parent:nil
+                                          context:nil];
+}
+
+- (nullable PBWMessage *)decodeDelimited:(NSData *)data
+                                consumed:(nullable NSUInteger *)consumed
+                                   error:(NSError **)error
+{
+    pbw_limits defaults = {0, 0};
+
+    return [self decodeDelimited:data
+                        consumed:consumed
+                          limits:defaults
+                           error:error];
+}
+
+- (nullable PBWMessage *)decodeDelimited:(NSData *)data
+                                consumed:(nullable NSUInteger *)consumed
+                                  limits:(pbw_limits)limits
+                                   error:(NSError **)error
+{
+    pbw_message *decoded = NULL;
+    size_t read = 0;
+    pbw_status status = pbw_decode_delimited_limits(
+        _descriptor, data.bytes, data.length, &limits, &decoded, &read);
+
+    if (status != PBW_OK) {
+        if (consumed != NULL) {
+            *consumed = 0;
+        }
+        PBWSetError(error, status, nil);
+        return nil;
+    }
+    if (consumed != NULL) {
+        *consumed = read;
     }
     return [[PBWMessage alloc] initWithDescriptor:_descriptor
                                            schema:_schema
@@ -675,15 +760,30 @@
 - (nullable PBWMessage *)parseJSONString:(NSString *)text
                                    error:(NSError **)error
 {
+    pbw_limits defaults = {0, 0};
+
+    return [self parseJSONString:text
+             ignoreUnknownFields:NO
+                          limits:defaults
+                           error:error];
+}
+
+- (nullable PBWMessage *)parseJSONString:(NSString *)text
+                     ignoreUnknownFields:(BOOL)ignoreUnknownFields
+                                  limits:(pbw_limits)limits
+                                   error:(NSError **)error
+{
     const char *utf8 = text.UTF8String;
     pbw_message *parsed = NULL;
+    pbw_json_parse_options options = {ignoreUnknownFields ? 1 : 0};
     pbw_status status;
 
     if (utf8 == NULL) {
         PBWSetError(error, PBW_ERR_INVALID, nil);
         return nil;
     }
-    status = pbw_json_parse(_descriptor, utf8, strlen(utf8), &parsed);
+    status = pbw_json_parse_limits(_descriptor, utf8, strlen(utf8), &limits,
+                                   &options, &parsed);
     if (status != PBW_OK) {
         PBWSetError(error, status, nil);
         return nil;
@@ -708,6 +808,15 @@
 - (nullable PBWMessage *)parseTextFormat:(NSString *)text
                                    error:(NSError **)error
 {
+    pbw_limits defaults = {0, 0};
+
+    return [self parseTextFormat:text limits:defaults error:error];
+}
+
+- (nullable PBWMessage *)parseTextFormat:(NSString *)text
+                                  limits:(pbw_limits)limits
+                                   error:(NSError **)error
+{
     const char *utf8 = text.UTF8String;
     pbw_message *parsed = NULL;
     pbw_status status;
@@ -716,7 +825,8 @@
         PBWSetError(error, PBW_ERR_INVALID, nil);
         return nil;
     }
-    status = pbw_text_parse(_descriptor, utf8, strlen(utf8), &parsed);
+    status =
+        pbw_text_parse_limits(_descriptor, utf8, strlen(utf8), &limits, &parsed);
     if (status != PBW_OK) {
         PBWSetError(error, status, nil);
         return nil;
@@ -727,6 +837,124 @@
                                             owned:YES
                                            parent:nil
                                           context:nil];
+}
+
+- (nullable NSString *)anyTypeURL
+{
+    const char *url = pbw_any_type_url(_message);
+
+    return url != NULL ? @(url) : nil;
+}
+
+- (nullable NSData *)anyPayload
+{
+    size_t len = 0;
+    const void *bytes = pbw_any_payload(_message, &len);
+
+    return bytes != NULL ? [NSData dataWithBytes:bytes length:len] : nil;
+}
+
+- (nullable PBWMessage *)packAnyWithTypeURL:(NSString *)typeURL
+                                    payload:(NSData *)payload
+                                      error:(NSError **)error
+{
+    pbw_message *packed = NULL;
+    const char *utf8 = typeURL.UTF8String;
+    pbw_status status;
+
+    if (utf8 == NULL) {
+        PBWSetError(error, PBW_ERR_INVALID, nil);
+        return nil;
+    }
+    status = pbw_any_pack(_descriptor, utf8, payload.bytes, payload.length,
+                          &packed);
+    if (status != PBW_OK) {
+        PBWSetError(error, status, nil);
+        return nil;
+    }
+    return [[PBWMessage alloc] initWithDescriptor:_descriptor
+                                           schema:_schema
+                                          message:packed
+                                            owned:YES
+                                           parent:nil
+                                          context:nil];
+}
+
+- (nullable NSNumber *)timestampMillis:(NSError **)error
+{
+    int64_t ms = 0;
+    pbw_status status = pbw_timestamp_to_millis(_message, &ms);
+
+    if (status != PBW_OK) {
+        PBWSetError(error, status, nil);
+        return nil;
+    }
+    return @(ms);
+}
+
+- (nullable PBWMessage *)messageWithTimestampMillis:(int64_t)ms
+                                              error:(NSError **)error
+{
+    pbw_message *stamp = NULL;
+    pbw_status status = pbw_timestamp_from_millis(_descriptor, ms, &stamp);
+
+    if (status != PBW_OK) {
+        PBWSetError(error, status, nil);
+        return nil;
+    }
+    return [[PBWMessage alloc] initWithDescriptor:_descriptor
+                                           schema:_schema
+                                          message:stamp
+                                            owned:YES
+                                           parent:nil
+                                          context:nil];
+}
+
+- (nullable NSNumber *)durationMillis:(NSError **)error
+{
+    int64_t ms = 0;
+    pbw_status status = pbw_duration_to_millis(_message, &ms);
+
+    if (status != PBW_OK) {
+        PBWSetError(error, status, nil);
+        return nil;
+    }
+    return @(ms);
+}
+
+- (nullable PBWMessage *)messageWithDurationMillis:(int64_t)ms
+                                             error:(NSError **)error
+{
+    pbw_message *span = NULL;
+    pbw_status status = pbw_duration_from_millis(_descriptor, ms, &span);
+
+    if (status != PBW_OK) {
+        PBWSetError(error, status, nil);
+        return nil;
+    }
+    return [[PBWMessage alloc] initWithDescriptor:_descriptor
+                                           schema:_schema
+                                          message:span
+                                            owned:YES
+                                           parent:nil
+                                          context:nil];
+}
+
+- (nonnull NSArray<NSString *> *)fieldMaskPaths
+{
+    size_t count = pbw_fieldmask_path_count(_message);
+    NSMutableArray<NSString *> *out =
+        [NSMutableArray arrayWithCapacity:count];
+    size_t i;
+
+    for (i = 0; i < count; i++) {
+        const char *path = pbw_fieldmask_path_at(_message, i);
+
+        if (path != NULL) {
+            [out addObject:@(path)];
+        }
+    }
+    return out;
 }
 
 @end

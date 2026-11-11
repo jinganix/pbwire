@@ -1,0 +1,23 @@
+
+Â
+maptest.proto
+structtest"4
+MapValue
+name (	Rname
+value (Rvalue"æ
+Maps2
+by_int (2.structtest.Maps.ByIntEntryRbyInt2
+by_str (2.structtest.Maps.ByStrEntryRbyStr2
+by_msg (2.structtest.Maps.ByMsgEntryRbyMsg8
+
+ByIntEntry
+key (Rkey
+value (	Rvalue:88
+
+ByStrEntry
+key (	Rkey
+value (Rvalue:8N
+
+ByMsgEntry
+key (	Rkey*
+value (2.structtest.MapValueRvalue:8bproto3

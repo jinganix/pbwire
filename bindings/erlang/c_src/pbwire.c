@@ -511,6 +511,11 @@ decode_2(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
         enif_rwlock_runlock(state->cache_lock);
         raise_exception(env, argv[0]);
     }
+    if (state->opts.max_bytes_set &&
+        tdata->dec.bin.size > state->opts.max_bytes) {
+        enif_rwlock_runlock(state->cache_lock);
+        raise_exception(env, make_atom(env, "too_large"));
+    }
 
     tdata->dec.p = (char *)(tdata->dec.bin.data);
     tdata->dec.end = tdata->dec.p + tdata->dec.bin.size;
@@ -536,6 +541,7 @@ set_opts_1(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     int32_t arity;
     ERL_NIF_TERM head, tail, *array;
     ERL_NIF_TERM opt_with_utf8, opt_string_as_list, opt_retain_cap;
+    ERL_NIF_TERM opt_max_bytes, opt_max_depth;
 
     if (argc != 1 || !enif_is_list(env, argv[0])) {
         return enif_make_badarg(env);
@@ -548,6 +554,8 @@ set_opts_1(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     opt_with_utf8 = make_atom(env, "with_utf8");
     opt_string_as_list = make_atom(env, "string_as_list");
     opt_retain_cap = make_atom(env, "retain_cap");
+    opt_max_bytes = make_atom(env, "max_bytes");
+    opt_max_depth = make_atom(env, "max_depth");
 
     head = argv[0];
     while (enif_get_list_cell(env, head, &head, &tail)) {
@@ -588,6 +596,31 @@ set_opts_1(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
                     }
                 }
                 enif_rwlock_rwunlock(state->cache_lock);
+            } else if (array[0] == opt_max_bytes) {
+                /* Input guard mirroring pbw_limits.max_bytes: decode
+                 * rejects larger binaries. 0 (the default) means unset. */
+                long cap;
+
+                if (!enif_get_long(env, array[1], &cap) || cap < 0) {
+                    return enif_make_badarg(env);
+                }
+                state->opts.max_bytes = (size_t)cap;
+                state->opts.max_bytes_set = (cap > 0);
+            } else if (array[0] == opt_max_depth) {
+                /* Input guard mirroring pbw_limits.max_depth: decode
+                 * rejects deeper message nesting. 0 means unset; the
+                 * decoder still enforces its built-in caps. */
+                long depth;
+
+                if (!enif_get_long(env, array[1], &depth) || depth < 0) {
+                    return enif_make_badarg(env);
+                }
+                /* Saturate instead of wrapping: a huge value must never
+                 * become a tiny cap. */
+                state->opts.max_depth = depth > (long)UINT32_MAX
+                                            ? UINT32_MAX
+                                            : (uint32_t)depth;
+                state->opts.max_depth_set = (depth > 0);
             } else {
                 return enif_make_badarg(env);
             }

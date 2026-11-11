@@ -18,7 +18,8 @@ Plan, in order:
 3. port `conformance/testee.c`: read the length-prefixed `ConformanceRequest`
    (decoded with epb itself, from the same defs), pick the message by the
    suffix of `message_type`, decode and re-encode, answer `skipped` for JSON,
-   JSPB and text.
+   JSPB and text (JSON and text are non-goals for this binding: no second
+   codec, no descriptor loader, gpb stays the only schema source).
 
 Until then, the binding's correctness is covered by its own suites
 (`make erlang-test`: EUnit + the NIF C tests, including gpb parity), and the

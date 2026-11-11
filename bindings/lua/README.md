@@ -78,6 +78,10 @@ buffer malloc. That is the ~7-8x row in the benchmark below.
 | `schema:message("pkg.Name")` | an empty builder message (anchors the schema until collected) |
 | `msg:set(tbl)` | merge a table into the builder (chainable); repeated fields replace |
 | `msg:encode()` | wire bytes of the builder |
+| `msg:to_json()` / `msg:to_text([print_unknown])` | JSON mapping / text format of a builder |
+| `schema:to_json("pkg.Name", tbl)` / `schema:from_json("pkg.Name", text[, ignore_unknown])` | table <-> JSON mapping text (`to_text`/`from_text` are the text-format twins) |
+| `pbwire.new_context()` / `pbwire.new_pool(max_idle[, retain_cap])` | a reusable `pbw_ctx`, or a bounded freelist of them; the pool resets a context on release and both cap what they keep |
+| `ctx:decode("pkg.Name", wire)` / `ctx:encode(msg)` / `ctx:used()` / `ctx:retain_cap()` | arena decode (read-only, dies with the next `reset`), encode into the context buffer |
 
 Every `pbw_status` is checked and raised as a Lua error; a wrong Lua type for a
 value raises; malformed wire data is rejected by `decode`. Nothing aborts or

@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.16)
 
-project(pbwire VERSION 0.1.15 LANGUAGES C)
+project(pbwire VERSION 0.1.16 LANGUAGES C)
 
 option(PBW_BUILD_PROTOC "Build the optional .proto importer (needs libprotobuf)" OFF)
 option(PBW_BUILD_TESTS "Build the self-checks" ON)
@@ -46,7 +46,11 @@ target_include_directories(pbwire
            $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
 target_compile_features(pbwire PUBLIC c_std_99)
 set_target_properties(pbwire PROPERTIES EXPORT_NAME pbwire
-    VERSION ${PROJECT_VERSION} SOVERSION 1)
+    VERSION ${PROJECT_VERSION} SOVERSION 1
+    # Only what include/pbwire.h declares is exported (the header marks public
+    # declarations default-visible); internal helpers stay out of the dynamic
+    # symbol table.
+    C_VISIBILITY_PRESET hidden)
 
 # Optional: .proto text -> FileDescriptorSet, built on Google Protobuf.
 # Nothing in the core links against it, and it links against nothing in the core.

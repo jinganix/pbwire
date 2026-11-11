@@ -7,7 +7,7 @@
 > header, about 13k lines of C (roughly 7.5k binary codec, the rest the JSON mapping and text
 > format), zero runtime dependencies.
 
-Facts: source at <https://github.com/jinganix/pbwire>, license Apache-2.0, version `0.1.15`
+Facts: source at <https://github.com/jinganix/pbwire>, license Apache-2.0, version `0.1.16`
 (`VERSION` is the source of truth, `project(pbwire VERSION ...)` in `CMakeLists.txt` matches it). Encodings are byte-identical to `protoc 36.2`
 and pass Google's official conformance suites: binary + JSON 2745 successes, 0 skipped (2 expected
 failures that the reference C++ testee fails identically:
@@ -180,8 +180,11 @@ C++ runtime), `make bench`, `make bench-c` (C structs vs protoc C++). Optional, 
   `pbw_istream_feed`, `pbw_istream_next`, `pbw_istream_reset`, `pbw_istream_free`
   (`*out == NULL` + `PBW_OK` means need more data), `pbw_encode_sink(msg, sink, opaque)` in 8 KiB
   chunks with a `pbw_status`-returning sink.
-- Text/JSON: `pbw_text_print`, `pbw_text_print_opts`, `pbw_text_parse`, `pbw_json_print`,
-  `pbw_json_parse`, `pbw_json_parse_opts` (unknown fields fail unless ignored; closed-enum
+- Text/JSON: `pbw_text_print`, `pbw_text_print_opts`, `pbw_text_parse`, `pbw_text_parse_limits`,
+  `pbw_json_print`, `pbw_json_parse`, `pbw_json_parse_opts`, `pbw_json_parse_limits`
+  (the `_limits` pair takes the decoder's `pbw_limits{max_bytes, max_depth}`, checked before any
+  recursion; in JSON an array element also costs one level; unknown fields fail unless ignored;
+  closed-enum
   unknowns stay unknown).
 - `PBW_ABI_VERSION` (== 1) with `pbw_abi_version()`; the shared library SONAME carries the same
   number. Additive C API changes keep it; breaking changes bump it and the SONAME together.
@@ -197,7 +200,10 @@ C++ runtime), `make bench`, `make bench-c` (C structs vs protoc C++). Optional, 
   `pbw_message_is_initialized()`; `pbw_encode()` writes the tree as it stands, like the reference
   serializer.
 - Wire data is untrusted input: lengths bounds-checked, field number 0 and wire types above 5
-  rejected, nesting capped at 256 (`PBW_MAX_DEPTH`), every failure returns a `pbw_status`.
+  rejected, nesting capped at 256 (`PBW_MAX_DEPTH`), every failure returns a `pbw_status`. The cap
+  bounds recursion, not stack: reaching it costs ~1.4 KB of C stack per level in a release build
+  (~1 MB under sanitizers), so a thread parsing that deep needs ~1 MB free (`pbw_limits.max_depth`
+  lowers it for the binary decoder).
 - Descriptors are trusted input; hosts that accept sets over the network cap them with
   `pbw_descriptor_set_load_limits()`.
 - Dynamic schema loading: `pbw_descriptor_set_load()` reads a standard `FileDescriptorSet` produced by

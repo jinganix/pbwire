@@ -1,8 +1,8 @@
 ;; Official conformance-suite testee through the Clojure binding, mirroring
 ;; bindings/java/conformance/Testee.java on the same dynamic schema: no
 ;; per-message code, the request names the type and the descriptor set
-;; answers. Binary in -> binary out; JSON/text answer `skipped` (the binding
-;; has no printers, like the Python and Ruby testees).
+;; answers. Binary, JSON and text in -> binary, JSON or text out; JSPB
+;; answers `skipped`, like every other testee here.
 ;;
 ;; Run from bindings/clojure (the parent wires `make conformance-clojure`):
 ;;   java -cp <clojure jars>:../../java/out/classes:../runtime/src:. \
@@ -12,6 +12,9 @@
   (:import (java.io InputStream OutputStream)))
 
 (def ^:private PROTOBUF 1)
+(def ^:private JSON-IN 2)
+(def ^:private TEXT 4)
+(def ^:private CATEGORY-IGNORE-UNKNOWN 3)
 
 (defn- read-request [^InputStream in]
   (let [header (byte-array 4)]
@@ -43,17 +46,15 @@
                               (str "cannot parse ConformanceRequest: "
                                    (:decode-failed request))})
       (let [wanted (:requested_output_format request)
+            category (:test_category request)
             type-name (:message_type request)
-            payload (:protobuf_payload request)]
-        (cond
-          (not= PROTOBUF wanted)
+            payload (:protobuf_payload request)
+            json (:json_payload request)
+            text (:text_payload request)
+            print-unknown (:print_unknown_fields request)]
+        (if-not (contains? #{PROTOBUF JSON-IN TEXT} wanted)
           (pb/encode response-ty {:skipped (str "output format " wanted
                                                 " is not supported")})
-
-          (nil? payload)
-          (pb/encode response-ty {:skipped "only binary input is supported"})
-
-          :else
           (let [t (or (get @types type-name)
                       (let [nt (try (pb/message-type schema type-name)
                                     (catch RuntimeException _ nil))]
@@ -63,16 +64,49 @@
               (pb/encode response-ty {:runtime_error
                                       (str "unknown message type '"
                                            type-name "'")})
-              (let [parsed (try [:ok (pb/decode t payload)]
-                                (catch RuntimeException e
-                                  [:parse-error (str e)]))]
-                (if (= :parse-error (first parsed))
+              ;; A protobuf input decodes to a mutable Message, not a map:
+              ;; that path keeps unknown fields and oneof order, so the
+              ;; canonical re-encode (and the recommended conformance cases
+              ;; that compare against the reference's own output) stay exact.
+              ;; JSON/text input still comes in as a map (the binding's
+              ;; idiomatic form), which is enough for the JSON/text answers.
+              (let [parsed (try
+                             (cond
+                               (some? json)
+                               [:ok nil (pb/from-json t json
+                                          (= CATEGORY-IGNORE-UNKNOWN category) nil)]
+                               (some? text) [:ok nil (pb/from-text t text nil)]
+                               (some? payload) [:ok (pb/decode-message t payload) nil]
+                               :else [:skip "unsupported payload"])
+                             (catch RuntimeException e
+                               [:parse-error (str e)]))]
+                (cond
+                  (= :skip (first parsed))
+                  (pb/encode response-ty {:skipped (second parsed)})
+
+                  (= :parse-error (first parsed))
                   (pb/encode response-ty {:parse_error (second parsed)})
-                  (try (pb/encode response-ty {:protobuf_payload
-                                               (pb/encode t (second parsed))})
-                       (catch RuntimeException e
-                         (pb/encode response-ty {:serialize_error
-                                                 (str e)}))))))))))))
+
+                  :else
+                  (let [[_ msg m] parsed]
+                    (try
+                      (pb/encode response-ty
+                        (cond
+                          (= TEXT wanted)
+                          {:text_payload (if msg
+                                           (.toText msg (boolean print-unknown))
+                                           (pb/text-of-map t m (boolean print-unknown)))}
+                          (= JSON-IN wanted)
+                          {:json_payload (if msg
+                                           (.toJson msg)
+                                           (pb/json-of-map t m))}
+                          :else
+                          {:protobuf_payload (if msg
+                                               (pb/encode-message msg)
+                                               (pb/encode t m))}))
+                      (catch RuntimeException e
+                        (pb/encode response-ty {:serialize_error (str e)}))
+                      (finally (when msg (pb/close! msg))))))))))))))
 
 (defn -main [desc]
   (let [schema (pb/load-schema desc)

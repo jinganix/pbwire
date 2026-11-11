@@ -32,11 +32,14 @@ make bench    # four standard tiers vs elixir-protobuf on matrix3.proto
 
 ## API
 
-- `Pbwire.load_schema([MyApp.Person])` -> `:ok`; loads/replaces the global schema cache (transitive: referenced messages and enums come along). Options `with_utf8: true` (default) and `string_as_list: true` go to `:pbwire.set_opts/1` first.
+- `Pbwire.load_schema([MyApp.Person])` -> `:ok`; loads/replaces the global schema cache (transitive: referenced messages and enums come along). Options `with_utf8: true` (default), `string_as_list: true`, `retain_cap:`, `max_bytes:`, `max_depth:` go to `:pbwire.set_opts/1` first.
 - `Pbwire.purge_schema()` -> `:ok`; clears the schema.
 - `Pbwire.encode(%MyApp.Person{})` -> `binary()`; byte-identical to `Protobuf.encode/1`.
 - `Pbwire.decode(bin, MyApp.Person)` -> struct; equal to `Protobuf.decode(bin, MyApp.Person)`.
 - `Pbwire.encode_msg(struct, mods)` / `Pbwire.decode_msg(bin, mod, mods)`: load the schema on each call.
+- `Pbwire.encode_delimited(struct)` / `Pbwire.decode_delimited(bin, mod)`: varint-length framed codec (`{struct, rest}` back).
+- `Pbwire.encode_deterministic(struct)`: map entries sorted by key (core ordering), repeated order kept.
+- JSON and text are non-goals (struct translation only, no second codec); the conformance testee answers `skipped` for them.
 
 Unknown fields are dropped on decode; missing `required` fields raise
 instead of filling defaults; `NaN` bit-identity is not preserved (any

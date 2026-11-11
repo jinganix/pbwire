@@ -752,6 +752,286 @@ run_scale(pbw_schema *schema, const char *label, int encode)
     return result;
 }
 
+/* ------------------------------------------------------- stack headroom */
+
+/* The nesting cap bounds recursion, so it also bounds stack: hostile input may
+ * legally reach PBW_MAX_DEPTH, and every level costs one frame of the decode /
+ * JSON / encode recursion. Measured worst case at depth 255 is ~1.4 KB per
+ * level in a release build (~1.6 KB for the printers), ~3.8 KB for the encoder
+ * in a -O0 build, and ~1 MB under ASan. A 2 MB worker stack therefore covers
+ * every build shape; a future frame bloat that needs more trips this check
+ * instead of a host's thread. */
+#define STACK_PROBE_BYTES (2u * 1024u * 1024u)
+#define STACK_PROBE_DEPTH (PBW_MAX_DEPTH - 1)
+#define STACK_PROBE_MAX (4096)
+
+static unsigned stack_probe_failures;
+
+/* Reports the status the failing call actually returned, so an injected OOM
+ * inside a probe does not read like a format error. */
+static void
+stack_fail(const char *what, pbw_status status)
+{
+    fprintf(stderr, "stack probe: %s: %s\n", what, pbw_strerror(status));
+    stack_probe_failures++;
+}
+
+/* `depth` nested messages through field 2 (wire type 2), innermost value 1.
+ * Alternates between the two buffers, so the caller re-checks which holds the
+ * result. */
+static size_t
+layered_wire(uint8_t **out)
+{
+    uint8_t *cur = (uint8_t *)malloc(STACK_PROBE_MAX);
+    uint8_t *next = (uint8_t *)malloc(STACK_PROBE_MAX);
+    uint8_t *swap;
+    size_t len = 2;
+    size_t i;
+
+    if (cur == NULL || next == NULL) {
+        free(cur);
+        free(next);
+        *out = NULL;
+        return 0;
+    }
+    cur[0] = 0x08; /* field 1: varint */
+    cur[1] = 0x01;
+    for (i = 0; i < STACK_PROBE_DEPTH; i++) {
+        size_t at = 1;
+        size_t n = len;
+
+        next[0] = 0x12; /* field 2: nested message */
+        while (n >= 0x80) {
+            next[at++] = (uint8_t)(n | 0x80);
+            n >>= 7;
+        }
+        next[at++] = (uint8_t)n;
+        memcpy(next + at, cur, len);
+        len += at;
+        swap = cur;
+        cur = next;
+        next = swap;
+    }
+    free(next);
+    *out = cur;
+    return len;
+}
+
+static void *
+stack_probe(void *arg)
+{
+    pbw_schema *schema = (pbw_schema *)arg;
+    const pbw_descriptor *node = pbw_schema_find(schema, "Node");
+    pbw_message *decoded = NULL;
+    pbw_message *built = NULL;
+    pbw_message *tip = NULL;
+    uint8_t *wire = NULL;
+    uint8_t *enc = NULL;
+    char *json = NULL;
+    char *printed = NULL;
+    size_t len = 0;
+    size_t at = 0;
+    size_t elen = 0;
+    size_t plen = 0;
+    size_t i;
+
+    if (node == NULL) {
+        stack_fail("schema: Node missing", PBW_ERR_INVALID);
+        return NULL;
+    }
+
+    /* wire: decode a cap-deep tree */
+    len = layered_wire(&wire);
+    if (wire == NULL) {
+        stack_fail("wire: allocation", PBW_ERR_NOMEM);
+        return NULL;
+    }
+    {
+        pbw_status status = pbw_decode(node, wire, len, &decoded);
+
+        if (status != PBW_OK) {
+            stack_fail("decode", status);
+        }
+    }
+    pbw_message_free(decoded);
+    free(wire);
+
+    /* JSON: parse and print the same nesting */
+    json = (char *)malloc(STACK_PROBE_MAX);
+    if (json == NULL) {
+        stack_fail("json: allocation", PBW_ERR_NOMEM);
+        return NULL;
+    }
+    for (i = 0; i < STACK_PROBE_DEPTH; i++) {
+        memcpy(json + at, "{\"kid\":", 7);
+        at += 7;
+    }
+    json[at++] = '{';
+    json[at++] = '}';
+    for (i = 0; i < STACK_PROBE_DEPTH; i++) {
+        json[at++] = '}';
+    }
+    decoded = NULL;
+    {
+        pbw_status status = pbw_json_parse(node, json, at, &decoded);
+
+        if (status != PBW_OK) {
+            stack_fail("json parse", status);
+        } else if ((status = pbw_json_print(decoded, &printed, &plen)) != PBW_OK ||
+                   printed == NULL || plen == 0) {
+            stack_fail("json print", status != PBW_OK ? status : PBW_ERR_INVALID);
+        }
+        pbw_free(printed);
+        pbw_message_free(decoded);
+    }
+    free(json);
+
+    /* encode: build the same tree and serialize it */
+    built = pbw_message_new(node);
+    if (built == NULL) {
+        stack_fail("encode: allocation", PBW_ERR_NOMEM);
+        return NULL;
+    }
+    tip = built;
+    for (i = 0; i < STACK_PROBE_DEPTH && tip != NULL; i++) {
+        tip = pbw_message_set_message(tip, 2);
+    }
+    {
+        pbw_status status = PBW_OK;
+
+        if (tip == NULL || (status = pbw_message_set(tip, 1, pbw_value_new_int(1))) != PBW_OK ||
+            (status = pbw_encode(built, &enc, &elen)) != PBW_OK ||
+            enc == NULL) {
+            stack_fail("encode", status != PBW_OK ? status : PBW_ERR_NOMEM);
+        }
+    }
+    pbw_free(enc);
+    pbw_message_free(built);
+    return NULL;
+}
+
+/* The other half of the same contract: a host that cannot spare even the
+ * release-build stack (64 KB here) lowers the nesting cap per call instead.
+ * Without pbw_limits the 255-level input would recurse into a SIGBUS on this
+ * thread, which is why the limit probe runs on one. */
+#define LIMIT_PROBE_BYTES (64u * 1024u)
+
+static void *
+limit_probe(void *arg)
+{
+    pbw_schema *schema = (pbw_schema *)arg;
+    const pbw_descriptor *node = pbw_schema_find(schema, "Node");
+    pbw_json_parse_options opts;
+    pbw_limits lim;
+    pbw_message *out = NULL;
+    pbw_status status;
+    char *json;
+    size_t at = 0;
+    size_t i;
+
+    if (node == NULL) {
+        stack_fail("limit probe: schema: Node missing", PBW_ERR_INVALID);
+        return NULL;
+    }
+    json = (char *)malloc(STACK_PROBE_MAX);
+    if (json == NULL) {
+        stack_fail("limit probe: allocation", PBW_ERR_NOMEM);
+        return NULL;
+    }
+    for (i = 0; i < STACK_PROBE_DEPTH; i++) {
+        memcpy(json + at, "{\"kid\":", 7);
+        at += 7;
+    }
+    json[at++] = '{';
+    json[at++] = '}';
+    for (i = 0; i < STACK_PROBE_DEPTH; i++) {
+        json[at++] = '}';
+    }
+    memset(&opts, 0, sizeof(opts));
+    lim.max_bytes = 0;
+    lim.max_depth = 4;
+    status = pbw_json_parse_limits(node, json, at, &lim, &opts, &out);
+    free(json);
+    if (status != PBW_ERR_LIMIT || out != NULL) {
+        stack_fail("limit probe: cap-depth JSON did not report PBW_ERR_LIMIT",
+                   status);
+        return NULL;
+    }
+    /* the same call without the cap reaches PBW_MAX_DEPTH, which no 64 KB
+     * stack can hold: the test only proves the knob was applied because the
+     * capped parse survived */
+    printf("limit probe: depth cap honoured on a %u KB stack\n",
+           (unsigned)(LIMIT_PROBE_BYTES / 1024));
+    return NULL;
+}
+
+/* One thread, explicit stack: the probe must finish on it. */
+static unsigned
+run_stack_bound(void)
+{
+    pbw_schema *schema = pbw_schema_new();
+    pbw_descriptor *node;
+    pbw_field *field;
+    pthread_attr_t attr;
+    pthread_t thread;
+    unsigned failures = 0;
+
+    if (schema == NULL) {
+        fprintf(stderr, "stack probe: cannot create a schema\n");
+        return 1;
+    }
+    node = pbw_schema_add_message(schema, "Node");
+    pbw_message_add_field(node, "value", 1, PBW_TYPE_INT32,
+                          PBW_LABEL_OPTIONAL);
+    field = pbw_message_add_field(node, "kid", 2, PBW_TYPE_MESSAGE,
+                                  PBW_LABEL_OPTIONAL);
+    pbw_field_set_type_name(field, "Node");
+    if (pbw_schema_link(schema) != PBW_OK) {
+        fprintf(stderr, "stack probe: schema: %s\n", pbw_schema_error(schema));
+        pbw_schema_free(schema);
+        return 1;
+    }
+
+    stack_probe_failures = 0;
+    pthread_attr_init(&attr);
+    if (pthread_attr_setstacksize(&attr, STACK_PROBE_BYTES) != 0) {
+        fprintf(stderr, "stack probe: cannot set a %u byte stack\n",
+                (unsigned)STACK_PROBE_BYTES);
+        failures = 1;
+    } else if (pthread_create(&thread, &attr, stack_probe, schema) != 0) {
+        fprintf(stderr, "stack probe: cannot start the thread\n");
+        failures = 1;
+    } else {
+        pthread_join(thread, NULL);
+        if (stack_probe_failures != 0) {
+            fprintf(stderr, "stack probe: %u failure(s) at depth %d\n",
+                    stack_probe_failures, (int)STACK_PROBE_DEPTH);
+            failures = 1;
+        } else {
+            printf("stack probe: PBW_MAX_DEPTH fits a %u KB worker stack\n",
+                   (unsigned)(STACK_PROBE_BYTES / 1024));
+        }
+    }
+    /* ...and the per-call cap works on a stack PBW_MAX_DEPTH could not use */
+    if (failures == 0) {
+        if (pthread_attr_setstacksize(&attr, LIMIT_PROBE_BYTES) != 0 ||
+            pthread_create(&thread, &attr, limit_probe, schema) != 0) {
+            fprintf(stderr, "stack probe: cannot start the limit thread\n");
+            failures = 1;
+        } else {
+            pthread_join(thread, NULL);
+            if (stack_probe_failures != 0) {
+                fprintf(stderr, "limit probe: %u failure(s)\n",
+                        stack_probe_failures);
+                failures = 1;
+            }
+        }
+    }
+    pthread_attr_destroy(&attr);
+    pbw_schema_free(schema);
+    return failures;
+}
+
 /* ---------------------------------------------------------------- schema */
 
 static pbw_schema *
@@ -820,6 +1100,7 @@ main(void)
     failures += run(schema, "reflect", run_reflect, NULL);
     failures += run(schema, "load", run_dynamic_load, NULL);
     failures += run(schema, "loaded-shared", run_shared_loaded, outer);
+    failures += run_stack_bound();
     /* PBW_SKIP_SCALE=1 (used by `make coverage`): gcov edge counters are
      * shared globals, so instrumented threads serialize on them and any
      * throughput ratio is noise. The detector still runs under plain

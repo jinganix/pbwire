@@ -104,3 +104,20 @@ dynamic-only users; `register=false` drops the lazy per-isolate load so
 dual registration) must run first; `registry=false` drops `messageNames` +
 `preload()`. See `../../codegen/README.md`
 and `../../codegen/testdata/TESTSPEC.md` (T1–T6, run by `tests/generated_test.dart`).
+
+## Core coverage
+
+Every core entry point the binding adds is a thin `dart:ffi` wrapper over the
+same C implementation:
+
+| member | what it does |
+|---|---|
+| `Type.parseJson(text, ignoreUnknown:, maxBytes:, maxDepth:)` / `Message.printJson()` | JSON mapping, bounded |
+| `Type.parseText(text, maxBytes:, maxDepth:)` / `Message.printText([printUnknown])` | text format, bounded |
+| `Message.encodeDeterministic()` | map entries sorted by key |
+| `Message.encodeDelimited()` / `Type.decodeDelimited(wire)` | framing, with `consumed` |
+| `Message.encodedSize()` / `Message.encodeTo(nativeBuffer, cap)` | exact size; encode into caller-allocated native memory |
+| `Type.visit(wire, cb)` | single-level scan, no tree (`NativeCallable`) |
+| `Message.anyTypeUrl()`/`anyPayload()`, `Type.anyPack(...)`, `Message.timestampMillis()`/`Type.timestampFromMillis(ms)` (+ duration), `Message.fieldMaskPaths()` | WKT helpers |
+| `Schema.serviceCount`/`serviceAt`/`service(name)`, `Schema.resolveMethod(service, method)` | routing metadata |
+| `decodeLimits(..., maxBytes:, maxDepth:)` and the same options on every parse | input bounds |

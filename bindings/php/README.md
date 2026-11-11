@@ -135,3 +135,21 @@ registration) must run first; `registry=false` drops `MESSAGE_NAMES` +
 (protobuf v36.2 `php/src`), `tests/generated_test.php` is the oracle-free
 smoke, and `examples/roundtrip.php` assigns typed fields only. See
 `../../codegen/README.md`.
+
+## Core coverage
+
+Everything the C ABI exposes is reachable from PHP, through the same core (no
+second codec):
+
+| member | what it does |
+|---|---|
+| `Type::fromJson($json[, $ignoreUnknown[, $limits]])` / `Message::toJson()` | JSON mapping in and out |
+| `Type::fromText($text[, $limits])` / `Message::toText([$printUnknown])` | text format in and out |
+| `Message::encodeDeterministic()` | map entries sorted by key |
+| `Message::encodeDelimited()` / `Message::encodeDelimitedTo($cap)` / `Type::decodeDelimited($wire)` | length-prefixed framing |
+| `Message::encodedSize()` / `Message::encodeTo($cap)` | exact size, caller-owned buffer |
+| `Message::timestampMillis()` / `Type::timestampFromMillis($ms)` (and the duration twins) | Timestamp/Duration as milliseconds |
+| `Message::anyPack($typeUrl, $payload)`, `Message::anyTypeUrl()`, `Message::anyPayload()` | `google.protobuf.Any` |
+| `Message::fieldmaskPaths()` | `google.protobuf.FieldMask` |
+| `Schema::services()`, `Schema::service($name)`, `Schema::resolve($service, $method)` | routing metadata, no RPC |
+| `$limits = ['max_bytes' => n, 'max_depth' => n]` | bounds on every decode/parse/load entry point |

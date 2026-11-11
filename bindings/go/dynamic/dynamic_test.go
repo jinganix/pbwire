@@ -212,6 +212,145 @@ func TestHotSwap(t *testing.T) {
 	}
 }
 
+func TestExtendedCoverage(t *testing.T) {
+	s, err := Load(testDesc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	typ, err := s.Message("structtest.Scalars3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer typ.Close()
+	m := fillScalars(t, typ, 1)
+	defer m.Close()
+
+	wire, err := m.Encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	size, err := m.EncodedSize()
+	if err != nil || size != uint64(len(wire)) {
+		t.Fatalf("encoded size = %d, want %d (err %v)", size, len(wire), err)
+	}
+	if ok, err := m.IsInitialized(); err != nil || !ok {
+		t.Fatalf("initialized = %v, err %v", ok, err)
+	}
+	det, err := m.EncodeDeterministic()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(wire, det) {
+		t.Fatal("deterministic encode differs without map fields")
+	}
+
+	framed, err := m.EncodeDelimited()
+	if err != nil {
+		t.Fatal(err)
+	}
+	back, consumed, err := typ.DecodeDelimited(append(framed, framed...))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer back.Close()
+	if consumed != len(framed) {
+		t.Fatalf("consumed = %d, want %d", consumed, len(framed))
+	}
+	again, err := back.Encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(wire, again) {
+		t.Fatal("delimited round trip mismatch")
+	}
+
+	js, err := m.ToJSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fromJSON, err := typ.ParseJSON(js, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer fromJSON.Close()
+	jwire, err := fromJSON.Encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(wire, jwire) {
+		t.Fatal("json round trip mismatch")
+	}
+	if _, err := typ.ParseJSON(`{"nope":1}`, false); err == nil {
+		t.Fatal("json with unknown field must fail without ignore")
+	}
+	if _, err := typ.ParseJSON(`{"nope":1}`, true); err != nil {
+		t.Fatalf("json ignore unknown: %v", err)
+	}
+	if _, err := typ.ParseJSONLimits(js, false, uint64(len(js))+1, 0); err != nil {
+		t.Fatalf("json parse limits: %v", err)
+	}
+	if _, err := typ.ParseJSONLimits(js, false, 1, 0); err == nil {
+		t.Fatal("json parse must honor maxBytes")
+	}
+
+	txt, err := m.ToText(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fromText, err := typ.ParseText(txt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := typ.ParseTextLimits(txt, 1, 0); err == nil {
+		t.Fatal("text parse must honor maxBytes")
+	}
+	defer fromText.Close()
+	twire, err := fromText.Encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(wire, twire) {
+		t.Fatal("text round trip mismatch")
+	}
+
+	limited, err := typ.DecodeLimits(wire, uint64(len(wire)), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	limited.Close()
+	if _, err := typ.DecodeLimits(wire, 1, 0); err == nil {
+		t.Fatal("tiny maxBytes must fail")
+	}
+
+	if _, _, err := s.ResolveMethod("no.Such", "Nope"); err == nil {
+		t.Fatal("unknown service must fail to resolve")
+	}
+
+	var seen int
+	var names []string
+	if err := typ.Visit(wire, 0, 0, func(f VisitField) bool {
+		seen++
+		names = append(names, f.Name)
+		return true
+	}); err != nil {
+		t.Fatalf("visit: %v", err)
+	}
+	if seen == 0 {
+		t.Fatal("visit saw no fields")
+	}
+	var first string
+	if err := typ.Visit(wire, 0, 0, func(f VisitField) bool {
+		first = f.Name
+		return false // a stop is not an error
+	}); err != nil {
+		t.Fatalf("visit stop: %v", err)
+	}
+	if first == "" || first != names[0] {
+		t.Fatalf("visit stop saw %q, want %q", first, names[0])
+	}
+}
+
 // A view into a tree must not touch the arena after the root was closed:
 // Close frees the whole tree, and the view only keeps the root alive as a
 // Go pointer.

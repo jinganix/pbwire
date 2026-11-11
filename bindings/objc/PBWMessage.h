@@ -104,6 +104,14 @@ NS_ASSUME_NONNULL_BEGIN
 /* Wire bytes of this message. */
 - (nullable NSData *)encode:(NSError **)error;
 
+/* Wire bytes with map entries sorted by key, so equal messages encode to
+ * equal bytes regardless of insertion order. */
+- (nullable NSData *)encodeDeterministic:(NSError **)error;
+
+/* One length-delimited frame (varint length + message), the standard framing
+ * for a stream of messages. */
+- (nullable NSData *)encodeDelimited:(NSError **)error;
+
 /* Wire bytes through a workspace's reusable buffer (copied out, so the
  * result outlives the next use of the context). */
 - (nullable NSData *)encodeWithContext:(PBWContext *)context
@@ -116,6 +124,14 @@ NS_ASSUME_NONNULL_BEGIN
 - (nullable PBWMessage *)parseJSONString:(NSString *)text
                                    error:(NSError **)error;
 
+/* Same, but unknown field names are skipped instead of failing when
+ * ignoreUnknownFields is YES, and with explicit bounds (zero fields mean
+ * the defaults). */
+- (nullable PBWMessage *)parseJSONString:(NSString *)text
+                     ignoreUnknownFields:(BOOL)ignoreUnknownFields
+                                  limits:(pbw_limits)limits
+                                   error:(NSError **)error;
+
 /* Protobuf text format of this message. */
 - (nullable NSString *)textFormat:(NSError **)error;
 
@@ -123,8 +139,72 @@ NS_ASSUME_NONNULL_BEGIN
 - (nullable PBWMessage *)parseTextFormat:(NSString *)text
                                    error:(NSError **)error;
 
+/* Same with explicit bounds (zero fields mean the defaults). */
+- (nullable PBWMessage *)parseTextFormat:(NSString *)text
+                                  limits:(pbw_limits)limits
+                                   error:(NSError **)error;
+
+/* Well-known-type helpers over the dynamic API: the message is read as the
+ * named shape when its fields 1 and 2 match (a hand-built mirror with the
+ * same numbers works too, the core never special-cases WKTs). The pack
+ * direction makes a new message of the same type as this one, which is the
+ * template carrying the right descriptor. */
+
+/* field 1 (type_url) of an Any-shaped message, or nil when absent. */
+- (nullable NSString *)anyTypeURL;
+
+/* field 2 (value) bytes of an Any-shaped message, or nil when absent. */
+- (nullable NSData *)anyPayload;
+
+/* A new message of the same type holding typeURL + payload as fields 1/2. */
+- (nullable PBWMessage *)packAnyWithTypeURL:(NSString *)typeURL
+                                    payload:(NSData *)payload
+                                      error:(NSError **)error;
+
+/* A Timestamp-shaped message as milliseconds (fields 1/2: seconds/nanos).
+ * Fails on out-of-range nanos or a missing seconds field. */
+- (nullable NSNumber *)timestampMillis:(NSError **)error;
+
+/* A new message of the same type holding ms as a Timestamp. */
+- (nullable PBWMessage *)messageWithTimestampMillis:(int64_t)ms
+                                              error:(NSError **)error;
+
+/* A Duration-shaped message as milliseconds. Same failures as
+ * timestampMillis:. */
+- (nullable NSNumber *)durationMillis:(NSError **)error;
+
+/* A new message of the same type holding ms as a Duration. */
+- (nullable PBWMessage *)messageWithDurationMillis:(int64_t)ms
+                                             error:(NSError **)error;
+
+/* FieldMask paths (field 1, repeated string) without materializing the
+ * list; empty when the message holds none. */
+- (nonnull NSArray<NSString *> *)fieldMaskPaths;
+
 /* Decode data as a message of the same type. */
 - (nullable PBWMessage *)decode:(NSData *)data error:(NSError **)error;
+
+/* Same with explicit bounds: zero fields mean the defaults (no byte cap and
+ * PBW_MAX_DEPTH nesting), a max_depth above PBW_MAX_DEPTH clamps to it. */
+- (nullable PBWMessage *)decode:(NSData *)data
+                         limits:(pbw_limits)limits
+                          error:(NSError **)error;
+
+/* Decode one length-delimited frame (varint length + message) as a message
+ * of the same type. *consumed is the prefix + frame bytes on success (0
+ * otherwise, may be NULL), so concatenated frames decode in a loop by
+ * advancing past it. A truncated frame fails. */
+- (nullable PBWMessage *)decodeDelimited:(NSData *)data
+                                consumed:(nullable NSUInteger *)consumed
+                                   error:(NSError **)error;
+
+/* Same with explicit bounds; identical to decodeDelimited:consumed:error:
+ * with default bounds. A declared frame length past limits.max_bytes fails
+ * with PBW_ERR_LIMIT before the body is decoded. */
+- (nullable PBWMessage *)decodeDelimited:(NSData *)data
+                                consumed:(nullable NSUInteger *)consumed
+                                  limits:(pbw_limits)limits
+                                   error:(NSError **)error;
 
 /* Decode into a workspace: the message lives in its allocator (no per-value
  * malloc after warmup), so it retains the context and frees nothing itself.

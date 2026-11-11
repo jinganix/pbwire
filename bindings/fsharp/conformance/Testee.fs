@@ -9,9 +9,8 @@
 // schema-driven, it needs no per-message code: the request names the message
 // type, the descriptor set answers with the schema.
 //
-// Supported: binary in -> binary out. JSON and text output need printers the
-// binding does not expose, so those requests answer `skipped` and the runner
-// reports them as skipped rather than failed.
+// Supported: binary, JSON and text in -> binary, JSON or text out. JSPB
+// answers `skipped`, like every other testee here.
 //
 // `parse` walks and validates the whole payload before returning, and a parsed
 // message keeps the bytes it was parsed from, so `encode` hands them back: a
@@ -29,11 +28,18 @@ open Pbwire.FSharp
 
 // ConformanceRequest.requested_output_format values.
 let protobuf = 1
+let json = 2
+let text = 4
+
+// The suite asks for unknown fields to be dropped in some text tests.
+let categoryIgnoreUnknown = 3
 
 // ConformanceResponse field numbers: exactly one result field is set.
 let parseError = "parse_error"
 let runtimeError = "runtime_error"
 let protobufPayload = "protobuf_payload"
+let jsonPayload = "json_payload"
+let textPayload = "text_payload"
 let skipped = "skipped"
 let serializeError = "serialize_error"
 
@@ -63,12 +69,14 @@ let handle (schema: Schema) (requestTy: MessageType) (responseTy: MessageType) (
     | Ok req ->
         use req = req
         let wanted = Pbwire.getInt64 req "requested_output_format"
+        let category = Pbwire.getInt64 req "test_category"
+        let printUnknown = Pbwire.getBool req "print_unknown_fields"
         let name = Pbwire.tryString req "message_type" |> Option.defaultValue ""
         let payload = Pbwire.tryBytes req "protobuf_payload"
-        if wanted <> int64 protobuf then
+        let jsonIn = Pbwire.tryString req "json_payload"
+        let textIn = Pbwire.tryString req "text_payload"
+        if wanted <> int64 protobuf && wanted <> int64 json && wanted <> int64 text then
             answer responseTy skipped $"output format %d{wanted} is not supported"
-        elif payload.IsNone then
-            answer responseTy skipped "only binary input is supported"
         else
             let ty =
                 try
@@ -78,12 +86,31 @@ let handle (schema: Schema) (requestTy: MessageType) (responseTy: MessageType) (
             match ty with
             | None -> answer responseTy runtimeError $"unknown message type '%s{name}'"
             | Some ty ->
-                match Pbwire.tryParse ty payload.Value with
+                let parsed =
+                    try
+                        if jsonIn.IsSome then
+                            Ok(Pbwire.parseJson ty jsonIn.Value
+                                   (category = int64 categoryIgnoreUnknown))
+                        elif textIn.IsSome then
+                            Ok(Pbwire.parseText ty textIn.Value)
+                        elif payload.IsSome then
+                            Pbwire.tryParse ty payload.Value
+                        else
+                            Error(PbwireException(-1, "unsupported payload"))
+                    with :? PbwireException as e ->
+                        Error e
+                match parsed with
                 | Error e -> answer responseTy parseError e.Message
                 | Ok parsed ->
-                    use parsed = parsed
                     try
-                        answerBytes responseTy (parsed.Encode())
+                        let out = Pbwire.printJson parsed
+                        let txt = Pbwire.printText parsed printUnknown
+                        if wanted = int64 json then
+                            answer responseTy jsonPayload out
+                        elif wanted = int64 text then
+                            answer responseTy textPayload txt
+                        else
+                            answerBytes responseTy (parsed.Encode())
                     with :? PbwireException as e ->
                         answer responseTy serializeError e.Message
 

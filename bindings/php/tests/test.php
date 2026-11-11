@@ -247,6 +247,134 @@ try {
     check(str_contains($e->getMessage(), 'closed'), 'Value after owner close throws');
 }
 
+/* ------------------------------------------------- verify-and-fill extras */
+
+/*
+ * Core coverage the FFI wrapper now passes through: deterministic encode,
+ * encoded_size/encode_to, delimited framing, JSON and text mappings, input
+ * limits, services, and the well-known-type helpers. (visit and encode_sink
+ * have no PHP form: FFI cannot pass a PHP closure as a C callback.)
+ */
+
+$det = $ty->newMessage();
+$det->setInt('i32', -7)->setString('str', 'det');
+check($det->encodeDeterministic() === $det->encode(), 'deterministic matches encode');
+check($det->encodedSize() === strlen($det->encode()), 'encoded_size matches');
+$full = $det->encode();
+check($det->encodeTo(strlen($full) + 12) === $full, 'encode_to sized cap works');
+try {
+    $det->encodeTo(4);
+    check(false, 'encode_to short cap accepted');
+} catch (Error) {
+    check(true, 'encode_to rejects a short cap');
+}
+
+$frame = $det->encodeDelimited();
+$part = $ty->decodeDelimited($frame);
+check($part['read'] === strlen($frame), 'decodeDelimited reads the frame');
+check($part['message']->encode() === $full, 'delimited round trip is wire-equal');
+check($det->encodeDelimitedTo(strlen($frame) + 12) === $frame, 'encode_delimited_to matches');
+try {
+    $det->encodeDelimitedTo(4);
+    check(false, 'encode_delimited_to short cap accepted');
+} catch (Error) {
+    check(true, 'encode_delimited_to rejects a short cap');
+}
+try {
+    $ty->decodeDelimited(substr($frame, 0, 2));
+    check(false, 'truncated frame accepted');
+} catch (Error) {
+    check(true, 'truncated frame');
+}
+
+$json = $det->toJson();
+check(str_contains($json, '"str":"det"'), 'toJson prints');
+check($ty->fromJson($json)->encode() === $full, 'JSON round trip is wire-equal');
+try {
+    $ty->fromJson('{nope');
+    check(false, 'malformed JSON accepted');
+} catch (Error) {
+    check(true, 'malformed JSON');
+}
+try {
+    $ty->fromJson('{"unknown_field":1}');
+    check(false, 'unknown JSON field accepted');
+} catch (Error) {
+    check(true, 'unknown JSON field');
+}
+check($ty->fromJson('{"unknown_field":1}', true)->getInt('i32') === 0, 'ignored unknown JSON field reads as absent');
+
+$text = $det->toText();
+check(str_contains($text, 'str: "det"'), 'toText prints');
+check($ty->fromText($text)->encode() === $full, 'text round trip is wire-equal');
+try {
+    $ty->fromText('str: ');
+    check(false, 'malformed text accepted');
+} catch (Error) {
+    check(true, 'malformed text');
+}
+
+/* Limits reject oversized input on every entry point. */
+foreach ([
+    ['decode', fn() => $ty->decode($full, ['max_bytes' => 4])],
+    ['fromJson', fn() => $ty->fromJson('{"str":"x"}', false, ['max_bytes' => 4])],
+    ['fromText', fn() => $ty->fromText('str: "x"', ['max_bytes' => 4])],
+    ['decodeDelimited', fn() => $ty->decodeDelimited($frame, ['max_bytes' => 2])],
+    ['fromBytes', fn() => Schema::fromBytes(file_get_contents($desc), ['max_bytes' => 4])],
+] as [$name, $fn]) {
+    try {
+        $fn();
+        check(false, "$name max_bytes accepted");
+    } catch (Error) {
+        check(true, "$name max_bytes");
+    }
+}
+check($ty->decode($full, [])->getString('str') === 'det', 'empty limits mean defaults');
+
+/* Services and well-known types through the shared fixture. */
+$adv = Schema::fromFile(dirname(__DIR__, 3) . '/tests/data/adv.desc');
+check($adv->services() === ['pbwire.adv.Jobs'], 'services lists Jobs');
+$jobs = $adv->service('pbwire.adv.Jobs');
+check($jobs['name'] === 'pbwire.adv.Jobs' && count($jobs['methods']) === 2, 'service has two methods');
+check($jobs['methods'][0]['name'] === 'Get' && $jobs['methods'][0]['input_type'] === 'pbwire.adv.Job', 'unary resolves');
+check($jobs['methods'][0]['client_streaming'] === false && $jobs['methods'][0]['server_streaming'] === false, 'unary flags decode');
+check($jobs['methods'][1]['client_streaming'] === true && $jobs['methods'][1]['server_streaming'] === true, 'streaming flags decode');
+$routed = $adv->resolve('pbwire.adv.Jobs', 'Get');
+check($routed['input']->name() === 'pbwire.adv.Job' && $routed['output']->name() === 'pbwire.adv.Job', 'resolve maps names');
+try {
+    $adv->service('pbwire.adv.Nope');
+    check(false, 'unknown service accepted');
+} catch (Error) {
+    check(true, 'unknown service');
+}
+try {
+    $adv->resolve('pbwire.adv.Jobs', 'Nope');
+    check(false, 'unknown method accepted');
+} catch (Error) {
+    check(true, 'unknown method');
+}
+
+$jobTy = $routed['input'];
+$job = $jobTy->newMessage();
+$job->setString('id', '7');
+$packed = $adv->message('google.protobuf.Any')->anyPack('type.googleapis.com/pbwire.adv.Job', $job->encode());
+check($packed->anyTypeUrl() === 'type.googleapis.com/pbwire.adv.Job', 'any keeps the type url');
+check($adv->message('pbwire.adv.Job')->decode($packed->anyPayload())->getString('id') === '7', 'any keeps the payload');
+$ts = $adv->message('google.protobuf.Timestamp')->timestampFromMillis(1501);
+check($ts->timestampMillis() === 1501, 'timestamp millis round trip');
+$du = $adv->message('google.protobuf.Duration')->durationFromMillis(-2500);
+check($du->durationMillis() === -2500, 'duration millis round trip');
+$fm = $adv->message('google.protobuf.FieldMask')->fromJson('{"paths":["a.b","c"]}');
+check($fm->fieldmaskPaths() === ['a.b', 'c'], 'fieldmask paths read');
+try {
+    $ty->anyPack('t', 'p');
+    check(false, 'anyPack on a non-Any type accepted');
+} catch (Error) {
+    check(true, 'anyPack rejects a non-Any type');
+}
+
+echo "OK   $checks checks passed\n";
+
 /* A Type caches its Field handles; that cycle must be collectable, or the
  * native schema behind an unreachable Type never goes away. */
 $cycleSchema = Schema::fromFile($desc);

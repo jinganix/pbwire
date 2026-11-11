@@ -331,7 +331,8 @@ the NUL:
 /* JSON mapping: well-known types, extensions as [full.name], quoted 64-bit
  * integers, standard base64, enums by name, no unknown fields. */
 pbw_status pbw_json_print(const pbw_message *msg, char **out, size_t *len);
-/* pbw_json_parse_opts takes pbw_json_parse_options{ignore_unknown_fields}. */
+/* pbw_json_parse_opts takes pbw_json_parse_options{ignore_unknown_fields}.
+ * pbw_json_parse_limits / pbw_text_parse_limits take pbw_limits as well. */
 pbw_status pbw_json_parse(const pbw_descriptor *desc, const char *text,
                           size_t len, pbw_message **out);
 
@@ -352,9 +353,13 @@ Both printers emit the reference implementation's exact spelling, and both
 parsers return the reference's verdict on the official conformance inputs — see
 [testing.md](testing.md) for what pins that.
 
-Limits apply to the parsers too (the JSON and text parsers share the binary
-decoder's `PBW_MAX_DEPTH` nesting cap and its bounds checks), and their verdicts
-are fuzzed against the reference parser — 40,000 JSON and 60,000 text mutants in
+Limits apply to the parsers too: `pbw_json_parse_limits()` and
+`pbw_text_parse_limits()` take the same `pbw_limits{max_bytes, max_depth}` the
+binary decoder does, checked before any recursion, so a thread with a small
+stack can lower the nesting cap for one call instead of trusting
+`PBW_MAX_DEPTH` (in JSON an array element also costs a level, so a repeated
+message chain spends two per message). Their verdicts are fuzzed against the
+reference parser — 40,000 JSON and 60,000 text mutants in
 `make difftest` must be accepted or rejected exactly like libprotobuf. See
 [testing.md](testing.md).
 

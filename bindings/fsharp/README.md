@@ -93,8 +93,8 @@ dotnet run --project conformance -- ../../build/conformance.desc   # needs `make
 only (the request/response envelopes are dynamic messages too, exactly like the
 Java testee). Binary in → binary out is fully covered (1389 successes, 0
 unexpected failures — the same 2 expected failures the C testee lists in
-`conformance/failure_list_pbwire.txt`); JSON and text answer `skipped`, because
-the binding exposes no printers. The testee binary needs the .NET runtime on
+`conformance/failure_list_pbwire.txt`); JSON and text in both directions go
+through the C# binding's printers and parsers, so only JSPB answers `skipped`. The testee binary needs the .NET runtime on
 the runner's path (`DOTNET_ROOT_ARM64` when `dotnet` lives outside
 `/usr/local/share/dotnet`, e.g. Homebrew).
 
@@ -113,3 +113,19 @@ is shared, so one tree belongs to one thread, like the C core.
 dynamic-only users; `register=false` drops the eager load so `initSchema`
 (embedded bytes) or `useSchema` (an external `Schema`, dual registration)
 must run first; `registry=false` drops `messageNames` + `preload`.
+
+## Core coverage
+
+The facade passes every call to the C# binding, so the whole core is reachable
+without a second implementation:
+
+| member | what it does |
+|---|---|
+| `printJson`/`parseJson` and `printText`/`parseText` | JSON mapping and text format |
+| `encodeDeterministic` | map entries sorted by key |
+| `encodeDelimited`/`decodeDelimited` | framing, with `consumed` |
+| `encodedSize` | exact size without writing |
+| `visit` | single-level scan; `false` stops it without throwing |
+| `anyPack`, `anyTypeUrl`/`anyPayload`, `timestampFromMillis`/`timestampMillis` (+ duration), `fieldMaskPaths` | WKT helpers |
+| `serviceCount`/`serviceAt`/`service`, `resolveMethod` | routing metadata |
+| `decodeLimits(ty, wire, maxBytes, maxDepth)` | input bounds |

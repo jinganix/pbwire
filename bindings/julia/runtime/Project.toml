@@ -1,6 +1,6 @@
 name = "Pbwire"
 uuid = "e2e83456-3f0f-418d-abd2-efc0ef19ddc8"
-version = "0.1.15"
+version = "0.1.16"
 
 [deps]
 Libdl = "8f399da3-3557-5675-b5ff-fb832c97cbdb"

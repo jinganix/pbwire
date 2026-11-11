@@ -159,6 +159,30 @@ String do not change the message. A borrowed sub-message returned by `get` is
 owned by its parent: it keeps the parent alive and refuses to be used after the
 parent is closed.
 
+### Contexts and pools
+
+`Pbwire::Context` is the C `pbw_ctx` workspace (an arena plus a reusable encode
+buffer), and `Pbwire::Pool` is a bounded freelist of them, for a server that
+decodes in a tight loop:
+
+```ruby
+ctx = Pbwire::Context.new
+ctx.decode(schema, "pkg.Msg", wire)   # read-only view, dies with the next reset
+ctx.encode(msg)                       # into the context's buffer
+ctx.used                              # bytes held now
+ctx.retain_cap = 64 * 1024            # resident ceiling (1 MiB default)
+ctx.reset                             # frees everything since the last reset
+
+pool = Pbwire::Pool.new(max_idle: 8, retain_cap: 64 * 1024)
+ctx = pool.acquire
+# ... use ctx ...
+pool.release(ctx)                     # already reset for the next acquire
+```
+
+A message decoded through a context borrows it: after `reset` (or a pool
+`release`) it raises `"context was reset"` instead of reading freed arena
+memory.
+
 ## Repeated fields, maps, groups
 
 Repeated scalars (packed or unpacked on the wire), repeated strings/bytes and

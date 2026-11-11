@@ -28,6 +28,7 @@
 #define NAPI_VERSION 8
 #include <node_api.h>
 
+#include <math.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -1964,6 +1965,129 @@ new_message_value(napi_env env, desc_handle *desc, napi_value desc_object,
     return out;
 }
 
+/* Optional {maxBytes, maxDepth} limits argument: absent, null or undefined
+ * means the core defaults (no byte cap, PBW_MAX_DEPTH nesting). */
+/* Whether a non-negative integral double fits the target's size_t. */
+static int
+fits_size_t(double value)
+{
+    return value <= (double)SIZE_MAX;
+}
+
+static int
+parse_limits(napi_env env, napi_value *argv, size_t argc, size_t index,
+             pbw_limits *storage, const pbw_limits **out)
+{
+    napi_valuetype kind;
+    napi_value prop;
+    double number;
+    uint32_t depth;
+
+    *out = NULL;
+    if (index >= argc) {
+        return 1;
+    }
+    if (napi_typeof(env, argv[index], &kind) != napi_ok) {
+        return 0;
+    }
+    if (kind == napi_undefined || kind == napi_null) {
+        return 1;
+    }
+    if (kind != napi_object) {
+        fail_argument(env, "limits must be an object");
+        return 0;
+    }
+    memset(storage, 0, sizeof(*storage));
+    if (napi_get_named_property(env, argv[index], "maxBytes", &prop) !=
+            napi_ok ||
+        napi_typeof(env, prop, &kind) != napi_ok) {
+        return 0;
+    }
+    if (kind != napi_undefined && kind != napi_null) {
+        /* A JS number is a double: reject NaN, Infinity, a fraction and
+         * anything a size_t cannot hold, so a bad cap fails loudly instead of
+         * truncating to 0 ("no cap") or wrapping to a huge one. */
+        if (napi_get_value_double(env, prop, &number) != napi_ok ||
+            !(number >= 0) || number != number ||
+            number != floor(number) ||
+            number > (double)9007199254740991.0 ||
+            !fits_size_t(number)) {
+            fail_argument(env, "maxBytes must be a non-negative integer");
+            return 0;
+        }
+        storage->max_bytes = (size_t)number;
+    }
+    if (napi_get_named_property(env, argv[index], "maxDepth", &prop) !=
+            napi_ok ||
+        napi_typeof(env, prop, &kind) != napi_ok) {
+        return 0;
+    }
+    if (kind != napi_undefined && kind != napi_null) {
+        /* napi_get_value_uint32 converts a negative double instead of
+         * failing (-1 becomes 4294967295), so validate the double first. */
+        double depth_value;
+
+        if (napi_get_value_double(env, prop, &depth_value) != napi_ok ||
+            !(depth_value >= 1) || depth_value != depth_value ||
+            depth_value != floor(depth_value) ||
+            depth_value > (double)UINT32_MAX) {
+            fail_argument(env, "maxDepth must be a positive integer");
+            return 0;
+        }
+        depth = (uint32_t)depth_value;
+        storage->max_depth = depth;
+    }
+    *out = storage;
+    return 1;
+}
+
+/* Wraps one message descriptor: a scratch encode context plus the cached
+ * field table, holding a strong reference to the schema object. */
+static napi_value
+new_desc_value(napi_env env, napi_value schema_value, schema_handle *schema,
+               const pbw_descriptor *desc)
+{
+    napi_value out;
+    desc_handle *handle = calloc(1, sizeof(*handle));
+
+    if (handle == NULL) {
+        return fail_memory(env);
+    }
+    handle->schema = schema;
+    handle->enc = pbw_ctx_new();
+    handle->table = table_for(schema, desc);
+    if (handle->enc == NULL || handle->table == NULL) {
+        pbw_ctx_free(handle->enc);
+        free(handle);
+        return fail_memory(env);
+    }
+    if (napi_create_reference(env, schema_value, 1, &handle->schema_ref) !=
+        napi_ok) {
+        finalize_desc(env, handle, NULL);
+        return fail_memory(env);
+    }
+    out = new_handle(env, handle, finalize_desc);
+    if (out == NULL) {
+        finalize_desc(env, handle, NULL);
+    }
+    return out;
+}
+
+/* Wraps a fresh tree in a message handle holding the descriptor. */
+static napi_value
+new_tree_value(napi_env env, desc_handle *desc, napi_value desc_object,
+               pbw_message *msg)
+{
+    message_handle *handle = calloc(1, sizeof(*handle));
+
+    if (handle == NULL) {
+        pbw_message_free(msg);
+        return fail_memory(env);
+    }
+    handle->msg = msg;
+    return new_message_value(env, desc, desc_object, handle);
+}
+
 /* ---------------------------------------------------------- entry points */
 
 static napi_value
@@ -1981,21 +2105,30 @@ abi_version(napi_env env, napi_callback_info info)
 static napi_value
 load_descriptor_set(napi_env env, napi_callback_info info)
 {
-    napi_value argv[1];
+    napi_value argv[2];
+    size_t argc = 2;
     napi_value out;
     schema_handle *handle;
     pbw_schema *schema = NULL;
     pbw_status status;
+    pbw_limits storage;
+    const pbw_limits *limits;
     void *data = NULL;
     size_t len = 0;
 
-    if (!get_args(env, info, argv, 1)) {
+    if (napi_get_cb_info(env, info, &argc, argv, NULL, NULL) != napi_ok ||
+        argc < 1) {
+        napi_throw_type_error(env, NULL,
+                              "pbwire: expected (bytes, limits?)");
+        return NULL;
+    }
+    if (!parse_limits(env, argv, argc, 1, &storage, &limits)) {
         return NULL;
     }
     if (napi_get_buffer_info(env, argv[0], &data, &len) != napi_ok) {
         return fail_argument(env, "loadDescriptorSet expects a Buffer");
     }
-    status = pbw_descriptor_set_load(data, len, &schema);
+    status = pbw_descriptor_set_load_limits(data, len, limits, &schema);
     if (status != PBW_OK) {
         char message[512];
 
@@ -2024,7 +2157,6 @@ descriptor(napi_env env, napi_callback_info info)
     napi_value argv[2];
     napi_value out;
     schema_handle *schema;
-    desc_handle *handle;
     const pbw_descriptor *desc;
     string_buf buf;
     const char *name;
@@ -2045,27 +2177,7 @@ descriptor(napi_env env, napi_callback_info info)
         TRY(napi_get_null(env, &out));
         return out;
     }
-    handle = calloc(1, sizeof(*handle));
-    if (handle == NULL) {
-        return fail_memory(env);
-    }
-    handle->schema = schema;
-    handle->enc = pbw_ctx_new();
-    handle->table = table_for(schema, desc);
-    if (handle->enc == NULL || handle->table == NULL) {
-        pbw_ctx_free(handle->enc);
-        free(handle);
-        return fail_memory(env);
-    }
-    if (napi_create_reference(env, argv[0], 1, &handle->schema_ref) != napi_ok) {
-        finalize_desc(env, handle, NULL);
-        return fail_memory(env);
-    }
-    out = new_handle(env, handle, finalize_desc);
-    if (out == NULL) {
-        finalize_desc(env, handle, NULL);
-    }
-    return out;
+    return new_desc_value(env, argv[0], schema, desc);
 }
 
 static napi_value
@@ -2123,7 +2235,8 @@ is_eager(napi_env env, napi_callback_info info)
 static napi_value
 decode(napi_env env, napi_callback_info info)
 {
-    napi_value argv[2];
+    napi_value argv[3];
+    size_t argc = 3;
     napi_value out = NULL;
     napi_value array_buffer = NULL;
     desc_handle *desc;
@@ -2131,13 +2244,21 @@ decode(napi_env env, napi_callback_info info)
     size_t len = 0;
     slice_list list;
     scan_status status;
+    pbw_limits storage;
+    const pbw_limits *limits;
     void *words = NULL;
     uint32_t i;
 
-    if (!get_args(env, info, argv, 2)) {
+    if (napi_get_cb_info(env, info, &argc, argv, NULL, NULL) != napi_ok ||
+        argc < 2) {
+        napi_throw_type_error(env, NULL,
+                              "pbwire: expected (desc, bytes, limits?)");
         return NULL;
     }
     if (!unwrap(env, argv[0], (void **)&desc, "message descriptor handle")) {
+        return NULL;
+    }
+    if (!parse_limits(env, argv, argc, 2, &storage, &limits)) {
         return NULL;
     }
     if (napi_get_buffer_info(env, argv[1], &data, &len) != napi_ok) {
@@ -2148,6 +2269,19 @@ decode(napi_env env, napi_callback_info info)
     }
     if (table_is_eager(desc->table)) {
         return fail_argument(env, "decode on a schema that needs the tree");
+    }
+    if (limits != NULL) {
+        /* The view itself stays lazy: validate eagerly, then hand back
+         * the usual slices. A non-eager schema has no required fields, so
+         * the check only enforces the requested bounds. */
+        pbw_message *checked = NULL;
+        pbw_status checked_status = pbw_decode_limits(
+            desc->table->desc, data, len, limits, &checked);
+
+        if (checked_status != PBW_OK) {
+            return fail_status(env, "decode", checked_status);
+        }
+        pbw_message_free(checked);
     }
     memset(&list, 0, sizeof(list));
     list.items = list.inline_;
@@ -2187,24 +2321,34 @@ decode(napi_env env, napi_callback_info info)
 static napi_value
 decode_eager(napi_env env, napi_callback_info info)
 {
-    napi_value argv[2];
+    napi_value argv[3];
+    size_t argc = 3;
     desc_handle *desc;
     message_handle *handle;
     pbw_message *msg = NULL;
     void *data = NULL;
     size_t len = 0;
+    pbw_limits storage;
+    const pbw_limits *limits;
     pbw_status status;
 
-    if (!get_args(env, info, argv, 2)) {
+    if (napi_get_cb_info(env, info, &argc, argv, NULL, NULL) != napi_ok ||
+        argc < 2) {
+        napi_throw_type_error(env, NULL,
+                              "pbwire: expected (desc, bytes, limits?)");
         return NULL;
     }
     if (!unwrap(env, argv[0], (void **)&desc, "message descriptor handle")) {
         return NULL;
     }
+    if (!parse_limits(env, argv, argc, 2, &storage, &limits)) {
+        return NULL;
+    }
     if (napi_get_buffer_info(env, argv[1], &data, &len) != napi_ok) {
         return fail_argument(env, "decodeEager expects a Buffer");
     }
-    status = pbw_decode(desc->table->desc, data, len, &msg);
+    status =
+        pbw_decode_limits(desc->table->desc, data, len, limits, &msg);
     if (status != PBW_OK) {
         return fail_status(env, "decode", status);
     }
@@ -2224,15 +2368,24 @@ decode_eager(napi_env env, napi_callback_info info)
 static napi_value
 decode_object(napi_env env, napi_callback_info info)
 {
-    napi_value argv[2];
+    napi_value argv[3];
+    size_t argc = 3;
     desc_handle *desc;
     void *data = NULL;
     size_t len = 0;
+    pbw_limits storage;
+    const pbw_limits *limits;
 
-    if (!get_args(env, info, argv, 2)) {
+    if (napi_get_cb_info(env, info, &argc, argv, NULL, NULL) != napi_ok ||
+        argc < 2) {
+        napi_throw_type_error(env, NULL,
+                              "pbwire: expected (desc, bytes, limits?)");
         return NULL;
     }
     if (!unwrap(env, argv[0], (void **)&desc, "message descriptor handle")) {
+        return NULL;
+    }
+    if (!parse_limits(env, argv, argc, 2, &storage, &limits)) {
         return NULL;
     }
     if (napi_get_buffer_info(env, argv[1], &data, &len) != napi_ok) {
@@ -2244,8 +2397,8 @@ decode_object(napi_env env, napi_callback_info info)
     if (table_is_eager(desc->table)) {
         pbw_message *msg = NULL;
         napi_value out;
-        pbw_status status =
-            pbw_decode(desc->table->desc, data, len, &msg);
+        pbw_status status = pbw_decode_limits(desc->table->desc, data, len,
+                                              limits, &msg);
 
         if (status != PBW_OK) {
             return fail_status(env, "decodeObject", status);
@@ -2253,6 +2406,18 @@ decode_object(napi_env env, napi_callback_info info)
         out = message_to_js(env, msg);
         pbw_message_free(msg);
         return out;
+    }
+    if (limits != NULL) {
+        /* Same eager validation as decode(): the wire view accepts what
+         * the tree decoder accepts, so this only enforces the bounds. */
+        pbw_message *checked = NULL;
+        pbw_status checked_status = pbw_decode_limits(
+            desc->table->desc, data, len, limits, &checked);
+
+        if (checked_status != PBW_OK) {
+            return fail_status(env, "decodeObject", checked_status);
+        }
+        pbw_message_free(checked);
     }
     return wire_object_to_js(env, desc->table, (const uint8_t *)data, 0,
                              (uint32_t)len, 0);
@@ -2624,8 +2789,8 @@ message_to_json(napi_env env, napi_callback_info info)
 static napi_value
 json_to_message(napi_env env, napi_callback_info info)
 {
-    napi_value argv[3];
-    size_t argc = 3;
+    napi_value argv[4];
+    size_t argc = 4;
     desc_handle *desc;
     message_handle *handle;
     pbw_message *msg = NULL;
@@ -2633,6 +2798,8 @@ json_to_message(napi_env env, napi_callback_info info)
     const char *text;
     pbw_status status;
     pbw_json_parse_options opts;
+    pbw_limits storage;
+    const pbw_limits *limits;
     bool ignore = false;
 
     if (napi_get_cb_info(env, info, &argc, argv, NULL, NULL) != napi_ok ||
@@ -2654,13 +2821,21 @@ json_to_message(napi_env env, napi_callback_info info)
             return NULL;
         }
     }
+    if (!parse_limits(env, argv, argc, 3, &storage, &limits)) {
+        return NULL;
+    }
     text = string_bytes(env, argv[1], &buf);
     if (text == NULL) {
         return NULL;
     }
     opts.ignore_unknown_fields = ignore;
-    status = pbw_json_parse_opts(desc->table->desc, text, buf.len, &opts,
-                                 &msg);
+    if (limits != NULL) {
+        status = pbw_json_parse_limits(desc->table->desc, text, buf.len,
+                                       limits, &opts, &msg);
+    } else {
+        status = pbw_json_parse_opts(desc->table->desc, text, buf.len, &opts,
+                                     &msg);
+    }
     string_free(&buf, text);
     if (status != PBW_OK) {
         return fail_status(env, "jsonToMessage", status);
@@ -2724,25 +2899,39 @@ message_to_text(napi_env env, napi_callback_info info)
 static napi_value
 text_to_message(napi_env env, napi_callback_info info)
 {
-    napi_value argv[2];
+    napi_value argv[3];
+    size_t argc = 3;
     desc_handle *desc;
     message_handle *handle;
     pbw_message *msg = NULL;
     string_buf buf;
     const char *text;
     pbw_status status;
+    pbw_limits storage;
+    const pbw_limits *limits;
 
-    if (!get_args(env, info, argv, 2)) {
+    if (napi_get_cb_info(env, info, &argc, argv, NULL, NULL) != napi_ok ||
+        argc < 2) {
+        napi_throw_type_error(env, NULL,
+                              "pbwire: expected (desc, text, limits?)");
         return NULL;
     }
     if (!unwrap(env, argv[0], (void **)&desc, "message descriptor handle")) {
+        return NULL;
+    }
+    if (!parse_limits(env, argv, argc, 2, &storage, &limits)) {
         return NULL;
     }
     text = string_bytes(env, argv[1], &buf);
     if (text == NULL) {
         return NULL;
     }
-    status = pbw_text_parse(desc->table->desc, text, buf.len, &msg);
+    if (limits != NULL) {
+        status = pbw_text_parse_limits(desc->table->desc, text, buf.len,
+                                       limits, &msg);
+    } else {
+        status = pbw_text_parse(desc->table->desc, text, buf.len, &msg);
+    }
     string_free(&buf, text);
     if (status != PBW_OK) {
         return fail_status(env, "textToMessage", status);
@@ -2817,7 +3006,8 @@ encode_delimited(napi_env env, napi_callback_info info)
 static napi_value
 decode_delimited(napi_env env, napi_callback_info info)
 {
-    napi_value argv[2];
+    napi_value argv[3];
+    size_t argc = 3;
     napi_value out = NULL;
     napi_value message_value = NULL;
     napi_value read_value = NULL;
@@ -2827,12 +3017,20 @@ decode_delimited(napi_env env, napi_callback_info info)
     void *data = NULL;
     size_t len = 0;
     size_t consumed = 0;
+    pbw_limits storage;
+    const pbw_limits *limits;
     pbw_status status;
 
-    if (!get_args(env, info, argv, 2)) {
+    if (napi_get_cb_info(env, info, &argc, argv, NULL, NULL) != napi_ok ||
+        argc < 2) {
+        napi_throw_type_error(env, NULL,
+                              "pbwire: expected (desc, bytes, limits?)");
         return NULL;
     }
     if (!unwrap(env, argv[0], (void **)&desc, "message descriptor handle")) {
+        return NULL;
+    }
+    if (!parse_limits(env, argv, argc, 2, &storage, &limits)) {
         return NULL;
     }
     if (napi_get_buffer_info(env, argv[1], &data, &len) != napi_ok) {
@@ -2843,8 +3041,8 @@ decode_delimited(napi_env env, napi_callback_info info)
     if ((uint64_t)len > 0xffffffffull) {
         return fail_argument(env, "decodeDelimited expects a message below 4 GiB");
     }
-    status = pbw_decode_delimited(desc->table->desc, data, len, &msg,
-                                  &consumed);
+    status = pbw_decode_delimited_limits(desc->table->desc, data, len,
+                                         limits, &msg, &consumed);
     if (status != PBW_OK) {
         return fail_status(env, "decodeDelimited", status);
     }
@@ -2864,6 +3062,743 @@ decode_delimited(napi_env env, napi_callback_info info)
         napi_create_uint32(env, (uint32_t)consumed, &read_value) != napi_ok ||
         napi_set_named_property(env, out, "read", read_value) != napi_ok) {
         return NULL;
+    }
+    return out;
+}
+
+/* Deterministic bytes of a tree: map entries sorted by key, so equal
+ * messages encode to equal bytes regardless of insertion order. */
+static napi_value
+encode_deterministic(napi_env env, napi_callback_info info)
+{
+    napi_value argv[1];
+    napi_value out = NULL;
+    message_handle *handle;
+    uint8_t *wire = NULL;
+    size_t wire_len = 0;
+    pbw_status status;
+
+    if (!get_args(env, info, argv, 1)) {
+        return NULL;
+    }
+    if (!unwrap_message(env, argv[0], &handle)) {
+        return NULL;
+    }
+    status = pbw_encode_deterministic(handle->msg, &wire, &wire_len);
+    if (status != PBW_OK) {
+        return fail_status(env, "encodeDeterministic", status);
+    }
+    if (napi_create_buffer_copy(env, wire_len, wire, NULL, &out) != napi_ok) {
+        pbw_free(wire);
+        return NULL;
+    }
+    pbw_free(wire);
+    return out;
+}
+
+/* Exact byte count pbw_encode() would write for this tree. */
+static napi_value
+encoded_size(napi_env env, napi_callback_info info)
+{
+    napi_value argv[1];
+    napi_value out = NULL;
+    message_handle *handle;
+    size_t len = 0;
+    pbw_status status;
+
+    if (!get_args(env, info, argv, 1)) {
+        return NULL;
+    }
+    if (!unwrap_message(env, argv[0], &handle)) {
+        return NULL;
+    }
+    status = pbw_message_encoded_size(handle->msg, &len);
+    if (status != PBW_OK) {
+        return fail_status(env, "encodedSize", status);
+    }
+    if (napi_create_double(env, (double)len, &out) != napi_ok) {
+        return NULL;
+    }
+    return out;
+}
+
+/* Encode into a caller-provided Buffer: the cap is the hard limit, so a
+ * short Buffer fails instead of growing. Returns the bytes written. */
+static napi_value
+encode_to(napi_env env, napi_callback_info info)
+{
+    napi_value argv[2];
+    napi_value out = NULL;
+    message_handle *handle;
+    void *data = NULL;
+    size_t cap = 0;
+    size_t len = 0;
+    pbw_status status;
+
+    if (!get_args(env, info, argv, 2)) {
+        return NULL;
+    }
+    if (!unwrap_message(env, argv[0], &handle)) {
+        return NULL;
+    }
+    if (napi_get_buffer_info(env, argv[1], &data, &cap) != napi_ok) {
+        return fail_argument(env, "encodeTo expects a Buffer");
+    }
+    status = pbw_encode_to(handle->msg, data, cap, &len);
+    if (status != PBW_OK) {
+        return fail_status(env, "encodeTo", status);
+    }
+    if (napi_create_double(env, (double)len, &out) != napi_ok) {
+        return NULL;
+    }
+    return out;
+}
+
+/* One delimited frame into a caller-provided Buffer. */
+static napi_value
+encode_delimited_to(napi_env env, napi_callback_info info)
+{
+    napi_value argv[2];
+    napi_value out = NULL;
+    message_handle *handle;
+    void *data = NULL;
+    size_t cap = 0;
+    size_t len = 0;
+    pbw_status status;
+
+    if (!get_args(env, info, argv, 2)) {
+        return NULL;
+    }
+    if (!unwrap_message(env, argv[0], &handle)) {
+        return NULL;
+    }
+    if (napi_get_buffer_info(env, argv[1], &data, &cap) != napi_ok) {
+        return fail_argument(env, "encodeDelimitedTo expects a Buffer");
+    }
+    status = pbw_encode_delimited_to(handle->msg, data, cap, &len);
+    if (status != PBW_OK) {
+        return fail_status(env, "encodeDelimitedTo", status);
+    }
+    if (napi_create_double(env, (double)len, &out) != napi_ok) {
+        return NULL;
+    }
+    return out;
+}
+
+typedef struct {
+    napi_env env;
+    napi_value callback;
+    napi_value undefined;
+    int abort;  /* the callback returned false */
+    int failed; /* the N-API call failed; an exception is pending */
+} sink_state;
+
+/* Hands each 8 KiB chunk to the JS callback as a Buffer; a false return
+ * aborts the encode. */
+static pbw_status
+sink_trampoline(const uint8_t *data, size_t len, void *opaque)
+{
+    sink_state *state = opaque;
+    napi_env env = state->env;
+    napi_value chunk = NULL;
+    napi_value result = NULL;
+    bool proceed = false;
+
+    if (napi_create_buffer_copy(env, len, data, NULL, &chunk) != napi_ok ||
+        napi_call_function(env, state->undefined, state->callback, 1,
+                           &chunk, &result) != napi_ok) {
+        state->failed = 1;
+        return PBW_ERR_NOMEM;
+    }
+    if (napi_get_value_bool(env, result, &proceed) != napi_ok) {
+        state->failed = 1;
+        return PBW_ERR_NOMEM;
+    }
+    if (!proceed) {
+        state->abort = 1;
+        return PBW_ERR_INVALID;
+    }
+    return PBW_OK;
+}
+
+/* Streams the encoding through the JS callback in chunks. */
+static napi_value
+encode_sink(napi_env env, napi_callback_info info)
+{
+    napi_value argv[2];
+    napi_value out;
+    message_handle *handle;
+    napi_valuetype kind;
+    sink_state state;
+    pbw_status status;
+
+    if (!get_args(env, info, argv, 2)) {
+        return NULL;
+    }
+    if (!unwrap_message(env, argv[0], &handle)) {
+        return NULL;
+    }
+    if (napi_typeof(env, argv[1], &kind) != napi_ok ||
+        kind != napi_function) {
+        return fail_argument(env, "encodeSink expects a function");
+    }
+    memset(&state, 0, sizeof(state));
+    state.env = env;
+    state.callback = argv[1];
+    if (napi_get_undefined(env, &state.undefined) != napi_ok) {
+        return NULL;
+    }
+    status = pbw_encode_sink(handle->msg, sink_trampoline, &state);
+    if (state.failed) {
+        return NULL;
+    }
+    if (state.abort) {
+        return fail_argument(env, "encodeSink aborted by the callback");
+    }
+    if (status != PBW_OK) {
+        return fail_status(env, "encodeSink", status);
+    }
+    TRY(napi_get_undefined(env, &out));
+    return out;
+}
+
+typedef struct {
+    uint32_t number;
+    uint32_t wire_type;
+    const pbw_field *field;
+    uint64_t u64;        /* VARINT/32BIT/64BIT raw bits */
+    const uint8_t *data; /* LEN payload or whole group; into the input */
+    size_t len;
+} visit_event;
+
+typedef struct {
+    visit_event *items;
+    size_t count;
+    size_t cap;
+} visit_state;
+
+/* One event per wire field, recorded without building a tree. The payload
+ * still points into the caller's Buffer; it is copied when the JS array
+ * is built, so no pinning outlives this call. */
+static pbw_status
+visit_collect(void *ud, const pbw_field *field, uint32_t number,
+              uint32_t wire_type, const pbw_visit_value *value)
+{
+    visit_state *state = ud;
+    visit_event *event;
+
+    if (state->count == state->cap) {
+        size_t cap = state->cap != 0 ? state->cap * 2 : 32;
+        visit_event *items = realloc(state->items, cap * sizeof(*items));
+
+        if (items == NULL) {
+            return PBW_ERR_NOMEM;
+        }
+        state->items = items;
+        state->cap = cap;
+    }
+    event = &state->items[state->count++];
+    event->number = number;
+    event->wire_type = wire_type;
+    event->field = field;
+    event->u64 = value->u64;
+    event->data = value->data;
+    event->len = value->len;
+    return PBW_OK;
+}
+
+/* Single-level scan of wire bytes: an array of
+ * {number, wireType, name, value}, where value is a BigInt for scalar
+ * shapes and a Buffer for LEN payloads and groups. */
+static napi_value
+visit(napi_env env, napi_callback_info info)
+{
+    napi_value argv[3];
+    size_t argc = 3;
+    napi_value out = NULL;
+    desc_handle *desc;
+    void *data = NULL;
+    size_t len = 0;
+    pbw_limits storage;
+    const pbw_limits *limits;
+    visit_state state;
+    size_t fail_off = 0;
+    pbw_status status;
+    size_t i;
+
+    memset(&state, 0, sizeof(state));
+    if (napi_get_cb_info(env, info, &argc, argv, NULL, NULL) != napi_ok ||
+        argc < 2) {
+        napi_throw_type_error(env, NULL,
+                              "pbwire: expected (desc, bytes, limits?)");
+        return NULL;
+    }
+    if (!unwrap(env, argv[0], (void **)&desc, "message descriptor handle")) {
+        return NULL;
+    }
+    if (!parse_limits(env, argv, argc, 2, &storage, &limits)) {
+        return NULL;
+    }
+    if (napi_get_buffer_info(env, argv[1], &data, &len) != napi_ok) {
+        return fail_argument(env, "visit expects a Buffer");
+    }
+    status = pbw_visit_limits(desc->table->desc, data, len, limits,
+                              visit_collect, &state, &fail_off);
+    if (status != PBW_OK) {
+        free(state.items);
+        return fail_status(env, "visit", status);
+    }
+    if (napi_create_array_with_length(env, state.count, &out) != napi_ok) {
+        free(state.items);
+        return NULL;
+    }
+    for (i = 0; i < state.count; i++) {
+        visit_event *event = &state.items[i];
+        napi_value item = NULL;
+        napi_value value = NULL;
+        napi_value name = NULL;
+        napi_value number = NULL;
+        napi_value wire_type = NULL;
+        uint32_t index = table_by_number(desc->table, event->number);
+
+        if (event->wire_type == 0 || event->wire_type == 1 ||
+            event->wire_type == 5) {
+            if (napi_create_bigint_uint64(env, event->u64, &value) !=
+                napi_ok) {
+                goto fail;
+            }
+        } else if (napi_create_buffer_copy(env, event->len, event->data,
+                                           NULL, &value) != napi_ok) {
+            goto fail;
+        }
+        if (index != NOT_FOUND) {
+            const char *field_name = desc->table->fields[index].name;
+
+            if (napi_create_string_utf8(env, field_name, NAPI_AUTO_LENGTH,
+                                        &name) != napi_ok) {
+                goto fail;
+            }
+        } else if (napi_get_null(env, &name) != napi_ok) {
+            goto fail;
+        }
+        if (napi_create_object(env, &item) != napi_ok ||
+            napi_create_uint32(env, event->number, &number) != napi_ok ||
+            napi_create_uint32(env, event->wire_type, &wire_type) !=
+                napi_ok ||
+            napi_set_named_property(env, item, "number", number) !=
+                napi_ok ||
+            napi_set_named_property(env, item, "wireType", wire_type) !=
+                napi_ok ||
+            napi_set_named_property(env, item, "name", name) != napi_ok ||
+            napi_set_named_property(env, item, "value", value) != napi_ok ||
+            napi_set_element(env, out, (uint32_t)i, item) != napi_ok) {
+            goto fail;
+        }
+        continue;
+    fail:
+        free(state.items);
+        return NULL;
+    }
+    free(state.items);
+    return out;
+}
+
+/* Service names of a schema, for routing. */
+static napi_value
+services(napi_env env, napi_callback_info info)
+{
+    napi_value argv[1];
+    napi_value out = NULL;
+    schema_handle *schema;
+    size_t count;
+    size_t i;
+
+    if (!get_args(env, info, argv, 1)) {
+        return NULL;
+    }
+    if (!unwrap(env, argv[0], (void **)&schema, "schema handle")) {
+        return NULL;
+    }
+    count = pbw_schema_service_count(schema->schema);
+    if (napi_create_array_with_length(env, count, &out) != napi_ok) {
+        return NULL;
+    }
+    for (i = 0; i < count; i++) {
+        const pbw_service *svc = pbw_schema_service_at(schema->schema, i);
+        napi_value name = NULL;
+
+        if (svc == NULL ||
+            napi_create_string_utf8(env, pbw_service_name(svc),
+                                    NAPI_AUTO_LENGTH, &name) != napi_ok ||
+            napi_set_element(env, out, (uint32_t)i, name) != napi_ok) {
+            return NULL;
+        }
+    }
+    return out;
+}
+
+/* One service with its methods and streaming flags. */
+static napi_value
+service(napi_env env, napi_callback_info info)
+{
+    napi_value argv[2];
+    napi_value out = NULL;
+    napi_value methods = NULL;
+    napi_value name_value = NULL;
+    schema_handle *schema;
+    string_buf buf;
+    const char *name;
+    const pbw_service *svc;
+    size_t count;
+    size_t i;
+
+    if (!get_args(env, info, argv, 2)) {
+        return NULL;
+    }
+    if (!unwrap(env, argv[0], (void **)&schema, "schema handle")) {
+        return NULL;
+    }
+    name = string_bytes(env, argv[1], &buf);
+    if (name == NULL) {
+        return NULL;
+    }
+    svc = pbw_schema_service_find(schema->schema, name);
+    string_free(&buf, name);
+    if (svc == NULL) {
+        return fail_argument(env, "unknown service");
+    }
+    count = pbw_service_method_count(svc);
+    if (napi_create_array_with_length(env, count, &methods) != napi_ok) {
+        return NULL;
+    }
+    for (i = 0; i < count; i++) {
+        const pbw_method *method = pbw_service_method_at(svc, i);
+        napi_value item = NULL;
+        napi_value prop = NULL;
+        bool flag;
+
+        if (method == NULL || napi_create_object(env, &item) != napi_ok) {
+            return NULL;
+        }
+#define SET_STRING_PROP(key, text)                                        \
+    do {                                                                  \
+        if (napi_create_string_utf8(env, (text), NAPI_AUTO_LENGTH,        \
+                                    &prop) != napi_ok ||                  \
+            napi_set_named_property(env, item, (key), prop) != napi_ok) { \
+            return NULL;                                                  \
+        }                                                                 \
+    } while (0)
+        SET_STRING_PROP("name", pbw_method_name(method));
+        SET_STRING_PROP("inputType", pbw_method_input_type(method));
+        SET_STRING_PROP("outputType", pbw_method_output_type(method));
+#undef SET_STRING_PROP
+        flag = pbw_method_client_streaming(method) != 0;
+        if (napi_get_boolean(env, flag, &prop) != napi_ok ||
+            napi_set_named_property(env, item, "clientStreaming", prop) !=
+                napi_ok) {
+            return NULL;
+        }
+        flag = pbw_method_server_streaming(method) != 0;
+        if (napi_get_boolean(env, flag, &prop) != napi_ok ||
+            napi_set_named_property(env, item, "serverStreaming", prop) !=
+                napi_ok) {
+            return NULL;
+        }
+        if (napi_set_element(env, methods, (uint32_t)i, item) != napi_ok) {
+            return NULL;
+        }
+    }
+    if (napi_create_object(env, &out) != napi_ok ||
+        napi_create_string_utf8(env, pbw_service_name(svc), NAPI_AUTO_LENGTH,
+                                &name_value) != napi_ok ||
+        napi_set_named_property(env, out, "name", name_value) != napi_ok ||
+        napi_set_named_property(env, out, "methods", methods) != napi_ok) {
+        return NULL;
+    }
+    return out;
+}
+
+/* Resolves a method to its input/output descriptors for routing. */
+static napi_value
+resolve(napi_env env, napi_callback_info info)
+{
+    napi_value argv[3];
+    napi_value out = NULL;
+    napi_value input_value = NULL;
+    napi_value output_value = NULL;
+    schema_handle *schema;
+    string_buf svc_buf;
+    string_buf method_buf;
+    const char *svc_name;
+    const char *method_name;
+    const pbw_descriptor *in_desc = NULL;
+    const pbw_descriptor *out_desc = NULL;
+    pbw_status status;
+
+    if (!get_args(env, info, argv, 3)) {
+        return NULL;
+    }
+    if (!unwrap(env, argv[0], (void **)&schema, "schema handle")) {
+        return NULL;
+    }
+    svc_name = string_bytes(env, argv[1], &svc_buf);
+    if (svc_name == NULL) {
+        return NULL;
+    }
+    method_name = string_bytes(env, argv[2], &method_buf);
+    if (method_name == NULL) {
+        string_free(&svc_buf, svc_name);
+        return NULL;
+    }
+    status = pbw_service_resolve(schema->schema, svc_name, method_name,
+                                 &in_desc, &out_desc);
+    string_free(&svc_buf, svc_name);
+    string_free(&method_buf, method_name);
+    if (status != PBW_OK) {
+        return fail_status(env, "resolve", status);
+    }
+    input_value = new_desc_value(env, argv[0], schema, in_desc);
+    if (input_value == NULL) {
+        return NULL;
+    }
+    output_value = new_desc_value(env, argv[0], schema, out_desc);
+    if (output_value == NULL) {
+        return NULL;
+    }
+    if (napi_create_object(env, &out) != napi_ok ||
+        napi_set_named_property(env, out, "input", input_value) != napi_ok ||
+        napi_set_named_property(env, out, "output", output_value) !=
+            napi_ok) {
+        return NULL;
+    }
+    return out;
+}
+
+/* Packs already-encoded bytes into a new google.protobuf.Any tree. */
+static napi_value
+any_pack(napi_env env, napi_callback_info info)
+{
+    napi_value argv[3];
+    desc_handle *desc;
+    pbw_message *msg = NULL;
+    string_buf buf;
+    const char *type_url;
+    void *payload = NULL;
+    size_t payload_len = 0;
+    pbw_status status;
+
+    if (!get_args(env, info, argv, 3)) {
+        return NULL;
+    }
+    if (!unwrap(env, argv[0], (void **)&desc, "message descriptor handle")) {
+        return NULL;
+    }
+    type_url = string_bytes(env, argv[1], &buf);
+    if (type_url == NULL) {
+        return NULL;
+    }
+    if (napi_get_buffer_info(env, argv[2], &payload, &payload_len) !=
+        napi_ok) {
+        string_free(&buf, type_url);
+        return fail_argument(env, "anyPack expects a Buffer payload");
+    }
+    status = pbw_any_pack(desc->table->desc, type_url, payload, payload_len,
+                          &msg);
+    string_free(&buf, type_url);
+    if (status != PBW_OK) {
+        return fail_status(env, "anyPack", status);
+    }
+    return new_tree_value(env, desc, argv[0], msg);
+}
+
+/* type_url (field 1) of an Any tree, or null when absent. */
+static napi_value
+any_type_url(napi_env env, napi_callback_info info)
+{
+    napi_value argv[1];
+    napi_value out = NULL;
+    message_handle *handle;
+    const char *url;
+
+    if (!get_args(env, info, argv, 1)) {
+        return NULL;
+    }
+    if (!unwrap_message(env, argv[0], &handle)) {
+        return NULL;
+    }
+    url = pbw_any_type_url(handle->msg);
+    if (url == NULL) {
+        TRY(napi_get_null(env, &out));
+        return out;
+    }
+    if (napi_create_string_utf8(env, url, NAPI_AUTO_LENGTH, &out) != napi_ok) {
+        return NULL;
+    }
+    return out;
+}
+
+/* value bytes (field 2) of an Any tree, or null when absent. */
+static napi_value
+any_payload(napi_env env, napi_callback_info info)
+{
+    napi_value argv[1];
+    napi_value out = NULL;
+    message_handle *handle;
+    const void *payload;
+    size_t len = 0;
+
+    if (!get_args(env, info, argv, 1)) {
+        return NULL;
+    }
+    if (!unwrap_message(env, argv[0], &handle)) {
+        return NULL;
+    }
+    payload = pbw_any_payload(handle->msg, &len);
+    if (payload == NULL) {
+        TRY(napi_get_null(env, &out));
+        return out;
+    }
+    if (napi_create_buffer_copy(env, len, payload, NULL, &out) != napi_ok) {
+        return NULL;
+    }
+    return out;
+}
+
+/* int64 milliseconds from a BigInt or a number. */
+static int
+millis_from_js(napi_env env, napi_value value, int64_t *out)
+{
+    uint64_t bits;
+
+    if (!js_uint64(env, value, &bits)) {
+        fail_argument(env, "millis must be a BigInt or a number");
+        return 0;
+    }
+    *out = (int64_t)bits;
+    return 1;
+}
+
+/* A new Timestamp/Duration tree holding ms. */
+static napi_value
+millis_to_message(napi_env env, napi_callback_info info, int duration)
+{
+    napi_value argv[2];
+    desc_handle *desc;
+    pbw_message *msg = NULL;
+    int64_t ms;
+    pbw_status status;
+
+    if (!get_args(env, info, argv, 2)) {
+        return NULL;
+    }
+    if (!unwrap(env, argv[0], (void **)&desc, "message descriptor handle")) {
+        return NULL;
+    }
+    if (!millis_from_js(env, argv[1], &ms)) {
+        return NULL;
+    }
+    if (duration) {
+        status =
+            pbw_duration_from_millis(desc->table->desc, ms, &msg);
+    } else {
+        status =
+            pbw_timestamp_from_millis(desc->table->desc, ms, &msg);
+    }
+    if (status != PBW_OK) {
+        return fail_status(env,
+                           duration ? "durationFromMillis"
+                                    : "timestampFromMillis",
+                           status);
+    }
+    return new_tree_value(env, desc, argv[0], msg);
+}
+
+static napi_value
+timestamp_from_millis(napi_env env, napi_callback_info info)
+{
+    return millis_to_message(env, info, 0);
+}
+
+static napi_value
+duration_from_millis(napi_env env, napi_callback_info info)
+{
+    return millis_to_message(env, info, 1);
+}
+
+/* Milliseconds of a Timestamp/Duration tree, exact as a BigInt. */
+static napi_value
+millis_from_message(napi_env env, napi_callback_info info, int duration)
+{
+    napi_value argv[1];
+    napi_value out = NULL;
+    message_handle *handle;
+    int64_t ms = 0;
+    pbw_status status;
+
+    if (!get_args(env, info, argv, 1)) {
+        return NULL;
+    }
+    if (!unwrap_message(env, argv[0], &handle)) {
+        return NULL;
+    }
+    if (duration) {
+        status = pbw_duration_to_millis(handle->msg, &ms);
+    } else {
+        status = pbw_timestamp_to_millis(handle->msg, &ms);
+    }
+    if (status != PBW_OK) {
+        return fail_status(env,
+                           duration ? "durationMillis" : "timestampMillis",
+                           status);
+    }
+    if (napi_create_bigint_int64(env, ms, &out) != napi_ok) {
+        return NULL;
+    }
+    return out;
+}
+
+static napi_value
+timestamp_millis(napi_env env, napi_callback_info info)
+{
+    return millis_from_message(env, info, 0);
+}
+
+static napi_value
+duration_millis(napi_env env, napi_callback_info info)
+{
+    return millis_from_message(env, info, 1);
+}
+
+/* FieldMask paths as an array of strings. */
+static napi_value
+fieldmask_paths(napi_env env, napi_callback_info info)
+{
+    napi_value argv[1];
+    napi_value out = NULL;
+    message_handle *handle;
+    size_t count;
+    size_t i;
+
+    if (!get_args(env, info, argv, 1)) {
+        return NULL;
+    }
+    if (!unwrap_message(env, argv[0], &handle)) {
+        return NULL;
+    }
+    count = pbw_fieldmask_path_count(handle->msg);
+    if (napi_create_array_with_length(env, count, &out) != napi_ok) {
+        return NULL;
+    }
+    for (i = 0; i < count; i++) {
+        const char *path = pbw_fieldmask_path_at(handle->msg, i);
+        napi_value item = NULL;
+
+        if (path == NULL ||
+            napi_create_string_utf8(env, path, NAPI_AUTO_LENGTH, &item) !=
+                napi_ok ||
+            napi_set_element(env, out, (uint32_t)i, item) != napi_ok) {
+            return NULL;
+        }
     }
     return out;
 }
@@ -2908,6 +3843,39 @@ NAPI_MODULE_INIT()
         {"encodeDelimited", NULL, encode_delimited, NULL, NULL, NULL,
          napi_enumerable, NULL},
         {"decodeDelimited", NULL, decode_delimited, NULL, NULL, NULL,
+         napi_enumerable, NULL},
+        {"encodeDeterministic", NULL, encode_deterministic, NULL, NULL,
+         NULL, napi_enumerable, NULL},
+        {"encodedSize", NULL, encoded_size, NULL, NULL, NULL,
+         napi_enumerable, NULL},
+        {"encodeTo", NULL, encode_to, NULL, NULL, NULL, napi_enumerable,
+         NULL},
+        {"encodeDelimitedTo", NULL, encode_delimited_to, NULL, NULL, NULL,
+         napi_enumerable, NULL},
+        {"encodeSink", NULL, encode_sink, NULL, NULL, NULL, napi_enumerable,
+         NULL},
+        {"visit", NULL, visit, NULL, NULL, NULL, napi_enumerable, NULL},
+        {"services", NULL, services, NULL, NULL, NULL, napi_enumerable,
+         NULL},
+        {"service", NULL, service, NULL, NULL, NULL, napi_enumerable,
+         NULL},
+        {"resolve", NULL, resolve, NULL, NULL, NULL, napi_enumerable,
+         NULL},
+        {"anyPack", NULL, any_pack, NULL, NULL, NULL, napi_enumerable,
+         NULL},
+        {"anyTypeUrl", NULL, any_type_url, NULL, NULL, NULL,
+         napi_enumerable, NULL},
+        {"anyPayload", NULL, any_payload, NULL, NULL, NULL, napi_enumerable,
+         NULL},
+        {"timestampFromMillis", NULL, timestamp_from_millis, NULL, NULL,
+         NULL, napi_enumerable, NULL},
+        {"timestampMillis", NULL, timestamp_millis, NULL, NULL, NULL,
+         napi_enumerable, NULL},
+        {"durationFromMillis", NULL, duration_from_millis, NULL, NULL,
+         NULL, napi_enumerable, NULL},
+        {"durationMillis", NULL, duration_millis, NULL, NULL, NULL,
+         napi_enumerable, NULL},
+        {"fieldmaskPaths", NULL, fieldmask_paths, NULL, NULL, NULL,
          napi_enumerable, NULL},
     };
 

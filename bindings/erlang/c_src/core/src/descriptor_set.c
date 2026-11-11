@@ -77,6 +77,9 @@ typedef struct {
     size_t len;
 } ds_field;
 
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((format(printf, 2, 3)))
+#endif
 static void
 ds_error(pbw_schema *schema, const char *fmt, ...)
 {

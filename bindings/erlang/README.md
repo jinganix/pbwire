@@ -102,6 +102,9 @@ proto2.
 | `pbwire:decode(Bin, MsgName)` | record/map tuple | `MsgName` is the message atom, e.g. `'Person'`; raises `unknown_msg` if the schema has no such message |
 | `pbwire:encode_msg(Msg, Defs)` | `binary()` | `load_cache(Defs)` + `encode(Msg)` |
 | `pbwire:decode_msg(Bin, Name, Defs)` | tuple | `load_cache(Defs)` + `decode(Bin, Name)` |
+| `pbwire:encode_delimited(Msg)` | `binary()` | varint length prefix + `encode(Msg)` (stream framing) |
+| `pbwire:decode_delimited(Bin, MsgName)` | `{tuple(), binary()}` | one frame + the remaining bytes |
+| `pbwire:encode_deterministic(Msg, Defs)` | `binary()` | `load_cache(Defs)` + `encode/1` with map entries sorted by key |
 | `pbwire:debug_term(Term)` | term | Prints the internal node layout of the loaded schema (debugging aid) |
 
 Calling `encode/1` or `decode/2` before `load_cache/1` raises `cache_not_exists`. All functions are
@@ -127,6 +130,9 @@ Call `pbwire:set_opts/1` before `load_cache/1`:
 |--------------------------|---------|--------------------------------------------------------|
 | `{string_as_list, true}` | `false` | Decode string fields as lists instead of binaries      |
 | `{with_utf8, true}`      | `false` | Allow non-Latin-1 UTF-8 in string fields when encoding |
+| `{retain_cap, Bytes}`    | 1 MiB   | Resident encode buffer ceiling per scheduler (0 keeps nothing) |
+| `{max_bytes, Bytes}`     | 0 (off) | Reject `decode/2` inputs larger than `Bytes` (like `pbw_limits`) |
+| `{max_depth, Levels}`    | 0 (off) | Reject `decode/2` inputs nested deeper than `Levels` messages |
 
 `string` fields decode to binaries by default; non-Latin-1 text needs
 `{with_utf8, true}` or encoding raises.
@@ -201,7 +207,8 @@ use `encode_msg/2` / `decode_msg/3`.
 
 ### Why do I get `badarg` from `set_opts/1`?
 
-Only `{string_as_list, boolean()}` and `{with_utf8, boolean()}` are accepted, and the argument must be
+Only the documented options are accepted (`string_as_list` / `with_utf8` take booleans;
+`retain_cap` / `max_bytes` / `max_depth` take non-negative integers), and the argument must be
 a proper list of such tuples.
 
 ### Can several processes or applications use it at once?
@@ -228,6 +235,15 @@ five bytes, bits above bit 31 dropped), a length prefix must be a strict varint3
 nesting is capped at 100 and reserved wire types raise. A malformed binary raises instead of
 returning a partially decoded message, so `decode/2` is safe on untrusted input. gpb is more
 lenient about oversized tags; for those inputs the two implementations may disagree.
+
+### Is there JSON or text-format support?
+
+No, deliberately: JSON and text would need either a gpb-to-core schema mirror (a second loader)
+or an Erlang JSON mapping (a second codec), and this binding keeps gpb as its only schema source.
+The wire-level core coverage that maps cleanly is provided instead: length-delimited framing
+(`encode_delimited/1`, `decode_delimited/2`), deterministic map ordering (`encode_deterministic/2`)
+and the `max_bytes` / `max_depth` input guards. The conformance testee answers `skipped` for JSON,
+JSPB and text.
 
 ## Development
 

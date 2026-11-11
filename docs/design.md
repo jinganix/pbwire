@@ -134,6 +134,11 @@ shapes.
   taught about. The cost is one buffer per message that actually contains
   unknowns.
 - **Nesting is capped at 256 levels** in both directions (`PBW_MAX_DEPTH`).
+  The cap bounds recursion, not stack: reaching it costs about 1.4 KB of C
+  stack per level in a release build (~1 MB under sanitizers), so a thread that
+  parses untrusted input this deep needs roughly 1 MB free (2 MB pinned by
+  `test_threads`; macOS worker threads default to 512 KB). `pbw_limits.max_depth`
+  lowers the cap for the binary decoder.
 - **Ownership is explicit.** `pbw_message_set()` takes ownership of the value on
   success only (a rejected value stays the caller's), values owned by another
   message are refused so one payload never has two owners, a decoded plain tree

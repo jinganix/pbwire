@@ -594,11 +594,22 @@ public final class PbCodec {
 
     public static <O, B, M> M parseFrom(byte[] data, Supplier<B> factory, Meta<O, B> meta,
             Function<B, M> finish) {
+        return parseFrom(data, factory, meta, finish, Limits.defaults());
+    }
+
+    /** Bounded decode, like the core's {@code pbw_decode_limits}. */
+    public static <O, B, M> M parseFrom(byte[] data, Supplier<B> factory, Meta<O, B> meta,
+            Function<B, M> finish, Limits lim) {
+        if (lim == null) {
+            lim = Limits.defaults();
+        }
+        lim.checkBytes(data.length, "message");
         B b = factory.get();
         Wire.Reader r = new Wire.Reader();
         r.b = data;
         r.pos = 0;
         r.end = data.length;
+        r.cap = lim.effectiveDepth();
         parseInto(b, meta, r, data.length, -1, 0);
         if (r.pos != data.length) {
             throw new IllegalArgumentException("trailing bytes");
@@ -606,11 +617,145 @@ public final class PbCodec {
         return finish.apply(b);
     }
 
+    /**
+     * Map entries sorted by key, like the core's deterministic encoder.
+     * This binding has no map-entry awareness, so this is byte-identical
+     * to {@link #encode}.
+     */
+    public static <O, B> byte[] encodeDeterministic(O msg, Meta<O, B> meta) {
+        return encode(msg, meta);
+    }
+
+    /** Exact number of bytes {@link #encode} writes; pays one encode. */
+    public static <O, B> long encodedSize(O msg, Meta<O, B> meta) {
+        // shortcut: the typed walk would duplicate the encoder's traversal,
+        // and sizes only matter off the hot path.
+        return encode(msg, meta).length;
+    }
+
+    /** Length-delimited framing: varint length + message, one copy out. */
+    public static <O, B> byte[] encodeDelimited(O msg, Meta<O, B> meta) {
+        Wire.Buf b = GenericCodec.takeBuf();
+        encodeInto(msg, meta, b, 0);
+        int len = b.pos;
+        int llen = Wire.sizeVar32(len);
+        Wire.ensure(b, llen);
+        System.arraycopy(b.b, 0, b.b, llen, len);
+        int p = 0;
+        int v = len;
+        while ((v & ~0x7F) != 0) {
+            b.b[p++] = (byte) ((v & 0x7F) | 0x80);
+            v >>>= 7;
+        }
+        b.b[p++] = (byte) v;
+        b.pos = llen + len;
+        return GenericCodec.copyOut(b);
+    }
+
+    /** One delimited frame: the message plus its prefix + body length. */
+    public static final class DelimitedFrame<M> {
+        public final M message;
+        public final int consumed;
+
+        DelimitedFrame(M message, int consumed) {
+            this.message = message;
+            this.consumed = consumed;
+        }
+    }
+
+    /** Decodes one length-delimited frame; trailing bytes are left over. */
+    public static <O, B, M> DelimitedFrame<M> parseDelimitedFrom(byte[] data, int off,
+            Supplier<B> factory, Meta<O, B> meta, Function<B, M> finish) {
+        return parseDelimitedFrom(data, off, factory, meta, finish, Limits.defaults());
+    }
+
+    /** Same with explicit bounds. */
+    public static <O, B, M> DelimitedFrame<M> parseDelimitedFrom(byte[] data, int off,
+            Supplier<B> factory, Meta<O, B> meta, Function<B, M> finish, Limits lim) {
+        if (lim == null) {
+            lim = Limits.defaults();
+        }
+        if (off < 0 || off > data.length) {
+            throw new IllegalArgumentException("offset out of range");
+        }
+        Wire.Reader r = new Wire.Reader();
+        r.b = data;
+        r.pos = off;
+        r.end = data.length;
+        r.cap = lim.effectiveDepth();
+        int len = Wire.rLen32(r);
+        lim.checkBytes(len, "delimited frame");
+        int frameEnd = r.pos + len;
+        B b = factory.get();
+        parseInto(b, meta, r, frameEnd, -1, 0);
+        if (r.pos != frameEnd) {
+            throw new IllegalArgumentException("trailing bytes in frame");
+        }
+        return new DelimitedFrame<>(finish.apply(b), r.pos - off);
+    }
+
+    /**
+     * The typed message as a dynamic tree, through the shared wire format:
+     * the JSON and text printers run on this, so the typed path needs no
+     * second printer and the two cannot drift out of sync.
+     */
+    static <O, B> GenericCodec.DMsg toDynamic(O msg, Meta<O, B> meta) {
+        GenericCodec.Schema s = GenericCodec.Schema.fromMetas(
+                java.util.Collections.singletonList(meta));
+        return GenericCodec.decode(s.message(meta.fullName), encode(msg, meta));
+    }
+
+    /** A dynamic tree as a typed message, through the shared wire format. */
+    static <O, B, M> M fromDynamic(GenericCodec.DMsg d, Supplier<B> factory,
+            Meta<O, B> meta, Function<B, M> finish) {
+        return parseFrom(GenericCodec.encode(d), factory, meta, finish);
+    }
+
+    /** Prints a typed message in the JSON mapping. */
+    public static <O, B> String toJson(O msg, Meta<O, B> meta) {
+        return Json.print(toDynamic(msg, meta));
+    }
+
+    /** Parses JSON mapping into a typed message; unknown fields fail. */
+    public static <O, B, M> M fromJson(String json, Supplier<B> factory,
+            Meta<O, B> meta, Function<B, M> finish) {
+        return fromJson(json, false, Limits.defaults(), factory, meta, finish);
+    }
+
+    /** Parses JSON mapping with explicit options. */
+    public static <O, B, M> M fromJson(String json, boolean ignoreUnknown, Limits lim,
+            Supplier<B> factory, Meta<O, B> meta, Function<B, M> finish) {
+        GenericCodec.Schema s = GenericCodec.Schema.fromMetas(
+                java.util.Collections.singletonList(meta));
+        return fromDynamic(Json.parse(s.message(meta.fullName), json, ignoreUnknown,
+                lim == null ? Limits.defaults() : lim), factory, meta, finish);
+    }
+
+    /** Prints a typed message in text format. */
+    public static <O, B> String toText(O msg, Meta<O, B> meta) {
+        return Text.print(toDynamic(msg, meta));
+    }
+
+    /** Parses text format into a typed message. */
+    public static <O, B, M> M fromText(String text, Supplier<B> factory,
+            Meta<O, B> meta, Function<B, M> finish) {
+        return fromText(text, Limits.defaults(), factory, meta, finish);
+    }
+
+    /** Parses text format with explicit bounds. */
+    public static <O, B, M> M fromText(String text, Limits lim, Supplier<B> factory,
+            Meta<O, B> meta, Function<B, M> finish) {
+        GenericCodec.Schema s = GenericCodec.Schema.fromMetas(
+                java.util.Collections.singletonList(meta));
+        return fromDynamic(Text.parse(s.message(meta.fullName), text,
+                lim == null ? Limits.defaults() : lim), factory, meta, finish);
+    }
+
     @SuppressWarnings({"unchecked", "rawtypes"})
     static <O, B> void parseInto(B b, Meta<O, B> meta, Wire.Reader r, int end,
             int groupEnd, int depth) {
-        if (depth > Wire.MAX_DEPTH) {
-            throw new IllegalArgumentException("nesting exceeds " + Wire.MAX_DEPTH);
+        if (depth > r.cap) {
+            throw new IllegalArgumentException("nesting exceeds " + r.cap);
         }
         // Singular message/group builders pending assignment: repeat
         // occurrences merge into the same builder, like the reference.

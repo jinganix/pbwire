@@ -29,7 +29,7 @@
 
 mod ffi;
 
-use std::ffi::{c_char, c_int, CStr, CString};
+use std::ffi::{c_char, c_int, c_void, CStr, CString};
 use std::fmt;
 use std::fs;
 use std::marker::PhantomData;
@@ -184,6 +184,181 @@ impl Drop for Schema {
     }
 }
 
+impl Schema {
+    /// Services declared in the loaded files, for routing. The core does no
+    /// RPC; a transport resolves method names to input/output types.
+    pub fn service_count(&self) -> usize {
+        unsafe { ffi::pbw_schema_service_count(self.ptr.as_ptr()) }
+    }
+
+    /// One service by index.
+    pub fn service_at(&self, index: usize) -> Option<Service<'_>> {
+        NonNull::new(unsafe { ffi::pbw_schema_service_at(self.ptr.as_ptr(), index) }
+            as *mut ffi::pbw_service)
+        .map(|ptr| Service {
+            ptr,
+            _schema: PhantomData,
+        })
+    }
+
+    /// One service by fully qualified name (`"pkg.Service"`).
+    pub fn service(&self, name: &str) -> Result<Service<'_>> {
+        let name = CString::new(name).map_err(|_| Error {
+            status: -1,
+            message: "service name contains a NUL byte".into(),
+        })?;
+        match NonNull::new(unsafe {
+            ffi::pbw_schema_service_find(self.ptr.as_ptr(), name.as_ptr())
+                as *mut ffi::pbw_service
+        }) {
+            Some(ptr) => Ok(Service {
+                ptr,
+                _schema: PhantomData,
+            }),
+            None => Err(Error {
+                status: -1,
+                message: format!("no such service: {}", name.to_string_lossy()),
+            }),
+        }
+    }
+
+    /// Resolves `service`/`method` to its input/output message types: decode
+    /// with the first, encode with the second.
+    pub fn resolve_method(&self, service: &str, method: &str) -> Result<(Type<'_>, Type<'_>)> {
+        let svc = CString::new(service).map_err(|_| Error {
+            status: -1,
+            message: "service name contains a NUL byte".into(),
+        })?;
+        let meth = CString::new(method).map_err(|_| Error {
+            status: -1,
+            message: "method name contains a NUL byte".into(),
+        })?;
+        let mut in_desc: *const ffi::pbw_descriptor = ptr::null();
+        let mut out_desc: *const ffi::pbw_descriptor = ptr::null();
+        let status = unsafe {
+            ffi::pbw_service_resolve(
+                self.ptr.as_ptr(),
+                svc.as_ptr(),
+                meth.as_ptr(),
+                &mut in_desc,
+                &mut out_desc,
+            )
+        };
+        if status != ffi::PBW_OK {
+            return Err(status_error(status));
+        }
+        Ok((
+            Type {
+                desc: NonNull::new(in_desc as *mut ffi::pbw_descriptor)
+                    .ok_or_else(|| status_error(-1))?,
+                _schema: PhantomData,
+            },
+            Type {
+                desc: NonNull::new(out_desc as *mut ffi::pbw_descriptor)
+                    .ok_or_else(|| status_error(-1))?,
+                _schema: PhantomData,
+            },
+        ))
+    }
+}
+
+/// One scanned field: raw wire content, no allocation, no value tree.
+/// `field` is `None` when the number is unknown to the schema.
+pub struct VisitField<'a> {
+    pub field: Option<Field<'a>>,
+    pub number: u32,
+    pub wire_type: u32,
+    /// VARINT/32BIT/64BIT raw wire bits (no zigzag or sign extension).
+    /// Unused for the length-delimited shapes below.
+    pub raw: u64,
+    /// LEN payload bytes (nested message, packed run, string), or the whole
+    /// raw field for groups. `None` for the scalar shapes above.
+    pub data: Option<&'a [u8]>,
+}
+
+/// A service from a [`Schema`].
+pub struct Service<'s> {
+    ptr: NonNull<ffi::pbw_service>,
+    _schema: PhantomData<&'s Schema>,
+}
+
+impl Service<'_> {
+    pub fn name(&self) -> &str {
+        unsafe { CStr::from_ptr(ffi::pbw_service_name(self.ptr.as_ptr())) }
+            .to_str()
+            .unwrap_or("")
+    }
+
+    pub fn method_count(&self) -> usize {
+        unsafe { ffi::pbw_service_method_count(self.ptr.as_ptr()) }
+    }
+
+    pub fn method_at(&self, index: usize) -> Option<Method<'_>> {
+        NonNull::new(unsafe { ffi::pbw_service_method_at(self.ptr.as_ptr(), index) }
+            as *mut ffi::pbw_method)
+        .map(|ptr| Method {
+            ptr,
+            _schema: PhantomData,
+        })
+    }
+
+    pub fn method(&self, name: &str) -> Result<Method<'_>> {
+        let name = CString::new(name).map_err(|_| Error {
+            status: -1,
+            message: "method name contains a NUL byte".into(),
+        })?;
+        match NonNull::new(unsafe {
+            ffi::pbw_service_method_find(self.ptr.as_ptr(), name.as_ptr())
+                as *mut ffi::pbw_method
+        }) {
+            Some(ptr) => Ok(Method {
+                ptr,
+                _schema: PhantomData,
+            }),
+            None => Err(Error {
+                status: -1,
+                message: format!("no such method: {}", name.to_string_lossy()),
+            }),
+        }
+    }
+}
+
+/// One service method: fully qualified input/output type names for routing.
+pub struct Method<'s> {
+    ptr: NonNull<ffi::pbw_method>,
+    _schema: PhantomData<&'s Schema>,
+}
+
+impl Method<'_> {
+    pub fn name(&self) -> &str {
+        unsafe { CStr::from_ptr(ffi::pbw_method_name(self.ptr.as_ptr())) }
+            .to_str()
+            .unwrap_or("")
+    }
+
+    /// Fully qualified input message name, without the leading dot.
+    pub fn input_type(&self) -> &str {
+        unsafe { CStr::from_ptr(ffi::pbw_method_input_type(self.ptr.as_ptr())) }
+            .to_str()
+            .unwrap_or("")
+    }
+
+    /// Fully qualified output message name, without the leading dot.
+    pub fn output_type(&self) -> &str {
+        unsafe { CStr::from_ptr(ffi::pbw_method_output_type(self.ptr.as_ptr())) }
+            .to_str()
+            .unwrap_or("")
+    }
+
+    pub fn client_streaming(&self) -> bool {
+        unsafe { ffi::pbw_method_client_streaming(self.ptr.as_ptr()) != 0 }
+    }
+
+    pub fn server_streaming(&self) -> bool {
+        unsafe { ffi::pbw_method_server_streaming(self.ptr.as_ptr()) != 0 }
+    }
+}
+
 /// A message type from a [`Schema`].
 pub struct Type<'s> {
     desc: NonNull<ffi::pbw_descriptor>,
@@ -255,6 +430,265 @@ impl<'s> Type<'s> {
             owned: true,
             _parent: PhantomData,
         })
+    }
+
+    /// Decodes with explicit bounds: inputs larger than `max_bytes` fail,
+    /// and nesting past `max_depth` fails. Zero means the defaults (no byte
+    /// cap, `PBW_MAX_DEPTH` nesting).
+    pub fn decode_limits(&self, wire: &[u8], max_bytes: usize, max_depth: u32) -> Result<Message<'_>> {
+        let limits = ffi::pbw_limits {
+            max_bytes,
+            max_depth,
+        };
+        let mut out: *mut ffi::pbw_message = ptr::null_mut();
+        let status = unsafe {
+            ffi::pbw_decode_limits(
+                self.desc.as_ptr(),
+                wire.as_ptr().cast(),
+                wire.len(),
+                &limits,
+                &mut out,
+            )
+        };
+        if status != ffi::PBW_OK {
+            return Err(status_error(status));
+        }
+        Ok(Message {
+            ptr: NonNull::new(out).ok_or_else(|| status_error(-1))?,
+            owned: true,
+            _parent: PhantomData,
+        })
+    }
+
+    /// Decodes one length-delimited frame from the front of `wire`, returning
+    /// the message and how many bytes the frame occupied.
+    pub fn decode_delimited(&self, wire: &[u8]) -> Result<(Message<'_>, usize)> {
+        let mut out: *mut ffi::pbw_message = ptr::null_mut();
+        let mut consumed = 0usize;
+        let status = unsafe {
+            ffi::pbw_decode_delimited(
+                self.desc.as_ptr(),
+                wire.as_ptr().cast(),
+                wire.len(),
+                &mut out,
+                &mut consumed,
+            )
+        };
+        if status != ffi::PBW_OK {
+            return Err(status_error(status));
+        }
+        Ok((
+            Message {
+                ptr: NonNull::new(out).ok_or_else(|| status_error(-1))?,
+                owned: true,
+                _parent: PhantomData,
+            },
+            consumed,
+        ))
+    }
+
+    /// Parses JSON mapping text into a new tree. Unknown fields fail unless
+    /// `ignore_unknown` is set.
+    pub fn parse_json(&self, text: &str, ignore_unknown: bool) -> Result<Message<'_>> {
+        self.parse_json_limits(text, ignore_unknown, 0, 0)
+    }
+
+    /// [`parse_json`](Self::parse_json) with explicit bounds: text longer than
+    /// `max_bytes` fails, nesting past `max_depth` fails; 0 means the defaults.
+    pub fn parse_json_limits(
+        &self,
+        text: &str,
+        ignore_unknown: bool,
+        max_bytes: usize,
+        max_depth: u32,
+    ) -> Result<Message<'_>> {
+        let opts = ffi::pbw_json_parse_options {
+            ignore_unknown_fields: c_int::from(ignore_unknown),
+        };
+        let limits = ffi::pbw_limits {
+            max_bytes,
+            max_depth,
+        };
+        let mut out: *mut ffi::pbw_message = ptr::null_mut();
+        let status = unsafe {
+            ffi::pbw_json_parse_limits(
+                self.desc.as_ptr(),
+                text.as_ptr().cast(),
+                text.len(),
+                &limits,
+                &opts,
+                &mut out,
+            )
+        };
+        if status != ffi::PBW_OK {
+            return Err(status_error(status));
+        }
+        Ok(Message {
+            ptr: NonNull::new(out).ok_or_else(|| status_error(-1))?,
+            owned: true,
+            _parent: PhantomData,
+        })
+    }
+
+    /// Parses text format into a new tree.
+    pub fn parse_text(&self, text: &str) -> Result<Message<'_>> {
+        self.parse_text_limits(text, 0, 0)
+    }
+
+    /// [`parse_text`](Self::parse_text) with explicit bounds.
+    pub fn parse_text_limits(
+        &self,
+        text: &str,
+        max_bytes: usize,
+        max_depth: u32,
+    ) -> Result<Message<'_>> {
+        let limits = ffi::pbw_limits {
+            max_bytes,
+            max_depth,
+        };
+        let mut out: *mut ffi::pbw_message = ptr::null_mut();
+        let status = unsafe {
+            ffi::pbw_text_parse_limits(
+                self.desc.as_ptr(),
+                text.as_ptr().cast(),
+                text.len(),
+                &limits,
+                &mut out,
+            )
+        };
+        if status != ffi::PBW_OK {
+            return Err(status_error(status));
+        }
+        Ok(Message {
+            ptr: NonNull::new(out).ok_or_else(|| status_error(-1))?,
+            owned: true,
+            _parent: PhantomData,
+        })
+    }
+
+    /// Packs `payload` (already encoded bytes of the message named by
+    /// `type_url`) into a new `google.protobuf.Any` tree. `self` is the Any
+    /// descriptor.
+    pub fn any_pack(&self, type_url: &str, payload: &[u8]) -> Result<Message<'_>> {
+        let url = CString::new(type_url).map_err(|_| Error {
+            status: -1,
+            message: "type url contains a NUL byte".into(),
+        })?;
+        let mut out: *mut ffi::pbw_message = ptr::null_mut();
+        let status = unsafe {
+            ffi::pbw_any_pack(
+                self.desc.as_ptr(),
+                url.as_ptr(),
+                payload.as_ptr().cast(),
+                payload.len(),
+                &mut out,
+            )
+        };
+        if status != ffi::PBW_OK {
+            return Err(status_error(status));
+        }
+        Ok(Message {
+            ptr: NonNull::new(out).ok_or_else(|| status_error(-1))?,
+            owned: true,
+            _parent: PhantomData,
+        })
+    }
+
+    /// A new `google.protobuf.Timestamp` tree holding `ms`. `self` is the
+    /// Timestamp descriptor.
+    pub fn timestamp_from_millis(&self, ms: i64) -> Result<Message<'_>> {
+        let mut out: *mut ffi::pbw_message = ptr::null_mut();
+        let status =
+            unsafe { ffi::pbw_timestamp_from_millis(self.desc.as_ptr(), ms, &mut out) };
+        if status != ffi::PBW_OK {
+            return Err(status_error(status));
+        }
+        Ok(Message {
+            ptr: NonNull::new(out).ok_or_else(|| status_error(-1))?,
+            owned: true,
+            _parent: PhantomData,
+        })
+    }
+
+    /// A new `google.protobuf.Duration` tree holding `ms`. `self` is the
+    /// Duration descriptor.
+    pub fn duration_from_millis(&self, ms: i64) -> Result<Message<'_>> {
+        let mut out: *mut ffi::pbw_message = ptr::null_mut();
+        let status =
+            unsafe { ffi::pbw_duration_from_millis(self.desc.as_ptr(), ms, &mut out) };
+        if status != ffi::PBW_OK {
+            return Err(status_error(status));
+        }
+        Ok(Message {
+            ptr: NonNull::new(out).ok_or_else(|| status_error(-1))?,
+            owned: true,
+            _parent: PhantomData,
+        })
+    }
+
+    /// Single-level scan of `wire` without building a message tree: one
+    /// callback per field, no allocation. Nested messages and packed runs
+    /// arrive as byte payloads for the caller to recurse into. Returning an
+    /// error aborts the scan with that error's status.
+    pub fn visit<F>(&self, wire: &[u8], cb: &mut F) -> Result<()>
+    where
+        F: FnMut(VisitField<'_>) -> Result<()>,
+    {
+        unsafe extern "C" fn tramp<F>(
+            ud: *mut c_void,
+            field: *const ffi::pbw_field,
+            number: u32,
+            wire_type: u32,
+            value: *const ffi::pbw_visit_value,
+        ) -> c_int
+        where
+            F: FnMut(VisitField<'_>) -> Result<()>,
+        {
+            let cb = unsafe { &mut *(ud as *mut F) };
+            let field = NonNull::new(field as *mut ffi::pbw_field).map(|ptr| Field {
+                ptr,
+                _schema: PhantomData,
+            });
+            let raw = unsafe { &*value };
+            let data = if raw.data.is_null() {
+                None
+            } else {
+                Some(unsafe {
+                    std::slice::from_raw_parts(raw.data.cast::<u8>(), raw.len)
+                })
+            };
+            // A panicking callback must not unwind through the C frame (that
+            // aborts the process): report it as a failed scan instead.
+            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                cb(VisitField {
+                    field,
+                    number,
+                    wire_type,
+                    raw: raw.u64,
+                    data,
+                })
+            }));
+            match outcome {
+                Ok(Ok(())) => ffi::PBW_OK,
+                Ok(Err(e)) => e.status,
+                Err(_) => ffi::PBW_ERR_INVALID,
+            }
+        }
+        let mut fail_off = 0usize;
+        let status = unsafe {
+            ffi::pbw_visit(
+                self.desc.as_ptr(),
+                wire.as_ptr().cast(),
+                wire.len(),
+                Some(tramp::<F>),
+                cb as *mut F as *mut c_void,
+                &mut fail_off,
+            )
+        };
+        if status != ffi::PBW_OK {
+            return Err(status_error(status));
+        }
+        Ok(())
     }
 }
 
@@ -446,9 +880,153 @@ impl Message<'_> {
         unsafe { ffi::pbw_message_wire_size(self.ptr.as_ptr()) }
     }
 
+    /// Exact bytes [`Message::encode`] would write, without writing them.
+    pub fn encoded_size(&self) -> Result<usize> {
+        let mut size = 0usize;
+        let status = unsafe { ffi::pbw_message_encoded_size(self.ptr.as_ptr(), &mut size) };
+        if status != ffi::PBW_OK {
+            return Err(status_error(status));
+        }
+        Ok(size)
+    }
+
     /// True when every proto2 `required` field is present.
     pub fn is_initialized(&self) -> bool {
         unsafe { ffi::pbw_message_is_initialized(self.ptr.as_ptr()) != 0 }
+    }
+
+    /// Encodes with map entries sorted by key, so equal messages encode to
+    /// equal bytes regardless of insertion order.
+    pub fn encode_deterministic(&self) -> Result<Vec<u8>> {
+        let mut out: *mut u8 = ptr::null_mut();
+        let mut len = 0usize;
+        let status =
+            unsafe { ffi::pbw_encode_deterministic(self.ptr.as_ptr(), &mut out, &mut len) };
+        if status != ffi::PBW_OK {
+            return Err(status_error(status));
+        }
+        if len == 0 {
+            unsafe { ffi::pbw_free(out.cast()) };
+            return Ok(Vec::new());
+        }
+        let bytes = unsafe { std::slice::from_raw_parts(out, len) }.to_vec();
+        unsafe { ffi::pbw_free(out.cast()) };
+        Ok(bytes)
+    }
+
+    /// Encodes one length-delimited frame (varint length + message).
+    pub fn encode_delimited(&self) -> Result<Vec<u8>> {
+        let mut out: *mut u8 = ptr::null_mut();
+        let mut len = 0usize;
+        let status = unsafe { ffi::pbw_encode_delimited(self.ptr.as_ptr(), &mut out, &mut len) };
+        if status != ffi::PBW_OK {
+            return Err(status_error(status));
+        }
+        if len == 0 {
+            unsafe { ffi::pbw_free(out.cast()) };
+            return Ok(Vec::new());
+        }
+        let bytes = unsafe { std::slice::from_raw_parts(out, len) }.to_vec();
+        unsafe { ffi::pbw_free(out.cast()) };
+        Ok(bytes)
+    }
+
+    /// Prints this message in protobuf JSON mapping. Unknown fields are not
+    /// printed, matching the reference printer.
+    pub fn print_json(&self) -> Result<String> {
+        let mut out: *mut c_char = ptr::null_mut();
+        let mut len = 0usize;
+        let status = unsafe { ffi::pbw_json_print(self.ptr.as_ptr(), &mut out, &mut len) };
+        if status != ffi::PBW_OK {
+            return Err(status_error(status));
+        }
+        if len == 0 || out.is_null() {
+            unsafe { ffi::pbw_free(out.cast()) };
+            return Ok(String::new());
+        }
+        let bytes = unsafe { std::slice::from_raw_parts(out.cast::<u8>(), len) }.to_vec();
+        unsafe { ffi::pbw_free(out.cast()) };
+        String::from_utf8(bytes).map_err(|_| status_error(-1))
+    }
+
+    /// Prints this message in protobuf text format. Unknown fields print as
+    /// numeric lines when `print_unknown` is set, like the reference printer.
+    pub fn print_text(&self, print_unknown: bool) -> Result<String> {
+        let mut out: *mut c_char = ptr::null_mut();
+        let mut len = 0usize;
+        // pbw_text_print prints unknown fields; the opts entry is the one
+        // that honours the flag either way.
+        let status = unsafe {
+            ffi::pbw_text_print_opts(
+                self.ptr.as_ptr(),
+                c_int::from(print_unknown),
+                &mut out,
+                &mut len,
+            )
+        };
+        if status != ffi::PBW_OK {
+            return Err(status_error(status));
+        }
+        if len == 0 || out.is_null() {
+            unsafe { ffi::pbw_free(out.cast()) };
+            return Ok(String::new());
+        }
+        let bytes = unsafe { std::slice::from_raw_parts(out.cast::<u8>(), len) }.to_vec();
+        unsafe { ffi::pbw_free(out.cast()) };
+        String::from_utf8(bytes).map_err(|_| status_error(-1))
+    }
+
+    /// Field 1 of a `google.protobuf.Any` tree, or `None` when absent.
+    pub fn any_type_url(&self) -> Option<&str> {
+        let ptr = unsafe { ffi::pbw_any_type_url(self.ptr.as_ptr()) };
+        if ptr.is_null() {
+            return None;
+        }
+        unsafe { CStr::from_ptr(ptr) }.to_str().ok()
+    }
+
+    /// Field 2 of a `google.protobuf.Any` tree, or `None` when absent.
+    pub fn any_payload(&self) -> Option<&[u8]> {
+        let mut len = 0usize;
+        let ptr = unsafe { ffi::pbw_any_payload(self.ptr.as_ptr(), &mut len) };
+        if ptr.is_null() {
+            return None;
+        }
+        Some(unsafe { std::slice::from_raw_parts(ptr.cast::<u8>(), len) })
+    }
+
+    /// A `google.protobuf.Timestamp` tree as milliseconds.
+    pub fn timestamp_millis(&self) -> Result<i64> {
+        let mut ms = 0i64;
+        let status = unsafe { ffi::pbw_timestamp_to_millis(self.ptr.as_ptr(), &mut ms) };
+        if status != ffi::PBW_OK {
+            return Err(status_error(status));
+        }
+        Ok(ms)
+    }
+
+    /// A `google.protobuf.Duration` tree as milliseconds.
+    pub fn duration_millis(&self) -> Result<i64> {
+        let mut ms = 0i64;
+        let status = unsafe { ffi::pbw_duration_to_millis(self.ptr.as_ptr(), &mut ms) };
+        if status != ffi::PBW_OK {
+            return Err(status_error(status));
+        }
+        Ok(ms)
+    }
+
+    /// How many paths a `google.protobuf.FieldMask` tree holds.
+    pub fn fieldmask_path_count(&self) -> usize {
+        unsafe { ffi::pbw_fieldmask_path_count(self.ptr.as_ptr()) }
+    }
+
+    /// One `google.protobuf.FieldMask` path (`None` past the end).
+    pub fn fieldmask_path_at(&self, index: usize) -> Option<&str> {
+        let ptr = unsafe { ffi::pbw_fieldmask_path_at(self.ptr.as_ptr(), index) };
+        if ptr.is_null() {
+            return None;
+        }
+        unsafe { CStr::from_ptr(ptr) }.to_str().ok()
     }
 
     /// Encodes into a fresh `Vec` (one allocation by the core, one copy).

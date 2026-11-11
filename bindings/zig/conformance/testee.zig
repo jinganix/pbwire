@@ -228,5 +228,8 @@ pub fn main(init: std.process.Init.Minimal) !void {
         try out.writeAll(&out_len);
         try out.writeAll(resp);
         alloc.free(resp);
+        // The runner reads one response before sending the next request: a
+        // buffered write that is never flushed deadlocks the exchange.
+        try out.flush();
     }
 }

@@ -16,9 +16,8 @@ import java.util.Map;
  * schema-driven, it needs no per-message code: the request names the message
  * type, the descriptor set answers with the schema.
  *
- * <p>Supported: binary in -&gt; binary out. JSON and text output need printers the
- * binding does not expose, so those requests answer {@code skipped} and the
- * runner reports them as skipped rather than failed.
+ * <p>Supported: binary, JSON and text in -&gt; binary, JSON or text out. JSPB
+ * answers {@code skipped}, like every other testee here.
  *
  * <p>{@code decode()} validates the whole payload including proto2
  * {@code required} fields, and a parsed message keeps the bytes it was parsed
@@ -32,13 +31,20 @@ import java.util.Map;
 public class Testee {
     // ConformanceRequest.requested_output_format values.
     static final int PROTOBUF = 1;
+    static final int JSON = 2;
+    static final int TEXT = 4;
+
+    // ConformanceRequest.test_category values.
+    static final int CATEGORY_JSON_IGNORE_UNKNOWN = 3;
 
     // ConformanceResponse field numbers: exactly one result field is set.
     static final int PARSE_ERROR = 1;
     static final int RUNTIME_ERROR = 2;
     static final int PROTOBUF_PAYLOAD = 3;
+    static final int JSON_PAYLOAD = 4;
     static final int SKIPPED = 5;
     static final int SERIALIZE_ERROR = 6;
+    static final int TEXT_PAYLOAD = 8;
 
     private final MessageType requestType;
     private final MessageType responseType;
@@ -70,14 +76,15 @@ public class Testee {
                     "cannot parse ConformanceRequest: " + e.getMessage());
         }
         long wanted = request.getLong(3);
+        long category = request.getLong(5);
         String name = request.getString(4);
         byte[] payload = request.getBytes(1);
-        if (wanted != PROTOBUF) {
+        String json = request.getString(2);
+        String text = request.getString(8);
+        boolean printUnknown = request.getBool(9);
+        if (wanted != PROTOBUF && wanted != JSON && wanted != TEXT) {
             return response.set(SKIPPED,
                     "output format " + wanted + " is not supported");
-        }
-        if (payload == null) {
-            return response.set(SKIPPED, "only binary input is supported");
         }
         MessageType type;
         try {
@@ -88,11 +95,28 @@ public class Testee {
         }
         Message parsed;
         try {
-            parsed = type.decode(payload);
+            if (json != null) {
+                parsed = type.parseJson(json,
+                        category == CATEGORY_JSON_IGNORE_UNKNOWN, null);
+            } else if (text != null) {
+                parsed = type.parseText(text);
+            } else if (payload != null) {
+                parsed = type.decode(payload);
+            } else {
+                return response.set(SKIPPED, "unsupported payload");
+            }
         } catch (RuntimeException e) { // refused input: verdict, not a bug
             return response.set(PARSE_ERROR, String.valueOf(e.getMessage()));
         }
         try {
+            if (wanted == JSON) {
+                return response.set(JSON_PAYLOAD, parsed.toJson());
+            }
+            if (wanted == TEXT) {
+                // The runner asks for unknown fields to be dropped in the
+                // *_UnknownFields_Drop cases; print them only when asked.
+                return response.set(TEXT_PAYLOAD, parsed.toText(printUnknown));
+            }
             return response.set(PROTOBUF_PAYLOAD, parsed.encode());
         } catch (RuntimeException e) {
             return response.set(SERIALIZE_ERROR, String.valueOf(e.getMessage()));

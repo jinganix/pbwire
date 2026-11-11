@@ -103,7 +103,7 @@ descriptor sets.
 
 `conformance/testee.clj` speaks the runner's wire protocol (4-byte
 little-endian framing) on the same dynamic schema as the Java testee: binary
-in → binary out, JSON/text answer `skipped` (the binding has no printers,
+in both directions through `to-json`/`from-json`/`to-text`/`from-text`, only JSPB answers `skipped` (the binding has no printers,
 like the Python and Ruby testees). The parent wires the `make
 conformance-clojure` target; from `conformance/`:
 

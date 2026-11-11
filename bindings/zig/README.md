@@ -94,7 +94,7 @@ identically apply here too (same core decoder), so the shared
 | `examples/roundtrip.zig` | runnable round trip |
 | `tests/selftest.zig` | self-check (`zig build test`): oracle bytes, round trip, rejects, text/JSON |
 | `benchmarks/bench.zig` + `bench.sh` | the four standard tiers |
-| `conformance/testee.zig` | official-suite testee (binary + JSON + text, JSPB skipped) |
+| `conformance/testee.zig` | official-suite testee (binary + JSON + text, JSPB skipped); `make conformance-zig` |
 
 ## Generated models
 

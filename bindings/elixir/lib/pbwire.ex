@@ -45,6 +45,10 @@ defmodule Pbwire do
       instead of binaries. Leave it off: Elixir strings are binaries.
     * `:retain_cap` — resident encode-buffer ceiling per scheduler, like
       the C core's retain cap (1 MiB default when unset, 0 keeps nothing).
+    * `:max_bytes` — reject `:pbwire.decode/2` inputs larger than this many
+      bytes, like the C core's `pbw_limits.max_bytes` (0/unset: no cap).
+    * `:max_depth` — reject `:pbwire.decode/2` inputs nested deeper than this
+      many messages, like `pbw_limits.max_depth` (0/unset: built-in caps only).
 
   Raises `ArgumentError` when a module is not an `elixir-protobuf` generated
   module or carries a field this binding does not cover.
@@ -110,6 +114,49 @@ defmodule Pbwire do
   def decode_msg(binary, module, modules) when is_list(modules) do
     :ok = load_schema(modules ++ [module])
     decode(binary, module)
+  end
+
+  @doc """
+  Encodes a struct with length-delimited framing: a varint length prefix
+  followed by the message bytes (what the C core's `pbw_encode_delimited`
+  writes). Decodes with `decode_delimited/2`.
+  """
+  @spec encode_delimited(struct()) :: binary()
+  def encode_delimited(%_{} = struct) do
+    bin = encode(struct)
+    <<encode_varint(byte_size(bin))::binary, bin::binary>>
+  end
+
+  @doc """
+  Decodes one length-delimited frame (see `encode_delimited/1`), returning
+  the struct and the remaining bytes, so concatenated frames decode with
+  repeated calls.
+
+  A truncated prefix or frame raises the input binary (an `ErlangError`,
+  like malformed wire data in `decode/2`).
+  """
+  @spec decode_delimited(binary(), module()) :: {struct(), binary()}
+  def decode_delimited(binary, module) when is_binary(binary) and is_atom(module) do
+    {len, rest} = decode_varint!(binary)
+
+    case rest do
+      <<frame::binary-size(^len), rest2::binary>> -> {decode(frame, module), rest2}
+      _ -> :erlang.error(binary)
+    end
+  end
+
+  @doc """
+  Encodes a struct with map entries sorted by key, so equal structs encode
+  to equal bytes regardless of map insertion order (what the C core's
+  `pbw_encode_deterministic` does for maps; non-map fields encode exactly
+  as `encode/1` writes them, so repeated-field order is kept). Key order
+  matches the core: strings compare byte-wise, signed integer keys compare
+  signed, every other key compares unsigned.
+  """
+  @spec encode_deterministic(struct()) :: binary()
+  def encode_deterministic(%mod{} = struct) do
+    spec = fetch!(mod)
+    :pbwire.encode(sort_tuple(spec, to_tuple(spec, struct)))
   end
 
   # -- struct -> tuple -------------------------------------------------
@@ -289,4 +336,126 @@ defmodule Pbwire do
   defp scalar_zero(type, _) when type in [:float, :double], do: 0.0
   defp scalar_zero(:string, _), do: ""
   defp scalar_zero(:bytes, _), do: <<>>
+
+  # -- delimited framing -------------------------------------------------
+
+  # Unsigned varint32, as the wire writes lengths.
+  defp encode_varint(n) when is_integer(n) and n >= 0 do
+    IO.iodata_to_binary(varint_iodata(n))
+  end
+
+  defp varint_iodata(n) when n < 128, do: <<n>>
+  defp varint_iodata(n), do: [rem(n, 128) + 128, varint_iodata(div(n, 128))]
+
+  # Strict varint32 like the core's length reader: at most five bytes,
+  # nothing above bit 31. Anything else raises the whole input.
+  defp decode_varint!(bin), do: decode_varint!(bin, 0, 0, bin)
+
+  defp decode_varint!(<<byte, rest::binary>>, shift, acc, orig) when shift < 28 do
+    val = acc + :erlang.bsl(:erlang.band(byte, 127), shift)
+
+    if :erlang.band(byte, 128) == 0 do
+      {val, rest}
+    else
+      decode_varint!(rest, shift + 7, val, orig)
+    end
+  end
+
+  defp decode_varint!(<<byte, rest::binary>>, 28, acc, _orig) when byte < 16 do
+    {acc + :erlang.bsl(byte, 28), rest}
+  end
+
+  defp decode_varint!(_bad, _shift, _acc, orig), do: :erlang.error(orig)
+
+  # -- deterministic map ordering ----------------------------------------
+
+  # Sorts map entries everywhere below an already-translated tuple.
+  # Mirrors :pbwire.encode_deterministic/2: maps sort by key (byte-wise
+  # for strings, signed for signed integers, unsigned otherwise) while
+  # repeated order is preserved.
+  defp sort_tuple(%{name: name, fields: fields}, tuple) do
+    [_ | values] = Tuple.to_list(tuple)
+
+    sorted =
+      fields |> Enum.zip(values) |> Enum.map(fn {field, value} -> sort_field(field, value) end)
+
+    List.to_tuple([name | sorted])
+  end
+
+  defp sort_field(%{kind: {:map, key_kind, val_kind}}, values) when is_list(values) do
+    sort_entries(values, key_kind, val_kind)
+  end
+
+  defp sort_field(%{occurrence: :repeated, kind: {:message, mod}}, values)
+       when is_list(values) do
+    Enum.map(values, &sort_tuple(fetch!(mod), &1))
+  end
+
+  defp sort_field(%{kind: {:message, mod}}, value) when is_tuple(value) do
+    sort_tuple(fetch!(mod), value)
+  end
+
+  defp sort_field(%{kind: {:oneof, _, members}}, {member, value}) do
+    case Enum.find(members, &(&1.key == member)) do
+      nil -> {member, value}
+      %{kind: kind} -> {member, sort_value(kind, value)}
+    end
+  end
+
+  defp sort_field(_field, value), do: value
+
+  defp sort_value({:map, key_kind, val_kind}, values) when is_list(values) do
+    sort_entries(values, key_kind, val_kind)
+  end
+
+  defp sort_value({:message, mod}, value) when is_tuple(value) do
+    sort_tuple(fetch!(mod), value)
+  end
+
+  defp sort_value(_kind, value), do: value
+
+  defp sort_map_value({:map, key_kind, val_kind}, values) when is_list(values) do
+    sort_entries(values, key_kind, val_kind)
+  end
+
+  defp sort_map_value({:message, mod}, value) when is_tuple(value) do
+    sort_tuple(fetch!(mod), value)
+  end
+
+  defp sort_map_value(_kind, value), do: value
+
+  # Stable sort: the index tag keeps duplicate keys in input order, so the
+  # winner on decode (last value wins) is deterministic too.
+  defp sort_entries(entries, key_kind, val_kind) do
+    entries
+    |> Enum.with_index(1)
+    |> Enum.map(fn {{k, v}, i} ->
+      {canon_key(k, key_kind), i, {k, sort_map_value(val_kind, v)}}
+    end)
+    |> Enum.sort()
+    |> Enum.map(fn {_, _, e} -> e end)
+  end
+
+  # Canonical key for comparison, mirroring the core's map_key_cmp: strings
+  # byte-wise, signed integers signed, everything else unsigned.
+  defp canon_key(key, {:scalar, :string}) when is_binary(key), do: key
+  defp canon_key(key, {:scalar, :string}) when is_list(key), do: :erlang.iolist_to_binary(key)
+  defp canon_key(true, {:scalar, :bool}), do: 1
+  defp canon_key(false, {:scalar, :bool}), do: 0
+
+  defp canon_key(key, {:scalar, type}) when is_integer(key) do
+    if signed_key?(type), do: key, else: :erlang.band(key, key_mask(type))
+  end
+
+  defp canon_key(key, _kind), do: key
+
+  defp signed_key?(type) when type in [:int32, :int64, :sint32, :sint64, :sfixed32, :sfixed64] do
+    true
+  end
+
+  defp signed_key?(_type), do: false
+
+  defp key_mask(:uint32), do: 0xFFFFFFFF
+  defp key_mask(:fixed32), do: 0xFFFFFFFF
+  defp key_mask(_type), do: 0xFFFFFFFFFFFFFFFF
 end

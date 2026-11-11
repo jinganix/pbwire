@@ -66,6 +66,7 @@ make conformance-python  # official suite through the Python binding
 make conformance-ruby    # official suite through the Ruby binding
 make conformance-java    # official suite through the Java binding
 make conformance-lua conformance-r conformance-node  # same suite through those bindings
+make conformance-julia conformance-scala conformance-clojure conformance-fsharp conformance-zig  # same suite, JVM/FFI/static hosts
 
 # Official conformance suite (binary wire format). Needs the cached reference
 # checkout: `make conformance-setup` clones it once, `make conformance`

@@ -1,3 +1,7 @@
+import java.nio.ByteBuffer;
+import java.nio.charset.CharacterCodingException;
+import java.nio.charset.CharsetDecoder;
+import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -56,10 +60,48 @@ public final class GenericCodec {
         public boolean repeated;
         public boolean packed;
         public int oneof = -1; // oneof index, -1 = none
+        public boolean extension; // attached to an extendee, prints [name]
         public int presence = IMPLICIT;
         public MessageDef msgType; // MESSAGE/GROUP element type
+        public EnumDef enumType; // ENUM element type: value names and openness
+        public boolean enumClosed; // unknown numbers divert to unknown fields
+        public String fullName; // extensions only: [pkg.name] in JSON and text
         public byte[] tag; // precomputed tag bytes (singular/packed form)
         public String fieldName;
+    }
+
+    /** One enum type: its value names (aliases repeat a number) and openness. */
+    public static final class EnumDef {
+        public String fullName;
+        public final Map<String, Integer> byName = new HashMap<>();
+        public final Map<Integer, String> byNumber = new HashMap<>();
+        public boolean closed; // proto2 (and CLOSED editions) enums
+
+        /** The name of a number: the first declared, like the reference. */
+        public String nameOf(int number) {
+            return byNumber.get(number);
+        }
+
+        /** The number of a name, or null. Aliases all resolve. */
+        public Integer valueOf(String name) {
+            return byName.get(name);
+        }
+    }
+
+    /** One RPC method: its name, its streaming flags and its linked types. */
+    public static final class MethodDef {
+        public String name;
+        public MessageDef inputType;
+        public MessageDef outputType;
+        public boolean clientStreaming;
+        public boolean serverStreaming;
+    }
+
+    /** One service: its methods by name and in declaration order. */
+    public static final class SvcDef {
+        public String fullName;
+        public MethodDef[] methods = new MethodDef[0];
+        public Map<String, Integer> byName = new HashMap<>();
     }
 
     public static final class MessageDef {
@@ -86,10 +128,34 @@ public final class GenericCodec {
         // Transitive closure: some reachable message has a REQUIRED field.
         // decode() checks the tree only then, so other decodes pay one test.
         public boolean deepRequired;
+        // protoc's synthesized map entry: field 1 is the key, field 2 the value,
+        // and the JSON/text mappings print it as an object rather than a list.
+        public boolean mapEntry;
+        // Names the descriptor declared reserved: the text parser skips them.
+        public String[] reservedNames = new String[0];
+        // The schema this type came from: Any's type URL resolves through it.
+        public Schema schema;
     }
+
+
 
     public static final class Schema {
         public final Map<String, MessageDef> byName = new HashMap<>();
+        public final Map<String, EnumDef> enums = new HashMap<>();
+        // Extensions by their global name ([pkg.name] is how JSON and text
+        // address them); each is attached to its extendee's field list too.
+        public final Map<String, Field> extensions = new HashMap<>();
+        public final Map<String, SvcDef> services = new HashMap<>();
+
+        /** An enum type by full name, or null. */
+        public EnumDef enumDef(String fullName) {
+            return enums.get(fullName);
+        }
+
+        /** An extension by its global name, or null. */
+        public Field extension(String fullName) {
+            return extensions.get(fullName);
+        }
 
         public MessageDef message(String fullName) {
             MessageDef d = byName.get(fullName);
@@ -99,12 +165,47 @@ public final class GenericCodec {
             return d;
         }
 
+        public SvcDef service(String fullName) {
+            SvcDef s = services.get(fullName);
+            if (s == null) {
+                throw new IllegalArgumentException("no such service: " + fullName);
+            }
+            return s;
+        }
+
+        private void buildService(Proto.Service svc) {
+            SvcDef s = new SvcDef();
+            s.fullName = svc.fullName;
+            s.methods = new MethodDef[svc.methods.size()];
+            for (int i = 0; i < svc.methods.size(); i++) {
+                Proto.Method m = svc.methods.get(i);
+                MethodDef d = new MethodDef();
+                d.name = m.name;
+                d.inputType = message(m.input.fullName);
+                d.outputType = message(m.output.fullName);
+                d.clientStreaming = m.clientStreaming;
+                d.serverStreaming = m.serverStreaming;
+                s.methods[i] = d;
+                s.byName.put(d.name, i);
+            }
+            services.put(s.fullName, s);
+        }
+
         /**
          * Loads every message (+ extensions) in the set. The set is parsed
          * and linked here, so the runtime has no protobuf-java dependency:
          * a descriptor set plus this file is the whole schema story.
          */
         public static Schema load(byte[] fileDescriptorSet) {
+            return load(fileDescriptorSet, Limits.defaults());
+        }
+
+        /** Bounded descriptor load: rejects oversized inputs up front. */
+        public static Schema load(byte[] fileDescriptorSet, Limits lim) {
+            if (lim == null) {
+                lim = Limits.defaults();
+            }
+            lim.checkBytes(fileDescriptorSet.length, "descriptor set");
             List<Proto.File> files;
             try {
                 files = Proto.parseSet(fileDescriptorSet);
@@ -114,6 +215,16 @@ public final class GenericCodec {
                         + e.getMessage(), e);
             }
             Schema s = new Schema();
+            // Enums first: message fields link their element type while the
+            // defs are built.
+            for (Proto.File f : files) {
+                for (Proto.Enum e : f.enums) {
+                    s.buildEnum(e);
+                }
+                for (Proto.Message m : f.messages) {
+                    s.buildEnums(m, 1);
+                }
+            }
             for (Proto.File f : files) {
                 for (Proto.Message m : f.messages) {
                     s.buildDef(m);
@@ -128,6 +239,12 @@ public final class GenericCodec {
                     for (Proto.Field e : m.extensions) {
                         s.attachExtension(e);
                     }
+                }
+            }
+            // Services resolve after every message exists, like extensions.
+            for (Proto.File f : files) {
+                for (Proto.Service svc : f.services) {
+                    s.buildService(svc);
                 }
             }
             // Transitive required closure, monotone fixpoint so recursive
@@ -177,6 +294,34 @@ public final class GenericCodec {
             return false;
         }
 
+        private void buildEnum(Proto.Enum e) {
+            EnumDef d = new EnumDef();
+            d.fullName = e.fullName;
+            d.closed = e.closed;
+            for (Proto.EnumValue v : e.values) {
+                if (d.byName.put(v.name, v.number) != null) {
+                    throw new IllegalArgumentException("duplicate enum value "
+                            + d.fullName + "." + v.name);
+                }
+                // Aliases repeat a number: the first declared name is printed.
+                d.byNumber.putIfAbsent(v.number, v.name);
+            }
+            enums.put(d.fullName, d);
+        }
+
+        private void buildEnums(Proto.Message m, int depth) {
+            if (depth > Wire.MAX_DEPTH) {
+                throw new IllegalArgumentException("descriptor nesting exceeds "
+                        + Wire.MAX_DEPTH);
+            }
+            for (Proto.Enum e : m.enums) {
+                buildEnum(e);
+            }
+            for (Proto.Message n : m.nested) {
+                buildEnums(n, depth + 1);
+            }
+        }
+
         private MessageDef buildDef(Proto.Message m) {
             return buildDef(m, 1);
         }
@@ -192,6 +337,9 @@ public final class GenericCodec {
             }
             MessageDef d = new MessageDef();
             d.fullName = m.fullName;
+            d.mapEntry = m.mapEntry;
+            d.reservedNames = m.reservedNames.toArray(new String[0]);
+            d.schema = this;
             byName.put(m.fullName, d); // before fields: recursion-safe
             List<Field> fs = new ArrayList<>();
             Map<Proto.Oneof, Integer> oneofs = new HashMap<>();
@@ -212,6 +360,7 @@ public final class GenericCodec {
             }
             MessageDef d = new MessageDef();
             d.fullName = m.fullName;
+            d.schema = this;
             byName.put(m.fullName, d); // before fields: recursion-safe
             List<Field> fs = new ArrayList<>(m.fields.length);
             for (FieldMeta<?, ?> f : m.fields) {
@@ -342,6 +491,13 @@ public final class GenericCodec {
             s.repeated = f.label == Proto.Label.REPEATED;
             s.packed = f.packed;
             s.fieldName = f.name;
+            if (f.enumType != null) {
+                s.enumType = enums.get(f.enumType.fullName);
+                s.enumClosed = f.enumClosed;
+            }
+            if (f.isExtension) {
+                s.fullName = f.fullName;
+            }
             if (f.oneof != null) {
                 Integer idx = oneofs.get(f.oneof);
                 if (idx == null) {
@@ -379,6 +535,11 @@ public final class GenericCodec {
                         + e.extendee);
             }
             Field s = buildField(e, new HashMap<>());
+            s.extension = true;
+            if (e.fullName != null && extensions.put(e.fullName, s) != null) {
+                throw new IllegalArgumentException("duplicate extension "
+                        + e.fullName);
+            }
             List<Field> fs = new ArrayList<>(Arrays.asList(d.fields));
             fs.add(s);
             Map<String, Integer> names = new HashMap<>(d.oneofByName);
@@ -911,6 +1072,159 @@ public final class GenericCodec {
         return r;
     }
 
+    /** Length of a string in UTF-8 without allocating the bytes. */
+    static int utf8Length(String s) {
+        int n = 0;
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (c < 0x80) {
+                n++;
+            } else if (c < 0x800) {
+                n += 2;
+            } else if (Character.isHighSurrogate(c)
+                    && i + 1 < s.length()
+                    && Character.isLowSurrogate(s.charAt(i + 1))) {
+                n += 4;
+                i++;
+            } else {
+                n += 3;
+            }
+        }
+        return n;
+    }
+
+    /** One walk over the tree, mirroring {@link #encodeInto} field for field. */
+    private static long sizeOf(DMsg m, int depth) {
+        if (depth > Wire.MAX_DEPTH) {
+            throw new IllegalArgumentException("nesting exceeds " + Wire.MAX_DEPTH);
+        }
+        MessageDef def = m.def;
+        boolean noRequired = !def.hasRequired;
+        long n = 0;
+        for (int s = 0; s < def.fields.length; s++) {
+            if (!m.has[s]) {
+                if (!noRequired && def.fields[s].presence == REQUIRED) {
+                    throw new IllegalStateException("missing required field "
+                            + def.fullName + "." + def.fields[s].number);
+                }
+                continue;
+            }
+            Field f = def.fields[s];
+            if (f.repeated) {
+                Rep rp = m.rep;
+                int len = f.kind <= K_DOUBLE ? rp.numLen[s] : rp.refLen[s];
+                if (len == 0) {
+                    continue;
+                }
+                if (f.kind <= K_DOUBLE) {
+                    n += sizeRepNum(f, rp.num[s], len);
+                } else {
+                    for (int i = 0; i < len; i++) {
+                        n += sizeRefVal(f, rp.ref[s][i], depth);
+                    }
+                }
+                continue;
+            }
+            if (f.kind <= K_DOUBLE) {
+                long v = m.num[s];
+                if (v == 0 && f.presence == IMPLICIT) {
+                    continue;
+                }
+                n += f.tag.length + sizeNumSingle(f.kind, v);
+                continue;
+            }
+            if (f.kind == K_STRING && m.ref[s] instanceof String
+                    && f.presence == IMPLICIT
+                    && ((String) m.ref[s]).isEmpty()) {
+                continue;
+            }
+            if (f.kind == K_BYTES && m.ref[s] instanceof byte[]
+                    && f.presence == IMPLICIT
+                    && ((byte[]) m.ref[s]).length == 0) {
+                continue;
+            }
+            n += sizeRefVal(f, m.ref[s], depth);
+        }
+        if (m.unknown != null) {
+            for (byte[] u : m.unknown) {
+                n += u.length;
+            }
+        }
+        return n;
+    }
+
+    private static long sizeRepNum(Field f, long[] a, int n) {
+        if (f.packed) {
+            long payload;
+            if (f.kind == K_BOOL) {
+                payload = n;
+            } else if (f.kind == K_FIXED32 || f.kind == K_SFIXED32
+                    || f.kind == K_FLOAT) {
+                payload = 4L * n;
+            } else if (f.kind == K_FIXED64 || f.kind == K_SFIXED64
+                    || f.kind == K_DOUBLE) {
+                payload = 8L * n;
+            } else {
+                payload = 0;
+                for (int i = 0; i < n; i++) {
+                    payload += sizePackedVar(f.kind, a[i]);
+                }
+            }
+            return f.tag.length + Wire.sizeVar32((int) payload) + payload;
+        }
+        long total = 0;
+        for (int i = 0; i < n; i++) {
+            total += f.tag.length + sizeNumSingle(f.kind, a[i]);
+        }
+        return total;
+    }
+
+    private static long sizeNumSingle(int kind, long v) {
+        switch (kind) {
+            case K_INT32:
+            case K_ENUM:
+                return Wire.sizeInt32((int) v);
+            case K_UINT32:
+                return Wire.sizeVar32((int) v);
+            case K_SINT32:
+                return Wire.sizeVar32(Wire.zig32((int) v));
+            case K_INT64:
+            case K_UINT64:
+                return Wire.sizeVar64(v);
+            case K_SINT64:
+                return Wire.sizeVar64(Wire.zig64(v));
+            case K_BOOL:
+                return 1;
+            case K_FIXED32:
+            case K_SFIXED32:
+            case K_FLOAT:
+                return 4;
+            default:
+                return 8;
+        }
+    }
+
+    private static long sizeRefVal(Field f, Object v, int depth) {
+        if (v instanceof Slice) {
+            return ((Slice) v).len; // verbatim copy, tag included
+        }
+        if (f.kind == K_STRING) {
+            int n = utf8Length((String) v);
+            return f.tag.length + Wire.sizeVar32(n) + n;
+        }
+        if (f.kind == K_BYTES) {
+            int n = ((byte[]) v).length;
+            return f.tag.length + Wire.sizeVar32(n) + n;
+        }
+        if (f.kind == K_MESSAGE) {
+            long sub = sizeOf((DMsg) v, depth + 1);
+            return f.tag.length + Wire.sizeVar64(sub) + sub;
+        }
+        long sub = sizeOf((DMsg) v, depth + 1); // K_GROUP
+        return Wire.tagBytes(f.number, 3).length + sub
+                + Wire.tagBytes(f.number, 4).length;
+    }
+
     /* ---------------- encode ---------------- */
 
     /** One workspace per thread: the encode buffer plus the string
@@ -1037,6 +1351,11 @@ public final class GenericCodec {
 
     private static void encodeInto(DMsg m, Wire.Buf b, int depth,
             StrMemo sc) {
+        encodeInto(m, b, depth, sc, false);
+    }
+
+    private static void encodeInto(DMsg m, Wire.Buf b, int depth,
+            StrMemo sc, boolean deterministic) {
         if (depth > Wire.MAX_DEPTH) {
             throw new IllegalArgumentException("nesting exceeds " + Wire.MAX_DEPTH);
         }
@@ -1064,10 +1383,19 @@ public final class GenericCodec {
                 }
                 if (f.kind <= K_DOUBLE) {
                     encodeRepNum(b, f, rp.num[s], n);
+                } else if (deterministic && f.kind == K_MESSAGE
+                        && f.msgType.mapEntry) {
+                    // Deterministic: sort a copy, never the caller's message.
+                    Object[] sorted = Arrays.copyOf(rp.ref[s], n);
+                    Arrays.sort((Object[]) sorted, (x, y) -> mapKeyCmp(
+                            (GenericCodec.DMsg) x, (GenericCodec.DMsg) y));
+                    for (int i = 0; i < n; i++) {
+                        writeRefVal(b, f, sorted[i], depth, sc, deterministic);
+                    }
                 } else {
                     Object[] a = rp.ref[s];
                     for (int i = 0; i < n; i++) {
-                        writeRefVal(b, f, a[i], depth, sc);
+                        writeRefVal(b, f, a[i], depth, sc, deterministic);
                     }
                 }
                 continue;
@@ -1086,11 +1414,15 @@ public final class GenericCodec {
                 switch (kind) {
                     case K_INT32:
                     case K_ENUM: {
+                        // Encode the int32 interpretation, sign-extended: a
+                        // decoded value may carry a wider raw varint (the
+                        // reference truncates it to int32 and re-emits the
+                        // negative as 10 bytes).
                         int x = (int) v;
                         if (x >= 0) {
                             Wire.wTagVar32(b, tag, x);
                         } else {
-                            Wire.wTagVar64(b, tag, v);
+                            Wire.wTagVar64(b, tag, (long) x);
                         }
                         break;
                     }
@@ -1147,6 +1479,11 @@ public final class GenericCodec {
     /** Singular or repeated-element ref value: Slice copies verbatim. */
     private static void writeRefVal(Wire.Buf b, Field f, Object v, int depth,
             StrMemo sc) {
+        writeRefVal(b, f, v, depth, sc, false);
+    }
+
+    private static void writeRefVal(Wire.Buf b, Field f, Object v, int depth,
+            StrMemo sc, boolean deterministic) {
         if (v instanceof Slice) {
             Slice sl = (Slice) v; // tag included: pure copy, stays byte-exact
             Wire.ensure(b, sl.len);
@@ -1174,7 +1511,7 @@ public final class GenericCodec {
             }
             int lp = b.pos;
             b.b[b.pos++] = 0;
-            encodeInto((DMsg) v, b, depth + 1, sc);
+            encodeInto((DMsg) v, b, depth + 1, sc, deterministic);
             int len = b.pos - lp - 1;
             if (len < 128) {
                 b.b[lp] = (byte) len;
@@ -1392,29 +1729,324 @@ public final class GenericCodec {
             ThreadLocal.withInitial(Wire.Reader::new);
 
     public static DMsg decode(MessageDef def, byte[] wire) {
+        return decode(def, wire, Limits.defaults());
+    }
+
+    /** Bounded decode, like the core's {@code pbw_decode_limits}. */
+    public static DMsg decode(MessageDef def, byte[] wire, Limits lim) {
+        if (lim == null) {
+            lim = Limits.defaults();
+        }
+        lim.checkBytes(wire.length, "message");
         Wire.Reader r = READER.get();
         r.b = wire;
         r.pos = 0;
         r.end = wire.length;
-        DMsg m = decodeInto(new DMsg(def), r, wire.length, -1, 0);
-        if (r.pos != wire.length) {
-            throw new IllegalArgumentException("trailing bytes");
+        r.cap = lim.effectiveDepth();
+        try {
+            DMsg m = decodeInto(new DMsg(def), r, wire.length, -1, 0);
+            if (r.pos != wire.length) {
+                throw new IllegalArgumentException("trailing bytes");
+            }
+            // The core refuses a message missing a required field at decode
+            // time; the flag above keeps this walk off trees that cannot fail it.
+            if (def.deepRequired) {
+                checkRequired(m, r.cap, 0);
+            }
+            return m;
+        } finally {
+            r.cap = Wire.MAX_DEPTH; // workspace reuse must not leak the cap
         }
-        // The core refuses a message missing a required field at decode
-        // time; the flag above keeps this walk off trees that cannot fail it.
+    }
+
+    /** Exact number of bytes {@link #encode} writes for this tree. */
+    public static long encodedSize(DMsg m) {
+        return sizeOf(m, 0);
+    }
+
+    /**
+     * Map entries sorted by key, like the core's deterministic encoder: equal
+     * messages encode to equal bytes whatever the insertion order. Field order
+     * is already schema order, so only repeated map-entry fields differ.
+     */
+    public static byte[] encodeDeterministic(DMsg m) {
+        Workspace w = WORKSPACE.get();
+        Wire.Buf b = w.buf;
+        b.pos = 0;
+        encodeInto(m, b, 0, w.strings, true);
+        return copyOut(b);
+    }
+
+    /**
+     * Deterministic key order, mirroring src/encode.c map_key_cmp: a missing
+     * key sorts first, string/bytes keys compare byte-wise, signed kinds
+     * numerically and the unsigned kinds by raw bits.
+     */
+    private static int mapKeyCmp(GenericCodec.DMsg a,
+            GenericCodec.DMsg b) {
+        int ks = a.def.lookup(1);
+        boolean ha = ks >= 0 && a.has[ks];
+        boolean hb = ks >= 0 && b.has[ks];
+        if (!ha || !hb) {
+            return ha == hb ? 0 : (ha ? 1 : -1);
+        }
+        Field kf = a.def.fields[ks];
+        if (kf.kind == K_STRING || kf.kind == K_BYTES) {
+            byte[] xa = kf.kind == K_STRING
+                    ? null : (byte[]) refOf(a, ks);
+            byte[] xb = kf.kind == K_STRING
+                    ? null : (byte[]) refOf(b, ks);
+            if (kf.kind == K_STRING) {
+                xa = ((String) refOf(a, ks)).getBytes(StandardCharsets.UTF_8);
+                xb = ((String) refOf(b, ks)).getBytes(StandardCharsets.UTF_8);
+            }
+            int n = Math.min(xa.length, xb.length);
+            for (int i = 0; i < n; i++) {
+                int d = (xa[i] & 0xFF) - (xb[i] & 0xFF);
+                if (d != 0) {
+                    return d < 0 ? -1 : 1;
+                }
+            }
+            return Integer.compare(xa.length, xb.length);
+        }
+        long va = a.num[ks];
+        long vb = b.num[ks];
+        if (va == vb) {
+            return 0;
+        }
+        switch (kf.kind) {
+            case K_INT32:
+            case K_INT64:
+            case K_SINT32:
+            case K_SINT64:
+            case K_SFIXED32:
+            case K_SFIXED64:
+                return va < vb ? -1 : 1;
+            default:
+                return Long.compareUnsigned(va, vb) < 0 ? -1 : 1;
+        }
+    }
+
+    /** Whether `v` is the field's zero in its own width (implicit presence). */
+    private static boolean zeroBits(Field f, long v) {
+        switch (f.kind) {
+            case K_INT32:
+            case K_SINT32:
+            case K_ENUM:
+                return (int) v == 0;
+            case K_UINT32:
+            case K_FIXED32:
+            case K_SFIXED32:
+                return (v & 0xFFFFFFFFL) == 0;
+            case K_FLOAT:
+                // Raw bits: 0.0 is zero, -0.0 is not (like protobuf-java).
+                return (int) v == 0;
+            default:
+                return v == 0;
+        }
+    }
+
+    /** A ref-kind slot's value, materializing a lazy slice in place. */
+    private static Object refOf(GenericCodec.DMsg m, int slot) {
+        Object v = m.ref[slot];
+        if (v instanceof Slice) {
+            v = materialize(m.def.fields[slot], (Slice) v);
+            m.ref[slot] = v;
+        }
+        return v;
+    }
+
+    /** Length-delimited framing: varint length + message, one copy out. */
+    public static byte[] encodeDelimited(DMsg m) {
+        Workspace w = WORKSPACE.get();
+        Wire.Buf b = w.buf;
+        b.pos = 0;
+        encodeInto(m, b, 0, w.strings);
+        int len = b.pos;
+        int llen = Wire.sizeVar32(len);
+        Wire.ensure(b, llen);
+        System.arraycopy(b.b, 0, b.b, llen, len);
+        int p = 0;
+        int v = len;
+        while ((v & ~0x7F) != 0) {
+            b.b[p++] = (byte) ((v & 0x7F) | 0x80);
+            v >>>= 7;
+        }
+        b.b[p++] = (byte) v;
+        b.pos = llen + len;
+        return copyOut(b);
+    }
+
+    /** One delimited frame: the message plus its prefix + body length. */
+    public static final class Frame {
+        public final DMsg msg;
+        public final int consumed;
+
+        Frame(DMsg msg, int consumed) {
+            this.msg = msg;
+            this.consumed = consumed;
+        }
+    }
+
+    /** Decodes one length-delimited frame; the one-shot twin of the Stream. */
+    public static Frame decodeDelimited(MessageDef def, byte[] wire) {
+        return decodeDelimited(def, wire, 0, Limits.defaults());
+    }
+
+    /** Same with explicit bounds; trailing bytes are left for the caller. */
+    public static Frame decodeDelimited(MessageDef def, byte[] wire, int off,
+            Limits lim) {
+        if (lim == null) {
+            lim = Limits.defaults();
+        }
+        if (off < 0 || off > wire.length) {
+            throw new IllegalArgumentException("offset out of range");
+        }
+        Wire.Reader r = new Wire.Reader(); // small frames: no workspace needed
+        r.b = wire;
+        r.pos = off;
+        r.end = wire.length;
+        r.cap = lim.effectiveDepth();
+        int len = Wire.rLen32(r);
+        lim.checkBytes(len, "delimited frame");
+        int frameEnd = r.pos + len; // rLen32 already bounds-checked this
+        DMsg m = decodeInto(new DMsg(def), r, frameEnd, -1, 0);
+        if (r.pos != frameEnd) {
+            throw new IllegalArgumentException("trailing bytes in frame");
+        }
         if (def.deepRequired) {
-            checkRequired(m, 0);
+            checkRequired(m, r.cap, 0);
         }
-        return m;
+        return new Frame(m, r.pos - off);
+    }
+
+    /**
+     * Incremental delimited-message reader, like the core's {@code pbw_istream}:
+     * {@code feed()} appends wire bytes as they arrive, {@code next()} decodes
+     * one message per call and returns null when no whole frame is buffered.
+     * A frame that fails its limits or decodes badly leaves the buffer
+     * untouched, so the caller can {@code reset()} and carry on.
+     */
+    public static final class Stream {
+        private byte[] buf = new byte[256];
+        private int start; // consumed prefix, compacted when it grows
+        private int len; // buffered bytes after start
+        private final Limits lim;
+
+        public Stream() {
+            this(Limits.defaults());
+        }
+
+        public Stream(Limits lim) {
+            this.lim = lim == null ? Limits.defaults() : lim;
+        }
+
+        /** Drops buffered bytes, complete frames and partial ones alike. */
+        public void reset() {
+            start = 0;
+            len = 0;
+        }
+
+        /** Buffered bytes still waiting for a whole frame. */
+        public int buffered() {
+            return len;
+        }
+
+        public void feed(byte[] data) {
+            feed(data, 0, data.length);
+        }
+
+        public void feed(byte[] data, int off, int n) {
+            if (data == null && n > 0) {
+                throw new IllegalArgumentException("null payload");
+            }
+            if (off < 0 || n < 0 || off + n > (data == null ? 0 : data.length)) {
+                throw new IllegalArgumentException("feed out of range");
+            }
+            if (n == 0) {
+                return;
+            }
+            if (start > 0) { // compact the consumed prefix first
+                System.arraycopy(buf, start, buf, 0, len);
+                start = 0;
+            }
+            long need = (long) len + n;
+            if (need > Integer.MAX_VALUE - 8) {
+                throw new PbwireException("stream buffer exceeds the array limit", 2);
+            }
+            if (need > buf.length) {
+                int cap = Math.max(buf.length, 256);
+                while ((long) cap < need) {
+                    if (cap > (Integer.MAX_VALUE - 8) / 2) {
+                        cap = Integer.MAX_VALUE - 8; // need fits, so this holds
+                        break;
+                    }
+                    cap *= 2;
+                }
+                byte[] grown = new byte[cap];
+                System.arraycopy(buf, 0, grown, 0, len);
+                buf = grown;
+            }
+            System.arraycopy(data, off, buf, len, n);
+            len += n;
+        }
+
+        /**
+         * The next whole frame, or null when the buffer holds no complete
+         * one yet. A short (split) length varint waits; a 5-byte unterminated
+         * one is corrupt, like the core's reader.
+         */
+        public DMsg next(MessageDef def) {
+            int p = start;
+            int stop = start + len;
+            long v = 0;
+            int shift = 0;
+            int lp = p;
+            while (true) {
+                if (p >= stop) {
+                    return null; // split length varint: need more data
+                }
+                if (shift >= 35) {
+                    throw new IllegalArgumentException("bad frame length");
+                }
+                byte c = buf[p++];
+                v |= (long) (c & 0x7F) << shift;
+                shift += 7;
+                if (c >= 0) {
+                    break;
+                }
+            }
+            if (v > Integer.MAX_VALUE) {
+                throw new IllegalArgumentException("frame length overflow");
+            }
+            int n = (int) v;
+            if (stop - p < n) {
+                return null; // split body: need more data
+            }
+            // Only a whole buffered frame meets the byte cap: a chunked
+            // sender must not trip the limit with a split length prefix.
+            lim.checkBytes(n, "delimited frame");
+            int consumed = (p - lp) + n;
+            byte[] frame = Arrays.copyOfRange(buf, lp, lp + consumed);
+            Frame f = decodeDelimited(def, frame, 0, lim);
+            start += consumed;
+            if (start == stop) { // drained: reset so the buffer never grows
+                start = 0;
+                len = 0;
+            } else {
+                len -= consumed;
+            }
+            return f.msg;
+        }
     }
 
     /**
      * Whole-tree required check. Present nested messages parse here (and are
      * cached in place), so a lazy slice cannot smuggle in a missing field.
      */
-    private static void checkRequired(DMsg m, int depth) {
-        if (depth > Wire.MAX_DEPTH) {
-            throw new IllegalArgumentException("nesting exceeds " + Wire.MAX_DEPTH);
+    static void checkRequired(DMsg m, int cap, int depth) {
+        if (depth > cap) {
+            throw new IllegalArgumentException("nesting exceeds " + cap);
         }
         MessageDef def = m.def;
         if (def.hasRequired) {
@@ -1439,7 +2071,7 @@ public final class GenericCodec {
                         rp.ref[s][i] = v;
                     }
                     if (v instanceof DMsg) {
-                        checkRequired((DMsg) v, depth + 1);
+                        checkRequired((DMsg) v, cap, depth + 1);
                     }
                 }
             } else {
@@ -1449,7 +2081,7 @@ public final class GenericCodec {
                     m.ref[s] = v;
                 }
                 if (v instanceof DMsg) {
-                    checkRequired((DMsg) v, depth + 1);
+                    checkRequired((DMsg) v, cap, depth + 1);
                 }
             }
         }
@@ -1466,8 +2098,8 @@ public final class GenericCodec {
      */
     private static DMsg decodeInto(DMsg m, Wire.Reader r, int end,
             int groupEnd, int depth) {
-        if (depth > Wire.MAX_DEPTH) {
-            throw new IllegalArgumentException("nesting exceeds " + Wire.MAX_DEPTH);
+        if (depth > r.cap) {
+            throw new IllegalArgumentException("nesting exceeds " + r.cap);
         }
         MessageDef def = m.def;
         int outerEnd = r.end;
@@ -1613,7 +2245,10 @@ public final class GenericCodec {
         if (f.kind <= K_DOUBLE) {
             long v = readNumSingle(r, f.kind);
             m.num[s] = v;
-            if (f.presence != IMPLICIT || v != 0) {
+            // Implicit presence is decided on the *field's* zero, not the raw
+            // wire bits: an int32/uint32 varint wider than 32 bits truncates,
+            // and the reference then drops the field as an implicit zero.
+            if (f.presence != IMPLICIT || !zeroBits(f, v)) {
                 m.setPresent(s, f);
             }
             return;
@@ -1686,8 +2321,8 @@ public final class GenericCodec {
      */
     private static void validateInto(MessageDef def, Wire.Reader r, int end,
             int depth) {
-        if (depth > Wire.MAX_DEPTH) {
-            throw new IllegalArgumentException("nesting exceeds " + Wire.MAX_DEPTH);
+        if (depth > r.cap) {
+            throw new IllegalArgumentException("nesting exceeds " + r.cap);
         }
         int outerEnd = r.end;
         r.end = end;
@@ -1767,6 +2402,18 @@ public final class GenericCodec {
     }
 
     /** Parses a slice on first access; caches the value in place. */
+    /** Decodes UTF-8 strictly: malformed or unmappable input is an error. */
+    static String strictUtf8(byte[] b, int off, int len) {
+        CharsetDecoder dec = StandardCharsets.UTF_8.newDecoder()
+                .onMalformedInput(CodingErrorAction.REPORT)
+                .onUnmappableCharacter(CodingErrorAction.REPORT);
+        try {
+            return dec.decode(ByteBuffer.wrap(b, off, len)).toString();
+        } catch (CharacterCodingException e) {
+            throw new IllegalArgumentException("invalid UTF-8 in a string field");
+        }
+    }
+
     static Object materialize(Field f, Slice sl) {
         Wire.Reader r = new Wire.Reader(); // rare path: no workspace needed
         r.b = sl.b;
@@ -1786,7 +2433,10 @@ public final class GenericCodec {
         }
         int n = Wire.rLen(r);
         if (f.kind == K_STRING) {
-            return new String(r.b, r.pos, n, StandardCharsets.UTF_8);
+            // Strict, not the replacing constructor: a decoded string that is
+            // not valid UTF-8 must fail instead of turning into U+FFFD (the
+            // core keeps the bytes and its printers reject them).
+            return strictUtf8(r.b, r.pos, n);
         }
         return Arrays.copyOfRange(r.b, r.pos, r.pos + n);
     }

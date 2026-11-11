@@ -453,6 +453,66 @@ public final class Message implements AutoCloseable {
         }
     }
 
+    /**
+     * Map entries sorted by key, like the core's deterministic encoder.
+     * This binding has no map-entry awareness, so this is byte-identical
+     * to {@link #encode}.
+     */
+    public byte[] encodeDeterministic() {
+        segment();
+        try {
+            return GenericCodec.encodeDeterministic(data);
+        } catch (IllegalStateException | IllegalArgumentException e) {
+            throw new PbwireException(type.name() + ": encode failed", 1);
+        }
+    }
+
+    /** Length-delimited framing: varint length + message. */
+    public byte[] encodeDelimited() {
+        segment();
+        try {
+            return GenericCodec.encodeDelimited(data);
+        } catch (IllegalStateException | IllegalArgumentException e) {
+            throw new PbwireException(type.name() + ": encode failed", 1);
+        }
+    }
+
+    /** Exact number of bytes {@link #encode} writes for this tree. */
+    public long encodedSize() {
+        segment();
+        try {
+            return GenericCodec.encodedSize(data);
+        } catch (IllegalStateException | IllegalArgumentException e) {
+            throw new PbwireException(type.name() + ": encode failed", 1);
+        }
+    }
+
+    /** Prints this message in the JSON mapping. */
+    public String toJson() {
+        segment();
+        try {
+            return Json.print(data);
+        } catch (IllegalArgumentException e) {
+            throw new PbwireException(type.name() + ": print failed", 1);
+        }
+    }
+
+    /** Prints this message in text format; unknown fields print by default. */
+    public String toText() {
+        return toText(true);
+    }
+
+    /** Same with explicit control over unknown fields, like
+     *  {@code pbw_text_print_opts}. */
+    public String toText(boolean printUnknown) {
+        segment();
+        try {
+            return Text.print(data, printUnknown);
+        } catch (IllegalArgumentException e) {
+            throw new PbwireException(type.name() + ": print failed", 1);
+        }
+    }
+
     /** Marks the tree closed; callable more than once. Views ignore this. */
     @Override
     public void close() {

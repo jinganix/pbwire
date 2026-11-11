@@ -117,6 +117,14 @@ jobs:
       - name: API index in sync
         run: ./scripts/check-llms.sh
 
+  abi:
+    name: Shared library exports match the header
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Dynamic symbol table
+        run: ./scripts/check-symbols.sh
+
   format:
     name: clang-format
     runs-on: ubuntu-latest
@@ -258,6 +266,25 @@ jobs:
           CFLAGS="-O1 -std=c99 -Wall -Wextra -Werror -pedantic -fPIC -g
           -fsanitize=thread -fno-omit-frame-pointer"
           && PBW_SKIP_SCALE=1 ./build/test_threads
+
+  uninit-read:
+    name: Uninitialized-read hunt (zero/pattern auto-var-init)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install clang
+        run: sudo apt-get update && sudo apt-get install -y clang
+      - name: Core gate with deterministic uninitialized locals
+        # A struct member a context is built field-by-field can be left
+        # uninitialized (that is how `j_in.dlim` slipped through); zero and
+        # pattern init turn such a read into a deterministic, gateable failure
+        # instead of whatever happened to be in the stack slot.
+        run: |
+          for mode in zero pattern; do
+            echo "== -ftrivial-auto-var-init=$mode =="
+            make clean >/dev/null
+            make test CC=clang CFLAGS="-O2 -std=c99 -Wall -Wextra -Werror -pedantic -fPIC -fvisibility=hidden -ftrivial-auto-var-init=$mode"
+          done
 
   binding-asan:
     name: Binding extensions under ASan

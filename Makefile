@@ -1,5 +1,5 @@
 CC ?= cc
-CFLAGS ?= -O2 -std=c99 -Wall -Wextra -Werror -pedantic -fPIC
+CFLAGS ?= -O2 -std=c99 -Wall -Wextra -Werror -pedantic -fPIC -fvisibility=hidden
 CXX ?= c++
 CXXFLAGS ?= -O2 -std=c++17 -Wall -Wextra -Werror -pedantic
 CPPFLAGS += -Iinclude -Isrc
@@ -35,7 +35,7 @@ ifeq ($(UNAME_S),Darwin)
 SHLIB := build/libpbwire.1.dylib
 SHLIB_LINK := build/libpbwire.dylib
 SHLIB_FLAGS := -dynamiclib -install_name @rpath/libpbwire.1.dylib \
-	-compatibility_version 1 -current_version 0.1.15
+	-compatibility_version 1 -current_version 0.1.16
 else
 SHLIB := build/libpbwire.so.1
 SHLIB_LINK := build/libpbwire.so
@@ -597,6 +597,49 @@ conformance-node: $(CONFORMANCE_DESC) node-test
 		$(NODE_ABS) bindings/node/conformance/testee.js \
 		$(CURDIR)/$(CONFORMANCE_DESC)
 
+# Same suite through the Julia binding (binary, JSON and text; JSPB skips).
+conformance-julia: $(CONFORMANCE_DESC)
+	@test -x "$(CONFORMANCE_RUNNER)" || { \
+		echo "conformance_test_runner not found: $(CONFORMANCE_RUNNER)"; \
+		echo "run 'make conformance-setup' first"; exit 1; }
+	$(CONFORMANCE_RUNNER) --failure_list $(CURDIR)/conformance/failure_list_pbwire.txt \
+		$(JULIA_ABS) --project=bindings/julia/runtime \
+		bindings/julia/conformance/testee.jl $(CURDIR)/$(CONFORMANCE_DESC)
+
+# Same suite through the Zig binding (binary, JSON and text; JSPB skips).
+conformance-zig: $(CONFORMANCE_DESC)
+	@test -x "$(CONFORMANCE_RUNNER)" || { \
+		echo "conformance_test_runner not found: $(CONFORMANCE_RUNNER)"; \
+		echo "run 'make conformance-setup' first"; exit 1; }
+	cd bindings/zig && zig build testee
+	$(CONFORMANCE_RUNNER) --failure_list $(CURDIR)/conformance/failure_list_pbwire.txt \
+		$(CURDIR)/bindings/zig/zig-out/bin/testee-zig $(CURDIR)/$(CONFORMANCE_DESC)
+
+# Scala reuses the Java runtime: the classpath comes from its build script.
+conformance-scala: $(CONFORMANCE_DESC) scala-test
+	@test -x "$(CONFORMANCE_RUNNER)" || { \
+		echo "conformance_test_runner not found: $(CONFORMANCE_RUNNER)"; \
+		echo "run 'make conformance-setup' first"; exit 1; }
+	$(CONFORMANCE_RUNNER) --failure_list $(CURDIR)/conformance/failure_list_pbwire.txt \
+		$(JAVA_ABS) -cp "$(SCALA_CP)" Testee $(CURDIR)/$(CONFORMANCE_DESC)
+
+# Clojure reuses the Java runtime too.
+conformance-clojure: $(CONFORMANCE_DESC) clojure-test
+	@test -x "$(CONFORMANCE_RUNNER)" || { \
+		echo "conformance_test_runner not found: $(CONFORMANCE_RUNNER)"; \
+		echo "run 'make conformance-setup' first"; exit 1; }
+	$(CONFORMANCE_RUNNER) --failure_list $(CURDIR)/conformance/failure_list_pbwire.txt \
+		$(JAVA_ABS) -cp "$(CLOJURE_CP)" clojure.main -m testee $(CURDIR)/$(CONFORMANCE_DESC)
+
+# F# wraps the C# binding; dotnet run passes the descriptor through.
+conformance-fsharp: $(CONFORMANCE_DESC) fsharp-test
+	@test -x "$(CONFORMANCE_RUNNER)" || { \
+		echo "conformance_test_runner not found: $(CONFORMANCE_RUNNER)"; \
+		echo "run 'make conformance-setup' first"; exit 1; }
+	$(CONFORMANCE_RUNNER) --failure_list $(CURDIR)/conformance/failure_list_pbwire.txt \
+		$(DOTNET_ABS) run --project bindings/fsharp/conformance -c Release -- \
+		$(CURDIR)/$(CONFORMANCE_DESC)
+
 objc-test:
 	./bindings/objc/build.sh test
 
@@ -646,6 +689,18 @@ CLOJURE ?= clojure
 JULIA ?= julia
 RSCRIPT ?= Rscript
 RSCRIPT_ABS := $(shell command -v $(RSCRIPT) 2>/dev/null || echo $(RSCRIPT))
+JULIA_ABS := $(shell command -v $(JULIA) 2>/dev/null || echo $(JULIA))
+JAVA_ABS := $(shell command -v java 2>/dev/null || echo java)
+# Scala's classpath is what its build script prints; derived here so the
+# conformance target does not depend on parsing that output.
+SCALA_CP = $(CURDIR)/bindings/scala/out/classes:$(SCALA_LIB_CP)
+SCALA_LIB_CP := $(shell find /opt/homebrew/Cellar/scala $(HOME)/.cache/coursier 2>/dev/null \
+	-name 'scala3-library_3-*.jar' -o -name 'scala-library-*.jar' | tr '\n' ':')
+CLOJURE_CP = $(CURDIR)/bindings/java/out/classes:$(CURDIR)/bindings/clojure/runtime/src:$(CURDIR)/bindings/clojure/conformance:$(CLOJURE_LIB_CP)
+CLOJURE_LIB_CP := $(shell find $(CURDIR)/bindings/clojure/benchmarks/deps 2>/dev/null \
+	-name '*.jar' | tr '\n' ':')
+DOTNET ?= dotnet
+DOTNET_ABS := $(shell command -v $(DOTNET) 2>/dev/null || echo $(DOTNET))
 r-bind:
 	cd bindings/r && ./build.sh
 

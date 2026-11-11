@@ -92,6 +92,9 @@ record names do.
 | `Pbwire.decode(bin, mod)` | struct | `mod` is the generated module; equal to `Protobuf.decode(bin, mod)` |
 | `Pbwire.encode_msg(struct, mods)` | `binary()` | `load_schema(mods)` + `encode(struct)` |
 | `Pbwire.decode_msg(bin, mod, mods)` | struct | `load_schema(mods ++ [mod])` + `decode(bin, mod)` |
+| `Pbwire.encode_delimited(struct)` | `binary()` | varint length prefix + `encode(struct)` (stream framing) |
+| `Pbwire.decode_delimited(bin, mod)` | `{struct, binary()}` | one frame + the remaining bytes |
+| `Pbwire.encode_deterministic(struct)` | `binary()` | `encode/1` with map entries sorted by key |
 
 Calling `encode/1` or `decode/2` with a module that has no loaded schema
 raises `ArgumentError` before touching the NIF. NIF-level failures
@@ -123,6 +126,9 @@ loading:
 |---|---|---|
 | `:with_utf8` | `true` | Allow non-Latin-1 UTF-8 in string fields when encoding (Elixir strings are UTF-8; the Erlang default is `false`) |
 | `:string_as_list` | unset | Decode string fields as charlists instead of binaries (leave off: Elixir strings are binaries) |
+| `:retain_cap` | unset | Resident encode-buffer ceiling per scheduler, like the C core's retain cap (1 MiB default when unset, 0 keeps nothing) |
+| `:max_bytes` | unset | Reject `:pbwire.decode/2` inputs larger than this many bytes, like the C core's `pbw_limits.max_bytes` (0: no cap) |
+| `:max_depth` | unset | Reject `:pbwire.decode/2` inputs nested deeper than this many messages, like `pbw_limits.max_depth` (0: built-in caps only) |
 
 ## Benchmark
 
@@ -189,6 +195,16 @@ called). Call `Pbwire.load_schema/1` first, or use `encode_msg/2` /
 Encoding and decoding are safe from any number of processes. The schema
 cache is global to the node, so two applications with different `.proto`
 schemas need separate nodes — same rule as the Erlang binding.
+
+### Is there JSON or text-format support?
+
+No, deliberately: JSON and text would need a second codec beside the NIF,
+and this package owns struct translation only (`__message_props__/0` in,
+record tuples out). The wire-level core coverage that maps cleanly is
+provided instead: length-delimited framing (`encode_delimited/1`,
+`decode_delimited/2`), deterministic map ordering (`encode_deterministic/1`)
+and the `:max_bytes` / `:max_depth` input guards. The conformance testee
+answers `skipped` for JSON, JSPB and text.
 
 ### Why is there no `c_src/` here?
 

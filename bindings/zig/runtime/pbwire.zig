@@ -118,8 +118,15 @@ pub const Schema = struct {
 
     /// Loads descriptor-set bytes; use `--include_imports` so every type resolves.
     pub fn fromBytes(bytes: []const u8) Error!Schema {
+        return fromBytesLimits(bytes, null);
+    }
+
+    /// Same with explicit bounds: rejects inputs larger than
+    /// `limits.max_bytes` and caps nesting at `limits.max_depth`.
+    pub fn fromBytesLimits(bytes: []const u8, limits: ?Limits) Error!Schema {
         var out: ?*c.pbw_schema = null;
-        const st = c.pbw_descriptor_set_load(@ptrCast(dataPtr(bytes)), bytes.len, &out);
+        var storage: c.pbw_limits = undefined;
+        const st = c.pbw_descriptor_set_load_limits(@ptrCast(dataPtr(bytes)), bytes.len, limitsPtr(limits, &storage), &out);
         if (st != c.PBW_OK) {
             // The core hands back the partially built schema on failure so the
             // error text can be read; the caller must free it as usual.
@@ -174,8 +181,47 @@ pub const Schema = struct {
         try check(c.pbw_schema_link(self.ptr));
     }
 
+    /// Resolve `service`/`method` to its input/output descriptors for
+    /// routing. `Error.NotFound` when anything is unknown.
+    pub fn resolve(self: *const Schema, svc: []const u8, method: []const u8) Error!struct { input: MessageType, output: MessageType } {
+        var sbuf: [512]u8 = undefined;
+        var mbuf: [512]u8 = undefined;
+        try toNul(svc, &sbuf);
+        try toNul(method, &mbuf);
+        var in_desc: ?*const c.pbw_descriptor = null;
+        var out_desc: ?*const c.pbw_descriptor = null;
+        const st = c.pbw_service_resolve(self.ptr, nulPtr(&sbuf), nulPtr(&mbuf), &in_desc, &out_desc);
+        try check(st);
+        const ind = in_desc orelse return Error.NotFound;
+        const outd = out_desc orelse return Error.NotFound;
+        return .{
+            .input = .{ .ptr = @constCast(ind) },
+            .output = .{ .ptr = @constCast(outd) },
+        };
+    }
+
     pub fn lastError(self: *const Schema) [:0]const u8 {
         return zstr(c.pbw_schema_error(self.ptr));
+    }
+
+    /// Services loaded from the descriptor set (routing data only; the core
+    /// does no RPC). Hand-built schemas carry none.
+    pub fn serviceCount(self: *const Schema) usize {
+        return c.pbw_schema_service_count(self.ptr);
+    }
+
+    pub fn serviceAt(self: *const Schema, index: usize) ?Service {
+        const s = c.pbw_schema_service_at(self.ptr, index);
+        if (s == null) return null;
+        return .{ .ptr = @ptrCast(s) };
+    }
+
+    pub fn service(self: *const Schema, name: []const u8) Error!Service {
+        var nbuf: [512]u8 = undefined;
+        try toNul(name, &nbuf);
+        const s = c.pbw_schema_service_find(self.ptr, nulPtr(&nbuf));
+        if (s == null) return Error.NotFound;
+        return .{ .ptr = @ptrCast(s) };
     }
 };
 
@@ -212,8 +258,15 @@ pub const MessageType = struct {
 
     /// Decodes wire bytes; unknown fields are preserved and re-encoded.
     pub fn decode(self: *const MessageType, wire: []const u8) Error!Message {
+        return decodeLimits(self, wire, null);
+    }
+
+    /// Same with explicit bounds (`max_bytes` rejects oversized inputs,
+    /// `max_depth` caps nesting).
+    pub fn decodeLimits(self: *const MessageType, wire: []const u8, limits: ?Limits) Error!Message {
         var out: ?*c.pbw_message = null;
-        const st = c.pbw_decode(self.ptr, @ptrCast(dataPtr(wire)), wire.len, &out);
+        var storage: c.pbw_limits = undefined;
+        const st = c.pbw_decode_limits(self.ptr, @ptrCast(dataPtr(wire)), wire.len, limitsPtr(limits, &storage), &out);
         try check(st);
         if (out == null) return Error.UnknownStatus;
         return .{ .ptr = @ptrCast(out), .owned = true };
@@ -221,11 +274,18 @@ pub const MessageType = struct {
 
     /// Parses JSON mapping text into a new message tree.
     pub fn parseJson(self: *const MessageType, text: []const u8, opts: JsonOptions) Error!Message {
+        return parseJsonLimits(self, text, opts, null);
+    }
+
+    /// Same with explicit bounds (either pointer may be null for defaults).
+    pub fn parseJsonLimits(self: *const MessageType, text: []const u8, opts: ?JsonOptions, limits: ?Limits) Error!Message {
+        const o: JsonOptions = opts orelse .{};
         var copts = c.pbw_json_parse_options{
-            .ignore_unknown_fields = if (opts.ignore_unknown_fields) 1 else 0,
+            .ignore_unknown_fields = if (o.ignore_unknown_fields) 1 else 0,
         };
         var out: ?*c.pbw_message = null;
-        const st = c.pbw_json_parse_opts(self.ptr, @ptrCast(dataPtr(text)), text.len, &copts, &out);
+        var storage: c.pbw_limits = undefined;
+        const st = c.pbw_json_parse_limits(self.ptr, @ptrCast(dataPtr(text)), text.len, limitsPtr(limits, &storage), &copts, &out);
         try check(st);
         if (out == null) return Error.UnknownStatus;
         return .{ .ptr = @ptrCast(out), .owned = true };
@@ -233,9 +293,68 @@ pub const MessageType = struct {
 
     /// Parses text format into a new message tree.
     pub fn parseText(self: *const MessageType, text: []const u8) Error!Message {
+        return parseTextLimits(self, text, null);
+    }
+
+    /// Same with explicit bounds.
+    pub fn parseTextLimits(self: *const MessageType, text: []const u8, limits: ?Limits) Error!Message {
         var out: ?*c.pbw_message = null;
-        const st = c.pbw_text_parse(self.ptr, @ptrCast(dataPtr(text)), text.len, &out);
+        var storage: c.pbw_limits = undefined;
+        const st = c.pbw_text_parse_limits(self.ptr, @ptrCast(dataPtr(text)), text.len, limitsPtr(limits, &storage), &out);
         try check(st);
+        if (out == null) return Error.UnknownStatus;
+        return .{ .ptr = @ptrCast(out), .owned = true };
+    }
+
+    /// Single-level scan of `wire` without building a message tree: one
+    /// validating tag pass, one event per field, no allocation by the core.
+    /// Events borrow `wire`; free the list (not the payloads) with `free`.
+    pub fn visitCollect(self: *const MessageType, allocator: std.mem.Allocator, wire: []const u8, limits: ?Limits) Error![]VisitEvent {
+        var storage: c.pbw_limits = undefined;
+        var list: std.ArrayList(VisitEvent) = .empty;
+        errdefer list.deinit(allocator);
+        var state = VisitState{ .list = &list, .alloc = allocator };
+        const st = c.pbw_visit_limits(self.ptr, dataPtr(wire), wire.len, limitsPtr(limits, &storage), visitCb, &state, null);
+        try check(st);
+        return list.toOwnedSlice(allocator);
+    }
+
+    /// Decode framed with `encodeDelimited`: the message plus the prefix +
+    /// frame bytes consumed, so concatenated frames decode in a loop.
+    pub fn decodeDelimited(self: *const MessageType, wire: []const u8, limits: ?Limits) Error!Delimited {
+        var out: ?*c.pbw_message = null;
+        var consumed: usize = 0;
+        var storage: c.pbw_limits = undefined;
+        const st = c.pbw_decode_delimited_limits(self.ptr, dataPtr(wire), wire.len, limitsPtr(limits, &storage), &out, &consumed);
+        try check(st);
+        if (out == null) return Error.UnknownStatus;
+        return .{ .message = .{ .ptr = @ptrCast(out), .owned = true }, .consumed = consumed };
+    }
+
+    /// Pack already-encoded `payload` (bytes of the message named by
+    /// `type_url`, e.g. `"type.googleapis.com/pkg.Msg"`) into a new `Any`
+    /// tree of this type.
+    pub fn anyPack(self: *const MessageType, type_url: []const u8, payload: []const u8) Error!Message {
+        var nbuf: [512]u8 = undefined;
+        try toNul(type_url, &nbuf);
+        var out: ?*c.pbw_message = null;
+        try check(c.pbw_any_pack(self.ptr, nulPtr(&nbuf), dataPtr(payload), payload.len, &out));
+        if (out == null) return Error.UnknownStatus;
+        return .{ .ptr = @ptrCast(out), .owned = true };
+    }
+
+    /// A new `Timestamp`/`Duration` tree of this type holding `ms`. Nanos
+    /// keep the millisecond remainder, so the value round-trips.
+    pub fn timestampFromMillis(self: *const MessageType, ms: i64) Error!Message {
+        var out: ?*c.pbw_message = null;
+        try check(c.pbw_timestamp_from_millis(self.ptr, ms, &out));
+        if (out == null) return Error.UnknownStatus;
+        return .{ .ptr = @ptrCast(out), .owned = true };
+    }
+
+    pub fn durationFromMillis(self: *const MessageType, ms: i64) Error!Message {
+        var out: ?*c.pbw_message = null;
+        try check(c.pbw_duration_from_millis(self.ptr, ms, &out));
         if (out == null) return Error.UnknownStatus;
         return .{ .ptr = @ptrCast(out), .owned = true };
     }
@@ -411,6 +530,78 @@ pub const Message = struct {
     pub fn getMessage(self: *const Message, f: Field) ?Message {
         const v = self.value(f) orelse return null;
         return v.asMessage();
+    }
+
+    /// Length-delimited framing (varint length + message), the standard
+    /// framing for a stream of messages.
+    pub fn encodeDelimited(self: *const Message, allocator: std.mem.Allocator) ![]u8 {
+        var out: [*c]u8 = null;
+        var len: usize = 0;
+        try check(c.pbw_encode_delimited(self.ptr, @ptrCast(&out), &len));
+        if (len == 0 or out == null) {
+            if (out != null) c.pbw_free(@ptrCast(out));
+            return try allocator.dupe(u8, &[_]u8{});
+        }
+        defer c.pbw_free(@ptrCast(out));
+        return try allocator.dupe(u8, @as([*]const u8, @ptrCast(out))[0..len]);
+    }
+
+    /// Framing into caller memory: no allocation, `buf` is the hard limit.
+    /// Returns the whole frame; `Error.BufferTooSmall` when it does not fit.
+    pub fn encodeDelimitedInto(self: *const Message, buf: []u8) Error![]u8 {
+        var len: usize = 0;
+        const st = c.pbw_encode_delimited_to(self.ptr, dataPtrMut(buf), buf.len, &len);
+        if (st == c.PBW_ERR_LIMIT) return Error.BufferTooSmall;
+        try check(st);
+        return buf[0..len];
+    }
+
+    /// Encode and hand the bytes to `sink` in 8 KiB chunks, without
+    /// materializing the whole message. The sink gets `(ctx, data, len)` and
+    /// returns `PBW_OK` to continue; anything else aborts with that status.
+    pub fn encodeSink(self: *const Message, ctx: ?*anyopaque, sink: *const fn ([*c]const u8, usize, ?*anyopaque) callconv(.c) c.pbw_status) Error!void {
+        try check(c.pbw_encode_sink(self.ptr, @ptrCast(sink), ctx));
+    }
+
+    /// `type_url` (field 1) of an `Any` tree, or null when absent. Borrowed.
+    pub fn anyTypeUrl(self: *const Message) ?[]const u8 {
+        const p = c.pbw_any_type_url(self.ptr);
+        if (p == null) return null;
+        return std.mem.span(@as([*:0]const u8, @ptrCast(p)));
+    }
+
+    /// Value bytes (field 2) of an `Any` tree, or null when absent. Borrowed.
+    pub fn anyPayload(self: *const Message) ?[]const u8 {
+        var len: usize = 0;
+        const p = c.pbw_any_payload(self.ptr, &len);
+        if (p == null) return null;
+        if (len == 0) return &[_]u8{};
+        return @as([*]const u8, @ptrCast(p))[0..len];
+    }
+
+    /// This `Timestamp`/`Duration` tree as milliseconds.
+    pub fn timestampMillis(self: *const Message) Error!i64 {
+        var out: i64 = 0;
+        try check(c.pbw_timestamp_to_millis(self.ptr, &out));
+        return out;
+    }
+
+    pub fn durationMillis(self: *const Message) Error!i64 {
+        var out: i64 = 0;
+        try check(c.pbw_duration_to_millis(self.ptr, &out));
+        return out;
+    }
+
+    /// This `FieldMask`'s paths (field 1, repeated string) without
+    /// materializing the list.
+    pub fn fieldmaskPathCount(self: *const Message) usize {
+        return c.pbw_fieldmask_path_count(self.ptr);
+    }
+
+    pub fn fieldmaskPathAt(self: *const Message, index: usize) ?[]const u8 {
+        const p = c.pbw_fieldmask_path_at(self.ptr, index);
+        if (p == null) return null;
+        return std.mem.span(@as([*:0]const u8, @ptrCast(p)));
     }
 
     /// Wire length this tree was decoded from, 0 for a tree built by hand: a
@@ -590,5 +781,207 @@ pub const Value = struct {
         const p = c.pbw_value_at(self.ptr, index);
         if (p == null) return null;
         return .{ .ptr = @ptrCast(p), .owned = false };
+    }
+};
+
+/// Bounds for untrusted input. Zero fields mean the core defaults: no byte
+/// cap and `PBW_MAX_DEPTH` nesting. A `max_depth` above the cap clamps to it.
+pub const Limits = struct {
+    max_bytes: usize = 0,
+    max_depth: u32 = 0,
+
+    fn toC(self: *const Limits, storage: *c.pbw_limits) *const c.pbw_limits {
+        storage.* = .{ .max_bytes = self.max_bytes, .max_depth = self.max_depth };
+        return storage;
+    }
+};
+
+fn limitsPtr(limits: ?Limits, storage: *c.pbw_limits) ?*const c.pbw_limits {
+    if (limits) |*l| return l.toC(storage);
+    return null;
+}
+
+/// One scanned field: raw wire content, no allocation, no value tree.
+/// `wire_type` is the numeric wire type (0 varint, 1 64-bit, 2 LEN,
+/// 3/4 start/end group, 5 32-bit). Scalars arrive as `u64` (varints unfolded:
+/// no zigzag or sign extension); LEN payloads and whole group fields arrive
+/// as `data` (a nested message, a packed run, a string, or raw group bytes).
+pub const VisitEvent = struct {
+    number: u32,
+    wire_type: u32,
+    /// Null when the schema does not declare the number.
+    field: ?Field,
+    u64: u64,
+    data: []const u8,
+};
+
+const VisitState = struct {
+    list: *std.ArrayList(VisitEvent),
+    alloc: std.mem.Allocator,
+};
+
+fn visitCb(ud: ?*anyopaque, field: ?*const c.pbw_field, number: u32, wire_type: u32, value: ?*const c.pbw_visit_value) callconv(.c) c.pbw_status {
+    const v = value orelse return c.PBW_ERR_INVALID;
+    const st: *VisitState = @ptrCast(@alignCast(ud));
+    var ev = VisitEvent{
+        .number = number,
+        .wire_type = wire_type,
+        .field = if (field) |f| Field{ .ptr = f } else null,
+        .u64 = v.u64,
+        .data = &.{} ,
+    };
+    if (v.len > 0 and v.data != null) {
+        ev.data = @as([*]const u8, @ptrCast(v.data))[0..v.len];
+    }
+    st.list.append(st.alloc, ev) catch return c.PBW_ERR_NOMEM;
+    return c.PBW_OK;
+}
+
+/// Decode framed with `encodeDelimited`: the message plus the prefix + frame
+/// bytes consumed, so concatenated frames decode in a loop.
+pub const Delimited = struct {
+    message: Message,
+    consumed: usize,
+};
+
+/// A declared RPC: fully qualified input/output message names plus the two
+/// streaming flags from `MethodDescriptorProto` (both 0 is unary).
+pub const Method = struct {
+    ptr: *const c.pbw_method,
+
+    pub fn methodName(self: Method) [:0]const u8 {
+        return zstr(c.pbw_method_name(self.ptr));
+    }
+
+    pub fn inputType(self: Method) [:0]const u8 {
+        return zstr(c.pbw_method_input_type(self.ptr));
+    }
+
+    pub fn outputType(self: Method) [:0]const u8 {
+        return zstr(c.pbw_method_output_type(self.ptr));
+    }
+
+    pub fn clientStreaming(self: Method) bool {
+        return c.pbw_method_client_streaming(self.ptr) != 0;
+    }
+
+    pub fn serverStreaming(self: Method) bool {
+        return c.pbw_method_server_streaming(self.ptr) != 0;
+    }
+};
+
+/// A loaded service: routing data only, the core does no RPC. A transport
+/// (gRPC, Twirp, plain HTTP) decodes with the input type and encodes with
+/// the output type.
+pub const Service = struct {
+    ptr: *const c.pbw_service,
+
+    pub fn serviceName(self: Service) [:0]const u8 {
+        return zstr(c.pbw_service_name(self.ptr));
+    }
+
+    pub fn methodCount(self: Service) usize {
+        return c.pbw_service_method_count(self.ptr);
+    }
+
+    pub fn methodAt(self: Service, index: usize) ?Method {
+        const m = c.pbw_service_method_at(self.ptr, index);
+        if (m == null) return null;
+        return .{ .ptr = @ptrCast(m) };
+    }
+
+    pub fn method(self: Service, name: []const u8) Error!Method {
+        var nbuf: [512]u8 = undefined;
+        try toNul(name, &nbuf);
+        const m = c.pbw_service_method_find(self.ptr, nulPtr(&nbuf));
+        if (m == null) return Error.NotFound;
+        return .{ .ptr = @ptrCast(m) };
+    }
+};
+
+/// A reusable arena plus encode buffer: steady encode/decode in a loop stops
+/// calling malloc after the first few messages. One context per thread; never
+/// share one concurrently. Decoded trees borrow the context: they die with
+/// `reset` and are read-only (`deinit` on them is a no-op, writes fail).
+pub const Context = struct {
+    ptr: *c.pbw_ctx,
+
+    pub fn init() Error!Context {
+        const p = c.pbw_ctx_new();
+        if (p == null) return Error.OutOfMemory;
+        return .{ .ptr = @ptrCast(p) };
+    }
+
+    pub fn deinit(self: *Context) void {
+        c.pbw_ctx_free(self.ptr);
+    }
+
+    /// Release every allocation since the last reset, keeping the buffers.
+    pub fn reset(self: *Context) void {
+        c.pbw_ctx_reset(self.ptr);
+    }
+
+    /// Max bytes the context keeps resident across resets (default 1 MiB).
+    pub fn setRetainCap(self: *Context, cap: usize) void {
+        c.pbw_ctx_set_retain_cap(self.ptr, cap);
+    }
+
+    /// Bytes currently held in the context (for sizing/debugging).
+    pub fn used(self: *const Context) usize {
+        return c.pbw_ctx_used(self.ptr);
+    }
+
+    /// Decode into the arena. The tree borrows the context: it dies with the
+    /// next `reset` and must not outlive the context.
+    pub fn decode(self: *Context, ty: *const MessageType, wire: []const u8) Error!Message {
+        var out: ?*c.pbw_message = null;
+        const st = c.pbw_decode_ctx(self.ptr, ty.ptr, dataPtr(wire), wire.len, &out);
+        try check(st);
+        if (out == null) return Error.UnknownStatus;
+        return .{ .ptr = @ptrCast(out), .owned = false };
+    }
+
+    /// Encode into the context's buffer. The slice borrows the context:
+    /// valid until the next encode on it, `reset`, or `deinit`.
+    pub fn encodeBuf(self: *Context, msg: *const Message) Error![]const u8 {
+        var out: [*c]const u8 = null;
+        var len: usize = 0;
+        try check(c.pbw_encode_ctx(self.ptr, msg.ptr, &out, &len));
+        if (len == 0) return &[_]u8{};
+        return @as([*]const u8, @ptrCast(out))[0..len];
+    }
+};
+
+/// Bounded freelist of contexts: `acquire` instead of `Context.init`,
+/// `release` instead of `reset`+`free`. A released context is already reset.
+/// Unsynchronized: one pool per thread, never shared concurrently.
+pub const Pool = struct {
+    ptr: *c.pbw_pool,
+
+    pub fn init(max_idle: usize, retain_cap: usize) Error!Pool {
+        const p = c.pbw_pool_new(max_idle, retain_cap);
+        if (p == null) return Error.OutOfMemory;
+        return .{ .ptr = @ptrCast(p) };
+    }
+
+    pub fn deinit(self: *Pool) void {
+        c.pbw_pool_free(self.ptr);
+    }
+
+    /// Exclusive use until `release`. The context is already reset.
+    pub fn acquire(self: *Pool) Error!Context {
+        const p = c.pbw_pool_acquire(self.ptr);
+        if (p == null) return Error.OutOfMemory;
+        return .{ .ptr = @ptrCast(p) };
+    }
+
+    pub fn release(self: *Pool, ctx: *Context) void {
+        c.pbw_pool_release(self.ptr, ctx.ptr);
+        ctx.ptr = @ptrFromInt(0x1);
+    }
+
+    /// Idle contexts held now (for sizing/debugging).
+    pub fn idle(self: *const Pool) usize {
+        return c.pbw_pool_idle(self.ptr);
     }
 };

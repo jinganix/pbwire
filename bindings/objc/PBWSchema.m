@@ -68,4 +68,82 @@ NSString *const PBWErrorDomain = @"PBWErrorDomain";
     return [PBWMessage messageWithDescriptor:descriptor schema:self error:NULL];
 }
 
+- (nonnull NSArray<NSString *> *)serviceNames
+{
+    size_t count = pbw_schema_service_count(_schema);
+    NSMutableArray<NSString *> *out =
+        [NSMutableArray arrayWithCapacity:count];
+    size_t i;
+
+    for (i = 0; i < count; i++) {
+        const pbw_service *svc = pbw_schema_service_at(_schema, i);
+        const char *name = svc != NULL ? pbw_service_name(svc) : NULL;
+
+        if (name != NULL) {
+            [out addObject:@(name)];
+        }
+    }
+    return out;
+}
+
+- (const pbw_service *)serviceForName:(NSString *)service
+{
+    const char *utf8 = service.UTF8String;
+
+    return utf8 != NULL ? pbw_schema_service_find(_schema, utf8) : NULL;
+}
+
+- (nullable NSArray<NSString *> *)methodNamesForService:(NSString *)service
+{
+    const pbw_service *svc = [self serviceForName:service];
+    size_t count;
+    NSMutableArray<NSString *> *out;
+    size_t i;
+
+    if (svc == NULL) {
+        return nil;
+    }
+    count = pbw_service_method_count(svc);
+    out = [NSMutableArray arrayWithCapacity:count];
+    for (i = 0; i < count; i++) {
+        const pbw_method *method = pbw_service_method_at(svc, i);
+        const char *name = method != NULL ? pbw_method_name(method) : NULL;
+
+        if (name != NULL) {
+            [out addObject:@(name)];
+        }
+    }
+    return out;
+}
+
+- (const pbw_method *)methodForService:(NSString *)service
+                                method:(NSString *)method
+{
+    const pbw_service *svc = [self serviceForName:service];
+    const char *utf8 = method.UTF8String;
+
+    if (svc == NULL || utf8 == NULL) {
+        return NULL;
+    }
+    return pbw_service_method_find(svc, utf8);
+}
+
+- (nullable NSString *)inputTypeForService:(NSString *)service
+                                    method:(NSString *)method
+{
+    const pbw_method *found = [self methodForService:service method:method];
+    const char *type = found != NULL ? pbw_method_input_type(found) : NULL;
+
+    return type != NULL ? @(type) : nil;
+}
+
+- (nullable NSString *)outputTypeForService:(NSString *)service
+                                     method:(NSString *)method
+{
+    const pbw_method *found = [self methodForService:service method:method];
+    const char *type = found != NULL ? pbw_method_output_type(found) : NULL;
+
+    return type != NULL ? @(type) : nil;
+}
+
 @end

@@ -37,6 +37,18 @@ extension pbw_status {
     var code: Int32 { Int32(rawValue) }
 }
 
+// Zero fields mean the C defaults (no byte cap, PBW_MAX_DEPTH nesting). A
+// negative value would wrap into the unsigned C field and silently disable the
+// cap, so it is rejected; a depth above UInt32.max clamps instead of trapping.
+private func makeLimits(maxBytes: Int, maxDepth: Int) throws -> pbw_limits {
+    guard maxBytes >= 0, maxDepth >= 0 else {
+        throw PbwireError(status: PBW_ERR_INVALID.code,
+                          message: "limits must not be negative")
+    }
+    let depth = maxDepth > Int(UInt32.max) ? UInt32.max : UInt32(maxDepth)
+    return pbw_limits(max_bytes: size_t(maxBytes), max_depth: depth)
+}
+
 private func throwStatus(_ status: pbw_status, _ detail: String? = nil) throws -> Never {
     var message = String(cString: pbw_strerror(status))
     if let detail, !detail.isEmpty { message += ": \(detail)" }
@@ -246,15 +258,145 @@ public final class Message: Equatable {
         return Data(bytesNoCopy: bytes, count: len, deallocator: .free)
     }
 
-    /// Decodes bytes as a message of the same type.
-    public func decode(_ data: Data) throws -> Message {
+    /// Decodes bytes as a message of the same type. Zero bounds mean the
+    /// defaults (no byte cap, `PBW_MAX_DEPTH` nesting); a depth above the
+    /// cap clamps to it.
+    public func decode(_ data: Data, maxBytes: Int = 0, maxDepth: Int = 0) throws -> Message {
         var decoded: OpaquePointer?
+        var limits = try makeLimits(maxBytes: maxBytes, maxDepth: maxDepth)
         let status = data.withUnsafeBytes { raw in
-            pbw_decode(descriptor, raw.baseAddress, data.count, &decoded)
+            pbw_decode_limits(descriptor, raw.baseAddress, data.count, &limits, &decoded)
         }
         guard status == PBW_OK, let decoded else { try throwStatus(status) }
         return Message(
             schema: schema, descriptor: descriptor, tree: decoded, owned: true, parent: nil)
+    }
+
+    /// Wire bytes with map entries sorted by key, so equal messages encode
+    /// to equal bytes regardless of insertion order.
+    public func encodeDeterministic() throws -> Data {
+        guard let tree else {
+            throw PbwireError(status: PBW_ERR_INVALID.code, message: "message is closed")
+        }
+        var bytes: UnsafeMutablePointer<UInt8>?
+        var len = 0
+        let status = pbw_encode_deterministic(tree, &bytes, &len)
+        guard status == PBW_OK else { try throwStatus(status) }
+        guard len > 0, let bytes else {
+            if let bytes { pbw_free(bytes) }
+            return Data()
+        }
+        return Data(bytesNoCopy: bytes, count: len, deallocator: .free)
+    }
+
+    /// One length-delimited frame (varint length + message), the standard
+    /// framing for a stream of messages.
+    public func encodeDelimited() throws -> Data {
+        guard let tree else {
+            throw PbwireError(status: PBW_ERR_INVALID.code, message: "message is closed")
+        }
+        var bytes: UnsafeMutablePointer<UInt8>?
+        var len = 0
+        let status = pbw_encode_delimited(tree, &bytes, &len)
+        guard status == PBW_OK else { try throwStatus(status) }
+        guard len > 0, let bytes else {
+            if let bytes { pbw_free(bytes) }
+            return Data()
+        }
+        return Data(bytesNoCopy: bytes, count: len, deallocator: .free)
+    }
+
+    /// Decodes one length-delimited frame as a message of the same type.
+    /// Returns the message plus the prefix + frame bytes consumed, so
+    /// concatenated frames decode in a loop by advancing past them. A
+    /// truncated frame throws; a declared length past `maxBytes` throws
+    /// `PBW_ERR_LIMIT` before the body is decoded.
+    public func decodeDelimited(_ data: Data, maxBytes: Int = 0, maxDepth: Int = 0) throws
+        -> (message: Message, consumed: Int)
+    {
+        var decoded: OpaquePointer?
+        var consumed = 0
+        var limits = try makeLimits(maxBytes: maxBytes, maxDepth: maxDepth)
+        let status = data.withUnsafeBytes { raw in
+            pbw_decode_delimited_limits(
+                descriptor, raw.baseAddress, data.count, &limits, &decoded, &consumed)
+        }
+        guard status == PBW_OK, let decoded else { try throwStatus(status) }
+        return (
+            Message(
+                schema: schema, descriptor: descriptor, tree: decoded, owned: true,
+                parent: nil), consumed)
+    }
+
+    /// Protobuf JSON mapping text of this message. Matches the reference
+    /// printer: 64-bit integers print quoted, bytes print as standard
+    /// base64, enums print by name, well-known types use their JSON form.
+    public func toJSON() throws -> String {
+        guard let tree else {
+            throw PbwireError(status: PBW_ERR_INVALID.code, message: "message is closed")
+        }
+        var out: UnsafeMutablePointer<CChar>?
+        var len = 0
+        let status = pbw_json_print(tree, &out, &len)
+        guard status == PBW_OK, let out else { try throwStatus(status) }
+        defer { pbw_free(out) }
+        guard let text = String(bytes: Data(bytes: out, count: len), encoding: .utf8) else {
+            throw PbwireError(status: PBW_ERR_INVALID.code, message: "invalid UTF-8 in JSON output")
+        }
+        return text
+    }
+
+    /// Parses JSON mapping text into a message of the same type. Unknown
+    /// field names throw unless `ignoreUnknown` is set; `maxBytes` /
+    /// `maxDepth` bound the input, zeros meaning the defaults.
+    public func fromJSON(
+        _ text: String, ignoreUnknown: Bool = false, maxBytes: Int = 0, maxDepth: Int = 0
+    ) throws -> Message {
+        var parsed: OpaquePointer?
+        var limits = try makeLimits(maxBytes: maxBytes, maxDepth: maxDepth)
+        var options = pbw_json_parse_options(ignore_unknown_fields: ignoreUnknown ? 1 : 0)
+        let bytes = Array(text.utf8)
+        let status = bytes.withUnsafeBytes { raw in
+            pbw_json_parse_limits(
+                descriptor, raw.baseAddress?.assumingMemoryBound(to: CChar.self), bytes.count,
+                &limits, &options, &parsed)
+        }
+        guard status == PBW_OK, let parsed else { try throwStatus(status) }
+        return Message(
+            schema: schema, descriptor: descriptor, tree: parsed, owned: true, parent: nil)
+    }
+
+    /// Protobuf text format of this message. Unknown fields print as
+    /// numeric lines unless `printUnknown` is false.
+    public func toText(printUnknown: Bool = true) throws -> String {
+        guard let tree else {
+            throw PbwireError(status: PBW_ERR_INVALID.code, message: "message is closed")
+        }
+        var out: UnsafeMutablePointer<CChar>?
+        var len = 0
+        let status = pbw_text_print_opts(tree, printUnknown ? 1 : 0, &out, &len)
+        guard status == PBW_OK, let out else { try throwStatus(status) }
+        defer { pbw_free(out) }
+        guard let text = String(bytes: Data(bytes: out, count: len), encoding: .utf8) else {
+            throw PbwireError(status: PBW_ERR_INVALID.code, message: "invalid UTF-8 in text output")
+        }
+        return text
+    }
+
+    /// Parses text format into a message of the same type. `maxBytes` /
+    /// `maxDepth` bound the input, zeros meaning the defaults.
+    public func fromText(_ text: String, maxBytes: Int = 0, maxDepth: Int = 0) throws -> Message {
+        var parsed: OpaquePointer?
+        var limits = try makeLimits(maxBytes: maxBytes, maxDepth: maxDepth)
+        let bytes = Array(text.utf8)
+        let status = bytes.withUnsafeBytes { raw in
+            pbw_text_parse_limits(
+                descriptor, raw.baseAddress?.assumingMemoryBound(to: CChar.self), bytes.count,
+                &limits, &parsed)
+        }
+        guard status == PBW_OK, let parsed else { try throwStatus(status) }
+        return Message(
+            schema: schema, descriptor: descriptor, tree: parsed, owned: true, parent: nil)
     }
 
     // MARK: - internals

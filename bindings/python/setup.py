@@ -24,9 +24,12 @@ def find_root():
 
 ROOT = find_root()
 
+# Every src/*.c the extension calls into: json.c reaches the Any/Timestamp
+# helpers in wkt.c, so leaving it out makes the wheel import with an
+# undefined symbol.
 CORE = [
     "wire.c", "arena.c", "schema.c", "message.c", "encode.c", "decode.c",
-    "ctx.c", "descriptor_set.c", "text.c", "json.c", "stream.c",
+    "ctx.c", "descriptor_set.c", "text.c", "json.c", "stream.c", "wkt.c",
 ]
 
 if ROOT is None:

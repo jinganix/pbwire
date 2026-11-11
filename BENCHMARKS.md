@@ -22,6 +22,7 @@ tier table with a chart (see the [per-binding index](#cross-binding-comparison-l
   - [Core](#core-pbw_ctx-vs-plain-vs-generated) · [C structs](#c-structs-vs-protoc-generated-same-matrix3proto) · [Go](#go-cgo-dynamic) · [Python](#python-vs-googleprotobuf-upb)
   - [Java](#java-vs-protobuf-java) · [Node](#node-vs-google-protobuf-jspb-and-protobufjs) · [Ruby](#ruby-c-extension-vs-the-google-protobuf-gem) · [Objective-C](#objective-c-vs-the-protobuf-objc-runtime)
   - [Kotlin](#kotlin-vs-protoc---kotlin_out-over-protobuf-java) · [PHP](#php-vs-the-official-php-runtime-pure--c-extension) · [Dart](#dart-vs-the-protobuf-dart-package) · [Rust](#rust-vs-prost-and-rust-protobuf-3x) · [C#](#c-vs-googleprotobuf) · [Lua](#lua-c-module-tables-vs-lua-protobuf) · [Erlang](#erlang-pbwire-vs-gpb-vs-gpb-nif)
+- [Release re-measurement (2026-11-12)](#release-re-measurement-2026-11-12) — every binding's xlarge tier from the 0.1.16 release run
 - [Embedded vs nanopb](#embedded-nanopb-same-message-both-sides) — the microcontroller tier, footprint and throughput
 - [Run them](#run-them) / [Regenerate this file](#regenerate-this-file)
 
@@ -1389,6 +1390,46 @@ runtime + generated code is 7021 B for **one** message type. The full tables,
 the RAM model and the reasoning (including the static-schema option that was
 evaluated and left out) are in
 [bindings/embedded/README.md](bindings/embedded/README.md#footprint-and-the-nanopb-comparison).
+
+## Release re-measurement: 2026-11-12
+
+Every harness above was re-run for the 0.1.16 release, one at a time on an
+otherwise idle machine (back-to-back batches throttle a laptop CPU and
+under-report by up to 2x, so they were avoided). These are the xlarge-tier
+numbers from that run; the per-binding tables below keep the 2026-11-06
+recording as the reference dataset. Absolute MB/s moves roughly +-15% between
+runs on this host, so compare the ratios, not the absolute columns, and read
+both datasets as two samples of the same code.
+
+Dart, C++ and Embedded have no row here: `make dart-bench` needs
+`protoc-gen-dart` (not installed), C++ runs the C harness (`make bench-c`), and
+the embedded facade is a pass-through measured by `make embedded-bench`.
+
+| binding | encode MB/s (x baseline) | decode MB/s (x baseline) | baseline |
+|---|---|---|---|
+| core dynamic (`pbw_ctx`) | 1428.0 (1.20x ✅) | 840.3 (1.79x ✅) | protoc gen |
+| core dynamic (plain API) | 1483.4 (1.25x ✅) | 849.5 (1.81x ✅) | protoc gen |
+| C structs | 1205.1 (1.31x ✅) | 848.3 (2.17x ✅) | protoc gen |
+| Go | 1214.0 (2.22x ✅) | 809.3 (2.52x ✅) | protobuf-go |
+| Python (dict path) | 588.3 (6.82x ✅) | 1153.0 (1.41x ✅) | upb |
+| Java | 1013.9 (1.11x ✅) | 859.8 (2.13x ✅) | protobuf-java |
+| Kotlin | 1180.1 (1.28x ✅) | 823.2 (1.76x ✅) | protobuf-kotlin |
+| Scala | 1015.9 (1.25x ✅) | 847.4 (1.32x ✅) | ScalaPB |
+| Clojure | 1102.7 (1.07x ✅) | 850.6 (1.86x ✅) | protobuf-java |
+| Node | 1527.5 (2.88x ✅) | 1563.9 (3.76x ✅) | protobufjs |
+| Ruby | 1584.7 (1.16x ✅) | 1163.6 (1.65x ✅) | google-protobuf gem |
+| Objective-C | 83660.4 (2.11x ✅) | 80379.9 (2.91x ✅) | protobuf-ObjC |
+| PHP | 1414.3 (1.15x ✅) | 808.4 (1.44x ✅) | official C ext |
+| Rust | 1472.4 (1.00x ✅) | 822.8 (2.06x ✅) | prost |
+| C# | 1406.9 (2.88x ✅) | 846.2 (1.65x ✅) | Google.Protobuf |
+| F# | 1461.8 (2.87x ✅) | 838.5 (1.69x ✅) | Google.Protobuf |
+| Swift | 1547.8 (5.35x ✅) | 745.0 (3.26x ✅) | swift-protobuf |
+| Lua | 210.4 (1.10x ✅) | 134.0 (1.41x ✅) | lua-protobuf |
+| Erlang | 474.6 (3.81x ✅) | 355.3 (1.60x ✅) | gpb |
+| Elixir | 148.6 (2.32x ✅) | 86.1 (1.42x ✅) | elixir-protobuf |
+| Zig | 1568.4 (1.74x ✅) | 850.5 (2.52x ✅) | zig-protobuf |
+| Julia | 1517.5 (133.11x ✅) | 837.5 (1.17x ✅) | ProtoBuf.jl |
+| R | 184.3 (63.55x ✅) | 165.0 (63.46x ✅) | RProtoBuf |
 
 ## Run them
 

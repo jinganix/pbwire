@@ -262,6 +262,12 @@ struct ep_state_s {
          * (existing and future). Unset means the core default. */
         int retain_cap_set;
         size_t retain_cap;
+        /* Input guards for untrusted wire data, mirroring pbw_limits.
+         * Zero (unset) means no cap beyond the built-in ones. */
+        int max_bytes_set;
+        size_t max_bytes;
+        int max_depth_set;
+        uint32_t max_depth;
     } opts;
 
     ERL_NIF_TERM atom_ok;

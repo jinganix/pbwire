@@ -4,9 +4,11 @@
 //
 //   dart run tests/selftest.dart [descriptor-set]
 
+import 'dart:ffi';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:ffi/ffi.dart';
 import 'package:pbwire/pbwire.dart';
 
 var _checks = 0;
@@ -155,6 +157,78 @@ void main(List<String> args) {
     'setMessage on a scalar rejected',
   );
 
+  // The extended surface: deterministic/delimited encode, JSON and text
+  // print/parse, bounded decode, and the cheap extras.
+  {
+    final m = ty.newMessage()..setString('str', 'hello');
+    final w = m.encode();
+    check(m.encodedSize() == w.length, 'encodedSize');
+    check(m.isInitialized(), 'isInitialized');
+    check(_equals(m.encodeDeterministic(), w), 'deterministic');
+    final framed = m.encodeDelimited();
+    final dd = ty.decodeDelimited([...framed, ...framed]);
+    check(_equals(dd.message.encode(), w), 'delimited round trip');
+    check(dd.consumed == framed.length, 'delimited consumed');
+    dd.message.close();
+    final js = m.printJson();
+    check(_equals(ty.parseJson(js).encode(), w), 'json round trip');
+    check(_throws(() => ty.parseJson('{"nope":1}')), 'json unknown accepted');
+    check(_throws(() => ty.parseJson('{"name":"x"}', maxBytes: 4)),
+        'parseJson honors maxBytes');
+    check(_throws(() => ty.parseText('name: "x"', maxBytes: 4)),
+        'parseText honors maxBytes');
+    check(_throws(() => ty.parseJson('{"name":"x"}', maxBytes: -1)),
+        'parseJson rejects a negative maxBytes');
+    check(_equals(ty.parseJson('{"nope":1}', ignoreUnknown: true).encode(), []),
+        'json ignore unknown');
+    final tx = m.printText();
+    check(_equals(ty.parseText(tx).encode(), w), 'text round trip');
+    check(_equals(ty.decodeLimits(w).encode(), w), 'limits defaults');
+    check(_throws(() => ty.decodeLimits(w, maxBytes: 1)), 'limits maxBytes ignored');
+    check(_throws(() => ty.decodeLimits(w, maxBytes: -1)),
+        'a negative maxBytes is rejected, not a disabled cap');
+    check(_throws(() => ty.decodeLimits(w, maxDepth: -1)),
+        'a negative maxDepth is rejected');
+    check(_throws(() => ty.visit(w, (_) => true, maxBytes: -1)),
+        'visit rejects a negative maxBytes');
+    check(_throws(() => Schema.load(desc).resolveMethod('no.Such', 'Nope')),
+        'unknown service accepted');
+    var seen = 0;
+    ty.visit(w, (field) {
+      seen++;
+      return true;
+    });
+    check(seen > 0, 'visit saw fields');
+    var stopped = 0;
+    ty.visit(w, (field) {
+      stopped++;
+      return false;
+    });
+    check(stopped == 1, 'visit stops on false');
+    final target = calloc<Uint8>(w.length + 12);
+    try {
+      check(m.encodeTo(target, w.length + 12) == w.length,
+          'encodeTo writes the exact size');
+      check(_equals(target.asTypedList(w.length), w),
+          'encodeTo bytes match encode');
+    } finally {
+      calloc.free(target);
+    }
+    // A callback may start another scan; the outer one must still see its
+    // own state (the trampoline reads one module-level slot).
+    var nested = 0;
+    ty.visit(w, (outer) {
+      ty.visit(w, (inner) {
+        nested++;
+        return true;
+      });
+      nested++;
+      return true;
+    });
+    check(nested == 2 * seen, 'nested visit keeps both scans intact');
+    m.close();
+  }
+
   edgeSchema.close();
   /* Lifetime: closing the schema makes every Type/Field/Message throw instead
    * of reading freed descriptor memory, and a view refuses to touch the arena
@@ -225,5 +299,7 @@ bool _throws(void Function() op) {
     return false;
   } on PbwireException {
     return true;
+  } on ArgumentError {
+    return true; // an invalid argument is a rejection too
   }
 }
