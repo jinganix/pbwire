@@ -102,13 +102,29 @@ wkt_to_millis(const pbw_message *msg, int64_t *out)
     if (nanos > 999999999 || nanos < -999999999) {
         return PBW_ERR_INVALID;
     }
-    /* The sub-second part moves the result by at most 999 ms either way, so
-     * bound the multiply tightly enough that adding it cannot overflow:
-     * sec*1000 + nanos/1000000 stays inside int64 for every accepted sec. */
-    if (sec > (INT64_MAX - 999) / 1000 || sec < (INT64_MIN + 999) / 1000) {
-        return PBW_ERR_LIMIT;
+    /* sec*1000 + nanos/1000000 must stay inside int64, and the sub-second
+     * part only moves the result towards zero or away from it depending on
+     * its sign: bound each direction by the actual fraction, so a legal
+     * boundary value (sec 9223372036854775, nanos 807000000 == INT64_MAX)
+     * round-trips instead of reporting a limit. */
+    {
+        int64_t frac = nanos / 1000000;
+        int64_t hi;
+        int64_t lo;
+
+        /* Both bounds are always needed: a positive fraction can push the
+         * product *up* and a negative one *down*, but a far negative sec
+         * overflows on the low side regardless of the fraction's sign. The
+         * bound uses the actual remainder per direction, so a legal boundary
+         * value (sec 9223372036854775, nanos 807000000 == INT64_MAX) still
+         * converts. */
+        hi = (INT64_MAX - (frac > 0 ? frac : 0)) / 1000;
+        lo = (INT64_MIN - (frac < 0 ? frac : 0)) / 1000;
+        if (sec > hi || sec < lo) {
+            return PBW_ERR_LIMIT;
+        }
+        *out = sec * 1000 + frac;
     }
-    *out = sec * 1000 + nanos / 1000000;
     return PBW_OK;
 }
 
@@ -127,7 +143,9 @@ pbw_duration_to_millis(const pbw_message *dur, int64_t *out)
 /* Pack direction for the two time shapes: field 1 holds whole seconds,
  * field 2 the sub-second remainder. Duration keeps the same sign in both
  * fields; Timestamp requires nanos in [0, 1e9), so a negative millisecond
- * remainder borrows a second. int64 milliseconds always fit. */
+ * remainder borrows a second. That borrow can step one second below the
+ * representable range at the very bottom of int64, which is refused rather
+ * than written back as a pair that cannot convert. */
 static pbw_status
 wkt_from_millis(const pbw_descriptor *desc, int64_t ms, int floor_nanos,
                 pbw_message **out)
@@ -149,6 +167,13 @@ wkt_from_millis(const pbw_descriptor *desc, int64_t ms, int floor_nanos,
     *out = NULL;
     if (desc == NULL) {
         return PBW_ERR_INVALID;
+    }
+    /* The pair must convert back: secs * 1000 has to stay inside int64, and
+     * borrowing a second for a negative remainder can push a value at the
+     * very bottom of the int64 range out of it (Timestamp cannot represent
+     * INT64_MIN ms, Duration can: its nanos keep the sign). */
+    if (secs > INT64_MAX / 1000 || secs < INT64_MIN / 1000) {
+        return PBW_ERR_LIMIT;
     }
     msg = pbw_message_new(desc);
     vsec = pbw_value_new_int(secs);

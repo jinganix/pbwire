@@ -6380,6 +6380,49 @@ test_wkt(void)
                              pbw_value_new_int(INT64_MAX / 1000)));
     CHECK_OK(pbw_message_set(stamp, 2, pbw_value_new_int(999999999)));
     CHECK_STATUS(PBW_ERR_LIMIT, pbw_duration_to_millis(stamp, &millis));
+    /* The bound is per sign: seconds one past the conservative edge still fit
+     * when the fraction is small enough, and must round-trip exactly. */
+    CHECK_OK(pbw_message_set(stamp, 1, pbw_value_new_int(INT64_MAX / 1000)));
+    CHECK_OK(pbw_message_set(stamp, 2, pbw_value_new_int(807000000)));
+    CHECK_OK(pbw_duration_to_millis(stamp, &millis));
+    CHECK(millis == INT64_MAX);
+    /* A far seconds value overflows the multiply whatever the fraction's
+     * sign: both bounds are always checked. */
+    CHECK_OK(pbw_message_set(stamp, 1, pbw_value_new_int(INT64_MIN)));
+    CHECK_OK(pbw_message_set(stamp, 2, pbw_value_new_int(0)));
+    CHECK_STATUS(PBW_ERR_LIMIT, pbw_duration_to_millis(stamp, &millis));
+    CHECK_OK(pbw_message_set(stamp, 1, pbw_value_new_int(INT64_MAX)));
+    CHECK_OK(pbw_message_set(stamp, 2, pbw_value_new_int(0)));
+    CHECK_STATUS(PBW_ERR_LIMIT, pbw_duration_to_millis(stamp, &millis));
+    /* Duration keeps the nanos' sign, so its extreme millisecond values
+     * round-trip; Timestamp has to borrow a second there and refuses. */
+    pbw_message_free(stamp);
+    stamp = pbw_message_new(dur);
+    CHECK_OK(pbw_duration_from_millis(dur, INT64_MIN, &stamp));
+    CHECK_OK(pbw_duration_to_millis(stamp, &millis));
+    CHECK(millis == INT64_MIN);
+    pbw_message_free(stamp);
+    stamp = NULL;
+    CHECK_OK(pbw_duration_from_millis(dur, INT64_MAX, &stamp));
+    CHECK_OK(pbw_duration_to_millis(stamp, &millis));
+    CHECK(millis == INT64_MAX);
+    pbw_message_free(stamp);
+    stamp = NULL;
+    CHECK_STATUS(PBW_ERR_LIMIT, pbw_timestamp_from_millis(ts, INT64_MIN, &stamp));
+    CHECK(stamp == NULL);
+    CHECK_OK(pbw_timestamp_from_millis(ts, INT64_MAX, &stamp));
+    CHECK_OK(pbw_timestamp_to_millis(stamp, &millis));
+    CHECK(millis == INT64_MAX);
+    pbw_message_free(stamp);
+    /* A fresh duration tree for the cases below. */
+    stamp = pbw_message_new(dur);
+    CHECK(stamp != NULL);
+    CHECK_OK(pbw_message_set(stamp, 1, pbw_value_new_int(INT64_MIN / 1000)));
+    CHECK_OK(pbw_message_set(stamp, 2, pbw_value_new_int(-808000000)));
+    CHECK_OK(pbw_duration_to_millis(stamp, &millis));
+    CHECK(millis == INT64_MIN);
+    /* Restore the fraction the next case expects. */
+    CHECK_OK(pbw_message_set(stamp, 2, pbw_value_new_int(999999999)));
     CHECK_OK(pbw_message_set(stamp, 1,
                              pbw_value_new_int((INT64_MAX - 999) / 1000)));
     CHECK_OK(pbw_duration_to_millis(stamp, &millis));
