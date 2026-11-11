@@ -33,6 +33,8 @@ final class Error extends \RuntimeException
 final class Lib
 {
     private const HEADER = <<<'C'
+        typedef struct { size_t max_bytes; unsigned int max_depth; } pbw_limits;
+        typedef struct { int ignore_unknown_fields; } pbw_json_parse_options;
         int pbw_abi_version(void);
         const char *pbw_strerror(int status);
         void pbw_free(void *ptr);
@@ -77,7 +79,42 @@ final class Lib
         void *pbw_value_at(void *value, size_t index);
         int pbw_encode(void *msg, void **out, size_t *len);
         int pbw_encode_to(void *msg, void *out, size_t cap, size_t *len);
+        int pbw_encode_deterministic(void *msg, void **out, size_t *len);
+        int pbw_message_encoded_size(void *msg, size_t *len);
+        int pbw_encode_delimited(void *msg, void **out, size_t *len);
+        int pbw_encode_delimited_to(void *msg, void *out, size_t cap, size_t *len);
         int pbw_decode(void *desc, const void *buf, size_t len, void **out);
+        int pbw_decode_limits(void *desc, const void *buf, size_t len, const pbw_limits *limits, void **out);
+        int pbw_decode_delimited(void *desc, const void *buf, size_t len, void **out, size_t *consumed);
+        int pbw_decode_delimited_limits(void *desc, const void *buf, size_t len, const pbw_limits *limits, void **out, size_t *consumed);
+        int pbw_descriptor_set_load_limits(const void *data, size_t len, const pbw_limits *limits, void **out);
+        int pbw_json_print(void *msg, void **out, size_t *len);
+        int pbw_json_parse_opts(void *desc, const char *text, size_t len, const pbw_json_parse_options *options, void **out);
+        int pbw_json_parse_limits(void *desc, const char *text, size_t len, const pbw_limits *limits, const pbw_json_parse_options *options, void **out);
+        int pbw_text_print_opts(void *msg, int print_unknown_fields, void **out, size_t *len);
+        int pbw_text_parse(void *desc, const char *text, size_t len, void **out);
+        int pbw_text_parse_limits(void *desc, const char *text, size_t len, const pbw_limits *limits, void **out);
+        size_t pbw_schema_service_count(void *schema);
+        void *pbw_schema_service_at(void *schema, size_t index);
+        void *pbw_schema_service_find(void *schema, const char *name);
+        const char *pbw_service_name(void *svc);
+        size_t pbw_service_method_count(void *svc);
+        void *pbw_service_method_at(void *svc, size_t index);
+        const char *pbw_method_name(void *method);
+        const char *pbw_method_input_type(void *method);
+        const char *pbw_method_output_type(void *method);
+        int pbw_method_client_streaming(void *method);
+        int pbw_method_server_streaming(void *method);
+        int pbw_service_resolve(void *schema, const char *service, const char *method, void **in_desc, void **out_desc);
+        int pbw_any_pack(void *any_desc, const char *type_url, const void *payload, size_t len, void **out);
+        const char *pbw_any_type_url(void *msg);
+        const void *pbw_any_payload(void *msg, size_t *len);
+        int pbw_timestamp_to_millis(void *ts, long long *out);
+        int pbw_duration_to_millis(void *dur, long long *out);
+        int pbw_timestamp_from_millis(void *desc, long long ms, void **out);
+        int pbw_duration_from_millis(void *desc, long long ms, void **out);
+        size_t pbw_fieldmask_path_count(void *mask);
+        const char *pbw_fieldmask_path_at(void *mask, size_t index);
         C;
 
     private static ?FFI $ffi = null;
@@ -144,6 +181,50 @@ final class Lib
     {
         return (string) self::ffi()->pbw_strerror($status);
     }
+
+    /** The struct an limitsPtr() pointer points into: FFI::addr() does not
+     * keep its source alive, so the pointer dangles once the struct's scope
+     * ends. Calls are synchronous (and the binding is single-threaded), so a
+     * reused slot keeps every live pointer valid and costs no allocation
+     * (newSlot per call leaks, see slot()). */
+    private static ?CData $limitsHold = null;
+
+    /** One limits entry: a non-negative integer, or 0 when absent. */
+    private static function limitValue(array $limits, string $key, int $max): int
+    {
+        if (!isset($limits[$key])) {
+            return 0;
+        }
+        $v = $limits[$key];
+        if (!is_int($v)) {
+            throw new \InvalidArgumentException(
+                "pbwire: limits['$key'] must be an integer");
+        }
+        if ($v < 0 || $v > $max) {
+            throw new \InvalidArgumentException(
+                "pbwire: limits['$key'] must be between 0 and $max");
+        }
+
+        return $v;
+    }
+
+    /** A pbw_limits pointer for ['max_bytes' => n, 'max_depth' => n], or
+     * null for the core defaults (no byte cap, PBW_MAX_DEPTH nesting). */
+    public static function limitsPtr(?array $limits): ?CData
+    {
+        if ($limits === null) {
+            return null;
+        }
+        $l = self::$limitsHold ??= self::ffi()->new('pbw_limits');
+        /* A reused slot keeps the previous call's values: zero both fields
+         * first so an omitted key means the core default, not a stale cap.
+         * A negative value would wrap into an unsigned C field and silently
+         * disable the cap, so each one is validated as an integer first. */
+        $l->max_bytes = self::limitValue($limits, 'max_bytes', PHP_INT_MAX);
+        $l->max_depth = self::limitValue($limits, 'max_depth', 0xFFFFFFFF);
+
+        return FFI::addr($l);
+    }
 }
 
 /**
@@ -164,7 +245,7 @@ final class Schema
         $this->handle = $handle;
     }
 
-    public static function fromFile(string $path): self
+    public static function fromFile(string $path, ?array $limits = null): self
     {
         $bytes = @file_get_contents($path);
 
@@ -172,15 +253,16 @@ final class Schema
             throw new Error("pbwire: cannot read $path");
         }
 
-        return self::fromBytes($bytes);
+        return self::fromBytes($bytes, $limits);
     }
 
-    /** Load descriptor-set bytes; use --include_imports so every type resolves. */
-    public static function fromBytes(string $bytes): self
+    /** Load descriptor-set bytes; use --include_imports so every type resolves.
+     * A trailing ['max_bytes' => n, 'max_depth' => n] caps untrusted input. */
+    public static function fromBytes(string $bytes, ?array $limits = null): self
     {
         $ffi = Lib::ffi();
         $out = Lib::slot('void*[1]');
-        $status = $ffi->pbw_descriptor_set_load($bytes, strlen($bytes), FFI::addr($out[0]));
+        $status = $ffi->pbw_descriptor_set_load_limits($bytes, strlen($bytes), Lib::limitsPtr($limits), FFI::addr($out[0]));
         $handle = $out[0];
 
         if ($status !== 0) {
@@ -198,6 +280,68 @@ final class Schema
         }
 
         return new self($handle);
+    }
+
+    /** Service names of this schema, for routing. */
+    public function services(): array
+    {
+        $ffi = Lib::ffi();
+        $count = $ffi->pbw_schema_service_count($this->cdata());
+        $names = [];
+        for ($i = 0; $i < $count; $i++) {
+            $svc = $ffi->pbw_schema_service_at($this->cdata(), $i);
+            if ($svc === null) {
+                throw new Error('services: no service returned');
+            }
+            $names[] = (string) $ffi->pbw_service_name($svc);
+        }
+
+        return $names;
+    }
+
+    /** One service with its methods and streaming flags; throws when unknown. */
+    public function service(string $name): array
+    {
+        $ffi = Lib::ffi();
+        $svc = $ffi->pbw_schema_service_find($this->cdata(), $name);
+        if ($svc === null) {
+            throw new Error("no such service: $name");
+        }
+        $methods = [];
+        $count = $ffi->pbw_service_method_count($svc);
+        for ($i = 0; $i < $count; $i++) {
+            $m = $ffi->pbw_service_method_at($svc, $i);
+            if ($m === null) {
+                throw new Error("service $name: no method returned");
+            }
+            $methods[] = [
+                'name' => (string) $ffi->pbw_method_name($m),
+                'input_type' => (string) $ffi->pbw_method_input_type($m),
+                'output_type' => (string) $ffi->pbw_method_output_type($m),
+                'client_streaming' => $ffi->pbw_method_client_streaming($m) !== 0,
+                'server_streaming' => $ffi->pbw_method_server_streaming($m) !== 0,
+            ];
+        }
+
+        return ['name' => (string) $ffi->pbw_service_name($svc), 'methods' => $methods];
+    }
+
+    /** Resolve a method to its input/output types for routing; throws when
+     * the service or the method is unknown. */
+    public function resolve(string $service, string $method): array
+    {
+        $ffi = Lib::ffi();
+        $in = Lib::newSlot('void*[1]');
+        $out = Lib::newSlot('void*[1]');
+        $status = $ffi->pbw_service_resolve($this->cdata(), $service, $method, FFI::addr($in[0]), FFI::addr($out[0]));
+        if ($status !== 0) {
+            throw new Error("resolve $service/$method: " . Lib::errorText($status));
+        }
+        if ($in[0] === null || $out[0] === null) {
+            throw new Error("resolve $service/$method: no type returned");
+        }
+
+        return ['input' => new Type($this, $in[0]), 'output' => new Type($this, $out[0])];
     }
 
     /** Looks up a message by fully qualified name, e.g. "structtest.Scalars3". */
@@ -341,11 +485,16 @@ final class Type
         return Message::root($this, $ptr, $ctx);
     }
 
-    /** Decodes wire bytes; unknown fields are preserved and re-encoded. */
-    public function decode(string $wire): Message
+    /** Decodes wire bytes; unknown fields are preserved and re-encoded.
+     * A trailing ['max_bytes' => n, 'max_depth' => n] caps untrusted input. */
+    public function decode(string $wire, ?array $limits = null): Message
     {
         $out = Lib::slot('void*[1]');
-        $status = Lib::ffi()->pbw_decode($this->desc, $wire, strlen($wire), FFI::addr($out[0]));
+        if ($limits === null) {
+            $status = Lib::ffi()->pbw_decode($this->desc, $wire, strlen($wire), FFI::addr($out[0]));
+        } else {
+            $status = Lib::ffi()->pbw_decode_limits($this->desc, $wire, strlen($wire), Lib::limitsPtr($limits), FFI::addr($out[0]));
+        }
 
         if ($status !== 0) {
             throw new Error('decode: ' . Lib::errorText($status));
@@ -353,6 +502,126 @@ final class Type
 
         if ($out[0] === null) {
             throw new Error('decode: no message returned');
+        }
+
+        return Message::root($this, $out[0]);
+    }
+
+    /** Decodes one length-delimited frame; 'read' counts the length prefix
+     * plus the frame, so concatenated frames decode in a loop. */
+    public function decodeDelimited(string $wire, ?array $limits = null): array
+    {
+        $out = Lib::slot('void*[1]');
+        $used = Lib::newSlot('size_t');
+        if ($limits === null) {
+            $status = Lib::ffi()->pbw_decode_delimited($this->desc, $wire, strlen($wire), FFI::addr($out[0]), FFI::addr($used));
+        } else {
+            $status = Lib::ffi()->pbw_decode_delimited_limits($this->desc, $wire, strlen($wire), Lib::limitsPtr($limits), FFI::addr($out[0]), FFI::addr($used));
+        }
+
+        if ($status !== 0) {
+            throw new Error('decodeDelimited: ' . Lib::errorText($status));
+        }
+
+        if ($out[0] === null) {
+            throw new Error('decodeDelimited: no message returned');
+        }
+
+        return ['message' => Message::root($this, $out[0]), 'read' => $used->cdata];
+    }
+
+    /** Parses JSON mapping text; $ignore skips unknown field names instead
+     * of failing. A trailing limits array caps untrusted input. */
+    public function fromJson(string $json, bool $ignore = false, ?array $limits = null): Message
+    {
+        $ffi = Lib::ffi();
+        $opts = Lib::newSlot('pbw_json_parse_options');
+        $opts->ignore_unknown_fields = $ignore ? 1 : 0;
+        $out = Lib::slot('void*[1]');
+        if ($limits === null) {
+            $status = $ffi->pbw_json_parse_opts($this->desc, $json, strlen($json), FFI::addr($opts), FFI::addr($out[0]));
+        } else {
+            $status = $ffi->pbw_json_parse_limits($this->desc, $json, strlen($json), Lib::limitsPtr($limits), FFI::addr($opts), FFI::addr($out[0]));
+        }
+
+        if ($status !== 0) {
+            throw new Error('fromJson: ' . Lib::errorText($status));
+        }
+
+        if ($out[0] === null) {
+            throw new Error('fromJson: no message returned');
+        }
+
+        return Message::root($this, $out[0]);
+    }
+
+    /** Parses text format. A trailing limits array caps untrusted input. */
+    public function fromText(string $text, ?array $limits = null): Message
+    {
+        $out = Lib::slot('void*[1]');
+        if ($limits === null) {
+            $status = Lib::ffi()->pbw_text_parse($this->desc, $text, strlen($text), FFI::addr($out[0]));
+        } else {
+            $status = Lib::ffi()->pbw_text_parse_limits($this->desc, $text, strlen($text), Lib::limitsPtr($limits), FFI::addr($out[0]));
+        }
+
+        if ($status !== 0) {
+            throw new Error('fromText: ' . Lib::errorText($status));
+        }
+
+        if ($out[0] === null) {
+            throw new Error('fromText: no message returned');
+        }
+
+        return Message::root($this, $out[0]);
+    }
+
+    /** Packs already-encoded bytes into a new google.protobuf.Any tree. */
+    public function anyPack(string $typeUrl, string $payload): Message
+    {
+        $out = Lib::slot('void*[1]');
+        $status = Lib::ffi()->pbw_any_pack($this->desc, $typeUrl, $payload, strlen($payload), FFI::addr($out[0]));
+
+        if ($status !== 0) {
+            throw new Error('anyPack: ' . Lib::errorText($status));
+        }
+
+        if ($out[0] === null) {
+            throw new Error('anyPack: no message returned');
+        }
+
+        return Message::root($this, $out[0]);
+    }
+
+    /** A new Timestamp tree holding ms since the Unix epoch. */
+    public function timestampFromMillis(int $ms): Message
+    {
+        $out = Lib::slot('void*[1]');
+        $status = Lib::ffi()->pbw_timestamp_from_millis($this->desc, $ms, FFI::addr($out[0]));
+
+        if ($status !== 0) {
+            throw new Error('timestampFromMillis: ' . Lib::errorText($status));
+        }
+
+        if ($out[0] === null) {
+            throw new Error('timestampFromMillis: no message returned');
+        }
+
+        return Message::root($this, $out[0]);
+    }
+
+    /** A new Duration tree holding ms. */
+    public function durationFromMillis(int $ms): Message
+    {
+        $out = Lib::slot('void*[1]');
+        $status = Lib::ffi()->pbw_duration_from_millis($this->desc, $ms, FFI::addr($out[0]));
+
+        if ($status !== 0) {
+            throw new Error('durationFromMillis: ' . Lib::errorText($status));
+        }
+
+        if ($out[0] === null) {
+            throw new Error('durationFromMillis: no message returned');
         }
 
         return Message::root($this, $out[0]);
@@ -697,6 +966,183 @@ final class Message
         $ffi->pbw_free($out[0]);
 
         return $bytes;
+    }
+
+    /** Deterministic bytes: map entries sorted by key, so equal messages
+     * encode to equal bytes regardless of insertion order. */
+    public function encodeDeterministic(): string
+    {
+        $ffi = Lib::ffi();
+        $out = Lib::slot('void*[1]');
+        $len = Lib::slot('size_t');
+        $status = $ffi->pbw_encode_deterministic($this->cdata(), FFI::addr($out[0]), FFI::addr($len));
+
+        if ($status !== 0) {
+            throw new Error('encodeDeterministic: ' . Lib::errorText($status));
+        }
+
+        $bytes = FFI::string($out[0], $len->cdata);
+        $ffi->pbw_free($out[0]);
+
+        return $bytes;
+    }
+
+    /** Exact byte count encode() would write for this message. */
+    public function encodedSize(): int
+    {
+        $len = Lib::slot('size_t');
+        $status = Lib::ffi()->pbw_message_encoded_size($this->cdata(), FFI::addr($len));
+
+        if ($status !== 0) {
+            throw new Error('encodedSize: ' . Lib::errorText($status));
+        }
+
+        return $len->cdata;
+    }
+
+    /** Encodes into a $cap-byte buffer: the cap is the hard limit, so a
+     * short buffer fails instead of growing. */
+    public function encodeTo(int $cap): string
+    {
+        if ($cap < 1) {
+            throw new Error('encodeTo: cap must be positive');
+        }
+        $buf = str_repeat("\0", $cap);
+        $len = Lib::slot('size_t');
+        $status = Lib::ffi()->pbw_encode_to($this->cdata(), $buf, $cap, FFI::addr($len));
+
+        if ($status !== 0) {
+            throw new Error('encodeTo: ' . Lib::errorText($status));
+        }
+
+        return substr($buf, 0, $len->cdata);
+    }
+
+    /** One length-delimited frame (varint length + message). */
+    public function encodeDelimited(): string
+    {
+        $ffi = Lib::ffi();
+        $out = Lib::slot('void*[1]');
+        $len = Lib::slot('size_t');
+        $status = $ffi->pbw_encode_delimited($this->cdata(), FFI::addr($out[0]), FFI::addr($len));
+
+        if ($status !== 0) {
+            throw new Error('encodeDelimited: ' . Lib::errorText($status));
+        }
+
+        $bytes = FFI::string($out[0], $len->cdata);
+        $ffi->pbw_free($out[0]);
+
+        return $bytes;
+    }
+
+    /** One length-delimited frame into a $cap-byte buffer. */
+    public function encodeDelimitedTo(int $cap): string
+    {
+        if ($cap < 1) {
+            throw new Error('encodeDelimitedTo: cap must be positive');
+        }
+        $buf = str_repeat("\0", $cap);
+        $len = Lib::slot('size_t');
+        $status = Lib::ffi()->pbw_encode_delimited_to($this->cdata(), $buf, $cap, FFI::addr($len));
+
+        if ($status !== 0) {
+            throw new Error('encodeDelimitedTo: ' . Lib::errorText($status));
+        }
+
+        return substr($buf, 0, $len->cdata);
+    }
+
+    /** JSON mapping text of this message. */
+    public function toJson(): string
+    {
+        $ffi = Lib::ffi();
+        $out = Lib::slot('void*[1]');
+        $len = Lib::slot('size_t');
+        $status = $ffi->pbw_json_print($this->cdata(), FFI::addr($out[0]), FFI::addr($len));
+
+        if ($status !== 0) {
+            throw new Error('toJson: ' . Lib::errorText($status));
+        }
+
+        $text = FFI::string($out[0], $len->cdata);
+        $ffi->pbw_free($out[0]);
+
+        return $text;
+    }
+
+    /** Protobuf text format; $printUnknown drops unknown fields when false. */
+    public function toText(bool $printUnknown = true): string
+    {
+        $ffi = Lib::ffi();
+        $out = Lib::slot('void*[1]');
+        $len = Lib::slot('size_t');
+        $status = $ffi->pbw_text_print_opts($this->cdata(), $printUnknown ? 1 : 0, FFI::addr($out[0]), FFI::addr($len));
+
+        if ($status !== 0) {
+            throw new Error('toText: ' . Lib::errorText($status));
+        }
+
+        $text = FFI::string($out[0], $len->cdata);
+        $ffi->pbw_free($out[0]);
+
+        return $text;
+    }
+
+    /** type_url of an Any message, or null when absent. */
+    public function anyTypeUrl(): ?string
+    {
+        $url = Lib::ffi()->pbw_any_type_url($this->cdata());
+
+        return $url === null ? null : (string) $url;
+    }
+
+    /** value bytes of an Any message, or null when absent. */
+    public function anyPayload(): ?string
+    {
+        $len = Lib::slot('size_t');
+        $ptr = Lib::ffi()->pbw_any_payload($this->cdata(), FFI::addr($len));
+
+        return $ptr === null ? null : FFI::string($ptr, $len->cdata);
+    }
+
+    /** Milliseconds since the Unix epoch of a Timestamp message. */
+    public function timestampMillis(): int
+    {
+        $ms = Lib::slot('long long');
+        $status = Lib::ffi()->pbw_timestamp_to_millis($this->cdata(), FFI::addr($ms));
+
+        if ($status !== 0) {
+            throw new Error('timestampMillis: ' . Lib::errorText($status));
+        }
+
+        return $ms->cdata;
+    }
+
+    /** Milliseconds of a Duration message. */
+    public function durationMillis(): int
+    {
+        $ms = Lib::slot('long long');
+        $status = Lib::ffi()->pbw_duration_to_millis($this->cdata(), FFI::addr($ms));
+
+        if ($status !== 0) {
+            throw new Error('durationMillis: ' . Lib::errorText($status));
+        }
+
+        return $ms->cdata;
+    }
+
+    /** Path strings of a FieldMask message. */
+    public function fieldmaskPaths(): array
+    {
+        $ffi = Lib::ffi();
+        $count = $ffi->pbw_fieldmask_path_count($this->cdata());
+        $paths = [];
+        for ($i = 0; $i < $count; $i++) {
+            $paths[] = (string) $ffi->pbw_fieldmask_path_at($this->cdata(), $i);
+        }
+
+        return $paths;
     }
 
     public function cdata(): CData

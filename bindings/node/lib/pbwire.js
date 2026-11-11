@@ -55,13 +55,38 @@ class Schema {
     this._handle = handle;
   }
 
-  /** Load a FileDescriptorSet (protoc --descriptor_set_out, buf, ...). */
-  static fromBytes(bytes) {
-    return new Schema(addon.loadDescriptorSet(bytes));
+  /** Load a FileDescriptorSet (protoc --descriptor_set_out, buf, ...).
+   * An optional second argument caps untrusted input: {maxBytes, maxDepth}. */
+  static fromBytes(bytes, opts) {
+    return new Schema(addon.loadDescriptorSet(bytes, opts));
   }
 
-  static fromFile(file) {
-    return Schema.fromBytes(fs.readFileSync(file));
+  static fromFile(file, opts) {
+    return Schema.fromBytes(fs.readFileSync(file), opts);
+  }
+
+  /** Service names of this schema, for routing. */
+  services() {
+    return addon.services(this._handle);
+  }
+
+  /** One service with its methods and streaming flags; throws when unknown. */
+  service(name) {
+    return addon.service(this._handle, name);
+  }
+
+  /** Resolve a method to its input/output types for routing; throws when
+   * the service or the method is unknown. */
+  resolve(svc, method) {
+    const meta = this.service(svc).methods.find((m) => m.name === method);
+    if (meta === undefined) {
+      throw new Error(`pbwire: ${svc} has no method ${method}`);
+    }
+    const res = addon.resolve(this._handle, svc, method);
+    return {
+      input: new MessageType(this, meta.inputType, res.input),
+      output: new MessageType(this, meta.outputType, res.output),
+    };
   }
 
   /** A message type of this schema; throws when the name is not a message. */
@@ -108,34 +133,37 @@ class MessageType {
   }
 
   /** Parse JSON mapping text into a Message; throws on malformed input.
-   * A second true argument skips unknown field names instead of failing. */
-  fromJson(json, ignore = false) {
+   * A second true argument skips unknown field names instead of failing;
+   * a trailing {maxBytes, maxDepth} caps untrusted input. */
+  fromJson(json, ignore = false, opts) {
     if (typeof json !== 'string') {
       throw new TypeError('pbwire: fromJson expects a string');
     }
     const message = new Message(this);
-    message._handle = addon.jsonToMessage(this._handle, json, ignore);
+    message._handle = addon.jsonToMessage(this._handle, json, ignore, opts);
     return message;
   }
 
-  /** Parse text format into a Message; throws on malformed input. */
-  fromText(text) {
+  /** Parse text format into a Message; throws on malformed input. A
+   * trailing {maxBytes, maxDepth} caps untrusted input. */
+  fromText(text, opts) {
     if (typeof text !== 'string') {
       throw new TypeError('pbwire: fromText expects a string');
     }
     const message = new Message(this);
-    message._handle = addon.textToMessage(this._handle, text);
+    message._handle = addon.textToMessage(this._handle, text, opts);
     return message;
   }
 
   /** Decode one length-delimited frame: {message, read}, where read counts
    * the length prefix plus the frame, so concatenated frames decode in a
-   * loop. Throws on a truncated frame. */
-  decodeDelimited(bytes) {
+   * loop. Throws on a truncated frame. A trailing {maxBytes, maxDepth}
+   * caps untrusted input. */
+  decodeDelimited(bytes, opts) {
     if (!Buffer.isBuffer(bytes)) {
       throw new TypeError('pbwire: decodeDelimited expects a Buffer');
     }
-    const res = addon.decodeDelimited(this._handle, bytes);
+    const res = addon.decodeDelimited(this._handle, bytes, opts);
     const message = new Message(this);
     message._handle = res.message;
     return { message, read: res.read };
@@ -144,16 +172,18 @@ class MessageType {
   /** Decode wire bytes into a plain object in one call; throws on malformed
    * input. Same values `get()` would return, without the per-field round
    * trip: the fast path when most fields are read. Nothing is retained, so
-   * unlike `decode()` the result cannot re-encode. */
-  decodeObject(bytes) {
+   * unlike `decode()` the result cannot re-encode. A trailing
+   * {maxBytes, maxDepth} caps untrusted input. */
+  decodeObject(bytes, opts) {
     if (!Buffer.isBuffer(bytes)) {
       throw new TypeError('pbwire: decodeObject expects a Buffer');
     }
-    return addon.decodeObject(this._handle, bytes);
+    return addon.decodeObject(this._handle, bytes, opts);
   }
 
-  /** Decode wire bytes into a Message; throws on malformed input. */
-  decode(bytes) {
+  /** Decode wire bytes into a Message; throws on malformed input. A
+   * trailing {maxBytes, maxDepth} caps untrusted input. */
+  decode(bytes, opts) {
     if (!Buffer.isBuffer(bytes)) {
       throw new TypeError('pbwire: decode expects a Buffer');
     }
@@ -162,11 +192,45 @@ class MessageType {
     const wire = Buffer.from(bytes);
     const message = new Message(this);
     if (this._eager) {
-      message._handle = addon.decodeEager(this._handle, wire);
+      message._handle = addon.decodeEager(this._handle, wire, opts);
     } else {
       message._wire = wire;
-      message._slices = addon.decode(this._handle, wire);
+      message._slices = addon.decode(this._handle, wire, opts);
     }
+    return message;
+  }
+
+  /** Single-level scan of wire bytes without building a tree: an array of
+   * {number, wireType, name, value}, where value is a BigInt for scalar
+   * shapes and a Buffer for LEN payloads and groups. */
+  visit(bytes, opts) {
+    if (!Buffer.isBuffer(bytes)) {
+      throw new TypeError('pbwire: visit expects a Buffer');
+    }
+    return addon.visit(this._handle, bytes, opts);
+  }
+
+  /** Pack already-encoded bytes into a new google.protobuf.Any tree. */
+  anyPack(typeUrl, payload) {
+    if (!Buffer.isBuffer(payload)) {
+      throw new TypeError('pbwire: anyPack expects a Buffer payload');
+    }
+    const message = new Message(this);
+    message._handle = addon.anyPack(this._handle, typeUrl, payload);
+    return message;
+  }
+
+  /** A new Timestamp tree holding ms since the Unix epoch. */
+  timestampFromMillis(ms) {
+    const message = new Message(this);
+    message._handle = addon.timestampFromMillis(this._handle, ms);
+    return message;
+  }
+
+  /** A new Duration tree holding ms. */
+  durationFromMillis(ms) {
+    const message = new Message(this);
+    message._handle = addon.durationFromMillis(this._handle, ms);
     return message;
   }
 
@@ -232,6 +296,61 @@ class Message {
   /** One length-delimited frame (varint length + message). */
   encodeDelimited() {
     return addon.encodeDelimited(this._tree());
+  }
+
+  /** Deterministic bytes: map entries sorted by key, so equal messages
+   * encode to equal bytes regardless of insertion order. */
+  encodeDeterministic() {
+    return addon.encodeDeterministic(this._tree());
+  }
+
+  /** Exact byte count encode() would write for this message. */
+  encodedSize() {
+    return addon.encodedSize(this._tree());
+  }
+
+  /** Encode into a fresh Buffer sized encodedSize() + extra; the writer
+   * over-reserves tag room, so the default extra of 12 always fits. */
+  encodeTo(extra = 12) {
+    const buf = Buffer.allocUnsafe(this.encodedSize() + extra);
+    return buf.subarray(0, addon.encodeTo(this._tree(), buf));
+  }
+
+  /** One length-delimited frame into a fresh Buffer sized to fit. */
+  encodeDelimitedTo(extra = 16) {
+    const buf = Buffer.allocUnsafe(this.encodedSize() + extra);
+    return buf.subarray(0, addon.encodeDelimitedTo(this._tree(), buf));
+  }
+
+  /** Stream the encoding through the callback in chunks; the callback
+   * returns true to continue, false to abort (which throws). */
+  encodeSink(callback) {
+    addon.encodeSink(this._tree(), callback);
+  }
+
+  /** type_url of an Any message, or null when absent. */
+  anyTypeUrl() {
+    return addon.anyTypeUrl(this._tree());
+  }
+
+  /** value bytes of an Any message, or null when absent. */
+  anyPayload() {
+    return addon.anyPayload(this._tree());
+  }
+
+  /** Milliseconds since the Unix epoch of a Timestamp message. */
+  timestampMillis() {
+    return addon.timestampMillis(this._tree());
+  }
+
+  /** Milliseconds of a Duration message. */
+  durationMillis() {
+    return addon.durationMillis(this._tree());
+  }
+
+  /** Path strings of a FieldMask message. */
+  fieldmaskPaths() {
+    return addon.fieldmaskPaths(this._tree());
   }
 
   /** Wire bytes of this message. */

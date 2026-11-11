@@ -233,3 +233,72 @@ fn set_message_on_scalar_is_rejected() {
     let ty = schema.message("edge.Edge").expect("Edge");
     ty.new_message().set_message(ty.field("text").unwrap());
 }
+
+/// The extended surface round-trips: deterministic/delimited encode, JSON and
+/// text print/parse, bounded decode, and the single-level visit scan.
+#[test]
+
+#[test]
+fn parse_limits_are_honored() {
+    let schema = Schema::from_file(DESC).expect("load descriptor set");
+    let ty = schema.message("structtest.Scalars3").expect("type present");
+    let json = r#"{"i32":1}"#;
+    assert!(ty.parse_json(json, false).is_ok());
+    assert!(ty.parse_json_limits(json, false, json.len() + 1, 0).is_ok());
+    assert!(ty.parse_json_limits(json, false, 1, 0).is_err());
+    let text = "i32: 1";
+    assert!(ty.parse_text(text).is_ok());
+    assert!(ty.parse_text_limits(text, 1, 0).is_err());
+}
+
+fn extended_surface_round_trips() {
+    let schema = Schema::from_file(DESC).expect("load descriptor set");
+    let ty = schema.message(MSG).expect("message type");
+    let inner_ty = schema.message("structtest.Inner3").expect("inner type");
+    let msg = fill(&ty, &inner_ty);
+
+    let wire = msg.encode().expect("encode");
+    assert_eq!(msg.encoded_size().expect("encoded size"), wire.len());
+    assert!(msg.is_initialized());
+    assert_eq!(msg.encode_deterministic().expect("deterministic"), wire);
+
+    let framed = msg.encode_delimited().expect("delimited");
+    let (back, consumed) = ty.decode_delimited(&framed).expect("decode delimited");
+    assert_eq!(consumed, framed.len());
+    assert_eq!(back.encode().expect("encode"), wire);
+
+    let json = msg.print_json().expect("json print");
+    assert_eq!(ty.parse_json(&json, false).expect("json parse").encode().expect("encode"), wire);
+    assert!(ty.parse_json("{\"nope\":1}", false).is_err());
+    assert!(ty.parse_json("{\"nope\":1}", true).is_ok());
+
+    let text = msg.print_text(false).expect("text print");
+    // The flag decides whether unknown fields print; pbw_text_print is the
+    // "print them" default, so false must go through the opts entry too.
+    let mut with_unknown = msg.encode().expect("encode");
+    with_unknown.extend_from_slice(&[0xF8, 0x06, 0x02]); // field 111, varint 2
+    let parsed = ty.decode(&with_unknown).expect("decode with unknown");
+    let printed = parsed.print_text(true).expect("print unknowns");
+    assert!(printed.contains("111: 2"), "unknown prints: {printed}");
+    let dropped = parsed.print_text(false).expect("drop unknowns");
+    assert!(!dropped.contains("111"), "unknown dropped: {dropped}");
+    assert_eq!(ty.parse_text(&text).expect("text parse").encode().expect("encode"), wire);
+
+    assert!(ty.decode_limits(&wire, wire.len(), 0).is_ok());
+    assert!(ty.decode_limits(&wire, 1, 0).is_err());
+
+    /* The scan sees every field once, with no tree built. */
+    let mut seen = 0u32;
+    ty.visit(&wire, &mut |f| {
+        seen += 1;
+        assert_eq!(f.number != 0, true);
+        let _ = (f.field.is_some(), f.wire_type, f.raw, f.data);
+        Ok(())
+    })
+    .expect("visit");
+    assert!(seen > 0);
+
+    /* Unknown services fail to resolve; the schema simply has none. */
+    assert_eq!(schema.service_count(), 0);
+    assert!(schema.resolve_method("no.Such", "Nope").is_err());
+}

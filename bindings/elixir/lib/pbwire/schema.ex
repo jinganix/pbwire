@@ -57,12 +57,21 @@ defmodule Pbwire.Schema do
   @spec nif_opts(keyword()) :: keyword()
   def nif_opts(opts) do
     [with_utf8: Keyword.get(opts, :with_utf8, true)] ++
-      (if Keyword.has_key?(opts, :string_as_list),
-         do: [string_as_list: Keyword.fetch!(opts, :string_as_list)],
-         else: []) ++
-      (if Keyword.has_key?(opts, :retain_cap),
-         do: [retain_cap: Keyword.fetch!(opts, :retain_cap)],
-         else: [])
+      if(Keyword.has_key?(opts, :string_as_list),
+        do: [string_as_list: Keyword.fetch!(opts, :string_as_list)],
+        else: []
+      ) ++
+      if(Keyword.has_key?(opts, :retain_cap),
+        do: [retain_cap: Keyword.fetch!(opts, :retain_cap)],
+        else: []
+      ) ++
+      if(Keyword.has_key?(opts, :max_bytes),
+        do: [max_bytes: Keyword.fetch!(opts, :max_bytes)],
+        else: []
+      ) ++
+      if Keyword.has_key?(opts, :max_depth),
+        do: [max_depth: Keyword.fetch!(opts, :max_depth)],
+        else: []
   end
 
   # -- collection ------------------------------------------------------

@@ -1,0 +1,37 @@
+
+ä
+google/protobuf/any.protogoogle.protobuf"6
+Any
+type_url (	RtypeUrl
+value (RvalueBv
+com.google.protobufBAnyProtoPZ,google.golang.org/protobuf/types/known/anypb¢GPBªGoogle.Protobuf.WellKnownTypesbproto3
+û
+google/protobuf/duration.protogoogle.protobuf":
+Duration
+seconds (Rseconds
+nanos (RnanosBƒ
+com.google.protobufBDurationProtoPZ1google.golang.org/protobuf/types/known/durationpbø¢GPBªGoogle.Protobuf.WellKnownTypesbproto3
+æ
+ google/protobuf/field_mask.protogoogle.protobuf"!
+	FieldMask
+paths (	RpathsB…
+com.google.protobufBFieldMaskProtoPZ2google.golang.org/protobuf/types/known/fieldmaskpbø¢GPBªGoogle.Protobuf.WellKnownTypesbproto3
+ÿ
+google/protobuf/timestamp.protogoogle.protobuf";
+	Timestamp
+seconds (Rseconds
+nanos (RnanosB…
+com.google.protobufBTimestampProtoPZ2google.golang.org/protobuf/types/known/timestamppbø¢GPBªGoogle.Protobuf.WellKnownTypesbproto3
+Ð
+	adv.proto
+pbwire.advgoogle/protobuf/any.protogoogle/protobuf/duration.proto google/protobuf/field_mask.protogoogle/protobuf/timestamp.proto"¹
+Holder&
+any (2.google.protobuf.AnyRany*
+ts (2.google.protobuf.TimestampRts+
+dur (2.google.protobuf.DurationRdur.
+mask (2.google.protobuf.FieldMaskRmask"
+Job
+id (	Rid2^
+Jobs'
+Get.pbwire.adv.Job.pbwire.adv.Job-
+Watch.pbwire.adv.Job.pbwire.adv.Job(0bproto3

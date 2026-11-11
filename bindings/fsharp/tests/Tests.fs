@@ -210,5 +210,36 @@ let main argv =
     check (rejects (fun () -> edgeTy.NewMessage().Set("pick_num", "not a number") |> ignore) "type mismatch") "wrong-typed value rejected"
     check (rejects (fun () -> edgeTy.NewMessage().SetMessage "text" |> ignore) "not a message field") "setMessage on a scalar rejected"
 
+    // The extended surface: deterministic/delimited encode, JSON and text
+    // print/parse, bounded decode, visit, and service routing metadata.
+    use m = ty.NewMessage()
+    Pbwire.setAll m [ "str", Text "hello" ] |> ignore
+    let w = Pbwire.encode m
+    check (Pbwire.encodedSize m = uint64 w.Length) "encoded size"
+    check (Pbwire.isInitialized m) "initialized"
+    check (Pbwire.encodeDeterministic m = w) "deterministic"
+    let framed = Pbwire.encodeDelimited m
+    let back, consumed = Pbwire.decodeDelimited ty (Array.append framed framed)
+    use back = back
+    check (Pbwire.encode back = w) "delimited round trip"
+    check (consumed = framed.Length) "delimited consumed"
+    let js = Pbwire.printJson m
+    use fromJson = Pbwire.parseJson ty js false
+    check (Pbwire.encode fromJson = w) "json round trip"
+    check (throws (fun () -> Pbwire.parseJson ty "{\"nope\":1}" false |> ignore)) "json unknown accepted"
+    use ignored = Pbwire.parseJson ty "{\"nope\":1}" true
+    check (Pbwire.encode ignored = [||]) "json ignore unknown"
+    let tx = Pbwire.printText m false
+    use fromText = Pbwire.parseText ty tx
+    check (Pbwire.encode fromText = w) "text round trip"
+    use limited = Pbwire.decodeLimits ty w 0UL 0u
+    check (Pbwire.encode limited = w) "limits defaults"
+    check (throws (fun () -> Pbwire.decodeLimits ty w 1UL 0u |> ignore)) "limits maxBytes ignored"
+    let mutable seen = 0
+    Pbwire.visit ty w (fun f -> seen <- seen + 1; f.Number <> 0u)
+    check (seen > 0) "visit saw fields"
+    check (Pbwire.serviceCount schema = 0) "no services in fixture"
+    check (throws (fun () -> Pbwire.resolveMethod schema "no.Such" "Nope" |> ignore)) "unknown service accepted"
+
     printfn $"OK   %d{checks} checks passed"
     0

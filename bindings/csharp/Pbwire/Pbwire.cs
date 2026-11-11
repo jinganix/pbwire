@@ -116,8 +116,86 @@ internal static class Native
     [DllImport(Lib)] internal static extern int pbw_encode(IntPtr msg, out IntPtr data, out nuint len);
     [DllImport(Lib)]
     internal static extern int pbw_decode(IntPtr desc, IntPtr buf, nuint len, out IntPtr msg);
+    [DllImport(Lib)] internal static extern int pbw_encode_deterministic(IntPtr msg, out IntPtr data, out nuint len);
+    [DllImport(Lib)] internal static extern int pbw_encode_delimited(IntPtr msg, out IntPtr data, out nuint len);
+    [DllImport(Lib)]
+    internal static extern int pbw_decode_delimited(IntPtr desc, IntPtr buf, nuint len, out IntPtr msg, out nuint consumed);
+    [DllImport(Lib)]
+    internal static extern int pbw_decode_limits(IntPtr desc, IntPtr buf, nuint len, ref PbwLimits limits, out IntPtr msg);
+    [DllImport(Lib)] internal static extern int pbw_json_print(IntPtr msg, out IntPtr data, out nuint len);
+    [DllImport(Lib)]
+    internal static extern int pbw_json_parse_opts(IntPtr desc, IntPtr text, nuint len, ref PbwJsonOptions opts, out IntPtr msg);
+    [DllImport(Lib)]
+    internal static extern int pbw_json_parse_limits(IntPtr desc, IntPtr text, nuint len, ref PbwLimits limits, ref PbwJsonOptions opts, out IntPtr msg);
+    [DllImport(Lib)] internal static extern int pbw_text_print(IntPtr msg, out IntPtr data, out nuint len);
+    [DllImport(Lib)]
+    internal static extern int pbw_text_print_opts(IntPtr msg, int printUnknown, out IntPtr data, out nuint len);
+    [DllImport(Lib)]
+    internal static extern int pbw_text_parse(IntPtr desc, IntPtr text, nuint len, out IntPtr msg);
+    [DllImport(Lib)]
+    internal static extern int pbw_text_parse_limits(IntPtr desc, IntPtr text, nuint len, ref PbwLimits limits, out IntPtr msg);
+    [DllImport(Lib)] internal static extern int pbw_message_encoded_size(IntPtr msg, out nuint len);
+    [DllImport(Lib)] internal static extern int pbw_message_is_initialized(IntPtr msg);
+
+    /* well-known types */
+    [DllImport(Lib)]
+    internal static extern int pbw_any_pack(IntPtr desc, string typeUrl, IntPtr payload, nuint len, out IntPtr msg);
+    [DllImport(Lib)] internal static extern IntPtr pbw_any_type_url(IntPtr msg);
+    [DllImport(Lib)] internal static extern IntPtr pbw_any_payload(IntPtr msg, out nuint len);
+    [DllImport(Lib)] internal static extern int pbw_timestamp_to_millis(IntPtr msg, out long ms);
+    [DllImport(Lib)] internal static extern int pbw_duration_to_millis(IntPtr msg, out long ms);
+    [DllImport(Lib)] internal static extern int pbw_timestamp_from_millis(IntPtr desc, long ms, out IntPtr msg);
+    [DllImport(Lib)] internal static extern int pbw_duration_from_millis(IntPtr desc, long ms, out IntPtr msg);
+    [DllImport(Lib)] internal static extern nuint pbw_fieldmask_path_count(IntPtr msg);
+    [DllImport(Lib)] internal static extern IntPtr pbw_fieldmask_path_at(IntPtr msg, nuint index);
+
+    /* services */
+    [DllImport(Lib)] internal static extern nuint pbw_schema_service_count(IntPtr schema);
+    [DllImport(Lib)] internal static extern IntPtr pbw_schema_service_at(IntPtr schema, nuint index);
+    [DllImport(Lib)] internal static extern IntPtr pbw_schema_service_find(IntPtr schema, string name);
+    [DllImport(Lib)] internal static extern IntPtr pbw_service_name(IntPtr svc);
+    [DllImport(Lib)] internal static extern nuint pbw_service_method_count(IntPtr svc);
+    [DllImport(Lib)] internal static extern IntPtr pbw_service_method_at(IntPtr svc, nuint index);
+    [DllImport(Lib)] internal static extern IntPtr pbw_service_method_find(IntPtr svc, string name);
+    [DllImport(Lib)] internal static extern IntPtr pbw_method_name(IntPtr method);
+    [DllImport(Lib)] internal static extern IntPtr pbw_method_input_type(IntPtr method);
+    [DllImport(Lib)] internal static extern IntPtr pbw_method_output_type(IntPtr method);
+    [DllImport(Lib)] internal static extern int pbw_method_client_streaming(IntPtr method);
+    [DllImport(Lib)] internal static extern int pbw_method_server_streaming(IntPtr method);
+    [DllImport(Lib)]
+    internal static extern int pbw_service_resolve(IntPtr schema, string service, string method, out IntPtr inDesc, out IntPtr outDesc);
+
+    /* single-level scan: one callback per field, no tree, no allocation */
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    internal delegate int PbwVisitFn(IntPtr ud, IntPtr field, uint number, uint wireType, ref PbwVisitValue value);
+    [DllImport(Lib)]
+    internal static extern int pbw_visit(IntPtr desc, IntPtr buf, nuint len, PbwVisitFn cb, IntPtr ud, out nuint failOff);
     [DllImport(Lib)] internal static extern IntPtr pbw_strerror(int status);
     [DllImport(Lib)] internal static extern void pbw_free(IntPtr ptr);
+}
+
+/// <summary>Bounds for decoding: zero fields mean the defaults (no byte cap, PBW_MAX_DEPTH nesting).</summary>
+[StructLayout(LayoutKind.Sequential)]
+internal struct PbwLimits
+{
+    public nuint MaxBytes;
+    public uint MaxDepth;
+}
+
+/// <summary>JSON parse options: skip unknown field names instead of failing.</summary>
+[StructLayout(LayoutKind.Sequential)]
+internal struct PbwJsonOptions
+{
+    public int IgnoreUnknown;
+}
+
+/// <summary>One scanned field: raw wire content, no allocation, no value tree.</summary>
+[StructLayout(LayoutKind.Sequential)]
+internal struct PbwVisitValue
+{
+    public ulong Raw;
+    public IntPtr Data;
+    public nuint Len;
 }
 
 /// <summary>A loaded FileDescriptorSet: the schema every <see cref="MessageType"/> comes from.</summary>
@@ -156,6 +234,40 @@ public sealed class Schema : IDisposable
         return desc == IntPtr.Zero
             ? throw new PbwireException(-1, $"no such message type: {fullName}")
             : new MessageType(this, desc);
+    }
+
+    /// <summary>How many services the loaded files declare.</summary>
+    public int ServiceCount()
+    {
+        _ = Handle;
+        return (int)Native.pbw_schema_service_count(_handle);
+    }
+
+    /// <summary>One service by index.</summary>
+    public Service ServiceAt(int index)
+    {
+        _ = Handle;
+        var ptr = Native.pbw_schema_service_at(_handle, (nuint)index);
+        return ptr == IntPtr.Zero
+            ? throw new PbwireException(-1, $"no service at index {index}")
+            : new Service(this, ptr);
+    }
+
+    /// <summary>One service by fully qualified name, e.g. <c>pkg.Service</c>.</summary>
+    public Service Service(string name)
+    {
+        var ptr = Native.pbw_schema_service_find(Handle, name);
+        return ptr == IntPtr.Zero
+            ? throw new PbwireException(-1, $"no such service: {name}")
+            : new Service(this, ptr);
+    }
+
+    /// <summary>Resolves a method to its input/output message types for routing: decode with the input, encode with the output.</summary>
+    public (MessageType Input, MessageType Output) ResolveMethod(string service, string method)
+    {
+        Native.Check(Native.pbw_service_resolve(Handle, service, method, out var inDesc, out var outDesc));
+        return (new MessageType(this, Native.NotNull(inDesc, "resolve: no input type")),
+                new MessageType(this, Native.NotNull(outDesc, "resolve: no output type")));
     }
 
     internal IntPtr Handle =>
@@ -236,6 +348,146 @@ public sealed class MessageType
             Native.Check(Native.pbw_decode(_desc, (IntPtr)data, (nuint)wire.Length, out var msg));
             return Message.Root(this, Native.NotNull(msg, "decode: no message returned"));
         }
+    }
+
+    /// <summary>Decodes one length-delimited frame from the front of the wire, returning the message and how many bytes the frame occupied.</summary>
+    public unsafe (Message Message, int Consumed) DecodeDelimited(ReadOnlySpan<byte> wire)
+    {
+        EnsureOpen();
+        fixed (byte* data = wire)
+        {
+            Native.Check(Native.pbw_decode_delimited(_desc, (IntPtr)data, (nuint)wire.Length, out var msg, out var consumed));
+            if ((ulong)consumed > int.MaxValue)
+            {
+                Native.pbw_message_free(msg);
+                throw new PbwireException(-1, "pbwire: delimited frame exceeds the span limit");
+            }
+            return (Message.Root(this, Native.NotNull(msg, "decode: no message returned")), (int)consumed);
+        }
+    }
+
+    /// <summary>Decodes with explicit bounds: inputs larger than <paramref name="maxBytes"/> fail, and nesting past <paramref name="maxDepth"/> fails. Zero means the defaults.</summary>
+    public unsafe Message DecodeLimits(ReadOnlySpan<byte> wire, ulong maxBytes = 0, uint maxDepth = 0)
+    {
+        EnsureOpen();
+        var limits = new PbwLimits { MaxBytes = (nuint)maxBytes, MaxDepth = maxDepth };
+        fixed (byte* data = wire)
+        {
+            Native.Check(Native.pbw_decode_limits(_desc, (IntPtr)data, (nuint)wire.Length, ref limits, out var msg));
+            return Message.Root(this, Native.NotNull(msg, "decode: no message returned"));
+        }
+    }
+
+    /// <summary>Parses JSON mapping text into a new tree. Unknown fields fail unless <paramref name="ignoreUnknown"/> is set.</summary>
+    /// <summary>Parses JSON mapping text into a new tree. <paramref name="maxBytes"/> and <paramref name="maxDepth"/> bound the input (0 = the defaults).</summary>
+    public unsafe Message ParseJson(string text, bool ignoreUnknown = false, ulong maxBytes = 0, uint maxDepth = 0)
+    {
+        EnsureOpen();
+        var bytes = System.Text.Encoding.UTF8.GetBytes(text);
+        var opts = new PbwJsonOptions { IgnoreUnknown = ignoreUnknown ? 1 : 0 };
+        var limits = new PbwLimits { MaxBytes = (nuint)maxBytes, MaxDepth = maxDepth };
+        fixed (byte* data = bytes)
+        {
+            Native.Check(maxBytes == 0 && maxDepth == 0
+                ? Native.pbw_json_parse_opts(_desc, (IntPtr)data, (nuint)bytes.Length, ref opts, out var msg0)
+                : Native.pbw_json_parse_limits(_desc, (IntPtr)data, (nuint)bytes.Length, ref limits, ref opts, out msg0));
+            return Message.Root(this, Native.NotNull(msg0, "parse: no message returned"));
+        }
+    }
+
+    /// <summary>Parses text format into a new tree; <paramref name="maxBytes"/> and <paramref name="maxDepth"/> bound the input (0 = the defaults).</summary>
+    public unsafe Message ParseText(string text, ulong maxBytes = 0, uint maxDepth = 0)
+    {
+        EnsureOpen();
+        var bytes = System.Text.Encoding.UTF8.GetBytes(text);
+        var limits = new PbwLimits { MaxBytes = (nuint)maxBytes, MaxDepth = maxDepth };
+        fixed (byte* data = bytes)
+        {
+            Native.Check(maxBytes == 0 && maxDepth == 0
+                ? Native.pbw_text_parse(_desc, (IntPtr)data, (nuint)bytes.Length, out var msg0)
+                : Native.pbw_text_parse_limits(_desc, (IntPtr)data, (nuint)bytes.Length, ref limits, out msg0));
+            return Message.Root(this, Native.NotNull(msg0, "parse: no message returned"));
+        }
+    }
+
+    /// <summary>Packs <paramref name="payload"/> into a new <c>google.protobuf.Any</c> tree. This type is the Any descriptor.</summary>
+    public unsafe Message AnyPack(string typeUrl, ReadOnlySpan<byte> payload)
+    {
+        EnsureOpen();
+        fixed (byte* data = payload)
+        {
+            Native.Check(Native.pbw_any_pack(_desc, typeUrl, (IntPtr)data, (nuint)payload.Length, out var msg));
+            return Message.Root(this, Native.NotNull(msg, "pack: no message returned"));
+        }
+    }
+
+    /// <summary>A new <c>google.protobuf.Timestamp</c> tree holding <paramref name="ms"/>. This type is the Timestamp descriptor.</summary>
+    public Message TimestampFromMillis(long ms)
+    {
+        EnsureOpen();
+        Native.Check(Native.pbw_timestamp_from_millis(_desc, ms, out var msg));
+        return Message.Root(this, Native.NotNull(msg, "pack: no message returned"));
+    }
+
+    /// <summary>A new <c>google.protobuf.Duration</c> tree holding <paramref name="ms"/>. This type is the Duration descriptor.</summary>
+    public Message DurationFromMillis(long ms)
+    {
+        EnsureOpen();
+        Native.Check(Native.pbw_duration_from_millis(_desc, ms, out var msg));
+        return Message.Root(this, Native.NotNull(msg, "pack: no message returned"));
+    }
+
+    /// <summary>Single-level scan of the wire without building a message tree: one callback per field, no allocation. Nested messages and packed runs arrive as byte payloads for the caller to recurse into. Returning false stops the scan without an exception.</summary>
+    public unsafe void Visit(ReadOnlySpan<byte> wire, Func<VisitField, bool> callback)
+    {
+        EnsureOpen();
+        var handle = GCHandle.Alloc(callback);
+        bool aborted = false;
+        try
+        {
+            Native.PbwVisitFn fn = (IntPtr ud, IntPtr field, uint number, uint wireType, ref PbwVisitValue value) =>
+            {
+                var cb = (Func<VisitField, bool>)GCHandle.FromIntPtr(ud).Target!;
+                byte[]? bytes = null;
+                if (value.Data != IntPtr.Zero)
+                {
+                    if (value.Len > int.MaxValue)
+                    {
+                        aborted = true;
+                        return 1; // one LEN payload cannot exceed a span
+                    }
+                    bytes = new ReadOnlySpan<byte>((void*)value.Data, (int)value.Len).ToArray();
+                }
+                var type = field == IntPtr.Zero ? null : NestedTypeOf(field);
+                if (cb(new VisitField(field, number, wireType, value.Raw, bytes, type)))
+                {
+                    return 0;
+                }
+                aborted = true;
+                return 1;
+            };
+            fixed (byte* data = wire)
+            {
+                var status = Native.pbw_visit(_desc, (IntPtr)data, (nuint)wire.Length, fn, GCHandle.ToIntPtr(handle), out _);
+                // A callback stop is not a failure: the core reports the
+                // callback's status, so only a real failure throws here.
+                if (status != 0 && !aborted)
+                {
+                    Native.Check(status);
+                }
+            }
+            GC.KeepAlive(fn);
+        }
+        finally
+        {
+            handle.Free();
+        }
+    }
+
+    private MessageType? NestedTypeOf(IntPtr field)
+    {
+        var desc = Native.pbw_field_message_type(field);
+        return desc == IntPtr.Zero ? null : new MessageType(_schema, desc);
     }
 
     /// <summary>The message type of a MESSAGE/GROUP field, for nested access.</summary>
@@ -510,12 +762,129 @@ public sealed class Message : IDisposable
         Native.Check(Native.pbw_encode(Handle, out var data, out var len));
         try
         {
-            return new ReadOnlySpan<byte>((void*)data, (int)len).ToArray();
+            return Take(data, len);
         }
         finally
         {
             Native.pbw_free(data);
         }
+    }
+
+    private static unsafe byte[] Take(IntPtr data, nuint len)
+    {
+        if ((ulong)len > int.MaxValue)
+        {
+            throw new PbwireException(-1, "pbwire: payload exceeds the span limit");
+        }
+        return new ReadOnlySpan<byte>((void*)data, (int)len).ToArray();
+    }
+
+    /// <summary>Canonical encoding: map entries sorted by key, like the reference.</summary>
+    public unsafe byte[] EncodeDeterministic()
+    {
+        Native.Check(Native.pbw_encode_deterministic(Handle, out var data, out var len));
+        try
+        {
+            return Take(data, len);
+        }
+        finally
+        {
+            Native.pbw_free(data);
+        }
+    }
+
+    /// <summary>One length-delimited frame (varint length + message).</summary>
+    public unsafe byte[] EncodeDelimited()
+    {
+        Native.Check(Native.pbw_encode_delimited(Handle, out var data, out var len));
+        try
+        {
+            return Take(data, len);
+        }
+        finally
+        {
+            Native.pbw_free(data);
+        }
+    }
+
+    /// <summary>Protobuf JSON mapping. Unknown fields are not printed.</summary>
+    public unsafe string PrintJson()
+    {
+        Native.Check(Native.pbw_json_print(Handle, out var data, out var len));
+        try
+        {
+            return System.Text.Encoding.UTF8.GetString((byte*)data, (int)len);
+        }
+        finally
+        {
+            Native.pbw_free(data);
+        }
+    }
+
+    /// <summary>Protobuf text format. Unknown fields print as numeric lines when <paramref name="printUnknown"/> is set, like the reference printer.</summary>
+    public unsafe string PrintText(bool printUnknown = false)
+    {
+        var status = Native.pbw_text_print_opts(Handle, printUnknown ? 1 : 0,
+            out var data, out var len);
+        Native.Check(status);
+        try
+        {
+            return System.Text.Encoding.UTF8.GetString((byte*)data, (int)len);
+        }
+        finally
+        {
+            Native.pbw_free(data);
+        }
+    }
+
+    /// <summary>Exact bytes <see cref="Encode"/> would write, without writing them.</summary>
+    public ulong EncodedSize()
+    {
+        Native.Check(Native.pbw_message_encoded_size(Handle, out var len));
+        return (ulong)len;
+    }
+
+    /// <summary>True when every proto2 <c>required</c> field is present.</summary>
+    public bool IsInitialized() => Native.pbw_message_is_initialized(Handle) != 0;
+
+    /// <summary>Field 1 of a <c>google.protobuf.Any</c> tree, or null when absent.</summary>
+    public string? AnyTypeUrl()
+    {
+        var ptr = Native.pbw_any_type_url(Handle);
+        return ptr == IntPtr.Zero ? null : Native.Text(ptr);
+    }
+
+    /// <summary>Field 2 of a <c>google.protobuf.Any</c> tree, or null when absent.</summary>
+    public unsafe byte[]? AnyPayload()
+    {
+        var ptr = Native.pbw_any_payload(Handle, out var len);
+        return ptr == IntPtr.Zero ? null : Take(ptr, len);
+    }
+
+    /// <summary>A <c>google.protobuf.Timestamp</c> tree as milliseconds.</summary>
+    public long TimestampMillis()
+    {
+        Native.Check(Native.pbw_timestamp_to_millis(Handle, out var ms));
+        return ms;
+    }
+
+    /// <summary>A <c>google.protobuf.Duration</c> tree as milliseconds.</summary>
+    public long DurationMillis()
+    {
+        Native.Check(Native.pbw_duration_to_millis(Handle, out var ms));
+        return ms;
+    }
+
+    /// <summary>Every path of a <c>google.protobuf.FieldMask</c> tree.</summary>
+    public string[] FieldMaskPaths()
+    {
+        var n = (int)Native.pbw_fieldmask_path_count(Handle);
+        var paths = new string[n];
+        for (var i = 0; i < n; i++)
+        {
+            paths[i] = Native.Text(Native.pbw_fieldmask_path_at(Handle, (nuint)i));
+        }
+        return paths;
     }
 
     public void Dispose()
@@ -592,5 +961,143 @@ public sealed class Value
             return null;
         }
         return Message.View(_type, ptr, _owner);
+    }
+}
+
+/// <summary>One scanned field: raw wire content, no allocation, no value tree. <see cref="FieldPtr"/> is zero when the number is unknown to the schema.</summary>
+public sealed class VisitField
+{
+    internal VisitField(IntPtr fieldPtr, uint number, uint wireType, ulong raw, byte[]? data, MessageType? type)
+    {
+        FieldPtr = fieldPtr;
+        Number = number;
+        WireType = wireType;
+        Raw = raw;
+        Data = data;
+        Type = type;
+    }
+
+    /// <summary>Schema field handle, or zero when the number is unknown.</summary>
+    public IntPtr FieldPtr { get; }
+
+    public uint Number { get; }
+
+    public uint WireType { get; }
+
+    /// <summary>VARINT/32BIT/64BIT raw wire bits (no zigzag or sign extension). Unused for the length-delimited shapes.</summary>
+    public ulong Raw { get; }
+
+    /// <summary>LEN payload bytes (nested message, packed run, string), or the whole raw field for groups. Null for the scalar shapes.</summary>
+    public byte[]? Data { get; }
+
+    /// <summary>The message type of a MESSAGE/GROUP field payload, for recursing with <c>Visit</c>. Null otherwise.</summary>
+    public MessageType? Type { get; }
+}
+
+/// <summary>A service from a <see cref="Schema"/>: routing metadata, not RPC.</summary>
+public sealed class Service
+{
+    private readonly Schema _schema;
+    private readonly IntPtr _ptr;
+
+    internal Service(Schema schema, IntPtr ptr)
+    {
+        _schema = schema;
+        _ptr = ptr;
+    }
+
+    public string Name
+    {
+        get
+        {
+            _ = _schema.Handle;
+            return Native.Text(Native.pbw_service_name(_ptr));
+        }
+    }
+
+    public int MethodCount()
+    {
+        _ = _schema.Handle;
+        return (int)Native.pbw_service_method_count(_ptr);
+    }
+
+    public Method MethodAt(int index)
+    {
+        _ = _schema.Handle;
+        var ptr = Native.pbw_service_method_at(_ptr, (nuint)index);
+        return ptr == IntPtr.Zero
+            ? throw new PbwireException(-1, $"no method at index {index}")
+            : new Method(_schema, ptr);
+    }
+
+    public Method Method(string name)
+    {
+        _ = _schema.Handle;
+        var ptr = Native.pbw_service_method_find(_ptr, name);
+        return ptr == IntPtr.Zero
+            ? throw new PbwireException(-1, $"no such method: {name}")
+            : new Method(_schema, ptr);
+    }
+}
+
+/// <summary>One service method: fully qualified input/output type names for routing.</summary>
+public sealed class Method
+{
+    private readonly Schema _schema;
+    private readonly IntPtr _ptr;
+
+    internal Method(Schema schema, IntPtr ptr)
+    {
+        _schema = schema;
+        _ptr = ptr;
+    }
+
+    private void EnsureOpen() => _ = _schema.Handle;
+
+    public string Name
+    {
+        get
+        {
+            EnsureOpen();
+            return Native.Text(Native.pbw_method_name(_ptr));
+        }
+    }
+
+    /// <summary>Fully qualified input message name, without the leading dot.</summary>
+    public string InputType
+    {
+        get
+        {
+            EnsureOpen();
+            return Native.Text(Native.pbw_method_input_type(_ptr));
+        }
+    }
+
+    /// <summary>Fully qualified output message name, without the leading dot.</summary>
+    public string OutputType
+    {
+        get
+        {
+            EnsureOpen();
+            return Native.Text(Native.pbw_method_output_type(_ptr));
+        }
+    }
+
+    public bool ClientStreaming
+    {
+        get
+        {
+            EnsureOpen();
+            return Native.pbw_method_client_streaming(_ptr) != 0;
+        }
+    }
+
+    public bool ServerStreaming
+    {
+        get
+        {
+            EnsureOpen();
+            return Native.pbw_method_server_streaming(_ptr) != 0;
+        }
     }
 }

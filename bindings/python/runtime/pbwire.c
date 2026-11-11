@@ -133,8 +133,11 @@ typedef struct {
     int failed; /* out of memory */
 } sbuf;
 
+/* Slow path of sb_reserve(): the buffer has to grow, or the request cannot
+ * be represented. Kept out of line so the per-field check is one compare
+ * and one branch, the same split the core writer uses (w_reserve/w_grow). */
 static int
-sb_reserve(sbuf *b, size_t extra)
+sb_grow(sbuf *b, size_t extra)
 {
     size_t need, cap;
     uint8_t *data;
@@ -168,6 +171,15 @@ sb_reserve(sbuf *b, size_t extra)
     b->data = data;
     b->cap = cap;
     return 1;
+}
+
+static inline int
+sb_reserve(sbuf *b, size_t extra)
+{
+    if (!b->failed && b->len <= b->cap && extra <= b->cap - b->len) {
+        return 1;
+    }
+    return sb_grow(b, extra);
 }
 
 /* All raw writers assume the caller reserved enough room. */
@@ -2240,6 +2252,13 @@ Message_repr(Message *self)
                                 ((MessageType *)self->mtype)->name_utf8, n);
 }
 
+static PyObject *Message_to_json(Message *self, PyObject *unused);
+static PyObject *Message_to_text(Message *self, PyObject *args);
+static PyObject *Message_any_type_url(Message *self, PyObject *unused);
+static PyObject *Message_any_payload(Message *self, PyObject *unused);
+static PyObject *Message_to_millis(Message *self, PyObject *unused);
+static PyObject *Message_fieldmask_paths(Message *self, PyObject *unused);
+
 static PyMethodDef Message_methods[] = {
     {"to_dict", (PyCFunction)Message_to_dict, METH_NOARGS,
      "to_dict() -> dict, the eager form of this message"},
@@ -2251,6 +2270,18 @@ static PyMethodDef Message_methods[] = {
      "items() -> (name, value) pairs present on the wire"},
     {"get", (PyCFunction)Message_get, METH_VARARGS,
      "get(name[, default]) -> value, or default when the field is absent"},
+    {"to_json", (PyCFunction)Message_to_json, METH_NOARGS,
+     "to_json() -> str, protobuf JSON mapping of this message"},
+    {"to_text", (PyCFunction)Message_to_text, METH_VARARGS,
+     "to_text([print_unknown_fields]) -> str, protobuf text format"},
+    {"any_type_url", (PyCFunction)Message_any_type_url, METH_NOARGS,
+     "any_type_url() -> str or None, field 1 of an Any message"},
+    {"any_payload", (PyCFunction)Message_any_payload, METH_NOARGS,
+     "any_payload() -> bytes or None, field 2 of an Any message"},
+    {"to_millis", (PyCFunction)Message_to_millis, METH_NOARGS,
+     "to_millis() -> int, Timestamp/Duration as milliseconds"},
+    {"fieldmask_paths", (PyCFunction)Message_fieldmask_paths, METH_NOARGS,
+     "fieldmask_paths() -> list of str, paths of a FieldMask"},
     {NULL, NULL, 0, NULL},
 };
 
@@ -2285,6 +2316,994 @@ static PyTypeObject MessagePyType = {
     .tp_getset = Message_getset,
     .tp_repr = (reprfunc)Message_repr,
 };
+
+/* ------------------------------------------------------- core bridge */
+
+/* The auxiliary APIs below (JSON/text, deterministic and delimited framing,
+ * visit, WKT helpers, services) all run through the C core's message tree:
+ * the binding's own codec produces the wire bytes, the core decodes them
+ * into a tree, and the tree (or the bytes re-encoded from it) comes back as
+ * the lazy Message this binding returns everywhere else. The hot paths
+ * (encode/decode/to_dict) never touch this section. */
+
+/* Optional {"max_bytes": int, "max_depth": int} argument: -1 is an error,
+ * 0 means the argument was absent, 1 that *lim holds the caller's bounds. */
+static int
+parse_limits(PyObject *obj, pbw_limits *lim)
+{
+    PyObject *v;
+
+    if (obj == NULL || obj == Py_None) {
+        return 0;
+    }
+    if (!PyDict_Check(obj)) {
+        PyErr_SetString(PyExc_TypeError, "limits must be a dict");
+        return -1;
+    }
+    memset(lim, 0, sizeof(*lim));
+    v = PyDict_GetItemString(obj, "max_bytes");
+    if (v != NULL && v != Py_None) {
+        size_t n = PyLong_AsSize_t(v);
+
+        if (n == (size_t)-1 && PyErr_Occurred()) {
+            return -1;
+        }
+        lim->max_bytes = n;
+    }
+    v = PyDict_GetItemString(obj, "max_depth");
+    if (v != NULL && v != Py_None) {
+        unsigned long n = PyLong_AsUnsignedLong(v);
+
+        if (n == (unsigned long)-1 && PyErr_Occurred()) {
+            return -1;
+        }
+        lim->max_depth = n > UINT32_MAX ? UINT32_MAX : (uint32_t)n;
+    }
+    return 1;
+}
+
+/* Wire bytes for a dict or a Message of this type (new reference). */
+static PyObject *
+coerce_wire(MessageType *mt, PyObject *obj)
+{
+    sbuf b;
+    PyObject *out;
+
+    if (PyObject_TypeCheck(obj, &MessagePyType)) {
+        Message *m = (Message *)obj;
+
+        if (m->mtype != (PyObject *)mt) {
+            PyErr_Format(PyExc_TypeError, "%s cannot encode a %s",
+                         mt->name_utf8,
+                         ((MessageType *)m->mtype)->name_utf8);
+            return NULL;
+        }
+        return PyBytes_FromStringAndSize((const char *)m->data + m->off,
+                                         (Py_ssize_t)m->len);
+    }
+    memset(&b, 0, sizeof(b));
+    if (!enc_message(mt, obj, &b, 0)) {
+        free(b.data);
+        return NULL;
+    }
+    out = PyBytes_FromStringAndSize((const char *)b.data, (Py_ssize_t)b.len);
+    free(b.data);
+    return out;
+}
+
+/* A lazy Message over `buffer` (steals the reference), like decode(). */
+static PyObject *
+decode_buffer(MessageType *mt, PyObject *buffer)
+{
+    Message *m;
+
+    if ((uint64_t)PyBytes_GET_SIZE(buffer) > 0xffffffffull) {
+        Py_DECREF(buffer);
+        PyErr_SetString(PyExc_ValueError, "message is too large");
+        return NULL;
+    }
+    m = PyObject_GC_New(Message, &MessagePyType);
+    if (m == NULL) {
+        Py_DECREF(buffer);
+        return NULL;
+    }
+    PyObject_GC_Track(m);
+    m->mtype = (PyObject *)mt;
+    Py_INCREF(mt);
+    m->buffer = buffer;
+    m->data = (const uint8_t *)PyBytes_AS_STRING(buffer);
+    m->off = 0;
+    m->len = (uint32_t)PyBytes_GET_SIZE(buffer);
+    m->depth = 0;
+    m->slices = m->inline_slices;
+    m->nslices = 0;
+    m->cap = MSG_INLINE_SLICES;
+    if (!scan_message(m, mt, m->data, 0, m->len, 0)) {
+        Py_DECREF(m);
+        return NULL;
+    }
+    return (PyObject *)m;
+}
+
+/* A core tree for already-validated wire bytes (NULL on error). */
+static pbw_message *
+decode_tree(MessageType *mt, const uint8_t *data, size_t len)
+{
+    pbw_message *tree = NULL;
+    pbw_status status = pbw_decode(mt->desc, data, len, &tree);
+
+    if (status != PBW_OK) {
+        set_status(status, mt->name_utf8);
+        return NULL;
+    }
+    return tree;
+}
+
+/* A lazy Message holding the tree's encoding (the tree stays owned by the
+ * caller so the core helpers that built it can keep returning trees). */
+static PyObject *
+message_from_tree(MessageType *mt, pbw_message *tree)
+{
+    uint8_t *out = NULL;
+    size_t len = 0;
+    pbw_status status = pbw_encode(tree, &out, &len);
+    PyObject *bytes;
+
+    if (status != PBW_OK) {
+        set_status(status, mt->name_utf8);
+        return NULL;
+    }
+    bytes = PyBytes_FromStringAndSize((const char *)out, (Py_ssize_t)len);
+    pbw_free(out);
+    if (bytes == NULL) {
+        return NULL;
+    }
+    return decode_buffer(mt, bytes);
+}
+
+/* Enforce an optional limits dict on wire bytes about to be scanned. The
+ * tag scan below always caps nesting at PBW_MAX_DEPTH, so only a stricter
+ * max_depth needs the core (whose tree is validation only and is
+ * dropped). */
+static int
+check_wire_limits(MessageType *mt, const uint8_t *data, size_t len,
+                  PyObject *limits_obj)
+{
+    pbw_limits lim;
+    int have = parse_limits(limits_obj, &lim);
+    pbw_message *tree = NULL;
+    pbw_status status;
+
+    if (have < 0) {
+        return 0;
+    }
+    if (have == 0) {
+        return 1;
+    }
+    if (lim.max_bytes != 0 && len > lim.max_bytes) {
+        set_status(PBW_ERR_LIMIT, mt->name_utf8);
+        return 0;
+    }
+    if (lim.max_depth == 0 || lim.max_depth >= PBW_MAX_DEPTH) {
+        return 1;
+    }
+    status = pbw_decode_limits(mt->desc, data, len, &lim, &tree);
+    pbw_message_free(tree);
+    if (status != PBW_OK) {
+        set_status(status, mt->name_utf8);
+        return 0;
+    }
+    return 1;
+}
+
+/* JSON/text source: str stays borrowed, any other buffer is copied so the
+ * pointer outlives the core call (*keep owns the copy, NULL when none). */
+static int
+text_arg(PyObject *obj, const char **data, Py_ssize_t *len, PyObject **keep)
+{
+    if (PyUnicode_Check(obj)) {
+        *data = PyUnicode_AsUTF8AndSize(obj, len);
+        *keep = NULL;
+        return *data == NULL ? 0 : 1;
+    }
+    if (PyBytes_Check(obj)) {
+        *data = PyBytes_AS_STRING(obj);
+        *len = PyBytes_GET_SIZE(obj);
+        *keep = NULL;
+        return 1;
+    }
+    {
+        Py_buffer view;
+        PyObject *bytes;
+
+        if (PyObject_GetBuffer(obj, &view, PyBUF_SIMPLE) < 0) {
+            return 0;
+        }
+        bytes = PyBytes_FromStringAndSize((const char *)view.buf,
+                                          (Py_ssize_t)view.len);
+        PyBuffer_Release(&view);
+        if (bytes == NULL) {
+            return 0;
+        }
+        *data = PyBytes_AS_STRING(bytes);
+        *len = PyBytes_GET_SIZE(bytes);
+        *keep = bytes;
+        return 1;
+    }
+}
+
+static PyObject *
+MessageType_to_json(MessageType *self, PyObject *args)
+{
+    PyObject *obj;
+    PyObject *wire;
+    pbw_message *tree;
+    char *out = NULL;
+    size_t len = 0;
+    pbw_status status;
+    PyObject *text;
+
+    if (!PyArg_ParseTuple(args, "O:to_json", &obj)) {
+        return NULL;
+    }
+    wire = coerce_wire(self, obj);
+    if (wire == NULL) {
+        return NULL;
+    }
+    tree = decode_tree(self, (const uint8_t *)PyBytes_AS_STRING(wire),
+                       (size_t)PyBytes_GET_SIZE(wire));
+    Py_DECREF(wire);
+    if (tree == NULL) {
+        return NULL;
+    }
+    status = pbw_json_print(tree, &out, &len);
+    pbw_message_free(tree);
+    if (status != PBW_OK) {
+        set_status(status, self->name_utf8);
+        return NULL;
+    }
+    text = PyUnicode_FromStringAndSize(out, (Py_ssize_t)len);
+    pbw_free(out);
+    return text;
+}
+
+static PyObject *
+MessageType_from_json(MessageType *self, PyObject *args)
+{
+    PyObject *obj, *ignore = NULL, *limits_obj = NULL;
+    const char *data;
+    Py_ssize_t len;
+    PyObject *keep;
+    pbw_limits lim;
+    int have;
+    pbw_json_parse_options options;
+    pbw_message *tree = NULL;
+    pbw_status status;
+    PyObject *msg;
+
+    if (!PyArg_ParseTuple(args, "O|OO:from_json", &obj, &ignore,
+                          &limits_obj)) {
+        return NULL;
+    }
+    if (!text_arg(obj, &data, &len, &keep)) {
+        return NULL;
+    }
+    have = parse_limits(limits_obj, &lim);
+    if (have < 0) {
+        Py_XDECREF(keep);
+        return NULL;
+    }
+    memset(&options, 0, sizeof(options));
+    if (ignore != NULL && ignore != Py_None) {
+        int t = PyObject_IsTrue(ignore);
+
+        if (t < 0) {
+            Py_XDECREF(keep);
+            return NULL;
+        }
+        options.ignore_unknown_fields = t;
+    }
+    status =
+        pbw_json_parse_limits(self->desc, data, (size_t)len,
+                              have == 0 ? NULL : &lim,
+                              ignore == NULL ? NULL : &options, &tree);
+    Py_XDECREF(keep);
+    if (status != PBW_OK) {
+        set_status(status, self->name_utf8);
+        return NULL;
+    }
+    msg = message_from_tree(self, tree);
+    pbw_message_free(tree);
+    return msg;
+}
+
+static PyObject *
+MessageType_to_text(MessageType *self, PyObject *args)
+{
+    PyObject *obj, *unknown = NULL;
+    PyObject *wire;
+    pbw_message *tree;
+    char *out = NULL;
+    size_t len = 0;
+    int print_unknown = 1;
+    pbw_status status;
+    PyObject *text;
+
+    if (!PyArg_ParseTuple(args, "O|O:to_text", &obj, &unknown)) {
+        return NULL;
+    }
+    if (unknown != NULL && unknown != Py_None) {
+        print_unknown = PyObject_IsTrue(unknown);
+        if (print_unknown < 0) {
+            return NULL;
+        }
+    }
+    wire = coerce_wire(self, obj);
+    if (wire == NULL) {
+        return NULL;
+    }
+    tree = decode_tree(self, (const uint8_t *)PyBytes_AS_STRING(wire),
+                       (size_t)PyBytes_GET_SIZE(wire));
+    Py_DECREF(wire);
+    if (tree == NULL) {
+        return NULL;
+    }
+    status = pbw_text_print_opts(tree, print_unknown, &out, &len);
+    pbw_message_free(tree);
+    if (status != PBW_OK) {
+        set_status(status, self->name_utf8);
+        return NULL;
+    }
+    text = PyUnicode_FromStringAndSize(out, (Py_ssize_t)len);
+    pbw_free(out);
+    return text;
+}
+
+static PyObject *
+MessageType_from_text(MessageType *self, PyObject *args)
+{
+    PyObject *obj, *limits_obj = NULL;
+    const char *data;
+    Py_ssize_t len;
+    PyObject *keep;
+    pbw_limits lim;
+    int have;
+    pbw_message *tree = NULL;
+    pbw_status status;
+    PyObject *msg;
+
+    if (!PyArg_ParseTuple(args, "O|O:from_text", &obj, &limits_obj)) {
+        return NULL;
+    }
+    if (!text_arg(obj, &data, &len, &keep)) {
+        return NULL;
+    }
+    have = parse_limits(limits_obj, &lim);
+    if (have < 0) {
+        Py_XDECREF(keep);
+        return NULL;
+    }
+    status = pbw_text_parse_limits(self->desc, data, (size_t)len,
+                                   have == 0 ? NULL : &lim, &tree);
+    Py_XDECREF(keep);
+    if (status != PBW_OK) {
+        set_status(status, self->name_utf8);
+        return NULL;
+    }
+    msg = message_from_tree(self, tree);
+    pbw_message_free(tree);
+    return msg;
+}
+
+static PyObject *
+MessageType_encode_deterministic(MessageType *self, PyObject *args)
+{
+    PyObject *obj;
+    PyObject *wire;
+    pbw_message *tree;
+    uint8_t *out = NULL;
+    size_t len = 0;
+    pbw_status status;
+    PyObject *bytes;
+
+    if (!PyArg_ParseTuple(args, "O:encode_deterministic", &obj)) {
+        return NULL;
+    }
+    wire = coerce_wire(self, obj);
+    if (wire == NULL) {
+        return NULL;
+    }
+    tree = decode_tree(self, (const uint8_t *)PyBytes_AS_STRING(wire),
+                       (size_t)PyBytes_GET_SIZE(wire));
+    Py_DECREF(wire);
+    if (tree == NULL) {
+        return NULL;
+    }
+    /* Map entries sort by key; every other field encodes as usual. */
+    status = pbw_encode_deterministic(tree, &out, &len);
+    pbw_message_free(tree);
+    if (status != PBW_OK) {
+        set_status(status, self->name_utf8);
+        return NULL;
+    }
+    bytes = PyBytes_FromStringAndSize((const char *)out, (Py_ssize_t)len);
+    pbw_free(out);
+    return bytes;
+}
+
+static PyObject *
+MessageType_encode_delimited(MessageType *self, PyObject *args)
+{
+    PyObject *obj;
+    PyObject *wire;
+    size_t len, prefix;
+    PyObject *frame;
+    uint8_t *dst;
+
+    if (!PyArg_ParseTuple(args, "O:encode_delimited", &obj)) {
+        return NULL;
+    }
+    wire = coerce_wire(self, obj);
+    if (wire == NULL) {
+        return NULL;
+    }
+    /* One length-delimited frame: a varint length plus the message bytes. */
+    len = (size_t)PyBytes_GET_SIZE(wire);
+    prefix = varint_size((uint64_t)len);
+    frame = PyBytes_FromStringAndSize(NULL, (Py_ssize_t)(prefix + len));
+    if (frame == NULL) {
+        Py_DECREF(wire);
+        return NULL;
+    }
+    dst = (uint8_t *)PyBytes_AS_STRING(frame);
+    put_varint(dst, (uint64_t)len);
+    memcpy(dst + prefix, PyBytes_AS_STRING(wire), len);
+    Py_DECREF(wire);
+    return frame;
+}
+
+static PyObject *
+MessageType_decode_delimited(MessageType *self, PyObject *args)
+{
+    PyObject *obj, *limits_obj = NULL;
+    PyObject *buffer = NULL;
+    Py_buffer view;
+    uint64_t len;
+    size_t prefix;
+    PyObject *wire;
+    PyObject *msg;
+    rdr r;
+
+    if (!PyArg_ParseTuple(args, "O|O:decode_delimited", &obj,
+                          &limits_obj)) {
+        return NULL;
+    }
+    if (PyBytes_Check(obj)) {
+        buffer = obj;
+        Py_INCREF(buffer);
+    } else {
+        if (PyObject_GetBuffer(obj, &view, PyBUF_SIMPLE) < 0) {
+            return NULL;
+        }
+        buffer = PyBytes_FromStringAndSize((const char *)view.buf,
+                                           (Py_ssize_t)view.len);
+        PyBuffer_Release(&view);
+        if (buffer == NULL) {
+            return NULL;
+        }
+    }
+    r.p = (const uint8_t *)PyBytes_AS_STRING(buffer);
+    r.end = r.p + (size_t)PyBytes_GET_SIZE(buffer);
+    if (!rd_varint(&r, &len) || len > (uint64_t)(r.end - r.p)) {
+        Py_DECREF(buffer);
+        PyErr_SetString(PyExc_ValueError, "truncated delimited frame");
+        return NULL;
+    }
+    prefix = (size_t)(r.p - (const uint8_t *)PyBytes_AS_STRING(buffer));
+    wire = PyBytes_FromStringAndSize((const char *)r.p, (Py_ssize_t)len);
+    Py_DECREF(buffer);
+    if (wire == NULL) {
+        return NULL;
+    }
+    if (!check_wire_limits(self, (const uint8_t *)PyBytes_AS_STRING(wire),
+                           (size_t)len, limits_obj)) {
+        Py_DECREF(wire);
+        return NULL;
+    }
+    msg = decode_buffer(self, wire);
+    if (msg == NULL) {
+        return NULL;
+    }
+    {
+        PyObject *consumed = PyLong_FromSize_t(prefix + (size_t)len);
+        PyObject *out;
+
+        if (consumed == NULL) {
+            Py_DECREF(msg);
+            return NULL;
+        }
+        out = PyTuple_Pack(2, msg, consumed);
+        Py_DECREF(msg);
+        Py_DECREF(consumed);
+        return out;
+    }
+}
+
+static PyObject *
+MessageType_encoded_size(MessageType *self, PyObject *args)
+{
+    PyObject *obj;
+    PyObject *wire;
+    Py_ssize_t len;
+
+    if (!PyArg_ParseTuple(args, "O:encoded_size", &obj)) {
+        return NULL;
+    }
+    wire = coerce_wire(self, obj);
+    if (wire == NULL) {
+        return NULL;
+    }
+    len = PyBytes_GET_SIZE(wire);
+    Py_DECREF(wire);
+    return PyLong_FromSsize_t(len);
+}
+
+static PyObject *
+MessageType_encode_to(MessageType *self, PyObject *args)
+{
+    PyObject *obj, *target;
+    PyObject *wire;
+    Py_buffer view;
+    Py_ssize_t len;
+
+    if (!PyArg_ParseTuple(args, "OO:encode_to", &obj, &target)) {
+        return NULL;
+    }
+    wire = coerce_wire(self, obj);
+    if (wire == NULL) {
+        return NULL;
+    }
+    if (PyObject_GetBuffer(target, &view, PyBUF_WRITABLE) < 0) {
+        Py_DECREF(wire);
+        return NULL;
+    }
+    len = PyBytes_GET_SIZE(wire);
+    if (len > view.len) {
+        PyBuffer_Release(&view);
+        Py_DECREF(wire);
+        PyErr_SetString(PyExc_ValueError, "target buffer is too small");
+        return NULL;
+    }
+    memcpy(view.buf, PyBytes_AS_STRING(wire), (size_t)len);
+    PyBuffer_Release(&view);
+    Py_DECREF(wire);
+    return PyLong_FromSsize_t(len);
+}
+
+static PyObject *
+MessageType_encode_sink(MessageType *self, PyObject *args)
+{
+    PyObject *obj, *sink;
+    Py_ssize_t chunk = 8192;
+    PyObject *wire;
+    const char *data;
+    Py_ssize_t len, off = 0;
+
+    if (!PyArg_ParseTuple(args, "OO|n:encode_sink", &obj, &sink, &chunk)) {
+        return NULL;
+    }
+    if (!PyCallable_Check(sink)) {
+        PyErr_SetString(PyExc_TypeError, "sink must be callable");
+        return NULL;
+    }
+    if (chunk <= 0) {
+        PyErr_SetString(PyExc_ValueError, "chunk size must be positive");
+        return NULL;
+    }
+    wire = coerce_wire(self, obj);
+    if (wire == NULL) {
+        return NULL;
+    }
+    /* The core streams 8 KiB chunks; same shape here, straight off the
+     * encoded bytes. A sink exception aborts the stream. */
+    data = PyBytes_AS_STRING(wire);
+    len = PyBytes_GET_SIZE(wire);
+    while (off < len) {
+        Py_ssize_t n = len - off < chunk ? len - off : chunk;
+        PyObject *piece = PyBytes_FromStringAndSize(data + off, n);
+        PyObject *ret;
+
+        if (piece == NULL) {
+            Py_DECREF(wire);
+            return NULL;
+        }
+        ret = PyObject_CallOneArg(sink, piece);
+        Py_DECREF(piece);
+        if (ret == NULL) {
+            Py_DECREF(wire);
+            return NULL;
+        }
+        Py_DECREF(ret);
+        off += n;
+    }
+    Py_DECREF(wire);
+    return PyLong_FromSsize_t(len);
+}
+
+/* One scanned field per callback: (name or None, number, wire_type, value).
+ * Varints and fixed widths come back as ints (raw wire bits, no zigzag or
+ * sign extension, like the core visit values); length-delimited fields and
+ * groups come back as bytes. */
+typedef struct {
+    PyObject *callable;
+    int aborted; /* the callback raised: the scan stopped for it */
+} visit_ctx;
+
+static pbw_status
+visit_trampoline(void *ud, const pbw_field *field, uint32_t number,
+                 uint32_t wire_type, const pbw_visit_value *value)
+{
+    visit_ctx *ctx = (visit_ctx *)ud;
+    PyObject *name, *num, *wt, *v, *ret;
+
+    if (field != NULL) {
+        name = PyUnicode_FromString(pbw_field_name(field));
+        if (name == NULL) {
+            ctx->aborted = 1;
+            return PBW_ERR_NOMEM;
+        }
+    } else {
+        name = Py_None;
+        Py_INCREF(name);
+    }
+    num = PyLong_FromUnsignedLong(number);
+    wt = PyLong_FromUnsignedLong(wire_type);
+    if (wire_type == 0 || wire_type == 1) {
+        v = PyLong_FromUnsignedLongLong(value->u64);
+    } else if (wire_type == 5) {
+        v = PyLong_FromUnsignedLong((uint32_t)value->u64);
+    } else {
+        v = PyBytes_FromStringAndSize(value->len == 0 ? "" : (const char *)value->data,
+                                      (Py_ssize_t)value->len);
+    }
+    if (num == NULL || wt == NULL || v == NULL) {
+        Py_XDECREF(num);
+        Py_XDECREF(wt);
+        Py_XDECREF(v);
+        Py_DECREF(name);
+        ctx->aborted = 1;
+        return PBW_ERR_NOMEM;
+    }
+    ret = PyObject_CallFunctionObjArgs(ctx->callable, name, num, wt, v, NULL);
+    Py_DECREF(name);
+    Py_DECREF(num);
+    Py_DECREF(wt);
+    Py_DECREF(v);
+    if (ret == NULL) {
+        ctx->aborted = 1;
+        return PBW_ERR_INVALID;
+    }
+    Py_DECREF(ret);
+    return PBW_OK;
+}
+
+static PyObject *
+MessageType_visit(MessageType *self, PyObject *args)
+{
+    PyObject *obj, *callback, *limits_obj = NULL;
+    const uint8_t *data;
+    size_t len;
+    Py_buffer view;
+    int is_bytes;
+    pbw_limits lim;
+    int have;
+    visit_ctx ctx;
+    size_t fail_off = 0;
+    pbw_status status;
+
+    if (!PyArg_ParseTuple(args, "OO|O:visit", &obj, &callback,
+                          &limits_obj)) {
+        return NULL;
+    }
+    if (!PyCallable_Check(callback)) {
+        PyErr_SetString(PyExc_TypeError, "callback must be callable");
+        return NULL;
+    }
+    is_bytes = PyBytes_Check(obj);
+    if (is_bytes) {
+        data = (const uint8_t *)PyBytes_AS_STRING(obj);
+        len = (size_t)PyBytes_GET_SIZE(obj);
+    } else {
+        if (PyObject_GetBuffer(obj, &view, PyBUF_SIMPLE) < 0) {
+            return NULL;
+        }
+        data = (const uint8_t *)view.buf;
+        len = (size_t)view.len;
+    }
+    have = parse_limits(limits_obj, &lim);
+    if (have < 0) {
+        if (!is_bytes) {
+            PyBuffer_Release(&view);
+        }
+        return NULL;
+    }
+    ctx.callable = callback;
+    ctx.aborted = 0;
+    status = have == 0 ? pbw_visit(self->desc, data, len, visit_trampoline,
+                                   &ctx, &fail_off)
+                       : pbw_visit_limits(self->desc, data, len, &lim,
+                                          visit_trampoline, &ctx, &fail_off);
+    if (!is_bytes) {
+        PyBuffer_Release(&view);
+    }
+    if (status != PBW_OK) {
+        if (ctx.aborted || PyErr_Occurred()) {
+            return NULL;
+        }
+        set_status(status, self->name_utf8);
+        return NULL;
+    }
+    Py_RETURN_NONE;
+}
+
+/* Well-known-type helpers over the dynamic API: the caller loads the real
+ * descriptors (google/protobuf/any.proto etc. via a FileDescriptorSet); a
+ * hand-built mirror with the same field numbers works too. Timestamp and
+ * Duration share their field shapes, so the message name picks the helper.
+ */
+static int
+wkt_kind(MessageType *mt)
+{
+    if (strcmp(mt->name_utf8, "google.protobuf.Timestamp") == 0) {
+        return 1;
+    }
+    if (strcmp(mt->name_utf8, "google.protobuf.Duration") == 0) {
+        return 2;
+    }
+    PyErr_Format(PyExc_TypeError,
+                 "%s is not a Timestamp or Duration message",
+                 mt->name_utf8);
+    return 0;
+}
+
+static PyObject *
+MessageType_any_pack(MessageType *self, PyObject *args)
+{
+    PyObject *url_obj, *payload_obj;
+    const char *type_url;
+    Py_buffer view;
+    pbw_message *tree = NULL;
+    pbw_status status;
+    PyObject *msg;
+
+    if (!PyArg_ParseTuple(args, "OO:any_pack", &url_obj, &payload_obj)) {
+        return NULL;
+    }
+    type_url = PyUnicode_AsUTF8(url_obj);
+    if (type_url == NULL) {
+        return NULL;
+    }
+    if (PyObject_GetBuffer(payload_obj, &view, PyBUF_SIMPLE) < 0) {
+        return NULL;
+    }
+    status = pbw_any_pack(self->desc, type_url, view.buf, (size_t)view.len,
+                          &tree);
+    PyBuffer_Release(&view);
+    if (status != PBW_OK) {
+        set_status(status, self->name_utf8);
+        return NULL;
+    }
+    msg = message_from_tree(self, tree);
+    pbw_message_free(tree);
+    return msg;
+}
+
+static PyObject *
+Message_any(Message *self, int payload)
+{
+    MessageType *mt = (MessageType *)self->mtype;
+    pbw_message *tree = decode_tree(mt, self->data + self->off, self->len);
+    PyObject *out;
+
+    if (tree == NULL) {
+        return NULL;
+    }
+    if (payload) {
+        size_t len = 0;
+        const void *data = pbw_any_payload(tree, &len);
+
+        out = data == NULL ? Py_None : PyBytes_FromStringAndSize((const char *)data, (Py_ssize_t)len);
+        if (out == Py_None) {
+            Py_INCREF(out);
+        }
+    } else {
+        const char *url = pbw_any_type_url(tree);
+
+        out = url == NULL ? Py_None : PyUnicode_FromString(url);
+        if (out == Py_None) {
+            Py_INCREF(out);
+        }
+    }
+    pbw_message_free(tree);
+    return out;
+}
+
+static PyObject *
+Message_any_type_url(Message *self, PyObject *unused)
+{
+    (void)unused;
+    return Message_any(self, 0);
+}
+
+static PyObject *
+Message_any_payload(Message *self, PyObject *unused)
+{
+    (void)unused;
+    return Message_any(self, 1);
+}
+
+static PyObject *
+Message_to_millis(Message *self, PyObject *unused)
+{
+    MessageType *mt = (MessageType *)self->mtype;
+    int kind = wkt_kind(mt);
+    pbw_message *tree;
+    int64_t ms = 0;
+    pbw_status status;
+
+    (void)unused;
+    if (kind == 0) {
+        return NULL;
+    }
+    tree = decode_tree(mt, self->data + self->off, self->len);
+    if (tree == NULL) {
+        return NULL;
+    }
+    status = kind == 1 ? pbw_timestamp_to_millis(tree, &ms)
+                       : pbw_duration_to_millis(tree, &ms);
+    pbw_message_free(tree);
+    if (status != PBW_OK) {
+        set_status(status, mt->name_utf8);
+        return NULL;
+    }
+    return PyLong_FromLongLong(ms);
+}
+
+static PyObject *
+Message_fieldmask_paths(Message *self, PyObject *unused)
+{
+    MessageType *mt = (MessageType *)self->mtype;
+    pbw_message *tree = decode_tree(mt, self->data + self->off, self->len);
+    size_t n, i;
+    PyObject *list;
+
+    (void)unused;
+    if (tree == NULL) {
+        return NULL;
+    }
+    n = pbw_fieldmask_path_count(tree);
+    list = PyList_New((Py_ssize_t)n);
+    if (list == NULL) {
+        pbw_message_free(tree);
+        return NULL;
+    }
+    for (i = 0; i < n; i++) {
+        const char *path = pbw_fieldmask_path_at(tree, i);
+        PyObject *s;
+
+        if (path == NULL) {
+            break;
+        }
+        s = PyUnicode_FromString(path);
+        if (s == NULL) {
+            Py_DECREF(list);
+            pbw_message_free(tree);
+            return NULL;
+        }
+        PyList_SET_ITEM(list, (Py_ssize_t)i, s);
+    }
+    pbw_message_free(tree);
+    if (i != n && PyList_SetSlice(list, (Py_ssize_t)i, (Py_ssize_t)n, NULL) <
+                      0) {
+        Py_DECREF(list);
+        return NULL;
+    }
+    return list;
+}
+
+static PyObject *
+MessageType_from_millis(MessageType *self, PyObject *args)
+{
+    PyObject *obj;
+    int kind = wkt_kind(self);
+    long long ms;
+    pbw_message *tree = NULL;
+    pbw_status status;
+    PyObject *msg;
+
+    if (!PyArg_ParseTuple(args, "O:from_millis", &obj)) {
+        return NULL;
+    }
+    if (kind == 0) {
+        return NULL;
+    }
+    ms = PyLong_AsLongLong(obj);
+    if (ms == -1 && PyErr_Occurred()) {
+        return NULL;
+    }
+    status = kind == 1 ? pbw_timestamp_from_millis(self->desc, (int64_t)ms,
+                                                   &tree)
+                       : pbw_duration_from_millis(self->desc,
+                                                  (int64_t)ms, &tree);
+    if (status != PBW_OK) {
+        set_status(status, self->name_utf8);
+        return NULL;
+    }
+    msg = message_from_tree(self, tree);
+    pbw_message_free(tree);
+    return msg;
+}
+
+static PyObject *
+Message_to_json(Message *self, PyObject *unused)
+{
+    MessageType *mt = (MessageType *)self->mtype;
+    pbw_message *tree = decode_tree(mt, self->data + self->off, self->len);
+    char *out = NULL;
+    size_t len = 0;
+    pbw_status status;
+    PyObject *text;
+
+    (void)unused;
+    if (tree == NULL) {
+        return NULL;
+    }
+    status = pbw_json_print(tree, &out, &len);
+    pbw_message_free(tree);
+    if (status != PBW_OK) {
+        set_status(status, mt->name_utf8);
+        return NULL;
+    }
+    text = PyUnicode_FromStringAndSize(out, (Py_ssize_t)len);
+    pbw_free(out);
+    return text;
+}
+
+static PyObject *
+Message_to_text(Message *self, PyObject *args)
+{
+    MessageType *mt = (MessageType *)self->mtype;
+    PyObject *unknown = NULL;
+    int print_unknown = 1;
+    pbw_message *tree;
+    char *out = NULL;
+    size_t len = 0;
+    pbw_status status;
+    PyObject *text;
+
+    if (!PyArg_ParseTuple(args, "|O:to_text", &unknown)) {
+        return NULL;
+    }
+    if (unknown != NULL && unknown != Py_None) {
+        print_unknown = PyObject_IsTrue(unknown);
+        if (print_unknown < 0) {
+            return NULL;
+        }
+    }
+    tree = decode_tree(mt, self->data + self->off, self->len);
+    if (tree == NULL) {
+        return NULL;
+    }
+    status = pbw_text_print_opts(tree, print_unknown, &out, &len);
+    pbw_message_free(tree);
+    if (status != PBW_OK) {
+        set_status(status, mt->name_utf8);
+        return NULL;
+    }
+    text = PyUnicode_FromStringAndSize(out, (Py_ssize_t)len);
+    pbw_free(out);
+    return text;
+}
 
 /* ------------------------------------------------------------ type methods */
 
@@ -2335,44 +3354,22 @@ static PyObject *
 MessageType_encode(MessageType *self, PyObject *args)
 {
     PyObject *obj;
-    sbuf b;
-    PyObject *out;
 
     if (!PyArg_ParseTuple(args, "O:encode", &obj)) {
         return NULL;
     }
-    if (PyObject_TypeCheck(obj, &MessagePyType)) {
-        Message *m = (Message *)obj;
-
-        if (m->mtype != (PyObject *)self) {
-            PyErr_Format(PyExc_TypeError, "%s cannot encode a %s",
-                         self->name_utf8,
-                         ((MessageType *)m->mtype)->name_utf8);
-            return NULL;
-        }
-        return PyBytes_FromStringAndSize((const char *)m->data + m->off,
-                                         (Py_ssize_t)m->len);
-    }
-    memset(&b, 0, sizeof(b));
-    if (!enc_message(self, obj, &b, 0)) {
-        free(b.data);
-        return NULL;
-    }
-    out = PyBytes_FromStringAndSize((const char *)b.data, (Py_ssize_t)b.len);
-    free(b.data);
-    return out;
+    return coerce_wire(self, obj);
 }
 
 static PyObject *
 MessageType_decode(MessageType *self, PyObject *args)
 {
-    PyObject *obj;
+    PyObject *obj, *limits_obj = NULL;
     PyObject *buffer;
-    Message *m;
 
     /* bytes are immutable and kept alive by the Message, so no copy; any other
      * buffer gets copied into bytes first. */
-    if (!PyArg_ParseTuple(args, "O:decode", &obj)) {
+    if (!PyArg_ParseTuple(args, "O|O:decode", &obj, &limits_obj)) {
         return NULL;
     }
     if (PyBytes_Check(obj)) {
@@ -2396,33 +3393,12 @@ MessageType_decode(MessageType *self, PyObject *args)
             return NULL;
         }
     }
-
-    if ((uint64_t)PyBytes_GET_SIZE(buffer) > 0xffffffffull) {
-        Py_DECREF(buffer);
-        PyErr_SetString(PyExc_ValueError, "message is too large");
-        return NULL;
-    }
-    m = PyObject_GC_New(Message, &MessagePyType);
-    if (m == NULL) {
+    if (!check_wire_limits(self, (const uint8_t *)PyBytes_AS_STRING(buffer),
+                           (size_t)PyBytes_GET_SIZE(buffer), limits_obj)) {
         Py_DECREF(buffer);
         return NULL;
     }
-    PyObject_GC_Track(m);
-    m->mtype = (PyObject *)self;
-    Py_INCREF(self);
-    m->buffer = buffer;
-    m->data = (const uint8_t *)PyBytes_AS_STRING(buffer);
-    m->off = 0;
-    m->len = (uint32_t)PyBytes_GET_SIZE(buffer);
-    m->depth = 0;
-    m->slices = m->inline_slices;
-    m->nslices = 0;
-    m->cap = MSG_INLINE_SLICES;
-    if (!scan_message(m, self, m->data, 0, m->len, 0)) {
-        Py_DECREF(m);
-        return NULL;
-    }
-    return (PyObject *)m;
+    return decode_buffer(self, buffer);
 }
 
 static PyObject *
@@ -2437,7 +3413,36 @@ static PyMethodDef MessageType_methods[] = {
     {"encode", (PyCFunction)MessageType_encode, METH_VARARGS,
      "encode(dict_or_message) -> bytes"},
     {"decode", (PyCFunction)MessageType_decode, METH_VARARGS,
-     "decode(bytes) -> Message, fields read on demand"},
+     "decode(bytes[, limits]) -> Message, fields read on demand"},
+    {"encode_deterministic", (PyCFunction)MessageType_encode_deterministic,
+     METH_VARARGS,
+     "encode_deterministic(dict_or_message) -> bytes, map entries sorted"},
+    {"encode_delimited", (PyCFunction)MessageType_encode_delimited,
+     METH_VARARGS, "encode_delimited(dict_or_message) -> bytes, one frame"},
+    {"decode_delimited", (PyCFunction)MessageType_decode_delimited,
+     METH_VARARGS,
+     "decode_delimited(bytes[, limits]) -> (Message, consumed)"},
+    {"encoded_size", (PyCFunction)MessageType_encoded_size, METH_VARARGS,
+     "encoded_size(dict_or_message) -> int, bytes encode() writes"},
+    {"encode_to", (PyCFunction)MessageType_encode_to, METH_VARARGS,
+     "encode_to(dict_or_message, buffer) -> int, bytes written"},
+    {"encode_sink", (PyCFunction)MessageType_encode_sink, METH_VARARGS,
+     "encode_sink(dict_or_message, callable[, chunk_size]) -> int"},
+    {"to_json", (PyCFunction)MessageType_to_json, METH_VARARGS,
+     "to_json(dict_or_message) -> str, protobuf JSON mapping"},
+    {"from_json", (PyCFunction)MessageType_from_json, METH_VARARGS,
+     "from_json(text[, ignore_unknown[, limits]]) -> Message"},
+    {"to_text", (PyCFunction)MessageType_to_text, METH_VARARGS,
+     "to_text(dict_or_message[, print_unknown_fields]) -> str"},
+    {"from_text", (PyCFunction)MessageType_from_text, METH_VARARGS,
+     "from_text(text[, limits]) -> Message"},
+    {"visit", (PyCFunction)MessageType_visit, METH_VARARGS,
+     "visit(bytes, callback[, limits]), "
+     "callback(name, number, wire_type, value)"},
+    {"any_pack", (PyCFunction)MessageType_any_pack, METH_VARARGS,
+     "any_pack(type_url, payload) -> Message"},
+    {"from_millis", (PyCFunction)MessageType_from_millis, METH_VARARGS,
+     "from_millis(ms) -> Message, Timestamp/Duration holding ms"},
     {NULL, NULL, 0, NULL},
 };
 
@@ -2680,10 +3685,15 @@ read_file(const char *path, char **data, Py_ssize_t *len)
 }
 
 static PyObject *
-new_schema(const void *data, size_t len, const char *what)
+new_schema(const void *data, size_t len, const char *what,
+           const pbw_limits *lim)
 {
     pbw_schema *schema = NULL;
-    pbw_status status = pbw_descriptor_set_load(data, len, &schema);
+    pbw_status status = lim == NULL ? pbw_descriptor_set_load(data, len,
+                                                              &schema)
+                                    : pbw_descriptor_set_load_limits(data,
+                                                                     len, lim,
+                                                                     &schema);
     Schema *self;
 
     if (status != PBW_OK) {
@@ -2719,18 +3729,25 @@ static PyObject *
 Schema_from_file(PyObject *cls, PyObject *args)
 {
     const char *path;
+    PyObject *limits_obj = NULL;
     char *data;
     Py_ssize_t len;
+    pbw_limits lim;
+    int have;
     PyObject *out;
 
     (void)cls;
-    if (!PyArg_ParseTuple(args, "s:from_file", &path)) {
+    if (!PyArg_ParseTuple(args, "s|O:from_file", &path, &limits_obj)) {
+        return NULL;
+    }
+    have = parse_limits(limits_obj, &lim);
+    if (have < 0) {
         return NULL;
     }
     if (!read_file(path, &data, &len)) {
         return NULL;
     }
-    out = new_schema(data, (size_t)len, path);
+    out = new_schema(data, (size_t)len, path, have == 0 ? NULL : &lim);
     free(data);
     return out;
 }
@@ -2739,15 +3756,181 @@ static PyObject *
 Schema_load(PyObject *cls, PyObject *args)
 {
     Py_buffer view;
+    PyObject *limits_obj = NULL;
+    pbw_limits lim;
+    int have;
     PyObject *out;
 
     (void)cls;
-    if (!PyArg_ParseTuple(args, "y*:load", &view)) {
+    if (!PyArg_ParseTuple(args, "y*|O:load", &view, &limits_obj)) {
         return NULL;
     }
-    out = new_schema(view.buf, (size_t)view.len, "descriptor set");
+    have = parse_limits(limits_obj, &lim);
+    if (have < 0) {
+        PyBuffer_Release(&view);
+        return NULL;
+    }
+    out = new_schema(view.buf, (size_t)view.len, "descriptor set",
+                     have == 0 ? NULL : &lim);
     PyBuffer_Release(&view);
     return out;
+}
+
+static PyObject *
+Schema_services(Schema *self, PyObject *unused)
+{
+    size_t n = pbw_schema_service_count(self->schema), i;
+    PyObject *list = PyList_New((Py_ssize_t)n);
+
+    (void)unused;
+    if (list == NULL) {
+        return NULL;
+    }
+    for (i = 0; i < n; i++) {
+        const pbw_service *svc = pbw_schema_service_at(self->schema, i);
+        PyObject *name = PyUnicode_FromString(pbw_service_name(svc));
+
+        if (name == NULL) {
+            Py_DECREF(list);
+            return NULL;
+        }
+        PyList_SET_ITEM(list, (Py_ssize_t)i, name);
+    }
+    return list;
+}
+
+static PyObject *
+Schema_service_methods(Schema *self, PyObject *args)
+{
+    const char *name;
+    const pbw_service *svc;
+    size_t n, i;
+    PyObject *list;
+
+    if (!PyArg_ParseTuple(args, "s:service_methods", &name)) {
+        return NULL;
+    }
+    svc = pbw_schema_service_find(self->schema, name);
+    if (svc == NULL) {
+        PyErr_Format(PyExc_KeyError, "no service %s in the schema", name);
+        return NULL;
+    }
+    n = pbw_service_method_count(svc);
+    list = PyList_New((Py_ssize_t)n);
+    if (list == NULL) {
+        return NULL;
+    }
+    for (i = 0; i < n; i++) {
+        const pbw_method *method = pbw_service_method_at(svc, i);
+        PyObject *mname = PyUnicode_FromString(pbw_method_name(method));
+
+        if (mname == NULL) {
+            Py_DECREF(list);
+            return NULL;
+        }
+        PyList_SET_ITEM(list, (Py_ssize_t)i, mname);
+    }
+    return list;
+}
+
+/* Dict helpers for Schema.resolve(): -1 on error, 0 put. */
+static int
+set_type_name(PyObject *dict, const char *key, const char *name)
+{
+    PyObject *value = PyUnicode_FromString(name);
+
+    if (value == NULL) {
+        return -1;
+    }
+    if (PyDict_SetItemString(dict, key, value) < 0) {
+        Py_DECREF(value);
+        return -1;
+    }
+    Py_DECREF(value);
+    return 0;
+}
+
+static int
+set_flag(PyObject *dict, const char *key, int flag)
+{
+    PyObject *value = PyBool_FromLong(flag);
+
+    if (value == NULL) {
+        return -1;
+    }
+    if (PyDict_SetItemString(dict, key, value) < 0) {
+        Py_DECREF(value);
+        return -1;
+    }
+    Py_DECREF(value);
+    return 0;
+}
+
+/* Resolve service.method to its input/output MessageTypes plus the routing
+ * facts a transport needs: the declared type names and both streaming
+ * flags. */
+static PyObject *
+Schema_resolve(Schema *self, PyObject *args)
+{
+    const char *svc_name, *method_name;
+    const pbw_service *svc;
+    const pbw_method *method;
+    const pbw_descriptor *in_desc, *out_desc;
+    PyObject *in_type, *out_type, *dict;
+
+    if (!PyArg_ParseTuple(args, "ss:resolve", &svc_name, &method_name)) {
+        return NULL;
+    }
+    svc = pbw_schema_service_find(self->schema, svc_name);
+    if (svc == NULL) {
+        PyErr_Format(PyExc_KeyError, "no service %s in the schema",
+                     svc_name);
+        return NULL;
+    }
+    method = pbw_service_method_find(svc, method_name);
+    if (method == NULL) {
+        PyErr_Format(PyExc_KeyError, "no method %s in service %s",
+                     method_name, svc_name);
+        return NULL;
+    }
+    if (pbw_service_resolve(self->schema, svc_name, method_name, &in_desc,
+                            &out_desc) != PBW_OK) {
+        set_status(PBW_ERR_INVALID, svc_name);
+        return NULL;
+    }
+    in_type = make_message((PyObject *)self, in_desc, self->cache);
+    if (in_type == NULL) {
+        return NULL;
+    }
+    out_type = make_message((PyObject *)self, out_desc, self->cache);
+    if (out_type == NULL) {
+        Py_DECREF(in_type);
+        return NULL;
+    }
+    dict = PyDict_New();
+    if (dict == NULL) {
+        Py_DECREF(in_type);
+        Py_DECREF(out_type);
+        return NULL;
+    }
+    if (PyDict_SetItemString(dict, "input", in_type) < 0 ||
+        PyDict_SetItemString(dict, "output", out_type) < 0 ||
+        set_type_name(dict, "input_type",
+                      pbw_method_input_type(method)) < 0 ||
+        set_type_name(dict, "output_type",
+                      pbw_method_output_type(method)) < 0 ||
+        set_flag(dict, "client_streaming",
+                 pbw_method_client_streaming(method)) < 0 ||
+        set_flag(dict, "server_streaming",
+                 pbw_method_server_streaming(method)) < 0) {
+        Py_DECREF(in_type);
+        Py_DECREF(out_type);
+        Py_DECREF(dict);
+        return NULL;
+    }
+    Py_DECREF(in_type);
+    Py_DECREF(out_type);
+    return dict;
 }
 
 static PyObject *
@@ -2773,6 +3956,13 @@ static PyMethodDef Schema_methods[] = {
      "load(bytes) -> Schema, from FileDescriptorSet bytes"},
     {"message", (PyCFunction)Schema_message, METH_VARARGS,
      "message(name) -> MessageType"},
+    {"services", (PyCFunction)Schema_services, METH_NOARGS,
+     "services() -> list of service full names in the schema"},
+    {"service_methods", (PyCFunction)Schema_service_methods, METH_VARARGS,
+     "service_methods(service) -> list of method names"},
+    {"resolve", (PyCFunction)Schema_resolve, METH_VARARGS,
+     "resolve(service, method) -> dict with input/output types and "
+     "streaming flags"},
     {"__enter__", (PyCFunction)Schema_enter, METH_NOARGS, "context manager"},
     {"__exit__", (PyCFunction)Schema_exit, METH_VARARGS, "context manager"},
     {NULL, NULL, 0, NULL},

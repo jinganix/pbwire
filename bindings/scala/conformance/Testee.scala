@@ -8,9 +8,8 @@
  * code: the request names the message type, the descriptor set answers
  * with the schema.
  *
- * Supported: binary in -> binary out. JSON and text output need printers
- * the binding does not expose, so those requests answer `skipped` and the
- * runner reports them as skipped rather than failed.
+ * Supported: binary, JSON and text in -> binary, JSON or text out. JSPB
+ * answers `skipped`, like every other testee here.
  *
  *   scalac ... conformance/Testee.scala && java -cp out/classes Testee build/conformance.desc
  */
@@ -20,11 +19,16 @@ import java.util.HashMap
 object Testee {
   // ConformanceRequest.requested_output_format values.
   private final val Protobuf = 1
+  private final val Json = 2
+  private final val Text = 4
+  private final val CategoryIgnoreUnknown = 3
 
   // ConformanceResponse field numbers: exactly one result field is set.
   private final val ParseError = 1
   private final val RuntimeError = 2
   private final val ProtobufPayload = 3
+  private final val JsonPayload = 4
+  private final val TextPayload = 8
   private final val Skipped = 5
   private final val SerializeError = 6
 
@@ -95,13 +99,14 @@ class Testee(schema: Schema) {
           return finish(r)
       }
     val wanted = request.getLong(3)
+    val category = request.getLong(5)
     val name = request.getString(4)
     val payload = request.getBytes(1)
-    if (wanted != Protobuf) {
+    val json = request.getString(2)
+    val text = request.getString(8)
+    val printUnknown = request.getBool(9)
+    if (wanted != Protobuf && wanted != Json && wanted != Text) {
       return finish(response.set(Skipped, "output format " + wanted + " is not supported"))
-    }
-    if (payload == null) {
-      return finish(response.set(Skipped, "only binary input is supported"))
     }
     val ty =
       try messageOf(name)
@@ -110,13 +115,29 @@ class Testee(schema: Schema) {
           return finish(response.set(RuntimeError, "unknown message type '" + name + "'"))
       }
     val parsed =
-      try ty.decode(payload)
-      catch {
+      try {
+        if (json != null) {
+          ty.parseJson(json, category == CategoryIgnoreUnknown, null)
+        } else if (text != null) {
+          ty.parseText(text)
+        } else if (payload != null) {
+          ty.decode(payload)
+        } else {
+          return finish(response.set(Skipped, "unsupported payload"))
+        }
+      } catch {
         case e: RuntimeException => // refused input: verdict, not a bug
           return finish(response.set(ParseError, String.valueOf(e.getMessage)))
       }
-    try finish(response.set(ProtobufPayload, parsed.encode()))
-    catch {
+    try {
+      if (wanted == Json) {
+        finish(response.set(JsonPayload, parsed.toJson()))
+      } else if (wanted == Text) {
+        finish(response.set(TextPayload, parsed.toText(printUnknown)))
+      } else {
+        finish(response.set(ProtobufPayload, parsed.encode()))
+      }
+    } catch {
       case e: RuntimeException =>
         finish(response.set(SerializeError, String.valueOf(e.getMessage)))
     }

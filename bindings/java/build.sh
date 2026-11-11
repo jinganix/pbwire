@@ -31,6 +31,11 @@ if [ ! -f "$desc" ]; then
     protoc --descriptor_set_out="$desc" --include_imports \
         -I "$here/tests/data" "$here/tests/data/sample.proto"
 fi
+svcdesc=$here/tests/data/svc.desc
+if [ ! -f "$svcdesc" ]; then
+    protoc --descriptor_set_out="$svcdesc" --include_imports \
+        -I "$here/tests/data" "$here/tests/data/svc.proto"
+fi
 
 # Oracle sources from the same .proto files the facade is generated from.
 oracle=$here/out/oracle-src
@@ -55,6 +60,7 @@ java -cp "$here/out/classes:$jar" TestGenerated \
     "$root/codegen/testdata/maptest.bin" "$root/codegen/testdata/xfile.bin"
 java -cp "$here/out/classes" TestMetaSchema \
     "$root/bindings/c/tests/data/matrix3.bin" "$root/codegen/testdata/oneof1.bin"
+java -cp "$here/out/classes" TestCoverage "$desc" "$svcdesc" "$root/codegen/testdata/maptest.desc"
 java -cp "$here/out/classes" Roundtrip "$root/examples/addressbook.bin"
 java -cp "$here/out/classes" TestSwap
 

@@ -22,6 +22,44 @@ fill_default(ErlNifEnv *env, ep_spot_t *spot);
 static inline ERL_NIF_TERM
 spot_set_node(ErlNifEnv *env, ep_spot_t *spot, ep_node_t *node);
 
+/* Decode nesting guard mirroring pbw_limits.max_depth, in decoder stack
+ * frames: one singular-nested message costs one frame, a repeated-nested
+ * one costs two (list frame plus element frame). Unset (0) means only the
+ * built-in caps apply, so the default path costs one predictable branch. */
+static inline ERL_NIF_TERM
+check_decode_depth(ErlNifEnv *env, ep_stack_t *stack, ep_spot_t *spot)
+{
+    ep_state_t *state = (ep_state_t *)enif_priv_data(env);
+    uint32_t cap;
+
+    if (!state->opts.max_depth_set) {
+        return RET_OK;
+    }
+    if (state->opts.max_depth > EP_MAX_DECODE_DEPTH / 2) {
+        cap = EP_MAX_DECODE_DEPTH;
+    } else {
+        cap = state->opts.max_depth * 2;
+    }
+    if ((size_t)(spot - stack->spots) >= (size_t)cap) {
+        raise_exception(env, make_atom(env, "too_deep"));
+    }
+    return RET_OK;
+}
+
+/* Unknown-group skipping stays bounded by its own cap, lowered when the
+ * caller sets a smaller max_depth. */
+static inline uint32_t
+group_depth_cap(ErlNifEnv *env)
+{
+    ep_state_t *state = (ep_state_t *)enif_priv_data(env);
+
+    if (state->opts.max_depth_set &&
+        state->opts.max_depth < EP_MAX_GROUP_DEPTH) {
+        return state->opts.max_depth;
+    }
+    return EP_MAX_GROUP_DEPTH;
+}
+
 static inline ERL_NIF_TERM
 unpack_varint_u64(ErlNifEnv *env, ep_dec_t *dec, uint64_t *val)
 {
@@ -742,7 +780,7 @@ skip_group(ErlNifEnv *env, ep_dec_t *dec, uint32_t group_fnum, uint32_t depth)
     wire_type_e wire_type;
     ERL_NIF_TERM ret;
 
-    if (depth > EP_MAX_GROUP_DEPTH) {
+    if (depth > group_depth_cap(env)) {
         raise_exception(env, dec->term);
     }
 
@@ -889,7 +927,7 @@ collect_unknown_group_fields(ErlNifEnv *env, ep_dec_t *dec, uint32_t group_fnum,
     ERL_NIF_TERM list = enif_make_list(env, 0);
     ERL_NIF_TERM item, ret;
 
-    if (depth > EP_MAX_GROUP_DEPTH) {
+    if (depth > group_depth_cap(env)) {
         raise_exception(env, dec->term);
     }
 
@@ -1057,6 +1095,7 @@ begin_group_decode(ErlNifEnv *env, ep_dec_t *dec, ep_stack_t *stack, ep_spot_t *
     (*spot)->field = field;
     (*spot)++;
     check_ret(ret, stack_ensure(env, stack, spot));
+    check_ret(ret, check_decode_depth(env, stack, *spot));
     (*spot)->saved_outer_end = dec->end;
     check_ret(ret, group_content_bounds(env, dec, fnum, &end_tag));
     dec->end = end_tag;
@@ -1409,11 +1448,13 @@ decode(ErlNifEnv *env, ep_tdata_t *tdata, ep_node_t *node)
                             if (spot->field && spot->field->is_oneof) {
                                 spot++;
                                 check_ret(ret, stack_ensure(env, stack, &spot));
+                                check_ret(ret, check_decode_depth(env, stack, spot));
                                 spot->field = field;
                             } else {
                                 spot->field = field;
                                 spot++;
                                 check_ret(ret, stack_ensure(env, stack, &spot));
+                                check_ret(ret, check_decode_depth(env, stack, spot));
                             }
 
                             if (field->sub_node == NULL) {
@@ -1465,6 +1506,7 @@ decode(ErlNifEnv *env, ep_tdata_t *tdata, ep_node_t *node)
                         spot->pos = field->rnum;
                         spot++;
                         check_ret(ret, stack_ensure(env, stack, &spot));
+                        check_ret(ret, check_decode_depth(env, stack, spot));
                         t_sp = stack->spots + parent_idx;
 
                         if (field->sub_node == NULL) {

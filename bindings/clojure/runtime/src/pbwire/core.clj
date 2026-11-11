@@ -145,6 +145,64 @@
       (->clj msg)
       (finally (close! msg)))))
 
+(defn to-json
+  "Protobuf JSON mapping text of a message (mutable Message)."
+  [^Message msg]
+  (.toJson msg))
+
+(defn from-json
+  "Parses JSON mapping text into a persistent map. Unknown field names throw
+   unless `ignore-unknown?` is true; `limits` is nil or a Java Limits."
+  ([t text] (from-json t text false nil))
+  ([^MessageType t ^String text ignore-unknown? limits]
+   (let [msg (.parseJson t text (boolean ignore-unknown?) ^Limits limits)]
+     (try (->clj msg) (finally (close! msg))))))
+
+(defn to-text
+  "Protobuf text format; unknown fields print as numeric lines unless
+   `print-unknown?` is false."
+  ([^Message msg] (.toText msg true))
+  ([^Message msg print-unknown?] (.toText msg (boolean print-unknown?))))
+
+(defn from-text
+  "Parses text format into a persistent map; `limits` is nil or a Limits."
+  ([t text] (from-text t text nil))
+  ([^MessageType t ^String text limits]
+   (let [msg (.parseText t text ^Limits limits)]
+     (try (->clj msg) (finally (close! msg))))))
+
+(defn encode-deterministic
+  "Wire bytes with map entries sorted by key, so equal messages encode to
+   equal bytes regardless of insertion order."
+  [^Message msg]
+  (.encodeDeterministic msg))
+
+(defn encode-delimited
+  "One length-delimited frame (varint length + message)."
+  [^Message msg]
+  (.encodeDelimited msg))
+
+(defn- map->message
+  "A mutable Message of `t` holding `m`: one wire round trip through the
+   fast path, so printing a map costs no second representation."
+  [^MessageType t m]
+  (.decode t (encode t m)))
+
+(defn json-of-map
+  "JSON mapping text for a map of this type."
+  [^MessageType t m]
+  (let [msg (map->message t m)]
+    (try (.toJson msg)
+         (finally (close! msg)))))
+
+(defn text-of-map
+  "Text format for a map of this type; unknown fields print unless
+   `print-unknown?` is false."
+  ([t m] (text-of-map t m true))
+  ([^MessageType t m print-unknown?]
+   (let [msg (map->message t m)]
+     (try (.toText msg (boolean print-unknown?)) (finally (close! msg))))))
+
 (defn new-message
   "A new mutable message of this type; close it when done. Fill once with fill-message!, then encode-message reuses it without a map walk."
   [t]

@@ -25,6 +25,7 @@ const core_sources = [_][]const u8{
     "stream.c",
     "text.c",
     "wire.c",
+    "wkt.c",
 };
 
 pub fn build(b: *std.Build) void {
@@ -131,7 +132,9 @@ pub fn build(b: *std.Build) void {
     testee.root_module.linkLibrary(lib);
     b.installArtifact(testee);
     const testee_step = b.step("testee", "Build the conformance testee");
-    testee_step.dependOn(&testee.step);
+    // Install, not just compile: the conformance target runs
+    // zig-out/bin/testee-zig.
+    testee_step.dependOn(&b.addInstallArtifact(testee, .{}).step);
 
     // Baseline comparison (opt-in: fetching the package needs network once,
     // then it is cached like any dependency). `zig build test` and the plain

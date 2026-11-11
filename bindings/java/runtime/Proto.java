@@ -90,6 +90,7 @@ final class Proto {
     static final class Field {
         String name;
         String extendee; // extensions only: ".pkg.Message"
+        String fullName; // extensions only: the global name [a.b] addresses
         int number;
         Label label = Label.OPTIONAL;
         Type type;
@@ -99,18 +100,59 @@ final class Proto {
         boolean packed; // resolved: explicit option or the syntax default
         boolean hasPackedOption;
         boolean hasPresence; // resolved: explicit presence (not proto3 plain)
+        int enumOpen; // editions FeatureSet.enum_type: 0 unset, 1 OPEN, 2 CLOSED
         Message messageType; // linked: message + group fields
+        Enum enumType; // linked: enum fields
+        boolean enumClosed; // linked: unknown numbers go to the unknown fields
         Oneof oneof; // linked
         boolean isExtension;
+
+        /** The global name of an extension: [scope.name] addresses it. */
+        String scope(String enclosing) {
+            return enclosing.isEmpty() ? name : enclosing + "." + name;
+        }
+    }
+
+    /** One enum type: its values (aliases repeat a number) and its openness. */
+    static final class Enum {
+        String name;
+        String fullName;
+        final List<EnumValue> values = new ArrayList<>();
+        int enumOpen; // editions FeatureSet.enum_type: 0 unset, 1 OPEN, 2 CLOSED
+        boolean closed; // linked: proto2 (and CLOSED editions) reject unknown numbers
+    }
+
+    static final class EnumValue {
+        String name;
+        int number;
     }
 
     static final class Message {
         String name;
         String fullName;
+        boolean mapEntry; // options.map_entry: the JSON/text maps entry shape
         final List<Field> fields = new ArrayList<>();
         final List<Message> nested = new ArrayList<>();
         final List<Field> extensions = new ArrayList<>();
         final List<Oneof> oneofs = new ArrayList<>();
+        final List<Enum> enums = new ArrayList<>();
+        final List<String> reservedNames = new ArrayList<>();
+    }
+
+    static final class Service {
+        String name;
+        String fullName;
+        final List<Method> methods = new ArrayList<>();
+    }
+
+    static final class Method {
+        String name;
+        String inputType; // e.g. ".pkg.Request"
+        String outputType;
+        boolean clientStreaming;
+        boolean serverStreaming;
+        Message input; // linked
+        Message output; // linked
     }
 
     static final class File {
@@ -118,9 +160,12 @@ final class Proto {
         String pkg = "";
         String syntax = "proto2"; // absent means proto2
         boolean edition; // field 14: editions files behave as proto3
+        int enumOpen; // options.features.enum_type: 0 unset, 1 OPEN, 2 CLOSED
         final List<String> deps = new ArrayList<>();
         final List<Message> messages = new ArrayList<>();
         final List<Field> extensions = new ArrayList<>();
+        final List<Enum> enums = new ArrayList<>();
+        final List<Service> services = new ArrayList<>();
     }
 
     /** Parses a FileDescriptorSet into files; call link() before encoding. */
@@ -149,49 +194,113 @@ final class Proto {
      */
     static void link(List<File> files) {
         Map<String, Message> byName = new HashMap<>();
+        Map<String, Enum> enums = new HashMap<>();
         for (File f : files) {
             for (Message m : f.messages) {
-                index(m, f.pkg, byName);
+                index(m, f.pkg, byName, enums);
+            }
+            for (Enum e : f.enums) {
+                indexEnum(e, f.pkg, enums);
             }
         }
         for (File f : files) {
             // Editions files carry syntax "editions" plus field 14: the core
             // treats them as proto3, so packed defaults and presence match.
             boolean proto3 = "proto3".equals(f.syntax) || f.edition;
+            for (Enum e : f.enums) {
+                linkEnum(e, proto3, f.enumOpen);
+            }
+            // Enums close/open before fields link: a field copies its enum's
+            // closed flag, so the enum must be linked first.
             for (Message m : f.messages) {
-                linkMessage(m, f.pkg, proto3, byName);
+                linkEnums(m, proto3, f.enumOpen);
+            }
+            for (Message m : f.messages) {
+                linkMessage(m, f.pkg, proto3, f.enumOpen, byName, enums);
             }
             for (Field e : f.extensions) {
-                linkField(e, f.pkg, proto3, byName, null);
+                linkField(e, f.pkg, proto3, byName, enums, null);
+                e.fullName = e.scope(f.pkg);
+            }
+            for (Service s : f.services) {
+                s.fullName = f.pkg.isEmpty() ? s.name : f.pkg + "." + s.name;
+                for (Method m : s.methods) {
+                    if (m.name == null || m.inputType == null
+                            || m.outputType == null) {
+                        throw new IllegalArgumentException("method without name/input/output");
+                    }
+                    m.input = resolve(byName, f.pkg, m.inputType);
+                    m.output = resolve(byName, f.pkg, m.outputType);
+                    if (m.input == null || m.output == null) {
+                        throw new IllegalArgumentException("method " + s.fullName
+                                + "." + m.name + ": no such type");
+                    }
+                }
             }
         }
     }
 
-    private static void index(Message m, String scope, Map<String, Message> byName) {
+    private static void index(Message m, String scope, Map<String, Message> byName,
+            Map<String, Enum> enums) {
         m.fullName = scope.isEmpty() ? m.name : scope + "." + m.name;
         if (byName.put(m.fullName, m) != null) {
             throw new IllegalArgumentException("duplicate message " + m.fullName);
         }
+        for (Enum e : m.enums) {
+            indexEnum(e, m.fullName, enums);
+        }
         for (Message n : m.nested) {
-            index(n, m.fullName, byName);
+            index(n, m.fullName, byName, enums);
+        }
+    }
+
+    private static void indexEnum(Enum e, String scope, Map<String, Enum> enums) {
+        e.fullName = scope.isEmpty() ? e.name : scope + "." + e.name;
+        if (enums.put(e.fullName, e) != null) {
+            throw new IllegalArgumentException("duplicate enum " + e.fullName);
+        }
+    }
+
+    /** An enum is closed for proto2 files (and editions files asking for it). */
+    private static void linkEnum(Enum e, boolean proto3, int fileEnumOpen) {
+        if (e.name == null) {
+            throw new IllegalArgumentException("enum without a name");
+        }
+        if (e.enumOpen != 0) {
+            e.closed = e.enumOpen == 2;
+        } else if (fileEnumOpen != 0) {
+            e.closed = fileEnumOpen == 2;
+        } else {
+            e.closed = !proto3;
         }
     }
 
     private static void linkMessage(Message m, String scope, boolean proto3,
-            Map<String, Message> byName) {
+            int fileEnumOpen, Map<String, Message> byName, Map<String, Enum> enums) {
         for (Field f : m.fields) {
-            linkField(f, scope, proto3, byName, m);
+            linkField(f, scope, proto3, byName, enums, m);
         }
         for (Message n : m.nested) {
-            linkMessage(n, m.fullName, proto3, byName);
+            linkMessage(n, m.fullName, proto3, fileEnumOpen, byName, enums);
         }
         for (Field e : m.extensions) {
-            linkField(e, scope, proto3, byName, null);
+            linkField(e, scope, proto3, byName, enums, null);
+            e.fullName = e.scope(m.fullName);
+        }
+    }
+
+    /** Links the enums of a message and its nested messages (before fields). */
+    private static void linkEnums(Message m, boolean proto3, int fileEnumOpen) {
+        for (Enum e : m.enums) {
+            linkEnum(e, proto3, fileEnumOpen);
+        }
+        for (Message n : m.nested) {
+            linkEnums(n, proto3, fileEnumOpen);
         }
     }
 
     private static void linkField(Field f, String scope, boolean proto3,
-            Map<String, Message> byName, Message parent) {
+            Map<String, Message> byName, Map<String, Enum> enums, Message parent) {
         if (f.oneofIndex >= 0 && parent != null) {
             if (f.oneofIndex >= parent.oneofs.size()) {
                 throw new IllegalArgumentException("field " + f.name
@@ -205,6 +314,17 @@ final class Proto {
                 throw new IllegalArgumentException("field " + f.name
                         + ": no such type " + f.typeName);
             }
+        }
+        if (f.type == Type.ENUM && f.typeName != null) {
+            f.enumType = resolveEnum(enums, scope, f.typeName);
+            if (f.enumType == null) {
+                throw new IllegalArgumentException("field " + f.name
+                        + ": no such enum " + f.typeName);
+            }
+            // Editions may close one field in an open file; that wins over
+            // the enum type, exactly like the core's per-field enum_open.
+            f.enumClosed = f.enumOpen != 0 ? f.enumOpen == 2
+                    : f.enumType.closed;
         }
         if (f.label == Label.REPEATED && isPackable(f.type) && !f.hasPackedOption) {
             f.packed = proto3; // the syntax default
@@ -258,7 +378,6 @@ final class Proto {
     }
 
     /* ---------------- wire parsing ---------------- */
-
     private static File parseFile(byte[] b, int off, int len) {
         Wire.Reader r = sub(b, off, len);
         File f = new File();
@@ -280,8 +399,14 @@ final class Proto {
                 int n = Wire.rLen(r);
                 if (num == 4) {
                     f.messages.add(parseMessage(r.b, r.pos, n, 1));
+                } else if (num == 5) {
+                    f.enums.add(parseEnum(r.b, r.pos, n));
+                } else if (num == 6) {
+                    f.services.add(parseService(r.b, r.pos, n));
                 } else if (num == 7) {
                     f.extensions.add(parseField(r.b, r.pos, n, true));
+                } else if (num == 8) {
+                    f.enumOpen = parseFeatures(r.b, r.pos, n, 50);
                 } else if (num == 1) {
                     f.name = str(r.b, r.pos, n);
                 } else if (num == 2) {
@@ -325,8 +450,14 @@ final class Proto {
                 m.nested.add(parseMessage(r.b, r.pos, n, depth + 1));
             } else if (num == 6) {
                 m.extensions.add(parseField(r.b, r.pos, n, true));
+            } else if (num == 4) {
+                m.enums.add(parseEnum(r.b, r.pos, n));
+            } else if (num == 7) {
+                m.mapEntry = parseMessageOptions(r.b, r.pos, n);
             } else if (num == 8) {
                 m.oneofs.add(parseOneof(r.b, r.pos, n));
+            } else if (num == 10) {
+                m.reservedNames.add(str(r.b, r.pos, n));
             }
             r.pos += n;
         }
@@ -350,6 +481,184 @@ final class Proto {
             }
         }
         return o;
+    }
+
+    private static Enum parseEnum(byte[] b, int off, int len) {
+        Wire.Reader r = sub(b, off, len);
+        Enum e = new Enum();
+        while (r.pos < r.end) {
+            int tag = (int) Wire.rVar(r);
+            int num = tag >>> 3;
+            if ((tag & 7) != Wire.WT_LEN) {
+                Wire.skip(r, tag & 7);
+                continue;
+            }
+            int n = Wire.rLen(r);
+            if (num == 1) {
+                e.name = str(r.b, r.pos, n);
+            } else if (num == 2) {
+                e.values.add(parseEnumValue(r.b, r.pos, n));
+            } else if (num == 3) {
+                e.enumOpen = parseFeatures(r.b, r.pos, n, 7);
+            }
+            r.pos += n;
+        }
+        return e;
+    }
+
+    private static EnumValue parseEnumValue(byte[] b, int off, int len) {
+        Wire.Reader r = sub(b, off, len);
+        EnumValue v = new EnumValue();
+        boolean hasNumber = false;
+        while (r.pos < r.end) {
+            int tag = (int) Wire.rVar(r);
+            int num = tag >>> 3;
+            switch (tag & 7) {
+                case Wire.WT_VARINT:
+                    if (num == 2) {
+                        v.number = (int) Wire.rVar(r);
+                        hasNumber = true;
+                    } else {
+                        Wire.skip(r, Wire.WT_VARINT);
+                    }
+                    break;
+                case Wire.WT_LEN:
+                    int n = Wire.rLen(r);
+                    if (num == 1) {
+                        v.name = str(r.b, r.pos, n);
+                    }
+                    r.pos += n;
+                    break;
+                default:
+                    Wire.skip(r, tag & 7);
+                    break;
+            }
+        }
+        if (v.name == null || !hasNumber) {
+            throw new IllegalArgumentException("enum value without name/number");
+        }
+        return v;
+    }
+
+    /** MessageOptions.message_set_wire_format is field 1; map_entry is 7. */
+    private static boolean parseMessageOptions(byte[] b, int off, int len) {
+        Wire.Reader r = sub(b, off, len);
+        boolean mapEntry = false;
+        while (r.pos < r.end) {
+            int tag = (int) Wire.rVar(r);
+            int num = tag >>> 3;
+            if ((tag & 7) != Wire.WT_VARINT) {
+                Wire.skip(r, tag & 7);
+                continue;
+            }
+            if (num == 7) {
+                mapEntry = Wire.rVar(r) != 0;
+            } else {
+                Wire.skip(r, Wire.WT_VARINT);
+            }
+        }
+        return mapEntry;
+    }
+
+    /**
+     * Reads one Options message and returns the FeatureSet.enum_type
+     * (1 OPEN, 2 CLOSED) when it carries one: 0 means unset. `optionNumber` is
+     * the field that holds the FeatureSet (50 file, 21 field, ...).
+     */
+    private static int parseFeatures(byte[] b, int off, int len, int optionNumber) {
+        Wire.Reader r = sub(b, off, len);
+        int open = 0;
+        while (r.pos < r.end) {
+            int tag = (int) Wire.rVar(r);
+            int num = tag >>> 3;
+            if ((tag & 7) != Wire.WT_LEN) {
+                Wire.skip(r, tag & 7);
+                continue;
+            }
+            int n = Wire.rLen(r);
+            byte[] fb = r.b;
+            int fs = r.pos;
+            int fe = r.pos + n;
+            if (num == optionNumber) {
+                open = parseFeatureSetEnumType(fb, fs, fe);
+            }
+            r.pos += n;
+        }
+        return open;
+    }
+
+    /** FeatureSet.enum_type = 2: EnumType, 1 OPEN or 2 CLOSED. */
+    private static int parseFeatureSetEnumType(byte[] b, int off, int end) {
+        Wire.Reader r = sub(b, off, end - off);
+        int open = 0;
+        while (r.pos < r.end) {
+            int tag = (int) Wire.rVar(r);
+            if ((tag >>> 3) == 2 && (tag & 7) == Wire.WT_VARINT) {
+                int v = (int) Wire.rVar(r);
+                if (v == 1 || v == 2) {
+                    open = v;
+                }
+            } else {
+                Wire.skip(r, tag & 7);
+            }
+        }
+        return open;
+    }
+
+    private static Service parseService(byte[] b, int off, int len) {
+        Wire.Reader r = sub(b, off, len);
+        Service s = new Service();
+        while (r.pos < r.end) {
+            int tag = (int) Wire.rVar(r);
+            int num = tag >>> 3;
+            if ((tag & 7) != Wire.WT_LEN) {
+                Wire.skip(r, tag & 7);
+                continue;
+            }
+            int n = Wire.rLen(r);
+            if (num == 1) {
+                s.name = str(r.b, r.pos, n);
+            } else if (num == 2) {
+                s.methods.add(parseMethod(r.b, r.pos, n));
+            }
+            r.pos += n;
+        }
+        if (s.name == null) {
+            throw new IllegalArgumentException("service without a name");
+        }
+        return s;
+    }
+
+    private static Method parseMethod(byte[] b, int off, int len) {
+        Wire.Reader r = sub(b, off, len);
+        Method m = new Method();
+        while (r.pos < r.end) {
+            int tag = (int) Wire.rVar(r);
+            int num = tag >>> 3;
+            if ((tag & 7) == Wire.WT_VARINT) {
+                boolean v = Wire.rVar(r) != 0;
+                if (num == 5) {
+                    m.clientStreaming = v;
+                } else if (num == 6) {
+                    m.serverStreaming = v;
+                }
+                continue;
+            }
+            if ((tag & 7) != Wire.WT_LEN) {
+                Wire.skip(r, tag & 7);
+                continue;
+            }
+            int n = Wire.rLen(r);
+            if (num == 1) {
+                m.name = str(r.b, r.pos, n);
+            } else if (num == 2) {
+                m.inputType = str(r.b, r.pos, n);
+            } else if (num == 3) {
+                m.outputType = str(r.b, r.pos, n);
+            }
+            r.pos += n;
+        }
+        return m;
     }
 
     private static Field parseField(byte[] b, int off, int len, boolean extension) {
@@ -398,14 +707,49 @@ final class Proto {
         return f;
     }
 
-    /** FieldOptions: only packed (2) matters to a binary codec. */
+    /** The enum counterpart of {@link #resolve}: same C++ scoping rules. */
+    private static Enum resolveEnum(Map<String, Enum> byName, String scope,
+            String name) {
+        if (name.startsWith(".")) {
+            return byName.get(name.substring(1));
+        }
+        String s = scope;
+        while (true) {
+            String cand = s.isEmpty() ? name : s + "." + name;
+            Enum e = byName.get(cand);
+            if (e != null) {
+                return e;
+            }
+            int dot = name.indexOf('.');
+            if (dot >= 0) {
+                String head = name.substring(0, dot);
+                String rest = name.substring(dot + 1);
+                String prefix = s.isEmpty() ? head : s + "." + head;
+                if (byName.containsKey(prefix)) {
+                    return resolveEnum(byName, prefix, rest);
+                }
+            }
+            if (s.isEmpty()) {
+                return null;
+            }
+            int cut = s.lastIndexOf('.');
+            s = cut < 0 ? "" : s.substring(0, cut);
+        }
+    }
+
+    /** FieldOptions: packed (2) and the editions FeatureSet (21). */
     private static void parseFieldOptions(byte[] b, int off, int len, Field f) {
         Wire.Reader r = sub(b, off, len);
         while (r.pos < r.end) {
             int tag = (int) Wire.rVar(r);
-            if ((tag >>> 3) == 2 && (tag & 7) == Wire.WT_VARINT) {
+            int num = tag >>> 3;
+            if (num == 2 && (tag & 7) == Wire.WT_VARINT) {
                 f.packed = Wire.rVar(r) != 0;
                 f.hasPackedOption = true;
+            } else if (num == 21 && (tag & 7) == Wire.WT_LEN) {
+                int n = Wire.rLen(r);
+                f.enumOpen = parseFeatureSetEnumType(r.b, r.pos, r.pos + n);
+                r.pos += n;
             } else {
                 Wire.skip(r, tag & 7);
             }

@@ -17,12 +17,12 @@ public final class Wire {
             WT_FIXED32 = 5;
 
     /**
-     * Nesting cap the decoders enforce, like the core's PBW_MAX_DEPTH
-     * scaled to this binding's message depth (groups and messages share
-     * one budget). The dynamic codec and the generated models use the same
-     * bound, so the two decoders cannot diverge.
+     * Nesting cap the decoders enforce: the same bound as the C core's
+     * PBW_MAX_DEPTH (256), so a payload the core accepts never fails here.
+     * Groups and messages share one budget; the dynamic codec and the
+     * generated models use the same bound, so the two cannot diverge.
      */
-    public static final int MAX_DEPTH = 100;
+    public static final int MAX_DEPTH = 256;
 
     /** Reusable growable output buffer (the ThreadLocal C-core-pbw_ctx twin). */
     public static final class Buf {
@@ -34,6 +34,8 @@ public final class Wire {
     public static final class Reader {
         public byte[] b;
         public int pos, end;
+        /** Nesting cap for this decode; set from Limits at entry. */
+        int cap = MAX_DEPTH;
     }
 
     public static byte[] utf8(String s) {
@@ -398,8 +400,8 @@ public final class Wire {
      * unknown groups and for recorded (lazy) group slices alike.
      */
     public static void skipGroup(Reader r, int number, int depth) {
-        if (depth > MAX_DEPTH) {
-            throw new IllegalArgumentException("nesting exceeds " + MAX_DEPTH);
+        if (depth > r.cap) {
+            throw new IllegalArgumentException("nesting exceeds " + r.cap);
         }
         for (;;) {
             int tag = rTag(r);

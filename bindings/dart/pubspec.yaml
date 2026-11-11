@@ -1,10 +1,11 @@
 name: pbwire
 description: Dynamic protobuf over the pbwire C ABI, schema at runtime, no generated code.
-version: 0.1.15
+version: 0.1.16
 repository: https://github.com/jinganix/pbwire
 
 environment:
-  sdk: ^3.0.0
+  # NativeCallable (sync FFI callbacks, used by visit) is 3.1+.
+  sdk: ^3.1.0
 
 dependencies:
   ffi: ^2.1.0

@@ -99,3 +99,20 @@ follow the embedded set. The committed output is
 `tests/gen/` and `examples/gen/`; `examples/roundtrip.rs` assigns typed
 fields only, and `tests/compat.rs` proves byte and field parity with the
 pinned prost oracle (T1–T6). See `../../codegen/README.md`.
+
+## Core coverage
+
+The safe wrapper exposes the same surface as the C ABI, still over the statically
+linked core:
+
+| member | what it does |
+|---|---|
+| `Type::parse_json(text, ignore_unknown)` / `Message::to_json()` | JSON mapping |
+| `Type::parse_text(text)` / `Message::to_text(print_unknown)` | text format |
+| `Message::encode_deterministic()` | map entries sorted by key |
+| `Message::encode_delimited()` / `Type::decode_delimited(wire)` | framing, returns `consumed` |
+| `Message::encoded_size()` | exact size without writing |
+| `Type::parse_json_limits(text, ignore_unknown, max_bytes, max_depth)`, `parse_text_limits(...)` | bounds on the JSON/text parsers |
+| `Type::visit(wire, &mut cb)` | single-level scan; a panicking callback is caught, never unwinds into C |
+| `Type::any_pack(url, payload)`, `Message::any_type_url()`/`any_payload()`, `Type::timestamp_from_millis(ms)`/`duration_from_millis(ms)`, `Message::timestamp_millis()`/`duration_millis()`, `Message::fieldmask_path_count()`/`fieldmask_path_at(i)` | WKT helpers |
+| `Schema::service(..)`/`service_at`/`service_count`, `Schema::resolve_method(service, method)` | routing metadata |

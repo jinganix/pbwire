@@ -66,6 +66,34 @@ A singular message field that appears more than once on the wire merges (the
 payloads concatenate), and a oneof member set later clears the earlier ones, in
 both representations.
 
+## Beyond the wire
+
+The rest of the C core is exposed on the same types. Each takes a dict or a
+`Message` (or wire bytes where noted) and returns plain Python data, so no new
+dependency is needed:
+
+| member | meaning |
+|---|---|
+| `msg.to_json()` / `Type.to_json(obj)` | protobuf JSON mapping |
+| `Type.from_json(text, ignore_unknown=False, limits=None)` | parse JSON into a `Message` |
+| `msg.to_text([print_unknown])` / `Type.to_text(obj, ...)` | protobuf text format |
+| `Type.from_text(text, limits=None)` | parse text into a `Message` |
+| `Type.encode_deterministic(obj)` | bytes with map entries sorted by key |
+| `Type.encode_delimited(obj)` | one length-delimited frame |
+| `Type.decode_delimited(bytes, limits=None)` | `(Message, consumed)` |
+| `Type.decode(bytes, limits=None)` | like `decode`, with `{"max_bytes", "max_depth"}` bounds |
+| `Type.encoded_size(obj)` | bytes `encode()` would write |
+| `Type.encode_to(obj, buffer)` | encode into a writable buffer, returns bytes written |
+| `Type.encode_sink(obj, callable, chunk_size=8192)` | feed chunks to a callable, returns bytes written |
+| `Type.visit(bytes, callback, limits=None)` | one callback per wire field: `(name, number, wire_type, value)`; unknown fields report `name=None` |
+| `Type.any_pack(type_url, payload)` | a `google.protobuf.Any` holding raw bytes |
+| `msg.any_type_url()` / `msg.any_payload()` | field 1 / field 2 of an Any (`None` when absent) |
+| `Type.from_millis(ms)` / `msg.to_millis()` | `Timestamp`/`Duration` as milliseconds |
+| `msg.fieldmask_paths()` | paths of a `FieldMask` |
+| `schema.services()` / `schema.service_methods(name)` | service discovery |
+| `schema.resolve(service, method)` | `{"input", "output", "input_type", "output_type", "client_streaming", "server_streaming"}` |
+| `Schema.load(bytes, limits=None)` / `Schema.from_file(path, limits=None)` | load with `{"max_bytes", "max_depth"}` bounds |
+
 ## Value mapping
 
 | protobuf | Python |
@@ -94,7 +122,7 @@ shortest encoding of a proto3 message. Unknown fields in the wire are kept by a
 |---|---|---|
 | runtime | [`runtime/pbwire.c`](runtime/pbwire.c) | the CPython extension: schema, message types, dict <-> wire, parsed messages |
 | examples | [`examples/addressbook.py`](examples/addressbook.py) | schema at runtime, dict round trip + parsed message |
-| tests | [`tests/test_pbwire.py`](tests/test_pbwire.py) | byte parity with the `protoc` reference, oneof/merge/required failure paths |
+| tests | [`tests/test_pbwire.py`](tests/test_pbwire.py) | byte parity with the `protoc` reference, oneof/merge/required failure paths, and the core-API surface (JSON/text, framing, visit, limits, WKT, services) |
 | benchmarks | [`benchmarks/bench.py`](benchmarks/bench.py) | vs `google.protobuf` on four tiers |
 | conformance | [`conformance/`](conformance/) | official runner testee, `make conformance-python` |
 

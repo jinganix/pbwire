@@ -49,9 +49,14 @@ in, so a build needs no `protoc` either.
 | class | members |
 |---|---|
 | generated models | `newBuilder()`, typed setters/getters, `has…` for explicit presence, `toByteArray()`, `parseFrom(byte[])`, `isInitialized()` — see `tests/gen/` |
-| `Schema` | `fromFile(path)`, `fromBytes(byte[])`, `fromClasses(Class...)`, `message(fullName)`, `close()` |
-| `MessageType` | `name()`, `newMessage()`, `decode(byte[])` |
-| `Message` | `set(name\|number, …)`, `newMessage(name\|number)`, `clear(…)`, `has(…)`, `get(…)`, typed getters, `getList(…)`, `encode()`, `close()` |
+| `Schema` | `fromFile(path[, limits])`, `fromBytes(bytes[, limits])`, `fromClasses(Class...)`, `message(fullName)`, `service(fullName)`, `close()` |
+| `MessageType` | `name()`, `newMessage()`, `decode(bytes[, limits])`, `decodeDelimited(bytes[, off, limits])`, `parseJson(text[, ignoreUnknown, limits])`, `parseText(text[, limits])` |
+| `Message` | `set(name\|number, …)`, `newMessage(name\|number)`, `clear(…)`, `has(…)`, `get(…)`, typed getters, `getList(…)`, `encode()`, `encodeDelimited()`, `encodeDeterministic()`, `encodedSize()`, `toJson()`, `toText()`, `close()` |
+| `ServiceType` | `name()`, `methodCount()`, `method(name)` → `inputType()`, `outputType()`, `clientStreaming()`, `serverStreaming()` |
+| `Wkt` | `anyPack/Unpack`, `anyTypeUrl`, `anyPayload`, `timestamp/duration…Millis`, `fieldMaskPaths`, `newFieldMask` |
+| `GenericCodec.Stream` | incremental delimited reader: `feed(…)`, `next(type)`, `reset()`, `buffered()` |
+| `Limits` | `maxBytes`/`maxDepth` bounds for decode, delimited, JSON, text and descriptor loads (0 = default) |
+| `PbCodec` | typed twins: `encodeDelimited`, `parseDelimitedFrom`, `encodeDeterministic`, `encodedSize`, `parseFrom(…[, limits])`, `toJson`/`fromJson`, `toText`/`fromText` |
 | `PbwireException` | unchecked; `decode`/`encode` failures and unknown fields/types name the message and field |
 
 `set` overloads: `long` (every integer, fixed and enum field, raw 64-bit bits),
@@ -191,11 +196,15 @@ protoc --descriptor_set_out=tests/data/sample.desc --include_imports \
 - **No second wire format in codegen.** The plugin emits Builder classes
   that call `PbCodec`; every byte still comes from the `Wire` primitives the
   dynamic path uses, so the two APIs cannot diverge.
-- **Binary-only conformance testee.** `make conformance-java` runs the official
-  suite through the binding (same 2 expected tag-truncation failures as the C
-  core, on the shared `conformance/failure_list_pbwire.txt`); JSON/text input
-  answers `skipped` because the binding has no printers, like the Python and
-  Ruby testees.
+- **Binary, JSON and text conformance testee.** `make conformance-java` runs
+  the official suite through the binding: 2763 binary+JSON successes and 443
+  text successes, the same 2 expected tag-truncation failures as the C core
+  (shared `conformance/failure_list_pbwire.txt`). Only JSPB answers `skipped`.
+- **Invalid UTF-8 in a string field is rejected, not replaced.** The codec
+  keeps strings as `java.lang.String`, so a decoded string is strict-decoded
+  (a held value and its JSON/text print throw) instead of becoming U+FFFD.
+  The C core keeps the raw bytes and escapes them when printing text; the
+  JSON mapping rejects them in both implementations.
 - **No Maven/Gradle**, no JNI, no C glue file, no downloads: `build.sh` is
   plain `javac`. Classes are in the default package for the same
   reason (plain `javac -d out`, no module path); move them into a package if

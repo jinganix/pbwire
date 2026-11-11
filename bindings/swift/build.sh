@@ -24,12 +24,14 @@ if command -v protoc >/dev/null 2>&1; then
         --descriptor_set_out=tests/data/probe.desc tests/data/probe.proto
     protoc -I"$ROOT/bindings/c/tests/data" \
         --descriptor_set_out=tests/data/matrix3.desc matrix3.proto
+    protoc -I"$ROOT/bindings/c/tests/data" \
+        --descriptor_set_out=tests/data/maptest.desc maptest.proto
     cp "$ROOT/bindings/c/tests/data/matrix3.bin" tests/data/matrix3.bin
 fi
 
 # `swift test` on this toolchain only discovers the XCTest suite with an
 # explicit filter (otherwise the new runner reports 0 tests), so filter by
-# the suite name; it runs all 8.
+# the suite name; it runs all 13.
 case "${1:-all}" in
     test) swift test --filter PbwireTests ;;
     example) swift run Roundtrip ;;

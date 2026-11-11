@@ -104,3 +104,85 @@ module Pbwire =
         match msg.GetMessage field with
         | null -> None
         | m -> Some m
+
+    /// Canonical encoding: map entries sorted by key, like the reference.
+    let encodeDeterministic (msg: Message) : byte[] = msg.EncodeDeterministic()
+
+    /// One length-delimited frame (varint length + message).
+    let encodeDelimited (msg: Message) : byte[] = msg.EncodeDelimited()
+
+    /// Decodes one length-delimited frame; returns the message and how many
+    /// bytes the frame occupied.
+    let decodeDelimited (ty: MessageType) (wire: byte[]) : Message * int =
+        let struct (msg, consumed) = ty.DecodeDelimited(ReadOnlySpan<byte> wire)
+        msg, consumed
+
+    /// Decodes with explicit bounds (0 = the defaults).
+    let decodeLimits (ty: MessageType) (wire: byte[]) (maxBytes: uint64) (maxDepth: uint32) : Message =
+        ty.DecodeLimits(ReadOnlySpan<byte> wire, maxBytes, maxDepth)
+
+    /// Protobuf JSON mapping. Unknown fields are not printed.
+    let printJson (msg: Message) : string = msg.PrintJson()
+
+    /// Parses JSON mapping text; unknown fields fail unless `ignoreUnknown`.
+    let parseJson (ty: MessageType) (text: string) (ignoreUnknown: bool) : Message =
+        ty.ParseJson(text, ignoreUnknown)
+
+    /// Protobuf text format.
+    let printText (msg: Message) (printUnknown: bool) : string = msg.PrintText(printUnknown)
+
+    /// Parses text format.
+    let parseText (ty: MessageType) (text: string) : Message = ty.ParseText text
+
+    /// Exact bytes `encode` would write, without writing them.
+    let encodedSize (msg: Message) : uint64 = msg.EncodedSize()
+
+    /// True when every proto2 `required` field is present.
+    let isInitialized (msg: Message) : bool = msg.IsInitialized()
+
+    /// Field 1 of a `google.protobuf.Any` tree, or None when absent.
+    let tryAnyTypeUrl (msg: Message) : string option =
+        match msg.AnyTypeUrl() with
+        | null -> None
+        | s -> Some s
+
+    /// Field 2 of a `google.protobuf.Any` tree, or None when absent.
+    let tryAnyPayload (msg: Message) : byte[] option =
+        match msg.AnyPayload() with
+        | null -> None
+        | b -> Some b
+
+    /// A `google.protobuf.Timestamp` tree as milliseconds.
+    let timestampMillis (msg: Message) : int64 = msg.TimestampMillis()
+
+    /// A `google.protobuf.Duration` tree as milliseconds.
+    let durationMillis (msg: Message) : int64 = msg.DurationMillis()
+
+    /// Every path of a `google.protobuf.FieldMask` tree.
+    let fieldMaskPaths (msg: Message) : string[] = msg.FieldMaskPaths()
+
+    /// Packs `payload` into an `Any` tree; `ty` is the Any descriptor.
+    let anyPack (ty: MessageType) (typeUrl: string) (payload: byte[]) : Message =
+        ty.AnyPack(typeUrl, ReadOnlySpan<byte> payload)
+
+    /// A new Timestamp tree holding `ms`; `ty` is the Timestamp descriptor.
+    let timestampFromMillis (ty: MessageType) (ms: int64) : Message = ty.TimestampFromMillis ms
+
+    /// A new Duration tree holding `ms`; `ty` is the Duration descriptor.
+    let durationFromMillis (ty: MessageType) (ms: int64) : Message = ty.DurationFromMillis ms
+
+    /// Single-level scan of the wire: one callback per field, no tree built.
+    /// Return false from `cb` to abort the scan.
+    let visit (ty: MessageType) (wire: byte[]) (cb: VisitField -> bool) : unit =
+        ty.Visit(ReadOnlySpan<byte> wire, Func<VisitField, bool> cb)
+
+    /// How many services the loaded files declare.
+    let serviceCount (schema: Schema) : int = schema.ServiceCount()
+
+    /// One service by fully qualified name, e.g. `pkg.Service`.
+    let service (schema: Schema) (name: string) : Service = schema.Service name
+
+    /// Resolves a method to its input/output message types for routing.
+    let resolveMethod (schema: Schema) (svc: string) (meth: string) : MessageType * MessageType =
+        let struct (input, output) = schema.ResolveMethod(svc, meth)
+        input, output

@@ -14,6 +14,20 @@ package dynamic
 #cgo LDFLAGS: ${SRCDIR}/../../../build/libpbwire.a
 #include <stdlib.h>
 #include "pbwire.h"
+
+// The visit callback crosses from C back into Go: the exported Go function
+// below is the trampoline, and this wrapper casts it to pbw_visit_fn.
+extern int pbwgoVisitTramp(void *ud, void *field, uint32_t number,
+                           uint32_t wire_type, void *value);
+static pbw_status pbwgo_visit(const pbw_descriptor *desc, const void *buf,
+                             size_t len, const pbw_limits *limits,
+                             uintptr_t ud, size_t *fail_off)
+{
+    return pbw_visit_limits(desc, buf, len, limits,
+                            (pbw_visit_fn)pbwgoVisitTramp, (void *)ud,
+                            fail_off);
+}
+
 */
 import "C"
 
@@ -22,6 +36,7 @@ import (
 	"fmt"
 	"math"
 	"runtime"
+	"runtime/cgo"
 	"sync"
 	"sync/atomic"
 	"unsafe"
@@ -625,6 +640,344 @@ func (m *Message) Encode() ([]byte, error) {
 	}
 	defer C.pbw_free(unsafe.Pointer(out))
 	return copyBytes(unsafe.Pointer(out), l)
+}
+
+// EncodeDeterministic serializes with map entries sorted by key, so equal
+// messages encode to equal bytes regardless of insertion order.
+func (m *Message) EncodeDeterministic() ([]byte, error) {
+	if err := m.check(); err != nil {
+		return nil, err
+	}
+	var out *C.uchar
+	var l C.size_t
+	if st := C.pbw_encode_deterministic(m.c, &out, &l); st != C.PBW_OK {
+		return nil, statusErr("dynamic: encode deterministic", st)
+	}
+	defer C.pbw_free(unsafe.Pointer(out))
+	return copyBytes(unsafe.Pointer(out), l)
+}
+
+// EncodeDelimited serializes one length-delimited frame (varint length +
+// message), the standard framing for a stream of messages.
+func (m *Message) EncodeDelimited() ([]byte, error) {
+	if err := m.check(); err != nil {
+		return nil, err
+	}
+	var out *C.uchar
+	var l C.size_t
+	if st := C.pbw_encode_delimited(m.c, &out, &l); st != C.PBW_OK {
+		return nil, statusErr("dynamic: encode delimited", st)
+	}
+	defer C.pbw_free(unsafe.Pointer(out))
+	return copyBytes(unsafe.Pointer(out), l)
+}
+
+// DecodeDelimited decodes one length-delimited frame from the front of wire
+// and reports how many bytes the frame occupied, so a caller holding
+// concatenated frames advances by it and decodes again. Trailing bytes are
+// left for the caller; a truncated frame fails.
+func (t *MessageType) DecodeDelimited(wire []byte) (*Message, int, error) {
+	cbuf := unsafe.Pointer(unsafe.SliceData(wire))
+	var out *C.pbw_message
+	var consumed C.size_t
+	if st := C.pbw_decode_delimited(t.c, cbuf, C.size_t(len(wire)), &out, &consumed); st != C.PBW_OK {
+		runtime.KeepAlive(wire)
+		return nil, 0, statusErr("dynamic: decode delimited", st)
+	}
+	runtime.KeepAlive(wire)
+	m := &Message{typ: t, c: out, own: true}
+	t.s.retain()
+	return m, int(consumed), nil
+}
+
+// ToJSON prints the message in protobuf JSON mapping. Unknown fields are
+// not printed, matching the reference printer.
+func (m *Message) ToJSON() (string, error) {
+	if err := m.check(); err != nil {
+		return "", err
+	}
+	var out *C.char
+	var l C.size_t
+	if st := C.pbw_json_print(m.c, &out, &l); st != C.PBW_OK {
+		return "", statusErr("dynamic: json print", st)
+	}
+	defer C.pbw_free(unsafe.Pointer(out))
+	b, err := copyBytes(unsafe.Pointer(out), l)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
+}
+
+// ParseJSON parses JSON mapping text into a new tree. Unknown fields fail
+// unless ignoreUnknown is set.
+func (t *MessageType) ParseJSON(text string, ignoreUnknown bool) (*Message, error) {
+	return t.ParseJSONLimits(text, ignoreUnknown, 0, 0)
+}
+
+// ParseJSONLimits is ParseJSON with explicit bounds: text longer than
+// maxBytes fails, and nesting past maxDepth fails. Zero means the defaults.
+func (t *MessageType) ParseJSONLimits(text string, ignoreUnknown bool, maxBytes uint64, maxDepth uint32) (*Message, error) {
+	cstr := C.CString(text)
+	defer C.free(unsafe.Pointer(cstr))
+	var opts C.pbw_json_parse_options
+	opts.ignore_unknown_fields = 0
+	if ignoreUnknown {
+		opts.ignore_unknown_fields = 1
+	}
+	var limits C.pbw_limits
+	limits.max_bytes = C.size_t(maxBytes)
+	limits.max_depth = C.uint32_t(maxDepth)
+	var out *C.pbw_message
+	if st := C.pbw_json_parse_limits(t.c, cstr, C.size_t(len(text)), &limits, &opts, &out); st != C.PBW_OK {
+		return nil, statusErr("dynamic: json parse", st)
+	}
+	m := &Message{typ: t, c: out, own: true}
+	t.s.retain()
+	return m, nil
+}
+
+// ToText prints the message in protobuf text format. Unknown fields print
+// as numeric lines when printUnknown is set, like the reference printer.
+func (m *Message) ToText(printUnknown bool) (string, error) {
+	if err := m.check(); err != nil {
+		return "", err
+	}
+	var out *C.char
+	var l C.size_t
+	flag := C.int(0)
+	if printUnknown {
+		flag = 1
+	}
+	if st := C.pbw_text_print_opts(m.c, flag, &out, &l); st != C.PBW_OK {
+		return "", statusErr("dynamic: text print", st)
+	}
+	defer C.pbw_free(unsafe.Pointer(out))
+	b, err := copyBytes(unsafe.Pointer(out), l)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
+}
+
+// ParseText parses text format into a new tree.
+func (t *MessageType) ParseText(text string) (*Message, error) {
+	return t.ParseTextLimits(text, 0, 0)
+}
+
+// ParseTextLimits is ParseText with explicit bounds. Zero means the defaults.
+func (t *MessageType) ParseTextLimits(text string, maxBytes uint64, maxDepth uint32) (*Message, error) {
+	cstr := C.CString(text)
+	defer C.free(unsafe.Pointer(cstr))
+	var limits C.pbw_limits
+	limits.max_bytes = C.size_t(maxBytes)
+	limits.max_depth = C.uint32_t(maxDepth)
+	var out *C.pbw_message
+	if st := C.pbw_text_parse_limits(t.c, cstr, C.size_t(len(text)), &limits, &out); st != C.PBW_OK {
+		return nil, statusErr("dynamic: text parse", st)
+	}
+	m := &Message{typ: t, c: out, own: true}
+	t.s.retain()
+	return m, nil
+}
+
+// DecodeLimits decodes with explicit bounds: inputs larger than maxBytes
+// fail, and nesting past maxDepth fails. Zero means the defaults (no byte
+// cap, PBW_MAX_DEPTH nesting).
+func (t *MessageType) DecodeLimits(wire []byte, maxBytes uint64, maxDepth uint32) (*Message, error) {
+	cbuf := unsafe.Pointer(unsafe.SliceData(wire))
+	var out *C.pbw_message
+	var limits C.pbw_limits
+	limits.max_bytes = C.size_t(maxBytes)
+	limits.max_depth = C.uint32_t(maxDepth)
+	if st := C.pbw_decode_limits(t.c, cbuf, C.size_t(len(wire)), &limits, &out); st != C.PBW_OK {
+		runtime.KeepAlive(wire)
+		return nil, statusErr("dynamic: decode limits", st)
+	}
+	runtime.KeepAlive(wire)
+	m := &Message{typ: t, c: out, own: true}
+	t.s.retain()
+	return m, nil
+}
+
+// IsInitialized reports whether every proto2 required field is present
+// (recursively). Always true for proto3 messages without proto2 submessages.
+func (m *Message) IsInitialized() (bool, error) {
+	if err := m.check(); err != nil {
+		return false, err
+	}
+	return C.pbw_message_is_initialized(m.c) != 0, nil
+}
+
+// EncodedSize reports the exact number of bytes Encode writes, without
+// writing them: one walk over the present values.
+func (m *Message) EncodedSize() (uint64, error) {
+	if err := m.check(); err != nil {
+		return 0, err
+	}
+	var size C.size_t
+	if st := C.pbw_message_encoded_size(m.c, &size); st != C.PBW_OK {
+		return 0, statusErr("dynamic: encoded size", st)
+	}
+	return uint64(size), nil
+}
+
+// AnyTypeURL returns field 1 of a google.protobuf.Any tree, or false when
+// absent. Owned by the tree: valid until the message closes.
+func (m *Message) AnyTypeURL() (string, bool, error) {
+	if err := m.check(); err != nil {
+		return "", false, err
+	}
+	p := C.pbw_any_type_url(m.c)
+	if p == nil {
+		return "", false, nil
+	}
+	return C.GoString(p), true, nil
+}
+
+// AnyPayload returns field 2 of a google.protobuf.Any tree (copied out).
+func (m *Message) AnyPayload() ([]byte, error) {
+	if err := m.check(); err != nil {
+		return nil, err
+	}
+	var l C.size_t
+	p := C.pbw_any_payload(m.c, &l)
+	if p == nil {
+		return nil, nil
+	}
+	return copyBytes(unsafe.Pointer(p), l)
+}
+
+// TimestampMillis reads a google.protobuf.Timestamp tree as milliseconds.
+func (m *Message) TimestampMillis() (int64, error) {
+	if err := m.check(); err != nil {
+		return 0, err
+	}
+	var ms C.int64_t
+	if st := C.pbw_timestamp_to_millis(m.c, &ms); st != C.PBW_OK {
+		return 0, statusErr("dynamic: timestamp millis", st)
+	}
+	return int64(ms), nil
+}
+
+// DurationMillis reads a google.protobuf.Duration tree as milliseconds.
+func (m *Message) DurationMillis() (int64, error) {
+	if err := m.check(); err != nil {
+		return 0, err
+	}
+	var ms C.int64_t
+	if st := C.pbw_duration_to_millis(m.c, &ms); st != C.PBW_OK {
+		return 0, statusErr("dynamic: duration millis", st)
+	}
+	return int64(ms), nil
+}
+
+// FieldMaskPathCount returns how many paths a google.protobuf.FieldMask
+// tree holds, without materializing the list.
+func (m *Message) FieldMaskPathCount() (int, error) {
+	if err := m.check(); err != nil {
+		return 0, err
+	}
+	return int(C.pbw_fieldmask_path_count(m.c)), nil
+}
+
+// FieldMaskPathAt returns one FieldMask path (empty past the end).
+func (m *Message) FieldMaskPathAt(i int) (string, error) {
+	if err := m.check(); err != nil {
+		return "", err
+	}
+	p := C.pbw_fieldmask_path_at(m.c, C.size_t(i))
+	if p == nil {
+		return "", nil
+	}
+	return C.GoString(p), nil
+}
+
+// ResolveMethod resolves service/method to its input/output message types
+// for routing: decode with the first, encode with the second. The core does
+// no RPC; a transport (gRPC, Twirp, plain HTTP) uses these.
+func (s *Schema) ResolveMethod(service, method string) (*MessageType, *MessageType, error) {
+	csvc := C.CString(service)
+	defer C.free(unsafe.Pointer(csvc))
+	cmeth := C.CString(method)
+	defer C.free(unsafe.Pointer(cmeth))
+	var inDesc, outDesc *C.pbw_descriptor
+	if st := C.pbw_service_resolve(s.c, csvc, cmeth, &inDesc, &outDesc); st != C.PBW_OK {
+		return nil, nil, statusErr("dynamic: resolve method", st)
+	}
+	s.retain()
+	s.retain()
+	return &MessageType{s: s, c: inDesc, fields: make(map[string]*C.pbw_field), own: true},
+		&MessageType{s: s, c: outDesc, fields: make(map[string]*C.pbw_field), own: true}, nil
+}
+
+// VisitField is one scanned field: raw wire content, no allocation, no
+// value tree. Name is empty when the schema does not declare the number.
+// Raw carries the wire bits for varint (0) and the fixed widths (1, 5);
+// Data carries the LEN payload (nested message, packed run, string) or the
+// whole group field, and is nil for the scalar shapes. Data points into the
+// caller's slice and is only valid for the duration of the callback.
+type VisitField struct {
+	Name     string
+	Number   uint32
+	WireType uint32
+	Raw      uint64
+	Data     []byte
+}
+
+// visitCall is the handle value the C trampoline reads back: the callback
+// plus whether it asked to stop, so a stop is not mistaken for a failure.
+type visitCall struct {
+	cb      func(VisitField) bool
+	stopped bool
+}
+
+// pbwgoVisitTramp is the C-callable trampoline; cgo does not accept C types
+// in an exported signature, so it takes the ABI types directly.
+//
+//export pbwgoVisitTramp
+func pbwgoVisitTramp(ud unsafe.Pointer, field unsafe.Pointer, number uint32, wireType uint32, value unsafe.Pointer) int32 {
+	call := cgo.Handle(uintptr(ud)).Value().(*visitCall)
+	ev := VisitField{Number: number, WireType: wireType}
+	if field != nil {
+		ev.Name = C.GoString(C.pbw_field_name((*C.pbw_field)(field)))
+	}
+	if value != nil {
+		v := (*C.pbw_visit_value)(value)
+		ev.Raw = uint64(v.u64)
+		if v.data != nil {
+			ev.Data = unsafe.Slice((*byte)(unsafe.Pointer(v.data)), int(v.len))
+		}
+	}
+	if call.cb(ev) {
+		return 0
+	}
+	call.stopped = true
+	return 1
+}
+
+// Visit scans wire bytes one level deep without building a message tree: one
+// validating tag pass, one callback per field, the core allocating nothing.
+// Nested messages and packed runs arrive as Data payloads for the caller to
+// recurse into. Returning false from cb stops the scan without an error.
+// Zero bounds are the defaults.
+func (t *MessageType) Visit(wire []byte, maxBytes uint64, maxDepth uint32, cb func(VisitField) bool) error {
+	if cb == nil {
+		return errors.New("dynamic: visit needs a callback")
+	}
+	call := &visitCall{cb: cb}
+	h := cgo.NewHandle(call)
+	defer h.Delete()
+	var limits C.pbw_limits
+	limits.max_bytes = C.size_t(maxBytes)
+	limits.max_depth = C.uint32_t(maxDepth)
+	var failOff C.size_t
+	st := C.pbwgo_visit(t.c, unsafe.Pointer(unsafe.SliceData(wire)), C.size_t(len(wire)), &limits, C.uintptr_t(h), &failOff)
+	runtime.KeepAlive(wire)
+	if st != C.PBW_OK && !call.stopped {
+		return statusErr("dynamic: visit", st)
+	}
+	return nil
 }
 
 // Decode parses wire bytes into a new root tree; zero-copy in, one downcall.

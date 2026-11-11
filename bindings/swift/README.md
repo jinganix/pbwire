@@ -38,7 +38,7 @@ From `bindings/swift` (macOS, Swift 6.x; `build/libpbwire.a` comes from
 or plain SwiftPM (no dependencies to fetch, works offline):
 
 ```sh
-swift test            # self-check, 8 tests
+swift test            # self-check, 13 tests
 swift run Roundtrip   # example
 swift run -c release Bench   # the four standard tiers, pbwire-swift only
 ```
@@ -76,7 +76,12 @@ valid.
 | `nested(_:)` | the nested message of a singular message field, or nil |
 | `makeNested(_:)` | get-or-create the nested message, filling it in place |
 | `encode()` | wire bytes |
-| `decode(_:)` | decode bytes as a message of the same type |
+| `encodeDeterministic()` | wire bytes with map entries sorted by key |
+| `encodeDelimited()` | one length-delimited frame (varint length + message) |
+| `decode(_:maxBytes:maxDepth:)` | decode bytes as a message of the same type; zeros mean the defaults (no byte cap, `PBW_MAX_DEPTH` nesting) |
+| `decodeDelimited(_:maxBytes:maxDepth:)` | decode one frame, returning `(message, consumed)` so concatenated frames decode in a loop |
+| `toJSON()` / `fromJSON(_:ignoreUnknown:maxBytes:maxDepth:)` | JSON mapping round trip; unknown fields throw unless ignored |
+| `toText(printUnknown:)` / `fromText(_:maxBytes:maxDepth:)` | text format round trip; unknown fields print numerically unless disabled |
 
 Value mapping (the field's schema type decides the wire type):
 
@@ -110,9 +115,9 @@ one thread, like the C core.
 |---|---|---|
 | runtime | `Sources/CPbwire/` (C header re-export), `Sources/Pbwire/Pbwire.swift` | the `CPbwire` module shim and the `Schema`/`Message` wrapper |
 | example | `Sources/Roundtrip/main.swift` | build, encode, decode, assert, print |
-| tests | `Tests/PbwireTests/PbwireTests.swift` | XCTest self-check: descriptor load, full round trip, pinned bytes, presence, repeated fields, errors, lifetime loop |
+| tests | `Tests/PbwireTests/PbwireTests.swift` | XCTest self-check: descriptor load, full round trip, pinned bytes, presence, repeated fields, errors, lifetime loop, JSON/text, deterministic encoding, delimited framing, explicit limits |
 | benchmark | `Sources/Bench/main.swift`, `benchmarks/baseline/` | the four standard tiers vs apple/swift-protobuf (`benchmarks/bench.sh`) |
-| fixture | `tests/data/probe.proto` + committed `probe.desc`, `tests/data/matrix3.desc` | regenerate with `protoc -Itests/data --descriptor_set_out=tests/data/probe.desc tests/data/probe.proto` |
+| fixture | `tests/data/probe.proto` + committed `probe.desc`, `tests/data/matrix3.desc`, `tests/data/maptest.desc` (maps for the deterministic row) | regenerate with `protoc -Itests/data --descriptor_set_out=tests/data/probe.desc tests/data/probe.proto` (`build.sh` also regenerates `matrix3.desc`/`maptest.desc` from `bindings/c/tests/data` when protoc exists) |
 | conformance | `conformance/README.md` | how the official suite covers this binding (via the C testee) |
 
 ## Benchmark
@@ -158,9 +163,10 @@ deallocator, and `decode` wraps the decoder's arena in one `Message`.
 - **No conformance testee.** The official suite drives the C core through
   `conformance/testee.c`; a Swift testee would test the same core code, and
   the wrapper adds no wire behavior of its own. See `conformance/README.md`.
-- **No JSON/text format wrappers.** The C ABI's `pbw_json_*` / `pbw_text_*`
-  entry points are one import away (`import CPbwire`); no caller here asked
-  for them yet.
+- **No WKT/service helpers.** The C ABI's `pbw_any_*` /
+  `pbw_timestamp_*` / `pbw_service_*` entry points are one import away
+  (`import CPbwire`); the Objective-C binding already covers them, and no
+  caller here asked for them yet.
 
 ## Generated models
 

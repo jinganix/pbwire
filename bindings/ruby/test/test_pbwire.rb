@@ -455,5 +455,109 @@ CHECKS.each do |name, block|
   end
 end
 
+ADV = File.expand_path('../../tests/data/adv.desc', __dir__)
+
+check 'visit scans fields without a tree' do
+  msg = reference_message
+  wire = msg.encode
+  events = msg.visit(wire)
+  by_num = events.to_h { |n, _, _| [n, true] }
+  name_ev = events.find { |n, _, _| n == 8 }
+  assert name_ev, 'name field visited'
+  assert_equal 2, name_ev[1], 'name wire type'
+  assert_equal 'alice', name_ev[2], 'name value'
+  assert raised(Pbwire::Error) { msg.visit(wire, { max_bytes: 4 }) }, 'visit honors max_bytes'
+end
+
+check 'encoded_size matches and encode_to honors a fixed cap' do
+  msg = reference_message
+  wire = msg.encode
+  assert_equal wire.bytesize, msg.encoded_size, 'encoded_size'
+  assert_equal wire, msg.encode_to(wire.bytesize + 12), 'encode_to sized cap works'
+  assert raised(Pbwire::Error) { msg.encode_to(4) }, 'encode_to rejects a short cap'
+  full = msg.encode_delimited
+  assert_equal full, msg.encode_delimited_to(full.bytesize + 12), 'encode_delimited_to matches'
+end
+
+check 'encode_sink streams chunks to the block' do
+  msg = reference_message
+  wire = msg.encode
+  chunks = []
+  msg.encode_sink { |c| chunks << c; true }
+  assert_equal wire, chunks.join, 'sink gets every byte'
+  assert raised(Pbwire::Error) { msg.encode_sink { |_| false } }, 'sink abort raises'
+end
+
+check 'limits reject oversized input' do
+  msg = reference_message
+  wire = msg.encode
+  assert raised(Pbwire::Error) { schema.message(SAMPLE).decode(wire, { max_bytes: 4 }) }, 'decode max_bytes'
+  assert raised(Pbwire::Error) { schema.message(SAMPLE).from_json('{"name":"x"}', false, { max_bytes: 4 }) }, 'from_json max_bytes'
+  assert raised(Pbwire::Error) { schema.message(SAMPLE).from_text('name: "x"', { max_bytes: 4 }) }, 'from_text max_bytes'
+  assert raised(Pbwire::Error) { schema.message(SAMPLE).decode_delimited(msg.encode_delimited, { max_bytes: 2 }) }, 'decode_delimited max_bytes'
+  assert raised(Pbwire::Error) { Pbwire::Schema.from_bytes(File.binread(DATA), { max_bytes: 4 }) }, 'from_bytes max_bytes'
+  assert_equal 'alice', schema.message(SAMPLE).decode(wire, {}).get('name'), 'empty limits mean defaults'
+end
+
+check 'services resolve and streaming flags decode' do
+  aschema = Pbwire::Schema.from_file(ADV)
+  assert_equal ['pbwire.adv.Jobs'], aschema.services, 'services lists Jobs'
+  jobs = aschema.service('pbwire.adv.Jobs')
+  assert_equal 'pbwire.adv.Jobs', jobs[:name], 'service name'
+  assert_equal 2, jobs[:methods].size, 'two methods'
+  get = jobs[:methods][0]
+  assert_equal 'Get', get[:name], 'method name'
+  assert_equal 'pbwire.adv.Job', get[:input_type], 'input type'
+  assert_equal 'pbwire.adv.Job', get[:output_type], 'output type'
+  assert_equal false, get[:client_streaming], 'unary client streaming'
+  assert_equal false, get[:server_streaming], 'unary server streaming'
+  watch = jobs[:methods][1]
+  assert_equal true, watch[:client_streaming], 'streaming client flag'
+  assert_equal true, watch[:server_streaming], 'streaming server flag'
+  routed = aschema.resolve('pbwire.adv.Jobs', 'Get')
+  assert_equal 'pbwire.adv.Job', routed[:input], 'resolve input'
+  assert_equal 'pbwire.adv.Job', routed[:output], 'resolve output'
+  assert raised(Pbwire::Error) { aschema.service('pbwire.adv.Nope') }, 'unknown service raises'
+  assert raised(Pbwire::Error) { aschema.resolve('pbwire.adv.Jobs', 'Nope') }, 'unknown method raises'
+end
+
+check 'well-known-type helpers round trip' do
+  aschema = Pbwire::Schema.from_file(ADV)
+  payload = aschema.message('pbwire.adv.Job').tap { |m| m['id'] = '7' }.encode
+  packed = aschema.message('google.protobuf.Any').any_pack('type.googleapis.com/pbwire.adv.Job', payload)
+  assert_equal 'type.googleapis.com/pbwire.adv.Job', packed.any_type_url, 'any type url'
+  assert_equal '7', aschema.message('pbwire.adv.Job').decode(packed.any_payload).get('id'), 'any payload'
+  ts = aschema.message('google.protobuf.Timestamp').timestamp_from_millis(1501)
+  assert_equal 1501, ts.timestamp_millis, 'timestamp millis round trip'
+  du = aschema.message('google.protobuf.Duration').duration_from_millis(-2500)
+  assert_equal(-2500, du.duration_millis, 'duration millis round trip')
+  fm = aschema.message('google.protobuf.FieldMask').from_json('{"paths":["a.b","c"]}')
+  assert_equal %w[a.b c], fm.fieldmask_paths, 'fieldmask paths read'
+  assert raised(Pbwire::Error) { schema.message(SAMPLE).any_pack('t', 'p') }, 'any_pack rejects a non-Any type'
+end
+
+check 'pool and context recycle arenas' do
+  msg = reference_message
+  wire = msg.encode
+  ctx = Pbwire::Context.new
+  assert_equal wire, ctx.encode(schema.message(SAMPLE).tap { |m| m['name'] = 'alice' }), 'context encode matches'
+  borrowed = ctx.decode(schema, SAMPLE, wire)
+  assert_equal wire, borrowed.encode, 'context decode reads back'
+  assert raised(Pbwire::Error) { borrowed['name'] = 'bob' }, 'context tree is read-only'
+  ctx.reset
+  assert raised(Pbwire::Error) { borrowed.encode }, 'reset invalidates the borrow'
+  assert ctx.used >= 0, 'used reports bytes held'
+  ctx.retain_cap = 1024
+  assert_equal 1024, ctx.retain_cap, 'retain cap reads back'
+  pool = Pbwire::Pool.new(2, 0)
+  pc = pool.acquire
+  assert_equal 0, pool.idle, 'acquire pops the freelist'
+  pc.encode(schema.message(SAMPLE).tap { |m| m['name'] = 'alice' })
+  pool.release(pc)
+  assert_equal 1, pool.idle, 'release parks the context'
+  assert raised(Pbwire::Error) { pc.encode(msg) }, 'released context raises'
+  assert raised(Pbwire::Error) { pool.release(pc) }, 'double release raises'
+end
+
 puts "#{CHECKS.size - failures}/#{CHECKS.size} checks passed"
 exit(failures.zero? ? 0 : 1)

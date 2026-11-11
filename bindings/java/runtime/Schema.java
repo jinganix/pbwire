@@ -31,10 +31,26 @@ public final class Schema implements AutoCloseable {
 
     /** Loads descriptor-set bytes; use {@code --include_imports} so every type resolves. */
     public static Schema fromBytes(byte[] descriptorSet) {
+        return fromBytes(descriptorSet, Limits.defaults());
+    }
+
+    /** Bounded descriptor load: rejects oversized inputs up front. */
+    public static Schema fromBytes(byte[] descriptorSet, Limits lim) {
         try {
-            return new Schema(GenericCodec.Schema.load(descriptorSet));
+            return new Schema(GenericCodec.Schema.load(descriptorSet, lim));
         } catch (IllegalArgumentException e) {
             throw new PbwireException("descriptor set: " + e.getMessage(), 1);
+        } catch (PbwireException e) {
+            throw new PbwireException("descriptor set: " + e.getMessage(), e.status());
+        }
+    }
+
+    /** Loads a descriptor set with explicit bounds. */
+    public static Schema fromFile(String path, Limits lim) {
+        try {
+            return fromBytes(Files.readAllBytes(Path.of(path)), lim);
+        } catch (IOException e) {
+            throw new UncheckedIOException(path, e);
         }
     }
 
@@ -69,6 +85,16 @@ public final class Schema implements AutoCloseable {
             }
         }
         return new Schema(GenericCodec.Schema.fromMetas(metas));
+    }
+
+    /** Looks up a service by its fully qualified name, e.g. {@code "pbwire.test.Search"}. */
+    public ServiceType service(String fullName) {
+        checkOpen();
+        try {
+            return new ServiceType(this, schema.service(fullName));
+        } catch (IllegalArgumentException e) {
+            throw new PbwireException("no such service: " + fullName);
+        }
     }
 
     /** Looks up a message by its fully qualified name, e.g. {@code "pbwire.test.Sample"}. */

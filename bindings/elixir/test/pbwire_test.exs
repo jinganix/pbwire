@@ -258,4 +258,73 @@ defmodule PbwireTest do
     assert {:gpb_oneof, :choice, _, members} = by_name[:choice]
     assert Enum.map(members, &elem(&1, 1)) == [:pick_a, :pick_b, :pick_m]
   end
+
+  # -- delimited framing ------------------------------------------------
+
+  test "delimited round trip, frame plus rest" do
+    msg = %Person{name: "alice", id: 1}
+    bin = Pbwire.encode(msg)
+    frame = Pbwire.encode_delimited(msg)
+    assert frame == <<byte_size(bin)>> <> bin
+    assert Pbwire.decode_delimited(frame, Person) == {Pbwire.decode(bin, Person), <<>>}
+  end
+
+  test "delimited concatenated frames decode in turn" do
+    m1 = %Person{name: "a", id: 1}
+    m2 = %Person{name: "b", id: 2, email: "x@y"}
+    stream = Pbwire.encode_delimited(m1) <> Pbwire.encode_delimited(m2)
+    assert {^m1, rest} = Pbwire.decode_delimited(stream, Person)
+    assert Pbwire.decode_delimited(rest, Person) == {m2, <<>>}
+  end
+
+  test "delimited truncated input raises" do
+    assert_raise ErlangError, fn -> Pbwire.decode_delimited(<<5, 1, 2>>, Person) end
+    assert_raise ErlangError, fn -> Pbwire.decode_delimited(<<>>, Person) end
+  end
+
+  # -- deterministic encoding -------------------------------------------
+
+  test "deterministic map order is insertion-independent" do
+    a = %Doc{title: "det", attrs: %{"b" => 2, "a" => 1}, counts: %{3 => %Doc{}, 1 => %Doc{}}}
+    b = %Doc{title: "det", attrs: %{"a" => 1, "b" => 2}, counts: %{1 => %Doc{}, 3 => %Doc{}}}
+    assert Pbwire.encode_deterministic(a) == Pbwire.encode_deterministic(b)
+
+    assert Pbwire.decode(Pbwire.encode_deterministic(a), Doc) ==
+             Protobuf.decode(Protobuf.encode(a), Doc)
+  end
+
+  test "deterministic keeps repeated order and matches the oracle without maps" do
+    msg = %Doc{title: "t", nums: [3, 1, 2], labels: ["b", "a"]}
+    assert Pbwire.encode_deterministic(msg) == Protobuf.encode(msg)
+    assert Pbwire.decode(Pbwire.encode_deterministic(msg), Doc) == msg
+  end
+
+  # -- limits ------------------------------------------------------------
+
+  test "max_bytes rejects oversized inputs" do
+    msg = %Person{name: "alice", id: 1}
+    bin = Pbwire.encode(msg)
+    size = byte_size(bin)
+
+    :ok = Pbwire.load_schema(@mods, max_bytes: size - 1)
+    assert_raise ErlangError, fn -> Pbwire.decode(bin, Person) end
+
+    :ok = Pbwire.load_schema(@mods, max_bytes: size)
+    assert Pbwire.decode(bin, Person) == msg
+  after
+    Pbwire.load_schema(@mods, max_bytes: 0)
+  end
+
+  test "max_depth rejects deep nesting" do
+    deep =
+      Enum.reduce(1..8, %Doc{}, fn _, acc -> %Doc{counts: %{1 => acc}} end)
+
+    bin = Pbwire.encode(deep)
+    assert Pbwire.decode(bin, Doc) == deep
+
+    :ok = Pbwire.load_schema(@mods, max_depth: 3)
+    assert_raise ErlangError, fn -> Pbwire.decode(bin, Doc) end
+  after
+    Pbwire.load_schema(@mods, max_depth: 0)
+  end
 end

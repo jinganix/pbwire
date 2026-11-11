@@ -75,3 +75,19 @@ Explicit `Close` discipline: roots own their C tree and must be freed with
 `Close`; nested views from `NewMessage` read into the root and are never
 freed separately. `Decode` passes the input slice straight into C
 (zero-copy in); `Encode` copies the bytes out.
+
+## Core coverage
+
+The dynamic API mirrors the core one for one; each call is a single cgo
+downcall:
+
+| member | what it does |
+|---|---|
+| `Message.ToJSON()` / `MessageType.ParseJSON(text, ignoreUnknown)` | JSON mapping |
+| `Message.ToText(printUnknown)` / `MessageType.ParseText(text)` | text format |
+| `Message.EncodeDeterministic()` | map entries sorted by key |
+| `Message.EncodeDelimited()` / `MessageType.DecodeDelimited(wire)` | framing, returns `consumed` |
+| `Message.EncodedSize()` | exact size without writing |
+| `MessageType.DecodeLimits(wire, maxBytes, maxDepth)`, `ParseJSONLimits(...)`, `ParseTextLimits(...)` | input bounds on every decode/parse |
+| `MessageType.Visit(wire, maxBytes, maxDepth, cb)` | single-level scan (callback via `cgo.Handle`) |
+| `Message.AnyTypeURL()`/`AnyPayload()`, `Message.TimestampMillis()`/`DurationMillis()`, `Message.FieldMaskPathCount()`/`FieldMaskPathAt(i)`, `Schema.ResolveMethod(service, method)` | WKT helpers and routing |

@@ -8,9 +8,8 @@ a ConformanceRequest / ConformanceResponse) and, because the binding is
 schema-driven, it needs no per-message code: the request names the message
 type, the descriptor set answers with the schema.
 
-Supported: binary in -> binary out. JSON and text output need printers the
-binding does not expose yet, so those requests answer `skipped` and the runner
-reports them as skipped rather than failed.
+Supported: binary, JSON and text in -> binary, JSON or text out. JSPB answers
+`skipped`, like every other testee here.
 
 `decode()` walks and validates the whole payload before returning, and a parsed
 message keeps the bytes it was parsed from, so `encode()` hands them back: a
@@ -33,6 +32,8 @@ PROTOBUF = 1
 JSON = 2
 JSPB = 3
 TEXT = 4
+
+JSON_IGNORE_UNKNOWN = 3
 
 
 def read_request(stream):
@@ -85,11 +86,10 @@ def main(argv):
                 log.write(b"REQ " + body.hex().encode() + b"\n")
         wanted = request.get("requested_output_format", 0)
         name = request.get("message_type", "")
+        category = request.get("test_category", 0)
         response = {}
-        if wanted != PROTOBUF:
+        if wanted not in (PROTOBUF, JSON, TEXT):
             response["skipped"] = "output format %d is not supported" % wanted
-        elif "protobuf_payload" not in request:
-            response["skipped"] = "only binary input is supported"
         else:
             try:
                 message = message_of(name)
@@ -97,12 +97,26 @@ def main(argv):
                 response["runtime_error"] = "unknown message type %r" % name
             else:
                 try:
-                    parsed = message.decode(request["protobuf_payload"])
+                    if "json_payload" in request:
+                        parsed = message.from_json(request["json_payload"],
+                                                   category == JSON_IGNORE_UNKNOWN)
+                    elif "text_payload" in request:
+                        parsed = message.from_text(request["text_payload"])
+                    elif "protobuf_payload" in request:
+                        parsed = message.decode(request["protobuf_payload"])
+                    else:
+                        response["skipped"] = "unsupported payload"
                 except Exception as error:  # noqa: BLE001
                     response["parse_error"] = str(error)
                 else:
                     try:
-                        response["protobuf_payload"] = message.encode(parsed)
+                        if wanted == JSON:
+                            response["json_payload"] = parsed.to_json()
+                        elif wanted == TEXT:
+                            response["text_payload"] = parsed.to_text(
+                                request.get("print_unknown_fields", False))
+                        else:
+                            response["protobuf_payload"] = message.encode(parsed)
                     except Exception as error:  # noqa: BLE001
                         response["serialize_error"] = str(error)
         try:

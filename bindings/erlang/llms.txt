@@ -30,10 +30,13 @@ make erlang-bench   # from the repo root: epb vs gpb (+ gpb NIF when protoc + li
 
 - `pbwire:load_cache(Module:get_msg_defs())` -> `ok`; loads/replaces the global schema cache. On gpb 5+ pass `Module:get_proto_defs()` instead (compile with `introspect_get_proto_defs`) so the proto3 markers are included.
 - `pbwire:purge_cache()` -> `ok`; clears the schema.
-- `pbwire:set_opts([{string_as_list, boolean()} | {with_utf8, boolean()}])` -> `ok`; must be called before `load_cache/1`.
+- `pbwire:set_opts([{string_as_list, boolean()} | {with_utf8, boolean()} | {retain_cap, N} | {max_bytes, N} | {max_depth, N}])` -> `ok`; must be called before `load_cache/1`.
 - `pbwire:encode(MsgRecordOrMapTuple)` -> `binary()`; raises `cache_not_exists` if no schema is loaded.
 - `pbwire:decode(Binary, 'MessageName')` -> record/map tuple; raises `unknown_msg` for names missing from the schema.
 - `pbwire:encode_msg(Msg, Defs)` / `pbwire:decode_msg(Bin, Name, Defs)`: load the cache on each call.
+- `pbwire:encode_delimited(Msg)` / `pbwire:decode_delimited(Bin, Name)`: varint-length framed codec over the same NIF (`{Msg, Rest}` back).
+- `pbwire:encode_deterministic(Msg, Defs)`: map entries sorted by key (core ordering), repeated order kept.
+- JSON and text are non-goals (no second codec/loader); the conformance testee answers `skipped` for them.
 - `pbwire:debug_term(Term)`: prints the internal schema term layout.
 
 From Elixir the same calls are `:pbwire.encode/1`, `:pbwire.decode/2`, and

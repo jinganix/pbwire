@@ -1,0 +1,22 @@
+
+‰
+	svc.protopbwire.test"7
+Stamp
+seconds (Rseconds
+nanos (Rnanos"9
+AnyMsg
+type_url (	RtypeUrl
+value (Rvalue"
+Mask
+paths (	Rpaths";
+Node
+v (Rv%
+next (2.pbwire.test.NodeRnext";
+SearchRequest
+query (	Rquery
+limit (Rlimit"$
+SearchResponse
+hits (	Rhits2è
+Search?
+Find.pbwire.test.SearchRequest.pbwire.test.SearchResponseD
+Watch.pbwire.test.SearchRequest.pbwire.test.SearchResponse(0bproto3

@@ -124,6 +124,86 @@ pbwire_message_set(built, list(nums = list(1L, 2L)))
 ok(pbwire_decode(schema, msg, pbwire_message_encode(built))$nums[[2]] == 2L,
    "builder set merges")
 
+## visit: single-level scan with no tree (field 8 "name" is LEN "alice").
+events <- pbwire_visit(schema, msg, wire)
+by_num <- list()
+for (ev in events) by_num[[as.character(ev$number)]] <- ev
+ok(by_num[["8"]]$wire_type == 2L &&
+   identical(by_num[["8"]]$value, charToRaw("alice")),
+   "visit sees the LEN string")
+ok(by_num[["1"]]$wire_type == 0L, "visit sees the varint wire type")
+ok(fails(pbwire_visit(schema, msg, wire, list(max_bytes = 4))), "visit honors max_bytes")
+
+## encoded_size matches; encode_to honors a fixed cap (size + 12 always fits).
+size <- pbwire_encoded_size(schema, msg, full)
+ok(size == length(wire), "encoded_size matches the wire length")
+ok(identical(pbwire_encode_to(schema, msg, full, size + 12), wire), "encode_to sized cap works")
+ok(fails(pbwire_encode_to(schema, msg, full, 4)), "encode_to rejects a short cap")
+ffull <- pbwire_encode_delimited(schema, msg, full)
+ok(identical(pbwire_encode_delimited_to(schema, msg, full, length(ffull) + 12), ffull),
+   "encode_delimited_to matches the frame")
+
+## encode_sink delivers the encode in chunks; FALSE aborts.
+pieces <- list()
+pbwire_encode_sink(schema, msg, full, function(chunk) { pieces[[length(pieces) + 1L]] <<- chunk; TRUE })
+ok(identical(do.call(c, pieces), wire), "sink gets every byte")
+ok(fails(pbwire_encode_sink(schema, msg, full, function(chunk) FALSE)), "sink abort raises")
+
+## Limits reject oversized input on every entry point.
+ok(fails(pbwire_decode(schema, msg, wire, list(max_bytes = 4))), "decode honors max_bytes")
+ok(fails(pbwire_parse_binary(schema, msg, wire, list(max_bytes = 4))), "parse_binary honors max_bytes")
+ok(fails(pbwire_from_json(schema, msg, '{"name":"x"}', FALSE, list(max_bytes = 4))), "from_json honors max_bytes")
+ok(fails(pbwire_from_text(schema, msg, 'name: "x"', list(max_bytes = 4))), "from_text honors max_bytes")
+fr <- pbwire_encode_delimited(schema, msg, full)
+ok(fails(pbwire_decode_delimited(schema, msg, fr, list(max_bytes = 2))), "decode_delimited honors max_bytes")
+ok(fails(pbwire_load_raw(readBin("tests/data/sample.desc", "raw", n = 999999), list(max_bytes = 4))), "load honors max_bytes")
+
+## Services, WKT helpers, and pooled contexts through the shared fixture.
+aschema <- pbwire_load("../../tests/data/adv.desc")
+ok(identical(pbwire_services(aschema), "pbwire.adv.Jobs"), "services lists Jobs")
+jobs <- pbwire_service(aschema, "pbwire.adv.Jobs")
+ok(jobs$name == "pbwire.adv.Jobs" && length(jobs$methods) == 2L, "service has two methods")
+ok(jobs$methods[[1L]]$name == "Get" && jobs$methods[[1L]]$input_type == "pbwire.adv.Job", "unary resolves")
+ok(isFALSE(jobs$methods[[1L]]$client_streaming) && isFALSE(jobs$methods[[1L]]$server_streaming),
+   "unary flags decode")
+ok(isTRUE(jobs$methods[[2L]]$client_streaming) && isTRUE(jobs$methods[[2L]]$server_streaming),
+   "streaming flags decode")
+routed <- pbwire_resolve(aschema, "pbwire.adv.Jobs", "Get")
+ok(routed$input == "pbwire.adv.Job" && routed$output == "pbwire.adv.Job", "resolve maps names")
+ok(fails(pbwire_service(aschema, "pbwire.adv.Nope")), "unknown service fails")
+ok(fails(pbwire_resolve(aschema, "pbwire.adv.Jobs", "Nope")), "unknown method fails")
+
+packed <- pbwire_any_pack(aschema, "google.protobuf.Any",
+                          "type.googleapis.com/pbwire.adv.Job",
+                          pbwire_encode(aschema, "pbwire.adv.Job", list(id = "7")))
+ok(pbwire_msg_any_type_url(packed) == "type.googleapis.com/pbwire.adv.Job", "any keeps the type url")
+ok(pbwire_decode(aschema, "pbwire.adv.Job", pbwire_msg_any_payload(packed))$id == "7", "any keeps the payload")
+ts <- pbwire_timestamp_from_millis(aschema, "google.protobuf.Timestamp", 1501)
+ok(pbwire_msg_timestamp_millis(ts) == 1501, "timestamp millis round trip")
+du <- pbwire_duration_from_millis(aschema, "google.protobuf.Duration", -2500)
+ok(pbwire_msg_duration_millis(du) == -2500, "duration millis round trip")
+fm <- pbwire_parse_json(aschema, "google.protobuf.FieldMask", '{"paths":["a.b","c"]}')
+ok(identical(pbwire_msg_fieldmask_paths(fm), c("a.b", "c")), "fieldmask paths read")
+ok(fails(pbwire_any_pack(schema, msg, "t", charToRaw("p"))), "any_pack rejects a non-Any type")
+
+ctx <- pbwire_new_context()
+ok(identical(pbwire_context_encode(ctx, schema, msg, full), wire), "context encode matches")
+cm <- pbwire_context_decode(ctx, schema, msg, wire)
+ok(identical(pbwire_message_encode(cm), wire), "context decode reads back")
+ok(fails(pbwire_message_set(cm, list())), "context tree is read-only")
+pbwire_context_reset(ctx)
+ok(fails(pbwire_message_encode(cm)), "reset invalidates the borrow")
+ok(pbwire_context_used(ctx) >= 0, "used reports bytes held")
+invisible(pbwire_context_retain_cap(ctx, 1024))
+ok(pbwire_context_retain_cap(ctx) == 1024, "retain cap reads back")
+pool <- pbwire_new_pool(2, 0)
+pc <- pbwire_pool_acquire(pool)
+ok(pbwire_pool_idle(pool) == 0L, "acquire pops the freelist")
+invisible(pbwire_context_encode(pc, schema, msg, full))
+pbwire_pool_release(pool, pc)
+ok(pbwire_pool_idle(pool) == 1L, "release parks the context")
+ok(fails(invisible(pbwire_context_encode(pc, schema, msg, full))), "released context raises")
+
 if (failures > 0L) {
   cat(failures, "failures\n")
   quit(status = 1)

@@ -3,7 +3,10 @@
  *
  * Covers: descriptor set load (file + data), unknown names, a full scalar and
  * nested round trip, byte-exact re-encode, presence of absent/zero fields,
- * schema/API errors, decode rejecting garbage, and message lifetime. */
+ * schema/API errors, decode rejecting garbage, message lifetime, JSON/text
+ * mappings (plus parse options and bounds), deterministic encoding, delimited
+ * framing, explicit decode limits, and the WKT/service helpers in
+ * tests/data/cover.desc. */
 
 #import <Foundation/Foundation.h>
 
@@ -536,6 +539,251 @@ testJSONText(void)
 }
 
 static void
+testDeterministic(void)
+{
+    PBWSchema *schema = loadSchema();
+    PBWMessage *probe;
+    PBWMessage *ordered;
+    NSData *sorted;
+    NSData *plain;
+    NSError *error = nil;
+
+    if (schema == nil) {
+        return;
+    }
+    /* Inserted b-then-a: the plain encoding keeps insertion order, the
+     * deterministic one sorts by key. */
+    NSDictionary *reversed = @{@"b" : @(2),
+                               @"a" : @(1)};
+    NSDictionary *sortedPair = @{@"a" : @(1),
+                                 @"b" : @(2)};
+    /* attrs is field 14: entry {a:1} is 72 05 0A 01 61 10 01, {b:2} swaps in
+     * 62/02. Deterministic output pins that order whatever NSDictionary
+     * enumeration fed setEntries:. */
+    static const uint8_t pinned[] = {0x72, 0x05, 0x0a, 0x01, 0x61, 0x10,
+                                     0x01, 0x72, 0x05, 0x0a, 0x01, 0x62,
+                                     0x10, 0x02};
+    NSData *sortedWire = [NSData dataWithBytes:pinned length:sizeof(pinned)];
+
+    probe = [schema messageByName:@"pbwobjc.Probe"];
+    CHECK(probe != nil);
+    CHECK([probe setEntries:reversed forField:@"attrs" error:&error]);
+    sorted = [probe encodeDeterministic:&error];
+    CHECK(sorted != nil);
+    CHECK([sorted isEqualToData:sortedWire]);
+    plain = [probe encode:&error];
+    CHECK(plain != nil);
+    /* A plain encode of the same entries decodes to the same map, and the
+     * deterministic form is stable across insertion orders. */
+    CHECK([[[probe decode:plain error:&error] entriesForField:@"attrs"]
+        isEqualToDictionary:sortedPair]);
+    ordered = [schema messageByName:@"pbwobjc.Probe"];
+    CHECK([ordered setEntries:sortedPair forField:@"attrs" error:&error]);
+    CHECK([sorted isEqualToData:[ordered encodeDeterministic:&error]]);
+}
+
+static void
+testDelimited(void)
+{
+    PBWSchema *schema = loadSchema();
+    PBWMessage *probe;
+    PBWMessage *second;
+    NSData *frames;
+    NSUInteger consumed = 0;
+    NSUInteger again = 0;
+    PBWMessage *first = nil;
+    PBWMessage *back = nil;
+    NSError *error = nil;
+    pbw_limits tiny = {1, 0};
+
+    if (schema == nil) {
+        return;
+    }
+    probe = filledProbe(schema);
+    second = [schema messageByName:@"pbwobjc.Probe"];
+    CHECK([second setValue:@"bob" forField:@"text" error:&error]);
+    NSData *head = [probe encodeDelimited:&error];
+    NSData *tail = [second encodeDelimited:&error];
+    CHECK(head != nil && tail != nil);
+    NSMutableData *both = [head mutableCopy];
+    [both appendData:tail];
+    frames = both;
+
+    /* Two frames decode in a loop by advancing past *consumed. */
+    first = [probe decodeDelimited:frames consumed:&consumed error:&error];
+    CHECK(first != nil);
+    CHECK(consumed > 0);
+    CHECK_STRING([first valueForField:@"text"], @"h\u00e9llo");
+    NSRange restRange = NSMakeRange(consumed, frames.length - consumed);
+    back = [probe decodeDelimited:[frames subdataWithRange:restRange]
+                         consumed:&again
+                            error:&error];
+    CHECK(back != nil);
+    CHECK(consumed + again == frames.length);
+    CHECK_STRING([back valueForField:@"text"], @"bob");
+    /* NULL consumed is fine; a truncated frame fails. */
+    CHECK([probe decodeDelimited:frames consumed:NULL error:&error] != nil);
+    error = nil;
+    NSData *truncated = [frames subdataWithRange:NSMakeRange(0, 2)];
+    CHECK([probe decodeDelimited:truncated
+                        consumed:NULL
+                           error:&error] == nil);
+    CHECK(error.code == PBW_ERR_INVALID);
+    /* A declared frame length past max_bytes fails before the body. */
+    error = nil;
+    CHECK([probe decodeDelimited:frames
+                        consumed:NULL
+                          limits:tiny
+                           error:&error] == nil);
+    CHECK(error.code == PBW_ERR_LIMIT);
+}
+
+static void
+testLimits(void)
+{
+    PBWSchema *schema = loadSchema();
+    PBWMessage *probe;
+    NSData *wire;
+    NSError *error = nil;
+    pbw_limits tinyBytes = {2, 0};
+    pbw_limits hugeDepth = {0, 100000};
+    pbw_limits oneDeep = {0, 1};
+    pbw_limits defaults = {0, 0};
+    NSString *json;
+    NSString *text;
+
+    if (schema == nil) {
+        return;
+    }
+    probe = filledProbe(schema);
+    wire = [probe encode:&error];
+    CHECK(wire != nil);
+    /* Defaults behave like the unbounded calls. */
+    CHECK([[probe decode:wire limits:defaults error:&error] isKindOfClass:
+                                                                [PBWMessage class]]);
+    /* A byte cap below the payload fails; a depth past PBW_MAX_DEPTH clamps
+     * to it and still decodes. */
+    error = nil;
+    CHECK([probe decode:wire limits:tinyBytes error:&error] == nil);
+    CHECK(error.code == PBW_ERR_LIMIT);
+    CHECK([probe decode:wire limits:hugeDepth error:&error] != nil);
+
+    /* Same bounds on the text mappings. */
+    json = [probe JSONString:&error];
+    CHECK(json != nil);
+    CHECK([probe parseJSONString:json
+              ignoreUnknownFields:NO
+                           limits:defaults
+                            error:&error] != nil);
+    error = nil;
+    CHECK([probe parseJSONString:@"{\"nope\":1}"
+              ignoreUnknownFields:NO
+                           limits:defaults
+                            error:&error] == nil);
+    CHECK([probe parseJSONString:@"{\"nope\":1}"
+              ignoreUnknownFields:YES
+                           limits:defaults
+                            error:&error] != nil);
+    error = nil;
+    CHECK([probe parseJSONString:json
+              ignoreUnknownFields:NO
+                           limits:tinyBytes
+                            error:&error] == nil);
+    CHECK(error.code == PBW_ERR_LIMIT);
+    /* The nested message costs depth: one level is not enough. */
+    error = nil;
+    CHECK([probe parseJSONString:json
+              ignoreUnknownFields:NO
+                           limits:oneDeep
+                            error:&error] == nil);
+    CHECK(error.code == PBW_ERR_LIMIT);
+    text = [probe textFormat:&error];
+    CHECK(text != nil);
+    CHECK([probe parseTextFormat:text limits:defaults error:&error] != nil);
+    error = nil;
+    CHECK([probe parseTextFormat:text limits:tinyBytes error:&error] == nil);
+    CHECK(error.code == PBW_ERR_LIMIT);
+}
+
+static void
+testCoverSchema(void)
+{
+    NSString *path = [[@(__FILE__) stringByDeletingLastPathComponent]
+        stringByAppendingPathComponent:@"data/cover.desc"];
+    NSData *bytes = [NSData dataWithContentsOfFile:path];
+    NSError *error = nil;
+    PBWSchema *schema;
+    PBWMessage *box;
+    PBWMessage *packed;
+    PBWMessage *stamp;
+    PBWMessage *back;
+    PBWMessage *mask;
+    NSData *payload;
+    static const uint8_t raw[] = {0x0a, 0x03, 'a', 'b', 'c'};
+
+    CHECK(bytes.length > 0);
+    schema = [PBWSchema schemaFromData:bytes error:&error];
+    CHECK(schema != nil);
+    if (schema == nil) {
+        return;
+    }
+    /* Services: one service, one method, Stamp in and out. */
+    CHECK([[schema serviceNames] isEqualToArray:@[ @"pbwobjc.Lookup" ]]);
+    CHECK([[schema methodNamesForService:@"pbwobjc.Lookup"]
+        isEqualToArray:@[ @"Get" ]]);
+    CHECK([schema methodNamesForService:@"pbwobjc.Nope"] == nil);
+    NSString *inType = [schema inputTypeForService:@"pbwobjc.Lookup"
+                                            method:@"Get"];
+    NSString *outType = [schema outputTypeForService:@"pbwobjc.Lookup"
+                                              method:@"Get"];
+    CHECK_STRING(inType, @"pbwobjc.Stamp");
+    CHECK_STRING(outType, @"pbwobjc.Stamp");
+    CHECK([schema inputTypeForService:@"pbwobjc.Lookup" method:@"Nope"] ==
+          nil);
+    CHECK([schema inputTypeForService:@"pbwobjc.Nope" method:@"Get"] == nil);
+    /* probe.desc carries no services: empty, not nil. */
+    CHECK([loadSchema().serviceNames count] == 0);
+
+    /* Any: pack, read back, wire round trip. */
+    box = [schema messageByName:@"pbwobjc.AnyBox"];
+    CHECK(box != nil);
+    CHECK([box anyTypeURL] == nil);
+    CHECK([box anyPayload] == nil);
+    payload = [NSData dataWithBytes:raw length:sizeof(raw)];
+    packed = [box packAnyWithTypeURL:@"type.googleapis.com/pkg.Msg"
+                             payload:payload
+                               error:&error];
+    CHECK(packed != nil);
+    CHECK_STRING([packed anyTypeURL], @"type.googleapis.com/pkg.Msg");
+    CHECK([[packed anyPayload] isEqualToData:payload]);
+    back = [box decode:[packed encode:&error] error:&error];
+    CHECK(back != nil);
+    CHECK_STRING([back anyTypeURL], @"type.googleapis.com/pkg.Msg");
+    CHECK([[back anyPayload] isEqualToData:payload]);
+
+    /* Timestamp / Duration millis round trip (1500 ms = 1 s + 500 ms). */
+    stamp = [schema messageByName:@"pbwobjc.Stamp"];
+    CHECK(stamp != nil);
+    CHECK([stamp timestampMillis:&error] == nil);
+    back = [stamp messageWithTimestampMillis:1500 error:&error];
+    CHECK(back != nil);
+    CHECK([[back timestampMillis:&error] isEqualToNumber:@(1500)]);
+    CHECK([[[stamp decode:[back encode:&error] error:&error]
+        timestampMillis:&error] isEqualToNumber:@(1500)]);
+    back = [stamp messageWithDurationMillis:-2500 error:&error];
+    CHECK(back != nil);
+    CHECK([[back durationMillis:&error] isEqualToNumber:@(-2500)]);
+
+    /* FieldMask paths without materializing the list. */
+    mask = [schema messageByName:@"pbwobjc.Mask"];
+    CHECK(mask != nil);
+    CHECK([[mask fieldMaskPaths] count] == 0);
+    NSArray *paths = @[ @"a/b", @"c" ];
+    CHECK([mask setValues:paths forField:@"paths" error:&error]);
+    CHECK([[mask fieldMaskPaths] isEqualToArray:paths]);
+}
+
+static void
 testContextPool(void)
 {
     PBWSchema *schema = loadSchema();
@@ -598,6 +846,10 @@ main(int argc, char **argv)
         testRepeatedHelpers();
         testMapHelpers();
         testJSONText();
+        testDeterministic();
+        testDelimited();
+        testLimits();
+        testCoverSchema();
         testContextPool();
 
         if (failures == 0) {

@@ -23,6 +23,14 @@ final class PbwireTests: XCTestCase {
         try Schema(contentsOfFile: Self.fixture)
     }
 
+    func testNegativeLimitsAreRejected() throws {
+        let schema = try loadSchema()
+        let ty = try XCTUnwrap(schema.message("pbwswift.Probe"))
+        let wire = try ty.encode()
+        XCTAssertThrowsError(try ty.decode(wire, maxBytes: -1))
+        XCTAssertThrowsError(try ty.decode(wire, maxDepth: -1))
+    }
+
     func testSchemaLoad() throws {
         let schema = try loadSchema()
         XCTAssertNotNil(schema.message("pbwswift.Probe"))
@@ -153,6 +161,115 @@ final class PbwireTests: XCTestCase {
         XCTAssertEqual(decoded.count("tags"), 2)
         XCTAssertEqual(decoded.at("tags", 0), .string("a"))
         XCTAssertEqual(try decoded.encode(), try message.encode())
+    }
+
+    func testJSON() throws {
+        let schema = try loadSchema()
+        let message = schema.message("pbwswift.Probe")!
+        try message.set(.int(-12), "i32")
+        try message.set(.string("alice"), "text")
+        try message.makeNested("inner").set(.string("child"), "label")
+
+        let wire = try message.encode()
+        let json = try message.toJSON()
+        XCTAssertTrue(json.contains("\"text\":\"alice\"") || json.contains("\"text\": \"alice\""))
+        // JSON round-trips back to identical wire bytes.
+        XCTAssertEqual(try message.fromJSON(json).encode(), wire)
+        // Unknown field names throw unless ignored.
+        XCTAssertThrowsError(try message.fromJSON("{\"nope\":1}"))
+        let ignored = try message.fromJSON("{\"nope\":1}", ignoreUnknown: true)
+        XCTAssertNil(ignored.get("text"))
+        XCTAssertEqual(try ignored.encode(), Data())
+        // Malformed JSON and a byte cap below the payload both throw.
+        XCTAssertThrowsError(try message.fromJSON("{oops"))
+        XCTAssertThrowsError(try message.fromJSON(json, maxBytes: 2))
+    }
+
+    func testText() throws {
+        let schema = try loadSchema()
+        let message = schema.message("pbwswift.Probe")!
+        try message.set(.string("alice"), "text")
+        try message.makeNested("inner").set(.string("child"), "label")
+
+        let wire = try message.encode()
+        let text = try message.toText()
+        XCTAssertTrue(text.contains("text: \"alice\""))
+        // Text round-trips back to identical wire bytes.
+        XCTAssertEqual(try message.fromText(text).encode(), wire)
+        XCTAssertThrowsError(try message.fromText("text: "))
+        XCTAssertThrowsError(try message.fromText(text, maxBytes: 2))
+
+        // Unknown fields print numerically unless disabled.
+        let withUnknown = try message.decode(wire + Data([0x98, 0x06, 0x07]))
+        XCTAssertTrue(try withUnknown.toText().contains("99"))
+        XCTAssertFalse(try withUnknown.toText(printUnknown: false).contains("99"))
+        XCTAssertEqual(try withUnknown.encode(), wire + Data([0x98, 0x06, 0x07]))
+    }
+
+    func testDeterministic() throws {
+        // probe.proto has no map, so Maps (by_str is field 2: entry {a:1}
+        // is 12 05 0A 01 61 10 01) carries this row.
+        let matrix = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("tests/data/maptest.desc").path
+        let schema = try Schema(contentsOfFile: matrix)
+        let message = schema.message("structtest.Maps")!
+        let entryB = try message.makeNested("by_str")
+        try entryB.set(.string("b"), "key")
+        try entryB.set(.int(2), "value")
+        let entryA = try message.makeNested("by_str")
+        try entryA.set(.string("a"), "key")
+        try entryA.set(.int(1), "value")
+
+        let pinned = Data([
+            0x12, 0x05, 0x0A, 0x01, 0x61, 0x10, 0x01,
+            0x12, 0x05, 0x0A, 0x01, 0x62, 0x10, 0x02,
+        ])
+        XCTAssertEqual(try message.encodeDeterministic(), pinned)
+        // Plain encoding decodes to the same map.
+        let decoded = try message.decode(try message.encode())
+        XCTAssertEqual(decoded.count("by_str"), 2)
+    }
+
+    func testDelimited() throws {
+        let schema = try loadSchema()
+        let message = schema.message("pbwswift.Probe")!
+        try message.set(.int(-12), "i32")
+        let second = schema.message("pbwswift.Probe")!
+        try second.set(.string("bob"), "text")
+
+        let frames = try message.encodeDelimited() + second.encodeDelimited()
+        // Two frames decode in a loop by advancing past consumed.
+        let (first, read) = try message.decodeDelimited(frames)
+        XCTAssertEqual(first.get("i32"), .int(-12))
+        XCTAssertGreaterThan(read, 0)
+        let rest = frames.dropFirst(read)
+        let (back, again) = try message.decodeDelimited(Data(rest))
+        XCTAssertEqual(read + again, frames.count)
+        XCTAssertEqual(back.get("text"), .string("bob"))
+        // A truncated frame throws, as does a byte cap below the frame.
+        XCTAssertThrowsError(try message.decodeDelimited(frames.prefix(2)))
+        XCTAssertThrowsError(try message.decodeDelimited(frames, maxBytes: 1))
+    }
+
+    func testLimits() throws {
+        let schema = try loadSchema()
+        let message = schema.message("pbwswift.Probe")!
+        try message.set(.int(-12), "i32")
+        try message.makeNested("inner").set(.string("child"), "label")
+        let wire = try message.encode()
+
+        // Defaults behave like the unbounded call; a depth past the cap
+        // clamps to it and still decodes.
+        XCTAssertEqual(try message.decode(wire, maxBytes: 0, maxDepth: 0).get("i32"), .int(-12))
+        XCTAssertEqual(try message.decode(wire, maxDepth: 100_000).get("i32"), .int(-12))
+        // A byte cap below the payload throws PBW_ERR_LIMIT.
+        do {
+            _ = try message.decode(wire, maxBytes: 2)
+            XCTFail("expected a limit error")
+        } catch let error as PbwireError {
+            XCTAssertEqual(error.status, 5) // PBW_ERR_LIMIT
+        }
     }
 
     func testNestedLifetime() throws {

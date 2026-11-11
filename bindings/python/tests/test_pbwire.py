@@ -94,6 +94,64 @@ def _required_wire(first, last):
     return b"".join(_varint((i << 3) | 0) + _varint(i) for i in range(first, last + 1))
 
 
+def _field(name, number, label, kind, type_name=None):
+    """One FieldDescriptorProto, so a fixture needs no protoc."""
+    out = (_ld(1, name.encode()) + _varint((3 << 3) | 0) + _varint(number)
+           + _varint((4 << 3) | 0) + _varint(label) + _varint((5 << 3) | 0)
+           + _varint(kind))
+    if type_name is not None:
+        out += _ld(6, type_name.encode())
+    return out
+
+
+def _msg(name, fields):
+    return _ld(1, name.encode()) + b"".join(_ld(2, f) for f in fields)
+
+
+def _method(name, input_type, output_type, client=False, server=False):
+    out = (_ld(1, name.encode()) + _ld(2, input_type.encode())
+           + _ld(3, output_type.encode()))
+    if client:
+        out += _varint((5 << 3) | 0) + _varint(1)
+    if server:
+        out += _varint((6 << 3) | 0) + _varint(1)
+    return out
+
+
+def _wkt_desc():
+    """Any/Timestamp/FieldMask mirrors: same field numbers as the real
+    well-known types, so the core helpers accept them."""
+    any_msg = _msg("Any", [_field("type_url", 1, 1, 9),
+                              _field("value", 2, 1, 12)])
+    ts_msg = _msg("Timestamp", [_field("seconds", 1, 1, 3),
+                                   _field("nanos", 2, 1, 5)])
+    fm_msg = _msg("FieldMask", [_field("paths", 1, 3, 9)])
+    file_desc = (_ld(1, b"wkt.proto") + _ld(2, b"google.protobuf")
+                 + _ld(4, any_msg) + _ld(4, ts_msg) + _ld(4, fm_msg)
+                 + _ld(12, b"proto3"))
+    return _ld(1, file_desc)
+
+
+def _svc_desc():
+    job = _msg("Job", [_field("id", 1, 1, 9)])
+    svc = (_ld(1, b"Jobs")
+           + _ld(2, _method("Get", ".pbwire.svc.Job", ".pbwire.svc.Job"))
+           + _ld(2, _method("Chat", ".pbwire.svc.Job", ".pbwire.svc.Job",
+                             True, True)))
+    file_desc = (_ld(1, b"svc.proto") + _ld(2, b"pbwire.svc")
+                 + _ld(4, job) + _ld(6, svc) + _ld(12, b"proto2"))
+    return _ld(1, file_desc)
+
+
+def _node_desc():
+    """A recursive message for the max_depth bound: two nesting levels."""
+    node = _msg("Node", [_field("child", 1, 1, 11, ".t.Node"),
+                           _field("v", 2, 1, 5)])
+    file_desc = (_ld(1, b"n.proto") + _ld(2, b"t") + _ld(4, node)
+                 + _ld(12, b"proto3"))
+    return _ld(1, file_desc)
+
+
 def required_many():
     """Required tracking uses a 64-slot mask; exactly 64 must not shift by 64
     (undefined) and more than 64 must still be enforced, not silently
@@ -119,6 +177,235 @@ def required_many():
                       "%d required fields decode fully" % count)
         finally:
             os.unlink(path)
+
+
+def json_text():
+    with pbw.Schema.from_file(os.path.join(DATA, "matrix3.desc")) as schema:
+        scalars = schema.message("structtest.Scalars3")
+        with open(os.path.join(DATA, "matrix3.bin"), "rb") as handle:
+            reference = handle.read()
+
+        text = scalars.to_json(SCALARS3)
+        check('"i64":"9223372036854775807"' in text, "json quotes int64")
+        check('"color":"COLOR3_GREEN"' in text, "json names the enum")
+        check(scalars.from_json(text).to_dict() == SCALARS3,
+              "json round trip")
+        check(scalars.decode(reference).to_json() == text,
+              "Message.to_json matches")
+        check_raises(ValueError, lambda: scalars.from_json('{"nope":1}'),
+                     "json unknown field fails")
+        check(scalars.from_json('{"nope":1,"i32":3}', True).to_dict() ==
+              {"i32": 3}, "json ignore_unknown skips")
+        check_raises(ValueError, lambda: scalars.from_json('{"i32":}'),
+                     "json malformed fails")
+
+        flat = scalars.to_text({"i32": 1})
+        check(flat.strip() == "i32: 1", "text of one field")
+        message = scalars.decode(reference)
+        check(scalars.from_text(message.to_text()).to_dict() == SCALARS3,
+              "text round trip")
+        check(scalars.to_text(SCALARS3) == message.to_text(),
+              "Message.to_text matches")
+        unknown = reference + b"\xb8\x3e\x2a"  # field 999, varint 42
+        kept = scalars.decode(unknown)
+        check("999" in kept.to_text(), "text keeps unknown fields")
+        check("999" not in kept.to_text(False),
+              "text drops unknown fields on request")
+        check_raises(ValueError, lambda: scalars.from_text("i32: x"),
+                     "text malformed fails")
+
+
+def deterministic():
+    with pbw.Schema.from_file(os.path.join(DATA, "maptest.desc")) as schema:
+        maps = schema.message("structtest.Maps")
+        shuffled = {"by_int": [{"key": 2, "value": "b"},
+                                 {"key": 1, "value": "a"}]}
+        ordered = {"by_int": [{"key": 1, "value": "a"},
+                                {"key": 2, "value": "b"}]}
+        check(maps.encode_deterministic(shuffled) == maps.encode(ordered),
+              "deterministic encode sorts map entries")
+        check(maps.encode(shuffled) != maps.encode_deterministic(shuffled),
+              "plain encode keeps insertion order")
+        back = maps.decode(maps.encode_deterministic(shuffled))
+        check(back.to_dict() == ordered, "deterministic bytes decode")
+        check(maps.encode_deterministic({}) == b"",
+              "deterministic empty is empty")
+
+
+def delimited():
+    with pbw.Schema.from_file(os.path.join(DATA, "matrix3.desc")) as schema:
+        scalars = schema.message("structtest.Scalars3")
+        frame = scalars.encode_delimited(SCALARS3)
+        wire = scalars.encode(SCALARS3)
+        check(frame == _varint(len(wire)) + wire,
+              "delimited frame is a length prefix plus bytes")
+        message, consumed = scalars.decode_delimited(frame + b"\x00")
+        check(message.to_dict() == SCALARS3 and consumed == len(frame),
+              "decode_delimited returns the message and its length")
+        check_raises(ValueError,
+                     lambda: scalars.decode_delimited(frame[:-1]),
+                     "truncated delimited frame fails")
+        check_raises(ValueError, lambda: scalars.decode_delimited(b""),
+                     "empty delimited input fails")
+
+
+def sized():
+    with pbw.Schema.from_file(os.path.join(DATA, "matrix3.desc")) as schema:
+        scalars = schema.message("structtest.Scalars3")
+        wire = scalars.encode(SCALARS3)
+        check(scalars.encoded_size(SCALARS3) == len(wire),
+              "encoded_size matches encode")
+        check(scalars.encoded_size(scalars.decode(wire)) == len(wire),
+              "encoded_size of a Message matches")
+        buf = bytearray(len(wire))
+        check(scalars.encode_to(SCALARS3, buf) == len(wire) and
+              bytes(buf) == wire, "encode_to fills the buffer")
+        check(scalars.encode_to(scalars.decode(wire), buf) == len(wire),
+              "encode_to of a Message matches")
+        check_raises(ValueError,
+                     lambda: scalars.encode_to(SCALARS3, bytearray(2)),
+                     "encode_to into a small buffer fails")
+        parts = []
+        check(scalars.encode_sink(SCALARS3, parts.append, 7) == len(wire)
+              and b"".join(parts) == wire,
+              "encode_sink streams chunks in order")
+        check_raises(TypeError,
+                     lambda: scalars.encode_sink(SCALARS3, None),
+                     "encode_sink needs a callable")
+
+
+def visit():
+    with pbw.Schema.from_file(os.path.join(DATA, "matrix3.desc")) as schema:
+        scalars = schema.message("structtest.Scalars3")
+        with open(os.path.join(DATA, "matrix3.bin"), "rb") as handle:
+            reference = handle.read()
+        seen = []
+        check(scalars.visit(reference, lambda n, f, w, v:
+                            seen.append((n, f, w, v))) is None,
+              "visit returns None")
+        by_number = dict((f, (n, w, v)) for n, f, w, v in seen)
+        check(by_number[1][0] == "i32" and by_number[1][1] == 0,
+              "visit names field 1 with its wire type")
+        check(isinstance(by_number[1][2], int),
+              "visit varint comes back as int")
+        unk = reference + b"\xb8\x3e\x2a"  # field 999, varint 42
+        seen.clear()
+        scalars.visit(unk, lambda n, f, w, v: seen.append((n, f, w, v)))
+        check(seen[-1] == (None, 999, 0, 42),
+              "visit reports unknown fields with no name")
+
+        def abort(name, number, wire_type, value):
+            raise RuntimeError("stop")
+
+        check_raises(RuntimeError, lambda: scalars.visit(reference, abort),
+                     "visit propagates a callback exception")
+        check_raises(ValueError,
+                     lambda: scalars.visit(b"\x08",
+                                           lambda n, f, w, v: None),
+                     "visit of truncated wire fails")
+        check_raises(TypeError,
+                     lambda: scalars.visit(reference, None),
+                     "visit needs a callable")
+        check_raises(ValueError,
+                     lambda: scalars.visit(reference,
+                                            lambda n, f, w, v: None,
+                                            {"max_bytes": 5}),
+                     "visit honors max_bytes")
+
+
+def limits():
+    with pbw.Schema.from_file(os.path.join(DATA, "matrix3.desc")) as schema:
+        scalars = schema.message("structtest.Scalars3")
+        with open(os.path.join(DATA, "matrix3.bin"), "rb") as handle:
+            reference = handle.read()
+        check_raises(ValueError,
+                     lambda: scalars.decode(reference, {"max_bytes": 5}),
+                     "decode honors max_bytes")
+        check(scalars.decode(reference, {"max_bytes": len(reference),
+                                         "max_depth": 256}).to_dict() ==
+              SCALARS3, "limits at the boundary still decode")
+        check_raises(TypeError, lambda: scalars.decode(reference, 7),
+                     "limits must be a dict")
+        check_raises(ValueError,
+                     lambda: pbw.Schema.load(reference, {"max_bytes": 5}),
+                     "descriptor load honors max_bytes")
+    with pbw.Schema.load(_node_desc()) as schema:
+        node = schema.message("t.Node")
+        # outer.child.child.v: two nesting levels.
+        inner = b"\x10\x01"  # v = 1
+        wire = b"\x0a" + bytes([len(b"\x0a" + bytes([len(inner)]) +
+                                          inner)]) + b"\x0a" + bytes(
+            [len(inner)]) + inner
+        check(node.decode(wire).to_dict() ==
+              {"child": {"child": {"v": 1}}}, "recursive message decodes")
+        check_raises(ValueError,
+                     lambda: node.decode(wire, {"max_depth": 1}),
+                     "decode honors max_depth")
+        check(node.decode(wire, {"max_depth": 2}).to_dict() ==
+              {"child": {"child": {"v": 1}}},
+              "max_depth at the boundary still decodes")
+
+
+def wkt():
+    with pbw.Schema.load(_wkt_desc()) as schema:
+        ts = schema.message("google.protobuf.Timestamp")
+        check(ts.from_millis(1500).to_millis() == 1500,
+              "Timestamp millis round trip")
+        check(ts.from_millis(1500).to_dict() ==
+              {"seconds": 1, "nanos": 500000000},
+              "Timestamp millis split")
+        check(ts.from_millis(-1500).to_millis() == -1500,
+              "negative Timestamp millis round trip")
+        payload = ts.encode({"seconds": 1, "nanos": 500000000})
+        any_t = schema.message("google.protobuf.Any")
+        packed = any_t.any_pack(
+            "type.googleapis.com/google.protobuf.Timestamp", payload)
+        check(packed.any_type_url() ==
+              "type.googleapis.com/google.protobuf.Timestamp",
+              "Any type_url")
+        check(packed.any_payload() == payload, "Any payload")
+        check(packed.to_json() == '{"@type":"type.googleapis.com/'
+              'google.protobuf.Timestamp",'
+              '"value":"1970-01-01T00:00:01.500Z"}',
+              "Any JSON form")
+        empty = any_t.decode(b"")
+        check(empty.any_type_url() is None and empty.any_payload() is None,
+              "absent Any fields read as None")
+        fm = schema.message("google.protobuf.FieldMask")
+        mask = fm.decode(fm.encode({"paths": ["a.b", "c"]}))
+        check(mask.fieldmask_paths() == ["a.b", "c"], "FieldMask paths")
+        check(fm.from_json('{"paths":["x"]}').to_dict() ==
+              {"paths": ["x"]}, "FieldMask from JSON")
+        check_raises(TypeError, lambda: fm.decode(b"").to_millis(),
+                     "to_millis rejects other messages")
+
+
+def service():
+    with pbw.Schema.load(_svc_desc()) as schema:
+        check(schema.services() == ["pbwire.svc.Jobs"], "services list")
+        check(schema.service_methods("pbwire.svc.Jobs") == ["Get", "Chat"],
+              "service methods list")
+        resolved = schema.resolve("pbwire.svc.Jobs", "Chat")
+        check(resolved["input"].name == "pbwire.svc.Job" and
+              resolved["output"].name == "pbwire.svc.Job" and
+              resolved["input_type"] == "pbwire.svc.Job" and
+              resolved["output_type"] == "pbwire.svc.Job" and
+              resolved["client_streaming"] is True and
+              resolved["server_streaming"] is True,
+              "resolve maps a streaming method to its types")
+        unary = schema.resolve("pbwire.svc.Jobs", "Get")
+        check(unary["client_streaming"] is False and
+              unary["server_streaming"] is False,
+              "resolve marks unary methods")
+        job = resolved["input"]
+        check(job.decode(job.encode({"id": "7"})).to_dict() ==
+              {"id": "7"}, "resolved type encodes")
+        check_raises(KeyError,
+                     lambda: schema.service_methods("pbwire.svc.Nope"),
+                     "unknown service is a KeyError")
+        check_raises(KeyError,
+                     lambda: schema.resolve("pbwire.svc.Jobs", "Nope"),
+                     "unknown method is a KeyError")
 
 
 def main():
@@ -306,6 +593,14 @@ def main():
                      "required field with the wrong wire type does not count")
 
     required_many()
+    json_text()
+    deterministic()
+    delimited()
+    sized()
+    visit()
+    limits()
+    wkt()
+    service()
 
     print("test_pbwire: %s" % ("all checks passed" if not failures
                                else "%d FAILURES" % failures))

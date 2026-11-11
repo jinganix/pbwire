@@ -68,11 +68,10 @@ MB/s over wire bytes.
 
 ## Conformance
 
-`conformance/Testee.scala` is the official-suite testee: binary in ->
-binary out through the dynamic API, no per-message code. JSON/text input
-answers `skipped` (the binding has no printers), like the Java and Python
-testees. It shares the two expected binary tag-truncation failures on the
-repo-wide `conformance/failure_list_pbwire.txt`.
+`conformance/Testee.scala` is the official-suite testee: binary, JSON and text
+in both directions through the dynamic API, no per-message code. Only JSPB
+answers `skipped`. It shares the two expected binary tag-truncation failures on
+the repo-wide `conformance/failure_list_pbwire.txt`.
 
 ## Why not a copy of the Java runtime?
 

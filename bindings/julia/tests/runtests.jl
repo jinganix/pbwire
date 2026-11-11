@@ -142,6 +142,17 @@ end
     small = Dict{String,Any}("name" => "kid", "value" => 42)
     @test decode_dict(inner_ty, encode_dict(inner_ty, small)) == small
 
+    # encode() sizes its buffer from the last wire length; a tree that grew past
+    # that hint must fall back to the allocating writer, then use the new hint.
+    let m = decode(edge_ty, Vector{UInt8}(edge_oracle))
+        set_string!(m, "text", "y"^600)
+        @test get_string(m, "text") == "y"^600
+        first = encode(m)
+        @test length(first) > 600
+        @test encode(m) == first # the hint now fits: direct path, same bytes
+        close(m)
+    end
+
     # A default message is zero bytes both ways.
     let tmp = new_message(edge_ty)
         @test isempty(encode(tmp))
@@ -165,6 +176,54 @@ end
     # encode_dict closes its tree even when the conversion throws (no finalizer
     # on Message by design, so a throw must not leak the native tree).
     @test_throws PbwireError encode_dict(ty, Dict("nope" => 1))
+
+    # The extended surface: deterministic/delimited encode, JSON and text
+    # print/parse, bounded decode, the visit scan, and service metadata.
+    let m = new_message(ty)
+        set_string!(m, "str", "hello")
+        w = encode(m)
+        @test encoded_size(m) == length(w)
+        @test is_initialized(m)
+        @test encode_deterministic(m) == w
+        framed = encode_delimited(m)
+        back, consumed = decode_delimited(ty, vcat(framed, framed))
+        @test encode(back) == w
+        @test consumed == length(framed)
+        close(back)
+        js = print_json(m)
+        from_json = parse_json(ty, js)
+        @test encode(from_json) == w
+        close(from_json)
+        @test_throws PbwireError parse_json(ty, "{\"nope\":1}")
+        ignored = parse_json(ty, "{\"nope\":1}", true)
+        @test encode(ignored) == UInt8[]
+        close(ignored)
+        kept = decode(ty, vcat(w, UInt8[0xf8, 0x06, 0x02])) # unknown field 111
+        @test occursin("111: 2", print_text(kept, true))
+        @test !occursin("111", print_text(kept, false))
+        close(kept)
+        tx = print_text(m)
+        from_text = parse_text(ty, tx)
+        @test encode(from_text) == w
+        close(from_text)
+        limited = decode_limits(ty, w)
+        @test encode(limited) == w
+        close(limited)
+        @test_throws PbwireError decode_limits(ty, w, 1, 0)
+        @test_throws PbwireError parse_json(ty, js, false, 1, 0)
+        @test_throws PbwireError parse_text(ty, tx, 1, 0)
+        @test parse_json(ty, js, false, length(js) + 1, 0) isa Message
+        seen = Ref(0)
+        visit(ty, w, (f) -> begin
+            seen[] += 1
+            @test f.number != 0
+            return true
+        end)
+        @test seen[] > 0
+        @test service_count(schema) == 0
+        @test_throws PbwireError resolve_method(schema, "no.Such", "Nope")
+        close(m)
+    end
 
     close(edge_schema)
     close(schema)

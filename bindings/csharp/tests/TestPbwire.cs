@@ -103,6 +103,70 @@ Check(Throws(() => ty.Decode(new byte[] { 0x80 })), "truncated tag accepted");
 Check(Throws(() => schema.Message("structtest.Nope")), "unknown message accepted");
 Check(Throws(() => ty.Field("nope")), "unknown field accepted");
 
+// The extended surface: deterministic/delimited encode, JSON and text
+// print/parse, bounded decode, the single-level visit scan, and service
+// routing metadata.
+using (var m = ty.NewMessage())
+{
+    m.Set("str", "hello");
+    var w = m.Encode();
+    Check(m.EncodedSize() == (ulong)w.Length, "encoded size");
+    Check(m.IsInitialized(), "initialized");
+    Check(m.EncodeDeterministic().SequenceEqual(w), "deterministic");
+    var framed = m.EncodeDelimited();
+    var both = framed.Concat(framed).ToArray();
+    var (back, consumed) = ty.DecodeDelimited(both);
+    using (back)
+    {
+        Check(back.Encode().SequenceEqual(w), "delimited round trip");
+    }
+    Check(consumed == framed.Length, "delimited consumed");
+    var js = m.PrintJson();
+    using (var fromJson = ty.ParseJson(js))
+    {
+        Check(fromJson.Encode().SequenceEqual(w), "json round trip");
+    }
+    Check(Throws(() => ty.ParseJson("{\"nope\":1}")), "json unknown accepted");
+    Check(Throws(() => ty.ParseJson(js, false, 1)), "ParseJson honors maxBytes");
+    using (var bounded = ty.ParseJson(js, false, (ulong)js.Length + 1))
+    {
+        Check(bounded.EncodedSize() > 0, "ParseJson accepts an adequate maxBytes");
+    }
+    using (var ignored = ty.ParseJson("{\"nope\":1}", ignoreUnknown: true))
+    {
+        Check(ignored.Encode().Length == 0, "json ignore unknown");
+    }
+    var tx = m.PrintText();
+    // PrintText(false) must drop unknown fields; the default used to print them.
+    var withUnknown = new byte[w.Length + 3];
+    Array.Copy(w, withUnknown, w.Length);
+    withUnknown[w.Length] = 0xF8; // field 111, varint 2
+    withUnknown[w.Length + 1] = 0x06;
+    withUnknown[w.Length + 2] = 0x02;
+    using (var decoded = ty.Decode(withUnknown))
+    {
+        Check(decoded.PrintText(true).Contains("111: 2"),
+            "PrintText(true) prints unknowns");
+        Check(!decoded.PrintText(false).Contains("111"),
+            "PrintText(false) drops unknowns");
+    }
+    Check(Throws(() => ty.ParseText(tx, 1)), "ParseText honors maxBytes");
+    using (var fromText = ty.ParseText(tx))
+    {
+        Check(fromText.Encode().SequenceEqual(w), "text round trip");
+    }
+    using (var limited = ty.DecodeLimits(w))
+    {
+        Check(limited.Encode().SequenceEqual(w), "limits defaults");
+    }
+    Check(Throws(() => ty.DecodeLimits(w, maxBytes: 1)), "limits maxBytes ignored");
+    var seen = 0;
+    ty.Visit(w, f => { seen++; return f.Number != 0; });
+    Check(seen > 0, "visit saw fields");
+    Check(schema.ServiceCount() == 0, "no services in fixture");
+    Check(Throws(() => schema.ResolveMethod("no.Such", "Nope")), "unknown service accepted");
+}
+
 // The cases a binding can get wrong even when the core is right: payloads with
 // embedded NULs / invalid UTF-8, non-ASCII text, a negative enum, an empty
 // repeated element, proto3 optional presence with an empty value, and oneof

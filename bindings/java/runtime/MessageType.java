@@ -38,11 +38,81 @@ public final class MessageType {
      * first access, untouched slices re-encode verbatim.
      */
     public Message decode(byte[] wire) {
+        return decode(wire, Limits.defaults());
+    }
+
+    /** Bounded decode, like the core's {@code pbw_decode_limits}. */
+    public Message decode(byte[] wire, Limits lim) {
         checkOpen();
         try {
-            return Message.root(this, GenericCodec.decode(def, wire));
+            return Message.root(this, GenericCodec.decode(def, wire, lim));
+        } catch (PbwireException e) {
+            throw e;
         } catch (IllegalArgumentException e) {
             throw new PbwireException(name() + ": decode failed", 1);
+        }
+    }
+
+    /** One delimited frame: the message plus its prefix + body length. */
+    public static final class Delimited {
+        public final Message message;
+        public final int consumed;
+
+        Delimited(Message message, int consumed) {
+            this.message = message;
+            this.consumed = consumed;
+        }
+    }
+
+    /** Decodes one length-delimited frame; trailing bytes are left over. */
+    public Delimited decodeDelimited(byte[] wire) {
+        return decodeDelimited(wire, 0, Limits.defaults());
+    }
+
+    /** Same with an explicit offset and bounds. */
+    public Delimited decodeDelimited(byte[] wire, int off, Limits lim) {
+        checkOpen();
+        try {
+            GenericCodec.Frame f = GenericCodec.decodeDelimited(def, wire, off, lim);
+            return new Delimited(Message.root(this, f.msg), f.consumed);
+        } catch (PbwireException e) {
+            throw e;
+        } catch (IllegalArgumentException e) {
+            throw new PbwireException(name() + ": decode failed", 1);
+        }
+    }
+
+    /** Parses JSON mapping into a new message; unknown fields fail. */
+    public Message parseJson(String json) {
+        return parseJson(json, false, Limits.defaults());
+    }
+
+    /** Parses JSON mapping, optionally skipping unknown field names. */
+    public Message parseJson(String json, boolean ignoreUnknown, Limits lim) {
+        checkOpen();
+        try {
+            return Message.root(this, Json.parse(def, json, ignoreUnknown, lim));
+        } catch (PbwireException e) {
+            throw new PbwireException(name() + ": " + e.getMessage(), e.status());
+        } catch (IllegalArgumentException e) {
+            throw new PbwireException(name() + ": parse failed", 1);
+        }
+    }
+
+    /** Parses text format into a new message. */
+    public Message parseText(String text) {
+        return parseText(text, Limits.defaults());
+    }
+
+    /** Parses text format with explicit bounds. */
+    public Message parseText(String text, Limits lim) {
+        checkOpen();
+        try {
+            return Message.root(this, Text.parse(def, text, lim));
+        } catch (PbwireException e) {
+            throw new PbwireException(name() + ": " + e.getMessage(), e.status());
+        } catch (IllegalArgumentException e) {
+            throw new PbwireException(name() + ": parse failed", 1);
         }
     }
 

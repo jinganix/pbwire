@@ -115,6 +115,136 @@ typedef _DecodeNative = Int32 Function(Pointer<Void> desc, Pointer<Void> buf,
     IntPtr len, Pointer<Pointer<Void>> out);
 typedef _DecodeDart = int Function(Pointer<Void> desc, Pointer<Void> buf,
     int len, Pointer<Pointer<Void>> out);
+typedef _DecodeDelimitedNative = Int32 Function(
+    Pointer<Void> desc,
+    Pointer<Void> buf,
+    IntPtr len,
+    Pointer<Pointer<Void>> out,
+    Pointer<IntPtr> consumed);
+typedef _DecodeDelimitedDart = int Function(
+    Pointer<Void> desc,
+    Pointer<Void> buf,
+    int len,
+    Pointer<Pointer<Void>> out,
+    Pointer<IntPtr> consumed);
+typedef _DecodeLimitsNative = Int32 Function(
+    Pointer<Void> desc,
+    Pointer<Void> buf,
+    IntPtr len,
+    Pointer<Void> limits,
+    Pointer<Pointer<Void>> out);
+
+/* pbw_visit_value / pbw_visit_fn: one scanned field, no tree. */
+final class _VisitValue extends Struct {
+  @Uint64()
+  external int u64;
+
+  external Pointer<Uint8> data;
+
+  @Size()
+  external int len;
+}
+
+typedef _VisitFnNative = Int32 Function(Pointer<Void> ud, Pointer<Void> field,
+    Uint32 number, Uint32 wireType, Pointer<_VisitValue> value);
+typedef _VisitNative = Int32 Function(
+    Pointer<Void> desc,
+    Pointer<Void> buf,
+    IntPtr len,
+    Pointer<Void> limits,
+    Pointer<NativeFunction<_VisitFnNative>> cb,
+    Pointer<Void> ud,
+    Pointer<IntPtr> failOff);
+typedef _DecodeLimitsDart = int Function(
+    Pointer<Void> desc,
+    Pointer<Void> buf,
+    int len,
+    Pointer<Void> limits,
+    Pointer<Pointer<Void>> out);
+typedef _VisitDart = int Function(
+    Pointer<Void> desc,
+    Pointer<Void> buf,
+    int len,
+    Pointer<Void> limits,
+    Pointer<NativeFunction<_VisitFnNative>> cb,
+    Pointer<Void> ud,
+    Pointer<IntPtr> failOff);
+typedef _JsonParseNative = Int32 Function(
+    Pointer<Void> desc,
+    Pointer<Utf8> text,
+    IntPtr len,
+    Pointer<Void> opts,
+    Pointer<Pointer<Void>> out);
+typedef _JsonParseDart = int Function(
+    Pointer<Void> desc,
+    Pointer<Utf8> text,
+    int len,
+    Pointer<Void> opts,
+    Pointer<Pointer<Void>> out);
+typedef _JsonParseLimitsNative = Int32 Function(
+    Pointer<Void> desc,
+    Pointer<Utf8> text,
+    IntPtr len,
+    Pointer<Void> limits,
+    Pointer<Void> opts,
+    Pointer<Pointer<Void>> out);
+typedef _JsonParseLimitsDart = int Function(
+    Pointer<Void> desc,
+    Pointer<Utf8> text,
+    int len,
+    Pointer<Void> limits,
+    Pointer<Void> opts,
+    Pointer<Pointer<Void>> out);
+typedef _TextParseLimitsNative = Int32 Function(
+    Pointer<Void> desc,
+    Pointer<Utf8> text,
+    IntPtr len,
+    Pointer<Void> limits,
+    Pointer<Pointer<Void>> out);
+typedef _TextParseLimitsDart = int Function(
+    Pointer<Void> desc,
+    Pointer<Utf8> text,
+    int len,
+    Pointer<Void> limits,
+    Pointer<Pointer<Void>> out);
+typedef _TextPrintOptsNative = Int32 Function(Pointer<Void> msg, Int32 printUnknown,
+    Pointer<Pointer<Uint8>> out, Pointer<IntPtr> len);
+typedef _TextPrintOptsDart = int Function(Pointer<Void> msg, int printUnknown,
+    Pointer<Pointer<Uint8>> out, Pointer<IntPtr> len);
+typedef _MillisNative = Int32 Function(Pointer<Void> msg, Pointer<Int64> out);
+typedef _MillisDart = int Function(Pointer<Void> msg, Pointer<Int64> out);
+typedef _FromMillisNative = Int32 Function(
+    Pointer<Void> desc, Int64 ms, Pointer<Pointer<Void>> out);
+typedef _FromMillisDart = int Function(
+    Pointer<Void> desc, int ms, Pointer<Pointer<Void>> out);
+typedef _AnyPackNative = Int32 Function(Pointer<Void> desc, Pointer<Utf8> url,
+    Pointer<Void> payload, IntPtr len, Pointer<Pointer<Void>> out);
+typedef _AnyPackDart = int Function(Pointer<Void> desc, Pointer<Utf8> url,
+    Pointer<Void> payload, int len, Pointer<Pointer<Void>> out);
+typedef _CountNative = IntPtr Function(Pointer<Void> ptr);
+typedef _CountDart = int Function(Pointer<Void> ptr);
+typedef _AtNative = Pointer<Void> Function(Pointer<Void> ptr, IntPtr index);
+typedef _AtDart = Pointer<Void> Function(Pointer<Void> ptr, int index);
+typedef _MethodStrNative = Pointer<Utf8> Function(Pointer<Void> ptr);
+typedef _MethodStrDart = Pointer<Utf8> Function(Pointer<Void> ptr);
+typedef _PathAtNative = Pointer<Utf8> Function(Pointer<Void> ptr, IntPtr index);
+typedef _PathAtDart = Pointer<Utf8> Function(Pointer<Void> ptr, int index);
+typedef _MethodIntNative = Int32 Function(Pointer<Void> ptr);
+typedef _MethodIntDart = int Function(Pointer<Void> ptr);
+typedef _EncodedSizeNative = Int32 Function(Pointer<Void> msg, Pointer<IntPtr> len);
+typedef _EncodedSizeDart = int Function(Pointer<Void> msg, Pointer<IntPtr> len);
+typedef _ServiceResolveNative = Int32 Function(
+    Pointer<Void> schema,
+    Pointer<Utf8> service,
+    Pointer<Utf8> method,
+    Pointer<Pointer<Void>> inDesc,
+    Pointer<Pointer<Void>> outDesc);
+typedef _ServiceResolveDart = int Function(
+    Pointer<Void> schema,
+    Pointer<Utf8> service,
+    Pointer<Utf8> method,
+    Pointer<Pointer<Void>> inDesc,
+    Pointer<Pointer<Void>> outDesc);
 typedef _StrerrorNative = Pointer<Utf8> Function(Int32 status);
 typedef _StrerrorDart = Pointer<Utf8> Function(int status);
 
@@ -169,7 +299,70 @@ final class PbwireLibrary {
         valueAt = lib.lookupFunction<_ValueAtNative, _ValueAtDart>('pbw_value_at'),
         encode = lib.lookupFunction<_EncodeNative, _EncodeDart>('pbw_encode'),
         encodeTo = lib.lookupFunction<_EncodeToNative, _EncodeToDart>('pbw_encode_to'),
+        encodeDeterministic =
+            lib.lookupFunction<_EncodeNative, _EncodeDart>('pbw_encode_deterministic'),
+        encodeDelimited =
+            lib.lookupFunction<_EncodeNative, _EncodeDart>('pbw_encode_delimited'),
         decode = lib.lookupFunction<_DecodeNative, _DecodeDart>('pbw_decode'),
+        decodeDelimited = lib
+            .lookupFunction<_DecodeDelimitedNative, _DecodeDelimitedDart>('pbw_decode_delimited'),
+        decodeLimits = lib
+            .lookupFunction<_DecodeLimitsNative, _DecodeLimitsDart>('pbw_decode_limits'),
+        visit = lib.lookupFunction<_VisitNative, _VisitDart>('pbw_visit_limits'),
+        jsonPrint = lib.lookupFunction<_EncodeNative, _EncodeDart>('pbw_json_print'),
+        jsonParse =
+            lib.lookupFunction<_JsonParseNative, _JsonParseDart>('pbw_json_parse_opts'),
+        jsonParseLimits = lib.lookupFunction<_JsonParseLimitsNative,
+            _JsonParseLimitsDart>('pbw_json_parse_limits'),
+        textPrint = lib.lookupFunction<_EncodeNative, _EncodeDart>('pbw_text_print'),
+        textPrintOpts = lib
+            .lookupFunction<_TextPrintOptsNative, _TextPrintOptsDart>('pbw_text_print_opts'),
+        textParse = lib.lookupFunction<_DecodeNative, _DecodeDart>('pbw_text_parse'),
+        textParseLimits = lib.lookupFunction<_TextParseLimitsNative,
+            _TextParseLimitsDart>('pbw_text_parse_limits'),
+        messageEncodedSize = lib.lookupFunction<_EncodedSizeNative, _EncodedSizeDart>(
+            'pbw_message_encoded_size'),
+        messageIsInitialized =
+            lib.lookupFunction<_Int32Native, _Int32Dart>('pbw_message_is_initialized'),
+        anyPack = lib.lookupFunction<_AnyPackNative, _AnyPackDart>('pbw_any_pack'),
+        anyTypeUrl = lib.lookupFunction<_NameNative, _NameDart>('pbw_any_type_url'),
+        anyPayload = lib.lookupFunction<_ValueBytesNative, _ValueBytesDart>('pbw_any_payload'),
+        timestampToMillis = lib
+            .lookupFunction<_MillisNative, _MillisDart>('pbw_timestamp_to_millis'),
+        durationToMillis = lib
+            .lookupFunction<_MillisNative, _MillisDart>('pbw_duration_to_millis'),
+        timestampFromMillis = lib
+            .lookupFunction<_FromMillisNative, _FromMillisDart>('pbw_timestamp_from_millis'),
+        durationFromMillis = lib
+            .lookupFunction<_FromMillisNative, _FromMillisDart>('pbw_duration_from_millis'),
+        fieldmaskPathCount = lib
+            .lookupFunction<_CountNative, _CountDart>('pbw_fieldmask_path_count'),
+        fieldmaskPathAt =
+            lib.lookupFunction<_PathAtNative, _PathAtDart>('pbw_fieldmask_path_at'),
+        schemaServiceCount = lib
+            .lookupFunction<_CountNative, _CountDart>('pbw_schema_service_count'),
+        schemaServiceAt =
+            lib.lookupFunction<_AtNative, _AtDart>('pbw_schema_service_at'),
+        schemaServiceFind =
+            lib.lookupFunction<_SchemaFindNative, _SchemaFindDart>('pbw_schema_service_find'),
+        serviceName = lib.lookupFunction<_NameNative, _NameDart>('pbw_service_name'),
+        serviceMethodCount = lib
+            .lookupFunction<_CountNative, _CountDart>('pbw_service_method_count'),
+        serviceMethodAt =
+            lib.lookupFunction<_AtNative, _AtDart>('pbw_service_method_at'),
+        serviceMethodFind =
+            lib.lookupFunction<_SchemaFindNative, _SchemaFindDart>('pbw_service_method_find'),
+        methodName = lib.lookupFunction<_NameNative, _NameDart>('pbw_method_name'),
+        methodInputType =
+            lib.lookupFunction<_MethodStrNative, _MethodStrDart>('pbw_method_input_type'),
+        methodOutputType =
+            lib.lookupFunction<_MethodStrNative, _MethodStrDart>('pbw_method_output_type'),
+        methodClientStreaming = lib
+            .lookupFunction<_MethodIntNative, _MethodIntDart>('pbw_method_client_streaming'),
+        methodServerStreaming = lib
+            .lookupFunction<_MethodIntNative, _MethodIntDart>('pbw_method_server_streaming'),
+        serviceResolve = lib
+            .lookupFunction<_ServiceResolveNative, _ServiceResolveDart>('pbw_service_resolve'),
         strerror = lib.lookupFunction<_StrerrorNative, _StrerrorDart>('pbw_strerror');
 
   static PbwireLibrary? _instance;
@@ -239,7 +432,43 @@ final class PbwireLibrary {
   final _ValueAtDart valueAt;
   final _EncodeDart encode;
   final _EncodeToDart encodeTo;
+  final _EncodeDart encodeDeterministic;
+  final _EncodeDart encodeDelimited;
   final _DecodeDart decode;
+  final _DecodeDelimitedDart decodeDelimited;
+  final _DecodeLimitsDart decodeLimits;
+  final _VisitDart visit;
+  final _EncodeDart jsonPrint;
+  final _JsonParseDart jsonParse;
+  final _JsonParseLimitsDart jsonParseLimits;
+  final _EncodeDart textPrint;
+  final _TextPrintOptsDart textPrintOpts;
+  final _DecodeDart textParse;
+  final _TextParseLimitsDart textParseLimits;
+  final _EncodedSizeDart messageEncodedSize;
+  final _Int32Dart messageIsInitialized;
+  final _AnyPackDart anyPack;
+  final _NameDart anyTypeUrl;
+  final _ValueBytesDart anyPayload;
+  final _MillisDart timestampToMillis;
+  final _MillisDart durationToMillis;
+  final _FromMillisDart timestampFromMillis;
+  final _FromMillisDart durationFromMillis;
+  final _CountDart fieldmaskPathCount;
+  final _PathAtDart fieldmaskPathAt;
+  final _CountDart schemaServiceCount;
+  final _AtDart schemaServiceAt;
+  final _FindFieldDart schemaServiceFind;
+  final _NameDart serviceName;
+  final _CountDart serviceMethodCount;
+  final _AtDart serviceMethodAt;
+  final _FindFieldDart serviceMethodFind;
+  final _NameDart methodName;
+  final _MethodStrDart methodInputType;
+  final _MethodStrDart methodOutputType;
+  final _MethodIntDart methodClientStreaming;
+  final _MethodIntDart methodServerStreaming;
+  final _ServiceResolveDart serviceResolve;
   final _StrerrorDart strerror;
 }
 
@@ -247,6 +476,34 @@ PbwireLibrary get _lib => PbwireLibrary.instance;
 
 PbwireException _statusError(int status) =>
     PbwireException(status, _lib.strerror(status).toDartString());
+
+/// `pbw_limits`: zero means the defaults (no byte cap, `PBW_MAX_DEPTH`).
+/// Bounds as `pbw_limits` expects them: zero means the default, and a negative
+/// value would wrap into an unsigned C field (a cap silently disabled), so it
+/// is rejected here.
+void _checkLimits(int maxBytes, int maxDepth) {
+  // Dart ints are signed 64-bit: the largest byte cap a size_t can take.
+  if (maxBytes < 0 || maxBytes > 0x7FFFFFFFFFFFFFFF) {
+    throw ArgumentError.value(maxBytes, 'maxBytes', 'must be a non-negative int');
+  }
+  if (maxDepth < 0 || maxDepth > 0xFFFFFFFF) {
+    throw ArgumentError.value(maxDepth, 'maxDepth', 'must be a non-negative int');
+  }
+}
+
+final class _Limits extends Struct {
+  @Size()
+  external int maxBytes;
+
+  @UnsignedInt()
+  external int maxDepth;
+}
+
+/// `pbw_json_parse_options`: skip unknown field names instead of failing.
+final class _JsonOptions extends Struct {
+  @Int()
+  external int ignoreUnknown;
+}
 
 /// Copies Dart bytes into native memory for one call.
 Pointer<Uint8> _copyIn(List<int> bytes) {
@@ -309,6 +566,59 @@ final class Schema {
         malloc.free(data);
       }
       calloc.free(out);
+    }
+  }
+
+  /// How many services the loaded files declare.
+  int get serviceCount {
+    _ensureOpen();
+    return _lib.schemaServiceCount(_handle);
+  }
+
+  /// One service by index.
+  Service serviceAt(int index) {
+    _ensureOpen();
+    final ptr = _lib.schemaServiceAt(_handle, index);
+    if (ptr == nullptr) {
+      throw PbwireException(-1, 'no service at index $index');
+    }
+    return Service._(this, ptr);
+  }
+
+  /// One service by fully qualified name, e.g. `pkg.Service`.
+  Service service(String name) {
+    _ensureOpen();
+    final native = name.toNativeUtf8();
+    try {
+      final ptr = _lib.schemaServiceFind(_handle, native);
+      if (ptr == nullptr) {
+        throw PbwireException(-1, 'no such service: $name');
+      }
+      return Service._(this, ptr);
+    } finally {
+      malloc.free(native);
+    }
+  }
+
+  /// Resolves a method to its input/output message types for routing: decode
+  /// with the input, encode with the output.
+  ({Type input, Type output}) resolveMethod(String service, String method) {
+    _ensureOpen();
+    final svc = service.toNativeUtf8();
+    final meth = method.toNativeUtf8();
+    final inDesc = calloc<Pointer<Void>>();
+    final outDesc = calloc<Pointer<Void>>();
+    try {
+      final status = _lib.serviceResolve(_handle, svc, meth, inDesc, outDesc);
+      if (status != 0) {
+        throw _statusError(status);
+      }
+      return (input: Type._(this, inDesc.value), output: Type._(this, outDesc.value));
+    } finally {
+      malloc.free(svc);
+      malloc.free(meth);
+      calloc.free(inDesc);
+      calloc.free(outDesc);
     }
   }
 
@@ -405,6 +715,212 @@ final class Type {
     }
   }
 
+  /// Decodes one length-delimited frame from the front of [wire], returning
+  /// the message and how many bytes the frame occupied.
+  ({Message message, int consumed}) decodeDelimited(List<int> wire) {
+    _ensureOpen();
+    final data = _copyIn(wire);
+    final out = calloc<Pointer<Void>>();
+    final consumed = malloc<IntPtr>();
+    try {
+      final status = _lib.decodeDelimited(_desc, data.cast(), wire.length, out, consumed);
+      if (status != 0) {
+        throw _statusError(status);
+      }
+      if (out.value == nullptr) {
+        throw PbwireException(-1, 'decode: no message returned');
+      }
+      return (message: Message._root(this, out.value), consumed: consumed.value);
+    } finally {
+      if (data != nullptr) {
+        malloc.free(data);
+      }
+      calloc.free(out);
+      malloc.free(consumed);
+    }
+  }
+
+  /// Decodes with explicit bounds: inputs larger than [maxBytes] fail, and
+  /// nesting past [maxDepth] fails. Zero means the defaults.
+  Message decodeLimits(List<int> wire, {int maxBytes = 0, int maxDepth = 0}) {
+    _ensureOpen();
+    _checkLimits(maxBytes, maxDepth);
+    final data = _copyIn(wire);
+    final out = calloc<Pointer<Void>>();
+    final limits = calloc<_Limits>();
+    try {
+      limits.ref.maxBytes = maxBytes;
+      limits.ref.maxDepth = maxDepth;
+      final status =
+          _lib.decodeLimits(_desc, data.cast(), wire.length, limits.cast(), out);
+      if (status != 0) {
+        throw _statusError(status);
+      }
+      if (out.value == nullptr) {
+        throw PbwireException(-1, 'decode: no message returned');
+      }
+      return Message._root(this, out.value);
+    } finally {
+      if (data != nullptr) {
+        malloc.free(data);
+      }
+      calloc.free(out);
+      calloc.free(limits);
+    }
+  }
+
+  /// Scans [wire] one level deep without building a tree: one callback per
+  /// field, the core allocating nothing. Nested messages and packed runs
+  /// arrive as [VisitField.data] payloads for the caller to recurse into.
+  /// Returning false stops the scan without an error.
+  void visit(List<int> wire, bool Function(VisitField field) cb,
+      {int maxBytes = 0, int maxDepth = 0}) {
+    _ensureOpen();
+    _checkLimits(maxBytes, maxDepth);
+    final data = _copyIn(wire);
+    final limits = calloc<_Limits>();
+    final failOff = malloc<IntPtr>();
+    final state = _VisitState(this, cb);
+    final native = NativeCallable<_VisitFnNative>.isolateLocal(
+        _visitTrampoline, exceptionalReturn: 1);
+    try {
+      limits.ref.maxBytes = maxBytes;
+      limits.ref.maxDepth = maxDepth;
+      // Save/restore, not clear: a callback may start another visit, and
+      // the outer scan must still find its own state afterwards.
+      final previous = _visitUser;
+      _visitUser = state;
+      try {
+        final status = _lib.visit(_desc, data.cast(), wire.length,
+            limits.cast(), native.nativeFunction, nullptr, failOff);
+        if (status != 0 && !state.stopped) {
+          throw _statusError(status);
+        }
+      } finally {
+        _visitUser = previous;
+      }
+    } finally {
+      native.close();
+      if (data != nullptr) {
+        malloc.free(data);
+      }
+      calloc.free(limits);
+      malloc.free(failOff);
+    }
+  }
+
+  /// Parses JSON mapping text into a new tree. Unknown fields fail unless
+  /// [ignoreUnknown] is set; [maxBytes]/[maxDepth] bound the input.
+  Message parseJson(String text,
+      {bool ignoreUnknown = false, int maxBytes = 0, int maxDepth = 0}) {
+    _ensureOpen();
+    _checkLimits(maxBytes, maxDepth);
+    final native = text.toNativeUtf8();
+    final opts = calloc<_JsonOptions>();
+    final limits = calloc<_Limits>();
+    final out = calloc<Pointer<Void>>();
+    try {
+      opts.ref.ignoreUnknown = ignoreUnknown ? 1 : 0;
+      limits.ref.maxBytes = maxBytes;
+      limits.ref.maxDepth = maxDepth;
+      final status = _lib.jsonParseLimits(
+          _desc, native, native.length, limits.cast(), opts.cast(), out);
+      if (status != 0) {
+        throw _statusError(status);
+      }
+      if (out.value == nullptr) {
+        throw PbwireException(-1, 'parse: no message returned');
+      }
+      return Message._root(this, out.value);
+    } finally {
+      malloc.free(native);
+      calloc.free(opts);
+      calloc.free(limits);
+      calloc.free(out);
+    }
+  }
+
+  /// Parses text format into a new tree; [maxBytes]/[maxDepth] bound the input.
+  Message parseText(String text, {int maxBytes = 0, int maxDepth = 0}) {
+    _ensureOpen();
+    _checkLimits(maxBytes, maxDepth);
+    final native = text.toNativeUtf8();
+    final limits = calloc<_Limits>();
+    final out = calloc<Pointer<Void>>();
+    try {
+      limits.ref.maxBytes = maxBytes;
+      limits.ref.maxDepth = maxDepth;
+      final status = _lib.textParseLimits(
+          _desc, native.cast(), native.length, limits.cast(), out);
+      if (status != 0) {
+        throw _statusError(status);
+      }
+      if (out.value == nullptr) {
+        throw PbwireException(-1, 'parse: no message returned');
+      }
+      return Message._root(this, out.value);
+    } finally {
+      malloc.free(native);
+      calloc.free(limits);
+      calloc.free(out);
+    }
+  }
+
+  /// Packs [payload] into a new `google.protobuf.Any` tree. This type is the
+  /// Any descriptor.
+  Message anyPack(String typeUrl, List<int> payload) {
+    _ensureOpen();
+    final url = typeUrl.toNativeUtf8();
+    final data = _copyIn(payload);
+    final out = calloc<Pointer<Void>>();
+    try {
+      final status =
+          _lib.anyPack(_desc, url, data.cast(), payload.length, out);
+      if (status != 0) {
+        throw _statusError(status);
+      }
+      return Message._root(this, out.value);
+    } finally {
+      malloc.free(url);
+      if (data != nullptr) {
+        malloc.free(data);
+      }
+      calloc.free(out);
+    }
+  }
+
+  /// A new `google.protobuf.Timestamp` tree holding [ms]. This type is the
+  /// Timestamp descriptor.
+  Message timestampFromMillis(int ms) {
+    _ensureOpen();
+    final out = calloc<Pointer<Void>>();
+    try {
+      final status = _lib.timestampFromMillis(_desc, ms, out);
+      if (status != 0) {
+        throw _statusError(status);
+      }
+      return Message._root(this, out.value);
+    } finally {
+      calloc.free(out);
+    }
+  }
+
+  /// A new `google.protobuf.Duration` tree holding [ms]. This type is the
+  /// Duration descriptor.
+  Message durationFromMillis(int ms) {
+    _ensureOpen();
+    final out = calloc<Pointer<Void>>();
+    try {
+      final status = _lib.durationFromMillis(_desc, ms, out);
+      if (status != 0) {
+        throw _statusError(status);
+      }
+      return Message._root(this, out.value);
+    } finally {
+      calloc.free(out);
+    }
+  }
+
   /// The message type of a MESSAGE/GROUP field, for nested access.
   Type? nestedType(Field field) {
     _ensureOpen();
@@ -414,6 +930,53 @@ final class Type {
 }
 
 /// A resolved field handle.
+/// One scanned field, filled by [Type.visit]. [name] is empty when the
+/// schema does not declare the number; [raw] carries the wire bits for
+/// varint and the fixed widths; [data] carries LEN payloads and whole
+/// groups (it points into the caller's wire for the callback only).
+final class VisitField {
+  VisitField(this.name, this.number, this.wireType, this.raw, this.data);
+
+  final String name;
+  final int number;
+  final int wireType;
+  final int raw;
+  final Uint8List? data;
+}
+
+/* The callback the C side calls. NativeCallable.isolateLocal only accepts a
+ * top-level function, so the user callback and its Type travel through this
+ * field: visit is synchronous, and one isolate runs one callback at a time. */
+class _VisitState {
+  _VisitState(this.type, this.cb);
+
+  final Type type;
+  final bool Function(VisitField field) cb;
+  bool stopped = false;
+}
+
+_VisitState? _visitUser;
+
+int _visitTrampoline(Pointer<Void> ud, Pointer<Void> field, int number,
+    int wireType, Pointer<_VisitValue> value) {
+  final state = _visitUser;
+  if (state == null) {
+    return 1;
+  }
+  final v = value.ref;
+  Uint8List? data;
+  if (v.data != nullptr) {
+    data = Uint8List.fromList(
+        v.data.asTypedList(v.len)); // copied: the wire outlives the callback
+  }
+  final name = field == nullptr ? '' : _lib.fieldName(field).toDartString();
+  if (!state.cb(VisitField(name, number, wireType, v.u64, data))) {
+    state.stopped = true;
+    return 1;
+  }
+  return 0;
+}
+
 final class Field {
   Field._(this._ptr, this._type);
 
@@ -651,6 +1214,24 @@ final class Message {
 
   /* ------------------------------------------------------------------- wire */
 
+  Uint8List _encodeWith(_EncodeDart fn) {
+    _check();
+    final out = calloc<Pointer<Uint8>>();
+    final len = malloc<IntPtr>();
+    try {
+      final status = fn(_handle, out, len);
+      if (status != 0) {
+        throw _statusError(status);
+      }
+      final bytes = Uint8List.fromList(out.value.asTypedList(len.value));
+      _lib.free(out.value.cast());
+      return bytes;
+    } finally {
+      calloc.free(out);
+      malloc.free(len);
+    }
+  }
+
   /// Encoded bytes (one allocation by the core, one copy into a Dart list).
   Uint8List encode() {
     _check();
@@ -668,6 +1249,141 @@ final class Message {
       calloc.free(out);
       malloc.free(len);
     }
+  }
+
+  /// Canonical encoding: map entries sorted by key, like the reference.
+  Uint8List encodeDeterministic() => _encodeWith(_lib.encodeDeterministic);
+
+  /// Encodes into caller-owned native memory (`malloc`/`calloc`) and returns
+  /// the bytes written: no allocation, `cap` is the hard limit. The core
+  /// over-reserves a few bytes per field, so size it as [encodedSize] + 12
+  /// when it must fit. A Dart `Uint8List` cannot be passed here: the GC may
+  /// move it, so allocate with `package:ffi`'s `malloc`.
+  int encodeTo(Pointer<Uint8> out, int cap) {
+    _check();
+    if (cap < 1) {
+      throw ArgumentError.value(cap, 'cap', 'needs at least one byte');
+    }
+    final len = malloc<IntPtr>();
+    try {
+      final status =
+          _lib.encodeTo(_handle, out.cast(), cap, len);
+      if (status != 0) {
+        throw _statusError(status);
+      }
+      return len.value;
+    } finally {
+      malloc.free(len);
+    }
+  }
+
+  /// One length-delimited frame (varint length + message).
+  Uint8List encodeDelimited() => _encodeWith(_lib.encodeDelimited);
+
+  /// Protobuf JSON mapping. Unknown fields are not printed.
+  String printJson() => String.fromCharCodes(_encodeWith(_lib.jsonPrint));
+
+  /// Protobuf text format. Unknown fields print as numeric lines when
+  /// [printUnknown] is set, like the reference printer.
+  String printText([bool printUnknown = false]) {
+    if (!printUnknown) {
+      return String.fromCharCodes(_encodeWith(_lib.textPrint));
+    }
+    _check();
+    final out = calloc<Pointer<Uint8>>();
+    final len = malloc<IntPtr>();
+    try {
+      final status = _lib.textPrintOpts(_handle, 1, out, len);
+      if (status != 0) {
+        throw _statusError(status);
+      }
+      final bytes = Uint8List.fromList(out.value.asTypedList(len.value));
+      _lib.free(out.value.cast());
+      return String.fromCharCodes(bytes);
+    } finally {
+      calloc.free(out);
+      malloc.free(len);
+    }
+  }
+
+  /// Exact bytes [encode] would write, without writing them.
+  int encodedSize() {
+    _check();
+    final len = malloc<IntPtr>();
+    try {
+      final status = _lib.messageEncodedSize(_handle, len);
+      if (status != 0) {
+        throw _statusError(status);
+      }
+      return len.value;
+    } finally {
+      malloc.free(len);
+    }
+  }
+
+  /// True when every proto2 `required` field is present.
+  bool isInitialized() {
+    _check();
+    return _lib.messageIsInitialized(_handle) != 0;
+  }
+
+  /// Field 1 of a `google.protobuf.Any` tree, or null when absent.
+  String? anyTypeUrl() {
+    _check();
+    final ptr = _lib.anyTypeUrl(_handle);
+    return ptr == nullptr ? null : ptr.toDartString();
+  }
+
+  /// Field 2 of a `google.protobuf.Any` tree, or null when absent.
+  Uint8List? anyPayload() {
+    _check();
+    final len = malloc<IntPtr>();
+    try {
+      final ptr = _lib.anyPayload(_handle, len);
+      if (ptr == nullptr) {
+        return null;
+      }
+      return Uint8List.fromList(ptr.cast<Uint8>().asTypedList(len.value));
+    } finally {
+      malloc.free(len);
+    }
+  }
+
+  /// A `google.protobuf.Timestamp` tree as milliseconds.
+  int timestampMillis() {
+    _check();
+    final out = malloc<Int64>();
+    try {
+      final status = _lib.timestampToMillis(_handle, out);
+      if (status != 0) {
+        throw _statusError(status);
+      }
+      return out.value;
+    } finally {
+      malloc.free(out);
+    }
+  }
+
+  /// A `google.protobuf.Duration` tree as milliseconds.
+  int durationMillis() {
+    _check();
+    final out = malloc<Int64>();
+    try {
+      final status = _lib.durationToMillis(_handle, out);
+      if (status != 0) {
+        throw _statusError(status);
+      }
+      return out.value;
+    } finally {
+      malloc.free(out);
+    }
+  }
+
+  /// Every path of a `google.protobuf.FieldMask` tree.
+  List<String> fieldMaskPaths() {
+    _check();
+    final n = _lib.fieldmaskPathCount(_handle);
+    return List.generate(n, (i) => _lib.fieldmaskPathAt(_handle, i).toDartString());
   }
 
   void close() {
@@ -730,5 +1446,89 @@ final class Value {
       return null;
     }
     return Message._view(type, ptr, _owner);
+  }
+}
+
+/* -------------------------------------------------------------- services */
+
+/// A service from a [Schema]: routing metadata, not RPC.
+final class Service {
+  Service._(this._schema, this._ptr);
+
+  final Schema _schema;
+
+  /// Keeps the Schema alive while the service is used.
+  final Pointer<Void> _ptr;
+
+  void _check() => _schema._ensureOpen();
+
+  String get name {
+    _check();
+    return _lib.serviceName(_ptr).toDartString();
+  }
+
+  int get methodCount {
+    _check();
+    return _lib.serviceMethodCount(_ptr);
+  }
+
+  Method methodAt(int index) {
+    _check();
+    final ptr = _lib.serviceMethodAt(_ptr, index);
+    if (ptr == nullptr) {
+      throw PbwireException(-1, 'no method at index $index');
+    }
+    return Method._(_schema, ptr);
+  }
+
+  Method method(String name) {
+    _check();
+    final native = name.toNativeUtf8();
+    try {
+      final ptr = _lib.serviceMethodFind(_ptr, native);
+      if (ptr == nullptr) {
+        throw PbwireException(-1, 'no such method: $name');
+      }
+      return Method._(_schema, ptr);
+    } finally {
+      malloc.free(native);
+    }
+  }
+}
+
+/// One service method: fully qualified input/output type names for routing.
+final class Method {
+  Method._(this._schema, this._ptr);
+
+  final Schema _schema;
+  final Pointer<Void> _ptr;
+
+  void _check() => _schema._ensureOpen();
+
+  String get name {
+    _check();
+    return _lib.methodName(_ptr).toDartString();
+  }
+
+  /// Fully qualified input message name, without the leading dot.
+  String get inputType {
+    _check();
+    return _lib.methodInputType(_ptr).toDartString();
+  }
+
+  /// Fully qualified output message name, without the leading dot.
+  String get outputType {
+    _check();
+    return _lib.methodOutputType(_ptr).toDartString();
+  }
+
+  bool get clientStreaming {
+    _check();
+    return _lib.methodClientStreaming(_ptr) != 0;
+  }
+
+  bool get serverStreaming {
+    _check();
+    return _lib.methodServerStreaming(_ptr) != 0;
   }
 }

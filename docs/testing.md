@@ -210,10 +210,22 @@ make go-test                     # cgo dynamic binding (parity + hot-swap)
 make test-cpp                    # C++ binding self-check
 make codegen-test                  # the generated model test of every binding
 make conformance-python          # official suite through the Python binding
-make conformance-ruby            # official binary suite through the Ruby binding
-make conformance-java            # official binary suite through the Java binding
-make conformance-lua conformance-r conformance-node  # same suite through those bindings
+make conformance-ruby            # same through the Ruby binding
+make conformance-java            # same through the Java binding (pure-Java JSON/text)
+make conformance-lua conformance-r conformance-node  # same through those bindings
+make conformance-julia conformance-scala conformance-clojure conformance-fsharp conformance-zig
 ```
+
+Eleven bindings run the whole suite (binary, JSON and text); only JSPB answers
+`skipped` everywhere. The JVM bindings share the Java runtime, and the FFI /
+static-link hosts forward to the same C core, so a mapping bug has one place to
+live and one suite to prove it.
+
+The suite's *recommended* tier is not enforced: `--enforce_recommended` reports
+`RejectInvalidUtf8.String.*` for the core and for every binding, because
+`pbw_decode` keeps string bytes as given (a gateway must pass an invalid-UTF-8
+field through unchanged) and only the JSON/text printers reject it. Required
+tests all pass.
 
 ## 6. Environments a laptop cannot cover
 

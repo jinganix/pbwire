@@ -1,0 +1,29 @@
+// Shared verify-and-fill fixture: one service (all four streaming shapes via
+// two methods) plus a holder for the well-known-type helpers. Every binding
+// self-check references the compiled tests/data/adv.desc; regenerate with:
+//   protoc --descriptor_set_out=tests/data/adv.desc --include_imports
+//       -I/opt/homebrew/include -Itests/data tests/data/adv.proto
+syntax = "proto3";
+
+package pbwire.adv;
+
+import "google/protobuf/any.proto";
+import "google/protobuf/duration.proto";
+import "google/protobuf/field_mask.proto";
+import "google/protobuf/timestamp.proto";
+
+message Holder {
+  google.protobuf.Any any = 1;
+  google.protobuf.Timestamp ts = 2;
+  google.protobuf.Duration dur = 3;
+  google.protobuf.FieldMask mask = 4;
+}
+
+message Job {
+  string id = 1;
+}
+
+service Jobs {
+  rpc Get(Job) returns (Job);
+  rpc Watch(stream Job) returns (stream Job);
+}

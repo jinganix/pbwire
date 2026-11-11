@@ -103,7 +103,8 @@ typedef struct {
 enum {
     MSG_CLOSED = 0,
     MSG_BUILDER = 1, /* mutable pbw_message tree */
-    MSG_WIRE = 2     /* read-only view over decoded bytes */
+    MSG_WIRE = 2,    /* read-only view over decoded bytes */
+    MSG_CTX = 3      /* read-only borrow of a context's arena */
 };
 
 typedef struct {
@@ -115,6 +116,9 @@ typedef struct {
     VALUE parent; /* borrowed sub-message: the builder that owns tree */
     int owned;
     size_t enc_cap;
+    /* context borrow */
+    VALUE ctx_obj; /* Context object anchoring the arena */
+    unsigned ctx_gen; /* generation seen at decode */
     /* wire view */
     VALUE buffer; /* frozen String holding the bytes */
     const uint8_t *data;
@@ -276,6 +280,7 @@ message_mark(void *ptr)
     rb_gc_mark(message->type);
     rb_gc_mark(message->parent);
     rb_gc_mark(message->buffer);
+    rb_gc_mark(message->ctx_obj);
 }
 
 static void
@@ -341,6 +346,8 @@ message_alloc(VALUE klass)
     message->parent = Qnil;
     message->owned = 0;
     message->enc_cap = 0;
+    message->ctx_obj = Qnil;
+    message->ctx_gen = 0;
     message->buffer = Qnil;
     message->data = NULL;
     message->off = 0;
@@ -1155,6 +1162,10 @@ scalar_at(field_t *f, const uint8_t *p, const uint8_t *end, size_t *used)
 static VALUE message_wire_new(VALUE type, VALUE buffer, size_t off, size_t len,
                               uint32_t depth);
 static VALUE field_value(message_t *m, field_t *f);
+static pbw_message *message_read_tree(VALUE obj, message_t **out);
+static pbw_message *ctx_tree_checked(VALUE obj, message_t *message);
+static void parse_limits(VALUE opts, pbw_limits *storage,
+                         const pbw_limits **out);
 
 /* One repeated slice: a single unpacked value, or a whole packed run. */
 static void
@@ -1562,7 +1573,7 @@ item_to_ruby(VALUE owner, field_t *f, pbw_value *value)
 }
 
 static VALUE
-schema_s_load(VALUE klass, VALUE bytes)
+schema_do_load(VALUE klass, VALUE bytes, const pbw_limits *limits)
 {
     pbw_schema *schema = NULL;
     pbw_status status;
@@ -1570,8 +1581,9 @@ schema_s_load(VALUE klass, VALUE bytes)
     VALUE obj;
 
     StringValue(bytes);
-    status = pbw_descriptor_set_load(RSTRING_PTR(bytes),
-                                     (size_t)RSTRING_LEN(bytes), &schema);
+    status = pbw_descriptor_set_load_limits(RSTRING_PTR(bytes),
+                                            (size_t)RSTRING_LEN(bytes),
+                                            limits, &schema);
     if (status != PBW_OK) {
         /* the reason lives inside the schema: copy it before freeing */
         char reason[192];
@@ -1591,11 +1603,31 @@ schema_s_load(VALUE klass, VALUE bytes)
 }
 
 static VALUE
-schema_s_from_file(VALUE klass, VALUE path)
+schema_s_load(int argc, VALUE *argv, VALUE klass)
 {
-    VALUE bytes = rb_funcall(rb_cFile, rb_intern2("binread", 7), 1, path);
+    VALUE bytes;
+    VALUE opts = Qnil;
+    pbw_limits storage;
+    const pbw_limits *limits;
 
-    return schema_s_load(klass, bytes);
+    rb_scan_args(argc, argv, "11", &bytes, &opts);
+    parse_limits(opts, &storage, &limits);
+    return schema_do_load(klass, bytes, limits);
+}
+
+static VALUE
+schema_s_from_file(int argc, VALUE *argv, VALUE klass)
+{
+    VALUE path;
+    VALUE opts = Qnil;
+    VALUE bytes;
+    pbw_limits storage;
+    const pbw_limits *limits;
+
+    rb_scan_args(argc, argv, "11", &path, &opts);
+    parse_limits(opts, &storage, &limits);
+    bytes = rb_funcall(rb_cFile, rb_intern2("binread", 7), 1, path);
+    return schema_do_load(klass, bytes, limits);
 }
 
 static VALUE
@@ -1765,7 +1797,7 @@ message_get(VALUE self, VALUE key)
         {
             /* Also checks that no parent this builder was borrowed from has
              * been closed under it. */
-            pbw_message *tree = message_tree(self, &message);
+            pbw_message *tree = message_read_tree(self, &message);
             pbw_value *value = pbw_message_get_field(
                 tree, pbw_descriptor_field_at(type->desc, (size_t)f->index));
 
@@ -1810,7 +1842,7 @@ message_encode(VALUE self)
         return out;
     }
     {
-        pbw_message *tree = message_tree(self, &message);
+        pbw_message *tree = message_read_tree(self, &message);
         size_t cap = message->enc_cap;
         size_t wire = pbw_message_wire_size(tree);
 
@@ -1845,17 +1877,40 @@ message_encode(VALUE self)
 }
 
 static VALUE
-message_decode(VALUE self, VALUE bytes)
+message_decode(int argc, VALUE *argv, VALUE self)
 {
     message_t *message;
+    type_t *type;
+    VALUE bytes;
+    VALUE opts = Qnil;
+    pbw_limits storage;
+    const pbw_limits *limits;
     VALUE buffer;
 
+    rb_scan_args(argc, argv, "11", &bytes, &opts);
     TypedData_Get_Struct(self, message_t, &message_data_type, message);
     if (message->kind == MSG_CLOSED) {
         rb_raise(eError, "%s: message is closed",
                  type_name(message_type_of(self)));
     }
+    type = message_type_of(self);
     StringValue(bytes);
+    parse_limits(opts, &storage, &limits);
+    if (limits != NULL) {
+        /* The view itself stays lazy: validate eagerly, then hand back
+         * the usual bytes. */
+        pbw_message *tmp = NULL;
+        pbw_status status = pbw_decode_limits(type->desc,
+                                              RSTRING_PTR(bytes),
+                                              (size_t)RSTRING_LEN(bytes),
+                                              limits, &tmp);
+
+        if (status != PBW_OK) {
+            rb_raise(eError, "%s: %s", type_name(type),
+                     pbw_strerror(status));
+        }
+        pbw_message_free(tmp);
+    }
     buffer = rb_str_new_frozen(bytes);
     return message_wire_new(message->type, buffer, 0,
                             (size_t)RSTRING_LEN(buffer), 0);
@@ -1869,6 +1924,10 @@ message_print_tree(VALUE self, message_t *message, int *free_tree)
     if (message->kind == MSG_BUILDER) {
         *free_tree = 0;
         return message_tree(self, NULL);
+    }
+    if (message->kind == MSG_CTX) {
+        *free_tree = 0;
+        return ctx_tree_checked(self, message);
     }
     {
         type_t *type = message_type_of(self);
@@ -1956,7 +2015,8 @@ message_to_text(int argc, VALUE *argv, VALUE self)
 
 /* Parses text (JSON mapping or text format) into a new builder tree. */
 static VALUE
-message_parse(VALUE self, VALUE text, int json, int ignore_unknown)
+message_parse(VALUE self, VALUE text, int json, int ignore_unknown,
+              const pbw_limits *limits)
 {
     message_t *message;
     type_t *type;
@@ -1974,11 +2034,13 @@ message_parse(VALUE self, VALUE text, int json, int ignore_unknown)
         pbw_json_parse_options opts;
 
         opts.ignore_unknown_fields = ignore_unknown;
-        status = pbw_json_parse_opts(type->desc, RSTRING_PTR(text),
-                                     (size_t)RSTRING_LEN(text), &opts, &tree);
+        status = pbw_json_parse_limits(type->desc, RSTRING_PTR(text),
+                                       (size_t)RSTRING_LEN(text), limits,
+                                       &opts, &tree);
     } else {
-        status = pbw_text_parse(type->desc, RSTRING_PTR(text),
-                                (size_t)RSTRING_LEN(text), &tree);
+        status = pbw_text_parse_limits(type->desc, RSTRING_PTR(text),
+                                       (size_t)RSTRING_LEN(text), limits,
+                                       &tree);
     }
     if (status != PBW_OK) {
         rb_raise(eError, "%s: %s", type_name(type), pbw_strerror(status));
@@ -1994,9 +2056,13 @@ message_from_json(int argc, VALUE *argv, VALUE self)
 {
     VALUE text;
     VALUE ignore = Qfalse;
+    VALUE opts = Qnil;
+    pbw_limits storage;
+    const pbw_limits *limits;
 
-    rb_scan_args(argc, argv, "11", &text, &ignore);
-    return message_parse(self, text, 1, RTEST(ignore));
+    rb_scan_args(argc, argv, "12", &text, &ignore, &opts);
+    parse_limits(opts, &storage, &limits);
+    return message_parse(self, text, 1, RTEST(ignore), limits);
 }
 
 /* Materializes a decoded view into a builder holding the parsed tree, so
@@ -2018,6 +2084,27 @@ message_to_builder(VALUE self)
     if (message->kind == MSG_BUILDER) {
         return self;
     }
+    if (message->kind == MSG_CTX) {
+        pbw_message *borrowed = ctx_tree_checked(self, message);
+        uint8_t *wire = NULL;
+        size_t wire_len = 0;
+        pbw_message *fresh = NULL;
+
+        type = message_type_of(self);
+        status = pbw_encode(borrowed, &wire, &wire_len);
+        if (status != PBW_OK) {
+            rb_raise(eError, "%s: %s", type_name(type),
+                     pbw_strerror(status));
+        }
+        status = pbw_decode(type->desc, wire, wire_len, &fresh);
+        pbw_free(wire);
+        if (status != PBW_OK) {
+            rb_raise(eError, "%s: %s", type_name(type),
+                     pbw_strerror(status));
+        }
+        return message_builder_new(message->type, message->holder, fresh,
+                                   Qnil, 1);
+    }
     type = message_type_of(self);
     status = pbw_decode(type->desc,
                         (const uint8_t *)message->data + message->off,
@@ -2030,9 +2117,33 @@ message_to_builder(VALUE self)
 }
 
 static VALUE
-message_from_text(VALUE self, VALUE text)
+message_from_text(int argc, VALUE *argv, VALUE self)
 {
-    return message_parse(self, text, 0, 0);
+    VALUE text;
+    VALUE opts = Qnil;
+    pbw_limits storage;
+    const pbw_limits *limits;
+    message_t *message;
+    type_t *type;
+    pbw_message *tree = NULL;
+    pbw_status status;
+
+    rb_scan_args(argc, argv, "11", &text, &opts);
+    TypedData_Get_Struct(self, message_t, &message_data_type, message);
+    if (message->kind == MSG_CLOSED) {
+        rb_raise(eError, "%s: message is closed",
+                 type_name(message_type_of(self)));
+    }
+    type = message_type_of(self);
+    StringValue(text);
+    parse_limits(opts, &storage, &limits);
+    status = pbw_text_parse_limits(type->desc, RSTRING_PTR(text),
+                                   (size_t)RSTRING_LEN(text), limits, &tree);
+    if (status != PBW_OK) {
+        rb_raise(eError, "%s: %s", type_name(type), pbw_strerror(status));
+    }
+    return message_builder_new(message->type, message->holder, tree, Qnil,
+                               1);
 }
 
 static VALUE
@@ -2098,16 +2209,21 @@ message_encode_delimited(VALUE self)
 /* One frame from a byte string: [message, bytes consumed]. The message is
  * a builder holding the decoded tree. */
 static VALUE
-message_decode_delimited(VALUE self, VALUE bytes)
+message_decode_delimited(int argc, VALUE *argv, VALUE self)
 {
     message_t *message;
     type_t *type;
+    VALUE bytes;
+    VALUE opts = Qnil;
+    pbw_limits storage;
+    const pbw_limits *limits;
     pbw_message *tree = NULL;
     size_t consumed = 0;
     pbw_status status;
     VALUE out;
     VALUE pair[2];
 
+    rb_scan_args(argc, argv, "11", &bytes, &opts);
     TypedData_Get_Struct(self, message_t, &message_data_type, message);
     if (message->kind == MSG_CLOSED) {
         rb_raise(eError, "%s: message is closed",
@@ -2115,9 +2231,10 @@ message_decode_delimited(VALUE self, VALUE bytes)
     }
     type = message_type_of(self);
     StringValue(bytes);
-    status = pbw_decode_delimited(type->desc, RSTRING_PTR(bytes),
-                                  (size_t)RSTRING_LEN(bytes), &tree,
-                                  &consumed);
+    parse_limits(opts, &storage, &limits);
+    status = pbw_decode_delimited_limits(type->desc, RSTRING_PTR(bytes),
+                                         (size_t)RSTRING_LEN(bytes), limits,
+                                         &tree, &consumed);
     if (status != PBW_OK) {
         rb_raise(eError, "%s: %s", type_name(type), pbw_strerror(status));
     }
@@ -2128,13 +2245,946 @@ message_decode_delimited(VALUE self, VALUE bytes)
     return out;
 }
 
+/* Pool/context handles; the message borrow (MSG_CTX, below) anchors a
+ * context object and checks its generation on every read. */
+typedef struct {
+    pbw_ctx *ctx;
+    pbw_pool *pool; /* NULL for standalone contexts */
+    VALUE pool_obj; /* anchor while pooled */
+    int released;
+    unsigned gen; /* bumped by reset/release; messages hold their own */
+    size_t retain_cap; /* tracked here; the core only takes a setter */
+} ctx_t;
+
+typedef struct {
+    pbw_pool *pool;
+} pool_t;
+
+static VALUE cPool;
+static VALUE cContext;
+
+static const rb_data_type_t ctx_data_type;
+
+/* Optional limits hash (nil = core defaults): {max_bytes:, max_depth:}. */
+static void
+parse_limits(VALUE opts, pbw_limits *storage, const pbw_limits **out)
+{
+    VALUE v;
+
+    storage->max_bytes = 0;
+    storage->max_depth = 0;
+    if (NIL_P(opts)) {
+        *out = NULL;
+        return;
+    }
+    Check_Type(opts, T_HASH);
+    /* NUM2SIZET/NUM2UINT convert -1 to the unsigned maximum instead of
+     * failing, which would silently turn a cap into "no cap"; check the sign
+     * on a signed value first. */
+    v = rb_hash_lookup(opts, ID2SYM(rb_intern("max_bytes")));
+    if (!NIL_P(v)) {
+        long long n = NUM2LL(v);
+
+        if (n < 0) {
+            rb_raise(eError, "pbwire: max_bytes must not be negative");
+        }
+        storage->max_bytes = (size_t)n;
+    }
+    v = rb_hash_lookup(opts, ID2SYM(rb_intern("max_depth")));
+    if (!NIL_P(v)) {
+        long long n = NUM2LL(v);
+
+        if (n < 0 || n > (long long)UINT32_MAX) {
+            rb_raise(eError, "pbwire: max_depth must be between 0 and %u",
+                     UINT32_MAX);
+        }
+        storage->max_depth = (uint32_t)n;
+    }
+    *out = storage;
+}
+
+/* The tree behind a read: a builder's own tree, or a context borrow after
+ * a generation check (dies with the context's reset). */
+static pbw_message *
+ctx_tree_checked(VALUE obj, message_t *message)
+{
+    ctx_t *ctx;
+
+    TypedData_Get_Struct(message->ctx_obj, ctx_t, &ctx_data_type, ctx);
+    if (ctx->ctx == NULL || ctx->released || ctx->gen != message->ctx_gen) {
+        rb_raise(eError, "%s: context was reset",
+                 type_name(message_type_of(obj)));
+    }
+    return message->tree;
+}
+
+/* Builder tree for writes, context borrow or builder tree for reads. */
+static pbw_message *
+message_read_tree(VALUE obj, message_t **out)
+{
+    message_t *message;
+
+    TypedData_Get_Struct(obj, message_t, &message_data_type, message);
+    if (out != NULL) {
+        *out = message;
+    }
+    if (message->kind == MSG_CTX) {
+        return ctx_tree_checked(obj, message);
+    }
+    return message_tree(obj, out);
+}
+
+/* Exact number of bytes encode() writes: for callers that must know the
+ * length before encoding (a length-prefixed frame, encode_to). */
+static VALUE
+message_encoded_size(VALUE self)
+{
+    message_t *message;
+    type_t *type;
+    pbw_message *tree;
+    size_t n = 0;
+    pbw_status status;
+
+    TypedData_Get_Struct(self, message_t, &message_data_type, message);
+    if (message->kind == MSG_CLOSED) {
+        rb_raise(eError, "%s: message is closed",
+                 type_name(message_type_of(self)));
+    }
+    type = message_type_of(self);
+    if (message->kind == MSG_WIRE) {
+        /* Wire views only borrow their bytes: size a throwaway tree. */
+        pbw_message *tmp = NULL;
+
+        status = pbw_decode(type->desc, message->data + message->off,
+                            message->len, &tmp);
+        if (status != PBW_OK) {
+            rb_raise(eError, "%s: %s", type_name(type),
+                     pbw_strerror(status));
+        }
+        status = pbw_message_encoded_size(tmp, &n);
+        pbw_message_free(tmp);
+    } else {
+        tree = message_read_tree(self, &message);
+        status = pbw_message_encoded_size(tree, &n);
+    }
+    if (status != PBW_OK) {
+        rb_raise(eError, "%s: %s", type_name(type), pbw_strerror(status));
+    }
+    return SIZET2NUM(n);
+}
+
+/* Encode into a fixed cap: no growth, PBW_ERR_LIMIT when it does not fit
+ * (size + PBW_ENCODE_SLACK always fits; the exact size may not, as the
+ * writer over-reserves tag/varint room). */
+static VALUE
+message_encode_cap(VALUE self, VALUE capval, int delimited)
+{
+    message_t *message;
+    pbw_message *tree;
+    size_t cap = (size_t)NUM2SIZET(capval);
+    VALUE out;
+    size_t len = 0;
+    pbw_status status;
+
+    TypedData_Get_Struct(self, message_t, &message_data_type, message);
+    if (message->kind == MSG_CLOSED) {
+        rb_raise(eError, "%s: message is closed",
+                 type_name(message_type_of(self)));
+    }
+    if (message->kind == MSG_WIRE) {
+        rb_raise(eError, "%s: decoded messages encode their own bytes",
+                 type_name(message_type_of(self)));
+    }
+    tree = message_read_tree(self, &message);
+    out = rb_str_buf_new((long)(cap > 0 ? cap : 1));
+    status = delimited
+        ? pbw_encode_delimited_to(tree, RSTRING_PTR(out), cap, &len)
+        : pbw_encode_to(tree, RSTRING_PTR(out), cap, &len);
+    if (status != PBW_OK) {
+        if (status == PBW_ERR_LIMIT) {
+            rb_raise(eError, "%s: buffer too small",
+                     type_name(message_type_of(self)));
+        }
+        rb_raise(eError, "%s: %s", type_name(message_type_of(self)),
+                 pbw_strerror(status));
+    }
+    rb_str_set_len(out, (long)len);
+    return out;
+}
+
+static VALUE
+message_encode_to(VALUE self, VALUE cap)
+{
+    return message_encode_cap(self, cap, 0);
+}
+
+static VALUE
+message_encode_delimited_to(VALUE self, VALUE cap)
+{
+    return message_encode_cap(self, cap, 1);
+}
+
+struct sink_state {
+    int aborted;
+};
+
+/* Streams 8 KiB chunks to the block; the block aborts by returning false. */
+static pbw_status
+sink_yield(const uint8_t *data, size_t len, void *opaque)
+{
+    struct sink_state *st = (struct sink_state *)opaque;
+    VALUE chunk = rb_str_new((const char *)data, (long)len);
+    VALUE ret = rb_yield(chunk);
+
+    if (!RTEST(ret)) {
+        st->aborted = 1;
+        return PBW_ERR_INVALID;
+    }
+    return PBW_OK;
+}
+
+static VALUE
+message_encode_sink(VALUE self)
+{
+    message_t *message;
+    pbw_message *tree;
+    struct sink_state st;
+    pbw_status status;
+
+    if (!rb_block_given_p()) {
+        rb_raise(eError, "encode_sink needs a block");
+    }
+    TypedData_Get_Struct(self, message_t, &message_data_type, message);
+    if (message->kind == MSG_CLOSED) {
+        rb_raise(eError, "%s: message is closed",
+                 type_name(message_type_of(self)));
+    }
+    if (message->kind == MSG_WIRE) {
+        /* Wire views only borrow their bytes: chunk the copy. */
+        size_t off = 0;
+
+        while (off < message->len || (message->len == 0 && off == 0)) {
+            size_t n = message->len - off < 8192 ? message->len - off : 8192;
+            VALUE chunk = rb_str_new((const char *)message->data +
+                                     message->off + off, (long)n);
+            if (!RTEST(rb_yield(chunk))) {
+                rb_raise(eError, "%s: sink aborted",
+                         type_name(message_type_of(self)));
+            }
+            off += n;
+            if (message->len == 0) {
+                break;
+            }
+        }
+        return self;
+    }
+    tree = message_read_tree(self, &message);
+    st.aborted = 0;
+    /* A raising block longjmps through the core, which holds no
+     * allocations across the sink call (stack buffer only). */
+    status = pbw_encode_sink(tree, sink_yield, &st);
+    if (status != PBW_OK) {
+        if (st.aborted) {
+            rb_raise(eError, "%s: sink aborted",
+                     type_name(message_type_of(self)));
+        }
+        rb_raise(eError, "%s: %s", type_name(message_type_of(self)),
+                 pbw_strerror(status));
+    }
+    return self;
+}
+
+struct visit_state {
+    VALUE events; /* Array of [number, wire_type, value] */
+    VALUE buffer; /* frozen String: the scanned bytes, kept alive */
+    type_t *type;
+    uint32_t depth;
+    pbw_status status;
+};
+
+/* Best-effort value: typed through the schema when the number is known
+ * (sub-messages become wire-view Messages), raw otherwise. */
+static VALUE
+visit_value(struct visit_state *st, uint32_t number, uint32_t wire_type,
+            const pbw_visit_value *value)
+{
+    field_t *f = type_field_by_number(st->type, number);
+
+    if (f != NULL && f->type == PBW_TYPE_MESSAGE && wire_type == 2) {
+        VALUE sub = rb_str_new_frozen(rb_str_new((const char *)value->data,
+                                                (long)value->len));
+
+        return message_wire_new(f->sub, sub, 0, value->len, st->depth + 1);
+    }
+    if (f != NULL && f->type == PBW_TYPE_GROUP && wire_type == 3) {
+        VALUE sub = rb_str_new_frozen(rb_str_new((const char *)value->data,
+                                                (long)value->len));
+
+        return message_wire_new(f->sub, sub, 0, value->len, st->depth + 1);
+    }
+    if (wire_type == 2 || wire_type == 3) {
+        if (f != NULL && (f->type == PBW_TYPE_STRING ||
+                          f->type == PBW_TYPE_BYTES)) {
+            return string_from(f->type, value->data, value->len);
+        }
+        return rb_str_new((const char *)value->data, (long)value->len);
+    }
+    if (f != NULL && wire_type == (uint32_t)f->wire) {
+        if (f->type == PBW_TYPE_STRING || f->type == PBW_TYPE_BYTES) {
+            return Qnil; /* cannot happen: strings are LEN */
+        }
+        return scalar_to_ruby(f->type, value->u64);
+    }
+    return ULL2NUM(value->u64);
+}
+
+static pbw_status
+visit_collect(void *ud, const pbw_field *field, uint32_t number,
+              uint32_t wire_type, const pbw_visit_value *value)
+{
+    struct visit_state *st = (struct visit_state *)ud;
+    VALUE ev;
+
+    (void)field;
+    if (st->status != PBW_OK) {
+        return st->status;
+    }
+    ev = rb_ary_new_capa(3);
+    rb_ary_push(ev, UINT2NUM(number));
+    rb_ary_push(ev, UINT2NUM(wire_type));
+    rb_ary_push(ev, visit_value(st, number, wire_type, value));
+    rb_ary_push(st->events, ev);
+    return PBW_OK;
+}
+
+/* Single-level scan of bytes: an Array of [number, wire_type, value] with
+ * no message tree. Scalars arrive typed through the schema (varints
+ * unfolded), LEN payloads and whole group fields as Strings, known
+ * sub-messages as wire-view Messages. */
+static VALUE
+message_visit(int argc, VALUE *argv, VALUE self)
+{
+    message_t *message;
+    type_t *type;
+    VALUE bytes;
+    VALUE opts = Qnil;
+    pbw_limits storage;
+    const pbw_limits *limits;
+    struct visit_state st;
+    size_t fail_off = 0;
+    pbw_status status;
+
+    rb_scan_args(argc, argv, "11", &bytes, &opts);
+    TypedData_Get_Struct(self, message_t, &message_data_type, message);
+    if (message->kind == MSG_CLOSED) {
+        rb_raise(eError, "%s: message is closed",
+                 type_name(message_type_of(self)));
+    }
+    type = message_type_of(self);
+    StringValue(bytes);
+    parse_limits(opts, &storage, &limits);
+    st.events = rb_ary_new();
+    st.buffer = rb_str_new_frozen(bytes);
+    st.type = type;
+    st.depth = 0;
+    st.status = PBW_OK;
+    status = pbw_visit_limits(type->desc, RSTRING_PTR(st.buffer),
+                              (size_t)RSTRING_LEN(st.buffer), limits,
+                              visit_collect, &st, &fail_off);
+    RB_GC_GUARD(st.events);
+    RB_GC_GUARD(st.buffer);
+    if (status != PBW_OK) {
+        rb_raise(eError, "%s @%lu: %s", type_name(type),
+                 (unsigned long)fail_off, pbw_strerror(status));
+    }
+    return st.events;
+}
+
+/* Loaded service names, for routing. */
+static VALUE
+schema_services(VALUE self)
+{
+    pbw_schema *schema = schema_ptr(self);
+    size_t n = pbw_schema_service_count(schema);
+    size_t i;
+    VALUE out = rb_ary_new_capa((long)n);
+
+    for (i = 0; i < n; i++) {
+        rb_ary_push(out,
+                    rb_utf8_str_new_cstr(pbw_service_name(pbw_schema_service_at(schema, i))));
+    }
+    return out;
+}
+
+static VALUE
+method_hash(const pbw_method *m)
+{
+    VALUE h = rb_hash_new();
+
+    rb_hash_aset(h, ID2SYM(rb_intern("name")),
+                 rb_utf8_str_new_cstr(pbw_method_name(m)));
+    rb_hash_aset(h, ID2SYM(rb_intern("input_type")),
+                 rb_utf8_str_new_cstr(pbw_method_input_type(m)));
+    rb_hash_aset(h, ID2SYM(rb_intern("output_type")),
+                 rb_utf8_str_new_cstr(pbw_method_output_type(m)));
+    rb_hash_aset(h, ID2SYM(rb_intern("client_streaming")),
+                 pbw_method_client_streaming(m) ? Qtrue : Qfalse);
+    rb_hash_aset(h, ID2SYM(rb_intern("server_streaming")),
+                 pbw_method_server_streaming(m) ? Qtrue : Qfalse);
+    return h;
+}
+
+/* One service and its methods. */
+static VALUE
+schema_service(VALUE self, VALUE name)
+{
+    pbw_schema *schema = schema_ptr(self);
+    const pbw_service *svc;
+    size_t n;
+    size_t i;
+    VALUE out;
+    VALUE methods;
+
+    StringValue(name);
+    svc = pbw_schema_service_find(schema, StringValueCStr(name));
+    if (svc == NULL) {
+        rb_raise(eError, "no service %" PRIsVALUE " in the schema", name);
+    }
+    n = pbw_service_method_count(svc);
+    out = rb_hash_new();
+    methods = rb_ary_new_capa((long)n);
+    rb_hash_aset(out, ID2SYM(rb_intern("name")),
+                 rb_utf8_str_new_cstr(pbw_service_name(svc)));
+    for (i = 0; i < n; i++) {
+        rb_ary_push(methods, method_hash(pbw_service_method_at(svc, i)));
+    }
+    rb_hash_aset(out, ID2SYM(rb_intern("methods")), methods);
+    return out;
+}
+
+/* Resolve a method to its input/output message names for routing. */
+static VALUE
+schema_resolve(VALUE self, VALUE svc_name, VALUE method_name)
+{
+    pbw_schema *schema = schema_ptr(self);
+    const pbw_descriptor *in_desc = NULL;
+    const pbw_descriptor *out_desc = NULL;
+    VALUE out;
+    pbw_status status;
+
+    StringValue(svc_name);
+    StringValue(method_name);
+    status = pbw_service_resolve(schema, StringValueCStr(svc_name),
+                                 StringValueCStr(method_name), &in_desc,
+                                 &out_desc);
+    if (status != PBW_OK) {
+        rb_raise(eError, "%" PRIsVALUE "/%" PRIsVALUE ": %s", svc_name,
+                 method_name, pbw_strerror(status));
+    }
+    out = rb_hash_new();
+    rb_hash_aset(out, ID2SYM(rb_intern("input")),
+                 rb_utf8_str_new_cstr(pbw_descriptor_name(in_desc)));
+    rb_hash_aset(out, ID2SYM(rb_intern("output")),
+                 rb_utf8_str_new_cstr(pbw_descriptor_name(out_desc)));
+    return out;
+}
+
+/* Pack already-encoded payload into a new Any tree of this type. */
+static VALUE
+message_any_pack(VALUE self, VALUE type_url, VALUE payload)
+{
+    message_t *message;
+    type_t *type;
+    pbw_message *packed = NULL;
+    pbw_status status;
+    VALUE out;
+
+    TypedData_Get_Struct(self, message_t, &message_data_type, message);
+    if (message->kind == MSG_CLOSED) {
+        rb_raise(eError, "%s: message is closed",
+                 type_name(message_type_of(self)));
+    }
+    type = message_type_of(self);
+    StringValue(type_url);
+    StringValue(payload);
+    if (memchr(RSTRING_PTR(type_url), '\0',
+               (size_t)RSTRING_LEN(type_url)) != NULL) {
+        rb_raise(eError, "%s: NUL in type_url", type_name(type));
+    }
+    status = pbw_any_pack(type->desc, RSTRING_PTR(type_url),
+                          RSTRING_PTR(payload), (size_t)RSTRING_LEN(payload),
+                          &packed);
+    if (status != PBW_OK) {
+        rb_raise(eError, "%s: %s", type_name(type), pbw_strerror(status));
+    }
+    out = message_builder_new(message->type, message->holder, packed, Qnil,
+                              1);
+    return out;
+}
+
+static VALUE
+message_any_type_url(VALUE self)
+{
+    message_t *message;
+    pbw_message *tree = message_read_tree(self, &message);
+    const char *url = pbw_any_type_url(tree);
+
+    if (url == NULL) {
+        return Qnil;
+    }
+    return rb_utf8_str_new_cstr(url);
+}
+
+static VALUE
+message_any_payload(VALUE self)
+{
+    message_t *message;
+    pbw_message *tree = message_read_tree(self, &message);
+    size_t len = 0;
+    const void *data = pbw_any_payload(tree, &len);
+
+    if (data == NULL) {
+        return Qnil;
+    }
+    return rb_str_new((const char *)data, (long)len);
+}
+
+/* A Timestamp/Duration tree of this type holding ms. */
+static VALUE
+message_time_from_millis(VALUE self, VALUE ms, int duration)
+{
+    message_t *message;
+    type_t *type;
+    pbw_message *tree = NULL;
+    int64_t millis = NUM2LL(ms);
+    pbw_status status;
+
+    TypedData_Get_Struct(self, message_t, &message_data_type, message);
+    if (message->kind == MSG_CLOSED) {
+        rb_raise(eError, "%s: message is closed",
+                 type_name(message_type_of(self)));
+    }
+    type = message_type_of(self);
+    status = duration ? pbw_duration_from_millis(type->desc, millis, &tree)
+                      : pbw_timestamp_from_millis(type->desc, millis, &tree);
+    if (status != PBW_OK) {
+        rb_raise(eError, "%s: %s", type_name(type), pbw_strerror(status));
+    }
+    return message_builder_new(message->type, message->holder, tree, Qnil,
+                               1);
+}
+
+static VALUE
+message_timestamp_from_millis(VALUE self, VALUE ms)
+{
+    return message_time_from_millis(self, ms, 0);
+}
+
+static VALUE
+message_duration_from_millis(VALUE self, VALUE ms)
+{
+    return message_time_from_millis(self, ms, 1);
+}
+
+static VALUE
+message_time_millis(VALUE self, int duration)
+{
+    message_t *message;
+    pbw_message *tree = message_read_tree(self, &message);
+    int64_t ms = 0;
+    pbw_status status = duration ? pbw_duration_to_millis(tree, &ms)
+                                 : pbw_timestamp_to_millis(tree, &ms);
+
+    if (status != PBW_OK) {
+        rb_raise(eError, "%s: %s", type_name(message_type_of(self)),
+                 pbw_strerror(status));
+    }
+    return LL2NUM(ms);
+}
+
+static VALUE
+message_timestamp_millis(VALUE self)
+{
+    return message_time_millis(self, 0);
+}
+
+static VALUE
+message_duration_millis(VALUE self)
+{
+    return message_time_millis(self, 1);
+}
+
+/* A FieldMask's paths without materializing the list. */
+static VALUE
+message_fieldmask_paths(VALUE self)
+{
+    message_t *message;
+    pbw_message *tree = message_read_tree(self, &message);
+    size_t n = pbw_fieldmask_path_count(tree);
+    size_t i;
+    VALUE out = rb_ary_new_capa((long)n);
+
+    for (i = 0; i < n; i++) {
+        const char *path = pbw_fieldmask_path_at(tree, i);
+
+        rb_ary_push(out, rb_utf8_str_new_cstr(path != NULL ? path : ""));
+    }
+    return out;
+}
+
+/* ------------------------------------------------- pool and context */
+
+static void
+ctx_mark(void *ptr)
+{
+    ctx_t *ctx = (ctx_t *)ptr;
+
+    if (ctx != NULL) {
+        rb_gc_mark(ctx->pool_obj);
+    }
+}
+
+static void
+ctx_free(void *ptr)
+{
+    ctx_t *ctx = (ctx_t *)ptr;
+
+    if (ctx == NULL) {
+        return;
+    }
+    if (ctx->ctx != NULL) {
+        if (ctx->pool != NULL && !ctx->released) {
+            /* Collected while acquired: hand it back so the pool's
+             * freelist never dangles. */
+            pbw_pool_release(ctx->pool, ctx->ctx);
+        } else if (ctx->pool == NULL) {
+            pbw_ctx_free(ctx->ctx);
+        }
+    }
+    xfree(ctx);
+}
+
+static const rb_data_type_t ctx_data_type = {
+    "pbwire/context",
+    {ctx_mark, ctx_free, NULL},
+    0,
+    0,
+    RUBY_TYPED_FREE_IMMEDIATELY,
+};
+
+static void
+pool_free(void *ptr)
+{
+    pool_t *pool = (pool_t *)ptr;
+
+    if (pool == NULL) {
+        return;
+    }
+    if (pool->pool != NULL) {
+        pbw_pool_free(pool->pool);
+    }
+    xfree(pool);
+}
+
+static const rb_data_type_t pool_data_type = {
+    "pbwire/pool",
+    {NULL, pool_free, NULL},
+    0,
+    0,
+    RUBY_TYPED_FREE_IMMEDIATELY,
+};
+
+static ctx_t *
+ctx_ptr(VALUE obj)
+{
+    ctx_t *ctx;
+
+    TypedData_Get_Struct(obj, ctx_t, &ctx_data_type, ctx);
+    if (ctx->ctx == NULL || ctx->released) {
+        rb_raise(eError, "context was released");
+    }
+    return ctx;
+}
+
+/* Bounded freelist of contexts: acquire instead of Context.new, release
+ * instead of reset. A released context is already reset. */
+static VALUE
+pool_s_new(int argc, VALUE *argv, VALUE klass)
+{
+    VALUE max_idle = Qnil;
+    VALUE retain_cap = Qnil;
+    pool_t *pool;
+    VALUE obj;
+
+    rb_scan_args(argc, argv, "02", &max_idle, &retain_cap);
+    obj = typed_object_alloc(klass, &pool_data_type, (void **)&pool);
+    pool->pool = pbw_pool_new(NIL_P(max_idle) ? 0 : (size_t)NUM2SIZET(max_idle),
+                              NIL_P(retain_cap) ? 0 : (size_t)NUM2SIZET(retain_cap));
+    if (pool->pool == NULL) {
+        rb_raise(eError, "out of memory");
+    }
+    return obj;
+}
+
+/* Exclusive use until release; the context is already reset. */
+static VALUE
+pool_acquire(VALUE self)
+{
+    pool_t *pool;
+    pbw_ctx *ctx;
+    ctx_t *c;
+    VALUE obj;
+
+    TypedData_Get_Struct(self, pool_t, &pool_data_type, pool);
+    if (pool->pool == NULL) {
+        rb_raise(eError, "pool is closed");
+    }
+    ctx = pbw_pool_acquire(pool->pool);
+    if (ctx == NULL) {
+        rb_raise(eError, "out of memory");
+    }
+    obj = typed_object_alloc(cContext, &ctx_data_type, (void **)&c);
+    c->ctx = ctx;
+    c->pool = pool->pool;
+    c->pool_obj = self;
+    c->released = 0;
+    c->gen = 0;
+    c->retain_cap = 0;
+    return obj;
+}
+
+static VALUE
+pool_release(VALUE self, VALUE ctx_obj)
+{
+    pool_t *pool;
+    ctx_t *ctx;
+
+    TypedData_Get_Struct(self, pool_t, &pool_data_type, pool);
+    TypedData_Get_Struct(ctx_obj, ctx_t, &ctx_data_type, ctx);
+    if (pool->pool == NULL) {
+        rb_raise(eError, "pool is closed");
+    }
+    if (ctx->ctx == NULL || ctx->released || ctx->pool != pool->pool) {
+        rb_raise(eError, "context does not belong to this pool");
+    }
+    pbw_pool_release(pool->pool, ctx->ctx);
+    ctx->released = 1;
+    ctx->gen++;
+    return self;
+}
+
+static VALUE
+pool_idle(VALUE self)
+{
+    pool_t *pool;
+
+    TypedData_Get_Struct(self, pool_t, &pool_data_type, pool);
+    if (pool->pool == NULL) {
+        rb_raise(eError, "pool is closed");
+    }
+    return SIZET2NUM(pbw_pool_idle(pool->pool));
+}
+
+static VALUE
+pool_close(VALUE self)
+{
+    pool_t *pool;
+
+    TypedData_Get_Struct(self, pool_t, &pool_data_type, pool);
+    if (pool->pool != NULL) {
+        pbw_pool_free(pool->pool);
+        pool->pool = NULL;
+    }
+    return self;
+}
+
+static VALUE
+context_s_new(VALUE klass)
+{
+    ctx_t *ctx;
+    VALUE obj = typed_object_alloc(klass, &ctx_data_type, (void **)&ctx);
+
+    ctx->ctx = pbw_ctx_new();
+    if (ctx->ctx == NULL) {
+        rb_raise(eError, "out of memory");
+    }
+    ctx->pool = NULL;
+    ctx->pool_obj = Qnil;
+    ctx->released = 0;
+    ctx->gen = 0;
+    ctx->retain_cap = 0;
+    return obj;
+}
+
+/* Release every allocation since the last reset, keeping the buffers.
+ * Bumps the generation: outstanding borrows raise on next use. */
+static VALUE
+context_reset(VALUE self)
+{
+    ctx_t *ctx = ctx_ptr(self);
+
+    pbw_ctx_reset(ctx->ctx);
+    ctx->gen++;
+    return self;
+}
+
+static VALUE
+context_used(VALUE self)
+{
+    ctx_t *ctx = ctx_ptr(self);
+
+    return SIZET2NUM(pbw_ctx_used(ctx->ctx));
+}
+
+static VALUE
+context_retain_cap(VALUE self)
+{
+    ctx_t *ctx = ctx_ptr(self);
+
+    return SIZET2NUM(ctx->retain_cap);
+}
+
+static VALUE
+context_set_retain_cap(VALUE self, VALUE cap)
+{
+    ctx_t *ctx = ctx_ptr(self);
+
+    ctx->retain_cap = (size_t)NUM2SIZET(cap);
+    pbw_ctx_set_retain_cap(ctx->ctx, ctx->retain_cap);
+    return self;
+}
+
+static VALUE
+context_released_p(VALUE self)
+{
+    ctx_t *ctx;
+
+    TypedData_Get_Struct(self, ctx_t, &ctx_data_type, ctx);
+    return (ctx->ctx == NULL || ctx->released) ? Qtrue : Qfalse;
+}
+
+static VALUE
+context_close(VALUE self)
+{
+    ctx_t *ctx;
+
+    TypedData_Get_Struct(self, ctx_t, &ctx_data_type, ctx);
+    if (ctx->ctx != NULL && !ctx->released) {
+        if (ctx->pool != NULL) {
+            pbw_pool_release(ctx->pool, ctx->ctx);
+        } else {
+            pbw_ctx_free(ctx->ctx);
+        }
+        ctx->ctx = NULL;
+        ctx->released = 1;
+        ctx->gen++;
+    }
+    return self;
+}
+
+/* Decode into the arena: the message borrows the context (read-only, dies
+ * with reset). */
+static VALUE
+context_decode(int argc, VALUE *argv, VALUE self)
+{
+    ctx_t *ctx = ctx_ptr(self);
+    VALUE schema_obj;
+    VALUE type_name_val;
+    VALUE bytes;
+    VALUE opts = Qnil;
+    pbw_schema *schema;
+    const pbw_descriptor *desc;
+    pbw_limits storage;
+    const pbw_limits *limits;
+    pbw_message *tree = NULL;
+    pbw_status status;
+    message_t *message;
+    VALUE obj;
+    VALUE type_obj;
+
+    rb_scan_args(argc, argv, "31", &schema_obj, &type_name_val, &bytes,
+                 &opts);
+    schema = schema_ptr(schema_obj);
+    StringValue(type_name_val);
+    desc = pbw_schema_find(schema, StringValueCStr(type_name_val));
+    if (desc == NULL || pbw_descriptor_is_enum(desc)) {
+        rb_raise(eError, "no message %" PRIsVALUE " in the schema",
+                 type_name_val);
+    }
+    StringValue(bytes);
+    parse_limits(opts, &storage, &limits);
+    status = pbw_decode_ctx_limits(ctx->ctx, desc, RSTRING_PTR(bytes),
+                                   (size_t)RSTRING_LEN(bytes), limits, &tree);
+    if (status != PBW_OK) {
+        rb_raise(eError, "%" PRIsVALUE ": %s", type_name_val,
+                 pbw_strerror(status));
+    }
+    type_obj = type_for(schema_obj, desc);
+    obj = typed_object_alloc(cMessage, &message_data_type,
+                             (void **)&message);
+    message->kind = MSG_CTX;
+    message->type = type_obj;
+    message->tree = tree;
+    {
+        schema_t *own;
+
+        TypedData_Get_Struct(schema_obj, schema_t, &schema_data_type, own);
+        message->holder = own->holder;
+        holder_ref(own->holder);
+    }
+    message->parent = Qnil;
+    message->owned = 0;
+    message->enc_cap = 0;
+    message->buffer = Qnil;
+    message->data = NULL;
+    message->off = 0;
+    message->len = 0;
+    message->depth = 0;
+    message->slices = message->inline_slices;
+    message->nslices = 0;
+    message->cap = SLICE_INLINE;
+    message->ctx_obj = self;
+    message->ctx_gen = ctx->gen;
+    return obj;
+}
+
+/* Encode a message through the context's buffer. */
+static VALUE
+context_encode(VALUE self, VALUE msg)
+{
+    ctx_t *ctx = ctx_ptr(self);
+    message_t *message;
+    pbw_message *tree;
+    const uint8_t *out = NULL;
+    size_t len = 0;
+    pbw_status status;
+    VALUE str;
+
+    TypedData_Get_Struct(msg, message_t, &message_data_type, message);
+    if (message->kind == MSG_CLOSED) {
+        rb_raise(eError, "%s: message is closed",
+                 type_name(message_type_of(msg)));
+    }
+    if (message->kind == MSG_WIRE) {
+        return rb_str_new((const char *)message->data + message->off,
+                          (long)message->len);
+    }
+    tree = message_read_tree(msg, &message);
+    status = pbw_encode_ctx(ctx->ctx, tree, &out, &len);
+    if (status != PBW_OK) {
+        rb_raise(eError, "%s: %s", type_name(message_type_of(msg)),
+                 pbw_strerror(status));
+    }
+    str = rb_str_new((const char *)out, (long)len);
+    return str;
+}
 static VALUE
 message_close(VALUE self)
 {
     message_t *message;
 
     TypedData_Get_Struct(self, message_t, &message_data_type, message);
-    if (message->kind == MSG_BUILDER) {
+    if (message->kind == MSG_BUILDER || message->kind == MSG_CTX) {
         if (message->owned && message->tree != NULL) {
             pbw_message_free(message->tree);
         }
@@ -2142,6 +3192,7 @@ message_close(VALUE self)
         holder_release(message->holder);
         message->holder = NULL;
         message->parent = Qnil;
+        message->ctx_obj = Qnil;
     }
     if (message->slices != message->inline_slices) {
         free(message->slices);
@@ -2189,8 +3240,11 @@ Init_pbwire_ext(void)
 
     cSchema = rb_define_class_under(mPbwire, "Schema", rb_cObject);
     rb_define_alloc_func(cSchema, schema_alloc);
-    rb_define_singleton_method(cSchema, "from_bytes", schema_s_load, 1);
-    rb_define_singleton_method(cSchema, "from_file", schema_s_from_file, 1);
+    rb_define_singleton_method(cSchema, "from_bytes", schema_s_load, -1);
+    rb_define_singleton_method(cSchema, "from_file", schema_s_from_file, -1);
+    rb_define_method(cSchema, "services", schema_services, 0);
+    rb_define_method(cSchema, "service", schema_service, 1);
+    rb_define_method(cSchema, "resolve", schema_resolve, 2);
     rb_define_method(cSchema, "message", schema_message, 1);
     rb_define_method(cSchema, "close", schema_close, 0);
     rb_define_method(cSchema, "release", schema_close, 0);
@@ -2201,6 +3255,24 @@ Init_pbwire_ext(void)
     cType = rb_define_class_under(mPbwire, "Type", rb_cObject);
     rb_define_alloc_func(cType, type_alloc);
 
+    cPool = rb_define_class_under(mPbwire, "Pool", rb_cObject);
+    rb_define_singleton_method(cPool, "new", pool_s_new, -1);
+    rb_define_method(cPool, "acquire", pool_acquire, 0);
+    rb_define_method(cPool, "release", pool_release, 1);
+    rb_define_method(cPool, "idle", pool_idle, 0);
+    rb_define_method(cPool, "close", pool_close, 0);
+
+    cContext = rb_define_class_under(mPbwire, "Context", rb_cObject);
+    rb_define_singleton_method(cContext, "new", context_s_new, 0);
+    rb_define_method(cContext, "decode", context_decode, -1);
+    rb_define_method(cContext, "encode", context_encode, 1);
+    rb_define_method(cContext, "reset", context_reset, 0);
+    rb_define_method(cContext, "used", context_used, 0);
+    rb_define_method(cContext, "retain_cap", context_retain_cap, 0);
+    rb_define_method(cContext, "retain_cap=", context_set_retain_cap, 1);
+    rb_define_method(cContext, "released?", context_released_p, 0);
+    rb_define_method(cContext, "close", context_close, 0);
+
     cMessage = rb_define_class_under(mPbwire, "Message", rb_cObject);
     rb_define_alloc_func(cMessage, message_alloc);
     rb_define_method(cMessage, "type", message_type, 0);
@@ -2209,15 +3281,35 @@ Init_pbwire_ext(void)
     rb_define_method(cMessage, "get", message_get, 1);
     rb_define_method(cMessage, "[]", message_get, 1);
     rb_define_method(cMessage, "encode", message_encode, 0);
-    rb_define_method(cMessage, "decode", message_decode, 1);
+    rb_define_method(cMessage, "decode", message_decode, -1);
+    rb_define_method(cMessage, "encoded_size", message_encoded_size, 0);
+    rb_define_method(cMessage, "encode_to", message_encode_to, 1);
+    rb_define_method(cMessage, "encode_delimited_to",
+                     message_encode_delimited_to, 1);
+    rb_define_method(cMessage, "encode_sink", message_encode_sink, 0);
+    rb_define_method(cMessage, "visit", message_visit, -1);
+    rb_define_method(cMessage, "any_pack", message_any_pack, 2);
+    rb_define_method(cMessage, "any_type_url", message_any_type_url, 0);
+    rb_define_method(cMessage, "any_payload", message_any_payload, 0);
+    rb_define_method(cMessage, "timestamp_millis", message_timestamp_millis,
+                     0);
+    rb_define_method(cMessage, "duration_millis", message_duration_millis,
+                     0);
+    rb_define_method(cMessage, "timestamp_from_millis",
+                     message_timestamp_from_millis, 1);
+    rb_define_method(cMessage, "duration_from_millis",
+                     message_duration_from_millis, 1);
+    rb_define_method(cMessage, "fieldmask_paths", message_fieldmask_paths,
+                     0);
     rb_define_method(cMessage, "to_json", message_to_json, 0);
     rb_define_method(cMessage, "to_text", message_to_text, -1);
     rb_define_method(cMessage, "from_json", message_from_json, -1);
     rb_define_method(cMessage, "to_builder", message_to_builder, 0);
-    rb_define_method(cMessage, "from_text", message_from_text, 1);
+    rb_define_method(cMessage, "from_text", message_from_text, -1);
     rb_define_method(cMessage, "encode_deterministic", message_encode_deterministic, 0);
     rb_define_method(cMessage, "encode_delimited", message_encode_delimited, 0);
-    rb_define_method(cMessage, "decode_delimited", message_decode_delimited, 1);
+    rb_define_method(cMessage, "decode_delimited", message_decode_delimited,
+                       -1);
     rb_define_method(cMessage, "close", message_close, 0);
     rb_define_method(cMessage, "release", message_close, 0);
     rb_define_method(cMessage, "closed?", message_closed_p, 0);

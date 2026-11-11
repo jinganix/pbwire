@@ -37,6 +37,12 @@ d = to_dict(decoded)          # plain Dicts: d["inners"][2]["value"] == 42
 Fields are addressed by name (`"i32"`) or by a `Field` handle from
 `field(ty, "i32")`; the handle skips the name lookup and is what a hot loop
 should reuse. `set_*` returns the message, so calls chain; `at` is 1-based.
+A `MsgType` caches both the fields it resolved and the types behind its message
+fields, so repeated nested access reuses one cache.
+
+`encode` writes straight into the array it returns (one `ccall`, no copy out of
+a core buffer), sized from the last wire length the message saw; a tree that
+grows past that hint falls back to the allocating writer instead of failing.
 
 ## Requirements
 
@@ -96,4 +102,21 @@ julia --project=runtime conformance/testee.jl build/conformance.desc
 ```
 
 Speaks the runner's framing (little-endian length prefix) and answers binary
-in → binary out from the schema; JSON/text requests answer `skipped`.
+in both directions from the schema (`print_json`/`parse_json`,
+`print_text`/`parse_text`); only JSPB answers `skipped`.
+
+## Core coverage
+
+`ccall` reaches every core entry point the binding lists; the Julia layer only
+converts values:
+
+| member | what it does |
+|---|---|
+| `print_json(m)` / `parse_json(ty, text[, ignore_unknown[, max_bytes, max_depth]])` | JSON mapping, bounded |
+| `print_text(m[, print_unknown])` / `parse_text(ty, text[, max_bytes, max_depth])` | text format, bounded |
+| `encode_deterministic(m)` | map entries sorted by key |
+| `encode_delimited(m)` / `decode_delimited(ty, wire)` | framing, with `consumed` |
+| `encoded_size(m)` | exact size without writing |
+| `visit(ty, wire, cb)` | single-level scan; a callback exception is rethrown after the scan stops |
+| `any_pack(ty, url, payload)`, `any_type_url`/`any_payload`, `timestamp_from_millis`/`timestamp_millis` (+ duration), `fieldmask_paths(m)` | WKT helpers |
+| `service(s, name)`, `resolve_method(s, svc, meth)`, `client_streaming`/`server_streaming` | routing metadata |

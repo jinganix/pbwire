@@ -38,6 +38,25 @@ extern NSString *const PBWErrorDomain;
  * enum. The returned message retains this schema. */
 - (nullable PBWMessage *)messageByName:(NSString *)name;
 
+/* Service routing over the descriptor set (the core does no RPC: a transport
+ * decodes with the input message and encodes with the output one). Fully
+ * qualified names without the leading dot ("pkg.Service"), like the
+ * descriptors. Hand-built schemas carry no services. */
+
+/* Every service in the set, in descriptor order; empty when there are none. */
+- (nonnull NSArray<NSString *> *)serviceNames;
+
+/* Every method of that service, in declaration order; nil when the service
+ * is unknown. */
+- (nullable NSArray<NSString *> *)methodNamesForService:(NSString *)service;
+
+/* Fully qualified input/output message names for a method; nil when the
+ * service or the method is unknown. Feed them to messageByName:. */
+- (nullable NSString *)inputTypeForService:(NSString *)service
+                                    method:(NSString *)method;
+- (nullable NSString *)outputTypeForService:(NSString *)service
+                                     method:(NSString *)method;
+
 @end
 
 NS_ASSUME_NONNULL_END

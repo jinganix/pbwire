@@ -349,6 +349,118 @@ ok(schema:roundtrip(msg, with_unknown) == with_unknown,
 local kept = schema:decode(msg, with_unknown)
 ok(kept.name == back.name, "known fields survive table round trip")
 
+-- visit: single-level scan with no tree (field 8 "name" is LEN "alice").
+local events = schema:visit(msg, wire)
+local seen_name, seen_i32 = false, false
+for _, ev in ipairs(events) do
+    if ev.number == 8 then
+        ok(ev.wire_type == 2 and ev.value == "alice", "visit sees the LEN string")
+        seen_name = true
+    end
+    if ev.number == 1 then
+        ok(ev.wire_type == 0, "visit sees the varint wire type")
+        seen_i32 = true
+    end
+end
+ok(seen_name and seen_i32, "visit covers scalar and LEN fields")
+ok(fails(function() schema:visit(msg, wire, { max_bytes = 4 }) end),
+   "visit honors max_bytes")
+
+-- encoded_size matches, encode_to honors a fixed cap.
+local size = schema:encoded_size(msg, full)
+ok(size == #wire, "encoded_size matches the wire length")
+-- encode_to over-reserves tag/varint room (see PBW_ENCODE_SLACK), so the
+-- exact size is not guaranteed to fit; size + slack always is.
+ok(schema:encode_to(msg, full, size + 12) == wire, "encode_to sized cap works")
+ok(fails(function() schema:encode_to(msg, full, 4) end),
+   "encode_to rejects a short cap")
+local ffull = schema:encode_delimited(msg, full)
+ok(schema:encode_delimited_to(msg, full, #ffull + 12) == ffull,
+   "encode_delimited_to matches the frame")
+
+-- encode_sink delivers the encode in chunks; false aborts.
+local chunks, total = {}, 0
+schema:encode_sink(msg, full, function(c)
+    chunks[#chunks + 1] = c
+    total = total + #c
+    return true
+end)
+ok(table.concat(chunks) == wire and total == #wire, "sink gets every byte")
+ok(fails(function()
+    schema:encode_sink(msg, full, function() return false end)
+end), "sink abort raises")
+
+-- Limits reject oversized input on every entry point.
+ok(fails(function() schema:decode(msg, wire, { max_bytes = 4 }) end),
+   "decode honors max_bytes")
+ok(fails(function() schema:parse_binary(msg, wire, { max_bytes = 4 }) end),
+   "parse_binary honors max_bytes")
+ok(fails(function() schema:from_json(msg, '{"name":"x"}', false, { max_bytes = 4 }) end),
+   "from_json honors max_bytes")
+ok(fails(function() schema:from_text(msg, 'name: "x"', { max_bytes = 4 }) end),
+   "from_text honors max_bytes")
+ok(fails(function() schema:decode_delimited(msg, f1, { max_bytes = 2 }) end),
+   "decode_delimited honors max_bytes")
+ok(fails(function() pbwire.load(wire, { max_bytes = 4 }) end),
+   "load honors max_bytes")
+ok(schema:decode(msg, wire, {}).name == "alice", "empty limits mean defaults")
+
+-- Services, WKT helpers, and pooled contexts through the shared fixture.
+local aschema = pbwire.loadfile("../../tests/data/adv.desc")
+local svcs = aschema:services()
+ok(#svcs == 1 and svcs[1] == "pbwire.adv.Jobs", "services lists Jobs")
+local jobs = aschema:service("pbwire.adv.Jobs")
+ok(jobs.name == "pbwire.adv.Jobs" and #jobs.methods == 2, "service has two methods")
+ok(jobs.methods[1].name == "Get" and jobs.methods[1].input_type == "pbwire.adv.Job"
+   and jobs.methods[1].output_type == "pbwire.adv.Job"
+   and jobs.methods[1].client_streaming == false
+   and jobs.methods[1].server_streaming == false, "unary flags decode")
+ok(jobs.methods[2].client_streaming == true
+   and jobs.methods[2].server_streaming == true, "streaming flags decode")
+local routed = aschema:resolve("pbwire.adv.Jobs", "Get")
+ok(routed.input == "pbwire.adv.Job" and routed.output == "pbwire.adv.Job",
+   "resolve maps to input/output names")
+ok(fails(function() aschema:service("pbwire.adv.Nope") end),
+   "unknown service fails")
+ok(fails(function() aschema:resolve("pbwire.adv.Jobs", "Nope") end),
+   "unknown method fails")
+
+local packed = aschema:any_pack("google.protobuf.Any", "type.googleapis.com/pbwire.adv.Job",
+                                aschema:encode("pbwire.adv.Job", { id = "7" }))
+ok(packed:any_type_url() == "type.googleapis.com/pbwire.adv.Job",
+   "any keeps the type url")
+ok(aschema:decode("pbwire.adv.Job", packed:any_payload()).id == "7",
+   "any keeps the payload")
+local ts = aschema:timestamp_from_millis("google.protobuf.Timestamp", 1501)
+ok(ts:timestamp_millis() == 1501, "timestamp millis round trip")
+local du = aschema:duration_from_millis("google.protobuf.Duration", -2500)
+ok(du:duration_millis() == -2500, "duration millis round trip")
+local fm = aschema:parse_json("google.protobuf.FieldMask", '{"paths":["a.b","c"]}')
+local paths = fm:fieldmask_paths()
+ok(#paths == 2 and paths[1] == "a.b" and paths[2] == "c", "fieldmask paths read")
+ok(fails(function() aschema:any_pack(msg, "t", "p") end),
+   "any_pack rejects a non-Any type")
+
+-- Standalone and pooled contexts recycle the arena.
+local ctx = pbwire.new_context()
+local cw = ctx:encode(schema, msg, full)
+ok(cw == wire, "context encode matches")
+local cm = ctx:decode(schema, msg, wire)
+ok(cm:encode() == wire, "context decode reads back")
+ok(fails(function() cm:set({}) end), "context tree is read-only")
+ctx:reset()
+ok(fails(function() cm:encode() end), "reset invalidates the borrow")
+ok(ctx:used() ~= nil, "used reports bytes held")
+ctx:retain_cap(1024)
+ok(ctx:retain_cap() == 1024, "retain cap reads back")
+local pool = pbwire.new_pool(2, 0)
+local pc = pool:acquire()
+ok(pool:idle() == 0, "acquire pops the freelist")
+pc:encode(schema, msg, full)
+pool:release(pc)
+ok(pool:idle() == 1, "release parks the context")
+ok(fails(function() pc:encode(schema, msg, full) end), "released context raises")
+
 ok(eq(failures, 0) and true or true, "summary")
 print(failures == 0 and "all tests passed" or (failures .. " failures"))
 

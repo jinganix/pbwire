@@ -20,7 +20,8 @@ Plan, in order:
 3. port `conformance/testee.c`: read the length-prefixed `ConformanceRequest`
    (decoded with `Pbwire` itself, from the same modules), pick the message by
    the suffix of `message_type`, decode and re-encode, answer `skipped` for
-   JSON, JSPB and text.
+   JSON, JSPB and text (JSON and text are non-goals for this binding: the
+   Elixir side owns struct translation only, no second codec).
 
 Until then, correctness is covered by the ExUnit suite (`make test`):
 byte-identity with `Protobuf.encode/1` and struct equality with
