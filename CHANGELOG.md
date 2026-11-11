@@ -1,13 +1,21 @@
-# Changelog
-
-All notable changes to pbwire. Versions follow SemVer; `VERSION` is the
-source of truth and `scripts/sync-versions.sh` propagates it to every
-binding manifest.
-
-## [Unreleased]
+## [0.1.16] - 2026-11-12
 
 ### Added
 
+- Every binding now exposes the core surface the earlier subset left out:
+  JSON and text print/parse, deterministic (map-sorted) encoding, delimited
+  framing, `pbw_limits` bounds, encoded size / `encode_to` / `encode_sink`,
+  `visit` scanning, WKT helpers (`Any` pack, Timestamp/Duration millis,
+  FieldMask paths) and service resolution, each as a thin wrapper over the
+  same C core (no second codec anywhere). JVM bindings (Java, Kotlin, Scala,
+  Clojure) parse the descriptor set in pure Java; FFI hosts call the C ABI.
+- `make conformance-julia`, `conformance-scala`, `conformance-clojure`,
+  `conformance-fsharp` and `conformance-zig`: the official suite now runs
+  through those testees too, so 11 bindings cover binary, JSON and text
+  (`conformance-python` and `conformance-java` stopped skipping JSON/text).
+- Java: `Json`, `Text`, `Wkt`, `Limits` and `ServiceType` join the runtime, so
+  the pure-Java path has the same reach as the C core (2753 binary+JSON and 439
+  text conformance successes).
 - `pbw_json_parse_limits()` and `pbw_text_parse_limits()`: the two text parsers
   take the `pbw_limits{max_bytes, max_depth}` the binary decoder already takes,
   checked before any recursion, so a host on a small thread stack can lower the
@@ -15,6 +23,67 @@ binding manifest.
   ~1 MB of C stack under sanitizers). Additive, so `PBW_ABI_VERSION` stays 1.
 
 ### Fixed
+
+- The R binding's context-generation check no longer dereferences a cleared
+  external pointer.
+- The JVM `Wire.MAX_DEPTH` matches the core's `PBW_MAX_DEPTH` (256): a payload
+  the core accepts is no longer rejected by Java/Kotlin/Scala/Clojure.
+- Dart looked up `pbw_encode_to` but never exposed it; `Message.encodeTo(
+  nativeBuffer, cap)` now wraps it, and the README tables of seven bindings
+  document the surface they gained (JSON/text, framing, deterministic, limits,
+  WKT, services, `visit`).
+- Dart's `visit` saved its callback in one module slot, so a callback that
+  started another scan cleared the outer one mid-pass; it is save/restore now.
+- The Zig testee flushes each response (a buffered write deadlocked the
+  runner) and `zig build testee` now installs `zig-out/bin/testee-zig`.
+- `pbw_timestamp_to_millis()` / `pbw_duration_to_millis()` rejected seconds
+  values that only *might* overflow: the bound reserved 999 ms regardless of the
+  fraction's sign, so a legal boundary tree (seconds 9223372036854775, nanos
+  807000000 == `INT64_MAX` ms) reported `PBW_ERR_LIMIT` and failed to
+  round-trip. Both bounds are now derived from the actual sub-second remainder.
+  `pbw_timestamp_from_millis()` additionally refuses a millisecond value whose
+  borrowed second would put the seconds field below the int64/1000 edge
+  (`Duration` keeps the nanos' sign and converts both extremes unchanged); the
+  vendored Erlang copy and the Java `Wkt` twins follow.
+- Input bounds silently degraded in five bindings: a negative `max_bytes` or
+  `max_depth` (or a `NaN` in Node/R) wrapped into the unsigned C field and
+  turned a cap into "no cap" instead of failing. Node, Ruby, PHP, R and Dart
+  now reject a value the C type cannot hold, Swift throws instead of clamping it
+  to 0, and Go/Rust/C#/Julia gained bounded `parse_json`/`parse_text`
+  counterparts (`ParseJSONLimits`, `parse_json_limits`, optional parameters),
+  which the core already supported.
+- Java's encoder wrote the raw 64-bit varint for an int32/enum field whose
+  decoded value was wider than 32 bits (e.g. 0x1FFFFFFFF for -1), producing
+  `08 ff ff ff ff 1f` instead of the canonical 10-byte sign-extended form. The
+  singular path now encodes the int32 interpretation, matching the reference
+  (two recommended conformance cases, and the same fix covers Kotlin/Scala).
+- Java's decoder recorded implicit presence from the raw wire value: an
+  int32/uint32 varint wider than 32 bits that truncates to zero stayed "present",
+  so a re-encode emitted `08 00` where the reference drops the field. Presence
+  is now decided on the field's own zero (`zeroBits`), which also covers the
+  enum and sint32 cases.
+- Java decoded a string field with the replacing UTF-8 constructor, so an
+  invalid sequence became U+FFFD and the JSON printer emitted it instead of
+  failing like the C core (and the text printer lost the byte entirely). Strings
+  are now strict-decoded: a held value and its JSON/text print throw.
+- `print_unknown = false` did not drop the unknown fields in Julia, Rust and C#:
+  those wrappers sent `false` to `pbw_text_print()` (the "print them" default)
+  instead of `pbw_text_print_opts(..., 0)`. C# `PrintText` had the same
+  inversion behind its `printUnknown = false` default. All three now always use
+  the opts entry, and Julia/F# text-conformance went 439 -> 443.
+- The Java and Scala conformance testees ignored `print_unknown_fields`, so the
+  four `*UnknownFields_Drop.TextFormatOutput` cases printed unknown fields
+  anyway; both suites now report 443 text successes, like the core.
+- Java's JSON parser accepted `null` as a map value; the mapping rejects it
+  (only a singular field, or a `google.protobuf.Value` map value, may be null).
+- The Clojure conformance testee decoded binary input to a map, so a re-encode
+  dropped unknown fields and lost the canonical form; it now uses the binding's
+  mutable-message path, and the suite reports 2761 binary+JSON and 443 text
+  successes for C, Java, Scala, Kotlin's runtime, Clojure and the FFI hosts.
+- The Python extension's `setup.py` left `wkt.c` out of the source list, so a
+  wheel or sdist built from it failed to import with an undefined `pbw_any_pack`
+  symbol (the JSON printer reaches the Any helpers). The `make python-bind`
+  path was unaffected, which is why the tests did not catch it.
 
 - A JSON nesting-limit hit inside an array was reported as
   `PBW_ERR_INVALID` instead of `PBW_ERR_LIMIT`, unlike the binary decoder and
