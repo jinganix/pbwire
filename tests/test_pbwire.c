@@ -5202,6 +5202,11 @@ test_json_format(void)
         CHECK(decoded == NULL);
         CHECK_OK(pbw_json_parse_opts(msg, trailing, strlen(trailing),
                                      &opts, &decoded));
+        /* Refused input must not leak the tree it started to build (the
+         * sanitizer job checks this); a second parse overwrites the first
+         * tree, so free it before reusing the slot. */
+        pbw_message_free(decoded);
+        decoded = NULL;
         CHECK_OK(pbw_json_parse_opts(msg, trailing, strlen(trailing),
                                      &opts, &decoded));
         CHECK_OK(pbw_json_print(decoded, &out, &len));
@@ -6397,7 +6402,9 @@ test_wkt(void)
     /* Duration keeps the nanos' sign, so its extreme millisecond values
      * round-trip; Timestamp has to borrow a second there and refuses. */
     pbw_message_free(stamp);
-    stamp = pbw_message_new(dur);
+    /* from_millis() writes a fresh tree into *out, so the slot must be empty
+     * (a pre-created message would leak). */
+    stamp = NULL;
     CHECK_OK(pbw_duration_from_millis(dur, INT64_MIN, &stamp));
     CHECK_OK(pbw_duration_to_millis(stamp, &millis));
     CHECK(millis == INT64_MIN);
