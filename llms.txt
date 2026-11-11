@@ -7,7 +7,7 @@
 > header, about 13k lines of C (roughly 7.5k binary codec, the rest the JSON mapping and text
 > format), zero runtime dependencies.
 
-Facts: source at <https://github.com/jinganix/pbwire>, license Apache-2.0, version `0.1.15`
+Facts: source at <https://github.com/jinganix/pbwire>, license Apache-2.0, version `0.1.16`
 (`VERSION` is the source of truth, `project(pbwire VERSION ...)` in `CMakeLists.txt` matches it). Encodings are byte-identical to `protoc 36.2`
 and pass Google's official conformance suites: binary + JSON 2745 successes, 0 skipped (2 expected
 failures that the reference C++ testee fails identically:
