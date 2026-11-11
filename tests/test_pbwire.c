@@ -1060,6 +1060,233 @@ test_unknown_fields(pbw_schema *schema)
     }
 }
 
+/* pbw_message_encoded_size() walks the same branches as pbw_encode(), so it
+ * has to reject an inconsistent packed list the same way the writer does:
+ * otherwise a tree that encode refuses still reports a size, and the
+ * "size == encoded length" contract breaks silently. The public API cannot
+ * build such a list (the list push rejects a non-uint item), so the test pokes
+ * the item kind directly, as a future "fill a list from outside" entry point
+ * would. */
+static void
+test_size_packed_invariant(pbw_schema *schema)
+{
+    const pbw_descriptor *type = desc(schema, "Parent");
+    pbw_message *msg = pbw_message_new(type);
+    pbw_value *list;
+    size_t len = 0;
+
+    CHECK(msg != NULL);
+    if (msg == NULL) {
+        return;
+    }
+    /* Parent field 2 `nums` is repeated int32, packed */
+    CHECK_OK(pbw_message_set(msg, 2, pbw_value_new_int(7)));
+    CHECK_OK(pbw_message_encoded_size(msg, &len));
+    CHECK(len != 0);
+    list = &msg->values[1];
+    CHECK(list->kind == PBW_VALUE_LIST);
+    CHECK(list->as.list.len == 1 && list->as.list.items != NULL);
+    if (list->kind == PBW_VALUE_LIST && list->as.list.len == 1 &&
+        list->as.list.items != NULL) {
+        pbw_value_kind saved = list->as.list.items[0]->kind;
+
+        /* the writer checks the item kind; the size walk must too */
+        list->as.list.items[0]->kind = PBW_VALUE_BYTES;
+        CHECK_STATUS(PBW_ERR_INVALID, pbw_message_encoded_size(msg, &len));
+        list->as.list.items[0]->kind = saved; /* free reads the kind */
+    }
+    pbw_message_free(msg);
+}
+
+/* The JSON and text parsers accept the same pbw_limits the binary decoder
+ * does, so a host whose threads have a small stack can cap the nesting (and the
+ * input size) per call instead of trusting PBW_MAX_DEPTH. */
+static void
+test_parse_limits(pbw_schema *schema)
+{
+    const pbw_descriptor *tree = desc(schema, "Tree");
+    pbw_message *out = NULL;
+    pbw_limits lim;
+    char deep[4096];
+    size_t at = 0;
+    int i;
+
+    /* a chain of `levels` nested messages through the repeated `kids` */
+    /* JSON */
+    at = 0;
+    for (i = 0; i < 300; i++) {
+        memcpy(deep + at, "{\"kids\":[", 9);
+        at += 9;
+    }
+    memcpy(deep + at, "{}", 2);
+    at += 2;
+    for (i = 0; i < 300; i++) {
+        memcpy(deep + at, "]}", 2);
+        at += 2;
+    }
+    CHECK(at < sizeof(deep));
+    /* the default cap still bites */
+    CHECK_STATUS(PBW_ERR_LIMIT, pbw_json_parse(tree, deep, at, &out));
+    CHECK(out == NULL);
+    lim.max_bytes = 0;
+    lim.max_depth = 4;
+    CHECK_STATUS(PBW_ERR_LIMIT,
+                 pbw_json_parse_limits(tree, deep, at, &lim, NULL, &out));
+    CHECK(out == NULL);
+    /* the input-size bound is checked before parsing, like the decoder */
+    lim.max_bytes = at - 1;
+    lim.max_depth = 0;
+    CHECK_STATUS(PBW_ERR_LIMIT,
+                 pbw_json_parse_limits(tree, deep, at, &lim, NULL, &out));
+    CHECK(out == NULL);
+
+    /* three levels: under the cap, and the knob lowers it */
+    at = 0;
+    for (i = 0; i < 3; i++) {
+        memcpy(deep + at, "{\"kids\":[", 9);
+        at += 9;
+    }
+    memcpy(deep + at, "{}", 2);
+    at += 2;
+    for (i = 0; i < 3; i++) {
+        memcpy(deep + at, "]}", 2);
+        at += 2;
+    }
+    lim.max_bytes = at;
+    lim.max_depth = 0;
+    CHECK_OK(pbw_json_parse_limits(tree, deep, at, &lim, NULL, &out));
+    CHECK(out != NULL);
+    pbw_message_free(out);
+    out = NULL;
+    lim.max_bytes = 0;
+    lim.max_depth = 8;
+    {
+        pbw_json_parse_options opts;
+
+        memset(&opts, 0, sizeof(opts));
+        opts.ignore_unknown_fields = 1; /* the limits entry takes options too */
+        CHECK_OK(pbw_json_parse_limits(tree, deep, at, &lim, &opts, &out));
+        CHECK(out != NULL);
+        pbw_message_free(out);
+        out = NULL;
+    }
+    /* one level per 2 of depth budget (the array and the object), so a
+     * max_depth of 4 already rejects a three-level chain */
+    lim.max_depth = 4;
+    CHECK_STATUS(PBW_ERR_LIMIT,
+                 pbw_json_parse_limits(tree, deep, at, &lim, NULL, &out));
+    CHECK(out == NULL);
+    /* an above-the-cap max_depth clamps like the decoder */
+    lim.max_depth = PBW_MAX_DEPTH + 100;
+    CHECK_OK(pbw_json_parse_limits(tree, deep, at, &lim, NULL, &out));
+    pbw_message_free(out);
+    out = NULL;
+
+    /* text format: same shape, `kids { ... }` */
+    at = 0;
+    for (i = 0; i < 300; i++) {
+        memcpy(deep + at, "kids { ", 7);
+        at += 7;
+    }
+    for (i = 0; i < 300; i++) {
+        memcpy(deep + at, "}", 1);
+        at += 1;
+    }
+    CHECK(at < sizeof(deep));
+    CHECK_STATUS(PBW_ERR_LIMIT, pbw_text_parse(tree, deep, at, &out));
+    CHECK(out == NULL);
+    lim.max_bytes = 0;
+    lim.max_depth = 4;
+    CHECK_STATUS(PBW_ERR_LIMIT,
+                 pbw_text_parse_limits(tree, deep, at, &lim, &out));
+    CHECK(out == NULL);
+    lim.max_bytes = at - 1;
+    lim.max_depth = 0;
+    CHECK_STATUS(PBW_ERR_LIMIT,
+                 pbw_text_parse_limits(tree, deep, at, &lim, &out));
+    CHECK(out == NULL);
+    at = 0;
+    for (i = 0; i < 3; i++) {
+        memcpy(deep + at, "kids { ", 7);
+        at += 7;
+    }
+    for (i = 0; i < 3; i++) {
+        memcpy(deep + at, "}", 1);
+        at += 1;
+    }
+    lim.max_bytes = at;
+    lim.max_depth = 4;
+    CHECK_OK(pbw_text_parse_limits(tree, deep, at, &lim, &out));
+    CHECK(out != NULL);
+    pbw_message_free(out);
+    out = NULL;
+    lim.max_bytes = 0;
+    lim.max_depth = 2;
+    CHECK_STATUS(PBW_ERR_LIMIT,
+                 pbw_text_parse_limits(tree, deep, at, &lim, &out));
+    CHECK(out == NULL);
+}
+
+/* pbw_strtod_slow() substitutes the locale's decimal separator for the single
+ * '.' the JSON/text formats require, then maps the translated end offset back
+ * onto the original text (pbw_strtod_unmap). The mapping must be exact for a
+ * parse that stops at, inside or past a multi-byte separator: an end that
+ * lands before the '.' would move backwards relative to the number. */
+static void
+test_strtod_unmap(void)
+{
+    static const struct {
+        size_t used;   /* offset strtod reported in the translated buffer */
+        size_t before; /* offset of the '.' in the original text */
+        size_t dpsize; /* locale separator width in bytes */
+        size_t want;
+    } cases[] = {
+        /* one-byte separator ('5,5' style): identity everywhere */
+        {0, 0, 1, 0},
+        {1, 1, 1, 1},
+        {4, 1, 1, 4},
+        /* two-byte separator (U+066B, ar_SA/fa_IR) */
+        {1, 1, 2, 1}, /* stopped at the separator */
+        {2, 1, 2, 2}, /* stopped inside it: the '.' is consumed */
+        {3, 1, 2, 2}, /* the whole separator, nothing after it */
+        {5, 1, 2, 4}, /* separator plus two more bytes */
+        /* three-byte separator: the width the old formula got wrong */
+        {1, 1, 3, 1},
+        {2, 1, 3, 2},
+        {3, 1, 3, 2},
+        {4, 1, 3, 2},
+        {7, 1, 3, 5},
+        /* a parse that never reached the separator stays put */
+        {0, 0, 3, 0},
+        {2, 2, 3, 2},
+    };
+    size_t i;
+
+    for (i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        size_t got = pbw_strtod_unmap(cases[i].used, cases[i].before,
+                                      cases[i].dpsize);
+
+        CHECK(got == cases[i].want);
+        CHECK(got <= cases[i].used);
+        if (got != cases[i].want || got > cases[i].used) {
+            fprintf(stderr,
+                    "  unmap used=%lu before=%lu dpsize=%lu: got %lu want %lu\n",
+                    (unsigned long)cases[i].used,
+                    (unsigned long)cases[i].before,
+                    (unsigned long)cases[i].dpsize, (unsigned long)got,
+                    (unsigned long)cases[i].want);
+        }
+    }
+    /* the property the table encodes: never before the '.', never past the
+     * translated offset */
+    for (i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        if (cases[i].used > cases[i].before) {
+            CHECK(pbw_strtod_unmap(cases[i].used, cases[i].before,
+                                   cases[i].dpsize) >= cases[i].before);
+        }
+    }
+}
+
 /* Tag and varint width rules, pinned against libprotobuf 36:
  *   - a tag is a varint32, so at most 5 bytes; a longer tag is invalid
  *   - bits above bit 31 of a 5-byte tag are dropped (reference truncates)
@@ -4956,30 +5183,25 @@ test_json_format(void)
                      pbw_json_parse(msg, in, strlen(in), &decoded));
         CHECK(decoded == NULL);
     }
-    /* An unresolved Any keeps its bytes; printing shows an empty object.
-     * Trailing commas are tolerated like elsewhere. */
+    /* An unresolvable @type is a parse error, with or without
+     * `ignore_unknown_fields` (the reference resolves the type first). Trailing
+     * commas are tolerated like elsewhere. */
     {
         pbw_json_parse_options opts;
-        static const char want[] = "{\"payload\":{}}";
         static const char trailing[] =
             "{\"payload\":{\"@type\":"
             "\"type.googleapis.com/Sub\",\"a\":1,}}";
 
         opts.ignore_unknown_fields = 1;
         decoded = NULL;
-        CHECK_OK(pbw_json_parse_opts(
-            msg,
-            "{\"payload\":{\"@type\":\"type.googleapis.com/Nope\"}}",
-            strlen("{\"payload\":{\"@type\":\"type.googleapis.com/Nope\"}}"),
-            &opts, &decoded));
-        CHECK_OK(pbw_json_print(decoded, &out, &len));
-        CHECK(len == sizeof(want) - 1 &&
-              memcmp(out, want, len) == 0);
-        pbw_free(out);
-        out = NULL;
-        pbw_message_free(decoded);
-        decoded = NULL;
-        decoded = NULL;
+        CHECK_STATUS(PBW_ERR_INVALID, pbw_json_parse_opts(
+                                          msg,
+                                          "{\"payload\":{\"@type\":\"type.googleapis.com/Nope\"}}",
+                                          strlen("{\"payload\":{\"@type\":\"type.googleapis.com/Nope\"}}"),
+                                          &opts, &decoded));
+        CHECK(decoded == NULL);
+        CHECK_OK(pbw_json_parse_opts(msg, trailing, strlen(trailing),
+                                     &opts, &decoded));
         CHECK_OK(pbw_json_parse_opts(msg, trailing, strlen(trailing),
                                      &opts, &decoded));
         CHECK_OK(pbw_json_print(decoded, &out, &len));
@@ -5156,12 +5378,16 @@ test_json_format(void)
             pbw_json_parse_opts(msg, "{\"zzz\":1}", 9, &opts, &decoded));
         pbw_message_free(decoded);
         decoded = NULL;
-        CHECK_OK(pbw_json_parse_opts(
-            msg,
-            "{\"payload\":{\"@type\":\"type.googleapis.com/Nope\"}}",
-            48, &opts, &decoded));
-        pbw_message_free(decoded);
-        decoded = NULL;
+        /* `ignore_unknown_fields` does not extend to an unresolvable @type:
+         * the reference parser resolves the type before it consults the
+         * option (protobuf 36.2 `json::JsonStringToMessage` with
+         * ignore_unknown_fields=true returns INVALID_ARGUMENT "could not find
+         * @type"), so this stays a parse error. */
+        CHECK_STATUS(PBW_ERR_INVALID, pbw_json_parse_opts(
+                                          msg,
+                                          "{\"payload\":{\"@type\":\"type.googleapis.com/Nope\"}}",
+                                          48, &opts, &decoded));
+        CHECK(decoded == NULL);
     }
     /* Durations and field masks print their canonical forms. */
     {
@@ -7997,6 +8223,9 @@ main(void)
     test_unknown_fields(schema);
     test_hostile_arguments(schema);
     test_locale_independence(schema);
+    test_strtod_unmap();
+    test_parse_limits(schema);
+    test_size_packed_invariant(schema);
     test_tag_limits(schema);
     test_field_number_edges(schema);
     test_packed_wide_tag(schema);

@@ -63,16 +63,10 @@ pbw_arena_alloc_slow(pbw_arena *arena, size_t size)
     }
     size = align_up(size == 0 ? 1 : size);
     if (arena->no_grow) {
-        /* Caller memory: the head chunk is the whole capacity and there is no
-         * large list to fall back to, so a fit miss is the caller's NOMEM. */
-        chunk = arena->head;
-        if (chunk == NULL || !pbw_cap_holds(chunk->cap, chunk->used) ||
-            chunk->cap - chunk->used < size) {
-            return NULL;
-        }
-        ptr = (char *)chunk + PBW_CHUNK_HDR + chunk->used;
-        chunk->used += size;
-        return ptr;
+        /* Caller memory: the head chunk is the whole capacity, and the fast
+         * path already handled every allocation that fits, so reaching here is
+         * the caller's NOMEM. */
+        return NULL;
     }
     if (size > large_at) {
         /* Oversized single allocation: one malloc on the large list, freed on

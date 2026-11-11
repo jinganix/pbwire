@@ -1692,8 +1692,9 @@ typedef struct {
 typedef struct {
     j_cur cur;
     int ignore_unknown;
-    int depth;
-    int dot; /* the host locale's decimal point is '.' (checked once per call) */
+    uint32_t depth;
+    int dot;       /* the host locale's decimal point is '.' (checked once per call) */
+    uint32_t dlim; /* nesting cap for this call (pbw_limits.max_depth) */
 } j_in;
 
 typedef enum {
@@ -2307,7 +2308,7 @@ j_skip_value(j_in *j)
         if (j_expect_ch(j, '{') != PBW_OK) {
             return PBW_ERR_INVALID;
         }
-        if (j->depth >= PBW_MAX_DEPTH) {
+        if (j->depth >= j->dlim) {
             return PBW_ERR_LIMIT;
         }
         j->depth++;
@@ -2352,7 +2353,7 @@ j_skip_value(j_in *j)
         if (j_expect_ch(j, '[') != PBW_OK) {
             return PBW_ERR_INVALID;
         }
-        if (j->depth >= PBW_MAX_DEPTH) {
+        if (j->depth >= j->dlim) {
             return PBW_ERR_LIMIT;
         }
         j->depth++;
@@ -3617,7 +3618,7 @@ j_parse_struct(j_in *j, pbw_message *msg)
     if (j_expect_ch(j, '{') != PBW_OK) {
         return PBW_ERR_INVALID;
     }
-    if (j->depth >= PBW_MAX_DEPTH) {
+    if (j->depth >= j->dlim) {
         return PBW_ERR_LIMIT;
     }
     j->depth++;
@@ -3777,7 +3778,7 @@ j_parse_element(j_in *j, pbw_message *msg, const pbw_field *field)
         if (j_expect_ch(j, '[') != PBW_OK) {
             return PBW_ERR_INVALID;
         }
-        if (j->depth >= PBW_MAX_DEPTH) {
+        if (j->depth >= j->dlim) {
             return PBW_ERR_LIMIT;
         }
         j->depth++;
@@ -3788,9 +3789,11 @@ j_parse_element(j_in *j, pbw_message *msg, const pbw_field *field)
             return PBW_OK;
         }
         for (;;) {
-            if (j_parse_element(j, msg, field) != PBW_OK) {
+            pbw_status st = j_parse_element(j, msg, field);
+
+            if (st != PBW_OK) {
                 j->depth--;
-                return PBW_ERR_INVALID;
+                return st == PBW_ERR_LIMIT ? st : PBW_ERR_INVALID;
             }
             j_skip(&j->cur);
             if (j->cur.p < j->cur.end && *j->cur.p == ',') {
@@ -3820,7 +3823,7 @@ j_parse_array(j_in *j, pbw_message *msg, const pbw_field *field)
     if (j_expect_ch(j, '[') != PBW_OK) {
         return PBW_ERR_INVALID;
     }
-    if (j->depth >= PBW_MAX_DEPTH) {
+    if (j->depth >= j->dlim) {
         return PBW_ERR_LIMIT;
     }
     j->depth++;
@@ -3831,9 +3834,11 @@ j_parse_array(j_in *j, pbw_message *msg, const pbw_field *field)
         return PBW_OK;
     }
     for (;;) {
-        if (j_parse_element(j, msg, field) != PBW_OK) {
+        pbw_status st = j_parse_element(j, msg, field);
+
+        if (st != PBW_OK) {
             j->depth--;
-            return PBW_ERR_INVALID;
+            return st == PBW_ERR_LIMIT ? st : PBW_ERR_INVALID;
         }
         j_skip(&j->cur);
         if (j->cur.p < j->cur.end && *j->cur.p == ',') {
@@ -3939,7 +3944,7 @@ j_parse_map(j_in *j, pbw_message *msg, const pbw_field *field)
     if (j_expect_ch(j, '{') != PBW_OK) {
         return PBW_ERR_INVALID;
     }
-    if (j->depth >= PBW_MAX_DEPTH) {
+    if (j->depth >= j->dlim) {
         return PBW_ERR_LIMIT;
     }
     j->depth++;
@@ -4102,7 +4107,7 @@ j_parse_any(j_in *j, pbw_message *msg)
     }
     depth0 = j->depth;
     start = j->cur.p;
-    if (j->depth >= PBW_MAX_DEPTH) {
+    if (j->depth >= j->dlim) {
         return PBW_ERR_LIMIT;
     }
     j->depth++;
@@ -4209,11 +4214,10 @@ j_parse_any(j_in *j, pbw_message *msg)
                        : pbw_schema_find(msg->desc->schema, name);
     }
     if (resolved == NULL || resolved->is_enum) {
-        if (j->ignore_unknown) {
-            /* The field is skipped whole, as before: drop the type_url. */
-            pbw_message_clear(msg, url_field->number);
-            return PBW_OK;
-        }
+        /* An unresolvable (or enum) @type is a parse error even with
+         * `ignore_unknown_fields`: the reference resolves the type before it
+         * consults the option (protobuf 36.2 json parses `@type` into a
+         * dynamic message and fails with INVALID_ARGUMENT). */
         return PBW_ERR_INVALID;
     }
     sub = pbw_message_new(resolved);
@@ -4230,6 +4234,7 @@ j_parse_any(j_in *j, pbw_message *msg)
         inner.ignore_unknown = j->ignore_unknown;
         inner.depth = j->depth + 1;
         inner.dot = j->dot;
+        inner.dlim = j->dlim;
         /* start already points past the '{' the scan consumed. */
         for (;;) {
             pbw_buf key;
@@ -4347,7 +4352,7 @@ j_parse_named_field(j_in *j, pbw_message *msg, const uint8_t *key,
 static pbw_status
 j_parse_object_body(j_in *j, pbw_message *msg)
 {
-    if (j->depth >= PBW_MAX_DEPTH) {
+    if (j->depth >= j->dlim) {
         return PBW_ERR_LIMIT;
     }
     j->depth++;
@@ -4574,7 +4579,7 @@ j_parse_list_of(j_in *j, pbw_message *msg)
     if (j_expect_ch(j, '[') != PBW_OK) {
         return PBW_ERR_INVALID;
     }
-    if (j->depth >= PBW_MAX_DEPTH) {
+    if (j->depth >= j->dlim) {
         return PBW_ERR_LIMIT;
     }
     j->depth++;
@@ -4625,18 +4630,31 @@ j_parse_list_of(j_in *j, pbw_message *msg)
 }
 
 pbw_status
-pbw_json_parse_opts(const pbw_descriptor *desc, const char *text,
-                    size_t len, const pbw_json_parse_options *options,
-                    pbw_message **out)
+pbw_json_parse_limits(const pbw_descriptor *desc, const char *text,
+                      size_t len, const pbw_limits *limits,
+                      const pbw_json_parse_options *options,
+                      pbw_message **out)
 {
     j_in j;
     pbw_message *msg;
+    uint32_t dlim = PBW_MAX_DEPTH;
 
     if (out != NULL) {
         *out = NULL;
     }
     if (desc == NULL || (text == NULL && len != 0) || out == NULL) {
         return PBW_ERR_INVALID;
+    }
+    if (limits != NULL) {
+        /* Same bounds semantics as the binary decoder: 0 = default, above the
+         * cap clamps, and the byte cap is checked before any recursion. */
+        if (limits->max_depth != 0) {
+            dlim = limits->max_depth < PBW_MAX_DEPTH ? limits->max_depth
+                                                     : PBW_MAX_DEPTH;
+        }
+        if (limits->max_bytes != 0 && len > limits->max_bytes) {
+            return PBW_ERR_LIMIT;
+        }
     }
     if (desc->is_enum) {
         return PBW_ERR_TYPE;
@@ -4656,6 +4674,7 @@ pbw_json_parse_opts(const pbw_descriptor *desc, const char *text,
     j.ignore_unknown =
         options != NULL && options->ignore_unknown_fields;
     j.depth = 0;
+    j.dlim = dlim;
     j.dot = pbw_locale_dot();
     {
         pbw_status st = j_parse_message(&j, msg);
@@ -4680,8 +4699,15 @@ pbw_json_parse_opts(const pbw_descriptor *desc, const char *text,
 }
 
 pbw_status
+pbw_json_parse_opts(const pbw_descriptor *desc, const char *text, size_t len,
+                    const pbw_json_parse_options *options, pbw_message **out)
+{
+    return pbw_json_parse_limits(desc, text, len, NULL, options, out);
+}
+
+pbw_status
 pbw_json_parse(const pbw_descriptor *desc, const char *text, size_t len,
                pbw_message **out)
 {
-    return pbw_json_parse_opts(desc, text, len, NULL, out);
+    return pbw_json_parse_limits(desc, text, len, NULL, NULL, out);
 }

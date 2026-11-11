@@ -70,7 +70,10 @@ loads and frees its own schema from the same bytes, plus the truncated-set error
 path), and decode/encode against one shared loaded schema. It also prints a
 1-thread vs 8-thread throughput comparison and fails if the aggregate collapses,
 which a hidden lock would cause; the suite is run under ThreadSanitizer and
-ASan/UBSan during development. This is what the commit gate runs.
+ASan/UBSan during development. A last check runs the cap-deep nesting paths
+(JSON parse/print, binary decode, encode) on a 2 MB worker thread, because the
+nesting cap bounds recursion but every level still costs a stack frame. This is
+what the commit gate runs.
 
 `test_nofail` sweeps allocation failure instead of input: the core is built a
 second time with every allocation site renamed to a counting hook, the

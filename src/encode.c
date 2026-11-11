@@ -1219,10 +1219,17 @@ size_message(const pbw_message *msg, uint32_t depth, size_t *out)
                 size_t payload = 0;
 
                 for (j = 0; j < n; j++) {
+                    pbw_value *item = value->as.list.items[j];
+
+                    /* Same validation write_packed() does: the size walk
+                     * must reject exactly what the writer rejects, or a tree
+                     * that encode refuses would still report a length. */
+                    if (item == NULL || item->kind != PBW_VALUE_UINT) {
+                        return PBW_ERR_INVALID;
+                    }
                     if (!size_add(&payload,
-                                  packed_item_size(
-                                      field->type,
-                                      value->as.list.items[j]->as.u64))) {
+                                  packed_item_size(field->type,
+                                                   item->as.u64))) {
                         return PBW_ERR_LIMIT;
                     }
                 }

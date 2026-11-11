@@ -20,4 +20,8 @@ echo "== llms.txt sync =="
 
 echo "== build + test =="
 make -s test
+
+echo "== dynamic symbols =="
+./scripts/check-symbols.sh
+
 echo "check: OK"

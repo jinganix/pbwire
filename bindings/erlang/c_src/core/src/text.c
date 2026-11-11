@@ -1415,7 +1415,8 @@ t_ident_case_is(const char *start, size_t len, const char *word)
 typedef struct {
     text_cur cur;
     pbw_status status;
-    int dot; /* the host locale's decimal point is '.' (checked once per call) */
+    int dot;       /* the host locale's decimal point is '.' (checked once per call) */
+    uint32_t dlim; /* nesting cap for this call (pbw_limits.max_depth) */
 } text_in;
 
 /* Stores a scalar; repeated fields append. */
@@ -1846,7 +1847,7 @@ t_skip_value(text_in *t, uint32_t depth)
         char closer = *t->cur.p == '{' ? '}' : '>';
         pbw_status status;
 
-        if (depth >= PBW_MAX_DEPTH) {
+        if (depth >= t->dlim) {
             return PBW_ERR_LIMIT;
         }
         t->cur.p++;
@@ -1907,7 +1908,7 @@ t_skip_value(text_in *t, uint32_t depth)
     }
     if (*t->cur.p == '[') {
         /* a list: skip comma-separated values */
-        if (depth >= PBW_MAX_DEPTH) {
+        if (depth >= t->dlim) {
             return PBW_ERR_LIMIT;
         }
         t->cur.p++;
@@ -2253,7 +2254,7 @@ t_parse_message_value(text_in *t, pbw_message *msg, const pbw_field *field,
     char closer;
     pbw_message *slot;
 
-    if (depth >= PBW_MAX_DEPTH) {
+    if (depth >= t->dlim) {
         return PBW_ERR_LIMIT;
     }
     t_skip(&t->cur);
@@ -2404,7 +2405,7 @@ static pbw_status
 t_parse_message_body(text_in *t, pbw_message *msg, uint32_t depth,
                      char closer)
 {
-    if (depth > PBW_MAX_DEPTH) {
+    if (depth > t->dlim) {
         return PBW_ERR_LIMIT;
     }
     for (;;) {
@@ -2573,12 +2574,13 @@ t_parse_message_body(text_in *t, pbw_message *msg, uint32_t depth,
 }
 
 pbw_status
-pbw_text_parse(const pbw_descriptor *desc, const char *text, size_t len,
-               pbw_message **out)
+pbw_text_parse_limits(const pbw_descriptor *desc, const char *text, size_t len,
+                      const pbw_limits *limits, pbw_message **out)
 {
     text_in t;
     pbw_message *msg;
     pbw_status status;
+    uint32_t dlim = PBW_MAX_DEPTH;
 
     if (out != NULL) {
         *out = NULL;
@@ -2588,6 +2590,17 @@ pbw_text_parse(const pbw_descriptor *desc, const char *text, size_t len,
     }
     if (text == NULL && len > 0) {
         return PBW_ERR_INVALID;
+    }
+    if (limits != NULL) {
+        /* Same bounds semantics as the binary decoder: 0 = default, above the
+         * cap clamps, and the byte cap is checked before any recursion. */
+        if (limits->max_depth != 0) {
+            dlim = limits->max_depth < PBW_MAX_DEPTH ? limits->max_depth
+                                                     : PBW_MAX_DEPTH;
+        }
+        if (limits->max_bytes != 0 && len > limits->max_bytes) {
+            return PBW_ERR_LIMIT;
+        }
     }
     if (desc->schema != NULL && !desc->schema->linked) {
         return PBW_ERR_INVALID;
@@ -2600,6 +2613,7 @@ pbw_text_parse(const pbw_descriptor *desc, const char *text, size_t len,
     t.cur.end = t.cur.p + len;
     t.status = PBW_OK;
     t.dot = pbw_locale_dot();
+    t.dlim = dlim;
     status = t_parse_message_body(&t, msg, 0, 0);
     if (status != PBW_OK) {
         pbw_message_free(msg);
@@ -2612,4 +2626,11 @@ pbw_text_parse(const pbw_descriptor *desc, const char *text, size_t len,
     }
     *out = msg;
     return PBW_OK;
+}
+
+pbw_status
+pbw_text_parse(const pbw_descriptor *desc, const char *text, size_t len,
+               pbw_message **out)
+{
+    return pbw_text_parse_limits(desc, text, len, NULL, out);
 }

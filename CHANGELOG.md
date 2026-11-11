@@ -6,8 +6,39 @@ binding manifest.
 
 ## [Unreleased]
 
+### Added
+
+- `pbw_json_parse_limits()` and `pbw_text_parse_limits()`: the two text parsers
+  take the `pbw_limits{max_bytes, max_depth}` the binary decoder already takes,
+  checked before any recursion, so a host on a small thread stack can lower the
+  nesting cap per call instead of trusting `PBW_MAX_DEPTH` (256 levels cost
+  ~1 MB of C stack under sanitizers). Additive, so `PBW_ABI_VERSION` stays 1.
+
 ### Fixed
 
+- A JSON nesting-limit hit inside an array was reported as
+  `PBW_ERR_INVALID` instead of `PBW_ERR_LIMIT`, unlike the binary decoder and
+  the singular-object path.
+- An `Any` whose `@type` does not resolve is now a parse error even with
+  `ignore_unknown_fields`: the reference parser (protobuf 36.2) resolves the
+  type before it consults the option and returns `INVALID_ARGUMENT`, so the
+  previous "skip the whole field" behaviour was a deviation.
+- `pbw_message_encoded_size()` rejects an inconsistent packed list
+  (`PBW_ERR_INVALID`) the same way `pbw_encode()` does, instead of reporting a
+  length for a tree the writer refuses.
+- The locale decimal-separator remap (`pbw_strtod_slow()`) moved the end offset
+  backwards when a parse stopped inside a multi-byte separator: for a three-byte
+  separator `"1<sep>5"` ended one byte early, so the caller lost the fraction.
+- The shared library exported the internal helpers declared in `src/internal.h`
+  (`pbw_arena_*`, `pbw_buf_*`, `pbw_varint_read`, `pbw_strtod_slow`, ...) next to
+  the public API, so an embedder could link against them and their names could
+  not change without an ABI break. The core now builds with
+  `-fvisibility=hidden` and `include/pbwire.h` marks its declarations default
+  visible: the dynamic symbol table is exactly what the header declares.
+- `PBW_MAX_DEPTH` documents its stack cost: the nesting cap bounds recursion,
+  not stack (~1.4 KB per level in a release build, ~1 MB under sanitizers), and
+  `test_threads` now runs the cap-deep decode/JSON/encode paths on a 2 MB worker
+  stack, so a frame-bloating change fails the gate instead of a host's thread.
 - An unlinked descriptor no longer leaves the oneof case table out of the
   message block: `pbw_message_new()` sizes it from the fields themselves when
   the link has not run, which is the path the JSON/text printers take. Before

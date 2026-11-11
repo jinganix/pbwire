@@ -40,6 +40,12 @@
 #include <R.h>
 #include <Rinternals.h>
 #include <R_ext/Rdynload.h>
+/* attribute_visible: R finds the registration entry point by name, so it must
+ * stay exported even when the build hides symbols by default (the core is
+ * built with -fvisibility=hidden, and a build that forwards CFLAGS to this
+ * extension, e.g. a sanitizer build, would otherwise hide R_init_pbwire and
+ * make every .Call fail with "not available for .Call()"). */
+#include <R_ext/Visibility.h>
 
 #include <pbwire.h>
 
@@ -1507,7 +1513,7 @@ static const R_CallMethodDef pbwr_calls[] = {
     {NULL, NULL, 0},
 };
 
-void
+void attribute_visible
 R_init_pbwire(DllInfo *dll)
 {
     R_registerRoutines(dll, NULL, pbwr_calls, NULL, NULL);

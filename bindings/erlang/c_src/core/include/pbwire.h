@@ -24,6 +24,14 @@
 #include <stddef.h>
 #include <stdint.h>
 
+/* The library is built with -fvisibility=hidden: everything declared here is
+ * exported, and the internal helpers (src/internal.h) stay out of the dynamic
+ * symbol table. An embedder can therefore not link against them by accident,
+ * and their names are free to change without an ABI break. */
+#if defined(__GNUC__) || defined(__clang__)
+#pragma GCC visibility push(default)
+#endif
+
 /* ABI version: bumped on every breaking change to the C ABI (removed or
  * reordered exports, changed struct layouts visible to callers). Additive
  * changes keep the number. The shared library SONAME carries the same
@@ -446,6 +454,13 @@ pbw_status pbw_decode_ctx(pbw_ctx *ctx, const pbw_descriptor *desc,
 pbw_status pbw_encode_ctx(pbw_ctx *ctx, const pbw_message *msg,
                           const uint8_t **out, size_t *len);
 
+/* Bounds for untrusted input. Zero fields mean the defaults: no byte cap and
+ * PBW_MAX_DEPTH nesting. A max_depth above PBW_MAX_DEPTH is clamped to it. */
+typedef struct pbw_limits {
+    size_t max_bytes;   /* reject inputs larger than this */
+    uint32_t max_depth; /* nesting cap, 0 = PBW_MAX_DEPTH */
+} pbw_limits;
+
 /* ------------------------------------------------------------------ wire */
 
 /* The text and JSON mappings define '.' as the decimal separator, but strtod
@@ -469,6 +484,13 @@ pbw_status pbw_text_print_opts(const pbw_message *msg, int print_unknown_fields,
  * fails with PBW_ERR_REQUIRED, like the binary decoder. */
 pbw_status pbw_text_parse(const pbw_descriptor *desc, const char *text,
                           size_t len, pbw_message **out);
+/* Same with explicit bounds. Like the binary decoder, a max_depth above
+ * PBW_MAX_DEPTH clamps to it and a max_bytes of 0 means no byte cap; both are
+ * checked before any recursion, so a host on a small thread stack can lower the
+ * nesting cap instead of trusting PBW_MAX_DEPTH. */
+pbw_status pbw_text_parse_limits(const pbw_descriptor *desc, const char *text,
+                                 size_t len, const pbw_limits *limits,
+                                 pbw_message **out);
 
 /* Print msg in protobuf JSON mapping. *out is malloc'd, NUL-terminated and
  * owned by the caller (pbw_free); *len excludes the NUL. Matches the
@@ -486,7 +508,8 @@ pbw_status pbw_json_print(const pbw_message *msg, char **out, size_t *len);
  * and Duration 1=int64 `seconds`, 2=int32 `nanos`); a schema that carries
  * only the name is PBW_ERR_INVALID rather than a crash. */
 typedef struct pbw_json_parse_options {
-    /* Skip unknown field names and unknown `Any` types instead of failing. */
+    /* Skip unknown field names instead of failing. An `Any` whose `@type`
+     * does not resolve stays an error either way, like the reference parser. */
     int ignore_unknown_fields;
 } pbw_json_parse_options;
 pbw_status pbw_json_parse_opts(const pbw_descriptor *desc, const char *text,
@@ -496,6 +519,14 @@ pbw_status pbw_json_parse_opts(const pbw_descriptor *desc, const char *text,
 /* Same with default options (unknown fields fail). */
 pbw_status pbw_json_parse(const pbw_descriptor *desc, const char *text,
                           size_t len, pbw_message **out);
+/* Same with explicit bounds and options (either pointer may be NULL for the
+ * defaults). The nesting and byte caps behave like pbw_text_parse_limits();
+ * note that an array costs a level too, so a repeated message chain spends two
+ * levels per message (the default cap then rejects at 128, not 256). */
+pbw_status pbw_json_parse_limits(const pbw_descriptor *desc, const char *text,
+                                 size_t len, const pbw_limits *limits,
+                                 const pbw_json_parse_options *options,
+                                 pbw_message **out);
 
 /* Encode msg; *out is replaced with a malloc'd buffer owned by the caller
  * (pbw_free). *out and *len are 0 on failure. */
@@ -523,15 +554,13 @@ pbw_status pbw_decode(const pbw_descriptor *desc, const void *buf, size_t len,
 /* Nesting cap the decoder enforces (100 in the reference implementations; 256
  * here for the Erlang binding's 200-deep round-trips, which still rejects
  * conformance test 20000). A decoder that walks wire bytes itself must use the
- * same bound. */
+ * same bound. The cap bounds recursion, not stack: one nesting level costs
+ * about 1.4 KB of C stack in a release build and up to 3.8 KB in a debug
+ * build (~1 MB under ASan/UBSan), so a thread that parses input up to the cap
+ * needs roughly 1 MB free (test_threads pins it to 2 MB; macOS worker threads
+ * default to 512 KB). Callers that cannot promise that stack use
+ * pbw_limits.max_depth to lower the cap for the binary decoder. */
 #define PBW_MAX_DEPTH 256
-
-/* Bounds for untrusted input. Zero fields mean the defaults: no byte cap and
- * PBW_MAX_DEPTH nesting. A max_depth above PBW_MAX_DEPTH is clamped to it. */
-typedef struct pbw_limits {
-    size_t max_bytes;   /* reject inputs larger than this */
-    uint32_t max_depth; /* nesting cap, 0 = PBW_MAX_DEPTH */
-} pbw_limits;
 
 /* Decode with explicit bounds; identical to pbw_decode() with NULL limits. */
 pbw_status pbw_decode_limits(const pbw_descriptor *desc, const void *buf,
@@ -664,6 +693,10 @@ const char *pbw_strerror(pbw_status status);
 
 #ifdef __cplusplus
 }
+#endif
+
+#if defined(__GNUC__) || defined(__clang__)
+#pragma GCC visibility pop
 #endif
 
 #endif /* PBWIRE_H */

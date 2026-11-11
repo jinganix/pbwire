@@ -382,6 +382,21 @@ size_t pbw_varint_write(uint8_t *out, uint64_t value);
  * C-locale path is inlined, so it costs exactly the libc call it replaced. */
 int pbw_locale_dot(void);
 double pbw_strtod_slow(const char *text, char **end, double value, char *stop);
+/* Maps the end offset strtod reported in the locale-translated buffer back
+ * onto the original text: `before` is the '.' that was replaced, `dpsize` the
+ * width of the locale separator inserted there. Kept separate from the
+ * conversion so the mapping is testable without a multibyte locale. */
+static inline size_t
+pbw_strtod_unmap(size_t used, size_t before, size_t dpsize)
+{
+    if (used <= before) {
+        return used; /* stopped at, or before, the '.' */
+    }
+    if (used - before < dpsize) {
+        return before + 1; /* stopped inside the separator: the '.' is consumed */
+    }
+    return used - (dpsize - 1); /* past the whole separator */
+}
 int pbw_format_g_slow(char *buf, int n);
 
 static inline double

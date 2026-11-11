@@ -324,9 +324,7 @@ pbw_strtod_slow(const char *text, char **end, double value, char *stop)
          * that stopped before it (or on its first byte) keeps the original
          * offset, and a multi-byte decimal separator makes both cases differ. */
         used = translated_stop != NULL ? (size_t)(translated_stop - buf) : 0;
-        if (used > before) {
-            used -= dpsize - 1;
-        }
+        used = pbw_strtod_unmap(used, before, dpsize);
         if (end != NULL) {
             *end = (char *)text + used;
         }

@@ -1,5 +1,5 @@
 CC ?= cc
-CFLAGS ?= -O2 -std=c99 -Wall -Wextra -Werror -pedantic -fPIC
+CFLAGS ?= -O2 -std=c99 -Wall -Wextra -Werror -pedantic -fPIC -fvisibility=hidden
 CXX ?= c++
 CXXFLAGS ?= -O2 -std=c++17 -Wall -Wextra -Werror -pedantic
 CPPFLAGS += -Iinclude -Isrc
