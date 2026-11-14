@@ -28,13 +28,16 @@
  * Values are the FeatureSet enum numbers (0 = unset/unknown):
  * presence 1 EXPLICIT, 2 IMPLICIT, 3 LEGACY_REQUIRED; enum_open 1 OPEN,
  * 2 CLOSED; repack 1 PACKED, 2 EXPANDED; msg_enc 1 LENGTH_PREFIXED,
- * 2 DELIMITED. Loader-internal: presence/repack/msg_enc resolve to
- * single values at load, enum_open stays per-field (inherit = 0). */
+ * 2 DELIMITED; utf8 2 VERIFY, 3 NONE (the reference's FeatureSet enum, where
+ * VERIFY is the proto3/editions default and NONE the proto2 one).
+ * Loader-internal: presence/repack/msg_enc/utf8 resolve to single values at
+ * load, enum_open stays per-field (inherit = 0). */
 typedef struct {
     int presence;
     int enum_open;
     int repack;
     int msg_enc;
+    int utf8;
 } ds_features;
 
 /* One parsed FieldDescriptorProto: regular fields and extensions share the
@@ -260,6 +263,11 @@ ds_parse_featureset(const uint8_t *p, const uint8_t *end, ds_features *out)
         case 3: /* repeated_field_encoding */
             if (v >= 1 && v <= 2) {
                 out->repack = (int)v;
+            }
+            break;
+        case 4: /* utf8_validation: 2 VERIFY, 3 NONE */
+            if (v >= 2 && v <= 3) {
+                out->utf8 = (int)v;
             }
             break;
         case 5: /* message_encoding */
@@ -501,6 +509,17 @@ ds_add_field(pbw_schema *schema, pbw_descriptor *msg,
         (uint8_t)info->feat.enum_open; /* closed-ness lives on the enum type */
     field->msg_enc =
         (uint8_t)(info->feat.msg_enc ? info->feat.msg_enc : file->msg_enc);
+    /* utf8_validation, the reference's rule: field FeatureSet, then the file's,
+     * then the dialect default (VERIFY for proto3/editions, NONE for proto2).
+     * Only `string` fields carry it; `bytes` never validates. */
+    {
+        int utf8 = info->feat.utf8 ? info->feat.utf8
+                                   : (file->utf8 ? file->utf8
+                                                 : (msg->proto3 ? 2 : 3));
+
+        field->utf8_check =
+            (uint8_t)(utf8 == 2 && info->type == PBW_TYPE_STRING);
+    }
     if (info->has_oneof) {
         pbw_field_set_oneof(field, info->oneof);
     }

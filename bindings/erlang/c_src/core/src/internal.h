@@ -143,6 +143,10 @@ struct pbw_field {
     uint8_t presence;
     uint8_t enum_open;
     uint8_t msg_enc;
+    /* 1 = the field is a proto3/editions string with utf8_validation VERIFY:
+     * a decoded value is rejected when it is not valid UTF-8, like the
+     * reference parsers. 0 for proto2 strings and every non-string field. */
+    uint8_t utf8_check;
     pbw_type type;
     pbw_label label;
     pbw_descriptor *sub;
@@ -433,6 +437,9 @@ int pbw_tag_read(const uint8_t *p, const uint8_t *end, uint32_t *tag,
 /* Reads a length prefix: a strict varint32, unlike pbw_varint_read(). */
 int pbw_len_read(const uint8_t *p, const uint8_t *end, size_t *len,
                  size_t *used);
+/* Structural UTF-8 check: rejects overlong forms, surrogates and values past
+ * U+10FFFF. Shared by the string parser, the text/JSON parsers and decode(). */
+int pbw_utf8_valid(const uint8_t *data, size_t len);
 void pbw_buf_init(pbw_buf *buf);
 /* Wrap caller memory: reserve never reallocates, it fails once the buffer is
  * full. The memory stays the caller's. */
