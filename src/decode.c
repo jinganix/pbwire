@@ -701,7 +701,7 @@ read_packed(reader *r, const pbw_field *field, pbw_message *msg, int closed,
 PBW_INLINE pbw_status
 check_utf8(const pbw_field *field, const uint8_t *data, size_t len)
 {
-    if (field->utf8_check && !pbw_utf8_valid(data, len)) {
+    if (field->utf8_check && !pbw_utf8_ok(data, len)) {
         return PBW_ERR_INVALID;
     }
     return PBW_OK;
