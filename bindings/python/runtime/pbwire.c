@@ -408,6 +408,7 @@ typedef struct {
     uint8_t repeated;
     uint8_t packed;
     uint8_t required;
+    uint8_t utf8;          /* 1: a decoded string must be valid UTF-8 */
     uint32_t oneof;        /* 1-based oneof group, 0 = not in a oneof */
     uint8_t required_slot; /* index among the required fields, 0xff = none */
     PyObject *sub;         /* owned MessageType for MESSAGE fields */
@@ -927,16 +928,10 @@ string_object(uint8_t type, const uint8_t *p, size_t len)
     if (type == PBW_TYPE_BYTES) {
         return PyBytes_FromStringAndSize((const char *)p, (Py_ssize_t)len);
     }
-    {
-        PyObject *s = PyUnicode_DecodeUTF8((const char *)p, (Py_ssize_t)len,
-                                           NULL);
-
-        if (s != NULL) {
-            return s;
-        }
-        PyErr_Clear(); /* not UTF-8: hand the raw bytes back */
-    }
-    return PyBytes_FromStringAndSize((const char *)p, (Py_ssize_t)len);
+    /* The reference's loose path for a string it did not validate (proto2):
+     * malformed sequences become U+FFFD. proto3 fields were already rejected
+     * by the scan, so this cannot hide an error there. */
+    return PyUnicode_DecodeUTF8((const char *)p, (Py_ssize_t)len, "replace");
 }
 
 /* Element count of a packed run, so the list can be allocated once: varints
@@ -1584,6 +1579,13 @@ scan_message(Message *m, MessageType *mt, const uint8_t *data, size_t off,
                                   (size_t)plen, depth + 1)) {
                     goto fail;
                 }
+            } else if (f->utf8 && f->type == PBW_TYPE_STRING &&
+                       !pbw_utf8_valid(r.p, (size_t)plen)) {
+                /* proto3/editions strings fail the decode, like the reference
+                 * parser; proto2 strings stay unchecked. */
+                PyErr_SetString(PyExc_ValueError,
+                                "string field holds invalid UTF-8");
+                goto fail;
             } else if (f->wire != 2 && !scan_run(f, r.p, (size_t)plen)) {
                 PyErr_SetString(PyExc_ValueError, "truncated packed field");
                 goto fail;
@@ -3520,6 +3522,7 @@ make_message(PyObject *schema_obj, const pbw_descriptor *desc, PyObject *cache)
         f->repeated = pbw_field_label(field) == PBW_LABEL_REPEATED;
         f->packed = pbw_field_is_packed(field) != 0;
         f->required = pbw_field_label(field) == PBW_LABEL_REQUIRED;
+        f->utf8 = (uint8_t)pbw_field_requires_utf8_validation(field);
         f->required_slot = 0xff;
         if (f->required) {
             if (mt->n_required < 64) {

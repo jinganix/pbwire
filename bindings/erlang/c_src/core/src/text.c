@@ -1088,61 +1088,6 @@ t_hex_val(char c)
     return c - 'A' + 10;
 }
 
-/* Standard UTF-8 check, rejecting surrogates and overlong forms. */
-static int
-t_valid_utf8(const uint8_t *data, size_t len)
-{
-    size_t i = 0;
-
-    while (i < len) {
-        uint8_t c = data[i];
-
-        if (c < 0x80) {
-            i++;
-        } else if ((c & 0xe0) == 0xc0) {
-            if (c < 0xc2 || i + 1 >= len || (data[i + 1] & 0xc0) != 0x80) {
-                return 0;
-            }
-            i += 2;
-        } else if ((c & 0xf0) == 0xe0) {
-            if (i + 2 >= len || (data[i + 1] & 0xc0) != 0x80 ||
-                (data[i + 2] & 0xc0) != 0x80) {
-                return 0;
-            }
-            {
-                uint32_t v = ((uint32_t)(c & 15) << 12) |
-                             ((uint32_t)(data[i + 1] & 63) << 6) |
-                             (uint32_t)(data[i + 2] & 63);
-
-                if (v < 0x800 || (v >= 0xd800 && v <= 0xdfff)) {
-                    return 0;
-                }
-            }
-            i += 3;
-        } else if ((c & 0xf8) == 0xf0) {
-            if (c > 0xf4 || i + 3 >= len || (data[i + 1] & 0xc0) != 0x80 ||
-                (data[i + 2] & 0xc0) != 0x80 ||
-                (data[i + 3] & 0xc0) != 0x80) {
-                return 0;
-            }
-            {
-                uint32_t v = ((uint32_t)(c & 7) << 18) |
-                             ((uint32_t)(data[i + 1] & 63) << 12) |
-                             ((uint32_t)(data[i + 2] & 63) << 6) |
-                             (uint32_t)(data[i + 3] & 63);
-
-                if (v < 0x10000 || v > 0x10ffff) {
-                    return 0;
-                }
-            }
-            i += 4;
-        } else {
-            return 0;
-        }
-    }
-    return 1;
-}
-
 /* Appends the unescaped form of one quoted span. Surrogate halves and
  * out-of-range code points fail: the reference test suite requires it. */
 static pbw_status
@@ -1773,8 +1718,8 @@ t_parse_string_value(text_in *t, pbw_message *msg, const pbw_field *field)
         }
     }
     if (field->type == PBW_TYPE_STRING &&
-        !t_valid_utf8(out.data == NULL ? (const uint8_t *)"" : out.data,
-                      out.len)) {
+        !pbw_utf8_valid(out.data == NULL ? (const uint8_t *)"" : out.data,
+                        out.len)) {
         pbw_buf_free(&out);
         return PBW_ERR_INVALID;
     }

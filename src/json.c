@@ -1780,59 +1780,6 @@ j_expect_ch(j_in *j, char c)
     return PBW_OK;
 }
 
-/* Structural UTF-8 check, shared by the string parser. */
-static int
-j_valid_utf8(const uint8_t *data, size_t len)
-{
-    const uint8_t *p = data;
-    const uint8_t *end = data + len;
-
-    if (len == 0) {
-        return 1; /* an empty buffer may have a NULL data pointer */
-    }
-
-    while (p < end) {
-        uint8_t c = *p;
-        size_t width = 0;
-        uint32_t rune = 0;
-        size_t k;
-
-        if (c < 0x80) {
-            p++;
-            continue;
-        }
-        if ((c & 0xe0) == 0xc0) {
-            rune = c & 0x1f;
-            width = 2;
-        } else if ((c & 0xf0) == 0xe0) {
-            rune = c & 0x0f;
-            width = 3;
-        } else if ((c & 0xf8) == 0xf0) {
-            rune = c & 0x07;
-            width = 4;
-        } else {
-            return 0;
-        }
-        if (width > pbw_remaining((const uint8_t *)end, (const uint8_t *)p)) {
-            return 0;
-        }
-        for (k = 1; k < width; k++) {
-            if ((p[k] & 0xc0) != 0x80) {
-                return 0;
-            }
-            rune = (rune << 6) | (p[k] & 0x3f);
-        }
-        if ((width == 2 && rune < 0x80) ||
-            (width == 3 && rune < 0x800) ||
-            (width == 4 && rune < 0x10000) || rune > 0x10ffff ||
-            (rune >= 0xd800 && rune <= 0xdfff)) {
-            return 0;
-        }
-        p += width;
-    }
-    return 1;
-}
-
 /* Parses a JSON string (single quotes accepted, legacy mode), unescaping
  * into `out`. */
 static pbw_status
@@ -1855,7 +1802,7 @@ j_parse_string(j_in *j, pbw_buf *out)
         }
         c = (unsigned char)*j->cur.p++;
         if (c == (unsigned char)quote) {
-            if (!j_valid_utf8(out->data, out->len)) {
+            if (!pbw_utf8_valid(out->data, out->len)) {
                 return PBW_ERR_INVALID;
             }
             return PBW_OK;

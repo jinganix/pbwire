@@ -694,6 +694,19 @@ read_packed(reader *r, const pbw_field *field, pbw_message *msg, int closed,
     return PBW_OK;
 }
 
+/* A `string` field whose utf8_validation resolves to VERIFY must carry valid
+ * UTF-8: the reference parsers reject such a message instead of keeping bytes
+ * that later render as replacement characters. proto2 strings and `bytes`
+ * fields are unchecked, exactly like the reference. */
+PBW_INLINE pbw_status
+check_utf8(const pbw_field *field, const uint8_t *data, size_t len)
+{
+    if (field->utf8_check && !pbw_utf8_valid(data, len)) {
+        return PBW_ERR_INVALID;
+    }
+    return PBW_OK;
+}
+
 static pbw_status
 read_string_field(reader *r, const pbw_field *field, pbw_message *msg,
                   rep_cache *rep)
@@ -703,6 +716,10 @@ read_string_field(reader *r, const pbw_field *field, pbw_message *msg,
     pbw_status status;
 
     status = read_length(r, &data, &data_len);
+    if (status != PBW_OK) {
+        return status;
+    }
+    status = check_utf8(field, data, data_len);
     if (status != PBW_OK) {
         return status;
     }
@@ -1143,6 +1160,10 @@ decode_fields(pbw_message *msg, const uint8_t *buf, size_t len, uint32_t depth, 
                 if (status != PBW_OK) {
                     return status;
                 }
+                status = check_utf8(field, data, data_len);
+                if (status != PBW_OK) {
+                    return status;
+                }
                 if (!pbw_msg_present(msg, index)) {
                     if (!store_bytes_first(msg, index, data, data_len)) {
                         return PBW_ERR_NOMEM;
@@ -1245,6 +1266,10 @@ decode_fields(pbw_message *msg, const uint8_t *buf, size_t len, uint32_t depth, 
                 const uint8_t *data;
                 size_t data_len;
                 status = read_length(&r, &data, &data_len);
+                if (status != PBW_OK) {
+                    return status;
+                }
+                status = check_utf8(field, data, data_len);
                 if (status != PBW_OK) {
                     return status;
                 }

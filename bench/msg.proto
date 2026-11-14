@@ -1,10 +1,10 @@
 // Message used by the differential test and the benchmark against libprotobuf C++.
 // bench/bench.cc mirrors this schema by hand; the differential test is what keeps
 // the mirror honest.
-// Byte payloads are `bytes`, not `string`, on purpose: libprotobuf validates UTF-8
-// on proto3 string fields while pbwire treats string and bytes identically, and
-// this harness compares wire-format behaviour. pbwire's UTF-8 policy is covered by
-// tests/test_pbwire.c instead.
+// Byte payloads are `bytes`, not `string`: this harness compares wire format,
+// and pbwire now validates proto3 `string` fields exactly like libprotobuf
+// (utf8_validation VERIFY), covered by tests/test_pbwire.c and by the
+// proto3-vs-proto2 check in tests/test_descriptor.c.
 syntax = "proto3";
 
 package bench;

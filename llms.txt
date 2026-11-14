@@ -117,7 +117,8 @@ C++ runtime), `make bench`, `make bench-c` (C structs vs protoc C++). Optional, 
   `pbw_descriptor_field_at`, `pbw_descriptor_find_field`, `pbw_descriptor_find_field_name`,
   `pbw_descriptor_set_map_entry`; field facts via `pbw_field_name`, `pbw_field_number`,
   `pbw_field_type`, `pbw_field_label`, `pbw_field_is_packed`, `pbw_field_oneof_index`,
-  `pbw_field_message_type`, `pbw_field_set_full_name`; enum facts via `pbw_enum_add_value`,
+  `pbw_field_requires_utf8_validation`, `pbw_field_message_type`,
+  `pbw_field_set_full_name`; enum facts via `pbw_enum_add_value`,
   `pbw_enum_find_name`, `pbw_enum_find_value`.
 - Services: `pbw_schema_service_count`, `pbw_schema_service_at`, `pbw_schema_service_find`,
   `pbw_service_name`, `pbw_service_method_count`, `pbw_service_method_at`,
@@ -277,6 +278,8 @@ C++ runtime), `make bench`, `make bench-c` (C structs vs protoc C++). Optional, 
   expansions, unknown fields as numeric lines with `print_unknown_fields`, strict rejections
   including bad-UTF-8 strings, singular duplicates and unknown names).
 - JSON mapping (`pbw_json_print` / `pbw_json_parse`): same verdicts as the reference parser on
+- `pbw_utf8_valid`: the structural UTF-8 check decode() applies to a field whose
+  utf8_validation resolves to VERIFY, and the text/JSON parsers apply to every string.
   40,000 mutated inputs; all well-known types (`Any`, `Timestamp`, `Duration`, `FieldMask`,
   `Struct`/`Value`, wrappers, `Empty`), extensions as `[full.name]`, closed-enum unknowns kept as
   unknown fields, strict base64 (padded input must fill quanta) and strict numbers.

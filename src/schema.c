@@ -608,6 +608,12 @@ add_field(pbw_descriptor *msg, const char *name, uint32_t number, pbw_type type,
     field->type = type;
     field->label = label;
     field->is_extension = is_extension ? 1u : 0u;
+    /* Hand-built schemas follow the dialect: a proto3 schema validates its
+     * string fields on decode, proto2 does not (see pbw_field_utf8_*). The
+     * descriptor-set loader overwrites this per field from the FeatureSet. */
+    field->utf8_check =
+        (uint8_t)(type == PBW_TYPE_STRING && msg->schema != NULL &&
+                  msg->schema->proto3);
     msg->field_count++;
     add_index_add_row(msg);
     if (msg->schema != NULL) {
@@ -1210,6 +1216,12 @@ int
 pbw_field_is_packed(const pbw_field *field)
 {
     return field != NULL && field->packed != 0;
+}
+
+int
+pbw_field_requires_utf8_validation(const pbw_field *field)
+{
+    return field != NULL && field->utf8_check != 0;
 }
 
 uint32_t

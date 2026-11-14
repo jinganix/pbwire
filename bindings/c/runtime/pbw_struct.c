@@ -262,6 +262,7 @@ typedef struct sc_entry {
     size_t cnt;                     /* count offset (SC_RPT), 0 = singular */
     size_t elem;                    /* element size in memory: struct stride or scalar width */
     uint8_t oneof;                  /* 1 when the field is in a real oneof (cs selects) */
+    uint8_t utf8;                   /* 1: a decoded string must be valid UTF-8 */
     size_t cs;                      /* oneof case-word offset */
     const pbw_struct_field_t *rows; /* sub-layout rows (MSG/GRP), else NULL */
     size_t nrows;                   /* sub-layout row count */
@@ -493,6 +494,15 @@ plan_build(const pbw_descriptor *desc, const pbw_struct_field_t *fields,
             goto fail;
         }
         e->op = field_op(row, &info);
+        /* utf8_validation follows the schema (proto3/editions VERIFY), so the
+         * string check stays in one place: the reference parsers reject a
+         * malformed `string` instead of keeping bytes that render as U+FFFD. */
+        if ((e->op & SC_OP_MASK) == SC_OP_STR) {
+            const pbw_field *field = pbw_descriptor_find_field(desc, row->fnum);
+
+            e->utf8 = (uint8_t)(field != NULL &&
+                                pbw_field_requires_utf8_validation(field));
+        }
         if (row->kind == PBW_SF_ENUM && !row->repeated && row->dflt != 0) {
             /* The struct arrives zeroed, so only non-zero defaults need a
              * store; absent proto3 enums already read 0. */
@@ -1875,6 +1885,10 @@ dec_msg(const sc_plan *p, rdr *r, char *base, pbw_struct_arena *a,
                 continue;
             }
             if (!rd_payload(r, &inner)) {
+                return PBW_ERR_INVALID;
+            }
+            if (e->utf8 &&
+                !pbw_utf8_valid(inner.p, (size_t)(inner.end - inner.p))) {
                 return PBW_ERR_INVALID;
             }
             dup = (char *)sc_alloc(a, (size_t)(inner.end - inner.p) + 1);

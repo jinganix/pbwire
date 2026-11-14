@@ -995,6 +995,33 @@ test_schema(void)
     CHECK(pbw_descriptor_find_field_name(tags, "key") != NULL);
     CHECK(pbw_descriptor_find_field_name(tags, "value") != NULL);
 
+    /* utf8_validation follows the reference: the proto3 `string` field
+     * validates at parse, the proto2 one (Old.name) does not. */
+    CHECK(pbw_field_requires_utf8_validation(
+              pbw_descriptor_find_field_name(outer, "b")) == 1);
+    CHECK(pbw_field_requires_utf8_validation(
+              pbw_descriptor_find_field_name(outer, "plain")) == 0);
+    CHECK(pbw_field_requires_utf8_validation(
+              pbw_descriptor_find_field_name(old_msg, "name")) == 0);
+    {
+        /* Outer.b(7) = one 0xFF byte: proto3 rejects it. */
+        static const unsigned char bad3[] = {0x3A, 0x01, 0xFF};
+        /* Old.id(1) = 7 (required), Old.name(2) = one 0xFF byte: proto2
+         * keeps the malformed string byte for byte. */
+        static const unsigned char bad2[] = {0x08, 0x07, 0x12, 0x01, 0xFF};
+        pbw_message *m = NULL;
+        uint8_t *bytes = NULL;
+        size_t bytes_len = 0;
+
+        CHECK_STATUS(PBW_ERR_INVALID, pbw_decode(outer, bad3, sizeof(bad3), &m));
+        CHECK(m == NULL);
+        CHECK_OK(pbw_decode(old_msg, bad2, sizeof(bad2), &m));
+        CHECK_OK(pbw_encode(m, &bytes, &bytes_len));
+        CHECK(bytes_len == sizeof(bad2) && memcmp(bytes, bad2, bytes_len) == 0);
+        pbw_free(bytes);
+        pbw_message_free(m);
+    }
+
     /* oneof membership: both cases share one non-zero index */
     field = pbw_descriptor_find_field_name(outer, "a");
     CHECK(field != NULL && pbw_field_oneof_index(field) != 0);

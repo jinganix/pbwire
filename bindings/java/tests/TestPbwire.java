@@ -28,6 +28,7 @@ public final class TestPbwire {
             check(schema.message("pbwire.test.Sample").name().equals("pbwire.test.Sample"), "descriptor set loads");
             roundTrip(schema);
             byteExactReEncode(schema);
+            utf8Validation(schema);
             absentFields(schema);
             nested(schema);
             doubleClose(schema);
@@ -90,6 +91,26 @@ public final class TestPbwire {
                 check(decoded.get(1).equals(-42L), "get by number");
                 check(decoded.has("string_field"), "has() sees a set field");
             }
+        }
+    }
+
+    /** proto3 `string` values are validated on parse, like the reference. */
+    private static void utf8Validation(Schema schema) {
+        MessageType sample = schema.message("pbwire.test.Sample");
+        // string_field(9) = one 0xFF byte, bytes_field(10) = one 0xFF byte
+        byte[] badString = {0x4A, 0x01, (byte) 0xFF};
+        byte[] badBytes = {0x52, 0x01, (byte) 0xFF};
+        byte[] goodString = {0x4A, 0x02, (byte) 0xC3, (byte) 0xA9};
+        check(!decodes(sample, badString), "proto3 string with invalid UTF-8 is rejected");
+        check(decodes(sample, badBytes), "bytes field is never UTF-8 checked");
+        check(decodes(sample, goodString), "valid UTF-8 string decodes");
+    }
+
+    private static boolean decodes(MessageType type, byte[] wire) {
+        try (Message m = type.decode(wire)) {
+            return true;
+        } catch (RuntimeException e) {
+            return false;
         }
     }
 

@@ -259,6 +259,20 @@ uint32_t pbw_field_number(const pbw_field *field);
 pbw_type pbw_field_type(const pbw_field *field);
 pbw_label pbw_field_label(const pbw_field *field);
 int pbw_field_is_packed(const pbw_field *field);
+/* 1 when a decoded value of this field must be valid UTF-8, i.e. the reference
+ * implementation's rule: a `string` field whose utf8_validation resolves to
+ * VERIFY (proto3 and edition 2023+ files by default, proto2 never unless a
+ * FeatureSet says otherwise). pbw_decode() rejects such a value with
+ * PBW_ERR_INVALID instead of storing bytes the reference would refuse; `bytes`
+ * fields and proto2 strings stay unchecked, exactly like the reference. */
+int pbw_field_requires_utf8_validation(const pbw_field *field);
+/* Structural UTF-8 check: 1 when data is valid UTF-8, 0 for overlong forms,
+ * surrogates and values past U+10FFFF. The same check decode() applies to a
+ * field whose utf8_validation resolves to VERIFY, and that the text/JSON
+ * parsers apply to every string they accept; bindings that validate on their
+ * own (a host runtime that decodes strings itself) should use this one so the
+ * rule stays single-sourced. */
+int pbw_utf8_valid(const uint8_t *data, size_t len);
 uint32_t pbw_field_oneof_index(const pbw_field *field);
 const pbw_descriptor *pbw_field_message_type(const pbw_field *field);
 

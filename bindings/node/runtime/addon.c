@@ -216,6 +216,7 @@ typedef struct {
     uint8_t label;
     uint8_t wire;   /* wire type this field is encoded with */
     uint8_t closed; /* proto2 closed enum: unknown numbers leave the field */
+    uint8_t utf8;   /* 1: a `string` payload must be valid UTF-8 */
 } field_entry;
 
 struct desc_table {
@@ -541,6 +542,7 @@ table_build(schema_handle *schema, const pbw_descriptor *desc)
         entry->type = (uint8_t)pbw_field_type(field);
         entry->label = (uint8_t)pbw_field_label(field);
         entry->wire = (uint8_t)wire_type_of((pbw_type)entry->type);
+        entry->utf8 = (uint8_t)pbw_field_requires_utf8_validation(field);
         if (entry->type == PBW_TYPE_ENUM) {
             const pbw_descriptor *enum_desc = pbw_field_message_type(field);
 
@@ -1343,6 +1345,13 @@ scan_range(desc_table *table, const uint8_t *base, uint32_t off, uint32_t len,
 
                 if (!rb_len(&p, end, &payload_len) ||
                     payload_len > (size_t)(end - p)) {
+                    return SCAN_INVALID;
+                }
+                /* A proto3/editions `string` must be valid UTF-8, exactly as
+                 * the tree decoder requires: the lazy view and the tree agree
+                 * on which messages exist. */
+                if (entry->utf8 &&
+                    !pbw_utf8_valid(p, (size_t)payload_len)) {
                     return SCAN_INVALID;
                 }
                 payload = (uint32_t)(p - base);
