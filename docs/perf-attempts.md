@@ -255,16 +255,16 @@ tables. The cells did not flip; the spread across the day's runs is:
 
 | cell | ratio across runs | note |
 |---|---|---|
-| Java 136 B encode | 0.75x-0.82x | pure-Java writer vs generated straight-line code |
-| Kotlin 136 B encode | 0.80x-0.87x | same runtime, plus one DSL call |
+| Java 136 B encode | 0.71x-0.93x | pure-Java writer vs generated straight-line code |
+| Kotlin 136 B encode | 0.78x-0.97x | same runtime, plus one DSL call |
 | Kotlin 174 B encode | 0.79x | GC-sensitive, see its cell above |
-| Clojure 136 B encode | 0.73x-0.75x | interop path, same Java codec |
-| Julia 136 B decode | 0.89x-0.94x | plain-path `malloc`/`free` plus `ccall` |
-| core plain 169 B encode | 0.94x-1.04x | one `malloc`/`free` pair per call |
-| Go 136 B encode | 0.98x-1.00x | one cgo downcall per op |
+| Clojure 136 B encode | 0.70x-0.75x | interop path, same Java codec |
+| Julia 136 B decode | 0.89x-0.94x | plain-path `malloc`/`free` plus `ccall` (0.93x after the UTF-8 pass) |
+| core plain 169 B encode | 0.94x-1.04x | one `malloc`/`free` pair per call (0.94x after the UTF-8 pass) |
+| Go 136 B encode | 0.94x-1.00x | one cgo downcall per op |
 | Go 174 B encode | 0.98x | same |
-| Ruby 174 B encode | 0.95x-1.19x | bandwidth-bound at 174 B |
-| Node 136 B decode | 0.96x-1.06x | one N-API downcall per op |
+| Ruby 174 B encode | 0.95x-1.19x | bandwidth-bound at 174 B (1.00x after the UTF-8 pass) |
+| Node 136 B decode | 0.96x-1.14x | one N-API downcall per op (1.00x after the UTF-8 pass) |
 
 One more generic candidate was measured and rejected this round: the plain
 encode path starts its output buffer at 64 bytes and doubles, so a 132-139 B
@@ -274,12 +274,31 @@ capacity to 256 (which would remove both reallocs for every binding that calls
 for both builds across five alternating rounds (median 35.8 vs 35.2), inside
 the noise floor. The reallocs are a few ns against a ~30 ns tree walk.
 
+One cell *was* actionable that round and is now fixed: the UTF-8 validator
+below was a byte-per-iteration scan, which cost the Objective-C 74 KB tier
+0.14x and every string-heavy decode row several percent. Rows re-measured
+after that pass (BENCHMARKS.md, 2026-11-14):
+
+| cell | before | after |
+|---|---|---|
+| Objective-C xlarge decode | 0.14x | 1.16x |
+| Objective-C large decode | 0.79x | 2.62x |
+| Python xlarge decode | 0.93x-1.38x | 1.22x |
+| C struct xlarge decode | 1.72x | 2.00x |
+| Node 136 B decode | 0.96x | 1.00x |
+| Julia 136 B decode | 0.89x-0.94x | 0.93x |
+| Elixir xlarge decode | 1.38x | 0.99x (baseline matched the core) |
+
 What is left is not tuning: the four JVM cells need per-message codegen (a
 product decision this project rejects, see the Java cell above), Julia's decode
 cell needs a context-based API (an ownership change), and the rest are boundary
-cells whose ✅/❌ flips with host load at the 136-174 B tier. The tables keep
-the strict `>= 1.0x` rule the project asks for: a cell under 1.0x is marked
-❌ even when it is inside the noise band, and the text says so.
+cells whose ✅/❌ flips with host load at the 136-174 B tier. The 2026-11-14
+refresh added two more of those at the largest tier, both inside their
+baseline's own run-to-run band: Java xlarge encode 0.95x and Rust xlarge encode
+0.98x (prost's one-pass writer at 1333 MB/s against the core's 1305), and
+Elixir's xlarge decode 0.99x. The tables keep the strict `>= 1.0x` rule the
+project asks for: a cell under 1.0x is marked ❌ even when it is inside the
+noise band, and the text says so.
 
 ## Aligned cost: proto3 `string` UTF-8 validation
 
@@ -310,4 +329,135 @@ instead of ~2.2x). Behaviour proved against the reference rather than argued:
 the same three bytes (tag 1, length 1, 0xFF) parse as an error in a proto3
 message and as data in a proto2 one, on both sides, and the binary conformance
 suite now passes 2750 tests instead of 2745 (the extra ones are the JSON/UTF-8
-verdicts this alignment fixed).
+verdicts this alignment fixed). The cost measured here was the implementation's
+(one byte per iteration); the follow-up below keeps the rule and removes
+almost all of the time.
+
+### Follow-up: the validator itself (kept)
+
+The 14.1% price above was the *implementation*, not the rule: `pbw_utf8_valid`
+walked one byte per iteration, so every ASCII value paid a per-byte branch and
+a 74 KB ASCII value (the Objective-C tier shape) cost ~20 us of the decode. Two
+generic changes, measured against the pre-change library with two binaries
+built from the same tree and alternated in one session (best of 9 rounds):
+
+1. **ASCII runs skip 16 bytes at a time.** A word whose bytes are all below
+   0x80 has no high bit set, on either endianness, so two `uint64` loads and
+   one `or`/`and` test cover 16 bytes; the 8-byte loop and a byte loop finish
+   the remainder. The multi-byte rules now live in one `pbw_utf8_seq` helper
+   (internal.h) instead of being spelled out in each branch.
+2. **Values shorter than a machine word are validated inline** at the
+   decoder's three call sites (`pbw_utf8_ok` in internal.h). A 3-byte name or
+   8-byte tag was paying an out-of-line call for three iterations.
+
+C probe (alternating A/B, best-of-9, ns per pass):
+
+| case | old scalar | new word scan | new inline short path |
+|---|---|---|---|
+| 6000 short strings (3/8 B) | 15390 | 13027 | 10999 |
+| one 75776 B ASCII value | 19974 | 1274 | 1257 |
+
+End to end, `pbw_decode` + `pbw_message_free` on a real `matrix3` payload
+(protoc-encoded, 74889 B, 6000 strings), best of 5 x 300 iterations:
+
+| build | plain decode | `pbw_ctx` decode |
+|---|---|---|
+| old | 106.4 us | 121.3 us |
+| now | 99.6 us | 117.0 us |
+
+and on the Objective-C tier shape (one 74004-byte ASCII string), one
+decode+free per iteration: 20849 -> 2141 ns per decode (9.7x). The
+diagnosis that led here was the 2026-11-14 table row: `pbwire-objc` xlarge
+decode had fallen to 0.14x of the ObjC runtime purely on that 74 KB scan, and
+the harness now reports 1.16x with everything else unchanged.
+
+Cost/benefit for the rest of the matrix: the `matrix3` payload is 6000 short
+strings, where the word scan is worth ~4% of the decode and the inline path
+another ~3%. That is enough to move the C struct xlarge decode row from 1.72x
+to 2.00x; on the Python row the same ~7% is smaller than the day-to-day drift
+of the upb baseline (the 1.22x quoted in the table comes from one run, and upb
+moved ~10% between sessions), so it does not read as a validator effect there.
+The core's own decode rows landed at 1.52x-1.82x. Correctness is
+carried by `tests/test_pbwire.c:test_utf8_validator`, which walks every ASCII
+length across the 8- and 16-byte boundaries, every bad sequence at every offset
+of a 24-byte value, truncated tails and a 300-byte value with a bad byte at
+either end, with hand-written expectations (independent of the scan), plus the
+existing decode verdict tests, `make difftest` and `make conformance`
+(2750 binary/JSON + 443 text, unchanged).
+
+## Cell: Go, 136 B / 174 B encode (0.94x) — kept
+
+The two small encode cells were the only cells left where the *binding shape*
+was the whole gap, not the codec. `Encode()` called `pbw_encode()` once (which
+mallocs the result and hands ownership over), then `pbw_free()` (a second
+downcall), then `C.GoBytes()` (a Go allocation plus a full copy) — because
+libc memory cannot become a Go `[]byte`. The core already had the
+caller-buffer entry point (`pbw_encode_to`), so nothing was missing: the
+binding was choosing the expensive shape. Measured, that shape cost 52 ns of
+a 220 ns 136 B encode (below); a first arithmetic estimate of ~95 ns was
+wrong by 2x, which is why this was A/B'd instead of reasoned about.
+
+### The change
+
+- **core**: `pbw_encode_deterministic_to()`, the caller-buffer twin of
+  `pbw_encode_deterministic()` (the delimited twin already existed). The three
+  Go encode entry points now share one contract, so the binding does not need
+  two different ownership stories.
+- **binding**: `Encode()` / `EncodeDeterministic()` / `EncodeDelimited()` write
+  into a Go-allocated slice with `pbw_encode_to` and friends. The capacity is
+  `pbw_message_wire_size(msg) + PBW_ENCODE_SLACK` when the tree came from the
+  wire, otherwise the capacity the last successful encode needed (an atomic
+  field on `Message`), otherwise 256 — growing by doubling on
+  `PBW_ERR_LIMIT`. No C `malloc`, no `pbw_free`, no copy back: the bytes the
+  core writes *are* the result.
+- The returned slice is a fresh, caller-owned `[]byte` exactly as before. The
+  hint is advisory: too small costs a retry, too large allocates a few bytes
+  more, and an atomic keeps concurrent `Encode` correct — so the API contract
+  (fresh result, no retained memory, goroutine-safe) is unchanged, unlike
+  reusing a context buffer (which invalidates the previous result) or handing
+  the C buffer to Go (which cannot free it).
+
+### A/B (5 alternating rounds, only `dynamic.go` differs, same library)
+
+`ns` per encode, each round = one full harness run (best of 3 passes):
+
+| tier | old | new | delta |
+|---|---|---|---|
+| 136 B | 242.1 / 211.1 / 220.5 / 236.6 / 216.3 | 167.8 / 162.7 / 166.7 / 180.0 / 175.2 | **-24%** (median 220.5 -> 167.8) |
+| 174 B | 341.8 / 283.4 / 292.1 / 301.7 / 279.9 | 232.7 / 231.9 / 233.5 / 240.8 / 234.8 | **-20%** (median 292.1 -> 233.5) |
+| 2469 B | 2485 / 2262 / 2220 / 2203 / 2306 | 2043 / 2010 / 1895 / 1952 / 2025 | **-11%** (median 2262 -> 2010) |
+| 74913 B | 54168 / 54554 / 55171 (two rounds load-spiked) | 51026 / 51213 / 51503 | -6% (best round) |
+
+New side wins every tier in every round. Same-run ratio against protobuf-go
+(the harness times both sides in one process, so this is the cell to read):
+136 B encode 0.94x -> **1.28x**, 174 B 0.94x -> **1.22x**, 2469 B 1.85x ->
+2.19x, 74913 B 2.35x -> 2.45x (neutral, inside the tier's noise).
+
+### Rejected in the same pass
+
+- **`pbw_message_encoded_size()` before every encode** (size, then write):
+  flips the small cells just as well, but at 74 KB the extra walk (~45 us) on
+  top of the write walk doubles that tier, turning 2.4x into ~1.3x. A size
+  walk is only affordable when it replaces a *copy*, never when it replaces
+  nothing.
+- **Reusing one scratch buffer for the result** (a field on `Message`): the
+  returned `[]byte` must stay the caller's, so the only reusable buffer is a
+  separate one, which means copying back into a fresh result — i.e. keeping
+  the copy that this change removed.
+- **Returning `unsafe.Slice` over the C buffer**: libc memory cannot be handed
+  to the Go GC, and a finalizer does not make it safe.
+
+### Cost and edges
+
+- A cold message encodes with a 256-byte first attempt and grows by doubling,
+  so a *one-shot* encode of a large hand-built message can walk up to twice
+  (normally much less: a failed attempt stops as soon as the buffer is full).
+  A decoded tree starts from its exact wire length, so the common
+  decode-then-encode path never doubles.
+- After a doubling the result is copied into an exact-size slice, so a caller
+  never pins a 2x array; a steady-state encode returns `buf[:n]` with at most
+  `PBW_ENCODE_SLACK` bytes of slack and no copy at all.
+- Verified by `tests/test_pbwire.c:test_encode_to` (deterministic twin: bytes
+  equal to `pbw_encode_deterministic`, 2-byte-short buffer is
+  `PBW_ERR_LIMIT`, NULL args rejected), `make go-test` (byte equality and
+  round trips over every tier), `make difftest` and `make test`.

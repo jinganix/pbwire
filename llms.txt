@@ -169,9 +169,10 @@ C++ runtime), `make bench`, `make bench-c` (C structs vs protoc C++). Optional, 
   `pbw_decode_delimited_ctx`, `pbw_decode_delimited_ctx_limits`; over-large
   `max_depth` clamps to `PBW_MAX_DEPTH`.
 - `pbw_encode_deterministic`: map entries sorted by key, everything else byte-identical to
-  `pbw_encode`.
+  `pbw_encode`. `pbw_encode_deterministic_to` is its caller-memory twin (`PBW_ERR_LIMIT` when the
+  buffer is too small), so a deterministic frame costs no malloc plus copy.
 - `pbw_status pbw_message_encoded_size(const pbw_message *, size_t *len)`: exact wire length
-  without allocating or writing bytes (one walk; measured at ~0.75x of an encode), for callers that
+  without allocating or writing bytes (one walk; measured at ~0.8x of an encode), for callers that
   must frame a message before encoding it. `pbw_encode_to()` over-reserves tag/varint space, so its
   smallest guaranteed cap is `size + PBW_ENCODE_SLACK` (12), not `size`.
 - Scan without a tree: `pbw_visit`, `pbw_visit_limits` (one callback per field, `pbw_visit_value`
