@@ -137,9 +137,12 @@ shapes.
   `pbw_field_requires_utf8_validation(field)` exposes the resolved rule, and
   `pbw_utf8_valid()` is the same structural check the text and JSON parsers use,
   so a binding that decodes strings in its own runtime validates identically.
-  This costs throughput on decode (measured at 13-14% on a 75 KB proto3 payload
-  with 3000 strings, see [perf-attempts.md](perf-attempts.md)); the reference
-  pays the same cost, so the comparison stays honest.
+  This costs throughput on decode, and the check is built for the common case:
+  ASCII runs are skipped 16 bytes at a time and values shorter than a machine
+  word are checked inline, so a 75 KB proto3 payload with 3000 strings pays
+  ~4% of its decode instead of the 13-14% a byte-per-iteration scan cost (see
+  [perf-attempts.md](perf-attempts.md)). The reference validates the same bytes
+  at parse time, so the comparison stays honest.
 - **Unknown fields are data.** Anything the schema does not declare — including
   a known field carrying the wrong wire type, and legacy groups — is kept as
   raw wire bytes and written back after the known fields, in the order they
@@ -176,9 +179,10 @@ models. Pick per call site, not per program.
 
 Use the context in a hot loop or per server worker; use the plain API for
 one-off work, or when the result has to be kept and modified. The difference the
-two columns show is exactly one `malloc`/`free` pair per call: it costs ~20% of
-the context's throughput at 132-169 B, ~13% at 2755 B, and is gone by 86 KB
-where the payload dominates — see the `ctx` vs `plain` columns in
+two columns show is exactly one `malloc`/`free` pair per call: it costs the
+context roughly 10-20% of its throughput on the small tiers (most of it on
+encode, where the output buffer is the whole cost) and ~5% at 86 KB, where the
+payload dominates — see the `ctx` vs `plain` columns in
 [BENCHMARKS.md](../BENCHMARKS.md).
 
 A context keeps at most `pbw_ctx_set_retain_cap` bytes resident across resets

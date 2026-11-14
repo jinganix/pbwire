@@ -440,6 +440,78 @@ int pbw_len_read(const uint8_t *p, const uint8_t *end, size_t *len,
 /* Structural UTF-8 check: rejects overlong forms, surrogates and values past
  * U+10FFFF. Shared by the string parser, the text/JSON parsers and decode(). */
 int pbw_utf8_valid(const uint8_t *data, size_t len);
+
+/* UTF-8 rules for one multi-byte sequence: returns the bytes it consumes, or 0
+ * when it is malformed or truncated. The one definition behind both callers
+ * below, so the rules are not spelled out three times. */
+PBW_INLINE int
+pbw_utf8_seq(const uint8_t *d, size_t avail)
+{
+    uint8_t c = d[0];
+
+    if ((c & 0xe0) == 0xc0) {
+        if (c < 0xc2 || avail < 2 || (d[1] & 0xc0) != 0x80) {
+            return 0;
+        }
+        return 2;
+    }
+    if ((c & 0xf0) == 0xe0) {
+        uint32_t v;
+
+        if (avail < 3 || (d[1] & 0xc0) != 0x80 || (d[2] & 0xc0) != 0x80) {
+            return 0;
+        }
+        v = ((uint32_t)(c & 15) << 12) | ((uint32_t)(d[1] & 63) << 6) |
+            (uint32_t)(d[2] & 63);
+        if (v < 0x800 || (v >= 0xd800 && v <= 0xdfff)) {
+            return 0;
+        }
+        return 3;
+    }
+    if ((c & 0xf8) == 0xf0) {
+        uint32_t v;
+
+        if (c > 0xf4 || avail < 4 || (d[1] & 0xc0) != 0x80 ||
+            (d[2] & 0xc0) != 0x80 || (d[3] & 0xc0) != 0x80) {
+            return 0;
+        }
+        v = ((uint32_t)(c & 7) << 18) | ((uint32_t)(d[1] & 63) << 12) |
+            ((uint32_t)(d[2] & 63) << 6) | (uint32_t)(d[3] & 63);
+        if (v < 0x10000 || v > 0x10ffff) {
+            return 0;
+        }
+        return 4;
+    }
+    return 0; /* a continuation byte, or a 5/6-byte form */
+}
+
+/* The check the decoder runs per decoded string. Most strings are shorter than
+ * a machine word (a name, a tag, an enum label), so they are validated here
+ * without a call; longer ones go to pbw_utf8_valid's word-at-a-time scan,
+ * which is what keeps a multi-KB value from paying a byte-per-iteration walk. */
+#define PBW_UTF8_SHORT 8
+PBW_INLINE int
+pbw_utf8_ok(const uint8_t *data, size_t len)
+{
+    size_t i;
+
+    if (len >= PBW_UTF8_SHORT) {
+        return pbw_utf8_valid(data, len);
+    }
+    for (i = 0; i < len; i++) {
+        int n;
+
+        if (data[i] < 0x80) {
+            continue;
+        }
+        n = pbw_utf8_seq(data + i, len - i);
+        if (n == 0) {
+            return 0;
+        }
+        i += (size_t)(n - 1);
+    }
+    return 1;
+}
 void pbw_buf_init(pbw_buf *buf);
 /* Wrap caller memory: reserve never reallocates, it fails once the buffer is
  * full. The memory stays the caller's. */

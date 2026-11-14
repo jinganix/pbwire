@@ -29,7 +29,7 @@ row links to the section with the fix and its limits.
 |---|---|---|
 | Generated `.pb.cc` / `.pb.go` bloat, slow builds, big binaries | Solved: no generated code, schema loads at runtime | [codegen](#how-to-avoid-protobuf-code-generation-bloat) |
 | `protoc` + per-language plugins + include paths in every CI job | Eased: one `FileDescriptorSet` built once, no `protoc` at runtime | [toolchain](#how-to-simplify-the-protoc-toolchain) |
-| `DynamicMessage` much slower than generated code | Solved: `pbw_ctx` beats generated C++ 1.1–1.7x, `DynamicMessage` 8–15x on encode | [dynamic](#why-is-dynamicmessage-slow-and-what-is-faster) |
+| `DynamicMessage` much slower than generated code | Solved: `pbw_ctx` beats generated C++ 1.1–1.5x, `DynamicMessage` 11–15x on encode | [dynamic](#why-is-dynamicmessage-slow-and-what-is-faster) |
 | A different API, defaults and habits in every language | Unified semantics, idiomatic APIs per language — by design, not one API everywhere | [consistency](#why-do-protobuf-apis-differ-per-language) |
 | libprotobuf / Abseil weight, Bazel–CMake friction, C++ upgrade churn | Solved: pure C99 core, zero runtime dependencies | [dependencies](#how-to-avoid-the-protobuf-c-dependency-and-build-burden) |
 | Runtime upgrades break generated code and plugins | Mitigated: stable C ABI (`PBW_ABI_VERSION`), bindings decoupled from core | [upgrades](#how-to-survive-protobuf-version-upgrades) |
@@ -78,8 +78,8 @@ pbwire is descriptor-driven too, but built for it: precomputed lookup tables,
 precomputed tag bytes, single-pass writes (the C++ serializer sizes first,
 then writes), one bump arena plus one reusable encode buffer per `pbw_ctx`.
 Measured on Apple M4 Pro (`protoc 36.2`, `make bench`, byte-equality checked
-before timing): the in-process `pbw_ctx` API runs 1.1–1.7x the generated C++
-codec on every payload tier and 8–15x `DynamicMessage` on encode, 2–4x on
+before timing): the in-process `pbw_ctx` API runs 1.1–1.5x the generated C++
+codec on every payload tier and 11–15x `DynamicMessage` on encode, 3.0–4.6x on
 decode. The two places generic dispatch still shows are documented, not
 hidden: the plain one-`malloc`-per-call API near-ties generated code on small
 messages, and tiny-message straight-line writes in some host bindings. Full

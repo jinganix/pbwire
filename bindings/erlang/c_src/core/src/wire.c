@@ -190,6 +190,12 @@ pbw_len_read(const uint8_t *p, const uint8_t *end, size_t *len, size_t *used)
     return 0;
 }
 
+/* A word made only of bytes below 0x80 has no high bit set, on either
+ * endianness, so one test covers eight bytes of an ASCII run: a long value
+ * costs one load and one branch per 16 bytes instead of one per byte. The
+ * rules for the non-ASCII sequences live in pbw_utf8_seq (internal.h). */
+#define PBW_UTF8_HIGH 0x8080808080808080ull
+
 int
 pbw_utf8_valid(const uint8_t *data, size_t len)
 {
@@ -199,47 +205,38 @@ pbw_utf8_valid(const uint8_t *data, size_t len)
         return 1; /* an empty buffer may carry a NULL data pointer */
     }
     while (i < len) {
-        uint8_t c = data[i];
+        int n;
 
-        if (c < 0x80) {
+        if (data[i] >= 0x80) {
+            n = pbw_utf8_seq(data + i, len - i);
+            if (n == 0) {
+                return 0;
+            }
+            i += (size_t)n;
+            continue;
+        }
+        /* ASCII run: two words per test, then one, then the last few bytes. */
+        while (i + 16 <= len) {
+            uint64_t a, b;
+
+            memcpy(&a, data + i, sizeof a);
+            memcpy(&b, data + i + 8, sizeof b);
+            if ((a | b) & PBW_UTF8_HIGH) {
+                break;
+            }
+            i += 16;
+        }
+        while (i + 8 <= len) {
+            uint64_t a;
+
+            memcpy(&a, data + i, sizeof a);
+            if (a & PBW_UTF8_HIGH) {
+                break;
+            }
+            i += 8;
+        }
+        while (i < len && data[i] < 0x80) {
             i++;
-        } else if ((c & 0xe0) == 0xc0) {
-            if (c < 0xc2 || i + 1 >= len || (data[i + 1] & 0xc0) != 0x80) {
-                return 0;
-            }
-            i += 2;
-        } else if ((c & 0xf0) == 0xe0) {
-            uint32_t v;
-
-            if (i + 2 >= len || (data[i + 1] & 0xc0) != 0x80 ||
-                (data[i + 2] & 0xc0) != 0x80) {
-                return 0;
-            }
-            v = ((uint32_t)(c & 15) << 12) |
-                ((uint32_t)(data[i + 1] & 63) << 6) |
-                (uint32_t)(data[i + 2] & 63);
-            if (v < 0x800 || (v >= 0xd800 && v <= 0xdfff)) {
-                return 0;
-            }
-            i += 3;
-        } else if ((c & 0xf8) == 0xf0) {
-            uint32_t v;
-
-            if (c > 0xf4 || i + 3 >= len || (data[i + 1] & 0xc0) != 0x80 ||
-                (data[i + 2] & 0xc0) != 0x80 ||
-                (data[i + 3] & 0xc0) != 0x80) {
-                return 0;
-            }
-            v = ((uint32_t)(c & 7) << 18) |
-                ((uint32_t)(data[i + 1] & 63) << 12) |
-                ((uint32_t)(data[i + 2] & 63) << 6) |
-                (uint32_t)(data[i + 3] & 63);
-            if (v < 0x10000 || v > 0x10ffff) {
-                return 0;
-            }
-            i += 4;
-        } else {
-            return 0;
         }
     }
     return 1;

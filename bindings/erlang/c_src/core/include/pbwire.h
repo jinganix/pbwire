@@ -598,6 +598,11 @@ pbw_status pbw_descriptor_set_load_limits(const void *data, size_t len,
  * pbw_encode() writes them. */
 pbw_status pbw_encode_deterministic(const pbw_message *msg, uint8_t **out,
                                     size_t *len);
+/* The caller-buffer twin of pbw_encode_deterministic(), with the same
+ * contract as pbw_encode_to(): no allocation, `cap` is the hard limit,
+ * PBW_ERR_LIMIT when the message does not fit. */
+pbw_status pbw_encode_deterministic_to(const pbw_message *msg, void *out,
+                                       size_t cap, size_t *len);
 
 /* ------------------------------------------------------------ visit scan */
 

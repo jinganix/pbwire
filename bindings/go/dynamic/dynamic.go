@@ -186,6 +186,12 @@ type Message struct {
 	root   *Message // non-nil for views: keeps the root (and schema) alive
 	own    bool
 	closed bool // roots only: a view must not touch the freed arena
+	// encCap is the buffer capacity the last encode needed, i.e. the size
+	// hint for the next one: it lets an encode write straight into Go memory
+	// with one downcall, no C malloc and no copy back. Advisory and atomic:
+	// a stale (small) value only costs a retry, a stale (large) value only
+	// allocates a few bytes too many, so concurrent Encode stays correct.
+	encCap atomic.Int64
 }
 
 // New builds an empty root message.
@@ -628,48 +634,93 @@ func (m *Message) GetMessageSlice(name string) ([]*Message, error) {
 	return out, nil
 }
 
-// Encode serializes the tree; one cgo downcall plus one heap copy out.
-func (m *Message) Encode() ([]byte, error) {
+// encodeShape picks which caller-buffer entry point to call: the core has
+// one for each wire form, all with the same contract (no allocation, `cap`
+// is the hard limit, PBW_ERR_LIMIT when it does not fit).
+type encodeShape int
+
+const (
+	shapePlain encodeShape = iota
+	shapeDeterministic
+	shapeDelimited
+)
+
+// encodeTo writes the tree straight into Go memory. The C core used to
+// malloc the result and hand ownership over, which cost a second downcall
+// (pbw_free) plus a full copy back into Go for every encode; writing into a
+// Go slice instead is one downcall and nothing to free. The capacity comes
+// from the last successful encode (or the decoded wire length), so a hot loop
+// reuses the size it already paid for and a cold message grows on demand.
+func (m *Message) encodeTo(shape encodeShape, label string) ([]byte, error) {
 	if err := m.check(); err != nil {
 		return nil, err
 	}
-	var out *C.uchar
-	var l C.size_t
-	if st := C.pbw_encode(m.c, &out, &l); st != C.PBW_OK {
-		return nil, statusErr("dynamic: encode", st)
+	cap := int(m.encCap.Load())
+	if cap <= 0 {
+		if n := C.pbw_message_wire_size(m.c); n > 0 {
+			// Exact for a tree decoded and not mutated since; too small
+			// after mutation, which the retry below covers.
+			cap = int(n) + int(C.PBW_ENCODE_SLACK)
+		} else {
+			cap = 256 // the core's own small-message starting point
+		}
 	}
-	defer C.pbw_free(unsafe.Pointer(out))
-	return copyBytes(unsafe.Pointer(out), l)
+	for {
+		out := make([]byte, cap)
+		var l C.size_t
+		var st C.pbw_status
+		switch shape {
+		case shapeDeterministic:
+			st = C.pbw_encode_deterministic_to(m.c, unsafe.Pointer(&out[0]), C.size_t(cap), &l)
+		case shapeDelimited:
+			st = C.pbw_encode_delimited_to(m.c, unsafe.Pointer(&out[0]), C.size_t(cap), &l)
+		default:
+			st = C.pbw_encode_to(m.c, unsafe.Pointer(&out[0]), C.size_t(cap), &l)
+		}
+		runtime.KeepAlive(out)
+		if st == C.PBW_OK {
+			// Hint the exact size plus the writer's reservation slack, not
+			// the capacity a retry happened to reach: a message that once
+			// needed a doubling should not keep a 2x buffer.
+			n := int(l)
+			m.encCap.Store(int64(n) + int64(C.PBW_ENCODE_SLACK))
+			if cap-n <= int(C.PBW_ENCODE_SLACK) {
+				// At most a few bytes larger than the result: slicing the
+				// array we already allocated is free, and the overshoot is
+				// smaller than the copy it would replace.
+				return out[:n], nil
+			}
+			// A retry left a much larger array than the result; copy into an
+			// exact one so the caller's slice does not pin it.
+			res := make([]byte, n)
+			copy(res, out[:n])
+			return res, nil
+		}
+		if st != C.PBW_ERR_LIMIT {
+			return nil, statusErr(label, st)
+		}
+		if cap >= math.MaxInt32 {
+			return nil, fmt.Errorf("dynamic: %s result exceeds the 2 GB limit", label)
+		}
+		cap *= 2
+	}
+}
+
+// Encode serializes the tree into a fresh slice the caller owns.
+func (m *Message) Encode() ([]byte, error) {
+	return m.encodeTo(shapePlain, "dynamic: encode")
 }
 
 // EncodeDeterministic serializes with map entries sorted by key, so equal
 // messages encode to equal bytes regardless of insertion order.
 func (m *Message) EncodeDeterministic() ([]byte, error) {
-	if err := m.check(); err != nil {
-		return nil, err
-	}
-	var out *C.uchar
-	var l C.size_t
-	if st := C.pbw_encode_deterministic(m.c, &out, &l); st != C.PBW_OK {
-		return nil, statusErr("dynamic: encode deterministic", st)
-	}
-	defer C.pbw_free(unsafe.Pointer(out))
-	return copyBytes(unsafe.Pointer(out), l)
+	return m.encodeTo(shapeDeterministic, "dynamic: encode deterministic")
 }
 
 // EncodeDelimited serializes one length-delimited frame (varint length +
 // message), the standard framing for a stream of messages.
 func (m *Message) EncodeDelimited() ([]byte, error) {
-	if err := m.check(); err != nil {
-		return nil, err
-	}
-	var out *C.uchar
-	var l C.size_t
-	if st := C.pbw_encode_delimited(m.c, &out, &l); st != C.PBW_OK {
-		return nil, statusErr("dynamic: encode delimited", st)
-	}
-	defer C.pbw_free(unsafe.Pointer(out))
-	return copyBytes(unsafe.Pointer(out), l)
+	return m.encodeTo(shapeDelimited, "dynamic: encode delimited")
 }
 
 // DecodeDelimited decodes one length-delimited frame from the front of wire

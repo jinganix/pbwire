@@ -2754,6 +2754,39 @@ test_encode_to(pbw_schema *schema)
     }
     CHECK(pbw_message_wire_size(NULL) == 0);
 
+    /* The deterministic twin writes the same bytes into caller memory: same
+     * contract as pbw_encode_to(), which is what a binding needs to write a
+     * deterministic frame without a malloc plus a copy. */
+    {
+        uint8_t *det = NULL;
+        size_t det_len = 0;
+
+        CHECK_OK(pbw_encode_deterministic(msg, &det, &det_len));
+        buf = (uint8_t *)malloc(det_len + PBW_ENCODE_SLACK);
+        if (buf != NULL) {
+            CHECK_OK(pbw_encode_deterministic_to(msg, buf,
+                                                 det_len + PBW_ENCODE_SLACK,
+                                                 &len));
+            CHECK(len == det_len);
+            CHECK(memcmp(buf, det, det_len) == 0);
+            CHECK_STATUS(PBW_ERR_LIMIT,
+                         pbw_encode_deterministic_to(msg, buf, det_len - 1,
+                                                     &len));
+            CHECK(len == 0);
+            CHECK_STATUS(PBW_ERR_INVALID,
+                         pbw_encode_deterministic_to(msg, NULL, det_len + 16,
+                                                     &len));
+            CHECK_STATUS(PBW_ERR_INVALID,
+                         pbw_encode_deterministic_to(NULL, buf, det_len + 16,
+                                                     &len));
+            CHECK_STATUS(PBW_ERR_INVALID,
+                         pbw_encode_deterministic_to(msg, buf, det_len + 16,
+                                                     NULL));
+            free(buf);
+        }
+        pbw_free(det);
+    }
+
     pbw_message_free(decoded);
     pbw_message_free(msg);
     pbw_free(wire);
@@ -3244,6 +3277,104 @@ test_utf8_validation(void)
 
     pbw_schema_free(proto2);
     pbw_schema_free(proto3);
+}
+
+/* pbw_utf8_valid() skips ASCII runs a word (two words) at a time, so the
+ * boundaries of that path -- 7/8/15/16/17 bytes, an ASCII prefix followed by
+ * a sequence, a long value with one bad byte -- are where a bug would live.
+ * Hand-written expectations, independent of the scan itself. */
+static void
+test_utf8_validator(void)
+{
+    static const unsigned char seq2[] = {0xC3, 0xA9};             /* e-acute */
+    static const unsigned char seq3[] = {0xE2, 0x82, 0xAC};       /* euro */
+    static const unsigned char seq4[] = {0xF0, 0x9F, 0x98, 0x80}; /* emoji */
+    static const unsigned char bad[][4] = {
+        {0x80, 0, 0, 0},          /* stray continuation */
+        {0xC0, 0x80, 0, 0},       /* 2-byte overlong */
+        {0xC1, 0xBF, 0, 0},       /* 2-byte overlong */
+        {0xC3, 0x41, 0, 0},       /* second byte not a continuation */
+        {0xE0, 0x80, 0x80, 0},    /* 3-byte overlong */
+        {0xED, 0xA0, 0x80, 0},    /* surrogate */
+        {0xE2, 0x82, 0x41, 0},    /* 3rd byte not a continuation */
+        {0xF0, 0x80, 0x80, 0x80}, /* 4-byte overlong */
+        {0xF4, 0x90, 0x80, 0x80}, /* past U+10FFFF */
+        {0xF5, 0x80, 0x80, 0x80}, /* past U+10FFFF */
+        {0xFF, 0, 0, 0},          /* not a lead byte at all */
+    };
+    static const size_t bad_len[] = {1, 2, 2, 2, 3, 3, 3, 4, 4, 4, 1};
+    static const size_t good_len[] = {2, 3, 4};
+    const unsigned char *good[3];
+    unsigned char buf[320];
+    size_t len;
+    size_t p;
+    size_t i;
+
+    good[0] = seq2;
+    good[1] = seq3;
+    good[2] = seq4;
+
+    CHECK(pbw_utf8_valid(NULL, 0) == 1); /* no bytes, no data pointer */
+    /* Every ASCII length around the word boundaries. */
+    for (len = 0; len <= 40; len++) {
+        for (i = 0; i < len; i++) {
+            buf[i] = (unsigned char)('a' + (int)(i % 26));
+        }
+        CHECK(pbw_utf8_valid(buf, len) == 1);
+    }
+    /* A valid multi-byte sequence at every offset of a 24-byte ASCII value:
+     * sometimes it straddles the 8- and 16-byte word tests. */
+    for (i = 0; i < 3; i++) {
+        for (p = 0; p <= 20; p++) {
+            for (len = 0; len < 24; len++) {
+                buf[len] = (unsigned char)('a' + (int)(len % 26));
+            }
+            buf[p] = good[i][0];
+            buf[p + 1] = good[i][1];
+            if (good_len[i] == 3) {
+                buf[p + 2] = good[i][2];
+            }
+            if (good_len[i] == 4) {
+                buf[p + 2] = good[i][2];
+                buf[p + 3] = good[i][3];
+            }
+            CHECK(pbw_utf8_valid(buf, 24) == 1);
+        }
+    }
+    /* One bad sequence at the same offsets: always rejected, and the scan must
+     * not stop early (a later valid sequence does not rescue an earlier bad one). */
+    for (i = 0; i < sizeof(bad_len) / sizeof(bad_len[0]); i++) {
+        for (p = 0; p <= 20; p++) {
+            for (len = 0; len < 24; len++) {
+                buf[len] = (unsigned char)('a' + (int)(len % 26));
+            }
+            memcpy(buf + p, bad[i], bad_len[i]);
+            CHECK(pbw_utf8_valid(buf, 24) == 0);
+        }
+    }
+    /* Truncated sequences at the very end. */
+    for (i = 0; i < 3; i++) {
+        for (len = 0; len < 20; len++) {
+            buf[len] = (unsigned char)('a' + (int)(len % 26));
+        }
+        memcpy(buf + 20, good[0], 1);
+        CHECK(pbw_utf8_valid(buf, 21) == 0);
+        memcpy(buf + 20, good[1], 2);
+        CHECK(pbw_utf8_valid(buf, 22) == 0);
+        memcpy(buf + 20, good[2], 3);
+        CHECK(pbw_utf8_valid(buf, 23) == 0);
+    }
+    /* A long value: all ASCII, bad byte at the end, and a valid tail. */
+    for (len = 0; len < 300; len++) {
+        buf[len] = (unsigned char)('a' + (int)(len % 26));
+    }
+    CHECK(pbw_utf8_valid(buf, 300) == 1);
+    buf[299] = 0xFF;
+    CHECK(pbw_utf8_valid(buf, 300) == 0);
+    buf[299] = (unsigned char)'a';
+    buf[298] = seq2[0];
+    buf[299] = seq2[1];
+    CHECK(pbw_utf8_valid(buf, 300) == 1);
 }
 
 static void
@@ -8419,6 +8550,7 @@ main(void)
     test_any_long_url();
     test_schema_errors();
     test_utf8_validation();
+    test_utf8_validator();
 
     pbw_schema_free(schema);
 

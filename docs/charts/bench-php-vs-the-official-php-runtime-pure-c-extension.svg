@@ -5,57 +5,57 @@
 <text x="80" y="51" font-size="12">pbwire-php-c</text>
 <rect x="180.0" y="40" width="12" height="12" fill="#57606a"/>
 <text x="196.0" y="51" font-size="12">protobuf-php-c</text>
-<line x1="64" y1="343.0" x2="704" y2="343.0" stroke="#e1e4e8"/>
-<text x="56" y="347.0" text-anchor="end" font-size="10" fill="#57606a">500</text>
-<line x1="64" y1="204.7" x2="704" y2="204.7" stroke="#e1e4e8"/>
-<text x="56" y="208.7" text-anchor="end" font-size="10" fill="#57606a">1000</text>
+<line x1="64" y1="354.4" x2="704" y2="354.4" stroke="#e1e4e8"/>
+<text x="56" y="358.4" text-anchor="end" font-size="10" fill="#57606a">500</text>
+<line x1="64" y1="213.1" x2="704" y2="213.1" stroke="#e1e4e8"/>
+<text x="56" y="217.1" text-anchor="end" font-size="10" fill="#57606a">1000</text>
 <text x="101.0" y="448" text-anchor="middle" font-size="10">136 B</text>
 <text x="101.0" y="462" text-anchor="middle" font-size="10" fill="#57606a">encode</text>
-<rect x="74.0" y="149.1" width="24" height="278.9" rx="2" fill="#2da44e"/>
-<text x="86.0" y="144.1" text-anchor="middle" font-size="10" fill="#24292f">1321.4</text>
-<rect x="104.0" y="253.2" width="24" height="174.8" rx="2" fill="#57606a"/>
-<text x="116.0" y="248.2" text-anchor="middle" font-size="10" fill="#24292f">784.3</text>
+<rect x="74.0" y="153.2" width="24" height="274.8" rx="2" fill="#2da44e"/>
+<text x="86.0" y="148.2" text-anchor="middle" font-size="10" fill="#24292f">1341.3</text>
+<rect x="104.0" y="247.3" width="24" height="180.7" rx="2" fill="#57606a"/>
+<text x="116.0" y="242.3" text-anchor="middle" font-size="10" fill="#24292f">845.5</text>
 <text x="181.0" y="448" text-anchor="middle" font-size="10">174 B</text>
 <text x="181.0" y="462" text-anchor="middle" font-size="10" fill="#57606a">encode</text>
-<rect x="154.0" y="160.1" width="24" height="267.9" rx="2" fill="#2da44e"/>
-<text x="166.0" y="155.1" text-anchor="middle" font-size="10" fill="#24292f">1250.4</text>
-<rect x="184.0" y="234.9" width="24" height="193.1" rx="2" fill="#57606a"/>
-<text x="196.0" y="229.9" text-anchor="middle" font-size="10" fill="#24292f">859.6</text>
+<rect x="154.0" y="173.2" width="24" height="254.8" rx="2" fill="#2da44e"/>
+<text x="166.0" y="168.2" text-anchor="middle" font-size="10" fill="#24292f">1216</text>
+<rect x="184.0" y="235.8" width="24" height="192.2" rx="2" fill="#57606a"/>
+<text x="196.0" y="230.8" text-anchor="middle" font-size="10" fill="#24292f">894.4</text>
 <text x="261.0" y="448" text-anchor="middle" font-size="10">2469 B</text>
 <text x="261.0" y="462" text-anchor="middle" font-size="10" fill="#57606a">encode</text>
-<rect x="234.0" y="132.4" width="24" height="295.6" rx="2" fill="#2da44e"/>
-<text x="246.0" y="127.4" text-anchor="middle" font-size="10" fill="#24292f">1436.6</text>
-<rect x="264.0" y="160.0" width="24" height="268.0" rx="2" fill="#57606a"/>
-<text x="276.0" y="155.0" text-anchor="middle" font-size="10" fill="#24292f">1251.1</text>
+<rect x="234.0" y="133.2" width="24" height="294.8" rx="2" fill="#2da44e"/>
+<text x="246.0" y="128.2" text-anchor="middle" font-size="10" fill="#24292f">1479.5</text>
+<rect x="264.0" y="160.8" width="24" height="267.2" rx="2" fill="#57606a"/>
+<text x="276.0" y="155.8" text-anchor="middle" font-size="10" fill="#24292f">1291.9</text>
 <text x="341.0" y="448" text-anchor="middle" font-size="10">74913 B</text>
 <text x="341.0" y="462" text-anchor="middle" font-size="10" fill="#57606a">encode</text>
-<rect x="314.0" y="142.7" width="24" height="285.3" rx="2" fill="#2da44e"/>
-<text x="326.0" y="137.7" text-anchor="middle" font-size="10" fill="#24292f">1364.5</text>
-<rect x="344.0" y="161.9" width="24" height="266.1" rx="2" fill="#57606a"/>
-<text x="356.0" y="156.9" text-anchor="middle" font-size="10" fill="#24292f">1238.9</text>
+<rect x="314.0" y="141.1" width="24" height="286.9" rx="2" fill="#2da44e"/>
+<text x="326.0" y="136.1" text-anchor="middle" font-size="10" fill="#24292f">1423</text>
+<rect x="344.0" y="161.5" width="24" height="266.5" rx="2" fill="#57606a"/>
+<text x="356.0" y="156.5" text-anchor="middle" font-size="10" fill="#24292f">1287.7</text>
 <text x="421.0" y="448" text-anchor="middle" font-size="10">136 B</text>
 <text x="421.0" y="462" text-anchor="middle" font-size="10" fill="#57606a">decode</text>
-<rect x="394.0" y="253.3" width="24" height="174.7" rx="2" fill="#2da44e"/>
-<text x="406.0" y="248.3" text-anchor="middle" font-size="10" fill="#24292f">783.9</text>
-<rect x="424.0" y="396.8" width="24" height="31.2" rx="2" fill="#57606a"/>
-<text x="436.0" y="391.8" text-anchor="middle" font-size="10" fill="#24292f">381.9</text>
+<rect x="394.0" y="267.9" width="24" height="160.1" rx="2" fill="#2da44e"/>
+<text x="406.0" y="262.9" text-anchor="middle" font-size="10" fill="#24292f">764.4</text>
+<rect x="424.0" y="396.1" width="24" height="31.9" rx="2" fill="#57606a"/>
+<text x="436.0" y="391.1" text-anchor="middle" font-size="10" fill="#24292f">407.7</text>
 <text x="501.0" y="448" text-anchor="middle" font-size="10">174 B</text>
 <text x="501.0" y="462" text-anchor="middle" font-size="10" fill="#57606a">decode</text>
-<rect x="474.0" y="275.8" width="24" height="152.2" rx="2" fill="#2da44e"/>
-<text x="486.0" y="270.8" text-anchor="middle" font-size="10" fill="#24292f">700.1</text>
-<rect x="504.0" y="400.1" width="24" height="27.9" rx="2" fill="#57606a"/>
-<text x="516.0" y="395.1" text-anchor="middle" font-size="10" fill="#24292f">375.6</text>
+<rect x="474.0" y="297.2" width="24" height="130.8" rx="2" fill="#2da44e"/>
+<text x="486.0" y="292.2" text-anchor="middle" font-size="10" fill="#24292f">662.1</text>
+<rect x="504.0" y="399.5" width="24" height="28.5" rx="2" fill="#57606a"/>
+<text x="516.0" y="394.5" text-anchor="middle" font-size="10" fill="#24292f">400.9</text>
 <text x="581.0" y="448" text-anchor="middle" font-size="10">2469 B</text>
 <text x="581.0" y="462" text-anchor="middle" font-size="10" fill="#57606a">decode</text>
-<rect x="554.0" y="278.9" width="24" height="149.1" rx="2" fill="#2da44e"/>
-<text x="566.0" y="273.9" text-anchor="middle" font-size="10" fill="#24292f">689.5</text>
-<rect x="584.0" y="345.6" width="24" height="82.4" rx="2" fill="#57606a"/>
-<text x="596.0" y="340.6" text-anchor="middle" font-size="10" fill="#24292f">493.6</text>
+<rect x="554.0" y="298.1" width="24" height="129.9" rx="2" fill="#2da44e"/>
+<text x="566.0" y="293.1" text-anchor="middle" font-size="10" fill="#24292f">659</text>
+<rect x="584.0" y="357.2" width="24" height="70.8" rx="2" fill="#57606a"/>
+<text x="596.0" y="352.2" text-anchor="middle" font-size="10" fill="#24292f">493.4</text>
 <text x="661.0" y="448" text-anchor="middle" font-size="10">74913 B</text>
 <text x="661.0" y="462" text-anchor="middle" font-size="10" fill="#57606a">decode</text>
-<rect x="634.0" y="255.7" width="24" height="172.3" rx="2" fill="#2da44e"/>
-<text x="646.0" y="250.7" text-anchor="middle" font-size="10" fill="#24292f">774.5</text>
-<rect x="664.0" y="324.8" width="24" height="103.2" rx="2" fill="#57606a"/>
-<text x="676.0" y="319.8" text-anchor="middle" font-size="10" fill="#24292f">547.8</text>
+<rect x="634.0" y="281.3" width="24" height="146.7" rx="2" fill="#2da44e"/>
+<text x="646.0" y="276.3" text-anchor="middle" font-size="10" fill="#24292f">715.8</text>
+<rect x="664.0" y="332.5" width="24" height="95.5" rx="2" fill="#57606a"/>
+<text x="676.0" y="327.5" text-anchor="middle" font-size="10" fill="#24292f">556.9</text>
 <text x="64" y="490" font-size="10" fill="#57606a">green = ✅ beats baseline · red = ❌ trails</text>
 </svg>

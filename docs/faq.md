@@ -92,7 +92,7 @@ emits a direct Wire codec).
 When the schema is fixed at build time, you never touch a descriptor, and
 libprotobuf is already in the process: then generated code is the simpler
 choice, with fewer moving parts and no runtime schema to ship. pbwire still wins
-the throughput comparison even there (the in-process core is 1.2-1.7x the
+the throughput comparison even there (the in-process core is 1.1-1.5x the
 generated C++ codec), but throughput is not the only axis — a straight-line
 codec has no schema to load and no reflection work to do. pbwire also does not
 do RPC. See [../README.md](../README.md#comparison-with-generated-code-dynamicmessage-and-upb) and
@@ -126,10 +126,10 @@ Generated code compiles field offsets into straight-line C++; pbwire walks a
 descriptor and a value tree at runtime, which costs roughly 40 ns per encode of a
 132-byte message. That cost is mostly paid back by writing the message in one
 pass (the C++ serializer sizes first, then writes) and by precomputed tag bytes,
-so the in-process `pbw_ctx` API is 1.2-1.4x the generated codec on encode and
-1.5-1.7x on decode, on every tier.
+so the in-process `pbw_ctx` API is 1.12-1.47x the generated codec on encode
+and 1.52-1.82x on decode, on every tier.
 The gap only shows up in one place: a dynamic codec meeting generated straight-line writes on
-a tiny message (Java/Kotlin, 0.82x/0.80x at 136 B). Numbers
+a tiny message (Java/Kotlin/Clojure, 0.71x/0.78x/0.75x at 136 B). Numbers
 and the per-language
 reasons are in [BENCHMARKS.md](../BENCHMARKS.md).
 
