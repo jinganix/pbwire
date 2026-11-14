@@ -1413,8 +1413,10 @@ pbw_encode_deterministic(const pbw_message *msg, uint8_t **out, size_t *len)
     return encode_alloc(msg, 1, out, len);
 }
 
-pbw_status
-pbw_encode_to(const pbw_message *msg, void *out, size_t cap, size_t *len)
+/* Shared by the two caller-buffer entry points: only the deterministic flag
+ * differs, so the validation and the fixed-buffer handling live once. */
+static pbw_status
+encode_into(const pbw_message *msg, int det, void *out, size_t cap, size_t *len)
 {
     pbw_buf buf;
     writer w;
@@ -1434,7 +1436,7 @@ pbw_encode_to(const pbw_message *msg, void *out, size_t cap, size_t *len)
     w.buf = &buf;
     w.pos = 0;
     w.status = PBW_OK;
-    encode_message(&w, msg, 0, 0);
+    encode_message(&w, msg, 0, det);
     status = w.status;
     if (status == PBW_ERR_NOMEM && buf.fixed) {
         /* A fixed buffer cannot fail to allocate: the write did not fit. */
@@ -1444,4 +1446,17 @@ pbw_encode_to(const pbw_message *msg, void *out, size_t cap, size_t *len)
         *len = w.pos;
     }
     return status;
+}
+
+pbw_status
+pbw_encode_to(const pbw_message *msg, void *out, size_t cap, size_t *len)
+{
+    return encode_into(msg, 0, out, cap, len);
+}
+
+pbw_status
+pbw_encode_deterministic_to(const pbw_message *msg, void *out, size_t cap,
+                            size_t *len)
+{
+    return encode_into(msg, 1, out, cap, len);
 }
