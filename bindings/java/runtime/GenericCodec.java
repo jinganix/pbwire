@@ -65,6 +65,7 @@ public final class GenericCodec {
         public MessageDef msgType; // MESSAGE/GROUP element type
         public EnumDef enumType; // ENUM element type: value names and openness
         public boolean enumClosed; // unknown numbers divert to unknown fields
+        public boolean utf8; // a decoded string must be valid UTF-8 (proto3/editions)
         public String fullName; // extensions only: [pkg.name] in JSON and text
         public byte[] tag; // precomputed tag bytes (singular/packed form)
         public String fieldName;
@@ -379,6 +380,10 @@ public final class GenericCodec {
             s.repeated = f.repeated;
             s.packed = f.packed;
             s.fieldName = f.name;
+            // Generated tables carry no syntax, so a string keeps the strict
+            // check this binding always had; the descriptor path (below) uses
+            // the field's utf8_validation.
+            s.utf8 = f.kind == Kind.STRING;
             if (f.oneof >= 0) {
                 s.oneof = f.oneof;
                 s.presence = EXPLICIT; // reads/writes go through the oneof case
@@ -491,6 +496,7 @@ public final class GenericCodec {
             s.repeated = f.label == Proto.Label.REPEATED;
             s.packed = f.packed;
             s.fieldName = f.name;
+            s.utf8 = f.type == Proto.Type.STRING && f.utf8 == 2;
             if (f.enumType != null) {
                 s.enumType = enums.get(f.enumType.fullName);
                 s.enumClosed = f.enumClosed;
@@ -2205,6 +2211,10 @@ public final class GenericCodec {
                 Wire.skipGroup(r, f.number, depth + 1);
             } else { // K_STRING / K_BYTES element
                 int len = Wire.rLen32(r);
+                if (f.utf8 && !Wire.utf8Valid(r.b, r.pos, len)) {
+                    throw new IllegalArgumentException(
+                            "invalid UTF-8 in a string field");
+                }
                 r.pos += len;
             }
             Rep rp = m.rep();
@@ -2263,6 +2273,13 @@ public final class GenericCodec {
         int len = Wire.rLen32(r);
         if (len == 0 && f.presence == IMPLICIT) {
             return; // proto3 "": absent, never emitted
+        }
+        /* proto3/editions strings are validated here, at parse, like the
+         * reference: a malformed value fails the decode instead of surfacing
+         * as U+FFFD when the slice is materialized. proto2 keeps the loose
+         * mapping, so f.utf8 is off there. */
+        if (f.utf8 && !Wire.utf8Valid(r.b, r.pos, len)) {
+            throw new IllegalArgumentException("invalid UTF-8 in a string field");
         }
         r.pos += len;
         m.ref[s] = new Slice(r.b, fieldStart, r.pos - fieldStart);
@@ -2379,17 +2396,7 @@ public final class GenericCodec {
     }
 
     /** Parses a slice on first access; caches the value in place. */
-    /** Decodes UTF-8 strictly: malformed or unmappable input is an error. */
-    static String strictUtf8(byte[] b, int off, int len) {
-        CharsetDecoder dec = StandardCharsets.UTF_8.newDecoder()
-                .onMalformedInput(CodingErrorAction.REPORT)
-                .onUnmappableCharacter(CodingErrorAction.REPORT);
-        try {
-            return dec.decode(ByteBuffer.wrap(b, off, len)).toString();
-        } catch (CharacterCodingException e) {
-            throw new IllegalArgumentException("invalid UTF-8 in a string field");
-        }
-    }
+
 
     static Object materialize(Field f, Slice sl) {
         Wire.Reader r = new Wire.Reader(); // rare path: no workspace needed
@@ -2410,10 +2417,10 @@ public final class GenericCodec {
         }
         int n = Wire.rLen(r);
         if (f.kind == K_STRING) {
-            // Strict, not the replacing constructor: a decoded string that is
-            // not valid UTF-8 must fail instead of turning into U+FFFD (the
-            // core keeps the bytes and its printers reject them).
-            return strictUtf8(r.b, r.pos, n);
+            // decodeInto already rejected malformed UTF-8 where the field
+            // requires it (proto3/editions), so this is the loose mapping only
+            // for proto2 strings, which is what the reference does there.
+            return new String(r.b, r.pos, n, StandardCharsets.UTF_8);
         }
         return Arrays.copyOfRange(r.b, r.pos, r.pos + n);
     }

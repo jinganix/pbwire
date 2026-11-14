@@ -101,6 +101,7 @@ final class Proto {
         boolean hasPackedOption;
         boolean hasPresence; // resolved: explicit presence (not proto3 plain)
         int enumOpen; // editions FeatureSet.enum_type: 0 unset, 1 OPEN, 2 CLOSED
+        int utf8; // editions FeatureSet.utf8_validation: 0 unset, 2 VERIFY, 3 NONE
         Message messageType; // linked: message + group fields
         Enum enumType; // linked: enum fields
         boolean enumClosed; // linked: unknown numbers go to the unknown fields
@@ -161,6 +162,7 @@ final class Proto {
         String syntax = "proto2"; // absent means proto2
         boolean edition; // field 14: editions files behave as proto3
         int enumOpen; // options.features.enum_type: 0 unset, 1 OPEN, 2 CLOSED
+        int utf8; // options.features.utf8_validation: 0 unset, 2 VERIFY, 3 NONE
         final List<String> deps = new ArrayList<>();
         final List<Message> messages = new ArrayList<>();
         final List<Field> extensions = new ArrayList<>();
@@ -216,10 +218,11 @@ final class Proto {
                 linkEnums(m, proto3, f.enumOpen);
             }
             for (Message m : f.messages) {
-                linkMessage(m, f.pkg, proto3, f.enumOpen, byName, enums);
+                linkMessage(m, f.pkg, proto3, f.enumOpen, f.utf8, byName,
+                            enums);
             }
             for (Field e : f.extensions) {
-                linkField(e, f.pkg, proto3, byName, enums, null);
+                linkField(e, f.pkg, proto3, f.utf8, byName, enums, null);
                 e.fullName = e.scope(f.pkg);
             }
             for (Service s : f.services) {
@@ -276,15 +279,17 @@ final class Proto {
     }
 
     private static void linkMessage(Message m, String scope, boolean proto3,
-            int fileEnumOpen, Map<String, Message> byName, Map<String, Enum> enums) {
+            int fileEnumOpen, int fileUtf8, Map<String, Message> byName,
+            Map<String, Enum> enums) {
         for (Field f : m.fields) {
-            linkField(f, scope, proto3, byName, enums, m);
+            linkField(f, scope, proto3, fileUtf8, byName, enums, m);
         }
         for (Message n : m.nested) {
-            linkMessage(n, m.fullName, proto3, fileEnumOpen, byName, enums);
+            linkMessage(n, m.fullName, proto3, fileEnumOpen, fileUtf8, byName,
+                        enums);
         }
         for (Field e : m.extensions) {
-            linkField(e, scope, proto3, byName, enums, null);
+            linkField(e, scope, proto3, fileUtf8, byName, enums, null);
             e.fullName = e.scope(m.fullName);
         }
     }
@@ -301,6 +306,12 @@ final class Proto {
 
     private static void linkField(Field f, String scope, boolean proto3,
             Map<String, Message> byName, Map<String, Enum> enums, Message parent) {
+        linkField(f, scope, proto3, 0, byName, enums, parent);
+    }
+
+    private static void linkField(Field f, String scope, boolean proto3,
+            int fileUtf8, Map<String, Message> byName, Map<String, Enum> enums,
+            Message parent) {
         if (f.oneofIndex >= 0 && parent != null) {
             if (f.oneofIndex >= parent.oneofs.size()) {
                 throw new IllegalArgumentException("field " + f.name
@@ -328,6 +339,17 @@ final class Proto {
         }
         if (f.label == Label.REPEATED && isPackable(f.type) && !f.hasPackedOption) {
             f.packed = proto3; // the syntax default
+        }
+        /* utf8_validation: field FeatureSet, then the file's, then the dialect
+         * default (VERIFY for proto3/editions, NONE for proto2). Only `string`
+         * fields carry it, and only they validate on parse, like the
+         * reference. */
+        if (f.type == Type.STRING) {
+            int utf8 = f.utf8 != 0 ? f.utf8 : (fileUtf8 != 0 ? fileUtf8
+                    : (proto3 ? 2 : 3));
+            f.utf8 = utf8 == 2 ? 2 : 3;
+        } else {
+            f.utf8 = 3;
         }
         f.hasPresence = f.label != Label.REPEATED
                 && (f.type == Type.MESSAGE || f.type == Type.GROUP
@@ -407,6 +429,7 @@ final class Proto {
                     f.extensions.add(parseField(r.b, r.pos, n, true));
                 } else if (num == 8) {
                     f.enumOpen = parseFeatures(r.b, r.pos, n, 50);
+                    f.utf8 = parseFeaturesUtf8(r.b, r.pos, n);
                 } else if (num == 1) {
                     f.name = str(r.b, r.pos, n);
                 } else if (num == 2) {
@@ -605,6 +628,48 @@ final class Proto {
         return open;
     }
 
+    /**
+     * FeatureSet.utf8_validation = 4: Utf8Validation, 2 VERIFY or 3 NONE.
+     * 0 (unset) leaves the dialect default in charge: VERIFY for proto3 and
+     * editions, NONE for proto2, exactly like the reference.
+     */
+    private static int parseFeatureSetUtf8(byte[] b, int off, int end) {
+        Wire.Reader r = sub(b, off, end - off);
+        int utf8 = 0;
+        while (r.pos < r.end) {
+            int tag = (int) Wire.rVar(r);
+            if ((tag >>> 3) == 4 && (tag & 7) == Wire.WT_VARINT) {
+                int v = (int) Wire.rVar(r);
+                if (v == 2 || v == 3) {
+                    utf8 = v;
+                }
+            } else {
+                Wire.skip(r, tag & 7);
+            }
+        }
+        return utf8;
+    }
+
+    /** FileOptions.features (field 50) -> FeatureSet.utf8_validation. */
+    private static int parseFeaturesUtf8(byte[] b, int off, int len) {
+        Wire.Reader r = sub(b, off, len);
+        int utf8 = 0;
+        while (r.pos < r.end) {
+            int tag = (int) Wire.rVar(r);
+            int num = tag >>> 3;
+            if ((tag & 7) != Wire.WT_LEN) {
+                Wire.skip(r, tag & 7);
+                continue;
+            }
+            int n = Wire.rLen(r);
+            if (num == 50) {
+                utf8 = parseFeatureSetUtf8(r.b, r.pos, r.pos + n);
+            }
+            r.pos += n;
+        }
+        return utf8;
+    }
+
     private static Service parseService(byte[] b, int off, int len) {
         Wire.Reader r = sub(b, off, len);
         Service s = new Service();
@@ -749,6 +814,7 @@ final class Proto {
             } else if (num == 21 && (tag & 7) == Wire.WT_LEN) {
                 int n = Wire.rLen(r);
                 f.enumOpen = parseFeatureSetEnumType(r.b, r.pos, r.pos + n);
+                f.utf8 = parseFeatureSetUtf8(r.b, r.pos, r.pos + n);
                 r.pos += n;
             } else {
                 Wire.skip(r, tag & 7);

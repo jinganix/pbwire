@@ -244,16 +244,12 @@ public final class TestCoverage {
         }
     }
 
-    /** A decoded string that is not valid UTF-8 must fail on access and on
-     *  printing instead of being silently replaced with U+FFFD. */
+    /** A proto3 string that is not valid UTF-8 fails the decode, like the
+     *  reference parser, instead of turning into U+FFFD on access. */
     private static void invalidUtf8String(Schema schema) {
         MessageType type = schema.message("pbwire.test.Sample");
         byte[] wire = {0x4A, 0x02, 0x68, (byte) 0x92}; // field 9, "h" + 0x92
-        try (Message m = type.decode(wire)) {
-            checkThrows(() -> m.getString("string_field"), "getString rejects invalid UTF-8");
-            checkThrows(m::toJson, "toJson rejects invalid UTF-8");
-            checkThrows(() -> m.toText(true), "toText rejects invalid UTF-8");
-        }
+        checkThrows(() -> type.decode(wire), "decode rejects invalid UTF-8");
     }
 
     private static void checkThrows(Runnable op, String what) {

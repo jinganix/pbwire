@@ -3169,6 +3169,83 @@ test_any_long_url(void)
     pbw_schema_free(schema);
 }
 
+/* UTF-8 validation follows the reference: a `string` field whose
+ * utf8_validation resolves to VERIFY (proto3/editions default) rejects a value
+ * that is not valid UTF-8 at parse, while `bytes` and proto2 strings keep the
+ * raw bytes. */
+static void
+test_utf8_validation(void)
+{
+    pbw_schema *proto3 = pbw_schema_new();
+    pbw_schema *proto2 = pbw_schema_new();
+    pbw_descriptor *m3;
+    pbw_descriptor *m2;
+    /* field 1 string = 0xFF, field 2 bytes = 0xFF */
+    static const unsigned char bad_str[] = {0x0A, 0x01, 0xFF};
+    static const unsigned char bad_bytes[] = {0x12, 0x01, 0xFF};
+    /* field 1 string = valid 2-byte sequence "\xC3\xA9" (e-acute) */
+    static const unsigned char good_str[] = {0x0A, 0x02, 0xC3, 0xA9};
+    pbw_message *msg = NULL;
+    uint8_t *out = NULL;
+    size_t len = 0;
+    pbw_status status;
+
+    CHECK(proto3 != NULL && proto2 != NULL);
+    /* The dialect decides the default for fields added afterwards, so set it
+     * before the fields exist. */
+    pbw_schema_set_proto3(proto2, 0);
+    m3 = pbw_schema_add_message(proto3, "U3");
+    m2 = pbw_schema_add_message(proto2, "U2");
+    CHECK(m3 != NULL && m2 != NULL);
+    CHECK(pbw_message_add_field(m3, "s", 1, PBW_TYPE_STRING,
+                                PBW_LABEL_OPTIONAL) != NULL);
+    CHECK(pbw_message_add_field(m3, "b", 2, PBW_TYPE_BYTES,
+                                PBW_LABEL_OPTIONAL) != NULL);
+    CHECK(pbw_message_add_field(m2, "s", 1, PBW_TYPE_STRING,
+                                PBW_LABEL_OPTIONAL) != NULL);
+    CHECK(pbw_message_add_field(m2, "b", 2, PBW_TYPE_BYTES,
+                                PBW_LABEL_OPTIONAL) != NULL);
+    CHECK_OK(pbw_schema_link(proto3));
+    CHECK_OK(pbw_schema_link(proto2));
+
+    /* The rule is visible on the field, which is what the bindings read. */
+    CHECK(pbw_field_requires_utf8_validation(
+              pbw_descriptor_find_field(m3, 1)) == 1);
+    CHECK(pbw_field_requires_utf8_validation(
+              pbw_descriptor_find_field(m3, 2)) == 0);
+    CHECK(pbw_field_requires_utf8_validation(
+              pbw_descriptor_find_field(m2, 1)) == 0);
+
+    /* proto3 string: malformed input is rejected, valid input is kept */
+    status = pbw_decode(m3, bad_str, sizeof(bad_str), &msg);
+    CHECK_STATUS(PBW_ERR_INVALID, status);
+    CHECK(msg == NULL);
+    CHECK_OK(pbw_decode(m3, good_str, sizeof(good_str), &msg));
+    CHECK_OK(pbw_encode(msg, &out, &len));
+    CHECK(len == sizeof(good_str) && memcmp(out, good_str, len) == 0);
+    pbw_free(out);
+    out = NULL;
+    pbw_message_free(msg);
+    msg = NULL;
+    /* proto3 bytes field: never validated */
+    CHECK_OK(pbw_decode(m3, bad_bytes, sizeof(bad_bytes), &msg));
+    CHECK_OK(pbw_encode(msg, &out, &len));
+    CHECK(len == sizeof(bad_bytes) && memcmp(out, bad_bytes, len) == 0);
+    pbw_free(out);
+    out = NULL;
+    pbw_message_free(msg);
+    msg = NULL;
+    /* proto2 string: kept byte for byte, like the reference's loose path */
+    CHECK_OK(pbw_decode(m2, bad_str, sizeof(bad_str), &msg));
+    CHECK_OK(pbw_encode(msg, &out, &len));
+    CHECK(len == sizeof(bad_str) && memcmp(out, bad_str, len) == 0);
+    pbw_free(out);
+    pbw_message_free(msg);
+
+    pbw_schema_free(proto2);
+    pbw_schema_free(proto3);
+}
+
 static void
 test_schema_errors(void)
 {
@@ -4656,7 +4733,9 @@ test_json_format(void)
         /* name(5) = "a>b" */
         static const uint8_t gt[] = {0x2A, 0x03, 0x61, 0x3E, 0x62};
         static const char want_gt[] = "{\"name\":\"a\\u003eb\"}";
-        /* name(5) = single 0xFF byte */
+        /* name(5) = single 0xFF byte: proto3 strings are validated at parse,
+         * so decode is where this fails now. The printer's own check is
+         * covered below with a value built by hand. */
         static const uint8_t badutf8[] = {0x2A, 0x01, 0xFF};
 
         decoded = NULL;
@@ -4677,12 +4756,21 @@ test_json_format(void)
         out = NULL;
         pbw_message_free(decoded);
         decoded = NULL;
-        CHECK_OK(pbw_decode(msg, badutf8, sizeof(badutf8), &decoded));
         CHECK_STATUS(PBW_ERR_INVALID,
-                     pbw_json_print(decoded, &out, &len));
+                     pbw_decode(msg, badutf8, sizeof(badutf8), &decoded));
+        CHECK(decoded == NULL);
+    }
+    /* The printer still refuses a value a caller built by hand: decode is not
+     * the only way in. */
+    {
+        pbw_message *built = pbw_message_new(msg);
+        static const uint8_t raw[] = {0xFF};
+
+        CHECK_OK(pbw_message_set(built, 5,
+                                 pbw_value_new_bytes(raw, sizeof(raw))));
+        CHECK_STATUS(PBW_ERR_INVALID, pbw_json_print(built, &out, &len));
         CHECK(out == NULL);
-        pbw_message_free(decoded);
-        decoded = NULL;
+        pbw_message_free(built);
     }
     /* Astral characters print as raw UTF-8; malformed byte sequences
      * fail the print instead of emitting garbage. */
@@ -4718,14 +4806,13 @@ test_json_format(void)
         pbw_message_free(decoded);
         decoded = NULL;
         for (k = 0; k < sizeof(bad) / sizeof(bad[0]); k++) {
+            /* proto3 strings are validated at parse, like the reference
+             * parsers: the message never reaches the printer. */
             decoded = NULL;
-            CHECK_OK(
-                pbw_decode(msg, bad[k].bytes, bad[k].len, &decoded));
             CHECK_STATUS(PBW_ERR_INVALID,
-                         pbw_json_print(decoded, &out, &len));
-            CHECK(out == NULL);
-            pbw_message_free(decoded);
-            decoded = NULL;
+                         pbw_decode(msg, bad[k].bytes, bad[k].len,
+                                    &decoded));
+            CHECK(decoded == NULL);
         }
     }
     /* Raw multibyte UTF-8 in keys peeks (then fails as unknown). */
@@ -8331,6 +8418,7 @@ main(void)
     test_long_names();
     test_any_long_url();
     test_schema_errors();
+    test_utf8_validation();
 
     pbw_schema_free(schema);
 

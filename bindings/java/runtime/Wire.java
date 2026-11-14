@@ -38,6 +38,50 @@ public final class Wire {
         int cap = MAX_DEPTH;
     }
 
+    /**
+     * Structural UTF-8 check: rejects overlong forms, surrogates and values
+     * past U+10FFFF, like the core's pbw_utf8_valid and the reference parsers.
+     */
+    public static boolean utf8Valid(byte[] b, int off, int len) {
+        int i = off;
+        int end = off + len;
+        while (i < end) {
+            int c = b[i] & 0xff;
+            if (c < 0x80) {
+                i++;
+            } else if ((c & 0xe0) == 0xc0) {
+                if (c < 0xc2 || i + 1 >= end || (b[i + 1] & 0xc0) != 0x80) {
+                    return false;
+                }
+                i += 2;
+            } else if ((c & 0xf0) == 0xe0) {
+                if (i + 2 >= end || (b[i + 1] & 0xc0) != 0x80
+                        || (b[i + 2] & 0xc0) != 0x80) {
+                    return false;
+                }
+                int v = ((c & 15) << 12) | ((b[i + 1] & 63) << 6) | (b[i + 2] & 63);
+                if (v < 0x800 || (v >= 0xd800 && v <= 0xdfff)) {
+                    return false;
+                }
+                i += 3;
+            } else if ((c & 0xf8) == 0xf0) {
+                if (c > 0xf4 || i + 3 >= end || (b[i + 1] & 0xc0) != 0x80
+                        || (b[i + 2] & 0xc0) != 0x80 || (b[i + 3] & 0xc0) != 0x80) {
+                    return false;
+                }
+                int v = ((c & 7) << 18) | ((b[i + 1] & 63) << 12)
+                        | ((b[i + 2] & 63) << 6) | (b[i + 3] & 63);
+                if (v < 0x10000 || v > 0x10ffff) {
+                    return false;
+                }
+                i += 4;
+            } else {
+                return false;
+            }
+        }
+        return true;
+    }
+
     public static byte[] utf8(String s) {
         return s.getBytes(StandardCharsets.UTF_8);
     }

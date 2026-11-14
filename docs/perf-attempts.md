@@ -280,3 +280,34 @@ cell needs a context-based API (an ownership change), and the rest are boundary
 cells whose ✅/❌ flips with host load at the 136-174 B tier. The tables keep
 the strict `>= 1.0x` rule the project asks for: a cell under 1.0x is marked
 ❌ even when it is inside the noise band, and the text says so.
+
+## Aligned cost: proto3 `string` UTF-8 validation
+
+pbwire used to keep any bytes in a `string` field. The reference does not:
+`FieldDescriptor::requires_utf8_validation()` is true for a `string` whose
+`utf8_validation` resolves to VERIFY (proto3 and edition-2023+ by default, proto2
+never), and libprotobuf's parser rejects such a message ("contains invalid UTF-8
+data"), as does protobuf-java's `readStringRequireUtf8`. Aligning meant
+validating at parse, in every decode path (core `read_string_field` plus the
+`PBW_ACT_STR` / `PBW_ACT_REP_STR` fast paths, the C struct codec, the Java scan
+and the Python scan).
+
+Green path (byte equality, conformance, differential test) is unchanged; the
+cost is decode time on payloads with many proto3 strings. A/B on the C struct
+harness over `matrix3` (proto3, 3000 sub-messages each with a string), two libs
+from the same sources, validation on versus forced off, alternating runs, best
+of 5, median ns per decode:
+
+| tier | validation on | validation off | delta |
+|---|---|---|---|
+| 136 B | 108.3 | 108.8 | noise |
+| 174 B | 165.9 | 154.9 | +7.1% |
+| 74913 B | 99800.7 | 87440.9 | **+14.1%** |
+
+That is the aligned price: the reference pays it too (libprotobuf's own decode
+of the same payload is 191278 ns in that harness, so pbwire still leads by ~1.9x
+instead of ~2.2x). Behaviour proved against the reference rather than argued:
+the same three bytes (tag 1, length 1, 0xFF) parse as an error in a proto3
+message and as data in a proto2 one, on both sides, and the binary conformance
+suite now passes 2750 tests instead of 2745 (the extra ones are the JSON/UTF-8
+verdicts this alignment fixed).

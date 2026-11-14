@@ -152,6 +152,42 @@ def _node_desc():
     return _ld(1, file_desc)
 
 
+def _utf8_pair_desc(proto3):
+    """A FileDescriptorSet with one message holding a single string field, built
+    here so the fixture needs no protoc; the syntax decides the UTF-8 rule."""
+    msg = _msg("Pair", [_field("s", 1, 1, 9)])  # LABEL_OPTIONAL, TYPE_STRING
+    file_desc = (_ld(1, b"u8.proto") + _ld(2, b"p") + _ld(4, msg)
+                 + _ld(12, b"proto3" if proto3 else b"proto2"))
+    return _ld(1, file_desc)
+
+
+def utf8_pair():
+    """proto3 strings reject malformed UTF-8 at parse; proto2 strings keep the
+    loose mapping, exactly like the reference implementations."""
+    import tempfile
+
+    for proto3 in (True, False):
+        with tempfile.NamedTemporaryFile(suffix=".desc", delete=False) as out:
+            out.write(_utf8_pair_desc(proto3))
+            path = out.name
+        try:
+            with pbw.Schema.from_file(path) as schema:
+                pair = schema.message("p.Pair")
+                bad = b"\x0a\x01\xff"  # field 1, one 0xFF byte
+                if proto3:
+                    check_raises(ValueError, lambda: pair.decode(bad),
+                                 "proto3 string rejects invalid UTF-8")
+                    message = pair.decode(b"\x0a\x02\xc3\xa9")
+                    check(message.s == "\u00e9", "proto3 string keeps valid UTF-8")
+                else:
+                    message = pair.decode(bad)
+                    check(message.s == "\ufffd", "proto2 string maps to U+FFFD")
+                    check(message.to_dict() == {"s": "\ufffd"},
+                          "proto2 loose string in to_dict")
+        finally:
+            os.unlink(path)
+
+
 def required_many():
     """Required tracking uses a 64-slot mask; exactly 64 must not shift by 64
     (undefined) and more than 64 must still be enforced, not silently
@@ -592,6 +628,9 @@ def main():
         check_raises(ValueError, lambda: person.decode(b"\x0a\x00"),
                      "required field with the wrong wire type does not count")
 
+    # A proto3 `string` is validated at parse, like the reference; a proto2 one
+    # keeps the loose mapping (malformed bytes become U+FFFD).
+    utf8_pair()
     required_many()
     json_text()
     deterministic()

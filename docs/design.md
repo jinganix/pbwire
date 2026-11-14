@@ -127,6 +127,19 @@ shapes.
   checked by `pbw_decode()` (which then fails with `PBW_ERR_REQUIRED`) and by
   `pbw_message_is_initialized()`; `pbw_encode()` writes the tree as it stands,
   matching the reference serializer.
+- **`string` fields validate UTF-8 where the reference does.** A `string` field
+  whose `utf8_validation` resolves to VERIFY — the default for proto3 and
+  edition-2023+ files, never for proto2 unless a FeatureSet says so — must carry
+  valid UTF-8: `pbw_decode()` fails with `PBW_ERR_INVALID` on malformed input,
+  exactly like libprotobuf (which logs "contains invalid UTF-8 data" and rejects
+  the message) and protobuf-java's `readStringRequireUtf8`. A proto2 string and
+  every `bytes` field keep the raw bytes, matching the reference's loose path.
+  `pbw_field_requires_utf8_validation(field)` exposes the resolved rule, and
+  `pbw_utf8_valid()` is the same structural check the text and JSON parsers use,
+  so a binding that decodes strings in its own runtime validates identically.
+  This costs throughput on decode (measured at 13-14% on a 75 KB proto3 payload
+  with 3000 strings, see [perf-attempts.md](perf-attempts.md)); the reference
+  pays the same cost, so the comparison stays honest.
 - **Unknown fields are data.** Anything the schema does not declare — including
   a known field carrying the wrong wire type, and legacy groups — is kept as
   raw wire bytes and written back after the known fields, in the order they

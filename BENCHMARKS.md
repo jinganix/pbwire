@@ -80,6 +80,15 @@ differ). The per-run proof lives next to each harness run, not here: every
 [Regenerate this file](#regenerate-this-file)). Re-paste the tables after
 re-running, and refresh this section when the machine or toolchain moves.
 
+> **Note (2026-11-14):** these tables predate the proto3 `string` UTF-8
+> validation that now runs at parse time (see
+> [perf-attempts.md](docs/perf-attempts.md#aligned-cost-proto3-string-utf-8-validation)).
+> Decode rows are therefore up to 14% optimistic on payloads with many proto3
+> strings (the `matrix3` payload carries 3000 of them), and the C/Java/Python
+> figures move most. A re-measure is pending a quiet host; the alignment itself
+> is proved by the byte-equality, differential and conformance gates, not by
+> these numbers.
+
 Last full refresh: 2026-11-13. Every binding's four tiers were re-run on the
 same host that day (`make bench`, `make bench-c`, `make python-bench`, ...) and
 pasted from the harness output; each row is the best of the day's runs for
