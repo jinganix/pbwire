@@ -645,6 +645,12 @@ const (
 	shapeDelimited
 )
 
+// encodeSlack is PBW_ENCODE_SLACK: the writer over-reserves tag/varint room,
+// so a buffer this much larger than the encoded size is the smallest cap
+// guaranteed to fit. Mirrored here so a caller sizing its own buffer does not
+// have to reach for the C constant.
+const encodeSlack = int(C.PBW_ENCODE_SLACK)
+
 // encodeTo writes the tree straight into Go memory. The C core used to
 // malloc the result and hand ownership over, which cost a second downcall
 // (pbw_free) plus a full copy back into Go for every encode; writing into a
@@ -660,7 +666,7 @@ func (m *Message) encodeTo(shape encodeShape, label string) ([]byte, error) {
 		if n := C.pbw_message_wire_size(m.c); n > 0 {
 			// Exact for a tree decoded and not mutated since; too small
 			// after mutation, which the retry below covers.
-			cap = int(n) + int(C.PBW_ENCODE_SLACK)
+			cap = int(n) + encodeSlack
 		} else {
 			cap = 256 // the core's own small-message starting point
 		}
@@ -683,8 +689,8 @@ func (m *Message) encodeTo(shape encodeShape, label string) ([]byte, error) {
 			// the capacity a retry happened to reach: a message that once
 			// needed a doubling should not keep a 2x buffer.
 			n := int(l)
-			m.encCap.Store(int64(n) + int64(C.PBW_ENCODE_SLACK))
-			if cap-n <= int(C.PBW_ENCODE_SLACK) {
+			m.encCap.Store(int64(n) + int64(encodeSlack))
+			if cap-n <= encodeSlack {
 				// At most a few bytes larger than the result: slicing the
 				// array we already allocated is free, and the overshoot is
 				// smaller than the copy it would replace.
