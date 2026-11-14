@@ -62,14 +62,14 @@ over wire bytes:
 
 | payload | op | pbwire-kotlin (MB/s, x protobuf-kotlin) | protobuf-kotlin (MB/s) |
 |---|---|---|---|
-| 136 B | encode | 1849.3 (0.8x) | 2311.1 |
-| 136 B | decode | 978.2 (1.4x) | 679.3 |
-| 174 B | encode | 1552.8 (1.3x) | 1232.6 |
-| 174 B | decode | 832.1 (1.5x) | 562.4 |
-| 2469 B | encode | 967.3 (1.1x) | 870.0 |
-| 2469 B | decode | 862.1 (1.8x) | 481.0 |
-| 74913 B | encode | 1003.9 (1.1x) | 919.4 |
-| 74913 B | decode | 973.2 (2.1x) | 470.6 |
+| 136 B | encode | 1729.7 (0.8x) | 2109.9 |
+| 136 B | decode | 934.8 (1.5x) | 634.2 |
+| 174 B | encode | 627.8 (0.5x) | 1189.7 |
+| 174 B | decode | 777.0 (1.4x) | 560.5 |
+| 2469 B | encode | 967.3 (1.1x) | 861.4 |
+| 2469 B | decode | 772.7 (1.6x) | 470.2 |
+| 74913 B | encode | 934.3 (1.1x) | 833.7 |
+| 74913 B | decode | 788.1 (1.7x) | 453.1 |
 
 ## Why not a copy of the Java runtime?
 

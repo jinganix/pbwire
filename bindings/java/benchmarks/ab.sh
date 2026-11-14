@@ -44,7 +44,16 @@ fi
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 mkdir -p "$tmp/probe"
-javac -nowarn -d "$tmp/probe" -cp "$base:$jar" "$here/Ab.java"
+# Ab times the dynamic codec against the protobuf-java oracle, so the
+# probe compiles the benchmark's Matrix3 sources next to Ab itself.
+if [ ! -f "$here/gen/structtest/Matrix3.java" ]; then
+    mkdir -p "$here/gen"
+    protoc -I"$root/bindings/c/tests/data" \
+        --java_out="$here/gen" \
+        "$root/bindings/c/tests/data/matrix3.proto"
+fi
+javac -nowarn -d "$tmp/probe" -cp "$base:$jar" "$here/Ab.java" \
+    "$here/gen/structtest/Matrix3.java"
 
 i=0
 while [ "$i" -lt "$rounds" ]; do

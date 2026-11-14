@@ -146,21 +146,21 @@ over wire bytes:
 
 | payload | op | pbwire-java (MB/s, x protobuf-java) | protobuf-java (MB/s) |
 |---|---|---|---|
-| 136 B | encode | 1831.6 (0.8x) | 2243.7 |
-| 136 B | decode | 939.2 (1.5x) | 633.9 |
-| 174 B | encode | 1575.1 (1.2x) | 1264.2 |
-| 174 B | decode | 845.7 (1.5x) | 550.5 |
-| 2469 B | encode | 1023.6 (1.2x) | 873.3 |
-| 2469 B | decode | 892.9 (2.0x) | 446.3 |
-| 74913 B | encode | 1061.4 (1.2x) | 904.7 |
-| 74913 B | decode | 968.7 (2.4x) | 411.0 |
+| 136 B | encode | 1728.6 (0.7x) | 2360.2 |
+| 136 B | decode | 941.4 (1.5x) | 632.4 |
+| 174 B | encode | 1465.3 (1.2x) | 1249.5 |
+| 174 B | decode | 791.0 (1.4x) | 580.1 |
+| 2469 B | encode | 958.6 (1.1x) | 844.1 |
+| 2469 B | decode | 777.9 (1.8x) | 423.6 |
+| 74913 B | encode | 955.1 (1.1x) | 884.9 |
+| 74913 B | decode | 827.6 (2.1x) | 395.6 |
 
 `pbwire-java` wins from 174 B up on encode and wins every decode tier: 1.2x
-at 174 B, 1.2x at 2469 B, 1.2x at 74913 B on encode; 1.5x, 2.0x and 2.4x on
-decode. The one cell it loses is the 136 B encode (0.82x): `protobuf-java`'s
-generated writer is one straight-line block of known tags and values (~60 ns),
+at 174 B, 1.1x at 2469 B, 1.1x at 74913 B on encode; 1.4x, 1.8x and 2.1x on
+decode. The one cell it loses is the 136 B encode (0.73x): `protobuf-java`'s
+generated writer is one straight-line block of known tags and values (~58 ns),
 while a dynamic codec pays a presence gate, a type dispatch and tag loads per
-field (~80 ns including the `byte[]` copy). That floor is structural, not
+field (~79 ns including the `byte[]` copy). That floor is structural, not
 tuning: the per-field work left -- loads, one `switch`, one call -- is what a
 generated writer avoids by knowing every field at compile time. The
 generated models (`codegen`) make the mirror trade: they skip the tree and

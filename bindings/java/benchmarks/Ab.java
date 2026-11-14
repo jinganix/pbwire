@@ -36,36 +36,25 @@ public final class Ab {
         byte[] small = Files.readAllBytes(Path.of(args[1]));
 
         GenericCodec.DMsg dynSmall = GenericCodec.decode(def, small);
-        Structtest_Scalars3 pojoSmall = Structtest_Scalars3.parseFrom(small);
         Matrix3.Scalars3 refSmall = Matrix3.Scalars3.parseFrom(small);
         require(Arrays.equals(GenericCodec.encode(dynSmall), refSmall.toByteArray()),
                 "dynamic bytes (small)");
-        require(Arrays.equals(pojoSmall.toByteArray(), refSmall.toByteArray()),
-                "typed bytes (small)");
 
-        run("small", dynSmall, pojoSmall, refSmall, def, small, false);
+        run("small", dynSmall, refSmall, def, small, false);
 
         GenericCodec.DMsg dynConst = fill(def, false);
-        Structtest_Scalars3 pojoConst = Structtest_Scalars3.parseFrom(
-                GenericCodec.encode(dynConst));
         Matrix3.Scalars3 refConst = fillRef(false);
         byte[] constBytes = refConst.toByteArray();
         require(Arrays.equals(GenericCodec.encode(dynConst), constBytes),
                 "dynamic bytes (const)");
-        require(Arrays.equals(pojoConst.toByteArray(), constBytes),
-                "typed bytes (const)");
-        run("const", dynConst, pojoConst, refConst, def, constBytes, true);
+        run("const", dynConst, refConst, def, constBytes, true);
 
         GenericCodec.DMsg dynVar = fill(def, true);
-        Structtest_Scalars3 pojoVar = Structtest_Scalars3.parseFrom(
-                GenericCodec.encode(dynVar));
         Matrix3.Scalars3 refVar = fillRef(true);
         byte[] varBytes = refVar.toByteArray();
         require(Arrays.equals(GenericCodec.encode(dynVar), varBytes),
                 "dynamic bytes (varied)");
-        require(Arrays.equals(pojoVar.toByteArray(), varBytes),
-                "typed bytes (varied)");
-        run("varied", dynVar, pojoVar, refVar, def, varBytes, true);
+        run("varied", dynVar, refVar, def, varBytes, true);
 
         System.err.println("sink " + sink);
     }
@@ -78,15 +67,13 @@ public final class Ab {
     }
 
     private static void run(String shape, GenericCodec.DMsg dyn,
-            Structtest_Scalars3 pojo, Matrix3.Scalars3 ref,
+            Matrix3.Scalars3 ref,
             GenericCodec.MessageDef def, byte[] bytes, boolean big)
             throws Exception {
         int n = big ? ELEMS : ITERS;
         Runnable[] ops = {
             () -> sink += GenericCodec.encode(dyn).length,
             () -> sink += GenericCodec.decode(def, bytes).has.length,
-            () -> sink += pojo.toByteArray().length,
-            () -> sink += Structtest_Scalars3.parseFrom(bytes).getI32(),
             () -> sink += ref.toByteArray().length,
             () -> {
                 try {
@@ -96,8 +83,8 @@ public final class Ab {
                 }
             },
         };
-        String[] names = {"dyn-encode", "dyn-decode", "typed-encode",
-                "typed-decode", "pbuf-encode", "pbuf-decode"};
+        String[] names = {"dyn-encode", "dyn-decode", "pbuf-encode",
+                "pbuf-decode"};
         double[] best = new double[ops.length];
         Arrays.fill(best, Double.MAX_VALUE);
         for (int i = 0; i < ops.length; i++) {
