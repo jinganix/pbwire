@@ -16,7 +16,7 @@
 ;;   ./bench.sh
 (ns pbwire.bench
   (:require [pbwire.core :as pb])
-  (:import (java.util Arrays)))
+  (:import (java.util Arrays) (structtest Matrix3$Scalars3)))
 
 (def ^:private cases ["small" "medium" "large" "xlarge"])
 (def ^:private repeats [0 1 100 3000])
@@ -117,7 +117,10 @@
         (let [label (nth cases tier)
               n (nth repeats tier)
               floor (nth floors tier)
-              official (official-message n)
+              ;; Hinted so the timed baseline below compiles to a direct
+              ;; call: an unhinted local reflects (~800 ns/call here) and
+              ;; never warms, which once inflated this row to 9.9x.
+              ^Matrix3$Scalars3 official (official-message n)
               reference (.toByteArray official)]
           (if (not= (count reference) (nth want tier))
             (do (println "FAIL" label "official encoder wrote" (count reference)

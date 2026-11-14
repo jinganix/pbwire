@@ -1231,7 +1231,7 @@ public final class GenericCodec {
      *  cache, so an encode pays a single ThreadLocal lookup. */
     private static final class Workspace {
         Wire.Buf buf = new Wire.Buf();
-        final StrMemo strings = new StrMemo();
+        final StrCache strings = new StrCache();
     }
 
     private static final ThreadLocal<Workspace> WORKSPACE =
@@ -1248,21 +1248,28 @@ public final class GenericCodec {
         retainCap = Math.max(0, bytes);
     }
 
-    /** Last (field, string) emitted on this thread, with its whole-field
-     *  image once the same pair has been seen twice. A value that repeats
-     *  (what a repeated string field usually holds) re-emits with one
-     *  arraycopy; distinct values -- what real traffic carries -- write
-     *  straight into the buffer and never allocate an image they would not
-     *  reuse. One identity compare either way, whatever the cardinality.
-     *  Per-thread because a MessageDef is shared between threads. */
-    private static final class StrMemo {
-        Field field;
-        String str;
-        byte[] img; // null until the same (field, str) is seen twice
+    /** Whole field image (tag + length + UTF-8) by reference: a stable
+     *  String on a stable field re-emits with one arraycopy. 8 FIFO
+     *  slots cover the handful of distinct (field, string) pairs a
+     *  message carries; beyond that each emit rebuilds its image. */
+    private static final class StrCache {
+        final byte[][] tags = new byte[8][];
+        final String[] strs = new String[8];
+        final byte[][] imgs = new byte[8][];
+        int next;
     }
 
-    /** Whole field image: tag + length + UTF-8. */
-    private static byte[] strImage(byte[] tag, String s) {
+    private static void writeStrField(Wire.Buf b, byte[] tag, String s,
+            StrCache c) {
+        for (int i = 0; i < c.tags.length; i++) {
+            if (c.tags[i] == tag && c.strs[i] == s) {
+                byte[] img = c.imgs[i];
+                Wire.ensure(b, img.length);
+                System.arraycopy(img, 0, b.b, b.pos, img.length);
+                b.pos += img.length;
+                return;
+            }
+        }
         byte[] u = s.getBytes(StandardCharsets.UTF_8);
         int llen = Wire.sizeVar32(u.length);
         byte[] img = new byte[tag.length + llen + u.length];
@@ -1275,43 +1282,13 @@ public final class GenericCodec {
         }
         img[p++] = (byte) n;
         System.arraycopy(u, 0, img, p, u.length);
-        return img;
-    }
-
-    private static void writeStrField(Wire.Buf b, Field f, String s,
-            StrMemo c) {
-        if (c.field == f && c.str == s) {
-            if (c.img == null) {
-                c.img = strImage(f.tag, s);
-            }
-            byte[] img = c.img;
-            Wire.ensure(b, img.length);
-            System.arraycopy(img, 0, b.b, b.pos, img.length);
-            b.pos += img.length;
-            return;
-        }
-        c.field = f;
-        c.str = s;
-        c.img = null;
-        // First sighting (or a new value): write in place. Tag, a 1-byte
-        // length placeholder, the UTF-8 bytes, then the real length --
-        // no whole-field image allocated for a value that may not repeat.
-        byte[] tag = f.tag;
-        Wire.ensure(b, tag.length + 1);
-        System.arraycopy(tag, 0, b.b, b.pos, tag.length);
-        b.pos += tag.length;
-        int lp = b.pos;
-        b.b[b.pos++] = 0;
-        byte[] u = s.getBytes(StandardCharsets.UTF_8);
-        Wire.ensure(b, u.length);
-        System.arraycopy(u, 0, b.b, b.pos, u.length);
-        b.pos += u.length;
-        int len = b.pos - lp - 1;
-        if (len < 128) {
-            b.b[lp] = (byte) len;
-        } else {
-            Wire.patch(b, lp);
-        }
+        c.tags[c.next] = tag;
+        c.strs[c.next] = s;
+        c.imgs[c.next] = img;
+        c.next = (c.next + 1) & (c.tags.length - 1);
+        Wire.ensure(b, img.length);
+        System.arraycopy(img, 0, b.b, b.pos, img.length);
+        b.pos += img.length;
     }
 
     /** Single pass into a reusable buffer; nested payloads use a 1-byte
@@ -1350,12 +1327,12 @@ public final class GenericCodec {
     }
 
     private static void encodeInto(DMsg m, Wire.Buf b, int depth,
-            StrMemo sc) {
+            StrCache sc) {
         encodeInto(m, b, depth, sc, false);
     }
 
     private static void encodeInto(DMsg m, Wire.Buf b, int depth,
-            StrMemo sc, boolean deterministic) {
+            StrCache sc, boolean deterministic) {
         if (depth > Wire.MAX_DEPTH) {
             throw new IllegalArgumentException("nesting exceeds " + Wire.MAX_DEPTH);
         }
@@ -1478,12 +1455,12 @@ public final class GenericCodec {
 
     /** Singular or repeated-element ref value: Slice copies verbatim. */
     private static void writeRefVal(Wire.Buf b, Field f, Object v, int depth,
-            StrMemo sc) {
+            StrCache sc) {
         writeRefVal(b, f, v, depth, sc, false);
     }
 
     private static void writeRefVal(Wire.Buf b, Field f, Object v, int depth,
-            StrMemo sc, boolean deterministic) {
+            StrCache sc, boolean deterministic) {
         if (v instanceof Slice) {
             Slice sl = (Slice) v; // tag included: pure copy, stays byte-exact
             Wire.ensure(b, sl.len);
@@ -1492,7 +1469,7 @@ public final class GenericCodec {
             return;
         }
         if (f.kind == K_STRING) {
-            writeStrField(b, f, (String) v, sc);
+            writeStrField(b, f.tag, (String) v, sc);
             return;
         }
         if (f.kind == K_BYTES) {
@@ -1717,7 +1694,7 @@ public final class GenericCodec {
     }
 
     private static void writeGroup(Wire.Buf b, Field f, DMsg m, int depth,
-            StrMemo sc) {
+            StrCache sc) {
         writeBytes(b, Wire.tagBytes(f.number, 3));
         encodeInto(m, b, depth + 1, sc);
         writeBytes(b, Wire.tagBytes(f.number, 4));
