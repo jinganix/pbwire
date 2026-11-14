@@ -72,20 +72,24 @@ over wire bytes. The baseline is `protoc --java_out` code compiled at bench
 time; both sides must produce identical bytes before anything is timed, and
 both allocate per call. The Clojure encode under test reuses a pre-built
 mutable message (fill once, encode many); decode is a validating scan plus
-close, no map materialization — like the Java row — so it beats generated
-straight-line code at every tier. The persistent-map fns stay for
-convenience and are gated for parity, but hot loops use the mutable path.
+close, no map materialization — like the Java row — so it tracks the Java
+row tier for tier (losing only the 136 B encode, like Java). The baseline is
+a direct `toByteArray` call: the measured value carries a type hint so the
+call compiles direct. An unhinted local reflects (~800 ns a call here) and
+never warms, which once inflated this row past 9x. The persistent-map fns
+stay for convenience and are gated for parity, but hot loops use the
+mutable path.
 
 | payload | op | pbwire-clj (MB/s, x protobuf-java) | protobuf-java (MB/s) |
 |---|---|---|---|
-| 136 B | encode | 1742.7 (9.9x) | 175.6 |
-| 136 B | decode | 915.3 (1.4x) | 673.9 |
-| 174 B | encode | 1514.0 (7.1x) | 211.8 |
-| 174 B | decode | 807.5 (1.4x) | 591.4 |
-| 2469 B | encode | 944.0 (1.3x) | 707.2 |
-| 2469 B | decode | 869.6 (1.9x) | 463.1 |
-| 74913 B | encode | 947.3 (1.1x) | 876.7 |
-| 74913 B | decode | 951.0 (2.2x) | 440.7 |
+| 136 B | encode | 1618.4 (0.7x) | 2179.9 |
+| 136 B | decode | 932.7 (1.4x) | 665.4 |
+| 174 B | encode | 1408.6 (1.1x) | 1242.2 |
+| 174 B | decode | 781.0 (1.3x) | 581.1 |
+| 2469 B | encode | 1023.1 (1.2x) | 855.9 |
+| 2469 B | decode | 753.7 (1.6x) | 469.7 |
+| 74913 B | encode | 1028.1 (1.1x) | 900.5 |
+| 74913 B | decode | 811.0 (1.7x) | 463.9 |
 
 The small tiers are where a persistent map per message would lose: 3000
 submaps and 12000 boxed ints on the xlarge tier plus a per-field interop
