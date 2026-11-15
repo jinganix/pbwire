@@ -434,9 +434,6 @@ static void
 write_group_body(writer *w, const pbw_field *field, const pbw_value *value,
                  uint32_t depth, int det)
 {
-    uint8_t end[5];
-    size_t end_len;
-
     if (value->as.msg == NULL) {
         w->status = PBW_ERR_INVALID;
         return;
@@ -450,9 +447,16 @@ write_group_body(writer *w, const pbw_field *field, const pbw_value *value,
     if (w->status != PBW_OK) {
         return;
     }
-    end_len = pbw_varint_write(end, ((uint64_t)field->number << 3) |
-                                        PBW_WIRE_END_GROUP);
-    w_put(w, end, end_len);
+    /* Format the END tag straight into the output: bouncing it through a
+     * stack temp trips -Werror=array-bounds under _FORTIFY_SOURCE once
+     * w_copy inlines (a runtime length against a 5-byte object), and the
+     * extra copy is pointless anyway. */
+    if (!w_reserve(w, 5)) {
+        return;
+    }
+    w->pos += pbw_varint_write(w->base + w->pos,
+                               ((uint64_t)field->number << 3) |
+                                   PBW_WIRE_END_GROUP);
 }
 
 /* One MessageSet item: START_GROUP(1), type_id (field 2), the extension
