@@ -151,22 +151,54 @@ pbw_arena_reset(pbw_arena *arena)
         arena->chunk_size = PBW_ARENA_MIN_CHUNK;
         return;
     }
-    /* An outlier that grew the head past the budget is dropped as well:
-     * steady workloads under budget stay malloc-free, anything above pays
-     * one malloc per reset instead of pinning the peak forever. */
-    if (head->cap > arena->retain_cap) {
+    /* An outlier head past the budget is dropped: steady workloads under
+     * budget stay resident, anything above pays one malloc per reset instead
+     * of pinning the peak forever. */
+    while (head != NULL && head->cap > arena->retain_cap) {
+        pbw_arena_chunk *next = head->next;
+
         free(head);
-        arena->head = NULL;
+        head = next;
+    }
+    arena->head = head;
+    if (head == NULL) {
         arena->chunk_size = PBW_ARENA_MIN_CHUNK;
         return;
     }
-    for (chunk = head->next; chunk != NULL;) {
-        pbw_arena_chunk *next = chunk->next;
-        free(chunk);
-        chunk = next;
+    /* Keep the head prefix that holds what was used: a tree bigger than one
+     * chunk then reuses its chunks instead of re-mallocing them every
+     * decode. Kept bytes stop at the retain budget (plus one chunk, which
+     * bounds the overshoot); the tail is freed. The head chunk itself is
+     * always kept, even on an idle reset (used == 0): keeping a prefix
+     * means at least one chunk stays reachable, never none. */
+    {
+        size_t used = 0;
+        size_t kept;
+        pbw_arena_chunk *last;
+        pbw_arena_chunk *rest;
+
+        for (chunk = head; chunk != NULL; chunk = chunk->next) {
+            used += chunk->used;
+        }
+        last = head;
+        kept = head->cap;
+        rest = head->next;
+        while (rest != NULL && kept < used && kept <= arena->retain_cap) {
+            kept += rest->cap;
+            last = rest;
+            rest = rest->next;
+        }
+        while (rest != NULL) {
+            pbw_arena_chunk *next = rest->next;
+
+            free(rest);
+            rest = next;
+        }
+        last->next = NULL;
+        for (chunk = head; chunk != NULL; chunk = chunk->next) {
+            chunk->used = 0;
+        }
     }
-    head->next = NULL;
-    head->used = 0;
 }
 
 pbw_arena *

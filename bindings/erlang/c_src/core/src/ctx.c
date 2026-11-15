@@ -255,6 +255,13 @@ pbw_decode_ctx_limits(pbw_ctx *ctx, const pbw_descriptor *desc,
     if (limits != NULL && limits->max_bytes > 0 && len > limits->max_bytes) {
         return PBW_ERR_LIMIT;
     }
+    /* A sealed arena holds the previous decode: reset it here so a
+     * decode_in/reset/decode loop costs one call, not two. Only the
+     * sealed (read-only) state resets implicitly; a dirty writable arena
+     * keeps its trees, as before. */
+    if (ctx->arena.readonly) {
+        pbw_arena_reset(&ctx->arena);
+    }
     {
         pbw_status status =
             pbw_decode_arena_lim(&ctx->arena, desc, buf, len, pbw_effective_depth(limits), out);
