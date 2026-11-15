@@ -17,10 +17,14 @@ public final class Limits {
         this.maxDepth = maxDepth;
     }
 
-    /** No byte cap, {@link Wire#MAX_DEPTH} nesting. */
+    /** No byte cap, {@link Wire#MAX_DEPTH} nesting. Immutable, so one shared
+     *  instance serves every unbounded decode instead of a fresh allocation
+     *  per call. */
     public static Limits defaults() {
-        return new Limits(0, 0);
+        return DEFAULTS;
     }
+
+    private static final Limits DEFAULTS = new Limits(0, 0);
 
     /** The depth cap this limit enforces on a decode. */
     int effectiveDepth() {

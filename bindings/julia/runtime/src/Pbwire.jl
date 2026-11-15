@@ -38,7 +38,7 @@ export fieldmask_paths, visit
 export Service, Method, service_count, service_at, service, service_name
 export method_count, method_at, method, method_name, method_input, method_output
 export client_streaming, server_streaming, resolve_method
-export close
+export close, Ctx, reset!, decode_in
 
 """Anything the C core refused, plus I/O failures from [`from_file`](@ref)."""
 struct PbwireError <: Exception
@@ -78,7 +78,11 @@ end
 # entry point is resolved once via `dlsym` into its own Ref and called
 # through a raw pointer. One pointer load per call, no Dict hash.
 const _handle = Ref{Ptr{Cvoid}}(C_NULL)
+const _p_pbw_ctx_free = Ref{Ptr{Cvoid}}(C_NULL)
+const _p_pbw_ctx_new = Ref{Ptr{Cvoid}}(C_NULL)
+const _p_pbw_ctx_reset = Ref{Ptr{Cvoid}}(C_NULL)
 const _p_pbw_decode = Ref{Ptr{Cvoid}}(C_NULL)
+const _p_pbw_decode_ctx = Ref{Ptr{Cvoid}}(C_NULL)
 const _p_pbw_descriptor_find_field_name = Ref{Ptr{Cvoid}}(C_NULL)
 const _p_pbw_descriptor_name = Ref{Ptr{Cvoid}}(C_NULL)
 const _p_pbw_descriptor_set_load = Ref{Ptr{Cvoid}}(C_NULL)
@@ -316,10 +320,10 @@ mutable struct Message
     ty::MsgType
     handle::Ptr{Cvoid}
     owned::Bool
-    parent::Union{Message,Nothing} # keeps the parent (and its tree) alive
+    parent::Any # keeps the tree alive: the parent Message, or the Ctx it lives in
     cap::Int # last wire length seen: the encode buffer hint, 0 when unknown
     function Message(ty::MsgType, handle::Ptr{Cvoid}, owned::Bool,
-            parent::Union{Message,Nothing}, cap::Int = 0)
+            parent, cap::Int = 0)
         if handle == C_NULL
             throw(PbwireError(-1, "pbw_message_new: out of memory"))
         end
@@ -342,6 +346,49 @@ function new_message(ty::MsgType)
             @libcall(:pbw_message_new, Ptr{Cvoid}, (Ptr{Cvoid},), ty.desc),
             true, nothing)
     end
+end
+
+"""A reusable decode workspace: a decode into it allocates nothing after the
+first message. One context per task, never shared concurrently."""
+mutable struct Ctx
+    handle::Ptr{Cvoid}
+    function Ctx()
+        h = @libcall(:pbw_ctx_new, Ptr{Cvoid}, ())
+        if h == C_NULL
+            throw(PbwireError(-1, "pbw_ctx_new: out of memory"))
+        end
+        c = new(h)
+        finalizer(c) do x
+            if x.handle != C_NULL
+                @libcall(:pbw_ctx_free, Cvoid, (Ptr{Cvoid},), x.handle)
+                x.handle = C_NULL
+            end
+        end
+        return c
+    end
+end
+
+"""Drops every tree decoded with `c`, keeping its buffers for the next decode."""
+function reset!(c::Ctx)
+    @libcall(:pbw_ctx_reset, Cvoid, (Ptr{Cvoid},), c.handle)
+    return c
+end
+
+"""Decodes wire bytes into `c` instead of a fresh allocation per value: the
+allocator call drops out of steady-state decoding. The tree is read-only, and
+`decode_in`, `reset!` or closing `c` invalidates it -- so copy out anything
+you keep, or encode it while it is still live."""
+function decode_in(c::Ctx, ty::MsgType, wire::Vector{UInt8})
+    reset!(c)
+    out = Ref{Ptr{Cvoid}}(C_NULL)
+    GC.@preserve ty c begin
+        status = @libcall(:pbw_decode_ctx, Cint,
+            (Ptr{Cvoid}, Ptr{Cvoid}, Ptr{UInt8}, Csize_t, Ptr{Ptr{Cvoid}}),
+            c.handle, ty.desc, isempty(wire) ? C_NULL : wire,
+            length(wire), out)
+    end
+    _check(status, "decode")
+    return Message(ty, out[], false, c, length(wire))
 end
 
 """Decodes wire bytes; unknown fields are preserved and re-encoded."""
@@ -1106,7 +1153,11 @@ function __init__()
     _p_pbw_any_pack[] = Libdl.dlsym(_handle[], :pbw_any_pack)
     _p_pbw_any_payload[] = Libdl.dlsym(_handle[], :pbw_any_payload)
     _p_pbw_any_type_url[] = Libdl.dlsym(_handle[], :pbw_any_type_url)
+    _p_pbw_ctx_free[] = Libdl.dlsym(_handle[], :pbw_ctx_free)
+    _p_pbw_ctx_new[] = Libdl.dlsym(_handle[], :pbw_ctx_new)
+    _p_pbw_ctx_reset[] = Libdl.dlsym(_handle[], :pbw_ctx_reset)
     _p_pbw_decode[] = Libdl.dlsym(_handle[], :pbw_decode)
+    _p_pbw_decode_ctx[] = Libdl.dlsym(_handle[], :pbw_decode_ctx)
     _p_pbw_decode_delimited[] = Libdl.dlsym(_handle[], :pbw_decode_delimited)
     _p_pbw_decode_limits[] = Libdl.dlsym(_handle[], :pbw_decode_limits)
     _p_pbw_duration_from_millis[] = Libdl.dlsym(_handle[], :pbw_duration_from_millis)

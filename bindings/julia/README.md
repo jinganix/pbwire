@@ -115,6 +115,7 @@ converts values:
 | `print_json(m)` / `parse_json(ty, text[, ignore_unknown[, max_bytes, max_depth]])` | JSON mapping, bounded |
 | `print_text(m[, print_unknown])` / `parse_text(ty, text[, max_bytes, max_depth])` | text format, bounded |
 | `encode_deterministic(m)` | map entries sorted by key |
+| `decode_in(ctx, ty, wire)` / `reset!(ctx)` | decode into a reusable `Ctx`: no allocation after the first message (read-only tree) |
 | `encode_delimited(m)` / `decode_delimited(ty, wire)` | framing, with `consumed` |
 | `encoded_size(m)` | exact size without writing |
 | `visit(ty, wire, cb)` | single-level scan; a callback exception is rethrown after the scan stops |

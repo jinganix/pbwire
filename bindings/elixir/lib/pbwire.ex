@@ -242,15 +242,25 @@ defmodule Pbwire do
 
   # -- tuple -> struct -------------------------------------------------
 
-  defp from_tuple(%{mod: mod, fields: fields} = spec, tuple) do
-    [_ | values] = Tuple.to_list(tuple)
+  # One pass over the record: the per-position tables (keys/flds) are built
+  # once per module at schema load, so a decode indexes them instead of walking
+  # two lists through Tuple.to_list + Enum.zip + Enum.map + a list concat. This
+  # runs once per decoded message, nested ones included, so every field of every
+  # message pays it.
+  defp from_tuple(%{mod: mod, keys: keys, flds: flds} = spec, tuple) do
+    # Record i+1 holds field i (element 0 is the type tag). A record shorter
+    # than the field table keeps the struct defaults for the fields it does not
+    # carry, like the zip this replaces.
+    m = min(tuple_size(flds), tuple_size(tuple) - 1)
+    struct(mod, tuple_pairs(spec, tuple, 0, m, keys, flds, []))
+  end
 
-    pairs =
-      fields
-      |> Enum.zip(values)
-      |> Enum.map(fn {field, value} -> {field_key(field), decode_field(field, value, spec)} end)
+  defp tuple_pairs(_spec, _tuple, j, m, _keys, _flds, acc) when j >= m, do: acc
 
-    struct(mod, pairs ++ [__unknown_fields__: []])
+  defp tuple_pairs(spec, tuple, j, m, keys, flds, acc) do
+    field = elem(flds, j)
+    value = decode_field(field, elem(tuple, j + 1), spec)
+    tuple_pairs(spec, tuple, j + 1, m, keys, flds, [{elem(keys, j), value} | acc])
   end
 
   defp decode_field(%{kind: {:oneof, _, _}}, :undefined, _spec), do: nil
