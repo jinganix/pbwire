@@ -2,7 +2,6 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
-import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * One dynamic message: a mutable value tree over a {@code DMsg}.
@@ -27,27 +26,26 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public final class Message implements AutoCloseable {
     private final MessageType type;
     private final GenericCodec.DMsg data;
-    private final AtomicBoolean closed; /* shared with child views */
-    private final Message parent; /* a view keeps its root reachable */
+    private final Message parent; /* a view keeps its root reachable; null on a root */
     private final boolean own;
+    private boolean closed; /* meaningful on the root only; views read their root's */
 
     private Message(MessageType type, GenericCodec.DMsg data,
-            AtomicBoolean closed, Message parent, boolean own) {
+            Message parent, boolean own) {
         this.type = type;
         this.data = data;
-        this.closed = closed;
         this.parent = parent;
         this.own = own;
     }
 
     /** A root: closing it retires the whole tree. */
     static Message root(MessageType type, GenericCodec.DMsg data) {
-        return new Message(type, data, new AtomicBoolean(false), null, true);
+        return new Message(type, data, null, true);
     }
 
     /** A child view: closing it is a no-op, closing the root retires it. */
     private Message view(GenericCodec.DMsg child, MessageType childType) {
-        return new Message(childType, child, closed, parent != null ? parent : this, false);
+        return new Message(childType, child, parent != null ? parent : this, false);
     }
 
     public MessageType type() {
@@ -517,14 +515,15 @@ public final class Message implements AutoCloseable {
     @Override
     public void close() {
         if (own) {
-            closed.set(true);
+            closed = true;
         }
     }
 
     /* ------------------------------------------------------------- internals */
 
     private GenericCodec.DMsg segment() {
-        if (closed.get()) {
+        Message root = parent != null ? parent : this;
+        if (root.closed) {
             throw new IllegalStateException(type.name() + ": message is closed");
         }
         type.checkOpen();

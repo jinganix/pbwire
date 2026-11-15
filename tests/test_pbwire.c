@@ -2582,6 +2582,38 @@ test_ctx_retain_cap(pbw_schema *schema)
     pbw_ctx_free(ctx); /* frees the pending large chunk */
 }
 
+/* A reset is idempotent: the second one sees an empty arena (used == 0) and
+ * must keep the retained chunks rather than drop every chunk pointer, which
+ * would leak them until the process exits. */
+static void
+test_ctx_reset_twice(pbw_schema *schema)
+{
+    const pbw_descriptor *person = desc(schema, "Person");
+    pbw_ctx *ctx = pbw_ctx_new();
+    pbw_message *decoded = NULL;
+    size_t len = 0;
+    size_t head;
+    const uint8_t wire[] = {0x0a, 0x01, 'x'};
+
+    CHECK(ctx != NULL);
+    CHECK_STATUS(PBW_OK, pbw_decode_ctx(ctx, person, wire, sizeof(wire),
+                                        &decoded));
+    CHECK(decoded != NULL);
+    pbw_ctx_reset(ctx);
+    head = test_head_cap(ctx);
+    CHECK(head > 0);
+    pbw_ctx_reset(ctx); /* empty arena: the same chunks stay reachable */
+    CHECK(test_head_cap(ctx) == head);
+    CHECK(pbw_ctx_used(ctx) == 0);
+    /* Still functional afterwards. */
+    CHECK_STATUS(PBW_OK, pbw_decode_ctx(ctx, person, wire, sizeof(wire),
+                                        &decoded));
+    CHECK(decoded != NULL);
+    CHECK(pbw_message_get(decoded, 1) != NULL);
+    pbw_ctx_free(ctx);
+    (void)len;
+}
+
 /* A context that only ever holds oversized single allocations never grows a
  * head chunk. Reset must still release those, or a steady workload of large
  * payloads grows without bound until pbw_ctx_free(). */
@@ -8518,6 +8550,7 @@ main(void)
     test_ctx_build(schema);
     test_ctx_mem(schema);
     test_ctx_retain_cap(schema);
+    test_ctx_reset_twice(schema);
     test_ctx_reset_oversized_only();
     test_ctx_pool(schema);
     test_encode_to(schema);

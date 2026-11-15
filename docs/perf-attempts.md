@@ -694,3 +694,132 @@ Nothing else was kept: the 136 B Julia cell is still 0.87x because the
 remaining 21 ns to ProtoBuf.jl's pure-Julia generated decode is the min core
 decode cost plus a downcall, and closing it needs a different decode shape
 (not a tuning fix).
+
+## Round: small-tier boundary cells, 2026-11-15
+
+Aim: the remaining sub-1.0x cells, with generic changes only (no per-payload
+path). Five changes were measured; three are kept, two are recorded as rejected
+or reverted.
+
+### Kept: `pbw_arena_reset` keeps the used chunk prefix (core)
+
+The reset kept exactly one chunk (the head) and freed the rest, so a tree larger
+than its largest single chunk re-malloc'd its chunks on every decode. The reset
+now keeps the chain prefix that covers the previous `used` total, bounded by
+`retain_cap`. C probe, `matrix3` x3000 (74913 B), `pbw_decode_ctx` in a loop,
+best of 5 x 300:
+
+| build | ns/op (ctx decode) |
+|---|---|
+| keep head only | 125893 |
+| keep used prefix | 104493 |
+
+The plain path on the same payload is 102196-105760 ns, so the workspace stops
+losing to the one-shot decode (-17%, and the Julia `dec+ctx` xlarge row went
+0.88x -> 1.08x).
+
+**Bug found in the first version of this change and fixed before keeping it:**
+the prefix loop could keep zero chunks (when `used` summed to 0, i.e. a second
+`pbw_ctx_reset` with nothing allocated), and returned with `arena->head = NULL`
+without freeing the chain -- every chunk leaked. Reproduced with a
+allocator-counting probe (`reset` then `reset` then `pbw_ctx_free` left 1 block
+live); fixed by always keeping the head chunk, and `test_ctx_reset_twice()` in
+`tests/test_pbwire.c` now asserts the retained head survives an idle reset.
+
+### Kept: `pbw_decode_ctx` resets a sealed context on entry (core, semantics)
+
+Saves the second call in a `reset`/`decode` loop. Contract note, because it is a
+behaviour change: **a decode into a context that already holds a sealed tree
+now invalidates that tree**, exactly like an explicit reset, so a caller that
+decodes twice into one context without resetting no longer gets two live trees.
+Header (`pbw_decode_ctx`, `pbw_decode_delimited_ctx`), `docs/guide.md` and
+`docs/internal` notes were updated to say so.
+
+### Kept: no `ThreadLocal` reader in the Java decode (pure-Java codec)
+
+`GenericCodec.decode` used a `ThreadLocal<Wire.Reader>` as a scratch buffer.
+One use of the workspace is not a reuse pattern worth a ThreadLocal: a local
+`new Wire.Reader()` is scalar-replaced by C2, so the lookup (and the escape) go
+away. Measured on the JVM harness (174 B decode, matrix3): pbwire 235-248 ns
+across runs, and the Scala 174 B cell moved 0.99x -> 0.98-1.00x, i.e. the codec
+was never the gap there. Kept because it removes a shared-mutable scratch
+object (the reader no longer has to be reset to `MAX_DEPTH` in a `finally`)
+and costs nothing measurable.
+
+### Kept: `Message` drops its `AtomicBoolean` (Java/Kotlin/Scala/Clojure)
+
+`Message.root()` allocated a `AtomicBoolean`, shared with child views, only for
+`close()`/`segment()`'s open check. The class is documented as one-thread-per-
+message, so the flag is a plain `boolean` on the root and views read
+`root.closed`. Verified with a classpath probe on the same payload: raw
+`GenericCodec.decode` 233 ns, `MessageType.decode()` + `close()` 226 ns (the
+wrapper is already gone after JIT, which is also why this does not "fix" a cell
+by itself).
+
+### Reverted: `wire_len` write-back after a successful `pbw_encode` (core)
+
+`encode_alloc` recorded the produced size in `msg->wire_len` as the next call's
+buffer hint. Measured on the 169 B/core tiers: 0.98x -> 1.02x in one run and
+0.96x in the next, i.e. inside the noise band the ledger already documents
+(0.94-1.04x), while `pbw_encode` takes a `const pbw_message *` and would start
+writing to it -- a contract change (and a data race for a message shared read-
+only between threads) for an unreliable 2%. Reverted before the tables were
+repasted; the exact-start hint is the caller's job through `pbw_encode_to`/
+`pbw_encode_ctx`, where the capacity is already owned.
+
+### Rejected: larger `growLong`/`growObj` minimum in the Java codec
+
+Started repeated arrays at 16 elements; a 4-element start saves zeroing on the
+narrow tiers. Measured: pbwire-side numbers did not move (247.9 -> 247.1 ns at
+174 B), and the one run that showed 1.03x had a baseline that swung 234 -> 300
+ns, so the change bought nothing and was reverted.
+
+## Kept: the encoder caches its buffer base and capacity (core)
+
+`writer` held only `pbw_buf *buf`, so every field write did
+`w->buf->data + w->pos`: two dependent loads, and the second one is reloaded
+after each store to `w->pos` because the compiler cannot prove the store does
+not alias `buf->data`. The writer now caches `base` and `limit` and refreshes
+them in `w_grow`, the only place they change.
+
+Measured on `make bench` (same machine, one run each side of the change, core
+tiers, `ns/op`; bytes identical, gated by the harness):
+
+| tier | op | before | after |
+|---|---|---|---|
+| 132 B | plain encode | 82.9 | 73.8 |
+| 169 B | plain encode | 112.4 | 98.3 |
+| 2755 B | plain encode | 2294.3 | 1992.9 |
+| 85933 B | plain encode | 56676.6 | 53937.2 |
+| 169 B | `pbw_ctx` encode | 96.2 | 87.6 |
+
+That is 10-13% off every encode path that goes through `pbw_encode_buf`
+(plain, `pbw_ctx`, `pbw_encode_to`, and every C-linked binding: Go, Rust, Node,
+Ruby, Lua, PHP, Zig, Julia, R, embedded). It also closed the last core cell:
+**plain 169 B encode 0.96x -> 1.10x** against generated C++. The decoder's
+equivalent (hoisting `msg->values` / `msg->present` out of the loop) was not
+attempted: the ledger's earlier presence-word hoist measured neutral, and the
+decode hot loop hands `msg` to out-of-line helpers in a dozen places.
+
+### The two cells this does not close
+
+- **Julia 136 B plain decode (0.89x).** Attribution, one probe of the same
+  136-byte payload: C `pbw_decode` + `pbw_message_free` 126.1 ns,
+  `pbw_decode_ctx` (no allocator call) 107.4 ns, so the one arena
+  `malloc`/`free` pair is 18.7 ns; the Julia wrapper adds 7.5 ns
+  (133.6 measured end to end) and ProtoBuf.jl's whole decode is 118.8 ns. A
+  zero-cost wrapper would still be 126.1 > 118.8, so the cell needs the
+  allocator pair gone -- an ownership change, since `decode` promises a
+  mutable tree with a per-call lifetime. Rejected: allocating the arena from
+  Julia's own heap. A 2048-byte `Vector{UInt8}(undef, n)` costs **47.3 ns**
+  per call on this machine, three times the `malloc`/`free` pair it would
+  replace, so the scratch-buffer path is strictly worse. The binding's
+  `decode_in` (reusable `Ctx`) is the allocation-free path and measures
+  0.98x-1.02x.
+- **Scala 174 B decode (0.98x).** The codec is not the gap: `GenericCodec.decode`
+  alone is 235 ns, the binding's `decode()` + `close()` is 247, and the
+  baseline (ScalaPB, not protobuf-java, which is 321 ns on the same bytes) is
+  241-247 across runs. A classpath probe shows the `Message` wrapper is already
+  eliminated by the JIT (226 vs 233 ns raw), so what is left is the DMsg array
+  set plus the per-field dispatch, and the cell flips with the baseline's own
+  run-to-run band.

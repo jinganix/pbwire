@@ -379,7 +379,8 @@ allocator call drops out of steady-state decoding. The tree is read-only, and
 `decode_in`, `reset!` or closing `c` invalidates it -- so copy out anything
 you keep, or encode it while it is still live."""
 function decode_in(c::Ctx, ty::MsgType, wire::Vector{UInt8})
-    reset!(c)
+    # No reset! here: the core seals each decode read-only and resets a sealed
+    # arena on entry, so steady-state decoding is one ccall, not two.
     out = Ref{Ptr{Cvoid}}(C_NULL)
     GC.@preserve ty c begin
         status = @libcall(:pbw_decode_ctx, Cint,

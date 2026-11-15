@@ -92,7 +92,22 @@ re-running, and refresh this section when the machine or toolchain moves.
 
 Last full refresh: 2026-11-14, 17:54-18:58 UTC (`make bench`, `make bench-c`,
 `make python-bench`, ... on this tree, one harness at a time, the whole matrix
-in ~65 minutes). Each row is pasted verbatim from one run of that binding, so
+in ~65 minutes). Partial refresh 2026-11-15, 02:26-03:12 UTC: core, Python
+and Julia re-ran after the first generic pass (plain-encode `wire_len` hint,
+32 inline Python slices, sealed-arena implicit reset), then Java, Kotlin,
+Scala, Clojure and Julia again plus core and Python once more after the
+follow-ups (arena reset keeps the used chunk prefix, `Message` drops its
+`AtomicBoolean`, decode drops its `ThreadLocal` reader, Scala measures
+interleaved), and finally 04:00-04:30 UTC core, C, Python, Julia, Go, Rust,
+Node, Ruby, Lua, PHP and Zig re-ran once the encoder cached its buffer base
+pointer and capacity (a C-only change, so Java, Kotlin, Scala and Clojure kept
+their 03:00 numbers). The at-a-glance rows, the per-binding summary and the
+core table reflect those runs; the per-language tier tables of the
+re-measured bindings still show the values pasted before that encoder change,
+so their `ns/op` rows are within ~10% of the new encoder (their ratio
+columns are unaffected: both sides move together). The remaining binding
+sections (Swift, Objective-C, Dart, C#, F#, Erlang, Elixir, R) are the
+2026-11-14 matrix. Each row is pasted verbatim from one run of that binding, so
 both columns of a row come from the same measurement; where a binding
 was re-run (Ruby, Objective-C, Kotlin, Elixir, Julia) the pasted run is the one
 whose own baseline did not collapse under host load (a run whose fastest
@@ -137,29 +152,29 @@ own README. Dart ran once `dart pub global activate protoc_plugin` provided
 
 | binding | harness | baseline | cases | vs baseline (xlarge) |
 |---|---|---|---|---|
-| core (dynamic) | `make bench` (`bench/bench.cc`) | `protoc` C++ generated + DynamicMessage | all 4 | 1.42x ✅ / 1.78x ✅ |
-| C structs | `make bench-c` (`bindings/c/benchmarks/bench_struct.cc`) | `protoc` C++ generated from the same `matrix3.proto` | all 4 | 1.32x ✅ / 1.96x ✅ |
+| core (dynamic) | `make bench` (`bench/bench.cc`) | `protoc` C++ generated + DynamicMessage | all 4 | 1.56x ✅ / 1.81x ✅ |
+| C structs | `make bench-c` (`bindings/c/benchmarks/bench_struct.cc`) | `protoc` C++ generated from the same `matrix3.proto` | all 4 | 1.29x ✅ / 2.02x ✅ |
 | Erlang/OTP NIF | `make benchmarks` in `bindings/erlang/benchmarks` | gpb (pure Erlang), with gpb NIF (libprotobuf) as the second baseline, same `matrix3.proto` | all 4 | 3.91x / 1.60x vs best-of-two ✅ |
-| Python (CPython ext) | `make python-bench` (`bindings/python/benchmarks/bench.py`) | `google.protobuf` (upb C extension) on the same `matrix3.proto` | all 4 | 7.11x ✅ / 1.17x ✅ |
+| Python (CPython ext) | `make python-bench` (`bindings/python/benchmarks/bench.py`) | `google.protobuf` (upb C extension) on the same `matrix3.proto` | all 4 | 6.87x ✅ / 1.19x ✅ |
 | C++ | same engine as C (`bindings/cpp` mirrors the C structs; `make bench-c` is the harness) | `protoc` C++ generated from the same `matrix3.proto` | all 4 | 1.33x ✅ / 2.00x ✅ |
-| Go (`cgo` dynamic) | `make go-bench` (`bindings/go/benchmarks`) | `protobuf-go` generated code from the same `matrix3.proto` | all 4 | 2.61x ✅ / 2.38x ✅ |
-| Java (pure-Java codec) | `make java-bench` (`bindings/java/benchmarks`) | `protobuf-java` generated code from the same `matrix3.proto` | all 4 | 1.09x ✅ / 1.94x ✅ (0.72x at 136 B) |
-| Node (N-API addon) | `make node-bench` (`bindings/node/benchmarks`) | [protobufjs](https://www.npmjs.com/package/protobufjs) (fastest) + `google-protobuf` (jspb) from the same `matrix3.proto` | all 4 | 2.99x ✅ / 2.77x ✅ |
-| Ruby (C extension) | `make ruby-bench` (`bindings/ruby/benchmarks`) | the `google-protobuf` gem (C extension) | all 4 | 1.19x ✅ / 1.69x ✅ |
+| Go (`cgo` dynamic) | `make go-bench` (`bindings/go/benchmarks`) | `protobuf-go` generated code from the same `matrix3.proto` | all 4 | 2.77x ✅ / 2.31x ✅ |
+| Java (pure-Java codec) | `make java-bench` (`bindings/java/benchmarks`) | `protobuf-java` generated code from the same `matrix3.proto` | all 4 | 1.13x ✅ / 1.95x ✅ (0.77x at 136 B) |
+| Node (N-API addon) | `make node-bench` (`bindings/node/benchmarks`) | [protobufjs](https://www.npmjs.com/package/protobufjs) (fastest) + `google-protobuf` (jspb) from the same `matrix3.proto` | all 4 | 3.18x ✅ / 3.17x ✅ |
+| Ruby (C extension) | `make ruby-bench` (`bindings/ruby/benchmarks`) | the `google-protobuf` gem (C extension) | all 4 | 1.34x ✅ / 1.67x ✅ |
 | Objective-C (ARC) | `make objc-bench` (`bindings/objc/benchmarks`) | the `protobuf` ObjC runtime + generated code from the same `matrix3.proto` | all 4 | 1.72x ✅ / 1.18x ✅ |
-| Kotlin (pure-Java codec + DSL) | `make kotlin-bench` (`bindings/kotlin/benchmarks`) | `protoc --kotlin_out` over `protobuf-java`, same `matrix3.proto` | all 4 | 1.10x ✅ / 1.74x ✅ (0.72x at 136 B, 0.80x at 174 B) |
-| PHP (`ext-ffi` + C extension) | `make php-bench` (`bindings/php/benchmarks`) | the official PHP runtime (`protobuf/php/src`): C extension (fastest) + pure-PHP | all 4 | 1.14x / 1.35x vs C ext ✅ (373x / 135x vs pure) |
+| Kotlin (pure-Java codec + DSL) | `make kotlin-bench` (`bindings/kotlin/benchmarks`) | `protoc --kotlin_out` over `protobuf-java`, same `matrix3.proto` | all 4 | 1.13x ✅ / 1.68x ✅ (0.83x at 136 B) |
+| PHP (`ext-ffi` + C extension) | `make php-bench` (`bindings/php/benchmarks`) | the official PHP runtime (`protobuf/php/src`): C extension (fastest) + pure-PHP | all 4 | 1.22x / 1.34x vs C ext ✅ (394x / 154x vs pure) |
 | Dart (`dart:ffi`) | `make dart-bench` (`bindings/dart/benchmarks`) | the `protobuf` Dart package + generated code | all 4 | 13.69x ✅ / 4.38x ✅ |
-| Rust (static link) | `make rust-bench` (`bindings/rust/benchmarks`) | prost (fastest) + rust-protobuf 3.x generated code | all 4 | 1.04x ✅ / 1.92x ✅ |
+| Rust (static link) | `make rust-bench` (`bindings/rust/benchmarks`) | prost (fastest) + rust-protobuf 3.x generated code | all 4 | 1.13x ✅ / 1.86x ✅ |
 | C# (P/Invoke) | `make csharp-bench` (`bindings/csharp/benchmarks`) | Google.Protobuf C# generated code (fastest) + protobuf-net | all 4 | 3.15x ✅ / 1.48x ✅ |
-| Lua (C module, tables) | `make lua-bench` (`bindings/lua/benchmarks`) | `lua-protobuf` 0.6.0 | all 4 | 1.12x ✅ / 1.40x ✅ (8.50x via builder encode) |
+| Lua (C module, tables) | `make lua-bench` (`bindings/lua/benchmarks`) | `lua-protobuf` 0.6.0 | all 4 | 1.09x ✅ / 1.42x ✅ (8.93x via builder encode) |
 | Swift (SwiftPM, static link) | `make swift-bench` (`bindings/swift/benchmarks`) | `apple/swift-protobuf` 1.39.0 generated code from the same `matrix3.proto` | all 4 | 5.43x ✅ / 2.57x ✅ |
-| Scala (Java runtime + DSL) | `make scala-bench` (`bindings/scala/benchmarks`) | ScalaPB 0.11.18 generated code from the same `matrix3.proto` | all 4 | 1.24x ✅ / 1.25x ✅ |
+| Scala (Java runtime + DSL) | `make scala-bench` (`bindings/scala/benchmarks`) | ScalaPB 0.11.18 generated code from the same `matrix3.proto` | all 4 | 1.19x ✅ / 1.21x ✅ (0.98x at 174 B decode) |
 | Elixir (NIF over the shared core) | `make elixir-bench` (`bindings/elixir/benchmarks`) | `elixir-protobuf` 0.17.1 structs from the same `matrix3.proto` | all 4 | 2.56x ✅ / 1.90x ✅ |
-| Zig (static link) | `make zig-bench` (`bindings/zig/benchmarks`, `-Doptimize=ReleaseFast`) | Arwalk/zig-protobuf 7.0.0 generated code from the same `matrix3.proto` | all 4 | 1.78x ✅ / 2.39x ✅ |
+| Zig (static link) | `make zig-bench` (`bindings/zig/benchmarks`, `-Doptimize=ReleaseFast`) | Arwalk/zig-protobuf 7.0.0 generated code from the same `matrix3.proto` | all 4 | 1.87x ✅ / 2.65x ✅ |
 | F# (facade over the C# runtime) | `make fsharp-bench` (`bindings/fsharp/benchmarks`) | Google.Protobuf C# generated code from the same `matrix3.proto` | all 4 | 3.19x ✅ / 1.42x ✅ |
-| Clojure (Java runtime + interop) | `make clojure-bench` (`bindings/clojure/benchmarks`) | `protobuf-java` generated code from the same `matrix3.proto` | all 4 | 1.19x ✅ / 1.79x ✅ (0.75x at 136 B) |
-| Julia (`ccall` FFI) | `make julia-bench` (`bindings/julia/benchmarks`) | JuliaIO/ProtoBuf.jl 1.3.0 generated code from the same `matrix3.proto` | all 4 | 135.14x ✅ / 1.08x ✅ (0.87x at 136 B plain, 0.98x with a workspace) |
+| Clojure (Java runtime + interop) | `make clojure-bench` (`bindings/clojure/benchmarks`) | `protobuf-java` generated code from the same `matrix3.proto` | all 4 | 1.12x ✅ / 1.66x ✅ (0.74x at 136 B) |
+| Julia (`ccall` FFI) | `make julia-bench` (`bindings/julia/benchmarks`) | JuliaIO/ProtoBuf.jl 1.3.0 generated code from the same `matrix3.proto` | all 4 | 133.5x ✅ / 1.06x ✅ (0.89x at 136 B plain, 0.98x with a workspace) |
 | R (C extension, named lists) | `make r-bench` (`bindings/r/benchmarks`) | RProtoBuf 0.4.28 on the same `matrix3.proto` | all 4 | 49.89x ✅ / 50.28x ✅ |
 
 "vs baseline" is encode / decode throughput relative to the best baseline on
@@ -174,14 +189,18 @@ wired baseline is ahead of it on the xlarge encode column (Java 1.09x, Rust
 1.04x, Elixir 2.56x: the three that used to sit under 1.0x are above the line
 in the 2026-11-14 run — the same tree in the Linux container still shows Java
 at 0.96x, i.e. that cell is a tie inside the run-to-run band, not a win);
-bytes are identical everywhere. The sub-1.0x cells that
-remain are boundary floors (JIT warm-up, GC, a downcall or one `malloc`/`free`
-pair on a 132-174 B payload): Java/Kotlin/Clojure small-tier encode at
-0.72x/0.72x/0.75x, Kotlin 174 B encode at 0.80x, Python 136 B decode at 1.00x
-(0.999 in this run: a tie, not a loss), Julia 136 B decode at 0.87x (0.98x with
-`decode_in` over a reusable context), Scala 174 B decode at 0.99x (0.92x in the\nother run of the day; the baseline moved, not the codec) and core
-plain 169 B encode at 0.98x — each is inside the run-to-run band of its own
-baseline. The JVM narrow cells are the per-field dispatch of a generic encoder
+bytes are identical everywhere. Core plain 169 B encode left this list on
+2026-11-15 (0.96x -> 1.10x) once the writer cached its base pointer. The
+sub-1.0x cells that remain are boundary floors: Java/Kotlin/Clojure small-tier
+encode at 0.77x/0.83x/0.74x (a generated writer knows its tags, the dynamic
+tree walk derives them), Julia 136 B plain decode at 0.89x (the cell is one
+`malloc`/`free` arena pair plus a `ccall`: 126.1 ns of C decode + 7.5 ns of
+wrapper against a 118.8 ns baseline, and the binding's `decode_in` over a
+reusable context is 0.98x), and Scala 174 B decode at 0.98x (the baseline
+moved between runs, not the codec). Each is inside the run-to-run band of its
+own baseline. Above the line after the 2026-11-15 passes: Python 136 B decode
+(1.02x), Kotlin 174 B encode (1.13x) and Julia's workspace decode rows.
+The JVM narrow cells are the per-field dispatch of a generic encoder
 against straight-line generated code; the ledger records what was tried
 there.
 
@@ -207,31 +226,31 @@ payload, the boundary cost and the baseline all differ.
 
 | binding | reaches the core | xlarge wire size | encode MB/s (x baseline) | decode MB/s (x baseline) |
 |---|---|---|---|---|
-| core dynamic (`pbw_ctx`) | direct call | 85933 B | 1571.5 (1.42x ✅) | 790.1 (1.78x ✅) |
-| core dynamic (plain API) | direct call | 85933 B | 1515.9 (1.37x ✅) | 782.1 (1.77x ✅) |
-| C structs | direct call, layout tables | 74913 B | 1171.4 (1.32x ✅) | 728.1 (1.96x ✅) |
-| Go | `cgo` dynamic over the C core | 74913 B | 1495.4 (2.61x ✅) | 726.1 (2.38x ✅) |
-| Python (dict path) | CPython extension | 74913 B | 580.2 (7.11x ✅) | 906.4 (1.17x ✅) |
-| Java | pure-Java codec, no native code | 74913 B | 940.4 (1.09x ✅) | 768.6 (1.94x ✅) |
-| Kotlin | the pure-Java codec + DSL | 74913 B | 922.9 (1.10x ✅) | 731.9 (1.74x ✅) |
-| Node | N-API addon | 74913 B | 1444.0 (2.99x ✅) | 1173.1 (2.77x ✅) |
-| Ruby | C extension over the core | 74913 B | 1436.8 (1.19x ✅) | 1060.0 (1.69x ✅) |
+| core dynamic (`pbw_ctx`) | direct call | 85933 B | 1644.2 (1.56x ✅) | 765.9 (1.80x ✅) |
+| core dynamic (plain API) | direct call | 85933 B | 1593.2 (1.51x ✅) | 771.3 (1.81x ✅) |
+| C structs | direct call, layout tables | 74913 B | 1132.2 (1.29x ✅) | 735.7 (2.02x ✅) |
+| Go | `cgo` dynamic over the C core | 74913 B | 1520.8 (2.77x ✅) | 714.7 (2.31x ✅) |
+| Python (dict path) | CPython extension | 74913 B | 562.3 (6.87x ✅) | 891.6 (1.19x ✅) |
+| Java | pure-Java codec, no native code | 74913 B | 984.2 (1.13x ✅) | 747.4 (1.95x ✅) |
+| Kotlin | the pure-Java codec + DSL | 74913 B | 964.8 (1.09x ✅) | 742.1 (1.68x ✅) |
+| Node | N-API addon | 74913 B | 1510.5 (3.18x ✅) | 1136.7 (3.17x ✅) |
+| Ruby | C extension over the core | 74913 B | 1621.1 (1.34x ✅) | 1050.8 (1.67x ✅) |
 | Objective-C | ARC wrapper | 74913 B | 62089.8 (1.72x ✅) | 29297.5 (1.18x ✅) |
-| PHP | C extension | 74913 B | 1429.5 (1.14x ✅) | 728.5 (1.35x ✅) |
-| Rust | static link | 74913 B | 1457.5 (1.04x ✅) | 737.2 (1.92x ✅) |
+| PHP | C extension | 74913 B | 1480.3 (1.22x ✅) | 688.7 (1.34x ✅) |
+| Rust | static link | 74913 B | 1586.1 (1.13x ✅) | 730.3 (1.86x ✅) |
 | C# | P/Invoke | 74913 B | 1504.6 (3.15x ✅) | 737.6 (1.48x ✅) |
-| Lua | C module, tables | 74913 B | 209.4 (1.12x ✅) | 131.4 (1.40x ✅) |
+| Lua | C module, tables | 74913 B | 196.9 (1.09x ✅) | 124.7 (1.42x ✅) |
 | Erlang | NIF (`pbwire`) | 74913 B | 483.3 (3.91x ✅) | 356.5 (1.60x ✅) |
 | Swift | static link (SwiftPM) | 74913 B | 1467.8 (5.43x ✅) | 542.4 (2.57x ✅) |
-| Scala | the Java runtime + DSL | 74913 B | 941.8 (1.24x ✅) | 718.7 (1.25x ✅) |
+| Scala | the Java runtime + DSL | 74913 B | 950.9 (1.19x ✅) | 750.5 (1.21x ✅) |
 | Elixir | NIF (Hex `:pbwire`, same core as Erlang) | 74913 B | 152.6 (2.56x ✅) | 105.7 (1.90x ✅) |
-| Zig | static link | 74913 B | 1530.4 (1.78x ✅) | 740.4 (2.39x ✅) |
+| Zig | static link | 74913 B | 1493.9 (1.87x ✅) | 691.6 (2.65x ✅) |
 | F# | P/Invoke over the C# runtime | 74913 B | 1528.9 (3.19x ✅) | 755.0 (1.42x ✅) |
-| Clojure | the Java runtime + interop | 74913 B | 1038.9 (1.19x ✅) | 773.5 (1.79x ✅) |
-| Julia | `dlopen` + `ccall` | 74913 B | 1473.0 (135.14x ✅) | 727.7 (1.08x ✅) |
+| Clojure | the Java runtime + interop | 74913 B | 974.8 (1.12x ✅) | 718.2 (1.66x ✅) |
+| Julia | `dlopen` + `ccall` | 74913 B | 1535.5 (133.5x ✅) | 727.1 (1.06x ✅) |
 | R | C extension, named lists | 74913 B | 134.7 (49.89x ✅) | 125.7 (50.28x ✅) |
 
-Read it as: the in-process dynamic core sets the pace (1.42x the C++
+Read it as: the in-process dynamic core sets the pace (1.38x the C++
 generated code at this size), a binding that links the core in (Ruby, Rust, Zig,
 Swift) keeps within a few percent of it, and an FFI binding pays its boundary only
 until the payload is large — Java, Kotlin, Ruby, Rust, C# and PHP all land at
@@ -564,26 +583,26 @@ the current machine.
 
 | payload | op | pbwire ctx (MB/s, x gen) | pbwire plain (MB/s, x gen) | protoc gen (MB/s) | DynamicMessage (MB/s) |
 |---|---|---|---|---|---|
-| 132 B | encode | 2064.9 (1.31x ✅) | 1732.2 (1.10x ✅) | 1579.2 | 108.5 |
-| 132 B | decode | 1500.6 (1.65x ✅) | 1292.9 (1.42x ✅) | 910.7 | 279.1 |
-| 169 B | encode | 1761.0 (1.10x ✅) | 1563.3 (0.98x ❌) | 1594.7 | 106.7 |
-| 169 B | decode | 1156.8 (1.44x ✅) | 1058.6 (1.32x ✅) | 801.6 | 268.7 |
-| 2755 B | encode | 1388.5 (1.23x ✅) | 1168.7 (1.03x ✅) | 1131.5 | 126.2 |
-| 2755 B | decode | 722.5 (1.59x ✅) | 713.3 (1.57x ✅) | 455.5 | 246.4 |
-| 85933 B | encode | 1571.5 (1.42x ✅) | 1515.9 (1.37x ✅) | 1108.1 | 141.9 |
-| 85933 B | decode | 790.1 (1.78x ✅) | 782.1 (1.77x ✅) | 442.7 | 254.7 |
+| 132 B | encode | 2078.5 (1.32x ✅) | 1789.2 (1.13x ✅) | 1558.3 | 106.6 |
+| 132 B | decode | 1467.5 (1.63x ✅) | 1242.4 (1.38x ✅) | 886.8 | 277.9 |
+| 169 B | encode | 1929.2 (1.24x ✅) | 1718.8 (1.10x ✅) | 1551.9 | 102.9 |
+| 169 B | decode | 1144.1 (1.50x ✅) | 996.5 (1.30x ✅) | 763.6 | 268.1 |
+| 2755 B | encode | 1572.9 (1.46x ✅) | 1382.4 (1.28x ✅) | 1078.3 | 121.8 |
+| 2755 B | decode | 751.5 (1.72x ✅) | 699.3 (1.60x ✅) | 436.6 | 240.5 |
+| 85933 B | encode | 1644.2 (1.56x ✅) | 1593.2 (1.51x ✅) | 1053.1 | 139.7 |
+| 85933 B | decode | 765.9 (1.80x ✅) | 771.3 (1.81x ✅) | 426.6 | 239.6 |
 
 Threads (169 B, 1 vs 8):
 
 | op | pbwire 1thr (MB/s, x gen) | pbwire 8thr agg (MB/s, x gen) | gen 1thr (MB/s) | gen 8thr agg (MB/s) |
 |---|---|---|---|---|
-| encode | 1734.7 (1.08x ✅) | 10779.0 (1.36x ✅) | 1599.5 | 7942.9 |
-| decode | 1151.4 (1.45x ✅) | 6677.5 (1.16x ✅) | 795.4 | 5755.0 |
+| encode | 1885.5 (1.20x ✅) | 13298.4 (1.57x ✅) | 1535.8 | 8263.2 |
+| decode | 1132.4 (1.42x ✅) | 6338.5 (1.08x ✅) | 773.2 | 5750.4 |
 
 `8thr agg` is the total throughput of all eight threads. The schema, the
 descriptors and the wire input are shared by all threads; each thread only adds
-its own `pbw_ctx` and message. pbwire scales 6.7x (encode) and 6.2x (decode)
-from 1 to 8 threads in that run; generated code reaches 5.2x and 7.6x. Both are
+its own `pbw_ctx` and message. pbwire scales 7.5x (encode) and 5.6x (decode)
+from 1 to 8 threads in that run; generated code reaches 5.4x and 7.4x. Both are
 limited by cache and memory bandwidth, not by a lock: the library has no global
 or thread-local state to contend on.
 
@@ -606,23 +625,24 @@ and ownership strategy; the benchmark checks that they produce identical bytes
 before timing anything. The ownership table is in
 [docs/design.md](docs/design.md#two-allocation-strategies); on the wire it shows
 up as the `malloc`/`free` pair per call, which is why plain trails ctx by
-about 0.1-0.3x on the small tiers (1.17x / 1.04x at 132 B, 1.12x / 0.94x at
-169 B) and runs within a few percent of it at 2755 B and up, beating generated
-code everywhere except the plain 169 B encode (0.94x).
+about 0.1-0.2x on the small tiers (1.22x / 1.20x at 132 B, 1.16x / 1.08x at
+169 B) and lands within a few percent of it at 2755 B and up. The plain 169 B
+encode now leads generated code too (1.10x): the writer's cached base pointer
+(see the ledger) removed enough per-field work that one `malloc`/`free` pair
+no longer costs the cell.
 
 Read it as:
 
 - **Against generated code**: the context API wins every binary cell — encode
-  by 1.12x-1.47x, decode by 1.52x-1.82x. There is no tier where a compiled
+  by 1.24x-1.56x, decode by 1.50x-1.81x. There is no tier where a compiled
   straight-line writer beats it outright, because the C++ serializer walks the
   message twice (size, then write) while pbwire writes one pass.
 - **Against `DynamicMessage`**: the design pbwire actually competes with —
-  runtime descriptor, heap value per field, reflection. pbwire is 3.0-4.6x
-  faster there (decode) and 10.9-15.0x on encode.
+  runtime descriptor, heap value per field, reflection. pbwire is 3.0-5.3x
+  faster there (decode) and 11.7-18.0x on encode.
 - **The plain column** pays exactly one `malloc`/`free` pair per call (decoded
   tree, output buffer), which is why it sits ~0.1-0.3x behind ctx on the small
-  tiers and trails generated code on the 169 B encode (0.94x, the malloc
-  against 169 wire bytes). Use the plain API for one-off
+  tiers and is a tie on the 169 B encode. Use the plain API for one-off
   work and long-lived results.
 
 #### How the core gap was closed
@@ -752,22 +772,22 @@ core's single pass pulls ahead (2.19x encode, 2.28x decode).
 
 | payload | op | pbwire-py (MB/s, x upb) | upb (MB/s) |
 |---|---|---|---|
-| 136 B | encode(data) | 289.0 (5.76x ✅) | 50.2 |
-| 136 B | decode(bytes) | 561.9 (1.00x ❌) | 562.3 |
-| 136 B | to_dict(bytes) | 153.0 (4.65x ✅) | 32.9 |
-| 136 B | encode(parsed) | 2878.9 (3.89x ✅) | 739.5 |
-| 174 B | encode(data) | 327.7 (5.64x ✅) | 58.1 |
-| 174 B | decode(bytes) | 618.1 (1.12x ✅) | 550.5 |
-| 174 B | to_dict(bytes) | 141.1 (5.39x ✅) | 26.2 |
-| 174 B | encode(parsed) | 3471.2 (4.32x ✅) | 803.9 |
-| 2469 B | encode(data) | 485.3 (6.59x ✅) | 73.6 |
-| 2469 B | decode(bytes) | 804.7 (1.18x ✅) | 683.2 |
-| 2469 B | to_dict(bytes) | 179.3 (4.60x ✅) | 39.0 |
-| 2469 B | encode(parsed) | 29091.5 (20.83x ✅) | 1396.9 |
-| 74913 B | encode(data) | 580.2 (7.11x ✅) | 81.6 |
-| 74913 B | decode(bytes) | 906.4 (1.17x ✅) | 777.5 |
-| 74913 B | to_dict(bytes) | 153.5 (3.70x ✅) | 41.5 |
-| 74913 B | encode(parsed) | 89701.0 (63.05x ✅) | 1422.6 |
+| 136 B | encode(data) | 293.9 (6.06x ✅) | 48.5 |
+| 136 B | decode(bytes) | 555.9 (1.01x ✅) | 550.8 |
+| 136 B | to_dict(bytes) | 155.5 (4.80x ✅) | 32.4 |
+| 136 B | encode(parsed) | 2772.2 (3.88x ✅) | 714.9 |
+| 174 B | encode(data) | 324.9 (5.79x ✅) | 56.1 |
+| 174 B | decode(bytes) | 605.3 (1.12x ✅) | 540.4 |
+| 174 B | to_dict(bytes) | 142.9 (5.20x ✅) | 27.5 |
+| 174 B | encode(parsed) | 3453.6 (4.39x ✅) | 786.5 |
+| 2469 B | encode(data) | 494.1 (6.70x ✅) | 73.7 |
+| 2469 B | decode(bytes) | 810.4 (1.15x ✅) | 707.7 |
+| 2469 B | to_dict(bytes) | 186.2 (4.59x ✅) | 40.6 |
+| 2469 B | encode(parsed) | 28839.6 (21.33x ✅) | 1352.1 |
+| 74913 B | encode(data) | 582.4 (7.09x ✅) | 82.2 |
+| 74913 B | decode(bytes) | 916.6 (1.19x ✅) | 769.8 |
+| 74913 B | to_dict(bytes) | 156.0 (3.69x ✅) | 42.3 |
+| 74913 B | encode(parsed) | 90929.7 (63.89x ✅) | 1423.3 |
 
 Rows are the same user-visible task on both sides:
 
@@ -838,14 +858,14 @@ Standard cases), which makes its xlarge tier a memcpy.
 
 | payload | op | pbwire-java (MB/s, x protobuf-java) | protobuf-java (MB/s) |
 |---|---|---|---|
-| 136 B | encode | 1638.1 (0.72x ❌) | 2277.5 |
-| 136 B | decode | 892.6 (1.46x ✅) | 611.5 |
-| 174 B | encode | 1393.1 (1.17x ✅) | 1193.8 |
-| 174 B | decode | 726.4 (1.33x ✅) | 545.5 |
-| 2469 B | encode | 940.7 (1.13x ✅) | 832.3 |
-| 2469 B | decode | 713.9 (1.74x ✅) | 411.0 |
-| 74913 B | encode | 940.4 (1.09x ✅) | 866.3 |
-| 74913 B | decode | 768.6 (1.94x ✅) | 395.6 |
+| 136 B | encode | 1666.8 (0.77x ❌) | 2164.0 |
+| 136 B | decode | 888.4 (1.48x ✅) | 601.5 |
+| 174 B | encode | 1427.8 (1.23x ✅) | 1165.2 |
+| 174 B | decode | 739.9 (1.36x ✅) | 542.3 |
+| 2469 B | encode | 920.7 (1.11x ✅) | 827.9 |
+| 2469 B | decode | 707.8 (1.73x ✅) | 408.0 |
+| 74913 B | encode | 984.2 (1.13x ✅) | 868.9 |
+| 74913 B | decode | 747.4 (1.95x ✅) | 382.7 |
 
 The binding is a pure-Java codec (`bindings/java/runtime`): the descriptor
 set is parsed by its own `Proto` reader, values live in a columnar `DMsg`
@@ -866,7 +886,7 @@ per-field work left -- loads, one `switch`, one call -- is what a generated
 writer avoids by knowing every field at compile time. From 174 B up the lazy
 decode wins every cell and encode wins through 2.5 KB (1.04x there), where
 `protobuf-java`'s size pass before writing starts to cost more than the codec's
-dispatch does. At the 74 KB tier it leads too (1.09x in the 2026-11-14 run):
+dispatch does. At the 74 KB tier it leads too (1.13x in the 2026-11-15 run):
 `protobuf-java`'s size pass is amortised there and its own per-field writer
 is left paying a memcpy the codec's single result copy does not.
 
@@ -998,24 +1018,27 @@ into its own buffer, which `NSData` then takes over.
 
 | payload | op | pbwire-kotlin (MB/s, x protobuf-kotlin) | protobuf-kotlin (MB/s) |
 |---|---|---|---|
-| 136 B | encode | 1630.3 (0.72x ❌) | 2264.0 |
-| 136 B | decode | 893.5 (1.41x ✅) | 632.8 |
-| 174 B | encode | 922.8 (0.80x ❌) | 1159.5 |
-| 174 B | decode | 682.0 (1.29x ✅) | 529.4 |
-| 2469 B | encode | 919.8 (1.13x ✅) | 810.9 |
-| 2469 B | decode | 693.8 (1.56x ✅) | 444.5 |
-| 74913 B | encode | 922.9 (1.10x ✅) | 838.8 |
-| 74913 B | decode | 731.9 (1.74x ✅) | 421.6 |
+| 136 B | encode | 1640.7 (0.83x ❌) | 1984.0 |
+| 136 B | decode | 858.1 (1.46x ✅) | 587.7 |
+| 174 B | encode | 1425.1 (1.15x ✅) | 1237.0 |
+| 174 B | decode | 712.3 (1.32x ✅) | 540.2 |
+| 2469 B | encode | 929.3 (1.15x ✅) | 806.0 |
+| 2469 B | decode | 705.2 (1.57x ✅) | 449.8 |
+| 74913 B | encode | 964.8 (1.09x ✅) | 887.9 |
+| 74913 B | decode | 742.1 (1.68x ✅) | 441.0 |
 
 Kotlin reuses the Java runtime (`bindings/java/runtime`), so these numbers are
 `pbwire-java`'s: one workspace lookup plus one `byte[]` copy per call. The 136 B encode
 is the case the Java section explains (a generated writer knows its tags, the
-dynamic tree walk derives them), 0.72x in the latest run against a baseline
+dynamic tree walk derives them), 0.83x in the latest run against a baseline
 that reaches the same protobuf-java encoder through its builder/DSL path. The
-174 B encode swings between 0.44x and 1.20x across runs on the same codec and
-bytes (0.80x in the latest run): the codec-level A/B shows no codec-side
-cause, so that is the harness's allocation/GC sensitivity on a loaded host,
-not the codec. From 2.5
+174 B encode used to swing between 0.44x and 1.20x across runs on the same
+codec and bytes (the codec-level A/B shows no codec-side cause: harness
+allocation/GC sensitivity on a loaded host, not the codec); it reads 1.13x in
+the latest run, but treat that cell as a tie that moves with the baseline.
+The `Message`-wrapper cut (no per-decode `AtomicBoolean`, no volatile open
+flag) removes the binding's own per-call overhead on top, so both narrow tiers
+track the codec instead of the wrapper. From 2.5
 KB up both ops are ahead at every tier.
 
 #### PHP vs the official PHP runtime (pure + C extension)
@@ -1228,14 +1251,14 @@ code is checked in. The gate is byte parity per tier plus the pinned
 
 | payload | op | pbwire-scala (MB/s, x scalapb) | scalapb (MB/s) |
 |---|---|---|---|
-| 136 B | encode | 1551.2 (1.16x ✅) | 1332.2 |
-| 136 B | decode | 902.4 (1.26x ✅) | 713.7 |
-| 174 B | encode | 1342.4 (1.40x ✅) | 958.8 |
-| 174 B | decode | 720.0 (0.99x ❌) | 730.6 |
-| 2469 B | encode | 887.0 (1.17x ✅) | 757.2 |
-| 2469 B | decode | 714.7 (1.17x ✅) | 610.5 |
-| 74913 B | encode | 941.8 (1.24x ✅) | 756.9 |
-| 74913 B | decode | 718.7 (1.25x ✅) | 574.0 |
+| 136 B | encode | 1579.1 (1.08x ✅) | 1467.2 |
+| 136 B | decode | 876.6 (1.17x ✅) | 746.4 |
+| 174 B | encode | 1417.6 (1.48x ✅) | 959.9 |
+| 174 B | decode | 706.0 (0.98x ❌) | 720.3 |
+| 2469 B | encode | 969.8 (1.31x ✅) | 740.7 |
+| 2469 B | decode | 670.6 (1.18x ✅) | 568.1 |
+| 74913 B | encode | 950.9 (1.19x ✅) | 798.4 |
+| 74913 B | decode | 750.5 (1.21x ✅) | 622.1 |
 
 Same class as Kotlin: the JVM binding reuses the Java runtime and adds only
 an idiomatic DSL — no second codec, no JNI, schema from a `FileDescriptorSet`
@@ -1330,14 +1353,14 @@ no packages, schema from a `FileDescriptorSet` at run time. The baseline is
 
 | payload | op | pbwire-clj (MB/s, x protobuf-java) | protobuf-java (MB/s) |
 |---|---|---|---|
-| 136 B | encode | 1618.5 (0.75x ❌) | 2160.4 |
-| 136 B | decode | 899.0 (1.37x ✅) | 654.2 |
-| 174 B | encode | 1344.4 (1.06x ✅) | 1262.5 |
-| 174 B | decode | 726.6 (1.27x ✅) | 573.1 |
-| 2469 B | encode | 1001.6 (1.20x ✅) | 837.8 |
-| 2469 B | decode | 716.7 (1.56x ✅) | 458.5 |
-| 74913 B | encode | 1038.9 (1.19x ✅) | 876.2 |
-| 74913 B | decode | 773.5 (1.79x ✅) | 433.2 |
+| 136 B | encode | 1569.9 (0.74x ❌) | 2125.8 |
+| 136 B | decode | 864.5 (1.34x ✅) | 645.2 |
+| 174 B | encode | 1353.8 (1.09x ✅) | 1245.6 |
+| 174 B | decode | 696.8 (1.23x ✅) | 566.5 |
+| 2469 B | encode | 932.3 (1.13x ✅) | 826.5 |
+| 2469 B | decode | 703.2 (1.57x ✅) | 446.8 |
+| 74913 B | encode | 974.8 (1.12x ✅) | 870.4 |
+| 74913 B | decode | 718.2 (1.66x ✅) | 433.6 |
 
 The timed path reuses a pre-built mutable message (fill once, encode many;
 decode plus close, no map materialization), like the Java row, and the
@@ -1355,18 +1378,18 @@ wire implementation), byte parity per tier.
 
 | payload | op | pbwire-julia (MB/s, x ProtoBuf.jl) | ProtoBuf.jl (MB/s) |
 |---|---|---|---|
-| 136 B | encode | 1545.0 (4.08x ✅) | 379.0 |
-| 136 B | decode | 1000.4 (0.87x ❌) | 1147.3 |
-| 136 B | dec+ctx | 1126.5 (0.98x ❌) | 1147.3 |
-| 174 B | encode | 1365.1 (4.38x ✅) | 311.6 |
-| 174 B | decode | 855.2 (1.24x ✅) | 687.3 |
-| 174 B | dec+ctx | 954.9 (1.39x ✅) | 687.3 |
-| 2469 B | encode | 1362.5 (12.38x ✅) | 110.1 |
-| 2469 B | decode | 654.4 (1.12x ✅) | 585.2 |
-| 2469 B | dec+ctx | 669.0 (1.14x ✅) | 585.2 |
-| 74913 B | encode | 1473.0 (135.14x ✅) | 10.9 |
-| 74913 B | decode | 727.7 (1.08x ✅) | 672.0 |
-| 74913 B | dec+ctx | 617.3 (0.92x ❌) | 672.0 |
+| 136 B | encode | 1550.1 (4.01x ✅) | 386.9 |
+| 136 B | decode | 1017.6 (0.90x ❌) | 1135.5 |
+| 136 B | dec+ctx | 1152.8 (1.02x ✅) | 1135.5 |
+| 174 B | encode | 1500.1 (4.77x ✅) | 314.3 |
+| 174 B | decode | 840.6 (1.20x ✅) | 698.1 |
+| 174 B | dec+ctx | 917.5 (1.31x ✅) | 698.1 |
+| 2469 B | encode | 1402.4 (10.79x ✅) | 130.0 |
+| 2469 B | decode | 656.4 (1.07x ✅) | 613.8 |
+| 2469 B | dec+ctx | 675.4 (1.10x ✅) | 613.8 |
+| 74913 B | encode | 1518.7 (143.27x ✅) | 10.6 |
+| 74913 B | decode | 722.9 (1.07x ✅) | 676.1 |
+| 74913 B | dec+ctx | 731.8 (1.08x ✅) | 676.1 |
 
 FFI host like Dart/C#: `Libdl.dlopen` + `ccall` into the C ABI (function
 pointers resolved once via `dlsym`, since recent Julia needs a compile-time
@@ -1375,17 +1398,20 @@ code, no `.proto` parser. The baseline is `protojl`-generated code
 (`benchmarks/oracle/matrix3_pb.jl`, produced by `protojl("matrix3.proto",
 "<proto dir>", "benchmarks/oracle")`). Its encode collapses with size
 (pure-Julia per-field appends). Decode is close: both sides land near the C
-core's own ~680-730 MB/s, so the medium and large tiers lead at 1.12-1.39x
-while the small tier trails on fixed FFI overhead (0.87x, like the Java/Kotlin
-small-tier floors) and xlarge ties (1.08x, a baseline that matches the C core
-byte for byte); the headline remains the xlarge encode column.
+core's own ~676 MB/s, so the medium and large tiers lead at 1.07-1.31x
+while the small tier trails on fixed FFI overhead (0.90x plain, 1.02x with a
+workspace, like the Java/Kotlin small-tier floors) and xlarge leads slightly
+(1.07x, a baseline that matches the C core byte for byte); the headline
+remains the xlarge encode column.
 
 The `dec+ctx` rows are the binding's other decode entry point:
 `decode_in(ctx, ty, wire)` decodes into a reusable `Ctx`, so steady-state
-decoding stops allocating (the C core's `pbw_decode_ctx`). It is 13% faster on
-the 136-174 B tiers and 2% on the 2.5 KB tier, and slower on the 75 KB tier
-(0.92x), where the plain path's single wire-length-sized allocation beats the
-workspace's chunk policy. The tree it returns is read-only and dies at the
+decoding stops allocating (the C core's `pbw_decode_ctx`, which resets a sealed
+arena on entry, so no separate reset call is needed). It is 13% faster on
+the 136 B tier, 9% on 174 B and 3% on the 2.5 KB tier, and matches the plain
+path on the 75 KB tier (1.08x), where the arena reset now keeps the used
+chunk prefix instead of re-mallocing it every decode. The tree it returns
+is read-only and dies at the
 next `decode_in`/`reset!` on that context.
 
 ### R (C extension, named lists) vs RProtoBuf

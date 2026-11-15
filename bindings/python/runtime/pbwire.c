@@ -1342,7 +1342,9 @@ typedef struct {
 } slice_t;
 
 #define SLICE_DEAD 0xffffffffu /* cleared by a later member of its oneof */
-#define MSG_INLINE_SLICES 16
+/* 32 inline slices cover a typical message with ~20 top-level fields and no heap:
+ * short messages decode with zero mallocs, larger ones still grow by doubling. */
+#define MSG_INLINE_SLICES 32
 
 typedef struct {
     PyObject_HEAD PyObject *mtype; /* owned MessageType */
