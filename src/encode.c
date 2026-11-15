@@ -143,14 +143,10 @@ w_copy(uint8_t *dst, const uint8_t *src, size_t len)
         memcpy(dst, src, len);
         return;
     }
-    while (i + 8 <= len) {
-        memcpy(dst + i, src + i, 8);
-        i += 8;
-    }
-    if (i + 4 <= len) {
-        memcpy(dst + i, src + i, 4);
-        i += 4;
-    }
+    /* Byte loop, not chunked memcpy: callers pass small stack tags (e.g. a
+     * 5-byte group END tag), and memcpy(dst + i, src + i, 8) trips
+     * -Werror=array-bounds under _FORTIFY_SOURCE even when the length guard
+     * rules it out at runtime. The compiler unrolls this on its own. */
     for (; i < len; i++) {
         dst[i] = src[i];
     }
