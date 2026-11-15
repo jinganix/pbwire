@@ -296,7 +296,8 @@ cells whose ✅/❌ flips with host load at the 136-174 B tier. The 2026-11-14
 refresh added two more of those at the largest tier, both inside their
 baseline's own run-to-run band: Java xlarge encode 0.95x and Rust xlarge encode
 0.98x (prost's one-pass writer at 1333 MB/s against the core's 1305), and
-Elixir's xlarge decode 0.99x. The tables keep the strict `>= 1.0x` rule the
+Elixir's xlarge decode 0.99x (closed later: see the one-pass struct build
+below). The tables keep the strict `>= 1.0x` rule the
 project asks for: a cell under 1.0x is marked ❌ even when it is inside the
 noise band, and the text says so.
 
@@ -461,3 +462,235 @@ New side wins every tier in every round. Same-run ratio against protobuf-go
   equal to `pbw_encode_deterministic`, 2-byte-short buffer is
   `PBW_ERR_LIMIT`, NULL args rejected), `make go-test` (byte equality and
   round trips over every tier), `make difftest` and `make test`.
+
+## Cell: Elixir xlarge decode (0.99x) — kept
+
+BENCHMARKS.md listed `pbwire-elixir` 56.3 MB/s against `elixir-protobuf` 56.8
+on the xlarge tier, the only Elixir cell under 1.0x, while every smaller tier
+was 1.67-1.82x. That shape (worse as the payload grows) is the signature of a
+per-message cost, not a per-byte one: the binding decoded the NIF's record
+tuples and then walked them a second time to build the struct.
+
+### Where the time went
+
+`Pbwire.from_tuple/2` ran `Tuple.to_list` + `Enum.zip(fields, values)` +
+`Enum.map` + `pairs ++ [__unknown_fields__: []]` + `struct(mod, pairs)` per
+message — five passes and four intermediate lists, on every decoded message,
+nested ones included (3001 of them at xlarge). The NIF side was already
+one-pass; the Elixir side was not.
+
+### The change
+
+The schema spec now carries two per-position tables built once at load
+(`keys`: the struct key per field, `flds`: the field metadata per field), and
+`from_tuple` indexes them while walking the record once:
+
+```elixir
+defp from_tuple(%{mod: mod, keys: keys, flds: flds} = spec, tuple) do
+  m = min(tuple_size(flds), tuple_size(tuple) - 1)
+  struct(mod, tuple_pairs(spec, tuple, 0, m, keys, flds, []))
+end
+```
+
+`struct/2` stays (the generated module's other defaults — `__protobuf__`,
+`__pb_extensions__` — must survive), and a record shorter than the field table
+keeps the struct defaults for the fields it does not carry, exactly like the
+`Enum.zip` this replaces.
+
+### A/B
+
+Same machine, same harness (`make elixir-bench`), one run per side; the
+baseline column did not move, which is what makes the comparison
+`elixir-protobuf` 56.8 -> 57.2 MB/s (noise) against pbwire 56.3 -> 104.5 MB/s:
+
+| tier | before (decode) | after (decode) | x baseline after |
+|---|---|---|---|
+| 136 B | 48.2 | 102.2 | 1.83x |
+| 174 B | 99.7 | 105.0 | 1.81x |
+| 2469 B | 56.1 | 109.9 | 2.02x |
+| 74913 B | 56.3 (0.99x) | 104.5 | 1.83x |
+
+Encode is untouched (it builds the tuple directly and was already 2.4-2.9x).
+Verified by `make elixir-test` (30 tests incl. the generated-model suite) and
+`mix format --check-formatted`.
+
+## Rejected: Java "no trailing copy" and JVM decode allocation trims
+
+Both are real wins on paper and both measured inside the host's noise band,
+so they are not in the tree. The harness record (`Bench.java`) times a built
+tree through six `Runnable`s at one call site; the codec's own floor is
+1.1-3.3 GB/s. Two probes were built for this round:
+
+- a two-classloader probe (`TimedCodec`, one JVM, both builds, interleaved
+  rounds, `ThreadMXBean.getCurrentThreadCpuTime`), which needs the result
+  stored in a static or escape analysis scalar-replaces the arrays and
+  under-measures by 3x;
+- a CPU-time copy of `Bench` (`BenchCpu`, same lambda shapes as the table),
+  which is load-proof but still ±1.5-3% per row at 174 B.
+
+What was measured (min over 5-9 interleaved rounds, CPU time, both sides):
+
+| candidate | result |
+|---|---|
+| encode: size the workspace buffer from the last result, hand it out with no trim copy (`copyOut`) | 174 B 1.00-1.01x, 2469 B 1.00x, 74913 B 1.01x (the 75 KB copy costs ~1%: this machine's memcpy is ~100 GB/s) |
+| decode: presence as a bitmap inside `num[]` instead of a `boolean[]`, shared empty `ref`/`oneofCase` arrays, `Limits.defaults()` singleton | 174 B 1.006-1.011x; the same build's untouched encode row moved 1.8-3.4% in the same runs |
+
+Conclusions kept from the round: the trailing-copy removal is worth ~1% on
+every tier, not the ~5% the byte count suggests; the allocation trims are
+worth ~1% at 174 B; and both are below this host's floor (load average 16 on
+14 cores from unrelated processes, matching the 2026-11-14 re-run round
+above). Java's xlarge encode also measures 1.15x on this host against the
+0.95x in the table, i.e. that cell is baseline-run-dependent. One change from
+the round *did* survive: `Limits.defaults()` returns a shared immutable
+instance instead of allocating one per decode (no behaviour, no risk,
+one allocation per call removed).
+
+## Round: the xlarge tier (Java 0.95x, Rust 0.98x in the tables)
+
+BENCHMARKS.md marks two xlarge encode cells below 1.0x, and the historical
+tables show the xlarge encode column used to lead by more (0.1.8: Java
+1025.8 MB/s 1.15x, Rust 1596.5 MB/s 1.08-1.84x; 0.1.11: 1061.4 / 1398.4).
+Cross-release comparisons in that file come from different sessions, so this
+round asked the question directly: **is there a code regression at xlarge,
+and does the tier still lead?**
+
+### Is there a regression? No.
+
+`git worktree` at 0.1.11 (`fb65ed0`) built its own `libpbwire.a`; the current
+`bench/bench.cc` was compiled against both libraries, and the two binaries
+were alternated on the same host, min-of-N:
+
+| tier | 0.1.11 lib | HEAD lib | HEAD/0.1.11 |
+|---|---|---|---|
+| xlarge encode | 57966.8 ns | 55951.9 ns | **1.036x faster** |
+| large encode | 2270.1 ns | 2117.9 ns | 1.072x |
+| xlarge decode | 133918.5 ns | 137161.1 ns | 0.976x |
+| small encode | 75.8 ns | 78.5 ns | 0.966x |
+
+So the core did not regress at xlarge: HEAD is ~3.6% faster there than the
+release the old tables were proud of. The xlarge numbers in BENCHMARKS.md
+moved because their *baselines* did (Java's protobuf-java column 976.1 ->
+1002.2 with the same jar, prost 1364.5 -> 1333.0), i.e. a quieter host for
+the baseline side.
+
+### Does the tier still lead? On this host, yes.
+
+Same-session runs against the real baselines (host at load 10-16 from
+unrelated Gradle/node processes, so absolute MB/s are 1.5-2x below the
+tables; only the ratio in the same run is meaningful):
+
+| binding | ours | baseline | x baseline |
+|---|---|---|---|
+| core `pbw_ctx` | 1.36-2.2 GB/s (encode) | protoc C++ 0.61-0.77 GB/s | 1.5-2.2x |
+| Java | 965 MB/s | protobuf-java 835 MB/s | **1.15x** |
+| Scala | 997.7 MB/s | ScalaPB 737.9 MB/s | **1.35x** |
+| Rust | 851.9 MB/s | prost 768.9 MB/s | **1.11x** |
+
+Both ❌ cells are therefore stale rather than regressions; they need a
+re-run on an idle host before the table is rewritten (pasting these
+load-affected absolute numbers would corrupt the same-machine tables).
+
+### Where the xlarge encode time goes
+
+A local sampler run (a copy of `bench.cc` that loops only the ctx xlarge
+encode, sampled with `sample(1)`; the copy lives outside the repo) put 89%
+of samples inside `encode_message` itself (the field loop and its inlined
+writes), 9.5% in `_platform_memmove`/`DYLD-STUB$$memcpy` leaves and 2%
+elsewhere. The copy leaves are the out-of-line `memcpy` calls for short
+payloads: 3000 three-byte `tags` elements plus the packed length tags.
+
+### Change kept: short payloads copy in line
+
+`src/encode.c` grew `w_copy()`, used by `w_put` and by every bytes/string
+len-tag/payload write: up to `PBW_COPY_INLINE` (16) bytes copy as unrolled
+8/4/1-byte stores, longer payloads stay a `memcpy` call. Reads and writes
+stay inside `[src, src+len)`, so nothing is over-read.
+
+Verified by profiling the same harness again: the new build has **zero**
+`_platform_memmove`/memcpy leaves in the xlarge encode (all samples fall in
+`encode_message`), where the old build had 9.5%. Throughput, measured
+paired (20 alternations, thread CPU time, min per side): median ratio
+1.012, best 1.003, 11/20 rounds faster -- i.e. **about +1%**, well inside
+this host's paired pair-to-pair noise (-35%..+34%). Kept because it removes
+an out-of-line call per short payload with no downside and a 25-line diff,
+not because the timer can see it.
+
+`make test`, `make difftest` (byte equality against libprotobuf on every
+case, 20000-input fuzz verdicts) and `make format-check` pass.
+
+### What would actually move xlarge
+
+The remaining 89% is the per-value field loop, which is what the ledger's
+earlier attempts (varint windows, packed rewriting, buffer sizing) already
+hit: repeated *unpacked* scalars pay one `write_element` dispatch per
+element and nested messages pay one tag+placeholder reserve plus a
+recursive field loop plus a length patch each. Both shapes are already
+written as tight loops with hoisted cursors (see `write_packed`,
+`w_varint_noreserve`), so a further win needs a different writer shape
+(e.g. sizing children before writing them, at the cost of a second walk --
+rejected in this file for the Go cell).
+
+## Session 2026-11-14 (evening): the full matrix, and what it settled
+
+Every harness was re-run on the same host (`make bench`, `make c-bench` ...
+one at a time, 17:54-18:58 UTC, host carrying ~0.4-1.0 normalised load from
+other tenants), and the tables in BENCHMARKS.md are those runs. Two cells flipped
+because the *baselines* moved, not because of a code change: Java xlarge encode
+0.95x -> 1.09x and Rust xlarge encode 0.98x -> 1.04x. In the same runs
+`protobuf-java` fell 1002.2 -> 866.3 MB/s and prost rose 1333.0 -> 1398.4
+MB/s while `pbwire-java` moved -1.4% and `pbwire-rust` +11.7% (the latter
+carried the in-tree short-payload copy from the section above). Read both
+flips as "at parity or above, inside the band", not as a win from a patch.
+
+The rest of the sub-1.0x list did not move: Java/Kotlin/Clojure 136 B encode
+(0.72x / 0.72x / 0.75x), Kotlin 174 B encode (0.80x, the same codec and bytes
+swinging between 0.44x and 1.20x run to run), Scala 174 B decode (0.99x), core
+plain 169 B encode (0.98x), Python 136 B decode (0.999x, a tie) and Julia
+136 B decode (0.87x). Two attempts are worth recording.
+
+### Cell: the JVM generated models, 136-174 B encode/decode
+
+Root cause candidate: a generated model resolves every field by *name*,
+`Message.set("str", ...)` / `Message.getString("str")`, which hashes the
+string into `MessageDef.byName` once per field. A probe over the Java facade
+(`LookupAB`, decode + 10 getters, alternating named vs numeric access) put
+the named lookup at **3.07 ns per field**, so ~60 ns on a 22-field message.
+
+Attempt: make the generated models address fields by number (a compile-time
+constant the generator already has) instead of by name -- Scala's case-class
+`fill`/`load` and the Clojure interop `fill!`/`->clj`.
+
+Result: **neutral, reverted.** The Scala A/B (two class directories, old and
+new `matrix3.scala`, five alternating rounds of the 174 B tier through the
+generated case class only) gave encode 424 -> 415 ns (median, -2%) and decode
+709 -> 730 ns (+3%): the model's own `ty.newMessage()`, `Message` construction
+and case-class build dominate, and the two rounds that made the change look
+fast were JIT warm-up. The Clojure harness moved 84.0 -> 86.5 ns on 136 B
+encode and 129.4 -> 122.6 ns on 174 B (-5%), i.e. inside its own band, because
+Clojure's map walk is what costs there, not the field lookup. The 3 ns/field is
+real in the Java probe, but the message it applies to is a *direct* DMsg walk
+(the benchmark harness), not the generated model, so the win was never on the
+measured path. The generator change is also ~5 regenerated files of churn for
+an unmeasurable result, so it is not kept.
+
+### Cell: Julia 136 B decode (0.87x), and a workspace path that helps
+
+`pbw_decode` owns one arena per tree: one `malloc` and one `free` per call. A
+raw-ccall probe (no binding wrapper) split the 136 B decode: **129.4 ns** with
+one malloc/free pair, **108.2 ns** the same parse through `pbw_decode_ctx` +
+`pbw_ctx_reset` on a reused context (-16%), and the binding's wrapper adds
+nothing measurable (129.4 vs 130.1 ns).
+
+Change kept: the Julia binding gained `Ctx`, `reset!` and `decode_in(ctx, ty,
+wire)` -- the only binding without the core's reusable workspace (C, Go, Rust
+and Erlang already expose it). In the harness that is **+13%** on 136 B
+(1000.4 -> 1126.5 MB/s), +12% on 174 B, +2% on 2.5 KB, and **-15%** on 74 KB:
+above the context's 1 MiB retain cap the arena drops its head chunk on every
+reset, so the plain path's single wire-length-sized allocation wins there.
+All four rows are in the Julia table; the plain `decode` row stays the
+headline, and the binding does not switch paths behind the caller's back.
+
+Nothing else was kept: the 136 B Julia cell is still 0.87x because the
+remaining 21 ns to ProtoBuf.jl's pure-Julia generated decode is the min core
+decode cost plus a downcall, and closing it needs a different decode shape
+(not a tuning fix).
