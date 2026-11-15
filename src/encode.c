@@ -108,6 +108,36 @@ w_reserve(writer *w, size_t extra)
     return w_grow(w, extra);
 }
 
+/* Copy of a wire payload: most field values are short (ids, names, enum
+ * labels, short tags), and for those an out-of-line memcpy call costs more
+ * than the copy itself -- it showed up as 9% of the xlarge encode profile.
+ * Up to PBW_COPY_INLINE bytes the copy unrolls into a few stores; anything
+ * larger stays a memcpy call. Reads and writes stay inside [src, src+len),
+ * so a payload shorter than the unroll width is never over-read. */
+#define PBW_COPY_INLINE 16
+
+PBW_INLINE void
+w_copy(uint8_t *dst, const uint8_t *src, size_t len)
+{
+    size_t i = 0;
+
+    if (PBW_EXPECT(len > PBW_COPY_INLINE, 0)) {
+        memcpy(dst, src, len);
+        return;
+    }
+    while (i + 8 <= len) {
+        memcpy(dst + i, src + i, 8);
+        i += 8;
+    }
+    if (i + 4 <= len) {
+        memcpy(dst + i, src + i, 4);
+        i += 4;
+    }
+    for (; i < len; i++) {
+        dst[i] = src[i];
+    }
+}
+
 PBW_INLINE void
 w_put(writer *w, const void *data, size_t len)
 {
@@ -117,7 +147,7 @@ w_put(writer *w, const void *data, size_t len)
     if (!w_reserve(w, len)) {
         return;
     }
-    memcpy(w->buf->data + w->pos, data, len);
+    w_copy(w->buf->data + w->pos, (const uint8_t *)data, len);
     w->pos += len;
 }
 
@@ -295,7 +325,7 @@ static void
 w_tag_bytes(writer *w, const uint8_t *tag, size_t len)
 {
     if (w_reserve(w, len)) {
-        memcpy(w->buf->data + w->pos, tag, len);
+        w_copy(w->buf->data + w->pos, tag, len);
         w->pos += len;
     }
 }
@@ -478,7 +508,7 @@ write_element(writer *w, const pbw_field *field, const pbw_value *value,
             w_tag_noreserve(w, field->tag_word, field->tag_len);
             w_varint_noreserve(w, value->as.bytes.len);
             if (value->as.bytes.len > 0) {
-                memcpy(w->buf->data + w->pos, value->as.bytes.data,
+                w_copy(w->buf->data + w->pos, value->as.bytes.data,
                        value->as.bytes.len);
                 w->pos += value->as.bytes.len;
             }
@@ -672,7 +702,7 @@ write_packed(writer *w, const pbw_field *field, const pbw_value *list)
         if (field->len_tag_len <= 4) {
             w_tag_noreserve(w, field->len_tag_word, field->len_tag_len);
         } else {
-            memcpy(w->buf->data + w->pos, field->len_tag, field->len_tag_len);
+            w_copy(w->buf->data + w->pos, field->len_tag, field->len_tag_len);
             w->pos += field->len_tag_len;
         }
         w_varint_noreserve(w, payload);
@@ -702,7 +732,7 @@ write_packed(writer *w, const pbw_field *field, const pbw_value *list)
         if (field->len_tag_len <= 4) {
             w_tag_noreserve(w, field->len_tag_word, field->len_tag_len);
         } else {
-            memcpy(w->buf->data + w->pos, field->len_tag, field->len_tag_len);
+            w_copy(w->buf->data + w->pos, field->len_tag, field->len_tag_len);
             w->pos += field->len_tag_len;
         }
         w_varint_noreserve(w, payload);
@@ -737,7 +767,7 @@ write_packed(writer *w, const pbw_field *field, const pbw_value *list)
         if (field->len_tag_len <= 4) {
             w_tag_noreserve(w, field->len_tag_word, field->len_tag_len);
         } else {
-            memcpy(w->buf->data + w->pos, field->len_tag, field->len_tag_len);
+            w_copy(w->buf->data + w->pos, field->len_tag, field->len_tag_len);
             w->pos += field->len_tag_len;
         }
         w_varint_noreserve(w, payload);
@@ -823,7 +853,7 @@ write_packed(writer *w, const pbw_field *field, const pbw_value *list)
     if (field->len_tag_len <= 4) {
         w_tag_noreserve(w, field->len_tag_word, field->len_tag_len);
     } else {
-        memcpy(w->buf->data + w->pos, field->len_tag, field->len_tag_len);
+        w_copy(w->buf->data + w->pos, field->len_tag, field->len_tag_len);
         w->pos += field->len_tag_len;
     }
     w_varint_noreserve(w, payload);
