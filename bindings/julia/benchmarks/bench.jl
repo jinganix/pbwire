@@ -168,11 +168,17 @@ function main(args::Vector{String})
         dec = measure(floor, () -> let m = decode(ty, got)
             close(m)
         end)
+        # The workspace path: the same decode into a reusable context, which
+        # drops the per-message arena allocation. Both rows are the binding's
+        # own API; the table's ratio uses the workspace one.
+        ctx = Ctx()
+        dec_ctx = measure(floor, () -> decode_in(ctx, ty, got))
         close(probe)
         println("$label: $want bytes, $tier_n iterations (repeat field x$n)")
         println("  $(rpad("impl", 12)) $(rpad("op", 7)) $(lpad("ns/op", 12)) $(lpad("MB/s", 10))")
         row("pbwire-julia", "encode", want, enc)
         row("pbwire-julia", "decode", want, dec)
+        row("pbwire-julia", "dec+ctx", want, dec_ctx)
         if baseline !== nothing
             ref = fill_baseline(n)
             ref_bytes = baseline_encode(ref)

@@ -430,9 +430,9 @@ void pbw_ctx_set_user(pbw_ctx *ctx, void *user);
 void *pbw_ctx_user(const pbw_ctx *ctx);
 /* Release every allocation made since the last reset, keeping the buffers. */
 void pbw_ctx_reset(pbw_ctx *ctx);
-/* Max bytes the context keeps resident across resets (decode arena head +
+/* Max bytes the context keeps resident across resets (decode arena chunks +
  * encode buffer), default 1 MiB. Single allocations above it bypass the
- * reusable chunk and are freed on reset, so one outlier never pins the
+ * reusable chunks and are freed on reset, so one outlier never pins the
  * context. 0 keeps nothing: every reset frees everything, like the plain
  * functions but through the context API. Applies lazily at the next reset. */
 void pbw_ctx_set_retain_cap(pbw_ctx *ctx, size_t cap);
@@ -460,7 +460,9 @@ size_t pbw_pool_idle(const pbw_pool *pool);
 /* Bytes currently held in the context (for sizing/debugging). */
 size_t pbw_ctx_used(const pbw_ctx *ctx);
 
-/* Decode into the context instead of one allocation per value. */
+/* Decode into the context instead of one allocation per value. A sealed
+ * context (one holding a previous decode) resets implicitly on entry, so a
+ * decode loop needs no reset call; earlier trees die with that reset. */
 pbw_status pbw_decode_ctx(pbw_ctx *ctx, const pbw_descriptor *desc,
                           const void *buf, size_t len, pbw_message **out);
 /* Encode into the context's buffer. *out stays valid until the next
@@ -693,9 +695,9 @@ pbw_status pbw_decode_delimited_limits(const pbw_descriptor *desc,
                                        pbw_message **out, size_t *consumed);
 /* The pbw_ctx twin: the tree lands in the context's arena (read-only, like
  * pbw_decode_ctx_limits()) instead of one malloc block, so a framed stream
- * decoded in a loop stops allocating. The context is not reset here -- reset
- * it first, as with pbw_decode_ctx(). A declared frame length past
- * limits->max_bytes is PBW_ERR_LIMIT before the body is decoded. */
+ * decoded in a loop stops allocating. It resets a sealed context implicitly,
+ * exactly like pbw_decode_ctx(), so a frame loop needs no reset call. A
+ * declared frame length past limits->max_bytes is PBW_ERR_LIMIT before the body is decoded. */
 pbw_status pbw_decode_delimited_ctx_limits(pbw_ctx *ctx,
                                            const pbw_descriptor *desc,
                                            const void *buf, size_t len,

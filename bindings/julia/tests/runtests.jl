@@ -213,6 +213,13 @@ end
         @test_throws PbwireError parse_json(ty, js, false, 1, 0)
         @test_throws PbwireError parse_text(ty, tx, 1, 0)
         @test parse_json(ty, js, false, length(js) + 1, 0) isa Message
+        # A workspace decode: read-only tree, byte-identical re-encode, and the
+        # next decode on the same context replaces it.
+        ctx = Ctx()
+        in_ctx = decode_in(ctx, ty, w)
+        @test encode(in_ctx) == w
+        @test_throws PbwireError set_int!(in_ctx, "i32", 1)
+        @test encode(decode_in(ctx, ty, w)) == w
         seen = Ref(0)
         visit(ty, w, (f) -> begin
             seen[] += 1

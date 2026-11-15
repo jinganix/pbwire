@@ -207,7 +207,9 @@ Out of scope for the core library, permanently:
   writes bytes: core and importer share no type and no link dependency).
   The core will never learn `.proto` syntax: the `FileDescriptorSet` is the
   schema format, and producing it once with `protoc`/`buf` stays the workflow.
-- Code generation
+- Codec code generation (per-message encode/decode boilerplate). `codegen/`
+  emits thin data models only — field definitions over the shared codec — so
+  there is deliberately no second wire implementation to maintain
 - Networking / RPC / HTTP / gRPC transports and stubs. Services load from
   the set, are queryable, and resolve to input/output descriptors with
   `pbw_service_resolve()` for routing; the bytes on the socket stay
@@ -240,9 +242,11 @@ Scenarios, in the shape of the pain they remove:
 - **Embedding.** The Erlang NIF is the extreme case: a crash takes the host VM
   down, so every failure path returns a status, everything is bounds-checked,
   and ownership is explicit.
-- **Generated ergonomics where wanted.** `codegen` generates message
-  models per language from the same descriptor; the compiler checks host code,
-  the wire format still comes from this core.
+- **Generated ergonomics where wanted, without generated codecs.** `codegen`
+  emits thin message models per language from the same descriptor — field
+  definitions only, so the host compiler checks your code while the wire
+  format still comes from this one core. Annotations or custom attributes on
+  the model never affect the bytes.
 
 ## Status and limitations
 

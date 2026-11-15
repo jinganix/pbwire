@@ -265,12 +265,13 @@ C++ runtime), `make bench`, `make bench-c` (C structs vs protoc C++). Optional, 
 - Not implemented in the core, permanently: `.proto` text parsing (build the set once with
   `protoc`/`buf`/`pbwire-protoc`); no CLI (use `protoc --decode/--encode`); RPC/HTTP transport
   and stubs (services load, are queryable, and resolve via `pbw_service_resolve`; the transport
-  stays official), code generation (the
-  C binding ships its own protoc plugin for layout tables).
+  stays official), codec code generation (per-message encode/decode boilerplate;
+  `codegen` emits thin field-definition models only, over the shared codec).
 - Generated message models: `codegen` is one protoc plugin (`protoc-gen-pbwire`) that
   emits typed fields, presence flags and encode/decode wrappers per language (C, Java, Kotlin, C#, F#, Dart, PHP, Ruby, Python, Node, Rust, Objective-C, Lua, Swift, Zig, Scala, Clojure, Elixir, Julia, R; Go is dynamic-API only for now; Erlang keeps gpb). The wrappers call the
   binding's dynamic API (Java POJOs write straight into the shared Wire primitives
-  instead, same bytes, no Message tree), so the generated layer never adds a second wire format. `make
+  instead, same bytes, no Message tree), so the generated layer never adds a second wire format:
+  models carry field definitions only, and custom annotations never change the bytes. `make
   codegen` regenerates the committed models, `make codegen-test` runs one generated test per binding
   (typed fields -> encode -> compare with the pinned protoc bytes -> decode -> verify), and
   `make codegen-conformance` generates models for the official conformance proto.

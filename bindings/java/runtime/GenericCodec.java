@@ -1708,9 +1708,6 @@ public final class GenericCodec {
 
     /* ---------------- decode ---------------- */
 
-    private static final ThreadLocal<Wire.Reader> READER =
-            ThreadLocal.withInitial(Wire.Reader::new);
-
     public static DMsg decode(MessageDef def, byte[] wire) {
         return decode(def, wire, Limits.defaults());
     }
@@ -1721,25 +1718,24 @@ public final class GenericCodec {
             lim = Limits.defaults();
         }
         lim.checkBytes(wire.length, "message");
-        Wire.Reader r = READER.get();
+        // A fresh reader per call, never stored anywhere, so the JIT can
+        // scalar-replace it: no allocation and no ThreadLocal lookup, unlike
+        // a shared workspace. Thread confinement comes from the call itself.
+        Wire.Reader r = new Wire.Reader();
         r.b = wire;
         r.pos = 0;
         r.end = wire.length;
         r.cap = lim.effectiveDepth();
-        try {
-            DMsg m = decodeInto(new DMsg(def), r, wire.length, -1, 0);
-            if (r.pos != wire.length) {
-                throw new IllegalArgumentException("trailing bytes");
-            }
-            // The core refuses a message missing a required field at decode
-            // time; the flag above keeps this walk off trees that cannot fail it.
-            if (def.deepRequired) {
-                checkRequired(m, r.cap, 0);
-            }
-            return m;
-        } finally {
-            r.cap = Wire.MAX_DEPTH; // workspace reuse must not leak the cap
+        DMsg m = decodeInto(new DMsg(def), r, wire.length, -1, 0);
+        if (r.pos != wire.length) {
+            throw new IllegalArgumentException("trailing bytes");
         }
+        // The core refuses a message missing a required field at decode
+        // time; the flag above keeps this walk off trees that cannot fail it.
+        if (def.deepRequired) {
+            checkRequired(m, r.cap, 0);
+        }
+        return m;
     }
 
     /** Exact number of bytes {@link #encode} writes for this tree. */

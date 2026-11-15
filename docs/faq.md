@@ -18,10 +18,14 @@
 
 ### Is pbwire a Protobuf code generator?
 
-No. It is a runtime: descriptors in, dynamic messages out. Nothing is generated,
-nothing is compiled per schema, and adding a message type does not require a
-rebuild — unless you embedded the descriptor set in the binary (see
-[Do I have to recompile when a `.proto` changes?](#do-i-have-to-recompile-when-a-proto-changes)).
+No codec code is ever generated. It is a runtime: descriptors in, dynamic
+messages out. Nothing is compiled per schema, and adding a message type does
+not require a rebuild — unless you embedded the descriptor set in the binary
+(see [Do I have to recompile when a `.proto` changes?](#do-i-have-to-recompile-when-a-proto-changes)).
+The optional `codegen` layer emits thin models only — field definitions
+(names, numbers, types, presence) for the host compiler to check — while
+every byte still goes through the one shared codec. Custom annotations or
+attributes on those models never affect the wire bytes.
 
 ### Does it need `protoc` at runtime?
 

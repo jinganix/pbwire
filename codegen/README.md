@@ -4,7 +4,10 @@ One protoc plugin, one generated model per language. The generated code gives th
 host language's compiler (or IDE) something to check — field names, types,
 presence and repetition — while every byte still comes from the binding's
 existing dynamic codec and, under it, the C core. This layer never implements a
-second wire format.
+second wire format: the model holds field definitions only, so added
+annotations, attributes or comments cannot change the bytes. That is the
+point — readable, editable output that compiles fast, instead of the
+per-message codec boilerplate `protoc` repeats into every file.
 
 ```sh
 make codegen            # regenerate the committed models (needs protoc)

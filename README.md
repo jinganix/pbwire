@@ -52,6 +52,10 @@ pbw_free(buf);
   `protoc`, no JSON/C++ runtime underneath.
 - **Dynamic messages and reflection.** Create messages from a descriptor,
   get/set fields by number or name, walk nested structures, oneofs and maps.
+- **Thin models, not fat codecs.** One C core owns every wire byte; `codegen`
+  emits only field definitions (names, numbers, types, presence) for the host
+  language. Extra annotations, attributes or comments on the model never touch
+  the codec, so the output stays readable, editable and fast to compile.
 - **Byte-identical to the reference implementation.** Encodings match
   `protoc 36.2` for every scalar type, packed/unpacked repetition and nested
   messages; pinned bytes in the test suite keep parity from regressing silently.
@@ -74,7 +78,7 @@ pbw_free(buf);
 | Language | C99 (C++ consumers include the same header) |
 | Wire format | Google Protobuf binary, proto2 + proto3 (edition-2023 descriptor sets load too) |
 | Schema input | hand-built descriptors, or a standard `FileDescriptorSet` |
-| Message handling | dynamic value tree with reflection; no generated code |
+| Message handling | dynamic value tree with reflection; no generated codec code (optional thin models carry field definitions only) |
 | Runtime dependencies | none (optional importer `pbwire-protoc` needs libprotobuf, C++17) |
 | Not implemented | `.proto` text parsing in the core (deliberately never: build the set once with `protoc`/`buf`/`pbwire-protoc`); RPC transport and stubs (services load, are queryable, and resolve to descriptors with `pbw_service_resolve` for routing — the transport itself stays official gRPC/Twirp/plain HTTP); no CLI (inspect with `protoc --decode/--encode`) |
 | Memory model | one allocation per decoded tree, or one reusable arena `pbw_ctx` per thread |
@@ -159,13 +163,13 @@ address book, loaded from `addressbook.desc` at runtime) is in
 `make bench` verifies byte-for-byte equality with libprotobuf before timing
 anything, so a speed number can never come from a wrong encoder. On an Apple
 M4 Pro with `-O2` and `protoc 36.2`, the in-process dynamic core with a
-`pbw_ctx` runs 1.12-1.47x the throughput of the generated C++ codec on encode
-and 1.52-1.82x on decode, on every tier
-(132 B to 86 KB), and 11-15x the speed of C++
-`DynamicMessage` on encode and 3.0-4.6x on decode. Generated code only wins where
+`pbw_ctx` runs 1.24-1.56x the throughput of the generated C++ codec on encode
+and 1.50-1.81x on decode, on every tier
+(132 B to 86 KB), and 11.7-18.0x the speed of C++
+`DynamicMessage` on encode and 3.0-5.3x on decode. Generated code only wins where
 a dynamic codec meets generated straight-line writes on a tiny message
-(Java/Kotlin/Clojure, 136 B, 0.71x/0.78x/0.75x); the arena API wins every tier, and the plain
-API trails only on the 169 B encode. `make bench-docker` runs the
+(Java/Kotlin/Clojure, 136 B, 0.77x/0.83x/0.74x); the arena and plain APIs win
+every tier. `make bench-docker` runs the
 same harnesses in a Linux container and `make bench-compare` pairs the two runs
 row by row, so the numbers above hold off Apple silicon as well
 ([BENCHMARKS.md](BENCHMARKS.md#linux-docker-the-same-harnesses-one-container-away)).
@@ -179,29 +183,29 @@ The one-row summary is here; the detail is there.
 
 | Language | How it talks to the core | Best encode / decode vs official | Baseline |
 |---|---|---|---|
-| [C](bindings/c/) | static link, struct codec | 1.34x (small) / 2.00x (xlarge) | [protoc C++](https://github.com/protocolbuffers/protobuf) |
-| [C++](bindings/cpp/) | same C runtime, same header | 1.34x (small) / 2.00x (xlarge)¹ | [protoc C++](https://github.com/protocolbuffers/protobuf) |
-| [Python](bindings/python/) | CPython extension | 64.5x (xlarge) / 1.22x (xlarge) | [google.protobuf (upb)](https://pypi.org/project/protobuf/) |
-| [Ruby](bindings/ruby/) | C extension, linked | 1.30x (small) / 1.89x (large) | [google-protobuf gem](https://rubygems.org/gems/google-protobuf) |
-| [Java](bindings/java/) | pure-Java codec, no native code | 1.15x (medium) / 1.89x (xlarge) | [protobuf-java](https://github.com/protocolbuffers/protobuf/tree/main/java) |
-| [Kotlin](bindings/kotlin/) | Java runtime + DSL | 1.20x (medium) / 1.81x (xlarge) | [protobuf-kotlin](https://github.com/protocolbuffers/protobuf/tree/main/java/kotlin) |
-| [Node](bindings/node/) | N-API addon | 3.21x (large) / 2.40x (xlarge) vs protobufjs | [jspb](https://www.npmjs.com/package/google-protobuf) + [protobufjs](https://www.npmjs.com/package/protobufjs) |
-| [Objective-C](bindings/objc/) | ARC wrapper | 6.61x (small) / 2.91x (medium) | [protobuf-objc](https://github.com/protocolbuffers/protobuf/tree/main/objectivec) |
-| [PHP](bindings/php/) | C extension | 1.59x (small) / 1.88x (small) vs C ext (362x / 140x vs pure PHP) | [protobuf-php](https://github.com/protocolbuffers/protobuf/tree/main/php) |
-| [Dart](bindings/dart/) | `dart:ffi` | 15.4x (xlarge) / 4.4x (large) | [protobuf-dart](https://pub.dev/packages/protobuf) |
-| [Rust](bindings/rust/) | static link | 1.25x (small) / 1.83x (large) vs prost | [rust-protobuf 3.x](https://github.com/stepancheg/rust-protobuf) + [prost](https://github.com/tokio-rs/prost) |
-| [C#](bindings/csharp/) | P/Invoke | 3.34x (medium) / 2.04x (medium) | [Google.Protobuf](https://www.nuget.org/packages/Google.Protobuf) + [protobuf-net](https://github.com/protobuf-net/protobuf-net) |
-| [Go](bindings/go/) | cgo dynamic (hot-swappable registry) | 2.45x (xlarge) / 2.28x (large) | [google.golang.org/protobuf](https://pkg.go.dev/google.golang.org/protobuf) |
+| [C](bindings/c/) | static link, struct codec | 1.29x (xlarge) / 2.02x (xlarge) | [protoc C++](https://github.com/protocolbuffers/protobuf) |
+| [C++](bindings/cpp/) | same C runtime, same header | 1.29x (xlarge) / 2.02x (xlarge)¹ | [protoc C++](https://github.com/protocolbuffers/protobuf) |
+| [Python](bindings/python/) | CPython extension | 6.87x (xlarge) / 1.19x (xlarge) (64x via `encode(parsed)`) | [google.protobuf (upb)](https://pypi.org/project/protobuf/) |
+| [Ruby](bindings/ruby/) | C extension, linked | 1.35x (small) / 1.86x (large) | [google-protobuf gem](https://rubygems.org/gems/google-protobuf) |
+| [Java](bindings/java/) | pure-Java codec, no native code | 1.23x (medium) / 1.95x (xlarge) | [protobuf-java](https://github.com/protocolbuffers/protobuf/tree/main/java) |
+| [Kotlin](bindings/kotlin/) | Java runtime + DSL | 1.13x (medium) / 1.68x (xlarge) | [protobuf-kotlin](https://github.com/protocolbuffers/protobuf/tree/main/java/kotlin) |
+| [Node](bindings/node/) | N-API addon | 3.18x (xlarge) / 3.17x (xlarge) vs protobufjs | [jspb](https://www.npmjs.com/package/google-protobuf) + [protobufjs](https://www.npmjs.com/package/protobufjs) |
+| [Objective-C](bindings/objc/) | ARC wrapper | 7.44x (small) / 2.83x (medium) | [protobuf-objc](https://github.com/protocolbuffers/protobuf/tree/main/objectivec) |
+| [PHP](bindings/php/) | C extension | 1.70x (small) / 1.90x (small) vs C ext (373x / 135x vs pure PHP) | [protobuf-php](https://github.com/protocolbuffers/protobuf/tree/main/php) |
+| [Dart](bindings/dart/) | `dart:ffi` | 13.7x (xlarge) / 4.4x (xlarge) | [protobuf-dart](https://pub.dev/packages/protobuf) |
+| [Rust](bindings/rust/) | static link | 1.29x (small) / 1.86x (xlarge) vs prost | [rust-protobuf 3.x](https://github.com/stepancheg/rust-protobuf) + [prost](https://github.com/tokio-rs/prost) |
+| [C#](bindings/csharp/) | P/Invoke | 3.19x (medium) / 2.08x (medium) | [Google.Protobuf](https://www.nuget.org/packages/Google.Protobuf) + [protobuf-net](https://github.com/protobuf-net/protobuf-net) |
+| [Go](bindings/go/) | cgo dynamic (hot-swappable registry) | 2.77x (xlarge) / 2.31x (xlarge) | [google.golang.org/protobuf](https://pkg.go.dev/google.golang.org/protobuf) |
 | [Erlang](bindings/erlang/) | NIF | 3.91x (xlarge) / 2.47x (medium) | [gpb](https://github.com/tomas-abrahamsson/gpb) |
-| [Lua](bindings/lua/) | C module, tables + builder | 7.65x (xlarge, builder) / 1.73x (small, tables) | [lua-protobuf](https://github.com/starwing/lua-protobuf) |
-| [Swift](bindings/swift/) | SwiftPM, static link | 4.96x (large) / 4.28x (medium) | [swift-protobuf](https://github.com/apple/swift-protobuf) |
-| [Scala](bindings/scala/) | Java runtime + DSL | 1.44x (medium) / 1.25x (xlarge) | [ScalaPB](https://github.com/scalapb/ScalaPB) |
-| [Elixir](bindings/elixir/) | NIF (shared core) | 2.92x (medium) / 1.82x (large) | [elixir-protobuf](https://github.com/elixir-protobuf/protobuf) |
-| [Zig](bindings/zig/) | static link | 1.81x (xlarge) / 47.2x (small) | [zig-protobuf](https://github.com/Arwalk/zig-protobuf) |
-| [F#](bindings/fsharp/) | C# runtime + facade | 3.29x (medium) / 2.04x (medium) | [Google.Protobuf](https://www.nuget.org/packages/Google.Protobuf) |
-| [Clojure](bindings/clojure/) | Java runtime + interop | 1.51x (large) / 1.77x (xlarge) | [protobuf-java](https://github.com/protocolbuffers/protobuf/tree/main/java) |
-| [Julia](bindings/julia/) | `dlopen` + `ccall` | 135.6x (xlarge) / 1.22x (medium) | [ProtoBuf.jl](https://github.com/JuliaIO/ProtoBuf.jl) |
-| [R](bindings/r/) | C extension, named lists | 61.5x (xlarge) / 66.6x (xlarge) | [RProtoBuf](https://github.com/eddelbuettel/rprotobuf) |
+| [Lua](bindings/lua/) | C module, tables + builder | 8.93x (xlarge, builder) / 1.66x (small, tables) | [lua-protobuf](https://github.com/starwing/lua-protobuf) |
+| [Swift](bindings/swift/) | SwiftPM, static link | 5.51x (xlarge) / 4.24x (medium) | [swift-protobuf](https://github.com/apple/swift-protobuf) |
+| [Scala](bindings/scala/) | Java runtime + DSL | 1.48x (medium) / 1.21x (xlarge) | [ScalaPB](https://github.com/scalapb/ScalaPB) |
+| [Elixir](bindings/elixir/) | NIF (shared core) | 3.06x (small) / 1.90x (xlarge) | [elixir-protobuf](https://github.com/elixir-protobuf/protobuf) |
+| [Zig](bindings/zig/) | static link | 1.87x (xlarge) / 50.0x (small) | [zig-protobuf](https://github.com/Arwalk/zig-protobuf) |
+| [F#](bindings/fsharp/) | C# runtime + facade | 3.19x (xlarge) / 1.99x (medium) | [Google.Protobuf](https://www.nuget.org/packages/Google.Protobuf) |
+| [Clojure](bindings/clojure/) | Java runtime + interop | 1.13x (large) / 1.66x (xlarge) | [protobuf-java](https://github.com/protocolbuffers/protobuf/tree/main/java) |
+| [Julia](bindings/julia/) | `dlopen` + `ccall` | 133.5x (xlarge) / 1.31x (medium, workspace decode) | [ProtoBuf.jl](https://github.com/JuliaIO/ProtoBuf.jl) |
+| [R](bindings/r/) | C extension, named lists | 59.0x (large) / 50.3x (xlarge) | [RProtoBuf](https://github.com/eddelbuettel/rprotobuf) |
 
 ¹ C++ has no separate bench; same engine as the C struct codec. Best columns take the best ratio across the four tiers for encode/decode separately, tier in parentheses (Apple M4 Pro, `protoc 36.2`); tiers and absolute MB/s are in [BENCHMARKS.md](BENCHMARKS.md).
 
@@ -210,7 +214,7 @@ The one-row summary is here; the detail is there.
 | | Schema at runtime | Generated code | Runtime dependency | Dynamic messages + reflection |
 |---|---|---|---|---|
 | **pbwire** | yes | none | none (C99) | yes |
-| `protoc` generated C++ | no | yes | libprotobuf | via `DynamicMessage`, slower |
+| `protoc` generated C++ | no | yes (per-message codec, slow to compile, hard to read/edit) | libprotobuf | via `DynamicMessage`, 11-15x slower encode than pbwire `ctx` |
 | `DynamicMessage` (C++) | yes | no | libprotobuf | yes |
 | upb | yes | optional | bundled C runtime | yes |
 | nanopb | no | yes | none (embedded C) | no |
@@ -220,7 +224,7 @@ several host languages, or when libprotobuf must not be in the process. Pick
 generated code only when the schema never changes *and* you accept a codegen
 step: even then generated straight-line writes win only the smallest encode
 cells against dynamic dispatch — the Java, Kotlin and Clojure bindings at 136 B
-(0.71x, 0.78x and 0.75x) — while the in-process `pbw_ctx` wins every tier of the
+(0.77x, 0.83x and 0.74x) — while the in-process `pbw_ctx` wins every tier of the
 core benchmark and the C struct codec wins every tier of its own.
 
 ## Contributing

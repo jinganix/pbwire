@@ -383,3 +383,133 @@ func TestViewAfterRootClose(t *testing.T) {
 		t.Fatal("closed root encode must fail")
 	}
 }
+
+// The encode buffer is sized from the last successful encode, so the paths
+// worth testing are the ones a warm hint never takes: a cold message that has
+// to grow (doubling), a message that grew past the stored hint (stale, small),
+// and one that shrank far below it (overshoot, copied into an exact slice).
+// Each state must still produce the exact wire size and never hand back an
+// array much larger than the result.
+func TestEncodeSizeHint(t *testing.T) {
+	s, err := Load(testDesc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	typ, err := s.Message("structtest.Scalars3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer typ.Close()
+
+	m := fillScalars(t, typ, 0)
+	defer m.Close()
+
+	check := func(label string, out []byte) {
+		t.Helper()
+		size, err := m.EncodedSize()
+		if err != nil {
+			t.Fatalf("%s: size: %v", label, err)
+		}
+		if uint64(len(out)) != size {
+			t.Fatalf("%s: encoded %d bytes, size says %d", label, len(out), size)
+		}
+		if cap(out)-len(out) > encodeSlack {
+			t.Fatalf("%s: %d-byte result pinned in a %d-byte array",
+				label, len(out), cap(out))
+		}
+	}
+
+	// Warm hint: the small tier fits the 256-byte seed on the first try.
+	small, err := m.Encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	check("small", small)
+	warm, err := m.Encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(small, warm) {
+		t.Fatal("second encode differs from the first")
+	}
+
+	// Grow the message past the hint: proto3 keeps substituting the string,
+	// so the encoder has to double instead of writing into the stale cap.
+	const big = "x" + "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" +
+		"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" +
+		"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" +
+		"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" +
+		"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	if err := m.SetString("str", big); err != nil {
+		t.Fatal(err)
+	}
+	grown, err := m.Encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	check("grown", grown)
+
+	// Shrink it far below the hint: the stored capacity would pin a much
+	// larger array, so the result is copied into an exact-size slice.
+	if err := m.SetString("str", ""); err != nil {
+		t.Fatal(err)
+	}
+	shrunk, err := m.Encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	check("shrunk", shrunk)
+	if cap(shrunk) != len(shrunk) {
+		t.Fatalf("shrank to %d bytes but kept a %d-byte array", len(shrunk), cap(shrunk))
+	}
+	// A fresh message with the same (shrunken) content must agree byte for
+	// byte: the hint is bookkeeping, never part of the wire.
+	ref := fillScalars(t, typ, 0)
+	defer ref.Close()
+	if err := ref.SetString("str", ""); err != nil {
+		t.Fatal(err)
+	}
+	refWire, err := ref.Encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(refWire, shrunk) {
+		t.Fatal("the size hint changed the encoded bytes")
+	}
+
+	// The same hint path drives the deterministic and delimited forms; the
+	// matrix3 message has no map fields, so the bytes must match exactly.
+	if err := m.SetString("str", big); err != nil {
+		t.Fatal(err)
+	}
+	det, err := m.EncodeDeterministic()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(grown, det) {
+		t.Fatal("deterministic encode differs from plain without map fields")
+	}
+	framed, err := m.EncodeDelimited()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if uint64(len(framed)) < uint64(len(grown)) {
+		t.Fatal("delimited frame shorter than the message")
+	}
+	back, consumed, err := typ.DecodeDelimited(framed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer back.Close()
+	if consumed != len(framed) {
+		t.Fatalf("consumed %d of %d", consumed, len(framed))
+	}
+	again, err := back.Encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(grown, again) {
+		t.Fatal("delimited round trip mismatch")
+	}
+}

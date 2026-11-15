@@ -127,7 +127,19 @@ defmodule Pbwire.Schema do
     syntax = props_syntax(props)
 
     with {:ok, {fields, refs}} <- message_fields(props, syntax) do
-      spec = %{mod: mod, name: mod, syntax: syntax, fields: fields, by_key: %{}, enum_values: nil}
+      # keys/flds are the same per-position tables tuple-form: the decoder
+      # indexes them per field instead of walking a list with zip/map.
+      spec = %{
+        mod: mod,
+        name: mod,
+        syntax: syntax,
+        fields: fields,
+        keys: List.to_tuple(Enum.map(fields, &field_key(&1))),
+        flds: List.to_tuple(fields),
+        by_key: %{},
+        enum_values: nil
+      }
+
       {:ok, Map.put(specs, mod, %{spec | by_key: Map.new(fields, &{field_key(&1), &1})}), refs}
     end
   end

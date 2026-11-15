@@ -27,9 +27,9 @@ row links to the section with the fix and its limits.
 
 | Complaint about the official library | Status in pbwire | Where |
 |---|---|---|
-| Generated `.pb.cc` / `.pb.go` bloat, slow builds, big binaries | Solved: no generated code, schema loads at runtime | [codegen](#how-to-avoid-protobuf-code-generation-bloat) |
+| Generated `.pb.cc` / `.pb.go` bloat, slow builds, big binaries | Solved: no generated codec code, schema loads at runtime; thin field-only models stay readable and editable | [codegen](#how-to-avoid-protobuf-code-generation-bloat) |
 | `protoc` + per-language plugins + include paths in every CI job | Eased: one `FileDescriptorSet` built once, no `protoc` at runtime | [toolchain](#how-to-simplify-the-protoc-toolchain) |
-| `DynamicMessage` much slower than generated code | Solved: `pbw_ctx` beats generated C++ 1.1–1.5x, `DynamicMessage` 11–15x on encode | [dynamic](#why-is-dynamicmessage-slow-and-what-is-faster) |
+| `DynamicMessage` much slower than generated code | Solved: `pbw_ctx` beats generated C++ 1.1–1.5x, `DynamicMessage` 11–15x on encode and 3.0–4.6x on decode | [dynamic](#why-is-dynamicmessage-slow-and-what-is-faster) |
 | A different API, defaults and habits in every language | Unified semantics, idiomatic APIs per language — by design, not one API everywhere | [consistency](#why-do-protobuf-apis-differ-per-language) |
 | libprotobuf / Abseil weight, Bazel–CMake friction, C++ upgrade churn | Solved: pure C99 core, zero runtime dependencies | [dependencies](#how-to-avoid-the-protobuf-c-dependency-and-build-burden) |
 | Runtime upgrades break generated code and plugins | Mitigated: stable C ABI (`PBW_ABI_VERSION`), bindings decoupled from core | [upgrades](#how-to-survive-protobuf-version-upgrades) |
@@ -46,13 +46,18 @@ The classic complaint: 191 `.proto` files cost ~5 minutes of codegen
 compilation and hundreds of MB of objects; a Go developer wrote easyproto
 because `*.pb.go` added tens of MB of unneeded runtime to the binary.
 
-pbwire generates nothing at runtime. Descriptors go in (hand-built or a
+pbwire generates no codec code at runtime. Descriptors go in (hand-built or a
 standard `FileDescriptorSet`), dynamic messages come out — adding a message
 type never requires a rebuild unless you embedded the descriptor bytes in the
 binary. Generated models exist (`codegen`, plus the C struct plugin) for
-ergonomics, but they reuse the binding's codec instead of a second wire
-implementation: most wrap the dynamic API, Java and C emit straight-line
-Wire code. See [Is pbwire a Protobuf code generator?](faq.md#is-pbwire-a-protobuf-code-generator)
+ergonomics only: each model carries just the field definitions (names,
+numbers, types, presence), and every encode/decode call still runs through
+the binding's shared codec and the one C core — never a second wire
+implementation (most wrap the dynamic API; Java and C emit straight-line
+Wire reads against shared tables). Because the model holds no codec logic,
+custom annotations, attributes or comments on it cannot change the bytes,
+and the output stays readable, editable and fast to compile — none of the
+per-message codec boilerplate `protoc` repeats into every file. See [Is pbwire a Protobuf code generator?](faq.md#is-pbwire-a-protobuf-code-generator)
 and [Do I have to recompile when a `.proto` changes?](faq.md#do-i-have-to-recompile-when-a-proto-changes).
 
 ## How to simplify the protoc toolchain?
@@ -80,7 +85,8 @@ then writes), one bump arena plus one reusable encode buffer per `pbw_ctx`.
 Measured on Apple M4 Pro (`protoc 36.2`, `make bench`, byte-equality checked
 before timing): the in-process `pbw_ctx` API runs 1.1–1.5x the generated C++
 codec on every payload tier and 11–15x `DynamicMessage` on encode, 3.0–4.6x on
-decode. The two places generic dispatch still shows are documented, not
+decode — same dynamic shape (schema in at runtime, reflection out), an order
+of magnitude less overhead. The two places generic dispatch still shows are documented, not
 hidden: the plain one-`malloc`-per-call API near-ties generated code on small
 messages, and tiny-message straight-line writes in some host bindings. Full
 tables per language are in [BENCHMARKS.md](../BENCHMARKS.md).

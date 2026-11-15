@@ -111,15 +111,17 @@ object Bench {
     count
   }
 
-  /** Every op calibrates independently from the floor, then one warm-up
-   * pass and the best of Passes timed passes. */
-  private def measure(floor: Int, op: () => Unit): Double = {
-    val count = calibrate(op, floor)
-    run(count, () => op())
-    var best = Double.MaxValue
+  /** Every op calibrates from the floor, each warms up once, then the best
+   * of Passes timed passes interleaved per op (the unified measurement
+   * standard in BENCHMARKS.md), so a load spike hits both sides equally. */
+  private def measureAll(floor: Int, ops: Seq[() => Unit]): Seq[Double] = {
+    val counts = ops.map(calibrate(_, floor))
+    counts.zip(ops).foreach { case (c, op) => run(math.min(c, 1000), op) }
+    var best = Seq.fill(ops.size)(Double.MaxValue)
     var pass = 0
     while (pass < Passes) {
-      best = math.min(best, run(count, () => op()))
+      val timed = counts.zip(ops).map { case (c, op) => run(c, op) }
+      best = best.zip(timed).map { case (b, t) => math.min(b, t) }
       pass += 1
     }
     best
@@ -171,10 +173,15 @@ object Bench {
               } else {
                 val official = fillOfficial(n)
                 val tierCount = calibrate(() => message.encode(), count)
-                val encode = measure(count, () => message.encode())
-                val decode = measure(count, () => ty.decode(reference).close())
-                val officialEncode = measure(count, () => official.toByteArray)
-                val officialDecode = measure(count, () => Scalars3.parseFrom(reference))
+                val res = measureAll(count, Seq(
+                  () => message.encode(),
+                  () => ty.decode(reference).close(),
+                  () => official.toByteArray,
+                  () => Scalars3.parseFrom(reference)))
+                val encode = res(0)
+                val decode = res(1)
+                val officialEncode = res(2)
+                val officialDecode = res(3)
 
                 println(label + ": " + reference.length + " bytes, " + tierCount +
                   " iterations (repeat field x" + n + ")")

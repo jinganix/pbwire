@@ -206,7 +206,8 @@ one arena for the whole tree, so `pbw_message_free()` releases the tree, its
 values, submessages and payloads at once; `pbw_value_free()` on a value taken
 from a decoded tree is a no-op on purpose (the `PBW_VF_ARENA` flag).
 3. **Context messages belong to the context.** `pbw_decode_ctx` trees are
-read-only and die with the next `pbw_ctx_reset()`/`pbw_ctx_free()`, never with
+read-only and die with the next `pbw_decode_ctx()` on that context, `pbw_ctx_reset()`
+or `pbw_ctx_free()`, never with
 `pbw_message_free` (that is a no-op there too). A tree built with
 `pbw_message_new_ctx()` is mutable until a decode seals it, but it only takes
 values built in that same arena (`pbw_value_new_*_ctx`): a heap value

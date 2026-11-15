@@ -12,6 +12,11 @@
 
 typedef struct {
     pbw_buf *buf;
+    /* Cached buf->data and buf->cap: every field write needs the base pointer
+     * and every reserve the capacity, and the two loads through `buf` are
+     * dependent. They are refreshed in w_grow, the only place they change. */
+    uint8_t *base;
+    size_t limit;
     size_t pos;
     pbw_status status;
 } writer;
@@ -96,16 +101,55 @@ w_grow(writer *w, size_t extra)
         w->status = PBW_ERR_NOMEM;
         return 0;
     }
+    /* The reserve may have moved the block: refresh the cached views. */
+    w->base = w->buf->data;
+    w->limit = w->buf->cap;
     return 1;
+}
+
+PBW_INLINE void
+w_init(writer *w, pbw_buf *buf)
+{
+    w->buf = buf;
+    w->base = buf->data;
+    w->limit = buf->cap;
+    w->pos = 0;
+    w->status = PBW_OK;
 }
 
 PBW_INLINE int
 w_reserve(writer *w, size_t extra)
 {
-    if (PBW_EXPECT(w->buf->cap - w->pos >= extra, 1)) {
+    if (PBW_EXPECT(w->limit - w->pos >= extra, 1)) {
         return 1;
     }
     return w_grow(w, extra);
+}
+
+/* Copy of a wire payload: most field values are short (ids, names, enum
+ * labels, short tags), and for those an out-of-line memcpy call costs more
+ * than the copy itself -- it showed up as 9% of the xlarge encode profile.
+ * Up to PBW_COPY_INLINE bytes the copy unrolls into a few stores; anything
+ * larger stays a memcpy call. Reads and writes stay inside [src, src+len),
+ * so a payload shorter than the unroll width is never over-read. */
+#define PBW_COPY_INLINE 16
+
+PBW_INLINE void
+w_copy(uint8_t *dst, const uint8_t *src, size_t len)
+{
+    size_t i = 0;
+
+    if (PBW_EXPECT(len > PBW_COPY_INLINE, 0)) {
+        memcpy(dst, src, len);
+        return;
+    }
+    /* Byte loop, not chunked memcpy: callers pass small stack tags (e.g. a
+     * 5-byte group END tag), and memcpy(dst + i, src + i, 8) trips
+     * -Werror=array-bounds under _FORTIFY_SOURCE even when the length guard
+     * rules it out at runtime. The compiler unrolls this on its own. */
+    for (; i < len; i++) {
+        dst[i] = src[i];
+    }
 }
 
 PBW_INLINE void
@@ -117,7 +161,7 @@ w_put(writer *w, const void *data, size_t len)
     if (!w_reserve(w, len)) {
         return;
     }
-    memcpy(w->buf->data + w->pos, data, len);
+    w_copy(w->base + w->pos, (const uint8_t *)data, len);
     w->pos += len;
 }
 
@@ -131,7 +175,7 @@ w_varint(writer *w, uint64_t value)
     if (!w_reserve(w, 10)) {
         return;
     }
-    out = w->buf->data + w->pos;
+    out = w->base + w->pos;
     if (value < 0x80) {
         out[0] = (uint8_t)value;
         w->pos += 1;
@@ -166,7 +210,7 @@ w_tag_word_le(writer *w, uint32_t word, size_t len)
 {
 #if defined(__BYTE_ORDER__) && defined(__ORDER_BIG_ENDIAN__) && \
     __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
-    uint8_t *out = w->buf->data + w->pos;
+    uint8_t *out = w->base + w->pos;
     size_t i;
 
     for (i = 0; i < len; i++) {
@@ -177,10 +221,10 @@ w_tag_word_le(writer *w, uint32_t word, size_t len)
      __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__)
     /* memcpy of a fixed size compiles to one store and does not assume the
      * output offset is aligned. */
-    memcpy(w->buf->data + w->pos, &word, sizeof(word));
+    memcpy(w->base + w->pos, &word, sizeof(word));
 #else
     /* Unknown byte order: the portable spelling. */
-    uint8_t *out = w->buf->data + w->pos;
+    uint8_t *out = w->base + w->pos;
     size_t i;
 
     for (i = 0; i < len; i++) {
@@ -214,7 +258,7 @@ w_tag_noreserve(writer *w, uint32_t word, size_t len)
 PBW_INLINE void
 w_varint_noreserve(writer *w, uint64_t value)
 {
-    uint8_t *out = w->buf->data + w->pos;
+    uint8_t *out = w->base + w->pos;
     size_t len = 0;
 
     if (value < 0x80) {
@@ -270,7 +314,7 @@ w_varint_noreserve(writer *w, uint64_t value)
 PBW_INLINE void
 w_fixed_noreserve(writer *w, uint64_t value, size_t size)
 {
-    uint8_t *out = w->buf->data + w->pos;
+    uint8_t *out = w->base + w->pos;
 
     if (size == 4) {
         out[0] = (uint8_t)value;
@@ -295,7 +339,7 @@ static void
 w_tag_bytes(writer *w, const uint8_t *tag, size_t len)
 {
     if (w_reserve(w, len)) {
-        memcpy(w->buf->data + w->pos, tag, len);
+        w_copy(w->base + w->pos, tag, len);
         w->pos += len;
     }
 }
@@ -322,7 +366,7 @@ w_len_begin(writer *w, size_t *mark)
     if (!w_reserve(w, 1)) {
         return;
     }
-    w->buf->data[w->pos] = 0;
+    w->base[w->pos] = 0;
     w->pos += 1;
 }
 
@@ -338,12 +382,12 @@ w_len_end(writer *w, size_t mark)
         if (!w_reserve(w, shift)) {
             return;
         }
-        base = w->buf->data;
+        base = w->base;
         memmove(base + mark + 1 + shift, base + mark + 1, payload);
         w->pos += shift;
     }
     {
-        uint8_t *out = w->buf->data + mark;
+        uint8_t *out = w->base + mark;
 
         while (payload >= 0x80) {
             *out++ = (uint8_t)((payload & 0x7f) | 0x80);
@@ -361,7 +405,7 @@ w_fixed(writer *w, uint64_t value, size_t size)
     if (!w_reserve(w, size)) {
         return;
     }
-    out = w->buf->data + w->pos;
+    out = w->base + w->pos;
     if (size == 4) {
         out[0] = (uint8_t)value;
         out[1] = (uint8_t)(value >> 8);
@@ -390,9 +434,6 @@ static void
 write_group_body(writer *w, const pbw_field *field, const pbw_value *value,
                  uint32_t depth, int det)
 {
-    uint8_t end[5];
-    size_t end_len;
-
     if (value->as.msg == NULL) {
         w->status = PBW_ERR_INVALID;
         return;
@@ -406,9 +447,16 @@ write_group_body(writer *w, const pbw_field *field, const pbw_value *value,
     if (w->status != PBW_OK) {
         return;
     }
-    end_len = pbw_varint_write(end, ((uint64_t)field->number << 3) |
-                                        PBW_WIRE_END_GROUP);
-    w_put(w, end, end_len);
+    /* Format the END tag straight into the output: bouncing it through a
+     * stack temp trips -Werror=array-bounds under _FORTIFY_SOURCE once
+     * w_copy inlines (a runtime length against a 5-byte object), and the
+     * extra copy is pointless anyway. */
+    if (!w_reserve(w, 5)) {
+        return;
+    }
+    w->pos += pbw_varint_write(w->base + w->pos,
+                               ((uint64_t)field->number << 3) |
+                                   PBW_WIRE_END_GROUP);
 }
 
 /* One MessageSet item: START_GROUP(1), type_id (field 2), the extension
@@ -478,7 +526,7 @@ write_element(writer *w, const pbw_field *field, const pbw_value *value,
             w_tag_noreserve(w, field->tag_word, field->tag_len);
             w_varint_noreserve(w, value->as.bytes.len);
             if (value->as.bytes.len > 0) {
-                memcpy(w->buf->data + w->pos, value->as.bytes.data,
+                w_copy(w->base + w->pos, value->as.bytes.data,
                        value->as.bytes.len);
                 w->pos += value->as.bytes.len;
             }
@@ -520,7 +568,7 @@ write_element(writer *w, const pbw_field *field, const pbw_value *value,
             }
             w_tag_noreserve(w, field->tag_word, field->tag_len);
             mark = w->pos;
-            w->buf->data[w->pos] = 0;
+            w->base[w->pos] = 0;
             w->pos += 1;
         } else {
             w_field_tag(w, field, 0);
@@ -672,11 +720,11 @@ write_packed(writer *w, const pbw_field *field, const pbw_value *list)
         if (field->len_tag_len <= 4) {
             w_tag_noreserve(w, field->len_tag_word, field->len_tag_len);
         } else {
-            memcpy(w->buf->data + w->pos, field->len_tag, field->len_tag_len);
+            w_copy(w->base + w->pos, field->len_tag, field->len_tag_len);
             w->pos += field->len_tag_len;
         }
         w_varint_noreserve(w, payload);
-        out = w->buf->data + w->pos;
+        out = w->base + w->pos;
         for (i = 0; i < n; i++) {
             pbw_value *item = items[i];
             if (item == NULL || item->kind != PBW_VALUE_UINT) {
@@ -702,11 +750,11 @@ write_packed(writer *w, const pbw_field *field, const pbw_value *list)
         if (field->len_tag_len <= 4) {
             w_tag_noreserve(w, field->len_tag_word, field->len_tag_len);
         } else {
-            memcpy(w->buf->data + w->pos, field->len_tag, field->len_tag_len);
+            w_copy(w->base + w->pos, field->len_tag, field->len_tag_len);
             w->pos += field->len_tag_len;
         }
         w_varint_noreserve(w, payload);
-        out = w->buf->data + w->pos;
+        out = w->base + w->pos;
         for (i = 0; i < n; i++) {
             pbw_value *item = items[i];
             uint32_t v;
@@ -737,11 +785,11 @@ write_packed(writer *w, const pbw_field *field, const pbw_value *list)
         if (field->len_tag_len <= 4) {
             w_tag_noreserve(w, field->len_tag_word, field->len_tag_len);
         } else {
-            memcpy(w->buf->data + w->pos, field->len_tag, field->len_tag_len);
+            w_copy(w->base + w->pos, field->len_tag, field->len_tag_len);
             w->pos += field->len_tag_len;
         }
         w_varint_noreserve(w, payload);
-        out = w->buf->data + w->pos;
+        out = w->base + w->pos;
         for (i = 0; i < n; i++) {
             pbw_value *item = items[i];
             uint64_t v;
@@ -823,7 +871,7 @@ write_packed(writer *w, const pbw_field *field, const pbw_value *list)
     if (field->len_tag_len <= 4) {
         w_tag_noreserve(w, field->len_tag_word, field->len_tag_len);
     } else {
-        memcpy(w->buf->data + w->pos, field->len_tag, field->len_tag_len);
+        w_copy(w->base + w->pos, field->len_tag, field->len_tag_len);
         w->pos += field->len_tag_len;
     }
     w_varint_noreserve(w, payload);
@@ -832,7 +880,7 @@ write_packed(writer *w, const pbw_field *field, const pbw_value *list)
     switch (field->type) {
     case PBW_TYPE_INT32:
     case PBW_TYPE_ENUM: {
-        uint8_t *out = w->buf->data + w->pos;
+        uint8_t *out = w->base + w->pos;
         for (i = 0; i < n; i++) {
             w_varint_out(&out,
                          (uint64_t)(int64_t)(int32_t)items[i]->as.u64);
@@ -841,7 +889,7 @@ write_packed(writer *w, const pbw_field *field, const pbw_value *list)
         return;
     }
     case PBW_TYPE_UINT32: {
-        uint8_t *out = w->buf->data + w->pos;
+        uint8_t *out = w->base + w->pos;
         for (i = 0; i < n; i++) {
             w_varint_out(&out, (uint64_t)(uint32_t)items[i]->as.u64);
         }
@@ -849,7 +897,7 @@ write_packed(writer *w, const pbw_field *field, const pbw_value *list)
         return;
     }
     case PBW_TYPE_SINT32: {
-        uint8_t *out = w->buf->data + w->pos;
+        uint8_t *out = w->base + w->pos;
         for (i = 0; i < n; i++) {
             w_varint_out(&out, zigzag_encode(items[i]->as.u64, 32));
         }
@@ -857,7 +905,7 @@ write_packed(writer *w, const pbw_field *field, const pbw_value *list)
         return;
     }
     case PBW_TYPE_SINT64: {
-        uint8_t *out = w->buf->data + w->pos;
+        uint8_t *out = w->base + w->pos;
         for (i = 0; i < n; i++) {
             w_varint_out(&out, zigzag_encode(items[i]->as.u64, 64));
         }
@@ -865,7 +913,7 @@ write_packed(writer *w, const pbw_field *field, const pbw_value *list)
         return;
     }
     default: {
-        uint8_t *out = w->buf->data + w->pos;
+        uint8_t *out = w->base + w->pos;
         for (i = 0; i < n; i++) {
             w_varint_out(&out, items[i]->as.u64);
         }
@@ -1320,9 +1368,7 @@ pbw_encode_buf(pbw_buf *buf, const pbw_message *msg)
      * status, so a retry after the caller freed memory must not inherit it. */
     buf->oom = 0;
     buf->len = 0;
-    w.buf = buf;
-    w.pos = 0;
-    w.status = PBW_OK;
+    w_init(&w, buf);
     encode_message(&w, msg, 0, 0);
     buf->len = w.pos;
     return w.status;
@@ -1379,9 +1425,7 @@ encode_alloc(const pbw_message *msg, int det, uint8_t **out, size_t *len)
             return PBW_ERR_NOMEM;
         }
     }
-    w.buf = &buf;
-    w.pos = 0;
-    w.status = PBW_OK;
+    w_init(&w, &buf);
     encode_message(&w, msg, 0, det);
     if (w.status != PBW_OK) {
         pbw_buf_free(&buf);
@@ -1433,9 +1477,7 @@ encode_into(const pbw_message *msg, int det, void *out, size_t cap, size_t *len)
         return PBW_ERR_INVALID;
     }
     pbw_buf_init_fixed(&buf, out, cap);
-    w.buf = &buf;
-    w.pos = 0;
-    w.status = PBW_OK;
+    w_init(&w, &buf);
     encode_message(&w, msg, 0, det);
     status = w.status;
     if (status == PBW_ERR_NOMEM && buf.fixed) {
