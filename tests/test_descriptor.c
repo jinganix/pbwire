@@ -260,6 +260,27 @@ test_messageset(void)
     out = NULL;
     pbw_message_free(msg);
     msg = NULL;
+    /* A broken second item must not half-mutate the first: the field keeps
+     * x=5 and the whole second item is preserved as unknown bytes. */
+    {
+        static const unsigned char good_then_partial[] = {
+            0x0b, 0x10, 0x04, 0x1a, 0x02, 0x08, 0x05, 0x0c,
+            0x0b, 0x10, 0x04, 0x1a, 0x03, 0x08, 0x07, 0x80, 0x0c};
+        static const unsigned char second[] = {0x0b, 0x10, 0x04, 0x1a,
+                                               0x03, 0x08, 0x07, 0x80,
+                                               0x0c};
+        CHECK_OK(pbw_decode(set, good_then_partial,
+                            sizeof(good_then_partial), &msg));
+        v = pbw_message_get(msg, 4);
+        CHECK(v != NULL);
+        CHECK(pbw_value_get_int(
+                  pbw_message_get(pbw_value_get_message(v), 1)) == 5);
+        CHECK(pbw_message_unknown_len(msg) == sizeof(second));
+        CHECK(memcmp(pbw_message_unknown_bytes(msg), second,
+                     sizeof(second)) == 0);
+        pbw_message_free(msg);
+        msg = NULL;
+    }
     /* Malformed items: a bad inner message and items missing their id
      * or payload fall back to unknown bytes; a truncated item fails. */
     {
