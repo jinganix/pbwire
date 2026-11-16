@@ -615,6 +615,7 @@ add_field(pbw_descriptor *msg, const char *name, uint32_t number, pbw_type type,
         (uint8_t)(type == PBW_TYPE_STRING && msg->schema != NULL &&
                   msg->schema->proto3);
     msg->field_count++;
+    msg->epoch++;
     add_index_add_row(msg);
     if (msg->schema != NULL) {
         msg->schema->linked = 0;
@@ -1041,6 +1042,13 @@ pbw_schema_link(pbw_schema *schema)
         return PBW_OK;
     }
     schema->error[0] = '\0';
+    for (i = 0; i < schema->count; i++) {
+        /* Even a failed link sorts before it validates, so every pass
+         * retires pre-link messages whether it succeeds or not. */
+        if (!schema->descs[i]->is_enum) {
+            schema->descs[i]->epoch++;
+        }
+    }
     for (i = 0; i < schema->count; i++) {
         if (schema->descs[i]->is_enum) {
             continue;

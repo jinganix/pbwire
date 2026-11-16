@@ -1651,7 +1651,7 @@ pbw_json_print(const pbw_message *msg, char **out, size_t *len)
 {
     j_out j;
 
-    if (msg == NULL || out == NULL || len == NULL) {
+    if (!pbw_msg_fresh(msg) || out == NULL || len == NULL) {
         return PBW_ERR_INVALID;
     }
     /* Zeroed on every failure path, like pbw_encode() and the text printer:

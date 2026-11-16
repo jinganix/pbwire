@@ -761,7 +761,7 @@ pbw_text_print_opts(const pbw_message *msg, int print_unknown_fields,
 {
     text_out t;
 
-    if (msg == NULL || out == NULL || len == NULL) {
+    if (!pbw_msg_fresh(msg) || out == NULL || len == NULL) {
         return PBW_ERR_INVALID;
     }
     *out = NULL;

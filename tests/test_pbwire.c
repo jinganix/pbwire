@@ -3432,6 +3432,29 @@ test_schema_errors(void)
     CHECK_OK(pbw_schema_link(schema));
     pbw_schema_free(schema);
 
+    /* A message built before the link must not silently permute: the link
+     * sorts fields by number, so slot 0 ("b") becomes slot 1. Stale
+     * access fails instead of returning the wrong field. */
+    schema = pbw_schema_new();
+    msg = pbw_schema_add_message(schema, "M");
+    CHECK(msg != NULL);
+    CHECK(pbw_message_add_field(msg, "b", 2, PBW_TYPE_INT32,
+                                PBW_LABEL_OPTIONAL) != NULL);
+    CHECK(pbw_message_add_field(msg, "a", 1, PBW_TYPE_INT32,
+                                PBW_LABEL_OPTIONAL) != NULL);
+    {
+        pbw_message *early = pbw_message_new(msg);
+        CHECK(early != NULL);
+        /* fields[0] is "b" before the link: pointer stores work pre-link. */
+        CHECK_OK(
+            pbw_message_set_field(early, &msg->fields[0], pbw_value_new_int(7)));
+        CHECK_OK(pbw_schema_link(schema));
+        CHECK(pbw_message_get(early, 2) == NULL);
+        CHECK(pbw_message_get(early, 1) == NULL);
+        pbw_message_free(early);
+    }
+    pbw_schema_free(schema);
+
     /* type kind mismatches */
     schema = pbw_schema_new();
     msg = pbw_schema_add_message(schema, "M");

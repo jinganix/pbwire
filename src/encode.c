@@ -1346,7 +1346,7 @@ size_message(const pbw_message *msg, uint32_t depth, size_t *out)
 pbw_status
 pbw_message_encoded_size(const pbw_message *msg, size_t *len)
 {
-    if (msg == NULL || msg->desc == NULL || len == NULL) {
+    if (!pbw_msg_fresh(msg) || len == NULL) {
         return PBW_ERR_INVALID;
     }
     return size_message(msg, 0, len);
@@ -1360,7 +1360,7 @@ pbw_encode_buf(pbw_buf *buf, const pbw_message *msg)
 {
     writer w;
 
-    if (msg == NULL || buf == NULL || msg->desc == NULL ||
+    if (msg == NULL || buf == NULL || !pbw_msg_fresh(msg) ||
         (msg->desc->schema != NULL && !msg->desc->schema->linked)) {
         return PBW_ERR_INVALID;
     }
@@ -1388,7 +1388,7 @@ encode_alloc(const pbw_message *msg, int det, uint8_t **out, size_t *len)
      * one after a failure. */
     *out = NULL;
     *len = 0;
-    if (msg == NULL || msg->desc == NULL ||
+    if (!pbw_msg_fresh(msg) ||
         (msg->desc->schema != NULL && !msg->desc->schema->linked)) {
         return PBW_ERR_INVALID;
     }
@@ -1470,7 +1470,7 @@ encode_into(const pbw_message *msg, int det, void *out, size_t cap, size_t *len)
         return PBW_ERR_INVALID;
     }
     *len = 0; /* no bytes written yet: never leave a stale length behind */
-    if (msg == NULL || msg->desc == NULL || (out == NULL && cap > 0) ||
+    if (!pbw_msg_fresh(msg) || (out == NULL && cap > 0) ||
         (msg->desc->schema != NULL && !msg->desc->schema->linked)) {
         /* An unlinked descriptor has no tags yet: refuse instead of writing
          * values with no field numbers. */
