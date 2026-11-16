@@ -793,6 +793,10 @@ pbw_message_set_field(pbw_message *msg, const pbw_field *field, pbw_value *value
         !pbw_msg_fresh(msg) || field == NULL) {
         return PBW_ERR_INVALID;
     }
+    base = msg->desc->fields;
+    if (field < base || field >= base + msg->desc->field_count) {
+        return PBW_ERR_INVALID;
+    }
     if (msg->arena != NULL) {
         if (msg->arena->readonly) {
             return PBW_ERR_INVALID;
@@ -805,10 +809,6 @@ pbw_message_set_field(pbw_message *msg, const pbw_field *field, pbw_value *value
              * arena can: pbw_message_free() walks its slots (has_heap). */
             return PBW_ERR_INVALID;
         }
-    }
-    base = msg->desc->fields;
-    if (field < base || field >= base + msg->desc->field_count) {
-        return PBW_ERR_INVALID;
     }
     if (!value_matches(field, value)) {
         return PBW_ERR_TYPE;

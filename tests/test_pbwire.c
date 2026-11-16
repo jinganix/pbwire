@@ -3453,6 +3453,33 @@ test_schema_errors(void)
         CHECK(pbw_message_get(early, 1) == NULL);
         pbw_message_free(early);
     }
+    /* A field pointer resolved after the link stays valid: the array is
+     * only permuted by the link itself, and a pointer must never be
+     * cached across an add or a link (realloc may move the array, the
+     * link sorts it in place). Re-resolve by number instead. */
+    {
+        const pbw_field *fresh;
+        pbw_message *m;
+
+        pbw_schema_free(schema);
+        schema = pbw_schema_new();
+        msg = pbw_schema_add_message(schema, "M");
+        CHECK(msg != NULL);
+        CHECK(pbw_message_add_field(msg, "b", 2, PBW_TYPE_INT32,
+                                    PBW_LABEL_OPTIONAL) != NULL);
+        CHECK(pbw_message_add_field(msg, "a", 1, PBW_TYPE_INT32,
+                                    PBW_LABEL_OPTIONAL) != NULL);
+        CHECK_OK(pbw_schema_link(schema));
+        fresh = pbw_descriptor_find_field(msg, 2);
+        CHECK(fresh != NULL);
+        m = pbw_message_new(msg);
+        CHECK(m != NULL);
+        CHECK_OK(pbw_message_set_field(m, fresh, pbw_value_new_int(9)));
+        CHECK(pbw_value_get_int(pbw_message_get(m, 2)) == 9);
+        CHECK(pbw_message_get_field(m, fresh) != NULL);
+        CHECK(pbw_message_get(m, 1) == NULL);
+        pbw_message_free(m);
+    }
     pbw_schema_free(schema);
 
     /* type kind mismatches */
