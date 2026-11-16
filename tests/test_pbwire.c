@@ -5969,11 +5969,18 @@ test_json_format(void)
             "{\"when\":\"1970-01-01T00:00:00Z\"}",
             "{\"when\":\"1970-01-01T00:00:00.5Z\"}",
             "{\"when\":\"2026-11-07T01:02:03.123456789Z\"}",
+            /* range edges still parse (offsets may touch, not cross). */
+            "{\"when\":\"0001-01-01T00:00:00Z\"}",
+            "{\"when\":\"9999-12-31T23:59:59Z\"}",
+            "{\"when\":\"0001-01-01T00:30:00+00:30\"}",
         };
         static const char *want[] = {
             "{\"when\":\"1970-01-01T00:00:00Z\"}",
             "{\"when\":\"1970-01-01T00:00:00.500Z\"}",
             "{\"when\":\"2026-11-07T01:02:03.123456789Z\"}",
+            "{\"when\":\"0001-01-01T00:00:00Z\"}",
+            "{\"when\":\"9999-12-31T23:59:59Z\"}",
+            "{\"when\":\"0001-01-01T00:00:00Z\"}",
         };
         size_t i;
 
@@ -6001,6 +6008,9 @@ test_json_format(void)
             "{\"when\":\"2019-02-29T00:00:00Z\"}",
             "{\"when\":\"2020-02-30T00:00:00Z\"}",
             "{\"when\":\"2020-04-31T00:00:00Z\"}",
+            /* A valid date with an offset that leaves the Timestamp range. */
+            "{\"when\":\"0001-01-01T00:00:00+00:01\"}",
+            "{\"when\":\"9999-12-31T23:59:59-00:01\"}",
         };
         size_t i;
 
@@ -6760,6 +6770,19 @@ test_wkt(void)
                                                sizeof(inner), NULL));
     pbw_message_free(empty);
 
+    /* a string where seconds belong is not a Timestamp, even hand-built:
+     * the getters read 0 for the wrong kind, which would silently become
+     * the epoch. */
+    {
+        pbw_message *bad = pbw_message_new(any);
+
+        CHECK(bad != NULL);
+        CHECK_OK(
+            pbw_message_set(bad, 1, pbw_value_new_string("x")));
+        CHECK_STATUS(PBW_ERR_INVALID,
+                     pbw_timestamp_to_millis(bad, &millis));
+        pbw_message_free(bad);
+    }
     /* a descriptor whose field 1 is not a string is not an Any */
     CHECK_STATUS(PBW_ERR_TYPE,
                  pbw_any_pack(ts, "x", inner, sizeof(inner), &packed));

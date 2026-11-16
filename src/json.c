@@ -10,8 +10,8 @@
  * the reference parser accepts in its default (legacy) mode: proto and
  * camelCase names, quoted or bare 64-bit integers, floats with integral or
  * exponential text, quoted bools, single-quoted and bare key strings,
- * trailing commas, `null` as unset, single elements for repeated fields,
- * nested-array flattening (outside `Value`/`ListValue`), the object form of
+ * trailing commas, `null` as unset, nested-array flattening (outside
+ * `Value`/`ListValue`), the object form of
  * well-known types (`{"seconds": ...}`), base64 with either alphabet and
  * optional padding, unknown closed-enum numbers diverted to unknown fields
  * (like the binary decoder), and duplicate keys allowed except inside oneofs
@@ -3155,6 +3155,13 @@ j_parse_timestamp(j_in *j, pbw_message *msg)
         offset = ((int64_t)off_hour * 60 + (int64_t)off_min) * 60;
         secs += neg ? offset : -offset;
     } else {
+        pbw_buf_free(&raw);
+        return PBW_ERR_INVALID;
+    }
+    /* A valid date with a valid offset can still fall outside the Timestamp
+     * range (0001-01-01 to 9999-12-31): the printer rejects such values,
+     * so the parser must too. */
+    if (secs < -62135596800ll || secs > 253402300799ll) {
         pbw_buf_free(&raw);
         return PBW_ERR_INVALID;
     }
