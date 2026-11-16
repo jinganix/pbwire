@@ -158,7 +158,9 @@ void pbw_field_set_oneof(pbw_field *field, uint32_t oneof_index);
 
 /* Resolve type names, sort fields by number and build lookup tables. Idempotent
  * while no field is added; the first success freezes the field layout, so
- * create messages and set values only after it returns PBW_OK. */
+ * create messages and set values only after it returns PBW_OK. Link once
+ * before sharing the schema across threads: add/link while another thread
+ * reads it races on the lookup tables. */
 pbw_status pbw_schema_link(pbw_schema *schema);
 /* Last link failure reason (empty when the last link succeeded). */
 const char *pbw_schema_error(const pbw_schema *schema);
@@ -465,7 +467,8 @@ size_t pbw_ctx_used(const pbw_ctx *ctx);
 
 /* Decode into the context instead of one allocation per value. A sealed
  * context (one holding a previous decode) resets implicitly on entry, so a
- * decode loop needs no reset call; earlier trees die with that reset. */
+ * decode loop needs no reset call; earlier trees die with that reset. A
+ * failed decode resets too, so its partial trees never accumulate. */
 pbw_status pbw_decode_ctx(pbw_ctx *ctx, const pbw_descriptor *desc,
                           const void *buf, size_t len, pbw_message **out);
 /* Encode into the context's buffer. *out stays valid until the next
@@ -492,7 +495,8 @@ typedef struct pbw_limits {
 
 /* Print msg in protobuf text format. *out is malloc'd, NUL-terminated and owned
  * by the caller (pbw_free); *len excludes the NUL. Unknown fields are shown
- * as numeric `field: value` lines, like the reference printer. */
+ * as numeric `field: value` lines, like the reference printer; those lines
+ * do not parse back (pass 0 for print_unknown_fields for round trips). */
 pbw_status pbw_text_print(const pbw_message *msg, char **out, size_t *len);
 /* Same, with explicit control over unknown fields (the conformance suite asks
  * for both). */

@@ -91,12 +91,18 @@ wkt_to_millis(const pbw_message *msg, int64_t *out)
         return PBW_ERR_INVALID;
     }
     vsec = pbw_message_get(msg, 1);
-    if (vsec == NULL) {
+    if (vsec == NULL || vsec->kind != PBW_VALUE_UINT) {
+        /* A hand-built tree can hold any kind here; the getters return 0
+         * for the wrong kind, which would silently become the epoch. */
         return PBW_ERR_INVALID;
     }
     sec = (int64_t)pbw_value_get_uint(vsec);
     vnano = pbw_message_get(msg, 2);
     if (vnano != NULL) {
+        /* All numerics share PBW_VALUE_UINT (raw bit pattern). */
+        if (vnano->kind != PBW_VALUE_UINT) {
+            return PBW_ERR_INVALID;
+        }
         nanos = pbw_value_get_int32(vnano);
     }
     if (nanos > 999999999 || nanos < -999999999) {

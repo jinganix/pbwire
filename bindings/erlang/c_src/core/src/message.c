@@ -637,6 +637,11 @@ pbw_message_put(pbw_message *msg, size_t index, const pbw_value *value)
     /* Keep the caller's arena flag: a decoded payload lives in the arena, one
      * the caller passed in is theirs to free with the message. */
     msg->values[index].flags = value->flags | PBW_VF_EMBEDDED;
+    if (value->kind == PBW_VALUE_MESSAGE && value->as.msg != NULL) {
+        /* Owned now: storing the same sub-message twice would free it
+         * twice, so set_field() rejects it (see the stored check). */
+        value->as.msg->stored = 1;
+    }
     pbw_msg_set_present(msg, index, 1);
 }
 
@@ -663,6 +668,9 @@ pbw_message_store(pbw_message *msg, const pbw_field *field, pbw_value *value)
                 clear_slot(msg, index);
             }
             return 0;
+        }
+        if (value->kind == PBW_VALUE_MESSAGE && value->as.msg != NULL) {
+            value->as.msg->stored = 1;
         }
         return 1;
     }
@@ -809,6 +817,15 @@ pbw_message_set_field(pbw_message *msg, const pbw_field *field, pbw_value *value
              * arena can: pbw_message_free() walks its slots (has_heap). */
             return PBW_ERR_INVALID;
         }
+    } else if ((value->flags & PBW_VF_ARENA) != 0) {
+        /* A heap tree cannot hold a context-arena payload: the next reset
+         * would free it under the tree. */
+        return PBW_ERR_INVALID;
+    }
+    if (value->kind == PBW_VALUE_MESSAGE && value->as.msg != NULL &&
+        value->as.msg->stored) {
+        /* Already owned by another message: sharing it would free it twice. */
+        return PBW_ERR_INVALID;
     }
     if (!value_matches(field, value)) {
         return PBW_ERR_TYPE;

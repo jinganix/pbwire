@@ -5,7 +5,7 @@
 require "mkmf"
 
 root = File.expand_path("../../../..", __dir__)
-core = %w[wire arena schema message encode decode ctx descriptor_set text json stream]
+core = %w[wire arena schema message encode decode ctx descriptor_set text json stream wkt]
 srcs = [File.join(__dir__, "pbwire_ext.c")] + core.map { |c| File.join(root, "src", "#{c}.c") }
 
 $INCFLAGS += " -I#{File.join(root, "include")}"

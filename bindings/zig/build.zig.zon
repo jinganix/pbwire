@@ -1,6 +1,6 @@
 .{
     .name = .pbwire_zig,
-    .version = "0.1.0",
+    .version = "0.1.17",
     .fingerprint = 0x653457e32b749842,
     .minimum_zig_version = "0.14.0",
     // Baseline only (`zig build -Dbaseline=true bench-baseline`): Arwalk's

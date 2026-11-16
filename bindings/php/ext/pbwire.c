@@ -1651,7 +1651,7 @@ zend_module_entry pbwire_module_entry = {
     NULL, /* RINIT */
     NULL, /* RSHUTDOWN */
     PHP_MINFO(pbwire),
-    "0.1.0",
+    "0.1.17",
     STANDARD_MODULE_PROPERTIES,
 };
 

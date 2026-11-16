@@ -212,28 +212,34 @@ conform(const pbw_message *request, pbw_message *out)
             snprintf(why, sizeof(why), "unknown message type %s", type);
             return pbw_message_set(out, 2, pbw_value_new_string(why)) == PBW_OK;
         }
-        /* input by presence: json_payload, text_payload or protobuf_payload */
-        if (json != NULL) {
+        /* Input by field presence, not by pointer: a present-but-empty
+         * payload has a NULL data pointer with length 0, and must parse
+         * (or fail) instead of falling through to "unsupported". */
+        if (pbw_message_get(request, 2) != NULL) {
             pbw_json_parse_options opts;
 
             opts.ignore_unknown_fields =
                 category == CATEGORY_JSON_IGNORE_UNKNOWN;
-            status = pbw_json_parse_opts(desc, (const char *)json, json_len,
+            status = pbw_json_parse_opts(desc,
+                                         json != NULL ? (const char *)json
+                                                      : "",
+                                         json_len,
                                          &opts, &decoded);
             if (status != PBW_OK) {
                 return pbw_message_set(out, 1,
                                        pbw_value_new_string(pbw_strerror(status))) ==
                        PBW_OK;
             }
-        } else if (text != NULL) {
-            status = pbw_text_parse(desc, (const char *)text, text_len,
-                                    &decoded);
+        } else if (pbw_message_get(request, 8) != NULL) {
+            status = pbw_text_parse(desc,
+                                    text != NULL ? (const char *)text : "",
+                                    text_len, &decoded);
             if (status != PBW_OK) {
                 return pbw_message_set(out, 1,
                                        pbw_value_new_string(pbw_strerror(status))) ==
                        PBW_OK;
             }
-        } else if (payload != NULL) {
+        } else if (pbw_message_get(request, 1) != NULL) {
             status = pbw_decode(desc, payload, payload_len, &decoded);
             if (status != PBW_OK) {
                 return pbw_message_set(out, 1,

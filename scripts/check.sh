@@ -27,4 +27,18 @@ echo "== dynamic symbols =="
 echo "== erlang vendored core =="
 make -s -C bindings/erlang/c_src core-sync-check
 
+echo "== binding core file lists =="
+for f in src/*.c; do
+  b=${f#src/}
+  b=${b%.c}
+  [ -e "bindings/php/ext/core_$b.c" ] || {
+    echo "check: bindings/php/ext/core_$b.c missing (symlink to ../../../$f)" >&2
+    exit 1
+  }
+  grep -qw "$b" bindings/ruby/ext/pbwire_ext/extconf.rb || {
+    echo "check: extconf.rb core list missing $b" >&2
+    exit 1
+  }
+done
+
 echo "check: OK"
