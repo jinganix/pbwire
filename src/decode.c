@@ -67,6 +67,13 @@ read_varint(reader *r, uint64_t *out)
     return 1;
 }
 
+/* Upfront batch cap for packed runs: a hostile run (megabytes of varint
+ * terminators with an undecodable tail) must fail on its first byte, not
+ * on a whole-run reservation. Past the cap the reserve covers one chunk
+ * and the loop grows geometrically; bench tiers peak at 3000 packed items,
+ * so the fast path below never sees it. */
+#define PBW_PACKED_BATCH_MAX 4096u
+
 static pbw_status skip_group(reader *r, uint32_t number, uint32_t depth, uint32_t dlim);
 static pbw_status skip_field(reader *r, pbw_message *msg, uint32_t number,
                              uint32_t wire_type, uint32_t depth, uint32_t dlim,
@@ -578,17 +585,27 @@ read_packed(reader *r, const pbw_field *field, pbw_message *msg, int closed,
         for (k = 0; k < data_len; k++) {
             n += (size_t)(data[k] < 0x80);
         }
-        if (!pbw_value_list_reserve(
-                vlist, n > UINT32_MAX ? UINT32_MAX : (uint32_t)n,
-                msg->arena)) {
-            return PBW_ERR_NOMEM;
-        }
-        /* The scan counted the items: one bump for every node of this run
-         * instead of one allocation per item. */
-        if (n > 0 && n <= UINT32_MAX &&
-            n <= SIZE_MAX / sizeof(pbw_value)) {
-            batch = (pbw_value *)pbw_arena_alloc(
-                msg->arena, n * sizeof(pbw_value));
+        if (n > PBW_PACKED_BATCH_MAX) {
+            /* Hostile-sized run: reserve one chunk, grow geometrically,
+             * and leave the batch block off so the loop allocates the
+             * few nodes it actually stores before failing. */
+            if (!pbw_value_list_reserve(vlist, PBW_PACKED_BATCH_MAX,
+                                        msg->arena)) {
+                return PBW_ERR_NOMEM;
+            }
+        } else {
+            if (!pbw_value_list_reserve(
+                    vlist, n > UINT32_MAX ? UINT32_MAX : (uint32_t)n,
+                    msg->arena)) {
+                return PBW_ERR_NOMEM;
+            }
+            /* The scan counted the items: one bump for every node of this run
+             * instead of one allocation per item. */
+            if (n > 0 && n <= UINT32_MAX &&
+                n <= SIZE_MAX / sizeof(pbw_value)) {
+                batch = (pbw_value *)pbw_arena_alloc(
+                    msg->arena, n * sizeof(pbw_value));
+            }
         }
     } else if (field->type == PBW_TYPE_FIXED32 ||
                field->type == PBW_TYPE_SFIXED32 ||
@@ -603,19 +620,26 @@ read_packed(reader *r, const pbw_field *field, pbw_message *msg, int closed,
                            : 4u;
         size_t count = data_len / width;
 
-        if (!pbw_value_list_reserve(
-                vlist, count > UINT32_MAX ? UINT32_MAX : (uint32_t)count,
-                msg->arena)) {
-            return PBW_ERR_NOMEM;
-        }
-        /* Fixed-width items need no scan: the payload length divides exactly,
-         * so the node block comes from one bump like a varint run's. A
-         * truncated tail fails in read_scalar() before it can index past the
-         * block: each successful read consumes `width` bytes. */
-        if (batchable && count > 0 && count <= UINT32_MAX &&
-            count <= SIZE_MAX / sizeof(pbw_value)) {
-            batch = (pbw_value *)pbw_arena_alloc(
-                msg->arena, count * sizeof(pbw_value));
+        if (count > PBW_PACKED_BATCH_MAX) {
+            if (!pbw_value_list_reserve(vlist, PBW_PACKED_BATCH_MAX,
+                                        msg->arena)) {
+                return PBW_ERR_NOMEM;
+            }
+        } else {
+            if (!pbw_value_list_reserve(
+                    vlist, count > UINT32_MAX ? UINT32_MAX : (uint32_t)count,
+                    msg->arena)) {
+                return PBW_ERR_NOMEM;
+            }
+            /* Fixed-width items need no scan: the payload length divides exactly,
+             * so the node block comes from one bump like a varint run's. A
+             * truncated tail fails in read_scalar() before it can index past the
+             * block: each successful read consumes `width` bytes. */
+            if (batchable && count > 0 && count <= UINT32_MAX &&
+                count <= SIZE_MAX / sizeof(pbw_value)) {
+                batch = (pbw_value *)pbw_arena_alloc(
+                    msg->arena, count * sizeof(pbw_value));
+            }
         }
     }
     items = vlist->as.list.items;
