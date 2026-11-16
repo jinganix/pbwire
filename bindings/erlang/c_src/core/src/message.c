@@ -626,6 +626,20 @@ pbw_message_put(pbw_message *msg, size_t index, const pbw_value *value)
         if (number != 0 && number != field->number) {
             const pbw_field *previous = pbw_find_field(msg->desc, number);
 
+            if (previous == NULL &&
+                (msg->desc->schema == NULL ||
+                 !msg->desc->schema->linked)) {
+                /* Unsorted rows: the binary search above cannot see them,
+                 * so an old sibling would stay present beside the new one. */
+                size_t k;
+
+                for (k = 0; k < msg->desc->field_count; k++) {
+                    if (msg->desc->fields[k].number == number) {
+                        previous = &msg->desc->fields[k];
+                        break;
+                    }
+                }
+            }
             if (previous != NULL) {
                 clear_slot(msg, value_field_index(msg, previous));
             }
@@ -821,6 +835,23 @@ pbw_message_set_field(pbw_message *msg, const pbw_field *field, pbw_value *value
         /* A heap tree cannot hold a context-arena payload: the next reset
          * would free it under the tree. */
         return PBW_ERR_INVALID;
+    }
+    if (msg->arena != NULL && (value->flags & PBW_VF_ARENA) != 0) {
+        /* Same arena only: a value from another arena dies with its own
+         * reset, and a value from before this arena's reset is already
+         * dead (owns() sees only live bytes, below `used`). */
+        const void *payload = NULL;
+
+        if (value->kind == PBW_VALUE_BYTES) {
+            payload = value->as.bytes.data;
+        } else if (value->kind == PBW_VALUE_MESSAGE) {
+            payload = value->as.msg;
+        } else if (value->kind == PBW_VALUE_LIST) {
+            payload = value->as.list.items;
+        }
+        if (!pbw_arena_owns(msg->arena, payload)) {
+            return PBW_ERR_INVALID;
+        }
     }
     if (value->kind == PBW_VALUE_MESSAGE && value->as.msg != NULL &&
         value->as.msg->stored) {

@@ -191,6 +191,12 @@ pbw_pool_release(pbw_pool *pool, pbw_ctx *ctx)
     if (pool == NULL || ctx == NULL) {
         return;
     }
+    if (ctx->arena.no_grow) {
+        /* Caller memory can never grow: pooling it would hand out a context
+         * that fails where a pooled one succeeds, so it stays with its
+         * caller. */
+        return;
+    }
     /* A released context is always clean: the next acquire can use it
      * without resetting. The retain cap bounds what the reset keeps, so
      * an outlier never pins the pool. */

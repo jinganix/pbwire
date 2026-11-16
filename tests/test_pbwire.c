@@ -986,6 +986,26 @@ test_hostile_arguments(pbw_schema *schema)
         pbw_ctx_free(ctx);
     }
 
+    /* A value from one arena cannot be stored into a message of another:
+     * the source reset would free it under the tree. (Plain integers are
+     * inline and stay safe; a bytes payload aliases the source arena.) */
+    {
+        static const char payload[] = "cross";
+        pbw_ctx *a = pbw_ctx_new();
+        pbw_ctx *b = pbw_ctx_new();
+        pbw_message *mb = NULL;
+        pbw_value *v = NULL;
+
+        CHECK(a != NULL && b != NULL);
+        mb = pbw_message_new_ctx(b, person);
+        v = pbw_value_new_bytes_ctx(a, payload, sizeof(payload) - 1);
+        CHECK(mb != NULL && v != NULL);
+        CHECK_STATUS(PBW_ERR_INVALID, pbw_message_set(mb, 1, v));
+        pbw_value_free(v);
+        pbw_ctx_free(a);
+        pbw_ctx_free(b);
+    }
+
     /* The same sub-message cannot live in two fields: the second store is
      * rejected instead of sharing ownership (and double-freeing). */
     {
@@ -1006,6 +1026,25 @@ test_hostile_arguments(pbw_schema *schema)
         free(w2);
         pbw_message_free(p1);
         pbw_message_free(p2);
+    }
+
+    /* A wrong-kind value smuggled past the type-checked stores (internal
+     * put) must fail the encode, not read the wrong union arm: an integer
+     * where a message belongs would recurse into address 0x1234. */
+    {
+        pbw_message *m = pbw_message_new(parent);
+        pbw_value bad;
+        uint8_t *buf = NULL;
+        size_t len = 0;
+
+        CHECK(m != NULL);
+        memset(&bad, 0, sizeof(bad));
+        bad.kind = PBW_VALUE_UINT;
+        bad.as.u64 = 0x1234;
+        pbw_message_put(m, 0, &bad);
+        CHECK_STATUS(PBW_ERR_INVALID, pbw_encode(m, &buf, &len));
+        CHECK(buf == NULL && len == 0);
+        pbw_message_free(m);
     }
 
     /* A feed chunk no allocation can hold fails instead of spinning on a
@@ -2805,6 +2844,27 @@ test_ctx_pool(pbw_schema *schema)
     pbw_pool_release(pool, c);
     CHECK(pbw_pool_idle(pool) == 2);
 
+    /* Caller memory is never pooled: it could not grow like the pooled
+     * contexts, so releasing it leaves the idle count alone and the next
+     * acquire makes a fresh heap context. */
+    {
+        static union {
+            uint8_t bytes[4096];
+            size_t align;
+        } mem;
+        pbw_ctx *fixed = pbw_ctx_new_mem(mem.bytes, sizeof(mem.bytes));
+        pbw_ctx *fresh;
+
+        CHECK(fixed != NULL);
+        pbw_pool_release(pool, fixed);
+        CHECK(pbw_pool_idle(pool) == 2);
+        fresh = pbw_pool_acquire(pool);
+        CHECK(fresh != NULL && fresh != fixed);
+        CHECK_STATUS(PBW_OK,
+                     pbw_decode_ctx(fresh, person, wire, len, &decoded));
+        pbw_pool_release(pool, fresh);
+    }
+
     /* NULL-safe, and max_idle 0 degenerates to new/free */
     CHECK(pbw_pool_acquire(NULL) == NULL);
     CHECK(pbw_pool_idle(NULL) == 0);
@@ -3563,6 +3623,17 @@ test_schema_errors(void)
     CHECK_STATUS(PBW_ERR_INVALID, pbw_schema_link(schema));
     pbw_schema_free(schema);
 
+    /* A oneof index the link would reject must not size the case table:
+     * on 32-bit the size math wraps. */
+    schema = pbw_schema_new();
+    msg = pbw_schema_add_message(schema, "M");
+    field = pbw_message_add_field(msg, "a", 1, PBW_TYPE_INT32,
+                                  PBW_LABEL_OPTIONAL);
+    CHECK(field != NULL);
+    pbw_field_set_oneof(field, 0xffffffffu);
+    CHECK(pbw_message_new(msg) == NULL);
+    pbw_schema_free(schema);
+
     /* field and descriptor name/number validation */
     schema = pbw_schema_new();
     msg = pbw_schema_add_message(schema, "M");
@@ -3579,6 +3650,35 @@ test_schema_errors(void)
     CHECK(pbw_message_add_field(msg, "b", 1, PBW_TYPE_INT32,
                                 PBW_LABEL_OPTIONAL) == NULL); /* duplicate number */
     CHECK_OK(pbw_schema_link(schema));
+    pbw_schema_free(schema);
+
+    /* An unlinked oneof still clears its old sibling: the rows are in add
+     * order, so the binary search misses and only the linear fallback
+     * finds field 2 after field 1 is stored. */
+    schema = pbw_schema_new();
+    msg = pbw_schema_add_message(schema, "M");
+    {
+        pbw_message *m;
+        const pbw_field *f2;
+        const pbw_field *f1;
+
+        f2 = pbw_message_add_field(msg, "b", 2, PBW_TYPE_INT32,
+                                   PBW_LABEL_OPTIONAL);
+        f1 = pbw_message_add_field(msg, "a", 1, PBW_TYPE_INT32,
+                                   PBW_LABEL_OPTIONAL);
+        CHECK(f2 != NULL && f1 != NULL);
+        pbw_field_set_oneof((pbw_field *)f2, 1);
+        pbw_field_set_oneof((pbw_field *)f1, 1);
+        m = pbw_message_new(msg);
+        CHECK(m != NULL);
+        CHECK_OK(pbw_message_set_field(m, f2, pbw_value_new_uint(2)));
+        CHECK(pbw_message_field_count(m) == 1);
+        CHECK_OK(pbw_message_set_field(m, f1, pbw_value_new_uint(1)));
+        /* One member only: storing the second clears the first. get()
+         * needs a linked schema, so the count is the witness. */
+        CHECK(pbw_message_field_count(m) == 1);
+        pbw_message_free(m);
+    }
     pbw_schema_free(schema);
 
     /* A message built before the link must not silently permute: the link
@@ -4378,8 +4478,8 @@ test_text_format(void)
             "color: BOGUS",                                                                                                                                              /* unknown enum */
             "color: 1.5",                                                                                                                                                /* float for enum */
             "f32: 0x10",                                                                                                                                                 /* hex float */
-            "f32: +1.5",                                                                                                                                                 /* leading plus */
-            "a: +1",                                                                                                                                                     /* leading plus on int */
+            "f32: +1.5",                                                                                                                                                 /* leading plus rejected like the C++ reference */
+            "a: +1",                                                                                                                                                     /* leading plus rejected like the C++ reference */
             "a: -2147483649",                                                                                                                                            /* int32 range */
             "f32: 0x1p3",                                                                                                                                                /* hex float */
             "a: 0b101",                                                                                                                                                  /* binary */
@@ -6802,10 +6902,19 @@ test_wkt(void)
     stamp = pbw_message_new(ts);
     CHECK_OK(pbw_message_set(stamp, 1, pbw_value_new_int(-1)));
     CHECK_OK(pbw_message_set(stamp, 2, pbw_value_new_int(-500000000)));
-    CHECK_OK(pbw_timestamp_to_millis(stamp, &millis));
+    /* Negative nanos are only legal on a Duration: the reference rejects
+     * this Timestamp instead of converting it. */
+    CHECK_STATUS(PBW_ERR_INVALID, pbw_timestamp_to_millis(stamp, &millis));
+    pbw_message_free(stamp);
+    /* ... while the same shape converts fine as a Duration. */
+    stamp = pbw_message_new(dur);
+    CHECK(stamp != NULL);
+    CHECK_OK(pbw_message_set(stamp, 1, pbw_value_new_int(-1)));
+    CHECK_OK(pbw_message_set(stamp, 2, pbw_value_new_int(-500000000)));
+    CHECK_OK(pbw_duration_to_millis(stamp, &millis));
     CHECK(millis == -1500);
     pbw_message_clear(stamp, 2);
-    CHECK_OK(pbw_timestamp_to_millis(stamp, &millis));
+    CHECK_OK(pbw_duration_to_millis(stamp, &millis));
     CHECK(millis == -1000);
     pbw_message_free(stamp);
     stamp = pbw_message_new(ts);
@@ -6815,6 +6924,14 @@ test_wkt(void)
     CHECK_STATUS(PBW_ERR_INVALID, pbw_timestamp_to_millis(stamp, &millis));
     CHECK_STATUS(PBW_ERR_INVALID, pbw_timestamp_to_millis(NULL, &millis));
     CHECK_STATUS(PBW_ERR_INVALID, pbw_timestamp_to_millis(stamp, NULL));
+    /* Negative nanos belong to Durations, not Timestamps. */
+    CHECK_OK(pbw_message_set(stamp, 1, pbw_value_new_int(1)));
+    CHECK_OK(pbw_message_set(stamp, 2, pbw_value_new_int(-1)));
+    CHECK_STATUS(PBW_ERR_INVALID, pbw_timestamp_to_millis(stamp, &millis));
+    /* ... but a seconds-only negative Timestamp still converts. */
+    pbw_message_clear(stamp, 2);
+    CHECK_OK(pbw_timestamp_to_millis(stamp, &millis));
+    CHECK(millis == 1000);
     pbw_message_free(stamp);
     stamp = pbw_message_new(dur);
     CHECK(stamp != NULL);

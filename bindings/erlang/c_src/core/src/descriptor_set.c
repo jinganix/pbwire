@@ -746,6 +746,13 @@ ds_enum_proto(pbw_schema *schema, const char *parent, const uint8_t *p,
                     return status;
                 }
             } else if (f.field == 2 && f.wire == PBW_WIRE_VARINT) {
+                /* int32 travels as up-to-64-bit varint (negatives use all
+                 * ten bytes); anything outside the 32-bit range would
+                 * truncate into a different value. */
+                if (f.varint > 0x7fffffffu &&
+                    f.varint < 0xffffffff80000000ull) {
+                    return PBW_ERR_INVALID;
+                }
                 number = (int32_t)(uint32_t)f.varint;
             }
         }

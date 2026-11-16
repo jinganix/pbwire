@@ -80,7 +80,7 @@ pbw_any_payload(const pbw_message *any_msg, size_t *len)
 /* seconds (field 1) + nanos (field 2) to milliseconds, shared by Timestamp
  * and Duration: same shape, same range rule. */
 static pbw_status
-wkt_to_millis(const pbw_message *msg, int64_t *out)
+wkt_to_millis(const pbw_message *msg, int64_t *out, int is_timestamp)
 {
     pbw_value *vsec;
     pbw_value *vnano;
@@ -106,6 +106,10 @@ wkt_to_millis(const pbw_message *msg, int64_t *out)
         nanos = pbw_value_get_int32(vnano);
     }
     if (nanos > 999999999 || nanos < -999999999) {
+        return PBW_ERR_INVALID;
+    }
+    if (is_timestamp && nanos < 0) {
+        /* Negative nanos are only legal on a Duration. */
         return PBW_ERR_INVALID;
     }
     /* sec*1000 + nanos/1000000 must stay inside int64, and the sub-second
@@ -137,13 +141,13 @@ wkt_to_millis(const pbw_message *msg, int64_t *out)
 pbw_status
 pbw_timestamp_to_millis(const pbw_message *ts, int64_t *out)
 {
-    return wkt_to_millis(ts, out);
+    return wkt_to_millis(ts, out, 1);
 }
 
 pbw_status
 pbw_duration_to_millis(const pbw_message *dur, int64_t *out)
 {
-    return wkt_to_millis(dur, out);
+    return wkt_to_millis(dur, out, 0);
 }
 
 /* Pack direction for the two time shapes: field 1 holds whole seconds,

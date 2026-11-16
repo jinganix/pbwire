@@ -545,6 +545,36 @@ int pbw_arena_init_mem(pbw_arena *arena, void *mem, size_t len);
 void pbw_arena_reset(pbw_arena *arena);
 void pbw_arena_free(pbw_arena *arena);
 size_t pbw_arena_used(const pbw_arena *arena);
+/* 1 when ptr points into live arena memory (below `used` in a head chunk
+ * or inside an oversized single allocation). Used at the store boundary so
+ * a value from one arena cannot be stored into a message of another: the
+ * source reset would free it under the tree. */
+static inline int
+pbw_arena_owns(const pbw_arena *arena, const void *ptr)
+{
+    const pbw_arena_chunk *chunk;
+
+    if (arena == NULL || ptr == NULL) {
+        return ptr == NULL;
+    }
+    for (chunk = arena->head; chunk != NULL; chunk = chunk->next) {
+        const uint8_t *base = (const uint8_t *)chunk + PBW_CHUNK_HDR;
+
+        if ((const uint8_t *)ptr >= base &&
+            (const uint8_t *)ptr < base + chunk->used) {
+            return 1;
+        }
+    }
+    for (chunk = arena->large; chunk != NULL; chunk = chunk->next) {
+        const uint8_t *base = (const uint8_t *)chunk + PBW_CHUNK_HDR;
+
+        if ((const uint8_t *)ptr >= base &&
+            (const uint8_t *)ptr < base + chunk->used) {
+            return 1;
+        }
+    }
+    return 0;
+}
 
 /* decode.c / encode.c */
 /* Same with an explicit nesting cap (PBW_MAX_DEPTH when limits are default). */
@@ -730,6 +760,12 @@ pbw_message_new_a(pbw_arena *arena, const pbw_descriptor *desc)
             if (desc->fields[k].oneof_index > oneof_max) {
                 oneof_max = desc->fields[k].oneof_index;
             }
+        }
+        /* A oneof index the link would reject must not size the case
+         * table here: on 32-bit the size math wraps and the table
+         * writes out of bounds. Link enforces the same bound. */
+        if (oneof_max > desc->field_count + 1) {
+            return NULL;
         }
     }
     if (desc->field_count > (SIZE_MAX - sizeof(pbw_message)) / sizeof(pbw_value)) {

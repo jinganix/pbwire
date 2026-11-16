@@ -507,6 +507,14 @@ write_element(writer *w, const pbw_field *field, const pbw_value *value,
     switch (field->type) {
     case PBW_TYPE_STRING:
     case PBW_TYPE_BYTES: {
+        /* `put` takes any value, so one wrong-kind slot would read the
+         * wrong union arm (an integer as a pointer). The packed path
+         * already checks each item; the singular path checks the arms it
+         * dereferences (message/bytes), fused into the existing guards. */
+        if (value->kind != PBW_VALUE_BYTES) {
+            w->status = PBW_ERR_INVALID;
+            return;
+        }
         /* Length is known before the payload: reserve once for tag,
          * length and payload instead of three separate checks. The tag
          * write stores a whole word, so reserve 4 for it. */
@@ -538,6 +546,10 @@ write_element(writer *w, const pbw_field *field, const pbw_value *value,
         return;
     }
     case PBW_TYPE_GROUP: {
+        if (value->kind != PBW_VALUE_MESSAGE) {
+            w->status = PBW_ERR_INVALID;
+            return;
+        }
         write_group_body(w, field, value, depth, det);
         return;
     }
@@ -550,7 +562,7 @@ write_element(writer *w, const pbw_field *field, const pbw_value *value,
             return;
         }
 
-        if (value->as.msg == NULL) {
+        if (value->as.msg == NULL || value->kind != PBW_VALUE_MESSAGE) {
             w->status = PBW_ERR_INVALID;
             return;
         }
@@ -1167,9 +1179,12 @@ size_element(const pbw_field *field, const pbw_value *value, uint32_t depth,
     switch (field->type) {
     case PBW_TYPE_STRING:
     case PBW_TYPE_BYTES:
+        if (value->kind != PBW_VALUE_BYTES) {
+            return PBW_ERR_INVALID;
+        }
         return size_len_prefixed(out, field->tag_len, value->as.bytes.len);
     case PBW_TYPE_MESSAGE:
-        if (value->as.msg == NULL) {
+        if (value->as.msg == NULL || value->kind != PBW_VALUE_MESSAGE) {
             return PBW_ERR_INVALID;
         }
         if (depth == PBW_MAX_DEPTH) {
@@ -1192,7 +1207,7 @@ size_element(const pbw_field *field, const pbw_value *value, uint32_t depth,
         }
         return size_len_prefixed(out, field->tag_len, body);
     case PBW_TYPE_GROUP:
-        if (value->as.msg == NULL) {
+        if (value->as.msg == NULL || value->kind != PBW_VALUE_MESSAGE) {
             return PBW_ERR_INVALID;
         }
         if (depth == PBW_MAX_DEPTH) {

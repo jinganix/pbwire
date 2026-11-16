@@ -906,6 +906,31 @@ test_load_hostile(void)
     CHECK_OK(pbw_descriptor_set_load(set, sw.len, &schema));
     CHECK(pbw_descriptor_is_map_entry(pbw_schema_find(schema, "p.Good")));
     pbw_schema_free(schema);
+    schema = NULL;
+    /* 10. a 33-bit enum value truncates into a different number: reject
+     * it like the wide field number above. */
+    iw.len = 0;
+    w_str(&iw, 1, "E");
+    {
+        uint8_t val[16];
+        ds_w vw;
+
+        vw.p = val;
+        vw.len = 0;
+        w_str(&vw, 1, "V");
+        w_int(&vw, 2, 0x100000001ull);
+        w_sub(&iw, 2, val, vw.len);
+    }
+    w.len = 0;
+    w_str(&w, 1, "w.proto");
+    w_str(&w, 2, "p");
+    w_sub(&w, 5, inner, iw.len);
+    w_str(&w, 12, "proto3");
+    sw.len = 0;
+    w_sub(&sw, 1, file, w.len);
+    CHECK_STATUS(PBW_ERR_INVALID,
+                 pbw_descriptor_set_load(set, sw.len, &schema));
+    pbw_schema_free(schema);
 }
 
 static void
