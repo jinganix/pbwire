@@ -219,6 +219,23 @@ jobs:
           ruby-version: '4.0'
       - name: Build the extension and run the self-check
         run: make ruby-test
+      - name: Published gem builds, installs and passes tests
+        run: |
+          rm -rf /tmp/geminst && mkdir -p /tmp/geminst
+          (cd bindings/ruby && gem build pbwire.gemspec --output=/tmp/pbwire.gem)
+          gem install --local --install-dir /tmp/geminst --no-document /tmp/pbwire.gem
+          GEM_HOME=/tmp/geminst GEM_PATH=/tmp/geminst ruby -I/tmp/geminst/gems/pbwire-$(tr -d ' \t\n' < VERSION)/lib bindings/ruby/test/test_pbwire.rb
+
+  php:
+    name: PHP binding (native ext builds)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.5'
+      - name: Build the native extension
+        run: (cd bindings/php/ext && ./build.sh)
 
   erlang:
     name: Erlang binding (OTP 29 on ${{ matrix.os }})

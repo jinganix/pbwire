@@ -87,6 +87,7 @@ setver CMakeLists.txt -e "s/^project[(]pbwire VERSION [0-9.]*/project(pbwire VER
 setver Makefile -e "s/-current_version [0-9.]*/-current_version $VER/"
 setver bindings/dart/pubspec.yaml -e "s/^version: .*/version: $VER/"
 setver bindings/dart/benchmarks/pubspec.yaml -e "s/^version: .*/version: $VER/"
+setver bindings/dart/benchmarks/pubspec.lock -e "/^  pbwire:/,/^  protobuf:/s/^    version: \".*\"$/    version: \"$VER\"/"
 setver bindings/rust/Cargo.toml -e "s/^version = \".*\"/version = \"$VER\"/"
 setver bindings/rust/benchmarks/Cargo.toml -e "s/^version = \".*\"/version = \"$VER\"/"
 setver bindings/erlang/src/pbwire.app.src -e "s/{vsn, \"[^\"]*\"}/{vsn, \"$VER\"}/"

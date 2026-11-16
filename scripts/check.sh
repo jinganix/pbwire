@@ -35,8 +35,28 @@ for f in src/*.c; do
     echo "check: bindings/php/ext/core_$b.c missing (symlink to ../../../$f)" >&2
     exit 1
   }
-  grep -qw "$b" bindings/ruby/ext/pbwire_ext/extconf.rb || {
+  # The gem packs real files (symlinks and parent paths are rejected at
+  # install), so the copy must match the repo root, not merely exist.
+  cmp -s "$f" "bindings/ruby/ext/pbwire_ext/core_$b.c" || {
+    echo "check: bindings/ruby/ext/pbwire_ext/core_$b.c differs from $f" >&2
+    exit 1
+  }
+  grep "^core = " bindings/ruby/ext/pbwire_ext/extconf.rb | grep -qw "$b" || {
     echo "check: extconf.rb core list missing $b" >&2
+    exit 1
+  }
+done
+# Reverse direction: a stale vendored file with no repo source must go.
+for f in bindings/ruby/ext/pbwire_ext/core_*.c; do
+  b=${f#bindings/ruby/ext/pbwire_ext/core_}
+  [ -e "src/$b" ] || {
+    echo "check: $f has no repo-root source; delete it" >&2
+    exit 1
+  }
+done
+for f in include/pbwire.h src/internal.h; do
+  cmp -s "$f" "bindings/ruby/ext/pbwire_ext/$(basename "$f")" || {
+    echo "check: bindings/ruby/ext/pbwire_ext/$(basename "$f") differs from $f" >&2
     exit 1
   }
 done
