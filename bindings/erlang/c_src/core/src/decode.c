@@ -67,6 +67,13 @@ read_varint(reader *r, uint64_t *out)
     return 1;
 }
 
+/* Upfront batch cap for packed runs: a hostile run (megabytes of varint
+ * terminators with an undecodable tail) must fail on its first byte, not
+ * on a whole-run reservation. Past the cap the reserve covers one chunk
+ * and the loop grows geometrically; bench tiers peak at 3000 packed items,
+ * so the fast path below never sees it. */
+#define PBW_PACKED_BATCH_MAX 4096u
+
 static pbw_status skip_group(reader *r, uint32_t number, uint32_t depth, uint32_t dlim);
 static pbw_status skip_field(reader *r, pbw_message *msg, uint32_t number,
                              uint32_t wire_type, uint32_t depth, uint32_t dlim,
@@ -578,17 +585,27 @@ read_packed(reader *r, const pbw_field *field, pbw_message *msg, int closed,
         for (k = 0; k < data_len; k++) {
             n += (size_t)(data[k] < 0x80);
         }
-        if (!pbw_value_list_reserve(
-                vlist, n > UINT32_MAX ? UINT32_MAX : (uint32_t)n,
-                msg->arena)) {
-            return PBW_ERR_NOMEM;
-        }
-        /* The scan counted the items: one bump for every node of this run
-         * instead of one allocation per item. */
-        if (n > 0 && n <= UINT32_MAX &&
-            n <= SIZE_MAX / sizeof(pbw_value)) {
-            batch = (pbw_value *)pbw_arena_alloc(
-                msg->arena, n * sizeof(pbw_value));
+        if (n > PBW_PACKED_BATCH_MAX) {
+            /* Hostile-sized run: reserve one chunk, grow geometrically,
+             * and leave the batch block off so the loop allocates the
+             * few nodes it actually stores before failing. */
+            if (!pbw_value_list_reserve(vlist, PBW_PACKED_BATCH_MAX,
+                                        msg->arena)) {
+                return PBW_ERR_NOMEM;
+            }
+        } else {
+            if (!pbw_value_list_reserve(
+                    vlist, n > UINT32_MAX ? UINT32_MAX : (uint32_t)n,
+                    msg->arena)) {
+                return PBW_ERR_NOMEM;
+            }
+            /* The scan counted the items: one bump for every node of this run
+             * instead of one allocation per item. */
+            if (n > 0 && n <= UINT32_MAX &&
+                n <= SIZE_MAX / sizeof(pbw_value)) {
+                batch = (pbw_value *)pbw_arena_alloc(
+                    msg->arena, n * sizeof(pbw_value));
+            }
         }
     } else if (field->type == PBW_TYPE_FIXED32 ||
                field->type == PBW_TYPE_SFIXED32 ||
@@ -603,19 +620,26 @@ read_packed(reader *r, const pbw_field *field, pbw_message *msg, int closed,
                            : 4u;
         size_t count = data_len / width;
 
-        if (!pbw_value_list_reserve(
-                vlist, count > UINT32_MAX ? UINT32_MAX : (uint32_t)count,
-                msg->arena)) {
-            return PBW_ERR_NOMEM;
-        }
-        /* Fixed-width items need no scan: the payload length divides exactly,
-         * so the node block comes from one bump like a varint run's. A
-         * truncated tail fails in read_scalar() before it can index past the
-         * block: each successful read consumes `width` bytes. */
-        if (batchable && count > 0 && count <= UINT32_MAX &&
-            count <= SIZE_MAX / sizeof(pbw_value)) {
-            batch = (pbw_value *)pbw_arena_alloc(
-                msg->arena, count * sizeof(pbw_value));
+        if (count > PBW_PACKED_BATCH_MAX) {
+            if (!pbw_value_list_reserve(vlist, PBW_PACKED_BATCH_MAX,
+                                        msg->arena)) {
+                return PBW_ERR_NOMEM;
+            }
+        } else {
+            if (!pbw_value_list_reserve(
+                    vlist, count > UINT32_MAX ? UINT32_MAX : (uint32_t)count,
+                    msg->arena)) {
+                return PBW_ERR_NOMEM;
+            }
+            /* Fixed-width items need no scan: the payload length divides exactly,
+             * so the node block comes from one bump like a varint run's. A
+             * truncated tail fails in read_scalar() before it can index past the
+             * block: each successful read consumes `width` bytes. */
+            if (batchable && count > 0 && count <= UINT32_MAX &&
+                count <= SIZE_MAX / sizeof(pbw_value)) {
+                batch = (pbw_value *)pbw_arena_alloc(
+                    msg->arena, count * sizeof(pbw_value));
+            }
         }
     }
     items = vlist->as.list.items;
@@ -856,6 +880,79 @@ read_field(reader *r, const pbw_field *field, pbw_message *msg,
                       rep);
 }
 
+/* Merges a validated MessageSet payload into the extension it extends:
+ * singular scalars overwrite, repeated items append, singular submessages
+ * merge recursively, unknown bytes append. Both share one arena (every
+ * decode runs in one), so values move by shallow copy; src slots are
+ * detached as they move so freeing src never releases a moved payload. */
+static pbw_status
+messageset_merge(pbw_message *dst, pbw_message *src)
+{
+    size_t i;
+
+    if (dst == NULL || src == NULL || dst->desc != src->desc) {
+        return PBW_ERR_INVALID;
+    }
+    for (i = 0; i < src->nfields; i++) {
+        const pbw_field *field;
+        pbw_value *sv;
+
+        if (!pbw_msg_present(src, i)) {
+            continue;
+        }
+        field = &src->desc->fields[i];
+        sv = &src->values[i];
+        if (field->label == PBW_LABEL_REPEATED &&
+            sv->kind == PBW_VALUE_LIST) {
+            pbw_value *list = pbw_message_list_for(dst, field);
+            size_t k;
+
+            if (list == NULL) {
+                return PBW_ERR_NOMEM;
+            }
+            for (k = 0; k < sv->as.list.len; k++) {
+                if (!pbw_value_list_push(list, sv->as.list.items[k],
+                                         dst->arena)) {
+                    return PBW_ERR_NOMEM;
+                }
+            }
+            if ((sv->flags & PBW_VF_ARENA) == 0) {
+                free(sv->as.list.items);
+            }
+            sv->as.list.items = NULL;
+            sv->as.list.len = 0;
+            sv->as.list.cap = 0;
+            pbw_msg_set_present(src, i, 0);
+            continue;
+        }
+        if ((field->type == PBW_TYPE_MESSAGE ||
+             field->type == PBW_TYPE_GROUP) &&
+            sv->kind == PBW_VALUE_MESSAGE && sv->as.msg != NULL &&
+            pbw_msg_present(dst, i) &&
+            dst->values[i].kind == PBW_VALUE_MESSAGE &&
+            dst->values[i].as.msg != NULL &&
+            dst->values[i].as.msg->desc == sv->as.msg->desc) {
+            pbw_message *schild = sv->as.msg;
+            pbw_status status =
+                messageset_merge(dst->values[i].as.msg, schild);
+
+            pbw_msg_set_present(src, i, 0);
+            if (status != PBW_OK) {
+                return status;
+            }
+            pbw_message_free(schild);
+            continue;
+        }
+        pbw_message_put(dst, i, sv);
+        pbw_msg_set_present(src, i, 0);
+    }
+    if (src->unknown_len > 0) {
+        return (pbw_status)pbw_message_add_unknown(dst, src->unknown,
+                                                   src->unknown_len);
+    }
+    return PBW_OK;
+}
+
 /* A MessageSet item: START_GROUP(1) was consumed; the body holds type_id
  * (field 2, varint) and message (field 3, bytes). The walk runs on a copy
  * of the reader: anything anomalous (no id, no payload, unknown id, a
@@ -960,30 +1057,33 @@ read_messageset_item(reader *r, pbw_message *msg, uint32_t depth,
         return PBW_ERR_LIMIT;
     }
     index = (size_t)(ext - desc->fields);
-    if (pbw_msg_present(msg, index) &&
-        msg->values[index].kind == PBW_VALUE_MESSAGE &&
-        msg->values[index].as.msg != NULL &&
-        msg->values[index].as.msg->desc == ext->sub) {
-        /* Singular messages merge, MessageSet items included. */
-        status = decode_fields(msg->values[index].as.msg, payload,
-                               payload_len, depth + 1, dlim);
-    } else {
-        status = decode_message(msg->arena, ext->sub, payload, payload_len,
-                                &nested, depth + 1, dlim);
-        if (status == PBW_OK) {
-            pbw_value value;
-
-            value.kind = PBW_VALUE_MESSAGE;
-            value.flags = msg->arena != NULL ? PBW_VF_ARENA : 0;
-            value.as.msg = nested;
-            pbw_message_put(msg, index, &value);
-        }
-    }
+    /* Decode into a temp first: a broken payload must leave an already
+     * present extension untouched (the item is kept as unknown instead). */
+    status = decode_message(msg->arena, ext->sub, payload, payload_len,
+                            &nested, depth + 1, dlim);
     if (status != PBW_OK) {
         /* Undecodable payload: keep today's verdict (accept as unknown). */
         pbw_message_free(nested);
         return skip_field(r, msg, 1, PBW_WIRE_START_GROUP, depth, dlim,
                           start);
+    }
+    if (pbw_msg_present(msg, index) &&
+        msg->values[index].kind == PBW_VALUE_MESSAGE &&
+        msg->values[index].as.msg != NULL &&
+        msg->values[index].as.msg->desc == ext->sub) {
+        /* Singular messages merge, MessageSet items included. */
+        status = messageset_merge(msg->values[index].as.msg, nested);
+        pbw_message_free(nested);
+        if (status != PBW_OK) {
+            return status;
+        }
+    } else {
+        pbw_value value;
+
+        value.kind = PBW_VALUE_MESSAGE;
+        value.flags = msg->arena != NULL ? PBW_VF_ARENA : 0;
+        value.as.msg = nested;
+        pbw_message_put(msg, index, &value);
     }
     *r = t;
     return PBW_OK;

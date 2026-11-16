@@ -207,7 +207,6 @@ typedef struct {
     pbw_buf buf;
     pbw_status status;
     uint32_t depth; /* message nesting, capped at PBW_MAX_DEPTH */
-    int dot;        /* the host locale's decimal point is '.' (checked once per call) */
 } j_out;
 
 static void
@@ -268,13 +267,13 @@ j_double(j_out *j, double value, int is_float)
 
     for (prec = prec_min; prec <= prec_max; prec++) {
         char tmp[32];
-        int n = pbw_format_g(tmp, sizeof(tmp), prec, value, j->dot);
+        int n = pbw_format_g_c(tmp, sizeof(tmp), prec, value);
         double back;
 
         if (n <= 0 || (size_t)n >= sizeof(tmp)) {
             continue;
         }
-        back = pbw_strtod(tmp, NULL, j->dot);
+        back = pbw_strtod_c(tmp, NULL);
         if ((is_float ? (double)(float)back == value : back == value)) {
             j_put(j, tmp, (size_t)n);
             return;
@@ -1652,7 +1651,7 @@ pbw_json_print(const pbw_message *msg, char **out, size_t *len)
 {
     j_out j;
 
-    if (msg == NULL || out == NULL || len == NULL) {
+    if (!pbw_msg_fresh(msg) || out == NULL || len == NULL) {
         return PBW_ERR_INVALID;
     }
     /* Zeroed on every failure path, like pbw_encode() and the text printer:
@@ -1662,7 +1661,6 @@ pbw_json_print(const pbw_message *msg, char **out, size_t *len)
     pbw_buf_init(&j.buf);
     j.status = PBW_OK;
     j.depth = 0;
-    j.dot = pbw_locale_dot();
     if (!pbw_buf_reserve(&j.buf, 64)) {
         return PBW_ERR_NOMEM;
     }
@@ -1693,7 +1691,6 @@ typedef struct {
     j_cur cur;
     int ignore_unknown;
     uint32_t depth;
-    int dot;       /* the host locale's decimal point is '.' (checked once per call) */
     uint32_t dlim; /* nesting cap for this call (pbw_limits.max_depth) */
 } j_in;
 
@@ -2097,9 +2094,9 @@ j_trim(const char **text, size_t *len)
     }
 }
 
-/* strtod with full-consumption check, like SimpleAtod. */
+/* Locale-free strtod with full-consumption check, like SimpleAtod. */
 static pbw_status
-j_atod(const char *text, size_t len, int dot, double *out)
+j_atod(const char *text, size_t len, double *out)
 {
     char stack[64];
     char *tmp = stack;
@@ -2126,7 +2123,7 @@ j_atod(const char *text, size_t len, int dot, double *out)
     if (tmp == NULL) {
         return PBW_ERR_INVALID;
     }
-    v = pbw_strtod(tmp, &stop, dot);
+    v = pbw_strtod_c(tmp, &stop);
     if (stop == tmp) {
         goto invalid;
     }
@@ -2501,7 +2498,7 @@ j_parse_int_value(j_in *j, const char *text, size_t len, int quoted,
             double d;
 
             /* 1e3 and 1.0 spell integers; 1.5 does not. */
-            if (j_atod(text, len, j->dot, &d) != PBW_OK || !isfinite(d) ||
+            if (j_atod(text, len, &d) != PBW_OK || !isfinite(d) ||
                 d < -9007199254740992.0 || d > 9007199254740992.0) {
                 return PBW_ERR_INVALID;
             }
@@ -2519,7 +2516,7 @@ j_parse_int_value(j_in *j, const char *text, size_t len, int quoted,
     if (j_atou64(text, len, &u) != PBW_OK) {
         double d;
 
-        if (j_atod(text, len, j->dot, &d) != PBW_OK || !isfinite(d) || d < 0 ||
+        if (j_atod(text, len, &d) != PBW_OK || !isfinite(d) || d < 0 ||
             d > 18014398509481984.0) {
             return PBW_ERR_INVALID;
         }
@@ -2558,7 +2555,7 @@ j_parse_double_value(j_in *j, const char *text, size_t len, int is_float,
         }
     }
     /* Quoted floats allow surrounding whitespace (SimpleAtod does). */
-    if (j_atod(text, len, j->dot, &d) != PBW_OK) {
+    if (j_atod(text, len, &d) != PBW_OK) {
         return PBW_ERR_INVALID;
     }
     if (is_float && isfinite(d) && !isfinite((float)d)) {
@@ -3364,7 +3361,7 @@ j_parse_value_msg(j_in *j, pbw_message *msg)
         double d;
 
         if (j_parse_raw(j, &text, &len) != PBW_OK ||
-            j_atod(text, len, j->dot, &d) != PBW_OK) {
+            j_atod(text, len, &d) != PBW_OK) {
             return PBW_ERR_INVALID;
         }
         {
@@ -4180,7 +4177,6 @@ j_parse_any(j_in *j, pbw_message *msg)
         inner.cur.end = end;
         inner.ignore_unknown = j->ignore_unknown;
         inner.depth = j->depth + 1;
-        inner.dot = j->dot;
         inner.dlim = j->dlim;
         /* start already points past the '{' the scan consumed. */
         for (;;) {
@@ -4622,7 +4618,6 @@ pbw_json_parse_limits(const pbw_descriptor *desc, const char *text,
         options != NULL && options->ignore_unknown_fields;
     j.depth = 0;
     j.dlim = dlim;
-    j.dot = pbw_locale_dot();
     {
         pbw_status st = j_parse_message(&j, msg);
 

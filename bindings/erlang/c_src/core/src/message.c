@@ -141,7 +141,7 @@ pbw_message_get(const pbw_message *msg, uint32_t number)
     const pbw_field *field;
     size_t index;
 
-    if (msg == NULL) {
+    if (!pbw_msg_fresh(msg)) {
         return NULL;
     }
     field = pbw_descriptor_find_field(msg->desc, number);
@@ -158,7 +158,7 @@ pbw_message_get_field(const pbw_message *msg, const pbw_field *field)
     const pbw_field *base;
     size_t index;
 
-    if (msg == NULL || msg->desc == NULL || field == NULL) {
+    if (!pbw_msg_fresh(msg) || field == NULL) {
         return NULL;
     }
     base = msg->desc->fields;
@@ -176,7 +176,7 @@ is_initialized(const pbw_message *msg, uint32_t depth)
 
     /* Read `>` like the decoder: a message at depth PBW_MAX_DEPTH is
      * accepted on the wire, so the required-field walk must judge it too. */
-    if (msg == NULL || msg->desc == NULL || depth > PBW_MAX_DEPTH) {
+    if (!pbw_msg_fresh(msg) || depth > PBW_MAX_DEPTH) {
         return 0;
     }
     /* The flag is computed by pbw_schema_link(); an unlinked descriptor is
@@ -234,7 +234,7 @@ pbw_message_present_list(const pbw_message *msg, uint32_t *fnums,
     size_t i;
     size_t n = 0;
 
-    if (msg == NULL || msg->desc == NULL || fnums == NULL || values == NULL) {
+    if (!pbw_msg_fresh(msg) || fnums == NULL || values == NULL) {
         return 0;
     }
     for (i = 0; i < msg->desc->field_count && n < cap; i++) {
@@ -253,7 +253,7 @@ pbw_message_field_count(const pbw_message *msg)
     size_t i;
     size_t count = 0;
 
-    if (msg == NULL) {
+    if (!pbw_msg_fresh(msg)) {
         return 0;
     }
     for (i = 0; i < msg->desc->field_count; i++) {
@@ -269,7 +269,7 @@ pbw_message_field_at(const pbw_message *msg, size_t index,
     size_t i;
     size_t seen = 0;
 
-    if (msg == NULL) {
+    if (!pbw_msg_fresh(msg)) {
         return NULL;
     }
     for (i = 0; i < msg->desc->field_count; i++) {
@@ -706,8 +706,9 @@ pbw_message_clear(pbw_message *msg, uint32_t number)
     const pbw_field *field;
     size_t index;
 
-    if (msg == NULL || (msg->arena != NULL && msg->arena->readonly)) {
-        /* Context-owned messages are read-only. */
+    if (msg == NULL || !pbw_msg_fresh(msg) ||
+        (msg->arena != NULL && msg->arena->readonly)) {
+        /* Context-owned messages are read-only; stale ones are dead. */
         return;
     }
     field = pbw_descriptor_find_field(msg->desc, number);
@@ -767,7 +768,8 @@ pbw_message_set(pbw_message *msg, uint32_t number, pbw_value *value)
 {
     const pbw_field *field;
 
-    if (msg == NULL || value == NULL || (value->flags & PBW_VF_EMBEDDED) != 0) {
+    if (msg == NULL || value == NULL || (value->flags & PBW_VF_EMBEDDED) != 0 ||
+        !pbw_msg_fresh(msg)) {
         return PBW_ERR_INVALID;
     }
     if (msg->arena != NULL && msg->arena->readonly) {
@@ -788,7 +790,11 @@ pbw_message_set_field(pbw_message *msg, const pbw_field *field, pbw_value *value
     const pbw_field *base;
 
     if (msg == NULL || value == NULL || (value->flags & PBW_VF_EMBEDDED) != 0 ||
-        msg->desc == NULL || field == NULL) {
+        !pbw_msg_fresh(msg) || field == NULL) {
+        return PBW_ERR_INVALID;
+    }
+    base = msg->desc->fields;
+    if (field < base || field >= base + msg->desc->field_count) {
         return PBW_ERR_INVALID;
     }
     if (msg->arena != NULL) {
@@ -803,10 +809,6 @@ pbw_message_set_field(pbw_message *msg, const pbw_field *field, pbw_value *value
              * arena can: pbw_message_free() walks its slots (has_heap). */
             return PBW_ERR_INVALID;
         }
-    }
-    base = msg->desc->fields;
-    if (field < base || field >= base + msg->desc->field_count) {
-        return PBW_ERR_INVALID;
     }
     if (!value_matches(field, value)) {
         return PBW_ERR_TYPE;
@@ -824,7 +826,8 @@ pbw_message_set_message(pbw_message *msg, uint32_t number)
     pbw_value *value;
     pbw_message *nested;
 
-    if (msg == NULL || (msg->arena != NULL && msg->arena->readonly)) {
+    if (msg == NULL || !pbw_msg_fresh(msg) ||
+        (msg->arena != NULL && msg->arena->readonly)) {
         return NULL;
     }
     field = pbw_descriptor_find_field(msg->desc, number);

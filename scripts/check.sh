@@ -24,4 +24,7 @@ make -s test
 echo "== dynamic symbols =="
 ./scripts/check-symbols.sh
 
+echo "== erlang vendored core =="
+make -s -C bindings/erlang/c_src core-sync-check
+
 echo "check: OK"

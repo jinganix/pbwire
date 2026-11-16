@@ -305,7 +305,9 @@ pbw_status pbw_message_encoded_size(const pbw_message *msg, size_t *len);
 pbw_value *pbw_message_get(const pbw_message *msg, uint32_t number);
 /* Same as pbw_message_get() for an already-resolved field of the message's
  * descriptor (NULL when it belongs elsewhere); skips the number lookup for
- * hot reflection loops that cached the pointer. */
+ * hot reflection loops that cached the pointer. Resolve the pointer again
+ * after any add or link: an add may move the field array and the link sorts
+ * it, so a cached pointer may name another field (use the number then). */
 pbw_value *pbw_message_get_field(const pbw_message *msg,
                                  const pbw_field *field);
 /* Number of fields with a value. */
@@ -347,7 +349,8 @@ pbw_status pbw_message_add_unknown_bytes(pbw_message *msg, const void *data,
 pbw_status pbw_message_set(pbw_message *msg, uint32_t number, pbw_value *value);
 /* Same as pbw_message_set() for an already-resolved field of the message's
  * descriptor (PBW_ERR_INVALID when it belongs elsewhere); skips the number
- * lookup for hot build loops that cached the pointer. */
+ * lookup for hot build loops that cached the pointer. Same caching rule as
+ * pbw_message_get_field(): re-resolve after any add or link. */
 pbw_status pbw_message_set_field(pbw_message *msg, const pbw_field *field,
                                  pbw_value *value);
 /* Create (or return the existing) nested message value for a MESSAGE field. */

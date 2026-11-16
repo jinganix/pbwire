@@ -206,6 +206,12 @@ struct pbw_descriptor {
      * schemas. Field FeatureSet overrides only exist when this is set. */
     int edition;
     pbw_schema *schema;
+    /* Layout epoch: bumped by add_field() and by every link pass (even a
+     * failed one, which sorts before it validates). A message captures it
+     * at creation; a mismatch means the slots moved, so field access
+     * fails instead of reading the wrong slot. Field pointers must not
+     * be cached across an add or a link for the same reason. */
+    uint32_t epoch;
     size_t field_count;
     /* Rows allocated in `fields`, grown geometrically by add_field(): a
      * descriptor set with thousands of fields in one message would otherwise
@@ -308,6 +314,7 @@ struct pbw_message {
     pbw_arena *arena;     /* non-NULL: the tree is allocated from an arena */
     pbw_arena *own;       /* non-NULL: this message frees that arena */
     pbw_value *values;    /* nfields inline slots, see `present` */
+    uint32_t epoch;       /* desc->epoch at creation: mismatch = stale */
     uint32_t *present;    /* field_count bits: the slot holds a value */
     uint32_t *oneof_case; /* 1-based oneof index -> field number, 0 = unset */
     size_t nfields;       /* desc->field_count at creation: free needs no desc */
@@ -346,6 +353,17 @@ enum {
     PBW_ACT_REP_MSG     /* repeated message */
 };
 
+/* 1 when the message's slots still match its descriptor's layout: same
+ * field order and count as at creation. An add or a link (even a failed
+ * one, which sorts before it validates) bumps the descriptor epoch and
+ * retires every message built from it. */
+static inline int
+pbw_msg_fresh(const pbw_message *msg)
+{
+    return msg != NULL && msg->desc != NULL && !msg->desc->is_enum &&
+           msg->epoch == msg->desc->epoch;
+}
+
 /* A message keeps its values inline: one allocation holds the struct, the value
  * slots, the presence bitmap and the oneof cases. */
 static inline int
@@ -381,53 +399,21 @@ pbw_varint_size(uint64_t value)
     return size;
 }
 size_t pbw_varint_write(uint8_t *out, uint64_t value);
-/* Locale-independent decimal conversions for the JSON and text formats:
- * pbw_locale_dot() is asked once per print/parse call, then passed down. The
- * C-locale path is inlined, so it costs exactly the libc call it replaced. */
-int pbw_locale_dot(void);
-double pbw_strtod_slow(const char *text, char **end, double value, char *stop);
-/* Maps the end offset strtod reported in the locale-translated buffer back
- * onto the original text: `before` is the '.' that was replaced, `dpsize` the
- * width of the locale separator inserted there. Kept separate from the
- * conversion so the mapping is testable without a multibyte locale. */
-static inline size_t
-pbw_strtod_unmap(size_t used, size_t before, size_t dpsize)
-{
-    if (used <= before) {
-        return used; /* stopped at, or before, the '.' */
-    }
-    if (used - before < dpsize) {
-        return before + 1; /* stopped inside the separator: the '.' is consumed */
-    }
-    return used - (dpsize - 1); /* past the whole separator */
-}
-int pbw_format_g_slow(char *buf, int n);
-
-static inline double
-pbw_strtod(const char *text, char **end, int dot)
-{
-    char *stop = NULL;
-    double value = strtod(text, &stop);
-
-    if (dot || stop == NULL || *stop != '.') {
-        if (end != NULL) {
-            *end = stop;
-        }
-        return value;
-    }
-    return pbw_strtod_slow(text, end, value, stop);
-}
-
-static inline int
-pbw_format_g(char *buf, size_t cap, int precision, double value, int dot)
-{
-    int n = snprintf(buf, cap, "%.*g", precision, value);
-
-    if (dot || n <= 0 || (size_t)n >= cap) {
-        return n;
-    }
-    return pbw_format_g_slow(buf, n);
-}
+/* Decimal conversions for the JSON and text formats. The wire format defines
+ * '.' as the decimal separator, full stop: these never consult the host
+ * locale (no localeconv, no locale-sensitive strtod/printf), so output is
+ * byte-identical under any LC_NUMERIC and no concurrent setlocale can skew
+ * a parse. The first 25 significant digits accumulate into a (hi, lo)
+ * pair (error ~2^-100 relative) scaled by exact x10 steps, so ordinary
+ * inputs round exactly once, like strtod; saturation (inf/zero) is decided
+ * by integer decimal-exponent math, so DBL_MAX/DBL_MIN parse exactly.
+ * shortcut: a decimal landing exactly halfway between two doubles may round
+ * to either neighbor (the pair cannot see which side the true value is on).
+ * Differential fuzzing against strtod shows only such 1-ulp razor cases and
+ * no systematic drift; exact-halfway needs bignum the core does not buy.
+ * The differential and conformance suites pin the precision. */
+double pbw_strtod_c(const char *text, char **end);
+int pbw_format_g_c(char *buf, size_t cap, int precision, double value);
 int pbw_varint_read(const uint8_t *p, const uint8_t *end, uint64_t *value,
                     size_t *used);
 /* Reads a field tag. A tag is a varint32: at most 5 bytes, and the value is
@@ -779,6 +765,7 @@ pbw_message_new_a(pbw_arena *arena, const pbw_descriptor *desc)
      * only the presence bitmap and the oneof cases start cleared. */
     msg = (pbw_message *)block;
     msg->desc = desc;
+    msg->epoch = desc->epoch;
     msg->arena = arena;
     msg->own = NULL;
     msg->nfields = desc->field_count;

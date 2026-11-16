@@ -51,6 +51,25 @@ pbw_istream_reset(pbw_istream *s)
     s->off = 0;
 }
 
+/* True when the bytes hold at least one complete frame (length prefix plus
+ * body), without decoding anything. Lets feed() tell pipelined frames
+ * (which next() will drain and police) from never-completing bytes (which
+ * would otherwise grow the buffer forever). */
+static int
+has_complete_frame(const uint8_t *base, size_t avail)
+{
+    size_t used = 0;
+    size_t frame;
+
+    if (base == NULL) {
+        return 0;
+    }
+    if (!pbw_len_read(base, base + avail, &frame, &used)) {
+        return 0;
+    }
+    return used <= avail && frame <= avail - used;
+}
+
 pbw_status
 pbw_istream_feed(pbw_istream *s, const void *data, size_t len)
 {
@@ -59,6 +78,37 @@ pbw_istream_feed(pbw_istream *s, const void *data, size_t len)
     }
     if (len == 0) {
         return PBW_OK;
+    }
+    /* Bound never-completing bytes: without a cap a sender that never forms
+     * a frame grows the buffer forever. Pipelined complete frames stay
+     * allowed past the cap (next() polices each frame); only a buffer with
+     * no complete frame in it is refused. The +5 is the length-prefix slack:
+     * a max-sized frame needs at most max_bytes + 5 buffered bytes. */
+    if (s->limits.max_bytes > 0) {
+        size_t max = s->limits.max_bytes;
+        size_t buffered = s->len - s->off;
+        size_t total;
+        int over;
+
+        if (len > SIZE_MAX - buffered) {
+            /* Absurd chunk: let the growth path below report NOMEM. */
+            over = 0;
+            total = 0;
+        } else {
+            total = buffered + len;
+            over = total > max && total - max > 5;
+        }
+        if (over && buffered > max && buffered - max >= 5) {
+            const uint8_t *base = s->data != NULL ? s->data + s->off : NULL;
+
+            if (!has_complete_frame(base, buffered)) {
+                return PBW_ERR_LIMIT;
+            }
+        } else if (over && buffered == 0) {
+            if (!has_complete_frame((const uint8_t *)data, len)) {
+                return PBW_ERR_LIMIT;
+            }
+        }
     }
     if (!pbw_cap_holds(s->cap, s->len) || s->off > s->len) {
         return PBW_ERR_INVALID;
