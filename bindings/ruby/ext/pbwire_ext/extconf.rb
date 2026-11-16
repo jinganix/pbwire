@@ -6,7 +6,7 @@
 # includes. No repo-root paths: `gem install` unpacks elsewhere.
 require "mkmf"
 
-core = %w[wire arena schema message encode decode ctx descriptor_set text json stream wkt]
+core = %w[arena ctx decode descriptor_set encode json message schema stream text wire wkt]
 srcs = [File.join(__dir__, "pbwire_ext.c")] + core.map { |c| File.join(__dir__, "core_#{c}.c") }
 
 $INCFLAGS += " -I#{__dir__}"

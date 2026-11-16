@@ -4,7 +4,9 @@
 # Self-check for the Ruby binding: plain asserts, no test framework, no gems.
 # Run it with test/run.sh (builds libpbwire first) or directly with the library
 # already built: ruby -Ilib test/test_pbwire.rb
-$LOAD_PATH.unshift File.expand_path('../lib', __dir__)
+# Set PBWIRE_GEM_TEST=1 with the installed gem first on the load path to run
+# the same suite against the published gem instead of the repo build.
+$LOAD_PATH.unshift File.expand_path('../lib', __dir__) unless ENV['PBWIRE_GEM_TEST']
 require 'pbwire'
 
 DATA = File.expand_path('data/sample.desc', __dir__)

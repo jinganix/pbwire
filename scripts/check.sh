@@ -31,8 +31,14 @@ echo "== binding core file lists =="
 for f in src/*.c; do
   b=${f#src/}
   b=${b%.c}
-  [ -e "bindings/php/ext/core_$b.c" ] || {
-    echo "check: bindings/php/ext/core_$b.c missing (symlink to ../../../$f)" >&2
+  # PHP compiles symlinks, so the link target is the invariant (a real
+  # file in its place would silently freeze the core it was copied from).
+  [ "$(readlink "bindings/php/ext/core_$b.c")" = "../../../$f" ] || {
+    echo "check: bindings/php/ext/core_$b.c must symlink to ../../../$f" >&2
+    exit 1
+  }
+  grep -qw "core_$b\.c" bindings/php/ext/config.m4 || {
+    echo "check: config.m4 core list missing core_$b.c" >&2
     exit 1
   }
   # The gem packs real files (symlinks and parent paths are rejected at
@@ -47,8 +53,8 @@ for f in src/*.c; do
   }
 done
 # Reverse direction: a stale vendored file with no repo source must go.
-for f in bindings/ruby/ext/pbwire_ext/core_*.c; do
-  b=${f#bindings/ruby/ext/pbwire_ext/core_}
+for f in bindings/ruby/ext/pbwire_ext/core_*.c bindings/php/ext/core_*.c; do
+  b=${f##*/core_}
   [ -e "src/$b" ] || {
     echo "check: $f has no repo-root source; delete it" >&2
     exit 1

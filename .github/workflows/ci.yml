@@ -224,7 +224,9 @@ jobs:
           rm -rf /tmp/geminst && mkdir -p /tmp/geminst
           (cd bindings/ruby && gem build pbwire.gemspec --output=/tmp/pbwire.gem)
           gem install --local --install-dir /tmp/geminst --no-document /tmp/pbwire.gem
-          GEM_HOME=/tmp/geminst GEM_PATH=/tmp/geminst ruby -I/tmp/geminst/gems/pbwire-$(tr -d ' \t\n' < VERSION)/lib bindings/ruby/test/test_pbwire.rb
+          # PBWIRE_GEM_TEST skips the repo lib on the load path, so the suite
+          # loads the installed gem (without it the repo build shadows it).
+          PBWIRE_GEM_TEST=1 GEM_HOME=/tmp/geminst GEM_PATH=/tmp/geminst ruby -I/tmp/geminst/gems/pbwire-$(tr -d ' \t\n' < VERSION)/lib bindings/ruby/test/test_pbwire.rb
 
   php:
     name: PHP binding (native ext builds)

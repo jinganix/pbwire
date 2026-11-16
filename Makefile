@@ -204,6 +204,13 @@ ruby-core-sync:
 	for f in src/*.c; do cp "$$f" bindings/ruby/ext/pbwire_ext/core_$$(basename "$$f"); done
 	cp include/pbwire.h bindings/ruby/ext/pbwire_ext/pbwire.h
 	cp src/internal.h bindings/ruby/ext/pbwire_ext/internal.h
+	for f in bindings/ruby/ext/pbwire_ext/core_*.c; do \
+		[ -e src/$${f##*/core_} ] || rm "$$f"; \
+	done
+	names=$$(for f in src/*.c; do basename "$$f" .c; done | sort | tr '\n' ' '); \
+	sed -i.bak -e "s/^core = %w\[.*\]/core = %w[$$names]/" \
+		-e 's/ \]/]/' bindings/ruby/ext/pbwire_ext/extconf.rb && \
+		rm -f bindings/ruby/ext/pbwire_ext/extconf.rb.bak
 
 # Erlang binding benchmark (bindings/erlang/benchmarks): epb, gpb and (when
 # protoc + libprotobuf are available) gpb NIF on matrix3.proto. Same optional
