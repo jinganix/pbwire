@@ -1,3 +1,29 @@
+## [0.1.17] - 2026-11-16
+
+### Fixed
+
+- proto3 `string` fields are validated as UTF-8 at parse, like the
+  reference: decode rejects a malformed payload with `PBW_ERR_INVALID`
+  when `utf8_validation` resolves to VERIFY (proto3 and edition 2023+ by
+  default, never proto2). The C struct codec, Java and Python follow the
+  same rule, and `pbw_field_requires_utf8_validation()` plus
+  `pbw_utf8_valid()` are the shared check the text/JSON parsers use.
+
+### Changed
+
+- Faster UTF-8 validation: ASCII runs are skipped 16 bytes at a time, so a
+  75 KB ASCII value drops from ~20 us to ~1.3 us per validation and a real
+  75 KB matrix3 decode goes 106.4 -> 99.6 us.
+- New `pbw_encode_deterministic_to()` for caller-buffer deterministic
+  writes; Go encodes now write into caller memory instead of malloc/copy
+  (136 B encode 220.5 -> 167.8 ns).
+- Encoder caches buffer views, keeps the arena prefix and resets the
+  context implicitly; short payloads copy inline. Elixir decodes in one
+  pass, Java reuses one immutable Limits instance, Julia decodes into a
+  reusable workspace.
+- Restored the per-thread Java string-image cache and re-measured every
+  binding, so all benchmark tables are from a single run per binding.
+
 ## [0.1.16] - 2026-11-12
 
 ### Added
