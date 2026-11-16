@@ -18,6 +18,11 @@ The point is not to re-implement Protobuf encoding. It is to let every language
 with a C ABI share one dynamic Protobuf schema and one message-processing core
 instead of re-implementing Protobuf per host language.
 
+> **Help wanted: Java 136 B encode (~0.7x vs `protobuf-java`).** The pure-Java
+> codec is tuned to what looks like a structural floor, and six measured
+> attempts all failed. If you know HotSpot, see [the call for help](docs/java-encode-help.md)
+> — a fix that keeps the binding dynamic, or a proof that the floor is real.
+
 ```c
 uint8_t *buf;
 size_t len;
@@ -33,6 +38,7 @@ pbw_free(buf);
 | [Design and architecture](docs/design.md) | how it works, dynamic message semantics, the two allocation strategies, scope, limits, use cases, repository layout |
 | [Performance benchmarks](BENCHMARKS.md) | **the performance document**: the four standard tiers, every binding against its official runtime, and the cross-binding comparison |
 | [Performance attempts ledger](docs/perf-attempts.md) | every optimization tried against a still-below-baseline cell, its A/B number, and why it was kept or rejected |
+| [Help wanted: Java 136 B encode](docs/java-encode-help.md) | the one open perf gap: what was tried, why it looks structural, and how to help |
 | [Examples index](docs/examples.md) | one runnable round trip per binding, with the exact command |
 | [Testing and conformance](docs/testing.md) | the self-check, pinned reference bytes, `difftest`, the official conformance suite |
 | [FAQ](docs/faq.md) | syntax support, thread safety, unknown fields, untrusted input, `.proto` at runtime |
