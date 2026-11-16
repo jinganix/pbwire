@@ -98,15 +98,31 @@ pbw_istream_feed(pbw_istream *s, const void *data, size_t len)
             total = buffered + len;
             over = total > max && total - max > 5;
         }
-        if (over && buffered > max && buffered - max >= 5) {
-            const uint8_t *base = s->data != NULL ? s->data + s->off : NULL;
+        if (over) {
+            const uint8_t *base =
+                (buffered > 0 && s->data != NULL) ? s->data + s->off : NULL;
 
-            if (!has_complete_frame(base, buffered)) {
-                return PBW_ERR_LIMIT;
-            }
-        } else if (over && buffered == 0) {
-            if (!has_complete_frame((const uint8_t *)data, len)) {
-                return PBW_ERR_LIMIT;
+            if (base != NULL && has_complete_frame(base, buffered)) {
+                /* Pipelined: next() drains each frame and polices it. */
+            } else if (buffered == 0) {
+                if (!has_complete_frame((const uint8_t *)data, len)) {
+                    return PBW_ERR_LIMIT;
+                }
+            } else {
+                /* A split frame is only let through when this chunk
+                 * completes a within-cap frame; anything else (a partial
+                 * prefix, an oversized frame, trailing garbage) is refused
+                 * before it grows the buffer. */
+                size_t used = 0;
+                size_t frame = 0;
+
+                if (base == NULL ||
+                    !pbw_len_read(base, base + buffered, &frame, &used) ||
+                    frame > max || used > max + 5 - frame ||
+                    used + frame <= buffered ||
+                    used + frame > buffered + len) {
+                    return PBW_ERR_LIMIT;
+                }
             }
         }
     }

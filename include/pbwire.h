@@ -465,7 +465,8 @@ size_t pbw_ctx_used(const pbw_ctx *ctx);
 
 /* Decode into the context instead of one allocation per value. A sealed
  * context (one holding a previous decode) resets implicitly on entry, so a
- * decode loop needs no reset call; earlier trees die with that reset. */
+ * decode loop needs no reset call; earlier trees die with that reset. A
+ * failed decode resets too, so its partial trees never accumulate. */
 pbw_status pbw_decode_ctx(pbw_ctx *ctx, const pbw_descriptor *desc,
                           const void *buf, size_t len, pbw_message **out);
 /* Encode into the context's buffer. *out stays valid until the next

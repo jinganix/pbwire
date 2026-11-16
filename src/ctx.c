@@ -269,6 +269,10 @@ pbw_decode_ctx_limits(pbw_ctx *ctx, const pbw_descriptor *desc,
             /* Seal the arena: decoded trees are read-only, later builds
              * need a reset first. */
             ctx->arena.readonly = 1;
+        } else {
+            /* A failed decode leaves partial trees behind: drop them, or a
+             * loop over hostile frames grows the arena without bound. */
+            pbw_arena_reset(&ctx->arena);
         }
         return status;
     }

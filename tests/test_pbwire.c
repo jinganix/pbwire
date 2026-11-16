@@ -980,6 +980,63 @@ test_hostile_arguments(pbw_schema *schema)
         pbw_istream_free(stream);
     }
 
+    /* One partial prefix byte must not disarm the cap for the next huge
+     * chunk: 1 + 10KB continuation bytes holds no complete frame, so the
+     * second feed fails instead of growing the buffer. */
+    {
+        static uint8_t big[10240];
+        pbw_limits capped;
+        pbw_istream *stream;
+        size_t i;
+
+        for (i = 0; i < sizeof(big); i++) {
+            big[i] = 0x80;
+        }
+        capped.max_bytes = 64;
+        capped.max_depth = 0;
+        stream = pbw_istream_new(&capped);
+        CHECK(stream != NULL);
+        CHECK_OK(pbw_istream_feed(stream, "\x80", 1));
+        CHECK_STATUS(PBW_ERR_LIMIT,
+                     pbw_istream_feed(stream, big, sizeof(big)));
+        pbw_istream_free(stream);
+    }
+
+    /* ... while a frame split across two feeds still streams when the
+     * second chunk completes a within-cap frame: 30x (id = 0) + prefix. */
+    {
+        /* 75 bytes total beats the 64 + 5 cap check, so the second feed
+         * only passes when it completes the 60-byte frame (the 14-byte
+         * tail is the next frame's start, never decoded here). */
+        uint8_t part1[30];
+        uint8_t part2[45];
+        pbw_limits capped;
+        pbw_istream *stream;
+        pbw_message *msg = NULL;
+        size_t i;
+
+        part1[0] = 0x3c; /* 60 body bytes follow */
+        for (i = 1; i < sizeof(part1); i++) {
+            part1[i] = (i % 2 == 1) ? 0x10 : 0x00; /* id = 0 ... */
+        }
+        for (i = 0; i < sizeof(part2); i++) {
+            size_t body = 29 + i;
+
+            part2[i] = body < 60 ? ((body % 2 == 0) ? 0x10 : 0x00)
+                                 : 0x00; /* ... continued + tail */
+        }
+        capped.max_bytes = 64;
+        capped.max_depth = 0;
+        stream = pbw_istream_new(&capped);
+        CHECK(stream != NULL);
+        CHECK_OK(pbw_istream_feed(stream, part1, sizeof(part1)));
+        CHECK_OK(pbw_istream_feed(stream, part2, sizeof(part2)));
+        CHECK_OK(pbw_istream_next(stream, person, &msg));
+        CHECK(msg != NULL);
+        pbw_message_free(msg);
+        pbw_istream_free(stream);
+    }
+
     /* A one-byte length prefix that runs past the buffer is invalid, on the
      * fast path as well as the general one. */
     {
@@ -2587,6 +2644,47 @@ test_ctx_reset_twice(pbw_schema *schema)
     CHECK(pbw_message_get(decoded, 1) != NULL);
     pbw_ctx_free(ctx);
     (void)len;
+}
+
+/* A failed decode drops its partial trees: looping over hostile frames in a
+ * shared context must not grow the arena. */
+static void
+test_ctx_failed_decode_resets(pbw_schema *schema)
+{
+    const pbw_descriptor *parent = desc(schema, "Parent");
+    /* packed nums: 65 valid items then a truncated varint tail */
+    static uint8_t bad[2 + 200];
+    pbw_ctx *ctx = pbw_ctx_new();
+    pbw_message *decoded = NULL;
+    size_t i;
+
+    bad[0] = 0x12;
+    bad[1] = 200;
+    for (i = 0; i < 65; i++) {
+        bad[2 + i * 2] = 0x80;
+        bad[2 + i * 2 + 1] = 0x01;
+    }
+    for (i = 2 + 130; i < sizeof(bad); i++) {
+        bad[i] = 0x80;
+    }
+    CHECK(ctx != NULL);
+    for (i = 0; i < 50; i++) {
+        decoded = (pbw_message *)0x1;
+        CHECK_STATUS(PBW_ERR_INVALID,
+                     pbw_decode_ctx(ctx, parent, bad, sizeof(bad), &decoded));
+        CHECK(decoded == NULL);
+    }
+    CHECK(pbw_ctx_used(ctx) == 0);
+    /* Still functional afterwards. */
+    {
+        static const uint8_t wire[] = {0x12, 0x01, 0x01}; /* nums = [1] */
+
+        CHECK_STATUS(PBW_OK, pbw_decode_ctx(ctx, parent, wire, sizeof(wire),
+                                            &decoded));
+        CHECK(decoded != NULL);
+        CHECK(pbw_message_get(decoded, 2) != NULL);
+    }
+    pbw_ctx_free(ctx);
 }
 
 /* A context that only ever holds oversized single allocations never grows a
@@ -8614,6 +8712,7 @@ main(void)
     test_ctx_mem(schema);
     test_ctx_retain_cap(schema);
     test_ctx_reset_twice(schema);
+    test_ctx_failed_decode_resets(schema);
     test_ctx_reset_oversized_only();
     test_ctx_pool(schema);
     test_encode_to(schema);
