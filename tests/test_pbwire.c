@@ -831,6 +831,41 @@ test_locale_independence(pbw_schema *schema)
         CHECK(parsed != NULL &&
               pbw_value_get_double(pbw_message_get(parsed, 12)) == 1.5);
         pbw_message_free(parsed);
+        /* Locale-free converters: same bytes under any LC_NUMERIC. */
+        {
+            static const struct {
+                const char *text;
+                double want;
+            } vecs[] = {{"3.14", 3.14},
+                        {"0.1", 0.1},
+                        {"-2.25", -2.25},
+                        {"1e3", 1000.0},
+                        {"1.5e-7", 1.5e-7},
+                        {".5", 0.5},
+                        {"1.", 1.0},
+                        {"+2.5", 2.5},
+                        {"3.141592653589793", 3.141592653589793}};
+            size_t k;
+            char *stop;
+            char buf[32];
+
+            for (k = 0; k < sizeof(vecs) / sizeof(vecs[0]); k++) {
+                double got = pbw_strtod_c(vecs[k].text, &stop);
+
+                CHECK(stop == vecs[k].text + strlen(vecs[k].text) &&
+                      got == vecs[k].want);
+            }
+            CHECK(pbw_strtod_c("1.5x", &stop) == 1.5 &&
+                  stop != NULL && strcmp(stop, "x") == 0);
+            CHECK(pbw_strtod_c("", &stop) == 0.0 && stop != NULL &&
+                  *stop == '\0');
+            CHECK(pbw_strtod_c("abc", &stop) == 0.0 && stop != NULL &&
+                  *stop == 'a');
+            CHECK(pbw_format_g_c(buf, sizeof(buf), 17, 1.5) == 3 &&
+                  strcmp(buf, "1.5") == 0);
+            CHECK(pbw_format_g_c(buf, sizeof(buf), 17, 2.0) == 1 &&
+                  strcmp(buf, "2") == 0);
+        }
     }
     setlocale(LC_NUMERIC, saved);
 }
@@ -1225,66 +1260,6 @@ test_parse_limits(pbw_schema *schema)
     CHECK_STATUS(PBW_ERR_LIMIT,
                  pbw_text_parse_limits(tree, deep, at, &lim, &out));
     CHECK(out == NULL);
-}
-
-/* pbw_strtod_slow() substitutes the locale's decimal separator for the single
- * '.' the JSON/text formats require, then maps the translated end offset back
- * onto the original text (pbw_strtod_unmap). The mapping must be exact for a
- * parse that stops at, inside or past a multi-byte separator: an end that
- * lands before the '.' would move backwards relative to the number. */
-static void
-test_strtod_unmap(void)
-{
-    static const struct {
-        size_t used;   /* offset strtod reported in the translated buffer */
-        size_t before; /* offset of the '.' in the original text */
-        size_t dpsize; /* locale separator width in bytes */
-        size_t want;
-    } cases[] = {
-        /* one-byte separator ('5,5' style): identity everywhere */
-        {0, 0, 1, 0},
-        {1, 1, 1, 1},
-        {4, 1, 1, 4},
-        /* two-byte separator (U+066B, ar_SA/fa_IR) */
-        {1, 1, 2, 1}, /* stopped at the separator */
-        {2, 1, 2, 2}, /* stopped inside it: the '.' is consumed */
-        {3, 1, 2, 2}, /* the whole separator, nothing after it */
-        {5, 1, 2, 4}, /* separator plus two more bytes */
-        /* three-byte separator: the width the old formula got wrong */
-        {1, 1, 3, 1},
-        {2, 1, 3, 2},
-        {3, 1, 3, 2},
-        {4, 1, 3, 2},
-        {7, 1, 3, 5},
-        /* a parse that never reached the separator stays put */
-        {0, 0, 3, 0},
-        {2, 2, 3, 2},
-    };
-    size_t i;
-
-    for (i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
-        size_t got = pbw_strtod_unmap(cases[i].used, cases[i].before,
-                                      cases[i].dpsize);
-
-        CHECK(got == cases[i].want);
-        CHECK(got <= cases[i].used);
-        if (got != cases[i].want || got > cases[i].used) {
-            fprintf(stderr,
-                    "  unmap used=%lu before=%lu dpsize=%lu: got %lu want %lu\n",
-                    (unsigned long)cases[i].used,
-                    (unsigned long)cases[i].before,
-                    (unsigned long)cases[i].dpsize, (unsigned long)got,
-                    (unsigned long)cases[i].want);
-        }
-    }
-    /* the property the table encodes: never before the '.', never past the
-     * translated offset */
-    for (i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
-        if (cases[i].used > cases[i].before) {
-            CHECK(pbw_strtod_unmap(cases[i].used, cases[i].before,
-                                   cases[i].dpsize) >= cases[i].before);
-        }
-    }
 }
 
 /* Tag and varint width rules, pinned against libprotobuf 36:
@@ -8562,7 +8537,6 @@ main(void)
     test_unknown_fields(schema);
     test_hostile_arguments(schema);
     test_locale_independence(schema);
-    test_strtod_unmap();
     test_parse_limits(schema);
     test_size_packed_invariant(schema);
     test_tag_limits(schema);
