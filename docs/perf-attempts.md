@@ -66,6 +66,8 @@ generated `writeTo` is straight-line code with compile-time offsets.
 | 4 | primitive mirror arrays on `MessageDef` (`kind[]`, `presence[]`, `repeated[]`, `tags[]`) instead of pointer chasing through `Field` | 84-155 ns (+5..+70%) | four arrays with four bases cost more loads than two loads plus the `Field` fields the JIT already had in L1. |
 | 5 | inline the singular ref path (string/bytes/message) from `writeRefVal()` into `encodeInto()` | 85-98 ns (+9..+15%) | removes three call boundaries but enlarges `encodeInto`, which is already the only reason `writeRefVal` sometimes fails to inline. |
 | 6 | drop the `f.repeated` branch and the `v == 0 && IMPLICIT` test (measurement only: the x0 payload has no repeated fields and no zero values) | 76.0 vs 75.6 | neutral. These per-field branches are not the cost, which is why a precomputed action table would not have paid off either - it was dropped before being built. |
+| 7 | split `encodeInto`: repeated-field branch and unknown-fields tail extracted to helpers, `fields`/`has`/`num`/`ref` hoisted to locals (the opposite of #5) | neutral (larger shapes 0.99-1.04x across runs; the 136 B row flipped sign with the oracle) | the singular loop is not smaller in any way the JIT can use: same loads per field, plus two cold call boundaries. Measured on a different, heavily loaded box, so ratios only, no ns/op. |
+| 8 | object dispatch for the numeric singular path: static `NumWriter` lambda table indexed by kind instead of the `switch` (proxy for a `MethodHandle`/explicit-arity dispatch) | encode down on every shape, both runs: const 0.91x twice, varied 0.96-0.98x, 136 B 0.81-0.85x | a megamorphic call site costs more than the branch-predicted tableswitch. A faithful `MethodHandle` version would need a per-field constant call site for the JIT to fold, which runtime-built field definitions cannot provide without generating classes - so this stands in for that direction too. Same loaded-box caveat as #7. |
 
 ### Regression caught by the tables (revert kept)
 
@@ -823,3 +825,57 @@ decode hot loop hands `msg` to out-of-line helpers in a dozen places.
   eliminated by the JIT (226 vs 233 ns raw), so what is left is the DMsg array
   set plus the per-field dispatch, and the cell flips with the baseline's own
   run-to-run band.
+
+## Rejected: JNI binding for Java (2026-11-16)
+
+Question: would the Java binding be faster on top of the C core through JNI
+than the current pure-Java codec? Answer: no, except large-payload encode.
+Do not re-attempt without a new reason; the numbers below are the ceiling
+a real JNI data binding would sit under.
+
+### Probe (throwaway, not committed)
+
+A minimal JNI harness over `build/libpbwire.a` (`/tmp/jnibench`, four native
+methods, same `matrix3.proto` / same four tiers as `Bench.java`): `nativeInit`
+loads `matrix3.desc` via `pbw_descriptor_set_load`; `nativeSetRef` decodes
+the reference bytes once into a cached C tree per tier; `nativeEncode(tier)`
+re-encodes the cached tree (`pbw_encode`, one `byte[]` out per call);
+`nativeDecode(bytes)` runs `pbw_decode` + touches the field/presence counts
++ `pbw_message_free` per call (one `byte[]` in, no Java objects created).
+Both sides allocate per call and cross the boundary once per op; timing is
+the same calibrate + 3-pass best-of interleaved loop as `Bench.java`, so
+machine drift hits both sides equally. Byte parity gated first: JNI bytes
+are identical to `GenericCodec` bytes on all four tiers.
+
+### Result (Apple M4 Pro, OpenJDK 26.0.1, same process)
+
+| tier | encode pure-Java | encode JNI (C) | JNI/pure | decode pure-Java | decode JNI (C) | JNI/pure |
+|---|---|---|---|---|---|---|
+| small 136 B | 1606 MB/s (84.7 ns) | 865 MB/s (157.3 ns) | **0.54x** | 886 MB/s (153.6 ns) | 536 MB/s (253.7 ns) | **0.61x** |
+| medium 174 B | 1360 MB/s (128.0 ns) | 947 MB/s (183.7 ns) | **0.70x** | 735 MB/s (236.7 ns) | 551 MB/s (315.6 ns) | **0.75x** |
+| large 2469 B | 985 MB/s (2506.5 ns) | 1516 MB/s (1629.1 ns) | **1.54x** | 718 MB/s (3436.9 ns) | 629 MB/s (3927.5 ns) | **0.88x** |
+| xlarge 74913 B | 924 MB/s (81111.0 ns) | 1557 MB/s (48107.6 ns) | **1.69x** | 746 MB/s (100430.4 ns) | 690 MB/s (108600.4 ns) | **0.92x** |
+
+### Why this is the ceiling, not the floor
+
+The probe favours JNI on purpose: encode reuses a prebuilt C tree (no
+Java-object-to-C translation per call) and decode never materialises Java
+objects (no C-tree-to-`DMsg` translation). A real JNI data binding pays both
+translations on top of these numbers, so it measures strictly worse. Even
+so, JNI loses both ops on small/medium (one JNI call +
+`GetByteArrayElements` pin/copy dominates an 80-300 ns codec), wins encode
+only on large/xlarge (the C single-pass writer pulls ahead once the payload
+dominates the boundary), and loses decode everywhere (C decode eagerly
+materialises the whole tree plus a `malloc`/`free` pair per call, while
+`GenericCodec.decode` is lazy on message/string/bytes fields).
+
+### Decision
+
+Keep the pure-Java codec. It already leads `protobuf-java` on xlarge
+(encode ~1.0x, decode ~1.7x in `bench.sh`), ships zero native libraries,
+and cannot segfault the host JVM. A JNI port buys at most ~1.6x on
+large/xlarge **encode only**, at the cost of per-platform `.dylib`/`.so`
+distribution, a second codec to keep byte-identical, and host-crash risk.
+The one workload where JNI would win -- a gateway that re-emits large
+payloads without touching fields -- is a passthrough, not a data binding,
+and should be built as that if it ever matters.
