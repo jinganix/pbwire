@@ -969,6 +969,45 @@ test_hostile_arguments(pbw_schema *schema)
         pbw_message_free(parsed);
     }
 
+    /* A heap message cannot hold a context-arena value: the next reset
+     * would free the payload under it. */
+    {
+        pbw_ctx *ctx = pbw_ctx_new();
+        pbw_message *heap = pbw_message_new(parent);
+        pbw_value *v = NULL;
+
+        CHECK(ctx != NULL);
+        CHECK(heap != NULL);
+        v = pbw_value_new_uint_ctx(ctx, 7);
+        CHECK(v != NULL);
+        CHECK_STATUS(PBW_ERR_INVALID, pbw_message_set(heap, 2, v));
+        pbw_value_free(v);
+        pbw_message_free(heap);
+        pbw_ctx_free(ctx);
+    }
+
+    /* The same sub-message cannot live in two fields: the second store is
+     * rejected instead of sharing ownership (and double-freeing). */
+    {
+        pbw_message *p1 = pbw_message_new(parent);
+        pbw_message *p2 = pbw_message_new(parent);
+        pbw_message *sub = pbw_message_new(desc(schema, "Child"));
+        pbw_value *w1 = NULL;
+        pbw_value *w2 = NULL;
+
+        CHECK(p1 != NULL && p2 != NULL && sub != NULL);
+        w1 = pbw_value_new_message(sub);
+        w2 = pbw_value_new_message(sub);
+        CHECK(w1 != NULL && w2 != NULL);
+        CHECK_OK(pbw_message_set(p1, 1, w1));
+        CHECK_STATUS(PBW_ERR_INVALID, pbw_message_set(p2, 1, w2));
+        /* w2 never took ownership: free the wrapper struct only, the
+         * message still belongs to p1. */
+        free(w2);
+        pbw_message_free(p1);
+        pbw_message_free(p2);
+    }
+
     /* A feed chunk no allocation can hold fails instead of spinning on a
      * wrapped capacity. */
     {
@@ -3509,6 +3548,18 @@ test_schema_errors(void)
                                   PBW_LABEL_OPTIONAL);
     CHECK(field != NULL);
     pbw_field_set_oneof(field, 99);
+    CHECK_STATUS(PBW_ERR_INVALID, pbw_schema_link(schema));
+    pbw_schema_free(schema);
+
+    /* a repeated field cannot join a oneof: the store path never clears a
+     * sibling for it, so linking rejects it instead of encoding two
+     * members. */
+    schema = pbw_schema_new();
+    msg = pbw_schema_add_message(schema, "M");
+    field = pbw_message_add_field(msg, "a", 1, PBW_TYPE_INT32,
+                                  PBW_LABEL_REPEATED);
+    CHECK(field != NULL);
+    pbw_field_set_oneof(field, 1);
     CHECK_STATUS(PBW_ERR_INVALID, pbw_schema_link(schema));
     pbw_schema_free(schema);
 

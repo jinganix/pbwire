@@ -775,6 +775,14 @@ link_message(pbw_schema *schema, pbw_descriptor *msg)
                      field->oneof_index, msg->name, field->name);
             return PBW_ERR_INVALID;
         }
+        if (field->oneof_index != 0 && field->label == PBW_LABEL_REPEATED) {
+            /* The store path never clears a sibling for a repeated field,
+             * so two members would stay present and encode together. */
+            snprintf(schema->error, sizeof(schema->error),
+                     "repeated field %s.%s cannot be in a oneof", msg->name,
+                     field->name);
+            return PBW_ERR_INVALID;
+        }
 
         if (field->type == PBW_TYPE_MESSAGE || field->type == PBW_TYPE_ENUM ||
             field->type == PBW_TYPE_GROUP) {

@@ -313,6 +313,7 @@ struct pbw_message {
     const pbw_descriptor *desc;
     pbw_arena *arena;     /* non-NULL: the tree is allocated from an arena */
     pbw_arena *own;       /* non-NULL: this message frees that arena */
+    int stored;           /* 1: owned by another message's slot or list */
     pbw_value *values;    /* nfields inline slots, see `present` */
     uint32_t epoch;       /* desc->epoch at creation: mismatch = stale */
     uint32_t *present;    /* field_count bits: the slot holds a value */
@@ -768,6 +769,7 @@ pbw_message_new_a(pbw_arena *arena, const pbw_descriptor *desc)
     msg->epoch = desc->epoch;
     msg->arena = arena;
     msg->own = NULL;
+    msg->stored = 0;
     msg->nfields = desc->field_count;
     msg->values = (pbw_value *)(void *)(block + values_off);
     msg->present = (uint32_t *)(void *)(block + present_off);

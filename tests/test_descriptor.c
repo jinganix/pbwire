@@ -807,7 +807,34 @@ test_load_hostile(void)
     CHECK(schema != NULL && strlen(pbw_schema_error(schema)) > 0);
     pbw_schema_free(schema);
     schema = NULL;
-    /* 8. a map entry that does not have exactly optional key #1 and value #2:
+    /* 8. a 33-bit field number: it truncates to 1 without a range check,
+     * so the loader rejects wide varints instead of renumbering. */
+    {
+        uint8_t fld[64];
+        ds_w fw;
+
+        iw.len = 0;
+        w_str(&iw, 1, "M");
+        fw.p = fld;
+        fw.len = 0;
+        w_str(&fw, 1, "x");
+        w_int(&fw, 3, 0x100000001ull);
+        w_int(&fw, 4, 1);
+        w_int(&fw, 5, 5);
+        w_sub(&iw, 2, fld, fw.len);
+    }
+    w.len = 0;
+    w_str(&w, 1, "w.proto");
+    w_str(&w, 2, "p");
+    w_sub(&w, 4, inner, iw.len);
+    w_str(&w, 12, "proto3");
+    sw.len = 0;
+    w_sub(&sw, 1, file, w.len);
+    CHECK_STATUS(PBW_ERR_INVALID,
+                 pbw_descriptor_set_load(set, sw.len, &schema));
+    pbw_schema_free(schema);
+    schema = NULL;
+    /* 9. a map entry that does not have exactly optional key #1 and value #2:
      * INVALID. The JSON/text printers read those two numbers directly, so a
      * other shape would fail the whole print much later. */
     iw.len = 0;
