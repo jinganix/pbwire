@@ -7768,6 +7768,45 @@ test_streaming(pbw_schema *schema)
         CHECK(got == NULL);
         pbw_istream_free(capped);
     }
+    /* Never-completing bytes are capped at feed time, not buffered forever. */
+    {
+        pbw_limits dribble;
+        pbw_istream *starved;
+        size_t k;
+
+        dribble.max_bytes = 64;
+        dribble.max_depth = 0;
+        starved = pbw_istream_new(&dribble);
+        CHECK(starved != NULL);
+        for (k = 0; k < 69; k++) {
+            CHECK_OK(pbw_istream_feed(starved, "\x80", 1));
+        }
+        CHECK_STATUS(PBW_ERR_LIMIT,
+                     pbw_istream_feed(starved, "\x80", 1));
+        pbw_istream_free(starved);
+    }
+    /* Pipelined complete frames past max_bytes + 5 still feed: the
+     * per-frame limit stays enforced by next(), not by the buffer. */
+    {
+        pbw_limits piped;
+        pbw_istream *multi;
+        size_t k;
+
+        piped.max_bytes = 64;
+        piped.max_depth = 0;
+        multi = pbw_istream_new(&piped);
+        CHECK(multi != NULL);
+        for (k = 0; k < 10; k++) {
+            CHECK_OK(pbw_istream_feed(multi, f1, f1_len));
+        }
+        CHECK_OK(pbw_istream_next(multi, type, &got));
+        CHECK(got != NULL);
+        CHECK(strcmp(pbw_value_get_string(pbw_message_get(got, 1)),
+                     "alice") == 0);
+        pbw_message_free(got);
+        got = NULL;
+        pbw_istream_free(multi);
+    }
     CHECK_STATUS(PBW_ERR_INVALID, pbw_istream_feed(NULL, wire, 1));
     CHECK_STATUS(PBW_ERR_INVALID, pbw_istream_next(s, type, NULL));
     CHECK_STATUS(PBW_ERR_INVALID, pbw_encode_sink(NULL, collect_sink, &sunk));
