@@ -1047,6 +1047,140 @@ test_hostile_arguments(pbw_schema *schema)
         pbw_message_free(m);
     }
 
+    /* Same hole through the DELIMITED shortcut: the kind gate must run
+     * before group tags, or the writer chases address 0x1234. */
+    {
+        pbw_schema *s = pbw_schema_new();
+        pbw_descriptor *md = pbw_schema_add_message(s, "M");
+        pbw_field *mf = pbw_message_add_field(md, "child", 1,
+                                              PBW_TYPE_MESSAGE,
+                                              PBW_LABEL_OPTIONAL);
+        pbw_message *m = NULL;
+        pbw_value bad;
+        uint8_t *buf = NULL;
+        size_t len = 0;
+
+        CHECK(s != NULL && md != NULL && mf != NULL);
+        pbw_field_set_type_name(mf, "M");
+        mf->msg_enc = 2;
+        CHECK_OK(pbw_schema_link(s));
+        m = pbw_message_new(md);
+        CHECK(m != NULL);
+        memset(&bad, 0, sizeof(bad));
+        bad.kind = PBW_VALUE_UINT;
+        bad.as.u64 = 0x1234;
+        pbw_message_put(m, 0, &bad);
+        CHECK_STATUS(PBW_ERR_INVALID, pbw_encode(m, &buf, &len));
+        CHECK(buf == NULL && len == 0);
+        pbw_message_free(m);
+        pbw_schema_free(s);
+    }
+
+    /* Scalar branches read the same union: a BYTES value in an INT32
+     * slot must fail instead of emitting pointer bits. */
+    {
+        pbw_schema *s = pbw_schema_new();
+        pbw_descriptor *md = pbw_schema_add_message(s, "M");
+        pbw_field *mf = pbw_message_add_field(md, "a", 1, PBW_TYPE_INT32,
+                                              PBW_LABEL_OPTIONAL);
+        pbw_message *m = NULL;
+        pbw_value bad;
+        uint8_t *payload = malloc(1);
+        uint8_t *buf = NULL;
+        size_t len = 0;
+        size_t size = 0;
+
+        CHECK(s != NULL && md != NULL && mf != NULL);
+        CHECK(payload != NULL);
+        payload[0] = 'x';
+        CHECK_OK(pbw_schema_link(s));
+        m = pbw_message_new(md);
+        CHECK(m != NULL);
+        memset(&bad, 0, sizeof(bad));
+        bad.kind = PBW_VALUE_BYTES;
+        bad.as.bytes.data = payload; /* heap-owned: the slot frees it */
+        bad.as.bytes.len = 1;
+        pbw_message_put(m, 0, &bad);
+        CHECK_STATUS(PBW_ERR_INVALID, pbw_encode(m, &buf, &len));
+        CHECK(buf == NULL && len == 0);
+        CHECK_STATUS(PBW_ERR_INVALID, pbw_message_encoded_size(m, &size));
+        pbw_message_free(m);
+        pbw_schema_free(s);
+    }
+
+    /* A hostile item smuggled into a repeated message field must fail
+     * is_initialized instead of crashing on a bad union arm. */
+    {
+        pbw_schema *s2 = pbw_schema_new();
+        pbw_descriptor *md;
+        pbw_descriptor *sub;
+        pbw_field *mf;
+        pbw_schema_set_proto3(s2, 0);
+        md = pbw_schema_add_message(s2, "M");
+        sub = pbw_schema_add_message(s2, "Sub");
+        mf = pbw_message_add_field(md, "kids", 1,
+                                   PBW_TYPE_MESSAGE,
+                                   PBW_LABEL_REPEATED);
+        pbw_message *mm = NULL;
+        pbw_value l;
+        pbw_value *item;
+
+        CHECK(md != NULL && sub != NULL && mf != NULL);
+        pbw_field_set_type_name(mf, "Sub");
+        /* A required field forces the initialized walk to inspect items. */
+        CHECK(pbw_message_add_field(md, "req", 2, PBW_TYPE_INT32,
+                                    PBW_LABEL_REQUIRED) != NULL);
+        CHECK_OK(pbw_schema_link(s2));
+        mm = pbw_message_new(md);
+        CHECK(mm != NULL);
+        /* Heap-owned hostile item, so the free walk stays valid. */
+        item = (pbw_value *)calloc(1, sizeof(*item));
+        CHECK(item != NULL);
+        item->kind = PBW_VALUE_UINT;
+        item->as.u64 = 0x1234;
+        memset(&l, 0, sizeof(l));
+        l.kind = PBW_VALUE_LIST;
+        l.as.list.items = (pbw_value **)calloc(1, sizeof(item));
+        CHECK(l.as.list.items != NULL);
+        l.as.list.items[0] = item;
+        l.as.list.len = 1;
+        l.as.list.cap = 1;
+        pbw_message_put(mm, 0, &l);
+        CHECK(!pbw_message_is_initialized(mm));
+        pbw_message_free(mm);
+        pbw_schema_free(s2);
+    }
+
+    /* A sealed context rejects new allocations: the arena is read-only. */
+    {
+        pbw_ctx *ctx = pbw_ctx_new();
+        pbw_message *decoded = NULL;
+        pbw_message *m2;
+        pbw_value *v;
+        uint8_t *buf = NULL;
+        size_t len = 0;
+
+        CHECK(ctx != NULL);
+        {
+            pbw_message *tmp = pbw_message_new(person);
+            pbw_value *vs = pbw_value_new_string("x");
+
+            CHECK(tmp != NULL && vs != NULL);
+            CHECK_OK(pbw_message_set(tmp, 1, vs));
+            CHECK_OK(pbw_encode(tmp, &buf, &len));
+            pbw_message_free(tmp);
+        }
+        CHECK_OK(pbw_decode_ctx(ctx, pbw_schema_find(schema, "Person"),
+                                buf, len, &decoded));
+        CHECK(decoded != NULL);
+        m2 = pbw_message_new_ctx(ctx, pbw_schema_find(schema, "Person"));
+        CHECK(m2 == NULL);
+        v = pbw_value_new_uint_ctx(ctx, 7);
+        CHECK(v == NULL);
+        pbw_free(buf);
+        pbw_ctx_free(ctx);
+    }
+
     /* A feed chunk no allocation can hold fails instead of spinning on a
      * wrapped capacity. */
     {
@@ -1395,6 +1529,105 @@ test_parse_limits(pbw_schema *schema)
     CHECK_STATUS(PBW_ERR_LIMIT,
                  pbw_text_parse_limits(tree, deep, at, &lim, &out));
     CHECK(out == NULL);
+}
+
+/* A depth breach inside a map value or an Any payload stays LIMIT so
+ * callers can tell unbounded input from malformed input. */
+static void
+test_deep_map_any_limits(void)
+{
+    pbw_schema *s = pbw_schema_new();
+    pbw_descriptor *m;
+    pbw_descriptor *entry;
+    pbw_descriptor *any;
+    pbw_field *f;
+    pbw_message *out = NULL;
+    char deep[8192];
+    size_t at = 0;
+    int i;
+
+    CHECK(s != NULL);
+    if (s == NULL) {
+        return;
+    }
+    m = pbw_schema_add_message(s, "M");
+    entry = pbw_schema_add_message(s, "MEntry");
+    any = pbw_schema_add_message(s, "google.protobuf.Any");
+    CHECK(m != NULL && entry != NULL && any != NULL);
+    if (m == NULL || entry == NULL || any == NULL) {
+        pbw_schema_free(s);
+        return;
+    }
+    CHECK(pbw_message_add_field(entry, "key", 1, PBW_TYPE_STRING,
+                                PBW_LABEL_OPTIONAL) != NULL);
+    f = pbw_message_add_field(entry, "value", 2, PBW_TYPE_MESSAGE,
+                              PBW_LABEL_OPTIONAL);
+    CHECK(f != NULL);
+    pbw_field_set_type_name(f, "M");
+    pbw_descriptor_set_map_entry(entry);
+    f = pbw_message_add_field(m, "map", 1, PBW_TYPE_MESSAGE,
+                              PBW_LABEL_REPEATED);
+    CHECK(f != NULL);
+    pbw_field_set_type_name(f, "MEntry");
+    f = pbw_message_add_field(m, "next", 2, PBW_TYPE_MESSAGE,
+                              PBW_LABEL_OPTIONAL);
+    CHECK(f != NULL);
+    pbw_field_set_type_name(f, "M");
+    f = pbw_message_add_field(any, "type_url", 1, PBW_TYPE_STRING,
+                              PBW_LABEL_OPTIONAL);
+    CHECK(f != NULL);
+    f = pbw_message_add_field(any, "value", 2, PBW_TYPE_BYTES,
+                              PBW_LABEL_OPTIONAL);
+    CHECK(f != NULL);
+    f = pbw_message_add_field(m, "payload", 3, PBW_TYPE_MESSAGE,
+                              PBW_LABEL_OPTIONAL);
+    CHECK(f != NULL);
+    pbw_field_set_type_name(f, "google.protobuf.Any");
+    CHECK_OK(pbw_schema_link(s));
+    m = (pbw_descriptor *)pbw_schema_find(s, "M");
+    any = (pbw_descriptor *)pbw_schema_find(s, "google.protobuf.Any");
+    CHECK(m != NULL && any != NULL);
+    /* deep input through a map value still reports LIMIT, not INVALID */
+    at = 0;
+    for (i = 0; i < 300; i++) {
+        memcpy(deep + at, "{\"map\":{\"k\":", 12);
+        at += 12;
+    }
+    memcpy(deep + at, "{}", 2);
+    at += 2;
+    for (i = 0; i < 300; i++) {
+        memcpy(deep + at, "}}", 2);
+        at += 2;
+    }
+    CHECK(at < sizeof(deep));
+    CHECK_STATUS(PBW_ERR_LIMIT, pbw_json_parse(m, deep, at, &out));
+    CHECK(out == NULL);
+    /* ... and so does a deep Any payload (inlined fields form). */
+    {
+        static const char prefix[] =
+            "{\"payload\":{\"@type\":\"type.googleapis.com/M\",";
+        static const char suffix[] = "}}";
+        char abuf[8192];
+        size_t apos = 0;
+
+        memcpy(abuf + apos, prefix, sizeof(prefix) - 1);
+        apos += sizeof(prefix) - 1;
+        for (i = 0; i < 300; i++) {
+            memcpy(abuf + apos, "\"next\":{", 8);
+            apos += 8;
+        }
+        memcpy(abuf + apos, "\"next\":{}", 9);
+        apos += 9;
+        for (i = 0; i < 300; i++) {
+            abuf[apos++] = '}';
+        }
+        memcpy(abuf + apos, suffix, sizeof(suffix) - 1);
+        apos += sizeof(suffix) - 1;
+        CHECK(apos < sizeof(abuf));
+        CHECK_STATUS(PBW_ERR_LIMIT, pbw_json_parse(m, abuf, apos, &out));
+        CHECK(out == NULL);
+    }
+    pbw_schema_free(s);
 }
 
 /* Tag and varint width rules, pinned against libprotobuf 36:
@@ -3677,6 +3910,49 @@ test_schema_errors(void)
         /* One member only: storing the second clears the first. get()
          * needs a linked schema, so the count is the witness. */
         CHECK(pbw_message_field_count(m) == 1);
+        pbw_message_free(m);
+    }
+    pbw_schema_free(schema);
+
+    /* set_oneof() after a message exists retires it: the case table was
+     * sized before the new index existed, so a later set must fail
+     * instead of writing past it. */
+    schema = pbw_schema_new();
+    msg = pbw_schema_add_message(schema, "M");
+    {
+        pbw_message *m;
+        pbw_field *fa;
+        pbw_field *fb;
+
+        fa = pbw_message_add_field(msg, "a", 1, PBW_TYPE_INT32,
+                                   PBW_LABEL_OPTIONAL);
+        fb = pbw_message_add_field(msg, "b", 2, PBW_TYPE_INT32,
+                                   PBW_LABEL_OPTIONAL);
+        CHECK(fa != NULL && fb != NULL);
+        (void)fa;
+        m = pbw_message_new(msg);
+        CHECK(m != NULL);
+        pbw_field_set_oneof(fb, 3);
+        CHECK_STATUS(PBW_ERR_INVALID,
+                     pbw_message_set_field(m, fb, pbw_value_new_int(1)));
+        pbw_message_free(m);
+    }
+    pbw_schema_free(schema);
+
+    /* encoded_size() agrees with encode(): both refuse unlinked schemas
+     * instead of sizing a tagless message at zero. */
+    schema = pbw_schema_new();
+    msg = pbw_schema_add_message(schema, "M");
+    {
+        pbw_message *m;
+        size_t len = 0;
+
+        CHECK(msg != NULL);
+        CHECK(pbw_message_add_field(msg, "a", 1, PBW_TYPE_INT32,
+                                    PBW_LABEL_OPTIONAL) != NULL);
+        m = pbw_message_new(msg);
+        CHECK(m != NULL);
+        CHECK_STATUS(PBW_ERR_INVALID, pbw_message_encoded_size(m, &len));
         pbw_message_free(m);
     }
     pbw_schema_free(schema);
@@ -8877,6 +9153,7 @@ main(void)
     test_hostile_arguments(schema);
     test_locale_independence(schema);
     test_parse_limits(schema);
+    test_deep_map_any_limits();
     test_size_packed_invariant(schema);
     test_tag_limits(schema);
     test_field_number_edges(schema);

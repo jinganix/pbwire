@@ -713,7 +713,21 @@ pbw_field_set_oneof(pbw_field *field, uint32_t oneof_index)
     }
     field->oneof_index = oneof_index;
     if (field->schema != NULL) {
-        field->schema->linked = 0;
+        pbw_schema *schema = field->schema;
+        size_t i;
+
+        schema->linked = 0;
+        /* The oneof_case table sizes from the max index at message creation:
+         * retire existing messages so a later set cannot index past it. */
+        for (i = 0; i < schema->count; i++) {
+            pbw_descriptor *desc = schema->descs[i];
+
+            if (!desc->is_enum && field >= desc->fields &&
+                field < desc->fields + desc->field_count) {
+                desc->epoch++;
+                break;
+            }
+        }
     }
 }
 

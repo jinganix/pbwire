@@ -1271,16 +1271,17 @@ j_print_struct_value(j_out *j, const pbw_message *msg)
     }
     fields = pbw_message_get(msg, 1);
     size_t i;
+    size_t k;
+    int first = 1;
 
     j_ch(j, '{');
     if (fields != NULL && fields->kind == PBW_VALUE_LIST) {
-        int first = 1;
-
         for (i = 0; i < fields->as.list.len; i++) {
             const pbw_value *item = fields->as.list.items[i];
             const pbw_message *m;
             const pbw_value *key;
             const pbw_value *val;
+            int last = 1;
 
             if (item == NULL || item->kind != PBW_VALUE_MESSAGE ||
                 item->as.msg == NULL) {
@@ -1294,6 +1295,29 @@ j_print_struct_value(j_out *j, const pbw_message *msg)
                 val == NULL) {
                 j->status = PBW_ERR_INVALID;
                 return;
+            }
+            /* Binary input may repeat a key: only the last one prints,
+             * like j_print_map does for map fields. */
+            for (k = i + 1; k < fields->as.list.len; k++) {
+                const pbw_value *later = fields->as.list.items[k];
+                const pbw_value *later_key;
+
+                if (later == NULL || later->kind != PBW_VALUE_MESSAGE ||
+                    later->as.msg == NULL) {
+                    continue;
+                }
+                later_key = pbw_message_get(later->as.msg, 1);
+                if (later_key != NULL &&
+                    later_key->kind == PBW_VALUE_BYTES &&
+                    later_key->as.bytes.len == key->as.bytes.len &&
+                    memcmp(later_key->as.bytes.data, key->as.bytes.data,
+                           key->as.bytes.len) == 0) {
+                    last = 0;
+                    break;
+                }
+            }
+            if (!last) {
+                continue;
             }
             if (val->kind == PBW_VALUE_MESSAGE && val->as.msg != NULL &&
                 j_classify(val->as.msg->desc) == J_VALUE &&
@@ -3965,11 +3989,15 @@ j_parse_map(j_in *j, pbw_message *msg, const pbw_field *field)
                 j->depth--;
                 return PBW_ERR_NOMEM;
             }
-            if (j_parse_message(j, sub) != PBW_OK) {
-                pbw_message_free(sub);
-                pbw_message_free(item);
-                j->depth--;
-                return PBW_ERR_INVALID;
+            {
+                pbw_status pst = j_parse_message(j, sub);
+
+                if (pst != PBW_OK) {
+                    pbw_message_free(sub);
+                    pbw_message_free(item);
+                    j->depth--;
+                    return pst == PBW_ERR_LIMIT ? pst : PBW_ERR_INVALID;
+                }
             }
             st = j_store_message(j, item, value_field, sub);
             if (st != PBW_OK) {
@@ -4110,10 +4138,14 @@ j_parse_any(j_in *j, pbw_message *msg)
                 j->depth = depth0;
                 return ust;
             }
-        } else if (j_skip_value(j) != PBW_OK) {
-            pbw_buf_free(&key);
-            j->depth = depth0;
-            return PBW_ERR_INVALID;
+        } else {
+            pbw_status sst = j_skip_value(j);
+
+            if (sst != PBW_OK) {
+                pbw_buf_free(&key);
+                j->depth = depth0;
+                return sst == PBW_ERR_LIMIT ? sst : PBW_ERR_INVALID;
+            }
         }
         pbw_buf_free(&key);
         j_skip(&j->cur);
@@ -4214,9 +4246,18 @@ j_parse_any(j_in *j, pbw_message *msg)
             } else if (wkt != J_NOT_WKT) {
                 /* Well-known payloads live under a "value" key. */
                 pbw_buf_free(&key);
-                if (!is_value || j_parse_message(&inner, sub) != PBW_OK) {
+                if (!is_value) {
                     pbw_message_free(sub);
                     return PBW_ERR_INVALID;
+                }
+                {
+                    pbw_status awst = j_parse_message(&inner, sub);
+
+                    if (awst != PBW_OK) {
+                        pbw_message_free(sub);
+                        return awst == PBW_ERR_LIMIT ? awst
+                                                     : PBW_ERR_INVALID;
+                    }
                 }
             } else {
                 /* Regular fields parse by name, like the outer object. */

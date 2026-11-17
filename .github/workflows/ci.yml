@@ -125,6 +125,18 @@ jobs:
       - name: Dynamic symbol table
         run: ./scripts/check-symbols.sh
 
+  gates:
+    name: Pre-push gate (vendored cores, file lists, format)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install clang-format
+        run: sudo apt-get update && sudo apt-get install -y clang-format-20
+      - name: Run the same gate as the pre-push hook
+        run: |
+          sudo ln -sf /usr/bin/clang-format-20 /usr/local/bin/clang-format
+          ./scripts/check.sh
+
   format:
     name: clang-format
     runs-on: ubuntu-latest
@@ -238,6 +250,8 @@ jobs:
           php-version: '8.5'
       - name: Build the native extension
         run: (cd bindings/php/ext && ./build.sh)
+      - name: Run the self-check against FFI and native ext
+        run: make php-test php-ext-test
 
   erlang:
     name: Erlang binding (OTP 29 on ${{ matrix.os }})

@@ -309,7 +309,7 @@ pbw_encode_ctx(pbw_ctx *ctx, const pbw_message *msg, const uint8_t **out,
 pbw_message *
 pbw_message_new_ctx(pbw_ctx *ctx, const pbw_descriptor *desc)
 {
-    if (ctx == NULL) {
+    if (ctx == NULL || ctx->arena.readonly) {
         return NULL;
     }
     return pbw_message_new_a(&ctx->arena, desc);
@@ -318,7 +318,7 @@ pbw_message_new_ctx(pbw_ctx *ctx, const pbw_descriptor *desc)
 pbw_value *
 pbw_value_new_uint_ctx(pbw_ctx *ctx, uint64_t bits)
 {
-    if (ctx == NULL) {
+    if (ctx == NULL || ctx->arena.readonly) {
         return NULL;
     }
     return pbw_value_new_uint_a(&ctx->arena, bits);
@@ -327,7 +327,7 @@ pbw_value_new_uint_ctx(pbw_ctx *ctx, uint64_t bits)
 pbw_value *
 pbw_value_new_bytes_ctx(pbw_ctx *ctx, const void *data, size_t len)
 {
-    if (ctx == NULL) {
+    if (ctx == NULL || ctx->arena.readonly) {
         return NULL;
     }
     return pbw_value_new_bytes_a(&ctx->arena, data, len);

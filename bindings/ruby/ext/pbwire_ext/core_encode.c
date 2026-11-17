@@ -546,7 +546,8 @@ write_element(writer *w, const pbw_field *field, const pbw_value *value,
         return;
     }
     case PBW_TYPE_GROUP: {
-        if (value->kind != PBW_VALUE_MESSAGE) {
+        if (value == NULL || value->as.msg == NULL ||
+            value->kind != PBW_VALUE_MESSAGE) {
             w->status = PBW_ERR_INVALID;
             return;
         }
@@ -556,14 +557,14 @@ write_element(writer *w, const pbw_field *field, const pbw_value *value,
     case PBW_TYPE_MESSAGE: {
         size_t mark;
 
+        if (value == NULL || value->as.msg == NULL ||
+            value->kind != PBW_VALUE_MESSAGE) {
+            w->status = PBW_ERR_INVALID;
+            return;
+        }
         /* Editions message_encoding = DELIMITED travels as group tags. */
         if (field->msg_enc == 2) {
             write_group_body(w, field, value, depth, det);
-            return;
-        }
-
-        if (value->as.msg == NULL || value->kind != PBW_VALUE_MESSAGE) {
-            w->status = PBW_ERR_INVALID;
             return;
         }
         if (depth == PBW_MAX_DEPTH) {
@@ -599,6 +600,10 @@ write_element(writer *w, const pbw_field *field, const pbw_value *value,
     case PBW_TYPE_FLOAT:
     case PBW_TYPE_FIXED32:
     case PBW_TYPE_SFIXED32:
+        if (value == NULL || value->kind != PBW_VALUE_UINT) {
+            w->status = PBW_ERR_INVALID;
+            return;
+        }
         /* One reserve for tag plus value: the common small-message path
          * then writes without another capacity check. The tag write stores
          * a whole word, so reserve 4 for it. */
@@ -617,6 +622,10 @@ write_element(writer *w, const pbw_field *field, const pbw_value *value,
     case PBW_TYPE_DOUBLE:
     case PBW_TYPE_FIXED64:
     case PBW_TYPE_SFIXED64:
+        if (value == NULL || value->kind != PBW_VALUE_UINT) {
+            w->status = PBW_ERR_INVALID;
+            return;
+        }
         if (field->tag_len <= 4) {
             if (!w_reserve(w, 4 + 8)) {
                 w->status = PBW_ERR_NOMEM;
@@ -630,6 +639,10 @@ write_element(writer *w, const pbw_field *field, const pbw_value *value,
         w_fixed(w, value->as.u64, 8);
         return;
     default:
+        if (value == NULL || value->kind != PBW_VALUE_UINT) {
+            w->status = PBW_ERR_INVALID;
+            return;
+        }
         if (field->tag_len <= 4) {
             if (!w_reserve(w, 4 + 10)) {
                 w->status = PBW_ERR_NOMEM;
@@ -1184,7 +1197,8 @@ size_element(const pbw_field *field, const pbw_value *value, uint32_t depth,
         }
         return size_len_prefixed(out, field->tag_len, value->as.bytes.len);
     case PBW_TYPE_MESSAGE:
-        if (value->as.msg == NULL || value->kind != PBW_VALUE_MESSAGE) {
+        if (value == NULL || value->as.msg == NULL ||
+            value->kind != PBW_VALUE_MESSAGE) {
             return PBW_ERR_INVALID;
         }
         if (depth == PBW_MAX_DEPTH) {
@@ -1207,7 +1221,8 @@ size_element(const pbw_field *field, const pbw_value *value, uint32_t depth,
         }
         return size_len_prefixed(out, field->tag_len, body);
     case PBW_TYPE_GROUP:
-        if (value->as.msg == NULL || value->kind != PBW_VALUE_MESSAGE) {
+        if (value == NULL || value->as.msg == NULL ||
+            value->kind != PBW_VALUE_MESSAGE) {
             return PBW_ERR_INVALID;
         }
         if (depth == PBW_MAX_DEPTH) {
@@ -1228,14 +1243,23 @@ size_element(const pbw_field *field, const pbw_value *value, uint32_t depth,
     case PBW_TYPE_FLOAT:
     case PBW_TYPE_FIXED32:
     case PBW_TYPE_SFIXED32:
+        if (value == NULL || value->kind != PBW_VALUE_UINT) {
+            return PBW_ERR_INVALID;
+        }
         *out = field->tag_len + 4;
         return PBW_OK;
     case PBW_TYPE_DOUBLE:
     case PBW_TYPE_FIXED64:
     case PBW_TYPE_SFIXED64:
+        if (value == NULL || value->kind != PBW_VALUE_UINT) {
+            return PBW_ERR_INVALID;
+        }
         *out = field->tag_len + 8;
         return PBW_OK;
     default:
+        if (value == NULL || value->kind != PBW_VALUE_UINT) {
+            return PBW_ERR_INVALID;
+        }
         body = pbw_varint_size(wire_value(field->type, value->as.u64));
         if (!size_add(&body, field->tag_len)) {
             return PBW_ERR_LIMIT;
@@ -1361,7 +1385,8 @@ size_message(const pbw_message *msg, uint32_t depth, size_t *out)
 pbw_status
 pbw_message_encoded_size(const pbw_message *msg, size_t *len)
 {
-    if (!pbw_msg_fresh(msg) || len == NULL) {
+    if (!pbw_msg_fresh(msg) || len == NULL ||
+        (msg->desc->schema != NULL && !msg->desc->schema->linked)) {
         return PBW_ERR_INVALID;
     }
     return size_message(msg, 0, len);

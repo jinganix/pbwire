@@ -433,7 +433,9 @@ void pbw_ctx_free(pbw_ctx *ctx);
  * it); freed with the context. */
 void pbw_ctx_set_user(pbw_ctx *ctx, void *user);
 void *pbw_ctx_user(const pbw_ctx *ctx);
-/* Release every allocation made since the last reset, keeping the buffers. */
+/* Release every allocation made since the last reset, keeping the buffers.
+ * Every message built or decoded with this context dies here too: touching
+ * one afterwards reads whatever the next user of the chunk wrote. */
 void pbw_ctx_reset(pbw_ctx *ctx);
 /* Max bytes the context keeps resident across resets (decode arena chunks +
  * encode buffer), default 1 MiB. Single allocations above it bypass the

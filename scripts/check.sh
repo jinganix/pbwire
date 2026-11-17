@@ -66,5 +66,37 @@ for f in include/pbwire.h src/internal.h; do
     exit 1
   }
 done
+# The Zig binding and CMake keep their own core file lists (no globs),
+# so a new src/*.c must be added in three more places.
+for f in src/*.c; do
+  b=$(basename "$f")
+  grep -q "\"$b\"" bindings/zig/build.zig || {
+    echo "check: bindings/zig/build.zig core list missing $b" >&2
+    exit 1
+  }
+  grep -q "src/$b" CMakeLists.txt || {
+    echo "check: CMakeLists.txt core list missing src/$b" >&2
+    exit 1
+  }
+  # The Python sdist stages explicit core copies next to setup.py, so its
+  # CORE list must name every core file too.
+  grep -q "\"$b\"" bindings/python/setup.py || {
+    echo "check: bindings/python/setup.py CORE missing $b" >&2
+    exit 1
+  }
+  # The Lua rock builds in-tree with explicit paths; a missing entry is a
+  # link-time undefined symbol (e.g. wkt.c for pbw_any_*).
+  grep -q "\"src/$b\"" bindings/lua/pbwire-*.rockspec || {
+    echo "check: bindings/lua/pbwire-*.rockspec sources missing src/$b" >&2
+    exit 1
+  }
+done
+
+echo "== formatting =="
+if command -v clang-format >/dev/null 2>&1; then
+  make -s format-check
+else
+  echo "check: WARN: clang-format not found, skipping format-check" >&2
+fi
 
 echo "check: OK"

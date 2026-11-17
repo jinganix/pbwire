@@ -206,8 +206,14 @@ is_initialized(const pbw_message *msg, uint32_t depth)
                 continue;
             }
             for (j = 0; j < value->as.list.len; j++) {
-                if (!is_initialized(value->as.list.items[j]->as.msg,
-                                    depth + 1)) {
+                const pbw_value *item = value->as.list.items[j];
+
+                /* Same guard as encode: a hostile put() can plant a
+                 * non-message item here, and dereferencing it crashes
+                 * instead of reporting uninitialized. */
+                if (item == NULL || item->kind != PBW_VALUE_MESSAGE ||
+                    item->as.msg == NULL ||
+                    !is_initialized(item->as.msg, depth + 1)) {
                     return 0;
                 }
             }
