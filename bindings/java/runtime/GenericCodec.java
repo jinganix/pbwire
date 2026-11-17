@@ -879,6 +879,60 @@ public final class GenericCodec {
             return add(def.fields[slotByName(name)].number, v);
         }
 
+        /* Slot-direct primitive stores: Message already resolved the slot
+         * and checked the kind, so these skip the second fnum->slot lookup
+         * and all boxing on the set() path. */
+        void putNum(int s, long v) {
+            Field f = def.fields[s];
+            long w = narrowNum(f.kind, v);
+            if (f.repeated) {
+                has[s] = true;
+                appendNum(rep(), s, w);
+            } else {
+                num[s] = w;
+                setPresent(s, f);
+            }
+        }
+
+        void putDouble(int s, double v) {
+            Field f = def.fields[s];
+            long w = f.kind == K_FLOAT
+                    ? Float.floatToRawIntBits((float) v)
+                    : Double.doubleToRawLongBits(v);
+            if (f.repeated) {
+                has[s] = true;
+                appendNum(rep(), s, w);
+            } else {
+                num[s] = w;
+                setPresent(s, f);
+            }
+        }
+
+        private static long narrowNum(int kind, long v) {
+            switch (kind) {
+                case K_INT32:
+                case K_SINT32:
+                case K_SFIXED32:
+                case K_UINT32:
+                case K_ENUM:
+                case K_FIXED32:
+                    return (int) v;
+                default:
+                    return v;
+            }
+        }
+
+        private static void appendNum(Rep rp, int s, long w) {
+            long[] a = rp.num[s];
+            int n = rp.numLen[s];
+            if (a == null || n == a.length) {
+                a = growLong(a, n + 1);
+                rp.num[s] = a;
+            }
+            a[n] = w;
+            rp.numLen[s] = n + 1;
+        }
+
         public DMsg newMessage(int fnum) {
             int s = slot(fnum);
             Field f = def.fields[s];

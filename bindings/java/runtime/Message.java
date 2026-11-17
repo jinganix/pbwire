@@ -7,8 +7,8 @@ import java.util.List;
  * One dynamic message: a mutable value tree over a {@code DMsg}.
  *
  * <p>Fields are addressed by name or by number; both resolve through the
- * type's field table, so a hot {@code set}/{@code get} loop costs a map
- * lookup. {@code set} replaces a singular field and appends to a repeated
+ * type's field table. In a hot loop prefer the number overloads: they skip
+ * the name map, all boxing and a second slot lookup. {@code set} replaces a singular field and appends to a repeated
  * one; a field that was never set is absent ({@code get} returns null, typed
  * getters return the Java default).
  *
@@ -77,7 +77,8 @@ public final class Message implements AutoCloseable {
             case GenericCodec.K_FIXED64:
             case GenericCodec.K_SFIXED64:
             case GenericCodec.K_ENUM:
-                store(slot, f, Long.valueOf(value));
+                segment();
+                data.putNum(slot, value);
                 return this;
             default:
                 throw new PbwireException(type.name() + ": field " + f.number
@@ -99,7 +100,8 @@ public final class Message implements AutoCloseable {
             throw new PbwireException(type.name() + ": field " + f.number
                     + " needs a boolean");
         }
-        store(slot, f, Boolean.valueOf(value));
+        segment();
+        data.putNum(slot, value ? 1 : 0);
         return this;
     }
 
@@ -118,7 +120,8 @@ public final class Message implements AutoCloseable {
             throw new PbwireException(type.name() + ": field " + f.number
                     + " needs a float or double");
         }
-        store(slot, f, Double.valueOf(value));
+        segment();
+        data.putDouble(slot, value);
         return this;
     }
 
