@@ -35,7 +35,7 @@ setver() {
 }
 
 expect() { # expect <file> <grep-pattern> <what>
-  if ! grep -qE "$2" "$1"; then
+  if ! grep -qE -- "$2" "$1"; then
     fail "$3 ($1)"
   fi
 }
