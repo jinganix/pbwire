@@ -39,6 +39,7 @@ build = {
         "src/text.c",
         "src/json.c",
         "src/stream.c",
+        "src/wkt.c",
       },
       incdirs = { "include" },
     },

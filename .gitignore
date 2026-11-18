@@ -17,6 +17,9 @@ Thumbs.db
 .claude/
 .kilo/
 
+# superpowers working files (specs + plans, local-only)
+docs/superpowers/
+
 # Node
 node_modules/
 .tmp/

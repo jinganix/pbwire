@@ -1,15 +1,16 @@
 # frozen_string_literal: true
 
-# Builds the C extension for rubygems: compiles ext/pbwire_ext/pbwire_ext.c
-# together with the C core (../../../src/*.c), so the gem is self-contained.
+# Builds the C extension for rubygems from the files shipped inside the gem:
+# ext/pbwire_ext/pbwire_ext.c plus the vendored core (core_*.c symlinks into
+# ../../../../src, packaged as real files) and the two headers the core
+# includes. No repo-root paths: `gem install` unpacks elsewhere.
 require "mkmf"
 
-root = File.expand_path("../../../..", __dir__)
-core = %w[wire arena schema message encode decode ctx descriptor_set text json stream]
-srcs = [File.join(__dir__, "pbwire_ext.c")] + core.map { |c| File.join(root, "src", "#{c}.c") }
+core = %w[arena ctx decode descriptor_set encode json message schema stream text wire wkt]
+srcs = [File.join(__dir__, "pbwire_ext.c")] + core.map { |c| File.join(__dir__, "core_#{c}.c") }
 
-$INCFLAGS += " -I#{File.join(root, "include")}"
+$INCFLAGS += " -I#{__dir__}"
 $srcs = srcs
-$objs = srcs.map { |s| s.sub(/\.c$/, ".o") }
+$objs = srcs.map { |s| File.join(__dir__, "#{File.basename(s, ".c")}.o") }
 
 create_makefile("pbwire_ext")

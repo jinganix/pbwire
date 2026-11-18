@@ -35,7 +35,7 @@ setver() {
 }
 
 expect() { # expect <file> <grep-pattern> <what>
-  if ! grep -qE "$2" "$1"; then
+  if ! grep -qE -- "$2" "$1"; then
     fail "$3 ($1)"
   fi
 }
@@ -60,6 +60,8 @@ if [[ $CHECK == 1 ]]; then
   expect bindings/clojure/deps.edn ":artifact \"target/pbwire-clojure-$VER.jar\"" "clojure deps.edn"
   expect bindings/clojure/pom.xml "^  <version>$VER</version>" "clojure pom template"
   expect bindings/r/runtime/DESCRIPTION "^Version: $VER\$" "r DESCRIPTION"
+  expect bindings/php/ext/pbwire.c "^    \"$VER\",$" "php ext module version"
+  expect bindings/zig/build.zig.zon "^    \.version = \"$VER\",$" "zig build.zig.zon"
   # Plugin versions must never track VERSION (a blanket rewrite once
   # shipped maven-compiler-plugin:0.1.1 to every user of the file).
   if grep -A1 "maven-compiler-plugin" bindings/java/pom.xml | grep -q "<version>$VER</version>"; then
@@ -85,6 +87,7 @@ setver CMakeLists.txt -e "s/^project[(]pbwire VERSION [0-9.]*/project(pbwire VER
 setver Makefile -e "s/-current_version [0-9.]*/-current_version $VER/"
 setver bindings/dart/pubspec.yaml -e "s/^version: .*/version: $VER/"
 setver bindings/dart/benchmarks/pubspec.yaml -e "s/^version: .*/version: $VER/"
+setver bindings/dart/benchmarks/pubspec.lock -e "/^  pbwire:/,/^  protobuf:/s/^    version: \".*\"$/    version: \"$VER\"/"
 setver bindings/rust/Cargo.toml -e "s/^version = \".*\"/version = \"$VER\"/"
 setver bindings/rust/benchmarks/Cargo.toml -e "s/^version = \".*\"/version = \"$VER\"/"
 setver bindings/erlang/src/pbwire.app.src -e "s/{vsn, \"[^\"]*\"}/{vsn, \"$VER\"}/"
@@ -102,6 +105,8 @@ setver bindings/julia/runtime/Project.toml -e "s/^version = \".*\"/version = \"$
 setver bindings/clojure/deps.edn -e "s|target/pbwire-clojure-[0-9.]*.jar|target/pbwire-clojure-$VER.jar|"
 setver bindings/clojure/pom.xml -e "s|^  <version>[0-9.]*</version>|  <version>$VER</version>|"
 setver bindings/r/runtime/DESCRIPTION -e "s/^Version: .*/Version: $VER/"
+setver bindings/php/ext/pbwire.c -e "s/^    \"[0-9.]*\",$/    \"$VER\",/"
+setver bindings/zig/build.zig.zon -e "s/^    \\.version = \"[0-9.]*\",$/    .version = \"$VER\",/"
 # Kotlin pins its pbwire-java dependency to the same release line.
 setver bindings/kotlin/pom.xml -e "/<artifactId>pbwire-java<\/artifactId>/,/<\/dependency>/s|<version>[0-9.]*</version>|<version>$VER</version>|"
 setver README.md -e "s|releases/tag/v[0-9.]*|releases/tag/v$VER|g" \

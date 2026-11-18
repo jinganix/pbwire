@@ -15,8 +15,10 @@ Gem::Specification.new do |s|
   s.homepage = "https://github.com/jinganix/pbwire"
   s.license = "Apache-2.0"
   s.required_ruby_version = ">= 3.0"
-  s.files = Dir["lib/**/*.rb", "ext/**/*.{c,h,rb}", "../../include/pbwire.h",
-                "../../src/*.c", "../../VERSION", "README.md"]
+  # Only gem-relative paths: `gem install` rejects parent references, so the
+  # core travels as ext/pbwire_ext/core_*.c + the two headers it includes
+  # (symlinks into the repo, packaged as real files).
+  s.files = Dir["lib/**/*.rb", "ext/**/*.{c,h,rb}", "README.md"]
   s.require_paths = ["lib"]
   s.extensions = ["ext/pbwire_ext/extconf.rb"]
 end

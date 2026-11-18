@@ -342,20 +342,21 @@ ds_parse_field(ds_field_info *out, const uint8_t *p, const uint8_t *end)
             }
             break;
         case 3: /* number */
-            if (f.wire != PBW_WIRE_VARINT) {
+            if (f.wire != PBW_WIRE_VARINT || f.varint > UINT32_MAX) {
+                /* A 33-bit number would truncate into a valid one. */
                 return PBW_ERR_INVALID;
             }
             out->number = (uint32_t)f.varint;
             out->has_number = 1;
             break;
         case 4: /* label */
-            if (f.wire != PBW_WIRE_VARINT) {
+            if (f.wire != PBW_WIRE_VARINT || f.varint > UINT32_MAX) {
                 return PBW_ERR_INVALID;
             }
             out->label = (uint32_t)f.varint;
             break;
         case 5: /* type */
-            if (f.wire != PBW_WIRE_VARINT) {
+            if (f.wire != PBW_WIRE_VARINT || f.varint > UINT32_MAX) {
                 return PBW_ERR_INVALID;
             }
             out->type = (uint32_t)f.varint;
@@ -391,7 +392,7 @@ ds_parse_field(ds_field_info *out, const uint8_t *p, const uint8_t *end)
             out->proto3_optional = f.varint != 0;
             break;
         case 9: /* oneof_index is 0-based on the wire, 1-based here */
-            if (f.wire != PBW_WIRE_VARINT) {
+            if (f.wire != PBW_WIRE_VARINT || f.varint >= UINT32_MAX) {
                 return PBW_ERR_INVALID;
             }
             out->oneof = (uint32_t)f.varint + 1u;
@@ -745,6 +746,13 @@ ds_enum_proto(pbw_schema *schema, const char *parent, const uint8_t *p,
                     return status;
                 }
             } else if (f.field == 2 && f.wire == PBW_WIRE_VARINT) {
+                /* int32 travels as up-to-64-bit varint (negatives use all
+                 * ten bytes); anything outside the 32-bit range would
+                 * truncate into a different value. */
+                if (f.varint > 0x7fffffffu &&
+                    f.varint < 0xffffffff80000000ull) {
+                    return PBW_ERR_INVALID;
+                }
                 number = (int32_t)(uint32_t)f.varint;
             }
         }

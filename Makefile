@@ -197,6 +197,21 @@ erlang-core-sync:
 	cp src/*.c src/*.h bindings/erlang/c_src/core/src/
 	cp include/pbwire.h bindings/erlang/c_src/core/include/pbwire.h
 
+# Ruby gem counterpart: the gem cannot pack symlinks or parent paths, so the
+# core travels as real files and check.sh fails on drift; refresh after a
+# core change the same way as erlang-core-sync.
+ruby-core-sync:
+	for f in src/*.c; do cp "$$f" bindings/ruby/ext/pbwire_ext/core_$$(basename "$$f"); done
+	cp include/pbwire.h bindings/ruby/ext/pbwire_ext/pbwire.h
+	cp src/internal.h bindings/ruby/ext/pbwire_ext/internal.h
+	for f in bindings/ruby/ext/pbwire_ext/core_*.c; do \
+		[ -e src/$${f##*/core_} ] || rm "$$f"; \
+	done
+	names=$$(for f in src/*.c; do basename "$$f" .c; done | sort | tr '\n' ' '); \
+	sed -i.bak -e "s/^core = %w\[.*\]/core = %w[$$names]/" \
+		-e 's/ \]/]/' bindings/ruby/ext/pbwire_ext/extconf.rb && \
+		rm -f bindings/ruby/ext/pbwire_ext/extconf.rb.bak
+
 # Erlang binding benchmark (bindings/erlang/benchmarks): epb, gpb and (when
 # protoc + libprotobuf are available) gpb NIF on matrix3.proto. Same optional
 # status as `bench`/`bench-c`; needs OTP + gpb.
@@ -839,7 +854,7 @@ clean:
 		bindings/rust/target bindings/rust/benchmarks/gen \
 	bindings/lua/pbwire.so bindings/lua/pbwire.o
 
-.PHONY: all test fuzz coverage release-check examples shared format format-check bench bench-c erlang-test erlang-core-sync erlang-bench \
+.PHONY: all test fuzz coverage release-check examples shared format format-check bench bench-c erlang-test erlang-core-sync ruby-core-sync erlang-bench \
 	python-bind python-test python-bench difftest difftest-short conformance conformance-setup conformance-python \
 	conformance-ruby conformance-java conformance-lua conformance-r conformance-node ruby-bind java-test ruby-test node-test objc-test r-bind \
 	lua-bind lua-test lua-bench \

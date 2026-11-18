@@ -132,6 +132,10 @@ core-sync-check:
 		for f in $(CORE_FILES); do \
 			cmp -s $(REPO_ROOT)/$$f $(PBW_CORE)/$$f || { echo "c_src/core drift: $$f differs from repo root; copy it over"; exit 1; }; \
 		done; \
+		for f in $(PBW_CORE)/src/*.c $(PBW_CORE)/src/*.h $(PBW_CORE)/include/*.h; do \
+			rel=$${f#$(PBW_CORE)/}; \
+			[ -e $(REPO_ROOT)/$$rel ] || { echo "c_src/core drift: $$rel has no repo-root source; delete it"; exit 1; }; \
+		done; \
 	fi
 
 clean:

@@ -25,7 +25,8 @@ jobs:
   erlang:
     name: Hex (bindings/erlang, replace)
     if: inputs.binding == 'erlang'
-    runs-on: ubuntu-latest
+    # Pinned: setup-beam v1.24.0 cannot map the 26.04 runner image.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
       - name: Tree must still be the tag's version
@@ -49,7 +50,8 @@ jobs:
   elixir:
     name: Hex (bindings/elixir)
     if: inputs.binding == 'elixir'
-    runs-on: ubuntu-latest
+    # Pinned: setup-beam v1.24.0 cannot map the 26.04 runner image.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
       - name: Tree must still be the tag's version

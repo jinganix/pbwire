@@ -1,3 +1,42 @@
+## [Unreleased]
+
+### Fixed
+
+- A message tree built before a later `pbw_message_add_field()` or
+  `pbw_schema_link()` is retired (its epoch no longer matches the
+  descriptor) and is now refused everywhere it is walked: encoding, the
+  size walk, and the JSON and text printers used to read past the retired
+  slot array (heap-buffer-overflow on a nested message, reported by ASan).
+  `pbw_message_encoded_size()` also clears its length on failure. A retired
+  map entry is refused as well; it used to print a defaulted key and value.
+- Ownership fixes found by the same pass: freeing a submessage handed out by
+  its parent (including an adopted `pbw_decode()` root) is a no-op again
+  instead of freeing it under the parent; a value wrapper around a
+  parent-owned message no longer releases it; repeated message items from
+  the JSON/text parsers are marked parent-owned like `pbw_message_set()`
+  items, so they cannot be freed or adopted twice. A value from another
+  arena, and a child that would die with an arena this tree does not free,
+  are now rejected at the store boundary instead of dangling after a reset,
+  and so is a store that would make a message its own ancestor.
+- `pbw_value_at()`, `pbw_message_is_initialized()` and the writers treat a
+  corrupt list (items or capacity but no item array) as a failed lookup
+  instead of reading `NULL[0]`; encoding and the size walk also refuse a
+  bytes payload that cannot exist (a NULL pointer with a length), so
+  `pbw_message_encoded_size()` no longer reports a length for a tree the
+  encoder rejects. The same payload rule now covers every reader that
+  touches the bytes before a quoted/base64 writer could: a map key (both
+  duplicate scans and the deterministic sort), a Struct entry key, a
+  FieldMask path and an Any type URL fail instead of reading through NULL.
+- Clearing a field detaches its child instead of leaving it marked owned: a
+  decoded submessage released by `pbw_message_clear()` can be stored again
+  (it used to be refused as a duplicate store). While detached it is
+  read-only -- nothing would release a payload or child it grew there -- and
+  becomes writable again once it is back in a tree. A cycle whose target
+  sits below the store boundary's cycle walk is now refused there instead of
+  being accepted and never freed.
+- Timestamp parsing computes the epoch days in `int64`, so dates before
+  1970 no longer rely on unsigned wrap plus an `int32` conversion.
+
 ## [0.1.17] - 2026-11-16
 
 ### Fixed

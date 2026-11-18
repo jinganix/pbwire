@@ -191,6 +191,12 @@ pbw_pool_release(pbw_pool *pool, pbw_ctx *ctx)
     if (pool == NULL || ctx == NULL) {
         return;
     }
+    if (ctx->arena.no_grow) {
+        /* Caller memory can never grow: pooling it would hand out a context
+         * that fails where a pooled one succeeds, so it stays with its
+         * caller. */
+        return;
+    }
     /* A released context is always clean: the next acquire can use it
      * without resetting. The retain cap bounds what the reset keeps, so
      * an outlier never pins the pool. */
@@ -269,6 +275,10 @@ pbw_decode_ctx_limits(pbw_ctx *ctx, const pbw_descriptor *desc,
             /* Seal the arena: decoded trees are read-only, later builds
              * need a reset first. */
             ctx->arena.readonly = 1;
+        } else {
+            /* A failed decode leaves partial trees behind: drop them, or a
+             * loop over hostile frames grows the arena without bound. */
+            pbw_arena_reset(&ctx->arena);
         }
         return status;
     }
@@ -299,7 +309,7 @@ pbw_encode_ctx(pbw_ctx *ctx, const pbw_message *msg, const uint8_t **out,
 pbw_message *
 pbw_message_new_ctx(pbw_ctx *ctx, const pbw_descriptor *desc)
 {
-    if (ctx == NULL) {
+    if (ctx == NULL || ctx->arena.readonly) {
         return NULL;
     }
     return pbw_message_new_a(&ctx->arena, desc);
@@ -308,7 +318,7 @@ pbw_message_new_ctx(pbw_ctx *ctx, const pbw_descriptor *desc)
 pbw_value *
 pbw_value_new_uint_ctx(pbw_ctx *ctx, uint64_t bits)
 {
-    if (ctx == NULL) {
+    if (ctx == NULL || ctx->arena.readonly) {
         return NULL;
     }
     return pbw_value_new_uint_a(&ctx->arena, bits);
@@ -317,7 +327,7 @@ pbw_value_new_uint_ctx(pbw_ctx *ctx, uint64_t bits)
 pbw_value *
 pbw_value_new_bytes_ctx(pbw_ctx *ctx, const void *data, size_t len)
 {
-    if (ctx == NULL) {
+    if (ctx == NULL || ctx->arena.readonly) {
         return NULL;
     }
     return pbw_value_new_bytes_a(&ctx->arena, data, len);

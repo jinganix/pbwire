@@ -162,6 +162,45 @@ static int field_create(zval *out, zval *schema_zv, const pbw_field *field);
 static int message_create(zval *out, zval *type_zv, zval *parent_zv,
                           pbw_message *msg, pbw_ctx *ctx, bool owned);
 
+/* Optional `?array $limits` argument (['max_bytes' => n, 'max_depth' => n]):
+ * NULL/absent means core defaults. A present array builds a stack struct;
+ * absent keys keep the core defaults (no byte cap, PBW_MAX_DEPTH nesting),
+ * and a negative value is rejected instead of wrapping into unsigned. */
+static int parse_limits(zval *zv, pbw_limits *out, const pbw_limits **used) {
+    zval *v;
+    zend_long n;
+
+    *used = NULL;
+    if (zv == NULL || Z_TYPE_P(zv) == IS_NULL) {
+        return 0;
+    }
+    if (Z_TYPE_P(zv) != IS_ARRAY) {
+        throw_error("limits must be an array");
+        return -1;
+    }
+    out->max_bytes = 0;
+    out->max_depth = 0;
+    v = zend_hash_str_find(Z_ARRVAL_P(zv), "max_bytes", 9);
+    if (v != NULL) {
+        if (Z_TYPE_P(v) != IS_LONG || (n = Z_LVAL_P(v)) < 0) {
+            throw_error("limits['max_bytes'] must be a non-negative integer");
+            return -1;
+        }
+        out->max_bytes = (size_t)n;
+    }
+    v = zend_hash_str_find(Z_ARRVAL_P(zv), "max_depth", 9);
+    if (v != NULL) {
+        if (Z_TYPE_P(v) != IS_LONG || (n = Z_LVAL_P(v)) < 0 ||
+            (uint64_t)n > UINT32_MAX) {
+            throw_error("limits['max_depth'] must be a non-negative integer");
+            return -1;
+        }
+        out->max_depth = (uint32_t)n;
+    }
+    *used = out;
+    return 0;
+}
+
 /* ---------------------------------------------------------------- Schema */
 
 static zend_object *schema_create(zend_class_entry *ce) {
@@ -210,6 +249,16 @@ ZEND_END_ARG_INFO()
 
 ZEND_BEGIN_ARG_INFO_EX(arginfo_schema_frombytes, 0, 0, 1)
 ZEND_ARG_TYPE_INFO(0, bytes, IS_STRING, 0)
+ZEND_ARG_TYPE_INFO_WITH_DEFAULT_VALUE(0, limits, IS_ARRAY, 1, "null")
+ZEND_END_ARG_INFO()
+
+ZEND_BEGIN_ARG_INFO_EX(arginfo_schema_service, 0, 0, 1)
+ZEND_ARG_TYPE_INFO(0, name, IS_STRING, 0)
+ZEND_END_ARG_INFO()
+
+ZEND_BEGIN_ARG_INFO_EX(arginfo_schema_resolve, 0, 0, 2)
+ZEND_ARG_TYPE_INFO(0, service, IS_STRING, 0)
+ZEND_ARG_TYPE_INFO(0, method, IS_STRING, 0)
 ZEND_END_ARG_INFO()
 
 ZEND_BEGIN_ARG_INFO_EX(arginfo_schema_message, 0, 0, 1)
@@ -291,12 +340,21 @@ PHP_METHOD(Schema, fromFile) {
 PHP_METHOD(Schema, fromBytes) {
     char *bytes;
     size_t len;
-    ZEND_PARSE_PARAMETERS_START(1, 1)
+    zval *limits_zv = NULL;
+    pbw_limits lim;
+    const pbw_limits *limp = NULL;
+    ZEND_PARSE_PARAMETERS_START(1, 2)
     Z_PARAM_STRING(bytes, len)
+    Z_PARAM_OPTIONAL
+    Z_PARAM_ZVAL(limits_zv)
     ZEND_PARSE_PARAMETERS_END();
 
+    if (parse_limits(limits_zv, &lim, &limp) != 0) {
+        RETURN_THROWS();
+    }
     pbw_schema *schema = NULL;
-    pbw_status st = pbw_descriptor_set_load(bytes, len, &schema);
+    pbw_status st = limp == NULL ? pbw_descriptor_set_load(bytes, len, &schema)
+                                  : pbw_descriptor_set_load_limits(bytes, len, limp, &schema);
     if (st != PBW_OK) {
         char buf[1024];
         const char *why =
@@ -351,6 +409,117 @@ PHP_METHOD(Schema, message) {
     }
 }
 
+PHP_METHOD(Schema, services) {
+    ZEND_PARSE_PARAMETERS_NONE();
+    schema_obj *s = schema_from(Z_OBJ_P(ZEND_THIS));
+    if (s->holder == NULL || s->holder->schema == NULL || s->closed) {
+        throw_error("schema is closed");
+        RETURN_THROWS();
+    }
+    size_t count = pbw_schema_service_count(s->holder->schema);
+    array_init_size(return_value, count);
+    for (size_t i = 0; i < count; i++) {
+        const pbw_service *svc =
+            pbw_schema_service_at(s->holder->schema, i);
+        if (svc == NULL) {
+            throw_error("services: no service returned");
+            RETURN_THROWS();
+        }
+        add_next_index_string(return_value, pbw_service_name(svc));
+    }
+}
+
+PHP_METHOD(Schema, service) {
+    char *name;
+    size_t name_len;
+    ZEND_PARSE_PARAMETERS_START(1, 1)
+    Z_PARAM_STRING(name, name_len)
+    ZEND_PARSE_PARAMETERS_END();
+
+    schema_obj *s = schema_from(Z_OBJ_P(ZEND_THIS));
+    if (s->holder == NULL || s->holder->schema == NULL || s->closed) {
+        throw_error("schema is closed");
+        RETURN_THROWS();
+    }
+    const pbw_service *svc =
+        pbw_schema_service_find(s->holder->schema, name);
+    if (svc == NULL) {
+        char buf[512];
+        snprintf(buf, sizeof buf, "no such service: %s", name);
+        throw_error(buf);
+        RETURN_THROWS();
+    }
+    size_t count = pbw_service_method_count(svc);
+    array_init(return_value);
+    add_assoc_string(return_value, "name", pbw_service_name(svc));
+    zval methods;
+    array_init_size(&methods, count);
+    for (size_t i = 0; i < count; i++) {
+        const pbw_method *m = pbw_service_method_at(svc, i);
+        zval entry;
+        if (m == NULL) {
+            zval_ptr_dtor(&methods);
+            throw_error("service: no method returned");
+            RETURN_THROWS();
+        }
+        array_init(&entry);
+        add_assoc_string(&entry, "name", pbw_method_name(m));
+        add_assoc_string(&entry, "input_type", pbw_method_input_type(m));
+        add_assoc_string(&entry, "output_type", pbw_method_output_type(m));
+        add_assoc_bool(&entry, "client_streaming",
+                       pbw_method_client_streaming(m) != 0);
+        add_assoc_bool(&entry, "server_streaming",
+                       pbw_method_server_streaming(m) != 0);
+        add_next_index_zval(&methods, &entry);
+    }
+    add_assoc_zval(return_value, "methods", &methods);
+}
+
+PHP_METHOD(Schema, resolve) {
+    char *service;
+    size_t service_len;
+    char *method;
+    size_t method_len;
+    ZEND_PARSE_PARAMETERS_START(2, 2)
+    Z_PARAM_STRING(service, service_len)
+    Z_PARAM_STRING(method, method_len)
+    ZEND_PARSE_PARAMETERS_END();
+
+    schema_obj *s = schema_from(Z_OBJ_P(ZEND_THIS));
+    if (s->holder == NULL || s->holder->schema == NULL || s->closed) {
+        throw_error("schema is closed");
+        RETURN_THROWS();
+    }
+    const pbw_descriptor *in = NULL;
+    const pbw_descriptor *out = NULL;
+    pbw_status st = pbw_service_resolve(s->holder->schema, service, method,
+                                        &in, &out);
+    if (st != PBW_OK) {
+        char buf[512];
+        snprintf(buf, sizeof buf, "resolve %s/%s: %s", service, method,
+                 pbw_strerror(st));
+        throw_error(buf);
+        RETURN_THROWS();
+    }
+    if (in == NULL || out == NULL) {
+        throw_error("resolve: no type returned");
+        RETURN_THROWS();
+    }
+    array_init(return_value);
+    zval tin, tout;
+    if (type_create(&tin, ZEND_THIS, in) != 0) {
+        zval_ptr_dtor(return_value);
+        RETURN_THROWS();
+    }
+    if (type_create(&tout, ZEND_THIS, out) != 0) {
+        zval_ptr_dtor(&tin);
+        zval_ptr_dtor(return_value);
+        RETURN_THROWS();
+    }
+    add_assoc_zval(return_value, "input", &tin);
+    add_assoc_zval(return_value, "output", &tout);
+}
+
 PHP_METHOD(Schema, close) {
     ZEND_PARSE_PARAMETERS_NONE();
     schema_obj *s = schema_from(Z_OBJ_P(ZEND_THIS));
@@ -399,7 +568,7 @@ static HashTable *type_get_gc(zend_object *o, zval **table, int *n) {
     type_obj *t = type_from(o);
 
     if (Z_TYPE(t->fields) == IS_ARRAY) {
-        *table = Z_ARRVAL(t->fields);
+        *table = &t->fields;
         *n = 1;
     } else {
         *n = 0;
@@ -459,6 +628,32 @@ ZEND_END_ARG_INFO()
 
 ZEND_BEGIN_ARG_INFO_EX(arginfo_type_decode, 0, 0, 1)
 ZEND_ARG_TYPE_INFO(0, wire, IS_STRING, 0)
+ZEND_ARG_TYPE_INFO_WITH_DEFAULT_VALUE(0, limits, IS_ARRAY, 1, "null")
+ZEND_END_ARG_INFO()
+
+ZEND_BEGIN_ARG_INFO_EX(arginfo_type_decode_delimited, 0, 0, 1)
+ZEND_ARG_TYPE_INFO(0, wire, IS_STRING, 0)
+ZEND_ARG_TYPE_INFO_WITH_DEFAULT_VALUE(0, limits, IS_ARRAY, 1, "null")
+ZEND_END_ARG_INFO()
+
+ZEND_BEGIN_ARG_INFO_EX(arginfo_type_fromjson, 0, 0, 1)
+ZEND_ARG_TYPE_INFO(0, json, IS_STRING, 0)
+ZEND_ARG_TYPE_INFO_WITH_DEFAULT_VALUE(0, ignore, _IS_BOOL, 0, "false")
+ZEND_ARG_TYPE_INFO_WITH_DEFAULT_VALUE(0, limits, IS_ARRAY, 1, "null")
+ZEND_END_ARG_INFO()
+
+ZEND_BEGIN_ARG_INFO_EX(arginfo_type_fromtext, 0, 0, 1)
+ZEND_ARG_TYPE_INFO(0, text, IS_STRING, 0)
+ZEND_ARG_TYPE_INFO_WITH_DEFAULT_VALUE(0, limits, IS_ARRAY, 1, "null")
+ZEND_END_ARG_INFO()
+
+ZEND_BEGIN_ARG_INFO_EX(arginfo_type_anypack, 0, 0, 2)
+ZEND_ARG_TYPE_INFO(0, type_url, IS_STRING, 0)
+ZEND_ARG_TYPE_INFO(0, payload, IS_STRING, 0)
+ZEND_END_ARG_INFO()
+
+ZEND_BEGIN_ARG_INFO_EX(arginfo_type_frommillis, 0, 0, 1)
+ZEND_ARG_TYPE_INFO(0, millis, IS_LONG, 0)
 ZEND_END_ARG_INFO()
 
 ZEND_BEGIN_ARG_INFO_EX(arginfo_type_nestedtype, 0, 0, 1)
@@ -557,13 +752,22 @@ PHP_METHOD(Type, newMessage) {
 PHP_METHOD(Type, decode) {
     char *wire;
     size_t wire_len;
-    ZEND_PARSE_PARAMETERS_START(1, 1)
+    zval *limits_zv = NULL;
+    pbw_limits lim;
+    const pbw_limits *limp = NULL;
+    ZEND_PARSE_PARAMETERS_START(1, 2)
     Z_PARAM_STRING(wire, wire_len)
+    Z_PARAM_OPTIONAL
+    Z_PARAM_ZVAL(limits_zv)
     ZEND_PARSE_PARAMETERS_END();
 
+    if (parse_limits(limits_zv, &lim, &limp) != 0) {
+        RETURN_THROWS();
+    }
     type_obj *t = type_from(Z_OBJ_P(ZEND_THIS));
     pbw_message *msg = NULL;
-    pbw_status st = pbw_decode(t->desc, wire, wire_len, &msg);
+    pbw_status st = limp == NULL ? pbw_decode(t->desc, wire, wire_len, &msg)
+                                  : pbw_decode_limits(t->desc, wire, wire_len, limp, &msg);
     if (st != PBW_OK) {
         throw_error_status("decode", st);
         RETURN_THROWS();
@@ -594,6 +798,219 @@ PHP_METHOD(Type, nestedType) {
     }
     /* The Field keeps the Schema alive; reuse that reference. */
     if (type_create(return_value, &fo->schema_zv, sub) != 0) {
+        RETURN_THROWS();
+    }
+}
+
+PHP_METHOD(Type, decodeDelimited) {
+    char *wire;
+    size_t wire_len;
+    zval *limits_zv = NULL;
+    pbw_limits lim;
+    const pbw_limits *limp = NULL;
+    ZEND_PARSE_PARAMETERS_START(1, 2)
+    Z_PARAM_STRING(wire, wire_len)
+    Z_PARAM_OPTIONAL
+    Z_PARAM_ZVAL(limits_zv)
+    ZEND_PARSE_PARAMETERS_END();
+
+    if (parse_limits(limits_zv, &lim, &limp) != 0) {
+        RETURN_THROWS();
+    }
+    type_obj *t = type_from(Z_OBJ_P(ZEND_THIS));
+    pbw_message *msg = NULL;
+    size_t consumed = 0;
+    pbw_status st = limp == NULL
+                        ? pbw_decode_delimited(t->desc, wire, wire_len, &msg,
+                                              &consumed)
+                        : pbw_decode_delimited_limits(t->desc, wire, wire_len,
+                                                     limp, &msg, &consumed);
+    if (st != PBW_OK) {
+        throw_error_status("decodeDelimited", st);
+        RETURN_THROWS();
+    }
+    if (msg == NULL) {
+        throw_error("decodeDelimited: no message returned");
+        RETURN_THROWS();
+    }
+    array_init(return_value);
+    {
+        zval m;
+        zval undef;
+        ZVAL_UNDEF(&undef);
+        if (message_create(&m, ZEND_THIS, &undef, msg, NULL, true) != 0) {
+            pbw_message_free(msg);
+            zval_ptr_dtor(return_value);
+            RETURN_THROWS();
+        }
+        add_assoc_zval(return_value, "message", &m);
+        add_assoc_long(return_value, "read", (zend_long)consumed);
+    }
+}
+
+PHP_METHOD(Type, fromJson) {
+    char *json;
+    size_t json_len;
+    bool ignore = false;
+    zval *limits_zv = NULL;
+    pbw_limits lim;
+    const pbw_limits *limp = NULL;
+    ZEND_PARSE_PARAMETERS_START(1, 3)
+    Z_PARAM_STRING(json, json_len)
+    Z_PARAM_OPTIONAL
+    Z_PARAM_BOOL(ignore)
+    Z_PARAM_ZVAL(limits_zv)
+    ZEND_PARSE_PARAMETERS_END();
+
+    if (parse_limits(limits_zv, &lim, &limp) != 0) {
+        RETURN_THROWS();
+    }
+    type_obj *t = type_from(Z_OBJ_P(ZEND_THIS));
+    pbw_message *msg = NULL;
+    pbw_json_parse_options opts;
+    pbw_status st;
+    opts.ignore_unknown_fields = ignore ? 1 : 0;
+    if (limp == NULL) {
+        st = pbw_json_parse_opts(t->desc, json, json_len, &opts, &msg);
+    } else {
+        st = pbw_json_parse_limits(t->desc, json, json_len, limp, &opts,
+                                    &msg);
+    }
+    if (st != PBW_OK) {
+        throw_error_status("fromJson", st);
+        RETURN_THROWS();
+    }
+    if (msg == NULL) {
+        throw_error("fromJson: no message returned");
+        RETURN_THROWS();
+    }
+    zval undef;
+    ZVAL_UNDEF(&undef);
+    if (message_create(return_value, ZEND_THIS, &undef, msg, NULL, true) !=
+        0) {
+        pbw_message_free(msg);
+        RETURN_THROWS();
+    }
+}
+
+PHP_METHOD(Type, fromText) {
+    char *text;
+    size_t text_len;
+    zval *limits_zv = NULL;
+    pbw_limits lim;
+    const pbw_limits *limp = NULL;
+    ZEND_PARSE_PARAMETERS_START(1, 2)
+    Z_PARAM_STRING(text, text_len)
+    Z_PARAM_OPTIONAL
+    Z_PARAM_ZVAL(limits_zv)
+    ZEND_PARSE_PARAMETERS_END();
+
+    if (parse_limits(limits_zv, &lim, &limp) != 0) {
+        RETURN_THROWS();
+    }
+    type_obj *t = type_from(Z_OBJ_P(ZEND_THIS));
+    pbw_message *msg = NULL;
+    pbw_status st = limp == NULL
+                        ? pbw_text_parse(t->desc, text, text_len, &msg)
+                        : pbw_text_parse_limits(t->desc, text, text_len, limp,
+                                               &msg);
+    if (st != PBW_OK) {
+        throw_error_status("fromText", st);
+        RETURN_THROWS();
+    }
+    if (msg == NULL) {
+        throw_error("fromText: no message returned");
+        RETURN_THROWS();
+    }
+    zval undef;
+    ZVAL_UNDEF(&undef);
+    if (message_create(return_value, ZEND_THIS, &undef, msg, NULL, true) !=
+        0) {
+        pbw_message_free(msg);
+        RETURN_THROWS();
+    }
+}
+
+PHP_METHOD(Type, anyPack) {
+    char *url;
+    size_t url_len;
+    char *payload;
+    size_t payload_len;
+    ZEND_PARSE_PARAMETERS_START(2, 2)
+    Z_PARAM_STRING(url, url_len)
+    Z_PARAM_STRING(payload, payload_len)
+    ZEND_PARSE_PARAMETERS_END();
+
+    type_obj *t = type_from(Z_OBJ_P(ZEND_THIS));
+    pbw_message *msg = NULL;
+    pbw_status st = pbw_any_pack(t->desc, url, payload, payload_len, &msg);
+    if (st != PBW_OK) {
+        throw_error_status("anyPack", st);
+        RETURN_THROWS();
+    }
+    if (msg == NULL) {
+        throw_error("anyPack: no message returned");
+        RETURN_THROWS();
+    }
+    zval undef;
+    ZVAL_UNDEF(&undef);
+    if (message_create(return_value, ZEND_THIS, &undef, msg, NULL, true) !=
+        0) {
+        pbw_message_free(msg);
+        RETURN_THROWS();
+    }
+}
+
+PHP_METHOD(Type, timestampFromMillis) {
+    zend_long ms;
+    ZEND_PARSE_PARAMETERS_START(1, 1)
+    Z_PARAM_LONG(ms)
+    ZEND_PARSE_PARAMETERS_END();
+
+    type_obj *t = type_from(Z_OBJ_P(ZEND_THIS));
+    pbw_message *msg = NULL;
+    pbw_status st =
+        pbw_timestamp_from_millis(t->desc, (int64_t)ms, &msg);
+    if (st != PBW_OK) {
+        throw_error_status("timestampFromMillis", st);
+        RETURN_THROWS();
+    }
+    if (msg == NULL) {
+        throw_error("timestampFromMillis: no message returned");
+        RETURN_THROWS();
+    }
+    zval undef;
+    ZVAL_UNDEF(&undef);
+    if (message_create(return_value, ZEND_THIS, &undef, msg, NULL, true) !=
+        0) {
+        pbw_message_free(msg);
+        RETURN_THROWS();
+    }
+}
+
+PHP_METHOD(Type, durationFromMillis) {
+    zend_long ms;
+    ZEND_PARSE_PARAMETERS_START(1, 1)
+    Z_PARAM_LONG(ms)
+    ZEND_PARSE_PARAMETERS_END();
+
+    type_obj *t = type_from(Z_OBJ_P(ZEND_THIS));
+    pbw_message *msg = NULL;
+    pbw_status st =
+        pbw_duration_from_millis(t->desc, (int64_t)ms, &msg);
+    if (st != PBW_OK) {
+        throw_error_status("durationFromMillis", st);
+        RETURN_THROWS();
+    }
+    if (msg == NULL) {
+        throw_error("durationFromMillis: no message returned");
+        RETURN_THROWS();
+    }
+    zval undef;
+    ZVAL_UNDEF(&undef);
+    if (message_create(return_value, ZEND_THIS, &undef, msg, NULL, true) !=
+        0) {
+        pbw_message_free(msg);
         RETURN_THROWS();
     }
 }
@@ -811,6 +1228,14 @@ ZEND_ARG_INFO(0, field)
 ZEND_ARG_TYPE_INFO(0, index, IS_LONG, 0)
 ZEND_END_ARG_INFO()
 
+ZEND_BEGIN_ARG_INFO_EX(arginfo_message_encode_to, 0, 0, 1)
+ZEND_ARG_TYPE_INFO(0, cap, IS_LONG, 0)
+ZEND_END_ARG_INFO()
+
+ZEND_BEGIN_ARG_INFO_EX(arginfo_message_totext, 0, 0, 0)
+ZEND_ARG_TYPE_INFO_WITH_DEFAULT_VALUE(0, printUnknown, _IS_BOOL, 0, "true")
+ZEND_END_ARG_INFO()
+
 PHP_METHOD(Message, __construct) {
     throw_error("use Type::newMessage() or Type::decode()");
 }
@@ -873,6 +1298,244 @@ PHP_METHOD(Message, encode) {
     ZSTR_LEN(str) = len;
     m->encode_hint = len;
     RETURN_STR(str);
+}
+
+PHP_METHOD(Message, encodeDeterministic) {
+    ZEND_PARSE_PARAMETERS_NONE();
+    message_obj *m = check_message(ZEND_THIS);
+    if (m == NULL) {
+        RETURN_THROWS();
+    }
+    uint8_t *out = NULL;
+    size_t len = 0;
+    pbw_status st = pbw_encode_deterministic(m->msg, &out, &len);
+    if (st != PBW_OK) {
+        throw_error_status("encodeDeterministic", st);
+        RETURN_THROWS();
+    }
+    zend_string *str = zend_string_init((const char *)out, len, 0);
+    pbw_free(out);
+    if (str == NULL) {
+        throw_error("out of memory");
+        RETURN_THROWS();
+    }
+    RETURN_STR(str);
+}
+
+PHP_METHOD(Message, encodedSize) {
+    ZEND_PARSE_PARAMETERS_NONE();
+    message_obj *m = check_message(ZEND_THIS);
+    if (m == NULL) {
+        RETURN_THROWS();
+    }
+    size_t len = 0;
+    pbw_status st = pbw_message_encoded_size(m->msg, &len);
+    if (st != PBW_OK) {
+        throw_error_status("encodedSize", st);
+        RETURN_THROWS();
+    }
+    RETURN_LONG((zend_long)len);
+}
+
+PHP_METHOD(Message, encodeTo) {
+    zend_long cap;
+    ZEND_PARSE_PARAMETERS_START(1, 1)
+    Z_PARAM_LONG(cap)
+    ZEND_PARSE_PARAMETERS_END();
+
+    if (cap < 1) {
+        throw_error("encodeTo: cap must be positive");
+        RETURN_THROWS();
+    }
+    message_obj *m = check_message(ZEND_THIS);
+    if (m == NULL) {
+        RETURN_THROWS();
+    }
+    zend_string *str = zend_string_alloc((size_t)cap, 0);
+    size_t len = 0;
+    pbw_status st =
+        pbw_encode_to(m->msg, ZSTR_VAL(str), (size_t)cap, &len);
+    if (st != PBW_OK) {
+        zend_string_release(str);
+        throw_error_status("encodeTo", st);
+        RETURN_THROWS();
+    }
+    ZSTR_LEN(str) = len;
+    RETURN_STR(str);
+}
+
+PHP_METHOD(Message, encodeDelimited) {
+    ZEND_PARSE_PARAMETERS_NONE();
+    message_obj *m = check_message(ZEND_THIS);
+    if (m == NULL) {
+        RETURN_THROWS();
+    }
+    uint8_t *out = NULL;
+    size_t len = 0;
+    pbw_status st = pbw_encode_delimited(m->msg, &out, &len);
+    if (st != PBW_OK) {
+        throw_error_status("encodeDelimited", st);
+        RETURN_THROWS();
+    }
+    zend_string *str = zend_string_init((const char *)out, len, 0);
+    pbw_free(out);
+    if (str == NULL) {
+        throw_error("out of memory");
+        RETURN_THROWS();
+    }
+    RETURN_STR(str);
+}
+
+PHP_METHOD(Message, encodeDelimitedTo) {
+    zend_long cap;
+    ZEND_PARSE_PARAMETERS_START(1, 1)
+    Z_PARAM_LONG(cap)
+    ZEND_PARSE_PARAMETERS_END();
+
+    if (cap < 1) {
+        throw_error("encodeDelimitedTo: cap must be positive");
+        RETURN_THROWS();
+    }
+    message_obj *m = check_message(ZEND_THIS);
+    if (m == NULL) {
+        RETURN_THROWS();
+    }
+    zend_string *str = zend_string_alloc((size_t)cap, 0);
+    size_t len = 0;
+    pbw_status st =
+        pbw_encode_delimited_to(m->msg, ZSTR_VAL(str), (size_t)cap, &len);
+    if (st != PBW_OK) {
+        zend_string_release(str);
+        throw_error_status("encodeDelimitedTo", st);
+        RETURN_THROWS();
+    }
+    ZSTR_LEN(str) = len;
+    RETURN_STR(str);
+}
+
+PHP_METHOD(Message, toJson) {
+    ZEND_PARSE_PARAMETERS_NONE();
+    message_obj *m = check_message(ZEND_THIS);
+    if (m == NULL) {
+        RETURN_THROWS();
+    }
+    char *out = NULL;
+    size_t len = 0;
+    pbw_status st = pbw_json_print(m->msg, &out, &len);
+    if (st != PBW_OK) {
+        throw_error_status("toJson", st);
+        RETURN_THROWS();
+    }
+    zend_string *str = zend_string_init(out, len, 0);
+    pbw_free(out);
+    if (str == NULL) {
+        throw_error("out of memory");
+        RETURN_THROWS();
+    }
+    RETURN_STR(str);
+}
+
+PHP_METHOD(Message, toText) {
+    bool print_unknown = true;
+    ZEND_PARSE_PARAMETERS_START(0, 1)
+    Z_PARAM_OPTIONAL
+    Z_PARAM_BOOL(print_unknown)
+    ZEND_PARSE_PARAMETERS_END();
+
+    message_obj *m = check_message(ZEND_THIS);
+    if (m == NULL) {
+        RETURN_THROWS();
+    }
+    char *out = NULL;
+    size_t len = 0;
+    pbw_status st =
+        pbw_text_print_opts(m->msg, print_unknown ? 1 : 0, &out, &len);
+    if (st != PBW_OK) {
+        throw_error_status("toText", st);
+        RETURN_THROWS();
+    }
+    zend_string *str = zend_string_init(out, len, 0);
+    pbw_free(out);
+    if (str == NULL) {
+        throw_error("out of memory");
+        RETURN_THROWS();
+    }
+    RETURN_STR(str);
+}
+
+PHP_METHOD(Message, anyTypeUrl) {
+    ZEND_PARSE_PARAMETERS_NONE();
+    message_obj *m = check_message(ZEND_THIS);
+    if (m == NULL) {
+        RETURN_THROWS();
+    }
+    const char *url = pbw_any_type_url(m->msg);
+    if (url == NULL) {
+        RETURN_NULL();
+    }
+    RETURN_STRING(url);
+}
+
+PHP_METHOD(Message, anyPayload) {
+    ZEND_PARSE_PARAMETERS_NONE();
+    message_obj *m = check_message(ZEND_THIS);
+    if (m == NULL) {
+        RETURN_THROWS();
+    }
+    size_t len = 0;
+    const void *payload = pbw_any_payload(m->msg, &len);
+    if (payload == NULL) {
+        RETURN_NULL();
+    }
+    RETURN_STRINGL((const char *)payload, len);
+}
+
+PHP_METHOD(Message, timestampMillis) {
+    ZEND_PARSE_PARAMETERS_NONE();
+    message_obj *m = check_message(ZEND_THIS);
+    if (m == NULL) {
+        RETURN_THROWS();
+    }
+    int64_t ms = 0;
+    pbw_status st = pbw_timestamp_to_millis(m->msg, &ms);
+    if (st != PBW_OK) {
+        throw_error_status("timestampMillis", st);
+        RETURN_THROWS();
+    }
+    RETURN_LONG((zend_long)ms);
+}
+
+PHP_METHOD(Message, durationMillis) {
+    ZEND_PARSE_PARAMETERS_NONE();
+    message_obj *m = check_message(ZEND_THIS);
+    if (m == NULL) {
+        RETURN_THROWS();
+    }
+    int64_t ms = 0;
+    pbw_status st = pbw_duration_to_millis(m->msg, &ms);
+    if (st != PBW_OK) {
+        throw_error_status("durationMillis", st);
+        RETURN_THROWS();
+    }
+    RETURN_LONG((zend_long)ms);
+}
+
+PHP_METHOD(Message, fieldmaskPaths) {
+    ZEND_PARSE_PARAMETERS_NONE();
+    message_obj *m = check_message(ZEND_THIS);
+    if (m == NULL) {
+        RETURN_THROWS();
+    }
+    size_t count = pbw_fieldmask_path_count(m->msg);
+    array_init_size(return_value, count);
+    for (size_t i = 0; i < count; i++) {
+        const char *path = pbw_fieldmask_path_at(m->msg, i);
+        if (path == NULL) {
+            throw_error("fieldmaskPaths: no path returned");
+            RETURN_THROWS();
+        }
+        add_next_index_string(return_value, path);
+    }
 }
 
 PHP_METHOD(Message, setInt) {
@@ -1516,6 +2179,9 @@ static const zend_function_entry schema_methods[] = {
     PHP_ME(Schema, fromBytes, arginfo_schema_frombytes,
            ZEND_ACC_PUBLIC | ZEND_ACC_STATIC)
     PHP_ME(Schema, message, arginfo_schema_message, ZEND_ACC_PUBLIC)
+    PHP_ME(Schema, services, arginfo_noargs, ZEND_ACC_PUBLIC)
+    PHP_ME(Schema, service, arginfo_schema_service, ZEND_ACC_PUBLIC)
+    PHP_ME(Schema, resolve, arginfo_schema_resolve, ZEND_ACC_PUBLIC)
     PHP_ME(Schema, close, arginfo_noargs, ZEND_ACC_PUBLIC)
     PHP_FE_END,
 };
@@ -1528,6 +2194,12 @@ static const zend_function_entry type_methods[] = {
     PHP_ME(Type, fieldByNumber, arginfo_type_fieldbynumber, ZEND_ACC_PUBLIC)
     PHP_ME(Type, newMessage, arginfo_noargs, ZEND_ACC_PUBLIC)
     PHP_ME(Type, decode, arginfo_type_decode, ZEND_ACC_PUBLIC)
+    PHP_ME(Type, decodeDelimited, arginfo_type_decode_delimited, ZEND_ACC_PUBLIC)
+    PHP_ME(Type, fromJson, arginfo_type_fromjson, ZEND_ACC_PUBLIC)
+    PHP_ME(Type, fromText, arginfo_type_fromtext, ZEND_ACC_PUBLIC)
+    PHP_ME(Type, anyPack, arginfo_type_anypack, ZEND_ACC_PUBLIC)
+    PHP_ME(Type, timestampFromMillis, arginfo_type_frommillis, ZEND_ACC_PUBLIC)
+    PHP_ME(Type, durationFromMillis, arginfo_type_frommillis, ZEND_ACC_PUBLIC)
     PHP_ME(Type, nestedType, arginfo_type_nestedtype, ZEND_ACC_PUBLIC)
     PHP_ME(Type, isMessageField, arginfo_type_nestedtype, ZEND_ACC_PUBLIC)
     PHP_FE_END,
@@ -1565,6 +2237,18 @@ static const zend_function_entry message_methods[] = {
     PHP_ME(Message, count, arginfo_message_field, ZEND_ACC_PUBLIC)
     PHP_ME(Message, at, arginfo_message_at, ZEND_ACC_PUBLIC)
     PHP_ME(Message, encode, arginfo_noargs, ZEND_ACC_PUBLIC)
+    PHP_ME(Message, encodeDeterministic, arginfo_noargs, ZEND_ACC_PUBLIC)
+    PHP_ME(Message, encodedSize, arginfo_noargs, ZEND_ACC_PUBLIC)
+    PHP_ME(Message, encodeTo, arginfo_message_encode_to, ZEND_ACC_PUBLIC)
+    PHP_ME(Message, encodeDelimited, arginfo_noargs, ZEND_ACC_PUBLIC)
+    PHP_ME(Message, encodeDelimitedTo, arginfo_message_encode_to, ZEND_ACC_PUBLIC)
+    PHP_ME(Message, toJson, arginfo_noargs, ZEND_ACC_PUBLIC)
+    PHP_ME(Message, toText, arginfo_message_totext, ZEND_ACC_PUBLIC)
+    PHP_ME(Message, anyTypeUrl, arginfo_noargs, ZEND_ACC_PUBLIC)
+    PHP_ME(Message, anyPayload, arginfo_noargs, ZEND_ACC_PUBLIC)
+    PHP_ME(Message, timestampMillis, arginfo_noargs, ZEND_ACC_PUBLIC)
+    PHP_ME(Message, durationMillis, arginfo_noargs, ZEND_ACC_PUBLIC)
+    PHP_ME(Message, fieldmaskPaths, arginfo_noargs, ZEND_ACC_PUBLIC)
     PHP_ME(Message, close, arginfo_noargs, ZEND_ACC_PUBLIC)
     PHP_FE_END,
 };
@@ -1651,7 +2335,7 @@ zend_module_entry pbwire_module_entry = {
     NULL, /* RINIT */
     NULL, /* RSHUTDOWN */
     PHP_MINFO(pbwire),
-    "0.1.0",
+    "0.1.17",
     STANDARD_MODULE_PROPERTIES,
 };
 

@@ -158,7 +158,9 @@ void pbw_field_set_oneof(pbw_field *field, uint32_t oneof_index);
 
 /* Resolve type names, sort fields by number and build lookup tables. Idempotent
  * while no field is added; the first success freezes the field layout, so
- * create messages and set values only after it returns PBW_OK. */
+ * create messages and set values only after it returns PBW_OK. Link once
+ * before sharing the schema across threads: add/link while another thread
+ * reads it races on the lookup tables. */
 pbw_status pbw_schema_link(pbw_schema *schema);
 /* Last link failure reason (empty when the last link succeeded). */
 const char *pbw_schema_error(const pbw_schema *schema);
@@ -282,6 +284,9 @@ const pbw_descriptor *pbw_field_message_type(const pbw_field *field);
  * descriptor must be linked (pbw_schema_link() returned PBW_OK), because field
  * lookup relies on the number-sorted field array the link builds. */
 pbw_message *pbw_message_new(const pbw_descriptor *desc);
+/* Frees a message the caller owns and everything under it. A submessage
+ * handed out by a parent (pbw_message_set_message(), a decoded tree) is owned
+ * by that parent, so freeing it here is a no-op, like arena memory. */
 void pbw_message_free(pbw_message *msg);
 const pbw_descriptor *pbw_message_descriptor(const pbw_message *msg);
 /* Wire length this tree was decoded from, 0 when it was built by hand. A
@@ -293,7 +298,8 @@ size_t pbw_message_wire_size(const pbw_message *msg);
  * the length before encoding (a length-prefixed frame, a pre-sized buffer)
  * this costs less than encoding twice. Deterministic encoding produces the
  * same length. PBW_ERR_LIMIT when nesting exceeds PBW_MAX_DEPTH, PBW_ERR_INVALID
- * on a NULL submessage. */
+ * on a NULL submessage or a message retired by a later schema change; *len is
+ * 0 on every failure. */
 pbw_status pbw_message_encoded_size(const pbw_message *msg, size_t *len);
 /* Slack pbw_encode_to() needs past pbw_message_encoded_size(): the writer
  * reserves tag/varint room upfront, so `size + PBW_ENCODE_SLACK` is the
@@ -305,7 +311,9 @@ pbw_status pbw_message_encoded_size(const pbw_message *msg, size_t *len);
 pbw_value *pbw_message_get(const pbw_message *msg, uint32_t number);
 /* Same as pbw_message_get() for an already-resolved field of the message's
  * descriptor (NULL when it belongs elsewhere); skips the number lookup for
- * hot reflection loops that cached the pointer. */
+ * hot reflection loops that cached the pointer. Resolve the pointer again
+ * after any add or link: an add may move the field array and the link sorts
+ * it, so a cached pointer may name another field (use the number then). */
 pbw_value *pbw_message_get_field(const pbw_message *msg,
                                  const pbw_field *field);
 /* Number of fields with a value. */
@@ -324,7 +332,11 @@ const pbw_field *pbw_message_field_at(const pbw_message *msg, size_t index,
  * stands (the reference serializer does the same). Always 1 for proto3
  * messages that contain no proto2 submessage. */
 int pbw_message_is_initialized(const pbw_message *msg);
-/* Drop a field value (and, for a oneof, the group case). */
+/* Drop a field value (and, for a oneof, the group case). A submessage the
+ * field owned is released with it; one that lives in the tree's arena
+ * survives the release unowned, so it can be stored into another field. While
+ * detached it rejects stores (nothing would release what it grew there) and
+ * becomes writable again once a tree owns it. */
 void pbw_message_clear(pbw_message *msg, uint32_t number);
 
 /* Unknown fields kept from decoding, as raw wire bytes (each item is its
@@ -343,11 +355,18 @@ pbw_status pbw_message_add_unknown_bytes(pbw_message *msg, const void *data,
  * instead. A message built with pbw_message_new_ctx() only accepts values
  * built with the matching pbw_value_new_*_ctx() constructor (also
  * PBW_ERR_INVALID): the context arena frees by reset, so it cannot own a heap
- * payload. A plain-decoded tree accepts both. */
+ * payload. A plain-decoded tree accepts both. A message value must be able to
+ * die with the tree that takes it: it shares this tree's arena, or it owns an
+ * arena this tree releases (an adopted pbw_decode() root); a message from
+ * another context's arena is rejected the same way. A message that would
+ * become its own ancestor (its subtree already holds this message) is
+ * refused too, since a later clear() or free() would release the arena it
+ * is walking inside. */
 pbw_status pbw_message_set(pbw_message *msg, uint32_t number, pbw_value *value);
 /* Same as pbw_message_set() for an already-resolved field of the message's
  * descriptor (PBW_ERR_INVALID when it belongs elsewhere); skips the number
- * lookup for hot build loops that cached the pointer. */
+ * lookup for hot build loops that cached the pointer. Same caching rule as
+ * pbw_message_get_field(): re-resolve after any add or link. */
 pbw_status pbw_message_set_field(pbw_message *msg, const pbw_field *field,
                                  pbw_value *value);
 /* Create (or return the existing) nested message value for a MESSAGE field. */
@@ -428,7 +447,9 @@ void pbw_ctx_free(pbw_ctx *ctx);
  * it); freed with the context. */
 void pbw_ctx_set_user(pbw_ctx *ctx, void *user);
 void *pbw_ctx_user(const pbw_ctx *ctx);
-/* Release every allocation made since the last reset, keeping the buffers. */
+/* Release every allocation made since the last reset, keeping the buffers.
+ * Every message built or decoded with this context dies here too: touching
+ * one afterwards reads whatever the next user of the chunk wrote. */
 void pbw_ctx_reset(pbw_ctx *ctx);
 /* Max bytes the context keeps resident across resets (decode arena chunks +
  * encode buffer), default 1 MiB. Single allocations above it bypass the
@@ -462,7 +483,8 @@ size_t pbw_ctx_used(const pbw_ctx *ctx);
 
 /* Decode into the context instead of one allocation per value. A sealed
  * context (one holding a previous decode) resets implicitly on entry, so a
- * decode loop needs no reset call; earlier trees die with that reset. */
+ * decode loop needs no reset call; earlier trees die with that reset. A
+ * failed decode resets too, so its partial trees never accumulate. */
 pbw_status pbw_decode_ctx(pbw_ctx *ctx, const pbw_descriptor *desc,
                           const void *buf, size_t len, pbw_message **out);
 /* Encode into the context's buffer. *out stays valid until the next
@@ -489,7 +511,8 @@ typedef struct pbw_limits {
 
 /* Print msg in protobuf text format. *out is malloc'd, NUL-terminated and owned
  * by the caller (pbw_free); *len excludes the NUL. Unknown fields are shown
- * as numeric `field: value` lines, like the reference printer. */
+ * as numeric `field: value` lines, like the reference printer; those lines
+ * do not parse back (pass 0 for print_unknown_fields for round trips). */
 pbw_status pbw_text_print(const pbw_message *msg, char **out, size_t *len);
 /* Same, with explicit control over unknown fields (the conformance suite asks
  * for both). */

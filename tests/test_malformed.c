@@ -819,6 +819,76 @@ test_packed_batches(const pbw_descriptor *d)
     CHECK(list != NULL && pbw_value_get_kind(list) == PBW_VALUE_LIST);
     CHECK(list != NULL && pbw_value_count(list) == 200);
     pbw_message_free(m);
+    m = NULL;
+
+    /* A hostile run must not reserve the whole run upfront: an overlong
+     * first varint fails as INVALID even in a small fixed arena, instead
+     * of NOMEM from a giant reservation (the 32789 terminators below
+     * reserve 256KB upfront pre-fix; the capped reserve needs ~32KB). */
+    {
+        enum { kBig = 32800 };
+        static uint8_t big[kBig];
+        static union {
+            uint8_t bytes[192 * 1024];
+            size_t align;
+        } budget;
+        uint8_t *frame;
+        size_t framelen;
+        pbw_ctx *ctx;
+        pbw_message *out = NULL;
+
+        memset(big, 0x01, sizeof(big));
+        memset(big, 0x80, 11);
+        big[11] = 0x01;
+        frame = (uint8_t *)malloc(8 + sizeof(big));
+        CHECK(frame != NULL);
+        if (frame == NULL) {
+            return;
+        }
+        framelen = packed_block(frame, kRepInt32, big, sizeof(big));
+        ctx = pbw_ctx_new_mem(budget.bytes, sizeof(budget.bytes));
+        CHECK(ctx != NULL);
+        if (ctx != NULL) {
+            CHECK_STATUS(PBW_ERR_INVALID,
+                         pbw_decode_ctx(ctx, d, frame, framelen, &out));
+            CHECK(out == NULL);
+            pbw_ctx_free(ctx);
+        }
+        free(frame);
+    }
+
+    /* 20000 valid items: past any batch cap, geometric growth stays exact. */
+    {
+        size_t n = 20000;
+        uint8_t *run = (uint8_t *)malloc(n);
+        uint8_t *frame;
+        size_t framelen;
+
+        CHECK(run != NULL);
+        if (run == NULL) {
+            return;
+        }
+        memset(run, 0x01, n);
+        frame = (uint8_t *)malloc(n + 8);
+        CHECK(frame != NULL);
+        if (frame == NULL) {
+            free(run);
+            return;
+        }
+        framelen = packed_block(frame, kRepInt32, run, n);
+        free(run);
+        CHECK_STATUS(PBW_OK, pbw_decode(d, frame, framelen, &m));
+        CHECK(m != NULL);
+        list = m != NULL ? pbw_message_get(m, kRepInt32) : NULL;
+        CHECK(list != NULL && pbw_value_count(list) == n);
+        if (list != NULL && pbw_value_count(list) == n) {
+            CHECK(pbw_value_get_int(pbw_value_at(list, 0)) == 1);
+            CHECK(pbw_value_get_int(pbw_value_at(list, n - 1)) == 1);
+        }
+        pbw_message_free(m);
+        m = NULL;
+        free(frame);
+    }
 }
 
 static pbw_status

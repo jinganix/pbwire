@@ -125,6 +125,18 @@ jobs:
       - name: Dynamic symbol table
         run: ./scripts/check-symbols.sh
 
+  gates:
+    name: Pre-push gate (vendored cores, file lists, format)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install clang-format
+        run: sudo apt-get update && sudo apt-get install -y clang-format-20
+      - name: Run the same gate as the pre-push hook
+        run: |
+          sudo ln -sf /usr/bin/clang-format-20 /usr/local/bin/clang-format
+          ./scripts/check.sh
+
   format:
     name: clang-format
     runs-on: ubuntu-latest
@@ -219,6 +231,27 @@ jobs:
           ruby-version: '4.0'
       - name: Build the extension and run the self-check
         run: make ruby-test
+      - name: Published gem builds, installs and passes tests
+        run: |
+          rm -rf /tmp/geminst && mkdir -p /tmp/geminst
+          (cd bindings/ruby && gem build pbwire.gemspec --output=/tmp/pbwire.gem)
+          gem install --local --install-dir /tmp/geminst --no-document /tmp/pbwire.gem
+          # PBWIRE_GEM_TEST skips the repo lib on the load path, so the suite
+          # loads the installed gem (without it the repo build shadows it).
+          PBWIRE_GEM_TEST=1 GEM_HOME=/tmp/geminst GEM_PATH=/tmp/geminst ruby -I/tmp/geminst/gems/pbwire-$(tr -d ' \t\n' < VERSION)/lib bindings/ruby/test/test_pbwire.rb
+
+  php:
+    name: PHP binding (native ext builds)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.5'
+      - name: Build the native extension
+        run: (cd bindings/php/ext && ./build.sh)
+      - name: Run the self-check against FFI and native ext
+        run: make php-test php-ext-test
 
   erlang:
     name: Erlang binding (OTP 29 on ${{ matrix.os }})
@@ -226,7 +259,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        # Pinned: setup-beam v1.24.0 cannot map the 26.04 runner image.
+        os: [ubuntu-24.04, macos-latest]
     steps:
       - uses: actions/checkout@v5
       - uses: erlef/setup-beam@v1.24.0
@@ -325,7 +359,8 @@ jobs:
 
   ports:
     name: 32-bit and big-endian (${{ matrix.target }})
-    runs-on: ubuntu-latest
+    # Pinned: the 26.04 image no longer ships qemu-user-static.
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:

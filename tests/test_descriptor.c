@@ -260,6 +260,27 @@ test_messageset(void)
     out = NULL;
     pbw_message_free(msg);
     msg = NULL;
+    /* A broken second item must not half-mutate the first: the field keeps
+     * x=5 and the whole second item is preserved as unknown bytes. */
+    {
+        static const unsigned char good_then_partial[] = {
+            0x0b, 0x10, 0x04, 0x1a, 0x02, 0x08, 0x05, 0x0c,
+            0x0b, 0x10, 0x04, 0x1a, 0x03, 0x08, 0x07, 0x80, 0x0c};
+        static const unsigned char second[] = {0x0b, 0x10, 0x04, 0x1a,
+                                               0x03, 0x08, 0x07, 0x80,
+                                               0x0c};
+        CHECK_OK(pbw_decode(set, good_then_partial,
+                            sizeof(good_then_partial), &msg));
+        v = pbw_message_get(msg, 4);
+        CHECK(v != NULL);
+        CHECK(pbw_value_get_int(
+                  pbw_message_get(pbw_value_get_message(v), 1)) == 5);
+        CHECK(pbw_message_unknown_len(msg) == sizeof(second));
+        CHECK(memcmp(pbw_message_unknown_bytes(msg), second,
+                     sizeof(second)) == 0);
+        pbw_message_free(msg);
+        msg = NULL;
+    }
     /* Malformed items: a bad inner message and items missing their id
      * or payload fall back to unknown bytes; a truncated item fails. */
     {
@@ -786,7 +807,34 @@ test_load_hostile(void)
     CHECK(schema != NULL && strlen(pbw_schema_error(schema)) > 0);
     pbw_schema_free(schema);
     schema = NULL;
-    /* 8. a map entry that does not have exactly optional key #1 and value #2:
+    /* 8. a 33-bit field number: it truncates to 1 without a range check,
+     * so the loader rejects wide varints instead of renumbering. */
+    {
+        uint8_t fld[64];
+        ds_w fw;
+
+        iw.len = 0;
+        w_str(&iw, 1, "M");
+        fw.p = fld;
+        fw.len = 0;
+        w_str(&fw, 1, "x");
+        w_int(&fw, 3, 0x100000001ull);
+        w_int(&fw, 4, 1);
+        w_int(&fw, 5, 5);
+        w_sub(&iw, 2, fld, fw.len);
+    }
+    w.len = 0;
+    w_str(&w, 1, "w.proto");
+    w_str(&w, 2, "p");
+    w_sub(&w, 4, inner, iw.len);
+    w_str(&w, 12, "proto3");
+    sw.len = 0;
+    w_sub(&sw, 1, file, w.len);
+    CHECK_STATUS(PBW_ERR_INVALID,
+                 pbw_descriptor_set_load(set, sw.len, &schema));
+    pbw_schema_free(schema);
+    schema = NULL;
+    /* 9. a map entry that does not have exactly optional key #1 and value #2:
      * INVALID. The JSON/text printers read those two numbers directly, so a
      * other shape would fail the whole print much later. */
     iw.len = 0;
@@ -857,6 +905,31 @@ test_load_hostile(void)
     w_sub(&sw, 1, file, w.len);
     CHECK_OK(pbw_descriptor_set_load(set, sw.len, &schema));
     CHECK(pbw_descriptor_is_map_entry(pbw_schema_find(schema, "p.Good")));
+    pbw_schema_free(schema);
+    schema = NULL;
+    /* 10. a 33-bit enum value truncates into a different number: reject
+     * it like the wide field number above. */
+    iw.len = 0;
+    w_str(&iw, 1, "E");
+    {
+        uint8_t val[16];
+        ds_w vw;
+
+        vw.p = val;
+        vw.len = 0;
+        w_str(&vw, 1, "V");
+        w_int(&vw, 2, 0x100000001ull);
+        w_sub(&iw, 2, val, vw.len);
+    }
+    w.len = 0;
+    w_str(&w, 1, "w.proto");
+    w_str(&w, 2, "p");
+    w_sub(&w, 5, inner, iw.len);
+    w_str(&w, 12, "proto3");
+    sw.len = 0;
+    w_sub(&sw, 1, file, w.len);
+    CHECK_STATUS(PBW_ERR_INVALID,
+                 pbw_descriptor_set_load(set, sw.len, &schema));
     pbw_schema_free(schema);
 }
 

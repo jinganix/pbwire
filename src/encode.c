@@ -507,6 +507,17 @@ write_element(writer *w, const pbw_field *field, const pbw_value *value,
     switch (field->type) {
     case PBW_TYPE_STRING:
     case PBW_TYPE_BYTES: {
+        /* `put` takes any value, so one wrong-kind slot would read the
+         * wrong union arm (an integer as a pointer). The packed path
+         * already checks each item; the singular path checks the arms it
+         * dereferences (message/bytes), fused into the existing guards. */
+        if (value == NULL || value->kind != PBW_VALUE_BYTES ||
+            (value->as.bytes.len > 0 && value->as.bytes.data == NULL)) {
+            /* Wrong kind, or a payload that cannot exist (a NULL pointer with
+             * a length): copying it would read through NULL. */
+            w->status = PBW_ERR_INVALID;
+            return;
+        }
         /* Length is known before the payload: reserve once for tag,
          * length and payload instead of three separate checks. The tag
          * write stores a whole word, so reserve 4 for it. */
@@ -538,20 +549,25 @@ write_element(writer *w, const pbw_field *field, const pbw_value *value,
         return;
     }
     case PBW_TYPE_GROUP: {
+        if (value == NULL || value->as.msg == NULL ||
+            value->kind != PBW_VALUE_MESSAGE) {
+            w->status = PBW_ERR_INVALID;
+            return;
+        }
         write_group_body(w, field, value, depth, det);
         return;
     }
     case PBW_TYPE_MESSAGE: {
         size_t mark;
 
+        if (value == NULL || value->as.msg == NULL ||
+            value->kind != PBW_VALUE_MESSAGE) {
+            w->status = PBW_ERR_INVALID;
+            return;
+        }
         /* Editions message_encoding = DELIMITED travels as group tags. */
         if (field->msg_enc == 2) {
             write_group_body(w, field, value, depth, det);
-            return;
-        }
-
-        if (value->as.msg == NULL) {
-            w->status = PBW_ERR_INVALID;
             return;
         }
         if (depth == PBW_MAX_DEPTH) {
@@ -587,6 +603,10 @@ write_element(writer *w, const pbw_field *field, const pbw_value *value,
     case PBW_TYPE_FLOAT:
     case PBW_TYPE_FIXED32:
     case PBW_TYPE_SFIXED32:
+        if (value == NULL || value->kind != PBW_VALUE_UINT) {
+            w->status = PBW_ERR_INVALID;
+            return;
+        }
         /* One reserve for tag plus value: the common small-message path
          * then writes without another capacity check. The tag write stores
          * a whole word, so reserve 4 for it. */
@@ -605,6 +625,10 @@ write_element(writer *w, const pbw_field *field, const pbw_value *value,
     case PBW_TYPE_DOUBLE:
     case PBW_TYPE_FIXED64:
     case PBW_TYPE_SFIXED64:
+        if (value == NULL || value->kind != PBW_VALUE_UINT) {
+            w->status = PBW_ERR_INVALID;
+            return;
+        }
         if (field->tag_len <= 4) {
             if (!w_reserve(w, 4 + 8)) {
                 w->status = PBW_ERR_NOMEM;
@@ -618,6 +642,10 @@ write_element(writer *w, const pbw_field *field, const pbw_value *value,
         w_fixed(w, value->as.u64, 8);
         return;
     default:
+        if (value == NULL || value->kind != PBW_VALUE_UINT) {
+            w->status = PBW_ERR_INVALID;
+            return;
+        }
         if (field->tag_len <= 4) {
             if (!w_reserve(w, 4 + 10)) {
                 w->status = PBW_ERR_NOMEM;
@@ -1046,6 +1074,30 @@ write_map_sorted(writer *w, const pbw_field *field, const pbw_value *list,
     }
     tmp = items + n;
     memcpy(items, list->as.list.items, n * sizeof(*items));
+    /* A key payload that cannot exist fails the encode before map_key_cmp()
+     * compares it: write_element() would refuse it, too late. A NULL entry
+     * fails here too: the sort below reads every item's kind. */
+    for (j = 0; j < n; j++) {
+        const pbw_message *em;
+        const pbw_value *k;
+
+        if (items[j] == NULL ||
+            items[j]->kind != PBW_VALUE_MESSAGE ||
+            items[j]->as.msg == NULL) {
+            free(items);
+            w->status = PBW_ERR_INVALID;
+            return;
+        }
+        em = items[j]->as.msg;
+        k = pbw_message_get(em, 1);
+
+        if (k != NULL && k->kind == PBW_VALUE_BYTES &&
+            !pbw_bytes_readable(k)) {
+            free(items);
+            w->status = PBW_ERR_INVALID;
+            return;
+        }
+    }
     map_sort(kf, items, tmp, n);
     for (j = 0; j < n; j++) {
         write_element(w, field, items[j], depth, det);
@@ -1060,6 +1112,18 @@ static void
 encode_message(writer *w, const pbw_message *msg, uint32_t depth, int det)
 {
     size_t i;
+    /* A nested message retired by a later add_field or link has fewer slots
+     * (or a different field order) than its live descriptor, so walking it
+     * would read past them or emit the wrong field numbers. The root gets the
+     * full check on entry; every nested level (a submessage, a repeated item,
+     * a MessageSet payload) only needs the epoch: msg and msg->desc are
+     * non-NULL and a message is never built on an enum descriptor. One
+     * compare, hinted not-taken: a full pbw_msg_fresh() here cost 9% on the
+     * nested-message-heavy xlarge bench tier. */
+    if (PBW_EXPECT(msg->epoch != msg->desc->epoch, 0)) {
+        w->status = PBW_ERR_INVALID;
+        return;
+    }
     /* The presence bitmap never changes while encoding, so hoist the first
      * word: most messages have 32 fields or fewer and then test bits without
      * reloading the bitmap per field. Larger descriptors use the generic
@@ -1084,6 +1148,12 @@ encode_message(writer *w, const pbw_message *msg, uint32_t depth, int det)
         if (field->label == PBW_LABEL_REPEATED) {
             if (value->kind != PBW_VALUE_LIST || value->as.list.len == 0) {
                 continue;
+            }
+            if (value->as.list.items == NULL) {
+                /* Corrupt list (no producer builds one): refuse instead of
+                 * reading item 0 through a NULL array. */
+                w->status = PBW_ERR_INVALID;
+                return;
             }
             if (field->packed) {
                 write_packed(w, field, value);
@@ -1167,9 +1237,16 @@ size_element(const pbw_field *field, const pbw_value *value, uint32_t depth,
     switch (field->type) {
     case PBW_TYPE_STRING:
     case PBW_TYPE_BYTES:
+        if (value == NULL || value->kind != PBW_VALUE_BYTES ||
+            (value->as.bytes.len > 0 && value->as.bytes.data == NULL)) {
+            /* Same payload rule as write_element(): the size walk must
+             * refuse exactly what the writer refuses. */
+            return PBW_ERR_INVALID;
+        }
         return size_len_prefixed(out, field->tag_len, value->as.bytes.len);
     case PBW_TYPE_MESSAGE:
-        if (value->as.msg == NULL) {
+        if (value == NULL || value->as.msg == NULL ||
+            value->kind != PBW_VALUE_MESSAGE) {
             return PBW_ERR_INVALID;
         }
         if (depth == PBW_MAX_DEPTH) {
@@ -1192,7 +1269,8 @@ size_element(const pbw_field *field, const pbw_value *value, uint32_t depth,
         }
         return size_len_prefixed(out, field->tag_len, body);
     case PBW_TYPE_GROUP:
-        if (value->as.msg == NULL) {
+        if (value == NULL || value->as.msg == NULL ||
+            value->kind != PBW_VALUE_MESSAGE) {
             return PBW_ERR_INVALID;
         }
         if (depth == PBW_MAX_DEPTH) {
@@ -1213,14 +1291,23 @@ size_element(const pbw_field *field, const pbw_value *value, uint32_t depth,
     case PBW_TYPE_FLOAT:
     case PBW_TYPE_FIXED32:
     case PBW_TYPE_SFIXED32:
+        if (value == NULL || value->kind != PBW_VALUE_UINT) {
+            return PBW_ERR_INVALID;
+        }
         *out = field->tag_len + 4;
         return PBW_OK;
     case PBW_TYPE_DOUBLE:
     case PBW_TYPE_FIXED64:
     case PBW_TYPE_SFIXED64:
+        if (value == NULL || value->kind != PBW_VALUE_UINT) {
+            return PBW_ERR_INVALID;
+        }
         *out = field->tag_len + 8;
         return PBW_OK;
     default:
+        if (value == NULL || value->kind != PBW_VALUE_UINT) {
+            return PBW_ERR_INVALID;
+        }
         body = pbw_varint_size(wire_value(field->type, value->as.u64));
         if (!size_add(&body, field->tag_len)) {
             return PBW_ERR_LIMIT;
@@ -1235,6 +1322,11 @@ size_message(const pbw_message *msg, uint32_t depth, size_t *out)
 {
     size_t total = 0;
     size_t i;
+    /* Same staleness rule as encode_message(): the root is checked by the
+     * caller, every nested level compares the epoch. */
+    if (PBW_EXPECT(msg->epoch != msg->desc->epoch, 0)) {
+        return PBW_ERR_INVALID;
+    }
     /* Same presence hoist as encode_message(): one bitmap word covers most
      * descriptors, so the walk does not reload it per field. */
     int single_word = msg->desc->field_count <= 32;
@@ -1261,6 +1353,9 @@ size_message(const pbw_message *msg, uint32_t depth, size_t *out)
 
             if (value->kind != PBW_VALUE_LIST || value->as.list.len == 0) {
                 continue;
+            }
+            if (value->as.list.items == NULL) {
+                return PBW_ERR_INVALID;
             }
             n = value->as.list.len;
             if (field->packed) {
@@ -1346,7 +1441,14 @@ size_message(const pbw_message *msg, uint32_t depth, size_t *out)
 pbw_status
 pbw_message_encoded_size(const pbw_message *msg, size_t *len)
 {
-    if (msg == NULL || msg->desc == NULL || len == NULL) {
+    if (len == NULL) {
+        return PBW_ERR_INVALID;
+    }
+    /* No length is known yet: never leave a stale one behind, like the
+     * encode entry points that hand out a buffer. */
+    *len = 0;
+    if (!pbw_msg_fresh(msg) ||
+        (msg->desc->schema != NULL && !msg->desc->schema->linked)) {
         return PBW_ERR_INVALID;
     }
     return size_message(msg, 0, len);
@@ -1360,7 +1462,7 @@ pbw_encode_buf(pbw_buf *buf, const pbw_message *msg)
 {
     writer w;
 
-    if (msg == NULL || buf == NULL || msg->desc == NULL ||
+    if (msg == NULL || buf == NULL || !pbw_msg_fresh(msg) ||
         (msg->desc->schema != NULL && !msg->desc->schema->linked)) {
         return PBW_ERR_INVALID;
     }
@@ -1388,7 +1490,7 @@ encode_alloc(const pbw_message *msg, int det, uint8_t **out, size_t *len)
      * one after a failure. */
     *out = NULL;
     *len = 0;
-    if (msg == NULL || msg->desc == NULL ||
+    if (!pbw_msg_fresh(msg) ||
         (msg->desc->schema != NULL && !msg->desc->schema->linked)) {
         return PBW_ERR_INVALID;
     }
@@ -1470,7 +1572,7 @@ encode_into(const pbw_message *msg, int det, void *out, size_t cap, size_t *len)
         return PBW_ERR_INVALID;
     }
     *len = 0; /* no bytes written yet: never leave a stale length behind */
-    if (msg == NULL || msg->desc == NULL || (out == NULL && cap > 0) ||
+    if (!pbw_msg_fresh(msg) || (out == NULL && cap > 0) ||
         (msg->desc->schema != NULL && !msg->desc->schema->linked)) {
         /* An unlinked descriptor has no tags yet: refuse instead of writing
          * values with no field numbers. */

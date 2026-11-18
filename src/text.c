@@ -27,7 +27,6 @@ typedef struct {
     int indent;
     int print_unknown;
     pbw_status status;
-    int dot; /* the host locale's decimal point is '.' (checked once per call) */
 } text_out;
 
 static void
@@ -101,13 +100,13 @@ t_double(text_out *t, double value, int is_float)
     }
     for (prec = prec_min; prec <= prec_max; prec++) {
         char tmp[32];
-        int n = pbw_format_g(tmp, sizeof(tmp), prec, value, t->dot);
+        int n = pbw_format_g_c(tmp, sizeof(tmp), prec, value);
         double back;
 
         if (n <= 0 || (size_t)n >= sizeof(tmp)) {
             continue;
         }
-        back = pbw_strtod(tmp, NULL, t->dot);
+        back = pbw_strtod_c(tmp, NULL);
         if ((is_float ? (double)(float)back == value : back == value)) {
             t_put(t, tmp, (size_t)n);
             return;
@@ -724,6 +723,12 @@ t_print_message(text_out *t, const pbw_message *msg, uint32_t depth)
     if (t->status != PBW_OK) {
         return;
     }
+    if (!pbw_msg_fresh(msg)) {
+        /* Same retired-nested-message rule as the JSON printer: the slot
+         * array is shorter than the live descriptor. */
+        t->status = PBW_ERR_INVALID;
+        return;
+    }
     if (depth > PBW_MAX_DEPTH) {
         t->status = PBW_ERR_LIMIT;
         return;
@@ -762,7 +767,7 @@ pbw_text_print_opts(const pbw_message *msg, int print_unknown_fields,
 {
     text_out t;
 
-    if (msg == NULL || out == NULL || len == NULL) {
+    if (!pbw_msg_fresh(msg) || out == NULL || len == NULL) {
         return PBW_ERR_INVALID;
     }
     *out = NULL;
@@ -771,7 +776,6 @@ pbw_text_print_opts(const pbw_message *msg, int print_unknown_fields,
     t.indent = 0;
     t.print_unknown = print_unknown_fields != 0;
     t.status = PBW_OK;
-    t.dot = pbw_locale_dot();
     if (!pbw_buf_reserve(&t.buf, 64)) {
         return PBW_ERR_NOMEM;
     }
@@ -1360,7 +1364,6 @@ t_ident_case_is(const char *start, size_t len, const char *word)
 typedef struct {
     text_cur cur;
     pbw_status status;
-    int dot;       /* the host locale's decimal point is '.' (checked once per call) */
     uint32_t dlim; /* nesting cap for this call (pbw_limits.max_depth) */
 } text_in;
 
@@ -1522,7 +1525,7 @@ t_parse_float_value(text_in *t, pbw_message *msg, const pbw_field *field,
             }
             memcpy(tmp, num.start, num.len);
             tmp[num.len] = '\0';
-            value = pbw_strtod(tmp, &endp, t->dot);
+            value = pbw_strtod_c(tmp, &endp);
             {
                 int ok = endp != tmp;
 
@@ -1553,7 +1556,7 @@ t_parse_float_value(text_in *t, pbw_message *msg, const pbw_field *field,
             /* strip a trailing f/F: strtod stops there anyway, but a bare
              * "1e" must fail instead of parsing as 1 */
             tmp[num.len] = '\0';
-            value = pbw_strtod(tmp, &endp, t->dot);
+            value = pbw_strtod_c(tmp, &endp);
             used = (size_t)(endp - tmp);
             if (want > 0 && (tmp[want - 1] == 'f' || tmp[want - 1] == 'F')) {
                 want--;
@@ -1578,7 +1581,7 @@ t_parse_float_value(text_in *t, pbw_message *msg, const pbw_field *field,
             value = HUGE_VAL;
             have = 1;
         } else if (t_ident_case_is(start, len, "nan")) {
-            value = strtod("NAN", NULL);
+            value = (double)NAN;
             have = 1;
         } else {
             return PBW_ERR_INVALID;
@@ -2557,7 +2560,6 @@ pbw_text_parse_limits(const pbw_descriptor *desc, const char *text, size_t len,
     t.cur.p = text == NULL ? "" : text;
     t.cur.end = t.cur.p + len;
     t.status = PBW_OK;
-    t.dot = pbw_locale_dot();
     t.dlim = dlim;
     status = t_parse_message_body(&t, msg, 0, 0);
     if (status != PBW_OK) {

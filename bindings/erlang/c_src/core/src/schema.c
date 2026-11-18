@@ -615,6 +615,7 @@ add_field(pbw_descriptor *msg, const char *name, uint32_t number, pbw_type type,
         (uint8_t)(type == PBW_TYPE_STRING && msg->schema != NULL &&
                   msg->schema->proto3);
     msg->field_count++;
+    msg->epoch++;
     add_index_add_row(msg);
     if (msg->schema != NULL) {
         msg->schema->linked = 0;
@@ -712,7 +713,21 @@ pbw_field_set_oneof(pbw_field *field, uint32_t oneof_index)
     }
     field->oneof_index = oneof_index;
     if (field->schema != NULL) {
-        field->schema->linked = 0;
+        pbw_schema *schema = field->schema;
+        size_t i;
+
+        schema->linked = 0;
+        /* The oneof_case table sizes from the max index at message creation:
+         * retire existing messages so a later set cannot index past it. */
+        for (i = 0; i < schema->count; i++) {
+            pbw_descriptor *desc = schema->descs[i];
+
+            if (!desc->is_enum && field >= desc->fields &&
+                field < desc->fields + desc->field_count) {
+                desc->epoch++;
+                break;
+            }
+        }
     }
 }
 
@@ -772,6 +787,14 @@ link_message(pbw_schema *schema, pbw_descriptor *msg)
             snprintf(schema->error, sizeof(schema->error),
                      "oneof index %u out of range in %s.%s",
                      field->oneof_index, msg->name, field->name);
+            return PBW_ERR_INVALID;
+        }
+        if (field->oneof_index != 0 && field->label == PBW_LABEL_REPEATED) {
+            /* The store path never clears a sibling for a repeated field,
+             * so two members would stay present and encode together. */
+            snprintf(schema->error, sizeof(schema->error),
+                     "repeated field %s.%s cannot be in a oneof", msg->name,
+                     field->name);
             return PBW_ERR_INVALID;
         }
 
@@ -1041,6 +1064,13 @@ pbw_schema_link(pbw_schema *schema)
         return PBW_OK;
     }
     schema->error[0] = '\0';
+    for (i = 0; i < schema->count; i++) {
+        /* Even a failed link sorts before it validates, so every pass
+         * retires pre-link messages whether it succeeds or not. */
+        if (!schema->descs[i]->is_enum) {
+            schema->descs[i]->epoch++;
+        }
+    }
     for (i = 0; i < schema->count; i++) {
         if (schema->descs[i]->is_enum) {
             continue;
