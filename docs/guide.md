@@ -200,7 +200,13 @@ Five rules cover every pointer the API hands out or takes:
 1. **`pbw_message_set()` takes ownership on success only.** If it returns an
 error, the value is still the caller's to free. Values already owned by another
 message are rejected (`PBW_ERR_INVALID`): build a fresh value instead of moving
-one across messages.
+one across messages. A submessage handed out by its parent
+(`pbw_message_set_message()`, or a decoded tree) is owned by that parent, so
+`pbw_message_free()` on it is a no-op. Clear the field and the submessage is
+released: one that lives in the tree's arena survives unowned, so it can then
+be stored into another field. While detached it rejects stores (no teardown
+walk would release a payload or child it grew there) and is writable again
+once a tree owns it.
 2. **A decoded plain tree owns everything under it.** `pbw_decode()` allocates
 one arena for the whole tree, so `pbw_message_free()` releases the tree, its
 values, submessages and payloads at once; `pbw_value_free()` on a value taken
@@ -212,7 +218,12 @@ or `pbw_ctx_free()`, never with
 `pbw_message_new_ctx()` is mutable until a decode seals it, but it only takes
 values built in that same arena (`pbw_value_new_*_ctx`): a heap value
 (`pbw_value_new_string()`, ...) is rejected with `PBW_ERR_INVALID`, because the
-reset could not free it.
+reset could not free it. A submessage follows the same rule: it must share this
+tree's arena, or own an arena the tree releases with it (an adopted
+`pbw_decode()` root). A message that lives in another context's arena is
+rejected, whether the tree taking it was context-built or heap-built. So is a
+message that would become its own ancestor: its subtree already holding the
+tree would turn a later clear or free into a release of the arena it walks.
 4. **The schema outlives every message built from it.** Messages, values and
 context trees hold pointers into the schema's descriptors; free the schema last
 and treat a linked schema as read-only while other threads use it.
