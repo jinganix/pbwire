@@ -928,6 +928,30 @@ test_hostile_arguments(pbw_schema *schema)
         }
         pbw_message_free(container);
     }
+    {
+        /* The same holds when the parent is itself a decoded tree: the
+         * adopted root's arena must be freed by the parent's release walk,
+         * so attaching one has to stay allowed (and must not leak). */
+        static const uint8_t empty_child[] = {0x0a, 0x00};
+        static const uint8_t kid_wire[] = {0x0a, 0x01, 'k', 0x10, 0x01};
+        pbw_message *decoded_parent = NULL;
+        pbw_message *decoded_child = NULL;
+        pbw_value *adopted;
+        uint8_t *buf = NULL;
+        size_t len = 0;
+
+        CHECK_OK(pbw_decode(parent, empty_child, sizeof(empty_child),
+                            &decoded_parent));
+        CHECK_OK(pbw_decode(desc(schema, "Child"), kid_wire,
+                            sizeof(kid_wire), &decoded_child));
+        adopted = pbw_value_new_message(decoded_child);
+        CHECK(adopted != NULL);
+        CHECK_OK(pbw_message_set(decoded_parent, 1, adopted));
+        CHECK_OK(pbw_encode(decoded_parent, &buf, &len));
+        CHECK(buf != NULL && len >= 4);
+        free(buf);
+        pbw_message_free(decoded_parent);
+    }
 
     /* The layout freezes at the first successful link: a later field would
      * desynchronize the value slots of messages that already exist. */
@@ -1006,6 +1030,811 @@ test_hostile_arguments(pbw_schema *schema)
         pbw_ctx_free(b);
     }
 
+    /* A repeated scalar from one arena cannot be stored into a message of
+     * another: the repeated path keeps the wrapper pointer (not a copy),
+     * so the source reset would free the element under the tree. */
+    {
+        pbw_ctx *a = pbw_ctx_new();
+        pbw_ctx *b = pbw_ctx_new();
+        pbw_message *mb = NULL;
+        pbw_value *v = NULL;
+
+        CHECK(a != NULL && b != NULL);
+        mb = pbw_message_new_ctx(b, parent);
+        v = pbw_value_new_uint_ctx(a, 7);
+        CHECK(mb != NULL && v != NULL);
+        CHECK_STATUS(PBW_ERR_INVALID, pbw_message_set(mb, 2, v));
+        pbw_value_free(v);
+        pbw_ctx_free(a);
+        pbw_ctx_free(b);
+    }
+
+    /* A heap wrapper around an arena sub-message cannot be stored anywhere
+     * but its own arena: the wrapper flags say heap, so the arena-ownership
+     * check above does not see it, yet a reset would free the child under
+     * the tree. */
+    {
+        pbw_ctx *a = pbw_ctx_new();
+        pbw_message *heap = pbw_message_new(parent);
+        pbw_message *sub = NULL;
+        pbw_value *w = NULL;
+
+        CHECK(a != NULL && heap != NULL);
+        sub = pbw_message_new_ctx(a, desc(schema, "Child"));
+        w = pbw_value_new_message(sub);
+        CHECK(sub != NULL && w != NULL);
+        CHECK_STATUS(PBW_ERR_INVALID, pbw_message_set(heap, 3, w));
+        /* Rejected: nothing took ownership, free it all. */
+        pbw_value_free(w);
+        pbw_message_free(heap);
+        pbw_ctx_free(a);
+    }
+    /* A heap wrapper around a foreign arena sub-message cannot join a
+     * decoded (packed-arena) tree either: the packed arena explicitly
+     * allows heap payloads, but the child still dies with its own reset. */
+    {
+        static const uint8_t seed[] = {0x10, 0x01};
+        pbw_ctx *a = pbw_ctx_new();
+        pbw_message *packed = NULL;
+        pbw_message *sub = NULL;
+        pbw_value *w = NULL;
+
+        CHECK(a != NULL);
+        CHECK_STATUS(PBW_OK, pbw_decode(parent, seed, sizeof(seed),
+                                        &packed));
+        sub = pbw_message_new_ctx(a, desc(schema, "Child"));
+        w = pbw_value_new_message(sub);
+        CHECK(packed != NULL && sub != NULL && w != NULL);
+        CHECK_STATUS(PBW_ERR_INVALID, pbw_message_set(packed, 1, w));
+        /* Rejected: nothing took ownership, free it all. */
+        pbw_value_free(w);
+        pbw_message_free(packed);
+        pbw_ctx_free(a);
+    }
+
+    /* A list with a nonzero length but no item array is corrupt: no
+     * producer builds one, but the printers must still fail instead of
+     * reading NULL[0] (the text printer and the encoder already do). */
+    {
+        pbw_message *m = pbw_message_new(parent);
+        const pbw_field *nums = pbw_descriptor_find_field(parent, 2);
+        pbw_value *list = NULL;
+        pbw_value *v = NULL;
+        void *saved = NULL;
+        char *out = NULL;
+        size_t len = 0;
+
+        CHECK(m != NULL && nums != NULL);
+        list = pbw_message_list_for(m, nums);
+        v = pbw_value_new_uint(7);
+        CHECK(list != NULL && v != NULL);
+        CHECK(pbw_value_list_push(list, v, NULL) != 0);
+        saved = list->as.list.items;
+        list->as.list.items = NULL;
+        /* The public accessors must not index a NULL item array either: a
+         * corrupt list is a failed lookup, not a NULL dereference. */
+        CHECK(pbw_value_count(list) == 1);
+        CHECK(pbw_value_at(list, 0) == NULL);
+        CHECK_STATUS(PBW_ERR_INVALID, pbw_json_print(m, &out, &len));
+        CHECK(out == NULL && len == 0);
+        {
+            size_t size = 1234;
+            uint8_t *enc = NULL;
+
+            CHECK_STATUS(PBW_ERR_INVALID, pbw_message_encoded_size(m, &size));
+            CHECK(size == 0);
+            CHECK_STATUS(PBW_ERR_INVALID, pbw_encode(m, &enc, &size));
+            CHECK(enc == NULL && size == 0);
+        }
+        list->as.list.items = saved;
+        pbw_message_free(m);
+    }
+
+    /* A NULL item in a repeated string list is hostile input, not a crash:
+     * the unpacked encoder and the size walk must refuse it like the
+     * packed path and the printers already do. */
+    {
+        pbw_schema *s = pbw_schema_new();
+        pbw_descriptor *rep = NULL;
+        pbw_message *m = NULL;
+        const pbw_field *tags = NULL;
+        pbw_value *list = NULL;
+        pbw_value *v = NULL;
+        void *saved = NULL;
+        size_t size = 1234;
+        uint8_t *enc = NULL;
+        char *out = NULL;
+        size_t len = 0;
+
+        CHECK(s != NULL);
+        rep = pbw_schema_add_message(s, "Rep");
+        CHECK(rep != NULL);
+        CHECK(pbw_message_add_field(rep, "tags", 1, PBW_TYPE_STRING,
+                                    PBW_LABEL_REPEATED) != NULL);
+        CHECK_OK(pbw_schema_link(s));
+        m = pbw_message_new(rep);
+        CHECK(m != NULL);
+        tags = pbw_descriptor_find_field(rep, 1);
+        CHECK(tags != NULL);
+        list = pbw_message_list_for(m, tags);
+        v = pbw_value_new_string("hi");
+        CHECK(list != NULL && v != NULL);
+        CHECK(pbw_value_list_push(list, v, NULL) != 0);
+        saved = list->as.list.items;
+        list->as.list.items[0] = NULL;
+        CHECK_STATUS(PBW_ERR_INVALID, pbw_message_encoded_size(m, &size));
+        CHECK(size == 0);
+        CHECK_STATUS(PBW_ERR_INVALID, pbw_encode(m, &enc, &size));
+        CHECK(enc == NULL && size == 0);
+        CHECK_STATUS(PBW_ERR_INVALID,
+                     pbw_encode_deterministic(m, &enc, &size));
+        CHECK(enc == NULL && size == 0);
+        CHECK_STATUS(PBW_ERR_INVALID, pbw_json_print(m, &out, &len));
+        CHECK(out == NULL && len == 0);
+        CHECK_STATUS(PBW_ERR_INVALID, pbw_text_print(m, &out, &len));
+        CHECK(out == NULL && len == 0);
+        list->as.list.items = saved;
+        pbw_message_free(m);
+        pbw_schema_free(s);
+    }
+
+    /* A NULL entry in a map field must fail deterministic encode before the
+     * key sort reads it, the same way the element writer would. */
+    {
+        pbw_schema *s = pbw_schema_new();
+        pbw_descriptor *entry = NULL;
+        pbw_descriptor *mapmsg = NULL;
+        pbw_field *f = NULL;
+        pbw_message *m = NULL;
+        pbw_message *e = NULL;
+        const pbw_field *entries = NULL;
+        pbw_value *list = NULL;
+        pbw_value *w = NULL;
+        pbw_value *saved = NULL;
+        uint8_t *enc = NULL;
+        size_t size = 1234;
+
+        CHECK(s != NULL);
+        entry = pbw_schema_add_message(s, "E");
+        CHECK(entry != NULL);
+        CHECK(pbw_message_add_field(entry, "key", 1, PBW_TYPE_STRING,
+                                    PBW_LABEL_OPTIONAL) != NULL);
+        CHECK(pbw_message_add_field(entry, "value", 2, PBW_TYPE_INT32,
+                                    PBW_LABEL_OPTIONAL) != NULL);
+        pbw_descriptor_set_map_entry(entry);
+        mapmsg = pbw_schema_add_message(s, "M");
+        CHECK(mapmsg != NULL);
+        f = pbw_message_add_field(mapmsg, "entries", 1, PBW_TYPE_MESSAGE,
+                                  PBW_LABEL_REPEATED);
+        CHECK(f != NULL);
+        pbw_field_set_type_name(f, "E");
+        CHECK_OK(pbw_schema_link(s));
+        m = pbw_message_new(mapmsg);
+        e = pbw_message_new(entry);
+        CHECK(m != NULL && e != NULL);
+        CHECK_OK(pbw_message_set(e, 1, pbw_value_new_string("k")));
+        w = pbw_value_new_message(e);
+        CHECK(w != NULL);
+        CHECK_OK(pbw_message_set(m, 1, w));
+        entries = pbw_descriptor_find_field(mapmsg, 1);
+        CHECK(entries != NULL);
+        list = pbw_message_list_for(m, entries);
+        CHECK(list != NULL);
+        saved = list->as.list.items[0];
+        list->as.list.items[0] = NULL;
+        CHECK_STATUS(PBW_ERR_INVALID,
+                     pbw_encode_deterministic(m, &enc, &size));
+        CHECK(enc == NULL && size == 0);
+        CHECK_STATUS(PBW_ERR_INVALID, pbw_encode(m, &enc, &size));
+        CHECK(enc == NULL && size == 0);
+        list->as.list.items[0] = saved;
+        pbw_message_free(m);
+        pbw_schema_free(s);
+    }
+
+    /* A hand-built bytes value with a length but no pointer must fail the
+     * store, not report success while leaving the slot untouched. */
+    {
+        const pbw_descriptor *child = desc(schema, "Child");
+        pbw_message *m = pbw_message_new(child);
+        pbw_value *bad = (pbw_value *)calloc(1, sizeof(pbw_value));
+        const pbw_value *got = NULL;
+
+        CHECK(m != NULL && bad != NULL);
+        bad->kind = PBW_VALUE_BYTES;
+        bad->flags = 0;
+        bad->as.bytes.data = NULL;
+        bad->as.bytes.len = 5;
+        CHECK_STATUS(PBW_ERR_INVALID, pbw_message_set(m, 1, bad));
+        got = pbw_message_get(m, 1);
+        CHECK(got == NULL);
+        pbw_value_free(bad); /* rejected: still the caller's */
+        CHECK_OK(pbw_message_set(m, 1, pbw_value_new_string("ok")));
+        bad = (pbw_value *)calloc(1, sizeof(pbw_value));
+        CHECK(bad != NULL);
+        bad->kind = PBW_VALUE_BYTES;
+        bad->flags = 0;
+        bad->as.bytes.data = NULL;
+        bad->as.bytes.len = 5;
+        CHECK_STATUS(PBW_ERR_INVALID, pbw_message_set(m, 1, bad));
+        pbw_value_free(bad); /* rejected: still the caller's */
+        got = pbw_message_get(m, 1);
+        CHECK(got != NULL && pbw_value_get_bytes(got, NULL) != NULL &&
+              strcmp((const char *)pbw_value_get_bytes(got, NULL), "ok") ==
+                  0);
+        pbw_message_free(m);
+    }
+
+    /* Freeing a nested message handed out by its parent must be a no-op:
+     * the parent owns it (like a decoded tree's submessages, whose free
+     * is documented as a no-op). Otherwise the slot dangles and the
+     * parent's encode and free read and free it again. */
+    {
+        pbw_message *p = pbw_message_new(parent);
+        pbw_message *c = NULL;
+        uint8_t *buf = NULL;
+        size_t len = 0;
+
+        CHECK(p != NULL);
+        c = pbw_message_set_message(p, 1);
+        CHECK(c != NULL);
+        CHECK_OK(pbw_message_set(c, 2, pbw_value_new_int(5)));
+        pbw_message_free(c);
+        CHECK_OK(pbw_encode(p, &buf, &len));
+        CHECK(buf != NULL && len > 0);
+        free(buf);
+        pbw_message_free(p);
+    }
+
+    /* A nested message retired by a later add_field (epoch bump) must
+     * not be walked: the printers and the encoder loop over the live
+     * descriptor's field count, past the retired slot array. */
+    {
+        pbw_schema *s = pbw_schema_new();
+        pbw_descriptor *sub = NULL;
+        pbw_descriptor *top = NULL;
+        pbw_field *fs = NULL;
+        pbw_message *m_sub = NULL;
+        pbw_message *m_top = NULL;
+        pbw_value *w = NULL;
+        char *out = NULL;
+        size_t len = 0;
+
+        CHECK(s != NULL);
+        sub = pbw_schema_add_message(s, "S");
+        CHECK(sub != NULL);
+        CHECK(pbw_message_add_field(sub, "a", 1, PBW_TYPE_INT32,
+                                    PBW_LABEL_OPTIONAL) != NULL);
+        top = pbw_schema_add_message(s, "T");
+        CHECK(top != NULL);
+        fs = pbw_message_add_field(top, "s", 1, PBW_TYPE_MESSAGE,
+                                   PBW_LABEL_OPTIONAL);
+        CHECK(fs != NULL);
+        m_sub = pbw_message_new(sub);
+        m_top = pbw_message_new(top);
+        w = pbw_value_new_message(m_sub);
+        CHECK(m_sub != NULL && m_top != NULL && w != NULL);
+        /* Pre-link lookup has no index yet; the add_field pointer is
+         * the handle. */
+        CHECK_OK(pbw_message_set_field(m_top, fs, w));
+        CHECK(pbw_message_add_field(sub, "b", 2, PBW_TYPE_INT32,
+                                    PBW_LABEL_OPTIONAL) != NULL);
+        CHECK_STATUS(PBW_ERR_INVALID,
+                     pbw_json_print(m_top, &out, &len));
+        CHECK(out == NULL && len == 0);
+        CHECK_STATUS(PBW_ERR_INVALID,
+                     pbw_text_print(m_top, &out, &len));
+        CHECK(out == NULL && len == 0);
+        pbw_message_free(m_top);
+        pbw_schema_free(s);
+    }
+
+    /* A nested message retired by a later add is stale even when the parent
+     * was built after a successful link (a link bumps the epoch too), so the
+     * encoder must refuse it: otherwise it walks the child's slots with the
+     * live field count and reads past them. */
+    {
+        pbw_schema *s = pbw_schema_new();
+        pbw_descriptor *sub = NULL;
+        pbw_descriptor *top = NULL;
+        pbw_message *stale = NULL;
+        pbw_message *fresh = NULL;
+        pbw_field *fs = NULL;
+        pbw_value *w = NULL;
+        uint8_t *buf = NULL;
+        size_t len = 1234;
+        int i;
+
+        CHECK(s != NULL);
+        sub = pbw_schema_add_message(s, "S");
+        top = pbw_schema_add_message(s, "T");
+        CHECK(sub != NULL && top != NULL);
+        CHECK(pbw_message_add_field(sub, "f1", 1, PBW_TYPE_INT32,
+                                    PBW_LABEL_OPTIONAL) != NULL);
+        fs = pbw_message_add_field(top, "s", 1, PBW_TYPE_MESSAGE,
+                                   PBW_LABEL_OPTIONAL);
+        CHECK(fs != NULL);
+        pbw_field_set_type_name(fs, "S");
+        /* The child is built while its descriptor has one field. */
+        stale = pbw_message_new(sub);
+        CHECK(stale != NULL);
+        for (i = 2; i <= 8; i++) {
+            char name[8];
+
+            snprintf(name, sizeof(name), "f%d", i);
+            CHECK(pbw_message_add_field(sub, name, (uint32_t)i,
+                                        PBW_TYPE_INT32,
+                                        PBW_LABEL_OPTIONAL) != NULL);
+        }
+        CHECK_OK(pbw_schema_link(s));
+        CHECK(!pbw_msg_fresh(stale));
+        fresh = pbw_message_new(top);
+        w = pbw_value_new_message(stale);
+        CHECK(fresh != NULL && w != NULL);
+        CHECK_OK(pbw_message_set(fresh, 1, w));
+        CHECK_STATUS(PBW_ERR_INVALID, pbw_message_encoded_size(fresh, &len));
+        CHECK(len == 0);
+        CHECK_STATUS(PBW_ERR_INVALID, pbw_encode(fresh, &buf, &len));
+        CHECK(buf == NULL && len == 0);
+        CHECK_STATUS(PBW_ERR_INVALID, pbw_encode_deterministic(fresh, &buf, &len));
+        CHECK(buf == NULL && len == 0);
+        pbw_message_free(fresh);
+        pbw_schema_free(s);
+    }
+
+    /* A stale google.protobuf.Value must be refused, not silently dropped:
+     * its empty scan walks the live field count over the retired presence
+     * bitmap, so an early "empty" answer both loses the element and reads
+     * past the block once the count crosses a word. */
+    {
+        pbw_schema *s = pbw_schema_new();
+        pbw_descriptor *val = NULL;
+        pbw_descriptor *top = NULL;
+        pbw_message *stale = NULL;
+        pbw_message *list_owner = NULL;
+        pbw_field *fs = NULL;
+        pbw_value *w = NULL;
+        char *out = NULL;
+        size_t len = 0;
+
+        CHECK(s != NULL);
+        val = pbw_schema_add_message(s, "google.protobuf.Value");
+        top = pbw_schema_add_message(s, "Top");
+        CHECK(val != NULL && top != NULL);
+        CHECK(pbw_message_add_field(val, "a", 1, PBW_TYPE_INT32,
+                                    PBW_LABEL_OPTIONAL) != NULL);
+        fs = pbw_message_add_field(top, "v", 1, PBW_TYPE_MESSAGE,
+                                   PBW_LABEL_REPEATED);
+        CHECK(fs != NULL);
+        pbw_field_set_type_name(fs, "google.protobuf.Value");
+        stale = pbw_message_new(val);
+        CHECK(stale != NULL);
+        CHECK(pbw_message_add_field(val, "b", 2, PBW_TYPE_INT32,
+                                    PBW_LABEL_OPTIONAL) != NULL);
+        CHECK_OK(pbw_schema_link(s));
+        CHECK(!pbw_msg_fresh(stale));
+        list_owner = pbw_message_new(top);
+        w = pbw_value_new_message(stale);
+        CHECK(list_owner != NULL && w != NULL);
+        CHECK_OK(pbw_message_set(list_owner, 1, w));
+        CHECK_STATUS(PBW_ERR_INVALID, pbw_json_print(list_owner, &out, &len));
+        CHECK(out == NULL && len == 0);
+        pbw_message_free(list_owner);
+        pbw_schema_free(s);
+    }
+
+    /* No message may become its own ancestor: clear()/free() would release
+     * the arena (or struct) they are walking inside. Every path that could
+     * close such a cycle is rejected at the store boundary. */
+    {
+        const pbw_descriptor *deep = desc(schema, "Deep");
+        static const uint8_t deep_wire[] = {0x0a, 0x00};
+        static const uint8_t parent_wire[] = {0x0a, 0x00};
+        pbw_message *m = NULL;
+        pbw_message *kid = NULL;
+        pbw_message *b = NULL;
+        pbw_value *w;
+        pbw_value *w2;
+        const pbw_value *list;
+        size_t i;
+
+        /* the message itself, as a heap tree */
+        CHECK(deep != NULL);
+        m = pbw_message_new(deep);
+        CHECK(m != NULL);
+        w = pbw_value_new_message(m);
+        CHECK(w != NULL);
+        CHECK_STATUS(PBW_ERR_INVALID, pbw_message_set(m, 1, w));
+        free(w); /* rejected: the wrapper still owns m, free the struct only */
+        pbw_message_free(m);
+
+        /* the decoded root, stored into its own nested child */
+        CHECK_OK(pbw_decode(deep, deep_wire, sizeof(deep_wire), &m));
+        kid = (pbw_message *)pbw_value_get_message(pbw_message_get(m, 1));
+        CHECK(kid != NULL);
+        w = pbw_value_new_message(m);
+        CHECK(w != NULL);
+        CHECK_STATUS(PBW_ERR_INVALID, pbw_message_set(kid, 1, w));
+        free(w); /* rejected: the wrapper still owns the root m */
+        pbw_message_clear(kid, 1);
+        pbw_message_free(m);
+
+        /* decoded children are owned by their tree: moving one to another
+         * field of the same tree must be rejected like a duplicate store */
+        CHECK_OK(pbw_decode(parent, parent_wire, sizeof(parent_wire), &m));
+        kid = (pbw_message *)pbw_value_get_message(pbw_message_get(m, 1));
+        CHECK(kid != NULL);
+        w = pbw_value_new_message(kid);
+        CHECK(w != NULL);
+        CHECK_STATUS(PBW_ERR_INVALID, pbw_message_set(m, 3, w));
+        pbw_value_free(w); /* rejected: the slot still owns the child */
+        list = pbw_message_get(m, 3);
+        CHECK(pbw_value_count(list) == 0);
+        pbw_message_free(m);
+
+        /* a two-message heap cycle: the closing store is refused */
+        m = pbw_message_new(deep);
+        b = pbw_message_new(deep);
+        CHECK(m != NULL && b != NULL);
+        CHECK_OK(pbw_message_set(m, 1, pbw_value_new_message(b)));
+        w = pbw_value_new_message(m);
+        CHECK(w != NULL);
+        CHECK_STATUS(PBW_ERR_INVALID, pbw_message_set(b, 1, w));
+        free(w);             /* rejected: the wrapper still owns m, a root */
+        pbw_message_free(m); /* releases b with it */
+
+        /* A target deeper than the cycle walk refuses the store as well:
+         * the cycle would sit below the walk cap, and its root is `stored`,
+         * so no free path could ever reach it again. */
+        m = pbw_message_new(deep);
+        CHECK(m != NULL);
+        b = m;
+        for (i = 0; i < PBW_MAX_DEPTH + 2 && b != NULL; i++) {
+            b = pbw_message_set_message(b, 1);
+        }
+        CHECK(b != NULL);
+        w = pbw_value_new_message(m);
+        CHECK(w != NULL);
+        CHECK_STATUS(PBW_ERR_INVALID, pbw_message_set(b, 1, w));
+        free(w);
+        pbw_message_free(m);
+
+        /* Clearing a field detaches its child: the arena struct outlives the
+         * release, so storing it again is a move, not a duplicate store. While
+         * detached no release walk reaches it, so a heap payload is refused
+         * there; once it is back in the tree it is stored and freed normally. */
+        CHECK_OK(pbw_decode(parent, parent_wire, sizeof(parent_wire), &m));
+        kid = (pbw_message *)pbw_value_get_message(pbw_message_get(m, 1));
+        CHECK(kid != NULL);
+        pbw_message_clear(m, 1);
+        w2 = pbw_value_new_string("heap");
+        CHECK(w2 != NULL);
+        CHECK_STATUS(PBW_ERR_INVALID, pbw_message_set(kid, 1, w2));
+        pbw_value_free(w2); /* rejected: still the caller's */
+        w = pbw_value_new_message(kid);
+        CHECK(w != NULL);
+        CHECK_OK(pbw_message_set(m, 1, w));
+        CHECK_OK(pbw_message_set(kid, 1, pbw_value_new_string("heap")));
+        pbw_message_free(m); /* releases the re-adopted child and its payload */
+
+        /* A detached message is frozen, children included: it must not grow a
+         * subtree that no teardown walk would ever release. */
+        CHECK_OK(pbw_decode(deep, deep_wire, sizeof(deep_wire), &m));
+        kid = (pbw_message *)pbw_value_get_message(pbw_message_get(m, 1));
+        CHECK(kid != NULL);
+        pbw_message_clear(m, 1);
+        CHECK(pbw_message_set_message(kid, 1) == NULL);
+        w = pbw_value_new_message(kid);
+        CHECK(w != NULL);
+        CHECK_OK(pbw_message_set(m, 1, w)); /* adopted: writable again */
+        CHECK(pbw_message_set_message(kid, 1) != NULL);
+        pbw_message_free(m);
+    }
+
+    /* Repeated message items belong to their list, whether they came from
+     * pbw_message_set() or from a parser: freeing one directly must be a
+     * no-op, and handing it to a second message must be rejected. */
+    {
+        static const char json_kids[] = "{\"kids\":[{\"name\":\"a\"}]}";
+        const pbw_descriptor *holder_desc = desc(schema, "Parent");
+        pbw_message *root = NULL;
+        pbw_message *other = pbw_message_new(holder_desc);
+        pbw_message *kid = NULL;
+        pbw_value *w;
+        const pbw_value *list;
+        const pbw_value *item;
+        pbw_status st;
+        size_t len = 0;
+
+        CHECK(other != NULL);
+        CHECK_OK(pbw_json_parse(holder_desc, json_kids,
+                                sizeof(json_kids) - 1, &root));
+        list = pbw_message_get(root, 3);
+        item = pbw_value_at(list, 0);
+        kid = (pbw_message *)pbw_value_get_message(item);
+        CHECK(list != NULL && kid != NULL);
+        w = pbw_value_new_message(kid);
+        CHECK(w != NULL);
+        st = pbw_message_set(other, 1, w);
+        CHECK_STATUS(PBW_ERR_INVALID, st);
+        if (st != PBW_OK) {
+            pbw_value_free(w); /* rejected: the list still owns the child */
+        }
+        pbw_message_free(kid); /* owned by the list: no-op */
+        CHECK_OK(pbw_message_encoded_size(root, &len));
+        CHECK(len > 0);
+        pbw_message_free(other);
+        pbw_message_free(root);
+    }
+
+    /* A direct free of a submessage the parent owns must stay a no-op even
+     * when that child is an adopted decoded root: freeing its arena here
+     * leaves the parent slot dangling and frees the same block twice. */
+    {
+        static const uint8_t kid_wire2[] = {0x0a, 0x01, 'k', 0x10, 0x01};
+        pbw_message *decoded_child = NULL;
+        pbw_message *holder = pbw_message_new(parent);
+        pbw_value *w;
+        uint8_t *buf = NULL;
+        size_t len = 0;
+
+        CHECK(holder != NULL);
+        CHECK_OK(pbw_decode(desc(schema, "Child"), kid_wire2,
+                            sizeof(kid_wire2), &decoded_child));
+        w = pbw_value_new_message(decoded_child);
+        CHECK(w != NULL);
+        CHECK_OK(pbw_message_set(holder, 1, w));
+        pbw_message_free(decoded_child); /* owned by holder: no-op */
+        CHECK_OK(pbw_encode(holder, &buf, &len));
+        CHECK(buf != NULL && len >= 4);
+        free(buf);
+        pbw_message_free(holder); /* releases the adopted arena exactly once */
+    }
+
+    /* The same no-op must hold for a heap wrapper: pbw_value_free() on a
+     * wrapper the caller made around a parent-owned message may not release
+     * that message under the parent's slot. */
+    {
+        pbw_message *p = pbw_message_new(parent);
+        pbw_message *c = NULL;
+        pbw_value *wraps;
+        uint8_t *buf = NULL;
+        size_t len = 0;
+
+        CHECK(p != NULL);
+        c = pbw_message_set_message(p, 1);
+        CHECK(c != NULL);
+        wraps = pbw_value_new_message(c);
+        CHECK(wraps != NULL);
+        pbw_value_free(wraps);
+        CHECK_OK(pbw_encode(p, &buf, &len)); /* the slot is still valid */
+        CHECK(buf != NULL && len > 0);
+        free(buf);
+        pbw_message_free(p);
+    }
+
+    /* Struct/ListValue print their own body, so they need the same stale rule
+     * as j_print_message(): a retired inner message must not print as "{}"
+     * (silently dropping it) instead of failing. */
+    {
+        pbw_schema *s = pbw_schema_new();
+        pbw_descriptor *val = NULL;
+        pbw_descriptor *st = NULL;
+        pbw_descriptor *lval = NULL;
+        pbw_descriptor *top = NULL;
+        pbw_message *stale_struct = NULL;
+        pbw_message *stale_list = NULL;
+        pbw_message *fresh_val = NULL;
+        pbw_message *owner = NULL;
+        pbw_field *fs = NULL;
+        pbw_value *w = NULL;
+        pbw_value *vw = NULL;
+        char *out = NULL;
+        size_t len = 0;
+
+        CHECK(s != NULL);
+        val = pbw_schema_add_message(s, "google.protobuf.Value");
+        st = pbw_schema_add_message(s, "google.protobuf.Struct");
+        lval = pbw_schema_add_message(s, "google.protobuf.ListValue");
+        top = pbw_schema_add_message(s, "Top");
+        CHECK(val != NULL && st != NULL && lval != NULL && top != NULL);
+        fs = pbw_message_add_field(val, "struct_value", 5, PBW_TYPE_MESSAGE,
+                                   PBW_LABEL_OPTIONAL);
+        CHECK(fs != NULL);
+        pbw_field_set_type_name(fs, "google.protobuf.Struct");
+        fs = pbw_message_add_field(val, "list_value", 6, PBW_TYPE_MESSAGE,
+                                   PBW_LABEL_OPTIONAL);
+        CHECK(fs != NULL);
+        pbw_field_set_type_name(fs, "google.protobuf.ListValue");
+        CHECK(pbw_message_add_field(st, "fields", 1, PBW_TYPE_STRING,
+                                    PBW_LABEL_OPTIONAL) != NULL);
+        CHECK(pbw_message_add_field(lval, "values", 1, PBW_TYPE_STRING,
+                                    PBW_LABEL_REPEATED) != NULL);
+        stale_struct = pbw_message_new(st);
+        stale_list = pbw_message_new(lval);
+        CHECK(stale_struct != NULL && stale_list != NULL);
+        CHECK(pbw_message_add_field(st, "extra", 2, PBW_TYPE_INT32,
+                                    PBW_LABEL_OPTIONAL) != NULL);
+        CHECK(pbw_message_add_field(lval, "extra", 2, PBW_TYPE_INT32,
+                                    PBW_LABEL_OPTIONAL) != NULL);
+        fs = pbw_message_add_field(top, "v", 1, PBW_TYPE_MESSAGE,
+                                   PBW_LABEL_OPTIONAL);
+        CHECK(fs != NULL);
+        pbw_field_set_type_name(fs, "google.protobuf.Value");
+        CHECK_OK(pbw_schema_link(s));
+        CHECK(!pbw_msg_fresh(stale_struct));
+        fresh_val = pbw_message_new(val);
+        w = pbw_value_new_message(stale_struct);
+        CHECK(fresh_val != NULL && w != NULL);
+        CHECK_OK(pbw_message_set(fresh_val, 5, w));
+        owner = pbw_message_new(top);
+        vw = pbw_value_new_message(fresh_val);
+        CHECK(owner != NULL && vw != NULL);
+        CHECK_OK(pbw_message_set(owner, 1, vw));
+        CHECK_STATUS(PBW_ERR_INVALID, pbw_json_print(owner, &out, &len));
+        CHECK(out == NULL && len == 0);
+        pbw_message_free(owner);
+        /* ... and a retired ListValue must not print as "[]" either. */
+        CHECK(!pbw_msg_fresh(stale_list));
+        fresh_val = pbw_message_new(val);
+        w = pbw_value_new_message(stale_list);
+        CHECK(fresh_val != NULL && w != NULL);
+        CHECK_OK(pbw_message_set(fresh_val, 6, w));
+        owner = pbw_message_new(top);
+        vw = pbw_value_new_message(fresh_val);
+        CHECK(owner != NULL && vw != NULL);
+        CHECK_OK(pbw_message_set(owner, 1, vw));
+        CHECK_STATUS(PBW_ERR_INVALID, pbw_json_print(owner, &out, &len));
+        CHECK(out == NULL && len == 0);
+        pbw_message_free(owner);
+        pbw_schema_free(s);
+    }
+
+    /* A retired map entry has no readable key or value: the printer must fail,
+     * not print their defaults (which would silently drop the entry). */
+    {
+        pbw_schema *s = pbw_schema_new();
+        pbw_descriptor *entry = NULL;
+        pbw_descriptor *top = NULL;
+        pbw_message *stale_entry = NULL;
+        pbw_message *owner = NULL;
+        pbw_value *w = NULL;
+        pbw_field *f = NULL;
+        char *out = NULL;
+        size_t len = 0;
+        size_t i;
+
+        CHECK(s != NULL);
+        entry = pbw_schema_add_message(s, "Top.EEntry");
+        top = pbw_schema_add_message(s, "Top");
+        CHECK(entry != NULL && top != NULL);
+        CHECK(pbw_message_add_field(entry, "key", 1, PBW_TYPE_STRING,
+                                    PBW_LABEL_OPTIONAL) != NULL);
+        CHECK(pbw_message_add_field(entry, "value", 2, PBW_TYPE_INT32,
+                                    PBW_LABEL_OPTIONAL) != NULL);
+        pbw_descriptor_set_map_entry(entry);
+        stale_entry = pbw_message_new(entry);
+        CHECK(stale_entry != NULL);
+        CHECK(pbw_message_add_field(entry, "extra", 3, PBW_TYPE_INT32,
+                                    PBW_LABEL_OPTIONAL) != NULL);
+        f = pbw_message_add_field(top, "m", 1, PBW_TYPE_MESSAGE,
+                                  PBW_LABEL_REPEATED);
+        CHECK(f != NULL);
+        pbw_field_set_type_name(f, "Top.EEntry");
+        CHECK_OK(pbw_schema_link(s));
+        CHECK(!pbw_msg_fresh(stale_entry));
+        owner = pbw_message_new(top);
+        CHECK(owner != NULL);
+        /* Past 32 entries the printer precomputes keys first: it must reject
+         * the retired entry there and let the per-entry scan report it. */
+        for (i = 0; i < 33; i++) {
+            pbw_message *e = pbw_message_set_message(owner, 1);
+
+            CHECK(e != NULL);
+            CHECK_OK(pbw_message_set(e, 1, pbw_value_new_string("k")));
+            CHECK_OK(pbw_message_set(e, 2, pbw_value_new_uint(1)));
+        }
+        w = pbw_value_new_message(stale_entry);
+        CHECK(w != NULL);
+        CHECK_OK(pbw_message_set(owner, 1, w));
+        CHECK_STATUS(PBW_ERR_INVALID, pbw_json_print(owner, &out, &len));
+        CHECK(out == NULL && len == 0);
+        pbw_message_free(owner);
+        pbw_schema_free(s);
+    }
+
+    /* A bytes field reaches the base64 printer instead of the string one,
+     * and it follows the same payload rule. */
+    {
+        const pbw_descriptor *scalar = desc(schema, "Scalar");
+        pbw_message *m = pbw_message_new(scalar);
+        pbw_value *slot;
+        pbw_value bad;
+        char *txt = NULL;
+        size_t len = 0;
+        size_t index;
+
+        CHECK(m != NULL && scalar != NULL);
+        index = (size_t)(pbw_descriptor_find_field(scalar, 15) -
+                         scalar->fields); /* Scalar.byt */
+        memset(&bad, 0, sizeof(bad));
+        bad.kind = PBW_VALUE_BYTES;
+        bad.as.bytes.data = NULL;
+        bad.as.bytes.len = 2;
+        pbw_message_put(m, index, &bad); /* dropped: the field stays absent */
+        CHECK(pbw_message_field_count(m) == 0);
+        slot = &m->values[index];
+        slot->kind = PBW_VALUE_BYTES;
+        slot->flags = PBW_VF_EMBEDDED;
+        slot->as.bytes.data = NULL;
+        slot->as.bytes.len = 2;
+        pbw_msg_set_present(m, index, 1);
+        CHECK_STATUS(PBW_ERR_INVALID, pbw_json_print(m, &txt, &len));
+        CHECK(txt == NULL && len == 0);
+        pbw_message_free(m);
+    }
+
+    /* A corrupt list must not crash the writers either: an append refuses
+     * instead of writing through a NULL item array, and freeing the tree
+     * skips that array instead of dereferencing NULL[0]. */
+    {
+        pbw_message *m = pbw_message_new(parent);
+        pbw_value *nums_list = pbw_message_list_for(
+            m, pbw_descriptor_find_field(parent, 2));
+        pbw_value *item = pbw_value_new_uint(9);
+        pbw_value *extra = pbw_value_new_uint(10);
+        void *saved = NULL;
+
+        CHECK(m != NULL && nums_list != NULL && item != NULL && extra != NULL);
+        CHECK(pbw_value_list_push(nums_list, item, NULL) != 0);
+        saved = nums_list->as.list.items;
+        nums_list->as.list.items = NULL; /* one item, no array */
+        CHECK(pbw_value_list_push(nums_list, extra, NULL) == 0);
+        nums_list->as.list.len = 0; /* capacity but no array: same shape */
+        CHECK(pbw_value_list_push(nums_list, extra, NULL) == 0);
+        nums_list->as.list.len = 1; /* one item, no array, no capacity either */
+        nums_list->as.list.cap = 0;
+        CHECK(pbw_value_list_push(nums_list, extra, NULL) == 0);
+        nums_list->as.list.cap = 1; /* free the tree in that state */
+        pbw_value_free(extra);
+        pbw_message_free(m); /* skips the missing array instead of NULL[0] */
+        /* The walk cannot reach item[0]: release the two blocks the corrupt
+         * list left behind (a leak would trip ASan/LSan). */
+        free(item);
+        free(saved);
+    }
+
+    /* The same corrupt list on an *unpacked* repeated field fails the encoder
+     * itself: write_packed() is not there to catch it first. */
+    {
+        const pbw_descriptor *plain = desc(schema, "NumsPlain");
+        pbw_message *m = pbw_message_new(plain);
+        pbw_value *item = pbw_value_new_uint(1);
+        pbw_value *list;
+        void *saved = NULL;
+        uint8_t *buf = NULL;
+        size_t len = 0;
+
+        CHECK(m != NULL && item != NULL);
+        CHECK_OK(pbw_message_set(m, 1, item)); /* repeated: the list owns it */
+        list = pbw_message_get(m, 1);
+        CHECK(list != NULL && pbw_value_count(list) == 1);
+        saved = list->as.list.items;
+        list->as.list.items = NULL;
+        CHECK_STATUS(PBW_ERR_INVALID, pbw_encode(m, &buf, &len));
+        CHECK(buf == NULL && len == 0);
+        {
+            size_t size = 4321;
+
+            CHECK_STATUS(PBW_ERR_INVALID, pbw_message_encoded_size(m, &size));
+            CHECK(size == 0);
+        }
+        pbw_message_free(m);
+        /* the corrupt walk could not reach it: release the item by hand */
+        free(item);
+        free(saved);
+    }
+
     /* The same sub-message cannot live in two fields: the second store is
      * rejected instead of sharing ownership (and double-freeing). */
     {
@@ -1026,6 +1855,103 @@ test_hostile_arguments(pbw_schema *schema)
         free(w2);
         pbw_message_free(p1);
         pbw_message_free(p2);
+    }
+
+    /* A heap payload stored into a submessage of a decoded tree (or into one
+     * of its repeated items) is released with that tree: the arena only frees
+     * the structs, so the slot walk is the one place the heap payload can go.
+     * A released slot reports absent, so a second walk cannot free it twice. */
+    {
+        static const uint8_t child_wire3[] = {0x0a, 0x00}; /* field 1, child */
+        static const uint8_t kids_wire[] = {0x1a, 0x00};   /* field 3, kids[0] */
+        pbw_message *root = NULL;
+        pbw_message *child = NULL;
+        pbw_message *kid = NULL;
+        const pbw_value *list;
+        const pbw_value *item;
+
+        CHECK_OK(pbw_decode(parent, child_wire3, sizeof(child_wire3), &root));
+        child = pbw_message_set_message(root, 1);
+        CHECK(child != NULL);
+        CHECK_OK(pbw_message_set(child, 1, pbw_value_new_string("heap")));
+        pbw_message_clear(root, 1);
+        CHECK(pbw_message_field_count(child) == 0);
+        CHECK(pbw_message_get(child, 1) == NULL);
+        pbw_message_free(root);
+
+        CHECK_OK(pbw_decode(parent, kids_wire, sizeof(kids_wire), &root));
+        list = pbw_message_get(root, 3);
+        item = pbw_value_at(list, 0);
+        kid = (pbw_message *)pbw_value_get_message(item);
+        CHECK(list != NULL && kid != NULL);
+        CHECK_OK(pbw_message_set(kid, 1, pbw_value_new_string("heap")));
+        pbw_message_clear(root, 3);
+        CHECK(pbw_message_field_count(kid) == 0);
+        CHECK(pbw_message_get(kid, 1) == NULL);
+        pbw_message_free(root);
+    }
+
+    /* A bytes value with no payload but a nonzero length can only come from
+     * the internal put(); the writers must reject it instead of copying or
+     * printing from a NULL pointer (the JSON printer used to substitute ""
+     * and then read past that literal). */
+    {
+        pbw_message *m = pbw_message_new(desc(schema, "Child"));
+        pbw_value bad;
+        uint8_t *buf = NULL;
+        size_t len = 0;
+        char *txt = NULL;
+
+        CHECK(m != NULL);
+        memset(&bad, 0, sizeof(bad));
+        bad.kind = PBW_VALUE_BYTES;
+        bad.as.bytes.data = NULL;
+        bad.as.bytes.len = 4;
+        pbw_message_put(m, 0, &bad); /* field 0 is Child.name */
+        /* The store boundary drops it: the field stays absent and every
+         * writer keeps working. */
+        CHECK(pbw_message_get(m, 1) == NULL); /* Child.name, number 1 */
+        CHECK(pbw_message_field_count(m) == 0);
+        CHECK_OK(pbw_encode(m, &buf, &len));
+        CHECK(buf != NULL && len == 0);
+        free(buf);
+        buf = NULL;
+        CHECK_OK(pbw_json_print(m, &txt, &len));
+        pbw_free(txt);
+        txt = NULL;
+        pbw_message_free(m);
+    }
+    /* A tree that holds the shape anyway (only reachable by poking the slot)
+     * must fail every writer instead of reading through the NULL payload. */
+    {
+        pbw_message *m = pbw_message_new(desc(schema, "Child"));
+        pbw_value *slot;
+        uint8_t *buf = NULL;
+        size_t len = 0;
+        char *txt = NULL;
+
+        CHECK(m != NULL);
+        slot = &m->values[0];
+        slot->kind = PBW_VALUE_BYTES;
+        slot->flags = PBW_VF_EMBEDDED;
+        slot->as.bytes.data = NULL;
+        slot->as.bytes.len = 4;
+        pbw_msg_set_present(m, 0, 1);
+        CHECK_STATUS(PBW_ERR_INVALID, pbw_encode(m, &buf, &len));
+        CHECK(buf == NULL && len == 0);
+        {
+            /* The size walk must refuse it too: a length for a tree the
+             * encoder rejects would lie about the encoding. */
+            size_t size = 1234;
+
+            CHECK_STATUS(PBW_ERR_INVALID, pbw_message_encoded_size(m, &size));
+            CHECK(size == 0);
+        }
+        CHECK_STATUS(PBW_ERR_INVALID, pbw_json_print(m, &txt, &len));
+        CHECK(txt == NULL && len == 0);
+        CHECK_STATUS(PBW_ERR_INVALID, pbw_text_print(m, &txt, &len));
+        CHECK(txt == NULL && len == 0);
+        pbw_message_free(m);
     }
 
     /* A wrong-kind value smuggled past the type-checked stores (internal
@@ -1147,6 +2073,11 @@ test_hostile_arguments(pbw_schema *schema)
         l.as.list.cap = 1;
         pbw_message_put(mm, 0, &l);
         CHECK(!pbw_message_is_initialized(mm));
+        /* The same corrupt list (items but no array) must report
+         * uninitialized instead of reading NULL[0]. */
+        mm->values[0].as.list.items = NULL;
+        CHECK(!pbw_message_is_initialized(mm));
+        mm->values[0].as.list.items = l.as.list.items;
         pbw_message_free(mm);
         pbw_schema_free(s2);
     }
@@ -3921,6 +4852,7 @@ test_schema_errors(void)
     msg = pbw_schema_add_message(schema, "M");
     {
         pbw_message *m;
+        pbw_value *w;
         pbw_field *fa;
         pbw_field *fb;
 
@@ -3933,8 +4865,10 @@ test_schema_errors(void)
         m = pbw_message_new(msg);
         CHECK(m != NULL);
         pbw_field_set_oneof(fb, 3);
-        CHECK_STATUS(PBW_ERR_INVALID,
-                     pbw_message_set_field(m, fb, pbw_value_new_int(1)));
+        w = pbw_value_new_int(1);
+        CHECK(w != NULL);
+        CHECK_STATUS(PBW_ERR_INVALID, pbw_message_set_field(m, fb, w));
+        pbw_value_free(w); /* rejected: ownership stays with the caller */
         pbw_message_free(m);
     }
     pbw_schema_free(schema);
@@ -6686,6 +7620,108 @@ test_json_format(void)
         decoded = NULL;
         pbw_schema_free(s2);
     }
+    /* A payload that cannot exist (a NULL pointer with a length) must fail
+     * every reader, not only the scalar printer: the map-key duplicate scan,
+     * the Struct key scan, the FieldMask path and the Any type name all read
+     * the bytes before a quoted/base64 writer could reject them. */
+    {
+        pbw_message *m = pbw_message_new(msg);
+        pbw_message *sub;
+        pbw_message *e = NULL;
+        pbw_message *inner;
+        pbw_value *list;
+        uint8_t *buf = NULL;
+        void *saved;
+        int i;
+
+        CHECK(m != NULL);
+        /* Any type_url */
+        sub = pbw_message_set_message(m, 17);
+        CHECK(sub != NULL);
+        CHECK_OK(pbw_message_set(sub, 1, pbw_value_new_string("Sub")));
+        saved = pbw_message_get(sub, 1)->as.bytes.data;
+        pbw_message_get(sub, 1)->as.bytes.data = NULL;
+        CHECK_STATUS(PBW_ERR_INVALID, pbw_json_print(m, &out, &len));
+        CHECK(out == NULL && len == 0);
+        free(saved); /* the poked slot can no longer release it */
+        pbw_message_clear(m, 17);
+        /* FieldMask path */
+        sub = pbw_message_set_message(m, 15);
+        CHECK(sub != NULL);
+        CHECK_OK(pbw_message_set(sub, 1, pbw_value_new_string("a_b")));
+        list = pbw_message_get(sub, 1);
+        CHECK(list != NULL && pbw_value_count(list) == 1);
+        saved = list->as.list.items[0]->as.bytes.data;
+        list->as.list.items[0]->as.bytes.data = NULL;
+        CHECK_STATUS(PBW_ERR_INVALID, pbw_json_print(m, &out, &len));
+        CHECK(out == NULL && len == 0);
+        pbw_message_clear(m, 15);
+        free(saved); /* cleared: the item is gone, so release it here */
+        /* Struct: both keys the same length, one of them corrupt. bad = 1
+         * makes entry 0's duplicate scan compare the corrupt later key;
+         * bad = 0 makes entry 0 itself the one with the corrupt key. */
+        for (i = 0; i < 2; i++) {
+            int bad = i;
+            int k;
+
+            saved = NULL;
+            sub = pbw_message_set_message(m, 16);
+            CHECK(sub != NULL);
+            for (k = 0; k < 2; k++) {
+                e = pbw_message_set_message(sub, 1);
+                CHECK(e != NULL);
+                CHECK_OK(pbw_message_set(e, 1, pbw_value_new_string("k")));
+                inner = pbw_message_set_message(e, 2);
+                CHECK(inner != NULL);
+                CHECK_OK(pbw_message_set(inner, 3,
+                                         pbw_value_new_string("v")));
+                if (k == bad) {
+                    saved = pbw_message_get(e, 1)->as.bytes.data;
+                    pbw_message_get(e, 1)->as.bytes.data = NULL;
+                }
+            }
+            CHECK_STATUS(PBW_ERR_INVALID, pbw_json_print(m, &out, &len));
+            CHECK(out == NULL && len == 0);
+            pbw_message_clear(m, 16);
+            free(saved);
+        }
+        /* Map: two entries (the legacy scan compares the later key) ... */
+        e = pbw_message_set_message(m, 20);
+        CHECK(e != NULL);
+        CHECK_OK(pbw_message_set(e, 1, pbw_value_new_string("a")));
+        CHECK_OK(pbw_message_set(e, 2, pbw_value_new_uint(1)));
+        e = pbw_message_set_message(m, 20);
+        CHECK(e != NULL);
+        CHECK_OK(pbw_message_set(e, 1, pbw_value_new_string("b")));
+        CHECK_OK(pbw_message_set(e, 2, pbw_value_new_uint(2)));
+        saved = pbw_message_get(e, 1)->as.bytes.data;
+        pbw_message_get(e, 1)->as.bytes.data = NULL;
+        CHECK_STATUS(PBW_ERR_INVALID, pbw_json_print(m, &out, &len));
+        CHECK(out == NULL && len == 0);
+        /* ... and the deterministic sort compares keys before any writer. */
+        CHECK_STATUS(PBW_ERR_INVALID, pbw_encode_deterministic(m, &buf, &len));
+        CHECK(buf == NULL && len == 0);
+        pbw_message_clear(m, 20);
+        free(saved);
+        /* More than 32 entries take the precomputed sort path: a corrupt key
+         * must fall back to the scan, not reach j_flatkey_cmp. */
+        saved = NULL;
+        for (i = 0; i < 33; i++) {
+            e = pbw_message_set_message(m, 20);
+            CHECK(e != NULL);
+            CHECK_OK(pbw_message_set(e, 1, pbw_value_new_string("k")));
+            CHECK_OK(pbw_message_set(e, 2, pbw_value_new_uint((uint64_t)i)));
+            if (i == 10) {
+                saved = pbw_message_get(e, 1)->as.bytes.data;
+                pbw_message_get(e, 1)->as.bytes.data = NULL;
+            }
+        }
+        CHECK_STATUS(PBW_ERR_INVALID, pbw_json_print(m, &out, &len));
+        CHECK(out == NULL && len == 0);
+        pbw_message_free(m);
+        free(saved);
+    }
+
     check_json_prefix_sweep(msg);
     pbw_schema_free(schema);
 }
