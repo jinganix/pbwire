@@ -502,6 +502,13 @@ j_value_is_empty(const pbw_message *msg)
 {
     size_t i;
 
+    if (!pbw_msg_fresh(msg)) {
+        /* A retired message has fewer slots than its live descriptor, so the
+         * scan below would read past them; and answering "empty" would drop
+         * the element instead of reporting it. Callers take 0 as "not empty"
+         * and hand it to j_print_message(), which reports PBW_ERR_INVALID. */
+        return 0;
+    }
     for (i = 0; i < msg->desc->field_count; i++) {
         if (pbw_msg_present(msg, i)) {
             return 0;
@@ -576,7 +583,10 @@ j_print_scalar(j_out *j, const pbw_field *field, const pbw_value *value)
             data = value->as.bytes.data;
             len = value->as.bytes.len;
         }
-        j_quoted(j, data == NULL ? (const uint8_t *)"" : data, len);
+        /* Pass data through: j_quoted() rejects a NULL payload with a
+         * length, and substituting "" here turned that into a read past the
+         * literal. */
+        j_quoted(j, data, len);
         break;
     }
     case PBW_TYPE_BYTES: {
@@ -587,7 +597,7 @@ j_print_scalar(j_out *j, const pbw_field *field, const pbw_value *value)
             data = value->as.bytes.data;
             len = value->as.bytes.len;
         }
-        j_base64(j, data == NULL ? (const uint8_t *)"" : data, len);
+        j_base64(j, data, len); /* same rule as the string branch above */
         break;
     }
     case PBW_TYPE_ENUM: {
@@ -659,7 +669,7 @@ j_print_map_key(j_out *j, const pbw_field *key_field, const pbw_value *key)
         {
             size_t before = j->buf.len;
 
-            j_quoted(j, data == NULL ? (const uint8_t *)"" : data, len);
+            j_quoted(j, data, len);
             if (j->status == PBW_OK && j->buf.len >= before + 2) {
                 memmove(j->buf.data + before, j->buf.data + before + 1,
                         j->buf.len - before - 2);
@@ -763,6 +773,19 @@ j_idx_sort(const j_flatkey *keys, size_t *idx, size_t *tmp, size_t n)
     memcpy(idx, tmp, n * sizeof(*idx));
 }
 
+/* A list with items but no item array is corrupt: fail instead of reading
+ * NULL[0]. No producer builds one, but the text printer and the encoder
+ * already guard it, so the JSON printer does too. */
+static int
+j_list_items_ok(j_out *j, const pbw_value *list)
+{
+    if (list->as.list.len > 0 && list->as.list.items == NULL) {
+        j->status = PBW_ERR_INVALID;
+        return 0;
+    }
+    return 1;
+}
+
 /* Marks entries shadowed by a later equal key in caller-owned, zeroed
  * skip[]: 1 = keep the legacy loop (small maps and malformed input),
  * -1 = out of memory, 0 = skip[] filled. */
@@ -798,6 +821,13 @@ j_map_winners(const pbw_value *list, uint8_t *skip)
             return 1;
         }
         key = pbw_message_get(item->as.msg, 1);
+        if (key != NULL && key->kind == PBW_VALUE_BYTES &&
+            !pbw_bytes_readable(key)) {
+            /* A payload that cannot exist: the legacy path below reports it
+             * with a status, before any sort compares key bytes. */
+            free(block);
+            return 1;
+        }
         keys[i].has_key = key != NULL;
         if (key == NULL) {
             static const pbw_value zero = {PBW_VALUE_UINT, 0, {0}};
@@ -860,6 +890,9 @@ j_print_map(j_out *j, const pbw_field *field, const pbw_value *list)
         j->status = PBW_ERR_INVALID;
         return;
     }
+    if (!j_list_items_ok(j, list)) {
+        return;
+    }
     /* Binary input may repeat a key (last wins); JSON objects cannot.
      * Past a few dozen entries the per-item later-scan turns quadratic,
      * so large maps precompute the shadowed entries once by sorting. */
@@ -896,7 +929,9 @@ j_print_map(j_out *j, const pbw_field *field, const pbw_value *list)
         int last = 1;
 
         if (item == NULL || item->kind != PBW_VALUE_MESSAGE ||
-            item->as.msg == NULL) {
+            item->as.msg == NULL || !pbw_msg_fresh(item->as.msg)) {
+            /* A retired entry (add_field/link after it was built) has no key
+             * or value to read: printing its defaults would silently drop it. */
             j->status = PBW_ERR_INVALID;
             free(skip);
             return;
@@ -909,6 +944,13 @@ j_print_map(j_out *j, const pbw_field *field, const pbw_value *list)
             static const pbw_value zero = {PBW_VALUE_UINT, 0, {0}};
 
             key = &zero;
+        }
+        if (key->kind == PBW_VALUE_BYTES && !pbw_bytes_readable(key)) {
+            /* A key payload that cannot exist fails the print here, before
+             * the duplicate scan below compares it. */
+            j->status = PBW_ERR_INVALID;
+            free(skip);
+            return;
         }
         if (val == NULL) {
             static const pbw_value zero = {PBW_VALUE_UINT, 0, {0}};
@@ -942,6 +984,7 @@ j_print_map(j_out *j, const pbw_field *field, const pbw_value *list)
                 }
                 if (key->kind == PBW_VALUE_BYTES) {
                     if (later_key->as.bytes.len == key->as.bytes.len &&
+                        pbw_bytes_readable(later_key) &&
                         memcmp(later_key->as.bytes.data, key->as.bytes.data,
                                key->as.bytes.len) == 0) {
                         last = 0;
@@ -987,6 +1030,9 @@ j_print_repeated(j_out *j, const pbw_field *field, const pbw_value *list)
     if (field->type == PBW_TYPE_MESSAGE && field->sub != NULL &&
         field->sub->map_entry) {
         j_print_map(j, field, list);
+        return;
+    }
+    if (!j_list_items_ok(j, list)) {
         return;
     }
     j_ch(j, '[');
@@ -1139,6 +1185,9 @@ j_print_fieldmask(j_out *j, const pbw_message *msg)
 
     j_ch(j, '"');
     if (paths != NULL && paths->kind == PBW_VALUE_LIST) {
+        if (!j_list_items_ok(j, paths)) {
+            return;
+        }
         for (i = 0; i < paths->as.list.len; i++) {
             const pbw_value *item = paths->as.list.items[i];
             const uint8_t *p;
@@ -1146,7 +1195,8 @@ j_print_fieldmask(j_out *j, const pbw_message *msg)
             size_t k;
             int saw_under = 0;
 
-            if (item == NULL || item->kind != PBW_VALUE_BYTES) {
+            if (item == NULL || item->kind != PBW_VALUE_BYTES ||
+                !pbw_bytes_readable(item)) {
                 j->status = PBW_ERR_INVALID;
                 return;
             }
@@ -1269,6 +1319,13 @@ j_print_struct_value(j_out *j, const pbw_message *msg)
         }
         return;
     }
+    if (!pbw_msg_fresh(msg)) {
+        /* Struct/ListValue print their body here instead of going through
+         * j_print_message(), so they need the same stale rule: a retired
+         * inner message must fail, not print as an empty {} / []. */
+        j->status = PBW_ERR_INVALID;
+        return;
+    }
     fields = pbw_message_get(msg, 1);
     size_t i;
     size_t k;
@@ -1276,6 +1333,9 @@ j_print_struct_value(j_out *j, const pbw_message *msg)
 
     j_ch(j, '{');
     if (fields != NULL && fields->kind == PBW_VALUE_LIST) {
+        if (!j_list_items_ok(j, fields)) {
+            return;
+        }
         for (i = 0; i < fields->as.list.len; i++) {
             const pbw_value *item = fields->as.list.items[i];
             const pbw_message *m;
@@ -1292,7 +1352,7 @@ j_print_struct_value(j_out *j, const pbw_message *msg)
             key = pbw_message_get(m, 1);
             val = pbw_message_get(m, 2);
             if (key == NULL || key->kind != PBW_VALUE_BYTES ||
-                val == NULL) {
+                val == NULL || !pbw_bytes_readable(key)) {
                 j->status = PBW_ERR_INVALID;
                 return;
             }
@@ -1310,6 +1370,7 @@ j_print_struct_value(j_out *j, const pbw_message *msg)
                 if (later_key != NULL &&
                     later_key->kind == PBW_VALUE_BYTES &&
                     later_key->as.bytes.len == key->as.bytes.len &&
+                    pbw_bytes_readable(later_key) &&
                     memcmp(later_key->as.bytes.data, key->as.bytes.data,
                            key->as.bytes.len) == 0) {
                     last = 0;
@@ -1354,10 +1415,20 @@ j_print_list_value(j_out *j, const pbw_message *msg)
         }
         return;
     }
+    if (!pbw_msg_fresh(msg)) {
+        /* Struct/ListValue print their body here instead of going through
+         * j_print_message(), so they need the same stale rule: a retired
+         * inner message must fail, not print as an empty {} / []. */
+        j->status = PBW_ERR_INVALID;
+        return;
+    }
     values = pbw_message_get(msg, 1);
 
     j_ch(j, '[');
     if (values != NULL && values->kind == PBW_VALUE_LIST) {
+        if (!j_list_items_ok(j, values)) {
+            return;
+        }
         size_t i;
         int first = 1;
 
@@ -1407,6 +1478,11 @@ j_print_any(j_out *j, const pbw_message *msg)
         return;
     }
     if (url_v->kind == PBW_VALUE_BYTES) {
+        if (!pbw_bytes_readable(url_v)) {
+            /* The type name is scanned below, before any quoting. */
+            j->status = PBW_ERR_INVALID;
+            return;
+        }
         url = url_v->as.bytes.data;
         url_len = url_v->as.bytes.len;
     }
@@ -1659,6 +1735,13 @@ static void
 j_print_message(j_out *j, const pbw_message *msg)
 {
     if (j == NULL || j->status != PBW_OK) {
+        return;
+    }
+    if (!pbw_msg_fresh(msg)) {
+        /* A nested message retired by a later add_field (or link) has a
+         * shorter slot array than its live descriptor: walking it would
+         * read past the slots. The root is already checked on entry. */
+        j->status = PBW_ERR_INVALID;
         return;
     }
     if (j->depth >= PBW_MAX_DEPTH) {
@@ -2991,7 +3074,7 @@ j_parse_timestamp(j_in *j, pbw_message *msg)
     uint32_t y_adj;
     uint32_t month_days;
     uint32_t leap_days;
-    int32_t epoch_days;
+    int64_t epoch_days;
     uint32_t parts[6];
     const char *suffix[6] = {"-", "-", "T", ":", ":", ""};
 
@@ -3115,10 +3198,13 @@ j_parse_timestamp(j_in *j, pbw_message *msg)
     y_adj = year + 4800 - carry;
     month_days = (m_adj * 62719 + 769) / 2048;
     leap_days = y_adj / 4 - y_adj / 100 + y_adj / 400;
-    epoch_days = (int32_t)(y_adj * 365 + leap_days + month_days + (day - 1) -
-                           2472632);
-    secs = (int64_t)epoch_days * 86400 + (int64_t)hour * 3600 +
-           (int64_t)min * 60 + (int64_t)sec;
+    /* int64 math: a date before 1970 lands below the 2472632 offset, and an
+     * unsigned subtraction there would wrap and lean on the int32 conversion
+     * to come back out negative. */
+    epoch_days = (int64_t)y_adj * 365 + leap_days + month_days + (day - 1) -
+                 2472632;
+    secs = epoch_days * 86400 + (int64_t)hour * 3600 + (int64_t)min * 60 +
+           (int64_t)sec;
     if (*data == 'Z') {
         if (left != 1) {
             pbw_buf_free(&raw);
@@ -3524,6 +3610,9 @@ j_check_duplicate_keys(const pbw_value *list)
 
     if (list == NULL || list->kind != PBW_VALUE_LIST || list->as.list.len < 2) {
         return PBW_OK;
+    }
+    if (list->as.list.items == NULL) {
+        return PBW_ERR_INVALID;
     }
     n = list->as.list.len;
     while (cap < n * 2) {

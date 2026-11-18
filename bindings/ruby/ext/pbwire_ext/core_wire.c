@@ -696,6 +696,9 @@ pbw_format_g_c(char *buf, size_t cap, int precision, double value)
             seplen++;
         }
     }
+    /* snprintf counted every byte it wrote (`n` includes the separator) and
+     * the separator is always followed by a fraction digit, so the memmove
+     * length below cannot wrap. */
     *p = '.';
     memmove(p + 1, p + seplen,
             (size_t)n - (size_t)(p - buf) - seplen + 1);

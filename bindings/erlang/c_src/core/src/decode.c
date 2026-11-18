@@ -1461,6 +1461,11 @@ decode_message(pbw_arena *arena, const pbw_descriptor *desc, const uint8_t *buf,
         /* Root only: nested messages recurse with depth + 1. The encode
          * pre-size reads exactly this, so nested trees need no copy. */
         msg->wire_len = len;
+    } else {
+        /* Nested results are installed in a parent (or merged and dropped):
+         * mark them owned here so the store boundary's duplicate check holds
+         * for decoded children too, exactly like pbw_message_put(). */
+        msg->stored = 1;
     }
     *out = msg;
     return PBW_OK;

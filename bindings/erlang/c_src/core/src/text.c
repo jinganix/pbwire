@@ -723,6 +723,12 @@ t_print_message(text_out *t, const pbw_message *msg, uint32_t depth)
     if (t->status != PBW_OK) {
         return;
     }
+    if (!pbw_msg_fresh(msg)) {
+        /* Same retired-nested-message rule as the JSON printer: the slot
+         * array is shorter than the live descriptor. */
+        t->status = PBW_ERR_INVALID;
+        return;
+    }
     if (depth > PBW_MAX_DEPTH) {
         t->status = PBW_ERR_LIMIT;
         return;
