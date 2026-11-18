@@ -1160,7 +1160,7 @@ test_hostile_arguments(pbw_schema *schema)
         v = pbw_value_new_string("hi");
         CHECK(list != NULL && v != NULL);
         CHECK(pbw_value_list_push(list, v, NULL) != 0);
-        saved = list->as.list.items;
+        saved = list->as.list.items[0];
         list->as.list.items[0] = NULL;
         CHECK_STATUS(PBW_ERR_INVALID, pbw_message_encoded_size(m, &size));
         CHECK(size == 0);
@@ -1173,7 +1173,7 @@ test_hostile_arguments(pbw_schema *schema)
         CHECK(out == NULL && len == 0);
         CHECK_STATUS(PBW_ERR_INVALID, pbw_text_print(m, &out, &len));
         CHECK(out == NULL && len == 0);
-        list->as.list.items = saved;
+        list->as.list.items[0] = saved;
         pbw_message_free(m);
         pbw_schema_free(s);
     }
