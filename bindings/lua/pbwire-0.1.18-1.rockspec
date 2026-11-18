@@ -3,10 +3,10 @@
 -- `source.dir` on every bump (the filename must stay
 -- pbwire-<VERSION>-1.rockspec to match).
 package = "pbwire"
-version = "0.1.17-1"
+version = "0.1.18-1"
 source = {
-  url = "https://github.com/jinganix/pbwire/archive/refs/tags/v0.1.17.tar.gz",
-  dir = "pbwire-0.1.17",
+  url = "https://github.com/jinganix/pbwire/archive/refs/tags/v0.1.18.tar.gz",
+  dir = "pbwire-0.1.18",
 }
 description = {
   summary = "Protobuf wire codec: Lua tables through the pbwire C core",
