@@ -568,7 +568,7 @@ static HashTable *type_get_gc(zend_object *o, zval **table, int *n) {
     type_obj *t = type_from(o);
 
     if (Z_TYPE(t->fields) == IS_ARRAY) {
-        *table = Z_ARRVAL(t->fields);
+        *table = &t->fields;
         *n = 1;
     } else {
         *n = 0;
