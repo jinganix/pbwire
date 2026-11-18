@@ -63,7 +63,8 @@ jobs:
   # red means a binding broke, not the core (the core gate is `make test`).
   bindings:
     name: All host bindings (ubuntu)
-    runs-on: ubuntu-latest
+    # Pinned: setup-beam v1.24.0 cannot map the 26.04 runner image.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
       - name: Core shared library for the FFI bindings
@@ -163,7 +164,8 @@ jobs:
   # Split from the Apple pair below because Swift/ObjC need macOS.
   codegen-linux:
     name: Generated models (linux bindings)
-    runs-on: ubuntu-latest
+    # Pinned: setup-beam v1.24.0 cannot map the 26.04 runner image.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
       - name: Cache pinned protobuf checkout

@@ -185,7 +185,8 @@ jobs:
   hex:
     name: Hex (bindings/erlang)
     needs: validate
-    runs-on: ubuntu-latest
+    # Pinned: setup-beam v1.24.0 cannot map the 26.04 runner image.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
       - uses: erlef/setup-beam@v1.24.0
@@ -206,7 +207,8 @@ jobs:
     # pbwire_elixir depends on the :pbwire NIF (~> 0.1), so it publishes
     # after the Erlang job puts the same VERSION on Hex.
     needs: hex
-    runs-on: ubuntu-latest
+    # Pinned: setup-beam v1.24.0 cannot map the 26.04 runner image.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
       - uses: erlef/setup-beam@v1.24.0
