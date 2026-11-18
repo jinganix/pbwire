@@ -1359,7 +1359,7 @@ test_hostile_arguments(pbw_schema *schema)
         stale = pbw_message_new(sub);
         CHECK(stale != NULL);
         for (i = 2; i <= 8; i++) {
-            char name[8];
+            char name[16];
 
             snprintf(name, sizeof(name), "f%d", i);
             CHECK(pbw_message_add_field(sub, name, (uint32_t)i,
