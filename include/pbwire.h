@@ -284,6 +284,9 @@ const pbw_descriptor *pbw_field_message_type(const pbw_field *field);
  * descriptor must be linked (pbw_schema_link() returned PBW_OK), because field
  * lookup relies on the number-sorted field array the link builds. */
 pbw_message *pbw_message_new(const pbw_descriptor *desc);
+/* Frees a message the caller owns and everything under it. A submessage
+ * handed out by a parent (pbw_message_set_message(), a decoded tree) is owned
+ * by that parent, so freeing it here is a no-op, like arena memory. */
 void pbw_message_free(pbw_message *msg);
 const pbw_descriptor *pbw_message_descriptor(const pbw_message *msg);
 /* Wire length this tree was decoded from, 0 when it was built by hand. A
@@ -295,7 +298,8 @@ size_t pbw_message_wire_size(const pbw_message *msg);
  * the length before encoding (a length-prefixed frame, a pre-sized buffer)
  * this costs less than encoding twice. Deterministic encoding produces the
  * same length. PBW_ERR_LIMIT when nesting exceeds PBW_MAX_DEPTH, PBW_ERR_INVALID
- * on a NULL submessage. */
+ * on a NULL submessage or a message retired by a later schema change; *len is
+ * 0 on every failure. */
 pbw_status pbw_message_encoded_size(const pbw_message *msg, size_t *len);
 /* Slack pbw_encode_to() needs past pbw_message_encoded_size(): the writer
  * reserves tag/varint room upfront, so `size + PBW_ENCODE_SLACK` is the
@@ -328,7 +332,11 @@ const pbw_field *pbw_message_field_at(const pbw_message *msg, size_t index,
  * stands (the reference serializer does the same). Always 1 for proto3
  * messages that contain no proto2 submessage. */
 int pbw_message_is_initialized(const pbw_message *msg);
-/* Drop a field value (and, for a oneof, the group case). */
+/* Drop a field value (and, for a oneof, the group case). A submessage the
+ * field owned is released with it; one that lives in the tree's arena
+ * survives the release unowned, so it can be stored into another field. While
+ * detached it rejects stores (nothing would release what it grew there) and
+ * becomes writable again once a tree owns it. */
 void pbw_message_clear(pbw_message *msg, uint32_t number);
 
 /* Unknown fields kept from decoding, as raw wire bytes (each item is its
@@ -347,7 +355,13 @@ pbw_status pbw_message_add_unknown_bytes(pbw_message *msg, const void *data,
  * instead. A message built with pbw_message_new_ctx() only accepts values
  * built with the matching pbw_value_new_*_ctx() constructor (also
  * PBW_ERR_INVALID): the context arena frees by reset, so it cannot own a heap
- * payload. A plain-decoded tree accepts both. */
+ * payload. A plain-decoded tree accepts both. A message value must be able to
+ * die with the tree that takes it: it shares this tree's arena, or it owns an
+ * arena this tree releases (an adopted pbw_decode() root); a message from
+ * another context's arena is rejected the same way. A message that would
+ * become its own ancestor (its subtree already holds this message) is
+ * refused too, since a later clear() or free() would release the arena it
+ * is walking inside. */
 pbw_status pbw_message_set(pbw_message *msg, uint32_t number, pbw_value *value);
 /* Same as pbw_message_set() for an already-resolved field of the message's
  * descriptor (PBW_ERR_INVALID when it belongs elsewhere); skips the number

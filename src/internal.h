@@ -363,6 +363,16 @@ pbw_msg_fresh(const pbw_message *msg)
            msg->epoch == msg->desc->epoch;
 }
 
+/* 1 when a bytes/string payload of `value` can be read: a zero length may
+ * carry NULL, a longer payload must have a pointer. The constructors and
+ * decode guarantee it, and pbw_message_put() refuses the shape, so only a
+ * slot poked by hand can hold it; no reader may touch that. */
+PBW_INLINE int
+pbw_bytes_readable(const pbw_value *value)
+{
+    return value->as.bytes.len == 0 || value->as.bytes.data != NULL;
+}
+
 /* A message keeps its values inline: one allocation holds the struct, the value
  * slots, the presence bitmap and the oneof cases. */
 static inline int
@@ -915,6 +925,12 @@ pbw_value_list_push(pbw_value *list, pbw_value *item, pbw_arena *arena)
         list->as.list.len == UINT32_MAX) {
         return 0;
     }
+    if (list->as.list.items == NULL &&
+        (list->as.list.len > 0 || list->as.list.cap > 0)) {
+        /* Corrupt list (capacity or items but no array): every append would
+         * write through NULL. Refuse instead. */
+        return 0;
+    }
     if (list->as.list.len == list->as.list.cap) {
         uint32_t cap = list->as.list.cap ? list->as.list.cap * 2u : 8u;
         size_t bytes;
@@ -950,8 +966,13 @@ pbw_value_list_push(pbw_value *list, pbw_value *item, pbw_arena *arena)
     }
     /* The list owns the wrapper from here on: pbw_value_free() on an item
      * handed out by pbw_value_at() is the documented no-op, and the list
-     * destroy path releases the wrapper itself. */
+     * destroy path releases the wrapper itself. A message item is owned
+     * from here on too, so every push site (decode, set, the JSON and text
+     * parsers) marks it owned in this one place. */
     item->flags |= PBW_VF_EMBEDDED;
+    if (item->kind == PBW_VALUE_MESSAGE && item->as.msg != NULL) {
+        item->as.msg->stored = 1;
+    }
     list->as.list.items[list->as.list.len++] = item;
     return 1;
 }
