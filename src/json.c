@@ -113,6 +113,12 @@ j_field_by_name(const pbw_descriptor *desc, const char *key, size_t len,
         const pbw_field *f = &desc->fields[i];
         size_t n = strlen(f->name);
 
+        /* Extensions are addressable only as "[full.name]"; a plain key must
+         * not resolve to one, or it would shadow a regular field or accept a
+         * spelling the JSON mapping does not define. */
+        if (f->is_extension) {
+            continue;
+        }
         /* Camelizing drops underscores, so the JSON spelling can be shorter
          * than the proto name; only a name without one is length-checked,
          * which keeps the hot path at one compare. */
@@ -128,6 +134,9 @@ j_field_by_name(const pbw_descriptor *desc, const char *key, size_t len,
     for (i = 0; i < desc->field_count; i++) {
         const pbw_field *f = &desc->fields[i];
 
+        if (f->is_extension) {
+            continue;
+        }
         if (strlen(f->name) == len && memcmp(f->name, key, len) == 0) {
             *out = f;
             return 1;
@@ -136,6 +145,9 @@ j_field_by_name(const pbw_descriptor *desc, const char *key, size_t len,
     for (i = 0; i < desc->field_count; i++) {
         const pbw_field *f = &desc->fields[i];
 
+        if (f->is_extension) {
+            continue;
+        }
         j_json_name(f->name, tmp, sizeof(tmp));
         if (strlen(tmp) == len && memcmp(tmp, key, len) == 0) {
             *out = f;
@@ -2213,6 +2225,9 @@ j_atod(const char *text, size_t len, double *out)
     if (text == NULL || out == NULL) {
         return PBW_ERR_INVALID;
     }
+    if (len > 0 && memchr(text, 0, len) != NULL) {
+        return PBW_ERR_INVALID;
+    }
     /* strtod skips leading whitespace itself, but not trailing garbage. A
      * number longer than the stack buffer is unusual, not invalid: the
      * reference parser has no length limit either. */
@@ -2227,9 +2242,6 @@ j_atod(const char *text, size_t len, double *out)
     }
     memcpy(tmp, text, len);
     tmp[len] = '\0';
-    if (tmp == NULL) {
-        return PBW_ERR_INVALID;
-    }
     v = pbw_strtod_c(tmp, &stop);
     if (stop == tmp) {
         goto invalid;
@@ -2264,7 +2276,7 @@ j_atob(const char *text, size_t len, int *out)
     char lower[8];
     size_t i;
 
-    if (len >= sizeof(lower)) {
+    if (len >= sizeof(lower) || (len > 0 && memchr(text, 0, len) != NULL)) {
         return PBW_ERR_INVALID;
     }
     for (i = 0; i < len; i++) {
@@ -2804,9 +2816,9 @@ j_parse_scalar_value(j_in *j, pbw_message *msg, const pbw_field *field)
             pbw_buf raw;
 
             pbw_buf_init(&raw);
-            if (j_parse_string(j, &raw) != PBW_OK) {
+            if ((st = j_parse_string(j, &raw)) != PBW_OK) {
                 pbw_buf_free(&raw);
-                return PBW_ERR_INVALID;
+                return st;
             }
             st = j_parse_double_value(j, (const char *)raw.data, raw.len,
                                       field->type == PBW_TYPE_FLOAT, &v);
@@ -2865,9 +2877,9 @@ j_parse_scalar_value(j_in *j, pbw_message *msg, const pbw_field *field)
             pbw_buf raw;
 
             pbw_buf_init(&raw);
-            if (j_parse_string(j, &raw) != PBW_OK) {
+            if ((st = j_parse_string(j, &raw)) != PBW_OK) {
                 pbw_buf_free(&raw);
-                return PBW_ERR_INVALID;
+                return st;
             }
             st = j_parse_int_value(j, (const char *)raw.data, raw.len, 1,
                                    is_signed, bits32, &bits);
@@ -2898,9 +2910,9 @@ j_parse_scalar_value(j_in *j, pbw_message *msg, const pbw_field *field)
             pbw_status st;
 
             pbw_buf_init(&raw);
-            if (j_parse_string(j, &raw) != PBW_OK) {
+            if ((st = j_parse_string(j, &raw)) != PBW_OK) {
                 pbw_buf_free(&raw);
-                return PBW_ERR_INVALID;
+                return st;
             }
             st = j_atob((const char *)raw.data, raw.len, &flag);
             pbw_buf_free(&raw);
@@ -2921,9 +2933,9 @@ j_parse_scalar_value(j_in *j, pbw_message *msg, const pbw_field *field)
             return PBW_ERR_INVALID;
         }
         pbw_buf_init(&raw);
-        if (j_parse_string(j, &raw) != PBW_OK) {
+        if ((st = j_parse_string(j, &raw)) != PBW_OK) {
             pbw_buf_free(&raw);
-            return PBW_ERR_INVALID;
+            return st;
         }
         if (field->type == PBW_TYPE_STRING) {
             st = j_store_bytes(j, msg, field, raw.data, raw.len);
@@ -2957,6 +2969,7 @@ j_parse_enum_value(j_in *j, pbw_message *msg, const pbw_field *field,
 {
     j_kind kind = j_peek_kind(j);
     int32_t number = 0;
+    pbw_status est;
 
     *stored = 1;
     if (kind == JK_STR) {
@@ -2965,15 +2978,18 @@ j_parse_enum_value(j_in *j, pbw_message *msg, const pbw_field *field,
         size_t len;
 
         pbw_buf_init(&raw);
-        if (j_parse_string(j, &raw) != PBW_OK ||
-            !pbw_buf_reserve(&raw, 1)) {
+        if ((est = j_parse_string(j, &raw)) != PBW_OK) {
             pbw_buf_free(&raw);
-            return PBW_ERR_INVALID;
+            return est;
+        }
+        if (!pbw_buf_reserve(&raw, 1)) {
+            pbw_buf_free(&raw);
+            return PBW_ERR_NOMEM;
         }
         raw.data[raw.len] = '\0';
         text = (const char *)raw.data;
         len = raw.len;
-        if (field->sub != NULL &&
+        if (field->sub != NULL && memchr(text, 0, len) == NULL &&
             pbw_enum_find_value(field->sub, text, &number)) {
             pbw_buf_free(&raw);
         } else {
@@ -3077,6 +3093,7 @@ j_parse_timestamp(j_in *j, pbw_message *msg)
     int64_t epoch_days;
     uint32_t parts[6];
     const char *suffix[6] = {"-", "-", "T", ":", ":", ""};
+    pbw_status st;
 
     secs_field = j_time_field(msg->desc, 1, PBW_TYPE_INT64);
     nanos_field = j_time_field(msg->desc, 2, PBW_TYPE_INT32);
@@ -3087,9 +3104,9 @@ j_parse_timestamp(j_in *j, pbw_message *msg)
         return j_expect_lit(j, "null");
     }
     pbw_buf_init(&raw);
-    if (j_parse_string(j, &raw) != PBW_OK) {
+    if ((st = j_parse_string(j, &raw)) != PBW_OK) {
         pbw_buf_free(&raw);
-        return PBW_ERR_INVALID;
+        return st;
     }
     /* strptime-free: fixed offsets, exactly like the reference. */
     data = (const char *)raw.data;
@@ -3296,6 +3313,7 @@ j_parse_duration(j_in *j, pbw_message *msg)
     const char *rest;
     size_t rest_len;
     size_t i;
+    pbw_status st;
     const pbw_field *secs_field =
         j_time_field(msg->desc, 1, PBW_TYPE_INT64);
     const pbw_field *nanos_field =
@@ -3308,9 +3326,9 @@ j_parse_duration(j_in *j, pbw_message *msg)
         return j_expect_lit(j, "null");
     }
     pbw_buf_init(&raw);
-    if (j_parse_string(j, &raw) != PBW_OK) {
+    if ((st = j_parse_string(j, &raw)) != PBW_OK) {
         pbw_buf_free(&raw);
-        return PBW_ERR_INVALID;
+        return st;
     }
     /* NUL-terminate for the integer scan. */
     if (!pbw_buf_reserve(&raw, 1)) {
@@ -3390,14 +3408,15 @@ j_parse_fieldmask(j_in *j, pbw_message *msg)
     const pbw_field *paths;
     const char *p;
     const char *end;
+    pbw_status st;
 
     if (j_peek_kind(j) == JK_NULL) {
         return j_expect_lit(j, "null");
     }
     pbw_buf_init(&raw);
-    if (j_parse_string(j, &raw) != PBW_OK) {
+    if ((st = j_parse_string(j, &raw)) != PBW_OK) {
         pbw_buf_free(&raw);
-        return PBW_ERR_INVALID;
+        return st;
     }
     paths = pbw_descriptor_find_field(msg->desc, 1);
     if (paths == NULL) {
@@ -3478,7 +3497,9 @@ j_parse_value_msg(j_in *j, pbw_message *msg)
         double d;
 
         if (j_parse_raw(j, &text, &len) != PBW_OK ||
-            j_atod(text, len, &d) != PBW_OK) {
+            j_atod(text, len, &d) != PBW_OK || !isfinite(d)) {
+            /* JSON has no spelling for a number past a double's range; the
+             * plain double field path rejects the same token. */
             return PBW_ERR_INVALID;
         }
         {
@@ -3496,9 +3517,9 @@ j_parse_value_msg(j_in *j, pbw_message *msg)
         pbw_status st;
 
         pbw_buf_init(&raw);
-        if (j_parse_string(j, &raw) != PBW_OK) {
+        if ((st = j_parse_string(j, &raw)) != PBW_OK) {
             pbw_buf_free(&raw);
-            return PBW_ERR_INVALID;
+            return st;
         }
         st = j_store_bytes(j, msg, f3, raw.data, raw.len);
         pbw_buf_free(&raw);
@@ -4213,11 +4234,11 @@ j_parse_any(j_in *j, pbw_message *msg)
                 return PBW_ERR_INVALID;
             }
             pbw_buf_init(&raw);
-            if (j_parse_string(j, &raw) != PBW_OK) {
+            if ((ust = j_parse_string(j, &raw)) != PBW_OK) {
                 pbw_buf_free(&raw);
                 pbw_buf_free(&key);
                 j->depth = depth0;
-                return PBW_ERR_INVALID;
+                return ust;
             }
             /* The stored type_url is the full URL; resolution strips it. */
             ust = j_store_bytes(j, msg, url_field, raw.data, raw.len);
@@ -4276,7 +4297,8 @@ j_parse_any(j_in *j, pbw_message *msg)
             }
         }
         off = slash == NULL ? 0 : (size_t)(slash - url) + 1;
-        if (url_len - off >= sizeof(name)) {
+        if (url_len - off >= sizeof(name) ||
+            memchr(url + off, 0, url_len - off) != NULL) {
             return PBW_ERR_INVALID;
         }
         memcpy(name, url + off, url_len - off);
@@ -4405,7 +4427,9 @@ j_parse_named_field(j_in *j, pbw_message *msg, const uint8_t *key,
         }
         memcpy(name, key + 1, len - 2);
         name[len - 2] = '\0';
-        ext = msg->desc->schema == NULL
+        /* A name holding a NUL byte is no name: matching a prefix of it
+         * would resolve a field the caller did not spell. */
+        ext = msg->desc->schema == NULL || memchr(name, 0, len - 2) != NULL
                   ? NULL
                   : pbw_schema_find_extension(msg->desc->schema, name);
         if (ext == NULL) {

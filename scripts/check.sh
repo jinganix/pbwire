@@ -70,6 +70,12 @@ done
 # so a new src/*.c must be added in three more places.
 for f in src/*.c; do
   b=$(basename "$f")
+  # The Makefile's SRC list is the one place `make` links from: a missing
+  # entry is an undefined symbol for consumers of libpbwire.a.
+  grep -q "src/$b" Makefile || {
+    echo "check: Makefile SRC list missing src/$b" >&2
+    exit 1
+  }
   grep -q "\"$b\"" bindings/zig/build.zig || {
     echo "check: bindings/zig/build.zig core list missing $b" >&2
     exit 1

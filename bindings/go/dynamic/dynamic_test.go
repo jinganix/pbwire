@@ -384,6 +384,24 @@ func TestViewAfterRootClose(t *testing.T) {
 	}
 }
 
+// A closed schema must answer lookups with an error instead of reading the
+// freed C schema.
+func TestLookupAfterSchemaClose(t *testing.T) {
+	s, err := Load(testDesc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	typ, err := s.Message("structtest.Scalars3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	typ.Close()
+	s.Close()
+	if _, err := s.Message("structtest.Scalars3"); err == nil {
+		t.Fatal("message lookup after schema Close must fail")
+	}
+}
+
 // The encode buffer is sized from the last successful encode, so the paths
 // worth testing are the ones a warm hint never takes: a cold message that has
 // to grow (doubling), a message that grew past the stored hint (stale, small),

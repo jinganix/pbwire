@@ -37,8 +37,19 @@
     _ctx = NULL;
 }
 
+/* A wrapper the pool took back must not touch the workspace: the pool may
+ * have handed it to another owner. */
+- (void)requireLive
+{
+    if (_released) {
+        [NSException raise:NSInternalInconsistencyException
+                    format:@"pbwire: context was released to its pool"];
+    }
+}
+
 - (pbw_ctx *)ctx
 {
+    [self requireLive];
     return _ctx;
 }
 
@@ -50,30 +61,33 @@
 
 - (void)setRetainCap:(NSUInteger)retainCap
 {
+    [self requireLive];
     _retainCap = retainCap;
     pbw_ctx_set_retain_cap(_ctx, retainCap);
 }
 
 - (NSUInteger)usedBytes
 {
+    [self requireLive];
     return pbw_ctx_used(_ctx);
 }
 
 - (void)reset
 {
+    [self requireLive];
     pbw_ctx_reset(_ctx);
 }
 
 /* One-shot claim for -[PBWPool releaseContext:]: a second release of the same
  * wrapper must not push the same workspace into the freelist twice (that is a
  * double free the pool cannot see). */
-- (BOOL)markReleased
+- (pbw_ctx *)markReleased
 {
     if (_released) {
-        return NO;
+        return NULL;
     }
     _released = YES;
-    return YES;
+    return _ctx;
 }
 
 @end

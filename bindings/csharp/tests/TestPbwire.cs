@@ -163,6 +163,24 @@ using (var m = ty.NewMessage())
     var seen = 0;
     ty.Visit(w, f => { seen++; return f.Number != 0; });
     Check(seen > 0, "visit saw fields");
+    // A callback exception must not unwind through the native frame; the
+    // scan stops and the exception surfaces to the caller unchanged.
+    {
+        var thrown = new InvalidOperationException("boom");
+        var caught = false;
+        try
+        {
+            ty.Visit(w, f => throw thrown);
+        }
+        catch (InvalidOperationException e)
+        {
+            caught = ReferenceEquals(e, thrown);
+        }
+        Check(caught, "visit rethrows the callback exception");
+        var again = 0;
+        ty.Visit(w, f => { again++; return true; });
+        Check(again > 0, "visit still usable after a throw");
+    }
     Check(schema.ServiceCount() == 0, "no services in fixture");
     Check(Throws(() => schema.ResolveMethod("no.Such", "Nope")), "unknown service accepted");
 }

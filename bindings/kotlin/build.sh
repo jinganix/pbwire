@@ -63,23 +63,15 @@ jar xf "$jar"
 jar cf "$here/out/pbwire.jar" .
 cd "$here"
 
-case "$(uname -s)" in
-Darwin) lib=$root/build/libpbwire.dylib ;;
-*) lib=$root/build/libpbwire.so ;;
-esac
-
-java --enable-native-access=ALL-UNNAMED -Dpbwire.library="$lib" \
-    -cp "$here/out/pbwire.jar:$here/out/java-classes" TestPbwireKt \
+java -cp "$here/out/pbwire.jar:$here/out/java-classes" TestPbwireKt \
     "$root/bindings/c/tests/data/matrix3.desc"
-java --enable-native-access=ALL-UNNAMED -Dpbwire.library="$lib" \
-    -cp "$here/out/pbwire.jar:$here/out/java-classes" GeneratedTestKt \
+java -cp "$here/out/pbwire.jar:$here/out/java-classes" GeneratedTestKt \
     "$root/bindings/c/tests/data/matrix3.bin" "$root/codegen/testdata/oneof1.bin"
-java --enable-native-access=ALL-UNNAMED -Dpbwire.library="$lib" \
-    -cp "$here/out/pbwire.jar:$here/out/java-classes" RoundtripKt \
+java -cp "$here/out/pbwire.jar:$here/out/java-classes" RoundtripKt \
     "$root/examples/addressbook.bin"
 
 echo "built $here/out/pbwire.jar"
-echo "self-check: java --enable-native-access=ALL-UNNAMED -Dpbwire.library=$lib \\"
-echo "                 -cp $here/out/pbwire.jar:$here/out/java-classes TestPbwireKt $root/bindings/c/tests/data/matrix3.desc"
-echo "example:    java --enable-native-access=ALL-UNNAMED -Dpbwire.library=$lib \\"
-echo "                 -cp $here/out/pbwire.jar:$here/out/java-classes RoundtripKt $root/examples/addressbook.bin"
+echo "self-check: java -cp $here/out/pbwire.jar:$here/out/java-classes TestPbwireKt \\"
+echo "                 $root/bindings/c/tests/data/matrix3.desc"
+echo "example:    java -cp $here/out/pbwire.jar:$here/out/java-classes RoundtripKt \\"
+echo "                 $root/examples/addressbook.bin"

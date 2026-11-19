@@ -73,6 +73,19 @@ if [[ $CHECK == 1 ]]; then
   [ -f "$rock" ] || fail "lua rockspec missing ($rock)"
   expect "$rock" "^version = \"$VER-1\"$" "lua rockspec version"
   expect "$rock" "refs/tags/v$VER.tar.gz" "lua rockspec source url"
+  expect "$rock" "^  dir = \"pbwire-$VER\"" "lua rockspec dir"
+  # The Kotlin project version is not enough: the unanchored match above also
+  # passes when its pbwire-java dependency lags behind.
+  sed -n '/<artifactId>pbwire-java<\/artifactId>/,/<\/dependency>/p' \
+    bindings/kotlin/pom.xml | grep -q "<version>$VER</version>" ||
+    fail "kotlin pom: pbwire-java dependency version"
+  # The ABI number names the shared library on every platform; the three
+  # literals must move together.
+  abi=$(sed -n 's/^#define PBW_ABI_VERSION \([0-9]*\)$/\1/p' include/pbwire.h)
+  [ -n "$abi" ] || fail "include/pbwire.h: PBW_ABI_VERSION not found"
+  expect Makefile "-compatibility_version $abi" "Makefile darwin compatibility_version"
+  expect Makefile "soname,libpbwire.so.$abi" "Makefile linux soname"
+  expect CMakeLists.txt "SOVERSION $abi" "cmake SOVERSION"
   for f in bindings/python/setup.py bindings/ruby/pbwire.gemspec bindings/objc/PBWire.podspec bindings/clojure/build.clj; do
     grep -q "VERSION" "$f" || fail "$f: no longer reads the VERSION file"
   done

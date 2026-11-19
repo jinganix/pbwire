@@ -45,6 +45,7 @@ regen: build
 		--pbwire-c_out=$(CURDIR)/build/regen \
 		bindings/c/tests/data/matrix3.proto bindings/c/tests/data/matrix2.proto bindings/c/tests/data/maptest.proto bindings/c/tests/data/grouptest.proto bindings/c/tests/data/oneoftest.proto bindings/c/tests/data/extensiontest.proto
 	cp build/regen/matrix3.h build/regen/matrix2.h build/regen/maptest.h build/regen/grouptest.h build/regen/oneoftest.h build/regen/extensiontest.h ../tests/gen/
+	$(MAKE) regen-recur
 	$(PROTOC) -I$(ROOT) --include_imports \
 		--descriptor_set_out=$(ROOT)/bindings/c/tests/data/matrix3.desc \
 		bindings/c/tests/data/matrix3.proto
@@ -95,5 +96,25 @@ dump: build
 		--plugin=protoc-gen-dump=$(DUMP) \
 		--dump_out=$(CURDIR)/testdata/c/extensiontest \
 		bindings/c/tests/data/extensiontest.proto
+	PATH="$(CURDIR)/build:$$PATH" $(PROTOC) -I$(ROOT) \
+		--plugin=protoc-gen-dump=$(DUMP) \
+		--dump_out=$(CURDIR)/testdata/c/recur \
+		bindings/c/plugin/testdata/proto/recur.proto
 
-.PHONY: build test regen dump
+# Refresh the cross-file/recursive fixture: its dump, the descriptor sets its
+# headers name, and the pinned headers the golden test compares against.
+regen-recur: build
+	PATH="$(CURDIR)/build:$$PATH" $(PROTOC) -I$(ROOT) \
+		--plugin=protoc-gen-dump=$(DUMP) \
+		--dump_out=$(CURDIR)/testdata/c/recur \
+		bindings/c/plugin/testdata/proto/recur.proto
+	$(PROTOC) -I$(ROOT) --include_imports \
+		--descriptor_set_out=$(CURDIR)/testdata/proto/recur.desc \
+		bindings/c/plugin/testdata/proto/recur.proto
+	$(PROTOC) -I$(ROOT) --include_imports \
+		--descriptor_set_out=$(CURDIR)/testdata/proto/dep.desc \
+		bindings/c/plugin/testdata/proto/dep.proto
+	$(GO) run ./cmd/regen-headers testdata/c/recur/test.dump testdata/c/recur
+	@echo "refreshed testdata/c/recur; run 'go test ./...'"
+
+.PHONY: build test regen dump regen-recur

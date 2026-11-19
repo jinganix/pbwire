@@ -222,7 +222,7 @@ See `test/test_pbwire.js`.
 through this binding (`make conformance-node`):
 
 ```
-CONFORMANCE SUITE PASSED: 2745 successes, 0 skipped, 2 expected failures,
+CONFORMANCE SUITE PASSED: 2750 successes, 0 skipped, 2 expected failures,
 0 unexpected failures.
 CONFORMANCE SUITE PASSED: 443 successes, 0 skipped, 0 expected failures,
 0 unexpected failures.

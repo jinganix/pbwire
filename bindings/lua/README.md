@@ -53,7 +53,11 @@ steady use stops calling `malloc` after warmup: values allocate by bump
 pointer, the encoder reuses its buffer, and nothing is freed per call. Fill
 and decode run no metamethods (raw table access only: `lua_next` never
 consults `__index`/`__pairs`), so no reentrant call can reset the arena
-mid-use, and Lua states are single-threaded anyway.
+mid-use, and Lua states are single-threaded anyway. The one exception is the
+decode -> table direction: building those tables allocates, which can run a
+pending `__gc` finalizer, and a finalizer that calls a method on the *same*
+schema resets the arena the outer walk is still reading. Keep schema use out
+of finalizers.
 
 Fields are read in whatever order the table carries them: the core emits
 fields in descriptor order no matter the insertion order, so equal tables
@@ -170,7 +174,7 @@ must run first; `registry=false` drops `MESSAGE_NAMES` + `preload()`.
 reusing the cached protobuf checkout from `make conformance-setup`):
 
 ```
-CONFORMANCE SUITE PASSED: 2745 successes, 0 skipped, 2 expected failures,
+CONFORMANCE SUITE PASSED: 2750 successes, 0 skipped, 2 expected failures,
 0 unexpected failures.
 CONFORMANCE SUITE PASSED: 443 successes, 0 skipped, 0 expected failures,
 0 unexpected failures.

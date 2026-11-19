@@ -13,27 +13,31 @@
 #include "pbw_struct.h"
 #include "pbwire.h"
 
+typedef struct structtest_group_test_inner structtest_group_test_inner_t;
+typedef struct structtest_group_test_item structtest_group_test_item_t;
+typedef struct structtest_group_test structtest_group_test_t;
+
 /* structtest.GroupTest.Inner */
-typedef struct {
+struct structtest_group_test_inner {
     int32_t x; /* optional */
     int has_x;
     const char *s; /* optional */
-} structtest_group_test_inner_t;
+};
 
 /* structtest.GroupTest.Item */
-typedef struct {
+struct structtest_group_test_item {
     int32_t v; /* optional */
     int has_v;
-} structtest_group_test_item_t;
+};
 
 /* structtest.GroupTest */
-typedef struct {
+struct structtest_group_test {
     structtest_group_test_inner_t *inner; /* optional, structtest.GroupTest.Inner */
     structtest_group_test_item_t *item;
     size_t n_item;
     int32_t id; /* optional */
     int has_id;
-} structtest_group_test_t;
+};
 
 static const pbw_struct_field_t structtest_group_test_inner_fields[] = {
     {2, PBW_SF_INT32, 0, offsetof(structtest_group_test_inner_t, x), offsetof(structtest_group_test_inner_t, has_x), 0, 0, 0, NULL, 0, PBW_TYPE_INT32, 0, 0, 0, 0, 0},

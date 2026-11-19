@@ -11,6 +11,7 @@
 // checkout (`make shared` builds it).
 
 using System.Reflection;
+using System.Runtime.ExceptionServices;
 using System.Runtime.InteropServices;
 
 namespace Pbwire;
@@ -443,28 +444,40 @@ public sealed class MessageType
         EnsureOpen();
         var handle = GCHandle.Alloc(callback);
         bool aborted = false;
+        Exception? thrown = null;
         try
         {
             Native.PbwVisitFn fn = (IntPtr ud, IntPtr field, uint number, uint wireType, ref PbwVisitValue value) =>
             {
-                var cb = (Func<VisitField, bool>)GCHandle.FromIntPtr(ud).Target!;
-                byte[]? bytes = null;
-                if (value.Data != IntPtr.Zero)
+                /* A managed exception must not unwind through the native
+                 * frame: stop the scan and rethrow after it returns. */
+                try
                 {
-                    if (value.Len > int.MaxValue)
+                    var cb = (Func<VisitField, bool>)GCHandle.FromIntPtr(ud).Target!;
+                    byte[]? bytes = null;
+                    if (value.Data != IntPtr.Zero)
                     {
-                        aborted = true;
-                        return 1; // one LEN payload cannot exceed a span
+                        if (value.Len > int.MaxValue)
+                        {
+                            aborted = true;
+                            return 1; // one LEN payload cannot exceed a span
+                        }
+                        bytes = new ReadOnlySpan<byte>((void*)value.Data, (int)value.Len).ToArray();
                     }
-                    bytes = new ReadOnlySpan<byte>((void*)value.Data, (int)value.Len).ToArray();
+                    var type = field == IntPtr.Zero ? null : NestedTypeOf(field);
+                    if (cb(new VisitField(field, number, wireType, value.Raw, bytes, type)))
+                    {
+                        return 0;
+                    }
+                    aborted = true;
+                    return 1;
                 }
-                var type = field == IntPtr.Zero ? null : NestedTypeOf(field);
-                if (cb(new VisitField(field, number, wireType, value.Raw, bytes, type)))
+                catch (Exception e)
                 {
-                    return 0;
+                    thrown = e;
+                    aborted = true;
+                    return 1;
                 }
-                aborted = true;
-                return 1;
             };
             fixed (byte* data = wire)
             {
@@ -481,6 +494,10 @@ public sealed class MessageType
         finally
         {
             handle.Free();
+        }
+        if (thrown != null)
+        {
+            ExceptionDispatchInfo.Capture(thrown).Throw();
         }
     }
 
@@ -717,7 +734,15 @@ public sealed class Message : IDisposable
             return null;
         }
         var ptr = Native.pbw_value_get_bytes(value, out var len);
-        return ptr == IntPtr.Zero ? null : new ReadOnlySpan<byte>((void*)ptr, (int)len).ToArray();
+        if (ptr == IntPtr.Zero)
+        {
+            return null;
+        }
+        if ((ulong)len > int.MaxValue)
+        {
+            throw new PbwireException(-1, "pbwire: bytes payload exceeds the span limit");
+        }
+        return new ReadOnlySpan<byte>((void*)ptr, (int)len).ToArray();
     }
 
     public Message? GetMessage(string field) => GetMessage(_type.Field(field));
@@ -738,7 +763,16 @@ public sealed class Message : IDisposable
     public int Count(string field)
     {
         var value = Value(_type.Field(field));
-        return value == IntPtr.Zero ? 0 : (int)Native.pbw_value_count(value);
+        if (value == IntPtr.Zero)
+        {
+            return 0;
+        }
+        var count = Native.pbw_value_count(value);
+        if (count > int.MaxValue)
+        {
+            throw new PbwireException(-1, "pbwire: repeated field exceeds the int limit");
+        }
+        return (int)count;
     }
 
     /// <summary>One item of a repeated field.</summary>

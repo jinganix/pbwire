@@ -2760,6 +2760,9 @@ message_free(napi_env env, napi_callback_info info)
     handle->msg = NULL;
     handle->freed = 1;
     free_reference(env, &handle->desc_ref);
+    /* The descriptor reference is gone: drop the pointer so nothing can
+     * reach a collectable descriptor through a freed handle. */
+    handle->desc = NULL;
     TRY(napi_get_undefined(env, &out));
     return out;
 }

@@ -1,0 +1,8 @@
+// Generator fixture: imported by recur.proto.
+syntax = "proto3";
+
+package dep;
+
+message Base {
+  int32 x = 1;
+}

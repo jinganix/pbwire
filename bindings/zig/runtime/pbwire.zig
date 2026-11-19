@@ -905,6 +905,14 @@ pub const Service = struct {
 /// `reset` and are read-only (`deinit` on them is a no-op, writes fail).
 pub const Context = struct {
     ptr: *c.pbw_ctx,
+    /// Set by Pool.release: the pool owns the context again, so a later
+    /// deinit is a no-op and every other call is a loud bug.
+    released: bool = false,
+
+    fn live(self: *const Context) *c.pbw_ctx {
+        if (self.released) @panic("pbwire: context was released to its pool");
+        return self.ptr;
+    }
 
     pub fn init() Error!Context {
         const p = c.pbw_ctx_new();
@@ -913,29 +921,31 @@ pub const Context = struct {
     }
 
     pub fn deinit(self: *Context) void {
+        if (self.released) return;
         c.pbw_ctx_free(self.ptr);
+        self.released = true;
     }
 
     /// Release every allocation since the last reset, keeping the buffers.
     pub fn reset(self: *Context) void {
-        c.pbw_ctx_reset(self.ptr);
+        c.pbw_ctx_reset(self.live());
     }
 
     /// Max bytes the context keeps resident across resets (default 1 MiB).
     pub fn setRetainCap(self: *Context, cap: usize) void {
-        c.pbw_ctx_set_retain_cap(self.ptr, cap);
+        c.pbw_ctx_set_retain_cap(self.live(), cap);
     }
 
     /// Bytes currently held in the context (for sizing/debugging).
     pub fn used(self: *const Context) usize {
-        return c.pbw_ctx_used(self.ptr);
+        return c.pbw_ctx_used(self.live());
     }
 
     /// Decode into the arena. The tree borrows the context: it dies with the
     /// next `reset` and must not outlive the context.
     pub fn decode(self: *Context, ty: *const MessageType, wire: []const u8) Error!Message {
         var out: ?*c.pbw_message = null;
-        const st = c.pbw_decode_ctx(self.ptr, ty.ptr, dataPtr(wire), wire.len, &out);
+        const st = c.pbw_decode_ctx(self.live(), ty.ptr, dataPtr(wire), wire.len, &out);
         try check(st);
         if (out == null) return Error.UnknownStatus;
         return .{ .ptr = @ptrCast(out), .owned = false };
@@ -946,7 +956,7 @@ pub const Context = struct {
     pub fn encodeBuf(self: *Context, msg: *const Message) Error![]const u8 {
         var out: [*c]const u8 = null;
         var len: usize = 0;
-        try check(c.pbw_encode_ctx(self.ptr, msg.ptr, &out, &len));
+        try check(c.pbw_encode_ctx(self.live(), msg.ptr, &out, &len));
         if (len == 0) return &[_]u8{};
         return @as([*]const u8, @ptrCast(out))[0..len];
     }
@@ -976,8 +986,9 @@ pub const Pool = struct {
     }
 
     pub fn release(self: *Pool, ctx: *Context) void {
-        c.pbw_pool_release(self.ptr, ctx.ptr);
-        ctx.ptr = @ptrFromInt(0x1);
+        if (ctx.released) @panic("pbwire: context released twice");
+        c.pbw_pool_release(self.ptr, ctx.live());
+        ctx.released = true;
     }
 
     /// Idle contexts held now (for sizing/debugging).

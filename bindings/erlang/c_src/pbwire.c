@@ -33,15 +33,14 @@ ep_get_tdata(ep_state_t *state)
 
     /* One slot per NIF-calling thread class. lock_n is sized from the normal +
      * dirty-CPU schedulers (the only threads that can call this NIF), so two
-     * threads never share a slot. A surplus thread maps onto the last slot
-     * rather than addressing out of bounds; add dirty-IO schedulers to lock_n
-     * before flagging any function ERL_NIF_DIRTY_JOB_IO_BOUND. */
+     * threads never share a slot. A surplus thread gets no slot at all: sharing
+     * one would let two schedulers interleave writes into the same encoder
+     * buffer. Add dirty-IO schedulers to lock_n before flagging any function
+     * ERL_NIF_DIRTY_JOB_IO_BOUND. */
     uint32_t slot = ep_atomic_fetch_add_u32(&state->slot_next, 1);
-    if (state->lock_n == 0) {
+
+    if (state->lock_n == 0 || slot >= state->lock_n) {
         return NULL;
-    }
-    if (slot >= state->lock_n) {
-        slot = state->lock_n - 1;
     }
 
     ep_tls_state = state;
@@ -281,7 +280,8 @@ load(ErlNifEnv *env, void **priv, ERL_NIF_TERM info)
     ep_state_t *state;
 
     if (*priv == NULL) {
-        if (!enif_get_uint(env, info, &lock_n)) {
+        if (!enif_get_uint(env, info, &lock_n) || lock_n == 0) {
+            /* Zero slots would hand every call a NULL thread state. */
             return RET_ERROR;
         }
 
@@ -445,6 +445,9 @@ encode_1(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     }
 
     tdata = ep_get_tdata(state);
+    if (tdata == NULL) {
+        raise_exception(env, make_atom(env, "no_thread_slot"));
+    }
     if (tdata->enc.mem == NULL) {
         size_t init = ENC_INIT_SIZE;
 
@@ -502,6 +505,9 @@ decode_2(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     }
 
     tdata = ep_get_tdata(state);
+    if (tdata == NULL) {
+        raise_exception(env, make_atom(env, "no_thread_slot"));
+    }
     enif_rwlock_rlock(state->cache_lock);
     if (state->cache == NULL) {
         enif_rwlock_runlock(state->cache_lock);
@@ -538,6 +544,10 @@ static ERL_NIF_TERM
 set_opts_1(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 {
     ep_state_t *state = (ep_state_t *)enif_priv_data(env);
+    /* Parsed into a copy and published only after the whole list checks out:
+     * a rejected option can no longer leave the earlier ones applied. */
+    ep_opts_t next = state->opts;
+    int retain_cap_changed = 0;
     int32_t arity;
     ERL_NIF_TERM head, tail, *array;
     ERL_NIF_TERM opt_with_utf8, opt_string_as_list, opt_retain_cap;
@@ -562,40 +572,29 @@ set_opts_1(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
         if (enif_get_tuple(env, head, &arity, to_const(array)) && arity == 2) {
             if (array[0] == opt_with_utf8) {
                 if (array[1] == state->atom_true) {
-                    state->opts.with_utf8 = 1;
+                    next.with_utf8 = 1;
                 } else if (array[1] == state->atom_false) {
-                    state->opts.with_utf8 = 0;
+                    next.with_utf8 = 0;
                 } else {
                     return enif_make_badarg(env);
                 }
             } else if (array[0] == opt_string_as_list) {
                 if (array[1] == state->atom_true) {
-                    state->opts.string_as_list = 1;
+                    next.string_as_list = 1;
                 } else if (array[1] == state->atom_false) {
-                    state->opts.string_as_list = 0;
+                    next.string_as_list = 0;
                 } else {
                     return enif_make_badarg(env);
                 }
             } else if (array[0] == opt_retain_cap) {
                 long cap;
-                uint32_t i;
 
                 if (!enif_get_long(env, array[1], &cap) || cap < 0) {
                     return enif_make_badarg(env);
                 }
-                state->opts.retain_cap = (size_t)cap;
-                state->opts.retain_cap_set = 1;
-                /* Live scheduler contexts hold the old ceiling: reapply
-                 * under the write lock, which excludes concurrent
-                 * encode/decode readers. */
-                enif_rwlock_rwlock(state->cache_lock);
-                for (i = 0; i < state->lock_n; i++) {
-                    if (state->tdata[i].ctx != NULL) {
-                        pbw_ctx_set_retain_cap(state->tdata[i].ctx,
-                                               (size_t)cap);
-                    }
-                }
-                enif_rwlock_rwunlock(state->cache_lock);
+                next.retain_cap = (size_t)cap;
+                next.retain_cap_set = 1;
+                retain_cap_changed = 1;
             } else if (array[0] == opt_max_bytes) {
                 /* Input guard mirroring pbw_limits.max_bytes: decode
                  * rejects larger binaries. 0 (the default) means unset. */
@@ -604,8 +603,8 @@ set_opts_1(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
                 if (!enif_get_long(env, array[1], &cap) || cap < 0) {
                     return enif_make_badarg(env);
                 }
-                state->opts.max_bytes = (size_t)cap;
-                state->opts.max_bytes_set = (cap > 0);
+                next.max_bytes = (size_t)cap;
+                next.max_bytes_set = (cap > 0);
             } else if (array[0] == opt_max_depth) {
                 /* Input guard mirroring pbw_limits.max_depth: decode
                  * rejects deeper message nesting. 0 means unset; the
@@ -617,10 +616,10 @@ set_opts_1(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
                 }
                 /* Saturate instead of wrapping: a huge value must never
                  * become a tiny cap. */
-                state->opts.max_depth = depth > (long)UINT32_MAX
-                                            ? UINT32_MAX
-                                            : (uint32_t)depth;
-                state->opts.max_depth_set = (depth > 0);
+                next.max_depth = depth > (long)UINT32_MAX
+                                     ? UINT32_MAX
+                                     : (uint32_t)depth;
+                next.max_depth_set = (depth > 0);
             } else {
                 return enif_make_badarg(env);
             }
@@ -634,6 +633,22 @@ set_opts_1(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     if (!enif_is_empty_list(env, head)) {
         return enif_make_badarg(env);
     }
+
+    /* Publish, then reapply the retained ceiling to every live scheduler
+     * context: the write lock excludes concurrent encode/decode readers. */
+    enif_rwlock_rwlock(state->cache_lock);
+    state->opts = next;
+    if (retain_cap_changed && next.retain_cap_set) {
+        uint32_t i;
+
+        for (i = 0; i < state->lock_n; i++) {
+            if (state->tdata[i].ctx != NULL) {
+                pbw_ctx_set_retain_cap(state->tdata[i].ctx,
+                                       next.retain_cap);
+            }
+        }
+    }
+    enif_rwlock_rwunlock(state->cache_lock);
 
     return state->atom_ok;
 }

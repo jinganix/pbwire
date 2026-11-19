@@ -394,4 +394,9 @@ test "pool and context recycle arenas" {
     ctx.reset();
     pool.release(&ctx);
     try std.testing.expectEqual(@as(usize, 1), pool.idle());
+    try std.testing.expect(ctx.released);
+    // A released context must not be freed a second time by the usual
+    // `defer ctx.deinit()`; the pool owns it now.
+    ctx.deinit();
+    try std.testing.expectEqual(@as(usize, 1), pool.idle());
 }

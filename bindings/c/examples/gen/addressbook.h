@@ -20,28 +20,32 @@ typedef enum {
     TUTORIAL_PERSON_PHONE_TYPE_WORK = 2
 } tutorial_person_phone_type_t;
 
+typedef struct tutorial_person_phone_number tutorial_person_phone_number_t;
+typedef struct tutorial_person tutorial_person_t;
+typedef struct tutorial_address_book tutorial_address_book_t;
+
 /* tutorial.Person.PhoneNumber */
-typedef struct {
+struct tutorial_person_phone_number {
     const char *number; /* required */
     int32_t type; /* optional, tutorial.Person.PhoneType */
     int has_type;
-} tutorial_person_phone_number_t;
+};
 
 /* tutorial.Person */
-typedef struct {
+struct tutorial_person {
     const char *name; /* required */
     int32_t id; /* required */
     int has_id;
     const char *email; /* optional */
     tutorial_person_phone_number_t *phones;
     size_t n_phones;
-} tutorial_person_t;
+};
 
 /* tutorial.AddressBook */
-typedef struct {
+struct tutorial_address_book {
     tutorial_person_t *people;
     size_t n_people;
-} tutorial_address_book_t;
+};
 
 static const pbw_struct_field_t tutorial_person_phone_number_fields[] = {
     {1, PBW_SF_STRING, 0, offsetof(tutorial_person_phone_number_t, number), 0, 0, 0, 0, NULL, 0, PBW_TYPE_STRING, 2, 0, 1, 0, 0},

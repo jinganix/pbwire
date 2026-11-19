@@ -56,10 +56,15 @@ def main():
     total_e = 0
     total_t = 0
     nfiles = 0
+    missing = []
     for src in sources:
         base = os.path.basename(src)
         a = parse(os.path.join(dir_a, base + ".gcov"))
         b = parse(os.path.join(dir_b, base + ".gcov"))
+        if not a and not b:
+            # A source with no data in either run is unmeasured. Counting it as
+            # zero lines would hide it behind the other files' coverage.
+            missing.append(src)
         lines = sorted(set(a) | set(b))
         with open(os.path.join(out, base + ".gcov"), "w") as f:
             for ln in lines:
@@ -91,6 +96,10 @@ def main():
         # Nothing measured: that is a broken run (stale objects, a gcov format
         # change, missing .gcda), never a pass.
         print("gcov-merge: no coverage data parsed", file=sys.stderr)
+        return 1
+    if missing:
+        print("gcov-merge: no coverage data for " + ", ".join(missing),
+              file=sys.stderr)
         return 1
     return 0 if pct >= floor else 1
 

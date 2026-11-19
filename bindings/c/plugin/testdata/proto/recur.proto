@@ -1,0 +1,21 @@
+// Generator fixture: self-reference, a forward reference, and a type from
+// another file. None of the pinned headers exercise those shapes.
+syntax = "proto3";
+
+package recur;
+
+import "bindings/c/plugin/testdata/proto/dep.proto";
+
+message Node {
+  Node next = 1;
+  int32 v = 2;
+}
+
+message Alpha {
+  Beta b = 1;
+}
+
+message Beta {
+  int32 x = 1;
+  dep.Base base = 2;
+}

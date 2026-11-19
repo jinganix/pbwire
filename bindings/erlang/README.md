@@ -109,7 +109,10 @@ proto2.
 
 Calling `encode/1` or `decode/2` before `load_cache/1` raises `cache_not_exists`. All functions are
 safe to call concurrently from many processes: the schema cache is shared and read-locked, and each
-scheduler gets its own scratch buffers.
+scheduler gets its own scratch buffers. That per-thread state is sized at load time from the number
+of normal + dirty-CPU schedulers (`pbwire.erl`'s `init/0`); a thread beyond that count raises
+`no_thread_slot` instead of sharing another thread's buffers, so if you flag a NIF
+`ERL_NIF_DIRTY_JOB_IO_BOUND` later, add the dirty-I/O schedulers to that count first.
 
 ## Supported protobuf features
 

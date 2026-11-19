@@ -4,6 +4,7 @@ package cgen
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"google.golang.org/protobuf/reflect/protoreflect"
@@ -14,7 +15,7 @@ import (
 // The output name is "<base>.pbwire.h" where base is the proto file name
 // without directory or extension.
 func Generate(fd protoreflect.FileDescriptor) (string, string, error) {
-	g := &generator{fd: fd}
+	g := &generator{fd: fd, byName: map[protoreflect.FullName]protoreflect.MessageDescriptor{}}
 	if err := g.collect(); err != nil {
 		return "", "", err
 	}
@@ -22,8 +23,12 @@ func Generate(fd protoreflect.FileDescriptor) (string, string, error) {
 	name := base + ".h"
 	g.output = name
 	var b strings.Builder
+	if err := g.checkNames(); err != nil {
+		return "", "", err
+	}
 	g.writeHeader(&b, fd.Path())
 	g.writeEnums(&b)
+	g.writeForwardDecls(&b)
 	if err := g.writeMessages(&b); err != nil {
 		return "", "", err
 	}
@@ -36,12 +41,86 @@ func Generate(fd protoreflect.FileDescriptor) (string, string, error) {
 	return name, b.String(), nil
 }
 
+/* checkNames rejects two types that flatten to one C identifier: proto
+ * names Foo.Bar and Foo_Bar are distinct, "foo_bar_t" is not. */
+func (g *generator) checkNames() error {
+	seenTypes := map[string]string{}
+	for _, m := range g.messages {
+		n := cname(m)
+		if prev, ok := seenTypes[n]; ok {
+			return fmt.Errorf("%s and %s both map to C type %s_t", prev, m.FullName(), n)
+		}
+		seenTypes[n] = string(m.FullName())
+	}
+	for _, e := range g.enums {
+		n := cname(e)
+		if prev, ok := seenTypes[n]; ok {
+			return fmt.Errorf("%s and %s both map to C type %s_t", prev, e.FullName(), n)
+		}
+		seenTypes[n] = string(e.FullName())
+	}
+	return nil
+}
+
 type generator struct {
 	fd       protoreflect.FileDescriptor
 	output   string                           // output file name, guards derive from it
 	messages []protoreflect.MessageDescriptor // post-order: nested first
 	enums    []protoreflect.EnumDescriptor
 	exts     map[string][]protoreflect.FieldDescriptor // extendee full name -> extensions, by number
+	/* Proto paths of other files whose generated header this one needs:
+	 * the member is `<their>_t *`, which only that header declares. */
+	deps map[string]bool
+	/* Messages declared in this file, by full name: a table may only
+	 * reference another table in this file. */
+	byName map[protoreflect.FullName]protoreflect.MessageDescriptor
+}
+
+/* noteDep records the file that declares a referenced message/enum type, so
+ * writeHeader can include its generated header (same basename rule as the
+ * output name). Types from the file being generated need nothing. */
+func (g *generator) noteDep(d protoreflect.Descriptor) {
+	if d == nil {
+		return
+	}
+	pf := d.ParentFile()
+	if pf == nil || pf.Path() == g.fd.Path() {
+		return
+	}
+	if g.deps == nil {
+		g.deps = map[string]bool{}
+	}
+	g.deps[pf.Path()] = true
+}
+
+func (g *generator) collectDeps(m protoreflect.MessageDescriptor) error {
+	fields := m.Fields()
+	for i := 0; i < fields.Len(); i++ {
+		f := fields.Get(i)
+		switch f.Kind() {
+		case protoreflect.MessageKind, protoreflect.GroupKind:
+			g.noteDep(f.Message())
+		case protoreflect.EnumKind:
+			g.noteDep(f.Enum())
+		}
+	}
+	return nil
+}
+
+/* collectExtDeps covers extension rows: they become members of the extendee's
+ * struct, so a extension typed from another file needs that file's header just
+ * like a regular field does. */
+func (g *generator) collectExtDeps() {
+	for _, list := range g.exts {
+		for _, ext := range list {
+			switch ext.Kind() {
+			case protoreflect.MessageKind, protoreflect.GroupKind:
+				g.noteDep(ext.Message())
+			case protoreflect.EnumKind:
+				g.noteDep(ext.Enum())
+			}
+		}
+	}
 }
 
 func (g *generator) collect() error {
@@ -55,7 +134,11 @@ func (g *generator) collect() error {
 			if err := walk(m.Messages()); err != nil {
 				return err
 			}
+			if err := g.collectDeps(m); err != nil {
+				return err
+			}
 			g.messages = append(g.messages, m)
+			g.byName[m.FullName()] = m
 			for j := 0; j < m.Enums().Len(); j++ {
 				g.enums = append(g.enums, m.Enums().Get(j))
 			}
@@ -68,7 +151,11 @@ func (g *generator) collect() error {
 	if err := walk(g.fd.Messages()); err != nil {
 		return err
 	}
-	return g.collectExtensions()
+	if err := g.collectExtensions(); err != nil {
+		return err
+	}
+	g.collectExtDeps()
+	return nil
 }
 
 // collectExtensions groups the file's extensions by extendee. Extension rows
@@ -267,6 +354,19 @@ func upper(s string) string {
 	return b.String()
 }
 
+/* headerName is the generated-file name for a .proto path: basename only,
+ * exactly like Generate's output name. shortcut: two files whose basenames
+ * match get one header name, so an import of the loser resolves to the
+ * winner's types (a loud compile error unless their C type names collide);
+ * upgrade to a path-derived name if that ever bites. */
+func headerName(path string) string {
+	base := path
+	if i := strings.LastIndex(base, "/"); i >= 0 {
+		base = base[i+1:]
+	}
+	return strings.TrimSuffix(base, ".proto") + ".h"
+}
+
 func (g *generator) guard() string {
 	name := g.output
 	if i := strings.LastIndex(name, "."); i >= 0 {
@@ -290,6 +390,16 @@ func (g *generator) writeHeader(b *strings.Builder, path string) {
 	fmt.Fprintf(b, "\n")
 	fmt.Fprintf(b, "#include \"pbw_struct.h\"\n")
 	fmt.Fprintf(b, "#include \"pbwire.h\"\n")
+	if len(g.deps) > 0 {
+		paths := make([]string, 0, len(g.deps))
+		for p := range g.deps {
+			paths = append(paths, p)
+		}
+		sort.Strings(paths)
+		for _, p := range paths {
+			fmt.Fprintf(b, "#include \"%s\"\n", headerName(p))
+		}
+	}
 	fmt.Fprintf(b, "\n")
 }
 
@@ -403,6 +513,18 @@ func (g *generator) needsHas(f protoreflect.FieldDescriptor) bool {
 	return g.fd.Syntax() != protoreflect.Proto3
 }
 
+/* writeForwardDecls names every message type first: members are
+ * `<type>_t *`, and a typedef's name is not in scope inside its own
+ * definition, so a recursive or forward-referencing message needs the tag. */
+func (g *generator) writeForwardDecls(b *strings.Builder) {
+	for _, m := range g.messages {
+		fmt.Fprintf(b, "typedef struct %s %s_t;\n", cname(m), cname(m))
+	}
+	if len(g.messages) > 0 {
+		fmt.Fprintf(b, "\n")
+	}
+}
+
 func (g *generator) writeMessages(b *strings.Builder) error {
 	for _, m := range g.messages {
 		/* Map entries are plain structs: key/value rows like any message. */
@@ -434,7 +556,7 @@ func (g *generator) writeMessages(b *strings.Builder) error {
 			}
 			fmt.Fprintf(b, "} %s;\n", uname)
 		}
-		fmt.Fprintf(b, "typedef struct {\n")
+		fmt.Fprintf(b, "struct %s {\n", cname(m))
 		fields := m.Fields()
 		if fields.Len() == 0 && len(g.extFields(m)) == 0 {
 			/* ISO C forbids an empty struct too: one placeholder member. */
@@ -512,23 +634,56 @@ func (g *generator) writeMessages(b *strings.Builder) error {
 				}
 			}
 		}
-		fmt.Fprintf(b, "} %s_t;\n", cname(m))
+		fmt.Fprintf(b, "};\n")
 		fmt.Fprintf(b, "\n")
 	}
 	return nil
 }
 
+/* writeTables emits each table after every table it references: an initializer
+ * may name the same table (a recursive message) but not one still undeclared,
+ * and ISO C has no forward declaration for a `static const` array. */
 func (g *generator) writeTables(b *strings.Builder) error {
-	for _, m := range g.messages {
+	const (
+		unvisited = 0
+		visiting  = 1
+		done      = 2
+	)
+	state := map[protoreflect.FullName]int{}
+	var emit func(m protoreflect.MessageDescriptor) error
+	emit = func(m protoreflect.MessageDescriptor) error {
+		switch state[m.FullName()] {
+		case visiting, done:
+			return nil
+		}
+		state[m.FullName()] = visiting
+		fields := m.Fields()
+		for i := 0; i < fields.Len(); i++ {
+			f := fields.Get(i)
+			if f.Kind() != protoreflect.MessageKind &&
+				f.Kind() != protoreflect.GroupKind {
+				continue
+			}
+			sub := f.Message()
+			if sub == nil {
+				continue
+			}
+			if target, ok := g.byName[sub.FullName()]; ok {
+				if err := emit(target); err != nil {
+					return err
+				}
+			}
+		}
+		state[m.FullName()] = done
 		fmt.Fprintf(b, "static const pbw_struct_field_t %s_fields[] = {\n", cname(m))
 		if g.tableLen(m) == 0 {
 			/* ISO C forbids an empty initializer list: a message with no
 			 * field still gets one (unused) row, and the wrappers pass 0. */
 			fmt.Fprintf(b, "    {0, PBW_SF_INT32, 0, 0, 0, 0, 0, 0, NULL, 0, PBW_TYPE_INT32, 0, 0, 0, 0, 0},\n")
 		}
-		fields := m.Fields()
-		for i := 0; i < fields.Len(); i++ {
-			if err := g.writeRow(b, m, fields.Get(i)); err != nil {
+		tfields := m.Fields()
+		for i := 0; i < tfields.Len(); i++ {
+			if err := g.writeRow(b, m, tfields.Get(i)); err != nil {
 				return err
 			}
 		}
@@ -539,6 +694,12 @@ func (g *generator) writeTables(b *strings.Builder) error {
 		}
 		fmt.Fprintf(b, "};\n")
 		fmt.Fprintf(b, "\n")
+		return nil
+	}
+	for _, m := range g.messages {
+		if err := emit(m); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -658,15 +819,25 @@ func pbwType(f protoreflect.FieldDescriptor) (string, int, error) {
 // in its own file (protoc --descriptor_set_out, see `make -C bindings/c/plugin
 // regen`) and is loaded at runtime with pbw_struct_schema_load, so the
 // header pins no descriptor bytes.
+/* macroName is `upper` with a leading '_' when the name would start with a
+ * digit: `#define 1TEST_DESC_PATH` is not a preprocessing directive. */
+func macroName(s string) string {
+	n := upper(s)
+	if n != "" && n[0] >= '0' && n[0] <= '9' {
+		return "_" + n
+	}
+	return n
+}
+
 func (g *generator) writeSchema(b *strings.Builder) {
 	base := strings.TrimSuffix(g.output, ".h")
 	desc := strings.TrimSuffix(g.fd.Path(), ".proto") + ".desc"
 	fmt.Fprintf(b, "/* FileDescriptorSet for %s, kept in %s.\n", g.fd.Path(), desc)
 	fmt.Fprintf(b, " * Produced by protoc --descriptor_set_out; regenerate with\n")
 	fmt.Fprintf(b, " * `make -C bindings/c/plugin regen`. Load it at runtime:\n")
-	fmt.Fprintf(b, " * pbw_struct_schema_load(%s_DESC_PATH, &schema).\n", upper(base))
+	fmt.Fprintf(b, " * pbw_struct_schema_load(%s_DESC_PATH, &schema).\n", macroName(base))
 	fmt.Fprintf(b, " */\n")
-	fmt.Fprintf(b, "#define %s_DESC_PATH \"%s\"\n", upper(base), desc)
+	fmt.Fprintf(b, "#define %s_DESC_PATH \"%s\"\n", macroName(base), desc)
 	fmt.Fprintf(b, "\n")
 }
 

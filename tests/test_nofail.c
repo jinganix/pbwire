@@ -863,6 +863,19 @@ workload(void)
         /* deterministic encoding sorts any maps the same way */
         (void)pbw_encode_deterministic(msg, &det, &det_len);
         pbw_free(det);
+        /* The caller-buffer twin allocates only for the map sort: a buffer
+         * one byte short reaches the sort and then reports LIMIT, while an
+         * injected failure in that malloc reports NOMEM. */
+        if (wire_len > 1) {
+            uint8_t *detbuf = (uint8_t *)malloc(wire_len - 1);
+            size_t detbuf_len = 0;
+
+            if (detbuf != NULL) {
+                (void)pbw_encode_deterministic_to(msg, detbuf, wire_len - 1,
+                                                  &detbuf_len);
+                free(detbuf);
+            }
+        }
         /* an empty message encodes to zero bytes */
         {
             pbw_message *empty = pbw_message_new(m);
@@ -1142,8 +1155,10 @@ main(void)
         printf("nofail: implausible allocation count %ld\n", total);
         return 1;
     }
-    /* Sweep: fail the i-th allocation, then one clean tail run. */
-    for (i = 1; i <= total + 1; i++) {
+    /* Sweep: fail_at counts down, so fail_at = i fails allocation i+1. Start
+     * at 0 so the very first allocation is injected, and keep one clean tail
+     * run past the last one. */
+    for (i = 0; i <= total; i++) {
         fail_at = i;
         alloc_count = 0;
         workload();

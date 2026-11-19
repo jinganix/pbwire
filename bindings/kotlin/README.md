@@ -1,13 +1,11 @@
 # pbwire Kotlin binding
 
 `bindings/kotlin/runtime` is the Kotlin binding. Kotlin runs on the JVM, so it
-uses the Java binding's FFI layer (`bindings/java/runtime`: the JDK 22+ Foreign
-Function & Memory downcalls to the C ABI in
-[`include/pbwire.h`](../../include/pbwire.h)) and adds the DSL that official
-Kotlin support also is: `protoc --kotlin_out` generates Kotlin over
-protobuf-java, never a second runtime. There is no new wire code and no second
-schema path -- a `FileDescriptorSet` is loaded at run time and the C core owns
-the bytes.
+uses the Java binding's pure-Java codec (`bindings/java/runtime`, no JNI and no
+native library) and adds the DSL that official Kotlin support also is:
+`protoc --kotlin_out` generates Kotlin over protobuf-java, never a second
+runtime. There is no new wire code and no second schema path -- a
+`FileDescriptorSet` is loaded at run time and the Java codec owns the bytes.
 
 ```kotlin
 schema("tests/data/matrix3.desc").use { schema ->
@@ -43,8 +41,8 @@ else is the Java binding's API, which Kotlin calls directly.
 ./build.sh          # make shared + javac the Java runtime + kotlinc into out/pbwire.jar
 ```
 
-`build.sh` prints the two run commands (they need `-Dpbwire.library=<path>` and
-`--enable-native-access=ALL-UNNAMED`, exactly like the Java binding). Kotlin
+`build.sh` prints the run commands (plain `java`/`kotlin`, no native library
+path and no `--enable-native-access`, exactly like the Java binding). Kotlin
 cannot import from Java's default package, which is why the runtime file declares
 none.
 
@@ -73,8 +71,8 @@ over wire bytes:
 
 ## Why not a copy of the Java runtime?
 
-A second copy of the FFM tables would be a second thing to keep in sync with
-`include/pbwire.h` for zero benefit: Kotlin calls Java classes with no
+A second copy of the codec tables would be a second thing to keep in sync for
+zero benefit: Kotlin calls Java classes with no
 marshalling cost, and the JVM is the same host either way. The ownership and
 threading rules are the Java binding's: a `Schema` or `Message` belongs to one
 thread, `use`/`close` frees a root, and a nested message is a view of its parent.

@@ -2303,6 +2303,10 @@ pbwr_context_decode(SEXP ctx_sexp, SEXP schema_sexp, SEXP type, SEXP wire,
     if (m == NULL) {
         Rf_error("pbwire: out of memory");
     }
+    /* The core resets a sealed arena before this decode, which releases the
+     * tree the last decode handed out; bump the generation so those borrowed
+     * builders fail instead of reading freed memory. */
+    c->gen++;
     status = pbw_decode_ctx_limits(c->ctx, desc, bytes, len, limits, &msg);
     if (status != PBW_OK) {
         free(m);
@@ -2337,6 +2341,10 @@ pbwr_context_encode(SEXP ctx_sexp, SEXP schema_sexp, SEXP type, SEXP list)
     pbw_status status;
     SEXP ans;
 
+    /* Same reset discipline as every other context entry point: a decode
+     * seals the arena, and a new tree cannot grow inside it. */
+    pbw_ctx_reset(c->ctx);
+    c->gen++;
     msg = pbw_message_new_ctx(c->ctx, desc);
     if (msg == NULL) {
         Rf_error("pbwire: out of memory");

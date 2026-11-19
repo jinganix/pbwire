@@ -352,11 +352,13 @@ frame_split(const void *buf, size_t len, const pbw_limits *limits,
     if (!pbw_len_read(base, base + len, frame, used)) {
         return PBW_ERR_INVALID;
     }
-    if (*used > len || *frame > len - *used) {
-        return PBW_ERR_INVALID;
-    }
+    /* The cap is checked before the body, so an oversized frame is LIMIT
+     * whether or not the bytes arrived -- same order as pbw_istream_next(). */
     if (limits != NULL && limits->max_bytes > 0 && *frame > limits->max_bytes) {
         return PBW_ERR_LIMIT;
+    }
+    if (*used > len || *frame > len - *used) {
+        return PBW_ERR_INVALID;
     }
     *body = base + *used;
     return PBW_OK;

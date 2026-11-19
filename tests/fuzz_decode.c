@@ -98,7 +98,6 @@ run_frame(const uint8_t *buf, size_t len, unsigned frame)
         size_t out_len = 0;
         char *text = NULL;
         size_t text_len = 0;
-        pbw_limits lim = {0, 0};
 
         if (pbw_encode(msg, &out, &out_len) == PBW_OK) {
             printf("encode=%zu ", out_len);
@@ -119,18 +118,22 @@ run_frame(const uint8_t *buf, size_t len, unsigned frame)
         } else {
             printf("text=ERR ");
         }
-        /* path 3: bounded decode agrees on the verdict class */
-        {
-            pbw_message *m2 = NULL;
-            pbw_status st2 = pbw_decode_limits(g_msg, buf, len, &lim, &m2);
-
-            if ((st2 == PBW_OK) != 1) {
-                printf("LIMIT-MISMATCH ");
-                g_verdict_mismatch = 1;
-            }
-            pbw_message_free(m2);
-        }
         pbw_message_free(msg);
+    }
+    /* path 3: a bounded decode must never accept what the unbounded one
+     * rejects. The depth cap is shallow so the comparison exercises the limit
+     * paths instead of rerunning the same defaults; it runs for every verdict,
+     * not only the accepted ones. */
+    {
+        pbw_message *m2 = NULL;
+        pbw_limits tight = {len, 4};
+        pbw_status st2 = pbw_decode_limits(g_msg, buf, len, &tight, &m2);
+
+        if (st2 == PBW_OK && st != PBW_OK) {
+            printf("LIMIT-MISMATCH ");
+            g_verdict_mismatch = 1;
+        }
+        pbw_message_free(m2);
     }
     printf("len=%zu\n", len);
 }
@@ -138,23 +141,34 @@ run_frame(const uint8_t *buf, size_t len, unsigned frame)
 /* JSON mode (`fuzz_decode json < file`): the bytes are parsed as the JSON
  * mapping of the built-in Fuzz tree. Text mode (`fuzz_decode text`) does
  * the same through the text format. Both exit 0 unless ASan/UBSan traps. */
+/* `expect_ok` comes from the corpus file name (*valid*), so a regression that
+ * starts rejecting the valid fixtures fails the gate instead of printing a
+ * status nobody reads. */
 static void
-run_json_frame(const char *text, size_t len, unsigned frame)
+run_json_frame(const char *text, size_t len, unsigned frame, int expect_ok)
 {
     pbw_message *msg = NULL;
     pbw_status st = pbw_json_parse(g_msg, text, len, &msg);
 
     printf("[%u] json=%d len=%zu\n", frame, (int)st, len);
+    if (expect_ok && st != PBW_OK) {
+        printf("VALID-REJECTED ");
+        g_verdict_mismatch = 1;
+    }
     pbw_message_free(msg);
 }
 
 static void
-run_text_frame(const char *text, size_t len, unsigned frame)
+run_text_frame(const char *text, size_t len, unsigned frame, int expect_ok)
 {
     pbw_message *msg = NULL;
     pbw_status st = pbw_text_parse(g_msg, text, len, &msg);
 
     printf("[%u] text=%d len=%zu\n", frame, (int)st, len);
+    if (expect_ok && st != PBW_OK) {
+        printf("VALID-REJECTED ");
+        g_verdict_mismatch = 1;
+    }
     pbw_message_free(msg);
 }
 
@@ -188,12 +202,14 @@ main(int argc, char **argv)
     }
     build_schema();
     if (argc > 1 && strcmp(argv[1], "json") == 0) {
-        run_json_frame((const char *)input, total, 0);
+        run_json_frame((const char *)input, total, 0,
+                       argc > 2 && strstr(argv[2], "valid") != NULL);
         pbw_schema_free(g_schema);
         return g_verdict_mismatch ? 1 : 0;
     }
     if (argc > 1 && strcmp(argv[1], "text") == 0) {
-        run_text_frame((const char *)input, total, 0);
+        run_text_frame((const char *)input, total, 0,
+                       argc > 2 && strstr(argv[2], "valid") != NULL);
         pbw_schema_free(g_schema);
         return g_verdict_mismatch ? 1 : 0;
     }

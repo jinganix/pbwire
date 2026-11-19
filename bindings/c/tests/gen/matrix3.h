@@ -20,14 +20,17 @@ typedef enum {
     STRUCTTEST_COLOR3_COLOR3_GREEN = 2
 } structtest_color3_t;
 
+typedef struct structtest_inner3 structtest_inner3_t;
+typedef struct structtest_scalars3 structtest_scalars3_t;
+
 /* structtest.Inner3 */
-typedef struct {
+struct structtest_inner3 {
     const char *name; /* optional */
     int32_t value; /* optional */
-} structtest_inner3_t;
+};
 
 /* structtest.Scalars3 */
-typedef struct {
+struct structtest_scalars3 {
     int32_t i32; /* optional */
     int64_t i64; /* optional */
     uint32_t u32; /* optional */
@@ -55,7 +58,7 @@ typedef struct {
     const char *opt_str; /* optional */
     bool *flags;
     size_t n_flags;
-} structtest_scalars3_t;
+};
 
 static const pbw_struct_field_t structtest_inner3_fields[] = {
     {1, PBW_SF_STRING, 0, offsetof(structtest_inner3_t, name), 0, 0, 0, 0, NULL, 0, PBW_TYPE_STRING, 2, 0, 0, 0, 0},
