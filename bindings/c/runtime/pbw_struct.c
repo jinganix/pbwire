@@ -194,9 +194,11 @@ static int
 row_info(const pbw_struct_field_t *row, const pbw_descriptor *desc, rinfo *out)
 {
     if (row->type != 0) {
-        if (expected_kind[row->type] != (uint8_t)row->kind ||
+        if (row->type > PBW_TYPE_SINT64 ||
+            expected_kind[row->type] != (uint8_t)row->kind ||
             row->wire != wire_type_of((pbw_type)row->type) ||
-            (row->repeated != 0) != (row->count != 0)) {
+            (row->repeated != 0) != (row->count != 0) ||
+            (row->oneof != 0 && row->repeated != 0)) {
             return 0;
         }
         out->type = (pbw_type)row->type;
@@ -494,14 +496,31 @@ plan_build(const pbw_descriptor *desc, const pbw_struct_field_t *fields,
             goto fail;
         }
         e->op = field_op(row, &info);
-        /* utf8_validation follows the schema (proto3/editions VERIFY), so the
-         * string check stays in one place: the reference parsers reject a
-         * malformed `string` instead of keeping bytes that render as U+FFFD. */
-        if ((e->op & SC_OP_MASK) == SC_OP_STR) {
-            const pbw_field *field = pbw_descriptor_find_field(desc, row->fnum);
+        /* One schema lookup per row serves two rules: the shape check (a row's
+         * own type is self-consistent by construction, so a table that
+         * declares a different kind than the schema would still pass row_info()
+         * and then write the wrong member width into the caller's struct) and
+         * utf8_validation (which follows the schema -- proto3/editions VERIFY
+         * -- so the string check stays in one place: the reference parsers
+         * reject a malformed `string` instead of keeping bytes that render as
+         * U+FFFD). */
+        if (row->type != 0 || (e->op & SC_OP_MASK) == SC_OP_STR) {
+            const pbw_field *sf = pbw_descriptor_find_field(desc, row->fnum);
 
-            e->utf8 = (uint8_t)(field != NULL &&
-                                pbw_field_requires_utf8_validation(field));
+            if (row->type != 0 &&
+                (sf == NULL || (pbw_type)row->type != pbw_field_type(sf) ||
+                 (row->repeated != 0) !=
+                     (pbw_field_label(sf) == PBW_LABEL_REPEATED) ||
+                 (row->required != 0) !=
+                     (pbw_field_label(sf) == PBW_LABEL_REQUIRED) ||
+                 (row->packed != 0 && row->repeated == 0))) {
+                status = PBW_ERR_INVALID;
+                goto fail;
+            }
+            if ((e->op & SC_OP_MASK) == SC_OP_STR) {
+                e->utf8 = (uint8_t)(sf != NULL &&
+                                    pbw_field_requires_utf8_validation(sf));
+            }
         }
         if (row->kind == PBW_SF_ENUM && !row->repeated && row->dflt != 0) {
             /* The struct arrives zeroed, so only non-zero defaults need a
@@ -1640,8 +1659,10 @@ clear_oneof_prev(const sc_entry *e, char *base, pbw_struct_arena *a)
 {
     char *v = base + e->off;
 
-    if (e->op & SC_RPT) { /* invalid in a oneof; stay safe anyway */
-        free(*(void **)v);
+    if (e->op & SC_RPT) { /* rejected at init; stay safe anyway */
+        if (a == NULL) {
+            free(*(void **)v);
+        }
         *(void **)v = NULL;
         if (e->cnt != 0) {
             *(size_t *)(base + e->cnt) = 0;

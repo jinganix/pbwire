@@ -721,9 +721,14 @@ pbw_field_set_oneof(pbw_field *field, uint32_t oneof_index)
          * retire existing messages so a later set cannot index past it. */
         for (i = 0; i < schema->count; i++) {
             pbw_descriptor *desc = schema->descs[i];
+            /* The field array of every live descriptor occupies a distinct
+             * range, so an integer range test finds the owner. Relational
+             * pointer comparison between unrelated arrays is undefined. */
+            uintptr_t lo = (uintptr_t)(void *)desc->fields;
+            uintptr_t f = (uintptr_t)(void *)field;
 
-            if (!desc->is_enum && field >= desc->fields &&
-                field < desc->fields + desc->field_count) {
+            if (!desc->is_enum && f >= lo &&
+                f - lo < desc->field_count * sizeof(pbw_field)) {
                 desc->epoch++;
                 break;
             }
@@ -1036,14 +1041,45 @@ link_message(pbw_schema *schema, pbw_descriptor *msg)
         if (map == NULL) {
             return PBW_ERR_NOMEM;
         }
+        /* Two passes: regular fields claim their name first, then extensions.
+         * Extensions may share a name with a regular field by design, and a
+         * plain-name lookup must find the regular one; a name only an
+         * extension has still resolves to that extension. */
         for (i = 0; i < msg->field_count; i++) {
             const pbw_field *field = &msg->fields[i];
-            size_t slot = (size_t)(name_hash(field->name) & (uint32_t)(size - 1));
+            size_t slot;
 
+            if (field->is_extension) {
+                continue;
+            }
+            slot = (size_t)(name_hash(field->name) & (uint32_t)(size - 1));
             while (map[slot] != NULL) {
                 slot = (slot + 1) & (size - 1);
             }
             map[slot] = field;
+        }
+        for (i = 0; i < msg->field_count; i++) {
+            const pbw_field *field = &msg->fields[i];
+            size_t slot;
+            const pbw_field *probe;
+
+            if (!field->is_extension) {
+                continue;
+            }
+            slot = (size_t)(name_hash(field->name) & (uint32_t)(size - 1));
+            for (;;) {
+                probe = map[slot];
+                if (probe == NULL) {
+                    break;
+                }
+                if (strcmp(probe->name, field->name) == 0) {
+                    break; /* a regular field already owns the name */
+                }
+                slot = (slot + 1) & (size - 1);
+            }
+            if (probe == NULL) {
+                map[slot] = field;
+            }
         }
         msg->name_map = map;
         msg->name_map_size = size;
@@ -1196,14 +1232,23 @@ pbw_descriptor_find_field_name(const pbw_descriptor *desc,
     }
     {
         size_t i;
+        const pbw_field *match = NULL;
 
-        for (i = 0; i < desc->field_count; i++) {
-            if (strcmp(desc->fields[i].name, name) == 0) {
-                return &desc->fields[i];
+        /* Regular fields win a shared name; extensions fill the rest. */
+        for (i = 0; i < desc->field_count && match == NULL; i++) {
+            if (!desc->fields[i].is_extension &&
+                strcmp(desc->fields[i].name, name) == 0) {
+                match = &desc->fields[i];
             }
         }
+        for (i = 0; i < desc->field_count && match == NULL; i++) {
+            if (desc->fields[i].is_extension &&
+                strcmp(desc->fields[i].name, name) == 0) {
+                match = &desc->fields[i];
+            }
+        }
+        return match;
     }
-    return NULL;
 }
 
 const char *
@@ -1446,7 +1491,9 @@ pbw_service_resolve(const pbw_schema *schema, const char *service,
     }
     in = pbw_schema_find(schema, pbw_method_input_type(m));
     out = pbw_schema_find(schema, pbw_method_output_type(m));
-    if (in == NULL || out == NULL) {
+    if (in == NULL || out == NULL || in->is_enum || out->is_enum) {
+        /* RPC types are messages; an enum descriptor has no fields to drive
+         * a request or a reply. */
         return PBW_ERR_INVALID;
     }
     if (in_desc != NULL) {

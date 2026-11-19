@@ -42,6 +42,20 @@ public final class TestCoverage {
         try (Schema schema = Schema.fromFile(mapDesc)) {
             deterministicMaps(schema.message("spectest.MapTest"));
         }
+        // A proto2 required field missing on the wire: the binary path must
+        // report PBW_ERR_REQUIRED (6), like the JSON/text parsers do, and
+        // keep the field name instead of collapsing to a generic failure.
+        try (Schema schema = Schema.fromFile(
+                "../../bindings/c/tests/data/matrix2.desc")) {
+            MessageType scalars = schema.message("structtest.Scalars2");
+            try {
+                scalars.decode(new byte[0]);
+                check(false, "decode without required fields must fail");
+            } catch (PbwireException e) {
+                check(e.status() == 6 && e.getMessage().contains("id"),
+                        "required-field decode reports status 6");
+            }
+        }
         String confDesc = args.length > 3 ? args[3] : "../../build/conformance.desc";
         if (java.nio.file.Files.exists(java.nio.file.Path.of(confDesc))) {
             try (Schema schema = Schema.fromFile(confDesc)) {
@@ -339,6 +353,12 @@ public final class TestCoverage {
             check("a\u00e9".equals(m.getMessage("inner").getString("tag")),
                     "\\u escape parses");
         }
+        // An enum number outside int32 must be rejected, not wrapped into a
+        // different member.
+        fails(() -> type.parseJson("{\"color\": 4294967297}"),
+                "out-of-range JSON enum number");
+        fails(() -> type.parseJson("{\"color\": -4294967295}"),
+                "negative out-of-range JSON enum number");
         fails(() -> type.parseJson("{\"nope\": 1}"), "unknown JSON field fails");
         try (Message m = type.parseJson("{\"nope\": 1}", true, Limits.defaults())) {
             check(m.encode().length == 0, "unknown JSON field skips");

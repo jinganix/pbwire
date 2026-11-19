@@ -1,0 +1,15 @@
+
+O
+*bindings/c/plugin/testdata/proto/dep.protodep"
+Base
+x (Rxbproto3
+ù
+,bindings/c/plugin/testdata/proto/recur.protorecur*bindings/c/plugin/testdata/proto/dep.proto"5
+Node
+next (2.recur.NodeRnext
+v (Rv""
+Alpha
+b (2.recur.BetaRb"3
+Beta
+x (Rx
+base (2	.dep.BaseRbasebproto3

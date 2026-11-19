@@ -110,12 +110,19 @@ func (s *Schema) retain() {
 }
 
 func (s *Schema) release() {
+	var c *C.pbw_schema
+
 	s.mu.Lock()
 	s.refs--
-	free := s.refs == 0
+	if s.refs == 0 {
+		/* Drop the pointer with the free: a later lookup then reports a
+		 * closed schema instead of reading freed memory. */
+		c = s.c
+		s.c = nil
+	}
 	s.mu.Unlock()
-	if free {
-		C.pbw_schema_free(s.c)
+	if c != nil {
+		C.pbw_schema_free(c)
 	}
 }
 
@@ -136,7 +143,13 @@ type MessageType struct {
 func (s *Schema) Message(name string) (*MessageType, error) {
 	cname := C.CString(name)
 	defer C.free(unsafe.Pointer(cname))
-	c := C.pbw_schema_find(s.c, cname)
+	s.mu.Lock()
+	schema := s.c
+	s.mu.Unlock()
+	if schema == nil {
+		return nil, errors.New("dynamic: schema is closed")
+	}
+	c := C.pbw_schema_find(schema, cname)
 	if c == nil {
 		return nil, fmt.Errorf("dynamic: message %s not found", name)
 	}

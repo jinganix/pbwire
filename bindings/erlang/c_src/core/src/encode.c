@@ -19,6 +19,9 @@ typedef struct {
     size_t limit;
     size_t pos;
     pbw_status status;
+    /* Set when a malloc for the deterministic map sort failed, so a caller
+     * buffer that also overflowed can report the right one. */
+    int alloc_failed;
 } writer;
 
 int
@@ -115,6 +118,7 @@ w_init(writer *w, pbw_buf *buf)
     w->limit = buf->cap;
     w->pos = 0;
     w->status = PBW_OK;
+    w->alloc_failed = 0;
 }
 
 PBW_INLINE int
@@ -531,7 +535,6 @@ write_element(writer *w, const pbw_field *field, const pbw_value *value,
                 return;
             }
             if (!w_reserve(w, 4 + lb + value->as.bytes.len)) {
-                w->status = PBW_ERR_NOMEM;
                 return;
             }
             w_tag_noreserve(w, field->tag_word, field->tag_len);
@@ -579,7 +582,6 @@ write_element(writer *w, const pbw_field *field, const pbw_value *value,
          * whole word, so reserve 4 for it. */
         if (field->tag_len <= 4) {
             if (!w_reserve(w, 4 + 1)) {
-                w->status = PBW_ERR_NOMEM;
                 return;
             }
             w_tag_noreserve(w, field->tag_word, field->tag_len);
@@ -612,7 +614,6 @@ write_element(writer *w, const pbw_field *field, const pbw_value *value,
          * a whole word, so reserve 4 for it. */
         if (field->tag_len <= 4) {
             if (!w_reserve(w, 4 + 4)) {
-                w->status = PBW_ERR_NOMEM;
                 return;
             }
             w_tag_noreserve(w, field->tag_word, field->tag_len);
@@ -631,7 +632,6 @@ write_element(writer *w, const pbw_field *field, const pbw_value *value,
         }
         if (field->tag_len <= 4) {
             if (!w_reserve(w, 4 + 8)) {
-                w->status = PBW_ERR_NOMEM;
                 return;
             }
             w_tag_noreserve(w, field->tag_word, field->tag_len);
@@ -648,7 +648,6 @@ write_element(writer *w, const pbw_field *field, const pbw_value *value,
         }
         if (field->tag_len <= 4) {
             if (!w_reserve(w, 4 + 10)) {
-                w->status = PBW_ERR_NOMEM;
                 return;
             }
             w_tag_noreserve(w, field->tag_word, field->tag_len);
@@ -742,7 +741,6 @@ write_packed(writer *w, const pbw_field *field, const pbw_value *list)
         payload = n;
         if (!w_reserve(w, (field->len_tag_len <= 4 ? 4 : field->len_tag_len) +
                               pbw_varint_size(payload) + payload)) {
-            w->status = PBW_ERR_NOMEM;
             return;
         }
         if (field->len_tag_len <= 4) {
@@ -772,7 +770,6 @@ write_packed(writer *w, const pbw_field *field, const pbw_value *list)
         payload = n * 4;
         if (!w_reserve(w, (field->len_tag_len <= 4 ? 4 : field->len_tag_len) +
                               pbw_varint_size(payload) + payload)) {
-            w->status = PBW_ERR_NOMEM;
             return;
         }
         if (field->len_tag_len <= 4) {
@@ -807,7 +804,6 @@ write_packed(writer *w, const pbw_field *field, const pbw_value *list)
         payload = n * 8;
         if (!w_reserve(w, (field->len_tag_len <= 4 ? 4 : field->len_tag_len) +
                               pbw_varint_size(payload) + payload)) {
-            w->status = PBW_ERR_NOMEM;
             return;
         }
         if (field->len_tag_len <= 4) {
@@ -893,7 +889,6 @@ write_packed(writer *w, const pbw_field *field, const pbw_value *list)
      * number >= 2^21) is copied byte by byte instead. */
     if (!w_reserve(w, (field->len_tag_len <= 4 ? 4 : field->len_tag_len) +
                           pbw_varint_size(payload) + payload)) {
-        w->status = PBW_ERR_NOMEM;
         return;
     }
     if (field->len_tag_len <= 4) {
@@ -965,41 +960,66 @@ map_key_cmp(const pbw_field *kf, const pbw_value *a, const pbw_value *b)
     if (ka == kb) {
         return 0;
     }
-    if (ka == NULL) {
-        return -1;
-    }
-    if (kb == NULL) {
-        return 1;
-    }
-    if (ka->kind == PBW_VALUE_BYTES && kb->kind == PBW_VALUE_BYTES) {
-        size_t n = ka->as.bytes.len < kb->as.bytes.len ? ka->as.bytes.len
-                                                       : kb->as.bytes.len;
+    /* An absent key is its field default (0, or the empty string): the
+     * reference sorts by the logical key, not by presence. */
+    if (kf->type == PBW_TYPE_STRING) {
+        size_t la = ka != NULL ? ka->as.bytes.len : 0;
+        size_t lb = kb != NULL ? kb->as.bytes.len : 0;
+        size_t n = la < lb ? la : lb;
         int r = n > 0 ? memcmp(ka->as.bytes.data, kb->as.bytes.data, n) : 0;
 
         if (r != 0) {
             return r < 0 ? -1 : 1;
         }
-        if (ka->as.bytes.len != kb->as.bytes.len) {
-            return ka->as.bytes.len < kb->as.bytes.len ? -1 : 1;
+        if (la != lb) {
+            return la < lb ? -1 : 1;
         }
         return 0;
     }
-    switch (kf->type) {
-    case PBW_TYPE_INT32:
-    case PBW_TYPE_INT64:
-    case PBW_TYPE_SINT32:
-    case PBW_TYPE_SINT64:
-    case PBW_TYPE_SFIXED32:
-    case PBW_TYPE_SFIXED64:
-        if ((int64_t)ka->as.u64 != (int64_t)kb->as.u64) {
-            return (int64_t)ka->as.u64 < (int64_t)kb->as.u64 ? -1 : 1;
+    {
+        uint64_t ua = ka != NULL ? ka->as.u64 : 0;
+        uint64_t ub = kb != NULL ? kb->as.u64 : 0;
+
+        switch (kf->type) {
+        /* Normalize to the width the wire carries: the encoder truncates
+         * INT32/UINT32/BOOL, so the sort must compare the same bits. */
+        case PBW_TYPE_INT32:
+        case PBW_TYPE_SINT32:
+        case PBW_TYPE_SFIXED32: {
+            int64_t sa = (int64_t)(int32_t)(uint32_t)ua;
+            int64_t sb = (int64_t)(int32_t)(uint32_t)ub;
+
+            return sa < sb ? -1 : sa > sb ? 1
+                                          : 0;
         }
-        return 0;
-    default:
-        if (ka->as.u64 != kb->as.u64) {
-            return ka->as.u64 < kb->as.u64 ? -1 : 1;
+        case PBW_TYPE_INT64:
+        case PBW_TYPE_SINT64:
+        case PBW_TYPE_SFIXED64: {
+            int64_t sa = (int64_t)ua;
+            int64_t sb = (int64_t)ub;
+
+            return sa < sb ? -1 : sa > sb ? 1
+                                          : 0;
         }
-        return 0;
+        case PBW_TYPE_BOOL: {
+            uint64_t na = ua != 0 ? 1 : 0;
+            uint64_t nb = ub != 0 ? 1 : 0;
+
+            return na < nb ? -1 : na > nb ? 1
+                                          : 0;
+        }
+        case PBW_TYPE_UINT32:
+        case PBW_TYPE_FIXED32: {
+            uint32_t na = (uint32_t)ua;
+            uint32_t nb = (uint32_t)ub;
+
+            return na < nb ? -1 : na > nb ? 1
+                                          : 0;
+        }
+        default:
+            return ua < ub ? -1 : ua > ub ? 1
+                                          : 0;
+        }
     }
 }
 
@@ -1063,6 +1083,7 @@ write_map_sorted(writer *w, const pbw_field *field, const pbw_value *list,
     }
     if (n > SIZE_MAX / (2 * sizeof(*items))) {
         w->status = PBW_ERR_NOMEM;
+        w->alloc_failed = 1;
         return;
     }
     /* One allocation split in two: halves the malloc/free calls on the
@@ -1070,6 +1091,7 @@ write_map_sorted(writer *w, const pbw_field *field, const pbw_value *list,
     items = (pbw_value **)malloc(2 * n * sizeof(*items));
     if (items == NULL) {
         w->status = PBW_ERR_NOMEM;
+        w->alloc_failed = 1;
         return;
     }
     tmp = items + n;
@@ -1091,8 +1113,13 @@ write_map_sorted(writer *w, const pbw_field *field, const pbw_value *list,
         em = items[j]->as.msg;
         k = pbw_message_get(em, 1);
 
-        if (k != NULL && k->kind == PBW_VALUE_BYTES &&
-            !pbw_bytes_readable(k)) {
+        /* The key must be the kind the comparator reads: a string key is
+         * compared as bytes (reading kernel memory through a UINT value's
+         * bits would follow a NULL data pointer), an integer key as bits. */
+        if (k != NULL &&
+            ((kf->type == PBW_TYPE_STRING &&
+              (k->kind != PBW_VALUE_BYTES || !pbw_bytes_readable(k))) ||
+             (kf->type != PBW_TYPE_STRING && k->kind != PBW_VALUE_UINT))) {
             free(items);
             w->status = PBW_ERR_INVALID;
             return;
@@ -1582,8 +1609,8 @@ encode_into(const pbw_message *msg, int det, void *out, size_t cap, size_t *len)
     w_init(&w, &buf);
     encode_message(&w, msg, 0, det);
     status = w.status;
-    if (status == PBW_ERR_NOMEM && buf.fixed) {
-        /* A fixed buffer cannot fail to allocate: the write did not fit. */
+    if (status == PBW_ERR_NOMEM && buf.fixed && !w.alloc_failed) {
+        /* A caller buffer does not allocate: the write did not fit. */
         status = PBW_ERR_LIMIT;
     }
     if (status == PBW_OK) {

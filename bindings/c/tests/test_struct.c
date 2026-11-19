@@ -37,6 +37,10 @@
 
 #include "pbwire.h"
 
+/* Scratch descriptor for the hostile-load case: written and removed by the
+ * test, git-ignored and cleaned up by `make clean`. */
+#define CORRUPT_DESC_PATH "corrupt_test.desc"
+
 #include "gen/matrix2.h"
 #include "gen/matrix3.h"
 #include "gen/maptest.h"
@@ -1059,6 +1063,43 @@ test_failed_decode_cleanup(void)
     pbw_schema_free(schema);
 }
 
+/* A table that leaves the wire facts at 0 (a layout written before the
+ * code generator filled them in) derives them from the schema, including the
+ * UTF-8 rule: a proto3 `string` must decode valid UTF-8. */
+typedef struct {
+    const char *s;
+} legacy_str_t;
+
+static const pbw_struct_field_t legacy_str_fields[] = {
+    {1, PBW_SF_STRING, 0, offsetof(legacy_str_t, s), 0, 0, 0, 0, NULL, 0, 0, 0,
+     0, 0, 0, 0},
+};
+
+static void
+test_utf8_follows_schema(void)
+{
+    static const uint8_t bad[] = {0x0a, 0x01, 0xFF}; /* s = 1, one byte */
+    pbw_schema *schema = pbw_schema_new();
+    pbw_descriptor *m = pbw_schema_add_message(schema, "S");
+    legacy_str_t out;
+
+    CHECK(schema != NULL && m != NULL);
+    if (schema == NULL || m == NULL) {
+        pbw_schema_free(schema);
+        return;
+    }
+    pbw_schema_set_proto3(schema, 1);
+    pbw_message_add_field(m, "s", 1, PBW_TYPE_STRING, PBW_LABEL_OPTIONAL);
+    CHECK_OK(pbw_schema_link(schema));
+
+    memset(&out, 0, sizeof(out));
+    CHECK_STATUS(PBW_ERR_INVALID,
+                 pbw_struct_decode(schema, "S", legacy_str_fields, 1, bad,
+                                   sizeof(bad), &out));
+    pbw_struct_free(legacy_str_fields, 1, &out);
+    pbw_schema_free(schema);
+}
+
 /* The schema drives: a layout that drops a field, changes a kind or
  * flips repetition must fail instead of silently dropping data. */
 static void
@@ -1103,6 +1144,18 @@ test_layout_mismatch(void)
     /* Wrong kind (int32 field read as string). */
     memcpy(fields, structtest_scalars3_fields, sizeof(fields));
     fields[0].kind = PBW_SF_STRING;
+    CHECK_STATUS(PBW_ERR_INVALID,
+                 pbw_struct_encode(schema, "structtest.Scalars3", fields, 22,
+                                   &s, &wire, &wire_len));
+    CHECK(wire == NULL);
+
+    /* Kind and type flipped together: the row is self-consistent but the
+     * schema says string, so writing a pbw_bytes_t through an 8-byte slot
+     * would corrupt the struct. */
+    memcpy(fields, structtest_scalars3_fields, sizeof(fields));
+    fields[13].kind = PBW_SF_BYTES;
+    fields[13].type = PBW_TYPE_BYTES;
+    fields[13].wire = 2;
     CHECK_STATUS(PBW_ERR_INVALID,
                  pbw_struct_encode(schema, "structtest.Scalars3", fields, 22,
                                    &s, &wire, &wire_len));
@@ -1201,7 +1254,7 @@ test_schema_load_errors(void)
     CHECK(schema == NULL);
     CHECK_STATUS(PBW_ERR_INVALID,
                  pbw_struct_schema_load(MATRIX3_DESC_PATH, NULL));
-    f = fopen("corrupt_test.desc", "wb");
+    f = fopen(CORRUPT_DESC_PATH, "wb");
     CHECK(f != NULL);
     if (f != NULL) {
         static const uint8_t garbage[] = {0xde, 0xad, 0xbe, 0xef};
@@ -1210,12 +1263,12 @@ test_schema_load_errors(void)
         /* Garbage propagates descriptor_set_load's contract: a status
          * plus a schema carrying the reason, freed on both paths. */
         schema = (pbw_schema *)0x1;
-        if (pbw_struct_schema_load("corrupt_test.desc", &schema) == PBW_OK) {
+        if (pbw_struct_schema_load(CORRUPT_DESC_PATH, &schema) == PBW_OK) {
             CHECK(0); /* garbage must not load */
         }
         CHECK(schema != (pbw_schema *)0x1);
         pbw_schema_free(schema);
-        remove("corrupt_test.desc");
+        remove(CORRUPT_DESC_PATH);
     }
 }
 
@@ -2336,6 +2389,7 @@ main(void)
     test_merge_keeps_defaults();
     test_merge_repeated_keeps_defaults();
     test_failed_decode_cleanup();
+    test_utf8_follows_schema();
     test_layout_mismatch();
     test_bad_arguments();
     test_schema_load_errors();

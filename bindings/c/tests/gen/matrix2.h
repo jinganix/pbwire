@@ -20,15 +20,18 @@ typedef enum {
     STRUCTTEST_SHADE_SHADE_NEG = -2
 } structtest_shade_t;
 
+typedef struct structtest_inner2 structtest_inner2_t;
+typedef struct structtest_scalars2 structtest_scalars2_t;
+
 /* structtest.Inner2 */
-typedef struct {
+struct structtest_inner2 {
     const char *name; /* required */
     int32_t value; /* optional */
     int has_value;
-} structtest_inner2_t;
+};
 
 /* structtest.Scalars2 */
-typedef struct {
+struct structtest_scalars2 {
     int32_t id; /* required */
     int has_id;
     int32_t i32; /* optional */
@@ -51,7 +54,7 @@ typedef struct {
     structtest_inner2_t *inner; /* optional, structtest.Inner2 */
     structtest_inner2_t *inners;
     size_t n_inners;
-} structtest_scalars2_t;
+};
 
 static const pbw_struct_field_t structtest_inner2_fields[] = {
     {1, PBW_SF_STRING, 0, offsetof(structtest_inner2_t, name), 0, 0, 0, 0, NULL, 0, PBW_TYPE_STRING, 2, 0, 1, 0, 0},

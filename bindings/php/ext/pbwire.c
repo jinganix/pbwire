@@ -1271,6 +1271,7 @@ PHP_METHOD(Message, encode) {
         pbw_status fast = pbw_encode_to(m->msg, ZSTR_VAL(str), cap, &len);
         if (fast == PBW_OK) {
             ZSTR_LEN(str) = len;
+            ZSTR_VAL(str)[len] = '\0'; /* zend_string invariant */
             m->encode_hint = len;
             RETURN_STR(str);
         }
@@ -1296,6 +1297,7 @@ PHP_METHOD(Message, encode) {
         RETURN_THROWS();
     }
     ZSTR_LEN(str) = len;
+    ZSTR_VAL(str)[len] = '\0'; /* zend_string invariant */
     m->encode_hint = len;
     RETURN_STR(str);
 }
@@ -1361,6 +1363,7 @@ PHP_METHOD(Message, encodeTo) {
         RETURN_THROWS();
     }
     ZSTR_LEN(str) = len;
+    ZSTR_VAL(str)[len] = '\0'; /* zend_string invariant */
     RETURN_STR(str);
 }
 

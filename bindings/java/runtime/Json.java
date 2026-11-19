@@ -1866,7 +1866,13 @@ public final class Json {
                 if (v == null) {
                     v = (long) (double) parseDouble(false);
                 }
-                number = v.intValue();
+                if (v < Integer.MIN_VALUE || v > Integer.MAX_VALUE) {
+                    /* Every other integer path range-checks; wrapping here
+                     * would silently name a different enum member. */
+                    throw new PbwireException("JSON: enum value " + text
+                            + " is outside int32", 1);
+                }
+                number = (int) (long) v;
             } else if (kind == JK_NULL && isNullValue(f)) {
                 expectLit("null"); // the canonical spelling of NULL_VALUE
                 number = 0;

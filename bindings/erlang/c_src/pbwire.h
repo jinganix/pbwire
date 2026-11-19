@@ -241,6 +241,25 @@ typedef struct ep_tdata_s {
     pbw_ctx *ctx;
 } ep_tdata_t;
 
+/* set_opts() publishes one of these in a single store. decode() checks
+ * max_bytes under the cache read lock; the other reads (context creation and
+ * the encoder's retain_cap) are unlocked on purpose -- they only steer buffer
+ * sizing, so a stale value costs one call. */
+typedef struct ep_opts_s {
+    uint32_t with_utf8;
+    uint32_t string_as_list;
+    /* retain_cap_set: apply retain_cap to every scheduler context
+     * (existing and future). Unset means the core default. */
+    int retain_cap_set;
+    size_t retain_cap;
+    /* Input guards for untrusted wire data, mirroring pbw_limits.
+     * Zero (unset) means no cap beyond the built-in ones. */
+    int max_bytes_set;
+    size_t max_bytes;
+    int max_depth_set;
+    uint32_t max_depth;
+} ep_opts_t;
+
 struct ep_state_s {
     ep_cache_t *cache;
 
@@ -255,20 +274,7 @@ struct ep_state_s {
     ErlNifRWLock *cache_lock;
     void *_pad_local_lock; /* layout: was ErlNifRWLock *local_lock */
 
-    struct opts_s {
-        uint32_t with_utf8;
-        uint32_t string_as_list;
-        /* retain_cap_set: apply retain_cap to every scheduler context
-         * (existing and future). Unset means the core default. */
-        int retain_cap_set;
-        size_t retain_cap;
-        /* Input guards for untrusted wire data, mirroring pbw_limits.
-         * Zero (unset) means no cap beyond the built-in ones. */
-        int max_bytes_set;
-        size_t max_bytes;
-        int max_depth_set;
-        uint32_t max_depth;
-    } opts;
+    ep_opts_t opts;
 
     ERL_NIF_TERM atom_ok;
     ERL_NIF_TERM atom_error;

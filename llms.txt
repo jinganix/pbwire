@@ -9,7 +9,7 @@
 
 Facts: source at <https://github.com/jinganix/pbwire>, license Apache-2.0, version `0.1.18`
 (`VERSION` is the source of truth, `project(pbwire VERSION ...)` in `CMakeLists.txt` matches it). Encodings are byte-identical to `protoc 36.2`
-and pass Google's official conformance suites: binary + JSON 2745 successes, 0 skipped (2 expected
+and pass Google's official conformance suites: binary + JSON 2750 successes, 0 skipped (2 expected
 failures that the reference C++ testee fails identically:
 `Required.Proto2/Proto3.ProtobufInput.BadTag_FieldNumberSlightlyTooHigh`; pbwire additionally
 passes 4 JSON tests the reference fails, `SingleValueForRepeatedFieldInt32/Message` on both
@@ -172,7 +172,8 @@ C++ runtime), `make bench`, `make bench-c` (C structs vs protoc C++). Optional, 
   `max_depth` clamps to `PBW_MAX_DEPTH`.
 - `pbw_encode_deterministic`: map entries sorted by key, everything else byte-identical to
   `pbw_encode`. `pbw_encode_deterministic_to` is its caller-memory twin (`PBW_ERR_LIMIT` when the
-  buffer is too small), so a deterministic frame costs no malloc plus copy.
+  buffer is too small), so the output buffer costs no malloc plus copy; the map-entry sort still
+  allocates, so a map-bearing message can also return `PBW_ERR_NOMEM`.
 - `pbw_status pbw_message_encoded_size(const pbw_message *, size_t *len)`: exact wire length
   without allocating or writing bytes (one walk; measured at ~0.8x of an encode), for callers that
   must frame a message before encoding it. `pbw_encode_to()` over-reserves tag/varint space, so its
@@ -280,10 +281,12 @@ C++ runtime), `make bench`, `make bench-c` (C structs vs protoc C++). Optional, 
 - Text format (`pbw_text_print` / `pbw_text_parse`): printer output is byte-identical to the
   reference; the parser matches it (extensions as `[full.name]`, group type names, `Any`
   expansions, unknown fields as numeric lines with `print_unknown_fields`, strict rejections
-  including bad-UTF-8 strings, singular duplicates and unknown names).
+  including bad-UTF-8 strings in a field whose `utf8_validation` resolves to VERIFY, singular
+  duplicates and unknown names).
 - JSON mapping (`pbw_json_print` / `pbw_json_parse`): same verdicts as the reference parser on
 - `pbw_utf8_valid`: the structural UTF-8 check decode() applies to a field whose
-  utf8_validation resolves to VERIFY, and the text/JSON parsers apply to every string.
+  utf8_validation resolves to VERIFY; the JSON parser applies it to every string, the text parser
+  follows the same per-field rule as decode().
   40,000 mutated inputs; all well-known types (`Any`, `Timestamp`, `Duration`, `FieldMask`,
   `Struct`/`Value`, wrappers, `Empty`), extensions as `[full.name]`, closed-enum unknowns kept as
   unknown fields, strict base64 (padded input must fill quanta) and strict numbers.

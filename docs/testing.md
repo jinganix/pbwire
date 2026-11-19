@@ -156,7 +156,7 @@ PBWIRE_PROTOBUF_SRC=/path/to/protobuf make conformance   # use an existing check
 ```
 
 ```
-CONFORMANCE SUITE PASSED: 2745 successes, 0 skipped, 2 expected failures, 0 unexpected failures.
+CONFORMANCE SUITE PASSED: 2750 successes, 0 skipped, 2 expected failures, 0 unexpected failures.
 CONFORMANCE SUITE PASSED: 443 successes, 0 skipped, 0 expected failures, 0 unexpected failures.
 ```
 
@@ -221,11 +221,19 @@ Eleven bindings run the whole suite (binary, JSON and text); only JSPB answers
 static-link hosts forward to the same C core, so a mapping bug has one place to
 live and one suite to prove it.
 
-The suite's *recommended* tier is not enforced: `--enforce_recommended` reports
-`RejectInvalidUtf8.String.*` for the core and for every binding, because
-`pbw_decode` keeps string bytes as given (a gateway must pass an invalid-UTF-8
-field through unchanged) and only the JSON/text printers reject it. Required
-tests all pass.
+The suite's *recommended* tier is not enforced. For the core,
+`--enforce_recommended` reports 67 cases in four families. The binary/JSON run
+accounts for 65: a proto3 scalar that arrives as zero is written back out
+(`ValidDataScalarBinary.*.ProtobufOutput`, implicit presence), the JSON parser
+takes tokens the strict tier rejects by opinion (44 `JsonInput.*`, among them
+trailing commas, single quotes, duplicate keys, double-quoted bools and
+`Struct`/`Value` nesting past 100), and three `FieldMask` output checks. The
+text run adds two (`TextFormatInput.StringLiteralShortUnicodeEscapeSurrogatePair*`,
+a short surrogate-pair escape). Invalid UTF-8 is not among them: `pbw_decode`
+rejects a malformed proto3 (`utf8_validation: VERIFY`) string and keeps a proto2
+string as given (a gateway must pass a proto2 invalid-UTF-8 field through
+unchanged), so only the JSON parser rejects every string; the text parser
+follows the same per-field rule. Required tests all pass.
 
 ## 6. Environments a laptop cannot cover
 

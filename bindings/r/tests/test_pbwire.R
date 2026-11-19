@@ -193,6 +193,15 @@ ok(identical(pbwire_message_encode(cm), wire), "context decode reads back")
 ok(fails(pbwire_message_set(cm, list())), "context tree is read-only")
 pbwire_context_reset(ctx)
 ok(fails(pbwire_message_encode(cm)), "reset invalidates the borrow")
+# A second decode resets the sealed arena implicitly: the first tree must not
+# survive it silently.
+cm2 <- pbwire_context_decode(ctx, schema, msg, wire)
+cm3 <- pbwire_context_decode(ctx, schema, msg, wire)
+ok(fails(pbwire_message_encode(cm2)), "implicit reset invalidates the earlier tree")
+ok(identical(pbwire_message_encode(cm3), wire), "the newest tree is readable")
+# encode works after a decode, and it resets the arena like decode does
+invisible(pbwire_context_encode(ctx, schema, msg, full))
+ok(fails(pbwire_message_encode(cm3)), "encode after decode invalidates the tree")
 ok(pbwire_context_used(ctx) >= 0, "used reports bytes held")
 invisible(pbwire_context_retain_cap(ctx, 1024))
 ok(pbwire_context_retain_cap(ctx) == 1024, "retain cap reads back")

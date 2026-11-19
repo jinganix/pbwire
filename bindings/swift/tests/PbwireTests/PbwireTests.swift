@@ -89,6 +89,17 @@ final class PbwireTests: XCTestCase {
         XCTAssertEqual(try decoded.encode(), wire)
     }
 
+    /// An interior NUL is part of the value: the setter stores UTF-8 bytes,
+    /// not a NUL-terminated C string, so the tail must survive a round trip.
+    func testStringWithInteriorNul() throws {
+        let schema = try loadSchema()
+        let message = schema.message("pbwswift.Probe")!
+
+        try message.set(.string("a\0b"), "text")
+        let wire = try message.encode()
+        XCTAssertEqual(try message.decode(wire).get("text"), .string("a\0b"))
+    }
+
     func testPinnedBytes() throws {
         // One pinned encoding, so wire drift fails here instead of in a
         // benchmark: i32 = 150 packs as 08 96 01, text = "hi" as 4A 02 68 69.

@@ -13,6 +13,7 @@
  * checkout (`make shared` builds it).
  */
 
+import 'dart:convert';
 import 'dart:ffi';
 import 'dart:io';
 import 'dart:typed_data';
@@ -1281,13 +1282,13 @@ final class Message {
   Uint8List encodeDelimited() => _encodeWith(_lib.encodeDelimited);
 
   /// Protobuf JSON mapping. Unknown fields are not printed.
-  String printJson() => String.fromCharCodes(_encodeWith(_lib.jsonPrint));
+  String printJson() => utf8.decode(_encodeWith(_lib.jsonPrint));
 
   /// Protobuf text format. Unknown fields print as numeric lines when
   /// [printUnknown] is set, like the reference printer.
   String printText([bool printUnknown = false]) {
     if (!printUnknown) {
-      return String.fromCharCodes(_encodeWith(_lib.textPrint));
+      return utf8.decode(_encodeWith(_lib.textPrint));
     }
     _check();
     final out = calloc<Pointer<Uint8>>();
@@ -1299,7 +1300,7 @@ final class Message {
       }
       final bytes = Uint8List.fromList(out.value.asTypedList(len.value));
       _lib.free(out.value.cast());
-      return String.fromCharCodes(bytes);
+      return utf8.decode(bytes);
     } finally {
       calloc.free(out);
       malloc.free(len);

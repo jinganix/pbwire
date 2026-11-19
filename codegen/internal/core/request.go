@@ -1,6 +1,7 @@
 package core
 
 import (
+	"fmt"
 	"strings"
 
 	"google.golang.org/protobuf/reflect/protodesc"
@@ -117,7 +118,13 @@ func BuildDescriptors(req *pluginpb.CodeGeneratorRequest) ([]protoreflect.FileDe
 
 	var targets []protoreflect.FileDescriptor
 	for _, name := range req.FileToGenerate {
-		targets = append(targets, filesMap[normalizeProtoPath(name)])
+		fd, ok := filesMap[normalizeProtoPath(name)]
+		if !ok {
+			/* A target the request does not carry would be a nil entry, and
+			 * every caller dereferences it. Report it as a plugin error. */
+			return nil, nil, fmt.Errorf("file_to_generate %q is not in proto_file", name)
+		}
+		targets = append(targets, fd)
 	}
 	return all, targets, nil
 }

@@ -20,7 +20,8 @@ pbw_any_pack(const pbw_descriptor *any_desc, const char *type_url,
         return PBW_ERR_INVALID;
     }
     *out = NULL;
-    if (any_desc == NULL || type_url == NULL || (payload == NULL && len > 0)) {
+    if (any_desc == NULL || pbw_descriptor_is_enum(any_desc) ||
+        type_url == NULL || (payload == NULL && len > 0)) {
         return PBW_ERR_INVALID;
     }
     msg = pbw_message_new(any_desc);
@@ -175,7 +176,7 @@ wkt_from_millis(const pbw_descriptor *desc, int64_t ms, int floor_nanos,
         return PBW_ERR_INVALID;
     }
     *out = NULL;
-    if (desc == NULL) {
+    if (desc == NULL || pbw_descriptor_is_enum(desc)) {
         return PBW_ERR_INVALID;
     }
     /* The pair must convert back: secs * 1000 has to stay inside int64, and

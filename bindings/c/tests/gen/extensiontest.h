@@ -13,13 +13,16 @@
 #include "pbw_struct.h"
 #include "pbwire.h"
 
+typedef struct exttest_inner exttest_inner_t;
+typedef struct exttest_has_ext exttest_has_ext_t;
+
 /* exttest.Inner */
-typedef struct {
+struct exttest_inner {
     const char *name; /* optional */
-} exttest_inner_t;
+};
 
 /* exttest.HasExt */
-typedef struct {
+struct exttest_has_ext {
     int32_t id; /* optional */
     int has_id;
     int32_t ext_int; /* extension exttest.ext_int */
@@ -28,7 +31,7 @@ typedef struct {
     int32_t *ext_nums; /* extension exttest.ext_nums */
     size_t n_ext_nums;
     exttest_inner_t *ext_inner; /* extension exttest.ext_inner */
-} exttest_has_ext_t;
+};
 
 static const pbw_struct_field_t exttest_inner_fields[] = {
     {1, PBW_SF_STRING, 0, offsetof(exttest_inner_t, name), 0, 0, 0, 0, NULL, 0, PBW_TYPE_STRING, 2, 0, 0, 0, 0},

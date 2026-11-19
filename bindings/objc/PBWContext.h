@@ -36,9 +36,10 @@ NS_ASSUME_NONNULL_BEGIN
  * Every message decoded with this context becomes invalid. */
 - (void)reset;
 
-/* Internal: claim this wrapper for a pool release; NO when it was already
- * released (a second release would double-free the workspace). */
-- (BOOL)markReleased;
+/* Internal: claim this wrapper for a pool release and hand back the wrapped
+ * workspace, or NULL when it was already released (a second release would
+ * free the workspace twice). */
+- (nullable pbw_ctx *)markReleased;
 
 /* Internal: the wrapped workspace. A context from -[PBWPool acquire] shares
  * its workspace with the pool: do not free it, release it instead. */

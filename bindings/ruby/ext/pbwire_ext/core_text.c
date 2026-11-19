@@ -1009,13 +1009,10 @@ t_parse_number(text_cur *c, t_number *out)
                 r++;
             }
             if (r >= c->end || !t_is_digit(*r)) {
-                out->kind = T_NUM_FLOAT;
-                out->is_hex = 0;
-                out->is_oct = 0;
-                out->start = c->p;
-                out->len = (size_t)(q - c->p);
-                c->p = q;
-                return 1;
+                /* A dangling exponent is a malformed number, never a
+                 * mantissa followed by a new token: the reference lexer
+                 * rejects `.5e` as one bad float. */
+                return 0;
             }
             while (r < c->end && t_is_digit(*r)) {
                 r++;
@@ -1122,7 +1119,9 @@ t_unescape(pbw_buf *out, const char *start, size_t len)
             for (i = 0; i < 2 && p < end && *p >= '0' && *p <= '7'; i++) {
                 v = v * 8 + (unsigned)(*p++ - '0');
             }
-            /* values above 255 truncate, like the reference */
+            /* The reference text tokenizer truncates an octal escape above
+             * \\377 into a char (tokenizer.cc: static_cast<char>(code)),
+             * unlike its CUnescape helper; match the tokenizer. */
             if (!pbw_buf_reserve(out, 1)) {
                 return PBW_ERR_NOMEM;
             }
@@ -1720,7 +1719,10 @@ t_parse_string_value(text_in *t, pbw_message *msg, const pbw_field *field)
             }
         }
     }
-    if (field->type == PBW_TYPE_STRING &&
+    /* Same rule as the binary decoder: only a field whose utf8_validation
+     * resolves to VERIFY rejects bytes, so a proto2 string the decoder
+     * accepted prints and parses back. */
+    if (pbw_field_requires_utf8_validation(field) &&
         !pbw_utf8_valid(out.data == NULL ? (const uint8_t *)"" : out.data,
                         out.len)) {
         pbw_buf_free(&out);
@@ -1909,8 +1911,16 @@ t_skip_value(text_in *t, uint32_t depth)
             t->cur.p++;
             t_skip(&t->cur);
         }
-        if (t_parse_number(&t->cur, &num)) {
-            return PBW_OK;
+        {
+            /* A malformed number ("1z") advances the cursor before failing,
+             * so retry the identifier from the saved position instead of
+             * accepting the glued tail as a separate token. */
+            text_cur save = t->cur;
+
+            if (t_parse_number(&t->cur, &num)) {
+                return PBW_OK;
+            }
+            t->cur = save;
         }
         if (t_ident(&t->cur, &start, &len)) {
             return PBW_OK;

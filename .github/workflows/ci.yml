@@ -27,7 +27,15 @@ jobs:
           else
             RANGE="HEAD~1..HEAD"
           fi
-          for c in $(git log --format=%H "$RANGE"); do
+          commits=$(git log --format=%H "$RANGE") || {
+            echo "cannot resolve commit range $RANGE" >&2
+            exit 1
+          }
+          if [ -z "$commits" ]; then
+            echo "commit range $RANGE is empty" >&2
+            exit 1
+          fi
+          for c in $commits; do
             git show -s --format=%B "$c" > /tmp/pbwire-commit-msg
             echo "--- $c: $(head -n 1 /tmp/pbwire-commit-msg)"
             ./scripts/validate-commit-msg.sh /tmp/pbwire-commit-msg
@@ -200,6 +208,10 @@ jobs:
         run: |
           PROTOC="$PB_SRC/build/protoc" make codegen
           git diff --exit-code
+          # `git diff` ignores untracked files: a newly generated model that
+          # should be committed would otherwise slip through. Scoped to the
+          # trees codegen writes so an unrelated stray file cannot red the job.
+          test -z "$(git status --porcelain -- bindings codegen)"
       - name: Generated model tests (Ruby, PHP, Node, Python)
         run: make -C codegen test-ruby test-php test-node test-python
 

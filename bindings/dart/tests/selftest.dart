@@ -172,6 +172,14 @@ void main(List<String> args) {
     dd.message.close();
     final js = m.printJson();
     check(_equals(ty.parseJson(js).encode(), w), 'json round trip');
+    // The printer emits UTF-8 bytes: a non-ASCII string must not come back as
+    // one character per byte.
+    final uni = ty.newMessage()..setString('str', 'é');
+    check(uni.printJson().contains('é'), 'printJson decodes UTF-8');
+    // The text printer escapes non-ASCII bytes, so the check is the round
+    // trip: the escaped form must parse back to the same value.
+    check(_equals(uni.encode(), ty.parseText(uni.printText()).encode()),
+        'printText escapes and re-parses');
     check(_throws(() => ty.parseJson('{"nope":1}')), 'json unknown accepted');
     check(_throws(() => ty.parseJson('{"name":"x"}', maxBytes: 4)),
         'parseJson honors maxBytes');

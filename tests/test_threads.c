@@ -555,7 +555,14 @@ run(pbw_schema *schema, const char *label, void *(*entry)(void *),
         workers[i].outer = outer;
         workers[i].id = i;
         if (pthread_create(&threads[i], NULL, entry, &workers[i]) != 0) {
+            /* The already-created threads point at this stack: join them
+             * before unwinding instead of leaving them dangling. */
+            unsigned j;
+
             fprintf(stderr, "%s: pthread_create failed\n", label);
+            for (j = 0; j < i; j++) {
+                pthread_join(threads[j], NULL);
+            }
             return 1;
         }
     }

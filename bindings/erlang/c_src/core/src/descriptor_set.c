@@ -38,6 +38,10 @@ typedef struct {
     int repack;
     int msg_enc;
     int utf8;
+    /* Dialect of the file that declared the field, for the default behind
+     * those five: an extension may be declared in a proto3 file while its
+     * extendee is a proto2 message. */
+    int proto3;
 } ds_features;
 
 /* One parsed FieldDescriptorProto: regular fields and extensions share the
@@ -507,7 +511,9 @@ ds_add_field(pbw_schema *schema, pbw_descriptor *msg,
         field->presence = 1;
     }
     field->enum_open =
-        (uint8_t)info->feat.enum_open; /* closed-ness lives on the enum type */
+        (uint8_t)(info->type == PBW_TYPE_ENUM
+                      ? info->feat.enum_open /* closed-ness lives on the enum type */
+                      : 0);
     field->msg_enc =
         (uint8_t)(info->feat.msg_enc ? info->feat.msg_enc : file->msg_enc);
     /* utf8_validation, the reference's rule: field FeatureSet, then the file's,
@@ -516,7 +522,7 @@ ds_add_field(pbw_schema *schema, pbw_descriptor *msg,
     {
         int utf8 = info->feat.utf8 ? info->feat.utf8
                                    : (file->utf8 ? file->utf8
-                                                 : (msg->proto3 ? 2 : 3));
+                                                 : (file->proto3 ? 2 : 3));
 
         field->utf8_check =
             (uint8_t)(utf8 == 2 && info->type == PBW_TYPE_STRING);
@@ -579,8 +585,9 @@ ds_queue_extension(pbw_schema *schema, ds_pending_ext **exts, size_t *count,
     return PBW_OK;
 }
 
-/* Attaches every queued extension to the message it extends. The dialect
- * follows the extendee: an extension of a proto2 message is proto2 itself. */
+/* Attaches every queued extension to the message it extends. The field's
+ * dialect (presence, packing, utf8_validation) follows the file that declares
+ * the extension, not the extendee's: the two may differ. */
 static pbw_status
 ds_attach_extensions(pbw_schema *schema, ds_pending_ext *exts, size_t count)
 {
@@ -760,6 +767,9 @@ ds_enum_proto(pbw_schema *schema, const char *parent, const uint8_t *p,
             ds_error(schema, "enum value without a name in %s", fqname);
             return PBW_ERR_INVALID;
         }
+        /* EnumValueDescriptorProto.number is optional (default 0), so a
+         * missing number is not an error; protoc never omits it, and the
+         * reference descriptor pool accepts the default. */
         status = pbw_enum_add_value(desc, value_name, number);
         if (status != PBW_OK) {
             ds_error(schema, "out of memory");
@@ -1153,6 +1163,12 @@ ds_service_proto(pbw_schema *schema, const char *package, const uint8_t *p,
                             end)) != PBW_OK) {
         return status;
     }
+    if (pbw_schema_service_find(schema, fqname) != NULL) {
+        /* Two services under one name would make every lookup return the
+         * first one and silently hide the other's methods. */
+        ds_error(schema, "duplicate service %s", fqname);
+        return PBW_ERR_INVALID;
+    }
     svc = (pbw_service *)calloc(1, sizeof(*svc));
     if (svc == NULL) {
         ds_error(schema, "out of memory");
@@ -1190,7 +1206,10 @@ ds_service_proto(pbw_schema *schema, const char *package, const uint8_t *p,
                 break;
             }
             if (info.name[0] == '\0' || info.input[0] == '\0' ||
-                info.output[0] == '\0') {
+                info.output[0] == '\0' ||
+                pbw_service_method_find(svc, info.name) != NULL) {
+                /* A repeated rpc name resolves to the first method, so the
+                 * second one would never be reachable. */
                 status = PBW_ERR_INVALID;
                 break;
             }
@@ -1302,10 +1321,16 @@ ds_file_proto(pbw_schema *schema, const uint8_t *p, const uint8_t *end,
     /* File FeatureSet over the syntax defaults. FileOptions.features is
      * field 50; options may sit anywhere, so re-walk for them. */
     memset(&feat, 0, sizeof(feat));
-    feat.presence = has_edition ? 1 : 0;            /* EXPLICIT unless overridden */
-    feat.enum_open = has_edition || proto3 ? 1 : 0; /* OPEN unless proto2 */
-    feat.repack = proto3 || has_edition;            /* PACKED for proto3/editions */
-    feat.msg_enc = has_edition ? 1 : 0;             /* LENGTH_PREFIXED for editions */
+    /* Dialect defaults: the proto3 dialect (proto3 syntax, and the
+     * EDITION_PROTO3 placeholder 999) has implicit presence, open enums and
+     * packed repeated fields; proto2 syntax and the EDITION_PROTO2 placeholder
+     * (998) have explicit presence, closed enums and expanded repeats; every
+     * other edition defaults like 2023 (explicit presence, OPEN, PACKED). */
+    feat.presence = (has_edition ? edition == 999 : proto3 != 0) ? 0 : 1;
+    feat.enum_open = proto3 ? 1 : 0;
+    feat.repack = proto3 ? 1 : 0;
+    feat.msg_enc = has_edition ? 1 : 0; /* LENGTH_PREFIXED for editions */
+    feat.proto3 = proto3;
     walk = p;
     for (;;) {
         int rc = ds_next(&walk, end, &f);

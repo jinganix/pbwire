@@ -40,10 +40,15 @@
 
 - (void)releaseContext:(PBWContext *)context
 {
-    if (![context markReleased]) {
+    /* The claim hands back the workspace: reading `ctx` after it would raise
+     * (the pool may have given it to another owner), reading it before it
+     * would defeat the double-release guard below. */
+    pbw_ctx *raw = [context markReleased];
+
+    if (raw == NULL) {
         return; /* second release of one wrapper: nothing to do */
     }
-    pbw_pool_release(_pool, context.ctx);
+    pbw_pool_release(_pool, raw);
 }
 
 - (NSUInteger)idleCount

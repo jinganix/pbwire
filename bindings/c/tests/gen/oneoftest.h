@@ -13,10 +13,13 @@
 #include "pbw_struct.h"
 #include "pbwire.h"
 
+typedef struct structtest_sub structtest_sub_t;
+typedef struct structtest_one_of_test structtest_one_of_test_t;
+
 /* structtest.Sub */
-typedef struct {
+struct structtest_sub {
     int32_t v; /* optional */
-} structtest_sub_t;
+};
 
 /* structtest.OneOfTest */
 /* oneof structtest.OneOfTest.kind */
@@ -26,11 +29,11 @@ typedef union {
     structtest_sub_t *sub;
     pbw_bytes_t blob;
 } structtest_one_of_test_kind_u;
-typedef struct {
+struct structtest_one_of_test {
     uint32_t kind_case; /* oneof kind: selected field number, 0 = none */
     structtest_one_of_test_kind_u kind;
     int32_t id; /* optional */
-} structtest_one_of_test_t;
+};
 
 static const pbw_struct_field_t structtest_sub_fields[] = {
     {1, PBW_SF_INT32, 0, offsetof(structtest_sub_t, v), 0, 0, 0, 0, NULL, 0, PBW_TYPE_INT32, 0, 0, 0, 0, 0},

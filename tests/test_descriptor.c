@@ -317,6 +317,27 @@ test_messageset(void)
         CHECK(pbw_decode(set, cut, sizeof(cut), &msg) != PBW_OK);
         CHECK(msg == NULL);
     }
+    /* A depth cap hit inside the item payload must surface as LIMIT, not as
+     * "undecodable payload" preserved in the unknown bytes. The payload below
+     * nests unknown groups inside the item; the old code swallowed the cap and
+     * returned OK with the whole item kept as unknown bytes. */
+    {
+        /* type 4, payload = two nested unknown groups */
+        static const unsigned char deep[] = {0x0b, 0x10, 0x04, 0x1a, 0x04, 0x0b,
+                                             0x0b, 0x0c, 0x0c, 0x0c};
+        pbw_limits tight = {0, 1};
+
+        CHECK_STATUS(PBW_ERR_LIMIT,
+                     pbw_decode_limits(set, deep, sizeof(deep), &tight,
+                                       &msg));
+        CHECK(msg == NULL);
+        /* Well within the cap: the same item still decodes. */
+        tight.max_depth = 4;
+        CHECK_OK(pbw_decode_limits(set, deep, sizeof(deep), &tight, &msg));
+        CHECK(msg != NULL);
+        pbw_message_free(msg);
+        msg = NULL;
+    }
     pbw_schema_free(schema);
 }
 
@@ -1897,6 +1918,357 @@ test_json_loader(void)
     pbw_schema_free(schema);
 }
 
+/* Loader feature resolution and hostile shape regressions from the audit. */
+static void
+test_loader_feature_edges(void)
+{
+    uint8_t value_body[64];
+    uint8_t enum_body[128];
+    uint8_t fs_body[16];
+    uint8_t opt_body[32];
+    uint8_t field_body[128];
+    uint8_t msg_body[256];
+    uint8_t file_body[512];
+    uint8_t set[1024];
+    ds_w vb;
+    ds_w eb;
+    ds_w fsb;
+    ds_w ob;
+    ds_w fld;
+    ds_w mb;
+    ds_w fb;
+    ds_w sb;
+    pbw_schema *schema = NULL;
+    pbw_descriptor *m;
+    const pbw_field *f;
+
+    /* EnumValueDescriptorProto.number is optional: a value without one loads
+     * with number 0, like the reference descriptor pool. */
+    vb.p = value_body;
+    vb.len = 0;
+    w_str(&vb, 1, "ZERO");
+    eb.p = enum_body;
+    eb.len = 0;
+    w_str(&eb, 1, "E");
+    w_sub(&eb, 2, vb.p, vb.len);
+    fb.p = file_body;
+    fb.len = 0;
+    w_str(&fb, 1, "e.proto");
+    w_str(&fb, 12, "proto3");
+    w_sub(&fb, 5, eb.p, eb.len);
+    sb.p = set;
+    sb.len = 0;
+    w_sub(&sb, 1, fb.p, fb.len);
+    CHECK_OK(pbw_descriptor_set_load(sb.p, sb.len, &schema));
+    {
+        const pbw_descriptor *e = pbw_schema_find(schema, "E");
+        int32_t n = 99;
+
+        CHECK(e != NULL);
+        CHECK(pbw_enum_find_value(e, "ZERO", &n) == 1 && n == 0);
+    }
+    pbw_schema_free(schema);
+    schema = NULL;
+    /* The same value with an explicit number loads too. */
+    vb.p = value_body;
+    vb.len = 0;
+    w_str(&vb, 1, "ZERO");
+    w_int(&vb, 2, 0);
+    eb.p = enum_body;
+    eb.len = 0;
+    w_str(&eb, 1, "E");
+    w_sub(&eb, 2, vb.p, vb.len);
+    fb.p = file_body;
+    fb.len = 0;
+    w_str(&fb, 1, "e.proto");
+    w_str(&fb, 12, "proto3");
+    w_sub(&fb, 5, eb.p, eb.len);
+    sb.p = set;
+    sb.len = 0;
+    w_sub(&sb, 1, fb.p, fb.len);
+    CHECK_OK(pbw_descriptor_set_load(sb.p, sb.len, &schema));
+    pbw_schema_free(schema);
+    schema = NULL;
+
+    /* A CLOSED enum_type feature on a non-enum field changes nothing: the
+     * value stays in the field instead of moving to the unknowns. */
+    fsb.p = fs_body;
+    fsb.len = 0;
+    w_int(&fsb, 2, 2); /* FeatureSet.enum_type = CLOSED */
+    ob.p = opt_body;
+    ob.len = 0;
+    w_sub(&ob, 21, fsb.p, fsb.len); /* FieldOptions.features */
+    fld.p = field_body;
+    fld.len = 0;
+    w_str(&fld, 1, "a");
+    w_int(&fld, 3, 1);
+    w_int(&fld, 4, 1);
+    w_int(&fld, 5, 5); /* TYPE_INT32 */
+    w_sub(&fld, 8, ob.p, ob.len);
+    mb.p = msg_body;
+    mb.len = 0;
+    w_str(&mb, 1, "M");
+    w_sub(&mb, 2, fld.p, fld.len);
+    fb.p = file_body;
+    fb.len = 0;
+    w_str(&fb, 1, "f.proto");
+    w_str(&fb, 12, "proto3");
+    w_sub(&fb, 4, mb.p, mb.len);
+    sb.p = set;
+    sb.len = 0;
+    w_sub(&sb, 1, fb.p, fb.len);
+    CHECK_OK(pbw_descriptor_set_load(sb.p, sb.len, &schema));
+    m = pbw_schema_find(schema, "M");
+    CHECK(m != NULL);
+    if (m != NULL) {
+        static const uint8_t a1[] = {0x08, 0x01};
+        pbw_message *msg = NULL;
+
+        CHECK_OK(pbw_decode(m, a1, sizeof(a1), &msg));
+        CHECK(msg != NULL && pbw_message_get(msg, 1) != NULL);
+        CHECK(pbw_message_get(msg, 1) != NULL &&
+              pbw_value_get_int(pbw_message_get(msg, 1)) == 1);
+        pbw_message_free(msg);
+    }
+    pbw_schema_free(schema);
+    schema = NULL;
+
+    /* EDITION_PROTO3 (999) defaults like proto3: implicit presence, packed
+     * repeats. EDITION_PROTO2 (998) defaults like proto2: explicit presence,
+     * expanded repeats. */
+    {
+        static const uint32_t editions[] = {999, 998};
+        size_t e;
+
+        for (e = 0; e < 2; e++) {
+            pbw_message *msg = NULL;
+            char *out = NULL;
+            size_t out_len = 0;
+
+            fld.p = field_body;
+            fld.len = 0;
+            w_str(&fld, 1, "a");
+            w_int(&fld, 3, 1);
+            w_int(&fld, 4, 3); /* LABEL_REPEATED */
+            w_int(&fld, 5, 5); /* TYPE_INT32 */
+            mb.p = msg_body;
+            mb.len = 0;
+            w_str(&mb, 1, "M");
+            w_sub(&mb, 2, fld.p, fld.len);
+            {
+                /* singular int32 b = 2, for the presence check */
+                uint8_t pres[128];
+                ds_w pb;
+
+                pb.p = pres;
+                pb.len = 0;
+                w_str(&pb, 1, "b");
+                w_int(&pb, 3, 2);
+                w_int(&pb, 4, 1);
+                w_int(&pb, 5, 5);
+                w_sub(&mb, 2, pb.p, pb.len);
+            }
+            fb.p = file_body;
+            fb.len = 0;
+            w_str(&fb, 1, "ed.proto");
+            w_str(&fb, 12, "editions");
+            w_int(&fb, 14, editions[e]);
+            w_sub(&fb, 4, mb.p, mb.len);
+            sb.p = set;
+            sb.len = 0;
+            w_sub(&sb, 1, fb.p, fb.len);
+            CHECK_OK(pbw_descriptor_set_load(sb.p, sb.len, &schema));
+            m = pbw_schema_find(schema, "M");
+            CHECK(m != NULL && pbw_descriptor_find_field(m, 1) != NULL);
+            if (m != NULL && pbw_descriptor_find_field(m, 1) != NULL) {
+                CHECK(pbw_field_is_packed(pbw_descriptor_find_field(m, 1)) ==
+                      (editions[e] == 999));
+            }
+            /* presence: a set zero prints only under explicit presence */
+            msg = pbw_message_new(m);
+            CHECK(msg != NULL);
+            if (msg != NULL) {
+                CHECK_OK(pbw_message_set(msg, 2, pbw_value_new_int(0)));
+                CHECK_OK(pbw_json_print(msg, &out, &out_len));
+                CHECK(out != NULL);
+                if (out != NULL) {
+                    CHECK(strcmp(out, editions[e] == 998 ? "{\"b\":0}" : "{}") ==
+                          0);
+                    pbw_free(out);
+                }
+                pbw_message_free(msg);
+            }
+            pbw_schema_free(schema);
+            schema = NULL;
+        }
+    }
+
+    /* An extension takes its utf8 rule from the file that declares it, not
+     * from its extendee's dialect. */
+    {
+        static const char *const extendee_syntax[2] = {"proto2", "proto3"};
+        size_t k;
+
+        for (k = 0; k < 2; k++) {
+            /* declaring file is the opposite syntax of the extendee's */
+            const char *decl_syntax = k == 0 ? "proto3" : "proto2";
+            static const uint8_t bad_utf8[] = {0xa2, 0x06, 0x01, 0xff};
+            pbw_message *msg = NULL;
+
+            mb.p = msg_body;
+            mb.len = 0;
+            w_str(&mb, 1, "M");
+            fb.p = file_body;
+            fb.len = 0;
+            w_str(&fb, 1, "a.proto");
+            w_str(&fb, 2, "p");
+            w_str(&fb, 12, extendee_syntax[k]);
+            w_sub(&fb, 4, mb.p, mb.len);
+            sb.p = set;
+            sb.len = 0;
+            w_sub(&sb, 1, fb.p, fb.len);
+            /* second file: extend p.M with a string field */
+            fld.p = field_body;
+            fld.len = 0;
+            w_str(&fld, 1, "s");
+            w_str(&fld, 2, ".p.M");
+            w_int(&fld, 3, 100);
+            w_int(&fld, 4, 1);
+            w_int(&fld, 5, 9); /* TYPE_STRING */
+            fb.p = file_body;
+            fb.len = 0;
+            w_str(&fb, 1, "b.proto");
+            w_str(&fb, 2, "p");
+            w_str(&fb, 12, decl_syntax);
+            w_sub(&fb, 7, fld.p, fld.len); /* FileDescriptorProto.extension */
+            w_sub(&sb, 1, fb.p, fb.len);
+            CHECK_OK(pbw_descriptor_set_load(sb.p, sb.len, &schema));
+            m = pbw_schema_find(schema, "p.M");
+            CHECK(m != NULL);
+            f = pbw_descriptor_find_field(m, 100);
+            CHECK(f != NULL && pbw_field_is_extension(f));
+            CHECK(pbw_field_requires_utf8_validation(f) ==
+                  (strcmp(decl_syntax, "proto3") == 0));
+            CHECK_STATUS(strcmp(decl_syntax, "proto3") == 0 ? PBW_ERR_INVALID
+                                                            : PBW_OK,
+                         pbw_decode(m, bad_utf8, sizeof(bad_utf8), &msg));
+            pbw_message_free(msg);
+            pbw_schema_free(schema);
+            schema = NULL;
+        }
+    }
+}
+/* Services: duplicate names or rpc names are rejected, and resolve refuses a
+ * non-message input/output type. */
+static void
+test_service_validation(void)
+{
+    uint8_t msg_body[128];
+    uint8_t svc_body[256];
+    uint8_t method_body[128];
+    uint8_t enum_body[64];
+    uint8_t file_body[1024];
+    uint8_t set[2048];
+    ds_w mb, sb, meth, eb, fb, sb_set;
+    pbw_schema *schema = NULL;
+
+    /* one message M, an enum E, and a service with the rpc shapes below */
+    mb.p = msg_body;
+    mb.len = 0;
+    w_str(&mb, 1, "M");
+    eb.p = enum_body;
+    eb.len = 0;
+    w_str(&eb, 1, "E");
+    {
+        uint8_t value_body[64];
+        ds_w vb;
+
+        vb.p = value_body;
+        vb.len = 0;
+        w_str(&vb, 1, "ZERO");
+        w_int(&vb, 2, 0);
+        w_sub(&eb, 2, vb.p, vb.len);
+    }
+
+    /* duplicate service name */
+    meth.p = method_body;
+    meth.len = 0;
+    w_str(&meth, 1, "Get");
+    w_str(&meth, 2, ".p.M");
+    w_str(&meth, 3, ".p.M");
+    sb.p = svc_body;
+    sb.len = 0;
+    w_str(&sb, 1, "S");
+    w_sub(&sb, 2, meth.p, meth.len);
+    fb.p = file_body;
+    fb.len = 0;
+    w_str(&fb, 1, "svc.proto");
+    w_str(&fb, 2, "p");
+    w_sub(&fb, 4, mb.p, mb.len);
+    w_sub(&fb, 5, eb.p, eb.len);
+    w_sub(&fb, 6, sb.p, sb.len);
+    w_sub(&fb, 6, sb.p, sb.len); /* same service twice */
+    sb_set.p = set;
+    sb_set.len = 0;
+    w_sub(&sb_set, 1, fb.p, fb.len);
+    CHECK_STATUS(PBW_ERR_INVALID,
+                 pbw_descriptor_set_load(sb_set.p, sb_set.len, &schema));
+    pbw_schema_free(schema);
+    schema = NULL;
+
+    /* duplicate rpc name inside one service */
+    sb.p = svc_body;
+    sb.len = 0;
+    w_str(&sb, 1, "S");
+    w_sub(&sb, 2, meth.p, meth.len);
+    w_sub(&sb, 2, meth.p, meth.len);
+    fb.p = file_body;
+    fb.len = 0;
+    w_str(&fb, 1, "svc.proto");
+    w_str(&fb, 2, "p");
+    w_sub(&fb, 4, mb.p, mb.len);
+    w_sub(&fb, 5, eb.p, eb.len);
+    w_sub(&fb, 6, sb.p, sb.len);
+    sb_set.p = set;
+    sb_set.len = 0;
+    w_sub(&sb_set, 1, fb.p, fb.len);
+    CHECK_STATUS(PBW_ERR_INVALID,
+                 pbw_descriptor_set_load(sb_set.p, sb_set.len, &schema));
+    pbw_schema_free(schema);
+    schema = NULL;
+
+    /* an enum as an rpc type: the file loads, resolve refuses it */
+    meth.p = method_body;
+    meth.len = 0;
+    w_str(&meth, 1, "Use");
+    w_str(&meth, 2, ".p.E");
+    w_str(&meth, 3, ".p.M");
+    sb.p = svc_body;
+    sb.len = 0;
+    w_str(&sb, 1, "S");
+    w_sub(&sb, 2, meth.p, meth.len);
+    fb.p = file_body;
+    fb.len = 0;
+    w_str(&fb, 1, "svc.proto");
+    w_str(&fb, 2, "p");
+    w_sub(&fb, 4, mb.p, mb.len);
+    w_sub(&fb, 5, eb.p, eb.len);
+    w_sub(&fb, 6, sb.p, sb.len);
+    sb_set.p = set;
+    sb_set.len = 0;
+    w_sub(&sb_set, 1, fb.p, fb.len);
+    CHECK_OK(pbw_descriptor_set_load(sb_set.p, sb_set.len, &schema));
+    {
+        const pbw_descriptor *in = NULL;
+        const pbw_descriptor *out = NULL;
+
+        CHECK_STATUS(PBW_ERR_INVALID,
+                     pbw_service_resolve(schema, "p.S", "Use", &in, &out));
+        CHECK(in == NULL && out == NULL);
+    }
+    pbw_schema_free(schema);
+}
+
 int
 main(void)
 {
@@ -1918,6 +2290,8 @@ main(void)
     test_services_protoc();
     test_editions();
     test_messageset();
+    test_service_validation();
+    test_loader_feature_edges();
 
     if (failures != 0) {
         fprintf(stderr, "%d check(s) failed\n", failures);

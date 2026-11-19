@@ -27,6 +27,12 @@ GATEWAY_BIN := build/example_gateway
 CPP_EXAMPLE_BIN := build/example_addressbook_cpp
 HDRS := include/pbwire.h src/internal.h
 TEST_HDRS := tests/desc_set.h
+# Every header a test binary reads, so `make test` relinks when one changes:
+# without them a regenerated layout table or descriptor fixture left the old
+# binary in place and the gate reported on stale code.
+TEST_DEPS := $(HDRS) $(TEST_HDRS) bindings/c/runtime/pbw_struct.h \
+	bindings/embedded/runtime/pbwe.h bindings/c/tests/gen/*.h \
+	bindings/c/examples/gen/*.h
 
 # Shared library for the bindings (python/, go/): same ABI number as
 # PBW_ABI_VERSION and the CMake SOVERSION.
@@ -65,13 +71,13 @@ $(LIB): $(OBJ)
 build/%.o: src/%.c $(HDRS) | build
 	$(CC) $(CFLAGS) $(CPPFLAGS) -c -o $@ $<
 
-$(TEST_BIN): tests/test_pbwire.c $(LIB) | build
+$(TEST_BIN): tests/test_pbwire.c $(TEST_DEPS) $(LIB) | build
 	$(CC) $(CFLAGS) $(CPPFLAGS) -o $@ $< $(LIB)
 
-$(MALFORMED_BIN): tests/test_malformed.c $(LIB) | build
+$(MALFORMED_BIN): tests/test_malformed.c $(TEST_DEPS) $(LIB) | build
 	$(CC) $(CFLAGS) $(CPPFLAGS) -o $@ $< $(LIB)
 
-$(FUZZ_BIN): tests/fuzz_decode.c $(LIB) | build
+$(FUZZ_BIN): tests/fuzz_decode.c $(TEST_DEPS) $(LIB) | build
 	$(CC) $(CFLAGS) $(CPPFLAGS) -o $@ $< $(LIB)
 
 # Stdin fuzz harness (tests/fuzz_decode.c): deterministic replay of the
@@ -80,8 +86,8 @@ $(FUZZ_BIN): tests/fuzz_decode.c $(LIB) | build
 fuzz: $(FUZZ_BIN)
 	for f in tests/data/fuzz/*.bin; do ./build/fuzz_decode < "$$f" || exit 1; done
 	for f in tests/data/fuzz-desc/*.desc; do ./build/fuzz_decode desc < "$$f" || exit 1; done
-	for f in tests/data/fuzz-json/*.json; do ./build/fuzz_decode json < "$$f" || exit 1; done
-	for f in tests/data/fuzz-text/*.text; do ./build/fuzz_decode text < "$$f" || exit 1; done
+	for f in tests/data/fuzz-json/*.json; do ./build/fuzz_decode json "$$f" < "$$f" || exit 1; done
+	for f in tests/data/fuzz-text/*.text; do ./build/fuzz_decode text "$$f" < "$$f" || exit 1; done
 	@echo "fuzz: corpus replay OK"
 
 # Core coverage floor (gcov): fails when the weighted line coverage of
@@ -141,7 +147,7 @@ $(NOFAIL_STRUCT_OBJ): bindings/c/runtime/pbw_struct.c bindings/c/runtime/pbw_str
 	$(CC) $(CFLAGS) $(CPPFLAGS) -Ibindings/c/runtime -Dmalloc=pbw_fail_malloc \
 		-Dcalloc=pbw_fail_calloc -Drealloc=pbw_fail_realloc \
 		-Dfree=pbw_fail_free -c -o $@ $<
-$(NOFAIL_BIN): tests/test_nofail.c $(NOFAIL_OBJ) $(NOFAIL_STRUCT_OBJ) | build
+$(NOFAIL_BIN): tests/test_nofail.c $(TEST_DEPS) $(NOFAIL_OBJ) $(NOFAIL_STRUCT_OBJ) | build
 	$(CC) $(CFLAGS) $(CPPFLAGS) -Ibindings/c/runtime -o $@ tests/test_nofail.c \
 		$(NOFAIL_OBJ) $(NOFAIL_STRUCT_OBJ)
 
@@ -239,18 +245,18 @@ $(DESC_BIN): tests/test_descriptor.c $(TEST_HDRS) $(LIB) | build
 	$(CC) $(CFLAGS) $(CPPFLAGS) -o $@ $< $(LIB)
 
 C_RUNTIME := bindings/c/runtime/pbw_struct.c
-$(STRUCT_BIN): bindings/c/tests/test_struct.c $(C_RUNTIME) $(LIB) | build
+$(STRUCT_BIN): bindings/c/tests/test_struct.c $(TEST_DEPS) $(C_RUNTIME) $(LIB) | build
 	$(CC) $(CFLAGS) $(CPPFLAGS) -Ibindings/c/runtime -Ibindings/c/tests -Ibindings/c/examples -o $@ bindings/c/tests/test_struct.c $(C_RUNTIME) $(LIB)
 
-$(EMBEDDED_BIN): bindings/embedded/tests/test_embedded.c bindings/embedded/runtime/pbwe.c $(LIB) | build
+$(EMBEDDED_BIN): bindings/embedded/tests/test_embedded.c bindings/embedded/runtime/pbwe.c $(TEST_DEPS) $(LIB) | build
 	$(CC) $(CFLAGS) $(CPPFLAGS) -Iinclude -Ibindings/embedded/runtime -o $@ bindings/embedded/tests/test_embedded.c bindings/embedded/runtime/pbwe.c $(LIB)
 
-$(EMBEDDED_EXAMPLE_BIN): bindings/embedded/examples/roundtrip.c bindings/embedded/runtime/pbwe.c $(LIB) | build
+$(EMBEDDED_EXAMPLE_BIN): bindings/embedded/examples/roundtrip.c bindings/embedded/runtime/pbwe.c $(TEST_DEPS) $(LIB) | build
 	$(CC) $(CFLAGS) $(CPPFLAGS) -Iinclude -Ibindings/embedded/runtime -o $@ bindings/embedded/examples/roundtrip.c bindings/embedded/runtime/pbwe.c $(LIB)
-$(EXAMPLE_BIN): bindings/c/examples/addressbook.c $(C_RUNTIME) $(LIB) | build
+$(EXAMPLE_BIN): bindings/c/examples/addressbook.c $(TEST_DEPS) $(C_RUNTIME) $(LIB) | build
 	$(CC) $(CFLAGS) $(CPPFLAGS) -Ibindings/c/runtime -o $@ bindings/c/examples/addressbook.c $(C_RUNTIME) $(LIB)
 
-$(GATEWAY_BIN): bindings/c/examples/gateway.c $(LIB) | build
+$(GATEWAY_BIN): bindings/c/examples/gateway.c $(TEST_DEPS) $(LIB) | build
 	$(CC) $(CFLAGS) $(CPPFLAGS) -o $@ $< $(LIB)
 
 # C++ binding example (bindings/cpp): same addressbook round-trip as the
@@ -843,7 +849,7 @@ codegen-conformance:
 	$(MAKE) -C codegen conformance
 
 clean:
-	rm -f src/*.o
+	rm -f src/*.o corrupt_test.desc
 	rm -rf build codegen/build bench/gen bindings/go/benchmarks/gen build/doxygen \
 		bindings/java/benchmarks/gen bindings/java/benchmarks/out \
 		bindings/node/benchmarks/gen bindings/ruby/benchmarks/gen \

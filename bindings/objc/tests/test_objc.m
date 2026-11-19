@@ -826,7 +826,23 @@ testContextPool(void)
     pooledBack = nil;
     [pool releaseContext:pooled];
     CHECK([pool idleCount] == 1);
+    /* A second release of the same wrapper is a no-op, not an exception:
+     * the workspace must sit in the freelist exactly once. */
+    [pool releaseContext:pooled];
+    CHECK([pool idleCount] == 1);
+    /* The pool owns it now: resetting the stale wrapper must raise instead
+     * of clearing a workspace another owner may hold. */
+    @try {
+        [pooled reset];
+        CHECK(0);
+    } @catch (NSException *e) {
+        CHECK_STRING(e.name, NSInternalInconsistencyException);
+    }
     pooled = nil;
+    /* A string with an interior NUL keeps its tail: the value is stored as
+     * bytes, not as a NUL-terminated C string. */
+    CHECK([probe setValue:@"a\0b" forField:@"text" error:&error]);
+    CHECK_STRING([probe valueForField:@"text"], @"a\0b");
 }
 
 int

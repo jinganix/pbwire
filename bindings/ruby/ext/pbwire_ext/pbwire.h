@@ -270,8 +270,10 @@ int pbw_field_is_packed(const pbw_field *field);
 int pbw_field_requires_utf8_validation(const pbw_field *field);
 /* Structural UTF-8 check: 1 when data is valid UTF-8, 0 for overlong forms,
  * surrogates and values past U+10FFFF. The same check decode() applies to a
- * field whose utf8_validation resolves to VERIFY, and that the text/JSON
- * parsers apply to every string they accept; bindings that validate on their
+ * field whose utf8_validation resolves to VERIFY; the JSON parser applies it
+ * to every string it accepts, and the text parser follows the same per-field
+ * rule as decode() (a proto2 string keeps its bytes). Bindings that validate
+ * on their
  * own (a host runtime that decodes strings itself) should use this one so the
  * rule stays single-sourced. */
 int pbw_utf8_valid(const uint8_t *data, size_t len);
@@ -624,8 +626,10 @@ pbw_status pbw_descriptor_set_load_limits(const void *data, size_t len,
 pbw_status pbw_encode_deterministic(const pbw_message *msg, uint8_t **out,
                                     size_t *len);
 /* The caller-buffer twin of pbw_encode_deterministic(), with the same
- * contract as pbw_encode_to(): no allocation, `cap` is the hard limit,
- * PBW_ERR_LIMIT when the message does not fit. */
+ * contract as pbw_encode_to(): `cap` is the hard limit and PBW_ERR_LIMIT when
+ * the message does not fit. The output buffer itself costs no allocation, but
+ * the map-entry sort does, so a message with a map can also fail here with
+ * PBW_ERR_NOMEM. */
 pbw_status pbw_encode_deterministic_to(const pbw_message *msg, void *out,
                                        size_t cap, size_t *len);
 

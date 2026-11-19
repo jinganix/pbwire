@@ -62,13 +62,16 @@ typedef struct pbw_struct_field {
     pbw_struct_kind_t kind;
     int repeated;                          /* 0: singular, 1: repeated (+count holds) */
     size_t offset;                         /* data: value for scalars, pointer for string/message */
-    size_t has;                            /* has-flag offset (singular scalars/enums); 0 = none */
+    size_t has;                            /* offset of an `int` has-flag (singular scalars/enums); 0 = none */
     size_t count;                          /* count offset (repeated); 0 = singular */
     size_t elem;                           /* MESSAGE: sizeof(sub-struct), singular or repeated */
     int32_t dflt;                          /* ENUM default when absent (proto2 [default=] or 0) */
     const struct pbw_struct_field *fields; /* sub-layout (MESSAGE) */
     size_t nfields;
-    /* Wire facts, filled in by the code generator. A table that leaves type
+    /* The has-flag at `has` is written as a 4-byte `int` (0/1): a
+     * hand-written layout must declare `int has_x;`, not a smaller type.
+     *
+     * Wire facts, filled in by the code generator. A table that leaves type
      * at 0 (tables written before these members existed) makes the codec fall
      * back to the schema, which is slower but identical. With them the codec
      * needs no schema lookup at all. */

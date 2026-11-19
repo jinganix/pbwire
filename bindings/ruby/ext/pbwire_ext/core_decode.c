@@ -1062,8 +1062,12 @@ read_messageset_item(reader *r, pbw_message *msg, uint32_t depth,
     status = decode_message(msg->arena, ext->sub, payload, payload_len,
                             &nested, depth + 1, dlim);
     if (status != PBW_OK) {
-        /* Undecodable payload: keep today's verdict (accept as unknown). */
         pbw_message_free(nested);
+        if (status != PBW_ERR_INVALID) {
+            /* Only a malformed payload falls back to unknown preservation;
+             * the caller's depth cap or an allocation failure must surface. */
+            return status;
+        }
         return skip_field(r, msg, 1, PBW_WIRE_START_GROUP, depth, dlim,
                           start);
     }

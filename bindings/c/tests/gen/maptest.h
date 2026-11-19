@@ -13,39 +13,45 @@
 #include "pbw_struct.h"
 #include "pbwire.h"
 
+typedef struct structtest_map_value structtest_map_value_t;
+typedef struct structtest_maps_by_int_entry structtest_maps_by_int_entry_t;
+typedef struct structtest_maps_by_str_entry structtest_maps_by_str_entry_t;
+typedef struct structtest_maps_by_msg_entry structtest_maps_by_msg_entry_t;
+typedef struct structtest_maps structtest_maps_t;
+
 /* structtest.MapValue */
-typedef struct {
+struct structtest_map_value {
     const char *name; /* optional */
     int32_t value; /* optional */
-} structtest_map_value_t;
+};
 
 /* structtest.Maps.ByIntEntry */
-typedef struct {
+struct structtest_maps_by_int_entry {
     int32_t key; /* optional */
     const char *value; /* optional */
-} structtest_maps_by_int_entry_t;
+};
 
 /* structtest.Maps.ByStrEntry */
-typedef struct {
+struct structtest_maps_by_str_entry {
     const char *key; /* optional */
     int32_t value; /* optional */
-} structtest_maps_by_str_entry_t;
+};
 
 /* structtest.Maps.ByMsgEntry */
-typedef struct {
+struct structtest_maps_by_msg_entry {
     const char *key; /* optional */
     structtest_map_value_t *value; /* optional, structtest.MapValue */
-} structtest_maps_by_msg_entry_t;
+};
 
 /* structtest.Maps */
-typedef struct {
+struct structtest_maps {
     structtest_maps_by_int_entry_t *by_int;
     size_t n_by_int;
     structtest_maps_by_str_entry_t *by_str;
     size_t n_by_str;
     structtest_maps_by_msg_entry_t *by_msg;
     size_t n_by_msg;
-} structtest_maps_t;
+};
 
 static const pbw_struct_field_t structtest_map_value_fields[] = {
     {1, PBW_SF_STRING, 0, offsetof(structtest_map_value_t, name), 0, 0, 0, 0, NULL, 0, PBW_TYPE_STRING, 2, 0, 0, 0, 0},

@@ -2085,8 +2085,15 @@ public final class GenericCodec {
         if (def.hasRequired) {
             for (int s = 0; s < def.fields.length; s++) {
                 if (def.fields[s].presence == REQUIRED && !m.has[s]) {
-                    throw new IllegalArgumentException("missing required field "
-                            + def.fullName + "." + def.fields[s].number);
+                    /* Status 6 is PBW_ERR_REQUIRED, the same the core and every
+                     * other binding report; an IllegalArgumentException here
+                     * was turned into "status 1: decode failed" on the binary
+                     * path. */
+                    String fname = def.fields[s].fieldName;
+                    throw new PbwireException("missing required field "
+                            + def.fullName + "."
+                            + (fname != null ? fname
+                                : Integer.toString(def.fields[s].number)), 6);
                 }
             }
         }

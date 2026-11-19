@@ -3,7 +3,7 @@
 # with the ARM toolchain at -Os and sum text/data/bss per module. No link and
 # no libc, so the number is the codec's own cost; the firmware's libc, its own
 # allocator and the schema data are on top of it.
-set -uo pipefail
+set -euo pipefail
 
 CC=${MCU_CC:-arm-none-eabi-gcc}
 SIZER=${MCU_SIZE:-arm-none-eabi-size}
@@ -14,10 +14,15 @@ if ! command -v "$CC" >/dev/null 2>&1; then
     echo "mcu-size: $CC not found (install arm-none-eabi-gcc, e.g. brew install arm-none-eabi-gcc)" >&2
     exit 1
 fi
+if ! command -v "$SIZER" >/dev/null 2>&1; then
+    echo "mcu-size: $SIZER not found" >&2
+    exit 1
+fi
 
 rm -rf "$OUT"
 mkdir -p "$OUT/fsinclude"
-FLAGS="-Os -std=c99 -ffreestanding -mthumb -ffunction-sections -fdata-sections -I$OUT/fsinclude -I$ROOT/include -I$ROOT/src"
+FLAGS=(-Os -std=c99 -ffreestanding -mthumb -ffunction-sections -fdata-sections \
+    -I"$OUT/fsinclude" -I"$ROOT/include" -I"$ROOT/src")
 
 # A freestanding toolchain ships no libc headers. Only declarations are needed
 # to compile, and nothing is linked, so these stubs are enough: the point is the
@@ -73,9 +78,9 @@ char *setlocale(int, const char *);
 EOF
 
 for src in "$ROOT"/src/*.c; do
-    "$CC" $FLAGS -c -o "$OUT/$(basename "${src%.c}").o" "$src" || exit 1
+    "$CC" "${FLAGS[@]}" -c -o "$OUT/$(basename "${src%.c}").o" "$src"
 done
-"$CC" $FLAGS -I"$ROOT/bindings/embedded/runtime" -c -o "$OUT/pbwe.o" \
+"$CC" "${FLAGS[@]}" -I"$ROOT/bindings/embedded/runtime" -c -o "$OUT/pbwe.o" \
     "$ROOT/bindings/embedded/runtime/pbwe.c" || exit 1
 
 # text data bss dec hex filename; the core set is what decode/encode need, the
@@ -119,7 +124,7 @@ if [ -n "${NANOPB_DIR:-}" ] && [ -f "${NANOPB_GEN:-}" ]; then
     GEN=$(cd "$(dirname "$NANOPB_GEN")" && pwd)
     for src in "$NANOPB_DIR/pb_common.c" "$NANOPB_DIR/pb_encode.c" \
         "$NANOPB_DIR/pb_decode.c" "$NANOPB_GEN"; do
-        "$CC" $FLAGS -I"$NANOPB_DIR" -I"$GEN" -c -o "$NBOUT/$(basename "${src%.c}").o" \
+        "$CC" "${FLAGS[@]}" -I"$NANOPB_DIR" -I"$GEN" -c -o "$NBOUT/$(basename "${src%.c}").o" \
             "$src" || exit 1
     done
     echo

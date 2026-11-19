@@ -96,6 +96,7 @@ pbw_message_add_unknown(pbw_message *msg, const uint8_t *data, size_t len)
 {
     size_t need;
     uint8_t *grown;
+    uint8_t *stash = NULL;
 
     if (msg == NULL) {
         return PBW_ERR_INVALID;
@@ -123,8 +124,24 @@ pbw_message_add_unknown(pbw_message *msg, const uint8_t *data, size_t len)
             }
             cap *= 2;
         }
+        /* The caller may append the message's own blob to itself;
+         * realloc can move that block, so copy the source first. */
+        if (msg->unknown != NULL && len <= (size_t)(UINTPTR_MAX - (uintptr_t)(const void *)data)) {
+            uintptr_t base = (uintptr_t)(void *)msg->unknown;
+            uintptr_t src = (uintptr_t)(const void *)data;
+
+            if (src < base + msg->unknown_len && src + len > base) {
+                stash = (uint8_t *)malloc(len);
+                if (stash == NULL) {
+                    return PBW_ERR_NOMEM;
+                }
+                memcpy(stash, data, len);
+                data = stash;
+            }
+        }
         if (msg->arena != NULL) {
             if (msg->unknown == NULL && msg->unknown_len > 0) {
+                free(stash);
                 return PBW_ERR_NOMEM;
             }
             grown = (uint8_t *)pbw_arena_alloc(msg->arena, cap);
@@ -135,13 +152,15 @@ pbw_message_add_unknown(pbw_message *msg, const uint8_t *data, size_t len)
             grown = (uint8_t *)realloc(msg->unknown, cap);
         }
         if (grown == NULL) {
+            free(stash);
             return PBW_ERR_NOMEM;
         }
         msg->unknown = grown;
         msg->unknown_cap = cap;
     }
-    memcpy(msg->unknown + msg->unknown_len, data, len);
+    memmove(msg->unknown + msg->unknown_len, data, len);
     msg->unknown_len = need;
+    free(stash);
     return PBW_OK;
 }
 

@@ -32,6 +32,9 @@ bindings/cpp/tests/gen_oracle/
 # written by `make codegen-conformance` and removed on success; the ignore
 # entry keeps a failed run (no cargo, bad model) from leaving a stray file.
 bindings/rust/tests/conf_gen.rs
+# written by test_struct's hostile-load case in the repo root and removed by
+# that test; an interrupted run would otherwise leave it untracked.
+/corrupt_test.desc
 results/
 dist/
 *.egg-info/

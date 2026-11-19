@@ -391,14 +391,19 @@
 
     switch (type) {
     case PBW_TYPE_STRING: {
-        const char *utf8;
+        NSData *utf8;
 
         if (![value isKindOfClass:[NSString class]]) {
             PBWSetError(error, PBW_ERR_TYPE, name);
             return NULL;
         }
-        utf8 = ((NSString *)value).UTF8String;
-        stored = pbw_value_new_string(utf8 != NULL ? utf8 : "");
+        /* Bytes, not -UTF8String: an interior NUL would truncate the value. */
+        utf8 = [(NSString *)value dataUsingEncoding:NSUTF8StringEncoding];
+        if (utf8 == nil) {
+            PBWSetError(error, PBW_ERR_TYPE, name);
+            return NULL;
+        }
+        stored = pbw_value_new_bytes(utf8.bytes, utf8.length);
         break;
     }
     case PBW_TYPE_BYTES: {

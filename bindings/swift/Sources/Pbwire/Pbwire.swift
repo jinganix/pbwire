@@ -464,7 +464,14 @@ public final class Message: Equatable {
         let type = pbw_field_type(f)
         switch (type, value) {
         case (PBW_TYPE_STRING, .string(let text)):
-            return text.withCString { pbw_value_new_string($0) }
+            // Bytes, not a NUL-terminated C string: `a\0b` must keep its
+            // tail instead of silently becoming "a" (like every other string
+            // field here).
+            let utf8 = Array(text.utf8)
+            if utf8.isEmpty { return pbw_value_new_bytes("", 0) }
+            return utf8.withUnsafeBufferPointer { buf in
+                pbw_value_new_bytes(buf.baseAddress, buf.count)
+            }
         case (PBW_TYPE_BYTES, .bytes(let data)):
             // Empty Data has no base address; the empty literal keeps the
             // pointer valid for the zero-length copy.
