@@ -20,7 +20,7 @@ namespace Spectest {
     }
 
     /// <summary>spectest.Oneof1</summary>
-    public sealed partial class Oneof1 {
+    public sealed partial class Oneof1 : Pbwire.INativeModel {
         /// <summary>Field number for the "name" field.</summary>
         public const int NameFieldNumber = 1;
         public string Name { get; set; }  = "";
@@ -113,6 +113,9 @@ namespace Spectest {
             using Pbwire.Message msg = PbwireFile_Oneof1.Schema.Message("spectest.Oneof1").Decode(wire);
             LoadFrom(msg);
         }
+        /// <summary>The native-object entry: one call per op over the shipped converter.</summary>
+        void Pbwire.INativeModel.WriteTo(Pbwire.Message msg) { EncodeInto(msg); }
+        void Pbwire.INativeModel.ReadFrom(Pbwire.Message msg) { LoadFrom(msg); }
         public void MergeFrom(Oneof1 other) {
             if (other == null) { return; }
             Name = other.Name;
@@ -144,10 +147,27 @@ namespace Spectest {
             var subInner = msg.GetMessage("inner");
             if (subInner != null) { var m = new Types.Inner(); m.LoadFrom(subInner); Inner = m; }
         }
+        /// <summary>Flat slot layout: scalar offsets, pointer slots for the reference-typed fields, one presence bit per proto3 optional. Read by the native-object entry, gated by Pbwire.Layout.Verify.</summary>
+        public static class Oneof1Layout {
+            /// <summary>The message type the table describes.</summary>
+            public static readonly global::Pbwire.MessageType Type = PbwireFile_Oneof1.Schema.Message("spectest.Oneof1");
+            /// <summary>One row per field, in slot order.</summary>
+            public static readonly global::Pbwire.Layout Table = new global::Pbwire.Layout("spectest.Oneof1", 32, 0)
+                .FieldAt("num", 0, 4)
+                .Ref("name", 8, 8)
+                .Ref("text", 16, 8)
+                .Ref("inner", 24, 8);
+            /// <summary>One call per op: native object in, wire bytes out.</summary>
+            /// <remarks>The tree is allocated once per op and the model's shipped converter crosses once per present field: the C core has no offset reader, so the table documents the flat layout instead of driving it.</remarks>
+            public static byte[] Marshal(Oneof1 native) => global::Pbwire.Run.Encode(native, Type);
+            /// <summary>One call per op: wire bytes in, native object out.</summary>
+            public static Oneof1 Unmarshal(byte[] wire) => global::Pbwire.Run.Decode<Oneof1>(wire, Type);
+        }
+
 
         public static partial class Types {
             /// <summary>spectest.Oneof1.Inner</summary>
-            public sealed partial class Inner {
+            public sealed partial class Inner : Pbwire.INativeModel {
                 /// <summary>Field number for the "v" field.</summary>
                 public const int VFieldNumber = 1;
                 public int V { get; set; }
@@ -190,6 +210,9 @@ namespace Spectest {
                     using Pbwire.Message msg = PbwireFile_Oneof1.Schema.Message("spectest.Oneof1.Inner").Decode(wire);
                     LoadFrom(msg);
                 }
+                /// <summary>The native-object entry: one call per op over the shipped converter.</summary>
+                void Pbwire.INativeModel.WriteTo(Pbwire.Message msg) { EncodeInto(msg); }
+                void Pbwire.INativeModel.ReadFrom(Pbwire.Message msg) { LoadFrom(msg); }
                 public void MergeFrom(Inner other) {
                     if (other == null) { return; }
                     V = other.V;
@@ -202,6 +225,20 @@ namespace Spectest {
                 internal void LoadFrom(Pbwire.Message msg) {
                     V = (int)msg.GetInt("v");
                 }
+                /// <summary>Flat slot layout: scalar offsets, pointer slots for the reference-typed fields, one presence bit per proto3 optional. Read by the native-object entry, gated by Pbwire.Layout.Verify.</summary>
+                public static class InnerLayout {
+                    /// <summary>The message type the table describes.</summary>
+                    public static readonly global::Pbwire.MessageType Type = PbwireFile_Oneof1.Schema.Message("spectest.Oneof1.Inner");
+                    /// <summary>One row per field, in slot order.</summary>
+                    public static readonly global::Pbwire.Layout Table = new global::Pbwire.Layout("spectest.Oneof1.Inner", 8, 0)
+                        .FieldAt("v", 0, 4);
+                    /// <summary>One call per op: native object in, wire bytes out.</summary>
+                    /// <remarks>The tree is allocated once per op and the model's shipped converter crosses once per present field: the C core has no offset reader, so the table documents the flat layout instead of driving it.</remarks>
+                    public static byte[] Marshal(Inner native) => global::Pbwire.Run.Encode(native, Type);
+                    /// <summary>One call per op: wire bytes in, native object out.</summary>
+                    public static Inner Unmarshal(byte[] wire) => global::Pbwire.Run.Decode<Inner>(wire, Type);
+                }
+
             }
 
         }

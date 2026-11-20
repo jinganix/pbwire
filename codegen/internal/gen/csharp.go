@@ -62,7 +62,7 @@ func csharpFiles(f *model.File, opt Options) ([]File, error) {
 			}
 		}
 		for _, r := range csTree(f) {
-			writeCsharpMessage(&b, f, r, "    ", byLocal, holder, parser)
+			writeCsharpMessage(&b, f, r, "    ", byLocal, holder, parser, !opt.NoLayout)
 		}
 		b.WriteString("}\n")
 		files = append(files, File{Name: base(f) + ".cs", Content: b.String()})
@@ -379,6 +379,119 @@ func csPascal(s string) string {
 	return strings.Join(parts, "")
 }
 
+// csSlot is one row of the emitted flat layout: a field's storage offset in
+// the canonical flat image, its width in bytes, and (for a proto3 optional) the
+// index of its presence bit. Reference-shaped fields (string, bytes,
+// submessage, repeated) hold a pointer, so their slot is an indirection and
+// the native object is not flat.
+type csSlot struct {
+	name     string
+	offset   int
+	size     int
+	presence int
+	ref      bool
+}
+
+func csSlotSize(field model.Field) (int, bool) {
+	if field.Repeated || field.Message != "" || field.Kind == protoreflect.StringKind || field.Kind == protoreflect.BytesKind {
+		return 8, true
+	}
+	switch field.Kind {
+	case protoreflect.BoolKind:
+		return 1, false
+	case protoreflect.Int32Kind, protoreflect.Sint32Kind, protoreflect.Sfixed32Kind,
+		protoreflect.Uint32Kind, protoreflect.Fixed32Kind, protoreflect.FloatKind,
+		protoreflect.EnumKind:
+		return 4, false
+	default:
+		return 8, false
+	}
+}
+
+// csSlots packs a message into the canonical flat image: scalar slots at
+// natural alignment in declaration order, then one pointer slot per reference
+// field, then the presence bitmap (one bit per proto3 optional, declaration
+// order, the same index csOptBit computes).
+func csSlots(m *model.Message) (slots []csSlot, total, presenceBits int) {
+	// Presence bits follow declaration order among the proto3 optionals, the
+	// same index csOptBit gives the model's has-bits, wherever the slot lands.
+	hasBit := map[string]int{}
+	bit := 0
+	for _, field := range m.Fields {
+		if field.Skip != "" || !field.NeedsHas || field.Required || field.Oneof != "" {
+			continue
+		}
+		hasBit[field.Name] = bit
+		bit++
+	}
+	// Scalars first (natural alignment, declaration order), then pointer slots.
+	pos := 0
+	for pass := 0; pass < 2; pass++ {
+		for _, field := range m.Fields {
+			if field.Skip != "" {
+				continue
+			}
+			size, ref := csSlotSize(field)
+			if (pass == 0) == ref {
+				continue
+			}
+			if rem := pos % size; rem != 0 {
+				pos += size - rem
+			}
+			presence := -1
+			if b, ok := hasBit[field.Name]; ok {
+				presence = b
+			}
+			slots = append(slots, csSlot{name: field.Name, offset: pos, size: size, presence: presence, ref: ref})
+			pos += size
+		}
+	}
+	if rem := pos % 8; rem != 0 {
+		pos += 8 - rem
+	}
+	return slots, pos, bit
+}
+
+// writeCsharpLayout emits the offset table plus the one-call native-object
+// entry. The table is the contract a native reader would consume; the walk
+// itself stays in the generated model's shipped converter (see the emission's
+// comment and bindings/csharp/pbench/README.md).
+func writeCsharpLayout(b *strings.Builder, f *model.File, n *csNode, indent, holder string) {
+	m := n.msg
+	slots, total, bits := csSlots(m)
+	fmt.Fprintf(b, "%s/// <summary>Flat slot layout: scalar offsets, pointer slots for the reference-typed fields, one presence bit per proto3 optional. Read by the native-object entry, gated by Pbwire.Layout.Verify.</summary>\n", indent)
+	fmt.Fprintf(b, "%spublic static class %sLayout {\n", indent, n.self)
+	in := indent + "    "
+	fmt.Fprintf(b, "%s/// <summary>The message type the table describes.</summary>\n", in)
+	fmt.Fprintf(b, "%spublic static readonly global::Pbwire.MessageType Type = %s.Schema.Message(%q);\n", in, holder, m.Full)
+	fmt.Fprintf(b, "%s/// <summary>One row per field, in slot order.</summary>\n", in)
+	if len(slots) == 0 {
+		fmt.Fprintf(b, "%spublic static readonly global::Pbwire.Layout Table = new global::Pbwire.Layout(%q, %d, %d);\n", in, m.Full, total, bits)
+	} else {
+		fmt.Fprintf(b, "%spublic static readonly global::Pbwire.Layout Table = new global::Pbwire.Layout(%q, %d, %d)\n", in, m.Full, total, bits)
+		for i, slot := range slots {
+			call := fmt.Sprintf("FieldAt(%q, %d, %d)", slot.name, slot.offset, slot.size)
+			switch {
+			case slot.presence >= 0:
+				call = fmt.Sprintf("Has(%q, %d, %d)", slot.name, slot.presence, slot.offset)
+			case slot.ref:
+				call = fmt.Sprintf("Ref(%q, %d, %d)", slot.name, slot.offset, slot.size)
+			}
+			end := ""
+			if i == len(slots)-1 {
+				end = ";"
+			}
+			fmt.Fprintf(b, "%s    .%s%s\n", in, call, end)
+		}
+	}
+	fmt.Fprintf(b, "%s/// <summary>One call per op: native object in, wire bytes out.</summary>\n", in)
+	fmt.Fprintf(b, "%s/// <remarks>The tree is allocated once per op and the model's shipped converter crosses once per present field: the C core has no offset reader, so the table documents the flat layout instead of driving it.</remarks>\n", in)
+	fmt.Fprintf(b, "%spublic static byte[] Marshal(%s native) => global::Pbwire.Run.Encode(native, Type);\n", in, n.self)
+	fmt.Fprintf(b, "%s/// <summary>One call per op: wire bytes in, native object out.</summary>\n", in)
+	fmt.Fprintf(b, "%spublic static %s Unmarshal(byte[] wire) => global::Pbwire.Run.Decode<%s>(wire, Type);\n", in, n.self, n.self)
+	fmt.Fprintf(b, "%s}\n\n", indent)
+}
+
 func writeCsharpEnum(b *strings.Builder, e *model.Enum, indent string) {
 	fmt.Fprintf(b, "%s/// <summary>%s</summary>\n", indent, e.Full)
 	fmt.Fprintf(b, "%spublic enum %s {\n", indent, csEnumName(e.Name))
@@ -424,12 +537,12 @@ func csCur(n *csNode) []string {
 	return cur
 }
 
-func writeCsharpMessage(b *strings.Builder, f *model.File, n *csNode, indent string, byLocal map[string]*csNode, holder, parser string) {
+func writeCsharpMessage(b *strings.Builder, f *model.File, n *csNode, indent string, byLocal map[string]*csNode, holder, parser string, layout bool) {
 	m := n.msg
 	oneofs := csOneofs(m)
 	curobj := csCur(n)
 	fmt.Fprintf(b, "%s/// <summary>%s</summary>\n", indent, m.Full)
-	fmt.Fprintf(b, "%spublic sealed partial class %s {\n", indent, n.self)
+	fmt.Fprintf(b, "%spublic sealed partial class %s : Pbwire.INativeModel {\n", indent, n.self)
 	sub := indent + "    "
 	for _, field := range m.Fields {
 		if field.Skip != "" {
@@ -445,6 +558,9 @@ func writeCsharpMessage(b *strings.Builder, f *model.File, n *csNode, indent str
 		writeCsharpOneof(b, f, n, o, sub, curobj, byLocal)
 	}
 	writeCsharpCodec(b, f, n, sub, curobj, byLocal, holder, parser)
+	if layout {
+		writeCsharpLayout(b, f, n, sub, holder)
+	}
 	if len(n.children) == 0 && len(n.enums) == 0 {
 		fmt.Fprintf(b, "%s}\n\n", indent)
 		return
@@ -455,7 +571,7 @@ func writeCsharpMessage(b *strings.Builder, f *model.File, n *csNode, indent str
 		writeCsharpEnum(b, e, tindent)
 	}
 	for _, c := range n.children {
-		writeCsharpMessage(b, f, c, tindent, byLocal, holder, parser)
+		writeCsharpMessage(b, f, c, tindent, byLocal, holder, parser, layout)
 	}
 	fmt.Fprintf(b, "%s    }\n%s}\n\n", indent, indent)
 }
@@ -702,6 +818,9 @@ func writeCsharpCodec(b *strings.Builder, f *model.File, n *csNode, indent strin
 	fmt.Fprintf(b, "%s internal void MergeFromBytes(byte[] wire) {\n", indent)
 	fmt.Fprintf(b, "%s    using Pbwire.Message msg = "+holder+".Schema.Message(%q).Decode(wire);\n", indent, full)
 	fmt.Fprintf(b, "%s    LoadFrom(msg);\n%s}\n", indent, indent)
+	fmt.Fprintf(b, "%s/// <summary>The native-object entry: one call per op over the shipped converter.</summary>\n", indent)
+	fmt.Fprintf(b, "%svoid Pbwire.INativeModel.WriteTo(Pbwire.Message msg) { EncodeInto(msg); }\n", indent)
+	fmt.Fprintf(b, "%svoid Pbwire.INativeModel.ReadFrom(Pbwire.Message msg) { LoadFrom(msg); }\n", indent)
 	fmt.Fprintf(b, "%spublic void MergeFrom(%s other) {\n", indent, n.self)
 	fmt.Fprintf(b, "%s    if (other == null) { return; }\n", indent)
 	for _, field := range m.Fields {

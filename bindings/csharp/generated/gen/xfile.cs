@@ -20,7 +20,7 @@ namespace Xfile {
     }
 
     /// <summary>xfile.UsesDep</summary>
-    public sealed partial class UsesDep {
+    public sealed partial class UsesDep : Pbwire.INativeModel {
         /// <summary>Field number for the "single" field.</summary>
         public const int SingleFieldNumber = 1;
         public Xdep.DepMsg? Single { get; set; }
@@ -76,6 +76,9 @@ namespace Xfile {
             using Pbwire.Message msg = PbwireFile_Xfile.Schema.Message("xfile.UsesDep").Decode(wire);
             LoadFrom(msg);
         }
+        /// <summary>The native-object entry: one call per op over the shipped converter.</summary>
+        void Pbwire.INativeModel.WriteTo(Pbwire.Message msg) { EncodeInto(msg); }
+        void Pbwire.INativeModel.ReadFrom(Pbwire.Message msg) { LoadFrom(msg); }
         public void MergeFrom(UsesDep other) {
             if (other == null) { return; }
             if (other.Single != null) { if (Single == null) { Single = new Xdep.DepMsg(); } Single.MergeFrom(other.Single); }
@@ -103,6 +106,22 @@ namespace Xfile {
             }
             Note = msg.GetString("note") ?? "";
         }
+        /// <summary>Flat slot layout: scalar offsets, pointer slots for the reference-typed fields, one presence bit per proto3 optional. Read by the native-object entry, gated by Pbwire.Layout.Verify.</summary>
+        public static class UsesDepLayout {
+            /// <summary>The message type the table describes.</summary>
+            public static readonly global::Pbwire.MessageType Type = PbwireFile_Xfile.Schema.Message("xfile.UsesDep");
+            /// <summary>One row per field, in slot order.</summary>
+            public static readonly global::Pbwire.Layout Table = new global::Pbwire.Layout("xfile.UsesDep", 24, 0)
+                .Ref("single", 0, 8)
+                .Ref("many", 8, 8)
+                .Ref("note", 16, 8);
+            /// <summary>One call per op: native object in, wire bytes out.</summary>
+            /// <remarks>The tree is allocated once per op and the model's shipped converter crosses once per present field: the C core has no offset reader, so the table documents the flat layout instead of driving it.</remarks>
+            public static byte[] Marshal(UsesDep native) => global::Pbwire.Run.Encode(native, Type);
+            /// <summary>One call per op: wire bytes in, native object out.</summary>
+            public static UsesDep Unmarshal(byte[] wire) => global::Pbwire.Run.Decode<UsesDep>(wire, Type);
+        }
+
     }
 
 }

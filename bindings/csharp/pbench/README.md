@@ -54,3 +54,17 @@ paths expose the fields `benchmarks/Bench.cs` checks (`str`, `inner.name`,
 `u64`, `color`), and that a decoded model re-encodes to the same bytes. It also
 runs `Layout.Verify` for `Scalars3` and `Inner3`, so a wrong offset table fails
 the gate instead of producing bad bytes.
+
+## Provisional table (Stage 3)
+
+`dotnet run --project pbench/gate -c Release -- compare`: gate first, then
+interleaved rounds (all three implementations back to back), median of five.
+MB/s over wire bytes, 2026-11-21, recorded mid-session (load ~15-30; absolute
+numbers move with the host, the ordering does not):
+
+| tier | `tree` enc | `shim` enc | Google enc | `tree` dec | `shim` dec | Google dec |
+|---|---|---|---|---|---|---|
+| 136 B | 1365.9 | 91.1 | 130.8 | 829.6 | 100.9 | 277.8 |
+| 174 B | 1490.8 | 116.4 | 378.5 | 821.7 | 128.6 | 273.0 |
+| 2469 B | 1359.2 | 60.4 | 386.7 | 676.5 | 51.1 | 381.7 |
+| 74913 B | 1573.5 | 61.3 | 387.9 | 745.7 | 51.8 | 476.4 |

@@ -1091,3 +1091,27 @@ candidate (cached field-name `napi_ref`s to skip V8's per-call UTF-8 string
 interning) buys ~20-30 ns of that and cannot reach jspb's ~5 ns per field. The
 one-change cell was accepted above and the plan says to stop there rather than
 keep tuning a boundary floor.
+
+## Cell: C# native-object arm, all tiers (below Google.Protobuf)
+
+The C# `pbench` `shim` row (generated model in, wire out) sits below the
+Google.Protobuf baseline at every tier: 2026-11-21 `pbench/compare`, xlarge
+74913 B encode 61.3 MB/s against 387.9, decode 51.8 against 476.4 (small tier
+1.27 against 130.8). The `tree` row (prebuilt `Pbwire.Message` handle) beats
+the baseline 3-4x on the same run.
+
+Stage 6 verdict -- **no change attempted, rejected on the mechanism**: codegen
+now emits the per-message flat layout table (scalar offset/width, pointer slots
+for `string`/`bytes`/submessage/repeated, one presence bit per proto3 optional)
+and the gate validates it, but the C core has no entry that reads a pinned
+managed object through such a table. Adding `pbwcs_encode` / `pbwcs_decode`
+means touching `src/` and `include/`, which this plan forbids; a managed walk
+over the same table is the same per-field `P/Invoke` converter with a
+different loop, so it cannot pay. The measured row is the mechanism's floor (one
+crossing per present field, ~12k fields at 74 KB), not a tuning miss.
+
+A/B probe: none. The two builds the plan asks for (table-driven walk against
+the model's shipped converter) would both cross per field, and the ledger rule
+(reject a change that cannot win every round) is decided before the run: the
+table walk adds managed reads on top of the same crossings. Byte equality holds
+in both (the C core writes the bytes), so no round could show a win.

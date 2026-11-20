@@ -1135,3 +1135,148 @@ public sealed class Method
         }
     }
 }
+
+/// <summary>A generated model's shipped tree converter: how a native object fills a <see cref="Message"/> and reads one back.</summary>
+public interface INativeModel
+{
+    /// <summary>Writes every present field of the native object into the tree.</summary>
+    void WriteTo(Message msg);
+
+    /// <summary>Reads every field of the tree into the native object.</summary>
+    void ReadFrom(Message msg);
+}
+
+/// <summary>One row of a flat slot layout: where a field's storage sits in the canonical flat image.</summary>
+public readonly record struct LayoutSlot(string Name, int Offset, int Size, int Presence);
+
+/// <summary>
+/// The flat slot layout a native reader would consume: scalar slots at byte
+/// offsets, one pointer slot per reference-typed field (an indirection, since
+/// <c>string</c>/<c>bytes</c>/submessages/repeated fields are managed
+/// references), and one presence bit per proto3 optional. Codegen emits one per
+/// message and <see cref="Verify"/> checks it against the descriptor; the walk
+/// itself stays in the generated model (see <c>pbench/README.md</c>).
+/// </summary>
+public sealed class Layout
+{
+    private readonly List<LayoutSlot> _slots = new();
+    private readonly Dictionary<string, LayoutSlot> _byName = new(StringComparer.Ordinal);
+
+    public Layout(string name, int bytes, int presenceBits)
+    {
+        Name = name;
+        Bytes = bytes;
+        PresenceBits = presenceBits;
+    }
+
+    /// <summary>The fully qualified message this table describes.</summary>
+    public string Name { get; }
+
+    /// <summary>Size of the flat image in bytes.</summary>
+    public int Bytes { get; }
+
+    /// <summary>Number of presence bits the image carries.</summary>
+    public int PresenceBits { get; }
+
+    /// <summary>Every row, in slot order.</summary>
+    public IReadOnlyList<LayoutSlot> Slots => _slots;
+
+    /// <summary>A plain scalar slot at <paramref name="offset"/>.</summary>
+    public Layout FieldAt(string name, int offset, int size) => Add(new LayoutSlot(name, offset, size, -1));
+
+    /// <summary>A proto3 optional: presence bit <paramref name="bit"/>, storage at <paramref name="offset"/>.</summary>
+    public Layout Has(string name, int bit, int offset) => Add(new LayoutSlot(name, offset, 0, bit));
+
+    /// <summary>A reference-typed slot: a pointer indirection, not flat data.</summary>
+    public Layout Ref(string name, int offset, int size) => Add(new LayoutSlot(name, offset, size, -1));
+
+    /// <summary>The row for a field, or throws when the table does not describe it.</summary>
+    public LayoutSlot Slot(string name) =>
+        _byName.TryGetValue(name, out var slot) ? slot : throw new PbwireException(-1, $"{Name}: no layout row for {name}");
+
+    /// <summary>
+    /// Checks the table against the descriptor: every row names a real field,
+    /// offsets stay inside the image and never overlap backwards, presence bits
+    /// are distinct and inside the bitmap. A wrong table fails here instead of
+    /// producing bad bytes.
+    /// </summary>
+    public Layout Verify(MessageType type)
+    {
+        if (type.Name != Name)
+        {
+            throw new PbwireException(-1, $"layout {Name} does not describe {type.Name}");
+        }
+        if (_slots.Count == 0 && (Bytes != 0 || PresenceBits != 0))
+        {
+            throw new PbwireException(-1, $"{Name}: empty layout with a non-zero image");
+        }
+        var bits = new HashSet<int>();
+        var prevEnd = 0;
+        foreach (var slot in _slots)
+        {
+            type.Field(slot.Name); // throws when the descriptor has no such field
+            if (slot.Offset < 0 || slot.Offset >= Bytes || slot.Offset < prevEnd)
+            {
+                throw new PbwireException(-1, $"{Name}.{slot.Name}: offset {slot.Offset} outside [0, {Bytes}) or overlapping");
+            }
+            if (slot.Size < 0 || slot.Offset + slot.Size > Bytes)
+            {
+                throw new PbwireException(-1, $"{Name}.{slot.Name}: {slot.Size} bytes at {slot.Offset} run past {Bytes}");
+            }
+            prevEnd = slot.Offset + Math.Max(slot.Size, 1);
+            if (slot.Presence >= 0)
+            {
+                if (slot.Presence >= PresenceBits || !bits.Add(slot.Presence))
+                {
+                    throw new PbwireException(-1, $"{Name}.{slot.Name}: presence bit {slot.Presence} is out of range or reused");
+                }
+            }
+        }
+        if (bits.Count != PresenceBits)
+        {
+            throw new PbwireException(-1, $"{Name}: {PresenceBits} presence bits declared, {bits.Count} used");
+        }
+        return this;
+    }
+
+    private Layout Add(LayoutSlot slot)
+    {
+        if (_byName.ContainsKey(slot.Name))
+        {
+            throw new PbwireException(-1, $"{Name}: duplicate layout row for {slot.Name}");
+        }
+        _byName[slot.Name] = slot;
+        _slots.Add(slot);
+        return this;
+    }
+}
+
+/// <summary>
+/// The native-object entry over a generated model: one call per op. Encode
+/// allocates the tree once, lets the model's shipped converter cross once per
+/// present field, and writes the bytes in one call; decode is one decode call
+/// plus the model's own load.
+/// </summary>
+public static class Run
+{
+    /// <summary>Native object in, wire bytes out.</summary>
+    public static byte[] Encode(object native, MessageType type)
+    {
+        if (native is not INativeModel model)
+        {
+            throw new PbwireException(-1, $"{type.Name}: not a generated model: {native.GetType().Name}");
+        }
+        using var msg = type.NewMessage();
+        model.WriteTo(msg);
+        return msg.Encode();
+    }
+
+    /// <summary>Wire bytes in, native object out.</summary>
+    public static T Decode<T>(byte[] wire, MessageType type) where T : INativeModel, new()
+    {
+        using var msg = type.Decode(wire);
+        var native = new T();
+        native.ReadFrom(msg);
+        return native;
+    }
+}

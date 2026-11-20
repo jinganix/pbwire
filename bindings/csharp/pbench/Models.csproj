@@ -1,0 +1,24 @@
+<!-- The matrix3 model for the C# pbench and benchmark harnesses: the
+committed pbwire generated model is the native object of the shim arm. Kept in
+its own assembly so the benchmark's protoc-generated baseline (also namespace
+Structtest) can stay in a different one. -->
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>Pbwire.Matrix3</AssemblyName>
+    <RootNamespace>Pbwire.Matrix3</RootNamespace>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="../generated/gen/matrix3.cs" />
+    <Compile Include="../generated/gen/PbwireFile_Matrix3.cs" />
+    <ProjectReference Include="../Pbwire/Pbwire.csproj" />
+    <PackageReference Include="Google.Protobuf" Version="3.36.2" />
+  </ItemGroup>
+
+</Project>

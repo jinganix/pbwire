@@ -20,7 +20,7 @@ namespace Tutorial {
     }
 
     /// <summary>tutorial.Person</summary>
-    public sealed partial class Person {
+    public sealed partial class Person : Pbwire.INativeModel {
         /// <summary>Field number for the "name" field.</summary>
         public const int NameFieldNumber = 1;
         public string Name { get; set; }  = "";
@@ -88,6 +88,9 @@ namespace Tutorial {
             using Pbwire.Message msg = PbwireFile_Addressbook.Schema.Message("tutorial.Person").Decode(wire);
             LoadFrom(msg);
         }
+        /// <summary>The native-object entry: one call per op over the shipped converter.</summary>
+        void Pbwire.INativeModel.WriteTo(Pbwire.Message msg) { EncodeInto(msg); }
+        void Pbwire.INativeModel.ReadFrom(Pbwire.Message msg) { LoadFrom(msg); }
         public void MergeFrom(Person other) {
             if (other == null) { return; }
             Name = other.Name;
@@ -115,6 +118,23 @@ namespace Tutorial {
                 if (sub != null) { var m = new Types.PhoneNumber(); m.LoadFrom(sub); Phones.Add(m); }
             }
         }
+        /// <summary>Flat slot layout: scalar offsets, pointer slots for the reference-typed fields, one presence bit per proto3 optional. Read by the native-object entry, gated by Pbwire.Layout.Verify.</summary>
+        public static class PersonLayout {
+            /// <summary>The message type the table describes.</summary>
+            public static readonly global::Pbwire.MessageType Type = PbwireFile_Addressbook.Schema.Message("tutorial.Person");
+            /// <summary>One row per field, in slot order.</summary>
+            public static readonly global::Pbwire.Layout Table = new global::Pbwire.Layout("tutorial.Person", 32, 1)
+                .FieldAt("id", 0, 4)
+                .Ref("name", 8, 8)
+                .Has("email", 0, 16)
+                .Ref("phones", 24, 8);
+            /// <summary>One call per op: native object in, wire bytes out.</summary>
+            /// <remarks>The tree is allocated once per op and the model's shipped converter crosses once per present field: the C core has no offset reader, so the table documents the flat layout instead of driving it.</remarks>
+            public static byte[] Marshal(Person native) => global::Pbwire.Run.Encode(native, Type);
+            /// <summary>One call per op: wire bytes in, native object out.</summary>
+            public static Person Unmarshal(byte[] wire) => global::Pbwire.Run.Decode<Person>(wire, Type);
+        }
+
 
         public static partial class Types {
             /// <summary>tutorial.Person.PhoneType</summary>
@@ -125,7 +145,7 @@ namespace Tutorial {
             }
 
             /// <summary>tutorial.Person.PhoneNumber</summary>
-            public sealed partial class PhoneNumber {
+            public sealed partial class PhoneNumber : Pbwire.INativeModel {
                 /// <summary>Field number for the "number" field.</summary>
                 public const int NumberFieldNumber = 1;
                 public string Number { get; set; }  = "";
@@ -180,6 +200,9 @@ namespace Tutorial {
                     using Pbwire.Message msg = PbwireFile_Addressbook.Schema.Message("tutorial.Person.PhoneNumber").Decode(wire);
                     LoadFrom(msg);
                 }
+                /// <summary>The native-object entry: one call per op over the shipped converter.</summary>
+                void Pbwire.INativeModel.WriteTo(Pbwire.Message msg) { EncodeInto(msg); }
+                void Pbwire.INativeModel.ReadFrom(Pbwire.Message msg) { LoadFrom(msg); }
                 public void MergeFrom(PhoneNumber other) {
                     if (other == null) { return; }
                     Number = other.Number;
@@ -195,13 +218,28 @@ namespace Tutorial {
                     Number = msg.GetString("number") ?? "";
                     if (msg.Has("type")) { Type = (PhoneType)msg.GetInt("type"); }
                 }
+                /// <summary>Flat slot layout: scalar offsets, pointer slots for the reference-typed fields, one presence bit per proto3 optional. Read by the native-object entry, gated by Pbwire.Layout.Verify.</summary>
+                public static class PhoneNumberLayout {
+                    /// <summary>The message type the table describes.</summary>
+                    public static readonly global::Pbwire.MessageType Type = PbwireFile_Addressbook.Schema.Message("tutorial.Person.PhoneNumber");
+                    /// <summary>One row per field, in slot order.</summary>
+                    public static readonly global::Pbwire.Layout Table = new global::Pbwire.Layout("tutorial.Person.PhoneNumber", 16, 1)
+                        .Has("type", 0, 0)
+                        .Ref("number", 8, 8);
+                    /// <summary>One call per op: native object in, wire bytes out.</summary>
+                    /// <remarks>The tree is allocated once per op and the model's shipped converter crosses once per present field: the C core has no offset reader, so the table documents the flat layout instead of driving it.</remarks>
+                    public static byte[] Marshal(PhoneNumber native) => global::Pbwire.Run.Encode(native, Type);
+                    /// <summary>One call per op: wire bytes in, native object out.</summary>
+                    public static PhoneNumber Unmarshal(byte[] wire) => global::Pbwire.Run.Decode<PhoneNumber>(wire, Type);
+                }
+
             }
 
         }
     }
 
     /// <summary>tutorial.AddressBook</summary>
-    public sealed partial class AddressBook {
+    public sealed partial class AddressBook : Pbwire.INativeModel {
         /// <summary>Field number for the "people" field.</summary>
         public const int PeopleFieldNumber = 1;
         private readonly global::Google.Protobuf.Collections.RepeatedField<Person> people_ = new global::Google.Protobuf.Collections.RepeatedField<Person>();
@@ -245,6 +283,9 @@ namespace Tutorial {
             using Pbwire.Message msg = PbwireFile_Addressbook.Schema.Message("tutorial.AddressBook").Decode(wire);
             LoadFrom(msg);
         }
+        /// <summary>The native-object entry: one call per op over the shipped converter.</summary>
+        void Pbwire.INativeModel.WriteTo(Pbwire.Message msg) { EncodeInto(msg); }
+        void Pbwire.INativeModel.ReadFrom(Pbwire.Message msg) { LoadFrom(msg); }
         public void MergeFrom(AddressBook other) {
             if (other == null) { return; }
             People.Add(other.People);
@@ -261,6 +302,20 @@ namespace Tutorial {
                 if (sub != null) { var m = new Person(); m.LoadFrom(sub); People.Add(m); }
             }
         }
+        /// <summary>Flat slot layout: scalar offsets, pointer slots for the reference-typed fields, one presence bit per proto3 optional. Read by the native-object entry, gated by Pbwire.Layout.Verify.</summary>
+        public static class AddressBookLayout {
+            /// <summary>The message type the table describes.</summary>
+            public static readonly global::Pbwire.MessageType Type = PbwireFile_Addressbook.Schema.Message("tutorial.AddressBook");
+            /// <summary>One row per field, in slot order.</summary>
+            public static readonly global::Pbwire.Layout Table = new global::Pbwire.Layout("tutorial.AddressBook", 8, 0)
+                .Ref("people", 0, 8);
+            /// <summary>One call per op: native object in, wire bytes out.</summary>
+            /// <remarks>The tree is allocated once per op and the model's shipped converter crosses once per present field: the C core has no offset reader, so the table documents the flat layout instead of driving it.</remarks>
+            public static byte[] Marshal(AddressBook native) => global::Pbwire.Run.Encode(native, Type);
+            /// <summary>One call per op: wire bytes in, native object out.</summary>
+            public static AddressBook Unmarshal(byte[] wire) => global::Pbwire.Run.Decode<AddressBook>(wire, Type);
+        }
+
     }
 
 }

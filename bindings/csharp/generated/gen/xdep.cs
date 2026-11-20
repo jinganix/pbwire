@@ -20,7 +20,7 @@ namespace Xdep {
     }
 
     /// <summary>xdep.DepMsg</summary>
-    public sealed partial class DepMsg {
+    public sealed partial class DepMsg : Pbwire.INativeModel {
         /// <summary>Field number for the "name" field.</summary>
         public const int NameFieldNumber = 1;
         public string Name { get; set; }  = "";
@@ -69,6 +69,9 @@ namespace Xdep {
             using Pbwire.Message msg = PbwireFile_Xdep.Schema.Message("xdep.DepMsg").Decode(wire);
             LoadFrom(msg);
         }
+        /// <summary>The native-object entry: one call per op over the shipped converter.</summary>
+        void Pbwire.INativeModel.WriteTo(Pbwire.Message msg) { EncodeInto(msg); }
+        void Pbwire.INativeModel.ReadFrom(Pbwire.Message msg) { LoadFrom(msg); }
         public void MergeFrom(DepMsg other) {
             if (other == null) { return; }
             Name = other.Name;
@@ -86,6 +89,21 @@ namespace Xdep {
             Name = msg.GetString("name") ?? "";
             Value = (int)msg.GetInt("value");
         }
+        /// <summary>Flat slot layout: scalar offsets, pointer slots for the reference-typed fields, one presence bit per proto3 optional. Read by the native-object entry, gated by Pbwire.Layout.Verify.</summary>
+        public static class DepMsgLayout {
+            /// <summary>The message type the table describes.</summary>
+            public static readonly global::Pbwire.MessageType Type = PbwireFile_Xdep.Schema.Message("xdep.DepMsg");
+            /// <summary>One row per field, in slot order.</summary>
+            public static readonly global::Pbwire.Layout Table = new global::Pbwire.Layout("xdep.DepMsg", 16, 0)
+                .FieldAt("value", 0, 4)
+                .Ref("name", 8, 8);
+            /// <summary>One call per op: native object in, wire bytes out.</summary>
+            /// <remarks>The tree is allocated once per op and the model's shipped converter crosses once per present field: the C core has no offset reader, so the table documents the flat layout instead of driving it.</remarks>
+            public static byte[] Marshal(DepMsg native) => global::Pbwire.Run.Encode(native, Type);
+            /// <summary>One call per op: wire bytes in, native object out.</summary>
+            public static DepMsg Unmarshal(byte[] wire) => global::Pbwire.Run.Decode<DepMsg>(wire, Type);
+        }
+
     }
 
 }

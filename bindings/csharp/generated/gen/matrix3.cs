@@ -27,7 +27,7 @@ namespace Structtest {
     }
 
     /// <summary>structtest.Inner3</summary>
-    public sealed partial class Inner3 {
+    public sealed partial class Inner3 : Pbwire.INativeModel {
         /// <summary>Field number for the "name" field.</summary>
         public const int NameFieldNumber = 1;
         public string Name { get; set; }  = "";
@@ -76,6 +76,9 @@ namespace Structtest {
             using Pbwire.Message msg = PbwireFile_Matrix3.Schema.Message("structtest.Inner3").Decode(wire);
             LoadFrom(msg);
         }
+        /// <summary>The native-object entry: one call per op over the shipped converter.</summary>
+        void Pbwire.INativeModel.WriteTo(Pbwire.Message msg) { EncodeInto(msg); }
+        void Pbwire.INativeModel.ReadFrom(Pbwire.Message msg) { LoadFrom(msg); }
         public void MergeFrom(Inner3 other) {
             if (other == null) { return; }
             Name = other.Name;
@@ -93,10 +96,25 @@ namespace Structtest {
             Name = msg.GetString("name") ?? "";
             Value = (int)msg.GetInt("value");
         }
+        /// <summary>Flat slot layout: scalar offsets, pointer slots for the reference-typed fields, one presence bit per proto3 optional. Read by the native-object entry, gated by Pbwire.Layout.Verify.</summary>
+        public static class Inner3Layout {
+            /// <summary>The message type the table describes.</summary>
+            public static readonly global::Pbwire.MessageType Type = PbwireFile_Matrix3.Schema.Message("structtest.Inner3");
+            /// <summary>One row per field, in slot order.</summary>
+            public static readonly global::Pbwire.Layout Table = new global::Pbwire.Layout("structtest.Inner3", 16, 0)
+                .FieldAt("value", 0, 4)
+                .Ref("name", 8, 8);
+            /// <summary>One call per op: native object in, wire bytes out.</summary>
+            /// <remarks>The tree is allocated once per op and the model's shipped converter crosses once per present field: the C core has no offset reader, so the table documents the flat layout instead of driving it.</remarks>
+            public static byte[] Marshal(Inner3 native) => global::Pbwire.Run.Encode(native, Type);
+            /// <summary>One call per op: wire bytes in, native object out.</summary>
+            public static Inner3 Unmarshal(byte[] wire) => global::Pbwire.Run.Decode<Inner3>(wire, Type);
+        }
+
     }
 
     /// <summary>structtest.Scalars3</summary>
-    public sealed partial class Scalars3 {
+    public sealed partial class Scalars3 : Pbwire.INativeModel {
         /// <summary>Field number for the "i32" field.</summary>
         public const int I32FieldNumber = 1;
         public int I32 { get; set; }
@@ -280,6 +298,9 @@ namespace Structtest {
             using Pbwire.Message msg = PbwireFile_Matrix3.Schema.Message("structtest.Scalars3").Decode(wire);
             LoadFrom(msg);
         }
+        /// <summary>The native-object entry: one call per op over the shipped converter.</summary>
+        void Pbwire.INativeModel.WriteTo(Pbwire.Message msg) { EncodeInto(msg); }
+        void Pbwire.INativeModel.ReadFrom(Pbwire.Message msg) { LoadFrom(msg); }
         public void MergeFrom(Scalars3 other) {
             if (other == null) { return; }
             I32 = other.I32;
@@ -411,6 +432,41 @@ namespace Structtest {
                 if (itemFlags != null) { Flags.Add(itemFlags.AsBool()); }
             }
         }
+        /// <summary>Flat slot layout: scalar offsets, pointer slots for the reference-typed fields, one presence bit per proto3 optional. Read by the native-object entry, gated by Pbwire.Layout.Verify.</summary>
+        public static class Scalars3Layout {
+            /// <summary>The message type the table describes.</summary>
+            public static readonly global::Pbwire.MessageType Type = PbwireFile_Matrix3.Schema.Message("structtest.Scalars3");
+            /// <summary>One row per field, in slot order.</summary>
+            public static readonly global::Pbwire.Layout Table = new global::Pbwire.Layout("structtest.Scalars3", 168, 2)
+                .FieldAt("i32", 0, 4)
+                .FieldAt("i64", 8, 8)
+                .FieldAt("u32", 16, 4)
+                .FieldAt("u64", 24, 8)
+                .FieldAt("s32", 32, 4)
+                .FieldAt("s64", 40, 8)
+                .FieldAt("fx32", 48, 4)
+                .FieldAt("fx64", 56, 8)
+                .FieldAt("sfx32", 64, 4)
+                .FieldAt("sfx64", 72, 8)
+                .FieldAt("f32", 80, 4)
+                .FieldAt("f64", 88, 8)
+                .FieldAt("flag", 96, 1)
+                .FieldAt("color", 100, 4)
+                .Has("opt_i32", 0, 104)
+                .Ref("str", 112, 8)
+                .Ref("inner", 120, 8)
+                .Ref("nums", 128, 8)
+                .Ref("tags", 136, 8)
+                .Ref("inners", 144, 8)
+                .Has("opt_str", 1, 152)
+                .Ref("flags", 160, 8);
+            /// <summary>One call per op: native object in, wire bytes out.</summary>
+            /// <remarks>The tree is allocated once per op and the model's shipped converter crosses once per present field: the C core has no offset reader, so the table documents the flat layout instead of driving it.</remarks>
+            public static byte[] Marshal(Scalars3 native) => global::Pbwire.Run.Encode(native, Type);
+            /// <summary>One call per op: wire bytes in, native object out.</summary>
+            public static Scalars3 Unmarshal(byte[] wire) => global::Pbwire.Run.Decode<Scalars3>(wire, Type);
+        }
+
     }
 
 }
