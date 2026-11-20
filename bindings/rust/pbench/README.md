@@ -69,19 +69,38 @@ arena allocated once. MB/s over wire bytes, 2026-11-20, recorded mid-session:
 **Keep the shipped `tree` runtime and publish the flat-image `shim` row as the
 native-object candidate; encode splits by payload size, decode does not.** One
 call per op removes the per-field crossing: shim decode is above prost at every
-tier (1.43x at 136 B, 1.91x at 74 KB) and shim encode is above prost at 136 B
-(1.05x), level at 174 B (0.99x), and below it at 2469 B (0.80x) and 74913 B
-(0.83x). The encode loss is the shared C struct codec's repeated-element path,
+tier (1.38x at 136 B, 1.90x at 74 KB) and shim encode is above prost at 136 B
+(1.10x), level at 174 B (1.01x), and below it at 2469 B (0.80x) and 74913 B
+(0.84x). The encode loss is the shared C struct codec's repeated-element path,
 not the Rust arm: `make bench-c` measures the same codec at 1132.2 MB/s on
 74913 B, while the tree row's `encode_to` reaches 1713.7 MB/s there, and prost's
 generated writer is straight-line code with no per-element reserve.
 
 It is not "replace the shipped fast path": `pbwire-rust-tree` times a *prebuilt*
-handle's `encode_to`, which beats prost on every encode tier (1.16x/1.09x/
-1.27x/1.26x on this run) and stays the shipping runtime for applications that
+handle's `encode_to`, which beats prost on every encode tier (1.20x/1.11x/
+1.23x/1.17x on the recorded run) and stays the shipping runtime for
+applications that
 already hold a tree. It is not "a boundary feature is missing": the boundary is
 a single call in both directions, and the shim's decode is faster than the tree
 decode at every tier; only the struct codec's encode path is behind, and that is
 a C runtime question shared by every layout binding, not a missing Rust entry
 point. The arm stays re-runnable (`cargo test --test flat`, `make rust-bench`)
 so a faster struct encoder moves this row without touching Rust.
+
+## Formal rows (Stage 5)
+
+`make rust-bench` records `results/bench-rust-<stamp>.{log,json}`; the run below
+is `results/bench-rust-20261120T205610Z.json` (Apple M4 Pro, arm64, sha
+`13406a1`), same harness and the same two rows `pbwire-rust-tree` /
+`pbwire-rust-shim`. MB/s over wire bytes:
+
+| tier | `tree` enc | `shim` enc | prost enc | `tree` dec | `shim` dec | prost dec |
+|---|---|---|---|---|---|---|
+| 136 B | 1845.2 | 1703.2 | 1541.8 | 1030.9 | 1147.6 | 833.0 |
+| 174 B | 1726.3 | 1566.9 | 1548.5 | 879.6 | 1020.5 | 623.3 |
+| 2469 B | 1655.0 | 1072.3 | 1340.9 | 651.6 | 640.4 | 340.4 |
+| 74913 B | 1600.9 | 1145.0 | 1370.9 | 716.2 | 722.7 | 380.4 |
+
+Against prost: shim encode 1.10x / 1.01x / 0.80x / 0.84x and shim decode
+1.38x / 1.64x / 1.88x / 1.90x; the tree row is 1.20x / 1.11x / 1.23x / 1.17x on
+encode and 1.24x / 1.41x / 1.91x / 1.88x on decode.
