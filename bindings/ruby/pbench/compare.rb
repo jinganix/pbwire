@@ -72,6 +72,7 @@ Payload::TIERS.each do |tier|
     exit 1
   end
   obj = Payload.object(repeats)
+  official = Payload.official(repeats)
   tree_wire = TreeArm.marshal(obj)
   shim_wire = ShimArm.marshal(obj)
   unless tree_wire == ref && shim_wire == ref
@@ -86,7 +87,7 @@ Payload::TIERS.each do |tier|
                      ['pbwire-ruby-tree', 'encode', -> { TreeArm.marshal(obj) }],
                      ['pbwire-ruby-shim', 'encode', -> { ShimArm.marshal(obj) }],
                      ['google-protobuf', 'encode',
-                      -> { Structtest::Scalars3.encode(Payload.official(repeats)) }]
+                      -> { Structtest::Scalars3.encode(official) }]
                    ], tier[:iterations])
   encode.each { |impl, op, ns| puts row(impl, op, bytes, ns) }
 
