@@ -1239,6 +1239,12 @@ dec_oneof_stage(cshim_codec *h, const cshim_row *r, const uint8_t *buf, size_t l
         return -1;
     }
     st = &h->ostages[r->ogrp];
+    /* A repeat visit to the same staged message member merges into the
+     * staged submessage; capture it before the slot is reset below. */
+    int merge =
+        (r->kind == CSHIMK_MSG && st->fnum == r->fnum && st->ptr != NULL);
+
+    const void *prior = merge ? st->ptr : NULL;
     st->fnum = r->fnum;
     st->kind = r->kind;
     st->scalar = 0;
@@ -1315,35 +1321,49 @@ dec_oneof_stage(cshim_codec *h, const cshim_row *r, const uint8_t *buf, size_t l
         uint64_t sl;
         void *sub;
 
+        /* A repeat visit to the same staged member merges into the
+         * staged submessage instead of starting a fresh one; any other
+         * member still replaces the slot. */
         if (r->group) {
+            if (merge) {
+                sub = (void *)prior;
+                st->ptr = sub;
+            } else {
+                sub = arena_alloc(h, h->tables[r->sub].msg_size);
+                if (sub == NULL) {
+                    h->fail_off = *pos;
+                    return -1;
+                }
+                memset(sub, 0, h->tables[r->sub].msg_size);
+                st->ptr = sub;
+            }
+            if (dec_group_body(h, (size_t)r->sub, sub, buf, len, pos,
+                               r->fnum, depth)) {
+                return -1;
+            }
+            return 0;
+        }
+        if (get_varint(buf, len, pos, &sl) || sl > (uint64_t)(len - *pos)) {
+            break;
+        }
+        if (merge) {
+            sub = (void *)prior;
+            st->ptr = sub;
+        } else {
             sub = arena_alloc(h, h->tables[r->sub].msg_size);
             if (sub == NULL) {
                 h->fail_off = *pos;
                 return -1;
             }
             memset(sub, 0, h->tables[r->sub].msg_size);
-            if (dec_group_body(h, (size_t)r->sub, sub, buf, len, pos,
-                               r->fnum, depth)) {
-                return -1;
-            }
             st->ptr = sub;
-            return 0;
         }
-        if (get_varint(buf, len, pos, &sl) || sl > (uint64_t)(len - *pos)) {
-            break;
-        }
-        sub = arena_alloc(h, h->tables[r->sub].msg_size);
-        if (sub == NULL) {
-            h->fail_off = *pos;
-            return -1;
-        }
-        memset(sub, 0, h->tables[r->sub].msg_size);
         if (dec_msg(h, &h->tables[r->sub], sub, buf + *pos, (size_t)sl,
                     depth + 1)) {
             h->fail_off = *pos;
             return -1;
         }
-        st->ptr = sub;
+
         *pos += (size_t)sl;
         return 0;
     }
