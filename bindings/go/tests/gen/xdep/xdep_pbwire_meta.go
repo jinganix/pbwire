@@ -11,11 +11,11 @@ import (
 
 // DepMsgMeta is the generated DATA table for xdep.DepMsg: one row per field.
 var DepMsgMeta = codec.NewTable("xdep.DepMsg", []*codec.Field{
-	{Name: "name", Num: 1, Wire: codec.WireLen, Kind: codec.KindString, Fast: true, Off: uint32(unsafe.Offsetof(DepMsg{}.Name)), Count: uint32(unsafe.Offsetof(DepMsg{}.Name)) + uint32(unsafe.Sizeof(uintptr(0))), Elem: uint32(unsafe.Sizeof("")),
+	{Name: "name", Num: 1, Wire: codec.WireLen, Kind: codec.KindString, Fast: true, Off: uint32(unsafe.Offsetof(DepMsg{}.Name)),
 		GetStr: func(msg any) string { return msg.(*DepMsg).Name },
 		SetStr: func(msg any, v string) { msg.(*DepMsg).Name = v },
 	},
-	{Name: "value", Num: 2, Wire: codec.WireVarint, Kind: codec.KindInt32, Fast: true, Off: uint32(unsafe.Offsetof(DepMsg{}.Value)), Elem: uint32(unsafe.Sizeof(int32(0))),
+	{Name: "value", Num: 2, Wire: codec.WireVarint, Kind: codec.KindInt32, Fast: true, Off: uint32(unsafe.Offsetof(DepMsg{}.Value)),
 		GetI32: func(msg any) int32 { return msg.(*DepMsg).Value },
 		SetI32: func(msg any, v int32) { msg.(*DepMsg).Value = v },
 	},

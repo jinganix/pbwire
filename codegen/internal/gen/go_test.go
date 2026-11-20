@@ -135,13 +135,18 @@ func TestGoFilesDefault(t *testing.T) {
 		"GetI32:",
 		"SetStr:",
 		"Fast: true, Off: uint32(unsafe.Offsetof(M{}.V))",
-		"Elem: uint32(unsafe.Sizeof(int32(0)))",
 		"Fast: true, Off: uint32(unsafe.Offsetof(M{}.S))",
-		"Count: uint32(unsafe.Offsetof(M{}.S)) + uint32(unsafe.Sizeof(uintptr(0)))",
 		"\"unsafe\"",
 	} {
 		if !strings.Contains(meta, want) {
 			t.Errorf("meta file misses %q", want)
+		}
+	}
+	// Count/Elem are layout facts nothing reads; emitting them would imply
+	// engine behavior that does not exist.
+	for _, bad := range []string{"Elem:", "Count:"} {
+		if strings.Contains(meta, bad) {
+			t.Errorf("meta file must not emit dead columns: %q", bad)
 		}
 	}
 	for _, bad := range []string{

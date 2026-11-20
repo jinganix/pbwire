@@ -11,11 +11,11 @@ import (
 
 // MapValueMeta is the generated DATA table for spectest.MapValue: one row per field.
 var MapValueMeta = codec.NewTable("spectest.MapValue", []*codec.Field{
-	{Name: "name", Num: 1, Wire: codec.WireLen, Kind: codec.KindString, Fast: true, Off: uint32(unsafe.Offsetof(MapValue{}.Name)), Count: uint32(unsafe.Offsetof(MapValue{}.Name)) + uint32(unsafe.Sizeof(uintptr(0))), Elem: uint32(unsafe.Sizeof("")),
+	{Name: "name", Num: 1, Wire: codec.WireLen, Kind: codec.KindString, Fast: true, Off: uint32(unsafe.Offsetof(MapValue{}.Name)),
 		GetStr: func(msg any) string { return msg.(*MapValue).Name },
 		SetStr: func(msg any, v string) { msg.(*MapValue).Name = v },
 	},
-	{Name: "value", Num: 2, Wire: codec.WireVarint, Kind: codec.KindInt32, Fast: true, Off: uint32(unsafe.Offsetof(MapValue{}.Value)), Elem: uint32(unsafe.Sizeof(int32(0))),
+	{Name: "value", Num: 2, Wire: codec.WireVarint, Kind: codec.KindInt32, Fast: true, Off: uint32(unsafe.Offsetof(MapValue{}.Value)),
 		GetI32: func(msg any) int32 { return msg.(*MapValue).Value },
 		SetI32: func(msg any, v int32) { msg.(*MapValue).Value = v },
 	},
@@ -23,11 +23,11 @@ var MapValueMeta = codec.NewTable("spectest.MapValue", []*codec.Field{
 
 // MapTest_ByIntEntryMeta is the generated DATA table for spectest.MapTest.ByIntEntry: one row per field.
 var MapTest_ByIntEntryMeta = codec.NewTable("spectest.MapTest.ByIntEntry", []*codec.Field{
-	{Name: "key", Num: 1, Wire: codec.WireVarint, Kind: codec.KindInt32, Fast: true, Off: uint32(unsafe.Offsetof(MapTest_ByIntEntry{}.Key)), Elem: uint32(unsafe.Sizeof(int32(0))),
+	{Name: "key", Num: 1, Wire: codec.WireVarint, Kind: codec.KindInt32, Fast: true, Off: uint32(unsafe.Offsetof(MapTest_ByIntEntry{}.Key)),
 		GetI32: func(msg any) int32 { return msg.(*MapTest_ByIntEntry).Key },
 		SetI32: func(msg any, v int32) { msg.(*MapTest_ByIntEntry).Key = v },
 	},
-	{Name: "value", Num: 2, Wire: codec.WireLen, Kind: codec.KindString, Fast: true, Off: uint32(unsafe.Offsetof(MapTest_ByIntEntry{}.Value)), Count: uint32(unsafe.Offsetof(MapTest_ByIntEntry{}.Value)) + uint32(unsafe.Sizeof(uintptr(0))), Elem: uint32(unsafe.Sizeof("")),
+	{Name: "value", Num: 2, Wire: codec.WireLen, Kind: codec.KindString, Fast: true, Off: uint32(unsafe.Offsetof(MapTest_ByIntEntry{}.Value)),
 		GetStr: func(msg any) string { return msg.(*MapTest_ByIntEntry).Value },
 		SetStr: func(msg any, v string) { msg.(*MapTest_ByIntEntry).Value = v },
 	},
@@ -35,11 +35,11 @@ var MapTest_ByIntEntryMeta = codec.NewTable("spectest.MapTest.ByIntEntry", []*co
 
 // MapTest_ByStrEntryMeta is the generated DATA table for spectest.MapTest.ByStrEntry: one row per field.
 var MapTest_ByStrEntryMeta = codec.NewTable("spectest.MapTest.ByStrEntry", []*codec.Field{
-	{Name: "key", Num: 1, Wire: codec.WireLen, Kind: codec.KindString, Fast: true, Off: uint32(unsafe.Offsetof(MapTest_ByStrEntry{}.Key)), Count: uint32(unsafe.Offsetof(MapTest_ByStrEntry{}.Key)) + uint32(unsafe.Sizeof(uintptr(0))), Elem: uint32(unsafe.Sizeof("")),
+	{Name: "key", Num: 1, Wire: codec.WireLen, Kind: codec.KindString, Fast: true, Off: uint32(unsafe.Offsetof(MapTest_ByStrEntry{}.Key)),
 		GetStr: func(msg any) string { return msg.(*MapTest_ByStrEntry).Key },
 		SetStr: func(msg any, v string) { msg.(*MapTest_ByStrEntry).Key = v },
 	},
-	{Name: "value", Num: 2, Wire: codec.WireVarint, Kind: codec.KindInt32, Fast: true, Off: uint32(unsafe.Offsetof(MapTest_ByStrEntry{}.Value)), Elem: uint32(unsafe.Sizeof(int32(0))),
+	{Name: "value", Num: 2, Wire: codec.WireVarint, Kind: codec.KindInt32, Fast: true, Off: uint32(unsafe.Offsetof(MapTest_ByStrEntry{}.Value)),
 		GetI32: func(msg any) int32 { return msg.(*MapTest_ByStrEntry).Value },
 		SetI32: func(msg any, v int32) { msg.(*MapTest_ByStrEntry).Value = v },
 	},
@@ -47,7 +47,7 @@ var MapTest_ByStrEntryMeta = codec.NewTable("spectest.MapTest.ByStrEntry", []*co
 
 // MapTest_ByMsgEntryMeta is the generated DATA table for spectest.MapTest.ByMsgEntry: one row per field.
 var MapTest_ByMsgEntryMeta = codec.NewTable("spectest.MapTest.ByMsgEntry", []*codec.Field{
-	{Name: "key", Num: 1, Wire: codec.WireLen, Kind: codec.KindString, Fast: true, Off: uint32(unsafe.Offsetof(MapTest_ByMsgEntry{}.Key)), Count: uint32(unsafe.Offsetof(MapTest_ByMsgEntry{}.Key)) + uint32(unsafe.Sizeof(uintptr(0))), Elem: uint32(unsafe.Sizeof("")),
+	{Name: "key", Num: 1, Wire: codec.WireLen, Kind: codec.KindString, Fast: true, Off: uint32(unsafe.Offsetof(MapTest_ByMsgEntry{}.Key)),
 		GetStr: func(msg any) string { return msg.(*MapTest_ByMsgEntry).Key },
 		SetStr: func(msg any, v string) { msg.(*MapTest_ByMsgEntry).Key = v },
 	},
