@@ -66,3 +66,19 @@ func (c *Codec) Unmarshal(wire []byte) (*matrix3.Scalars3, error) {
 	}
 	return &out, nil
 }
+
+// DirectMarshal encodes the struct straight through the shared table
+// engine, with no DMsg value tree in between.
+func (c *Codec) DirectMarshal(m *matrix3.Scalars3) ([]byte, error) {
+	return codec.EncodeModel(m, matrix3.Scalars3Meta)
+}
+
+// DirectUnmarshal decodes wire bytes straight into a struct through the
+// shared table engine, with no DMsg value tree in between.
+func (c *Codec) DirectUnmarshal(wire []byte) (*matrix3.Scalars3, error) {
+	out := &matrix3.Scalars3{}
+	if err := codec.DecodeModel(wire, out, matrix3.Scalars3Meta); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
