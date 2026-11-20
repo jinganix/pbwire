@@ -23,8 +23,10 @@ dynamic paths are what this harness compares.
 | `cshim/` | Erlang-style C | measures the struct layout once, then C reads Go memory directly: one crossing per call |
 
 Each solution lives in its own directory with its engine next to its arm;
-nothing here is shared scaffolding. `runtime/` stays empty until this
-harness selects the final solution.
+nothing here is shared scaffolding. The harness selected `cshim`: the
+shipped engine lives in `../runtime/` (package `runtime`, layout in
+`../runtime/layout/`), and `cshim/` keeps the matrix3 reference arm whose
+hand-written plan and fixup mirror what `protoc-gen-pbwire` emits.
 
 ## Harness
 
@@ -39,8 +41,8 @@ go test -tags pbench -run TestCompare -v -count=1 ./pbench/
 ```
 
 Last recorded run (Apple M4 Pro; absolute numbers move with the host, the
-ordering does not): `cshim` 1.61-2.16x encode and 1.41-2.03x decode against
-`protobuf-go`, `dyngo` 0.27-0.35x encode and 0.31-0.35x decode, `dync`
+ordering does not): `cshim` 1.35-1.80x encode and 1.21-1.96x decode against
+`protobuf-go`, `dyngo` direct 1.42-1.76x encode and 0.88-1.13x decode, `dync`
 0.05-0.10x encode and 0.11-0.13x decode.
 
 That ordering is the reason the arms exist: a per-field copy into any tree
