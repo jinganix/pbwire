@@ -14,7 +14,7 @@
 // question and lives in pbench/dync; see
 // github.com/jinganix/pbwire/issues/41.
 //
-// Both sides produce identical bytes and the dyngo decode is compared field by
+// Both sides produce identical bytes and the model decode is compared field by
 // field against the oracle before anything is timed, so a speed number from a
 // wrong codec is meaningless but never published.
 //
@@ -174,7 +174,7 @@ func gate(t tier) error {
 
 	structMsg := &matrix3.Scalars3{}
 	if err := structMsg.Unmarshal(reference); err != nil {
-		return fmt.Errorf("%s: dyngo decode: %v", t.label, err)
+		return fmt.Errorf("%s: model decode: %v", t.label, err)
 	}
 	if err := checkStruct(t.label, structMsg, want); err != nil {
 		return err
@@ -184,7 +184,7 @@ func gate(t tier) error {
 		return err
 	}
 	if !bytes.Equal(structOut, reference) {
-		return fmt.Errorf("%s: pbwire-go dyngo and protobuf-go encode differently (%d vs %d bytes)",
+		return fmt.Errorf("%s: pbwire-go and protobuf-go encode differently (%d vs %d bytes)",
 			t.label, len(structOut), len(reference))
 	}
 
