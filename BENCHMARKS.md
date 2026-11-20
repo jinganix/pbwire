@@ -180,13 +180,13 @@ own README. Dart ran once `dart pub global activate protoc_plugin` provided
 | PHP (`ext-ffi` + C extension) | `make php-bench` (`bindings/php/benchmarks`) | the official PHP runtime (`protobuf/php/src`): C extension (fastest) + pure-PHP | all 4 | 1.22x / 1.34x vs C ext ✅ (394x / 154x vs pure) |
 | Dart (`dart:ffi`) | `make dart-bench` (`bindings/dart/benchmarks`) | the `protobuf` Dart package + generated code | all 4 | 13.69x ✅ / 4.38x ✅ |
 | Rust (static link) | `make rust-bench` (`bindings/rust/benchmarks`) | prost (fastest) + rust-protobuf 3.x generated code | all 4 | 1.13x ✅ / 1.86x ✅ |
-| C# (P/Invoke) | `make csharp-bench` (`bindings/csharp/benchmarks`) | Google.Protobuf C# generated code (fastest) + protobuf-net | all 4 | 3.15x ✅ / 1.48x ✅ |
+| C# (P/Invoke) | `make csharp-bench` (`bindings/csharp/benchmarks`) | Google.Protobuf C# generated code (fastest) + protobuf-net | all 4 | 3.46x ✅ / 1.48x ✅ `tree` (native-object `shim` 0.12x / 0.10x) |
 | Lua (C module, tables) | `make lua-bench` (`bindings/lua/benchmarks`) | `lua-protobuf` 0.6.0 | all 4 | 1.09x ✅ / 1.42x ✅ (8.93x via builder encode — data already in pbwire) |
 | Swift (SwiftPM, static link) | `make swift-bench` (`bindings/swift/benchmarks`) | `apple/swift-protobuf` 1.39.0 generated code from the same `matrix3.proto` | all 4 | 5.43x ✅ / 2.57x ✅ |
 | Scala (Java runtime + DSL) | `make scala-bench` (`bindings/scala/benchmarks`) | ScalaPB 0.11.18 generated code from the same `matrix3.proto` | all 4 | 1.45x ✅ / 1.37x ✅ `tree` (`core` case class 0.33x / 0.30x) |
 | Elixir (NIF over the shared core) | `make elixir-bench` (`bindings/elixir/benchmarks`) | `elixir-protobuf` 0.17.1 structs from the same `matrix3.proto` | all 4 | 2.56x ✅ / 1.90x ✅ |
 | Zig (static link) | `make zig-bench` (`bindings/zig/benchmarks`, `-Doptimize=ReleaseFast`) | Arwalk/zig-protobuf 7.0.0 generated code from the same `matrix3.proto` | all 4 | 1.87x ✅ / 2.65x ✅ |
-| F# (facade over the C# runtime) | `make fsharp-bench` (`bindings/fsharp/benchmarks`) | Google.Protobuf C# generated code from the same `matrix3.proto` | all 4 | 3.19x ✅ / 1.42x ✅ |
+| F# (facade over the C# runtime) | `make fsharp-bench` (`bindings/fsharp/benchmarks`) | Google.Protobuf C# generated code from the same `matrix3.proto` | all 4 | 3.36x ✅ / 1.49x ✅ `tree` (`shim` 0.12x / 0.10x) |
 | Clojure (Java runtime + interop) | `make clojure-bench` (`bindings/clojure/benchmarks`) | `protobuf-java` generated code from the same `matrix3.proto` | all 4 | 1.26x ✅ / 1.70x ✅ `core` (0.68x at 136 B; `tree` map API 0.01x) |
 | Julia (`ccall` FFI) | `make julia-bench` (`bindings/julia/benchmarks`) | JuliaIO/ProtoBuf.jl 1.3.0 generated code from the same `matrix3.proto` | all 4 | 133.5x ✅ / 1.06x ✅ (0.89x at 136 B plain, 0.98x with a workspace) |
 | R (C extension, named lists) | `make r-bench` (`bindings/r/benchmarks`) | RProtoBuf 0.4.28 on the same `matrix3.proto` | all 4 | 49.89x ✅ / 50.28x ✅ |
@@ -283,14 +283,14 @@ payload, the boundary cost and the baseline all differ.
 | Objective-C | ARC wrapper | 74913 B | 62089.8 (1.72x ✅) | 29297.5 (1.18x ✅) |
 | PHP | C extension | 74913 B | 1480.3 (1.22x ✅) | 688.7 (1.34x ✅) |
 | Rust | static link | 74913 B | 1586.1 (1.13x ✅) | 730.3 (1.86x ✅) |
-| C# | P/Invoke | 74913 B | 1504.6 (3.15x ✅) | 737.6 (1.48x ✅) |
+| C# | P/Invoke | 74913 B | 1689.7 (3.46x ✅) `tree`; native-object `shim` 59.1 (0.12x ❌) | 750.7 (1.48x ✅) `tree`; `shim` 51.5 (0.10x ❌) |
 | Lua | C module, tables | 74913 B | 196.9 (1.09x ✅) | 124.7 (1.42x ✅) |
 | Erlang | NIF (`pbwire`) | 74913 B | 483.3 (3.91x ✅) | 356.5 (1.60x ✅) |
 | Swift | static link (SwiftPM) | 74913 B | 1467.8 (5.43x ✅) | 542.4 (2.57x ✅) |
 | Scala | the Java runtime + DSL | 74913 B | 950.9 (1.19x ✅) | 750.5 (1.21x ✅) |
 | Elixir | NIF (Hex `:pbwire`, same core as Erlang) | 74913 B | 152.6 (2.56x ✅) | 105.7 (1.90x ✅) |
 | Zig | static link | 74913 B | 1493.9 (1.87x ✅) | 691.6 (2.65x ✅) |
-| F# | P/Invoke over the C# runtime | 74913 B | 1528.9 (3.19x ✅) | 755.0 (1.42x ✅) |
+| F# | P/Invoke over the C# runtime | 74913 B | 1617.7 (3.36x ✅) `tree`; `shim` 58.3 (0.12x ❌) | 734.1 (1.49x ✅) `tree`; `shim` 48.9 (0.10x ❌) |
 | Clojure | the Java runtime + interop | 74913 B | 974.8 (1.12x ✅) | 718.2 (1.66x ✅) |
 | Julia | `dlopen` + `ccall` | 74913 B | 1535.5 (133.5x ✅) | 727.1 (1.06x ✅) |
 | R | C extension, named lists | 74913 B | 134.7 (49.89x ✅) | 125.7 (50.28x ✅) |
@@ -1245,21 +1245,25 @@ first if this row ever regresses.
 
 ![C# vs Google.Protobuf — MB/s by tier](docs/charts/bench-c-vs-google-protobuf.svg)
 
-| payload | op | pbwire-csharp (MB/s, x protobuf-csharp) | protobuf-csharp (MB/s) | protobuf-net (MB/s) |
+| payload | op | pbwire-csharp-tree (MB/s, x protobuf-csharp) | pbwire-csharp-shim (MB/s, x) | protobuf-csharp (MB/s) | protobuf-net (MB/s) |
 |---|---|---|---|---|
-| 136 B | encode | 1372.3 (3.05x ✅) | 449.7 | 560.0 |
-| 136 B | decode | 856.5 (1.88x ✅) | 455.7 | 452.4 |
-| 174 B | encode | 1259.7 (3.19x ✅) | 395.0 | — |
-| 174 B | decode | 787.8 (2.08x ✅) | 377.9 | — |
-| 2469 B | encode | 1225.5 (2.19x ✅) | 559.1 | 383.4 |
-| 2469 B | decode | 664.2 (1.45x ✅) | 456.9 | 292.5 |
-| 74913 B | encode | 1504.6 (3.15x ✅) | 477.6 | 390.0 |
-| 74913 B | decode | 737.6 (1.48x ✅) | 497.3 | 321.6 |
+| 136 B | encode | 1538.9 (3.32x ✅) | 146.4 (0.32x ❌) | 463.6 | 567.4 |
+| 136 B | decode | 870.4 (1.80x ✅) | 174.6 (0.36x ❌) | 482.7 | 491.1 |
+| 174 B | encode | 1478.9 (3.63x ✅) | 121.2 (0.30x ❌) | 407.5 | — |
+| 174 B | decode | 789.0 (2.05x ✅) | 126.8 (0.33x ❌) | 384.8 | — |
+| 2469 B | encode | 1191.3 (2.09x ✅) | 56.0 (0.10x ❌) | 569.7 | 392.3 |
+| 2469 B | decode | 670.6 (1.43x ✅) | 46.8 (0.10x ❌) | 469.7 | 296.0 |
+| 74913 B | encode | 1689.7 (3.46x ✅) | 59.1 (0.12x ❌) | 488.7 | 381.9 |
+| 74913 B | decode | 750.7 (1.48x ✅) | 51.5 (0.10x ❌) | 506.9 | 328.0 |
 
-Google.Protobuf's C# runtime is already a fast tree codec, so this is the
-closest race of the five. Every cell is at or above parity -- the closest is
-the 2469 B decode at 1.46x -- and the encode side
-stays ~2.3-3.3x ahead at every tier. protobuf-net, the other widely used C#
+`pbwire-csharp-tree` is the shipped path: a prebuilt `Pbwire.Message` handle
+encoded/decoded in one call. `pbwire-csharp-shim` is the pbench native-object
+arm: a generated model in, one `Marshal`/`Unmarshal` call per op. It is below
+Google.Protobuf at every tier because every present field still crosses the
+boundary once -- the C core has no entry that reads a pinned managed object
+through the generated layout table, and adding one needs `src/`. The handle row
+is 3.3-3.6x ahead encode and 1.4-2.1x decode; the shim rows are published, not
+headlined. protobuf-net, the other widely used C#
 runtime (hand-written contracts in Pbn.cs, bytes gated like the rest), is
 slower than Google.Protobuf on every tier here (xlarge 365.1 vs 484.3
 encode): the official runtime is the fastest baseline, so the ratio column
@@ -1446,22 +1450,26 @@ is ~20x slower and is not timed.
 
 ![F# (facade over the C# runtime) vs Google.Protobuf — MB/s by tier](docs/charts/bench-f-facade-over-the-c-runtime-vs-google-protobuf.svg)
 
-| payload | op | pbwire-fsharp (MB/s, x Google.Protobuf) | Google.Protobuf (MB/s) |
-|---|---|---|---|
-| 136 B | encode | 1405.3 (3.19x ✅) | 439.9 |
-| 136 B | decode | 846.6 (1.84x ✅) | 460.7 |
-| 174 B | encode | 1299.3 (3.18x ✅) | 408.7 |
-| 174 B | decode | 811.6 (1.99x ✅) | 407.9 |
-| 2469 B | encode | 1336.9 (2.42x ✅) | 551.9 |
-| 2469 B | decode | 706.7 (1.41x ✅) | 501.5 |
-| 74913 B | encode | 1528.9 (3.19x ✅) | 480.0 |
-| 74913 B | decode | 755.0 (1.42x ✅) | 530.5 |
+| payload | op | pbwire-fsharp-tree (MB/s, x Google.Protobuf) | pbwire-fsharp-shim (MB/s, x) | Google.Protobuf (MB/s) |
+|---|---|---|---|---|
+| 136 B | encode | 1477.5 (3.24x ✅) | 132.3 (0.29x ❌) | 456.6 |
+| 136 B | decode | 877.8 (1.93x ✅) | 156.6 (0.34x ❌) | 454.8 |
+| 174 B | encode | 1512.3 (3.72x ✅) | 110.0 (0.27x ❌) | 406.1 |
+| 174 B | decode | 741.1 (1.88x ✅) | 116.1 (0.29x ❌) | 394.0 |
+| 2469 B | encode | 1414.5 (2.53x ✅) | 56.7 (0.10x ❌) | 559.8 |
+| 2469 B | decode | 666.4 (1.42x ✅) | 47.0 (0.10x ❌) | 468.4 |
+| 74913 B | encode | 1617.7 (3.36x ✅) | 58.3 (0.12x ❌) | 481.0 |
+| 74913 B | decode | 734.1 (1.49x ✅) | 48.9 (0.10x ❌) | 494.1 |
 
 Same class as Kotlin: F# reuses the C# binding's project via
 `ProjectReference` and adds only an F#-idiomatic facade — no second runtime,
 no packages, schema from a `FileDescriptorSet` at run time. The baseline is
 `protoc`-generated C# compiled in a sibling project (F# cannot compile
-`.cs`). Byte parity per tier before timing.
+`.cs`). Byte parity per tier before timing. Both rows come from the C#
+runtime: `pbwire-fsharp-tree` is the `Message` handle the facade exposes,
+`pbwire-fsharp-shim` is the C# generated model's native-object entry
+(`bindings/csharp/pbench/Shim.cs`), so F# has no separate port and no second
+wire implementation.
 
 ### Clojure (Java runtime + interop) vs `protobuf-java`
 
