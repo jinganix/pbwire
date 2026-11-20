@@ -42,11 +42,7 @@ func (m *DMsg) mark(i int, v any) {
 	s.present = true
 	fp := m.typ.plan.Fields[i]
 	if fp.Presence == PresenceOneof {
-		s.oneof, s.oneofSet = v, true
-		storeOneof(s, v)
-		for _, j := range m.typ.sibs[i] {
-			m.slots[j].present, m.slots[j].oneofSet, m.slots[j].oneof = false, false, nil
-		}
+		mergeOneof(m, i, v)
 		return
 	}
 	if explicitPresence(fp) {

@@ -1,0 +1,22 @@
+// Dynamic-core branch fixture (proto2): a oneof message member whose submessage
+// has two fields (split occurrences must merge), a repeated legacy group, and
+// fields declared out of field-number order (the wire is number-ordered).
+syntax = "proto2";
+
+package branches;
+
+message Sub {
+  optional int32 a = 1;
+  optional int32 b = 2;
+}
+
+message Branches {
+  oneof kind {
+    Sub sub = 1;
+  }
+  repeated group Item = 2 {
+    optional int32 v = 1;
+  }
+  optional int32 two = 4;
+  optional int32 one = 3;
+}
