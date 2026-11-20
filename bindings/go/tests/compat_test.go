@@ -17,6 +17,7 @@ package tests
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"math"
 	"os"
 	"path/filepath"
@@ -462,32 +463,55 @@ func TestModelConcurrentUse(t *testing.T) {
 		t.Fatal(err)
 	}
 	var wg sync.WaitGroup
-	errCh := make(chan string, 64)
+	type dbgHit struct {
+		k, g   int
+		second string
+		out    []byte
+	}
+	hitCh := make(chan dbgHit, 64)
 	for i := 0; i < 8; i++ {
 		wg.Add(1)
-		go func() {
+		go func(g int) {
 			defer wg.Done()
 			for k := 0; k < 50; k++ {
 				m := &gen1.Scalars3{}
 				if err := m.Unmarshal(ref); err != nil {
-					errCh <- "unmarshal: " + err.Error()
+					hitCh <- dbgHit{k: k, g: g, second: "unmarshal: " + err.Error()}
 					return
 				}
 				out, err := m.Marshal()
 				if err != nil {
-					errCh <- "marshal: " + err.Error()
+					hitCh <- dbgHit{k: k, g: g, second: "marshal: " + err.Error()}
 					return
 				}
 				if !bytes.Equal(out, ref) {
-					errCh <- "re-encode differs"
+					second := "marshal-err"
+					if out2, err2 := m.Marshal(); err2 == nil {
+						second = "dirty"
+						if bytes.Equal(out2, ref) {
+							second = "clean"
+						}
+					}
+					hitCh <- dbgHit{k: k, g: g, second: second, out: out}
 					return
 				}
 			}
-		}()
+		}(i)
 	}
 	wg.Wait()
-	close(errCh)
-	for msg := range errCh {
-		t.Fatal(msg)
-	}
+	close(hitCh)
+	for h := range hitCh {
+		if h.out != nil {
+			fmt.Printf("COMPAT mismatch goroutine=%d k=%d second-marshal=%s ref=%d out=%d\n", h.g, h.k, h.second, len(ref), len(h.out))
+			n := 0
+				for i := 0; i < len(ref) && i < len(h.out) && n < 10; i++ {
+					if ref[i] != h.out[i] {
+						fmt.Printf("COMPAT diff at %d: ref=%02x out=%02x\n", i, ref[i], h.out[i])
+						n++
+					}
+				}
+				t.Fatal("re-encode differs")
+			}
+			t.Fatal(h.second)
+		}
 }
