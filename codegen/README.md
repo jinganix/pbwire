@@ -107,6 +107,23 @@ Rules the model follows, per field:
   file's prefix. Unresolvable types still skip loudly (`// skipped <field>:`).
   This keeps each generated file to one import per referenced file.
 
+## Generation rules
+
+1. **Thin model.** The message file holds data only: field names, host types,
+presence and repetition, plus nil-safe accessors. No tags, varints, lengths,
+packed runs or presence branching.
+2. **Separate meta when needed.** Field facts (numbers, wire types, kinds,
+packing, sub-tables) live in a sibling meta file (`*_meta.*`, `*_Meta.*`)
+where the language benefits; single-file outputs keep the same split in-file.
+3. **No wire logic in model or meta.** Encode/decode live once in the binding's
+shared engine (`dyngo/codec.EncodeTable/DecodeTable`, `PbCodec`, the C core);
+generated files are DATA tables plus trivial field closures. One-line
+`encode/decode` forwarding on the model is ergonomics, not a second codec.
+
+The pure-Go path follows the same rule: generated `*_pbwire.go` + `*_pbwire_meta.go`
+feed the shared table engine (`EncodeModel/DecodeModel`) with no per-message
+straight-line codec and no intermediate tree on the hot path.
+
 ## Where the models live
 
 The models are committed next to the tests that use them, so a test run needs
