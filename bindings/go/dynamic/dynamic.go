@@ -2,11 +2,11 @@
 // FileDescriptorSet at run time (no recompile, no restart), builds dynamic
 // message trees and encodes/decodes them through the shared C core over cgo.
 //
-// This is the counterpart to the static generator (../plugin): generated
-// codecs stay the fast path for pinned schemas; this package is for schemas
-// that must change under a running process. Correctness comes from the C
-// core (conformance-tested); the per-op price is one cgo transition plus
-// one heap copy each way, measured in ../cgoprobe.
+// This is the C-core dynamic path. For the same runtime schema without cgo,
+// see the dynamic Go core in ../codec (codec.Load + Schema.Type + DMsg),
+// which drives the shared table engine; generated models build on that.
+// Correctness comes from the C core (conformance-tested); the per-op price
+// is one cgo transition, priced against the other arms in ../pbench.
 package dynamic
 
 /*

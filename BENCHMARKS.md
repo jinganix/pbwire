@@ -181,10 +181,17 @@ own README. Dart ran once `dart pub global activate protoc_plugin` provided
 the largest case the binding runs. Where a binding has several baselines the
 headline names the fastest: protobufjs over jspb, the PHP C extension over
 pure PHP, prost over rust-protobuf, Google.Protobuf over protobuf-net, the
-faster of gpb / gpb NIF per op. `encode` is host data to wire bytes and
-`decode` is wire bytes to an in-memory message on both sides (R materializes
-plain lists on both sides: RProtoBuf's bare `read()` is lazily parsed and
-faster, but hands back no R data — see its section). Every binding with a
+faster of gpb / gpb NIF per op. The intended comparison is the user-visible
+task on both sides: `encode` is host data to wire bytes and `decode` is wire
+bytes to an in-memory message. R, Lua, Python, Elixir and Erlang meet that
+bar because their decode materializes native values (RProtoBuf's bare
+`read()` is lazily parsed and hands back no R data — see its section). The
+handle-based bindings (Go, Node, Ruby, C#, Rust, Swift, Objective-C, Zig,
+F#, Dart, PHP, Julia and the JVM four) publish rows for the dynamic handle
+API instead, which leaves the copy between the handle and the host's native
+objects outside the timer. Go now prints both of its dynamic cores
+(`pbwire-go dync` and `pbwire-go dyngo`); the rest are being brought in line, tracked in
+[issue 41](https://github.com/jinganix/pbwire/issues/41). Every binding with a
 wired baseline is ahead of it on the xlarge encode column (Java 1.09x, Rust
 1.04x, Elixir 2.56x: the three that used to sit under 1.0x are above the line
 in the 2026-11-14 run — the same tree in the Linux container still shows Java
@@ -730,19 +737,40 @@ the layout per call and mallocs per value (5.3x / 3.9x slower at 136 B, 4.2x /
 compile is amortised). It stays in the
 output so that trade-off is visible rather than hidden.
 
-### Go (`cgo` dynamic)
+### Go (two dynamic cores)
 
-![Go (cgo dynamic) — MB/s by tier](docs/charts/bench-go-cgo-dynamic.svg)
+![Go (two dynamic cores) — MB/s by tier](docs/charts/bench-go-cgo-dynamic.svg)
 
-The static generator (`protoc-gen-pbwire-go`) is removed: Go keeps only the
-`cgo` dynamic binding (`bindings/go/dynamic`), which loads a
-`FileDescriptorSet` at run time and hot-swaps schemas without a restart.
+Static generated codecs are not a Go path: the binding ships two dynamic
+cores over one wire engine. The C core (`bindings/go/dynamic`) is cgo over
+`libpbwire`, loads a `FileDescriptorSet` at run time and hot-swaps schemas
+without a restart; the Go core (`bindings/go/codec`) loads the same set into
+plans and encodes a pure-Go value tree, with no cgo.
 `make go-bench` (`bindings/go/benchmarks`, build-tagged so `go test ./...`
 stays fast) times it against `protobuf-go` generated code from the same
-`matrix3.proto` on all four tiers; `bench.sh` generates the baseline with
-`protoc-gen-go` and the `FileDescriptorSet` both sides load.
+`matrix3.proto` on all four tiers. The two generated packages are the
+committed ones under `bindings/go/tests`, so `bench.sh` needs `protoc` only,
+for the `FileDescriptorSet` the dynamic registry loads.
 
-| payload | op | pbwire-go (MB/s, x protobuf-go) | protobuf-go (MB/s) |
+The table below is the dynamic C core (`pbwire-go dync`): `Encode()` on a tree
+already built in C, `Decode()` without reading a field back into Go. The
+harness also prints `pbwire-go dyngo`: the dynamic Go core
+([`bindings/go/codec/`](bindings/go/codec/)) through the thin generated model
+an application holds — `Marshal()`/`Unmarshal()`, no cgo, native struct in
+and struct out, every wire decision in the shared table engine. Only the
+dyngo row is the like-for-like comparison; the dync row is the handle figure,
+and the copy between handle and native object sits outside its timer (see
+[issue 41](https://github.com/jinganix/pbwire/issues/41)).
+This run (loaded host, same process times both sides) puts dyngo near
+parity on small tiers and ahead from 2.5 KB up; the formal numbers land with
+the next container run. Three dynamic arms were compared under
+[`bindings/go/pbench/`](bindings/go/pbench/) (same tiers, interleaved,
+native struct in and out): the C core at 0.05-0.11x encode, the Go core at
+0.16-0.27x, and an Erlang-style C shim at 1.71-2.20x. The per-field copy into
+any tree is what separates them; recorded in
+[perf-attempts.md](docs/perf-attempts.md#probe-round-go-struct-path-issue-41).
+
+| payload | op | pbwire-go dync (MB/s, x protobuf-go) | protobuf-go (MB/s) |
 |---|---|---|---|
 | 136 B | encode | 847.5 (1.34x ✅) | 632.3 |
 | 136 B | decode | 684.5 (1.24x ✅) | 553.9 |
@@ -754,14 +782,15 @@ stays fast) times it against `protobuf-go` generated code from the same
 | 74913 B | decode | 726.1 (2.38x ✅) | 304.8 |
 
 Every tier is gated before timing: the official bytes must land on the
-pinned size, `pbwire-go` must encode byte-identical bytes, decoding the
+pinned size, `pbwire-go` must encode byte-identical bytes from both the
+dynamic tree and the generated struct, the struct decode must keep every
+field (compared one by one against the `protobuf-go` decode), decoding the
 reference and re-encoding must return the same bytes, and the official
-decode is spot-checked (`str`, inner `kid`/42, repeated count and last
-`inners` value). The `cgo` boundary is one downcall per op with zero-copy
-decode in, and encode writes into Go memory: `pbw_encode_to` fills a Go-owned
-slice whose capacity comes from the message's decoded wire length or the last
-successful encode, so there is no C-side `malloc`, no second downcall to free
-it and no copy back out of C. That is why the small tier is ahead now (1.28x
+dynamic decode is spot-checked (`str`, inner `kid`/42, repeated count and
+last `inners` value). For the rows above, the `cgo` boundary is one downcall
+per op: `pbw_encode_to` fills a Go-owned slice whose capacity comes from the
+message's decoded wire length or the last successful encode, so there is no
+C-side `malloc`, no second downcall to free it and no copy back out of C. That is why the small tier is ahead now (1.28x
 encode, 1.21x decode at 136 B) instead of sitting at parity: the boundary that
 used to cost a malloc/free pair plus a copy is one call. From 2.5 KB up the
 core's single pass pulls ahead (2.19x encode, 2.28x decode).
