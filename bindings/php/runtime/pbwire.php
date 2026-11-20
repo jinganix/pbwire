@@ -20,6 +20,11 @@ if (\extension_loaded('pbwire')) {
     return;
 }
 
+/* shortcut: no pure-PHP core, reopen when a no-compiler deployment needs it.
+ * The official pure-PHP runtime is already the benchmark baseline, so a second
+ * pure-PHP engine here would measure our code against the competitor, not a
+ * deployment choice; the C extension and this ext-ffi wrapper share the core. */
+
 use FFI;
 use FFI\CData;
 

@@ -86,13 +86,32 @@ hashtable lookup plus a C tree store, and the FFI version additionally pays one
 trampoline per field (interpreter-scale, ~5 MB/s). Both shim rows are below the
 baseline, so Stage 6 has cells to target.
 
+## Formal table (Stage 5/6)
+
+Final `make php-bench` (`results/bench-php-20261120T234351Z.json`), MB/s over
+wire bytes, with the Stage 6 encode scratch context in place:
+
+| tier | `pbwire-php-tree` enc/dec | `pbwire-php-shim` enc/dec | `pbwire-php-shim-ffi` enc/dec | `protobuf-php-c` enc/dec |
+|---|---|---|---|---|
+| 136 B | 1519.8 / 787.3 | 186.5 / 168.0 | 5.0 / 5.7 | 886.2 / 428.7 |
+| 174 B | 1518.2 / 753.5 | 201.2 / 178.0 | 5.3 / 5.6 | 982.0 / 431.1 |
+| 2469 B | 1787.7 / 680.5 | 196.0 / 189.4 | 5.1 / 4.4 | 1332.4 / 525.7 |
+| 74913 B | 1639.1 / 750.8 | 214.6 / 206.9 | 5.6 / 4.7 | 1332.0 / 580.5 |
+
+Stage 6 A/B (two `.so` builds, xlarge) accepted one change: one scratch
+`pbw_ctx` per `Type`, reset per `encodeArray` call, with `pbw_encode_ctx`
+writing once into its reused buffer; it won every round (390346.6 -> 340963.3
+ns/op and the four rounds after it). Decoding through `pbw_decode_ctx` on the
+same context was rejected (3 of 5 rounds lost). Details and all rounds are in
+[docs/perf-attempts.md](../../../docs/perf-attempts.md).
+
 ## Verdict
 
 **Keep the shipped builder/wire-view runtime and publish the array rows.**
 `pbwire-php-tree` (prebuilt `Message`) is above the official C extension at every
-tier (136 B 1319.5 / 649.2 MB/s, 74913 B 1711.9 / 711.8 against 869.9 / 413.9 and
-1301.5 / 537.7). The native array `shim` is one C-extension entry, but it is
-below the baseline on every cell (136 B 151.2 / 159.8, 74913 B 190.1 / 211.9),
+tier (136 B 1519.8 / 787.3 MB/s, 74913 B 1639.1 / 750.8 against 886.2 / 428.7 and
+1332.0 / 580.5). The native array `shim` is one C-extension entry, but it is
+below the baseline on every cell (136 B 186.5 / 168.0, 74913 B 214.6 / 206.9),
 and `shim-ffi` is interpreter-scale (~5 MB/s) because it pays one FFI trampoline
 per field.
 

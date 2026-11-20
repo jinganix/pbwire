@@ -177,7 +177,7 @@ own README. Dart ran once `dart pub global activate protoc_plugin` provided
 | Ruby (C extension) | `make ruby-bench` (`bindings/ruby/benchmarks`) | the `google-protobuf` gem (C extension) | all 4 | 1.35x ✅ / 1.75x ✅ `tree` (native-object `shim` 0.19x / 0.23x, one C-extension object walk per op) |
 | Objective-C (ARC) | `make objc-bench` (`bindings/objc/benchmarks`) | the `protobuf` ObjC runtime + generated code from the same `matrix3.proto` | all 4 | 1.72x ✅ / 1.18x ✅ |
 | Kotlin (pure-Java codec + DSL) | `make kotlin-bench` (`bindings/kotlin/benchmarks`) | `protoc --kotlin_out` over `protobuf-java`, same `matrix3.proto` | all 4 | 1.11x ✅ / 1.77x ✅ `tree` (0.71x at 136 B; `core` 0.79x / 0.76x) |
-| PHP (`ext-ffi` + C extension) | `make php-bench` (`bindings/php/benchmarks`) | the official PHP runtime (`protobuf/php/src`): C extension (fastest) + pure-PHP | all 4 | 1.22x / 1.34x vs C ext ✅ (394x / 154x vs pure) |
+| PHP (`ext-ffi` + C extension) | `make php-bench` (`bindings/php/benchmarks`) | the official PHP runtime (`protobuf/php/src`): C extension (fastest) + pure-PHP | all 4 | 1.23x / 1.29x `tree` vs C ext ✅ (420x / 139x vs pure; native-object `shim` 0.16x / 0.36x, `shim-ffi` 0.004x / 0.008x) |
 | Dart (`dart:ffi`) | `make dart-bench` (`bindings/dart/benchmarks`) | the `protobuf` Dart package + generated code | all 4 | 15.73x ✅ / 4.57x ✅ `tree` (native-object `shim` 11.38x / 4.69x, one C-side reader call per op) |
 | Rust (static link) | `make rust-bench` (`bindings/rust/benchmarks`) | prost (fastest) + rust-protobuf 3.x generated code | all 4 | 1.17x ✅ / 1.88x ✅ `tree` (native-object `shim` 0.84x / 1.90x, one C-side struct-codec call per op; `shim` encode is above prost at 136 B and level at 174 B) |
 | C# (P/Invoke) | `make csharp-bench` (`bindings/csharp/benchmarks`) | Google.Protobuf C# generated code (fastest) + protobuf-net | all 4 | 3.46x ✅ / 1.48x ✅ `tree` (native-object `shim` 0.12x / 0.10x) |
@@ -222,7 +222,7 @@ timer.
 | Swift | three arms: `tree` (prebuilt `Message` handle, shipped), `shim` (the C reader walks the generated `@frozen` mirror in one call), `core` is plan 21 |
 | Zig | three arms: `tree` (prebuilt `Message` handle, shipped), `shim` (the C reader walks the generated `extern struct` mirror in one call), `core` is plan 22 |
 | Python | three |
-| PHP | deferred: overlaps the official runtime's pure-PHP implementation already in the baseline |
+| PHP | two arms plus the FFI deployment: `tree` (prebuilt `Message` handle, shipped), `shim` (one C-extension entry walks the array in C), `shim-ffi` (same API on `ext-ffi`, the no-compiler row); `core` deferred: overlaps the official runtime's pure-PHP implementation already in the baseline |
 | Ruby | two arms: `tree` (prebuilt `Message` handle, shipped), `shim` (the C extension walks the generated model in one call), `core` deferred: no pure-Ruby precedent, no native-less deployment |
 | R | two arms: `tree` (prebuilt builder handle, shipped), `shim` (one `.Call` walks the named list in C; the walk was already there, only the per-call type lookup is gone), `core` deferred: interpreted per-field loops are orders of magnitude off |
 
@@ -284,7 +284,7 @@ payload, the boundary cost and the baseline all differ.
 | Dart (`tree`, prebuilt handle) | `dart:ffi` binding | 74913 B | 1593.8 (15.73x ✅) `tree`; native-object `shim` 1152.9 (11.38x ✅) | 726.0 (4.57x ✅) `tree`; `shim` 745.5 (4.69x ✅) |
 | Ruby | C extension over the core | 74913 B | 1804.9 (1.35x ✅) `tree`; native-object `shim` 253.5 (0.19x ❌) | 1207.8 (1.75x ✅) `tree`; `shim` 158.6 (0.23x ❌) |
 | Objective-C | ARC wrapper | 74913 B | 62089.8 (1.72x ✅) | 29297.5 (1.18x ✅) |
-| PHP | C extension | 74913 B | 1480.3 (1.22x ✅) | 688.7 (1.34x ✅) |
+| PHP | C extension | 74913 B | 1639.1 (1.23x ✅) `tree`; native-object `shim` 214.6 (0.16x ❌) | 750.8 (1.29x ✅) `tree`; `shim` 206.9 (0.36x ❌) |
 | Rust | static link | 74913 B | 1600.9 (1.17x ✅) `tree`; native-object `shim` 1145.0 (0.84x ❌) | 716.2 (1.88x ✅) `tree`; `shim` 722.7 (1.90x ✅) |
 | C# | P/Invoke | 74913 B | 1689.7 (3.46x ✅) `tree`; native-object `shim` 59.1 (0.12x ❌) | 750.7 (1.48x ✅) `tree`; `shim` 51.5 (0.10x ❌) |
 | Lua | C module, tables | 74913 B | 196.9 (1.09x ✅) | 124.7 (1.42x ✅) |
@@ -1155,44 +1155,69 @@ KB up both ops are ahead at every tier.
 
 ![PHP vs the official PHP runtime (pure + C extension) — MB/s by tier](docs/charts/bench-php-vs-the-official-php-runtime-pure-c-extension.svg)
 
-| payload | op | pbwire-php-c (MB/s, x protobuf-php-c) | protobuf-php-c (MB/s) |
+The native C extension publishes three rows on the same payload: the prebuilt
+`Message` handle (`pbwire-php-tree`), the native-array entry
+(`pbwire-php-shim`, one extension call whose walk is in C), and the official C
+extension. The `ext-ffi` wrapper is the no-compiler deployment and gets its own
+row (`pbwire-php-shim-ffi`).
+
+| payload | op | pbwire-php-tree (MB/s, x protobuf-php-c) | pbwire-php-shim (MB/s, x) | protobuf-php-c (MB/s) |
+|---|---|---|---|---|
+| 136 B | encode | 1519.8 (1.71x ✅) | 186.5 (0.21x ❌) | 886.2 |
+| 136 B | decode | 787.3 (1.84x ✅) | 168.0 (0.39x ❌) | 428.7 |
+| 174 B | encode | 1518.2 (1.55x ✅) | 201.2 (0.20x ❌) | 982.0 |
+| 174 B | decode | 753.5 (1.75x ✅) | 178.0 (0.41x ❌) | 431.1 |
+| 2469 B | encode | 1787.7 (1.34x ✅) | 196.0 (0.15x ❌) | 1332.4 |
+| 2469 B | decode | 680.5 (1.29x ✅) | 189.4 (0.36x ❌) | 525.7 |
+| 74913 B | encode | 1639.1 (1.23x ✅) | 214.6 (0.16x ❌) | 1332.0 |
+| 74913 B | decode | 750.8 (1.29x ✅) | 206.9 (0.36x ❌) | 580.5 |
+
+`pbwire-php-tree` is the shipped path: built messages live in a per-message
+arena (one bump allocator instead of a malloc per value, sequential layout for
+the encoder), decoded trees keep the core's single-malloc arena, and both encode
+straight into the result string. It wins every tier against the official C
+extension (1.23-1.84x). `pbwire-php-shim` is the task a PHP application runs when
+its data is an array: one extension entry walks the array in C
+(`zend_hash_str_find` per field, recursion) and fills the tree, or materializes
+the array on decode. It is below the official C extension at every tier because
+every field still costs a hashtable lookup plus a C tree store, and the decode
+materializes the array eagerly.
+
+The `ext-ffi` wrapper runs the same array API through one FFI trampoline per
+field (the no-compiler deployment), so its row is interpreter-scale; the
+official C extension is the baseline in that same run:
+
+| payload | op | pbwire-php-tree (MB/s, x protobuf-php-c) | pbwire-php-shim-ffi (MB/s, x) | protobuf-php-c (MB/s) |
+|---|---|---|---|---|
+| 136 B | encode | 302.3 (0.35x ❌) | 5.0 (0.01x ❌) | 872.0 |
+| 136 B | decode | 224.4 (0.55x ❌) | 5.7 (0.01x ❌) | 409.7 |
+| 174 B | encode | 360.3 (0.37x ❌) | 5.3 (0.01x ❌) | 973.8 |
+| 174 B | decode | 256.2 (0.65x ❌) | 5.6 (0.01x ❌) | 393.4 |
+| 2469 B | encode | 1214.9 (0.91x ❌) | 5.1 (0.004x ❌) | 1338.6 |
+| 2469 B | decode | 605.0 (1.16x ✅) | 4.4 (0.008x ❌) | 522.2 |
+| 74913 B | encode | 1565.2 (1.18x ✅) | 5.6 (0.004x ❌) | 1326.7 |
+| 74913 B | decode | 743.9 (1.34x ✅) | 4.7 (0.008x ❌) | 556.1 |
+
+The pure-PHP runtime, timed by a second `php -n` run in the same harness, is a
+different race; the FFI tree handle is the pbwire side there:
+
+| payload | op | pbwire-php-tree (MB/s, x protobuf-php) | protobuf-php (MB/s) |
 |---|---|---|---|
-| 136 B | encode | 1397.5 (1.70x ✅) | 824.2 |
-| 136 B | decode | 755.9 (1.90x ✅) | 398.2 |
-| 174 B | encode | 1245.2 (1.37x ✅) | 908.8 |
-| 174 B | decode | 709.1 (1.79x ✅) | 395.5 |
-| 2469 B | encode | 1473.6 (1.16x ✅) | 1265.1 |
-| 2469 B | decode | 653.8 (1.33x ✅) | 492.8 |
-| 74913 B | encode | 1429.5 (1.14x ✅) | 1256.0 |
-| 74913 B | decode | 728.5 (1.35x ✅) | 541.4 |
-
-
-The native extension links the C core in, like the Ruby C extension: built
-messages live in a per-message arena (one bump allocator instead of a malloc
-per value, sequential layout for the encoder), decoded trees keep the core's
-single-malloc arena, and both encode straight into the result string. Against
-the official C extension — the same official API backed by C, which `bench.sh`
-times whenever it is installed — that wins every tier, 1.11-1.59x on encode
-and 1.29-1.88x on decode. The `ext-ffi` wrapper runs the same core through one FFI trampoline per call:
-it trails on small payloads (0.19x / 0.24x encode and 0.29x / 0.40x decode at
-136-174 B) and converges from 2.5 KB up (xlarge 0.95x / 1.05x vs the C
-extension in the same harness). The pure-PHP runtime, timed by a second `php -n` run
-in the same harness, is a different race:
-
-| payload | op | pbwire-php (MB/s, x protobuf-php) | protobuf-php (MB/s) |
-|---|---|---|---|
-| 136 B | encode | 249.0 (65.53x ✅) | 3.8 |
-| 136 B | decode | 221.4 (34.59x ✅) | 6.4 |
-| 174 B | encode | 282.5 (78.47x ✅) | 3.6 |
-| 174 B | decode | 248.5 (41.42x ✅) | 6.0 |
-| 2469 B | encode | 1058.9 (294.14x ✅) | 3.6 |
-| 2469 B | decode | 594.1 (118.82x ✅) | 5.0 |
-| 74913 B | encode | 1381.0 (373.24x ✅) | 3.7 |
-| 74913 B | decode | 714.6 (134.83x ✅) | 5.3 |
+| 136 B | encode | 311.3 (77.83x ✅) | 4.0 |
+| 136 B | decode | 228.2 (34.58x ✅) | 6.6 |
+| 174 B | encode | 374.5 (96.03x ✅) | 3.9 |
+| 174 B | decode | 263.7 (42.53x ✅) | 6.2 |
+| 2469 B | encode | 1234.5 (342.92x ✅) | 3.6 |
+| 2469 B | decode | 610.1 (117.33x ✅) | 5.2 |
+| 74913 B | encode | 1552.5 (419.59x ✅) | 3.7 |
+| 74913 B | decode | 748.9 (138.69x ✅) | 5.4 |
 
 The pure-PHP runtime spends its time on per-field bookkeeping (~4-6 MB/s flat
 across tiers), so quoting those ratios without the C-extension table is
-quoting the interpreter, not the codec.
+quoting the interpreter, not the codec. Both shim builds (C extension and
+`ext-ffi`) produce identical bytes and pass the pbench gate on all four tiers;
+the gap between them is the per-field PHP loop plus the FFI trampoline, not a
+different codec.
 
 #### Dart vs the `protobuf` Dart package
 
