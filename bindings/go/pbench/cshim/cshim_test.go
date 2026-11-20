@@ -6,8 +6,14 @@ import (
 	"math"
 	"runtime"
 	"testing"
+	"unsafe"
 
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protodesc"
+	"google.golang.org/protobuf/reflect/protoreflect"
+	"google.golang.org/protobuf/types/descriptorpb"
+	"google.golang.org/protobuf/types/dynamicpb"
+	shimlayout "pbwire/pbench/cshim/layout"
 	"pbwire/tests/gen/matrix3"
 	"pbwire/tests/gen_oracle/matrix3pb"
 )
@@ -392,5 +398,192 @@ func BenchmarkUnmarshal(b *testing.B) {
 				sinkStruct = m
 			}
 		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// C codec shapes beyond the matrix3 subset: bytes, generalized explicit
+// presence, and required fields. A scratch struct plus hand-built layout
+// rows drive the C codec directly (no matrix3 fixup involved); the oracle
+// is dynamicpb over a proto2 descriptor, an independent implementation.
+// ---------------------------------------------------------------------------
+
+type scratchCshim struct {
+	Raw  []byte
+	Opt  *int64
+	Flg  *bool
+	Req  int32
+	Zero *int32
+}
+
+func scratchDescriptor(t *testing.T) protoreflect.MessageDescriptor {
+	t.Helper()
+	str := func(s string) *string { return &s }
+	i32 := func(n int32) *int32 { return &n }
+	fd := &descriptorpb.FileDescriptorProto{
+		Syntax:  str("proto2"),
+		Name:    str("scratch.proto"),
+		Package: str("scratch"),
+		MessageType: []*descriptorpb.DescriptorProto{{
+			Name: str("S"),
+			Field: []*descriptorpb.FieldDescriptorProto{
+				{Name: str("raw"), Number: i32(1), Label: descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL.Enum(), Type: descriptorpb.FieldDescriptorProto_TYPE_BYTES.Enum()},
+				{Name: str("opt"), Number: i32(2), Label: descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL.Enum(), Type: descriptorpb.FieldDescriptorProto_TYPE_INT64.Enum()},
+				{Name: str("flg"), Number: i32(3), Label: descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL.Enum(), Type: descriptorpb.FieldDescriptorProto_TYPE_BOOL.Enum()},
+				{Name: str("req"), Number: i32(4), Label: descriptorpb.FieldDescriptorProto_LABEL_REQUIRED.Enum(), Type: descriptorpb.FieldDescriptorProto_TYPE_INT32.Enum()},
+				{Name: str("zero"), Number: i32(5), Label: descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL.Enum(), Type: descriptorpb.FieldDescriptorProto_TYPE_INT32.Enum()},
+			},
+		}},
+	}
+	file, err := protodesc.NewFile(fd, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return file.Messages().ByName("S")
+}
+
+func scratchOracle(t *testing.T, md protoreflect.MessageDescriptor, raw []byte, opt *int64, flg *bool, req int32, zero *int32) []byte {
+	t.Helper()
+	m := dynamicpb.NewMessage(md)
+	byNum := func(n protoreflect.FieldNumber) protoreflect.FieldDescriptor {
+		return md.Fields().ByNumber(n)
+	}
+	if raw != nil {
+		m.Set(byNum(1), protoreflect.ValueOfBytes(raw))
+	}
+	if opt != nil {
+		m.Set(byNum(2), protoreflect.ValueOfInt64(*opt))
+	}
+	if flg != nil {
+		m.Set(byNum(3), protoreflect.ValueOfBool(*flg))
+	}
+	m.Set(byNum(4), protoreflect.ValueOfInt32(req))
+	if zero != nil {
+		m.Set(byNum(5), protoreflect.ValueOfInt32(*zero))
+	}
+	// Deterministic: plain dynamicpb marshal walks an internal map, so
+	// its field order is unstable run to run (see codec_test.go).
+	wire, err := proto.MarshalOptions{Deterministic: true}.Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return wire
+}
+
+func scratchRows() (rows []shimlayout.Row, subrows []shimlayout.Row, baseSize, subSize uintptr) {
+	var s scratchCshim
+	row := func(fnum uint32, kind shimlayout.Kind, wire shimlayout.Wire, offset, has uint32, explicit, required bool) shimlayout.Row {
+		return shimlayout.Row{
+			Fnum: fnum, Kind: kind, Wire: wire,
+			Offset: offset, Has: has,
+			Explicit: explicit, Required: required,
+			Sub: -1,
+		}
+	}
+	offRaw := uint32(unsafe.Offsetof(s.Raw))
+	offOpt := uint32(unsafe.Offsetof(s.Opt))
+	offFlg := uint32(unsafe.Offsetof(s.Flg))
+	offReq := uint32(unsafe.Offsetof(s.Req))
+	offZero := uint32(unsafe.Offsetof(s.Zero))
+	rows = []shimlayout.Row{
+		// bytes: length-delimited like strings, distinct kind for fixup.
+		{Fnum: 1, Kind: shimlayout.KindBytes, Wire: shimlayout.WireLen, Offset: offRaw, Sub: -1},
+		// proto2 optional int64: explicit presence via pointer.
+		row(2, shimlayout.KindInt64, shimlayout.WireVarint, offOpt, offOpt, true, false),
+		// proto2 optional bool set to false: present, encodes zero.
+		row(3, shimlayout.KindBool, shimlayout.WireVarint, offFlg, offFlg, true, false),
+		// required int32: zero still emits.
+		row(4, shimlayout.KindInt32, shimlayout.WireVarint, offReq, 0, false, true),
+		// unset optional: omitted, the control.
+		row(5, shimlayout.KindInt32, shimlayout.WireVarint, offZero, offZero, true, false),
+	}
+	// The constructor requires a non-empty sub-table; the scratch message
+	// has no nesting, so a single dummy scalar row satisfies the contract.
+	subrows = []shimlayout.Row{
+		{Fnum: 1, Kind: shimlayout.KindInt32, Wire: shimlayout.WireVarint, Offset: 0, Sub: -1},
+	}
+	return rows, subrows, unsafe.Sizeof(s), 8
+}
+
+// testEncode drives the codec without the matrix3 fixup: the scratch
+// struct needs none, re-encoding raw C state is byte-stable.
+func testEncode(t *testing.T, c *Codec, m *scratchCshim) []byte {
+	t.Helper()
+	out, err := c.encodeRaw(unsafe.Pointer(m))
+	runtime.KeepAlive(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+func testDecode(t *testing.T, c *Codec, m *scratchCshim, wire []byte) {
+	t.Helper()
+	if _, err := c.decodeRaw(unsafe.Pointer(m), wire); err != nil {
+		t.Fatal(err)
+	}
+	runtime.KeepAlive(m)
+}
+
+func TestCshimCodecBytesExplicit(t *testing.T) {
+	md := scratchDescriptor(t)
+	seven := int64(7)
+	fals := false
+	// raw set, opt set, flg present-but-false, req zero-but-required,
+	// zero unset (omitted, the control).
+	ref := scratchOracle(t, md, []byte("hi"), &seven, &fals, 0, nil)
+
+	rows, subrows, baseSize, subSize := scratchRows()
+	c, err := newCodecFromLayout(rows, subrows, baseSize, subSize)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	m := &scratchCshim{Raw: []byte("hi"), Opt: &seven, Flg: &fals, Req: 0}
+	got := testEncode(t, c, m)
+	if !bytes.Equal(got, ref) {
+		t.Fatalf("encode differs: %x vs %x", got, ref)
+	}
+
+	// Reverse: our bytes parse as the same dynamic message.
+	want := dynamicpb.NewMessage(md)
+	byNum := func(n protoreflect.FieldNumber) protoreflect.FieldDescriptor {
+		return md.Fields().ByNumber(n)
+	}
+	want.Set(byNum(1), protoreflect.ValueOfBytes([]byte("hi")))
+	want.Set(byNum(2), protoreflect.ValueOfInt64(seven))
+	want.Set(byNum(3), protoreflect.ValueOfBool(fals))
+	want.Set(byNum(4), protoreflect.ValueOfInt32(0))
+	rt := dynamicpb.NewMessage(md)
+	if err := proto.Unmarshal(got, rt); err != nil {
+		t.Fatalf("oracle reparse: %v", err)
+	}
+	if !proto.Equal(want, rt) {
+		t.Fatal("oracle reparse mismatch")
+	}
+
+	// Decode writes raw C-backed state; re-encode must be byte-stable
+	// without any Go fixup, and typed reads verify the values.
+	back := &scratchCshim{}
+	testDecode(t, c, back, ref)
+	runtime.KeepAlive(ref)
+	if back.Raw == nil || string(back.Raw) != "hi" {
+		t.Fatalf("bytes field lost: %q", back.Raw)
+	}
+	if back.Opt == nil || *back.Opt != 7 {
+		t.Fatalf("explicit int64 lost: %+v", back.Opt)
+	}
+	if back.Flg == nil || *back.Flg != false {
+		t.Fatalf("explicit bool lost: %+v", back.Flg)
+	}
+	if back.Req != 0 {
+		t.Fatalf("required zero changed: %d", back.Req)
+	}
+	if back.Zero != nil {
+		t.Fatalf("unset optional materialized: %+v", back.Zero)
+	}
+	if again := testEncode(t, c, back); !bytes.Equal(again, ref) {
+		t.Fatalf("re-encode differs: %x vs %x", again, ref)
 	}
 }

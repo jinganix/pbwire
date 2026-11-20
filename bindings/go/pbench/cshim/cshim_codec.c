@@ -451,6 +451,13 @@ msg_size(cshim_codec *h, const cshim_row *rows, size_t n, const void *base, int 
         const cshim_row *r = &rows[i];
         const uint8_t *p = (const uint8_t *)base + r->offset;
         size_t sz = 0;
+        const uint8_t *vp = p;
+        if (r->explicit) {
+            vp = rd_ptr((const uint8_t *)base + r->has);
+            if (vp == NULL) {
+                continue;
+            }
+        }
 
         if (r->repeated) {
             intptr_t cnt = rd_len((const uint8_t *)base + r->count);
@@ -483,7 +490,7 @@ msg_size(cshim_codec *h, const cshim_row *rows, size_t n, const void *base, int 
                     payload = (size_t)cnt;
                 }
                 sz = varint_size(tag) + varint_size(payload) + payload;
-            } else if (r->kind == CSHIMK_STR) {
+            } else if (r->kind == CSHIMK_STR || r->kind == CSHIMK_BYTES) {
                 size_t k;
                 uint64_t tag = tag_value(r->fnum, 2);
 
@@ -522,8 +529,8 @@ msg_size(cshim_codec *h, const cshim_row *rows, size_t n, const void *base, int 
             case CSHIMK_I32: {
                 int32_t v;
 
-                memcpy(&v, p, 4);
-                if (v != 0) {
+                memcpy(&v, vp, 4);
+                if (v != 0 || r->required || r->explicit) {
                     sz = varint_size(tag_value(r->fnum, 0)) +
                          varint_size((uint64_t)(int64_t)v);
                 }
@@ -532,8 +539,8 @@ msg_size(cshim_codec *h, const cshim_row *rows, size_t n, const void *base, int 
             case CSHIMK_I64: {
                 int64_t v;
 
-                memcpy(&v, p, 8);
-                if (v != 0) {
+                memcpy(&v, vp, 8);
+                if (v != 0 || r->required || r->explicit) {
                     sz = varint_size(tag_value(r->fnum, 0)) +
                          varint_size((uint64_t)v);
                 }
@@ -542,8 +549,8 @@ msg_size(cshim_codec *h, const cshim_row *rows, size_t n, const void *base, int 
             case CSHIMK_U32: {
                 uint32_t v;
 
-                memcpy(&v, p, 4);
-                if (v != 0) {
+                memcpy(&v, vp, 4);
+                if (v != 0 || r->required || r->explicit) {
                     sz = varint_size(tag_value(r->fnum, 0)) +
                          varint_size((uint64_t)v);
                 }
@@ -552,8 +559,8 @@ msg_size(cshim_codec *h, const cshim_row *rows, size_t n, const void *base, int 
             case CSHIMK_U64: {
                 uint64_t v;
 
-                memcpy(&v, p, 8);
-                if (v != 0) {
+                memcpy(&v, vp, 8);
+                if (v != 0 || r->required || r->explicit) {
                     sz = varint_size(tag_value(r->fnum, 0)) + varint_size(v);
                 }
                 break;
@@ -561,8 +568,8 @@ msg_size(cshim_codec *h, const cshim_row *rows, size_t n, const void *base, int 
             case CSHIMK_S32: {
                 int32_t v;
 
-                memcpy(&v, p, 4);
-                if (v != 0) {
+                memcpy(&v, vp, 4);
+                if (v != 0 || r->required || r->explicit) {
                     sz = varint_size(tag_value(r->fnum, 0)) +
                          varint_size(zigzag32(v));
                 }
@@ -571,8 +578,8 @@ msg_size(cshim_codec *h, const cshim_row *rows, size_t n, const void *base, int 
             case CSHIMK_S64: {
                 int64_t v;
 
-                memcpy(&v, p, 8);
-                if (v != 0) {
+                memcpy(&v, vp, 8);
+                if (v != 0 || r->required || r->explicit) {
                     sz = varint_size(tag_value(r->fnum, 0)) +
                          varint_size(zigzag64(v));
                 }
@@ -581,8 +588,8 @@ msg_size(cshim_codec *h, const cshim_row *rows, size_t n, const void *base, int 
             case CSHIMK_FIX32: {
                 uint32_t v;
 
-                memcpy(&v, p, 4);
-                if (v != 0) {
+                memcpy(&v, vp, 4);
+                if (v != 0 || r->required || r->explicit) {
                     sz = varint_size(tag_value(r->fnum, 5)) + 4;
                 }
                 break;
@@ -590,8 +597,8 @@ msg_size(cshim_codec *h, const cshim_row *rows, size_t n, const void *base, int 
             case CSHIMK_FIX64: {
                 uint64_t v;
 
-                memcpy(&v, p, 8);
-                if (v != 0) {
+                memcpy(&v, vp, 8);
+                if (v != 0 || r->required || r->explicit) {
                     sz = varint_size(tag_value(r->fnum, 1)) + 8;
                 }
                 break;
@@ -599,8 +606,8 @@ msg_size(cshim_codec *h, const cshim_row *rows, size_t n, const void *base, int 
             case CSHIMK_FLOAT: {
                 float v;
 
-                memcpy(&v, p, 4);
-                if (v != 0.0f) {
+                memcpy(&v, vp, 4);
+                if (v != 0.0f || r->required || r->explicit) {
                     sz = varint_size(tag_value(r->fnum, 5)) + 4;
                 }
                 break;
@@ -608,8 +615,8 @@ msg_size(cshim_codec *h, const cshim_row *rows, size_t n, const void *base, int 
             case CSHIMK_DOUBLE: {
                 double v;
 
-                memcpy(&v, p, 8);
-                if (v != 0.0) {
+                memcpy(&v, vp, 8);
+                if (v != 0.0 || r->required || r->explicit) {
                     sz = varint_size(tag_value(r->fnum, 1)) + 8;
                 }
                 break;
@@ -617,31 +624,35 @@ msg_size(cshim_codec *h, const cshim_row *rows, size_t n, const void *base, int 
             case CSHIMK_BOOL: {
                 uint8_t v;
 
-                memcpy(&v, p, 1);
-                if (v != 0) {
+                memcpy(&v, vp, 1);
+                if (v != 0 || r->required || r->explicit) {
                     sz = varint_size(tag_value(r->fnum, 0)) + 1;
                 }
                 break;
             }
-            case CSHIMK_STR: {
-                intptr_t sl = rd_len((const uint8_t *)base + r->count);
+            case CSHIMK_STR:
+        case CSHIMK_BYTES: {
+                intptr_t sl = r->explicit ?
+                rd_len(vp + sizeof(void *)) :
+                rd_len((const uint8_t *)base + r->count);
 
                 if (sl < 0) {
                     h->err = CSHIM_ERR_PLAN;
                     return -1;
                 }
-                if (sl != 0) {
+                if (sl != 0 || r->required || r->explicit) {
                     sz = varint_size(tag_value(r->fnum, 2)) +
                          varint_size((size_t)sl) + (size_t)sl;
                 }
                 break;
             }
             case CSHIMK_MSG: {
-                const void *sub = rd_ptr(p);
+                const void *sub = rd_ptr(vp);
                 size_t sub_size = 0;
 
-                if (sub != NULL) {
-                    if (msg_size(h, h->subrows, h->nsubrows, sub, depth + 1,
+                if (sub != NULL || r->required) {
+                    if (sub != NULL &&
+                        msg_size(h, h->subrows, h->nsubrows, sub, depth + 1,
                                  &sub_size)) {
                         return -1;
                     }
@@ -740,6 +751,13 @@ enc_msg(cshim_codec *h, const cshim_row *rows, size_t n, const void *base, int d
     for (i = 0; i < n; i++) {
         const cshim_row *r = &rows[i];
         const uint8_t *p = (const uint8_t *)base + r->offset;
+        const uint8_t *vp = p;
+        if (r->explicit) {
+            vp = rd_ptr((const uint8_t *)base + r->has);
+            if (vp == NULL) {
+                continue;
+            }
+        }
 
         if (r->repeated) {
             intptr_t cnt = rd_len((const uint8_t *)base + r->count);
@@ -800,7 +818,7 @@ enc_msg(cshim_codec *h, const cshim_row *rows, size_t n, const void *base, int d
                     q[k] = e[k] != 0 ? 1 : 0;
                 }
                 h->out_len = start + head + (size_t)cnt;
-            } else if (r->kind == CSHIMK_STR) {
+            } else if (r->kind == CSHIMK_STR || r->kind == CSHIMK_BYTES) {
                 for (k = 0; k < (size_t)cnt; k++) {
                     const uint8_t *sh = e + k * r->elem;
                     const void *sd = rd_ptr(sh);
@@ -833,8 +851,8 @@ enc_msg(cshim_codec *h, const cshim_row *rows, size_t n, const void *base, int d
         case CSHIMK_I32: {
             int32_t v;
 
-            memcpy(&v, p, 4);
-            if (v != 0 &&
+            memcpy(&v, vp, 4);
+            if ((v != 0 || r->required || r->explicit) &&
                 wr_tag_varint(h, r->fnum, (uint64_t)(int64_t)v)) {
                 return -1;
             }
@@ -843,8 +861,8 @@ enc_msg(cshim_codec *h, const cshim_row *rows, size_t n, const void *base, int d
         case CSHIMK_I64: {
             int64_t v;
 
-            memcpy(&v, p, 8);
-            if (v != 0 && wr_tag_varint(h, r->fnum, (uint64_t)v)) {
+            memcpy(&v, vp, 8);
+            if ((v != 0 || r->required || r->explicit) && wr_tag_varint(h, r->fnum, (uint64_t)v)) {
                 return -1;
             }
             break;
@@ -852,8 +870,8 @@ enc_msg(cshim_codec *h, const cshim_row *rows, size_t n, const void *base, int d
         case CSHIMK_U32: {
             uint32_t v;
 
-            memcpy(&v, p, 4);
-            if (v != 0 && wr_tag_varint(h, r->fnum, (uint64_t)v)) {
+            memcpy(&v, vp, 4);
+            if ((v != 0 || r->required || r->explicit) && wr_tag_varint(h, r->fnum, (uint64_t)v)) {
                 return -1;
             }
             break;
@@ -861,8 +879,8 @@ enc_msg(cshim_codec *h, const cshim_row *rows, size_t n, const void *base, int d
         case CSHIMK_U64: {
             uint64_t v;
 
-            memcpy(&v, p, 8);
-            if (v != 0 && wr_tag_varint(h, r->fnum, v)) {
+            memcpy(&v, vp, 8);
+            if ((v != 0 || r->required || r->explicit) && wr_tag_varint(h, r->fnum, v)) {
                 return -1;
             }
             break;
@@ -870,8 +888,8 @@ enc_msg(cshim_codec *h, const cshim_row *rows, size_t n, const void *base, int d
         case CSHIMK_S32: {
             int32_t v;
 
-            memcpy(&v, p, 4);
-            if (v != 0 && wr_tag_varint(h, r->fnum, zigzag32(v))) {
+            memcpy(&v, vp, 4);
+            if ((v != 0 || r->required || r->explicit) && wr_tag_varint(h, r->fnum, zigzag32(v))) {
                 return -1;
             }
             break;
@@ -879,8 +897,8 @@ enc_msg(cshim_codec *h, const cshim_row *rows, size_t n, const void *base, int d
         case CSHIMK_S64: {
             int64_t v;
 
-            memcpy(&v, p, 8);
-            if (v != 0 && wr_tag_varint(h, r->fnum, zigzag64(v))) {
+            memcpy(&v, vp, 8);
+            if ((v != 0 || r->required || r->explicit) && wr_tag_varint(h, r->fnum, zigzag64(v))) {
                 return -1;
             }
             break;
@@ -888,8 +906,8 @@ enc_msg(cshim_codec *h, const cshim_row *rows, size_t n, const void *base, int d
         case CSHIMK_FIX32: {
             uint32_t v;
 
-            memcpy(&v, p, 4);
-            if (v != 0 && wr_tag_fixed(h, r->fnum, 5, (uint64_t)v)) {
+            memcpy(&v, vp, 4);
+            if ((v != 0 || r->required || r->explicit) && wr_tag_fixed(h, r->fnum, 5, (uint64_t)v)) {
                 return -1;
             }
             break;
@@ -897,8 +915,8 @@ enc_msg(cshim_codec *h, const cshim_row *rows, size_t n, const void *base, int d
         case CSHIMK_FIX64: {
             uint64_t v;
 
-            memcpy(&v, p, 8);
-            if (v != 0 && wr_tag_fixed(h, r->fnum, 1, v)) {
+            memcpy(&v, vp, 8);
+            if ((v != 0 || r->required || r->explicit) && wr_tag_fixed(h, r->fnum, 1, v)) {
                 return -1;
             }
             break;
@@ -907,9 +925,9 @@ enc_msg(cshim_codec *h, const cshim_row *rows, size_t n, const void *base, int d
             float v;
             uint32_t bits;
 
-            memcpy(&v, p, 4);
+            memcpy(&v, vp, 4);
             memcpy(&bits, p, 4);
-            if (v != 0.0f && wr_tag_fixed(h, r->fnum, 5, (uint64_t)bits)) {
+            if ((v != 0.0f || r->required || r->explicit) && wr_tag_fixed(h, r->fnum, 5, (uint64_t)bits)) {
                 return -1;
             }
             break;
@@ -918,9 +936,9 @@ enc_msg(cshim_codec *h, const cshim_row *rows, size_t n, const void *base, int d
             double v;
             uint64_t bits;
 
-            memcpy(&v, p, 8);
+            memcpy(&v, vp, 8);
             memcpy(&bits, p, 8);
-            if (v != 0.0 && wr_tag_fixed(h, r->fnum, 1, bits)) {
+            if ((v != 0.0 || r->required || r->explicit) && wr_tag_fixed(h, r->fnum, 1, bits)) {
                 return -1;
             }
             break;
@@ -928,29 +946,32 @@ enc_msg(cshim_codec *h, const cshim_row *rows, size_t n, const void *base, int d
         case CSHIMK_BOOL: {
             uint8_t v;
 
-            memcpy(&v, p, 1);
-            if (v != 0 && wr_tag_varint(h, r->fnum, 1)) {
+            memcpy(&v, vp, 1);
+            if ((v != 0 || r->required || r->explicit) && wr_tag_varint(h, r->fnum, (uint64_t)v)) {
                 return -1;
             }
             break;
         }
-        case CSHIMK_STR: {
+        case CSHIMK_STR:
+        case CSHIMK_BYTES: {
             const void *sd = rd_ptr(p);
-            intptr_t sl = rd_len((const uint8_t *)base + r->count);
+            intptr_t sl = r->explicit ?
+                rd_len(vp + sizeof(void *)) :
+                rd_len((const uint8_t *)base + r->count);
 
             if (sl < 0 || (sl != 0 && sd == NULL)) {
                 h->err = CSHIM_ERR_PLAN;
                 return -1;
             }
-            if (sl != 0 && wr_tag_bytes(h, r->fnum, sd, (size_t)sl)) {
+            if ((sl != 0 || r->required || r->explicit) && wr_tag_bytes(h, r->fnum, sd, (size_t)sl)) {
                 return -1;
             }
             break;
         }
         case CSHIMK_MSG: {
-            const void *sub = rd_ptr(p);
+            const void *sub = rd_ptr(vp);
 
-            if (sub != NULL && enc_sub(h, r->fnum, sub, depth)) {
+            if ((sub != NULL || r->required) && enc_sub(h, r->fnum, sub, depth)) {
                 return -1;
             }
             break;
@@ -1168,7 +1189,7 @@ dec_msg(cshim_codec *h, const cshim_row *rows, const cshim_row **resolve,
         if (r->repeated) {
             cshim_acc *a = &accs[r - rows];
 
-            if (r->kind == CSHIMK_STR) {
+            if (r->kind == CSHIMK_STR || r->kind == CSHIMK_BYTES) {
                 uint64_t sl;
                 struct {
                     void *data;
@@ -1266,6 +1287,21 @@ dec_msg(cshim_codec *h, const cshim_row *rows, const cshim_row **resolve,
             return -1;
         }
 
+        uint8_t *dp = (uint8_t *)base + r->offset;
+        if (r->explicit) {
+            void *slot = (void *)rd_ptr((uint8_t *)base + r->has);
+            if (slot == NULL) {
+                slot = arena_alloc(h, r->elem);
+                if (slot == NULL) {
+                    h->fail_off = pos;
+                    return -1;
+                }
+                memset(slot, 0, r->elem);
+                st_ptr((uint8_t *)base + r->has, slot);
+            }
+            dp = slot;
+        }
+
         switch (r->kind) {
         case CSHIMK_I32: {
             uint64_t v;
@@ -1273,7 +1309,7 @@ dec_msg(cshim_codec *h, const cshim_row *rows, const cshim_row **resolve,
             if (get_varint(buf, len, &pos, &v)) {
                 goto badwire;
             }
-            st_u32((uint8_t *)base + r->offset, (uint32_t)v);
+            st_u32(dp, (uint32_t)v);
             break;
         }
         case CSHIMK_I64: {
@@ -1282,7 +1318,7 @@ dec_msg(cshim_codec *h, const cshim_row *rows, const cshim_row **resolve,
             if (get_varint(buf, len, &pos, &v)) {
                 goto badwire;
             }
-            st_u64((uint8_t *)base + r->offset, v);
+            st_u64(dp, v);
             break;
         }
         case CSHIMK_U32: {
@@ -1291,7 +1327,7 @@ dec_msg(cshim_codec *h, const cshim_row *rows, const cshim_row **resolve,
             if (get_varint(buf, len, &pos, &v)) {
                 goto badwire;
             }
-            st_u32((uint8_t *)base + r->offset, (uint32_t)v);
+            st_u32(dp, (uint32_t)v);
             break;
         }
         case CSHIMK_U64: {
@@ -1300,7 +1336,7 @@ dec_msg(cshim_codec *h, const cshim_row *rows, const cshim_row **resolve,
             if (get_varint(buf, len, &pos, &v)) {
                 goto badwire;
             }
-            st_u64((uint8_t *)base + r->offset, v);
+            st_u64(dp, v);
             break;
         }
         case CSHIMK_S32: {
@@ -1309,7 +1345,7 @@ dec_msg(cshim_codec *h, const cshim_row *rows, const cshim_row **resolve,
             if (get_varint(buf, len, &pos, &v)) {
                 goto badwire;
             }
-            st_u32((uint8_t *)base + r->offset, unzigzag32(v));
+            st_u32(dp, unzigzag32(v));
             break;
         }
         case CSHIMK_S64: {
@@ -1318,7 +1354,7 @@ dec_msg(cshim_codec *h, const cshim_row *rows, const cshim_row **resolve,
             if (get_varint(buf, len, &pos, &v)) {
                 goto badwire;
             }
-            st_u64((uint8_t *)base + r->offset, unzigzag64(v));
+            st_u64(dp, unzigzag64(v));
             break;
         }
         case CSHIMK_FIX32:
@@ -1328,7 +1364,7 @@ dec_msg(cshim_codec *h, const cshim_row *rows, const cshim_row **resolve,
             if (avail < 4) {
                 goto badwire;
             }
-            st_u32((uint8_t *)base + r->offset, rd_u32(buf + pos));
+            st_u32(dp, rd_u32(buf + pos));
             pos += 4;
             break;
         }
@@ -1339,7 +1375,7 @@ dec_msg(cshim_codec *h, const cshim_row *rows, const cshim_row **resolve,
             if (avail < 8) {
                 goto badwire;
             }
-            st_u64((uint8_t *)base + r->offset, rd_u64(buf + pos));
+            st_u64(dp, rd_u64(buf + pos));
             pos += 8;
             break;
         }
@@ -1349,10 +1385,11 @@ dec_msg(cshim_codec *h, const cshim_row *rows, const cshim_row **resolve,
             if (get_varint(buf, len, &pos, &v)) {
                 goto badwire;
             }
-            st_u8((uint8_t *)base + r->offset, v != 0 ? 1 : 0);
+            st_u8(dp, v != 0 ? 1 : 0);
             break;
         }
-        case CSHIMK_STR: {
+        case CSHIMK_STR:
+        case CSHIMK_BYTES: {
             uint64_t sl;
 
             if (get_varint(buf, len, &pos, &sl) ||
@@ -1360,8 +1397,10 @@ dec_msg(cshim_codec *h, const cshim_row *rows, const cshim_row **resolve,
                 goto badwire;
             }
             h->str_bytes += (size_t)sl;
-            st_ptr((uint8_t *)base + r->offset, (void *)(buf + pos));
-            st_len((uint8_t *)base + r->count, (intptr_t)sl);
+            st_ptr(dp, (void *)(buf + pos));
+            st_len(r->explicit ? dp + sizeof(void *) :
+                                  (uint8_t *)base + r->count,
+                   (intptr_t)sl);
             pos += (size_t)sl;
             break;
         }
@@ -1385,7 +1424,7 @@ dec_msg(cshim_codec *h, const cshim_row *rows, const cshim_row **resolve,
                 h->fail_off = pos;
                 return -1;
             }
-            st_ptr((uint8_t *)base + r->offset, sub);
+            st_ptr(dp, sub);
             pos += (size_t)sl;
             break;
         }
@@ -1522,7 +1561,7 @@ check_rows(const cshim_row *rows, size_t n, size_t struct_size, int is_sub,
         if (r->fnum == 0 || (i != 0 && rows[i - 1].fnum >= r->fnum)) {
             return -1;
         }
-        if (r->kind > CSHIMK_OPT_STR) {
+        if (r->kind > CSHIMK_BYTES) {
             return -1;
         }
         if (r->wire != 0 && r->wire != 1 && r->wire != 2 && r->wire != 5) {
@@ -1531,7 +1570,35 @@ check_rows(const cshim_row *rows, size_t n, size_t struct_size, int is_sub,
         if (is_sub && (r->repeated || r->kind == CSHIMK_MSG)) {
             return -1;
         }
-        if (r->repeated) {
+        if (r->required && (r->repeated || r->explicit)) {
+            return -1;
+        }
+        if (r->explicit) {
+            int w;
+
+            if (r->repeated || r->kind == CSHIMK_MSG ||
+                r->kind == CSHIMK_OPT_I32 || r->kind == CSHIMK_OPT_STR) {
+                return -1;
+            }
+            if (r->kind == CSHIMK_STR || r->kind == CSHIMK_BYTES) {
+                need = (uint32_t)(2 * ptr);
+                if (r->elem != 2 * ptr) {
+                    return -1;
+                }
+            } else {
+                w = width_of(r->kind);
+                if (w == 0 || r->elem != (uint32_t)w) {
+                    return -1;
+                }
+                need = (uint32_t)w;
+            }
+            if (r->count != 0 ||
+                (uint64_t)r->has + ptr > struct_size ||
+                (uint64_t)r->offset + ptr > struct_size) {
+                return -1;
+            }
+            need = (uint32_t)ptr;
+        } else if (r->repeated) {
             if (r->kind == CSHIMK_I32) {
                 need = (uint32_t)(3 * ptr);
                 if (r->elem != 4) {
@@ -1542,7 +1609,7 @@ check_rows(const cshim_row *rows, size_t n, size_t struct_size, int is_sub,
                 if (r->elem != 1) {
                     return -1;
                 }
-            } else if (r->kind == CSHIMK_STR) {
+            } else if (r->kind == CSHIMK_STR || r->kind == CSHIMK_BYTES) {
                 need = (uint32_t)(3 * ptr);
                 if (r->elem != 2 * ptr) {
                     return -1;
@@ -1558,7 +1625,7 @@ check_rows(const cshim_row *rows, size_t n, size_t struct_size, int is_sub,
             if (r->count != r->offset + (uint32_t)ptr) {
                 return -1;
             }
-        } else if (r->kind == CSHIMK_STR) {
+        } else if (r->kind == CSHIMK_STR || r->kind == CSHIMK_BYTES) {
             need = (uint32_t)(2 * ptr);
             if (r->elem != 2 * ptr) {
                 return -1;
@@ -1573,12 +1640,12 @@ check_rows(const cshim_row *rows, size_t n, size_t struct_size, int is_sub,
             }
         } else if (r->kind == CSHIMK_OPT_I32) {
             need = (uint32_t)ptr;
-            if (r->has != r->offset || r->count != 0 || r->elem != 4) {
+            if (r->required || r->has != r->offset || r->count != 0 || r->elem != 4) {
                 return -1;
             }
         } else if (r->kind == CSHIMK_OPT_STR) {
             need = (uint32_t)ptr;
-            if (r->has != r->offset || r->count != 0 ||
+            if (r->required || r->has != r->offset || r->count != 0 ||
                 r->elem != 2 * ptr) {
                 return -1;
             }

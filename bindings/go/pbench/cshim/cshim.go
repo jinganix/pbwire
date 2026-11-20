@@ -32,6 +32,7 @@ import (
 	"runtime"
 	"unsafe"
 
+	shimlayout "pbwire/pbench/cshim/layout"
 	"pbwire/tests/gen/matrix3"
 )
 
@@ -139,19 +140,156 @@ type Codec struct {
 func New() (*Codec, error) {
 	l := measure()
 	rows, subrows := l.plan()
-	var h *C.cshim_codec
-	st := C.cshim_codec_new(&h, &rows[0], C.size_t(len(rows)),
-		&subrows[0], C.size_t(len(subrows)),
+	c, err := newCodecFromCRows(rows, subrows,
 		C.size_t(unsafe.Sizeof(matrix3.Scalars3{})),
 		C.size_t(unsafe.Sizeof(matrix3.Inner3{})))
+	if err != nil {
+		return nil, err
+	}
+	c.l = l
+	return c, nil
+}
+
+func newCodecFromCRows(rows, subrows []C.cshim_row, baseSize, subSize C.size_t) (*Codec, error) {
+	var h *C.cshim_codec
+	st := C.cshim_codec_new(&h, &rows[0], C.size_t(len(rows)),
+		&subrows[0], C.size_t(len(subrows)), baseSize, subSize)
 	runtime.KeepAlive(rows)
 	runtime.KeepAlive(subrows)
 	if int(st) != stOK {
 		return nil, statusError("new", st, 0)
 	}
-	c := &Codec{h: h, l: l}
+	c := &Codec{h: h}
 	runtime.SetFinalizer(c, (*Codec).finalize)
 	return c, nil
+}
+
+// translateRow converts one layout.Row into the C row the codec owns.
+// Shapes the C codec does not implement yet (oneof members, foreign
+// fields, groups, sub-table references) fail loudly instead of encoding
+// wrong bytes. Repeated rows pass through: the C codec already frames
+// packed numerics, strings and sub-messages element by element.
+func translateRow(r shimlayout.Row, ptrSize, subSize uintptr) (C.cshim_row, error) {
+	if r.Itab != 0 || r.Foreign || r.Group || r.Sub >= 0 {
+		return C.cshim_row{}, fmt.Errorf("cshim: field %d needs a later task (oneof/foreign/group/sub)", r.Fnum)
+	}
+	var kind C.uint32_t
+	switch r.Kind {
+	case shimlayout.KindInt32:
+		kind = C.CSHIMK_I32
+	case shimlayout.KindInt64:
+		kind = C.CSHIMK_I64
+	case shimlayout.KindUint32:
+		kind = C.CSHIMK_U32
+	case shimlayout.KindUint64:
+		kind = C.CSHIMK_U64
+	case shimlayout.KindSint32:
+		kind = C.CSHIMK_S32
+	case shimlayout.KindSint64:
+		kind = C.CSHIMK_S64
+	case shimlayout.KindFixed32:
+		kind = C.CSHIMK_FIX32
+	case shimlayout.KindFixed64:
+		kind = C.CSHIMK_FIX64
+	case shimlayout.KindSfixed32:
+		kind = C.CSHIMK_FIX32
+	case shimlayout.KindSfixed64:
+		kind = C.CSHIMK_FIX64
+	case shimlayout.KindFloat:
+		kind = C.CSHIMK_FLOAT
+	case shimlayout.KindDouble:
+		kind = C.CSHIMK_DOUBLE
+	case shimlayout.KindBool:
+		kind = C.CSHIMK_BOOL
+	case shimlayout.KindString:
+		kind = C.CSHIMK_STR
+	case shimlayout.KindBytes:
+		kind = C.CSHIMK_BYTES
+	case shimlayout.KindEnum:
+		kind = C.CSHIMK_I32
+	case shimlayout.KindMessage:
+		kind = C.CSHIMK_MSG
+	default:
+		return C.cshim_row{}, fmt.Errorf("cshim: bad kind %d on field %d", r.Kind, r.Fnum)
+	}
+	var elem uint32
+	switch r.Kind {
+	case shimlayout.KindInt32, shimlayout.KindUint32, shimlayout.KindSint32,
+		shimlayout.KindFixed32, shimlayout.KindSfixed32, shimlayout.KindFloat,
+		shimlayout.KindEnum:
+		elem = 4
+	case shimlayout.KindInt64, shimlayout.KindUint64, shimlayout.KindSint64,
+		shimlayout.KindFixed64, shimlayout.KindSfixed64, shimlayout.KindDouble:
+		elem = 8
+	case shimlayout.KindBool:
+		elem = 1
+	case shimlayout.KindString, shimlayout.KindBytes:
+		elem = 2 * uint32(ptrSize)
+	case shimlayout.KindMessage:
+		elem = uint32(subSize)
+	}
+	var count uint32
+	if (r.Kind == shimlayout.KindString || r.Kind == shimlayout.KindBytes) && !r.Explicit {
+		count = r.Offset + uint32(ptrSize)
+	}
+	var has uint32
+	if r.Explicit {
+		has = r.Has
+	}
+	var explicit, required uint32
+	if r.Explicit {
+		explicit = 1
+	}
+	if r.Required {
+		required = 1
+	}
+	return C.cshim_row{
+		fnum:     C.uint32_t(r.Fnum),
+		kind:     kind,
+		repeated: C.uint32_t(boolBit(r.Repeated)),
+		packed:   C.uint32_t(boolBit(r.Packed)),
+		wire:     C.uint32_t(r.Wire),
+		offset:   C.uint32_t(r.Offset),
+		has:      C.uint32_t(has),
+		count:    C.uint32_t(count),
+		elem:     C.uint32_t(elem),
+		explicit: C.uint32_t(explicit),
+		required: C.uint32_t(required),
+	}, nil
+}
+
+func boolBit(v bool) uint32 {
+	if v {
+		return 1
+	}
+	return 0
+}
+
+// newCodecFromLayout builds a codec from layout rows, the same shape the
+// generated cshim files will feed the harness with. No per-message Go
+// code lives here: translation is field-by-field and generic.
+func newCodecFromLayout(rows, subrows []shimlayout.Row, baseSize, subSize uintptr) (*Codec, error) {
+	if len(rows) == 0 || len(subrows) == 0 || baseSize == 0 || subSize == 0 {
+		return nil, errors.New("v2: empty layout")
+	}
+	ptrSize := unsafe.Sizeof(uintptr(0))
+	crows := make([]C.cshim_row, len(rows))
+	for i, r := range rows {
+		cr, err := translateRow(r, ptrSize, subSize)
+		if err != nil {
+			return nil, err
+		}
+		crows[i] = cr
+	}
+	csubs := make([]C.cshim_row, len(subrows))
+	for i, r := range subrows {
+		cr, err := translateRow(r, ptrSize, subSize)
+		if err != nil {
+			return nil, err
+		}
+		csubs[i] = cr
+	}
+	return newCodecFromCRows(crows, csubs, C.size_t(baseSize), C.size_t(subSize))
 }
 
 func (l *layout) plan() ([]C.cshim_row, []C.cshim_row) {
@@ -240,6 +378,14 @@ func (c *Codec) Marshal(m *matrix3.Scalars3) ([]byte, error) {
 	if m == nil {
 		return nil, errors.New("v2: nil message")
 	}
+	out, err := c.encodeRaw(unsafe.Pointer(m))
+	runtime.KeepAlive(m)
+	return out, err
+}
+
+// encodeRaw runs one grow-and-retry encode loop over raw struct memory.
+// The caller owns the layout the codec was built with; no fixup runs.
+func (c *Codec) encodeRaw(base unsafe.Pointer) ([]byte, error) {
 	hint := c.hint
 	if hint < 64 {
 		hint = 64
@@ -250,9 +396,8 @@ func (c *Codec) Marshal(m *matrix3.Scalars3) ([]byte, error) {
 		if hint != 0 {
 			dst = (*C.uint8_t)(unsafe.Pointer(&out[0]))
 		}
-		res := C.cshim_encode(c.h, C.uintptr_t(uintptr(unsafe.Pointer(m))), dst,
+		res := C.cshim_encode(c.h, C.uintptr_t(uintptr(base)), dst,
 			C.size_t(hint))
-		runtime.KeepAlive(m)
 		switch int(res.status) {
 		case stOK:
 			n := int(res.len)
@@ -281,19 +426,30 @@ func (c *Codec) Unmarshal(wire []byte) (*matrix3.Scalars3, error) {
 		return nil, errors.New("v2: closed codec")
 	}
 	m := &matrix3.Scalars3{}
+	strBytes, err := c.decodeRaw(unsafe.Pointer(m), wire)
+	if err != nil {
+		return nil, err
+	}
+	c.fixup(m, strBytes)
+	runtime.KeepAlive(c)
+	return m, nil
+}
+
+// decodeRaw runs one decode into raw struct memory and reports the total
+// string payload size for the caller's fixup. No fixup runs here.
+func (c *Codec) decodeRaw(base unsafe.Pointer, wire []byte) (int, error) {
 	var wp *C.uint8_t
 	if len(wire) != 0 {
 		wp = (*C.uint8_t)(unsafe.Pointer(&wire[0]))
 	}
-	res := C.cshim_decode(c.h, C.uintptr_t(uintptr(unsafe.Pointer(m))), wp,
+	res := C.cshim_decode(c.h, C.uintptr_t(uintptr(base)), wp,
 		C.size_t(len(wire)))
 	runtime.KeepAlive(wire)
 	if int(res.status) != stOK {
-		return nil, statusError("unmarshal", res.status, res.fail_off)
+		return 0, statusError("unmarshal", res.status, res.fail_off)
 	}
-	c.fixup(m, int(res.str_bytes))
 	runtime.KeepAlive(c)
-	return m, nil
+	return int(res.str_bytes), nil
 }
 
 // rawHeader and rawSlice are the Go header layouts C writes during decode.
