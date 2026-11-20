@@ -6,8 +6,9 @@ package maptest
 
 import (
 	"errors"
-	"pbwire/runtime"
+	pbwrt "pbwire/runtime"
 	"pbwire/runtime/layout"
+	"runtime"
 	"sync"
 	"unsafe"
 )
@@ -115,27 +116,27 @@ func MapTestCshimCopy(dst, src *MapTest, a *layout.Arena) {
 }
 
 // MapValueCshimFixup wraps staged oneof members into typed wrappers.
-func MapValueCshimFixup(raw *MapValue, c *runtime.Codec) {
+func MapValueCshimFixup(raw *MapValue, c *pbwrt.Codec) {
 }
 
 // MapTest_ByIntEntryCshimFixup wraps staged oneof members into typed wrappers.
-func MapTest_ByIntEntryCshimFixup(raw *MapTest_ByIntEntry, c *runtime.Codec) {
+func MapTest_ByIntEntryCshimFixup(raw *MapTest_ByIntEntry, c *pbwrt.Codec) {
 }
 
 // MapTest_ByStrEntryCshimFixup wraps staged oneof members into typed wrappers.
-func MapTest_ByStrEntryCshimFixup(raw *MapTest_ByStrEntry, c *runtime.Codec) {
+func MapTest_ByStrEntryCshimFixup(raw *MapTest_ByStrEntry, c *pbwrt.Codec) {
 }
 
 // MapTest_ByMsgEntryCshimFixup wraps staged oneof members into typed wrappers.
-func MapTest_ByMsgEntryCshimFixup(raw *MapTest_ByMsgEntry, c *runtime.Codec) {
+func MapTest_ByMsgEntryCshimFixup(raw *MapTest_ByMsgEntry, c *pbwrt.Codec) {
 }
 
 // MapTestCshimFixup wraps staged oneof members into typed wrappers.
-func MapTestCshimFixup(raw *MapTest, c *runtime.Codec) {
+func MapTestCshimFixup(raw *MapTest, c *pbwrt.Codec) {
 }
 
-var mapValueCshimCodec = sync.OnceValue(func() *runtime.Codec {
-	c, err := runtime.NewCodecFromLayout(CshimRegistry(), "spectest.MapValue")
+var mapValueCshimCodec = sync.OnceValue(func() *pbwrt.Codec {
+	c, err := pbwrt.NewCodecFromLayout(CshimRegistry(), "spectest.MapValue")
 	if err != nil {
 		panic(err)
 	}
@@ -146,7 +147,9 @@ func (m *MapValue) Marshal() ([]byte, error) {
 	if m == nil {
 		return []byte{}, nil
 	}
-	return mapValueCshimCodec().EncodeRaw(unsafe.Pointer(m))
+	out, err := mapValueCshimCodec().EncodeRaw(unsafe.Pointer(m))
+	runtime.KeepAlive(m)
+	return out, err
 }
 
 func (m *MapValue) Unmarshal(wire []byte) error {
@@ -155,21 +158,22 @@ func (m *MapValue) Unmarshal(wire []byte) error {
 	}
 	var raw MapValue
 	c := mapValueCshimCodec()
-	n, err := c.DecodeRaw(unsafe.Pointer(&raw), wire)
+	var out MapValue
+	err := c.DecodeInto(unsafe.Pointer(&raw), wire, func(strBytes int) {
+		var a layout.Arena
+		a.Reset(strBytes)
+		MapValueCshimFixup(&raw, c)
+		MapValueCshimCopy(&out, &raw, &a)
+	})
 	if err != nil {
 		return err
 	}
-	var a layout.Arena
-	a.Reset(n)
-	MapValueCshimFixup(&raw, c)
-	var out MapValue
-	MapValueCshimCopy(&out, &raw, &a)
 	*m = out
 	return nil
 }
 
-var mapTest_ByIntEntryCshimCodec = sync.OnceValue(func() *runtime.Codec {
-	c, err := runtime.NewCodecFromLayout(CshimRegistry(), "spectest.MapTest.ByIntEntry")
+var mapTest_ByIntEntryCshimCodec = sync.OnceValue(func() *pbwrt.Codec {
+	c, err := pbwrt.NewCodecFromLayout(CshimRegistry(), "spectest.MapTest.ByIntEntry")
 	if err != nil {
 		panic(err)
 	}
@@ -180,7 +184,9 @@ func (m *MapTest_ByIntEntry) Marshal() ([]byte, error) {
 	if m == nil {
 		return []byte{}, nil
 	}
-	return mapTest_ByIntEntryCshimCodec().EncodeRaw(unsafe.Pointer(m))
+	out, err := mapTest_ByIntEntryCshimCodec().EncodeRaw(unsafe.Pointer(m))
+	runtime.KeepAlive(m)
+	return out, err
 }
 
 func (m *MapTest_ByIntEntry) Unmarshal(wire []byte) error {
@@ -189,21 +195,22 @@ func (m *MapTest_ByIntEntry) Unmarshal(wire []byte) error {
 	}
 	var raw MapTest_ByIntEntry
 	c := mapTest_ByIntEntryCshimCodec()
-	n, err := c.DecodeRaw(unsafe.Pointer(&raw), wire)
+	var out MapTest_ByIntEntry
+	err := c.DecodeInto(unsafe.Pointer(&raw), wire, func(strBytes int) {
+		var a layout.Arena
+		a.Reset(strBytes)
+		MapTest_ByIntEntryCshimFixup(&raw, c)
+		MapTest_ByIntEntryCshimCopy(&out, &raw, &a)
+	})
 	if err != nil {
 		return err
 	}
-	var a layout.Arena
-	a.Reset(n)
-	MapTest_ByIntEntryCshimFixup(&raw, c)
-	var out MapTest_ByIntEntry
-	MapTest_ByIntEntryCshimCopy(&out, &raw, &a)
 	*m = out
 	return nil
 }
 
-var mapTest_ByStrEntryCshimCodec = sync.OnceValue(func() *runtime.Codec {
-	c, err := runtime.NewCodecFromLayout(CshimRegistry(), "spectest.MapTest.ByStrEntry")
+var mapTest_ByStrEntryCshimCodec = sync.OnceValue(func() *pbwrt.Codec {
+	c, err := pbwrt.NewCodecFromLayout(CshimRegistry(), "spectest.MapTest.ByStrEntry")
 	if err != nil {
 		panic(err)
 	}
@@ -214,7 +221,9 @@ func (m *MapTest_ByStrEntry) Marshal() ([]byte, error) {
 	if m == nil {
 		return []byte{}, nil
 	}
-	return mapTest_ByStrEntryCshimCodec().EncodeRaw(unsafe.Pointer(m))
+	out, err := mapTest_ByStrEntryCshimCodec().EncodeRaw(unsafe.Pointer(m))
+	runtime.KeepAlive(m)
+	return out, err
 }
 
 func (m *MapTest_ByStrEntry) Unmarshal(wire []byte) error {
@@ -223,21 +232,22 @@ func (m *MapTest_ByStrEntry) Unmarshal(wire []byte) error {
 	}
 	var raw MapTest_ByStrEntry
 	c := mapTest_ByStrEntryCshimCodec()
-	n, err := c.DecodeRaw(unsafe.Pointer(&raw), wire)
+	var out MapTest_ByStrEntry
+	err := c.DecodeInto(unsafe.Pointer(&raw), wire, func(strBytes int) {
+		var a layout.Arena
+		a.Reset(strBytes)
+		MapTest_ByStrEntryCshimFixup(&raw, c)
+		MapTest_ByStrEntryCshimCopy(&out, &raw, &a)
+	})
 	if err != nil {
 		return err
 	}
-	var a layout.Arena
-	a.Reset(n)
-	MapTest_ByStrEntryCshimFixup(&raw, c)
-	var out MapTest_ByStrEntry
-	MapTest_ByStrEntryCshimCopy(&out, &raw, &a)
 	*m = out
 	return nil
 }
 
-var mapTest_ByMsgEntryCshimCodec = sync.OnceValue(func() *runtime.Codec {
-	c, err := runtime.NewCodecFromLayout(CshimRegistry(), "spectest.MapTest.ByMsgEntry")
+var mapTest_ByMsgEntryCshimCodec = sync.OnceValue(func() *pbwrt.Codec {
+	c, err := pbwrt.NewCodecFromLayout(CshimRegistry(), "spectest.MapTest.ByMsgEntry")
 	if err != nil {
 		panic(err)
 	}
@@ -248,7 +258,9 @@ func (m *MapTest_ByMsgEntry) Marshal() ([]byte, error) {
 	if m == nil {
 		return []byte{}, nil
 	}
-	return mapTest_ByMsgEntryCshimCodec().EncodeRaw(unsafe.Pointer(m))
+	out, err := mapTest_ByMsgEntryCshimCodec().EncodeRaw(unsafe.Pointer(m))
+	runtime.KeepAlive(m)
+	return out, err
 }
 
 func (m *MapTest_ByMsgEntry) Unmarshal(wire []byte) error {
@@ -257,21 +269,22 @@ func (m *MapTest_ByMsgEntry) Unmarshal(wire []byte) error {
 	}
 	var raw MapTest_ByMsgEntry
 	c := mapTest_ByMsgEntryCshimCodec()
-	n, err := c.DecodeRaw(unsafe.Pointer(&raw), wire)
+	var out MapTest_ByMsgEntry
+	err := c.DecodeInto(unsafe.Pointer(&raw), wire, func(strBytes int) {
+		var a layout.Arena
+		a.Reset(strBytes)
+		MapTest_ByMsgEntryCshimFixup(&raw, c)
+		MapTest_ByMsgEntryCshimCopy(&out, &raw, &a)
+	})
 	if err != nil {
 		return err
 	}
-	var a layout.Arena
-	a.Reset(n)
-	MapTest_ByMsgEntryCshimFixup(&raw, c)
-	var out MapTest_ByMsgEntry
-	MapTest_ByMsgEntryCshimCopy(&out, &raw, &a)
 	*m = out
 	return nil
 }
 
-var mapTestCshimCodec = sync.OnceValue(func() *runtime.Codec {
-	c, err := runtime.NewCodecFromLayout(CshimRegistry(), "spectest.MapTest")
+var mapTestCshimCodec = sync.OnceValue(func() *pbwrt.Codec {
+	c, err := pbwrt.NewCodecFromLayout(CshimRegistry(), "spectest.MapTest")
 	if err != nil {
 		panic(err)
 	}
@@ -282,7 +295,9 @@ func (m *MapTest) Marshal() ([]byte, error) {
 	if m == nil {
 		return []byte{}, nil
 	}
-	return mapTestCshimCodec().EncodeRaw(unsafe.Pointer(m))
+	out, err := mapTestCshimCodec().EncodeRaw(unsafe.Pointer(m))
+	runtime.KeepAlive(m)
+	return out, err
 }
 
 func (m *MapTest) Unmarshal(wire []byte) error {
@@ -291,15 +306,16 @@ func (m *MapTest) Unmarshal(wire []byte) error {
 	}
 	var raw MapTest
 	c := mapTestCshimCodec()
-	n, err := c.DecodeRaw(unsafe.Pointer(&raw), wire)
+	var out MapTest
+	err := c.DecodeInto(unsafe.Pointer(&raw), wire, func(strBytes int) {
+		var a layout.Arena
+		a.Reset(strBytes)
+		MapTestCshimFixup(&raw, c)
+		MapTestCshimCopy(&out, &raw, &a)
+	})
 	if err != nil {
 		return err
 	}
-	var a layout.Arena
-	a.Reset(n)
-	MapTestCshimFixup(&raw, c)
-	var out MapTest
-	MapTestCshimCopy(&out, &raw, &a)
 	*m = out
 	return nil
 }

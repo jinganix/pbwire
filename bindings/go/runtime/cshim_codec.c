@@ -233,6 +233,9 @@ typedef struct cshim_table_mem {
     const cshim_row **resolve;
     size_t maxfnum;
     cshim_acc *accs;
+    /* First slot of this table's oneof staging area: row.ogrp is relative
+     * to the table, so two messages never share a slot. */
+    size_t stage_base;
 } cshim_table_mem;
 
 struct cshim_codec {
@@ -1036,8 +1039,11 @@ enc_msg(cshim_codec *h, const cshim_table_mem *t, const void *base, int depth)
             float v;
             uint32_t bits;
 
+            /* Both the zero test and the emitted bits come from the
+             * payload: for a set oneof member vp is the wrapper, p is
+             * the interface header whose first word is the itab. */
             memcpy(&v, vp, 4);
-            memcpy(&bits, p, 4);
+            memcpy(&bits, vp, 4);
             if ((v != 0.0f || r->required || r->explicit || r->itab) && wr_tag_fixed(h, r->fnum, 5, (uint64_t)bits)) {
                 return -1;
             }
@@ -1048,7 +1054,7 @@ enc_msg(cshim_codec *h, const cshim_table_mem *t, const void *base, int depth)
             uint64_t bits;
 
             memcpy(&v, vp, 8);
-            memcpy(&bits, p, 8);
+            memcpy(&bits, vp, 8);
             if ((v != 0.0 || r->required || r->explicit || r->itab) && wr_tag_fixed(h, r->fnum, 1, bits)) {
                 return -1;
             }
@@ -1228,17 +1234,18 @@ skip_group(cshim_codec *h, const uint8_t *buf, size_t len, size_t *pos,
  * owns all wrapper allocation. Last occurrence wins; split message
  * occurrences do not merge (documented follow-up). */
 static int
-dec_oneof_stage(cshim_codec *h, const cshim_row *r, const uint8_t *buf, size_t len,
-                size_t *pos, int depth)
+dec_oneof_stage(cshim_codec *h, const cshim_table_mem *t, const cshim_row *r,
+                const uint8_t *buf, size_t len, size_t *pos, int depth)
 {
     cshim_oneof_stage *st;
     uint64_t v;
+    size_t slot = t->stage_base + r->ogrp;
 
-    if (r->ogrp >= h->nstages) {
+    if (slot >= h->nstages) {
         h->err = CSHIM_ERR_PLAN;
         return -1;
     }
-    st = &h->ostages[r->ogrp];
+    st = &h->ostages[slot];
     /* A repeat visit to the same staged message member merges into the
      * staged submessage; capture it before the slot is reset below. */
     int merge =
@@ -1460,7 +1467,7 @@ dec_body(cshim_codec *h, const cshim_table_mem *t, void *base, const uint8_t *bu
             continue;
         }
         if (r->itab != 0) {
-            if (dec_oneof_stage(h, r, buf, len, &pos, depth)) {
+            if (dec_oneof_stage(h, t, r, buf, len, &pos, depth)) {
                 h->fail_off = pos;
                 return -1;
             }
@@ -1731,18 +1738,22 @@ dec_body(cshim_codec *h, const cshim_table_mem *t, void *base, const uint8_t *bu
                 }
             } else {
                 uint64_t sl;
-                void *sub;
+                void *sub = (void *)rd_ptr(dp);
 
                 if (get_varint(buf, len, &pos, &sl) ||
                     sl > (uint64_t)(len - pos)) {
                     goto badwire;
                 }
-                sub = arena_alloc(h, h->tables[r->sub].msg_size);
+                /* A repeated occurrence of a singular message merges into
+                 * the one already decoded, like the reference runtime. */
                 if (sub == NULL) {
-                    h->fail_off = pos;
-                    return -1;
+                    sub = arena_alloc(h, h->tables[r->sub].msg_size);
+                    if (sub == NULL) {
+                        h->fail_off = pos;
+                        return -1;
+                    }
+                    memset(sub, 0, h->tables[r->sub].msg_size);
                 }
-                memset(sub, 0, h->tables[r->sub].msg_size);
                 if (dec_msg(h, &h->tables[r->sub], sub, buf + pos, (size_t)sl,
                             depth + 1)) {
                     h->fail_off = pos;
@@ -1864,6 +1875,8 @@ free_codec(cshim_codec *h)
     free(h->tables);
     free(h);
 }
+
+/* stage_bases is transient: it only seeds table_mem.stage_base. */
 
 static int
 width_of(uint32_t kind)
@@ -2092,6 +2105,7 @@ cshim_codec_new(cshim_codec **out, const cshim_table *tables, size_t ntables,
 {
     cshim_codec *h;
     size_t i, j;
+    size_t *stage_bases;
 
     if (out == NULL) {
         return CSHIM_ERR_PLAN;
@@ -2100,30 +2114,44 @@ cshim_codec_new(cshim_codec **out, const cshim_table *tables, size_t ntables,
     if (check_registry(tables, ntables, root)) {
         return CSHIM_ERR_PLAN;
     }
-    h = (cshim_codec *)calloc(1, sizeof(*h));
-    if (h == NULL) {
+    stage_bases = (size_t *)calloc(ntables, sizeof(*stage_bases));
+    if (stage_bases == NULL) {
         return CSHIM_ERR_NOMEM;
     }
+    h = (cshim_codec *)calloc(1, sizeof(*h));
+    if (h == NULL) {
+        free(stage_bases);
+        return CSHIM_ERR_NOMEM;
+    }
+    /* Each table gets its own staging range: row.ogrp is table-relative,
+     * so a root oneof and a nested oneof never share a slot. */
+    size_t base = 0;
     for (i = 0; i < ntables; i++) {
         size_t k;
+        size_t slots = 0;
 
         for (k = 0; k < tables[i].nrows; k++) {
             if (tables[i].rows[k].itab != 0 &&
-                tables[i].rows[k].ogrp >= h->nstages) {
-                h->nstages = (size_t)tables[i].rows[k].ogrp + 1;
+                (size_t)tables[i].rows[k].ogrp + 1 > slots) {
+                slots = (size_t)tables[i].rows[k].ogrp + 1;
             }
         }
+        stage_bases[i] = base;
+        base += slots;
     }
+    h->nstages = base;
     if (h->nstages != 0) {
         h->ostages =
             (cshim_oneof_stage *)calloc(h->nstages, sizeof(*h->ostages));
         if (h->ostages == NULL) {
+            free(stage_bases);
             free_codec(h);
             return CSHIM_ERR_NOMEM;
         }
     }
     h->tables = (cshim_table_mem *)calloc(ntables, sizeof(*h->tables));
     if (h->tables == NULL) {
+        free(stage_bases);
         free_codec(h);
         return CSHIM_ERR_NOMEM;
     }
@@ -2134,6 +2162,7 @@ cshim_codec_new(cshim_codec **out, const cshim_table *tables, size_t ntables,
 
         t->nrows = tables[i].nrows;
         t->msg_size = tables[i].msg_size;
+        t->stage_base = stage_bases[i];
         t->rows = (cshim_row *)malloc(t->nrows * sizeof(*t->rows));
         t->accs = (cshim_acc *)calloc(t->nrows, sizeof(*t->accs));
         t->resolve = NULL;
@@ -2159,6 +2188,7 @@ cshim_codec_new(cshim_codec **out, const cshim_table *tables, size_t ntables,
             t->accs[j].elem = t->rows[j].elem;
         }
     }
+    free(stage_bases);
     *out = h;
     return CSHIM_OK;
 }

@@ -131,11 +131,11 @@ func TestGoFilesDefault(t *testing.T) {
 		t.Fatalf("missing cshim file, got %v", keys(got))
 	}
 	for _, want := range []string{
-		`"pbwire/runtime"`,
+		`pbwrt "pbwire/runtime"`,
 		`func (m *M) Marshal() ([]byte, error)`,
 		"EncodeRaw(unsafe.Pointer(m))",
 		"func (m *M) Unmarshal(wire []byte) error",
-		"DecodeRaw(unsafe.Pointer(&raw), wire)",
+		"DecodeInto(unsafe.Pointer(&raw), wire, func(strBytes int) {",
 		"MCshimFixup(&raw, c)",
 		"MCshimCopy(&out, &raw, &a)",
 		"func CshimRegistry() []layout.Msg",
@@ -360,11 +360,11 @@ func TestGoFilesCshimWiring(t *testing.T) {
 		t.Fatalf("missing cshim file, got %v", keys(got))
 	}
 	for _, want := range []string{
-		`"pbwire/runtime"`,
+		`pbwrt "pbwire/runtime"`,
 		"func (m *B) Marshal() ([]byte, error)",
 		"EncodeRaw(unsafe.Pointer(m))",
 		"func (m *B) Unmarshal(wire []byte) error",
-		"DecodeRaw(unsafe.Pointer(&raw), wire)",
+		"DecodeInto(unsafe.Pointer(&raw), wire, func(strBytes int) {",
 		"BCshimFixup(&raw, c)",
 		"BCshimCopy(&out, &raw, &a)",
 		"// BCshimFixup wraps staged oneof members",
@@ -481,6 +481,24 @@ func TestGoCshimSkipFails(t *testing.T) {
 	opt := Options{Mappings: map[string]string{"xdep.proto": "pbwire/tests/gen/xdep"}}
 	if err := writeGoCshim(&b, goBranchFile(), opt); err == nil {
 		t.Fatal("cshim emission over a skipped field must fail")
+	}
+}
+
+// A drivable file whose model needs no imports emits no empty import block:
+// gofmt-clean output is part of the contract.
+func TestGoFilesNoEmptyImport(t *testing.T) {
+	files, err := goFiles(&model.File{
+		Path: "n.proto", Package: "n", Prefix: "N",
+		Messages: []model.Message{{
+			Name: "M", Full: "n.M",
+			Fields: []model.Field{{Name: "v", Lower: "v", Pascal: "V", Number: 1, Kind: protoreflect.Int32Kind}},
+		}},
+	}, Options{Lang: "go", Model: true, Register: true, Registry: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := goFileMap(t, files)["n_pbwire.go"]; strings.Contains(got, "import ()") {
+		t.Error("model file must not emit an empty import block")
 	}
 }
 

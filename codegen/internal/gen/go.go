@@ -232,17 +232,26 @@ func writeGoModelHeader(b *strings.Builder, f *model.File, opt Options, useCshim
 	if len(f.Messages) == 0 && len(f.Enums) == 0 {
 		return // package clause only: nothing to import
 	}
-	b.WriteString("import (\n")
+	// Build the import list first: an empty block is legal Go but not
+	// gofmt-clean, and a cshim file needs none of them.
+	var imports []string
 	if len(f.Messages) > 0 && !useCshim {
-		b.WriteString("\t\"pbwire/pbench/dyngo/codec\"\n")
+		imports = append(imports, "\t\"pbwire/pbench/dyngo/codec\"\n")
 	}
 	if len(f.Enums) > 0 {
-		b.WriteString("\t\"fmt\"\n")
+		imports = append(imports, "\t\"fmt\"\n")
 	}
 	for _, imp := range f.Imports {
 		if path, ok := opt.Mappings[imp.Path]; ok {
-			fmt.Fprintf(b, "\n\t%s %q\n", goImportAlias(path), path)
+			imports = append(imports, fmt.Sprintf("\n\t%s %q\n", goImportAlias(path), path))
 		}
+	}
+	if len(imports) == 0 {
+		return
+	}
+	b.WriteString("import (\n")
+	for _, line := range imports {
+		b.WriteString(line)
 	}
 	b.WriteString(")\n\n")
 }
@@ -1062,7 +1071,7 @@ func goCshimPayload(f *model.File, field model.Field) (string, bool, error) {
 // Messages without oneofs get an empty body so call sites stay uniform.
 func writeGoCshimFixup(b *strings.Builder, f *model.File, m model.Message) error {
 	fmt.Fprintf(b, "// %sCshimFixup wraps staged oneof members into typed wrappers.\n", m.Name)
-	fmt.Fprintf(b, "func %sCshimFixup(raw *%s, c *runtime.Codec) {\n", m.Name, m.Name)
+	fmt.Fprintf(b, "func %sCshimFixup(raw *%s, c *pbwrt.Codec) {\n", m.Name, m.Name)
 	for _, slot := range goOneofSlots(m) {
 		var members []model.Field
 		for _, field := range goSorted(m) {
@@ -1150,22 +1159,25 @@ func cshimCodecVar(m model.Message) string {
 // A bad generated row fails once at first use, loudly.
 func writeGoCshimCodec(b *strings.Builder, f *model.File, m model.Message) error {
 	cv := cshimCodecVar(m)
-	fmt.Fprintf(b, "var %s = sync.OnceValue(func() *runtime.Codec {\n", cv)
-	fmt.Fprintf(b, "\tc, err := runtime.NewCodecFromLayout(CshimRegistry(), %q)\n", m.Full)
+	fmt.Fprintf(b, "var %s = sync.OnceValue(func() *pbwrt.Codec {\n", cv)
+	fmt.Fprintf(b, "\tc, err := pbwrt.NewCodecFromLayout(CshimRegistry(), %q)\n", m.Full)
 	b.WriteString("\tif err != nil {\n\t\tpanic(err)\n\t}\n\treturn c\n})\n\n")
 	fmt.Fprintf(b, "func (m *%s) Marshal() ([]byte, error) {\n", m.Name)
 	fmt.Fprintf(b, "\tif m == nil {\n\t\treturn []byte{}, nil\n\t}\n")
-	fmt.Fprintf(b, "\treturn %s().EncodeRaw(unsafe.Pointer(m))\n}\n\n", cv)
+	fmt.Fprintf(b, "\tout, err := %s().EncodeRaw(unsafe.Pointer(m))\n", cv)
+	b.WriteString("\truntime.KeepAlive(m)\n\treturn out, err\n}\n\n")
 	fmt.Fprintf(b, "func (m *%s) Unmarshal(wire []byte) error {\n", m.Name)
 	fmt.Fprintf(b, "\tif m == nil {\n\t\treturn errors.New(%q)\n\t}\n", m.Full+": Unmarshal into nil message")
 	fmt.Fprintf(b, "\tvar raw %s\n", m.Name)
 	fmt.Fprintf(b, "\tc := %s()\n", cv)
-	b.WriteString("\tn, err := c.DecodeRaw(unsafe.Pointer(&raw), wire)\n")
-	b.WriteString("\tif err != nil {\n\t\treturn err\n\t}\n")
-	b.WriteString("\tvar a layout.Arena\n\ta.Reset(n)\n")
-	fmt.Fprintf(b, "\t%sCshimFixup(&raw, c)\n", m.Name)
 	fmt.Fprintf(b, "\tvar out %s\n", m.Name)
-	fmt.Fprintf(b, "\t%sCshimCopy(&out, &raw, &a)\n", m.Name)
+	// DecodeInto holds the codec lock across decode, fixup and copy: the
+	// staged oneof slots and the arena belong to this decode only.
+	b.WriteString("\terr := c.DecodeInto(unsafe.Pointer(&raw), wire, func(strBytes int) {\n")
+	b.WriteString("\t\tvar a layout.Arena\n\t\ta.Reset(strBytes)\n")
+	fmt.Fprintf(b, "\t\t%sCshimFixup(&raw, c)\n", m.Name)
+	fmt.Fprintf(b, "\t\t%sCshimCopy(&out, &raw, &a)\n", m.Name)
+	b.WriteString("\t})\n\tif err != nil {\n\t\treturn err\n\t}\n")
 	b.WriteString("\t*m = out\n\treturn nil\n}\n\n")
 	return nil
 }
@@ -1197,7 +1209,9 @@ func writeGoCshim(b *strings.Builder, f *model.File, opt Options) error {
 	}
 	b.WriteString(headerP(f, "//", "Cshim layout over the generated structs: field facts plus offsets for the Erlang-style C codec."))
 	fmt.Fprintf(b, "package %s\n\n", goPackage(f))
-	b.WriteString("import (\n\t\"errors\"\n\t\"pbwire/runtime\"\n\t\"pbwire/runtime/layout\"\n\t\"sync\"\n\t\"unsafe\"\n")
+	// pbwrt aliases the engine package: its name collides with the standard
+	// library's runtime, which the generated Marshal needs for KeepAlive.
+	b.WriteString("import (\n\t\"errors\"\n\tpbwrt \"pbwire/runtime\"\n\t\"pbwire/runtime/layout\"\n\t\"runtime\"\n\t\"sync\"\n\t\"unsafe\"\n")
 	for _, imp := range f.Imports {
 		if path, ok := opt.Mappings[imp.Path]; ok {
 			fmt.Fprintf(b, "\n\t%s %q\n", goImportAlias(path), path)

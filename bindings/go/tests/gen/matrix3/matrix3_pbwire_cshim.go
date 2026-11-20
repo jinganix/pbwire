@@ -6,8 +6,9 @@ package matrix3
 
 import (
 	"errors"
-	"pbwire/runtime"
+	pbwrt "pbwire/runtime"
 	"pbwire/runtime/layout"
+	"runtime"
 	"sync"
 	"unsafe"
 )
@@ -112,15 +113,15 @@ func Scalars3CshimCopy(dst, src *Scalars3, a *layout.Arena) {
 }
 
 // Inner3CshimFixup wraps staged oneof members into typed wrappers.
-func Inner3CshimFixup(raw *Inner3, c *runtime.Codec) {
+func Inner3CshimFixup(raw *Inner3, c *pbwrt.Codec) {
 }
 
 // Scalars3CshimFixup wraps staged oneof members into typed wrappers.
-func Scalars3CshimFixup(raw *Scalars3, c *runtime.Codec) {
+func Scalars3CshimFixup(raw *Scalars3, c *pbwrt.Codec) {
 }
 
-var inner3CshimCodec = sync.OnceValue(func() *runtime.Codec {
-	c, err := runtime.NewCodecFromLayout(CshimRegistry(), "structtest.Inner3")
+var inner3CshimCodec = sync.OnceValue(func() *pbwrt.Codec {
+	c, err := pbwrt.NewCodecFromLayout(CshimRegistry(), "structtest.Inner3")
 	if err != nil {
 		panic(err)
 	}
@@ -131,7 +132,9 @@ func (m *Inner3) Marshal() ([]byte, error) {
 	if m == nil {
 		return []byte{}, nil
 	}
-	return inner3CshimCodec().EncodeRaw(unsafe.Pointer(m))
+	out, err := inner3CshimCodec().EncodeRaw(unsafe.Pointer(m))
+	runtime.KeepAlive(m)
+	return out, err
 }
 
 func (m *Inner3) Unmarshal(wire []byte) error {
@@ -140,21 +143,22 @@ func (m *Inner3) Unmarshal(wire []byte) error {
 	}
 	var raw Inner3
 	c := inner3CshimCodec()
-	n, err := c.DecodeRaw(unsafe.Pointer(&raw), wire)
+	var out Inner3
+	err := c.DecodeInto(unsafe.Pointer(&raw), wire, func(strBytes int) {
+		var a layout.Arena
+		a.Reset(strBytes)
+		Inner3CshimFixup(&raw, c)
+		Inner3CshimCopy(&out, &raw, &a)
+	})
 	if err != nil {
 		return err
 	}
-	var a layout.Arena
-	a.Reset(n)
-	Inner3CshimFixup(&raw, c)
-	var out Inner3
-	Inner3CshimCopy(&out, &raw, &a)
 	*m = out
 	return nil
 }
 
-var scalars3CshimCodec = sync.OnceValue(func() *runtime.Codec {
-	c, err := runtime.NewCodecFromLayout(CshimRegistry(), "structtest.Scalars3")
+var scalars3CshimCodec = sync.OnceValue(func() *pbwrt.Codec {
+	c, err := pbwrt.NewCodecFromLayout(CshimRegistry(), "structtest.Scalars3")
 	if err != nil {
 		panic(err)
 	}
@@ -165,7 +169,9 @@ func (m *Scalars3) Marshal() ([]byte, error) {
 	if m == nil {
 		return []byte{}, nil
 	}
-	return scalars3CshimCodec().EncodeRaw(unsafe.Pointer(m))
+	out, err := scalars3CshimCodec().EncodeRaw(unsafe.Pointer(m))
+	runtime.KeepAlive(m)
+	return out, err
 }
 
 func (m *Scalars3) Unmarshal(wire []byte) error {
@@ -174,15 +180,16 @@ func (m *Scalars3) Unmarshal(wire []byte) error {
 	}
 	var raw Scalars3
 	c := scalars3CshimCodec()
-	n, err := c.DecodeRaw(unsafe.Pointer(&raw), wire)
+	var out Scalars3
+	err := c.DecodeInto(unsafe.Pointer(&raw), wire, func(strBytes int) {
+		var a layout.Arena
+		a.Reset(strBytes)
+		Scalars3CshimFixup(&raw, c)
+		Scalars3CshimCopy(&out, &raw, &a)
+	})
 	if err != nil {
 		return err
 	}
-	var a layout.Arena
-	a.Reset(n)
-	Scalars3CshimFixup(&raw, c)
-	var out Scalars3
-	Scalars3CshimCopy(&out, &raw, &a)
 	*m = out
 	return nil
 }
