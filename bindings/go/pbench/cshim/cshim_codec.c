@@ -142,6 +142,34 @@ rd_ptr(const void *p)
     return v;
 }
 
+/* Interfaces are two words: the itab at +0, the data word at +8. */
+static uintptr_t
+rd_itab(const void *p)
+{
+    uintptr_t v;
+
+    memcpy(&v, p, sizeof(v));
+    return v;
+}
+
+static const void *
+rd_data(const void *p)
+{
+    return rd_ptr((const uint8_t *)p + sizeof(void *));
+}
+
+/* For a set oneof member (itab already matched), the payload address: the
+ * data word's value, i.e. the wrapper address. Scalars, strings and the
+ * message pointer all live at wrapper offset zero. */
+static const void *
+oneof_payload(const uint8_t *base, const cshim_row *r)
+{
+    if (rd_itab(base + r->offset) != r->itab) {
+        return NULL;
+    }
+    return rd_data(base + r->offset);
+}
+
 static intptr_t
 rd_len(const void *p)
 {
@@ -211,6 +239,8 @@ struct cshim_codec {
     cshim_table_mem *tables;
     size_t ntables;
     size_t root;
+    cshim_oneof_stage *ostages;
+    size_t nstages;
 
     uint8_t *out;
     size_t out_len;
@@ -459,6 +489,11 @@ msg_size(cshim_codec *h, const cshim_table_mem *t, const void *base, int depth,
             if (vp == NULL) {
                 continue;
             }
+        } else if (r->itab != 0) {
+            vp = oneof_payload(base, r);
+            if (vp == NULL) {
+                continue;
+            }
         }
 
         if (r->repeated) {
@@ -537,7 +572,7 @@ msg_size(cshim_codec *h, const cshim_table_mem *t, const void *base, int depth,
                 int32_t v;
 
                 memcpy(&v, vp, 4);
-                if (v != 0 || r->required || r->explicit) {
+                if (v != 0 || r->required || r->explicit || r->itab) {
                     sz = varint_size(tag_value(r->fnum, 0)) +
                          varint_size((uint64_t)(int64_t)v);
                 }
@@ -547,7 +582,7 @@ msg_size(cshim_codec *h, const cshim_table_mem *t, const void *base, int depth,
                 int64_t v;
 
                 memcpy(&v, vp, 8);
-                if (v != 0 || r->required || r->explicit) {
+                if (v != 0 || r->required || r->explicit || r->itab) {
                     sz = varint_size(tag_value(r->fnum, 0)) +
                          varint_size((uint64_t)v);
                 }
@@ -557,7 +592,7 @@ msg_size(cshim_codec *h, const cshim_table_mem *t, const void *base, int depth,
                 uint32_t v;
 
                 memcpy(&v, vp, 4);
-                if (v != 0 || r->required || r->explicit) {
+                if (v != 0 || r->required || r->explicit || r->itab) {
                     sz = varint_size(tag_value(r->fnum, 0)) +
                          varint_size((uint64_t)v);
                 }
@@ -567,7 +602,7 @@ msg_size(cshim_codec *h, const cshim_table_mem *t, const void *base, int depth,
                 uint64_t v;
 
                 memcpy(&v, vp, 8);
-                if (v != 0 || r->required || r->explicit) {
+                if (v != 0 || r->required || r->explicit || r->itab) {
                     sz = varint_size(tag_value(r->fnum, 0)) + varint_size(v);
                 }
                 break;
@@ -576,7 +611,7 @@ msg_size(cshim_codec *h, const cshim_table_mem *t, const void *base, int depth,
                 int32_t v;
 
                 memcpy(&v, vp, 4);
-                if (v != 0 || r->required || r->explicit) {
+                if (v != 0 || r->required || r->explicit || r->itab) {
                     sz = varint_size(tag_value(r->fnum, 0)) +
                          varint_size(zigzag32(v));
                 }
@@ -586,7 +621,7 @@ msg_size(cshim_codec *h, const cshim_table_mem *t, const void *base, int depth,
                 int64_t v;
 
                 memcpy(&v, vp, 8);
-                if (v != 0 || r->required || r->explicit) {
+                if (v != 0 || r->required || r->explicit || r->itab) {
                     sz = varint_size(tag_value(r->fnum, 0)) +
                          varint_size(zigzag64(v));
                 }
@@ -596,7 +631,7 @@ msg_size(cshim_codec *h, const cshim_table_mem *t, const void *base, int depth,
                 uint32_t v;
 
                 memcpy(&v, vp, 4);
-                if (v != 0 || r->required || r->explicit) {
+                if (v != 0 || r->required || r->explicit || r->itab) {
                     sz = varint_size(tag_value(r->fnum, 5)) + 4;
                 }
                 break;
@@ -605,7 +640,7 @@ msg_size(cshim_codec *h, const cshim_table_mem *t, const void *base, int depth,
                 uint64_t v;
 
                 memcpy(&v, vp, 8);
-                if (v != 0 || r->required || r->explicit) {
+                if (v != 0 || r->required || r->explicit || r->itab) {
                     sz = varint_size(tag_value(r->fnum, 1)) + 8;
                 }
                 break;
@@ -614,7 +649,7 @@ msg_size(cshim_codec *h, const cshim_table_mem *t, const void *base, int depth,
                 float v;
 
                 memcpy(&v, vp, 4);
-                if (v != 0.0f || r->required || r->explicit) {
+                if (v != 0.0f || r->required || r->explicit || r->itab) {
                     sz = varint_size(tag_value(r->fnum, 5)) + 4;
                 }
                 break;
@@ -623,7 +658,7 @@ msg_size(cshim_codec *h, const cshim_table_mem *t, const void *base, int depth,
                 double v;
 
                 memcpy(&v, vp, 8);
-                if (v != 0.0 || r->required || r->explicit) {
+                if (v != 0.0 || r->required || r->explicit || r->itab) {
                     sz = varint_size(tag_value(r->fnum, 1)) + 8;
                 }
                 break;
@@ -632,14 +667,14 @@ msg_size(cshim_codec *h, const cshim_table_mem *t, const void *base, int depth,
                 uint8_t v;
 
                 memcpy(&v, vp, 1);
-                if (v != 0 || r->required || r->explicit) {
+                if (v != 0 || r->required || r->explicit || r->itab) {
                     sz = varint_size(tag_value(r->fnum, 0)) + 1;
                 }
                 break;
             }
             case CSHIMK_STR:
         case CSHIMK_BYTES: {
-                intptr_t sl = r->explicit ?
+                intptr_t sl = (r->explicit || r->itab != 0) ?
                 rd_len(vp + sizeof(void *)) :
                 rd_len((const uint8_t *)base + r->count);
 
@@ -647,7 +682,7 @@ msg_size(cshim_codec *h, const cshim_table_mem *t, const void *base, int depth,
                     h->err = CSHIM_ERR_PLAN;
                     return -1;
                 }
-                if (sl != 0 || r->required || r->explicit) {
+                if (sl != 0 || r->required || r->explicit || r->itab) {
                     sz = varint_size(tag_value(r->fnum, 2)) +
                          varint_size((size_t)sl) + (size_t)sl;
                 }
@@ -821,6 +856,11 @@ enc_msg(cshim_codec *h, const cshim_table_mem *t, const void *base, int depth)
             if (vp == NULL) {
                 continue;
             }
+        } else if (r->itab != 0) {
+            vp = oneof_payload(base, r);
+            if (vp == NULL) {
+                continue;
+            }
         }
 
         if (r->repeated) {
@@ -920,7 +960,7 @@ enc_msg(cshim_codec *h, const cshim_table_mem *t, const void *base, int depth)
             int32_t v;
 
             memcpy(&v, vp, 4);
-            if ((v != 0 || r->required || r->explicit) &&
+            if ((v != 0 || r->required || r->explicit || r->itab) &&
                 wr_tag_varint(h, r->fnum, (uint64_t)(int64_t)v)) {
                 return -1;
             }
@@ -930,7 +970,7 @@ enc_msg(cshim_codec *h, const cshim_table_mem *t, const void *base, int depth)
             int64_t v;
 
             memcpy(&v, vp, 8);
-            if ((v != 0 || r->required || r->explicit) && wr_tag_varint(h, r->fnum, (uint64_t)v)) {
+            if ((v != 0 || r->required || r->explicit || r->itab) && wr_tag_varint(h, r->fnum, (uint64_t)v)) {
                 return -1;
             }
             break;
@@ -939,7 +979,7 @@ enc_msg(cshim_codec *h, const cshim_table_mem *t, const void *base, int depth)
             uint32_t v;
 
             memcpy(&v, vp, 4);
-            if ((v != 0 || r->required || r->explicit) && wr_tag_varint(h, r->fnum, (uint64_t)v)) {
+            if ((v != 0 || r->required || r->explicit || r->itab) && wr_tag_varint(h, r->fnum, (uint64_t)v)) {
                 return -1;
             }
             break;
@@ -948,7 +988,7 @@ enc_msg(cshim_codec *h, const cshim_table_mem *t, const void *base, int depth)
             uint64_t v;
 
             memcpy(&v, vp, 8);
-            if ((v != 0 || r->required || r->explicit) && wr_tag_varint(h, r->fnum, v)) {
+            if ((v != 0 || r->required || r->explicit || r->itab) && wr_tag_varint(h, r->fnum, v)) {
                 return -1;
             }
             break;
@@ -957,7 +997,7 @@ enc_msg(cshim_codec *h, const cshim_table_mem *t, const void *base, int depth)
             int32_t v;
 
             memcpy(&v, vp, 4);
-            if ((v != 0 || r->required || r->explicit) && wr_tag_varint(h, r->fnum, zigzag32(v))) {
+            if ((v != 0 || r->required || r->explicit || r->itab) && wr_tag_varint(h, r->fnum, zigzag32(v))) {
                 return -1;
             }
             break;
@@ -966,7 +1006,7 @@ enc_msg(cshim_codec *h, const cshim_table_mem *t, const void *base, int depth)
             int64_t v;
 
             memcpy(&v, vp, 8);
-            if ((v != 0 || r->required || r->explicit) && wr_tag_varint(h, r->fnum, zigzag64(v))) {
+            if ((v != 0 || r->required || r->explicit || r->itab) && wr_tag_varint(h, r->fnum, zigzag64(v))) {
                 return -1;
             }
             break;
@@ -975,7 +1015,7 @@ enc_msg(cshim_codec *h, const cshim_table_mem *t, const void *base, int depth)
             uint32_t v;
 
             memcpy(&v, vp, 4);
-            if ((v != 0 || r->required || r->explicit) && wr_tag_fixed(h, r->fnum, 5, (uint64_t)v)) {
+            if ((v != 0 || r->required || r->explicit || r->itab) && wr_tag_fixed(h, r->fnum, 5, (uint64_t)v)) {
                 return -1;
             }
             break;
@@ -984,7 +1024,7 @@ enc_msg(cshim_codec *h, const cshim_table_mem *t, const void *base, int depth)
             uint64_t v;
 
             memcpy(&v, vp, 8);
-            if ((v != 0 || r->required || r->explicit) && wr_tag_fixed(h, r->fnum, 1, v)) {
+            if ((v != 0 || r->required || r->explicit || r->itab) && wr_tag_fixed(h, r->fnum, 1, v)) {
                 return -1;
             }
             break;
@@ -995,7 +1035,7 @@ enc_msg(cshim_codec *h, const cshim_table_mem *t, const void *base, int depth)
 
             memcpy(&v, vp, 4);
             memcpy(&bits, p, 4);
-            if ((v != 0.0f || r->required || r->explicit) && wr_tag_fixed(h, r->fnum, 5, (uint64_t)bits)) {
+            if ((v != 0.0f || r->required || r->explicit || r->itab) && wr_tag_fixed(h, r->fnum, 5, (uint64_t)bits)) {
                 return -1;
             }
             break;
@@ -1006,7 +1046,7 @@ enc_msg(cshim_codec *h, const cshim_table_mem *t, const void *base, int depth)
 
             memcpy(&v, vp, 8);
             memcpy(&bits, p, 8);
-            if ((v != 0.0 || r->required || r->explicit) && wr_tag_fixed(h, r->fnum, 1, bits)) {
+            if ((v != 0.0 || r->required || r->explicit || r->itab) && wr_tag_fixed(h, r->fnum, 1, bits)) {
                 return -1;
             }
             break;
@@ -1015,15 +1055,15 @@ enc_msg(cshim_codec *h, const cshim_table_mem *t, const void *base, int depth)
             uint8_t v;
 
             memcpy(&v, vp, 1);
-            if ((v != 0 || r->required || r->explicit) && wr_tag_varint(h, r->fnum, (uint64_t)v)) {
+            if ((v != 0 || r->required || r->explicit || r->itab) && wr_tag_varint(h, r->fnum, (uint64_t)v)) {
                 return -1;
             }
             break;
         }
         case CSHIMK_STR:
         case CSHIMK_BYTES: {
-            const void *sd = rd_ptr(p);
-            intptr_t sl = r->explicit ?
+            const void *sd = rd_ptr(vp);
+            intptr_t sl = (r->explicit || r->itab != 0) ?
                 rd_len(vp + sizeof(void *)) :
                 rd_len((const uint8_t *)base + r->count);
 
@@ -1031,7 +1071,7 @@ enc_msg(cshim_codec *h, const cshim_table_mem *t, const void *base, int depth)
                 h->err = CSHIM_ERR_PLAN;
                 return -1;
             }
-            if ((sl != 0 || r->required || r->explicit) && wr_tag_bytes(h, r->fnum, sd, (size_t)sl)) {
+            if ((sl != 0 || r->required || r->explicit || r->itab) && wr_tag_bytes(h, r->fnum, sd, (size_t)sl)) {
                 return -1;
             }
             break;
@@ -1179,6 +1219,137 @@ skip_group(cshim_codec *h, const uint8_t *buf, size_t len, size_t *pos,
     return -1;
 }
 
+/* One set oneof member: stage (member, payload) for the Go fixup, which
+ * owns all wrapper allocation. Last occurrence wins; split message
+ * occurrences do not merge (documented follow-up). */
+static int
+dec_oneof_stage(cshim_codec *h, const cshim_row *r, const uint8_t *buf, size_t len,
+                size_t *pos, int depth)
+{
+    cshim_oneof_stage *st;
+    uint64_t v;
+
+    if (r->ogrp >= h->nstages) {
+        h->err = CSHIM_ERR_PLAN;
+        return -1;
+    }
+    st = &h->ostages[r->ogrp];
+    st->fnum = r->fnum;
+    st->kind = r->kind;
+    st->scalar = 0;
+    st->ptr = NULL;
+    st->len = 0;
+    switch (r->kind) {
+    case CSHIMK_I32:
+        if (get_varint(buf, len, pos, &v)) {
+            break;
+        }
+        st->scalar = (uint64_t)(int64_t)(int32_t)(uint32_t)v;
+        return 0;
+    case CSHIMK_I64:
+    case CSHIMK_U64:
+        if (get_varint(buf, len, pos, &v)) {
+            break;
+        }
+        st->scalar = v;
+        return 0;
+    case CSHIMK_U32:
+        if (get_varint(buf, len, pos, &v)) {
+            break;
+        }
+        st->scalar = (uint64_t)(uint32_t)v;
+        return 0;
+    case CSHIMK_S32:
+        if (get_varint(buf, len, pos, &v)) {
+            break;
+        }
+        st->scalar = (uint64_t)(int64_t)(int32_t)unzigzag32(v);
+        return 0;
+    case CSHIMK_S64:
+        if (get_varint(buf, len, pos, &v)) {
+            break;
+        }
+        st->scalar = (uint64_t)unzigzag64(v);
+        return 0;
+    case CSHIMK_FIX32:
+    case CSHIMK_FLOAT:
+        if (len - *pos < 4) {
+            break;
+        }
+        st->scalar = rd_u32(buf + *pos);
+        *pos += 4;
+        return 0;
+    case CSHIMK_FIX64:
+    case CSHIMK_DOUBLE:
+        if (len - *pos < 8) {
+            break;
+        }
+        st->scalar = rd_u64(buf + *pos);
+        *pos += 8;
+        return 0;
+    case CSHIMK_BOOL:
+        if (get_varint(buf, len, pos, &v)) {
+            break;
+        }
+        st->scalar = v != 0 ? 1 : 0;
+        return 0;
+    case CSHIMK_STR:
+    case CSHIMK_BYTES: {
+        uint64_t sl;
+
+        if (get_varint(buf, len, pos, &sl) || sl > (uint64_t)(len - *pos)) {
+            break;
+        }
+        h->str_bytes += (size_t)sl;
+        st->ptr = buf + *pos;
+        st->len = (size_t)sl;
+        *pos += (size_t)sl;
+        return 0;
+    }
+    case CSHIMK_MSG: {
+        uint64_t sl;
+        void *sub;
+
+        if (r->group) {
+            sub = arena_alloc(h, h->tables[r->sub].msg_size);
+            if (sub == NULL) {
+                h->fail_off = *pos;
+                return -1;
+            }
+            memset(sub, 0, h->tables[r->sub].msg_size);
+            if (dec_group_body(h, (size_t)r->sub, sub, buf, len, pos,
+                               r->fnum, depth)) {
+                return -1;
+            }
+            st->ptr = sub;
+            return 0;
+        }
+        if (get_varint(buf, len, pos, &sl) || sl > (uint64_t)(len - *pos)) {
+            break;
+        }
+        sub = arena_alloc(h, h->tables[r->sub].msg_size);
+        if (sub == NULL) {
+            h->fail_off = *pos;
+            return -1;
+        }
+        memset(sub, 0, h->tables[r->sub].msg_size);
+        if (dec_msg(h, &h->tables[r->sub], sub, buf + *pos, (size_t)sl,
+                    depth + 1)) {
+            h->fail_off = *pos;
+            return -1;
+        }
+        st->ptr = sub;
+        *pos += (size_t)sl;
+        return 0;
+    }
+    default:
+        break;
+    }
+    h->err = CSHIM_ERR_WIRE;
+    h->fail_off = *pos;
+    return -1;
+}
+
 /* One repeated numeric element, already known to match the row kind. */
 static int
 collect_one(cshim_codec *h, const cshim_row *r, cshim_acc *a, const uint8_t *buf,
@@ -1258,6 +1429,13 @@ dec_body(cshim_codec *h, const cshim_table_mem *t, void *base, const uint8_t *bu
                     return -1;
                 }
             } else if (skip_scalar(h, buf, len, &pos, wt)) {
+                h->fail_off = pos;
+                return -1;
+            }
+            continue;
+        }
+        if (r->itab != 0) {
+            if (dec_oneof_stage(h, r, buf, len, &pos, depth)) {
                 h->fail_off = pos;
                 return -1;
             }
@@ -1653,6 +1831,7 @@ free_codec(cshim_codec *h)
         free(h->tables[i].resolve);
         free(h->tables[i].rows);
     }
+    free(h->ostages);
     for (b = h->blocks; b != NULL; b = next) {
         next = b->next;
         free(b);
@@ -1718,6 +1897,39 @@ check_table(const cshim_row *rows, size_t n, size_t struct_size, int is_sub)
             return -1;
         }
         if ((r->wire == 3) != (r->group != 0)) {
+            return -1;
+        }
+        if (r->itab != 0) {
+            int w;
+
+            if (r->repeated || r->explicit || r->required || r->has != 0 ||
+                r->count != 0) {
+                return -1;
+            }
+            if ((uint64_t)r->offset + 2 * ptr > struct_size) {
+                return -1;
+            }
+            /* Oneof members live in one interface word; the payload
+             * shape rides the kind, so check elem here and skip the
+             * flat-scalar shape section below (its count != 0 rule
+             * is for plain strings, not interface members). */
+            if (r->kind == CSHIMK_STR || r->kind == CSHIMK_BYTES) {
+                if (r->elem != 2 * ptr) {
+                    return -1;
+                }
+            } else if (r->kind == CSHIMK_MSG) {
+                if (r->sub < 0) {
+                    return -1;
+                }
+            } else {
+                w = width_of(r->kind);
+                if (w == 0 || r->elem != (uint32_t)w) {
+                    return -1;
+                }
+            }
+            continue;
+        }
+        if (r->ogrp != 0) {
             return -1;
         }
         if (r->required && (r->repeated || r->explicit)) {
@@ -1867,6 +2079,24 @@ cshim_codec_new(cshim_codec **out, const cshim_table *tables, size_t ntables,
     if (h == NULL) {
         return CSHIM_ERR_NOMEM;
     }
+    for (i = 0; i < ntables; i++) {
+        size_t k;
+
+        for (k = 0; k < tables[i].nrows; k++) {
+            if (tables[i].rows[k].itab != 0 &&
+                tables[i].rows[k].ogrp >= h->nstages) {
+                h->nstages = (size_t)tables[i].rows[k].ogrp + 1;
+            }
+        }
+    }
+    if (h->nstages != 0) {
+        h->ostages =
+            (cshim_oneof_stage *)calloc(h->nstages, sizeof(*h->ostages));
+        if (h->ostages == NULL) {
+            free_codec(h);
+            return CSHIM_ERR_NOMEM;
+        }
+    }
     h->tables = (cshim_table_mem *)calloc(ntables, sizeof(*h->tables));
     if (h->tables == NULL) {
         free_codec(h);
@@ -1960,6 +2190,9 @@ cshim_decode(cshim_codec *h, uintptr_t base, const uint8_t *wire, size_t wire_le
             h->tables[i].accs[j].len = 0;
         }
     }
+    for (i = 0; i < h->nstages; i++) {
+        h->ostages[i].fnum = 0;
+    }
     if (dec_msg(h, &h->tables[h->root], (void *)base,
                 wire, wire_len, 0)) {
         res.status = h->err;
@@ -1989,4 +2222,23 @@ cshim_decode(cshim_codec *h, uintptr_t base, const uint8_t *wire, size_t wire_le
     res.status = CSHIM_OK;
     res.str_bytes = h->str_bytes;
     return res;
+}
+
+int
+cshim_stage(const cshim_codec *h, size_t idx, uint32_t *fnum, uint32_t *kind,
+            uint64_t *scalar, uintptr_t *ptr, size_t *len)
+{
+    const cshim_oneof_stage *st;
+
+    if (h == NULL || fnum == NULL || kind == NULL || scalar == NULL ||
+        ptr == NULL || len == NULL || idx >= h->nstages) {
+        return -1;
+    }
+    st = &h->ostages[idx];
+    *fnum = st->fnum;
+    *kind = st->kind;
+    *scalar = st->scalar;
+    *ptr = (uintptr_t)st->ptr;
+    *len = st->len;
+    return 0;
 }
