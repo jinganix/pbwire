@@ -385,19 +385,22 @@ func (c *Codec) DecodeInto(base unsafe.Pointer, wire []byte, materialize func(st
 	}
 	res := C.cshim_decode(c.h, C.uintptr_t(uintptr(base)), wp,
 		C.size_t(len(wire)))
-	// Keep the destination frame alive through the call: its address crossed
-	// as an integer and C writes into it.
-	runtime.KeepAlive(base)
-	runtime.KeepAlive(wire)
 	if int(res.status) != stOK {
 		return statusError("decode", res.status, res.fail_off)
 	}
 	materialize(int(res.str_bytes))
+	// After the call the raw struct holds string headers that point into wire,
+	// and materialize reads them, so both must live past it: base's address
+	// crossed as an integer and C writes into it, and wire owns the payload.
+	runtime.KeepAlive(base)
+	runtime.KeepAlive(wire)
 	return nil
 }
 
 // DecodeRaw runs one decode into raw struct memory and reports the total
-// string payload size for the caller's fixup. No fixup runs here.
+// string payload size for the caller's fixup. No fixup runs here, so the
+// caller must keep wire and base alive through its own fixup: the raw string
+// headers point into wire.
 func (c *Codec) DecodeRaw(base unsafe.Pointer, wire []byte) (int, error) {
 	if c == nil || c.h == nil {
 		return 0, errors.New("runtime: closed codec")
