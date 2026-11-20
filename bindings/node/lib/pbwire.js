@@ -129,6 +129,16 @@ class MessageType {
     }
     // The addon builds the tree, encodes it into the type's scratch buffer and
     // frees the tree; only the bytes cross back.
+    return this.encodeObject(value);
+  }
+
+  /** Encode a plain object (or a generated class instance's plain shape) in
+   * one addon downcall: the addon walks the schema's fields in C and fills a
+   * tree it frees again, so no per-field set() crosses the boundary. */
+  encodeObject(value) {
+    if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+      throw new TypeError('pbwire: encodeObject expects an object');
+    }
     return this._copy(addon.encodeObject(this._handle, value));
   }
 
@@ -179,6 +189,12 @@ class MessageType {
       throw new TypeError('pbwire: decodeObject expects a Buffer');
     }
     return addon.decodeObject(this._handle, bytes, opts);
+  }
+
+  /** `decodeObject` under the native-object-in/native-object-out name the
+   * pbench arms use. */
+  decodeToObject(bytes, opts) {
+    return this.decodeObject(bytes, opts);
   }
 
   /** Decode wire bytes into a Message; throws on malformed input. A

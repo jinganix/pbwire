@@ -41,5 +41,38 @@ beside `pbwire-node-shim` (the native-object row).
 
 ## Run table
 
-Provisional numbers land here from Stage 3; the recorded Stage 5 rows live in
-`BENCHMARKS.md`.
+Provisional (Stage 3, `node pbench/compare.js`, median of five interleaved
+rounds, 2026-11-21 under load average ~33): `tree` is the whole user task
+(build the handle with one `set()` per field, then encode; decode, then read
+every field back), `shim` is one `encodeObject` / `decodeToObject` call. The
+prebuilt-handle row `make node-bench` publishes as `pbwire-node-tree` is a
+different op and is not in this table.
+
+| tier | arm | encode ns/op | encode MB/s | decode ns/op | decode MB/s |
+|---|---|---|---|---|---|
+| 136 B | `pbwire-node-tree` | 3566.5 | 38.1 | 3551.3 | 38.3 |
+| 136 B | `pbwire-node-shim` | 3048.5 | 44.6 | 2241.6 | 60.7 |
+| 136 B | `google-protobuf` | 2398.3 | 56.7 | 1183.5 | 114.9 |
+| 136 B | `protobufjs` | 564.6 | 240.9 | 355.2 | 382.9 |
+| 174 B | `pbwire-node-tree` | 4349.8 | 40.0 | 4907.6 | 35.5 |
+| 174 B | `pbwire-node-shim` | 3727.4 | 46.7 | 3632.3 | 47.9 |
+| 174 B | `google-protobuf` | 3001.4 | 58.0 | 1641.1 | 106.0 |
+| 174 B | `protobufjs` | 671.3 | 259.2 | 456.4 | 381.3 |
+| 2469 B | `pbwire-node-tree` | 55984.8 | 44.1 | 55996.4 | 44.1 |
+| 2469 B | `pbwire-node-shim` | 54599.0 | 45.2 | 50813.3 | 48.6 |
+| 2469 B | `google-protobuf` | 45947.6 | 53.7 | 31715.9 | 77.8 |
+| 2469 B | `protobufjs` | 6567.9 | 375.9 | 6129.9 | 402.8 |
+| 74913 B | `pbwire-node-tree` | 1583318.7 | 47.3 | 1534439.4 | 48.8 |
+| 74913 B | `pbwire-node-shim` | 1571778.1 | 47.7 | 1426569.4 | 52.5 |
+| 74913 B | `google-protobuf` | 1382696.4 | 54.2 | 922986.7 | 81.2 |
+| 74913 B | `protobufjs` | 175388.5 | 427.1 | 176945.4 | 423.4 |
+
+The reading: building a `Message` through `set()` and reading one back through
+`get()` is ~15x the codec's own cost at the small tiers and ~30x at 74 KB
+(1583 µs against the prebuilt handle's ~50 µs), so the boundary, not the codec,
+is what the native-object task pays. One downcall removes the JS side of it
+(3.0 against 3.6 µs at 136 B, 1.42 against 1.53 ms at 74 KB, so the shim beats
+the per-field assembly at every tier), but the addon still pays one N-API
+property read or write per field (~60-70 ns) where jspb and protobufjs pay a
+few ns in their own heap. That is why every tree and shim cell sits below both
+baselines while the prebuilt handle row still beats them.

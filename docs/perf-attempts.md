@@ -1019,3 +1019,32 @@ chased. No A/B was run: there is no single in-scope change to put on the
 probe (`benchmarks/ab.sh` times `GenericCodec` and the protobuf-java
 oracle, and the runtime change that would move this is the rejected
 per-message codegen).
+
+## Provisional: the Node two-arm pbench (2026-11-21, issue 41)
+
+First run of the Node `pbench` rows, before plan 04's Stage 5 recorder pass:
+`node bindings/node/pbench/compare.js`, interleaved rounds over `a-tree`
+(the whole task: one `set()` per field then encode; decode then one `get()` per
+field), `b-shim` (`type.encodeObject(obj)` / `type.decodeToObject(wire)`, one
+N-API downcall) and the two baselines, median of five, all four tiers.
+xlarge = 74913 B, MB/s:
+
+| arm | enc | dec |
+|---|---|---|
+| `pbwire-node-tree` | 47.3 | 48.8 |
+| `pbwire-node-shim` | 47.7 | 52.5 |
+| google-protobuf (jspb) | 54.2 | 81.2 |
+| protobufjs | 427.1 | 423.4 |
+
+The same order holds at 136 B (shim 44.6/60.7, jspb 56.7/114.9, protobufjs
+240.9/382.9) and at 174 B and 2469 B. Host load average was ~33 during this run
+(other checkouts building), so the absolute numbers are low and only the
+ordering is worth reading; Stage 5 re-ran the formal rows on the recorder
+(`results/bench-node-*.json`) and the shim row lost the same cells there.
+
+Reading: one downcall beats the per-field `set()` assembly by 1.05x-1.17x, so
+the shim replaces the JS-side loop -- but it does not reach either baseline.
+The addon's object walk costs one N-API property read (encode) or write
+(decode) per field, ~60-70 ns, against ~5 ns for protobufjs or jspb writing
+into its own heap. The prebuilt `Message` handle stays the fastest path for
+data that is already in pbwire (74 KB encode ~50 µs, decode ~60 µs).

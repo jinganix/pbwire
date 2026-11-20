@@ -814,11 +814,25 @@ message_to_js(napi_env env, const pbw_message *msg)
 
 /* ------------------------------------------------------------ JS -> pbw */
 
-static int js_to_message(napi_env env, pbw_message *msg, desc_table *table,
-                         napi_value object);
+/* One error shape for a bad field value: the field name comes first, so a
+ * caller can tell which of a message's fields was refused. */
+static void
+fail_field(napi_env env, const char *field, const char *what)
+{
+    char message[256];
 
+    snprintf(message, sizeof(message), "pbwire: %s: %s", field, what);
+    napi_throw_type_error(env, NULL, message);
+}
+
+static int js_to_message(napi_env env, pbw_message *msg, desc_table *table,
+                         napi_value object, uint32_t *seen);
+
+/* A 64-bit field's value: BigInt or a decimal string, both exact. Anything
+ * else (a fractional number, an out-of-range or non-decimal string, a
+ * negative value for an unsigned field) is refused, never truncated. */
 static int
-js_uint64(napi_env env, napi_value value, uint64_t *out)
+js_int64(napi_env env, napi_value value, int is_unsigned, uint64_t *out)
 {
     napi_valuetype kind;
 
@@ -826,30 +840,87 @@ js_uint64(napi_env env, napi_value value, uint64_t *out)
         return 0;
     }
     if (kind == napi_bigint) {
-        int64_t bits = 0;
         bool lossless = true;
 
-        if (napi_get_value_bigint_int64(env, value, &bits, &lossless) !=
-            napi_ok) {
-            return 0;
+        if (is_unsigned) {
+            if (napi_get_value_bigint_uint64(env, value, out, &lossless) !=
+                    napi_ok || !lossless) {
+                return 0;
+            }
+        } else {
+            int64_t bits = 0;
+
+            if (napi_get_value_bigint_int64(env, value, &bits, &lossless) !=
+                    napi_ok || !lossless) {
+                return 0;
+            }
+            *out = (uint64_t)bits; /* two's complement: the raw bit pattern */
         }
-        *out = (uint64_t)bits; /* two's complement: the raw bit pattern */
         return 1;
     }
     if (kind == napi_number) {
         double number;
 
-        if (napi_get_value_double(env, value, &number) != napi_ok) {
+        /* A JS number is exact only through +-2^53; outside it (or when it is
+         * not an integer) converting would silently change the value. */
+        if (napi_get_value_double(env, value, &number) != napi_ok ||
+            !(number >= -9007199254740992.0 && number <= 9007199254740992.0) ||
+            (double)(int64_t)number != number) {
+            return 0;
+        }
+        if (is_unsigned && number < 0) {
             return 0;
         }
         *out = (uint64_t)(int64_t)number;
         return 1;
     }
+    if (kind == napi_string) {
+        string_buf buf;
+        const char *text = string_bytes(env, value, &buf);
+        uint64_t limit;
+        uint64_t mag = 0;
+        size_t i = 0;
+        int neg = 0;
+        int ok = 1;
+
+        if (text == NULL) {
+            return 0;
+        }
+        if (i < buf.len && text[i] == '-') {
+            neg = 1;
+            i++;
+        }
+        if (neg && is_unsigned) {
+            ok = 0;
+        }
+        if (i == buf.len) {
+            ok = 0; /* "" and "-" are not numbers */
+        }
+        limit = is_unsigned
+                    ? UINT64_MAX
+                    : (neg ? 9223372036854775808ull : 9223372036854775807ull);
+        for (; ok && i < buf.len; i++) {
+            unsigned digit = (unsigned)(text[i] - '0');
+
+            if (text[i] < '0' || text[i] > '9' ||
+                mag > (limit - digit) / 10) {
+                ok = 0;
+                break;
+            }
+            mag = mag * 10 + digit;
+        }
+        if (ok) {
+            *out = neg ? (uint64_t)0 - mag : mag;
+        }
+        string_free(&buf, text);
+        return ok;
+    }
     return 0;
 }
 
 static pbw_value *
-value_from_js(napi_env env, pbw_type type, napi_value value)
+value_from_js(napi_env env, pbw_type type, napi_value value,
+              const char *field)
 {
     pbw_value *out = NULL;
     bool flag = false;
@@ -922,17 +993,19 @@ value_from_js(napi_env env, pbw_type type, napi_value value)
         }
         break;
     }
-    default: { /* 64-bit integers */
+    default: { /* 64-bit integers: BigInt or decimal string, exact */
         uint64_t bits;
+        int is_unsigned =
+            (type == PBW_TYPE_UINT64 || type == PBW_TYPE_FIXED64);
 
-        if (js_uint64(env, value, &bits)) {
+        if (js_int64(env, value, is_unsigned, &bits)) {
             out = pbw_value_new_uint(bits);
         }
         break;
     }
     }
     if (out == NULL) {
-        fail_argument(env, "value does not match the field type");
+        fail_field(env, field, "value does not match the field type");
     }
     return out;
 }
@@ -955,10 +1028,11 @@ set_element(napi_env env, pbw_message *msg, desc_table *table,
             fail_argument(env, "cannot set the nested message field");
             return 0;
         }
-        return js_to_message(env, child, table_sub(table, entry), value);
+        return js_to_message(env, child, table_sub(table, entry), value, NULL);
     }
     {
-        pbw_value *item = value_from_js(env, (pbw_type)entry->type, value);
+        pbw_value *item =
+            value_from_js(env, (pbw_type)entry->type, value, entry->name);
         pbw_status status;
 
         if (item == NULL) {
@@ -994,7 +1068,7 @@ set_field(napi_env env, pbw_message *msg, desc_table *table,
         return set_element(env, msg, table, entry, value);
     }
     if (napi_is_array(env, value, &is_array) != napi_ok || !is_array) {
-        fail_argument(env, "a repeated field takes an array");
+        fail_field(env, entry->name, "a repeated field takes an array");
         return 0;
     }
     if (napi_get_array_length(env, value, &count) != napi_ok) {
@@ -1015,21 +1089,95 @@ set_field(napi_env env, pbw_message *msg, desc_table *table,
     return 1;
 }
 
+/* Rejects a property the schema does not have. Only called when the count of
+ * object properties and the count of fields that landed differ, so the walk
+ * above stays one napi_get_named_property per schema field and never pays for
+ * enumerating an object it understood completely. */
 static int
-js_to_message(napi_env env, pbw_message *msg, desc_table *table,
-              napi_value object)
+js_reject_unknown(napi_env env, napi_value object, desc_table *table)
 {
-    napi_valuetype kind;
     napi_value names;
     uint32_t count = 0;
     uint32_t i;
 
+    if (napi_get_all_property_names(
+            env, object, napi_key_own_only,
+            (napi_key_filter)(napi_key_enumerable | napi_key_skip_symbols),
+            napi_key_numbers_to_strings, &names) != napi_ok ||
+        napi_get_array_length(env, names, &count) != napi_ok) {
+        return 0;
+    }
+    for (i = 0; i < count; i++) {
+        string_buf buf;
+        napi_value key;
+        const char *name;
+
+        if (napi_get_element(env, names, i, &key) != napi_ok) {
+            return 0;
+        }
+        name = string_bytes(env, key, &buf);
+        if (name == NULL) {
+            return 0;
+        }
+        if (table_by_name(table, name) == NOT_FOUND) {
+            char message[512];
+
+            snprintf(message, sizeof(message), "pbwire: %s has no field %s",
+                     pbw_descriptor_name(table->desc), name);
+            napi_throw_error(env, NULL, message);
+            string_free(&buf, name);
+            return 0;
+        }
+        string_free(&buf, name);
+    }
+    return 1;
+}
+
+/* Walks the schema's field table in order, one napi_get_named_property per
+ * field: the addon reads the host's object directly, with no JS round trip and
+ * no name hashing on the common path. An `undefined` property is absent (so a
+ * proto3 optional field is set only when its property is present); nested
+ * messages and repeated elements recurse here, inside C. `*seen`, when given,
+ * counts the properties that landed, so the caller can compare it with the
+ * object's own property count. */
+static int
+js_to_message(napi_env env, pbw_message *msg, desc_table *table,
+              napi_value object, uint32_t *seen)
+{
+    napi_valuetype kind;
+    bool is_array = false;
+    napi_value names;
+    uint32_t count = 0;
+    uint32_t i;
+    uint32_t found = 0;
+
     if (napi_typeof(env, object, &kind) != napi_ok) {
         return 0;
     }
-    if (kind != napi_object) {
+    if (napi_is_array(env, object, &is_array) != napi_ok ||
+        kind != napi_object || is_array) {
         fail_argument(env, "a nested message takes an object");
         return 0;
+    }
+    for (i = 0; i < table->nfields; i++) {
+        field_entry *entry = &table->fields[i];
+        napi_value value;
+        napi_valuetype vkind;
+
+        if (napi_get_named_property(env, object, entry->name, &value) !=
+            napi_ok) {
+            return 0; /* pending exception from a getter */
+        }
+        if (napi_typeof(env, value, &vkind) != napi_ok) {
+            return 0;
+        }
+        if (vkind == napi_undefined) {
+            continue;
+        }
+        if (!set_field(env, msg, table, entry, value)) {
+            return 0;
+        }
+        found++;
     }
     if (napi_get_all_property_names(
             env, object, napi_key_own_only,
@@ -1040,37 +1188,11 @@ js_to_message(napi_env env, pbw_message *msg, desc_table *table,
     if (napi_get_array_length(env, names, &count) != napi_ok) {
         return 0;
     }
-    for (i = 0; i < count; i++) {
-        string_buf buf;
-        napi_value key;
-        napi_value value;
-        const char *name;
-        uint32_t index;
-        int ok;
-
-        if (napi_get_element(env, names, i, &key) != napi_ok) {
-            return 0;
-        }
-        name = string_bytes(env, key, &buf);
-        if (name == NULL) {
-            return 0;
-        }
-        index = table_by_name(table, name);
-        if (index == NOT_FOUND) {
-            char message[512];
-
-            snprintf(message, sizeof(message), "pbwire: %s has no field %s",
-                     pbw_descriptor_name(table->desc), name);
-            napi_throw_error(env, NULL, message);
-            string_free(&buf, name);
-            return 0;
-        }
-        ok = napi_get_property(env, object, key, &value) == napi_ok &&
-             set_field(env, msg, table, &table->fields[index], value);
-        string_free(&buf, name);
-        if (!ok) {
-            return 0;
-        }
+    if (count != found && !js_reject_unknown(env, object, table)) {
+        return 0;
+    }
+    if (seen != NULL) {
+        *seen = found;
     }
     return 1;
 }
@@ -2689,7 +2811,7 @@ encode_object(napi_env env, napi_callback_info info)
     if (msg == NULL) {
         return fail_memory(env);
     }
-    ok = js_to_message(env, msg, desc->table, argv[1]);
+    ok = js_to_message(env, msg, desc->table, argv[1], NULL);
     if (ok) {
         status = pbw_encode_ctx(desc->enc, msg, &desc->enc_data, &desc->enc_len);
         if (status != PBW_OK) {
@@ -3682,7 +3804,7 @@ millis_from_js(napi_env env, napi_value value, int64_t *out)
 {
     uint64_t bits;
 
-    if (!js_uint64(env, value, &bits)) {
+    if (!js_int64(env, value, 0, &bits)) {
         fail_argument(env, "millis must be a BigInt or a number");
         return 0;
     }

@@ -92,6 +92,53 @@ test('builds, encodes and decodes every field kind', () => {
   message.free();
 });
 
+test('encodeObject takes a plain object in one call', () => {
+  const wire = person.encodeObject(VALUES);
+  assert.ok(wire.equals(person.encode(VALUES)), 'same bytes as encode(object)');
+  assert.ok(Buffer.isBuffer(wire));
+  const fresh = person.newMessage();
+  const viaSet = fresh.set('name', 'alice').set('id', 7).encode();
+  assert.ok(viaSet.equals(person.encode({ name: 'alice', id: 7 })));
+  fresh.free();
+  // Absent means absent: an undefined property leaves the field unwritten.
+  assert.ok(person.encodeObject({ name: 'alice', id: undefined })
+    .equals(person.encode({ name: 'alice' })), 'undefined stays absent');
+  // Explicit presence: the zero of an optional field is written only when set.
+  const optional = one.encodeObject({ maybe: 0, text: 'x' });
+  assert.strictEqual(one.decodeObject(optional).maybe, 0);
+  assert.deepStrictEqual(person.decodeToObject(wire), person.decodeObject(wire));
+  // The addon walks nested and repeated messages in C: bad shapes are loud.
+  assert.throws(() => person.encodeObject({ inner: { nope: 1 } }),
+    /has no field nope/);
+  assert.throws(() => person.encodeObject({ inner: [1, 2] }),
+    /nested message takes an object/);
+  assert.throws(() => person.encodeObject({ nope: 1 }), /has no field nope/);
+  assert.throws(() => person.encodeObject([1]), /expects an object/);
+});
+
+test('64-bit fields take a BigInt or a decimal string, exactly', () => {
+  const max = 9223372036854775807n;
+  assert.ok(person.encodeObject({ big: '9223372036854775807' })
+    .equals(person.encodeObject({ big: max })), 'decimal string == BigInt');
+  assert.ok(person.encodeObject({ big: '-9223372036854775808' })
+    .equals(person.encodeObject({ big: -9223372036854775808n })));
+  // A number is accepted while it is an exact safe integer.
+  assert.ok(person.encodeObject({ big: 42 })
+    .equals(person.encodeObject({ big: 42n })));
+  assert.throws(() => person.encodeObject({ big: '9223372036854775808' }),
+    /big: value does not match the field type/, 'int64 overflow refused');
+  assert.throws(() => person.encodeObject({ big: '-9223372036854775809' }),
+    /big: value does not match the field type/);
+  assert.throws(() => person.encodeObject({ big: '0x10' }),
+    /big: value does not match the field type/, 'not decimal');
+  assert.throws(() => person.encodeObject({ big: 1.5 }),
+    /big: value does not match the field type/, 'fraction refused');
+  assert.throws(() => person.encodeObject({ big: 2n ** 64n }),
+    /big: value does not match the field type/);
+  assert.throws(() => person.encodeObject({ name: 5 }),
+    /name: value does not match the field type/);
+});
+
 test('a decoded message re-encodes to the same bytes', () => {
   const wire = person.encode(VALUES);
   const message = person.decode(wire);
