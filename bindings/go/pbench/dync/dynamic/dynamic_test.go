@@ -20,7 +20,7 @@ func TestMain(m *testing.M) {
 	}
 	defer os.RemoveAll(tmp)
 	out := filepath.Join(tmp, "matrix3.desc")
-	cmd := exec.Command("protoc", "-I../../c/tests/data",
+	cmd := exec.Command("protoc", "-I../../../../c/tests/data",
 		"--descriptor_set_out="+out, "--include_imports", "matrix3.proto")
 	if out2, err := cmd.CombinedOutput(); err != nil {
 		panic("protoc: " + err.Error() + ": " + string(out2))

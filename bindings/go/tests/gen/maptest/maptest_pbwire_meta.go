@@ -5,16 +5,16 @@
 package maptest
 
 import (
-	"pbwire/codec"
+	"pbwire/pbench/dyngo/codec"
 )
 
 // MapValueMeta is the generated DATA table for spectest.MapValue: one row per field.
 var MapValueMeta = codec.NewTable("spectest.MapValue", []*codec.Field{
-	{Num: 1, Wire: codec.WireLen, Kind: codec.KindString,
+	{Name: "name", Num: 1, Wire: codec.WireLen, Kind: codec.KindString,
 		GetStr: func(msg any) string { return msg.(*MapValue).Name },
 		SetStr: func(msg any, v string) { msg.(*MapValue).Name = v },
 	},
-	{Num: 2, Wire: codec.WireVarint, Kind: codec.KindInt32,
+	{Name: "value", Num: 2, Wire: codec.WireVarint, Kind: codec.KindInt32,
 		GetI32: func(msg any) int32 { return msg.(*MapValue).Value },
 		SetI32: func(msg any, v int32) { msg.(*MapValue).Value = v },
 	},
@@ -22,11 +22,11 @@ var MapValueMeta = codec.NewTable("spectest.MapValue", []*codec.Field{
 
 // MapTest_ByIntEntryMeta is the generated DATA table for spectest.MapTest.ByIntEntry: one row per field.
 var MapTest_ByIntEntryMeta = codec.NewTable("spectest.MapTest.ByIntEntry", []*codec.Field{
-	{Num: 1, Wire: codec.WireVarint, Kind: codec.KindInt32,
+	{Name: "key", Num: 1, Wire: codec.WireVarint, Kind: codec.KindInt32,
 		GetI32: func(msg any) int32 { return msg.(*MapTest_ByIntEntry).Key },
 		SetI32: func(msg any, v int32) { msg.(*MapTest_ByIntEntry).Key = v },
 	},
-	{Num: 2, Wire: codec.WireLen, Kind: codec.KindString,
+	{Name: "value", Num: 2, Wire: codec.WireLen, Kind: codec.KindString,
 		GetStr: func(msg any) string { return msg.(*MapTest_ByIntEntry).Value },
 		SetStr: func(msg any, v string) { msg.(*MapTest_ByIntEntry).Value = v },
 	},
@@ -34,11 +34,11 @@ var MapTest_ByIntEntryMeta = codec.NewTable("spectest.MapTest.ByIntEntry", []*co
 
 // MapTest_ByStrEntryMeta is the generated DATA table for spectest.MapTest.ByStrEntry: one row per field.
 var MapTest_ByStrEntryMeta = codec.NewTable("spectest.MapTest.ByStrEntry", []*codec.Field{
-	{Num: 1, Wire: codec.WireLen, Kind: codec.KindString,
+	{Name: "key", Num: 1, Wire: codec.WireLen, Kind: codec.KindString,
 		GetStr: func(msg any) string { return msg.(*MapTest_ByStrEntry).Key },
 		SetStr: func(msg any, v string) { msg.(*MapTest_ByStrEntry).Key = v },
 	},
-	{Num: 2, Wire: codec.WireVarint, Kind: codec.KindInt32,
+	{Name: "value", Num: 2, Wire: codec.WireVarint, Kind: codec.KindInt32,
 		GetI32: func(msg any) int32 { return msg.(*MapTest_ByStrEntry).Value },
 		SetI32: func(msg any, v int32) { msg.(*MapTest_ByStrEntry).Value = v },
 	},
@@ -46,11 +46,11 @@ var MapTest_ByStrEntryMeta = codec.NewTable("spectest.MapTest.ByStrEntry", []*co
 
 // MapTest_ByMsgEntryMeta is the generated DATA table for spectest.MapTest.ByMsgEntry: one row per field.
 var MapTest_ByMsgEntryMeta = codec.NewTable("spectest.MapTest.ByMsgEntry", []*codec.Field{
-	{Num: 1, Wire: codec.WireLen, Kind: codec.KindString,
+	{Name: "key", Num: 1, Wire: codec.WireLen, Kind: codec.KindString,
 		GetStr: func(msg any) string { return msg.(*MapTest_ByMsgEntry).Key },
 		SetStr: func(msg any, v string) { msg.(*MapTest_ByMsgEntry).Key = v },
 	},
-	{Num: 2, Wire: codec.WireLen, Kind: codec.KindMessage,
+	{Name: "value", Num: 2, Wire: codec.WireLen, Kind: codec.KindMessage,
 		Sub: func() *codec.Table { return MapValueMeta },
 		GetMsg: func(msg any) any {
 			if v := msg.(*MapTest_ByMsgEntry).Value; v == nil {
@@ -70,7 +70,7 @@ var MapTest_ByMsgEntryMeta = codec.NewTable("spectest.MapTest.ByMsgEntry", []*co
 
 // MapTestMeta is the generated DATA table for spectest.MapTest: one row per field.
 var MapTestMeta = codec.NewTable("spectest.MapTest", []*codec.Field{
-	{Num: 1, Wire: codec.WireLen, Kind: codec.KindMessage,
+	{Name: "by_int", Num: 1, Wire: codec.WireLen, Kind: codec.KindMessage,
 		Sub:       func() *codec.Table { return MapTest_ByIntEntryMeta },
 		Repeated:  true,
 		RepMsgLen: func(msg any) int { return len(msg.(*MapTest).ByInt) },
@@ -87,7 +87,7 @@ var MapTestMeta = codec.NewTable("spectest.MapTest", []*codec.Field{
 			return item
 		},
 	},
-	{Num: 2, Wire: codec.WireLen, Kind: codec.KindMessage,
+	{Name: "by_str", Num: 2, Wire: codec.WireLen, Kind: codec.KindMessage,
 		Sub:       func() *codec.Table { return MapTest_ByStrEntryMeta },
 		Repeated:  true,
 		RepMsgLen: func(msg any) int { return len(msg.(*MapTest).ByStr) },
@@ -104,7 +104,7 @@ var MapTestMeta = codec.NewTable("spectest.MapTest", []*codec.Field{
 			return item
 		},
 	},
-	{Num: 3, Wire: codec.WireLen, Kind: codec.KindMessage,
+	{Name: "by_msg", Num: 3, Wire: codec.WireLen, Kind: codec.KindMessage,
 		Sub:       func() *codec.Table { return MapTest_ByMsgEntryMeta },
 		Repeated:  true,
 		RepMsgLen: func(msg any) int { return len(msg.(*MapTest).ByMsg) },

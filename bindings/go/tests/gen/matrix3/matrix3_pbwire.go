@@ -6,7 +6,7 @@ package matrix3
 
 import (
 	"fmt"
-	"pbwire/codec"
+	"pbwire/pbench/dyngo/codec"
 )
 
 // structtest.Color3

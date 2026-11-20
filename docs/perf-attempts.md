@@ -892,26 +892,37 @@ tree already living in C, `Decode()` into a handle nobody reads) next to a
 static generated table codec, which is not what the library is: generated
 models may carry data, never wire decisions, and the wire lives in one engine.
 
-The static generated-table path was therefore deleted (`pbench/neutral`,
-`pbench/purego`, `pbench/table`, and the codegen Meta-plus-loader split went
-with it) and the Go binding now ships two dynamic cores over the same
-`codec.EncodeTable`/`DecodeTable` engine: the C core over cgo
-(`bindings/go/dynamic`) and a pure-Go core with a runtime value tree
-(`bindings/go/codec`, `codec.DMsg`). Generated models are thin structs plus a
-metadata file of field tables.
+The static generated-table path was therefore deleted (`neutral`,
+`purego`, `table`, and the codegen Meta-plus-loader split went with it). No
+runtime is shipped yet: the two dynamic cores compete over the same
+`EncodeTable`/`DecodeTable` engine — the C core over cgo
+(`pbench/dync/dynamic`) and a pure-Go core with a runtime value tree
+(`pbench/dyngo/codec`, `codec.DMsg`) — each in its own solution directory
+next to its arm, and `runtime/` stays empty until they select the final
+solution. Generated models are thin structs plus a metadata file of field
+tables.
 
 `bindings/go/pbench/` now compares exactly the three dynamic shapes, each
 behind the same native-in / native-out contract (`Marshal` from a caller-held
-struct, `Unmarshal` to a fully materialized fresh struct), interleaved in one
-process, median of 5 rounds, gated on byte-identical output and a
-field-by-field struct compare before timing. Ratios are one loaded-host run:
+struct, `Unmarshal` to a fully materialized fresh struct), with struct<->tree
+moves through shipped `ImportModel`/`ExportModel` converters only — no
+test-only glue — interleaved in one process, median of 5 rounds, gated on
+byte-identical output and a field-by-field struct compare before timing.
+Ratios are one Apple M4 Pro run:
 
 | tier | op | dync (C core) | dyngo (Go core) | cshim (Erlang-style) |
 |---|---|---|---|---|
-| 136 B | enc / dec | 0.11x / 0.13x | 0.27x / 0.27x | 1.71x / 1.37x |
-| 174 B | enc / dec | 0.10x / 0.13x | 0.27x / 0.31x | 1.75x / 1.32x |
-| 2469 B | enc / dec | 0.05x / 0.12x | 0.19x / 0.37x | 2.18x / 2.02x |
+| 136 B | enc / dec | 0.10x / 0.12x | 0.32x / 0.31x | 1.61x / 1.41x |
+| 174 B | enc / dec | 0.09x / 0.13x | 0.35x / 0.35x | 1.64x / 1.41x |
+| 2469 B | enc / dec | 0.05x / 0.11x | 0.27x / 0.35x | 2.16x / 1.98x |
 | 74913 B | enc / dec | 0.05x / 0.12x | 0.16x / 0.36x | 2.20x / 2.07x |
+
+A real bug surfaced while making the thin-model benchmark honest: the shared
+table's capacity hint remembered the largest encode (the xlarge gate tier),
+so every later small encode allocated and zeroed ~75 KB per call — 5.6 us on
+the 136 B tier that vanished once the hint memorized the last actual size
+plus headroom instead of the capacity. One table serves every payload size of
+its message, so a capacity memory is always the wrong memory.
 
 The ordering is the whole finding: a per-field copy into any tree — a C tree
 through cgo worst, the Go value tree better but still per field — costs far

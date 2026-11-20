@@ -64,6 +64,7 @@ type ForeignOps struct {
 // (wrapping oneof members, dereferencing optional pointers, converting
 // named enum types); all wire logic lives in EncodeTable/DecodeTable.
 type Field struct {
+	Name     string
 	Num      uint32
 	Wire     WireType
 	Kind     Kind
@@ -250,10 +251,13 @@ type Table struct {
 	encCap atomic.Int64
 }
 
-// capHint reports the last successful encode capacity, or 0 before the first.
+// capHint reports the last successful encode size plus headroom, or 0 before
+// the first call. It is a size, deliberately not a capacity: one table serves
+// every payload size of its message, so memorizing a large capacity would
+// force every later small encode to allocate and zero it.
 func (t *Table) capHint() int { return int(t.encCap.Load()) }
 
-// setCapHint records the capacity a successful encode needed.
+// setCapHint records what the next presize should be.
 func (t *Table) setCapHint(n int) { t.encCap.Store(int64(n)) }
 
 // NewTable builds the ByNum index over fields. Tables are read-only after

@@ -7,14 +7,12 @@
 // message, the two proto3 optionals, and the repeated fields scaled x0 / x1 /
 // x100 / x3000, which lands the tiers on 136 / 174 / 2469 / 74913 bytes.
 //
-// Two pbwire rows, one per dynamic core, because the two answer different
-// questions: `pbwire-go dync` times the dynamic C core (Encode() on a tree
-// that was already built in C, Decode()+Close() without reading a field back
-// into Go), and `pbwire-go dyngo` times the dynamic Go core through the thin
-// generated model an application actually holds (Marshal()/Unmarshal() over
-// the shared table engine, no cgo). protobuf-go builds and reads its native
-// objects in both cases, so only the dyngo row is the like-for-like
-// comparison; see github.com/jinganix/pbwire/issues/41.
+// One pbwire row: the thin generated model an application actually holds
+// (Marshal()/Unmarshal() over the shared table engine, no cgo), struct in
+// and struct out, against protobuf-go on the same task. The dynamic C core
+// (prebuilt tree, unread handle) is not timed here: it answers a different
+// question and lives in pbench/dync; see
+// github.com/jinganix/pbwire/issues/41.
 //
 // Both sides produce identical bytes and the dyngo decode is compared field by
 // field against the oracle before anything is timed, so a speed number from a
@@ -32,13 +30,11 @@ import (
 	"fmt"
 	"math"
 	"os"
-	"path/filepath"
 	"runtime"
 	"testing"
 	"time"
 
 	"google.golang.org/protobuf/proto"
-	"pbwire/dynamic"
 	"pbwire/tests/gen/matrix3"
 	"pbwire/tests/gen_oracle/matrix3pb"
 )
@@ -59,12 +55,6 @@ var tiers = []tier{
 
 const minPassSeconds = 0.25
 const passes = 3
-
-var (
-	descBytes []byte
-	reg       *dynamic.Registry
-	typ       *dynamic.MessageType
-)
 
 func i32p(v int32) *int32   { return &v }
 func strp(v string) *string { return &v }
@@ -170,10 +160,8 @@ func checkStruct(label string, got *matrix3.Scalars3, want *matrix3pb.Scalars3) 
 	return nil
 }
 
-// The gate: every tier's official bytes land on the pinned size, pbwire
-// encodes byte-identical bytes from both the dynamic tree and the generated
-// struct, the struct decode keeps every field, and the dynamic decode
-// re-encodes byte-identically.
+// The gate: every tier's official bytes land on the pinned size, the thin
+// model encodes byte-identical bytes, and its decode keeps every field.
 func gate(t tier) error {
 	want := fillOfficial(t.n)
 	reference, err := proto.Marshal(want)
@@ -200,19 +188,6 @@ func gate(t tier) error {
 			t.label, len(structOut), len(reference))
 	}
 
-	back, err := typ.Decode(reference)
-	if err != nil {
-		return err
-	}
-	defer back.Close()
-	again, err := back.Encode()
-	if err != nil {
-		return err
-	}
-	if !bytes.Equal(again, reference) {
-		return fmt.Errorf("%s: pbwire-go dynamic decode differs", t.label)
-	}
-
 	var official matrix3pb.Scalars3
 	if err := proto.Unmarshal(reference, &official); err != nil {
 		return err
@@ -223,31 +198,12 @@ func gate(t tier) error {
 		(t.n > 0 && official.Inners[t.n-1].GetValue() != int32(t.n)) {
 		return fmt.Errorf("%s: official decoded values differ", t.label)
 	}
-	fmt.Printf("OK   %s parity: struct decode field by field, both codecs byte identical, x%d (%d bytes)\n",
+	fmt.Printf("OK   %s parity: model decode field by field, byte identical, x%d (%d bytes)\n",
 		t.label, t.n, len(reference))
 	return nil
 }
 
 func TestMain(m *testing.M) {
-	_, file, _, _ := runtime.Caller(0)
-	var err error
-	descBytes, err = os.ReadFile(filepath.Join(filepath.Dir(file), "gen", "matrix3.desc"))
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "load gen/matrix3.desc: run ./bench.sh first")
-		os.Exit(1)
-	}
-	reg, err = dynamic.NewRegistry(descBytes)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "NewRegistry:", err)
-		os.Exit(1)
-	}
-	defer reg.Purge()
-	typ, err = reg.Current().Message("structtest.Scalars3")
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "Message:", err)
-		os.Exit(1)
-	}
-	defer typ.Close()
 	for _, t := range tiers {
 		if err := gate(t); err != nil {
 			fmt.Fprintln(os.Stderr, "FAIL:", err)
@@ -309,25 +265,14 @@ func TestMatrix3Bench(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		// The native object an application holds, and the C tree the
-		// published dynamic numbers encode. Both are built before the timer.
+		// The native object an application holds, built before the timer.
 		structMsg := &matrix3.Scalars3{}
 		if err := structMsg.Unmarshal(reference); err != nil {
 			t.Fatal(err)
 		}
-		tree, err := typ.Decode(reference)
-		if err != nil {
-			t.Fatal(err)
-		}
 
-		count := calibrate(func() {
-			sinkBytes, _ = tree.Encode()
-		}, tr.floor)
 		structEncode := measure(1, func() {
 			sinkBytes, _ = structMsg.Marshal()
-		})
-		encode := measure(tr.floor, func() {
-			sinkBytes, _ = tree.Encode()
 		})
 		officialEncode := measure(tr.floor, func() {
 			sinkBytes, _ = proto.Marshal(official)
@@ -336,23 +281,16 @@ func TestMatrix3Bench(t *testing.T) {
 			m := new(matrix3.Scalars3)
 			_ = m.Unmarshal(reference)
 		})
-		decode := measure(tr.floor, func() {
-			m, _ := typ.Decode(reference)
-			m.Close()
-		})
 		officialDecode := measure(tr.floor, func() {
 			var m matrix3pb.Scalars3
 			_ = proto.Unmarshal(reference, &m)
 		})
-		tree.Close()
 
-		fmt.Printf("\n%s: %d bytes, %d iterations (repeat field x%d)\n", tr.label, len(reference), count, tr.n)
+		fmt.Printf("\n%s: %d bytes (repeat field x%d)\n", tr.label, len(reference), tr.n)
 		fmt.Printf("  %-17s %-7s %12s %10s\n", "impl", "op", "ns/op", "MB/s")
-		row("pbwire-go dyngo", "encode", len(reference), structEncode)
-		row("pbwire-go dync", "encode", len(reference), encode)
+		row("pbwire-go", "encode", len(reference), structEncode)
 		row("protobuf-go", "encode", len(reference), officialEncode)
-		row("pbwire-go dyngo", "decode", len(reference), structDecode)
-		row("pbwire-go dync", "decode", len(reference), decode)
+		row("pbwire-go", "decode", len(reference), structDecode)
 		row("protobuf-go", "decode", len(reference), officialDecode)
 		fmt.Println()
 	}
