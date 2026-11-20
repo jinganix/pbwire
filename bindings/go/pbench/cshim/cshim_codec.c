@@ -198,17 +198,19 @@ typedef struct cshim_acc {
     size_t elem;
 } cshim_acc;
 
-struct cshim_codec {
+typedef struct cshim_table_mem {
     cshim_row *rows;
     size_t nrows;
+    size_t msg_size;
     const cshim_row **resolve;
     size_t maxfnum;
-    cshim_row *subrows;
-    size_t nsubrows;
-    const cshim_row **sub_resolve;
-    size_t sub_maxfnum;
-    size_t base_size;
-    size_t sub_size;
+    cshim_acc *accs;
+} cshim_table_mem;
+
+struct cshim_codec {
+    cshim_table_mem *tables;
+    size_t ntables;
+    size_t root;
 
     uint8_t *out;
     size_t out_len;
@@ -423,7 +425,7 @@ wr_tag_bytes(cshim_codec *h, uint32_t fnum, const void *data, size_t len)
 
 /* Bytes a nested message occupies, without allocating anything. */
 static int
-msg_size(cshim_codec *h, const cshim_row *rows, size_t n, const void *base, int depth,
+msg_size(cshim_codec *h, const cshim_table_mem *t, const void *base, int depth,
          size_t *out);
 
 static int
@@ -438,7 +440,7 @@ add_size(cshim_codec *h, size_t *total, size_t add)
 }
 
 static int
-msg_size(cshim_codec *h, const cshim_row *rows, size_t n, const void *base, int depth,
+msg_size(cshim_codec *h, const cshim_table_mem *t, const void *base, int depth,
          size_t *out)
 {
     size_t total = 0, i;
@@ -447,8 +449,8 @@ msg_size(cshim_codec *h, const cshim_row *rows, size_t n, const void *base, int 
         h->err = CSHIM_ERR_DEPTH;
         return -1;
     }
-    for (i = 0; i < n; i++) {
-        const cshim_row *r = &rows[i];
+    for (i = 0; i < t->nrows; i++) {
+        const cshim_row *r = &t->rows[i];
         const uint8_t *p = (const uint8_t *)base + r->offset;
         size_t sz = 0;
         const uint8_t *vp = p;
@@ -507,18 +509,23 @@ msg_size(cshim_codec *h, const cshim_row *rows, size_t n, const void *base, int 
                 }
             } else if (r->kind == CSHIMK_MSG) {
                 size_t k;
-                uint64_t tag = tag_value(r->fnum, 2);
+                uint64_t stag = tag_value(r->fnum, r->group ? 3u : 2u);
+                uint64_t etag = tag_value(r->fnum, 4);
 
                 for (k = 0; k < (size_t)cnt; k++) {
                     const void *sub = rd_ptr(e + k * r->elem);
                     size_t sub_size = 0;
 
                     if (sub != NULL &&
-                        msg_size(h, h->subrows, h->nsubrows, sub, depth + 1,
+                        msg_size(h, &h->tables[r->sub], sub, depth + 1,
                                  &sub_size)) {
                         return -1;
                     }
-                    sz += varint_size(tag) + varint_size(sub_size) + sub_size;
+                    if (r->group) {
+                        sz += varint_size(stag) + sub_size + varint_size(etag);
+                    } else {
+                        sz += varint_size(stag) + varint_size(sub_size) + sub_size;
+                    }
                 }
             } else {
                 h->err = CSHIM_ERR_PLAN;
@@ -652,12 +659,17 @@ msg_size(cshim_codec *h, const cshim_row *rows, size_t n, const void *base, int 
 
                 if (sub != NULL || r->required) {
                     if (sub != NULL &&
-                        msg_size(h, h->subrows, h->nsubrows, sub, depth + 1,
+                        msg_size(h, &h->tables[r->sub], sub, depth + 1,
                                  &sub_size)) {
                         return -1;
                     }
-                    sz = varint_size(tag_value(r->fnum, 2)) +
-                         varint_size(sub_size) + sub_size;
+                    if (r->group) {
+                        sz = varint_size(tag_value(r->fnum, 3)) + sub_size +
+                             varint_size(tag_value(r->fnum, 4));
+                    } else {
+                        sz = varint_size(tag_value(r->fnum, 2)) +
+                             varint_size(sub_size) + sub_size;
+                    }
                 }
                 break;
             }
@@ -704,10 +716,22 @@ msg_size(cshim_codec *h, const cshim_row *rows, size_t n, const void *base, int 
 /* ---------------------------------------------------------------- encoder */
 
 static int
-enc_msg(cshim_codec *h, const cshim_row *rows, size_t n, const void *base, int depth);
+dec_body(cshim_codec *h, const cshim_table_mem *t, void *base, const uint8_t *buf, size_t len,
+         size_t *posp, uint32_t endgroup, int depth);
 
 static int
-enc_sub(cshim_codec *h, uint32_t fnum, const void *sub, int depth)
+dec_msg(cshim_codec *h, const cshim_table_mem *t, void *base, const uint8_t *buf, size_t len,
+        int depth);
+
+static int
+dec_group_body(cshim_codec *h, size_t subti, void *target, const uint8_t *buf, size_t len,
+               size_t *pos, uint32_t gnum, int depth);
+
+static int
+enc_msg(cshim_codec *h, const cshim_table_mem *t, const void *base, int depth);
+
+static int
+enc_sub(cshim_codec *h, size_t subti, uint32_t fnum, const void *sub, int depth)
 {
     size_t plen = 0, start;
     uint64_t tag = tag_value(fnum, 2);
@@ -715,7 +739,7 @@ enc_sub(cshim_codec *h, uint32_t fnum, const void *sub, int depth)
     uint8_t *p;
 
     if (sub != NULL &&
-        msg_size(h, h->subrows, h->nsubrows, sub, depth + 1, &plen)) {
+        msg_size(h, &h->tables[subti], sub, depth + 1, &plen)) {
         return -1;
     }
     head += varint_size(plen);
@@ -728,7 +752,7 @@ enc_sub(cshim_codec *h, uint32_t fnum, const void *sub, int depth)
     p = put_varint(p, (uint64_t)plen);
     h->out_len += head;
     if (plen != 0) {
-        if (enc_msg(h, h->subrows, h->nsubrows, sub, depth + 1)) {
+        if (enc_msg(h, &h->tables[subti], sub, depth + 1)) {
             return -1;
         }
         if (h->out_len != start + head + plen) {
@@ -739,8 +763,48 @@ enc_sub(cshim_codec *h, uint32_t fnum, const void *sub, int depth)
     return 0;
 }
 
+/* Groups frame with start/end tags instead of a length prefix. The caller
+ * buffer never moves (no realloc on overflow, just a NULL report), so the
+ * end tag is written after the body through a fresh out_ptr. */
 static int
-enc_msg(cshim_codec *h, const cshim_row *rows, size_t n, const void *base, int depth)
+enc_group(cshim_codec *h, size_t subti, uint32_t fnum, const void *sub, int depth)
+{
+    size_t blen = 0, start;
+    size_t head = varint_size(tag_value(fnum, 3));
+    size_t tail = varint_size(tag_value(fnum, 4));
+    uint8_t *p;
+
+    if (sub != NULL &&
+        msg_size(h, &h->tables[subti], sub, depth + 1, &blen)) {
+        return -1;
+    }
+    start = h->out_len;
+    p = out_ptr(h, head + blen + tail);
+    if (p == NULL) {
+        return -1;
+    }
+    p = put_varint(p, tag_value(fnum, 3));
+    h->out_len += head;
+    if (blen != 0) {
+        if (enc_msg(h, &h->tables[subti], sub, depth + 1)) {
+            return -1;
+        }
+        if (h->out_len != start + head + blen) {
+            h->err = CSHIM_ERR_PLAN;
+            return -1;
+        }
+    }
+    p = out_ptr(h, tail);
+    if (p == NULL) {
+        return -1;
+    }
+    p = put_varint(p, tag_value(fnum, 4));
+    h->out_len += tail;
+    return 0;
+}
+
+static int
+enc_msg(cshim_codec *h, const cshim_table_mem *t, const void *base, int depth)
 {
     size_t i;
 
@@ -748,8 +812,8 @@ enc_msg(cshim_codec *h, const cshim_row *rows, size_t n, const void *base, int d
         h->err = CSHIM_ERR_DEPTH;
         return -1;
     }
-    for (i = 0; i < n; i++) {
-        const cshim_row *r = &rows[i];
+    for (i = 0; i < t->nrows; i++) {
+        const cshim_row *r = &t->rows[i];
         const uint8_t *p = (const uint8_t *)base + r->offset;
         const uint8_t *vp = p;
         if (r->explicit) {
@@ -836,7 +900,11 @@ enc_msg(cshim_codec *h, const cshim_row *rows, size_t n, const void *base, int d
                 for (k = 0; k < (size_t)cnt; k++) {
                     const void *sub = rd_ptr(e + k * r->elem);
 
-                    if (enc_sub(h, r->fnum, sub, depth)) {
+                    if (r->group) {
+                        if (enc_group(h, (size_t)r->sub, r->fnum, sub, depth)) {
+                            return -1;
+                        }
+                    } else if (enc_sub(h, (size_t)r->sub, r->fnum, sub, depth)) {
                         return -1;
                     }
                 }
@@ -971,7 +1039,13 @@ enc_msg(cshim_codec *h, const cshim_row *rows, size_t n, const void *base, int d
         case CSHIMK_MSG: {
             const void *sub = rd_ptr(vp);
 
-            if ((sub != NULL || r->required) && enc_sub(h, r->fnum, sub, depth)) {
+            if (r->group) {
+                if ((sub != NULL || r->required) &&
+                    enc_group(h, (size_t)r->sub, r->fnum, sub, depth)) {
+                    return -1;
+                }
+            } else if ((sub != NULL || r->required) &&
+                       enc_sub(h, (size_t)r->sub, r->fnum, sub, depth)) {
                 return -1;
             }
             break;
@@ -1140,11 +1214,10 @@ collect_one(cshim_codec *h, const cshim_row *r, cshim_acc *a, const uint8_t *buf
 }
 
 static int
-dec_msg(cshim_codec *h, const cshim_row *rows, const cshim_row **resolve,
-        size_t maxfnum, cshim_acc *accs, void *base, const uint8_t *buf, size_t len,
-        int depth)
+dec_body(cshim_codec *h, const cshim_table_mem *t, void *base, const uint8_t *buf, size_t len,
+        size_t *posp, uint32_t endgroup, int depth)
 {
-    size_t pos = 0;
+    size_t pos = *posp;
 
     if (depth > CSHIM_MAX_DEPTH) {
         h->err = CSHIM_ERR_DEPTH;
@@ -1168,17 +1241,22 @@ dec_msg(cshim_codec *h, const cshim_row *rows, const cshim_row **resolve,
             h->fail_off = pos;
             return -1;
         }
-        r = fn <= maxfnum ? resolve[fn] : NULL;
+        if (wt == 4) {
+            if (endgroup != 0 && fn == endgroup) {
+                *posp = pos;
+                return 0;
+            }
+            h->err = CSHIM_ERR_WIRE;
+            h->fail_off = pos;
+            return -1;
+        }
+        r = fn <= t->maxfnum ? t->resolve[fn] : NULL;
         if (r == NULL) {
             if (wt == 3) {
                 if (skip_group(h, buf, len, &pos, (uint32_t)fn, depth + 1)) {
                     h->fail_off = pos;
                     return -1;
                 }
-            } else if (wt == 4) {
-                h->err = CSHIM_ERR_WIRE;
-                h->fail_off = pos;
-                return -1;
             } else if (skip_scalar(h, buf, len, &pos, wt)) {
                 h->fail_off = pos;
                 return -1;
@@ -1187,7 +1265,7 @@ dec_msg(cshim_codec *h, const cshim_row *rows, const cshim_row **resolve,
         }
 
         if (r->repeated) {
-            cshim_acc *a = &accs[r - rows];
+            cshim_acc *a = &t->accs[r - t->rows];
 
             if (r->kind == CSHIMK_STR || r->kind == CSHIMK_BYTES) {
                 uint64_t sl;
@@ -1216,39 +1294,65 @@ dec_msg(cshim_codec *h, const cshim_row *rows, const cshim_row **resolve,
                 }
                 pos += (size_t)sl;
             } else if (r->kind == CSHIMK_MSG) {
-                uint64_t sl;
                 void *sub;
                 void *slot;
 
-                if (wt != 2) {
-                    h->err = CSHIM_ERR_WIRE;
-                    h->fail_off = pos;
-                    return -1;
+                if (r->group) {
+                    if (wt != 3) {
+                        h->err = CSHIM_ERR_WIRE;
+                        h->fail_off = pos;
+                        return -1;
+                    }
+                    sub = arena_alloc(h, h->tables[r->sub].msg_size);
+                    if (sub == NULL) {
+                        h->fail_off = pos;
+                        return -1;
+                    }
+                    memset(sub, 0, h->tables[r->sub].msg_size);
+                    if (dec_group_body(h, (size_t)r->sub, sub, buf, len, &pos,
+                                       r->fnum, depth)) {
+                        h->fail_off = pos;
+                        return -1;
+                    }
+                    slot = sub;
+                    if (acc_push(h, a, &slot)) {
+                        h->fail_off = pos;
+                        return -1;
+                    }
+                    continue;
                 }
-                if (get_varint(buf, len, &pos, &sl) ||
-                    sl > (uint64_t)(len - pos)) {
-                    h->err = CSHIM_ERR_WIRE;
-                    h->fail_off = pos;
-                    return -1;
+                {
+                    uint64_t sl;
+
+                    if (wt != 2) {
+                        h->err = CSHIM_ERR_WIRE;
+                        h->fail_off = pos;
+                        return -1;
+                    }
+                    if (get_varint(buf, len, &pos, &sl) ||
+                        sl > (uint64_t)(len - pos)) {
+                        h->err = CSHIM_ERR_WIRE;
+                        h->fail_off = pos;
+                        return -1;
+                    }
+                    sub = arena_alloc(h, h->tables[r->sub].msg_size);
+                    if (sub == NULL) {
+                        h->fail_off = pos;
+                        return -1;
+                    }
+                    memset(sub, 0, h->tables[r->sub].msg_size);
+                    if (dec_msg(h, &h->tables[r->sub], sub, buf + pos,
+                                (size_t)sl, depth + 1)) {
+                        h->fail_off = pos;
+                        return -1;
+                    }
+                    slot = sub;
+                    if (acc_push(h, a, &slot)) {
+                        h->fail_off = pos;
+                        return -1;
+                    }
+                    pos += (size_t)sl;
                 }
-                sub = arena_alloc(h, h->sub_size);
-                if (sub == NULL) {
-                    h->fail_off = pos;
-                    return -1;
-                }
-                memset(sub, 0, h->sub_size);
-                if (dec_msg(h, h->subrows, h->sub_resolve,
-                            h->sub_maxfnum, h->sub_accs, sub, buf + pos,
-                            (size_t)sl, depth + 1)) {
-                    h->fail_off = pos;
-                    return -1;
-                }
-                slot = sub;
-                if (acc_push(h, a, &slot)) {
-                    h->fail_off = pos;
-                    return -1;
-                }
-                pos += (size_t)sl;
             } else {
                 if (wt == 2) {
                     uint64_t plen;
@@ -1405,27 +1509,45 @@ dec_msg(cshim_codec *h, const cshim_row *rows, const cshim_row **resolve,
             break;
         }
         case CSHIMK_MSG: {
-            uint64_t sl;
-            void *sub;
+            if (r->group) {
+                void *sub = (void *)rd_ptr(dp);
 
-            if (get_varint(buf, len, &pos, &sl) ||
-                sl > (uint64_t)(len - pos)) {
-                goto badwire;
+                if (sub == NULL) {
+                    sub = arena_alloc(h, h->tables[r->sub].msg_size);
+                    if (sub == NULL) {
+                        h->fail_off = pos;
+                        return -1;
+                    }
+                    memset(sub, 0, h->tables[r->sub].msg_size);
+                    st_ptr(dp, sub);
+                }
+                if (dec_group_body(h, (size_t)r->sub, sub, buf, len, &pos,
+                                   r->fnum, depth)) {
+                    h->fail_off = pos;
+                    return -1;
+                }
+            } else {
+                uint64_t sl;
+                void *sub;
+
+                if (get_varint(buf, len, &pos, &sl) ||
+                    sl > (uint64_t)(len - pos)) {
+                    goto badwire;
+                }
+                sub = arena_alloc(h, h->tables[r->sub].msg_size);
+                if (sub == NULL) {
+                    h->fail_off = pos;
+                    return -1;
+                }
+                memset(sub, 0, h->tables[r->sub].msg_size);
+                if (dec_msg(h, &h->tables[r->sub], sub, buf + pos, (size_t)sl,
+                            depth + 1)) {
+                    h->fail_off = pos;
+                    return -1;
+                }
+                st_ptr(dp, sub);
+                pos += (size_t)sl;
             }
-            sub = arena_alloc(h, h->sub_size);
-            if (sub == NULL) {
-                h->fail_off = pos;
-                return -1;
-            }
-            memset(sub, 0, h->sub_size);
-            if (dec_msg(h, h->subrows, h->sub_resolve,
-                        h->sub_maxfnum, h->sub_accs, sub, buf + pos, (size_t)sl,
-                        depth + 1)) {
-                h->fail_off = pos;
-                return -1;
-            }
-            st_ptr(dp, sub);
-            pos += (size_t)sl;
             break;
         }
         case CSHIMK_OPT_I32: {
@@ -1482,7 +1604,32 @@ dec_msg(cshim_codec *h, const cshim_row *rows, const cshim_row **resolve,
         h->fail_off = pos;
         return -1;
     }
+    if (endgroup != 0) {
+        h->err = CSHIM_ERR_WIRE;
+        h->fail_off = pos;
+        return -1;
+    }
+    *posp = pos;
     return 0;
+}
+
+/* Length-delimited message: fresh cursor over the sub-slice. */
+static int
+dec_msg(cshim_codec *h, const cshim_table_mem *t, void *base, const uint8_t *buf, size_t len,
+        int depth)
+{
+    size_t pos = 0;
+
+    return dec_body(h, t, base, buf, len, &pos, 0, depth);
+}
+
+/* Group body: the same field loop over the caller's buffer, terminated by
+ * the matching end tag instead of the buffer end. */
+static int
+dec_group_body(cshim_codec *h, size_t subti, void *target, const uint8_t *buf, size_t len,
+               size_t *pos, uint32_t gnum, int depth)
+{
+    return dec_body(h, &h->tables[subti], target, buf, len, pos, gnum, depth + 1);
 }
 
 /* --------------------------------------------------------------- plan init */
@@ -1496,26 +1643,21 @@ free_codec(cshim_codec *h)
     if (h == NULL) {
         return;
     }
-    if (h->accs != NULL) {
-        for (i = 0; i < h->nrows; i++) {
-            free(h->accs[i].buf);
+    for (i = 0; i < h->ntables; i++) {
+        size_t j;
+
+        for (j = 0; j < h->tables[i].nrows; j++) {
+            free(h->tables[i].accs[j].buf);
         }
-    }
-    if (h->sub_accs != NULL) {
-        for (i = 0; i < h->nsubrows; i++) {
-            free(h->sub_accs[i].buf);
-        }
+        free(h->tables[i].accs);
+        free(h->tables[i].resolve);
+        free(h->tables[i].rows);
     }
     for (b = h->blocks; b != NULL; b = next) {
         next = b->next;
         free(b);
     }
-    free(h->accs);
-    free(h->sub_accs);
-    free(h->resolve);
-    free(h->sub_resolve);
-    free(h->rows);
-    free(h->subrows);
+    free(h->tables);
     free(h);
 }
 
@@ -1543,10 +1685,11 @@ width_of(uint32_t kind)
 }
 
 /* The plan table is generated by the Go half; these checks make a bad row
- * fail once at New time instead of writing through a wrong offset later. */
+ * fail once at New time instead of writing through a wrong offset later.
+ * Sub-table links need the whole registry, so check_registry verifies them
+ * after every table passes its shape checks here. */
 static int
-check_rows(const cshim_row *rows, size_t n, size_t struct_size, int is_sub,
-           size_t msg_size)
+check_table(const cshim_row *rows, size_t n, size_t struct_size, int is_sub)
 {
     size_t i;
     size_t ptr = sizeof(void *);
@@ -1564,10 +1707,17 @@ check_rows(const cshim_row *rows, size_t n, size_t struct_size, int is_sub,
         if (r->kind > CSHIMK_BYTES) {
             return -1;
         }
-        if (r->wire != 0 && r->wire != 1 && r->wire != 2 && r->wire != 5) {
+        if (r->wire != 0 && r->wire != 1 && r->wire != 2 && r->wire != 5 &&
+            r->wire != 3) {
             return -1;
         }
-        if (is_sub && (r->repeated || r->kind == CSHIMK_MSG)) {
+        if (is_sub && r->repeated) {
+            return -1;
+        }
+        if (r->group && (r->kind != CSHIMK_MSG || r->explicit)) {
+            return -1;
+        }
+        if ((r->wire == 3) != (r->group != 0)) {
             return -1;
         }
         if (r->required && (r->repeated || r->explicit)) {
@@ -1635,9 +1785,6 @@ check_rows(const cshim_row *rows, size_t n, size_t struct_size, int is_sub,
             }
         } else if (r->kind == CSHIMK_MSG) {
             need = (uint32_t)ptr;
-            if (r->elem != msg_size) {
-                return -1;
-            }
         } else if (r->kind == CSHIMK_OPT_I32) {
             need = (uint32_t)ptr;
             if (r->required || r->has != r->offset || r->count != 0 || r->elem != 4) {
@@ -1665,69 +1812,97 @@ check_rows(const cshim_row *rows, size_t n, size_t struct_size, int is_sub,
     return 0;
 }
 
+/* Registry-wide checks after every table passes its shape: sub indexes
+ * resolve, message rows carry their sub-table's struct size, and only
+ * message rows name a sub-table. */
+static int
+check_registry(const cshim_table *tables, size_t ntables, size_t root)
+{
+    size_t i, j;
+
+    if (tables == NULL || ntables == 0 || root >= ntables) {
+        return -1;
+    }
+    for (i = 0; i < ntables; i++) {
+        if (check_table(tables[i].rows, tables[i].nrows, tables[i].msg_size,
+                        (int)(i != root))) {
+            return -1;
+        }
+    }
+    for (i = 0; i < ntables; i++) {
+        for (j = 0; j < tables[i].nrows; j++) {
+            const cshim_row *r = &tables[i].rows[j];
+
+            if (r->kind == CSHIMK_MSG) {
+                if (r->sub < 0 || (size_t)r->sub >= ntables) {
+                    return -1;
+                }
+                if (!r->repeated &&
+                    r->elem != (uint32_t)tables[r->sub].msg_size) {
+                    return -1;
+                }
+            } else if (r->sub != -1) {
+                return -1;
+            }
+        }
+    }
+    return 0;
+}
+
 int
-cshim_codec_new(cshim_codec **out, const cshim_row *rows, size_t nrows,
-             const cshim_row *subrows, size_t nsubrows, size_t base_size,
-             size_t sub_size)
+cshim_codec_new(cshim_codec **out, const cshim_table *tables, size_t ntables,
+                size_t root)
 {
     cshim_codec *h;
-    size_t i;
+    size_t i, j;
 
     if (out == NULL) {
         return CSHIM_ERR_PLAN;
     }
     *out = NULL;
-    if (check_rows(rows, nrows, base_size, 0, sub_size) ||
-        check_rows(subrows, nsubrows, sub_size, 1, 0)) {
+    if (check_registry(tables, ntables, root)) {
         return CSHIM_ERR_PLAN;
     }
     h = (cshim_codec *)calloc(1, sizeof(*h));
     if (h == NULL) {
         return CSHIM_ERR_NOMEM;
     }
-    h->nrows = nrows;
-    h->nsubrows = nsubrows;
-    h->base_size = base_size;
-    h->sub_size = sub_size;
-    h->rows = (cshim_row *)malloc(nrows * sizeof(*h->rows));
-    h->subrows = (cshim_row *)malloc(nsubrows * sizeof(*h->subrows));
-    h->accs = (cshim_acc *)calloc(nrows, sizeof(*h->accs));
-    h->sub_accs = (cshim_acc *)calloc(nsubrows, sizeof(*h->sub_accs));
-    if (h->rows == NULL || h->subrows == NULL || h->accs == NULL ||
-        h->sub_accs == NULL) {
+    h->tables = (cshim_table_mem *)calloc(ntables, sizeof(*h->tables));
+    if (h->tables == NULL) {
         free_codec(h);
         return CSHIM_ERR_NOMEM;
     }
-    memcpy(h->rows, rows, nrows * sizeof(*h->rows));
-    memcpy(h->subrows, subrows, nsubrows * sizeof(*h->subrows));
+    h->ntables = ntables;
+    h->root = root;
+    for (i = 0; i < ntables; i++) {
+        cshim_table_mem *t = &h->tables[i];
 
-    for (i = 0; i < nrows; i++) {
-        h->maxfnum = h->rows[i].fnum > h->maxfnum ? h->rows[i].fnum
-                                                  : h->maxfnum;
-    }
-    h->resolve = (const cshim_row **)calloc(h->maxfnum + 1, sizeof(*h->resolve));
-    if (h->resolve == NULL) {
-        free_codec(h);
-        return CSHIM_ERR_NOMEM;
-    }
-    for (i = 0; i < nrows; i++) {
-        h->resolve[h->rows[i].fnum] = &h->rows[i];
-        h->accs[i].elem = h->rows[i].elem;
-    }
-    for (i = 0; i < nsubrows; i++) {
-        h->sub_maxfnum = h->subrows[i].fnum > h->sub_maxfnum
-                             ? h->subrows[i].fnum
-                             : h->sub_maxfnum;
-    }
-    h->sub_resolve =
-        (const cshim_row **)calloc(h->sub_maxfnum + 1, sizeof(*h->sub_resolve));
-    if (h->sub_resolve == NULL) {
-        free_codec(h);
-        return CSHIM_ERR_NOMEM;
-    }
-    for (i = 0; i < nsubrows; i++) {
-        h->sub_resolve[h->subrows[i].fnum] = &h->subrows[i];
-        h->sub_accs[i].elem = h->subrows[i].elem;
+        t->nrows = tables[i].nrows;
+        t->msg_size = tables[i].msg_size;
+        t->rows = (cshim_row *)malloc(t->nrows * sizeof(*t->rows));
+        t->accs = (cshim_acc *)calloc(t->nrows, sizeof(*t->accs));
+        t->resolve = NULL;
+        t->maxfnum = 0;
+        if (t->rows == NULL || t->accs == NULL) {
+            free_codec(h);
+            return CSHIM_ERR_NOMEM;
+        }
+        memcpy(t->rows, tables[i].rows, t->nrows * sizeof(*t->rows));
+        for (j = 0; j < t->nrows; j++) {
+            if (t->rows[j].fnum > t->maxfnum) {
+                t->maxfnum = t->rows[j].fnum;
+            }
+        }
+        t->resolve =
+            (const cshim_row **)calloc(t->maxfnum + 1, sizeof(*t->resolve));
+        if (t->resolve == NULL) {
+            free_codec(h);
+            return CSHIM_ERR_NOMEM;
+        }
+        for (j = 0; j < t->nrows; j++) {
+            t->resolve[t->rows[j].fnum] = &t->rows[j];
+            t->accs[j].elem = t->rows[j].elem;
+        }
     }
     *out = h;
     return CSHIM_OK;
@@ -1753,7 +1928,7 @@ cshim_encode(cshim_codec *h, uintptr_t base, uint8_t *out, size_t cap)
     h->out = out;
     h->out_cap = cap;
     h->out_len = 0;
-    if (enc_msg(h, h->rows, h->nrows, (const void *)base, 0)) {
+    if (enc_msg(h, &h->tables[h->root], (const void *)base, 0)) {
         res.status = h->err;
     } else {
         res.status = CSHIM_OK;
@@ -1778,13 +1953,14 @@ cshim_decode(cshim_codec *h, uintptr_t base, const uint8_t *wire, size_t wire_le
     h->fail_off = 0;
     h->str_bytes = 0;
     arena_reset(h);
-    for (i = 0; i < h->nrows; i++) {
-        h->accs[i].len = 0;
+    for (i = 0; i < h->ntables; i++) {
+        size_t j;
+
+        for (j = 0; j < h->tables[i].nrows; j++) {
+            h->tables[i].accs[j].len = 0;
+        }
     }
-    for (i = 0; i < h->nsubrows; i++) {
-        h->sub_accs[i].len = 0;
-    }
-    if (dec_msg(h, h->rows, h->resolve, h->maxfnum, h->accs, (void *)base,
+    if (dec_msg(h, &h->tables[h->root], (void *)base,
                 wire, wire_len, 0)) {
         res.status = h->err;
         res.fail_off = h->fail_off;
@@ -1793,9 +1969,9 @@ cshim_decode(cshim_codec *h, uintptr_t base, const uint8_t *wire, size_t wire_le
     /* Publish the accumulator buffers as raw Go slice headers.  Go copies
      * the elements immediately after the call; the next decode resets the
      * accumulators before writing them again. */
-    for (i = 0; i < h->nrows; i++) {
-        const cshim_row *r = &h->rows[i];
-        cshim_acc *a = &h->accs[i];
+    for (i = 0; i < h->tables[h->root].nrows; i++) {
+        const cshim_row *r = &h->tables[h->root].rows[i];
+        cshim_acc *a = &h->tables[h->root].accs[i];
         uint8_t *hdr;
         void *data;
         intptr_t len;

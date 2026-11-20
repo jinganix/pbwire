@@ -140,9 +140,11 @@ type Codec struct {
 func New() (*Codec, error) {
 	l := measure()
 	rows, subrows := l.plan()
-	c, err := newCodecFromCRows(rows, subrows,
-		C.size_t(unsafe.Sizeof(matrix3.Scalars3{})),
-		C.size_t(unsafe.Sizeof(matrix3.Inner3{})))
+	c, err := newCodecFromCTables(
+		[]cshimTableInput{
+			{rows: rows, size: C.size_t(unsafe.Sizeof(matrix3.Scalars3{}))},
+			{rows: subrows, size: C.size_t(unsafe.Sizeof(matrix3.Inner3{}))},
+		}, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -150,12 +152,38 @@ func New() (*Codec, error) {
 	return c, nil
 }
 
-func newCodecFromCRows(rows, subrows []C.cshim_row, baseSize, subSize C.size_t) (*Codec, error) {
+// cshimTableInput is one registry entry: the Go-owned rows plus the
+// struct size the C arena uses for sub-message allocation.
+type cshimTableInput struct {
+	rows []C.cshim_row
+	size C.size_t
+}
+
+func newCodecFromCTables(tabs []cshimTableInput, root int) (*Codec, error) {
+	if len(tabs) == 0 || root < 0 || root >= len(tabs) {
+		return nil, errors.New("v2: bad registry")
+	}
+	ct := make([]C.cshim_table, len(tabs))
+	var pinner runtime.Pinner
+	defer pinner.Unpin()
+	for i, t := range tabs {
+		if len(t.rows) == 0 || t.size == 0 {
+			return nil, errors.New("v2: empty table")
+		}
+		// The row slices travel into C, which copies them synchronously:
+		// pin every backing array for the duration of the call.
+		pinner.Pin(&t.rows[0])
+		ct[i] = C.cshim_table{
+			rows:     &t.rows[0],
+			nrows:    C.size_t(len(t.rows)),
+			msg_size: t.size,
+		}
+	}
+	pinner.Pin(&ct[0])
 	var h *C.cshim_codec
-	st := C.cshim_codec_new(&h, &rows[0], C.size_t(len(rows)),
-		&subrows[0], C.size_t(len(subrows)), baseSize, subSize)
-	runtime.KeepAlive(rows)
-	runtime.KeepAlive(subrows)
+	st := C.cshim_codec_new(&h, &ct[0], C.size_t(len(ct)), C.size_t(root))
+	runtime.KeepAlive(tabs)
+	runtime.KeepAlive(ct)
 	if int(st) != stOK {
 		return nil, statusError("new", st, 0)
 	}
@@ -166,12 +194,11 @@ func newCodecFromCRows(rows, subrows []C.cshim_row, baseSize, subSize C.size_t) 
 
 // translateRow converts one layout.Row into the C row the codec owns.
 // Shapes the C codec does not implement yet (oneof members, foreign
-// fields, groups, sub-table references) fail loudly instead of encoding
-// wrong bytes. Repeated rows pass through: the C codec already frames
-// packed numerics, strings and sub-messages element by element.
-func translateRow(r shimlayout.Row, ptrSize, subSize uintptr) (C.cshim_row, error) {
-	if r.Itab != 0 || r.Foreign || r.Group || r.Sub >= 0 {
-		return C.cshim_row{}, fmt.Errorf("cshim: field %d needs a later task (oneof/foreign/group/sub)", r.Fnum)
+// fields) fail loudly instead of encoding wrong bytes. Groups and
+// sub-table references ride the registry the caller built.
+func translateRow(r shimlayout.Row, reg []shimlayout.Msg, ptrSize uintptr) (C.cshim_row, error) {
+	if r.Itab != 0 || r.Foreign {
+		return C.cshim_row{}, fmt.Errorf("cshim: field %d needs a later task (oneof/foreign)", r.Fnum)
 	}
 	var kind C.uint32_t
 	switch r.Kind {
@@ -213,23 +240,41 @@ func translateRow(r shimlayout.Row, ptrSize, subSize uintptr) (C.cshim_row, erro
 		return C.cshim_row{}, fmt.Errorf("cshim: bad kind %d on field %d", r.Kind, r.Fnum)
 	}
 	var elem uint32
-	switch r.Kind {
-	case shimlayout.KindInt32, shimlayout.KindUint32, shimlayout.KindSint32,
-		shimlayout.KindFixed32, shimlayout.KindSfixed32, shimlayout.KindFloat,
-		shimlayout.KindEnum:
-		elem = 4
-	case shimlayout.KindInt64, shimlayout.KindUint64, shimlayout.KindSint64,
-		shimlayout.KindFixed64, shimlayout.KindSfixed64, shimlayout.KindDouble:
-		elem = 8
-	case shimlayout.KindBool:
-		elem = 1
-	case shimlayout.KindString, shimlayout.KindBytes:
-		elem = 2 * uint32(ptrSize)
-	case shimlayout.KindMessage:
-		elem = uint32(subSize)
+	if r.Repeated {
+		switch r.Kind {
+		case shimlayout.KindInt32, shimlayout.KindUint32, shimlayout.KindSint32,
+			shimlayout.KindFixed32, shimlayout.KindSfixed32, shimlayout.KindFloat,
+			shimlayout.KindEnum:
+			elem = 4
+		case shimlayout.KindBool:
+			elem = 1
+		case shimlayout.KindString, shimlayout.KindBytes:
+			elem = 2 * uint32(ptrSize)
+		case shimlayout.KindMessage:
+			elem = uint32(ptrSize)
+		}
+	} else {
+		switch r.Kind {
+		case shimlayout.KindInt32, shimlayout.KindUint32, shimlayout.KindSint32,
+			shimlayout.KindFixed32, shimlayout.KindSfixed32, shimlayout.KindFloat,
+			shimlayout.KindEnum:
+			elem = 4
+		case shimlayout.KindInt64, shimlayout.KindUint64, shimlayout.KindSint64,
+			shimlayout.KindFixed64, shimlayout.KindSfixed64, shimlayout.KindDouble:
+			elem = 8
+		case shimlayout.KindBool:
+			elem = 1
+		case shimlayout.KindString, shimlayout.KindBytes:
+			elem = 2 * uint32(ptrSize)
+		case shimlayout.KindMessage:
+			if r.Sub < 0 || int(r.Sub) >= len(reg) {
+				return C.cshim_row{}, fmt.Errorf("cshim: field %d names no registry table", r.Fnum)
+			}
+			elem = uint32(reg[r.Sub].Size)
+		}
 	}
 	var count uint32
-	if (r.Kind == shimlayout.KindString || r.Kind == shimlayout.KindBytes) && !r.Explicit {
+	if r.Repeated || ((r.Kind == shimlayout.KindString || r.Kind == shimlayout.KindBytes) && !r.Explicit) {
 		count = r.Offset + uint32(ptrSize)
 	}
 	var has uint32
@@ -243,6 +288,10 @@ func translateRow(r shimlayout.Row, ptrSize, subSize uintptr) (C.cshim_row, erro
 	if r.Required {
 		required = 1
 	}
+	var group uint32
+	if r.Group {
+		group = 1
+	}
 	return C.cshim_row{
 		fnum:     C.uint32_t(r.Fnum),
 		kind:     kind,
@@ -255,6 +304,8 @@ func translateRow(r shimlayout.Row, ptrSize, subSize uintptr) (C.cshim_row, erro
 		elem:     C.uint32_t(elem),
 		explicit: C.uint32_t(explicit),
 		required: C.uint32_t(required),
+		group:    C.uint32_t(group),
+		sub:      C.int32_t(r.Sub),
 	}, nil
 }
 
@@ -265,31 +316,41 @@ func boolBit(v bool) uint32 {
 	return 0
 }
 
-// newCodecFromLayout builds a codec from layout rows, the same shape the
-// generated cshim files will feed the harness with. No per-message Go
-// code lives here: translation is field-by-field and generic.
-func newCodecFromLayout(rows, subrows []shimlayout.Row, baseSize, subSize uintptr) (*Codec, error) {
-	if len(rows) == 0 || len(subrows) == 0 || baseSize == 0 || subSize == 0 {
-		return nil, errors.New("v2: empty layout")
+// newCodecFromLayout builds a codec from a layout registry, the same
+// shape the generated cshim files will feed the harness with. No
+// per-message Go code lives here: translation is field-by-field and
+// generic, and sub-table indexes ride the registry order.
+func newCodecFromLayout(reg []shimlayout.Msg, root string) (*Codec, error) {
+	if len(reg) == 0 {
+		return nil, errors.New("v2: empty registry")
+	}
+	ri := -1
+	for i, m := range reg {
+		if m.Full == root {
+			ri = i
+			break
+		}
+	}
+	if ri < 0 {
+		return nil, fmt.Errorf("v2: unknown root %q", root)
 	}
 	ptrSize := unsafe.Sizeof(uintptr(0))
-	crows := make([]C.cshim_row, len(rows))
-	for i, r := range rows {
-		cr, err := translateRow(r, ptrSize, subSize)
-		if err != nil {
-			return nil, err
+	tabs := make([]cshimTableInput, len(reg))
+	for i, m := range reg {
+		if len(m.Rows) == 0 || m.Size == 0 {
+			return nil, fmt.Errorf("v2: empty table %q", m.Full)
 		}
-		crows[i] = cr
-	}
-	csubs := make([]C.cshim_row, len(subrows))
-	for i, r := range subrows {
-		cr, err := translateRow(r, ptrSize, subSize)
-		if err != nil {
-			return nil, err
+		crows := make([]C.cshim_row, len(m.Rows))
+		for j, r := range m.Rows {
+			cr, err := translateRow(r, reg, ptrSize)
+			if err != nil {
+				return nil, err
+			}
+			crows[j] = cr
 		}
-		csubs[i] = cr
+		tabs[i] = cshimTableInput{rows: crows, size: C.size_t(m.Size)}
 	}
-	return newCodecFromCRows(crows, csubs, C.size_t(baseSize), C.size_t(subSize))
+	return newCodecFromCTables(tabs, ri)
 }
 
 func (l *layout) plan() ([]C.cshim_row, []C.cshim_row) {
@@ -298,7 +359,7 @@ func (l *layout) plan() ([]C.cshim_row, []C.cshim_row) {
 	msgPtr := uintptr(unsafe.Sizeof((*matrix3.Inner3)(nil)))
 
 	row := func(fnum, kind, repeated, packed, wire uint32, off, has, count,
-		elem uintptr) C.cshim_row {
+		elem uintptr, explicit, required, group uint32, sub int32) C.cshim_row {
 		return C.cshim_row{
 			fnum:     C.uint32_t(fnum),
 			kind:     C.uint32_t(kind),
@@ -309,10 +370,14 @@ func (l *layout) plan() ([]C.cshim_row, []C.cshim_row) {
 			has:      C.uint32_t(has),
 			count:    C.uint32_t(count),
 			elem:     C.uint32_t(elem),
+			explicit: C.uint32_t(explicit),
+			required: C.uint32_t(required),
+			group:    C.uint32_t(group),
+			sub:      C.int32_t(sub),
 		}
 	}
 	scalar := func(fnum, kind, wire uint32, off, elem uintptr) C.cshim_row {
-		return row(fnum, kind, 0, 0, wire, off, 0, 0, elem)
+		return row(fnum, kind, 0, 0, wire, off, 0, 0, elem, 0, 0, 0, -1)
 	}
 
 	main := []C.cshim_row{
@@ -329,21 +394,21 @@ func (l *layout) plan() ([]C.cshim_row, []C.cshim_row) {
 		scalar(11, kindFloat, wireFixed32, l.f32, 4),
 		scalar(12, kindDouble, wireFixed64, l.f64, 8),
 		scalar(13, kindBool, wireVarint, l.flag, 1),
-		row(14, kindStr, 0, 0, wireBytes, l.str, 0, l.str+ptr, strElem),
+		row(14, kindStr, 0, 0, wireBytes, l.str, 0, l.str+ptr, strElem, 0, 0, 0, -1),
 		scalar(15, kindI32, wireVarint, l.color, 4),
-		row(16, kindMsg, 0, 0, wireBytes, l.inner, 0, 0, l.innerSize),
-		row(17, kindI32, 1, 1, wireVarint, l.nums, 0, l.nums+ptr, 4),
-		row(18, kindStr, 1, 0, wireBytes, l.tags, 0, l.tags+ptr, strElem),
-		row(19, kindMsg, 1, 0, wireBytes, l.inners, 0, l.inners+ptr, msgPtr),
-		row(20, kindOptI32, 0, 0, wireVarint, l.optI32, l.optI32, 0, 4),
+		row(16, kindMsg, 0, 0, wireBytes, l.inner, 0, 0, l.innerSize, 0, 0, 0, 1),
+		row(17, kindI32, 1, 1, wireVarint, l.nums, 0, l.nums+ptr, 4, 0, 0, 0, -1),
+		row(18, kindStr, 1, 0, wireBytes, l.tags, 0, l.tags+ptr, strElem, 0, 0, 0, -1),
+		row(19, kindMsg, 1, 0, wireBytes, l.inners, 0, l.inners+ptr, msgPtr, 0, 0, 0, 1),
+		row(20, kindOptI32, 0, 0, wireVarint, l.optI32, l.optI32, 0, 4, 0, 0, 0, -1),
 		row(21, kindOptStr, 0, 0, wireBytes, l.optStr, l.optStr, 0,
-			strElem),
-		row(22, kindBool, 1, 1, wireVarint, l.flags, 0, l.flags+ptr, 1),
+			strElem, 0, 0, 0, -1),
+		row(22, kindBool, 1, 1, wireVarint, l.flags, 0, l.flags+ptr, 1, 0, 0, 0, -1),
 	}
 
 	sub := []C.cshim_row{
 		row(1, kindStr, 0, 0, wireBytes, l.innerName, 0,
-			l.innerName+ptr, strElem),
+			l.innerName+ptr, strElem, 0, 0, 0, -1),
 		scalar(2, kindI32, wireVarint, l.innerValue, 4),
 	}
 	return main, sub

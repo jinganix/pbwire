@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"math"
+	"reflect"
 	"runtime"
 	"testing"
 	"unsafe"
@@ -507,9 +508,9 @@ func scratchRows() (rows []shimlayout.Row, subrows []shimlayout.Row, baseSize, s
 
 // testEncode drives the codec without the matrix3 fixup: the scratch
 // struct needs none, re-encoding raw C state is byte-stable.
-func testEncode(t *testing.T, c *Codec, m *scratchCshim) []byte {
+func testEncode(t *testing.T, c *Codec, m any) []byte {
 	t.Helper()
-	out, err := c.encodeRaw(unsafe.Pointer(m))
+	out, err := c.encodeRaw(unsafe.Pointer(reflect.ValueOf(m).Pointer()))
 	runtime.KeepAlive(m)
 	if err != nil {
 		t.Fatal(err)
@@ -517,12 +518,13 @@ func testEncode(t *testing.T, c *Codec, m *scratchCshim) []byte {
 	return out
 }
 
-func testDecode(t *testing.T, c *Codec, m *scratchCshim, wire []byte) {
+func testDecode(t *testing.T, c *Codec, m any, wire []byte) {
 	t.Helper()
-	if _, err := c.decodeRaw(unsafe.Pointer(m), wire); err != nil {
+	if _, err := c.decodeRaw(unsafe.Pointer(reflect.ValueOf(m).Pointer()), wire); err != nil {
 		t.Fatal(err)
 	}
 	runtime.KeepAlive(m)
+	runtime.KeepAlive(wire)
 }
 
 func TestCshimCodecBytesExplicit(t *testing.T) {
@@ -534,7 +536,11 @@ func TestCshimCodecBytesExplicit(t *testing.T) {
 	ref := scratchOracle(t, md, []byte("hi"), &seven, &fals, 0, nil)
 
 	rows, subrows, baseSize, subSize := scratchRows()
-	c, err := newCodecFromLayout(rows, subrows, baseSize, subSize)
+	reg := []shimlayout.Msg{
+		{Full: "scratch.S", Size: baseSize, Rows: rows},
+		{Full: "scratch.Sub", Size: subSize, Rows: subrows},
+	}
+	c, err := newCodecFromLayout(reg, "scratch.S")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -585,5 +591,199 @@ func TestCshimCodecBytesExplicit(t *testing.T) {
 	}
 	if again := testEncode(t, c, back); !bytes.Equal(again, ref) {
 		t.Fatalf("re-encode differs: %x vs %x", again, ref)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Groups and multi-level nesting. Root S holds a singular group, a repeated
+// group and a two-level nested message; the oracle is dynamicpb over a
+// proto2 descriptor. A mismatched end tag and a truncated group must both
+// fail instead of decoding silently.
+// ---------------------------------------------------------------------------
+
+type scratchLeaf struct{ W int32 }
+
+type scratchSub struct {
+	Leaf *scratchLeaf
+	N    int32
+}
+
+type scratchGrp struct {
+	V int32
+	S string
+}
+
+type scratchRep struct{ V int32 }
+
+type scratchG struct {
+	Grp *scratchGrp
+	Rep []*scratchRep
+	Sub *scratchSub
+}
+
+func scratchGroupDescriptor(t *testing.T) protoreflect.MessageDescriptor {
+	t.Helper()
+	str := func(s string) *string { return &s }
+	i32 := func(n int32) *int32 { return &n }
+	f := func(name string, num int32, label descriptorpb.FieldDescriptorProto_Label, typ descriptorpb.FieldDescriptorProto_Type, typeName string) *descriptorpb.FieldDescriptorProto {
+		fd := &descriptorpb.FieldDescriptorProto{
+			Name: str(name), Number: i32(num), Label: label.Enum(), Type: typ.Enum(),
+		}
+		if typeName != "" {
+			fd.TypeName = str(typeName)
+		}
+		return fd
+	}
+	opt := descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL
+	req := descriptorpb.FieldDescriptorProto_LABEL_REQUIRED
+	_ = req
+	rep := descriptorpb.FieldDescriptorProto_LABEL_REPEATED
+	fd := &descriptorpb.FileDescriptorProto{
+		Syntax:  str("proto2"),
+		Name:    str("scratch3.proto"),
+		Package: str("scratch3"),
+		MessageType: []*descriptorpb.DescriptorProto{
+			{Name: str("Leaf"), Field: []*descriptorpb.FieldDescriptorProto{
+				f("w", 1, opt, descriptorpb.FieldDescriptorProto_TYPE_INT32, ""),
+			}},
+			{Name: str("Sub"), Field: []*descriptorpb.FieldDescriptorProto{
+				f("leaf", 1, opt, descriptorpb.FieldDescriptorProto_TYPE_MESSAGE, ".scratch3.Leaf"),
+				f("n", 2, opt, descriptorpb.FieldDescriptorProto_TYPE_INT32, ""),
+			}},
+			{Name: str("S"), Field: []*descriptorpb.FieldDescriptorProto{
+				f("grp", 1, opt, descriptorpb.FieldDescriptorProto_TYPE_GROUP, ".scratch3.S.Grp"),
+				f("rep", 2, rep, descriptorpb.FieldDescriptorProto_TYPE_GROUP, ".scratch3.S.Rep"),
+				f("sub", 3, opt, descriptorpb.FieldDescriptorProto_TYPE_MESSAGE, ".scratch3.Sub"),
+			},
+				NestedType: []*descriptorpb.DescriptorProto{
+					{Name: str("Grp"), Field: []*descriptorpb.FieldDescriptorProto{
+						f("v", 1, opt, descriptorpb.FieldDescriptorProto_TYPE_INT32, ""),
+						f("s", 2, opt, descriptorpb.FieldDescriptorProto_TYPE_STRING, ""),
+					}},
+					{Name: str("Rep"), Field: []*descriptorpb.FieldDescriptorProto{
+						f("v", 1, opt, descriptorpb.FieldDescriptorProto_TYPE_INT32, ""),
+					}},
+				}},
+		},
+	}
+	file, err := protodesc.NewFile(fd, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return file.Messages().ByName("S")
+}
+
+func scratchGroupRows() []shimlayout.Msg {
+	return []shimlayout.Msg{
+		{Full: "scratch3.S", Size: unsafe.Sizeof(scratchG{}), Rows: []shimlayout.Row{
+			{Fnum: 1, Kind: shimlayout.KindMessage, Wire: shimlayout.WireStartGroup, Group: true, Offset: uint32(unsafe.Offsetof(scratchG{}.Grp)), Sub: 1},
+			{Fnum: 2, Kind: shimlayout.KindMessage, Wire: shimlayout.WireStartGroup, Group: true, Repeated: true, Offset: uint32(unsafe.Offsetof(scratchG{}.Rep)), Sub: 2},
+			{Fnum: 3, Kind: shimlayout.KindMessage, Wire: shimlayout.WireLen, Offset: uint32(unsafe.Offsetof(scratchG{}.Sub)), Sub: 3},
+		}},
+		{Full: "scratch3.Grp", Size: unsafe.Sizeof(scratchGrp{}), Rows: []shimlayout.Row{
+			{Fnum: 1, Kind: shimlayout.KindInt32, Wire: shimlayout.WireVarint, Offset: uint32(unsafe.Offsetof(scratchGrp{}.V)), Sub: -1},
+			{Fnum: 2, Kind: shimlayout.KindString, Wire: shimlayout.WireLen, Offset: uint32(unsafe.Offsetof(scratchGrp{}.S)), Sub: -1},
+		}},
+		{Full: "scratch3.Rep", Size: unsafe.Sizeof(scratchRep{}), Rows: []shimlayout.Row{
+			{Fnum: 1, Kind: shimlayout.KindInt32, Wire: shimlayout.WireVarint, Offset: uint32(unsafe.Offsetof(scratchRep{}.V)), Sub: -1},
+		}},
+		{Full: "scratch3.Sub", Size: unsafe.Sizeof(scratchSub{}), Rows: []shimlayout.Row{
+			{Fnum: 1, Kind: shimlayout.KindMessage, Wire: shimlayout.WireLen, Offset: uint32(unsafe.Offsetof(scratchSub{}.Leaf)), Sub: 4},
+			{Fnum: 2, Kind: shimlayout.KindInt32, Wire: shimlayout.WireVarint, Offset: uint32(unsafe.Offsetof(scratchSub{}.N)), Sub: -1},
+		}},
+		{Full: "scratch3.Leaf", Size: unsafe.Sizeof(scratchLeaf{}), Rows: []shimlayout.Row{
+			{Fnum: 1, Kind: shimlayout.KindInt32, Wire: shimlayout.WireVarint, Offset: uint32(unsafe.Offsetof(scratchLeaf{}.W)), Sub: -1},
+		}},
+	}
+}
+
+func TestCshimCodecGroups(t *testing.T) {
+	md := scratchGroupDescriptor(t)
+	byNum := func(n protoreflect.FieldNumber) protoreflect.FieldDescriptor {
+		return md.Fields().ByNumber(n)
+	}
+	build := func() *dynamicpb.Message {
+		m := dynamicpb.NewMessage(md)
+		leaf := dynamicpb.NewMessage(byNum(3).Message().Fields().ByNumber(1).Message())
+		leaf.Set(leaf.Descriptor().Fields().ByNumber(1), protoreflect.ValueOfInt32(9))
+		sub := dynamicpb.NewMessage(byNum(3).Message())
+		sub.Set(sub.Descriptor().Fields().ByNumber(1), protoreflect.ValueOfMessage(leaf))
+		sub.Set(sub.Descriptor().Fields().ByNumber(2), protoreflect.ValueOfInt32(5))
+		grp := dynamicpb.NewMessage(byNum(1).Message())
+		grp.Set(grp.Descriptor().Fields().ByNumber(1), protoreflect.ValueOfInt32(7))
+		grp.Set(grp.Descriptor().Fields().ByNumber(2), protoreflect.ValueOfString("g"))
+		m.Set(byNum(1), protoreflect.ValueOfMessage(grp))
+		rep1 := dynamicpb.NewMessage(byNum(2).Message())
+		rep1.Set(rep1.Descriptor().Fields().ByNumber(1), protoreflect.ValueOfInt32(1))
+		rep2 := dynamicpb.NewMessage(byNum(2).Message())
+		rep2.Set(rep2.Descriptor().Fields().ByNumber(1), protoreflect.ValueOfInt32(2))
+		ml := m.Mutable(byNum(2)).List()
+		ml.Append(protoreflect.ValueOfMessage(rep1))
+		ml.Append(protoreflect.ValueOfMessage(rep2))
+		m.Set(byNum(3), protoreflect.ValueOfMessage(sub))
+		return m
+	}
+	want := build()
+	ref, err := proto.MarshalOptions{Deterministic: true}.Marshal(want)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	c, err := newCodecFromLayout(scratchGroupRows(), "scratch3.S")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	m := &scratchG{
+		Grp: &scratchGrp{V: 7, S: "g"},
+		Rep: []*scratchRep{{V: 1}, {V: 2}},
+		Sub: &scratchSub{Leaf: &scratchLeaf{W: 9}, N: 5},
+	}
+	if got := testEncode(t, c, m); !bytes.Equal(got, ref) {
+		t.Fatalf("encode differs: %x vs %x", got, ref)
+	}
+
+	// Reverse: our bytes parse as the same dynamic message.
+	rt := dynamicpb.NewMessage(md)
+	if err := proto.Unmarshal(ref, rt); err != nil {
+		t.Fatalf("oracle reparse: %v", err)
+	}
+	if !proto.Equal(want, rt) {
+		t.Fatal("oracle reparse mismatch")
+	}
+
+	// Decode writes raw C-backed state; typed reads verify it and
+	// re-encoding must be byte-stable without any Go fixup.
+	back := &scratchG{}
+	testDecode(t, c, back, ref)
+	runtime.KeepAlive(ref)
+	if back.Grp == nil || back.Grp.V != 7 || back.Grp.S != "g" {
+		t.Fatalf("group lost: %+v", back.Grp)
+	}
+	if len(back.Rep) != 2 || back.Rep[0].V != 1 || back.Rep[1].V != 2 {
+		t.Fatalf("repeated group lost: %+v", back.Rep)
+	}
+	if back.Sub == nil || back.Sub.Leaf == nil || back.Sub.Leaf.W != 9 || back.Sub.N != 5 {
+		t.Fatalf("nested message lost: %+v", back.Sub)
+	}
+	if again := testEncode(t, c, back); !bytes.Equal(again, ref) {
+		t.Fatalf("re-encode differs: %x vs %x", again, ref)
+	}
+
+	// A mismatched end tag must fail, not skip.
+	bad := append([]byte{}, ref...)
+	if len(bad) < 7 || bad[6] != 0x0c {
+		t.Fatalf("unexpected oracle prefix: %x", ref)
+	}
+	bad[6] = 0x14 // first group closed by field 2's end tag
+	badBase := unsafe.Pointer(reflect.ValueOf(&scratchG{}).Pointer())
+	if _, err := c.decodeRaw(badBase, bad); err == nil {
+		t.Fatal("mismatched end tag decoded without error")
+	}
+	runtime.KeepAlive(bad)
+	// A truncated group must fail as well.
+	if _, err := c.decodeRaw(badBase, ref[:len(ref)-1]); err == nil {
+		t.Fatal("truncated input decoded without error")
 	}
 }
