@@ -188,7 +188,7 @@ own README. Dart ran once `dart pub global activate protoc_plugin` provided
 | Zig (static link) | `make zig-bench` (`bindings/zig/benchmarks`, `-Doptimize=ReleaseFast`) | Arwalk/zig-protobuf 7.0.0 generated code from the same `matrix3.proto` | all 4 | 1.87x ✅ / 2.65x ✅ |
 | F# (facade over the C# runtime) | `make fsharp-bench` (`bindings/fsharp/benchmarks`) | Google.Protobuf C# generated code from the same `matrix3.proto` | all 4 | 3.36x ✅ / 1.49x ✅ `tree` (`shim` 0.12x / 0.10x) |
 | Clojure (Java runtime + interop) | `make clojure-bench` (`bindings/clojure/benchmarks`) | `protobuf-java` generated code from the same `matrix3.proto` | all 4 | 1.26x ✅ / 1.70x ✅ `core` (0.68x at 136 B; `tree` map API 0.01x) |
-| Julia (`ccall` FFI) | `make julia-bench` (`bindings/julia/benchmarks`) | JuliaIO/ProtoBuf.jl 1.3.0 generated code from the same `matrix3.proto` | all 4 | 133.5x ✅ / 1.06x ✅ (0.89x at 136 B plain, 0.98x with a workspace) |
+| Julia (`ccall` FFI) | `make julia-bench` (`bindings/julia/benchmarks`) | JuliaIO/ProtoBuf.jl 1.3.0 generated code from the same `matrix3.proto` | all 4 | 96.20x ✅ / 1.11x ✅ `shim` (one C-side layout read per op; prebuilt `tree` handle 137.75x / 1.08x; 136 B shim decode 0.96x) |
 | R (C extension, named lists) | `make r-bench` (`bindings/r/benchmarks`) | RProtoBuf 0.4.28 on the same `matrix3.proto` | all 4 | 49.89x ✅ / 50.28x ✅ |
 
 "vs baseline" is encode / decode throughput relative to the best baseline on
@@ -217,7 +217,7 @@ timer.
 | F# | three, no separate F# port |
 | Node | three arms: `tree` (prebuilt `Message` handle, shipped), `shim` (the addon walks the plain object in one call), `core` is plan 15 |
 | Dart | three arms: `tree` (prebuilt `Message` handle, shipped), `shim` (the C reader walks the generated flat `Struct` in one call), `core` is plan 18 |
-| Julia | three |
+| Julia | three arms: `tree` (prebuilt `Message` handle, shipped), `shim` (the C reader walks the generated layout struct in one call), `core` is plan 19 |
 | Rust | three |
 | Swift | three |
 | Zig | three |
@@ -235,14 +235,14 @@ bytes are identical everywhere. Core plain 169 B encode left this list on
 2026-11-15 (0.96x -> 1.10x) once the writer cached its base pointer. The
 sub-1.0x cells that remain are boundary floors: Java/Kotlin small-tier `tree`
 encode at 0.71x/0.71x and Clojure's 136 B `core` encode at 0.68x (a generated
-writer knows its tags, the dynamic tree walk derives them), Julia 136 B plain
-decode at 0.89x (the cell is one
-`malloc`/`free` arena pair plus a `ccall`: 126.1 ns of C decode + 7.5 ns of
-wrapper against a 118.8 ns baseline, and the binding's `decode_in` over a
-reusable context is 0.98x), and Scala 174 B `tree` decode at 1.00x (the baseline
-moved between runs, not the codec). Each is inside the run-to-run band of its
-own baseline. Above the line after the 2026-11-15 passes: Python 136 B decode
-(1.02x), Kotlin 174 B encode (1.13x) and Julia's workspace decode rows.
+writer knows its tags, the dynamic tree walk derives them), Julia's 136 B
+decode (tree 0.90x, native-object `shim` 0.96x, workspace 1.00x: the C decode
+plus a `ccall` against ProtoBuf.jl's pure-Julia generated decoder; the shim
+already runs without a per-call `malloc`/`free` pair), and Scala 174 B `tree`
+decode at 1.00x (the baseline moved between runs, not the codec). Each is
+inside the run-to-run band of its own baseline. Above the line after the
+2026-11-15 passes: Python 136 B decode (1.02x), Kotlin 174 B encode (1.13x)
+and Julia's workspace decode rows from 174 B up.
 The JVM narrow cells are the per-field dispatch of a generic encoder
 against straight-line generated code; the ledger records what was tried
 there.
@@ -293,7 +293,7 @@ payload, the boundary cost and the baseline all differ.
 | Zig | static link | 74913 B | 1493.9 (1.87x ✅) | 691.6 (2.65x ✅) |
 | F# | P/Invoke over the C# runtime | 74913 B | 1617.7 (3.36x ✅) `tree`; `shim` 58.3 (0.12x ❌) | 734.1 (1.49x ✅) `tree`; `shim` 48.9 (0.10x ❌) |
 | Clojure | the Java runtime + interop | 74913 B | 974.8 (1.12x ✅) | 718.2 (1.66x ✅) |
-| Julia | `dlopen` + `ccall` | 74913 B | 1535.5 (133.5x ✅) | 727.1 (1.06x ✅) |
+| Julia | `dlopen` + `ccall` | 74913 B | 1653.0 (137.75x ✅) `tree`; native-object `shim` 1154.4 (96.20x ✅) | 761.6 (1.08x ✅) `tree`; `shim` 783.6 (1.11x ✅) |
 | R | C extension, named lists | 74913 B | 134.7 (49.89x ✅) | 125.7 (50.28x ✅) |
 
 Read it as: the in-process dynamic core sets the pace (1.38x the C++
@@ -311,9 +311,9 @@ and Node's `shim` row -- the native object in and out -- is 0.12x / 0.13x of
 protobufjs: the boundary, not the codec, is what that row measures, PHP's 1.14x /
 1.35x is over the official C extension (the pure-PHP runtime trails it by
 ~373x / ~135x) — see their sections. Swift, Scala, F#, Zig and Julia join
-the ~0.92-1.5 GB/s encode club on xlarge (Swift 5.43x and Julia 135x encode
-are baseline effects: swift-protobuf and ProtoBuf.jl encode much slower than
-their own decode).
+the ~0.92-1.5 GB/s encode club on xlarge (Swift 5.43x and Julia's 137.75x
+`tree` / 96.20x `shim` encode are baseline effects: swift-protobuf and
+ProtoBuf.jl encode much slower than their own decode).
 
 ## Linux (docker): the same harnesses, one container away
 
@@ -1518,42 +1518,48 @@ wire implementation), byte parity per tier.
 
 ![Julia (dlopen + ccall) vs ProtoBuf.jl — MB/s by tier](docs/charts/bench-julia-dlopen-ccall-vs-protobuf-jl.svg)
 
-| payload | op | pbwire-julia (MB/s, x ProtoBuf.jl) | ProtoBuf.jl (MB/s) |
-|---|---|---|---|
-| 136 B | encode | 1550.1 (4.01x ✅) | 386.9 |
-| 136 B | decode | 1017.6 (0.90x ❌) | 1135.5 |
-| 136 B | dec+ctx | 1152.8 (1.02x ✅) | 1135.5 |
-| 174 B | encode | 1500.1 (4.77x ✅) | 314.3 |
-| 174 B | decode | 840.6 (1.20x ✅) | 698.1 |
-| 174 B | dec+ctx | 917.5 (1.31x ✅) | 698.1 |
-| 2469 B | encode | 1402.4 (10.79x ✅) | 130.0 |
-| 2469 B | decode | 656.4 (1.07x ✅) | 613.8 |
-| 2469 B | dec+ctx | 675.4 (1.10x ✅) | 613.8 |
-| 74913 B | encode | 1518.7 (143.27x ✅) | 10.6 |
-| 74913 B | decode | 722.9 (1.07x ✅) | 676.1 |
-| 74913 B | dec+ctx | 731.8 (1.08x ✅) | 676.1 |
+| payload | op | pbwire-julia-tree (MB/s, x ProtoBuf.jl) | pbwire-julia-shim (MB/s, x ProtoBuf.jl) | ProtoBuf.jl (MB/s) |
+|---|---|---|---|---|
+| 136 B | encode | 1657.2 (4.28x ✅) | 1277.7 (3.30x ✅) | 387.3 |
+| 136 B | decode | 1025.6 (0.90x ❌) | 1096.8 (0.96x ❌) | 1140.1 |
+| 136 B | dec+ctx | 1137.3 (1.00x ❌) | -- | 1140.1 |
+| 174 B | encode | 1556.4 (4.69x ✅) | 1280.7 (3.86x ✅) | 332.1 |
+| 174 B | decode | 872.7 (1.17x ✅) | 997.3 (1.34x ✅) | 746.4 |
+| 174 B | dec+ctx | 970.2 (1.30x ✅) | -- | 746.4 |
+| 2469 B | encode | 1661.2 (12.63x ✅) | 1026.9 (7.81x ✅) | 131.5 |
+| 2469 B | decode | 683.4 (1.07x ✅) | 697.6 (1.10x ✅) | 635.8 |
+| 2469 B | dec+ctx | 684.5 (1.08x ✅) | -- | 635.8 |
+| 74913 B | encode | 1653.0 (137.75x ✅) | 1154.4 (96.20x ✅) | 12.0 |
+| 74913 B | decode | 761.6 (1.08x ✅) | 783.6 (1.11x ✅) | 703.1 |
+| 74913 B | dec+ctx | 756.8 (1.08x ✅) | -- | 703.1 |
 
 FFI host like Dart/C#: `Libdl.dlopen` + `ccall` into the C ABI (function
 pointers resolved once via `dlsym`, since recent Julia needs a compile-time
 library name), `Dict`-based messages convert through the C ABI, no wire
 code, no `.proto` parser. The baseline is `protojl`-generated code
-(`benchmarks/oracle/matrix3_pb.jl`, produced by `protojl("matrix3.proto",
-"<proto dir>", "benchmarks/oracle")`). Its encode collapses with size
-(pure-Julia per-field appends). Decode is close: both sides land near the C
-core's own ~676 MB/s, so the medium and large tiers lead at 1.07-1.31x
-while the small tier trails on fixed FFI overhead (0.90x plain, 1.02x with a
-workspace, like the Java/Kotlin small-tier floors) and xlarge leads slightly
-(1.07x, a baseline that matches the C core byte for byte); the headline
-remains the xlarge encode column.
+(`benchmarks/oracle/structtest/matrix3_pb.jl`, produced by
+`protojl("matrix3.proto", "<proto dir>", "benchmarks/oracle")`). Its encode
+collapses with size (pure-Julia per-field appends).
+
+`pbwire-julia-tree` is the prebuilt dynamic `Message` handle (plain
+encode/decode plus the reusable workspace). `pbwire-julia-shim` is the other
+native-object path: a generated `mutable struct Scalars3Layout` is the object,
+and `bindings/julia/native/pbw_julia_shim.c` walks it in place through
+`pbw_struct_codec_*`, one `ccall` per op, with the image and caller-memory
+arena allocated once. The shim beats the baseline on all four encode tiers
+(3.30x at 136 B, 96.20x at 74 KB) and on medium/large/xlarge decode
+(1.10-1.34x). The 136 B decode stays below (0.96x shim, 0.90x tree): the small
+tier is the C struct decode plus the boundary, not an arena cost (the plan
+removes the per-call `malloc`/`free` pair, and Stage 6 recorded two attempts
+that did not beat it). The headline remains the xlarge encode column.
 
 The `dec+ctx` rows are the binding's other decode entry point:
 `decode_in(ctx, ty, wire)` decodes into a reusable `Ctx`, so steady-state
 decoding stops allocating (the C core's `pbw_decode_ctx`, which resets a sealed
-arena on entry, so no separate reset call is needed). It is 13% faster on
-the 136 B tier, 9% on 174 B and 3% on the 2.5 KB tier, and matches the plain
-path on the 75 KB tier (1.08x), where the arena reset now keeps the used
-chunk prefix instead of re-mallocing it every decode. The tree it returns
-is read-only and dies at the
+arena on entry, so no separate reset call is needed). It matches the plain
+path on the 136 B tier, leads by 11% on 174 B and 1-8% on the larger tiers,
+where the arena reset now keeps the used chunk prefix instead of re-mallocing
+it every decode. The tree it returns is read-only and dies at the
 next `decode_in`/`reset!` on that context.
 
 ### R (C extension, named lists) vs RProtoBuf

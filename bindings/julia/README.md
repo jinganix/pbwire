@@ -64,11 +64,21 @@ julia --project=runtime examples/roundtrip.jl
 julia --project=runtime benchmarks/bench.jl # vs JuliaIO/ProtoBuf.jl, four tiers
 ```
 
-Without `benchmarks/oracle/matrix3_pb.jl` (generated with `protoc
---julia_out`) the script times pbwire only and says so. The four tiers are
+`benchmarks/bench.jl` prints two mechanisms: `pbwire-julia-tree` is the
+prebuilt dynamic `Message` handle (plain encode/decode plus the reusable
+`Ctx` workspace), and `pbwire-julia-shim` is the generated `mutable struct
+Scalars3Layout` read and written in place by
+`native/pbw_julia_shim.c`, one `ccall` per op. `make julia-bench` builds the
+shim library first. Without `benchmarks/oracle/.../matrix3_pb.jl` (generated
+with `protojl`) the script times pbwire only and says so. The four tiers are
 small / medium / large / xlarge (the repeated fields scaled x0 / x1 / x100 /
 x3000). Copied from [BENCHMARKS.md](../../BENCHMARKS.md), which is the single
 source for all performance numbers; higher is better, MB/s over wire bytes.
+
+`pbench/` is the three-arm contract: `tree` (dynamic handle, whole task),
+`shim` (flat layout image), `core` (`n/a`, plan 19). Run `pbench/setup.sh`,
+then `julia --project=runtime pbench/gate.jl` (byte/field gate) and
+`compare.jl` (interleaved median table).
 
 Strings cross as NUL-terminated C strings, so `set_string!` rejects embedded
 NUL bytes: use `set_bytes!` for binary payloads (a `string` field accepts them
@@ -86,9 +96,9 @@ anything. One message tree belongs to one thread, like the C core.
 
 ## Generated models
 
-`protoc-gen-pbwire` (in `../../codegen`) emits `<base>_pbwire.jl`
-(structs over this dynamic API) and `<base>_meta.jl` (the embedded
-descriptor set plus its loader, included by path). `--pbwire_opt=lang=julia`
+`protoc-gen-pbwire` (in `../../codegen`) also emits a
+`mutable struct <Message>Layout` and its `fieldoffset` row table beside each
+message, the native object the pbench `shim` arm reads in one call. `--pbwire_opt=lang=julia`
 `[,model=bool][,register=bool][,registry=bool]` (all default `true`):
 `model=false` leaves the schema file for dynamic-only users;
 `register=false` drops the lazy load so `init_schema()` (embedded bytes)

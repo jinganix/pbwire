@@ -150,6 +150,11 @@ Dart has all three: `tree` is the prebuilt `Message` handle, `shim` is the
 generated flat `<Message>Layout` read in place by the C-side reader
 (`pbwire-dart-shim`), `core` waits on plan 18.
 
+Julia has all three: `tree` is the prebuilt `Message` handle, `shim` is the
+generated mutable `<Message>Layout` read in place by
+`bindings/julia/native/pbw_julia_shim.c` (`pbwire-julia-shim`), `core` waits
+on plan 19.
+
 A binding states which of the three it has, including the two-mechanism
 bindings and the deferred ports with the reason: the status table in
 [BENCHMARKS.md](../BENCHMARKS.md#bindings-vs-their-baselines), with the per-arm
@@ -187,7 +192,7 @@ throughput against the official runtime, copied from
 | Zig | `zig-protobuf` codegen per message, fragmented across forks | `@cImport`-free static link (`translate-c` + `libpbwire.a` compiled in) | 1.81x / 2.13x (vs zig-protobuf) |
 | F# | .NET protobuf means C# SDK style even in F# code | facade over the C# project (`ProjectReference`, same P/Invoke core) | 3.05x / 1.44x (vs Google.Protobuf) |
 | Clojure | protobuf-java interop per message, maps materialized per field | mutable-message fast path over the Java runtime (maps stay for convenience) | 1.16x / 1.77x (vs protobuf-java; mutable-message fast path; 0.75x encode at 136 B) |
-| Julia | `ProtoBuf.jl` is pure Julia, per-field interpreter overhead | `dlopen` + `ccall` FFI host (`FileDescriptorSet` at run time, `Dict` boundary) | 135.6x / 1.00x (vs ProtoBuf.jl; baseline encode collapses with size) |
+| Julia | `ProtoBuf.jl` is pure Julia, per-field interpreter overhead | `dlopen` + `ccall` FFI host (`FileDescriptorSet` at run time, `Dict` boundary); the generated layout image is read in place by a C-side reader (`bindings/julia/native/`), one `ccall` per op | 96.20x / 1.11x `shim` (vs ProtoBuf.jl; prebuilt `tree` handle 137.75x / 1.08x, 136 B shim decode 0.96x) |
 | R | `RProtoBuf` binds the C++ runtime per message | C extension over the core (`.Call`, named lists in/out, statically linked) | 61.5x / 66.6x (vs RProtoBuf) |
 | Lua | game servers hand tables to `pbc`/`lua-protobuf`, each with its own schema story | C module over the core: tables convert through the schema's arena, a builder tree is the write fast path | 1.08x / 1.33x (vs lua-protobuf; 7.65x via builder encode — data already in pbwire) |
 
