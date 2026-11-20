@@ -844,14 +844,16 @@ js_int64(napi_env env, napi_value value, int is_unsigned, uint64_t *out)
 
         if (is_unsigned) {
             if (napi_get_value_bigint_uint64(env, value, out, &lossless) !=
-                    napi_ok || !lossless) {
+                    napi_ok ||
+                !lossless) {
                 return 0;
             }
         } else {
             int64_t bits = 0;
 
             if (napi_get_value_bigint_int64(env, value, &bits, &lossless) !=
-                    napi_ok || !lossless) {
+                    napi_ok ||
+                !lossless) {
                 return 0;
             }
             *out = (uint64_t)bits; /* two's complement: the raw bit pattern */
