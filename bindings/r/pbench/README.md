@@ -75,3 +75,27 @@ the application had to keep. One `.Call` keeps that task 60-90x RProtoBuf at
 74913 B; the builder row is 3.5-10x the list row because it skips the list walk
 and the named-list materialization entirely -- that is the builder's price, not
 something the shim can recover without a tree of its own.
+
+## Verdict
+
+**Keep the shipped runtime and publish both rows.** `pbwire-r-shim` is the
+native-object row R users actually run -- a named list in, wire bytes out, the
+whole walk in C behind one `.Call` -- and it is 25-90x RProtoBuf on every tier
+(xlarge 155.3 MB/s encode, 121.4 MB/s decode, against 2.1 / 2.9). `pbwire-r-tree`
+is the prebuilt builder handle (`pbwire_message` + `pbwire_message_set` before
+the timer), 3.5-10x the list row (xlarge 1606.5 / 485.5 MB/s), and stays the form
+a hot loop should hold.
+
+It is not (a) -- "replace the shipped fast path": the list path is 1/3.5 to
+1/10 of the builder because it pays the whole list walk plus the decode-side
+named-list materialization, so replacing the builder with it would slow every
+`pbwire_msg_encode` caller.
+
+It is not (c) -- "split by payload size": the list path is above RProtoBuf at
+all four tiers (25x at 136 B, 74x at 74913 B), and there is no crossover between
+the two arms at any size -- both scale with the payload, and the builder wins by
+the same order everywhere.
+
+`core` stays `n/a`: a pure-R port would loop per field in the interpreter, orders
+of magnitude off, and no native-less R target exists (TODO in
+`runtime/R/pbwire.R`).
