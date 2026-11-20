@@ -113,7 +113,7 @@ func TestGoFilesDefault(t *testing.T) {
 		t.Error("model file must not embed the descriptor")
 	}
 	for _, want := range []string{
-		`"pbwire/codec"`,
+		`"pbwire/pbench/dyngo/codec"`,
 		"func (m *M) Marshal() ([]byte, error)",
 		"codec.EncodeModel(m, MMeta)",
 		"func (m *M) Unmarshal(wire []byte) error",
@@ -129,6 +129,7 @@ func TestGoFilesDefault(t *testing.T) {
 	}
 	for _, want := range []string{
 		"var MMeta = codec.NewTable(\"t.M\"",
+		"Name: \"v\"",
 		"Num: 1, Wire: codec.WireVarint, Kind: codec.KindInt32",
 		"Num: 2, Wire: codec.WireLen, Kind: codec.KindString",
 		"GetI32:",
@@ -156,7 +157,7 @@ func TestGoFilesDefault(t *testing.T) {
 			t.Errorf("model file must stay thin: %q", bad)
 		}
 	}
-	if strings.Contains(models, "pbwire/dynamic") {
+	if strings.Contains(models, "pbwire/pbench/dync/dynamic") {
 		t.Error("model file must not import the dynamic API")
 	}
 }
@@ -281,7 +282,7 @@ func TestGoCodecBranches(t *testing.T) {
 		`"math"`,
 		"GetInt(",
 		"SetInt(",
-		"pbwire/dynamic",
+		"pbwire/pbench/dync/dynamic",
 		"type B struct",
 	} {
 		if strings.Contains(meta, bad) {

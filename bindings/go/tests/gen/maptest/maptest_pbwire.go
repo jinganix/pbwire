@@ -5,7 +5,7 @@
 package maptest
 
 import (
-	"pbwire/codec"
+	"pbwire/pbench/dyngo/codec"
 )
 
 // spectest.MapValue

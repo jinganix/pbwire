@@ -23,7 +23,7 @@ func EncodeModel(msg any, t *Table) ([]byte, error) {
 	if err := EncodeTable(&e, msg, t, 0); err != nil {
 		return nil, err
 	}
-	t.setCapHint(cap(e.Buf))
+	t.setCapHint(len(e.Buf) + 64)
 	return e.Result(), nil
 }
 

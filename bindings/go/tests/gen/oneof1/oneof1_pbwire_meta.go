@@ -5,12 +5,12 @@
 package oneof1
 
 import (
-	"pbwire/codec"
+	"pbwire/pbench/dyngo/codec"
 )
 
 // Oneof1_InnerMeta is the generated DATA table for spectest.Oneof1.Inner: one row per field.
 var Oneof1_InnerMeta = codec.NewTable("spectest.Oneof1.Inner", []*codec.Field{
-	{Num: 1, Wire: codec.WireVarint, Kind: codec.KindInt32,
+	{Name: "v", Num: 1, Wire: codec.WireVarint, Kind: codec.KindInt32,
 		GetI32: func(msg any) int32 { return msg.(*Oneof1_Inner).V },
 		SetI32: func(msg any, v int32) { msg.(*Oneof1_Inner).V = v },
 	},
@@ -18,11 +18,11 @@ var Oneof1_InnerMeta = codec.NewTable("spectest.Oneof1.Inner", []*codec.Field{
 
 // Oneof1Meta is the generated DATA table for spectest.Oneof1: one row per field.
 var Oneof1Meta = codec.NewTable("spectest.Oneof1", []*codec.Field{
-	{Num: 1, Wire: codec.WireLen, Kind: codec.KindString,
+	{Name: "name", Num: 1, Wire: codec.WireLen, Kind: codec.KindString,
 		GetStr: func(msg any) string { return msg.(*Oneof1).Name },
 		SetStr: func(msg any, v string) { msg.(*Oneof1).Name = v },
 	},
-	{Num: 2, Wire: codec.WireVarint, Kind: codec.KindInt32, Oneof: true,
+	{Name: "num", Num: 2, Wire: codec.WireVarint, Kind: codec.KindInt32, Oneof: true,
 		GetOneof: func(msg any) (any, bool) {
 			if x, ok := msg.(*Oneof1).Kind.(*Oneof1_Num); ok {
 				return x.Num, true
@@ -31,7 +31,7 @@ var Oneof1Meta = codec.NewTable("spectest.Oneof1", []*codec.Field{
 		},
 		SetOneof: func(msg any, v any) { msg.(*Oneof1).Kind = &Oneof1_Num{Num: v.(int32)} },
 	},
-	{Num: 3, Wire: codec.WireLen, Kind: codec.KindString, Oneof: true,
+	{Name: "text", Num: 3, Wire: codec.WireLen, Kind: codec.KindString, Oneof: true,
 		GetOneof: func(msg any) (any, bool) {
 			if x, ok := msg.(*Oneof1).Kind.(*Oneof1_Text); ok {
 				return x.Text, true
@@ -40,7 +40,7 @@ var Oneof1Meta = codec.NewTable("spectest.Oneof1", []*codec.Field{
 		},
 		SetOneof: func(msg any, v any) { msg.(*Oneof1).Kind = &Oneof1_Text{Text: v.(string)} },
 	},
-	{Num: 4, Wire: codec.WireLen, Kind: codec.KindMessage, Oneof: true,
+	{Name: "inner", Num: 4, Wire: codec.WireLen, Kind: codec.KindMessage, Oneof: true,
 		Sub: func() *codec.Table { return Oneof1_InnerMeta },
 		GetOneof: func(msg any) (any, bool) {
 			if x, ok := msg.(*Oneof1).Kind.(*Oneof1_Inner_); ok {

@@ -1,20 +1,23 @@
 # pbwire Go binding
 
-Two dynamic cores, one wire implementation:
+No shipped runtime yet: the candidates live side by side in
+[`pbench/`](pbench/) until its numbers select the final solution. Two dynamic
+cores compete over one wire implementation:
 
-- **C core** ([`dynamic/`](dynamic/)): cgo over the shared `libpbwire.a`. It
-  loads a `FileDescriptorSet` at run time, builds message trees in C, and
-  hot-swaps schemas without a restart (`Registry.Swap`); in-flight messages
-  keep the schema they were built from.
-- **Go core** ([`codec/`](codec/)): the same runtime schema, decoded into a
-  pure-Go value tree (`codec.DMsg`) and encoded by the shared table engine.
-  No cgo, no generated code, no second wire implementation.
+- **C core** ([`pbench/dync/dynamic/`](pbench/dync/dynamic/)): cgo over the
+  shared `libpbwire.a`. It loads a `FileDescriptorSet` at run time, builds
+  message trees in C, and hot-swaps schemas without a restart
+  (`Registry.Swap`); in-flight messages keep the schema they were built from.
+- **Go core** ([`pbench/dyngo/codec/`](pbench/dyngo/codec/)): the same runtime
+  schema, decoded into a pure-Go value tree (`codec.DMsg`) and encoded by the
+  shared table engine. No cgo, no generated code, no second wire
+  implementation.
 
 Generated models are thin wrappers over the Go core: a `protoc-gen-pbwire`
 struct plus one metadata file of field tables. Nothing in generated code
 decides a tag, a length, presence or skipping.
 
-## Dynamic C core
+## Dynamic C core (candidate)
 
 ```go
 reg, _ := dynamic.NewRegistry(descSet)   // descSet: FileDescriptorSet bytes
@@ -36,7 +39,7 @@ Roots own their C tree and must be freed with `Close`; nested views from
 passes the input slice straight into C (zero-copy in); `Encode` writes into
 a Go slice (one downcall, nothing to free).
 
-## Dynamic Go core
+## Dynamic Go core (candidate)
 
 Same schema bytes, no cgo: `codec.Load` turns a `FileDescriptorSet` into
 per-message plans, `Schema.Type` binds one to a runtime table, and `DMsg`
@@ -86,14 +89,14 @@ to keep them. Reach for the two dynamic cores when that matters.
 |---|---|---|
 | model | `tests/gen/<pkg>/<base>_pbwire.go` | structs, enums, getters, `Reset`, one-line `Marshal`/`Unmarshal` |
 | metadata | `tests/gen/<pkg>/<base>_pbwire_meta.go` | one field table per message: facts and trivial accessors, no wire logic |
-| dynamic Go core | [`codec/`](codec/) | `Schema`/`DType`/`DMsg`, the one `EncodeTable`/`DecodeTable` engine, descriptor-set plans |
-| dynamic C core | [`dynamic/`](dynamic/) | `Registry` (hot-swap), `Schema`, `MessageType`, `Message` |
-| bench | [`benchmarks/bench_test.go`](benchmarks/bench_test.go) (`bench.sh` writes `gen/matrix3.desc` with `protoc`) | four standard tiers: `pbwire-go dync`, `pbwire-go dyngo`, `protobuf-go`, gated on byte parity and a field-by-field decode before timing |
-| arms | [`pbench/`](pbench/) (`go test -tags pbench ./pbench/`) | the three dynamic arms over the same tiers, native struct in and out (issue #41) |
+| Go core candidate | [`pbench/dyngo/codec/`](pbench/dyngo/codec/) | `Schema`/`DType`/`DMsg`, the one `EncodeTable`/`DecodeTable` engine, descriptor-set plans, shipped model<->tree converter |
+| C core candidate | [`pbench/dync/dynamic/`](pbench/dync/dynamic/) | `Registry` (hot-swap), `Schema`, `MessageType`, `Message`, shipped model<->tree converter |
+| bench | [`benchmarks/bench_test.go`](benchmarks/bench_test.go) | four standard tiers: thin model vs `protobuf-go`, gated on byte parity and a field-by-field decode before timing |
+| arms | [`pbench/`](pbench/) (`go test -tags pbench ./pbench/`) | the three dynamic arms over the same tiers, native struct in and out, converter-only glue (issue #41) |
 
 ```shell
-make go-test    # dynamic C core checks + Go core parity + generated-model compat (needs protoc)
-make go-bench   # four standard tiers, both cores, against protobuf-go
+make go-test    # candidate checks + converter parity + generated-model compat (needs protoc)
+make go-bench   # four standard tiers, thin model against protobuf-go (needs Go only)
 ```
 
 Generated models are split like Java's: the message file holds the data types

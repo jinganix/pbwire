@@ -10,8 +10,8 @@
 package dynamic
 
 /*
-#cgo CFLAGS: -I${SRCDIR}/../../../include
-#cgo LDFLAGS: ${SRCDIR}/../../../build/libpbwire.a
+#cgo CFLAGS: -I${SRCDIR}/../../../../../include
+#cgo LDFLAGS: ${SRCDIR}/../../../../../build/libpbwire.a
 #include <stdlib.h>
 #include "pbwire.h"
 

@@ -5,7 +5,7 @@
 package oneof1
 
 import (
-	"pbwire/codec"
+	"pbwire/pbench/dyngo/codec"
 )
 
 // spectest.Oneof1.Inner

@@ -137,7 +137,7 @@ func (m *DMsg) Encode() ([]byte, error) {
 	if err := EncodeTable(&e, m, t, 0); err != nil {
 		return nil, err
 	}
-	t.setCapHint(cap(e.Buf))
+	t.setCapHint(len(e.Buf) + 64)
 	return e.Result(), nil
 }
 

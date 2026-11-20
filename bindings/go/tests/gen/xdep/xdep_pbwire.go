@@ -5,7 +5,7 @@
 package xdep
 
 import (
-	"pbwire/codec"
+	"pbwire/pbench/dyngo/codec"
 )
 
 // xdep.DepMsg

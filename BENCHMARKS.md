@@ -189,8 +189,9 @@ bar because their decode materializes native values (RProtoBuf's bare
 handle-based bindings (Go, Node, Ruby, C#, Rust, Swift, Objective-C, Zig,
 F#, Dart, PHP, Julia and the JVM four) publish rows for the dynamic handle
 API instead, which leaves the copy between the handle and the host's native
-objects outside the timer. Go now prints both of its dynamic cores
-(`pbwire-go dync` and `pbwire-go dyngo`); the rest are being brought in line, tracked in
+objects outside the timer. Go prints the thin-model row (struct in, struct
+out; its dynamic candidates compete separately in `pbench/`); the rest are
+being brought in line, tracked in
 [issue 41](https://github.com/jinganix/pbwire/issues/41). Every binding with a
 wired baseline is ahead of it on the xlarge encode column (Java 1.09x, Rust
 1.04x, Elixir 2.56x: the three that used to sit under 1.0x are above the line
@@ -737,49 +738,49 @@ the layout per call and mallocs per value (5.3x / 3.9x slower at 136 B, 4.2x /
 compile is amortised). It stays in the
 output so that trade-off is visible rather than hidden.
 
-### Go (two dynamic cores)
+### Go (thin model vs protobuf-go)
 
-![Go (two dynamic cores) — MB/s by tier](docs/charts/bench-go-cgo-dynamic.svg)
+![Go (thin model) — MB/s by tier](docs/charts/bench-go-cgo-dynamic.svg)
 
-Static generated codecs are not a Go path: the binding ships two dynamic
-cores over one wire engine. The C core (`bindings/go/dynamic`) is cgo over
-`libpbwire`, loads a `FileDescriptorSet` at run time and hot-swaps schemas
-without a restart; the Go core (`bindings/go/codec`) loads the same set into
-plans and encodes a pure-Go value tree, with no cgo.
-`make go-bench` (`bindings/go/benchmarks`, build-tagged so `go test ./...`
-stays fast) times it against `protobuf-go` generated code from the same
+No shipped runtime yet: the candidates compete in
+[`bindings/go/pbench/`](bindings/go/pbench/) (see below) and `runtime/`
+stays empty until they select the final solution. `make go-bench`
+(`bindings/go/benchmarks`, build-tagged so `go test ./...` stays fast) times
+the thin generated model — `Marshal()`/`Unmarshal()`, no cgo, native struct
+in and out — against `protobuf-go` generated code from the same
 `matrix3.proto` on all four tiers. The two generated packages are the
-committed ones under `bindings/go/tests`, so `bench.sh` needs `protoc` only,
-for the `FileDescriptorSet` the dynamic registry loads.
+committed ones under `bindings/go/tests`, so `bench.sh` needs Go only: no
+protoc, no C toolchain, no descriptor.
 
-The table below is the dynamic C core (`pbwire-go dync`): `Encode()` on a tree
-already built in C, `Decode()` without reading a field back into Go. The
-harness also prints `pbwire-go dyngo`: the dynamic Go core
-([`bindings/go/codec/`](bindings/go/codec/)) through the thin generated model
-an application holds — `Marshal()`/`Unmarshal()`, no cgo, native struct in
-and struct out, every wire decision in the shared table engine. Only the
-dyngo row is the like-for-like comparison; the dync row is the handle figure,
-and the copy between handle and native object sits outside its timer (see
-[issue 41](https://github.com/jinganix/pbwire/issues/41)).
-This run (loaded host, same process times both sides) puts dyngo near
-parity on small tiers and ahead from 2.5 KB up; the formal numbers land with
-the next container run. Three dynamic arms were compared under
-[`bindings/go/pbench/`](bindings/go/pbench/) (same tiers, interleaved,
-native struct in and out): the C core at 0.05-0.11x encode, the Go core at
-0.16-0.27x, and an Erlang-style C shim at 1.71-2.20x. The per-field copy into
-any tree is what separates them; recorded in
-[perf-attempts.md](docs/perf-attempts.md#probe-round-go-struct-path-issue-41).
+The rows below are the like-for-like comparison both sides of issue 41
+asked for: the same user-visible task, struct in and struct out, gated on
+byte-identical output and a field-by-field decode before timing. Apple M4
+Pro, same process times both sides:
 
-| payload | op | pbwire-go dync (MB/s, x protobuf-go) | protobuf-go (MB/s) |
+| payload | op | pbwire-go (MB/s, x protobuf-go) | protobuf-go (MB/s) |
 |---|---|---|---|
-| 136 B | encode | 847.5 (1.34x ✅) | 632.3 |
-| 136 B | decode | 684.5 (1.24x ✅) | 553.9 |
-| 174 B | encode | 765.3 (1.24x ✅) | 618.5 |
-| 174 B | decode | 647.1 (1.40x ✅) | 462.5 |
-| 2469 B | encode | 1310.9 (2.51x ✅) | 523.1 |
-| 2469 B | decode | 657.3 (2.27x ✅) | 289.7 |
-| 74913 B | encode | 1495.4 (2.61x ✅) | 571.9 |
-| 74913 B | decode | 726.1 (2.38x ✅) | 304.8 |
+| 136 B | encode | 864.2 (1.30x ✅) | 666.9 |
+| 136 B | decode | 509.7 (0.93x ❌) | 548.9 |
+| 174 B | encode | 981.2 (1.56x ✅) | 630.1 |
+| 174 B | decode | 448.3 (0.99x ❌) | 452.6 |
+| 2469 B | encode | 854.5 (1.70x ✅) | 503.8 |
+| 2469 B | decode | 344.9 (1.11x ✅) | 309.9 |
+| 74913 B | encode | 881.9 (1.48x ✅) | 595.5 |
+| 74913 B | decode | 379.4 (1.21x ✅) | 312.4 |
+
+The two small-decode cells sit at parity: the per-field getter/setter
+dispatch of a generic engine against straight-line generated code, the same
+structural category as Java's small-tier cells (see
+[issue 41](https://github.com/jinganix/pbwire/issues/41)). Everything else
+is ahead, and encode leads on every tier.
+
+The three dynamic arms behind the thin model were compared under
+[`bindings/go/pbench/`](bindings/go/pbench/) (same tiers, interleaved,
+native struct in and out, converter-only glue): the C core at 0.05-0.10x
+encode, the Go core at 0.27-0.35x encode, and the Erlang-style C shim at
+1.61-2.16x. The per-field copy into any tree is what separates them; the
+full ledger is in
+[perf-attempts.md](docs/perf-attempts.md#probe-round-go-dynamic-arms-issue-41).
 
 Every tier is gated before timing: the official bytes must land on the
 pinned size, `pbwire-go` must encode byte-identical bytes from both the
