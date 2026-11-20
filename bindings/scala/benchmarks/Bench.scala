@@ -38,6 +38,34 @@ object Bench {
 
   private var failures = 0
 
+  /** The committed generated model for the same payload (native object). */
+  private def fillGenerated(n: Int): matrix3Gen.Structtest_Scalars3 =
+    matrix3Gen.Structtest_Scalars3(
+      i32 = Int.MinValue,
+      i64 = Long.MaxValue,
+      u32 = 0xffffffffL,
+      u64 = -1L,
+      s32 = Int.MinValue,
+      s64 = Long.MinValue,
+      fx32 = 0xdeadbeefL,
+      fx64 = 72623859790382856L,
+      sfx32 = Int.MinValue,
+      sfx64 = Long.MinValue,
+      f32 = Float.PositiveInfinity,
+      f64 = -123456.789,
+      flag = true,
+      str = "hello",
+      color = 2,
+      inner = Some(matrix3Gen.Structtest_Inner3(name = "kid", value = 42)),
+      nums = (0 until n).map(i => i - 3).toList,
+      tags = List.fill(n)("tag"),
+      inners = (0 until n).map(i =>
+        matrix3Gen.Structtest_Inner3(name = "grandkid", value = i + 1)).toList,
+      optI32 = Some(-7),
+      optStr = Some("opt"),
+      flags = (0 until n).map(i => i % 2 == 0).toList
+    )
+
   private def fillOfficial(n: Int): Scalars3 = {
     var m = Scalars3(
       i32 = Int.MinValue,
@@ -133,7 +161,7 @@ object Bench {
   }
 
   private def row(impl: String, op: String, bytes: Int, ns: Double): Unit =
-    println("  %-12s %-7s %12.1f %10.1f".format(impl, op, ns, bytes / ns * 1000.0))
+    println("  %-18s %-7s %12.1f %10.1f".format(impl, op, ns, bytes / ns * 1000.0))
 
   def main(args: Array[String]): Unit = {
     if (args.length != 1) {
@@ -176,26 +204,50 @@ object Bench {
                 println("FAIL " + label + ": pbwire-scala decode differs")
                 failures += 1
               } else {
-                val official = fillOfficial(n)
-                val tierCount = calibrate(() => message.encode(), count)
-                val res = measureAll(count, Seq(
-                  () => message.encode(),
-                  () => ty.decode(reference).close(),
-                  () => official.toByteArray,
-                  () => Scalars3.parseFrom(reference)))
-                val encode = res(0)
-                val decode = res(1)
-                val officialEncode = res(2)
-                val officialDecode = res(3)
+                // The native-object arm: the committed generated model must
+                // round-trip byte-identically and expose the same values.
+                val model = fillGenerated(n)
+                val modelBytes = matrix3Gen.Structtest_Scalars3.encode(model)
+                if (!java.util.Arrays.equals(modelBytes, reference)) {
+                  println("FAIL " + label + ": pbwire-scala core encode differs")
+                  failures += 1
+                } else {
+                  val modelBack = matrix3Gen.Structtest_Scalars3.decode(reference)
+                  val modelOk = java.util.Arrays.equals(
+                    matrix3Gen.Structtest_Scalars3.encode(modelBack), reference) &&
+                    modelBack.str == "hello" &&
+                    modelBack.nums.size == n &&
+                    modelBack.inners.size == n &&
+                    modelBack.inner.exists(_.name == "kid") &&
+                    (n == 0 || modelBack.inners(n - 1).value == n)
+                  if (!modelOk) {
+                    println("FAIL " + label + ": pbwire-scala core decode differs")
+                    failures += 1
+                  } else {
+                    println("OK   " + label + " generated-model parity, x" + n +
+                      " (" + reference.length + " bytes)")
+                    val official = fillOfficial(n)
+                    val tierCount = calibrate(() => message.encode(), count)
+                    val res = measureAll(count, Seq(
+                      () => message.encode(),
+                      () => matrix3Gen.Structtest_Scalars3.encode(model),
+                      () => official.toByteArray,
+                      () => ty.decode(reference).close(),
+                      () => matrix3Gen.Structtest_Scalars3.decode(reference),
+                      () => Scalars3.parseFrom(reference)))
 
-                println(label + ": " + reference.length + " bytes, " + tierCount +
-                  " iterations (repeat field x" + n + ")")
-                println("  %-12s %-7s %12s %10s".format("impl", "op", "ns/op", "MB/s"))
-                row("pbwire-scala", "encode", reference.length, encode)
-                row("scalapb", "encode", reference.length, officialEncode)
-                row("pbwire-scala", "decode", reference.length, decode)
-                row("scalapb", "decode", reference.length, officialDecode)
-                println()
+                    println(label + ": " + reference.length + " bytes, " + tierCount +
+                      " iterations (repeat field x" + n + ")")
+                    println("  %-18s %-7s %12s %10s".format("impl", "op", "ns/op", "MB/s"))
+                    row("pbwire-scala-tree", "encode", reference.length, res(0))
+                    row("pbwire-scala-core", "encode", reference.length, res(1))
+                    row("scalapb", "encode", reference.length, res(2))
+                    row("pbwire-scala-tree", "decode", reference.length, res(3))
+                    row("pbwire-scala-core", "decode", reference.length, res(4))
+                    row("scalapb", "decode", reference.length, res(5))
+                    println()
+                  }
+                }
               }
             }
           }

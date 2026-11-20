@@ -45,7 +45,8 @@ protoc -I"$root/tests/data" \
 rm -rf "$out"
 mkdir -p "$out"
 javac -d "$out" -cp "$jar" "$root"/bindings/java/runtime/*.java \
-    "$here/Bench.java" "$gen"/structtest/*.java
+    "$here/Bench.java" "$gen"/structtest/*.java \
+    "$root"/bindings/java/tests/gen/*.java
 
 exec java -cp "$out:$jar" Bench "$gen/matrix3.desc" \
     "$gen/matrix2.desc" "$root/bindings/c/tests/data/matrix2.bin" \

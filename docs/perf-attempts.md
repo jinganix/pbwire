@@ -970,3 +970,47 @@ retention is untouched, verified by the existing `codec` unknown tests.
   per call. That path was still static generated code, and it was removed
   once the dynamic Go core existed; the engine it drove is the one both
   dynamic cores use today.
+
+## Provisional: the JVM four, three arms (2026-11-21, issue 41)
+
+First run of the JVM `pbench` rows, before plan 03's Stage 5 recorder pass:
+one interleaved round per tier, best of three passes, all arms plus the
+baseline back to back. `tree` = `GenericCodec`/`DMsg` (a `Message`), `core` =
+the committed generated model in `bindings/<lang>/tests/gen` used as the
+native object, `shim` = `bindings/java/pbench/jni` (not timed here; its
+ceiling is the pbench table). xlarge = 74913 B:
+
+| binding | tree enc | core enc | baseline enc | tree dec | core dec | baseline dec |
+|---|---|---|---|---|---|---|
+| Java | 133853.9 ns 559.7 MB/s | 148018.5 ns 506.1 | 129224.1 ns 579.7 | 143072.8 ns 523.6 | 285911.6 ns 262.0 | 230162.8 ns 325.5 |
+| Kotlin | 79515.9 ns 942.1 | 115311.8 ns 649.7 | 86284.1 ns 868.2 | 106019.1 ns 706.6 | 227891.3 ns 328.7 | 164866.7 ns 454.4 |
+| Scala | 67474.6 ns 1110.2 | 321962.9 ns 232.7 | 95261.0 ns 786.4 | 101594.9 ns 737.4 | 466979.4 ns 160.4 | 114116.3 ns 656.5 |
+| Clojure | 7365842.0 ns 10.2 | 63117.5 ns 1186.9 | 85906.0 ns 872.0 | 8837011.7 ns 8.5 | 98633.8 ns 759.5 | 165927.3 ns 451.5 |
+
+Clojure's `tree` row is the persistent-map API over the generated model's
+map fns (the binding's own data tree); its `core` row is the mutable-message
+fast path with no map walk, per the plan's review focus. Materialization:
+the `tree` rows decode lazily (message/string/bytes fields parse on first
+access) and the `core` rows decode eagerly into the typed model, so the
+`core` decode column pays the materialization the `tree` column skips.
+
+Reading: the JVM native-object rows are *not* faster. The generated models
+are a table engine over the shipped runtime (`PbCodec`'s per-field
+`FieldMeta` lambdas, method-handle setters, and for Scala a by-name
+`fill`/`load` translation), so they cost more per field than the dynamic
+`DMsg` walk: Java/Kotlin `core` encode is 0.87x the baseline at xlarge and
+0.29x at 136 B; Scala `core` is 0.24-0.35x everywhere; Clojure's mutable
+`core` is the one that beats the baseline (1.36x / 1.11x encode). The
+`tree` rows stay the shipped fast path and the headline.
+
+### Stage 6 decision: not chased in this plan
+
+Every below-baseline `core` cell is the generated model's per-field
+translation, not a codec cell: closing it needs per-message generated
+writers (the same product decision the Java 136 B cell above already
+recorded as rejected), plus a generator change outside this plan's files.
+The small-tier `core` cells are boundary floors and are labelled, not
+chased. No A/B was run: there is no single in-scope change to put on the
+probe (`benchmarks/ab.sh` times `GenericCodec` and the protobuf-java
+oracle, and the runtime change that would move this is the rejected
+per-message codegen).

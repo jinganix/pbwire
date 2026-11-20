@@ -40,10 +40,13 @@ esac
 
 rm -rf "$out"
 mkdir -p "$out"
-javac -d "$out" -cp "$java_jar" "$root"/bindings/java/runtime/*.java "$gen"/structtest/*.java
+javac -d "$out" -cp "$java_jar" "$root"/bindings/java/runtime/*.java "$gen"/structtest/*.java \
+    "$root"/bindings/java/tests/gen/*.java
 # -include-runtime bundles kotlin-stdlib, so the run command needs no kotlinc dir.
+# tests/gen/matrix3.kt is the generated DSL over the same Java models (core arm).
 kotlinc -nowarn -cp "$out:$java_jar:$kotlin_jar" -include-runtime -d "$out/bench.jar" \
-    "$root"/bindings/kotlin/runtime/*.kt "$here"/Bench.kt "$gen"/structtest/*.kt
+    "$root"/bindings/kotlin/runtime/*.kt "$here"/Bench.kt "$gen"/structtest/*.kt \
+    "$root"/bindings/kotlin/tests/gen/matrix3.kt
 
 exec java --enable-native-access=ALL-UNNAMED -Dpbwire.library="$lib" \
     -cp "$out/bench.jar:$out:$java_jar:$kotlin_jar" BenchKt "$gen/matrix3.desc"

@@ -21,7 +21,8 @@
 ;;
 ;;   ./bench.sh
 (ns pbwire.bench
-  (:require [pbwire.core :as pb])
+  (:require [matrix3 :as gen]
+            [pbwire.core :as pb])
   (:import (java.util Arrays) (structtest Matrix3$Scalars3)))
 
 (def ^:private cases ["small" "medium" "large" "xlarge"])
@@ -106,13 +107,18 @@
         count
         (recur (* 2 count))))))
 
-(defn- measure [floor op]
-  (let [count (calibrate op floor)]
-    (run-ns count op)
-    (apply min (repeatedly passes #(run-ns count op)))))
+(defn- measure-all [floor ops]
+  (let [counts (mapv #(calibrate % floor) ops)
+        best (atom (vec (repeat (count ops) Double/MAX_VALUE)))]
+    (doseq [[c op] (map vector (mapv #(min % 1000) counts) ops)]
+      (run-ns c op))
+    (dotimes [_ passes]
+      (doseq [i (range (count ops))]
+        (swap! best #(assoc % i (min (nth % i) (run-ns (nth counts i) (nth ops i)))))))
+    @best))
 
 (defn- row [impl op nbytes ns]
-  (println (format "  %-12s %-7s %12.1f %10.1f" impl op ns (/ (* nbytes 1000.0) ns))))
+  (println (format "  %-18s %-7s %12.1f %10.1f" impl op ns (/ (* nbytes 1000.0) ns))))
 
 (defn -main [desc]
   (let [schema (pb/load-schema desc)
@@ -148,29 +154,42 @@
                                        (or (zero? n)
                                            (= (- n 4) (last (:nums back))))
                                        (Arrays/equals ^bytes reference
-                                                      ^bytes (pb/encode ty back))))]
+                                                      ^bytes (pb/encode ty back))))
+                        gen-ok (Arrays/equals
+                                ^bytes reference
+                                ^bytes (gen/encode-structtest-scalars3 data))]
                     (when-not back-ok
                       (println "FAIL" label "pbwire-clojure decode differs")
-                      (swap! failures inc)))
+                      (swap! failures inc))
+                    (when-not gen-ok
+                      (println "FAIL" label "generated model bytes differ")
+                      (swap! failures inc))
+                    (when (and back-ok gen-ok)
+                      (println "OK  " (str label " generated-model parity, x" n
+                                           " (" (count reference) " bytes)"))))
                   (let [data-msg (pb/new-message ty)
                         _ (pb/fill-message! data-msg data)
                         tier-count (calibrate #(pb/encode-message data-msg) floor)
-                        encode (measure floor #(pb/encode-message data-msg))
-                        decode (measure floor #(let [m (pb/decode-message ty reference)]
-                                                 (pb/close! m)))
-                        official-encode (measure floor #(.toByteArray official))
-                        official-decode (measure floor
-                                                 #(structtest.Matrix3$Scalars3/parseFrom
-                                                   ^bytes reference))]
+                        res (measure-all floor
+                              [#(gen/encode-structtest-scalars3 data)
+                               #(pb/encode-message data-msg)
+                               #(.toByteArray official)
+                               #(gen/decode-structtest-scalars3 reference)
+                               #(let [m (pb/decode-message ty reference)]
+                                  (pb/close! m))
+                               #(structtest.Matrix3$Scalars3/parseFrom
+                                 ^bytes reference)])]
                     (pb/close! data-msg)
                     (println (str label ": " (count reference) " bytes, "
                                   tier-count " iterations (repeat field x" n ")"))
-                    (println (format "  %-12s %-7s %12s %10s"
+                    (println (format "  %-18s %-7s %12s %10s"
                                      "impl" "op" "ns/op" "MB/s"))
-                    (row "pbwire-clj" "encode" (count reference) encode)
-                    (row "protobuf-java" "encode" (count reference) official-encode)
-                    (row "pbwire-clj" "decode" (count reference) decode)
-                    (row "protobuf-java" "decode" (count reference) official-decode)
+                    (row "pbwire-clj-tree" "encode" (count reference) (nth res 0))
+                    (row "pbwire-clj-core" "encode" (count reference) (nth res 1))
+                    (row "protobuf-java" "encode" (count reference) (nth res 2))
+                    (row "pbwire-clj-tree" "decode" (count reference) (nth res 3))
+                    (row "pbwire-clj-core" "decode" (count reference) (nth res 4))
+                    (row "protobuf-java" "decode" (count reference) (nth res 5))
                     (println))))))))
       (finally (pb/close! schema)))
     (when (pos? @failures)

@@ -13,10 +13,11 @@ import structtest.Matrix3;
 
 /*
  * Benchmark for the pure-Java binding: the generic codec against the
- * official protobuf-java generated code and DynamicMessage, same
- * matrix3.proto, same four tiers as BENCHMARKS.md. The codec loads the
- * schema from matrix3.desc with its own parser -- protobuf-java below is
- * only the baseline being beaten, plus the DynamicMessage column.
+ * official protobuf-java generated code, same matrix3.proto, same four
+ * tiers as BENCHMARKS.md. The codec loads the schema from matrix3.desc with
+ * its own parser -- protobuf-java below is only the baseline being beaten.
+ * DynamicMessage stays a correctness cross-check, not a timed column: the
+ * timed rows are the two arms plus the baseline, six per tier.
  *
  * Correctness gates (un-timed): proto2 round trip against matrix2.bin,
  * oneof against edge.bin, groups + extensions cross-checked through
@@ -114,8 +115,17 @@ public final class Bench {
             return;
         }
         Structtest_Scalars3 modelBack = Structtest_Scalars3.parseFrom(reference);
+        boolean modelOk = "hello".equals(modelBack.getStr())
+                && modelBack.getNumsCount() == n
+                && modelBack.getInnersCount() == n
+                && "kid".equals(modelBack.getInner().getName())
+                && (n == 0 || modelBack.getInners(n - 1).getValue() == n);
         if (!Arrays.equals(modelBack.toByteArray(), reference)) {
             fail(label, "generated model round trip differs");
+            return;
+        }
+        if (!modelOk) {
+            fail(label, "generated model values differ");
             return;
         }
         System.out.printf("OK   %s parity, x%d (%d bytes)%n", label, n,
@@ -133,23 +143,23 @@ public final class Bench {
         Matrix3.Scalars3 officialMessage = fillOfficial(n);
         Runnable[] ops = {
             () -> GenericCodec.encode(data),
-            () -> GenericCodec.decode(scalars3, reference),
+            model::toByteArray,
             officialMessage::toByteArray,
+            () -> GenericCodec.decode(scalars3, reference),
+            () -> Structtest_Scalars3.parseFrom(reference),
             () -> parse(reference),
-            dynBuilt::toByteArray,
-            () -> parseDyn(desc, reference),
         };
         double[] best = measureAll(floor, ops);
 
         System.out.printf("%s: %d bytes, floor %d iterations (repeat field x%d)%n",
                 label, reference.length, floor, n);
-        System.out.printf("  %-14s %-7s %12s %10s%n", "impl", "op", "ns/op", "MB/s");
-        row("pbwire-java", "encode", reference.length, best[0]);
+        System.out.printf("  %-18s %-7s %12s %10s%n", "impl", "op", "ns/op", "MB/s");
+        row("pbwire-java-tree", "encode", reference.length, best[0]);
+        row("pbwire-java-core", "encode", reference.length, best[1]);
         row("protobuf-java", "encode", reference.length, best[2]);
-        row("dynamicmessage", "encode", reference.length, best[4]);
-        row("pbwire-java", "decode", reference.length, best[1]);
-        row("protobuf-java", "decode", reference.length, best[3]);
-        row("dynamicmessage", "decode", reference.length, best[5]);
+        row("pbwire-java-tree", "decode", reference.length, best[3]);
+        row("pbwire-java-core", "decode", reference.length, best[4]);
+        row("protobuf-java", "decode", reference.length, best[5]);
         System.out.println();
     }
 
@@ -354,22 +364,13 @@ public final class Bench {
         }
     }
 
-    private static DynamicMessage parseDyn(Descriptors.Descriptor desc,
-            byte[] wire) {
-        try {
-            return DynamicMessage.parseFrom(desc, wire);
-        } catch (Exception e) {
-            throw new RuntimeException(e);
-        }
-    }
-
     private static void fail(String label, String what) {
         System.out.printf("FAIL %s: %s%n", label, what);
         failures++;
     }
 
     private static void row(String impl, String op, int bytes, double ns) {
-        System.out.printf("  %-14s %-7s %12.1f %10.1f%n", impl, op, ns,
+        System.out.printf("  %-18s %-7s %12.1f %10.1f%n", impl, op, ns,
                 bytes / ns * 1000.0);
     }
 
