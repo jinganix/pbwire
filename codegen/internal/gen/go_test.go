@@ -305,3 +305,104 @@ func TestGoCodecBranches(t *testing.T) {
 		t.Error("table rows must run in field-number order")
 	}
 }
+
+// The cshim layout file: one registry for the file plus a typed copy
+// function per message. Same branch shapes as the table emitter, plus
+// bytes and groups which cshim must also drive. No skipped fields: a
+// model-level skip fails cshim emission loudly (see TestGoCshimSkipFails).
+func goCshimFile() *model.File {
+	f := goBranchFile()
+	keep := func(ms []model.Message) []model.Message {
+		out := ms[:0]
+		for _, m := range ms {
+			fields := m.Fields[:0]
+			for _, field := range m.Fields {
+				if field.Skip == "" {
+					fields = append(fields, field)
+				}
+			}
+			m.Fields = fields
+			out = append(out, m)
+		}
+		return out
+	}
+	f.Messages = keep(f.Messages)
+	f.Messages = append(f.Messages, model.Message{
+		Name: "Bytes",
+		Full: "b.Bytes",
+		Fields: []model.Field{
+			{Name: "raw", Lower: "raw", Pascal: "Raw", Number: 1, Kind: protoreflect.BytesKind},
+			{Name: "payload", Lower: "payload", Pascal: "Payload", Number: 2, Kind: protoreflect.BytesKind, NeedsHas: true},
+		},
+	})
+	f.Messages = append(f.Messages, model.Message{
+		Name: "Grouped",
+		Full: "b.Grouped",
+		Fields: []model.Field{
+			{Name: "item", Lower: "item", Pascal: "Item", Number: 1, Kind: protoreflect.GroupKind, Message: "Inner"},
+		},
+	})
+	return f
+}
+
+func TestGoCshimBranches(t *testing.T) {
+	var b strings.Builder
+	opt := Options{Mappings: map[string]string{"xdep.proto": "pbwire/tests/gen/xdep"}}
+	if err := writeGoCshim(&b, goCshimFile(), opt); err != nil {
+		t.Fatal(err)
+	}
+	out := b.String()
+	// Spacing-insensitive: gofmt aligns composite literals with padding.
+	has := func(s, want string) bool {
+		strip := func(s string) string {
+			s = strings.ReplaceAll(s, " ", "")
+			return strings.ReplaceAll(s, "\t", "")
+		}
+		return strings.Contains(strip(s), strip(want))
+	}
+	for _, want := range []string{
+		"func CshimRegistry() []layout.Msg",
+		"Full: \"b.B\"",
+		"Size: uintptr(unsafe.Sizeof(B{}))",
+		`"pbwire/pbench/cshim/layout"`,
+		`"unsafe"`,
+		// scalar row carries its struct offset.
+		"Offset: uint32(unsafe.Offsetof(B{}.Req))",
+		"Kind: layout.KindInt32",
+		// explicit optional carries the presence offset.
+		"Has: uint32(unsafe.Offsetof(B{}.Opt))",
+		// bytes is its own kind.
+		"Kind: layout.KindBytes",
+		// nested message row points at the registry index.
+		"Sub: 0",
+		// oneof members carry the wrapper itab.
+		"Itab: layout.ItabOf((*B_N)(nil))",
+		// group rows frame instead of length-prefixing.
+		"Group: true",
+		// map rides as a repeated entry message.
+		"B_ByKeyEntry",
+		// foreign rows name their message, never a row index.
+		"Foreign: true",
+		"FType: \"xdep.DepMsg\"",
+		// per-message typed copy plus file factory.
+		"func BCshimCopy(dst, src *B, a *layout.Arena)",
+		"InnerCshimCopy(dst.Sub, src.Sub, a)",
+		"a.AddString(x.T)",
+		"func CshimNew(full string) any",
+		"case \"b.B\": return &B{}",
+	} {
+		if !has(out, want) {
+			t.Errorf("cshim output misses %q", want)
+		}
+	}
+}
+
+// A model-level skip must fail the cshim emission loudly: the generated
+// file names struct fields, so a missing field would not compile.
+func TestGoCshimSkipFails(t *testing.T) {
+	var b strings.Builder
+	opt := Options{Mappings: map[string]string{"xdep.proto": "pbwire/tests/gen/xdep"}}
+	if err := writeGoCshim(&b, goBranchFile(), opt); err == nil {
+		t.Fatal("cshim emission over a skipped field must fail")
+	}
+}

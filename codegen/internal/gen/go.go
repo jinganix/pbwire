@@ -748,3 +748,312 @@ func goSorted(m model.Message) []model.Field {
 	sort.Slice(out, func(i, j int) bool { return out[i].Number < out[j].Number })
 	return out
 }
+
+// goCshimKind maps a proto kind onto the layout kind. Enums ride int32:
+// unknown values are preserved, never validated.
+func goCshimKind(field model.Field) (string, error) {
+	switch field.Kind {
+	case protoreflect.Int32Kind, protoreflect.EnumKind:
+		return "layout.KindInt32", nil
+	case protoreflect.Int64Kind:
+		return "layout.KindInt64", nil
+	case protoreflect.Uint32Kind:
+		return "layout.KindUint32", nil
+	case protoreflect.Uint64Kind:
+		return "layout.KindUint64", nil
+	case protoreflect.Sint32Kind:
+		return "layout.KindSint32", nil
+	case protoreflect.Sint64Kind:
+		return "layout.KindSint64", nil
+	case protoreflect.Fixed32Kind:
+		return "layout.KindFixed32", nil
+	case protoreflect.Fixed64Kind:
+		return "layout.KindFx64", nil
+	case protoreflect.Sfixed32Kind:
+		return "layout.KindSfx32", nil
+	case protoreflect.Sfixed64Kind:
+		return "layout.KindSfx64", nil
+	case protoreflect.FloatKind:
+		return "layout.KindFloat", nil
+	case protoreflect.DoubleKind:
+		return "layout.KindDouble", nil
+	case protoreflect.BoolKind:
+		return "layout.KindBool", nil
+	case protoreflect.StringKind:
+		return "layout.KindString", nil
+	case protoreflect.BytesKind:
+		return "layout.KindBytes", nil
+	case protoreflect.MessageKind, protoreflect.GroupKind:
+		return "layout.KindMessage", nil
+	default:
+		return "", fmt.Errorf("cshim: no layout kind for field %s of kind %s", field.Name, field.Kind)
+	}
+}
+
+// goCshimWire is the layout wire-type constant for a field's kind.
+func goCshimWire(field model.Field) string {
+	switch field.Kind {
+	case protoreflect.Fixed32Kind, protoreflect.Sfixed32Kind, protoreflect.FloatKind:
+		return "layout.WireFixed32"
+	case protoreflect.Fixed64Kind, protoreflect.Sfixed64Kind, protoreflect.DoubleKind:
+		return "layout.WireFixed64"
+	case protoreflect.StringKind, protoreflect.BytesKind, protoreflect.MessageKind:
+		return "layout.WireLen"
+	case protoreflect.GroupKind:
+		return "layout.WireStartGroup"
+	default:
+		return "layout.WireVarint"
+	}
+}
+
+// goCshimSub resolves the registry index of a message-typed field:
+// by full proto name first, by local class name for map entries (which
+// carry no Full). Foreign fields resolve at runtime via FType instead.
+func goCshimSub(f *model.File, field model.Field, regIdx map[string]int) (int32, error) {
+	if field.Kind != protoreflect.MessageKind && field.Kind != protoreflect.GroupKind {
+		return -1, nil
+	}
+	if field.Import != "" {
+		return -1, nil
+	}
+	if i, ok := regIdx[field.Full]; ok && field.Full != "" {
+		return int32(i), nil
+	}
+	if i, ok := regIdx[field.Message]; ok {
+		return int32(i), nil
+	}
+	return -1, fmt.Errorf("cshim: message %s of field %s not in file %s", field.Message, field.Name, f.Path)
+}
+
+// goCshimForeignName is the full proto name a foreign row resolves by.
+func goCshimForeignName(f *model.File, field model.Field) string {
+	if field.Full != "" {
+		return field.Full
+	}
+	for _, imp := range f.Imports {
+		if imp.Path == field.Import {
+			return imp.Package + "." + field.Message
+		}
+	}
+	return field.Message
+}
+
+// writeGoCshimRow emits one layout.Row literal. Every shape has a mapping;
+// model-level skips and unknown shapes fail loudly instead of emitting a
+// silent subset, because the generated file names struct fields and a
+// missing row would silently change the wire.
+func writeGoCshimRow(b *strings.Builder, f *model.File, m model.Message, field model.Field, regIdx map[string]int) error {
+	if field.Skip != "" {
+		return fmt.Errorf("cshim: field %s.%s skipped in model (%s)", m.Full, field.Name, field.Skip)
+	}
+	kind, err := goCshimKind(field)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(b, "\t\t{Fnum: %d, Kind: %s, Wire: %s", field.Number, kind, goCshimWire(field))
+	if field.Repeated {
+		b.WriteString(", Repeated: true")
+		if field.Packed {
+			b.WriteString(", Packed: true")
+		}
+	}
+	explicit := field.NeedsHas && !field.Required
+	if explicit {
+		b.WriteString(", Explicit: true")
+	}
+	if field.Required {
+		b.WriteString(", Required: true")
+	}
+	if field.Kind == protoreflect.GroupKind {
+		b.WriteString(", Group: true")
+	}
+	name := goCamel(field.Name)
+	off := fmt.Sprintf("uint32(unsafe.Offsetof(%s{}.%s))", m.Name, name)
+	if field.Oneof != "" {
+		wrap := goWrapper(f, m, field)
+		fmt.Fprintf(b, ", Offset: uint32(unsafe.Offsetof(%s{}.%s))", m.Name, goCamel(field.Oneof))
+		fmt.Fprintf(b, ", Itab: layout.ItabOf((*%s)(nil))", wrap)
+	} else {
+		fmt.Fprintf(b, ", Offset: %s", off)
+		if explicit {
+			fmt.Fprintf(b, ", Has: %s", off)
+		}
+	}
+	sub, err := goCshimSub(f, field, regIdx)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(b, ", Sub: %d", sub)
+	if field.Import != "" {
+		fmt.Fprintf(b, ", Foreign: true, FType: %q", goCshimForeignName(f, field))
+	}
+	b.WriteString("},\n")
+	return nil
+}
+
+// writeGoCshimMsg emits one layout.Msg literal: full name, struct size
+// for the C arena, and its rows in field-number order.
+func writeGoCshimMsg(b *strings.Builder, f *model.File, m model.Message, regIdx map[string]int) error {
+	fmt.Fprintf(b, "\t{Full: %q, Size: uintptr(unsafe.Sizeof(%s{})), Rows: []layout.Row{\n", m.Full, m.Name)
+	for _, field := range goSorted(m) {
+		if err := writeGoCshimRow(b, f, m, field, regIdx); err != nil {
+			return err
+		}
+	}
+	b.WriteString("\t}},\n")
+	return nil
+}
+
+// writeGoCshimCopyField emits one field's materialization: raw C-filled
+// struct memory in, fully owned Go values out. All stores are typed, so
+// every pointer write keeps its write barrier; no unsafe appears here.
+func writeGoCshimCopyField(b *strings.Builder, f *model.File, m model.Message, field model.Field) error {
+	name := goCamel(field.Name)
+	if field.Oneof != "" {
+		return writeGoCshimCopyOneof(b, f, m, field, name)
+	}
+	if field.Kind == protoreflect.MessageKind || field.Kind == protoreflect.GroupKind {
+		return writeGoCshimCopyMessage(b, f, m, field, name)
+	}
+	switch field.Kind {
+	case protoreflect.StringKind:
+		if field.NeedsHas && !field.Required {
+			fmt.Fprintf(b, "\tif src.%s != nil {\n\t\tv := a.AddString(*src.%s)\n\t\tdst.%s = &v\n\t}\n", name, name, name)
+		} else {
+			fmt.Fprintf(b, "\tdst.%s = a.AddString(src.%s)\n", name, name)
+		}
+	case protoreflect.BytesKind:
+		if field.Repeated {
+			fmt.Fprintf(b, "\tif len(src.%s) != 0 {\n\t\tdst.%s = make([][]byte, 0, len(src.%s))\n\t\tfor _, p := range src.%s {\n\t\t\tdst.%s = append(dst.%s, a.AddBytes(p))\n\t\t}\n\t}\n", name, name, name, name, name, name)
+		} else if field.NeedsHas && !field.Required {
+			fmt.Fprintf(b, "\tif src.%s != nil {\n\t\tv := a.AddBytes(*src.%s)\n\t\tdst.%s = &v\n\t}\n", name, name, name)
+		} else {
+			fmt.Fprintf(b, "\tdst.%s = a.AddBytes(src.%s)\n", name, name)
+		}
+	default:
+		if field.Repeated {
+			if field.Kind == protoreflect.StringKind {
+				fmt.Fprintf(b, "\tif len(src.%s) != 0 {\n\t\tdst.%s = make([]string, 0, len(src.%s))\n\t\tfor _, s := range src.%s {\n\t\t\tdst.%s = append(dst.%s, a.AddString(s))\n\t\t}\n\t}\n", name, name, name, name, name, name)
+			} else {
+				fmt.Fprintf(b, "\tif len(src.%s) != 0 {\n\t\tdst.%s = append([]%s(nil), src.%s...)\n\t}\n", name, name, goTableValType(f, field), name)
+			}
+		} else if field.NeedsHas && !field.Required {
+			fmt.Fprintf(b, "\tif src.%s != nil {\n\t\tv := *src.%s\n\t\tdst.%s = &v\n\t}\n", name, name, name)
+		} else {
+			fmt.Fprintf(b, "\tdst.%s = src.%s\n", name, name)
+		}
+	}
+	return nil
+}
+
+// writeGoCshimCopyOneof emits one oneof member: presence lives in the
+// wrapper, so even a zero or empty member re-wraps on the way out.
+func writeGoCshimCopyOneof(b *strings.Builder, f *model.File, m model.Message, field model.Field, name string) error {
+	wrap := goWrapper(f, m, field)
+	iname := goCamel(field.Oneof)
+	payload := func(v string) string {
+		switch field.Kind {
+		case protoreflect.StringKind:
+			return "a.AddString(" + v + ")"
+		case protoreflect.BytesKind:
+			return "a.AddBytes(" + v + ")"
+		default:
+			return v
+		}
+	}
+	if field.Kind == protoreflect.MessageKind || field.Kind == protoreflect.GroupKind {
+		fmt.Fprintf(b, "\tif x, ok := src.%s.(*%s); ok {\n", iname, wrap)
+		fmt.Fprintf(b, "\t\tvar cp %s\n", goWrapType(f, field))
+		fmt.Fprintf(b, "\t\tif x.%s != nil {\n", name)
+		fmt.Fprintf(b, "\t\t\tcp = &%s{}\n", strings.TrimPrefix(goWrapType(f, field), "*"))
+		fmt.Fprintf(b, "\t\t\t%sCshimCopy(cp, x.%s, a)\n", strings.TrimPrefix(goWrapType(f, field), "*"), name)
+		fmt.Fprintf(b, "\t\t}\n\t\tdst.%s = &%s{%s: cp}\n\t}\n", iname, wrap, name)
+		return nil
+	}
+	fmt.Fprintf(b, "\tif x, ok := src.%s.(*%s); ok {\n", iname, wrap)
+	fmt.Fprintf(b, "\t\tdst.%s = &%s{%s: %s}\n\t}\n", iname, wrap, name, payload("x."+name))
+	return nil
+}
+
+// writeGoCshimCopyMessage emits singular and repeated message/group
+// materialization, including map entries (repeated entry structs) and
+// foreign siblings (framed through their own copy function).
+func writeGoCshimCopyMessage(b *strings.Builder, f *model.File, m model.Message, field model.Field, name string) error {
+	sub := field.Message
+	if field.Import != "" {
+		fmt.Fprintf(b, "\tif src.%s != nil {\n", name)
+		fmt.Fprintf(b, "\t\tdst.%s = &%s{}\n", name, sub)
+		fmt.Fprintf(b, "\t\t%sCshimCopy(dst.%s, src.%s, a)\n\t}\n", sub, name, name)
+		return nil
+	}
+	if field.Repeated {
+		fmt.Fprintf(b, "\tif len(src.%s) != 0 {\n", name)
+		fmt.Fprintf(b, "\t\tdst.%s = make([]*%s, len(src.%s))\n", name, sub, name)
+		fmt.Fprintf(b, "\t\tfor i, s := range src.%s {\n", name)
+		fmt.Fprintf(b, "\t\t\tif s == nil {\n\t\t\t\tcontinue\n\t\t\t}\n")
+		fmt.Fprintf(b, "\t\t\tcp := &%s{}\n", sub)
+		fmt.Fprintf(b, "\t\t\t%sCshimCopy(cp, s, a)\n", sub)
+		fmt.Fprintf(b, "\t\t\tdst.%s[i] = cp\n\t\t}\n\t}\n", name)
+		return nil
+	}
+	fmt.Fprintf(b, "\tif src.%s != nil {\n", name)
+	fmt.Fprintf(b, "\t\tdst.%s = &%s{}\n", name, sub)
+	fmt.Fprintf(b, "\t\t%sCshimCopy(dst.%s, src.%s, a)\n\t}\n", sub, name, name)
+	return nil
+}
+
+// writeGoCshimCopy emits one message's typed copy function.
+func writeGoCshimCopy(b *strings.Builder, f *model.File, m model.Message) error {
+	fmt.Fprintf(b, "// %sCshimCopy materializes src into dst: src may alias C-filled\n// memory (raw string headers, C-arena submessages), dst ends fully\n// owned by Go. All stores are typed.\n", m.Name)
+	fmt.Fprintf(b, "func %sCshimCopy(dst, src *%s, a *layout.Arena) {\n", m.Name, m.Name)
+	for _, field := range goSorted(m) {
+		if field.Skip != "" {
+			return fmt.Errorf("cshim: field %s.%s skipped in model (%s)", m.Full, field.Name, field.Skip)
+		}
+		if err := writeGoCshimCopyField(b, f, m, field); err != nil {
+			return err
+		}
+	}
+	b.WriteString("}\n\n")
+	return nil
+}
+
+// writeGoCshim emits the cshim layout file body: the per-file message
+// registry, one typed copy per message, and the generic allocator used
+// by decode paths that cannot name the type.
+func writeGoCshim(b *strings.Builder, f *model.File, opt Options) error {
+	regIdx := map[string]int{}
+	for i, m := range f.Messages {
+		regIdx[m.Full] = i
+		regIdx[m.Name] = i
+	}
+	b.WriteString(headerP(f, "//", "Cshim layout over the generated structs: field facts plus offsets for the Erlang-style C codec."))
+	fmt.Fprintf(b, "package %s\n\n", goPackage(f))
+	b.WriteString("import (\n\t\"pbwire/pbench/cshim/layout\"\n\t\"unsafe\"\n")
+	for _, imp := range f.Imports {
+		if path, ok := opt.Mappings[imp.Path]; ok {
+			fmt.Fprintf(b, "\n\t%s %q\n", goImportAlias(path), path)
+		}
+	}
+	b.WriteString(")\n\n")
+	b.WriteString("// CshimRegistry lists every message in this file for the C codec:\n// field facts plus struct layout, indexes stable for Sub references.\n")
+	b.WriteString("func CshimRegistry() []layout.Msg {\n\treturn []layout.Msg{\n")
+	for _, m := range f.Messages {
+		if err := writeGoCshimMsg(b, f, m, regIdx); err != nil {
+			return err
+		}
+	}
+	b.WriteString("\t}\n}\n\n")
+	for _, m := range f.Messages {
+		if err := writeGoCshimCopy(b, f, m); err != nil {
+			return err
+		}
+	}
+	b.WriteString("// CshimNew allocates a fresh message by full proto name for generic\n// decode paths that cannot name the type.\n")
+	b.WriteString("func CshimNew(full string) any {\n\tswitch full {\n")
+	for _, m := range f.Messages {
+		fmt.Fprintf(b, "\tcase %q: return &%s{}\n", m.Full, m.Name)
+	}
+	b.WriteString("\t}\n\treturn nil\n}\n")
+	return nil
+}
