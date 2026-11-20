@@ -504,14 +504,14 @@ func TestModelConcurrentUse(t *testing.T) {
 		if h.out != nil {
 			fmt.Printf("COMPAT mismatch goroutine=%d k=%d second-marshal=%s ref=%d out=%d\n", h.g, h.k, h.second, len(ref), len(h.out))
 			n := 0
-				for i := 0; i < len(ref) && i < len(h.out) && n < 10; i++ {
-					if ref[i] != h.out[i] {
-						fmt.Printf("COMPAT diff at %d: ref=%02x out=%02x\n", i, ref[i], h.out[i])
-						n++
-					}
+			for i := 0; i < len(ref) && i < len(h.out) && n < 10; i++ {
+				if ref[i] != h.out[i] {
+					fmt.Printf("COMPAT diff at %d: ref=%02x out=%02x\n", i, ref[i], h.out[i])
+					n++
 				}
-				t.Fatal("re-encode differs")
 			}
-			t.Fatal(h.second)
+			t.Fatal("re-encode differs")
 		}
+		t.Fatal(h.second)
+	}
 }
