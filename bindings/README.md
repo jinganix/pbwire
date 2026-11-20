@@ -148,17 +148,17 @@ detail in `bindings/<lang>/pbench/README.md`.
 
 Every row is also the reason that binding exists: its host runtime's status quo
 has a specific cost, and the binding removes it *without* a second wire
-implementation (the allowed third mechanism is the [`core`
-arm](#pbench-three-arms-one-contract)). The ratios are xlarge-tier throughput against the official
-runtime, copied from [BENCHMARKS.md](../BENCHMARKS.md) where the reasoning and
-the full tables are.
+implementation (the allowed third mechanism is the
+[`core` arm](#pbench-three-arms-one-contract)). The ratios are xlarge-tier
+throughput against the official runtime, copied from
+[BENCHMARKS.md](../BENCHMARKS.md) where the reasoning and the full tables are.
 
 | binding | the pain it removes | what it does instead | encode / decode vs official |
 |---|---|---|---|
 | C | dynamic messages cost a libprotobuf dependency, or hand-written wire code per message | struct codec compiled from layout tables over the shared core, schema loaded at run time | 1.33x / 2.00x (vs protoc C++) |
 | C++ | generated classes pin the schema at compile time; `DynamicMessage` is 10x slower | the same C runtime and header, no extra layer | 1.33x / 2.00x (vs protoc C++) |
 | Embedded | generated C codecs pin the schema at compile time and need a struct per message; a full runtime drags a heap in | static-memory facade over the same core: one box, one arena, caller-owned encode buffers, input bounded by `pbw_limits` | no separate bench — the facade is a pass-through, so the C row and the core bench measure the wire it speaks |
-| Python | `google.protobuf` needs a generated module per `.proto`, and dict conversion is seconds at 75 KB | CPython extension: dict↔wire in C, `decode()` returns a parsed message that keeps one slice per wire field | 6.85x / 1.22x (vs upb) |
+| Python | `google.protobuf` needs a generated module per `.proto`, and dict conversion is seconds at 75 KB | CPython extension: dict↔wire in C, `decode()` returns a parsed message that keeps one slice per wire field | 6.85x / 3.69x (vs upb; 1.19x decode handle, 64x via `encode(parsed)`, data already in pbwire) |
 | Ruby | the `google-protobuf` gem materializes and re-encodes every field; a Fiddle bridge costs ~3 µs per downcall | C extension over the core: builder tree for writes, validating wire view for reads | 1.20x / 1.64x (vs the gem) |
 | Java | JNI glue, or protobuf-java re-deriving sizes before every write | pure-Java codec: columnar values, lazy decode, `Unsafe` stores (no JNI, no native lib, no generator) | 1.15x / 1.89x (vs protobuf-java; 0.95x encode at 74 KB) |
 | Kotlin | official Kotlin is Kotlin over protobuf-java | reuses the Java runtime, adds a DSL | 1.20x / 1.81x (vs protobuf-kotlin; 0.78x encode at 136 B) |
@@ -178,13 +178,17 @@ the full tables are.
 | Clojure | protobuf-java interop per message, maps materialized per field | mutable-message fast path over the Java runtime (maps stay for convenience) | 1.16x / 1.77x (vs protobuf-java; mutable-message fast path; 0.75x encode at 136 B) |
 | Julia | `ProtoBuf.jl` is pure Julia, per-field interpreter overhead | `dlopen` + `ccall` FFI host (`FileDescriptorSet` at run time, `Dict` boundary) | 135.6x / 1.00x (vs ProtoBuf.jl; baseline encode collapses with size) |
 | R | `RProtoBuf` binds the C++ runtime per message | C extension over the core (`.Call`, named lists in/out, statically linked) | 61.5x / 66.6x (vs RProtoBuf) |
-| Lua | game servers hand tables to `pbc`/`lua-protobuf`, each with its own schema story | C module over the core: tables convert through the schema's arena, builders encode hot | 1.08x / 1.33x (vs lua-protobuf; 7.65x via builder encode) |
+| Lua | game servers hand tables to `pbc`/`lua-protobuf`, each with its own schema story | C module over the core: tables convert through the schema's arena, a builder tree is the write fast path | 1.08x / 1.33x (vs lua-protobuf; 7.65x via builder encode — data already in pbwire) |
 
 Read the ratios as "what this binding buys its host language", not as a
 cross-language speed ranking: the payload and the boundary cost differ per row,
 which is why the at-a-glance table in
 [BENCHMARKS.md](../BENCHMARKS.md#at-a-glance-every-binding-one-tier) puts them
 side by side with the absolute MB/s.
+
+Header ratios quote the native-object row (host data in, host data out). The
+`tree` row further down is the same codec with the tree already built: a proxy
+or transcoder task, not an application's encode.
 
 ## Status
 

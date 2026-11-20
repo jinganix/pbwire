@@ -85,6 +85,10 @@ the short version:
 | Julia | `dlopen` + `ccall` FFI host | `FileDescriptorSet` |
 | R | C extension, named lists in/out | `FileDescriptorSet` |
 
+Header ratios quote the native-object row (host data in, host data out). The
+`tree` row in [BENCHMARKS.md](../BENCHMARKS.md) is the same codec with the tree
+already built: a proxy or transcoder task, not an application's encode.
+
 The C bindings check `PBW_ABI_VERSION` at load time, so a library built from a
 newer, incompatible tree fails fast instead of corrupting memory. The C ABI is
 the product; richer host bindings live on top of it. `codegen` adds generated
