@@ -141,7 +141,7 @@ arm64). MB/s over wire bytes:
 
 Against swift-protobuf: shim encode 2.34x / 3.03x / 3.87x / 3.37x and shim
 decode 3.07x / 3.61x / 2.59x / 2.56x; the tree row is 2.60x / 3.67x / 5.59x /
-6.31x on encode and 3.74x / 4.22x / 3.38x / 3.01x on decode.
+6.31x on encode and 3.74x / 4.22x / 3.45x / 2.59x on decode.
 
 Stage 6 (optimization) is a recorded no-op: no published Swift cell is below
 its baseline (both rows beat swift-protobuf at every tier, see above), so no
