@@ -6,6 +6,7 @@ package xfile
 
 import (
 	"pbwire/pbench/dyngo/codec"
+	"unsafe"
 
 	xdep "pbwire/tests/gen/xdep"
 )
@@ -45,7 +46,7 @@ var UsesDepMeta = codec.NewTable("xfile.UsesDep", []*codec.Field{
 			return item
 		},
 	},
-	{Name: "note", Num: 3, Wire: codec.WireLen, Kind: codec.KindString,
+	{Name: "note", Num: 3, Wire: codec.WireLen, Kind: codec.KindString, Fast: true, Off: uint32(unsafe.Offsetof(UsesDep{}.Note)), Count: uint32(unsafe.Offsetof(UsesDep{}.Note)) + uint32(unsafe.Sizeof(uintptr(0))), Elem: uint32(unsafe.Sizeof("")),
 		GetStr: func(msg any) string { return msg.(*UsesDep).Note },
 		SetStr: func(msg any, v string) { msg.(*UsesDep).Note = v },
 	},

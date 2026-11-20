@@ -241,6 +241,9 @@ func writeGoMetaHeader(b *strings.Builder, f *model.File, opt Options) {
 		return
 	}
 	b.WriteString("import (\n\t\"pbwire/pbench/dyngo/codec\"\n")
+	if goNeedsUnsafe(f) {
+		b.WriteString("\t\"unsafe\"\n")
+	}
 	for _, imp := range f.Imports {
 		if path, ok := opt.Mappings[imp.Path]; ok {
 			fmt.Fprintf(b, "\n\t%s %q\n", goImportAlias(path), path)
@@ -504,6 +507,80 @@ func goScalarGoType(f *model.File, field model.Field) string {
 	return goTypeName(f, field)
 }
 
+// goFastRow reports whether a field row may carry offset layout facts.
+// The engine's fast path excludes oneof members (presence lives in the
+// wrapper), foreign rows (the sibling owns the bytes), groups and all
+// message kinds (pointer framing stays on closures in v1). Everything
+// else — scalars, enums, strings, bytes and repeated scalars — reads
+// the struct field directly.
+func goFastRow(field model.Field) bool {
+	if field.Skip != "" || field.Oneof != "" || field.Import != "" {
+		return false
+	}
+	return field.Kind != protoreflect.GroupKind && field.Kind != protoreflect.MessageKind
+}
+
+// goNeedsUnsafe reports whether any row of the file carries offsets.
+func goNeedsUnsafe(f *model.File) bool {
+	for _, m := range f.Messages {
+		for _, field := range m.Fields {
+			if goFastRow(field) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// goElemSizeof is the Elem column: the in-memory size of one element of
+// the row, as a compile-time unsafe.Sizeof over a kind zero literal.
+// Named types need no qualification: the size depends on the kind only.
+func goElemSizeof(field protoreflect.Kind) string {
+	switch field {
+	case protoreflect.Int32Kind, protoreflect.Sint32Kind, protoreflect.Sfixed32Kind, protoreflect.EnumKind:
+		return "uint32(unsafe.Sizeof(int32(0)))"
+	case protoreflect.Int64Kind, protoreflect.Sint64Kind, protoreflect.Sfixed64Kind:
+		return "uint32(unsafe.Sizeof(int64(0)))"
+	case protoreflect.Uint32Kind, protoreflect.Fixed32Kind:
+		return "uint32(unsafe.Sizeof(uint32(0)))"
+	case protoreflect.Uint64Kind, protoreflect.Fixed64Kind:
+		return "uint32(unsafe.Sizeof(uint64(0)))"
+	case protoreflect.FloatKind:
+		return "uint32(unsafe.Sizeof(float32(0)))"
+	case protoreflect.DoubleKind:
+		return "uint32(unsafe.Sizeof(float64(0)))"
+	case protoreflect.BoolKind:
+		return "uint32(unsafe.Sizeof(bool(false)))"
+	case protoreflect.StringKind:
+		return "uint32(unsafe.Sizeof(\"\"))"
+	case protoreflect.BytesKind:
+		return "uint32(unsafe.Sizeof([]byte(nil)))"
+	default:
+		return "0"
+	}
+}
+
+// writeGoTableFast appends the offset layout columns for rows the engine
+// may drive directly: Fast validity, Off value offset, Has presence offset
+// for explicit rows, Count len-word offset for string/slice rows, and Elem
+// element size. Message, oneof, foreign and group rows emit nothing.
+func writeGoTableFast(b *strings.Builder, f *model.File, m model.Message, field model.Field, name string) {
+	if !goFastRow(field) {
+		return
+	}
+	off := fmt.Sprintf("uint32(unsafe.Offsetof(%s{}.%s))", m.Name, name)
+	fmt.Fprintf(b, ", Fast: true, Off: %s", off)
+	if field.NeedsHas && !field.Required {
+		fmt.Fprintf(b, ", Has: %s", off)
+	}
+	if field.Kind == protoreflect.StringKind || field.Kind == protoreflect.BytesKind || field.Repeated {
+		if !field.NeedsHas || field.Required {
+			fmt.Fprintf(b, ", Count: %s + uint32(unsafe.Sizeof(uintptr(0)))", off)
+		}
+	}
+	fmt.Fprintf(b, ", Elem: %s", goElemSizeof(field.Kind))
+}
+
 // writeGoTableOneof emits a oneof member row: presence lives in the wrapper
 // type assertion (a set member is present by construction, zero and empty
 // included), values pass through unwrapped, SetOneof rebuilds the wrapper,
@@ -584,15 +661,19 @@ func writeGoTableScalar(b *strings.Builder, f *model.File, m model.Message, fiel
 		if field.Packed {
 			b.WriteString(", Packed: true")
 		}
+		writeGoTableFast(b, f, m, field, name)
 		b.WriteString(",\n")
 		writeGoTableRepAccessors(b, f, m, field, name)
 		return
 	}
 	if field.NeedsHas && !field.Required && field.Message == "" {
-		b.WriteString(", Explicit: true,\n")
+		b.WriteString(", Explicit: true")
+		writeGoTableFast(b, f, m, field, name)
+		b.WriteString(",\n")
 		writeGoTableOptAccessors(b, f, m, field, name)
 		return
 	}
+	writeGoTableFast(b, f, m, field, name)
 	b.WriteString(",\n")
 	writeGoTablePlainAccessors(b, f, m, field, name)
 }
