@@ -92,3 +92,8 @@ payload-size crossover, the shim is above the baseline from 136 B to 74 KB.
 `make dart-bench` publishes both rows (`pbwire-dart-shim` beside
 `pbwire-dart-tree`); the shim is the native-object row, never a replacement for
 the handle.
+
+Stage 6 (optimization) is a recorded no-op: no published Dart cell is below
+its baseline (the prebuilt handle and the flat image both beat `protobuf-dart`
+at every tier, see `make dart-bench`), so no A/B round was run and the
+attempts ledger gains no entry.
