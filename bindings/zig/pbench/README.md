@@ -56,15 +56,15 @@ the same bytes. The bench repeats the byte gate for every tier before timing.
 
 ## Provisional table (Stage 3)
 
-`make zig-bench`: same harness, same payload, all four arms plus the
-Arwalk/zig-protobuf baseline. MB/s over wire bytes, 2026-11-20:
+`cd bindings/zig && zig build -Doptimize=ReleaseFast bench`: both arms back to
+back in one process, best of three passes. MB/s over wire bytes, 2026-11-20:
 
-| tier | `tree` enc | `shim` enc | zig-protobuf enc | `tree` dec | `shim` dec | zig-protobuf dec |
-|---|---|---|---|---|---|---|
-| 136 B | 2023.4 | 1954.2 | 1285.9 | 1137.8 | 1254.6 | 25.7 |
-| 174 B | 1971.8 | 1706.2 | 1027.3 | 946.2 | 1057.7 | 22.7 |
-| 2469 B | 1724.0 | 1148.5 | 879.7 | 693.3 | 680.7 | 71.2 |
-| 74913 B | 1736.2 | 1202.7 | 837.3 | 741.8 | 751.0 | 332.3 |
+| tier | `tree` enc | `shim` enc | `tree` dec | `shim` dec |
+|---|---|---|---|---|
+| 136 B | 2133.1 | 1857.3 | 1147.6 | 1208.6 |
+| 174 B | 1959.6 | 1581.1 | 953.9 | 1039.1 |
+| 2469 B | 1723.7 | 1122.4 | 689.3 | 681.4 |
+| 74913 B | 1763.2 | 1207.5 | 757.2 | 764.5 |
 
 ## Verdict
 
@@ -76,3 +76,17 @@ and 48.8x / 46.5x / 9.55x / 2.26x on decode. The tree row (a prebuilt
 encoder; the shim is the answer for an application that wants its own
 `extern struct` object, and it removes the per-field crossing issue 41 is
 about. There is no below-baseline shim cell, so Stage 6 is a recorded no-op.
+
+## Formal rows (Stage 5)
+
+`make zig-bench` records `results/bench-zig-<stamp>.{log,json}` and prints both
+rows per tier plus the Arwalk/zig-protobuf baseline. The run below is
+`results/bench-zig-20261120T215240Z.json` (Apple M4 Pro, arm64), same harness,
+same payload, bytes gated equal before timing:
+
+| tier | `tree` enc | `shim` enc | zig-protobuf enc | `tree` dec | `shim` dec | zig-protobuf dec |
+|---|---|---|---|---|---|---|
+| 136 B | 2023.4 | 1954.2 | 1285.9 | 1137.8 | 1254.6 | 25.7 |
+| 174 B | 1971.8 | 1706.2 | 1027.3 | 946.2 | 1057.7 | 22.7 |
+| 2469 B | 1724.0 | 1148.5 | 879.7 | 693.3 | 680.7 | 71.2 |
+| 74913 B | 1736.2 | 1202.7 | 837.3 | 741.8 | 751.0 | 332.3 |
