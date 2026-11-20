@@ -29,10 +29,12 @@ fn main() {
         panic!("copy {}: {e} (run `make` in the repo root)", archive.display())
     });
     println!("cargo:rustc-link-search=native={}", out.display());
+    /* The layout codec first: it references pbw_* symbols, so it must appear
+     * before the core archive on linkers that scan archives in order. */
+    compile_struct_codec(&root, &out);
     println!("cargo:rustc-link-lib=static=pbwire");
     println!("cargo:rerun-if-env-changed=PBWIRE_LIB_DIR");
     println!("cargo:rerun-if-changed={}", archive.display());
-    compile_struct_codec(&root, &out);
     println!("cargo:rerun-if-changed=build.rs");
 }
 
