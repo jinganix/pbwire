@@ -787,3 +787,226 @@ func TestCshimCodecGroups(t *testing.T) {
 		t.Fatal("truncated input decoded without error")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Oneof members via the itab table: the C codec matches the interface word
+// with no Go work per call, including zero-valued members which still
+// encode. Decode stages (member, payload) for the fixup; last occurrence
+// wins. Message-member merge across split occurrences is a documented
+// follow-up (single occurrences round-trip exactly).
+// ---------------------------------------------------------------------------
+
+type scratchOneofN struct{ N int32 }
+
+type scratchOneofT struct{ T string }
+
+type scratchOneofInner struct{ V int32 }
+
+type scratchOneofW struct{ In *scratchOneofInner }
+
+type scratchOneof struct {
+	Name string
+	Kind any
+}
+
+func scratchOneofDescriptor(t *testing.T) protoreflect.MessageDescriptor {
+	t.Helper()
+	str := func(s string) *string { return &s }
+	i32 := func(n int32) *int32 { return &n }
+	f := func(name string, num int32, typ descriptorpb.FieldDescriptorProto_Type, typeName string, oneof string) *descriptorpb.FieldDescriptorProto {
+		fd := &descriptorpb.FieldDescriptorProto{
+			Name: str(name), Number: i32(num), Label: descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL.Enum(), Type: typ.Enum(),
+		}
+		if typeName != "" {
+			fd.TypeName = str(typeName)
+		}
+		if oneof != "" {
+			fd.OneofIndex = i32(0)
+		}
+		_ = oneof
+		return fd
+	}
+	_ = f
+	fd := &descriptorpb.FileDescriptorProto{
+		Syntax:  str("proto3"),
+		Name:    str("scratch4.proto"),
+		Package: str("scratch4"),
+		MessageType: []*descriptorpb.DescriptorProto{
+			{
+				Name: str("Inner"),
+				Field: []*descriptorpb.FieldDescriptorProto{
+					{Name: str("v"), Number: i32(1), Label: descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL.Enum(), Type: descriptorpb.FieldDescriptorProto_TYPE_INT32.Enum()},
+				},
+			},
+			{
+				Name: str("S"),
+				Field: []*descriptorpb.FieldDescriptorProto{
+					{Name: str("name"), Number: i32(1), Label: descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL.Enum(), Type: descriptorpb.FieldDescriptorProto_TYPE_STRING.Enum()},
+					{Name: str("num"), Number: i32(2), Label: descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL.Enum(), Type: descriptorpb.FieldDescriptorProto_TYPE_INT32.Enum(), OneofIndex: i32(0)},
+					{Name: str("text"), Number: i32(3), Label: descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL.Enum(), Type: descriptorpb.FieldDescriptorProto_TYPE_STRING.Enum(), OneofIndex: i32(0)},
+					{Name: str("inner"), Number: i32(4), Label: descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL.Enum(), Type: descriptorpb.FieldDescriptorProto_TYPE_MESSAGE.Enum(), TypeName: str(".scratch4.Inner"), OneofIndex: i32(0)},
+				},
+				OneofDecl: []*descriptorpb.OneofDescriptorProto{{Name: str("kind")}},
+			},
+		},
+	}
+	file, err := protodesc.NewFile(fd, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return file.Messages().ByName("S")
+}
+
+func scratchOneofRows() []shimlayout.Msg {
+	return []shimlayout.Msg{
+		{Full: "scratch4.S", Size: unsafe.Sizeof(scratchOneof{}), Rows: []shimlayout.Row{
+			{Fnum: 1, Kind: shimlayout.KindString, Wire: shimlayout.WireLen, Offset: uint32(unsafe.Offsetof(scratchOneof{}.Name)), Sub: -1},
+			{Fnum: 2, Kind: shimlayout.KindInt32, Wire: shimlayout.WireVarint, Offset: uint32(unsafe.Offsetof(scratchOneof{}.Kind)), Itab: shimlayout.ItabOf((*scratchOneofN)(nil)), Ogrp: 0, Sub: -1},
+			{Fnum: 3, Kind: shimlayout.KindString, Wire: shimlayout.WireLen, Offset: uint32(unsafe.Offsetof(scratchOneof{}.Kind)), Itab: shimlayout.ItabOf((*scratchOneofT)(nil)), Ogrp: 0, Sub: -1},
+			{Fnum: 4, Kind: shimlayout.KindMessage, Wire: shimlayout.WireLen, Offset: uint32(unsafe.Offsetof(scratchOneof{}.Kind)), Itab: shimlayout.ItabOf((*scratchOneofW)(nil)), Ogrp: 0, Sub: 1},
+		}},
+		{Full: "scratch4.Inner", Size: unsafe.Sizeof(scratchOneofInner{}), Rows: []shimlayout.Row{
+			{Fnum: 1, Kind: shimlayout.KindInt32, Wire: shimlayout.WireVarint, Offset: uint32(unsafe.Offsetof(scratchOneofInner{}.V)), Sub: -1},
+		}},
+	}
+}
+
+func oracleOneof(t *testing.T, md protoreflect.MessageDescriptor, kind protoreflect.FieldNumber, v protoreflect.Value) []byte {
+	t.Helper()
+	m := dynamicpb.NewMessage(md)
+	m.Set(md.Fields().ByNumber(1), protoreflect.ValueOfString("n"))
+	if kind != 0 {
+		m.Set(md.Fields().ByNumber(kind), v)
+	}
+	wire, err := proto.MarshalOptions{Deterministic: true}.Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return wire
+}
+
+// fixupOneof is what the generated model will own: wrap the staged
+// occurrence into its wrapper with a typed store. Strings copy out of
+// the wire; the message member reads its scalar from the C-arena
+// submessage. Slot 0 is the test registry's only oneof group.
+func fixupOneof(t *testing.T, c *Codec, m *scratchOneof, wire []byte) {
+	t.Helper()
+	fnum, _, scalar, ptr, ln, ok := c.stage(0)
+	if !ok {
+		t.Fatal("stage read failed")
+	}
+	switch fnum {
+	case 0:
+		m.Kind = nil
+	case 2:
+		m.Kind = &scratchOneofN{N: int32(scalar)}
+	case 3:
+		m.Kind = &scratchOneofT{T: string(unsafe.Slice((*byte)(ptr), ln))}
+	case 4:
+		if ptr == nil {
+			t.Fatal("message member staged nil submessage")
+		}
+		m.Kind = &scratchOneofW{In: &scratchOneofInner{V: *(*int32)(ptr)}}
+	default:
+		t.Fatalf("unexpected staged fnum %d", fnum)
+	}
+	runtime.KeepAlive(wire)
+}
+
+func TestCshimCodecOneof(t *testing.T) {
+	md := scratchOneofDescriptor(t)
+	reg := scratchOneofRows()
+	c, err := newCodecFromLayout(reg, "scratch4.S")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	// Zero-valued members still encode: presence lives in the wrapper.
+	cases := []struct {
+		name string
+		kind any
+		fnum protoreflect.FieldNumber
+		val  protoreflect.Value
+	}{
+		{"zero-int", &scratchOneofN{}, 2, protoreflect.ValueOfInt32(0)},
+		{"neg-int", &scratchOneofN{N: -7}, 2, protoreflect.ValueOfInt32(-7)},
+		{"empty-string", &scratchOneofT{}, 3, protoreflect.ValueOfString("")},
+		{"text", &scratchOneofT{T: "hi"}, 3, protoreflect.ValueOfString("hi")},
+	}
+	for _, tc := range cases {
+		m := &scratchOneof{Name: "n", Kind: tc.kind}
+		ref := oracleOneof(t, md, tc.fnum, tc.val)
+		if got := testEncode(t, c, m); !bytes.Equal(got, ref) {
+			t.Fatalf("%s: encode differs: %x vs %x", tc.name, got, ref)
+		}
+		rt := dynamicpb.NewMessage(md)
+		if err := proto.Unmarshal(ref, rt); err != nil {
+			t.Fatalf("%s: oracle reparse: %v", tc.name, err)
+		}
+		want := dynamicpb.NewMessage(md)
+		want.Set(md.Fields().ByNumber(1), protoreflect.ValueOfString("n"))
+		want.Set(md.Fields().ByNumber(tc.fnum), tc.val)
+		if !proto.Equal(want, rt) {
+			t.Fatalf("%s: oracle reparse mismatch", tc.name)
+		}
+
+		// Decode stages the member; the fixup wraps it, and
+		// re-encoding the fixed-up struct is byte-stable.
+		back := &scratchOneof{}
+		testDecode(t, c, back, ref)
+		if back.Name != "n" {
+			t.Fatalf("%s: name lost: %q", tc.name, back.Name)
+		}
+		fixupOneof(t, c, back, ref)
+		if !reflect.DeepEqual(back.Kind, tc.kind) {
+			t.Fatalf("%s: fixup gave %#v, want %#v", tc.name, back.Kind, tc.kind)
+		}
+		if again := testEncode(t, c, back); !bytes.Equal(again, ref) {
+			t.Fatalf("%s: re-encode differs: %x vs %x", tc.name, again, ref)
+		}
+	}
+
+	// Message member round-trips through the C-arena submessage.
+	innerMd := md.Fields().ByNumber(4).Message()
+	im := dynamicpb.NewMessage(innerMd)
+	im.Set(innerMd.Fields().ByNumber(1), protoreflect.ValueOfInt32(9))
+	innerRef := oracleOneof(t, md, 4, protoreflect.ValueOfMessage(im))
+	innerKind := &scratchOneofW{In: &scratchOneofInner{V: 9}}
+	if got := testEncode(t, c, &scratchOneof{Name: "n", Kind: innerKind}); !bytes.Equal(got, innerRef) {
+		t.Fatalf("message: encode differs: %x vs %x", got, innerRef)
+	}
+	backInner := &scratchOneof{}
+	testDecode(t, c, backInner, innerRef)
+	fixupOneof(t, c, backInner, innerRef)
+	if !reflect.DeepEqual(backInner.Kind, innerKind) {
+		t.Fatalf("message: fixup gave %#v, want %#v", backInner.Kind, innerKind)
+	}
+	if again := testEncode(t, c, backInner); !bytes.Equal(again, innerRef) {
+		t.Fatalf("message: re-encode differs: %x vs %x", again, innerRef)
+	}
+
+	// Unset oneof encodes only the name field and fixes up to nil.
+	bareRef := oracleOneof(t, md, 0, protoreflect.Value{})
+	if got := testEncode(t, c, &scratchOneof{Name: "n"}); !bytes.Equal(got, bareRef) {
+		t.Fatalf("unset: encode differs: %x vs %x", got, bareRef)
+	}
+	backBare := &scratchOneof{}
+	testDecode(t, c, backBare, bareRef)
+	fixupOneof(t, c, backBare, bareRef)
+	if backBare.Kind != nil {
+		t.Fatalf("unset: fixup gave %#v, want nil", backBare.Kind)
+	}
+
+	// Last occurrence wins across members sharing the group slot.
+	// Duplicate scalar fields are valid wire; the parser keeps the last.
+	first := oracleOneof(t, md, 2, protoreflect.ValueOfInt32(-7))
+	second := oracleOneof(t, md, 3, protoreflect.ValueOfString("hi"))
+	both := append(append([]byte{}, first...), second...)
+	backLast := &scratchOneof{}
+	testDecode(t, c, backLast, both)
+	fixupOneof(t, c, backLast, both)
+	if !reflect.DeepEqual(backLast.Kind, &scratchOneofT{T: "hi"}) {
+		t.Fatalf("last-wins: fixup gave %#v", backLast.Kind)
+	}
+}

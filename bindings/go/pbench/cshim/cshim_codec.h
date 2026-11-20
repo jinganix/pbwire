@@ -70,6 +70,11 @@ enum {
  *            instead of a length prefix (Kind is KindMessage).
  *   sub      registry index of a message-typed field's sub-table, -1 when
  *            the row holds no submessage.
+ *   itab     expected interface itab for a oneof member row, 0 otherwise.
+ *            Encode matches the interface word with no Go work per call;
+ *            decode stages the payload for the Go fixup.
+ *   ogrp     oneof group index: the staging slot a set member decodes
+ *            into. Meaningful only when itab is set.
  */
 typedef struct cshim_row {
     uint32_t fnum;
@@ -85,7 +90,22 @@ typedef struct cshim_row {
     uint32_t required;
     uint32_t group;
     int32_t sub;
+    uintptr_t itab;
+    uint32_t ogrp;
 } cshim_row;
+
+/* One staged oneof occurrence: the member's field number plus its payload
+ * in canonical form. Scalar kinds carry final value bits (zigzag applied,
+ * floats as raw bits, bools as 0/1); strings and bytes point into the wire
+ * with a length; messages point at a C-arena submessage. The Go fixup
+ * wraps staged values into oneof wrappers with typed stores. */
+typedef struct cshim_oneof_stage {
+    uint32_t fnum;
+    uint32_t kind;
+    uint64_t scalar;
+    const void *ptr;
+    size_t len;
+} cshim_oneof_stage;
 
 /* One message table in the registry. The codec copies the rows at build
  * time; resolve and accumulators are derived per table. */
@@ -143,5 +163,13 @@ cshim_enc_result cshim_encode(cshim_codec *h, uintptr_t base, uint8_t *out,
  * array before returning, so no raw pointer survives a returned struct. */
 cshim_dec_result cshim_decode(cshim_codec *h, uintptr_t base, const uint8_t *wire,
                         size_t wire_len);
+
+/* Read one staged oneof occurrence for the Go fixup.  ptr rides a
+ * uintptr_t so Go needs no pointer-type dance; it points into wire
+ * (strings/bytes) or the C arena (messages) and is valid until the next
+ * decode.  Returns 0 with *fnum == 0 when slot idx staged nothing. */
+int cshim_stage(const cshim_codec *h, size_t idx, uint32_t *fnum,
+                uint32_t *kind, uint64_t *scalar, uintptr_t *ptr,
+                size_t *len);
 
 #endif /* PBW_GO_V2_CODEC_H */
