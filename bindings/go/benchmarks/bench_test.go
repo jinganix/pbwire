@@ -6,15 +6,25 @@
 // The same payload as every other binding: every scalar kind, the nested
 // message, the two proto3 optionals, and the repeated fields scaled x0 / x1 /
 // x100 / x3000, which lands the tiers on 136 / 174 / 2469 / 74913 bytes.
-// Both sides must produce identical bytes before anything is timed, and both
-// allocate per call (pbwire Encode()/Decode() against proto.Marshal()/
-// proto.Unmarshal()), so the comparison is like for like.
 //
-// The gen/ directory is built by bench.sh (protoc-gen-go) and never
-// committed. Correctness gates run in TestMain before any timing: a speed
-// number from a wrong codec is meaningless.
+// Two pbwire rows, one per dynamic core, because the two answer different
+// questions: `pbwire-go dync` times the dynamic C core (Encode() on a tree
+// that was already built in C, Decode()+Close() without reading a field back
+// into Go), and `pbwire-go dyngo` times the dynamic Go core through the thin
+// generated model an application actually holds (Marshal()/Unmarshal() over
+// the shared table engine, no cgo). protobuf-go builds and reads its native
+// objects in both cases, so only the dyngo row is the like-for-like
+// comparison; see github.com/jinganix/pbwire/issues/41.
 //
-//	./bench.sh          generate, build, run
+// Both sides produce identical bytes and the dyngo decode is compared field by
+// field against the oracle before anything is timed, so a speed number from a
+// wrong codec is meaningless but never published.
+//
+// The descriptor set is built by bench.sh (protoc) and never committed. The
+// two generated packages are the committed ones under tests/, so the
+// baseline does not need protoc-gen-go.
+//
+//	./bench.sh          build, run
 package benchmarks
 
 import (
@@ -28,8 +38,9 @@ import (
 	"time"
 
 	"google.golang.org/protobuf/proto"
-	"pbwire/benchmarks/gen"
 	"pbwire/dynamic"
+	"pbwire/tests/gen/matrix3"
+	"pbwire/tests/gen_oracle/matrix3pb"
 )
 
 type tier struct {
@@ -58,8 +69,22 @@ var (
 func i32p(v int32) *int32   { return &v }
 func strp(v string) *string { return &v }
 
-func fillOfficial(n int) *gen.Scalars3 {
-	m := &gen.Scalars3{
+func sameI32(a, b *int32) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
+}
+
+func sameStr(a, b *string) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
+}
+
+func fillOfficial(n int) *matrix3pb.Scalars3 {
+	m := &matrix3pb.Scalars3{
 		I32:    math.MinInt32,
 		I64:    math.MaxInt64,
 		U32:    math.MaxUint32,
@@ -74,143 +99,107 @@ func fillOfficial(n int) *gen.Scalars3 {
 		F64:    -123456.789,
 		Flag:   true,
 		Str:    "hello",
-		Color:  gen.Color3_COLOR3_GREEN,
-		Inner:  &gen.Inner3{Name: "kid", Value: 42},
+		Color:  matrix3pb.Color3_COLOR3_GREEN,
+		Inner:  &matrix3pb.Inner3{Name: "kid", Value: 42},
 		OptI32: i32p(-7),
 		OptStr: strp("opt"),
 	}
 	for i := 0; i < n; i++ {
 		m.Nums = append(m.Nums, int32(i-3))
 		m.Tags = append(m.Tags, "tag")
-		m.Inners = append(m.Inners, &gen.Inner3{Name: "grandkid", Value: int32(i + 1)})
+		m.Inners = append(m.Inners, &matrix3pb.Inner3{Name: "grandkid", Value: int32(i + 1)})
 		m.Flags = append(m.Flags, i%2 == 0)
 	}
 	return m
 }
 
-func fillPbwire(n int) (*dynamic.Message, error) {
-	m := typ.New()
-	set := func(err error) error {
-		if err != nil {
-			m.Close()
-		}
-		return err
+// checkStruct compares every field of a pbwire decode against the protobuf-go
+// decode of the same bytes: the Go core path is correct only if nothing was
+// dropped on the way back into Go.
+func checkStruct(label string, got *matrix3.Scalars3, want *matrix3pb.Scalars3) error {
+	bad := func(what string) error {
+		return fmt.Errorf("%s: struct decode lost %s", label, what)
 	}
-	if err := set(m.SetInt("i32", math.MinInt32)); err != nil {
-		return nil, err
-	}
-	if err := set(m.SetInt("i64", math.MaxInt64)); err != nil {
-		return nil, err
-	}
-	if err := set(m.SetUint("u32", 0xffffffff)); err != nil {
-		return nil, err
-	}
-	if err := set(m.SetUint("u64", 1<<64-1)); err != nil {
-		return nil, err
-	}
-	if err := set(m.SetInt("s32", math.MinInt32)); err != nil {
-		return nil, err
-	}
-	if err := set(m.SetInt("s64", math.MinInt64)); err != nil {
-		return nil, err
-	}
-	if err := set(m.SetUint("fx32", 0xdeadbeef)); err != nil {
-		return nil, err
-	}
-	if err := set(m.SetUint("fx64", 72623859790382856)); err != nil {
-		return nil, err
-	}
-	if err := set(m.SetInt("sfx32", math.MinInt32)); err != nil {
-		return nil, err
-	}
-	if err := set(m.SetInt("sfx64", math.MinInt64)); err != nil {
-		return nil, err
-	}
-	if err := set(m.SetFloat("f32", float32(math.Inf(1)))); err != nil {
-		return nil, err
-	}
-	if err := set(m.SetDouble("f64", -123456.789)); err != nil {
-		return nil, err
-	}
-	if err := set(m.SetBool("flag", true)); err != nil {
-		return nil, err
-	}
-	if err := set(m.SetString("str", "hello")); err != nil {
-		return nil, err
-	}
-	if err := set(m.SetInt("color", 2)); err != nil {
-		return nil, err
-	}
-	if err := set(m.SetInt("opt_i32", -7)); err != nil {
-		return nil, err
-	}
-	if err := set(m.SetString("opt_str", "opt")); err != nil {
-		return nil, err
-	}
-	inner, err := m.NewMessage("inner")
-	if err != nil {
-		m.Close()
-		return nil, err
-	}
-	if err := inner.SetString("name", "kid"); err != nil {
-		m.Close()
-		return nil, err
-	}
-	if err := inner.SetInt("value", 42); err != nil {
-		m.Close()
-		return nil, err
-	}
-	for i := 0; i < n; i++ {
-		if err := set(m.SetInt("nums", int64(i-3))); err != nil {
-			return nil, err
-		}
-		if err := set(m.SetString("tags", "tag")); err != nil {
-			return nil, err
-		}
-		if err := set(m.SetBool("flags", i%2 == 0)); err != nil {
-			return nil, err
-		}
-		sub, err := m.NewMessage("inners")
-		if err != nil {
-			m.Close()
-			return nil, err
-		}
-		if err := sub.SetString("name", "grandkid"); err != nil {
-			m.Close()
-			return nil, err
-		}
-		if err := sub.SetInt("value", int64(i+1)); err != nil {
-			m.Close()
-			return nil, err
+	for _, c := range []struct {
+		name string
+		ok   bool
+	}{
+		{"i32", got.I32 == want.I32},
+		{"i64", got.I64 == want.I64},
+		{"u32", got.U32 == want.U32},
+		{"u64", got.U64 == want.U64},
+		{"s32", got.S32 == want.S32},
+		{"s64", got.S64 == want.S64},
+		{"fx32", got.Fx32 == want.Fx32},
+		{"fx64", got.Fx64 == want.Fx64},
+		{"sfx32", got.Sfx32 == want.Sfx32},
+		{"sfx64", got.Sfx64 == want.Sfx64},
+		{"f32", got.F32 == want.F32},
+		{"f64", got.F64 == want.F64},
+		{"flag", got.Flag == want.Flag},
+		{"str", got.Str == want.Str},
+		{"color", int32(got.Color) == int32(want.Color)},
+		{"inner.name", got.Inner.GetName() == want.Inner.GetName()},
+		{"inner.value", got.Inner.GetValue() == want.Inner.GetValue()},
+		{"opt_i32", sameI32(got.OptI32, want.OptI32)},
+		{"opt_str", sameStr(got.OptStr, want.OptStr)},
+	} {
+		if !c.ok {
+			return bad(c.name)
 		}
 	}
-	return m, nil
+	if len(got.Nums) != len(want.Nums) || len(got.Tags) != len(want.Tags) ||
+		len(got.Flags) != len(want.Flags) || len(got.Inners) != len(want.Inners) {
+		return bad("repeated field lengths")
+	}
+	for i := range want.Nums {
+		if got.Nums[i] != want.Nums[i] {
+			return bad("nums[" + fmt.Sprint(i) + "]")
+		}
+		if got.Tags[i] != want.Tags[i] {
+			return bad("tags[" + fmt.Sprint(i) + "]")
+		}
+		if got.Flags[i] != want.Flags[i] {
+			return bad("flags[" + fmt.Sprint(i) + "]")
+		}
+		if got.Inners[i].Name != want.Inners[i].Name ||
+			got.Inners[i].Value != want.Inners[i].Value {
+			return bad("inners[" + fmt.Sprint(i) + "]")
+		}
+	}
+	return nil
 }
 
 // The gate: every tier's official bytes land on the pinned size, pbwire
-// encodes byte-identical bytes, and a pbwire decode re-encodes
-// byte-identically. Official-side values are spot-checked so a wrong payload
-// cannot hide behind matching bytes.
+// encodes byte-identical bytes from both the dynamic tree and the generated
+// struct, the struct decode keeps every field, and the dynamic decode
+// re-encodes byte-identically.
 func gate(t tier) error {
-	reference, err := proto.Marshal(fillOfficial(t.n))
+	want := fillOfficial(t.n)
+	reference, err := proto.Marshal(want)
 	if err != nil {
 		return err
 	}
 	if len(reference) != t.want {
 		return fmt.Errorf("%s: official encoder wrote %d bytes, expected %d", t.label, len(reference), t.want)
 	}
-	message, err := fillPbwire(t.n)
+
+	structMsg := &matrix3.Scalars3{}
+	if err := structMsg.Unmarshal(reference); err != nil {
+		return fmt.Errorf("%s: dyngo decode: %v", t.label, err)
+	}
+	if err := checkStruct(t.label, structMsg, want); err != nil {
+		return err
+	}
+	structOut, err := structMsg.Marshal()
 	if err != nil {
 		return err
 	}
-	defer message.Close()
-	got, err := message.Encode()
-	if err != nil {
-		return err
+	if !bytes.Equal(structOut, reference) {
+		return fmt.Errorf("%s: pbwire-go dyngo and protobuf-go encode differently (%d vs %d bytes)",
+			t.label, len(structOut), len(reference))
 	}
-	if !bytes.Equal(got, reference) {
-		return fmt.Errorf("%s: pbwire-go and protobuf-go encode differently (%d vs %d bytes)", t.label, len(got), len(reference))
-	}
+
 	back, err := typ.Decode(reference)
 	if err != nil {
 		return err
@@ -221,18 +210,21 @@ func gate(t tier) error {
 		return err
 	}
 	if !bytes.Equal(again, reference) {
-		return fmt.Errorf("%s: pbwire-go decode differs", t.label)
+		return fmt.Errorf("%s: pbwire-go dynamic decode differs", t.label)
 	}
-	var official gen.Scalars3
+
+	var official matrix3pb.Scalars3
 	if err := proto.Unmarshal(reference, &official); err != nil {
 		return err
 	}
 	if official.Str != "hello" || official.Inner.GetName() != "kid" ||
-		official.Inner.GetValue() != 42 || len(official.Nums) != t.n ||
+		official.Inner.GetValue() != 42 || len(official.Tags) != t.n ||
+		len(official.Nums) != t.n || len(official.Inners) != t.n ||
 		(t.n > 0 && official.Inners[t.n-1].GetValue() != int32(t.n)) {
 		return fmt.Errorf("%s: official decoded values differ", t.label)
 	}
-	fmt.Printf("OK   %s encoding parity, x%d (%d bytes)\n", t.label, t.n, len(reference))
+	fmt.Printf("OK   %s parity: struct decode field by field, both codecs byte identical, x%d (%d bytes)\n",
+		t.label, t.n, len(reference))
 	return nil
 }
 
@@ -293,6 +285,7 @@ func calibrate(op func(), floor int) int {
 }
 
 func measure(floor int, op func()) float64 {
+	runtime.GC() // a row inherits no heap growth from the row before it
 	count := calibrate(op, floor)
 	run(count, op) // warm-up
 	best := float64(1e100)
@@ -305,46 +298,61 @@ func measure(floor int, op func()) float64 {
 }
 
 func row(impl, op string, size int, ns float64) {
-	fmt.Printf("  %-12s %-7s %12.1f %10.1f\n", impl, op, ns, float64(size)/ns*1000.0)
+	fmt.Printf("  %-17s %-7s %12.1f %10.1f\n", impl, op, ns, float64(size)/ns*1000.0)
 }
 
 func TestMatrix3Bench(t *testing.T) {
 	for _, tr := range tiers {
-		message, err := fillPbwire(tr.n)
-		if err != nil {
-			t.Fatal(err)
-		}
-		reference, err := proto.Marshal(fillOfficial(tr.n))
-		if err != nil {
-			t.Fatal(err)
-		}
 		official := fillOfficial(tr.n)
+		reference, err := proto.Marshal(official)
+		if err != nil {
+			t.Fatal(err)
+		}
 
-		// Tier line shows the reference op's count; slower ops keep the floor.
+		// The native object an application holds, and the C tree the
+		// published dynamic numbers encode. Both are built before the timer.
+		structMsg := &matrix3.Scalars3{}
+		if err := structMsg.Unmarshal(reference); err != nil {
+			t.Fatal(err)
+		}
+		tree, err := typ.Decode(reference)
+		if err != nil {
+			t.Fatal(err)
+		}
+
 		count := calibrate(func() {
-			_, _ = message.Encode()
+			sinkBytes, _ = tree.Encode()
 		}, tr.floor)
+		structEncode := measure(1, func() {
+			sinkBytes, _ = structMsg.Marshal()
+		})
 		encode := measure(tr.floor, func() {
-			sinkBytes, _ = message.Encode()
+			sinkBytes, _ = tree.Encode()
+		})
+		officialEncode := measure(tr.floor, func() {
+			sinkBytes, _ = proto.Marshal(official)
+		})
+		structDecode := measure(1, func() {
+			m := new(matrix3.Scalars3)
+			_ = m.Unmarshal(reference)
 		})
 		decode := measure(tr.floor, func() {
 			m, _ := typ.Decode(reference)
 			m.Close()
 		})
-		officialEncode := measure(tr.floor, func() {
-			sinkBytes, _ = proto.Marshal(official)
-		})
 		officialDecode := measure(tr.floor, func() {
-			var m gen.Scalars3
+			var m matrix3pb.Scalars3
 			_ = proto.Unmarshal(reference, &m)
 		})
-		message.Close()
+		tree.Close()
 
 		fmt.Printf("\n%s: %d bytes, %d iterations (repeat field x%d)\n", tr.label, len(reference), count, tr.n)
-		fmt.Printf("  %-12s %-7s %12s %10s\n", "impl", "op", "ns/op", "MB/s")
-		row("pbwire-go", "encode", len(reference), encode)
+		fmt.Printf("  %-17s %-7s %12s %10s\n", "impl", "op", "ns/op", "MB/s")
+		row("pbwire-go dyngo", "encode", len(reference), structEncode)
+		row("pbwire-go dync", "encode", len(reference), encode)
 		row("protobuf-go", "encode", len(reference), officialEncode)
-		row("pbwire-go", "decode", len(reference), decode)
+		row("pbwire-go dyngo", "decode", len(reference), structDecode)
+		row("pbwire-go dync", "decode", len(reference), decode)
 		row("protobuf-go", "decode", len(reference), officialDecode)
 		fmt.Println()
 	}
