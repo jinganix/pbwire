@@ -61,7 +61,10 @@ is better):
 ```
 
 `ns/op` and `MB/s` are two views of the same measurement
-(`MB/s = bytes / ns/op * 1000`). `make bench-c` adds one more block per case
+(`MB/s = bytes / ns/op * 1000`). The comma and the iteration count are
+optional: a harness that calibrates per op (Go, Python) has no single count
+for a case, and `scripts/bench-record.py` accepts the shorter header.
+`make bench-c` adds one more block per case
 (`pbwire-c1`: the C binding's one-shot API, which compiles the layout on every
 call) after the standard four rows; only the standard block is aggregated
 below. The Python harness names its ops by the task instead (`encode(data)`,

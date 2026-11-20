@@ -26,9 +26,11 @@ def render(path):
         r.get("elapsed_s")))
     for block in r.get("cases", []):
         repeats = ("x%s" % block["repeats"]) if block.get("repeats") is not None else "?"
+        iters = ("%s iterations, " % block["iterations"]
+                 if block.get("iterations") is not None else "")
         print()
-        print("### %s: %s bytes (%s iterations, %s)" % (
-            block["case"], block["bytes"], block["iterations"], repeats))
+        print("### %s: %s bytes (%s%s)" % (
+            block["case"], block["bytes"], iters, repeats))
         print()
         print("| impl | op | ns/op | MB/s |")
         print("|---|---|---|---|")

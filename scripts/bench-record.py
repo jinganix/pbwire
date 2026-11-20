@@ -35,11 +35,13 @@ SCHEMA_VERSION = 1
 
 # "<case>: <bytes> bytes, ... <iterations> iterations" — the "..." covers
 # every harness dialect ("floor N iterations" in Java, per-op silent counts
-# in Python, which prints no iterations at all and no closing paren).
+# in Python and Go, which print no iterations at all and no closing paren).
+# The comma after "bytes" is optional for the same reason: the Go harness
+# calibrates per op, so one case has no single iteration count.
 # Text/json/stream/threads tables of bench.cc never match: their byte
 # counts are not directly after the colon.
 TIER_RE = re.compile(
-    r"^([A-Za-z0-9_.\-]+):\s+(\d+)\s+bytes,(?:\s+.*?(\d+)\s+iterations\b)?.*$"
+    r"^([A-Za-z0-9_.\-]+):\s+(\d+)\s+bytes[ ,](?:\s+.*?(\d+)\s+iterations\b)?.*$"
 )
 REPEATS_RE = re.compile(r"[xX](\d+)\)?\s*$")
 # A result row, parsed from the right: the last two fields are ns/op and
@@ -228,6 +230,15 @@ threads: 1 vs 8 (14 cores), 500 iterations per thread, something
     assert len(py) == 1 and py[0]["iterations"] is None, py
     assert py[0]["repeats"] == 100 and len(py[0]["rows"]) == 2, py
     assert py[0]["rows"][1]["impl"] == "pb upb", py
+    # Go dialect: no comma after "bytes" either, and a closing paren.
+    go = parse_log(
+        "small: 136 bytes (repeat field x0)\n"
+        "  pbwire-go        encode         282.5      481.4\n"
+        "  protobuf-go      encode         344.9      394.3\n"
+    )
+    assert len(go) == 1 and go[0]["bytes"] == 136, go
+    assert go[0]["iterations"] is None and go[0]["repeats"] == 0, go
+    assert len(go[0]["rows"]) == 2, go
     print("selftest: parser OK (%d sample blocks)" % len(cases))
 
 
