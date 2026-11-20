@@ -5,9 +5,9 @@ import (
 	"testing"
 	"unsafe"
 
-	gen1 "pbwire/tests/gen/matrix3"
 	pbwrt "pbwire/runtime"
 	"pbwire/runtime/layout"
+	gen1 "pbwire/tests/gen/matrix3"
 )
 
 func TestZZLayoutProbe(t *testing.T) {
