@@ -22,12 +22,16 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 
 	"google.golang.org/protobuf/proto"
 
+	gmap "pbwire/tests/gen/maptest"
 	gen1 "pbwire/tests/gen/matrix3"
 	genone "pbwire/tests/gen/oneof1"
+	gdep "pbwire/tests/gen/xdep"
+	gxfile "pbwire/tests/gen/xfile"
 	pb1 "pbwire/tests/gen_oracle/matrix3pb"
 	pbone "pbwire/tests/gen_oracle/oneof1pb"
 )
@@ -348,6 +352,75 @@ func TestT5Switch(t *testing.T) {
 	}
 }
 
+// A nil sub-message is data, not a crash: a nil repeated element and a oneof
+// wrapper holding a nil message must encode as the empty message, byte for
+// byte what protobuf-go writes, instead of dereferencing nil.
+func TestT6NilSubmessage(t *testing.T) {
+	empty, err := (&gen1.Scalars3{Inners: []*gen1.Inner3{nil}}).Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := proto.Marshal(&pb1.Scalars3{Inners: []*pb1.Inner3{nil}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(want) == 0 || !bytes.Equal(empty, want) {
+		t.Fatalf("nil repeated element encoded %q, protobuf-go writes %q", empty, want)
+	}
+
+	one := &genone.Oneof1{Name: "a", Kind: &genone.Oneof1_Inner_{Inner: nil}}
+	got, err := one.Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantOne, err := proto.Marshal(&pbone.Oneof1{Name: "a", Kind: &pbone.Oneof1_Inner_{Inner: nil}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, wantOne) {
+		t.Fatalf("nil oneof member encoded %q, protobuf-go writes %q", got, wantOne)
+	}
+	back := &genone.Oneof1{}
+	if err := back.Unmarshal(wantOne); err != nil {
+		t.Fatal(err)
+	}
+	if back.GetInner() == nil {
+		t.Fatal("empty oneof member decoded as absent")
+	}
+}
+
+// Every generated message must build its codec plan on first use: the plan
+// is built lazily and a rejected row panics (sync.OnceValue). An encode
+// error is not this test's business, so a zero value with required fields
+// only logs. This covers the models whose own Marshal no other test calls.
+func TestGeneratedPlansAccepted(t *testing.T) {
+	cases := map[string]func() ([]byte, error){
+		"matrix3.Inner3":      (&gen1.Inner3{}).Marshal,
+		"matrix3.Scalars3":    (&gen1.Scalars3{}).Marshal,
+		"oneof1.Oneof1_Inner": (&genone.Oneof1_Inner{}).Marshal,
+		"oneof1.Oneof1":       (&genone.Oneof1{}).Marshal,
+		"maptest.MapValue":    (&gmap.MapValue{}).Marshal,
+		"maptest.MapTest":     (&gmap.MapTest{}).Marshal,
+		"maptest.ByIntEntry":  (&gmap.MapTest_ByIntEntry{}).Marshal,
+		"maptest.ByStrEntry":  (&gmap.MapTest_ByStrEntry{}).Marshal,
+		"maptest.ByMsgEntry":  (&gmap.MapTest_ByMsgEntry{}).Marshal,
+		"xdep.DepMsg":         (&gdep.DepMsg{}).Marshal,
+		"xfile.UsesDep":       (&gxfile.UsesDep{}).Marshal,
+	}
+	for name, marshal := range cases {
+		t.Run(name, func(t *testing.T) {
+			defer func() {
+				if p := recover(); p != nil {
+					t.Fatalf("codec plan rejected on first use: %v", p)
+				}
+			}()
+			if _, err := marshal(); err != nil {
+				t.Logf("encode error on the zero value: %v", err)
+			}
+		})
+	}
+}
+
 func TestT6Errors(t *testing.T) {
 	loadVectors(t)
 	if err := (&gen1.Scalars3{}).Unmarshal([]byte{0xff, 0xff, 0xff}); err == nil {
@@ -377,5 +450,44 @@ func TestT6Errors(t *testing.T) {
 	}
 	if ob.GetNum() != 1 {
 		t.Fatal("T6 oneof member round-trips")
+	}
+}
+
+// The generated model is safe for concurrent use: one codec per message type
+// serializes its own C scratch. Run with -race to prove the shared state is
+// covered (TESTSPEC: the thin model stands in for generated code).
+func TestModelConcurrentUse(t *testing.T) {
+	ref, err := os.ReadFile(filepath.Join(filepath.Dir(callerFile(t)), "..", "..", "c", "tests", "data", "matrix3.bin"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wg sync.WaitGroup
+	errCh := make(chan string, 64)
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for k := 0; k < 50; k++ {
+				m := &gen1.Scalars3{}
+				if err := m.Unmarshal(ref); err != nil {
+					errCh <- "unmarshal: " + err.Error()
+					return
+				}
+				out, err := m.Marshal()
+				if err != nil {
+					errCh <- "marshal: " + err.Error()
+					return
+				}
+				if !bytes.Equal(out, ref) {
+					errCh <- "re-encode differs"
+					return
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	close(errCh)
+	for msg := range errCh {
+		t.Fatal(msg)
 	}
 }

@@ -1,17 +1,18 @@
-// Package dynamic is the MVP of a hot-swappable Go binding: it loads a
+// Package dynamic is the tree arm of the Go pbench: it loads a
 // FileDescriptorSet at run time (no recompile, no restart), builds dynamic
 // message trees and encodes/decodes them through the shared C core over cgo.
 //
-// This is the counterpart to the static generator (../plugin): generated
-// codecs stay the fast path for pinned schemas; this package is for schemas
-// that must change under a running process. Correctness comes from the C
-// core (conformance-tested); the per-op price is one cgo transition plus
-// one heap copy each way, measured in ../cgoprobe.
+// The three arms, one contract (bindings/README.md#pbench-three-arms-one-contract):
+// pbench/dync in this directory (tree, C core over cgo), pbench/dyngo (core,
+// pure Go: codec.Load + Schema.Type + DMsg over the shared table engine) and
+// pbench/cshim (shim, C reads Go memory through a generated layout table).
+// Correctness comes from the C core (conformance-tested); the per-op price is
+// one cgo crossing, priced against the other arms in pbench.
 package dynamic
 
 /*
-#cgo CFLAGS: -I${SRCDIR}/../../../include
-#cgo LDFLAGS: ${SRCDIR}/../../../build/libpbwire.a
+#cgo CFLAGS: -I${SRCDIR}/../../../../../include
+#cgo LDFLAGS: ${SRCDIR}/../../../../../build/libpbwire.a
 #include <stdlib.h>
 #include "pbwire.h"
 

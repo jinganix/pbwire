@@ -833,19 +833,26 @@ than the current pure-Java codec? Answer: no, except large-payload encode.
 Do not re-attempt without a new reason; the numbers below are the ceiling
 a real JNI data binding would sit under.
 
-### Probe (throwaway, not committed)
+### Probe
 
-A minimal JNI harness over `build/libpbwire.a` (`/tmp/jnibench`, four native
-methods, same `matrix3.proto` / same four tiers as `Bench.java`): `nativeInit`
-loads `matrix3.desc` via `pbw_descriptor_set_load`; `nativeSetRef` decodes
-the reference bytes once into a cached C tree per tier; `nativeEncode(tier)`
+A minimal JNI harness over `build/libpbwire.a` (four native methods, same
+`matrix3.proto` / same four tiers as `Bench.java`): `nativeInit` loads
+`matrix3.desc` via `pbw_descriptor_set_load`; `nativeSetRef` decodes the
+reference bytes once into a cached C tree per tier; `nativeEncode(tier)`
 re-encodes the cached tree (`pbw_encode`, one `byte[]` out per call);
-`nativeDecode(bytes)` runs `pbw_decode` + touches the field/presence counts
-+ `pbw_message_free` per call (one `byte[]` in, no Java objects created).
-Both sides allocate per call and cross the boundary once per op; timing is
-the same calibrate + 3-pass best-of interleaved loop as `Bench.java`, so
-machine drift hits both sides equally. Byte parity gated first: JNI bytes
-are identical to `GenericCodec` bytes on all four tiers.
+`nativeDecode(bytes)` runs `pbw_decode` + touches the field/presence counts +
+`pbw_message_free` per call (one `byte[]` in, no Java objects created). Both
+sides allocate per call and cross the boundary once per op; timing is the same
+calibrate + 3-pass best-of interleaved loop as `Bench.java`, so machine drift
+hits both sides equally. Byte parity gated first: JNI bytes are identical to
+`GenericCodec` bytes on all four tiers.
+
+The probe was throwaway when it produced this table; it now lives in
+[`bindings/java/pbench/`](../bindings/java/pbench/README.md) and reruns with
+`make pbench-java`, so this decision can be re-priced from numbers instead of
+memory (the 2026-11-20 re-run reproduced the ordering; host load moves the
+large/xlarge encode cell between ~1.4x and ~2.0x, so read the pbench README's
+own table as one sample, not the value).
 
 ### Result (Apple M4 Pro, OpenJDK 26.0.1, same process)
 
@@ -879,3 +886,87 @@ distribution, a second codec to keep byte-identical, and host-crash risk.
 The one workload where JNI would win -- a gateway that re-emits large
 payloads without touching fields -- is a passthrough, not a data binding,
 and should be built as that if it ever matters.
+
+## Probe round: Go dynamic arms (issue #41)
+
+The published Go rows used to time the dynamic handle API (`Encode()` on a
+tree already living in C, `Decode()` into a handle nobody reads) next to a
+static generated table codec, which is not what the library is: generated
+models may carry data, never wire decisions, and the wire lives in one engine.
+
+The static generated-table path was therefore deleted (`neutral`,
+`purego`, `table`, and the codegen Meta-plus-loader split went with it). No
+runtime is shipped yet: the two dynamic cores compete over the same
+`EncodeTable`/`DecodeTable` engine — the C core over cgo
+(`pbench/dync/dynamic`) and a pure-Go core with a runtime value tree
+(`pbench/dyngo/codec`, `codec.DMsg`) — each in its own solution
+directory next to its arm, and `runtime/` stays empty until they select the
+final solution. Generated models are thin structs plus a metadata file of
+field tables. The selection landed: `bindings/go/runtime/` ships as the
+default engine, while the pure-Go one stays a candidate whose table engine
+models the cshim cannot drive fall back to.
+
+`bindings/go/pbench/` now compares exactly the three dynamic shapes, each
+behind the same native-in / native-out contract (`Marshal` from a caller-held
+struct, `Unmarshal` to a fully materialized fresh struct), with struct<->tree
+moves through shipped `ImportModel`/`ExportModel` converters only — no
+test-only glue — interleaved in one process, median of 5 rounds, gated on
+byte-identical output and a field-by-field struct compare before timing.
+Ratios are one Apple M4 Pro run:
+
+| tier | op | dync (C core) | dyngo (Go core) | cshim (Erlang-style) |
+|---|---|---|---|---|
+| 136 B | enc / dec | 0.10x / 0.12x | 0.32x / 0.31x | 1.61x / 1.41x |
+| 174 B | enc / dec | 0.09x / 0.13x | 0.35x / 0.35x | 1.64x / 1.41x |
+| 2469 B | enc / dec | 0.05x / 0.11x | 0.27x / 0.35x | 2.16x / 1.98x |
+| 74913 B | enc / dec | 0.05x / 0.12x | 0.16x / 0.36x | 2.20x / 2.07x |
+
+A real bug surfaced while making the thin-model benchmark honest: the shared
+table's capacity hint remembered the largest encode (the xlarge gate tier),
+so every later small encode allocated and zeroed ~75 KB per call — 5.6 us on
+the 136 B tier that vanished once the hint memorized the last actual size
+plus headroom instead of the capacity. One table serves every payload size of
+its message, so a capacity memory is always the wrong memory.
+
+The ordering is the whole finding: a per-field copy into any tree — a C tree
+through cgo worst, the Go value tree better but still per field — costs far
+more than reading the struct where it already is. The Erlang shape (a
+binding-local C file reading Go memory through a once-measured layout table)
+is the shape to copy when a binding must be both native-object-end-to-end
+and fast.
+
+2026-11-20 baseline (dyngo fast-path work, Task 1): tree-path `dyngo` arm
+re-measured on this host, median of 5 interleaved rounds — 136 B enc/dec
+0.33x/0.32x, 174 B 0.35x/0.35x, 2469 B 0.27x/0.35x, 74913 B 0.22x/0.33x
+against protobuf-go. A `dyngo-direct` gate arm (`EncodeModel`/`DecodeModel`
+straight on the struct, no `DMsg` tree) is added and gated byte-identical;
+its timed row lands in Task 4.
+
+2026-11-20 after (Tasks 2-4): `dyngo` row now times the direct path with
+the offset fast path live (generated `Off/Has/Count/Elem` + `unsafe` reads
+on encode, scalar stores on decode). Same host, median of 5 rounds —
+136 B enc/dec 1.39x/0.85x, 174 B 1.53x/0.87x, 2469 B 1.55x/1.11x,
+74913 B 1.50x/1.13x, all at 1 alloc like the oracle. The jump has two
+parts: dropping the struct<->tree copies (the tree arm stays as the
+dynamic-path reference, still ~0.2-0.3x) and the offset reads replacing
+per-field closures. Still on closures in v1: message rows, oneof,
+`Foreign`, groups, explicit/pointer decode stores and repeated decode
+(pointer stores skip the write barrier on purpose); `DMsg` unknown
+retention is untouched, verified by the existing `codec` unknown tests.
+
+### Recorded earlier answers (kept for the numbers, not as shipping plans)
+
+- A language-neutral bulk table plus one cgo call caps encode at ~0.45x: the
+  public core API has no bulk value/list constructor, so the per-row
+  `pbw_value_new_*` + `pbw_message_set_field` pair cannot be batched away
+  (~13.45 ns per present value against the cshim peer). Neutral core and a
+  competitive native-object path are mutually exclusive.
+- Straight-line per-message Go code reached ~2.0x encode / ~2.0x decode at
+  xlarge, but it is a second wire implementation pinned only by the parity
+  gate. That ceiling is what the must-stay-dynamic rule costs; it is not a
+  shipping option.
+- The generated table codec (one data table per message over the shared
+  engine) reached ~1.4-1.6x encode and ~0.9-1.3x decode with the plan gate
+  per call. That path was still static generated code, and it was removed
+  once the dynamic Go core existed; the engine it drove is the one both
+  dynamic cores use today.

@@ -32,8 +32,8 @@ make codegen-test    # run every binding's generated model test (needs each tool
 make codegen-conformance  # generate models for the official conformance proto
 make erlang-bench  # Erlang: epb, gpb, gpb NIF on matrix3.proto
 make test-cpp      # C++ binding self-check (C++17, no protobuf needed)
-make go-test       # Go cgo dynamic binding self-check (parity + hot-swap)
-make go-bench      # Go cgo dynamic binding vs protobuf-go on the four standard tiers
+make go-test       # Go binding self-check (models + engines + generated-model compat)
+make go-bench      # Go thin model vs protobuf-go on the four standard tiers
 make java-test     # Java pure-Java codec self-check (no JNI, no native library)
 make java-bench    # Java pure-Java codec vs protobuf-java on the four standard tiers
 make node-bench    # Node N-API addon vs google-protobuf (jspb)
@@ -123,7 +123,7 @@ after touching `bindings/ruby`, `make go-test` after touching `bindings/go`, and
 | `bindings/c/` | C binding: direct struct codec (`runtime/pbw_struct.c`, layout tables carry the wire facts), `protoc-gen-pbwire-c` (`plugin/`), `examples/`, `tests/`, `benchmarks/`, `conformance/` |
 | `bindings/python/` | Python binding: CPython extension (`runtime/pbwire.c`, dict<->wire in C), `examples/`, `tests/`, `benchmarks/`, `conformance/` (official runner testee) |
 | `bindings/ruby/` | Ruby binding: a C extension over the core (`ext/pbwire_ext`, builder tree + lazy wire view), `lib/`, `examples/`, `test/`, `benchmarks/`, `conformance/` (official runner testee) |
-| `bindings/go/` | Go binding: cgo dynamic binding over the C core (`dynamic/`), loads a `FileDescriptorSet` at runtime, hot-swappable registry, `make go-test` |
+| `bindings/go/` | Go binding: thin generated models over a cshim runtime (`runtime/`), both dynamic engines as `pbench/` candidates, `make go-test` |
 | `bindings/cpp/` | C++ binding over the shared C runtime: `examples/`, `tests/`, `benchmarks/`, `conformance/` |
 | `bindings/java/` | Java binding: pure-Java codec (`runtime/`, no JNI), `examples/`, `tests/`, `benchmarks/`, `conformance/` |
 | `bindings/kotlin/` | Kotlin binding: DSL over the Java runtime, `tests/`, `benchmarks/` |
@@ -153,7 +153,7 @@ after touching `bindings/ruby`, `make go-test` after touching `bindings/go`, and
 
 This decides how a binding gets its schema, and it is not negotiable:
 
-1. **Ahead-of-time compiled languages load the descriptor set.** C, C++, Go, Rust
+1. **Ahead-of-time compiled languages load the descriptor set.** C, C++, Rust
    and C# have no way to bake a dynamic schema into the binary, so every binding
    loads a `FileDescriptorSet` (`protoc --descriptor_set_out`) at runtime and
    drives field lookup, wire types and presence from it. A hand-built schema in a
@@ -163,6 +163,9 @@ This decides how a binding gets its schema, and it is not negotiable:
    `.proto` into that host's own schema definition, which the binding loads once
    at startup. Generated *layout* (C structs and offset tables, Erlang records)
    is part of this, but the field numbers and types still come from the schema.
+   Go sits here since issue 41: `protoc-gen-pbwire` emits the layout tables the
+   Go runtime walks, so a generated model needs no descriptor, while the
+   `pbench` Go engine's `codec.Load` still takes one at run time for a value tree.
 3. **Erlang needs neither.** gpb already is the plugin: `gpb_compile` /
    `protoc-erl` emits the record definitions plus `get_msg_defs/0` (gpb 5+:
    `get_proto_defs/0`, which keeps the proto3 markers), and

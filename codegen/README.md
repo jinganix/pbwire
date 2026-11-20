@@ -31,7 +31,7 @@ Every language gets the same shape, spelled the way that language spells things:
 | Node | protobufjs-static shape | `Cls.create()` / `.encode(m).finish()` / `.decode()` / `.verify()` / `.fromObject()` / `.toObject()`; schema embedded, `.d.ts` included |
 | Rust | struct, prost shape | `pub i32: i32` + `pub opt_i32: Option<i32>` + oneof `Option<Kind>` + `i32` enums + `encode_to_vec` / `decode` over the embedded schema |
 | Lua | table + constructor (no dominant lib; T1–T4 only) | `M.Scalars3.new{i32 = 1}` + `encode(t)` / `decode(wire)` with embedded schema (legacy `(schema, …)` form kept) |
-| Go | struct, protoc-gen-go shape | `I32 int32` + `OptI32 *int32` + oneof wrappers + nil-safe getters + `Marshal`/`Unmarshal` over the embedded schema |
+| Go | struct, protoc-gen-go shape, model and metadata split | `I32 int32` + `OptI32 *int32` + oneof wrappers + nil-safe getters; the message file holds data and `Reset`, `Marshal`/`Unmarshal` come from the `_pbwire_cshim.go` layout file (one cgo crossing) or from the table engine when the file cannot be driven, the `_pbwire_meta.go` file holds the field tables, and no model embeds a descriptor |
 | Objective-C | GPBMessage-shaped | `@property` fields + `hasX` + `XArray` repeated + `Kind_OneOfCase` + `-data` / `+parseFromData:error:`, over the embedded schema |
 | Swift | struct, Swift-idiomatic | `var i32: Int64` + `optI32: Int64?` + `Int64` enums + `encode()` / `decode(_:)` over the embedded schema |
 | Zig | struct over the static-link runtime | `i32`/`u64` fields + `?T` presence + `enum(i32)` enums + `encode` / `decode` / `load` over the embedded schema |
@@ -107,6 +107,23 @@ Rules the model follows, per field:
   file's prefix. Unresolvable types still skip loudly (`// skipped <field>:`).
   This keeps each generated file to one import per referenced file.
 
+## Generation rules
+
+1. **Thin model.** The message file holds data only: field names, host types,
+presence and repetition, plus nil-safe accessors. No tags, varints, lengths,
+packed runs or presence branching.
+2. **Separate meta when needed.** Field facts (numbers, wire types, kinds,
+packing, sub-tables) live in a sibling meta file (`*_meta.*`, `*_Meta.*`)
+where the language benefits; single-file outputs keep the same split in-file.
+3. **No wire logic in model or meta.** Encode/decode live once in the binding's
+shared engine (`codec.EncodeTable/DecodeTable`, `runtime`, `PbCodec`, the C core);
+generated files are DATA tables plus trivial field closures. One-line
+`encode/decode` forwarding on the model is ergonomics, not a second codec.
+
+The pure-Go path follows the same rule: generated `*_pbwire.go` + `*_pbwire_meta.go`
+feed the shared table engine (`EncodeModel/DecodeModel`) with no per-message
+straight-line codec and no intermediate tree on the hot path.
+
 ## Where the models live
 
 The models are committed next to the tests that use them, so a test run needs
@@ -122,7 +139,7 @@ bindings/php/tests/gen/         matrix3.php + PbwireFile_Matrix3.php
 bindings/ruby/test/gen/         matrix3.rb + matrix3_meta.rb
 bindings/python/tests/gen/      matrix3_pbwire.py + matrix3_pbwire_meta.py
 bindings/node/tests/gen/        matrix3.d.ts, matrix3.js + matrix3_meta.js
-bindings/go/tests/gen/matrix3/  matrix3_pbwire.go + matrix3_pbwire_meta.go (package matrix3)
+bindings/go/tests/gen/matrix3/  matrix3_pbwire.go (model) + matrix3_pbwire_meta.go (field tables)
 bindings/rust/tests/gen/        matrix3_pbwire.rs + matrix3_pbwire_meta.rs
 bindings/objc/tests/gen/        matrix3.h, matrix3.m + matrix3_schema.h, matrix3_schema.m
 bindings/lua/tests/gen/         matrix3.lua + matrix3_meta.lua
