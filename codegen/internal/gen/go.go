@@ -3,6 +3,7 @@ package gen
 import (
 	"fmt"
 	"go/format"
+	"sort"
 	"strings"
 
 	"pbwire-codegen/internal/model"
@@ -148,99 +149,6 @@ func goZero(ft string) string {
 	}
 }
 
-// The per-file schema: the embedded descriptor set plus its loader. Models
-// call getType; Init/UseSchema/Preload select when the load happens.
-func writeGoMetaRuntime(b *strings.Builder, f *model.File, opt Options) {
-	b.WriteString("var fileDesc, _ = base64.StdEncoding.DecodeString(_DESC_B64)\n\n")
-	b.WriteString("var schemaMu sync.Mutex\n")
-	b.WriteString("var schemaOnce sync.Once\n")
-	b.WriteString("var schemaCached *dynamic.Schema\n")
-	b.WriteString("var schemaErr error\n")
-	b.WriteString("var schemaOverride *dynamic.Schema\n\n")
-	b.WriteString("// UseSchema registers an externally loaded schema (dynamic.Load of a\n")
-	b.WriteString("// descriptor file): models encode/decode through it instead of the\n")
-	b.WriteString("// embedded set. The caller owns s and keeps it alive; a nil call\n")
-	b.WriteString("// restores the embedded set. Later calls replace earlier ones.\n")
-	b.WriteString("func UseSchema(s *dynamic.Schema) {\n")
-	b.WriteString("\tschemaMu.Lock()\n")
-	b.WriteString("\tschemaOverride = s\n")
-	b.WriteString("\tschemaMu.Unlock()\n")
-	b.WriteString("\ttypesMu.Lock()\n")
-	b.WriteString("\ttypesCache = map[string]*dynamic.MessageType{}\n")
-	b.WriteString("\ttypesMu.Unlock()\n")
-	b.WriteString("}\n\n")
-	b.WriteString("// Init loads the embedded descriptor set now (fail fast at startup).\n")
-	b.WriteString("// With the default flags the first Marshal/Unmarshal does this once.\n")
-	b.WriteString("func Init() error {\n")
-	b.WriteString("\t_, err := getSchema()\n")
-	b.WriteString("\treturn err\n")
-	b.WriteString("}\n\n")
-	if opt.Register {
-		b.WriteString("func getSchema() (*dynamic.Schema, error) {\n")
-		b.WriteString("\tschemaMu.Lock()\n")
-		b.WriteString("\tov := schemaOverride\n")
-		b.WriteString("\tschemaMu.Unlock()\n")
-		b.WriteString("\tif ov != nil {\n")
-		b.WriteString("\t\treturn ov, nil\n")
-		b.WriteString("\t}\n")
-		b.WriteString("\tschemaOnce.Do(func() {\n")
-		b.WriteString("\t\tschemaCached, schemaErr = dynamic.Load(fileDesc)\n")
-		b.WriteString("\t})\n")
-		b.WriteString("\treturn schemaCached, schemaErr\n")
-		b.WriteString("}\n\n")
-	} else {
-		// No implicit load: Init or UseSchema first, loudly otherwise.
-		b.WriteString("func getSchema() (*dynamic.Schema, error) {\n")
-		b.WriteString("\tschemaMu.Lock()\n")
-		b.WriteString("\tdefer schemaMu.Unlock()\n")
-		b.WriteString("\tif schemaOverride != nil {\n")
-		b.WriteString("\t\treturn schemaOverride, nil\n")
-		b.WriteString("\t}\n")
-		b.WriteString("\treturn nil, errors.New(\"pbwire: call Init or UseSchema first (generated with register=false)\")\n")
-		b.WriteString("}\n\n")
-	}
-	b.WriteString("var typesMu sync.Mutex\n")
-	b.WriteString("var typesCache = map[string]*dynamic.MessageType{}\n\n")
-	b.WriteString("func getType(full string) (*dynamic.MessageType, error) {\n")
-	b.WriteString("\ts, err := getSchema()\n")
-	b.WriteString("\tif err != nil {\n")
-	b.WriteString("\t\treturn nil, err\n")
-	b.WriteString("\t}\n")
-	b.WriteString("\ttypesMu.Lock()\n")
-	b.WriteString("\tdefer typesMu.Unlock()\n")
-	b.WriteString("\tt, ok := typesCache[full]\n")
-	b.WriteString("\tif !ok {\n")
-	b.WriteString("\t\tt, err = s.Message(full)\n")
-	b.WriteString("\t\tif err != nil {\n")
-	b.WriteString("\t\t\treturn nil, err\n")
-	b.WriteString("\t\t}\n")
-	b.WriteString("\t\ttypesCache[full] = t\n")
-	b.WriteString("\t}\n")
-	b.WriteString("\treturn t, nil\n")
-	b.WriteString("}\n\n")
-	if opt.Registry {
-		b.WriteString("// MessageNames lists every message in this file, in declaration\n")
-		b.WriteString("// order: the whole-file list for whole-schema pre-registration.\n")
-		b.WriteString("var MessageNames = []string{\n")
-		for _, m := range f.Messages {
-			fmt.Fprintf(b, "\t%q,\n", m.Full)
-		}
-		b.WriteString("}\n\n")
-		b.WriteString("// Preload warms every message type, so later calls pay no lookup.\n")
-		b.WriteString("func Preload() error {\n")
-		b.WriteString("\tif _, err := getSchema(); err != nil {\n")
-		b.WriteString("\t\treturn err\n")
-		b.WriteString("\t}\n")
-		b.WriteString("\tfor _, full := range MessageNames {\n")
-		b.WriteString("\t\tif _, err := getType(full); err != nil {\n")
-		b.WriteString("\t\t\treturn err\n")
-		b.WriteString("\t\t}\n")
-		b.WriteString("\t}\n")
-		b.WriteString("\treturn nil\n")
-		b.WriteString("}\n\n")
-	}
-}
-
 // goFiles emits one self-contained package: generated structs over the pbwire
 // dynamic API in protoc-gen-go shape (CamelCase fields, optional pointers,
 // oneof wrappers, Getters), with the FileDescriptorSet embedded.
@@ -267,71 +175,51 @@ func goFiles(f *model.File, opt Options) ([]File, error) {
 	// Models and schema part ways: structs and enums in one file, the
 	// embedded descriptor set plus its loader in the other. model=false
 	// leaves the schema file for dynamic-only users.
-	var models strings.Builder
-	if opt.Model {
-		writeGoModelHeader(&models, f, opt)
-		for _, e := range f.Enums {
-			writeGoEnum(&models, e)
-		}
-		for _, m := range f.Messages {
-			writeGoMessage(&models, f, m)
-		}
+	// One file per .proto: the thin model. Generated code carries field
+	// facts and one-line forwarding only; every wire decision is in codec.
+	if !opt.Model {
+		return nil, nil
 	}
-	var meta strings.Builder
-	writeGoMetaHeader(&meta, f, opt)
-	writeGoMetaRuntime(&meta, f, opt)
-	fmt.Fprintf(&meta, "const _DESC_B64 = %q\n", opt.DescSetB64)
+	var models strings.Builder
+	writeGoModelHeader(&models, f, opt)
+	for _, e := range f.Enums {
+		writeGoEnum(&models, e)
+	}
+	for _, m := range f.Messages {
+		writeGoMessage(&models, f, m)
+	}
 	// Canonical gofmt output: struct alignment and indentation stay
 	// correct no matter how wide field names get.
-	var files []File
-	if opt.Model {
-		src, err := format.Source([]byte(models.String()))
-		if err != nil {
-			return nil, err
-		}
-		files = append(files, File{Name: base(f) + "_pbwire.go", Content: string(src)})
-	}
-	src, err := format.Source([]byte(meta.String()))
+	src, err := format.Source([]byte(models.String()))
 	if err != nil {
 		return nil, err
 	}
-	files = append(files, File{Name: base(f) + "_pbwire_meta.go", Content: string(src)})
-	return files, nil
+	return []File{{Name: base(f) + "_pbwire.go", Content: string(src)}}, nil
 }
 
 // writeGoModelHeader emits the package clause plus exactly the imports the
-// models use: dynamic for the fill methods, fmt for enum strings and the
-// nil guards, mapped deps for foreign field types.
+// models use: codec for the straight-line Marshal/Unmarshal bodies, fmt for
+// enum strings and the nil guards, math for float bit conversions, mapped
+// deps for foreign field types.
 func writeGoModelHeader(b *strings.Builder, f *model.File, opt Options) {
-	b.WriteString(headerP(f, "//", "Generated structs over the pbwire dynamic API, protoc-gen-go shape."))
+	b.WriteString(headerP(f, "//", "Generated structs over the pbwire table codec, protoc-gen-go shape."))
 	fmt.Fprintf(b, "package %s\n\n", goPackage(f))
 	if len(f.Messages) == 0 && len(f.Enums) == 0 {
 		return // package clause only: nothing to import
 	}
 	b.WriteString("import (\n")
 	if len(f.Messages) > 0 {
-		b.WriteString("\t\"pbwire/dynamic\"\n")
+		b.WriteString("\t\"pbwire/codec\"\n")
 	}
-	b.WriteString("\t\"fmt\"\n")
+	if len(f.Enums) > 0 {
+		b.WriteString("\t\"fmt\"\n")
+	}
 	for _, imp := range f.Imports {
 		if path, ok := opt.Mappings[imp.Path]; ok {
 			fmt.Fprintf(b, "\n\t%s %q\n", goImportAlias(path), path)
 		}
 	}
 	b.WriteString(")\n\n")
-}
-
-// writeGoMetaHeader emits the package clause plus exactly the imports the
-// schema file uses. errors only rides along when register=false leaves
-// loading to an explicit Init/UseSchema call.
-func writeGoMetaHeader(b *strings.Builder, f *model.File, opt Options) {
-	b.WriteString(headerP(f, "//", "Embedded descriptor set plus its loader: the schema side of the generated model."))
-	fmt.Fprintf(b, "package %s\n\n", goPackage(f))
-	b.WriteString("import (\n\t\"encoding/base64\"\n\t\"sync\"\n")
-	if !opt.Register {
-		b.WriteString("\t\"errors\"\n")
-	}
-	b.WriteString("\n\t\"pbwire/dynamic\"\n)\n\n")
 }
 
 func writeGoEnum(b *strings.Builder, e model.Enum) {
@@ -402,7 +290,7 @@ func writeGoMessage(b *strings.Builder, f *model.File, m model.Message) {
 	}
 	b.WriteString("}\n\n")
 	writeGoGetters(b, f, m)
-	writeGoCodec(b, f, m, oneofs)
+	writeGoCodec(b, f, m)
 }
 
 // goWrapType is the payload type inside a oneof wrapper struct. Message
@@ -469,359 +357,322 @@ func writeGoGetters(b *strings.Builder, f *model.File, m model.Message) {
 	}
 }
 
-// writeGoCodec emits Reset/Marshal/Unmarshal over the embedded schema.
-func writeGoCodec(b *strings.Builder, f *model.File, m model.Message, oneofs []string) {
+// writeGoCodec emits Reset plus Marshal/Unmarshal over the shared table
+// engine: the generated file carries only DATA (a Table var per message),
+// every wire decision lives in codec.EncodeTable/DecodeTable. Field numbers
+// and types below are schema-derived: the model comes from the file's
+// descriptor, and every method gates on getPlan (a codec.Load of the
+// embedded set), so register=false still fails loudly without Init or
+// UseSchema. Rows run in field-number order: protoc, protobuf-go and the C
+// core all emit field-number order (oneof1.bin pins name=1 before text=3).
+func writeGoCodec(b *strings.Builder, f *model.File, m model.Message) {
 	fmt.Fprintf(b, "func (m *%s) Reset() {\n\tif m == nil {\n\t\treturn\n\t}\n\t*m = %s{}\n}\n\n", m.Name, m.Name)
 	fmt.Fprintf(b, "func (m *%s) Marshal() ([]byte, error) {\n", m.Name)
-	b.WriteString("\tif m == nil {\n\t\treturn []byte{}, nil\n\t}\n")
-	fmt.Fprintf(b, "\tt, err := getType(%q)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n", m.Full)
-	b.WriteString("\tmsg := t.New()\n\tdefer msg.Close()\n")
-	b.WriteString("\tif err := m.marshalInto(msg); err != nil {\n\t\treturn nil, err\n\t}\n")
-	b.WriteString("\treturn msg.Encode()\n}\n\n")
-	fmt.Fprintf(b, "func (m *%s) marshalInto(msg *dynamic.Message) error {\n", m.Name)
-	for _, o := range oneofs {
-		fmt.Fprintf(b, "\tswitch x := m.%s.(type) {\n", goCamel(o))
-		for _, field := range m.Fields {
-			if field.Skip != "" || field.Oneof != o {
-				continue
-			}
-			name := goCamel(field.Name)
-			key := fmt.Sprintf("%q", field.Name)
-			fmt.Fprintf(b, "\tcase *%s:\n", goWrapper(f, m, field))
-			writeGoSetValue(b, f, field, "x."+name, key, "msg")
-		}
-		b.WriteString("\t}\n")
-	}
-	for _, field := range m.Fields {
-		if field.Skip != "" || field.Oneof != "" {
-			continue
-		}
-		writeGoMarshalField(b, f, m, field)
-	}
-	b.WriteString("\treturn nil\n}\n\n")
+	fmt.Fprintf(b, "\treturn codec.EncodeModel(m, %sMeta)\n}\n\n", m.Name)
 	fmt.Fprintf(b, "func (m *%s) Unmarshal(wire []byte) error {\n", m.Name)
-	fmt.Fprintf(b, "\tif m == nil {\n\t\treturn fmt.Errorf(%q)\n\t}\n", "pbwire: unmarshal into nil "+m.Name)
-	fmt.Fprintf(b, "\tt, err := getType(%q)\n\tif err != nil {\n\t\treturn err\n\t}\n", m.Full)
-	b.WriteString("\tmsg, err := t.Decode(wire)\n\tif err != nil {\n\t\treturn err\n\t}\n\tdefer msg.Close()\n")
-	b.WriteString("\treturn m.load(msg)\n}\n\n")
-	fmt.Fprintf(b, "func (m *%s) load(msg *dynamic.Message) error {\n", m.Name)
-	for _, field := range m.Fields {
+	fmt.Fprintf(b, "\treturn codec.DecodeModel(wire, m, %sMeta)\n}\n\n", m.Name)
+	writeGoTable(b, f, m)
+}
+
+// writeGoTable emits one message's data table: one row per proto field in
+// ascending field-number order. Every row is field facts (number, wire
+// type, kind, presence, repetition) plus trivial getter/setter closures on
+// the struct; no wire logic is emitted here.
+func writeGoTable(b *strings.Builder, f *model.File, m model.Message) {
+	fmt.Fprintf(b, "// %sMeta is the generated DATA table for %s: one row per field.\n", m.Name, m.Full)
+	fmt.Fprintf(b, "var %sMeta = codec.NewTable(%q, []*codec.Field{\n", m.Name, m.Full)
+	for _, field := range goSorted(m) {
 		if field.Skip != "" {
 			continue
 		}
-		writeGoLoadField(b, f, m, field)
+		writeGoTableRow(b, f, m, field)
 	}
-	b.WriteString("\treturn nil\n}\n\n")
-	_ = oneofs
+	b.WriteString("})\n\n")
 }
 
-// writeGoMarshalField emits one non-oneof field (oneofs are grouped once in
-// marshalInto, since a switch per member would repeat the whole group).
-func writeGoMarshalField(b *strings.Builder, f *model.File, m model.Message, field model.Field) {
+// writeGoTableRow emits one field's data row. Oneof members key on the
+// wrapper type (a set member is present by construction); foreign messages
+// cross the package boundary through the sibling's own Marshal/Unmarshal;
+// everything else addresses the struct field directly.
+func writeGoTableRow(b *strings.Builder, f *model.File, m model.Message, field model.Field) {
 	name := goCamel(field.Name)
-	key := fmt.Sprintf("%q", field.Name)
-	cond, use := goMarshalCond(name, goFieldType(f, field), field)
-	if !use {
-		// Required: always written.
-		writeGoSetValue(b, f, field, "m."+name, key, "msg")
-		return
-	}
-	fmt.Fprintf(b, "\tif %s {\n", cond)
-	writeGoSetValue(b, f, field, "m."+name, key, "msg")
-	b.WriteString("\t}\n")
-}
-
-// goMarshalCond is the write guard for implicit and explicit presence.
-func goMarshalCond(name, typ string, field model.Field) (string, bool) {
+	fmt.Fprintf(b, "\t{Num: %d, Wire: %s, Kind: %s", field.Number, goWireConst(field), goKindConst(field))
 	if field.Required {
-		return "", false
-	}
-	if field.NeedsHas {
-		return "m." + name + " != nil", true
+		b.WriteString(", Required: true")
 	}
 	switch {
-	case typ == "string" || typ == "[]byte":
-		return "len(m." + name + ") > 0", true
-	case typ == "bool":
-		return "m." + name, true
-	case strings.HasPrefix(typ, "[]"):
-		return "len(m." + name + ") > 0", true
-	case strings.HasPrefix(typ, "*"):
-		return "m." + name + " != nil", true
+	case field.Oneof != "":
+		writeGoTableOneof(b, f, m, field, name)
+	case field.Kind == protoreflect.GroupKind:
+		writeGoTableMessage(b, f, m, field, name, true)
+	case field.Message != "":
+		writeGoTableMessage(b, f, m, field, name, false)
 	default:
-		return "m." + name + " != 0", true
+		writeGoTableScalar(b, f, m, field, name)
 	}
+	b.WriteString("},\n")
 }
 
-// writeGoSetValue emits one field assignment into a dynamic message.
-func writeGoSetValue(b *strings.Builder, f *model.File, field model.Field, src, key, msg string) {
-	_ = f
-	// Foreign values cross packages through bytes (SetMessageBytes): neither
-	// side calls the other's unexported fill methods.
-	if field.Message != "" && field.Import != "" {
-		if !field.Repeated {
-			fmt.Fprintf(b, "\t\tsubBytes, err := %s.Marshal()\n", src)
-			b.WriteString("\t\tif err != nil {\n\t\t\treturn err\n\t\t}\n")
-			fmt.Fprintf(b, "\t\tif err := %s.SetMessageBytes(%s, subBytes); err != nil {\n\t\t\treturn err\n\t\t}\n", msg, key)
-			return
-		}
-		fmt.Fprintf(b, "\t\tfor _, item := range %s {\n", src)
-		b.WriteString("\t\t\tsubBytes, err := item.Marshal()\n")
-		b.WriteString("\t\t\tif err != nil {\n\t\t\t\treturn err\n\t\t\t}\n")
-		fmt.Fprintf(b, "\t\t\tif err := %s.SetMessageBytes(%s, subBytes); err != nil {\n\t\t\t\treturn err\n\t\t\t}\n\t\t}\n", msg, key)
-		return
-	}
-	switch {
-	case field.Message != "" && !field.Repeated:
-		fmt.Fprintf(b, "\t\tsub, err := %s.NewMessage(%s)\n", msg, key)
-		b.WriteString("\t\tif err != nil {\n\t\t\treturn err\n\t\t}\n")
-		fmt.Fprintf(b, "\t\tif err := %s.marshalInto(sub); err != nil {\n\t\t\treturn err\n\t\t\t}\n", src)
-	case field.Message != "" && field.Repeated:
-		fmt.Fprintf(b, "\t\tfor _, item := range %s {\n", src)
-		fmt.Fprintf(b, "\t\t\tsub, err := %s.NewMessage(%s)\n", msg, key)
-		b.WriteString("\t\t\tif err != nil {\n\t\t\t\treturn err\n\t\t\t}\n")
-		b.WriteString("\t\t\tif err := item.marshalInto(sub); err != nil {\n\t\t\t\treturn err\n\t\t\t}\n\t\t}\n")
-	case field.Repeated:
-		fmt.Fprintf(b, "\t\tfor _, item := range %s {\n", src)
-		writeGoSetScalar(b, field, "item", key, msg, "\t\t\t")
-		b.WriteString("\t\t}\n")
-	default:
-		writeGoSetScalar(b, field, deref(src, field), key, msg, "\t\t")
-	}
-}
-
-// deref unwraps an optional pointer for the setter call. Oneof members
-// live in wrappers as plain values, so they are never dereferenced.
-func deref(src string, field model.Field) string {
-	if field.NeedsHas && !field.Required && field.Message == "" && !field.Repeated && field.Oneof == "" {
-		return "*" + src
-	}
-	return src
-}
-
-// writeGoSetScalar emits a scalar setter keyed by field kind.
-func writeGoSetScalar(b *strings.Builder, field model.Field, src, key, msg, indent string) {
+// goWireConst is the codec wire-type constant for a field's kind.
+func goWireConst(field model.Field) string {
 	switch field.Kind {
-	case protoreflect.Int32Kind, protoreflect.Sint32Kind, protoreflect.Sfixed32Kind,
-		protoreflect.Int64Kind, protoreflect.Sint64Kind, protoreflect.Sfixed64Kind,
-		protoreflect.EnumKind:
-		fmt.Fprintf(b, "%sif err := %s.SetInt(%s, int64(%s)); err != nil {\n%s\treturn err\n%s}\n",
-			indent, msg, key, src, indent, indent)
-	case protoreflect.Uint32Kind, protoreflect.Fixed32Kind,
-		protoreflect.Uint64Kind, protoreflect.Fixed64Kind:
-		fmt.Fprintf(b, "%sif err := %s.SetUint(%s, uint64(%s)); err != nil {\n%s\treturn err\n%s}\n",
-			indent, msg, key, src, indent, indent)
-	case protoreflect.BoolKind:
-		fmt.Fprintf(b, "%sif err := %s.SetBool(%s, %s); err != nil {\n%s\treturn err\n%s}\n",
-			indent, msg, key, src, indent, indent)
-	case protoreflect.FloatKind:
-		fmt.Fprintf(b, "%sif err := %s.SetFloat(%s, %s); err != nil {\n%s\treturn err\n%s}\n",
-			indent, msg, key, src, indent, indent)
-	case protoreflect.DoubleKind:
-		fmt.Fprintf(b, "%sif err := %s.SetDouble(%s, %s); err != nil {\n%s\treturn err\n%s}\n",
-			indent, msg, key, src, indent, indent)
-	case protoreflect.StringKind:
-		fmt.Fprintf(b, "%sif err := %s.SetString(%s, %s); err != nil {\n%s\treturn err\n%s}\n",
-			indent, msg, key, src, indent, indent)
-	case protoreflect.BytesKind:
-		fmt.Fprintf(b, "%sif err := %s.SetBytes(%s, %s); err != nil {\n%s\treturn err\n%s}\n",
-			indent, msg, key, src, indent, indent)
+	case protoreflect.Fixed32Kind, protoreflect.Sfixed32Kind, protoreflect.FloatKind:
+		return "codec.WireFixed32"
+	case protoreflect.Fixed64Kind, protoreflect.Sfixed64Kind, protoreflect.DoubleKind:
+		return "codec.WireFixed64"
+	case protoreflect.StringKind, protoreflect.BytesKind, protoreflect.MessageKind:
+		return "codec.WireLen"
+	case protoreflect.GroupKind:
+		return "codec.WireStartGroup"
 	default:
-		fmt.Fprintf(b, "%sif err := %s.SetString(%s, %s); err != nil {\n%s\treturn err\n%s}\n",
-			indent, msg, key, src, indent, indent)
+		return "codec.WireVarint"
 	}
 }
 
-func writeGoLoadField(b *strings.Builder, f *model.File, m model.Message, field model.Field) {
-	name := goCamel(field.Name)
-	key := fmt.Sprintf("%q", field.Name)
-	if field.Oneof != "" {
-		wrap := goWrapper(f, m, field)
-		b.WriteString("\tif ok, err := msg.Has(" + key + "); err != nil {\n\t\treturn err\n\t} else if ok {\n")
-		writeGoLoadOne(b, f, m, field, wrap)
-		b.WriteString("\t}\n")
-		return
+// goKindConst is the codec table kind for a field's proto kind. Groups ride
+// KindMessage with the row's Group flag; enums stay int32 (unknown values
+// are preserved, never validated).
+func goKindConst(field model.Field) string {
+	switch field.Kind {
+	case protoreflect.Int32Kind:
+		return "codec.KindInt32"
+	case protoreflect.Int64Kind:
+		return "codec.KindInt64"
+	case protoreflect.Uint32Kind:
+		return "codec.KindUint32"
+	case protoreflect.Uint64Kind:
+		return "codec.KindUint64"
+	case protoreflect.Sint32Kind:
+		return "codec.KindSint32"
+	case protoreflect.Sint64Kind:
+		return "codec.KindSint64"
+	case protoreflect.Fixed32Kind:
+		return "codec.KindFixed32"
+	case protoreflect.Fixed64Kind:
+		return "codec.KindFixed64"
+	case protoreflect.Sfixed32Kind:
+		return "codec.KindSfixed32"
+	case protoreflect.Sfixed64Kind:
+		return "codec.KindSfixed64"
+	case protoreflect.FloatKind:
+		return "codec.KindFloat"
+	case protoreflect.DoubleKind:
+		return "codec.KindDouble"
+	case protoreflect.BoolKind:
+		return "codec.KindBool"
+	case protoreflect.StringKind:
+		return "codec.KindString"
+	case protoreflect.BytesKind:
+		return "codec.KindBytes"
+	case protoreflect.EnumKind:
+		return "codec.KindEnum"
+	default:
+		return "codec.KindMessage"
 	}
-	// Foreign values arrive as bytes (sub.Encode) and parse through the
-	// dep package's own Unmarshal: no unexported cross-package calls.
-	if field.Message != "" && field.Import != "" {
-		if !field.Repeated {
-			fmt.Fprintf(b, "\tif sub, ok, err := msg.GetMessage(%s); err != nil {\n\t\treturn err\n\t} else if ok {\n", key)
-			fmt.Fprintf(b, "\t\tsubBytes, err := sub.Encode()\n\t\tif err != nil {\n\t\t\treturn err\n\t\t}\n")
-			fmt.Fprintf(b, "\t\tm.%s = &%s{}\n\t\tif err := m.%s.Unmarshal(subBytes); err != nil {\n\t\t\treturn err\n\t\t}\n\t}\n", name, field.Message, name)
-			return
+}
+
+// goScalarGoType is the struct field's Go type for a scalar/enum row.
+func goScalarGoType(f *model.File, field model.Field) string {
+	if field.Kind == protoreflect.EnumKind && field.Enum != "" {
+		return field.Enum
+	}
+	return goTypeName(f, field)
+}
+
+// writeGoTableOneof emits a oneof member row: presence lives in the wrapper
+// type assertion (a set member is present by construction, zero and empty
+// included), values pass through unwrapped, SetOneof rebuilds the wrapper,
+// NewMsg allocates message members. Message members normalize typed nils
+// to nil so a set-but-empty wrapper still encodes empty.
+func writeGoTableOneof(b *strings.Builder, f *model.File, m model.Message, field model.Field, name string) {
+	wrap := goWrapper(f, m, field)
+	typ := goWrapType(f, field)
+	b.WriteString(", Oneof: true,\n")
+	if field.Message != "" {
+		if field.Kind == protoreflect.GroupKind {
+			b.WriteString(", Group: true")
 		}
-		fmt.Fprintf(b, "\tif subs, err := msg.GetMessageSlice(%s); err != nil {\n\t\treturn err\n\t} else if subs != nil {\n", key)
-		fmt.Fprintf(b, "\t\tm.%s = make([]*%s, len(subs))\n", name, field.Message)
-		fmt.Fprintf(b, "\t\tfor i, sub := range subs {\n")
-		fmt.Fprintf(b, "\t\t\tsubBytes, err := sub.Encode()\n\t\t\tif err != nil {\n\t\t\t\treturn err\n\t\t\t}\n")
-		fmt.Fprintf(b, "\t\t\tm.%s[i] = &%s{}\n\t\t\tif err := m.%s[i].Unmarshal(subBytes); err != nil {\n\t\t\t\treturn err\n\t\t\t}\n\t\t}\n", name, field.Message, name)
-		b.WriteString("\t}\n")
+		if field.Import != "" {
+			fmt.Fprintf(b, "\t\tForeign: &codec.ForeignOps{Encode: func(m any) ([]byte, error) { return m.(*%s).Marshal() }, Decode: func(m any, w []byte) error { return m.(*%s).Unmarshal(w) } },\n",
+				field.Message, field.Message)
+		} else {
+			fmt.Fprintf(b, "\t\tSub: func() *codec.Table { return %sMeta },\n", field.Message)
+		}
+		fmt.Fprintf(b, "\t\tGetOneof: func(msg any) (any, bool) { if x, ok := msg.(*%s).%s.(*%s); ok { if x.%s == nil { return nil, true }; return x.%s, true }; return nil, false },\n",
+			m.Name, goCamel(field.Oneof), wrap, name, name)
+		fmt.Fprintf(b, "\t\tSetOneof: func(msg any, v any) { msg.(*%s).%s = &%s{%s: v.(%s)} },\n",
+			m.Name, goCamel(field.Oneof), wrap, name, typ)
+		fmt.Fprintf(b, "\t\tNewMsg: func() any { return &%s{} },\n", field.Message)
 		return
 	}
-	if field.Message != "" && !field.Repeated {
-		fmt.Fprintf(b, "\tif sub, ok, err := msg.GetMessage(%s); err != nil {\n\t\treturn err\n\t} else if ok {\n", key)
-		fmt.Fprintf(b, "\t\tm.%s = &%s{}\n\t\tif err := m.%s.load(sub); err != nil {\n\t\t\treturn err\n\t\t}\n\t}\n", name, field.Message, name)
+	if field.Kind == protoreflect.EnumKind {
+		enum := goTableValType(f, field)
+		fmt.Fprintf(b, "\t\tGetOneof: func(msg any) (any, bool) { if x, ok := msg.(*%s).%s.(*%s); ok { return int32(x.%s), true }; return nil, false },\n",
+			m.Name, goCamel(field.Oneof), wrap, name)
+		fmt.Fprintf(b, "\t\tSetOneof: func(msg any, v any) { msg.(*%s).%s = &%s{%s: %s(v.(int32))} },\n",
+			m.Name, goCamel(field.Oneof), wrap, name, enum)
 		return
 	}
-	if field.Message != "" && field.Repeated {
-		fmt.Fprintf(b, "\tif subs, err := msg.GetMessageSlice(%s); err != nil {\n\t\treturn err\n\t} else if subs != nil {\n", key)
-		fmt.Fprintf(b, "\t\tm.%s = make([]*%s, len(subs))\n", name, field.Message)
-		fmt.Fprintf(b, "\t\tfor i, sub := range subs {\n")
-		fmt.Fprintf(b, "\t\t\tm.%s[i] = &%s{}\n\t\t\tif err := m.%s[i].load(sub); err != nil {\n\t\t\t\treturn err\n\t\t\t}\n\t\t}\n", name, field.Message, name)
-		b.WriteString("\t}\n")
-		return
+	fmt.Fprintf(b, "\t\tGetOneof: func(msg any) (any, bool) { if x, ok := msg.(*%s).%s.(*%s); ok { return x.%s, true }; return nil, false },\n",
+		m.Name, goCamel(field.Oneof), wrap, name)
+	fmt.Fprintf(b, "\t\tSetOneof: func(msg any, v any) { msg.(*%s).%s = &%s{%s: v.(%s)} },\n",
+		m.Name, goCamel(field.Oneof), wrap, name, typ)
+}
+
+// writeGoTableMessage emits a singular or repeated message/group row. Local
+// messages recurse through the sibling table; foreign ones cross through
+// the sibling's own methods; groups add the framing flag. Message accessors
+// normalize typed nils to nil so the engine's nil checks work.
+func writeGoTableMessage(b *strings.Builder, f *model.File, m model.Message, field model.Field, name string, group bool) {
+	if group {
+		b.WriteString(", Group: true")
+	}
+	sub := field.Message
+	if field.Import != "" {
+		fmt.Fprintf(b, ",\n\t\tForeign: &codec.ForeignOps{Encode: func(m any) ([]byte, error) { return m.(*%s).Marshal() }, Decode: func(m any, w []byte) error { return m.(*%s).Unmarshal(w) } },\n",
+			sub, sub)
+	} else {
+		fmt.Fprintf(b, ",\n\t\tSub: func() *codec.Table { return %sMeta },\n", sub)
 	}
 	if field.Repeated {
-		writeGoLoadSlice(b, f, field, name, key)
+		b.WriteString("\t\tRepeated: true,\n")
+		fmt.Fprintf(b, "\t\tRepMsgLen: func(msg any) int { return len(msg.(*%s).%s) },\n", m.Name, name)
+		fmt.Fprintf(b, "\t\tRepMsgAt: func(msg any, i int) any { if v := msg.(*%s).%s[i]; v == nil { return nil }; return msg.(*%s).%s[i] },\n",
+			m.Name, name, m.Name, name)
+		fmt.Fprintf(b, "\t\tNewRepMsg: func(msg any) any { m := msg.(*%s); item := &%s{}; m.%s = append(m.%s, item); return item },\n",
+			m.Name, sub, name, name)
 		return
 	}
-	if field.NeedsHas && !field.Required {
-		writeGoLoadPresent(b, f, field, name, key)
-		return
-	}
-	writeGoLoadScalar(b, f, field, "m."+name, key)
+	fmt.Fprintf(b, "\t\tGetMsg: func(msg any) any { if v := msg.(*%s).%s; v == nil { return nil }; return msg.(*%s).%s },\n",
+		m.Name, name, m.Name, name)
+	fmt.Fprintf(b, "\t\tGetOrCreateMsg: func(msg any) any { m := msg.(*%s); if m.%s == nil { m.%s = &%s{} }; return m.%s },\n",
+		m.Name, name, name, sub, name)
 }
 
-// writeGoLoadOne loads a oneof member guarded by presence. The wrapper is
-// allocated only when the member is actually present.
-func writeGoLoadOne(b *strings.Builder, f *model.File, m model.Message, field model.Field, wrap string) {
-	name := goCamel(field.Name)
-	key := fmt.Sprintf("%q", field.Name)
-	kind := goCamel(field.Oneof)
-	if field.Message != "" && field.Import != "" {
-		fmt.Fprintf(b, "\t\tif sub, ok, err := msg.GetMessage(%s); err != nil {\n\t\t\treturn err\n\t\t} else if ok {\n", key)
-		fmt.Fprintf(b, "\t\t\tsubBytes, err := sub.Encode()\n\t\t\tif err != nil {\n\t\t\t\treturn err\n\t\t\t}\n")
-		fmt.Fprintf(b, "\t\t\tw := &%s{%s: &%s{}}\n\t\t\tif err := w.%s.Unmarshal(subBytes); err != nil {\n\t\t\t\treturn err\n\t\t\t}\n", wrap, name, field.Message, name)
-		fmt.Fprintf(b, "\t\t\tm.%s = w\n\t\t}\n", kind)
-		return
-	}
-	if field.Message != "" {
-		fmt.Fprintf(b, "\t\tif sub, ok, err := msg.GetMessage(%s); err != nil {\n\t\t\treturn err\n\t\t} else if ok {\n", key)
-		fmt.Fprintf(b, "\t\t\tw := &%s{%s: &%s{}}\n\t\t\tif err := w.%s.load(sub); err != nil {\n\t\t\t\treturn err\n\t\t\t}\n", wrap, name, field.Message, name)
-		fmt.Fprintf(b, "\t\t\tm.%s = w\n\t\t}\n", kind)
-		return
-	}
-	b.WriteString("\t\tif v, ok, err := ")
-	writeGoGetCall(b, field, key)
-	b.WriteString("; err != nil {\n\t\t\treturn err\n\t\t} else if ok {\n")
-	if t := dstType(f, field, ""); t != "" {
-		fmt.Fprintf(b, "\t\t\tw := &%s{%s: %s(v)}\n", wrap, name, t)
-	} else {
-		fmt.Fprintf(b, "\t\t\tw := &%s{%s: v}\n", wrap, name)
-	}
-	fmt.Fprintf(b, "\t\t\tm.%s = w\n\t\t}\n", kind)
-}
-
-// writeGoLoadPresent loads an optional field only when present. Pointers
-// take the address of a converted copy; []byte assigns the copy directly.
-func writeGoLoadPresent(b *strings.Builder, f *model.File, field model.Field, name, key string) {
-	b.WriteString("\tif v, ok, err := ")
-	writeGoGetCall(b, field, key)
-	b.WriteString("; err != nil {\n\t\treturn err\n\t} else if ok {\n")
-	t := goFieldType(f, field)
-	if strings.HasPrefix(t, "*") {
-		base := strings.TrimPrefix(t, "*")
-		fmt.Fprintf(b, "\t\ttmp := %s(v)\n\t\tm.%s = &tmp\n\t}\n", base, name)
-	} else if t == "[]byte" {
-		fmt.Fprintf(b, "\t\tm.%s = v\n\t}\n", name)
-	} else {
-		fmt.Fprintf(b, "\t\tm.%s = v\n\t}\n", name)
-	}
-}
-
-// writeGoLoadScalar loads an implicit scalar (zero when absent: same result).
-func writeGoLoadScalar(b *strings.Builder, f *model.File, field model.Field, dst, key string) {
-	b.WriteString("\tif v, ok, err := ")
-	writeGoGetCall(b, field, key)
-	b.WriteString("; err != nil {\n\t\treturn err\n\t} else if ok {\n")
-	if t := dstType(f, field, dst); t != "" {
-		fmt.Fprintf(b, "\t\t%s = %s(v)\n\t}\n", dst, t)
-	} else {
-		fmt.Fprintf(b, "\t\t%s = v\n\t}\n", dst)
-	}
-}
-
-// dstType converts the getter's int64/uint64 to the destination type.
-func dstType(f *model.File, field model.Field, dst string) string {
-	_ = f
-	_ = dst
-	switch field.Kind {
-	case protoreflect.Int32Kind, protoreflect.Sint32Kind, protoreflect.Sfixed32Kind:
-		return "int32"
-	case protoreflect.Uint32Kind, protoreflect.Fixed32Kind:
-		return "uint32"
-	case protoreflect.EnumKind:
-		if field.Enum != "" {
-			return field.Enum
+// writeGoTableScalar emits a singular or repeated scalar/enum/string/bytes
+// row. Pointer presence (proto3 optional, proto2 optional) rides the
+// Explicit flag with optional accessors; required fields always emit;
+// everything else skips the zero value in the engine.
+func writeGoTableScalar(b *strings.Builder, f *model.File, m model.Message, field model.Field, name string) {
+	if field.Repeated {
+		b.WriteString(", Repeated: true")
+		if field.Packed {
+			b.WriteString(", Packed: true")
 		}
-		return "int32"
-	case protoreflect.FloatKind:
-		return "float32"
-	default:
-		return ""
-	}
-}
-
-// writeGoGetCall emits the getter invocation returning (v, ok, err).
-func writeGoGetCall(b *strings.Builder, field model.Field, key string) {
-	switch field.Kind {
-	case protoreflect.Int32Kind, protoreflect.Sint32Kind, protoreflect.Sfixed32Kind,
-		protoreflect.Int64Kind, protoreflect.Sint64Kind, protoreflect.Sfixed64Kind,
-		protoreflect.EnumKind:
-		fmt.Fprintf(b, "msg.GetInt(%s)", key)
-	case protoreflect.Uint32Kind, protoreflect.Fixed32Kind,
-		protoreflect.Uint64Kind, protoreflect.Fixed64Kind:
-		fmt.Fprintf(b, "msg.GetUint(%s)", key)
-	case protoreflect.BoolKind:
-		fmt.Fprintf(b, "msg.GetBool(%s)", key)
-	case protoreflect.FloatKind:
-		fmt.Fprintf(b, "msg.GetFloat(%s)", key)
-	case protoreflect.DoubleKind:
-		fmt.Fprintf(b, "msg.GetDouble(%s)", key)
-	case protoreflect.StringKind:
-		fmt.Fprintf(b, "msg.GetString(%s)", key)
-	case protoreflect.BytesKind:
-		fmt.Fprintf(b, "msg.GetBytes(%s)", key)
-	default:
-		fmt.Fprintf(b, "msg.GetInt(%s)", key)
-	}
-}
-
-// writeGoLoadSlice loads a repeated scalar field.
-func writeGoLoadSlice(b *strings.Builder, f *model.File, field model.Field, name, key string) {
-	b.WriteString("\tif vs, err := ")
-	switch field.Kind {
-	case protoreflect.Int32Kind, protoreflect.Sint32Kind, protoreflect.Sfixed32Kind,
-		protoreflect.Int64Kind, protoreflect.Sint64Kind, protoreflect.Sfixed64Kind,
-		protoreflect.EnumKind:
-		fmt.Fprintf(b, "msg.GetIntSlice(%s)", key)
-	case protoreflect.Uint32Kind, protoreflect.Fixed32Kind,
-		protoreflect.Uint64Kind, protoreflect.Fixed64Kind:
-		fmt.Fprintf(b, "msg.GetUintSlice(%s)", key)
-	case protoreflect.BoolKind:
-		fmt.Fprintf(b, "msg.GetBoolSlice(%s)", key)
-	case protoreflect.FloatKind:
-		fmt.Fprintf(b, "msg.GetFloatSlice(%s)", key)
-	case protoreflect.DoubleKind:
-		fmt.Fprintf(b, "msg.GetDoubleSlice(%s)", key)
-	case protoreflect.StringKind:
-		fmt.Fprintf(b, "msg.GetStringSlice(%s)", key)
-	case protoreflect.BytesKind:
-		fmt.Fprintf(b, "msg.GetBytesSlice(%s)", key)
-	default:
-		fmt.Fprintf(b, "msg.GetIntSlice(%s)", key)
-	}
-	b.WriteString("; err != nil {\n\t\treturn err\n\t} else if vs != nil {\n")
-	t := goFieldType(f, field)
-	elem := strings.TrimPrefix(t, "[]")
-	if field.Kind == protoreflect.EnumKind && field.Enum != "" {
-		elem = field.Enum
-	}
-	if elem == "[]byte" {
-		fmt.Fprintf(b, "\t\tm.%s = vs\n\t}\n", name)
+		b.WriteString(",\n")
+		writeGoTableRepAccessors(b, f, m, field, name)
 		return
 	}
-	fmt.Fprintf(b, "\t\tm.%s = make(%s, len(vs))\n\t\tfor i, v := range vs {\n\t\t\tm.%s[i] = %s(v)\n\t\t}\n\t}\n",
-		name, t, name, elem)
+	if field.NeedsHas && !field.Required && field.Message == "" {
+		b.WriteString(", Explicit: true,\n")
+		writeGoTableOptAccessors(b, f, m, field, name)
+		return
+	}
+	b.WriteString(",\n")
+	writeGoTablePlainAccessors(b, f, m, field, name)
+}
+
+// goTableSuffix maps a proto kind to the accessor name suffix in the table
+// engine (I32, U64, Sfx32, F32, Str, ...).
+func goTableSuffix(field model.Field) string {
+	switch field.Kind {
+	case protoreflect.Int32Kind:
+		return "I32"
+	case protoreflect.Int64Kind:
+		return "I64"
+	case protoreflect.Uint32Kind:
+		return "U32"
+	case protoreflect.Uint64Kind:
+		return "U64"
+	case protoreflect.Sint32Kind:
+		return "S32"
+	case protoreflect.Sint64Kind:
+		return "S64"
+	case protoreflect.Fixed32Kind:
+		return "Fx32"
+	case protoreflect.Fixed64Kind:
+		return "Fx64"
+	case protoreflect.Sfixed32Kind:
+		return "Sfx32"
+	case protoreflect.Sfixed64Kind:
+		return "Sfx64"
+	case protoreflect.FloatKind:
+		return "F32"
+	case protoreflect.DoubleKind:
+		return "F64"
+	case protoreflect.BoolKind:
+		return "Bool"
+	case protoreflect.StringKind:
+		return "Str"
+	case protoreflect.BytesKind:
+		return "Bytes"
+	case protoreflect.EnumKind:
+		return "Enum"
+	default:
+		return "I32"
+	}
+}
+
+// goTableValType is the Go value type a row's accessors carry: the named
+// enum for enums, the struct field type otherwise.
+func goTableValType(f *model.File, field model.Field) string {
+	if field.Kind == protoreflect.EnumKind && field.Enum != "" {
+		return field.Enum
+	}
+	return goTypeName(f, field)
+}
+
+// writeGoTablePlainAccessors emits plain getter/setter closures for an
+// implicitly present singular scalar: the engine skips the zero value.
+func writeGoTablePlainAccessors(b *strings.Builder, f *model.File, m model.Message, field model.Field, name string) {
+	sfx := goTableSuffix(field)
+	typ := goTableValType(f, field)
+	if field.Kind == protoreflect.EnumKind {
+		fmt.Fprintf(b, "\t\tGetEnum: func(msg any) int32 { return int32(msg.(*%s).%s) },\n", m.Name, name)
+		fmt.Fprintf(b, "\t\tSetEnum: func(msg any, v int32) { msg.(*%s).%s = %s(v) },\n", m.Name, name, typ)
+		return
+	}
+	fmt.Fprintf(b, "\t\tGet%s: func(msg any) %s { return msg.(*%s).%s },\n", sfx, typ, m.Name, name)
+	fmt.Fprintf(b, "\t\tSet%s: func(msg any, v %s) { msg.(*%s).%s = v },\n", sfx, typ, m.Name, name)
+}
+
+// writeGoTableOptAccessors emits pointer getter/setter closures for an
+// explicitly present singular scalar: presence is the pointer, not the
+// value, so zero and empty still encode.
+func writeGoTableOptAccessors(b *strings.Builder, f *model.File, m model.Message, field model.Field, name string) {
+	sfx := goTableSuffix(field)
+	typ := goTableValType(f, field)
+	if field.Kind == protoreflect.EnumKind {
+		fmt.Fprintf(b, "\t\tGetOptEnum: func(msg any) *int32 { p := msg.(*%s).%s; if p == nil { return nil }; v := int32(*p); return &v },\n", m.Name, name)
+		fmt.Fprintf(b, "\t\tSetOptEnum: func(msg any, v int32) { tmp := %s(v); msg.(*%s).%s = &tmp },\n", typ, m.Name, name)
+		return
+	}
+	fmt.Fprintf(b, "\t\tGetOpt%s: func(msg any) *%s { return msg.(*%s).%s },\n", sfx, typ, m.Name, name)
+	fmt.Fprintf(b, "\t\tSetOpt%s: func(msg any, v %s) { tmp := v; msg.(*%s).%s = &tmp },\n", sfx, typ, m.Name, name)
+}
+
+// writeGoTableRepAccessors emits slice getter/append closures for a repeated
+// scalar row. Enum slices convert element-wise (the slice type is named);
+// everything else addresses the slice directly.
+func writeGoTableRepAccessors(b *strings.Builder, f *model.File, m model.Message, field model.Field, name string) {
+	sfx := goTableSuffix(field)
+	typ := goTableValType(f, field)
+	if field.Kind == protoreflect.EnumKind {
+		fmt.Fprintf(b, "\t\tGetRepEnum: func(msg any) []int32 { vs := msg.(*%s).%s; out := make([]int32, len(vs)); for i, v := range vs { out[i] = int32(v) }; return out },\n",
+			m.Name, name)
+		fmt.Fprintf(b, "\t\tAppendEnum: func(msg any, v int32) { m := msg.(*%s); m.%s = append(m.%s, %s(v)) },\n",
+			m.Name, name, name, typ)
+		return
+	}
+	fmt.Fprintf(b, "\t\tGetRep%s: func(msg any) []%s { return msg.(*%s).%s },\n", sfx, typ, m.Name, name)
+	fmt.Fprintf(b, "\t\tAppend%s: func(msg any, v %s) { m := msg.(*%s); m.%s = append(m.%s, v) },\n", sfx, typ, m.Name, name, name)
+}
+
+// goSorted returns the message fields in wire order (ascending field
+// number). Generated tables list rows in field-number order so the engine
+// emits byte-identical output (oneof1.bin pins name=1 before text=3).
+func goSorted(m model.Message) []model.Field {
+	out := append([]model.Field(nil), m.Fields...)
+	sort.Slice(out, func(i, j int) bool { return out[i].Number < out[j].Number })
+	return out
 }
