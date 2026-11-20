@@ -19,15 +19,21 @@
 
 #[path = "../gen/matrix3.rs"]
 mod matrix3;
+/* The pbwire-side model (the tree and the flat mirror) is the same generated
+ * file the crate's tests use; regenerating it is `make -C codegen gen`. */
+#[path = "../../tests/gen/matrix3_pbwire.rs"]
+mod models;
 
 mod prost_gen {
     include!(concat!(env!("OUT_DIR"), "/structtest.rs"));
 }
 
+use std::ffi::{c_char, CString};
 use std::time::Instant;
 
 use matrix3::{Color3, Inner3, Scalars3};
-use pbwire::{Message, Schema, Type};
+use models::{Inner3Flat, Scalars3Flat};
+use pbwire::{FlatImage, Message, Schema, Type};
 use prost::Message as _;
 use protobuf::{EnumOrUnknown, Message as _};
 
@@ -55,7 +61,7 @@ fn main() {
     let inner_ty = schema.message("structtest.Inner3").expect("inner type");
 
     for tier in 0..CASES.len() {
-        run_case(&ty, &inner_ty, tier);
+        run_case(&schema, &ty, &inner_ty, tier);
     }
     if unsafe { FAILURES } != 0 {
         eprintln!("{} check(s) failed", unsafe { FAILURES });
@@ -63,7 +69,7 @@ fn main() {
     }
 }
 
-fn run_case(ty: &Type<'_>, inner_ty: &Type<'_>, tier: usize) {
+fn run_case(schema: &Schema, ty: &Type<'_>, inner_ty: &Type<'_>, tier: usize) {
     let label = CASES[tier];
     let n = REPEATS[tier];
     let iterations = ITERATIONS[tier];
@@ -97,6 +103,24 @@ fn run_case(ty: &Type<'_>, inner_ty: &Type<'_>, tier: usize) {
         "OK   {label} encoding parity, x{n} ({} bytes)",
         reference.len()
     );
+
+    // The in-place arm: the generated `#[repr(C)]` mirror is the native
+    // object, one call per op. Parity first, exactly like the tree.
+    let mut flat = schema.in_place::<Scalars3Flat>().expect("flat plan");
+    let payload = FlatPayload::new(n);
+    let flat_image = flat.encode_in_place(&payload.image).expect("flat encode");
+    if flat_image != reference {
+        fail(
+            label,
+            &format!(
+                "pbwire-rust-shim wrote {} bytes, protobuf-rust {}",
+                flat_image.len(),
+                reference.len()
+            ),
+        );
+        return;
+    }
+    println!("OK   {label} flat-image parity, x{n}");
 
     // Decode must round-trip byte-exactly and expose the same values.
     let back = ty.decode(&reference).expect("decode");
@@ -146,6 +170,20 @@ fn run_case(ty: &Type<'_>, inner_ty: &Type<'_>, tier: usize) {
         message.encode_to(&mut pbwire_buf).expect("encode").len()
     });
     let decode = measure(iterations, || ty.decode(&reference).expect("decode"));
+    let mut flat_image = FlatImage::<Scalars3Flat>::new();
+    flat.decode_in_place(&reference, &mut flat_image)
+        .expect("flat decode");
+    if flat_image.value.str.is_null() || flat_image.value.nums_count != n {
+        fail(label, "pbwire-rust-shim decode differs");
+        return;
+    }
+    let flat_encode = measure(iterations, || {
+        flat.encode_in_place(&payload.image).expect("flat encode").len()
+    });
+    let flat_decode = measure(iterations, || {
+        flat.decode_in_place(&reference, &mut flat_image)
+            .expect("flat decode")
+    });
     let official_encode = measure(iterations, || {
         official_buf.clear();
         official.write_to_vec(&mut official_buf).expect("encode");
@@ -168,10 +206,12 @@ fn run_case(ty: &Type<'_>, inner_ty: &Type<'_>, tier: usize) {
         reference.len()
     );
     println!("  {:<12} {:<7} {:>12} {:>10}", "impl", "op", "ns/op", "MB/s");
-    row("pbwire-rust", "encode", reference.len(), encode);
+    row("pbwire-rust-tree", "encode", reference.len(), encode);
+    row("pbwire-rust-shim", "encode", reference.len(), flat_encode);
     row("protobuf-rust", "encode", reference.len(), official_encode);
     row("prost", "encode", reference.len(), prost_encode);
-    row("pbwire-rust", "decode", reference.len(), decode);
+    row("pbwire-rust-tree", "decode", reference.len(), decode);
+    row("pbwire-rust-shim", "decode", reference.len(), flat_decode);
     row("protobuf-rust", "decode", reference.len(), official_decode);
     row("prost", "decode", reference.len(), prost_decode);
     println!();
@@ -335,4 +375,77 @@ fn row(impl_name: &str, op: &str, bytes: usize, ns: f64) {
 fn fail(label: &str, what: &str) {
     println!("FAIL {label}: {what}");
     unsafe { FAILURES += 1 };
+}
+
+/// The in-place fixture: the flat image plus every allocation it points into,
+/// built once per tier so the timed loop only runs the codec.
+struct FlatPayload {
+    image: Scalars3Flat,
+    _inner: Box<Inner3Flat>,
+    _inners: Vec<Inner3Flat>,
+    _nums: Vec<i32>,
+    _tags: Vec<*mut c_char>,
+    _flags: Vec<u8>,
+    _strs: Vec<CString>,
+}
+
+impl FlatPayload {
+    fn new(n: usize) -> FlatPayload {
+        let mut strs: Vec<CString> = ["hello", "kid", "opt", "tag", "grandkid"]
+            .iter()
+            .map(|s| CString::new(*s).expect("cstring"))
+            .collect();
+        let ptr = |i: usize| strs[i].as_ptr() as *mut c_char;
+        let mut inner = Box::new(Inner3Flat {
+            name: ptr(1),
+            value: 42,
+        });
+        let mut nums: Vec<i32> = (0..n).map(|i| i as i32 - 3).collect();
+        let mut tags: Vec<*mut c_char> = (0..n).map(|_| ptr(3)).collect();
+        let mut inners: Vec<Inner3Flat> = (0..n)
+            .map(|i| Inner3Flat {
+                name: ptr(4),
+                value: i as i32 + 1,
+            })
+            .collect();
+        let mut flags: Vec<u8> = (0..n).map(|i| u8::from(i % 2 == 0)).collect();
+        let image = Scalars3Flat {
+            i32: i32::MIN,
+            i64: i64::MAX,
+            u32: u32::MAX,
+            u64: u64::MAX,
+            s32: i32::MIN,
+            s64: i64::MIN,
+            fx32: 0xdeadbeef,
+            fx64: 72623859790382856,
+            sfx32: i32::MIN,
+            sfx64: i64::MIN,
+            f32: f32::INFINITY,
+            f64: -123456.789,
+            flag: 1,
+            str: ptr(0),
+            color: Color3::COLOR3_GREEN as i32,
+            inner: &mut *inner as *mut Inner3Flat,
+            nums: nums.as_mut_ptr(),
+            nums_count: nums.len(),
+            tags: tags.as_mut_ptr(),
+            tags_count: tags.len(),
+            inners: inners.as_mut_ptr(),
+            inners_count: inners.len(),
+            opt_i32: -7,
+            has_opt_i32: 1,
+            opt_str: ptr(2),
+            flags: flags.as_mut_ptr(),
+            flags_count: flags.len(),
+        };
+        FlatPayload {
+            image,
+            _inner: inner,
+            _inners: inners,
+            _nums: nums,
+            _tags: tags,
+            _flags: flags,
+            _strs: std::mem::take(&mut strs),
+        }
+    }
 }

@@ -74,6 +74,55 @@ impl Person {
     }
 }
 
+/// tutorial.Person as a flat native image: `Schema::in_place` hands this memory
+/// to the C struct codec, so one call reads or writes it in place.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct PersonFlat {
+    pub name: *mut ::core::ffi::c_char,
+    pub id: i32,
+    pub has_id: i32,
+    pub email: *mut ::core::ffi::c_char,
+    pub phones: *mut person::PhoneNumberFlat,
+    pub phones_count: usize,
+}
+
+impl PersonFlat {
+    /// Field plan rows: name, slot offset, kind, flags, has/count/oneof
+    /// offsets, child image. Offsets are asserted below.
+    pub const FIELDS: &'static [pbwire::FieldPlan] = {
+        use pbwire::Kind;
+        &[
+            pbwire::FieldPlan("name", 0, Kind::String, pbwire::REQUIRED, 0, 0, 0, None),
+            pbwire::FieldPlan("id", 8, Kind::I32, pbwire::REQUIRED, 12, 0, 0, None),
+            pbwire::FieldPlan("email", 16, Kind::String, 0, 0, 0, 0, None),
+            pbwire::FieldPlan("phones", 24, Kind::Message, pbwire::REPEATED, 0, 32, 0, Some(pbwire::ChildPlan { full_name: "tutorial.Person.PhoneNumber", fields: person::PhoneNumberFlat::FIELDS, size: ::core::mem::size_of::<person::PhoneNumberFlat>() })),
+        ]
+    };
+}
+
+const _: () = assert!(::core::mem::offset_of!(PersonFlat, name) == 0);
+const _: () = assert!(::core::mem::offset_of!(PersonFlat, id) == 8);
+const _: () = assert!(::core::mem::offset_of!(PersonFlat, has_id) == 12);
+const _: () = assert!(::core::mem::offset_of!(PersonFlat, email) == 16);
+const _: () = assert!(::core::mem::offset_of!(PersonFlat, phones) == 24);
+const _: () = assert!(::core::mem::offset_of!(PersonFlat, phones_count) == 32);
+
+impl ::core::default::Default for PersonFlat {
+    fn default() -> Self {
+        // SAFETY: every slot is an integer, a raw pointer, or `PbwBytes`,
+        // so an all-zero image is a valid (empty) message.
+        unsafe { ::core::mem::zeroed() }
+    }
+}
+
+unsafe impl pbwire::FlatMessage for PersonFlat {
+    const FULL_NAME: &'static str = "tutorial.Person";
+    fn fields() -> &'static [pbwire::FieldPlan] {
+        PersonFlat::FIELDS
+    }
+}
+
 /// Nested message and enum types in `Person`.
 pub mod person {
     #[allow(unused_imports)]
@@ -123,6 +172,47 @@ pub mod person {
             o.number = msg.get_str(t.field("number")?).unwrap_or("").to_string();
             if msg.has(t.field("type")?) { o.r#type = Some(msg.get_i64(t.field("type")?) as i32); }
             Ok(o)
+        }
+    }
+
+    /// tutorial.Person.PhoneNumber as a flat native image: `Schema::in_place` hands this memory
+    /// to the C struct codec, so one call reads or writes it in place.
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    pub struct PhoneNumberFlat {
+        pub number: *mut ::core::ffi::c_char,
+        pub r#type: i32,
+        pub has_type: i32,
+    }
+
+    impl PhoneNumberFlat {
+        /// Field plan rows: name, slot offset, kind, flags, has/count/oneof
+        /// offsets, child image. Offsets are asserted below.
+        pub const FIELDS: &'static [pbwire::FieldPlan] = {
+            use pbwire::Kind;
+            &[
+                pbwire::FieldPlan("number", 0, Kind::String, pbwire::REQUIRED, 0, 0, 0, None),
+                pbwire::FieldPlan("type", 8, Kind::Enum, 0, 12, 0, 0, None),
+            ]
+        };
+    }
+
+    const _: () = assert!(::core::mem::offset_of!(PhoneNumberFlat, number) == 0);
+    const _: () = assert!(::core::mem::offset_of!(PhoneNumberFlat, r#type) == 8);
+    const _: () = assert!(::core::mem::offset_of!(PhoneNumberFlat, has_type) == 12);
+
+    impl ::core::default::Default for PhoneNumberFlat {
+        fn default() -> Self {
+            // SAFETY: every slot is an integer, a raw pointer, or `PbwBytes`,
+            // so an all-zero image is a valid (empty) message.
+            unsafe { ::core::mem::zeroed() }
+        }
+    }
+
+    unsafe impl pbwire::FlatMessage for PhoneNumberFlat {
+        const FULL_NAME: &'static str = "tutorial.Person.PhoneNumber";
+        fn fields() -> &'static [pbwire::FieldPlan] {
+            PhoneNumberFlat::FIELDS
         }
     }
 
@@ -203,6 +293,44 @@ impl AddressBook {
             }
         }
         Ok(o)
+    }
+}
+
+/// tutorial.AddressBook as a flat native image: `Schema::in_place` hands this memory
+/// to the C struct codec, so one call reads or writes it in place.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct AddressBookFlat {
+    pub people: *mut PersonFlat,
+    pub people_count: usize,
+}
+
+impl AddressBookFlat {
+    /// Field plan rows: name, slot offset, kind, flags, has/count/oneof
+    /// offsets, child image. Offsets are asserted below.
+    pub const FIELDS: &'static [pbwire::FieldPlan] = {
+        use pbwire::Kind;
+        &[
+            pbwire::FieldPlan("people", 0, Kind::Message, pbwire::REPEATED, 0, 8, 0, Some(pbwire::ChildPlan { full_name: "tutorial.Person", fields: PersonFlat::FIELDS, size: ::core::mem::size_of::<PersonFlat>() })),
+        ]
+    };
+}
+
+const _: () = assert!(::core::mem::offset_of!(AddressBookFlat, people) == 0);
+const _: () = assert!(::core::mem::offset_of!(AddressBookFlat, people_count) == 8);
+
+impl ::core::default::Default for AddressBookFlat {
+    fn default() -> Self {
+        // SAFETY: every slot is an integer, a raw pointer, or `PbwBytes`,
+        // so an all-zero image is a valid (empty) message.
+        unsafe { ::core::mem::zeroed() }
+    }
+}
+
+unsafe impl pbwire::FlatMessage for AddressBookFlat {
+    const FULL_NAME: &'static str = "tutorial.AddressBook";
+    fn fields() -> &'static [pbwire::FieldPlan] {
+        AddressBookFlat::FIELDS
     }
 }
 

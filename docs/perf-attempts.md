@@ -1139,3 +1139,21 @@ the model's shipped converter) would both cross per field, and the ledger rule
 (reject a change that cannot win every round) is decided before the run: the
 table walk adds managed reads on top of the same crossings. Byte equality holds
 in both (the C core writes the bytes), so no round could show a win.
+
+## Provisional: Rust shim arm (plan 08)
+
+The flat-layout shim is the generated `#[repr(C)]` mirror plus one call into
+the C struct codec (`bindings/c/runtime/pbw_struct.c`, compiled by
+`bindings/rust/build.rs`), so there is no per-field crossing. Provisional
+`make rust-bench` medians (2026-11-20): `shim` encode 1613.5 / 1521.5 / 1088.7 /
+1128.0 MB/s and decode 1122.8 / 995.6 / 659.5 / 706.4 MB/s at 136 / 174 / 2469 /
+74913 B. Decode is above prost on every tier (1.43x small, 1.63x medium, 1.98x
+large, 1.91x xlarge). Encode is above prost at 136 B (1.05x) and level at 174 B
+(0.99x), and **below** it at 2469 B (0.80x) and 74913 B (0.83x).
+
+That shape is the shared C struct codec's, not the Rust arm's: the same codec
+is 1132.2 MB/s at 74913 B in the C structs table (`make bench-c`), essentially
+the shim's 1128.0, while the shipped tree row's `encode_to` reaches 1713.7 on
+the same payload in the same run. The codec's repeated-element paths reserve
+per element (`sb_reserve` per string/array item), and prost's generated writer
+has the same loop as straight-line code with no reserve at all.

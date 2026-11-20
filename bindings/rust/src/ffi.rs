@@ -22,8 +22,42 @@ opaque!(
     pbw_message,
     pbw_value,
     pbw_service,
-    pbw_method
+    pbw_method,
+    pbw_struct_codec,
+    pbw_struct_arena
 );
+
+/// `pbw_struct_field_t` from `bindings/c/runtime/pbw_struct.h`: one layout row
+/// of the generic struct codec (the `#[repr(C)]` memory the C side walks).
+#[allow(non_camel_case_types)]
+#[repr(C)]
+pub struct pbw_struct_field {
+    pub fnum: u32,
+    pub kind: u32,
+    pub repeated: c_int,
+    pub offset: usize,
+    pub has: usize,
+    pub count: usize,
+    pub elem: usize,
+    pub dflt: i32,
+    pub fields: *const pbw_struct_field,
+    pub nfields: usize,
+    pub typ: u8,
+    pub wire: u8,
+    pub packed: u8,
+    pub required: u8,
+    pub oneof: u8,
+    pub cs: usize,
+}
+
+/// `pbw_struct_buf`: the codec's reusable encode buffer (C owns `data`).
+#[allow(non_camel_case_types)]
+#[repr(C)]
+pub struct pbw_struct_buf {
+    pub data: *mut u8,
+    pub len: usize,
+    pub cap: usize,
+}
 
 #[repr(C)]
 pub struct pbw_limits {
@@ -71,6 +105,7 @@ extern "C" {
     ) -> *const pbw_field;
     pub fn pbw_descriptor_find_field(desc: *const pbw_descriptor, number: u32) -> *const pbw_field;
     pub fn pbw_field_name(field: *const pbw_field) -> *const c_char;
+    pub fn pbw_field_default_value(field: *const pbw_field) -> *const c_char;
     pub fn pbw_field_number(field: *const pbw_field) -> u32;
     pub fn pbw_field_type(field: *const pbw_field) -> c_int;
     pub fn pbw_field_label(field: *const pbw_field) -> c_int;
@@ -252,6 +287,30 @@ extern "C" {
     ) -> c_int;
     pub fn pbw_strerror(status: c_int) -> *const c_char;
     pub fn pbw_free(ptr: *mut c_void);
+
+    /* struct codec (compiled from bindings/c/runtime/pbw_struct.c) */
+    pub fn pbw_struct_codec_init(
+        out: *mut *mut pbw_struct_codec,
+        schema: *const pbw_schema,
+        message: *const c_char,
+        fields: *const pbw_struct_field,
+        nfields: usize,
+    ) -> c_int;
+    pub fn pbw_struct_codec_free(codec: *mut pbw_struct_codec);
+    pub fn pbw_struct_codec_encode(
+        codec: *const pbw_struct_codec,
+        base: *const c_void,
+        buf: *mut pbw_struct_buf,
+    ) -> c_int;
+    pub fn pbw_struct_codec_decode(
+        codec: *const pbw_struct_codec,
+        wire: *const u8,
+        wire_len: usize,
+        arena: *mut *mut pbw_struct_arena,
+        base: *mut c_void,
+    ) -> c_int;
+    pub fn pbw_struct_buf_free(buf: *mut pbw_struct_buf);
+    pub fn pbw_struct_arena_new_mem(mem: *mut c_void, len: usize) -> *mut pbw_struct_arena;
 }
 
 /* pbw_status / pbw_type / pbw_label / pbw_value_kind */

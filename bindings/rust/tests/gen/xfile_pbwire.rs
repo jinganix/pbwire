@@ -73,3 +73,47 @@ impl UsesDep {
     }
 }
 
+/// xfile.UsesDep as a flat native image: `Schema::in_place` hands this memory
+/// to the C struct codec, so one call reads or writes it in place.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct UsesDepFlat {
+    pub single: *mut _pbwire_imp_xdep::DepMsgFlat,
+    pub many: *mut _pbwire_imp_xdep::DepMsgFlat,
+    pub many_count: usize,
+    pub note: *mut ::core::ffi::c_char,
+}
+
+impl UsesDepFlat {
+    /// Field plan rows: name, slot offset, kind, flags, has/count/oneof
+    /// offsets, child image. Offsets are asserted below.
+    pub const FIELDS: &'static [pbwire::FieldPlan] = {
+        use pbwire::Kind;
+        &[
+            pbwire::FieldPlan("single", 0, Kind::Message, 0, 0, 0, 0, Some(pbwire::ChildPlan { full_name: "xdep.DepMsg", fields: _pbwire_imp_xdep::DepMsgFlat::FIELDS, size: ::core::mem::size_of::<_pbwire_imp_xdep::DepMsgFlat>() })),
+            pbwire::FieldPlan("many", 8, Kind::Message, pbwire::REPEATED, 0, 16, 0, Some(pbwire::ChildPlan { full_name: "xdep.DepMsg", fields: _pbwire_imp_xdep::DepMsgFlat::FIELDS, size: ::core::mem::size_of::<_pbwire_imp_xdep::DepMsgFlat>() })),
+            pbwire::FieldPlan("note", 24, Kind::String, 0, 0, 0, 0, None),
+        ]
+    };
+}
+
+const _: () = assert!(::core::mem::offset_of!(UsesDepFlat, single) == 0);
+const _: () = assert!(::core::mem::offset_of!(UsesDepFlat, many) == 8);
+const _: () = assert!(::core::mem::offset_of!(UsesDepFlat, many_count) == 16);
+const _: () = assert!(::core::mem::offset_of!(UsesDepFlat, note) == 24);
+
+impl ::core::default::Default for UsesDepFlat {
+    fn default() -> Self {
+        // SAFETY: every slot is an integer, a raw pointer, or `PbwBytes`,
+        // so an all-zero image is a valid (empty) message.
+        unsafe { ::core::mem::zeroed() }
+    }
+}
+
+unsafe impl pbwire::FlatMessage for UsesDepFlat {
+    const FULL_NAME: &'static str = "xfile.UsesDep";
+    fn fields() -> &'static [pbwire::FieldPlan] {
+        UsesDepFlat::FIELDS
+    }
+}
+

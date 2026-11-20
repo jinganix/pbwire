@@ -1189,3 +1189,447 @@ impl<'a> Value<'a> {
         })
     }
 }
+
+/* ------------------------------------------------------- in-place images */
+
+// The native-object arm: a generated `#[repr(C)]` mirror is the native object
+// and the C struct codec (`bindings/c/runtime/pbw_struct.c`, compiled by
+// `build.rs`) reads or writes it in place, so one call crosses the boundary
+// per op and no field is ever copied across. The generated row table carries
+// the wire facts, so the codec needs the schema only once, at `in_place`.
+
+/// One mirror slot's wire kind: how the C struct codec reads or writes it.
+/// The variants are finer than [`Kind`] has to be because the C codec stores
+/// `int32`, `sint32` and `sfixed32` in the same 4-byte slot but on the wire
+/// they are three tags.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Kind {
+    I32,
+    S32,
+    Sfx32,
+    I64,
+    S64,
+    Sfx64,
+    U32,
+    Fx32,
+    U64,
+    Fx64,
+    Bool,
+    F32,
+    F64,
+    Enum,
+    String,
+    Bytes,
+    Message,
+    Group,
+}
+
+impl Kind {
+    /// `pbw_struct_kind_t` (the C codec's storage class).
+    fn storage(self) -> u32 {
+        match self {
+            Kind::I32 | Kind::S32 | Kind::Sfx32 => 0,
+            Kind::I64 | Kind::S64 | Kind::Sfx64 => 1,
+            Kind::U32 | Kind::Fx32 => 2,
+            Kind::U64 | Kind::Fx64 => 3,
+            Kind::Bool => 4,
+            Kind::F32 => 5,
+            Kind::F64 => 6,
+            Kind::String => 7,
+            Kind::Bytes => 8,
+            Kind::Enum => 9,
+            Kind::Message | Kind::Group => 10,
+        }
+    }
+
+    /// `(pbw_type, wire type)` of one element.
+    fn wire(self) -> (u8, u8) {
+        match self {
+            Kind::I32 => (5, 0),
+            Kind::S32 => (17, 0),
+            Kind::Sfx32 => (15, 5),
+            Kind::I64 => (3, 0),
+            Kind::S64 => (18, 0),
+            Kind::Sfx64 => (16, 1),
+            Kind::U32 => (13, 0),
+            Kind::Fx32 => (7, 5),
+            Kind::U64 => (4, 0),
+            Kind::Fx64 => (6, 1),
+            Kind::Bool => (8, 0),
+            Kind::F32 => (2, 5),
+            Kind::F64 => (1, 1),
+            Kind::Enum => (14, 0),
+            Kind::String => (9, 2),
+            Kind::Bytes => (12, 2),
+            Kind::Message => (11, 2),
+            Kind::Group => (10, 3),
+        }
+    }
+}
+
+/* Row flags: what one `FieldPlan` needs beyond the slot. */
+/// Repeated: the slot is a pointer to a contiguous array plus a count slot.
+pub const REPEATED: u8 = 1;
+/// Repeated and packed on the wire.
+pub const PACKED: u8 = 2;
+/// Proto2 required.
+pub const REQUIRED: u8 = 4;
+/// A member of a real oneof: the case word at the row's `cs` offset selects it.
+pub const ONEOF: u8 = 8;
+
+/// The C codec's inline byte string (`pbw_bytes_t`): `data == NULL` is absent,
+/// `len` is the truth, and `data` may contain NUL.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct PbwBytes {
+    pub data: *mut u8,
+    pub len: usize,
+}
+
+impl Default for PbwBytes {
+    fn default() -> Self {
+        PbwBytes {
+            data: std::ptr::null_mut(),
+            len: 0,
+        }
+    }
+}
+
+/// A message-typed row's child image: its rows, its proto full name (for the
+/// codec's sub-plan) and the size of one image (the array stride).
+#[derive(Clone, Copy)]
+pub struct ChildPlan {
+    pub full_name: &'static str,
+    pub fields: &'static [FieldPlan],
+    pub size: usize,
+}
+
+/// One field row of a generated mirror, positional so the table reads as a
+/// table: `(name, offset, kind, flags, has, count, oneof_case, child)`.
+///
+/// * `offset` -- the value slot in the mirror;
+/// * `has` -- a 4-byte presence flag slot, 0 when absent is NULL/not tracked;
+/// * `count` -- a repeated field's element count slot, 0 when singular;
+/// * `oneof_case` -- the shared `u32` case word slot, 0 when not in a oneof;
+/// * `child` -- the sub-image plan for a message/group field.
+#[derive(Clone, Copy)]
+pub struct FieldPlan(
+    pub &'static str,
+    pub usize,
+    pub Kind,
+    pub u8,
+    pub usize,
+    pub usize,
+    pub usize,
+    pub Option<ChildPlan>,
+);
+
+/// A generated `#[repr(C)]` mirror of one message.
+///
+/// # Safety
+///
+/// The implementor must be a `#[repr(C)]` struct whose slots follow the C
+/// struct codec's ABI exactly (`pbw_struct.h`): strings are NUL-terminated
+/// pointers, bytes are an inline [`PbwBytes`], a sub-message is a pointer to
+/// its child image, repeated fields are a pointer plus a `usize` count, and
+/// every offset in [`FlatMessage::fields`] is an `offset_of!` of that struct.
+/// All-zero bytes must be a valid, empty image.
+pub unsafe trait FlatMessage: Sized {
+    /// Proto full name, e.g. `"structtest.Scalars3"`.
+    const FULL_NAME: &'static str;
+
+    /// The generated layout table.
+    fn fields() -> &'static [FieldPlan];
+
+    /// A zeroed image: every scalar 0, every pointer/bytes NULL, every count 0.
+    fn zeroed() -> Self {
+        // SAFETY: the trait contract requires an all-zero image to be valid.
+        unsafe { std::mem::zeroed() }
+    }
+
+    /// Size of one image in bytes (the repeated-message array stride).
+    fn size() -> usize {
+        std::mem::size_of::<Self>()
+    }
+}
+
+/// A caller-owned decode arena: one 8-byte-aligned block that every decoded
+/// string, bytes value, array and sub-message is bump-allocated from. Decoding
+/// again resets it, which invalidates the previous image; the block itself is
+/// reused, so a steady-state decode loop allocates nothing.
+pub struct Arena {
+    block: Vec<u64>,
+}
+
+impl Arena {
+    /// The default block: enough for the large benchmark tier with room to
+    /// spare. A smaller one is a `PBW_ERR_NOMEM`, not corruption.
+    pub const DEFAULT_BYTES: usize = 1 << 20;
+
+    pub fn new(bytes: usize) -> Arena {
+        Arena {
+            block: vec![0; bytes.div_ceil(8).max(1)],
+        }
+    }
+
+    fn as_void(&mut self) -> (*mut c_void, usize) {
+        (self.block.as_mut_ptr().cast(), self.block.len() * 8)
+    }
+}
+
+/// The native object of the in-place arm: a mirror plus the arena a decoded
+/// image points into. Both are allocated once, so a hot loop allocates nothing.
+pub struct FlatImage<T: FlatMessage> {
+    pub value: T,
+    arena: Arena,
+}
+
+impl<T: FlatMessage> FlatImage<T> {
+    pub fn new() -> FlatImage<T> {
+        FlatImage::with_arena(Arena::DEFAULT_BYTES)
+    }
+
+    /// `bytes` must hold every string/bytes/array/sub-message of one decode.
+    pub fn with_arena(bytes: usize) -> FlatImage<T> {
+        FlatImage {
+            value: T::zeroed(),
+            arena: Arena::new(bytes),
+        }
+    }
+}
+
+impl<T: FlatMessage> Default for FlatImage<T> {
+    fn default() -> Self {
+        FlatImage::new()
+    }
+}
+
+/// One compiled in-place plan: the C struct codec over a generated mirror, its
+/// reusable encode buffer, and the row table it walks (kept alive here because
+/// the codec references it). Build it once per message type; every
+/// [`FlatType::encode_in_place`] / [`FlatType::decode_in_place`] is one call.
+pub struct FlatType<'s, T: FlatMessage> {
+    _schema: &'s Schema,
+    codec: NonNull<ffi::pbw_struct_codec>,
+    buf: ffi::pbw_struct_buf,
+    _rows: Vec<Box<[ffi::pbw_struct_field]>>,
+    _message: CString,
+    _marker: PhantomData<T>,
+}
+
+impl Schema {
+    /// Compiles the generated mirror `T` into the C struct codec: the
+    /// native-object path. The schema is immutable, so the plan can be shared
+    /// like any other `&Schema` (the C core is not thread safe).
+    pub fn in_place<T: FlatMessage>(&self) -> Result<FlatType<'_, T>> {
+        FlatType::new(self)
+    }
+}
+
+impl<'s, T: FlatMessage> FlatType<'s, T> {
+    fn new(schema: &'s Schema) -> Result<FlatType<'s, T>> {
+        let name = CString::new(T::FULL_NAME).map_err(|_| Error {
+            status: -1,
+            message: format!("message name contains a NUL byte: {:?}", T::FULL_NAME),
+        })?;
+        let desc = unsafe { ffi::pbw_schema_find(schema.ptr.as_ptr(), name.as_ptr()) };
+        let desc = NonNull::new(desc as *mut ffi::pbw_descriptor).ok_or_else(|| Error {
+            status: -1,
+            message: format!("no such message type: {}", T::FULL_NAME),
+        })?;
+        let mut rows = Vec::new();
+        let (fields, nfields) = unsafe {
+            build_rows(T::fields(), T::FULL_NAME, schema, desc, &mut rows, 0)?
+        };
+        let mut codec: *mut ffi::pbw_struct_codec = ptr::null_mut();
+        let status = unsafe {
+            ffi::pbw_struct_codec_init(
+                &mut codec,
+                schema.ptr.as_ptr(),
+                name.as_ptr(),
+                fields,
+                nfields,
+            )
+        };
+        if status != ffi::PBW_OK {
+            unsafe { ffi::pbw_struct_codec_free(codec) };
+            return Err(status_error(status));
+        }
+        let codec = NonNull::new(codec).ok_or_else(|| status_error(-1))?;
+        Ok(FlatType {
+            _schema: schema,
+            codec,
+            buf: ffi::pbw_struct_buf {
+                data: ptr::null_mut(),
+                len: 0,
+                cap: 0,
+            },
+            _rows: rows,
+            _message: name,
+            _marker: PhantomData,
+        })
+    }
+
+    /// The mirror this plan was compiled for (its proto full name).
+    pub fn name(&self) -> &'static str {
+        T::FULL_NAME
+    }
+
+    /// One call: the C codec reads the mirror in place and appends the wire
+    /// bytes to this plan's reusable buffer. The slice is a view of that
+    /// buffer, valid until the next encode on this plan (the `&mut self`
+    /// borrow makes a second encode while it is alive a compile error).
+    pub fn encode_in_place(&mut self, image: &T) -> Result<&[u8]> {
+        let status = unsafe {
+            ffi::pbw_struct_codec_encode(
+                self.codec.as_ptr(),
+                (image as *const T).cast(),
+                &mut self.buf,
+            )
+        };
+        if status != ffi::PBW_OK {
+            return Err(status_error(status));
+        }
+        if self.buf.data.is_null() || self.buf.len == 0 {
+            return Ok(&[]);
+        }
+        Ok(unsafe { std::slice::from_raw_parts(self.buf.data, self.buf.len) })
+    }
+
+    /// One call: the C codec writes the mirror in place. Strings, bytes,
+    /// arrays and sub-messages are bump-allocated from `image`'s arena, so the
+    /// decoded image is a view of that arena and must not outlive it (decoding
+    /// into the same image again invalidates the previous view).
+    pub fn decode_in_place(&self, wire: &[u8], image: &mut FlatImage<T>) -> Result<()> {
+        image.value = T::zeroed();
+        let (mem, len) = image.arena.as_void();
+        let mut arena = unsafe { ffi::pbw_struct_arena_new_mem(mem, len) };
+        if arena.is_null() {
+            return Err(Error {
+                status: ffi::PBW_ERR_INVALID,
+                message: format!(
+                    "decode arena too small for a {} image (grow FlatImage::with_arena)",
+                    T::FULL_NAME
+                ),
+            });
+        }
+        let status = unsafe {
+            ffi::pbw_struct_codec_decode(
+                self.codec.as_ptr(),
+                wire.as_ptr(),
+                wire.len(),
+                &mut arena,
+                (&mut image.value as *mut T).cast(),
+            )
+        };
+        /* A caller-memory arena owns nothing to free; the block stays ours. */
+        if status != ffi::PBW_OK {
+            return Err(status_error(status));
+        }
+        Ok(())
+    }
+}
+
+impl<T: FlatMessage> Drop for FlatType<'_, T> {
+    fn drop(&mut self) {
+        unsafe {
+            ffi::pbw_struct_codec_free(self.codec.as_ptr());
+            ffi::pbw_struct_buf_free(&mut self.buf);
+        }
+    }
+}
+
+/// Compiles one level of a generated plan into C rows, recursively. The row
+/// arrays are boxed and kept in `storage`, so the pointers the codec holds stay
+/// valid for the life of the plan.
+///
+/// # Safety
+///
+/// `schema` and `desc` must be live and belong together; `plans` must be a
+/// generated table (the trait contract of [`FlatMessage`]).
+unsafe fn build_rows(
+    plans: &'static [FieldPlan],
+    message: &str,
+    schema: &Schema,
+    desc: NonNull<ffi::pbw_descriptor>,
+    storage: &mut Vec<Box<[ffi::pbw_struct_field]>>,
+    depth: usize,
+) -> Result<(*const ffi::pbw_struct_field, usize)> {
+    if depth > 32 {
+        return Err(Error {
+            status: -1,
+            message: format!("{message}: nested layout deeper than 32 levels"),
+        });
+    }
+    let mut rows: Vec<ffi::pbw_struct_field> = Vec::with_capacity(plans.len());
+    for plan in plans {
+        let name = CString::new(plan.0).map_err(|_| Error {
+            status: -1,
+            message: format!("{message}: field name contains a NUL byte"),
+        })?;
+        let field = unsafe { ffi::pbw_descriptor_find_field_name(desc.as_ptr(), name.as_ptr()) };
+        if field.is_null() {
+            return Err(Error {
+                status: -1,
+                message: format!("{message}: layout names an unknown field {:?}", plan.0),
+            });
+        }
+        let (typ, wire) = plan.2.wire();
+        rows.push(ffi::pbw_struct_field {
+            fnum: unsafe { ffi::pbw_field_number(field) },
+            kind: plan.2.storage(),
+            repeated: i32::from(plan.3 & REPEATED != 0),
+            offset: plan.1,
+            has: plan.4,
+            count: plan.5,
+            elem: 0,
+            dflt: unsafe { enum_default(field, plan.2) },
+            fields: ptr::null(),
+            nfields: 0,
+            typ,
+            wire,
+            packed: u8::from(plan.3 & PACKED != 0),
+            required: u8::from(plan.3 & REQUIRED != 0),
+            oneof: u8::from(plan.3 & ONEOF != 0),
+            cs: plan.6,
+        });
+    }
+    let mut boxed = rows.into_boxed_slice();
+    for (plan, row) in plans.iter().zip(boxed.iter_mut()) {
+        let Some(child) = plan.7 else {
+            continue;
+        };
+        let child_name = CString::new(child.full_name).map_err(|_| Error {
+            status: -1,
+            message: format!("{message}: child name contains a NUL byte"),
+        })?;
+        let child_desc = unsafe { ffi::pbw_schema_find(schema.ptr.as_ptr(), child_name.as_ptr()) };
+        let child_desc = NonNull::new(child_desc as *mut ffi::pbw_descriptor).ok_or_else(|| Error {
+            status: -1,
+            message: format!("{message}: missing child type {:?}", child.full_name),
+        })?;
+        let (child_rows, child_n) = unsafe {
+            build_rows(child.fields, child.full_name, schema, child_desc, storage, depth + 1)?
+        };
+        row.fields = child_rows;
+        row.nfields = child_n;
+        row.elem = child.size;
+    }
+    let ptr = boxed.as_ptr();
+    let n = boxed.len();
+    storage.push(boxed);
+    Ok((ptr, n))
+}
+
+/// The proto2 `[default = N]` of a singular enum, which the codec seeds; every
+/// other kind defaults to 0 and absent proto3 enums read 0 already.
+unsafe fn enum_default(field: *const ffi::pbw_field, kind: Kind) -> i32 {
+    if kind != Kind::Enum {
+        return 0;
+    }
+    let text = unsafe { ffi::pbw_field_default_value(field) };
+    if text.is_null() {
+        return 0;
+    }
+    cstr(text).trim().parse().unwrap_or(0)
+}

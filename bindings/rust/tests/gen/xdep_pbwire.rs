@@ -56,3 +56,42 @@ impl DepMsg {
     }
 }
 
+/// xdep.DepMsg as a flat native image: `Schema::in_place` hands this memory
+/// to the C struct codec, so one call reads or writes it in place.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct DepMsgFlat {
+    pub name: *mut ::core::ffi::c_char,
+    pub value: i32,
+}
+
+impl DepMsgFlat {
+    /// Field plan rows: name, slot offset, kind, flags, has/count/oneof
+    /// offsets, child image. Offsets are asserted below.
+    pub const FIELDS: &'static [pbwire::FieldPlan] = {
+        use pbwire::Kind;
+        &[
+            pbwire::FieldPlan("name", 0, Kind::String, 0, 0, 0, 0, None),
+            pbwire::FieldPlan("value", 8, Kind::I32, 0, 0, 0, 0, None),
+        ]
+    };
+}
+
+const _: () = assert!(::core::mem::offset_of!(DepMsgFlat, name) == 0);
+const _: () = assert!(::core::mem::offset_of!(DepMsgFlat, value) == 8);
+
+impl ::core::default::Default for DepMsgFlat {
+    fn default() -> Self {
+        // SAFETY: every slot is an integer, a raw pointer, or `PbwBytes`,
+        // so an all-zero image is a valid (empty) message.
+        unsafe { ::core::mem::zeroed() }
+    }
+}
+
+unsafe impl pbwire::FlatMessage for DepMsgFlat {
+    const FULL_NAME: &'static str = "xdep.DepMsg";
+    fn fields() -> &'static [pbwire::FieldPlan] {
+        DepMsgFlat::FIELDS
+    }
+}
+

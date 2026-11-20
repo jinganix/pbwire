@@ -511,6 +511,11 @@ func writeRustMessage(b *strings.Builder, f *model.File, n *rustNode, cur []stri
 	}
 	b.WriteString("}\n\n")
 	writeRustImpl(b, f, n, cur, byLocal, g, opt)
+	if !opt.NoLayout {
+		if p, ok := rustFlatPlanOf(f, *m, cur, byLocal, map[string]bool{}); ok {
+			writeRustFlat(b, p, m.Full)
+		}
+	}
 	if len(n.children) == 0 && len(n.enums) == 0 && len(oneofs) == 0 {
 		return
 	}
@@ -957,4 +962,288 @@ func rustElem(field model.Field, expr string) string {
 	default:
 		return expr + ".as_i64()"
 	}
+}
+
+/* ------------------------------------------------------------ flat layout */
+
+// The in-place arm (plan 08): every message the C struct codec can express
+// gets a `#[repr(C)]` mirror whose slots are exactly that codec's image, plus
+// a FieldPlan row table. Offsets are computed here with Rust's repr(C) rules
+// and asserted next to the table with `core::mem::offset_of!`, so an offset
+// the compiler disagrees with fails the build instead of producing bytes. The
+// slot sizes assume a 64-bit target; on any other target the assertions are a
+// compile error, loudly, rather than a silently wrong image.
+
+// rustFlatSlot is one mirror member: the struct field plus its byte offset.
+type rustFlatSlot struct {
+	name   string
+	typ    string
+	offset int
+	size   int
+	align  int
+}
+
+// rustFlatRow is one FieldPlan row (the slot offsets become the row facts).
+type rustFlatRow struct {
+	name   string
+	kind   string
+	flags  []string
+	offset int
+	has    int
+	count  int
+	cs     int
+	child  string // "Some(pbwire::ChildPlan { ... })", "" for None
+}
+
+// rustFlatPlan is one message's mirror: slots in declaration order plus the
+// rows that address them.
+type rustFlatPlan struct {
+	name  string
+	slots []rustFlatSlot
+	rows  []rustFlatRow
+}
+
+// rustFlatKind maps a field kind to its Kind variant and mirror slot. A
+// message slot is a pointer to the child image; a bool slot is a byte, never a
+// Rust `bool`, so a decoder byte can never be an invalid bool.
+func rustFlatKind(field model.Field, child string) (kind, slot string, size, align int, ok bool) {
+	switch field.Kind {
+	case protoreflect.Int32Kind:
+		return "I32", "i32", 4, 4, true
+	case protoreflect.Sint32Kind:
+		return "S32", "i32", 4, 4, true
+	case protoreflect.Sfixed32Kind:
+		return "Sfx32", "i32", 4, 4, true
+	case protoreflect.Int64Kind:
+		return "I64", "i64", 8, 8, true
+	case protoreflect.Sint64Kind:
+		return "S64", "i64", 8, 8, true
+	case protoreflect.Sfixed64Kind:
+		return "Sfx64", "i64", 8, 8, true
+	case protoreflect.Uint32Kind:
+		return "U32", "u32", 4, 4, true
+	case protoreflect.Fixed32Kind:
+		return "Fx32", "u32", 4, 4, true
+	case protoreflect.Uint64Kind:
+		return "U64", "u64", 8, 8, true
+	case protoreflect.Fixed64Kind:
+		return "Fx64", "u64", 8, 8, true
+	case protoreflect.BoolKind:
+		return "Bool", "u8", 1, 1, true
+	case protoreflect.FloatKind:
+		return "F32", "f32", 4, 4, true
+	case protoreflect.DoubleKind:
+		return "F64", "f64", 8, 8, true
+	case protoreflect.EnumKind:
+		return "Enum", "i32", 4, 4, true
+	case protoreflect.StringKind:
+		return "String", "*mut ::core::ffi::c_char", 8, 8, true
+	case protoreflect.BytesKind:
+		return "Bytes", "pbwire::PbwBytes", 16, 8, true
+	case protoreflect.MessageKind:
+		return "Message", "*mut " + child, 8, 8, true
+	case protoreflect.GroupKind:
+		return "Group", "*mut " + child, 8, 8, true
+	}
+	return "", "", 0, 0, false
+}
+
+// rustFlatChildFull is the proto full name of a message-typed field, for the
+// child plan (a map field carries no Full; it names the entry message).
+func rustFlatChildFull(f *model.File, field model.Field) string {
+	if field.Full != "" {
+		return field.Full
+	}
+	for _, m := range f.Messages {
+		if m.Name == field.Message {
+			return m.Full
+		}
+	}
+	return field.Message
+}
+
+// rustFlatSlotOf appends one slot at natural alignment and returns its offset.
+func (p *rustFlatPlan) add(name, typ string, size, align int) int {
+	off := 0
+	for _, s := range p.slots {
+		if end := s.offset + s.size; end > off {
+			off = end
+		}
+	}
+	off = (off + align - 1) / align * align
+	p.slots = append(p.slots, rustFlatSlot{name: name, typ: typ, offset: off, size: size, align: align})
+	return off
+}
+
+// rustFlatPlanOf builds one message's plan, or reports the message as not
+// expressible. A skipped field, an unknown kind, or a child that is itself not
+// expressible (including a reference cycle, which would make the row table
+// reference itself) means the message has no mirror.
+func rustFlatPlanOf(f *model.File, m model.Message, cur []string, byLocal map[string]*rustNode, seen map[string]bool) (*rustFlatPlan, bool) {
+	if seen[m.Name] {
+		return nil, false // a cycle: the const row tables would reference each other
+	}
+	seen[m.Name] = true
+	defer delete(seen, m.Name)
+	// Resolve every child plan first: the row table needs the child's rows.
+	childFull := map[string]string{}
+	for _, field := range m.Fields {
+		if field.Skip != "" {
+			return nil, false
+		}
+		if field.Kind != protoreflect.MessageKind && field.Kind != protoreflect.GroupKind {
+			continue
+		}
+		childFull[field.Name] = rustFlatChildFull(f, field)
+		if field.Import != "" {
+			// Emitted by the sibling file (same generator), so its mirror is
+			// reachable through the inline import module.
+			continue
+		}
+		cn, ok := byLocal[field.Message]
+		if !ok {
+			return nil, false
+		}
+		if _, ok := rustFlatPlanOf(f, *cn.msg, cn.segs, byLocal, seen); !ok {
+			return nil, false
+		}
+	}
+	p := &rustFlatPlan{name: rustFlatName(m.Name)}
+	taken := map[string]bool{}
+	unique := func(name string) string {
+		for taken[name] {
+			name += "0"
+		}
+		taken[name] = true
+		return name
+	}
+	slots := map[string]int{}
+	row := func(field model.Field, kind string, offset, has, count, cs int, flags []string, child string) {
+		p.rows = append(p.rows, rustFlatRow{
+			name: field.Name, kind: kind, flags: flags, offset: offset,
+			has: has, count: count, cs: cs, child: child,
+		})
+	}
+	for _, field := range m.Fields {
+		child := ""
+		if field.Message != "" {
+			child = rustFieldPath(f, field, cur, byLocal) + "Flat"
+		}
+		kind, slot, size, align, ok := rustFlatKind(field, child)
+		if !ok {
+			return nil, false
+		}
+		if field.Repeated {
+			elem := slot
+			if field.Message != "" {
+				elem = child
+			}
+			off := p.add(unique(field.Name), "*mut "+elem, 8, 8)
+			count := p.add(unique(field.Name+"_count"), "usize", 8, 8)
+			slots[field.Name] = off
+			var flags []string
+			flags = append(flags, "pbwire::REPEATED")
+			if field.Packed {
+				flags = append(flags, "pbwire::PACKED")
+			}
+			if field.Required {
+				flags = append(flags, "pbwire::REQUIRED")
+			}
+			expr := ""
+			if field.Message != "" {
+				expr = fmt.Sprintf("Some(pbwire::ChildPlan { full_name: %q, fields: %s::FIELDS, size: ::core::mem::size_of::<%s>() })",
+					childFull[field.Name], child, child)
+			}
+			row(field, kind, off, 0, count, 0, flags, expr)
+			continue
+		}
+		cs := 0
+		var flags []string
+		if field.Oneof != "" {
+			caseSlot, ok := slots["#"+field.Oneof]
+			if !ok {
+				caseSlot = p.add(unique(field.Oneof+"_case"), "u32", 4, 4)
+				slots["#"+field.Oneof] = caseSlot
+			}
+			cs = caseSlot
+			flags = append(flags, "pbwire::ONEOF")
+		}
+		off := p.add(unique(field.Name), slot, size, align)
+		slots[field.Name] = off
+		has := 0
+		// A pointer-shaped slot is absent when NULL (string/bytes/message), a
+		// oneof uses its case word; every other optional scalar needs the
+		// 4-byte has flag the codec writes.
+		pointer := field.Kind == protoreflect.StringKind || field.Kind == protoreflect.BytesKind ||
+			field.Kind == protoreflect.MessageKind || field.Kind == protoreflect.GroupKind
+		if field.Oneof == "" && (field.NeedsHas || field.Required) && !pointer {
+			has = p.add(unique("has_"+field.Name), "i32", 4, 4)
+		}
+		if field.Required {
+			flags = append(flags, "pbwire::REQUIRED")
+		}
+		expr := ""
+		if field.Message != "" {
+			expr = fmt.Sprintf("Some(pbwire::ChildPlan { full_name: %q, fields: %s::FIELDS, size: ::core::mem::size_of::<%s>() })",
+				childFull[field.Name], child, child)
+		}
+		row(field, kind, off, has, 0, cs, flags, expr)
+	}
+	return p, true
+}
+
+// rustFlatName is the mirror type name of a message: the struct's local name
+// plus Flat.
+func rustFlatName(local string) string {
+	segs := strings.Split(local, "_")
+	return segs[len(segs)-1] + "Flat"
+}
+
+// writeRustFlat emits one message's mirror, its FieldPlan table, the const
+// offset assertions that prove the table, and the FlatMessage impl.
+func writeRustFlat(b *strings.Builder, p *rustFlatPlan, full string) {
+	fmt.Fprintf(b, "/// %s as a flat native image: `Schema::in_place` hands this memory\n", full)
+	b.WriteString("/// to the C struct codec, so one call reads or writes it in place.\n")
+	b.WriteString("#[repr(C)]\n#[derive(Clone, Copy)]\n")
+	fmt.Fprintf(b, "pub struct %s {\n", p.name)
+	for _, s := range p.slots {
+		fmt.Fprintf(b, "    pub %s: %s,\n", rustName(s.name), s.typ)
+	}
+	b.WriteString("}\n\n")
+	fmt.Fprintf(b, "impl %s {\n", p.name)
+	b.WriteString("    /// Field plan rows: name, slot offset, kind, flags, has/count/oneof\n")
+	b.WriteString("    /// offsets, child image. Offsets are asserted below.\n")
+	// The `use` is scoped to the table: a proto message or enum named `Kind`
+	// generates its own type in an enclosing module, and the rows must not
+	// resolve to that one.
+	b.WriteString("    pub const FIELDS: &'static [pbwire::FieldPlan] = {\n")
+	b.WriteString("        use pbwire::Kind;\n")
+	b.WriteString("        &[\n")
+	for _, r := range p.rows {
+		flags := "0"
+		if len(r.flags) > 0 {
+			flags = strings.Join(r.flags, " | ")
+		}
+		fmt.Fprintf(b, "            pbwire::FieldPlan(%q, %d, Kind::%s, %s, %d, %d, %d, %s),\n",
+			r.name, r.offset, r.kind, flags, r.has, r.count, r.cs, orNone(r.child))
+	}
+	b.WriteString("        ]\n    };\n}\n\n")
+	for _, s := range p.slots {
+		fmt.Fprintf(b, "const _: () = assert!(::core::mem::offset_of!(%s, %s) == %d);\n",
+			p.name, rustName(s.name), s.offset)
+	}
+	fmt.Fprintf(b, "\nimpl ::core::default::Default for %s {\n    fn default() -> Self {\n", p.name)
+	b.WriteString("        // SAFETY: every slot is an integer, a raw pointer, or `PbwBytes`,\n")
+	b.WriteString("        // so an all-zero image is a valid (empty) message.\n")
+	b.WriteString("        unsafe { ::core::mem::zeroed() }\n    }\n}\n\n")
+	fmt.Fprintf(b, "unsafe impl pbwire::FlatMessage for %s {\n", p.name)
+	fmt.Fprintf(b, "    const FULL_NAME: &'static str = %q;\n", full)
+	fmt.Fprintf(b, "    fn fields() -> &'static [pbwire::FieldPlan] {\n        %s::FIELDS\n    }\n}\n\n", p.name)
+}
+
+func orNone(expr string) string {
+	if expr == "" {
+		return "None"
+	}
+	return expr
 }
