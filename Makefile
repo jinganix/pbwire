@@ -429,7 +429,8 @@ CFILES := include/*.h include/pbwire-protoc/*.h src/*.c src/*.h \
 	bindings/erlang/c_src_tests/*.c bindings/erlang/c_src_tests/*.h \
 	bindings/erlang/c_src_tests/stub/*.c bindings/erlang/c_src_tests/stub/*.h \
 	bindings/node/runtime/*.c bindings/objc/*.h bindings/objc/*.m \
-	bindings/objc/examples/*.m bindings/objc/tests/*.m bindings/objc/benchmarks/*.m
+	bindings/objc/examples/*.m bindings/objc/tests/*.m bindings/objc/benchmarks/*.m \
+	bindings/java/pbench/jni/*.c
 
 format:
 	clang-format -i $(CFILES)
@@ -757,6 +758,13 @@ r-test: r-bind
 java-bench:
 	./scripts/bench-run.sh --binding java -- ./bindings/java/benchmarks/bench.sh
 
+# Java pbench: the pure-Java codec against the C core through JNI, kept
+# runnable so the "should we use JNI?" decision can be re-priced from numbers
+# (bindings/java/pbench/README.md). Optional and not a gate: it needs a native
+# toolchain, while the shipped binding stays plain javac.
+pbench-java:
+	./bindings/java/pbench/pbench.sh
+
 ruby-bench: ruby-bind
 	RUBY=$(RUBY) ./scripts/bench-run.sh --binding ruby -- sh bindings/ruby/benchmarks/bench.sh
 
@@ -852,6 +860,7 @@ clean:
 	rm -f src/*.o corrupt_test.desc
 	rm -rf build codegen/build bench/gen bindings/go/benchmarks/gen build/doxygen \
 		bindings/java/benchmarks/gen bindings/java/benchmarks/out \
+		bindings/java/pbench/out \
 		bindings/node/benchmarks/gen bindings/ruby/benchmarks/gen \
 		bindings/ruby/lib/pbwire_ext.* bindings/objc/benchmarks/gen \
 		bindings/kotlin/out bindings/php/benchmarks/gen \
@@ -864,7 +873,7 @@ clean:
 	python-bind python-test python-bench difftest difftest-short conformance conformance-setup conformance-python \
 	conformance-ruby conformance-java conformance-lua conformance-r conformance-node ruby-bind java-test ruby-test node-test objc-test r-bind \
 	lua-bind lua-test lua-bench \
-	java-bench ruby-bench node-bench objc-bench go-bench \
+	java-bench ruby-bench node-bench objc-bench go-bench pbench-java \
 	kotlin-test php-test dart-test rust-test csharp-test \
 	kotlin-bench php-bench dart-bench rust-bench csharp-bench \
 	swift-test scala-test elixir-test zig-test fsharp-test clojure-test julia-test r-test \
