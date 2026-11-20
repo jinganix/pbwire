@@ -74,8 +74,18 @@ type Field struct {
 	Packed   bool // repeated packable numerics share one length run
 	Group    bool // proto2 group: start/end framing (Kind is KindMessage)
 	Oneof    bool // oneof member: presence via GetOneof, value always written
-	Sub      func() *Table
-	Foreign  *ForeignOps
+	// Fast and the four columns below are the cshim-shaped layout facts.
+	// Fast means the columns are valid and the engine may read/write the
+	// struct field directly instead of calling the closures. Zero Fast
+	// keeps the row on closures: offset 0 is a legal field offset (the
+	// first struct field), so it cannot double as "unset".
+	Fast    bool   // offset columns valid; direct struct access allowed
+	Off     uint32 // byte offset of the value (pointer slot for explicit rows)
+	Has     uint32 // byte offset of the presence pointer (explicit rows)
+	Count   uint32 // byte offset of the len word (string/slice rows)
+	Elem    uint32 // in-memory element size
+	Sub     func() *Table
+	Foreign *ForeignOps
 
 	GetI32    func(msg any) int32
 	SetI32    func(msg any, v int32)
@@ -249,6 +259,10 @@ type Table struct {
 	// encCap is the capacity the last encode needed: a size hint for the next
 	// one, kept on the table so generated models carry no codec state.
 	encCap atomic.Int64
+
+	// hasFast reports whether any row carries valid offset columns. The
+	// engine reads it once per message instead of scanning rows per field.
+	hasFast bool
 }
 
 // capHint reports the last successful encode size plus headroom, or 0 before
@@ -274,7 +288,14 @@ func NewTable(name string, fields []*Field) *Table {
 	for _, f := range fields {
 		byNum[f.Num] = f
 	}
-	return &Table{Name: name, Fields: fields, ByNum: byNum}
+	tb := &Table{Name: name, Fields: fields, ByNum: byNum}
+	for _, f := range fields {
+		if f.Fast {
+			tb.hasFast = true
+			break
+		}
+	}
+	return tb
 }
 
 // lookup returns the row for num or nil for an unknown field.
@@ -307,7 +328,17 @@ func EncodeTable(e *Encoder, msg any, t *Table, depth int) error {
 	if msg == nil {
 		return nil
 	}
+	base := fastBase(t, msg)
 	for _, f := range t.Fields {
+		if base != nil && f.Fast {
+			done, err := encodeFast(e, base, f, depth)
+			if err != nil {
+				return err
+			}
+			if done {
+				continue
+			}
+		}
 		if f.Repeated {
 			if err := encodeRepeated(e, msg, f, depth); err != nil {
 				return err
@@ -1091,7 +1122,7 @@ func decodeField(d *Decoder, a *Arena, t *Table, msg any, f *Field, num uint32, 
 		}
 		if f.Explicit {
 			f.SetOptI32(msg, int32(v))
-		} else {
+		} else if !storeFast(t, msg, f, uint64(int64(int32(v)))) {
 			f.SetI32(msg, int32(v))
 		}
 	case KindInt64:
@@ -1104,7 +1135,7 @@ func decodeField(d *Decoder, a *Arena, t *Table, msg any, f *Field, num uint32, 
 		}
 		if f.Explicit {
 			f.SetOptI64(msg, int64(v))
-		} else {
+		} else if !storeFast(t, msg, f, v) {
 			f.SetI64(msg, int64(v))
 		}
 	case KindUint32:
@@ -1117,7 +1148,7 @@ func decodeField(d *Decoder, a *Arena, t *Table, msg any, f *Field, num uint32, 
 		}
 		if f.Explicit {
 			f.SetOptU32(msg, uint32(v))
-		} else {
+		} else if !storeFast(t, msg, f, uint64(uint32(v))) {
 			f.SetU32(msg, uint32(v))
 		}
 	case KindUint64:
@@ -1130,7 +1161,7 @@ func decodeField(d *Decoder, a *Arena, t *Table, msg any, f *Field, num uint32, 
 		}
 		if f.Explicit {
 			f.SetOptU64(msg, v)
-		} else {
+		} else if !storeFast(t, msg, f, v) {
 			f.SetU64(msg, v)
 		}
 	case KindSint32:
@@ -1143,7 +1174,7 @@ func decodeField(d *Decoder, a *Arena, t *Table, msg any, f *Field, num uint32, 
 		}
 		if f.Explicit {
 			f.SetOptS32(msg, ZigZagDecode32(v))
-		} else {
+		} else if !storeFast(t, msg, f, uint64(int64(ZigZagDecode32(v)))) {
 			f.SetS32(msg, ZigZagDecode32(v))
 		}
 	case KindSint64:
@@ -1156,7 +1187,7 @@ func decodeField(d *Decoder, a *Arena, t *Table, msg any, f *Field, num uint32, 
 		}
 		if f.Explicit {
 			f.SetOptS64(msg, ZigZagDecode64(v))
-		} else {
+		} else if !storeFast(t, msg, f, uint64(ZigZagDecode64(v))) {
 			f.SetS64(msg, ZigZagDecode64(v))
 		}
 	case KindFixed32:
@@ -1169,7 +1200,7 @@ func decodeField(d *Decoder, a *Arena, t *Table, msg any, f *Field, num uint32, 
 		}
 		if f.Explicit {
 			f.SetOptFx32(msg, v)
-		} else {
+		} else if !storeFast(t, msg, f, uint64(v)) {
 			f.SetFx32(msg, v)
 		}
 	case KindFixed64:
@@ -1182,7 +1213,7 @@ func decodeField(d *Decoder, a *Arena, t *Table, msg any, f *Field, num uint32, 
 		}
 		if f.Explicit {
 			f.SetOptFx64(msg, v)
-		} else {
+		} else if !storeFast(t, msg, f, v) {
 			f.SetFx64(msg, v)
 		}
 	case KindSfixed32:
@@ -1195,7 +1226,7 @@ func decodeField(d *Decoder, a *Arena, t *Table, msg any, f *Field, num uint32, 
 		}
 		if f.Explicit {
 			f.SetOptSfx32(msg, int32(v))
-		} else {
+		} else if !storeFast(t, msg, f, uint64(int64(int32(v)))) {
 			f.SetSfx32(msg, int32(v))
 		}
 	case KindSfixed64:
@@ -1208,7 +1239,7 @@ func decodeField(d *Decoder, a *Arena, t *Table, msg any, f *Field, num uint32, 
 		}
 		if f.Explicit {
 			f.SetOptSfx64(msg, int64(v))
-		} else {
+		} else if !storeFast(t, msg, f, v) {
 			f.SetSfx64(msg, int64(v))
 		}
 	case KindFloat:
@@ -1221,7 +1252,7 @@ func decodeField(d *Decoder, a *Arena, t *Table, msg any, f *Field, num uint32, 
 		}
 		if f.Explicit {
 			f.SetOptF32(msg, math.Float32frombits(v))
-		} else {
+		} else if !storeFast(t, msg, f, uint64(v)) {
 			f.SetF32(msg, math.Float32frombits(v))
 		}
 	case KindDouble:
@@ -1234,7 +1265,7 @@ func decodeField(d *Decoder, a *Arena, t *Table, msg any, f *Field, num uint32, 
 		}
 		if f.Explicit {
 			f.SetOptF64(msg, math.Float64frombits(v))
-		} else {
+		} else if !storeFast(t, msg, f, v) {
 			f.SetF64(msg, math.Float64frombits(v))
 		}
 	case KindBool:
@@ -1247,7 +1278,7 @@ func decodeField(d *Decoder, a *Arena, t *Table, msg any, f *Field, num uint32, 
 		}
 		if f.Explicit {
 			f.SetOptBool(msg, v != 0)
-		} else {
+		} else if !storeFast(t, msg, f, v) {
 			f.SetBool(msg, v != 0)
 		}
 	case KindString:
@@ -1286,7 +1317,7 @@ func decodeField(d *Decoder, a *Arena, t *Table, msg any, f *Field, num uint32, 
 		}
 		if f.Explicit {
 			f.SetOptEnum(msg, int32(v))
-		} else {
+		} else if !storeFast(t, msg, f, uint64(int64(int32(v)))) {
 			f.SetEnum(msg, int32(v))
 		}
 	case KindMessage:

@@ -7,10 +7,13 @@
 package codec_test
 
 import (
+	"bytes"
 	"math"
 	"os"
+	"reflect"
 	"sort"
 	"testing"
+	"unsafe"
 
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protodesc"
@@ -1699,4 +1702,120 @@ func TestWirePrimitives(t *testing.T) {
 	}
 	a.Reset()
 	_ = s1
+}
+
+// ---------------------------------------------------------------------------
+// Offset fast-path parity: the same rows run through closures and through
+// Off/Has/Count/Elem layout facts must produce identical bytes and structs.
+// ---------------------------------------------------------------------------
+
+type offProbe struct {
+	A int32
+	B int64
+	S string
+	N []int32
+	O *int32
+}
+
+var (
+	offA = uint32(unsafe.Offsetof(offProbe{}.A))
+	offB = uint32(unsafe.Offsetof(offProbe{}.B))
+	offS = uint32(unsafe.Offsetof(offProbe{}.S))
+	offN = uint32(unsafe.Offsetof(offProbe{}.N))
+	offO = uint32(unsafe.Offsetof(offProbe{}.O))
+	offW = uint32(unsafe.Sizeof(uintptr(0)))
+)
+
+func offProbeFields(fast bool) []*codec.Field {
+	mk := func(f *codec.Field) *codec.Field {
+		if fast {
+			f.Fast = true
+		}
+		return f
+	}
+	return []*codec.Field{
+		mk(&codec.Field{Num: 1, Wire: codec.WireVarint, Kind: codec.KindInt32,
+			Off: offA, Elem: 4,
+			GetI32: func(m any) int32 { return m.(*offProbe).A },
+			SetI32: func(m any, v int32) { m.(*offProbe).A = v }}),
+		mk(&codec.Field{Num: 2, Wire: codec.WireVarint, Kind: codec.KindInt64,
+			Off: offB, Elem: 8,
+			GetI64: func(m any) int64 { return m.(*offProbe).B },
+			SetI64: func(m any, v int64) { m.(*offProbe).B = v }}),
+		mk(&codec.Field{Num: 3, Wire: codec.WireLen, Kind: codec.KindString,
+			Off: offS, Count: offS + offW, Elem: uint32(unsafe.Sizeof("")),
+			GetStr: func(m any) string { return m.(*offProbe).S },
+			SetStr: func(m any, v string) { m.(*offProbe).S = v }}),
+		mk(&codec.Field{Num: 4, Wire: codec.WireVarint, Kind: codec.KindInt32,
+			Repeated: true, Packed: true,
+			Off: offN, Count: offN + offW, Elem: 4,
+			GetRepI32: func(m any) []int32 { return m.(*offProbe).N },
+			AppendI32: func(m any, v int32) { m.(*offProbe).N = append(m.(*offProbe).N, v) }}),
+		mk(&codec.Field{Num: 5, Wire: codec.WireVarint, Kind: codec.KindInt32,
+			Explicit: true,
+			Off:      offO, Has: offO, Elem: 4,
+			GetOptI32: func(m any) *int32 { return m.(*offProbe).O },
+			SetOptI32: func(m any, v int32) { tmp := v; m.(*offProbe).O = &tmp }}),
+	}
+}
+
+func encodeProbe(t *codec.Table, m *offProbe) []byte {
+	e := &codec.Encoder{Buf: make([]byte, 0, 64)}
+	if err := codec.EncodeTable(e, m, t, 0); err != nil {
+		panic(err)
+	}
+	return e.Result()
+}
+
+func decodeProbe(t *codec.Table, w []byte) *offProbe {
+	m := &offProbe{}
+	d := &codec.Decoder{Buf: w}
+	a := &codec.Arena{}
+	if err := codec.DecodeTable(d, a, m, t, 0); err != nil {
+		panic(err)
+	}
+	return m
+}
+
+func TestOffsetFastPathParity(t *testing.T) {
+	slow := codec.NewTable("probe", offProbeFields(false))
+	fast := codec.NewTable("probe", offProbeFields(true))
+
+	v := int32(-7)
+	cases := map[string]*offProbe{
+		"zero":   {},
+		"full":   {A: -1, B: math.MinInt64, S: "hi", N: []int32{1, 2, 3}, O: &v},
+		"nilopt": {A: 5, S: "x"},
+	}
+	for name, want := range cases {
+		encSlow, encFast := encodeProbe(slow, want), encodeProbe(fast, want)
+		if !bytes.Equal(encSlow, encFast) {
+			t.Fatalf("%s: encode differs %x vs %x", name, encSlow, encFast)
+		}
+		decSlow, decFast := decodeProbe(slow, encSlow), decodeProbe(fast, encFast)
+		if !reflect.DeepEqual(decSlow, decFast) {
+			t.Fatalf("%s: decode differs %+v vs %+v", name, decSlow, decFast)
+		}
+		if !reflect.DeepEqual(decFast, want) {
+			t.Fatalf("%s: round trip lost data: %+v", name, decFast)
+		}
+	}
+
+	// Unknown fields are dropped on the struct path either way.
+	withUnknown := append(encodeProbe(slow, cases["full"]),
+		0x98, 0x06, 0x07) // field 99, varint 7
+	if !reflect.DeepEqual(decodeProbe(slow, withUnknown), decodeProbe(fast, withUnknown)) {
+		t.Fatal("unknown: decode differs")
+	}
+
+	// A misaligned 64-bit offset must fall back to closures, not fault.
+	mis := codec.NewTable("probe", offProbeFields(true))
+	mis.Fields[1].Off = 1
+	want := cases["full"]
+	if enc := encodeProbe(mis, want); !bytes.Equal(enc, encodeProbe(slow, want)) {
+		t.Fatal("misaligned: encode differs")
+	}
+	if dec := decodeProbe(mis, encodeProbe(slow, want)); !reflect.DeepEqual(dec, want) {
+		t.Fatalf("misaligned: decode lost data: %+v", dec)
+	}
 }
