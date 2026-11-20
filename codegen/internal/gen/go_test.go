@@ -94,16 +94,17 @@ func goFileMap(t *testing.T, files []File) map[string]string {
 	return out
 }
 
-// Default: one thin model file per .proto. Structs, getters, field rows, and
-// one-line forwarding to codec; no descriptor, no plan gate, no encoder state.
+// Default: one thin model file per .proto. Structs, getters and Reset; the
+// field rows live in meta, the Marshal/Unmarshal forwarding in the cshim
+// wiring file. No descriptor, no plan gate, no encoder state.
 func TestGoFilesDefault(t *testing.T) {
 	files, err := goFiles(goTestFile(), Options{Lang: "go", Model: true, Register: true, Registry: true})
 	if err != nil {
 		t.Fatal(err)
 	}
 	got := goFileMap(t, files)
-	if len(got) != 2 {
-		t.Fatalf("want model+meta files, got %v", keys(got))
+	if len(got) != 3 {
+		t.Fatalf("want model+meta+cshim files, got %v", keys(got))
 	}
 	models, ok := got["t_pbwire.go"]
 	if !ok {
@@ -113,14 +114,34 @@ func TestGoFilesDefault(t *testing.T) {
 		t.Error("model file must not embed the descriptor")
 	}
 	for _, want := range []string{
-		`"pbwire/pbench/dyngo/codec"`,
-		"func (m *M) Marshal() ([]byte, error)",
-		"codec.EncodeModel(m, MMeta)",
-		"func (m *M) Unmarshal(wire []byte) error",
-		"codec.DecodeModel(wire, m, MMeta)",
+		"func (m *M) Reset()",
+		"func (m *M) GetV() int32",
 	} {
 		if !strings.Contains(models, want) {
 			t.Errorf("model file misses %q", want)
+		}
+	}
+	for _, bad := range []string{"pbwire/pbench/dyngo/codec", "EncodeModel", "DecodeModel", "codec.NewTable"} {
+		if strings.Contains(models, bad) {
+			t.Errorf("model file must stay data-only, found %q", bad)
+		}
+	}
+	cshim, ok := got["t_pbwire_cshim.go"]
+	if !ok {
+		t.Fatalf("missing cshim file, got %v", keys(got))
+	}
+	for _, want := range []string{
+		`"pbwire/runtime"`,
+		`func (m *M) Marshal() ([]byte, error)`,
+		"EncodeRaw(unsafe.Pointer(m))",
+		"func (m *M) Unmarshal(wire []byte) error",
+		"DecodeRaw(unsafe.Pointer(&raw), wire)",
+		"MCshimFixup(&raw, c)",
+		"MCshimCopy(&out, &raw, &a)",
+		"func CshimRegistry() []layout.Msg",
+	} {
+		if !strings.Contains(cshim, want) {
+			t.Errorf("cshim file misses %q", want)
 		}
 	}
 	meta, ok := got["t_pbwire_meta.go"]
@@ -221,24 +242,37 @@ func TestGoCodecBranches(t *testing.T) {
 	if !ok {
 		t.Fatalf("missing meta file, got %v", keys(got))
 	}
-	// The model side: types, getters, forwarding. No table, no wire logic.
+	// The model side: types, getters, Reset. No table, no wire logic,
+	// no Marshal bodies.
 	for _, want := range []string{
 		"type B struct",
 		"func (m *B) GetReq() int32",
 		"Opt      *string",
-		"func (m *B) Marshal() ([]byte, error)",
-		"codec.EncodeModel(m, BMeta)",
-		"codec.DecodeModel(wire, m, BMeta)",
+		"func (m *B) Reset()",
 		"type isB_kind interface",
 	} {
 		if !strings.Contains(models, want) {
 			t.Errorf("branch model file misses %q", want)
 		}
 	}
-	for _, bad := range []string{"codec.NewTable", "GetI32:", "SetStr:", "Sub: func()"} {
+	for _, bad := range []string{"codec.NewTable", "GetI32:", "SetStr:", "Sub: func()", "EncodeRaw"} {
 		if strings.Contains(models, bad) {
-			t.Errorf("branch model file must stay free of field tables: %q", bad)
+			t.Errorf("branch model file must stay free of tables and runtime calls: %q", bad)
 		}
+	}
+	// The branch fixture carries a skipped field, so the whole file stays
+	// on the table engine: dyngo forwarding in the model, no cshim file.
+	for _, want := range []string{
+		"func (m *B) Marshal() ([]byte, error)",
+		"codec.EncodeModel(m, BMeta)",
+		"codec.DecodeModel(wire, m, BMeta)",
+	} {
+		if !strings.Contains(models, want) {
+			t.Errorf("skipped file must stay on the table engine, misses %q", want)
+		}
+	}
+	if _, ok := got["b_pbwire_cshim.go"]; ok {
+		t.Error("skipped file must not emit a cshim file")
 	}
 	// The meta side: every field-fact and closure shape.
 	for _, want := range []string{
@@ -306,6 +340,49 @@ func TestGoCodecBranches(t *testing.T) {
 	}
 }
 
+// A fully drivable file wires the model onto the runtime: the model keeps
+// Reset, the cshim file carries the codec, Marshal/Unmarshal, fixup and
+// copy. Uses the skip-free branch fixture end to end through goFiles.
+func TestGoFilesCshimWiring(t *testing.T) {
+	files, err := goFiles(goCshimFile(), Options{
+		Lang: "go", Model: true, Register: true, Registry: true,
+		Mappings: map[string]string{"xdep.proto": "pbwire/tests/gen/xdep"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := goFileMap(t, files)
+	if len(got) != 3 {
+		t.Fatalf("want model+meta+cshim files, got %v", keys(got))
+	}
+	cshim, ok := got["b_pbwire_cshim.go"]
+	if !ok {
+		t.Fatalf("missing cshim file, got %v", keys(got))
+	}
+	for _, want := range []string{
+		`"pbwire/runtime"`,
+		"func (m *B) Marshal() ([]byte, error)",
+		"EncodeRaw(unsafe.Pointer(m))",
+		"func (m *B) Unmarshal(wire []byte) error",
+		"DecodeRaw(unsafe.Pointer(&raw), wire)",
+		"BCshimFixup(&raw, c)",
+		"BCshimCopy(&out, &raw, &a)",
+		"// BCshimFixup wraps staged oneof members",
+		"Ogrp: 0",
+		"sync.OnceValue",
+	} {
+		if !strings.Contains(cshim, want) {
+			t.Errorf("cshim wiring file misses %q", want)
+		}
+	}
+	models := got["b_pbwire.go"]
+	for _, bad := range []string{"EncodeModel", "DecodeModel", "EncodeRaw", "pbwire/pbench/dyngo/codec"} {
+		if strings.Contains(models, bad) {
+			t.Errorf("drivable model file must forward from the cshim file, found %q", bad)
+		}
+	}
+}
+
 // The cshim layout file: one registry for the file plus a typed copy
 // function per message. Same branch shapes as the table emitter, plus
 // bytes and groups which cshim must also drive. No skipped fields: a
@@ -364,7 +441,7 @@ func TestGoCshimBranches(t *testing.T) {
 		"func CshimRegistry() []layout.Msg",
 		"Full: \"b.B\"",
 		"Size: uintptr(unsafe.Sizeof(B{}))",
-		`"pbwire/pbench/cshim/layout"`,
+		`"pbwire/runtime/layout"`,
 		`"unsafe"`,
 		// scalar row carries its struct offset.
 		"Offset: uint32(unsafe.Offsetof(B{}.Req))",
@@ -376,11 +453,11 @@ func TestGoCshimBranches(t *testing.T) {
 		// nested message row points at the registry index.
 		"Sub: 0",
 		// oneof members carry the wrapper itab.
-		"Itab: layout.ItabOf((*B_N)(nil))",
+		"Itab: layout.ItabFor[isB_kind]((*B_N)(nil))",
 		// group rows frame instead of length-prefixing.
 		"Group: true",
-		// map rides as a repeated entry message.
-		"B_ByKeyEntry",
+		// repeated strings copy element-wise through the arena.
+		"dst.Tags = make([]string, 0, len(src.Tags))",
 		// foreign rows name their message, never a row index.
 		"Foreign: true",
 		"FType: \"xdep.DepMsg\"",
@@ -404,5 +481,53 @@ func TestGoCshimSkipFails(t *testing.T) {
 	opt := Options{Mappings: map[string]string{"xdep.proto": "pbwire/tests/gen/xdep"}}
 	if err := writeGoCshim(&b, goBranchFile(), opt); err == nil {
 		t.Fatal("cshim emission over a skipped field must fail")
+	}
+}
+
+// The runtime owns the engine: the emitted layout imports
+// pbwire/runtime/layout, members of different oneofs stage into different
+// slots, and every fixed width maps onto a layout kind that exists.
+func TestGoCshimRuntimeImport(t *testing.T) {
+	f := &model.File{
+		Path:    "o.proto",
+		Package: "o",
+		Prefix:  "O",
+		Messages: []model.Message{
+			{
+				Name: "M",
+				Full: "o.M",
+				Fields: []model.Field{
+					{Name: "n", Lower: "n", Pascal: "N", Number: 1, Kind: protoreflect.Int32Kind, Oneof: "a", NeedsHas: true},
+					{Name: "m", Lower: "m", Pascal: "M", Number: 2, Kind: protoreflect.StringKind, Oneof: "b", NeedsHas: true},
+					{Name: "fx", Lower: "fx", Pascal: "Fx", Number: 3, Kind: protoreflect.Fixed64Kind},
+					{Name: "sfx", Lower: "sfx", Pascal: "Sfx", Number: 4, Kind: protoreflect.Sfixed32Kind},
+				},
+			},
+		},
+	}
+	var b strings.Builder
+	if err := writeGoCshim(&b, f, Options{}); err != nil {
+		t.Fatal(err)
+	}
+	out := b.String()
+	if strings.Contains(out, "pbench/cshim/layout") {
+		t.Error("layout must import the packaged runtime, not the pbench arm")
+	}
+	if !strings.Contains(out, `"pbwire/runtime/layout"`) {
+		t.Error("layout misses the runtime import")
+	}
+	strip := func(s string) string {
+		s = strings.ReplaceAll(s, " ", "")
+		return strings.ReplaceAll(s, "\t", "")
+	}
+	flat := strip(out)
+	if strings.Count(flat, "Ogrp:0") != 1 || strings.Count(flat, "Ogrp:1") != 1 {
+		t.Error("oneof members of different oneofs must stage into different slots")
+	}
+	if strings.Contains(flat, "Explicit:true") {
+		t.Error("oneof presence lives in the wrapper, never in an explicit row")
+	}
+	if strings.Contains(out, "KindFx64") || strings.Contains(out, "KindSfx32") {
+		t.Error("fixed widths must map onto layout kinds that exist")
 	}
 }

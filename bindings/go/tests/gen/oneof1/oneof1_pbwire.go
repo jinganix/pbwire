@@ -4,9 +4,7 @@
 
 package oneof1
 
-import (
-	"pbwire/pbench/dyngo/codec"
-)
+import ()
 
 // spectest.Oneof1.Inner
 type Oneof1_Inner struct {
@@ -25,14 +23,6 @@ func (m *Oneof1_Inner) Reset() {
 		return
 	}
 	*m = Oneof1_Inner{}
-}
-
-func (m *Oneof1_Inner) Marshal() ([]byte, error) {
-	return codec.EncodeModel(m, Oneof1_InnerMeta)
-}
-
-func (m *Oneof1_Inner) Unmarshal(wire []byte) error {
-	return codec.DecodeModel(wire, m, Oneof1_InnerMeta)
 }
 
 // spectest.Oneof1
@@ -95,12 +85,4 @@ func (m *Oneof1) Reset() {
 		return
 	}
 	*m = Oneof1{}
-}
-
-func (m *Oneof1) Marshal() ([]byte, error) {
-	return codec.EncodeModel(m, Oneof1Meta)
-}
-
-func (m *Oneof1) Unmarshal(wire []byte) error {
-	return codec.DecodeModel(wire, m, Oneof1Meta)
 }

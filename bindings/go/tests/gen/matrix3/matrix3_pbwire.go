@@ -6,7 +6,6 @@ package matrix3
 
 import (
 	"fmt"
-	"pbwire/pbench/dyngo/codec"
 )
 
 // structtest.Color3
@@ -56,14 +55,6 @@ func (m *Inner3) Reset() {
 		return
 	}
 	*m = Inner3{}
-}
-
-func (m *Inner3) Marshal() ([]byte, error) {
-	return codec.EncodeModel(m, Inner3Meta)
-}
-
-func (m *Inner3) Unmarshal(wire []byte) error {
-	return codec.DecodeModel(wire, m, Inner3Meta)
 }
 
 // structtest.Scalars3
@@ -251,12 +242,4 @@ func (m *Scalars3) Reset() {
 		return
 	}
 	*m = Scalars3{}
-}
-
-func (m *Scalars3) Marshal() ([]byte, error) {
-	return codec.EncodeModel(m, Scalars3Meta)
-}
-
-func (m *Scalars3) Unmarshal(wire []byte) error {
-	return codec.DecodeModel(wire, m, Scalars3Meta)
 }
