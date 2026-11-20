@@ -73,7 +73,7 @@ tier (1.38x at 136 B, 1.90x at 74 KB) and shim encode is above prost at 136 B
 (1.10x), level at 174 B (1.01x), and below it at 2469 B (0.80x) and 74913 B
 (0.84x). The encode loss is the shared C struct codec's repeated-element path,
 not the Rust arm: `make bench-c` measures the same codec at 1132.2 MB/s on
-74913 B, while the tree row's `encode_to` reaches 1713.7 MB/s there, and prost's
+74913 B, while the tree row's `encode_to` reaches 1600.9 MB/s there, and prost's
 generated writer is straight-line code with no per-element reserve.
 
 It is not "replace the shipped fast path": `pbwire-rust-tree` times a *prebuilt*

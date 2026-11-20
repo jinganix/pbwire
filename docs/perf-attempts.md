@@ -1157,3 +1157,29 @@ the shim's 1128.0, while the shipped tree row's `encode_to` reaches 1713.7 on
 the same payload in the same run. The codec's repeated-element paths reserve
 per element (`sb_reserve` per string/array item), and prost's generated writer
 has the same loop as straight-line code with no reserve at all.
+
+Stage 6 A/B on the two below-baseline cells (2469 B and 74913 B shim encode;
+prost is ahead 0.80x / 0.84x). One candidate: compile `pbw_struct.c` with `-O3`
+instead of `-O2` (`bindings/rust/build.rs`), two release builds from the same
+tree (`CARGO_TARGET_DIR=/tmp/ab-base` and `/tmp/ab-cand`), alternating runs:
+
+| round | large base | large `-O3` | xlarge base | xlarge `-O3` |
+|---|---|---|---|---|
+| 1 | 1068.8 | 1181.1 (+10%) | 1158.1 | 1229.0 (+6%) |
+| 2 | 1126.9 | 1172.5 (+4%) | 1153.9 | 1211.9 (+5%) |
+| 3 (loaded box) | 1094.8 | 883.9 | 578.9 | 1162.4 |
+
+Bytes stayed identical (the bench's flat-image parity check passed in every
+run). **Rejected**, two reasons: the third round flips sign on a loaded box, so
+the change does not win in *every* round; and, decisively, every other layout
+arm compiles the same `bindings/c/runtime/pbw_struct.c` at `-O2` (`bindings/c`
+`make bench-c`, `bindings/dart/build.sh`, `bindings/julia/build.sh`), so an
+`-O3` Rust row would no longer time the same codec build the sibling shim rows
+publish. The cell is the shared struct encoder's per-element reserve path
+(`sb_reserve` per string/array item); fixing it means changing a runtime file
+outside this plan's list and re-measuring C/Go/Dart/Julia/C#/Swift, so it stays
+recorded here rather than patched under plan 08.
+
+A second candidate was considered and not built: pre-sizing the plan's encode
+buffer. The measured loop already reuses the buffer (one growth on the first
+call, outside the timed steady state), so it cannot win a round.
