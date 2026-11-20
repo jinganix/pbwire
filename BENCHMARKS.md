@@ -189,7 +189,7 @@ own README. Dart ran once `dart pub global activate protoc_plugin` provided
 | F# (facade over the C# runtime) | `make fsharp-bench` (`bindings/fsharp/benchmarks`) | Google.Protobuf C# generated code from the same `matrix3.proto` | all 4 | 3.36x ✅ / 1.49x ✅ `tree` (`shim` 0.12x / 0.10x) |
 | Clojure (Java runtime + interop) | `make clojure-bench` (`bindings/clojure/benchmarks`) | `protobuf-java` generated code from the same `matrix3.proto` | all 4 | 1.26x ✅ / 1.70x ✅ `core` (0.68x at 136 B; `tree` map API 0.01x) |
 | Julia (`ccall` FFI) | `make julia-bench` (`bindings/julia/benchmarks`) | JuliaIO/ProtoBuf.jl 1.3.0 generated code from the same `matrix3.proto` | all 4 | 96.20x ✅ / 1.11x ✅ `shim` (one C-side layout read per op; prebuilt `tree` handle 137.75x / 1.08x; 136 B shim decode 0.96x) |
-| R (C extension, named lists) | `make r-bench` (`bindings/r/benchmarks`) | RProtoBuf 0.4.28 on the same `matrix3.proto` | all 4 | 49.89x ✅ / 50.28x ✅ |
+| R (C extension, named lists) | `make r-bench` (`bindings/r/benchmarks`) | RProtoBuf 0.4.28 on the same `matrix3.proto` | all 4 | 50.42x ✅ / 45.27x ✅ `shim` (native-object named list, one `.Call`, the walk in C; prebuilt builder `tree` 400.04x / 106.29x) |
 
 "vs baseline" is encode / decode throughput relative to the best baseline on
 the largest case the binding runs. Where a binding has several baselines the
@@ -224,7 +224,7 @@ timer.
 | Python | three |
 | PHP | deferred: overlaps the official runtime's pure-PHP implementation already in the baseline |
 | Ruby | two arms: `tree` (prebuilt `Message` handle, shipped), `shim` (the C extension walks the generated model in one call), `core` deferred: no pure-Ruby precedent, no native-less deployment |
-| R | deferred: interpreted per-field loops are orders of magnitude off |
+| R | two arms: `tree` (prebuilt builder handle, shipped), `shim` (one `.Call` walks the named list in C; the walk was already there, only the per-call type lookup is gone), `core` deferred: interpreted per-field loops are orders of magnitude off |
 
 Every binding with a
 wired baseline is ahead of it on the xlarge encode column (Java 1.09x, Rust
@@ -296,7 +296,7 @@ payload, the boundary cost and the baseline all differ.
 | F# | P/Invoke over the C# runtime | 74913 B | 1617.7 (3.36x ✅) `tree`; `shim` 58.3 (0.12x ❌) | 734.1 (1.49x ✅) `tree`; `shim` 48.9 (0.10x ❌) |
 | Clojure | the Java runtime + interop | 74913 B | 974.8 (1.12x ✅) | 718.2 (1.66x ✅) |
 | Julia | `dlopen` + `ccall` | 74913 B | 1653.0 (137.75x ✅) `tree`; native-object `shim` 1154.4 (96.20x ✅) | 761.6 (1.08x ✅) `tree`; `shim` 783.6 (1.11x ✅) |
-| R | C extension, named lists | 74913 B | 134.7 (49.89x ✅) | 125.7 (50.28x ✅) |
+| R | C extension, named lists | 74913 B | 1089.6 (400.04x ✅) `tree`; native-object `shim` 137.3 (50.42x ✅) | 288.1 (106.29x ✅) `tree`; `shim` 122.7 (45.27x ✅) |
 
 Read it as: the in-process dynamic core sets the pace (1.38x the C++
 generated code at this size), a binding that links the core in (Ruby, Rust, Zig,
@@ -1593,16 +1593,16 @@ next `decode_in`/`reset!` on that context.
 
 ![R (C extension, named lists) vs RProtoBuf — MB/s by tier](docs/charts/bench-r-c-extension-named-lists-vs-rprotobuf.svg)
 
-| payload | op | pbwire-r (MB/s, x RProtoBuf) | RProtoBuf (MB/s) |
-|---|---|---|---|
-| 136 B | encode | 94.1 (36.19x ✅) | 2.6 |
-| 136 B | decode | 86.1 (34.44x ✅) | 2.5 |
-| 174 B | encode | 108.4 (38.71x ✅) | 2.8 |
-| 174 B | decode | 97.5 (34.82x ✅) | 2.8 |
-| 2469 B | encode | 153.4 (59.00x ✅) | 2.6 |
-| 2469 B | decode | 133.5 (47.68x ✅) | 2.8 |
-| 74913 B | encode | 134.7 (49.89x ✅) | 2.7 |
-| 74913 B | decode | 125.7 (50.28x ✅) | 2.5 |
+| payload | op | pbwire-r-tree (MB/s, x RProtoBuf) | pbwire-r-shim (MB/s, x RProtoBuf) | RProtoBuf (MB/s) |
+|---|---|---|---|---|
+| 136 B | encode | 303.9 (115.27x ✅) | 94.4 (35.82x ✅) | 2.6 |
+| 136 B | decode | 96.5 (36.36x ✅) | 91.3 (34.41x ✅) | 2.7 |
+| 174 B | encode | 350.6 (120.99x ✅) | 74.0 (25.55x ✅) | 2.9 |
+| 174 B | decode | 115.6 (39.47x ✅) | 99.1 (33.85x ✅) | 2.9 |
+| 2469 B | encode | 1091.3 (424.64x ✅) | 137.9 (53.67x ✅) | 2.6 |
+| 2469 B | decode | 468.1 (162.40x ✅) | 134.2 (46.56x ✅) | 2.9 |
+| 74913 B | encode | 1089.6 (400.04x ✅) | 137.3 (50.42x ✅) | 2.7 |
+| 74913 B | decode | 288.1 (106.29x ✅) | 122.7 (45.27x ✅) | 2.7 |
 
 Same class as Lua/Ruby: a C extension over the core (named lists in/out
 through one transient tree per call, statically linked), schema from
@@ -1613,21 +1613,30 @@ Rcpp) shares the session; the registered-table hit is ~100 ns. Bytes are
 gated equal on all four tiers before timing (RProtoBuf takes the `u64` max as
 its decimal string — R numerics cannot spell it — everything else is the same
 R values pbwire encodes), and the materialized decode is gated identical too,
-plus a full decode round trip. Like Lua, the one-shot
-list path pays a conversion per field while the builder path (`pbwire_message`
-once, `encode` per send, 1403.5 MB/s on the xlarge tier) runs at the core's
-speed; the table above times the one-shot path both sides. Encode is no
-contest at any tier: setting 3000 nested messages field by field through S4
-dispatch costs RProtoBuf ~27 ms where the C core walks the list once. Decode
-is compared as the same user-visible task: `RProtoBuf::read` parses in C++ and materializes
-fields lazily on `$`, while `pbwire_decode` builds the full named-list tree
-eagerly, so the baseline side reads every field into the same plain-list shape
-(the table's `decode` row). A bare `read()` alone is a few times faster than
-`pbwire_decode`, but it hands back a Message, not R data; once both sides
-produce plain lists, pbwire leads 67x at xlarge. Two R spellings to know: `INT32_MIN`
-reads back
-as `NA` (it *is* `NA_INTEGER`), and doubles past 2^63 clamp to the int/uint
-limits — both documented in the binding README.
+plus a full decode round trip.
+
+Two rows, named by the arm (`bindings/r/pbench/README.md`):
+
+- **`pbwire-r-shim`** is the task an R application runs: the generated model's
+  named list in, wire bytes out. One `.Call` hands the list to C, which walks it
+  and fills the tree inside C; the decode is the same one call in reverse and
+  returns the fully materialized named list. The type is resolved once into a
+  schema-owned message number, so the call does not look a name up per message.
+- **`pbwire-r-tree`** is a prebuilt builder handle (`pbwire_message` once,
+  `pbwire_message_set` once, `encode` per send; `pbwire_parse_binary` for wire
+  -> tree). It skips the list walk and the named-list materialization, which is
+  why it is 3.5-10x the list row — not a different codec.
+
+Encode is no contest at any tier: setting 3000 nested messages field by field
+through S4 dispatch costs RProtoBuf ~27 ms where the C core walks the list once.
+Decode is compared as the same user-visible task: `RProtoBuf::read` parses in C++
+and materializes fields lazily on `$`, while `pbwire_decode` builds the full
+named-list tree eagerly, so the baseline side reads every field into the same
+plain-list shape (the table's `decode` rows). A bare `read()` alone is a few
+times faster than `pbwire_decode`, but it hands back a Message, not R data; once
+both sides produce plain lists, the list path leads 45x at xlarge. Two R spellings
+to know: `INT32_MIN` reads back as `NA` (it *is* `NA_INTEGER`), and doubles past
+2^63 clamp to the int/uint limits — both documented in the binding README.
 
 ## Embedded: nanopb, same message, both sides
 

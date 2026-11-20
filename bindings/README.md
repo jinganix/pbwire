@@ -170,6 +170,12 @@ generated model read by one C-extension entry (`pbwire-ruby-shim`); `core` is
 deferred (`shortcut: no pure-Ruby core, reopen when a native-less Ruby target
 appears`).
 
+R has two: `tree` is the prebuilt builder handle (`pbwire-r-tree`), `shim` is
+the named list in and wire bytes out through one `.Call` with the walk inside C
+(`pbwire-r-shim`, the generated model's `Type_encode(list)` shape); `core` is
+deferred (`shortcut: no pure-R core, reopen when a native-less R target
+appears`).
+
 A binding states which of the three it has, including the two-mechanism
 bindings and the deferred ports with the reason: the status table in
 [BENCHMARKS.md](../BENCHMARKS.md#bindings-vs-their-baselines), with the per-arm

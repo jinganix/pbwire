@@ -79,6 +79,7 @@ to equal bytes and match `protoc --encode` byte for byte (verified on the
 | `pbwire_load_raw(bytes)` | same from a raw vector holding the set |
 | `pbwire_encode(schema, "pkg.Name", list)` | wire bytes as a raw vector |
 | `pbwire_decode(schema, "pkg.Name", wire)` | a named list; unknown fields are skipped, so a re-encode is canonical rather than byte-exact |
+| `pbwire_type_number(schema, "pkg.Name")` | the message's number, resolved once and kept by the schema; `pbwire_encode_number`/`pbwire_decode_number` take it instead of the name string, so a hot loop skips the per-call type lookup (same C walk, the generated model's `Type_encode(list)` shape) |
 | `pbwire_roundtrip(schema, "pkg.Name", wire)` | gateway passthrough: decode and re-encode in the core, unknown fields survive |
 | `pbwire_message(schema, "pkg.Name")` | an empty builder message (anchors the schema until collected) |
 | `pbwire_message_set(msg, list)` | merge a list into the builder (returns the builder; repeated fields replace) |
@@ -148,7 +149,21 @@ varints the reference C++ testee truncates identically); only JSPB answers
 [`BENCHMARKS.md`](../../BENCHMARKS.md) against RProtoBuf when it is installed
 (any load failure skips the baseline columns instead of failing the run).
 The gate is tier size (the bytes are canonical), byte equality with the
-baseline, plus a full-field expectation check.
+baseline, plus a full-field expectation check. Two rows, named by the arm they
+time: `pbwire-r-shim` is the named list in and wire bytes out through one
+`.Call` (the walk happens in C), `pbwire-r-tree` is a prebuilt builder handle.
+Neither replaces the other: a list is what R code passes around, a builder is
+what a hot loop keeps.
+
+## pbench: the named-list row and the builder row
+
+[`pbench/`](pbench/README.md) holds the issue-41 arms, the RProtoBuf gate and the
+interleaved comparison loop (`Rscript pbench/gate.R`,
+`Rscript pbench/compare.R`). The arm table, the provisional numbers and the
+verdict live in [`pbench/README.md`](pbench/README.md); `make r-bench` is the
+formal run. `core` (a pure-R port) is deferred: a per-field interpreter loop is
+orders of magnitude off and no native-less R target exists
+(`shortcut: no pure-R core, reopen when a native-less R target appears`).
 
 ## Layout
 
@@ -160,6 +175,7 @@ baseline, plus a full-field expectation check.
 | example | [`examples/roundtrip.R`](examples/roundtrip.R) |
 | self-check | [`tests/test_pbwire.R`](tests/test_pbwire.R) |
 | benchmark | [`benchmarks/bench.R`](benchmarks/bench.R) | the four standard tiers against RProtoBuf |
+| pbench | [`pbench/`](pbench/README.md) | the `tree`/`shim` arms, the gate and the interleaved comparison |
 | conformance | [`conformance/testee.R`](conformance/testee.R) | binary, JSON and text through the official runner |
 | fixture | [`tests/data/sample.proto`](tests/data/sample.proto) and the checked-in `sample.desc` |
 
