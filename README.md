@@ -191,7 +191,7 @@ The one-row summary is here; the detail is there.
 |---|---|---|---|
 | [C](bindings/c/) | static link, struct codec | 1.29x (xlarge) / 2.02x (xlarge) | [protoc C++](https://github.com/protocolbuffers/protobuf) |
 | [C++](bindings/cpp/) | same C runtime, same header | 1.29x (xlarge) / 2.02x (xlarge)¹ | [protoc C++](https://github.com/protocolbuffers/protobuf) |
-| [Python](bindings/python/) | CPython extension | 6.87x (xlarge) / 1.19x (xlarge) (64x via `encode(parsed)`) | [google.protobuf (upb)](https://pypi.org/project/protobuf/) |
+| [Python](bindings/python/) | CPython extension | 6.87x (xlarge, `encode(dict)`) / 3.69x (xlarge, `to_dict`) (64x via `encode(parsed)`, data already in pbwire) | [google.protobuf (upb)](https://pypi.org/project/protobuf/) |
 | [Ruby](bindings/ruby/) | C extension, linked | 1.35x (small) / 1.86x (large) | [google-protobuf gem](https://rubygems.org/gems/google-protobuf) |
 | [Java](bindings/java/) | pure-Java codec, no native code | 1.23x (medium) / 1.95x (xlarge) | [protobuf-java](https://github.com/protocolbuffers/protobuf/tree/main/java) |
 | [Kotlin](bindings/kotlin/) | Java runtime + DSL | 1.13x (medium) / 1.68x (xlarge) | [protobuf-kotlin](https://github.com/protocolbuffers/protobuf/tree/main/java/kotlin) |
@@ -203,7 +203,7 @@ The one-row summary is here; the detail is there.
 | [C#](bindings/csharp/) | P/Invoke | 3.19x (medium) / 2.08x (medium) | [Google.Protobuf](https://www.nuget.org/packages/Google.Protobuf) + [protobuf-net](https://github.com/protobuf-net/protobuf-net) |
 | [Go](bindings/go/) | thin generated models, one cgo crossing per op | 1.73x (xlarge) / 1.47x (xlarge) | [google.golang.org/protobuf](https://pkg.go.dev/google.golang.org/protobuf) |
 | [Erlang](bindings/erlang/) | NIF | 3.91x (xlarge) / 2.47x (medium) | [gpb](https://github.com/tomas-abrahamsson/gpb) |
-| [Lua](bindings/lua/) | C module, tables + builder | 8.93x (xlarge, builder) / 1.66x (small, tables) | [lua-protobuf](https://github.com/starwing/lua-protobuf) |
+| [Lua](bindings/lua/) | C module, tables + builder | 1.09x (xlarge, tables) / 1.42x (xlarge, tables) (8.93x via builder encode, data already in pbwire) | [lua-protobuf](https://github.com/starwing/lua-protobuf) |
 | [Swift](bindings/swift/) | SwiftPM, static link | 5.51x (xlarge) / 4.24x (medium) | [swift-protobuf](https://github.com/apple/swift-protobuf) |
 | [Scala](bindings/scala/) | Java runtime + DSL | 1.48x (medium) / 1.21x (xlarge) | [ScalaPB](https://github.com/scalapb/ScalaPB) |
 | [Elixir](bindings/elixir/) | NIF (shared core) | 3.06x (small) / 1.90x (xlarge) | [elixir-protobuf](https://github.com/elixir-protobuf/protobuf) |
@@ -214,6 +214,10 @@ The one-row summary is here; the detail is there.
 | [R](bindings/r/) | C extension, named lists | 59.0x (large) / 50.3x (xlarge) | [RProtoBuf](https://github.com/eddelbuettel/rprotobuf) |
 
 ¹ C++ has no separate bench; same engine as the C struct codec. Best columns take the best ratio across the four tiers for encode/decode separately, tier in parentheses (Apple M4 Pro, `protoc 36.2`); tiers and absolute MB/s are in [BENCHMARKS.md](BENCHMARKS.md).
+
+Header ratios quote the native-object row (host data in, host data out). The
+`tree` row further down is the same codec with the tree already built: a proxy
+or transcoder task, not an application's encode.
 
 ## Comparison with generated code, `DynamicMessage` and upb
 
