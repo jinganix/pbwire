@@ -122,3 +122,27 @@ tree to get there. The gap to the handle is the shared struct codec's encode
 path (it writes proto3 implicit scalars unconditionally and reserves per
 repeated element), a C runtime question that moves every layout row at once —
 recorded in `docs/perf-attempts.md`, not patched under this plan.
+
+## Formal rows (Stage 5)
+
+`make swift-bench` records `results/bench-swift-<stamp>.{log,json}` and prints
+both rows per tier plus the apple/swift-protobuf baseline
+(`benchmarks/baseline`): `pbwire-swift-tree` (the prebuilt handle) and
+`pbwire-swift-shim` (the flat mirror), same harness, same payload, same bytes.
+The run below is `results/bench-swift-20261120T213641Z.json` (Apple M4 Pro,
+arm64). MB/s over wire bytes:
+
+| tier | `tree` enc | `shim` enc | swift-protobuf enc | `tree` dec | `shim` dec | swift-protobuf dec |
+|---|---|---|---|---|---|---|
+| 136 B | 1137.6 | 1021.1 | 437.1 | 923.3 | 757.6 | 247.0 |
+| 174 B | 1189.6 | 983.7 | 324.4 | 827.8 | 708.5 | 196.0 |
+| 2469 B | 1498.6 | 1037.4 | 268.2 | 682.3 | 511.8 | 197.5 |
+| 74913 B | 1763.7 | 941.2 | 279.6 | 591.1 | 584.6 | 228.4 |
+
+Against swift-protobuf: shim encode 2.34x / 3.03x / 3.87x / 3.37x and shim
+decode 3.07x / 3.61x / 2.59x / 2.56x; the tree row is 2.60x / 3.67x / 5.59x /
+6.31x on encode and 3.74x / 4.22x / 3.38x / 3.01x on decode.
+
+Stage 6 (optimization) is a recorded no-op: no published Swift cell is below
+its baseline (both rows beat swift-protobuf at every tier, see above), so no
+A/B round was run and the attempts ledger gains no entry.
