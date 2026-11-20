@@ -1163,8 +1163,11 @@ pub fn InPlace(comptime T: type, comptime full_name: []const u8, comptime plans:
         pub fn decodeInPlace(self: *Self, wire: []const u8, image: *T) !void {
             @memset(std.mem.asBytes(image), 0);
             var arena = self.arena;
-            try check(c.pbw_struct_codec_decode(self.codec, dataPtr(wire), wire.len, &arena, @ptrCast(image)));
+            const status = c.pbw_struct_codec_decode(self.codec, dataPtr(wire), wire.len, &arena, @ptrCast(image));
+            // Keep the arena even on failure: C created it before parsing, and
+            // a later decode reuses (and resets) it.
             self.arena = arena;
+            try check(status);
         }
     };
 }
