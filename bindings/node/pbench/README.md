@@ -76,3 +76,24 @@ the per-field assembly at every tier), but the addon still pays one N-API
 property read or write per field (~60-70 ns) where jspb and protobufjs pay a
 few ns in their own heap. That is why every tree and shim cell sits below both
 baselines while the prebuilt handle row still beats them.
+
+## Verdict
+
+**Keep the handle path as the runtime; the shim arm stays the native-object
+path and a re-runnable candidate.** The shim replaces the JS per-field assembly
+(it is 1.17x at 136 B and 1.05x at 74 KB) but not the `Message` tree, and it
+does not close the gap to the official runtimes: each field of the
+native-object task crosses N-API once (an object property read on encode, an
+object property write on decode) at ~60-70 ns, against jspb's and protobufjs's
+per-field cost inside their own heap (~5 ns). One downcall per op already
+removes what can be removed; Stage 6 records the two boundary changes that were
+tried and why they do not close it. Publishing both rows (Stage 5) keeps the
+codec number and the native-object number visible instead of quoting one for the
+other.
+
+It is not (a) because "replace the harness path" cannot mean replacing the
+binding's shipped fast path: a prebuilt `Message` encodes 74 KB in ~50 µs and
+decodes it in ~60 µs, 15-30x faster than either native-object row, and anyone
+who re-encodes the same message keeps that path. It is not (c) because there is
+no payload-size crossover: the shim is below both baselines at every tier, small
+and xlarge alike.

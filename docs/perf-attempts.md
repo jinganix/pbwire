@@ -1048,3 +1048,11 @@ The addon's object walk costs one N-API property read (encode) or write
 (decode) per field, ~60-70 ns, against ~5 ns for protobufjs or jspb writing
 into its own heap. The prebuilt `Message` handle stays the fastest path for
 data that is already in pbwire (74 KB encode ~50 µs, decode ~60 µs).
+
+Verdict: keep the prebuilt `Message` handle path as the runtime's fast path and
+keep the shim as the binding's native-object path and a re-runnable arm. The
+shim replaces the JS-side per-field assembly (1.05x-1.17x) but not the tree:
+re-encoding a built message (74 KB in ~50 µs) stays 30x cheaper than building a
+native object, and replacing that path with the shim would slow every user down.
+No payload-size split applies -- the shim is below jspb and protobufjs at 136 B
+as well as at 74913 B.
