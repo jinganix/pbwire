@@ -232,6 +232,10 @@ jobs:
           if [ -n "$out" ]; then echo "$out"; exit 1; fi
       - name: cgo dynamic binding tests
         run: make go-test
+      - name: ASan probe of the concurrent model path
+        run: |
+          cd bindings/go
+          go test -asan -count=1 -run TestModelConcurrentUse -v ./tests/ 2>&1 | tail -60
 
   ruby:
     name: Ruby binding
