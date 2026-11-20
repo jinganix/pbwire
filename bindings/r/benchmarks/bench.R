@@ -3,6 +3,13 @@
 # x0 / x1 / x100 / x3000). Against RProtoBuf when it is installed and loads
 # the same schema; otherwise the baseline columns print "-".
 #
+# Two pbwire rows, named by the arm they time: `pbwire-r-shim` is the native
+# object of an R application (a named list in, wire bytes out; one .Call, the
+# walk in C) and `pbwire-r-tree` is the prebuilt builder handle (one
+# `pbwire_message` + `pbwire_message_set` before the timer, then
+# `pbwire_message_encode`; `pbwire_parse_binary` decodes straight into a
+# builder tree). See pbench/README.md.
+#
 # Both sides must produce identical bytes before anything is timed. Like the
 # other harnesses it calibrates from the floor until one pass takes
 # 0.25 s, warms up, then reports the best of 3 passes.
@@ -167,31 +174,41 @@ for (c in cases) {
   ec <- calibrate(function() bench_encode(tbl), floor)
   dc <- calibrate(function() bench_decode(wire), floor)
   # Builder hot path: built once outside timing, so encode() is one core
-  # walk plus one buffer malloc.
+  # walk plus one buffer malloc. Decoding straight into a builder tree is one
+  # .Call too (no named-list materialization in between).
   built <- pbwire_message(schema, MSG)
   pbwire_msg_set(built, tbl)
   stopifnot(identical(pbwire_msg_encode(built), wire))
+  stopifnot(identical(pbwire_msg_encode(pbwire_parse_binary(schema, MSG, wire)),
+                      wire))
   mc <- calibrate(function() pbwire_msg_encode(built), floor)
+  tc <- calibrate(function() pbwire_parse_binary(schema, MSG, wire), floor)
   ens <- best(function() bench_encode(tbl), ec) * 1e9
   dns <- best(function() bench_decode(wire), dc) * 1e9
   mns <- best(function() pbwire_msg_encode(built), mc) * 1e9
+  tns <- best(function() pbwire_parse_binary(schema, MSG, wire), tc) * 1e9
   embps <- length(wire) / ens * 1000
   dmbps <- length(wire) / dns * 1000
   mmbps <- length(wire) / mns * 1000
+  tmbps <- length(wire) / tns * 1000
+  # Rows are named by the arm they time (BENCHMARKS.md "Output format"):
+  # `pbwire-r-shim` is the named-list task (a list in, wire out, the whole walk
+  # in C), `pbwire-r-tree` the prebuilt builder handle.
   cat(sprintf("%s: %d bytes, %d iterations (repeat field x%d)\n",
               name, length(wire), ec, repeats))
   cat("  impl      op           ns/op       MB/s\n")
-  cat(sprintf("  pbwire    encode    %10.1f %10.1f\n", ens, embps))
-  cat(sprintf("  pbwire    encode_msg%10.1f %10.1f\n", mns, mmbps))
-  cat(sprintf("  pbwire    decode    %10.1f %10.1f\n", dns, dmbps))
+  cat(sprintf("  pbwire-r-shim encode %10.1f %10.1f\n", ens, embps))
+  cat(sprintf("  pbwire-r-tree encode %10.1f %10.1f\n", mns, mmbps))
+  cat(sprintf("  pbwire-r-shim decode %10.1f %10.1f\n", dns, dmbps))
+  cat(sprintf("  pbwire-r-tree decode %10.1f %10.1f\n", tns, tmbps))
   if (has_pb) {
     be <- best(function() pb_encode(tbl), ec) * 1e9
     bd <- best(function() pb_decode(wire), dc) * 1e9
-    cat(sprintf("  base      encode    %10.1f %10.1f\n", be,
+    cat(sprintf("  RProtoBuf encode    %10.1f %10.1f\n", be,
                 length(wire) / be * 1000))
-    cat(sprintf("  base      decode    %10.1f %10.1f\n", bd,
+    cat(sprintf("  RProtoBuf decode    %10.1f %10.1f\n", bd,
                 length(wire) / bd * 1000))
-    cat(sprintf("  -- vs baseline: encode %.2fx, encode_msg %.2fx, decode %.2fx\n",
-                be / ens, be / mns, bd / dns))
+    cat(sprintf("  -- vs RProtoBuf: shim encode %.2fx, tree encode %.2fx, shim decode %.2fx, tree decode %.2fx\n",
+                be / ens, be / mns, bd / dns, bd / tns))
   }
 }
