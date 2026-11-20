@@ -38,7 +38,7 @@ From `bindings/swift` (macOS, Swift 6.x; `build/libpbwire.a` comes from
 or plain SwiftPM (no dependencies to fetch, works offline):
 
 ```sh
-swift test            # self-check, 13 tests
+swift test            # self-check, 25 tests
 swift run Roundtrip   # example
 swift run -c release Bench   # the four standard tiers, pbwire-swift only
 ```
@@ -113,10 +113,10 @@ one thread, like the C core.
 
 | Piece | Path | Role |
 |---|---|---|
-| runtime | `Sources/CPbwire/` (C header re-export), `Sources/Pbwire/Pbwire.swift` | the `CPbwire` module shim and the `Schema`/`Message` wrapper |
+| runtime | `Sources/CPbwire/` (C header re-export + the layout reader + `bindings/c/runtime/pbw_struct.c`), `Sources/Pbwire/Pbwire.swift` | the `CPbwire` module shim, the `Schema`/`Message` wrapper and the flat-mirror API (`ReprMessage`, `FieldPlan`, `InPlace`, `ReprStorage`) |
 | example | `Sources/Roundtrip/main.swift` | build, encode, decode, assert, print |
-| tests | `Tests/PbwireTests/PbwireTests.swift` | XCTest self-check: descriptor load, full round trip, pinned bytes, presence, repeated fields, errors, lifetime loop, JSON/text, deterministic encoding, delimited framing, explicit limits |
-| benchmark | `Sources/Bench/main.swift`, `benchmarks/baseline/` | the four standard tiers vs apple/swift-protobuf (`benchmarks/bench.sh`) |
+| tests | `Tests/PbwireTests/PbwireTests.swift`, `GeneratedTest.swift`, `InPlaceTest.swift` | XCTest self-check: descriptor load, full round trip, pinned bytes, presence, repeated fields, errors, lifetime loop, JSON/text, deterministic encoding, delimited framing, explicit limits; the generated models; and the mirror gate (bytes, fields, re-encode, layout rows) |
+| benchmark | `Sources/Bench/main.swift`, `Sources/Pbench/` (arms, payload, provisional compare), `benchmarks/baseline/` | the four standard tiers with both rows (`pbwire-swift-tree`, `pbwire-swift-shim`) vs apple/swift-protobuf (`benchmarks/bench.sh`) |
 | fixture | `tests/data/probe.proto` + committed `probe.desc`, `tests/data/matrix3.desc`, `tests/data/maptest.desc` (maps for the deterministic row) | regenerate with `protoc -Itests/data --descriptor_set_out=tests/data/probe.desc tests/data/probe.proto` (`build.sh` also regenerates `matrix3.desc`/`maptest.desc` from `bindings/c/tests/data` when protoc exists) |
 | conformance | `conformance/README.md` | how the official suite covers this binding (via the C testee) |
 
@@ -139,27 +139,33 @@ allocate per call. Copied from the run on Apple M4 Pro / Swift 6.4.2 /
 swift-protobuf 1.39.0 (per-run noise is a few percent); higher is better,
 MB/s over wire bytes:
 
-| payload | op | pbwire-swift (MB/s, x swift-protobuf) | swift-protobuf (MB/s) |
-|---|---|---|---|
-| 136 B | encode | 1148.0 (2.5x) | 452.5 |
-| 136 B | decode | 974.2 (3.9x) | 251.1 |
-| 174 B | encode | 1199.0 (3.6x) | 329.0 |
-| 174 B | decode | 873.0 (4.4x) | 197.9 |
-| 2469 B | encode | 1339.3 (5.0x) | 268.1 |
-| 2469 B | decode | 662.5 (3.3x) | 201.3 |
-| 74913 B | encode | 1543.2 (5.5x) | 283.0 |
-| 74913 B | decode | 623.9 (2.7x) | 232.1 |
+| payload | op | pbwire-swift-tree (MB/s, x swift-protobuf) | pbwire-swift-shim (MB/s, x swift-protobuf) | swift-protobuf (MB/s) |
+|---|---|---|---|---|
+| 136 B | encode | 1137.6 (2.6x) | 1021.1 (2.3x) | 437.1 |
+| 136 B | decode | 923.3 (3.7x) | 757.6 (3.1x) | 247.0 |
+| 174 B | encode | 1189.6 (3.7x) | 983.7 (3.0x) | 324.4 |
+| 174 B | decode | 827.8 (4.2x) | 708.5 (3.6x) | 196.0 |
+| 2469 B | encode | 1498.6 (5.6x) | 1037.4 (3.9x) | 268.2 |
+| 2469 B | decode | 682.3 (3.5x) | 511.8 (2.6x) | 197.5 |
+| 74913 B | encode | 1763.7 (6.3x) | 941.2 (3.4x) | 279.6 |
+| 74913 B | decode | 591.1 (2.6x) | 584.6 (2.6x) | 228.4 |
 
-The wrapper adds one Swift object per call and no copy: `encode` hands the
-malloc'd buffer the C encoder already filled to `Data` with a free
-deallocator, and `decode` wraps the decoder's arena in one `Message`.
+`pbwire-swift-tree` times a prebuilt `Message` handle; the wrapper adds one
+Swift object per call and no copy (`encode` hands the malloc'd buffer the C
+encoder already filled to `Data` with a free deallocator, `decode` wraps the
+decoder's arena in one `Message`). `pbwire-swift-shim` times the generated
+`@frozen` `<Message>Repr` mirror with one call per op into the C layout codec —
+see [`pbench/README.md`](pbench/README.md) for the mechanism, the gate and why
+the prebuilt handle stays the faster row.
 
 ## Deliberately skipped
 
-- **No protoc plugin or generated code.** Swift is a compiled language, but
+- **No generated code on the shipped path.** Swift is a compiled language, but
   this binding follows the dynamic path the C ABI and the Objective-C binding
   already take: a `FileDescriptorSet` is the runtime schema, so there is no
-  second schema source to keep in sync and no build step to run.
+  second schema source to keep in sync and no build step to run. The emitter's
+  `@frozen` mirrors are the pbench `shim` arm (and the tests' models); the
+  quick start above never needs them.
 - **No conformance testee.** The official suite drives the C core through
   `conformance/testee.c`; a Swift testee would test the same core code, and
   the wrapper adds no wire behavior of its own. See `conformance/README.md`.
@@ -167,6 +173,29 @@ deallocator, and `decode` wraps the decoder's arena in one `Message`.
   `pbw_timestamp_*` / `pbw_service_*` entry points are one import away
   (`import CPbwire`); the Objective-C binding already covers them, and no
   caller here asked for them yet.
+
+## In-place mirrors (the pbench `shim` arm)
+
+Beside each message the emitter also writes a `@frozen public struct
+<Message>Repr: Pbwire.ReprMessage`: fixed-width slots in a known order, no
+references, and a `fields: [Pbwire.FieldPlan]` table whose offsets come from
+`MemoryLayout<Repr>.offset(of:)`. One C call per op encodes or decodes it:
+
+```swift
+let inPlace = try schema.inPlace(Structtest_Scalars3Repr.self)  // once
+var image = Structtest_Scalars3Repr()
+fill(&image)                                     // pointers borrow your storage
+let wire = try inPlace.encodeInPlace(image)      // one downcall
+var back = Structtest_Scalars3Repr()
+try inPlace.decodeInPlace(wire, into: &back)     // one downcall, arena-backed
+```
+
+A decoded mirror borrows the type's arena, so it stays readable until that
+type's next decode; `Pbwire.ReprStorage` owns the buffers a hand-built mirror
+points at. A `string` slot is NUL-terminated UTF-8 (use `bytes` for arbitrary
+bytes), `bytes` is the core's inline `pbw_bytes_t`. Encoder and decoder both
+live in C (`Sources/CPbwire/shim.c` + `bindings/c/runtime/pbw_struct.c`,
+compiled into the package), so nothing walks fields across the boundary.
 
 ## Generated models
 

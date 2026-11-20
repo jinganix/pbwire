@@ -182,7 +182,7 @@ own README. Dart ran once `dart pub global activate protoc_plugin` provided
 | Rust (static link) | `make rust-bench` (`bindings/rust/benchmarks`) | prost (fastest) + rust-protobuf 3.x generated code | all 4 | 1.17x ✅ / 1.88x ✅ `tree` (native-object `shim` 0.84x / 1.90x, one C-side struct-codec call per op; `shim` encode is above prost at 136 B and level at 174 B) |
 | C# (P/Invoke) | `make csharp-bench` (`bindings/csharp/benchmarks`) | Google.Protobuf C# generated code (fastest) + protobuf-net | all 4 | 3.46x ✅ / 1.48x ✅ `tree` (native-object `shim` 0.12x / 0.10x) |
 | Lua (C module, tables) | `make lua-bench` (`bindings/lua/benchmarks`) | `lua-protobuf` 0.6.0 | all 4 | 1.09x ✅ / 1.42x ✅ (8.93x via builder encode — data already in pbwire) |
-| Swift (SwiftPM, static link) | `make swift-bench` (`bindings/swift/benchmarks`) | `apple/swift-protobuf` 1.39.0 generated code from the same `matrix3.proto` | all 4 | 5.43x ✅ / 2.57x ✅ |
+| Swift (SwiftPM, static link) | `make swift-bench` (`bindings/swift/benchmarks`) | `apple/swift-protobuf` 1.39.0 generated code from the same `matrix3.proto` | all 4 | 6.31x ✅ / 2.59x ✅ `tree` (native-object `shim` 3.37x / 2.56x, one C-side layout-codec call per op) |
 | Scala (Java runtime + DSL) | `make scala-bench` (`bindings/scala/benchmarks`) | ScalaPB 0.11.18 generated code from the same `matrix3.proto` | all 4 | 1.45x ✅ / 1.37x ✅ `tree` (`core` case class 0.33x / 0.30x) |
 | Elixir (NIF over the shared core) | `make elixir-bench` (`bindings/elixir/benchmarks`) | `elixir-protobuf` 0.17.1 structs from the same `matrix3.proto` | all 4 | 2.56x ✅ / 1.90x ✅ |
 | Zig (static link) | `make zig-bench` (`bindings/zig/benchmarks`, `-Doptimize=ReleaseFast`) | Arwalk/zig-protobuf 7.0.0 generated code from the same `matrix3.proto` | all 4 | 1.87x ✅ / 2.65x ✅ |
@@ -219,7 +219,7 @@ timer.
 | Dart | three arms: `tree` (prebuilt `Message` handle, shipped), `shim` (the C reader walks the generated flat `Struct` in one call), `core` is plan 18 |
 | Julia | three arms: `tree` (prebuilt `Message` handle, shipped), `shim` (the C reader walks the generated layout struct in one call), `core` is plan 19 |
 | Rust | three arms: `tree` (prebuilt `Message` handle, shipped), `shim` (the C reader walks the generated `#[repr(C)]` mirror in one call), `core` is plan 20 |
-| Swift | three |
+| Swift | three arms: `tree` (prebuilt `Message` handle, shipped), `shim` (the C reader walks the generated `@frozen` mirror in one call), `core` is plan 21 |
 | Zig | three |
 | Python | three |
 | PHP | deferred: overlaps the official runtime's pure-PHP implementation already in the baseline |
@@ -289,7 +289,7 @@ payload, the boundary cost and the baseline all differ.
 | C# | P/Invoke | 74913 B | 1689.7 (3.46x ✅) `tree`; native-object `shim` 59.1 (0.12x ❌) | 750.7 (1.48x ✅) `tree`; `shim` 51.5 (0.10x ❌) |
 | Lua | C module, tables | 74913 B | 196.9 (1.09x ✅) | 124.7 (1.42x ✅) |
 | Erlang | NIF (`pbwire`) | 74913 B | 483.3 (3.91x ✅) | 356.5 (1.60x ✅) |
-| Swift | static link (SwiftPM) | 74913 B | 1467.8 (5.43x ✅) | 542.4 (2.57x ✅) |
+| Swift | static link (SwiftPM) | 74913 B | 1763.7 (6.31x ✅) `tree`; native-object `shim` 941.2 (3.37x ✅) | 591.1 (2.59x ✅) `tree`; `shim` 584.6 (2.56x ✅) |
 | Scala | the Java runtime + DSL | 74913 B | 950.9 (1.19x ✅) | 750.5 (1.21x ✅) |
 | Elixir | NIF (Hex `:pbwire`, same core as Erlang) | 74913 B | 152.6 (2.56x ✅) | 105.7 (1.90x ✅) |
 | Zig | static link | 74913 B | 1493.9 (1.87x ✅) | 691.6 (2.65x ✅) |
@@ -313,9 +313,9 @@ and Node's `shim` row -- the native object in and out -- is 0.12x / 0.13x of
 protobufjs: the boundary, not the codec, is what that row measures, PHP's 1.14x /
 1.35x is over the official C extension (the pure-PHP runtime trails it by
 ~373x / ~135x) — see their sections. Swift, Scala, F#, Zig and Julia join
-the ~0.92-1.5 GB/s encode club on xlarge (Swift 5.43x and Julia's 137.75x
-`tree` / 96.20x `shim` encode are baseline effects: swift-protobuf and
-ProtoBuf.jl encode much slower than their own decode).
+the ~0.92-1.5 GB/s encode club on xlarge (Swift 6.31x `tree` / 3.37x `shim` and
+Julia's 137.75x `tree` / 96.20x `shim` encode are baseline effects:
+swift-protobuf and ProtoBuf.jl encode much slower than their own decode).
 
 ## Linux (docker): the same harnesses, one container away
 
@@ -1359,16 +1359,16 @@ competitor rather than a decision.
 
 ![Swift (SwiftPM, static link) vs apple/swift-protobuf — MB/s by tier](docs/charts/bench-swift-swiftpm-static-link-vs-apple-swift-protobuf.svg)
 
-| payload | op | pbwire-swift (MB/s, x swift-protobuf) | swift-protobuf (MB/s) |
-|---|---|---|---|
-| 136 B | encode | 1055.0 (2.49x ✅) | 422.9 |
-| 136 B | decode | 896.5 (3.92x ✅) | 228.8 |
-| 174 B | encode | 1085.1 (3.43x ✅) | 316.4 |
-| 174 B | decode | 799.5 (4.29x ✅) | 186.2 |
-| 2469 B | encode | 1275.1 (4.97x ✅) | 256.8 |
-| 2469 B | decode | 649.7 (3.51x ✅) | 185.1 |
-| 74913 B | encode | 1467.8 (5.43x ✅) | 270.1 |
-| 74913 B | decode | 542.4 (2.57x ✅) | 210.9 |
+| payload | op | pbwire-swift-tree (MB/s, x swift-protobuf) | pbwire-swift-shim (MB/s, x swift-protobuf) | swift-protobuf (MB/s) |
+|---|---|---|---|---|
+| 136 B | encode | 1137.6 (2.60x ✅) | 1021.1 (2.34x ✅) | 437.1 |
+| 136 B | decode | 923.3 (3.74x ✅) | 757.6 (3.07x ✅) | 247.0 |
+| 174 B | encode | 1189.6 (3.67x ✅) | 983.7 (3.03x ✅) | 324.4 |
+| 174 B | decode | 827.8 (4.22x ✅) | 708.5 (3.61x ✅) | 196.0 |
+| 2469 B | encode | 1498.6 (5.59x ✅) | 1037.4 (3.87x ✅) | 268.2 |
+| 2469 B | decode | 682.3 (3.45x ✅) | 511.8 (2.59x ✅) | 197.5 |
+| 74913 B | encode | 1763.7 (6.31x ✅) | 941.2 (3.37x ✅) | 279.6 |
+| 74913 B | decode | 591.1 (2.59x ✅) | 584.6 (2.56x ✅) | 228.4 |
 
 FFI host like Objective-C/Dart: `FileDescriptorSet` at run time, C ABI calls
 only, no wire code, no plugin. SwiftPM links `build/libpbwire.a` via
@@ -1376,6 +1376,14 @@ only, no wire code, no plugin. SwiftPM links `build/libpbwire.a` via
 separate package using swift-protobuf's own build plugin, so no generated
 code is checked in. The gate is byte parity per tier plus the pinned
 `matrix3.bin` oracle.
+
+`pbwire-swift-tree` times a prebuilt `Message` handle's `encode()`/`decode()`;
+`pbwire-swift-shim` times the generated `@frozen <Message>Repr` mirror with one
+`encodeInPlace`/`decodeInPlace` call into `bindings/c/runtime/pbw_struct.c`
+(compiled into the package's `CPbwire` target), so no field and no ARC crosses
+per field. The handle stays the fastest row because it is already one call into
+the core's own encoder; the shim answers the native-object question at 2.3-3.9x
+the baseline.
 
 ### Scala (Java runtime + DSL) vs ScalaPB
 

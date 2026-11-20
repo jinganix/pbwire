@@ -160,6 +160,11 @@ generated `#[repr(C)]` `<Message>Flat` read in place by the C struct codec
 compiled into the crate (`pbwire-rust-shim`, one call per op), `core` waits on
 plan 20.
 
+Swift has all three: `tree` is the prebuilt `Message` handle, `shim` is the
+generated `@frozen` `<Message>Repr` mirror (no references, so no ARC per field)
+read in place by `bindings/swift/Sources/CPbwire/shim.c` over the same C struct
+codec (`pbwire-swift-shim`, one call per op), `core` waits on plan 21.
+
 A binding states which of the three it has, including the two-mechanism
 bindings and the deferred ports with the reason: the status table in
 [BENCHMARKS.md](../BENCHMARKS.md#bindings-vs-their-baselines), with the per-arm
