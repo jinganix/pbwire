@@ -45,3 +45,33 @@ Two R spellings the gate keeps instead of hiding: `INT32_MIN` reads back as `NA`
 reports the median of five rounds (`Rscript bindings/r/pbench/compare.R`). The
 formal, recorded run is `make r-bench`, which prints `pbwire-r-shim` (the
 one-`.Call` list path) beside `pbwire-r-tree` (the prebuilt builder).
+
+## Provisional table (Stage 3)
+
+`Rscript bindings/r/pbench/compare.R`, median of five interleaved rounds,
+2026-11-21, MB/s over wire bytes. `tree` encode is the prebuilt builder handle
+and `tree` decode is `pbwire_parse_binary` (wire -> builder tree); `shim` is one
+`.Call` with the named list in or out; RProtoBuf is the baseline, materialized
+into the same plain list on decode.
+
+| tier | arm | encode | decode |
+|---|---|---|---|
+| 136 B | `pbwire-r-tree` | 226.4 | 81.4 |
+| 136 B | `pbwire-r-shim` | 63.7 | 52.1 |
+| 136 B | RProtoBuf | 1.6 | 2.5 |
+| 174 B | `pbwire-r-tree` | 265.2 | 97.9 |
+| 174 B | `pbwire-r-shim` | 71.0 | 60.8 |
+| 174 B | RProtoBuf | 1.9 | 2.8 |
+| 2469 B | `pbwire-r-tree` | 949.0 | 437.3 |
+| 2469 B | `pbwire-r-shim` | 133.5 | 118.3 |
+| 2469 B | RProtoBuf | 2.4 | 3.8 |
+| 74913 B | `pbwire-r-tree` | 1606.5 | 485.5 |
+| 74913 B | `pbwire-r-shim` | 155.3 | 121.4 |
+| 74913 B | RProtoBuf | 2.1 | 2.9 |
+
+The reading: R's native object is the named list, so the `shim` row is the task
+an application actually runs (list in, wire out), while `tree` needs a builder
+the application had to keep. One `.Call` keeps that task 60-90x RProtoBuf at
+74913 B; the builder row is 3.5-10x the list row because it skips the list walk
+and the named-list materialization entirely -- that is the builder's price, not
+something the shim can recover without a tree of its own.

@@ -57,6 +57,27 @@ ok(back$pick_num == 9L && is.null(back$pick_str), "oneof round trip")
 ## Re-encoding a decoded list gives the same bytes.
 ok(identical(pbwire_encode(schema, msg, back), wire), "decode/encode is byte-exact")
 
+## Message numbers: the type resolved once, then one .Call per op (the
+## generated model's `Type_encode(list)` / `Type_decode(wire)` shape).
+number <- pbwire_type_number(schema, msg)
+ok(is.integer(number) && number >= 1L, "type_number returns a slot")
+ok(identical(pbwire_type_number(schema, msg), number),
+   "type_number is stable for one type")
+ok(identical(pbwire_encode_number(schema, number, full), wire),
+   "encode_number matches encode")
+ok(identical(pbwire_decode_number(schema, number, wire), back),
+   "decode_number matches decode")
+ok(isTRUE(tryCatch({
+  pbwire_encode_number(schema, number + 100L, full)
+  FALSE
+}, error = function(e) grepl("no message number", conditionMessage(e)))),
+   "encode_number rejects an unknown slot")
+ok(isTRUE(tryCatch({
+  pbwire_type_number(schema, "no.such.Message")
+  FALSE
+}, error = function(e) grepl("no message", conditionMessage(e)))),
+   "type_number rejects an unknown type")
+
 ## Absent fields decode as NULL / empty lists.
 sparse <- pbwire_decode(schema, msg, pbwire_encode(schema, msg, list(name = "bob")))
 ok(sparse$name == "bob", "sparse field present")

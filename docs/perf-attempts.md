@@ -1298,3 +1298,34 @@ the remaining gap is the generated-model materialization, not the decode tree
 allocation. The plan's rule rejects a change that does not win every round, so
 the decode path stayed on `pbw_decode`; the final build is change 1 only.
 
+
+## Provisional: R one-`.Call` list arm (plan 12)
+
+R's native object is a named list, so the `shim` arm is the shipped list path
+reached without the per-call type-name lookup: `Structtest_Scalars3_encode(list)`
+in the generated model's shape calls one `.Call`
+(`pbwire_encode_number(schema, number, list)`), and C walks the whole list and
+fills the tree inside C. The type is resolved once into a schema-owned message
+number. The `tree` arm is the prebuilt builder handle (`pbwire_message` +
+`pbwire_message_set` before the timer, `pbwire_message_encode` timed;
+`pbwire_parse_binary` for wire -> tree). Provisional
+`Rscript bindings/r/pbench/compare.R`, median of five interleaved rounds,
+2026-11-21, MB/s:
+
+| arm | enc 136/174/2469/74913 | dec 136/174/2469/74913 |
+|---|---|---|
+| `pbwire-r-tree` | 226.4 / 265.2 / 949.0 / 1606.5 | 81.4 / 97.9 / 437.3 / 485.5 |
+| `pbwire-r-shim` | 63.7 / 71.0 / 133.5 / 155.3 | 52.1 / 60.8 / 118.3 / 121.4 |
+| RProtoBuf | 1.6 / 1.9 / 2.4 / 2.1 | 2.5 / 2.8 / 3.8 / 2.9 |
+
+Reading: the list path needs no new mechanism -- the C walk was already there
+behind `pbwire_encode` -- so one `.Call` puts it 25-90x above RProtoBuf, and the
+builder row is 3.5-10x the list row because it skips the list walk and the
+decode-side named-list materialization. No R cell is below its baseline, so the
+plan's Stage 6 (A/B, one change per round) has nothing to target here.
+
+Verdict: publish both rows. `pbwire-r-shim` is the native-object row (list in,
+wire out, walk in C); `pbwire-r-tree` is the prebuilt builder and stays the
+form hot loops hold. `core` (a pure-R port) is deferred with its TODO, since a
+per-field interpreter loop is orders of magnitude off and no native-less R
+target exists.

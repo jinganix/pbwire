@@ -63,9 +63,8 @@ for (tier in PB_TIERS) {
   tree_back <- tree_decode(ref)
   check(identical(tree_encode(tree_back), ref),
         paste(label, ": tree re-encode differs"))
-  check(identical(pbwire_msg_to_json(tree_back),
-                  pbwire_to_json(pbench_schema(), PB_MSG, tree_back)),
-        paste(label, ": tree is not readable as a tree"))
+  check(identical(pbwire_msg_to_json(tree_back), pbwire_msg_to_json(tree)),
+        paste(label, ": tree decode does not print like the source tree"))
 
   # shim: the named list in and out through one .Call.
   check(identical(shim_encode(fix), ref),
