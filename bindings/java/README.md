@@ -7,8 +7,9 @@ primitives in `Wire`: the dynamic `Message` tree over a runtime schema (a
 and owned by `GenericCodec`), and generated typed models (`codegen`)
 with the protobuf-java-shaped `newBuilder()`/`toByteArray()`/`parseFrom`
 API. A generated model is a thin typed wrapper over the same `Wire`
-primitives: no tree, no per-field lookup, and a schema file is needed only
-for the dynamic path.
+primitives: no tree and no schema lookup, but still one dispatch per field
+(presence test, kind switch, getter call through the `Meta` table) — and a
+schema file is needed only for the dynamic path.
 
 ```java
 try (Schema schema = Schema.fromFile("tests/data/sample.desc")) {
@@ -161,19 +162,25 @@ decode. The one cell it loses is the 136 B encode (0.73x): `protobuf-java`'s
 generated writer is one straight-line block of known tags and values (~58 ns),
 while a dynamic codec pays a presence gate, a type dispatch and tag loads per
 field (~79 ns including the `byte[]` copy). That floor is structural, not
-tuning: the per-field work left -- loads, one `switch`, one call -- is what a
-generated writer avoids by knowing every field at compile time. The
-generated models (`codegen`) make the mirror trade: they skip the tree and
-write straight into the wire buffer with compiled per-field code.
+tuning — and the generated models share most of it: they skip the tree and
+the schema lookup, but `PbCodec.encodeInto` still walks a `Meta` table with
+one dispatch per field (presence test, kind `switch`, getter call), so they
+narrow the gap without reaching straight-line generated code.
 Keep hot loops on the dynamic `Message` path; keep domain code on the
 generated models.
+
+`pbench/` keeps the other comparison committed and runnable: the pure-Java codec
+against the C core through JNI, same process, same tiers, gated on byte parity
+first. It is a reference, not a gate (`make pbench-java`, needs a native
+toolchain), and it records why JNI lost on small/medium encode and won only
+large/xlarge encode -- see [`pbench/README.md`](pbench/README.md).
 
 ## Layout
 
 | Piece | Path | Role |
 |---|---|---|
 | codec | [`runtime/GenericCodec.java`](runtime/GenericCodec.java) | columnar value tree, lazy decode slices, the single-pass encoder (the fast path) |
-| typed | [`runtime/PbCodec.java`](runtime/PbCodec.java), [`runtime/FieldMeta.java`](runtime/FieldMeta.java), [`runtime/Meta.java`](runtime/Meta.java), [`runtime/Kind.java`](runtime/Kind.java) | the generated models' table: fields in number order, direct `Wire` writes, no tree |
+| typed | [`runtime/PbCodec.java`](runtime/PbCodec.java), [`runtime/FieldMeta.java`](runtime/FieldMeta.java), [`runtime/Meta.java`](runtime/Meta.java), [`runtime/Kind.java`](runtime/Kind.java) | the generated models' table: fields in number order, direct `Wire` writes, no tree — one table dispatch per field |
 | wire | [`runtime/Wire.java`](runtime/Wire.java) | varint/tag/little-endian read/write, reusable buffer, `Unsafe` fast path |
 | schema | [`runtime/Proto.java`](runtime/Proto.java), [`runtime/Schema.java`](runtime/Schema.java) | descriptor-set parser and linker, no protobuf dependency |
 | API | [`runtime/MessageType.java`](runtime/MessageType.java), [`runtime/Message.java`](runtime/Message.java), [`runtime/PbwireException.java`](runtime/PbwireException.java) | the dynamic wrapper: typed getters, views, presence, errors |
@@ -182,6 +189,7 @@ generated models.
 | tests | [`tests/TestPbwire.java`](tests/TestPbwire.java), [`tests/TestGenerated.java`](tests/TestGenerated.java), [`tests/TestMetaSchema.java`](tests/TestMetaSchema.java), [`tests/TestSwap.java`](tests/TestSwap.java) | assert-based self-checks, no framework: dynamic gate, generated-model compat (T1–T6), Meta-schema and hot-swap checks |
 | fixture | [`tests/data/sample.proto`](tests/data/sample.proto) + `sample.desc` | `protoc --descriptor_set_out --include_imports` |
 | benchmark | [`benchmarks/Bench.java`](benchmarks/Bench.java) | the four standard tiers against `protobuf-java` |
+| pbench | [`pbench/Compare.java`](pbench/Compare.java), [`pbench/pure/`](pbench/pure/), [`pbench/jni/`](pbench/jni/) | one directory per candidate: the pure-Java codec against the C core through JNI, kept as a rerunnable reference |
 
 The fixture descriptor set is checked in; regenerate it (protoc on `PATH`)
 with:

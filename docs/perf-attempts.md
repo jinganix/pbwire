@@ -850,7 +850,9 @@ hits both sides equally. Byte parity gated first: JNI bytes are identical to
 The probe was throwaway when it produced this table; it now lives in
 [`bindings/java/pbench/`](../bindings/java/pbench/README.md) and reruns with
 `make pbench-java`, so this decision can be re-priced from numbers instead of
-memory (the 2026-11-20 re-run reproduced the ratios below within noise).
+memory (the 2026-11-20 re-run reproduced the ordering; host load moves the
+large/xlarge encode cell between ~1.4x and ~2.0x, so read the pbench README's
+own table as one sample, not the value).
 
 ### Result (Apple M4 Pro, OpenJDK 26.0.1, same process)
 
@@ -897,10 +899,12 @@ The static generated-table path was therefore deleted (`neutral`,
 runtime is shipped yet: the two dynamic cores compete over the same
 `EncodeTable`/`DecodeTable` engine — the C core over cgo
 (`pbench/dync/dynamic`) and a pure-Go core with a runtime value tree
-(`pbench/dyngo/codec`, `codec.DMsg`) — each in its own solution directory
-next to its arm, and `runtime/` stays empty until they select the final
-solution. Generated models are thin structs plus a metadata file of field
-tables.
+(`bindings/go/codec`, `codec.DMsg`) — each in its own solution
+directory next to its arm, and `runtime/` stays empty until they select the
+final solution. Generated models are thin structs plus a metadata file of
+field tables. The selection landed: `bindings/go/runtime/` ships as the
+default engine, and the pure-Go one ships as `bindings/go/codec/` because
+models the cshim cannot drive fall back to it.
 
 `bindings/go/pbench/` now compares exactly the three dynamic shapes, each
 behind the same native-in / native-out contract (`Marshal` from a caller-held
