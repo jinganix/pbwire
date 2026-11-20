@@ -68,3 +68,27 @@ numbers move with the host, the ordering does not):
 | 174 B | 1490.8 | 116.4 | 378.5 | 821.7 | 128.6 | 273.0 |
 | 2469 B | 1359.2 | 60.4 | 386.7 | 676.5 | 51.1 | 381.7 |
 | 74913 B | 1573.5 | 61.3 | 387.9 | 745.7 | 51.8 | 476.4 |
+## Verdict
+
+**Keep the prebuilt handle as the runtime and publish the native-object path
+beside it; the pinned layout does not pay on .NET as this plan can build it.**
+The table is emitted and gated (name/offset/width/presence), but the C core has
+no entry that reads a pinned managed object through it, so every present field
+still costs one `P/Invoke` in the managed walk: the `shim` row is 0.70x
+Google.Protobuf at 136 B encode and 0.16x at 74 KB (0.11x decode), i.e. the
+boundary is what the native-object task pays, not the codec. The `tree` row
+(the shipped `Message` handle) is 3-4x the baseline and stays the binding's
+headline.
+
+It is not (a) -- "replace the shipped fast path": re-encoding the same message
+through the prebuilt handle is 30x the native-object row (74 KB encode 44.3 µs
+against 1267.8 µs), and those users keep it. It is not (c) -- "a boundary
+feature is missing": no payload-size crossover exists, the native-object row is
+slower at every tier including 74 KB. So the arm is published as measured
+(`pbwire-csharp-shim`), never as the headline.
+
+Stage 6 is a recorded rejection, not a tuning round: the only change that
+removes the per-field crossing is a native offset reader over these rows (a
+`src/` + `include/` change outside this plan), and a managed walk variant is
+the same converter with a different loop, which cannot beat the per-field
+`P/Invoke` floor. Ledger entry: `docs/perf-attempts.md`.
