@@ -134,6 +134,11 @@ func TestGoFilesDefault(t *testing.T) {
 		"Num: 2, Wire: codec.WireLen, Kind: codec.KindString",
 		"GetI32:",
 		"SetStr:",
+		"Fast: true, Off: uint32(unsafe.Offsetof(M{}.V))",
+		"Elem: uint32(unsafe.Sizeof(int32(0)))",
+		"Fast: true, Off: uint32(unsafe.Offsetof(M{}.S))",
+		"Count: uint32(unsafe.Offsetof(M{}.S)) + uint32(unsafe.Sizeof(uintptr(0)))",
+		"\"unsafe\"",
 	} {
 		if !strings.Contains(meta, want) {
 			t.Errorf("meta file misses %q", want)
