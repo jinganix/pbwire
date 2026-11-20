@@ -826,7 +826,7 @@ fail_field(napi_env env, const char *field, const char *what)
 }
 
 static int js_to_message(napi_env env, pbw_message *msg, desc_table *table,
-                         napi_value object, uint32_t *seen);
+                         napi_value object, uint32_t *seen, pbw_ctx *ctx);
 
 /* A 64-bit field's value: BigInt or a decimal string, both exact. Anything
  * else (a fractional number, an out-of-range or non-decimal string, a
@@ -918,9 +918,26 @@ js_int64(napi_env env, napi_value value, int is_unsigned, uint64_t *out)
     return 0;
 }
 
+/* A value in the caller's arena when one is given, on the heap otherwise.
+ * The arena path is what makes a whole object walk one allocation: the tree
+ * and every scalar die with the next pbw_ctx_reset(). */
+static pbw_value *
+value_new_uint(pbw_ctx *ctx, uint64_t bits)
+{
+    return ctx != NULL ? pbw_value_new_uint_ctx(ctx, bits)
+                       : pbw_value_new_uint(bits);
+}
+
+static pbw_value *
+value_new_bytes(pbw_ctx *ctx, const void *data, size_t len)
+{
+    return ctx != NULL ? pbw_value_new_bytes_ctx(ctx, data, len)
+                       : pbw_value_new_bytes(data, len);
+}
+
 static pbw_value *
 value_from_js(napi_env env, pbw_type type, napi_value value,
-              const char *field)
+              const char *field, pbw_ctx *ctx)
 {
     pbw_value *out = NULL;
     bool flag = false;
@@ -930,7 +947,10 @@ value_from_js(napi_env env, pbw_type type, napi_value value,
         double number;
 
         if (napi_get_value_double(env, value, &number) == napi_ok) {
-            out = pbw_value_new_double(number);
+            uint64_t bits;
+
+            memcpy(&bits, &number, sizeof(bits));
+            out = value_new_uint(ctx, bits);
         }
         break;
     }
@@ -938,13 +958,17 @@ value_from_js(napi_env env, pbw_type type, napi_value value,
         double number;
 
         if (napi_get_value_double(env, value, &number) == napi_ok) {
-            out = pbw_value_new_float((float)number);
+            float single = (float)number;
+            uint32_t low;
+
+            memcpy(&low, &single, sizeof(low));
+            out = value_new_uint(ctx, low);
         }
         break;
     }
     case PBW_TYPE_BOOL:
         if (napi_get_value_bool(env, value, &flag) == napi_ok) {
-            out = pbw_value_new_bool(flag);
+            out = value_new_uint(ctx, flag ? 1 : 0);
         }
         break;
     case PBW_TYPE_INT32:
@@ -954,7 +978,7 @@ value_from_js(napi_env env, pbw_type type, napi_value value,
         int32_t number;
 
         if (napi_get_value_int32(env, value, &number) == napi_ok) {
-            out = pbw_value_new_uint((uint64_t)(int64_t)number);
+            out = value_new_uint(ctx, (uint64_t)(int64_t)number);
         }
         break;
     }
@@ -963,7 +987,7 @@ value_from_js(napi_env env, pbw_type type, napi_value value,
         uint32_t number;
 
         if (napi_get_value_uint32(env, value, &number) == napi_ok) {
-            out = pbw_value_new_uint(number);
+            out = value_new_uint(ctx, number);
         }
         break;
     }
@@ -980,7 +1004,7 @@ value_from_js(napi_env env, pbw_type type, napi_value value,
         if (data == NULL) {
             return NULL;
         }
-        out = pbw_value_new_bytes(data, buf.len);
+        out = value_new_bytes(ctx, data, buf.len);
         string_free(&buf, data);
         break;
     }
@@ -989,7 +1013,7 @@ value_from_js(napi_env env, pbw_type type, napi_value value,
         size_t len = 0;
 
         if (napi_get_buffer_info(env, value, &data, &len) == napi_ok) {
-            out = pbw_value_new_bytes(data, len);
+            out = value_new_bytes(ctx, data, len);
         }
         break;
     }
@@ -999,7 +1023,7 @@ value_from_js(napi_env env, pbw_type type, napi_value value,
             (type == PBW_TYPE_UINT64 || type == PBW_TYPE_FIXED64);
 
         if (js_int64(env, value, is_unsigned, &bits)) {
-            out = pbw_value_new_uint(bits);
+            out = value_new_uint(ctx, bits);
         }
         break;
     }
@@ -1014,7 +1038,7 @@ value_from_js(napi_env env, pbw_type type, napi_value value,
  * here. */
 static int
 set_element(napi_env env, pbw_message *msg, desc_table *table,
-            field_entry *entry, napi_value value)
+            field_entry *entry, napi_value value, pbw_ctx *ctx)
 {
     if (entry->type == PBW_TYPE_MESSAGE || entry->type == PBW_TYPE_GROUP) {
         pbw_message *child;
@@ -1028,11 +1052,12 @@ set_element(napi_env env, pbw_message *msg, desc_table *table,
             fail_argument(env, "cannot set the nested message field");
             return 0;
         }
-        return js_to_message(env, child, table_sub(table, entry), value, NULL);
+        return js_to_message(env, child, table_sub(table, entry), value, NULL,
+                             ctx);
     }
     {
-        pbw_value *item =
-            value_from_js(env, (pbw_type)entry->type, value, entry->name);
+        pbw_value *item = value_from_js(env, (pbw_type)entry->type, value,
+                                        entry->name, ctx);
         pbw_status status;
 
         if (item == NULL) {
@@ -1050,7 +1075,7 @@ set_element(napi_env env, pbw_message *msg, desc_table *table,
 
 static int
 set_field(napi_env env, pbw_message *msg, desc_table *table,
-          field_entry *entry, napi_value value)
+          field_entry *entry, napi_value value, pbw_ctx *ctx)
 {
     napi_valuetype kind;
     bool is_array = false;
@@ -1065,7 +1090,7 @@ set_field(napi_env env, pbw_message *msg, desc_table *table,
         return 1;
     }
     if (entry->label != PBW_LABEL_REPEATED) {
-        return set_element(env, msg, table, entry, value);
+        return set_element(env, msg, table, entry, value, ctx);
     }
     if (napi_is_array(env, value, &is_array) != napi_ok || !is_array) {
         fail_field(env, entry->name, "a repeated field takes an array");
@@ -1082,7 +1107,7 @@ set_field(napi_env env, pbw_message *msg, desc_table *table,
         if (napi_get_element(env, value, i, &item) != napi_ok) {
             return 0;
         }
-        if (!set_element(env, msg, table, entry, item)) {
+        if (!set_element(env, msg, table, entry, item, ctx)) {
             return 0;
         }
     }
@@ -1142,7 +1167,7 @@ js_reject_unknown(napi_env env, napi_value object, desc_table *table)
  * object's own property count. */
 static int
 js_to_message(napi_env env, pbw_message *msg, desc_table *table,
-              napi_value object, uint32_t *seen)
+              napi_value object, uint32_t *seen, pbw_ctx *ctx)
 {
     napi_valuetype kind;
     bool is_array = false;
@@ -1174,7 +1199,7 @@ js_to_message(napi_env env, pbw_message *msg, desc_table *table,
         if (vkind == napi_undefined) {
             continue;
         }
-        if (!set_field(env, msg, table, entry, value)) {
+        if (!set_field(env, msg, table, entry, value, ctx)) {
             return 0;
         }
         found++;
@@ -2751,7 +2776,8 @@ message_set(napi_env env, napi_callback_info info)
     if (entry == NULL) {
         return NULL;
     }
-    if (!set_field(env, handle->msg, handle->desc->table, entry, argv[2])) {
+    if (!set_field(env, handle->msg, handle->desc->table, entry, argv[2],
+                   NULL)) {
         return NULL;
     }
     TRY(napi_get_undefined(env, &out));
@@ -2807,11 +2833,15 @@ encode_object(napi_env env, napi_callback_info info)
     if (!unwrap(env, argv[0], (void **)&desc, "message descriptor handle")) {
         return NULL;
     }
-    msg = pbw_message_new(desc->table->desc);
+    /* One allocation for the whole walk: the tree and every value live in the
+     * type's encode arena and die with the next reset, so a 3000-element
+     * payload costs one arena chunk, not one malloc per field. */
+    pbw_ctx_reset(desc->enc);
+    msg = pbw_message_new_ctx(desc->enc, desc->table->desc);
     if (msg == NULL) {
         return fail_memory(env);
     }
-    ok = js_to_message(env, msg, desc->table, argv[1], NULL);
+    ok = js_to_message(env, msg, desc->table, argv[1], NULL, desc->enc);
     if (ok) {
         status = pbw_encode_ctx(desc->enc, msg, &desc->enc_data, &desc->enc_len);
         if (status != PBW_OK) {
@@ -2820,7 +2850,6 @@ encode_object(napi_env env, napi_callback_info info)
             ok = 0;
         }
     }
-    pbw_message_free(msg);
     if (!ok) {
         return NULL;
     }

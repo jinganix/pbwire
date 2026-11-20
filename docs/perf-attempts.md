@@ -1056,3 +1056,38 @@ re-encoding a built message (74 KB in ~50 µs) stays 30x cheaper than building a
 native object, and replacing that path with the shim would slow every user down.
 No payload-size split applies -- the shim is below jspb and protobufjs at 136 B
 as well as at 74913 B.
+
+## Optimization: the Node shim encode cell (2026-11-21, issue 41)
+
+Stage 5 put every shim cell below jspb, so plan 04's Stage 6 built the A/B
+probe it names: `bindings/node/benchmarks/ab.sh` compiles two `.node` builds
+from `runtime/addon.c` at two revisions into one tree, `ab.js` interleaves
+both builds in every round (5 rounds, median) and refuses to time a candidate
+whose bytes differ from the oracle. `AB_BASE=0dad1b0` vs the working tree also
+served as round 0: the schema-driven walk that replaced the object-key walk won
+encode 4-5/5 rounds at every tier (1.10x-1.36x), so the rewrite was kept.
+
+Change 1 -- **encode tree in the type's arena** (`pbw_ctx_reset` +
+`pbw_message_new_ctx` + `pbw_value_new_*_ctx` in `encodeObject`, the pattern the
+R/Lua/PHP bindings already use). One arena for the whole object walk instead of
+one malloc per field value. Bytes unchanged (the gate and the probe both refuse
+otherwise). A/B base = the pre-change addon, 2026-11-21 under load ~20:
+
+| tier | encode base | cand | ratio | rounds won |
+|---|---|---|---|---|
+| 136 B | 3050.5 | 2783.8 ns | 1.10x | 5/5 |
+| 174 B | 3546.9 | 3301.1 ns | 1.07x | 5/5 |
+| 2469 B | 54432.9 | 47244.8 ns | 1.15x | 5/5 |
+| 74913 B | 1493086.8 | 1290602.9 ns | 1.16x | 5/5 |
+
+An earlier run of the same probe lost one round at 136 B and one at 2469 B
+(1.08x/1.12x medians); the recorded run above (`results/ab-node-arena.log`) won
+every round at all four tiers. Decode is the same code and won 0-3/5 rounds at
+1.00x, which is what a same-code cell measures on this host. Accepted.
+
+Change 2 -- **not attempted**: the remaining shim gap is one N-API object
+property write (decode) or read (encode) per field, at ~60-70 ns; the next
+candidate (cached field-name `napi_ref`s to skip V8's per-call UTF-8 string
+interning) buys ~20-30 ns of that and cannot reach jspb's ~5 ns per field. The
+one-change cell was accepted above and the plan says to stop there rather than
+keep tuning a boundary floor.
