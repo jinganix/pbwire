@@ -646,6 +646,41 @@ func TestCshimSplitOneofMerge(t *testing.T) {
 	}
 }
 
+// Unknown policy for the thin model: unknown field numbers skip and stay
+// dropped on re-encode (the DMsg tree is the retention path for gateway
+// use, mirroring TestConvertModelDropsUnknownOnExport). A known field
+// carrying the wrong wire type fails the decode, like protobuf-go.
+func TestCshimUnknownDropped(t *testing.T) {
+	var s scratchMap
+	reg := []shimlayout.Msg{
+		{Full: "scratch5.S", Size: unsafe.Sizeof(s), Rows: []shimlayout.Row{
+			{Fnum: 1, Kind: shimlayout.KindString, Wire: shimlayout.WireLen, Offset: uint32(unsafe.Offsetof(s.Name)), Sub: -1},
+		}},
+	}
+	c, err := NewCodecFromLayout(reg, "scratch5.S")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	// Unknown field 9 (varint 7) rides along and is dropped on re-encode.
+	wire := []byte{0x0a, 0x01, 'n', 0x48, 0x07}
+	back := &scratchMap{}
+	testDecode(t, c, back, wire)
+	runtime.KeepAlive(wire)
+	if back.Name != "n" {
+		t.Fatalf("known field lost: %q", back.Name)
+	}
+	if again := testEncode(t, c, back); !bytes.Equal(again, []byte{0x0a, 0x01, 'n'}) {
+		t.Fatalf("unknown field survived: %x", again)
+	}
+
+	// Known field 1 sent as a varint must fail, like the oracle.
+	if _, err := c.DecodeRaw(unsafe.Pointer(&scratchMap{}), []byte{0x08, 0x01}); err == nil {
+		t.Fatal("wrong wire type decoded without error")
+	}
+}
+
 func TestCshimCodecMap(t *testing.T) {
 	md := scratchMapDescriptor(t)
 	var s scratchMap
