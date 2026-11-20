@@ -2272,7 +2272,7 @@ PHP_METHOD(Message, setMessage) {
         RETURN_THROWS();
     }
     zval subtype;
-    if (type_create(&subtype, &m->type_zv, sub) != 0) {
+    if (type_create(&subtype, &type_from(Z_OBJ(m->type_zv))->schema_zv, sub) != 0) {
         RETURN_THROWS();
     }
     int rc = message_create(return_value, &subtype, ZEND_THIS, child, NULL, false);
@@ -2474,7 +2474,7 @@ PHP_METHOD(Message, getMessage) {
         RETURN_NULL();
     }
     zval subtype;
-    if (type_create(&subtype, &m->type_zv, subdesc) != 0) {
+    if (type_create(&subtype, &type_from(Z_OBJ(m->type_zv))->schema_zv, subdesc) != 0) {
         RETURN_THROWS();
     }
     int rc = message_create(return_value, &subtype, ZEND_THIS, sub, NULL, false);
@@ -2570,7 +2570,7 @@ PHP_METHOD(Message, at) {
     const pbw_descriptor *sub = pbw_field_message_type(f);
     if (sub != NULL) {
         zval subtype;
-        if (type_create(&subtype, &m->type_zv, sub) != 0) {
+        if (type_create(&subtype, &type_from(Z_OBJ(m->type_zv))->schema_zv, sub) != 0) {
             RETURN_THROWS();
         }
         int rc = value_create(return_value, ZEND_THIS, &subtype, item);
