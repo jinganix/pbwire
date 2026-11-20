@@ -157,7 +157,7 @@ own README. Dart ran once `dart pub global activate protoc_plugin` provided
 | Erlang/OTP NIF | `make benchmarks` in `bindings/erlang/benchmarks` | gpb (pure Erlang), with gpb NIF (libprotobuf) as the second baseline, same `matrix3.proto` | all 4 | 3.91x / 1.60x vs best-of-two ✅ |
 | Python (CPython ext) | `make python-bench` (`bindings/python/benchmarks/bench.py`) | `google.protobuf` (upb C extension) on the same `matrix3.proto` | all 4 | 6.87x ✅ / 1.19x ✅ |
 | C++ | same engine as C (`bindings/cpp` mirrors the C structs; `make bench-c` is the harness) | `protoc` C++ generated from the same `matrix3.proto` | all 4 | 1.33x ✅ / 2.00x ✅ |
-| Go (`cgo` dynamic) | `make go-bench` (`bindings/go/benchmarks`) | `protobuf-go` generated code from the same `matrix3.proto` | all 4 | 2.77x ✅ / 2.31x ✅ |
+| Go (thin model, cshim runtime) | `make go-bench` (`bindings/go/benchmarks`) | `protobuf-go` generated code from the same `matrix3.proto` | all 4 | 1.73x ✅ / 1.47x ✅ |
 | Java (pure-Java codec) | `make java-bench` (`bindings/java/benchmarks`) | `protobuf-java` generated code from the same `matrix3.proto` | all 4 | 1.13x ✅ / 1.95x ✅ (0.77x at 136 B) |
 | Node (N-API addon) | `make node-bench` (`bindings/node/benchmarks`) | [protobufjs](https://www.npmjs.com/package/protobufjs) (fastest) + `google-protobuf` (jspb) from the same `matrix3.proto` | all 4 | 3.18x ✅ / 3.17x ✅ |
 | Ruby (C extension) | `make ruby-bench` (`bindings/ruby/benchmarks`) | the `google-protobuf` gem (C extension) | all 4 | 1.34x ✅ / 1.67x ✅ |
@@ -237,7 +237,7 @@ payload, the boundary cost and the baseline all differ.
 | core dynamic (`pbw_ctx`) | direct call | 85933 B | 1644.2 (1.56x ✅) | 765.9 (1.80x ✅) |
 | core dynamic (plain API) | direct call | 85933 B | 1593.2 (1.51x ✅) | 771.3 (1.81x ✅) |
 | C structs | direct call, layout tables | 74913 B | 1132.2 (1.29x ✅) | 735.7 (2.02x ✅) |
-| Go | `cgo` dynamic over the C core | 74913 B | 1520.8 (2.77x ✅) | 714.7 (2.31x ✅) |
+| Go | cshim runtime (one cgo call per op) | 74913 B | 992.9 (1.73x ✅) | 461.6 (1.47x ✅) |
 | Python (dict path) | CPython extension | 74913 B | 562.3 (6.87x ✅) | 891.6 (1.19x ✅) |
 | Java | pure-Java codec, no native code | 74913 B | 984.2 (1.13x ✅) | 747.4 (1.95x ✅) |
 | Kotlin | the pure-Java codec + DSL | 74913 B | 964.8 (1.09x ✅) | 742.1 (1.68x ✅) |
@@ -740,61 +740,40 @@ output so that trade-off is visible rather than hidden.
 
 ### Go (thin model vs protobuf-go)
 
-![Go (thin model) — MB/s by tier](docs/charts/bench-go-cgo-dynamic.svg)
+The shipped runtime is [`bindings/go/runtime/`](bindings/go/runtime/): the
+Erlang-style C codec reading Go structs through generated layout tables, one
+cgo crossing per op. `make go-bench` (`bindings/go/benchmarks`, build-tagged
+so `go test ./...` stays fast) times the thin generated model —
+`Marshal()`/`Unmarshal()` over that runtime, native struct in and out —
+against `protobuf-go` generated code from the same `matrix3.proto` on all
+four tiers. The two generated packages are the committed ones under
+`bindings/go/tests`, so `bench.sh` needs Go only: no protoc, no C toolchain,
+no descriptor.
 
-No shipped runtime yet: the candidates compete in
-[`bindings/go/pbench/`](bindings/go/pbench/) (see below) and `runtime/`
-stays empty until they select the final solution. `make go-bench`
-(`bindings/go/benchmarks`, build-tagged so `go test ./...` stays fast) times
-the thin generated model — `Marshal()`/`Unmarshal()`, no cgo, native struct
-in and out — against `protobuf-go` generated code from the same
-`matrix3.proto` on all four tiers. The two generated packages are the
-committed ones under `bindings/go/tests`, so `bench.sh` needs Go only: no
-protoc, no C toolchain, no descriptor.
-
-The rows below are the like-for-like comparison both sides of issue 41
-asked for: the same user-visible task, struct in and struct out, gated on
-byte-identical output and a field-by-field decode before timing. Apple M4
-Pro, same process times both sides:
+The rows below are the like-for-like comparison: the same user-visible task,
+struct in and struct out, gated on byte-identical output and a field-by-field
+decode before timing. Apple M4 Pro, same process times both sides:
 
 | payload | op | pbwire-go (MB/s, x protobuf-go) | protobuf-go (MB/s) |
 |---|---|---|---|
-| 136 B | encode | 864.2 (1.30x ✅) | 666.9 |
-| 136 B | decode | 509.7 (0.93x ❌) | 548.9 |
-| 174 B | encode | 981.2 (1.56x ✅) | 630.1 |
-| 174 B | decode | 448.3 (0.99x ❌) | 452.6 |
-| 2469 B | encode | 854.5 (1.70x ✅) | 503.8 |
-| 2469 B | decode | 344.9 (1.11x ✅) | 309.9 |
-| 74913 B | encode | 881.9 (1.48x ✅) | 595.5 |
-| 74913 B | decode | 379.4 (1.21x ✅) | 312.4 |
+| 136 B | encode | 870.0 (1.35x ✅) | 646.8 |
+| 136 B | decode | 719.8 (1.35x ✅) | 534.2 |
+| 174 B | encode | 925.1 (1.46x ✅) | 632.1 |
+| 174 B | decode | 591.0 (1.27x ✅) | 465.8 |
+| 2469 B | encode | 959.6 (1.83x ✅) | 525.4 |
+| 2469 B | decode | 480.9 (1.53x ✅) | 314.9 |
+| 74913 B | encode | 992.9 (1.73x ✅) | 574.7 |
+| 74913 B | decode | 461.6 (1.47x ✅) | 314.3 |
 
-The two small-decode cells sit at parity: the per-field getter/setter
-dispatch of a generic engine against straight-line generated code, the same
-structural category as Java's small-tier cells (see
-[issue 41](https://github.com/jinganix/pbwire/issues/41)). Everything else
-is ahead, and encode leads on every tier.
-
-The three dynamic arms behind the thin model were compared under
-[`bindings/go/pbench/`](bindings/go/pbench/) (same tiers, interleaved,
-native struct in and out, converter-only glue): the C core at 0.05-0.10x
-encode, the Go core at 0.27-0.35x encode, and the Erlang-style C shim at
-1.61-2.16x. The per-field copy into any tree is what separates them; the
-full ledger is in
-[perf-attempts.md](docs/perf-attempts.md#probe-round-go-dynamic-arms-issue-41).
-
-Every tier is gated before timing: the official bytes must land on the
-pinned size, `pbwire-go` must encode byte-identical bytes from both the
-dynamic tree and the generated struct, the struct decode must keep every
-field (compared one by one against the `protobuf-go` decode), decoding the
-reference and re-encoding must return the same bytes, and the official
-dynamic decode is spot-checked (`str`, inner `kid`/42, repeated count and
-last `inners` value). For the rows above, the `cgo` boundary is one downcall
-per op: `pbw_encode_to` fills a Go-owned slice whose capacity comes from the
-message's decoded wire length or the last successful encode, so there is no
-C-side `malloc`, no second downcall to free it and no copy back out of C. That is why the small tier is ahead now (1.28x
-encode, 1.21x decode at 136 B) instead of sitting at parity: the boundary that
-used to cost a malloc/free pair plus a copy is one call. From 2.5 KB up the
-core's single pass pulls ahead (2.19x encode, 2.28x decode).
+Every cell is ahead: encode writes straight from struct memory through one
+cgo call, decode fills the struct plus a single string arena with no
+per-field dispatch and no tree. The three dynamic arms behind the thin
+model were compared under [`bindings/go/pbench/`](bindings/go/pbench/)
+(same tiers, interleaved, native struct in and out, converter-only glue):
+the C core at 0.05-0.10x encode and 0.11-0.13x decode, the pure-Go direct
+path at 1.42-1.76x encode and 0.88-1.13x decode, and the cshim runtime at
+1.35-1.80x encode and 1.21-1.96x decode. The per-field copy into any tree
+is what separates them.
 
 ### Python vs `google.protobuf` (upb)
 
@@ -1516,7 +1495,7 @@ make embedded-bench  # embedded facade vs nanopb (host throughput, byte check)
 make embedded-size   # embedded facade vs nanopb (Cortex-M flash)
 make python-bench # Python extension vs google.protobuf (needs protobuf + protoc)
 make erlang-bench # Erlang binding: epb, gpb, gpb NIF on matrix3.proto (needs OTP + gpb)
-make go-bench     # Go cgo dynamic vs protobuf-go generated code (needs Go + protoc-gen-go)
+make go-bench     # Go thin model (cshim runtime) vs protobuf-go generated code (needs Go only)
 make java-bench   # pure-Java codec vs protobuf-java (fetches the jar from Maven Central once)
 make node-bench   # N-API addon vs google-protobuf/jspb (npm installs into the harness)
 make ruby-bench   # Ruby C extension vs the google-protobuf gem (`RUBY=...` picks the interpreter)
