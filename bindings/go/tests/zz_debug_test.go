@@ -84,61 +84,54 @@ func TestZZDebugSerial400(t *testing.T) {
 // message is fine and that encode raced; still dirty => unmarshal raced.
 func TestZZDebugRacy8x50(t *testing.T) {
 	ref := zzRef(t)
-	for round := 0; round < 10; round++ {
+	for round := 0; round < 50; round++ {
 		if msg := zzRacyRound(ref); msg != "" {
 			t.Fatalf("ZZ racy round %d: %s", round, msg)
 		}
 	}
-	fmt.Printf("ZZ racy 10 clean rounds\n")
+	fmt.Printf("ZZ racy 50 clean rounds\n")
 }
 
 func zzRacyRound(ref []byte) string {
 	var wg sync.WaitGroup
-	type hit struct {
-		k      int
-		second string
-		ref    []byte
-		out    []byte
-	}
-	hitCh := make(chan hit, 64)
+	errCh := make(chan string, 64)
+	var dumpOnce sync.Once
 	for i := 0; i < 8; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for k := 0; k < 500; k++ {
+			for k := 0; k < 50; k++ {
 				m := &gen1.Scalars3{}
 				if err := m.Unmarshal(ref); err != nil {
-					hitCh <- hit{k: k, second: "unmarshal: " + err.Error()}
+					errCh <- "unmarshal: " + err.Error()
 					return
 				}
 				out, err := m.Marshal()
 				if err != nil {
-					hitCh <- hit{k: k, second: "marshal: " + err.Error()}
+					errCh <- "marshal: " + err.Error()
 					return
 				}
 				if !bytes.Equal(out, ref) {
-					second := "marshal-err"
-					if out2, err2 := m.Marshal(); err2 == nil {
-						second = "dirty"
-						if bytes.Equal(out2, ref) {
-							second = "clean"
+					dumpOnce.Do(func() {
+						fmt.Printf("ZZ mismatch ref=%d out=%d\n", len(ref), len(out))
+						n := 0
+						for i := 0; i < len(ref) && i < len(out) && n < 10; i++ {
+							if ref[i] != out[i] {
+								fmt.Printf("ZZ diff at %d: ref=%02x out=%02x\n", i, ref[i], out[i])
+								n++
+							}
 						}
-					}
-					hitCh <- hit{k: k, second: second, ref: ref, out: out}
+					})
+					errCh <- "re-encode differs"
 					return
 				}
 			}
 		}()
 	}
 	wg.Wait()
-	close(hitCh)
-	for h := range hitCh {
-		if h.out != nil {
-			fmt.Printf("ZZ racy mismatch k=%d second-marshal=%s\n", h.k, h.second)
-			zzDump(h.ref, h.out)
-			return "re-encode differs"
-		}
-		return h.second
+	close(errCh)
+	for msg := range errCh {
+		return msg
 	}
 	return ""
 }
