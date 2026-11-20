@@ -2,6 +2,7 @@ package tests
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -34,6 +35,15 @@ func TestZZStress100(t *testing.T) {
 						return
 					}
 					if !bytes.Equal(out, ref) {
+						// Scratch-only dump on the failure path.
+						fmt.Printf("STRESS round=%d ref=%d out=%d\n", round, len(ref), len(out))
+						n := 0
+						for i := 0; i < len(ref) && i < len(out) && n < 10; i++ {
+							if ref[i] != out[i] {
+								fmt.Printf("STRESS diff at %d: ref=%02x out=%02x\n", i, ref[i], out[i])
+								n++
+							}
+						}
 						errCh <- "re-encode differs"
 						return
 					}
