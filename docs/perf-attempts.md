@@ -931,6 +931,13 @@ binding-local C file reading Go memory through a once-measured layout table)
 is the shape to copy when a binding must be both native-object-end-to-end
 and fast.
 
+2026-11-20 baseline (dyngo fast-path work, Task 1): tree-path `dyngo` arm
+re-measured on this host, median of 5 interleaved rounds — 136 B enc/dec
+0.33x/0.32x, 174 B 0.35x/0.35x, 2469 B 0.27x/0.35x, 74913 B 0.22x/0.33x
+against protobuf-go. A `dyngo-direct` gate arm (`EncodeModel`/`DecodeModel`
+straight on the struct, no `DMsg` tree) is added and gated byte-identical;
+its timed row lands in Task 4.
+
 ### Recorded earlier answers (kept for the numbers, not as shipping plans)
 
 - A language-neutral bulk table plus one cgo call caps encode at ~0.45x: the

@@ -38,6 +38,7 @@ func TestArmsGate(t *testing.T) {
 	}{
 		{"dync", cDync.Marshal, cDync.Unmarshal},
 		{"dyngo", cDynGo.Marshal, cDynGo.Unmarshal},
+		{"dyngo-direct", cDynGo.DirectMarshal, cDynGo.DirectUnmarshal},
 		{"cshim", cShim.Marshal, cShim.Unmarshal},
 	}
 	for _, arm := range arms {
