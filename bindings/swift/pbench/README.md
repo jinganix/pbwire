@@ -98,3 +98,27 @@ arena allocated once. MB/s over wire bytes, 2026-11-21, recorded mid-session:
 | 174 B | 1115.9 | 937.2 | 801.9 | 672.4 |
 | 2469 B | 1492.8 | 1004.7 | 689.3 | 534.4 |
 | 74913 B | 1675.8 | 917.0 | 642.6 | 592.4 |
+
+## Verdict
+
+**Keep the shipped `tree` runtime and publish the flat-mirror `shim` row as the
+native-object mechanism.** With one downcall per op the shim is above the
+swift-protobuf baseline at every tier on both ops: 2.3x encode and 3.1x decode
+at 136 B, 3.4x and 2.6x at 74 KB (formal run, `results/bench-swift-*`). The
+`tree` row — a *prebuilt* handle's `encode()`/`decode()`, no per-field work in
+the timed loop — is faster than the shim everywhere, because on Swift the
+boundary was never per-field in that row: the handle is already one call into
+the C core's own encoder, while the shim runs the generic C struct codec over
+the mirror (the same codec the C, Dart, Julia, Rust and C# shim rows time).
+
+So it is not (a) — "replace the shipped fast path": `pbwire-swift-tree` stays
+the runtime an application that holds a `Message` should use, and it is the
+fastest row here. It is not (c) — "a boundary feature is missing": the shim
+needs no new entry point, it is above the baseline from 136 B to 74 KB. What it
+answers is (b): a native `@frozen` value type can be encoded and decoded with
+one downcall and no ARC per field, at 3.1-3.9x the official runtime, so a Swift
+application that wants its own object shape never has to build a `Message`
+tree to get there. The gap to the handle is the shared struct codec's encode
+path (it writes proto3 implicit scalars unconditionally and reserves per
+repeated element), a C runtime question that moves every layout row at once —
+recorded in `docs/perf-attempts.md`, not patched under this plan.
