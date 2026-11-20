@@ -50,6 +50,13 @@ and the pinned prost oracle, that a decode exposes every fixture value (`str`,
 optionals and `u64`), and that the decoded image re-encodes to the same bytes.
 `rust-protobuf` parity is covered by the same fixture in the bench parity check.
 
+`make conformance-rust` is **deferred**: no `bindings/rust/conformance/` testee
+exists (the other bindings' targets drive their own binary against the official
+suite, which needs `make conformance-setup` and a stdio testee this plan's file
+list does not include), so there is no target to add here. The gate above plus
+`make rust-test` (compat: protoc reference bytes, prost oracle, round trips)
+cover this stage until a later plan adds the testee.
+
 ## Provisional table (Stage 3)
 
 `make rust-bench` (best of three passes per op, one reused buffer per side).
