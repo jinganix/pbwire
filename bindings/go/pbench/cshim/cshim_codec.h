@@ -40,7 +40,8 @@ enum {
     CSHIMK_STR,       /* Go string header (data at +0, length at +8) */
     CSHIMK_MSG,       /* Go pointer to a nested Go struct */
     CSHIMK_OPT_I32,   /* proto3 optional int32: Go pointer to int32 */
-    CSHIMK_OPT_STR    /* proto3 optional string: Go pointer to a raw header */
+    CSHIMK_OPT_STR,   /* proto3 optional string: Go pointer to a raw header */
+    CSHIMK_BYTES     /* Go []byte header (data at +0, length at +8) */
 };
 
 /*
@@ -59,6 +60,12 @@ enum {
  *            else 0 (Go strings and slices store ptr, len, cap)
  *   elem     in-memory element size: 4 for int32, 1 for bool, 16 for a
  *            string header, sizeof(void *) for []*Inner3
+ *   explicit 1 when presence is a pointer at has (any scalar, string or
+ *            bytes kind): NULL skips on encode, allocates on decode.
+ *            Replaces the OPT_* kinds for new tables; those stay for the
+ *            hand-written plan until it is generated.
+ *   required 1 when the field always emits, even at its zero value
+ *            (proto2 required). Never combined with repeated/explicit.
  */
 typedef struct cshim_row {
     uint32_t fnum;
@@ -70,6 +77,8 @@ typedef struct cshim_row {
     uint32_t has;
     uint32_t count;
     uint32_t elem;
+    uint32_t explicit;
+    uint32_t required;
 } cshim_row;
 
 /* Status codes.  On success exactly one cgo call is made per operation; the
