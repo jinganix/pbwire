@@ -5,7 +5,7 @@
 package oneof1
 
 import (
-	"pbwire/pbench/dyngo/codec"
+	"pbwire/codec"
 	"unsafe"
 )
 

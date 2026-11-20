@@ -7,7 +7,7 @@ import (
 	"bytes"
 	"testing"
 
-	"pbwire/pbench/dyngo/codec"
+	"pbwire/codec"
 )
 
 type unkHolder struct {

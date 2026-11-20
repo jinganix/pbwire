@@ -6,7 +6,7 @@ package addressbook
 
 import (
 	"fmt"
-	"pbwire/pbench/dyngo/codec"
+	"pbwire/codec"
 )
 
 // tutorial.Person.PhoneType

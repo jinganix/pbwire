@@ -34,7 +34,7 @@ service talks to an official-runtime service with no flag day.
 | `protobuf` pub package (Dart) | `bindings/dart/` | replace generated `.pb.dart` with the `dart:ffi` host + set |
 | rust-protobuf / prost (Rust) | `bindings/rust/` | replace `build.rs` codegen with a static link + set loaded at startup |
 | Google.Protobuf / protobuf-net (C#) | `bindings/csharp/` | replace generated `.cs` with P/Invoke calls; no NuGet runtime |
-| `google.golang.org/protobuf` (Go) | `bindings/go/` | replace generated `.pb.go` + registry with `dynamic` + a set file; schemas hot-swap without restart |
+| `google.golang.org/protobuf` (Go) | `bindings/go/` | keep generated structs, regenerate with `protoc --pbwire_out` for `Marshal`/`Unmarshal`; `codec.Load` takes a set file when the schema is not known at build time |
 | gpb / gpb NIF (Erlang) | `bindings/erlang/` | keep `gpb_compile` output, point `pbwire:load_cache/1` at it; records unchanged |
 | swift-protobuf (Swift) | `bindings/swift/` | replace generated `.pb.swift` with the SwiftPM FFI host + set |
 | ScalaPB (Scala) | `bindings/scala/` | replace generated case classes with the DSL over the shared Java runtime |

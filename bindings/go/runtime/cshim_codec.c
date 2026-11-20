@@ -2062,41 +2062,86 @@ check_table(const cshim_row *rows, size_t n, size_t struct_size, int is_sub)
     return 0;
 }
 
-/* Registry-wide checks after every table passes its shape: sub indexes
- * resolve, message rows carry their sub-table's struct size, and only
- * message rows name a sub-table. */
+/* Registry-wide checks: sub indexes resolve, message rows carry their
+ * sub-table's struct size, and only message rows name a sub-table.
+ *
+ * Every message in one file shares that file's registry, and each message
+ * gets its own codec with itself as root.  Tables outside the root's
+ * closure are never walked, so they are not checked: a root may carry
+ * repeated rows (the decode publishes them for the root only) while a
+ * nested table must not, and both shapes sit in the same registry. */
 static int
 check_registry(const cshim_table *tables, size_t ntables, size_t root)
 {
-    size_t i, j;
+    uint8_t *live;
+    size_t *queue;
+    size_t i, j, qh = 0, qt = 0;
+    int rc = 0;
 
     if (tables == NULL || ntables == 0 || root >= ntables) {
         return -1;
     }
-    for (i = 0; i < ntables; i++) {
-        if (check_table(tables[i].rows, tables[i].nrows, tables[i].msg_size,
-                        (int)(i != root))) {
-            return -1;
+    live = (uint8_t *)calloc(ntables, sizeof(*live));
+    queue = (size_t *)calloc(ntables, sizeof(*queue));
+    if (live == NULL || queue == NULL) {
+        free(live);
+        free(queue);
+        return -1;
+    }
+    live[root] = 1;
+    queue[qt++] = root;
+    while (qh < qt) {
+        size_t t = queue[qh++];
+
+        for (j = 0; j < tables[t].nrows; j++) {
+            const cshim_row *r = &tables[t].rows[j];
+
+            if (r->kind != CSHIMK_MSG) {
+                continue;
+            }
+            if (r->sub < 0 || (size_t)r->sub >= ntables) {
+                rc = -1;
+                goto done;
+            }
+            if (!live[r->sub]) {
+                live[r->sub] = 1;
+                queue[qt++] = (size_t)r->sub;
+            }
         }
     }
     for (i = 0; i < ntables; i++) {
+        if (!live[i]) {
+            continue;
+        }
+        if (check_table(tables[i].rows, tables[i].nrows, tables[i].msg_size,
+                        (int)(i != root))) {
+            rc = -1;
+            goto done;
+        }
+    }
+    for (i = 0; i < ntables; i++) {
+        if (!live[i]) {
+            continue;
+        }
         for (j = 0; j < tables[i].nrows; j++) {
             const cshim_row *r = &tables[i].rows[j];
 
             if (r->kind == CSHIMK_MSG) {
-                if (r->sub < 0 || (size_t)r->sub >= ntables) {
-                    return -1;
-                }
                 if (!r->repeated &&
                     r->elem != (uint32_t)tables[r->sub].msg_size) {
-                    return -1;
+                    rc = -1;
+                    goto done;
                 }
             } else if (r->sub != -1) {
-                return -1;
+                rc = -1;
+                goto done;
             }
         }
     }
-    return 0;
+done:
+    free(queue);
+    free(live);
+    return rc;
 }
 
 int

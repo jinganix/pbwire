@@ -1,23 +1,22 @@
 # pbwire Go binding
 
-No shipped runtime yet: the candidates live side by side in
-[`pbench/`](pbench/) until its numbers select the final solution. Two dynamic
-cores compete over one wire implementation:
+Shipped: thin generated models over [`runtime/`](runtime/), the Erlang-style C
+codec. The layout is measured once from the generated structs, C reads the
+struct memory directly through those offsets, and `Marshal`/`Unmarshal` cross
+cgo once per call (decode adds one `Stage` call per oneof group). A model the
+cshim cannot drive (cross-file field types,
+skipped fields, a message that repeats and is itself a field of another
+message) falls back to the shipped pure-Go engine in [`codec/`](codec/),
+which also carries the descriptor-set schema (`Schema`/`DType`/`DMsg`) and the
+model<->tree converters the dynamic cores share.
 
-- **C core** ([`pbench/dync/dynamic/`](pbench/dync/dynamic/)): cgo over the
-  shared `libpbwire.a`. It loads a `FileDescriptorSet` at run time, builds
-  message trees in C, and hot-swaps schemas without a restart
-  (`Registry.Swap`); in-flight messages keep the schema they were built from.
-- **Go core** ([`pbench/dyngo/codec/`](pbench/dyngo/codec/)): the same runtime
-  schema, decoded into a pure-Go value tree (`codec.DMsg`) and encoded by the
-  shared table engine. No cgo, no generated code, no second wire
-  implementation.
+A generated model is a `protoc-gen-pbwire` struct plus one metadata file of
+field tables. Nothing in generated code decides a tag, a length, presence or
+skipping. The C core with the hot-swap registry stays a benchmark candidate
+in [`pbench/`](pbench/), not shipped API; the pure-Go engine ships as the
+`codec` package because generated models fall back to it.
 
-Generated models are thin wrappers over the Go core: a `protoc-gen-pbwire`
-struct plus one metadata file of field tables. Nothing in generated code
-decides a tag, a length, presence or skipping.
-
-## Dynamic C core (candidate)
+## Dynamic C core (candidate, not shipped)
 
 ```go
 reg, _ := dynamic.NewRegistry(descSet)   // descSet: FileDescriptorSet bytes
@@ -39,11 +38,11 @@ Roots own their C tree and must be freed with `Close`; nested views from
 passes the input slice straight into C (zero-copy in); `Encode` writes into
 a Go slice (one downcall, nothing to free).
 
-## Dynamic Go core (candidate)
+## Pure-Go engine (`codec/`)
 
-Same schema bytes, no cgo: `codec.Load` turns a `FileDescriptorSet` into
-per-message plans, `Schema.Type` binds one to a runtime table, and `DMsg`
-holds the values.
+What the generated model falls back to, and the value-tree API on top of it:
+`codec.Load` turns a `FileDescriptorSet` into per-message plans,
+`Schema.Type` binds one to a runtime table, and `DMsg` holds the values.
 
 ```go
 s, _ := codec.Load(descSet)               // protoc --descriptor_set_out bytes
@@ -61,7 +60,8 @@ nums, _ := back.GetIntSlice("nums")
 
 Wire-first scope: encode, decode, field access and unknown-field retention.
 JSON, text, delimited framing, limits, `Visit`, the WKT helpers and
-`Registry` hot swap stay C-core-only for now. Maps ride as repeated entry
+`Registry` hot swap stay C-core-only for now, which is the candidate in
+[`pbench/dync/dynamic/`](pbench/dync/dynamic/). Maps ride as repeated entry
 messages in first-seen order with no sort: byte equality across runs is not
 promised for multi-entry maps until a deterministic pass exists.
 
@@ -71,7 +71,7 @@ promised for multi-entry maps until a deterministic pass exists.
 import gen "pbwire/tests/gen/matrix3"
 
 m := &gen.Scalars3{I32: -7, Str: "kid", Inner: &gen.Inner3{Name: "x", Value: 1}}
-wire, _ := m.Marshal()                // codec.EncodeModel: no schema argument
+wire, _ := m.Marshal()                // runtime cshim: no schema argument
 back := &gen.Scalars3{}
 back.Unmarshal(wire)
 back.GetStr()                          // "kid" (nil-safe, like protoc-gen-go)
@@ -89,13 +89,14 @@ to keep them. Reach for the two dynamic cores when that matters.
 |---|---|---|
 | model | `tests/gen/<pkg>/<base>_pbwire.go` | structs, enums, getters, `Reset`, one-line `Marshal`/`Unmarshal` |
 | metadata | `tests/gen/<pkg>/<base>_pbwire_meta.go` | one field table per message: facts and trivial accessors, no wire logic |
-| Go core candidate | [`pbench/dyngo/codec/`](pbench/dyngo/codec/) | `Schema`/`DType`/`DMsg`, the one `EncodeTable`/`DecodeTable` engine, descriptor-set plans, shipped model<->tree converter |
-| C core candidate | [`pbench/dync/dynamic/`](pbench/dync/dynamic/) | `Registry` (hot-swap), `Schema`, `MessageType`, `Message`, shipped model<->tree converter |
+| engine (default) | [`runtime/`](runtime/) | the cshim C codec plus [`layout/`](runtime/layout): struct offsets in, one cgo crossing per op |
+| engine (fallback) | [`codec/`](codec/) | `Schema`/`DType`/`DMsg`, the one `EncodeTable`/`DecodeTable` engine, descriptor-set plans, model<->tree converters |
+| C core candidate | [`pbench/dync/dynamic/`](pbench/dync/dynamic/) | `Registry` (hot-swap), `Schema`, `MessageType`, `Message`, model<->tree converter |
 | bench | [`benchmarks/bench_test.go`](benchmarks/bench_test.go) | four standard tiers: thin model vs `protobuf-go`, gated on byte parity and a field-by-field decode before timing |
 | arms | [`pbench/`](pbench/) (`go test -tags pbench ./pbench/`) | the three dynamic arms over the same tiers, native struct in and out, converter-only glue (issue #41) |
 
 ```shell
-make go-test    # candidate checks + converter parity + generated-model compat (needs protoc)
+make go-test    # engine + converter + generated-model compat checks (needs protoc)
 make go-bench   # four standard tiers, thin model against protobuf-go (needs Go only)
 ```
 
@@ -109,10 +110,11 @@ hand-written model can replace the generated one without touching the codec.
 embed and no schema registry to warm, so a generated model never consults a
 `FileDescriptorSet` at run time.
 
-## Core coverage (C core)
+## Core coverage (C core candidate)
 
 The `dynamic` API mirrors the core one for one; each call is a single cgo
-downcall:
+downcall. It stays a `pbench` candidate, so none of this is in the shipped
+binding today:
 
 | member | what it does |
 |---|---|

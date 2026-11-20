@@ -18,15 +18,16 @@ dynamic paths are what this harness compares.
 |---|---|---|
 | `dync/dynamic/` | dynamic C core engine | `Schema`/`Type`/`Message`: value tree in C over cgo, hot-swappable registry, plus the shipped model<->tree converter |
 | `dync/dync.go` | dynamic C core arm | struct -> C tree -> wire -> C tree -> struct, all through the shipped converter |
-| `dyngo/codec/` | dynamic Go core engine | `Schema`/`DType`/`DMsg`: pure-Go value tree and the shared table engine, plus the shipped model<->tree converter |
+| `../../codec/` | dynamic Go core engine | shipped pure-Go engine: `Schema`/`DType`/`DMsg`, the shared table engine and the model<->tree converter |
 | `dyngo/dyngo.go` | dynamic Go core arm | struct -> `DMsg` -> wire -> `DMsg` -> struct, all through the shipped converter, no cgo |
 | `cshim/` | Erlang-style C | measures the struct layout once, then C reads Go memory directly: one crossing per call |
 
-Each solution lives in its own directory with its engine next to its arm;
-nothing here is shared scaffolding. The harness selected `cshim`: the
-shipped engine lives in `../runtime/` (package `runtime`, layout in
-`../runtime/layout/`), and `cshim/` keeps the matrix3 reference arm whose
-hand-written plan and fixup mirror what `protoc-gen-pbwire` emits.
+The C candidate lives here with its engine next to its arm; the Go
+candidate's engine is the shipped `../../codec/` package, because generated
+models fall back to it. The harness selected `cshim`: the shipped engine is
+`../runtime/` (layout in `../runtime/layout/`), and `cshim/` keeps the matrix3
+reference arm whose hand-written plan and fixup mirror what
+`protoc-gen-pbwire` emits.
 
 ## Harness
 
