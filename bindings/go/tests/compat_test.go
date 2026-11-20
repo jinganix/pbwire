@@ -463,55 +463,42 @@ func TestModelConcurrentUse(t *testing.T) {
 		t.Fatal(err)
 	}
 	var wg sync.WaitGroup
-	type dbgHit struct {
-		k, g   int
-		second string
-		out    []byte
-	}
-	hitCh := make(chan dbgHit, 64)
+	errCh := make(chan string, 64)
 	for i := 0; i < 8; i++ {
 		wg.Add(1)
-		go func(g int) {
+		go func() {
 			defer wg.Done()
 			for k := 0; k < 50; k++ {
 				m := &gen1.Scalars3{}
 				if err := m.Unmarshal(ref); err != nil {
-					hitCh <- dbgHit{k: k, g: g, second: "unmarshal: " + err.Error()}
+					errCh <- "unmarshal: " + err.Error()
 					return
 				}
 				out, err := m.Marshal()
 				if err != nil {
-					hitCh <- dbgHit{k: k, g: g, second: "marshal: " + err.Error()}
+					errCh <- "marshal: " + err.Error()
 					return
 				}
 				if !bytes.Equal(out, ref) {
-					second := "marshal-err"
-					if out2, err2 := m.Marshal(); err2 == nil {
-						second = "dirty"
-						if bytes.Equal(out2, ref) {
-							second = "clean"
+					// Scratch-only dump: failure path only, the hot path above
+					// is byte-identical to the original test.
+					fmt.Printf("COMPAT mismatch ref=%d out=%d\n", len(ref), len(out))
+					n := 0
+					for i := 0; i < len(ref) && i < len(out) && n < 10; i++ {
+						if ref[i] != out[i] {
+							fmt.Printf("COMPAT diff at %d: ref=%02x out=%02x\n", i, ref[i], out[i])
+							n++
 						}
 					}
-					hitCh <- dbgHit{k: k, g: g, second: second, out: out}
+					errCh <- "re-encode differs"
 					return
 				}
 			}
-		}(i)
+		}()
 	}
 	wg.Wait()
-	close(hitCh)
-	for h := range hitCh {
-		if h.out != nil {
-			fmt.Printf("COMPAT mismatch goroutine=%d k=%d second-marshal=%s ref=%d out=%d\n", h.g, h.k, h.second, len(ref), len(h.out))
-			n := 0
-			for i := 0; i < len(ref) && i < len(h.out) && n < 10; i++ {
-				if ref[i] != h.out[i] {
-					fmt.Printf("COMPAT diff at %d: ref=%02x out=%02x\n", i, ref[i], h.out[i])
-					n++
-				}
-			}
-			t.Fatal("re-encode differs")
-		}
-		t.Fatal(h.second)
+	close(errCh)
+	for msg := range errCh {
+		t.Fatal(msg)
 	}
 }
