@@ -232,11 +232,26 @@ jobs:
           if [ -n "$out" ]; then echo "$out"; exit 1; fi
       - name: cgo dynamic binding tests
         run: make go-test
-      - name: race probe of the concurrent model path
+      - name: probe matrix
         if: always()
         run: |
           cd bindings/go
-          go test -race -count=5 -run TestModelConcurrentUse -v ./tests/ 2>&1 | tail -80
+          probe() {
+            name="$1"; shift
+            if env "$@" >/tmp/p.log 2>&1; then
+              echo "PROBE $name: PASS"
+            else
+              echo "PROBE $name: FAIL"
+              grep -a "re-encode\|differ\|unmarshal\|marshal:" /tmp/p.log | head -3
+            fi
+          }
+          go test -count=1 -run TestModelConcurrentUse ./tests/ >/tmp/plain.log 2>&1 && echo "PROBE plain: PASS" || echo "PROBE plain: FAIL"
+          probe noinline GOFLAGS='-gcflags=all=-l' go test -count=1 -run TestModelConcurrentUse ./tests/
+          probe nopt GOFLAGS='-gcflags=all=-N -l' go test -count=1 -run TestModelConcurrentUse ./tests/
+          probe cflags-O0 CGO_CFLAGS='-O0' go test -count=1 -run TestModelConcurrentUse ./tests/
+          probe checkptr GOFLAGS='-gcflags=all=-d=checkptr=2' go test -count=1 -run TestModelConcurrentUse ./tests/
+          probe noasync GODEBUG=asyncpreemptoff=1 go test -count=1 -run TestModelConcurrentUse ./tests/
+          probe single GOMAXPROCS=1 go test -count=1 -run TestModelConcurrentUse ./tests/
 
   ruby:
     name: Ruby binding
