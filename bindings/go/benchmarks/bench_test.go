@@ -288,9 +288,9 @@ func TestMatrix3Bench(t *testing.T) {
 
 		fmt.Printf("\n%s: %d bytes (repeat field x%d)\n", tr.label, len(reference), tr.n)
 		fmt.Printf("  %-17s %-7s %12s %10s\n", "impl", "op", "ns/op", "MB/s")
-		row("pbwire-go", "encode", len(reference), structEncode)
+		row("pbwire-go-core", "encode", len(reference), structEncode)
 		row("protobuf-go", "encode", len(reference), officialEncode)
-		row("pbwire-go", "decode", len(reference), structDecode)
+		row("pbwire-go-core", "decode", len(reference), structDecode)
 		row("protobuf-go", "decode", len(reference), officialDecode)
 		fmt.Println()
 	}
