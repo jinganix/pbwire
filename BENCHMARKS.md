@@ -173,7 +173,7 @@ own README. Dart ran once `dart pub global activate protoc_plugin` provided
 | C++ | same engine as C (`bindings/cpp` mirrors the C structs; `make bench-c` is the harness) | `protoc` C++ generated from the same `matrix3.proto` | all 4 | 1.33x ✅ / 2.00x ✅ |
 | Go (thin model, shim runtime) | `make go-bench` (`bindings/go/benchmarks`) | `protobuf-go` generated code from the same `matrix3.proto` | all 4 | 1.88x ✅ / 1.46x ✅ |
 | Java (pure-Java codec) | `make java-bench` (`bindings/java/benchmarks`) | `protobuf-java` generated code from the same `matrix3.proto` | all 4 | 1.26x ✅ / 1.76x ✅ `tree` (0.71x at 136 B; `core` generated model 0.75x / 0.80x) |
-| Node (N-API addon) | `make node-bench` (`bindings/node/benchmarks`) | [protobufjs](https://www.npmjs.com/package/protobufjs) (fastest) + `google-protobuf` (jspb) from the same `matrix3.proto` | all 4 | 3.18x ✅ / 3.17x ✅ |
+| Node (N-API addon) | `make node-bench` (`bindings/node/benchmarks`) | [protobufjs](https://www.npmjs.com/package/protobufjs) (fastest) + `google-protobuf` (jspb) from the same `matrix3.proto` | all 4 | 3.36x ✅ / 2.95x ✅ `tree` (native-object `shim` 0.12x / 0.13x vs protobufjs, 1.03x encode / 0.64x decode vs jspb at 74 KB) |
 | Ruby (C extension) | `make ruby-bench` (`bindings/ruby/benchmarks`) | the `google-protobuf` gem (C extension) | all 4 | 1.34x ✅ / 1.67x ✅ |
 | Objective-C (ARC) | `make objc-bench` (`bindings/objc/benchmarks`) | the `protobuf` ObjC runtime + generated code from the same `matrix3.proto` | all 4 | 1.72x ✅ / 1.18x ✅ |
 | Kotlin (pure-Java codec + DSL) | `make kotlin-bench` (`bindings/kotlin/benchmarks`) | `protoc --kotlin_out` over `protobuf-java`, same `matrix3.proto` | all 4 | 1.11x ✅ / 1.77x ✅ `tree` (0.71x at 136 B; `core` 0.79x / 0.76x) |
@@ -215,7 +215,7 @@ timer.
 | Go | all three exist; row naming only |
 | C# | three |
 | F# | three, no separate F# port |
-| Node | three |
+| Node | three arms: `tree` (prebuilt `Message` handle, shipped), `shim` (the addon walks the plain object in one call), `core` is plan 15 |
 | Dart | three |
 | Julia | three |
 | Rust | three |
@@ -277,7 +277,8 @@ payload, the boundary cost and the baseline all differ.
 | Python (dict path) | CPython extension | 74913 B | 562.3 (6.87x ✅) | 891.6 (1.19x ✅) |
 | Java | pure-Java codec, no native code | 74913 B | 984.2 (1.13x ✅) | 747.4 (1.95x ✅) |
 | Kotlin | the pure-Java codec + DSL | 74913 B | 964.8 (1.09x ✅) | 742.1 (1.68x ✅) |
-| Node | N-API addon | 74913 B | 1510.5 (3.18x ✅) | 1136.7 (3.17x ✅) |
+| Node (`tree`, prebuilt handle) | N-API addon | 74913 B | 1689.3 (3.36x ✅) | 1196.1 (2.95x ✅) |
+| Node (`shim`, native object in/out) | N-API addon, one downcall | 74913 B | 58.1 (0.12x ❌) | 52.3 (0.13x ❌) |
 | Ruby | C extension over the core | 74913 B | 1621.1 (1.34x ✅) | 1050.8 (1.67x ✅) |
 | Objective-C | ARC wrapper | 74913 B | 62089.8 (1.72x ✅) | 29297.5 (1.18x ✅) |
 | PHP | C extension | 74913 B | 1480.3 (1.22x ✅) | 688.7 (1.34x ✅) |
@@ -303,8 +304,10 @@ near the core's own number. The outliers are baseline or unit effects, not pbwir
 effects: Python's encode column is the dict path (3000 sub-messages, 12000
 ints), and the Objective-C tier is a memcpy race over one 74 KB string (the
 16-byte UTF-8 word scan is what keeps its decode near the copy cost).
-The headline always names the fastest baseline: Node's 2.99x / 2.77x is over
-protobufjs (jspb, the legacy baseline, trails it by ~25x / ~15x), PHP's 1.14x /
+The headline always names the fastest baseline: Node's 2.99x / 2.77x `tree`
+rows are over protobufjs (jspb, the legacy baseline, trails it by ~25x / ~15x),
+and Node's `shim` row -- the native object in and out -- is 0.12x / 0.13x of
+protobufjs: the boundary, not the codec, is what that row measures, PHP's 1.14x /
 1.35x is over the official C extension (the pure-PHP runtime trails it by
 ~373x / ~135x) — see their sections. Swift, Scala, F#, Zig and Julia join
 the ~0.92-1.5 GB/s encode club on xlarge (Swift 5.43x and Julia 135x encode
@@ -966,29 +969,49 @@ is left paying a memcpy the codec's single result copy does not.
 
 ![Node vs google-protobuf (jspb) and protobufjs — MB/s by tier](docs/charts/bench-node-vs-google-protobuf-jspb-and-protobufjs.svg)
 
-| payload | op | pbwire-node (MB/s, x protobufjs) | protobufjs (MB/s) | jspb (MB/s) |
-|---|---|---|---|---|
-| 136 B | encode | 613.8 (2.54x ✅) | 241.2 | 57.1 |
-| 136 B | decode | 377.7 (1.01x ✅) | 373.6 | 116.8 |
-| 174 B | encode | 564.5 (2.15x ✅) | 263.0 | 59.3 |
-| 174 B | decode | 424.4 (1.11x ✅) | 381.2 | 107.8 |
-| 2469 B | encode | 1359.1 (3.44x ✅) | 395.6 | 51.8 |
-| 2469 B | decode | 951.6 (2.49x ✅) | 382.1 | 76.1 |
-| 74913 B | encode | 1444.0 (2.99x ✅) | 482.7 | 55.8 |
-| 74913 B | decode | 1173.1 (2.77x ✅) | 424.2 | 80.5 |
+| payload | op | pbwire-node-tree (MB/s, x protobufjs) | pbwire-node-shim (MB/s) | protobufjs (MB/s) | jspb (MB/s) |
+|---|---|---|---|---|---|
+| 136 B | encode | 587.3 (2.45x ✅) | 48.1 | 239.8 | 56.4 |
+| 136 B | decode | 368.7 (0.92x ❌) | 59.9 | 400.7 | 121.0 |
+| 174 B | encode | 568.7 (1.95x ✅) | 53.6 | 291.0 | 60.9 |
+| 174 B | decode | 436.7 (1.15x ✅) | 47.7 | 380.4 | 108.8 |
+| 2469 B | encode | 1449.3 (3.45x ✅) | 53.7 | 420.2 | 53.2 |
+| 2469 B | decode | 947.5 (2.51x ✅) | 47.9 | 377.0 | 79.2 |
+| 74913 B | encode | 1689.3 (3.36x ✅) | 58.1 | 502.9 | 56.6 |
+| 74913 B | decode | 1196.1 (2.95x ✅) | 52.3 | 405.1 | 81.1 |
+
+The two pbwire columns are the arms (`bindings/node/pbench/`). `tree` is the
+codec once the data is already in pbwire: a `Message` handle is built before the
+timer, and `encode()`/`decode()` run against it (a decoded handle materializes a
+field only when it is read). `shim` is the user-visible native-object task:
+`type.encodeObject(obj)` and `type.decodeToObject(wire)` hand a plain JS object
+or `Buffer` to the addon and get one back, one N-API downcall per op, with the
+addon walking the schema's field table in C (nested messages and repeated
+elements recurse in C, so no per-field JS round trip). `core` is plan 15's
+TS/JS port and prints `n/a` until it exists.
+
+`shim` is the slower row, and that is the finding: it is 1.05x-1.17x faster than
+assembling the same message with one `set()` per field (the pbench `tree` arm
+times that whole task), but it is 0.15x-0.10x of `tree` and 0.12x-0.20x of
+protobufjs, because every field of a native-object encode is one N-API object
+property read (~60-70 ns) and every field of a decode is one property write,
+where jspb and protobufjs pay a few ns in their own heap. At 74 KB it edges
+past jspb on encode (1.03x) and stays below it on decode (0.64x); at 136 B it is
+below jspb on both. The verdict (and the A/B that accepted the arena build for
+the encode tree) is in `bindings/node/pbench/README.md` and the ledger; the
+`tree` row stays the binding's headline for data that is already in pbwire.
 
 jspb's throughput does not move with payload size: its writer resolves a
 code/type table per field and hands every repeated element to a closure, where
 the C core writes one tag byte and one inline value, or memcpys an already
-validated slice. protobufjs, the fastest widely used JS runtime, is 5-9x
-faster than jspb on the same bytes (and the harness gates its bytes too):
-the ratio column above is against it — 3.21x on large encode and 2.32x on
-decode. The ~23x over jspb is the legacy-baseline gap; the ~2-3x is the codec
-gap. Small decode sits at the parity line (1.00x this run, 0.96-1.14x across
-runs — one N-API downcall on a 136 B payload is the whole budget
-there): the slice list
-decode records lives on the stack up to 32 entries, so a small message scans
-with no native allocation at all.
+validated slice. protobufjs, the fastest widely used JS runtime, is 3-7x faster
+than jspb on the same bytes (and the harness gates its bytes too): the `tree`
+ratio column above is against it -- 3.45x on large encode and 2.51x on decode,
+3.36x / 2.95x at 74 KB. The ~26x over jspb is the legacy-baseline gap; the
+~3x is the codec gap. Small `tree` decode is the one cell below it (0.92x this
+run; 0.96-1.14x across runs): one N-API downcall on a 136 B payload is the
+whole budget there, and the slice list decode records lives on the stack up to
+32 entries, so a small message scans with no native allocation at all.
 
 What the gap is made of, and what the optimization pass changed:
 

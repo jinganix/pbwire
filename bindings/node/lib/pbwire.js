@@ -34,15 +34,17 @@
  * Values map per field type:
  *
  *   int32/uint32/sint32/fixed32/sfixed32/enum   number
- *   int64/uint64/sint64/fixed64/sfixed64        BigInt
+ *   int64/uint64/sint64/fixed64/sfixed64        BigInt, or a decimal string
  *   float/double                                number
  *   bool                                        boolean
  *   string                                      string
  *   bytes                                       Buffer
  *   message / repeated                          object / array
  *
- * There is no int64 precision loss: 64-bit fields are BigInt, and a JS number
- * is accepted when setting (rounded the way Number->int64 rounds).
+ * There is no int64 precision loss: 64-bit fields read as BigInt, and writing
+ * takes a BigInt or an exact decimal string. A JS number is accepted only
+ * while it is an exact safe integer; anything else is refused with a TypeError
+ * naming the field instead of being rounded.
  */
 
 const fs = require('node:fs');
