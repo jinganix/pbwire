@@ -21,6 +21,12 @@ import structtest.Matrix3;
  * Correctness gates (un-timed): proto2 round trip against matrix2.bin,
  * oneof against edge.bin, groups + extensions cross-checked through
  * DynamicMessage, unknown-field retention, and the required-field gate.
+ *
+ * Arms (bindings/README.md#pbench-three-arms-one-contract), timed in one
+ * interleaved round per tier:
+ *   tree  GenericCodec/DMsg, prebuilt    -- what the codec costs once the tree exists
+ *   core  the committed generated model  -- native object in and out (Structtest_Scalars3)
+ *   shim  ../pbench/jni                  -- ceiling: one JNI crossing, no tree translation
  */
 public final class Bench {
     private Bench() {

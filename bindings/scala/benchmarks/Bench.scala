@@ -8,7 +8,12 @@
  * scaled x0 / x1 / x100 / x3000, which lands the tiers on 136 / 174 / 2469 /
  * 74913 bytes. Both sides must produce identical bytes before anything is
  * timed, and both allocate per call (pbwire encode()/decode() against
- * toByteArray/parseFrom), so the comparison is like for like.
+ * toByteArray/parseFrom), so the timer covers the user-visible task.
+ *
+ * Arms (bindings/README.md#pbench-three-arms-one-contract):
+ *   tree  Message (GenericCodec/DMsg), prebuilt -- what the codec costs once the tree exists
+ *   core  the committed generated model      -- native object in and out (matrix3Gen case classes)
+ *   shim  ../java/pbench/jni                 -- ceiling: one JNI crossing, no tree translation
  *
  * The `structtest` classes are the ScalaPB baseline: bench.sh generates
  * them from bindings/c/tests/data/matrix3.proto with scalapbc, so this

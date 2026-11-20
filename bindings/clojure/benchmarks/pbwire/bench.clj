@@ -4,14 +4,20 @@
 ;;
 ;; The same payload as every other row: every scalar kind, the nested
 ;; message, the two proto3 optionals, and the repeated fields scaled
-;; x0 / x1 / x100 / x3000 (136 / 174 / 2469 / 74913 bytes). Both sides must
-;; produce identical bytes before anything is timed, and both reuse a
-;; pre-built message per call (encode-message against toByteArray,
-;; decode-message plus close against parseFrom), so the comparison is like
-;; for like with the Java row. The persistent-map fns (encode/decode) stay
-;; for convenience and are gated for parity, but the timed path is the
-;; mutable Message (fill once, encode many; decode plus close, no map
-;; materialization), which is what beats the generated baseline.
+;; x0 / x1 / x100 / x3000 (136 / 174 / 2469 / 74913 bytes). Every row's
+;; bytes are gated against the official runtime before anything is timed.
+;;
+;; Arms (bindings/README.md#pbench-three-arms-one-contract):
+;;   tree  the persistent-map API, prebuilt map -- what the codec costs once the tree exists
+;;   core  the mutable-message fast path       -- native object in and out, no map walk
+;;   shim  ../java/pbench/jni                  -- ceiling: one JNI crossing, no tree translation
+;;
+;; The persistent-map fns (encode/decode) are the `tree` row: the map is
+;; the binding's own tree, so its walk and materialization are the arm's
+;; cost. The `core` row is the mutable Message (fill once, encode many;
+;; decode plus close, no map materialization), which is what beats the
+;; generated baseline. The review focus for this plan says the core row is
+;; that fast path, not a per-call map conversion.
 ;;
 ;;   ./bench.sh
 (ns pbwire.bench

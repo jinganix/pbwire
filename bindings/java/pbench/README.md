@@ -11,6 +11,21 @@ is unchanged: keep the pure-Java codec. What is new is that the harness below is
 committed, so the next person (or the next language's template) starts from a
 re-runnable gate instead of a throwaway.
 
+## Arms
+
+The normative arm names are the contract's; this is where the Java rows live.
+
+| arm | here | what it times |
+|---|---|---|
+| `tree` | [`../benchmarks/Bench.java`](../benchmarks/Bench.java), `GenericCodec`/`DMsg` prebuilt | what the codec costs once the tree exists |
+| `core` | [`../benchmarks/Bench.java`](../benchmarks/Bench.java), the committed `Structtest_Scalars3` model | native object in and out through the shipped model |
+| `shim` | `jni/` (`pbwire_jni.c`) | the C core behind one JNI call; it never translates a tree, so it is a ceiling |
+
+The three rows obey
+[`../../README.md#pbench-three-arms-one-contract`](../../README.md#pbench-three-arms-one-contract).
+`Bindings/README.md` publishes `tree` and `core` side by side and says that
+`jni/` is the ceiling, not a binding cost.
+
 ## Contract
 
 The normative contract is in

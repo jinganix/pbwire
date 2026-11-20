@@ -5,10 +5,14 @@
  *
  * The same payload as the C/Go/Java/Rust rows: every scalar kind, the nested
  * message, the two proto3 optionals, and the repeated fields scaled x0 / x1 /
- * x100 / x3000, which lands the tiers on 136 / 174 / 2469 / 74913 bytes. Both
- * sides must produce identical bytes before anything is timed, and both
- * allocate per call (pbwire encode()/decode() against toByteArray()/
- * parseFrom()), so the comparison is like for like.
+ * x100 / x3000, which lands the tiers on 136 / 174 / 2469 / 74913 bytes. Every
+ * row allocates per call (pbwire encode()/decode() against toByteArray()/
+ * parseFrom()), so the timer covers the user-visible task.
+ *
+ * Arms (bindings/README.md#pbench-three-arms-one-contract):
+ *   tree  Message (GenericCodec/DMsg), prebuilt -- what the codec costs once the tree exists
+ *   core  the committed generated model      -- native object in and out (Structtest_Scalars3)
+ *   shim  ../java/pbench/jni                 -- ceiling: one JNI crossing, no tree translation
  *
  *   ./bench.sh          generate, build, run
  */
