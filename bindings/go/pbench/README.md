@@ -49,10 +49,19 @@ field-by-field struct compare against the oracle decode.
 go test -tags pbench -run TestCompare -v -count=1 ./pbench/
 ```
 
-Last recorded run (Apple M4 Pro; absolute numbers move with the host, the
-ordering does not): `shim` 1.35-1.80x encode and 1.21-1.96x decode against
-`protobuf-go`, `core` direct 1.42-1.76x encode and 0.88-1.13x decode, `tree`
-0.05-0.10x encode and 0.11-0.13x decode.
+Last recorded run (Apple M4 Pro, `go test -tags pbench -run TestCompare -count=1
+./pbench/`; absolute numbers move with the host, the ordering does not):
+`shim` 1.41-1.82x encode and 1.11-2.13x decode against `protobuf-go`, `core`
+direct 1.43-1.57x encode and 0.84-1.23x decode, `tree` 0.05-0.10x encode and
+0.11-0.13x decode. On the xlarge tier (74913 B, median of 5 interleaved
+rounds):
+
+| arm | encode ns/op | encode MB/s | decode ns/op | decode MB/s |
+|---|---|---|---|---|
+| `tree` (`dync/`) | 2665872.3 | 28.1 | 2239179.4 | 33.5 |
+| `core` (`dyngo/`) | 88386.2 | 847.6 | 243107.1 | 308.2 |
+| `shim` (`cshim/`) | 76514.4 | 979.1 | 140871.9 | 531.8 |
+| `protobuf-go` | 139204.4 | 538.2 | 299707.5 | 250.0 |
 
 That ordering is the reason the arms exist: a per-field copy into any tree
 (the C core with cgo crossings worst, the Go core better but still
