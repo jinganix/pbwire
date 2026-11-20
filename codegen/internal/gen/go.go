@@ -532,38 +532,10 @@ func goNeedsUnsafe(f *model.File) bool {
 	return false
 }
 
-// goElemSizeof is the Elem column: the in-memory size of one element of
-// the row, as a compile-time unsafe.Sizeof over a kind zero literal.
-// Named types need no qualification: the size depends on the kind only.
-func goElemSizeof(field protoreflect.Kind) string {
-	switch field {
-	case protoreflect.Int32Kind, protoreflect.Sint32Kind, protoreflect.Sfixed32Kind, protoreflect.EnumKind:
-		return "uint32(unsafe.Sizeof(int32(0)))"
-	case protoreflect.Int64Kind, protoreflect.Sint64Kind, protoreflect.Sfixed64Kind:
-		return "uint32(unsafe.Sizeof(int64(0)))"
-	case protoreflect.Uint32Kind, protoreflect.Fixed32Kind:
-		return "uint32(unsafe.Sizeof(uint32(0)))"
-	case protoreflect.Uint64Kind, protoreflect.Fixed64Kind:
-		return "uint32(unsafe.Sizeof(uint64(0)))"
-	case protoreflect.FloatKind:
-		return "uint32(unsafe.Sizeof(float32(0)))"
-	case protoreflect.DoubleKind:
-		return "uint32(unsafe.Sizeof(float64(0)))"
-	case protoreflect.BoolKind:
-		return "uint32(unsafe.Sizeof(bool(false)))"
-	case protoreflect.StringKind:
-		return "uint32(unsafe.Sizeof(\"\"))"
-	case protoreflect.BytesKind:
-		return "uint32(unsafe.Sizeof([]byte(nil)))"
-	default:
-		return "0"
-	}
-}
-
 // writeGoTableFast appends the offset layout columns for rows the engine
-// may drive directly: Fast validity, Off value offset, Has presence offset
-// for explicit rows, Count len-word offset for string/slice rows, and Elem
-// element size. Message, oneof, foreign and group rows emit nothing.
+// may drive directly: Fast validity, Off value offset, and Has presence
+// offset for explicit rows. Message, oneof, foreign and group rows emit
+// nothing. Only columns the engine reads are emitted.
 func writeGoTableFast(b *strings.Builder, f *model.File, m model.Message, field model.Field, name string) {
 	if !goFastRow(field) {
 		return
@@ -573,12 +545,6 @@ func writeGoTableFast(b *strings.Builder, f *model.File, m model.Message, field 
 	if field.NeedsHas && !field.Required {
 		fmt.Fprintf(b, ", Has: %s", off)
 	}
-	if field.Kind == protoreflect.StringKind || field.Kind == protoreflect.BytesKind || field.Repeated {
-		if !field.NeedsHas || field.Required {
-			fmt.Fprintf(b, ", Count: %s + uint32(unsafe.Sizeof(uintptr(0)))", off)
-		}
-	}
-	fmt.Fprintf(b, ", Elem: %s", goElemSizeof(field.Kind))
 }
 
 // writeGoTableOneof emits a oneof member row: presence lives in the wrapper

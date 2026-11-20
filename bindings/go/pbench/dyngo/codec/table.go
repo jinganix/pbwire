@@ -74,16 +74,15 @@ type Field struct {
 	Packed   bool // repeated packable numerics share one length run
 	Group    bool // proto2 group: start/end framing (Kind is KindMessage)
 	Oneof    bool // oneof member: presence via GetOneof, value always written
-	// Fast and the four columns below are the cshim-shaped layout facts.
+	// Fast and the columns below are the cshim-shaped layout facts.
 	// Fast means the columns are valid and the engine may read/write the
 	// struct field directly instead of calling the closures. Zero Fast
 	// keeps the row on closures: offset 0 is a legal field offset (the
-	// first struct field), so it cannot double as "unset".
+	// first struct field), so it cannot double as "unset". Only columns
+	// the engine reads are kept.
 	Fast    bool   // offset columns valid; direct struct access allowed
 	Off     uint32 // byte offset of the value (pointer slot for explicit rows)
 	Has     uint32 // byte offset of the presence pointer (explicit rows)
-	Count   uint32 // byte offset of the len word (string/slice rows)
-	Elem    uint32 // in-memory element size
 	Sub     func() *Table
 	Foreign *ForeignOps
 
