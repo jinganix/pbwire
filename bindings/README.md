@@ -139,6 +139,13 @@ binary conformance suite is the single contract both obey. `core` numbers enter
 suite; until then it prints `n/a`. pbench keeps one copy of the shipped codec,
 as an adapter over `runtime/`, never a duplicate engine.
 
+C# has all three: `tree` is the prebuilt `Pbwire.Message` handle, `shim` is
+the generated model's native-object entry (`pbwire-csharp-shim`), `core` waits
+on plan 16. F# rides the C# runtime and prints the same two rows through it --
+no separate port, no second wire implementation. The C# `shim` row is below
+Google.Protobuf because the C core has no offset reader for pinned managed
+memory (see `bindings/csharp/pbench/README.md`).
+
 A binding states which of the three it has, including the two-mechanism
 bindings and the deferred ports with the reason: the status table in
 [BENCHMARKS.md](../BENCHMARKS.md#bindings-vs-their-baselines), with the per-arm

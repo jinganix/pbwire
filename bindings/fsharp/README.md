@@ -55,6 +55,11 @@ dotnet run --project tests -- ../c/tests/data/matrix3.desc        # self-check
 dotnet run --project examples -- ../c/tests/data/matrix3.desc     # example
 ```
 
+The F# facade has no separate port: `make fsharp-bench` prints
+`pbwire-fsharp-tree` (the `Message` handle the facade exposes) and
+`pbwire-fsharp-shim` (the C# generated model's native-object entry) through the
+C# runtime, so both rows measure the same shipped code the C# binding publishes.
+
 ## Benchmarks
 
 ```shell
