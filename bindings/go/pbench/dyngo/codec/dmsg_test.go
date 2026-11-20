@@ -8,7 +8,7 @@ import (
 	"os"
 	"testing"
 
-	"pbwire/codec"
+	"pbwire/pbench/dyngo/codec"
 	"pbwire/tests/gen/matrix3"
 )
 

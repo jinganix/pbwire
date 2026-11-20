@@ -121,7 +121,7 @@ func TestGoFilesDefault(t *testing.T) {
 			t.Errorf("model file misses %q", want)
 		}
 	}
-	for _, bad := range []string{"pbwire/codec", "EncodeModel", "DecodeModel", "codec.NewTable"} {
+	for _, bad := range []string{"pbwire/pbench/dyngo/codec", "EncodeModel", "DecodeModel", "codec.NewTable"} {
 		if strings.Contains(models, bad) {
 			t.Errorf("model file must stay data-only, found %q", bad)
 		}
@@ -376,7 +376,7 @@ func TestGoFilesCshimWiring(t *testing.T) {
 		}
 	}
 	models := got["b_pbwire.go"]
-	for _, bad := range []string{"EncodeModel", "DecodeModel", "EncodeRaw", "pbwire/codec"} {
+	for _, bad := range []string{"EncodeModel", "DecodeModel", "EncodeRaw", "pbwire/pbench/dyngo/codec"} {
 		if strings.Contains(models, bad) {
 			t.Errorf("drivable model file must forward from the cshim file, found %q", bad)
 		}
