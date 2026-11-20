@@ -340,6 +340,9 @@ func (c *Codec) EncodeRaw(base unsafe.Pointer) ([]byte, error) {
 		}
 		res := C.cshim_encode(c.h, C.uintptr_t(uintptr(base)), dst,
 			C.size_t(hint))
+		// The struct address crossed the boundary as an integer, so nothing
+		// else keeps base (a caller frame) alive through the call.
+		runtime.KeepAlive(base)
 		switch int(res.status) {
 		case stOK:
 			n := int(res.len)
@@ -382,6 +385,9 @@ func (c *Codec) DecodeInto(base unsafe.Pointer, wire []byte, materialize func(st
 	}
 	res := C.cshim_decode(c.h, C.uintptr_t(uintptr(base)), wp,
 		C.size_t(len(wire)))
+	// Keep the destination frame alive through the call: its address crossed
+	// as an integer and C writes into it.
+	runtime.KeepAlive(base)
 	runtime.KeepAlive(wire)
 	if int(res.status) != stOK {
 		return statusError("decode", res.status, res.fail_off)
@@ -407,6 +413,8 @@ func (c *Codec) DecodeRaw(base unsafe.Pointer, wire []byte) (int, error) {
 	}
 	res := C.cshim_decode(c.h, C.uintptr_t(uintptr(base)), wp,
 		C.size_t(len(wire)))
+	// Keep the destination frame alive through the call (see DecodeInto).
+	runtime.KeepAlive(base)
 	runtime.KeepAlive(wire)
 	if int(res.status) != stOK {
 		return 0, statusError("decode", res.status, res.fail_off)
