@@ -697,6 +697,17 @@ remaining 21 ns to ProtoBuf.jl's pure-Julia generated decode is the min core
 decode cost plus a downcall, and closing it needs a different decode shape
 (not a tuning fix).
 
+## Provisional: Julia shim arm (plan 07)
+
+The flat-layout shim removes the per-field boundary, and its decode uses a
+caller-owned arena (`pbw_struct_arena_new_mem`) allocated once in the plan, so
+there is no per-call `malloc`/`free` pair. Provisional `compare.jl` medians
+(2026-11-21): `shim` encode 1353.3 / 1325.1 / 1077.9 / 1115.3 MB/s and decode
+1095.2 / 993.9 / 688.3 / 746.2 MB/s at 136 / 174 / 2469 / 74913 B. The 136 B
+decode cell is still below ProtoBuf.jl (1289.2 MB/s, 0.85x); the remaining gap
+is the C struct decode plus the ccall, not the arena pair. The 136 B decode
+entry above stands; Stage 6 tests it below.
+
 ## Round: small-tier boundary cells, 2026-11-15
 
 Aim: the remaining sub-1.0x cells, with generic changes only (no per-payload

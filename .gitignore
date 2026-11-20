@@ -79,6 +79,7 @@ bindings/clojure/benchmarks/deps/
 bindings/clojure/.cpcache/
 bindings/r/pbwire.so
 bindings/julia/benchmarks/oracle/
+bindings/julia/pbench/gen/
 bindings/zig/zig-out/
 bindings/zig/.zig-cache/
 bindings/zig/zig-pkg/

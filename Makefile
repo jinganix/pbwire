@@ -762,7 +762,10 @@ fsharp-test: shared
 clojure-test:
 	cd bindings/clojure && ./build.sh
 
-julia-test:
+julia-shim-native: build/libpbwire.a
+	sh bindings/julia/build.sh
+
+julia-test: julia-shim-native
 	cd bindings/julia && $(JULIA) --project=runtime tests/runtests.jl
 
 r-test: r-bind
@@ -835,7 +838,7 @@ fsharp-bench:
 clojure-bench:
 	./scripts/bench-run.sh --binding clojure -- ./bindings/clojure/benchmarks/bench.sh
 
-julia-bench:
+julia-bench: julia-shim-native
 	./scripts/bench-run.sh --binding julia -- $(JULIA) --project=bindings/julia/runtime bindings/julia/benchmarks/bench.jl
 
 r-bench:
@@ -901,7 +904,7 @@ clean:
 	java-bench ruby-bench node-bench objc-bench go-bench pbench-java \
 	kotlin-test php-test dart-test rust-test csharp-test \
 	kotlin-bench php-bench dart-bench rust-bench csharp-bench \
-	swift-test scala-test elixir-test zig-test fsharp-test clojure-test julia-test r-test \
+	swift-test scala-test elixir-test zig-test fsharp-test clojure-test julia-test julia-shim-native r-test \
 	swift-bench scala-bench elixir-bench zig-bench fsharp-bench clojure-bench julia-bench r-bench \
 	desc-fixture test-cpp clean plugin-c go-test \
 	codegen codegen-test codegen-conformance bench-docker bench-compare

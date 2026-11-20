@@ -53,6 +53,24 @@ function decode(::Type{Spectest_MapValue}, wire::Vector{UInt8})
     return from_dict(Spectest_MapValue, Pbwire.decode_dict(ty, wire))
 end
 
+
+# spectest.MapValue as a flat native image: one ccall reads and writes it in place.
+mutable struct MapValueLayout
+    name::Ptr{UInt8}
+    value::Int32
+end
+
+function MapValueLayout()
+    return MapValueLayout(
+        Ptr{UInt8}(C_NULL),
+        Int32(0),
+    )
+end
+
+const mapValueLayoutRows = Pbwire.LayoutRow[
+    Pbwire.LayoutRow(1, 7, 0, fieldoffset(MapValueLayout, :name), 0, 0, 9, 2, 0, 0, 0, 0, ""),
+    Pbwire.LayoutRow(2, 0, 0, fieldoffset(MapValueLayout, :value), 0, 0, 5, 0, 0, 0, 0, 0, ""),
+]
 # spectest.MapTest.ByIntEntry
 mutable struct Spectest_MapTest_ByIntEntry
     key::Int64
@@ -102,6 +120,24 @@ function decode(::Type{Spectest_MapTest_ByIntEntry}, wire::Vector{UInt8})
     return from_dict(Spectest_MapTest_ByIntEntry, Pbwire.decode_dict(ty, wire))
 end
 
+
+# spectest.MapTest.ByIntEntry as a flat native image: one ccall reads and writes it in place.
+mutable struct MapTest_ByIntEntryLayout
+    key::Int32
+    value::Ptr{UInt8}
+end
+
+function MapTest_ByIntEntryLayout()
+    return MapTest_ByIntEntryLayout(
+        Int32(0),
+        Ptr{UInt8}(C_NULL),
+    )
+end
+
+const mapTest_ByIntEntryLayoutRows = Pbwire.LayoutRow[
+    Pbwire.LayoutRow(1, 0, 0, fieldoffset(MapTest_ByIntEntryLayout, :key), 0, 0, 5, 0, 0, 0, 0, 0, ""),
+    Pbwire.LayoutRow(2, 7, 0, fieldoffset(MapTest_ByIntEntryLayout, :value), 0, 0, 9, 2, 0, 0, 0, 0, ""),
+]
 # spectest.MapTest.ByStrEntry
 mutable struct Spectest_MapTest_ByStrEntry
     key::String
@@ -151,6 +187,24 @@ function decode(::Type{Spectest_MapTest_ByStrEntry}, wire::Vector{UInt8})
     return from_dict(Spectest_MapTest_ByStrEntry, Pbwire.decode_dict(ty, wire))
 end
 
+
+# spectest.MapTest.ByStrEntry as a flat native image: one ccall reads and writes it in place.
+mutable struct MapTest_ByStrEntryLayout
+    key::Ptr{UInt8}
+    value::Int32
+end
+
+function MapTest_ByStrEntryLayout()
+    return MapTest_ByStrEntryLayout(
+        Ptr{UInt8}(C_NULL),
+        Int32(0),
+    )
+end
+
+const mapTest_ByStrEntryLayoutRows = Pbwire.LayoutRow[
+    Pbwire.LayoutRow(1, 7, 0, fieldoffset(MapTest_ByStrEntryLayout, :key), 0, 0, 9, 2, 0, 0, 0, 0, ""),
+    Pbwire.LayoutRow(2, 0, 0, fieldoffset(MapTest_ByStrEntryLayout, :value), 0, 0, 5, 0, 0, 0, 0, 0, ""),
+]
 # spectest.MapTest.ByMsgEntry
 mutable struct Spectest_MapTest_ByMsgEntry
     key::String
@@ -200,6 +254,24 @@ function decode(::Type{Spectest_MapTest_ByMsgEntry}, wire::Vector{UInt8})
     return from_dict(Spectest_MapTest_ByMsgEntry, Pbwire.decode_dict(ty, wire))
 end
 
+
+# spectest.MapTest.ByMsgEntry as a flat native image: one ccall reads and writes it in place.
+mutable struct MapTest_ByMsgEntryLayout
+    key::Ptr{UInt8}
+    value::Ptr{MapValueLayout}
+end
+
+function MapTest_ByMsgEntryLayout()
+    return MapTest_ByMsgEntryLayout(
+        Ptr{UInt8}(C_NULL),
+        Ptr{MapValueLayout}(C_NULL),
+    )
+end
+
+const mapTest_ByMsgEntryLayoutRows = Pbwire.LayoutRow[
+    Pbwire.LayoutRow(1, 7, 0, fieldoffset(MapTest_ByMsgEntryLayout, :key), 0, 0, 9, 2, 0, 0, 0, 0, ""),
+    Pbwire.LayoutRow(2, 10, 0, fieldoffset(MapTest_ByMsgEntryLayout, :value), 0, 0, 11, 2, 0, 0, 0, 0, "spectest.MapValue"),
+]
 # spectest.MapTest
 mutable struct Spectest_MapTest
     by_int::Vector{Spectest_MapTest_ByIntEntry}
@@ -257,3 +329,30 @@ function decode(::Type{Spectest_MapTest}, wire::Vector{UInt8})
     return from_dict(Spectest_MapTest, Pbwire.decode_dict(ty, wire))
 end
 
+
+# spectest.MapTest as a flat native image: one ccall reads and writes it in place.
+mutable struct MapTestLayout
+    by_int::Ptr{MapTest_ByIntEntryLayout}
+    by_intCount::Csize_t
+    by_str::Ptr{MapTest_ByStrEntryLayout}
+    by_strCount::Csize_t
+    by_msg::Ptr{MapTest_ByMsgEntryLayout}
+    by_msgCount::Csize_t
+end
+
+function MapTestLayout()
+    return MapTestLayout(
+        Ptr{MapTest_ByIntEntryLayout}(C_NULL),
+        Csize_t(0),
+        Ptr{MapTest_ByStrEntryLayout}(C_NULL),
+        Csize_t(0),
+        Ptr{MapTest_ByMsgEntryLayout}(C_NULL),
+        Csize_t(0),
+    )
+end
+
+const mapTestLayoutRows = Pbwire.LayoutRow[
+    Pbwire.LayoutRow(1, 10, 1, fieldoffset(MapTestLayout, :by_int), 0, fieldoffset(MapTestLayout, :by_intCount), 11, 2, 0, 0, 0, 0, "spectest.MapTest.ByIntEntry"),
+    Pbwire.LayoutRow(2, 10, 1, fieldoffset(MapTestLayout, :by_str), 0, fieldoffset(MapTestLayout, :by_strCount), 11, 2, 0, 0, 0, 0, "spectest.MapTest.ByStrEntry"),
+    Pbwire.LayoutRow(3, 10, 1, fieldoffset(MapTestLayout, :by_msg), 0, fieldoffset(MapTestLayout, :by_msgCount), 11, 2, 0, 0, 0, 0, "spectest.MapTest.ByMsgEntry"),
+]
