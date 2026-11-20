@@ -86,6 +86,12 @@ implemented (maps ride as repeated entry structs, as in every binding), and
 unknown wire fields are dropped on decode, as before: the struct has nowhere
 to keep them. Reach for the two dynamic cores when that matters.
 
+The codec hands C the message's address as an integer, so the message must
+live in the heap: a Go stack frame's address goes stale if the goroutine's
+stack is copied during the call. `Marshal`/`Unmarshal` keep the struct they
+reach through in the codec for the call, which makes a stack-allocated
+message escape — one allocation, never a stale pointer (issue 46).
+
 | Piece | Path | Role |
 |---|---|---|
 | model | `tests/gen/<pkg>/<base>_pbwire.go` | structs, enums, getters, `Reset`; `Marshal`/`Unmarshal` when the file has no cshim wiring |

@@ -902,6 +902,36 @@ func TestCshimConcurrentUse(t *testing.T) {
 	}
 }
 
+// The struct a call reaches through must live where Go never moves it: C
+// receives its address as an integer, so a stack frame would go stale if the
+// goroutine's stack were copied mid-call (issue 46). The codec holds that
+// address for the call, which is also what makes the caller's object escape.
+func TestCshimFramePinnedForCall(t *testing.T) {
+	reg := scratchOneofRows()
+	c, err := NewCodecFromLayout(reg, "scratch4.S")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	m := &scratchOneof{Name: "n", Kind: &scratchOneofN{N: -7}}
+	wire := testEncode(t, c, m)
+
+	back := &scratchOneof{}
+	pinned := false
+	if err := c.DecodeInto(unsafe.Pointer(back), wire, func(int) {
+		pinned = c.frame == unsafe.Pointer(back)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !pinned {
+		t.Fatal("decode target not pinned while materialize ran")
+	}
+	if c.frame != nil {
+		t.Fatal("codec kept the frame after the call returned")
+	}
+}
+
 func TestCshimCodecMap(t *testing.T) {
 	md := scratchMapDescriptor(t)
 	var s scratchMap

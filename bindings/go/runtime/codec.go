@@ -87,6 +87,14 @@ type Codec struct {
 	mu   sync.Mutex
 	h    *C.cshim_codec
 	hint int
+	// frame holds the struct a call reaches through, for the length of that
+	// call. C receives its address as an integer, which no stack map tracks,
+	// so a Go stack frame goes stale when the goroutine's stack is copied and
+	// C then reads or writes dead memory (issue 46). Storing the address in
+	// this heap field does two things at once: it keeps the struct alive for
+	// the call, and it makes the caller's object escape, so Go puts it in the
+	// heap where nothing moves it.
+	frame unsafe.Pointer
 }
 
 // cshimTableInput is one registry entry: the Go-owned rows plus the
@@ -328,6 +336,8 @@ func (c *Codec) EncodeRaw(base unsafe.Pointer) ([]byte, error) {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.frame = base
+	defer func() { c.frame = nil }()
 	hint := c.hint
 	if hint < 64 {
 		hint = 64
@@ -379,6 +389,8 @@ func (c *Codec) DecodeInto(base unsafe.Pointer, wire []byte, materialize func(st
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.frame = base
+	defer func() { c.frame = nil }()
 	var wp *C.uint8_t
 	if len(wire) != 0 {
 		wp = (*C.uint8_t)(unsafe.Pointer(&wire[0]))
@@ -410,6 +422,8 @@ func (c *Codec) DecodeRaw(base unsafe.Pointer, wire []byte) (int, error) {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.frame = base
+	defer func() { c.frame = nil }()
 	var wp *C.uint8_t
 	if len(wire) != 0 {
 		wp = (*C.uint8_t)(unsafe.Pointer(&wire[0]))
