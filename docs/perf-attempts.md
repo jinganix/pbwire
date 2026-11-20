@@ -1329,3 +1329,18 @@ wire out, walk in C); `pbwire-r-tree` is the prebuilt builder and stays the
 form hot loops hold. `core` (a pure-R port) is deferred with its TODO, since a
 per-field interpreter loop is orders of magnitude off and no native-less R
 target exists.
+
+Formal run (`make r-bench`, 2026-11-20T23:06:55Z,
+`results/bench-r-20261120T230655Z.json`), MB/s at 136/174/2469/74913 B:
+
+| row | enc | dec |
+|---|---|---|
+| `pbwire-r-shim` | 94.4 / 74.0 / 137.9 / 137.3 | 91.3 / 99.1 / 134.2 / 122.7 |
+| `pbwire-r-tree` | 303.9 / 350.6 / 1091.3 / 1089.6 | 96.5 / 115.6 / 468.1 / 288.1 |
+| RProtoBuf | 2.6 / 2.9 / 2.6 / 2.7 | 2.7 / 2.9 / 2.9 / 2.7 |
+
+Stage 6 is a recorded no-op: no R cell is below its baseline (the weakest is
+shim decode 25.55x at 174 B), so no A/B pair of extension builds was made and
+no change was attempted. The gap that remains is between the two arms (a
+builder skips the list walk and the named-list materialization), not against
+RProtoBuf.
