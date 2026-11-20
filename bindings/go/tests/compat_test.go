@@ -22,6 +22,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 
 	"google.golang.org/protobuf/proto"
@@ -414,5 +415,44 @@ func TestT6Errors(t *testing.T) {
 	}
 	if ob.GetNum() != 1 {
 		t.Fatal("T6 oneof member round-trips")
+	}
+}
+
+// The generated model is safe for concurrent use: one codec per message type
+// serializes its own C scratch. Run with -race to prove the shared state is
+// covered (TESTSPEC: the thin model stands in for generated code).
+func TestModelConcurrentUse(t *testing.T) {
+	ref, err := os.ReadFile(filepath.Join(filepath.Dir(callerFile(t)), "..", "..", "c", "tests", "data", "matrix3.bin"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wg sync.WaitGroup
+	errCh := make(chan string, 64)
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for k := 0; k < 50; k++ {
+				m := &gen1.Scalars3{}
+				if err := m.Unmarshal(ref); err != nil {
+					errCh <- "unmarshal: " + err.Error()
+					return
+				}
+				out, err := m.Marshal()
+				if err != nil {
+					errCh <- "marshal: " + err.Error()
+					return
+				}
+				if !bytes.Equal(out, ref) {
+					errCh <- "re-encode differs"
+					return
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	close(errCh)
+	for msg := range errCh {
+		t.Fatal(msg)
 	}
 }

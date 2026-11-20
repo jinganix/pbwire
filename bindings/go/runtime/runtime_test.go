@@ -2,8 +2,10 @@ package runtime
 
 import (
 	"bytes"
+	"fmt"
 	"reflect"
 	"runtime"
+	"sync"
 	"testing"
 	"unsafe"
 
@@ -413,6 +415,10 @@ type scratchOneofN struct{ N int32 }
 
 type scratchOneofT struct{ T string }
 
+type scratchOneofF struct{ F float32 }
+
+type scratchOneofD struct{ D float64 }
+
 type scratchOneofInner struct {
 	V int32
 	W int32
@@ -462,6 +468,8 @@ func scratchOneofDescriptor(t *testing.T) protoreflect.MessageDescriptor {
 					{Name: str("num"), Number: i32(2), Label: descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL.Enum(), Type: descriptorpb.FieldDescriptorProto_TYPE_INT32.Enum(), OneofIndex: i32(0)},
 					{Name: str("text"), Number: i32(3), Label: descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL.Enum(), Type: descriptorpb.FieldDescriptorProto_TYPE_STRING.Enum(), OneofIndex: i32(0)},
 					{Name: str("inner"), Number: i32(4), Label: descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL.Enum(), Type: descriptorpb.FieldDescriptorProto_TYPE_MESSAGE.Enum(), TypeName: str(".scratch4.Inner"), OneofIndex: i32(0)},
+					{Name: str("f"), Number: i32(5), Label: descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL.Enum(), Type: descriptorpb.FieldDescriptorProto_TYPE_FLOAT.Enum(), OneofIndex: i32(0)},
+					{Name: str("d"), Number: i32(6), Label: descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL.Enum(), Type: descriptorpb.FieldDescriptorProto_TYPE_DOUBLE.Enum(), OneofIndex: i32(0)},
 				},
 				OneofDecl: []*descriptorpb.OneofDescriptorProto{{Name: str("kind")}},
 			},
@@ -481,6 +489,8 @@ func scratchOneofRows() []shimlayout.Msg {
 			{Fnum: 2, Kind: shimlayout.KindInt32, Wire: shimlayout.WireVarint, Offset: uint32(unsafe.Offsetof(scratchOneof{}.Kind)), Itab: shimlayout.ItabOf((*scratchOneofN)(nil)), Ogrp: 0, Sub: -1},
 			{Fnum: 3, Kind: shimlayout.KindString, Wire: shimlayout.WireLen, Offset: uint32(unsafe.Offsetof(scratchOneof{}.Kind)), Itab: shimlayout.ItabOf((*scratchOneofT)(nil)), Ogrp: 0, Sub: -1},
 			{Fnum: 4, Kind: shimlayout.KindMessage, Wire: shimlayout.WireLen, Offset: uint32(unsafe.Offsetof(scratchOneof{}.Kind)), Itab: shimlayout.ItabOf((*scratchOneofW)(nil)), Ogrp: 0, Sub: 1},
+			{Fnum: 5, Kind: shimlayout.KindFloat, Wire: shimlayout.WireFixed32, Offset: uint32(unsafe.Offsetof(scratchOneof{}.Kind)), Itab: shimlayout.ItabOf((*scratchOneofF)(nil)), Ogrp: 0, Sub: -1},
+			{Fnum: 6, Kind: shimlayout.KindDouble, Wire: shimlayout.WireFixed64, Offset: uint32(unsafe.Offsetof(scratchOneof{}.Kind)), Itab: shimlayout.ItabOf((*scratchOneofD)(nil)), Ogrp: 0, Sub: -1},
 		}},
 		{Full: "scratch4.Inner", Size: unsafe.Sizeof(scratchOneofInner{}), Rows: []shimlayout.Row{
 			{Fnum: 1, Kind: shimlayout.KindInt32, Wire: shimlayout.WireVarint, Offset: uint32(unsafe.Offsetof(scratchOneofInner{}.V)), Sub: -1},
@@ -520,6 +530,10 @@ func fixupOneof(t *testing.T, c *Codec, m *scratchOneof, wire []byte) {
 		m.Kind = &scratchOneofN{N: int32(scalar)}
 	case 3:
 		m.Kind = &scratchOneofT{T: string(unsafe.Slice((*byte)(ptr), ln))}
+	case 5:
+		m.Kind = &scratchOneofF{F: *(*float32)(unsafe.Pointer(&scalar))}
+	case 6:
+		m.Kind = &scratchOneofD{D: *(*float64)(unsafe.Pointer(&scalar))}
 	case 4:
 		if ptr == nil {
 			t.Fatal("message member staged nil submessage")
@@ -678,6 +692,145 @@ func TestCshimUnknownDropped(t *testing.T) {
 	// Known field 1 sent as a varint must fail, like the oracle.
 	if _, err := c.DecodeRaw(unsafe.Pointer(&scratchMap{}), []byte{0x08, 0x01}); err == nil {
 		t.Fatal("wrong wire type decoded without error")
+	}
+
+	// An unknown legacy group skips whole, and an unterminated one fails.
+	withGroup := []byte{0x0a, 0x01, 'n', 0x4b, 0x08, 0x01, 0x4c}
+	gback := &scratchMap{}
+	testDecode(t, c, gback, withGroup)
+	if gback.Name != "n" {
+		t.Fatalf("group skip lost the known field: %q", gback.Name)
+	}
+	if _, err := c.DecodeRaw(unsafe.Pointer(&scratchMap{}), []byte{0x4b, 0x08, 0x01}); err == nil {
+		t.Fatal("unterminated group decoded without error")
+	}
+}
+
+// Nested oneofs must not share staging slots with their root: each table
+// owns its slots, keyed by (table, slot).
+type scratchNestOuter struct {
+	Name string
+	In   *scratchNestInner
+	A    any
+}
+
+type scratchNestInner struct {
+	A any
+}
+
+func TestCshimNestedOneofSlots(t *testing.T) {
+	var o scratchNestOuter
+	var in scratchNestInner
+	reg := []shimlayout.Msg{
+		{Full: "nest.O", Size: unsafe.Sizeof(o), Rows: []shimlayout.Row{
+			{Fnum: 1, Kind: shimlayout.KindString, Wire: shimlayout.WireLen, Offset: uint32(unsafe.Offsetof(o.Name)), Sub: -1},
+			{Fnum: 2, Kind: shimlayout.KindMessage, Wire: shimlayout.WireLen, Offset: uint32(unsafe.Offsetof(o.In)), Sub: 1},
+			{Fnum: 3, Kind: shimlayout.KindString, Wire: shimlayout.WireLen, Offset: uint32(unsafe.Offsetof(o.A)), Itab: shimlayout.ItabFor[any]((*scratchOneofT)(nil)), Ogrp: 0, Sub: -1},
+		}},
+		{Full: "nest.I", Size: unsafe.Sizeof(in), Rows: []shimlayout.Row{
+			{Fnum: 1, Kind: shimlayout.KindString, Wire: shimlayout.WireLen, Offset: uint32(unsafe.Offsetof(in.A)), Itab: shimlayout.ItabFor[any]((*scratchOneofT)(nil)), Ogrp: 0, Sub: -1},
+		}},
+	}
+	c, err := NewCodecFromLayout(reg, "nest.O")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	// Root member 3 then nested member 1: both are slot 0 in their own
+	// table, so the nested one must not clobber the root one.
+	msg := &scratchNestOuter{Name: "root", In: &scratchNestInner{A: &scratchOneofT{T: "inner"}}, A: &scratchOneofT{T: "outer"}}
+	wire := testEncode(t, c, msg)
+
+	// Decode stages both members; the root fixup and the nested fixup each
+	// read their own table's slot.
+	back := &scratchNestOuter{}
+	testDecode(t, c, back, wire)
+	runtime.KeepAlive(wire)
+	// Root member staged in the root table's range, nested member in the
+	// nested table's: neither range overwrote the other.
+	if fnum, _, _, _, ln, ok := c.Stage(0); !ok || fnum != 3 || ln != len("outer") {
+		t.Fatalf("root slot: fnum=%d len=%d ok=%v", fnum, ln, ok)
+	}
+	if fnum, _, _, _, ln, ok := c.Stage(1); !ok || fnum != 1 || ln != len("inner") {
+		t.Fatalf("nested slot: fnum=%d len=%d ok=%v", fnum, ln, ok)
+	}
+	if back.Name != "root" {
+		t.Fatalf("root field lost: %q", back.Name)
+	}
+}
+
+// Singular (non-oneof) message occurrences merge, like protobuf: a message
+// split across the wire keeps every sub-field set by any occurrence.
+func TestCshimSingularMessageMerge(t *testing.T) {
+	reg := scratchGroupRows()
+	c, err := NewCodecFromLayout(reg, "scratch3.S")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	// Field 3 is a singular Sub; field 1 of Sub is the singular Leaf.
+	w1 := testEncode(t, c, &scratchG{Sub: &scratchSub{Leaf: &scratchLeaf{W: 1}}})
+	w2 := testEncode(t, c, &scratchG{Sub: &scratchSub{N: 2}})
+	both := append(append([]byte{}, w1...), w2...)
+	back := &scratchG{}
+	testDecode(t, c, back, both)
+	runtime.KeepAlive(both)
+	if back.Sub == nil || back.Sub.Leaf == nil || back.Sub.Leaf.W != 1 || back.Sub.N != 2 {
+		t.Fatalf("singular merge gave %+v (leaf %+v)", back.Sub, back.Sub.Leaf)
+	}
+}
+
+// One Codec is serialized by its own lock: concurrent Marshal/Unmarshal on
+// the same codec return exactly what serial calls return. Run with -race to
+// prove there is no data race in the C scratch or the encode size hint.
+func TestCshimConcurrentUse(t *testing.T) {
+	reg := scratchOneofRows()
+	c, err := NewCodecFromLayout(reg, "scratch4.S")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	cases := []struct {
+		want []byte
+		kind any
+	}{
+		{testEncode(t, c, &scratchOneof{Name: "n", Kind: &scratchOneofN{N: -7}}), &scratchOneofN{N: -7}},
+		{testEncode(t, c, &scratchOneof{Name: "n", Kind: &scratchOneofT{T: "hi"}}), &scratchOneofT{T: "hi"}},
+		{testEncode(t, c, &scratchOneof{Name: "n", Kind: &scratchOneofF{F: 2.5}}), &scratchOneofF{F: 2.5}},
+	}
+	var wg sync.WaitGroup
+	errCh := make(chan string, 64)
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			for k := 0; k < 200; k++ {
+				tc := cases[(i+k)%len(cases)]
+				m := &scratchOneof{Name: "n", Kind: tc.kind}
+				got, err := c.EncodeRaw(unsafe.Pointer(m))
+				if err != nil {
+					errCh <- "encode: " + err.Error()
+					return
+				}
+				if !bytes.Equal(got, tc.want) {
+					errCh <- fmt.Sprintf("encode differs: %x vs %x", got, tc.want)
+					return
+				}
+				back := &scratchOneof{}
+				if _, err := c.DecodeRaw(unsafe.Pointer(back), tc.want); err != nil {
+					errCh <- "decode: " + err.Error()
+					return
+				}
+			}
+		}(i)
+	}
+	wg.Wait()
+	close(errCh)
+	for msg := range errCh {
+		t.Fatal(msg)
 	}
 }
 
@@ -847,6 +1000,30 @@ func TestCshimCodecOneof(t *testing.T) {
 	fixupOneof(t, c, backBare, bareRef)
 	if backBare.Kind != nil {
 		t.Fatalf("unset: fixup gave %#v, want nil", backBare.Kind)
+	}
+
+	// Fixed-width members: encode reads the wrapper payload, not the
+	// interface header (a header read would emit the itab word).
+	for _, tc := range []struct {
+		name string
+		kind any
+		fnum protoreflect.FieldNumber
+		val  protoreflect.Value
+	}{
+		{"float", &scratchOneofF{F: 2.5}, 5, protoreflect.ValueOfFloat32(2.5)},
+		{"double", &scratchOneofD{D: -0.5}, 6, protoreflect.ValueOfFloat64(-0.5)},
+		{"float-zero", &scratchOneofF{}, 5, protoreflect.ValueOfFloat32(0)},
+	} {
+		ref := oracleOneof(t, md, tc.fnum, tc.val)
+		if got := testEncode(t, c, &scratchOneof{Name: "n", Kind: tc.kind}); !bytes.Equal(got, ref) {
+			t.Fatalf("%s: encode differs: %x vs %x", tc.name, got, ref)
+		}
+		backFix := &scratchOneof{}
+		testDecode(t, c, backFix, ref)
+		fixupOneof(t, c, backFix, ref)
+		if !reflect.DeepEqual(backFix.Kind, tc.kind) {
+			t.Fatalf("%s: fixup gave %#v, want %#v", tc.name, backFix.Kind, tc.kind)
+		}
 	}
 
 	// Last occurrence wins across members sharing the group slot.
