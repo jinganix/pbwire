@@ -115,3 +115,53 @@ func TestCSharpFilesNoRegistry(t *testing.T) {
 		t.Error("loader stays without the registry")
 	}
 }
+
+// csharpLayoutFile is the layout fixture: scalar slots pack first (natural
+// alignment, in declaration order), pointer slots follow, and the proto3
+// optionals carry one presence bit each.
+func csharpLayoutFile() *model.File {
+	return &model.File{
+		Path:    "matrix3.proto",
+		Package: "structtest",
+		Prefix:  "Structtest",
+		Messages: []model.Message{
+			{
+				Name: "Inner3",
+				Full: "structtest.Inner3",
+				Fields: []model.Field{
+					{Name: "name", Lower: "name", Pascal: "Name", Number: 1, Kind: protoreflect.StringKind},
+				},
+			},
+			{
+				Name: "Scalars3",
+				Full: "structtest.Scalars3",
+				Fields: []model.Field{
+					{Name: "i32", Lower: "i32", Pascal: "I32", Number: 1, Kind: protoreflect.Int32Kind},
+					{Name: "opt_str", Lower: "opt_str", Pascal: "OptStr", Number: 2, Kind: protoreflect.StringKind, NeedsHas: true},
+					{Name: "i64", Lower: "i64", Pascal: "I64", Number: 3, Kind: protoreflect.Int64Kind},
+					{Name: "u32", Lower: "u32", Pascal: "U32", Number: 4, Kind: protoreflect.Uint32Kind},
+					{Name: "opt_i32", Lower: "opt_i32", Pascal: "OptI32", Number: 5, Kind: protoreflect.Int32Kind, NeedsHas: true},
+					{Name: "inner", Lower: "inner", Pascal: "Inner", Number: 6, Kind: protoreflect.MessageKind, Message: "Inner3"},
+				},
+			},
+		},
+	}
+}
+
+// The layout table is codegen's output and the gate for the shim arm: a
+// message without it cannot be walked by an offset reader.
+func TestCSharpLayout(t *testing.T) {
+	files, err := csharpFiles(csharpLayoutFile(), Options{Lang: "csharp", Model: true, Register: true, Registry: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	models, ok := csharpFileMap(t, files)["matrix3.cs"]
+	if !ok {
+		t.Fatal("missing models file")
+	}
+	for _, want := range []string{"Scalars3Layout", `FieldAt("i32", 0, 4)`, `Has("opt_i32", 1, 20)`} {
+		if !strings.Contains(models, want) {
+			t.Errorf("generated models miss %q", want)
+		}
+	}
+}
