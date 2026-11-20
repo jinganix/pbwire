@@ -9,6 +9,9 @@
     <RootNamespace>Pbwire.Bench</RootNamespace>
     <InvariantGlobalization>true</InvariantGlobalization>
     <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <!-- The shim model assembly keeps its own Structtest namespace; only the
+         protoc baseline in gen/ may reach this project's compilation. -->
+    <DisableTransitiveProjectReferences>true</DisableTransitiveProjectReferences>
   </PropertyGroup>
 
   <ItemGroup>
@@ -16,6 +19,10 @@
     <Compile Include="Pbn.cs" />
     <Compile Include="gen/*.cs" />
     <ProjectReference Include="../Pbwire/Pbwire.csproj" />
+    <!-- The shim arm's model assembly keeps its own Structtest namespace; the
+         protoc baseline in gen/ must stay the only one this project compiles. -->
+    <ProjectReference Include="../pbench/Shim.csproj" />
+
     <PackageReference Include="Google.Protobuf" Version="3.36.2" />
     <PackageReference Include="protobuf-net" Version="3.4.40" />
   </ItemGroup>

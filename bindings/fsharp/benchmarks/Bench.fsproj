@@ -8,12 +8,17 @@
     <AssemblyName>Bench</AssemblyName>
     <RootNamespace>Pbwire.FSharp.Bench</RootNamespace>
     <InvariantGlobalization>true</InvariantGlobalization>
+    <!-- The C# pbench shim assembly's model namespace must not reach this
+         project: only the baseline's Structtest (protoc) is used here. -->
+    <DisableTransitiveProjectReferences>true</DisableTransitiveProjectReferences>
   </PropertyGroup>
 
   <ItemGroup>
     <Compile Include="Bench.fs" />
     <ProjectReference Include="../runtime/Pbwire.FSharp.fsproj" />
     <ProjectReference Include="baseline/Baseline.csproj" />
+    <ProjectReference Include="../../csharp/pbench/Shim.csproj" />
+    <ProjectReference Include="../../csharp/Pbwire/Pbwire.csproj" />
     <PackageReference Include="Google.Protobuf" Version="3.36.2" />
   </ItemGroup>
 

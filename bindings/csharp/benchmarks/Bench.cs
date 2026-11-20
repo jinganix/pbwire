@@ -14,6 +14,7 @@
 using System.Diagnostics;
 using Google.Protobuf;
 using Pbwire;
+using Pbwire.Pbench;
 using Structtest;
 
 var cases = new[] { "small", "medium", "large", "xlarge" };
@@ -88,6 +89,21 @@ for (var tier = 0; tier < cases.Length; tier++)
         Console.WriteLine($"NOTE   {label}: protobuf-net singular-encodes single-element packed fields ({pbnBytes.Length} vs {reference.Length} bytes); its rows skipped");
     }
 
+    // The shim arm's native object: the committed generated model, filled before
+    // the timer. Its bytes must match too, and its decode must re-encode equal.
+    var native = Matrix3Shim.New(n);
+    var shimBytes = Matrix3Shim.Marshal(native);
+    if (!shimBytes.SequenceEqual(reference))
+    {
+        Fail(label, $"pbwire-csharp-shim wrote {shimBytes.Length} bytes, protobuf-csharp {reference.Length}");
+        continue;
+    }
+    if (!Matrix3Shim.Marshal(Matrix3Shim.Unmarshal(reference)).SequenceEqual(reference))
+    {
+        Fail(label, "pbwire-csharp-shim decode differs");
+        continue;
+    }
+
     var official = FillOfficial(n);
     // Tier line shows the reference op's count; slower ops keep the floor.
     var tierCount = Calibrate(() => message.Encode(), count);
@@ -96,17 +112,21 @@ for (var tier = 0; tier < cases.Length; tier++)
     {
         using var decoded = ty.Decode(reference);
     });
+    var shimEncode = Measure(count, () => Matrix3Shim.Marshal(native));
+    var shimDecode = Measure(count, () => Matrix3Shim.Unmarshal(reference));
     var officialEncode = Measure(count, () => official.ToByteArray());
     var pbnEncode = pbnOk ? Measure(count, () => PbnEncode(pbn)) : 0;
     var officialDecode = Measure(count, () => Scalars3.Parser.ParseFrom(reference));
     var pbnDecode = pbnOk ? Measure(count, () => PbnDecode(reference)) : 0;
 
     Console.WriteLine($"{label}: {reference.Length} bytes, {tierCount} iterations (repeat field x{n})");
-    Console.WriteLine($"  {"impl",-12} {"op",-7} {"ns/op",12} {"MB/s",10}");
-    Row("pbwire-csharp", "encode", reference.Length, encode);
+    Console.WriteLine($"  {"impl",-20} {"op",-7} {"ns/op",12} {"MB/s",10}");
+    Row("pbwire-csharp-tree", "encode", reference.Length, encode);
+    Row("pbwire-csharp-shim", "encode", reference.Length, shimEncode);
     Row("protobuf-csharp", "encode", reference.Length, officialEncode);
     if (pbnOk) Row("protobuf-net", "encode", reference.Length, pbnEncode);
-    Row("pbwire-csharp", "decode", reference.Length, decode);
+    Row("pbwire-csharp-tree", "decode", reference.Length, decode);
+    Row("pbwire-csharp-shim", "decode", reference.Length, shimDecode);
     Row("protobuf-csharp", "decode", reference.Length, officialDecode);
     if (pbnOk) Row("protobuf-net", "decode", reference.Length, pbnDecode);
     Console.WriteLine();
@@ -280,7 +300,7 @@ static double Measure(int floor, Action op)
 }
 
 static void Row(string impl, string op, int bytes, double ns) =>
-    Console.WriteLine($"  {impl,-12} {op,-7} {ns,12:F1} {bytes / ns * 1000.0,10:F1}");
+    Console.WriteLine($"  {impl,-20} {op,-7} {ns,12:F1} {bytes / ns * 1000.0,10:F1}");
 
 void Fail(string label, string what)
 {
