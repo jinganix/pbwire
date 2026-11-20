@@ -899,12 +899,12 @@ The static generated-table path was therefore deleted (`neutral`,
 runtime is shipped yet: the two dynamic cores compete over the same
 `EncodeTable`/`DecodeTable` engine — the C core over cgo
 (`pbench/dync/dynamic`) and a pure-Go core with a runtime value tree
-(`bindings/go/codec`, `codec.DMsg`) — each in its own solution
+(`pbench/dyngo/codec`, `codec.DMsg`) — each in its own solution
 directory next to its arm, and `runtime/` stays empty until they select the
 final solution. Generated models are thin structs plus a metadata file of
 field tables. The selection landed: `bindings/go/runtime/` ships as the
-default engine, and the pure-Go one ships as `bindings/go/codec/` because
-models the cshim cannot drive fall back to it.
+default engine, while the pure-Go one stays a candidate whose table engine
+models the cshim cannot drive fall back to.
 
 `bindings/go/pbench/` now compares exactly the three dynamic shapes, each
 behind the same native-in / native-out contract (`Marshal` from a caller-held

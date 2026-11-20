@@ -20,7 +20,7 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/descriptorpb"
 	"google.golang.org/protobuf/types/dynamicpb"
-	"pbwire/codec"
+	"pbwire/pbench/dyngo/codec"
 	"pbwire/tests/gen/matrix3"
 	"pbwire/tests/gen_oracle/matrix3pb"
 )

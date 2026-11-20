@@ -236,7 +236,7 @@ func writeGoModelHeader(b *strings.Builder, f *model.File, opt Options, useCshim
 	// gofmt-clean, and a cshim file needs none of them.
 	var imports []string
 	if len(f.Messages) > 0 && !useCshim {
-		imports = append(imports, "\t\"pbwire/codec\"\n")
+		imports = append(imports, "\t\"pbwire/pbench/dyngo/codec\"\n")
 	}
 	if len(f.Enums) > 0 {
 		imports = append(imports, "\t\"fmt\"\n")
@@ -264,7 +264,7 @@ func writeGoMetaHeader(b *strings.Builder, f *model.File, opt Options) {
 	if len(f.Messages) == 0 {
 		return
 	}
-	b.WriteString("import (\n\t\"pbwire/codec\"\n")
+	b.WriteString("import (\n\t\"pbwire/pbench/dyngo/codec\"\n")
 	if goNeedsUnsafe(f) {
 		b.WriteString("\t\"unsafe\"\n")
 	}

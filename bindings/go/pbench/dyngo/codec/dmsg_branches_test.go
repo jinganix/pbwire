@@ -8,7 +8,7 @@ import (
 	"os"
 	"testing"
 
-	"pbwire/codec"
+	"pbwire/pbench/dyngo/codec"
 )
 
 func loadBranches(t *testing.T) *codec.DType {

@@ -7,7 +7,7 @@ import (
 	"bytes"
 	"testing"
 
-	"pbwire/codec"
+	"pbwire/pbench/dyngo/codec"
 	dep "pbwire/tests/gen/xdep"
 )
 

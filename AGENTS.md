@@ -123,7 +123,7 @@ after touching `bindings/ruby`, `make go-test` after touching `bindings/go`, and
 | `bindings/c/` | C binding: direct struct codec (`runtime/pbw_struct.c`, layout tables carry the wire facts), `protoc-gen-pbwire-c` (`plugin/`), `examples/`, `tests/`, `benchmarks/`, `conformance/` |
 | `bindings/python/` | Python binding: CPython extension (`runtime/pbwire.c`, dict<->wire in C), `examples/`, `tests/`, `benchmarks/`, `conformance/` (official runner testee) |
 | `bindings/ruby/` | Ruby binding: a C extension over the core (`ext/pbwire_ext`, builder tree + lazy wire view), `lib/`, `examples/`, `test/`, `benchmarks/`, `conformance/` (official runner testee) |
-| `bindings/go/` | Go binding: thin generated models over a cshim runtime (`runtime/`), pure-Go fallback engine (`codec/`), dynamic C core candidate in `pbench/`, `make go-test` |
+| `bindings/go/` | Go binding: thin generated models over a cshim runtime (`runtime/`), both dynamic engines as `pbench/` candidates, `make go-test` |
 | `bindings/cpp/` | C++ binding over the shared C runtime: `examples/`, `tests/`, `benchmarks/`, `conformance/` |
 | `bindings/java/` | Java binding: pure-Java codec (`runtime/`, no JNI), `examples/`, `tests/`, `benchmarks/`, `conformance/` |
 | `bindings/kotlin/` | Kotlin binding: DSL over the Java runtime, `tests/`, `benchmarks/` |
@@ -164,8 +164,8 @@ This decides how a binding gets its schema, and it is not negotiable:
    at startup. Generated *layout* (C structs and offset tables, Erlang records)
    is part of this, but the field numbers and types still come from the schema.
    Go sits here since issue 41: `protoc-gen-pbwire` emits the layout tables the
-   Go runtime walks, so a generated model needs no descriptor, while
-   `codec.Load` still takes one at run time for the value tree.
+   Go runtime walks, so a generated model needs no descriptor, while the
+   `pbench` Go engine's `codec.Load` still takes one at run time for a value tree.
 3. **Erlang needs neither.** gpb already is the plugin: `gpb_compile` /
    `protoc-erl` emits the record definitions plus `get_msg_defs/0` (gpb 5+:
    `get_proto_defs/0`, which keeps the proto3 markers), and
