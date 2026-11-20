@@ -79,9 +79,53 @@ func TestZZDebugSerial400(t *testing.T) {
 	fmt.Printf("ZZ serial 400 iters clean\n")
 }
 
-// 8 goroutines but serialized by a test-side mutex: passes => the codec
-// lock is not covering some shared state (true race); fails => pollution
-// visible even without overlap.
+// 8 goroutines, no test-side lock (mirrors TestModelConcurrentUse): on the
+// first mismatch, marshal the same m again. Second marshal clean => the
+// message is fine and that encode raced; still dirty => unmarshal raced.
+func TestZZDebugRacy8x50(t *testing.T) {
+	ref := zzRef(t)
+	var wg sync.WaitGroup
+	errCh := make(chan string, 64)
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for k := 0; k < 50; k++ {
+				m := &gen1.Scalars3{}
+				if err := m.Unmarshal(ref); err != nil {
+					errCh <- fmt.Sprintf("unmarshal: %v", err)
+					return
+				}
+				out, err := m.Marshal()
+				if err != nil {
+					errCh <- fmt.Sprintf("marshal: %v", err)
+					return
+				}
+				if !bytes.Equal(out, ref) {
+					out2, err2 := m.Marshal()
+					second := "marshal-err"
+					if err2 == nil {
+						if bytes.Equal(out2, ref) {
+							second = "clean"
+						} else {
+							second = "dirty"
+						}
+					}
+					fmt.Printf("ZZ racy mismatch k=%d second-marshal=%s\n", k, second)
+					zzDump(ref, out)
+					errCh <- "racy re-encode differs"
+					return
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	close(errCh)
+	for msg := range errCh {
+		t.Fatal(msg)
+	}
+	fmt.Printf("ZZ racy 8x50 clean\n")
+}
 func TestZZDebugLocked8x50(t *testing.T) {
 	ref := zzRef(t)
 	var mu sync.Mutex
