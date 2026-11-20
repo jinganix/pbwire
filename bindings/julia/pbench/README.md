@@ -63,3 +63,27 @@ mid-session:
 | 174 B | 152.5 | 1325.1 | 341.6 | 187.4 | 993.9 | 726.7 |
 | 2469 B | 99.3 | 1077.9 | 140.2 | 424.9 | 688.3 | 635.8 |
 | 74913 B | 97.5 | 1115.3 | 11.9 | 522.1 | 746.2 | 720.7 |
+
+## Verdict
+
+**Publish the flat-image `shim` row as the native-object path beside the
+shipped handle.** With one `ccall` per op, the shim is above ProtoBuf.jl on all
+four encode tiers (3.3x at 136 B, 9.3x at 74 KB) and above it on medium, large
+and xlarge decode; the 136 B decode is 0.85x, so the small-size decode still
+pays the C struct decode plus the ccall. The whole-task `tree` row (build a
+`Message` with one setter per field, then read one getter per field) is 0.4-1.6x
+the baseline encode because each field crosses the boundary; that is the
+per-field walk issue 41 corrects, not the codec.
+
+It is not (a) -- "replace the shipped fast path": the formal
+`make julia-bench` row `pbwire-julia-tree` times a *prebuilt* `Message`, which
+stays the shipping runtime for applications that already hold a tree. It is not
+(c) -- "a boundary feature is missing": the shim removes the per-field crossing
+from 136 B to 74 KB; only the small decode stays below the pure-Julia generated
+baseline, and Stage 6 tests that one cell.
+
+For the review's 136 B decode question: the shim does remove the per-call
+`malloc`/`free` pair (the plan owns the image and the caller-memory arena, so
+steady-state decode allocates nothing). The remaining gap is the C struct
+decode plus the one `ccall`; 124 ns against ProtoBuf.jl's 105 ns, not an arena
+cost.
