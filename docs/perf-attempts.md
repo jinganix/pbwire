@@ -1183,3 +1183,25 @@ recorded here rather than patched under plan 08.
 A second candidate was considered and not built: pre-sizing the plan's encode
 buffer. The measured loop already reuses the buffer (one growth on the first
 call, outside the timed steady state), so it cannot win a round.
+
+## Provisional: Swift shim arm (plan 09)
+
+The flat shim is the generated `@frozen <Message>Repr` plus one call into the C
+struct codec (`bindings/c/runtime/pbw_struct.c`, symlinked into the Swift
+package's `CPbwire` target), so there is no per-field crossing and no ARC in
+the walk (the mirror holds pointers, not `String`/`Array`/`Data`). Offsets come
+from `MemoryLayout<Repr>.offset(of: \.slot)!` at registration time, so the
+table cannot drift from the Swift layout; a child mirror's array stride is
+emitted explicitly because a Swift stride can be wider than the child's size.
+
+Provisional `Bench compare` medians (2026-11-21, interleaved, median of five):
+`shim` encode 919.3 / 937.2 / 1004.7 / 917.0 MB/s and decode 717.3 / 672.4 /
+534.4 / 592.4 MB/s at 136 / 174 / 2469 / 74913 B; the prebuilt-handle `tree` row
+is 1073.9 / 1115.9 / 1492.8 / 1675.8 encode and 879.6 / 801.9 / 689.3 / 642.6
+decode on the same run.
+
+Same shape as the Rust arm (plan 08): the one-call mirror is behind the shipped
+handle on encode, and above it on nothing, because both rows run the same C
+struct codec — the `tree` row is the core's own encoder, the shim row is the
+shared layout codec. Against the swift-protobuf baseline this is what decides
+the arm, and Stage 6 keeps or rejects a change per cell.

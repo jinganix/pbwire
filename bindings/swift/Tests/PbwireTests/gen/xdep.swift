@@ -39,3 +39,18 @@ public struct Xdep_DepMsg {
     }
 }
 
+
+/// xdep.DepMsg as a flat native mirror: one C call reads and writes it in place.
+@frozen
+public struct Xdep_DepMsgRepr: Pbwire.ReprMessage {
+    public var name: UnsafePointer<CChar>? = nil
+    public var value: Int32 = 0
+    public init() {}
+
+    public static let protoName = "xdep.DepMsg"
+    public static let fields: [Pbwire.FieldPlan] = [
+        Pbwire.FieldPlan(number: 1, kind: .string, offset: MemoryLayout<Xdep_DepMsgRepr>.offset(of: \.name)!, type: 9, wire: 2),
+        Pbwire.FieldPlan(number: 2, kind: .int32, offset: MemoryLayout<Xdep_DepMsgRepr>.offset(of: \.value)!, type: 5, wire: 0),
+    ]
+}
+

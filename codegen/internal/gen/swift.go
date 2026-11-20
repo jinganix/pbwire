@@ -34,6 +34,7 @@ func swiftFiles(f *model.File, opt Options) ([]File, error) {
 		}
 		for _, m := range f.Messages {
 			writeSwiftMessage(&b, f, m, stem)
+			writeSwiftLayout(&b, f, m)
 		}
 		files = append(files, File{Name: stem + ".swift", Content: b.String()})
 	}
@@ -226,6 +227,313 @@ func writeSwiftMessage(b *strings.Builder, f *model.File, m model.Message, stem 
 		writeSwiftLoad(b, f, field)
 	}
 	b.WriteString("        return out\n    }\n}\n\n")
+}
+
+// swiftLayoutKindInfo maps one field kind to the mirror's slot type and the
+// codec's precomputed wire facts: the pbw_struct kind, the pbw type and the
+// wire type of one element. A slot type of "" means a message pointer, whose
+// element type the child mirror names.
+func swiftLayoutKindInfo(field model.Field) (slot string, cKind, typ, wire int, ok bool) {
+	switch field.Kind {
+	case protoreflect.Int32Kind:
+		return "Int32", 0, 5, 0, true
+	case protoreflect.Sint32Kind:
+		return "Int32", 0, 17, 0, true
+	case protoreflect.Sfixed32Kind:
+		return "Int32", 0, 15, 5, true
+	case protoreflect.Int64Kind:
+		return "Int64", 1, 3, 0, true
+	case protoreflect.Sint64Kind:
+		return "Int64", 1, 18, 0, true
+	case protoreflect.Sfixed64Kind:
+		return "Int64", 1, 16, 1, true
+	case protoreflect.Uint32Kind:
+		return "UInt32", 2, 13, 0, true
+	case protoreflect.Fixed32Kind:
+		return "UInt32", 2, 7, 5, true
+	case protoreflect.Uint64Kind:
+		return "UInt64", 3, 4, 0, true
+	case protoreflect.Fixed64Kind:
+		return "UInt64", 3, 6, 1, true
+	case protoreflect.BoolKind:
+		return "Bool", 4, 8, 0, true
+	case protoreflect.FloatKind:
+		return "Float", 5, 2, 5, true
+	case protoreflect.DoubleKind:
+		return "Double", 6, 1, 1, true
+	case protoreflect.StringKind:
+		// NUL-terminated UTF-8, the C codec's string contract: a string
+		// cannot carry an embedded NUL here (bytes can).
+		return "UnsafePointer<CChar>?", 7, 9, 2, true
+	case protoreflect.BytesKind:
+		// The core's inline bytes value (pointer + length), not a copy.
+		return "Pbwire.PbwireBytes", 8, 12, 2, true
+	case protoreflect.EnumKind:
+		return "Int32", 9, 14, 0, true
+	case protoreflect.MessageKind:
+		return "", 10, 11, 2, true
+	case protoreflect.GroupKind:
+		return "", 10, 10, 3, true
+	}
+	return "", 0, 0, 0, false
+}
+
+// swiftLayoutChild names the mirror of a message field's child type: the same
+// module (one Swift module), so no import line.
+func swiftLayoutChild(f *model.File, field model.Field) string {
+	return swiftMsg(f, field) + "Repr"
+}
+
+// swiftLayoutSlot is one scalar/message slot type; a message slot points at
+// the child mirror, so the image is a tree of caller-owned memory.
+func swiftLayoutSlot(f *model.File, field model.Field) string {
+	slot, cKind, _, _, _ := swiftLayoutKindInfo(field)
+	if cKind == 10 {
+		return "UnsafeMutablePointer<" + swiftLayoutChild(f, field) + ">?"
+	}
+	return slot
+}
+
+// swiftLayoutElem is the element type of a repeated slot's array: the scalar
+// slot without its optionality, or the child mirror.
+func swiftLayoutElem(f *model.File, field model.Field) string {
+	if field.Message != "" {
+		return swiftLayoutChild(f, field)
+	}
+	slot, _, _, _, _ := swiftLayoutKindInfo(field)
+	return strings.TrimSuffix(slot, "?")
+}
+
+// swiftLayoutZero is the zero value of a mirror slot (a mirror is a value
+// type with no references, so every slot has a compile-time default). An empty
+// result means the slot has none: a C struct's initializer cannot appear in a
+// @frozen type's property initializer (the defining module is not imported
+// here), so `init()` assigns those slots instead.
+func swiftLayoutZero(slot string) string {
+	switch {
+	case strings.HasSuffix(slot, "?"):
+		return "nil"
+	case slot == "Bool":
+		return "false"
+	case slot == "Pbwire.PbwireBytes":
+		return ""
+	}
+	return "0"
+}
+
+// swiftLayoutOK reports whether a message's mirror is expressible: every field
+// has a slot, no message recurses into itself (a pointer cycle would need an
+// unbounded image), and every local child is expressible too.
+func swiftLayoutOK(f *model.File, m model.Message) bool {
+	return swiftLayoutOKMsg(f, m, map[string]bool{})
+}
+
+func swiftLayoutOKMsg(f *model.File, m model.Message, stack map[string]bool) bool {
+	if stack[m.Name] {
+		return false
+	}
+	stack[m.Name] = true
+	defer delete(stack, m.Name)
+	for _, field := range m.Fields {
+		if field.Skip != "" {
+			return false
+		}
+		if _, _, _, _, ok := swiftLayoutKindInfo(field); !ok {
+			return false
+		}
+		if field.Kind != protoreflect.MessageKind && field.Kind != protoreflect.GroupKind {
+			continue
+		}
+		if field.Import != "" {
+			continue // the sibling file emits its own mirror
+		}
+		var child *model.Message
+		for i := range f.Messages {
+			if f.Messages[i].Name == field.Message {
+				child = &f.Messages[i]
+			}
+		}
+		if child == nil || !swiftLayoutOKMsg(f, *child, stack) {
+			return false
+		}
+	}
+	return true
+}
+
+// swiftCamel camelcases a proto identifier (a oneof's case word name).
+func swiftCamel(name string) string {
+	parts := strings.Split(name, "_")
+	out := ""
+	for _, p := range parts {
+		if p == "" {
+			continue
+		}
+		out += strings.ToUpper(p[:1]) + p[1:]
+	}
+	if out == "" {
+		return "case"
+	}
+	return out
+}
+
+// swiftLayoutOffset is the row offset of one mirror slot. MemoryLayout knows
+// the layout Swift actually chose, so the generated table can never disagree
+// with the memory the C codec walks (the Rust mirror asserts offset_of!
+// instead; Swift has no compile-time offset).
+func swiftLayoutOffset(cls, slot string) string {
+	return "MemoryLayout<" + cls + ">.offset(of: \\." + slot + ")!"
+}
+
+// writeSwiftLayout emits the flat @frozen mirror of one message plus the
+// layout-table rows the C codec is handed. Slots hold no references, so the
+// in-place walk pays no ARC; a repeated field carries its own count and a
+// oneof its own case word. Slot order: values (with counts) first, then has
+// flags, then case words, so neither a has flag nor a case word can sit at
+// offset 0 (the codec reads 0 as "no such slot").
+func writeSwiftLayout(b *strings.Builder, f *model.File, m model.Message) {
+	if !swiftLayoutOK(f, m) {
+		return
+	}
+	cls := className(f, m.Name) + "Repr"
+	taken := map[string]bool{}
+	unique := func(name string) string {
+		for taken[name] {
+			name += "0"
+		}
+		taken[name] = true
+		return name
+	}
+	countOf := make([]string, len(m.Fields))
+	hasOf := make([]string, len(m.Fields))
+	caseOf := map[string]string{}
+	var caseOrder []string
+	for i, field := range m.Fields {
+		taken[field.Lower] = true
+		if field.Repeated {
+			countOf[i] = unique("count" + field.Pascal)
+		}
+	}
+	for i, field := range m.Fields {
+		if field.Repeated || field.Oneof != "" || !(field.NeedsHas || field.Required) {
+			continue
+		}
+		if _, cKind, _, _, _ := swiftLayoutKindInfo(field); cKind == 7 || cKind == 8 || cKind == 10 {
+			continue // a pointer-shaped slot is absent when nil
+		}
+		hasOf[i] = unique("has" + field.Pascal)
+	}
+	for _, field := range m.Fields {
+		if field.Repeated || field.Oneof == "" {
+			continue
+		}
+		if _, ok := caseOf[field.Oneof]; !ok {
+			caseOf[field.Oneof] = unique(swiftCamel(field.Oneof) + "Case")
+			caseOrder = append(caseOrder, field.Oneof)
+		}
+	}
+
+	var decls, rows, inits []string
+	for i, field := range m.Fields {
+		slot := swiftLayoutSlot(f, field)
+		if field.Repeated {
+			slot = "UnsafeMutablePointer<" + swiftLayoutElem(f, field) + ">?"
+		}
+		zero := swiftLayoutZero(slot)
+		if zero == "" {
+			decls = append(decls, "    public var "+field.Lower+": "+slot)
+			inits = append(inits, "        "+field.Lower+" = "+slot+"()")
+		} else {
+			decls = append(decls, "    public var "+field.Lower+": "+slot+" = "+zero)
+		}
+		if field.Repeated {
+			decls = append(decls, "    public var "+countOf[i]+": Int = 0")
+		}
+	}
+	for i := range m.Fields {
+		if hasOf[i] != "" {
+			decls = append(decls, "    public var "+hasOf[i]+": Int32 = 0")
+		}
+	}
+	for _, oneof := range caseOrder {
+		decls = append(decls, "    public var "+caseOf[oneof]+": UInt32 = 0")
+	}
+	for i, field := range m.Fields {
+		_, cKind, typ, wire, _ := swiftLayoutKindInfo(field)
+		kind := [...]string{"int32", "int64", "uint32", "uint64", "bool", "float",
+			"double", "string", "bytes", "enum", "message"}[cKind]
+		if kind == "enum" {
+			kind = "`enum`"
+		}
+		row := fmt.Sprintf("        Pbwire.FieldPlan(number: %d, kind: .%s, offset: %s, type: %d, wire: %d",
+			field.Number, kind, swiftLayoutOffset(cls, field.Lower), typ, wire)
+		elem := ""
+		if field.Message != "" {
+			// Arrays of child mirrors are strided by Swift's stride, which
+			// can be wider than the child's size.
+			elem = ", elem: MemoryLayout<" + swiftLayoutChild(f, field) + ">.stride"
+		}
+		if field.Repeated {
+			row += ", repeated: true, count: " + swiftLayoutOffset(cls, countOf[i]) + elem
+			if field.Packed {
+				row += ", packed: true"
+			}
+		} else {
+			if hasOf[i] != "" {
+				row += ", has: " + swiftLayoutOffset(cls, hasOf[i])
+			}
+			row += elem
+		}
+		if !field.Repeated && field.Required {
+			row += ", required: true"
+		}
+		if !field.Repeated && field.Oneof != "" {
+			row += ", oneof: true, cs: " + swiftLayoutOffset(cls, caseOf[field.Oneof])
+		}
+		rows = append(rows, row+"),")
+	}
+
+	var children []string
+	seen := map[string]bool{}
+	for _, field := range m.Fields {
+		if field.Message == "" {
+			continue
+		}
+		child := swiftLayoutChild(f, field)
+		if seen[child] {
+			continue
+		}
+		seen[child] = true
+		children = append(children, child+".self")
+	}
+
+	fmt.Fprintf(b, "\n/// %s as a flat native mirror: one C call reads and writes it in place.\n", m.Full)
+	if len(children) > 0 {
+		fmt.Fprintf(b, "/// The child mirrors must be registered before this one.\n")
+	}
+	b.WriteString("@frozen\n")
+	fmt.Fprintf(b, "public struct %s: Pbwire.ReprMessage {\n", cls)
+	for _, d := range decls {
+		b.WriteString(d + "\n")
+	}
+	if len(inits) == 0 {
+		b.WriteString("    public init() {}\n")
+	} else {
+		b.WriteString("    public init() {\n")
+		for _, line := range inits {
+			b.WriteString(line + "\n")
+		}
+		b.WriteString("    }\n")
+	}
+	b.WriteString("\n")
+	fmt.Fprintf(b, "    public static let protoName = %q\n", m.Full)
+	if len(children) > 0 {
+		fmt.Fprintf(b, "    public static let children: [any Pbwire.ReprMessage.Type] = [%s]\n", strings.Join(children, ", "))
+	}
+	b.WriteString("    public static let fields: [Pbwire.FieldPlan] = [\n")
+	for _, r := range rows {
+		b.WriteString(r + "\n")
+	}
+	b.WriteString("    ]\n}\n\n")
 }
 
 func swiftZero(t string) string {

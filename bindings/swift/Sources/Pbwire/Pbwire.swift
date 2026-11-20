@@ -75,6 +75,10 @@ public enum PbwireValue: Equatable {
 /// A loaded `FileDescriptorSet`: the schema every `Message` comes from.
 public final class Schema {
     fileprivate var handle: OpaquePointer?
+    // The `shim` arm's registry: one C layout registry per schema (children
+    // resolve through it) plus the compiled mirrors by proto name.
+    fileprivate var registry: OpaquePointer?
+    fileprivate var mirrors: [String: Any] = [:]
 
     /// Loads a schema from a serialized `FileDescriptorSet` file.
     public convenience init(contentsOfFile path: String) throws {
@@ -111,6 +115,7 @@ public final class Schema {
     }
 
     deinit {
+        if let registry { pbw_swift_schema_free(registry) }
         if let handle { pbw_schema_free(handle) }
     }
 
@@ -566,5 +571,263 @@ public final class Message: Equatable {
         default:
             return false
         }
+    }
+}
+
+// MARK: - Flat mirrors (the pbench `shim` arm)
+
+/// The core's inline bytes value (`pbw_bytes_t`): a pointer and a length, so a
+/// mirror holds bytes without copying them. Re-exported so generated mirrors
+/// name it without importing the C module.
+public typealias PbwireBytes = pbw_bytes_t
+
+/// A generated `@frozen` mirror of one message: fixed-width slots in a known
+/// order and no references, so the C layout codec can read and write a value
+/// in place and the walk pays no ARC. The code generator emits the conformance
+/// beside the model struct (`Structtest_Scalars3Repr` next to
+/// `Structtest_Scalars3`) and takes every offset from
+/// `MemoryLayout.offset(of:)`, so the layout table and the memory the codec
+/// walks cannot disagree.
+public protocol ReprMessage {
+    /// Every slot has a zero value (the generated mirror is a value type
+    /// with no references), so one can be created and then decoded into.
+    init()
+    /// The message's fully qualified proto name (`"pkg.Outer.Inner"`).
+    static var protoName: String { get }
+    /// One row per field, in descriptor order.
+    static var fields: [FieldPlan] { get }
+    /// The mirrors of this message's message-typed fields; each is registered
+    /// before this message.
+    static var children: [any ReprMessage.Type] { get }
+}
+
+extension ReprMessage {
+    public static var children: [any ReprMessage.Type] { [] }
+}
+
+/// One field's slot in a mirror: the C layout codec's row. `has`, `count` and
+/// `cs` are 0 when the field has no such slot; `type`/`wire` are the wire
+/// facts the generator precomputed (0 makes the codec ask the schema).
+public struct FieldPlan {
+    /// `pbw_struct_kind_t`: how the codec reads and writes the slot.
+    public enum Kind: Int32 {
+        case int32 = 0
+        case int64 = 1
+        case uint32 = 2
+        case uint64 = 3
+        case bool = 4
+        case float = 5
+        case double = 6
+        case string = 7
+        case bytes = 8
+        case `enum` = 9
+        case message = 10
+    }
+
+    public let number: Int32
+    public let kind: Kind
+    public let offset: Int
+    public let type: UInt8
+    public let wire: UInt8
+    public let repeated: Bool
+    public let has: Int
+    public let count: Int
+    /// MESSAGE: the child mirror's array stride
+    /// (`MemoryLayout<Child>.stride`), which a Swift stride can make wider
+    /// than the child's size. 0 falls back to the child's size.
+    public let elem: Int
+    public let packed: Bool
+    public let required: Bool
+    public let oneof: Bool
+    public let cs: Int
+
+    public init(
+        number: Int32, kind: Kind, offset: Int, type: UInt8, wire: UInt8,
+        repeated: Bool = false, has: Int = 0, count: Int = 0, elem: Int = 0,
+        packed: Bool = false, required: Bool = false, oneof: Bool = false,
+        cs: Int = 0
+    ) {
+        self.number = number
+        self.kind = kind
+        self.offset = offset
+        self.type = type
+        self.wire = wire
+        self.repeated = repeated
+        self.has = has
+        self.count = count
+        self.elem = elem
+        self.packed = packed
+        self.required = required
+        self.oneof = oneof
+        self.cs = cs
+    }
+}
+
+/// Owns every buffer a filled mirror points at. The mirror borrows memory, so
+/// whatever it points at has to outlive the read: strings are NUL-terminated
+/// UTF-8, arrays are contiguous elements and a sub-message is its own mirror.
+public final class ReprStorage {
+    private var blocks: [UnsafeMutableRawPointer] = []
+
+    public init() {}
+
+    deinit {
+        for block in blocks { block.deallocate() }
+    }
+
+    public func string(_ text: String) -> UnsafePointer<CChar> {
+        let utf8 = Array(text.utf8) + [0]
+        let buffer = UnsafeMutablePointer<CChar>.allocate(capacity: utf8.count)
+        blocks.append(UnsafeMutableRawPointer(buffer))
+        for (i, byte) in utf8.enumerated() { buffer[i] = CChar(bitPattern: byte) }
+        return UnsafePointer(buffer)
+    }
+
+    public func array<T>(_ values: [T]) -> UnsafeMutablePointer<T> {
+        let buffer = UnsafeMutablePointer<T>.allocate(capacity: Swift.max(values.count, 1))
+        blocks.append(UnsafeMutableRawPointer(buffer))
+        for (i, value) in values.enumerated() { buffer[i] = value }
+        return buffer
+    }
+
+    public func mirror<R: ReprMessage>(of type: R.Type) -> UnsafeMutablePointer<R> {
+        let buffer = UnsafeMutablePointer<R>.allocate(capacity: 1)
+        blocks.append(UnsafeMutableRawPointer(buffer))
+        buffer.initialize(to: R())
+        return buffer
+    }
+}
+
+/// One registered mirror type: the compiled C layout codec, its reusable
+/// encode buffer and its decode arena. `Schema.inPlace` caches one per schema
+/// and mirror type; reuse it, because every encode/decode is one downcall.
+public final class InPlace<R: ReprMessage> {
+    private let handle: OpaquePointer
+    private let type: String
+    private let size: Int
+    private let image: UnsafeMutablePointer<R>
+
+    fileprivate init(handle: OpaquePointer, type: String) {
+        self.handle = handle
+        self.type = type
+        // An empty mirror still needs a byte to point at (Swift's empty
+        // struct has size 0, which the codec reads as "no layout").
+        let size = Swift.max(MemoryLayout<R>.size, 1)
+        self.size = size
+        // Allocate a whole stride: the C codec writes `size` bytes, but the
+        // binding's typed pointer must cover one element of R.
+        let bytes = Swift.max(MemoryLayout<R>.stride, 1)
+        let raw = UnsafeMutableRawPointer.allocate(
+            byteCount: bytes, alignment: MemoryLayout<R>.alignment)
+        raw.initializeMemory(as: UInt8.self, repeating: 0, count: bytes)
+        self.image = raw.bindMemory(to: R.self, capacity: 1)
+    }
+
+    deinit {
+        // The C type belongs to the schema's registry (one registry per
+        // schema frees every type), so releasing this wrapper must not free
+        // it: only the image is this object's.
+        UnsafeMutableRawPointer(image).deallocate()
+    }
+
+    /// The mirror's byte size.
+    public var byteCount: Int { size }
+
+    /// Mirror -> wire bytes: one call, borrowing the image. The bytes are a
+    /// copy of the type's reusable buffer (which stays the type's).
+    public func encodeInPlace(_ value: R) throws -> Data {
+        var copy = value
+        var bytes: UnsafeMutablePointer<UInt8>?
+        var len = 0
+        let status = withUnsafePointer(to: &copy) { pointer in
+            pbw_swift_encode(handle, pointer, &bytes, &len)
+        }
+        guard status == PBW_OK else { try throwStatus(status, type) }
+        guard len > 0, let bytes else { return Data() }
+        return Data(bytes: bytes, count: len)
+    }
+
+    /// Wire bytes -> mirror, in place: one call, writing this type's image and
+    /// bump-allocating every string, bytes value, array and sub-message from
+    /// its arena. The result is valid until the next decode of this type (or
+    /// its release), which is what the decoded image borrows from.
+    public func decodeInPlace(_ wire: Data, into value: inout R) throws {
+        let status = wire.withUnsafeBytes { raw in
+            pbw_swift_decode(
+                handle, raw.baseAddress?.assumingMemoryBound(to: UInt8.self), wire.count,
+                image)
+        }
+        guard status == PBW_OK else { try throwStatus(status, type) }
+        value = image.pointee
+    }
+}
+
+extension Schema {
+    /// The registered mirror of `type`, creating it and its children on first
+    /// use. One registry per schema, so two schemas have two sets of mirrors.
+    public func inPlace<R: ReprMessage>(_ type: R.Type) throws -> InPlace<R> {
+        try registerOpened(type)
+        guard let mirror = mirrors[R.protoName] as? InPlace<R> else {
+            throw PbwireError(
+                status: PBW_ERR_INVALID.code, message: "mirror not registered: \(R.protoName)")
+        }
+        return mirror
+    }
+
+    /// One call: a mirror in, wire bytes out.
+    public func encodeInPlace<R: ReprMessage>(_ value: R) throws -> Data {
+        try inPlace(R.self).encodeInPlace(value)
+    }
+
+    /// One call: wire bytes in, a mirror out (in place, borrowed from this
+    /// schema's arena for that type).
+    public func decodeInPlace<R: ReprMessage>(_ wire: Data, into value: inout R) throws {
+        try inPlace(R.self).decodeInPlace(wire, into: &value)
+    }
+
+    // Children first: a message row's sub-layout is resolved from the schema,
+    // so the child's rows must already be in the registry.
+    private func registerMirror(_ type: any ReprMessage.Type) throws {
+        try registerOpened(type)
+    }
+
+    private func registerOpened<R: ReprMessage>(_ type: R.Type) throws {
+        if mirrors[R.protoName] != nil { return }
+        for child in R.children { try registerMirror(child) }
+        if registry == nil {
+            var created: OpaquePointer?
+            let status = pbw_swift_schema_new(handle.map { UnsafeRawPointer($0) }, &created)
+            guard status == PBW_OK, let created else {
+                try throwStatus(status, "layout registry")
+            }
+            registry = created
+        }
+        guard let registry else {
+            throw PbwireError(status: PBW_ERR_INVALID.code, message: "no layout registry")
+        }
+        let plans = R.fields
+        let rows = plans.map { plan in
+            pbw_swift_row(
+                number: UInt64(plan.number), kind: UInt64(plan.kind.rawValue),
+                repeated: plan.repeated ? 1 : 0, offset: UInt64(plan.offset),
+                has: UInt64(plan.has), count: UInt64(plan.count),
+                elem: UInt64(plan.elem), type: UInt64(plan.type), wire: UInt64(plan.wire),
+                packed: plan.packed ? 1 : 0, required: plan.required ? 1 : 0,
+                oneof: plan.oneof ? 1 : 0, cs: UInt64(plan.cs))
+        }
+        var empty = pbw_swift_row()
+        var mirror: OpaquePointer?
+        let size = Swift.max(MemoryLayout<R>.size, 1)
+        let status: pbw_status = R.protoName.withCString { name in
+            if rows.isEmpty {
+                return pbw_swift_type_new(registry, name, &empty, 0, size, &mirror)
+            }
+            return rows.withUnsafeBufferPointer { buffer in
+                pbw_swift_type_new(
+                    registry, name, buffer.baseAddress, buffer.count, size, &mirror)
+            }
+        }
+        guard status == PBW_OK, let mirror else { try throwStatus(status, R.protoName) }
+        mirrors[R.protoName] = InPlace<R>(handle: mirror, type: R.protoName)
     }
 }

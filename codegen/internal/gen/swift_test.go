@@ -175,7 +175,7 @@ func TestSwiftLayout(t *testing.T) {
 		"public var countNums: Int = 0",
 		"public var hasOptI32: Int32 = 0",
 		"Pbwire.FieldPlan(number: 1, kind: .int32, offset: MemoryLayout<Structtest_Scalars3Repr>.offset(of: \\.i32)!, type: 5, wire: 0)",
-		"Pbwire.FieldPlan(number: 17, kind: .int32, offset: MemoryLayout<Structtest_Scalars3Repr>.offset(of: \\.nums)!, type: 5, wire: 0, repeated: true, count: MemoryLayout<Structtest_Scalars3Repr>.offset(of: \\.countNums)!)",
+		"Pbwire.FieldPlan(number: 17, kind: .int32, offset: MemoryLayout<Structtest_Scalars3Repr>.offset(of: \\.nums)!, type: 5, wire: 0, repeated: true, count: MemoryLayout<Structtest_Scalars3Repr>.offset(of: \\.countNums)!, packed: true)",
 		"Pbwire.FieldPlan(number: 20, kind: .int32, offset: MemoryLayout<Structtest_Scalars3Repr>.offset(of: \\.optI32)!, type: 5, wire: 0, has: MemoryLayout<Structtest_Scalars3Repr>.offset(of: \\.hasOptI32)!)",
 	} {
 		if !strings.Contains(models, want) {

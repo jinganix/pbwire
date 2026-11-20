@@ -15,7 +15,10 @@ let package = Package(
     ],
     targets: [
         // Re-exports the C core header (repo include/pbwire.h) as module
-        // CPbwire. Owns no wire code: the format stays in the C core.
+        // CPbwire, and compiles the C binding's layout codec
+        // (bindings/c/runtime/pbw_struct.c, symlinked here) into this target
+        // so the Swift `shim` arm reaches pbw_struct_codec_* in one call. No
+        // wire code of its own: the format stays in the C core.
         .target(
             name: "CPbwire",
             path: "Sources/CPbwire",
@@ -37,10 +40,16 @@ let package = Package(
             dependencies: ["Pbwire", "AddressbookGen"],
             path: "Sources/Roundtrip",
             linkerSettings: [pbwireLink]),
+        // pbench arms: the tree and shim timing loops and their payload on
+        // matrix3 (the generated mirror is symlinked in from the test model).
+        .target(
+            name: "Pbench",
+            dependencies: ["Pbwire"],
+            path: "Sources/Pbench"),
         // The four standard tiers (see BENCHMARKS.md) on matrix3.desc.
         .executableTarget(
             name: "Bench",
-            dependencies: ["Pbwire"],
+            dependencies: ["Pbwire", "Pbench"],
             path: "Sources/Bench",
             linkerSettings: [pbwireLink]),
         // Assert-based self-check, no dependencies beyond XCTest.

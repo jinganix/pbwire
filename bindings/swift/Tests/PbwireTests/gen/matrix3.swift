@@ -46,6 +46,21 @@ public struct Structtest_Inner3 {
     }
 }
 
+
+/// structtest.Inner3 as a flat native mirror: one C call reads and writes it in place.
+@frozen
+public struct Structtest_Inner3Repr: Pbwire.ReprMessage {
+    public var name: UnsafePointer<CChar>? = nil
+    public var value: Int32 = 0
+    public init() {}
+
+    public static let protoName = "structtest.Inner3"
+    public static let fields: [Pbwire.FieldPlan] = [
+        Pbwire.FieldPlan(number: 1, kind: .string, offset: MemoryLayout<Structtest_Inner3Repr>.offset(of: \.name)!, type: 9, wire: 2),
+        Pbwire.FieldPlan(number: 2, kind: .int32, offset: MemoryLayout<Structtest_Inner3Repr>.offset(of: \.value)!, type: 5, wire: 0),
+    ]
+}
+
 /// structtest.Scalars3
 public struct Structtest_Scalars3 {
     public var i32: Int64 = 0
@@ -146,5 +161,67 @@ public struct Structtest_Scalars3 {
         }
         return out
     }
+}
+
+
+/// structtest.Scalars3 as a flat native mirror: one C call reads and writes it in place.
+/// The child mirrors must be registered before this one.
+@frozen
+public struct Structtest_Scalars3Repr: Pbwire.ReprMessage {
+    public var i32: Int32 = 0
+    public var i64: Int64 = 0
+    public var u32: UInt32 = 0
+    public var u64: UInt64 = 0
+    public var s32: Int32 = 0
+    public var s64: Int64 = 0
+    public var fx32: UInt32 = 0
+    public var fx64: UInt64 = 0
+    public var sfx32: Int32 = 0
+    public var sfx64: Int64 = 0
+    public var f32: Float = 0
+    public var f64: Double = 0
+    public var flag: Bool = false
+    public var str: UnsafePointer<CChar>? = nil
+    public var color: Int32 = 0
+    public var inner: UnsafeMutablePointer<Structtest_Inner3Repr>? = nil
+    public var nums: UnsafeMutablePointer<Int32>? = nil
+    public var countNums: Int = 0
+    public var tags: UnsafeMutablePointer<UnsafePointer<CChar>>? = nil
+    public var countTags: Int = 0
+    public var inners: UnsafeMutablePointer<Structtest_Inner3Repr>? = nil
+    public var countInners: Int = 0
+    public var optI32: Int32 = 0
+    public var optStr: UnsafePointer<CChar>? = nil
+    public var flags: UnsafeMutablePointer<Bool>? = nil
+    public var countFlags: Int = 0
+    public var hasOptI32: Int32 = 0
+    public init() {}
+
+    public static let protoName = "structtest.Scalars3"
+    public static let children: [any Pbwire.ReprMessage.Type] = [Structtest_Inner3Repr.self]
+    public static let fields: [Pbwire.FieldPlan] = [
+        Pbwire.FieldPlan(number: 1, kind: .int32, offset: MemoryLayout<Structtest_Scalars3Repr>.offset(of: \.i32)!, type: 5, wire: 0),
+        Pbwire.FieldPlan(number: 2, kind: .int64, offset: MemoryLayout<Structtest_Scalars3Repr>.offset(of: \.i64)!, type: 3, wire: 0),
+        Pbwire.FieldPlan(number: 3, kind: .uint32, offset: MemoryLayout<Structtest_Scalars3Repr>.offset(of: \.u32)!, type: 13, wire: 0),
+        Pbwire.FieldPlan(number: 4, kind: .uint64, offset: MemoryLayout<Structtest_Scalars3Repr>.offset(of: \.u64)!, type: 4, wire: 0),
+        Pbwire.FieldPlan(number: 5, kind: .int32, offset: MemoryLayout<Structtest_Scalars3Repr>.offset(of: \.s32)!, type: 17, wire: 0),
+        Pbwire.FieldPlan(number: 6, kind: .int64, offset: MemoryLayout<Structtest_Scalars3Repr>.offset(of: \.s64)!, type: 18, wire: 0),
+        Pbwire.FieldPlan(number: 7, kind: .uint32, offset: MemoryLayout<Structtest_Scalars3Repr>.offset(of: \.fx32)!, type: 7, wire: 5),
+        Pbwire.FieldPlan(number: 8, kind: .uint64, offset: MemoryLayout<Structtest_Scalars3Repr>.offset(of: \.fx64)!, type: 6, wire: 1),
+        Pbwire.FieldPlan(number: 9, kind: .int32, offset: MemoryLayout<Structtest_Scalars3Repr>.offset(of: \.sfx32)!, type: 15, wire: 5),
+        Pbwire.FieldPlan(number: 10, kind: .int64, offset: MemoryLayout<Structtest_Scalars3Repr>.offset(of: \.sfx64)!, type: 16, wire: 1),
+        Pbwire.FieldPlan(number: 11, kind: .float, offset: MemoryLayout<Structtest_Scalars3Repr>.offset(of: \.f32)!, type: 2, wire: 5),
+        Pbwire.FieldPlan(number: 12, kind: .double, offset: MemoryLayout<Structtest_Scalars3Repr>.offset(of: \.f64)!, type: 1, wire: 1),
+        Pbwire.FieldPlan(number: 13, kind: .bool, offset: MemoryLayout<Structtest_Scalars3Repr>.offset(of: \.flag)!, type: 8, wire: 0),
+        Pbwire.FieldPlan(number: 14, kind: .string, offset: MemoryLayout<Structtest_Scalars3Repr>.offset(of: \.str)!, type: 9, wire: 2),
+        Pbwire.FieldPlan(number: 15, kind: .`enum`, offset: MemoryLayout<Structtest_Scalars3Repr>.offset(of: \.color)!, type: 14, wire: 0),
+        Pbwire.FieldPlan(number: 16, kind: .message, offset: MemoryLayout<Structtest_Scalars3Repr>.offset(of: \.inner)!, type: 11, wire: 2, elem: MemoryLayout<Structtest_Inner3Repr>.stride),
+        Pbwire.FieldPlan(number: 17, kind: .int32, offset: MemoryLayout<Structtest_Scalars3Repr>.offset(of: \.nums)!, type: 5, wire: 0, repeated: true, count: MemoryLayout<Structtest_Scalars3Repr>.offset(of: \.countNums)!, packed: true),
+        Pbwire.FieldPlan(number: 18, kind: .string, offset: MemoryLayout<Structtest_Scalars3Repr>.offset(of: \.tags)!, type: 9, wire: 2, repeated: true, count: MemoryLayout<Structtest_Scalars3Repr>.offset(of: \.countTags)!),
+        Pbwire.FieldPlan(number: 19, kind: .message, offset: MemoryLayout<Structtest_Scalars3Repr>.offset(of: \.inners)!, type: 11, wire: 2, repeated: true, count: MemoryLayout<Structtest_Scalars3Repr>.offset(of: \.countInners)!, elem: MemoryLayout<Structtest_Inner3Repr>.stride),
+        Pbwire.FieldPlan(number: 20, kind: .int32, offset: MemoryLayout<Structtest_Scalars3Repr>.offset(of: \.optI32)!, type: 5, wire: 0, has: MemoryLayout<Structtest_Scalars3Repr>.offset(of: \.hasOptI32)!),
+        Pbwire.FieldPlan(number: 21, kind: .string, offset: MemoryLayout<Structtest_Scalars3Repr>.offset(of: \.optStr)!, type: 9, wire: 2),
+        Pbwire.FieldPlan(number: 22, kind: .bool, offset: MemoryLayout<Structtest_Scalars3Repr>.offset(of: \.flags)!, type: 8, wire: 0, repeated: true, count: MemoryLayout<Structtest_Scalars3Repr>.offset(of: \.countFlags)!, packed: true),
+    ]
 }
 
