@@ -703,10 +703,23 @@ The flat-layout shim removes the per-field boundary, and its decode uses a
 caller-owned arena (`pbw_struct_arena_new_mem`) allocated once in the plan, so
 there is no per-call `malloc`/`free` pair. Provisional `compare.jl` medians
 (2026-11-21): `shim` encode 1353.3 / 1325.1 / 1077.9 / 1115.3 MB/s and decode
-1095.2 / 993.9 / 688.3 / 746.2 MB/s at 136 / 174 / 2469 / 74913 B. The 136 B
-decode cell is still below ProtoBuf.jl (1289.2 MB/s, 0.85x); the remaining gap
-is the C struct decode plus the ccall, not the arena pair. The 136 B decode
-entry above stands; Stage 6 tests it below.
+1095.2 / 993.9 / 688.3 / 746.2 MB/s at 136 / 174 / 2469 / 74913 B. The formal
+136 B row is 1107.3 MB/s against ProtoBuf.jl 1173.2 (0.94x); the remaining gap
+is the C struct decode plus the ccall, not the arena pair (the plan owns both
+the image and the caller-memory arena, so steady-state decode has no
+`malloc`/`free`).
+
+Stage 6 A/B on the 136 B shim decode (each build, five passes of 3.2M calls):
+
+| build | ns/op | MB/s | result |
+|---|---|---|---|
+| baseline | 133.9 | 1015.6 | -- |
+| cache the caller arena header in the type, skipping `pbw_struct_arena_new_mem` per call | 134.0 | 1013.0 | rejected: no win, within noise |
+| pass the image as `Ptr{T}` from `pointer_from_objref` instead of `Ref{T}` | 134.9 | 1008.1 | rejected: no win |
+
+Bytes stayed identical in both rounds (the gate passed); neither change was
+kept, so the 136 B decode entry above stands. The gap is the C struct decode
+shape, not a tuning fix in this arm.
 
 ## Round: small-tier boundary cells, 2026-11-15
 
