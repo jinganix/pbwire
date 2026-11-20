@@ -526,6 +526,147 @@ func fixupOneof(t *testing.T, c *Codec, m *scratchOneof, wire []byte) {
 	runtime.KeepAlive(wire)
 }
 
+// ---------------------------------------------------------------------------
+// Maps ride as repeated entry structs: array order is the wire order (like
+// the C struct binding), and message-valued entries nest one more level.
+// The oracle is dynamicpb over a map field, marshalled deterministically.
+// ---------------------------------------------------------------------------
+
+type scratchMapEntry struct {
+	Key string
+	Val int32
+}
+
+type scratchMapMsgEntry struct {
+	Key string
+	In  *scratchOneofInner
+}
+
+type scratchMap struct {
+	Name  string
+	ByStr []*scratchMapEntry
+	ByMsg []*scratchMapMsgEntry
+}
+
+func scratchMapDescriptor(t *testing.T) protoreflect.MessageDescriptor {
+	t.Helper()
+	str := func(s string) *string { return &s }
+	i32 := func(n int32) *int32 { return &n }
+	entry := func(name string, num int32, key, val *descriptorpb.FieldDescriptorProto) *descriptorpb.DescriptorProto {
+		return &descriptorpb.DescriptorProto{
+			Name:    str(name),
+			Field:   []*descriptorpb.FieldDescriptorProto{key, val},
+			Options: &descriptorpb.MessageOptions{MapEntry: func() *bool { b := true; return &b }()},
+		}
+	}
+	sf := func(name string, num int32, typ descriptorpb.FieldDescriptorProto_Type) *descriptorpb.FieldDescriptorProto {
+		return &descriptorpb.FieldDescriptorProto{
+			Name: str(name), Number: i32(num), Label: descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL.Enum(), Type: typ.Enum(),
+		}
+	}
+	fd := &descriptorpb.FileDescriptorProto{
+		Syntax:  str("proto3"),
+		Name:    str("scratch5.proto"),
+		Package: str("scratch5"),
+		MessageType: []*descriptorpb.DescriptorProto{
+			{
+				Name: str("Inner"),
+				Field: []*descriptorpb.FieldDescriptorProto{
+					{Name: str("v"), Number: i32(1), Label: descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL.Enum(), Type: descriptorpb.FieldDescriptorProto_TYPE_INT32.Enum()},
+				},
+			},
+			{
+				Name: str("S"),
+				Field: []*descriptorpb.FieldDescriptorProto{
+					{Name: str("name"), Number: i32(1), Label: descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL.Enum(), Type: descriptorpb.FieldDescriptorProto_TYPE_STRING.Enum()},
+					{Name: str("by_str"), Number: i32(2), Label: descriptorpb.FieldDescriptorProto_LABEL_REPEATED.Enum(), Type: descriptorpb.FieldDescriptorProto_TYPE_MESSAGE.Enum(), TypeName: str(".scratch5.S.ByStrEntry")},
+					{Name: str("by_msg"), Number: i32(3), Label: descriptorpb.FieldDescriptorProto_LABEL_REPEATED.Enum(), Type: descriptorpb.FieldDescriptorProto_TYPE_MESSAGE.Enum(), TypeName: str(".scratch5.S.ByMsgEntry")},
+				},
+				NestedType: []*descriptorpb.DescriptorProto{
+					entry("ByStrEntry", 2, sf("key", 1, descriptorpb.FieldDescriptorProto_TYPE_STRING), sf("value", 2, descriptorpb.FieldDescriptorProto_TYPE_INT32)),
+					entry("ByMsgEntry", 3, sf("key", 1, descriptorpb.FieldDescriptorProto_TYPE_STRING), &descriptorpb.FieldDescriptorProto{
+						Name: str("value"), Number: i32(2), Label: descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL.Enum(),
+						Type:     descriptorpb.FieldDescriptorProto_TYPE_MESSAGE.Enum(),
+						TypeName: str(".scratch5.Inner"),
+					}),
+				},
+			},
+		},
+	}
+	file, err := protodesc.NewFile(fd, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return file.Messages().ByName("S")
+}
+
+func TestCshimCodecMap(t *testing.T) {
+	md := scratchMapDescriptor(t)
+	var s scratchMap
+	reg := []shimlayout.Msg{
+		{Full: "scratch5.S", Size: unsafe.Sizeof(s), Rows: []shimlayout.Row{
+			{Fnum: 1, Kind: shimlayout.KindString, Wire: shimlayout.WireLen, Offset: uint32(unsafe.Offsetof(s.Name)), Sub: -1},
+			{Fnum: 2, Kind: shimlayout.KindMessage, Wire: shimlayout.WireLen, Offset: uint32(unsafe.Offsetof(s.ByStr)), Repeated: true, Sub: 1},
+			{Fnum: 3, Kind: shimlayout.KindMessage, Wire: shimlayout.WireLen, Offset: uint32(unsafe.Offsetof(s.ByMsg)), Repeated: true, Sub: 2},
+		}},
+		{Full: "scratch5.S.ByStrEntry", Size: unsafe.Sizeof(scratchMapEntry{}), Rows: []shimlayout.Row{
+			{Fnum: 1, Kind: shimlayout.KindString, Wire: shimlayout.WireLen, Offset: uint32(unsafe.Offsetof(scratchMapEntry{}.Key)), Sub: -1},
+			{Fnum: 2, Kind: shimlayout.KindInt32, Wire: shimlayout.WireVarint, Offset: uint32(unsafe.Offsetof(scratchMapEntry{}.Val)), Sub: -1},
+		}},
+		{Full: "scratch5.S.ByMsgEntry", Size: unsafe.Sizeof(scratchMapMsgEntry{}), Rows: []shimlayout.Row{
+			{Fnum: 1, Kind: shimlayout.KindString, Wire: shimlayout.WireLen, Offset: uint32(unsafe.Offsetof(scratchMapMsgEntry{}.Key)), Sub: -1},
+			{Fnum: 2, Kind: shimlayout.KindMessage, Wire: shimlayout.WireLen, Offset: uint32(unsafe.Offsetof(scratchMapMsgEntry{}.In)), Sub: 3},
+		}},
+		{Full: "scratch5.Inner", Size: unsafe.Sizeof(scratchOneofInner{}), Rows: []shimlayout.Row{
+			{Fnum: 1, Kind: shimlayout.KindInt32, Wire: shimlayout.WireVarint, Offset: uint32(unsafe.Offsetof(scratchOneofInner{}.V)), Sub: -1},
+		}},
+	}
+	c, err := NewCodecFromLayout(reg, "scratch5.S")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	// Deterministic oracle: keys in sorted order, matching the array order.
+	m := dynamicpb.NewMessage(md)
+	m.Set(md.Fields().ByNumber(1), protoreflect.ValueOfString("n"))
+	mp := m.Mutable(md.Fields().ByNumber(2)).Map()
+	mp.Set(protoreflect.ValueOfString("a").MapKey(), protoreflect.ValueOfInt32(1))
+	mp.Set(protoreflect.ValueOfString("b").MapKey(), protoreflect.ValueOfInt32(-2))
+	mm := m.Mutable(md.Fields().ByNumber(3)).Map()
+	innerMd := md.ParentFile().Messages().ByName("Inner")
+	inner := dynamicpb.NewMessage(innerMd)
+	inner.Set(innerMd.Fields().ByNumber(1), protoreflect.ValueOfInt32(9))
+	mm.Set(protoreflect.ValueOfString("k").MapKey(), protoreflect.ValueOfMessage(inner))
+	ref, err := proto.MarshalOptions{Deterministic: true}.Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	in := &scratchMap{
+		Name:  "n",
+		ByStr: []*scratchMapEntry{{Key: "a", Val: 1}, {Key: "b", Val: -2}},
+		ByMsg: []*scratchMapMsgEntry{{Key: "k", In: &scratchOneofInner{V: 9}}},
+	}
+	if got := testEncode(t, c, in); !bytes.Equal(got, ref) {
+		t.Fatalf("encode differs: %x vs %x", got, ref)
+	}
+	back := &scratchMap{}
+	testDecode(t, c, back, ref)
+	runtime.KeepAlive(ref)
+	if back.Name != "n" || len(back.ByStr) != 2 || back.ByStr[0].Key != "a" ||
+		back.ByStr[0].Val != 1 || back.ByStr[1].Key != "b" || back.ByStr[1].Val != -2 {
+		t.Fatalf("by_str mismatch: %+v", back.ByStr)
+	}
+	if len(back.ByMsg) != 1 || back.ByMsg[0].Key != "k" || back.ByMsg[0].In == nil ||
+		back.ByMsg[0].In.V != 9 {
+		t.Fatalf("by_msg mismatch: %+v", back.ByMsg)
+	}
+	if again := testEncode(t, c, back); !bytes.Equal(again, ref) {
+		t.Fatalf("re-encode differs: %x vs %x", again, ref)
+	}
+}
+
 func TestCshimCodecOneof(t *testing.T) {
 	md := scratchOneofDescriptor(t)
 	reg := scratchOneofRows()
