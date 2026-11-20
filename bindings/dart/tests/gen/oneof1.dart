@@ -3,6 +3,8 @@
 // Do not edit; regenerate from the .proto instead.
 
 import 'dart:typed_data';
+import 'dart:ffi' as ffi;
+import 'package:ffi/ffi.dart' as ffi;
 
 import 'package:pbwire/pbwire.dart';
 import 'oneof1_meta.dart';
@@ -59,6 +61,22 @@ class Oneof1_Inner {
   }
 }
 
+
+/// spectest.Oneof1.Inner as a flat `dart:ffi` image: the native object the layout codec
+/// reads and writes in one call.
+final class Oneof1_InnerLayout extends ffi.Struct {
+  @ffi.Int32() external int v;
+  static int get layoutSize => ffi.sizeOf<Oneof1_InnerLayout>();
+}
+
+/// Byte offset of each field's value slot of spectest.Oneof1.Inner, in descriptor order.
+const List<int> oneof1_InnerLayoutOffsets = <int>[0];
+/// Field numbers matching [oneof1_InnerLayoutOffsets].
+const List<int> oneof1_InnerLayoutNumbers = <int>[1];
+/// spectest.Oneof1.Inner's layout rows: the flat image the native reader consumes.
+const List<PbwField> oneof1_InnerLayoutRows = <PbwField>[
+  PbwField(number: 1, kind: PbwKind.int32, offset: 0, type: 5, wire: 0),
+];
 /// Possible cases for the "kind" oneof of spectest.Oneof1.
 enum Oneof1_Kind {
   num,
@@ -164,3 +182,26 @@ class Oneof1 {
   }
 }
 
+
+/// spectest.Oneof1 as a flat `dart:ffi` image: the native object the layout codec
+/// reads and writes in one call.
+final class Oneof1Layout extends ffi.Struct {
+  external ffi.Pointer<ffi.Utf8> name;
+  @ffi.Uint32() external int kindCase;
+  @ffi.Int32() external int num;
+  external ffi.Pointer<ffi.Utf8> text;
+  external ffi.Pointer<Oneof1_InnerLayout> inner;
+  static int get layoutSize => ffi.sizeOf<Oneof1Layout>();
+}
+
+/// Byte offset of each field's value slot of spectest.Oneof1, in descriptor order.
+const List<int> oneof1LayoutOffsets = <int>[0, 12, 16, 24];
+/// Field numbers matching [oneof1LayoutOffsets].
+const List<int> oneof1LayoutNumbers = <int>[1, 2, 3, 4];
+/// spectest.Oneof1's layout rows: the flat image the native reader consumes.
+const List<PbwField> oneof1LayoutRows = <PbwField>[
+  PbwField(number: 1, kind: PbwKind.string_, offset: 0, type: 9, wire: 2),
+  PbwField(number: 2, kind: PbwKind.int32, offset: 12, oneof: true, cs: 8, type: 5, wire: 0),
+  PbwField(number: 3, kind: PbwKind.string_, offset: 16, oneof: true, cs: 8, type: 9, wire: 2),
+  PbwField(number: 4, kind: PbwKind.message, offset: 24, child: 'spectest.Oneof1.Inner', oneof: true, cs: 8, type: 11, wire: 2),
+];

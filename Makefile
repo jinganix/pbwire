@@ -693,9 +693,27 @@ php-ext-test: php-ext shared
 	$(PHP) -d extension=$(CURDIR)/bindings/php/ext/modules/pbwire.so bindings/php/tests/test.php
 	$(PHP) -d extension=$(CURDIR)/bindings/php/ext/modules/pbwire.so bindings/php/tests/generated_test.php
 
-dart-test: shared
+# The shim arm's native reader (bindings/dart/native/pbw_dart_shim.c) compiled
+# with the C binding's struct codec and the core into one dynamic library.
+dart-shim-native:
+	./bindings/dart/build.sh
+
+dart-test: shared dart-shim-native
 	cd bindings/dart && $(DART) pub get >/dev/null
 	cd bindings/dart && $(DART) run tests/selftest.dart ../c/tests/data/matrix3.desc
+	cd bindings/dart && $(DART) run tests/layout_test.dart ../c/tests/data/matrix3.desc
+
+# Same suite through the Dart binding (binary, JSON and text; the shim arm
+# shares the C core, so this proves the binding's own decode/encode/JSON/text
+# plumbing on the same requests).
+conformance-dart: $(CONFORMANCE_DESC) dart-shim-native
+	cd bindings/dart && $(DART) pub get >/dev/null
+	@test -x "$(CONFORMANCE_RUNNER)" || { \
+		echo "conformance_test_runner not found: $(CONFORMANCE_RUNNER)"; \
+		echo "run 'make conformance-setup' first"; exit 1; }
+	$(CONFORMANCE_RUNNER) --failure_list $(CURDIR)/conformance/failure_list_pbwire.txt \
+		bindings/dart/conformance/testee.sh \
+		$(CURDIR)/$(CONFORMANCE_DESC)
 
 rust-test: shared
 	cd bindings/rust && cargo test
@@ -785,6 +803,13 @@ php-bench:
 
 dart-bench:
 	./scripts/bench-run.sh --binding dart -- ./bindings/dart/benchmarks/bench.sh
+
+# pbench: the gate (bytes parity + field compare across the arms) and the
+# interleaved provisional table.
+dart-pbench:
+	./bindings/dart/pbench/setup.sh
+	cd bindings/dart/pbench && $(DART) run gate.dart ../../c/tests/data/matrix3.desc
+	cd bindings/dart/pbench && $(DART) run compare.dart ../../c/tests/data/matrix3.desc
 
 rust-bench:
 	./scripts/bench-run.sh --binding rust -- ./bindings/rust/benchmarks/bench.sh

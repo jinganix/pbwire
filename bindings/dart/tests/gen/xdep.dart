@@ -3,6 +3,8 @@
 // Do not edit; regenerate from the .proto instead.
 
 import 'dart:typed_data';
+import 'dart:ffi' as ffi;
+import 'package:ffi/ffi.dart' as ffi;
 
 import 'package:pbwire/pbwire.dart';
 import 'xdep_meta.dart';
@@ -68,3 +70,21 @@ class DepMsg {
   }
 }
 
+
+/// xdep.DepMsg as a flat `dart:ffi` image: the native object the layout codec
+/// reads and writes in one call.
+final class DepMsgLayout extends ffi.Struct {
+  external ffi.Pointer<ffi.Utf8> name;
+  @ffi.Int32() external int value;
+  static int get layoutSize => ffi.sizeOf<DepMsgLayout>();
+}
+
+/// Byte offset of each field's value slot of xdep.DepMsg, in descriptor order.
+const List<int> depMsgLayoutOffsets = <int>[0, 8];
+/// Field numbers matching [depMsgLayoutOffsets].
+const List<int> depMsgLayoutNumbers = <int>[1, 2];
+/// xdep.DepMsg's layout rows: the flat image the native reader consumes.
+const List<PbwField> depMsgLayoutRows = <PbwField>[
+  PbwField(number: 1, kind: PbwKind.string_, offset: 0, type: 9, wire: 2),
+  PbwField(number: 2, kind: PbwKind.int32, offset: 8, type: 5, wire: 0),
+];
