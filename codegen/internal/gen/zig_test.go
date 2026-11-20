@@ -104,3 +104,45 @@ func TestZigIdent(t *testing.T) {
 		}
 	}
 }
+
+// The in-place arm (plan 10) emits, beside each message, an `extern struct`
+// mirror of the C struct codec's image plus a comptime `fields` row table.
+// The mirror's offsets are asserted at comptime, so an emitter/C ABI mismatch
+// is a compile error, not bad bytes.
+func TestZigLayout(t *testing.T) {
+	f := &model.File{
+		Path:    "matrix3.proto",
+		Package: "structtest",
+		Prefix:  "Structtest",
+		Messages: []model.Message{
+			{
+				Name: "Scalars3",
+				Full: "structtest.Scalars3",
+				Fields: []model.Field{
+					{Name: "i32", Lower: "i32", Pascal: "I32", Number: 1, Kind: protoreflect.Int32Kind},
+					{Name: "str", Lower: "str", Pascal: "Str", Number: 14, Kind: protoreflect.StringKind},
+					{Name: "nums", Lower: "nums", Pascal: "Nums", Number: 17, Kind: protoreflect.Int32Kind, Repeated: true},
+					{Name: "opt_i32", Lower: "optI32", Pascal: "OptI32", Number: 20, Kind: protoreflect.Int32Kind, NeedsHas: true},
+				},
+			},
+		},
+	}
+	files := zigFiles(f, Options{Lang: "zig", Model: true, Register: true, Registry: false})
+	var models string
+	for _, file := range files {
+		if file.Name == "matrix3.zig" {
+			models = file.Content
+		}
+	}
+	for _, want := range []string{
+		"pub const Scalars3Mirror = extern struct {",
+		"pub const fields = [_]FieldPlan{",
+		".kind = .int32",
+		".repeated = true",
+		"@offsetOf(Scalars3Mirror, \"opt_i32\")",
+	} {
+		if !strings.Contains(models, want) {
+			t.Errorf("zig layout misses %q\n%s", want, models)
+		}
+	}
+}
