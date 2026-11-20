@@ -19,18 +19,23 @@ dynamic paths are what this harness compares.
 
 | dir | arm | what it does |
 |---|---|---|
-| `dync/dynamic/` | dynamic C core engine | `Schema`/`Type`/`Message`: value tree in C over cgo, hot-swappable registry, plus the shipped model<->tree converter |
-| `dync/dync.go` | dynamic C core arm | struct -> C tree -> wire -> C tree -> struct, all through the shipped converter |
-| `dyngo/codec/` | dynamic Go core engine | `Schema`/`DType`/`DMsg`: pure-Go value tree and the shared table engine, plus the model<->tree converter |
-| `dyngo/dyngo.go` | dynamic Go core arm | struct -> `DMsg` -> wire -> `DMsg` -> struct, all through the shipped converter, no cgo |
-| `cshim/` | Erlang-style C | measures the struct layout once, then C reads Go memory directly: one crossing per call |
+| `dync/dynamic/` | `tree` | dynamic C core engine: `Schema`/`Type`/`Message`, a value tree in C over cgo, hot-swappable registry, plus the shipped model<->tree converter |
+| `dync/dync.go` | `tree` | struct -> C tree -> wire -> C tree -> struct, all through the shipped converter |
+| `dyngo/codec/` | `core` | dynamic Go core engine: `Schema`/`DType`/`DMsg`, a pure-Go value tree and the shared table engine, plus the model<->tree converter |
+| `dyngo/dyngo.go` | `core` | struct -> `DMsg` -> wire -> `DMsg` -> struct, all through the shipped converter, no cgo |
+| `cshim/` | `shim` | Erlang-style C: measures the struct layout once, then C reads Go memory directly, one crossing per call |
+
+The arm names are the ones in the normative contract (`tree`, `core`, `shim`);
+the directory names stay as they are so the reference arm and its engine keep
+one identity.
 
 Both candidates keep their engine next to their arm; nothing here is shared
-scaffolding. The harness selected `cshim`: the shipped engine is `../runtime/`
-(layout in `../runtime/layout/`), and `cshim/` keeps the matrix3 reference arm
-whose hand-written plan and fixup mirror what `protoc-gen-pbwire` emits.
-`dyngo/codec/` is a candidate that generated code still reaches: a model the
-cshim cannot drive keeps the table engine's `Marshal`/`Unmarshal`.
+scaffolding. The harness selected the `shim` arm: the shipped engine is
+`../runtime/` (layout in `../runtime/layout/`), and `cshim/` keeps the matrix3
+reference arm whose hand-written plan and fixup mirror what
+`protoc-gen-pbwire` emits. The `core` arm's engine is what generated code still
+reaches: a model the shim cannot drive keeps the table engine's
+`Marshal`/`Unmarshal`.
 
 ## Harness
 
@@ -45,12 +50,19 @@ go test -tags pbench -run TestCompare -v -count=1 ./pbench/
 ```
 
 Last recorded run (Apple M4 Pro; absolute numbers move with the host, the
-ordering does not): `cshim` 1.35-1.80x encode and 1.21-1.96x decode against
-`protobuf-go`, `dyngo` direct 1.42-1.76x encode and 0.88-1.13x decode, `dync`
+ordering does not): `shim` 1.35-1.80x encode and 1.21-1.96x decode against
+`protobuf-go`, `core` direct 1.42-1.76x encode and 0.88-1.13x decode, `tree`
 0.05-0.10x encode and 0.11-0.13x decode.
 
 That ordering is the reason the arms exist: a per-field copy into any tree
 (the C core with cgo crossings worst, the Go core better but still
-per-field) costs far more than reading the struct in place. The C shim is
+per-field) costs far more than reading the struct in place. The `shim` is
 the shape to copy when a binding must be both native-object-end-to-end and
 fast.
+
+## Verdict
+
+Selected: `cshim` -> the shipped runtime (`../runtime/`, layout in
+`../runtime/layout/`). `dyngo` stays the engine for models the shim cannot
+drive. `dync` stays the `tree` arm for proxies and transcoders; it is never a
+headline.

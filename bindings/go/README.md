@@ -14,8 +14,11 @@ converters the dynamic arms share.
 A generated model is a `protoc-gen-pbwire` struct plus one metadata file of
 field tables. Nothing in generated code decides a tag, a length, presence or
 skipping. The candidates keep their engines in [`pbench/`](pbench/) next to
-their arms: `cshim` won the comparison, so its engine ships as `runtime/`; the
-pure-Go one stays a candidate.
+their arms and publish under the contract's names: `tree` (`pbench/dync/`),
+`core` (`pbench/dyngo/`) and `shim` (`pbench/cshim/`, the shipped
+`runtime/`). The `shim` arm won the comparison, so its engine ships as
+`runtime/`; the `core` arm stays a candidate, the engine generated code falls
+back to. See [`pbench/README.md`](pbench/README.md#verdict).
 
 ## Dynamic C core (candidate, not shipped)
 
