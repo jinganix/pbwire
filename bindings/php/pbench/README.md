@@ -88,5 +88,22 @@ baseline, so Stage 6 has cells to target.
 
 ## Verdict
 
-Filled in after Stage 4; the formal `make php-bench` values are the ones
-published in [BENCHMARKS.md](../../../BENCHMARKS.md).
+**Keep the shipped builder/wire-view runtime and publish the array rows.**
+`pbwire-php-tree` (prebuilt `Message`) is above the official C extension at every
+tier (136 B 1319.5 / 649.2 MB/s, 74913 B 1711.9 / 711.8 against 869.9 / 413.9 and
+1301.5 / 537.7). The native array `shim` is one C-extension entry, but it is
+below the baseline on every cell (136 B 151.2 / 159.8, 74913 B 190.1 / 211.9),
+and `shim-ffi` is interpreter-scale (~5 MB/s) because it pays one FFI trampoline
+per field.
+
+It is not (a) -- "replace the shipped fast path": the array walk costs a
+hashtable lookup plus a C tree store per field, while the tree handle writes its
+already-built tree; replacing the handle would slow every encode/decode caller.
+
+It is not (c) -- "split by payload size": there is no crossover. The tree handle
+is above the official C extension at all four tiers and the array path is below
+it at all four; larger payloads do not make the array walk cheaper per byte.
+
+`core` stays `n/a`: the official pure-PHP runtime is already the baseline, so a
+second pure-PHP engine would measure our code against the competitor; the TODO
+in `runtime/pbwire.php` names the condition that would reopen it.
