@@ -5,6 +5,11 @@ A thin ARC wrapper over the C ABI: a `FileDescriptorSet`
 `PBWMessage` objects with field access by name. No code generation, no
 protoc plugin, Foundation only.
 
+Mechanisms: `tree` (`PBWMessage` handle) and `shim` (the struct codec reading C
+memory in place). No `core` arm: a pure-ObjC engine is the C engine plus message
+sends, so it has no separate cost profile. Contract:
+[`../README.md#pbench-three-arms-one-contract`](../README.md#pbench-three-arms-one-contract).
+
 ```objc
 NSError *error = nil;
 PBWSchema *schema = [PBWSchema schemaFromFile:@"tests/data/probe.desc" error:&error];

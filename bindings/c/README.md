@@ -12,6 +12,12 @@ The C binding is the core library itself plus this thin struct layer: no
 wrapper objects, no code generation at build time, no runtime dependencies
 beyond a C99 compiler (the plugin needs Go, but only maintainers run it).
 
+Mechanisms: `tree` (the dynamic `pbw_ctx` value tree, `pbwire-c-tree` in
+`make bench`) and `shim` (the struct codec reading C memory in place through
+layout tables, `pbwire-c-shim` in `make bench-c`). No `core` arm: the C binding
+*is* the shipped `src/`, so the third mechanism is the shipped core itself.
+Contract: [`../README.md#pbench-three-arms-one-contract`](../README.md#pbench-three-arms-one-contract).
+
 ## Layout
 
 | Piece | Path | Role |
@@ -219,7 +225,7 @@ dispatch used to be all that was left to pay. The gap grows with message size
 because `SerializeToString` walks the message twice (size, then write) while
 the struct encoder writes in one pass:
 
-| payload | op | pbwire-c (MB/s, x gen) | protoc gen (MB/s) |
+| payload | op | pbwire-c-shim (MB/s, x gen) | protoc gen (MB/s) |
 |---|---|---|---|
 | 136 B | encode | 1476.8 (1.0x) | 1416.4 |
 | 136 B | decode | 1090.8 (1.2x) | 894.2 |

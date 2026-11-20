@@ -729,7 +729,11 @@ only — absolute numbers move between machines.
 
 ![C structs vs protoc generated (same matrix3.proto) — MB/s by tier](docs/charts/bench-c-structs-vs-protoc-generated-same-matrix3-proto.svg)
 
-| payload | op | pbwire-c (MB/s, x gen) | protoc gen (MB/s) |
+The `pbwire-c-shim` rows are the struct codec reading C memory in place. The
+dynamic `pbw_ctx` block `make bench` prints for the same message is the
+binding's `pbwire-c-tree` arm, and `pbwire-c1` stays the one-shot probe.
+
+| payload | op | pbwire-c-shim (MB/s, x gen) | protoc gen (MB/s) |
 |---|---|---|---|
 | 136 B | encode | 1766.1 (1.29x ✅) | 1371.8 |
 | 136 B | decode | 1193.5 (1.44x ✅) | 827.3 |
@@ -1032,6 +1036,10 @@ moves with host load; above it the C core's pack-aware writer pulls ahead.
 
 ![Objective-C vs the protobuf ObjC runtime — MB/s by tier](docs/charts/bench-objective-c-vs-the-protobuf-objc-runtime.svg)
 
+The `pbwire-objc` rows are the `tree` arm (`PBWMessage` handle). The direct
+struct path is the same C code, measured by `make bench-c` (the `shim` rows);
+there is no third mechanism to compare here.
+
 | payload | op | pbwire-objc (MB/s, x protobuf-objc) | protobuf-objc (MB/s) |
 |---|---|---|---|
 | 136 B | encode | 957.4 (7.44x ✅) | 128.7 |
@@ -1253,7 +1261,10 @@ table hash order, so raw baseline bytes are not comparable.
 `matrix3.proto`, all four tiers, best of three samples per op. Same payload / op /
 MB/s layout as every other table: the `pbwire-erlang` column carries the ratio
 against the faster of gpb / gpb NIF per op (gpb is the byte reference either
-way), the other columns are the two baselines side by side.
+way), the other columns are the two baselines side by side. The `pbwire-erlang`
+rows are the `tree` arm (NIF handle); gpb, the pure-Erlang codec, **is** the
+`core` comparison, so a second BEAM port would measure our code against the
+competitor rather than a decision.
 
 | payload | op | pbwire-erlang (MB/s, x best) | gpb (MB/s) | gpb-nif (MB/s) |
 |---|---|---|---|---|
@@ -1326,7 +1337,8 @@ before timing, like every other row.
 
 Same class as Erlang: the BEAM binding reuses the published `:pbwire` Hex
 NIF (the same C core as `bindings/erlang`) and owns only the struct↔tuple
-translation; `elixir-protobuf` is the schema plugin, like gpb is for Erlang.
+translation; `elixir-protobuf` is the schema plugin, like gpb is for Erlang, and
+its pure-Elixir rows **are** the `core` comparison for this binding.
 Every encode is byte-identical to `Protobuf.encode/1` before timing. Known
 deliberate divergences from the oracle: NaN bit identity, unknown-field drop
 (the NIF tuple form has no storage), raise on missing `required`.
