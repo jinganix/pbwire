@@ -4,8 +4,6 @@
 
 package oneof1
 
-import ()
-
 // spectest.Oneof1.Inner
 type Oneof1_Inner struct {
 	V int32

@@ -6,8 +6,9 @@ package oneof1
 
 import (
 	"errors"
-	"pbwire/runtime"
+	pbwrt "pbwire/runtime"
 	"pbwire/runtime/layout"
+	"runtime"
 	"sync"
 	"unsafe"
 )
@@ -57,11 +58,11 @@ func Oneof1CshimCopy(dst, src *Oneof1, a *layout.Arena) {
 }
 
 // Oneof1_InnerCshimFixup wraps staged oneof members into typed wrappers.
-func Oneof1_InnerCshimFixup(raw *Oneof1_Inner, c *runtime.Codec) {
+func Oneof1_InnerCshimFixup(raw *Oneof1_Inner, c *pbwrt.Codec) {
 }
 
 // Oneof1CshimFixup wraps staged oneof members into typed wrappers.
-func Oneof1CshimFixup(raw *Oneof1, c *runtime.Codec) {
+func Oneof1CshimFixup(raw *Oneof1, c *pbwrt.Codec) {
 	if fnum, _, scalar, ptr, ln, ok := c.Stage(0); ok {
 		switch fnum {
 		case 0:
@@ -78,8 +79,8 @@ func Oneof1CshimFixup(raw *Oneof1, c *runtime.Codec) {
 	}
 }
 
-var oneof1_InnerCshimCodec = sync.OnceValue(func() *runtime.Codec {
-	c, err := runtime.NewCodecFromLayout(CshimRegistry(), "spectest.Oneof1.Inner")
+var oneof1_InnerCshimCodec = sync.OnceValue(func() *pbwrt.Codec {
+	c, err := pbwrt.NewCodecFromLayout(CshimRegistry(), "spectest.Oneof1.Inner")
 	if err != nil {
 		panic(err)
 	}
@@ -90,7 +91,9 @@ func (m *Oneof1_Inner) Marshal() ([]byte, error) {
 	if m == nil {
 		return []byte{}, nil
 	}
-	return oneof1_InnerCshimCodec().EncodeRaw(unsafe.Pointer(m))
+	out, err := oneof1_InnerCshimCodec().EncodeRaw(unsafe.Pointer(m))
+	runtime.KeepAlive(m)
+	return out, err
 }
 
 func (m *Oneof1_Inner) Unmarshal(wire []byte) error {
@@ -99,21 +102,22 @@ func (m *Oneof1_Inner) Unmarshal(wire []byte) error {
 	}
 	var raw Oneof1_Inner
 	c := oneof1_InnerCshimCodec()
-	n, err := c.DecodeRaw(unsafe.Pointer(&raw), wire)
+	var out Oneof1_Inner
+	err := c.DecodeInto(unsafe.Pointer(&raw), wire, func(strBytes int) {
+		var a layout.Arena
+		a.Reset(strBytes)
+		Oneof1_InnerCshimFixup(&raw, c)
+		Oneof1_InnerCshimCopy(&out, &raw, &a)
+	})
 	if err != nil {
 		return err
 	}
-	var a layout.Arena
-	a.Reset(n)
-	Oneof1_InnerCshimFixup(&raw, c)
-	var out Oneof1_Inner
-	Oneof1_InnerCshimCopy(&out, &raw, &a)
 	*m = out
 	return nil
 }
 
-var oneof1CshimCodec = sync.OnceValue(func() *runtime.Codec {
-	c, err := runtime.NewCodecFromLayout(CshimRegistry(), "spectest.Oneof1")
+var oneof1CshimCodec = sync.OnceValue(func() *pbwrt.Codec {
+	c, err := pbwrt.NewCodecFromLayout(CshimRegistry(), "spectest.Oneof1")
 	if err != nil {
 		panic(err)
 	}
@@ -124,7 +128,9 @@ func (m *Oneof1) Marshal() ([]byte, error) {
 	if m == nil {
 		return []byte{}, nil
 	}
-	return oneof1CshimCodec().EncodeRaw(unsafe.Pointer(m))
+	out, err := oneof1CshimCodec().EncodeRaw(unsafe.Pointer(m))
+	runtime.KeepAlive(m)
+	return out, err
 }
 
 func (m *Oneof1) Unmarshal(wire []byte) error {
@@ -133,15 +139,16 @@ func (m *Oneof1) Unmarshal(wire []byte) error {
 	}
 	var raw Oneof1
 	c := oneof1CshimCodec()
-	n, err := c.DecodeRaw(unsafe.Pointer(&raw), wire)
+	var out Oneof1
+	err := c.DecodeInto(unsafe.Pointer(&raw), wire, func(strBytes int) {
+		var a layout.Arena
+		a.Reset(strBytes)
+		Oneof1CshimFixup(&raw, c)
+		Oneof1CshimCopy(&out, &raw, &a)
+	})
 	if err != nil {
 		return err
 	}
-	var a layout.Arena
-	a.Reset(n)
-	Oneof1CshimFixup(&raw, c)
-	var out Oneof1
-	Oneof1CshimCopy(&out, &raw, &a)
 	*m = out
 	return nil
 }

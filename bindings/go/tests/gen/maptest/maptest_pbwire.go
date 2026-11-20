@@ -4,8 +4,6 @@
 
 package maptest
 
-import ()
-
 // spectest.MapValue
 type MapValue struct {
 	Name  string

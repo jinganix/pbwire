@@ -35,6 +35,7 @@ import (
 	"errors"
 	"fmt"
 	"runtime"
+	"sync"
 	"unsafe"
 
 	shimlayout "pbwire/runtime/layout"
@@ -79,9 +80,11 @@ const (
 
 // Codec owns the C plan, the decode scratch arena and the per-field repeated
 // accumulators, plus the last encode size used as the next call's buffer
-// hint. It is not safe for concurrent use: one codec is a serialized
-// encoder/decoder.
+// hint. Marshal and Unmarshal are safe for concurrent use: each holds the
+// codec's lock for the duration of its C call, because the scratch (encode
+// buffer, accumulators, arena, oneof stages) is shared state.
 type Codec struct {
+	mu   sync.Mutex
 	h    *C.cshim_codec
 	hint int
 }
@@ -296,7 +299,12 @@ func NewCodecFromLayout(reg []shimlayout.Msg, root string) (*Codec, error) {
 // Close releases the C plan and decode arena. A finished Codec must not be
 // used again.
 func (c *Codec) Close() {
-	if c == nil || c.h == nil {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.h == nil {
 		return
 	}
 	C.cshim_codec_free(c.h)
@@ -318,6 +326,8 @@ func (c *Codec) EncodeRaw(base unsafe.Pointer) ([]byte, error) {
 	if base == nil {
 		return nil, errors.New("runtime: encode nil message")
 	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	hint := c.hint
 	if hint < 64 {
 		hint = 64
@@ -348,6 +358,38 @@ func (c *Codec) EncodeRaw(base unsafe.Pointer) ([]byte, error) {
 	}
 }
 
+// DecodeInto decodes wire into base and then runs materialize while still
+// holding the codec lock: the staged oneof slots, the string arena and the
+// accumulators all belong to this decode, so fixup and materialization must
+// not interleave with another call. materialize receives the total string
+// payload size for sizing its arena. Generated Unmarshal uses this; raw
+// DecodeRaw is for single-threaded callers that do their own fixup.
+func (c *Codec) DecodeInto(base unsafe.Pointer, wire []byte, materialize func(strBytes int)) error {
+	if c == nil || c.h == nil {
+		return errors.New("runtime: closed codec")
+	}
+	if base == nil {
+		return errors.New("runtime: decode into nil message")
+	}
+	if materialize == nil {
+		return errors.New("runtime: nil materialize")
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	var wp *C.uint8_t
+	if len(wire) != 0 {
+		wp = (*C.uint8_t)(unsafe.Pointer(&wire[0]))
+	}
+	res := C.cshim_decode(c.h, C.uintptr_t(uintptr(base)), wp,
+		C.size_t(len(wire)))
+	runtime.KeepAlive(wire)
+	if int(res.status) != stOK {
+		return statusError("decode", res.status, res.fail_off)
+	}
+	materialize(int(res.str_bytes))
+	return nil
+}
+
 // DecodeRaw runs one decode into raw struct memory and reports the total
 // string payload size for the caller's fixup. No fixup runs here.
 func (c *Codec) DecodeRaw(base unsafe.Pointer, wire []byte) (int, error) {
@@ -357,6 +399,8 @@ func (c *Codec) DecodeRaw(base unsafe.Pointer, wire []byte) (int, error) {
 	if base == nil {
 		return 0, errors.New("runtime: decode into nil message")
 	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	var wp *C.uint8_t
 	if len(wire) != 0 {
 		wp = (*C.uint8_t)(unsafe.Pointer(&wire[0]))
@@ -376,6 +420,11 @@ func (c *Codec) DecodeRaw(base unsafe.Pointer, wire []byte) (int, error) {
 // points into wire (strings/bytes) or the C arena (messages) and is valid
 // until the next decode on this codec.
 func (c *Codec) Stage(idx int) (fnum, kind uint32, scalar uint64, ptr unsafe.Pointer, ln int, ok bool) {
+	if c == nil || c.h == nil {
+		return 0, 0, 0, nil, 0, false
+	}
+	// The stage slots belong to the last decode; the fixup runs right
+	// after it and before any other call, so no lock is taken here.
 	var cf, ck C.uint32_t
 	var cs C.uint64_t
 	var cp C.uintptr_t
