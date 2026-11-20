@@ -84,47 +84,63 @@ func TestZZDebugSerial400(t *testing.T) {
 // message is fine and that encode raced; still dirty => unmarshal raced.
 func TestZZDebugRacy8x50(t *testing.T) {
 	ref := zzRef(t)
+	for round := 0; round < 10; round++ {
+		if msg := zzRacyRound(ref); msg != "" {
+			t.Fatalf("ZZ racy round %d: %s", round, msg)
+		}
+	}
+	fmt.Printf("ZZ racy 10 clean rounds\n")
+}
+
+func zzRacyRound(ref []byte) string {
 	var wg sync.WaitGroup
-	errCh := make(chan string, 64)
+	type hit struct {
+		k      int
+		second string
+		ref    []byte
+		out    []byte
+	}
+	hitCh := make(chan hit, 64)
 	for i := 0; i < 8; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for k := 0; k < 50; k++ {
+			for k := 0; k < 500; k++ {
 				m := &gen1.Scalars3{}
 				if err := m.Unmarshal(ref); err != nil {
-					errCh <- fmt.Sprintf("unmarshal: %v", err)
+					hitCh <- hit{k: k, second: "unmarshal: " + err.Error()}
 					return
 				}
 				out, err := m.Marshal()
 				if err != nil {
-					errCh <- fmt.Sprintf("marshal: %v", err)
+					hitCh <- hit{k: k, second: "marshal: " + err.Error()}
 					return
 				}
 				if !bytes.Equal(out, ref) {
-					out2, err2 := m.Marshal()
 					second := "marshal-err"
-					if err2 == nil {
+					if out2, err2 := m.Marshal(); err2 == nil {
+						second = "dirty"
 						if bytes.Equal(out2, ref) {
 							second = "clean"
-						} else {
-							second = "dirty"
 						}
 					}
-					fmt.Printf("ZZ racy mismatch k=%d second-marshal=%s\n", k, second)
-					zzDump(ref, out)
-					errCh <- "racy re-encode differs"
+					hitCh <- hit{k: k, second: second, ref: ref, out: out}
 					return
 				}
 			}
 		}()
 	}
 	wg.Wait()
-	close(errCh)
-	for msg := range errCh {
-		t.Fatal(msg)
+	close(hitCh)
+	for h := range hitCh {
+		if h.out != nil {
+			fmt.Printf("ZZ racy mismatch k=%d second-marshal=%s\n", h.k, h.second)
+			zzDump(h.ref, h.out)
+			return "re-encode differs"
+		}
+		return h.second
 	}
-	fmt.Printf("ZZ racy 8x50 clean\n")
+	return ""
 }
 func TestZZDebugLocked8x50(t *testing.T) {
 	ref := zzRef(t)
