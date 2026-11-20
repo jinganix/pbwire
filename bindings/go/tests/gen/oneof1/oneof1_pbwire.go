@@ -35,14 +35,6 @@ func (m *Oneof1_Inner) Unmarshal(wire []byte) error {
 	return codec.DecodeModel(wire, m, Oneof1_InnerMeta)
 }
 
-// Oneof1_InnerMeta is the generated DATA table for spectest.Oneof1.Inner: one row per field.
-var Oneof1_InnerMeta = codec.NewTable("spectest.Oneof1.Inner", []*codec.Field{
-	{Num: 1, Wire: codec.WireVarint, Kind: codec.KindInt32,
-		GetI32: func(msg any) int32 { return msg.(*Oneof1_Inner).V },
-		SetI32: func(msg any, v int32) { msg.(*Oneof1_Inner).V = v },
-	},
-})
-
 // spectest.Oneof1
 type isOneof1_kind interface{ isOneof1_kind() }
 
@@ -112,43 +104,3 @@ func (m *Oneof1) Marshal() ([]byte, error) {
 func (m *Oneof1) Unmarshal(wire []byte) error {
 	return codec.DecodeModel(wire, m, Oneof1Meta)
 }
-
-// Oneof1Meta is the generated DATA table for spectest.Oneof1: one row per field.
-var Oneof1Meta = codec.NewTable("spectest.Oneof1", []*codec.Field{
-	{Num: 1, Wire: codec.WireLen, Kind: codec.KindString,
-		GetStr: func(msg any) string { return msg.(*Oneof1).Name },
-		SetStr: func(msg any, v string) { msg.(*Oneof1).Name = v },
-	},
-	{Num: 2, Wire: codec.WireVarint, Kind: codec.KindInt32, Oneof: true,
-		GetOneof: func(msg any) (any, bool) {
-			if x, ok := msg.(*Oneof1).Kind.(*Oneof1_Num); ok {
-				return x.Num, true
-			}
-			return nil, false
-		},
-		SetOneof: func(msg any, v any) { msg.(*Oneof1).Kind = &Oneof1_Num{Num: v.(int32)} },
-	},
-	{Num: 3, Wire: codec.WireLen, Kind: codec.KindString, Oneof: true,
-		GetOneof: func(msg any) (any, bool) {
-			if x, ok := msg.(*Oneof1).Kind.(*Oneof1_Text); ok {
-				return x.Text, true
-			}
-			return nil, false
-		},
-		SetOneof: func(msg any, v any) { msg.(*Oneof1).Kind = &Oneof1_Text{Text: v.(string)} },
-	},
-	{Num: 4, Wire: codec.WireLen, Kind: codec.KindMessage, Oneof: true,
-		Sub: func() *codec.Table { return Oneof1_InnerMeta },
-		GetOneof: func(msg any) (any, bool) {
-			if x, ok := msg.(*Oneof1).Kind.(*Oneof1_Inner_); ok {
-				if x.Inner == nil {
-					return nil, true
-				}
-				return x.Inner, true
-			}
-			return nil, false
-		},
-		SetOneof: func(msg any, v any) { msg.(*Oneof1).Kind = &Oneof1_Inner_{Inner: v.(*Oneof1_Inner)} },
-		NewMsg:   func() any { return &Oneof1_Inner{} },
-	},
-})
