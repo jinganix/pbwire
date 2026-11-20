@@ -171,6 +171,8 @@ func (c *Codec) Unmarshal(wire []byte) (*matrix3.Scalars3, error) {
 		return nil, err
 	}
 	c.fixup(m, strBytes)
+	// fixup reads string headers that point into wire, so wire must outlive it.
+	runtime.KeepAlive(wire)
 	runtime.KeepAlive(c)
 	return m, nil
 }
