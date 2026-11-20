@@ -219,7 +219,7 @@ func writeGoModelHeader(b *strings.Builder, f *model.File, opt Options) {
 	}
 	b.WriteString("import (\n")
 	if len(f.Messages) > 0 {
-		b.WriteString("\t\"pbwire/codec\"\n")
+		b.WriteString("\t\"pbwire/pbench/dyngo/codec\"\n")
 	}
 	if len(f.Enums) > 0 {
 		b.WriteString("\t\"fmt\"\n")
@@ -240,7 +240,7 @@ func writeGoMetaHeader(b *strings.Builder, f *model.File, opt Options) {
 	if len(f.Messages) == 0 {
 		return
 	}
-	b.WriteString("import (\n\t\"pbwire/codec\"\n")
+	b.WriteString("import (\n\t\"pbwire/pbench/dyngo/codec\"\n")
 	for _, imp := range f.Imports {
 		if path, ok := opt.Mappings[imp.Path]; ok {
 			fmt.Fprintf(b, "\n\t%s %q\n", goImportAlias(path), path)
@@ -421,7 +421,7 @@ func writeGoTable(b *strings.Builder, f *model.File, m model.Message) {
 // everything else addresses the struct field directly.
 func writeGoTableRow(b *strings.Builder, f *model.File, m model.Message, field model.Field) {
 	name := goCamel(field.Name)
-	fmt.Fprintf(b, "\t{Num: %d, Wire: %s, Kind: %s", field.Number, goWireConst(field), goKindConst(field))
+	fmt.Fprintf(b, "\t{Name: %q, Num: %d, Wire: %s, Kind: %s", field.Name, field.Number, goWireConst(field), goKindConst(field))
 	if field.Required {
 		b.WriteString(", Required: true")
 	}

@@ -5,16 +5,16 @@
 package addressbook
 
 import (
-	"pbwire/codec"
+	"pbwire/pbench/dyngo/codec"
 )
 
 // Person_PhoneNumberMeta is the generated DATA table for tutorial.Person.PhoneNumber: one row per field.
 var Person_PhoneNumberMeta = codec.NewTable("tutorial.Person.PhoneNumber", []*codec.Field{
-	{Num: 1, Wire: codec.WireLen, Kind: codec.KindString, Required: true,
+	{Name: "number", Num: 1, Wire: codec.WireLen, Kind: codec.KindString, Required: true,
 		GetStr: func(msg any) string { return msg.(*Person_PhoneNumber).Number },
 		SetStr: func(msg any, v string) { msg.(*Person_PhoneNumber).Number = v },
 	},
-	{Num: 2, Wire: codec.WireVarint, Kind: codec.KindEnum, Explicit: true,
+	{Name: "type", Num: 2, Wire: codec.WireVarint, Kind: codec.KindEnum, Explicit: true,
 		GetOptEnum: func(msg any) *int32 {
 			p := msg.(*Person_PhoneNumber).Type
 			if p == nil {
@@ -29,19 +29,19 @@ var Person_PhoneNumberMeta = codec.NewTable("tutorial.Person.PhoneNumber", []*co
 
 // PersonMeta is the generated DATA table for tutorial.Person: one row per field.
 var PersonMeta = codec.NewTable("tutorial.Person", []*codec.Field{
-	{Num: 1, Wire: codec.WireLen, Kind: codec.KindString, Required: true,
+	{Name: "name", Num: 1, Wire: codec.WireLen, Kind: codec.KindString, Required: true,
 		GetStr: func(msg any) string { return msg.(*Person).Name },
 		SetStr: func(msg any, v string) { msg.(*Person).Name = v },
 	},
-	{Num: 2, Wire: codec.WireVarint, Kind: codec.KindInt32, Required: true,
+	{Name: "id", Num: 2, Wire: codec.WireVarint, Kind: codec.KindInt32, Required: true,
 		GetI32: func(msg any) int32 { return msg.(*Person).Id },
 		SetI32: func(msg any, v int32) { msg.(*Person).Id = v },
 	},
-	{Num: 3, Wire: codec.WireLen, Kind: codec.KindString, Explicit: true,
+	{Name: "email", Num: 3, Wire: codec.WireLen, Kind: codec.KindString, Explicit: true,
 		GetOptStr: func(msg any) *string { return msg.(*Person).Email },
 		SetOptStr: func(msg any, v string) { tmp := v; msg.(*Person).Email = &tmp },
 	},
-	{Num: 4, Wire: codec.WireLen, Kind: codec.KindMessage,
+	{Name: "phones", Num: 4, Wire: codec.WireLen, Kind: codec.KindMessage,
 		Sub:       func() *codec.Table { return Person_PhoneNumberMeta },
 		Repeated:  true,
 		RepMsgLen: func(msg any) int { return len(msg.(*Person).Phones) },
@@ -62,7 +62,7 @@ var PersonMeta = codec.NewTable("tutorial.Person", []*codec.Field{
 
 // AddressBookMeta is the generated DATA table for tutorial.AddressBook: one row per field.
 var AddressBookMeta = codec.NewTable("tutorial.AddressBook", []*codec.Field{
-	{Num: 1, Wire: codec.WireLen, Kind: codec.KindMessage,
+	{Name: "people", Num: 1, Wire: codec.WireLen, Kind: codec.KindMessage,
 		Sub:       func() *codec.Table { return PersonMeta },
 		Repeated:  true,
 		RepMsgLen: func(msg any) int { return len(msg.(*AddressBook).People) },

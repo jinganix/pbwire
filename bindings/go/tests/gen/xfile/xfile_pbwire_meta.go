@@ -5,14 +5,14 @@
 package xfile
 
 import (
-	"pbwire/codec"
+	"pbwire/pbench/dyngo/codec"
 
 	xdep "pbwire/tests/gen/xdep"
 )
 
 // UsesDepMeta is the generated DATA table for xfile.UsesDep: one row per field.
 var UsesDepMeta = codec.NewTable("xfile.UsesDep", []*codec.Field{
-	{Num: 1, Wire: codec.WireLen, Kind: codec.KindMessage,
+	{Name: "single", Num: 1, Wire: codec.WireLen, Kind: codec.KindMessage,
 		Foreign: &codec.ForeignOps{Encode: func(m any) ([]byte, error) { return m.(*xdep.DepMsg).Marshal() }, Decode: func(m any, w []byte) error { return m.(*xdep.DepMsg).Unmarshal(w) }},
 		GetMsg: func(msg any) any {
 			if v := msg.(*UsesDep).Single; v == nil {
@@ -28,7 +28,7 @@ var UsesDepMeta = codec.NewTable("xfile.UsesDep", []*codec.Field{
 			return m.Single
 		},
 	},
-	{Num: 2, Wire: codec.WireLen, Kind: codec.KindMessage,
+	{Name: "many", Num: 2, Wire: codec.WireLen, Kind: codec.KindMessage,
 		Foreign:   &codec.ForeignOps{Encode: func(m any) ([]byte, error) { return m.(*xdep.DepMsg).Marshal() }, Decode: func(m any, w []byte) error { return m.(*xdep.DepMsg).Unmarshal(w) }},
 		Repeated:  true,
 		RepMsgLen: func(msg any) int { return len(msg.(*UsesDep).Many) },
@@ -45,7 +45,7 @@ var UsesDepMeta = codec.NewTable("xfile.UsesDep", []*codec.Field{
 			return item
 		},
 	},
-	{Num: 3, Wire: codec.WireLen, Kind: codec.KindString,
+	{Name: "note", Num: 3, Wire: codec.WireLen, Kind: codec.KindString,
 		GetStr: func(msg any) string { return msg.(*UsesDep).Note },
 		SetStr: func(msg any, v string) { msg.(*UsesDep).Note = v },
 	},
