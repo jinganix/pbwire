@@ -20,7 +20,7 @@ declare(strict_types=1);
  *   require __DIR__ . '/payload.php';
  */
 
-require __DIR__ . '/../runtime/pbwire.php';
+require_once __DIR__ . '/../runtime/pbwire.php';
 
 use Pbwire\Schema;
 use Pbwire\Type;

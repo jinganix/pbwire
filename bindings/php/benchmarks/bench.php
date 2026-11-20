@@ -24,7 +24,8 @@ declare(strict_types=1);
  *   ./bench.sh          generate, build, run
  */
 
-require __DIR__ . '/../runtime/pbwire.php';
+require_once __DIR__ . '/../runtime/pbwire.php';
+require_once __DIR__ . '/../pbench/payload.php';
 
 use Pbwire\Schema;
 
@@ -58,10 +59,11 @@ $desc = $argv[1] ?? "$gen/matrix3.desc";
 // The C extension (when loaded) backs the same generated classes, so one
 // label covers whichever official implementation is actually timed.
 $officialImpl = extension_loaded('protobuf') ? 'protobuf-php-c' : 'protobuf-php';
-// Our own implementation: the native extension when loaded, else the FFI
-// wrapper. bench.sh runs both when ext/modules/pbwire.so exists.
-$impl = extension_loaded('pbwire') ? 'pbwire-php-c' : 'pbwire-php';
-echo 'impl: ' . ($impl === 'pbwire-php-c' ? 'C extension ' . phpversion('pbwire') : 'ext-ffi') . "\n";
+// Rows are named by the arm they time: the prebuilt Message handle, the
+// native-array entry (one C extension call) or the same API on ext-ffi.
+$treeImpl = 'pbwire-php-tree';
+$shimImpl = extension_loaded('pbwire') ? 'pbwire-php-shim' : 'pbwire-php-shim-ffi';
+echo 'impl: ' . (extension_loaded('pbwire') ? 'C extension ' . phpversion('pbwire') : 'ext-ffi') . "\n";
 echo 'official: ' . ($officialImpl === 'protobuf-php-c' ? 'C extension ' . phpversion('protobuf') : 'pure PHP') . "\n\n";
 $schema = Schema::fromFile($desc);
 $ty = $schema->message('structtest.Scalars3');
@@ -84,7 +86,7 @@ for ($tier = 0; $tier < count(CASES); $tier++) {
     $got = $message->encode();
 
     if ($got !== $reference) {
-        fail($label, "$impl wrote " . strlen($got) . ' bytes, protobuf-php ' . strlen($reference));
+        fail($label, "$treeImpl wrote " . strlen($got) . ' bytes, protobuf-php ' . strlen($reference));
         continue;
     }
 
@@ -97,7 +99,21 @@ for ($tier = 0; $tier < count(CASES); $tier++) {
         && ($n === 0 || $back->at('nums', $n - 1)?->asInt() === $n - 4);
     $back->close();
     if (!$backOk) {
-        fail($label, "$impl decode differs");
+        fail($label, "$treeImpl decode differs");
+        continue;
+    }
+
+    // The native-object arm: a PHP array in, one entry call; wire in, the
+    // fully materialized array out. The same gate as the tree arm.
+    $arrayPayload = pbwire_pbench_payload($n);
+    $arrayWire = $ty->encodeArray($arrayPayload);
+    if ($arrayWire !== $reference) {
+        fail($label, "$shimImpl wrote " . strlen($arrayWire) . ' bytes, protobuf-php ' . strlen($reference));
+        continue;
+    }
+    $arrayBack = $ty->decodeArray($reference);
+    if (!pbwire_pbench_reads_ok($arrayBack, $n) || $ty->encodeArray($arrayBack) !== $reference) {
+        fail($label, "$shimImpl decode differs");
         continue;
     }
 
@@ -109,6 +125,8 @@ for ($tier = 0; $tier < count(CASES); $tier++) {
     $count = calibrate(static fn () => $message->encode(), $iterations);
     $encode = measure($iterations, static fn () => $message->encode());
     $decode = measure($iterations, static fn () => $ty->decode($reference));
+    $shimEncode = measure($iterations, static fn () => $ty->encodeArray($arrayPayload));
+    $shimDecode = measure($iterations, static fn () => $ty->decodeArray($reference));
     $officialEncode = measure($iterations, static fn () => $official->serializeToString());
     $officialDecode = measure($iterations, static function () use ($officialClass, $reference) {
         $parsed = new $officialClass();
@@ -120,9 +138,11 @@ for ($tier = 0; $tier < count(CASES); $tier++) {
     $bytes = strlen($reference);
     printf("%s: %d bytes, %d iterations (repeat field x%d)\n", $label, $bytes, $count, $n);
     printf("  %-12s %-7s %12s %10s\n", 'impl', 'op', 'ns/op', 'MB/s');
-    row($impl, 'encode', $bytes, $encode);
+    row($treeImpl, 'encode', $bytes, $encode);
+    row($shimImpl, 'encode', $bytes, $shimEncode);
     row($officialImpl, 'encode', $bytes, $officialEncode);
-    row($impl, 'decode', $bytes, $decode);
+    row($treeImpl, 'decode', $bytes, $decode);
+    row($shimImpl, 'decode', $bytes, $shimDecode);
     row($officialImpl, 'decode', $bytes, $officialDecode);
     echo "\n";
 }
