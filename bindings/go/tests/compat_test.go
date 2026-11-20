@@ -348,6 +348,43 @@ func TestT5Switch(t *testing.T) {
 	}
 }
 
+// A nil sub-message is data, not a crash: a nil repeated element and a oneof
+// wrapper holding a nil message must encode as the empty message, byte for
+// byte what protobuf-go writes, instead of dereferencing nil.
+func TestT6NilSubmessage(t *testing.T) {
+	empty, err := (&gen1.Scalars3{Inners: []*gen1.Inner3{nil}}).Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := proto.Marshal(&pb1.Scalars3{Inners: []*pb1.Inner3{nil}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(want) == 0 || !bytes.Equal(empty, want) {
+		t.Fatalf("nil repeated element encoded %q, protobuf-go writes %q", empty, want)
+	}
+
+	one := &genone.Oneof1{Name: "a", Kind: &genone.Oneof1_Inner_{Inner: nil}}
+	got, err := one.Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantOne, err := proto.Marshal(&pbone.Oneof1{Name: "a", Kind: &pbone.Oneof1_Inner_{Inner: nil}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, wantOne) {
+		t.Fatalf("nil oneof member encoded %q, protobuf-go writes %q", got, wantOne)
+	}
+	back := &genone.Oneof1{}
+	if err := back.Unmarshal(wantOne); err != nil {
+		t.Fatal(err)
+	}
+	if back.GetInner() == nil {
+		t.Fatal("empty oneof member decoded as absent")
+	}
+}
+
 func TestT6Errors(t *testing.T) {
 	loadVectors(t)
 	if err := (&gen1.Scalars3{}).Unmarshal([]byte{0xff, 0xff, 0xff}); err == nil {
