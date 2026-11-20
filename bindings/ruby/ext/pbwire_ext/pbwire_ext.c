@@ -90,6 +90,7 @@ typedef struct {
     uint32_t by_number_size;  /* entries in by_number */
     VALUE by_name;            /* Hash: field name -> Integer index */
     VALUE name_str;           /* frozen UTF-8 full name, for class lookup */
+    pbw_ctx *ctx;             /* encode/decode arena, reset per object call */
     uint32_t oneofs;
     int has_required;
 } type_t;
@@ -268,6 +269,10 @@ type_free(void *ptr)
     }
     holder_release(type->holder);
     type->holder = NULL;
+    if (type->ctx != NULL) {
+        pbw_ctx_free(type->ctx);
+        type->ctx = NULL;
+    }
     xfree(type->fields);
     xfree(type->by_number);
     xfree(type);
@@ -332,6 +337,7 @@ type_alloc(VALUE klass)
     type->by_number_size = 0;
     type->by_name = Qnil;
     type->name_str = Qnil;
+    type->ctx = NULL;
     type->oneofs = 0;
     type->has_required = 0;
     return obj;
@@ -1666,20 +1672,30 @@ object_scalar_present(field_t *f, VALUE value)
 /* One scalar/string value as a core value. UINT64_MAX must go through
  * rb_num2ull: rb_num2ll raises on it. */
 static pbw_value *
-object_scalar_value(field_t *f, VALUE value)
+object_scalar_value(field_t *f, VALUE value, pbw_ctx *ctx)
 {
+    uint64_t bits;
+
     switch ((pbw_type)f->type) {
     case PBW_TYPE_STRING:
     case PBW_TYPE_BYTES:
         Check_Type(value, T_STRING);
-        return pbw_value_new_bytes(RSTRING_PTR(value),
-                                   (size_t)RSTRING_LEN(value));
-    case PBW_TYPE_FLOAT:
-        return pbw_value_new_float((float)NUM2DBL(value));
-    case PBW_TYPE_DOUBLE:
-        return pbw_value_new_double(NUM2DBL(value));
+        return pbw_value_new_bytes_ctx(ctx, RSTRING_PTR(value),
+                                       (size_t)RSTRING_LEN(value));
+    case PBW_TYPE_FLOAT: {
+        float fv = (float)NUM2DBL(value);
+
+        memcpy(&bits, &fv, 4);
+        return pbw_value_new_uint_ctx(ctx, bits);
+    }
+    case PBW_TYPE_DOUBLE: {
+        double dv = NUM2DBL(value);
+
+        memcpy(&bits, &dv, 8);
+        return pbw_value_new_uint_ctx(ctx, bits);
+    }
     case PBW_TYPE_BOOL:
-        return pbw_value_new_bool(RTEST(value) ? 1 : 0);
+        return pbw_value_new_uint_ctx(ctx, RTEST(value) ? 1u : 0u);
     case PBW_TYPE_INT32:
     case PBW_TYPE_INT64:
     case PBW_TYPE_SINT32:
@@ -1687,9 +1703,9 @@ object_scalar_value(field_t *f, VALUE value)
     case PBW_TYPE_SFIXED32:
     case PBW_TYPE_SFIXED64:
     case PBW_TYPE_ENUM:
-        return pbw_value_new_int(rb_num2ll(value));
+        return pbw_value_new_uint_ctx(ctx, (uint64_t)rb_num2ll(value));
     default:
-        return pbw_value_new_uint(rb_num2ull(value));
+        return pbw_value_new_uint_ctx(ctx, rb_num2ull(value));
     }
 }
 
@@ -1748,12 +1764,14 @@ object_default(field_t *f)
     }
 }
 
-static void object_fill(pbw_message *msg, type_t *type, VALUE obj);
+static void object_fill(pbw_message *msg, type_t *type, VALUE obj,
+                        pbw_ctx *ctx);
 
 typedef struct {
     pbw_message *msg;
     type_t *type;
     VALUE obj;
+    pbw_ctx *ctx;
 } object_fill_args;
 
 static VALUE
@@ -1761,13 +1779,13 @@ object_fill_protected(VALUE argp)
 {
     object_fill_args *a = (object_fill_args *)(void *)argp;
 
-    object_fill(a->msg, a->type, a->obj);
+    object_fill(a->msg, a->type, a->obj, a->ctx);
     return Qnil;
 }
 
 /* Walk the generated model's ivars in descriptor order and fill the tree. */
 static void
-object_fill(pbw_message *msg, type_t *type, VALUE obj)
+object_fill(pbw_message *msg, type_t *type, VALUE obj, pbw_ctx *ctx)
 {
     size_t i;
 
@@ -1798,9 +1816,9 @@ object_fill(pbw_message *msg, type_t *type, VALUE obj)
                         rb_raise(eError, "%s.%s: out of memory",
                                  type_name(type), RSTRING_PTR(f->name));
                     }
-                    object_fill(child, field_sub_type(f), item);
+                    object_fill(child, field_sub_type(f), item, ctx);
                 } else {
-                    pbw_value *built = object_scalar_value(f, item);
+                    pbw_value *built = object_scalar_value(f, item, ctx);
 
                     status = pbw_message_set_field(msg, df, built);
                     if (status != PBW_OK) {
@@ -1825,7 +1843,7 @@ object_fill(pbw_message *msg, type_t *type, VALUE obj)
                 rb_raise(eError, "%s.%s: out of memory", type_name(type),
                          RSTRING_PTR(f->name));
             }
-            object_fill(child, field_sub_type(f), child_obj);
+            object_fill(child, field_sub_type(f), child_obj, ctx);
             continue;
         }
 
@@ -1845,7 +1863,7 @@ object_fill(pbw_message *msg, type_t *type, VALUE obj)
                 continue;
             }
             {
-                pbw_value *built = object_scalar_value(f, value);
+                pbw_value *built = object_scalar_value(f, value, ctx);
 
                 status = pbw_message_set_field(msg, df, built);
                 if (status != PBW_OK) {
@@ -1950,41 +1968,40 @@ type_encode_object(VALUE self, VALUE obj)
     pbw_message *tree;
     object_fill_args args;
     int state = 0;
-    size_t size = 0;
     size_t len = 0;
-    size_t cap;
     VALUE out;
     pbw_status status;
 
     TypedData_Get_Struct(self, type_t, &type_data_type, type);
-    tree = pbw_message_new(type->desc);
+    if (type->ctx == NULL) {
+        type->ctx = pbw_ctx_new();
+        if (type->ctx == NULL) {
+            rb_raise(eError, "%s: out of memory", type_name(type));
+        }
+    }
+    pbw_ctx_reset(type->ctx);
+    tree = pbw_message_new_ctx(type->ctx, type->desc);
     if (tree == NULL) {
         rb_raise(eError, "%s: out of memory", type_name(type));
     }
     args.msg = tree;
     args.type = type;
     args.obj = obj;
+    args.ctx = type->ctx;
     rb_protect(object_fill_protected, (VALUE)(void *)&args, &state);
     if (state != 0) {
-        pbw_message_free(tree);
         rb_jump_tag(state);
     }
-    status = pbw_message_encoded_size(tree, &size);
-    if (status != PBW_OK) {
-        pbw_message_free(tree);
-        rb_raise(eError, "%s: %s", type_name(type), pbw_strerror(status));
+    {
+        const uint8_t *data = NULL;
+
+        status = pbw_encode_ctx(type->ctx, tree, &data, &len);
+        if (status != PBW_OK) {
+            rb_raise(eError, "%s: %s", type_name(type),
+                     pbw_strerror(status));
+        }
+        out = rb_str_new((const char *)data, (long)len);
     }
-    cap = size + PBW_ENCODE_SLACK;
-    if (cap < 16) {
-        cap = 16;
-    }
-    out = rb_str_buf_new((long)cap);
-    status = pbw_encode_to(tree, RSTRING_PTR(out), cap, &len);
-    pbw_message_free(tree);
-    if (status != PBW_OK) {
-        rb_raise(eError, "%s: %s", type_name(type), pbw_strerror(status));
-    }
-    rb_str_set_len(out, (long)len);
     return out;
 }
 

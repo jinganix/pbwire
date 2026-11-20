@@ -1240,21 +1240,61 @@ four tiers, MB/s:
 
 | arm | enc 136/174/2469/74913 | dec 136/174/2469/74913 |
 |---|---|---|
-| `pbwire-ruby-tree` | 45.9 / 43.6 / 39.1 / 40.9 | 35.0 / 38.5 / 39.3 / 45.9 |
-| `pbwire-ruby-shim` | 135.3 / 130.8 / 125.2 / 131.1 | 139.0 / 150.8 / 137.7 / 153.6 |
-| google-protobuf gem | 44.0 / 31.3 / 18.0 / 18.1 | 253.7 / 256.7 / 478.5 / 671.7 |
+| `pbwire-ruby-tree` | 31.3 / 42.9 / 38.1 / 42.1 | 32.9 / 37.0 / 41.4 / 46.8 |
+| `pbwire-ruby-shim` | 79.8 / 130.6 / 129.9 / 133.2 | 132.2 / 146.0 / 143.5 / 153.4 |
+| google-protobuf gem | 479.3 / 782.0 / 1195.3 / 1302.0 | 241.1 / 243.8 / 494.4 / 672.2 |
 
-Reading: the object walk removes the Ruby-side per-field loop, so shim encode
-beats the gem at every tier (3.0x at 136 B, 7.3x at 74 KB). Decode loses
-because the shim, as the contract requires, hands back a fully materialized
-generated model while the gem's decoder keeps fields lazy; at 136 B it is 0.5x
-and at 74 KB 0.23x. The `tree` row is the per-field facade, not the prebuilt
-`Message` handle `make ruby-bench` publishes.
+Reading: the object walk is 2.5x-3.1x the per-field facade on encode and
+2.5x-4.0x on decode, so one extension entry removes the Ruby-side loop. It
+still loses to the gem on both ops: the gem's generated object already owns
+C-backed storage (and its decode stays lazy), while the shim builds a pbw tree
+from Ruby ivars and materializes every generated model/array. The `tree` row
+here is the per-field facade, not the prebuilt `Message` handle
+`make ruby-bench` publishes.
 
 Verdict: keep the builder/wire-view handle as the shipped fast path and keep
-the shim as the native-object row and a re-runnable arm. The object walk wins
-encode at every tier (3.0x-7.3x the gem) because it removes the Ruby-side
-per-field loop, but loses decode (0.5x-0.23x) because the contract's fully
-materialized generated model costs per-element Ruby objects and arrays where
-the gem hands back a lazy message. No payload split applies; the two ops point
-in opposite directions at both 136 B and 74913 B.
+the shim as the native-object row and a re-runnable arm. The formal prebuilt
+handle row is above the gem on every cell; the shim is below it on both ops at
+136 B and 74913 B, so no payload split applies and replacing the handle with a
+full object materialization would slow decode.
+
+## Stage 6: Ruby shim encode arena (plan 11)
+
+The two below-baseline shim cells (encode and decode at every tier) got one
+change each, A/B on two extension builds from the same tree
+(`bindings/ruby/pbench/ab.sh`, alternating rounds, xlarge 74913 B first).
+
+Change 1 -- **accepted**: build the encode tree in the type's `pbw_ctx` arena
+(`pbw_message_new_ctx` plus `pbw_value_new_*_ctx`) and copy `pbw_encode_ctx`'s
+buffer into the returned String, instead of one heap block per message/value.
+The `.so` before the change is base A, the candidate is base B:
+
+| round | base MB/s | arena MB/s |
+|---|---|---|
+| 1 | 133.9 | 248.9 |
+| 2 | 131.8 | 245.8 |
+| 3 | 135.0 | 248.1 |
+| 4 | 132.9 | 249.2 |
+| 5 | 133.8 | 252.6 |
+
+Every round wins (1.84x-1.90x), bytes stayed equal (the gate passed and the A/B
+script aborts on any byte difference), so the change stayed. It is bolded as a
+win but not a baseline win: the formal row rose from 133.0 to 253.5 MB/s at
+xlarge, still below the gem's 1334.9.
+
+Change 2 -- **rejected**: decode through `pbw_decode_ctx` on the same arena,
+so the tree stops costing one malloc block. Same A/B, xlarge decode:
+
+| round | base MB/s | arena MB/s |
+|---|---|---|
+| 1 | 154.6 | 156.0 |
+| 2 | 152.2 | 152.0 |
+| 3 | 151.9 | 153.9 |
+| 4 | 156.5 | 156.0 |
+| 5 | 154.9 | 155.3 |
+
+Round 2 and round 4 are not wins (the change is inside run-to-run noise), and
+the remaining gap is the generated-model materialization, not the decode tree
+allocation. The plan's rule rejects a change that does not win every round, so
+the decode path stayed on `pbw_decode`; the final build is change 1 only.
+

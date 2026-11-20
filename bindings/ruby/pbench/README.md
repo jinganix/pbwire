@@ -50,41 +50,43 @@ then encode; decode, then read every field back), `shim` is one `encode_object`
 
 | tier | arm | encode ns/op | encode MB/s | decode ns/op | decode MB/s |
 |---|---|---|---|---|---|
-| 136 B | `pbwire-ruby-tree` | 2965.2 | 45.9 | 3890.8 | 35.0 |
-| 136 B | `pbwire-ruby-shim` | 1005.2 | 135.3 | 978.2 | 139.0 |
-| 136 B | `google-protobuf` | 3092.7 | 44.0 | 536.0 | 253.7 |
-| 174 B | `pbwire-ruby-tree` | 3986.7 | 43.6 | 4517.7 | 38.5 |
-| 174 B | `pbwire-ruby-shim` | 1330.5 | 130.8 | 1153.7 | 150.8 |
-| 174 B | `google-protobuf` | 5554.3 | 31.3 | 677.9 | 256.7 |
-| 2469 B | `pbwire-ruby-tree` | 63202.0 | 39.1 | 62872.2 | 39.3 |
-| 2469 B | `pbwire-ruby-shim` | 19727.9 | 125.2 | 17928.7 | 137.7 |
-| 2469 B | `google-protobuf` | 137183.6 | 18.0 | 5160.1 | 478.5 |
-| 74913 B | `pbwire-ruby-tree` | 1832896.0 | 40.9 | 1631700.0 | 45.9 |
-| 74913 B | `pbwire-ruby-shim` | 571371.5 | 131.1 | 487625.0 | 153.6 |
-| 74913 B | `google-protobuf` | 4145257.5 | 18.1 | 111526.0 | 671.7 |
+| 136 B | `pbwire-ruby-tree` | 4340.2 | 31.3 | 4131.1 | 32.9 |
+| 136 B | `pbwire-ruby-shim` | 1704.4 | 79.8 | 1028.7 | 132.2 |
+| 136 B | `google-protobuf` | 283.8 | 479.3 | 564.1 | 241.1 |
+| 174 B | `pbwire-ruby-tree` | 4059.7 | 42.9 | 4700.7 | 37.0 |
+| 174 B | `pbwire-ruby-shim` | 1332.3 | 130.6 | 1192.0 | 146.0 |
+| 174 B | `google-protobuf` | 222.5 | 782.0 | 713.6 | 243.8 |
+| 2469 B | `pbwire-ruby-tree` | 64830.9 | 38.1 | 59692.1 | 41.4 |
+| 2469 B | `pbwire-ruby-shim` | 19002.1 | 129.9 | 17205.6 | 143.5 |
+| 2469 B | `google-protobuf` | 2065.6 | 1195.3 | 4994.0 | 494.4 |
+| 74913 B | `pbwire-ruby-tree` | 1779491.0 | 42.1 | 1601363.0 | 46.8 |
+| 74913 B | `pbwire-ruby-shim` | 562203.5 | 133.2 | 488371.0 | 153.4 |
+| 74913 B | `google-protobuf` | 57537.7 | 1302.0 | 111440.0 | 672.2 |
 
-The reading: the per-field facade (`tree`) is ~3x slower than one object walk
-at every tier, and it loses to the gem on encode at 136 B-174 B because it pays
-a Ruby-level `set` plus a C `pbw_message_set` per field. The shim removes that
-Ruby-side loop: encode is 3.0x the gem at 136 B and 7.3x at 74 KB. Decode is
-the opposite story: the shim materializes every generated model and array in
-C, while the gem's decode leaves fields lazy, so `shim` decode is 0.5x the gem
-at 136 B and 0.23x at 74 KB. Stage 6 looks at that cell.
+The reading: the per-field facade (`tree`) loses to the gem on both ops because
+it pays a Ruby-level `set`/`get` plus a C tree call per field. One C-extension
+entry removes the Ruby-side loop: `shim` is 2.5x-3.1x the `tree` arm on encode
+and 2.5x-4.0x on decode. It still loses to the gem, whose generated object is
+already a C-backed value: the shim must build a pbw tree from Ruby ivars
+(encode) or materialize every generated model and array (decode), while the gem
+writes/reads its own storage and leaves decode lazy. Stage 6's arena change cut
+the xlarge shim encode from 133.2 to 253.5 MB/s, but did not close the gap.
 
 ## Verdict
 
 **Keep the builder/wire-view handle as the shipped runtime; the shim is the
-native-object row and a re-runnable candidate.** One C-extension entry removes
-the Ruby-side per-field loop that the `tree` arm pays: `shim` encode is above
-the google-protobuf gem at every tier (3.0x at 136 B, 7.3x at 74 KB). Decode
-does not win: the contract asks for a fully materialized generated model, while
-the gem's decoder leaves fields lazy, so the shim's per-element Ruby object and
-array allocation costs 2.0x-4.4x more than the baseline. Publishing both rows
-keeps the codec number and the native-object number visible instead of quoting
-one for the other.
+native-object row and a re-runnable candidate.** The formal `make ruby-bench`
+row `pbwire-ruby-tree` (prebuilt `Message`/wire view) is 903.7 / 789.7 / 1531.2
+/ 1804.9 MB/s encode and 356.7 / 457.7 / 933.3 / 1207.8 MB/s decode, above the
+gem at every tier. The native-object `shim` row is 181.0 / 197.2 / 220.7 /
+253.5 encode and 138.5 / 153.4 / 142.6 / 158.6 decode: one extension call
+removes the Ruby per-field loop (2.5x-3.1x the `tree` arm), but the object walk
+still builds a C tree / materializes Ruby objects where the gem reads and
+writes its own C-backed storage. Publishing both rows keeps the codec number
+and the native-object number visible instead of quoting one for the other.
 
 It is not (a) -- "replace the shipped fast path": the runtime's fast path is the
 prebuilt `Message` builder (encode) and wire view (decode), which this arm does
 not replace; replacing it with a full object materialization would slow every
 decode. It is not (c) -- "split by payload size": there is no crossover. The
-shim wins encode at 136 B and at 74 KB, and loses decode at both ends.
+shim is below the gem on both ops at 136 B and at 74 KB.
