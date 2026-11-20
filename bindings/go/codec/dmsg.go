@@ -350,52 +350,52 @@ func (t *DType) buildSingularRow(f *Field, acc func(any) *slot) {
 		f.GetI32 = func(msg any) int32 { return int32(acc(msg).u) }
 		f.SetI32 = func(msg any, v int32) { s := acc(msg); s.present, s.u = true, uint64(int64(v)) }
 		f.GetOptI32 = func(msg any) *int32 { return optI32(acc(msg)) }
-		f.SetOptI32 = func(msg any, v int32) { s := acc(msg); s.present = true; s.opt = &v }
+		f.SetOptI32 = func(msg any, v int32) { s := acc(msg); s.present, s.u, s.opt = true, uint64(int64(v)), &v }
 	case KindInt64:
 		f.GetI64 = func(msg any) int64 { return int64(acc(msg).u) }
 		f.SetI64 = func(msg any, v int64) { s := acc(msg); s.present, s.u = true, uint64(v) }
 		f.GetOptI64 = func(msg any) *int64 { return optI64(acc(msg)) }
-		f.SetOptI64 = func(msg any, v int64) { s := acc(msg); s.present = true; s.opt = &v }
+		f.SetOptI64 = func(msg any, v int64) { s := acc(msg); s.present, s.u, s.opt = true, uint64(v), &v }
 	case KindUint32:
 		f.GetU32 = func(msg any) uint32 { return uint32(acc(msg).u) }
 		f.SetU32 = func(msg any, v uint32) { s := acc(msg); s.present, s.u = true, uint64(v) }
 		f.GetOptU32 = func(msg any) *uint32 { return optU32(acc(msg)) }
-		f.SetOptU32 = func(msg any, v uint32) { s := acc(msg); s.present = true; s.opt = &v }
+		f.SetOptU32 = func(msg any, v uint32) { s := acc(msg); s.present, s.u, s.opt = true, uint64(v), &v }
 	case KindUint64:
 		f.GetU64 = func(msg any) uint64 { return acc(msg).u }
 		f.SetU64 = func(msg any, v uint64) { s := acc(msg); s.present, s.u = true, v }
 		f.GetOptU64 = func(msg any) *uint64 { return optU64(acc(msg)) }
-		f.SetOptU64 = func(msg any, v uint64) { s := acc(msg); s.present = true; s.opt = &v }
+		f.SetOptU64 = func(msg any, v uint64) { s := acc(msg); s.present, s.u, s.opt = true, v, &v }
 	case KindSint32:
 		f.GetS32 = func(msg any) int32 { return int32(acc(msg).u) }
 		f.SetS32 = func(msg any, v int32) { s := acc(msg); s.present, s.u = true, uint64(int64(v)) }
 		f.GetOptS32 = func(msg any) *int32 { return optI32(acc(msg)) }
-		f.SetOptS32 = func(msg any, v int32) { s := acc(msg); s.present = true; s.opt = &v }
+		f.SetOptS32 = func(msg any, v int32) { s := acc(msg); s.present, s.u, s.opt = true, uint64(int64(v)), &v }
 	case KindSint64:
 		f.GetS64 = func(msg any) int64 { return int64(acc(msg).u) }
 		f.SetS64 = func(msg any, v int64) { s := acc(msg); s.present, s.u = true, uint64(v) }
 		f.GetOptS64 = func(msg any) *int64 { return optI64(acc(msg)) }
-		f.SetOptS64 = func(msg any, v int64) { s := acc(msg); s.present = true; s.opt = &v }
+		f.SetOptS64 = func(msg any, v int64) { s := acc(msg); s.present, s.u, s.opt = true, uint64(v), &v }
 	case KindFixed32:
 		f.GetFx32 = func(msg any) uint32 { return uint32(acc(msg).u) }
 		f.SetFx32 = func(msg any, v uint32) { s := acc(msg); s.present, s.u = true, uint64(v) }
 		f.GetOptFx32 = func(msg any) *uint32 { return optU32(acc(msg)) }
-		f.SetOptFx32 = func(msg any, v uint32) { s := acc(msg); s.present = true; s.opt = &v }
+		f.SetOptFx32 = func(msg any, v uint32) { s := acc(msg); s.present, s.u, s.opt = true, uint64(v), &v }
 	case KindFixed64:
 		f.GetFx64 = func(msg any) uint64 { return acc(msg).u }
 		f.SetFx64 = func(msg any, v uint64) { s := acc(msg); s.present, s.u = true, v }
 		f.GetOptFx64 = func(msg any) *uint64 { return optU64(acc(msg)) }
-		f.SetOptFx64 = func(msg any, v uint64) { s := acc(msg); s.present = true; s.opt = &v }
+		f.SetOptFx64 = func(msg any, v uint64) { s := acc(msg); s.present, s.u, s.opt = true, v, &v }
 	case KindSfixed32:
 		f.GetSfx32 = func(msg any) int32 { return int32(acc(msg).u) }
 		f.SetSfx32 = func(msg any, v int32) { s := acc(msg); s.present, s.u = true, uint64(int64(v)) }
 		f.GetOptSfx32 = func(msg any) *int32 { return optI32(acc(msg)) }
-		f.SetOptSfx32 = func(msg any, v int32) { s := acc(msg); s.present = true; s.opt = &v }
+		f.SetOptSfx32 = func(msg any, v int32) { s := acc(msg); s.present, s.u, s.opt = true, uint64(int64(v)), &v }
 	case KindSfixed64:
 		f.GetSfx64 = func(msg any) int64 { return int64(acc(msg).u) }
 		f.SetSfx64 = func(msg any, v int64) { s := acc(msg); s.present, s.u = true, uint64(v) }
 		f.GetOptSfx64 = func(msg any) *int64 { return optI64(acc(msg)) }
-		f.SetOptSfx64 = func(msg any, v int64) { s := acc(msg); s.present = true; s.opt = &v }
+		f.SetOptSfx64 = func(msg any, v int64) { s := acc(msg); s.present, s.u, s.opt = true, uint64(v), &v }
 	case KindFloat:
 		f.GetF32 = func(msg any) float32 { return math.Float32frombits(uint32(acc(msg).u)) }
 		f.SetF32 = func(msg any, v float32) {
@@ -403,7 +403,10 @@ func (t *DType) buildSingularRow(f *Field, acc func(any) *slot) {
 			s.present, s.u = true, uint64(math.Float32bits(v))
 		}
 		f.GetOptF32 = func(msg any) *float32 { return optF32(acc(msg)) }
-		f.SetOptF32 = func(msg any, v float32) { s := acc(msg); s.present = true; s.opt = &v }
+		f.SetOptF32 = func(msg any, v float32) {
+			s := acc(msg)
+			s.present, s.u, s.opt = true, uint64(math.Float32bits(v)), &v
+		}
 	case KindDouble:
 		f.GetF64 = func(msg any) float64 { return math.Float64frombits(acc(msg).u) }
 		f.SetF64 = func(msg any, v float64) {
@@ -411,27 +414,30 @@ func (t *DType) buildSingularRow(f *Field, acc func(any) *slot) {
 			s.present, s.u = true, math.Float64bits(v)
 		}
 		f.GetOptF64 = func(msg any) *float64 { return optF64(acc(msg)) }
-		f.SetOptF64 = func(msg any, v float64) { s := acc(msg); s.present = true; s.opt = &v }
+		f.SetOptF64 = func(msg any, v float64) {
+			s := acc(msg)
+			s.present, s.u, s.opt = true, math.Float64bits(v), &v
+		}
 	case KindBool:
 		f.GetBool = func(msg any) bool { return acc(msg).u != 0 }
 		f.SetBool = func(msg any, v bool) { s := acc(msg); s.present, s.u = true, boolBits(v) }
 		f.GetOptBool = func(msg any) *bool { return optBool(acc(msg)) }
-		f.SetOptBool = func(msg any, v bool) { s := acc(msg); s.present = true; s.opt = &v }
+		f.SetOptBool = func(msg any, v bool) { s := acc(msg); s.present, s.u, s.opt = true, boolBits(v), &v }
 	case KindEnum:
 		f.GetEnum = func(msg any) int32 { return int32(acc(msg).u) }
 		f.SetEnum = func(msg any, v int32) { s := acc(msg); s.present, s.u = true, uint64(int64(v)) }
 		f.GetOptEnum = func(msg any) *int32 { return optI32(acc(msg)) }
-		f.SetOptEnum = func(msg any, v int32) { s := acc(msg); s.present = true; s.opt = &v }
+		f.SetOptEnum = func(msg any, v int32) { s := acc(msg); s.present, s.u, s.opt = true, uint64(int64(v)), &v }
 	case KindString:
 		f.GetStr = func(msg any) string { return acc(msg).str }
 		f.SetStr = func(msg any, v string) { s := acc(msg); s.present, s.str = true, v }
 		f.GetOptStr = func(msg any) *string { return optStr(acc(msg)) }
-		f.SetOptStr = func(msg any, v string) { s := acc(msg); s.present = true; s.opt = &v }
+		f.SetOptStr = func(msg any, v string) { s := acc(msg); s.present, s.str, s.opt = true, v, &v }
 	case KindBytes:
 		f.GetBytes = func(msg any) []byte { return acc(msg).p }
 		f.SetBytes = func(msg any, v []byte) { s := acc(msg); s.present, s.p = true, v }
 		f.GetOptBytes = func(msg any) *[]byte { return optBytes(acc(msg)) }
-		f.SetOptBytes = func(msg any, v []byte) { s := acc(msg); s.present = true; s.opt = &v }
+		f.SetOptBytes = func(msg any, v []byte) { s := acc(msg); s.present, s.p, s.opt = true, v, &v }
 	}
 }
 
