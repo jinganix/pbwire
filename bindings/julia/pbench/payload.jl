@@ -6,7 +6,15 @@
 push!(LOAD_PATH, joinpath(@__DIR__, "..", "runtime", "src"))
 using Pbwire
 
-include(joinpath(@__DIR__, "gen", "matrix3_pbwire.jl"))
+const _GEN = isfile(joinpath(@__DIR__, "gen", "matrix3_pbwire.jl")) ?
+    joinpath(@__DIR__, "gen", "matrix3_pbwire.jl") :
+    joinpath(@__DIR__, "..", "tests", "gen", "matrix3_pbwire.jl")
+module G end
+Base.include(G, _GEN)
+const Scalars3Layout = G.Scalars3Layout
+const scalars3LayoutRows = G.scalars3LayoutRows
+const Inner3Layout = G.Inner3Layout
+const inner3LayoutRows = G.inner3LayoutRows
 
 struct Tier
     label::String
