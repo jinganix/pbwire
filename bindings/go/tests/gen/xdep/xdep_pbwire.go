@@ -42,15 +42,3 @@ func (m *DepMsg) Marshal() ([]byte, error) {
 func (m *DepMsg) Unmarshal(wire []byte) error {
 	return codec.DecodeModel(wire, m, DepMsgMeta)
 }
-
-// DepMsgMeta is the generated DATA table for xdep.DepMsg: one row per field.
-var DepMsgMeta = codec.NewTable("xdep.DepMsg", []*codec.Field{
-	{Num: 1, Wire: codec.WireLen, Kind: codec.KindString,
-		GetStr: func(msg any) string { return msg.(*DepMsg).Name },
-		SetStr: func(msg any, v string) { msg.(*DepMsg).Name = v },
-	},
-	{Num: 2, Wire: codec.WireVarint, Kind: codec.KindInt32,
-		GetI32: func(msg any) int32 { return msg.(*DepMsg).Value },
-		SetI32: func(msg any, v int32) { msg.(*DepMsg).Value = v },
-	},
-})

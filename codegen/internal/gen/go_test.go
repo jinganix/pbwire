@@ -102,8 +102,8 @@ func TestGoFilesDefault(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := goFileMap(t, files)
-	if len(got) != 1 {
-		t.Fatalf("want the thin model file only, got %v", keys(got))
+	if len(got) != 2 {
+		t.Fatalf("want model+meta files, got %v", keys(got))
 	}
 	models, ok := got["t_pbwire.go"]
 	if !ok {
@@ -118,17 +118,28 @@ func TestGoFilesDefault(t *testing.T) {
 		"codec.EncodeModel(m, MMeta)",
 		"func (m *M) Unmarshal(wire []byte) error",
 		"codec.DecodeModel(wire, m, MMeta)",
+	} {
+		if !strings.Contains(models, want) {
+			t.Errorf("model file misses %q", want)
+		}
+	}
+	meta, ok := got["t_pbwire_meta.go"]
+	if !ok {
+		t.Fatalf("missing meta file, got %v", keys(got))
+	}
+	for _, want := range []string{
 		"var MMeta = codec.NewTable(\"t.M\"",
 		"Num: 1, Wire: codec.WireVarint, Kind: codec.KindInt32",
 		"Num: 2, Wire: codec.WireLen, Kind: codec.KindString",
 		"GetI32:",
 		"SetStr:",
 	} {
-		if !strings.Contains(models, want) {
-			t.Errorf("model file misses %q", want)
+		if !strings.Contains(meta, want) {
+			t.Errorf("meta file misses %q", want)
 		}
 	}
 	for _, bad := range []string{
+		"codec.NewTable",
 		"getPlan",
 		"func Init()",
 		"UseSchema",
@@ -190,7 +201,35 @@ func TestGoCodecBranches(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	models := goFileMap(t, files)["b_pbwire.go"]
+	got := goFileMap(t, files)
+	models, ok := got["b_pbwire.go"]
+	if !ok {
+		t.Fatalf("missing model file, got %v", keys(got))
+	}
+	meta, ok := got["b_pbwire_meta.go"]
+	if !ok {
+		t.Fatalf("missing meta file, got %v", keys(got))
+	}
+	// The model side: types, getters, forwarding. No table, no wire logic.
+	for _, want := range []string{
+		"type B struct",
+		"func (m *B) GetReq() int32",
+		"Opt      *string",
+		"func (m *B) Marshal() ([]byte, error)",
+		"codec.EncodeModel(m, BMeta)",
+		"codec.DecodeModel(wire, m, BMeta)",
+		"type isB_kind interface",
+	} {
+		if !strings.Contains(models, want) {
+			t.Errorf("branch model file misses %q", want)
+		}
+	}
+	for _, bad := range []string{"codec.NewTable", "GetI32:", "SetStr:", "Sub: func()"} {
+		if strings.Contains(models, bad) {
+			t.Errorf("branch model file must stay free of field tables: %q", bad)
+		}
+	}
+	// The meta side: every field-fact and closure shape.
 	for _, want := range []string{
 		// required: always written, no presence guard.
 		"Num: 1, Wire: codec.WireVarint, Kind: codec.KindInt32, Required: true",
@@ -229,8 +268,8 @@ func TestGoCodecBranches(t *testing.T) {
 		// field-number order is preserved in the table.
 		"var BMeta = codec.NewTable(\"b.B\"",
 	} {
-		if !strings.Contains(models, want) {
-			t.Errorf("branch models file misses %q", want)
+		if !strings.Contains(meta, want) {
+			t.Errorf("branch meta file misses %q", want)
 		}
 	}
 	for _, bad := range []string{
@@ -243,13 +282,14 @@ func TestGoCodecBranches(t *testing.T) {
 		"GetInt(",
 		"SetInt(",
 		"pbwire/dynamic",
+		"type B struct",
 	} {
-		if strings.Contains(models, bad) {
-			t.Errorf("branch models file must not contain %q", bad)
+		if strings.Contains(meta, bad) {
+			t.Errorf("branch meta file must not contain %q", bad)
 		}
 	}
 	// Rows land in field-number order: req=1 before opt=2.
-	req, opt := strings.Index(models, "Num: 1,"), strings.Index(models, "Num: 2,")
+	req, opt := strings.Index(meta, "Num: 1,"), strings.Index(meta, "Num: 2,")
 	if req < 0 || opt < 0 || req > opt {
 		t.Error("table rows must run in field-number order")
 	}

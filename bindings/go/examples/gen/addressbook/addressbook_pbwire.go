@@ -66,25 +66,6 @@ func (m *Person_PhoneNumber) Unmarshal(wire []byte) error {
 	return codec.DecodeModel(wire, m, Person_PhoneNumberMeta)
 }
 
-// Person_PhoneNumberMeta is the generated DATA table for tutorial.Person.PhoneNumber: one row per field.
-var Person_PhoneNumberMeta = codec.NewTable("tutorial.Person.PhoneNumber", []*codec.Field{
-	{Num: 1, Wire: codec.WireLen, Kind: codec.KindString, Required: true,
-		GetStr: func(msg any) string { return msg.(*Person_PhoneNumber).Number },
-		SetStr: func(msg any, v string) { msg.(*Person_PhoneNumber).Number = v },
-	},
-	{Num: 2, Wire: codec.WireVarint, Kind: codec.KindEnum, Explicit: true,
-		GetOptEnum: func(msg any) *int32 {
-			p := msg.(*Person_PhoneNumber).Type
-			if p == nil {
-				return nil
-			}
-			v := int32(*p)
-			return &v
-		},
-		SetOptEnum: func(msg any, v int32) { tmp := Person_PhoneType(v); msg.(*Person_PhoneNumber).Type = &tmp },
-	},
-})
-
 // tutorial.Person
 type Person struct {
 	Name   string
@@ -136,39 +117,6 @@ func (m *Person) Unmarshal(wire []byte) error {
 	return codec.DecodeModel(wire, m, PersonMeta)
 }
 
-// PersonMeta is the generated DATA table for tutorial.Person: one row per field.
-var PersonMeta = codec.NewTable("tutorial.Person", []*codec.Field{
-	{Num: 1, Wire: codec.WireLen, Kind: codec.KindString, Required: true,
-		GetStr: func(msg any) string { return msg.(*Person).Name },
-		SetStr: func(msg any, v string) { msg.(*Person).Name = v },
-	},
-	{Num: 2, Wire: codec.WireVarint, Kind: codec.KindInt32, Required: true,
-		GetI32: func(msg any) int32 { return msg.(*Person).Id },
-		SetI32: func(msg any, v int32) { msg.(*Person).Id = v },
-	},
-	{Num: 3, Wire: codec.WireLen, Kind: codec.KindString, Explicit: true,
-		GetOptStr: func(msg any) *string { return msg.(*Person).Email },
-		SetOptStr: func(msg any, v string) { tmp := v; msg.(*Person).Email = &tmp },
-	},
-	{Num: 4, Wire: codec.WireLen, Kind: codec.KindMessage,
-		Sub:       func() *codec.Table { return Person_PhoneNumberMeta },
-		Repeated:  true,
-		RepMsgLen: func(msg any) int { return len(msg.(*Person).Phones) },
-		RepMsgAt: func(msg any, i int) any {
-			if v := msg.(*Person).Phones[i]; v == nil {
-				return nil
-			}
-			return msg.(*Person).Phones[i]
-		},
-		NewRepMsg: func(msg any) any {
-			m := msg.(*Person)
-			item := &Person_PhoneNumber{}
-			m.Phones = append(m.Phones, item)
-			return item
-		},
-	},
-})
-
 // tutorial.AddressBook
 type AddressBook struct {
 	People []*Person
@@ -195,24 +143,3 @@ func (m *AddressBook) Marshal() ([]byte, error) {
 func (m *AddressBook) Unmarshal(wire []byte) error {
 	return codec.DecodeModel(wire, m, AddressBookMeta)
 }
-
-// AddressBookMeta is the generated DATA table for tutorial.AddressBook: one row per field.
-var AddressBookMeta = codec.NewTable("tutorial.AddressBook", []*codec.Field{
-	{Num: 1, Wire: codec.WireLen, Kind: codec.KindMessage,
-		Sub:       func() *codec.Table { return PersonMeta },
-		Repeated:  true,
-		RepMsgLen: func(msg any) int { return len(msg.(*AddressBook).People) },
-		RepMsgAt: func(msg any, i int) any {
-			if v := msg.(*AddressBook).People[i]; v == nil {
-				return nil
-			}
-			return msg.(*AddressBook).People[i]
-		},
-		NewRepMsg: func(msg any) any {
-			m := msg.(*AddressBook)
-			item := &Person{}
-			m.People = append(m.People, item)
-			return item
-		},
-	},
-})
