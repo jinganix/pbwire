@@ -70,3 +70,21 @@ Ruby-side loop: encode is 3.0x the gem at 136 B and 7.3x at 74 KB. Decode is
 the opposite story: the shim materializes every generated model and array in
 C, while the gem's decode leaves fields lazy, so `shim` decode is 0.5x the gem
 at 136 B and 0.23x at 74 KB. Stage 6 looks at that cell.
+
+## Verdict
+
+**Keep the builder/wire-view handle as the shipped runtime; the shim is the
+native-object row and a re-runnable candidate.** One C-extension entry removes
+the Ruby-side per-field loop that the `tree` arm pays: `shim` encode is above
+the google-protobuf gem at every tier (3.0x at 136 B, 7.3x at 74 KB). Decode
+does not win: the contract asks for a fully materialized generated model, while
+the gem's decoder leaves fields lazy, so the shim's per-element Ruby object and
+array allocation costs 2.0x-4.4x more than the baseline. Publishing both rows
+keeps the codec number and the native-object number visible instead of quoting
+one for the other.
+
+It is not (a) -- "replace the shipped fast path": the runtime's fast path is the
+prebuilt `Message` builder (encode) and wire view (decode), which this arm does
+not replace; replacing it with a full object materialization would slow every
+decode. It is not (c) -- "split by payload size": there is no crossover. The
+shim wins encode at 136 B and at 74 KB, and loses decode at both ends.

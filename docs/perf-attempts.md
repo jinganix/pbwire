@@ -1250,3 +1250,11 @@ because the shim, as the contract requires, hands back a fully materialized
 generated model while the gem's decoder keeps fields lazy; at 136 B it is 0.5x
 and at 74 KB 0.23x. The `tree` row is the per-field facade, not the prebuilt
 `Message` handle `make ruby-bench` publishes.
+
+Verdict: keep the builder/wire-view handle as the shipped fast path and keep
+the shim as the native-object row and a re-runnable arm. The object walk wins
+encode at every tier (3.0x-7.3x the gem) because it removes the Ruby-side
+per-field loop, but loses decode (0.5x-0.23x) because the contract's fully
+materialized generated model costs per-element Ruby objects and arrays where
+the gem hands back a lazy message. No payload split applies; the two ops point
+in opposite directions at both 136 B and 74913 B.
