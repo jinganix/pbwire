@@ -287,7 +287,7 @@ bindings/cpp/               C++ binding: examples/, tests/, benchmarks/ over the
 bindings/python/            CPython extension: runtime/, examples/, tests/, benchmarks/, conformance/
 bindings/go/                Go: cgo dynamic over the C ABI, dynamic/ with hot-swap registry (no plugin)
 bindings/erlang/            Erlang/OTP NIF: c_src/ (runtime), examples/, test/, benchmarks/, conformance/
-bindings/java/              Java: pure-Java codec, runtime/, examples/, tests/ (no JNI, no native library)
+bindings/java/              Java: pure-Java codec, runtime/, examples/, tests/, pbench/ (JNI reference, not shipped)
 bindings/kotlin/            Kotlin: the Java runtime + a DSL
 bindings/ruby/              Ruby: a C extension over the core, ext/, lib/, examples/, test/, benchmarks/, conformance/
 bindings/node/              Node: N-API addon over the C ABI, lib/, examples/, test/ (no npm deps)
