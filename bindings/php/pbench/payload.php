@@ -203,11 +203,11 @@ function pbwire_pbench_official_materialize(string $wire): array
     return [
         'i32' => $m->getI32(),
         'i64' => $m->getI64(),
-        'u32' => $m->getU32(),
+        'u32' => $m->getU32() & 0xFFFFFFFF,
         'u64' => sprintf('%u', $m->getU64()),
         's32' => $m->getS32(),
         's64' => $m->getS64(),
-        'fx32' => $m->getFx32(),
+        'fx32' => $m->getFx32() & 0xFFFFFFFF,
         'fx64' => $m->getFx64(),
         'sfx32' => $m->getSfx32(),
         'sfx64' => $m->getSfx64(),

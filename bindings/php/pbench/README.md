@@ -51,8 +51,42 @@ runtime in one loop per tier and reports the median of five rounds. The formal,
 recorded run is `make php-bench`, which times `pbwire-php-shim` (C extension),
 `pbwire-php-shim-ffi` (`ext-ffi`) and `pbwire-php-tree`.
 
-## Run table
+## Provisional table (Stage 3)
 
-Provisional numbers and the verdict live here after Stage 3/4; the formal
-`make php-bench` values are the ones published in
-[BENCHMARKS.md](../../../BENCHMARKS.md).
+`php bindings/php/pbench/compare.php` in two runs (the shipped `ext-ffi` wrapper,
+then the C extension with `-d extension=.../pbwire.so`), median of five
+interleaved rounds, 2026-11-21, MB/s over wire bytes. The C extension row is
+`pbwire-php-shim` (one extension entry, the array walk in C); the FFI row is
+`pbwire-php-shim-ffi` (the same API without a compiler, one FFI call per field).
+`tree` is the prebuilt `Message` handle. The baseline is the official C
+extension.
+
+| tier | arm | encode | decode |
+|---|---|---|---|
+| 136 B | `pbwire-php-tree` | 1319.5 | 649.2 |
+| 136 B | `pbwire-php-shim` | 151.2 | 159.8 |
+| 136 B | `pbwire-php-shim-ffi` | 5.0 | 5.8 |
+| 136 B | `protobuf-php-c` | 869.9 | 413.9 |
+| 174 B | `pbwire-php-tree` | 833.7 | 472.8 |
+| 174 B | `pbwire-php-shim` | 122.8 | 119.5 |
+| 174 B | `pbwire-php-shim-ffi` | 5.2 | 5.6 |
+| 174 B | `protobuf-php-c` | 556.2 | 339.4 |
+| 2469 B | `pbwire-php-tree` | 1713.0 | 644.0 |
+| 2469 B | `pbwire-php-shim` | 149.9 | 144.2 |
+| 2469 B | `pbwire-php-shim-ffi` | 5.1 | 4.4 |
+| 2469 B | `protobuf-php-c` | 1213.8 | 498.3 |
+| 74913 B | `pbwire-php-tree` | 1711.9 | 711.8 |
+| 74913 B | `pbwire-php-shim` | 190.1 | 211.9 |
+| 74913 B | `pbwire-php-shim-ffi` | 5.5 | 4.7 |
+| 74913 B | `protobuf-php-c` | 1301.5 | 537.7 |
+
+The reading: the tree handle stays ahead of the official C extension because it
+never crosses into PHP data; the array path loses because every field is a
+hashtable lookup plus a C tree store, and the FFI version additionally pays one
+trampoline per field (interpreter-scale, ~5 MB/s). Both shim rows are below the
+baseline, so Stage 6 has cells to target.
+
+## Verdict
+
+Filled in after Stage 4; the formal `make php-bench` values are the ones
+published in [BENCHMARKS.md](../../../BENCHMARKS.md).

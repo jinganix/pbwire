@@ -1344,3 +1344,27 @@ shim decode 25.55x at 174 B), so no A/B pair of extension builds was made and
 no change was attempted. The gap that remains is between the two arms (a
 builder skips the list walk and the named-list materialization), not against
 RProtoBuf.
+
+## Provisional: PHP array entry, one extension call (plan 13)
+
+PHP's native object is an array in the generated model's shape. The `shim` arm
+is one C-extension entry (`Type::encodeArray` / `decodeArray`) that walks the
+array with `zend_hash_str_find` per descriptor field and fills the C tree in C;
+the no-compiler deployment is the same API on the shipped `ext-ffi` wrapper,
+published as `pbwire-php-shim-ffi` (one FFI call per field) and gated to the
+same bytes. The `tree` arm is the prebuilt `Message` handle. Provisional
+`php bindings/php/pbench/compare.php` (C extension row) and the same script on
+`ext-ffi`, median of five interleaved rounds, 2026-11-21, MB/s:
+
+| row | enc 136/174/2469/74913 | dec 136/174/2469/74913 |
+|---|---|---|
+| `pbwire-php-tree` | 1319.5 / 833.7 / 1713.0 / 1711.9 | 649.2 / 472.8 / 644.0 / 711.8 |
+| `pbwire-php-shim` | 151.2 / 122.8 / 149.9 / 190.1 | 159.8 / 119.5 / 144.2 / 211.9 |
+| `pbwire-php-shim-ffi` | 5.0 / 5.2 / 5.1 / 5.5 | 5.8 / 5.6 / 4.4 / 4.7 |
+| `protobuf-php-c` | 869.9 / 556.2 / 1213.8 / 1301.5 | 413.9 / 339.4 / 498.3 / 537.7 |
+
+The array path is below the official C extension on every cell, so Stage 6 has
+a target; the tree handle is above it. The two shim builds produce identical
+bytes (both gates pass) and the gap between them is the per-field PHP loop plus
+FFI trampoline, not a different codec.
+

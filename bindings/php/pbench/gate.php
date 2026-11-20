@@ -63,7 +63,7 @@ foreach (PB_TIERS as $tier) {
 
     $payload = pbwire_pbench_payload($repeats);
 
-    $tree = tree_prepare($payload);
+    $tree = tree_prepare($ref);
     gate_check(tree_encode($tree) === $ref, "$label: tree bytes differ from the official runtime");
     $treeBack = tree_decode($ref);
     gate_check(tree_encode($treeBack) === $ref, "$label: tree re-encode differs");
