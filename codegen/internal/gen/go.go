@@ -172,11 +172,9 @@ func goFiles(f *model.File, opt Options) ([]File, error) {
 		}
 		return local
 	})
-	// Models and schema part ways: structs and enums in one file, the
-	// embedded descriptor set plus its loader in the other. model=false
-	// leaves the schema file for dynamic-only users.
-	// One file per .proto: the thin model. Generated code carries field
-	// facts and one-line forwarding only; every wire decision is in codec.
+	// Two files, like Java's message/metadata split: the model holds data
+	// types and one-line forwarding only, so it stays replaceable; the meta
+	// file holds the field tables. Every wire decision stays in codec.
 	if !opt.Model {
 		return nil, nil
 	}
@@ -188,13 +186,25 @@ func goFiles(f *model.File, opt Options) ([]File, error) {
 	for _, m := range f.Messages {
 		writeGoMessage(&models, f, m)
 	}
+	var meta strings.Builder
+	writeGoMetaHeader(&meta, f, opt)
+	for _, m := range f.Messages {
+		writeGoTable(&meta, f, m)
+	}
 	// Canonical gofmt output: struct alignment and indentation stay
 	// correct no matter how wide field names get.
-	src, err := format.Source([]byte(models.String()))
-	if err != nil {
-		return nil, err
+	var files []File
+	for _, out := range []struct {
+		suffix  string
+		builder *strings.Builder
+	}{{"_pbwire.go", &models}, {"_pbwire_meta.go", &meta}} {
+		src, err := format.Source([]byte(out.builder.String()))
+		if err != nil {
+			return nil, err
+		}
+		files = append(files, File{Name: base(f) + out.suffix, Content: string(src)})
 	}
-	return []File{{Name: base(f) + "_pbwire.go", Content: string(src)}}, nil
+	return files, nil
 }
 
 // writeGoModelHeader emits the package clause plus exactly the imports the
@@ -214,6 +224,23 @@ func writeGoModelHeader(b *strings.Builder, f *model.File, opt Options) {
 	if len(f.Enums) > 0 {
 		b.WriteString("\t\"fmt\"\n")
 	}
+	for _, imp := range f.Imports {
+		if path, ok := opt.Mappings[imp.Path]; ok {
+			fmt.Fprintf(b, "\n\t%s %q\n", goImportAlias(path), path)
+		}
+	}
+	b.WriteString(")\n\n")
+}
+
+// writeGoMetaHeader emits the package clause plus exactly the imports the
+// metadata file uses: codec for the tables, mapped deps for foreign rows.
+func writeGoMetaHeader(b *strings.Builder, f *model.File, opt Options) {
+	b.WriteString(headerP(f, "//", "Field tables for the generated model. Data only: the codec decides every tag, length and presence."))
+	fmt.Fprintf(b, "package %s\n\n", goPackage(f))
+	if len(f.Messages) == 0 {
+		return
+	}
+	b.WriteString("import (\n\t\"pbwire/codec\"\n")
 	for _, imp := range f.Imports {
 		if path, ok := opt.Mappings[imp.Path]; ok {
 			fmt.Fprintf(b, "\n\t%s %q\n", goImportAlias(path), path)
@@ -371,7 +398,6 @@ func writeGoCodec(b *strings.Builder, f *model.File, m model.Message) {
 	fmt.Fprintf(b, "\treturn codec.EncodeModel(m, %sMeta)\n}\n\n", m.Name)
 	fmt.Fprintf(b, "func (m *%s) Unmarshal(wire []byte) error {\n", m.Name)
 	fmt.Fprintf(b, "\treturn codec.DecodeModel(wire, m, %sMeta)\n}\n\n", m.Name)
-	writeGoTable(b, f, m)
 }
 
 // writeGoTable emits one message's data table: one row per proto field in
