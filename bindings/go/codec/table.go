@@ -700,6 +700,15 @@ func writeOneofValue(e *Encoder, f *Field, v any, depth int) error {
 			e.Tag(f.Num, WireEndGroup)
 			return nil
 		}
+		if f.Foreign != nil {
+			subBytes, err := f.Foreign.Encode(v)
+			if err != nil {
+				return err
+			}
+			e.Tag(f.Num, WireLen)
+			e.Data(subBytes)
+			return nil
+		}
 		mark := e.Begin(f.Num)
 		if err := EncodeTable(e, v, f.Sub(), depth+1); err != nil {
 			return err
@@ -981,6 +990,14 @@ func encodeRepeated(e *Encoder, msg any, f *Field, depth int) error {
 				}
 				e.Tag(f.Num, WireLen)
 				e.Data(subBytes)
+				continue
+			}
+			if f.Group {
+				e.Tag(f.Num, WireStartGroup)
+				if err := EncodeTable(e, sub, f.Sub(), depth+1); err != nil {
+					return err
+				}
+				e.Tag(f.Num, WireEndGroup)
 				continue
 			}
 			mark := e.Begin(f.Num)
@@ -1914,6 +1931,16 @@ func decodeRepeated(d *Decoder, a *Arena, t *Table, msg any, f *Field, wt WireTy
 			return skipUnknown(t, d, msg, f.Num, wt, depth)
 		}
 	case KindMessage:
+		if f.Group {
+			if wt != WireStartGroup {
+				return skipUnknown(t, d, msg, f.Num, wt, depth)
+			}
+			if f.Foreign != nil {
+				return skipUnknown(t, d, msg, f.Num, wt, depth)
+			}
+			item := f.NewRepMsg(msg)
+			return decodeGroupBody(d, a, item, f.Sub(), f.Num, depth)
+		}
 		if wt != WireLen {
 			return skipUnknown(t, d, msg, f.Num, wt, depth)
 		}
