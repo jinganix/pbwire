@@ -114,3 +114,83 @@ func TestSwiftFilesNoRegistry(t *testing.T) {
 		t.Error("registry=false must drop the list")
 	}
 }
+
+// swiftLayoutTestFile is the layout gate's fixture: scalars of every width, a
+// string, a repeated message and a proto3 optional (a has flag next to a
+// pointer-shaped absence).
+func swiftLayoutTestFile() *model.File {
+	return &model.File{
+		Path:    "matrix3.proto",
+		Package: "structtest",
+		Prefix:  "Structtest",
+		Messages: []model.Message{
+			{
+				Name: "Inner3",
+				Full: "structtest.Inner3",
+				Fields: []model.Field{
+					{Name: "name", Lower: "name", Pascal: "Name", Number: 1, Kind: protoreflect.StringKind},
+				},
+			},
+			{
+				Name: "Scalars3",
+				Full: "structtest.Scalars3",
+				Fields: []model.Field{
+					{Name: "i32", Lower: "i32", Pascal: "I32", Number: 1, Kind: protoreflect.Int32Kind},
+					{Name: "flag", Lower: "flag", Pascal: "Flag", Number: 13, Kind: protoreflect.BoolKind},
+					{Name: "str", Lower: "str", Pascal: "Str", Number: 14, Kind: protoreflect.StringKind},
+					{Name: "inner", Lower: "inner", Pascal: "Inner", Number: 16, Kind: protoreflect.MessageKind, Message: "Inner3", Full: "structtest.Inner3"},
+					{Name: "nums", Lower: "nums", Pascal: "Nums", Number: 17, Kind: protoreflect.Int32Kind, Repeated: true, Packed: true},
+					{Name: "opt_i32", Lower: "optI32", Pascal: "OptI32", Number: 20, Kind: protoreflect.Int32Kind, NeedsHas: true},
+				},
+			},
+		},
+	}
+}
+
+// Layout gate: the Swift mirror is a @frozen value type (no references, so no
+// ARC traffic per field) whose slot offsets are the ones the C layout codec is
+// handed, computed by MemoryLayout at run time instead of assumed.
+func TestSwiftLayout(t *testing.T) {
+	files, err := swiftFiles(swiftLayoutTestFile(), Options{Lang: "swift", Model: true, Register: true, Registry: true, DescSetB64: "e30="})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var models string
+	for _, f := range files {
+		if f.Name == "matrix3.swift" {
+			models = f.Content
+		}
+	}
+	if models == "" {
+		t.Fatal("missing models file")
+	}
+	for _, want := range []string{
+		"@frozen\npublic struct Structtest_Scalars3Repr: Pbwire.ReprMessage {",
+		`public static let protoName = "structtest.Scalars3"`,
+		"public static let fields: [Pbwire.FieldPlan] = [",
+		"public static let children: [any Pbwire.ReprMessage.Type] = [Structtest_Inner3Repr.self]",
+		"public var str: UnsafePointer<CChar>? = nil",
+		"public var inner: UnsafeMutablePointer<Structtest_Inner3Repr>? = nil",
+		"public var nums: UnsafeMutablePointer<Int32>? = nil",
+		"public var countNums: Int = 0",
+		"public var hasOptI32: Int32 = 0",
+		"Pbwire.FieldPlan(number: 1, kind: .int32, offset: MemoryLayout<Structtest_Scalars3Repr>.offset(of: \\.i32)!, type: 5, wire: 0)",
+		"Pbwire.FieldPlan(number: 17, kind: .int32, offset: MemoryLayout<Structtest_Scalars3Repr>.offset(of: \\.nums)!, type: 5, wire: 0, repeated: true, count: MemoryLayout<Structtest_Scalars3Repr>.offset(of: \\.countNums)!)",
+		"Pbwire.FieldPlan(number: 20, kind: .int32, offset: MemoryLayout<Structtest_Scalars3Repr>.offset(of: \\.optI32)!, type: 5, wire: 0, has: MemoryLayout<Structtest_Scalars3Repr>.offset(of: \\.hasOptI32)!)",
+	} {
+		if !strings.Contains(models, want) {
+			t.Errorf("models file misses %q", want)
+		}
+	}
+	// The mirror holds no references (no ARC per field): every slot is a
+	// pointer, a fixed-width scalar or the core's inline bytes value.
+	repr := models[strings.Index(models, "struct Structtest_Scalars3Repr"):]
+	if i := strings.Index(repr, "public static let protoName"); i >= 0 {
+		repr = repr[:i]
+	}
+	for _, banned := range []string{"String =", "[Int64]", "Data"} {
+		if strings.Contains(repr, banned) {
+			t.Errorf("mirror must not hold %q (ARC per field)", banned)
+		}
+	}
+}
