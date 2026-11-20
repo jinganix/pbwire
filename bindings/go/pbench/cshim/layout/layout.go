@@ -44,10 +44,11 @@ const (
 
 // Row is one field's layout facts. Offsets come from unsafe.Offsetof over
 // the generated struct, evaluated once at init by generated code. Itab is
-// the expected interface itab for a oneof member row, 0 otherwise. Sub is
-// the registry index of a message-typed field's message, -1 when the row
-// holds no submessage. Foreign rows name their message by full proto name
-// for the harness to resolve against a sibling registry.
+// the expected interface itab for a oneof member row, 0 otherwise; Ogrp
+// is that member's staging slot for decode. Sub is the registry index of
+// a message-typed field's message, -1 when the row holds no submessage.
+// Foreign rows name their message by full proto name for the harness to
+// resolve against a sibling registry.
 type Row struct {
 	Fnum     uint32
 	Kind     Kind
@@ -60,6 +61,7 @@ type Row struct {
 	Required bool
 	Group    bool
 	Itab     uintptr
+	Ogrp     uint32
 	Sub      int32
 	Foreign  bool
 	FType    string

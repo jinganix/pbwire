@@ -193,12 +193,12 @@ func newCodecFromCTables(tabs []cshimTableInput, root int) (*Codec, error) {
 }
 
 // translateRow converts one layout.Row into the C row the codec owns.
-// Shapes the C codec does not implement yet (oneof members, foreign
-// fields) fail loudly instead of encoding wrong bytes. Groups and
-// sub-table references ride the registry the caller built.
+// Shapes the C codec does not implement yet (foreign fields) fail loudly
+// instead of encoding wrong bytes. Groups and sub-table references ride
+// the registry the caller built.
 func translateRow(r shimlayout.Row, reg []shimlayout.Msg, ptrSize uintptr) (C.cshim_row, error) {
-	if r.Itab != 0 || r.Foreign {
-		return C.cshim_row{}, fmt.Errorf("cshim: field %d needs a later task (oneof/foreign)", r.Fnum)
+	if r.Foreign {
+		return C.cshim_row{}, fmt.Errorf("cshim: field %d needs foreign support", r.Fnum)
 	}
 	var kind C.uint32_t
 	switch r.Kind {
@@ -274,7 +274,7 @@ func translateRow(r shimlayout.Row, reg []shimlayout.Msg, ptrSize uintptr) (C.cs
 		}
 	}
 	var count uint32
-	if r.Repeated || ((r.Kind == shimlayout.KindString || r.Kind == shimlayout.KindBytes) && !r.Explicit) {
+	if r.Repeated || ((r.Kind == shimlayout.KindString || r.Kind == shimlayout.KindBytes) && !r.Explicit && r.Itab == 0) {
 		count = r.Offset + uint32(ptrSize)
 	}
 	var has uint32
@@ -306,6 +306,8 @@ func translateRow(r shimlayout.Row, reg []shimlayout.Msg, ptrSize uintptr) (C.cs
 		required: C.uint32_t(required),
 		group:    C.uint32_t(group),
 		sub:      C.int32_t(r.Sub),
+		itab:     C.uintptr_t(r.Itab),
+		ogrp:     C.uint32_t(r.Ogrp),
 	}, nil
 }
 
@@ -515,6 +517,25 @@ func (c *Codec) decodeRaw(base unsafe.Pointer, wire []byte) (int, error) {
 	}
 	runtime.KeepAlive(c)
 	return int(res.str_bytes), nil
+}
+
+// stage reads one staged oneof occurrence for the fixup the generated
+// model will own: fnum 0 means nothing was staged in this slot. The
+// payload points into wire (strings/bytes) or the C arena (messages)
+// and is valid until the next decode on this codec.
+func (c *Codec) stage(idx int) (fnum, kind uint32, scalar uint64, ptr unsafe.Pointer, ln int, ok bool) {
+	var cf, ck C.uint32_t
+	var cs C.uint64_t
+	var cp C.uintptr_t
+	var cl C.size_t
+	if C.cshim_stage(c.h, C.size_t(idx), &cf, &ck, &cs, &cp, &cl) != 0 {
+		return 0, 0, 0, nil, 0, false
+	}
+	runtime.KeepAlive(c)
+	// The integer arrives from C (wire/arena address valid until the next
+	// decode); reinterpret its bits as a pointer in one step so vet
+	// accepts the uintptr -> pointer conversion.
+	return uint32(cf), uint32(ck), uint64(cs), *(*unsafe.Pointer)(unsafe.Pointer(&cp)), int(cl), true
 }
 
 // rawHeader and rawSlice are the Go header layouts C writes during decode.
