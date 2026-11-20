@@ -108,6 +108,21 @@ ns move with machine load and JDK (a loaded host puts the small tier at 0.57x
 pure encode rather than 0.50x, and the large/xlarge encode ratio anywhere in
 1.4x-2.0x); only the intra-run ratios are comparable.
 
+## Verdict
+
+Selected: the pure-Java runtime (`../runtime/`) stays the shipped codec. `jni/`
+stays the `shim` ceiling and is not a candidate for the runtime: it never
+translates a tree, so a real JNI binding pays strictly more than its numbers.
+The ledger entry is
+[`Rejected: JNI binding for Java`](../../../docs/perf-attempts.md#rejected-jni-binding-for-java-2026-11-16).
+
+The `core` arm (the committed generated model, native object in and out) loses
+to the official runtime on every tier -- its per-field table dispatch and
+builder materialization cost more than the dynamic `DMsg` walk -- so the
+`tree` row (`Message`/`GenericCodec`) remains the shipped fast path and the
+headline. The numbers and the reason are in
+[`Provisional: the JVM four, three arms`](../../../docs/perf-attempts.md#provisional-the-jvm-four-three-arms-2026-11-21-issue-41).
+
 ## Reuse in other languages
 
 Copy the layout: one directory per candidate, the same native-in / native-out
