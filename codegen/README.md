@@ -31,7 +31,7 @@ Every language gets the same shape, spelled the way that language spells things:
 | Node | protobufjs-static shape | `Cls.create()` / `.encode(m).finish()` / `.decode()` / `.verify()` / `.fromObject()` / `.toObject()`; schema embedded, `.d.ts` included |
 | Rust | struct, prost shape | `pub i32: i32` + `pub opt_i32: Option<i32>` + oneof `Option<Kind>` + `i32` enums + `encode_to_vec` / `decode` over the embedded schema |
 | Lua | table + constructor (no dominant lib; T1–T4 only) | `M.Scalars3.new{i32 = 1}` + `encode(t)` / `decode(wire)` with embedded schema (legacy `(schema, …)` form kept) |
-| Go | struct, protoc-gen-go shape, model and metadata split | `I32 int32` + `OptI32 *int32` + oneof wrappers + nil-safe getters + `Marshal`/`Unmarshal`; the message file holds data and forwarding only, the `_pbwire_meta.go` file holds the field tables, and no model embeds a descriptor |
+| Go | struct, protoc-gen-go shape, model and metadata split | `I32 int32` + `OptI32 *int32` + oneof wrappers + nil-safe getters; the message file holds data and `Reset`, `Marshal`/`Unmarshal` come from the `_pbwire_cshim.go` layout file (one cgo crossing) or from the table engine when the file cannot be driven, the `_pbwire_meta.go` file holds the field tables, and no model embeds a descriptor |
 | Objective-C | GPBMessage-shaped | `@property` fields + `hasX` + `XArray` repeated + `Kind_OneOfCase` + `-data` / `+parseFromData:error:`, over the embedded schema |
 | Swift | struct, Swift-idiomatic | `var i32: Int64` + `optI32: Int64?` + `Int64` enums + `encode()` / `decode(_:)` over the embedded schema |
 | Zig | struct over the static-link runtime | `i32`/`u64` fields + `?T` presence + `enum(i32)` enums + `encode` / `decode` / `load` over the embedded schema |
@@ -116,7 +116,7 @@ packed runs or presence branching.
 packing, sub-tables) live in a sibling meta file (`*_meta.*`, `*_Meta.*`)
 where the language benefits; single-file outputs keep the same split in-file.
 3. **No wire logic in model or meta.** Encode/decode live once in the binding's
-shared engine (`dyngo/codec.EncodeTable/DecodeTable`, `PbCodec`, the C core);
+shared engine (`codec.EncodeTable/DecodeTable`, `runtime`, `PbCodec`, the C core);
 generated files are DATA tables plus trivial field closures. One-line
 `encode/decode` forwarding on the model is ergonomics, not a second codec.
 

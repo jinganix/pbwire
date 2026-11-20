@@ -5,7 +5,7 @@
 package xfile
 
 import (
-	"pbwire/pbench/dyngo/codec"
+	"pbwire/codec"
 
 	xdep "pbwire/tests/gen/xdep"
 )

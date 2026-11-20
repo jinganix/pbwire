@@ -27,8 +27,11 @@ import (
 
 	"google.golang.org/protobuf/proto"
 
+	gmap "pbwire/tests/gen/maptest"
 	gen1 "pbwire/tests/gen/matrix3"
 	genone "pbwire/tests/gen/oneof1"
+	gdep "pbwire/tests/gen/xdep"
+	gxfile "pbwire/tests/gen/xfile"
 	pb1 "pbwire/tests/gen_oracle/matrix3pb"
 	pbone "pbwire/tests/gen_oracle/oneof1pb"
 )
@@ -383,6 +386,38 @@ func TestT6NilSubmessage(t *testing.T) {
 	}
 	if back.GetInner() == nil {
 		t.Fatal("empty oneof member decoded as absent")
+	}
+}
+
+// Every generated message must build its codec plan on first use: the plan
+// is built lazily and a rejected row panics (sync.OnceValue). An encode
+// error is not this test's business, so a zero value with required fields
+// only logs. This covers the models whose own Marshal no other test calls.
+func TestGeneratedPlansAccepted(t *testing.T) {
+	cases := map[string]func() ([]byte, error){
+		"matrix3.Inner3":      (&gen1.Inner3{}).Marshal,
+		"matrix3.Scalars3":    (&gen1.Scalars3{}).Marshal,
+		"oneof1.Oneof1_Inner": (&genone.Oneof1_Inner{}).Marshal,
+		"oneof1.Oneof1":       (&genone.Oneof1{}).Marshal,
+		"maptest.MapValue":    (&gmap.MapValue{}).Marshal,
+		"maptest.MapTest":     (&gmap.MapTest{}).Marshal,
+		"maptest.ByIntEntry":  (&gmap.MapTest_ByIntEntry{}).Marshal,
+		"maptest.ByStrEntry":  (&gmap.MapTest_ByStrEntry{}).Marshal,
+		"maptest.ByMsgEntry":  (&gmap.MapTest_ByMsgEntry{}).Marshal,
+		"xdep.DepMsg":         (&gdep.DepMsg{}).Marshal,
+		"xfile.UsesDep":       (&gxfile.UsesDep{}).Marshal,
+	}
+	for name, marshal := range cases {
+		t.Run(name, func(t *testing.T) {
+			defer func() {
+				if p := recover(); p != nil {
+					t.Fatalf("codec plan rejected on first use: %v", p)
+				}
+			}()
+			if _, err := marshal(); err != nil {
+				t.Logf("encode error on the zero value: %v", err)
+			}
+		})
 	}
 }
 

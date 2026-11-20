@@ -121,7 +121,7 @@ func TestGoFilesDefault(t *testing.T) {
 			t.Errorf("model file misses %q", want)
 		}
 	}
-	for _, bad := range []string{"pbwire/pbench/dyngo/codec", "EncodeModel", "DecodeModel", "codec.NewTable"} {
+	for _, bad := range []string{"pbwire/codec", "EncodeModel", "DecodeModel", "codec.NewTable"} {
 		if strings.Contains(models, bad) {
 			t.Errorf("model file must stay data-only, found %q", bad)
 		}
@@ -376,7 +376,7 @@ func TestGoFilesCshimWiring(t *testing.T) {
 		}
 	}
 	models := got["b_pbwire.go"]
-	for _, bad := range []string{"EncodeModel", "DecodeModel", "EncodeRaw", "pbwire/pbench/dyngo/codec"} {
+	for _, bad := range []string{"EncodeModel", "DecodeModel", "EncodeRaw", "pbwire/codec"} {
 		if strings.Contains(models, bad) {
 			t.Errorf("drivable model file must forward from the cshim file, found %q", bad)
 		}
@@ -394,7 +394,7 @@ func goCshimFile() *model.File {
 		for _, m := range ms {
 			fields := m.Fields[:0]
 			for _, field := range m.Fields {
-				if field.Skip == "" {
+				if field.Skip == "" && field.Import == "" {
 					fields = append(fields, field)
 				}
 			}
@@ -458,9 +458,6 @@ func TestGoCshimBranches(t *testing.T) {
 		"Group: true",
 		// repeated strings copy element-wise through the arena.
 		"dst.Tags = make([]string, 0, len(src.Tags))",
-		// foreign rows name their message, never a row index.
-		"Foreign: true",
-		"FType: \"xdep.DepMsg\"",
 		// per-message typed copy plus file factory.
 		"func BCshimCopy(dst, src *B, a *layout.Arena)",
 		"InnerCshimCopy(dst.Sub, src.Sub, a)",
@@ -481,6 +478,71 @@ func TestGoCshimSkipFails(t *testing.T) {
 	opt := Options{Mappings: map[string]string{"xdep.proto": "pbwire/tests/gen/xdep"}}
 	if err := writeGoCshim(&b, goBranchFile(), opt); err == nil {
 		t.Fatal("cshim emission over a skipped field must fail")
+	}
+}
+
+// A message field defined in another file must fail the cshim emission too:
+// the file's C codec only knows its own registry, and a generated copy of a
+// slice of foreign structs would not even compile. The model keeps the table
+// engine's Marshal/Unmarshal instead.
+func TestGoCshimForeignFieldFallsBack(t *testing.T) {
+	files, err := goFiles(&model.File{
+		Path: "u.proto", Package: "u", Prefix: "U",
+		Imports: []model.Import{{Path: "xdep.proto", Package: "xdep", Prefix: "Xdep"}},
+		Messages: []model.Message{{
+			Name: "Uses", Full: "u.Uses",
+			Fields: []model.Field{
+				{Name: "one", Lower: "one", Pascal: "One", Number: 1, Kind: protoreflect.MessageKind, Message: "DepMsg", Import: "xdep.proto"},
+				{Name: "many", Lower: "many", Pascal: "Many", Number: 2, Kind: protoreflect.MessageKind, Message: "DepMsg", Import: "xdep.proto", Repeated: true},
+			},
+		}},
+	}, Options{Lang: "go", Model: true, Mappings: map[string]string{"xdep.proto": "pbwire/tests/gen/xdep"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := goFileMap(t, files)
+	if _, ok := got["u_pbwire_cshim.go"]; ok {
+		t.Error("a foreign message field must not emit a cshim file")
+	}
+	models := got["u_pbwire.go"]
+	for _, want := range []string{"codec.EncodeModel(m, UsesMeta)", "codec.DecodeModel(wire, m, UsesMeta)"} {
+		if !strings.Contains(models, want) {
+			t.Errorf("foreign model must keep the table engine, misses %q", want)
+		}
+	}
+}
+
+// A message named by another message's field cannot carry repeated rows: the
+// C decode publishes repeat buffers for the root table only. The whole file
+// then stays on the table engine, as addressbook's AddressBook -> Person
+// does.
+func TestGoCshimSubRepeatedFallsBack(t *testing.T) {
+	files, err := goFiles(&model.File{
+		Path: "a.proto", Package: "a", Prefix: "A",
+		Messages: []model.Message{
+			{Name: "Phone", Full: "a.Phone", Fields: []model.Field{
+				{Name: "n", Lower: "n", Pascal: "N", Number: 1, Kind: protoreflect.StringKind},
+			}},
+			{Name: "Person", Full: "a.Person", Fields: []model.Field{
+				{Name: "phones", Lower: "phones", Pascal: "Phones", Number: 1, Kind: protoreflect.MessageKind, Message: "Phone", Repeated: true},
+			}},
+			{Name: "Book", Full: "a.Book", Fields: []model.Field{
+				{Name: "people", Lower: "people", Pascal: "People", Number: 1, Kind: protoreflect.MessageKind, Message: "Person", Repeated: true},
+			}},
+		},
+	}, Options{Lang: "go", Model: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := goFileMap(t, files)
+	if _, ok := got["a_pbwire_cshim.go"]; ok {
+		t.Error("a sub table with repeated rows must not emit a cshim file")
+	}
+	models := got["a_pbwire.go"]
+	for _, want := range []string{"codec.EncodeModel(m, PhoneMeta)", "codec.EncodeModel(m, BookMeta)"} {
+		if !strings.Contains(models, want) {
+			t.Errorf("nested-repeat file must keep the table engine, misses %q", want)
+		}
 	}
 }
 

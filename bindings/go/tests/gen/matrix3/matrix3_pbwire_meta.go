@@ -5,7 +5,7 @@
 package matrix3
 
 import (
-	"pbwire/pbench/dyngo/codec"
+	"pbwire/codec"
 	"unsafe"
 )
 

@@ -236,7 +236,7 @@ func writeGoModelHeader(b *strings.Builder, f *model.File, opt Options, useCshim
 	// gofmt-clean, and a cshim file needs none of them.
 	var imports []string
 	if len(f.Messages) > 0 && !useCshim {
-		imports = append(imports, "\t\"pbwire/pbench/dyngo/codec\"\n")
+		imports = append(imports, "\t\"pbwire/codec\"\n")
 	}
 	if len(f.Enums) > 0 {
 		imports = append(imports, "\t\"fmt\"\n")
@@ -264,7 +264,7 @@ func writeGoMetaHeader(b *strings.Builder, f *model.File, opt Options) {
 	if len(f.Messages) == 0 {
 		return
 	}
-	b.WriteString("import (\n\t\"pbwire/pbench/dyngo/codec\"\n")
+	b.WriteString("import (\n\t\"pbwire/codec\"\n")
 	if goNeedsUnsafe(f) {
 		b.WriteString("\t\"unsafe\"\n")
 	}
@@ -834,12 +834,9 @@ func goCshimWire(field model.Field) string {
 
 // goCshimSub resolves the registry index of a message-typed field:
 // by full proto name first, by local class name for map entries (which
-// carry no Full). Foreign fields resolve at runtime via FType instead.
+// carry no Full).
 func goCshimSub(f *model.File, field model.Field, regIdx map[string]int) (int32, error) {
 	if field.Kind != protoreflect.MessageKind && field.Kind != protoreflect.GroupKind {
-		return -1, nil
-	}
-	if field.Import != "" {
 		return -1, nil
 	}
 	if i, ok := regIdx[field.Full]; ok && field.Full != "" {
@@ -851,19 +848,6 @@ func goCshimSub(f *model.File, field model.Field, regIdx map[string]int) (int32,
 	return -1, fmt.Errorf("cshim: message %s of field %s not in file %s", field.Message, field.Name, f.Path)
 }
 
-// goCshimForeignName is the full proto name a foreign row resolves by.
-func goCshimForeignName(f *model.File, field model.Field) string {
-	if field.Full != "" {
-		return field.Full
-	}
-	for _, imp := range f.Imports {
-		if imp.Path == field.Import {
-			return imp.Package + "." + field.Message
-		}
-	}
-	return field.Message
-}
-
 // writeGoCshimRow emits one layout.Row literal. Every shape has a mapping;
 // model-level skips and unknown shapes fail loudly instead of emitting a
 // silent subset, because the generated file names struct fields and a
@@ -871,6 +855,12 @@ func goCshimForeignName(f *model.File, field model.Field) string {
 func writeGoCshimRow(b *strings.Builder, f *model.File, m model.Message, field model.Field, regIdx map[string]int, slots []string) error {
 	if field.Skip != "" {
 		return fmt.Errorf("cshim: field %s.%s skipped in model (%s)", m.Full, field.Name, field.Skip)
+	}
+	// A message from another file cannot be walked: this file's C codec root
+	// only knows its own registry, so the whole file stays on the table
+	// engine (the runtime rejects a foreign row at New time anyway).
+	if field.Import != "" && (field.Kind == protoreflect.MessageKind || field.Kind == protoreflect.GroupKind) {
+		return fmt.Errorf("cshim: field %s.%s comes from %s", m.Full, field.Name, field.Import)
 	}
 	kind, err := goCshimKind(field)
 	if err != nil {
@@ -913,9 +903,6 @@ func writeGoCshimRow(b *strings.Builder, f *model.File, m model.Message, field m
 		return err
 	}
 	fmt.Fprintf(b, ", Sub: %d", sub)
-	if field.Import != "" {
-		fmt.Fprintf(b, ", Foreign: true, FType: %q", goCshimForeignName(f, field))
-	}
 	b.WriteString("},\n")
 	return nil
 }
@@ -1122,16 +1109,9 @@ func writeGoCshimFixup(b *strings.Builder, f *model.File, m model.Message) error
 }
 
 // writeGoCshimCopyMessage emits singular and repeated message/group
-// materialization, including map entries (repeated entry structs) and
-// foreign siblings (framed through their own copy function).
+// materialization, including map entries (repeated entry structs).
 func writeGoCshimCopyMessage(b *strings.Builder, f *model.File, m model.Message, field model.Field, name string) error {
 	sub := field.Message
-	if field.Import != "" {
-		fmt.Fprintf(b, "\tif src.%s != nil {\n", name)
-		fmt.Fprintf(b, "\t\tdst.%s = &%s{}\n", name, sub)
-		fmt.Fprintf(b, "\t\t%sCshimCopy(dst.%s, src.%s, a)\n\t}\n", sub, name, name)
-		return nil
-	}
 	if field.Repeated {
 		fmt.Fprintf(b, "\tif len(src.%s) != 0 {\n", name)
 		fmt.Fprintf(b, "\t\tdst.%s = make([]*%s, len(src.%s))\n", name, sub, name)
@@ -1198,10 +1178,42 @@ func writeGoCshimCopy(b *strings.Builder, f *model.File, m model.Message) error 
 	return nil
 }
 
+// goCshimSubRepeated names the first message that is both named by a field
+// of another message and carries repeated rows. The C decode publishes its
+// repeat buffers for the root table only, so a message used as a sub table
+// cannot have repeated fields: such a file stays on the table engine.
+func goCshimSubRepeated(f *model.File) string {
+	subs := map[string]bool{}
+	for _, m := range f.Messages {
+		for _, field := range m.Fields {
+			if field.Import != "" {
+				continue
+			}
+			if field.Kind == protoreflect.MessageKind || field.Kind == protoreflect.GroupKind {
+				subs[field.Message] = true
+			}
+		}
+	}
+	for _, m := range f.Messages {
+		if !subs[m.Name] {
+			continue
+		}
+		for _, field := range m.Fields {
+			if field.Repeated {
+				return m.Full
+			}
+		}
+	}
+	return ""
+}
+
 // writeGoCshim emits the cshim layout file body: the per-file message
 // registry, one typed copy per message, and the generic allocator used
 // by decode paths that cannot name the type.
 func writeGoCshim(b *strings.Builder, f *model.File, opt Options) error {
+	if full := goCshimSubRepeated(f); full != "" {
+		return fmt.Errorf("cshim: sub table %s has repeated rows", full)
+	}
 	regIdx := map[string]int{}
 	for i, m := range f.Messages {
 		regIdx[m.Full] = i
