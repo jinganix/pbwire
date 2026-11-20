@@ -53,7 +53,6 @@ type DType struct {
 	table *Table
 	mu    sync.Mutex
 	subs  map[int]*DType
-	sibs  map[int][]int // oneof member ordinal -> the other members
 }
 
 // Schema.Type returns the dynamic type for a fully qualified message name.
@@ -146,24 +145,25 @@ func (m *DMsg) Encode() ([]byte, error) {
 // not declare, as raw wire bytes including their tags.
 func (m *DMsg) UnknownBytes() []byte { return m.unknown }
 
-// buildTable turns the plan into the shared engine's row form.
+// buildTable turns the plan into the shared engine's row form. Rows land in
+// field-number order (C4): the engine emits table order, and the wire is
+// number-ordered, so declaration order would corrupt byte equality.
+// Slot ordinals are captured per row and never change.
 func (t *DType) buildTable() *Table {
-	t.sibs = map[int][]int{}
-	for i, fp := range t.plan.Fields {
-		if fp.Presence != PresenceOneof {
-			continue
+	order := make([]int, 0, len(t.plan.Fields))
+	for i := range t.plan.Fields {
+		order = append(order, i)
+	}
+	for i := 1; i < len(order); i++ {
+		j := i
+		for j > 0 && t.plan.Fields[order[j-1]].Number > t.plan.Fields[order[j]].Number {
+			order[j-1], order[j] = order[j], order[j-1]
+			j--
 		}
-		var others []int
-		for j, other := range t.plan.Fields {
-			if j != i && other.Presence == PresenceOneof && other.Oneof == fp.Oneof {
-				others = append(others, j)
-			}
-		}
-		t.sibs[i] = others
 	}
 	rows := make([]*Field, 0, len(t.plan.Fields))
-	for i, fp := range t.plan.Fields {
-		rows = append(rows, t.buildRow(i, fp))
+	for _, i := range order {
+		rows = append(rows, t.buildRow(i, t.plan.Fields[i]))
 	}
 	tb := NewTable(t.plan.Full, rows)
 	tb.Unknown = func(msg any, raw []byte) {
@@ -244,7 +244,52 @@ func appendRep[T any](s *slot, v T) {
 	s.rep = append(s.rep.([]T), v)
 }
 
-// buildRow emits one field's row. Closures capture the field ordinal only, so
+// mergeOneof assigns a set oneof member and zeroes its siblings. It runs
+// without any built table (buildTable may still be pending), so the siblings
+// come from a plan scan, not a cache. When winner and newcomer are both a
+// nested value tree (C2: split oneof occurrences share one message), the
+// incoming tree merges in field by field instead of replacing the winner.
+func mergeOneof(m *DMsg, i int, v any) {
+	s := &m.slots[i]
+	if old, ok := s.oneof.(*DMsg); ok && s.oneofSet {
+		if in, ok := v.(*DMsg); ok {
+			in.mergeInto(old)
+			v = old
+		}
+	}
+	s.present, s.oneof, s.oneofSet = true, v, true
+	storeOneof(s, v)
+	fp := m.typ.plan.Fields[i]
+	for j, other := range m.typ.plan.Fields {
+		if j == i || other.Presence != PresenceOneof || other.Oneof != fp.Oneof {
+			continue
+		}
+		m.slots[j] = slot{}
+	}
+}
+
+// mergeInto folds a second occurrence of the same submessage into this tree:
+// scalars take the last value, repeated runs append, unknown bytes append.
+func (m *DMsg) mergeInto(dst *DMsg) {
+	if m == nil || dst == nil {
+		return
+	}
+	for i := range m.slots {
+		if !m.slots[i].present || m.slots[i].oneofSet {
+			continue
+		}
+		if m.typ.plan.Fields[i].Repeated {
+			if sel := m.slots[i].rep; sel != nil {
+				dst.slots[i].present = true
+				dst.slots[i].rep = appendRepeatedRep(dst.slots[i].rep, sel)
+			}
+			continue
+		}
+		dst.slots[i] = m.slots[i]
+	}
+	dst.unknown = append(dst.unknown, m.unknown...)
+}
+
 // the same rows serve every message of that plan.
 func (t *DType) buildRow(i int, fp *FieldPlan) *Field {
 	acc := func(msg any) *slot { return &msg.(*DMsg).slots[i] }
@@ -287,6 +332,7 @@ func (t *DType) buildRow(i int, fp *FieldPlan) *Field {
 				}
 				s.m = st.New()
 			}
+			s.present = true
 			return s.m
 		}
 		f.NewMsg = func() any {
@@ -310,29 +356,18 @@ func (t *DType) buildRow(i int, fp *FieldPlan) *Field {
 				return nil
 			}
 			child := st.New()
+			s.present = true
 			appendRep(s, child)
 			return child
 		}
 	}
 	if f.Oneof {
-		sibsOf := func(i int) []int {
-			t.mu.Lock()
-			sibs := t.sibs[i]
-			t.mu.Unlock()
-			return sibs
-		}
 		f.GetOneof = func(msg any) (any, bool) {
 			s := acc(msg)
 			return s.oneof, s.oneofSet
 		}
 		f.SetOneof = func(msg any, v any) {
-			s := acc(msg)
-			s.present, s.oneof, s.oneofSet = true, v, true
-			storeOneof(s, v)
-			d := msg.(*DMsg)
-			for _, j := range sibsOf(i) {
-				d.slots[j].present, d.slots[j].oneofSet, d.slots[j].oneof = false, false, nil
-			}
+			mergeOneof(msg.(*DMsg), i, v)
 		}
 	}
 	if f.Repeated {
@@ -565,4 +600,49 @@ func boolBits(v bool) uint64 {
 		return 1
 	}
 	return 0
+}
+
+// appendRepeatedRep concatenates two repeated runs without knowing the typed
+// slice behind them; every repeated append funnels through this so split
+// occurrences merge element by element instead of replacing the run.
+func appendRepeatedRep(dst, src any) any {
+	if dst == nil {
+		return src
+	}
+	if src == nil {
+		return dst
+	}
+	switch in := src.(type) {
+	case []int32:
+		out := append([]int32(nil), dst.([]int32)...)
+		return append(out, in...)
+	case []int64:
+		out := append([]int64(nil), dst.([]int64)...)
+		return append(out, in...)
+	case []uint32:
+		out := append([]uint32(nil), dst.([]uint32)...)
+		return append(out, in...)
+	case []uint64:
+		out := append([]uint64(nil), dst.([]uint64)...)
+		return append(out, in...)
+	case []float32:
+		out := append([]float32(nil), dst.([]float32)...)
+		return append(out, in...)
+	case []float64:
+		out := append([]float64(nil), dst.([]float64)...)
+		return append(out, in...)
+	case []bool:
+		out := append([]bool(nil), dst.([]bool)...)
+		return append(out, in...)
+	case []string:
+		out := append([]string(nil), dst.([]string)...)
+		return append(out, in...)
+	case [][]byte:
+		out := append([][]byte(nil), dst.([][]byte)...)
+		return append(out, in...)
+	case []*DMsg:
+		out := append([]*DMsg(nil), dst.([]*DMsg)...)
+		return append(out, in...)
+	}
+	return src
 }

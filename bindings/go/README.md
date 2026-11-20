@@ -58,7 +58,9 @@ nums, _ := back.GetIntSlice("nums")
 
 Wire-first scope: encode, decode, field access and unknown-field retention.
 JSON, text, delimited framing, limits, `Visit`, the WKT helpers and
-`Registry` hot swap stay C-core-only for now.
+`Registry` hot swap stay C-core-only for now. Maps ride as repeated entry
+messages in first-seen order with no sort: byte equality across runs is not
+promised for multi-entry maps until a deterministic pass exists.
 
 ## Thin generated model
 
