@@ -310,9 +310,13 @@ func (c *Codec) finalize() {
 
 // EncodeRaw runs one grow-and-retry encode loop over raw struct memory.
 // The caller owns the layout the codec was built with; no fixup runs.
+// A nil base is a caller bug: report it instead of faulting in C.
 func (c *Codec) EncodeRaw(base unsafe.Pointer) ([]byte, error) {
 	if c == nil || c.h == nil {
 		return nil, errors.New("runtime: closed codec")
+	}
+	if base == nil {
+		return nil, errors.New("runtime: encode nil message")
 	}
 	hint := c.hint
 	if hint < 64 {
@@ -349,6 +353,9 @@ func (c *Codec) EncodeRaw(base unsafe.Pointer) ([]byte, error) {
 func (c *Codec) DecodeRaw(base unsafe.Pointer, wire []byte) (int, error) {
 	if c == nil || c.h == nil {
 		return 0, errors.New("runtime: closed codec")
+	}
+	if base == nil {
+		return 0, errors.New("runtime: decode into nil message")
 	}
 	var wp *C.uint8_t
 	if len(wire) != 0 {

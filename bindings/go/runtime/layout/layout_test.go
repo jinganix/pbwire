@@ -1,6 +1,9 @@
 package layout
 
-import "testing"
+import (
+	"testing"
+	"unsafe"
+)
 
 type wrapA struct{ N int32 }
 
@@ -42,5 +45,29 @@ func TestArena(t *testing.T) {
 	src[0] = 'X'
 	if string(c) != "abc" {
 		t.Fatal("arena aliases input")
+	}
+}
+
+type kindIface interface{ isK() }
+
+// ItabFor reports the interface word for the field's own interface type: a
+// non-empty interface holding *wrapA carries a different word than an any
+// holding the same pointer, and the C codec compares against the former.
+func TestItabFor(t *testing.T) {
+	anyWord := ItabOf((*wrapA)(nil))
+	ifaceWord := ItabFor[kindIface]((*wrapA)(nil))
+	if ifaceWord == 0 {
+		t.Fatal("named-interface itab must be non-zero")
+	}
+	if ifaceWord == anyWord {
+		t.Fatal("named-interface word must differ from the any word for the same pointer")
+	}
+	var v kindIface = (*wrapA)(nil)
+	w := (*[2]uintptr)(unsafe.Pointer(&v))
+	if w[0] != ifaceWord {
+		t.Fatalf("ItabFor must read the interface word: got %x want %x", w[0], ifaceWord)
+	}
+	if ItabFor[kindIface]((*wrapB)(nil)) == ifaceWord {
+		t.Fatal("distinct wrappers under one interface must have distinct words")
 	}
 }
