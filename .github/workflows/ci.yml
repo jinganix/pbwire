@@ -235,7 +235,7 @@ jobs:
           if [ -n "$out" ]; then echo "$out"; exit 1; fi
       - name: cgo dynamic binding tests
         env:
-          GODEBUG: cgocheck=2
+          GOEXPERIMENT: cgocheck2
         run: make go-test
 
   ruby:
