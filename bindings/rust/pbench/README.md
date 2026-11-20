@@ -63,3 +63,25 @@ arena allocated once. MB/s over wire bytes, 2026-11-20, recorded mid-session:
 | 174 B | 1673.7 | 1521.5 | 1533.3 | 847.6 | 995.6 | 611.1 |
 | 2469 B | 1724.0 | 1088.7 | 1353.4 | 651.1 | 659.5 | 332.4 |
 | 74913 B | 1713.7 | 1128.0 | 1358.4 | 715.1 | 706.4 | 370.0 |
+
+## Verdict
+
+**Keep the shipped `tree` runtime and publish the flat-image `shim` row as the
+native-object candidate; encode splits by payload size, decode does not.** One
+call per op removes the per-field crossing: shim decode is above prost at every
+tier (1.43x at 136 B, 1.91x at 74 KB) and shim encode is above prost at 136 B
+(1.05x), level at 174 B (0.99x), and below it at 2469 B (0.80x) and 74913 B
+(0.83x). The encode loss is the shared C struct codec's repeated-element path,
+not the Rust arm: `make bench-c` measures the same codec at 1132.2 MB/s on
+74913 B, while the tree row's `encode_to` reaches 1713.7 MB/s there, and prost's
+generated writer is straight-line code with no per-element reserve.
+
+It is not "replace the shipped fast path": `pbwire-rust-tree` times a *prebuilt*
+handle's `encode_to`, which beats prost on every encode tier (1.16x/1.09x/
+1.27x/1.26x on this run) and stays the shipping runtime for applications that
+already hold a tree. It is not "a boundary feature is missing": the boundary is
+a single call in both directions, and the shim's decode is faster than the tree
+decode at every tier; only the struct codec's encode path is behind, and that is
+a C runtime question shared by every layout binding, not a missing Rust entry
+point. The arm stays re-runnable (`cargo test --test flat`, `make rust-bench`)
+so a faster struct encoder moves this row without touching Rust.
