@@ -599,6 +599,22 @@ func TestCshimCodecOneof(t *testing.T) {
 		t.Fatalf("message: re-encode differs: %x vs %x", again, innerRef)
 	}
 
+	// Typed-nil message member encodes the empty message, matching the
+	// oracle; decode normalizes to a non-nil empty inner.
+	nilRef := oracleOneof(t, md, 4, protoreflect.ValueOfMessage(dynamicpb.NewMessage(innerMd)))
+	if got := testEncode(t, c, &scratchOneof{Name: "n", Kind: &scratchOneofW{}}); !bytes.Equal(got, nilRef) {
+		t.Fatalf("typed-nil: encode differs: %x vs %x", got, nilRef)
+	}
+	backNil := &scratchOneof{}
+	testDecode(t, c, backNil, nilRef)
+	fixupOneof(t, c, backNil, nilRef)
+	if !reflect.DeepEqual(backNil.Kind, &scratchOneofW{In: &scratchOneofInner{}}) {
+		t.Fatalf("typed-nil: fixup gave %#v", backNil.Kind)
+	}
+	if again := testEncode(t, c, backInner); !bytes.Equal(again, innerRef) {
+		t.Fatalf("message: re-encode differs: %x vs %x", again, innerRef)
+	}
+
 	// Unset oneof encodes only the name field and fixes up to nil.
 	bareRef := oracleOneof(t, md, 0, protoreflect.Value{})
 	if got := testEncode(t, c, &scratchOneof{Name: "n"}); !bytes.Equal(got, bareRef) {

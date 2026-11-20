@@ -85,10 +85,19 @@ func IndexOf(reg []Msg, full string) int {
 	return -1
 }
 
-// ItabOf returns the interface itab word for a (possibly nil) pointer of
-// a wrapper type, so the C codec can match a oneof member by pointer
-// comparison with no Go work per call. Itabs are stable for the lifetime
+// ItabFor reports the interface word for a value stored under the
+// interface type I: the itab the C codec compares against when the struct
+// field has that static interface type. Itabs are stable for the lifetime
 // of the process.
+func ItabFor[I any](v I) uintptr {
+	w := (*[2]unsafe.Pointer)(unsafe.Pointer(&v))
+	return uintptr(w[0])
+}
+
+// ItabOf is ItabFor[any]: the first word of an empty interface value is
+// its type pointer, which is exactly what the C codec compares for struct
+// fields typed as any. For a named oneof interface use ItabFor with that
+// interface type: its interface word differs from the type pointer.
 func ItabOf(v any) uintptr {
 	w := (*[2]unsafe.Pointer)(unsafe.Pointer(&v))
 	return uintptr(w[0])

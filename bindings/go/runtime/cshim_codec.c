@@ -692,7 +692,10 @@ msg_size(cshim_codec *h, const cshim_table_mem *t, const void *base, int depth,
                 const void *sub = rd_ptr(vp);
                 size_t sub_size = 0;
 
-                if (sub != NULL || r->required) {
+                /* A set oneof member (itab already matched) encodes even
+                 * when its payload pointer is nil: presence lives in the
+                 * wrapper, so a typed-nil member is the empty message. */
+                if (sub != NULL || r->required || r->itab != 0) {
                     if (sub != NULL &&
                         msg_size(h, &h->tables[r->sub], sub, depth + 1,
                                  &sub_size)) {
@@ -1080,11 +1083,13 @@ enc_msg(cshim_codec *h, const cshim_table_mem *t, const void *base, int depth)
             const void *sub = rd_ptr(vp);
 
             if (r->group) {
-                if ((sub != NULL || r->required) &&
+                /* See the size pass: a matched oneof member encodes even
+                 * with a nil payload, as the empty message/group. */
+                if ((sub != NULL || r->required || r->itab != 0) &&
                     enc_group(h, (size_t)r->sub, r->fnum, sub, depth)) {
                     return -1;
                 }
-            } else if ((sub != NULL || r->required) &&
+            } else if ((sub != NULL || r->required || r->itab != 0) &&
                        enc_sub(h, (size_t)r->sub, r->fnum, sub, depth)) {
                 return -1;
             }
