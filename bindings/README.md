@@ -146,6 +146,10 @@ no separate port, no second wire implementation. The C# `shim` row is below
 Google.Protobuf because the C core has no offset reader for pinned managed
 memory (see `bindings/csharp/pbench/README.md`).
 
+Dart has all three: `tree` is the prebuilt `Message` handle, `shim` is the
+generated flat `<Message>Layout` read in place by the C-side reader
+(`pbwire-dart-shim`), `core` waits on plan 18.
+
 A binding states which of the three it has, including the two-mechanism
 bindings and the deferred ports with the reason: the status table in
 [BENCHMARKS.md](../BENCHMARKS.md#bindings-vs-their-baselines), with the per-arm
@@ -172,7 +176,7 @@ throughput against the official runtime, copied from
 | Node | jspb resolves a code/type table per field and hands every repeated element to a closure | N-API addon (node headers only), reusable buffer, wire view for decoded messages; the native-object path is one addon call that walks the JS object in C | 3.36x / 2.95x `tree` (vs [protobufjs](https://www.npmjs.com/package/protobufjs); 26x / 15x vs jspb). Native object in and out (`shim`): 1.03x encode / 0.64x decode vs jspb at 74 KB, 0.12x / 0.13x vs protobufjs — the boundary floor |
 | Objective-C | the ObjC runtime allocates and copies per field | ARC wrapper: the encoder's buffer is handed to `NSData` with no copy | 1.92x / 1.16x (vs protobuf-objc; 6.6x / 2.7x at 136 B) |
 | PHP | the official runtime is pure PHP, all per-field bookkeeping in the interpreter | native C extension over the core (`ext-ffi` wrapper without a compiler) | 1.11x / 1.29x (vs C ext; 362x / 140x vs pure PHP) |
-| Dart | a pure-Dart field loop dominates, and FFI adds copies | `dart:ffi` plus the core's arena | 15.4x / 4.27x (vs protobuf-dart) |
+| Dart | a pure-Dart field loop dominates, and the per-field `set`/`get` walk is what the native-object task pays | `dart:ffi` plus the core's arena; the generated flat `<Message>Layout` is read in place by a C-side `pbw_struct` reader (`bindings/dart/native/`), one FFI call per op | 15.7x / 4.6x `tree` (vs protobuf-dart; native-object `shim` 11.4x / 4.7x) |
 | Rust | rust-protobuf generated codecs | links `libpbwire.a` statically behind a safe wrapper | 1.69x / 1.86x (vs rust-protobuf; 0.98x / 1.59x vs prost) |
 | C# | Google.Protobuf is already a fast tree codec — the closest race of the set | P/Invoke plus a resolver, no packages | 3.07x / 1.47x (vs Google.Protobuf; 3.93x / 2.27x vs protobuf-net) |
 | Go | the official runtime walks `protoreflect`/`protowire` per field | thin generated structs over one cgo crossing per op (`runtime/`: struct offsets as layout tables); the models the cshim cannot drive stay on the pure-Go table engine (`pbench/dyngo/codec/`), which also holds the descriptor-set value tree ([issue 41](https://github.com/jinganix/pbwire/issues/41)) | 1.73x / 1.47x (vs protobuf-go; thin model, struct in and struct out) |

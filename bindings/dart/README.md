@@ -44,14 +44,23 @@ working directory or the entry script. The only package dependency is
 
 ```shell
 dart pub get
+./build.sh                                          # the C-side layout reader (libpbwire_dart)
 dart run tests/selftest.dart                        # self-check vs pinned protoc bytes
+dart run tests/layout_test.dart                     # the native-object `shim` path
 dart run examples/roundtrip.dart                    # example
 ```
+
+`./build.sh` compiles `native/pbw_dart_shim.c` with the C binding's
+`pbw_struct` codec and the core into `build/libpbwire_dart.{dylib,so}` (found by
+`PBWIRE_DART_LIB`, else by walking up). On a x86_64/host toolchain this is just
+`cc` and `build/libpbwire.a`; `make dart-test` and `make conformance-dart` build
+it first.
 
 ## Benchmarks
 
 ```shell
 cd benchmarks && dart pub get && ./bench.sh         # vs the protobuf Dart runtime, four tiers
+make dart-bench                                     # the recorded run (results/)
 ```
 
 Needs `dart pub global activate protoc_plugin` (it provides `protoc-gen-dart`;
@@ -60,16 +69,35 @@ xlarge (the repeated fields scaled x0 / x1 / x100 / x3000). Copied from
 [BENCHMARKS.md](../../BENCHMARKS.md), which is the single source for all
 performance numbers; higher is better, MB/s over wire bytes:
 
-| payload | op | pbwire-dart (MB/s, x protobuf-dart) | protobuf-dart (MB/s) |
-|---|---|---|---|
-| 136 B | encode | 783.4 (3.6x) | 217.5 |
-| 136 B | decode | 401.6 (1.9x) | 206.6 |
-| 174 B | encode | 689.2 (3.8x) | 179.2 |
-| 174 B | decode | 411.7 (2.2x) | 187.3 |
-| 2469 B | encode | 1237.0 (11.5x) | 107.3 |
-| 2469 B | decode | 624.1 (4.4x) | 141.3 |
-| 74913 B | encode | 1430.7 (15.4x) | 92.8 |
-| 74913 B | decode | 694.0 (4.3x) | 162.4 |
+| payload | op | pbwire-dart-tree (MB/s, x protobuf-dart) | pbwire-dart-shim (MB/s, x) | protobuf-dart (MB/s) |
+|---|---|---|---|---|
+| 136 B | encode | 818.0 (3.94x) | 1335.1 (6.43x) | 207.6 |
+| 136 B | decode | 374.7 (1.72x) | 1003.2 (4.61x) | 217.7 |
+| 174 B | encode | 915.3 (5.06x) | 1273.9 (7.05x) | 180.8 |
+| 174 B | decode | 402.5 (2.13x) | 912.1 (4.82x) | 189.3 |
+| 2469 B | encode | 1351.4 (11.40x) | 1059.3 (8.94x) | 118.5 |
+| 2469 B | decode | 630.3 (4.40x) | 675.3 (4.71x) | 143.3 |
+| 74913 B | encode | 1593.8 (15.73x) | 1152.9 (11.38x) | 101.3 |
+| 74913 B | decode | 726.0 (4.57x) | 745.5 (4.69x) | 159.0 |
+
+`pbwire-dart-tree` is the shipped handle path; `pbwire-dart-shim` is the
+native-object arm. The three pbench arms:
+
+| arm | mechanism | what it answers |
+|---|---|---|
+| `tree` | the prebuilt `Message` handle: one `set` per field to build, `encode()`; `decode()` then one `get` per field | what the per-field downcall task costs once the tree exists |
+| `shim` | the generated `<Message>Layout` (`dart:ffi` `Struct`) is the native object; `PbwireLayout.encode` / `decodeInto` make one FFI call and `native/pbw_dart_shim.c` walks that memory in place through `pbw_struct_codec_*` | is a boundary worth paying for at all |
+| `core` | a pure-Dart port of the C core | plan 18 (`issue41-18-core-dart.md`) |
+
+Both published rows beat the official runtime; the shim is the row a caller
+with its own native image pays. The gate, the provisional table and the verdict
+are in [`pbench/README.md`](pbench/README.md).
+
+## Conformance
+
+`make conformance-dart` runs the official binary/JSON/text suite through
+`conformance/testee.dart` on `build/conformance.desc`; it passes with the same
+two expected failures as the C testee.
 
 Strings cross as NUL-terminated C strings, so `setString()` stops at the first
 NUL byte: use `setBytes()` for binary payloads (a `string` field accepts them
@@ -94,7 +122,13 @@ for 64-bit fields) over the dynamic API, with the `FileDescriptorSet`
 embedded: no `.desc` file at use time, and the wire stays in the C core. The
 committed output is `tests/gen/` (plus the protoc-gen-dart oracle in
 `tests/gen_oracle/`, pinned in `pubspec.lock`) and `examples/gen/`;
-`examples/roundtrip.dart` assigns typed fields only. Each file splits in two:
+`examples/roundtrip.dart` assigns typed fields only. Beside each message the
+emitter also writes a `final class <Message>Layout extends ffi.Struct`, the
+`<message>LayoutRows` table (field number, kind, offset, presence/count slots,
+sub-message full name, oneof case, precomputed wire facts) and the
+`<message>LayoutOffsets`/`<message>LayoutNumbers` lists; the C-side reader
+consumes those rows through the C binding's `pbw_struct` codec. Each file
+splits in two:
 `<base>.dart` (facades) and `<base>_meta.dart` (the embedded descriptor set
 plus its loader, imported by the models file).
 `--pbwire_opt=lang=dart[,model=bool][,register=bool][,registry=bool]`
