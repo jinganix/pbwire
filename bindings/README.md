@@ -100,11 +100,56 @@ anything else:
   project and adds only an F#-idiomatic facade over the same P/Invoke
   runtime, exactly like Kotlin reuses Java.
 
+## pbench: three arms, one contract
+
+Every binding's `pbench/` compares the same three arms over the same `matrix3`
+payload and the four standard tiers. Every arm does the same user-visible
+task: a native object in, wire bytes out; wire bytes in, a fully readable
+native object out. No arm may hold a prebuilt tree before the timer starts,
+and no arm may use test-only glue: the native <-> tree move goes through a
+shipped converter or a shipped model, so the timer covers what a user of that
+path pays.
+
+| arm | mechanism | what it answers |
+|---|---|---|
+| `tree` | the data already lives in the binding's own message/tree object (`Message`, `DMsg`, `MessageType` handle) | what the codec costs once the tree exists |
+| `shim` | C reads and writes the host's own memory through a layout/offset table; one crossing per op, no intermediate tree | is a boundary worth paying for at all |
+| `core` | the C core ported to the host language: value tree plus wire engine plus skip/group/unknown/validation, native object in and out | can the host language replace the C core for this binding |
+
+The uniform contract, per binding:
+
+```
+New(descriptorSet) -> Arm
+Arm.Marshal(nativeMessage) -> wire bytes
+Arm.Unmarshal(wire) -> nativeMessage
+Arm.Tree(nativeMessage) -> binding tree        // tree arm only, already built
+```
+
+Gate before any timing: every arm's bytes equal the official runtime's bytes on
+all four tiers, and every arm's decode compares field by field against an
+oracle decode. Timing: interleaved rounds (all arms plus the baseline back to
+back), median of five, printed in the `BENCHMARKS.md` "Output format" block so
+`scripts/bench-record.py` reads it unchanged.
+
+The layered rule replaces "no second wire implementation" for the third arm:
+the C core stays the default for every host binding that can reach it, a
+host-language `core` port is the one allowed second mechanism, and the official
+binary conformance suite is the single contract both obey. `core` numbers enter
+`BENCHMARKS.md` only after the arm passes the official binary conformance
+suite; until then it prints `n/a`. pbench keeps one copy of the shipped codec,
+as an adapter over `runtime/`, never a duplicate engine.
+
+A binding states which of the three it has, including the two-mechanism
+bindings and the deferred ports with the reason: the status table in
+[BENCHMARKS.md](../BENCHMARKS.md#bindings-vs-their-baselines), with the per-arm
+detail in `bindings/<lang>/pbench/README.md`.
+
 ## What each binding solves
 
 Every row is also the reason that binding exists: its host runtime's status quo
 has a specific cost, and the binding removes it *without* a second wire
-implementation. The ratios are xlarge-tier throughput against the official
+implementation (the allowed third mechanism is the [`core`
+arm](#pbench-three-arms-one-contract)). The ratios are xlarge-tier throughput against the official
 runtime, copied from [BENCHMARKS.md](../BENCHMARKS.md) where the reasoning and
 the full tables are.
 

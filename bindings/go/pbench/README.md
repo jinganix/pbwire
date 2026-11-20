@@ -8,6 +8,9 @@ test-only glue: the struct<->tree moves go through shipped converters
 (`ImportModel`/`ExportModel` in each arm's engine, tested as public API),
 so the timer covers exactly what a user of that path pays.
 
+The normative contract is in
+[`../../README.md#pbench-three-arms-one-contract`](../../README.md#pbench-three-arms-one-contract).
+
 There is no generated-code arm here on purpose: generated models are ergonomics
 over the shared engine, not a third wire implementation, and the binding's
 dynamic paths are what this harness compares.
