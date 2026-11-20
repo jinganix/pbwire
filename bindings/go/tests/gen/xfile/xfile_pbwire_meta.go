@@ -5,7 +5,7 @@
 package xfile
 
 import (
-	"pbwire/codec"
+	"pbwire/pbench/dyngo/codec"
 	"unsafe"
 
 	xdep "pbwire/tests/gen/xdep"

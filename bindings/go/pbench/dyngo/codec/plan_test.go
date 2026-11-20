@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"google.golang.org/protobuf/types/descriptorpb"
-	"pbwire/codec"
+	"pbwire/pbench/dyngo/codec"
 )
 
 func mustLoad(t *testing.T, path string) *codec.Schema {

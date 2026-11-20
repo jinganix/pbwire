@@ -10,7 +10,7 @@ package dynamic
 import (
 	"fmt"
 
-	"pbwire/codec"
+	"pbwire/pbench/dyngo/codec"
 )
 
 // ImportModel copies a generated model into a new tree of this type.

@@ -5,7 +5,7 @@
 package addressbook
 
 import (
-	"pbwire/codec"
+	"pbwire/pbench/dyngo/codec"
 	"unsafe"
 )
 

@@ -4,17 +4,18 @@ Shipped: thin generated models over [`runtime/`](runtime/), the Erlang-style C
 codec. The layout is measured once from the generated structs, C reads the
 struct memory directly through those offsets, and `Marshal`/`Unmarshal` cross
 cgo once per call (decode adds one `Stage` call per oneof group). A model the
-cshim cannot drive (cross-file field types,
-skipped fields, a message that repeats and is itself a field of another
-message) falls back to the shipped pure-Go engine in [`codec/`](codec/),
-which also carries the descriptor-set schema (`Schema`/`DType`/`DMsg`) and the
-model<->tree converters the dynamic cores share.
+cshim cannot drive (cross-file field types, skipped fields, a message that
+repeats and is itself a field of another message) stays on the table engine,
+so its generated metadata file imports the pure-Go candidate
+[`pbench/dyngo/codec/`](pbench/dyngo/codec/), which also carries the
+descriptor-set schema (`Schema`/`DType`/`DMsg`) and the model<->tree
+converters the dynamic arms share.
 
 A generated model is a `protoc-gen-pbwire` struct plus one metadata file of
 field tables. Nothing in generated code decides a tag, a length, presence or
-skipping. The C core with the hot-swap registry stays a benchmark candidate
-in [`pbench/`](pbench/), not shipped API; the pure-Go engine ships as the
-`codec` package because generated models fall back to it.
+skipping. The candidates keep their engines in [`pbench/`](pbench/) next to
+their arms: `cshim` won the comparison, so its engine ships as `runtime/`; the
+pure-Go one stays a candidate.
 
 ## Dynamic C core (candidate, not shipped)
 
@@ -87,10 +88,11 @@ to keep them. Reach for the two dynamic cores when that matters.
 
 | Piece | Path | Role |
 |---|---|---|
-| model | `tests/gen/<pkg>/<base>_pbwire.go` | structs, enums, getters, `Reset`, one-line `Marshal`/`Unmarshal` |
+| model | `tests/gen/<pkg>/<base>_pbwire.go` | structs, enums, getters, `Reset`; `Marshal`/`Unmarshal` when the file has no cshim wiring |
+| cshim wiring | `tests/gen/<pkg>/<base>_pbwire_cshim.go` | registry, offsets, copy/fixup and the `Marshal`/`Unmarshal` going through `runtime/`; emitted only when the whole file is drivable |
 | metadata | `tests/gen/<pkg>/<base>_pbwire_meta.go` | one field table per message: facts and trivial accessors, no wire logic |
 | engine (default) | [`runtime/`](runtime/) | the cshim C codec plus [`layout/`](runtime/layout): struct offsets in, one cgo crossing per op |
-| engine (fallback) | [`codec/`](codec/) | `Schema`/`DType`/`DMsg`, the one `EncodeTable`/`DecodeTable` engine, descriptor-set plans, model<->tree converters |
+| engine (fallback) | [`pbench/dyngo/codec/`](pbench/dyngo/codec/) | candidate pure-Go engine: `Schema`/`DType`/`DMsg`, the one `EncodeTable`/`DecodeTable` engine, descriptor-set plans, model<->tree converters |
 | C core candidate | [`pbench/dync/dynamic/`](pbench/dync/dynamic/) | `Registry` (hot-swap), `Schema`, `MessageType`, `Message`, model<->tree converter |
 | bench | [`benchmarks/bench_test.go`](benchmarks/bench_test.go) | four standard tiers: thin model vs `protobuf-go`, gated on byte parity and a field-by-field decode before timing |
 | arms | [`pbench/`](pbench/) (`go test -tags pbench ./pbench/`) | the three dynamic arms over the same tiers, native struct in and out, converter-only glue (issue #41) |
