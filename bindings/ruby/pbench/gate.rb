@@ -17,12 +17,10 @@ def fail(what)
 end
 
 def check(failures, ok, what)
-  if ok
-    true
-  else
-    fail(what)
-    failures + 1
-  end
+  return failures if ok
+
+  fail(what)
+  failures + 1
 end
 
 type = Payload.type

@@ -8,6 +8,7 @@
 # the same suite against the published gem instead of the repo build.
 $LOAD_PATH.unshift File.expand_path('../lib', __dir__) unless ENV['PBWIRE_GEM_TEST']
 require 'pbwire'
+require_relative 'gen/matrix3'
 
 DATA = File.expand_path('data/sample.desc', __dir__)
 SAMPLE = 'pbwire.ruby.Sample'
@@ -499,6 +500,44 @@ check 'limits reject oversized input' do
   assert raised(Pbwire::Error) { schema.message(SAMPLE).decode_delimited(msg.encode_delimited, { max_bytes: 2 }) }, 'decode_delimited max_bytes'
   assert raised(Pbwire::Error) { Pbwire::Schema.from_bytes(File.binread(DATA), { max_bytes: 4 }) }, 'from_bytes max_bytes'
   assert_equal 'alice', schema.message(SAMPLE).decode(wire, {}).get('name'), 'empty limits mean defaults'
+end
+
+check 'generated model object codec round trips in one extension call' do
+  classes = {
+    'structtest.Scalars3' => Pbwire::Gen::Structtest_Scalars3,
+    'structtest.Inner3' => Pbwire::Gen::Structtest_Inner3
+  }
+  type = Pbwire::Gen._schema(Pbwire::Gen::DESC_B64_MATRIX3)
+                       .type('structtest.Scalars3')
+  obj = Pbwire::Gen::Structtest_Scalars3.new(
+    i32: -7,
+    u64: 18_446_744_073_709_551_615,
+    str: 'hello',
+    color: 2,
+    inner: Pbwire::Gen::Structtest_Inner3.new(name: 'kid', value: 42),
+    nums: [1, 2, 3],
+    tags: %w[a b],
+    inners: [Pbwire::Gen::Structtest_Inner3.new(name: 'g', value: 9)],
+    flags: [true, false],
+    opt_i32: 0,
+    opt_str: 'opt'
+  )
+  wire = type.encode_object(obj)
+  assert_equal Pbwire::Gen::Structtest_Scalars3.encode(obj), wire,
+               'object encode matches the model facade'
+  back = type.decode_object(wire, classes)
+  assert_equal(-7, back.i32, 'signed int32')
+  assert_equal 18_446_744_073_709_551_615, back.u64, 'uint64 max'
+  assert_equal 'hello', back.str, 'string'
+  assert_equal 2, back.color, 'enum'
+  assert_equal 42, back.inner.value, 'nested model'
+  assert_equal [1, 2, 3], back.nums, 'repeated scalar'
+  assert_equal %w[a b], back.tags, 'repeated string'
+  assert_equal 9, back.inners.first.value, 'repeated model'
+  assert_equal [true, false], back.flags, 'repeated bool'
+  assert_equal 0, back.opt_i32, 'optional zero'
+  assert back.has_opt_i32?, 'optional zero keeps presence'
+  assert_equal wire, type.encode_object(back), 'object decode re-encodes'
 end
 
 check 'services resolve and streaming flags decode' do

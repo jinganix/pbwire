@@ -1227,3 +1227,26 @@ every cell: encode 1.52x / 1.66x / 1.31x / 1.44x and decode 48.8x / 46.5x /
 
 Stage 6 is a recorded no-op: no published Zig cell is below its baseline, so
 no A/B build was made and no change was attempted.
+
+## Provisional: Ruby object-walk shim arm (plan 11)
+
+The Ruby `shim` arm is one C-extension entry (`type.encode_object(obj)` /
+`type.decode_object(wire, classes)`) that walks the generated model's instance
+variables in C and recurses there; the `tree` arm times the whole user task
+(`Structtest_Scalars3.encode(obj)`, which builds a `Message` with one `set` per
+field, and `.decode(wire)`, which reads one `get` per field back). Provisional
+`ruby pbench/compare.rb`, median of five interleaved rounds, 2026-11-21, all
+four tiers, MB/s:
+
+| arm | enc 136/174/2469/74913 | dec 136/174/2469/74913 |
+|---|---|---|
+| `pbwire-ruby-tree` | 45.9 / 43.6 / 39.1 / 40.9 | 35.0 / 38.5 / 39.3 / 45.9 |
+| `pbwire-ruby-shim` | 135.3 / 130.8 / 125.2 / 131.1 | 139.0 / 150.8 / 137.7 / 153.6 |
+| google-protobuf gem | 44.0 / 31.3 / 18.0 / 18.1 | 253.7 / 256.7 / 478.5 / 671.7 |
+
+Reading: the object walk removes the Ruby-side per-field loop, so shim encode
+beats the gem at every tier (3.0x at 136 B, 7.3x at 74 KB). Decode loses
+because the shim, as the contract requires, hands back a fully materialized
+generated model while the gem's decoder keeps fields lazy; at 136 B it is 0.5x
+and at 74 KB 0.23x. The `tree` row is the per-field facade, not the prebuilt
+`Message` handle `make ruby-bench` publishes.

@@ -18,3 +18,55 @@ wire implementation in this binding.
 
 TODO in `lib/pbwire.rb`: `shortcut: no pure-Ruby core, reopen when a
 native-less Ruby target appears`.
+
+## Gate
+
+```
+make ruby-bind                              # the extension
+ruby bindings/ruby/pbench/gate.rb           # PASS / exit 1
+```
+
+The gate asserts, per tier, that `tree` (model facade) bytes and `shim`
+(`encode_object`) bytes equal the google-protobuf gem's bytes, that each arm's
+decode reads the fields `benchmarks/bench.rb` checks (`str`, `inner.name`,
+`inner.value`, the repeated lengths and last element, the proto3 optionals,
+`u64`, `color`), and that each decoded object re-encodes to the same bytes.
+
+## Timing
+
+`compare.rb` interleaves `a-tree`, `b-shim` and the google-protobuf gem in one
+loop per tier and reports the median of five rounds
+(`ruby bindings/ruby/pbench/compare.rb`). The formal, recorded run is
+`make ruby-bench`, which prints `pbwire-ruby-tree` (the prebuilt handle row)
+beside `pbwire-ruby-shim` (the native-object row).
+
+## Run table
+
+Provisional (Stage 3, `ruby pbench/compare.rb`, median of five interleaved
+rounds, 2026-11-21): `tree` is the whole user task (build the generated model,
+then encode; decode, then read every field back), `shim` is one `encode_object`
+/ `decode_object` call. The prebuilt-handle row `make ruby-bench` publishes as
+`pbwire-ruby-tree` is a different op and is not in this table.
+
+| tier | arm | encode ns/op | encode MB/s | decode ns/op | decode MB/s |
+|---|---|---|---|---|---|
+| 136 B | `pbwire-ruby-tree` | 2965.2 | 45.9 | 3890.8 | 35.0 |
+| 136 B | `pbwire-ruby-shim` | 1005.2 | 135.3 | 978.2 | 139.0 |
+| 136 B | `google-protobuf` | 3092.7 | 44.0 | 536.0 | 253.7 |
+| 174 B | `pbwire-ruby-tree` | 3986.7 | 43.6 | 4517.7 | 38.5 |
+| 174 B | `pbwire-ruby-shim` | 1330.5 | 130.8 | 1153.7 | 150.8 |
+| 174 B | `google-protobuf` | 5554.3 | 31.3 | 677.9 | 256.7 |
+| 2469 B | `pbwire-ruby-tree` | 63202.0 | 39.1 | 62872.2 | 39.3 |
+| 2469 B | `pbwire-ruby-shim` | 19727.9 | 125.2 | 17928.7 | 137.7 |
+| 2469 B | `google-protobuf` | 137183.6 | 18.0 | 5160.1 | 478.5 |
+| 74913 B | `pbwire-ruby-tree` | 1832896.0 | 40.9 | 1631700.0 | 45.9 |
+| 74913 B | `pbwire-ruby-shim` | 571371.5 | 131.1 | 487625.0 | 153.6 |
+| 74913 B | `google-protobuf` | 4145257.5 | 18.1 | 111526.0 | 671.7 |
+
+The reading: the per-field facade (`tree`) is ~3x slower than one object walk
+at every tier, and it loses to the gem on encode at 136 B-174 B because it pays
+a Ruby-level `set` plus a C `pbw_message_set` per field. The shim removes that
+Ruby-side loop: encode is 3.0x the gem at 136 B and 7.3x at 74 KB. Decode is
+the opposite story: the shim materializes every generated model and array in
+C, while the gem's decode leaves fields lazy, so `shim` decode is 0.5x the gem
+at 136 B and 0.23x at 74 KB. Stage 6 looks at that cell.

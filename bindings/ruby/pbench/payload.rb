@@ -134,6 +134,8 @@ module Payload
          back.flags.last == (repeats - 1).even?)) &&
       back.opt_i32 == -7 &&
       back.opt_str == 'opt' &&
+      back.has_opt_i32? &&
+      back.has_opt_str? &&
       back.u64 == 18_446_744_073_709_551_615 &&
       back.color == 2
   end
