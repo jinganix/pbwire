@@ -56,6 +56,7 @@ typedef struct {
     zval schema_zv; /* Pbwire\Schema, kept alive */
     const pbw_descriptor *desc;
     zval fields;    /* php array: name -> Pbwire\Field, resolved once */
+    pbw_ctx *array_ctx; /* scratch arena/buffer for the one-call array entry */
     zend_object std;
 } type_obj;
 
@@ -543,6 +544,7 @@ static zend_object *type_create_obj(zend_class_entry *ce) {
     ZVAL_UNDEF(&o->schema_zv);
     ZVAL_UNDEF(&o->fields);
     o->desc = NULL;
+    o->array_ctx = NULL;
     return &o->std;
 }
 
@@ -556,6 +558,10 @@ static void type_free(zend_object *o) {
     }
     if (Z_TYPE(t->fields) == IS_ARRAY) {
         zval_ptr_dtor(&t->fields);
+    }
+    if (t->array_ctx != NULL) {
+        pbw_ctx_free(t->array_ctx);
+        t->array_ctx = NULL;
     }
     zend_object_std_dtor(&t->std);
 }
@@ -629,6 +635,15 @@ static const pbw_field *type_field_cached(zval *type_zv, const char *name,
 
 static int array_is_message_type(pbw_type type) {
     return type == PBW_TYPE_MESSAGE || type == PBW_TYPE_GROUP;
+}
+
+/* One scratch context per Type: reset per call, so steady use stops paying a
+ * context malloc/free and keeps the arena chunks and encode buffer. */
+static pbw_ctx *type_array_ctx(type_obj *t) {
+    if (t->array_ctx == NULL) {
+        t->array_ctx = pbw_ctx_new();
+    }
+    return t->array_ctx;
 }
 
 static int array_bad_field(const pbw_field *field, const char *what) {
@@ -1448,9 +1463,9 @@ PHP_METHOD(Type, encodeArray) {
     ZEND_PARSE_PARAMETERS_END();
 
     type_obj *t = type_from(Z_OBJ_P(ZEND_THIS));
-    pbw_ctx *ctx = pbw_ctx_new();
+    pbw_ctx *ctx = type_array_ctx(t);
     pbw_message *msg;
-    size_t size = 0;
+    const uint8_t *out = NULL;
     size_t len = 0;
     pbw_status st;
     zend_string *str;
@@ -1459,33 +1474,21 @@ PHP_METHOD(Type, encodeArray) {
         throw_error("out of memory");
         RETURN_THROWS();
     }
+    pbw_ctx_reset(ctx);
     msg = pbw_message_new_ctx(ctx, t->desc);
     if (msg == NULL) {
-        pbw_ctx_free(ctx);
         throw_error("out of memory");
         RETURN_THROWS();
     }
     if (array_encode_message(message_zv, ctx, t->desc, msg, 0) != 0) {
-        pbw_ctx_free(ctx);
         RETURN_THROWS();
     }
-    st = pbw_message_encoded_size(msg, &size);
+    st = pbw_encode_ctx(ctx, msg, &out, &len);
     if (st != PBW_OK) {
-        pbw_ctx_free(ctx);
         throw_error_status("encodeArray", st);
         RETURN_THROWS();
     }
-    str = zend_string_alloc(size + PBW_ENCODE_SLACK, 0);
-    st = pbw_encode_to(msg, ZSTR_VAL(str), size + PBW_ENCODE_SLACK, &len);
-    if (st != PBW_OK) {
-        zend_string_release(str);
-        pbw_ctx_free(ctx);
-        throw_error_status("encodeArray", st);
-        RETURN_THROWS();
-    }
-    ZSTR_LEN(str) = len;
-    ZSTR_VAL(str)[len] = '\0'; /* zend_string invariant */
-    pbw_ctx_free(ctx);
+    str = zend_string_init((const char *)out, len, 0);
     RETURN_STR(str);
 }
 

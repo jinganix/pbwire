@@ -1368,3 +1368,46 @@ a target; the tree handle is above it. The two shim builds produce identical
 bytes (both gates pass) and the gap between them is the per-field PHP loop plus
 FFI trampoline, not a different codec.
 
+## Cell: PHP native-array encode/decode, below the official C extension (plan 13)
+
+The formal `make php-bench` rows put `pbwire-php-shim` at 160.5-194.1 MB/s encode
+and 168.5-212.5 MB/s decode against the official C extension's 887-1313 / 445-569,
+so the array entry is a below-baseline cell. A/B probe:
+`bindings/php/pbench/ab.sh <base.so> <candidate.so> 5 xlarge`, two extension
+builds from the same tree, alternating base and candidate in one session. The
+probe gates bytes first (encode equals the official runtime, decode re-encodes to
+the same bytes) and aborts on any difference.
+
+Change 1 -- **accepted**: one scratch `pbw_ctx` per `Pbwire\Type`, reset per
+`encodeArray` call, with `pbw_encode_ctx` writing once into its reused buffer
+instead of a fresh context plus `pbw_message_encoded_size` + `pbw_encode_to`
+(two tree walks). xlarge encode, ns/op:
+
+| round | base | candidate |
+|---|---|---|
+| 1 | 390346.6 | 340963.3 |
+| 2 | 381605.0 | 345738.3 |
+| 3 | 379034.3 | 364158.4 |
+| 4 | 394362.9 | 346453.4 |
+| 5 | 384188.1 | 345151.7 |
+
+Every round wins (about 1.05-1.14x); bytes stayed equal and the gate passed, so
+the change stayed. The formal xlarge shim encode rose from 194.1 to ~220 MB/s,
+still below the baseline.
+
+Change 2 -- **rejected**: decode the same array arm through `pbw_decode_ctx` on
+the same scratch context instead of `pbw_decode` + `pbw_message_free`. Same A/B,
+xlarge decode, ns/op:
+
+| round | base | candidate |
+|---|---|---|
+| 1 | 336149.0 | 362994.0 |
+| 2 | 364320.6 | 370132.5 |
+| 3 | 353816.2 | 353711.4 |
+| 4 | 358166.8 | 348870.8 |
+| 5 | 351480.2 | 352890.7 |
+
+Rounds 1, 2 and 5 are losses, so the change does not win every round; the gap is
+the per-field array materialization, not the decode tree allocation. The decode
+path stayed on `pbw_decode`; the final build is change 1 only.
+
