@@ -100,8 +100,22 @@ public final class Bench {
         if (failures != 0) {
             return;
         }
+        // The native-object row: the committed generated model must produce
+        // the same bytes in both directions before it is timed.
+        Structtest_Scalars3 model = fillModel(n);
+        if (!Arrays.equals(model.toByteArray(), reference)) {
+            fail(label, "generated model bytes differ");
+            return;
+        }
+        Structtest_Scalars3 modelBack = Structtest_Scalars3.parseFrom(reference);
+        if (!Arrays.equals(modelBack.toByteArray(), reference)) {
+            fail(label, "generated model round trip differs");
+            return;
+        }
         System.out.printf("OK   %s parity, x%d (%d bytes)%n", label, n,
                 reference.length);
+        System.out.printf("OK   %s generated-model parity, x%d (%d bytes)%n",
+                label, n, reference.length);
 
         Descriptors.Descriptor desc = protoScalars3;
         DynamicMessage dynBuilt = DynamicMessage.parseFrom(desc, reference);
@@ -380,6 +394,37 @@ public final class Bench {
             b.addInners(Matrix3.Inner3.newBuilder().setName("grandkid")
                     .setValue(i + 1));
             b.addFlags(i % 2 == 0);
+        }
+        return b.build();
+    }
+
+    /** The committed generated model for the same payload (native object). */
+    private static Structtest_Scalars3 fillModel(int n) {
+        Structtest_Scalars3.Builder b = Structtest_Scalars3.newBuilder()
+                .setI32(Integer.MIN_VALUE)
+                .setI64(Long.MAX_VALUE)
+                .setU32(-1)
+                .setU64(-1L)
+                .setS32(Integer.MIN_VALUE)
+                .setS64(Long.MIN_VALUE)
+                .setFx32(0xdeadbeef)
+                .setFx64(72623859790382856L)
+                .setSfx32(Integer.MIN_VALUE)
+                .setSfx64(Long.MIN_VALUE)
+                .setF32(Float.POSITIVE_INFINITY)
+                .setF64(-123456.789)
+                .setFlag(true)
+                .setStr("hello")
+                .setColorValue(2)
+                .setInner(Structtest_Inner3.newBuilder().setName("kid").setValue(42))
+                .setOptI32(-7)
+                .setOptStr("opt");
+        for (int i = 0; i < n; i++) {
+            b.addNums(i - 3)
+                    .addTags("tag")
+                    .addInners(Structtest_Inner3.newBuilder()
+                            .setName("grandkid").setValue(i + 1))
+                    .addFlags(i % 2 == 0);
         }
         return b.build();
     }
