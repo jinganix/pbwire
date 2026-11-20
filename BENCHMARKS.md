@@ -179,7 +179,7 @@ own README. Dart ran once `dart pub global activate protoc_plugin` provided
 | Kotlin (pure-Java codec + DSL) | `make kotlin-bench` (`bindings/kotlin/benchmarks`) | `protoc --kotlin_out` over `protobuf-java`, same `matrix3.proto` | all 4 | 1.11x ✅ / 1.77x ✅ `tree` (0.71x at 136 B; `core` 0.79x / 0.76x) |
 | PHP (`ext-ffi` + C extension) | `make php-bench` (`bindings/php/benchmarks`) | the official PHP runtime (`protobuf/php/src`): C extension (fastest) + pure-PHP | all 4 | 1.22x / 1.34x vs C ext ✅ (394x / 154x vs pure) |
 | Dart (`dart:ffi`) | `make dart-bench` (`bindings/dart/benchmarks`) | the `protobuf` Dart package + generated code | all 4 | 15.73x ✅ / 4.57x ✅ `tree` (native-object `shim` 11.38x / 4.69x, one C-side reader call per op) |
-| Rust (static link) | `make rust-bench` (`bindings/rust/benchmarks`) | prost (fastest) + rust-protobuf 3.x generated code | all 4 | 1.13x ✅ / 1.86x ✅ |
+| Rust (static link) | `make rust-bench` (`bindings/rust/benchmarks`) | prost (fastest) + rust-protobuf 3.x generated code | all 4 | 1.17x ✅ / 1.88x ✅ `tree` (native-object `shim` 0.84x / 1.90x, one C-side struct-codec call per op; `shim` encode is above prost at 136 B and level at 174 B) |
 | C# (P/Invoke) | `make csharp-bench` (`bindings/csharp/benchmarks`) | Google.Protobuf C# generated code (fastest) + protobuf-net | all 4 | 3.46x ✅ / 1.48x ✅ `tree` (native-object `shim` 0.12x / 0.10x) |
 | Lua (C module, tables) | `make lua-bench` (`bindings/lua/benchmarks`) | `lua-protobuf` 0.6.0 | all 4 | 1.09x ✅ / 1.42x ✅ (8.93x via builder encode — data already in pbwire) |
 | Swift (SwiftPM, static link) | `make swift-bench` (`bindings/swift/benchmarks`) | `apple/swift-protobuf` 1.39.0 generated code from the same `matrix3.proto` | all 4 | 5.43x ✅ / 2.57x ✅ |
@@ -218,7 +218,7 @@ timer.
 | Node | three arms: `tree` (prebuilt `Message` handle, shipped), `shim` (the addon walks the plain object in one call), `core` is plan 15 |
 | Dart | three arms: `tree` (prebuilt `Message` handle, shipped), `shim` (the C reader walks the generated flat `Struct` in one call), `core` is plan 18 |
 | Julia | three arms: `tree` (prebuilt `Message` handle, shipped), `shim` (the C reader walks the generated layout struct in one call), `core` is plan 19 |
-| Rust | three |
+| Rust | three arms: `tree` (prebuilt `Message` handle, shipped), `shim` (the C reader walks the generated `#[repr(C)]` mirror in one call), `core` is plan 20 |
 | Swift | three |
 | Zig | three |
 | Python | three |
@@ -228,7 +228,7 @@ timer.
 
 Every binding with a
 wired baseline is ahead of it on the xlarge encode column (Java 1.09x, Rust
-1.04x, Elixir 2.56x: the three that used to sit under 1.0x are above the line
+1.17x, Elixir 2.56x: the three that used to sit under 1.0x are above the line
 in the 2026-11-14 run — the same tree in the Linux container still shows Java
 at 0.96x, i.e. that cell is a tie inside the run-to-run band, not a win);
 bytes are identical everywhere. Core plain 169 B encode left this list on
@@ -238,11 +238,13 @@ encode at 0.71x/0.71x and Clojure's 136 B `core` encode at 0.68x (a generated
 writer knows its tags, the dynamic tree walk derives them), Julia's 136 B
 decode (tree 0.90x, native-object `shim` 0.96x, workspace 1.00x: the C decode
 plus a `ccall` against ProtoBuf.jl's pure-Julia generated decoder; the shim
-already runs without a per-call `malloc`/`free` pair), and Scala 174 B `tree`
-decode at 1.00x (the baseline moved between runs, not the codec). Each is
-inside the run-to-run band of its own baseline. Above the line after the
-2026-11-15 passes: Python 136 B decode (1.02x), Kotlin 174 B encode (1.13x)
-and Julia's workspace decode rows from 174 B up.
+already runs without a per-call `malloc`/`free` pair), Rust's native-object
+`shim` encode from 2469 B up (0.80x/0.84x: the shared C struct encoder reserves
+per repeated element, while the same arm's decode and the `tree` row are above
+the line), and Scala 174 B `tree` decode at 1.00x (the baseline moved between
+runs, not the codec). Each is inside the run-to-run band of its own baseline.
+Above the line after the 2026-11-15 passes: Python 136 B decode (1.02x), Kotlin
+174 B encode (1.13x) and Julia's workspace decode rows from 174 B up.
 The JVM narrow cells are the per-field dispatch of a generic encoder
 against straight-line generated code; the ledger records what was tried
 there.
@@ -283,7 +285,7 @@ payload, the boundary cost and the baseline all differ.
 | Ruby | C extension over the core | 74913 B | 1621.1 (1.34x ✅) | 1050.8 (1.67x ✅) |
 | Objective-C | ARC wrapper | 74913 B | 62089.8 (1.72x ✅) | 29297.5 (1.18x ✅) |
 | PHP | C extension | 74913 B | 1480.3 (1.22x ✅) | 688.7 (1.34x ✅) |
-| Rust | static link | 74913 B | 1586.1 (1.13x ✅) | 730.3 (1.86x ✅) |
+| Rust | static link | 74913 B | 1600.9 (1.17x ✅) `tree`; native-object `shim` 1145.0 (0.84x ❌) | 716.2 (1.88x ✅) `tree`; `shim` 722.7 (1.90x ✅) |
 | C# | P/Invoke | 74913 B | 1689.7 (3.46x ✅) `tree`; native-object `shim` 59.1 (0.12x ❌) | 750.7 (1.48x ✅) `tree`; `shim` 51.5 (0.10x ❌) |
 | Lua | C module, tables | 74913 B | 196.9 (1.09x ✅) | 124.7 (1.42x ✅) |
 | Erlang | NIF (`pbwire`) | 74913 B | 483.3 (3.91x ✅) | 356.5 (1.60x ✅) |
@@ -1221,26 +1223,36 @@ already hold a tree; the shim row is the native-object path.
 
 ![Rust vs prost (and rust-protobuf 3.x) — MB/s by tier](docs/charts/bench-rust-vs-prost-and-rust-protobuf-3-x.svg)
 
-| payload | op | pbwire-rust (MB/s, x prost) | prost (MB/s) | protobuf-rust (MB/s) |
-|---|---|---|---|---|
-| 136 B | encode | 1807.7 (1.22x ✅) | 1486.5 | 1273.5 |
-| 136 B | decode | 1080.9 (1.22x ✅) | 882.4 | 735.1 |
-| 174 B | encode | 1685.1 (1.11x ✅) | 1513.3 | 1307.8 |
-| 174 B | decode | 918.8 (1.41x ✅) | 649.4 | 574.5 |
-| 2469 B | encode | 1484.0 (1.04x ✅) | 1426.6 | 812.9 |
-| 2469 B | decode | 671.4 (1.92x ✅) | 350.3 | 353.2 |
-| 74913 B | encode | 1457.5 (1.04x ✅) | 1398.4 | 846.8 |
-| 74913 B | decode | 737.2 (1.92x ✅) | 383.5 | 369.8 |
+| payload | op | pbwire-rust-tree (MB/s, x prost) | pbwire-rust-shim (MB/s, x prost) | prost (MB/s) | protobuf-rust (MB/s) |
+|---|---|---|---|---|---|
+| 136 B | encode | 1845.2 (1.20x ✅) | 1703.2 (1.10x ✅) | 1541.8 | 1248.5 |
+| 136 B | decode | 1030.9 (1.24x ✅) | 1147.6 (1.38x ✅) | 833.0 | 722.5 |
+| 174 B | encode | 1726.3 (1.11x ✅) | 1566.9 (1.01x ✅) | 1548.5 | 1336.8 |
+| 174 B | decode | 879.6 (1.41x ✅) | 1020.5 (1.64x ✅) | 623.3 | 567.6 |
+| 2469 B | encode | 1655.0 (1.23x ✅) | 1072.3 (0.80x ❌) | 1340.9 | 822.6 |
+| 2469 B | decode | 651.6 (1.91x ✅) | 640.4 (1.88x ✅) | 340.4 | 344.3 |
+| 74913 B | encode | 1600.9 (1.17x ✅) | 1145.0 (0.84x ❌) | 1370.9 | 845.1 |
+| 74913 B | decode | 716.2 (1.88x ✅) | 722.7 (1.90x ✅) | 380.4 | 381.6 |
 
 The archive is linked in, so a call is a direct C call with no `dlopen` lookup.
-prost, the fastest widely used Rust runtime (generated at build time by
-build.rs, bytes gated like the rest), is behind only on no cell now that
-encode reuses one buffer per implementation (pbwire `encode_to()`,
-rust-protobuf `write_to_vec()`, prost `encode()`): the one-shot `encode()`
-paid the core malloc plus a 75 KB copy that neither baseline pays, and with
-that gone the largest tier is 1.04x prost's own one-pass writer (prost 2.6x
-behind `rust-protobuf`). pbwire-rust leads every other cell against both
-(decode 1.92x / 1.99x at xlarge).
+`pbwire-rust-tree` is a prebuilt `Message` handle (`encode_to()` into one reused
+buffer, `decode()` then one `get_*` per field); `pbwire-rust-shim` is the
+generated `#[repr(C)]` mirror read and written by the C struct codec in one
+call per op, with the image and its decode arena allocated once. prost, the
+fastest widely used Rust runtime (generated at build time by build.rs, bytes
+gated like the rest), is behind the tree row on every cell now that encode
+reuses one buffer per implementation (pbwire `encode_to()`, rust-protobuf
+`write_to_vec()`, prost `encode()`): the one-shot `encode()` paid the core
+malloc plus a 75 KB copy that neither baseline pays.
+
+The shim's decode leads prost at every tier (1.38x at 136 B, 1.90x at 74 KB)
+and its encode leads at 136 B (1.10x), is level at 174 B (1.01x), and trails at
+2469 B/74913 B (0.80x/0.84x): that is the shared C struct encoder's
+per-repeated-element reserve path (`make bench-c` measures the same codec at
+1132.2 MB/s on 74913 B), while prost's generated writer is straight-line code
+with no per-element reserve. The ledger records the `-O3` A/B attempt on that
+cell and why it was rejected (the sibling layout arms compile the same C file
+at `-O2`).
 
 `encode_to()` tries the caller's buffer first and only asks for the exact size
 (a second tree walk) when the buffer does not fit, which is what keeps the

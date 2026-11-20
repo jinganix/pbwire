@@ -43,10 +43,12 @@ cargo run --example roundtrip -- ../c/tests/data/matrix3.desc
 ```
 
 `build.rs` copies `build/libpbwire.a` into `OUT_DIR` and links it statically, so
-the resulting binary has no runtime dependency on the library. `PBWIRE_LIB_DIR`
-points at a different build directory. Everything is `cdylib`-free on purpose:
-the FFI hosts (Java, Node, Objective-C, PHP, Dart, C#) `dlopen` the shared
-library, while Rust compiles the archive in.
+the resulting binary has no runtime dependency on the library. It also compiles
+`bindings/c/runtime/pbw_struct.c` into a second archive (through `CC`/`AR`,
+default `cc`/`ar`): that is the layout codec the in-place arm calls.
+`PBWIRE_LIB_DIR` points at a different build directory. Everything is
+`cdylib`-free on purpose: the FFI hosts (Java, Node, Objective-C, PHP, Dart, C#)
+`dlopen` the shared library, while Rust compiles the archive in.
 
 ## Benchmarks
 
@@ -61,19 +63,38 @@ xlarge (the repeated fields scaled x0 / x1 / x100 / x3000). Copied from
 [BENCHMARKS.md](../../BENCHMARKS.md), which is the single source for all
 performance numbers; higher is better, MB/s over wire bytes:
 
-| payload | op | pbwire-rust (MB/s, x protobuf-rust) | protobuf-rust (MB/s) | prost (MB/s) |
-|---|---|---|---|---|
-| 136 B | encode | 1962.9 (1.5x) | 1288.1 | 1601.8 |
-| 136 B | decode | 1169.9 (1.5x) | 775.2 | 941.0 |
-| 174 B | encode | 1870.2 (1.4x) | 1338.7 | 1470.4 |
-| 174 B | decode | 963.1 (1.7x) | 570.7 | 655.5 |
-| 2469 B | encode | 1532.9 (1.8x) | 838.7 | 1248.4 |
-| 2469 B | decode | 682.0 (1.8x) | 370.2 | 365.5 |
-| 74913 B | encode | 1398.4 (1.6x) | 849.5 | 1296.6 |
-| 74913 B | decode | 729.1 (1.8x) | 406.1 | 390.3 |
+| payload | op | pbwire-rust-tree (MB/s, x prost) | pbwire-rust-shim (MB/s, x prost) | prost (MB/s) | protobuf-rust (MB/s) |
+|---|---|---|---|---|---|
+| 136 B | encode | 1845.2 (1.20x) | 1703.2 (1.10x) | 1541.8 | 1248.5 |
+| 136 B | decode | 1030.9 (1.24x) | 1147.6 (1.38x) | 833.0 | 722.5 |
+| 174 B | encode | 1726.3 (1.11x) | 1566.9 (1.01x) | 1548.5 | 1336.8 |
+| 174 B | decode | 879.6 (1.41x) | 1020.5 (1.64x) | 623.3 | 567.6 |
+| 2469 B | encode | 1655.0 (1.23x) | 1072.3 (0.80x) | 1340.9 | 822.6 |
+| 2469 B | decode | 651.6 (1.91x) | 640.4 (1.88x) | 340.4 | 344.3 |
+| 74913 B | encode | 1600.9 (1.17x) | 1145.0 (0.84x) | 1370.9 | 845.1 |
+| 74913 B | decode | 716.2 (1.88x) | 722.7 (1.90x) | 380.4 | 381.6 |
 
 `set_str` rejects a string containing a NUL byte (it would truncate on the way
 to C); use `set_bytes` for binary payloads, including on a `string` field.
+
+### The native-object arm
+
+`pbwire-rust-tree` times a prebuilt `Message`; `pbwire-rust-shim` times the
+generated `#[repr(C)]` mirror with one call per op:
+
+```rust
+let mut plan = schema.in_place::<Scalars3Flat>()?;   // compiles the rows once
+let mut buf = plan.encode_in_place(&image)?;         // bytes borrowed from the plan
+let mut decoded = FlatImage::<Scalars3Flat>::new();  // mirror + reusable arena
+plan.decode_in_place(&buf, &mut decoded)?;
+```
+
+The generated `<Message>Flat::FIELDS` rows carry the offsets and wire facts;
+`build.rs` compiles the C codec they address. Decode allocates strings, bytes,
+arrays and sub-messages from the image's arena, so the image must not outlive
+it (decoding again into the same image invalidates the previous view). The arm,
+its gate (`cargo test --test flat`) and the verdict live in
+[`pbench/README.md`](pbench/README.md).
 
 ## Threads
 

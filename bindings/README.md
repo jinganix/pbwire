@@ -155,6 +155,11 @@ generated mutable `<Message>Layout` read in place by
 `bindings/julia/native/pbw_julia_shim.c` (`pbwire-julia-shim`), `core` waits
 on plan 19.
 
+Rust has all three: `tree` is the prebuilt `Message` handle, `shim` is the
+generated `#[repr(C)]` `<Message>Flat` read in place by the C struct codec
+compiled into the crate (`pbwire-rust-shim`, one call per op), `core` waits on
+plan 20.
+
 A binding states which of the three it has, including the two-mechanism
 bindings and the deferred ports with the reason: the status table in
 [BENCHMARKS.md](../BENCHMARKS.md#bindings-vs-their-baselines), with the per-arm
