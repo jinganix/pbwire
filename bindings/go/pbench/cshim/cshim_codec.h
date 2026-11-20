@@ -66,6 +66,10 @@ enum {
  *            hand-written plan until it is generated.
  *   required 1 when the field always emits, even at its zero value
  *            (proto2 required). Never combined with repeated/explicit.
+ *   group    1 when the row frames a proto2 group with start/end tags
+ *            instead of a length prefix (Kind is KindMessage).
+ *   sub      registry index of a message-typed field's sub-table, -1 when
+ *            the row holds no submessage.
  */
 typedef struct cshim_row {
     uint32_t fnum;
@@ -79,7 +83,17 @@ typedef struct cshim_row {
     uint32_t elem;
     uint32_t explicit;
     uint32_t required;
+    uint32_t group;
+    int32_t sub;
 } cshim_row;
+
+/* One message table in the registry. The codec copies the rows at build
+ * time; resolve and accumulators are derived per table. */
+typedef struct cshim_table {
+    const cshim_row *rows;
+    size_t nrows;
+    size_t msg_size;
+} cshim_table;
 
 /* Status codes.  On success exactly one cgo call is made per operation; the
  * error path returns a code and never needs a second call to fetch text.
@@ -108,11 +122,10 @@ typedef struct cshim_dec_result {
     size_t str_bytes;
 } cshim_dec_result;
 
-/* Build a codec and copy the layout tables into C-owned memory.  The Go
- * slices may be freed by the caller after the call returns. */
-int cshim_codec_new(cshim_codec **out, const cshim_row *rows, size_t nrows,
-                 const cshim_row *subrows, size_t nsubrows, size_t base_size,
-                 size_t sub_size);
+/* Build a codec over a table registry. tables[root] is the root message;
+ * message rows address their sub-table through the row's sub index. */
+int cshim_codec_new(cshim_codec **out, const cshim_table *tables,
+                 size_t ntables, size_t root);
 
 void cshim_codec_free(cshim_codec *h);
 
