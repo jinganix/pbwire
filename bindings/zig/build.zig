@@ -44,6 +44,15 @@ pub fn build(b: *std.Build) void {
         .files = &core_sources,
         .flags = &.{ "-std=c99", "-Wall" },
     });
+    // The C binding's layout codec: the generated extern-struct mirror is
+    // walked in place by this file, so the binding links one implementation
+    // and adds no wire code of its own.
+    core_mod.addIncludePath(b.path("../c/runtime"));
+    core_mod.addCSourceFiles(.{
+        .root = b.path("../c/runtime"),
+        .files = &.{"pbw_struct.c"},
+        .flags = &.{ "-std=c99", "-Wall" },
+    });
     const lib = b.addLibrary(.{ .name = "pbwire", .root_module = core_mod });
 
     // The binding module itself: `const pbwire = @import("pbwire");`
@@ -54,6 +63,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     tc.addIncludePath(b.path("../../include"));
+    tc.addIncludePath(b.path("../c/runtime"));
     const pbwire_mod = b.createModule(.{
         .root_source_file = b.path("runtime/pbwire.zig"),
         .target = target,
@@ -63,6 +73,15 @@ pub fn build(b: *std.Build) void {
         },
     });
     pbwire_mod.addIncludePath(b.path("../../include"));
+    pbwire_mod.addIncludePath(b.path("../c/runtime"));
+
+    // The generated matrix3 model, for the shim row both bench harnesses time.
+    const model_mod = b.createModule(.{
+        .root_source_file = b.path("tests/gen/matrix3.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "pbwire", .module = pbwire_mod }},
+    });
 
     // zig build test
     const unit_mod = b.createModule(.{
@@ -112,7 +131,10 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
         .link_libc = true,
-        .imports = &.{.{ .name = "pbwire", .module = pbwire_mod }},
+        .imports = &.{
+            .{ .name = "pbwire", .module = pbwire_mod },
+            .{ .name = "pbwire_gen", .module = model_mod },
+        },
     });
     const bench = b.addExecutable(.{ .name = "bench", .root_module = bench_mod });
     bench.root_module.linkLibrary(lib);
@@ -169,6 +191,7 @@ pub fn build(b: *std.Build) void {
             .link_libc = true,
             .imports = &.{
                 .{ .name = "pbwire", .module = pbwire_mod },
+                .{ .name = "pbwire_gen", .module = model_mod },
                 .{ .name = "protobuf", .module = protobuf_mod },
                 .{ .name = "matrix3", .module = matrix3_mod },
             },

@@ -5,6 +5,8 @@
 const std = @import("std");
 const pbwire = @import("pbwire");
 
+const FieldPlan = pbwire.FieldPlan;
+
 // tutorial.Person.PhoneType
 pub const Tutorial_Person_PhoneType = enum(i32) {
     MOBILE = 0,
@@ -56,6 +58,30 @@ pub const Tutorial_Person_PhoneNumber = struct {
         return out;
     }
 };
+
+
+/// tutorial.Person.PhoneNumber as a flat native image: one C struct-codec call reads and writes it in
+/// place. Every offset below is asserted at comptime.
+pub const Person_PhoneNumberMirror = extern struct {
+    number: ?[*:0]const u8 = null,
+    type_: i32 = 0,
+    has_type: i32 = 0,
+
+    /// Field plan rows: slot offset and has/count/oneof offsets. The
+    /// comptime block below proves every offset.
+    pub const fields = [_]FieldPlan{
+        .{ .number = 1, .kind = .string, .required = true, .offset = 0 },
+        .{ .number = 2, .kind = .enumeration, .offset = 8, .has = 12 },
+    };
+    pub const plan = pbwire.InPlace(@This(), "tutorial.Person.PhoneNumber", &fields);
+};
+
+comptime {
+    std.debug.assert(@offsetOf(Person_PhoneNumberMirror, "number") == 0);
+    std.debug.assert(@offsetOf(Person_PhoneNumberMirror, "type_") == 8);
+    std.debug.assert(@offsetOf(Person_PhoneNumberMirror, "has_type") == 12);
+    std.debug.assert(@sizeOf(Person_PhoneNumberMirror) == 16);
+}
 
 // tutorial.Person
 pub const Tutorial_Person = struct {
@@ -133,6 +159,38 @@ pub const Tutorial_Person = struct {
     }
 };
 
+
+/// tutorial.Person as a flat native image: one C struct-codec call reads and writes it in
+/// place. Every offset below is asserted at comptime.
+pub const PersonMirror = extern struct {
+    name: ?[*:0]const u8 = null,
+    id: i32 = 0,
+    has_id: i32 = 0,
+    email: ?[*:0]const u8 = null,
+    phones: ?[*]Person_PhoneNumberMirror = null,
+    phones_count: usize = 0,
+
+    /// Field plan rows: slot offset and has/count/oneof offsets. The
+    /// comptime block below proves every offset.
+    pub const fields = [_]FieldPlan{
+        .{ .number = 1, .kind = .string, .required = true, .offset = 0 },
+        .{ .number = 2, .kind = .int32, .required = true, .offset = 8, .has = 12 },
+        .{ .number = 3, .kind = .string, .offset = 16 },
+        .{ .number = 4, .kind = .message, .repeated = true, .offset = 24, .count = 32, .child = pbwire.ChildPlan{ .full_name = "tutorial.Person.PhoneNumber", .fields = &Person_PhoneNumberMirror.fields, .size = @sizeOf(Person_PhoneNumberMirror) } },
+    };
+    pub const plan = pbwire.InPlace(@This(), "tutorial.Person", &fields);
+};
+
+comptime {
+    std.debug.assert(@offsetOf(PersonMirror, "name") == 0);
+    std.debug.assert(@offsetOf(PersonMirror, "id") == 8);
+    std.debug.assert(@offsetOf(PersonMirror, "has_id") == 12);
+    std.debug.assert(@offsetOf(PersonMirror, "email") == 16);
+    std.debug.assert(@offsetOf(PersonMirror, "phones") == 24);
+    std.debug.assert(@offsetOf(PersonMirror, "phones_count") == 32);
+    std.debug.assert(@sizeOf(PersonMirror) == 40);
+}
+
 // tutorial.AddressBook
 pub const Tutorial_AddressBook = struct {
     people: []const Tutorial_Person = &[_]Tutorial_Person{},
@@ -181,4 +239,25 @@ pub const Tutorial_AddressBook = struct {
         return out;
     }
 };
+
+
+/// tutorial.AddressBook as a flat native image: one C struct-codec call reads and writes it in
+/// place. Every offset below is asserted at comptime.
+pub const AddressBookMirror = extern struct {
+    people: ?[*]PersonMirror = null,
+    people_count: usize = 0,
+
+    /// Field plan rows: slot offset and has/count/oneof offsets. The
+    /// comptime block below proves every offset.
+    pub const fields = [_]FieldPlan{
+        .{ .number = 1, .kind = .message, .repeated = true, .offset = 0, .count = 8, .child = pbwire.ChildPlan{ .full_name = "tutorial.Person", .fields = &PersonMirror.fields, .size = @sizeOf(PersonMirror) } },
+    };
+    pub const plan = pbwire.InPlace(@This(), "tutorial.AddressBook", &fields);
+};
+
+comptime {
+    std.debug.assert(@offsetOf(AddressBookMirror, "people") == 0);
+    std.debug.assert(@offsetOf(AddressBookMirror, "people_count") == 8);
+    std.debug.assert(@sizeOf(AddressBookMirror) == 16);
+}
 

@@ -1205,3 +1205,25 @@ handle on encode, and above it on nothing, because both rows run the same C
 struct codec — the `tree` row is the core's own encoder, the shim row is the
 shared layout codec. Against the swift-protobuf baseline this is what decides
 the arm, and Stage 6 keeps or rejects a change per cell.
+
+## Provisional: Zig shim arm (plan 10)
+
+The flat shim is the generated `extern struct <Message>Mirror` plus one call
+into the C struct codec (`bindings/c/runtime/pbw_struct.c`, compiled into the
+binding's static archive by `bindings/zig/build.zig`), so no field crosses the
+boundary. Strings are NUL-terminated pointers, bytes the core's inline
+`pbw_bytes_t`, a sub-message a pointer to its child mirror, and a repeated
+field a pointer plus a count. Every slot offset is asserted with `@offsetOf` in
+a `comptime` block, so an emitter/ABI mismatch is a compile error, not bad
+bytes.
+
+`make zig-bench` medians (2026-11-20, all four arms plus Arwalk/zig-protobuf):
+`shim` encode 1954.2 / 1706.2 / 1148.5 / 1202.7 MB/s and decode 1254.6 /
+1057.7 / 680.7 / 751.0 MB/s at 136 / 174 / 2469 / 74913 B; the prebuilt-handle
+`tree` row is 2023.4 / 1971.8 / 1724.0 / 1736.2 encode and 1137.8 / 946.2 /
+693.3 / 741.8 decode. Against zig-protobuf the shim is above the baseline on
+every cell: encode 1.52x / 1.66x / 1.31x / 1.44x and decode 48.8x / 46.5x /
+9.55x / 2.26x.
+
+Stage 6 is a recorded no-op: no published Zig cell is below its baseline, so
+no A/B build was made and no change was attempted.

@@ -13,6 +13,7 @@
 //!   zig build -Doptimize=ReleaseFast -Dbaseline=true bench-baseline [-- <matrix3.desc>]
 const std = @import("std");
 const pbwire = @import("pbwire");
+const gen = @import("pbwire_gen");
 const matrix3 = @import("matrix3");
 const Base = matrix3.Scalars3;
 
@@ -97,6 +98,79 @@ fn fillBase(alloc: std.mem.Allocator, n: usize) !Base {
     return m;
 }
 
+const ShimFixture = struct {
+    image: gen.Scalars3Mirror,
+    inner: *gen.Inner3Mirror,
+    nums: []i32,
+    tags: []?[*:0]const u8,
+    inners: []gen.Inner3Mirror,
+    flags: []u8,
+
+    fn deinit(self: *ShimFixture, alloc: std.mem.Allocator) void {
+        alloc.destroy(self.inner);
+        alloc.free(self.nums);
+        alloc.free(self.tags);
+        alloc.free(self.inners);
+        alloc.free(self.flags);
+    }
+};
+
+fn fillShim(alloc: std.mem.Allocator, n: usize) !ShimFixture {
+    const inner = try alloc.create(gen.Inner3Mirror);
+    errdefer alloc.destroy(inner);
+    inner.* = .{ .name = "kid", .value = 42 };
+    const nums = try alloc.alloc(i32, n);
+    errdefer alloc.free(nums);
+    const tags = try alloc.alloc(?[*:0]const u8, n);
+    errdefer alloc.free(tags);
+    const inners = try alloc.alloc(gen.Inner3Mirror, n);
+    errdefer alloc.free(inners);
+    const flags = try alloc.alloc(u8, n);
+    errdefer alloc.free(flags);
+    for (0..n) |i| {
+        nums[i] = @as(i32, @intCast(i)) - 3;
+        tags[i] = "tag";
+        inners[i] = .{ .name = "grandkid", .value = @as(i32, @intCast(i)) + 1 };
+        flags[i] = if (i % 2 == 0) 1 else 0;
+    }
+    return .{
+        .image = .{
+            .i32 = std.math.minInt(i32),
+            .i64 = std.math.maxInt(i64),
+            .u32 = std.math.maxInt(u32),
+            .u64 = std.math.maxInt(u64),
+            .s32 = std.math.minInt(i32),
+            .s64 = std.math.minInt(i64),
+            .fx32 = 0xdeadbeef,
+            .fx64 = 72623859790382856,
+            .sfx32 = std.math.minInt(i32),
+            .sfx64 = std.math.minInt(i64),
+            .f32 = std.math.inf(f32),
+            .f64 = -123456.789,
+            .flag = 1,
+            .str = "hello",
+            .color = 2,
+            .inner = inner,
+            .nums = if (n == 0) null else nums.ptr,
+            .nums_count = n,
+            .tags = if (n == 0) null else tags.ptr,
+            .tags_count = n,
+            .inners = if (n == 0) null else inners.ptr,
+            .inners_count = n,
+            .opt_i32 = -7,
+            .has_opt_i32 = 1,
+            .opt_str = "opt",
+            .flags = if (n == 0) null else flags.ptr,
+            .flags_count = n,
+        },
+        .inner = inner,
+        .nums = nums,
+        .tags = tags,
+        .inners = inners,
+        .flags = flags,
+    };
+}
+
 fn nanos(io: std.Io) i96 {
     return std.Io.Clock.now(.awake, io).nanoseconds;
 }
@@ -121,7 +195,7 @@ fn run(io: std.Io, op: anytype, iterations: usize) f64 {
     return elapsed / @as(f64, @floatFromInt(iterations));
 }
 
-fn runCase(io: std.Io, alloc: std.mem.Allocator, ty: *const pbwire.MessageType, inner_ty: *const pbwire.MessageType, tier: usize) !void {
+fn runCase(io: std.Io, alloc: std.mem.Allocator, ty: *const pbwire.MessageType, inner_ty: *const pbwire.MessageType, shim_plan: *gen.Scalars3Mirror.plan, tier: usize) !void {
     const label = CASES[tier];
     const n = REPEATS[tier];
 
@@ -150,6 +224,28 @@ fn runCase(io: std.Io, alloc: std.mem.Allocator, ty: *const pbwire.MessageType, 
     try bmsg.encode(&bw, bscratch.allocator());
     if (bw.end != WANT[tier] or !std.mem.eql(u8, buf[0..bw.end], reference)) {
         fail(label, "baseline wrote {d} bytes, expected {d} identical bytes", .{ bw.end, WANT[tier] });
+        return;
+    }
+
+    // Shim arm: the generated mirror, one C call per op.
+    var shim = try fillShim(alloc, n);
+    defer shim.deinit(alloc);
+    const shim_wire = try shim_plan.encodeInPlace(&shim.image);
+    if (shim_wire.len != reference.len or !std.mem.eql(u8, shim_wire, reference)) {
+        fail(label, "pbwire-zig-shim wrote {d} bytes, expected {d} identical bytes", .{ shim_wire.len, reference.len });
+        return;
+    }
+    var shim_back = std.mem.zeroes(gen.Scalars3Mirror);
+    try shim_plan.decodeInPlace(reference, &shim_back);
+    const shim_again = try shim_plan.encodeInPlace(&shim_back);
+    if (!std.mem.eql(u8, shim_again, reference)) {
+        fail(label, "pbwire-zig-shim decode differs", .{});
+        return;
+    }
+    if (shim_back.nums_count != n or shim_back.inners_count != n or shim_back.tags_count != n or
+        shim_back.inner == null or !std.mem.eql(u8, std.mem.span(shim_back.inner.?.name orelse ""), "kid"))
+    {
+        fail(label, "pbwire-zig-shim fields differ", .{});
         return;
     }
 
@@ -184,6 +280,9 @@ fn runCase(io: std.Io, alloc: std.mem.Allocator, ty: *const pbwire.MessageType, 
         var bm: *const Base = undefined;
         var sa: *std.heap.ArenaAllocator = undefined;
         var ga: std.mem.Allocator = undefined;
+        var plan: *gen.Scalars3Mirror.plan = undefined;
+        var image: *const gen.Scalars3Mirror = undefined;
+        var sback: *gen.Scalars3Mirror = undefined;
         fn encPb() void {
             const out = pm.encodeInto(b) catch unreachable;
             std.mem.doNotOptimizeAway(out);
@@ -205,6 +304,14 @@ fn runCase(io: std.Io, alloc: std.mem.Allocator, ty: *const pbwire.MessageType, 
             defer d.deinit(ga);
             std.mem.doNotOptimizeAway(&d);
         }
+        fn encShim() void {
+            const out = plan.encodeInPlace(image) catch unreachable;
+            std.mem.doNotOptimizeAway(out);
+        }
+        fn decShim() void {
+            plan.decodeInPlace(r, sback) catch unreachable;
+            std.mem.doNotOptimizeAway(sback);
+        }
     };
     S.pm = &pmsg;
     S.t = ty;
@@ -213,6 +320,9 @@ fn runCase(io: std.Io, alloc: std.mem.Allocator, ty: *const pbwire.MessageType, 
     S.bm = &bmsg;
     S.sa = &bscratch;
     S.ga = alloc;
+    S.plan = shim_plan;
+    S.image = &shim.image;
+    S.sback = &shim_back;
 
     const penc = calibrate(io, S.encPb, iterations);
     var penc_best: f64 = std.math.floatMax(f64);
@@ -226,15 +336,23 @@ fn runCase(io: std.Io, alloc: std.mem.Allocator, ty: *const pbwire.MessageType, 
     const bdec = calibrate(io, S.decBase, iterations);
     var bdec_best: f64 = std.math.floatMax(f64);
     for (0..PASSES) |_| bdec_best = @min(bdec_best, run(io, S.decBase, bdec));
+    const senc = calibrate(io, S.encShim, iterations);
+    var senc_best: f64 = std.math.floatMax(f64);
+    for (0..PASSES) |_| senc_best = @min(senc_best, run(io, S.encShim, senc));
+    const sdec = calibrate(io, S.decShim, iterations);
+    var sdec_best: f64 = std.math.floatMax(f64);
+    for (0..PASSES) |_| sdec_best = @min(sdec_best, run(io, S.decShim, sdec));
 
     const bytes_f: f64 = @floatFromInt(reference.len);
     std.debug.print("{s}: {d} bytes, {d} iterations (repeat field x{d})\n", .{ label, reference.len, penc, n });
     std.debug.print("  impl      op           ns/op       MB/s\n", .{});
-    std.debug.print("  pbwire-zig encode      {d:>8.1}    {d:>8.1}\n", .{ penc_best, bytes_f / penc_best * 1000.0 });
-    std.debug.print("  pbwire-zig decode      {d:>8.1}    {d:>8.1}\n", .{ pdec_best, bytes_f / pdec_best * 1000.0 });
+    std.debug.print("  pbwire-zig-tree encode      {d:>8.1}    {d:>8.1}\n", .{ penc_best, bytes_f / penc_best * 1000.0 });
+    std.debug.print("  pbwire-zig-tree decode      {d:>8.1}    {d:>8.1}\n", .{ pdec_best, bytes_f / pdec_best * 1000.0 });
+    std.debug.print("  pbwire-zig-shim encode      {d:>8.1}    {d:>8.1}\n", .{ senc_best, bytes_f / senc_best * 1000.0 });
+    std.debug.print("  pbwire-zig-shim decode      {d:>8.1}    {d:>8.1}\n", .{ sdec_best, bytes_f / sdec_best * 1000.0 });
     std.debug.print("  base      encode      {d:>8.1}    {d:>8.1}\n", .{ benc_best, bytes_f / benc_best * 1000.0 });
     std.debug.print("  base      decode      {d:>8.1}    {d:>8.1}\n", .{ bdec_best, bytes_f / bdec_best * 1000.0 });
-    std.debug.print("  -- vs baseline: encode {d:.2}x, decode {d:.2}x\n", .{ benc_best / penc_best, bdec_best / pdec_best });
+    std.debug.print("  -- vs baseline: tree encode {d:.2}x, decode {d:.2}x; shim encode {d:.2}x, decode {d:.2}x\n", .{ benc_best / penc_best, bdec_best / pdec_best, benc_best / senc_best, bdec_best / sdec_best });
 }
 
 pub fn main(init: std.process.Init.Minimal) !void {
@@ -253,12 +371,14 @@ pub fn main(init: std.process.Init.Minimal) !void {
     defer schema.deinit();
     const ty = try schema.messageType("structtest.Scalars3");
     const inner_ty = try schema.messageType("structtest.Inner3");
+    var shim_plan = try gen.Scalars3Mirror.plan.init(alloc, &schema);
+    defer shim_plan.deinit();
 
     var threaded: std.Io.Threaded = .init(alloc, .{});
     defer threaded.deinit();
     const io = threaded.io();
 
-    for (0..CASES.len) |tier| try runCase(io, alloc, &ty, &inner_ty, tier);
+    for (0..CASES.len) |tier| try runCase(io, alloc, &ty, &inner_ty, &shim_plan, tier);
     if (failures != 0) {
         std.debug.print("{d} check(s) failed\n", .{failures});
         std.process.exit(1);
