@@ -413,7 +413,10 @@ type scratchOneofN struct{ N int32 }
 
 type scratchOneofT struct{ T string }
 
-type scratchOneofInner struct{ V int32 }
+type scratchOneofInner struct {
+	V int32
+	W int32
+}
 
 type scratchOneofW struct{ In *scratchOneofInner }
 
@@ -449,6 +452,7 @@ func scratchOneofDescriptor(t *testing.T) protoreflect.MessageDescriptor {
 				Name: str("Inner"),
 				Field: []*descriptorpb.FieldDescriptorProto{
 					{Name: str("v"), Number: i32(1), Label: descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL.Enum(), Type: descriptorpb.FieldDescriptorProto_TYPE_INT32.Enum()},
+					{Name: str("w"), Number: i32(2), Label: descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL.Enum(), Type: descriptorpb.FieldDescriptorProto_TYPE_INT32.Enum()},
 				},
 			},
 			{
@@ -480,6 +484,7 @@ func scratchOneofRows() []shimlayout.Msg {
 		}},
 		{Full: "scratch4.Inner", Size: unsafe.Sizeof(scratchOneofInner{}), Rows: []shimlayout.Row{
 			{Fnum: 1, Kind: shimlayout.KindInt32, Wire: shimlayout.WireVarint, Offset: uint32(unsafe.Offsetof(scratchOneofInner{}.V)), Sub: -1},
+			{Fnum: 2, Kind: shimlayout.KindInt32, Wire: shimlayout.WireVarint, Offset: uint32(unsafe.Offsetof(scratchOneofInner{}.W)), Sub: -1},
 		}},
 	}
 }
@@ -519,7 +524,10 @@ func fixupOneof(t *testing.T, c *Codec, m *scratchOneof, wire []byte) {
 		if ptr == nil {
 			t.Fatal("message member staged nil submessage")
 		}
-		m.Kind = &scratchOneofW{In: &scratchOneofInner{V: *(*int32)(ptr)}}
+		m.Kind = &scratchOneofW{In: &scratchOneofInner{
+			V: *(*int32)(ptr),
+			W: *(*int32)(unsafe.Add(ptr, 4)),
+		}}
 	default:
 		t.Fatalf("unexpected staged fnum %d", fnum)
 	}
@@ -573,6 +581,7 @@ func scratchMapDescriptor(t *testing.T) protoreflect.MessageDescriptor {
 				Name: str("Inner"),
 				Field: []*descriptorpb.FieldDescriptorProto{
 					{Name: str("v"), Number: i32(1), Label: descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL.Enum(), Type: descriptorpb.FieldDescriptorProto_TYPE_INT32.Enum()},
+					{Name: str("w"), Number: i32(2), Label: descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL.Enum(), Type: descriptorpb.FieldDescriptorProto_TYPE_INT32.Enum()},
 				},
 			},
 			{
@@ -598,6 +607,43 @@ func scratchMapDescriptor(t *testing.T) protoreflect.MessageDescriptor {
 		t.Fatal(err)
 	}
 	return file.Messages().ByName("S")
+}
+
+// Split message occurrences merge into the staged submessage; a different
+// member arriving later still replaces the slot.
+func TestCshimSplitOneofMerge(t *testing.T) {
+	reg := scratchOneofRows()
+	c, err := NewCodecFromLayout(reg, "scratch4.S")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	w1 := testEncode(t, c, &scratchOneof{Name: "n", Kind: &scratchOneofW{In: &scratchOneofInner{V: 1}}})
+	w2 := testEncode(t, c, &scratchOneof{Name: "n", Kind: &scratchOneofW{In: &scratchOneofInner{W: 2}}})
+	both := append(append([]byte{}, w1...), w2...)
+	back := &scratchOneof{}
+	testDecode(t, c, back, both)
+	fixupOneof(t, c, back, both)
+	if !reflect.DeepEqual(back.Kind, &scratchOneofW{In: &scratchOneofInner{V: 1, W: 2}}) {
+		t.Fatalf("split merge gave %#v", back.Kind)
+	}
+	// Re-encoding the merged struct is the canonical single occurrence,
+	// not the split input.
+	wantMerged := testEncode(t, c, &scratchOneof{Name: "n", Kind: &scratchOneofW{In: &scratchOneofInner{V: 1, W: 2}}})
+	if again := testEncode(t, c, back); !bytes.Equal(again, wantMerged) {
+		t.Fatalf("merged re-encode differs: %x vs %x", again, wantMerged)
+	}
+
+	// Different member later: replace, not merge.
+	wt := testEncode(t, c, &scratchOneof{Name: "n", Kind: &scratchOneofT{T: "hi"}})
+	mix := append(append([]byte{}, w1...), wt...)
+	backMix := &scratchOneof{}
+	testDecode(t, c, backMix, mix)
+	fixupOneof(t, c, backMix, mix)
+	if !reflect.DeepEqual(backMix.Kind, &scratchOneofT{T: "hi"}) {
+		t.Fatalf("replace gave %#v", backMix.Kind)
+	}
 }
 
 func TestCshimCodecMap(t *testing.T) {
