@@ -230,6 +230,11 @@ type scratchGrp struct {
 
 type scratchRep struct{ V int32 }
 
+type scratchSubRep struct {
+	N    int32
+	Tags []string
+}
+
 type scratchG struct {
 	Grp *scratchGrp
 	Rep []*scratchRep
@@ -657,6 +662,69 @@ func TestCshimSplitOneofMerge(t *testing.T) {
 	fixupOneof(t, c, backMix, mix)
 	if !reflect.DeepEqual(backMix.Kind, &scratchOneofT{T: "hi"}) {
 		t.Fatalf("replace gave %#v", backMix.Kind)
+	}
+}
+
+// A sub table cannot carry repeated rows: decode publishes repeat buffers
+// for the root table only, so a nested repeat would silently decode nothing.
+// The root itself may repeat, and a table outside the root's closure is
+// never walked, so its shape is not checked.
+func TestCshimSubRepeatedRules(t *testing.T) {
+	var r scratchG
+	var sub scratchSubRep
+	reg := []shimlayout.Msg{
+		{Full: "scratch7.R", Size: unsafe.Sizeof(r), Rows: []shimlayout.Row{
+			{Fnum: 1, Kind: shimlayout.KindMessage, Wire: shimlayout.WireLen, Offset: uint32(unsafe.Offsetof(r.Grp)), Sub: 1},
+		}},
+		{Full: "scratch7.S", Size: unsafe.Sizeof(sub), Rows: []shimlayout.Row{
+			{Fnum: 1, Kind: shimlayout.KindString, Wire: shimlayout.WireLen, Repeated: true, Offset: uint32(unsafe.Offsetof(sub.Tags)), Sub: -1},
+		}},
+	}
+	if _, err := NewCodecFromLayout(reg, "scratch7.R"); err == nil {
+		t.Fatal("a repeated row in a sub table must be refused")
+	}
+	// The same table is fine as the root: the rule tracks the one table decode
+	// publishes its repeat buffers for, not the row shape.
+	c2, err := NewCodecFromLayout(reg, "scratch7.S")
+	if err != nil {
+		t.Fatalf("the root may repeat: %v", err)
+	}
+	c2.Close()
+
+	var m scratchMap
+	var unused scratchRep
+	accepted := []shimlayout.Msg{
+		{Full: "scratch8.R", Size: unsafe.Sizeof(m), Rows: []shimlayout.Row{
+			{Fnum: 1, Kind: shimlayout.KindString, Wire: shimlayout.WireLen, Offset: uint32(unsafe.Offsetof(m.Name)), Sub: -1},
+		}},
+		{Full: "scratch8.Unused", Size: unsafe.Sizeof(unused), Rows: []shimlayout.Row{
+			{Fnum: 1, Kind: shimlayout.KindInt32, Wire: shimlayout.WireVarint, Repeated: true, Offset: uint32(unsafe.Offsetof(unused.V)), Sub: -1},
+		}},
+	}
+	c, err := NewCodecFromLayout(accepted, "scratch8.R")
+	if err != nil {
+		t.Fatalf("an unreachable table must not be validated: %v", err)
+	}
+	defer c.Close()
+	if got := testEncode(t, c, &scratchMap{Name: "n"}); !bytes.Equal(got, []byte{0x0a, 0x01, 'n'}) {
+		t.Fatalf("encode differs: %x", got)
+	}
+}
+
+// A row naming a message from another file cannot be walked: the codec's
+// registry is this file's messages, so New must refuse the row instead of
+// indexing the table array with Sub -1. The Go emitter keeps such a file on
+// the pure-Go engine (TestGoCshimForeignFieldFallsBack), so only a
+// hand-written layout reaches this guard.
+func TestCshimForeignRowRefused(t *testing.T) {
+	var s scratchG
+	reg := []shimlayout.Msg{
+		{Full: "scratch6.S", Size: unsafe.Sizeof(s), Rows: []shimlayout.Row{
+			{Fnum: 1, Kind: shimlayout.KindMessage, Wire: shimlayout.WireLen, Offset: uint32(unsafe.Offsetof(s.Grp)), Sub: -1, Foreign: true, FType: "other.Leaf"},
+		}},
+	}
+	if _, err := NewCodecFromLayout(reg, "scratch6.S"); err == nil {
+		t.Fatal("a foreign row must be refused at New time")
 	}
 }
 

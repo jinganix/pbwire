@@ -5,7 +5,7 @@ package codec_test
 import (
 	"testing"
 
-	"pbwire/pbench/dyngo/codec"
+	"pbwire/codec"
 	"pbwire/tests/gen/matrix3"
 )
 

@@ -10,7 +10,7 @@ import (
 	"path/filepath"
 	"runtime"
 
-	"pbwire/pbench/dyngo/codec"
+	"pbwire/codec"
 	"pbwire/tests/gen/matrix3"
 )
 
@@ -22,7 +22,7 @@ type Codec struct {
 
 func descriptorPath() string {
 	_, file, _, _ := runtime.Caller(0)
-	return filepath.Join(filepath.Dir(file), "codec", "testdata", "matrix3.desc")
+	return filepath.Join(filepath.Dir(file), "..", "..", "codec", "testdata", "matrix3.desc")
 }
 
 // New loads the pinned descriptor set and resolves the message type.

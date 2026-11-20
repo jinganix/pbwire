@@ -1,7 +1,7 @@
-// Package codec is the production pure-Go protobuf codec for generated
-// struct models. It adapts the pbench V3 probe into a schema-driven engine
-// the codegen Go emitter programs against: wire primitives here, the
-// descriptor-set plan in plan.go, and the Encoder/Decoder driver in codec.go.
+// Package codec is the shipped pure-Go codec for generated struct models: the
+// schema-driven engine the Go emitter programs against, grown out of the V3
+// probe. Wire primitives live here, the descriptor-set plan in plan.go, and
+// the Encoder/Decoder driver in codec.go.
 //
 // The codec never knows any Go struct layout. Generated Marshal/Unmarshal
 // code is straight-line field code that pushes values through Encoder and

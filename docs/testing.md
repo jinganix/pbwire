@@ -206,7 +206,7 @@ available, the same four benchmark tiers — see
 make python-test ruby-test node-test objc-test java-test kotlin-test php-test dart-test rust-test csharp-test \
      lua-test swift-test scala-test elixir-test zig-test fsharp-test clojure-test julia-test r-test
 make erlang-test                 # EUnit + NIF C tests
-make go-test                     # cgo dynamic binding (parity + hot-swap)
+make go-test                     # thin models + codec engine (parity, generated-model compat)
 make test-cpp                    # C++ binding self-check
 make codegen-test                  # the generated model test of every binding
 make conformance-python          # official suite through the Python binding

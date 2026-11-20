@@ -5,7 +5,7 @@
 package maptest
 
 import (
-	"pbwire/pbench/dyngo/codec"
+	"pbwire/codec"
 	"unsafe"
 )
 

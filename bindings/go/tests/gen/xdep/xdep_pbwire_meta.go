@@ -5,7 +5,7 @@
 package xdep
 
 import (
-	"pbwire/pbench/dyngo/codec"
+	"pbwire/codec"
 	"unsafe"
 )
 
