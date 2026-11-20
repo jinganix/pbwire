@@ -989,7 +989,12 @@ ceiling is the pbench table). xlarge = 74913 B:
 
 Clojure's `tree` row is the persistent-map API over the generated model's
 map fns (the binding's own data tree); its `core` row is the mutable-message
-fast path with no map walk, per the plan's review focus. Materialization:
+fast path with no map walk, per the plan's review focus. This first run was
+taken under heavy host load (load average 16-28, another checkout building),
+so its Java absolute numbers are ~1.6x low; Stage 5 re-ran all four on the
+recorder (`results/bench-{java,kotlin,scala,clojure}-20261120T17*.json`) and
+those are the run whose rows `BENCHMARKS.md` publishes. The ordering and the
+`core`-slower conclusion did not change. Materialization:
 the `tree` rows decode lazily (message/string/bytes fields parse on first
 access) and the `core` rows decode eagerly into the typed model, so the
 `core` decode column pays the materialization the `tree` column skips.

@@ -172,22 +172,22 @@ own README. Dart ran once `dart pub global activate protoc_plugin` provided
 | Python (CPython ext) | `make python-bench` (`bindings/python/benchmarks/bench.py`) | `google.protobuf` (upb C extension) on the same `matrix3.proto` | all 4 | 6.87x ✅ / 1.19x ✅ |
 | C++ | same engine as C (`bindings/cpp` mirrors the C structs; `make bench-c` is the harness) | `protoc` C++ generated from the same `matrix3.proto` | all 4 | 1.33x ✅ / 2.00x ✅ |
 | Go (thin model, shim runtime) | `make go-bench` (`bindings/go/benchmarks`) | `protobuf-go` generated code from the same `matrix3.proto` | all 4 | 1.88x ✅ / 1.46x ✅ |
-| Java (pure-Java codec) | `make java-bench` (`bindings/java/benchmarks`) | `protobuf-java` generated code from the same `matrix3.proto` | all 4 | 1.13x ✅ / 1.95x ✅ (0.77x at 136 B) |
+| Java (pure-Java codec) | `make java-bench` (`bindings/java/benchmarks`) | `protobuf-java` generated code from the same `matrix3.proto` | all 4 | 1.26x ✅ / 1.76x ✅ `tree` (0.71x at 136 B; `core` generated model 0.75x / 0.80x) |
 | Node (N-API addon) | `make node-bench` (`bindings/node/benchmarks`) | [protobufjs](https://www.npmjs.com/package/protobufjs) (fastest) + `google-protobuf` (jspb) from the same `matrix3.proto` | all 4 | 3.18x ✅ / 3.17x ✅ |
 | Ruby (C extension) | `make ruby-bench` (`bindings/ruby/benchmarks`) | the `google-protobuf` gem (C extension) | all 4 | 1.34x ✅ / 1.67x ✅ |
 | Objective-C (ARC) | `make objc-bench` (`bindings/objc/benchmarks`) | the `protobuf` ObjC runtime + generated code from the same `matrix3.proto` | all 4 | 1.72x ✅ / 1.18x ✅ |
-| Kotlin (pure-Java codec + DSL) | `make kotlin-bench` (`bindings/kotlin/benchmarks`) | `protoc --kotlin_out` over `protobuf-java`, same `matrix3.proto` | all 4 | 1.13x ✅ / 1.68x ✅ (0.83x at 136 B) |
+| Kotlin (pure-Java codec + DSL) | `make kotlin-bench` (`bindings/kotlin/benchmarks`) | `protoc --kotlin_out` over `protobuf-java`, same `matrix3.proto` | all 4 | 1.11x ✅ / 1.77x ✅ `tree` (0.71x at 136 B; `core` 0.79x / 0.76x) |
 | PHP (`ext-ffi` + C extension) | `make php-bench` (`bindings/php/benchmarks`) | the official PHP runtime (`protobuf/php/src`): C extension (fastest) + pure-PHP | all 4 | 1.22x / 1.34x vs C ext ✅ (394x / 154x vs pure) |
 | Dart (`dart:ffi`) | `make dart-bench` (`bindings/dart/benchmarks`) | the `protobuf` Dart package + generated code | all 4 | 13.69x ✅ / 4.38x ✅ |
 | Rust (static link) | `make rust-bench` (`bindings/rust/benchmarks`) | prost (fastest) + rust-protobuf 3.x generated code | all 4 | 1.13x ✅ / 1.86x ✅ |
 | C# (P/Invoke) | `make csharp-bench` (`bindings/csharp/benchmarks`) | Google.Protobuf C# generated code (fastest) + protobuf-net | all 4 | 3.15x ✅ / 1.48x ✅ |
 | Lua (C module, tables) | `make lua-bench` (`bindings/lua/benchmarks`) | `lua-protobuf` 0.6.0 | all 4 | 1.09x ✅ / 1.42x ✅ (8.93x via builder encode — data already in pbwire) |
 | Swift (SwiftPM, static link) | `make swift-bench` (`bindings/swift/benchmarks`) | `apple/swift-protobuf` 1.39.0 generated code from the same `matrix3.proto` | all 4 | 5.43x ✅ / 2.57x ✅ |
-| Scala (Java runtime + DSL) | `make scala-bench` (`bindings/scala/benchmarks`) | ScalaPB 0.11.18 generated code from the same `matrix3.proto` | all 4 | 1.19x ✅ / 1.21x ✅ (0.98x at 174 B decode) |
+| Scala (Java runtime + DSL) | `make scala-bench` (`bindings/scala/benchmarks`) | ScalaPB 0.11.18 generated code from the same `matrix3.proto` | all 4 | 1.45x ✅ / 1.37x ✅ `tree` (`core` case class 0.33x / 0.30x) |
 | Elixir (NIF over the shared core) | `make elixir-bench` (`bindings/elixir/benchmarks`) | `elixir-protobuf` 0.17.1 structs from the same `matrix3.proto` | all 4 | 2.56x ✅ / 1.90x ✅ |
 | Zig (static link) | `make zig-bench` (`bindings/zig/benchmarks`, `-Doptimize=ReleaseFast`) | Arwalk/zig-protobuf 7.0.0 generated code from the same `matrix3.proto` | all 4 | 1.87x ✅ / 2.65x ✅ |
 | F# (facade over the C# runtime) | `make fsharp-bench` (`bindings/fsharp/benchmarks`) | Google.Protobuf C# generated code from the same `matrix3.proto` | all 4 | 3.19x ✅ / 1.42x ✅ |
-| Clojure (Java runtime + interop) | `make clojure-bench` (`bindings/clojure/benchmarks`) | `protobuf-java` generated code from the same `matrix3.proto` | all 4 | 1.12x ✅ / 1.66x ✅ (0.74x at 136 B) |
+| Clojure (Java runtime + interop) | `make clojure-bench` (`bindings/clojure/benchmarks`) | `protobuf-java` generated code from the same `matrix3.proto` | all 4 | 1.26x ✅ / 1.70x ✅ `core` (0.68x at 136 B; `tree` map API 0.01x) |
 | Julia (`ccall` FFI) | `make julia-bench` (`bindings/julia/benchmarks`) | JuliaIO/ProtoBuf.jl 1.3.0 generated code from the same `matrix3.proto` | all 4 | 133.5x ✅ / 1.06x ✅ (0.89x at 136 B plain, 0.98x with a workspace) |
 | R (C extension, named lists) | `make r-bench` (`bindings/r/benchmarks`) | RProtoBuf 0.4.28 on the same `matrix3.proto` | all 4 | 49.89x ✅ / 50.28x ✅ |
 
@@ -208,10 +208,10 @@ timer.
 | Objective-C | two mechanisms |
 | Erlang | two mechanisms; a second pure-BEAM codec would measure our code against gpb, not a decision |
 | Elixir | two mechanisms; `elixir-protobuf` is that baseline |
-| Java | third arm exists; only the native-object row is missing |
-| Kotlin | third arm exists; only the native-object row is missing |
-| Scala | third arm exists; only the native-object row is missing |
-| Clojure | third arm exists; only the native-object row is missing |
+| Java | three arms: `tree` (shipped `DMsg`), `core` (generated model, slower), `shim` (`pbench/jni` ceiling) |
+| Kotlin | three arms: reuses Java's `tree` and `core`; `shim` is the JNI ceiling |
+| Scala | three arms: `tree` shipped, `core` the generated case class (slower), `shim` the JNI ceiling |
+| Clojure | three arms: `core` (mutable-message fast path, shipped headline), `tree` (persistent-map API), `shim` the JNI ceiling |
 | Go | all three exist; row naming only |
 | C# | three |
 | F# | three, no separate F# port |
@@ -233,12 +233,13 @@ in the 2026-11-14 run — the same tree in the Linux container still shows Java
 at 0.96x, i.e. that cell is a tie inside the run-to-run band, not a win);
 bytes are identical everywhere. Core plain 169 B encode left this list on
 2026-11-15 (0.96x -> 1.10x) once the writer cached its base pointer. The
-sub-1.0x cells that remain are boundary floors: Java/Kotlin/Clojure small-tier
-encode at 0.77x/0.83x/0.74x (a generated writer knows its tags, the dynamic
-tree walk derives them), Julia 136 B plain decode at 0.89x (the cell is one
+sub-1.0x cells that remain are boundary floors: Java/Kotlin small-tier `tree`
+encode at 0.71x/0.71x and Clojure's 136 B `core` encode at 0.68x (a generated
+writer knows its tags, the dynamic tree walk derives them), Julia 136 B plain
+decode at 0.89x (the cell is one
 `malloc`/`free` arena pair plus a `ccall`: 126.1 ns of C decode + 7.5 ns of
 wrapper against a 118.8 ns baseline, and the binding's `decode_in` over a
-reusable context is 0.98x), and Scala 174 B decode at 0.98x (the baseline
+reusable context is 0.98x), and Scala 174 B `tree` decode at 1.00x (the baseline
 moved between runs, not the codec). Each is inside the run-to-run band of its
 own baseline. Above the line after the 2026-11-15 passes: Python 136 B decode
 (1.02x), Kotlin 174 B encode (1.13x) and Julia's workspace decode rows.
@@ -913,16 +914,30 @@ Standard cases), which makes its xlarge tier a memcpy.
 
 ![Java vs protobuf-java — MB/s by tier](docs/charts/bench-java-vs-protobuf-java.svg)
 
-| payload | op | pbwire-java (MB/s, x protobuf-java) | protobuf-java (MB/s) |
-|---|---|---|---|
-| 136 B | encode | 1666.8 (0.77x ❌) | 2164.0 |
-| 136 B | decode | 888.4 (1.48x ✅) | 601.5 |
-| 174 B | encode | 1427.8 (1.23x ✅) | 1165.2 |
-| 174 B | decode | 739.9 (1.36x ✅) | 542.3 |
-| 2469 B | encode | 920.7 (1.11x ✅) | 827.9 |
-| 2469 B | decode | 707.8 (1.73x ✅) | 408.0 |
-| 74913 B | encode | 984.2 (1.13x ✅) | 868.9 |
-| 74913 B | decode | 747.4 (1.95x ✅) | 382.7 |
+| payload | op | pbwire-java-tree (MB/s, x protobuf-java) | pbwire-java-core (MB/s) | protobuf-java (MB/s) |
+|---|---|---|---|---|
+| 136 B | encode | 1585.4 (0.71x ❌) | 607.8 | 2235.7 |
+| 136 B | decode | 852.6 (1.38x ✅) | 321.7 | 618.8 |
+| 174 B | encode | 1226.6 (1.17x ✅) | 583.2 | 1051.0 |
+| 174 B | decode | 632.7 (1.16x ✅) | 289.2 | 545.5 |
+| 2469 B | encode | 915.2 (1.12x ✅) | 584.3 | 819.8 |
+| 2469 B | decode | 708.0 (1.68x ✅) | 277.6 | 420.7 |
+| 74913 B | encode | 1120.1 (1.26x ✅) | 671.6 | 891.6 |
+| 74913 B | decode | 729.1 (1.76x ✅) | 331.7 | 413.7 |
+
+The two pbwire columns are the arms: `tree` is the prebuilt `GenericCodec`/`DMsg`
+tree, `core` is the committed generated model (`Structtest_Scalars3`) used as the
+native object (`toByteArray()`/`parseFrom()`). The `core` row is the shipped
+typed path and it loses at every tier here (0.27x at 136 B, 0.75x at 74 KB
+encode, 0.52x-0.80x decode): the generated table walks one `FieldMeta` lambda
+per field and its decode builds the eager typed tree, against a generated writer
+that knows every tag and a decode that materializes nothing until read. The
+`tree` row therefore stays Java's headline, and the model stays the ergonomic
+path. The `tree` decode column is lazy (message/string/bytes fields parse on
+first access); the `core` decode column is eager, so it carries the
+materialization the `tree` column skips. `shim` for the JVM four:
+`bindings/java/pbench/` (`jni/`, one crossing, no tree translation -- a ceiling,
+not a binding cost).
 
 The binding is a pure-Java codec (`bindings/java/runtime`): the descriptor
 set is parsed by its own `Proto` reader, values live in a columnar `DMsg`
@@ -935,7 +950,7 @@ write each with a single capacity check, backed by `sun.misc.Unsafe` stores
 with no per-byte bounds checks -- the same trick the official encoder uses --
 with a checked fallback when `Unsafe` is missing or the platform is
 big-endian.
-Only the 136 B encode still loses: generated `protobuf-java` writes that message
+Only the 136 B `tree` encode still loses: generated `protobuf-java` writes that message
 as one straight-line block of known tags and values (~58 ns), while the dynamic
 codec pays a presence gate, a type dispatch and tag loads per field (~84 ns
 including the `byte[]` copy). That floor is structural, not tuning: the
@@ -943,7 +958,7 @@ per-field work left -- loads, one `switch`, one call -- is what a generated
 writer avoids by knowing every field at compile time. From 174 B up the lazy
 decode wins every cell and encode wins through 2.5 KB (1.04x there), where
 `protobuf-java`'s size pass before writing starts to cost more than the codec's
-dispatch does. At the 74 KB tier it leads too (1.13x in the 2026-11-15 run):
+dispatch does. At the 74 KB tier it leads too (1.26x in the 2026-11-20 run):
 `protobuf-java`'s size pass is amortised there and its own per-field writer
 is left paying a memcpy the codec's single result copy does not.
 
@@ -1077,25 +1092,32 @@ into its own buffer, which `NSData` then takes over.
 
 ![Kotlin vs protoc --kotlin_out over protobuf-java — MB/s by tier](docs/charts/bench-kotlin-vs-protoc-kotlin-out-over-protobuf-java.svg)
 
-| payload | op | pbwire-kotlin (MB/s, x protobuf-kotlin) | protobuf-kotlin (MB/s) |
-|---|---|---|---|
-| 136 B | encode | 1640.7 (0.83x ❌) | 1984.0 |
-| 136 B | decode | 858.1 (1.46x ✅) | 587.7 |
-| 174 B | encode | 1425.1 (1.15x ✅) | 1237.0 |
-| 174 B | decode | 712.3 (1.32x ✅) | 540.2 |
-| 2469 B | encode | 929.3 (1.15x ✅) | 806.0 |
-| 2469 B | decode | 705.2 (1.57x ✅) | 449.8 |
-| 74913 B | encode | 964.8 (1.09x ✅) | 887.9 |
-| 74913 B | decode | 742.1 (1.68x ✅) | 441.0 |
+| payload | op | pbwire-kotlin-tree (MB/s, x protobuf-kotlin) | pbwire-kotlin-core (MB/s) | protobuf-kotlin (MB/s) |
+|---|---|---|---|---|
+| 136 B | encode | 1554.4 (0.71x ❌) | 609.6 | 2202.7 |
+| 136 B | decode | 890.4 (1.41x ✅) | 339.1 | 632.2 |
+| 174 B | encode | 1491.6 (1.20x ✅) | 640.3 | 1242.6 |
+| 174 B | decode | 722.0 (1.24x ✅) | 292.5 | 582.9 |
+| 2469 B | encode | 996.9 (1.16x ✅) | 641.2 | 862.5 |
+| 2469 B | decode | 709.0 (1.54x ✅) | 300.2 | 459.6 |
+| 74913 B | encode | 990.3 (1.11x ✅) | 705.4 | 890.0 |
+| 74913 B | decode | 772.9 (1.77x ✅) | 329.6 | 436.1 |
 
 Kotlin reuses the Java runtime (`bindings/java/runtime`), so these numbers are
-`pbwire-java`'s: one workspace lookup plus one `byte[]` copy per call. The 136 B encode
+`pbwire-java`'s: one workspace lookup plus one `byte[]` copy per call. `core`
+is the same committed generated Java model the Kotlin DSL builds (the
+`tests/gen/matrix3.kt` factories are inline sugar over it), so it repeats
+Java's loss (0.28x at 136 B, 0.79x at 74 KB encode, 0.50x-0.76x decode) for the
+same reason; the `tree` row stays the headline. The `tree` decode column is
+lazy, the `core` column eager (the materialization footnote is in the Java
+section). `shim` for the JVM four: `bindings/java/pbench/` (`jni/`, one
+crossing, no tree translation -- a ceiling, not a binding cost). The 136 B encode
 is the case the Java section explains (a generated writer knows its tags, the
-dynamic tree walk derives them), 0.83x in the latest run against a baseline
+dynamic tree walk derives them), 0.71x in the latest run against a baseline
 that reaches the same protobuf-java encoder through its builder/DSL path. The
 174 B encode used to swing between 0.44x and 1.20x across runs on the same
 codec and bytes (the codec-level A/B shows no codec-side cause: harness
-allocation/GC sensitivity on a loaded host, not the codec); it reads 1.13x in
+allocation/GC sensitivity on a loaded host, not the codec); it reads 1.20x in
 the latest run, but treat that cell as a tie that moves with the baseline.
 The `Message`-wrapper cut (no per-decode `AtomicBoolean`, no volatile open
 flag) removes the binding's own per-call overhead on top, so both narrow tiers
@@ -1313,22 +1335,28 @@ code is checked in. The gate is byte parity per tier plus the pinned
 
 ![Scala (Java runtime + DSL) vs ScalaPB — MB/s by tier](docs/charts/bench-scala-java-runtime-dsl-vs-scalapb.svg)
 
-| payload | op | pbwire-scala (MB/s, x scalapb) | scalapb (MB/s) |
-|---|---|---|---|
-| 136 B | encode | 1579.1 (1.08x ✅) | 1467.2 |
-| 136 B | decode | 876.6 (1.17x ✅) | 746.4 |
-| 174 B | encode | 1417.6 (1.48x ✅) | 959.9 |
-| 174 B | decode | 706.0 (0.98x ❌) | 720.3 |
-| 2469 B | encode | 969.8 (1.31x ✅) | 740.7 |
-| 2469 B | decode | 670.6 (1.18x ✅) | 568.1 |
-| 74913 B | encode | 950.9 (1.19x ✅) | 798.4 |
-| 74913 B | decode | 750.5 (1.21x ✅) | 622.1 |
+| payload | op | pbwire-scala-tree (MB/s, x scalapb) | pbwire-scala-core (MB/s) | scalapb (MB/s) |
+|---|---|---|---|---|
+| 136 B | encode | 1290.2 (0.81x ❌) | 367.1 | 1598.8 |
+| 136 B | decode | 775.5 (1.34x ✅) | 229.4 | 578.1 |
+| 174 B | encode | 1293.7 (1.37x ✅) | 353.9 | 942.0 |
+| 174 B | decode | 702.3 (1.00x ✅) | 202.6 | 700.2 |
+| 2469 B | encode | 1000.5 (1.44x ✅) | 237.9 | 694.6 |
+| 2469 B | decode | 661.4 (1.22x ✅) | 131.6 | 542.7 |
+| 74913 B | encode | 1050.5 (1.45x ✅) | 240.5 | 723.2 |
+| 74913 B | decode | 707.4 (1.37x ✅) | 155.0 | 515.1 |
 
 Same class as Kotlin: the JVM binding reuses the Java runtime and adds only
 an idiomatic DSL — no second codec, no JNI, schema from a `FileDescriptorSet`
 at run time. The baseline is `scalapbc`-generated code (needs `cs install
 scalapbc` once); the jars land in `benchmarks/deps`. Byte parity per tier
-before timing, like every other row.
+before timing, like every other row. `core` is the committed generated
+`matrix3Gen` case class; its `encode`/`decode` fill and load a `Message`
+field by field by name, so it is the slowest JVM `core` row (0.23x at 136 B,
+0.33x at 74 KB encode, 0.24x-0.30x decode): the translation is the cost, not
+the wire engine. `tree` stays the headline. `shim` for the JVM four:
+`bindings/java/pbench/` (`jni/`, one crossing, no tree translation -- a
+ceiling, not a binding cost).
 
 ### Elixir (NIF over the shared core) vs `elixir-protobuf`
 
@@ -1416,16 +1444,27 @@ no packages, schema from a `FileDescriptorSet` at run time. The baseline is
 
 ![Clojure (Java runtime + interop) vs protobuf-java — MB/s by tier](docs/charts/bench-clojure-java-runtime-interop-vs-protobuf-java.svg)
 
-| payload | op | pbwire-clj (MB/s, x protobuf-java) | protobuf-java (MB/s) |
-|---|---|---|---|
-| 136 B | encode | 1569.9 (0.74x ❌) | 2125.8 |
-| 136 B | decode | 864.5 (1.34x ✅) | 645.2 |
-| 174 B | encode | 1353.8 (1.09x ✅) | 1245.6 |
-| 174 B | decode | 696.8 (1.23x ✅) | 566.5 |
-| 2469 B | encode | 932.3 (1.13x ✅) | 826.5 |
-| 2469 B | decode | 703.2 (1.57x ✅) | 446.8 |
-| 74913 B | encode | 974.8 (1.12x ✅) | 870.4 |
-| 74913 B | decode | 718.2 (1.66x ✅) | 433.6 |
+| payload | op | pbwire-clj-core (MB/s, x protobuf-java) | pbwire-clj-tree (MB/s) | protobuf-java (MB/s) |
+|---|---|---|---|---|
+| 136 B | encode | 1521.2 (0.68x ❌) | 21.0 | 2232.5 |
+| 136 B | decode | 881.8 (1.35x ✅) | 21.1 | 651.3 |
+| 174 B | encode | 1396.9 (1.12x ✅) | 19.9 | 1251.2 |
+| 174 B | decode | 762.6 (1.34x ✅) | 16.2 | 568.6 |
+| 2469 B | encode | 1156.9 (1.35x ✅) | 9.8 | 857.7 |
+| 2469 B | decode | 703.4 (1.55x ✅) | 8.2 | 454.9 |
+| 74913 B | encode | 1123.1 (1.26x ✅) | 10.0 | 893.1 |
+| 74913 B | decode | 742.4 (1.70x ✅) | 8.5 | 436.6 |
+
+`core` is the mutable-message fast path: the prebuilt `Message` (fill once,
+encode many; decode plus close), the generated model's native object with no
+map walk -- the plan's review focus says the core row must not be a per-call
+map conversion. `tree` is the other shipped path, the persistent-map API the
+generated model exposes (`matrix3`'s constructor and encode/decode fns): the
+map is the Clojure tree, so its walk and materialization are that arm's cost,
+~10-21 MB/s (`tree` ratio 0.01x-0.03x). The split is the one the README
+documents: maps for convenience, the mutable path for hot loops. `shim` for
+the JVM four: `bindings/java/pbench/` (`jni/`, one crossing, no tree
+translation -- a ceiling, not a binding cost).
 
 The timed path reuses a pre-built mutable message (fill once, encode many;
 decode plus close, no map materialization), like the Java row, and the
