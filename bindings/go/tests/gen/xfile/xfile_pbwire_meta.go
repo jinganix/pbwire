@@ -46,7 +46,7 @@ var UsesDepMeta = codec.NewTable("xfile.UsesDep", []*codec.Field{
 			return item
 		},
 	},
-	{Name: "note", Num: 3, Wire: codec.WireLen, Kind: codec.KindString, Fast: true, Off: uint32(unsafe.Offsetof(UsesDep{}.Note)), Count: uint32(unsafe.Offsetof(UsesDep{}.Note)) + uint32(unsafe.Sizeof(uintptr(0))), Elem: uint32(unsafe.Sizeof("")),
+	{Name: "note", Num: 3, Wire: codec.WireLen, Kind: codec.KindString, Fast: true, Off: uint32(unsafe.Offsetof(UsesDep{}.Note)),
 		GetStr: func(msg any) string { return msg.(*UsesDep).Note },
 		SetStr: func(msg any, v string) { msg.(*UsesDep).Note = v },
 	},

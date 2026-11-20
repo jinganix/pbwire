@@ -11,11 +11,11 @@ import (
 
 // Person_PhoneNumberMeta is the generated DATA table for tutorial.Person.PhoneNumber: one row per field.
 var Person_PhoneNumberMeta = codec.NewTable("tutorial.Person.PhoneNumber", []*codec.Field{
-	{Name: "number", Num: 1, Wire: codec.WireLen, Kind: codec.KindString, Required: true, Fast: true, Off: uint32(unsafe.Offsetof(Person_PhoneNumber{}.Number)), Count: uint32(unsafe.Offsetof(Person_PhoneNumber{}.Number)) + uint32(unsafe.Sizeof(uintptr(0))), Elem: uint32(unsafe.Sizeof("")),
+	{Name: "number", Num: 1, Wire: codec.WireLen, Kind: codec.KindString, Required: true, Fast: true, Off: uint32(unsafe.Offsetof(Person_PhoneNumber{}.Number)),
 		GetStr: func(msg any) string { return msg.(*Person_PhoneNumber).Number },
 		SetStr: func(msg any, v string) { msg.(*Person_PhoneNumber).Number = v },
 	},
-	{Name: "type", Num: 2, Wire: codec.WireVarint, Kind: codec.KindEnum, Explicit: true, Fast: true, Off: uint32(unsafe.Offsetof(Person_PhoneNumber{}.Type)), Has: uint32(unsafe.Offsetof(Person_PhoneNumber{}.Type)), Elem: uint32(unsafe.Sizeof(int32(0))),
+	{Name: "type", Num: 2, Wire: codec.WireVarint, Kind: codec.KindEnum, Explicit: true, Fast: true, Off: uint32(unsafe.Offsetof(Person_PhoneNumber{}.Type)), Has: uint32(unsafe.Offsetof(Person_PhoneNumber{}.Type)),
 		GetOptEnum: func(msg any) *int32 {
 			p := msg.(*Person_PhoneNumber).Type
 			if p == nil {
@@ -30,15 +30,15 @@ var Person_PhoneNumberMeta = codec.NewTable("tutorial.Person.PhoneNumber", []*co
 
 // PersonMeta is the generated DATA table for tutorial.Person: one row per field.
 var PersonMeta = codec.NewTable("tutorial.Person", []*codec.Field{
-	{Name: "name", Num: 1, Wire: codec.WireLen, Kind: codec.KindString, Required: true, Fast: true, Off: uint32(unsafe.Offsetof(Person{}.Name)), Count: uint32(unsafe.Offsetof(Person{}.Name)) + uint32(unsafe.Sizeof(uintptr(0))), Elem: uint32(unsafe.Sizeof("")),
+	{Name: "name", Num: 1, Wire: codec.WireLen, Kind: codec.KindString, Required: true, Fast: true, Off: uint32(unsafe.Offsetof(Person{}.Name)),
 		GetStr: func(msg any) string { return msg.(*Person).Name },
 		SetStr: func(msg any, v string) { msg.(*Person).Name = v },
 	},
-	{Name: "id", Num: 2, Wire: codec.WireVarint, Kind: codec.KindInt32, Required: true, Fast: true, Off: uint32(unsafe.Offsetof(Person{}.Id)), Elem: uint32(unsafe.Sizeof(int32(0))),
+	{Name: "id", Num: 2, Wire: codec.WireVarint, Kind: codec.KindInt32, Required: true, Fast: true, Off: uint32(unsafe.Offsetof(Person{}.Id)),
 		GetI32: func(msg any) int32 { return msg.(*Person).Id },
 		SetI32: func(msg any, v int32) { msg.(*Person).Id = v },
 	},
-	{Name: "email", Num: 3, Wire: codec.WireLen, Kind: codec.KindString, Explicit: true, Fast: true, Off: uint32(unsafe.Offsetof(Person{}.Email)), Has: uint32(unsafe.Offsetof(Person{}.Email)), Elem: uint32(unsafe.Sizeof("")),
+	{Name: "email", Num: 3, Wire: codec.WireLen, Kind: codec.KindString, Explicit: true, Fast: true, Off: uint32(unsafe.Offsetof(Person{}.Email)), Has: uint32(unsafe.Offsetof(Person{}.Email)),
 		GetOptStr: func(msg any) *string { return msg.(*Person).Email },
 		SetOptStr: func(msg any, v string) { tmp := v; msg.(*Person).Email = &tmp },
 	},

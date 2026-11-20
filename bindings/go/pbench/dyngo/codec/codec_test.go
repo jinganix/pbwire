@@ -1706,8 +1706,16 @@ func TestWirePrimitives(t *testing.T) {
 
 // ---------------------------------------------------------------------------
 // Offset fast-path parity: the same rows run through closures and through
-// Off/Has/Count/Elem layout facts must produce identical bytes and structs.
+// Off/Has layout facts must produce identical bytes and structs. The fast
+// table's closures panic, so any silent fallback to closures fails the
+// test instead of passing quietly.
 // ---------------------------------------------------------------------------
+
+type isOffKind interface{ isOffKind() }
+
+type offKindN struct{ N int32 }
+
+func (*offKindN) isOffKind() {}
 
 type offProbe struct {
 	A int32
@@ -1715,6 +1723,7 @@ type offProbe struct {
 	S string
 	N []int32
 	O *int32
+	K isOffKind
 }
 
 var (
@@ -1723,39 +1732,69 @@ var (
 	offS = uint32(unsafe.Offsetof(offProbe{}.S))
 	offN = uint32(unsafe.Offsetof(offProbe{}.N))
 	offO = uint32(unsafe.Offsetof(offProbe{}.O))
-	offW = uint32(unsafe.Sizeof(uintptr(0)))
 )
 
-func offProbeFields(fast bool) []*codec.Field {
+func offPanic[T any]() func(any) T {
+	return func(any) T { panic("offProbe: fell back to closure on a fast row") }
+}
+
+func offPanicSet[T any]() func(any, T) {
+	return func(any, T) { panic("offProbe: fell back to closure on a fast row") }
+}
+
+func offProbeFields(fast, stub bool) []*codec.Field {
 	mk := func(f *codec.Field) *codec.Field {
 		if fast {
 			f.Fast = true
 		}
 		return f
 	}
+	getI32 := func(m any) int32 { return m.(*offProbe).A }
+	setI32 := func(m any, v int32) { m.(*offProbe).A = v }
+	getI64 := func(m any) int64 { return m.(*offProbe).B }
+	setI64 := func(m any, v int64) { m.(*offProbe).B = v }
+	getStr := func(m any) string { return m.(*offProbe).S }
+	getRep := func(m any) []int32 { return m.(*offProbe).N }
+	getOpt := func(m any) *int32 { return m.(*offProbe).O }
+	if stub {
+		getI32, setI32 = offPanic[int32](), offPanicSet[int32]()
+		getI64, setI64 = offPanic[int64](), offPanicSet[int64]()
+		getStr = offPanic[string]()
+		getRep = offPanic[[]int32]()
+		getOpt = offPanic[*int32]()
+	}
 	return []*codec.Field{
 		mk(&codec.Field{Num: 1, Wire: codec.WireVarint, Kind: codec.KindInt32,
-			Off: offA, Elem: 4,
-			GetI32: func(m any) int32 { return m.(*offProbe).A },
-			SetI32: func(m any, v int32) { m.(*offProbe).A = v }}),
+			Off:    offA,
+			GetI32: getI32,
+			SetI32: setI32}),
 		mk(&codec.Field{Num: 2, Wire: codec.WireVarint, Kind: codec.KindInt64,
-			Off: offB, Elem: 8,
-			GetI64: func(m any) int64 { return m.(*offProbe).B },
-			SetI64: func(m any, v int64) { m.(*offProbe).B = v }}),
+			Off:    offB,
+			GetI64: getI64,
+			SetI64: setI64}),
 		mk(&codec.Field{Num: 3, Wire: codec.WireLen, Kind: codec.KindString,
-			Off: offS, Count: offS + offW, Elem: uint32(unsafe.Sizeof("")),
-			GetStr: func(m any) string { return m.(*offProbe).S },
+			Off:    offS,
+			GetStr: getStr,
 			SetStr: func(m any, v string) { m.(*offProbe).S = v }}),
 		mk(&codec.Field{Num: 4, Wire: codec.WireVarint, Kind: codec.KindInt32,
 			Repeated: true, Packed: true,
-			Off: offN, Count: offN + offW, Elem: 4,
-			GetRepI32: func(m any) []int32 { return m.(*offProbe).N },
+			Off:       offN,
+			GetRepI32: getRep,
 			AppendI32: func(m any, v int32) { m.(*offProbe).N = append(m.(*offProbe).N, v) }}),
 		mk(&codec.Field{Num: 5, Wire: codec.WireVarint, Kind: codec.KindInt32,
 			Explicit: true,
-			Off:      offO, Has: offO, Elem: 4,
-			GetOptI32: func(m any) *int32 { return m.(*offProbe).O },
+			Off:      offO, Has: offO,
+			GetOptI32: getOpt,
 			SetOptI32: func(m any, v int32) { tmp := v; m.(*offProbe).O = &tmp }}),
+		&codec.Field{Num: 6, Wire: codec.WireVarint, Kind: codec.KindInt32,
+			Oneof: true,
+			GetOneof: func(m any) (any, bool) {
+				if x, ok := m.(*offProbe).K.(*offKindN); ok {
+					return x.N, true
+				}
+				return nil, false
+			},
+			SetOneof: func(m any, v any) { m.(*offProbe).K = &offKindN{N: v.(int32)} }},
 	}
 }
 
@@ -1778,14 +1817,15 @@ func decodeProbe(t *codec.Table, w []byte) *offProbe {
 }
 
 func TestOffsetFastPathParity(t *testing.T) {
-	slow := codec.NewTable("probe", offProbeFields(false))
-	fast := codec.NewTable("probe", offProbeFields(true))
+	slow := codec.NewTable("probe", offProbeFields(false, false))
+	fast := codec.NewTable("probe", offProbeFields(true, true))
 
 	v := int32(-7)
 	cases := map[string]*offProbe{
-		"zero":   {},
-		"full":   {A: -1, B: math.MinInt64, S: "hi", N: []int32{1, 2, 3}, O: &v},
-		"nilopt": {A: 5, S: "x"},
+		"zero":      {},
+		"full":      {A: -1, B: math.MinInt64, S: "hi", N: []int32{1, 2, 3}, O: &v, K: &offKindN{N: 9}},
+		"nilopt":    {A: 5, S: "x"},
+		"oneofzero": {A: 1, K: &offKindN{}},
 	}
 	for name, want := range cases {
 		encSlow, encFast := encodeProbe(slow, want), encodeProbe(fast, want)
@@ -1809,7 +1849,8 @@ func TestOffsetFastPathParity(t *testing.T) {
 	}
 
 	// A misaligned 64-bit offset must fall back to closures, not fault.
-	mis := codec.NewTable("probe", offProbeFields(true))
+	// The fallback table keeps working closures for that row.
+	mis := codec.NewTable("probe", offProbeFields(true, false))
 	mis.Fields[1].Off = 1
 	want := cases["full"]
 	if enc := encodeProbe(mis, want); !bytes.Equal(enc, encodeProbe(slow, want)) {

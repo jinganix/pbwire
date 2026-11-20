@@ -11,7 +11,7 @@ import (
 
 // Oneof1_InnerMeta is the generated DATA table for spectest.Oneof1.Inner: one row per field.
 var Oneof1_InnerMeta = codec.NewTable("spectest.Oneof1.Inner", []*codec.Field{
-	{Name: "v", Num: 1, Wire: codec.WireVarint, Kind: codec.KindInt32, Fast: true, Off: uint32(unsafe.Offsetof(Oneof1_Inner{}.V)), Elem: uint32(unsafe.Sizeof(int32(0))),
+	{Name: "v", Num: 1, Wire: codec.WireVarint, Kind: codec.KindInt32, Fast: true, Off: uint32(unsafe.Offsetof(Oneof1_Inner{}.V)),
 		GetI32: func(msg any) int32 { return msg.(*Oneof1_Inner).V },
 		SetI32: func(msg any, v int32) { msg.(*Oneof1_Inner).V = v },
 	},
@@ -19,7 +19,7 @@ var Oneof1_InnerMeta = codec.NewTable("spectest.Oneof1.Inner", []*codec.Field{
 
 // Oneof1Meta is the generated DATA table for spectest.Oneof1: one row per field.
 var Oneof1Meta = codec.NewTable("spectest.Oneof1", []*codec.Field{
-	{Name: "name", Num: 1, Wire: codec.WireLen, Kind: codec.KindString, Fast: true, Off: uint32(unsafe.Offsetof(Oneof1{}.Name)), Count: uint32(unsafe.Offsetof(Oneof1{}.Name)) + uint32(unsafe.Sizeof(uintptr(0))), Elem: uint32(unsafe.Sizeof("")),
+	{Name: "name", Num: 1, Wire: codec.WireLen, Kind: codec.KindString, Fast: true, Off: uint32(unsafe.Offsetof(Oneof1{}.Name)),
 		GetStr: func(msg any) string { return msg.(*Oneof1).Name },
 		SetStr: func(msg any, v string) { msg.(*Oneof1).Name = v },
 	},
