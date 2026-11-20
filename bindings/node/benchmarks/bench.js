@@ -5,7 +5,16 @@
  * and the four standard tiers from BENCHMARKS.md: every scalar, the nested
  * message, the proto3 optionals, and the repeated fields scaled x0 / x1 /
  * x100 / x3000 (136 / 174 / 2469 / 74913 bytes). All sides must produce
+
  * identical bytes before anything is timed.
+ *
+ * Two pbwire rows, named by the mechanism they time:
+ *
+ *   pbwire-node-tree  encode/decode of a `Message` handle built (and read)
+ *                     before the timer: the codec's own cost once the tree
+ *                     exists. "The data is already in pbwire."
+ *   pbwire-node-shim  the native object in, wire out and wire in, native
+ *                     object out: one addon call, the object walked in C.
  *
  *   ./bench.sh        generate, build, run
  */
@@ -13,6 +22,8 @@
 const path = require('node:path');
 
 const { Schema } = require(path.join(__dirname, '..', 'lib', 'pbwire'));
+// The pbench payload: the same native object the shim arm times.
+const { nativeObject } = require(path.join(__dirname, '..', 'pbench', 'payload'));
 const { Scalars3, Inner3, Color3 } = require(path.join(__dirname, 'gen', 'matrix3_pb.js'));
 
 /* Second baseline: protobufjs, the fastest widely used JS runtime. Optional:
@@ -190,7 +201,7 @@ function run(iterations, op) {
 }
 
 function row(impl, op, bytes, ns) {
-    console.log(`  ${impl.padEnd(14)} ${op.padEnd(7)} ${ns.toFixed(1).padStart(12)} ` +
+    console.log(`  ${impl.padEnd(17)} ${op.padEnd(7)} ${ns.toFixed(1).padStart(12)} ` +
         `${((bytes / ns) * 1000).toFixed(1).padStart(10)}`);
 }
 
@@ -207,6 +218,13 @@ function main() {
             continue;
         }
         const message = fillPbwire(type, repeats);
+        const shimObject = nativeObject(repeats);
+        if (!type.encodeObject(shimObject).equals(reference)) {
+            console.log(`FAIL ${label}: pbwire-node-shim encodes differently`);
+            failures++;
+            message.free();
+            continue;
+        }
         if (!message.encode().equals(reference)) {
             console.log(`FAIL ${label}: pbwire-node and google-protobuf encode differently`);
             failures++;
@@ -230,6 +248,20 @@ function main() {
             message.free();
             continue;
         }
+        // The shim decode reads the same values straight into a plain object.
+        const shimBack = type.decodeToObject(reference);
+        const shimOk = shimBack.str === 'hello'
+            && shimBack.inner.name === 'kid'
+            && shimBack.inner.value === 42
+            && (shimBack.nums ?? []).length === repeats
+            && (shimBack.inners ?? []).length === repeats
+            && (repeats === 0 || shimBack.inners[repeats - 1].value === repeats);
+        if (!shimOk) {
+            console.log(`FAIL ${label}: pbwire-node-shim decode differs`);
+            failures++;
+            message.free();
+            continue;
+        }
         console.log(`OK   ${label} encoding parity, x${repeats} (${reference.length} bytes)`);
 
         const official = fillOfficial(repeats);
@@ -237,6 +269,8 @@ function main() {
         const count = calibrate(() => message.encode(), iterations);
         const encodeNs = measure(iterations, () => message.encode());
         const decodeNs = measure(iterations, () => type.decode(reference).free());
+        const shimEncodeNs = measure(iterations, () => type.encodeObject(shimObject));
+        const shimDecodeNs = measure(iterations, () => type.decodeToObject(reference));
         const officialEncodeNs = measure(iterations, () => official.serializeBinary());
         const officialDecodeNs = measure(iterations, () => Scalars3.deserializeBinary(reference));
         let pjs = null;
@@ -257,14 +291,16 @@ function main() {
 
         console.log(`${label}: ${reference.length} bytes, ${count} iterations ` +
             `(repeat field x${repeats})`);
-        console.log(`  ${'impl'.padEnd(14)} ${'op'.padEnd(7)} ${'ns/op'.padStart(12)} ` +
+        console.log(`  ${'impl'.padEnd(17)} ${'op'.padEnd(7)} ${'ns/op'.padStart(12)} ` +
             `${'MB/s'.padStart(10)}`);
-        row('pbwire-node', 'encode', reference.length, encodeNs);
+        row('pbwire-node-tree', 'encode', reference.length, encodeNs);
+        row('pbwire-node-shim', 'encode', reference.length, shimEncodeNs);
         row('google-protobuf', 'encode', reference.length, officialEncodeNs);
         if (pjs !== null) {
             row('protobufjs', 'encode', reference.length, pjsEncodeNs);
         }
-        row('pbwire-node', 'decode', reference.length, decodeNs);
+        row('pbwire-node-tree', 'decode', reference.length, decodeNs);
+        row('pbwire-node-shim', 'decode', reference.length, shimDecodeNs);
         row('google-protobuf', 'decode', reference.length, officialDecodeNs);
         if (pjs !== null) {
             row('protobufjs', 'decode', reference.length, pjsDecodeNs);
