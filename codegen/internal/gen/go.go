@@ -384,14 +384,13 @@ func writeGoGetters(b *strings.Builder, f *model.File, m model.Message) {
 	}
 }
 
-// writeGoCodec emits Reset plus Marshal/Unmarshal over the shared table
-// engine: the generated file carries only DATA (a Table var per message),
-// every wire decision lives in codec.EncodeTable/DecodeTable. Field numbers
-// and types below are schema-derived: the model comes from the file's
-// descriptor, and every method gates on getPlan (a codec.Load of the
-// embedded set), so register=false still fails loudly without Init or
-// UseSchema. Rows run in field-number order: protoc, protobuf-go and the C
-// core all emit field-number order (oneof1.bin pins name=1 before text=3).
+// writeGoCodec emits Reset plus the one-line Marshal/Unmarshal forwarding.
+// The model file carries no table and no wire logic; the metadata file holds
+// one data table per message and the codec decides every tag, length, packed
+// run and presence. Field numbers and types come from the file's descriptor
+// at generation time, so nothing is hand-written. Rows run in field-number
+// order: protoc, protobuf-go and the C core all emit field-number order
+// (oneof1.bin pins name=1 before text=3).
 func writeGoCodec(b *strings.Builder, f *model.File, m model.Message) {
 	fmt.Fprintf(b, "func (m *%s) Reset() {\n\tif m == nil {\n\t\treturn\n\t}\n\t*m = %s{}\n}\n\n", m.Name, m.Name)
 	fmt.Fprintf(b, "func (m *%s) Marshal() ([]byte, error) {\n", m.Name)
