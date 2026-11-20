@@ -938,6 +938,18 @@ against protobuf-go. A `dyngo-direct` gate arm (`EncodeModel`/`DecodeModel`
 straight on the struct, no `DMsg` tree) is added and gated byte-identical;
 its timed row lands in Task 4.
 
+2026-11-20 after (Tasks 2-4): `dyngo` row now times the direct path with
+the offset fast path live (generated `Off/Has/Count/Elem` + `unsafe` reads
+on encode, scalar stores on decode). Same host, median of 5 rounds —
+136 B enc/dec 1.39x/0.85x, 174 B 1.53x/0.87x, 2469 B 1.55x/1.11x,
+74913 B 1.50x/1.13x, all at 1 alloc like the oracle. The jump has two
+parts: dropping the struct<->tree copies (the tree arm stays as the
+dynamic-path reference, still ~0.2-0.3x) and the offset reads replacing
+per-field closures. Still on closures in v1: message rows, oneof,
+`Foreign`, groups, explicit/pointer decode stores and repeated decode
+(pointer stores skip the write barrier on purpose); `DMsg` unknown
+retention is untouched, verified by the existing `codec` unknown tests.
+
 ### Recorded earlier answers (kept for the numbers, not as shipping plans)
 
 - A language-neutral bulk table plus one cgo call caps encode at ~0.45x: the
