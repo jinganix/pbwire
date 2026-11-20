@@ -174,7 +174,7 @@ own README. Dart ran once `dart pub global activate protoc_plugin` provided
 | Go (thin model, shim runtime) | `make go-bench` (`bindings/go/benchmarks`) | `protobuf-go` generated code from the same `matrix3.proto` | all 4 | 1.88x ✅ / 1.46x ✅ |
 | Java (pure-Java codec) | `make java-bench` (`bindings/java/benchmarks`) | `protobuf-java` generated code from the same `matrix3.proto` | all 4 | 1.26x ✅ / 1.76x ✅ `tree` (0.71x at 136 B; `core` generated model 0.75x / 0.80x) |
 | Node (N-API addon) | `make node-bench` (`bindings/node/benchmarks`) | [protobufjs](https://www.npmjs.com/package/protobufjs) (fastest) + `google-protobuf` (jspb) from the same `matrix3.proto` | all 4 | 3.36x ✅ / 2.95x ✅ `tree` (native-object `shim` 0.12x / 0.13x vs protobufjs, 1.03x encode / 0.64x decode vs jspb at 74 KB) |
-| Ruby (C extension) | `make ruby-bench` (`bindings/ruby/benchmarks`) | the `google-protobuf` gem (C extension) | all 4 | 1.34x ✅ / 1.67x ✅ |
+| Ruby (C extension) | `make ruby-bench` (`bindings/ruby/benchmarks`) | the `google-protobuf` gem (C extension) | all 4 | 1.35x ✅ / 1.75x ✅ `tree` (native-object `shim` 0.19x / 0.23x, one C-extension object walk per op) |
 | Objective-C (ARC) | `make objc-bench` (`bindings/objc/benchmarks`) | the `protobuf` ObjC runtime + generated code from the same `matrix3.proto` | all 4 | 1.72x ✅ / 1.18x ✅ |
 | Kotlin (pure-Java codec + DSL) | `make kotlin-bench` (`bindings/kotlin/benchmarks`) | `protoc --kotlin_out` over `protobuf-java`, same `matrix3.proto` | all 4 | 1.11x ✅ / 1.77x ✅ `tree` (0.71x at 136 B; `core` 0.79x / 0.76x) |
 | PHP (`ext-ffi` + C extension) | `make php-bench` (`bindings/php/benchmarks`) | the official PHP runtime (`protobuf/php/src`): C extension (fastest) + pure-PHP | all 4 | 1.22x / 1.34x vs C ext ✅ (394x / 154x vs pure) |
@@ -223,7 +223,7 @@ timer.
 | Zig | three arms: `tree` (prebuilt `Message` handle, shipped), `shim` (the C reader walks the generated `extern struct` mirror in one call), `core` is plan 22 |
 | Python | three |
 | PHP | deferred: overlaps the official runtime's pure-PHP implementation already in the baseline |
-| Ruby | deferred: no pure-Ruby precedent, no native-less deployment |
+| Ruby | two arms: `tree` (prebuilt `Message` handle, shipped), `shim` (the C extension walks the generated model in one call), `core` deferred: no pure-Ruby precedent, no native-less deployment |
 | R | deferred: interpreted per-field loops are orders of magnitude off |
 
 Every binding with a
@@ -282,7 +282,7 @@ payload, the boundary cost and the baseline all differ.
 | Node (`tree`, prebuilt handle) | N-API addon | 74913 B | 1689.3 (3.36x ✅) | 1196.1 (2.95x ✅) |
 | Node (`shim`, native object in/out) | N-API addon, one downcall | 74913 B | 58.1 (0.12x ❌) | 52.3 (0.13x ❌) |
 | Dart (`tree`, prebuilt handle) | `dart:ffi` binding | 74913 B | 1593.8 (15.73x ✅) `tree`; native-object `shim` 1152.9 (11.38x ✅) | 726.0 (4.57x ✅) `tree`; `shim` 745.5 (4.69x ✅) |
-| Ruby | C extension over the core | 74913 B | 1621.1 (1.34x ✅) | 1050.8 (1.67x ✅) |
+| Ruby | C extension over the core | 74913 B | 1804.9 (1.35x ✅) `tree`; native-object `shim` 253.5 (0.19x ❌) | 1207.8 (1.75x ✅) `tree`; `shim` 158.6 (0.23x ❌) |
 | Objective-C | ARC wrapper | 74913 B | 62089.8 (1.72x ✅) | 29297.5 (1.18x ✅) |
 | PHP | C extension | 74913 B | 1480.3 (1.22x ✅) | 688.7 (1.34x ✅) |
 | Rust | static link | 74913 B | 1600.9 (1.17x ✅) `tree`; native-object `shim` 1145.0 (0.84x ❌) | 716.2 (1.88x ✅) `tree`; `shim` 722.7 (1.90x ✅) |
@@ -1043,16 +1043,16 @@ What the gap is made of, and what the optimization pass changed:
 
 ![Ruby (C extension) vs the google-protobuf gem — MB/s by tier](docs/charts/bench-ruby-c-extension-vs-the-google-protobuf-gem.svg)
 
-| payload | op | pbwire-ruby (MB/s, x gem) | gem (MB/s) |
-|---|---|---|---|
-| 136 B | encode | 904.6 (1.47x ✅) | 614.8 |
-| 136 B | decode | 315.1 (1.41x ✅) | 223.5 |
-| 174 B | encode | 770.7 (1.07x ✅) | 718.3 |
-| 174 B | decode | 365.3 (1.54x ✅) | 237.3 |
-| 2469 B | encode | 1397.0 (1.19x ✅) | 1170.0 |
-| 2469 B | decode | 890.5 (1.90x ✅) | 468.5 |
-| 74913 B | encode | 1436.8 (1.19x ✅) | 1211.9 |
-| 74913 B | decode | 1060.0 (1.69x ✅) | 626.4 |
+| payload | op | pbwire-ruby-tree (MB/s, x gem) | pbwire-ruby-shim (MB/s, x gem) | gem (MB/s) |
+|---|---|---|---|---|
+| 136 B | encode | 903.7 (1.30x ✅) | 181.0 (0.26x ❌) | 696.6 |
+| 136 B | decode | 356.7 (1.46x ✅) | 138.5 (0.57x ❌) | 244.3 |
+| 174 B | encode | 789.7 (0.98x ❌) | 197.2 (0.25x ❌) | 802.8 |
+| 174 B | decode | 457.7 (1.74x ✅) | 153.4 (0.58x ❌) | 262.8 |
+| 2469 B | encode | 1531.2 (1.24x ✅) | 220.7 (0.18x ❌) | 1230.0 |
+| 2469 B | decode | 933.3 (1.88x ✅) | 142.6 (0.29x ❌) | 497.3 |
+| 74913 B | encode | 1804.9 (1.35x ✅) | 253.5 (0.19x ❌) | 1334.9 |
+| 74913 B | decode | 1207.8 (1.75x ✅) | 158.6 (0.23x ❌) | 690.4 |
 
 Ruby is a C extension over the same core, so this is C extension against C
 extension. The first version drove the same C ABI through stdlib Fiddle and lost
@@ -1060,28 +1060,29 @@ every row by an order of magnitude: a downcall costs ~3 µs, so a 136 B encode w
 3.3 µs against the core's ~65 ns, and the tiers could only be compared by padding
 `str` because the wrapper had no repeated fields. The rewrite removed the
 boundary, added the repeated-field payload (so the xlarge tier is 3000 nested
-messages, not one 74 KB string), and split the message into two representations:
+messages, not one 74 KB string), and split the message into two representations.
+The pbench adds the native-object row beside it:
 
-- **Encoding** writes one pass from the C message tree straight into the String
-  that is returned: the builder keeps the last encoded length as the next
-  buffer-size hint, `pbw_encode_to` writes into a Ruby string's bytes (no
-  intermediate buffer, no second copy), and a message that needs more room retries
-  with a larger string. Packed runs compute their exact payload size first
-  instead of reserving a 10-bytes-per-element worst case, so the write fits the
-  hint and no `memmove` patches the length prefix.
-- **Decoding** is one validating tag scan that records, per wire field, where its
-  value lives (a 32-byte slice, 32 of them inline). The gem materializes every
-  field; this binding materializes on `get`, and `encode` on an unmodified wire
-  view hands the bytes back byte for byte, which is also what preserves unknown
-  fields and non-canonical encodings. That is where the 1.6-1.9x decode numbers
-  come from at 174 B and up, where sub-message tree building used to dominate.
-- Field facts (number, kind, wire type, packed/required/oneof, sub type, a
-  name -> index Hash) are resolved once per message type into a per-schema cache,
-  so the scan and the accessors never walk the descriptor.
+- **`tree` (prebuilt `Message` handle, the shipped runtime).** Encoding writes
+  one pass from the C message tree straight into the String that is returned: the
+  builder keeps the last encoded length as the next buffer-size hint,
+  `pbw_encode_to` writes into a Ruby string's bytes (no intermediate buffer, no
+  second copy). Decoding is one validating tag scan that records, per wire field,
+  where its value lives; the gem materializes every field, this binding
+  materializes on `get`, and an unmodified wire view re-encodes byte for byte.
+  Field facts are resolved once per message type into a per-schema cache.
+- **`shim` (native object in and out).** `type.encode_object(obj)` walks the
+  generated model's instance variables inside C in one entry call and fills a
+  pbw tree (built in the type's arena since Stage 6); `decode_object` decodes
+  once and materializes the generated model classes in C. It is 2.5x-3.1x the
+  per-field model facade, but below the gem: the gem's generated object already
+  owns C-backed storage (and its decode stays lazy), while this row builds a C
+  tree from Ruby ivars / allocates every model and array.
 
-All four tiers sit at or above parity, and the 174 B encode -- a band-boundary
-cell (0.95-1.19x across runs; today 1.00x, the closest row) -- is the one that
-moves with host load; above it the C core's pack-aware writer pulls ahead.
+The `tree` row is above parity at xlarge (1.35x encode, 1.75x decode); the
+native-object `shim` row is below it (0.19x / 0.23x), which is the boundary cost
+the pbench row makes visible. The 174 B `tree` encode is the band-boundary cell
+(0.95-1.19x across runs; today 0.98x).
 
 #### Objective-C vs the `protobuf` ObjC runtime
 

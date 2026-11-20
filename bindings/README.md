@@ -165,6 +165,11 @@ generated `@frozen` `<Message>Repr` mirror (no references, so no ARC per field)
 read in place by `bindings/swift/Sources/CPbwire/shim.c` over the same C struct
 codec (`pbwire-swift-shim`, one call per op), `core` waits on plan 21.
 
+Ruby has two: `tree` is the prebuilt `Message`/wire-view handle, `shim` is the
+generated model read by one C-extension entry (`pbwire-ruby-shim`); `core` is
+deferred (`shortcut: no pure-Ruby core, reopen when a native-less Ruby target
+appears`).
+
 A binding states which of the three it has, including the two-mechanism
 bindings and the deferred ports with the reason: the status table in
 [BENCHMARKS.md](../BENCHMARKS.md#bindings-vs-their-baselines), with the per-arm
@@ -185,7 +190,7 @@ throughput against the official runtime, copied from
 | C++ | generated classes pin the schema at compile time; `DynamicMessage` is 10x slower | the same C runtime and header, no extra layer | 1.33x / 2.00x (vs protoc C++) |
 | Embedded | generated C codecs pin the schema at compile time and need a struct per message; a full runtime drags a heap in | static-memory facade over the same core: one box, one arena, caller-owned encode buffers, input bounded by `pbw_limits` | no separate bench — the facade is a pass-through, so the C row and the core bench measure the wire it speaks |
 | Python | `google.protobuf` needs a generated module per `.proto`, and dict conversion is seconds at 75 KB | CPython extension: dict↔wire in C, `decode()` returns a parsed message that keeps one slice per wire field | 6.85x / 3.69x (vs upb; 1.19x decode handle, 64x via `encode(parsed)`, data already in pbwire) |
-| Ruby | the `google-protobuf` gem materializes and re-encodes every field; a Fiddle bridge costs ~3 µs per downcall | C extension over the core: builder tree for writes, validating wire view for reads | 1.20x / 1.64x (vs the gem) |
+| Ruby | the `google-protobuf` gem materializes and re-encodes every field; a Fiddle bridge costs ~3 µs per downcall | C extension over the core: builder tree for writes, validating wire view for reads; one extension call walks the generated model (native-object `shim`) | 1.35x / 1.75x `tree` (native-object `shim` 0.19x / 0.23x, vs the gem) |
 | Java | JNI glue, or protobuf-java re-deriving sizes before every write | pure-Java codec: columnar values, lazy decode, `Unsafe` stores (no JNI, no native lib, no generator) | 1.15x / 1.89x (vs protobuf-java; 0.95x encode at 74 KB) |
 | Kotlin | official Kotlin is Kotlin over protobuf-java | reuses the Java runtime, adds a DSL | 1.20x / 1.81x (vs protobuf-kotlin; 0.78x encode at 136 B) |
 | Node | jspb resolves a code/type table per field and hands every repeated element to a closure | N-API addon (node headers only), reusable buffer, wire view for decoded messages; the native-object path is one addon call that walks the JS object in C | 3.36x / 2.95x `tree` (vs [protobufjs](https://www.npmjs.com/package/protobufjs); 26x / 15x vs jspb). Native object in and out (`shim`): 1.03x encode / 0.64x decode vs jspb at 74 KB, 0.12x / 0.13x vs protobufjs — the boundary floor |
