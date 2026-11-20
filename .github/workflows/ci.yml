@@ -208,6 +208,9 @@ jobs:
         run: |
           PROTOC="$PB_SRC/build/protoc" make codegen
           git diff --exit-code
+          echo "--- DEBUG status start ---"
+          git status --porcelain -- bindings codegen
+          echo "--- DEBUG status end ---"
           # `git diff` ignores untracked files: a newly generated model that
           # should be committed would otherwise slip through. Scoped to the
           # trees codegen writes so an unrelated stray file cannot red the job.
