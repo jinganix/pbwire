@@ -462,6 +462,14 @@ func TestModelConcurrentUse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Scratch: repeat the body so one CI run gets many independent
+	// windows; the per-round body is byte-identical to the original.
+	for round := 0; round < 10; round++ {
+		concurrentUseRound(t, ref, round)
+	}
+}
+
+func concurrentUseRound(t *testing.T, ref []byte, round int) {
 	var wg sync.WaitGroup
 	errCh := make(chan string, 64)
 	for i := 0; i < 8; i++ {
