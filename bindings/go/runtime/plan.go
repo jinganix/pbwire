@@ -83,7 +83,8 @@ type FieldPlan struct {
 	UTF8        bool                                   // proto3 strings reject invalid UTF-8 on decode; proto2 strings never do
 	HasDefault  bool                                   // proto2 explicit default (informational; absent still reads as zero)
 	Default     string                                 // raw default text from the descriptor
-	JSONName    string                                 // ToJsonName of Name, memoized at plan build for the JSON codec
+	JSONName    string                                 // the descriptor's json_name, else ToJsonName(Name)
+	Delimited   bool                                   // editions message_encoding=DELIMITED: group tags, message naming
 }
 
 // MessagePlan is one message's ordered field list plus lookup indexes.
@@ -93,6 +94,7 @@ type MessagePlan struct {
 	Oneofs     []string        // distinct real oneof names, declaration order
 	IsMapEntry bool            // this message is a map entry (key/value are Fields 1/2)
 	Reserved   map[string]bool // reserved field names, skipped silently by the text parser
+	feat       featureSet      // editions features this scope resolves to
 	byNumber   map[uint32]*FieldPlan
 	byName     map[string]*FieldPlan
 	// Memoized JSON indexes, built once in fillMessage. The JSON codec
@@ -137,7 +139,8 @@ type Schema struct {
 	enums    map[string]*EnumPlan
 	services map[string]*ServicePlan
 	exts     map[string]*ExtPlan
-	types    sync.Map // full name -> *DType
+	extByMsg map[string]map[uint32]*ExtPlan // extendee -> number -> extension
+	types    sync.Map                       // full name -> *DType
 }
 
 // ExtPlan is one proto extension: its fully qualified field name, the
@@ -205,14 +208,16 @@ func Load(set []byte) (*Schema, error) {
 		enums:    map[string]*EnumPlan{},
 		services: map[string]*ServicePlan{},
 		exts:     map[string]*ExtPlan{},
+		extByMsg: map[string]map[uint32]*ExtPlan{},
 	}
 	for _, f := range fds.File {
 		pkg := f.GetPackage()
+		fs := fileFeatures(f).with(f.GetOptions().GetFeatures())
 		for _, e := range f.EnumType {
-			s.addEnum(joinName(pkg, nil, e.GetName()), e, f)
+			s.addEnum(joinName(pkg, nil, e.GetName()), e, fs)
 		}
 		for _, m := range f.MessageType {
-			s.addMessage(joinName(pkg, nil, m.GetName()), m, f)
+			s.addMessage(joinName(pkg, nil, m.GetName()), m, fs)
 		}
 	}
 	for _, f := range fds.File {
@@ -253,23 +258,25 @@ func Load(set []byte) (*Schema, error) {
 		if err := walk("", false, f.MessageType); err != nil {
 			return nil, err
 		}
-		if err := s.addFileExtensions(pkg, nil, f.Extension, f); err != nil {
+		fs := fileFeatures(f).with(f.GetOptions().GetFeatures())
+		if err := s.addFileExtensions(pkg, nil, f.Extension, fs); err != nil {
 			return nil, err
 		}
-		var scopes func(path []string, ms []*descriptorpb.DescriptorProto) error
-		scopes = func(path []string, ms []*descriptorpb.DescriptorProto) error {
+		var scopes func(parent string, path []string, ms []*descriptorpb.DescriptorProto) error
+		scopes = func(parent string, path []string, ms []*descriptorpb.DescriptorProto) error {
 			for _, m := range ms {
+				full := joinName(pkg, path, m.GetName())
 				scope := append(path, m.GetName())
-				if err := s.addFileExtensions(pkg, scope, m.Extension, f); err != nil {
+				if err := s.addFileExtensions(pkg, scope, m.Extension, s.messages[full].feat); err != nil {
 					return err
 				}
-				if err := scopes(scope, m.NestedType); err != nil {
+				if err := scopes(full, scope, m.NestedType); err != nil {
 					return err
 				}
 			}
 			return nil
 		}
-		if err := scopes(nil, f.MessageType); err != nil {
+		if err := scopes("", nil, f.MessageType); err != nil {
 			return nil, err
 		}
 	}
@@ -311,19 +318,36 @@ func (s *Schema) Service(full string) (*ServicePlan, error) {
 // its extendee and carries a regular field descriptor, so the field plan
 // builder fills it like any other field. Unknown type references fail
 // loudly, like unknown message fields do.
-func (s *Schema) addFileExtensions(pkg string, scope []string, exts []*descriptorpb.FieldDescriptorProto, f *descriptorpb.FileDescriptorProto) error {
+func (s *Schema) addFileExtensions(pkg string, scope []string, exts []*descriptorpb.FieldDescriptorProto, fs featureSet) error {
 	for _, fd := range exts {
 		full := joinName(pkg, scope, fd.GetName())
 		if _, dup := s.exts[full]; dup {
 			return fmt.Errorf("codec: duplicate extension %s", full)
 		}
-		fp, err := s.buildField(syntaxOf(f), nil, fd)
+		fp, err := s.buildField(fs, nil, fd)
 		if err != nil {
 			return fmt.Errorf("codec: extension %s: %w", full, err)
 		}
-		s.exts[full] = &ExtPlan{Full: full, Extendee: normName(fd.GetExtendee()), Field: fp}
+		xp := &ExtPlan{Full: full, Extendee: normName(fd.GetExtendee()), Field: fp}
+		s.exts[full] = xp
+		// The binary decoder routes by extendee and number; one map per
+		// message keeps that lookup off the unknown-field path.
+		byNum := s.extByMsg[xp.Extendee]
+		if byNum == nil {
+			byNum = map[uint32]*ExtPlan{}
+			s.extByMsg[xp.Extendee] = byNum
+		}
+		byNum[fp.Number] = xp
 	}
 	return nil
+}
+
+// ExtensionByNumber resolves one extension of the named message by field
+// number, for the binary decoder. Generated tables carry no schema, so a
+// nil hit there keeps the old drop behavior.
+func (s *Schema) ExtensionByNumber(extendee string, num uint32) (*ExtPlan, bool) {
+	xp, ok := s.extByMsg[extendee][num]
+	return xp, ok
 }
 
 func (s *Schema) addService(full string, svc *descriptorpb.ServiceDescriptorProto) error {
@@ -371,32 +395,60 @@ func normName(t string) string {
 	return strings.TrimPrefix(t, ".")
 }
 
-func syntaxOf(f *descriptorpb.FileDescriptorProto) string {
-	if syn := f.GetSyntax(); syn != "" {
-		return syn
-	}
-	// Only proto2 can spell required or explicit defaults.
-	var proto2 bool
-	var walk func(ms []*descriptorpb.DescriptorProto)
-	walk = func(ms []*descriptorpb.DescriptorProto) {
-		for _, m := range ms {
-			for _, fd := range m.Field {
-				if fd.GetLabel() == descriptorpb.FieldDescriptorProto_LABEL_REQUIRED ||
-					fd.DefaultValue != nil {
-					proto2 = true
-				}
-			}
-			walk(m.NestedType)
-		}
-	}
-	walk(f.MessageType)
-	if proto2 {
-		return "proto2"
-	}
-	return "proto3"
+// featureSet is a resolved editions FeatureSet scope. Values are the
+// descriptor's own enum numbers (0 = unset): field_presence 1 EXPLICIT,
+// 2 IMPLICIT, 3 LEGACY_REQUIRED; enum_type 1 OPEN, 2 CLOSED;
+// repeated_field_encoding 1 PACKED, 2 EXPANDED; utf8_validation 2 VERIFY,
+// 3 NONE; message_encoding 1 LENGTH_PREFIXED, 2 DELIMITED. A file starts
+// from the defaults its syntax implies and each scope overrides them.
+type featureSet struct {
+	presence int32
+	enumType int32
+	repack   int32
+	utf8     int32
+	msgEnc   int32
 }
 
-func (s *Schema) addEnum(full string, e *descriptorpb.EnumDescriptorProto, f *descriptorpb.FileDescriptorProto) {
+// fileFeatures is the dialect baseline: proto3 has implicit presence, open
+// enums, packed repeats and UTF-8 checks; proto2 and an absent syntax (which
+// protoc omits for proto2 files) have the opposite; editions default the way
+// the reference does for edition 2023.
+func fileFeatures(f *descriptorpb.FileDescriptorProto) featureSet {
+	switch f.GetSyntax() {
+	case "proto3":
+		return featureSet{presence: 2, enumType: 1, repack: 1, utf8: 2, msgEnc: 1}
+	case "editions":
+		return featureSet{presence: 1, enumType: 1, repack: 1, utf8: 2, msgEnc: 1}
+	default:
+		return featureSet{presence: 1, enumType: 2, repack: 2, utf8: 3, msgEnc: 1}
+	}
+}
+
+// with folds one scope's FeatureSet over this one.
+func (fs featureSet) with(o *descriptorpb.FeatureSet) featureSet {
+	if o == nil {
+		return fs
+	}
+	if o.FieldPresence != nil {
+		fs.presence = int32(o.GetFieldPresence())
+	}
+	if o.EnumType != nil {
+		fs.enumType = int32(o.GetEnumType())
+	}
+	if o.RepeatedFieldEncoding != nil {
+		fs.repack = int32(o.GetRepeatedFieldEncoding())
+	}
+	if o.Utf8Validation != nil {
+		fs.utf8 = int32(o.GetUtf8Validation())
+	}
+	if o.MessageEncoding != nil {
+		fs.msgEnc = int32(o.GetMessageEncoding())
+	}
+	return fs
+}
+
+func (s *Schema) addEnum(full string, e *descriptorpb.EnumDescriptorProto, fs featureSet) {
+	fs = fs.with(e.GetOptions().GetFeatures())
 	vals := map[int32]string{}
 	byName := map[string]int32{}
 	for _, v := range e.Value {
@@ -406,16 +458,19 @@ func (s *Schema) addEnum(full string, e *descriptorpb.EnumDescriptorProto, f *de
 		}
 		byName[v.GetName()] = n
 	}
-	s.enums[full] = &EnumPlan{Full: full, Closed: syntaxOf(f) == "proto2", Values: vals, ByName: byName}
+	// shortcut: a field-level enum_type override is not read; no descriptor
+	// in the tree needs one. Add it on the field plan when one appears.
+	s.enums[full] = &EnumPlan{Full: full, Closed: fs.enumType == 2, Values: vals, ByName: byName}
 }
 
-func (s *Schema) addMessage(full string, m *descriptorpb.DescriptorProto, f *descriptorpb.FileDescriptorProto) {
-	s.messages[full] = &MessagePlan{Full: full, IsMapEntry: m.GetOptions().GetMapEntry()}
+func (s *Schema) addMessage(full string, m *descriptorpb.DescriptorProto, fs featureSet) {
+	fs = fs.with(m.GetOptions().GetFeatures())
+	s.messages[full] = &MessagePlan{Full: full, IsMapEntry: m.GetOptions().GetMapEntry(), feat: fs}
 	for _, e := range m.EnumType {
-		s.addEnum(full+"."+e.GetName(), e, f)
+		s.addEnum(full+"."+e.GetName(), e, fs)
 	}
 	for _, n := range m.NestedType {
-		s.addMessage(full+"."+n.GetName(), n, f)
+		s.addMessage(full+"."+n.GetName(), n, fs)
 	}
 }
 
@@ -428,9 +483,8 @@ func (s *Schema) fillMessage(full string, m *descriptorpb.DescriptorProto, f *de
 	for i, o := range m.OneofDecl {
 		oneofs[i] = o.GetName()
 	}
-	syntax := syntaxOf(f)
 	for _, fd := range m.Field {
-		fp, err := s.buildField(syntax, oneofs, fd)
+		fp, err := s.buildField(mp.feat, oneofs, fd)
 		if err != nil {
 			return fmt.Errorf("codec: message %s field %s: %w", full, fd.GetName(), err)
 		}
@@ -483,6 +537,15 @@ func (s *Schema) fillMessage(full string, m *descriptorpb.DescriptorProto, f *de
 	return nil
 }
 
+// fieldJSONName is the descriptor's json_name when it is spelled out, else
+// protoc's ToJsonName of the field name.
+func fieldJSONName(fd *descriptorpb.FieldDescriptorProto) string {
+	if n := fd.GetJsonName(); n != "" {
+		return n
+	}
+	return jsonName(fd.GetName())
+}
+
 func wireFor(t descriptorpb.FieldDescriptorProto_Type) (WireType, bool) {
 	switch t {
 	case descriptorpb.FieldDescriptorProto_TYPE_INT32,
@@ -525,14 +588,15 @@ func packable(t descriptorpb.FieldDescriptorProto_Type) bool {
 	}
 }
 
-func (s *Schema) buildField(syntax string, oneofs []string, fd *descriptorpb.FieldDescriptorProto) (*FieldPlan, error) {
+func (s *Schema) buildField(fs featureSet, oneofs []string, fd *descriptorpb.FieldDescriptorProto) (*FieldPlan, error) {
+	fs = fs.with(fd.GetOptions().GetFeatures())
 	wt, ok := wireFor(fd.GetType())
 	if !ok {
 		return nil, fmt.Errorf("unknown proto type %d", int32(fd.GetType()))
 	}
 	fp := &FieldPlan{
 		Name:     fd.GetName(),
-		JSONName: jsonName(fd.GetName()),
+		JSONName: fieldJSONName(fd),
 		Number:   uint32(fd.GetNumber()),
 		Proto:    fd.GetType(),
 		Wire:     wt,
@@ -593,11 +657,13 @@ func (s *Schema) buildField(syntax string, oneofs []string, fd *descriptorpb.Fie
 		fp.Presence = PresenceImplicit
 	case fd.GetType() == descriptorpb.FieldDescriptorProto_TYPE_MESSAGE || fp.Group:
 		fp.Presence = PresenceExplicit
-	case syntax == "proto2":
-		// Proto2 optional scalars always carry explicit presence.
-		fp.Presence = PresenceExplicit
-	default:
+	case fs.presence == 3:
+		// Editions spell proto2 required as a FeatureSet value.
+		fp.Presence = PresenceRequired
+	case fs.presence == 2:
 		fp.Presence = PresenceImplicit
+	default:
+		fp.Presence = PresenceExplicit
 	}
 
 	if fp.Proto == descriptorpb.FieldDescriptorProto_TYPE_MESSAGE || fp.Group {
@@ -615,22 +681,23 @@ func (s *Schema) buildField(syntax string, oneofs []string, fd *descriptorpb.Fie
 		fp.Enum = ref
 	}
 
-	// Packed encoding: proto3 packs repeated packable numerics unless
-	// packed=false is written explicitly (the option bit distinguishes
-	// explicit false from unset); proto2 packs only on packed=true.
+	// Packed encoding: the field FeatureSet wins, then the file/message
+	// default (PACKED for proto3 and editions, EXPANDED for proto2); an
+	// explicit `packed` option wins over both.
 	if fp.Repeated && packable(fp.Proto) {
-		if syntax == "proto3" {
-			fp.Packed = true
-			if opts := fd.GetOptions(); opts != nil && opts.Packed != nil {
-				fp.Packed = opts.GetPacked()
-			}
-		} else {
-			fp.Packed = fd.GetOptions().GetPacked()
+		fp.Packed = fs.repack == 1
+		if opts := fd.GetOptions(); opts != nil && opts.Packed != nil {
+			fp.Packed = opts.GetPacked()
 		}
 	}
-	// String validation follows the dialect default (VERIFY for proto3 and
-	// editions, NONE for proto2), like the reference FeatureSet default: only
-	// string fields carry it, bytes never do.
-	fp.UTF8 = syntax == "proto3" && fp.Proto == descriptorpb.FieldDescriptorProto_TYPE_STRING
+	// UTF-8 validation: only string fields carry it, bytes never do.
+	fp.UTF8 = fs.utf8 == 2 && fp.Proto == descriptorpb.FieldDescriptorProto_TYPE_STRING
+	// Editions message_encoding=DELIMITED frames a message field with group
+	// tags; the field stays a message for naming, so Group is left alone and
+	// the table row treats Delimited as a group (see buildRow).
+	if fp.Proto == descriptorpb.FieldDescriptorProto_TYPE_MESSAGE && fs.msgEnc == 2 {
+		fp.Delimited = true
+		fp.Wire = WireStartGroup
+	}
 	return fp, nil
 }

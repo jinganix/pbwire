@@ -130,7 +130,7 @@ func loadJSONSchema(t *testing.T) *runtime.Schema {
 					jfield("ratio", 11, jlabelOpt, descriptorpb.FieldDescriptorProto_TYPE_DOUBLE, ""),
 					jfield("quant", 12, jlabelOpt, descriptorpb.FieldDescriptorProto_TYPE_FLOAT, ""),
 					jfield("target", 13, jlabelOpt, descriptorpb.FieldDescriptorProto_TYPE_MESSAGE, ".jsontest.Target"),
-				jfield("shade", 14, jlabelOpt, descriptorpb.FieldDescriptorProto_TYPE_ENUM, ".jsontest.Shade"),
+					jfield("shade", 14, jlabelOpt, descriptorpb.FieldDescriptorProto_TYPE_ENUM, ".jsontest.Shade"),
 				},
 				NestedType: []*descriptorpb.DescriptorProto{
 					jmapEntry("ScoresEntry", "string", "int32", ""),

@@ -154,7 +154,9 @@ func (t *DType) Encode(m *DMsg) ([]byte, error) { return m.Encode() }
 // deterministic encoder. Only map-entry rows reorder, and the caller's
 // tree keeps its insertion order. Every other row keeps its order.
 func (t *DType) EncodeDeterministic(m *DMsg) ([]byte, error) {
-	tb := t.tableFor()
+	// The tree's own plan drives the rows: a caller may pass a tree of
+	// another type, and the row closures index its slots.
+	tb := m.typ.tableFor()
 	cap0 := tb.capHint()
 	if cap0 < 256 {
 		cap0 = 256
@@ -254,14 +256,12 @@ func msgSize(m *DMsg, lim Limits, depth int) (int, error) {
 	if err := lim.checkDepth(depth); err != nil {
 		return 0, err
 	}
-	tb := m.typ.tableFor()
-	shape := isEntryShape(tb)
 	entryPlan := m.typ.plan.IsMapEntry
 	n := 0
 	for i, fp := range m.typ.plan.Fields {
 		isKV := fp.Number == 1 || fp.Number == 2
 		entry := entryPlan && isKV
-		force := fp.Presence == PresenceRequired || (!entry && shape && isKV)
+		force := fp.Presence == PresenceRequired
 		size, err := fieldSize(&m.slots[i], fp, entry, force, lim, depth)
 		if err != nil {
 			return 0, err
@@ -278,11 +278,99 @@ func msgSize(m *DMsg, lim Limits, depth int) (int, error) {
 	return n + len(m.unknown), nil
 }
 
+// buildExtRow is a decode-only row for one extension: the closures land
+// in the extension slot (re-found per call, since findExt may grow the
+// slice) through the same builders regular rows use. Oneof stays off:
+// extensions cannot be oneof members. Encode keeps its own table walker,
+// so this row only ever serves decodeField and its callees.
+func (t *DType) buildExtRow(dm *DMsg, xp *ExtPlan) *Field {
+	fp := xp.Field
+	acc := func(any) *slot { return dm.findExt(xp) }
+	f := &Field{
+		Name:     fp.Name,
+		Num:      fp.Number,
+		Wire:     fp.Wire,
+		Explicit: explicitPresence(fp),
+		Required: fp.Presence == PresenceRequired,
+		Repeated: fp.Repeated,
+		Packed:   fp.Packed,
+		Group:    fp.Group || fp.Delimited,
+		UTF8:     fp.UTF8,
+	}
+	kind, ok := kindOf(fp.Proto)
+	if !ok {
+		return nil
+	}
+	f.Kind = kind
+	if kind == KindMessage {
+		sub := func() *DType {
+			st, err := t.s.Type(fp.Message)
+			if err != nil {
+				return nil
+			}
+			return st
+		}
+		f.Sub = func() *Table {
+			if st := sub(); st != nil {
+				return st.tableFor()
+			}
+			return nil
+		}
+		f.GetMsg = func(msg any) any {
+			if s := acc(msg).m; s != nil {
+				return s
+			}
+			return nil
+		}
+		f.GetOrCreateMsg = func(msg any) any {
+			s := acc(msg)
+			if s.m == nil {
+				st := sub()
+				if st == nil {
+					return nil
+				}
+				s.m = st.New()
+			}
+			s.present = true
+			return s.m
+		}
+		f.NewMsg = func() any {
+			if st := sub(); st != nil {
+				return st.New()
+			}
+			return nil
+		}
+		f.RepMsgLen = func(msg any) int {
+			if s := acc(msg).rep; s != nil {
+				return len(s.([]*DMsg))
+			}
+			return 0
+		}
+		f.RepMsgAt = func(msg any, idx int) any { return repOf[*DMsg](acc(msg))[idx] }
+		f.NewRepMsg = func(msg any) any {
+			s := acc(msg)
+			st := sub()
+			if st == nil {
+				return nil
+			}
+			child := st.New()
+			s.present = true
+			appendRep(s, child)
+			return child
+		}
+	}
+	if f.Repeated {
+		t.buildRepeatedRow(f, fp, acc)
+		return f
+	}
+	t.buildSingularRow(f, acc)
+	return f
+}
+
 // fieldSize is the encoded length of one field occurrence run: tags plus
 // payloads, with packed runs sharing one length prefix like the encoder.
 // entry marks a map-entry key/value row, which emits exactly when present;
-// force marks rows that always emit (proto2 required, or the Required mark
-// NewTable sets on entry-shaped rows).
+// force marks rows that always emit (proto2 required).
 func fieldSize(s *slot, fp *FieldPlan, entry, force bool, lim Limits, depth int) (int, error) {
 	if fp.Repeated {
 		return repSize(s, fp, lim, depth)
@@ -301,7 +389,7 @@ func fieldSize(s *slot, fp *FieldPlan, entry, force bool, lim Limits, depth int)
 		if !present && !force {
 			return 0, nil
 		}
-		if fp.Group {
+		if fp.Group || fp.Delimited {
 			child, err := msgSize(s.m, lim, depth+1)
 			if err != nil {
 				return 0, err
@@ -332,7 +420,7 @@ func fieldSize(s *slot, fp *FieldPlan, entry, force bool, lim Limits, depth int)
 // wrapper itself, so zero and empty values still count.
 func oneofSize(s *slot, fp *FieldPlan, lim Limits, depth int) (int, error) {
 	if fp.Proto == descriptorpb.FieldDescriptorProto_TYPE_MESSAGE || fp.Group {
-		if fp.Group {
+		if fp.Group || fp.Delimited {
 			child, err := msgSize(s.m, lim, depth+1)
 			if err != nil {
 				return 0, err
@@ -349,8 +437,8 @@ func oneofSize(s *slot, fp *FieldPlan, lim Limits, depth int) (int, error) {
 }
 
 // isZeroScalar reports whether an implicit-presence scalar reads as its
-// zero, exactly like the encoder's skip: floats compare == 0, so -0.0 is
-// omitted too.
+// zero, exactly like the encoder's skip: float -0.0 has a nonzero bit
+// pattern, so it still emits.
 func isZeroScalar(s *slot, fp *FieldPlan) bool {
 	switch fp.Proto {
 	case descriptorpb.FieldDescriptorProto_TYPE_INT32,
@@ -568,14 +656,15 @@ func numElemSize(fp *FieldPlan, sext, zext uint64) int {
 }
 
 // EncodeDelimited frames the message with a varint length prefix: prefix
-// plus body in one fresh slice the caller owns.
-func (m *DMsg) EncodeDelimited() []byte {
+// plus body in one fresh slice the caller owns. A body that cannot encode
+// (nesting past the depth cap) reports the error instead of framing nothing.
+func (m *DMsg) EncodeDelimited() ([]byte, error) {
 	body, err := m.Encode()
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	out := AppendVarint(make([]byte, 0, SizeVarint(uint64(len(body)))+len(body)), uint64(len(body)))
-	return append(out, body...)
+	return append(out, body...), nil
 }
 
 // DecodeDelimited decodes one length-prefixed frame: the message plus the
@@ -612,8 +701,13 @@ func (t *DType) DecodeDelimitedLimits(wire []byte, lim Limits) (*DMsg, int, erro
 	return m, d.Off + int(n), nil
 }
 
-// Encode serializes the tree into a fresh slice the caller owns.
+// Encode serializes the tree into a fresh slice the caller owns. A nil
+// tree encodes as absent (empty), like EncodedSize and IsInitialized treat
+// it, instead of panicking on the type lookup.
 func (m *DMsg) Encode() ([]byte, error) {
+	if m == nil {
+		return []byte{}, nil
+	}
 	t := m.typ.tableFor()
 	cap0 := t.capHint()
 	if cap0 < 256 {
@@ -651,19 +745,21 @@ func (t *DType) buildTable() *Table {
 	for _, i := range order {
 		rows = append(rows, t.buildRow(i, t.plan.Fields[i]))
 	}
-	tb := NewTable(t.plan.Full, rows)
-	tb.IsMapEntry = t.plan.IsMapEntry
-	if t.plan.IsMapEntry {
-		// Exact entry mark, independent of the table-name heuristic in
-		// NewTable: hand-built schemas may name entries freely.
-		if len(tb.ByNum) > 2 {
-			if tb.ByNum[1] != nil {
-				tb.ByNum[1].Required = true
-			}
-			if tb.ByNum[2] != nil {
-				tb.ByNum[2].Required = true
-			}
+	tb := newTable(t.plan.Full, rows, t.plan.IsMapEntry)
+	// Extensions are not rows (they live in m.ext, not the slot array),
+	// but binary decode needs a row to land them in: build one per hit
+	// from the same builders the regular rows use, so decode, text and
+	// JSON all write ext slots through identical closures.
+	tb.Ext = func(msg any, num uint32) *Field {
+		dm, ok := msg.(*DMsg)
+		if !ok {
+			return nil
 		}
+		xp, ok := t.s.ExtensionByNumber(t.plan.Full, num)
+		if !ok {
+			return nil
+		}
+		return t.buildExtRow(dm, xp)
 	}
 	tb.Unknown = func(msg any, raw []byte) {
 		d := msg.(*DMsg)
@@ -761,19 +857,9 @@ func (m *DMsg) findExt(xp *ExtPlan) *slot {
 	return &m.ext[len(m.ext)-1].s
 }
 
-// getExt returns the storage slot for an extension field, or nil when the
-// message holds no such extension.
-func (m *DMsg) getExt(xp *ExtPlan) *slot {
-	for i := range m.ext {
-		if m.ext[i].xp.Field.Number == xp.Field.Number {
-			return &m.ext[i].s
-		}
-	}
-	return nil
-}
-
-// without any built table (buildTable may still be pending), so the siblings
-// come from a plan scan, not a cache. When winner and newcomer are both a
+// mergeOneof sets the oneof member at slot i and clears its siblings: the
+// slot array is fixed by the plan, so the siblings come from a plain scan,
+// never from the table being built. When winner and newcomer are both a
 // nested value tree (C2: split oneof occurrences share one message), the
 // incoming tree merges in field by field instead of replacing the winner.
 func mergeOneof(m *DMsg, i int, v any) {
@@ -804,7 +890,14 @@ func (m *DMsg) mergeInto(dst *DMsg) {
 		return
 	}
 	for i := range m.slots {
-		if !m.slots[i].present || m.slots[i].oneofSet {
+		if !m.slots[i].present {
+			continue
+		}
+		if m.slots[i].oneofSet {
+			// A oneof member in the newer occurrence replaces whatever
+			// member the destination's oneof held, or merges into it when
+			// both occurrences set the same member.
+			dst.mark(i, m.slots[i].oneof)
 			continue
 		}
 		if m.typ.plan.Fields[i].Repeated {
@@ -855,7 +948,7 @@ func (t *DType) buildRow(i int, fp *FieldPlan) *Field {
 		Required: fp.Presence == PresenceRequired,
 		Repeated: fp.Repeated,
 		Packed:   fp.Packed,
-		Group:    fp.Group,
+		Group:    fp.Group || fp.Delimited,
 		Oneof:    fp.Presence == PresenceOneof,
 		UTF8:     fp.UTF8,
 	}
@@ -1176,35 +1269,25 @@ func appendRepeatedRep(dst, src any) any {
 	}
 	switch in := src.(type) {
 	case []int32:
-		out := append([]int32(nil), dst.([]int32)...)
-		return append(out, in...)
+		return append(dst.([]int32), in...)
 	case []int64:
-		out := append([]int64(nil), dst.([]int64)...)
-		return append(out, in...)
+		return append(dst.([]int64), in...)
 	case []uint32:
-		out := append([]uint32(nil), dst.([]uint32)...)
-		return append(out, in...)
+		return append(dst.([]uint32), in...)
 	case []uint64:
-		out := append([]uint64(nil), dst.([]uint64)...)
-		return append(out, in...)
+		return append(dst.([]uint64), in...)
 	case []float32:
-		out := append([]float32(nil), dst.([]float32)...)
-		return append(out, in...)
+		return append(dst.([]float32), in...)
 	case []float64:
-		out := append([]float64(nil), dst.([]float64)...)
-		return append(out, in...)
+		return append(dst.([]float64), in...)
 	case []bool:
-		out := append([]bool(nil), dst.([]bool)...)
-		return append(out, in...)
+		return append(dst.([]bool), in...)
 	case []string:
-		out := append([]string(nil), dst.([]string)...)
-		return append(out, in...)
+		return append(dst.([]string), in...)
 	case [][]byte:
-		out := append([][]byte(nil), dst.([][]byte)...)
-		return append(out, in...)
+		return append(dst.([][]byte), in...)
 	case []*DMsg:
-		out := append([]*DMsg(nil), dst.([]*DMsg)...)
-		return append(out, in...)
+		return append(dst.([]*DMsg), in...)
 	}
 	return src
 }

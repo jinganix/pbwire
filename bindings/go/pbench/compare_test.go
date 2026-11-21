@@ -95,29 +95,17 @@ func checkStruct(label string, got *matrix3.Scalars3, want *matrix3pb.Scalars3) 
 	return nil
 }
 
-// dyngoDirect times the direct struct path (EncodeModel/DecodeModel, no
-// DMsg tree). The gate still covers the tree-conversion arm separately
-// in gate_test.go, so this row measures the practical path.
-type dyngoDirect struct{ c *dyngo.Codec }
-
-func (d dyngoDirect) Name() string { return "dyngo" }
-func (d dyngoDirect) Marshal(m *matrix3.Scalars3) ([]byte, error) {
-	return d.c.DirectMarshal(m)
-}
-func (d dyngoDirect) Unmarshal(wire []byte) (*matrix3.Scalars3, error) {
-	return d.c.DirectUnmarshal(wire)
-}
-
 func TestCompare(t *testing.T) {
 	cDync, err := dync.New()
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer cDync.Close()
 	cDynGo, err := dyngo.New()
 	if err != nil {
 		t.Fatal(err)
 	}
-	impls := []codec{cDync, dyngoDirect{cDynGo}}
+	impls := []codec{cDync, cDynGo}
 	names := []string{"dync (C core)", "dyngo (Go core)", "protobuf-go"}
 
 	const rounds = 5

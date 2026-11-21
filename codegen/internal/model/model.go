@@ -36,9 +36,10 @@ type Field struct {
 
 // Message is one message with its fields in declaration order.
 type Message struct {
-	Name   string // local: nested path joined with "_", e.g. Outer_Inner
-	Full   string // fully qualified proto name
-	Fields []Field
+	Name       string // local: nested path joined with "_", e.g. Outer_Inner
+	Full       string // fully qualified proto name
+	Fields     []Field
+	IsMapEntry bool // protoc's synthetic map entry (key/value at 1/2)
 }
 
 // EnumValue and Enum carry the enum as plain integer constants: no emitter
@@ -162,7 +163,7 @@ func LowerCamel(s string) string {
 func (f *File) buildMessage(md protoreflect.MessageDescriptor, path []string) {
 	path = append(path, string(md.Name()))
 	local := strings.Join(path, "_")
-	msg := Message{Name: local, Full: string(md.FullName())}
+	msg := Message{Name: local, Full: string(md.FullName()), IsMapEntry: md.IsMapEntry()}
 	fields := md.Fields()
 	for i := 0; i < fields.Len(); i++ {
 		msg.Fields = append(msg.Fields, f.buildField(fields.Get(i)))

@@ -439,7 +439,13 @@ func writeGoUnknownHooks(b *strings.Builder, f *model.File) {
 // the struct; no wire logic is emitted here.
 func writeGoTable(b *strings.Builder, f *model.File, m model.Message) {
 	fmt.Fprintf(b, "// %sMeta is the generated DATA table for %s: one row per field.\n", m.Name, m.Full)
-	fmt.Fprintf(b, "var %sMeta = runtime.NewTable(%q, []*runtime.Field{\n", m.Name, m.Full)
+	ctor := "NewTable"
+	if m.IsMapEntry {
+		// An entry's key and value emit even when zero, so the table says
+		// what it is instead of the runtime guessing from its shape.
+		ctor = "NewMapEntryTable"
+	}
+	fmt.Fprintf(b, "var %sMeta = runtime.%s(%q, []*runtime.Field{\n", m.Name, ctor, m.Full)
 	for _, field := range goSorted(m) {
 		if field.Skip != "" {
 			continue

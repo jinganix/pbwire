@@ -18,9 +18,8 @@
 // field against the oracle before anything is timed, so a speed number from a
 // wrong codec is meaningless but never published.
 //
-// The descriptor set is built by bench.sh (protoc) and never committed. The
-// two generated packages are the committed ones under tests/, so the
-// baseline does not need protoc-gen-go.
+// The two generated packages are the committed ones under tests/, so the
+// baseline needs neither protoc nor protoc-gen-go.
 //
 //	./bench.sh          build, run
 package benchmarks
@@ -378,10 +377,22 @@ func TestMatrix3Bench(t *testing.T) {
 		for i := range officials {
 			officials[i] = fillOfficial(tr.n)
 		}
+		structMsgs := make([]*matrix3.Scalars3, len(officials))
+		for i, o := range officials {
+			reference, err := proto.Marshal(o)
+			if err != nil {
+				t.Fatal(err)
+			}
+			m := &matrix3.Scalars3{}
+			if err := m.Unmarshal(reference); err != nil {
+				t.Fatal(err)
+			}
+			structMsgs[i] = m
+		}
 		structEncodePar, structEncodeParLo, structEncodeParHi := measureParallel(calibrate(func() {
-			_, _ = structMsg.Marshal()
-		}, 1), func(_ int) {
-			_, _ = structMsg.Marshal()
+			_, _ = structMsgs[0].Marshal()
+		}, 1), func(g int) {
+			_, _ = structMsgs[g%len(structMsgs)].Marshal()
 		}, "GoEncodePar"+tr.label)
 		officialEncodePar, officialEncodeParLo, officialEncodeParHi := measureParallel(calibrate(func() {
 			_, _ = proto.Marshal(officials[0])
@@ -409,24 +420,12 @@ func TestMatrix3Bench(t *testing.T) {
 		row("protobuf-go", "encode", len(reference), officialEncode, officialEncodeAllocs, officialEncodeBop)
 		row("pbwire-go", "decode", len(reference), structDecode, structDecodeAllocs, structDecodeBop)
 		row("protobuf-go", "decode", len(reference), officialDecode, officialDecodeAllocs, officialDecodeBop)
-		structEncodeParAllocs, structEncodeParBop := allocStats(func() {
-			_, _ = structMsg.Marshal()
-		})
-		officialEncodeParAllocs, officialEncodeParBop := allocStats(func() {
-			_, _ = proto.Marshal(official)
-		})
-		structDecodeParAllocs, structDecodeParBop := allocStats(func() {
-			m := new(matrix3.Scalars3)
-			_ = m.Unmarshal(reference)
-		})
-		officialDecodeParAllocs, officialDecodeParBop := allocStats(func() {
-			var m matrix3pb.Scalars3
-			_ = proto.Unmarshal(reference, &m)
-		})
-		row("pbwire-go", "encode-par", len(reference), structEncodePar, structEncodeParAllocs, structEncodeParBop)
-		row("protobuf-go", "encode-par", len(reference), officialEncodePar, officialEncodeParAllocs, officialEncodeParBop)
-		row("pbwire-go", "decode-par", len(reference), structDecodePar, structDecodeParAllocs, structDecodeParBop)
-		row("protobuf-go", "decode-par", len(reference), officialDecodePar, officialDecodeParAllocs, officialDecodeParBop)
+		// Allocations do not depend on the goroutine count: the serial
+		// numbers above describe the parallel rows too.
+		row("pbwire-go", "encode-par", len(reference), structEncodePar, structEncodeAllocs, structEncodeBop)
+		row("protobuf-go", "encode-par", len(reference), officialEncodePar, officialEncodeAllocs, officialEncodeBop)
+		row("pbwire-go", "decode-par", len(reference), structDecodePar, structDecodeAllocs, structDecodeBop)
+		row("protobuf-go", "decode-par", len(reference), officialDecodePar, officialDecodeAllocs, officialDecodeBop)
 		// Spread lines start at column 0 with no "bytes", so the recorder
 		// skips them (see its selftest): the log keeps the noise, the JSON
 		// keeps the medians.

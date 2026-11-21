@@ -24,7 +24,6 @@ import (
 	"bytes"
 	"math"
 	"sort"
-	"strings"
 	"sync/atomic"
 	"unicode/utf8"
 	"unsafe"
@@ -258,14 +257,22 @@ type Field struct {
 	Present func(msg any) bool
 }
 
-// Table is one message's table: its rows plus a ByNum index sized to the
-// message's max field number for O(1) decode lookup. The two hooks are
+// Table is one message's table: its rows plus a ByNum index for O(1) decode
+// lookup. The index is a slice sized to the message's max field number,
+// unless that number is far above the field count (a legal 536870911 would
+// ask for gigabytes); such a table keeps a map instead. The two hooks are
 // optional: unset, unknown fields are dropped exactly as before.
 type Table struct {
 	Name   string
 	Fields []*Field
 	ByNum  []*Field
+	sparse map[uint32]*Field
 
+	// Ext resolves an extension row for the dynamic core: binary decode
+	// calls it only when the field number misses every row, so generated
+	// and hand-built tables (nil hook) keep the old drop behavior and the
+	// hot path pays one nil check per unknown field.
+	Ext func(msg any, num uint32) *Field
 	// Unknown receives every field the table does not declare (or a known
 	// field carrying the wrong wire type), as bytes including the tag.
 	Unknown func(msg any, raw []byte)
@@ -282,10 +289,9 @@ type Table struct {
 	hasFast bool
 
 	// IsMapEntry marks a map-entry message table: holders repeat it and
-	// sort their elements by key on the deterministic path. The dynamic
-	// core sets it from the schema plan; generated tables predate the
-	// flag, so the encoder also recognizes the protoc entry shape (see
-	// isMapEntryTable).
+	// sort their elements by key on the deterministic path, and the key
+	// and value rows always emit, even when zero. The dynamic core takes
+	// it from the schema plan; generated code asks for NewMapEntryTable.
 	IsMapEntry bool
 }
 
@@ -295,41 +301,68 @@ type Table struct {
 // force every later small encode to allocate and zero it.
 func (t *Table) capHint() int { return int(t.encCap.Load()) }
 
-// setCapHint records what the next presize should be.
-func (t *Table) setCapHint(n int) { t.encCap.Store(int64(n)) }
+// setCapHint records what the next presize should be, but only once the size
+// has moved by more than a factor of two. This store is the only shared write
+// on a table, and its cache line also carries Fields/ByNum/Name, so a steady
+// payload must not rewrite it per encode: that bounce is what stops parallel
+// whole-message encodes from scaling.
+func (t *Table) setCapHint(n int) {
+	if cur := int(t.encCap.Load()); cur > 0 && n >= cur/2 && n <= cur*2 {
+		return
+	}
+	t.encCap.Store(int64(n))
+}
 
 // NewTable builds the ByNum index over fields. Tables are read-only after
 // this call; decode only reads them. Sub tables stay lazy (a func) so a
 // message containing itself cannot form a package-init cycle.
-func NewTable(name string, fields []*Field) *Table {
+func NewTable(name string, fields []*Field) *Table { return newTable(name, fields, false) }
+
+// NewMapEntryTable is NewTable for a map-entry message: its key and value
+// rows emit whenever the entry does, even for a zero key or an empty value,
+// like the C core and every reference serializer.
+func NewMapEntryTable(name string, fields []*Field) *Table {
+	return newTable(name, fields, true)
+}
+
+func newTable(name string, fields []*Field, isMapEntry bool) *Table {
 	max := 0
 	for _, f := range fields {
 		if int(f.Num) > max {
 			max = int(f.Num)
 		}
 	}
-	byNum := make([]*Field, max+1)
+	sparse := max > 1<<16 && max > 4*len(fields)
+	var byNum []*Field
+	if sparse {
+		byNum = nil
+	} else {
+		byNum = make([]*Field, max+1)
+	}
+	var byMap map[uint32]*Field
 	for _, f := range fields {
+		if sparse {
+			if byMap == nil {
+				byMap = make(map[uint32]*Field, len(fields))
+			}
+			byMap[f.Num] = f
+			continue
+		}
 		byNum[f.Num] = f
 	}
-	tb := &Table{Name: name, Fields: fields, ByNum: byNum}
+	tb := &Table{Name: name, Fields: fields, ByNum: byNum, sparse: byMap, IsMapEntry: isMapEntry}
 	for _, f := range fields {
 		if f.Fast {
 			tb.hasFast = true
 			break
 		}
 	}
-	// Map-entry key/value rows always emit when the entry does, even for
-	// zero keys and empty values, like the C core and every reference
-	// serializer. Generated tables predate a schema marker, so entries
-	// are recognized by the shape protoc enforces (see isEntryShape);
-	// the dynamic core also marks exact entry tables from its plan.
-	if isEntryShape(tb) && len(tb.ByNum) > 2 {
-		if tb.ByNum[1] != nil {
-			tb.ByNum[1].Required = true
+	if isMapEntry {
+		if f := lookup(tb, 1); f != nil {
+			f.Required = true
 		}
-		if tb.ByNum[2] != nil {
-			tb.ByNum[2].Required = true
+		if f := lookup(tb, 2); f != nil {
+			f.Required = true
 		}
 	}
 	return tb
@@ -340,7 +373,8 @@ func lookup(t *Table, num uint32) *Field {
 	if int(num) < len(t.ByNum) {
 		return t.ByNum[num]
 	}
-	return nil
+	// A nil map read returns nil, so dense tables pay only the len check.
+	return t.sparse[num]
 }
 
 // packable reports whether kind uses a varint/fixed primitive that packs.
@@ -1146,37 +1180,12 @@ func encodeRepeated(e *Encoder, msg any, f *Field, depth int, deterministic bool
 	return nil
 }
 
-// isMapEntryTable reports whether sub is a map-entry message. The dynamic
-// core marks entry tables from the schema plan; generated tables predate
-// that flag, so they fall back to the entry shape protoc enforces: exactly
-// fields 1 (scalar key) and 2 (value), named like an entry. A repeated
-// plain message shaped exactly like an entry would also match; protoc
-// names real entries Parent+Field+"Entry", so the suffix keeps that
-// misfire to hand-built tables only.
+// isMapEntryTable reports whether sub is a map-entry message. The flag is
+// explicit: NewMapEntryTable (generated code) and the dynamic core's plan
+// set it, so an ordinary message that happens to look like an entry is
+// never sorted or forced to emit zero keys.
 func isMapEntryTable(sub *Table) bool {
-	if sub == nil {
-		return false
-	}
-	return sub.IsMapEntry || isEntryShape(sub)
-}
-
-// isEntryShape recognizes the entry shape protoc enforces: exactly fields
-// 1 (scalar key) and 2 (value), on a table named like an entry.
-func isEntryShape(tb *Table) bool {
-	if tb == nil || len(tb.Fields) != 2 {
-		return false
-	}
-	k, v := tb.Fields[0], tb.Fields[1]
-	if k.Num != 1 || v.Num != 2 {
-		return false
-	}
-	if k.Kind == KindMessage || k.Repeated || k.Oneof || k.Explicit || k.Group {
-		return false
-	}
-	if v.Repeated || v.Oneof || v.Explicit || v.Group {
-		return false
-	}
-	return strings.HasSuffix(tb.Name, "Entry")
+	return sub != nil && sub.IsMapEntry
 }
 
 // mapKey is one entry's sort key: the raw numeric bits, the string bytes,
@@ -1195,7 +1204,7 @@ type mapKey struct {
 // A dynamic entry that never set its key sorts as missing.
 func mapEntryKey(sub *Table, elem any) mapKey {
 	var k mapKey
-	if sub == nil || len(sub.ByNum) < 2 || sub.ByNum[1] == nil {
+	if elem == nil || sub == nil || len(sub.ByNum) < 2 || sub.ByNum[1] == nil {
 		return k
 	}
 	row := sub.ByNum[1]
@@ -1369,6 +1378,9 @@ func DecodeTableLimits(d *Decoder, a *Arena, msg any, t *Table, depth int, lim L
 			return err
 		}
 		f := lookup(t, num)
+		if f == nil && t.Ext != nil {
+			f = t.Ext(msg, num)
+		}
 		if f == nil {
 			if err := skipUnknown(t, d, msg, num, wt, depth, lim); err != nil {
 				return err
@@ -1652,7 +1664,7 @@ func decodeField(d *Decoder, a *Arena, t *Table, msg any, base unsafe.Pointer, f
 // decodeGroup runs a proto2 group body: members loop until the matching
 // end tag, dispatched through the sub-table like a nested message.
 func decodeGroup(d *Decoder, a *Arena, msg any, f *Field, depth int, lim Limits) error {
-	return decodeGroupBody(d, a, f.GetOrCreateMsg(msg), f.Sub(), f.Num, depth, lim)
+	return decodeGroupBody(d, a, f.GetOrCreateMsg(msg), f.Sub(), f.Num, depth+1, lim)
 }
 
 // decodeGroupBody is the end-tag-terminated loop shared by plain and oneof
@@ -1675,6 +1687,9 @@ func decodeGroupBody(d *Decoder, a *Arena, target any, sub *Table, group uint32,
 			return nil
 		}
 		g := lookup(sub, num)
+		if g == nil && sub.Ext != nil {
+			g = sub.Ext(target, num)
+		}
 		if g == nil {
 			if err := skipUnknown(sub, d, target, num, wt, depth, lim); err != nil {
 				return err
@@ -1845,7 +1860,7 @@ func readOneofValue(d *Decoder, a *Arena, f *Field, wt WireType, depth int, lim 
 				return nil, false, nil
 			}
 			target := f.NewMsg()
-			if err := decodeGroupBody(d, a, target, f.Sub(), f.Num, depth, lim); err != nil {
+			if err := decodeGroupBody(d, a, target, f.Sub(), f.Num, depth+1, lim); err != nil {
 				return nil, false, err
 			}
 			return target, true, nil
@@ -1891,9 +1906,6 @@ func decodeRepeated(d *Decoder, a *Arena, t *Table, msg any, f *Field, wt WireTy
 			}
 			f.AppendI32(msg, int32(v))
 		case WireLen:
-			if !packableKind(f.Kind) {
-				return skipUnknown(t, d, msg, f.Num, wt, depth, lim)
-			}
 			raw, err := d.Bytes()
 			if err != nil {
 				return err
@@ -1918,9 +1930,6 @@ func decodeRepeated(d *Decoder, a *Arena, t *Table, msg any, f *Field, wt WireTy
 			}
 			f.AppendI64(msg, int64(v))
 		case WireLen:
-			if !packableKind(f.Kind) {
-				return skipUnknown(t, d, msg, f.Num, wt, depth, lim)
-			}
 			raw, err := d.Bytes()
 			if err != nil {
 				return err
@@ -1945,9 +1954,6 @@ func decodeRepeated(d *Decoder, a *Arena, t *Table, msg any, f *Field, wt WireTy
 			}
 			f.AppendU32(msg, uint32(v))
 		case WireLen:
-			if !packableKind(f.Kind) {
-				return skipUnknown(t, d, msg, f.Num, wt, depth, lim)
-			}
 			raw, err := d.Bytes()
 			if err != nil {
 				return err
@@ -1972,9 +1978,6 @@ func decodeRepeated(d *Decoder, a *Arena, t *Table, msg any, f *Field, wt WireTy
 			}
 			f.AppendU64(msg, v)
 		case WireLen:
-			if !packableKind(f.Kind) {
-				return skipUnknown(t, d, msg, f.Num, wt, depth, lim)
-			}
 			raw, err := d.Bytes()
 			if err != nil {
 				return err
@@ -1999,9 +2002,6 @@ func decodeRepeated(d *Decoder, a *Arena, t *Table, msg any, f *Field, wt WireTy
 			}
 			f.AppendS32(msg, ZigZagDecode32(v))
 		case WireLen:
-			if !packableKind(f.Kind) {
-				return skipUnknown(t, d, msg, f.Num, wt, depth, lim)
-			}
 			raw, err := d.Bytes()
 			if err != nil {
 				return err
@@ -2026,9 +2026,6 @@ func decodeRepeated(d *Decoder, a *Arena, t *Table, msg any, f *Field, wt WireTy
 			}
 			f.AppendS64(msg, ZigZagDecode64(v))
 		case WireLen:
-			if !packableKind(f.Kind) {
-				return skipUnknown(t, d, msg, f.Num, wt, depth, lim)
-			}
 			raw, err := d.Bytes()
 			if err != nil {
 				return err
@@ -2053,9 +2050,6 @@ func decodeRepeated(d *Decoder, a *Arena, t *Table, msg any, f *Field, wt WireTy
 			}
 			f.AppendFx32(msg, v)
 		case WireLen:
-			if !packableKind(f.Kind) {
-				return skipUnknown(t, d, msg, f.Num, wt, depth, lim)
-			}
 			raw, err := d.Bytes()
 			if err != nil {
 				return err
@@ -2080,9 +2074,6 @@ func decodeRepeated(d *Decoder, a *Arena, t *Table, msg any, f *Field, wt WireTy
 			}
 			f.AppendFx64(msg, v)
 		case WireLen:
-			if !packableKind(f.Kind) {
-				return skipUnknown(t, d, msg, f.Num, wt, depth, lim)
-			}
 			raw, err := d.Bytes()
 			if err != nil {
 				return err
@@ -2107,9 +2098,6 @@ func decodeRepeated(d *Decoder, a *Arena, t *Table, msg any, f *Field, wt WireTy
 			}
 			f.AppendSfx32(msg, int32(v))
 		case WireLen:
-			if !packableKind(f.Kind) {
-				return skipUnknown(t, d, msg, f.Num, wt, depth, lim)
-			}
 			raw, err := d.Bytes()
 			if err != nil {
 				return err
@@ -2134,9 +2122,6 @@ func decodeRepeated(d *Decoder, a *Arena, t *Table, msg any, f *Field, wt WireTy
 			}
 			f.AppendSfx64(msg, int64(v))
 		case WireLen:
-			if !packableKind(f.Kind) {
-				return skipUnknown(t, d, msg, f.Num, wt, depth, lim)
-			}
 			raw, err := d.Bytes()
 			if err != nil {
 				return err
@@ -2161,9 +2146,6 @@ func decodeRepeated(d *Decoder, a *Arena, t *Table, msg any, f *Field, wt WireTy
 			}
 			f.AppendF32(msg, math.Float32frombits(v))
 		case WireLen:
-			if !packableKind(f.Kind) {
-				return skipUnknown(t, d, msg, f.Num, wt, depth, lim)
-			}
 			raw, err := d.Bytes()
 			if err != nil {
 				return err
@@ -2188,9 +2170,6 @@ func decodeRepeated(d *Decoder, a *Arena, t *Table, msg any, f *Field, wt WireTy
 			}
 			f.AppendF64(msg, math.Float64frombits(v))
 		case WireLen:
-			if !packableKind(f.Kind) {
-				return skipUnknown(t, d, msg, f.Num, wt, depth, lim)
-			}
 			raw, err := d.Bytes()
 			if err != nil {
 				return err
@@ -2215,9 +2194,6 @@ func decodeRepeated(d *Decoder, a *Arena, t *Table, msg any, f *Field, wt WireTy
 			}
 			f.AppendBool(msg, v != 0)
 		case WireLen:
-			if !packableKind(f.Kind) {
-				return skipUnknown(t, d, msg, f.Num, wt, depth, lim)
-			}
 			raw, err := d.Bytes()
 			if err != nil {
 				return err
@@ -2263,9 +2239,6 @@ func decodeRepeated(d *Decoder, a *Arena, t *Table, msg any, f *Field, wt WireTy
 			}
 			f.AppendEnum(msg, int32(v))
 		case WireLen:
-			if !packableKind(f.Kind) {
-				return skipUnknown(t, d, msg, f.Num, wt, depth, lim)
-			}
 			raw, err := d.Bytes()
 			if err != nil {
 				return err
@@ -2290,7 +2263,7 @@ func decodeRepeated(d *Decoder, a *Arena, t *Table, msg any, f *Field, wt WireTy
 				return skipUnknown(t, d, msg, f.Num, wt, depth, lim)
 			}
 			item := f.NewRepMsg(msg)
-			return decodeGroupBody(d, a, item, f.Sub(), f.Num, depth, lim)
+			return decodeGroupBody(d, a, item, f.Sub(), f.Num, depth+1, lim)
 		}
 		if wt != WireLen {
 			return skipUnknown(t, d, msg, f.Num, wt, depth, lim)

@@ -49,7 +49,7 @@ func encodeExtTable(e *Encoder, m *DMsg, depth int, deterministic bool) error {
 			}
 			continue
 		}
-		if fp.Proto == descriptorpb.FieldDescriptorProto_TYPE_MESSAGE || fp.Group {
+		if fp.Proto == descriptorpb.FieldDescriptorProto_TYPE_MESSAGE || fp.Group || fp.Delimited {
 			if err := encodeExtMsg(e, m, fp, s.m, depth, deterministic); err != nil {
 				return err
 			}
@@ -61,10 +61,11 @@ func encodeExtTable(e *Encoder, m *DMsg, depth int, deterministic bool) error {
 	return nil
 }
 
-// encodeExtMsg frames one singular extension submessage, group or not. A
+// encodeExtMsg frames one singular extension submessage, group (or editions
+// delimited, which travels with group tags) or not. A
 // present-but-nil slot encodes empty, exactly like fieldSize sizes it.
 func encodeExtMsg(e *Encoder, m *DMsg, fp *FieldPlan, sub *DMsg, depth int, deterministic bool) error {
-	if fp.Group {
+	if fp.Group || fp.Delimited {
 		e.Tag(fp.Number, WireStartGroup)
 		if sub != nil {
 			if err := encodeSubmessage(e, sub, sub.typ.tableFor(), depth+1, deterministic); err != nil {
@@ -88,7 +89,7 @@ func encodeExtMsg(e *Encoder, m *DMsg, fp *FieldPlan, sub *DMsg, depth int, dete
 // element, packable numerics share one length prefix when the row packs,
 // everything else repeats the tag like the encodeRepeated engine.
 func encodeExtRep(e *Encoder, m *DMsg, fp *FieldPlan, s *slot, depth int, deterministic bool) error {
-	if fp.Group {
+	if fp.Group || fp.Delimited {
 		for _, sub := range s.rep.([]*DMsg) {
 			e.Tag(fp.Number, WireStartGroup)
 			if sub != nil {

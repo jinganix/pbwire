@@ -601,9 +601,10 @@ func (m *DMsg) NewMessage(name string) (*DMsg, error) {
 		return child, nil
 	}
 	if fp.Presence == PresenceOneof {
-		m.slots[i].m = child
 		m.mark(i, child)
-		return child, nil
+		// The caller writes through the child the tree kept, which is the
+		// previous winner when mergeOneof folded the new one into it.
+		return m.slots[i].m, nil
 	}
 	m.slots[i].m = child
 	m.slots[i].present = true

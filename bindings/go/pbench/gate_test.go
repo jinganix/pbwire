@@ -5,7 +5,6 @@ package pbench
 import (
 	"bytes"
 	"fmt"
-	"math"
 	"strings"
 	"testing"
 
@@ -25,6 +24,7 @@ func TestArmsGate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer cDync.Close()
 	cDynGo, err := dyngo.New()
 	if err != nil {
 		t.Fatal(err)
@@ -83,7 +83,6 @@ func structOf(w *matrix3pb.Scalars3) *matrix3.Scalars3 {
 		m.Inners = append(m.Inners, &matrix3.Inner3{Name: v.Name, Value: v.Value})
 	}
 	m.Flags = append(m.Flags, w.Flags...)
-	_ = math.MinInt32
 	return m
 }
 
@@ -112,6 +111,7 @@ func TestGateSemantics(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer cDync.Close()
 	cDynGo, err := dyngo.New()
 	if err != nil {
 		t.Fatal(err)

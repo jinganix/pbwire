@@ -3,9 +3,8 @@
 // default (legacy) mode. Mirrors src/json.c, which is the authority for
 // every semantic here, and bindings/java/runtime/Json.java.
 //
-// Field names print as their camelCase (json_name) spelling, extensions
-// would print as [full.name] (the Go plans carry no extensions, so bracket
-// keys never resolve), 64-bit integers quoted, bytes as standard base64,
+// Field names print as their camelCase (json_name) spelling, extensions as
+// [full.name], 64-bit integers quoted, bytes as standard base64,
 // enums by name, floats in the shortest round-tripping form (non-finite
 // values quoted), maps as objects with duplicate keys collapsed to the last
 // entry, and the well-known types in their JSON form (@type expansions,
@@ -221,8 +220,23 @@ func fieldByNumber(plan *MessagePlan, num uint32) (*FieldPlan, int) {
 /* ------------------------------------------------------------ printer */
 
 type jsonOut struct {
-	sb  strings.Builder
-	err error
+	sb    strings.Builder
+	err   error
+	depth int
+}
+
+// enter spends one nesting level; past MaxDepth the printer fails with
+// ErrDepth instead of growing the goroutine stack.
+func (o *jsonOut) enter() bool {
+	if o.err != nil {
+		return false
+	}
+	if o.depth >= MaxDepth {
+		o.fail(ErrDepth)
+		return false
+	}
+	o.depth++
+	return true
 }
 
 func (o *jsonOut) fail(err error) {
@@ -358,6 +372,10 @@ func (o *jsonOut) printMessage(m *DMsg) {
 		o.fail(fmt.Errorf("json: cannot print a nil message"))
 		return
 	}
+	if !o.enter() {
+		return
+	}
+	defer func() { o.depth-- }()
 	switch jsonClassify(m.typ.plan.Full) {
 	case jwAny:
 		o.printAny(m)
@@ -417,11 +435,13 @@ func (o *jsonOut) printMessage(m *DMsg) {
 		order = kept
 	}
 	o.ch('{')
-	for k, i := range order {
+	n := 0
+	for _, i := range order {
 		fp := m.typ.plan.Fields[i]
-		if k > 0 {
+		if n > 0 {
 			o.ch(',')
 		}
+		n++
 		o.quoted(jsonFieldName(fp))
 		o.ch(':')
 		if fp.Repeated {
@@ -430,7 +450,40 @@ func (o *jsonOut) printMessage(m *DMsg) {
 		}
 		o.printSingular(m, i, fp)
 	}
+	// Extensions follow the regular fields in number order, keyed
+	// "[full.name]" like the reference printer.
+	for x := range m.ext {
+		xv := &m.ext[x]
+		if !xv.s.present {
+			continue
+		}
+		if n > 0 {
+			o.ch(',')
+		}
+		n++
+		o.quoted("[" + xv.xp.Full + "]")
+		o.ch(':')
+		o.printExtension(m.typ, xv)
+	}
 	o.ch('}')
+}
+
+// printExtension prints one set extension's value: an array for repeated
+// runs, the bare value otherwise.
+func (o *jsonOut) printExtension(t *DType, xv *extValue) {
+	fp, s := extField(xv), &xv.s
+	if !fp.Repeated {
+		o.printScalar(t, fp, s.u, s.str, s.p, s.m)
+		return
+	}
+	o.ch('[')
+	for k := 0; k < repLen(s); k++ {
+		if k > 0 {
+			o.ch(',')
+		}
+		o.printElement(t, fp, s, k)
+	}
+	o.ch(']')
 }
 
 // enumName resolves an enum value to its first-declared name.
@@ -454,7 +507,7 @@ func (o *jsonOut) printFloat(kind descriptorpb.FieldDescriptorProto_Type, bits u
 		case math.IsInf(float64(f), -1):
 			o.str("\"-Infinity\"")
 		default:
-			o.str(strconv.FormatFloat(float64(f), 'g', -1, 32))
+			o.str(jsonFloat32(f))
 		}
 		return
 	}
@@ -467,8 +520,35 @@ func (o *jsonOut) printFloat(kind descriptorpb.FieldDescriptorProto_Type, bits u
 	case math.IsInf(v, -1):
 		o.str("\"-Infinity\"")
 	default:
-		o.str(strconv.FormatFloat(v, 'g', -1, 64))
+		o.str(jsonFloat64(v))
 	}
+}
+
+// jsonFloat64 spells a double the way the reference printer does: the
+// shortest %.*g form that parses back to the same value, starting at 15
+// significant digits. Go's 'g' with precision -1 switches to an exponent
+// spelling sooner than the reference, which turns 123456789 into
+// 1.23456789e+08.
+func jsonFloat64(v float64) string {
+	for prec := 15; prec <= 17; prec++ {
+		txt := strconv.FormatFloat(v, 'g', prec, 64)
+		if back, err := strconv.ParseFloat(txt, 64); err == nil && back == v {
+			return txt
+		}
+	}
+	return "0"
+}
+
+// jsonFloat32 is jsonFloat64 for a float value: the reference formats the
+// widened double, so 0.1 prints as 0.100000001.
+func jsonFloat32(f float32) string {
+	for prec := 9; prec <= 17; prec++ {
+		txt := strconv.FormatFloat(float64(f), 'g', prec, 64)
+		if back, err := strconv.ParseFloat(txt, 64); err == nil && float32(back) == f {
+			return txt
+		}
+	}
+	return "0"
 }
 
 func (o *jsonOut) printScalar(t *DType, fp *FieldPlan, u uint64, str string, p []byte, sub *DMsg) {
@@ -836,26 +916,43 @@ func (o *jsonOut) printFieldMask(m *DMsg) {
 }
 
 func (o *jsonOut) printStruct(m *DMsg) {
+	if !o.enter() {
+		return
+	}
+	defer func() { o.depth-- }()
 	_, fieldsOrd := fieldByNumber(m.typ.plan, 1)
 	if fieldsOrd < 0 {
 		o.fail(fmt.Errorf("json: Struct has no fields"))
 		return
 	}
 	items, _ := m.slots[fieldsOrd].rep.([]*DMsg)
-	o.ch('{')
-	first := true
-	for _, e := range items {
+	// Binary input may repeat a key (last wins); a JSON object cannot.
+	last := make(map[string]int, len(items))
+	for k, e := range items {
 		if e == nil {
 			o.fail(fmt.Errorf("json: Struct entry is nil"))
 			return
 		}
 		keyFP, keyOrd := fieldByNumber(e.typ.plan, 1)
+		if keyFP == nil || !e.slots[keyOrd].present {
+			o.fail(fmt.Errorf("json: Struct entry is malformed"))
+			return
+		}
+		last[e.slots[keyOrd].str] = k
+	}
+	o.ch('{')
+	first := true
+	for k, e := range items {
+		_, keyOrd := fieldByNumber(e.typ.plan, 1)
 		valFP, valOrd := fieldByNumber(e.typ.plan, 2)
-		if keyFP == nil || valFP == nil || !e.slots[keyOrd].present || e.slots[valOrd].m == nil {
+		if keyOrd < 0 || valFP == nil || e.slots[valOrd].m == nil {
 			o.fail(fmt.Errorf("json: Struct entry is malformed"))
 			return
 		}
 		val := e.slots[valOrd].m
+		if last[e.slots[keyOrd].str] != k {
+			continue
+		}
 		if jsonClassify(val.typ.plan.Full) == jwValue && jValueIsEmpty(val) {
 			continue
 		}
@@ -871,6 +968,10 @@ func (o *jsonOut) printStruct(m *DMsg) {
 }
 
 func (o *jsonOut) printListValue(m *DMsg) {
+	if !o.enter() {
+		return
+	}
+	defer func() { o.depth-- }()
 	_, valuesOrd := fieldByNumber(m.typ.plan, 1)
 	if valuesOrd < 0 {
 		o.fail(fmt.Errorf("json: ListValue has no values"))
@@ -898,9 +999,10 @@ func (o *jsonOut) printListValue(m *DMsg) {
 
 // printValue prints a google.protobuf.Value: exactly one of its six fields.
 func (o *jsonOut) printValue(m *DMsg) {
-	if o.err != nil {
+	if !o.enter() {
 		return
 	}
+	defer func() { o.depth-- }()
 	for n := uint32(1); n <= 6; n++ {
 		fp, ord := fieldByNumber(m.typ.plan, n)
 		if fp == nil || !m.slots[ord].present {
@@ -916,7 +1018,7 @@ func (o *jsonOut) printValue(m *DMsg) {
 				o.fail(fmt.Errorf("json: Value number is not finite"))
 				return
 			}
-			o.str(strconv.FormatFloat(v, 'g', -1, 64))
+			o.str(jsonFloat64(v))
 		case 3: // string_value
 			o.quoted(s.str)
 		case 4: // bool_value
@@ -2018,15 +2120,15 @@ func (p *jsonIn) parseFieldValue(m *DMsg, ord int, fp *FieldPlan, inArray bool) 
 			return p.parseArray(m, ord, fp)
 		}
 		if fp.Proto == descriptorpb.FieldDescriptorProto_TYPE_ENUM {
-			skip, err := p.parseEnumValue(m, ord, fp)
-			_ = skip
+			// The element arm stores its own value; only the map arm
+			// needs the "ignored unknown name" flag.
+			_, err := p.parseEnumValue(m, ord, fp)
 			return err
 		}
 		return p.parseScalarValue(m, ord, fp)
 	}
 	if fp.Proto == descriptorpb.FieldDescriptorProto_TYPE_ENUM {
-		skip, err := p.parseEnumValue(m, ord, fp)
-		_ = skip
+		_, err := p.parseEnumValue(m, ord, fp)
 		return err
 	}
 	return p.parseScalarValue(m, ord, fp)
@@ -2086,36 +2188,38 @@ func (p *jsonIn) parseElement(m *DMsg, ord int, fp *FieldPlan) error {
 		return p.emitNull(m, ord, fp)
 	}
 	// Nested arrays flatten into the current one, except inside Value and
-	// ListValue. The brackets still cost a level, like a plain array.
-	if p.peekKind() == jkArr && !isValueField(m, ord, fp) &&
-		jsonClassify(fieldMsgFull(m, ord, fp)) != jwList {
-		if err := p.enter(); err != nil {
-			return err
-		}
-		defer func() { p.depth-- }()
-		if err := p.expectCh('['); err != nil {
-			return err
-		}
-		p.skip()
-		if p.pos < len(p.s) && p.s[p.pos] == ']' {
-			p.pos++
-			return nil
-		}
-		for {
-			if err := p.parseElement(m, ord, fp); err != nil {
+	// ListValue. The brackets still cost a level, like a plain array. One
+	// type lookup decides both exceptions.
+	if p.peekKind() == jkArr {
+		if kind := jsonClassify(fieldMsgFull(m, ord, fp)); kind != jwValue && kind != jwList {
+			if err := p.enter(); err != nil {
+				return err
+			}
+			defer func() { p.depth-- }()
+			if err := p.expectCh('['); err != nil {
 				return err
 			}
 			p.skip()
-			if p.pos < len(p.s) && p.s[p.pos] == ',' {
+			if p.pos < len(p.s) && p.s[p.pos] == ']' {
 				p.pos++
-				p.skip()
-				if p.pos < len(p.s) && p.s[p.pos] == ']' {
-					p.pos++
-					return nil
-				}
-				continue
+				return nil
 			}
-			return p.expectCh(']')
+			for {
+				if err := p.parseElement(m, ord, fp); err != nil {
+					return err
+				}
+				p.skip()
+				if p.pos < len(p.s) && p.s[p.pos] == ',' {
+					p.pos++
+					p.skip()
+					if p.pos < len(p.s) && p.s[p.pos] == ']' {
+						p.pos++
+						return nil
+					}
+					continue
+				}
+				return p.expectCh(']')
+			}
 		}
 	}
 	return p.parseFieldValue(m, ord, fp, true)
@@ -2330,11 +2434,15 @@ done:
 
 func (p *jsonIn) parseNamedField(m *DMsg, key string) error {
 	if len(key) >= 2 && key[0] == '[' && key[len(key)-1] == ']' {
-		// The Go plans carry no extensions; bracket keys never resolve.
-		if p.ignore {
-			return p.skipValue()
+		name := key[1 : len(key)-1]
+		xp, ok := m.typ.s.Extension(name)
+		if !ok || xp.Extendee != m.typ.plan.Full {
+			if p.ignore {
+				return p.skipValue()
+			}
+			return p.fail("unknown extension %q", key)
 		}
-		return p.fail("unknown extension %q", key)
+		return p.parseExtension(m, xp)
 	}
 	fp, ord := lookupField(m.typ.plan, key)
 	if fp == nil {
@@ -2344,6 +2452,34 @@ func (p *jsonIn) parseNamedField(m *DMsg, key string) error {
 		return p.fail("unknown field %q", key)
 	}
 	return p.parseFieldValue(m, ord, fp, false)
+}
+
+// parseExtension parses one "[full.name]" value into the extension slot. The
+// value rides the regular field parsers through a one-field holder message,
+// so every scalar, repeated and message arm stays shared with regular fields.
+func (p *jsonIn) parseExtension(m *DMsg, xp *ExtPlan) error {
+	fp := xp.Field
+	s := m.findExt(xp)
+	if !fp.Repeated && s.present {
+		return p.fail("duplicate extension %q", xp.Full)
+	}
+	holder := &DMsg{
+		typ:   &DType{s: m.typ.s, plan: &MessagePlan{Full: m.typ.plan.Full, Fields: []*FieldPlan{fp}}},
+		slots: make([]slot, 1),
+	}
+	if err := p.parseFieldValue(holder, 0, fp, false); err != nil {
+		return err
+	}
+	tmp := holder.slots[0]
+	if fp.Repeated {
+		if tmp.rep != nil {
+			s.present = true
+			s.rep = appendRepeatedRep(s.rep, tmp.rep)
+		}
+		return nil
+	}
+	*s = tmp
+	return nil
 }
 
 func (p *jsonIn) parseObjectBody(m *DMsg) error {
@@ -2510,8 +2646,6 @@ func (p *jsonIn) parseTimestamp(m *DMsg) error {
 	}
 	if rest == "Z" {
 		secs = time.Date(year, time.Month(mon), day, hour, min, sec, 0, time.UTC).Unix()
-	} else if len(rest) != 0 {
-		return p.fail("bad Timestamp %q", text)
 	}
 	if secs < -62135596800 || secs > 253402300799 {
 		return p.fail("Timestamp out of range %q", text)

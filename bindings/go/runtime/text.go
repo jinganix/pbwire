@@ -137,8 +137,8 @@ func (o *textOut) printMessage(m *DMsg, depth int) {
 		o.fail(fmt.Errorf("text: cannot print a nil message"))
 		return
 	}
-	if jsonClassify(m.typ.plan.Full) == jwAny {
-		o.printAnyText(m)
+	if depth > MaxDepth {
+		o.fail(ErrDepth)
 		return
 	}
 	for i, fp := range m.typ.plan.Fields {
@@ -147,14 +147,14 @@ func (o *textOut) printMessage(m *DMsg, depth int) {
 		}
 		if fp.Repeated {
 			for k := 0; k < repLen(&m.slots[i]); k++ {
-				o.printField(m, i, fp, k)
+				o.printField(m, i, fp, k, depth)
 			}
 			continue
 		}
-		o.printField(m, i, fp, -1)
+		o.printField(m, i, fp, -1, depth)
 	}
 	for i := range m.ext {
-		o.printExt(m, &m.ext[i])
+		o.printExt(m, &m.ext[i], depth)
 	}
 	if o.printUnknown && len(m.unknown) > 0 {
 		o.printUnknowns(m.unknown, depth)
@@ -169,7 +169,7 @@ func displayName(fp *FieldPlan) string {
 	return fp.Name
 }
 
-func (o *textOut) printField(m *DMsg, i int, fp *FieldPlan, elem int) {
+func (o *textOut) printField(m *DMsg, i int, fp *FieldPlan, elem int, depth int) {
 	if o.err != nil {
 		return
 	}
@@ -192,7 +192,7 @@ func (o *textOut) printField(m *DMsg, i int, fp *FieldPlan, elem int) {
 		}
 		o.str(" {\n")
 		o.indent++
-		o.printMessage(sub, 0)
+		o.printMessage(sub, depth+1)
 		o.indent--
 		o.pad()
 		o.str("}\n")
@@ -203,47 +203,11 @@ func (o *textOut) printField(m *DMsg, i int, fp *FieldPlan, elem int) {
 	o.str("\n")
 }
 
-// printAnyText prints a google.protobuf.Any in its expanded text form:
-// `[type-url] { ...fields... }`, like the reference printer. An empty Any
-// prints nothing, so the enclosing braces still round-trip.
-func (o *textOut) printAnyText(m *DMsg) {
-	if o.err != nil {
-		return
-	}
-	url := AnyTypeURL(m)
-	if url == "" {
-		return
-	}
-	name := url
-	if k := strings.LastIndexByte(url, '/'); k >= 0 {
-		name = url[k+1:]
-	}
-	sub, err := m.typ.s.Type(name)
-	if err != nil || sub == nil {
-		o.fail(fmt.Errorf("text: unknown Any type %q", url))
-		return
-	}
-	inner, err := sub.Decode(AnyPayload(m))
-	if err != nil {
-		o.fail(fmt.Errorf("text: bad Any payload for %q: %w", url, err))
-		return
-	}
-	o.pad()
-	o.str("[")
-	o.str(url)
-	o.str("] {\n")
-	o.indent++
-	o.printMessage(inner, 0)
-	o.indent--
-	o.pad()
-	o.str("}\n")
-}
-
 // printExt prints one set extension: `[full.name] { ... }` for messages and
 // groups, `[full.name]: v` for scalars, one line per repeated element like
 // regular fields. The slice stays number-ordered, so extensions print in
 // field-number order.
-func (o *textOut) printExt(m *DMsg, xv *extValue) {
+func (o *textOut) printExt(m *DMsg, xv *extValue, depth int) {
 	if o.err != nil {
 		return
 	}
@@ -256,11 +220,11 @@ func (o *textOut) printExt(m *DMsg, xv *extValue) {
 		if fp.Repeated {
 			items, _ := s.rep.([]*DMsg)
 			for _, sub := range items {
-				o.printExtMsg(xv, sub)
+				o.printExtMsg(xv, sub, depth)
 			}
 			return
 		}
-		o.printExtMsg(xv, s.m)
+		o.printExtMsg(xv, s.m, depth)
 		return
 	}
 	if fp.Repeated {
@@ -283,7 +247,7 @@ func (o *textOut) printExt(m *DMsg, xv *extValue) {
 }
 
 // printExtMsg prints one set message- or group-typed extension value.
-func (o *textOut) printExtMsg(xv *extValue, sub *DMsg) {
+func (o *textOut) printExtMsg(xv *extValue, sub *DMsg, depth int) {
 	if o.err != nil {
 		return
 	}
@@ -296,7 +260,7 @@ func (o *textOut) printExtMsg(xv *extValue, sub *DMsg) {
 	o.str(xv.xp.Full)
 	o.str("] {\n")
 	o.indent++
-	o.printMessage(sub, 0)
+	o.printMessage(sub, depth+1)
 	o.indent--
 	o.pad()
 	o.str("}\n")
@@ -462,6 +426,10 @@ func (o *textOut) printUnknowns(raw []byte, depth int) {
 }
 
 func (o *textOut) printUnknownValue(num uint32, wt WireType, raw []byte, depth int) []byte {
+	if depth >= MaxDepth {
+		o.fail(ErrDepth)
+		return nil
+	}
 	o.pad()
 	o.str(strconv.FormatUint(uint64(num), 10))
 	switch wt {
@@ -503,7 +471,7 @@ func (o *textOut) printUnknownValue(num uint32, wt WireType, raw []byte, depth i
 			o.fail(fmt.Errorf("text: bad unknown length: %w", err))
 			return nil
 		}
-		if textUnknownIsMessage(payload, depth) {
+		if textUnknownIsMessage(payload) {
 			o.str(" {\n")
 			o.indent++
 			o.printUnknowns(payload, depth+1)
@@ -537,7 +505,7 @@ func (o *textOut) printUnknownValue(num uint32, wt WireType, raw []byte, depth i
 
 // textUnknownIsMessage reports whether bytes parse cleanly as a field run,
 // so the unknown printer can show a length-delimited value as a message.
-func textUnknownIsMessage(raw []byte, depth int) bool {
+func textUnknownIsMessage(raw []byte) bool {
 	if len(raw) == 0 {
 		return false
 	}
@@ -1047,9 +1015,17 @@ func parseTextSint(n textNum, neg bool, min int64, max uint64) (int64, error) {
 // unqualified type name the printer emits. Extensions would ride brackets;
 // the Go plans carry none, so brackets never resolve.
 func lookupTextField(plan *MessagePlan, name string) (*FieldPlan, int, bool) {
-	for i, fp := range plan.Fields {
-		if fp.Name == name {
-			return fp, i, false
+	if plan.byName != nil {
+		if fp, ok := plan.byName[name]; ok {
+			if i, ok := plan.ordByNum[fp.Number]; ok {
+				return fp, i, false
+			}
+		}
+	} else {
+		for i, fp := range plan.Fields {
+			if fp.Name == name {
+				return fp, i, false
+			}
 		}
 	}
 	for i, fp := range plan.Fields {
@@ -1061,11 +1037,6 @@ func lookupTextField(plan *MessagePlan, name string) (*FieldPlan, int, bool) {
 		return nil, -1, true
 	}
 	return nil, -1, false
-}
-
-// textOneofSet reports whether another member of the same oneof is set.
-func textOneofSet(m *DMsg, ord int, fp *FieldPlan) bool {
-	return oneofSet(m, ord, fp)
 }
 
 // parseBody parses a top-level message: fields until EOF.
@@ -1294,7 +1265,7 @@ func (p *textIn) parseMessageBody(m *DMsg, closer byte) error {
 			if m.slots[ord].present {
 				return p.fail("duplicate field %q", name)
 			}
-			if fp.Presence == PresenceOneof && textOneofSet(m, ord, fp) {
+			if fp.Presence == PresenceOneof && oneofSet(m, ord, fp) {
 				return p.fail("duplicate oneof member %q", name)
 			}
 		}
@@ -1412,11 +1383,36 @@ func (p *textIn) scanBracket() (string, error) {
 			for p.pos < len(p.s) && p.s[p.pos] != '\n' {
 				p.pos++
 			}
-		default:
+		case isTextURLChar(c):
 			out = append(out, c)
 			p.pos++
+		default:
+			return "", p.fail("bad character %q in a type URL or extension name", c)
 		}
 	}
+}
+
+// isTextTypeName reports a dotted identifier list ("a.b.C"), no slashes.
+func isTextTypeName(name string) bool {
+	if name == "" {
+		return false
+	}
+	for _, part := range strings.Split(name, ".") {
+		if part == "" || !isTextIdentStart(part[0]) {
+			return false
+		}
+		for i := 1; i < len(part); i++ {
+			if !isTextIdentChar(part[i]) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// isTextURLChar is the reference tokenizer's URL alphabet.
+func isTextURLChar(c byte) bool {
+	return isTextIdentChar(c) || strings.ContainsRune("-._~!$&()*+,;=%/", rune(c))
 }
 
 // parseBracket parses one bracketed extension or Any type URL plus its
@@ -1457,9 +1453,22 @@ func (p *textIn) parseAnyText(m *DMsg, url string) error {
 		}
 		i += 2
 	}
-	name := url
-	if k := strings.LastIndexByte(url, '/'); k >= 0 {
-		name = url[k+1:]
+	slash := strings.LastIndexByte(url, '/')
+	if slash <= 0 {
+		return p.fail("Any type URL %q needs a prefix and a type name", url)
+	}
+	name := url[slash+1:]
+	if !isTextTypeName(name) {
+		return p.fail("bad Any type name %q", name)
+	}
+	// Like the reference, a second expansion for the same Any is an error.
+	urlFP, urlOrd := timeField(m.typ.plan, 1, descriptorpb.FieldDescriptorProto_TYPE_STRING)
+	valFP, valOrd := timeField(m.typ.plan, 2, descriptorpb.FieldDescriptorProto_TYPE_BYTES)
+	if urlFP == nil || valFP == nil {
+		return p.fail("bad Any shape")
+	}
+	if m.slots[urlOrd].present {
+		return p.fail("second Any expansion")
 	}
 	sub, err := m.typ.s.Type(name)
 	if err != nil || sub == nil {
@@ -1490,11 +1499,6 @@ func (p *textIn) parseAnyText(m *DMsg, url string) error {
 	if err != nil {
 		return err
 	}
-	urlFP, urlOrd := timeField(m.typ.plan, 1, descriptorpb.FieldDescriptorProto_TYPE_STRING)
-	valFP, valOrd := timeField(m.typ.plan, 2, descriptorpb.FieldDescriptorProto_TYPE_BYTES)
-	if urlFP == nil || valFP == nil {
-		return p.fail("bad Any shape")
-	}
 	storeString(m, urlOrd, urlFP, url)
 	if len(payload) > 0 {
 		storeBytes(m, valOrd, valFP, payload)
@@ -1505,12 +1509,14 @@ func (p *textIn) parseAnyText(m *DMsg, url string) error {
 // parseExtensionValue parses the value after a bracketed extension name: a
 // message or group takes `{...}` or `<...>` (with an optional colon), like
 // parseMessageValue, while a scalar takes `: value`, like any other scalar
-// field. A repeated message appends one element per bracketed occurrence;
-// a repeated singular message merges into the set value, like the binary
-// decoder; scalars replace and repeated runs append.
+// field. A repeated extension appends one element per bracketed occurrence;
+// a singular one may only be named once.
 func (p *textIn) parseExtensionValue(m *DMsg, xp *ExtPlan) error {
 	fp := xp.Field
 	s := m.findExt(xp)
+	if !fp.Repeated && s.present {
+		return p.fail("duplicate extension %q", xp.Full)
+	}
 	if fp.Proto == descriptorpb.FieldDescriptorProto_TYPE_MESSAGE || fp.Group {
 		if err := p.enter(); err != nil {
 			return err
@@ -1786,14 +1792,7 @@ func (p *textIn) parseTextEnum(m *DMsg, ord int, fp *FieldPlan) error {
 	if !ok {
 		return p.fail("expected an enum for field %q", fp.Name)
 	}
-	byName := ep.ByName
-	if byName == nil {
-		byName = map[string]int32{}
-		for num, ename := range ep.Values {
-			byName[ename] = num
-		}
-	}
-	if num, ok := byName[name]; ok {
+	if num, ok := ep.ByName[name]; ok {
 		return finish(num)
 	}
 	return p.fail("unknown enum name %q", name)
@@ -1817,7 +1816,7 @@ func (p *textIn) parseTextString(m *DMsg, ord int, fp *FieldPlan) error {
 			break
 		}
 	}
-	if fp.Proto == descriptorpb.FieldDescriptorProto_TYPE_STRING && !utf8.Valid(out) {
+	if fp.UTF8 && !utf8.Valid(out) {
 		return p.fail("string field %q is not valid UTF-8", fp.Name)
 	}
 	if fp.Proto == descriptorpb.FieldDescriptorProto_TYPE_STRING {

@@ -37,7 +37,7 @@ func (t *DType) ExportModel(d *DMsg, model any, meta *Table) error {
 	if meta == nil {
 		return fmt.Errorf("codec: export without a model table")
 	}
-	return exportInto(d, model, meta, t)
+	return exportInto(d, model, meta, d.typ)
 }
 
 // importInto copies one message level from the model side to the tree side.
