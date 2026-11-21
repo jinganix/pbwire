@@ -908,6 +908,37 @@ public final class GenericCodec {
             }
         }
 
+        /* Slot-direct reference stores: Message already resolved the slot,
+         * so these skip the second fnum->slot lookup and the kind switch. */
+        void putRef(int s, Object v) {
+            ref[s] = v;
+            setPresent(s, def.fields[s]);
+        }
+
+        void appendRef(int s, Object v) {
+            has[s] = true;
+            Rep rp = rep();
+            Object[] a = rp.ref[s];
+            int n = rp.refLen[s];
+            if (a == null || n == a.length) {
+                a = growObj(a, n + 1);
+                rp.ref[s] = a;
+            }
+            a[n] = v;
+            rp.refLen[s] = n + 1;
+        }
+
+        DMsg newMessageInSlot(int s) {
+            Field f = def.fields[s];
+            DMsg m = new DMsg(f.msgType);
+            if (f.repeated) {
+                appendRef(s, m);
+            } else {
+                putRef(s, m);
+            }
+            return m;
+        }
+
         private static long narrowNum(int kind, long v) {
             switch (kind) {
                 case K_INT32:

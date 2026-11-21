@@ -167,9 +167,9 @@ public final class Message implements AutoCloseable {
     private void store(int slot, GenericCodec.Field f, Object value) {
         segment();
         if (f.repeated) {
-            data.add(f.number, value);
+            data.appendRef(slot, value);
         } else {
-            data.set(f.number, value);
+            data.putRef(slot, value);
         }
     }
 
@@ -193,7 +193,7 @@ public final class Message implements AutoCloseable {
                     + " is not a message field");
         }
         segment();
-        return view(data.newMessage(f.number), type.subtype(slot));
+        return view(data.newMessageInSlot(slot), type.subtype(slot));
     }
 
     /** Drops a field value (and, for a oneof, the group case). */
