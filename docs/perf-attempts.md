@@ -1746,3 +1746,13 @@ expected tag-truncation failures and skips the JSON/text half: 1412 successes,
 1403 skipped, 2 expected failures, 0 unexpected -- the same set as the C core,
 the TypeScript, C#, Python and Dart ports. The `ccall` testee
 `make conformance-julia` keeps covering binary + JSON + text.
+
+Formal rows (`make julia-bench`, `results/bench-julia-20261121T020057Z.json`,
+MB/s at 136 / 174 / 2469 / 74913 B): `pbwire-julia-core` encode 52.7 / 25.8 /
+21.7 / 22.1 and decode 164.6 / 46.8 / 23.5 / 22.5; protobuf-jl the same run
+383.1 / 322.7 / 130.3 / 12.1 and 1076.1 / 763.7 / 618.6 / 695.9. The published
+rows are prebuilt-object ops (`encode_dict` on a Dict held before the timer,
+`decode_dict` materializing the whole dict), so the below-baseline cells are the
+three smaller encode tiers (0.08-0.17x) and every decode tier (0.03-0.15x); the
+one above-baseline cell is the 74 KB encode (1.83x), where ProtoBuf.jl's
+per-field size pre-pass dominates and the flat slot loop does not.

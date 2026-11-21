@@ -5,11 +5,13 @@ using Printf
 # optionals, and the repeated fields scaled x0 / x1 / x100 / x3000, which lands
 # the tiers on 136 / 174 / 2469 / 74913 bytes.
 #
-# The rows are the two published mechanisms: `pbwire-julia-tree` is the
-# prebuilt dynamic Message handle (plain encode/decode plus the reusable Ctx
-# workspace), and `pbwire-julia-shim` is the generated flat layout image read
-# and written in place by the C reader, one ccall per op. Both sides must
-# produce identical bytes before anything is timed.
+# The rows are the published mechanisms: `pbwire-julia-tree` is the prebuilt
+# dynamic Message handle (plain encode/decode plus the reusable Ctx
+# workspace), `pbwire-julia-shim` is the generated flat layout image read and
+# written in place by the C reader (one ccall per op), and
+# `pbwire-julia-core` is the pure-Julia core (plan 19): a plain Dict in,
+# encode_dict out; wire bytes in, fully materialized decode_dict out. All
+# sides must produce identical bytes before anything is timed.
 #
 # The baseline is JuliaIO/ProtoBuf.jl with generated code
 # (`benchmarks/oracle/.../matrix3_pb.jl`, produced by `protojl("matrix3.proto",
@@ -19,6 +21,8 @@ using Printf
 #   julia --project=runtime benchmarks/bench.jl [matrix3.desc]
 
 include(joinpath(@__DIR__, "..", "pbench", "b-shim.jl"))
+include(joinpath(@__DIR__, "..", "pbench", "core_arm.jl"))
+using .CoreArm
 
 const FLOORS = (50000, 50000, 5000, 500)
 const MIN_PASS_SECONDS = 0.25
@@ -101,6 +105,13 @@ function main(args::Vector{String})
             failures += 1
             continue
         end
+        core_obj = core_object(n)
+        if core_marshal(core_obj) != got || core_roundtrip(got) != got ||
+           core_unmarshal(got) != core_obj
+            println("FAIL $label: core bytes or fields differ")
+            failures += 1
+            continue
+        end
         println("OK   $label encoding parity, x$n ($want bytes)")
 
         probe = fill_tree!(ty, n)
@@ -118,6 +129,8 @@ function main(args::Vector{String})
 
         shim_enc = measure(floor, () -> shim_encode(payload))
         shim_dec = measure(floor, () -> shim_decode(got, payload))
+        core_enc = measure(floor, () -> core_marshal(core_obj))
+        core_dec = measure(floor, () -> core_unmarshal(got))
 
         println("$label: $want bytes, $tier_n iterations (repeat field x$n)")
         println("  $(rpad("impl", 18)) $(rpad("op", 7)) $(lpad("ns/op", 12)) $(lpad("MB/s", 10))")
@@ -126,6 +139,8 @@ function main(args::Vector{String})
         row("pbwire-julia-tree", "dec+ctx", want, dec_ctx)
         row("pbwire-julia-shim", "encode", want, shim_enc)
         row("pbwire-julia-shim", "decode", want, shim_dec)
+        row("pbwire-julia-core", "encode", want, core_enc)
+        row("pbwire-julia-core", "decode", want, core_dec)
         if HAS_ORACLE
             ref = baseline_message(n)
             ref_bytes = baseline_encode(ref)
