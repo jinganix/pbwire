@@ -32,6 +32,29 @@ mismatch prints `FAIL` and exits 1, so no row is published before the arm is
 correct. The same core is what `make conformance-python-pure` runs the official
 binary suite through.
 
+## Run table
+
+Provisional (Stage 3, `python3 bindings/python/pbench/compare.py --rounds 3`,
+best of three interleaved rounds per cell, 2026-11-21, busy machine): the
+`core` arm is the whole user task -- `encode_object(dict)` builds the tree and
+writes it, `decode_object(bytes)` parses and reads every field into dicts.
+
+| tier | `pbwire-py-core` encode ns/op | encode MB/s | decode ns/op | decode MB/s |
+|---|---|---|---|---|
+| 136 B | 15483.6 | 8.8 | 19186.4 | 7.1 |
+| 174 B | 19670.1 | 8.8 | 24934.2 | 7.0 |
+| 2469 B | 241020.3 | 10.2 | 360992.2 | 6.8 |
+| 74913 B | 7167944.4 | 10.5 | 10980368.0 | 6.8 |
+
+The same run, for scale: `pbwire-py-tree` (the extension's handle path)
+953.8 MB/s decode / 96092.3 MB/s encode at 74 KB, `pbwire-py-shim` (one
+downcall, dict in and out) 162.8 / 608.4, upb 806.7 / 514.9. The comparable
+baseline for a pure-Python core is protobuf's own pure-Python runtime: same
+74913 B payload in a separate process, 6.2 MB/s decode and 15.0 MB/s
+serialize-from-parsed -- so the port is 1.10x that parser on decode and in the
+same class, 100x behind the extension because the interpreter, not the wire
+engine, is what it pays for.
+
 ## Timing
 
 `make python-bench` (`bindings/python/benchmarks/bench.py bench`) is the formal,

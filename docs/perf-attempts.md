@@ -1560,3 +1560,31 @@ unboxed slot storage -- a struct/columnar tree, i.e. a rewrite of `Tree`,
 the baseline, so there was no below-baseline cell with a one-change candidate
 to A/B; the budget went to the descriptor reader, the decoder's unknown/group/
 limit rules and the binary conformance pass instead.
+
+## Cell: Python pure core, every tier (below the extension and upb)
+
+The pure-Python core (`bindings/python/pure/`, issue 41 plan 17) is the
+no-extension path, so its baseline is not upb (the C extension in
+`google.protobuf`) but the official runtime's own pure-Python mode. Stage 3
+provisional numbers, `bindings/python/pbench/compare.py`, best of three
+interleaved rounds per cell, 2026-11-21 (Apple silicon; the machine was busy):
+
+| tier | pure-core encode | pure-core decode |
+|---|---|---|
+| 136 B | 8.8 MB/s | 7.1 MB/s |
+| 174 B | 8.8 MB/s | 7.0 MB/s |
+| 2469 B | 10.2 MB/s | 6.8 MB/s |
+| 74913 B | 10.5 MB/s | 6.8 MB/s |
+
+The same run: `pbwire-py-tree` (the extension's handle path) 953.8 decode /
+96092.3 encode MB/s at 74 KB, `pbwire-py-shim` (one downcall, dict in/out)
+162.8 / 608.4, upb 806.7 / 514.9. The gap is the interpreter, not the wire
+engine: per value the port allocates a Python `int`, `str`/`bytes`, `Raw` or
+`dict` slot, which is exactly what upb does not do.
+
+Against the comparable runtime, the same 74913 B payload in a separate process
+(`PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python python3`, best of three
+calibrated passes): protobuf's pure-Python parser 6.2 MB/s decode and 15.0 MB/s
+serialize-from-parsed. The port is at 6.8 MB/s decode (1.10x) and 10.5 MB/s
+`encode(dict)` -- which builds the tree first -- so the port is in the same
+class as the official pure-Python runtime, not 100x behind it.

@@ -344,6 +344,18 @@ conformance-python: python-bind $(CONFORMANCE_DESC)
 		$(PY_ABS) bindings/python/conformance/testee.py \
 		$(CURDIR)/$(CONFORMANCE_DESC)
 
+# Same suite through the pure-Python core (no CPython extension, no
+# google.protobuf): binary in, binary out; JSON and text answer "skipped"
+# (the runner counts skips, not failures), so the pass set is the binary
+# suite.
+conformance-python-pure: $(CONFORMANCE_DESC)
+	@test -x "$(CONFORMANCE_RUNNER)" || { \
+		echo "conformance_test_runner not found: $(CONFORMANCE_RUNNER)"; \
+		echo "run 'make conformance-setup' first"; exit 1; }
+	$(CONFORMANCE_RUNNER) --failure_list $(CURDIR)/conformance/failure_list_pbwire.txt \
+		$(PY_ABS) bindings/python/conformance/testee_pure.py \
+		$(CURDIR)/$(CONFORMANCE_DESC)
+
 # Same suite through the Lua binding (binary, JSON and text; only JSPB
 # answers "skipped").
 conformance-lua: $(CONFORMANCE_DESC) lua-bind
@@ -567,6 +579,7 @@ python-bind: $(PY_MODULE)
 
 python-test: python-bind
 	$(PY) bindings/python/tests/test_pbwire.py
+	$(PY) bindings/python/tests/pure/run.py
 
 # Host-language bindings over the same C ABI (see bindings/README.md). Each
 # loads a FileDescriptorSet at run time, so none of them needs a plugin or a

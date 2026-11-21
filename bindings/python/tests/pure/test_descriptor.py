@@ -18,7 +18,13 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", ".."))  # bindings/python
 
-from pure.descriptor import K, MESSAGE_PRESENCE, EXPLICIT, IMPLICIT, REQUIRED  # noqa: E402
+from pure.descriptor import (  # noqa: E402
+    EXPLICIT,
+    IMPLICIT,
+    K,
+    MESSAGE_PRESENCE,
+    REQUIRED,
+)
 from pure.schema import Schema  # noqa: E402
 
 DESC = os.path.join(HERE, "..", "..", "..", "..", "bindings", "c", "tests",
@@ -87,7 +93,80 @@ def test_matrix3():
     assert by_name["inner"].tag_end is None
 
 
-TESTS = [test_matrix3]
+DATA = os.path.join(HERE, "..", "..", "..", "..", "bindings", "c", "tests", "data")
+
+
+def _type(desc, name):
+    return Schema.from_file(os.path.join(DATA, desc)).message(name)
+
+
+def test_proto2():
+    """A proto2 file: explicit presence everywhere, closed enums, required."""
+    matrix2 = _type("matrix2.desc", "structtest.Scalars2").def_
+    by_name = {f.name: f for f in matrix2.fields}
+    assert by_name["i32"].presence == EXPLICIT  # proto2 has has-bits
+    assert by_name["shade"].enum_closed  # proto2 enum is closed
+    assert matrix2.deep_required  # Inner carries a required field
+    inner = by_name["inner"]
+    assert inner.msg_type.deep_required
+    assert any(f.presence == REQUIRED for f in inner.msg_type.fields)
+    # An explicit `packed = true` option survives; the default does not pack.
+    assert by_name["packed_nums"].packed
+    assert not by_name["nums"].packed
+
+
+def test_groups():
+    group = _type("grouptest.desc", "structtest.GroupTest").def_
+    by_name = {f.name: f for f in group.fields}
+    inner = by_name["inner"]
+    assert inner.kind == K.GROUP and inner.wt == 3
+    assert bytes(inner.tag) == b"\x0b" and bytes(inner.tag_end) == b"\x0c"
+    assert inner.msg_type.full_name == "structtest.GroupTest.Inner"
+    assert by_name["item"].repeated and by_name["item"].kind == K.GROUP
+
+
+def test_oneof_and_map():
+    oneof = _type("oneoftest.desc", "structtest.OneOfTest").def_
+    assert oneof.oneof_count == 1
+    assert oneof.oneof_by_name == {"kind": 0}
+    for f in oneof.fields:
+        if f.name == "id":
+            assert f.oneof == -1 and f.presence == IMPLICIT
+        else:
+            assert f.oneof == 0 and f.presence == EXPLICIT
+    maps = _type("maptest.desc", "structtest.Maps").def_
+    entry = {f.name: f for f in maps.fields}["by_msg"].msg_type
+    assert entry.map_entry and entry.full_name == "structtest.Maps.ByMsgEntry"
+    assert [f.number for f in entry.fields] == [1, 2]
+
+
+def test_extensions():
+    has_ext = _type("extensiontest.desc", "exttest.HasExt").def_
+    by_name = {f.name: f for f in has_ext.fields}
+    # Extensions ride the extendee's slot table by field number.
+    assert by_name["ext_int"].number == 100
+    assert by_name["ext_int"].full_name == "exttest.ext_int"
+    assert by_name["ext_inner"].msg_type.full_name == "exttest.Inner"
+    assert by_name["ext_nums"].repeated and not by_name["ext_nums"].packed
+
+
+def test_bad_descriptors():
+    """A truncated or hostile descriptor set is rejected, not half-loaded (an
+    empty set is valid: it declares no files)."""
+    with open(os.path.join(DATA, "matrix3.desc"), "rb") as handle:
+        good = handle.read()
+    assert Schema.from_bytes(b"").core.messages == {}
+    for bad in (good[:len(good) // 2], b"\xff" * 16, b"\x0a" * 400):
+        try:
+            Schema.from_bytes(bad)
+        except Exception:  # noqa: BLE001 - any refusal is fine, a crash is not
+            pass
+        else:
+            raise AssertionError("accepted a broken descriptor set")
+
+
+TESTS = [test_matrix3, test_proto2, test_groups, test_oneof_and_map,
+         test_extensions, test_bad_descriptors]
 
 
 def main():
