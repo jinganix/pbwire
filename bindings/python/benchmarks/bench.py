@@ -24,6 +24,18 @@ The rows compare the same user-visible task, not the same internal call:
 goes through JSON-shaped intermediate values and is ~4x slower than reading the
 fields, so it would not measure the same thing.
 
+The `pbwire-py-core` rows are the pure-Python core (`bindings/python/pure/`, no
+CPython extension, no `google.protobuf`), timed on the same task:
+
+    encode(data)    encode_object(dict): build the tree, then write the wire
+    to_dict(bytes)  decode_object(bytes): parse, then read every field
+    encode(parsed)  encode(tree): the tree a decode already built
+
+They are gated first -- the core's bytes must equal protoc's, its decode must
+equal the same dict, and a decoded tree must re-encode byte-exactly -- so no
+row is printed before the arm is correct. It is the no-extension path and is
+never the fast one; see `bindings/python/pbench/README.md`.
+
 The baseline row names the protobuf implementation that is actually loaded
 (`pb upb`: protobuf's C extension). The generated `matrix3_pb2` module comes
 from `protoc --python_out` (see the Makefile).
@@ -42,6 +54,9 @@ sys.path.insert(0, os.path.join(HERE, "gen"))         # matrix3_pb2
 import pbwire as pbw
 from google.protobuf.internal import api_implementation
 import matrix3_pb2
+
+sys.path.insert(0, os.path.join(HERE, "..", "pbench"))   # the pure core arm
+import core as pure_core  # noqa: E402
 
 TIERS = (("small", 0, 136), ("medium", 1, 174), ("large", 100, 2469), ("xlarge", 3000, 74913))
 DESC = "bindings/c/tests/data/matrix3.desc"
@@ -174,6 +189,16 @@ def run():
         if protobuf_data(matrix3_pb2.Scalars3.FromString(reference)) != want_dict:
             return fail("protobuf data differs", label)
 
+        # The pure core is gated before it is timed: same bytes, same data,
+        # byte-exact round trip.
+        if pure_core.marshal(values) != reference:
+            return fail("pure core bytes differ from protobuf", label)
+        if pure_core.unmarshal(reference) != want_dict:
+            return fail("pure core decode differs", label)
+        core_message = pure_core.TYPE.decode(reference)
+        if pure_core.TYPE.encode(core_message) != reference:
+            return fail("pure core tree round trip differs", label)
+
         message = scalars.decode(reference)
         pb_message = matrix3_pb2.Scalars3.FromString(reference)
 
@@ -188,6 +213,12 @@ def run():
              time_it(lambda: matrix3_pb2.Scalars3.FromString(reference))[0]),
             ("pbwire-py", "to_dict(bytes)",
              time_it(lambda: scalars.decode(reference).to_dict())[0]),
+            (pure_core.NAME, "encode(data)",
+             time_it(lambda: pure_core.marshal(values))[0]),
+            (pure_core.NAME, "to_dict(bytes)",
+             time_it(lambda: pure_core.unmarshal(reference))[0]),
+            (pure_core.NAME, "encode(parsed)",
+             time_it(lambda: pure_core.TYPE.encode(core_message))[0]),
             (base_label, "to_dict(bytes)",
              time_it(lambda: protobuf_data(
                  matrix3_pb2.Scalars3.FromString(reference)))[0]),
