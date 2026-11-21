@@ -235,3 +235,20 @@ end
     close(edge_schema)
     close(schema)
 end
+
+# The pure-Julia core (plan 19) is a second, independent codec: same wire, same
+# official conformance suite, no ccall. Its checks are plain assertions, not
+# `@test`, so they read the same standalone and here.
+for file in ("descriptor_test.jl", "wire_test.jl", "codec_test.jl")
+    include(joinpath(@__DIR__, "core", file))
+end
+
+@testset "pbwire julia core" begin
+    for (file, run) in (("descriptor_test", descriptor_tests),
+                        ("wire_test", wire_tests),
+                        ("codec_test", codec_tests))
+        checks, failures = run()
+        @test failures == 0
+        println("  $(file): $(checks - failures)/$(checks) checks")
+    end
+end

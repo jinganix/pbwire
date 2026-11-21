@@ -653,6 +653,17 @@ conformance-julia: $(CONFORMANCE_DESC)
 		$(JULIA_ABS) --project=bindings/julia/runtime \
 		bindings/julia/conformance/testee.jl $(CURDIR)/$(CONFORMANCE_DESC)
 
+# Same suite through the pure-Julia core (no native library, no ccall):
+# binary in, binary out; JSON and text answer "skipped" (the runner counts
+# skips, not failures), so the pass set is the binary suite.
+conformance-julia-core: $(CONFORMANCE_DESC)
+	@test -x "$(CONFORMANCE_RUNNER)" || { \
+		echo "conformance_test_runner not found: $(CONFORMANCE_RUNNER)"; \
+		echo "run 'make conformance-setup' first"; exit 1; }
+	$(CONFORMANCE_RUNNER) --failure_list $(CURDIR)/conformance/failure_list_pbwire.txt \
+		$(JULIA_ABS) --project=bindings/julia/runtime \
+		bindings/julia/conformance/testee_core.jl $(CURDIR)/$(CONFORMANCE_DESC)
+
 # Same suite through the Zig binding (binary, JSON and text; JSPB skips).
 conformance-zig: $(CONFORMANCE_DESC)
 	@test -x "$(CONFORMANCE_RUNNER)" || { \

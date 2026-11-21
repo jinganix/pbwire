@@ -6,6 +6,8 @@
 
 include(joinpath(@__DIR__, "a-tree.jl"))
 include(joinpath(@__DIR__, "b-shim.jl"))
+include(joinpath(@__DIR__, "core_arm.jl"))
+using .CoreArm
 
 HAS_ORACLE || error("no ProtoBuf.jl oracle; run pbench/setup.sh")
 
@@ -40,10 +42,16 @@ for tier in tiers
     again = shim_encode(payload)
     check(again == wire, "$(tier.label): shim decode/re-encode differs")
 
+    core_obj = core_object(tier.repeats)
+    check(core_marshal(core_obj) == wire, "$(tier.label): core bytes differ")
+    check(core_roundtrip(wire) == wire,
+        "$(tier.label): core decode/re-encode differs")
+    check(core_unmarshal(wire) == core_obj, "$(tier.label): core fields differ")
+
     official = baseline_decode(wire)
     check(baseline_reads(official, tier.repeats),
         "$(tier.label): official fields differ")
-    println("OK   $(tier.label): $(length(wire)) bytes, tree/shim equal, x$(tier.repeats)")
+    println("OK   $(tier.label): $(length(wire)) bytes, tree/shim/core equal, x$(tier.repeats)")
 end
 
 if failures != 0

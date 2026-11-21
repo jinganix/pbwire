@@ -223,6 +223,8 @@ make conformance-csharp          # the pure-C# core: binary in/out, JSON and
                                  # text answer "skipped" (same scope as above)
 make conformance-dart-core       # the pure-Dart core: binary in/out, JSON and
                                  # text answer "skipped" (same scope as above)
+make conformance-julia-core      # the pure-Julia core: binary in/out, JSON and
+                                 # text answer "skipped" (same scope as above)
 make dart-core-web               # the pure core compiled to dart2js and wasm
                                  # (int is a double there; 64-bit stays BigInt)
 make conformance-julia conformance-scala conformance-clojure conformance-fsharp conformance-zig
@@ -231,7 +233,8 @@ make conformance-julia conformance-scala conformance-clojure conformance-fsharp 
 Eleven bindings run the whole suite (binary, JSON and text); only JSPB answers
 `skipped` everywhere. The host-language `core` arms that ship a binary codec
 only (`conformance-node-core`, `conformance-csharp`,
-`conformance-python-pure`, `conformance-dart-core`) answer `skipped` for the
+`conformance-python-pure`, `conformance-dart-core`,
+`conformance-julia-core`) answer `skipped` for the
 JSON and text requests, so their pass set is the binary suite. The JVM bindings
 share the Java runtime, and the FFI / static-link hosts forward to the same C
 core, so a mapping bug has one place to live and one suite to prove it.

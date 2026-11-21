@@ -1700,3 +1700,49 @@ columnar/lazy tree or code generated for the concrete message -- a rewrite of
 the tree and both codecs, and what the FFI runtime already is. The arm is
 published with its numbers as the portable (no native library, dart2js/
 dart2wasm) path, exactly as the TypeScript, C# and Python cores are.
+
+## Provisional: the Julia pure-core arm (plan 19, 2026-11-21)
+
+`bindings/julia/runtime/src/core/` is the pure-Julia core: descriptor reader,
+`Message` tree, wire primitives, encoder and decoder (unknown retention,
+groups, packed runs, oneof, presence, limits), stdlib only -- no `ccall` and no
+native library, so it is the arm for hosts that cannot build the C core. The
+`core` pbench arm (`pbench/core_arm.jl`) is the same user task as the other
+bindings' core arms: a plain `Dict` in, `encode_dict` out; wire bytes in,
+`decode_dict` (fully materialized) out -- so the timer covers the tree
+conversion a user of this path pays, not a prebuilt tree.
+
+`cd bindings/julia/pbench && julia --project=../runtime compare.jl`,
+interleaved rounds, median of five, one session on an M-series laptop (host
+load average ~20, other checkouts building), so read the ordering; Stage 5
+re-records the formal rows.
+
+| tier | arm | enc ns/op | enc MB/s | dec ns/op | dec MB/s |
+|---|---|---|---|---|---|
+| 136 B | `pbwire-julia-core` | 2787 | 48.8 | 788 | 172.6 |
+| 136 B | `pbwire-julia-shim` | 102 | 1334.6 | 119 | 1145.2 |
+| 136 B | protobuf-jl | 348 | 390.6 | 106 | 1279.5 |
+| 2469 B | `pbwire-julia-core` | 84114 | 29.4 | 95375 | 25.9 |
+| 2469 B | `pbwire-julia-shim` | 2396 | 1030.5 | 3606 | 684.7 |
+| 2469 B | protobuf-jl | 22453 | 110.0 | 4048 | 610.0 |
+| 74913 B | `pbwire-julia-core` | 2493871 | 30.0 | 2980705 | 25.1 |
+| 74913 B | `pbwire-julia-shim` | 67040 | 1117.4 | 100088 | 748.5 |
+| 74913 B | protobuf-jl | 6296130 | 11.9 | 102895 | 728.1 |
+
+Reading: the pure core's encode crosses ProtoBuf.jl at 74 KB (30.0 against
+11.9 MB/s): the generated Julia encoder re-derives sizes per field, while this
+one writes fused tag+value pairs into one reusable buffer. It loses the three
+smaller encode tiers (0.12-0.27x) and every decode tier (0.03-0.13x): the
+`Dict` <-> tree conversion is real work per field (`from_dict`/`to_dict` walk a
+`Vector{Any}` slot table and the decoded strings stay `Raw` slices until
+materialized), and ProtoBuf.jl's generated decode writes straight into typed
+struct fields. The interpreter loop is published as the no-native path, never
+as the fast one: the `shim` row (one `ccall` per op) is 2.4-4.8x the core
+encode and 2.2-4.8x the core decode.
+
+Conformance scope: binary only (the plan's file list has no JSON or text
+printer), so `make conformance-julia-core` passes the binary suite with the two
+expected tag-truncation failures and skips the JSON/text half: 1412 successes,
+1403 skipped, 2 expected failures, 0 unexpected -- the same set as the C core,
+the TypeScript, C#, Python and Dart ports. The `ccall` testee
+`make conformance-julia` keeps covering binary + JSON + text.

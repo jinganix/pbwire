@@ -43,11 +43,12 @@ bindings/julia/pbench/setup.sh
 cd bindings/julia/pbench && julia --project=../runtime gate.jl   # PASS / exit 1
 ```
 
-The gate asserts, per tier, that `tree` (dynamic handle) bytes and `shim`
-(layout image) bytes equal the official ProtoBuf.jl encoder's bytes, that both
-decode paths expose every field `payload.jl` reads (including `str`,
-`inner.name`, the repeated last elements, the proto3 optionals and `u64`), and
-that the shim's decoded image re-encodes to the same bytes.
+The gate asserts, per tier, that `tree` (dynamic handle), `shim` (layout image)
+and `core` (pure-Julia tree) bytes equal the official ProtoBuf.jl encoder's
+bytes, that every decode path exposes every field `payload.jl` reads (including
+`str`, `inner.name`, the repeated last elements, the proto3 optionals and
+`u64`), that the shim's decoded image re-encodes to the same bytes, and that the
+core's decoded dict equals the input object and re-encodes byte-exactly.
 
 ## Provisional table (Stage 3)
 
@@ -55,15 +56,16 @@ that the shim's decoded image re-encodes to the same bytes.
 three arms back to back), median of five. `tree` is the whole user task (build
 with one `set` per field, then encode; decode, then read every field back);
 `shim` is one `encode_layout` / `decode_layout` call on the flat image, with the
-image and arena allocated once. MB/s over wire bytes, 2026-11-21, recorded
-mid-session:
+image and arena allocated once; `core` is the pure-Julia arm (a plain `Dict`
+in, `encode_dict` out; wire bytes in, fully materialized `decode_dict` out). MB/s
+over wire bytes, 2026-11-21, recorded mid-session:
 
-| tier | `tree` enc | `shim` enc | pb-jl enc | `tree` dec | `shim` dec | pb-jl dec |
-|---|---|---|---|---|---|---|
-| 136 B | 168.9 | 1353.3 | 412.6 | 193.7 | 1095.2 | 1289.2 |
-| 174 B | 152.5 | 1325.1 | 341.6 | 187.4 | 993.9 | 726.7 |
-| 2469 B | 99.3 | 1077.9 | 140.2 | 424.9 | 688.3 | 635.8 |
-| 74913 B | 97.5 | 1115.3 | 11.9 | 522.1 | 746.2 | 720.7 |
+| tier | `tree` enc | `shim` enc | `core` enc | pb-jl enc | `tree` dec | `shim` dec | `core` dec | pb-jl dec |
+|---|---|---|---|---|---|---|---|---|
+| 136 B | 138.6 | 1334.6 | 48.8 | 390.6 | 183.7 | 1145.2 | 172.6 | 1279.5 |
+| 174 B | 132.3 | 1235.5 | 26.6 | 327.2 | 180.4 | 1003.5 | 48.9 | 699.1 |
+| 2469 B | 85.3 | 1030.5 | 29.4 | 110.0 | 420.2 | 684.7 | 25.9 | 610.0 |
+| 74913 B | 84.8 | 1117.4 | 30.0 | 11.9 | 514.0 | 748.5 | 25.1 | 728.1 |
 
 ## Verdict
 

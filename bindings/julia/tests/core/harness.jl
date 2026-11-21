@@ -7,10 +7,22 @@
 
 if !isdefined(@__MODULE__, :PbwireCore)
     include(joinpath(@__DIR__, "..", "..", "runtime", "src", "PbwireCore.jl"))
-    using .PbwireCore
 end
 
-const CORE_DATA = abspath(joinpath(@__DIR__, "..", "..", "..", "c", "tests",
+# Explicit names: `tests/runtests.jl` also loads the `ccall` binding, whose
+# exports collide with the pure core's. An explicit `using X: name` wins over
+# the other module's implicit export, so the same files read the same in both
+# places.
+using .PbwireCore: at, CoreError, decode, decode_dict, encode, encode_dict,
+    field_by_name, field_count, Field, from_bytes, from_dict, from_file,
+    get_field, get_int, get_message, get_string, has, Limits, msgtype,
+    new_message, oneof_case, raw_payload, Raw, set_int!, to_dict,
+    EXPLICIT, IMPLICIT, MESSAGE_PRESENCE, REQUIRED, K_BOOL, K_BYTES, K_DOUBLE,
+    K_ENUM, K_FIXED32, K_FIXED64, K_FLOAT, K_GROUP, K_INT32, K_INT64,
+    K_MESSAGE, K_SFIXED32, K_SFIXED64, K_SINT32, K_SINT64, K_STRING,
+    K_UINT32, K_UINT64
+
+const CORE_FIXTURES = abspath(joinpath(@__DIR__, "..", "..", "..", "c", "tests",
     "data"))
 
 """The status of the CoreError `f` throws, or `nothing` when it does not."""
@@ -26,13 +38,13 @@ end
 "True when `f` throws any CoreError."
 throws_core_error(f) = status_of(f) !== nothing
 
-function fixture(name::AbstractString, data::AbstractString = CORE_DATA)
+function fixture(name::AbstractString, data::AbstractString = CORE_FIXTURES)
     return read(joinpath(data, name))
 end
 
 """One message type from one fixture descriptor file."""
 function type_of(file::AbstractString, name::AbstractString,
-        data::AbstractString = CORE_DATA)
+        data::AbstractString = CORE_FIXTURES)
     return msgtype(from_file(joinpath(data, file)), name)
 end
 

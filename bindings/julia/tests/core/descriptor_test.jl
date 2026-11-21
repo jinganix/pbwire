@@ -10,7 +10,7 @@
 
 include(joinpath(@__DIR__, "harness.jl"))
 
-function descriptor_tests(data::AbstractString = CORE_DATA)
+function descriptor_tests(data::AbstractString = CORE_FIXTURES)
     checks = 0
     failures = 0
     function check(ok::Bool, what::AbstractString)
@@ -127,7 +127,7 @@ function descriptor_tests(data::AbstractString = CORE_DATA)
 end
 
 if abspath(PROGRAM_FILE) == @__FILE__
-    n, f = descriptor_tests(isempty(ARGS) ? CORE_DATA : ARGS[1])
+    n, f = descriptor_tests(isempty(ARGS) ? CORE_FIXTURES : ARGS[1])
     println("descriptor_test: $(n - f)/$(n) checks passed")
     exit(f == 0 ? 0 : 1)
 end
