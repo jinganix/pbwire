@@ -10,10 +10,12 @@ and wire bytes out; wire bytes in and a fully readable native object out.
 |---|---|---|---|
 | `tree` | `benchmarks/src/main.rs` | the shipped handle: `schema.message(name)`, one `set_*` per field, `encode_to()` into a reused buffer; `decode()` then one `get_*` per field | what the per-field native call costs once the tree exists |
 | `shim` | `benchmarks/src/main.rs` | the generated `<Message>Flat` (`#[repr(C)]`) is the native object; `FlatType::encode_in_place` / `decode_in_place` cross once into `bindings/c/runtime/pbw_struct.c`, which walks that memory in place through `pbw_struct_codec_*` | is a boundary worth paying for at all |
-| `core` | `n/a` | a pure-Rust port of the C core | plan 20 (`issue41-20-core-rust.md`) builds it |
+| `core` | `pbench/core_arm.rs` | the pure-Rust port of the C core behind the `core` cargo feature (`src/core/`): one `Message` tree in and wire bytes out, wire bytes in and the same tree out | can the host language replace the C core for this binding |
 
-`core` prints `n/a` until plan 20 lands; there is no second wire implementation
-in this binding.
+The `core` arm is the one allowed second mechanism
+([`bindings/README.md`](../../README.md#pbench-three-arms-one-contract)); it is
+not on the default build path, so the crate keeps linking the C core and this
+binding keeps one wire implementation there.
 
 ## Layout table
 
