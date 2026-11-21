@@ -216,6 +216,8 @@ make conformance-lua conformance-r conformance-node  # same through those bindin
 make conformance-node-core       # the pure-TypeScript core: binary in/out; JSON
                                  # and text answer "skipped" (runner counts skips,
                                  # not failures), so the pass set is the binary suite
+make conformance-csharp          # the pure-C# core: binary in/out, JSON and
+                                 # text answer "skipped" (same scope as above)
 make conformance-julia conformance-scala conformance-clojure conformance-fsharp conformance-zig
 ```
 

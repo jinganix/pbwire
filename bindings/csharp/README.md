@@ -84,6 +84,45 @@ Strings cross as NUL-terminated C strings, so `Set(field, string)` stops at the
 first NUL byte: use the `ReadOnlySpan<byte>` overload for binary payloads (a
 `string` field accepts them too, which is how protobuf's wire format works).
 
+## Pure-C# core (no native library)
+
+`bindings/csharp/Pbwire/Core/` is a second, self-contained engine with no
+`DllImport`: it reads the same `FileDescriptorSet`, builds its own schema, and
+encodes/decodes the same bytes, so a deployment with no C toolchain and no
+`libpbwire` still uses pbwire. Nothing in `Pbwire.cs` changes: the P/Invoke
+binding stays the default. F#'s facade can target either.
+
+```csharp
+using Pbwire.Core;
+
+var schema = Schema.FromFile("../c/tests/data/matrix3.desc");
+var ty = schema.Message("structtest.Scalars3");
+var msg = ty.NewMessage().Set("i32", -42).Set("str", "alice");
+msg.Add("tags", "a").Add("tags", "bb");        // repeated: appends (converted)
+msg.NewMessage("inner").Set("name", "kid");
+
+byte[] wire = ty.Encode(msg);                  // byte-identical with the C core
+Msg back = ty.Decode(wire);                    // unknown fields retained
+byte[] again = ty.Encode(back);                // byte-exact round trip
+```
+
+`ty.DecodeObject(wire)` / `ty.EncodeObject(dict)` are the plain-object forms the
+pbench `core` arm times. Scope is the binary codec and the same subset the C
+core owns: descriptor reader, encode, decode with unknown retention, groups,
+packed runs, oneof, presence, proto2 required fields, depth/size limits, strict
+tags and lengths, UTF-8 validation on proto3 strings. There is no JSON or text
+printer and no deterministic/delimited/WKT helper in this core (use the P/Invoke
+binding for those). `long`/`ulong` edges round-trip exactly, and no field takes
+a `byte[]` on the hot path: repeated elements are boxed slots, strings/bytes
+decoded off the wire stay slices of the input until read.
+
+`make conformance-csharp` runs the official binary suite through it: 1412
+successes, 1403 skipped (JSON/text input and output), 2 expected failures, 0
+unexpected, same failure set as the C core. Numbers: `BENCHMARKS.md` and
+`pbench/README.md`; it beats Google.Protobuf's generated codec on every encode
+tier and loses the two large decodes to the boxed tree, so it is the
+no-toolchain arm, not the shipped fast path.
+
 ## Ownership and threads
 
 A `Schema` and a root `Message` own native memory: `Dispose()` frees it. A

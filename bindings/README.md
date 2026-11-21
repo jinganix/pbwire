@@ -140,9 +140,13 @@ suite; until then it prints `n/a`. pbench keeps one copy of the shipped codec,
 as an adapter over `runtime/`, never a duplicate engine.
 
 C# has all three: `tree` is the prebuilt `Pbwire.Message` handle, `shim` is
-the generated model's native-object entry (`pbwire-csharp-shim`), `core` waits
-on plan 16. F# rides the C# runtime and prints the same two rows through it --
-no separate port, no second wire implementation. The C# `shim` row copies the
+the generated model's native-object entry (`pbwire-csharp-shim`), and `core`
+is the pure-C# port in `bindings/csharp/Pbwire/Core/` (`pbwire-csharp-core`,
+`make conformance-csharp`). F# rides the C# runtime and its facade can target
+the same core; no separate F# port exists. The `core` row is above
+Google.Protobuf on all four encode tiers (1.09-2.11x) and on the small decode
+tiers, below it on the two large decodes (0.77x / 0.63x: the boxed tree, not
+the wire engine). The C# `shim` row copies the
 native object into one contiguous image per op and hands it to a C-side reader
 (`bindings/csharp/native/pbw_cs_shim.c`, one `P/Invoke` per op): it is above
 Google.Protobuf on every encode tier (1.10-2.43x) and on the small decode tiers

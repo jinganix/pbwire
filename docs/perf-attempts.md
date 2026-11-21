@@ -1508,3 +1508,55 @@ plan's remaining budget went to the descriptor reader, the decoder's unknown/
 group/limit rules and the binary conformance pass. The prototype of this arm
 also crossed the plan's 3-hour budget, so the decision is recorded rather than
 the cell chased.
+
+## Provisional: the C# pure-core arm (plan 16, 2026-11-21)
+
+The third arm of `bindings/csharp/pbench/` is a pure-C# port of the C core
+(`bindings/csharp/Pbwire/Core/`: descriptor reader, tree, wire, encode, decode
+with unknown retention, groups, packed, oneof, presence, limits). It is not a
+boundary crossing at all -- the task runs in the managed heap -- so it measures
+what the C# binding could do with no native library, the way every other
+binding's `core` arm does. `CCore.New` builds the arm's native object (its own
+`Msg` tree) before the timer, so the row times the codec like `tree` does.
+
+`make csharp-pbench` (gate, then interleaved rounds, median of five) is
+mid-session and the small cells drifted by 6-8x between rounds, so only the
+ordering is worth reading; Stage 5 re-recorded the formal rows:
+
+| tier | arm | enc MB/s | dec MB/s |
+|---|---|---|---|
+| 136 B | `pbwire-csharp-core` | 129.5 | 134.8 |
+| 136 B | protobuf-csharp | 130.6 | 219.0 |
+| 2469 B | `pbwire-csharp-core` | 665.2 | 342.3 |
+| 2469 B | protobuf-csharp | 439.3 | 435.1 |
+| 74913 B | `pbwire-csharp-core` | 702.4 | 304.8 |
+| 74913 B | protobuf-csharp | 393.6 | 484.7 |
+
+Reading: above the generated reader/writer on every encode cell from 2.5 KB up
+(1.5x-1.8x in this pass) and below it on decode from 2.5 KB up. The wire engine
+is not the cost; the tree is (one boxed slot per scalar, one `Raw` slice per
+string, one `Msg` per sub-message), which is exactly what the native rows do
+not pay.
+
+Formal rows: `make csharp-bench` 2026-11-21
+(`results/bench-csharp-20261121T004756Z.json`) core encode 925.8 / 852.6 /
+621.2 / 653.6 MB/s, decode 540.9 / 479.6 / 362.4 / 318.6 at 136 / 174 / 2469 /
+74913 B; protobuf-csharp in the same run 457.9 / 404.6 / 568.5 / 472.2 encode
+and 473.9 / 395.2 / 473.4 / 506.3 decode. So the core is 2.02x / 2.11x / 1.09x
+/ 1.38x on encode and 1.14x / 1.21x / 0.77x / 0.63x on decode. The tree beats
+the core at 74 KB by 2.4x each way (`pbwire-csharp-tree` 1665.5 / 753.3); the
+core beats the image round trip (`pbwire-csharp-shim` 665.7 / 362.8) on both.
+
+Conformance scope: the core is a binary codec (no JSON or text printer in the
+plan's file list), so `make conformance-csharp` passes the binary suite with the
+same two expected tag-truncation failures and skips the JSON half (1412
+successes, 1403 skipped, 2 expected failures, 0 unexpected). The P/Invoke
+binding's rows keep the binary + JSON + text coverage.
+
+Stage 6 decision: **not attempted in plan 16**. The two below-baseline cells
+are the large decodes (0.77x, 0.63x), and the only change that moves them is
+unboxed slot storage -- a struct/columnar tree, i.e. a rewrite of `Tree`,
+`Encode` and `Decode`, not a one-line probe. Every other cell is at or above
+the baseline, so there was no below-baseline cell with a one-change candidate
+to A/B; the budget went to the descriptor reader, the decoder's unknown/group/
+limit rules and the binary conformance pass instead.

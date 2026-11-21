@@ -67,7 +67,10 @@ paths expose the fields `benchmarks/Bench.cs` checks (`str`, `inner.name`,
 runs `Layout.Verify` for `Scalars3` and `Inner3`, so a wrong offset table fails
 the gate instead of producing bad bytes.
 
-## Provisional table (Stage 3)
+## Provisional table (Stage 3, plan 05/05b)
+
+The `tree` and `shim` rows below are plan 05's mid-session table (kept as
+written; the formal run is the Verdict).
 
 `dotnet run --project pbench/gate -c Release -- compare`: gate first, then
 interleaved rounds (all three implementations back to back), median of five.
@@ -89,6 +92,26 @@ baseline on every encode tier (1.7x-3.0x) and on the two small decode tiers
 every repeated element (3000 ints, 3000 strings, 3000 sub-messages, 3000 bools
 at the xlarge tier) into managed objects, which the handle row never pays.
 Stage 6 addresses (or records) exactly those two cells.
+
+## Pure-C# `core` arm (Stage 3 provisional, plan 16)
+
+The same gate then interleaved rounds, median of five, 2026-11-21
+(`make csharp-pbench`, mid-session: the small-tier `core` cells showed a 6-8x
+round spread, so they are host noise, not a codec number -- the Stage 5
+best-of-three run below is the figure that counts):
+
+| tier | `core` enc | Google enc | `core` dec | Google dec |
+|---|---|---|---|---|
+| 136 B | 129.5 | 130.6 | 134.8 | 219.0 |
+| 174 B | 111.5 | 382.6 | 450.1 | 337.3 |
+| 2469 B | 665.2 | 439.3 | 342.3 | 435.1 |
+| 74913 B | 702.4 | 393.6 | 304.8 | 484.7 |
+
+The ordering that held in every round: encode above Google.Protobuf from
+2469 B up (1.5x-1.8x), decode above it below 2.5 KB only. The arm is
+`c-core/CCore.cs` over `bindings/csharp/Pbwire/Core/` (descriptor reader,
+tree, wire, encode, decode), measured with its own tree built before the timer
+so the row times the codec, like `tree`.
 
 ## Verdict
 
@@ -134,3 +157,43 @@ Stage 6 (optimization) is recorded in `docs/perf-attempts.md`: the plan-cache
 change (one static `LayoutPlan` instead of a lock+lookup per op) is kept and is
 byte-identical, and the two decode cells cannot cross without dropping the
 image copy -- a mechanism change, not a tuning round.
+
+### The pure-C# core arm (plan 16)
+
+**Publish `pbwire-csharp-core` beside the two native rows; the addon stays the
+default path and the pure core is the arm for a build with no C toolchain
+(and the codec F# inherits).** Formal `make csharp-bench`, one run, same
+baseline in every row (`results/bench-csharp-20261121T004756Z.json`,
+2026-11-21):
+
+| tier | op | pbwire-csharp-core | protobuf-csharp | x |
+|---|---|---|---|---|
+| 136 B | encode | 925.8 | 457.9 | 2.02 |
+| 136 B | decode | 540.9 | 473.9 | 1.14 |
+| 174 B | encode | 852.6 | 404.6 | 2.11 |
+| 174 B | decode | 479.6 | 395.2 | 1.21 |
+| 2469 B | encode | 621.2 | 568.5 | 1.09 |
+| 2469 B | decode | 362.4 | 473.4 | 0.77 |
+| 74913 B | encode | 653.6 | 472.2 | 1.38 |
+| 74913 B | decode | 318.6 | 506.3 | 0.63 |
+
+The core is above Google.Protobuf's generated codec on all four encode tiers
+(1.09-2.11x) and on both small decode tiers (1.14x, 1.21x), and below it on the
+two large decodes (0.77x, 0.63x). The gap is the tree shape, not the wire
+engine: every decoded element is a boxed `object` slot plus a `Raw` slice (or a
+`Msg`), so 3000 ints + 3000 strings + 3000 sub-messages + 3000 bools cost more
+than the reference parser's straight-line generated reader, while the handle
+row (`tree`, 737.9 / 753.3 at 74913 B) never materializes at all. It is still
+2.1-2.6x faster than the `shim`'s managed image round trip on the same
+tiers, because nothing is copied twice: `tree` > `core` > `shim` on decode at
+74 KB (754 / 319 / 363 MB/s).
+
+It is not a replacement for the addon: the prebuilt handle is 2.4x faster on
+encode and 2.4x on decode at 74 KB, and the shim's native half is still the
+fastest way to hand a *separate* native object to the core. The pure core wins
+where the alternative is "no pbwire at all" -- a container or CI image with no
+C compiler, a single-file `dotnet publish`, or a wasm/browser host -- and it is
+the codec F#'s facade can fall back to. Stage 6 is recorded in
+`docs/perf-attempts.md`: the two below-baseline decode cells need unboxed
+slot storage (a columnar/struct tree), which is a representation change, not
+a tuning round; no probe was run for a cell that a one-line change cannot move.
