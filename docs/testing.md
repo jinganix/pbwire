@@ -210,6 +210,9 @@ make go-test                     # thin models + codec engine (parity, generated
 make test-cpp                    # C++ binding self-check
 make codegen-test                  # the generated model test of every binding
 make conformance-python          # official suite through the Python binding
+make conformance-python-pure     # same through the pure-Python core: binary
+                                 # in/out; JSON and text answer "skipped"
+
 make conformance-ruby            # same through the Ruby binding
 make conformance-java            # same through the Java binding (pure-Java JSON/text)
 make conformance-lua conformance-r conformance-node  # same through those bindings
@@ -223,7 +226,8 @@ make conformance-julia conformance-scala conformance-clojure conformance-fsharp 
 
 Eleven bindings run the whole suite (binary, JSON and text); only JSPB answers
 `skipped` everywhere. The host-language `core` arms that ship a binary codec
-only (`conformance-node-core`, `conformance-csharp`) answer `skipped` for the
+only (`conformance-node-core`, `conformance-csharp`,
+`conformance-python-pure`) answer `skipped` for the
 JSON and text requests, so their pass set is the binary suite. The JVM bindings
 share the Java runtime, and the FFI / static-link hosts forward to the same C
 core, so a mapping bug has one place to live and one suite to prove it.

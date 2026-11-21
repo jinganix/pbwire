@@ -1594,7 +1594,7 @@ Formal rows: `make python-bench` 2026-11-21
 
 | tier | core encode(data) | core to_dict(bytes) | core encode(parsed) |
 |---|---|---|---|
-| 136 B | 8.8 | 6.9 | 12.2 |
+| 136 B | 8.6 | 7.1 | 13.4 |
 | 174 B | 8.8 | 6.7 | 13.0 |
 | 2469 B | 10.1 | 6.8 | 18.8 |
 | 74913 B | 10.3 | 6.7 | 19.3 |

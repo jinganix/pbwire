@@ -157,6 +157,17 @@ image-to-object copy costs more than the reference parser's whole run (see
 class with reference members cannot be pinned, so the image -- not
 `GCHandle.Alloc(obj, Pinned)` -- is what C walks.
 
+Python has all three: `tree` is the prebuilt `Message` handle (`decode()` keeps
+one slice per wire field), `shim` is the dict in and wire out through one
+CPython downcall (`encode(dict)` / `to_dict()`), and `core` is the pure-Python
+port in `bindings/python/pure/` (`pbwire-py-core`, `make
+conformance-python-pure`). The core is the no-extension mode (pure-Python
+interpreter, PyPy, sandbox), published, never the headline: at 74 KB it is 6.7
+MB/s decode / 10.3 MB/s `encode(dict)` against the extension's 941.9 / 577.1,
+and against `google.protobuf`'s own pure-Python runtime -- the comparable
+baseline -- it is 1.08x on decode and 1.29x on `encode(parsed)`. See
+`bindings/python/pbench/README.md`.
+
 Dart has all three: `tree` is the prebuilt `Message` handle, `shim` is the
 generated flat `<Message>Layout` read in place by the C-side reader
 (`pbwire-dart-shim`), `core` waits on plan 18.

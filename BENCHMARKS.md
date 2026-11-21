@@ -170,6 +170,7 @@ own README. Dart ran once `dart pub global activate protoc_plugin` provided
 | C structs | `make bench-c` (`bindings/c/benchmarks/bench_struct.cc`) | `protoc` C++ generated from the same `matrix3.proto` | all 4 | 1.29x ✅ / 2.02x ✅ |
 | Erlang/OTP NIF | `make benchmarks` in `bindings/erlang/benchmarks` | gpb (pure Erlang), with gpb NIF (libprotobuf) as the second baseline, same `matrix3.proto` | all 4 | 3.91x / 1.60x vs best-of-two ✅ |
 | Python (CPython ext) | `make python-bench` (`bindings/python/benchmarks/bench.py`) | `google.protobuf` (upb C extension) on the same `matrix3.proto` | all 4 | 6.87x ✅ / 1.19x ✅ |
+| Python (pure-Python `core`) | `make python-bench` | `google.protobuf`'s own pure-Python runtime (`PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python`), no C extension | all 4 | 1.29x ✅ `encode(parsed)` / 1.08x ✅ decode at 74 KB; `encode(data)` 0.69x (the pure-Python baseline has no dict entry point) |
 | C++ | same engine as C (`bindings/cpp` mirrors the C structs; `make bench-c` is the harness) | `protoc` C++ generated from the same `matrix3.proto` | all 4 | 1.33x ✅ / 2.00x ✅ |
 | Go (thin model, shim runtime) | `make go-bench` (`bindings/go/benchmarks`) | `protobuf-go` generated code from the same `matrix3.proto` | all 4 | 1.88x ✅ / 1.46x ✅ |
 | Java (pure-Java codec) | `make java-bench` (`bindings/java/benchmarks`) | `protobuf-java` generated code from the same `matrix3.proto` | all 4 | 1.26x ✅ / 1.76x ✅ `tree` (0.71x at 136 B; `core` generated model 0.75x / 0.80x) |
@@ -277,6 +278,7 @@ payload, the boundary cost and the baseline all differ.
 | Go (`core` row, shim runtime) | cshim runtime (one cgo call per op) | 74913 B | 1050.7 (1.78x ✅) | 512.1 (1.46x ✅) |
 | Go (`tree` arm) | value tree in C, one cgo call per field | 74913 B | 28.1 (0.05x ❌) | 33.5 (0.13x ❌) |
 | Python (dict path) | CPython extension | 74913 B | 562.3 (6.87x ✅) | 891.6 (1.19x ✅) |
+| Python (`core`, pure-Python) | no native code, interpreter only | 74913 B | 19.3 (1.29x ✅) `encode(parsed)`; `encode(data)` 10.3 | 6.7 (1.08x ✅) |
 | Java | pure-Java codec, no native code | 74913 B | 984.2 (1.13x ✅) | 747.4 (1.95x ✅) |
 | Kotlin | the pure-Java codec + DSL | 74913 B | 964.8 (1.09x ✅) | 742.1 (1.68x ✅) |
 | Node (`tree`, prebuilt handle) | N-API addon | 74913 B | 1689.3 (3.36x ✅) | 1196.1 (2.95x ✅) |
@@ -904,6 +906,43 @@ different representation:
   varints end on a byte without the continuation bit, fixed runs divide) and
   fills it with `PyList_SET_ITEM`; the per-field list table lives on the stack
   for messages with up to 8 fields, which is every sub-message on these tiers.
+
+#### The pure-Python core (no extension)
+
+The binding's third arm is a port of the C core in stdlib-only Python
+(`bindings/python/pure/`: descriptor reader, tree, encoder, decoder; no C
+extension, no `google.protobuf`), for the modes where the extension cannot
+load -- a pure-Python interpreter, PyPy, a sandbox. `make python-bench` prints
+it as `pbwire-py-core`, gated first on protoc's bytes and a field-by-field
+decode. Formal run, same session (`results/bench-python-20261121T010913Z.json`,
+2026-11-21), MB/s:
+
+| payload | `encode(data)` | `to_dict(bytes)` | `encode(parsed)` |
+|---|---|---|---|
+| 136 B | 8.6 | 7.1 | 13.4 |
+| 174 B | 8.8 | 6.7 | 13.0 |
+| 2469 B | 10.1 | 6.8 | 18.8 |
+| 74913 B | 10.3 | 6.7 | 19.3 |
+
+upb in the same run, at 74913 B: 82.4 / 39.3 / 1477.6. Comparing the core
+against upb would be dishonest -- upb is a C extension, and the whole point of
+this arm is running where none can load. The comparable baseline is
+`google.protobuf`'s own pure-Python runtime, measured on the same 74913 B
+payload in a separate process
+(`PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python`): `FromString` 6.2 MB/s and
+`SerializeToString` on a parsed message 15.0 MB/s. So at 74 KB the core decodes
+1.08x that parser (6.7 vs 6.2) and encodes a parsed tree 1.29x (19.3 vs 15.0);
+the official pure-Python runtime has no dict entry point, so `encode(data)`
+has no counterpart there.
+
+That is the honest shape of a pure-Python codec: ~100x behind the extension,
+which materializes in C, and at parity or slightly ahead of the only other
+pure-Python implementation of the same format. The official binary suite is
+green through it (`make conformance-python-pure`: 1412 successes, 1403
+JSON/text skipped, 2 expected, 0 unexpected -- the same failure set as the C
+core), which is the bar for publishing. Verdict and the Stage 6 decision are in
+`bindings/python/pbench/README.md` and `docs/perf-attempts.md`: the extension
+stays the shipped codec, the core is the no-extension mode, never the headline.
 
 ### Java, Node, Ruby and Objective-C vs their official runtimes
 
