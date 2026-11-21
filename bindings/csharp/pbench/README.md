@@ -12,10 +12,12 @@ native object out.
 |---|---|---|
 | `tree` | the prebuilt `Pbwire.Message` handle: `message.Encode()`, `type.Decode(wire)` | what the C core's codec costs once the tree exists |
 | `shim` | `Scalars3Layout.Marshal(model)` / `.Unmarshal(wire)`: one flat image in, **one `P/Invoke`** per op, `bindings/csharp/native/pbw_cs_shim.c` walks it through `pbw_struct_codec_*` | is a boundary worth paying for at all |
-| `core` | `n/a` — a C# port of the C core | plan 16 (`issue41-16-core-csharp.md`) builds it |
+| `core` | `bindings/csharp/Pbwire/Core/`: a pure-C# port of the C core (`Schema`, `Msg`, `Encode`, `Decode`), no `DllImport` | what the same codec costs with no native library at all |
 
-`core` prints `n/a` until plan 16 lands; there is no second wire
-implementation in this binding.
+The `core` arm is a file, not a stub: `CCore.cs` in the gate loads
+`benchmarks/gen/matrix3.desc`, builds the dynamic tree from the plain object
+(`EncodeObject`) and decodes to a plain object (`DecodeObject`). It never
+touches `libpbwire`; that is the whole point of the arm.
 
 ## Layout table
 
