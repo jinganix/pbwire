@@ -1021,7 +1021,9 @@ func writeCsharpOneofRead(b *strings.Builder, indent string, m *model.Message, o
 		}
 		fmt.Fprintf(b, "%s        break;\n", indent)
 	}
-	fmt.Fprintf(b, "%s    default: dst.Clear%s(); break;\n%s}\n", indent, csPascal(oneof), indent)
+	// A fresh image has no stale case, so the read path must not clear anything
+	// (and has no `dst` in scope: this switch runs inside ReadImage).
+	fmt.Fprintf(b, "%s    default: break;\n%s}\n", indent, indent)
 }
 
 // oneofMember is any member of a oneof (they share one case word).

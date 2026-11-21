@@ -184,7 +184,7 @@ namespace Spectest {
                 case 4:
                     { var p = *(byte**)(img + 24); if (p != null) { var c = new Types.Inner(); c.ReadImage(p); Inner = c; } }
                     break;
-                default: dst.ClearKind(); break;
+                default: break;
             }
             GC.KeepAlive(this);
         }
