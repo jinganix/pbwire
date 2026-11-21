@@ -213,6 +213,9 @@ make conformance-python          # official suite through the Python binding
 make conformance-ruby            # same through the Ruby binding
 make conformance-java            # same through the Java binding (pure-Java JSON/text)
 make conformance-lua conformance-r conformance-node  # same through those bindings
+make conformance-node-core       # the pure-TypeScript core: binary in/out; JSON
+                                 # and text answer "skipped" (runner counts skips,
+                                 # not failures), so the pass set is the binary suite
 make conformance-julia conformance-scala conformance-clojure conformance-fsharp conformance-zig
 ```
 
