@@ -195,7 +195,11 @@ no-C-toolchain mode, never as the shipped fast path.
 Swift has all three: `tree` is the prebuilt `Message` handle, `shim` is the
 generated `@frozen` `<Message>Repr` mirror (no references, so no ARC per field)
 read in place by `bindings/swift/Sources/CPbwire/shim.c` over the same C struct
-codec (`pbwire-swift-shim`, one call per op), `core` waits on plan 21.
+codec (`pbwire-swift-shim`, one call per op), and `core` is the `PbwireCore`
+product (`bindings/swift/Sources/PbwireCore/`): a pure-Swift descriptor reader,
+value tree, encoder and decoder with no C module, no `libpbwire.a` and no
+`unsafeFlags`, so it can be a normal SwiftPM dependency and `make
+conformance-swift` can drive the official suite through it.
 
 Ruby has two: `tree` is the prebuilt `Message`/wire-view handle, `shim` is the
 generated model read by one C-extension entry (`pbwire-ruby-shim`); `core` is
@@ -247,7 +251,7 @@ throughput against the official runtime, copied from
 | C# | Google.Protobuf is already a fast tree codec — the closest race of the set | P/Invoke plus a resolver, no packages; the native-object path is one call into `bindings/csharp/native/pbw_cs_shim.c` over a per-op flat image | 3.22x / 1.48x `tree` (vs Google.Protobuf; native-object `shim` 2.43x encode, 1.49x decode at 136 B, 0.71x decode at 74 KB) |
 | Go | the official runtime walks `protoreflect`/`protowire` per field | thin generated structs over one cgo crossing per op (`runtime/`: struct offsets as layout tables); the models the cshim cannot drive stay on the pure-Go table engine (`pbench/dyngo/codec/`), which also holds the descriptor-set value tree ([issue 41](https://github.com/jinganix/pbwire/issues/41)) | 1.73x / 1.47x (vs protobuf-go; thin model, struct in and struct out) |
 | Erlang | gpb is pure Erlang; gpb NIF binds libprotobuf per message | NIF over the core, consuming gpb's own definitions — no second generator | 3.91x / 1.60x (vs gpb) |
-| Swift | Apple moved to Swift while the binding set still spoke ObjC; `swift-protobuf` generates a struct per message | SwiftPM package: FFI host over the C ABI (`FileDescriptorSet` at run time, static `libpbwire.a`, no wire code) | 4.43x / 2.84x (vs swift-protobuf) |
+| Swift | Apple moved to Swift while the binding set still spoke ObjC; `swift-protobuf` generates a struct per message | SwiftPM package: FFI host over the C ABI (`FileDescriptorSet` at run time, static `libpbwire.a`, no wire code), plus a pure-Swift `PbwireCore` product for consumers the `unsafeFlags` static link cannot reach | 4.43x / 2.84x (vs swift-protobuf) |
 | Scala | data teams write Scala against Java protobuf | same Java runtime as Kotlin plus an idiomatic DSL — one runtime, three JVM languages | 1.21x / 1.25x (vs ScalaPB) |
 | Elixir | `elixir-protobuf` is pure Elixir, every field through the interpreter | struct↔tuple translation over the shared NIF (no C of its own) | 2.41x / 0.99x (vs elixir-protobuf; xlarge decode at parity) |
 | Zig | `zig-protobuf` codegen per message, fragmented across forks | `@cImport`-free static link (`translate-c` + `libpbwire.a` compiled in); the generated `extern struct` mirror is read in place by the C struct codec, one call per op | 1.81x / 2.13x `tree`, 1.44x / 2.26x native-object `shim` (vs zig-protobuf) |

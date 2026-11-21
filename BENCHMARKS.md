@@ -185,6 +185,7 @@ own README. Dart ran once `dart pub global activate protoc_plugin` provided
 | C# (P/Invoke) | `make csharp-bench` (`bindings/csharp/benchmarks`) | Google.Protobuf C# generated code (fastest) + protobuf-net | all 4 | 3.46x ✅ / 1.48x ✅ `tree` (native-object `shim` 0.12x / 0.10x; pure-C# `core` 1.38x encode / 0.63x decode vs protobuf-csharp at 74 KB, no native library) |
 | Lua (C module, tables) | `make lua-bench` (`bindings/lua/benchmarks`) | `lua-protobuf` 0.6.0 | all 4 | 1.09x ✅ / 1.42x ✅ (8.93x via builder encode — data already in pbwire) |
 | Swift (SwiftPM, static link) | `make swift-bench` (`bindings/swift/benchmarks`) | `apple/swift-protobuf` 1.39.0 generated code from the same `matrix3.proto` | all 4 | 6.31x ✅ / 2.59x ✅ `tree` (native-object `shim` 3.37x / 2.56x, one C-side layout-codec call per op) |
+| Swift (pure-Swift `core`) | `make swift-bench` + `make conformance-swift` (`bindings/swift/Sources/PbwireCore/`) | `apple/swift-protobuf` 1.39.0 generated code from the same `matrix3.proto` | all 4 | 0.87x ❌ / 0.28x ❌ (no C module, no `libpbwire.a`, no `unsafeFlags`; official binary suite passed) |
 | Scala (Java runtime + DSL) | `make scala-bench` (`bindings/scala/benchmarks`) | ScalaPB 0.11.18 generated code from the same `matrix3.proto` | all 4 | 1.45x ✅ / 1.37x ✅ `tree` (`core` case class 0.33x / 0.30x) |
 | Elixir (NIF over the shared core) | `make elixir-bench` (`bindings/elixir/benchmarks`) | `elixir-protobuf` 0.17.1 structs from the same `matrix3.proto` | all 4 | 2.56x ✅ / 1.90x ✅ |
 | Zig (static link) | `make zig-bench` (`bindings/zig/benchmarks`, `-Doptimize=ReleaseFast`) | Arwalk/zig-protobuf 7.0.0 generated code from the same `matrix3.proto` | all 4 | 1.44x ✅ / 2.26x ✅ `shim` (native-object `extern struct` mirror, one C struct-codec call per op; prebuilt `tree` handle 2.07x / 2.23x) |
@@ -1513,16 +1514,16 @@ competitor rather than a decision.
 
 ![Swift (SwiftPM, static link) vs apple/swift-protobuf — MB/s by tier](docs/charts/bench-swift-swiftpm-static-link-vs-apple-swift-protobuf.svg)
 
-| payload | op | pbwire-swift-tree (MB/s, x swift-protobuf) | pbwire-swift-shim (MB/s, x swift-protobuf) | swift-protobuf (MB/s) |
-|---|---|---|---|---|
-| 136 B | encode | 1137.6 (2.60x ✅) | 1021.1 (2.34x ✅) | 437.1 |
-| 136 B | decode | 923.3 (3.74x ✅) | 757.6 (3.07x ✅) | 247.0 |
-| 174 B | encode | 1189.6 (3.67x ✅) | 983.7 (3.03x ✅) | 324.4 |
-| 174 B | decode | 827.8 (4.22x ✅) | 708.5 (3.61x ✅) | 196.0 |
-| 2469 B | encode | 1498.6 (5.59x ✅) | 1037.4 (3.87x ✅) | 268.2 |
-| 2469 B | decode | 682.3 (3.45x ✅) | 511.8 (2.59x ✅) | 197.5 |
-| 74913 B | encode | 1763.7 (6.31x ✅) | 941.2 (3.37x ✅) | 279.6 |
-| 74913 B | decode | 591.1 (2.59x ✅) | 584.6 (2.56x ✅) | 228.4 |
+| payload | op | pbwire-swift-tree (MB/s, x swift-protobuf) | pbwire-swift-shim (MB/s, x swift-protobuf) | pbwire-swift-core (MB/s, x swift-protobuf) | swift-protobuf (MB/s) |
+|---|---|---|---|---|---|
+| 136 B | encode | 955.2 (2.20x ✅) | 883.8 (2.04x ✅) | 232.8 (0.54x ❌) | 434.2 |
+| 136 B | decode | 858.1 (3.49x ✅) | 652.4 (2.65x ✅) | 93.0 (0.38x ❌) | 246.0 |
+| 174 B | encode | 1087.4 (3.36x ✅) | 935.0 (2.89x ✅) | 213.4 (0.66x ❌) | 323.2 |
+| 174 B | decode | 784.2 (3.96x ✅) | 652.8 (3.30x ✅) | 84.3 (0.43x ❌) | 198.1 |
+| 2469 B | encode | 1481.6 (5.69x ✅) | 998.2 (3.84x ✅) | 234.9 (0.90x ❌) | 260.3 |
+| 2469 B | decode | 656.3 (3.40x ✅) | 508.6 (2.63x ✅) | 61.9 (0.32x ❌) | 193.2 |
+| 74913 B | encode | 1656.6 (6.01x ✅) | 886.6 (3.22x ✅) | 239.6 (0.87x ❌) | 275.6 |
+| 74913 B | decode | 586.8 (2.71x ✅) | 563.3 (2.60x ✅) | 60.2 (0.28x ❌) | 216.4 |
 
 FFI host like Objective-C/Dart: `FileDescriptorSet` at run time, C ABI calls
 only, no wire code, no plugin. SwiftPM links `build/libpbwire.a` via
@@ -1536,8 +1537,20 @@ code is checked in. The gate is byte parity per tier plus the pinned
 `encodeInPlace`/`decodeInPlace` call into `bindings/c/runtime/pbw_struct.c`
 (compiled into the package's `CPbwire` target), so no field and no ARC crosses
 per field. The handle stays the fastest row because it is already one call into
-the core's own encoder; the shim answers the native-object question at 2.3-3.9x
+the core's own encoder; the shim answers the native-object question at 2.0-3.8x
 the baseline.
+
+`pbwire-swift-core` is the pure-Swift `PbwireCore` product
+(`bindings/swift/Sources/PbwireCore/`): a descriptor reader, value tree, encoder
+and decoder in Swift, no C module, no `libpbwire.a` and no `unsafeFlags`, so it
+can be a normal SwiftPM dependency and a build with no C toolchain can use it.
+It is not the fast path — 0.54-0.90x encode and 0.28-0.43x decode of
+swift-protobuf, the cost of the value tree's ARC — and it is published as the
+no-native mode; `make conformance-swift` drives the official binary suite
+through it (1412 successes, 1403 skipped, 2 expected, 0 unexpected, the same
+failure set as the C core). Numbers are
+`results/bench-swift-20261121T025449Z.json`; the `core` row's stage 6 round and
+the remaining gap are recorded in `docs/perf-attempts.md`.
 
 ### Scala (Java runtime + DSL) vs ScalaPB
 
