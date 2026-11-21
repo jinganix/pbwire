@@ -24,6 +24,11 @@ mod matrix3;
 #[path = "../../tests/gen/matrix3_pbwire.rs"]
 mod models;
 
+/* The third arm: the pure-Rust core (`cargo` feature `core`), one file so the
+ * arm has no crate of its own. */
+#[path = "../../pbench/core_arm.rs"]
+mod core_arm;
+
 mod prost_gen {
     include!(concat!(env!("OUT_DIR"), "/structtest.rs"));
 }
@@ -59,9 +64,13 @@ fn main() {
     });
     let ty = schema.message("structtest.Scalars3").expect("message type");
     let inner_ty = schema.message("structtest.Inner3").expect("inner type");
+    let core = core_arm::CoreArm::load(&path).unwrap_or_else(|e| {
+        eprintln!("core arm: {e}");
+        std::process::exit(1);
+    });
 
     for tier in 0..CASES.len() {
-        run_case(&schema, &ty, &inner_ty, tier);
+        run_case(&schema, &ty, &inner_ty, &core, tier);
     }
     if unsafe { FAILURES } != 0 {
         eprintln!("{} check(s) failed", unsafe { FAILURES });
@@ -69,7 +78,7 @@ fn main() {
     }
 }
 
-fn run_case(schema: &Schema, ty: &Type<'_>, inner_ty: &Type<'_>, tier: usize) {
+fn run_case(schema: &Schema, ty: &Type<'_>, inner_ty: &Type<'_>, core: &core_arm::CoreArm, tier: usize) {
     let label = CASES[tier];
     let n = REPEATS[tier];
     let iterations = ITERATIONS[tier];
@@ -121,6 +130,13 @@ fn run_case(schema: &Schema, ty: &Type<'_>, inner_ty: &Type<'_>, tier: usize) {
         return;
     }
     println!("OK   {label} flat-image parity, x{n}");
+
+    // The core arm: the pure-Rust codec, same payload, same reference bytes.
+    if let Err(what) = core.gate(&reference, n) {
+        fail(label, &what);
+        return;
+    }
+    println!("OK   {label} pure-core parity, x{n}");
 
     // Decode must round-trip byte-exactly and expose the same values.
     let back = ty.decode(&reference).expect("decode");
@@ -200,6 +216,10 @@ fn run_case(schema: &Schema, ty: &Type<'_>, inner_ty: &Type<'_>, tier: usize) {
     let prost_decode = measure(iterations, || {
         prost_gen::Scalars3::decode(&reference[..]).expect("decode")
     });
+    let core_message = core.build(n);
+    let mut core_buf = Vec::new();
+    let core_encode = measure(iterations, || core.encode_into(&core_message, &mut core_buf));
+    let core_decode = measure(iterations, || core.decode(&reference).expect("core decode"));
 
     println!(
         "{label}: {} bytes, {tier_count} iterations (repeat field x{n})",
@@ -208,10 +228,12 @@ fn run_case(schema: &Schema, ty: &Type<'_>, inner_ty: &Type<'_>, tier: usize) {
     println!("  {:<12} {:<7} {:>12} {:>10}", "impl", "op", "ns/op", "MB/s");
     row("pbwire-rust-tree", "encode", reference.len(), encode);
     row("pbwire-rust-shim", "encode", reference.len(), flat_encode);
+    row("pbwire-rust-core", "encode", reference.len(), core_encode);
     row("protobuf-rust", "encode", reference.len(), official_encode);
     row("prost", "encode", reference.len(), prost_encode);
     row("pbwire-rust-tree", "decode", reference.len(), decode);
     row("pbwire-rust-shim", "decode", reference.len(), flat_decode);
+    row("pbwire-rust-core", "decode", reference.len(), core_decode);
     row("protobuf-rust", "decode", reference.len(), official_decode);
     row("prost", "decode", reference.len(), prost_decode);
     println!();

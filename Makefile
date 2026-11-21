@@ -664,6 +664,20 @@ conformance-julia-core: $(CONFORMANCE_DESC)
 		$(JULIA_ABS) --project=bindings/julia/runtime \
 		bindings/julia/conformance/testee_core.jl $(CURDIR)/$(CONFORMANCE_DESC)
 
+# Same suite through the pure-Rust core (`bindings/rust/src/core/`, no C
+# library and no `unsafe`): binary in, binary out; JSON and text answer
+# "skipped" (the runner counts skips, not failures), so the pass set is the
+# binary suite.
+conformance-rust: $(CONFORMANCE_DESC)
+	@test -x "$(CONFORMANCE_RUNNER)" || { \
+		echo "conformance_test_runner not found: $(CONFORMANCE_RUNNER)"; \
+		echo "run 'make conformance-setup' first"; exit 1; }
+	cd bindings/rust && cargo build --release --no-default-features --features core \
+		--bin pbwire-conformance
+	$(CONFORMANCE_RUNNER) --failure_list $(CURDIR)/conformance/failure_list_pbwire.txt \
+		$(CURDIR)/bindings/rust/target/release/pbwire-conformance \
+		$(CURDIR)/$(CONFORMANCE_DESC)
+
 # Same suite through the Zig binding (binary, JSON and text; JSPB skips).
 conformance-zig: $(CONFORMANCE_DESC)
 	@test -x "$(CONFORMANCE_RUNNER)" || { \
@@ -796,6 +810,10 @@ conformance-dart-core: $(CONFORMANCE_DESC)
 
 rust-test: shared
 	cd bindings/rust && cargo test
+	# The pure-Rust core is a feature, so it needs its own pass: this is the
+	# `--no-default-features` build the `core` arm and `make conformance-rust`
+	# rely on (no C code linked into the testee).
+	cd bindings/rust && cargo test --no-default-features --features core
 
 csharp-test: shared csharp-shim-native
 	cd bindings/csharp && $(DOTNET) run --project tests -- ../c/tests/data/matrix3.desc
@@ -983,7 +1001,7 @@ clean:
 
 .PHONY: all test fuzz coverage release-check examples shared format format-check bench bench-c erlang-test erlang-core-sync ruby-core-sync erlang-bench \
 	python-bind python-test python-bench difftest difftest-short conformance conformance-setup conformance-python \
-	conformance-ruby conformance-java conformance-lua conformance-r conformance-node ruby-bind java-test ruby-test node-test objc-test r-bind \
+	conformance-ruby conformance-java conformance-lua conformance-r conformance-node conformance-rust ruby-bind java-test ruby-test node-test objc-test r-bind \
 	lua-bind lua-test lua-bench \
 	java-bench ruby-bench node-bench objc-bench go-bench pbench-java \
 	kotlin-test php-test dart-test rust-test csharp-test csharp-pbench \

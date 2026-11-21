@@ -43,6 +43,8 @@ the caller keeps alive (a repeat decode invalidates it).
 ```
 make rust-test                                        # includes the gate
 cd bindings/rust && cargo test --test flat             # PASS / exit 1
+cd bindings/rust && cargo test --no-default-features --features core
+make conformance-rust                                  # official binary suite
 ```
 
 The gate asserts, on the pinned `matrix3` fixture, that the flat image's bytes
@@ -52,26 +54,44 @@ and the pinned prost oracle, that a decode exposes every fixture value (`str`,
 optionals and `u64`), and that the decoded image re-encodes to the same bytes.
 `rust-protobuf` parity is covered by the same fixture in the bench parity check.
 
-`make conformance-rust` is **deferred**: no `bindings/rust/conformance/` testee
-exists (the other bindings' targets drive their own binary against the official
-suite, which needs `make conformance-setup` and a stdio testee this plan's file
-list does not include), so there is no target to add here. The gate above plus
-`make rust-test` (compat: protoc reference bytes, prost oracle, round trips)
-cover this stage until a later plan adds the testee.
+The `core` arm has its own gates. `cargo test --no-default-features --features
+core` runs the pure core's tests (`tests/core/`): the descriptor reader (22
+fields of `structtest.Scalars3`, the four presence kinds, proto2 requiredness,
+groups, oneofs), the codec (the `matrix3` fixture in both directions, unknown
+retention, groups, packed, oneof, presence, the `u64`/`i64` edges, the limits)
+and the wire primitives (masking, strict lengths and tags, the group skipper's
+depth cap, a deterministic garbage-never-panics sweep).
+
+`make conformance-rust` runs `bindings/rust/conformance/main.rs` -- the same
+4-byte-length-framed testee the other bindings use -- against the official
+suite, and it is the gate that admits the arm into `BENCHMARKS.md`. It is built
+with `--no-default-features --features core`, so the binary links no C code:
+
+```
+PASSED: 1412 successes, 1403 skipped, 2 expected failures, 0 unexpected failures
+PASSED: 0 successes, 445 skipped
+```
+
+Same failure set as the C core and the TypeScript, C#, Python, Dart and Julia
+ports: the 2 expected are the list's `BadTag_FieldNumberSlightlyTooHigh` cases
+and the skipped half is the JSON/text mapping, out of this core's (binary)
+scope.
 
 ## Provisional table (Stage 3)
 
 `make rust-bench` (best of three passes per op, one reused buffer per side).
 `tree` is a prebuilt handle's `encode_to` / `decode`; `shim` is one
 `encode_in_place` / `decode_in_place` on the flat image, with the image and
-arena allocated once. MB/s over wire bytes, 2026-11-20, recorded mid-session:
+arena allocated once; `core` is the pure-Rust codec on its own prebuilt
+`Message` tree (`pbench/core_arm.rs`), so it differs from `tree` only in who
+walks the wire. MB/s over wire bytes, 2026-11-21:
 
-| tier | `tree` enc | `shim` enc | prost enc | `tree` dec | `shim` dec | prost dec |
-|---|---|---|---|---|---|---|
-| 136 B | 1783.1 | 1613.5 | 1540.0 | 990.7 | 1122.8 | 783.0 |
-| 174 B | 1673.7 | 1521.5 | 1533.3 | 847.6 | 995.6 | 611.1 |
-| 2469 B | 1724.0 | 1088.7 | 1353.4 | 651.1 | 659.5 | 332.4 |
-| 74913 B | 1713.7 | 1128.0 | 1358.4 | 715.1 | 706.4 | 370.0 |
+| tier | `core` enc | prost enc | `core` dec | prost dec | rust-protobuf dec |
+|---|---|---|---|---|---|
+| 136 B | 1119.2 | 1654.1 | 433.3 | 916.3 | 769.0 |
+| 174 B | 1084.8 | 1575.6 | 371.6 | 629.8 | 591.2 |
+| 2469 B | 889.1 | 1259.0 | 236.2 | 335.8 | 378.6 |
+| 74913 B | 895.2 | 1310.9 | 233.3 | 357.2 | 379.9 |
 
 ## Verdict
 

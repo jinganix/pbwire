@@ -5,7 +5,9 @@ edition = "2021"
 publish = false
 
 [dependencies]
-pbwire = { path = ".." }
+# `core` turns on the pure-Rust codec (`../src/core/`) for the third pbench arm;
+# the crate still links the C core, so the tree and shim rows are unchanged.
+pbwire = { path = "..", features = ["core"] }
 protobuf = "3"
 prost = "0.14"
 

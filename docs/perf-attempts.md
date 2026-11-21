@@ -1772,3 +1772,42 @@ columnar/lazy tree or code generated for the concrete message -- a rewrite of
 the tree and both codecs, i.e. the `ccall` runtime again. The arm is published
 with its numbers as the no-native path, exactly as the TypeScript, C#, Python
 and Dart cores are.
+
+## Provisional: the Rust pure-core arm (plan 20, 2026-11-21, issue 41)
+
+`bindings/rust/src/core/` is a pure-Rust port of the C core behind the `core`
+cargo feature (off by default: the crate keeps linking the C core, `make
+rust-test` keeps proving the FFI path). It is the `core` arm of the three-arm
+contract and it competes with prost directly, since prost is a pure-Rust codec
+too. `make rust-bench`, one session, M-series arm64 laptop; `core` is a prebuilt
+`Message` tree through one `encode_to` into a reused buffer and one one-shot
+`decode`, exactly the shape of the `pbwire-rust-tree` row, so the two rows
+differ only in who walks the wire:
+
+| tier | arm | enc MB/s | dec MB/s |
+|---|---|---|---|
+| 136 B | `pbwire-rust-core` | 1119.2 | 433.3 |
+| 136 B | prost | 1654.1 | 916.3 |
+| 136 B | protobuf-rust | 1325.8 | 769.0 |
+| 2469 B | `pbwire-rust-core` | 889.1 | 236.2 |
+| 2469 B | prost | 1259.0 | 335.8 |
+| 2469 B | protobuf-rust | 854.6 | 378.6 |
+| 74913 B | `pbwire-rust-core` | 895.2 | 233.3 |
+| 74913 B | prost | 1310.9 | 357.2 |
+| 74913 B | protobuf-rust | 864.5 | 379.9 |
+
+Reading: the core is above protobuf-rust on the two large encodes (1.04x) and
+below prost on every encode (0.68-0.69x); every decode is below both baselines
+(0.47-0.70x of prost). The shape is the same one the other host-language cores
+report: prost's generated writer and reader are straight-line code over typed
+struct fields with no value tree in between, while this arm's tree is a slot
+vector of a `Value` enum, one `Box<Message>` per submessage and one byte vector
+per string. Those are allocations on the decode path the reference does not
+make -- the payload's 3000 `inners` and 3000 `tags` at 74 KB -- which is the
+decode gap, not the wire walk (the encode side does no allocation at all).
+
+Conformance: `make conformance-rust` (the new `bindings/rust/conformance/main.rs`
+testee, built with `--no-default-features --features core`, so no C code is
+linked) passes the binary suite with the same failure set as the C core: 1412
+successes, 1403 skipped, 2 expected failures, 0 unexpected. The skipped half is
+the JSON/text mapping, out of this core's (binary) scope.

@@ -6,7 +6,20 @@ description = "Rust binding over the pbwire C ABI: dynamic protobuf without gene
 license = "MIT"
 repository = "https://github.com/jinganix/pbwire"
 
+[features]
+# The pure-Rust core (`src/core/`): no C library, no `unsafe`, no generated
+# code. Off by default so the crate keeps linking the C core statically.
+core = []
+
 [dependencies]
+
+# The official conformance testee (`bindings/rust/conformance/`). It needs the
+# pure-Rust core, so it is built only with `--no-default-features --features
+# core` and is skipped by a plain `cargo build`/`cargo test`.
+[[bin]]
+name = "pbwire-conformance"
+path = "conformance/main.rs"
+required-features = ["core"]
 
 [workspace]
 members = ["benchmarks"]

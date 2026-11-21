@@ -7,4 +7,6 @@
 //!   cargo test --no-default-features --features core --test core
 #![cfg(feature = "core")]
 
+mod codec;
 mod descriptor;
+mod wire;

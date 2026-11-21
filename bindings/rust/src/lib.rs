@@ -29,6 +29,12 @@
 
 mod ffi;
 
+/// The pure-Rust wire core, behind the `core` cargo feature: no C library, no
+/// `unsafe`, no generated code. See [`core`] for the API and `pbench/README.md`
+/// for why it exists (the pbench `core` arm, not the shipped codec).
+#[cfg(feature = "core")]
+pub mod core;
+
 use std::ffi::{c_char, c_int, c_void, CStr, CString};
 use std::fmt;
 use std::fs;
