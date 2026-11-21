@@ -100,21 +100,24 @@ anything else:
   project and adds only an F#-idiomatic facade over the same P/Invoke
   runtime, exactly like Kotlin reuses Java.
 
-## pbench: three arms, one contract
+## pbench: four arms, one contract
 
-Every binding's `pbench/` compares the same three arms over the same `matrix3`
-payload and the four standard tiers. Every arm does the same user-visible
-task: a native object in, wire bytes out; wire bytes in, a fully readable
-native object out. No arm may hold a prebuilt tree before the timer starts,
-and no arm may use test-only glue: the native <-> tree move goes through a
-shipped converter or a shipped model, so the timer covers what a user of that
-path pays.
+Every binding's `pbench/` compares the same four arms over the same `matrix3`
+payload and the four standard tiers. The `tree`, `shim` and `core` arms do the
+same user-visible task: a native object in, wire bytes out; wire bytes in, a
+fully readable native object out. None of the three may hold a prebuilt tree
+before the timer starts, and none may use test-only glue: the native <-> tree
+move goes through a shipped converter or a shipped model, so the timer covers
+what a user of that path pays. The fourth arm, `proxy`, times the prebuilt
+task instead: re-encode a held handle, decode-and-free with no
+materialization. It is published, never the headline.
 
 | arm | mechanism | what it answers |
 |---|---|---|
-| `tree` | the data already lives in the binding's own message/tree object (`Message`, `DMsg`, `MessageType` handle) | what the codec costs once the tree exists |
+| `tree` | a native object in and out through the shipped per-field API (build per field, encode; decode, read back per field, free); no prebuilt tree before the timer | what a user of that path pays |
 | `shim` | C reads and writes the host's own memory through a layout/offset table; one crossing per op, no intermediate tree | is a boundary worth paying for at all |
 | `core` | the C core ported to the host language: value tree plus wire engine plus skip/group/unknown/validation, native object in and out | can the host language replace the C core for this binding |
+| `proxy` | the prebuilt task: re-encode a held handle, decode-and-free with no materialization | what the proxy/transcoder task costs; published, never the headline |
 
 The uniform contract, per binding:
 
@@ -122,7 +125,7 @@ The uniform contract, per binding:
 New(descriptorSet) -> Arm
 Arm.Marshal(nativeMessage) -> wire bytes
 Arm.Unmarshal(wire) -> nativeMessage
-Arm.Tree(nativeMessage) -> binding tree        // tree arm only, already built
+Arm.Proxy() -> wire bytes                       // proxy arm only, prebuilt held before the timer
 ```
 
 Gate before any timing: every arm's bytes equal the official runtime's bytes on
@@ -240,7 +243,7 @@ detail in `bindings/<lang>/pbench/README.md`.
 Every row is also the reason that binding exists: its host runtime's status quo
 has a specific cost, and the binding removes it *without* a second wire
 implementation (the allowed third mechanism is the
-[`core` arm](#pbench-three-arms-one-contract)). The ratios are xlarge-tier
+[`core` arm](#pbench-four-arms-one-contract)). The ratios are xlarge-tier
 throughput against the official runtime, copied from
 [BENCHMARKS.md](../BENCHMARKS.md) where the reasoning and the full tables are.
 

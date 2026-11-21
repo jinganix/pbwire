@@ -69,12 +69,14 @@ for a case, and `scripts/bench-record.py` accepts the shorter header.
 call) after the standard four rows; only the standard block is aggregated
 below.
 
-Rows are named by the mechanism they time: `tree` (the data already lives in the
-binding's own message object), `shim` (C reads the host's memory through a
-layout table, one crossing, no intermediate tree) and `core` (a host-language
-port of the core, native object in and out). A `tree` row excludes the copy
-between the host's native objects and the binding's tree; the `core` row times
-that copy. `n/a` means the arm is not built for that binding; the reason is in
+Rows are named by the mechanism they time: `tree` (a native object in and out
+through the shipped per-field API, no prebuilt tree before the timer), `shim`
+(C reads the host's memory through a layout table, one crossing, no
+intermediate tree), `core` (a host-language port of the core, native object in
+and out) and `proxy` (the prebuilt task: re-encode a held handle,
+decode-and-free with no materialization; published, never the headline). The
+`tree`, `shim` and `core` rows all time the same native-in/native-out task.
+`n/a` means the arm is not built for that binding; the reason is in
 `bindings/<lang>/pbench/README.md`.
 
 The Python harness names its ops by the task as well as the representation
