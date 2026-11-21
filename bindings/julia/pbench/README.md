@@ -90,3 +90,22 @@ For the review's 136 B decode question: the shim does remove the per-call
 steady-state decode allocates nothing). The remaining gap is the C struct
 decode plus the one `ccall`; 124 ns against ProtoBuf.jl's 105 ns, not an arena
 cost.
+
+## Verdict (core, plan 19)
+
+**The `ccall` runtime stays the shipped codec; the pure core ships as the
+no-native arm.** `make conformance-julia-core` passes the official binary suite
+(1412 successes, 1403 skipped, 2 expected, 0 unexpected -- the same set as the
+C core, the TypeScript, C#, Python and Dart ports), so the arm is a proven
+second mechanism, and it needs neither a C toolchain nor a native library:
+stdlib-only Julia, no `ccall`, no generated code.
+
+Its numbers (provisional table above) are the honest price of that portability:
+at 74 KB the pure encoder is 30.0 MB/s against ProtoBuf.jl's 11.9 (2.5x,
+because the generated encoder re-derives sizes per field while this one writes
+fused tag+value pairs into one buffer), but it is 0.12-0.27x the generated
+baseline on the three smaller encode tiers and 0.03-0.13x on every decode tier,
+where the `Dict` <-> tree conversion, not the wire walk, is what an interpreter
+pays. The `shim` row is 2.4-4.8x the core encode and 2.2-4.8x the core decode,
+so this is published as the arm for hosts without a C toolchain, never as the
+fast one.
