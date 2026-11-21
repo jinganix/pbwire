@@ -137,7 +137,9 @@ namespace Structtest {
             };
             /// <summary>This message's image, as the file's layout source sees it.</summary>
             public static readonly global::Pbwire.LayoutType Spec = new("structtest.Inner3", ImageBytes, Rows);
-            private static global::Pbwire.LayoutPlan Plan => global::Pbwire.LayoutPlan.Compile(PbwireFile_Matrix3.Layouts, Spec);
+            private static global::Pbwire.LayoutPlan? _plan;
+            /// <summary>The compiled reader, cached after the first call (no per-op lookup).</summary>
+            private static global::Pbwire.LayoutPlan Plan => _plan ??= global::Pbwire.LayoutPlan.Compile(PbwireFile_Matrix3.Layouts, Spec);
             /// <summary>One call per op: native object in, wire bytes out (one native call over the flat image).</summary>
             public static unsafe byte[] Marshal(Inner3 native)
             {
@@ -665,7 +667,9 @@ namespace Structtest {
             };
             /// <summary>This message's image, as the file's layout source sees it.</summary>
             public static readonly global::Pbwire.LayoutType Spec = new("structtest.Scalars3", ImageBytes, Rows);
-            private static global::Pbwire.LayoutPlan Plan => global::Pbwire.LayoutPlan.Compile(PbwireFile_Matrix3.Layouts, Spec);
+            private static global::Pbwire.LayoutPlan? _plan;
+            /// <summary>The compiled reader, cached after the first call (no per-op lookup).</summary>
+            private static global::Pbwire.LayoutPlan Plan => _plan ??= global::Pbwire.LayoutPlan.Compile(PbwireFile_Matrix3.Layouts, Spec);
             /// <summary>One call per op: native object in, wire bytes out (one native call over the flat image).</summary>
             public static unsafe byte[] Marshal(Scalars3 native)
             {

@@ -186,7 +186,9 @@ namespace Tutorial {
             };
             /// <summary>This message's image, as the file's layout source sees it.</summary>
             public static readonly global::Pbwire.LayoutType Spec = new("tutorial.Person", ImageBytes, Rows);
-            private static global::Pbwire.LayoutPlan Plan => global::Pbwire.LayoutPlan.Compile(PbwireFile_Addressbook.Layouts, Spec);
+            private static global::Pbwire.LayoutPlan? _plan;
+            /// <summary>The compiled reader, cached after the first call (no per-op lookup).</summary>
+            private static global::Pbwire.LayoutPlan Plan => _plan ??= global::Pbwire.LayoutPlan.Compile(PbwireFile_Addressbook.Layouts, Spec);
             /// <summary>One call per op: native object in, wire bytes out (one native call over the flat image).</summary>
             public static unsafe byte[] Marshal(Person native)
             {
@@ -330,7 +332,9 @@ namespace Tutorial {
                     };
                     /// <summary>This message's image, as the file's layout source sees it.</summary>
                     public static readonly global::Pbwire.LayoutType Spec = new("tutorial.Person.PhoneNumber", ImageBytes, Rows);
-                    private static global::Pbwire.LayoutPlan Plan => global::Pbwire.LayoutPlan.Compile(PbwireFile_Addressbook.Layouts, Spec);
+                    private static global::Pbwire.LayoutPlan? _plan;
+                    /// <summary>The compiled reader, cached after the first call (no per-op lookup).</summary>
+                    private static global::Pbwire.LayoutPlan Plan => _plan ??= global::Pbwire.LayoutPlan.Compile(PbwireFile_Addressbook.Layouts, Spec);
                     /// <summary>One call per op: native object in, wire bytes out (one native call over the flat image).</summary>
                     public static unsafe byte[] Marshal(PhoneNumber native)
                     {
@@ -467,7 +471,9 @@ namespace Tutorial {
             };
             /// <summary>This message's image, as the file's layout source sees it.</summary>
             public static readonly global::Pbwire.LayoutType Spec = new("tutorial.AddressBook", ImageBytes, Rows);
-            private static global::Pbwire.LayoutPlan Plan => global::Pbwire.LayoutPlan.Compile(PbwireFile_Addressbook.Layouts, Spec);
+            private static global::Pbwire.LayoutPlan? _plan;
+            /// <summary>The compiled reader, cached after the first call (no per-op lookup).</summary>
+            private static global::Pbwire.LayoutPlan Plan => _plan ??= global::Pbwire.LayoutPlan.Compile(PbwireFile_Addressbook.Layouts, Spec);
             /// <summary>One call per op: native object in, wire bytes out (one native call over the flat image).</summary>
             public static unsafe byte[] Marshal(AddressBook native)
             {
