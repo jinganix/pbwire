@@ -10,11 +10,13 @@ and wire bytes out; wire bytes in and a fully readable native object out.
 |---|---|---|---|
 | `tree` | `a-tree.dart` | the shipped handle: `schema.message(name)`, one `set` per field, `encode()`; `decode()` then one `get` per field | what the per-field downcall task costs once the tree exists |
 | `shim` | `b-shim.dart` | the generated `<Message>Layout` (`dart:ffi` `Struct`) is the native object; `PbwireLayout.encode` / `decodeInto` cross once and `bindings/dart/native/pbw_dart_shim.c` walks that memory in place through `pbw_struct_codec_*` | is a boundary worth paying for at all |
-| `core` | `n/a` | a pure-Dart port of the C core | plan 18 (`issue41-18-core-dart.md`) builds it |
+| `core` | `c-core.dart` | the pure-Dart core (`package:pbwire/core/`): one `set` per field on a `Msg` tree, then `encode()`; `decode()` then one `get` per field | what the per-field boundary costs when there is none, and the only arm that runs where `dart:ffi` does not exist |
 
-`core` prints `n/a` until plan 18 lands; there is no second wire
-implementation in this binding. `dart2js`/`dart2wasm` have no `dart:ffi`, so the
-`shim` row covers the VM targets only; plan 18 owns the rest.
+The `core` arm is `bindings/dart/lib/core/`, a pure-Dart port of the C core
+(plan 18, `issue41-18-core-dart.md`). `dart2js`/`dart2wasm` have no `dart:ffi`,
+so the `shim` row covers the VM targets only and the `core` row covers the
+rest. There is still no second wire implementation in this binding: `tree` and
+`shim` reach the same C core, and `core` is the portable Dart one.
 
 ## Layout table
 
