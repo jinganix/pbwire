@@ -90,7 +90,8 @@ first NUL byte: use the `ReadOnlySpan<byte>` overload for binary payloads (a
 `DllImport`: it reads the same `FileDescriptorSet`, builds its own schema, and
 encodes/decodes the same bytes, so a deployment with no C toolchain and no
 `libpbwire` still uses pbwire. Nothing in `Pbwire.cs` changes: the P/Invoke
-binding stays the default. F#'s facade can target either.
+binding stays the default. The F# facade still rides the P/Invoke binding;
+wiring it to this core is a separate change.
 
 ```csharp
 using Pbwire.Core;

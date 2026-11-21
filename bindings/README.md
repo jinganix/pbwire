@@ -142,8 +142,9 @@ as an adapter over `runtime/`, never a duplicate engine.
 C# has all three: `tree` is the prebuilt `Pbwire.Message` handle, `shim` is
 the generated model's native-object entry (`pbwire-csharp-shim`), and `core`
 is the pure-C# port in `bindings/csharp/Pbwire/Core/` (`pbwire-csharp-core`,
-`make conformance-csharp`). F# rides the C# runtime and its facade can target
-the same core; no separate F# port exists. The `core` row is above
+`make conformance-csharp`). F# rides the C# P/Invoke runtime and prints the
+same `tree`/`shim` rows through it; the pure core is C#-only today (no F#
+facade is wired to it, no separate F# port exists). The `core` row is above
 Google.Protobuf on all four encode tiers (1.09-2.11x) and on the small decode
 tiers, below it on the two large decodes (0.77x / 0.63x: the boxed tree, not
 the wire engine). The C# `shim` row copies the
