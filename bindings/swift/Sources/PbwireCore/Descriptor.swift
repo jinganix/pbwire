@@ -91,7 +91,10 @@ public struct Field: Sendable {
     public init() {}
 }
 
-public struct MsgDef: Sendable {
+/// A message's compiled table. A class on purpose: the codec reads
+/// `schema.messages[i]` on every message and field, and a struct copy here
+/// retains two dictionaries and three arrays each time.
+public final class MsgDef: @unchecked Sendable {
     public var fullName = ""
     public var fields: [Field] = []
     /// Dense number-to-slot map, `nil` when field numbers are sparse.
@@ -229,7 +232,7 @@ private func parseSet(_ bytes: [UInt8]) throws -> ([PFile], [PMessage], [PEnum])
     var files: [PFile] = []
     var messages: [PMessage] = []
     var enums: [PEnum] = []
-    let r = Reader(bytes)
+    var r = Reader(bytes)
     while r.pos < r.end {
         let tag = try r.readVar32()
         if tag >> 3 == 1 && UInt8(tag & 7) == wtLen {
@@ -246,7 +249,7 @@ private func parseSet(_ bytes: [UInt8]) throws -> ([PFile], [PMessage], [PEnum])
 private func parseFile(
     _ b: [UInt8], _ off: Int, _ len: Int, _ messages: inout [PMessage], _ enums: inout [PEnum]
 ) throws -> PFile {
-    let r = try Reader(b, from: off, to: off + len)
+    var r = try Reader(b, from: off, to: off + len)
     var f = PFile()
     while r.pos < r.end {
         let tag = try r.readVar32()
@@ -294,7 +297,7 @@ private func parseMessage(
     if depth > maxDepth {
         throw CoreError("descriptor nesting exceeds \(maxDepth)")
     }
-    let r = try Reader(b, from: off, to: off + len)
+    var r = try Reader(b, from: off, to: off + len)
     var m = PMessage()
     let pos = messages.count
     messages.append(m)  // reserve the index before parsing children
@@ -327,7 +330,7 @@ private func parseMessage(
 }
 
 private func parseOneof(_ b: [UInt8], _ off: Int, _ len: Int) throws -> POneof {
-    let r = try Reader(b, from: off, to: off + len)
+    var r = try Reader(b, from: off, to: off + len)
     var o = POneof()
     while r.pos < r.end {
         let tag = try r.readVar32()
@@ -345,7 +348,7 @@ private func parseOneof(_ b: [UInt8], _ off: Int, _ len: Int) throws -> POneof {
 private func parseEnum(
     _ b: [UInt8], _ off: Int, _ len: Int, _ enums: inout [PEnum]
 ) throws -> Int {
-    let r = try Reader(b, from: off, to: off + len)
+    var r = try Reader(b, from: off, to: off + len)
     var e = PEnum()
     let pos = enums.count
     enums.append(e)
@@ -370,7 +373,7 @@ private func parseEnum(
 }
 
 private func parseEnumValue(_ b: [UInt8], _ off: Int, _ len: Int) throws -> PEnumValue {
-    let r = try Reader(b, from: off, to: off + len)
+    var r = try Reader(b, from: off, to: off + len)
     var v = PEnumValue()
     var hasNumber = false
     while r.pos < r.end {
@@ -400,7 +403,7 @@ private func parseEnumValue(_ b: [UInt8], _ off: Int, _ len: Int) throws -> PEnu
 
 /// `MessageOptions.map_entry` is field 7.
 private func parseMapEntry(_ b: [UInt8], _ off: Int, _ len: Int) throws -> Bool {
-    let r = try Reader(b, from: off, to: off + len)
+    var r = try Reader(b, from: off, to: off + len)
     var mapEntry = false
     while r.pos < r.end {
         let tag = try r.readVar32()
@@ -422,7 +425,7 @@ private func parseMapEntry(_ b: [UInt8], _ off: Int, _ len: Int) throws -> Bool 
 private func parseFeatures(_ b: [UInt8], _ off: Int, _ end: Int, _ optionNumber: UInt32) throws
     -> Int32
 {
-    let r = try Reader(b, from: off, to: end)
+    var r = try Reader(b, from: off, to: end)
     var open: Int32 = 0
     while r.pos < r.end {
         let tag = try r.readVar32()
@@ -444,7 +447,7 @@ private func parseFeatures(_ b: [UInt8], _ off: Int, _ end: Int, _ optionNumber:
 private func parseFeaturesUtf8(
     _ b: [UInt8], _ off: Int, _ end: Int, _ optionNumber: UInt32
 ) throws -> Int32 {
-    let r = try Reader(b, from: off, to: end)
+    var r = try Reader(b, from: off, to: end)
     var utf8: Int32 = 0
     while r.pos < r.end {
         let tag = try r.readVar32()
@@ -464,7 +467,7 @@ private func parseFeaturesUtf8(
 
 /// `FeatureSet.enum_type` = 2: 1 OPEN or 2 CLOSED.
 private func parseFeatureSetEnumType(_ b: [UInt8], _ off: Int, _ end: Int) throws -> Int32 {
-    let r = try Reader(b, from: off, to: end)
+    var r = try Reader(b, from: off, to: end)
     var open: Int32 = 0
     while r.pos < r.end {
         let tag = try r.readVar32()
@@ -480,7 +483,7 @@ private func parseFeatureSetEnumType(_ b: [UInt8], _ off: Int, _ end: Int) throw
 
 /// `FeatureSet.utf8_validation` = 4: 2 VERIFY or 3 NONE.
 private func parseFeatureSetUtf8(_ b: [UInt8], _ off: Int, _ end: Int) throws -> Int32 {
-    let r = try Reader(b, from: off, to: end)
+    var r = try Reader(b, from: off, to: end)
     var utf8: Int32 = 0
     while r.pos < r.end {
         let tag = try r.readVar32()
@@ -495,7 +498,7 @@ private func parseFeatureSetUtf8(_ b: [UInt8], _ off: Int, _ end: Int) throws ->
 }
 
 private func parseField(_ b: [UInt8], _ off: Int, _ len: Int) throws -> PField {
-    let r = try Reader(b, from: off, to: off + len)
+    var r = try Reader(b, from: off, to: off + len)
     var f = PField()
     while r.pos < r.end {
         let tag = try r.readVar32()
@@ -539,7 +542,7 @@ private func parseField(_ b: [UInt8], _ off: Int, _ len: Int) throws -> PField {
 
 /// `FieldOptions`: packed (2) and the editions FeatureSet (21).
 private func parseFieldOptions(_ b: [UInt8], _ off: Int, _ end: Int, _ f: inout PField) throws {
-    let r = try Reader(b, from: off, to: end)
+    var r = try Reader(b, from: off, to: end)
     while r.pos < r.end {
         let tag = try r.readVar32()
         let num = tag >> 3
@@ -843,7 +846,7 @@ private func buildField(_ f: PField, _ oneofs: inout [Int: Int]) throws -> Field
     return out
 }
 
-private func finishDef(_ d: inout MsgDef, _ unsorted: [Field], _ oneofs: [Int: Int],
+private func finishDef(_ d: MsgDef, _ unsorted: [Field], _ oneofs: [Int: Int],
                        _ oneofNames: [String])
 {
     // Stable sort by field number: the slots decode into are field-number
@@ -895,17 +898,17 @@ private func buildDef(_ defs: inout [MsgDef], _ messages: [PMessage], _ pos: Int
     }
     let names = messages[pos].oneofs.map(\.name)
     let idx = messages[pos].idx
-    var d = defs[idx]
+    let d = MsgDef()
     d.fullName = messages[pos].fullName
     d.reservedNames = messages[pos].reservedNames
     d.mapEntry = messages[pos].mapEntry
-    finishDef(&d, fields, oneofs, names)
+    finishDef(d, fields, oneofs, names)
     defs[idx] = d
     let nested = messages[pos].nested
     for n in nested { try buildDef(&defs, messages, n, depth + 1) }
 }
 
-private func attachExtension(_ defs: inout [MsgDef], _ e: PField, _ byName: [String: Int]) throws {
+private func attachExtension(_ defs: [MsgDef], _ e: PField, _ byName: [String: Int]) throws {
     guard var extendee = e.extendee else {
         throw CoreError("extension without extendee")
     }
@@ -916,27 +919,26 @@ private func attachExtension(_ defs: inout [MsgDef], _ e: PField, _ byName: [Str
     var empty: [Int: Int] = [:]
     var s = try buildField(e, &empty)
     s.fullName = e.fullName
-    var d = defs[idx]
+    let d = defs[idx]
     let oneofByName = d.oneofByName
     let count = d.oneofCount
     var fields = d.fields
     fields.append(s)
     let noOneofs: [Int: Int] = [:]
-    finishDef(&d, fields, noOneofs, [])
+    finishDef(d, fields, noOneofs, [])
     d.oneofByName = oneofByName  // extensions are never in a oneof
     d.oneofCount = count
-    defs[idx] = d
 }
 
-private func attachMessageExtensions(_ defs: inout [MsgDef], _ messages: [PMessage], _ pos: Int,
+private func attachMessageExtensions(_ defs: [MsgDef], _ messages: [PMessage], _ pos: Int,
                                      _ byName: [String: Int]) throws
 {
-    for e in messages[pos].extensions { try attachExtension(&defs, e, byName) }
+    for e in messages[pos].extensions { try attachExtension(defs, e, byName) }
     let nested = messages[pos].nested
-    for n in nested { try attachMessageExtensions(&defs, messages, n, byName) }
+    for n in nested { try attachMessageExtensions(defs, messages, n, byName) }
 }
 
-private func finishTransitive(_ defs: inout [MsgDef]) {
+private func finishTransitive(_ defs: [MsgDef]) {
     while true {
         var changed = false
         for idx in defs.indices where !defs[idx].deepRequired {
@@ -1006,7 +1008,7 @@ public func loadSchema(_ bytes: [UInt8], _ limits: Limits) throws -> Schema {
 
     var enumDefs = [EnumDef](repeating: EnumDef(), count: l.nextEnum)
     for pos in enums.indices { try buildEnum(&enumDefs, enums[pos]) }
-    var defs = [MsgDef](repeating: MsgDef(), count: l.nextMessage)
+    var defs = (0..<l.nextMessage).map { _ in MsgDef() }
     for i in files.indices {
         let fileMessages = files[i].messages
         for pos in fileMessages { try buildDef(&defs, messages, pos, 1) }
@@ -1014,14 +1016,14 @@ public func loadSchema(_ bytes: [UInt8], _ limits: Limits) throws -> Schema {
     // Extensions attach to their extendee after all defs exist.
     for i in files.indices {
         for e in files[i].extensions {
-            try attachExtension(&defs, e, l.messageByName)
+            try attachExtension(defs, e, l.messageByName)
         }
         let fileMessages = files[i].messages
         for pos in fileMessages {
-            try attachMessageExtensions(&defs, messages, pos, l.messageByName)
+            try attachMessageExtensions(defs, messages, pos, l.messageByName)
         }
     }
-    finishTransitive(&defs)
+    finishTransitive(defs)
     return Schema(messages: defs, enums: enumDefs, messageByName: l.messageByName,
                   enumByName: l.enumByName)
 }

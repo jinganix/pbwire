@@ -58,36 +58,87 @@ public struct Limits: Sendable {
     }
 }
 
-/// A precomputed tag: field number and wire type as their varint bytes, so a
-/// hot loop copies at most five bytes instead of re-encoding the number.
-public struct Tag: Sendable {
-    public let bytes: [UInt8]
+/// A precomputed tag: field number and wire type as their varint bytes, inline.
+/// A hot loop copies at most five bytes and touches no reference, so a tag write
+/// costs no ARC traffic (an `[UInt8]` field here was the largest single cost in
+/// the first profile of the core arm).
+public struct Tag: Sendable, Equatable {
+    @usableFromInline let b0: UInt8
+    @usableFromInline let b1: UInt8
+    @usableFromInline let b2: UInt8
+    @usableFromInline let b3: UInt8
+    @usableFromInline let b4: UInt8
+    /// Number of valid bytes, 0 for `Tag.empty`.
+    public let count: Int
 
     public init(fieldNumber: UInt32, wireType: UInt8) {
+        var tmp: [UInt8] = [0, 0, 0, 0, 0]
         var tag = UInt64(fieldNumber) * 8 + UInt64(wireType)
-        var bytes: [UInt8] = []
-        bytes.reserveCapacity(5)
+        var n = 0
         while tag > 0x7f {
-            bytes.append(UInt8(truncatingIfNeeded: tag) & 0x7f | 0x80)
+            tmp[n] = UInt8(truncatingIfNeeded: tag) & 0x7f | 0x80
+            n += 1
             tag >>= 7
         }
-        bytes.append(UInt8(truncatingIfNeeded: tag))
-        self.bytes = bytes
+        tmp[n] = UInt8(truncatingIfNeeded: tag)
+        n += 1
+        b0 = tmp[0]
+        b1 = tmp[1]
+        b2 = tmp[2]
+        b3 = tmp[3]
+        b4 = tmp[4]
+        count = n
     }
 
-    private init(bytes: [UInt8]) {
-        self.bytes = bytes
+    private init(_ bytes: [UInt8], _ count: Int) {
+        b0 = count > 0 ? bytes[0] : 0
+        b1 = count > 1 ? bytes[1] : 0
+        b2 = count > 2 ? bytes[2] : 0
+        b3 = count > 3 ? bytes[3] : 0
+        b4 = count > 4 ? bytes[4] : 0
+        self.count = count
     }
 
     /// The absent tag (every non-group field's `tagEnd`).
-    public static let empty = Tag(bytes: [])
+    public static let empty = Tag([0, 0, 0, 0, 0], 0)
+
+    /// The tag's bytes as an array (tests and descriptor reading only; the write
+    /// path uses the inline bytes).
+    public var bytes: [UInt8] {
+        var out = [b0, b1, b2, b3, b4]
+        out.removeLast(5 - count)
+        return out
+    }
 }
 
 // ------------------------------------------------------------------ writing
 
 @inline(__always)
 public func writeTag(_ w: inout [UInt8], _ tag: Tag) {
-    w.append(contentsOf: tag.bytes)
+    switch tag.count {
+    case 1:
+        w.append(tag.b0)
+    case 2:
+        w.append(tag.b0)
+        w.append(tag.b1)
+    case 3:
+        w.append(tag.b0)
+        w.append(tag.b1)
+        w.append(tag.b2)
+    case 4:
+        w.append(tag.b0)
+        w.append(tag.b1)
+        w.append(tag.b2)
+        w.append(tag.b3)
+    case 5:
+        w.append(tag.b0)
+        w.append(tag.b1)
+        w.append(tag.b2)
+        w.append(tag.b3)
+        w.append(tag.b4)
+    default:
+        return
+    }
 }
 
 @inline(__always)
@@ -224,10 +275,11 @@ public func unzig64(_ v: UInt64) -> Int64 {
 /// Cursor over an input buffer. One reader threads through a whole decode, so a
 /// nested payload consumes exactly its slice and positions never need saving.
 ///
-/// A reference type on purpose: the recursive decode passes it to every level
-/// without `inout` exclusivity gymnastics, and the payload array is shared
-/// copy-on-write rather than copied per level.
-public final class Reader {
+/// A value type on purpose: `inout` is statically enforced and free, while a
+/// class's stored-property mutations cost one `swift_beginAccess` per byte read
+/// (the first profile of the core arm was dominated by them). The payload array
+/// is copied by reference (COW), so nesting copies a buffer header, not bytes.
+public struct Reader {
     public let b: [UInt8]
     public var pos: Int
     public var end: Int
@@ -253,7 +305,7 @@ public final class Reader {
 
     /// varint, low 32 bits (unsigned). Validates the encoding's length only:
     /// the high bits are discarded on purpose, like the C core's `uint32_t`.
-    public func readVar32() throws -> UInt32 {
+    public mutating func readVar32() throws -> UInt32 {
         var p = pos
         let e = end
         var lo: UInt64 = 0
@@ -273,7 +325,7 @@ public final class Reader {
     }
 
     /// varint, full 64 bits (unsigned).
-    public func readVar64() throws -> UInt64 {
+    public mutating func readVar64() throws -> UInt64 {
         var p = pos
         let e = end
         var v: UInt64 = 0
@@ -293,7 +345,7 @@ public final class Reader {
     }
 
     /// varint reduced to its bool value: any set payload bit means true.
-    public func readVarBool() throws -> Bool {
+    public mutating func readVarBool() throws -> Bool {
         var p = pos
         let e = end
         var nz: UInt8 = 0
@@ -315,7 +367,7 @@ public final class Reader {
     /// Strict length read, like the core's: at most five bytes, the fifth only
     /// carries four bits; an out-of-range length is rejected, not truncated.
     /// Leaves `pos` after the length.
-    public func readLen32() throws -> Int {
+    public mutating func readLen32() throws -> Int {
         var p = pos
         let e = end
         if p >= e { throw CoreError("truncated length") }
@@ -338,7 +390,7 @@ public final class Reader {
 
     /// Loose length read for descriptor parsing: any varint up to 2^31-1,
     /// bounds checked.
-    public func readLen() throws -> Int {
+    public mutating func readLen() throws -> Int {
         let v = try readVar64()
         if v > 0x7fff_ffff { throw CoreError("length overflow") }
         if pos + Int(v) > end { throw CoreError("truncated length-delimited") }
@@ -348,7 +400,7 @@ public final class Reader {
     /// Strict tag read: a varint32 of at most five bytes. A 5-byte tag above
     /// UINT32_MAX truncates instead of failing, exactly what the reference
     /// parser does (the official suite expects two such cases to parse).
-    public func readTag() throws -> UInt32 {
+    public mutating func readTag() throws -> UInt32 {
         var p = pos
         let e = end
         if p >= e { throw CoreError("truncated tag") }
@@ -367,7 +419,7 @@ public final class Reader {
         return UInt32(truncatingIfNeeded: v)
     }
 
-    public func readFixed32() throws -> UInt32 {
+    public mutating func readFixed32() throws -> UInt32 {
         if pos + 4 > end { throw CoreError("truncated fixed32") }
         let p = pos
         pos = p + 4
@@ -375,7 +427,7 @@ public final class Reader {
             | UInt32(b[p + 3]) << 24
     }
 
-    public func readFixed64() throws -> UInt64 {
+    public mutating func readFixed64() throws -> UInt64 {
         if pos + 8 > end { throw CoreError("truncated fixed64") }
         let p = pos
         pos = p + 8
@@ -385,7 +437,7 @@ public final class Reader {
     }
 
     /// Skips one field value of a non-group wire type.
-    public func skip(_ wt: UInt8) throws {
+    public mutating func skip(_ wt: UInt8) throws {
         switch wt {
         case wtVarint:
             _ = try readVarBool()
@@ -406,7 +458,7 @@ public final class Reader {
     /// Validates a group body up to its matching end tag, like the core's group
     /// skipper: every tag is strict, field 0 and wire types above 5 are
     /// rejected, and an end tag only closes the group it names.
-    public func skipGroup(_ number: UInt32, _ depth: UInt32) throws {
+    public mutating func skipGroup(_ number: UInt32, _ depth: UInt32) throws {
         if depth > cap {
             throw CoreError("nesting exceeds \(cap)", status: 4)
         }
@@ -434,7 +486,7 @@ public final class Reader {
     /// Skips one unknown field: groups validate to their matching end tag,
     /// anything else only checks value shape. End-group tags never reach here;
     /// the decode loop owns them.
-    public func skipUnknown(_ fnum: UInt32, _ wt: UInt8, _ depth: UInt32) throws {
+    public mutating func skipUnknown(_ fnum: UInt32, _ wt: UInt8, _ depth: UInt32) throws {
         if wt == wtStartGroup {
             try skipGroup(fnum, depth + 1)
         } else {
