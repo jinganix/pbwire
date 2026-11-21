@@ -158,16 +158,12 @@ public final class TestVisit {
             wire = message.encode();
         }
         check(wire.length > 10, "the fixture exceeds the 10-byte cap");
-        try {
-            sample.visit(wire, new Limits(10, 0), (field, number, wireType,
-                    value) -> 0);
-            check(false, "an over-cap input must fail");
-        } catch (PbwireException expected) {
-            check(expected.status() == 5, "the cap failure carries PBW_ERR_LIMIT");
-        }
+        int at = sample.visit(wire, new Limits(10, 0), (field, number, wireType,
+                value) -> 0);
+        check(at == 0, "an over-cap input fails at offset 0");
     }
 
-    /** Truncated payloads and field 0 fail with PBW_ERR_INVALID. */
+    /** Truncated payloads and field 0 fail at the field's start offset. */
     private static void malformed(MessageType sample) {
         final byte[] wire;
         try (Message message = sample.newMessage()) {
@@ -180,13 +176,18 @@ public final class TestVisit {
             new byte[] {0x0f},
         };
         for (byte[] w : bad) {
-            try {
-                sample.visit(w, (field, number, wireType, value) -> 0);
-                check(false, "malformed wire must fail");
-            } catch (PbwireException expected) {
-                check(expected.status() == 1, "malformed wire fails");
-            }
+            int at = sample.visit(w, (field, number, wireType, value) -> 0);
+            check(at == 0, "malformed wire fails at the field's start");
         }
+        // LEN length overrunning the input fails at the field's start too.
+        final byte[] strWire;
+        try (Message message = sample.newMessage()) {
+            message.set("string_field", "hello");
+            strWire = message.encode();
+        }
+        byte[] cut = Arrays.copyOf(strWire, strWire.length - 2);
+        int at = sample.visit(cut, (field, number, wireType, value) -> 0);
+        check(at == 0, "a truncated LEN payload fails at the field's start");
     }
 
     /** Empty input visits nothing and reports length 0. */

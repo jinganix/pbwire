@@ -1797,12 +1797,11 @@ public final class GenericCodec {
      * one validating tag pass, one callback per field, no allocation past
      * the per-field value. Mirrors the core's {@code pbw_visit_limits}.
      *
-     * <p>Returns the wire length when every field was visited, or the
-     * aborting field's start offset when the callback returns non-zero.
-     * Malformed wire throws with status 1 and a byte-cap violation with
-     * status 5, like the bounded decode. Only the byte cap and the group
-     * nesting cap apply: the scan itself never recurses. No
-     * required/enum/UTF-8 checks: values are raw wire bits.
+     * <p>Returns the wire length when every field was visited, the failing
+     * field's start offset on malformed input, or 0 when the input exceeds
+     * the byte cap. Only the byte cap and the group nesting cap apply: the
+     * scan itself never recurses. No required/enum/UTF-8 checks: values are
+     * raw wire bits.
      */
     static int scan(MessageDef def, byte[] wire, Limits lim,
             Visit.Visitor cb) {
@@ -1812,7 +1811,9 @@ public final class GenericCodec {
         if (cb == null) {
             throw new PbwireException("visit needs a callback", 1);
         }
-        lim.checkBytes(wire.length, "message");
+        if (lim.maxBytes > 0 && wire.length > lim.maxBytes) {
+            return 0;
+        }
         Wire.Reader r = new Wire.Reader();
         r.b = wire;
         r.pos = 0;
@@ -1824,14 +1825,12 @@ public final class GenericCodec {
             try {
                 tag = Wire.rTag(r);
             } catch (IllegalArgumentException e) {
-                throw new PbwireException("visit failed at offset "
-                        + fieldStart, 1);
+                return fieldStart;
             }
             int fnum = tag >>> 3;
             int wt = tag & 7;
             if (fnum == 0 || wt == 4 || wt > Wire.WT_FIXED32) {
-                throw new PbwireException("visit failed at offset "
-                        + fieldStart, 1);
+                return fieldStart;
             }
             int s = def.lookup(fnum);
             Field field = s < 0 ? null : def.fields[s];
@@ -1849,6 +1848,9 @@ public final class GenericCodec {
                         break;
                     case Wire.WT_LEN: {
                         int n = Wire.rLen32(r);
+                        if (n < 0 || n > r.end - r.pos) {
+                            return fieldStart;
+                        }
                         v.data = wire;
                         v.off = r.pos;
                         v.len = n;
@@ -1863,8 +1865,7 @@ public final class GenericCodec {
                         break;
                 }
             } catch (IllegalArgumentException e) {
-                throw new PbwireException("visit failed at offset "
-                        + fieldStart, 1);
+                return fieldStart;
             }
             if (cb.visit(field, fnum, wt, v) != 0) {
                 return fieldStart;
