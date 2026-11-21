@@ -1821,3 +1821,19 @@ at 136 / 174 / 2469 / 74913 B): `pbwire-rust-core` encode 1008.3 / 978.2 / 869.0
 below it on every decode (0.56-0.64x). The shipped `pbwire-rust-tree` row is
 1.66-1.88x the core on encode and 2.50-3.14x on decode, which is why the static
 link stays the default.
+
+Stage 6 decision: **recorded, not chased**. Every below-baseline cell is a
+decode (0.47-0.73x of prost) or a small encode; the encode path already
+allocates nothing (one reusable buffer, fused tag+value writes) and lands within
+4% of `rust-protobuf` at 74 KB, so the encode cells are prost's straight-line
+generated writer, not a missing reserve. The decode cost is the boxed tree the
+C core's shape forces on a schema-driven codec: a `Vec<Option<Value>>` slot
+array per message (zeroed on every submessage), a `Box<Message>` per submessage
+and one owned byte vector per string -- about 12k allocations for the 74 KB
+payload's 3000 `inners`, 3000 `tags` and 3000 `nums`. The candidates that fit
+"one change per round" (reserve the packed varint run up front, shrink `Value`
+by boxing its `Vec` payloads, `Box<[u8]>` strings) each move a few percent of a
+314 us decode, i.e. inside this host's spread, and the change that would close
+the gap is a columnar or code-generated tree -- the rewrite the TypeScript, C#,
+Python, Dart and Julia cores also declined. The arm is published with its
+numbers as the no-C path.
