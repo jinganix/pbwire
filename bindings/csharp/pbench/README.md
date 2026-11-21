@@ -10,9 +10,10 @@ native object out.
 
 | arm | mechanism | what it answers |
 |---|---|---|
-| `tree` | the prebuilt `Pbwire.Message` handle: `message.Encode()`, `type.Decode(wire)` | what the C core's codec costs once the tree exists |
+| `tree` | a native object in and out through the shipped per-field API: fresh `NewMessage()` + one `Set()` per field then `Encode()`; `Decode()` then one `get` per field into a fresh object, then `Dispose()`; no prebuilt tree before the timer | what an application pays through the handle path |
 | `shim` | `Scalars3Layout.Marshal(model)` / `.Unmarshal(wire)`: one flat image in, **one `P/Invoke`** per op, `bindings/csharp/native/pbw_cs_shim.c` walks it through `pbw_struct_codec_*` | is a boundary worth paying for at all |
 | `core` | `bindings/csharp/Pbwire/Core/`: a pure-C# port of the C core (`Schema`, `Msg`, `Encode`, `Decode`), no `DllImport` | what the same codec costs with no native library at all |
+| `proxy` | the prebuilt task: re-encode a held handle, decode-and-`Dispose()` with no materialization | what the codec costs once the tree exists; published, never the headline |
 
 The `core` arm is a file, not a stub: `CCore.cs` in the gate loads
 `benchmarks/gen/matrix3.desc`, builds the dynamic tree from the plain object
@@ -113,7 +114,44 @@ The ordering that held in every round: encode above Google.Protobuf from
 tree, wire, encode, decode), measured with its own tree built before the timer
 so the row times the codec, like `tree`.
 
-## Verdict
+## Verdict (Go-parity re-time, 2026-11-21)
+
+**Ship the flat-image `shim` row as the native-object path; publish `tree`
+(full task), `core`, and `proxy` beside it; never headline `proxy`.** Formal
+`make csharp-bench` under `results/.bench.lock`, median of 5
+(`results/bench-csharp-20261121T185300Z.json`). Throughput ratios are
+pbwire MB/s over `protobuf-csharp` MB/s (higher is faster):
+
+| tier | tree enc | tree dec | shim enc | shim dec | core enc | core dec |
+|---|---|---|---|---|---|---|
+| 136 B | 0.38x | 0.45x | 2.58x | 1.54x | 2.09x | 1.14x |
+| 174 B | 0.36x | 0.39x | 2.42x | 1.48x | 2.08x | 1.14x |
+| 2469 B | 0.15x | 1.11x | 1.05x | 0.73x | 1.04x | 0.73x |
+| 74913 B | 0.17x | 1.49x | 1.36x | 0.70x | 1.34x | 0.62x |
+
+The `tree` row is now the real application task (`benchmarks/Bench.cs`:
+`FillPbwire` fresh per iteration, `Encode()`, `Dispose()` inside the timer;
+decode reads every gate-checked field back through `ConsumeTree`, same field
+list the gate asserts in `TreeFieldsOk`). The old prebuilt rows are relabelled
+`pbwire-csharp-proxy`, not re-measured as a new task. Proxy/tree encode gap
+at xlarge: 20.7x (8.4x small, 9.9x medium, 15.7x large) -- that gap is what the
+old `tree` row was hiding.
+
+Why not the others: `tree` encode loses on every tier (0.15x-0.38x -- one
+`Set()` P/Invoke per field plus a fresh arena per iteration) and small-tier
+decode (0.45x, 0.39x); it wins decode only at 2469 B+ (1.11x, 1.49x), where
+one C decode beats the generated parser even with per-field reads back out.
+`core` is the no-C-toolchain path (above baseline on all four encode tiers
+and both small decodes), not the fast path. `proxy` is the held-tree price,
+never the headline.
+
+Below-baseline native cells flagged for Task 15 (no optimization here): tree
+encode every tier, tree decode at 136/174 B, shim decode at 2469/74913 B,
+core decode at 2469/74913 B. F# rides on C#: no own bench or pbench arms; the
+F# facade encodes through the same C core, and `make conformance-fsharp` is
+green (2750 + 443 successes, 0 unexpected).
+
+## Verdict (superseded Stage 3/16 tables, kept as written)
 
 **Publish the flat-image `shim` row as the native-object path: with one
 `P/Invoke` per op the C reader is above the official baseline on 10 of the 12
