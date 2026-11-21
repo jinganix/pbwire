@@ -222,6 +222,11 @@ public final class TestVisit {
         check(sample.visit(new byte[] {0x42}, nop) == 0,
                 "a missing length fails at offset 0");
 
+        // Truncated LEN after a valid field fails at its own start offset.
+        byte[] afterValidLen = {0x08, 0x01, 0x4A, 0x05, 0x01, 0x02};
+        check(sample.visit(afterValidLen, nop) == 2,
+                "a truncated LEN fails at its own start offset");
+
         // A varint past the 10-byte limit: ten continuations plus a closer.
         byte[] overlong = new byte[12];
         overlong[0] = 0x08;

@@ -197,9 +197,6 @@ func (m *DMsg) IsInitialized() bool {
 			return false
 		}
 		if fp.Proto != descriptorpb.FieldDescriptorProto_TYPE_MESSAGE && !fp.Group {
-			if sub, ok := s.oneof.(*DMsg); ok && sub != nil && !sub.IsInitialized() {
-				return false
-			}
 			continue
 		}
 		if fp.Repeated {

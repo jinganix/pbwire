@@ -160,7 +160,7 @@ own README. Dart ran once `dart pub global activate protoc_plugin` provided
 | Erlang/OTP NIF | `make benchmarks` in `bindings/erlang/benchmarks` | gpb (pure Erlang), with gpb NIF (libprotobuf) as the second baseline, same `matrix3.proto` | all 4 | 3.91x / 1.60x vs best-of-two ✅ |
 | Python (CPython ext) | `make python-bench` (`bindings/python/benchmarks/bench.py`) | `google.protobuf` (upb C extension) on the same `matrix3.proto` | all 4 | 6.87x ✅ / 1.19x ✅ |
 | C++ | same engine as C (`bindings/cpp` mirrors the C structs; `make bench-c` is the harness) | `protoc` C++ generated from the same `matrix3.proto` | all 4 | 1.33x ✅ / 2.00x ✅ |
-| Go (thin model, pure-Go engine) | `make go-bench` (`bindings/go/benchmarks`) | `protobuf-go` generated code from the same `matrix3.proto` | all 4 | 1.49x ✅ / 1.20x ✅ (0.87x at 136 B, 0.89x at 174 B decode) |
+| Go (thin model, pure-Go engine) | `make go-bench` (`bindings/go/benchmarks`) | `protobuf-go` generated code from the same `matrix3.proto` | all 4 | 1.49x ✅ / 1.37x ✅ (decode leads every tier) |
 | Java (pure-Java codec) | `make java-bench` (`bindings/java/benchmarks`) | `protobuf-java` generated code from the same `matrix3.proto` | all 4 | 1.13x ✅ / 1.95x ✅ (0.77x at 136 B) |
 | Node (N-API addon) | `make node-bench` (`bindings/node/benchmarks`) | [protobufjs](https://www.npmjs.com/package/protobufjs) (fastest) + `google-protobuf` (jspb) from the same `matrix3.proto` | all 4 | 3.18x ✅ / 3.17x ✅ |
 | Ruby (C extension) | `make ruby-bench` (`bindings/ruby/benchmarks`) | the `google-protobuf` gem (C extension) | all 4 | 1.34x ✅ / 1.67x ✅ |
@@ -240,7 +240,7 @@ payload, the boundary cost and the baseline all differ.
 | core dynamic (`pbw_ctx`) | direct call | 85933 B | 1644.2 (1.56x ✅) | 765.9 (1.80x ✅) |
 | core dynamic (plain API) | direct call | 85933 B | 1593.2 (1.51x ✅) | 771.3 (1.81x ✅) |
 | C structs | direct call, layout tables | 74913 B | 1132.2 (1.29x ✅) | 735.7 (2.02x ✅) |
-| Go | pure-Go table engine, no cgo | 74913 B | 841.7 (1.49x ✅) | 359.8 (1.20x ✅) |
+| Go | pure-Go table engine, no cgo | 74913 B | 821.4 (1.49x ✅) | 428.4 (1.37x ✅) |
 | Python (dict path) | CPython extension | 74913 B | 562.3 (6.87x ✅) | 891.6 (1.19x ✅) |
 | Java | pure-Java codec, no native code | 74913 B | 984.2 (1.13x ✅) | 747.4 (1.95x ✅) |
 | Kotlin | the pure-Java codec + DSL | 74913 B | 964.8 (1.09x ✅) | 742.1 (1.68x ✅) |
@@ -761,14 +761,14 @@ decode before timing. Apple M4 Pro, same process times both sides:
 
 | payload | op | pbwire-go (MB/s, x protobuf-go) | protobuf-go (MB/s) |
 |---|---|---|---|
-| 136 B | encode | 832.9 (1.36x ✅) | 610.6 |
-| 136 B | decode | 565.2 (1.03x ✅) | 549.5 |
-| 174 B | encode | 880.2 (1.50x ✅) | 585.5 |
-| 174 B | decode | 484.7 (1.03x ✅) | 469.2 |
-| 2469 B | encode | 829.5 (1.57x ✅) | 528.9 |
-| 2469 B | decode | 377.1 (1.31x ✅) | 287.5 |
-| 74913 B | encode | 837.5 (1.49x ✅) | 563.1 |
-| 74913 B | decode | 435.9 (1.38x ✅) | 315.2 |
+| 136 B | encode | 845.5 (1.38x ✅) | 610.8 |
+| 136 B | decode | 561.2 (1.03x ✅) | 542.9 |
+| 174 B | encode | 883.9 (1.50x ✅) | 588.0 |
+| 174 B | decode | 477.0 (1.04x ✅) | 457.4 |
+| 2469 B | encode | 809.3 (1.56x ✅) | 518.4 |
+| 2469 B | decode | 370.1 (1.27x ✅) | 291.1 |
+| 74913 B | encode | 821.4 (1.49x ✅) | 550.2 |
+| 74913 B | decode | 428.4 (1.37x ✅) | 313.3 |
 
 Encode is ahead on every tier: the fast path reads scalars, strings and
 bytes straight from struct memory with no getter calls and no tree. Decode stores plain integer-width scalars straight into struct memory

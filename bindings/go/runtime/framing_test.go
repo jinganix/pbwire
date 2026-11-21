@@ -395,6 +395,42 @@ func TestEncodedSize(t *testing.T) {
 	if got := jm.EncodedSize(); got != len(jdet) {
 		t.Fatalf("json EncodedSize = %d, len(EncodeDeterministic) = %d", got, len(jdet))
 	}
+	// Trees deeper than the cap report -1; Encode errors on the same tree.
+	opt := descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL
+	ms := descriptorpb.FieldDescriptorProto_TYPE_MESSAGE
+	deepSet := &descriptorpb.FileDescriptorSet{File: []*descriptorpb.FileDescriptorProto{
+		{
+			Name:    jstrp("deep.proto"),
+			Package: jstrp("deeptest"),
+			Syntax:  jstrp("proto3"),
+			MessageType: []*descriptorpb.DescriptorProto{
+				{
+					Name: jstrp("Rec"),
+					Field: []*descriptorpb.FieldDescriptorProto{
+						jfield("child", 1, opt, ms, ".deeptest.Rec"),
+					},
+				},
+			},
+		},
+	}}
+	raw, err := proto.Marshal(deepSet)
+	mustSet(t, err)
+	rs, err := runtime.Load(raw)
+	mustSet(t, err)
+	rtyp := mustType(t, rs, "deeptest.Rec")
+	deep := rtyp.New()
+	cur := deep
+	for i := 0; i < runtime.MaxDepth+10; i++ {
+		nxt, err := cur.NewMessage("child")
+		mustSet(t, err)
+		cur = nxt
+	}
+	if got := deep.EncodedSize(); got != -1 {
+		t.Fatalf("deep EncodedSize = %d, want -1", got)
+	}
+	if _, err := deep.Encode(); err == nil {
+		t.Fatal("deep Encode must fail past the depth cap")
+	}
 }
 
 func TestFramingDelimited(t *testing.T) {

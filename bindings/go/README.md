@@ -127,7 +127,7 @@ js, _ := typ.MarshalJSON(d)
 | `DType.New/Decode/DecodeLimits` | build empty, parse wire bytes, parse with byte/depth bounds |
 | `DType.Encode(m)` / `DType.EncodeDeterministic(m)` | serialize a tree; deterministic sorts native map-entry rows by key |
 | `DType.DecodeDelimited/DecodeDelimitedLimits` | framing, returns `consumed`, trailing bytes left unread |
-| `DMsg.EncodedSize()` / `DMsg.IsInitialized()` | exact size without writing; proto2 required-field check |
+| `DMsg.EncodedSize()` / `DMsg.IsInitialized()` | exact size without writing (`-1` when depth-capped; Encode errors on the same tree); proto2 required-field check |
 | `DType.MarshalJSON/UnmarshalJSON(+Limits)` | JSON mapping, `ignoreUnknown` flag, byte/depth bounds |
 | `DType.MarshalText/UnmarshalText(+Limits)` | text format, `printUnknown` flag, byte/depth bounds |
 | `DType.Visit(wire, lim, fn)` | single-level scan, raw bits, non-nil visitor aborts |

@@ -51,7 +51,7 @@ in, so a build needs no `protoc` either.
 |---|---|
 | generated models | `newBuilder()`, typed setters/getters, `has…` for explicit presence, `toByteArray()`, `parseFrom(byte[])`, `isInitialized()` — see `tests/gen/` |
 | `Schema` | `fromFile(path[, limits])`, `fromBytes(bytes[, limits])`, `fromClasses(Class...)`, `message(fullName)`, `service(fullName)`, `close()` |
-| `MessageType` | `name()`, `newMessage()`, `decode(bytes[, limits])`, `decodeDelimited(bytes[, off, limits])`, `visit(wire[, limits], cb)`, `parseJson(text[, ignoreUnknown, limits])`, `parseText(text[, limits])` |
+| `MessageType` | `name()`, `newMessage()`, `decode(bytes[, limits])`, `decodeDelimited(bytes[, off, limits])`, `visit(wire, cb) / visit(wire, lim, cb)`, `parseJson(text[, ignoreUnknown, limits])`, `parseText(text[, limits])` |
 | `Message` | `set(name\|number, …)`, `newMessage(name\|number)`, `clear(…)`, `has(…)`, `get(…)`, typed getters, `getList(…)`, `encode()`, `encodeDelimited()`, `encodeDeterministic()`, `encodedSize()`, `toJson()`, `toText()`, `close()` |
 | `ServiceType` | `name()`, `methodCount()`, `method(name)` → `inputType()`, `outputType()`, `clientStreaming()`, `serverStreaming()` |
 | `Wkt` | `anyPack/Unpack`, `anyTypeUrl`, `anyPayload`, `timestamp/duration…Millis`, `fieldMaskPaths`, `newFieldMask` |

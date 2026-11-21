@@ -21,7 +21,7 @@ public final class Visit {
         /**
          * LEN: the payload bytes (a nested message, a packed run, a string);
          * START_GROUP: the whole field (tag through the matching END_GROUP).
-         * Aliases the scanned input; NULL for the scalar shapes above.
+         * Aliases the scanned input; null for the scalar shapes above.
          */
         public byte[] data;
         /** Payload/raw start inside {@link #data}; 0 for scalar shapes. */
@@ -31,7 +31,7 @@ public final class Visit {
     }
 
     /**
-     * Scan callback: {@code field} is NULL when the number is unknown to the
+     * Scan callback: {@code field} is null when the number is unknown to the
      * schema. {@code number}/{@code wireType} are what the wire carries: a
      * known field may carry another wire type (a packed LEN for a repeated
      * scalar, or a mismatch the reference decoders keep as an unknown field).
