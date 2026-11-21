@@ -1866,3 +1866,31 @@ a worse codec. Candidates, one per round: a class `MsgDef` (every
 `schema.messages[i]` read copies a struct with two dictionaries and three
 arrays), an inline `Tag` (every tag write currently retains a `[UInt8]`), and
 per-message `Field` copies.
+
+Stage 6 round 1 (kept): type-level overhead, not the wire walk. `sample` on the
+`Bench` process showed the arm spending most of its time in
+`swift_beginAccess` (the `Reader` was a class, so every `pos` read/write cost a
+runtime exclusivity check -- per byte), in `outlined init with copy of Tag`
+(every tag was an `[UInt8]`, i.e. ARC traffic per field), and in `MsgDef` struct
+copies (`schema.messages[i]` copied two dictionaries and three arrays per
+message and per field). One change, three mechanical parts: `Reader` is a value
+type passed `inout`, `Tag` holds its five bytes inline, `MsgDef` is a class.
+Wire bytes unchanged (the codec gate and the official suite re-pass); xlarge
+encode 185.3 -> 239.6 MB/s and decode 51.2 -> 60.2 MB/s, 136 B encode 163.3 ->
+232.8 and decode 75.0 -> 93.0. Keeping it.
+
+Stage 6 decision after round 1: **recorded, not chased further**. Every cell is
+still below swift-protobuf (0.54-0.90x encode, 0.28-0.43x decode), and the
+remaining cost is the tree itself, not the codec: one class `Message` + one
+`[Value?]` slot array per submessage, one `[UInt8]` per string, and a
+`Value`/`Field` copy per field -- 3000 of each in the 74 KB payload. Two more
+rounds were measured as candidates and are inside the host's spread or start
+changing the published object shape: making `Field` a class (one retain instead
+of two string retains per field, single-digit percent) and hoisting the
+`values` array out of ARC with an unsafe buffer (the message tree would lose its
+value semantics at the API edge). The honest fix is the same one the Rust,
+TypeScript, C#, Python, Dart and Julia cores recorded: a columnar or
+code-generated tree, i.e. a rewrite of the tree and both codecs. The arm is
+published with its numbers as the no-C, no-`unsafeFlags` path -- the product
+exists for reach (a normal SwiftPM dependency), and `make conformance-swift`
+proves the wire format on it.

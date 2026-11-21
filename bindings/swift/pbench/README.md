@@ -134,26 +134,55 @@ path (it writes proto3 implicit scalars unconditionally and reserves per
 repeated element), a C runtime question that moves every layout row at once —
 recorded in `docs/perf-attempts.md`, not patched under this plan.
 
+## Verdict: the pure core (Stage 4)
+
+**The FFI product stays the default; `PbwireCore` is the no-native,
+no-`unsafeFlags` path.** The reason to ship a second Swift wire implementation
+is not speed, it is reach: this package's `Pbwire`, `Bench` and test products
+carry `LinkerSetting.unsafeFlags(["../../build/libpbwire.a"])`, which SwiftPM
+refuses in a non-root package. A consumer who adds `pbwire` as a normal
+dependency, or a build with no C toolchain, has nowhere to go. `PbwireCore`
+answers that: pure Swift, no C module, no archive, no unsafe flags, and it
+passes the official binary suite on its own (`make conformance-swift`).
+
+It is not the fast path and does not pretend to be: the formal run below puts
+it at 0.54-0.90x of swift-protobuf on encode and 0.28-0.43x on decode, against
+2.6-6.3x / 2.6-4.2x for the `tree` handle. The gap is the value tree's ARC
+traffic, not the wire walk: one class `Message` plus one slot array per
+submessage, one `[UInt8]` per string, and a `Value`/`Field` copy per field, at
+3000 sub-messages and 3000 strings in the 74 KB payload. Why the gap exists and
+what was already fixed is in `docs/perf-attempts.md`.
+
 ## Formal rows (Stage 5)
 
 `make swift-bench` records `results/bench-swift-<stamp>.{log,json}` and prints
-both rows per tier plus the apple/swift-protobuf baseline
-(`benchmarks/baseline`): `pbwire-swift-tree` (the prebuilt handle) and
-`pbwire-swift-shim` (the flat mirror), same harness, same payload, same bytes.
-The run below is `results/bench-swift-20261120T213641Z.json` (Apple M4 Pro,
-arm64). MB/s over wire bytes:
+all three rows per tier plus the apple/swift-protobuf baseline
+(`benchmarks/baseline`): `pbwire-swift-tree` (the prebuilt handle),
+`pbwire-swift-shim` (the flat mirror) and `pbwire-swift-core` (the pure core's
+prebuilt tree), same harness, same payload, same bytes. The run below is
+`results/bench-swift-20261121T025449Z.json` (Apple M4 Pro, arm64). MB/s over
+wire bytes:
 
-| tier | `tree` enc | `shim` enc | swift-protobuf enc | `tree` dec | `shim` dec | swift-protobuf dec |
-|---|---|---|---|---|---|---|
-| 136 B | 1137.6 | 1021.1 | 437.1 | 923.3 | 757.6 | 247.0 |
-| 174 B | 1189.6 | 983.7 | 324.4 | 827.8 | 708.5 | 196.0 |
-| 2469 B | 1498.6 | 1037.4 | 268.2 | 682.3 | 511.8 | 197.5 |
-| 74913 B | 1763.7 | 941.2 | 279.6 | 591.1 | 584.6 | 228.4 |
+| tier | `tree` enc | `shim` enc | `core` enc | swift-protobuf enc | `tree` dec | `shim` dec | `core` dec | swift-protobuf dec |
+|---|---|---|---|---|---|---|---|---|
+| 136 B | 955.2 | 883.8 | 232.8 | 434.2 | 858.1 | 652.4 | 93.0 | 246.0 |
+| 174 B | 1087.4 | 935.0 | 213.4 | 323.2 | 784.2 | 652.8 | 84.3 | 198.1 |
+| 2469 B | 1481.6 | 998.2 | 234.9 | 260.3 | 656.3 | 508.6 | 61.9 | 193.2 |
+| 74913 B | 1656.6 | 886.6 | 239.6 | 275.6 | 586.8 | 563.3 | 60.2 | 216.4 |
 
-Against swift-protobuf: shim encode 2.34x / 3.03x / 3.87x / 3.37x and shim
-decode 3.07x / 3.61x / 2.59x / 2.56x; the tree row is 2.60x / 3.67x / 5.59x /
-6.31x on encode and 3.74x / 4.22x / 3.45x / 2.59x on decode.
+Against swift-protobuf: `core` encode 0.54x / 0.66x / 0.90x / 0.87x and decode
+0.38x / 0.43x / 0.32x / 0.28x; the `tree` row is 2.20x / 3.36x / 5.69x / 6.01x
+on encode and 3.49x / 3.96x / 3.40x / 2.71x on decode, the `shim` row 2.04x /
+2.89x / 3.84x / 3.22x and 2.65x / 3.30x / 2.63x / 2.60x.
 
-Stage 6 (optimization) is a recorded no-op: no published Swift cell is below
-its baseline (both rows beat swift-protobuf at every tier, see above), so no
-A/B round was run and the attempts ledger gains no entry.
+Stage 6 (optimization): one round, kept. The first profile of the core arm was
+dominated by `swift_beginAccess` (a class `Reader`'s stored-property mutations
+cost a runtime exclusivity check **per byte read**), `outlined init with copy of
+Tag` (an `[UInt8]` per tag = ARC traffic on every field write) and `MsgDef`
+struct copies (`schema.messages[i]` copied two dictionaries and three arrays per
+message). Making `Reader` a value type passed `inout`, `Tag` five inline bytes,
+and `MsgDef` a class moved xlarge encode 185.3 -> 239.6 MB/s and decode 51.2 ->
+60.2 MB/s (136 B: 163.3 -> 232.8 and 75.0 -> 93.0); the provisional table above
+is the pre-round run. The remaining gap is the tree's ARC, whose fix is a
+columnar/code-generated tree — a rewrite, recorded in `docs/perf-attempts.md`,
+not chased.
