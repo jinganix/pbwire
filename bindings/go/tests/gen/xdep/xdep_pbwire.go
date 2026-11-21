@@ -4,6 +4,10 @@
 
 package xdep
 
+import (
+	"pbwire/pbench/dyngo/codec"
+)
+
 // xdep.DepMsg
 type DepMsg struct {
 	Name  string
@@ -29,4 +33,12 @@ func (m *DepMsg) Reset() {
 		return
 	}
 	*m = DepMsg{}
+}
+
+func (m *DepMsg) Marshal() ([]byte, error) {
+	return codec.EncodeModel(m, DepMsgMeta)
+}
+
+func (m *DepMsg) Unmarshal(wire []byte) error {
+	return codec.DecodeModel(wire, m, DepMsgMeta)
 }
