@@ -15,6 +15,8 @@
  *                     exists. "The data is already in pbwire."
  *   pbwire-node-shim  the native object in, wire out and wire in, native
  *                     object out: one addon call, the object walked in C.
+ *   pbwire-node-core  the same native object and the same task on the pure
+ *                     TypeScript core: no native library, no boundary.
  *
  *   ./bench.sh        generate, build, run
  */
@@ -22,6 +24,8 @@
 const path = require('node:path');
 
 const { Schema } = require(path.join(__dirname, '..', 'lib', 'pbwire'));
+// The pbench core arm: the pure-TypeScript codec, no native library.
+const coreArm = require(path.join(__dirname, '..', 'pbench', 'c-core'));
 // The pbench payload: the same native object the shim arm times.
 const { nativeObject } = require(path.join(__dirname, '..', 'pbench', 'payload'));
 const { Scalars3, Inner3, Color3 } = require(path.join(__dirname, 'gen', 'matrix3_pb.js'));
@@ -219,6 +223,12 @@ function main() {
         }
         const message = fillPbwire(type, repeats);
         const shimObject = nativeObject(repeats);
+        if (!Buffer.from(coreArm.marshal(shimObject)).equals(reference)) {
+            console.log(`FAIL ${label}: pbwire-node-core encodes differently`);
+            failures++;
+            message.free();
+            continue;
+        }
         if (!type.encodeObject(shimObject).equals(reference)) {
             console.log(`FAIL ${label}: pbwire-node-shim encodes differently`);
             failures++;
@@ -249,6 +259,19 @@ function main() {
             continue;
         }
         // The shim decode reads the same values straight into a plain object.
+        const coreBack = coreArm.unmarshal(reference);
+        const coreOk = coreBack.str === 'hello'
+            && coreBack.inner.name === 'kid'
+            && coreBack.inner.value === 42
+            && (coreBack.nums ?? []).length === repeats
+            && (coreBack.inners ?? []).length === repeats
+            && (repeats === 0 || coreBack.inners[repeats - 1].value === repeats);
+        if (!coreOk) {
+            console.log(`FAIL ${label}: pbwire-node-core decode differs`);
+            failures++;
+            message.free();
+            continue;
+        }
         const shimBack = type.decodeToObject(reference);
         const shimOk = shimBack.str === 'hello'
             && shimBack.inner.name === 'kid'
@@ -269,6 +292,8 @@ function main() {
         const count = calibrate(() => message.encode(), iterations);
         const encodeNs = measure(iterations, () => message.encode());
         const decodeNs = measure(iterations, () => type.decode(reference).free());
+        const coreEncodeNs = measure(iterations, () => coreArm.marshal(shimObject));
+        const coreDecodeNs = measure(iterations, () => coreArm.unmarshal(reference));
         const shimEncodeNs = measure(iterations, () => type.encodeObject(shimObject));
         const shimDecodeNs = measure(iterations, () => type.decodeToObject(reference));
         const officialEncodeNs = measure(iterations, () => official.serializeBinary());
@@ -295,12 +320,14 @@ function main() {
             `${'MB/s'.padStart(10)}`);
         row('pbwire-node-tree', 'encode', reference.length, encodeNs);
         row('pbwire-node-shim', 'encode', reference.length, shimEncodeNs);
+        row('pbwire-node-core', 'encode', reference.length, coreEncodeNs);
         row('google-protobuf', 'encode', reference.length, officialEncodeNs);
         if (pjs !== null) {
             row('protobufjs', 'encode', reference.length, pjsEncodeNs);
         }
         row('pbwire-node-tree', 'decode', reference.length, decodeNs);
         row('pbwire-node-shim', 'decode', reference.length, shimDecodeNs);
+        row('pbwire-node-core', 'decode', reference.length, coreDecodeNs);
         row('google-protobuf', 'decode', reference.length, officialDecodeNs);
         if (pjs !== null) {
             row('protobufjs', 'decode', reference.length, pjsDecodeNs);
