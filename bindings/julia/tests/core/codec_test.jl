@@ -228,6 +228,18 @@ codec_tests(data::AbstractString = CORE_FIXTURES) = begin
     check(encode(decode(ext, ext_bin)) == ext_bin,
         "extensiontest fixture round trips")
 
+    # ------------------------------------------------ slices and setters
+    framed = UInt8[0xaa; bin; 0xbb]
+    check(encode(decode_slice(scalars, framed, 2, length(bin))) == bin,
+        "decode_slice reads one body slice of a larger buffer")
+    bm = new_message(scalars)
+    set_int!(bm, "flag", 1) # a bool field through the integer setter
+    check(encode(bm) == UInt8[0x68, 0x01], "a bool set through set_int! is true")
+    bm2 = new_message(scalars)
+    set_bytes!(bm2, "str", UInt8[0x68, 0x69])
+    check(encode(bm2) == UInt8[0x72, 0x02, 0x68, 0x69],
+        "set_bytes! writes a bytes field without validation")
+
     # ------------------------------------------------------ raw slices
     rm = decode(scalars, bin)
     slot = scalars.def.by_name["str"]

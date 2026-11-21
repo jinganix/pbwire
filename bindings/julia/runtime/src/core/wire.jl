@@ -621,6 +621,9 @@ end
 """A `String` as UTF-8 bytes. Julia strings may hold invalid UTF-8 (a lone
 surrogate built through unsafe means); those bytes are copied verbatim."""
 utf8_encode(s::AbstractString) = Vector{UInt8}(codeunits(String(s)))
+# A `string` field also accepts raw bytes (protobuf's wire format does not
+# distinguish them); pass them through unchanged.
+utf8_encode(v::Vector{UInt8}) = v
 
 # ------------------------------------------------- float/double bit patterns
 

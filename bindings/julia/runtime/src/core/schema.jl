@@ -175,7 +175,9 @@ set_int!(m::Message, name_or_number, v::Integer) =
     _set_scalar!(m, name_or_number, _int_storage(_field(m, name_or_number).kind, v))
 
 function _int_storage(kind::Int, v::Integer)
-    if kind == K_UINT32 || kind == K_FIXED32
+    if kind == K_BOOL
+        return v != 0
+    elseif kind == K_UINT32 || kind == K_FIXED32
         return _ubits(v) & 0xFFFFFFFF
     elseif kind == K_UINT64 || kind == K_FIXED64
         return _ubits(v)

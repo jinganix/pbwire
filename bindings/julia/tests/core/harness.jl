@@ -13,10 +13,10 @@ end
 # exports collide with the pure core's. An explicit `using X: name` wins over
 # the other module's implicit export, so the same files read the same in both
 # places.
-using .PbwireCore: at, CoreError, decode, decode_dict, encode, encode_dict,
+using .PbwireCore: at, CoreError, decode, decode_dict, decode_slice, encode, encode_dict,
     field_by_name, field_count, Field, from_bytes, from_dict, from_file,
     get_field, get_int, get_message, get_string, has, Limits, msgtype,
-    new_message, oneof_case, raw_payload, Raw, set_int!, to_dict,
+    new_message, oneof_case, raw_payload, Raw, set_bytes!, set_int!, to_dict,
     EXPLICIT, IMPLICIT, MESSAGE_PRESENCE, REQUIRED, K_BOOL, K_BYTES, K_DOUBLE,
     K_ENUM, K_FIXED32, K_FIXED64, K_FLOAT, K_GROUP, K_INT32, K_INT64,
     K_MESSAGE, K_SFIXED32, K_SFIXED64, K_SINT32, K_SINT64, K_STRING,
