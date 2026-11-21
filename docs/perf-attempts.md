@@ -906,6 +906,10 @@ field tables. The selection landed: `bindings/go/runtime/` ships as the
 default engine, while the pure-Go one stays a candidate whose table engine
 models the cshim cannot drive fall back to.
 
+> 2026-11-21 addendum: superseded — the cshim runtime was retired and the
+> shipped Go binding is now the pure-Go table engine end to end. The entry
+> above records the selection experiment, not the current state.
+
 `bindings/go/pbench/` now compares exactly the three dynamic shapes, each
 behind the same native-in / native-out contract (`Marshal` from a caller-held
 struct, `Unmarshal` to a fully materialized fresh struct), with struct<->tree

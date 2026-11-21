@@ -73,7 +73,7 @@ the short version:
 | Dart | `dart:ffi` | `FileDescriptorSet` |
 | C# | `DllImport` + a resolver | `FileDescriptorSet` |
 | Rust | links `libpbwire.a` statically | `FileDescriptorSet` |
-| Go | thin generated models over a cshim runtime (one cgo crossing) | none for the struct path; `codec.Load` takes a `FileDescriptorSet` |
+| Go | thin generated models over the pure-Go table engine (no cgo) | none for the struct path; `runtime.Load` takes a `FileDescriptorSet` |
 | Erlang | NIF; gpb records via `pbwire:load_cache/1` | gpb's `get_msg_defs/0` |
 | Lua | C module over the core, tables in/out | `FileDescriptorSet` |
 | Swift | SwiftPM package, FFI host over the C ABI | `FileDescriptorSet` |
@@ -84,10 +84,6 @@ the short version:
 | Clojure | persistent maps over the Java runtime | `FileDescriptorSet` |
 | Julia | `dlopen` + `ccall` FFI host | `FileDescriptorSet` |
 | R | C extension, named lists in/out | `FileDescriptorSet` |
-
-Header ratios quote the native-object row (host data in, host data out). The
-`tree` row in [BENCHMARKS.md](../BENCHMARKS.md) is the same codec with the tree
-already built: a proxy or transcoder task, not an application's encode.
 
 The C bindings check `PBW_ABI_VERSION` at load time, so a library built from a
 newer, incompatible tree fails fast instead of corrupting memory. The C ABI is
@@ -104,11 +100,8 @@ the throughput comparison even there (the in-process core is 1.1-1.5x the
 generated C++ codec), but throughput is not the only axis — a straight-line
 codec has no schema to load and no reflection work to do, and a binding that
 crosses an FFI boundary per field pays for that crossing (see
-[issue 41](https://github.com/jinganix/pbwire/issues/41)). The published ratios
-include the host-object copy: host data in, host data out. A transcoder that
-already holds pbwire's tree pays less (`tree` rows in
-[BENCHMARKS.md](../BENCHMARKS.md)). pbwire also does not
-RPC. See [../README.md](../README.md#comparison-with-generated-code-dynamicmessage-and-upb) and
+[issue 41](https://github.com/jinganix/pbwire/issues/41)). pbwire also does not
+do RPC. See [../README.md](../README.md#comparison-with-generated-code-dynamicmessage-and-upb) and
 [design.md](design.md).
 
 ### Is it thread-safe?

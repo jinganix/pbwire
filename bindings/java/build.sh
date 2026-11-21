@@ -55,6 +55,7 @@ javac -nowarn -cp "$jar" -d "$here/out/classes" \
 # Self-check: TestPbwire is the binding gate, TestGenerated covers the generated models
 # (T1-T6 against the pinned reference bytes and the protobuf-java oracle).
 java -cp "$here/out/classes" TestPbwire "$desc"
+java -cp "$here/out/classes" TestVisit "$desc"
 java -cp "$here/out/classes:$jar" TestGenerated \
     "$root/bindings/c/tests/data/matrix3.bin" "$root/codegen/testdata/oneof1.bin" \
     "$root/codegen/testdata/maptest.bin" "$root/codegen/testdata/xfile.bin"

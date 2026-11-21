@@ -31,6 +31,7 @@ import (
 	"math"
 	"os"
 	"runtime"
+	"sync"
 	"testing"
 	"time"
 
@@ -221,6 +222,36 @@ func run(count int, op func()) float64 {
 	return float64(time.Since(start).Nanoseconds()) / float64(count)
 }
 
+// measureParallel splits count ops across GOMAXPROCS goroutines and reports
+// wall ns/op: what a server with shared-nothing messages sees. The closure
+// receives its goroutine index so callers can hand each goroutine its own
+// message (sharing one message across Marshal goroutines leans on
+// undocumented cache behavior); decode builds a fresh message per op, encode
+// only reads prebuilt structs and discards the output (no shared sink).
+func measureParallel(count int, op func(g int)) float64 {
+	n := runtime.GOMAXPROCS(0)
+	if n < 1 {
+		n = 1
+	}
+	per := count / n
+	if per < 1 {
+		per = 1
+	}
+	var wg sync.WaitGroup
+	start := time.Now()
+	for g := 0; g < n; g++ {
+		wg.Add(1)
+		go func(g int) {
+			defer wg.Done()
+			for i := 0; i < per; i++ {
+				op(g)
+			}
+		}(g)
+	}
+	wg.Wait()
+	return float64(time.Since(start).Nanoseconds()) / float64(per*n)
+}
+
 // Every op calibrates independently from the floor: a slow op already exceeds
 // the minimum at the floor and keeps it, a fast op doubles up.
 func calibrate(op func(), floor int) int {
@@ -253,8 +284,27 @@ func measure(floor int, op func()) float64 {
 	return best
 }
 
-func row(impl, op string, size int, ns float64) {
-	fmt.Printf("  %-17s %-7s %12.1f %10.1f\n", impl, op, ns, float64(size)/ns*1000.0)
+func row(impl, op string, size int, ns float64, allocs float64, bop float64) {
+	fmt.Printf("  %-17s %-7s %12.1f %10.1f %8.0f %10.0f\n", impl, op, ns, float64(size)/ns*1000.0, allocs, bop)
+}
+
+// allocStats measures allocations in passes separate from measure() so the
+// measurement never perturbs the timed number: AllocsPerRun counts, and a
+// MemStats.TotalAlloc delta over a calibrated count gives bytes/op.
+func allocStats(op func()) (allocs float64, bop float64) {
+	a := testing.AllocsPerRun(5, op)
+	if a < 0 {
+		a = 0
+	}
+	count := calibrate(op, 1000)
+	runtime.GC()
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	for i := 0; i < count; i++ {
+		op()
+	}
+	runtime.ReadMemStats(&after)
+	return float64(a), float64(after.TotalAlloc-before.TotalAlloc) / float64(count)
 }
 
 func TestMatrix3Bench(t *testing.T) {
@@ -285,13 +335,76 @@ func TestMatrix3Bench(t *testing.T) {
 			var m matrix3pb.Scalars3
 			_ = proto.Unmarshal(reference, &m)
 		})
+		structEncodeAllocs, structEncodeBop := allocStats(func() {
+			sinkBytes, _ = structMsg.Marshal()
+		})
+		officialEncodeAllocs, officialEncodeBop := allocStats(func() {
+			sinkBytes, _ = proto.Marshal(official)
+		})
+		structDecodeAllocs, structDecodeBop := allocStats(func() {
+			m := new(matrix3.Scalars3)
+			_ = m.Unmarshal(reference)
+		})
+		officialDecodeAllocs, officialDecodeBop := allocStats(func() {
+			var m matrix3pb.Scalars3
+			_ = proto.Unmarshal(reference, &m)
+		})
+		// Parallel rows: same ops, shared-nothing closures, wall time per op.
+		// Each goroutine gets its own official message: sharing one across
+		// Marshal goroutines leans on undocumented cache behavior.
+		officials := make([]*matrix3pb.Scalars3, runtime.GOMAXPROCS(0))
+		for i := range officials {
+			officials[i] = fillOfficial(tr.n)
+		}
+		structEncodePar := measureParallel(calibrate(func() {
+			_, _ = structMsg.Marshal()
+		}, 1), func(_ int) {
+			_, _ = structMsg.Marshal()
+		})
+		officialEncodePar := measureParallel(calibrate(func() {
+			_, _ = proto.Marshal(officials[0])
+		}, tr.floor), func(g int) {
+			_, _ = proto.Marshal(officials[g%len(officials)])
+		})
+		structDecodePar := measureParallel(calibrate(func() {
+			m := new(matrix3.Scalars3)
+			_ = m.Unmarshal(reference)
+		}, 1), func(_ int) {
+			m := new(matrix3.Scalars3)
+			_ = m.Unmarshal(reference)
+		})
+		officialDecodePar := measureParallel(calibrate(func() {
+			var m matrix3pb.Scalars3
+			_ = proto.Unmarshal(reference, &m)
+		}, tr.floor), func(_ int) {
+			var m matrix3pb.Scalars3
+			_ = proto.Unmarshal(reference, &m)
+		})
 
 		fmt.Printf("\n%s: %d bytes (repeat field x%d)\n", tr.label, len(reference), tr.n)
-		fmt.Printf("  %-17s %-7s %12s %10s\n", "impl", "op", "ns/op", "MB/s")
-		row("pbwire-go", "encode", len(reference), structEncode)
-		row("protobuf-go", "encode", len(reference), officialEncode)
-		row("pbwire-go", "decode", len(reference), structDecode)
-		row("protobuf-go", "decode", len(reference), officialDecode)
+		fmt.Printf("  %-17s %-7s %12s %10s %8s %10s\n", "impl", "op", "ns/op", "MB/s", "allocs", "B/op")
+		row("pbwire-go", "encode", len(reference), structEncode, structEncodeAllocs, structEncodeBop)
+		row("protobuf-go", "encode", len(reference), officialEncode, officialEncodeAllocs, officialEncodeBop)
+		row("pbwire-go", "decode", len(reference), structDecode, structDecodeAllocs, structDecodeBop)
+		row("protobuf-go", "decode", len(reference), officialDecode, officialDecodeAllocs, officialDecodeBop)
+		structEncodeParAllocs, structEncodeParBop := allocStats(func() {
+			_, _ = structMsg.Marshal()
+		})
+		officialEncodeParAllocs, officialEncodeParBop := allocStats(func() {
+			_, _ = proto.Marshal(official)
+		})
+		structDecodeParAllocs, structDecodeParBop := allocStats(func() {
+			m := new(matrix3.Scalars3)
+			_ = m.Unmarshal(reference)
+		})
+		officialDecodeParAllocs, officialDecodeParBop := allocStats(func() {
+			var m matrix3pb.Scalars3
+			_ = proto.Unmarshal(reference, &m)
+		})
+		row("pbwire-go", "encode-par", len(reference), structEncodePar, structEncodeParAllocs, structEncodeParBop)
+		row("protobuf-go", "encode-par", len(reference), officialEncodePar, officialEncodeParAllocs, officialEncodeParBop)
+		row("pbwire-go", "decode-par", len(reference), structDecodePar, structDecodeParAllocs, structDecodeParBop)
+		row("protobuf-go", "decode-par", len(reference), officialDecodePar, officialDecodeParAllocs, officialDecodeParBop)
 		fmt.Println()
 	}
 }

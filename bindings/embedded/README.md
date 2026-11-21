@@ -16,12 +16,6 @@ This is not a second codec: `pbwe_decode`/`pbwe_encode` are thin wrappers
 over `pbw_decode_ctx_limits`/`pbw_encode_to`, so the wire format stays the C
 core's and the core conformance suite covers it.
 
-Mechanisms: `tree` (the `pbw_ctx` value tree behind `pbwe_encode`/`pbwe_decode`)
-and `shim` (the struct codec reading caller memory in place through layout
-tables). No `core` arm: the facade links the shipped `src/` core, so the third
-mechanism is that core. Contract:
-[`../README.md#pbench-three-arms-one-contract`](../README.md#pbench-three-arms-one-contract).
-
 ```
 bindings/embedded/
     runtime/        pbwe.h + pbwe.c (the facade, C99, no dependencies)

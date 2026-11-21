@@ -5,16 +5,16 @@
 package xfile
 
 import (
-	"pbwire/pbench/dyngo/codec"
+	"pbwire/runtime"
 	"unsafe"
 
 	xdep "pbwire/tests/gen/xdep"
 )
 
 // UsesDepMeta is the generated DATA table for xfile.UsesDep: one row per field.
-var UsesDepMeta = codec.NewTable("xfile.UsesDep", []*codec.Field{
-	{Name: "single", Num: 1, Wire: codec.WireLen, Kind: codec.KindMessage,
-		Foreign: &codec.ForeignOps{Encode: func(m any) ([]byte, error) { return m.(*xdep.DepMsg).Marshal() }, Decode: func(m any, w []byte) error { return m.(*xdep.DepMsg).Unmarshal(w) }},
+var UsesDepMeta = runtime.NewTable("xfile.UsesDep", []*runtime.Field{
+	{Name: "single", Num: 1, Wire: runtime.WireLen, Kind: runtime.KindMessage,
+		Foreign: &runtime.ForeignOps{Encode: func(m any) ([]byte, error) { return m.(*xdep.DepMsg).Marshal() }, Decode: func(m any, w []byte) error { return m.(*xdep.DepMsg).Unmarshal(w) }},
 		GetMsg: func(msg any) any {
 			if v := msg.(*UsesDep).Single; v == nil {
 				return nil
@@ -29,8 +29,8 @@ var UsesDepMeta = codec.NewTable("xfile.UsesDep", []*codec.Field{
 			return m.Single
 		},
 	},
-	{Name: "many", Num: 2, Wire: codec.WireLen, Kind: codec.KindMessage,
-		Foreign:   &codec.ForeignOps{Encode: func(m any) ([]byte, error) { return m.(*xdep.DepMsg).Marshal() }, Decode: func(m any, w []byte) error { return m.(*xdep.DepMsg).Unmarshal(w) }},
+	{Name: "many", Num: 2, Wire: runtime.WireLen, Kind: runtime.KindMessage,
+		Foreign:   &runtime.ForeignOps{Encode: func(m any) ([]byte, error) { return m.(*xdep.DepMsg).Marshal() }, Decode: func(m any, w []byte) error { return m.(*xdep.DepMsg).Unmarshal(w) }},
 		Repeated:  true,
 		RepMsgLen: func(msg any) int { return len(msg.(*UsesDep).Many) },
 		RepMsgAt: func(msg any, i int) any {
@@ -46,7 +46,7 @@ var UsesDepMeta = codec.NewTable("xfile.UsesDep", []*codec.Field{
 			return item
 		},
 	},
-	{Name: "note", Num: 3, Wire: codec.WireLen, Kind: codec.KindString, Fast: true, Off: uint32(unsafe.Offsetof(UsesDep{}.Note)),
+	{Name: "note", Num: 3, Wire: runtime.WireLen, Kind: runtime.KindString, UTF8: true, Fast: true, Off: uint32(unsafe.Offsetof(UsesDep{}.Note)),
 		GetStr: func(msg any) string { return msg.(*UsesDep).Note },
 		SetStr: func(msg any, v string) { msg.(*UsesDep).Note = v },
 	},

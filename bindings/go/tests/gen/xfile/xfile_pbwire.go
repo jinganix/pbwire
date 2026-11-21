@@ -5,7 +5,7 @@
 package xfile
 
 import (
-	"pbwire/pbench/dyngo/codec"
+	"pbwire/runtime"
 
 	xdep "pbwire/tests/gen/xdep"
 )
@@ -46,9 +46,9 @@ func (m *UsesDep) Reset() {
 }
 
 func (m *UsesDep) Marshal() ([]byte, error) {
-	return codec.EncodeModel(m, UsesDepMeta)
+	return runtime.EncodeModel(m, UsesDepMeta)
 }
 
 func (m *UsesDep) Unmarshal(wire []byte) error {
-	return codec.DecodeModel(wire, m, UsesDepMeta)
+	return runtime.DecodeModel(wire, m, UsesDepMeta)
 }

@@ -5,17 +5,17 @@
 package addressbook
 
 import (
-	"pbwire/pbench/dyngo/codec"
+	"pbwire/runtime"
 	"unsafe"
 )
 
 // Person_PhoneNumberMeta is the generated DATA table for tutorial.Person.PhoneNumber: one row per field.
-var Person_PhoneNumberMeta = codec.NewTable("tutorial.Person.PhoneNumber", []*codec.Field{
-	{Name: "number", Num: 1, Wire: codec.WireLen, Kind: codec.KindString, Required: true, Fast: true, Off: uint32(unsafe.Offsetof(Person_PhoneNumber{}.Number)),
+var Person_PhoneNumberMeta = runtime.NewTable("tutorial.Person.PhoneNumber", []*runtime.Field{
+	{Name: "number", Num: 1, Wire: runtime.WireLen, Kind: runtime.KindString, Required: true, Fast: true, Off: uint32(unsafe.Offsetof(Person_PhoneNumber{}.Number)),
 		GetStr: func(msg any) string { return msg.(*Person_PhoneNumber).Number },
 		SetStr: func(msg any, v string) { msg.(*Person_PhoneNumber).Number = v },
 	},
-	{Name: "type", Num: 2, Wire: codec.WireVarint, Kind: codec.KindEnum, Explicit: true, Fast: true, Off: uint32(unsafe.Offsetof(Person_PhoneNumber{}.Type)), Has: uint32(unsafe.Offsetof(Person_PhoneNumber{}.Type)),
+	{Name: "type", Num: 2, Wire: runtime.WireVarint, Kind: runtime.KindEnum, Explicit: true, Fast: true, Off: uint32(unsafe.Offsetof(Person_PhoneNumber{}.Type)), Has: uint32(unsafe.Offsetof(Person_PhoneNumber{}.Type)),
 		GetOptEnum: func(msg any) *int32 {
 			p := msg.(*Person_PhoneNumber).Type
 			if p == nil {
@@ -29,21 +29,21 @@ var Person_PhoneNumberMeta = codec.NewTable("tutorial.Person.PhoneNumber", []*co
 })
 
 // PersonMeta is the generated DATA table for tutorial.Person: one row per field.
-var PersonMeta = codec.NewTable("tutorial.Person", []*codec.Field{
-	{Name: "name", Num: 1, Wire: codec.WireLen, Kind: codec.KindString, Required: true, Fast: true, Off: uint32(unsafe.Offsetof(Person{}.Name)),
+var PersonMeta = runtime.NewTable("tutorial.Person", []*runtime.Field{
+	{Name: "name", Num: 1, Wire: runtime.WireLen, Kind: runtime.KindString, Required: true, Fast: true, Off: uint32(unsafe.Offsetof(Person{}.Name)),
 		GetStr: func(msg any) string { return msg.(*Person).Name },
 		SetStr: func(msg any, v string) { msg.(*Person).Name = v },
 	},
-	{Name: "id", Num: 2, Wire: codec.WireVarint, Kind: codec.KindInt32, Required: true, Fast: true, Off: uint32(unsafe.Offsetof(Person{}.Id)),
+	{Name: "id", Num: 2, Wire: runtime.WireVarint, Kind: runtime.KindInt32, Required: true, Fast: true, Off: uint32(unsafe.Offsetof(Person{}.Id)),
 		GetI32: func(msg any) int32 { return msg.(*Person).Id },
 		SetI32: func(msg any, v int32) { msg.(*Person).Id = v },
 	},
-	{Name: "email", Num: 3, Wire: codec.WireLen, Kind: codec.KindString, Explicit: true, Fast: true, Off: uint32(unsafe.Offsetof(Person{}.Email)), Has: uint32(unsafe.Offsetof(Person{}.Email)),
+	{Name: "email", Num: 3, Wire: runtime.WireLen, Kind: runtime.KindString, Explicit: true, Fast: true, Off: uint32(unsafe.Offsetof(Person{}.Email)), Has: uint32(unsafe.Offsetof(Person{}.Email)),
 		GetOptStr: func(msg any) *string { return msg.(*Person).Email },
 		SetOptStr: func(msg any, v string) { tmp := v; msg.(*Person).Email = &tmp },
 	},
-	{Name: "phones", Num: 4, Wire: codec.WireLen, Kind: codec.KindMessage,
-		Sub:       func() *codec.Table { return Person_PhoneNumberMeta },
+	{Name: "phones", Num: 4, Wire: runtime.WireLen, Kind: runtime.KindMessage,
+		Sub:       func() *runtime.Table { return Person_PhoneNumberMeta },
 		Repeated:  true,
 		RepMsgLen: func(msg any) int { return len(msg.(*Person).Phones) },
 		RepMsgAt: func(msg any, i int) any {
@@ -62,9 +62,9 @@ var PersonMeta = codec.NewTable("tutorial.Person", []*codec.Field{
 })
 
 // AddressBookMeta is the generated DATA table for tutorial.AddressBook: one row per field.
-var AddressBookMeta = codec.NewTable("tutorial.AddressBook", []*codec.Field{
-	{Name: "people", Num: 1, Wire: codec.WireLen, Kind: codec.KindMessage,
-		Sub:       func() *codec.Table { return PersonMeta },
+var AddressBookMeta = runtime.NewTable("tutorial.AddressBook", []*runtime.Field{
+	{Name: "people", Num: 1, Wire: runtime.WireLen, Kind: runtime.KindMessage,
+		Sub:       func() *runtime.Table { return PersonMeta },
 		Repeated:  true,
 		RepMsgLen: func(msg any) int { return len(msg.(*AddressBook).People) },
 		RepMsgAt: func(msg any, i int) any {

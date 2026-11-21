@@ -285,7 +285,7 @@ codegen/                  protoc-gen-pbwire: generated models for every language
 bindings/c/                 C binding: runtime/ (struct codec), plugin/, examples/, tests/, benchmarks/, conformance/
 bindings/cpp/               C++ binding: examples/, tests/, benchmarks/ over the shared C runtime (no plugin)
 bindings/python/            CPython extension: runtime/, examples/, tests/, benchmarks/, conformance/
-bindings/go/                Go: generated models over a cshim runtime/, both dynamic engines as pbench/ candidates
+bindings/go/                Go: generated models over the pure-Go table engine, the dynamic C core as a pbench candidate
 bindings/erlang/            Erlang/OTP NIF: c_src/ (runtime), examples/, test/, benchmarks/, conformance/
 bindings/java/              Java: pure-Java codec, runtime/, examples/, tests/, pbench/ (JNI reference, not shipped)
 bindings/kotlin/            Kotlin: the Java runtime + a DSL

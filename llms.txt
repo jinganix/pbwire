@@ -33,7 +33,7 @@ make format       # clang-format >= 19; make format-check for the gate
 
 # Host-language bindings, each needing only its own toolchain:
 make python-test  # Python (CPython extension, dict<->wire in C)
-make go-test      # Go (generated models over a cshim runtime)
+make go-test      # Go (generated models over the pure-Go table engine)
 make erlang-test  # Erlang (EUnit + NIF C tests, needs OTP)
 make test-cpp     # C++ (same C runtime, no protobuf needed)
 make java-test    # Java (pure-Java codec, no JNI, no native library)
@@ -252,7 +252,7 @@ C++ runtime), `make bench`, `make bench-c` (C structs vs protoc C++). Optional, 
   keep the number, breaking changes bump it with the SONAME. `bindings/python` (a CPython
   extension), `bindings/ruby` (C extension), `bindings/node` (N-API addon) and `bindings/php`
   (`ext-ffi`) compare `pbw_abi_version()` with `PBW_ABI_VERSION` at load;
-  `bindings/go` is generated models over a cshim runtime with one cgo crossing per op.
+  `bindings/go` is generated models over the pure-Go table engine (no cgo).
   `bindings/java` (pure-Java codec, and Kotlin/Scala/Clojure through it) needs no ABI check.
 - Binding memory ceilings (`pbw_ctx_set_retain_cap` is reachable from Java/Kotlin/Scala/Clojure
   (`setRetainCap`), Erlang/Elixir (`set_opts` / `retain_cap:`) and the embedded box's
@@ -327,10 +327,10 @@ C++ runtime), `make bench`, `make bench-c` (C structs vs protoc C++). Optional, 
   with its own pure-Java codec; Ruby and Lua are C
   extensions that link the core and keep the message conversion in C (Ruby adds a lazy wire view,
   Lua uses plain tables); Rust links the archive in statically (Zig compiles it in);
-  Go links a cshim codec over cgo (one crossing per op); Elixir translates structs for the shared NIF
+  Go ships pure-Go generated models (no cgo); Elixir translates structs for the shared NIF
   (no C of its own); F# reuses the C# project.
-- [bindings/go/README.md](bindings/go/README.md): Go binding, thin generated models over a cshim
-  runtime (`runtime/`) plus the pbench dynamic engines (`go test ./...` covers parity).
+- [bindings/go/README.md](bindings/go/README.md): Go binding, thin generated models over the pure-Go
+  table engine plus the pbench dynamic C core (`go test ./...` covers parity).
 - [bindings/python/runtime/pbwire.c](bindings/python/runtime/pbwire.c): Python binding, a CPython
   extension; schema from a `FileDescriptorSet`, dict<->wire in C for every field kind,
   `decode()` returns a parsed message that records one slice per wire field (fields materialize on

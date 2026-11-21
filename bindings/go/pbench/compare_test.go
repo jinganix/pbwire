@@ -1,8 +1,7 @@
 //go:build pbench
 
-// Interleaved comparison of the three dynamic arms on the same payload:
-// dync is the C core over cgo, dyngo is the Go core (value tree, no cgo), and
-// cshim is the Erlang-style C codec reading Go memory directly. Every arm does
+// Interleaved comparison of the two dynamic arms on the same payload:
+// dync is the C core over cgo and dyngo is the Go core (value tree, no cgo). Every arm does
 // the same user-visible task, native struct in and native struct out, and every
 // impl is measured in the same round, back to back, so machine load hits all of
 // them equally and the median across rounds is the number to read.
@@ -18,7 +17,6 @@ import (
 	"time"
 
 	"google.golang.org/protobuf/proto"
-	"pbwire/pbench/cshim"
 	"pbwire/pbench/dync"
 	"pbwire/pbench/dyngo"
 	"pbwire/tests/gen/matrix3"
@@ -119,12 +117,8 @@ func TestCompare(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cShim, err := cshim.New()
-	if err != nil {
-		t.Fatal(err)
-	}
-	impls := []codec{cDync, dyngoDirect{cDynGo}, cShim}
-	names := []string{"dync (C core)", "dyngo (Go core)", "cshim (erlang-style)", "protobuf-go"}
+	impls := []codec{cDync, dyngoDirect{cDynGo}}
+	names := []string{"dync (C core)", "dyngo (Go core)", "protobuf-go"}
 
 	const rounds = 5
 

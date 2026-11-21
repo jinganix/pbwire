@@ -1,488 +1,427 @@
-// Package runtime is the packaged Go binding engine: the schema plan is
-// resolved once, the language-specific walk lives in C, and Marshal/Unmarshal
-// each cross the cgo boundary exactly once.
+// The driver the generated code programs against: Encoder for Marshal,
+// Decoder for Unmarshal, plus the Arena for string storage.
 //
-// The Go half owns the struct layout. At New time it measures every field
-// with unsafe.Offsetof, builds a layout table (one row per field), and hands
-// it to the C codec, which copies it and caches field-number -> row
-// pointers. Marshal passes the struct address as an integer for the
-// duration of one call; C reads the Go memory through the offsets. That
-// keeps the cgo pointer-passing rules happy (no Go pointer crosses as a
-// pointer value and none is retained), while runtime.KeepAlive keeps the
-// reached-from-struct graph alive for the call.
+// Ownership rules, stated once:
+//   - Encoder writes into Buf. A zero Encoder is ready; pre-size Buf when
+//     the message size is roughly known. Result hands the buffer to the
+//     caller: with a fresh Encoder per Marshal the result is a fresh
+//     caller-owned slice. Reuse an Encoder via Reset only after the
+//     previous Result is no longer needed; Reset keeps the capacity.
+//   - Decoder borrows the caller's wire slice: it never copies except via
+//     String. Bytes returns a sub-slice aliasing the input, so generated
+//     code must copy (string() copies; byte fields go through Arena or
+//     append([]byte(nil), ...)) before the input may be reused or mutated.
+//   - Arena is a bump allocator owned by one decode call. Decoded strings
+//     and byte copies point into it; the message owns the arena's memory
+//     once Unmarshal returns, independent of the input slice. Arenas are
+//     not safe for concurrent use; one per decode call.
+//   - Errors are the sentinels ErrWire and ErrDepth from wire.go.
+//     Generated decode returns them directly.
 //
-// Decode ownership: C writes scalars directly into a zeroed Go struct and
-// leaves string payloads in the caller's wire bytes, nested sub-messages in
-// a codec-owned C arena and repeated elements in per-field accumulators.
-// The caller copies every string into one Go arena and every repeated field
-// into one Go backing array before returning. Strings are interior pointers
-// into that arena, which keeps it alive; the C arena and accumulators are
-// reset at the start of the next decode.
+// Group pattern (proto2 groups; the plan marks them with Group=true):
 //
-// Per-message plans (which offsets, which fixup) are generated code, not
-// this package: see pbench/cshim for the hand-written reference arm and
-// protoc-gen-pbwire for the emitter. This package only translates layout
-// rows, owns the C plan, and runs the raw encode/decode calls.
+//	enc.Tag(n, codec.WireStartGroup)
+//	... member fields ...
+//	enc.Tag(n, codec.WireEndGroup)
+//
+//	for {
+//	    num, wt, err := d.Next()
+//	    if err != nil { return err }
+//	    if wt == codec.WireEndGroup {
+//	        if num != n { return codec.ErrWire }
+//	        break
+//	    }
+//	    ... member fields, d.Skip(num, wt, depth) by default ...
+//	}
+//
+// Packed repeated numerics encode as one length-delimited run and decode
+// accepting both packed runs and unpacked singles, like protobuf-go.
+// Unknown fields (including extensions, which the emitter never generates
+// accessors for) decode via Skip and are dropped, as on the dynamic path.
 package runtime
 
-/*
-#cgo CFLAGS: -I${SRCDIR} -O2 -std=c99
-#include "cshim_codec.h"
-*/
-import "C"
+import "unsafe"
 
-import (
-	"errors"
-	"fmt"
-	"runtime"
-	"sync"
-	"unsafe"
-
-	shimlayout "pbwire/runtime/layout"
-)
-
-// Layout kinds. These mirror the CSHIMK_* enum in cshim_codec.h.
-const (
-	kindI32 uint32 = iota
-	kindI64
-	kindU32
-	kindU64
-	kindS32
-	kindS64
-	kindFix32
-	kindFix64
-	kindFloat
-	kindDouble
-	kindBool
-	kindStr
-	kindMsg
-	kindOptI32
-	kindOptStr
-)
-
-// Wire types.
-const (
-	wireVarint  uint32 = 0
-	wireFixed64 uint32 = 1
-	wireBytes   uint32 = 2
-	wireFixed32 uint32 = 5
-)
-
-// Status codes. These mirror the CSHIM_* enum in cshim_codec.h.
-const (
-	stOK    = 0
-	stNoMem = 1
-	stWire  = 2
-	stDepth = 3
-	stPlan  = 4
-	stSpace = 5
-)
-
-// Codec owns the C plan, the decode scratch arena and the per-field repeated
-// accumulators, plus the last encode size used as the next call's buffer
-// hint. Marshal and Unmarshal are safe for concurrent use: each holds the
-// codec's lock for the duration of its C call, because the scratch (encode
-// buffer, accumulators, arena, oneof stages) is shared state.
-type Codec struct {
-	mu   sync.Mutex
-	h    *C.cshim_codec
-	hint int
-	// frame holds the struct a call reaches through, for the length of that
-	// call. C receives its address as an integer, which no stack map tracks,
-	// so a Go stack frame goes stale when the goroutine's stack is copied and
-	// C then reads or writes dead memory (issue 46). Storing the address in
-	// this heap field does two things at once: it keeps the struct alive for
-	// the call, and it makes the caller's object escape, so Go puts it in the
-	// heap where nothing moves it.
-	frame unsafe.Pointer
+// Encoder is a reusable append-only buffer for straight-line Marshal code.
+// The zero value is ready; Buf may be pre-sized. Not safe for concurrent
+// use; one Encoder per in-flight Marshal.
+type Encoder struct {
+	Buf []byte
 }
 
-// cshimTableInput is one registry entry: the Go-owned rows plus the
-// struct size the C arena uses for sub-message allocation.
-type cshimTableInput struct {
-	rows []C.cshim_row
-	size C.size_t
+// Reset drops the contents, keeping the capacity for the next Marshal.
+// Call it only after the previous Result is no longer needed: Result
+// aliases the same backing array.
+func (e *Encoder) Reset() {
+	e.Buf = e.Buf[:0]
 }
 
-// newCodecFromTables builds a codec over a caller-owned row registry.
-// tables[root] is the root message; message rows address their sub-table
-// through the row's sub index. Unexported: the input rows are C-owned and
-// only NewCodecFromLayout can build them; cross-package callers use that.
-func newCodecFromTables(tabs []cshimTableInput, root int) (*Codec, error) {
-	if len(tabs) == 0 || root < 0 || root >= len(tabs) {
-		return nil, errors.New("runtime: bad registry")
-	}
-	ct := make([]C.cshim_table, len(tabs))
-	var pinner runtime.Pinner
-	defer pinner.Unpin()
-	for i, t := range tabs {
-		if len(t.rows) == 0 || t.size == 0 {
-			return nil, errors.New("runtime: empty table")
-		}
-		// The row slices travel into C, which copies them synchronously:
-		// pin every backing array for the duration of the call.
-		pinner.Pin(&t.rows[0])
-		ct[i] = C.cshim_table{
-			rows:     &t.rows[0],
-			nrows:    C.size_t(len(t.rows)),
-			msg_size: t.size,
-		}
-	}
-	pinner.Pin(&ct[0])
-	var h *C.cshim_codec
-	st := C.cshim_codec_new(&h, &ct[0], C.size_t(len(ct)), C.size_t(root))
-	runtime.KeepAlive(tabs)
-	runtime.KeepAlive(ct)
-	if int(st) != stOK {
-		return nil, statusError("new", C.int(st), 0)
-	}
-	c := &Codec{h: h}
-	runtime.SetFinalizer(c, (*Codec).finalize)
-	return c, nil
+// Result hands the accumulated bytes to the caller. With a fresh Encoder
+// the slice is fresh and caller-owned.
+func (e *Encoder) Result() []byte {
+	return e.Buf
 }
 
-// translateRow converts one layout.Row into the C row the codec owns.
-// Shapes the C codec does not implement yet (foreign fields) fail loudly
-// instead of encoding wrong bytes. Groups and sub-table references ride
-// the registry the caller built.
-func translateRow(r shimlayout.Row, reg []shimlayout.Msg, ptrSize uintptr) (C.cshim_row, error) {
-	if r.Foreign {
-		return C.cshim_row{}, fmt.Errorf("runtime: field %d needs foreign support", r.Fnum)
+// Tag appends the tag for field num with wire type wt.
+func (e *Encoder) Tag(num uint32, wt WireType) {
+	e.Buf = AppendTag(e.Buf, num, wt)
+}
+
+// Varint appends v in varint encoding.
+func (e *Encoder) Varint(v uint64) {
+	e.Buf = AppendVarint(e.Buf, v)
+}
+
+// Fixed32 appends v little-endian.
+func (e *Encoder) Fixed32(v uint32) {
+	e.Buf = AppendFixed32(e.Buf, v)
+}
+
+// Fixed64 appends v little-endian.
+func (e *Encoder) Fixed64(v uint64) {
+	e.Buf = AppendFixed64(e.Buf, v)
+}
+
+// Data appends a length-delimited payload.
+func (e *Encoder) Data(p []byte) {
+	e.Buf = AppendLen(e.Buf, p)
+}
+
+// Text appends a length-delimited string.
+func (e *Encoder) Text(s string) {
+	e.Buf = AppendVarint(e.Buf, uint64(len(s)))
+	e.Buf = append(e.Buf, s...)
+}
+
+// Begin starts a length-delimited field (submessage or packed run): it
+// writes the tag plus a one-byte length placeholder and returns a mark for
+// End. Marks nest but must close LIFO: End the most recent Begin first.
+func (e *Encoder) Begin(num uint32) int {
+	e.Tag(num, WireLen)
+	mark := len(e.Buf)
+	e.Buf = append(e.Buf, 0)
+	return mark
+}
+
+// End patches the length opened by Begin. The payload between mark and the
+// buffer end shifts right when the length itself needs more than one byte,
+// so no Begin opened after mark may still be open.
+func (e *Encoder) End(mark int) {
+	n := len(e.Buf) - mark - 1
+	if n < 0x80 {
+		e.Buf[mark] = byte(n)
+		return
 	}
-	var kind C.uint32_t
-	switch r.Kind {
-	case shimlayout.KindInt32:
-		kind = C.CSHIMK_I32
-	case shimlayout.KindInt64:
-		kind = C.CSHIMK_I64
-	case shimlayout.KindUint32:
-		kind = C.CSHIMK_U32
-	case shimlayout.KindUint64:
-		kind = C.CSHIMK_U64
-	case shimlayout.KindSint32:
-		kind = C.CSHIMK_S32
-	case shimlayout.KindSint64:
-		kind = C.CSHIMK_S64
-	case shimlayout.KindFixed32:
-		kind = C.CSHIMK_FIX32
-	case shimlayout.KindFixed64:
-		kind = C.CSHIMK_FIX64
-	case shimlayout.KindSfixed32:
-		kind = C.CSHIMK_FIX32
-	case shimlayout.KindSfixed64:
-		kind = C.CSHIMK_FIX64
-	case shimlayout.KindFloat:
-		kind = C.CSHIMK_FLOAT
-	case shimlayout.KindDouble:
-		kind = C.CSHIMK_DOUBLE
-	case shimlayout.KindBool:
-		kind = C.CSHIMK_BOOL
-	case shimlayout.KindString:
-		kind = C.CSHIMK_STR
-	case shimlayout.KindBytes:
-		kind = C.CSHIMK_BYTES
-	case shimlayout.KindEnum:
-		kind = C.CSHIMK_I32
-	case shimlayout.KindMessage:
-		kind = C.CSHIMK_MSG
-	default:
-		return C.cshim_row{}, fmt.Errorf("runtime: bad kind %d on field %d", r.Kind, r.Fnum)
+	var tmp [10]byte
+	v := uint64(n)
+	i := 0
+	for v >= 0x80 {
+		tmp[i] = byte(v) | 0x80
+		v >>= 7
+		i++
 	}
-	var elem uint32
-	if r.Repeated {
-		switch r.Kind {
-		case shimlayout.KindInt32, shimlayout.KindUint32, shimlayout.KindSint32,
-			shimlayout.KindFixed32, shimlayout.KindSfixed32, shimlayout.KindFloat,
-			shimlayout.KindEnum:
-			elem = 4
-		case shimlayout.KindBool:
-			elem = 1
-		case shimlayout.KindString, shimlayout.KindBytes:
-			elem = 2 * uint32(ptrSize)
-		case shimlayout.KindMessage:
-			elem = uint32(ptrSize)
+	tmp[i] = byte(v)
+	i++
+	e.Buf = append(e.Buf, tmp[1:i]...)
+	copy(e.Buf[mark+i:], e.Buf[mark+1:])
+	copy(e.Buf[mark:], tmp[:i])
+}
+
+// Decoder is a bounds-checked cursor over a caller's wire slice for
+// straight-line Unmarshal code. It borrows Buf and never retains it beyond
+// the values the caller copies out. Not safe for concurrent use.
+type Decoder struct {
+	Buf []byte
+	Off int
+	// lastTag is where the tag of the current field started, so SkipRaw can
+	// hand back the field bytes with their tag: a hook that retains unknown
+	// fields needs re-emittable bytes, and a tag-less remainder is not.
+	lastTag int
+}
+
+// Done reports whether the cursor reached the end of the input.
+func (d *Decoder) Done() bool {
+	return d.Off >= len(d.Buf)
+}
+
+// Rest returns the unread remainder. It aliases the input.
+func (d *Decoder) Rest() []byte {
+	return d.Buf[d.Off:]
+}
+
+// Next reads the next tag, returning its field number and wire type. It
+// rejects field number 0 and wire types above 5. A tag is a varint32: the
+// loop stops after five bytes, so an overlong tag (like the reference
+// parser, which reads at most five bytes) fails instead of decoding.
+func (d *Decoder) Next() (uint32, WireType, error) {
+	d.lastTag = d.Off
+	b := d.Buf[d.Off:]
+	// Single-byte tags (field numbers 1-15) are the common case: one
+	// load, no loop. The checks below mirror the slow path exactly:
+	// field number 0 and wire types 6/7 still fail.
+	if len(b) > 0 && b[0] < 0x80 {
+		v := uint64(b[0])
+		num := uint32(v >> 3)
+		wt := WireType(v & 7)
+		if num == 0 || wt > WireFixed32 {
+			return 0, 0, ErrWire
 		}
-	} else {
-		switch r.Kind {
-		case shimlayout.KindInt32, shimlayout.KindUint32, shimlayout.KindSint32,
-			shimlayout.KindFixed32, shimlayout.KindSfixed32, shimlayout.KindFloat,
-			shimlayout.KindEnum:
-			elem = 4
-		case shimlayout.KindInt64, shimlayout.KindUint64, shimlayout.KindSint64,
-			shimlayout.KindFixed64, shimlayout.KindSfixed64, shimlayout.KindDouble:
-			elem = 8
-		case shimlayout.KindBool:
-			elem = 1
-		case shimlayout.KindString, shimlayout.KindBytes:
-			elem = 2 * uint32(ptrSize)
-		case shimlayout.KindMessage:
-			if r.Sub < 0 || int(r.Sub) >= len(reg) {
-				return C.cshim_row{}, fmt.Errorf("runtime: field %d names no registry table", r.Fnum)
+		d.Off++
+		return num, wt, nil
+	}
+	var v uint64
+	n := 0
+	for i := 0; i < 5; i++ {
+		if i >= len(b) {
+			return 0, 0, ErrWire
+		}
+		c := b[i]
+		if i == 4 {
+			if c >= 0x80 {
+				return 0, 0, ErrWire
 			}
-			elem = uint32(reg[r.Sub].Size)
+			v |= uint64(c) << 28
+			n = 5
+			break
 		}
-	}
-	var count uint32
-	if r.Repeated || ((r.Kind == shimlayout.KindString || r.Kind == shimlayout.KindBytes) && !r.Explicit && r.Itab == 0) {
-		count = r.Offset + uint32(ptrSize)
-	}
-	var has uint32
-	if r.Explicit {
-		has = r.Has
-	}
-	var explicit, required uint32
-	if r.Explicit {
-		explicit = 1
-	}
-	if r.Required {
-		required = 1
-	}
-	var group uint32
-	if r.Group {
-		group = 1
-	}
-	return C.cshim_row{
-		fnum:     C.uint32_t(r.Fnum),
-		kind:     kind,
-		repeated: C.uint32_t(boolBit(r.Repeated)),
-		packed:   C.uint32_t(boolBit(r.Packed)),
-		wire:     C.uint32_t(r.Wire),
-		offset:   C.uint32_t(r.Offset),
-		has:      C.uint32_t(has),
-		count:    C.uint32_t(count),
-		elem:     C.uint32_t(elem),
-		explicit: C.uint32_t(explicit),
-		required: C.uint32_t(required),
-		group:    C.uint32_t(group),
-		sub:      C.int32_t(r.Sub),
-		itab:     C.uintptr_t(r.Itab),
-		ogrp:     C.uint32_t(r.Ogrp),
-	}, nil
-}
-
-func boolBit(v bool) uint32 {
-	if v {
-		return 1
-	}
-	return 0
-}
-
-// NewCodecFromLayout builds a codec from a layout registry, the same
-// shape the generated code feeds the harness with. No per-message Go code
-// lives here: translation is field-by-field and generic, and sub-table
-// indexes ride the registry order.
-func NewCodecFromLayout(reg []shimlayout.Msg, root string) (*Codec, error) {
-	if len(reg) == 0 {
-		return nil, errors.New("runtime: empty registry")
-	}
-	ri := -1
-	for i, m := range reg {
-		if m.Full == root {
-			ri = i
+		v |= uint64(c&0x7f) << uint(7*i)
+		if c < 0x80 {
+			n = i + 1
 			break
 		}
 	}
-	if ri < 0 {
-		return nil, fmt.Errorf("runtime: unknown root %q", root)
+	num := uint32(v >> 3)
+	wt := WireType(v & 7)
+	if num == 0 || v>>3 > MaxFieldNumber || wt > WireFixed32 {
+		return 0, 0, ErrWire
 	}
-	ptrSize := unsafe.Sizeof(uintptr(0))
-	tabs := make([]cshimTableInput, len(reg))
-	for i, m := range reg {
-		if len(m.Rows) == 0 || m.Size == 0 {
-			return nil, fmt.Errorf("runtime: empty table %q", m.Full)
+	d.Off += n
+	return num, wt, nil
+}
+
+// SkipRaw discards one field value and returns its bytes including the tag
+// (the whole start/end frame for a group). The slice aliases the input, so a
+// caller that keeps it must copy.
+func (d *Decoder) SkipRaw(num uint32, wt WireType, depth int) ([]byte, error) {
+	return d.SkipRawLimits(num, wt, depth, Limits{})
+}
+
+// SkipRawLimits is SkipRaw with explicit bounds, like SkipLimits is to Skip.
+func (d *Decoder) SkipRawLimits(num uint32, wt WireType, depth int, lim Limits) ([]byte, error) {
+	start := d.lastTag
+	if err := d.SkipLimits(num, wt, depth, lim); err != nil {
+		return nil, err
+	}
+	return d.Buf[start:d.Off], nil
+}
+
+// Varint reads one varint. The loop is inline (same accept set as
+// ConsumeVarint): scalar fields parse one varint each, so one call level
+// here is one per scalar on every decode.
+func (d *Decoder) Varint() (uint64, error) {
+	b := d.Buf[d.Off:]
+	// One-byte varints (small ints, false flags, enum zeros) skip the
+	// loop; the slow path below is unchanged.
+	if len(b) > 0 && b[0] < 0x80 {
+		d.Off++
+		return uint64(b[0]), nil
+	}
+	var v uint64
+	for i := 0; i < 10; i++ {
+		if i >= len(b) {
+			return 0, ErrWire
 		}
-		crows := make([]C.cshim_row, len(m.Rows))
-		for j, r := range m.Rows {
-			cr, err := translateRow(r, reg, ptrSize)
+		c := b[i]
+		if i == 9 {
+			if c >= 0x80 {
+				return 0, ErrWire
+			}
+			d.Off += 10
+			return v | uint64(c)<<63, nil
+		}
+		v |= uint64(c&0x7f) << uint(7*i)
+		if c < 0x80 {
+			d.Off += i + 1
+			return v, nil
+		}
+	}
+	return 0, ErrWire
+}
+
+// Fixed32 reads 4 little-endian bytes.
+func (d *Decoder) Fixed32() (uint32, error) {
+	b := d.Buf[d.Off:]
+	if len(b) < 4 {
+		return 0, ErrWire
+	}
+	d.Off += 4
+	return uint32(b[0]) | uint32(b[1])<<8 | uint32(b[2])<<16 | uint32(b[3])<<24, nil
+}
+
+// Fixed64 reads 8 little-endian bytes.
+func (d *Decoder) Fixed64() (uint64, error) {
+	b := d.Buf[d.Off:]
+	if len(b) < 8 {
+		return 0, ErrWire
+	}
+	d.Off += 8
+	return uint64(b[0]) | uint64(b[1])<<8 | uint64(b[2])<<16 | uint64(b[3])<<24 |
+		uint64(b[4])<<32 | uint64(b[5])<<40 | uint64(b[6])<<48 | uint64(b[7])<<56, nil
+}
+
+// Bytes reads a length-delimited payload as a sub-slice aliasing the input.
+// Copy it (Arena.AddBytes or append) before the input may change. The length
+// loop is inline (same accept set as ConsumeLen): strings, bytes, packed
+// runs and submessages each parse one length per occurrence.
+func (d *Decoder) Bytes() ([]byte, error) {
+	b := d.Buf[d.Off:]
+	// Short payloads carry a one-byte length: bounds-check and slice
+	// without entering the varint loop.
+	if len(b) > 0 && b[0] < 0x80 {
+		n := uint64(b[0])
+		if n > uint64(len(b)-1) {
+			return nil, ErrWire
+		}
+		end := 1 + int(n)
+		d.Off += end
+		return b[1:end], nil
+	}
+	var n uint64
+	m := 0
+	for i := 0; i < 10; i++ {
+		if i >= len(b) {
+			return nil, ErrWire
+		}
+		c := b[i]
+		if i == 9 {
+			if c >= 0x80 {
+				return nil, ErrWire
+			}
+			n |= uint64(c) << 63
+			m = 10
+			break
+		}
+		n |= uint64(c&0x7f) << uint(7*i)
+		if c < 0x80 {
+			m = i + 1
+			break
+		}
+	}
+	if n > uint64(len(b)-m) {
+		return nil, ErrWire
+	}
+	end := m + int(n)
+	d.Off += end
+	return b[m:end], nil
+}
+
+// String reads a length-delimited payload as a string. The conversion
+// copies, so the result is independent of the input. No UTF-8 validation
+// is done, matching protobuf-go unmarshal.
+func (d *Decoder) String() (string, error) {
+	p, err := d.Bytes()
+	if err != nil {
+		return "", err
+	}
+	return string(p), nil
+}
+
+// Skip discards one field value of the given wire type. Groups recurse with
+// depth+1 and must close with the matching end tag; an end tag at top level
+// (or a mismatched one) is ErrWire.
+func (d *Decoder) Skip(num uint32, wt WireType, depth int) error {
+	return d.SkipLimits(num, wt, depth, Limits{})
+}
+
+// SkipLimits is Skip with explicit bounds: group nesting past the effective
+// cap fails instead of recursing. The old name keeps its signature as a
+// defaults wrapper.
+func (d *Decoder) SkipLimits(num uint32, wt WireType, depth int, lim Limits) error {
+	switch wt {
+	case WireVarint:
+		_, err := d.Varint()
+		return err
+	case WireFixed64:
+		if len(d.Buf)-d.Off < 8 {
+			return ErrWire
+		}
+		d.Off += 8
+		return nil
+	case WireLen:
+		_, err := d.Bytes()
+		return err
+	case WireStartGroup:
+		if err := lim.checkDepth(depth + 1); err != nil {
+			return err
+		}
+		for {
+			inner, innerWT, err := d.Next()
 			if err != nil {
-				return nil, err
+				return err
 			}
-			crows[j] = cr
-		}
-		tabs[i] = cshimTableInput{rows: crows, size: C.size_t(m.Size)}
-	}
-	return newCodecFromTables(tabs, ri)
-}
-
-// Close releases the C plan and decode arena. A finished Codec must not be
-// used again.
-func (c *Codec) Close() {
-	if c == nil {
-		return
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.h == nil {
-		return
-	}
-	C.cshim_codec_free(c.h)
-	c.h = nil
-	runtime.SetFinalizer(c, nil)
-}
-
-func (c *Codec) finalize() {
-	c.Close()
-}
-
-// EncodeRaw runs one grow-and-retry encode loop over raw struct memory.
-// The caller owns the layout the codec was built with; no fixup runs.
-// A nil base is a caller bug: report it instead of faulting in C.
-func (c *Codec) EncodeRaw(base unsafe.Pointer) ([]byte, error) {
-	if c == nil || c.h == nil {
-		return nil, errors.New("runtime: closed codec")
-	}
-	if base == nil {
-		return nil, errors.New("runtime: encode nil message")
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.frame = base
-	defer func() { c.frame = nil }()
-	hint := c.hint
-	if hint < 64 {
-		hint = 64
-	}
-	for {
-		out := make([]byte, hint)
-		var dst *C.uint8_t
-		if hint != 0 {
-			dst = (*C.uint8_t)(unsafe.Pointer(&out[0]))
-		}
-		res := C.cshim_encode(c.h, C.uintptr_t(uintptr(base)), dst,
-			C.size_t(hint))
-		// The struct address crossed the boundary as an integer, so nothing
-		// else keeps base (a caller frame) alive through the call.
-		runtime.KeepAlive(base)
-		switch int(res.status) {
-		case stOK:
-			n := int(res.len)
-			c.hint = n
-			runtime.KeepAlive(c)
-			return out[:n], nil
-		case stSpace:
-			if hint > int(^uint(0)>>1)/2 {
-				return nil, statusError("encode", C.int(stNoMem), 0)
+			if innerWT == WireEndGroup {
+				if inner != num {
+					return ErrWire
+				}
+				return nil
 			}
-			hint *= 2
-			continue
-		default:
-			return nil, statusError("encode", res.status, 0)
+			if err := d.SkipLimits(inner, innerWT, depth+1, lim); err != nil {
+				return err
+			}
 		}
-	}
-}
-
-// DecodeInto decodes wire into base and then runs materialize while still
-// holding the codec lock: the staged oneof slots, the string arena and the
-// accumulators all belong to this decode, so fixup and materialization must
-// not interleave with another call. materialize receives the total string
-// payload size for sizing its arena. Generated Unmarshal uses this; raw
-// DecodeRaw is for single-threaded callers that do their own fixup.
-func (c *Codec) DecodeInto(base unsafe.Pointer, wire []byte, materialize func(strBytes int)) error {
-	if c == nil || c.h == nil {
-		return errors.New("runtime: closed codec")
-	}
-	if base == nil {
-		return errors.New("runtime: decode into nil message")
-	}
-	if materialize == nil {
-		return errors.New("runtime: nil materialize")
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.frame = base
-	defer func() { c.frame = nil }()
-	var wp *C.uint8_t
-	if len(wire) != 0 {
-		wp = (*C.uint8_t)(unsafe.Pointer(&wire[0]))
-	}
-	res := C.cshim_decode(c.h, C.uintptr_t(uintptr(base)), wp,
-		C.size_t(len(wire)))
-	if int(res.status) != stOK {
-		return statusError("decode", res.status, res.fail_off)
-	}
-	materialize(int(res.str_bytes))
-	// After the call the raw struct holds string headers that point into wire,
-	// and materialize reads them, so both must live past it: base's address
-	// crossed as an integer and C writes into it, and wire owns the payload.
-	runtime.KeepAlive(base)
-	runtime.KeepAlive(wire)
-	return nil
-}
-
-// DecodeRaw runs one decode into raw struct memory and reports the total
-// string payload size for the caller's fixup. No fixup runs here, so the
-// caller must keep wire and base alive through its own fixup: the raw string
-// headers point into wire.
-func (c *Codec) DecodeRaw(base unsafe.Pointer, wire []byte) (int, error) {
-	if c == nil || c.h == nil {
-		return 0, errors.New("runtime: closed codec")
-	}
-	if base == nil {
-		return 0, errors.New("runtime: decode into nil message")
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.frame = base
-	defer func() { c.frame = nil }()
-	var wp *C.uint8_t
-	if len(wire) != 0 {
-		wp = (*C.uint8_t)(unsafe.Pointer(&wire[0]))
-	}
-	res := C.cshim_decode(c.h, C.uintptr_t(uintptr(base)), wp,
-		C.size_t(len(wire)))
-	// Keep the destination frame alive through the call (see DecodeInto).
-	runtime.KeepAlive(base)
-	runtime.KeepAlive(wire)
-	if int(res.status) != stOK {
-		return 0, statusError("decode", res.status, res.fail_off)
-	}
-	runtime.KeepAlive(c)
-	return int(res.str_bytes), nil
-}
-
-// Stage reads one staged oneof occurrence for the fixup the generated
-// model owns: fnum 0 means nothing was staged in this slot. The payload
-// points into wire (strings/bytes) or the C arena (messages) and is valid
-// until the next decode on this codec.
-func (c *Codec) Stage(idx int) (fnum, kind uint32, scalar uint64, ptr unsafe.Pointer, ln int, ok bool) {
-	if c == nil || c.h == nil {
-		return 0, 0, 0, nil, 0, false
-	}
-	// The stage slots belong to the last decode; the fixup runs right
-	// after it and before any other call, so no lock is taken here.
-	var cf, ck C.uint32_t
-	var cs C.uint64_t
-	var cp C.uintptr_t
-	var cl C.size_t
-	if C.cshim_stage(c.h, C.size_t(idx), &cf, &ck, &cs, &cp, &cl) != 0 {
-		return 0, 0, 0, nil, 0, false
-	}
-	runtime.KeepAlive(c)
-	// The integer arrives from C (wire/arena address valid until the next
-	// decode); reinterpret its bits as a pointer in one step so vet
-	// accepts the uintptr -> pointer conversion.
-	return uint32(cf), uint32(ck), uint64(cs), *(*unsafe.Pointer)(unsafe.Pointer(&cp)), int(cl), true
-}
-
-func statusError(op string, st C.int, off C.size_t) error {
-	var msg string
-
-	switch int(st) {
-	case stNoMem:
-		msg = "out of memory"
-	case stWire:
-		msg = "malformed wire bytes"
-	case stDepth:
-		msg = "nesting limit exceeded"
-	case stPlan:
-		msg = "layout plan rejected"
-	case stSpace:
-		msg = "output buffer too small"
+	case WireFixed32:
+		if len(d.Buf)-d.Off < 4 {
+			return ErrWire
+		}
+		d.Off += 4
+		return nil
 	default:
-		msg = fmt.Sprintf("status %d", int(st))
+		return ErrWire // end group at top level, or impossible 6/7
 	}
-	if off != 0 {
-		return fmt.Errorf("runtime: %s: %s at byte %d", op, msg, uint64(off))
+}
+
+// Arena is a bump allocator for one decode call's string and byte storage.
+// Grow once with the input length (an upper bound: every stored byte comes
+// from the input), then AddString/AddBytes copy payloads in without further
+// allocation. The zero value is ready; Grow is optional but avoids growth.
+type Arena struct {
+	buf []byte
+}
+
+// Grow pre-allocates room for about n payload bytes.
+func (a *Arena) Grow(n int) {
+	if n <= 0 || cap(a.buf)-len(a.buf) >= n {
+		return
 	}
-	return fmt.Errorf("runtime: %s: %s", op, msg)
+	next := make([]byte, len(a.buf), len(a.buf)+n)
+	copy(next, a.buf)
+	a.buf = next
+}
+
+// Reset drops the contents, keeping the capacity for the next call.
+func (a *Arena) Reset() {
+	a.buf = a.buf[:0]
+}
+
+// AddBytes copies p into the arena.
+func (a *Arena) AddBytes(p []byte) []byte {
+	if len(p) == 0 {
+		return nil
+	}
+	start := len(a.buf)
+	a.buf = append(a.buf, p...)
+	return a.buf[start:]
+}
+
+// AddString copies p into the arena as a string without a second copy:
+// the result aliases arena memory, which the decoded message owns after
+// Unmarshal returns. It stays valid across later arena growth (growth
+// moves the backing array; live strings keep the old one alive).
+func (a *Arena) AddString(p []byte) string {
+	if len(p) == 0 {
+		return ""
+	}
+	start := len(a.buf)
+	a.buf = append(a.buf, p...)
+	return unsafe.String(&a.buf[start], len(p))
 }

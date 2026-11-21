@@ -23,12 +23,6 @@ with `pbwire:` — the API and the wire format are unchanged.
 This is the rebar3 layout (`src/`, `c_src/`, `include/`, `priv/`, `test/`), the
 local equivalent of the other bindings' `runtime/` + `tests/`.
 
-Mechanisms: `tree` (the NIF handle over the core, record tuples in and out) and
-`shim` (the single NIF entry that reads the record tuple directly). No `core`
-arm: gpb is already a pure-Erlang codec and is the baseline, so a second one
-would measure our code against the competitor, not a decision. Contract:
-[`../README.md#pbench-three-arms-one-contract`](../README.md#pbench-three-arms-one-contract).
-
 ## Build and run
 
 Needs Erlang/OTP (see [`.tool-versions`](.tool-versions)) and a C compiler;

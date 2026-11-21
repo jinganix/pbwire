@@ -5,17 +5,17 @@
 package xdep
 
 import (
-	"pbwire/pbench/dyngo/codec"
+	"pbwire/runtime"
 	"unsafe"
 )
 
 // DepMsgMeta is the generated DATA table for xdep.DepMsg: one row per field.
-var DepMsgMeta = codec.NewTable("xdep.DepMsg", []*codec.Field{
-	{Name: "name", Num: 1, Wire: codec.WireLen, Kind: codec.KindString, Fast: true, Off: uint32(unsafe.Offsetof(DepMsg{}.Name)),
+var DepMsgMeta = runtime.NewTable("xdep.DepMsg", []*runtime.Field{
+	{Name: "name", Num: 1, Wire: runtime.WireLen, Kind: runtime.KindString, UTF8: true, Fast: true, Off: uint32(unsafe.Offsetof(DepMsg{}.Name)),
 		GetStr: func(msg any) string { return msg.(*DepMsg).Name },
 		SetStr: func(msg any, v string) { msg.(*DepMsg).Name = v },
 	},
-	{Name: "value", Num: 2, Wire: codec.WireVarint, Kind: codec.KindInt32, Fast: true, Off: uint32(unsafe.Offsetof(DepMsg{}.Value)),
+	{Name: "value", Num: 2, Wire: runtime.WireVarint, Kind: runtime.KindInt32, Fast: true, Off: uint32(unsafe.Offsetof(DepMsg{}.Value)),
 		GetI32: func(msg any) int32 { return msg.(*DepMsg).Value },
 		SetI32: func(msg any, v int32) { msg.(*DepMsg).Value = v },
 	},

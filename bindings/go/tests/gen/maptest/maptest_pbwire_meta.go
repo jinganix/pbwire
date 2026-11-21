@@ -5,54 +5,54 @@
 package maptest
 
 import (
-	"pbwire/pbench/dyngo/codec"
+	"pbwire/runtime"
 	"unsafe"
 )
 
 // MapValueMeta is the generated DATA table for spectest.MapValue: one row per field.
-var MapValueMeta = codec.NewTable("spectest.MapValue", []*codec.Field{
-	{Name: "name", Num: 1, Wire: codec.WireLen, Kind: codec.KindString, Fast: true, Off: uint32(unsafe.Offsetof(MapValue{}.Name)),
+var MapValueMeta = runtime.NewTable("spectest.MapValue", []*runtime.Field{
+	{Name: "name", Num: 1, Wire: runtime.WireLen, Kind: runtime.KindString, UTF8: true, Fast: true, Off: uint32(unsafe.Offsetof(MapValue{}.Name)),
 		GetStr: func(msg any) string { return msg.(*MapValue).Name },
 		SetStr: func(msg any, v string) { msg.(*MapValue).Name = v },
 	},
-	{Name: "value", Num: 2, Wire: codec.WireVarint, Kind: codec.KindInt32, Fast: true, Off: uint32(unsafe.Offsetof(MapValue{}.Value)),
+	{Name: "value", Num: 2, Wire: runtime.WireVarint, Kind: runtime.KindInt32, Fast: true, Off: uint32(unsafe.Offsetof(MapValue{}.Value)),
 		GetI32: func(msg any) int32 { return msg.(*MapValue).Value },
 		SetI32: func(msg any, v int32) { msg.(*MapValue).Value = v },
 	},
 })
 
 // MapTest_ByIntEntryMeta is the generated DATA table for spectest.MapTest.ByIntEntry: one row per field.
-var MapTest_ByIntEntryMeta = codec.NewTable("spectest.MapTest.ByIntEntry", []*codec.Field{
-	{Name: "key", Num: 1, Wire: codec.WireVarint, Kind: codec.KindInt32, Fast: true, Off: uint32(unsafe.Offsetof(MapTest_ByIntEntry{}.Key)),
+var MapTest_ByIntEntryMeta = runtime.NewTable("spectest.MapTest.ByIntEntry", []*runtime.Field{
+	{Name: "key", Num: 1, Wire: runtime.WireVarint, Kind: runtime.KindInt32, Fast: true, Off: uint32(unsafe.Offsetof(MapTest_ByIntEntry{}.Key)),
 		GetI32: func(msg any) int32 { return msg.(*MapTest_ByIntEntry).Key },
 		SetI32: func(msg any, v int32) { msg.(*MapTest_ByIntEntry).Key = v },
 	},
-	{Name: "value", Num: 2, Wire: codec.WireLen, Kind: codec.KindString, Fast: true, Off: uint32(unsafe.Offsetof(MapTest_ByIntEntry{}.Value)),
+	{Name: "value", Num: 2, Wire: runtime.WireLen, Kind: runtime.KindString, UTF8: true, Fast: true, Off: uint32(unsafe.Offsetof(MapTest_ByIntEntry{}.Value)),
 		GetStr: func(msg any) string { return msg.(*MapTest_ByIntEntry).Value },
 		SetStr: func(msg any, v string) { msg.(*MapTest_ByIntEntry).Value = v },
 	},
 })
 
 // MapTest_ByStrEntryMeta is the generated DATA table for spectest.MapTest.ByStrEntry: one row per field.
-var MapTest_ByStrEntryMeta = codec.NewTable("spectest.MapTest.ByStrEntry", []*codec.Field{
-	{Name: "key", Num: 1, Wire: codec.WireLen, Kind: codec.KindString, Fast: true, Off: uint32(unsafe.Offsetof(MapTest_ByStrEntry{}.Key)),
+var MapTest_ByStrEntryMeta = runtime.NewTable("spectest.MapTest.ByStrEntry", []*runtime.Field{
+	{Name: "key", Num: 1, Wire: runtime.WireLen, Kind: runtime.KindString, UTF8: true, Fast: true, Off: uint32(unsafe.Offsetof(MapTest_ByStrEntry{}.Key)),
 		GetStr: func(msg any) string { return msg.(*MapTest_ByStrEntry).Key },
 		SetStr: func(msg any, v string) { msg.(*MapTest_ByStrEntry).Key = v },
 	},
-	{Name: "value", Num: 2, Wire: codec.WireVarint, Kind: codec.KindInt32, Fast: true, Off: uint32(unsafe.Offsetof(MapTest_ByStrEntry{}.Value)),
+	{Name: "value", Num: 2, Wire: runtime.WireVarint, Kind: runtime.KindInt32, Fast: true, Off: uint32(unsafe.Offsetof(MapTest_ByStrEntry{}.Value)),
 		GetI32: func(msg any) int32 { return msg.(*MapTest_ByStrEntry).Value },
 		SetI32: func(msg any, v int32) { msg.(*MapTest_ByStrEntry).Value = v },
 	},
 })
 
 // MapTest_ByMsgEntryMeta is the generated DATA table for spectest.MapTest.ByMsgEntry: one row per field.
-var MapTest_ByMsgEntryMeta = codec.NewTable("spectest.MapTest.ByMsgEntry", []*codec.Field{
-	{Name: "key", Num: 1, Wire: codec.WireLen, Kind: codec.KindString, Fast: true, Off: uint32(unsafe.Offsetof(MapTest_ByMsgEntry{}.Key)),
+var MapTest_ByMsgEntryMeta = runtime.NewTable("spectest.MapTest.ByMsgEntry", []*runtime.Field{
+	{Name: "key", Num: 1, Wire: runtime.WireLen, Kind: runtime.KindString, UTF8: true, Fast: true, Off: uint32(unsafe.Offsetof(MapTest_ByMsgEntry{}.Key)),
 		GetStr: func(msg any) string { return msg.(*MapTest_ByMsgEntry).Key },
 		SetStr: func(msg any, v string) { msg.(*MapTest_ByMsgEntry).Key = v },
 	},
-	{Name: "value", Num: 2, Wire: codec.WireLen, Kind: codec.KindMessage,
-		Sub: func() *codec.Table { return MapValueMeta },
+	{Name: "value", Num: 2, Wire: runtime.WireLen, Kind: runtime.KindMessage,
+		Sub: func() *runtime.Table { return MapValueMeta },
 		GetMsg: func(msg any) any {
 			if v := msg.(*MapTest_ByMsgEntry).Value; v == nil {
 				return nil
@@ -70,9 +70,9 @@ var MapTest_ByMsgEntryMeta = codec.NewTable("spectest.MapTest.ByMsgEntry", []*co
 })
 
 // MapTestMeta is the generated DATA table for spectest.MapTest: one row per field.
-var MapTestMeta = codec.NewTable("spectest.MapTest", []*codec.Field{
-	{Name: "by_int", Num: 1, Wire: codec.WireLen, Kind: codec.KindMessage,
-		Sub:       func() *codec.Table { return MapTest_ByIntEntryMeta },
+var MapTestMeta = runtime.NewTable("spectest.MapTest", []*runtime.Field{
+	{Name: "by_int", Num: 1, Wire: runtime.WireLen, Kind: runtime.KindMessage,
+		Sub:       func() *runtime.Table { return MapTest_ByIntEntryMeta },
 		Repeated:  true,
 		RepMsgLen: func(msg any) int { return len(msg.(*MapTest).ByInt) },
 		RepMsgAt: func(msg any, i int) any {
@@ -88,8 +88,8 @@ var MapTestMeta = codec.NewTable("spectest.MapTest", []*codec.Field{
 			return item
 		},
 	},
-	{Name: "by_str", Num: 2, Wire: codec.WireLen, Kind: codec.KindMessage,
-		Sub:       func() *codec.Table { return MapTest_ByStrEntryMeta },
+	{Name: "by_str", Num: 2, Wire: runtime.WireLen, Kind: runtime.KindMessage,
+		Sub:       func() *runtime.Table { return MapTest_ByStrEntryMeta },
 		Repeated:  true,
 		RepMsgLen: func(msg any) int { return len(msg.(*MapTest).ByStr) },
 		RepMsgAt: func(msg any, i int) any {
@@ -105,8 +105,8 @@ var MapTestMeta = codec.NewTable("spectest.MapTest", []*codec.Field{
 			return item
 		},
 	},
-	{Name: "by_msg", Num: 3, Wire: codec.WireLen, Kind: codec.KindMessage,
-		Sub:       func() *codec.Table { return MapTest_ByMsgEntryMeta },
+	{Name: "by_msg", Num: 3, Wire: runtime.WireLen, Kind: runtime.KindMessage,
+		Sub:       func() *runtime.Table { return MapTest_ByMsgEntryMeta },
 		Repeated:  true,
 		RepMsgLen: func(msg any) int { return len(msg.(*MapTest).ByMsg) },
 		RepMsgAt: func(msg any, i int) any {

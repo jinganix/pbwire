@@ -50,6 +50,13 @@ REPEATS_RE = re.compile(r"[xX](\d+)\)?\s*$")
 ROW_RE = re.compile(
     r"^\s{2,}(.+?)\s+(\S+)\s+(\d+(?:\.\d+)?)\s+(\d+(?:\.\d+)?)\s*$"
 )
+# Go rows with allocation columns: two trailing integers (allocs/op,
+# bytes/op). Tried first: without it a 6-column row misparses as a
+# 4-column one ("... encode 282.5" as impl, "481.4" as op).
+ROW_ALLOC_RE = re.compile(
+    r"^\s{2,}(.+?)\s+(\S+)\s+(\d+(?:\.\d+)?)\s+(\d+(?:\.\d+)?)"
+    r"\s+(\d+)\s+(\d+)\s*$"
+)
 
 
 def parse_log(text):
@@ -81,6 +88,19 @@ def parse_log(text):
         if line.strip() == "" or not line[:1].isspace():
             current = None
             continue
+        m = ROW_ALLOC_RE.match(line)
+        if m:
+            current["rows"].append(
+                {
+                    "impl": m.group(1).strip(),
+                    "op": m.group(2),
+                    "ns": float(m.group(3)),
+                    "mbps": float(m.group(4)),
+                    "allocs": int(m.group(5)),
+                    "bop": int(m.group(6)),
+                }
+            )
+            continue
         m = ROW_RE.match(line)
         if m:
             current["rows"].append(
@@ -89,6 +109,8 @@ def parse_log(text):
                     "op": m.group(2),
                     "ns": float(m.group(3)),
                     "mbps": float(m.group(4)),
+                    "allocs": None,
+                    "bop": None,
                 }
             )
     return cases
@@ -204,6 +226,7 @@ threads: 1 vs 8 (14 cores), 500 iterations per thread, something
     assert cases[0]["iterations"] == 1048576 and cases[0]["repeats"] == 0
     assert cases[0]["rows"][1] == {
         "impl": "pb gen", "op": "encode", "ns": 81.2, "mbps": 1625.3,
+        "allocs": None, "bop": None,
     }, cases[0]["rows"]
     assert cases[1]["rows"][0]["impl"] == "pb upb"
     assert cases[1]["rows"][0]["op"] == "encode(data)"
@@ -239,6 +262,22 @@ threads: 1 vs 8 (14 cores), 500 iterations per thread, something
     assert len(go) == 1 and go[0]["bytes"] == 136, go
     assert go[0]["iterations"] is None and go[0]["repeats"] == 0, go
     assert len(go[0]["rows"]) == 2, go
+    # Go with allocs: two trailing integer columns. They must not misparse
+    # as a 4-column row ("pbwire-go encode 282.5" as impl, "481.4" as op).
+    goa = parse_log(
+        "small: 136 bytes (repeat field x0)\n"
+        "  pbwire-go        encode         282.5      481.4        3       1234\n"
+        "  protobuf-go      encode         344.9      394.3        1         48\n"
+    )
+    assert len(goa) == 1 and len(goa[0]["rows"]) == 2, goa
+    assert goa[0]["rows"][0] == {
+        "impl": "pbwire-go", "op": "encode", "ns": 282.5, "mbps": 481.4,
+        "allocs": 3, "bop": 1234,
+    }, goa[0]["rows"]
+    assert goa[0]["rows"][1]["allocs"] == 1, goa[0]["rows"]
+    assert goa[0]["rows"][1]["bop"] == 48, goa[0]["rows"]
+    # Old logs without the columns keep parsing with null allocs.
+    assert go[0]["rows"][0].get("allocs") is None, go[0]["rows"]
     print("selftest: parser OK (%d sample blocks)" % len(cases))
 
 

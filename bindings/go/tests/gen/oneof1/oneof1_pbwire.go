@@ -4,6 +4,10 @@
 
 package oneof1
 
+import (
+	"pbwire/runtime"
+)
+
 // spectest.Oneof1.Inner
 type Oneof1_Inner struct {
 	V int32
@@ -21,6 +25,14 @@ func (m *Oneof1_Inner) Reset() {
 		return
 	}
 	*m = Oneof1_Inner{}
+}
+
+func (m *Oneof1_Inner) Marshal() ([]byte, error) {
+	return runtime.EncodeModel(m, Oneof1_InnerMeta)
+}
+
+func (m *Oneof1_Inner) Unmarshal(wire []byte) error {
+	return runtime.DecodeModel(wire, m, Oneof1_InnerMeta)
 }
 
 // spectest.Oneof1
@@ -83,4 +95,12 @@ func (m *Oneof1) Reset() {
 		return
 	}
 	*m = Oneof1{}
+}
+
+func (m *Oneof1) Marshal() ([]byte, error) {
+	return runtime.EncodeModel(m, Oneof1Meta)
+}
+
+func (m *Oneof1) Unmarshal(wire []byte) error {
+	return runtime.DecodeModel(wire, m, Oneof1Meta)
 }

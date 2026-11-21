@@ -13,10 +13,6 @@ re-runnable gate instead of a throwaway.
 
 ## Contract
 
-The normative contract is in
-[`../../README.md#pbench-three-arms-one-contract`](../../README.md#pbench-three-arms-one-contract).
-This section is the Java-specific shape of those arms.
-
 Both sides measure the same shape, so the ratio is the codec and not the setup:
 
 - **encode** -- re-encode the tree the candidate is holding, one `byte[]`

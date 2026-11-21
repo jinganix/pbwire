@@ -4,6 +4,10 @@
 
 package maptest
 
+import (
+	"pbwire/runtime"
+)
+
 // spectest.MapValue
 type MapValue struct {
 	Name  string
@@ -29,6 +33,14 @@ func (m *MapValue) Reset() {
 		return
 	}
 	*m = MapValue{}
+}
+
+func (m *MapValue) Marshal() ([]byte, error) {
+	return runtime.EncodeModel(m, MapValueMeta)
+}
+
+func (m *MapValue) Unmarshal(wire []byte) error {
+	return runtime.DecodeModel(wire, m, MapValueMeta)
 }
 
 // spectest.MapTest.ByIntEntry
@@ -58,6 +70,14 @@ func (m *MapTest_ByIntEntry) Reset() {
 	*m = MapTest_ByIntEntry{}
 }
 
+func (m *MapTest_ByIntEntry) Marshal() ([]byte, error) {
+	return runtime.EncodeModel(m, MapTest_ByIntEntryMeta)
+}
+
+func (m *MapTest_ByIntEntry) Unmarshal(wire []byte) error {
+	return runtime.DecodeModel(wire, m, MapTest_ByIntEntryMeta)
+}
+
 // spectest.MapTest.ByStrEntry
 type MapTest_ByStrEntry struct {
 	Key   string
@@ -85,6 +105,14 @@ func (m *MapTest_ByStrEntry) Reset() {
 	*m = MapTest_ByStrEntry{}
 }
 
+func (m *MapTest_ByStrEntry) Marshal() ([]byte, error) {
+	return runtime.EncodeModel(m, MapTest_ByStrEntryMeta)
+}
+
+func (m *MapTest_ByStrEntry) Unmarshal(wire []byte) error {
+	return runtime.DecodeModel(wire, m, MapTest_ByStrEntryMeta)
+}
+
 // spectest.MapTest.ByMsgEntry
 type MapTest_ByMsgEntry struct {
 	Key   string
@@ -110,6 +138,14 @@ func (m *MapTest_ByMsgEntry) Reset() {
 		return
 	}
 	*m = MapTest_ByMsgEntry{}
+}
+
+func (m *MapTest_ByMsgEntry) Marshal() ([]byte, error) {
+	return runtime.EncodeModel(m, MapTest_ByMsgEntryMeta)
+}
+
+func (m *MapTest_ByMsgEntry) Unmarshal(wire []byte) error {
+	return runtime.DecodeModel(wire, m, MapTest_ByMsgEntryMeta)
 }
 
 // spectest.MapTest
@@ -145,4 +181,12 @@ func (m *MapTest) Reset() {
 		return
 	}
 	*m = MapTest{}
+}
+
+func (m *MapTest) Marshal() ([]byte, error) {
+	return runtime.EncodeModel(m, MapTestMeta)
+}
+
+func (m *MapTest) Unmarshal(wire []byte) error {
+	return runtime.DecodeModel(wire, m, MapTestMeta)
 }

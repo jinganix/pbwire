@@ -6,7 +6,7 @@ package addressbook
 
 import (
 	"fmt"
-	"pbwire/pbench/dyngo/codec"
+	"pbwire/runtime"
 )
 
 // tutorial.Person.PhoneType
@@ -59,11 +59,11 @@ func (m *Person_PhoneNumber) Reset() {
 }
 
 func (m *Person_PhoneNumber) Marshal() ([]byte, error) {
-	return codec.EncodeModel(m, Person_PhoneNumberMeta)
+	return runtime.EncodeModel(m, Person_PhoneNumberMeta)
 }
 
 func (m *Person_PhoneNumber) Unmarshal(wire []byte) error {
-	return codec.DecodeModel(wire, m, Person_PhoneNumberMeta)
+	return runtime.DecodeModel(wire, m, Person_PhoneNumberMeta)
 }
 
 // tutorial.Person
@@ -110,11 +110,11 @@ func (m *Person) Reset() {
 }
 
 func (m *Person) Marshal() ([]byte, error) {
-	return codec.EncodeModel(m, PersonMeta)
+	return runtime.EncodeModel(m, PersonMeta)
 }
 
 func (m *Person) Unmarshal(wire []byte) error {
-	return codec.DecodeModel(wire, m, PersonMeta)
+	return runtime.DecodeModel(wire, m, PersonMeta)
 }
 
 // tutorial.AddressBook
@@ -137,9 +137,9 @@ func (m *AddressBook) Reset() {
 }
 
 func (m *AddressBook) Marshal() ([]byte, error) {
-	return codec.EncodeModel(m, AddressBookMeta)
+	return runtime.EncodeModel(m, AddressBookMeta)
 }
 
 func (m *AddressBook) Unmarshal(wire []byte) error {
-	return codec.DecodeModel(wire, m, AddressBookMeta)
+	return runtime.DecodeModel(wire, m, AddressBookMeta)
 }

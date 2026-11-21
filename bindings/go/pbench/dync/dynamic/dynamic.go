@@ -1,13 +1,12 @@
-// Package dynamic is the tree arm of the Go pbench: it loads a
+// Package dynamic is the MVP of a hot-swappable Go binding: it loads a
 // FileDescriptorSet at run time (no recompile, no restart), builds dynamic
 // message trees and encodes/decodes them through the shared C core over cgo.
 //
-// The three arms, one contract (bindings/README.md#pbench-three-arms-one-contract):
-// pbench/dync in this directory (tree, C core over cgo), pbench/dyngo (core,
-// pure Go: codec.Load + Schema.Type + DMsg over the shared table engine) and
-// pbench/cshim (shim, C reads Go memory through a generated layout table).
-// Correctness comes from the C core (conformance-tested); the per-op price is
-// one cgo crossing, priced against the other arms in pbench.
+// This is the C-core dynamic path. For the same runtime schema without cgo,
+// see the dynamic Go core in ../codec (codec.Load + Schema.Type + DMsg),
+// which drives the shared table engine; generated models build on that.
+// Correctness comes from the C core (conformance-tested); the per-op price
+// is one cgo transition, priced against the other arms in ../pbench.
 package dynamic
 
 /*

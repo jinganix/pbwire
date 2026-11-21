@@ -82,6 +82,30 @@ public final class MessageType {
         }
     }
 
+    /**
+     * Single-level scan of wire bytes without building a message tree:
+     * one callback per field, in wire order. Returns the wire length when
+     * every field was visited, the failing field's start offset on malformed
+     * input (or when the callback returns non-zero), or 0 when the input
+     * exceeds the byte cap. Only a null callback throws; malformed input
+     * and cap breaches are reported via the returned offset.
+     */
+    public int visit(byte[] wire, Visit.Visitor cb) {
+        return visit(wire, Limits.defaults(), cb);
+    }
+
+    /** Bounded visit, like the core's {@code pbw_visit_limits}. */
+    public int visit(byte[] wire, Limits lim, Visit.Visitor cb) {
+        checkOpen();
+        try {
+            return GenericCodec.scan(def, wire, lim, cb);
+        } catch (PbwireException e) {
+            throw e;
+        } catch (IllegalArgumentException e) {
+            throw new PbwireException(name() + ": visit failed", 1);
+        }
+    }
+
     /** Parses JSON mapping into a new message; unknown fields fail. */
     public Message parseJson(String json) {
         return parseJson(json, false, Limits.defaults());

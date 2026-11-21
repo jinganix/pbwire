@@ -4,6 +4,10 @@
 
 package xdep
 
+import (
+	"pbwire/runtime"
+)
+
 // xdep.DepMsg
 type DepMsg struct {
 	Name  string
@@ -29,4 +33,12 @@ func (m *DepMsg) Reset() {
 		return
 	}
 	*m = DepMsg{}
+}
+
+func (m *DepMsg) Marshal() ([]byte, error) {
+	return runtime.EncodeModel(m, DepMsgMeta)
+}
+
+func (m *DepMsg) Unmarshal(wire []byte) error {
+	return runtime.DecodeModel(wire, m, DepMsgMeta)
 }

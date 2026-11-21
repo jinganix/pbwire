@@ -67,8 +67,8 @@ anything else:
   wire code. PHP offers the same FFI wrapper (`ext-ffi`) plus a native C
   extension over the same core for hosts with a compiler; Rust links
   `libpbwire.a` in statically instead of `dlopen`-ing it,
-  which makes the result a single self-contained binary; Go compiles its own
-  cshim codec into the binary and crosses cgo once per call.
+  which makes the result a single self-contained binary; Go ships pure-Go
+  generated models with no cgo and no C toolchain.
 - **Kotlin needs no separate layer.** Kotlin runs on the JVM, so it uses the
   Java binding's runtime and adds only the DSL that official Kotlin support
   is (protoc `--kotlin_out` generates Kotlin over protobuf-java). Scala and
@@ -100,65 +100,20 @@ anything else:
   project and adds only an F#-idiomatic facade over the same P/Invoke
   runtime, exactly like Kotlin reuses Java.
 
-## pbench: three arms, one contract
-
-Every binding's `pbench/` compares the same three arms over the same `matrix3`
-payload and the four standard tiers. Every arm does the same user-visible
-task: a native object in, wire bytes out; wire bytes in, a fully readable
-native object out. No arm may hold a prebuilt tree before the timer starts,
-and no arm may use test-only glue: the native <-> tree move goes through a
-shipped converter or a shipped model, so the timer covers what a user of that
-path pays.
-
-| arm | mechanism | what it answers |
-|---|---|---|
-| `tree` | the data already lives in the binding's own message/tree object (`Message`, `DMsg`, `MessageType` handle) | what the codec costs once the tree exists |
-| `shim` | C reads and writes the host's own memory through a layout/offset table; one crossing per op, no intermediate tree | is a boundary worth paying for at all |
-| `core` | the C core ported to the host language: value tree plus wire engine plus skip/group/unknown/validation, native object in and out | can the host language replace the C core for this binding |
-
-The uniform contract, per binding:
-
-```
-New(descriptorSet) -> Arm
-Arm.Marshal(nativeMessage) -> wire bytes
-Arm.Unmarshal(wire) -> nativeMessage
-Arm.Tree(nativeMessage) -> binding tree        // tree arm only, already built
-```
-
-Gate before any timing: every arm's bytes equal the official runtime's bytes on
-all four tiers, and every arm's decode compares field by field against an
-oracle decode. Timing: interleaved rounds (all arms plus the baseline back to
-back), median of five, printed in the `BENCHMARKS.md` "Output format" block so
-`scripts/bench-record.py` reads it unchanged.
-
-The layered rule replaces "no second wire implementation" for the third arm:
-the C core stays the default for every host binding that can reach it, a
-host-language `core` port is the one allowed second mechanism, and the official
-binary conformance suite is the single contract both obey. `core` numbers enter
-`BENCHMARKS.md` only after the arm passes the official binary conformance
-suite; until then it prints `n/a`. pbench keeps one copy of the shipped codec,
-as an adapter over `runtime/`, never a duplicate engine.
-
-A binding states which of the three it has, including the two-mechanism
-bindings and the deferred ports with the reason: the status table in
-[BENCHMARKS.md](../BENCHMARKS.md#bindings-vs-their-baselines), with the per-arm
-detail in `bindings/<lang>/pbench/README.md`.
-
 ## What each binding solves
 
 Every row is also the reason that binding exists: its host runtime's status quo
 has a specific cost, and the binding removes it *without* a second wire
-implementation (the allowed third mechanism is the
-[`core` arm](#pbench-three-arms-one-contract)). The ratios are xlarge-tier
-throughput against the official runtime, copied from
-[BENCHMARKS.md](../BENCHMARKS.md) where the reasoning and the full tables are.
+implementation. The ratios are xlarge-tier throughput against the official
+runtime, copied from [BENCHMARKS.md](../BENCHMARKS.md) where the reasoning and
+the full tables are.
 
 | binding | the pain it removes | what it does instead | encode / decode vs official |
 |---|---|---|---|
 | C | dynamic messages cost a libprotobuf dependency, or hand-written wire code per message | struct codec compiled from layout tables over the shared core, schema loaded at run time | 1.33x / 2.00x (vs protoc C++) |
 | C++ | generated classes pin the schema at compile time; `DynamicMessage` is 10x slower | the same C runtime and header, no extra layer | 1.33x / 2.00x (vs protoc C++) |
 | Embedded | generated C codecs pin the schema at compile time and need a struct per message; a full runtime drags a heap in | static-memory facade over the same core: one box, one arena, caller-owned encode buffers, input bounded by `pbw_limits` | no separate bench — the facade is a pass-through, so the C row and the core bench measure the wire it speaks |
-| Python | `google.protobuf` needs a generated module per `.proto`, and dict conversion is seconds at 75 KB | CPython extension: dict↔wire in C, `decode()` returns a parsed message that keeps one slice per wire field | 6.85x / 3.69x (vs upb; 1.19x decode handle, 64x via `encode(parsed)`, data already in pbwire) |
+| Python | `google.protobuf` needs a generated module per `.proto`, and dict conversion is seconds at 75 KB | CPython extension: dict↔wire in C, `decode()` returns a parsed message that keeps one slice per wire field | 6.85x / 1.22x (vs upb) |
 | Ruby | the `google-protobuf` gem materializes and re-encodes every field; a Fiddle bridge costs ~3 µs per downcall | C extension over the core: builder tree for writes, validating wire view for reads | 1.20x / 1.64x (vs the gem) |
 | Java | JNI glue, or protobuf-java re-deriving sizes before every write | pure-Java codec: columnar values, lazy decode, `Unsafe` stores (no JNI, no native lib, no generator) | 1.15x / 1.89x (vs protobuf-java; 0.95x encode at 74 KB) |
 | Kotlin | official Kotlin is Kotlin over protobuf-java | reuses the Java runtime, adds a DSL | 1.20x / 1.81x (vs protobuf-kotlin; 0.78x encode at 136 B) |
@@ -168,7 +123,7 @@ throughput against the official runtime, copied from
 | Dart | a pure-Dart field loop dominates, and FFI adds copies | `dart:ffi` plus the core's arena | 15.4x / 4.27x (vs protobuf-dart) |
 | Rust | rust-protobuf generated codecs | links `libpbwire.a` statically behind a safe wrapper | 1.69x / 1.86x (vs rust-protobuf; 0.98x / 1.59x vs prost) |
 | C# | Google.Protobuf is already a fast tree codec — the closest race of the set | P/Invoke plus a resolver, no packages | 3.07x / 1.47x (vs Google.Protobuf; 3.93x / 2.27x vs protobuf-net) |
-| Go | the official runtime walks `protoreflect`/`protowire` per field | thin generated structs over one cgo crossing per op (`runtime/`: struct offsets as layout tables); the models the cshim cannot drive stay on the pure-Go table engine (`pbench/dyngo/codec/`), which also holds the descriptor-set value tree ([issue 41](https://github.com/jinganix/pbwire/issues/41)) | 1.73x / 1.47x (vs protobuf-go; thin model, struct in and struct out) |
+| Go | the official runtime walks `protoreflect`/`protowire` per field | thin generated structs over the pure-Go table engine (`runtime/`), which also holds the descriptor-set value tree | 1.49x / 1.38x (vs protobuf-go; thin model, struct in and struct out, xlarge tier) |
 | Erlang | gpb is pure Erlang; gpb NIF binds libprotobuf per message | NIF over the core, consuming gpb's own definitions — no second generator | 3.91x / 1.60x (vs gpb) |
 | Swift | Apple moved to Swift while the binding set still spoke ObjC; `swift-protobuf` generates a struct per message | SwiftPM package: FFI host over the C ABI (`FileDescriptorSet` at run time, static `libpbwire.a`, no wire code) | 4.43x / 2.84x (vs swift-protobuf) |
 | Scala | data teams write Scala against Java protobuf | same Java runtime as Kotlin plus an idiomatic DSL — one runtime, three JVM languages | 1.21x / 1.25x (vs ScalaPB) |
@@ -178,17 +133,13 @@ throughput against the official runtime, copied from
 | Clojure | protobuf-java interop per message, maps materialized per field | mutable-message fast path over the Java runtime (maps stay for convenience) | 1.16x / 1.77x (vs protobuf-java; mutable-message fast path; 0.75x encode at 136 B) |
 | Julia | `ProtoBuf.jl` is pure Julia, per-field interpreter overhead | `dlopen` + `ccall` FFI host (`FileDescriptorSet` at run time, `Dict` boundary) | 135.6x / 1.00x (vs ProtoBuf.jl; baseline encode collapses with size) |
 | R | `RProtoBuf` binds the C++ runtime per message | C extension over the core (`.Call`, named lists in/out, statically linked) | 61.5x / 66.6x (vs RProtoBuf) |
-| Lua | game servers hand tables to `pbc`/`lua-protobuf`, each with its own schema story | C module over the core: tables convert through the schema's arena, a builder tree is the write fast path | 1.08x / 1.33x (vs lua-protobuf; 7.65x via builder encode — data already in pbwire) |
+| Lua | game servers hand tables to `pbc`/`lua-protobuf`, each with its own schema story | C module over the core: tables convert through the schema's arena, builders encode hot | 1.08x / 1.33x (vs lua-protobuf; 7.65x via builder encode) |
 
 Read the ratios as "what this binding buys its host language", not as a
 cross-language speed ranking: the payload and the boundary cost differ per row,
 which is why the at-a-glance table in
 [BENCHMARKS.md](../BENCHMARKS.md#at-a-glance-every-binding-one-tier) puts them
 side by side with the absolute MB/s.
-
-Header ratios quote the native-object row (host data in, host data out). The
-`tree` row further down is the same codec with the tree already built: a proxy
-or transcoder task, not an application's encode.
 
 ## Status
 
@@ -200,7 +151,7 @@ the three mental-model shifts plus one row per language.
 | C | `pbw_struct_schema_load(path)` on a `FileDescriptorSet`; `plugin/` additionally emits structs + layout tables for the compile-time side | ✅ | struct layout is codegen, the schema itself is loaded |
 | C++ | the C runtime and its generated headers, unchanged | ✅ | inherits C |
 | Python | `pbwire.Schema.from_file/load` on a `FileDescriptorSet` | ✅ | the extension is compiled but the schema is always loaded; `decode()` returns a parsed message, `to_dict()`/`encode(dict)` are the dict path; binary + JSON + text testee |
-| Go | `protoc-gen-pbwire` generated models (layout tables, no descriptor at run time); the `pbench` Go engine adds `codec.Load` on a `FileDescriptorSet` for a value tree | ✅ | struct path needs no schema; both descriptor-set engines (the C core with the hot-swap registry and the pure-Go one) are `pbench` candidates until [issue 41](https://github.com/jinganix/pbwire/issues/41) closes |
+| Go | `protoc-gen-pbwire` generated models (field tables, no descriptor at run time); the `pbench` Go engine adds `codec.Load` on a `FileDescriptorSet` for a value tree | ✅ | struct path needs no schema; the dynamic C core stays a `pbench` candidate |
 | Erlang | `gpb_compile` → records + `get_msg_defs/0` → `pbwire:load_cache/1` | ✅ | gpb is the plugin, epb needs no descriptor path |
 | Lua | `pbwire.loadfile` on a `FileDescriptorSet` | ✅ | tables in, tables out; arena per schema, builders anchor it |
 | Java | `FileDescriptorSet` at run time, own pure-Java reader (JDK 17+) | ✅ | no JNI, no C glue, no generator, no native library; binary + JSON + text conformance testee |
@@ -256,7 +207,7 @@ gives the ceiling and the workaround.
 | Node | single-threaded: one reusable encode `pbw_ctx` per message type (freed with the type) + decoded message = JS `Buffer` + slice array | types x largest encoding each + retained messages | drop decoded messages; a type's buffer stays at its largest encoding |
 | Objective-C | `PBWContext` (with `retainCap`) backs `-decode:withContext:error:`, `PBWPool` hands contexts out | the context's capped buffer | an arena decode invalidates the previous tree; a pool `release` resets it |
 | Dart / Rust / C# / Swift / Zig / F# / Julia | plain `pbw_encode`/`pbw_decode` per call (`NSData` takes the malloc'd buffer over with no copy; Julia holds input bytes via finalizers) | none, except retained Julia messages | nothing to tune; Julia messages need a `close()` |
-| Go | one cached C codec per message type (`sync.OnceValue`: layout plan, decode arena, per-field accumulators); the Go string arena is per `Unmarshal` call and lives as long as the decoded message | the largest message that type has decoded | no `Close` on the model: the plan and its scratch buffers live for the process, so per-type memory settles at the largest decode; encode and decode of one type share that scratch under one mutex, so they run one at a time |
+| Go | no per-type retained state: each `Marshal` allocates its own buffer (sized by the table's shared atomic size hint) and each `Unmarshal` its own string arena | one buffer + one arena per call | nothing to tune |
 | PHP | built trees live in one `pbw_ctx` each (freed with the message, never decoded into so always mutable); decoded trees are single-malloc arenas | retained messages | drop the message; nested views hold the parent, `close()` frees either kind |
 | Erlang | one `pbw_ctx` per scheduler + a geometrically grown encode buffer, capped by `set_opts([{retain_cap, Bytes}])` (1 MiB default) | schedulers x capped buffer each | bounded by the scheduler count; lower the cap when messages vary wildly in size |
 | Lua | one `pbw_ctx` per schema (arena + encode buffer, reset per call; builders own plain trees); `new_context`/`new_pool` expose the arena API | largest message handled, plus the context's `retain_cap` | nothing to tune; idle schemas keep up to the retain cap; a context borrow dies with the next reset |

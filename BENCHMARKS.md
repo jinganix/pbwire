@@ -67,20 +67,10 @@ for a case, and `scripts/bench-record.py` accepts the shorter header.
 `make bench-c` adds one more block per case
 (`pbwire-c1`: the C binding's one-shot API, which compiles the layout on every
 call) after the standard four rows; only the standard block is aggregated
-below.
-
-Rows are named by the mechanism they time: `tree` (the data already lives in the
-binding's own message object), `shim` (C reads the host's memory through a
-layout table, one crossing, no intermediate tree) and `core` (a host-language
-port of the core, native object in and out). A `tree` row excludes the copy
-between the host's native objects and the binding's tree; the `core` row times
-that copy. `n/a` means the arm is not built for that binding; the reason is in
-`bindings/<lang>/pbench/README.md`.
-
-The Python harness names its ops by the task as well as the representation
-(`encode(data)`, `decode(bytes)`, `to_dict(bytes)`, `encode(parsed)`): a
-dict-based binding has two representations, and the row name says which one the
-timer covers.
+below. Go rows additionally print `allocs/op` and `B/op`, recorded into the
+JSON and rendered when present. The Python harness names its ops by the task instead (`encode(data)`,
+`decode(bytes)`, `to_dict(bytes)`, `encode(parsed)`), because a dict-based
+binding has two representations and only comparing like with like is fair.
 
 ## Test environment
 
@@ -171,7 +161,7 @@ own README. Dart ran once `dart pub global activate protoc_plugin` provided
 | Erlang/OTP NIF | `make benchmarks` in `bindings/erlang/benchmarks` | gpb (pure Erlang), with gpb NIF (libprotobuf) as the second baseline, same `matrix3.proto` | all 4 | 3.91x / 1.60x vs best-of-two ✅ |
 | Python (CPython ext) | `make python-bench` (`bindings/python/benchmarks/bench.py`) | `google.protobuf` (upb C extension) on the same `matrix3.proto` | all 4 | 6.87x ✅ / 1.19x ✅ |
 | C++ | same engine as C (`bindings/cpp` mirrors the C structs; `make bench-c` is the harness) | `protoc` C++ generated from the same `matrix3.proto` | all 4 | 1.33x ✅ / 2.00x ✅ |
-| Go (thin model, cshim runtime) | `make go-bench` (`bindings/go/benchmarks`) | `protobuf-go` generated code from the same `matrix3.proto` | all 4 | 1.73x ✅ / 1.47x ✅ |
+| Go (thin model, pure-Go engine) | `make go-bench` (`bindings/go/benchmarks`) | `protobuf-go` generated code from the same `matrix3.proto` | all 4 | 1.48x ✅ / 1.13x ✅ (xlarge; full tiers + allocs in section) |
 | Java (pure-Java codec) | `make java-bench` (`bindings/java/benchmarks`) | `protobuf-java` generated code from the same `matrix3.proto` | all 4 | 1.13x ✅ / 1.95x ✅ (0.77x at 136 B) |
 | Node (N-API addon) | `make node-bench` (`bindings/node/benchmarks`) | [protobufjs](https://www.npmjs.com/package/protobufjs) (fastest) + `google-protobuf` (jspb) from the same `matrix3.proto` | all 4 | 3.18x ✅ / 3.17x ✅ |
 | Ruby (C extension) | `make ruby-bench` (`bindings/ruby/benchmarks`) | the `google-protobuf` gem (C extension) | all 4 | 1.34x ✅ / 1.67x ✅ |
@@ -181,7 +171,7 @@ own README. Dart ran once `dart pub global activate protoc_plugin` provided
 | Dart (`dart:ffi`) | `make dart-bench` (`bindings/dart/benchmarks`) | the `protobuf` Dart package + generated code | all 4 | 13.69x ✅ / 4.38x ✅ |
 | Rust (static link) | `make rust-bench` (`bindings/rust/benchmarks`) | prost (fastest) + rust-protobuf 3.x generated code | all 4 | 1.13x ✅ / 1.86x ✅ |
 | C# (P/Invoke) | `make csharp-bench` (`bindings/csharp/benchmarks`) | Google.Protobuf C# generated code (fastest) + protobuf-net | all 4 | 3.15x ✅ / 1.48x ✅ |
-| Lua (C module, tables) | `make lua-bench` (`bindings/lua/benchmarks`) | `lua-protobuf` 0.6.0 | all 4 | 1.09x ✅ / 1.42x ✅ (8.93x via builder encode — data already in pbwire) |
+| Lua (C module, tables) | `make lua-bench` (`bindings/lua/benchmarks`) | `lua-protobuf` 0.6.0 | all 4 | 1.09x ✅ / 1.42x ✅ (8.93x via builder encode) |
 | Swift (SwiftPM, static link) | `make swift-bench` (`bindings/swift/benchmarks`) | `apple/swift-protobuf` 1.39.0 generated code from the same `matrix3.proto` | all 4 | 5.43x ✅ / 2.57x ✅ |
 | Scala (Java runtime + DSL) | `make scala-bench` (`bindings/scala/benchmarks`) | ScalaPB 0.11.18 generated code from the same `matrix3.proto` | all 4 | 1.19x ✅ / 1.21x ✅ (0.98x at 174 B decode) |
 | Elixir (NIF over the shared core) | `make elixir-bench` (`bindings/elixir/benchmarks`) | `elixir-protobuf` 0.17.1 structs from the same `matrix3.proto` | all 4 | 2.56x ✅ / 1.90x ✅ |
@@ -195,38 +185,18 @@ own README. Dart ran once `dart pub global activate protoc_plugin` provided
 the largest case the binding runs. Where a binding has several baselines the
 headline names the fastest: protobufjs over jspb, the PHP C extension over
 pure PHP, prost over rust-protobuf, Google.Protobuf over protobuf-net, the
-faster of gpb / gpb NIF per op. Every binding publishes the rows its
-mechanisms allow, and every row name says what it times. Every arm times a
-native object in and out on the same payload, never a tree built before the
-timer.
-
-| binding | verdict |
-|---|---|
-| C | two mechanisms; the third row is labelled `core (= shipped)` |
-| C++ | two mechanisms; the third row is labelled `core (= shipped)` |
-| Embedded | two mechanisms; the third row is the shipped core |
-| Objective-C | two mechanisms |
-| Erlang | two mechanisms; a second pure-BEAM codec would measure our code against gpb, not a decision |
-| Elixir | two mechanisms; `elixir-protobuf` is that baseline |
-| Java | third arm exists; only the native-object row is missing |
-| Kotlin | third arm exists; only the native-object row is missing |
-| Scala | third arm exists; only the native-object row is missing |
-| Clojure | third arm exists; only the native-object row is missing |
-| Go | all three exist; row naming only |
-| C# | three |
-| F# | three, no separate F# port |
-| Node | three |
-| Dart | three |
-| Julia | three |
-| Rust | three |
-| Swift | three |
-| Zig | three |
-| Python | three |
-| PHP | deferred: overlaps the official runtime's pure-PHP implementation already in the baseline |
-| Ruby | deferred: no pure-Ruby precedent, no native-less deployment |
-| R | deferred: interpreted per-field loops are orders of magnitude off |
-
-Every binding with a
+faster of gpb / gpb NIF per op. The intended comparison is the user-visible
+task on both sides: `encode` is host data to wire bytes and `decode` is wire
+bytes to an in-memory message. R, Lua, Python, Elixir and Erlang meet that
+bar because their decode materializes native values (RProtoBuf's bare
+`read()` is lazily parsed and hands back no R data — see its section). Go and the
+other handle-based bindings (Node, Ruby, C#, Rust, Swift, Objective-C, Zig,
+F#, Dart, PHP, Julia and the JVM four) publish rows for the dynamic handle
+API instead, which leaves the copy between the handle and the host's native
+objects outside the timer. Go already prints the thin-model row (struct in,
+struct out; its dynamic candidates compete separately in `pbench/`); the rest
+are being brought in line, tracked in
+[issue 41](https://github.com/jinganix/pbwire/issues/41). Every binding with a
 wired baseline is ahead of it on the xlarge encode column (Java 1.09x, Rust
 1.04x, Elixir 2.56x: the three that used to sit under 1.0x are above the line
 in the 2026-11-14 run — the same tree in the Linux container still shows Java
@@ -271,7 +241,7 @@ payload, the boundary cost and the baseline all differ.
 | core dynamic (`pbw_ctx`) | direct call | 85933 B | 1644.2 (1.56x ✅) | 765.9 (1.80x ✅) |
 | core dynamic (plain API) | direct call | 85933 B | 1593.2 (1.51x ✅) | 771.3 (1.81x ✅) |
 | C structs | direct call, layout tables | 74913 B | 1132.2 (1.29x ✅) | 735.7 (2.02x ✅) |
-| Go | cshim runtime (one cgo call per op) | 74913 B | 992.9 (1.73x ✅) | 461.6 (1.47x ✅) |
+| Go | pure-Go table engine, no cgo | 74913 B | 821.4 (1.49x ✅) | 428.4 (1.37x ✅) |
 | Python (dict path) | CPython extension | 74913 B | 562.3 (6.87x ✅) | 891.6 (1.19x ✅) |
 | Java | pure-Java codec, no native code | 74913 B | 984.2 (1.13x ✅) | 747.4 (1.95x ✅) |
 | Kotlin | the pure-Java codec + DSL | 74913 B | 964.8 (1.09x ✅) | 742.1 (1.68x ✅) |
@@ -729,11 +699,7 @@ only — absolute numbers move between machines.
 
 ![C structs vs protoc generated (same matrix3.proto) — MB/s by tier](docs/charts/bench-c-structs-vs-protoc-generated-same-matrix3-proto.svg)
 
-The `pbwire-c-shim` rows are the struct codec reading C memory in place. The
-dynamic `pbw_ctx` block `make bench` prints for the same message is the
-binding's `pbwire-c-tree` arm, and `pbwire-c1` stays the one-shot probe.
-
-| payload | op | pbwire-c-shim (MB/s, x gen) | protoc gen (MB/s) |
+| payload | op | pbwire-c (MB/s, x gen) | protoc gen (MB/s) |
 |---|---|---|---|
 | 136 B | encode | 1766.1 (1.29x ✅) | 1371.8 |
 | 136 B | decode | 1193.5 (1.44x ✅) | 827.3 |
@@ -778,40 +744,62 @@ output so that trade-off is visible rather than hidden.
 
 ### Go (thin model vs protobuf-go)
 
-The shipped runtime is [`bindings/go/runtime/`](bindings/go/runtime/): the
-Erlang-style C codec reading Go structs through generated layout tables, one
-cgo crossing per op. `make go-bench` (`bindings/go/benchmarks`, build-tagged
+![Go (thin model vs protobuf-go) — MB/s by tier](docs/charts/bench-go-thin-model-vs-protobuf-go.svg)
+
+The shipped engine is the pure-Go table codec in
+[`bindings/go/runtime/`](bindings/go/runtime/): no cgo,
+no layout tables. `make go-bench` (`bindings/go/benchmarks`, build-tagged
 so `go test ./...` stays fast) times the thin generated model —
-`Marshal()`/`Unmarshal()` over that runtime, native struct in and out —
+`Marshal()`/`Unmarshal()` over that engine, native struct in and out —
 against `protobuf-go` generated code from the same `matrix3.proto` on all
 four tiers. The two generated packages are the committed ones under
 `bindings/go/tests`, so `bench.sh` needs Go only: no protoc, no C toolchain,
 no descriptor.
 
-The rows below compare the same user-visible task, struct in and struct out,
-gated on byte-identical output and a field-by-field decode before timing. Apple
-M4 Pro, one process times both arms:
+The rows below time the same user-visible task, struct in and struct
+out, gated on byte-identical output and a field-by-field decode before
+timing; the `*-par` rows run the same ops across `GOMAXPROCS` goroutines.
+Apple M4 Pro, same process times both sides:
 
-| payload | op | pbwire-go (MB/s, x protobuf-go) | protobuf-go (MB/s) |
-|---|---|---|---|
-| 136 B | encode | 870.0 (1.35x ✅) | 646.8 |
-| 136 B | decode | 719.8 (1.35x ✅) | 534.2 |
-| 174 B | encode | 925.1 (1.46x ✅) | 632.1 |
-| 174 B | decode | 591.0 (1.27x ✅) | 465.8 |
-| 2469 B | encode | 959.6 (1.83x ✅) | 525.4 |
-| 2469 B | decode | 480.9 (1.53x ✅) | 314.9 |
-| 74913 B | encode | 992.9 (1.73x ✅) | 574.7 |
-| 74913 B | decode | 461.6 (1.47x ✅) | 314.3 |
+| payload | op | pbwire-go (MB/s, x protobuf-go) | protobuf-go (MB/s) | allocs/op (pbwire / protobuf-go) | B/op (pbwire / protobuf-go) |
+|---|---|---|---|---|---|
+| 136 B | encode | 868.0 (1.31x ✅) | 662.6 | 1 / 1 | 256 / 144 |
+| 136 B | decode | 592.8 (1.04x ✅) | 570.8 | 5 / 7 | 444 / 384 |
+| 174 B | encode | 918.8 (1.44x ✅) | 639.5 | 1 / 1 | 256 / 176 |
+| 174 B | decode | 490.1 (1.02x ✅) | 481.4 | 10 / 14 | 544 / 488 |
+| 2469 B | encode | 867.5 (1.59x ✅) | 546.6 | 1 / 1 | 2688 / 2688 |
+| 2469 B | decode | 352.4 (1.16x ✅) | 303.7 | 133 / 325 | 13288 / 15064 |
+| 74913 B | encode | 834.9 (1.48x ✅) | 562.8 | 1 / 1 | 81920 / 81920 |
+| 74913 B | decode | 336.6 (1.13x ✅) | 298.7 | 3057 / 9037 | 426957 / 472238 |
+| 136 B | encode-par | 1051.4 (0.50x ❌) | 2116.5 | 1 / 1 | 256 / 144 |
+| 136 B | decode-par | 1046.2 (0.90x ❌) | 1158.4 | 5 / 7 | 444 / 384 |
+| 174 B | encode-par | 1317.7 (0.58x ❌) | 2288.7 | 1 / 1 | 256 / 176 |
+| 174 B | decode-par | 935.3 (0.89x ❌) | 1052.1 | 10 / 14 | 544 / 488 |
+| 2469 B | encode-par | 1744.6 (0.75x ❌) | 2333.5 | 1 / 1 | 2688 / 2688 |
+| 2469 B | decode-par | 469.8 (1.02x ✅) | 461.3 | 133 / 325 | 13288 / 15064 |
+| 74913 B | encode-par | 2572.3 (0.67x ❌) | 3841.5 | 1 / 1 | 81920 / 81920 |
+| 74913 B | decode-par | 684.5 (1.34x ✅) | 512.7 | 3057 / 9037 | 426954 / 472236 |
 
-Every cell is ahead: encode writes straight from struct memory through one
-cgo call, decode fills the struct plus a single string arena with no
-per-field dispatch and no tree. The three dynamic arms behind the thin
-model were compared under [`bindings/go/pbench/`](bindings/go/pbench/)
-(same tiers, interleaved, native struct in and out, converter-only glue):
-the C core at 0.05-0.10x encode and 0.11-0.13x decode, the pure-Go direct
-path at 1.42-1.76x encode and 0.88-1.13x decode, and the cshim runtime at
-1.35-1.80x encode and 1.21-1.96x decode. The per-field copy into any tree
-is what separates them.
+Encode is ahead on every tier: the fast path reads scalars, strings and
+bytes straight from struct memory with no getter calls and no tree. Decode stores plain integer-width scalars straight into struct memory
+through the same offset columns (no pointers cross, so no write barrier is
+skipped); strings, bytes, slices, optionals and submessages stay on
+closures by design. Encode leads 1.31x–1.59x; decode leads every tier
+(1.02x–1.16x). The parallel rows show what a server sees, each goroutine on
+its own message: protobuf-go scales better with core count on encode
+(0.50x–0.75x) and on the two small decode tiers, while pbwire takes large
+decode-par (1.02x) and xlarge decode-par (1.34x). The host was loaded
+(load average above core count), so the par rows carry scheduler noise —
+published as measured, not as a scaling claim. The
+pbench gate pins the semantic edge the table cannot show: invalid UTF-8 in
+a proto3 string fails on every path, and unknown fields are dropped by the
+struct paths exactly as documented (`TestGateSemantics`). The two
+dynamic arms behind the thin model were compared under
+[`bindings/go/pbench/`](bindings/go/pbench/) (same tiers, interleaved,
+native struct in and out, converter-only glue): the C core at 0.05-0.10x
+encode and 0.11-0.13x decode, the pure-Go direct path at 1.42-1.76x encode
+and 0.88-1.13x decode. The per-field copy into any tree is what separates
+them.
 
 ### Python vs `google.protobuf` (upb)
 
@@ -836,22 +824,22 @@ is what separates them.
 | 74913 B | to_dict(bytes) | 156.0 (3.69x ✅) | 42.3 |
 | 74913 B | encode(parsed) | 90929.7 (63.89x ✅) | 1423.3 |
 
-Rows are the same user-visible task in both arms:
+Rows are the same user-visible task on both sides:
 
 - **encode(data)** starts from the same dict. upb has no dict entry point, so
   its side is filling a generated message field by field and then serializing;
   that population is most of the ~916 µs on the 75 KB tier. pbwire walks the
   dict once and writes the wire directly.
-- **decode(bytes)** ends with an in-memory message. Both arms parse lazily:
+- **decode(bytes)** ends with an in-memory message. Both sides parse lazily:
   pbwire records one slice per wire field (and validates the whole payload),
   upb parses into its arena.
-- **to_dict(bytes)** ends with plain Python data on either side: `decode(bytes)`
+- **to_dict(bytes)** ends with plain Python data on both sides: `decode(bytes)`
   plus `to_dict()`, against `FromString` plus reading every field through
   `ListFields()`. This is the `malloc`-bound row — 3000 sub-messages mean 3000
   dicts, 12000 ints and 3000 strings on either side, and nobody escapes it.
   (`json_format.MessageToDict` is ~4x slower than reading the fields, so the
   harness does not use it.)
-- **encode(parsed)** starts from an in-memory message in both arms. A pbwire
+- **encode(parsed)** starts from an in-memory message on both sides. A pbwire
   `Message` keeps the bytes it was parsed from and `encode()` hands them back,
   so the round trip is byte-exact and preserves unknown fields; upb re-encodes
   every field from its own structs.
@@ -1035,10 +1023,6 @@ moves with host load; above it the C core's pack-aware writer pulls ahead.
 #### Objective-C vs the `protobuf` ObjC runtime
 
 ![Objective-C vs the protobuf ObjC runtime — MB/s by tier](docs/charts/bench-objective-c-vs-the-protobuf-objc-runtime.svg)
-
-The `pbwire-objc` rows are the `tree` arm (`PBWMessage` handle). The direct
-struct path is the same C code, measured by `make bench-c` (the `shim` rows);
-there is no third mechanism to compare here.
 
 | payload | op | pbwire-objc (MB/s, x protobuf-objc) | protobuf-objc (MB/s) |
 |---|---|---|---|
@@ -1261,10 +1245,7 @@ table hash order, so raw baseline bytes are not comparable.
 `matrix3.proto`, all four tiers, best of three samples per op. Same payload / op /
 MB/s layout as every other table: the `pbwire-erlang` column carries the ratio
 against the faster of gpb / gpb NIF per op (gpb is the byte reference either
-way), the other columns are the two baselines side by side. The `pbwire-erlang`
-rows are the `tree` arm (NIF handle); gpb, the pure-Erlang codec, **is** the
-`core` comparison, so a second BEAM port would measure our code against the
-competitor rather than a decision.
+way), the other columns are the two baselines side by side.
 
 | payload | op | pbwire-erlang (MB/s, x best) | gpb (MB/s) | gpb-nif (MB/s) |
 |---|---|---|---|---|
@@ -1337,8 +1318,7 @@ before timing, like every other row.
 
 Same class as Erlang: the BEAM binding reuses the published `:pbwire` Hex
 NIF (the same C core as `bindings/erlang`) and owns only the struct↔tuple
-translation; `elixir-protobuf` is the schema plugin, like gpb is for Erlang, and
-its pure-Elixir rows **are** the `core` comparison for this binding.
+translation; `elixir-protobuf` is the schema plugin, like gpb is for Erlang.
 Every encode is byte-identical to `Protobuf.encode/1` before timing. Known
 deliberate divergences from the oracle: NaN bit identity, unknown-field drop
 (the NIF tuple form has no storage), raise on missing `required`.
@@ -1499,7 +1479,7 @@ once, `encode` per send, 1403.5 MB/s on the xlarge tier) runs at the core's
 speed; the table above times the one-shot path both sides. Encode is no
 contest at any tier: setting 3000 nested messages field by field through S4
 dispatch costs RProtoBuf ~27 ms where the C core walks the list once. Decode
-is compared as the same user-visible task: `RProtoBuf::read` parses in C++ and materializes
+is compared like for like: `RProtoBuf::read` parses in C++ and materializes
 fields lazily on `$`, while `pbwire_decode` builds the full named-list tree
 eagerly, so the baseline side reads every field into the same plain-list shape
 (the table's `decode` row). A bare `read()` alone is a few times faster than
@@ -1541,7 +1521,7 @@ make embedded-bench  # embedded facade vs nanopb (host throughput, byte check)
 make embedded-size   # embedded facade vs nanopb (Cortex-M flash)
 make python-bench # Python extension vs google.protobuf (needs protobuf + protoc)
 make erlang-bench # Erlang binding: epb, gpb, gpb NIF on matrix3.proto (needs OTP + gpb)
-make go-bench     # Go thin model (cshim runtime) vs protobuf-go generated code (needs Go only)
+make go-bench     # Go thin model (pure-Go engine) vs protobuf-go generated code (needs Go only)
 make java-bench   # pure-Java codec vs protobuf-java (fetches the jar from Maven Central once)
 make node-bench   # N-API addon vs google-protobuf/jspb (npm installs into the harness)
 make ruby-bench   # Ruby C extension vs the google-protobuf gem (`RUBY=...` picks the interpreter)
