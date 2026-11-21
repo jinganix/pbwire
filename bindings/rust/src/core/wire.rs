@@ -595,7 +595,8 @@ mod tests {
             w.push(0x41);
         }
         patch_len(&mut w, lp);
-        assert_eq!(w.len(), 2 + 2 + 200);
+        // 1 tag byte + 2 length bytes + 200 body bytes.
+        assert_eq!(w.len(), 1 + 2 + 200);
         assert_eq!(&w[1..3], &[0xc8, 0x01]);
         assert_eq!(w[3], 0x41);
     }
