@@ -2,6 +2,14 @@
  * (the fastest widely used Rust runtime) on the same matrix3.proto and the
  * four standard tiers from BENCHMARKS.md.
  *
+ * The tree row times the Go-parity full task: a fresh native Message per
+ * iteration (one set_* per field), encode_to into the reused buffer, drop;
+ * decode, one get_* per field into a sink the optimizer cannot drop, drop.
+ * Message frees itself on drop, so allocation and free both sit inside the
+ * timer. The proxy row keeps the old prebuilt shape (a held handle's
+ * encode_to, one-shot decode-and-drop with no materialization), relabelled
+ * not re-measured, never the headline.
+ *
  * The same payload as the C/Go/Java rows: every scalar kind, the nested
  * message, the two proto3 optionals, and the repeated fields scaled x0 / x1 /
  * x100 / x3000, which lands the tiers on 136 / 174 / 2469 / 74913 bytes. Both
@@ -11,8 +19,9 @@
  * steady state allocates nothing anywhere and the codec is timed, not the
  * allocator. A one-shot pbwire encode() would pay the core malloc plus a
  * 75 KB copy that neither baseline pays; encode_to() exists so hot loops do
- * not. Decode stays one-shot on every side (parse_from_bytes / decode /
- * Type::decode, each with its own arena).
+ * not. Baseline decode stays one-shot on every side (parse_from_bytes /
+ * decode / Type::decode, each with its own arena); the tree row instead
+ * decodes, reads every field back out, then drops the message.
  *
  *   ./bench.sh          generate, build, run
  */
@@ -38,7 +47,7 @@ use std::time::Instant;
 
 use matrix3::{Color3, Inner3, Scalars3};
 use models::{Inner3Flat, Scalars3Flat};
-use pbwire::{FlatImage, Message, Schema, Type};
+use pbwire::{Field, FlatImage, Message, Schema, Type};
 use prost::Message as _;
 use protobuf::{EnumOrUnknown, Message as _};
 
@@ -160,6 +169,50 @@ fn run_case(schema: &Schema, ty: &Type<'_>, inner_ty: &Type<'_>, core: &core_arm
         return;
     }
 
+    // Go-parity gate on the tree full task: a fresh native build encodes to
+    // the reference bytes, a fresh decode exposes every gate-checked field,
+    // and the decoded tree re-encodes byte-exactly. The timer consumes the
+    // same field list (TreeFields), so gate and timer agree by construction.
+    let fields = TreeFields::resolve(ty, inner_ty);
+    let fresh = fill_pbwire(ty, inner_ty, n);
+    match fresh.encode() {
+        Ok(bytes) if bytes == reference => {}
+        Ok(bytes) => {
+            fail(
+                label,
+                &format!(
+                    "fresh tree wrote {} bytes, expected {}",
+                    bytes.len(),
+                    reference.len()
+                ),
+            );
+            return;
+        }
+        Err(e) => {
+            fail(label, &format!("fresh tree encode failed: {e}"));
+            return;
+        }
+    }
+    drop(fresh);
+    match ty.decode(&reference) {
+        Ok(back) => {
+            if !tree_fields_ok(&back, &fields, n) {
+                fail(label, "fresh tree decode field compare differs");
+                return;
+            }
+            if back.encode().expect("encode") != reference {
+                fail(label, "re-encode of the decoded tree differs");
+                return;
+            }
+            println!("OK   {label} tree full-task parity, x{n}");
+            drop(back);
+        }
+        Err(e) => {
+            fail(label, &format!("fresh tree decode failed: {e}"));
+            return;
+        }
+    }
+
     let official = fill_official(n);
     let prost_msg = fill_prost(n);
     if prost_msg.encode_to_vec() != reference {
@@ -171,6 +224,8 @@ fn run_case(schema: &Schema, ty: &Type<'_>, inner_ty: &Type<'_>, core: &core_arm
     let mut official_buf = Vec::new();
     let mut prost_buf = Vec::new();
     // Tier line shows the reference op's count; slower ops keep the floor.
+    // (The fast proxy ops calibrate from the same floor, so they never
+    // inflate the tree rows.)
     let tier_count = calibrate(
         &mut || {
             pbwire_buf.clear();
@@ -181,11 +236,31 @@ fn run_case(schema: &Schema, ty: &Type<'_>, inner_ty: &Type<'_>, core: &core_arm
         },
         iterations,
     );
-    let encode = measure(iterations, || {
+    // The tree full task (Go parity): a fresh native build per iteration,
+    // encoded, dropped; a fresh decode per iteration, read back per field,
+    // dropped. The encode buffer is reused exactly as the header says;
+    // everything else is allocated and freed (dropped) inside the timer.
+    let tree_encode = measure(iterations, || {
+        pbwire_buf.clear();
+        let m = fill_pbwire(ty, inner_ty, n);
+        let len = m.encode_to(&mut pbwire_buf).expect("encode").len();
+        drop(m);
+        len
+    });
+    let tree_decode = measure(iterations, || {
+        let back = ty.decode(&reference).expect("decode");
+        let sink = consume_tree(&back, &fields, n);
+        drop(back);
+        sink
+    });
+    // The proxy task: the old prebuilt shape, relabelled not re-measured as
+    // a new task. A held handle re-encoded, decoded-and-dropped with no
+    // materialization.
+    let proxy_encode = measure(iterations, || {
         pbwire_buf.clear();
         message.encode_to(&mut pbwire_buf).expect("encode").len()
     });
-    let decode = measure(iterations, || ty.decode(&reference).expect("decode"));
+    let proxy_decode = measure(iterations, || ty.decode(&reference).expect("decode"));
     let mut flat_image = FlatImage::<Scalars3Flat>::new();
     flat.decode_in_place(&reference, &mut flat_image)
         .expect("flat decode");
@@ -226,14 +301,16 @@ fn run_case(schema: &Schema, ty: &Type<'_>, inner_ty: &Type<'_>, core: &core_arm
         reference.len()
     );
     println!("  {:<12} {:<7} {:>12} {:>10}", "impl", "op", "ns/op", "MB/s");
-    row("pbwire-rust-tree", "encode", reference.len(), encode);
+    row("pbwire-rust-tree", "encode", reference.len(), tree_encode);
     row("pbwire-rust-shim", "encode", reference.len(), flat_encode);
     row("pbwire-rust-core", "encode", reference.len(), core_encode);
+    row("pbwire-rust-proxy", "encode", reference.len(), proxy_encode);
     row("protobuf-rust", "encode", reference.len(), official_encode);
     row("prost", "encode", reference.len(), prost_encode);
-    row("pbwire-rust-tree", "decode", reference.len(), decode);
+    row("pbwire-rust-tree", "decode", reference.len(), tree_decode);
     row("pbwire-rust-shim", "decode", reference.len(), flat_decode);
     row("pbwire-rust-core", "decode", reference.len(), core_decode);
+    row("pbwire-rust-proxy", "decode", reference.len(), proxy_decode);
     row("protobuf-rust", "decode", reference.len(), official_decode);
     row("prost", "decode", reference.len(), prost_decode);
     println!();
@@ -311,6 +388,222 @@ fn fill_prost(n: usize) -> prost_gen::Scalars3 {
         m.flags.push(i % 2 == 0);
     }
     m
+}
+
+/// Field handles resolved once per tier so the tree timer pays only the
+/// per-field get, never the name lookup. The gate (`tree_fields_ok`) and the
+/// timer (`consume_tree`) share this list by construction.
+struct TreeFields<'s> {
+    i32_f: Field<'s>,
+    i64_f: Field<'s>,
+    u32_f: Field<'s>,
+    u64_f: Field<'s>,
+    s32_f: Field<'s>,
+    s64_f: Field<'s>,
+    fx32_f: Field<'s>,
+    fx64_f: Field<'s>,
+    sfx32_f: Field<'s>,
+    sfx64_f: Field<'s>,
+    f32_f: Field<'s>,
+    f64_f: Field<'s>,
+    flag: Field<'s>,
+    str_f: Field<'s>,
+    color: Field<'s>,
+    inner: Field<'s>,
+    opt_i32: Field<'s>,
+    opt_str: Field<'s>,
+    nums: Field<'s>,
+    tags: Field<'s>,
+    inners: Field<'s>,
+    flags: Field<'s>,
+    inner_name: Field<'s>,
+    inner_value: Field<'s>,
+}
+
+impl<'s> TreeFields<'s> {
+    fn resolve<'t, 'a>(ty: &'t Type<'a>, inner_ty: &'t Type<'a>) -> TreeFields<'t> {
+        TreeFields {
+            i32_f: ty.field("i32").expect("field"),
+            i64_f: ty.field("i64").expect("field"),
+            u32_f: ty.field("u32").expect("field"),
+            u64_f: ty.field("u64").expect("field"),
+            s32_f: ty.field("s32").expect("field"),
+            s64_f: ty.field("s64").expect("field"),
+            fx32_f: ty.field("fx32").expect("field"),
+            fx64_f: ty.field("fx64").expect("field"),
+            sfx32_f: ty.field("sfx32").expect("field"),
+            sfx64_f: ty.field("sfx64").expect("field"),
+            f32_f: ty.field("f32").expect("field"),
+            f64_f: ty.field("f64").expect("field"),
+            flag: ty.field("flag").expect("field"),
+            str_f: ty.field("str").expect("field"),
+            color: ty.field("color").expect("field"),
+            inner: ty.field("inner").expect("field"),
+            opt_i32: ty.field("opt_i32").expect("field"),
+            opt_str: ty.field("opt_str").expect("field"),
+            nums: ty.field("nums").expect("field"),
+            tags: ty.field("tags").expect("field"),
+            inners: ty.field("inners").expect("field"),
+            flags: ty.field("flags").expect("field"),
+            inner_name: inner_ty.field("name").expect("field"),
+            inner_value: inner_ty.field("value").expect("field"),
+        }
+    }
+}
+
+/// Gate half of the shared field list: every field the fixture sets must read
+/// back exactly. Repeated fields contribute their length plus the first and
+/// last elements.
+fn tree_fields_ok(m: &Message, f: &TreeFields, n: usize) -> bool {
+    if m.get_i64(f.i32_f) != i32::MIN as i64
+        || m.get_i64(f.i64_f) != i64::MAX
+        || m.get_i64(f.u32_f) != u32::MAX as i64
+        || m.get_i64(f.u64_f) != -1
+        || m.get_i64(f.s32_f) != i32::MIN as i64
+        || m.get_i64(f.s64_f) != i64::MIN
+        || m.get_i64(f.fx32_f) != 0xdeadbeef
+        || m.get_i64(f.fx64_f) != 72623859790382856
+        || m.get_i64(f.sfx32_f) != i32::MIN as i64
+        || m.get_i64(f.sfx64_f) != i64::MIN
+        || m.get_i64(f.color) != Color3::COLOR3_GREEN as i64
+        || m.get_f32(f.f32_f) != f32::INFINITY
+        || m.get_f64(f.f64_f) != -123456.789
+        || !m.get_bool(f.flag)
+        || m.get_str(f.str_f) != Some("hello")
+        || !m.has(f.opt_i32)
+        || m.get_i64(f.opt_i32) != -7
+        || m.get_str(f.opt_str) != Some("opt")
+    {
+        return false;
+    }
+    match m.get_message(f.inner) {
+        Some(inner) => {
+            if inner.get_str(f.inner_name) != Some("kid")
+                || inner.get_i64(f.inner_value) != 42
+            {
+                return false;
+            }
+        }
+        None => return false,
+    }
+    match m.value(f.nums) {
+        Some(v) if v.len() == n => {
+            if n > 0
+                && (!v.at(0).map_or(false, |e| e.as_i64() == -3)
+                    || !v.at(n - 1).map_or(false, |e| e.as_i64() == n as i64 - 4))
+            {
+                return false;
+            }
+        }
+        None if n == 0 => {}
+        _ => return false,
+    }
+    match m.value(f.tags) {
+        Some(v) if v.len() == n => {
+            if n > 0 && !v.at(0).map_or(false, |e| e.as_str() == Some("tag")) {
+                return false;
+            }
+        }
+        None if n == 0 => {}
+        _ => return false,
+    }
+    match m.value(f.inners) {
+        Some(v) if v.len() == n => {
+            if n > 0 {
+                let first_ok = v.at(0).and_then(|e| e.as_message()).map_or(false, |im| {
+                    im.get_str(f.inner_name) == Some("grandkid")
+                        && im.get_i64(f.inner_value) == 1
+                });
+                let last_ok = v
+                    .at(n - 1)
+                    .and_then(|e| e.as_message())
+                    .map_or(false, |im| im.get_i64(f.inner_value) == n as i64);
+                if !first_ok || !last_ok {
+                    return false;
+                }
+            }
+        }
+        None if n == 0 => {}
+        _ => return false,
+    }
+    match m.value(f.flags) {
+        Some(v) if v.len() == n => {
+            if n > 0
+                && (!v.at(0).map_or(false, |e| e.as_bool())
+                    || !v
+                        .at(n - 1)
+                        .map_or(false, |e| e.as_bool() == ((n - 1) % 2 == 0)))
+            {
+                return false;
+            }
+        }
+        None if n == 0 => {}
+        _ => return false,
+    }
+    true
+}
+
+/// Timer half of the shared field list: folds every gate-checked field into
+/// a sink the optimizer cannot drop. Same reads as `tree_fields_ok`.
+fn consume_tree(m: &Message, f: &TreeFields, n: usize) -> u64 {
+    let mut acc: u64 = 0;
+    acc = acc.wrapping_add(m.get_i64(f.i32_f) as u64);
+    acc = acc.wrapping_add(m.get_i64(f.i64_f) as u64);
+    acc = acc.wrapping_add(m.get_i64(f.u32_f) as u64);
+    acc = acc.wrapping_add(m.get_i64(f.u64_f) as u64);
+    acc = acc.wrapping_add(m.get_i64(f.s32_f) as u64);
+    acc = acc.wrapping_add(m.get_i64(f.s64_f) as u64);
+    acc = acc.wrapping_add(m.get_i64(f.fx32_f) as u64);
+    acc = acc.wrapping_add(m.get_i64(f.fx64_f) as u64);
+    acc = acc.wrapping_add(m.get_i64(f.sfx32_f) as u64);
+    acc = acc.wrapping_add(m.get_i64(f.sfx64_f) as u64);
+    acc = acc.wrapping_add(m.get_i64(f.color) as u64);
+    acc = acc.wrapping_add(m.get_f32(f.f32_f).to_bits() as u64);
+    acc = acc.wrapping_add(m.get_f64(f.f64_f).to_bits());
+    acc ^= m.get_bool(f.flag) as u64;
+    acc ^= m.get_str(f.str_f).map_or(0, |s| s.len() as u64);
+    acc = acc.wrapping_add(m.get_i64(f.opt_i32) as u64);
+    acc ^= m.get_str(f.opt_str).map_or(0, |s| s.len() as u64);
+    if let Some(inner) = m.get_message(f.inner) {
+        acc ^= inner.get_str(f.inner_name).map_or(0, |s| s.len() as u64);
+        acc = acc.wrapping_add(inner.get_i64(f.inner_value) as u64);
+    }
+    if let Some(v) = m.value(f.nums) {
+        acc ^= v.len() as u64;
+        if n > 0 {
+            acc = acc.wrapping_add(v.at(0).map_or(0, |e| e.as_i64() as u64));
+            acc = acc.wrapping_add(v.at(n - 1).map_or(0, |e| e.as_i64() as u64));
+        }
+    }
+    if let Some(v) = m.value(f.tags) {
+        acc ^= v.len() as u64;
+        if n > 0 {
+            acc ^= v.at(0).map_or(0, |e| e.as_str().map_or(0, |s| s.len() as u64));
+        }
+    }
+    if let Some(v) = m.value(f.inners) {
+        acc ^= v.len() as u64;
+        if n > 0 {
+            acc = acc.wrapping_add(
+                v.at(0)
+                    .and_then(|e| e.as_message())
+                    .map_or(0, |im| im.get_i64(f.inner_value) as u64),
+            );
+            acc = acc.wrapping_add(
+                v.at(n - 1)
+                    .and_then(|e| e.as_message())
+                    .map_or(0, |im| im.get_i64(f.inner_value) as u64),
+            );
+        }
+    }
+    if let Some(v) = m.value(f.flags) {
+        acc ^= v.len() as u64;
+        if n > 0 {
+            acc ^= v.at(0).map_or(0, |e| e.as_bool() as u64);
+            acc ^= v.at(n - 1).map_or(0, |e| e.as_bool() as u64);
+        }
+    }
+    std::hint::black_box(acc)
 }
 
 fn fill_pbwire<'a>(ty: &'a Type<'a>, inner_ty: &'a Type<'a>, n: usize) -> Message<'a> {
