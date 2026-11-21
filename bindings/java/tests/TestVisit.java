@@ -29,6 +29,7 @@ public final class TestVisit {
             abort(sample);
             limits(sample);
             malformed(sample);
+            hardened(sample);
             empty(sample);
         }
 
@@ -188,6 +189,66 @@ public final class TestVisit {
         byte[] cut = Arrays.copyOf(strWire, strWire.length - 2);
         int at = sample.visit(cut, (field, number, wireType, value) -> 0);
         check(at == 0, "a truncated LEN payload fails at the field's start");
+    }
+
+    /** Fuzz-adjacent malformed wire: every case fails at the field's start. */
+    private static void hardened(MessageType sample) {
+        Visit.Visitor nop = (field, number, wireType, value) -> 0;
+
+        // Field number 0, one-byte and two-byte tag forms.
+        check(sample.visit(new byte[] {0x00}, nop) == 0,
+                "field 0 fails at offset 0");
+        check(sample.visit(new byte[] {(byte) 0x80, 0x00}, nop) == 0,
+                "a two-byte field-0 tag fails at offset 0");
+
+        // A top-level END_GROUP has no opener, even for a known field.
+        check(sample.visit(new byte[] {0x0C}, nop) == 0,
+                "a top-level end-group fails at offset 0");
+
+        // Truncated fixed32 at the start and after a valid field.
+        check(sample.visit(new byte[] {(byte) 0xD5, 0x05, 0x01, 0x02},
+                nop) == 0, "a truncated fixed32 fails at offset 0");
+        byte[] afterValid = {0x08, 0x01, (byte) 0xD5, 0x05, 0x01, 0x02};
+        check(sample.visit(afterValid, nop) == 2,
+                "a truncated fixed32 fails at its own start offset");
+
+        // Truncated fixed64 (only 3 of 8 bytes present).
+        check(sample.visit(new byte[] {(byte) 0xD1, 0x05, 0x01, 0x02, 0x03},
+                nop) == 0, "a truncated fixed64 fails at offset 0");
+
+        // Length prefix cut off mid-varint and before the body.
+        check(sample.visit(new byte[] {0x42, (byte) 0x80}, nop) == 0,
+                "a cut length prefix fails at offset 0");
+        check(sample.visit(new byte[] {0x42}, nop) == 0,
+                "a missing length fails at offset 0");
+
+        // A varint past the 10-byte limit: ten continuations plus a closer.
+        byte[] overlong = new byte[12];
+        overlong[0] = 0x08;
+        Arrays.fill(overlong, 1, 11, (byte) 0x80);
+        overlong[11] = 0x01;
+        check(sample.visit(overlong, nop) == 0,
+                "an 11-byte varint fails at offset 0");
+
+        // A group closed by another field's end tag, and one never closed.
+        // Field 20 opens (0xA3); field 21 closes (0xAC) or nothing does.
+        check(sample.visit(new byte[] {(byte) 0xA3, 0x08, 0x05, (byte) 0xAC},
+                nop) == 0, "a mismatched group end fails at offset 0");
+        check(sample.visit(new byte[] {(byte) 0xA3, 0x08, 0x05},
+                nop) == 0, "an unclosed group fails at offset 0");
+
+        // 300 nested groups exceed the 256 depth cap; the scan never recurses
+        // into payloads, so the callback must not fire before the cap trips.
+        byte[] deep = new byte[600];
+        Arrays.fill(deep, 0, 300, (byte) 0x0B);
+        Arrays.fill(deep, 300, 600, (byte) 0x0C);
+        final int[] calls = {0};
+        int at = sample.visit(deep, (field, number, wireType, value) -> {
+            calls[0]++;
+            return 0;
+        });
+        check(at == 0 && calls[0] == 0,
+                "300-deep nesting fails at the depth cap with no callback");
     }
 
     /** Empty input visits nothing and reports length 0. */
