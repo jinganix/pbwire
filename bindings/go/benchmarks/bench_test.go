@@ -1,17 +1,27 @@
 //go:build bench
 
-// Go binding benchmark against the official protobuf-go generated code on
-// the same matrix3.proto and the four standard tiers from BENCHMARKS.md.
+// One thin-model row plus one proxy row, against the official protobuf-go
+// generated code on the same matrix3.proto and the four standard tiers
+// from BENCHMARKS.md.
 //
 // The same payload as every other binding: every scalar kind, the nested
 // message, the two proto3 optionals, and the repeated fields scaled x0 / x1 /
 // x100 / x3000, which lands the tiers on 136 / 174 / 2469 / 74913 bytes.
 //
-// One pbwire row: the thin generated model an application actually holds
-// (Marshal()/Unmarshal() over the shared table engine, no cgo), struct in
-// and struct out, against protobuf-go on the same task. The dynamic C core
-// (prebuilt tree, unread handle) is not timed here: it answers a different
-// question and lives in pbench/dync; see
+// Two pbwire rows, named by the task they time:
+//
+//	pbwire-go-core   the thin generated model an application actually holds
+//	                   (Marshal()/Unmarshal() over the shared table engine,
+//	                   no cgo): struct in and struct out, the full task with
+//	                   no prebuilt tree anywhere.
+//	pbwire-go-proxy  the prebuilt task on the tree arm (held dynamic C
+//	                   tree, re-encode and decode-and-free), published,
+//	                   never the headline.
+//
+// The dynamic C core full task itself (struct -> C tree -> wire -> C tree ->
+// struct through ImportModel/ExportModel per op) is not re-timed here: it
+// already has that shape and is compared under pbench/dync; see
+// bindings/go/pbench/README.md and
 // github.com/jinganix/pbwire/issues/41.
 //
 // Both sides produce identical bytes and the model decode is compared field by
@@ -20,7 +30,9 @@
 //
 // The descriptor set is built by bench.sh (protoc) and never committed. The
 // two generated packages are the committed ones under tests/, so the
-// baseline does not need protoc-gen-go.
+// baseline does not need protoc-gen-go. The proxy row reaches the C core
+// over cgo, so this harness needs a C toolchain and the repo static library
+// (make go-bench builds it first); the thin model itself needs neither.
 //
 //	./bench.sh          build, run
 package benchmarks
@@ -30,11 +42,13 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"path/filepath"
 	"runtime"
 	"testing"
 	"time"
 
 	"google.golang.org/protobuf/proto"
+	"pbwire/pbench/dync/dynamic"
 	"pbwire/tests/gen/matrix3"
 	"pbwire/tests/gen_oracle/matrix3pb"
 )
@@ -160,8 +174,41 @@ func checkStruct(label string, got *matrix3.Scalars3, want *matrix3pb.Scalars3) 
 	return nil
 }
 
+// proxyTyp is the matrix3 message type behind the proxy row, resolved once
+// in TestMain from the pinned descriptor set. Each tier holds one tree of
+// this type before its timer starts; every per-iteration op (re-encode the
+// held tree, decode a fresh tree and free it) goes through shipped public
+// API only (dynamic.Load, ImportModel, Encode, Decode, Close).
+var proxyTyp *dynamic.MessageType
+
+// loadProxyType opens the pinned descriptor set and resolves
+// structtest.Scalars3, mirroring the tree arm's own loader (pbench/dync)
+// without duplicating its conversion path: the bench holds trees, the arm
+// owns the full task.
+func loadProxyType() (*dynamic.Schema, *dynamic.MessageType, error) {
+	_, thisFile, _, _ := runtime.Caller(0)
+	raw, err := os.ReadFile(filepath.Join(filepath.Dir(thisFile), "..", "pbench", "dyngo", "codec", "testdata", "matrix3.desc"))
+	if err != nil {
+		return nil, nil, fmt.Errorf("proxy: descriptor: %v", err)
+	}
+	schema, err := dynamic.Load(raw)
+	if err != nil {
+		return nil, nil, fmt.Errorf("proxy: load: %v", err)
+	}
+	typ, err := schema.Message("structtest.Scalars3")
+	if err != nil {
+		schema.Close()
+		return nil, nil, fmt.Errorf("proxy: type: %v", err)
+	}
+	return schema, typ, nil
+}
+
 // The gate: every tier's official bytes land on the pinned size, the thin
 // model encodes byte-identical bytes, and its decode keeps every field.
+// The proxy arm gates beside it on the same bytes: a held tree re-encodes
+// byte-identical bytes (twice, so hold-and-recode is stable), and a
+// decode-and-free round trip with no materialization re-encodes
+// byte-identical bytes too.
 func gate(t tier) error {
 	want := fillOfficial(t.n)
 	reference, err := proto.Marshal(want)
@@ -188,6 +235,41 @@ func gate(t tier) error {
 			t.label, len(structOut), len(reference))
 	}
 
+	// Proxy: hold one tree built from the same native struct the core row
+	// encodes, then prove the two per-iteration ops reproduce the reference.
+	held, err := proxyTyp.ImportModel(structMsg, matrix3.Scalars3Meta)
+	if err != nil {
+		return fmt.Errorf("%s: proxy import: %v", t.label, err)
+	}
+	defer held.Close()
+	heldOut, err := held.Encode()
+	if err != nil {
+		return fmt.Errorf("%s: proxy encode: %v", t.label, err)
+	}
+	if !bytes.Equal(heldOut, reference) {
+		return fmt.Errorf("%s: pbwire-go-proxy and protobuf-go encode differently (%d vs %d bytes)",
+			t.label, len(heldOut), len(reference))
+	}
+	heldAgain, err := held.Encode()
+	if err != nil || !bytes.Equal(heldAgain, reference) {
+		return fmt.Errorf("%s: pbwire-go-proxy re-encode of the held tree differs", t.label)
+	}
+	fresh, err := proxyTyp.Decode(reference)
+	if err != nil {
+		return fmt.Errorf("%s: proxy decode: %v", t.label, err)
+	}
+	// No ExportModel: the proxy decode frees the tree with no
+	// materialization, so the round trip back through Encode is the check.
+	freshOut, err := fresh.Encode()
+	fresh.Close()
+	if err != nil {
+		return fmt.Errorf("%s: proxy re-encode: %v", t.label, err)
+	}
+	if !bytes.Equal(freshOut, reference) {
+		return fmt.Errorf("%s: pbwire-go-proxy decode round trip differs (%d vs %d bytes)",
+			t.label, len(freshOut), len(reference))
+	}
+
 	var official matrix3pb.Scalars3
 	if err := proto.Unmarshal(reference, &official); err != nil {
 		return err
@@ -204,13 +286,22 @@ func gate(t tier) error {
 }
 
 func TestMain(m *testing.M) {
+	schema, typ, err := loadProxyType()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "FAIL:", err)
+		os.Exit(1)
+	}
+	proxyTyp = typ
 	for _, t := range tiers {
 		if err := gate(t); err != nil {
 			fmt.Fprintln(os.Stderr, "FAIL:", err)
 			os.Exit(1)
 		}
 	}
-	os.Exit(m.Run())
+	code := m.Run()
+	typ.Close()
+	schema.Close()
+	os.Exit(code)
 }
 
 func run(count int, op func()) float64 {
@@ -277,6 +368,21 @@ func TestMatrix3Bench(t *testing.T) {
 		officialEncode := measure(tr.floor, func() {
 			sinkBytes, _ = proto.Marshal(official)
 		})
+		// Proxy: one C tree held before the timer (the transcoder task).
+		// The encode input is the same native struct the core row encodes;
+		// the decode frees a fresh tree per iteration with no ExportModel.
+		held, err := proxyTyp.ImportModel(structMsg, matrix3.Scalars3Meta)
+		if err != nil {
+			t.Fatal(err)
+		}
+		proxyEncode := measure(1, func() {
+			sinkBytes, _ = held.Encode()
+		})
+		proxyDecode := measure(1, func() {
+			proxyTree, _ := proxyTyp.Decode(reference)
+			proxyTree.Close()
+		})
+		held.Close()
 		structDecode := measure(1, func() {
 			m := new(matrix3.Scalars3)
 			_ = m.Unmarshal(reference)
@@ -289,8 +395,10 @@ func TestMatrix3Bench(t *testing.T) {
 		fmt.Printf("\n%s: %d bytes (repeat field x%d)\n", tr.label, len(reference), tr.n)
 		fmt.Printf("  %-17s %-7s %12s %10s\n", "impl", "op", "ns/op", "MB/s")
 		row("pbwire-go-core", "encode", len(reference), structEncode)
+		row("pbwire-go-proxy", "encode", len(reference), proxyEncode)
 		row("protobuf-go", "encode", len(reference), officialEncode)
 		row("pbwire-go-core", "decode", len(reference), structDecode)
+		row("pbwire-go-proxy", "decode", len(reference), proxyDecode)
 		row("protobuf-go", "decode", len(reference), officialDecode)
 		fmt.Println()
 	}
