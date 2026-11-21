@@ -222,9 +222,11 @@ make conformance-julia conformance-scala conformance-clojure conformance-fsharp 
 ```
 
 Eleven bindings run the whole suite (binary, JSON and text); only JSPB answers
-`skipped` everywhere. The JVM bindings share the Java runtime, and the FFI /
-static-link hosts forward to the same C core, so a mapping bug has one place to
-live and one suite to prove it.
+`skipped` everywhere. The host-language `core` arms that ship a binary codec
+only (`conformance-node-core`, `conformance-csharp`) answer `skipped` for the
+JSON and text requests, so their pass set is the binary suite. The JVM bindings
+share the Java runtime, and the FFI / static-link hosts forward to the same C
+core, so a mapping bug has one place to live and one suite to prove it.
 
 The suite's *recommended* tier is not enforced. For the core,
 `--enforce_recommended` reports 67 cases in four families. The binary/JSON run
