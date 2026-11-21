@@ -65,7 +65,9 @@ impl Schema {
         let path = path.as_ref();
         let bytes = std::fs::read(path)
             .map_err(|e| CoreError::new(format!("{}: {e}", path.display())))?;
-        Self::from_bytes(&bytes, &Limits::default())
+        let mut schema = Self::from_bytes(&bytes, &Limits::default())?;
+        schema.path = Some(path.display().to_string());
+        Ok(schema)
     }
 
     /// Loads descriptor-set bytes; use `--include_imports` so every type
