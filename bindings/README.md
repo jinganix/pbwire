@@ -102,6 +102,8 @@ anything else:
 
 ## pbench: four arms, one contract
 
+<a id="pbench-three-arms-one-contract"></a>
+
 Every binding's `pbench/` compares the same four arms over the same `matrix3`
 payload and the four standard tiers. The `tree`, `shim` and `core` arms do the
 same user-visible task: a native object in, wire bytes out; wire bytes in, a
@@ -233,7 +235,7 @@ same API on the shipped `ext-ffi` wrapper (`pbwire-php-shim-ffi`, no compiler);
 deployment needs it`) because the official pure-PHP runtime is already the
 baseline.
 
-A binding states which of the three it has, including the two-mechanism
+A binding states which of the four it has, including the two-mechanism
 bindings and the deferred ports with the reason: the status table in
 [BENCHMARKS.md](../BENCHMARKS.md#bindings-vs-their-baselines), with the per-arm
 detail in `bindings/<lang>/pbench/README.md`.
