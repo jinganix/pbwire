@@ -95,8 +95,11 @@ function arm(name, file) {
 }
 
 function check(name, mod) {
+    // The tree and shim arms go through the addon's native-object surface;
+    // the core arm is pure JS and needs nothing from the handle API.
     const type = typeOf();
-    if (typeof type.encodeObject !== 'function' || typeof type.decodeToObject !== 'function') {
+    if (mod.name !== 'c-core' &&
+        (typeof type.encodeObject !== 'function' || typeof type.decodeToObject !== 'function')) {
         fail(`${name} arm missing: encodeObject/decodeToObject`);
         return;
     }
@@ -129,12 +132,16 @@ function check(name, mod) {
 
 const a = arm('a-tree', './a-tree.js');
 const b = arm('shim', './b-shim.js');
+const c = arm('core', './c-core.js');
 
 if (a !== null) {
     check('a-tree', a);
 }
 if (b !== null) {
     check('shim', b);
+}
+if (c !== null) {
+    check('core', c);
 }
 
 if (failures !== 0) {

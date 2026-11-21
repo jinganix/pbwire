@@ -619,6 +619,18 @@ conformance-node: $(CONFORMANCE_DESC) node-test
 		$(NODE_ABS) bindings/node/conformance/testee.js \
 		$(CURDIR)/$(CONFORMANCE_DESC)
 
+# Same suite through the pure-TypeScript core (no native library): binary in,
+# binary out; JSON and text answer "skipped" (the runner does not count a skip
+# as a failure), so the pass set is the binary suite.
+conformance-node-core: $(CONFORMANCE_DESC)
+	@test -x "$(NODE_ABS)" || { echo "node not found: $(NODE_ABS)"; exit 1; }
+	@test -x "$(CONFORMANCE_RUNNER)" || { \
+		echo "conformance_test_runner not found: $(CONFORMANCE_RUNNER)"; \
+		echo "run 'make conformance-setup' first"; exit 1; }
+	$(CONFORMANCE_RUNNER) --failure_list $(CURDIR)/conformance/failure_list_pbwire.txt \
+		$(NODE_ABS) bindings/node/conformance/testee-core.js \
+		$(CURDIR)/$(CONFORMANCE_DESC)
+
 # Same suite through the Julia binding (binary, JSON and text; JSPB skips).
 conformance-julia: $(CONFORMANCE_DESC)
 	@test -x "$(CONFORMANCE_RUNNER)" || { \

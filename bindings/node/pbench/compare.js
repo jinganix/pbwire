@@ -1,8 +1,8 @@
 'use strict';
 
-/* Interleaved timing for the Node arms: per round, `a-tree`, `b-shim`, jspb
- * and protobufjs run back to back on the same payload; per tier the median of
- * five rounds is printed. The bytes are compared with jspb before anything is
+/* Interleaved timing for the Node arms: per round, `a-tree`, `b-shim`,
+ * `c-core`, jspb and protobufjs run back to back on the same payload; per tier
+ * the median of five rounds is printed. The bytes are compared with jspb before anything is
  * timed (the gate does this too; this is the last guard before a number).
  *
  *   node bindings/node/pbench/compare.js
@@ -18,6 +18,7 @@ const path = require('node:path');
 const { TIERS, nativeObject, typeOf } = require('./payload');
 const armA = require('./a-tree');
 const armB = require('./b-shim');
+const armC = require('./c-core');
 const { Scalars3, Inner3, Color3 } = require('../benchmarks/gen/matrix3_pb.js');
 
 const benchDir = path.join(__dirname, '..', 'benchmarks');
@@ -168,12 +169,13 @@ function main() {
         const obj = nativeObject(repeats);
         const aWire = armA.marshal(obj);
         const bWire = armB.marshal(obj);
+        const cWire = armC.marshal(obj);
         const jspb = official(repeats);
         const pjs = protobufJsObject(repeats);
         const pjsWire = Buffer.from(ProtobufJsType.encode(pjs).finish());
 
         if (!Buffer.from(aWire).equals(ref) || !Buffer.from(bWire).equals(ref) ||
-            !pjsWire.equals(ref)) {
+            !Buffer.from(cWire).equals(ref) || !pjsWire.equals(ref)) {
             console.log(`FAIL ${label}: arms and baselines disagree on bytes`);
             process.exit(1);
         }
@@ -184,6 +186,7 @@ function main() {
         const enc = timeOps([
             ['tree', 'pbwire-node-tree', 'encode', () => armA.marshal(obj)],
             ['shim', 'pbwire-node-shim', 'encode', () => armB.marshal(obj)],
+            ['core', 'pbwire-node-core', 'encode', () => armC.marshal(obj)],
             ['official', 'google-protobuf', 'encode', () => jspb.serializeBinary()],
             ['protobufjs', 'protobufjs', 'encode', () => ProtobufJsType.encode(pjs).finish()],
         ]);
@@ -193,6 +196,7 @@ function main() {
         const dec = timeOps([
             ['tree', 'pbwire-node-tree', 'decode', () => armA.unmarshal(ref)],
             ['shim', 'pbwire-node-shim', 'decode', () => armB.unmarshal(ref)],
+            ['core', 'pbwire-node-core', 'decode', () => armC.unmarshal(ref)],
             ['official', 'google-protobuf', 'decode', () => Scalars3.deserializeBinary(ref)],
             ['protobufjs', 'protobufjs', 'decode', () => ProtobufJsType.decode(ref)],
         ]);

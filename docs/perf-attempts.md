@@ -1463,3 +1463,35 @@ Rounds 1, 2 and 5 are losses, so the change does not win every round; the gap is
 the per-field array materialization, not the decode tree allocation. The decode
 path stayed on `pbw_decode`; the final build is change 1 only.
 
+## Provisional: the Node pure-TypeScript core arm (plan 15, 2026-11-21)
+
+Plan 15 landed a second, in-language implementation of the wire format under
+`bindings/node/lib/core/` (descriptor reader, tree, encode, decode with unknown
+retention), so the Node `pbench` gains a third arm: `c-core.js`. It is not a
+boundary crossing at all -- the task runs in the JS heap -- so it measures the
+wire format itself in the host language, the same question the other bindings'
+`core` arms answer. `node bindings/node/pbench/compare.js`, interleaved rounds,
+median of five, host load average ~22 (other checkouts building), so only the
+ordering is worth reading; Stage 5 re-recorded the formal rows.
+
+| tier | arm | enc ns/op | enc MB/s | dec ns/op | dec MB/s |
+|---|---|---|---|---|---|
+| 136 B | `pbwire-node-core` | 2049.4 | 66.4 | 1449.5 | 93.8 |
+| 136 B | google-protobuf | 2321.6 | 58.6 | 1134.5 | 119.9 |
+| 136 B | protobufjs | 550.4 | 247.1 | 347.4 | 391.4 |
+| 74913 B | `pbwire-node-core` | 434607.8 | 172.4 | 853442.5 | 87.8 |
+| 74913 B | google-protobuf | 1276967.8 | 58.7 | 893244.5 | 83.9 |
+| 74913 B | protobufjs | 172487.7 | 434.3 | 171038.0 | 438.0 |
+
+Reading: the in-language core beats jspb on encode at every tier (66.4 against
+58.6 MB/s at 136 B, 172.4 against 58.7 at 74 KB) and at 74 KB on decode (87.8
+against 83.9), and loses the small-tier decode cell (93.8 against 119.9) where
+jspb's generated reader has no dynamic slot lookup. It stays 2.5-3.7x behind
+protobufjs, which does per-type code generation. The boundary was the tree and
+shim arms' cost, not the codec: this arm skips it entirely.
+
+Conformance scope: the core is a binary codec (the plan's file list has no JSON
+or text printer), so `make conformance-node-core` passes the binary suite with
+the two expected tag-truncation failures and skips the JSON half (1412
+successes, 1403 skipped, 2 expected failures, 0 unexpected). The addon-backed
+`make conformance-node` keeps covering binary + JSON + text (2750 + 443).
