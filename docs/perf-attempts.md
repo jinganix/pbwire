@@ -1116,7 +1116,12 @@ interning) buys ~20-30 ns of that and cannot reach jspb's ~5 ns per field. The
 one-change cell was accepted above and the plan says to stop there rather than
 keep tuning a boundary floor.
 
-## Cell: C# native-object arm, all tiers (below Google.Protobuf)
+## Cell: C# native-object arm, all tiers (below Google.Protobuf) -- SUPERSEDED by plan 05b
+
+**Superseded (2026-11-21, plan 05b):** this entry measured a managed walk with
+one `P/Invoke` per present field, not the pinned-layout mechanism; see
+"Provisional: C# native flat-image reader (plan 05b)" below for the real
+reader's row and verdict. Kept for the record.
 
 The C# `pbench` `shim` row (generated model in, wire out) sits below the
 Google.Protobuf baseline at every tier: 2026-11-21 `pbench/compare`, xlarge
@@ -1162,6 +1167,30 @@ C call; that is the native object's construction cost, which the `tree` row
 Ledger rule: the superseded rejection said "the pinned layout does not pay on
 .NET". With the real reader it pays on 10 of 12 encode/decode cells; the two
 that do not are a materialisation cost, not a boundary cost.
+
+Stage 6 (two cells still below baseline: 2469 B and 74913 B decode).
+Measurement first, warm median at the xlarge tier: C decode 103 us,
+`ReadImage` (image -> managed objects) 147 us. The native half alone is 729
+MB/s, above `protobuf-csharp`'s whole decode (492 MB/s); the copy is the gap.
+
+Round 1 (kept): the generated `<Message>Layout` caches its compiled
+`LayoutPlan` in a static field instead of resolving it through a lock plus a
+dictionary on every op. Bytes unchanged, gate green, and it removes per-op
+work at every tier; in the interleaved comparison it is below the host's noise
+floor on the large/xlarge cells (where the copy dominates) so no round claims
+a percentage, and the small-tier rows moved inside the same noise band.
+
+Round 2 (not attempted): the only change that crosses the baseline is dropping
+the image copy -- reading wire bytes straight into the managed object graph --
+which is not a tuning of this mechanism but a different one (and would need a
+managed wire reader, the thing `AGENTS.md` forbids). So the two decode cells
+stay as published: 0.74x and 0.71x, with the split above as the reason.
+
+Formal rows: `make csharp-bench` 2026-11-21
+(`results/bench-csharp-20261121T000941Z.json`) shim encode 1130.8 / 980.3 /
+617.5 / 654.1 MB/s, decode 744.1 / 595.9 / 341.5 / 348.7 at 136 / 174 / 2469 /
+74913 B; `make fsharp-bench` (`results/bench-fsharp-20261121T001056Z.json`)
+encode 1180.6 / 966.1 / 643.0 / 658.3, decode 760.2 / 590.5 / 320.8 / 354.6.
 
 ## Provisional: Rust shim arm (plan 08)
 

@@ -142,9 +142,15 @@ as an adapter over `runtime/`, never a duplicate engine.
 C# has all three: `tree` is the prebuilt `Pbwire.Message` handle, `shim` is
 the generated model's native-object entry (`pbwire-csharp-shim`), `core` waits
 on plan 16. F# rides the C# runtime and prints the same two rows through it --
-no separate port, no second wire implementation. The C# `shim` row is below
-Google.Protobuf because the C core has no offset reader for pinned managed
-memory (see `bindings/csharp/pbench/README.md`).
+no separate port, no second wire implementation. The C# `shim` row copies the
+native object into one contiguous image per op and hands it to a C-side reader
+(`bindings/csharp/native/pbw_cs_shim.c`, one `P/Invoke` per op): it is above
+Google.Protobuf on every encode tier (1.10-2.43x) and on the small decode tiers
+(1.49x), and below it at 2469 B / 74913 B decode (0.74x / 0.71x) because the
+image-to-object copy costs more than the reference parser's whole run (see
+`bindings/csharp/pbench/README.md`). The handle stays the headline. A managed
+class with reference members cannot be pinned, so the image -- not
+`GCHandle.Alloc(obj, Pinned)` -- is what C walks.
 
 Dart has all three: `tree` is the prebuilt `Message` handle, `shim` is the
 generated flat `<Message>Layout` read in place by the C-side reader
@@ -212,14 +218,14 @@ throughput against the official runtime, copied from
 | PHP | the official runtime is pure PHP, all per-field bookkeeping in the interpreter | native C extension over the core (`ext-ffi` wrapper without a compiler); the native-object path is one extension entry that walks the PHP array in C | 1.23x / 1.29x `tree` (native-object `shim` 0.16x / 0.36x vs the C ext; `shim-ffi` 0.004x / 0.008x; 420x / 139x `tree` vs pure PHP) |
 | Dart | a pure-Dart field loop dominates, and the per-field `set`/`get` walk is what the native-object task pays | `dart:ffi` plus the core's arena; the generated flat `<Message>Layout` is read in place by a C-side `pbw_struct` reader (`bindings/dart/native/`), one FFI call per op | 15.7x / 4.6x `tree` (vs protobuf-dart; native-object `shim` 11.4x / 4.7x) |
 | Rust | rust-protobuf generated codecs | links `libpbwire.a` statically behind a safe wrapper | 1.69x / 1.86x (vs rust-protobuf; 0.98x / 1.59x vs prost) |
-| C# | Google.Protobuf is already a fast tree codec — the closest race of the set | P/Invoke plus a resolver, no packages | 3.07x / 1.47x (vs Google.Protobuf; 3.93x / 2.27x vs protobuf-net) |
+| C# | Google.Protobuf is already a fast tree codec — the closest race of the set | P/Invoke plus a resolver, no packages; the native-object path is one call into `bindings/csharp/native/pbw_cs_shim.c` over a per-op flat image | 3.22x / 1.48x `tree` (vs Google.Protobuf; native-object `shim` 2.43x encode, 1.49x decode at 136 B, 0.71x decode at 74 KB) |
 | Go | the official runtime walks `protoreflect`/`protowire` per field | thin generated structs over one cgo crossing per op (`runtime/`: struct offsets as layout tables); the models the cshim cannot drive stay on the pure-Go table engine (`pbench/dyngo/codec/`), which also holds the descriptor-set value tree ([issue 41](https://github.com/jinganix/pbwire/issues/41)) | 1.73x / 1.47x (vs protobuf-go; thin model, struct in and struct out) |
 | Erlang | gpb is pure Erlang; gpb NIF binds libprotobuf per message | NIF over the core, consuming gpb's own definitions — no second generator | 3.91x / 1.60x (vs gpb) |
 | Swift | Apple moved to Swift while the binding set still spoke ObjC; `swift-protobuf` generates a struct per message | SwiftPM package: FFI host over the C ABI (`FileDescriptorSet` at run time, static `libpbwire.a`, no wire code) | 4.43x / 2.84x (vs swift-protobuf) |
 | Scala | data teams write Scala against Java protobuf | same Java runtime as Kotlin plus an idiomatic DSL — one runtime, three JVM languages | 1.21x / 1.25x (vs ScalaPB) |
 | Elixir | `elixir-protobuf` is pure Elixir, every field through the interpreter | struct↔tuple translation over the shared NIF (no C of its own) | 2.41x / 0.99x (vs elixir-protobuf; xlarge decode at parity) |
 | Zig | `zig-protobuf` codegen per message, fragmented across forks | `@cImport`-free static link (`translate-c` + `libpbwire.a` compiled in); the generated `extern struct` mirror is read in place by the C struct codec, one call per op | 1.81x / 2.13x `tree`, 1.44x / 2.26x native-object `shim` (vs zig-protobuf) |
-| F# | .NET protobuf means C# SDK style even in F# code | facade over the C# project (`ProjectReference`, same P/Invoke core) | 3.05x / 1.44x (vs Google.Protobuf) |
+| F# | .NET protobuf means C# SDK style even in F# code | facade over the C# project (`ProjectReference`, same P/Invoke core and the same one-call C reader) | 3.14x / 1.40x `tree` (vs Google.Protobuf; native-object `shim` 2.57x encode, 1.51x decode at 136 B, 0.69x decode at 74 KB) |
 | Clojure | protobuf-java interop per message, maps materialized per field | mutable-message fast path over the Java runtime (maps stay for convenience) | 1.16x / 1.77x (vs protobuf-java; mutable-message fast path; 0.75x encode at 136 B) |
 | Julia | `ProtoBuf.jl` is pure Julia, per-field interpreter overhead | `dlopen` + `ccall` FFI host (`FileDescriptorSet` at run time, `Dict` boundary); the generated layout image is read in place by a C-side reader (`bindings/julia/native/`), one `ccall` per op | 96.20x / 1.11x `shim` (vs ProtoBuf.jl; prebuilt `tree` handle 137.75x / 1.08x, 136 B shim decode 0.96x) |
 | R | `RProtoBuf` binds the C++ runtime per message | C extension over the core (`.Call`, named lists in/out, statically linked) | 61.5x / 66.6x (vs RProtoBuf) |
