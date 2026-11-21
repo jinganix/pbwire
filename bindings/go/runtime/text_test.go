@@ -564,6 +564,66 @@ func TestTextExtensionRoundTrip(t *testing.T) {
 	}
 }
 
+// TestNestedExtensionEncode is the regression test for nested extensions
+// dropped on binary encode: encodeExtTable used to run only at the top
+// level, so a text-parsed extension inside a submessage vanished on
+// Encode while EncodedSize still counted it. Every nested encode arm now
+// shares encodeSubmessage, so the bytes and the size agree again.
+func TestNestedExtensionEncode(t *testing.T) {
+	inner := &descriptorpb.DescriptorProto{
+		Name: jstrp("Inner"),
+		Field: []*descriptorpb.FieldDescriptorProto{
+			jfield("base", 1, jlabelOpt, descriptorpb.FieldDescriptorProto_TYPE_INT32, ""),
+		},
+		ExtensionRange: []*descriptorpb.DescriptorProto_ExtensionRange{
+			{Start: ji32p(100), End: ji32p(200)},
+		},
+	}
+	outer := &descriptorpb.DescriptorProto{
+		Name: jstrp("Outer"),
+		Field: []*descriptorpb.FieldDescriptorProto{
+			jfield("sub", 1, jlabelOpt, descriptorpb.FieldDescriptorProto_TYPE_MESSAGE, ".nestext.Inner"),
+		},
+	}
+	extra := jfield("extra", 101, jlabelOpt, descriptorpb.FieldDescriptorProto_TYPE_INT32, "")
+	extra.Extendee = jstrp(".nestext.Inner")
+	fd := &descriptorpb.FileDescriptorProto{
+		Name:        jstrp("nestext.proto"),
+		Package:     jstrp("nestext"),
+		Syntax:      jstrp("proto2"),
+		MessageType: []*descriptorpb.DescriptorProto{outer, inner},
+		Extension:   []*descriptorpb.FieldDescriptorProto{extra},
+	}
+	raw, err := proto.Marshal(&descriptorpb.FileDescriptorSet{File: []*descriptorpb.FileDescriptorProto{fd}})
+	mustSet(t, err)
+	s, err := runtime.Load(raw)
+	mustSet(t, err)
+	typ := mustType(t, s, "nestext.Outer")
+	m, err := typ.UnmarshalText(`sub { base: 1 [nestext.extra]: 5 }`)
+	if err != nil {
+		t.Fatalf("UnmarshalText nested extension: %v", err)
+	}
+	wire, err := typ.Encode(m)
+	if err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+	// Outer field 1 holds 5 inner bytes: base varint plus ext 101 varint 5.
+	want := []byte{0x0A, 0x05, 0x08, 0x01, 0xA8, 0x06, 0x05}
+	if !bytes.Equal(wire, want) {
+		t.Fatalf("nested encode % x, want % x", wire, want)
+	}
+	if n := m.EncodedSize(); n != len(wire) {
+		t.Fatalf("EncodedSize %d != len(encode) %d", n, len(wire))
+	}
+	dwire, err := typ.EncodeDeterministic(m)
+	if err != nil {
+		t.Fatalf("EncodeDeterministic: %v", err)
+	}
+	if !bytes.Equal(dwire, want) {
+		t.Fatalf("nested deterministic encode % x, want % x", dwire, want)
+	}
+}
+
 func TestTextUnknownAndReserved(t *testing.T) {
 	s := loadTextSchema(t)
 	typ := mustType(t, s, "texttest.M")

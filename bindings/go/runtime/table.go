@@ -716,7 +716,7 @@ func encodeTable(e *Encoder, msg any, t *Table, depth int, deterministic bool) e
 				continue
 			}
 			mark := e.Begin(f.Num)
-			if err := encodeTable(e, sub, f.Sub(), depth+1, deterministic); err != nil {
+			if err := encodeSubmessage(e, sub, f.Sub(), depth+1, deterministic); err != nil {
 				return err
 			}
 			e.End(mark)
@@ -734,7 +734,7 @@ func encodeGroup(e *Encoder, msg any, f *Field, depth int, deterministic bool) e
 		return nil
 	}
 	e.Tag(f.Num, WireStartGroup)
-	if err := encodeTable(e, sub, f.Sub(), depth+1, deterministic); err != nil {
+	if err := encodeSubmessage(e, sub, f.Sub(), depth+1, deterministic); err != nil {
 		return err
 	}
 	e.Tag(f.Num, WireEndGroup)
@@ -800,7 +800,7 @@ func writeOneofValue(e *Encoder, f *Field, v any, depth int, deterministic bool)
 	case KindMessage:
 		if f.Group {
 			e.Tag(f.Num, WireStartGroup)
-			if err := encodeTable(e, v, f.Sub(), depth+1, deterministic); err != nil {
+			if err := encodeSubmessage(e, v, f.Sub(), depth+1, deterministic); err != nil {
 				return err
 			}
 			e.Tag(f.Num, WireEndGroup)
@@ -816,7 +816,7 @@ func writeOneofValue(e *Encoder, f *Field, v any, depth int, deterministic bool)
 			return nil
 		}
 		mark := e.Begin(f.Num)
-		if err := encodeTable(e, v, f.Sub(), depth+1, deterministic); err != nil {
+		if err := encodeSubmessage(e, v, f.Sub(), depth+1, deterministic); err != nil {
 			return err
 		}
 		e.End(mark)
@@ -1118,7 +1118,7 @@ func encodeRepeated(e *Encoder, msg any, f *Field, depth int, deterministic bool
 			}
 			if f.Group {
 				e.Tag(f.Num, WireStartGroup)
-				if err := encodeTable(e, sub, f.Sub(), depth+1, deterministic); err != nil {
+				if err := encodeSubmessage(e, sub, f.Sub(), depth+1, deterministic); err != nil {
 					return err
 				}
 				e.Tag(f.Num, WireEndGroup)
@@ -1127,8 +1127,8 @@ func encodeRepeated(e *Encoder, msg any, f *Field, depth int, deterministic bool
 			mark := e.Begin(f.Num)
 			// A nil element encodes empty, like protoc-gen-go: the
 			// table closures normalize typed nils to nil, and
-			// encodeTable is nil-tolerant.
-			if err := encodeTable(e, sub, f.Sub(), depth+1, deterministic); err != nil {
+			// encodeSubmessage is nil-tolerant.
+			if err := encodeSubmessage(e, sub, f.Sub(), depth+1, deterministic); err != nil {
 				return err
 			}
 			e.End(mark)
@@ -1302,7 +1302,7 @@ func encodeMapEntriesSorted(e *Encoder, msg any, f *Field, sub *Table, depth int
 	if len(sub.ByNum) < 2 || sub.ByNum[1] == nil {
 		for i := 0; i < n; i++ {
 			mark := e.Begin(f.Num)
-			if err := encodeTable(e, f.RepMsgAt(msg, i), sub, depth+1, true); err != nil {
+			if err := encodeSubmessage(e, f.RepMsgAt(msg, i), sub, depth+1, true); err != nil {
 				return err
 			}
 			e.End(mark)
@@ -1318,7 +1318,7 @@ func encodeMapEntriesSorted(e *Encoder, msg any, f *Field, sub *Table, depth int
 	})
 	for _, elem := range order {
 		mark := e.Begin(f.Num)
-		if err := encodeTable(e, elem, sub, depth+1, true); err != nil {
+		if err := encodeSubmessage(e, elem, sub, depth+1, true); err != nil {
 			return err
 		}
 		e.End(mark)

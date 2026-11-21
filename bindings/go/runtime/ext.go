@@ -11,9 +11,25 @@ import (
 	"google.golang.org/protobuf/types/descriptorpb"
 )
 
+// encodeSubmessage encodes one nested message body: plan fields via
+// encodeTable plus any extensions the dynamic tree holds. Generated
+// messages never carry ext, so the extra step is a type-asserted no-op
+// for them. Callers pass the depth the child encodes at (parent+1),
+// matching the two-step order Encode uses at the top level.
+func encodeSubmessage(e *Encoder, sub any, tbl *Table, depth int, deterministic bool) error {
+	if err := encodeTable(e, sub, tbl, depth, deterministic); err != nil {
+		return err
+	}
+	if dm, ok := sub.(*DMsg); ok && dm != nil {
+		return encodeExtTable(e, dm, depth, deterministic)
+	}
+	return nil
+}
+
 // encodeExtTable writes every present extension after the plan fields, in
 // field-number order (findExt keeps the slice sorted). It runs after
-// encodeTable in Encode and EncodeDeterministic alike.
+// encodeTable in Encode and EncodeDeterministic alike, and after every
+// nested encodeTable via encodeSubmessage.
 func encodeExtTable(e *Encoder, m *DMsg, depth int, deterministic bool) error {
 	if len(m.ext) == 0 {
 		return nil
@@ -51,7 +67,7 @@ func encodeExtMsg(e *Encoder, m *DMsg, fp *FieldPlan, sub *DMsg, depth int, dete
 	if fp.Group {
 		e.Tag(fp.Number, WireStartGroup)
 		if sub != nil {
-			if err := encodeTable(e, sub, sub.typ.tableFor(), depth+1, deterministic); err != nil {
+			if err := encodeSubmessage(e, sub, sub.typ.tableFor(), depth+1, deterministic); err != nil {
 				return err
 			}
 		}
@@ -60,7 +76,7 @@ func encodeExtMsg(e *Encoder, m *DMsg, fp *FieldPlan, sub *DMsg, depth int, dete
 	}
 	mark := e.Begin(fp.Number)
 	if sub != nil {
-		if err := encodeTable(e, sub, sub.typ.tableFor(), depth+1, deterministic); err != nil {
+		if err := encodeSubmessage(e, sub, sub.typ.tableFor(), depth+1, deterministic); err != nil {
 			return err
 		}
 	}
@@ -76,7 +92,7 @@ func encodeExtRep(e *Encoder, m *DMsg, fp *FieldPlan, s *slot, depth int, determ
 		for _, sub := range s.rep.([]*DMsg) {
 			e.Tag(fp.Number, WireStartGroup)
 			if sub != nil {
-				if err := encodeTable(e, sub, sub.typ.tableFor(), depth+1, deterministic); err != nil {
+				if err := encodeSubmessage(e, sub, sub.typ.tableFor(), depth+1, deterministic); err != nil {
 					return err
 				}
 			}
@@ -88,7 +104,7 @@ func encodeExtRep(e *Encoder, m *DMsg, fp *FieldPlan, s *slot, depth int, determ
 		for _, sub := range s.rep.([]*DMsg) {
 			mark := e.Begin(fp.Number)
 			if sub != nil {
-				if err := encodeTable(e, sub, sub.typ.tableFor(), depth+1, deterministic); err != nil {
+				if err := encodeSubmessage(e, sub, sub.typ.tableFor(), depth+1, deterministic); err != nil {
 					return err
 				}
 			}

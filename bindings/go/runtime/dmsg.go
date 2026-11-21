@@ -160,10 +160,7 @@ func (t *DType) EncodeDeterministic(m *DMsg) ([]byte, error) {
 		cap0 = 256
 	}
 	e := Encoder{Buf: make([]byte, 0, cap0)}
-	if err := encodeTable(&e, m, tb, 0, true); err != nil {
-		return nil, err
-	}
-	if err := encodeExtTable(&e, m, 0, true); err != nil {
+	if err := encodeSubmessage(&e, m, tb, 0, true); err != nil {
 		return nil, err
 	}
 	tb.setCapHint(len(e.Buf) + 64)
@@ -626,10 +623,7 @@ func (m *DMsg) Encode() ([]byte, error) {
 		cap0 = 256
 	}
 	e := Encoder{Buf: make([]byte, 0, cap0)}
-	if err := encodeTable(&e, m, t, 0, false); err != nil {
-		return nil, err
-	}
-	if err := encodeExtTable(&e, m, 0, false); err != nil {
+	if err := encodeSubmessage(&e, m, t, 0, false); err != nil {
 		return nil, err
 	}
 	t.setCapHint(len(e.Buf) + 64)
