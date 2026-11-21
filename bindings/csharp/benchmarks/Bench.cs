@@ -32,6 +32,8 @@ if (args.Length != 1)
     return 2;
 }
 
+CCore.Use(args[0]);
+
 using var schema = Schema.FromFile(args[0]);
 var ty = schema.Message("structtest.Scalars3");
 var innerTy = schema.Message("structtest.Inner3");
@@ -104,6 +106,20 @@ for (var tier = 0; tier < cases.Length; tier++)
         continue;
     }
 
+    // The pure-C# core arm's native object (its own tree, built before the
+    // timer, like the tree arm's handle). No native library is involved.
+    var coreNative = CCore.New(n);
+    if (!CCore.Marshal(coreNative).SequenceEqual(reference))
+    {
+        Fail(label, "pbwire-csharp-core encode differs");
+        continue;
+    }
+    if (!CCore.Marshal(CCore.Unmarshal(reference)).SequenceEqual(reference))
+    {
+        Fail(label, "pbwire-csharp-core decode differs");
+        continue;
+    }
+
     var official = FillOfficial(n);
     // Tier line shows the reference op's count; slower ops keep the floor.
     var tierCount = Calibrate(() => message.Encode(), count);
@@ -114,6 +130,8 @@ for (var tier = 0; tier < cases.Length; tier++)
     });
     var shimEncode = Measure(count, () => Matrix3Shim.Marshal(native));
     var shimDecode = Measure(count, () => Matrix3Shim.Unmarshal(reference));
+    var coreEncode = Measure(count, () => CCore.Marshal(coreNative));
+    var coreDecode = Measure(count, () => CCore.Unmarshal(reference));
     var officialEncode = Measure(count, () => official.ToByteArray());
     var pbnEncode = pbnOk ? Measure(count, () => PbnEncode(pbn)) : 0;
     var officialDecode = Measure(count, () => Scalars3.Parser.ParseFrom(reference));
@@ -123,10 +141,12 @@ for (var tier = 0; tier < cases.Length; tier++)
     Console.WriteLine($"  {"impl",-20} {"op",-7} {"ns/op",12} {"MB/s",10}");
     Row("pbwire-csharp-tree", "encode", reference.Length, encode);
     Row("pbwire-csharp-shim", "encode", reference.Length, shimEncode);
+    Row("pbwire-csharp-core", "encode", reference.Length, coreEncode);
     Row("protobuf-csharp", "encode", reference.Length, officialEncode);
     if (pbnOk) Row("protobuf-net", "encode", reference.Length, pbnEncode);
     Row("pbwire-csharp-tree", "decode", reference.Length, decode);
     Row("pbwire-csharp-shim", "decode", reference.Length, shimDecode);
+    Row("pbwire-csharp-core", "decode", reference.Length, coreDecode);
     Row("protobuf-csharp", "decode", reference.Length, officialDecode);
     if (pbnOk) Row("protobuf-net", "decode", reference.Length, pbnDecode);
     Console.WriteLine();

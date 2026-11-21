@@ -22,6 +22,7 @@
     <!-- The shim arm's model assembly keeps its own Structtest namespace; the
          protoc baseline in gen/ must stay the only one this project compiles. -->
     <ProjectReference Include="../pbench/Shim.csproj" />
+    <ProjectReference Include="../pbench/c-core/CCore.csproj" />
 
     <PackageReference Include="Google.Protobuf" Version="3.36.2" />
     <PackageReference Include="protobuf-net" Version="3.4.40" />
