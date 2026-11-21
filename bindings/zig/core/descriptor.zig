@@ -40,7 +40,7 @@ pub const Kind = enum(u8) {
     group = 17,
 
     pub fn isPackable(self: Kind) bool {
-        return @intFromEnum(self) <= @intFromEnum(Kind.double);
+        return @backingInt(self) <= @backingInt(Kind.double);
     }
 
     pub fn isRef(self: Kind) bool {
@@ -613,7 +613,7 @@ const Linker = struct {
         }
         f.has_presence = f.label != L_REPEATED and
             (f.type_ == T_MESSAGE or f.type_ == T_GROUP or
-            f.label == L_REQUIRED or !proto3 or f.proto3_optional);
+                f.label == L_REQUIRED or !proto3 or f.proto3_optional);
     }
 
     fn resolveMessage(self: *Linker, scope: []const u8, name: []const u8) !?usize {
