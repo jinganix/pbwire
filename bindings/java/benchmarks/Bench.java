@@ -24,9 +24,16 @@ import structtest.Matrix3;
  * DynamicMessage, unknown-field retention, and the required-field gate.
  *
  * Arms (bindings/README.md#pbench-three-arms-one-contract), timed in one
- * interleaved round per tier:
- *   tree  GenericCodec/DMsg, prebuilt    -- what the codec costs once the tree exists
+ * interleaved round per tier. The first two time the native-in/native-out
+ * task; the third is the prebuilt handle:
+ *
+ *   tree  GenericCodec/DMsg full task    -- fresh DMsg built per field per
+ *                     iteration, encode; decode, every gate-checked field
+ *                     read back per iteration (Java has no free; GC owns it)
  *   core  the committed generated model  -- native object in and out (Structtest_Scalars3)
+ *   proxy GenericCodec/DMsg, prebuilt    -- re-encode a held tree,
+ *                     decode-and-drop with no materialization. Published,
+ *                     never the headline.
  *   shim  ../pbench/jni                  -- ceiling: one JNI crossing, no tree translation
  */
 public final class Bench {
@@ -140,13 +147,30 @@ public final class Bench {
             return;
         }
 
+        // Full-task tree gate: a fresh per-field build must match the
+        // reference too (not just the held tree above), and the decode
+        // below must expose the same values the timer materializes.
+        if (!Arrays.equals(GenericCodec.encode(fillGeneric(scalars3, n)),
+                reference)) {
+            fail(label, "fresh-build tree bytes differ");
+            return;
+        }
+
         Matrix3.Scalars3 officialMessage = fillOfficial(n);
+        // Tree ops are the Go-parity full task: fresh DMsg per iteration,
+        // deep materialization of every gate-checked field on decode (the
+        // same field list checkDecoded asserts). Proxy ops are the old
+        // prebuilt task, relabelled, not re-measured as a new task.
+        // Calibration stays per-op (measureAll): the fast proxy ops keep
+        // their own count and never inflate the tree rows.
         Runnable[] ops = {
-            () -> GenericCodec.encode(data),
+            () -> GenericCodec.encode(fillGeneric(scalars3, n)),
             model::toByteArray,
+            () -> GenericCodec.encode(data),
             officialMessage::toByteArray,
-            () -> GenericCodec.decode(scalars3, reference),
+            () -> consumeTree(scalars3, reference, n),
             () -> Structtest_Scalars3.parseFrom(reference),
+            () -> GenericCodec.decode(scalars3, reference),
             () -> parse(reference),
         };
         double[] best = measureAll(floor, ops);
@@ -156,10 +180,12 @@ public final class Bench {
         System.out.printf("  %-18s %-7s %12s %10s%n", "impl", "op", "ns/op", "MB/s");
         row("pbwire-java-tree", "encode", reference.length, best[0]);
         row("pbwire-java-core", "encode", reference.length, best[1]);
-        row("protobuf-java", "encode", reference.length, best[2]);
-        row("pbwire-java-tree", "decode", reference.length, best[3]);
-        row("pbwire-java-core", "decode", reference.length, best[4]);
-        row("protobuf-java", "decode", reference.length, best[5]);
+        row("pbwire-java-proxy", "encode", reference.length, best[2]);
+        row("protobuf-java", "encode", reference.length, best[3]);
+        row("pbwire-java-tree", "decode", reference.length, best[4]);
+        row("pbwire-java-core", "decode", reference.length, best[5]);
+        row("pbwire-java-proxy", "decode", reference.length, best[6]);
+        row("protobuf-java", "decode", reference.length, best[7]);
         System.out.println();
     }
 
@@ -326,6 +352,34 @@ public final class Bench {
 
     private static int num(GenericCodec.MessageDef def, String name) {
         return def.fields[def.byName.get(name)].number;
+    }
+
+    private static long sink;
+
+    /**
+     * The tree decode half of the timed full task: decode, then read back
+     * every gate-checked field (same field list as checkDecoded asserts).
+     * GenericCodec.decode is lazy on message/string/bytes fields, so this
+     * is the work the binding really does turning wire into values.
+     */
+    private static void consumeTree(GenericCodec.MessageDef def, byte[] wire,
+            int n) {
+        GenericCodec.DMsg back = GenericCodec.decode(def, wire);
+        sink += ((String) back.get(num(back.def, "str"))).length();
+        sink += back.getList(num(back.def, "tags")).size();
+        java.util.List<Object> inners =
+                back.getList(num(back.def, "inners"));
+        sink += inners.size();
+        GenericCodec.DMsg inner =
+                (GenericCodec.DMsg) back.get(num(back.def, "inner"));
+        sink += ((String) inner.get(num(inner.def, "name"))).length();
+        sink += ((Number) inner.get(num(inner.def, "value"))).intValue();
+        if (n > 0) {
+            GenericCodec.DMsg last =
+                    (GenericCodec.DMsg) inners.get(n - 1);
+            sink += ((String) last.get(num(last.def, "name"))).length();
+            sink += ((Number) last.get(num(last.def, "value"))).intValue();
+        }
     }
 
     private static void checkDecoded(GenericCodec.DMsg back, int n,
