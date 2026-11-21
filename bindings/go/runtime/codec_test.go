@@ -1756,6 +1756,8 @@ type offProbe struct {
 	N []int32
 	O *int32
 	K isOffKind
+	F float32
+	D float64
 }
 
 var (
@@ -1764,6 +1766,8 @@ var (
 	offS = uint32(unsafe.Offsetof(offProbe{}.S))
 	offN = uint32(unsafe.Offsetof(offProbe{}.N))
 	offO = uint32(unsafe.Offsetof(offProbe{}.O))
+	offF = uint32(unsafe.Offsetof(offProbe{}.F))
+	offD = uint32(unsafe.Offsetof(offProbe{}.D))
 )
 
 func offPanic[T any]() func(any) T {
@@ -1788,12 +1792,18 @@ func offProbeFields(fast, stub bool) []*runtime.Field {
 	getStr := func(m any) string { return m.(*offProbe).S }
 	getRep := func(m any) []int32 { return m.(*offProbe).N }
 	getOpt := func(m any) *int32 { return m.(*offProbe).O }
+	getF32 := func(m any) float32 { return m.(*offProbe).F }
+	setF32 := func(m any, v float32) { m.(*offProbe).F = v }
+	getF64 := func(m any) float64 { return m.(*offProbe).D }
+	setF64 := func(m any, v float64) { m.(*offProbe).D = v }
 	if stub {
 		getI32, setI32 = offPanic[int32](), offPanicSet[int32]()
 		getI64, setI64 = offPanic[int64](), offPanicSet[int64]()
 		getStr = offPanic[string]()
 		getRep = offPanic[[]int32]()
 		getOpt = offPanic[*int32]()
+		getF32, setF32 = offPanic[float32](), offPanicSet[float32]()
+		getF64, setF64 = offPanic[float64](), offPanicSet[float64]()
 	}
 	return []*runtime.Field{
 		mk(&runtime.Field{Num: 1, Wire: runtime.WireVarint, Kind: runtime.KindInt32,
@@ -1818,6 +1828,14 @@ func offProbeFields(fast, stub bool) []*runtime.Field {
 			Off:      offO, Has: offO,
 			GetOptI32: getOpt,
 			SetOptI32: func(m any, v int32) { tmp := v; m.(*offProbe).O = &tmp }}),
+		mk(&runtime.Field{Num: 7, Wire: runtime.WireFixed32, Kind: runtime.KindFloat,
+			Off:    offF,
+			GetF32: getF32,
+			SetF32: setF32}),
+		mk(&runtime.Field{Num: 8, Wire: runtime.WireFixed64, Kind: runtime.KindDouble,
+			Off:    offD,
+			GetF64: getF64,
+			SetF64: setF64}),
 		&runtime.Field{Num: 6, Wire: runtime.WireVarint, Kind: runtime.KindInt32,
 			Oneof: true,
 			GetOneof: func(m any) (any, bool) {
@@ -1853,11 +1871,16 @@ func TestOffsetFastPathParity(t *testing.T) {
 	fast := runtime.NewTable("probe", offProbeFields(true, true))
 
 	v := int32(-7)
+	n32 := float32(math.Copysign(0, -1))
+	n64 := math.Copysign(0, -1)
 	cases := map[string]*offProbe{
 		"zero":      {},
-		"full":      {A: -1, B: math.MinInt64, S: "hi", N: []int32{1, 2, 3}, O: &v, K: &offKindN{N: 9}},
+		"full":      {A: -1, B: math.MinInt64, S: "hi", N: []int32{1, 2, 3}, O: &v, K: &offKindN{N: 9}, F: 1.5, D: -123.456},
 		"nilopt":    {A: 5, S: "x"},
 		"oneofzero": {A: 1, K: &offKindN{}},
+		// Negative zero is a value, not the default: both paths must
+		// emit it, matching the reference serializer.
+		"negzero": {F: n32, D: n64},
 	}
 	for name, want := range cases {
 		encSlow, encFast := encodeProbe(slow, want), encodeProbe(fast, want)

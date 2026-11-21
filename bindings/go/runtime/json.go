@@ -78,6 +78,15 @@ func (t *DType) UnmarshalJSONLimits(text string, ignoreUnknown bool, lim Limits)
 }
 
 // protoc's ToJsonName: drops every '_', uppercases the next letter.
+// jsonFieldName returns the field's JSON name: memoized at plan build,
+// computed on the fly for hand-built plans that carry none.
+func jsonFieldName(fp *FieldPlan) string {
+	if fp.JSONName != "" {
+		return fp.JSONName
+	}
+	return jsonName(fp.Name)
+}
+
 func jsonName(name string) string {
 	var sb strings.Builder
 	sb.Grow(len(name))
@@ -196,10 +205,15 @@ func ordinalOf(plan *MessagePlan, fp *FieldPlan) int {
 }
 
 // fieldByNumber resolves a field plan plus its ordinal, or nil when absent.
+// The ordinal rides the memoized index; hand-built plans without one fall
+// back to the pointer scan.
 func fieldByNumber(plan *MessagePlan, num uint32) (*FieldPlan, int) {
 	fp, ok := plan.ByNumber(num)
 	if !ok {
 		return nil, -1
+	}
+	if j, ok := plan.ordByNum[num]; ok {
+		return fp, j
 	}
 	return fp, ordinalOf(plan, fp)
 }
@@ -373,22 +387,42 @@ func (o *jsonOut) printMessage(m *DMsg) {
 		o.str("{}")
 		return
 	}
-	order := make([]int, 0, len(m.typ.plan.Fields))
-	for i, fp := range m.typ.plan.Fields {
-		if o.shouldPrint(m, i, fp) {
-			order = append(order, i)
+	order := m.typ.plan.numOrder
+	if order == nil {
+		// Hand-built plan without a memoized order: collect and sort.
+		order = make([]int, 0, len(m.typ.plan.Fields))
+		for i, fp := range m.typ.plan.Fields {
+			if o.shouldPrint(m, i, fp) {
+				order = append(order, i)
+			}
 		}
+		sort.Slice(order, func(a, b int) bool {
+			return m.typ.plan.Fields[order[a]].Number < m.typ.plan.Fields[order[b]].Number
+		})
+	} else {
+		// Memoized number order, filtered by presence per message.
+		// The kept list needs its own backing: numOrder is shared
+		// across messages (and recursion), so filtering in place
+		// would corrupt it. Small messages filter on the stack.
+		var stack [32]int
+		kept := stack[:0]
+		if len(order) > len(stack) {
+			kept = make([]int, 0, len(order))
+		}
+		for _, i := range order {
+			if o.shouldPrint(m, i, m.typ.plan.Fields[i]) {
+				kept = append(kept, i)
+			}
+		}
+		order = kept
 	}
-	sort.Slice(order, func(a, b int) bool {
-		return m.typ.plan.Fields[order[a]].Number < m.typ.plan.Fields[order[b]].Number
-	})
 	o.ch('{')
 	for k, i := range order {
 		fp := m.typ.plan.Fields[i]
 		if k > 0 {
 			o.ch(',')
 		}
-		o.quoted(jsonName(fp.Name))
+		o.quoted(jsonFieldName(fp))
 		o.ch(':')
 		if fp.Repeated {
 			o.printRepeated(m, i, fp)
@@ -1701,7 +1735,23 @@ func oneofSet(m *DMsg, ord int, fp *FieldPlan) bool {
 }
 
 // lookupField resolves a key by camelCase, then proto name, then jsonName.
+// The three namespaces each ride a memoized index (first wins, matching the
+// linear scans); hand-built plans without indexes use the scans directly.
 func lookupField(plan *MessagePlan, key string) (*FieldPlan, int) {
+	if plan.byCamel != nil {
+		if i, ok := plan.byCamel[key]; ok {
+			return plan.Fields[i], i
+		}
+		if fp, ok := plan.byName[key]; ok {
+			if j, ok := plan.ordByNum[fp.Number]; ok {
+				return fp, j
+			}
+		}
+		if i, ok := plan.byJSON[key]; ok {
+			return plan.Fields[i], i
+		}
+		return nil, -1
+	}
 	for i, fp := range plan.Fields {
 		if camelName(fp.Name) == key {
 			return fp, i

@@ -45,7 +45,7 @@ func aligned8(addr uintptr) bool { return addr%8 == 0 }
 // encodeFast writes one row straight from struct memory. It returns
 // handled=false for rows that stay on closures.
 func encodeFast(e *Encoder, base unsafe.Pointer, f *Field, depth int) (bool, error) {
-	if f.Oneof || f.Foreign != nil || f.Group || f.Kind == KindMessage {
+	if f.Oneof || f.Foreign != nil || f.Group || f.Entry || f.Kind == KindMessage {
 		return false, nil
 	}
 	if f.Repeated {
@@ -250,7 +250,10 @@ func encodeFast(e *Encoder, base unsafe.Pointer, f *Field, depth int) (bool, err
 			return true, nil
 		}
 		v := *(*float32)(addr)
-		if v == 0 && !f.Required {
+		// Negative zero is a value, not the default: compare bits so
+		// -0.0 still emits, like the closure path and the reference
+		// serializer (a plain == 0 would drop it).
+		if math.Float32bits(v) == 0 && !f.Required {
 			return true, nil
 		}
 		e.Tag(f.Num, WireFixed32)
@@ -270,7 +273,8 @@ func encodeFast(e *Encoder, base unsafe.Pointer, f *Field, depth int) (bool, err
 			return true, nil
 		}
 		v := *(*float64)(addr)
-		if v == 0 && !f.Required {
+		// Same bit comparison as float32 above: -0.0 emits.
+		if math.Float64bits(v) == 0 && !f.Required {
 			return true, nil
 		}
 		e.Tag(f.Num, WireFixed64)

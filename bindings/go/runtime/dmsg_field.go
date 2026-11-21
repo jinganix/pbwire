@@ -13,7 +13,8 @@ import (
 	"google.golang.org/protobuf/types/descriptorpb"
 )
 
-// find resolves the plan field and its slot ordinal.
+// find resolves the plan field and its slot ordinal. The ordinal rides the
+// memoized index; hand-built plans without one use the pointer scan.
 func (m *DMsg) find(name string) (*FieldPlan, int, error) {
 	if m == nil {
 		return nil, 0, fmt.Errorf("codec: nil message")
@@ -21,6 +22,9 @@ func (m *DMsg) find(name string) (*FieldPlan, int, error) {
 	fp, ok := m.typ.plan.ByName(name)
 	if !ok {
 		return nil, 0, fmt.Errorf("codec: %s has no field %q", m.typ.plan.Full, name)
+	}
+	if j, ok := m.typ.plan.ordByNum[fp.Number]; ok {
+		return fp, j, nil
 	}
 	for i, f := range m.typ.plan.Fields {
 		if f == fp {

@@ -156,6 +156,19 @@ func (d *Decoder) Rest() []byte {
 func (d *Decoder) Next() (uint32, WireType, error) {
 	d.lastTag = d.Off
 	b := d.Buf[d.Off:]
+	// Single-byte tags (field numbers 1-15) are the common case: one
+	// load, no loop. The checks below mirror the slow path exactly:
+	// field number 0 and wire types 6/7 still fail.
+	if len(b) > 0 && b[0] < 0x80 {
+		v := uint64(b[0])
+		num := uint32(v >> 3)
+		wt := WireType(v & 7)
+		if num == 0 || wt > WireFixed32 {
+			return 0, 0, ErrWire
+		}
+		d.Off++
+		return num, wt, nil
+	}
 	var v uint64
 	n := 0
 	for i := 0; i < 5; i++ {
@@ -207,6 +220,12 @@ func (d *Decoder) SkipRawLimits(num uint32, wt WireType, depth int, lim Limits) 
 // here is one per scalar on every decode.
 func (d *Decoder) Varint() (uint64, error) {
 	b := d.Buf[d.Off:]
+	// One-byte varints (small ints, false flags, enum zeros) skip the
+	// loop; the slow path below is unchanged.
+	if len(b) > 0 && b[0] < 0x80 {
+		d.Off++
+		return uint64(b[0]), nil
+	}
 	var v uint64
 	for i := 0; i < 10; i++ {
 		if i >= len(b) {
@@ -256,6 +275,17 @@ func (d *Decoder) Fixed64() (uint64, error) {
 // runs and submessages each parse one length per occurrence.
 func (d *Decoder) Bytes() ([]byte, error) {
 	b := d.Buf[d.Off:]
+	// Short payloads carry a one-byte length: bounds-check and slice
+	// without entering the varint loop.
+	if len(b) > 0 && b[0] < 0x80 {
+		n := uint64(b[0])
+		if n > uint64(len(b)-1) {
+			return nil, ErrWire
+		}
+		end := 1 + int(n)
+		d.Off += end
+		return b[1:end], nil
+	}
 	var n uint64
 	m := 0
 	for i := 0; i < 10; i++ {

@@ -11,6 +11,7 @@ package runtime
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 
@@ -82,6 +83,7 @@ type FieldPlan struct {
 	UTF8        bool                                   // proto3 strings reject invalid UTF-8 on decode; proto2 strings never do
 	HasDefault  bool                                   // proto2 explicit default (informational; absent still reads as zero)
 	Default     string                                 // raw default text from the descriptor
+	JSONName    string                                 // ToJsonName of Name, memoized at plan build for the JSON codec
 }
 
 // MessagePlan is one message's ordered field list plus lookup indexes.
@@ -93,6 +95,14 @@ type MessagePlan struct {
 	Reserved   map[string]bool // reserved field names, skipped silently by the text parser
 	byNumber   map[uint32]*FieldPlan
 	byName     map[string]*FieldPlan
+	// Memoized JSON indexes, built once in fillMessage. The JSON codec
+	// resolves every key and prints every field through these; all three
+	// maps are either present together or all nil (hand-built plans fall
+	// back to the linear scans in the JSON codec).
+	byCamel  map[string]int // camelCase key -> ordinal, first wins
+	byJSON   map[string]int // ToJsonName key -> ordinal, first wins
+	ordByNum map[uint32]int // field number -> ordinal
+	numOrder []int          // ordinals sorted by field number, for JSON print order
 }
 
 // ByNumber returns the field plan for a wire field number.
@@ -428,18 +438,30 @@ func (s *Schema) fillMessage(full string, m *descriptorpb.DescriptorProto, f *de
 	}
 	mp.byNumber = make(map[uint32]*FieldPlan, len(mp.Fields))
 	mp.byName = make(map[string]*FieldPlan, len(mp.Fields))
+	mp.byCamel = make(map[string]int, len(mp.Fields))
+	mp.byJSON = make(map[string]int, len(mp.Fields))
+	mp.ordByNum = make(map[uint32]int, len(mp.Fields))
 	for _, name := range m.ReservedName {
 		if mp.Reserved == nil {
 			mp.Reserved = map[string]bool{}
 		}
 		mp.Reserved[name] = true
 	}
-	for _, fp := range mp.Fields {
+	for i, fp := range mp.Fields {
 		if _, dup := mp.byNumber[fp.Number]; dup {
 			return fmt.Errorf("codec: message %s has duplicate field number %d", full, fp.Number)
 		}
 		mp.byNumber[fp.Number] = fp
 		mp.byName[fp.Name] = fp
+		// First wins in each derived namespace, mirroring the linear
+		// scans this replaces (they return the earliest field match).
+		if _, dup := mp.byCamel[camelName(fp.Name)]; !dup {
+			mp.byCamel[camelName(fp.Name)] = i
+		}
+		if _, dup := mp.byJSON[fp.JSONName]; !dup {
+			mp.byJSON[fp.JSONName] = i
+		}
+		mp.ordByNum[fp.Number] = i
 	}
 	seen := map[string]bool{}
 	for _, fp := range mp.Fields {
@@ -448,6 +470,16 @@ func (s *Schema) fillMessage(full string, m *descriptorpb.DescriptorProto, f *de
 			mp.Oneofs = append(mp.Oneofs, fp.Oneof)
 		}
 	}
+	// Field order for JSON print: declaration order is usually already
+	// numeric, but out-of-order declarations are legal, so the sorted
+	// index is memoized once instead of sorting per message.
+	mp.numOrder = make([]int, len(mp.Fields))
+	for i := range mp.Fields {
+		mp.numOrder[i] = i
+	}
+	sort.Slice(mp.numOrder, func(a, b int) bool {
+		return mp.Fields[mp.numOrder[a]].Number < mp.Fields[mp.numOrder[b]].Number
+	})
 	return nil
 }
 
@@ -499,11 +531,12 @@ func (s *Schema) buildField(syntax string, oneofs []string, fd *descriptorpb.Fie
 		return nil, fmt.Errorf("unknown proto type %d", int32(fd.GetType()))
 	}
 	fp := &FieldPlan{
-		Name:   fd.GetName(),
-		Number: uint32(fd.GetNumber()),
-		Proto:  fd.GetType(),
-		Wire:   wt,
-		Group:  fd.GetType() == descriptorpb.FieldDescriptorProto_TYPE_GROUP,
+		Name:     fd.GetName(),
+		JSONName: jsonName(fd.GetName()),
+		Number:   uint32(fd.GetNumber()),
+		Proto:    fd.GetType(),
+		Wire:     wt,
+		Group:    fd.GetType() == descriptorpb.FieldDescriptorProto_TYPE_GROUP,
 	}
 	if fp.Number == 0 || fp.Number > MaxFieldNumber {
 		return nil, fmt.Errorf("bad field number %d", fd.GetNumber())

@@ -1099,12 +1099,21 @@ func encodeRepeated(e *Encoder, msg any, f *Field, depth int, deterministic bool
 			e.Varint(uint64(int64(v)))
 		}
 	case KindMessage:
-		if deterministic && f.Foreign == nil && !f.Group {
-			if sub := f.Sub(); isMapEntryTable(sub) {
-				return encodeMapEntriesSorted(e, msg, f, sub, depth)
+		n := f.RepMsgLen(msg)
+		// Resolve the sub-table once: Sub is pure per field (generated
+		// tables return a static table, dynamic ones memoize under their
+		// own lock), so resolving per element only repeats an indirect
+		// call (plus a mutex on the dynamic path). Foreign rows carry no
+		// Sub; otherwise the call count matches the old code exactly:
+		// one resolution for non-empty rows plus the map-entry shape
+		// check, which reuses it instead of calling Sub a second time.
+		var subTab *Table
+		if f.Foreign == nil && (n > 0 || (deterministic && !f.Group)) {
+			subTab = f.Sub()
+			if deterministic && !f.Group && isMapEntryTable(subTab) {
+				return encodeMapEntriesSorted(e, msg, f, subTab, depth)
 			}
 		}
-		n := f.RepMsgLen(msg)
 		for i := 0; i < n; i++ {
 			sub := f.RepMsgAt(msg, i)
 			if f.Foreign != nil {
@@ -1118,7 +1127,7 @@ func encodeRepeated(e *Encoder, msg any, f *Field, depth int, deterministic bool
 			}
 			if f.Group {
 				e.Tag(f.Num, WireStartGroup)
-				if err := encodeSubmessage(e, sub, f.Sub(), depth+1, deterministic); err != nil {
+				if err := encodeSubmessage(e, sub, subTab, depth+1, deterministic); err != nil {
 					return err
 				}
 				e.Tag(f.Num, WireEndGroup)
@@ -1128,7 +1137,7 @@ func encodeRepeated(e *Encoder, msg any, f *Field, depth int, deterministic bool
 			// A nil element encodes empty, like protoc-gen-go: the
 			// table closures normalize typed nils to nil, and
 			// encodeSubmessage is nil-tolerant.
-			if err := encodeSubmessage(e, sub, f.Sub(), depth+1, deterministic); err != nil {
+			if err := encodeSubmessage(e, sub, subTab, depth+1, deterministic); err != nil {
 				return err
 			}
 			e.End(mark)
@@ -1241,13 +1250,11 @@ func mapEntryKey(sub *Table, elem any) mapKey {
 	return k
 }
 
-// mapKeyCmp orders two entry keys, mirroring src/encode.c map_key_cmp and
-// the Java GenericCodec deterministic branch: a missing key sorts first,
-// string/bytes keys compare bytewise, signed numerics numerically, and
-// unsigned kinds by raw bits.
-func mapKeyCmp(sub *Table, a, b any) int {
-	ka := mapEntryKey(sub, a)
-	kb := mapEntryKey(sub, b)
+// cmpMapKeys orders two extracted entry keys, mirroring src/encode.c
+// map_key_cmp and the Java GenericCodec deterministic branch: a missing
+// key sorts first, string/bytes keys compare bytewise, signed numerics
+// numerically, and unsigned kinds by raw bits.
+func cmpMapKeys(ka, kb mapKey) int {
 	if !ka.has || !kb.has {
 		if ka.has == kb.has {
 			return 0
@@ -1288,6 +1295,15 @@ func mapKeyCmp(sub *Table, a, b any) int {
 	}
 }
 
+// mapEntry orders one element with its extracted sort key: extracting
+// once per element instead of once per comparison turns key reads from
+// O(n log n) into O(n). The sort below stays stable, so equal keys keep
+// their insertion order exactly as before.
+type mapEntry struct {
+	elem any
+	key  mapKey
+}
+
 // encodeMapEntriesSorted encodes one repeated map-entry row in key order.
 // Elements are copied into an index first: the caller's slice (and the
 // dynamic tree's run) keep their insertion order. A table without a key
@@ -1309,16 +1325,17 @@ func encodeMapEntriesSorted(e *Encoder, msg any, f *Field, sub *Table, depth int
 		}
 		return nil
 	}
-	order := make([]any, n)
+	order := make([]mapEntry, n)
 	for i := 0; i < n; i++ {
-		order[i] = f.RepMsgAt(msg, i)
+		elem := f.RepMsgAt(msg, i)
+		order[i] = mapEntry{elem: elem, key: mapEntryKey(sub, elem)}
 	}
 	sort.SliceStable(order, func(a, b int) bool {
-		return mapKeyCmp(sub, order[a], order[b]) < 0
+		return cmpMapKeys(order[a].key, order[b].key) < 0
 	})
-	for _, elem := range order {
+	for _, ent := range order {
 		mark := e.Begin(f.Num)
-		if err := encodeSubmessage(e, elem, sub, depth+1, true); err != nil {
+		if err := encodeSubmessage(e, ent.elem, sub, depth+1, true); err != nil {
 			return err
 		}
 		e.End(mark)
