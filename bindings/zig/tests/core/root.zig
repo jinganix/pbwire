@@ -3,4 +3,5 @@ const std = @import("std");
 
 test {
     _ = @import("descriptor.zig");
+    _ = @import("codec.zig");
 }

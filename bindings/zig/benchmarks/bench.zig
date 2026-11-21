@@ -328,9 +328,9 @@ fn runCase(io: std.Io, alloc: std.mem.Allocator, ty: *const pbwire.MessageType, 
 }
 
 pub fn main(init: std.process.Init.Minimal) !void {
-    var gpa = std.heap.DebugAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const alloc = gpa.allocator();
+    // A release allocator: the C core allocates with malloc and the pure core
+    // through this one, so neither side pays a debug allocator's bookkeeping.
+    const alloc = std.heap.smp_allocator;
 
     var arg_it = std.process.Args.Iterator.init(init.args);
     _ = arg_it.next();

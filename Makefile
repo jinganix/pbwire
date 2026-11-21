@@ -700,6 +700,17 @@ conformance-zig: $(CONFORMANCE_DESC)
 	$(CONFORMANCE_RUNNER) --failure_list $(CURDIR)/conformance/failure_list_pbwire.txt \
 		$(CURDIR)/bindings/zig/zig-out/bin/testee-zig $(CURDIR)/$(CONFORMANCE_DESC)
 
+# Same suite through the pure-Zig core (`bindings/zig/core/`): `-Dcore=true`
+# builds a testee with no C source, no translate-c and no `libpbwire.a`.
+# Binary in, binary out; JSON and text answer "skipped".
+conformance-zig-core: $(CONFORMANCE_DESC)
+	@test -x "$(CONFORMANCE_RUNNER)" || { \
+		echo "conformance_test_runner not found: $(CONFORMANCE_RUNNER)"; \
+		echo "run 'make conformance-setup' first"; exit 1; }
+	cd bindings/zig && zig build -Dcore=true testee
+	$(CONFORMANCE_RUNNER) --failure_list $(CURDIR)/conformance/failure_list_pbwire.txt \
+		$(CURDIR)/bindings/zig/zig-out/bin/testee-zig $(CURDIR)/$(CONFORMANCE_DESC)
+
 # Scala reuses the Java runtime: the classpath comes from its build script.
 conformance-scala: $(CONFORMANCE_DESC) scala-test
 	@test -x "$(CONFORMANCE_RUNNER)" || { \
@@ -1014,7 +1025,7 @@ clean:
 
 .PHONY: all test fuzz coverage release-check examples shared format format-check bench bench-c erlang-test erlang-core-sync ruby-core-sync erlang-bench \
 	python-bind python-test python-bench difftest difftest-short conformance conformance-setup conformance-python \
-	conformance-ruby conformance-java conformance-lua conformance-r conformance-node conformance-rust conformance-swift ruby-bind java-test ruby-test node-test objc-test r-bind \
+	conformance-ruby conformance-java conformance-lua conformance-r conformance-node conformance-rust conformance-swift conformance-zig-core ruby-bind java-test ruby-test node-test objc-test r-bind \
 	lua-bind lua-test lua-bench \
 	java-bench ruby-bench node-bench objc-bench go-bench pbench-java \
 	kotlin-test php-test dart-test rust-test csharp-test csharp-pbench \

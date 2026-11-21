@@ -1894,3 +1894,28 @@ code-generated tree, i.e. a rewrite of the tree and both codecs. The arm is
 published with its numbers as the no-C, no-`unsafeFlags` path -- the product
 exists for reach (a normal SwiftPM dependency), and `make conformance-swift`
 proves the wire format on it.
+
+## Provisional: the Zig pure-core arm (plan 22, 2026-11-21, issue 41)
+
+`bindings/zig/core/` is a pure-Zig port of the C core, selected by
+`-Dcore=true` in `bindings/zig/build.zig` (no C source, no translate-c, no
+`libpbwire.a`). The default build still compiles and links the C core; the
+option exists for a build that cannot compile `src/*.c`. The pbench arm is
+`pbench/core_arm.zig`: a prebuilt core `Message` tree through one `encodeTo`
+into a reused buffer and one one-shot `decode`, the same shape as
+`pbwire-zig-tree`, so the rows differ only in who walks the wire.
+
+`zig build -Doptimize=ReleaseFast bench`, one session, M-series arm64 laptop,
+MB/s at 136 / 174 / 2469 / 74913 B: `pbwire-zig-core` encode 574.4 / 565.9 /
+685.7 / 729.9 and decode 780.6 / 649.4 / 326.8 / 334.7, against the shipped
+`pbwire-zig-tree` 2017.8 / 1804.9 / 1687.4 / 1641.3 and 1081.4 / 907.9 / 665.8 /
+743.7 and the shim 1849.5 / 1515.0 / 1118.5 / 1200.7 and 1211.9 / 1065.8 /
+658.9 / 721.2. The tree row is the C core's own encoder; the pure core pays for
+its value tree and per-field allocations on decode, and for tag/length writes
+without the C encoder's reserve pass on encode.
+
+Conformance: `make conformance-zig-core` (the new
+`bindings/zig/conformance/testee_core.zig`, built with `-Dcore=true`) passes the
+binary suite with the same failure set as the C core: 1412 successes, 1403
+skipped, 2 expected, 0 unexpected. The skipped half is JSON/text, out of this
+core's binary scope.

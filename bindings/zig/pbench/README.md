@@ -53,15 +53,21 @@ the same bytes. The bench repeats the byte gate for every tier before timing.
 
 ## Provisional table (Stage 3)
 
-`cd bindings/zig && zig build -Doptimize=ReleaseFast bench`: both arms back to
-back in one process, best of three passes. MB/s over wire bytes, 2026-11-20:
+`cd bindings/zig && zig build -Doptimize=ReleaseFast bench`: all three arms back
+to back in one process, best of three passes. MB/s over wire bytes, 2026-11-21:
 
-| tier | `tree` enc | `shim` enc | `tree` dec | `shim` dec |
-|---|---|---|---|---|
-| 136 B | 2133.1 | 1857.3 | 1147.6 | 1208.6 |
-| 174 B | 1959.6 | 1581.1 | 953.9 | 1039.1 |
-| 2469 B | 1723.7 | 1122.4 | 689.3 | 681.4 |
-| 74913 B | 1763.2 | 1207.5 | 757.2 | 764.5 |
+| tier | `tree` enc | `shim` enc | `core` enc | `tree` dec | `shim` dec | `core` dec |
+|---|---|---|---|---|---|---|
+| 136 B | 2017.8 | 1849.5 | 574.4 | 1081.4 | 1211.9 | 780.6 |
+| 174 B | 1804.9 | 1515.0 | 565.9 | 907.9 | 1065.8 | 649.4 |
+| 2469 B | 1687.4 | 1118.5 | 685.7 | 665.8 | 658.9 | 326.8 |
+| 74913 B | 1641.3 | 1200.7 | 729.9 | 743.7 | 721.2 | 334.7 |
+
+The core arm is the pure-Zig codec: the descriptor reader, the value tree and
+the binary encoder/decoder, with no C source and no translate-c. It is the
+`-Dcore=true` build in `build.zig`, and `make conformance-zig-core` gates it on
+the official binary suite (1412 successes, 1403 skipped, 2 expected, 0
+unexpected).
 
 ## Verdict
 
