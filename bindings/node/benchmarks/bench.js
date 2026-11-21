@@ -8,15 +8,22 @@
 
  * identical bytes before anything is timed.
  *
- * Two pbwire rows, named by the mechanism they time:
+ * Four pbwire rows, named by the mechanism they time. The first three time
+ * the same native-in/native-out task; the fourth is the prebuilt handle:
  *
- *   pbwire-node-tree  encode/decode of a `Message` handle built (and read)
- *                     before the timer: the codec's own cost once the tree
- *                     exists. "The data is already in pbwire."
+ *   pbwire-node-tree  a native object in and out through the shipped
+ *                     per-field API: build a fresh `Message` with one `set()`
+ *                     per field, encode, free; decode, read every field back
+ *                     with one `get()` per field into a fresh object, free.
+ *                     Fresh handle per iteration, freed inside the timer.
  *   pbwire-node-shim  the native object in, wire out and wire in, native
  *                     object out: one addon call, the object walked in C.
  *   pbwire-node-core  the same native object and the same task on the pure
  *                     TypeScript core: no native library, no boundary.
+ *   pbwire-node-proxy encode/decode of a `Message` handle built (and read)
+ *                     before the timer: the codec's own cost once the tree
+ *                     exists. "The data is already in pbwire." Published,
+ *                     never the headline.
  *
  *   ./bench.sh        generate, build, run
  */
@@ -24,9 +31,12 @@
 const path = require('node:path');
 
 const { Schema } = require(path.join(__dirname, '..', 'lib', 'pbwire'));
+// The pbench tree arm: the shipped per-field full task (fresh handle per
+// iteration, freed inside the timer, every field read back on decode).
+const treeArm = require(path.join(__dirname, '..', 'pbench', 'a-tree'));
 // The pbench core arm: the pure-TypeScript codec, no native library.
 const coreArm = require(path.join(__dirname, '..', 'pbench', 'c-core'));
-// The pbench payload: the same native object the shim arm times.
+// The pbench payload: the same native object the tree/shim/core arms time.
 const { nativeObject } = require(path.join(__dirname, '..', 'pbench', 'payload'));
 const { Scalars3, Inner3, Color3 } = require(path.join(__dirname, 'gen', 'matrix3_pb.js'));
 
@@ -223,6 +233,12 @@ function main() {
         }
         const message = fillPbwire(type, repeats);
         const shimObject = nativeObject(repeats);
+        if (!treeArm.marshal(shimObject).equals(reference)) {
+            console.log(`FAIL ${label}: pbwire-node-tree encodes differently`);
+            failures++;
+            message.free();
+            continue;
+        }
         if (!Buffer.from(coreArm.marshal(shimObject)).equals(reference)) {
             console.log(`FAIL ${label}: pbwire-node-core encodes differently`);
             failures++;
@@ -237,6 +253,23 @@ function main() {
         }
         if (!message.encode().equals(reference)) {
             console.log(`FAIL ${label}: pbwire-node and google-protobuf encode differently`);
+            failures++;
+            message.free();
+            continue;
+        }
+        // The tree decode reads every field back into a fresh native object.
+        const treeBack = treeArm.unmarshal(reference);
+        const treeOk = treeBack.str === 'hello'
+            && treeBack.inner.name === 'kid'
+            && treeBack.inner.value === 42
+            && (treeBack.nums ?? []).length === repeats
+            && (treeBack.inners ?? []).length === repeats
+            && (repeats === 0 || treeBack.inners[repeats - 1].value === repeats)
+            && treeBack.opt_i32 === -7
+            && treeBack.u64 === 18446744073709551615n
+            && treeBack.color === 2;
+        if (!treeOk) {
+            console.log(`FAIL ${label}: pbwire-node-tree decode differs`);
             failures++;
             message.free();
             continue;
@@ -290,8 +323,10 @@ function main() {
         const official = fillOfficial(repeats);
         // Tier line shows the reference op's count; slower ops keep the floor.
         const count = calibrate(() => message.encode(), iterations);
-        const encodeNs = measure(iterations, () => message.encode());
-        const decodeNs = measure(iterations, () => type.decode(reference).free());
+        const proxyEncodeNs = measure(iterations, () => message.encode());
+        const proxyDecodeNs = measure(iterations, () => type.decode(reference).free());
+        const encodeNs = measure(iterations, () => treeArm.marshal(shimObject));
+        const decodeNs = measure(iterations, () => treeArm.unmarshal(reference));
         const coreEncodeNs = measure(iterations, () => coreArm.marshal(shimObject));
         const coreDecodeNs = measure(iterations, () => coreArm.unmarshal(reference));
         const shimEncodeNs = measure(iterations, () => type.encodeObject(shimObject));
@@ -321,6 +356,7 @@ function main() {
         row('pbwire-node-tree', 'encode', reference.length, encodeNs);
         row('pbwire-node-shim', 'encode', reference.length, shimEncodeNs);
         row('pbwire-node-core', 'encode', reference.length, coreEncodeNs);
+        row('pbwire-node-proxy', 'encode', reference.length, proxyEncodeNs);
         row('google-protobuf', 'encode', reference.length, officialEncodeNs);
         if (pjs !== null) {
             row('protobufjs', 'encode', reference.length, pjsEncodeNs);
@@ -328,6 +364,7 @@ function main() {
         row('pbwire-node-tree', 'decode', reference.length, decodeNs);
         row('pbwire-node-shim', 'decode', reference.length, shimDecodeNs);
         row('pbwire-node-core', 'decode', reference.length, coreDecodeNs);
+        row('pbwire-node-proxy', 'decode', reference.length, proxyDecodeNs);
         row('google-protobuf', 'decode', reference.length, officialDecodeNs);
         if (pjs !== null) {
             row('protobufjs', 'decode', reference.length, pjsDecodeNs);
