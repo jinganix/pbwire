@@ -201,7 +201,7 @@ The one-row summary is here; the detail is there.
 | [Dart](bindings/dart/) | `dart:ffi` | 13.7x (xlarge) / 4.4x (xlarge) | [protobuf-dart](https://pub.dev/packages/protobuf) |
 | [Rust](bindings/rust/) | static link | 1.29x (small) / 1.86x (xlarge) vs prost | [rust-protobuf 3.x](https://github.com/stepancheg/rust-protobuf) + [prost](https://github.com/tokio-rs/prost) |
 | [C#](bindings/csharp/) | P/Invoke | 3.19x (medium) / 2.08x (medium) | [Google.Protobuf](https://www.nuget.org/packages/Google.Protobuf) + [protobuf-net](https://github.com/protobuf-net/protobuf-net) |
-| [Go](bindings/go/) | thin generated models, one cgo crossing per op | 1.73x (xlarge) / 1.47x (xlarge) | [google.golang.org/protobuf](https://pkg.go.dev/google.golang.org/protobuf) |
+| [Go](bindings/go/) | thin generated models, pure-Go engine, no cgo | 1.49x (xlarge) / 1.20x (xlarge) | [google.golang.org/protobuf](https://pkg.go.dev/google.golang.org/protobuf) |
 | [Erlang](bindings/erlang/) | NIF | 3.91x (xlarge) / 2.47x (medium) | [gpb](https://github.com/tomas-abrahamsson/gpb) |
 | [Lua](bindings/lua/) | C module, tables + builder | 8.93x (xlarge, builder) / 1.66x (small, tables) | [lua-protobuf](https://github.com/starwing/lua-protobuf) |
 | [Swift](bindings/swift/) | SwiftPM, static link | 5.51x (xlarge) / 4.24x (medium) | [swift-protobuf](https://github.com/apple/swift-protobuf) |

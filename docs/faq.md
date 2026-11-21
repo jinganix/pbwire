@@ -73,7 +73,7 @@ the short version:
 | Dart | `dart:ffi` | `FileDescriptorSet` |
 | C# | `DllImport` + a resolver | `FileDescriptorSet` |
 | Rust | links `libpbwire.a` statically | `FileDescriptorSet` |
-| Go | thin generated models over a cshim runtime (one cgo crossing) | none for the struct path; `codec.Load` takes a `FileDescriptorSet` |
+| Go | thin generated models over the pure-Go table engine (no cgo) | none for the struct path; `codec.Load` takes a `FileDescriptorSet` |
 | Erlang | NIF; gpb records via `pbwire:load_cache/1` | gpb's `get_msg_defs/0` |
 | Lua | C module over the core, tables in/out | `FileDescriptorSet` |
 | Swift | SwiftPM package, FFI host over the C ABI | `FileDescriptorSet` |
