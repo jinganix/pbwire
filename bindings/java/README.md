@@ -51,7 +51,7 @@ in, so a build needs no `protoc` either.
 |---|---|
 | generated models | `newBuilder()`, typed setters/getters, `has…` for explicit presence, `toByteArray()`, `parseFrom(byte[])`, `isInitialized()` — see `tests/gen/` |
 | `Schema` | `fromFile(path[, limits])`, `fromBytes(bytes[, limits])`, `fromClasses(Class...)`, `message(fullName)`, `service(fullName)`, `close()` |
-| `MessageType` | `name()`, `newMessage()`, `decode(bytes[, limits])`, `decodeDelimited(bytes[, off, limits])`, `parseJson(text[, ignoreUnknown, limits])`, `parseText(text[, limits])` |
+| `MessageType` | `name()`, `newMessage()`, `decode(bytes[, limits])`, `decodeDelimited(bytes[, off, limits])`, `visit(wire[, limits], cb)`, `parseJson(text[, ignoreUnknown, limits])`, `parseText(text[, limits])` |
 | `Message` | `set(name\|number, …)`, `newMessage(name\|number)`, `clear(…)`, `has(…)`, `get(…)`, typed getters, `getList(…)`, `encode()`, `encodeDelimited()`, `encodeDeterministic()`, `encodedSize()`, `toJson()`, `toText()`, `close()` |
 | `ServiceType` | `name()`, `methodCount()`, `method(name)` → `inputType()`, `outputType()`, `clientStreaming()`, `serverStreaming()` |
 | `Wkt` | `anyPack/Unpack`, `anyTypeUrl`, `anyPayload`, `timestamp/duration…Millis`, `fieldMaskPaths`, `newFieldMask` |
@@ -80,6 +80,17 @@ empty list. `has` is the presence test — a field that was not set (or not on t
 wire) is absent, matching pbwire's explicit-presence model. Enums are read as
 integers. A `uint64` above `Long.MAX_VALUE` reads as the same raw bits, i.e. a
 negative `long`.
+
+`visit` is the single-level scan (like the core's `pbw_visit`): one validating
+tag pass, one callback per field in wire order, no message tree. Nested
+messages and packed runs arrive as LEN payloads the caller recurses into with
+another `visit`; groups arrive as raw bytes; scalars carry their raw wire bits
+in `Visit.VisitValue.u64` with no zigzag applied. The callback receives `null`
+for the field when the number is unknown and returns 0 to continue; any
+non-zero value aborts the scan. The return mirrors the core's `fail_off`: the
+wire length on success, the failing/aborting field's start offset on malformed
+input or abort, or 0 when the input exceeds the byte cap. Only a null callback
+throws; only `maxBytes` and the group-nesting cap apply.
 
 Value mapping: `int32/int64/sint*/sfixed*/fixed*` → `long` (signed),
 `uint32`/`fixed32` → `long` (zero-extended, so 4000000000 reads as
