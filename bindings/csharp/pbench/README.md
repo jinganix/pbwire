@@ -11,7 +11,7 @@ native object out.
 | arm | mechanism | what it answers |
 |---|---|---|
 | `tree` | the prebuilt `Pbwire.Message` handle: `message.Encode()`, `type.Decode(wire)` | what the C core's codec costs once the tree exists |
-| `shim` | `Scalars3Layout.Marshal(model)` / `.Unmarshal(wire)`: the generated model is the native object, one call per op | is a boundary worth paying for at all |
+| `shim` | `Scalars3Layout.Marshal(model)` / `.Unmarshal(wire)`: one flat image in, **one `P/Invoke`** per op, `bindings/csharp/native/pbw_cs_shim.c` walks it through `pbw_struct_codec_*` | is a boundary worth paying for at all |
 | `core` | `n/a` — a C# port of the C core | plan 16 (`issue41-16-core-csharp.md`) builds it |
 
 `core` prints `n/a` until plan 16 lands; there is no second wire
@@ -19,26 +19,36 @@ implementation in this binding.
 
 ## Layout table
 
-`codegen/internal/gen/csharp.go` emits a `<Message>Layout` row table beside
-each message: `FieldAt(name, offset, size)` for a plain scalar slot,
-`Has(name, bit, offset)` for a proto3 optional (presence bit index plus its
-storage), `Ref(name, offset, size)` for a reference-shaped slot (a pointer
-indirection: `string`, `bytes`, submessage, repeated field). Scalars pack first
-at natural alignment, pointer slots follow; the offsets describe the flat image
-`pbw` would read if the core grew an offset reader. `Pbwire.Layout` validates
-the table against the descriptor (`Verify`): every schema field must have a row,
-every row must name a real field, and no slot may overlap another.
+`codegen/internal/gen/csharp.go` emits, beside each message, the flat image
+that the native reader walks:
 
-**Deviation (recorded):** the C core has no entry that reads a pinned managed
-object through an offset table, and adding one needs `src/` + `include/`, which
-this plan does not touch. The walk is therefore managed: `Pbwire.Run.Encode`
-allocates the tree once per op (`ty.NewMessage()`), the generated model's own
-shipped converter (`EncodeInto`) crosses once per present field, and one
-`Encode` call writes the bytes; decode is one `Decode` call plus the model's
-`LoadFrom`. One call per op from the caller's view, native object in and out,
-but the per-field crossing is not removed. The table is emitted and gated as
-the contract a native reader would consume (`FieldAt`/`Has` offsets), not as
-the walk's data source.
+- `<Message>Layout.Table`: the gated slot table — `FieldAt(name, offset, size)`
+  for a plain scalar, `Has(name, bit, offset)` for a proto3 optional (presence
+  bit index plus storage), `Ref(name, offset, size)` for a pointer slot. Scalars
+  pack first at natural alignment, pointer slots follow. `Pbwire.Layout.Verify`
+  checks it against the descriptor (every schema field has a row, every row
+  names a real field, no overlap).
+- `<Message>Layout.Rows`: one `Pbwire.LayoutRow` per field with the facts the C
+  codec needs — `pbw_struct_kind_t`, `pbw_type`, wire type, `Has`/`Count`/`Case`
+  byte offsets, `Packed`/`Required`, and the child's proto full name.
+- `WriteImage` / `ReadImage` / `NewImage` on the model: copy the native object
+  into and out of one contiguous image. Strings are NUL-terminated UTF-8 into
+  the call arena, `bytes` is the core's inline `pbw_bytes_t`, a sub-message is a
+  pointer to its own image (stride `Child.ImageBytes`), a repeated field is a
+  pointer to a contiguous array plus its count.
+
+**Why an explicit image and not a pin:** `GCHandle.Alloc(obj, Pinned)` throws for
+a class with reference members (`string`, `List<T>`/`RepeatedField<T>`), and the
+GC may move those members at any time. The image is the pinned representation;
+writing it field by field into one `Marshal.AllocHGlobal` block per thread is
+this arm's honest cost, and it is paid once per op, not once per field across
+the boundary.
+
+**Presence:** proto3 optionals keep their 4-byte presence word, absent
+pointer-kind fields stay NULL, and a oneof keeps its 4-byte case word. One
+recorded limitation, shared with the Dart arm: a *present but empty* optional
+`string`/`bytes` is indistinguishable from an absent one (NULL is the absence
+signal), so it encodes as absent.
 
 ## Gate
 
