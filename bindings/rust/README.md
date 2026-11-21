@@ -50,6 +50,21 @@ default `cc`/`ar`): that is the layout codec the in-place arm calls.
 `cdylib`-free on purpose: the FFI hosts (Java, Node, Objective-C, PHP, Dart, C#)
 `dlopen` the shared library, while Rust compiles the archive in.
 
+The `core` cargo feature adds a second, independent codec: the pure-Rust port of
+the C core in `src/core/` (descriptor reader, value tree, encoder, decoder).
+It is off by default -- the default build above is unchanged -- and it is the
+only mode that needs no C toolchain, no `unsafe` and no generated code:
+
+```shell
+cargo test --no-default-features --features core   # descriptor + codec + wire tests
+make -C ../.. conformance-rust                     # official binary suite (1412/2)
+cargo run --no-default-features --features core --bin pbwire-conformance -- ../../build/conformance.desc
+```
+
+It is the pbench `core` arm, published as the no-native mode
+(`pbench/README.md`): the shipped handle (the static link) stays 1.66-1.88x its
+encode and 2.50-3.14x its decode, and prost is 1.4-1.5x its encode.
+
 ## Benchmarks
 
 ```shell
