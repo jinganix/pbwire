@@ -232,6 +232,8 @@ pub fn build(b: *std.Build) void {
                 .{ .name = "pbwire_gen", .module = model_mod },
                 .{ .name = "protobuf", .module = protobuf_mod },
                 .{ .name = "matrix3", .module = matrix3_mod },
+                .{ .name = "pbwire_core", .module = pure_mod },
+                .{ .name = "pbench_core", .module = pbench_core_mod },
             },
         });
         const vs = b.addExecutable(.{ .name = "bench-vs-baseline", .root_module = vs_mod });

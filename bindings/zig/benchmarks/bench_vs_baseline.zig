@@ -16,6 +16,8 @@ const pbwire = @import("pbwire");
 const gen = @import("pbwire_gen");
 const matrix3 = @import("matrix3");
 const Base = matrix3.Scalars3;
+const pbcore = @import("pbwire_core");
+const core_arm_mod = @import("pbench_core");
 
 const CASES = [_][]const u8{ "small", "medium", "large", "xlarge" };
 const REPEATS = [_]usize{ 0, 1, 100, 3000 };
@@ -195,7 +197,7 @@ fn run(io: std.Io, op: anytype, iterations: usize) f64 {
     return elapsed / @as(f64, @floatFromInt(iterations));
 }
 
-fn runCase(io: std.Io, alloc: std.mem.Allocator, ty: *const pbwire.MessageType, inner_ty: *const pbwire.MessageType, shim_plan: *gen.Scalars3Mirror.plan, tier: usize) !void {
+fn runCase(io: std.Io, alloc: std.mem.Allocator, ty: *const pbwire.MessageType, inner_ty: *const pbwire.MessageType, shim_plan: *gen.Scalars3Mirror.plan, core_arm: *core_arm_mod.CoreArm, tier: usize) !void {
     const label = CASES[tier];
     const n = REPEATS[tier];
 
@@ -249,6 +251,16 @@ fn runCase(io: std.Io, alloc: std.mem.Allocator, ty: *const pbwire.MessageType, 
         return;
     }
 
+    // Core arm: the pure-Zig codec. Gate its bytes and read-back before timing.
+    core_arm.gate(alloc, reference, n) catch |err| {
+        fail(label, "pbwire-zig-core gate: {s}", .{@errorName(err)});
+        return;
+    };
+    var core_message = try core_arm.build(alloc, n);
+    defer core_message.deinit();
+    var core_buf: std.ArrayListUnmanaged(u8) = .empty;
+    defer core_buf.deinit(alloc);
+
     // Decode gates: pbwire round-trips byte-exactly, the baseline re-encodes
     // the reference to the same bytes.
     var back = try ty.decode(reference);
@@ -283,6 +295,10 @@ fn runCase(io: std.Io, alloc: std.mem.Allocator, ty: *const pbwire.MessageType, 
         var plan: *gen.Scalars3Mirror.plan = undefined;
         var image: *const gen.Scalars3Mirror = undefined;
         var sback: *gen.Scalars3Mirror = undefined;
+        var core: *core_arm_mod.CoreArm = undefined;
+        var cm: *const pbcore.Message = undefined;
+        var cbuf: *std.ArrayListUnmanaged(u8) = undefined;
+        var ca: std.mem.Allocator = undefined;
         fn encPb() void {
             const out = pm.encodeInto(b) catch unreachable;
             std.mem.doNotOptimizeAway(out);
@@ -312,6 +328,15 @@ fn runCase(io: std.Io, alloc: std.mem.Allocator, ty: *const pbwire.MessageType, 
             plan.decodeInPlace(r, sback) catch unreachable;
             std.mem.doNotOptimizeAway(sback);
         }
+        fn encCore() void {
+            core.encodeTo(cm, cbuf, ca) catch unreachable;
+            std.mem.doNotOptimizeAway(cbuf.items.len);
+        }
+        fn decCore() void {
+            var d = core.decode(ca, r) catch unreachable;
+            defer d.deinit();
+            std.mem.doNotOptimizeAway(&d);
+        }
     };
     S.pm = &pmsg;
     S.t = ty;
@@ -323,6 +348,10 @@ fn runCase(io: std.Io, alloc: std.mem.Allocator, ty: *const pbwire.MessageType, 
     S.plan = shim_plan;
     S.image = &shim.image;
     S.sback = &shim_back;
+    S.core = core_arm;
+    S.cm = &core_message;
+    S.cbuf = &core_buf;
+    S.ca = alloc;
 
     const penc = calibrate(io, S.encPb, iterations);
     var penc_best: f64 = std.math.floatMax(f64);
@@ -342,6 +371,12 @@ fn runCase(io: std.Io, alloc: std.mem.Allocator, ty: *const pbwire.MessageType, 
     const sdec = calibrate(io, S.decShim, iterations);
     var sdec_best: f64 = std.math.floatMax(f64);
     for (0..PASSES) |_| sdec_best = @min(sdec_best, run(io, S.decShim, sdec));
+    const cenc = calibrate(io, S.encCore, iterations);
+    var cenc_best: f64 = std.math.floatMax(f64);
+    for (0..PASSES) |_| cenc_best = @min(cenc_best, run(io, S.encCore, cenc));
+    const cdec = calibrate(io, S.decCore, iterations);
+    var cdec_best: f64 = std.math.floatMax(f64);
+    for (0..PASSES) |_| cdec_best = @min(cdec_best, run(io, S.decCore, cdec));
 
     const bytes_f: f64 = @floatFromInt(reference.len);
     std.debug.print("{s}: {d} bytes, {d} iterations (repeat field x{d})\n", .{ label, reference.len, penc, n });
@@ -350,15 +385,15 @@ fn runCase(io: std.Io, alloc: std.mem.Allocator, ty: *const pbwire.MessageType, 
     std.debug.print("  pbwire-zig-tree decode      {d:>8.1}    {d:>8.1}\n", .{ pdec_best, bytes_f / pdec_best * 1000.0 });
     std.debug.print("  pbwire-zig-shim encode      {d:>8.1}    {d:>8.1}\n", .{ senc_best, bytes_f / senc_best * 1000.0 });
     std.debug.print("  pbwire-zig-shim decode      {d:>8.1}    {d:>8.1}\n", .{ sdec_best, bytes_f / sdec_best * 1000.0 });
+    std.debug.print("  pbwire-zig-core encode      {d:>8.1}    {d:>8.1}\n", .{ cenc_best, bytes_f / cenc_best * 1000.0 });
+    std.debug.print("  pbwire-zig-core decode      {d:>8.1}    {d:>8.1}\n", .{ cdec_best, bytes_f / cdec_best * 1000.0 });
     std.debug.print("  base      encode      {d:>8.1}    {d:>8.1}\n", .{ benc_best, bytes_f / benc_best * 1000.0 });
     std.debug.print("  base      decode      {d:>8.1}    {d:>8.1}\n", .{ bdec_best, bytes_f / bdec_best * 1000.0 });
-    std.debug.print("  -- vs baseline: tree encode {d:.2}x, decode {d:.2}x; shim encode {d:.2}x, decode {d:.2}x\n", .{ benc_best / penc_best, bdec_best / pdec_best, benc_best / senc_best, bdec_best / sdec_best });
+    std.debug.print("  -- vs baseline: tree encode {d:.2}x, decode {d:.2}x; shim encode {d:.2}x, decode {d:.2}x; core encode {d:.2}x, decode {d:.2}x\n", .{ benc_best / penc_best, bdec_best / pdec_best, benc_best / senc_best, bdec_best / sdec_best, benc_best / cenc_best, bdec_best / cdec_best });
 }
 
 pub fn main(init: std.process.Init.Minimal) !void {
-    var gpa = std.heap.DebugAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const alloc = gpa.allocator();
+    const alloc = std.heap.smp_allocator;
 
     var arg_it = std.process.Args.Iterator.init(init.args);
     _ = arg_it.next();
@@ -373,12 +408,14 @@ pub fn main(init: std.process.Init.Minimal) !void {
     const inner_ty = try schema.messageType("structtest.Inner3");
     var shim_plan = try gen.Scalars3Mirror.plan.init(alloc, &schema);
     defer shim_plan.deinit();
+    var core_arm = try core_arm_mod.CoreArm.init(alloc, desc_path);
+    defer core_arm.deinit();
 
     var threaded: std.Io.Threaded = .init(alloc, .{});
     defer threaded.deinit();
     const io = threaded.io();
 
-    for (0..CASES.len) |tier| try runCase(io, alloc, &ty, &inner_ty, &shim_plan, tier);
+    for (0..CASES.len) |tier| try runCase(io, alloc, &ty, &inner_ty, &shim_plan, &core_arm, tier);
     if (failures != 0) {
         std.debug.print("{d} check(s) failed\n", .{failures});
         std.process.exit(1);
