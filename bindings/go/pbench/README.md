@@ -24,6 +24,7 @@ dynamic paths are what this harness compares.
 | `dyngo/codec/` | `core` | dynamic Go core engine: `Schema`/`DType`/`DMsg`, a pure-Go value tree and the shared table engine, plus the model<->tree converter |
 | `dyngo/dyngo.go` | `core` | struct -> `DMsg` -> wire -> `DMsg` -> struct, all through the shipped converter, no cgo |
 | `cshim/` | `shim` | Erlang-style C: measures the struct layout once, then C reads Go memory directly, one crossing per call |
+| `../benchmarks/bench_test.go` (`pbwire-go-proxy`) | `proxy` | one `dync` C tree held before the timer through the shipped `ImportModel` converter: re-encode the held handle per iteration, decode-and-free per iteration with no `ExportModel` back out; published, never the headline |
 
 The arm names are the ones in the normative contract (`tree`, `core`, `shim`);
 the directory names stay as they are so the reference arm and its engine keep
@@ -49,19 +50,28 @@ field-by-field struct compare against the oracle decode.
 go test -tags pbench -run TestCompare -v -count=1 ./pbench/
 ```
 
-Last recorded run (Apple M4 Pro, `go test -tags pbench -run TestCompare -count=1
-./pbench/`; absolute numbers move with the host, the ordering does not):
-`shim` 1.41-1.82x encode and 1.11-2.13x decode against `protobuf-go`, `core`
-direct 1.43-1.57x encode and 0.84-1.23x decode, `tree` 0.05-0.10x encode and
-0.11-0.13x decode. On the xlarge tier (74913 B, median of 5 interleaved
-rounds):
+The formal bench (`../benchmarks/bench_test.go`, `make go-bench`, recorded
+into `results/`) times the thin-model `core` row (`pbwire-go-core`: struct in
+and out through the shared table engine, no prebuilt tree anywhere) beside
+the new `proxy` row (`pbwire-go-proxy`: the held-tree task above) and the
+`protobuf-go` baseline. The `tree` full task already has the Go-parity shape
+(struct -> C tree -> wire -> C tree -> struct through `ImportModel` /
+`ExportModel` per op, tree built fresh and freed inside the timer), so it is
+verified, not re-timed: its numbers below stand from the interleaved harness.
+
+Last compare run (Apple M4 Pro, `go test -tags pbench -run TestCompare
+-count=1 ./pbench/`; absolute numbers move with the host, the ordering does
+not): `shim` 1.36-1.81x encode and 1.13-1.98x decode against `protobuf-go`,
+`core` direct 1.46-1.58x encode and 0.84-1.13x decode, `tree` 0.05-0.09x
+encode and 0.12-0.13x decode. On the xlarge tier (74913 B, median of 5
+interleaved rounds):
 
 | arm | encode ns/op | encode MB/s | decode ns/op | decode MB/s |
 |---|---|---|---|---|
-| `tree` (`dync/`) | 2665872.3 | 28.1 | 2239179.4 | 33.5 |
-| `core` (`dyngo/`) | 88386.2 | 847.6 | 243107.1 | 308.2 |
-| `shim` (`cshim/`) | 76514.4 | 979.1 | 140871.9 | 531.8 |
-| `protobuf-go` | 139204.4 | 538.2 | 299707.5 | 250.0 |
+| `tree` (`dync/`) | 2640940.0 | 28.4 | 2127628.8 | 35.2 |
+| `core` (`dyngo/`) | 89289.6 | 838.9 | 232320.4 | 322.5 |
+| `shim` (`cshim/`) | 77714.8 | 963.9 | 132236.7 | 566.5 |
+| `protobuf-go` | 135930.4 | 551.1 | 261572.3 | 286.4 |
 
 That ordering is the reason the arms exist: a per-field copy into any tree
 (the C core with cgo crossings worst, the Go core better but still
@@ -72,6 +82,16 @@ fast.
 ## Verdict
 
 Selected: `cshim` -> the shipped runtime (`../runtime/`, layout in
-`../runtime/layout/`). `dyngo` stays the engine for models the shim cannot
-drive. `dync` stays the `tree` arm for proxies and transcoders; it is never a
-headline.
+`../runtime/layout/`): one crossing per op, native struct in and out, above
+`protobuf-go` on every tier in the interleaved harness (1.36-1.81x encode,
+1.13-1.98x decode). `dyngo` stays the engine for models the shim cannot
+drive, and the thin generated model over it (`pbwire-go-core` in the formal
+bench) stays the default application path: xlarge 75829.0 ns/op encode
+(1.92x `protobuf-go`) and 168831.1 ns/op decode (1.60x). `dync` stays the
+`tree` arm for proxies and transcoders, xlarge 2640940.0 ns/op encode (0.05x)
+and 2127628.8 ns/op decode (0.12x): the per-field copy into a tree (worst
+through cgo crossings) is what separates it, and it is never a headline.
+The new `proxy` row prices the held-tree task on that same arm, xlarge
+51252.7 ns/op encode (2.84x) and 109982.8 ns/op decode (2.46x): 51.5x the
+tree encode and 19.3x the tree decode at xlarge, the cost of the per-field
+copy made visible. Proxy is published, never the headline.
