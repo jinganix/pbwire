@@ -9,9 +9,10 @@ wire bytes out; wire bytes in and a fully readable `dict` out.
 
 | arm | entry point | mechanism | what it answers |
 |---|---|---|---|
-| `tree` | `type.decode(bytes)` / `type.encode(message)` | the shipped handle path: one tag scan records a slice per wire field (`Message`), `encode(message)` writes the tree | what the codec costs once the tree exists |
-| `shim` | `type.encode(dict)` / `type.decode(bytes).to_dict()` | one CPython downcall per op, the C extension walks the dict against the schema's field table | is the boundary worth paying for at all |
+| `tree` | `pbench/tree.py`: `marshal(dict)` / `unmarshal(wire)` | the shipped per-field full task: `encode(dict)`; `decode(bytes)`, then one `get()` per field into a fresh dict (nested message and repeated messages read back field by field). No prebuilt handle before the timer; CPython's GC owns the handle (no manual free exists on this path) | what an application pays through the per-field API |
+| `shim` | `type.encode(dict)` / `type.decode(bytes).to_dict()` | one CPython downcall per op, the C extension walks the dict against the schema's field table (encode) and the tree (decode) | is the boundary worth paying for at all |
 | `core` | `type.encode_object(dict)` / `type.decode_object(bytes)` | the pure-Python core (`../pure/`): descriptor reader, tree and codec in Python, so the task runs in the interpreter with no native library at all | what the wire format costs when the extension cannot be loaded |
+| `proxy` | `type.encode(message)` / `type.decode(bytes)` on a handle built before the timer | re-encode a held tree, decode-and-free with no materialization | the codec's own cost once the tree exists -- published, never the headline |
 
 The native object is the same dict `benchmarks/bench.py` already builds
 (`matrix3.txt` values), the oracle is `google.protobuf` generated code from the
@@ -24,44 +25,45 @@ make python-test        # the extension's own check, unchanged
 make python-bench       # gate runs first: bytes equality + field compare, per tier
 ```
 
-`bench.py` refuses to print a `pbwire-py-core` row before the pure core
-reproduces the reference bytes on all four tiers and its decode reads the fields
-the harness checks (`str`, `inner`, `inner.name`, `inner.value`, the repeated
-lengths and their last elements, the proto3 optionals, `u64`, `color`). A
-mismatch prints `FAIL` and exits 1, so no row is published before the arm is
-correct. The same core is what `make conformance-python-pure` runs the official
-binary suite through.
+`bench.py` refuses to print a row before the arm behind it is correct: every
+arm's bytes must equal protoc's on all four tiers, every decode must read the
+fields the harness checks (`str`, `inner`, `inner.name`, `inner.value`, the
+repeated lengths and their last elements, the proto3 optionals, `u64`,
+`color`), and a decoded tree must re-encode byte-exactly -- including the
+tree arm's own materialized dict (`encode(unmarshal(wire)) == wire`), so no
+row is published before the full task round-trips. A mismatch prints `FAIL`
+and exits 1. The same core is what `make conformance-python-pure` runs the
+official binary suite through.
 
 ## Run table
 
-Provisional (Stage 3, `python3 bindings/python/pbench/compare.py --rounds 3`,
-best of three interleaved rounds per cell, 2026-11-21, busy machine): the
-`core` arm is the whole user task -- `encode_object(dict)` builds the tree and
-writes it, `decode_object(bytes)` parses and reads every field into dicts.
+Formal (`make python-bench`, `results/bench-python-20261121T183716Z.json`,
+74913 B xlarge tier, throughput ratios = pbwire MB/s over `pb upb` MB/s):
 
-| tier | `pbwire-py-core` encode ns/op | encode MB/s | decode ns/op | decode MB/s |
+| arm | encode ns/op | vs upb enc | decode ns/op | vs upb dec |
 |---|---|---|---|---|
-| 136 B | 15483.6 | 8.8 | 19186.4 | 7.1 |
-| 174 B | 19670.1 | 8.8 | 24934.2 | 7.0 |
-| 2469 B | 241020.3 | 10.2 | 360992.2 | 6.8 |
-| 74913 B | 7167944.4 | 10.5 | 10980368.0 | 6.8 |
+| `tree` (full task) | 131381.6 | 7.19x | 1168445.8 | 1.57x |
+| `shim` (one downcall) | 145161.0 | 6.51x | 501795.4 | 3.65x |
+| `core` (pure Python) | 7282435.5 | 0.13x | 11544691.3 | 0.16x |
+| `proxy` (prebuilt) | 840.0 | 60.92x | 82215.8 | 1.15x |
 
-The same run, for scale: `pbwire-py-tree` (the extension's handle path)
-953.8 MB/s decode / 96092.3 MB/s encode at 74 KB, `pbwire-py-shim` (one
-downcall, dict in and out) 162.8 / 608.4, upb 806.7 / 514.9. The comparable
-baseline for a pure-Python core is protobuf's own pure-Python runtime: same
-74913 B payload in a separate process, 6.2 MB/s decode and 15.0 MB/s
-serialize-from-parsed -- so the port is 1.10x that parser on decode and in the
-same class, 100x behind the extension because the interpreter, not the wire
-engine, is what it pays for.
+Decode compares against the matching upb task: `tree`/`shim` `to_dict(bytes)`
+against upb `to_dict(bytes)` (parse plus full materialization), `proxy`
+`decode(bytes)` against upb `decode(bytes)` (parse only). Proxy/tree gap at
+xlarge: 156.4x encode, 14.2x decode on the full-task side (proxy `encode(parsed)`
+vs tree `encode(data)`; proxy bare decode vs tree `to_dict`). Tree/shim encode
+converge (0.90x-1.10x across tiers): encode is one C downcall either way, so
+the per-field shape costs nothing extra on the way in; the tree tax is all on
+decode (2.3x at xlarge), one boundary crossing per `get()`.
 
 ## Timing
 
 `make python-bench` (`bindings/python/benchmarks/bench.py bench`) is the formal,
-recorded run: it prints `pbwire-py` (the extension's dict and message paths) and
-`pb addressbook` (upb) as before, and `pbwire-py-core` next to them for the pure
-core's encode(data) / decode to dict task. `results/` keeps the JSON the harness
-writes; it is not committed.
+recorded run: it prints `pbwire-py-tree` (the per-field full task from
+`pbench/tree.py`, which `bench.py` reuses directly), `pbwire-py-shim` (one
+downcall per op), `pbwire-py-proxy` (the old prebuilt rows, relabelled not
+re-measured as a new task) and `pbwire-py-core` next to upb (`pb upb`).
+`results/` keeps the JSON the harness writes; it is not committed.
 
 The pure core is the no-extension path (pure-Python mode, PyPy, a sandboxed
 interpreter), not the fast one: the extension stays the shipped codec. Its
@@ -70,13 +72,23 @@ library is visible, never as a headline.
 
 ## Verdict
 
-The CPython extension stays the shipped codec for the Python binding; the pure core
-ships as its no-extension mode (pure-Python interpreters, PyPy, sandboxed
-runtimes), which is what the official runtime offers too. The pure core is
-correct at the only contract that matters -- `make conformance-python-pure`:
-1412 successes, 1403 JSON/text skipped, 2 expected failures, 0 unexpected, the
-same failure set as the C core, the TS port and the C# port -- so it is
-published, never headlined.
+The CPython extension stays the shipped codec for the Python binding, and the
+`shim` shape (one downcall per op: `encode(dict)` / `decode(bytes).to_dict()`)
+is the recommended application path: it is the fastest native-in/native-out
+shape on every tier (3.65x upb on xlarge decode; tree pays 2.3x for per-field
+`get()` crossings), and it is also the simplest. The `tree` arm stays published
+beside it as the per-field-API reference -- it is the headline-adjacent
+application row, never replaced by `proxy`. The pure core ships as the
+no-extension mode (pure-Python interpreters, PyPy, sandboxed runtimes), correct
+at `make conformance-python-pure` (1412 successes, 1403 JSON/text skipped,
+2 expected failures, 0 unexpected -- rerun on this task's tree), published
+never headlined: it is 0.13x-0.16x upb on the 74 KB task because every value
+becomes a Python object in the interpreter, not because the wire walk is wrong.
+`proxy` is published with the held-tree price (156.4x encode gap at xlarge),
+never the headline.
+
+No optimization in this task: every native arm (`tree`, `shim`) is above
+baseline on every tier, so Task 15 has no Python cell.
 
 The reason it is not the default is arithmetic, not bugs. On the same 74 KB
 payload the extension's handle path is 953.8 MB/s decode / 96092.3 MB/s encode
