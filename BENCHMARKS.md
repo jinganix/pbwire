@@ -67,7 +67,8 @@ for a case, and `scripts/bench-record.py` accepts the shorter header.
 `make bench-c` adds one more block per case
 (`pbwire-c1`: the C binding's one-shot API, which compiles the layout on every
 call) after the standard four rows; only the standard block is aggregated
-below. The Python harness names its ops by the task instead (`encode(data)`,
+below. Go rows additionally print `allocs/op` and `B/op`, recorded into the
+JSON and rendered when present. The Python harness names its ops by the task instead (`encode(data)`,
 `decode(bytes)`, `to_dict(bytes)`, `encode(parsed)`), because a dict-based
 binding has two representations and only comparing like with like is fair.
 
@@ -160,7 +161,7 @@ own README. Dart ran once `dart pub global activate protoc_plugin` provided
 | Erlang/OTP NIF | `make benchmarks` in `bindings/erlang/benchmarks` | gpb (pure Erlang), with gpb NIF (libprotobuf) as the second baseline, same `matrix3.proto` | all 4 | 3.91x / 1.60x vs best-of-two ✅ |
 | Python (CPython ext) | `make python-bench` (`bindings/python/benchmarks/bench.py`) | `google.protobuf` (upb C extension) on the same `matrix3.proto` | all 4 | 6.87x ✅ / 1.19x ✅ |
 | C++ | same engine as C (`bindings/cpp` mirrors the C structs; `make bench-c` is the harness) | `protoc` C++ generated from the same `matrix3.proto` | all 4 | 1.33x ✅ / 2.00x ✅ |
-| Go (thin model, pure-Go engine) | `make go-bench` (`bindings/go/benchmarks`) | `protobuf-go` generated code from the same `matrix3.proto` | all 4 | 1.49x ✅ / 1.37x ✅ (decode leads every tier) |
+| Go (thin model, pure-Go engine) | `make go-bench` (`bindings/go/benchmarks`) | `protobuf-go` generated code from the same `matrix3.proto` | all 4 | 1.50x ✅ / 1.16x ✅ (xlarge; full tiers + allocs in section) |
 | Java (pure-Java codec) | `make java-bench` (`bindings/java/benchmarks`) | `protobuf-java` generated code from the same `matrix3.proto` | all 4 | 1.13x ✅ / 1.95x ✅ (0.77x at 136 B) |
 | Node (N-API addon) | `make node-bench` (`bindings/node/benchmarks`) | [protobufjs](https://www.npmjs.com/package/protobufjs) (fastest) + `google-protobuf` (jspb) from the same `matrix3.proto` | all 4 | 3.18x ✅ / 3.17x ✅ |
 | Ruby (C extension) | `make ruby-bench` (`bindings/ruby/benchmarks`) | the `google-protobuf` gem (C extension) | all 4 | 1.34x ✅ / 1.67x ✅ |
@@ -755,31 +756,42 @@ four tiers. The two generated packages are the committed ones under
 `bindings/go/tests`, so `bench.sh` needs Go only: no protoc, no C toolchain,
 no descriptor.
 
-The rows below are the like-for-like comparison: the same user-visible task,
-struct in and struct out, gated on byte-identical output and a field-by-field
-decode before timing. Apple M4 Pro, same process times both sides:
+The rows below time the same user-visible task, struct in and struct
+out, gated on byte-identical output and a field-by-field decode before
+timing; the `*-par` rows run the same ops across `GOMAXPROCS` goroutines.
+Apple M4 Pro, same process times both sides:
 
-| payload | op | pbwire-go (MB/s, x protobuf-go) | protobuf-go (MB/s) |
-|---|---|---|---|
-| 136 B | encode | 845.5 (1.38x ✅) | 610.8 |
-| 136 B | decode | 561.2 (1.03x ✅) | 542.9 |
-| 174 B | encode | 883.9 (1.50x ✅) | 588.0 |
-| 174 B | decode | 477.0 (1.04x ✅) | 457.4 |
-| 2469 B | encode | 809.3 (1.56x ✅) | 518.4 |
-| 2469 B | decode | 370.1 (1.27x ✅) | 291.1 |
-| 74913 B | encode | 821.4 (1.49x ✅) | 550.2 |
-| 74913 B | decode | 428.4 (1.37x ✅) | 313.3 |
+| payload | op | pbwire-go (MB/s, x protobuf-go) | protobuf-go (MB/s) | allocs/op (pbwire / protobuf-go) | B/op (pbwire / protobuf-go) |
+|---|---|---|---|---|---|
+| 136 B | encode | 841.4 (1.30x ✅) | 646.6 | 1 / 1 | 256 / 144 |
+| 136 B | decode | 588.4 (1.06x ✅) | 553.6 | 5 / 7 | 444 / 384 |
+| 174 B | encode | 836.0 (1.39x ✅) | 602.9 | 1 / 1 | 256 / 176 |
+| 174 B | decode | 436.7 (1.00x ❌) | 436.9 | 10 / 14 | 544 / 488 |
+| 2469 B | encode | 846.5 (1.59x ✅) | 532.6 | 1 / 1 | 2688 / 2688 |
+| 2469 B | decode | 346.0 (1.17x ✅) | 295.5 | 133 / 325 | 13288 / 15064 |
+| 74913 B | encode | 847.9 (1.50x ✅) | 564.6 | 1 / 1 | 81920 / 81920 |
+| 74913 B | decode | 329.7 (1.16x ✅) | 284.9 | 3057 / 9037 | 426956 / 472238 |
+| 136 B | encode-par | 1090.5 (1.01x ✅) | 1074.6 | 1 / 1 | 256 / 144 |
+| 136 B | decode-par | 970.2 (0.85x ❌) | 1138.7 | 5 / 7 | 444 / 384 |
+| 174 B | encode-par | 1337.0 (1.45x ✅) | 923.8 | 1 / 1 | 256 / 176 |
+| 174 B | decode-par | 981.9 (0.95x ❌) | 1039.0 | 10 / 14 | 544 / 488 |
+| 2469 B | encode-par | 1808.0 (1.27x ✅) | 1422.3 | 1 / 1 | 2688 / 2688 |
+| 2469 B | decode-par | 460.4 (0.94x ❌) | 488.0 | 133 / 325 | 13288 / 15064 |
+| 74913 B | encode-par | 1764.1 (0.73x ❌) | 2413.4 | 1 / 1 | 81920 / 81920 |
+| 74913 B | decode-par | 740.0 (1.09x ✅) | 677.7 | 3057 / 9037 | 426955 / 472237 |
 
 Encode is ahead on every tier: the fast path reads scalars, strings and
 bytes straight from struct memory with no getter calls and no tree. Decode stores plain integer-width scalars straight into struct memory
 through the same offset columns (no pointers cross, so no write barrier is
 skipped); strings, bytes, slices, optionals and submessages stay on
-closures by design. It leads on all four tiers now (1.03x–1.38x): folding
-the varint/length loops from `Consume*` into the `Decoder` methods removed
-one call level per field occurrence, which was the largest single slice of
-the small-tier gap. The remaining per-field dispatch (table lookup, kind
-switch, one `decodeField` call) is still the main decode cost, which is why
-the small-tier lead stays thin while the large tiers lead comfortably. The two
+closures by design. Encode leads 1.30x–1.59x; decode leads three tiers and
+ties the fourth (1.00x at 174 B). The parallel rows show what a server
+sees: encode scales on both sides except xlarge, where protobuf-go pulls
+ahead (0.73x), and decode-par trails the baseline on the three small tiers
+while leading xlarge (1.09x) — contention data, published as measured. The
+pbench gate pins the semantic edge the table cannot show: invalid UTF-8 in
+a proto3 string fails on every path, and unknown fields are dropped by the
+struct paths exactly as documented (`TestGateSemantics`). The two
 dynamic arms behind the thin model were compared under
 [`bindings/go/pbench/`](bindings/go/pbench/) (same tiers, interleaved,
 native struct in and out, converter-only glue): the C core at 0.05-0.10x
