@@ -10,10 +10,11 @@ and wire bytes out; wire bytes in and a fully readable native object out.
 |---|---|---|---|
 | `tree` | `a-tree.jl` | the shipped `Dict`/`Message` handle: `to_dict`, `encode_dict`; `decode_dict`, `from_dict` | what the codec costs once the tree exists |
 | `shim` | `b-shim.jl` | the generated `mutable struct <Message>Layout` image is the native object; `Pbwire.encode_layout` / `decode_layout` cross once and `bindings/julia/native/pbw_julia_shim.c` walks that memory in place through `pbw_struct_codec_*` | is a boundary worth paying for at all |
-| `core` | `n/a` | a pure-Julia port of the C core | plan 19 (`issue41-19-core-julia.md`) builds it |
+| `core` | `core_arm.jl` | the pure-Julia core (`runtime/src/core/`): `encode` / `decode` + field reads, no `ccall`, no native library | what the whole task costs when the wire walk is an interpreter loop |
 
-`core` prints `n/a` until plan 19 lands; there is no second wire
-implementation in this binding.
+`core` is the no-native arm (plan 19): stdlib-only Julia, no `ccall`, no
+generated code. It is an interpreter loop by construction and is never the
+fast path; `tree` and `shim` keep the shipped C core.
 
 ## Layout table
 
