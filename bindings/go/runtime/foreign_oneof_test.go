@@ -1,13 +1,13 @@
 // A foreign oneof message member: the sibling package owns the wire work and
 // the local engine only frames the bytes, the same shape as a foreign
 // repeated message row.
-package codec_test
+package runtime_test
 
 import (
 	"bytes"
 	"testing"
 
-	"pbwire/pbench/dyngo/codec"
+	"pbwire/runtime"
 	dep "pbwire/tests/gen/xdep"
 )
 
@@ -19,12 +19,12 @@ func TestForeignOneofMemberFraming(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	d := codec.Decoder{Buf: ref}
+	d := runtime.Decoder{Buf: ref}
 	_ = d
-	table := codec.NewTable("test.ForeignOneof", []*codec.Field{
+	table := runtime.NewTable("test.ForeignOneof", []*runtime.Field{
 		{
-			Num: 1, Wire: codec.WireLen, Kind: codec.KindMessage, Oneof: true,
-			Foreign: &codec.ForeignOps{
+			Num: 1, Wire: runtime.WireLen, Kind: runtime.KindMessage, Oneof: true,
+			Foreign: &runtime.ForeignOps{
 				Encode: func(m any) ([]byte, error) { return m.(*dep.DepMsg).Marshal() },
 				Decode: func(m any, w []byte) error { return m.(*dep.DepMsg).Unmarshal(w) },
 			},
@@ -42,20 +42,20 @@ func TestForeignOneofMemberFraming(t *testing.T) {
 		},
 	})
 	h := &foreignHolder{m: local}
-	var framed codec.Encoder
-	framed.Tag(1, codec.WireLen)
+	var framed runtime.Encoder
+	framed.Tag(1, runtime.WireLen)
 	framed.Data(ref)
-	var e codec.Encoder
-	if err := codec.EncodeTable(&e, h, table, 0); err != nil {
+	var e runtime.Encoder
+	if err := runtime.EncodeTable(&e, h, table, 0); err != nil {
 		t.Fatal(err)
 	}
 	if !bytes.Equal(e.Buf, framed.Buf) {
 		t.Fatalf("encode % x, want % x", e.Buf, framed.Buf)
 	}
 	var back foreignHolder
-	dd := codec.Decoder{Buf: e.Buf}
-	var a codec.Arena
-	if err := codec.DecodeTable(&dd, &a, &back, table, 0); err != nil {
+	dd := runtime.Decoder{Buf: e.Buf}
+	var a runtime.Arena
+	if err := runtime.DecodeTable(&dd, &a, &back, table, 0); err != nil {
 		t.Fatal(err)
 	}
 	if back.m == nil || back.m.Name != "n" || back.m.Value != 1 {

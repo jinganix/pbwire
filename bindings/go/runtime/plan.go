@@ -7,7 +7,7 @@
 // Only the descriptor types and proto.Unmarshal come from
 // google.golang.org/protobuf; nothing here runs in the encode/decode hot
 // path, so reflection is fine.
-package codec
+package runtime
 
 import (
 	"fmt"

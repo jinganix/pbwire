@@ -1,23 +1,23 @@
 // Dynamic-core branches the matrix3/oneof1 fixtures cannot reach: oneof
 // clearing before the first encode, split oneof-message merging, field-number
 // ordering, repeated legacy groups, and presence after decode.
-package codec_test
+package runtime_test
 
 import (
 	"bytes"
 	"os"
 	"testing"
 
-	"pbwire/pbench/dyngo/codec"
+	"pbwire/runtime"
 )
 
-func loadBranches(t *testing.T) *codec.DType {
+func loadBranches(t *testing.T) *runtime.DType {
 	t.Helper()
 	raw, err := os.ReadFile("testdata/branches.desc")
 	if err != nil {
 		t.Fatal(err)
 	}
-	s, err := codec.Load(raw)
+	s, err := runtime.Load(raw)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -35,7 +35,7 @@ func TestDMsgOneofClearsBeforeEncode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s, err := codec.Load(raw)
+	s, err := runtime.Load(raw)
 	if err != nil {
 		t.Fatal(err)
 	}

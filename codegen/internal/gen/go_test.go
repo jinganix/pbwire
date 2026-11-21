@@ -126,10 +126,10 @@ func TestGoFilesDefault(t *testing.T) {
 	}
 	for _, want := range []string{
 		"func (m *M) Marshal() ([]byte, error)",
-		"return codec.EncodeModel(m, MMeta)",
+		"return runtime.EncodeModel(m, MMeta)",
 		"func (m *M) Unmarshal(wire []byte) error",
-		"return codec.DecodeModel(wire, m, MMeta)",
-		`"pbwire/pbench/dyngo/codec"`,
+		"return runtime.DecodeModel(wire, m, MMeta)",
+		`"pbwire/runtime"`,
 	} {
 		if !strings.Contains(models, want) {
 			t.Errorf("model file must forward to the table engine, misses %q", want)
@@ -140,10 +140,10 @@ func TestGoFilesDefault(t *testing.T) {
 		t.Fatalf("missing meta file, got %v", keys(got))
 	}
 	for _, want := range []string{
-		"var MMeta = codec.NewTable(\"t.M\"",
+		"var MMeta = runtime.NewTable(\"t.M\"",
 		"Name: \"v\"",
-		"Num: 1, Wire: codec.WireVarint, Kind: codec.KindInt32",
-		"Num: 2, Wire: codec.WireLen, Kind: codec.KindString",
+		"Num: 1, Wire: runtime.WireVarint, Kind: runtime.KindInt32",
+		"Num: 2, Wire: runtime.WireLen, Kind: runtime.KindString",
 		"GetI32:",
 		"SetStr:",
 		"Fast: true, Off: uint32(unsafe.Offsetof(M{}.V))",
@@ -162,7 +162,7 @@ func TestGoFilesDefault(t *testing.T) {
 		}
 	}
 	for _, bad := range []string{
-		"codec.NewTable",
+		"runtime.NewTable",
 		"getPlan",
 		"func Init()",
 		"UseSchema",
@@ -246,7 +246,7 @@ func TestGoCodecBranches(t *testing.T) {
 			t.Errorf("branch model file misses %q", want)
 		}
 	}
-	for _, bad := range []string{"codec.NewTable", "GetI32:", "SetStr:", "Sub: func()", "EncodeRaw"} {
+	for _, bad := range []string{"runtime.NewTable", "GetI32:", "SetStr:", "Sub: func()", "EncodeRaw"} {
 		if strings.Contains(models, bad) {
 			t.Errorf("branch model file must stay free of tables and runtime calls: %q", bad)
 		}
@@ -255,8 +255,8 @@ func TestGoCodecBranches(t *testing.T) {
 	// on the table engine: dyngo forwarding in the model, no cshim file.
 	for _, want := range []string{
 		"func (m *B) Marshal() ([]byte, error)",
-		"codec.EncodeModel(m, BMeta)",
-		"codec.DecodeModel(wire, m, BMeta)",
+		"runtime.EncodeModel(m, BMeta)",
+		"runtime.DecodeModel(wire, m, BMeta)",
 	} {
 		if !strings.Contains(models, want) {
 			t.Errorf("skipped file must stay on the table engine, misses %q", want)
@@ -268,26 +268,26 @@ func TestGoCodecBranches(t *testing.T) {
 	// The meta side: every field-fact and closure shape.
 	for _, want := range []string{
 		// required: always written, no presence guard.
-		"Num: 1, Wire: codec.WireVarint, Kind: codec.KindInt32, Required: true",
+		"Num: 1, Wire: runtime.WireVarint, Kind: runtime.KindInt32, Required: true",
 		// proto2 optional pointer: presence through the pointer.
 		"GetOptStr:",
 		"SetOptStr:",
 		// proto3 optional int64.
 		"GetOptI64:",
 		// local submessage: sub-table reference plus message hooks.
-		"Sub: func() *codec.Table { return InnerMeta }",
+		"Sub: func() *runtime.Table { return InnerMeta }",
 		"GetOrCreateMsg:",
 		// foreign submessage: bytes through the sibling package.
-		"Foreign: &codec.ForeignOps",
+		"Foreign: &runtime.ForeignOps",
 		"xdep.DepMsg",
 		// packed vs unpacked repeated.
-		"Num: 6, Wire: codec.WireVarint, Kind: codec.KindInt32, Repeated: true, Packed: true",
-		"Num: 7, Wire: codec.WireVarint, Kind: codec.KindInt32, Repeated: true,",
+		"Num: 6, Wire: runtime.WireVarint, Kind: runtime.KindInt32, Repeated: true, Packed: true",
+		"Num: 7, Wire: runtime.WireVarint, Kind: runtime.KindInt32, Repeated: true,",
 		// repeated string rows carry slice hooks, not tags.
 		"GetRepStr:",
 		"AppendStr:",
 		// enum preserved as int (no validation).
-		"Kind: codec.KindEnum",
+		"Kind: runtime.KindEnum",
 		"= E(v)",
 		// maps ride as repeated entry structs.
 		"B_ByKeyEntryMeta",
@@ -299,10 +299,10 @@ func TestGoCodecBranches(t *testing.T) {
 		".Kind = &B_T{T: v.(string)}",
 		"return &Inner{}", // oneof message member allocator
 		// float/double need no math import: bit casts live in the engine.
-		"Kind: codec.KindFloat",
-		"Kind: codec.KindDouble",
+		"Kind: runtime.KindFloat",
+		"Kind: runtime.KindDouble",
 		// field-number order is preserved in the table.
-		"var BMeta = codec.NewTable(\"b.B\"",
+		"var BMeta = runtime.NewTable(\"b.B\"",
 	} {
 		if !strings.Contains(meta, want) {
 			t.Errorf("branch meta file misses %q", want)
@@ -347,7 +347,7 @@ func TestGoFilesNoCshim(t *testing.T) {
 		t.Fatal("codegen must not emit cshim wiring anymore")
 	}
 	models := got["t_pbwire.go"]
-	for _, want := range []string{"codec.EncodeModel(m,", "codec.DecodeModel(wire, m,"} {
+	for _, want := range []string{"runtime.EncodeModel(m,", "runtime.DecodeModel(wire, m,"} {
 		if !strings.Contains(models, want) {
 			t.Errorf("model file must forward to the table engine, misses %q", want)
 		}
@@ -383,7 +383,7 @@ func TestGoCshimForeignFieldFallsBack(t *testing.T) {
 		t.Error("a foreign message field must not emit a cshim file")
 	}
 	models := got["u_pbwire.go"]
-	for _, want := range []string{"codec.EncodeModel(m, UsesMeta)", "codec.DecodeModel(wire, m, UsesMeta)"} {
+	for _, want := range []string{"runtime.EncodeModel(m, UsesMeta)", "runtime.DecodeModel(wire, m, UsesMeta)"} {
 		if !strings.Contains(models, want) {
 			t.Errorf("foreign model must keep the table engine, misses %q", want)
 		}
@@ -417,7 +417,7 @@ func TestGoCshimSubRepeatedFallsBack(t *testing.T) {
 		t.Error("a sub table with repeated rows must not emit a cshim file")
 	}
 	models := got["a_pbwire.go"]
-	for _, want := range []string{"codec.EncodeModel(m, PhoneMeta)", "codec.EncodeModel(m, BookMeta)"} {
+	for _, want := range []string{"runtime.EncodeModel(m, PhoneMeta)", "runtime.EncodeModel(m, BookMeta)"} {
 		if !strings.Contains(models, want) {
 			t.Errorf("nested-repeat file must keep the table engine, misses %q", want)
 		}

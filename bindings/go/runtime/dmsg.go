@@ -10,7 +10,7 @@
 // so the result stays valid after the caller reuses the input slice. Unknown
 // fields are retained per message (bytes including the tag) and re-emitted
 // after that message's known fields, matching the C core.
-package codec
+package runtime
 
 import (
 	"fmt"

@@ -1,17 +1,17 @@
-// Thin model plumbing: the generated file forwards to codec.EncodeModel/
+// Thin model plumbing: the generated file forwards to runtime.EncodeModel/
 // DecodeModel and carries no encoder state of its own.
-package codec_test
+package runtime_test
 
 import (
 	"testing"
 
-	"pbwire/pbench/dyngo/codec"
+	"pbwire/runtime"
 	"pbwire/tests/gen/matrix3"
 )
 
 func TestThinModelEncoding(t *testing.T) {
 	src := fillScalarsStruct(2)
-	wire, err := codec.EncodeModel(src, matrix3.Scalars3Meta)
+	wire, err := runtime.EncodeModel(src, matrix3.Scalars3Meta)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -23,7 +23,7 @@ func TestThinModelEncoding(t *testing.T) {
 		t.Fatalf("Marshal % x != EncodeModel % x", got, wire)
 	}
 	var back matrix3.Scalars3
-	if err := codec.DecodeModel(wire, &back, matrix3.Scalars3Meta); err != nil {
+	if err := runtime.DecodeModel(wire, &back, matrix3.Scalars3Meta); err != nil {
 		t.Fatal(err)
 	}
 	if back.Str != "hello" || len(back.Nums) != 2 || back.Inner.GetName() != "kid" {

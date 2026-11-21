@@ -1,7 +1,7 @@
 // Shipped model<->tree conversion: the same native struct the application
 // holds moves into and out of a dynamic tree through public API only. pbench
 // times exactly these functions, so this test is the contract they rely on.
-package codec_test
+package runtime_test
 
 import (
 	"bytes"

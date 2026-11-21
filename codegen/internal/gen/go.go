@@ -174,7 +174,7 @@ func goFiles(f *model.File, opt Options) ([]File, error) {
 	})
 	// Two files, like Java's message/metadata split: the model holds data
 	// types and one-line forwarding only, so it stays replaceable; the meta
-	// file holds the field tables. Every wire decision stays in codec.
+	// file holds the field tables. Every wire decision stays in runtime.
 	if !opt.Model {
 		return nil, nil
 	}
@@ -209,7 +209,7 @@ func goFiles(f *model.File, opt Options) ([]File, error) {
 }
 
 // writeGoModelHeader emits the package clause plus exactly the imports the
-// models use: codec for Marshal/Unmarshal forwarding, fmt for enum strings
+// models use: runtime for Marshal/Unmarshal forwarding, fmt for enum strings
 // and the nil guards, mapped deps for foreign field types.
 func writeGoModelHeader(b *strings.Builder, f *model.File, opt Options) {
 	b.WriteString(headerP(f, "//", "Generated structs over the pbwire table codec, protoc-gen-go shape."))
@@ -221,7 +221,7 @@ func writeGoModelHeader(b *strings.Builder, f *model.File, opt Options) {
 	// gofmt-clean.
 	var imports []string
 	if len(f.Messages) > 0 {
-		imports = append(imports, "\t\"pbwire/pbench/dyngo/codec\"\n")
+		imports = append(imports, "\t\"pbwire/runtime\"\n")
 	}
 	if len(f.Enums) > 0 {
 		imports = append(imports, "\t\"fmt\"\n")
@@ -242,14 +242,14 @@ func writeGoModelHeader(b *strings.Builder, f *model.File, opt Options) {
 }
 
 // writeGoMetaHeader emits the package clause plus exactly the imports the
-// metadata file uses: codec for the tables, mapped deps for foreign rows.
+// metadata file uses: runtime for the tables, mapped deps for foreign rows.
 func writeGoMetaHeader(b *strings.Builder, f *model.File, opt Options) {
 	b.WriteString(headerP(f, "//", "Field tables for the generated model. Data only: the codec decides every tag, length and presence."))
 	fmt.Fprintf(b, "package %s\n\n", goPackage(f))
 	if len(f.Messages) == 0 {
 		return
 	}
-	b.WriteString("import (\n\t\"pbwire/pbench/dyngo/codec\"\n")
+	b.WriteString("import (\n\t\"pbwire/runtime\"\n")
 	if goNeedsUnsafe(f) {
 		b.WriteString("\t\"unsafe\"\n")
 	}
@@ -403,9 +403,9 @@ func writeGoGetters(b *strings.Builder, f *model.File, m model.Message) {
 func writeGoCodec(b *strings.Builder, f *model.File, m model.Message) {
 	fmt.Fprintf(b, "func (m *%s) Reset() {\n\tif m == nil {\n\t\treturn\n\t}\n\t*m = %s{}\n}\n\n", m.Name, m.Name)
 	fmt.Fprintf(b, "func (m *%s) Marshal() ([]byte, error) {\n", m.Name)
-	fmt.Fprintf(b, "\treturn codec.EncodeModel(m, %sMeta)\n}\n\n", m.Name)
+	fmt.Fprintf(b, "\treturn runtime.EncodeModel(m, %sMeta)\n}\n\n", m.Name)
 	fmt.Fprintf(b, "func (m *%s) Unmarshal(wire []byte) error {\n", m.Name)
-	fmt.Fprintf(b, "\treturn codec.DecodeModel(wire, m, %sMeta)\n}\n\n", m.Name)
+	fmt.Fprintf(b, "\treturn runtime.DecodeModel(wire, m, %sMeta)\n}\n\n", m.Name)
 }
 
 // writeGoTable emits one message's data table: one row per proto field in
@@ -414,7 +414,7 @@ func writeGoCodec(b *strings.Builder, f *model.File, m model.Message) {
 // the struct; no wire logic is emitted here.
 func writeGoTable(b *strings.Builder, f *model.File, m model.Message) {
 	fmt.Fprintf(b, "// %sMeta is the generated DATA table for %s: one row per field.\n", m.Name, m.Full)
-	fmt.Fprintf(b, "var %sMeta = codec.NewTable(%q, []*codec.Field{\n", m.Name, m.Full)
+	fmt.Fprintf(b, "var %sMeta = runtime.NewTable(%q, []*runtime.Field{\n", m.Name, m.Full)
 	for _, field := range goSorted(m) {
 		if field.Skip != "" {
 			continue
@@ -451,15 +451,15 @@ func writeGoTableRow(b *strings.Builder, f *model.File, m model.Message, field m
 func goWireConst(field model.Field) string {
 	switch field.Kind {
 	case protoreflect.Fixed32Kind, protoreflect.Sfixed32Kind, protoreflect.FloatKind:
-		return "codec.WireFixed32"
+		return "runtime.WireFixed32"
 	case protoreflect.Fixed64Kind, protoreflect.Sfixed64Kind, protoreflect.DoubleKind:
-		return "codec.WireFixed64"
+		return "runtime.WireFixed64"
 	case protoreflect.StringKind, protoreflect.BytesKind, protoreflect.MessageKind:
-		return "codec.WireLen"
+		return "runtime.WireLen"
 	case protoreflect.GroupKind:
-		return "codec.WireStartGroup"
+		return "runtime.WireStartGroup"
 	default:
-		return "codec.WireVarint"
+		return "runtime.WireVarint"
 	}
 }
 
@@ -469,39 +469,39 @@ func goWireConst(field model.Field) string {
 func goKindConst(field model.Field) string {
 	switch field.Kind {
 	case protoreflect.Int32Kind:
-		return "codec.KindInt32"
+		return "runtime.KindInt32"
 	case protoreflect.Int64Kind:
-		return "codec.KindInt64"
+		return "runtime.KindInt64"
 	case protoreflect.Uint32Kind:
-		return "codec.KindUint32"
+		return "runtime.KindUint32"
 	case protoreflect.Uint64Kind:
-		return "codec.KindUint64"
+		return "runtime.KindUint64"
 	case protoreflect.Sint32Kind:
-		return "codec.KindSint32"
+		return "runtime.KindSint32"
 	case protoreflect.Sint64Kind:
-		return "codec.KindSint64"
+		return "runtime.KindSint64"
 	case protoreflect.Fixed32Kind:
-		return "codec.KindFixed32"
+		return "runtime.KindFixed32"
 	case protoreflect.Fixed64Kind:
-		return "codec.KindFixed64"
+		return "runtime.KindFixed64"
 	case protoreflect.Sfixed32Kind:
-		return "codec.KindSfixed32"
+		return "runtime.KindSfixed32"
 	case protoreflect.Sfixed64Kind:
-		return "codec.KindSfixed64"
+		return "runtime.KindSfixed64"
 	case protoreflect.FloatKind:
-		return "codec.KindFloat"
+		return "runtime.KindFloat"
 	case protoreflect.DoubleKind:
-		return "codec.KindDouble"
+		return "runtime.KindDouble"
 	case protoreflect.BoolKind:
-		return "codec.KindBool"
+		return "runtime.KindBool"
 	case protoreflect.StringKind:
-		return "codec.KindString"
+		return "runtime.KindString"
 	case protoreflect.BytesKind:
-		return "codec.KindBytes"
+		return "runtime.KindBytes"
 	case protoreflect.EnumKind:
-		return "codec.KindEnum"
+		return "runtime.KindEnum"
 	default:
-		return "codec.KindMessage"
+		return "runtime.KindMessage"
 	}
 }
 
@@ -567,10 +567,10 @@ func writeGoTableOneof(b *strings.Builder, f *model.File, m model.Message, field
 			b.WriteString(", Group: true")
 		}
 		if field.Import != "" {
-			fmt.Fprintf(b, "\t\tForeign: &codec.ForeignOps{Encode: func(m any) ([]byte, error) { return m.(*%s).Marshal() }, Decode: func(m any, w []byte) error { return m.(*%s).Unmarshal(w) } },\n",
+			fmt.Fprintf(b, "\t\tForeign: &runtime.ForeignOps{Encode: func(m any) ([]byte, error) { return m.(*%s).Marshal() }, Decode: func(m any, w []byte) error { return m.(*%s).Unmarshal(w) } },\n",
 				field.Message, field.Message)
 		} else {
-			fmt.Fprintf(b, "\t\tSub: func() *codec.Table { return %sMeta },\n", field.Message)
+			fmt.Fprintf(b, "\t\tSub: func() *runtime.Table { return %sMeta },\n", field.Message)
 		}
 		fmt.Fprintf(b, "\t\tGetOneof: func(msg any) (any, bool) { if x, ok := msg.(*%s).%s.(*%s); ok { if x.%s == nil { return nil, true }; return x.%s, true }; return nil, false },\n",
 			m.Name, goCamel(field.Oneof), wrap, name, name)
@@ -603,10 +603,10 @@ func writeGoTableMessage(b *strings.Builder, f *model.File, m model.Message, fie
 	}
 	sub := field.Message
 	if field.Import != "" {
-		fmt.Fprintf(b, ",\n\t\tForeign: &codec.ForeignOps{Encode: func(m any) ([]byte, error) { return m.(*%s).Marshal() }, Decode: func(m any, w []byte) error { return m.(*%s).Unmarshal(w) } },\n",
+		fmt.Fprintf(b, ",\n\t\tForeign: &runtime.ForeignOps{Encode: func(m any) ([]byte, error) { return m.(*%s).Marshal() }, Decode: func(m any, w []byte) error { return m.(*%s).Unmarshal(w) } },\n",
 			sub, sub)
 	} else {
-		fmt.Fprintf(b, ",\n\t\tSub: func() *codec.Table { return %sMeta },\n", sub)
+		fmt.Fprintf(b, ",\n\t\tSub: func() *runtime.Table { return %sMeta },\n", sub)
 	}
 	if field.Repeated {
 		b.WriteString("\t\tRepeated: true,\n")

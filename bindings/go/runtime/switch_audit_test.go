@@ -1,13 +1,13 @@
 // Switch-audit guards: every shape the retired cshim path drove must behave
 // identically on the pure-Go table engine that generated models now use.
 // Each case pins byte output or a field-level round trip.
-package codec_test
+package runtime_test
 
 import (
 	"bytes"
 	"testing"
 
-	"pbwire/pbench/dyngo/codec"
+	"pbwire/runtime"
 	"pbwire/tests/gen/maptest"
 	"pbwire/tests/gen/oneof1"
 )
@@ -20,18 +20,18 @@ func TestAuditRequiredZeroEmits(t *testing.T) {
 		ReqStr string
 		ImpInt int32
 	}
-	tb := codec.NewTable("audit.Req", []*codec.Field{
-		{Num: 1, Wire: codec.WireVarint, Kind: codec.KindInt32, Required: true,
+	tb := runtime.NewTable("audit.Req", []*runtime.Field{
+		{Num: 1, Wire: runtime.WireVarint, Kind: runtime.KindInt32, Required: true,
 			GetI32: func(msg any) int32 { return msg.(*req).ReqInt },
 			SetI32: func(msg any, v int32) { msg.(*req).ReqInt = v }},
-		{Num: 2, Wire: codec.WireLen, Kind: codec.KindString, Required: true,
+		{Num: 2, Wire: runtime.WireLen, Kind: runtime.KindString, Required: true,
 			GetStr: func(msg any) string { return msg.(*req).ReqStr },
 			SetStr: func(msg any, v string) { msg.(*req).ReqStr = v }},
-		{Num: 3, Wire: codec.WireVarint, Kind: codec.KindInt32,
+		{Num: 3, Wire: runtime.WireVarint, Kind: runtime.KindInt32,
 			GetI32: func(msg any) int32 { return msg.(*req).ImpInt },
 			SetI32: func(msg any, v int32) { msg.(*req).ImpInt = v }},
 	})
-	wire, err := codec.EncodeModel(&req{}, tb)
+	wire, err := runtime.EncodeModel(&req{}, tb)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -41,7 +41,7 @@ func TestAuditRequiredZeroEmits(t *testing.T) {
 		t.Fatalf("required zero must emit: got %x want %x", wire, want)
 	}
 	back := new(req)
-	if err := codec.DecodeModel(wire, back, tb); err != nil {
+	if err := runtime.DecodeModel(wire, back, tb); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -54,30 +54,30 @@ func TestAuditExplicitBytes(t *testing.T) {
 	}
 	raw := []byte{0x01, 0x02}
 	empty := []byte{}
-	tb := codec.NewTable("audit.Raw", []*codec.Field{
-		{Num: 1, Wire: codec.WireLen, Kind: codec.KindBytes, Explicit: true,
+	tb := runtime.NewTable("audit.Raw", []*runtime.Field{
+		{Num: 1, Wire: runtime.WireLen, Kind: runtime.KindBytes, Explicit: true,
 			GetOptBytes: func(msg any) *[]byte { return msg.(*holder).Raw },
 			SetOptBytes: func(msg any, v []byte) {
 				tmp := v
 				msg.(*holder).Raw = &tmp
 			}},
 	})
-	if wire, err := codec.EncodeModel(&holder{}, tb); err != nil || len(wire) != 0 {
+	if wire, err := runtime.EncodeModel(&holder{}, tb); err != nil || len(wire) != 0 {
 		t.Fatalf("nil explicit bytes must skip: %x %v", wire, err)
 	}
-	wire, err := codec.EncodeModel(&holder{Raw: &empty}, tb)
+	wire, err := runtime.EncodeModel(&holder{Raw: &empty}, tb)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !bytes.Equal(wire, []byte{0x0a, 0x00}) {
 		t.Fatalf("empty non-nil bytes must emit tag+len0: %x", wire)
 	}
-	wire, err = codec.EncodeModel(&holder{Raw: &raw}, tb)
+	wire, err = runtime.EncodeModel(&holder{Raw: &raw}, tb)
 	if err != nil {
 		t.Fatal(err)
 	}
 	back := new(holder)
-	if err := codec.DecodeModel(wire, back, tb); err != nil {
+	if err := runtime.DecodeModel(wire, back, tb); err != nil {
 		t.Fatal(err)
 	}
 	if back.Raw == nil || !bytes.Equal(*back.Raw, raw) {
@@ -92,13 +92,13 @@ func TestAuditRecursiveTable(t *testing.T) {
 		Val  int32
 		Next *node
 	}
-	var tb *codec.Table
-	tb = codec.NewTable("audit.Node", []*codec.Field{
-		{Num: 1, Wire: codec.WireVarint, Kind: codec.KindInt32,
+	var tb *runtime.Table
+	tb = runtime.NewTable("audit.Node", []*runtime.Field{
+		{Num: 1, Wire: runtime.WireVarint, Kind: runtime.KindInt32,
 			GetI32: func(msg any) int32 { return msg.(*node).Val },
 			SetI32: func(msg any, v int32) { msg.(*node).Val = v }},
-		{Num: 2, Wire: codec.WireLen, Kind: codec.KindMessage,
-			Sub: func() *codec.Table { return tb },
+		{Num: 2, Wire: runtime.WireLen, Kind: runtime.KindMessage,
+			Sub: func() *runtime.Table { return tb },
 			GetMsg: func(msg any) any {
 				if v := msg.(*node).Next; v == nil {
 					return nil
@@ -114,12 +114,12 @@ func TestAuditRecursiveTable(t *testing.T) {
 			}},
 	})
 	in := &node{Val: 1, Next: &node{Val: 2, Next: &node{Val: 3}}}
-	wire, err := codec.EncodeModel(in, tb)
+	wire, err := runtime.EncodeModel(in, tb)
 	if err != nil {
 		t.Fatal(err)
 	}
 	back := new(node)
-	if err := codec.DecodeModel(wire, back, tb); err != nil {
+	if err := runtime.DecodeModel(wire, back, tb); err != nil {
 		t.Fatal(err)
 	}
 	for i, want := range []int32{1, 2, 3} {
@@ -145,15 +145,15 @@ func TestAuditOneof1RoundTrip(t *testing.T) {
 		{Name: "only"},
 	}
 	for i, m := range msgs {
-		wire, err := codec.EncodeModel(m, oneof1.Oneof1Meta)
+		wire, err := runtime.EncodeModel(m, oneof1.Oneof1Meta)
 		if err != nil {
 			t.Fatalf("case %d: encode: %v", i, err)
 		}
 		back := new(oneof1.Oneof1)
-		if err := codec.DecodeModel(wire, back, oneof1.Oneof1Meta); err != nil {
+		if err := runtime.DecodeModel(wire, back, oneof1.Oneof1Meta); err != nil {
 			t.Fatalf("case %d: decode: %v", i, err)
 		}
-		again, err := codec.EncodeModel(back, oneof1.Oneof1Meta)
+		again, err := runtime.EncodeModel(back, oneof1.Oneof1Meta)
 		if err != nil || !bytes.Equal(again, wire) {
 			t.Fatalf("case %d: re-encode %x != %x (%v)", i, again, wire, err)
 		}
@@ -192,15 +192,15 @@ func TestAuditMaptestRoundTrip(t *testing.T) {
 		ByStr: []*maptest.MapTest_ByStrEntry{{Key: "a", Value: -2}},
 		ByMsg: []*maptest.MapTest_ByMsgEntry{{Key: "k", Value: &maptest.MapValue{Name: "v", Value: 3}}},
 	}
-	wire, err := codec.EncodeModel(m, maptest.MapTestMeta)
+	wire, err := runtime.EncodeModel(m, maptest.MapTestMeta)
 	if err != nil {
 		t.Fatalf("encode: %v", err)
 	}
 	back := new(maptest.MapTest)
-	if err := codec.DecodeModel(wire, back, maptest.MapTestMeta); err != nil {
+	if err := runtime.DecodeModel(wire, back, maptest.MapTestMeta); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	again, err := codec.EncodeModel(back, maptest.MapTestMeta)
+	again, err := runtime.EncodeModel(back, maptest.MapTestMeta)
 	if err != nil || !bytes.Equal(again, wire) {
 		t.Fatalf("re-encode %x != %x (%v)", again, wire, err)
 	}
@@ -215,16 +215,16 @@ func TestAuditMaptestRoundTrip(t *testing.T) {
 // Unknown fields are dropped on the table path (no retention hooks): pin
 // the drop so a future retention change is a deliberate, tested decision.
 func TestAuditUnknownDropped(t *testing.T) {
-	base, err := codec.EncodeModel(&oneof1.Oneof1{Name: "n"}, oneof1.Oneof1Meta)
+	base, err := runtime.EncodeModel(&oneof1.Oneof1{Name: "n"}, oneof1.Oneof1Meta)
 	if err != nil {
 		t.Fatal(err)
 	}
 	wire := append(base, 0x98, 0x06, 0x07) // field 99, varint 7
 	back := new(oneof1.Oneof1)
-	if err := codec.DecodeModel(wire, back, oneof1.Oneof1Meta); err != nil {
+	if err := runtime.DecodeModel(wire, back, oneof1.Oneof1Meta); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	again, err := codec.EncodeModel(back, oneof1.Oneof1Meta)
+	again, err := runtime.EncodeModel(back, oneof1.Oneof1Meta)
 	if err != nil {
 		t.Fatal(err)
 	}

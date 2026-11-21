@@ -5,7 +5,7 @@
 package oneof1
 
 import (
-	"pbwire/pbench/dyngo/codec"
+	"pbwire/runtime"
 )
 
 // spectest.Oneof1.Inner
@@ -28,11 +28,11 @@ func (m *Oneof1_Inner) Reset() {
 }
 
 func (m *Oneof1_Inner) Marshal() ([]byte, error) {
-	return codec.EncodeModel(m, Oneof1_InnerMeta)
+	return runtime.EncodeModel(m, Oneof1_InnerMeta)
 }
 
 func (m *Oneof1_Inner) Unmarshal(wire []byte) error {
-	return codec.DecodeModel(wire, m, Oneof1_InnerMeta)
+	return runtime.DecodeModel(wire, m, Oneof1_InnerMeta)
 }
 
 // spectest.Oneof1
@@ -98,9 +98,9 @@ func (m *Oneof1) Reset() {
 }
 
 func (m *Oneof1) Marshal() ([]byte, error) {
-	return codec.EncodeModel(m, Oneof1Meta)
+	return runtime.EncodeModel(m, Oneof1Meta)
 }
 
 func (m *Oneof1) Unmarshal(wire []byte) error {
-	return codec.DecodeModel(wire, m, Oneof1Meta)
+	return runtime.DecodeModel(wire, m, Oneof1Meta)
 }

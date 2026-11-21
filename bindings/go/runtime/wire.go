@@ -8,7 +8,7 @@
 // code is straight-line field code that pushes values through Encoder and
 // pulls them out of Decoder. No reflection runs in the hot path; the only
 // reflection in the package lives in plan.go, which runs once at Load.
-package codec
+package runtime
 
 import "errors"
 

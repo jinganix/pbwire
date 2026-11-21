@@ -1,7 +1,7 @@
 // Model plumbing for the generated thin models. Marshal/Unmarshal forward
 // here, so the generated file holds data only: no capacity hint, no arena, no
 // nil handling of its own.
-package codec
+package runtime
 
 import (
 	"fmt"
@@ -12,7 +12,10 @@ import (
 // hint lives on the table, so a steady-state loop reuses the size it already
 // paid for without the model carrying any state.
 func EncodeModel(msg any, t *Table) ([]byte, error) {
-	if msg == nil || (reflect.ValueOf(msg).Kind() == reflect.Ptr && reflect.ValueOf(msg).IsNil()) {
+	if msg == nil {
+		return []byte{}, nil
+	}
+	if rv := reflect.ValueOf(msg); rv.Kind() == reflect.Ptr && rv.IsNil() {
 		return []byte{}, nil
 	}
 	cap0 := t.capHint()
@@ -31,7 +34,10 @@ func EncodeModel(msg any, t *Table) ([]byte, error) {
 // Arena per call, grown from the input, backs every decoded string and byte
 // payload, so the result owns its memory after return.
 func DecodeModel(wire []byte, msg any, t *Table) error {
-	if msg == nil || (reflect.ValueOf(msg).Kind() == reflect.Ptr && reflect.ValueOf(msg).IsNil()) {
+	if msg == nil {
+		return fmt.Errorf("pbwire: unmarshal into a nil message")
+	}
+	if rv := reflect.ValueOf(msg); rv.Kind() == reflect.Ptr && rv.IsNil() {
 		return fmt.Errorf("pbwire: unmarshal into a nil message")
 	}
 	d := Decoder{Buf: wire}

@@ -38,7 +38,7 @@
 // accepting both packed runs and unpacked singles, like protobuf-go.
 // Unknown fields (including extensions, which the emitter never generates
 // accessors for) decode via Skip and are dropped, as on the dynamic path.
-package codec
+package runtime
 
 import "unsafe"
 
@@ -150,12 +150,37 @@ func (d *Decoder) Rest() []byte {
 }
 
 // Next reads the next tag, returning its field number and wire type. It
-// rejects field number 0 and wire types above 5.
+// rejects field number 0 and wire types above 5. The varint loop is inline
+// (same accept set as ConsumeVarint/ConsumeTag): Next runs once per field
+// occurrence, so one call level here is one per field on every decode.
 func (d *Decoder) Next() (uint32, WireType, error) {
 	d.lastTag = d.Off
-	num, wt, n, err := ConsumeTag(d.Buf[d.Off:])
-	if err != nil {
-		return 0, 0, err
+	b := d.Buf[d.Off:]
+	var v uint64
+	n := 0
+	for i := 0; i < 10; i++ {
+		if i >= len(b) {
+			return 0, 0, ErrWire
+		}
+		c := b[i]
+		if i == 9 {
+			if c >= 0x80 {
+				return 0, 0, ErrWire
+			}
+			v |= uint64(c) << 63
+			n = 10
+			break
+		}
+		v |= uint64(c&0x7f) << uint(7*i)
+		if c < 0x80 {
+			n = i + 1
+			break
+		}
+	}
+	num := uint32(v >> 3)
+	wt := WireType(v & 7)
+	if num == 0 || v>>3 > MaxFieldNumber || wt > WireFixed32 {
+		return 0, 0, ErrWire
 	}
 	d.Off += n
 	return num, wt, nil
@@ -172,45 +197,87 @@ func (d *Decoder) SkipRaw(num uint32, wt WireType, depth int) ([]byte, error) {
 	return d.Buf[start:d.Off], nil
 }
 
-// Varint reads one varint.
+// Varint reads one varint. The loop is inline (same accept set as
+// ConsumeVarint): scalar fields parse one varint each, so one call level
+// here is one per scalar on every decode.
 func (d *Decoder) Varint() (uint64, error) {
-	v, n, err := ConsumeVarint(d.Buf[d.Off:])
-	if err != nil {
-		return 0, err
+	b := d.Buf[d.Off:]
+	var v uint64
+	for i := 0; i < 10; i++ {
+		if i >= len(b) {
+			return 0, ErrWire
+		}
+		c := b[i]
+		if i == 9 {
+			if c >= 0x80 {
+				return 0, ErrWire
+			}
+			d.Off += 10
+			return v | uint64(c)<<63, nil
+		}
+		v |= uint64(c&0x7f) << uint(7*i)
+		if c < 0x80 {
+			d.Off += i + 1
+			return v, nil
+		}
 	}
-	d.Off += n
-	return v, nil
+	return 0, ErrWire
 }
 
 // Fixed32 reads 4 little-endian bytes.
 func (d *Decoder) Fixed32() (uint32, error) {
-	v, n, err := ConsumeFixed32(d.Buf[d.Off:])
-	if err != nil {
-		return 0, err
+	b := d.Buf[d.Off:]
+	if len(b) < 4 {
+		return 0, ErrWire
 	}
-	d.Off += n
-	return v, nil
+	d.Off += 4
+	return uint32(b[0]) | uint32(b[1])<<8 | uint32(b[2])<<16 | uint32(b[3])<<24, nil
 }
 
 // Fixed64 reads 8 little-endian bytes.
 func (d *Decoder) Fixed64() (uint64, error) {
-	v, n, err := ConsumeFixed64(d.Buf[d.Off:])
-	if err != nil {
-		return 0, err
+	b := d.Buf[d.Off:]
+	if len(b) < 8 {
+		return 0, ErrWire
 	}
-	d.Off += n
-	return v, nil
+	d.Off += 8
+	return uint64(b[0]) | uint64(b[1])<<8 | uint64(b[2])<<16 | uint64(b[3])<<24 |
+		uint64(b[4])<<32 | uint64(b[5])<<40 | uint64(b[6])<<48 | uint64(b[7])<<56, nil
 }
 
 // Bytes reads a length-delimited payload as a sub-slice aliasing the input.
-// Copy it (Arena.AddBytes or append) before the input may change.
+// Copy it (Arena.AddBytes or append) before the input may change. The length
+// loop is inline (same accept set as ConsumeLen): strings, bytes, packed
+// runs and submessages each parse one length per occurrence.
 func (d *Decoder) Bytes() ([]byte, error) {
-	p, n, err := ConsumeLen(d.Buf[d.Off:])
-	if err != nil {
-		return nil, err
+	b := d.Buf[d.Off:]
+	var n uint64
+	m := 0
+	for i := 0; i < 10; i++ {
+		if i >= len(b) {
+			return nil, ErrWire
+		}
+		c := b[i]
+		if i == 9 {
+			if c >= 0x80 {
+				return nil, ErrWire
+			}
+			n |= uint64(c) << 63
+			m = 10
+			break
+		}
+		n |= uint64(c&0x7f) << uint(7*i)
+		if c < 0x80 {
+			m = i + 1
+			break
+		}
 	}
-	d.Off += n
-	return p, nil
+	if n > uint64(len(b)-m) {
+		return nil, ErrWire
+	}
+	end := m + int(n)
+	d.Off += end
+	return b[m:end], nil
 }
 
 // String reads a length-delimited payload as a string. The conversion

@@ -5,7 +5,7 @@
 package xdep
 
 import (
-	"pbwire/pbench/dyngo/codec"
+	"pbwire/runtime"
 )
 
 // xdep.DepMsg
@@ -36,9 +36,9 @@ func (m *DepMsg) Reset() {
 }
 
 func (m *DepMsg) Marshal() ([]byte, error) {
-	return codec.EncodeModel(m, DepMsgMeta)
+	return runtime.EncodeModel(m, DepMsgMeta)
 }
 
 func (m *DepMsg) Unmarshal(wire []byte) error {
-	return codec.DecodeModel(wire, m, DepMsgMeta)
+	return runtime.DecodeModel(wire, m, DepMsgMeta)
 }

@@ -4,7 +4,7 @@
 // encode; a Next/Switch/Skip loop on decode). Field numbers below are
 // schema-derived: the plan test pins them against the descriptor set, and
 // the tier gate below proves them byte-equal to protobuf-go.
-package codec_test
+package runtime_test
 
 import (
 	"bytes"
@@ -20,7 +20,7 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/descriptorpb"
 	"google.golang.org/protobuf/types/dynamicpb"
-	"pbwire/pbench/dyngo/codec"
+	"pbwire/runtime"
 	"pbwire/tests/gen/matrix3"
 	"pbwire/tests/gen_oracle/matrix3pb"
 )
@@ -29,89 +29,89 @@ import (
 // Straight-line model, encode side.
 // ---------------------------------------------------------------------------
 
-func marshalInner(e *codec.Encoder, m *matrix3.Inner3, depth int) error {
-	if err := codec.CheckDepth(depth); err != nil {
+func marshalInner(e *runtime.Encoder, m *matrix3.Inner3, depth int) error {
+	if err := runtime.CheckDepth(depth); err != nil {
 		return err
 	}
 	if m == nil {
 		return nil
 	}
 	if m.Name != "" {
-		e.Tag(1, codec.WireLen)
+		e.Tag(1, runtime.WireLen)
 		e.Text(m.Name)
 	}
 	if m.Value != 0 {
-		e.Tag(2, codec.WireVarint)
+		e.Tag(2, runtime.WireVarint)
 		e.Varint(uint64(int64(m.Value)))
 	}
 	return nil
 }
 
-func marshalScalars(e *codec.Encoder, m *matrix3.Scalars3, depth int) error {
-	if err := codec.CheckDepth(depth); err != nil {
+func marshalScalars(e *runtime.Encoder, m *matrix3.Scalars3, depth int) error {
+	if err := runtime.CheckDepth(depth); err != nil {
 		return err
 	}
 	if m == nil {
 		return nil
 	}
 	if m.I32 != 0 {
-		e.Tag(1, codec.WireVarint)
+		e.Tag(1, runtime.WireVarint)
 		e.Varint(uint64(int64(m.I32)))
 	}
 	if m.I64 != 0 {
-		e.Tag(2, codec.WireVarint)
+		e.Tag(2, runtime.WireVarint)
 		e.Varint(uint64(m.I64))
 	}
 	if m.U32 != 0 {
-		e.Tag(3, codec.WireVarint)
+		e.Tag(3, runtime.WireVarint)
 		e.Varint(uint64(m.U32))
 	}
 	if m.U64 != 0 {
-		e.Tag(4, codec.WireVarint)
+		e.Tag(4, runtime.WireVarint)
 		e.Varint(m.U64)
 	}
 	if m.S32 != 0 {
-		e.Tag(5, codec.WireVarint)
-		e.Varint(codec.ZigZagEncode32(m.S32))
+		e.Tag(5, runtime.WireVarint)
+		e.Varint(runtime.ZigZagEncode32(m.S32))
 	}
 	if m.S64 != 0 {
-		e.Tag(6, codec.WireVarint)
-		e.Varint(codec.ZigZagEncode64(m.S64))
+		e.Tag(6, runtime.WireVarint)
+		e.Varint(runtime.ZigZagEncode64(m.S64))
 	}
 	if m.Fx32 != 0 {
-		e.Tag(7, codec.WireFixed32)
+		e.Tag(7, runtime.WireFixed32)
 		e.Fixed32(m.Fx32)
 	}
 	if m.Fx64 != 0 {
-		e.Tag(8, codec.WireFixed64)
+		e.Tag(8, runtime.WireFixed64)
 		e.Fixed64(m.Fx64)
 	}
 	if m.Sfx32 != 0 {
-		e.Tag(9, codec.WireFixed32)
+		e.Tag(9, runtime.WireFixed32)
 		e.Fixed32(uint32(m.Sfx32))
 	}
 	if m.Sfx64 != 0 {
-		e.Tag(10, codec.WireFixed64)
+		e.Tag(10, runtime.WireFixed64)
 		e.Fixed64(uint64(m.Sfx64))
 	}
 	if b := math.Float32bits(m.F32); b != 0 {
-		e.Tag(11, codec.WireFixed32)
+		e.Tag(11, runtime.WireFixed32)
 		e.Fixed32(b)
 	}
 	if b := math.Float64bits(m.F64); b != 0 {
-		e.Tag(12, codec.WireFixed64)
+		e.Tag(12, runtime.WireFixed64)
 		e.Fixed64(b)
 	}
 	if m.Flag {
-		e.Tag(13, codec.WireVarint)
+		e.Tag(13, runtime.WireVarint)
 		e.Varint(1)
 	}
 	if m.Str != "" {
-		e.Tag(14, codec.WireLen)
+		e.Tag(14, runtime.WireLen)
 		e.Text(m.Str)
 	}
 	if m.Color != 0 {
-		e.Tag(15, codec.WireVarint)
+		e.Tag(15, runtime.WireVarint)
 		e.Varint(uint64(int64(m.Color)))
 	}
 	if m.Inner != nil {
@@ -129,7 +129,7 @@ func marshalScalars(e *codec.Encoder, m *matrix3.Scalars3, depth int) error {
 		e.End(mark)
 	}
 	for _, s := range m.Tags {
-		e.Tag(18, codec.WireLen)
+		e.Tag(18, runtime.WireLen)
 		e.Text(s)
 	}
 	for _, sub := range m.Inners {
@@ -140,11 +140,11 @@ func marshalScalars(e *codec.Encoder, m *matrix3.Scalars3, depth int) error {
 		e.End(mark)
 	}
 	if m.OptI32 != nil {
-		e.Tag(20, codec.WireVarint)
+		e.Tag(20, runtime.WireVarint)
 		e.Varint(uint64(int64(*m.OptI32)))
 	}
 	if m.OptStr != nil {
-		e.Tag(21, codec.WireLen)
+		e.Tag(21, runtime.WireLen)
 		e.Text(*m.OptStr)
 	}
 	if len(m.Flags) != 0 {
@@ -166,8 +166,8 @@ func marshalScalars(e *codec.Encoder, m *matrix3.Scalars3, depth int) error {
 // string; presence writes pointers/wrappers, exactly like generated code.
 // ---------------------------------------------------------------------------
 
-func unmarshalInner(d *codec.Decoder, a *codec.Arena, m *matrix3.Inner3, depth int) error {
-	if err := codec.CheckDepth(depth); err != nil {
+func unmarshalInner(d *runtime.Decoder, a *runtime.Arena, m *matrix3.Inner3, depth int) error {
+	if err := runtime.CheckDepth(depth); err != nil {
 		return err
 	}
 	for !d.Done() {
@@ -177,7 +177,7 @@ func unmarshalInner(d *codec.Decoder, a *codec.Arena, m *matrix3.Inner3, depth i
 		}
 		switch num {
 		case 1:
-			if wt != codec.WireLen {
+			if wt != runtime.WireLen {
 				if err := d.Skip(num, wt, depth); err != nil {
 					return err
 				}
@@ -189,7 +189,7 @@ func unmarshalInner(d *codec.Decoder, a *codec.Arena, m *matrix3.Inner3, depth i
 			}
 			m.Name = a.AddString(raw)
 		case 2:
-			if wt != codec.WireVarint {
+			if wt != runtime.WireVarint {
 				if err := d.Skip(num, wt, depth); err != nil {
 					return err
 				}
@@ -210,11 +210,11 @@ func unmarshalInner(d *codec.Decoder, a *codec.Arena, m *matrix3.Inner3, depth i
 }
 
 func unmarshalPackedInt32(raw []byte, dst *[]int32) error {
-	n, err := codec.CountVarints(raw)
+	n, err := runtime.CountVarints(raw)
 	if err != nil {
 		return err
 	}
-	sub := codec.Decoder{Buf: raw}
+	sub := runtime.Decoder{Buf: raw}
 	if cap(*dst)-len(*dst) < n {
 		next := make([]int32, len(*dst), len(*dst)+n)
 		copy(next, *dst)
@@ -231,11 +231,11 @@ func unmarshalPackedInt32(raw []byte, dst *[]int32) error {
 }
 
 func unmarshalPackedBool(raw []byte, dst *[]bool) error {
-	n, err := codec.CountVarints(raw)
+	n, err := runtime.CountVarints(raw)
 	if err != nil {
 		return err
 	}
-	sub := codec.Decoder{Buf: raw}
+	sub := runtime.Decoder{Buf: raw}
 	if cap(*dst)-len(*dst) < n {
 		next := make([]bool, len(*dst), len(*dst)+n)
 		copy(next, *dst)
@@ -251,8 +251,8 @@ func unmarshalPackedBool(raw []byte, dst *[]bool) error {
 	return nil
 }
 
-func unmarshalScalars(d *codec.Decoder, a *codec.Arena, m *matrix3.Scalars3, depth int) error {
-	if err := codec.CheckDepth(depth); err != nil {
+func unmarshalScalars(d *runtime.Decoder, a *runtime.Arena, m *matrix3.Scalars3, depth int) error {
+	if err := runtime.CheckDepth(depth); err != nil {
 		return err
 	}
 	for !d.Done() {
@@ -262,7 +262,7 @@ func unmarshalScalars(d *codec.Decoder, a *codec.Arena, m *matrix3.Scalars3, dep
 		}
 		switch num {
 		case 1:
-			if wt != codec.WireVarint {
+			if wt != runtime.WireVarint {
 				if err := d.Skip(num, wt, depth); err != nil {
 					return err
 				}
@@ -274,7 +274,7 @@ func unmarshalScalars(d *codec.Decoder, a *codec.Arena, m *matrix3.Scalars3, dep
 			}
 			m.I32 = int32(v)
 		case 2:
-			if wt != codec.WireVarint {
+			if wt != runtime.WireVarint {
 				if err := d.Skip(num, wt, depth); err != nil {
 					return err
 				}
@@ -286,7 +286,7 @@ func unmarshalScalars(d *codec.Decoder, a *codec.Arena, m *matrix3.Scalars3, dep
 			}
 			m.I64 = int64(v)
 		case 3:
-			if wt != codec.WireVarint {
+			if wt != runtime.WireVarint {
 				if err := d.Skip(num, wt, depth); err != nil {
 					return err
 				}
@@ -298,7 +298,7 @@ func unmarshalScalars(d *codec.Decoder, a *codec.Arena, m *matrix3.Scalars3, dep
 			}
 			m.U32 = uint32(v)
 		case 4:
-			if wt != codec.WireVarint {
+			if wt != runtime.WireVarint {
 				if err := d.Skip(num, wt, depth); err != nil {
 					return err
 				}
@@ -310,7 +310,7 @@ func unmarshalScalars(d *codec.Decoder, a *codec.Arena, m *matrix3.Scalars3, dep
 			}
 			m.U64 = v
 		case 5:
-			if wt != codec.WireVarint {
+			if wt != runtime.WireVarint {
 				if err := d.Skip(num, wt, depth); err != nil {
 					return err
 				}
@@ -320,9 +320,9 @@ func unmarshalScalars(d *codec.Decoder, a *codec.Arena, m *matrix3.Scalars3, dep
 			if err != nil {
 				return err
 			}
-			m.S32 = codec.ZigZagDecode32(v)
+			m.S32 = runtime.ZigZagDecode32(v)
 		case 6:
-			if wt != codec.WireVarint {
+			if wt != runtime.WireVarint {
 				if err := d.Skip(num, wt, depth); err != nil {
 					return err
 				}
@@ -332,9 +332,9 @@ func unmarshalScalars(d *codec.Decoder, a *codec.Arena, m *matrix3.Scalars3, dep
 			if err != nil {
 				return err
 			}
-			m.S64 = codec.ZigZagDecode64(v)
+			m.S64 = runtime.ZigZagDecode64(v)
 		case 7:
-			if wt != codec.WireFixed32 {
+			if wt != runtime.WireFixed32 {
 				if err := d.Skip(num, wt, depth); err != nil {
 					return err
 				}
@@ -346,7 +346,7 @@ func unmarshalScalars(d *codec.Decoder, a *codec.Arena, m *matrix3.Scalars3, dep
 			}
 			m.Fx32 = v
 		case 8:
-			if wt != codec.WireFixed64 {
+			if wt != runtime.WireFixed64 {
 				if err := d.Skip(num, wt, depth); err != nil {
 					return err
 				}
@@ -358,7 +358,7 @@ func unmarshalScalars(d *codec.Decoder, a *codec.Arena, m *matrix3.Scalars3, dep
 			}
 			m.Fx64 = v
 		case 9:
-			if wt != codec.WireFixed32 {
+			if wt != runtime.WireFixed32 {
 				if err := d.Skip(num, wt, depth); err != nil {
 					return err
 				}
@@ -370,7 +370,7 @@ func unmarshalScalars(d *codec.Decoder, a *codec.Arena, m *matrix3.Scalars3, dep
 			}
 			m.Sfx32 = int32(v)
 		case 10:
-			if wt != codec.WireFixed64 {
+			if wt != runtime.WireFixed64 {
 				if err := d.Skip(num, wt, depth); err != nil {
 					return err
 				}
@@ -382,7 +382,7 @@ func unmarshalScalars(d *codec.Decoder, a *codec.Arena, m *matrix3.Scalars3, dep
 			}
 			m.Sfx64 = int64(v)
 		case 11:
-			if wt != codec.WireFixed32 {
+			if wt != runtime.WireFixed32 {
 				if err := d.Skip(num, wt, depth); err != nil {
 					return err
 				}
@@ -394,7 +394,7 @@ func unmarshalScalars(d *codec.Decoder, a *codec.Arena, m *matrix3.Scalars3, dep
 			}
 			m.F32 = math.Float32frombits(v)
 		case 12:
-			if wt != codec.WireFixed64 {
+			if wt != runtime.WireFixed64 {
 				if err := d.Skip(num, wt, depth); err != nil {
 					return err
 				}
@@ -406,7 +406,7 @@ func unmarshalScalars(d *codec.Decoder, a *codec.Arena, m *matrix3.Scalars3, dep
 			}
 			m.F64 = math.Float64frombits(v)
 		case 13:
-			if wt != codec.WireVarint {
+			if wt != runtime.WireVarint {
 				if err := d.Skip(num, wt, depth); err != nil {
 					return err
 				}
@@ -418,7 +418,7 @@ func unmarshalScalars(d *codec.Decoder, a *codec.Arena, m *matrix3.Scalars3, dep
 			}
 			m.Flag = v != 0
 		case 14:
-			if wt != codec.WireLen {
+			if wt != runtime.WireLen {
 				if err := d.Skip(num, wt, depth); err != nil {
 					return err
 				}
@@ -430,7 +430,7 @@ func unmarshalScalars(d *codec.Decoder, a *codec.Arena, m *matrix3.Scalars3, dep
 			}
 			m.Str = a.AddString(raw)
 		case 15:
-			if wt != codec.WireVarint {
+			if wt != runtime.WireVarint {
 				if err := d.Skip(num, wt, depth); err != nil {
 					return err
 				}
@@ -442,7 +442,7 @@ func unmarshalScalars(d *codec.Decoder, a *codec.Arena, m *matrix3.Scalars3, dep
 			}
 			m.Color = matrix3.Color3(int32(v)) // unknown values preserved
 		case 16:
-			if wt != codec.WireLen {
+			if wt != runtime.WireLen {
 				if err := d.Skip(num, wt, depth); err != nil {
 					return err
 				}
@@ -455,19 +455,19 @@ func unmarshalScalars(d *codec.Decoder, a *codec.Arena, m *matrix3.Scalars3, dep
 			if m.Inner == nil {
 				m.Inner = new(matrix3.Inner3)
 			}
-			sub := codec.Decoder{Buf: raw}
+			sub := runtime.Decoder{Buf: raw}
 			if err := unmarshalInner(&sub, a, m.Inner, depth+1); err != nil {
 				return err
 			}
 		case 17:
 			switch wt {
-			case codec.WireVarint:
+			case runtime.WireVarint:
 				v, err := d.Varint()
 				if err != nil {
 					return err
 				}
 				m.Nums = append(m.Nums, int32(v))
-			case codec.WireLen:
+			case runtime.WireLen:
 				raw, err := d.Bytes()
 				if err != nil {
 					return err
@@ -481,7 +481,7 @@ func unmarshalScalars(d *codec.Decoder, a *codec.Arena, m *matrix3.Scalars3, dep
 				}
 			}
 		case 18:
-			if wt != codec.WireLen {
+			if wt != runtime.WireLen {
 				if err := d.Skip(num, wt, depth); err != nil {
 					return err
 				}
@@ -493,7 +493,7 @@ func unmarshalScalars(d *codec.Decoder, a *codec.Arena, m *matrix3.Scalars3, dep
 			}
 			m.Tags = append(m.Tags, a.AddString(raw))
 		case 19:
-			if wt != codec.WireLen {
+			if wt != runtime.WireLen {
 				if err := d.Skip(num, wt, depth); err != nil {
 					return err
 				}
@@ -505,12 +505,12 @@ func unmarshalScalars(d *codec.Decoder, a *codec.Arena, m *matrix3.Scalars3, dep
 			}
 			sub := new(matrix3.Inner3)
 			m.Inners = append(m.Inners, sub)
-			sd := codec.Decoder{Buf: raw}
+			sd := runtime.Decoder{Buf: raw}
 			if err := unmarshalInner(&sd, a, sub, depth+1); err != nil {
 				return err
 			}
 		case 20:
-			if wt != codec.WireVarint {
+			if wt != runtime.WireVarint {
 				if err := d.Skip(num, wt, depth); err != nil {
 					return err
 				}
@@ -523,7 +523,7 @@ func unmarshalScalars(d *codec.Decoder, a *codec.Arena, m *matrix3.Scalars3, dep
 			tmp := int32(v)
 			m.OptI32 = &tmp
 		case 21:
-			if wt != codec.WireLen {
+			if wt != runtime.WireLen {
 				if err := d.Skip(num, wt, depth); err != nil {
 					return err
 				}
@@ -537,13 +537,13 @@ func unmarshalScalars(d *codec.Decoder, a *codec.Arena, m *matrix3.Scalars3, dep
 			m.OptStr = &tmp
 		case 22:
 			switch wt {
-			case codec.WireVarint:
+			case runtime.WireVarint:
 				v, err := d.Varint()
 				if err != nil {
 					return err
 				}
 				m.Flags = append(m.Flags, v != 0)
-			case codec.WireLen:
+			case runtime.WireLen:
 				raw, err := d.Bytes()
 				if err != nil {
 					return err
@@ -569,7 +569,7 @@ func unmarshalScalars(d *codec.Decoder, a *codec.Arena, m *matrix3.Scalars3, dep
 
 // Top-level helpers: fresh output, one arena per call.
 func encodeScalars(m *matrix3.Scalars3) ([]byte, error) {
-	e := codec.Encoder{Buf: make([]byte, 0, 256)}
+	e := runtime.Encoder{Buf: make([]byte, 0, 256)}
 	if err := marshalScalars(&e, m, 0); err != nil {
 		return nil, err
 	}
@@ -578,9 +578,9 @@ func encodeScalars(m *matrix3.Scalars3) ([]byte, error) {
 
 func decodeScalars(wire []byte) (*matrix3.Scalars3, error) {
 	m := new(matrix3.Scalars3)
-	var a codec.Arena
+	var a runtime.Arena
 	a.Grow(len(wire))
-	d := codec.Decoder{Buf: wire}
+	d := runtime.Decoder{Buf: wire}
 	if err := unmarshalScalars(&d, &a, m, 0); err != nil {
 		return nil, err
 	}
@@ -779,22 +779,22 @@ type oneof1Msg struct {
 	Kind isOneof1Kind
 }
 
-func marshalOneof1Inner(e *codec.Encoder, m *oneof1Inner, depth int) error {
-	if err := codec.CheckDepth(depth); err != nil {
+func marshalOneof1Inner(e *runtime.Encoder, m *oneof1Inner, depth int) error {
+	if err := runtime.CheckDepth(depth); err != nil {
 		return err
 	}
 	if m == nil {
 		return nil
 	}
 	if m.V != 0 {
-		e.Tag(1, codec.WireVarint)
+		e.Tag(1, runtime.WireVarint)
 		e.Varint(uint64(int64(m.V)))
 	}
 	return nil
 }
 
-func unmarshalOneof1Inner(d *codec.Decoder, m *oneof1Inner, depth int) error {
-	if err := codec.CheckDepth(depth); err != nil {
+func unmarshalOneof1Inner(d *runtime.Decoder, m *oneof1Inner, depth int) error {
+	if err := runtime.CheckDepth(depth); err != nil {
 		return err
 	}
 	for !d.Done() {
@@ -804,7 +804,7 @@ func unmarshalOneof1Inner(d *codec.Decoder, m *oneof1Inner, depth int) error {
 		}
 		switch num {
 		case 1:
-			if wt != codec.WireVarint {
+			if wt != runtime.WireVarint {
 				if err := d.Skip(num, wt, depth); err != nil {
 					return err
 				}
@@ -824,23 +824,23 @@ func unmarshalOneof1Inner(d *codec.Decoder, m *oneof1Inner, depth int) error {
 	return nil
 }
 
-func marshalOneof1(e *codec.Encoder, m *oneof1Msg, depth int) error {
-	if err := codec.CheckDepth(depth); err != nil {
+func marshalOneof1(e *runtime.Encoder, m *oneof1Msg, depth int) error {
+	if err := runtime.CheckDepth(depth); err != nil {
 		return err
 	}
 	if m == nil {
 		return nil
 	}
 	if m.Name != "" {
-		e.Tag(1, codec.WireLen)
+		e.Tag(1, runtime.WireLen)
 		e.Text(m.Name)
 	}
 	switch x := m.Kind.(type) {
 	case *oneof1Num:
-		e.Tag(2, codec.WireVarint)
+		e.Tag(2, runtime.WireVarint)
 		e.Varint(uint64(int64(x.Num)))
 	case *oneof1Text:
-		e.Tag(3, codec.WireLen)
+		e.Tag(3, runtime.WireLen)
 		e.Text(x.Text)
 	case *oneof1InnerWrap:
 		mark := e.Begin(4)
@@ -852,8 +852,8 @@ func marshalOneof1(e *codec.Encoder, m *oneof1Msg, depth int) error {
 	return nil
 }
 
-func unmarshalOneof1(d *codec.Decoder, a *codec.Arena, m *oneof1Msg, depth int) error {
-	if err := codec.CheckDepth(depth); err != nil {
+func unmarshalOneof1(d *runtime.Decoder, a *runtime.Arena, m *oneof1Msg, depth int) error {
+	if err := runtime.CheckDepth(depth); err != nil {
 		return err
 	}
 	for !d.Done() {
@@ -863,7 +863,7 @@ func unmarshalOneof1(d *codec.Decoder, a *codec.Arena, m *oneof1Msg, depth int) 
 		}
 		switch num {
 		case 1:
-			if wt != codec.WireLen {
+			if wt != runtime.WireLen {
 				if err := d.Skip(num, wt, depth); err != nil {
 					return err
 				}
@@ -875,7 +875,7 @@ func unmarshalOneof1(d *codec.Decoder, a *codec.Arena, m *oneof1Msg, depth int) 
 			}
 			m.Name = a.AddString(raw)
 		case 2:
-			if wt != codec.WireVarint {
+			if wt != runtime.WireVarint {
 				if err := d.Skip(num, wt, depth); err != nil {
 					return err
 				}
@@ -887,7 +887,7 @@ func unmarshalOneof1(d *codec.Decoder, a *codec.Arena, m *oneof1Msg, depth int) 
 			}
 			m.Kind = &oneof1Num{Num: int32(v)}
 		case 3:
-			if wt != codec.WireLen {
+			if wt != runtime.WireLen {
 				if err := d.Skip(num, wt, depth); err != nil {
 					return err
 				}
@@ -899,7 +899,7 @@ func unmarshalOneof1(d *codec.Decoder, a *codec.Arena, m *oneof1Msg, depth int) 
 			}
 			m.Kind = &oneof1Text{Text: a.AddString(raw)}
 		case 4:
-			if wt != codec.WireLen {
+			if wt != runtime.WireLen {
 				if err := d.Skip(num, wt, depth); err != nil {
 					return err
 				}
@@ -910,7 +910,7 @@ func unmarshalOneof1(d *codec.Decoder, a *codec.Arena, m *oneof1Msg, depth int) 
 				return err
 			}
 			w := &oneof1InnerWrap{Inner: new(oneof1Inner)}
-			sub := codec.Decoder{Buf: raw}
+			sub := runtime.Decoder{Buf: raw}
 			if err := unmarshalOneof1Inner(&sub, w.Inner, depth+1); err != nil {
 				return err
 			}
@@ -969,16 +969,16 @@ func TestOneofRoundTrip(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		e := codec.Encoder{}
+		e := runtime.Encoder{}
 		if err := marshalOneof1(&e, tc.msg, 0); err != nil {
 			t.Fatalf("%s: %v", tc.label, err)
 		}
 		if string(e.Result()) != string(ref) {
 			t.Fatalf("%s: bytes differ from protobuf-go", tc.label)
 		}
-		var a codec.Arena
+		var a runtime.Arena
 		a.Grow(len(ref))
-		d := codec.Decoder{Buf: ref}
+		d := runtime.Decoder{Buf: ref}
 		back := new(oneof1Msg)
 		if err := unmarshalOneof1(&d, &a, back, 0); err != nil {
 			t.Fatalf("%s: decode: %v", tc.label, err)
@@ -1030,26 +1030,26 @@ type mapTest struct {
 	ByMsg map[string]*mapValue
 }
 
-func marshalMapValue(e *codec.Encoder, m *mapValue, depth int) error {
-	if err := codec.CheckDepth(depth); err != nil {
+func marshalMapValue(e *runtime.Encoder, m *mapValue, depth int) error {
+	if err := runtime.CheckDepth(depth); err != nil {
 		return err
 	}
 	if m == nil {
 		return nil
 	}
 	if m.Name != "" {
-		e.Tag(1, codec.WireLen)
+		e.Tag(1, runtime.WireLen)
 		e.Text(m.Name)
 	}
 	if m.Value != 0 {
-		e.Tag(2, codec.WireVarint)
+		e.Tag(2, runtime.WireVarint)
 		e.Varint(uint64(int64(m.Value)))
 	}
 	return nil
 }
 
-func unmarshalMapValue(d *codec.Decoder, a *codec.Arena, m *mapValue, depth int) error {
-	if err := codec.CheckDepth(depth); err != nil {
+func unmarshalMapValue(d *runtime.Decoder, a *runtime.Arena, m *mapValue, depth int) error {
+	if err := runtime.CheckDepth(depth); err != nil {
 		return err
 	}
 	for !d.Done() {
@@ -1059,7 +1059,7 @@ func unmarshalMapValue(d *codec.Decoder, a *codec.Arena, m *mapValue, depth int)
 		}
 		switch num {
 		case 1:
-			if wt != codec.WireLen {
+			if wt != runtime.WireLen {
 				if err := d.Skip(num, wt, depth); err != nil {
 					return err
 				}
@@ -1071,7 +1071,7 @@ func unmarshalMapValue(d *codec.Decoder, a *codec.Arena, m *mapValue, depth int)
 			}
 			m.Name = a.AddString(raw)
 		case 2:
-			if wt != codec.WireVarint {
+			if wt != runtime.WireVarint {
 				if err := d.Skip(num, wt, depth); err != nil {
 					return err
 				}
@@ -1091,8 +1091,8 @@ func unmarshalMapValue(d *codec.Decoder, a *codec.Arena, m *mapValue, depth int)
 	return nil
 }
 
-func marshalMapTest(e *codec.Encoder, m *mapTest, depth int) error {
-	if err := codec.CheckDepth(depth); err != nil {
+func marshalMapTest(e *runtime.Encoder, m *mapTest, depth int) error {
+	if err := runtime.CheckDepth(depth); err != nil {
 		return err
 	}
 	if m == nil {
@@ -1106,9 +1106,9 @@ func marshalMapTest(e *codec.Encoder, m *mapTest, depth int) error {
 	sort.Slice(intKeys, func(i, j int) bool { return intKeys[i] < intKeys[j] })
 	for _, k := range intKeys {
 		mark := e.Begin(1)
-		e.Tag(1, codec.WireVarint)
+		e.Tag(1, runtime.WireVarint)
 		e.Varint(uint64(int64(k)))
-		e.Tag(2, codec.WireLen)
+		e.Tag(2, runtime.WireLen)
 		e.Text(m.ByInt[k])
 		e.End(mark)
 	}
@@ -1119,9 +1119,9 @@ func marshalMapTest(e *codec.Encoder, m *mapTest, depth int) error {
 	sort.Strings(strKeys)
 	for _, k := range strKeys {
 		mark := e.Begin(2)
-		e.Tag(1, codec.WireLen)
+		e.Tag(1, runtime.WireLen)
 		e.Text(k)
-		e.Tag(2, codec.WireVarint)
+		e.Tag(2, runtime.WireVarint)
 		e.Varint(uint64(int64(m.ByStr[k])))
 		e.End(mark)
 	}
@@ -1132,7 +1132,7 @@ func marshalMapTest(e *codec.Encoder, m *mapTest, depth int) error {
 	sort.Strings(msgKeys)
 	for _, k := range msgKeys {
 		mark := e.Begin(3)
-		e.Tag(1, codec.WireLen)
+		e.Tag(1, runtime.WireLen)
 		e.Text(k)
 		sub := e.Begin(2)
 		if err := marshalMapValue(e, m.ByMsg[k], depth+1); err != nil {
@@ -1144,8 +1144,8 @@ func marshalMapTest(e *codec.Encoder, m *mapTest, depth int) error {
 	return nil
 }
 
-func unmarshalMapTest(d *codec.Decoder, a *codec.Arena, m *mapTest, depth int) error {
-	if err := codec.CheckDepth(depth); err != nil {
+func unmarshalMapTest(d *runtime.Decoder, a *runtime.Arena, m *mapTest, depth int) error {
+	if err := runtime.CheckDepth(depth); err != nil {
 		return err
 	}
 	for !d.Done() {
@@ -1153,7 +1153,7 @@ func unmarshalMapTest(d *codec.Decoder, a *codec.Arena, m *mapTest, depth int) e
 		if err != nil {
 			return err
 		}
-		if wt != codec.WireLen {
+		if wt != runtime.WireLen {
 			if err := d.Skip(num, wt, depth); err != nil {
 				return err
 			}
@@ -1163,7 +1163,7 @@ func unmarshalMapTest(d *codec.Decoder, a *codec.Arena, m *mapTest, depth int) e
 		if err != nil {
 			return err
 		}
-		sub := codec.Decoder{Buf: raw}
+		sub := runtime.Decoder{Buf: raw}
 		switch num {
 		case 1:
 			var k int32
@@ -1175,7 +1175,7 @@ func unmarshalMapTest(d *codec.Decoder, a *codec.Arena, m *mapTest, depth int) e
 				}
 				switch en {
 				case 1:
-					if ewt != codec.WireVarint {
+					if ewt != runtime.WireVarint {
 						if err := sub.Skip(en, ewt, depth+1); err != nil {
 							return err
 						}
@@ -1187,7 +1187,7 @@ func unmarshalMapTest(d *codec.Decoder, a *codec.Arena, m *mapTest, depth int) e
 					}
 					k = int32(kv)
 				case 2:
-					if ewt != codec.WireLen {
+					if ewt != runtime.WireLen {
 						if err := sub.Skip(en, ewt, depth+1); err != nil {
 							return err
 						}
@@ -1218,7 +1218,7 @@ func unmarshalMapTest(d *codec.Decoder, a *codec.Arena, m *mapTest, depth int) e
 				}
 				switch en {
 				case 1:
-					if ewt != codec.WireLen {
+					if ewt != runtime.WireLen {
 						if err := sub.Skip(en, ewt, depth+1); err != nil {
 							return err
 						}
@@ -1230,7 +1230,7 @@ func unmarshalMapTest(d *codec.Decoder, a *codec.Arena, m *mapTest, depth int) e
 					}
 					k = a.AddString(rk)
 				case 2:
-					if ewt != codec.WireVarint {
+					if ewt != runtime.WireVarint {
 						if err := sub.Skip(en, ewt, depth+1); err != nil {
 							return err
 						}
@@ -1261,7 +1261,7 @@ func unmarshalMapTest(d *codec.Decoder, a *codec.Arena, m *mapTest, depth int) e
 				}
 				switch en {
 				case 1:
-					if ewt != codec.WireLen {
+					if ewt != runtime.WireLen {
 						if err := sub.Skip(en, ewt, depth+1); err != nil {
 							return err
 						}
@@ -1273,7 +1273,7 @@ func unmarshalMapTest(d *codec.Decoder, a *codec.Arena, m *mapTest, depth int) e
 					}
 					k = a.AddString(rk)
 				case 2:
-					if ewt != codec.WireLen {
+					if ewt != runtime.WireLen {
 						if err := sub.Skip(en, ewt, depth+1); err != nil {
 							return err
 						}
@@ -1283,7 +1283,7 @@ func unmarshalMapTest(d *codec.Decoder, a *codec.Arena, m *mapTest, depth int) e
 					if err != nil {
 						return err
 					}
-					sd := codec.Decoder{Buf: rv}
+					sd := runtime.Decoder{Buf: rv}
 					if err := unmarshalMapValue(&sd, a, mv, depth+2); err != nil {
 						return err
 					}
@@ -1361,16 +1361,16 @@ func TestMapRoundTrip(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		e := codec.Encoder{}
+		e := runtime.Encoder{}
 		if err := marshalMapTest(&e, tc.msg, 0); err != nil {
 			t.Fatalf("%s: %v", tc.label, err)
 		}
 		if string(e.Result()) != string(ref) {
 			t.Fatalf("%s: bytes differ from protobuf-go", tc.label)
 		}
-		var a codec.Arena
+		var a runtime.Arena
 		a.Grow(len(ref))
-		d := codec.Decoder{Buf: ref}
+		d := runtime.Decoder{Buf: ref}
 		back := new(mapTest)
 		if err := unmarshalMapTest(&d, &a, back, 0); err != nil {
 			t.Fatalf("%s: decode: %v", tc.label, err)
@@ -1414,7 +1414,7 @@ func nestMessage(t *testing.T, levels int) []byte {
 	// this must trip ErrDepth end to end.
 	var b []byte
 	for i := 0; i < levels; i++ {
-		b = codec.AppendTag(b, 1, codec.WireStartGroup)
+		b = runtime.AppendTag(b, 1, runtime.WireStartGroup)
 	}
 	return b
 }
@@ -1426,33 +1426,33 @@ func TestAdversarial(t *testing.T) {
 	}{
 		{"truncated varint", func() []byte { return []byte{8, 0x80} }},
 		{"truncated tag", func() []byte { return []byte{0x80} }},
-		{"truncated len", func() []byte { return append(codec.AppendTag(nil, 14, codec.WireLen), 5, 'a', 'b') }},
-		{"len overrun", func() []byte { return append(codec.AppendTag(nil, 14, codec.WireLen), 100, 'a') }},
-		{"field zero", func() []byte { return codec.AppendTag(nil, 0, codec.WireVarint) }},
-		{"wiretype 6", func() []byte { return codec.AppendTag(nil, 1, 6) }},
-		{"wiretype 7", func() []byte { return codec.AppendTag(nil, 1, 7) }},
-		{"end group top", func() []byte { return codec.AppendTag(nil, 1, codec.WireEndGroup) }},
+		{"truncated len", func() []byte { return append(runtime.AppendTag(nil, 14, runtime.WireLen), 5, 'a', 'b') }},
+		{"len overrun", func() []byte { return append(runtime.AppendTag(nil, 14, runtime.WireLen), 100, 'a') }},
+		{"field zero", func() []byte { return runtime.AppendTag(nil, 0, runtime.WireVarint) }},
+		{"wiretype 6", func() []byte { return runtime.AppendTag(nil, 1, 6) }},
+		{"wiretype 7", func() []byte { return runtime.AppendTag(nil, 1, 7) }},
+		{"end group top", func() []byte { return runtime.AppendTag(nil, 1, runtime.WireEndGroup) }},
 		{"mismatched end", func() []byte {
-			b := codec.AppendTag(nil, 1, codec.WireStartGroup)
-			return codec.AppendTag(b, 2, codec.WireEndGroup)
+			b := runtime.AppendTag(nil, 1, runtime.WireStartGroup)
+			return runtime.AppendTag(b, 2, runtime.WireEndGroup)
 		}},
 		{"truncated fixed32", func() []byte {
-			b := codec.AppendTag(nil, 7, codec.WireFixed32)
+			b := runtime.AppendTag(nil, 7, runtime.WireFixed32)
 			return append(b, 1, 2, 3)
 		}},
 		{"truncated fixed64", func() []byte {
-			b := codec.AppendTag(nil, 8, codec.WireFixed64)
+			b := runtime.AppendTag(nil, 8, runtime.WireFixed64)
 			return append(b, 1, 2, 3)
 		}},
 		{"bad packed", func() []byte {
-			b := codec.AppendTag(nil, 17, codec.WireLen)
-			return codec.AppendLen(b, []byte{0x80})
+			b := runtime.AppendTag(nil, 17, runtime.WireLen)
+			return runtime.AppendLen(b, []byte{0x80})
 		}},
 		{"varint 10byte cont", func() []byte {
-			b := codec.AppendTag(nil, 1, codec.WireVarint)
+			b := runtime.AppendTag(nil, 1, runtime.WireVarint)
 			return append(b, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80)
 		}},
-		{"group depth bomb", func() []byte { return nestMessage(t, codec.MaxDepth+10) }},
+		{"group depth bomb", func() []byte { return nestMessage(t, runtime.MaxDepth+10) }},
 	}
 	for _, tc := range cases {
 		wire := tc.wire()
@@ -1461,12 +1461,12 @@ func TestAdversarial(t *testing.T) {
 		}
 	}
 	// Unknown fields are skipped, known fields still land.
-	e := codec.Encoder{}
-	e.Tag(99, codec.WireVarint)
+	e := runtime.Encoder{}
+	e.Tag(99, runtime.WireVarint)
 	e.Varint(12345)
-	e.Tag(1, codec.WireVarint)
+	e.Tag(1, runtime.WireVarint)
 	e.Varint(7)
-	e.Tag(100, codec.WireLen)
+	e.Tag(100, runtime.WireLen)
 	e.Data([]byte("junk"))
 	back, err := decodeScalars(e.Result())
 	if err != nil {
@@ -1476,10 +1476,10 @@ func TestAdversarial(t *testing.T) {
 		t.Fatalf("unknown skip: I32=%d want 7", back.I32)
 	}
 	// Unpacked singles decode for packed fields (protobuf-go accepts both).
-	e2 := codec.Encoder{}
-	e2.Tag(17, codec.WireVarint)
+	e2 := runtime.Encoder{}
+	e2.Tag(17, runtime.WireVarint)
 	e2.Varint(3)
-	e2.Tag(22, codec.WireVarint)
+	e2.Tag(22, runtime.WireVarint)
 	e2.Varint(1)
 	back2, err := decodeScalars(e2.Result())
 	if err != nil {
@@ -1489,12 +1489,12 @@ func TestAdversarial(t *testing.T) {
 		t.Fatalf("unpacked singles: %+v", back2)
 	}
 	// Group skip: unknown group bytes do not disturb the message.
-	e3 := codec.Encoder{}
-	e3.Tag(50, codec.WireStartGroup)
-	e3.Tag(1, codec.WireVarint)
+	e3 := runtime.Encoder{}
+	e3.Tag(50, runtime.WireStartGroup)
+	e3.Tag(1, runtime.WireVarint)
 	e3.Varint(9)
-	e3.Tag(50, codec.WireEndGroup)
-	e3.Tag(2, codec.WireVarint)
+	e3.Tag(50, runtime.WireEndGroup)
+	e3.Tag(2, runtime.WireVarint)
 	e3.Varint(11)
 	back3, err := decodeScalars(e3.Result())
 	if err != nil {
@@ -1510,29 +1510,29 @@ func TestAdversarial(t *testing.T) {
 // generated code threads depth and calls CheckDepth on entry. Group-depth
 // overflow goes through Skip end to end (see the table above).
 func TestDepthLimit(t *testing.T) {
-	if err := codec.CheckDepth(codec.MaxDepth); err != nil {
+	if err := runtime.CheckDepth(runtime.MaxDepth); err != nil {
 		t.Fatalf("limit itself must pass: %v", err)
 	}
-	if err := codec.CheckDepth(codec.MaxDepth + 1); err != codec.ErrDepth {
+	if err := runtime.CheckDepth(runtime.MaxDepth + 1); err != runtime.ErrDepth {
 		t.Fatalf("over limit must be ErrDepth, got %v", err)
 	}
-	tiny := append(codec.AppendTag(nil, 13, codec.WireVarint), 1)
-	for _, depth := range []int{codec.MaxDepth + 1, codec.MaxDepth + 40} {
-		d := codec.Decoder{Buf: tiny}
-		var a codec.Arena
-		if err := unmarshalScalars(&d, &a, new(matrix3.Scalars3), depth); err != codec.ErrDepth {
+	tiny := append(runtime.AppendTag(nil, 13, runtime.WireVarint), 1)
+	for _, depth := range []int{runtime.MaxDepth + 1, runtime.MaxDepth + 40} {
+		d := runtime.Decoder{Buf: tiny}
+		var a runtime.Arena
+		if err := unmarshalScalars(&d, &a, new(matrix3.Scalars3), depth); err != runtime.ErrDepth {
 			t.Fatalf("decode at depth %d: got %v, want ErrDepth", depth, err)
 		}
-		e := codec.Encoder{}
-		if err := marshalScalars(&e, &matrix3.Scalars3{Flag: true}, depth); err != codec.ErrDepth {
+		e := runtime.Encoder{}
+		if err := marshalScalars(&e, &matrix3.Scalars3{Flag: true}, depth); err != runtime.ErrDepth {
 			t.Fatalf("encode at depth %d: got %v, want ErrDepth", depth, err)
 		}
 	}
 	// One below the limit still decodes.
-	d := codec.Decoder{Buf: tiny}
-	var a codec.Arena
+	d := runtime.Decoder{Buf: tiny}
+	var a runtime.Arena
 	m := new(matrix3.Scalars3)
-	if err := unmarshalScalars(&d, &a, m, codec.MaxDepth); err != nil {
+	if err := unmarshalScalars(&d, &a, m, runtime.MaxDepth); err != nil {
 		t.Fatalf("decode at limit: %v", err)
 	}
 	if !m.Flag {
@@ -1540,46 +1540,46 @@ func TestDepthLimit(t *testing.T) {
 	}
 }
 
-// Group framing round trip, using the pattern from codec.go's doc comment.
+// Group framing round trip, using the pattern from runtime.go's doc comment.
 // The plan marks proto2 groups (Group=true, wire start/end); generated code
 // emits Tag(n, StartGroup) ... Tag(n, EndGroup) around the member fields.
 func TestGroupRoundTrip(t *testing.T) {
-	e := codec.Encoder{}
-	e.Tag(1, codec.WireStartGroup)
-	e.Tag(2, codec.WireVarint)
-	e.Varint(codec.ZigZagEncode32(-5))
-	e.Tag(3, codec.WireLen)
+	e := runtime.Encoder{}
+	e.Tag(1, runtime.WireStartGroup)
+	e.Tag(2, runtime.WireVarint)
+	e.Varint(runtime.ZigZagEncode32(-5))
+	e.Tag(3, runtime.WireLen)
 	e.Text("hi")
-	e.Tag(1, codec.WireEndGroup)
-	e.Tag(7, codec.WireVarint)
+	e.Tag(1, runtime.WireEndGroup)
+	e.Tag(7, runtime.WireVarint)
 	e.Varint(1)
 	wire := e.Result()
 
 	var x int32
 	var s string
 	var after bool
-	d := codec.Decoder{Buf: wire}
+	d := runtime.Decoder{Buf: wire}
 	const depth = 0
 	for !d.Done() {
 		num, wt, err := d.Next()
 		if err != nil {
 			t.Fatal(err)
 		}
-		if num == 1 && wt == codec.WireStartGroup {
+		if num == 1 && wt == runtime.WireStartGroup {
 			for {
 				in, iwt, err := d.Next()
 				if err != nil {
 					t.Fatal(err)
 				}
-				if iwt == codec.WireEndGroup {
+				if iwt == runtime.WireEndGroup {
 					if in != 1 {
-						t.Fatal(codec.ErrWire)
+						t.Fatal(runtime.ErrWire)
 					}
 					break
 				}
 				switch in {
 				case 2:
-					if iwt != codec.WireVarint {
+					if iwt != runtime.WireVarint {
 						if err := d.Skip(in, iwt, depth+1); err != nil {
 							t.Fatal(err)
 						}
@@ -1589,9 +1589,9 @@ func TestGroupRoundTrip(t *testing.T) {
 					if err != nil {
 						t.Fatal(err)
 					}
-					x = codec.ZigZagDecode32(v)
+					x = runtime.ZigZagDecode32(v)
 				case 3:
-					if iwt != codec.WireLen {
+					if iwt != runtime.WireLen {
 						if err := d.Skip(in, iwt, depth+1); err != nil {
 							t.Fatal(err)
 						}
@@ -1610,7 +1610,7 @@ func TestGroupRoundTrip(t *testing.T) {
 			}
 			continue
 		}
-		if num == 7 && wt == codec.WireVarint {
+		if num == 7 && wt == runtime.WireVarint {
 			v, err := d.Varint()
 			if err != nil {
 				t.Fatal(err)
@@ -1633,51 +1633,51 @@ func TestGroupRoundTrip(t *testing.T) {
 
 func TestWirePrimitives(t *testing.T) {
 	for _, v := range []uint64{0, 1, 127, 128, 300, 1<<32 - 1, 1<<64 - 1, math.MaxUint64} {
-		b := codec.AppendVarint(nil, v)
-		if len(b) != codec.SizeVarint(v) {
-			t.Fatalf("SizeVarint(%d) = %d, encoded %d", v, codec.SizeVarint(v), len(b))
+		b := runtime.AppendVarint(nil, v)
+		if len(b) != runtime.SizeVarint(v) {
+			t.Fatalf("SizeVarint(%d) = %d, encoded %d", v, runtime.SizeVarint(v), len(b))
 		}
-		got, n, err := codec.ConsumeVarint(b)
+		got, n, err := runtime.ConsumeVarint(b)
 		if err != nil || got != v || n != len(b) {
 			t.Fatalf("varint %d round trip: %d %d %v", v, got, n, err)
 		}
 	}
 	// Zigzag extremes.
-	if codec.ZigZagEncode32(math.MinInt32) != 0xffffffff || codec.ZigZagDecode32(1) != -1 {
+	if runtime.ZigZagEncode32(math.MinInt32) != 0xffffffff || runtime.ZigZagDecode32(1) != -1 {
 		t.Fatal("zigzag32")
 	}
-	if codec.ZigZagEncode64(math.MinInt64) != 0xffffffffffffffff || codec.ZigZagDecode64(1) != -1 {
+	if runtime.ZigZagEncode64(math.MinInt64) != 0xffffffffffffffff || runtime.ZigZagDecode64(1) != -1 {
 		t.Fatal("zigzag64")
 	}
 	// Fixed round trips.
-	b := codec.AppendFixed32(codec.AppendFixed64(nil, 0x0102030405060708), 0x01020304)
-	v64, n, err := codec.ConsumeFixed64(b)
+	b := runtime.AppendFixed32(runtime.AppendFixed64(nil, 0x0102030405060708), 0x01020304)
+	v64, n, err := runtime.ConsumeFixed64(b)
 	if err != nil || v64 != 0x0102030405060708 || n != 8 {
 		t.Fatal("fixed64")
 	}
-	v32, n, err := codec.ConsumeFixed32(b[8:])
+	v32, n, err := runtime.ConsumeFixed32(b[8:])
 	if err != nil || v32 != 0x01020304 || n != 4 {
 		t.Fatal("fixed32")
 	}
 	// Tag size + reject rules.
-	if codec.SizeTag(1, codec.WireVarint) != 1 || codec.SizeTag(2048, codec.WireLen) != 3 {
+	if runtime.SizeTag(1, runtime.WireVarint) != 1 || runtime.SizeTag(2048, runtime.WireLen) != 3 {
 		t.Fatal("SizeTag")
 	}
-	if _, _, _, err := codec.ConsumeTag([]byte{0}); err == nil {
+	if _, _, _, err := runtime.ConsumeTag([]byte{0}); err == nil {
 		t.Fatal("field 0 accepted")
 	}
 	// Multi-byte Begin/End: 200 payload bytes need a 2-byte length.
-	e := codec.Encoder{}
+	e := runtime.Encoder{}
 	mark := e.Begin(19)
 	for i := 0; i < 200; i++ {
 		e.Varint(1)
 	}
 	e.End(mark)
 	out := e.Result()
-	var d codec.Decoder
+	var d runtime.Decoder
 	d.Buf = out
 	num, wt, err := d.Next()
-	if err != nil || num != 19 || wt != codec.WireLen {
+	if err != nil || num != 19 || wt != runtime.WireLen {
 		t.Fatalf("framing tag: %d %d %v", num, wt, err)
 	}
 	raw, err := d.Bytes()
@@ -1691,7 +1691,7 @@ func TestWirePrimitives(t *testing.T) {
 		t.Fatal("Reset")
 	}
 	// Arena copies own their memory.
-	var a codec.Arena
+	var a runtime.Arena
 	a.Grow(8)
 	src := []byte("hello")
 	s1 := a.AddString(src)
@@ -1742,8 +1742,8 @@ func offPanicSet[T any]() func(any, T) {
 	return func(any, T) { panic("offProbe: fell back to closure on a fast row") }
 }
 
-func offProbeFields(fast, stub bool) []*codec.Field {
-	mk := func(f *codec.Field) *codec.Field {
+func offProbeFields(fast, stub bool) []*runtime.Field {
+	mk := func(f *runtime.Field) *runtime.Field {
 		if fast {
 			f.Fast = true
 		}
@@ -1763,30 +1763,30 @@ func offProbeFields(fast, stub bool) []*codec.Field {
 		getRep = offPanic[[]int32]()
 		getOpt = offPanic[*int32]()
 	}
-	return []*codec.Field{
-		mk(&codec.Field{Num: 1, Wire: codec.WireVarint, Kind: codec.KindInt32,
+	return []*runtime.Field{
+		mk(&runtime.Field{Num: 1, Wire: runtime.WireVarint, Kind: runtime.KindInt32,
 			Off:    offA,
 			GetI32: getI32,
 			SetI32: setI32}),
-		mk(&codec.Field{Num: 2, Wire: codec.WireVarint, Kind: codec.KindInt64,
+		mk(&runtime.Field{Num: 2, Wire: runtime.WireVarint, Kind: runtime.KindInt64,
 			Off:    offB,
 			GetI64: getI64,
 			SetI64: setI64}),
-		mk(&codec.Field{Num: 3, Wire: codec.WireLen, Kind: codec.KindString,
+		mk(&runtime.Field{Num: 3, Wire: runtime.WireLen, Kind: runtime.KindString,
 			Off:    offS,
 			GetStr: getStr,
 			SetStr: func(m any, v string) { m.(*offProbe).S = v }}),
-		mk(&codec.Field{Num: 4, Wire: codec.WireVarint, Kind: codec.KindInt32,
+		mk(&runtime.Field{Num: 4, Wire: runtime.WireVarint, Kind: runtime.KindInt32,
 			Repeated: true, Packed: true,
 			Off:       offN,
 			GetRepI32: getRep,
 			AppendI32: func(m any, v int32) { m.(*offProbe).N = append(m.(*offProbe).N, v) }}),
-		mk(&codec.Field{Num: 5, Wire: codec.WireVarint, Kind: codec.KindInt32,
+		mk(&runtime.Field{Num: 5, Wire: runtime.WireVarint, Kind: runtime.KindInt32,
 			Explicit: true,
 			Off:      offO, Has: offO,
 			GetOptI32: getOpt,
 			SetOptI32: func(m any, v int32) { tmp := v; m.(*offProbe).O = &tmp }}),
-		&codec.Field{Num: 6, Wire: codec.WireVarint, Kind: codec.KindInt32,
+		&runtime.Field{Num: 6, Wire: runtime.WireVarint, Kind: runtime.KindInt32,
 			Oneof: true,
 			GetOneof: func(m any) (any, bool) {
 				if x, ok := m.(*offProbe).K.(*offKindN); ok {
@@ -1798,27 +1798,27 @@ func offProbeFields(fast, stub bool) []*codec.Field {
 	}
 }
 
-func encodeProbe(t *codec.Table, m *offProbe) []byte {
-	e := &codec.Encoder{Buf: make([]byte, 0, 64)}
-	if err := codec.EncodeTable(e, m, t, 0); err != nil {
+func encodeProbe(t *runtime.Table, m *offProbe) []byte {
+	e := &runtime.Encoder{Buf: make([]byte, 0, 64)}
+	if err := runtime.EncodeTable(e, m, t, 0); err != nil {
 		panic(err)
 	}
 	return e.Result()
 }
 
-func decodeProbe(t *codec.Table, w []byte) *offProbe {
+func decodeProbe(t *runtime.Table, w []byte) *offProbe {
 	m := &offProbe{}
-	d := &codec.Decoder{Buf: w}
-	a := &codec.Arena{}
-	if err := codec.DecodeTable(d, a, m, t, 0); err != nil {
+	d := &runtime.Decoder{Buf: w}
+	a := &runtime.Arena{}
+	if err := runtime.DecodeTable(d, a, m, t, 0); err != nil {
 		panic(err)
 	}
 	return m
 }
 
 func TestOffsetFastPathParity(t *testing.T) {
-	slow := codec.NewTable("probe", offProbeFields(false, false))
-	fast := codec.NewTable("probe", offProbeFields(true, true))
+	slow := runtime.NewTable("probe", offProbeFields(false, false))
+	fast := runtime.NewTable("probe", offProbeFields(true, true))
 
 	v := int32(-7)
 	cases := map[string]*offProbe{
@@ -1850,7 +1850,7 @@ func TestOffsetFastPathParity(t *testing.T) {
 
 	// A misaligned 64-bit offset must fall back to closures, not fault.
 	// The fallback table keeps working closures for that row.
-	mis := codec.NewTable("probe", offProbeFields(true, false))
+	mis := runtime.NewTable("probe", offProbeFields(true, false))
 	mis.Fields[1].Off = 1
 	want := cases["full"]
 	if enc := encodeProbe(mis, want); !bytes.Equal(enc, encodeProbe(slow, want)) {

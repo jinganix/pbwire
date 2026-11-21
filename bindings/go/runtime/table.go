@@ -18,11 +18,12 @@
 // on decode, like protobuf-go. Unknown fields (wrong number, wrong wire
 // type, extensions, groups-as-unknown) are skipped, never preserved: the
 // struct has no storage for them.
-package codec
+package runtime
 
 import (
 	"math"
 	"sync/atomic"
+	"unsafe"
 )
 
 // Kind identifies the protobuf scalar kind of one table row. The engine
@@ -1056,6 +1057,9 @@ func DecodeTable(d *Decoder, a *Arena, msg any, t *Table, depth int) error {
 	if err := CheckDepth(depth); err != nil {
 		return err
 	}
+	// One address extraction per message: singular scalar stores below
+	// reuse it instead of each storeFast recomputing it per field.
+	base := fastBase(t, msg)
 	for !d.Done() {
 		num, wt, err := d.Next()
 		if err != nil {
@@ -1068,7 +1072,7 @@ func DecodeTable(d *Decoder, a *Arena, msg any, t *Table, depth int) error {
 			}
 			continue
 		}
-		if err := decodeField(d, a, t, msg, f, num, wt, depth); err != nil {
+		if err := decodeField(d, a, t, msg, base, f, num, wt, depth); err != nil {
 			return err
 		}
 	}
@@ -1078,7 +1082,7 @@ func DecodeTable(d *Decoder, a *Arena, msg any, t *Table, depth int) error {
 // decodeField decodes one field occurrence: repeated rows fan out, oneof
 // members wrap (last wins), groups run their own loop, foreign messages
 // cross through the sibling, everything else reads and assigns.
-func decodeField(d *Decoder, a *Arena, t *Table, msg any, f *Field, num uint32, wt WireType, depth int) error {
+func decodeField(d *Decoder, a *Arena, t *Table, msg any, base unsafe.Pointer, f *Field, num uint32, wt WireType, depth int) error {
 	if f.Repeated {
 		return decodeRepeated(d, a, t, msg, f, wt, depth)
 	}
@@ -1121,7 +1125,7 @@ func decodeField(d *Decoder, a *Arena, t *Table, msg any, f *Field, num uint32, 
 		}
 		if f.Explicit {
 			f.SetOptI32(msg, int32(v))
-		} else if !storeFast(t, msg, f, uint64(int64(int32(v)))) {
+		} else if !storeFast(base, f, uint64(int64(int32(v)))) {
 			f.SetI32(msg, int32(v))
 		}
 	case KindInt64:
@@ -1134,7 +1138,7 @@ func decodeField(d *Decoder, a *Arena, t *Table, msg any, f *Field, num uint32, 
 		}
 		if f.Explicit {
 			f.SetOptI64(msg, int64(v))
-		} else if !storeFast(t, msg, f, v) {
+		} else if !storeFast(base, f, v) {
 			f.SetI64(msg, int64(v))
 		}
 	case KindUint32:
@@ -1147,7 +1151,7 @@ func decodeField(d *Decoder, a *Arena, t *Table, msg any, f *Field, num uint32, 
 		}
 		if f.Explicit {
 			f.SetOptU32(msg, uint32(v))
-		} else if !storeFast(t, msg, f, uint64(uint32(v))) {
+		} else if !storeFast(base, f, uint64(uint32(v))) {
 			f.SetU32(msg, uint32(v))
 		}
 	case KindUint64:
@@ -1160,7 +1164,7 @@ func decodeField(d *Decoder, a *Arena, t *Table, msg any, f *Field, num uint32, 
 		}
 		if f.Explicit {
 			f.SetOptU64(msg, v)
-		} else if !storeFast(t, msg, f, v) {
+		} else if !storeFast(base, f, v) {
 			f.SetU64(msg, v)
 		}
 	case KindSint32:
@@ -1173,7 +1177,7 @@ func decodeField(d *Decoder, a *Arena, t *Table, msg any, f *Field, num uint32, 
 		}
 		if f.Explicit {
 			f.SetOptS32(msg, ZigZagDecode32(v))
-		} else if !storeFast(t, msg, f, uint64(int64(ZigZagDecode32(v)))) {
+		} else if !storeFast(base, f, uint64(int64(ZigZagDecode32(v)))) {
 			f.SetS32(msg, ZigZagDecode32(v))
 		}
 	case KindSint64:
@@ -1186,7 +1190,7 @@ func decodeField(d *Decoder, a *Arena, t *Table, msg any, f *Field, num uint32, 
 		}
 		if f.Explicit {
 			f.SetOptS64(msg, ZigZagDecode64(v))
-		} else if !storeFast(t, msg, f, uint64(ZigZagDecode64(v))) {
+		} else if !storeFast(base, f, uint64(ZigZagDecode64(v))) {
 			f.SetS64(msg, ZigZagDecode64(v))
 		}
 	case KindFixed32:
@@ -1199,7 +1203,7 @@ func decodeField(d *Decoder, a *Arena, t *Table, msg any, f *Field, num uint32, 
 		}
 		if f.Explicit {
 			f.SetOptFx32(msg, v)
-		} else if !storeFast(t, msg, f, uint64(v)) {
+		} else if !storeFast(base, f, uint64(v)) {
 			f.SetFx32(msg, v)
 		}
 	case KindFixed64:
@@ -1212,7 +1216,7 @@ func decodeField(d *Decoder, a *Arena, t *Table, msg any, f *Field, num uint32, 
 		}
 		if f.Explicit {
 			f.SetOptFx64(msg, v)
-		} else if !storeFast(t, msg, f, v) {
+		} else if !storeFast(base, f, v) {
 			f.SetFx64(msg, v)
 		}
 	case KindSfixed32:
@@ -1225,7 +1229,7 @@ func decodeField(d *Decoder, a *Arena, t *Table, msg any, f *Field, num uint32, 
 		}
 		if f.Explicit {
 			f.SetOptSfx32(msg, int32(v))
-		} else if !storeFast(t, msg, f, uint64(int64(int32(v)))) {
+		} else if !storeFast(base, f, uint64(int64(int32(v)))) {
 			f.SetSfx32(msg, int32(v))
 		}
 	case KindSfixed64:
@@ -1238,7 +1242,7 @@ func decodeField(d *Decoder, a *Arena, t *Table, msg any, f *Field, num uint32, 
 		}
 		if f.Explicit {
 			f.SetOptSfx64(msg, int64(v))
-		} else if !storeFast(t, msg, f, v) {
+		} else if !storeFast(base, f, v) {
 			f.SetSfx64(msg, int64(v))
 		}
 	case KindFloat:
@@ -1251,7 +1255,7 @@ func decodeField(d *Decoder, a *Arena, t *Table, msg any, f *Field, num uint32, 
 		}
 		if f.Explicit {
 			f.SetOptF32(msg, math.Float32frombits(v))
-		} else if !storeFast(t, msg, f, uint64(v)) {
+		} else if !storeFast(base, f, uint64(v)) {
 			f.SetF32(msg, math.Float32frombits(v))
 		}
 	case KindDouble:
@@ -1264,7 +1268,7 @@ func decodeField(d *Decoder, a *Arena, t *Table, msg any, f *Field, num uint32, 
 		}
 		if f.Explicit {
 			f.SetOptF64(msg, math.Float64frombits(v))
-		} else if !storeFast(t, msg, f, v) {
+		} else if !storeFast(base, f, v) {
 			f.SetF64(msg, math.Float64frombits(v))
 		}
 	case KindBool:
@@ -1277,7 +1281,7 @@ func decodeField(d *Decoder, a *Arena, t *Table, msg any, f *Field, num uint32, 
 		}
 		if f.Explicit {
 			f.SetOptBool(msg, v != 0)
-		} else if !storeFast(t, msg, f, v) {
+		} else if !storeFast(base, f, v) {
 			f.SetBool(msg, v != 0)
 		}
 	case KindString:
@@ -1316,7 +1320,7 @@ func decodeField(d *Decoder, a *Arena, t *Table, msg any, f *Field, num uint32, 
 		}
 		if f.Explicit {
 			f.SetOptEnum(msg, int32(v))
-		} else if !storeFast(t, msg, f, uint64(int64(int32(v)))) {
+		} else if !storeFast(base, f, uint64(int64(int32(v)))) {
 			f.SetEnum(msg, int32(v))
 		}
 	case KindMessage:
@@ -1352,6 +1356,7 @@ func decodeGroupBody(d *Decoder, a *Arena, target any, sub *Table, group uint32,
 	if err := CheckDepth(depth); err != nil {
 		return err
 	}
+	base := fastBase(sub, target)
 	for {
 		num, wt, err := d.Next()
 		if err != nil {
@@ -1370,7 +1375,7 @@ func decodeGroupBody(d *Decoder, a *Arena, target any, sub *Table, group uint32,
 			}
 			continue
 		}
-		if err := decodeField(d, a, sub, target, g, num, wt, depth); err != nil {
+		if err := decodeField(d, a, sub, target, base, g, num, wt, depth); err != nil {
 			return err
 		}
 	}

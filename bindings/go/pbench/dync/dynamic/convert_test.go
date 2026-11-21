@@ -10,14 +10,14 @@ import (
 	"runtime"
 	"testing"
 
-	"pbwire/pbench/dyngo/codec"
+	codec "pbwire/runtime"
 	"pbwire/tests/gen/matrix3"
 )
 
 func testRegistry(t *testing.T) (*Schema, *MessageType) {
 	t.Helper()
 	_, file, _, _ := runtime.Caller(0)
-	raw, err := os.ReadFile(filepath.Join(filepath.Dir(file), "..", "..", "dyngo", "codec", "testdata", "matrix3.desc"))
+	raw, err := os.ReadFile(filepath.Join(filepath.Dir(file), "..", "..", "..", "runtime", "testdata", "matrix3.desc"))
 	if err != nil {
 		t.Fatal(err)
 	}

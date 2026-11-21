@@ -229,10 +229,9 @@ erlang-bench:
 plugin-c:
 	$(MAKE) -C bindings/c/plugin test
 
-# Go binding (bindings/go): cgo dynamic binding over the shared C core.
-# Loads a FileDescriptorSet at run time, so schemas hot-swap without a
-# restart. Needs Go and a C compiler only (same optional status as the
-# other cgo/FFI bindings).
+# Go binding (bindings/go): pure-Go binding, no cgo on the shipped path.
+# Generated models marshal through bindings/go/runtime; the pbench/dync arm
+# still exercises the C core over cgo, so this keeps the $(LIB) build order.
 GO ?= go
 
 go-test: $(LIB)

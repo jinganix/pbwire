@@ -18,12 +18,12 @@ dynamic paths are what this harness compares.
 |---|---|---|
 | `dync/dynamic/` | dynamic C core engine | `Schema`/`Type`/`Message`: value tree in C over cgo, hot-swappable registry, plus the shipped model<->tree converter |
 | `dync/dync.go` | dynamic C core arm | struct -> C tree -> wire -> C tree -> struct, all through the shipped converter |
-| `dyngo/codec/` | dynamic Go core engine | `Schema`/`DType`/`DMsg`: pure-Go value tree and the shared table engine, plus the model<->tree converter |
+| `dyngo/dyngo.go` + `../runtime/` | dynamic Go core engine | `Schema`/`DType`/`DMsg`: pure-Go value tree and the shared table engine in the shipped `runtime/`, plus the model<->tree converter |
 | `dyngo/dyngo.go` | dynamic Go core arm | struct -> `DMsg` -> wire -> `DMsg` -> struct, all through the shipped converter, no cgo |
 
-Both arms keep their engine next to them; nothing here is shared
-scaffolding. The shipped engine is the pure-Go table engine in
-`dyngo/codec/`: every generated model marshals through it, so the
+The C arm keeps its engine next to it; the Go arm drives the shipped
+`../runtime/` engine. Nothing here is extra scaffolding. The shipped engine is the pure-Go table engine in
+`../runtime/`: every generated model marshals through it, so the
 harness now compares the two dynamic cores (C tree vs Go tree) with the
 shipped struct path measured separately in `../benchmarks/`.
 

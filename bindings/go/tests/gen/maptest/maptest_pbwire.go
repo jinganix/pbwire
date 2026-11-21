@@ -5,7 +5,7 @@
 package maptest
 
 import (
-	"pbwire/pbench/dyngo/codec"
+	"pbwire/runtime"
 )
 
 // spectest.MapValue
@@ -36,11 +36,11 @@ func (m *MapValue) Reset() {
 }
 
 func (m *MapValue) Marshal() ([]byte, error) {
-	return codec.EncodeModel(m, MapValueMeta)
+	return runtime.EncodeModel(m, MapValueMeta)
 }
 
 func (m *MapValue) Unmarshal(wire []byte) error {
-	return codec.DecodeModel(wire, m, MapValueMeta)
+	return runtime.DecodeModel(wire, m, MapValueMeta)
 }
 
 // spectest.MapTest.ByIntEntry
@@ -71,11 +71,11 @@ func (m *MapTest_ByIntEntry) Reset() {
 }
 
 func (m *MapTest_ByIntEntry) Marshal() ([]byte, error) {
-	return codec.EncodeModel(m, MapTest_ByIntEntryMeta)
+	return runtime.EncodeModel(m, MapTest_ByIntEntryMeta)
 }
 
 func (m *MapTest_ByIntEntry) Unmarshal(wire []byte) error {
-	return codec.DecodeModel(wire, m, MapTest_ByIntEntryMeta)
+	return runtime.DecodeModel(wire, m, MapTest_ByIntEntryMeta)
 }
 
 // spectest.MapTest.ByStrEntry
@@ -106,11 +106,11 @@ func (m *MapTest_ByStrEntry) Reset() {
 }
 
 func (m *MapTest_ByStrEntry) Marshal() ([]byte, error) {
-	return codec.EncodeModel(m, MapTest_ByStrEntryMeta)
+	return runtime.EncodeModel(m, MapTest_ByStrEntryMeta)
 }
 
 func (m *MapTest_ByStrEntry) Unmarshal(wire []byte) error {
-	return codec.DecodeModel(wire, m, MapTest_ByStrEntryMeta)
+	return runtime.DecodeModel(wire, m, MapTest_ByStrEntryMeta)
 }
 
 // spectest.MapTest.ByMsgEntry
@@ -141,11 +141,11 @@ func (m *MapTest_ByMsgEntry) Reset() {
 }
 
 func (m *MapTest_ByMsgEntry) Marshal() ([]byte, error) {
-	return codec.EncodeModel(m, MapTest_ByMsgEntryMeta)
+	return runtime.EncodeModel(m, MapTest_ByMsgEntryMeta)
 }
 
 func (m *MapTest_ByMsgEntry) Unmarshal(wire []byte) error {
-	return codec.DecodeModel(wire, m, MapTest_ByMsgEntryMeta)
+	return runtime.DecodeModel(wire, m, MapTest_ByMsgEntryMeta)
 }
 
 // spectest.MapTest
@@ -184,9 +184,9 @@ func (m *MapTest) Reset() {
 }
 
 func (m *MapTest) Marshal() ([]byte, error) {
-	return codec.EncodeModel(m, MapTestMeta)
+	return runtime.EncodeModel(m, MapTestMeta)
 }
 
 func (m *MapTest) Unmarshal(wire []byte) error {
-	return codec.DecodeModel(wire, m, MapTestMeta)
+	return runtime.DecodeModel(wire, m, MapTestMeta)
 }

@@ -1,22 +1,22 @@
 // Plan tests: the schema plan for the real matrix3/oneof1/maptest
 // descriptor sets matches the .proto sources field by field.
-package codec_test
+package runtime_test
 
 import (
 	"os"
 	"testing"
 
 	"google.golang.org/protobuf/types/descriptorpb"
-	"pbwire/pbench/dyngo/codec"
+	"pbwire/runtime"
 )
 
-func mustLoad(t *testing.T, path string) *codec.Schema {
+func mustLoad(t *testing.T, path string) *runtime.Schema {
 	t.Helper()
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	s, err := codec.Load(raw)
+	s, err := runtime.Load(raw)
 	if err != nil {
 		t.Fatalf("Load(%s): %v", path, err)
 	}
@@ -38,8 +38,8 @@ func TestPlanScalars3(t *testing.T) {
 		name     string
 		num      uint32
 		proto    descriptorpb.FieldDescriptorProto_Type
-		wire     codec.WireType
-		presence codec.Presence
+		wire     runtime.WireType
+		presence runtime.Presence
 		packed   bool
 		repeat   bool
 	}
@@ -59,12 +59,12 @@ func TestPlanScalars3(t *testing.T) {
 	STRING := descriptorpb.FieldDescriptorProto_TYPE_STRING
 	ENUM := descriptorpb.FieldDescriptorProto_TYPE_ENUM
 	MESSAGE := descriptorpb.FieldDescriptorProto_TYPE_MESSAGE
-	V := codec.WireVarint
-	F32 := codec.WireFixed32
-	F64 := codec.WireFixed64
-	L := codec.WireLen
-	IMP := codec.PresenceImplicit
-	OPT := codec.PresenceProto3Optional
+	V := runtime.WireVarint
+	F32 := runtime.WireFixed32
+	F64 := runtime.WireFixed64
+	L := runtime.WireLen
+	IMP := runtime.PresenceImplicit
+	OPT := runtime.PresenceProto3Optional
 	cases := []want{
 		{"i32", 1, INT32, V, IMP, false, false},
 		{"i64", 2, INT64, V, IMP, false, false},
@@ -81,7 +81,7 @@ func TestPlanScalars3(t *testing.T) {
 		{"flag", 13, BOOL, V, IMP, false, false},
 		{"str", 14, STRING, L, IMP, false, false},
 		{"color", 15, ENUM, V, IMP, false, false},
-		{"inner", 16, MESSAGE, L, codec.PresenceExplicit, false, false},
+		{"inner", 16, MESSAGE, L, runtime.PresenceExplicit, false, false},
 		{"nums", 17, INT32, V, IMP, true, true},
 		{"tags", 18, STRING, L, IMP, false, true},
 		{"inners", 19, MESSAGE, L, IMP, false, true},
@@ -140,7 +140,7 @@ func TestPlanScalars3(t *testing.T) {
 	if _, err := s.Message("structtest.Nope"); err == nil {
 		t.Error("Message(unknown) should fail")
 	}
-	if _, err := codec.Load([]byte{0xff, 0xff}); err == nil {
+	if _, err := runtime.Load([]byte{0xff, 0xff}); err == nil {
 		t.Error("Load(garbage) should fail")
 	}
 }
@@ -164,12 +164,12 @@ func TestPlanOneof(t *testing.T) {
 		if !ok {
 			t.Fatalf("field %d missing", tc.num)
 		}
-		if fp.Name != tc.name || fp.Presence != codec.PresenceOneof || fp.Oneof != "kind" {
+		if fp.Name != tc.name || fp.Presence != runtime.PresenceOneof || fp.Oneof != "kind" {
 			t.Errorf("field %d = %+v, want oneof member kind/%s", tc.num, fp, tc.name)
 		}
 	}
 	name, _ := m.ByNumber(1)
-	if name.Presence != codec.PresenceImplicit || name.Oneof != "" {
+	if name.Presence != runtime.PresenceImplicit || name.Oneof != "" {
 		t.Errorf("name = %+v, want implicit non-oneof", name)
 	}
 	inner, _ := m.ByNumber(4)

@@ -1,7 +1,7 @@
 # pbwire Go binding
 
 Shipped: thin generated models over the pure-Go table engine
-[`pbench/dyngo/codec/`](pbench/dyngo/codec/): no cgo, no layout measurement,
+[`runtime/`](runtime/): no cgo, no layout measurement,
 no schema argument. The generated metadata file holds one field table per
 message; the one shared engine interprets every table. The same package also
 carries the descriptor-set schema (`Schema`/`DType`/`DMsg`) and the
@@ -9,8 +9,8 @@ model<->tree converters the dynamic arms share.
 
 A generated model is a `protoc-gen-pbwire` struct plus one metadata file of
 field tables. Nothing in generated code decides a tag, a length, presence or
-skipping. The dynamic candidates keep their engines in [`pbench/`](pbench/)
-next to their arms; the pure-Go table engine is the one that ships.
+skipping. The dynamic C candidate keeps its engine in [`pbench/`](pbench/)
+next to its arm; the pure-Go table engine ships as [`runtime/`](runtime/).
 
 ## Dynamic C core (candidate, not shipped)
 
@@ -34,14 +34,14 @@ Roots own their C tree and must be freed with `Close`; nested views from
 passes the input slice straight into C (zero-copy in); `Encode` writes into
 a Go slice (one downcall, nothing to free).
 
-## Pure-Go engine (`codec/`)
+## Pure-Go engine (`runtime/`)
 
 What the generated model falls back to, and the value-tree API on top of it:
-`codec.Load` turns a `FileDescriptorSet` into per-message plans,
+`runtime.Load` turns a `FileDescriptorSet` into per-message plans,
 `Schema.Type` binds one to a runtime table, and `DMsg` holds the values.
 
 ```go
-s, _ := codec.Load(descSet)               // protoc --descriptor_set_out bytes
+s, _ := runtime.Load(descSet)             // protoc --descriptor_set_out bytes
 typ, _ := s.Type("structtest.Scalars3")
 
 m := typ.New()
@@ -85,7 +85,7 @@ to keep them. Reach for the two dynamic cores when that matters.
 |---|---|---|
 | model | `tests/gen/<pkg>/<base>_pbwire.go` | structs, enums, getters, `Reset`, `Marshal`/`Unmarshal` via the table engine |
 | metadata | `tests/gen/<pkg>/<base>_pbwire_meta.go` | one field table per message: facts and trivial accessors, no wire logic |
-| engine | [`pbench/dyngo/codec/`](pbench/dyngo/codec/) | the shipped pure-Go engine: `Schema`/`DType`/`DMsg`, the one `EncodeTable`/`DecodeTable` engine, descriptor-set plans, model<->tree converters |
+| engine | [`runtime/`](runtime/) | the shipped pure-Go engine: `Schema`/`DType`/`DMsg`, the one `EncodeTable`/`DecodeTable` engine, descriptor-set plans, model<->tree converters |
 | C core candidate | [`pbench/dync/dynamic/`](pbench/dync/dynamic/) | `Registry` (hot-swap), `Schema`, `MessageType`, `Message`, model<->tree converter |
 | bench | [`benchmarks/bench_test.go`](benchmarks/bench_test.go) | four standard tiers: thin model vs `protobuf-go`, gated on byte parity and a field-by-field decode before timing |
 | arms | [`pbench/`](pbench/) (`go test -tags pbench ./pbench/`) | the two dynamic arms over the same tiers, native struct in and out, converter-only glue (issue #41) |

@@ -1,6 +1,6 @@
 // Dynamic Go core: the same wire as the struct codec, decoded into a value
 // tree built from a runtime schema, and unknown fields retained per message.
-package codec_test
+package runtime_test
 
 import (
 	"bytes"
@@ -8,7 +8,7 @@ import (
 	"os"
 	"testing"
 
-	"pbwire/pbench/dyngo/codec"
+	"pbwire/runtime"
 	"pbwire/tests/gen/matrix3"
 )
 
@@ -31,13 +31,13 @@ func fillScalarsStruct(n int) *matrix3.Scalars3 {
 	return m
 }
 
-func loadMatrix3(t *testing.T) ([]byte, *codec.Schema) {
+func loadMatrix3(t *testing.T) ([]byte, *runtime.Schema) {
 	t.Helper()
 	raw, err := os.ReadFile("testdata/matrix3.desc")
 	if err != nil {
 		t.Fatal(err)
 	}
-	s, err := codec.Load(raw)
+	s, err := runtime.Load(raw)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -201,7 +201,7 @@ func TestDMsgOneofAndMap(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s, err := codec.Load(raw)
+	s, err := runtime.Load(raw)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -238,7 +238,7 @@ func TestDMsgOneofAndMap(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s, err = codec.Load(raw)
+	s, err = runtime.Load(raw)
 	if err != nil {
 		t.Fatal(err)
 	}

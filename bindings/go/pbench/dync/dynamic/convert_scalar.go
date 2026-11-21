@@ -7,7 +7,7 @@ package dynamic
 import (
 	"fmt"
 
-	"pbwire/pbench/dyngo/codec"
+	codec "pbwire/runtime"
 )
 
 // importScalar copies one singular scalar, string, bytes or enum field.

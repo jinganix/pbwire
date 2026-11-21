@@ -5,7 +5,7 @@
 // (where the field never occurred). Explicit (pointer) scalars write only
 // when the pointer is non-nil.
 
-package codec
+package runtime
 
 // importScalar copies one singular scalar, string, bytes or enum field.
 func importScalar(model any, mrow *Field, d *DMsg, drow *Field) error {

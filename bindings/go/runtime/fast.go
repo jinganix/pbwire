@@ -20,7 +20,7 @@
 //   - Rows the path cannot express (oneof, Foreign, Group, KindMessage)
 //     return handled=false and run the existing closures. Fallback is per
 //     row, so partial coverage still pays and output stays identical.
-package codec
+package runtime
 
 import (
 	"math"
@@ -649,14 +649,12 @@ func encodeFastRepeated(e *Encoder, base unsafe.Pointer, f *Field) (bool, error)
 // carries the final value's bits (floats as Float32/64bits, bools as 0/1).
 // Only plain integer-width stores happen here — no pointers cross unsafe,
 // so no write barrier is skipped. Everything else returns false and the
-// caller runs the row's setter closure.
-func storeFast(t *Table, msg any, f *Field, u uint64) bool {
-	if !t.hasFast || !f.Fast || f.Oneof || f.Foreign != nil || f.Group ||
+// caller runs the row's setter closure. base is the fastBase of the
+// message being filled (nil when the table has no offset rows), computed
+// once per message by the caller instead of once per field here.
+func storeFast(base unsafe.Pointer, f *Field, u uint64) bool {
+	if base == nil || !f.Fast || f.Oneof || f.Foreign != nil || f.Group ||
 		f.Explicit || f.Repeated {
-		return false
-	}
-	base := fastBase(t, msg)
-	if base == nil {
 		return false
 	}
 	addr := unsafe.Add(base, int(f.Off))

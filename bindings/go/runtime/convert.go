@@ -8,7 +8,7 @@
 // field at its zero value, and unknown bytes have nowhere to go on a struct
 // and are dropped (documented, matching the thin model's decode contract).
 // Required fields are not enforced on either direction.
-package codec
+package runtime
 
 import (
 	"fmt"

@@ -4,7 +4,7 @@
 // Values are semantic, not raw bits: a sint32 set to -7 reads back -7, and the
 // engine does the zigzag on the wire. Repeated setters append, singular setters
 // replace, and a oneof member clears its siblings.
-package codec
+package runtime
 
 import (
 	"fmt"
