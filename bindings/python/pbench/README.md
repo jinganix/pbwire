@@ -91,12 +91,14 @@ No optimization in this task: every native arm (`tree`, `shim`) is above
 baseline on every tier, so Task 15 has no Python cell.
 
 The reason it is not the default is arithmetic, not bugs. On the same 74 KB
-payload the extension's handle path is 953.8 MB/s decode / 96092.3 MB/s encode
-and upb 806.7 / 514.9, while the pure core is 6.8 / 10.5: every value becomes a
+payload the `proxy` path (prebuilt handle, formal
+`results/bench-python-20261121T183716Z.json` xlarge) is 911.2 MB/s decode /
+89182.7 MB/s `encode(parsed)`, and upb 793.9 / 1463.9 on the matching ops,
+while the pure core is 6.5 / 10.3 (`to_dict` / `encode(data)`): every value becomes a
 Python object (`int`, `str`, `Raw`, `dict` slot), and that materialization, not
 the wire walk, is what costs. Against protobuf's *pure-Python* runtime, the
 comparable alternative when no C extension can load, the core decodes 1.10x
-faster (6.8 vs 6.2 MB/s) and is in the same class on encode (10.5 MB/s
+faster (6.5 vs 6.2 MB/s) and is in the same class on encode (10.3 MB/s
 `encode(dict)`, which builds the tree first, vs 15.0 MB/s
 `SerializeToString` on an already-parsed message). So the pure core is a real
 replacement for the no-extension case and no replacement for the extension.
