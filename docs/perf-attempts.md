@@ -1914,6 +1914,25 @@ MB/s at 136 / 174 / 2469 / 74913 B: `pbwire-zig-core` encode 574.4 / 565.9 /
 its value tree and per-field allocations on decode, and for tag/length writes
 without the C encoder's reserve pass on encode.
 
+Formal rows (`make zig-bench`,
+`results/bench-zig-20261121T032028Z.json`, MB/s at 136 / 174 / 2469 / 74913 B):
+`pbwire-zig-core` encode 549.1 / 563.1 / 677.7 / 731.9 and decode 771.4 /
+649.0 / 343.6 / 356.6; `pbwire-zig-tree` 1986.1 / 1861.7 / 1658.6 / 1604.0 and
+1043.6 / 910.6 / 651.4 / 724.2; the `shim` 1735.6 / 1654.5 / 1131.2 / 1197.1
+and 1224.9 / 1037.7 / 673.1 / 745.0; zig-protobuf 1279.4 / 1040.3 / 834.5 /
+825.6 and 847.2 / 730.6 / 593.6 / 521.8. That is 0.43-0.89x encode and
+0.58-0.91x decode of the generated baseline, so the core stays the no-C option,
+never the shipped fast path. Both harnesses now allocate through the release
+allocator on both sides; the earlier zig-protobuf decode figures (~25 MB/s)
+were measuring a debug allocator, not the baseline.
+
+Stage 6 decision: **recorded, not chased.** The below-baseline cells are the
+whole core arm, and the honest fix is a code-generated or columnar tree, not a
+local edit: the decode row allocates one arena, a value slice per message and
+one byte slice per string, while the encode row appends tag/length bytes through
+the generic array writer. The same conclusion as the Rust and Swift cores; the
+arm is published with its numbers as the no-C build.
+
 Conformance: `make conformance-zig-core` (the new
 `bindings/zig/conformance/testee_core.zig`, built with `-Dcore=true`) passes the
 binary suite with the same failure set as the C core: 1412 successes, 1403

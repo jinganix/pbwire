@@ -201,6 +201,16 @@ value tree, encoder and decoder with no C module, no `libpbwire.a` and no
 `unsafeFlags`, so it can be a normal SwiftPM dependency and `make
 conformance-swift` can drive the official suite through it.
 
+Zig has all three: `tree` is the prebuilt `Message` handle, `shim` is the
+generated `extern struct` mirror read in place by the C struct codec
+(`pbwire-zig-shim`, one call per op), and `core` is the pure-Zig codec of
+`bindings/zig/core/` selected by `-Dcore=true` (`pbwire-zig-core`: descriptor
+reader, value tree and binary encoder/decoder with no C source, no translate-c
+and no `libpbwire.a`; `make conformance-zig-core`). It is below the generated
+baseline on every cell (0.43-0.89x encode, 0.58-0.91x decode at 74 KB), so the
+static link stays the default and the core option exists for a build that
+cannot compile `src/*.c`.
+
 Ruby has two: `tree` is the prebuilt `Message`/wire-view handle, `shim` is the
 generated model read by one C-extension entry (`pbwire-ruby-shim`); `core` is
 deferred (`shortcut: no pure-Ruby core, reopen when a native-less Ruby target
@@ -254,7 +264,7 @@ throughput against the official runtime, copied from
 | Swift | Apple moved to Swift while the binding set still spoke ObjC; `swift-protobuf` generates a struct per message | SwiftPM package: FFI host over the C ABI (`FileDescriptorSet` at run time, static `libpbwire.a`, no wire code), plus a pure-Swift `PbwireCore` product for consumers the `unsafeFlags` static link cannot reach | 4.43x / 2.84x (vs swift-protobuf) |
 | Scala | data teams write Scala against Java protobuf | same Java runtime as Kotlin plus an idiomatic DSL — one runtime, three JVM languages | 1.21x / 1.25x (vs ScalaPB) |
 | Elixir | `elixir-protobuf` is pure Elixir, every field through the interpreter | struct↔tuple translation over the shared NIF (no C of its own) | 2.41x / 0.99x (vs elixir-protobuf; xlarge decode at parity) |
-| Zig | `zig-protobuf` codegen per message, fragmented across forks | `@cImport`-free static link (`translate-c` + `libpbwire.a` compiled in); the generated `extern struct` mirror is read in place by the C struct codec, one call per op | 1.81x / 2.13x `tree`, 1.44x / 2.26x native-object `shim` (vs zig-protobuf) |
+| Zig | `zig-protobuf` codegen per message, fragmented across forks | `@cImport`-free static link (`translate-c` + `libpbwire.a` compiled in); the generated `extern struct` mirror is read in place by the C struct codec, one call per op; a pure-Zig `core` port behind `-Dcore=true` is the no-C-source build | 1.94x / 1.39x `tree`, 1.45x / 1.43x native-object `shim`, 0.89x / 0.68x pure `core` at 74 KB (vs zig-protobuf) |
 | F# | .NET protobuf means C# SDK style even in F# code | facade over the C# project (`ProjectReference`, same P/Invoke core and the same one-call C reader) | 3.14x / 1.40x `tree` (vs Google.Protobuf; native-object `shim` 2.57x encode, 1.51x decode at 136 B, 0.69x decode at 74 KB) |
 | Clojure | protobuf-java interop per message, maps materialized per field | mutable-message fast path over the Java runtime (maps stay for convenience) | 1.16x / 1.77x (vs protobuf-java; mutable-message fast path; 0.75x encode at 136 B) |
 | Julia | `ProtoBuf.jl` is pure Julia, per-field interpreter overhead | `dlopen` + `ccall` FFI host (`FileDescriptorSet` at run time, `Dict` boundary); the generated layout image is read in place by a C-side reader (`bindings/julia/native/`), one `ccall` per op; the pure-Julia `core` (`runtime/src/core/`) is the no-native arm | 96.20x / 1.11x `shim` (vs ProtoBuf.jl; prebuilt `tree` handle 137.75x / 1.08x, 136 B shim decode 0.96x; pure-Julia `core` 1.83x encode / 0.03x decode at 74 KB, 0.14x / 0.15x at 136 B) |
@@ -296,7 +306,7 @@ the three mental-model shifts plus one row per language.
 | Swift | `Schema(contentsOfFile:)` on a `FileDescriptorSet`, SwiftPM + C ABI | ✅ | links `build/libpbwire.a` via `unsafeFlags`; baseline is a separate package, no checked-in generated code |
 | Scala | the Java binding's runtime: `FileDescriptorSet` at run time | ✅ | DSL over the same runtime as Java/Kotlin; binary + JSON + text testee; baseline needs `scalapbc` once |
 | Elixir | `elixir-protobuf` structs + `__message_props__/0` → the shared `:pbwire` NIF | ✅ | no C of its own; Hex `:pbwire` tracks `bindings/erlang` (mix.lock pins the current release) |
-| Zig | `Schema.fromFile` on a `FileDescriptorSet`, core sources compiled in statically | ✅ | `build.zig` API targets Zig 0.17; binary + JSON + text testee (`make conformance-zig`); `make zig-bench` wires the pinned Arwalk/zig-protobuf baseline (fetched on first run) |
+| Zig | `Schema.fromFile` on a `FileDescriptorSet`, core sources compiled in statically; `-Dcore=true` uses the pure-Zig reader | ✅ | `build.zig` API targets Zig 0.17; binary + JSON + text testee (`make conformance-zig`), binary pure-core testee (`make conformance-zig-core`); `make zig-bench` wires the pinned Arwalk/zig-protobuf baseline (fetched on first run) |
 | F# | the C# binding's project: `FileDescriptorSet` at run time | ✅ | `ProjectReference`, no second runtime; JSON/text/visit come from the C# binding; binary + JSON + text testee |
 | Clojure | the Java binding's runtime via plain interop, `FileDescriptorSet` at run time | ✅ | persistent maps in/out, plus `to-json`/`from-json`/`to-text`/`from-text`; binary + JSON + text testee; `benchmarks/deps` jars are fetched, not committed |
 | Embedded | `pbwe_open` on a `FileDescriptorSet`, static facade over the C core | ✅ | one malloc phase, then bounded steady state; caller-owned buffers, no per-message allocation |

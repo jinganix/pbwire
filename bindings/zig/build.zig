@@ -8,6 +8,7 @@
 //   zig build example  run the round-trip example
 //   zig build bench    run the four standard tiers (needs a matrix3.desc path)
 //   zig build testee   build the conformance testee binary
+//   zig build -Dcore=true testee   the same testee on the pure-Zig core
 //
 // Written against the Zig 0.17 module-based build API (everything hangs off
 // b.createModule; Step.Compile takes only name + root_module).
@@ -208,7 +209,7 @@ pub fn build(b: *std.Build) void {
         const generator = zp.artifact("protoc-gen-zig");
 
         // System protoc drives their plugin (no protoc download involved).
-        const protoc = b.findProgram(.{ .names = &.{ "protoc" } }) orelse "protoc";
+        const protoc = b.findProgram(.{ .names = &.{"protoc"} }) orelse "protoc";
         const gen_run = b.addSystemCommand(&.{protoc});
         gen_run.addPrefixedArtifactArg("--plugin=protoc-gen-zig=", generator);
         const gen_dir = gen_run.addPrefixedOutputDirectoryArg("--zig_out=", "gen");

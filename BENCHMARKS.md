@@ -189,6 +189,7 @@ own README. Dart ran once `dart pub global activate protoc_plugin` provided
 | Scala (Java runtime + DSL) | `make scala-bench` (`bindings/scala/benchmarks`) | ScalaPB 0.11.18 generated code from the same `matrix3.proto` | all 4 | 1.45x ✅ / 1.37x ✅ `tree` (`core` case class 0.33x / 0.30x) |
 | Elixir (NIF over the shared core) | `make elixir-bench` (`bindings/elixir/benchmarks`) | `elixir-protobuf` 0.17.1 structs from the same `matrix3.proto` | all 4 | 2.56x ✅ / 1.90x ✅ |
 | Zig (static link) | `make zig-bench` (`bindings/zig/benchmarks`, `-Doptimize=ReleaseFast`) | Arwalk/zig-protobuf 7.0.0 generated code from the same `matrix3.proto` | all 4 | 1.44x ✅ / 2.26x ✅ `shim` (native-object `extern struct` mirror, one C struct-codec call per op; prebuilt `tree` handle 2.07x / 2.23x) |
+| Zig (pure-Zig `core`) | `make zig-bench` + `make conformance-zig-core` (`bindings/zig/core/`, `-Dcore=true`) | Arwalk/zig-protobuf 7.0.0 generated code from the same `matrix3.proto` | all 4 | 0.89x ❌ / 0.68x ❌ at 74 KB (0.43x / 0.91x at 136 B; no C source, no translate-c; official binary suite passed) |
 | F# (facade over the C# runtime) | `make fsharp-bench` (`bindings/fsharp/benchmarks`) | Google.Protobuf C# generated code from the same `matrix3.proto` | all 4 | 3.36x ✅ / 1.49x ✅ `tree` (`shim` 0.12x / 0.10x) |
 | Clojure (Java runtime + interop) | `make clojure-bench` (`bindings/clojure/benchmarks`) | `protobuf-java` generated code from the same `matrix3.proto` | all 4 | 1.26x ✅ / 1.70x ✅ `core` (0.68x at 136 B; `tree` map API 0.01x) |
 | Julia (`ccall` FFI) | `make julia-bench` (`bindings/julia/benchmarks`) | JuliaIO/ProtoBuf.jl 1.3.0 generated code from the same `matrix3.proto` | all 4 | 96.20x ✅ / 1.11x ✅ `shim` (one C-side layout read per op; prebuilt `tree` handle 137.75x / 1.08x; 136 B shim decode 0.96x) |
@@ -223,7 +224,7 @@ timer.
 | Julia | three arms: `tree` (prebuilt `Message` handle, shipped), `shim` (the C reader walks the generated layout struct in one call), `core` is plan 19 |
 | Rust | three arms: `tree` (prebuilt `Message` handle, shipped), `shim` (the C reader walks the generated `#[repr(C)]` mirror in one call), `core` (the pure-Rust codec behind the `core` cargo feature) |
 | Swift | three arms: `tree` (prebuilt `Message` handle, shipped), `shim` (the C reader walks the generated `@frozen` mirror in one call), `core` is plan 21 |
-| Zig | three arms: `tree` (prebuilt `Message` handle, shipped), `shim` (the C reader walks the generated `extern struct` mirror in one call), `core` is plan 22 |
+| Zig | three arms: `tree` (prebuilt `Message` handle, shipped), `shim` (the C reader walks the generated `extern struct` mirror in one call), `core` (the pure-Zig codec behind `-Dcore=true`) |
 | Python | three |
 | PHP | two arms plus the FFI deployment: `tree` (prebuilt `Message` handle, shipped), `shim` (one C-extension entry walks the array in C), `shim-ffi` (same API on `ext-ffi`, the no-compiler row); `core` deferred: overlaps the official runtime's pure-PHP implementation already in the baseline |
 | Ruby | two arms: `tree` (prebuilt `Message` handle, shipped), `shim` (the C extension walks the generated model in one call), `core` deferred: no pure-Ruby precedent, no native-less deployment |
@@ -298,6 +299,7 @@ payload, the boundary cost and the baseline all differ.
 | Scala | the Java runtime + DSL | 74913 B | 950.9 (1.19x ✅) | 750.5 (1.21x ✅) |
 | Elixir | NIF (Hex `:pbwire`, same core as Erlang) | 74913 B | 152.6 (2.56x ✅) | 105.7 (1.90x ✅) |
 | Zig | static link | 74913 B | 1736.2 (2.07x ✅) `tree`; native-object `shim` 1202.7 (1.44x ✅) | 741.8 (2.23x ✅) `tree`; `shim` 751.0 (2.26x ✅) |
+| Zig (`core`, pure-Zig) | no C source, `-Dcore=true` | 74913 B | 731.9 (0.89x ❌) | 356.6 (0.68x ❌) |
 | F# | P/Invoke over the C# runtime | 74913 B | 1617.7 (3.36x ✅) `tree`; `shim` 58.3 (0.12x ❌) | 734.1 (1.49x ✅) `tree`; `shim` 48.9 (0.10x ❌) |
 | Clojure | the Java runtime + interop | 74913 B | 974.8 (1.12x ✅) | 718.2 (1.66x ✅) |
 | Julia | `dlopen` + `ccall` | 74913 B | 1653.0 (137.75x ✅) `tree`; native-object `shim` 1154.4 (96.20x ✅); pure-Julia `core` 22.1 (1.83x ✅ at the 74 KB encode, 0.03x decode) | 761.6 (1.08x ✅) `tree`; `shim` 783.6 (1.11x ✅); pure-Julia `core` 22.5 (0.03x ❌) |
@@ -1612,16 +1614,16 @@ instead of walking two lists through `Tuple.to_list` + `Enum.zip` + `Enum.map`
 
 ![Zig (static link) vs Arwalk/zig-protobuf — MB/s by tier](docs/charts/bench-zig-static-link-vs-arwalk-zig-protobuf.svg)
 
-| payload | op | pbwire-zig-tree (MB/s, x zig-protobuf) | pbwire-zig-shim (MB/s, x zig-protobuf) | zig-protobuf (MB/s) |
-|---|---|---|---|---|
-| 136 B | encode | 2023.4 (1.57x ✅) | 1954.2 (1.52x ✅) | 1285.9 |
-| 136 B | decode | 1137.8 (44.26x ✅) | 1254.6 (48.80x ✅) | 25.7 |
-| 174 B | encode | 1971.8 (1.92x ✅) | 1706.2 (1.66x ✅) | 1027.3 |
-| 174 B | decode | 946.2 (41.63x ✅) | 1057.7 (46.54x ✅) | 22.7 |
-| 2469 B | encode | 1724.0 (1.96x ✅) | 1148.5 (1.31x ✅) | 879.7 |
-| 2469 B | decode | 693.3 (9.73x ✅) | 680.7 (9.55x ✅) | 71.2 |
-| 74913 B | encode | 1736.2 (2.07x ✅) | 1202.7 (1.44x ✅) | 837.3 |
-| 74913 B | decode | 741.8 (2.23x ✅) | 751.0 (2.26x ✅) | 332.3 |
+| payload | op | pbwire-zig-tree (MB/s, x zig-protobuf) | pbwire-zig-shim (MB/s, x zig-protobuf) | pbwire-zig-core (MB/s, x zig-protobuf) | zig-protobuf (MB/s) |
+|---|---|---|---|---|---|
+| 136 B | encode | 1986.1 (1.55x ✅) | 1735.6 (1.36x ✅) | 549.1 (0.43x ❌) | 1279.4 |
+| 136 B | decode | 1043.6 (1.23x ✅) | 1224.9 (1.45x ✅) | 771.4 (0.91x ❌) | 847.2 |
+| 174 B | encode | 1861.7 (1.79x ✅) | 1654.5 (1.59x ✅) | 563.1 (0.54x ❌) | 1040.3 |
+| 174 B | decode | 910.6 (1.25x ✅) | 1037.7 (1.42x ✅) | 649.0 (0.89x ❌) | 730.6 |
+| 2469 B | encode | 1658.6 (1.99x ✅) | 1131.2 (1.36x ✅) | 677.7 (0.81x ❌) | 834.5 |
+| 2469 B | decode | 651.4 (1.10x ✅) | 673.1 (1.13x ✅) | 343.6 (0.58x ❌) | 593.6 |
+| 74913 B | encode | 1604.0 (1.94x ✅) | 1197.1 (1.45x ✅) | 731.9 (0.89x ❌) | 825.6 |
+| 74913 B | decode | 724.2 (1.39x ✅) | 745.0 (1.43x ✅) | 356.6 (0.68x ❌) | 521.8 |
 
 Same class as Rust: the core sources compile into a static archive that links
 into one self-contained binary, schema from a `FileDescriptorSet` at run
@@ -1637,6 +1639,17 @@ four tiers before timing. `pbwire-zig-tree` times a prebuilt `Message` handle's
 into `bindings/c/runtime/pbw_struct.c` (compiled into the same archive), so no
 field crosses per field. The shim is above the baseline on every cell; the
 tree stays the fastest encode row because it is the core's own encoder.
+
+`pbwire-zig-core` is the pure-Zig codec (`bindings/zig/core/`, selected by
+`-Dcore=true`): its own `FileDescriptorSet` reader, value tree and binary
+encoder/decoder, with no C source, no translate-c and no `libpbwire.a`.
+`make conformance-zig-core` gates it on the official binary suite (1412
+successes, 1403 skipped, 2 expected, 0 unexpected). It is below the generated
+baseline on every cell (0.43-0.89x encode, 0.58-0.91x decode): the encode cost
+is the tag/length writer appending without the C encoder's reserve pass, and
+the decode cost is the value tree's arena and per-field allocations, the same
+shape the Rust and Swift cores report. The default artifacts keep linking the
+C core; the extra `-Dcore=true` artifact is the no-C build.
 
 The tree's encode lead is the generated straight-line writer versus one small
 opcode dispatch per field, ~2x at most. The baseline's decode is structural:

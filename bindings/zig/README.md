@@ -42,6 +42,8 @@ zig build test     # self-check against the pinned protoc bytes
 zig build example  # runnable round trip (takes an optional <matrix3.desc>)
 zig build bench -- matrix3.desc   # the four standard tiers
 zig build testee   # conformance testee -> zig-out/bin/testee-zig
+zig build -Dcore=true testee          # the same suite through the pure-Zig core
+zig build test                        # self-check + pure-core descriptor/codec tests
 ```
 
 `build.zig` compiles the core sources (`../../src/*.c`) into a static library
@@ -50,6 +52,23 @@ the library. There is no `dlopen`, no `bindgen`, and no second wire
 implementation. `setStr` rejects a string containing a NUL byte (it would
 truncate on the way to C); use `setBytes` for binary payloads, including on a
 `string` field.
+
+## Pure-Zig core (`-Dcore=true`)
+
+`core/` is a pure-Zig port of the wire core: a `FileDescriptorSet` reader, a
+value tree, wire primitives and a binary encoder/decoder, with no `@cImport`,
+no translate-c and no C source. It is selected for an artifact with
+`zig build -Dcore=true testee` (and its own tests run in `zig build test`); the
+default build still compiles and links the C core, which stays the fast path.
+
+The option exists for a build that cannot compile `src/*.c`. It is gated by
+`make conformance-zig-core` on the official binary suite (same failure set as
+the C core: 1412 successes, 1403 skipped, 2 expected, 0 unexpected) and its
+`pbwire-zig-core` pbench row is the no-C-source comparison. Unknown fields are
+retained in input order, groups validate to their matching end tag, packed runs
+and unpacked element forms are both accepted, oneofs collapse to the last
+member, presence follows each field's rule, and a root message owns one arena
+(freed on every error path and by `deinit`).
 
 ## Benchmarks
 
@@ -90,11 +109,14 @@ identically apply here too (same core decoder), so the shared
 | path | contents |
 |------|----------|
 | `runtime/pbwire.zig` | the binding: `Schema`, `MessageType`, `Field`, `Message`, `Value` over `@cImport` |
-| `build.zig` / `build.zig.zon` | static-libpbwire step plus `test` / `example` / `bench` / `testee` steps |
+| `core/` | pure-Zig descriptor reader, tree, wire engine, encode/decode (`-Dcore=true`) |
+| `build.zig` / `build.zig.zon` | static-libpbwire step plus `test` / `example` / `bench` / `testee` steps and the `core` option |
 | `examples/roundtrip.zig` | runnable round trip |
 | `tests/selftest.zig` | self-check (`zig build test`): oracle bytes, round trip, rejects, text/JSON |
 | `benchmarks/bench.zig` + `bench.sh` | the four standard tiers |
 | `conformance/testee.zig` | official-suite testee (binary + JSON + text, JSPB skipped); `make conformance-zig` |
+| `conformance/testee_core.zig` | binary pure-core testee (`-Dcore=true`); `make conformance-zig-core` |
+| `pbench/core_arm.zig` | the `core` pbench arm, imported by both bench harnesses |
 
 ## Generated models
 

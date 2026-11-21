@@ -38,9 +38,10 @@ that plan.
 ## Gate
 
 ```
-make zig-test                                        # self-check
+make zig-test                                        # self-check + pure-core tests
 cd bindings/zig && zig build generated-test          # mirror byte + field gate
-make zig-bench                                       # mirrors gated per tier before timing
+make conformance-zig-core                            # pure-core binary suite
+make zig-bench                                       # mirrors and core gated per tier before timing
 ```
 
 The generated-model gate asserts, on the pinned `matrix3` fixture, that the
@@ -73,8 +74,8 @@ unexpected).
 
 **Publish the flat-image `shim` row as the native-object path beside the
 shipped dynamic handle.** With one C call per op the shim is above the
-zig-protobuf baseline at every tier: 1.52x / 1.66x / 1.31x / 1.44x on encode
-and 48.8x / 46.5x / 9.55x / 2.26x on decode. The tree row (a prebuilt
+zig-protobuf baseline at every tier: 1.36x / 1.59x / 1.36x / 1.45x on encode
+and 1.45x / 1.42x / 1.13x / 1.43x on decode. The tree row (a prebuilt
 `pbwire.Message` handle) is still faster on encode because it is the core's own
 encoder; the shim is the answer for an application that wants its own
 `extern struct` object, and it removes the per-field crossing issue 41 is
@@ -82,17 +83,19 @@ about. There is no below-baseline shim cell, so Stage 6 is a recorded no-op.
 
 ## Formal rows (Stage 5)
 
-`make zig-bench` records `results/bench-zig-<stamp>.{log,json}` and prints both
-rows per tier plus the Arwalk/zig-protobuf baseline. The run below is
-`results/bench-zig-20261120T215240Z.json` (Apple M4 Pro, arm64), same harness,
-same payload, bytes gated equal before timing:
+`make zig-bench` records `results/bench-zig-<stamp>.{log,json}` and prints all
+three rows per tier plus the Arwalk/zig-protobuf baseline. The run below is
+`results/bench-zig-20261121T032028Z.json` (Apple M4 Pro, arm64), same harness,
+same payload, bytes gated equal before timing. Both sides allocate through the
+release allocator (`std.heap.smp_allocator`), so the zig-protobuf decode column
+is its release cost, not a debug allocator's:
 
-| tier | `tree` enc | `shim` enc | zig-protobuf enc | `tree` dec | `shim` dec | zig-protobuf dec |
-|---|---|---|---|---|---|---|
-| 136 B | 2023.4 | 1954.2 | 1285.9 | 1137.8 | 1254.6 | 25.7 |
-| 174 B | 1971.8 | 1706.2 | 1027.3 | 946.2 | 1057.7 | 22.7 |
-| 2469 B | 1724.0 | 1148.5 | 879.7 | 693.3 | 680.7 | 71.2 |
-| 74913 B | 1736.2 | 1202.7 | 837.3 | 741.8 | 751.0 | 332.3 |
+| tier | `tree` enc | `shim` enc | `core` enc | zig-protobuf enc | `tree` dec | `shim` dec | `core` dec | zig-protobuf dec |
+|---|---|---|---|---|---|---|---|---|
+| 136 B | 1986.1 | 1735.6 | 549.1 | 1279.4 | 1043.6 | 1224.9 | 771.4 | 847.2 |
+| 174 B | 1861.7 | 1654.5 | 563.1 | 1040.3 | 910.6 | 1037.7 | 649.0 | 730.6 |
+| 2469 B | 1658.6 | 1131.2 | 677.7 | 834.5 | 651.4 | 673.1 | 343.6 | 593.6 |
+| 74913 B | 1604.0 | 1197.1 | 731.9 | 825.6 | 724.2 | 745.0 | 356.6 | 521.8 |
 
 ## Core verdict
 
@@ -100,9 +103,10 @@ same payload, bytes gated equal before timing:
 pure-Zig core exists so a build that cannot compile `src/*.c` still encodes and
 decodes the same bytes, and the official suite proves it
 (`make conformance-zig-core`: 1412 successes, 1403 skipped, 2 expected, 0
-unexpected). It is not the fast path: the provisional run above puts it at
-0.28-0.42x of `pbwire-zig-tree` on encode and 0.44-0.72x on decode. The encode
-gap is the tag/length writer appending without the C encoder's reserve pass;
-the decode gap is the value tree's arena and per-field allocations, the same
-shape the Rust and Swift cores report. The default artifacts keep linking the
-C core, and `make conformance-zig` keeps proving that path.
+unexpected). It is not the fast path: the formal run puts it at 0.28-0.46x of
+`pbwire-zig-tree` on encode and 0.49-0.74x on decode, and 0.43-0.89x /
+0.58-0.91x of zig-protobuf (worst at 136 B encode, best at 74 KB encode). The
+encode gap is the tag/length writer appending without the C encoder's reserve
+pass; the decode gap is the value tree's arena and per-field allocations, the
+same shape the Rust and Swift cores report. The default artifacts keep linking
+the C core, and `make conformance-zig` keeps proving that path.
