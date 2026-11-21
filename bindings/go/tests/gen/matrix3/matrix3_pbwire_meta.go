@@ -11,7 +11,7 @@ import (
 
 // Inner3Meta is the generated DATA table for structtest.Inner3: one row per field.
 var Inner3Meta = runtime.NewTable("structtest.Inner3", []*runtime.Field{
-	{Name: "name", Num: 1, Wire: runtime.WireLen, Kind: runtime.KindString, Fast: true, Off: uint32(unsafe.Offsetof(Inner3{}.Name)),
+	{Name: "name", Num: 1, Wire: runtime.WireLen, Kind: runtime.KindString, UTF8: true, Fast: true, Off: uint32(unsafe.Offsetof(Inner3{}.Name)),
 		GetStr: func(msg any) string { return msg.(*Inner3).Name },
 		SetStr: func(msg any, v string) { msg.(*Inner3).Name = v },
 	},
@@ -75,7 +75,7 @@ var Scalars3Meta = runtime.NewTable("structtest.Scalars3", []*runtime.Field{
 		GetBool: func(msg any) bool { return msg.(*Scalars3).Flag },
 		SetBool: func(msg any, v bool) { msg.(*Scalars3).Flag = v },
 	},
-	{Name: "str", Num: 14, Wire: runtime.WireLen, Kind: runtime.KindString, Fast: true, Off: uint32(unsafe.Offsetof(Scalars3{}.Str)),
+	{Name: "str", Num: 14, Wire: runtime.WireLen, Kind: runtime.KindString, UTF8: true, Fast: true, Off: uint32(unsafe.Offsetof(Scalars3{}.Str)),
 		GetStr: func(msg any) string { return msg.(*Scalars3).Str },
 		SetStr: func(msg any, v string) { msg.(*Scalars3).Str = v },
 	},
@@ -103,7 +103,7 @@ var Scalars3Meta = runtime.NewTable("structtest.Scalars3", []*runtime.Field{
 		GetRepI32: func(msg any) []int32 { return msg.(*Scalars3).Nums },
 		AppendI32: func(msg any, v int32) { m := msg.(*Scalars3); m.Nums = append(m.Nums, v) },
 	},
-	{Name: "tags", Num: 18, Wire: runtime.WireLen, Kind: runtime.KindString, Repeated: true, Fast: true, Off: uint32(unsafe.Offsetof(Scalars3{}.Tags)),
+	{Name: "tags", Num: 18, Wire: runtime.WireLen, Kind: runtime.KindString, UTF8: true, Repeated: true, Fast: true, Off: uint32(unsafe.Offsetof(Scalars3{}.Tags)),
 		GetRepStr: func(msg any) []string { return msg.(*Scalars3).Tags },
 		AppendStr: func(msg any, v string) { m := msg.(*Scalars3); m.Tags = append(m.Tags, v) },
 	},
@@ -128,7 +128,7 @@ var Scalars3Meta = runtime.NewTable("structtest.Scalars3", []*runtime.Field{
 		GetOptI32: func(msg any) *int32 { return msg.(*Scalars3).OptI32 },
 		SetOptI32: func(msg any, v int32) { tmp := v; msg.(*Scalars3).OptI32 = &tmp },
 	},
-	{Name: "opt_str", Num: 21, Wire: runtime.WireLen, Kind: runtime.KindString, Explicit: true, Fast: true, Off: uint32(unsafe.Offsetof(Scalars3{}.OptStr)), Has: uint32(unsafe.Offsetof(Scalars3{}.OptStr)),
+	{Name: "opt_str", Num: 21, Wire: runtime.WireLen, Kind: runtime.KindString, UTF8: true, Explicit: true, Fast: true, Off: uint32(unsafe.Offsetof(Scalars3{}.OptStr)), Has: uint32(unsafe.Offsetof(Scalars3{}.OptStr)),
 		GetOptStr: func(msg any) *string { return msg.(*Scalars3).OptStr },
 		SetOptStr: func(msg any, v string) { tmp := v; msg.(*Scalars3).OptStr = &tmp },
 	},

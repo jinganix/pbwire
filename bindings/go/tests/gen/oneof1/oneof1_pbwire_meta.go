@@ -19,7 +19,7 @@ var Oneof1_InnerMeta = runtime.NewTable("spectest.Oneof1.Inner", []*runtime.Fiel
 
 // Oneof1Meta is the generated DATA table for spectest.Oneof1: one row per field.
 var Oneof1Meta = runtime.NewTable("spectest.Oneof1", []*runtime.Field{
-	{Name: "name", Num: 1, Wire: runtime.WireLen, Kind: runtime.KindString, Fast: true, Off: uint32(unsafe.Offsetof(Oneof1{}.Name)),
+	{Name: "name", Num: 1, Wire: runtime.WireLen, Kind: runtime.KindString, UTF8: true, Fast: true, Off: uint32(unsafe.Offsetof(Oneof1{}.Name)),
 		GetStr: func(msg any) string { return msg.(*Oneof1).Name },
 		SetStr: func(msg any, v string) { msg.(*Oneof1).Name = v },
 	},
@@ -32,7 +32,7 @@ var Oneof1Meta = runtime.NewTable("spectest.Oneof1", []*runtime.Field{
 		},
 		SetOneof: func(msg any, v any) { msg.(*Oneof1).Kind = &Oneof1_Num{Num: v.(int32)} },
 	},
-	{Name: "text", Num: 3, Wire: runtime.WireLen, Kind: runtime.KindString, Oneof: true,
+	{Name: "text", Num: 3, Wire: runtime.WireLen, Kind: runtime.KindString, UTF8: true, Oneof: true,
 		GetOneof: func(msg any) (any, bool) {
 			if x, ok := msg.(*Oneof1).Kind.(*Oneof1_Text); ok {
 				return x.Text, true

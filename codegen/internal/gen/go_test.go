@@ -94,6 +94,34 @@ func goFileMap(t *testing.T, files []File) map[string]string {
 	return out
 }
 
+// UTF8 is a proto3-only column: the engine rejects invalid UTF-8 on decode
+// only when the row says so (plan.go), and only proto3 strings say so.
+func TestGoTableUTF8Proto3Only(t *testing.T) {
+	meta := func(syntax string) string {
+		t.Helper()
+		f := goTestFile()
+		f.Syntax = syntax
+		files, err := goFiles(f, Options{Lang: "go", Model: true, Register: true, Registry: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := goFileMap(t, files)
+		m, ok := got["t_pbwire_meta.go"]
+		if !ok {
+			t.Fatalf("missing meta file, got %v", keys(got))
+		}
+		return m
+	}
+	if m := meta("proto3"); !strings.Contains(m, "UTF8: true") {
+		t.Error("proto3 string row must carry UTF8: true")
+	}
+	for _, syntax := range []string{"", "proto2"} {
+		if m := meta(syntax); strings.Contains(m, "UTF8") {
+			t.Errorf("syntax %q must not emit UTF8", syntax)
+		}
+	}
+}
+
 // Default: one thin model file per .proto. Structs, getters and Reset; the
 // field rows live in meta, the Marshal/Unmarshal forwarding in the cshim
 // wiring file. No descriptor, no plan gate, no encoder state.

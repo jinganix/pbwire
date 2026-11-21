@@ -46,7 +46,7 @@ var UsesDepMeta = runtime.NewTable("xfile.UsesDep", []*runtime.Field{
 			return item
 		},
 	},
-	{Name: "note", Num: 3, Wire: runtime.WireLen, Kind: runtime.KindString, Fast: true, Off: uint32(unsafe.Offsetof(UsesDep{}.Note)),
+	{Name: "note", Num: 3, Wire: runtime.WireLen, Kind: runtime.KindString, UTF8: true, Fast: true, Off: uint32(unsafe.Offsetof(UsesDep{}.Note)),
 		GetStr: func(msg any) string { return msg.(*UsesDep).Note },
 		SetStr: func(msg any, v string) { msg.(*UsesDep).Note = v },
 	},

@@ -431,6 +431,9 @@ func writeGoTable(b *strings.Builder, f *model.File, m model.Message) {
 func writeGoTableRow(b *strings.Builder, f *model.File, m model.Message, field model.Field) {
 	name := goCamel(field.Name)
 	fmt.Fprintf(b, "\t{Name: %q, Num: %d, Wire: %s, Kind: %s", field.Name, field.Number, goWireConst(field), goKindConst(field))
+	if f.Syntax == "proto3" && field.Kind == protoreflect.StringKind {
+		b.WriteString(", UTF8: true")
+	}
 	if field.Required {
 		b.WriteString(", Required: true")
 	}

@@ -11,7 +11,7 @@ import (
 
 // MapValueMeta is the generated DATA table for spectest.MapValue: one row per field.
 var MapValueMeta = runtime.NewTable("spectest.MapValue", []*runtime.Field{
-	{Name: "name", Num: 1, Wire: runtime.WireLen, Kind: runtime.KindString, Fast: true, Off: uint32(unsafe.Offsetof(MapValue{}.Name)),
+	{Name: "name", Num: 1, Wire: runtime.WireLen, Kind: runtime.KindString, UTF8: true, Fast: true, Off: uint32(unsafe.Offsetof(MapValue{}.Name)),
 		GetStr: func(msg any) string { return msg.(*MapValue).Name },
 		SetStr: func(msg any, v string) { msg.(*MapValue).Name = v },
 	},
@@ -27,7 +27,7 @@ var MapTest_ByIntEntryMeta = runtime.NewTable("spectest.MapTest.ByIntEntry", []*
 		GetI32: func(msg any) int32 { return msg.(*MapTest_ByIntEntry).Key },
 		SetI32: func(msg any, v int32) { msg.(*MapTest_ByIntEntry).Key = v },
 	},
-	{Name: "value", Num: 2, Wire: runtime.WireLen, Kind: runtime.KindString, Fast: true, Off: uint32(unsafe.Offsetof(MapTest_ByIntEntry{}.Value)),
+	{Name: "value", Num: 2, Wire: runtime.WireLen, Kind: runtime.KindString, UTF8: true, Fast: true, Off: uint32(unsafe.Offsetof(MapTest_ByIntEntry{}.Value)),
 		GetStr: func(msg any) string { return msg.(*MapTest_ByIntEntry).Value },
 		SetStr: func(msg any, v string) { msg.(*MapTest_ByIntEntry).Value = v },
 	},
@@ -35,7 +35,7 @@ var MapTest_ByIntEntryMeta = runtime.NewTable("spectest.MapTest.ByIntEntry", []*
 
 // MapTest_ByStrEntryMeta is the generated DATA table for spectest.MapTest.ByStrEntry: one row per field.
 var MapTest_ByStrEntryMeta = runtime.NewTable("spectest.MapTest.ByStrEntry", []*runtime.Field{
-	{Name: "key", Num: 1, Wire: runtime.WireLen, Kind: runtime.KindString, Fast: true, Off: uint32(unsafe.Offsetof(MapTest_ByStrEntry{}.Key)),
+	{Name: "key", Num: 1, Wire: runtime.WireLen, Kind: runtime.KindString, UTF8: true, Fast: true, Off: uint32(unsafe.Offsetof(MapTest_ByStrEntry{}.Key)),
 		GetStr: func(msg any) string { return msg.(*MapTest_ByStrEntry).Key },
 		SetStr: func(msg any, v string) { msg.(*MapTest_ByStrEntry).Key = v },
 	},
@@ -47,7 +47,7 @@ var MapTest_ByStrEntryMeta = runtime.NewTable("spectest.MapTest.ByStrEntry", []*
 
 // MapTest_ByMsgEntryMeta is the generated DATA table for spectest.MapTest.ByMsgEntry: one row per field.
 var MapTest_ByMsgEntryMeta = runtime.NewTable("spectest.MapTest.ByMsgEntry", []*runtime.Field{
-	{Name: "key", Num: 1, Wire: runtime.WireLen, Kind: runtime.KindString, Fast: true, Off: uint32(unsafe.Offsetof(MapTest_ByMsgEntry{}.Key)),
+	{Name: "key", Num: 1, Wire: runtime.WireLen, Kind: runtime.KindString, UTF8: true, Fast: true, Off: uint32(unsafe.Offsetof(MapTest_ByMsgEntry{}.Key)),
 		GetStr: func(msg any) string { return msg.(*MapTest_ByMsgEntry).Key },
 		SetStr: func(msg any, v string) { msg.(*MapTest_ByMsgEntry).Key = v },
 	},

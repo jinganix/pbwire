@@ -3,10 +3,13 @@
 package pbench
 
 import (
+	"bytes"
 	"fmt"
 	"math"
+	"strings"
 	"testing"
 
+	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
 	"pbwire/pbench/dync"
 	"pbwire/pbench/dyngo"
@@ -82,4 +85,83 @@ func structOf(w *matrix3pb.Scalars3) *matrix3.Scalars3 {
 	m.Flags = append(m.Flags, w.Flags...)
 	_ = math.MinInt32
 	return m
+}
+
+// TestGateSemantics pins the two semantic vectors from issue 41: invalid
+// UTF-8 in a proto3 string must fail decode on every path, and unknown
+// field 999 must round-trip byte-identical through the oracle while the
+// native-struct paths pin their documented deviation (dropped on decode:
+// the struct has no unknown storage, see bindings/go/README.md;
+// runtime.DMsg retains).
+func TestGateSemantics(t *testing.T) {
+	// Vector 1: str is field 14 (BytesType). Valid UTF-8 decodes; the
+	// same shape with invalid bytes must error mentioning UTF-8.
+	good := protowire.AppendTag(nil, 14, protowire.BytesType)
+	good = protowire.AppendBytes(good, []byte("hello"))
+	if err := new(matrix3.Scalars3).Unmarshal(good); err != nil {
+		t.Fatalf("valid UTF-8 rejected: %v", err)
+	}
+	bad := protowire.AppendTag(nil, 14, protowire.BytesType)
+	bad = protowire.AppendBytes(bad, []byte{0xff, 0xfe, 'x'})
+	if err := new(matrix3.Scalars3).Unmarshal(bad); err == nil {
+		t.Fatal("thin model decoded invalid UTF-8 without error")
+	} else if !strings.Contains(strings.ToLower(err.Error()), "utf") {
+		t.Fatalf("thin model error does not mention UTF-8: %v", err)
+	}
+
+	cDync, err := dync.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cDynGo, err := dyngo.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, decode := range map[string]func([]byte) (*matrix3.Scalars3, error){
+		"dync":  cDync.Unmarshal,
+		"dyngo": cDynGo.Unmarshal,
+	} {
+		if _, err := decode(good); err != nil {
+			t.Fatalf("%s rejected valid UTF-8: %v", name, err)
+		}
+		if _, err := decode(bad); err == nil {
+			t.Fatalf("%s decoded invalid UTF-8 without error", name)
+		}
+	}
+
+	// Vector 2: unknown field 999 (varint 7). The oracle keeps it;
+	// the struct paths drop it (pinned, not hidden).
+	unk := protowire.AppendTag(nil, 999, protowire.VarintType)
+	unk = protowire.AppendVarint(unk, 7)
+	var o matrix3pb.Scalars3
+	if err := proto.Unmarshal(unk, &o); err != nil {
+		t.Fatal(err)
+	}
+	if bout, err := proto.Marshal(&o); err != nil || !bytes.Equal(bout, unk) {
+		t.Fatalf("oracle round trip: %x, err %v", bout, err)
+	}
+	var m matrix3.Scalars3
+	if err := m.Unmarshal(unk); err != nil {
+		t.Fatalf("thin model rejected unknown-only wire: %v", err)
+	}
+	if again, err := m.Marshal(); err != nil || len(again) != 0 {
+		t.Fatalf("thin model round trip: %x (want empty), err %v", again, err)
+	}
+
+	// Vector 3: field 999 nested inside Inner3 (field 16) drops the same
+	// way; unknown-only wire decodes without error (covered above).
+	inner := protowire.AppendTag(nil, 999, protowire.VarintType)
+	inner = protowire.AppendVarint(inner, 7)
+	nested := protowire.AppendTag(nil, 16, protowire.BytesType)
+	nested = protowire.AppendBytes(nested, inner)
+	var m2 matrix3.Scalars3
+	if err := m2.Unmarshal(nested); err != nil {
+		t.Fatalf("thin model rejected nested unknown wire: %v", err)
+	}
+	if m2.Inner == nil {
+		t.Fatal("thin model dropped the known inner message carrying unknowns")
+	}
+	if again, err := m2.Marshal(); err != nil || bytes.Contains(again, inner) {
+		t.Fatalf("thin model replayed nested unknowns: %x, err %v", again, err)
+	}
 }

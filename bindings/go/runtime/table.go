@@ -1579,7 +1579,7 @@ func decodeField(d *Decoder, a *Arena, t *Table, msg any, base unsafe.Pointer, f
 			return err
 		}
 		if f.UTF8 && !utf8.Valid(raw) {
-			return ErrWire
+			return ErrUTF8
 		}
 		if f.Explicit {
 			f.SetOptStr(msg, a.AddString(raw))
@@ -1801,7 +1801,7 @@ func readOneofValue(d *Decoder, a *Arena, f *Field, wt WireType, depth int, lim 
 			return nil, false, err
 		}
 		if f.UTF8 && !utf8.Valid(raw) {
-			return nil, false, ErrWire
+			return nil, false, ErrUTF8
 		}
 		return a.AddString(raw), true, nil
 	case KindBytes:
@@ -2225,7 +2225,7 @@ func decodeRepeated(d *Decoder, a *Arena, t *Table, msg any, f *Field, wt WireTy
 			return err
 		}
 		if f.UTF8 && !utf8.Valid(raw) {
-			return ErrWire
+			return ErrUTF8
 		}
 		f.AppendStr(msg, a.AddString(raw))
 	case KindBytes:

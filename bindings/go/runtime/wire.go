@@ -37,6 +37,9 @@ var (
 	// ErrWire reports malformed wire data: truncation, bad varints, field
 	// number 0, wire types 6/7, length overruns, or a mismatched group end.
 	ErrWire = errors.New("codec: malformed wire data")
+	// ErrUTF8 reports a proto3 string carrying invalid UTF-8. It is
+	// distinct from ErrWire so callers can tell bad bytes from bad text.
+	ErrUTF8 = errors.New("codec: string field contains invalid UTF-8")
 	// ErrDepth reports nesting past MaxDepth.
 	ErrDepth = errors.New("codec: nesting exceeds max depth")
 )
