@@ -93,3 +93,16 @@ same payload, bytes gated equal before timing:
 | 174 B | 1971.8 | 1706.2 | 1027.3 | 946.2 | 1057.7 | 22.7 |
 | 2469 B | 1724.0 | 1148.5 | 879.7 | 693.3 | 680.7 | 71.2 |
 | 74913 B | 1736.2 | 1202.7 | 837.3 | 741.8 | 751.0 | 332.3 |
+
+## Core verdict
+
+**The static link stays the default; `-Dcore=true` is the no-C build.** The
+pure-Zig core exists so a build that cannot compile `src/*.c` still encodes and
+decodes the same bytes, and the official suite proves it
+(`make conformance-zig-core`: 1412 successes, 1403 skipped, 2 expected, 0
+unexpected). It is not the fast path: the provisional run above puts it at
+0.28-0.42x of `pbwire-zig-tree` on encode and 0.44-0.72x on decode. The encode
+gap is the tag/length writer appending without the C encoder's reserve pass;
+the decode gap is the value tree's arena and per-field allocations, the same
+shape the Rust and Swift cores report. The default artifacts keep linking the
+C core, and `make conformance-zig` keeps proving that path.
