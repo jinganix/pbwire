@@ -1,6 +1,8 @@
 // The pbench gate: every arm must produce the official protobuf package's
 // bytes on all four tiers, and every arm's decode must expose the fields
-// payload.dart lists, before any number is printed.
+// payload.dart lists, before any number is printed. The `core` arm is the
+// pure-Dart codec, so this is also the byte-parity check between it and the
+// official encoder.
 //
 //   dart run gate.dart [gen/matrix3.desc]
 
@@ -12,6 +14,7 @@ import 'package:pbwire/pbwire.dart';
 
 import 'a-tree.dart' as tree;
 import 'b-shim.dart' as shim;
+import 'c-core.dart' as core;
 import 'payload.dart';
 
 var _checks = 0;
@@ -43,13 +46,19 @@ void main(List<String> args) {
       final treeWire = tree.encode(p, tier.repeats);
       final image = p.image(arena, tier.repeats);
       final shimWire = shim.encode(p, image);
+      final coreWire = core.encode(p, tier.repeats);
       check(equals(treeWire, wire), '${tier.label}: tree bytes differ');
       check(equals(shimWire, wire), '${tier.label}: shim bytes differ');
+      check(equals(coreWire, wire), '${tier.label}: core bytes differ');
 
       // Decode each arm and read the same fields back.
       final treeAgain = tree.decode(p, wire, tier.repeats);
       check(treeAgain != null && equals(treeAgain, wire),
           '${tier.label}: tree decode/re-encode differs');
+
+      final coreAgain = core.decode(p, wire, tier.repeats);
+      check(coreAgain != null && equals(coreAgain, wire),
+          '${tier.label}: core decode/re-encode differs');
 
       final out = shim.output();
       final decodeArena = PbwArena(wire.length);
@@ -79,7 +88,8 @@ void main(List<String> args) {
       // this payload by 9 bytes), so only the official encoder is an oracle.
 
       stdout.writeln('OK   ${tier.label}: ${wire.length} bytes, '
-          'tree/${shimWire.length} shim, x${tier.repeats}');
+          'tree/${shimWire.length} shim/${coreWire.length} core, '
+          'x${tier.repeats}');
     }
   } finally {
     arena.releaseAll();

@@ -1,14 +1,17 @@
 // The one payload every Dart pbench arm times, plus the handles the arms and
 // the gate share: the shim's flat `Scalars3Layout` image, the tree arm's
-// `Message` handle and the official protobuf package's message.
+// `Message` handle, the pure core's `core.Msg` tree and the official protobuf
+// package's message.
 //
 // Values are bindings/c/tests/data/matrix3.txt; the repeats scale the three
 // repeated fields so the four tiers land on the standard wire sizes.
 
 import 'dart:ffi';
+import 'dart:io';
 
 import 'package:ffi/ffi.dart';
 import 'package:fixnum/fixnum.dart' as fixnum;
+import 'package:pbwire/core/schema.dart' as core;
 import 'package:pbwire/pbwire.dart';
 
 import 'gen/matrix3.dart' as pbw;
@@ -31,6 +34,13 @@ const tiers = <Tier>[
   Tier('xlarge', 3000, 74913, 500),
 ];
 
+/// The payload's 64-bit values, parsed once: a per-op BigInt.parse of ten
+/// decimal strings would be measuring the parser, not the codec.
+final BigInt _i64Max = BigInt.parse('9223372036854775807');
+final BigInt _u64Max = BigInt.parse('18446744073709551615');
+final BigInt _i64Min = BigInt.parse('-9223372036854775808');
+final BigInt _fx64Value = BigInt.parse('72623859790382856');
+
 /// The message fields every arm reads back after a decode: the gate compares
 /// them field by field, so all three arms answer the same list.
 const checkFields = <String>[
@@ -46,6 +56,9 @@ final class Pbench {
         layoutSchema = PbwLayoutSchema.load(descriptor) {
     ty = schema.message('structtest.Scalars3');
     innerTy = schema.message('structtest.Inner3');
+    coreType = core.Schema.fromBytes(
+            File(descriptor).readAsBytesSync())
+        .message('structtest.Scalars3');
     // Child first: a message row resolves its sub-layout by proto full name.
     innerType = layoutSchema.type(
         'structtest.Inner3', pbw.inner3LayoutRows, sizeOf<pbw.Inner3Layout>());
@@ -57,6 +70,7 @@ final class Pbench {
   final PbwLayoutSchema layoutSchema;
   late final Type ty;
   late final Type innerTy;
+  late final core.MessageType coreType;
   late final PbwType innerType;
   late final PbwType imageType;
 
@@ -154,6 +168,36 @@ final class Pbench {
     }
     return msg;
   }
+
+  /// The core arm's native object: a `core.Msg` tree built before the timer,
+  /// one entry per field (the same whole user-visible build as [handle]).
+  core.Msg coreMessage(int repeats) => core.fromObject(coreType.def, {
+        'i32': -2147483648,
+        'i64': _i64Max,
+        'u32': 4294967295,
+        'u64': _u64Max,
+        's32': -2147483648,
+        's64': _i64Min,
+        'fx32': 3735928559,
+        'fx64': _fx64Value,
+        'sfx32': -2147483648,
+        'sfx64': _i64Min,
+        'f32': double.infinity,
+        'f64': -123456.789,
+        'flag': true,
+        'str': 'hello',
+        'color': 2,
+        'opt_i32': -7,
+        'opt_str': 'opt',
+        'inner': <String, Object?>{'name': 'kid', 'value': 42},
+        'nums': <Object?>[for (var i = 0; i < repeats; i++) i - 3],
+        'tags': <Object?>[for (var i = 0; i < repeats; i++) 'tag'],
+        'flags': <Object?>[for (var i = 0; i < repeats; i++) i % 2 == 0],
+        'inners': <Object?>[
+          for (var i = 0; i < repeats; i++)
+            <String, Object?>{'name': 'grandkid', 'value': i + 1}
+        ],
+      });
 
   /// The official baseline's object: the same payload through protobuf-dart.
   proto.Scalars3 official(int repeats) => proto.Scalars3(

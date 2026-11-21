@@ -746,6 +746,9 @@ dart-test: shared dart-shim-native
 	cd bindings/dart && $(DART) pub get >/dev/null
 	cd bindings/dart && $(DART) run tests/selftest.dart ../c/tests/data/matrix3.desc
 	cd bindings/dart && $(DART) run tests/layout_test.dart ../c/tests/data/matrix3.desc
+	cd bindings/dart && $(DART) run tests/core/descriptor_test.dart ../c/tests/data
+	cd bindings/dart && $(DART) run tests/core/wire_test.dart
+	cd bindings/dart && $(DART) run tests/core/codec_test.dart ../c/tests/data
 
 # Same suite through the Dart binding (binary, JSON and text; the shim arm
 # shares the C core, so this proves the binding's own decode/encode/JSON/text
@@ -757,6 +760,18 @@ conformance-dart: $(CONFORMANCE_DESC) dart-shim-native
 		echo "run 'make conformance-setup' first"; exit 1; }
 	$(CONFORMANCE_RUNNER) --failure_list $(CURDIR)/conformance/failure_list_pbwire.txt \
 		bindings/dart/conformance/testee.sh \
+		$(CURDIR)/$(CONFORMANCE_DESC)
+
+# The same official suite through the pure-Dart core (no FFI, no C library):
+# binary in, binary out; JSON and text answer `skipped`, like every other
+# pure-core testee here.
+conformance-dart-core: $(CONFORMANCE_DESC)
+	cd bindings/dart && $(DART) pub get >/dev/null
+	@test -x "$(CONFORMANCE_RUNNER)" || { \
+		echo "conformance_test_runner not found: $(CONFORMANCE_RUNNER)"; \
+		echo "run 'make conformance-setup' first"; exit 1; }
+	$(CONFORMANCE_RUNNER) --failure_list $(CURDIR)/conformance/failure_list_pbwire.txt \
+		bindings/dart/conformance/testee_core.sh \
 		$(CURDIR)/$(CONFORMANCE_DESC)
 
 rust-test: shared

@@ -1,6 +1,6 @@
-// Interleaved timing for the Dart arms: per round `tree`, `shim` and the
-// official protobuf-dart baseline run back to back on the same payload; per
-// tier the median of five rounds is printed. The gate runs first in spirit:
+// Interleaved timing for the Dart arms: per round `tree`, `shim`, `core` and
+// the official protobuf-dart baseline run back to back on the same payload;
+// per tier the median of five rounds is printed. The gate runs first in spirit:
 // each round re-encodes with all three arms and refuses a row whose bytes
 // differ from the official encoder.
 //
@@ -10,7 +10,8 @@
 // then encode; decode, then read every field back). `shim` is one
 // `PbwireLayout.encode` / `decodeInto` call on the flat image, with the
 // destination image and arena allocated once (the steady state the C core's
-// arena is built for).
+// arena is built for). `core` is the same whole user task as `tree`, with the
+// pure-Dart codec instead of the C one.
 
 import 'dart:io';
 
@@ -19,6 +20,7 @@ import 'package:pbwire/pbwire.dart';
 
 import 'a-tree.dart' as tree;
 import 'b-shim.dart' as shim;
+import 'c-core.dart' as core;
 import 'payload.dart';
 
 const _rounds = 5;
@@ -60,22 +62,27 @@ void main(List<String> args) {
       // Warm every op once, then check the bytes each arm would publish.
       tree.encode(p, tier.repeats);
       shim.encode(p, image);
+      core.encode(p, tier.repeats);
       if (!equals(shim.encode(p, image), wire) ||
-          !equals(tree.encode(p, tier.repeats), wire)) {
+          !equals(tree.encode(p, tier.repeats), wire) ||
+          !equals(core.encode(p, tier.repeats), wire)) {
         stderr.writeln('${tier.label}: an arm disagrees with the official bytes');
         exit(1);
       }
       final treeEnc = <int>[];
       final shimEnc = <int>[];
+      final coreEnc = <int>[];
       final officialEnc = <int>[];
       final treeDec = <int>[];
       final shimDec = <int>[];
+      final coreDec = <int>[];
       final officialDec = <int>[];
       try {
         for (var round = 0; round < _rounds; round++) {
           treeEnc.add(_measure(tier.iterations, () => tree.encode(p, tier.repeats)));
           shimEnc.add(_measure(
               tier.iterations, () => PbwireLayout.encode(image, p.imageType)));
+          coreEnc.add(_measure(tier.iterations, () => core.encode(p, tier.repeats)));
           officialEnc.add(_measure(tier.iterations,
               () => p.official(tier.repeats).writeToBuffer()));
           treeDec.add(_measure(tier.iterations, () {
@@ -84,17 +91,23 @@ void main(List<String> args) {
           shimDec.add(_measure(tier.iterations, () {
             shim.decode(p, wire, out, decodeArena);
           }));
+          coreDec.add(_measure(tier.iterations, () {
+            core.decode(p, wire, tier.repeats);
+          }));
           officialDec.add(
               _measure(tier.iterations, () => p.officialFromBuffer(wire)));
         }
         final te = _median(treeEnc);
         final se = _median(shimEnc);
+        final ce = _median(coreEnc);
         final oe = _median(officialEnc);
         final td = _median(treeDec);
         final sd = _median(shimDec);
+        final cd = _median(coreDec);
         final od = _median(officialDec);
         stdout.writeln(_row(tier.label, 'tree', wire.length, te, td));
         stdout.writeln(_row(tier.label, 'shim', wire.length, se, sd));
+        stdout.writeln(_row(tier.label, 'core', wire.length, ce, cd));
         stdout.writeln(_row(tier.label, 'protobuf-dart', wire.length, oe, od));
         if (!shim.read(out, tier.repeats)) {
           stderr.writeln('${tier.label}: shim decode did not expose the fields');

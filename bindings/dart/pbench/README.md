@@ -63,18 +63,24 @@ official re-encode check: `protobuf-dart` 6.1's sint64 decoder reads
 ## Provisional table (Stage 3)
 
 `cd pbench && dart run compare.dart gen/matrix3.desc`: interleaved rounds (all
-three arms back to back), median of five. `tree` is the whole user task (build
-with one `set` per field, then encode; decode, then read every field back);
-`shim` is one `encode` / `decodeInto` call on the flat image, with the output
-image and arena allocated once (the C core's arena steady state). MB/s over
-wire bytes, 2026-11-21, recorded mid-session:
+four arms back to back), median of five. `tree` and `core` are the whole user
+task (build with one entry per field, then encode; decode, then read every
+field back); `shim` is one `encode` / `decodeInto` call on the flat image, with
+the output image and arena allocated once (the C core's arena steady state).
+MB/s over wire bytes, 2026-11-21, recorded mid-session:
 
-| tier | `tree` enc | `shim` enc | pb-dart enc | `tree` dec | `shim` dec | pb-dart dec |
-|---|---|---|---|---|---|---|
-| 136 B | 56.4 | 931.5 | 86.6 | 51.0 | 866.2 | 99.3 |
-| 174 B | 67.4 | 1308.3 | 92.1 | 82.5 | 901.6 | 168.9 |
-| 2469 B | 32.7 | 1035.2 | 81.8 | 324.4 | 660.3 | 132.5 |
-| 74913 B | 35.0 | 1092.2 | 73.1 | 476.6 | 722.6 | 149.5 |
+| tier | `tree` enc | `shim` enc | `core` enc | pb-dart enc | `tree` dec | `shim` dec | `core` dec | pb-dart dec |
+|---|---|---|---|---|---|---|---|---|
+| 136 B | 80.5 | 1462.4 | 35.0 | 99.6 | 82.8 | 1022.6 | 18.1 | 197.4 |
+| 174 B | 72.5 | 1370.1 | 39.7 | 96.0 | 87.5 | 925.5 | 20.7 | 178.1 |
+| 2469 B | 35.4 | 1075.8 | 111.6 | 90.8 | 355.0 | 686.0 | 66.1 | 139.8 |
+| 74913 B | 36.9 | 1099.7 | 149.4 | 82.5 | 509.7 | 748.0 | 91.8 | 156.2 |
+
+The `core` arm beats protobuf-dart's generated codec on encode from 2469 B up
+and loses the small tiers and every decode cell to per-call allocation: one
+`Msg` with a 22-slot list, a `fromObject` walk and a workspace copy per encode,
+one `Msg` per nested message and one growable list per repeated field per
+decode. It is the only arm that runs without a C library, which is the point.
 
 ## Verdict
 

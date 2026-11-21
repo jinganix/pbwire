@@ -1633,3 +1633,49 @@ Python objects -- which is a rewrite of the tree and both codecs, not a
 one-change A/B round, and it would put the arm at odds with the pbench contract
 (a native object in and out). The arm is published as the no-extension path
 with its numbers, exactly as the TypeScript and C# cores are.
+
+## Provisional: the Dart pure-core arm (plan 18, 2026-11-21)
+
+Plan 18 landed `bindings/dart/lib/core/`: the third in-language wire
+implementation (descriptor reader, `Msg` tree, encode, decode with unknown
+retention, groups, packed runs, proto2 required, limits), no `dart:ffi` and no
+`dart:io`, so it also compiles to dart2js/dart2wasm where the C library cannot
+be reached. The `core` pbench arm (`pbench/c-core.dart`) is the whole user task
+-- build the native tree from one plain-Dart entry per field, then `encode()`;
+`decode()` then one `get` per field -- exactly like the `tree` arm, so the two
+rows differ only in which codec does the work.
+`cd bindings/dart/pbench && dart run compare.dart gen/matrix3.desc`,
+interleaved rounds, median of five, one session on an M-series laptop (host
+load average ~20, other checkouts building), so read the ordering; Stage 5
+re-records the formal rows.
+
+| tier | arm | enc ns/op | enc MB/s | dec ns/op | dec MB/s |
+|---|---|---|---|---|---|
+| 136 B | `pbwire-dart-core` | 3885 | 35.0 | 7521 | 18.1 |
+| 136 B | `pbwire-dart-shim` | 93 | 1462.4 | 133 | 1022.6 |
+| 136 B | protobuf-dart | 1365 | 99.6 | 689 | 197.4 |
+| 2469 B | `pbwire-dart-core` | 22130 | 111.6 | 37369 | 66.1 |
+| 2469 B | `pbwire-dart-shim` | 2295 | 1075.8 | 3599 | 686.0 |
+| 2469 B | protobuf-dart | 27196 | 90.8 | 17662 | 139.8 |
+| 74913 B | `pbwire-dart-core` | 501564 | 149.4 | 815978 | 91.8 |
+| 74913 B | `pbwire-dart-shim` | 68120 | 1099.7 | 100152 | 748.0 |
+| 74913 B | protobuf-dart | 908056 | 82.5 | 479490 | 156.2 |
+
+Reading: the in-language codec beats protobuf-dart's generated codec on encode
+from 2469 B up (111.6 against 90.8, 149.4 against 82.5) and is 1.8x the
+baseline at 74 KB, because the generated encoder walk is per-field virtual and
+this one is a flat slot loop. It loses the small tiers on both ops (0.35x /
+0.09x at 136 B) where 3000-message-free work is dominated by per-call overhead:
+one `Msg` with a 22-slot list, one `fromObject` walk, one workspace buffer copy
+per encode, and -- on decode -- one `Msg` per nested message plus one growable
+list per repeated field. Decode is below the baseline at every tier (0.09x to
+0.59x): the tree materializes every element, which the generated reader does
+too, but the dynamic slot indirection (`slotOf` + `fields[s]` + `Object` casts)
+costs more than a compiled field write.
+
+Conformance scope: binary only (the plan's file list has no JSON or text
+printer), so `make conformance-dart-core` passes the binary suite with the two
+expected tag-truncation failures and skips the JSON/text half: 1412 successes,
+1403 skipped, 2 expected failures, 0 unexpected -- the same set as the C core,
+the TypeScript, C# and Python ports. The FFI testee `make conformance-dart`
+keeps covering binary + JSON + text (2750 + 439).
