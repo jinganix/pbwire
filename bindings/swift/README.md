@@ -6,6 +6,11 @@ A SwiftPM package over the C ABI: a `FileDescriptorSet`
 plugin, no wire code — the format stays in the C core, like the Objective-C
 and Dart bindings.
 
+The package also ships **`PbwireCore`**, a pure-Swift wire implementation (see
+[The pure-Swift core](#the-pure-swift-core)): no C module, no `libpbwire.a`, no
+`unsafeFlags`, so it can be a normal SwiftPM dependency. `Pbwire` stays the
+default and the fast path.
+
 ```swift
 import Pbwire
 
@@ -157,6 +162,36 @@ decoder's arena in one `Message`). `pbwire-swift-shim` times the generated
 `@frozen` `<Message>Repr` mirror with one call per op into the C layout codec —
 see [`pbench/README.md`](pbench/README.md) for the mechanism, the gate and why
 the prebuilt handle stays the faster row.
+
+## The pure-Swift core
+
+`Sources/PbwireCore/` is a second, independent implementation of the binary
+format: descriptor reader, value tree, wire primitives, encoder and decoder.
+It exists because the products above link `build/libpbwire.a` through
+`LinkerSetting.unsafeFlags`, which SwiftPM rejects in a non-root package — a
+consumer who adds `pbwire` as a dependency, or a machine with no C toolchain,
+needs a product with no native code at all.
+
+```swift
+import PbwireCore
+
+let schema = try Schema(contentsOfFile: "tests/data/matrix3.desc")
+let ty = try schema.message("structtest.Scalars3")
+let message = ty.newMessage()
+try message.setStr("str", "hello")
+let wire = try ty.encode(message)
+let back = try ty.decode(wire)
+```
+
+It decodes unknown fields (retained verbatim, re-encoded last in input order),
+groups, packed runs, oneofs, the four presence kinds and proto2 requiredness,
+and it enforces the same nesting/byte limits. `make swift-test` runs its own
+gate (`Tests/PbwireCoreTests`: descriptor, codec, wire), and `make
+conformance-swift` drives the **official binary suite** through it via
+`conformance/main.swift` (1412 successes, 1403 skipped, 2 expected, 0
+unexpected). It is slower than the FFI path (0.54-0.90x encode, 0.28-0.43x
+decode of swift-protobuf — the value tree's ARC), and is published as the
+no-native mode, not as the fast path; see `pbench/README.md#verdict-the-pure-core-stage-4`.
 
 ## Deliberately skipped
 
