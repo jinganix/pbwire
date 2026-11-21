@@ -10,6 +10,7 @@
 package runtime_test
 
 import (
+	"bytes"
 	"math"
 	"strings"
 	"testing"
@@ -359,6 +360,207 @@ func TestTextEnumNumbers(t *testing.T) {
 	// Unknown names fail.
 	if _, err := typ.UnmarshalText("color: NOPE\n"); err == nil {
 		t.Fatalf("unknown enum name must fail")
+	}
+}
+
+func TestTextAnyRoundTrip(t *testing.T) {
+	s := loadJSONSchema(t)
+	typ := mustType(t, s, "jsontest.W")
+	m, err := typ.UnmarshalText(`any: { [type.googleapis.com/jsontest.M] { text: "hi" } }`)
+	if err != nil {
+		t.Fatalf("UnmarshalText Any: %v", err)
+	}
+	sub, ok, err := m.GetMessage("any")
+	if err != nil || !ok || sub == nil {
+		t.Fatalf("any: ok=%v err=%v", ok, err)
+	}
+	got, _, err := sub.GetString("type_url")
+	if err != nil || got != "type.googleapis.com/jsontest.M" {
+		t.Fatalf("type_url = %q (%v)", got, err)
+	}
+	inner, err := runtime.AnyUnpack(sub, mustType(t, s, "jsontest.M"))
+	if err != nil {
+		t.Fatalf("AnyUnpack: %v", err)
+	}
+	if v, _, err := inner.GetString("text"); err != nil || v != "hi" {
+		t.Fatalf("text = %q (%v), want hi", v, err)
+	}
+	out, err := typ.MarshalText(m, false)
+	if err != nil {
+		t.Fatalf("MarshalText: %v", err)
+	}
+	back, err := typ.UnmarshalText(out)
+	if err != nil {
+		t.Fatalf("reparse %q: %v", out, err)
+	}
+	again, err := typ.MarshalText(back, false)
+	if err != nil {
+		t.Fatalf("reprint: %v", err)
+	}
+	if out != again {
+		t.Fatalf("print not stable:\n%s\nvs\n%s", out, again)
+	}
+	// A custom URL prefix resolves by suffix and packs verbatim.
+	m2, err := typ.UnmarshalText(`any: { [non.default.domain/jsontest.M] { text: "x" } }`)
+	if err != nil {
+		t.Fatalf("custom prefix: %v", err)
+	}
+	sub2, _, _ := m2.GetMessage("any")
+	if u, _, _ := sub2.GetString("type_url"); u != "non.default.domain/jsontest.M" {
+		t.Fatalf("type_url = %q", u)
+	}
+	// An unresolvable packed type fails the parse, like the reference.
+	if _, err := typ.UnmarshalText(`any: { [type.googleapis.com/jsontest.Nope] { } }`); err == nil {
+		t.Fatalf("unknown Any type must fail")
+	}
+	// An invalid percent-escape in the URL fails too, while a valid one
+	// packs verbatim.
+	if _, err := typ.UnmarshalText(`any: { [non.default.domain/%ZZ/jsontest.M] { } }`); err == nil {
+		t.Fatalf("invalid percent-escape must fail")
+	}
+	m3, err := typ.UnmarshalText(`any: { [non.default.domain/%2F/jsontest.M] { text: "e" } }`)
+	if err != nil {
+		t.Fatalf("valid percent-escape: %v", err)
+	}
+	sub3, _, _ := m3.GetMessage("any")
+	if u, _, _ := sub3.GetString("type_url"); u != "non.default.domain/%2F/jsontest.M" {
+		t.Fatalf("type_url = %q", u)
+	}
+}
+
+func TestTextFloatEdge(t *testing.T) {
+	s := loadJSONSchema(t)
+	typ := mustType(t, s, "jsontest.M")
+	// ratio is field 11 (double), quant is field 12 (float).
+	negZero := func(text string, want uint64) {
+		t.Helper()
+		m, err := typ.UnmarshalText(text)
+		if err != nil {
+			t.Fatalf("%s: %v", text, err)
+		}
+		wire, err := typ.Encode(m)
+		if err != nil {
+			t.Fatalf("%s encode: %v", text, err)
+		}
+		if len(wire) != 9 {
+			t.Fatalf("%s encodes %d bytes, want 9 (tag + 8)", text, len(wire))
+		}
+		var got uint64
+		for i := 0; i < 8; i++ {
+			got |= uint64(wire[1+i]) << uint(8*i)
+		}
+		if got != want {
+			t.Fatalf("%s bits %016x, want %016x", text, got, want)
+		}
+		if n := m.EncodedSize(); n != len(wire) {
+			t.Fatalf("%s size %d != len %d", text, n, len(wire))
+		}
+	}
+	negZero(`ratio: -0`, 1<<63)
+	negZero(`ratio: -0.0`, 1<<63)
+	negZero(`ratio: -1e-9999`, 1<<63)
+	infs := []struct {
+		text string
+		bits uint64
+	}{
+		{`ratio: 1e9999`, 0x7FF0000000000000},
+		{`ratio: -1e9999`, 0xFFF0000000000000},
+		{`ratio: 1e18446744073709551616`, 0x7FF0000000000000},
+		{`quant: 1e18446744073709551616`, 0x7FF0000000000000},
+	}
+	for _, tc := range infs {
+		m, err := typ.UnmarshalText(tc.text)
+		if err != nil {
+			t.Fatalf("%s: %v", tc.text, err)
+		}
+		var bits uint64
+		if strings.HasPrefix(tc.text, "quant") {
+			v, _, err := m.GetFloat("quant")
+			if err != nil {
+				t.Fatal(err)
+			}
+			bits = uint64(math.Float64bits(float64(v)))
+		} else {
+			v, _, err := m.GetDouble("ratio")
+			if err != nil {
+				t.Fatal(err)
+			}
+			bits = math.Float64bits(v)
+		}
+		if bits != tc.bits {
+			t.Fatalf("%s bits %016x, want %016x", tc.text, bits, tc.bits)
+		}
+	}
+}
+
+func TestTextExtensionRoundTrip(t *testing.T) {
+	holder := &descriptorpb.DescriptorProto{
+		Name: jstrp("Holder"),
+		Field: []*descriptorpb.FieldDescriptorProto{
+			jfield("base", 1, jlabelOpt, descriptorpb.FieldDescriptorProto_TYPE_INT32, ""),
+		},
+		ExtensionRange: []*descriptorpb.DescriptorProto_ExtensionRange{
+			{Start: ji32p(100), End: ji32p(200)},
+		},
+	}
+	groupBox := &descriptorpb.DescriptorProto{
+		Name: jstrp("GroupBox"),
+		Field: []*descriptorpb.FieldDescriptorProto{
+			jfield("g", 1, jlabelOpt, descriptorpb.FieldDescriptorProto_TYPE_INT32, ""),
+		},
+	}
+	groupExt := jfield("groupbox", 100, jlabelOpt, descriptorpb.FieldDescriptorProto_TYPE_GROUP, ".exttest.GroupBox")
+	groupExt.Extendee = jstrp(".exttest.Holder")
+	intExt := jfield("extra", 101, jlabelOpt, descriptorpb.FieldDescriptorProto_TYPE_INT32, "")
+	intExt.Extendee = jstrp(".exttest.Holder")
+	fd := &descriptorpb.FileDescriptorProto{
+		Name:        jstrp("ext.proto"),
+		Package:     jstrp("exttest"),
+		Syntax:      jstrp("proto2"),
+		MessageType: []*descriptorpb.DescriptorProto{holder, groupBox},
+		Extension:   []*descriptorpb.FieldDescriptorProto{groupExt, intExt},
+	}
+	raw, err := proto.Marshal(&descriptorpb.FileDescriptorSet{File: []*descriptorpb.FileDescriptorProto{fd}})
+	mustSet(t, err)
+	s, err := runtime.Load(raw)
+	mustSet(t, err)
+	typ := mustType(t, s, "exttest.Holder")
+	m, err := typ.UnmarshalText(`base: 1 [exttest.groupbox] { g: 7 } [exttest.extra]: 5`)
+	if err != nil {
+		t.Fatalf("UnmarshalText extension: %v", err)
+	}
+	wire, err := typ.Encode(m)
+	if err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+	// Group extension frames with start/end tags, scalars ride varints.
+	want := []byte{0x08, 0x01, 0xA3, 0x06, 0x08, 0x07, 0xA4, 0x06, 0xA8, 0x06, 0x05}
+	if !bytes.Equal(wire, want) {
+		t.Fatalf("encode % x, want % x", wire, want)
+	}
+	if n := m.EncodedSize(); n != len(wire) {
+		t.Fatalf("EncodedSize %d != len(encode) %d", n, len(wire))
+	}
+	out, err := typ.MarshalText(m, false)
+	if err != nil {
+		t.Fatalf("MarshalText: %v", err)
+	}
+	back, err := typ.UnmarshalText(out)
+	if err != nil {
+		t.Fatalf("reparse %q: %v", out, err)
+	}
+	again, err := typ.MarshalText(back, false)
+	if err != nil {
+		t.Fatalf("reprint: %v", err)
+	}
+	if out != again {
+		t.Fatalf("print not stable:\n%s\nvs\n%s", out, again)
+	}
+	if _, err := typ.UnmarshalText(`[exttest.nope]: 1`); err == nil {
+		t.Fatalf("unknown extension must fail")
+	}
+	if _, err := typ.UnmarshalText(`[exttest.extra]: 1 [other.Holder]: 2`); err == nil {
+		t.Fatalf("extension of another message must fail")
 	}
 }
 

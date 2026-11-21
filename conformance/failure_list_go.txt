@@ -1,0 +1,7 @@
+# Expected failures for the Go testee (bindings/go/conformance/testee.go).
+#
+# None: the official suite (binary, JSON and text) passes with no listed
+# entries. In particular the two binary tag-truncation cases the reference
+# C++ testee also fails (BadTag_FieldNumberSlightlyTooHigh, proto2+proto3)
+# pass here, because the Go tag reader rejects tags past MaxFieldNumber
+# instead of truncating them.

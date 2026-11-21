@@ -613,7 +613,9 @@ func encodeTable(e *Encoder, msg any, t *Table, depth int, deterministic bool) e
 				continue
 			}
 			v := f.GetF32(msg)
-			if v == 0 && skipZero(f, msg) {
+			// Negative zero is a value, not the default: compare bits so
+			// -0.0 still emits, like the reference serializer.
+			if math.Float32bits(v) == 0 && skipZero(f, msg) {
 				continue
 			}
 			e.Tag(f.Num, WireFixed32)
@@ -629,7 +631,9 @@ func encodeTable(e *Encoder, msg any, t *Table, depth int, deterministic bool) e
 				continue
 			}
 			v := f.GetF64(msg)
-			if v == 0 && skipZero(f, msg) {
+			// Negative zero is a value, not the default: compare bits so
+			// -0.0 still emits, like the reference serializer.
+			if math.Float64bits(v) == 0 && skipZero(f, msg) {
 				continue
 			}
 			e.Tag(f.Num, WireFixed64)

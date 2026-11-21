@@ -150,25 +150,25 @@ func (d *Decoder) Rest() []byte {
 }
 
 // Next reads the next tag, returning its field number and wire type. It
-// rejects field number 0 and wire types above 5. The varint loop is inline
-// (same accept set as ConsumeVarint/ConsumeTag): Next runs once per field
-// occurrence, so one call level here is one per field on every decode.
+// rejects field number 0 and wire types above 5. A tag is a varint32: the
+// loop stops after five bytes, so an overlong tag (like the reference
+// parser, which reads at most five bytes) fails instead of decoding.
 func (d *Decoder) Next() (uint32, WireType, error) {
 	d.lastTag = d.Off
 	b := d.Buf[d.Off:]
 	var v uint64
 	n := 0
-	for i := 0; i < 10; i++ {
+	for i := 0; i < 5; i++ {
 		if i >= len(b) {
 			return 0, 0, ErrWire
 		}
 		c := b[i]
-		if i == 9 {
+		if i == 4 {
 			if c >= 0x80 {
 				return 0, 0, ErrWire
 			}
-			v |= uint64(c) << 63
-			n = 10
+			v |= uint64(c) << 28
+			n = 5
 			break
 		}
 		v |= uint64(c&0x7f) << uint(7*i)

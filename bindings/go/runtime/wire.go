@@ -123,11 +123,15 @@ func ConsumeVarint(b []byte) (uint64, int, error) {
 }
 
 // ConsumeTag reads one tag, rejecting field number 0, numbers past
-// MaxFieldNumber, and wire types above 5 (6 and 7 included).
+// MaxFieldNumber, wire types above 5 (6 and 7 included), and tags longer
+// than five bytes (a tag is a varint32, like the reference parser reads).
 func ConsumeTag(b []byte) (uint32, WireType, int, error) {
 	v, n, err := ConsumeVarint(b)
 	if err != nil {
 		return 0, 0, 0, err
+	}
+	if n > 5 {
+		return 0, 0, 0, ErrWire
 	}
 	num := uint32(v >> 3)
 	wt := WireType(v & 7)

@@ -405,6 +405,40 @@ func TestJSONMapPrintLastWins(t *testing.T) {
 	}
 }
 
+func TestJSONIntMapKeysParse(t *testing.T) {
+	s := loadJSONSchema(t)
+	typ := mustType(t, s, "jsontest.M")
+	// Distinct integer keys are distinct entries, like the reference: the
+	// duplicate-key check compares decoded keys, not empty strings.
+	m, err := typ.UnmarshalJSON(`{"by_id":{"1":"a","3":"b"}}`, false)
+	if err != nil {
+		t.Fatalf("UnmarshalJSON int-keyed map: %v", err)
+	}
+	items, err := m.GetMessageSlice("by_id")
+	if err != nil || len(items) != 2 {
+		t.Fatalf("by_id entries = %d (%v)", len(items), err)
+	}
+	seen := map[int64]string{}
+	for _, e := range items {
+		k, _, err := e.GetInt("key")
+		if err != nil {
+			t.Fatal(err)
+		}
+		v, _, err := e.GetString("value")
+		if err != nil {
+			t.Fatal(err)
+		}
+		seen[k] = v
+	}
+	if seen[1] != "a" || seen[3] != "b" {
+		t.Fatalf("by_id = %v, want map[1:a 3:b]", seen)
+	}
+	// A repeated key still fails the parse, like the reference.
+	if _, err := typ.UnmarshalJSON(`{"by_id":{"1":"a","1":"b"}}`, false); err == nil {
+		t.Fatalf("duplicate int map key must fail")
+	}
+}
+
 func TestJSONWellKnown(t *testing.T) {
 	s := loadJSONSchema(t)
 	typ := mustType(t, s, "jsontest.W")

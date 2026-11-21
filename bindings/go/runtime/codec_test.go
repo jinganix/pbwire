@@ -1452,6 +1452,14 @@ func TestAdversarial(t *testing.T) {
 			b := runtime.AppendTag(nil, 1, runtime.WireVarint)
 			return append(b, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80)
 		}},
+		{"tag 6byte overlong", func() []byte {
+			// Tag 8 (field 1, varint) in six bytes, then value 7: tags are
+			// varint32, so bytes past the fifth reject the field.
+			return []byte{0x88, 0x80, 0x80, 0x80, 0x80, 0x00, 0x07}
+		}},
+		{"tag 9byte overlong", func() []byte {
+			return []byte{0x88, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x00, 0x07}
+		}},
 		{"group depth bomb", func() []byte { return nestMessage(t, runtime.MaxDepth+10) }},
 	}
 	for _, tc := range cases {
@@ -1459,6 +1467,30 @@ func TestAdversarial(t *testing.T) {
 		if _, err := decodeScalars(wire); err == nil {
 			t.Errorf("%s: want error, got nil", tc.label)
 		}
+	}
+	// Tags longer than five bytes are not tags at all: the reference parser
+	// reads tags as varint32, so the shared ConsumeTag rejects them too.
+	for _, wire := range [][]byte{
+		{0x88, 0x80, 0x80, 0x80, 0x80, 0x00, 0x07},
+		{0x88, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x00, 0x07},
+	} {
+		if _, _, _, err := runtime.ConsumeTag(wire); err == nil {
+			t.Errorf("ConsumeTag % x: want error, got nil", wire)
+		}
+		var d runtime.Decoder
+		d.Buf = wire
+		if _, _, err := d.Next(); err == nil {
+			t.Errorf("Next % x: want error, got nil", wire)
+		}
+	}
+	// A five-byte tag is the longest legal tag: an unknown field number in
+	// five bytes still skips, and ConsumeTag still reads it.
+	five := append(runtime.AppendTag(nil, 1<<25, runtime.WireVarint), 0x07)
+	if _, err := decodeScalars(five); err != nil {
+		t.Fatalf("5-byte tag: %v", err)
+	}
+	if num, wt, n, err := runtime.ConsumeTag(five); err != nil || num != 1<<25 || wt != runtime.WireVarint || n != 5 {
+		t.Fatalf("ConsumeTag 5-byte = %d %d %d (%v)", num, wt, n, err)
 	}
 	// Unknown fields are skipped, known fields still land.
 	e := runtime.Encoder{}

@@ -2170,7 +2170,7 @@ func entryKeyValue(e *DMsg, keyOrd int, keyFP *FieldPlan) (uint64, string, bool)
 	if keyFP.Proto == descriptorpb.FieldDescriptorProto_TYPE_STRING {
 		return 0, ks.str, true
 	}
-	return ks.u, "", true
+	return ks.u, "", false
 }
 
 func checkDuplicateEntryKeys(items []*DMsg, keyOrd int, keyFP *FieldPlan) bool {

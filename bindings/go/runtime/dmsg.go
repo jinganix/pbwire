@@ -40,9 +40,22 @@ type slot struct {
 type DMsg struct {
 	typ     *DType
 	slots   []slot
+	ext     []extValue
 	unknown []byte
 	arena   *Arena
 }
+
+// extValue is one parsed extension field: its schema plan plus a slot in
+// the same shape as a regular field slot. Extensions live outside the
+// plan-indexed slots because plans are shared and immutable; the slice
+// stays sorted by field number so encode and print run number-ordered.
+type extValue struct {
+	xp *ExtPlan
+	s  slot
+}
+
+// extField is the field plan of one stored extension value.
+func extField(xv *extValue) *FieldPlan { return xv.xp.Field }
 
 // DType is a message type bound to its schema plan and its runtime table.
 // Types are cached per schema, so the same plan always gets the same tables.
@@ -150,6 +163,9 @@ func (t *DType) EncodeDeterministic(m *DMsg) ([]byte, error) {
 	if err := encodeTable(&e, m, tb, 0, true); err != nil {
 		return nil, err
 	}
+	if err := encodeExtTable(&e, m, 0, true); err != nil {
+		return nil, err
+	}
 	tb.setCapHint(len(e.Buf) + 64)
 	return e.Result(), nil
 }
@@ -209,6 +225,25 @@ func (m *DMsg) IsInitialized() bool {
 			return false
 		}
 	}
+	for i := range m.ext {
+		s := &m.ext[i].s
+		if !s.present {
+			continue
+		}
+		if extField(&m.ext[i]).Repeated {
+			if subs, ok := s.rep.([]*DMsg); ok {
+				for _, sub := range subs {
+					if sub != nil && !sub.IsInitialized() {
+						return false
+					}
+				}
+			}
+			continue
+		}
+		if s.m != nil && !s.m.IsInitialized() {
+			return false
+		}
+	}
 	return true
 }
 
@@ -234,6 +269,13 @@ func msgSize(m *DMsg, lim Limits, depth int) (int, error) {
 		entry := entryPlan && isKV
 		force := fp.Presence == PresenceRequired || (!entry && shape && isKV)
 		size, err := fieldSize(&m.slots[i], fp, entry, force, lim, depth)
+		if err != nil {
+			return 0, err
+		}
+		n += size
+	}
+	for i := range m.ext {
+		size, err := fieldSize(&m.ext[i].s, extField(&m.ext[i]), true, false, lim, depth)
 		if err != nil {
 			return 0, err
 		}
@@ -323,9 +365,11 @@ func isZeroScalar(s *slot, fp *FieldPlan) bool {
 		descriptorpb.FieldDescriptorProto_TYPE_ENUM:
 		return int32(s.u) == 0
 	case descriptorpb.FieldDescriptorProto_TYPE_FLOAT:
-		return math.Float32frombits(uint32(s.u)) == 0
+		// Negative zero is a value, not the default: the bit pattern is
+		// nonzero, so -0.0 still sizes and emits like the reference.
+		return uint32(s.u) == 0
 	case descriptorpb.FieldDescriptorProto_TYPE_DOUBLE:
-		return math.Float64frombits(s.u) == 0
+		return s.u == 0
 	case descriptorpb.FieldDescriptorProto_TYPE_STRING:
 		return s.str == ""
 	case descriptorpb.FieldDescriptorProto_TYPE_BYTES:
@@ -585,6 +629,9 @@ func (m *DMsg) Encode() ([]byte, error) {
 	if err := encodeTable(&e, m, t, 0, false); err != nil {
 		return nil, err
 	}
+	if err := encodeExtTable(&e, m, 0, false); err != nil {
+		return nil, err
+	}
 	t.setCapHint(len(e.Buf) + 64)
 	return e.Result(), nil
 }
@@ -705,7 +752,35 @@ func appendRep[T any](s *slot, v T) {
 	s.rep = append(s.rep.([]T), v)
 }
 
-// mergeOneof assigns a set oneof member and zeroes its siblings. It runs
+// findExt returns the storage slot for an extension field, creating it in
+// number order on first use.
+func (m *DMsg) findExt(xp *ExtPlan) *slot {
+	for i := range m.ext {
+		if m.ext[i].xp.Field.Number == xp.Field.Number {
+			return &m.ext[i].s
+		}
+		if m.ext[i].xp.Field.Number > xp.Field.Number {
+			m.ext = append(m.ext, extValue{})
+			copy(m.ext[i+1:], m.ext[i:])
+			m.ext[i] = extValue{xp: xp}
+			return &m.ext[i].s
+		}
+	}
+	m.ext = append(m.ext, extValue{xp: xp})
+	return &m.ext[len(m.ext)-1].s
+}
+
+// getExt returns the storage slot for an extension field, or nil when the
+// message holds no such extension.
+func (m *DMsg) getExt(xp *ExtPlan) *slot {
+	for i := range m.ext {
+		if m.ext[i].xp.Field.Number == xp.Field.Number {
+			return &m.ext[i].s
+		}
+	}
+	return nil
+}
+
 // without any built table (buildTable may still be pending), so the siblings
 // come from a plan scan, not a cache. When winner and newcomer are both a
 // nested value tree (C2: split oneof occurrences share one message), the
@@ -730,7 +805,9 @@ func mergeOneof(m *DMsg, i int, v any) {
 }
 
 // mergeInto folds a second occurrence of the same submessage into this tree:
-// scalars take the last value, repeated runs append, unknown bytes append.
+// scalars take the last value, repeated runs append, singular submessages
+// merge recursively (Message::MergeFrom in the reference runtime), and
+// unknown bytes append.
 func (m *DMsg) mergeInto(dst *DMsg) {
 	if m == nil || dst == nil {
 		return
@@ -746,7 +823,31 @@ func (m *DMsg) mergeInto(dst *DMsg) {
 			}
 			continue
 		}
+		if srcm := m.slots[i].m; srcm != nil {
+			if dstm := dst.slots[i].m; dstm != nil {
+				srcm.mergeInto(dstm)
+				continue
+			}
+		}
 		dst.slots[i] = m.slots[i]
+	}
+	for _, xv := range m.ext {
+		d := dst.findExt(xv.xp)
+		if xv.xp.Field.Repeated {
+			if sel := xv.s.rep; sel != nil {
+				d.present = true
+				d.rep = appendRepeatedRep(d.rep, sel)
+			}
+			continue
+		}
+		if srcm := xv.s.m; srcm != nil {
+			if dstm := d.m; dstm != nil {
+				srcm.mergeInto(dstm)
+				d.present = true
+				continue
+			}
+		}
+		*d = xv.s
 	}
 	dst.unknown = append(dst.unknown, m.unknown...)
 }

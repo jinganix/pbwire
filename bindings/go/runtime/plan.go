@@ -126,7 +126,28 @@ type Schema struct {
 	messages map[string]*MessagePlan
 	enums    map[string]*EnumPlan
 	services map[string]*ServicePlan
+	exts     map[string]*ExtPlan
 	types    sync.Map // full name -> *DType
+}
+
+// ExtPlan is one proto extension: its fully qualified field name, the
+// message it extends, and the field plan describing its value shape.
+// Only the text codec resolves extensions today (binary keeps them as
+// unknown bytes, JSON rejects them); the plan still carries the full
+// shape so text parse, print and binary encode share it.
+type ExtPlan struct {
+	Full     string // fully qualified field name, without the leading dot
+	Extendee string // fully qualified extended message, without the leading dot
+	Field    *FieldPlan
+}
+
+// Extension returns the plan for a fully qualified extension field name.
+func (s *Schema) Extension(full string) (*ExtPlan, bool) {
+	if s == nil {
+		return nil, false
+	}
+	xp, ok := s.exts[full]
+	return xp, ok
 }
 
 // ServicePlan is one service: its methods in declaration order plus lookup.
@@ -173,6 +194,7 @@ func Load(set []byte) (*Schema, error) {
 		messages: map[string]*MessagePlan{},
 		enums:    map[string]*EnumPlan{},
 		services: map[string]*ServicePlan{},
+		exts:     map[string]*ExtPlan{},
 	}
 	for _, f := range fds.File {
 		pkg := f.GetPackage()
@@ -221,6 +243,25 @@ func Load(set []byte) (*Schema, error) {
 		if err := walk("", false, f.MessageType); err != nil {
 			return nil, err
 		}
+		if err := s.addFileExtensions(pkg, nil, f.Extension, f); err != nil {
+			return nil, err
+		}
+		var scopes func(path []string, ms []*descriptorpb.DescriptorProto) error
+		scopes = func(path []string, ms []*descriptorpb.DescriptorProto) error {
+			for _, m := range ms {
+				scope := append(path, m.GetName())
+				if err := s.addFileExtensions(pkg, scope, m.Extension, f); err != nil {
+					return err
+				}
+				if err := scopes(scope, m.NestedType); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+		if err := scopes(nil, f.MessageType); err != nil {
+			return nil, err
+		}
 	}
 	return s, nil
 }
@@ -256,6 +297,25 @@ func (s *Schema) Service(full string) (*ServicePlan, error) {
 // output to its message type. All message plans exist by now (every file's
 // messages are added before any service resolves), so an unknown type name
 // fails the whole Load loudly, like an unknown field type reference.
+// addFileExtensions registers one scope's extend block: each entry names
+// its extendee and carries a regular field descriptor, so the field plan
+// builder fills it like any other field. Unknown type references fail
+// loudly, like unknown message fields do.
+func (s *Schema) addFileExtensions(pkg string, scope []string, exts []*descriptorpb.FieldDescriptorProto, f *descriptorpb.FileDescriptorProto) error {
+	for _, fd := range exts {
+		full := joinName(pkg, scope, fd.GetName())
+		if _, dup := s.exts[full]; dup {
+			return fmt.Errorf("codec: duplicate extension %s", full)
+		}
+		fp, err := s.buildField(syntaxOf(f), nil, fd)
+		if err != nil {
+			return fmt.Errorf("codec: extension %s: %w", full, err)
+		}
+		s.exts[full] = &ExtPlan{Full: full, Extendee: normName(fd.GetExtendee()), Field: fp}
+	}
+	return nil
+}
+
 func (s *Schema) addService(full string, svc *descriptorpb.ServiceDescriptorProto) error {
 	if _, dup := s.services[full]; dup {
 		return fmt.Errorf("codec: duplicate service %s", full)

@@ -343,6 +343,23 @@ conformance-python: python-bind $(CONFORMANCE_DESC)
 		$(PY_ABS) bindings/python/conformance/testee.py \
 		$(CURDIR)/$(CONFORMANCE_DESC)
 
+# Same suite through the Go binding: the testee is package main in the
+# bindings/go module, built to build/ next to the C testee. Like the Python
+# testee it answers binary, JSON and text with no expected failures, so no
+# --failure_list is passed (see conformance/failure_list_go.txt).
+GO_TESTEE := build/conformance_go_testee
+
+$(GO_TESTEE): bindings/go/conformance/testee.go | build
+	cd bindings/go && $(GO) build -o $(CURDIR)/$@ ./conformance
+
+conformance-go: $(CONFORMANCE_DESC) $(GO_TESTEE)
+	@test -x "$(CONFORMANCE_RUNNER)" || { \
+		echo "conformance_test_runner not found: $(CONFORMANCE_RUNNER)"; \
+		echo "run 'make conformance-setup' first"; exit 1; }
+	$(CONFORMANCE_RUNNER) \
+		$(CURDIR)/$(GO_TESTEE) \
+		$(CURDIR)/$(CONFORMANCE_DESC)
+
 # Same suite through the Lua binding (binary, JSON and text; only JSPB
 # answers "skipped").
 conformance-lua: $(CONFORMANCE_DESC) lua-bind

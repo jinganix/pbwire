@@ -137,6 +137,10 @@ func (o *textOut) printMessage(m *DMsg, depth int) {
 		o.fail(fmt.Errorf("text: cannot print a nil message"))
 		return
 	}
+	if jsonClassify(m.typ.plan.Full) == jwAny {
+		o.printAnyText(m)
+		return
+	}
 	for i, fp := range m.typ.plan.Fields {
 		if !textShouldPrint(m, i, fp) {
 			continue
@@ -148,6 +152,9 @@ func (o *textOut) printMessage(m *DMsg, depth int) {
 			continue
 		}
 		o.printField(m, i, fp, -1)
+	}
+	for i := range m.ext {
+		o.printExt(m, &m.ext[i])
 	}
 	if o.printUnknown && len(m.unknown) > 0 {
 		o.printUnknowns(m.unknown, depth)
@@ -194,6 +201,105 @@ func (o *textOut) printField(m *DMsg, i int, fp *FieldPlan, elem int) {
 	o.str(": ")
 	o.printScalar(m.typ, fp, s, elem)
 	o.str("\n")
+}
+
+// printAnyText prints a google.protobuf.Any in its expanded text form:
+// `[type-url] { ...fields... }`, like the reference printer. An empty Any
+// prints nothing, so the enclosing braces still round-trip.
+func (o *textOut) printAnyText(m *DMsg) {
+	if o.err != nil {
+		return
+	}
+	url := AnyTypeURL(m)
+	if url == "" {
+		return
+	}
+	name := url
+	if k := strings.LastIndexByte(url, '/'); k >= 0 {
+		name = url[k+1:]
+	}
+	sub, err := m.typ.s.Type(name)
+	if err != nil || sub == nil {
+		o.fail(fmt.Errorf("text: unknown Any type %q", url))
+		return
+	}
+	inner, err := sub.Decode(AnyPayload(m))
+	if err != nil {
+		o.fail(fmt.Errorf("text: bad Any payload for %q: %w", url, err))
+		return
+	}
+	o.pad()
+	o.str("[")
+	o.str(url)
+	o.str("] {\n")
+	o.indent++
+	o.printMessage(inner, 0)
+	o.indent--
+	o.pad()
+	o.str("}\n")
+}
+
+// printExt prints one set extension: `[full.name] { ... }` for messages and
+// groups, `[full.name]: v` for scalars, one line per repeated element like
+// regular fields. The slice stays number-ordered, so extensions print in
+// field-number order.
+func (o *textOut) printExt(m *DMsg, xv *extValue) {
+	if o.err != nil {
+		return
+	}
+	s := &xv.s
+	fp := extField(xv)
+	if !s.present {
+		return
+	}
+	if fp.Proto == descriptorpb.FieldDescriptorProto_TYPE_MESSAGE || fp.Group {
+		if fp.Repeated {
+			items, _ := s.rep.([]*DMsg)
+			for _, sub := range items {
+				o.printExtMsg(xv, sub)
+			}
+			return
+		}
+		o.printExtMsg(xv, s.m)
+		return
+	}
+	if fp.Repeated {
+		for k := 0; k < repLen(s); k++ {
+			o.pad()
+			o.str("[")
+			o.str(xv.xp.Full)
+			o.str("]: ")
+			o.printScalar(m.typ, fp, s, k)
+			o.str("\n")
+		}
+		return
+	}
+	o.pad()
+	o.str("[")
+	o.str(xv.xp.Full)
+	o.str("]: ")
+	o.printScalar(m.typ, fp, s, -1)
+	o.str("\n")
+}
+
+// printExtMsg prints one set message- or group-typed extension value.
+func (o *textOut) printExtMsg(xv *extValue, sub *DMsg) {
+	if o.err != nil {
+		return
+	}
+	if sub == nil {
+		o.fail(fmt.Errorf("text: extension %q holds a nil message", xv.xp.Full))
+		return
+	}
+	o.pad()
+	o.str("[")
+	o.str(xv.xp.Full)
+	o.str("] {\n")
+	o.indent++
+	o.printMessage(sub, 0)
+	o.indent--
+	o.pad()
+	o.str("}\n")
 }
 
 func (o *textOut) printScalar(t *DType, fp *FieldPlan, s *slot, elem int) {
@@ -967,18 +1073,6 @@ func (p *textIn) parseBody(m *DMsg) error {
 	return p.parseMessageBody(m, 0)
 }
 
-// textBracketName peeks a bracket span for error messages.
-func textBracketName(p *textIn) string {
-	q := p.pos + 1
-	for q < len(p.s) && p.s[q] != ']' {
-		q++
-	}
-	if q < len(p.s) {
-		q++
-	}
-	return p.s[p.pos:q]
-}
-
 // skipReservedValue skips one value of a reserved field, guessing the shape
 // like the reference: a brace block, a list, or one scalar.
 func (p *textIn) skipReservedValue() error {
@@ -1169,7 +1263,14 @@ func (p *textIn) parseMessageBody(m *DMsg, closer byte) error {
 			return nil
 		}
 		if p.s[p.pos] == '[' {
-			return p.fail("unknown extension %q", textBracketName(p))
+			if err := p.parseBracket(m); err != nil {
+				return err
+			}
+			p.skip()
+			if p.pos < len(p.s) && (p.s[p.pos] == ',' || p.s[p.pos] == ';') {
+				p.pos++
+			}
+			continue
 		}
 		name, ok := p.parseIdent()
 		if !ok {
@@ -1290,6 +1391,204 @@ func (p *textIn) parseList(m *DMsg, ord int, fp *FieldPlan) error {
 	}
 }
 
+// scanBracket consumes '[...]' and returns its content with whitespace
+// and '#' comments stripped, like the reference tokenizer: a bracketed
+// type URL may span lines and carry comments.
+func (p *textIn) scanBracket() (string, error) {
+	p.pos++ // consume '['
+	var out []byte
+	for {
+		if p.pos >= len(p.s) {
+			return "", p.fail("truncated extension name")
+		}
+		c := p.s[p.pos]
+		switch {
+		case c == ']':
+			p.pos++
+			return string(out), nil
+		case c == ' ' || c == '\t' || c == '\n' || c == '\v' || c == '\f' || c == '\r':
+			p.pos++
+		case c == '#':
+			for p.pos < len(p.s) && p.s[p.pos] != '\n' {
+				p.pos++
+			}
+		default:
+			out = append(out, c)
+			p.pos++
+		}
+	}
+}
+
+// parseBracket parses one bracketed extension or Any type URL plus its
+// value. Inside google.protobuf.Any the brackets name the packed type;
+// anywhere else they name a registered extension of the message being
+// parsed, which must extend exactly this message.
+func (p *textIn) parseBracket(m *DMsg) error {
+	name, err := p.scanBracket()
+	if err != nil {
+		return err
+	}
+	if jsonClassify(m.typ.plan.Full) == jwAny {
+		return p.parseAnyText(m, name)
+	}
+	xp, ok := m.typ.s.Extension(name)
+	if !ok {
+		return p.fail("unknown extension %q", "["+name+"]")
+	}
+	if xp.Extendee != m.typ.plan.Full {
+		return p.fail("extension %q does not extend %s", "["+name+"]", m.typ.plan.Full)
+	}
+	return p.parseExtensionValue(m, xp)
+}
+
+// parseAnyText parses the bracketed type URL and body of a
+// google.protobuf.Any value: `[type-url] { ... }`. The URL prefix is free
+// form; only the suffix after the last slash names the packed type, so any
+// prefix the test suite invents resolves.
+func (p *textIn) parseAnyText(m *DMsg, url string) error {
+	// Percent-escapes in the URL must be well formed, like the reference
+	// URL parser: a '%' needs two hex digits after it.
+	for i := 0; i < len(url); i++ {
+		if url[i] != '%' {
+			continue
+		}
+		if i+2 >= len(url) || !isTextHex(url[i+1]) || !isTextHex(url[i+2]) {
+			return p.fail("bad Any type URL %q", url)
+		}
+		i += 2
+	}
+	name := url
+	if k := strings.LastIndexByte(url, '/'); k >= 0 {
+		name = url[k+1:]
+	}
+	sub, err := m.typ.s.Type(name)
+	if err != nil || sub == nil {
+		return p.fail("unknown Any type %q", url)
+	}
+	if err := p.enter(); err != nil {
+		return err
+	}
+	defer func() { p.depth-- }()
+	p.skip()
+	if p.pos < len(p.s) && p.s[p.pos] == ':' {
+		p.pos++
+		p.skip()
+	}
+	if p.pos >= len(p.s) || (p.s[p.pos] != '{' && p.s[p.pos] != '<') {
+		return p.fail("expected '{' for Any type %q", url)
+	}
+	closer := byte('}')
+	if p.s[p.pos] == '<' {
+		closer = byte('>')
+	}
+	p.pos++
+	inner := sub.New()
+	if err := p.parseMessageBody(inner, closer); err != nil {
+		return err
+	}
+	payload, err := inner.Encode()
+	if err != nil {
+		return err
+	}
+	urlFP, urlOrd := timeField(m.typ.plan, 1, descriptorpb.FieldDescriptorProto_TYPE_STRING)
+	valFP, valOrd := timeField(m.typ.plan, 2, descriptorpb.FieldDescriptorProto_TYPE_BYTES)
+	if urlFP == nil || valFP == nil {
+		return p.fail("bad Any shape")
+	}
+	storeString(m, urlOrd, urlFP, url)
+	if len(payload) > 0 {
+		storeBytes(m, valOrd, valFP, payload)
+	}
+	return nil
+}
+
+// parseExtensionValue parses the value after a bracketed extension name: a
+// message or group takes `{...}` or `<...>` (with an optional colon), like
+// parseMessageValue, while a scalar takes `: value`, like any other scalar
+// field. A repeated message appends one element per bracketed occurrence;
+// a repeated singular message merges into the set value, like the binary
+// decoder; scalars replace and repeated runs append.
+func (p *textIn) parseExtensionValue(m *DMsg, xp *ExtPlan) error {
+	fp := xp.Field
+	s := m.findExt(xp)
+	if fp.Proto == descriptorpb.FieldDescriptorProto_TYPE_MESSAGE || fp.Group {
+		if err := p.enter(); err != nil {
+			return err
+		}
+		defer func() { p.depth-- }()
+		p.skip()
+		if p.pos < len(p.s) && p.s[p.pos] == ':' {
+			p.pos++
+			p.skip()
+		}
+		if p.pos >= len(p.s) || (p.s[p.pos] != '{' && p.s[p.pos] != '<') {
+			return p.fail("expected '{' for extension %q", xp.Full)
+		}
+		closer := byte('}')
+		if p.s[p.pos] == '<' {
+			closer = byte('>')
+		}
+		p.pos++
+		sub, err := m.typ.s.Type(fp.Message)
+		if err != nil || sub == nil {
+			return p.fail("bad extension type %q", fp.Message)
+		}
+		inner := sub.New()
+		if err := p.parseMessageBody(inner, closer); err != nil {
+			return err
+		}
+		s.present = true
+		if fp.Repeated {
+			appendRep(s, inner)
+			return nil
+		}
+		if s.m != nil {
+			inner.mergeInto(s.m)
+			return nil
+		}
+		s.m = inner
+		return nil
+	}
+	p.skip()
+	if p.pos >= len(p.s) || p.s[p.pos] != ':' {
+		return p.fail("expected ':' for extension %q", xp.Full)
+	}
+	p.pos++
+	// Scalars ride the regular field parsers through a holder message whose
+	// plan holds just this field at ordinal 0: the stores index slots and
+	// plans by ordinal, so a real scratch ordinal would overrun the
+	// extendee plan. Message-typed extensions never reach here, so the
+	// holder never needs a table.
+	holder := &DMsg{typ: &DType{s: m.typ.s, plan: &MessagePlan{Full: m.typ.plan.Full, Fields: []*FieldPlan{fp}}}, slots: make([]slot, 1)}
+	var err error
+	if fp.Repeated {
+		save := p.pos
+		p.skip()
+		if p.pos < len(p.s) && p.s[p.pos] == '[' {
+			p.pos = save
+			err = p.parseList(holder, 0, fp)
+		} else {
+			p.pos = save
+			err = p.parseScalarValue(holder, 0, fp)
+		}
+	} else {
+		err = p.parseScalarValue(holder, 0, fp)
+	}
+	tmp := holder.slots[0]
+	if err != nil {
+		return err
+	}
+	if fp.Repeated {
+		if sel := tmp.rep; sel != nil {
+			s.present = true
+			s.rep = appendRepeatedRep(s.rep, sel)
+		}
+		return nil
+	}
+	*s = tmp
+	return nil
+}
+
 // parseScalarValue parses one scalar (non-message) value of the field.
 func (p *textIn) parseScalarValue(m *DMsg, ord int, fp *FieldPlan) error {
 	switch fp.Proto {
@@ -1383,7 +1682,9 @@ func (p *textIn) parseTextFloat(m *DMsg, ord int, fp *FieldPlan, isFloat bool) e
 		if n.kind != textNumFloat {
 			got, err := strconv.ParseFloat(n.text, 64)
 			if err != nil {
-				return p.fail("bad float for field %q", fp.Name)
+				if ne, ok := err.(*strconv.NumError); !ok || ne.Err != strconv.ErrRange {
+					return p.fail("bad float for field %q", fp.Name)
+				}
 			}
 			v = got
 		} else {
@@ -1392,8 +1693,13 @@ func (p *textIn) parseTextFloat(m *DMsg, ord int, fp *FieldPlan, isFloat bool) e
 				text = text[:len(text)-1]
 			}
 			got, err := strconv.ParseFloat(text, 64)
+			// Overflow and underflow still parse, like strtod in the
+			// reference: the clamped infinities and zeros are the
+			// value, only a malformed literal is an error.
 			if err != nil {
-				return p.fail("bad float for field %q", fp.Name)
+				if ne, ok := err.(*strconv.NumError); !ok || ne.Err != strconv.ErrRange {
+					return p.fail("bad float for field %q", fp.Name)
+				}
 			}
 			v = got
 		}
@@ -1547,6 +1853,29 @@ func tCheckRequired(m *DMsg) error {
 		}
 		if sub := m.slots[i].m; sub != nil {
 			if err := tCheckRequired(sub); err != nil {
+				return err
+			}
+		}
+	}
+	for i := range m.ext {
+		s := &m.ext[i].s
+		if extField(&m.ext[i]).Proto != descriptorpb.FieldDescriptorProto_TYPE_MESSAGE &&
+			!extField(&m.ext[i]).Group {
+			continue
+		}
+		if extField(&m.ext[i]).Repeated {
+			subs, _ := s.rep.([]*DMsg)
+			for _, sub := range subs {
+				if sub != nil {
+					if err := tCheckRequired(sub); err != nil {
+						return err
+					}
+				}
+			}
+			continue
+		}
+		if s.m != nil {
+			if err := tCheckRequired(s.m); err != nil {
 				return err
 			}
 		}
