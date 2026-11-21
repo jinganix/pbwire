@@ -160,3 +160,20 @@ is `results/bench-rust-20261120T205610Z.json` (Apple M4 Pro, arm64, sha
 Against prost: shim encode 1.10x / 1.01x / 0.80x / 0.84x and shim decode
 1.38x / 1.64x / 1.88x / 1.90x; the tree row is 1.20x / 1.11x / 1.23x / 1.17x on
 encode and 1.24x / 1.41x / 1.91x / 1.88x on decode.
+
+`pbwire-rust-core` in the same run (`results/bench-rust-20261121T022430Z.json`):
+MB/s over wire bytes, a prebuilt core `Message` through `encode_to` into a
+reused buffer and one one-shot `decode`.
+
+| tier | `core` enc | `core` dec | prost enc | prost dec | rust-protobuf enc | rust-protobuf dec |
+|---|---|---|---|---|---|---|
+| 136 B | 1008.3 | 413.0 | 1563.4 | 884.6 | 1282.8 | 731.4 |
+| 174 B | 978.2 | 348.4 | 1516.8 | 612.7 | 1317.3 | 571.2 |
+| 2469 B | 869.0 | 237.1 | 1242.7 | 326.2 | 831.4 | 368.7 |
+| 74913 B | 923.2 | 238.4 | 1348.3 | 363.3 | 886.2 | 400.7 |
+
+Against prost that is 0.64x / 0.64x / 0.70x / 0.68x on encode and 0.47x / 0.57x
+/ 0.73x / 0.66x on decode; against `rust-protobuf` 0.79x / 0.74x / 1.05x / 1.04x
+on encode and 0.56x / 0.61x / 0.64x / 0.59x on decode. The tree arm (the
+shipped static link) stays ahead of it everywhere: 1.79x / 1.66x / 1.88x / 1.86x
+on encode and 2.50x / 2.64x / 2.82x / 3.14x on decode.

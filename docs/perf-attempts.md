@@ -1811,3 +1811,13 @@ testee, built with `--no-default-features --features core`, so no C code is
 linked) passes the binary suite with the same failure set as the C core: 1412
 successes, 1403 skipped, 2 expected failures, 0 unexpected. The skipped half is
 the JSON/text mapping, out of this core's (binary) scope.
+
+Formal rows (`make rust-bench`, `results/bench-rust-20261121T022430Z.json`, MB/s
+at 136 / 174 / 2469 / 74913 B): `pbwire-rust-core` encode 1008.3 / 978.2 / 869.0
+/ 923.2 and decode 413.0 / 348.4 / 237.1 / 238.4, against prost's 1563.4 /
+1516.8 / 1242.7 / 1348.3 and 884.6 / 612.7 / 326.2 / 363.3 (0.64-0.70x encode,
+0.47-0.73x decode) and `rust-protobuf`'s 1282.8 / 1317.3 / 831.4 / 886.2 and
+731.4 / 571.2 / 368.7 / 400.7: above it on the two large encodes (1.04-1.05x),
+below it on every decode (0.56-0.64x). The shipped `pbwire-rust-tree` row is
+1.66-1.88x the core on encode and 2.50-3.14x on decode, which is why the static
+link stays the default.
