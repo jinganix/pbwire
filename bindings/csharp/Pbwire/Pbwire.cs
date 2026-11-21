@@ -28,32 +28,60 @@ public sealed class PbwireException : Exception
 internal static class Native
 {
     private const string Lib = "pbwire";
+    private const string ShimLib = "pbwire_cs_shim";
 
     static Native() =>
-        NativeLibrary.SetDllImportResolver(typeof(Native).Assembly, (name, _, _) =>
-            name == Lib ? NativeLibrary.Load(LibraryPath()) : IntPtr.Zero);
+        NativeLibrary.SetDllImportResolver(typeof(Native).Assembly, (name, _, _) => name switch
+        {
+            Lib => NativeLibrary.Load(LibraryPath("pbwire")),
+            ShimLib => NativeLibrary.Load(ShimPath()),
+            _ => IntPtr.Zero,
+        });
 
     /// <summary>PBWIRE_LIB, else build/libpbwire.{dylib,so} found above the working directory.</summary>
-    internal static string LibraryPath()
+    internal static string LibraryPath() => LibraryPath("pbwire");
+
+    /// <summary>The library beside PBWIRE_LIB, else build/lib&lt;name&gt;.{dylib,so} above the working directory.</summary>
+    private static string LibraryPath(string stem)
     {
         var env = Environment.GetEnvironmentVariable("PBWIRE_LIB");
         if (!string.IsNullOrEmpty(env))
         {
-            return env;
+            if (stem == "pbwire")
+            {
+                return env;
+            }
+            // The resolver's own resolution: the shim sits beside libpbwire.
+            var dir = Path.GetDirectoryName(Path.GetFullPath(env));
+            foreach (var suffix in new[] { "dylib", "so" })
+            {
+                var beside = Path.Combine(dir ?? ".", $"lib{stem}.{suffix}");
+                if (File.Exists(beside))
+                {
+                    return beside;
+                }
+            }
         }
         for (var dir = new DirectoryInfo(Directory.GetCurrentDirectory()); dir != null; dir = dir.Parent)
         {
             foreach (var suffix in new[] { "dylib", "so" })
             {
-                var candidate = Path.Combine(dir.FullName, "build", $"libpbwire.{suffix}");
+                var candidate = Path.Combine(dir.FullName, "build", $"lib{stem}.{suffix}");
                 if (File.Exists(candidate))
                 {
                     return candidate;
                 }
             }
         }
-        throw new PbwireException(-1, "no shared library found (set PBWIRE_LIB; run `make shared`)");
+        if (stem == "pbwire")
+        {
+            throw new PbwireException(-1, "no shared library found (set PBWIRE_LIB; run `make shared`)");
+        }
+        throw new PbwireException(-1, $"no {stem} library found (run `make csharp-shim-native`)");
     }
+
+    /// <summary>The C-side layout reader: beside PBWIRE_LIB, else build/.</summary>
+    internal static string ShimPath() => LibraryPath(ShimLib);
 
     internal static string Text(IntPtr ptr) =>
         ptr == IntPtr.Zero ? string.Empty : Marshal.PtrToStringUTF8(ptr) ?? string.Empty;
@@ -173,6 +201,18 @@ internal static class Native
     internal static extern int pbw_visit(IntPtr desc, IntPtr buf, nuint len, PbwVisitFn cb, IntPtr ud, out nuint failOff);
     [DllImport(Lib)] internal static extern IntPtr pbw_strerror(int status);
     [DllImport(Lib)] internal static extern void pbw_free(IntPtr ptr);
+
+    /* the flat-image reader (bindings/csharp/native/pbw_cs_shim.c) */
+    [DllImport(ShimLib)] internal static extern int pbw_cs_shim_schema_load(IntPtr data, nuint len, out IntPtr schema);
+    [DllImport(ShimLib)] internal static extern void pbw_cs_shim_schema_free(IntPtr schema);
+    [DllImport(ShimLib, CharSet = CharSet.Ansi)]
+    internal static extern int pbw_cs_shim_type_new(IntPtr schema, [MarshalAs(UnmanagedType.LPUTF8Str)] string message,
+        IntPtr rows, nuint nrows, nuint size, out IntPtr type);
+    [DllImport(ShimLib)]
+    internal static extern int pbw_cs_shim_encode(IntPtr type, IntPtr image, out IntPtr data, out nuint len);
+    [DllImport(ShimLib)]
+    internal static extern int pbw_cs_shim_decode(IntPtr type, IntPtr wire, nuint wireLen, IntPtr image,
+        IntPtr arena, nuint arenaLen);
 }
 
 /// <summary>Bounds for decoding: zero fields mean the defaults (no byte cap, PBW_MAX_DEPTH nesting).</summary>
@@ -1279,4 +1319,411 @@ public static class Run
         native.ReadFrom(msg);
         return native;
     }
+}
+
+/* ------------------------------------------------------- flat image reader */
+
+/// <summary>
+/// One row of a message's flat image: <see cref="Offset"/> is where the value
+/// (or, for a reference-shaped field, the pointer) sits, <see cref="Has"/> the
+/// 4-byte presence word (0 = none), <see cref="Count"/> the 8-byte repeated
+/// count (0 = singular), <see cref="Case"/> the 4-byte oneof case word (0 =
+/// none) and <see cref="Child"/> the proto full name of a sub-message. The
+/// generated <c>&lt;Message&gt;Layout</c> emits these; a native reader compiles
+/// them into a C layout codec.
+/// </summary>
+public readonly record struct LayoutRow(
+    uint Number,
+    FlatKind Kind,
+    int Offset,
+    uint Type,
+    int Wire = 0,
+    bool Repeated = false,
+    int Has = 0,
+    int Count = 0,
+    bool Packed = false,
+    bool Required = false,
+    bool Oneof = false,
+    int Case = 0,
+    string? Child = null);
+
+/// <summary>The value shapes the C layout codec understands (pbw_struct_kind_t).
+/// Named FlatKind so `[StructLayout(LayoutKind.Sequential)]` keeps working.</summary>
+public enum FlatKind
+{
+    Int32 = 0,
+    Int64 = 1,
+    Uint32 = 2,
+    Uint64 = 3,
+    Bool = 4,
+    Float = 5,
+    Double = 6,
+    String = 7,
+    Bytes = 8,
+    Enum = 9,
+    Message = 10,
+}
+
+/// <summary>One message's flat image: its byte size and one row per field.</summary>
+public sealed class LayoutType
+{
+    public LayoutType(string name, int size, LayoutRow[] rows)
+    {
+        Name = name;
+        Size = size;
+        Rows = rows;
+    }
+
+    /// <summary>The fully qualified message this image describes.</summary>
+    public string Name { get; }
+
+    /// <summary>Bytes of one image (the stride of a repeated sub-message array).</summary>
+    public int Size { get; }
+
+    /// <summary>One row per field, in slot order.</summary>
+    public LayoutRow[] Rows { get; }
+}
+
+/// <summary>
+/// A file's layouts: the descriptor set the shim loads for itself, the message
+/// table it resolves sub-message rows from, and one compiled reader per
+/// message. Generated code passes its file's instance.
+/// </summary>
+public sealed class LayoutSource
+{
+    private readonly Dictionary<string, LayoutType> _types = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, LayoutPlan> _plans = new(StringComparer.Ordinal);
+    private readonly Func<byte[]> _descriptors;
+    private readonly object _lock = new();
+    private IntPtr _schema;
+
+    public LayoutSource(string key, Func<byte[]> descriptors, LayoutType[] types)
+    {
+        Key = key;
+        _descriptors = descriptors;
+        foreach (var type in types)
+        {
+            _types[type.Name] = type;
+        }
+    }
+
+    public string Key { get; }
+
+    internal LayoutType? Find(string name) => _types.TryGetValue(name, out var type) ? type : null;
+
+    /// <summary>The compiled reader for a message; children are compiled first.</summary>
+    public LayoutPlan Plan(LayoutType type)
+    {
+        lock (_lock)
+        {
+            if (_plans.TryGetValue(type.Name, out var plan))
+            {
+                return plan;
+            }
+            if (_schema == IntPtr.Zero)
+            {
+                _schema = LoadSchema();
+            }
+
+            foreach (var row in type.Rows)
+            {
+                if (row.Child is { Length: > 0 } child)
+                {
+                    var childType = Find(child)
+                        ?? throw new PbwireException(-1, $"{type.Name}: sub-message {child} has no layout in {Key}");
+                    Plan(childType); // registers the child's rows and image size
+                }
+            }
+            var native = MarshalRows(type);
+            try
+            {
+                Native.Check(Native.pbw_cs_shim_type_new(_schema, type.Name, native.Rows,
+                    (nuint)type.Rows.Length, (nuint)type.Size, out var compiled));
+                plan = new LayoutPlan(compiled, type);
+            }
+            finally
+            {
+                Marshal.FreeHGlobal(native.Rows);
+                if (native.Names != IntPtr.Zero)
+                {
+                    Marshal.FreeHGlobal(native.Names);
+                }
+            }
+            _plans[type.Name] = plan;
+            return plan;
+        }
+    }
+
+    /// <summary>Loads the file's descriptor set into the shim (once): it owns its own schema copy.</summary>
+    private unsafe IntPtr LoadSchema()
+    {
+        IntPtr schema;
+        var bytes = _descriptors();
+        fixed (byte* data = bytes)
+        {
+            Native.Check(Native.pbw_cs_shim_schema_load((IntPtr)data, (nuint)bytes.Length, out schema));
+        }
+        if (schema == IntPtr.Zero)
+        {
+            throw new PbwireException(-1, $"{Key}: descriptor set produced no schema");
+        }
+        return schema;
+    }
+
+    // The C row mirror: 12 eight-byte facts plus the child-name pointer (13
+    // words), and the NUL-terminated names themselves in a second block. Both
+    // stay alive until pbw_cs_shim_type_new has copied them.
+    private static unsafe (IntPtr Rows, IntPtr Names) MarshalRows(LayoutType type)
+    {
+        const int Word = 8;
+        const int RowBytes = 13 * Word;
+        var rows = Marshal.AllocHGlobal(Math.Max(type.Rows.Length, 1) * RowBytes);
+        var names = IntPtr.Zero;
+        var namesLen = 0;
+        foreach (var row in type.Rows)
+        {
+            namesLen += (row.Child?.Length ?? 0) + 1;
+        }
+        if (namesLen > 0)
+        {
+            names = Marshal.AllocHGlobal(namesLen + 1);
+        }
+        var nameAt = names;
+        var nameUsed = 0;
+        for (var i = 0; i < type.Rows.Length; i++)
+        {
+            var row = type.Rows[i];
+            var p = (byte*)rows + i * RowBytes;
+            *(ulong*)(p + 0) = row.Number;
+            *(ulong*)(p + 8) = (ulong)row.Kind;
+            *(ulong*)(p + 16) = row.Repeated ? 1UL : 0UL;
+            *(ulong*)(p + 24) = (ulong)row.Offset;
+            *(ulong*)(p + 32) = (ulong)row.Has;
+            *(ulong*)(p + 40) = (ulong)row.Count;
+            *(ulong*)(p + 48) = row.Type;
+            *(ulong*)(p + 56) = (ulong)row.Wire;
+            *(ulong*)(p + 64) = row.Packed ? 1UL : 0UL;
+            *(ulong*)(p + 72) = row.Required ? 1UL : 0UL;
+            *(ulong*)(p + 80) = row.Oneof ? 1UL : 0UL;
+            *(ulong*)(p + 88) = (ulong)row.Case;
+            *(IntPtr*)(p + 96) = IntPtr.Zero;
+            if (row.Child is { Length: > 0 } child)
+            {
+                var dst = nameAt + nameUsed;
+                var span = new Span<byte>((void*)dst, child.Length + 1);
+                System.Text.Encoding.UTF8.GetBytes(child, span);
+                span[child.Length] = 0;
+                *(IntPtr*)(p + 96) = dst;
+                nameUsed += child.Length + 1;
+            }
+        }
+        return (rows, names);
+    }
+
+    /// <summary>Releases the shim-side schema and every compiled reader.</summary>
+    public void Dispose()
+    {
+        lock (_lock)
+        {
+            _plans.Clear();
+            if (_schema != IntPtr.Zero)
+            {
+                Native.pbw_cs_shim_schema_free(_schema);
+                _schema = IntPtr.Zero;
+            }
+        }
+        GC.SuppressFinalize(this);
+    }
+
+    ~LayoutSource() => Dispose();
+}
+
+/// <summary>One compiled native reader: encode and decode are each one call.</summary>
+public sealed unsafe class LayoutPlan
+{
+    private readonly IntPtr _handle;
+
+    internal LayoutPlan(IntPtr handle, LayoutType type)
+    {
+        _handle = handle;
+        Type = type;
+    }
+
+    public LayoutType Type { get; }
+
+    /// <summary>The compiled reader for a generated layout, cached by its file's <see cref="LayoutSource"/>.</summary>
+    public static LayoutPlan Compile(LayoutSource source, LayoutType type) => source.Plan(type);
+
+    /// <summary>Flat image in, wire bytes out (one copy out of the reused C buffer).</summary>
+    public byte[] Encode(byte* image)
+    {
+        Native.Check(Native.pbw_cs_shim_encode(_handle, (IntPtr)image, out var data, out var len));
+        if ((ulong)len > int.MaxValue)
+        {
+            throw new PbwireException(-1, "pbwire: payload exceeds the span limit");
+        }
+        return new ReadOnlySpan<byte>((void*)data, (int)len).ToArray();
+    }
+
+    /// <summary>Wire bytes in, flat image out: strings/bytes/children point into <paramref name="arena"/>.</summary>
+    public void Decode(byte[] wire, byte* image, IntPtr arena, int arenaBytes)
+    {
+        int status;
+        fixed (byte* data = wire)
+        {
+            status = Native.pbw_cs_shim_decode(_handle, (IntPtr)data, (nuint)wire.Length, (IntPtr)image,
+                arena, (nuint)arenaBytes);
+        }
+        if (status == 2)
+        {
+            throw new PbwireException(status, "decode arena too small (raise ImageCall.Rent's decode bytes)");
+        }
+        Native.Check(status);
+    }
+}
+
+/// <summary>
+/// The unmanaged memory of one flat-image call: the image itself (zeroed on
+/// every rent), a bump arena for the strings/bytes/sub-images an encode image
+/// points at, and the block the C decoder bump-allocates from. Reused per
+/// thread, so a steady-state loop allocates nothing; dispose in a
+/// <c>finally</c>/<c>using</c> before reading a decoded image.
+/// </summary>
+public sealed unsafe class ImageCall : IDisposable
+{
+    [ThreadStatic] private static ImageCall? _cached;
+    private byte* _image;
+    private int _imageBytes;
+    private byte* _arena;
+    private int _arenaBytes;
+    private ImageArena? _bump;
+
+    private ImageCall()
+    {
+    }
+
+    /// <summary>Rents this thread's call block: the image plus a decode arena of at least <paramref name="decodeBytes"/>.</summary>
+    public static ImageCall Rent(int imageBytes, int decodeBytes = 0)
+    {
+        var call = _cached ?? new ImageCall();
+        _cached = null;
+        call.Grow(imageBytes, decodeBytes);
+        new Span<byte>(call._image, imageBytes).Clear();
+        call._bump!.Reset();
+        return call;
+    }
+
+    /// <summary>The flat image (at least the requested bytes, zeroed).</summary>
+    public byte* Image => _image;
+
+    /// <summary>Where a generated <c>WriteImage</c> copies strings, bytes and sub-images.</summary>
+    public ImageArena Arena => _bump!;
+
+    /// <summary>The block the C decoder bump-allocates from.</summary>
+    public IntPtr DecodeArena => (IntPtr)_arena;
+
+    public int DecodeArenaBytes => _arenaBytes;
+
+    private void Grow(int imageBytes, int decodeBytes)
+    {
+        if (_image == null || _imageBytes < imageBytes)
+        {
+            if (_image != null)
+            {
+                Marshal.FreeHGlobal((IntPtr)_image);
+            }
+            _imageBytes = Math.Max(imageBytes, 4096);
+            _image = (byte*)Marshal.AllocHGlobal(_imageBytes);
+        }
+        if (_arena == null || _arenaBytes < decodeBytes)
+        {
+            if (_arena != null)
+            {
+                Marshal.FreeHGlobal((IntPtr)_arena);
+            }
+            _arenaBytes = Math.Max(decodeBytes, 4096);
+            _arena = (byte*)Marshal.AllocHGlobal(_arenaBytes);
+        }
+        _bump ??= new ImageArena();
+    }
+
+    public void Dispose() => _cached = this;
+}
+
+/// <summary>
+/// A bump allocator over a chain of unmanaged blocks, rewound per call: the
+/// values an encode image borrows. A block that fills up is kept (never freed
+/// while a pointer may still point into it) and the next one is started, so a
+/// steady-state loop allocates nothing after the first pass at that size.
+/// </summary>
+public sealed unsafe class ImageArena
+{
+    private IntPtr[] _blocks = new IntPtr[4];
+    private int[] _caps = new int[4];
+    private int _count;
+    private int _index;
+    private int _used;
+
+    /// <summary>Rewinds to the first block; the blocks stay for the next call.</summary>
+    public void Reset()
+    {
+        _index = 0;
+        _used = 0;
+    }
+
+    /// <summary>8-byte aligned, at least <paramref name="size"/> bytes; storage is not zeroed.</summary>
+    public byte* Alloc(int size)
+    {
+        var need = (size + 7) & ~7;
+        while (true)
+        {
+            if (_index < _count)
+            {
+                if (_used + need <= _caps[_index])
+                {
+                    var at = (byte*)_blocks[_index] + _used;
+                    _used += need;
+                    return at;
+                }
+                _index++;
+                _used = 0;
+                continue;
+            }
+            var fresh = Math.Max(need, 65536);
+            if (_count == _blocks.Length)
+            {
+                Array.Resize(ref _blocks, _count * 2);
+                Array.Resize(ref _caps, _count * 2);
+            }
+            _blocks[_count] = Marshal.AllocHGlobal(fresh);
+            _caps[_count] = fresh;
+            _count++;
+        }
+    }
+
+    /// <summary>Copies bytes (NUL-guarded); zero bytes still get a non-NULL pointer.</summary>
+    public IntPtr Copy(ReadOnlySpan<byte> bytes)
+    {
+        var at = Alloc(bytes.Length + 1);
+        bytes.CopyTo(new Span<byte>(at, bytes.Length));
+        at[bytes.Length] = 0;
+        return (IntPtr)at;
+    }
+
+    /// <summary>A NUL-terminated UTF-8 copy, or NULL for an absent value.</summary>
+    public IntPtr Utf8(string? text)
+    {
+        if (string.IsNullOrEmpty(text))
+        {
+            return IntPtr.Zero;
+        }
+        var n = System.Text.Encoding.UTF8.GetByteCount(text);
+        var at = Alloc(n + 1);
+        System.Text.Encoding.UTF8.GetBytes(text, new Span<byte>(at, n));
+        at[n] = 0;
+        return (IntPtr)at;
+    }
+
+    /// <summary>Zeroes a range (a fresh sub-image before its owner writes it).</summary>
+    public static void Clear(byte* at, int size) => new Span<byte>(at, size).Clear();
 }

@@ -1140,6 +1140,29 @@ the model's shipped converter) would both cross per field, and the ledger rule
 table walk adds managed reads on top of the same crossings. Byte equality holds
 in both (the C core writes the bytes), so no round could show a win.
 
+## Provisional: C# native flat-image reader (plan 05b, supersedes the plan 05 rejection)
+
+The plan 05 entry above ("C# native-object arm") measured a managed walk with
+one `P/Invoke` per present field; that is not the pinned-layout mechanism, so
+its verdict is **superseded** by this row, not deleted. What is measured now:
+`bindings/csharp/native/pbw_cs_shim.c` (compiled by `make csharp-shim-native`
+with `bindings/c/runtime/pbw_struct.c` and the core) exposes one encode and one
+decode entry; the managed side writes the native object into a contiguous
+unmanaged image once per op (`WriteImage`: scalars at their emitted offsets,
+strings/bytes/sub-images into a per-thread bump arena) and crosses once.
+
+Provisional `pbench/gate compare` (2026-11-21, median of five, xlarge tier):
+`shim` encode 686.8 MB/s (1.66x protobuf-csharp 414.5), decode 348.6 MB/s
+(0.73x of 474.6). Small tier 402.5 / 347.9 against 132.6 / 147.1. The two
+decode cells at 2469 B and 74913 B are below the baseline because
+`ReadImage` materialises every repeated element into managed objects after the
+C call; that is the native object's construction cost, which the `tree` row
+(prebuilt handle, no materialisation) does not pay.
+
+Ledger rule: the superseded rejection said "the pinned layout does not pay on
+.NET". With the real reader it pays on 10 of 12 encode/decode cells; the two
+that do not are a materialisation cost, not a boundary cost.
+
 ## Provisional: Rust shim arm (plan 08)
 
 The flat-layout shim is the generated `#[repr(C)]` mirror plus one call into

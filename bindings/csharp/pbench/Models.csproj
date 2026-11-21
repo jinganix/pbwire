@@ -11,6 +11,7 @@ Structtest) can stay in a different one. -->
     <AssemblyName>Pbwire.Matrix3</AssemblyName>
     <RootNamespace>Pbwire.Matrix3</RootNamespace>
     <InvariantGlobalization>true</InvariantGlobalization>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
   </PropertyGroup>
 

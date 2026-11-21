@@ -106,20 +106,86 @@ namespace Xfile {
             }
             Note = msg.GetString("note") ?? "";
         }
+        /// <summary>Bytes of one flat image: the native object's pinned representation.</summary>
+        public const int ImageBytes = 32;
+        /// <summary>Copies this native object into a zeroed flat image; strings, bytes and sub-images come from <paramref name="arena"/>.</summary>
+        public unsafe void WriteImage(byte* img, global::Pbwire.ImageArena arena) {
+            *(IntPtr*)(img + 0) = Single == null ? IntPtr.Zero : (IntPtr)Single.NewImage(arena);
+            {
+                var n = Many.Count;
+                if (n != 0) {
+                    var p = (byte*)arena.Alloc(n * Xdep.DepMsg.ImageBytes);
+                    for (var i = 0; i < n; i++) {
+                        Many[i].WriteImage(p + i * Xdep.DepMsg.ImageBytes, arena);
+                    }
+                    *(IntPtr*)(img + 8) = (IntPtr)p;
+                }
+                *(nuint*)(img + 24) = (nuint)n;
+            }
+            *(IntPtr*)(img + 16) = Note.Length == 0 ? IntPtr.Zero : arena.Utf8(Note);
+        }
+
+        /// <summary>Allocates a zeroed sub-image from the call arena and fills it.</summary>
+        public unsafe byte* NewImage(global::Pbwire.ImageArena arena) {
+            var p = (byte*)arena.Alloc(ImageBytes);
+            global::Pbwire.ImageArena.Clear(p, ImageBytes);
+            WriteImage(p, arena);
+            return p;
+            }
+
+        /// <summary>Copies a decoded flat image into this native object; the image's pointers must still be alive.</summary>
+        public unsafe void ReadImage(byte* img) {
+            {
+                var p = *(byte**)(img + 0);
+                if (p != null) { var c = new Xdep.DepMsg(); c.ReadImage(p); Single = c; }
+            }
+            Many.Clear();
+            var nMany = (int)(*(nuint*)(img + 24));
+            if (nMany != 0) {
+                var p = *(byte**)(img + 8);
+                for (var i = 0; i < nMany; i++) { var c = new Xdep.DepMsg(); c.ReadImage(p + i * Xdep.DepMsg.ImageBytes); Many.Add(c); }
+            }
+            {
+                var p = *(IntPtr*)(img + 16);
+                Note = p == IntPtr.Zero ? "" : (global::System.Runtime.InteropServices.Marshal.PtrToStringUTF8(p) ?? "");
+            }
+            GC.KeepAlive(this);
+        }
+
         /// <summary>Flat slot layout: scalar offsets, pointer slots for the reference-typed fields, one presence bit per proto3 optional. Read by the native-object entry, gated by Pbwire.Layout.Verify.</summary>
         public static class UsesDepLayout {
             /// <summary>The message type the table describes.</summary>
             public static readonly global::Pbwire.MessageType Type = PbwireFile_Xfile.Schema.Message("xfile.UsesDep");
             /// <summary>One row per field, in slot order.</summary>
-            public static readonly global::Pbwire.Layout Table = new global::Pbwire.Layout("xfile.UsesDep", 24, 0)
+            public static readonly global::Pbwire.Layout Table = new global::Pbwire.Layout("xfile.UsesDep", 32, 0)
                 .Ref("single", 0, 8)
                 .Ref("many", 8, 8)
                 .Ref("note", 16, 8);
-            /// <summary>One call per op: native object in, wire bytes out.</summary>
-            /// <remarks>The tree is allocated once per op and the model's shipped converter crosses once per present field: the C core has no offset reader, so the table documents the flat layout instead of driving it.</remarks>
-            public static byte[] Marshal(UsesDep native) => global::Pbwire.Run.Encode(native, Type);
-            /// <summary>One call per op: wire bytes in, native object out.</summary>
-            public static UsesDep Unmarshal(byte[] wire) => global::Pbwire.Run.Decode<UsesDep>(wire, Type);
+            /// <summary>One row per field, with the presence/count/oneof words and wire facts the C layout codec reads.</summary>
+            public static readonly global::Pbwire.LayoutRow[] Rows = {
+                new(1, global::Pbwire.FlatKind.Message, 0, 11, Wire: 2, Child: "xdep.DepMsg"),
+                new(2, global::Pbwire.FlatKind.Message, 8, 11, Wire: 2, Repeated: true, Count: 24, Child: "xdep.DepMsg"),
+                new(3, global::Pbwire.FlatKind.String, 16, 9, Wire: 2),
+            };
+            /// <summary>This message's image, as the file's layout source sees it.</summary>
+            public static readonly global::Pbwire.LayoutType Spec = new("xfile.UsesDep", ImageBytes, Rows);
+            private static global::Pbwire.LayoutPlan Plan => global::Pbwire.LayoutPlan.Compile(PbwireFile_Xfile.Layouts, Spec);
+            /// <summary>One call per op: native object in, wire bytes out (one native call over the flat image).</summary>
+            public static unsafe byte[] Marshal(UsesDep native)
+            {
+                using var call = global::Pbwire.ImageCall.Rent(ImageBytes);
+                native.WriteImage(call.Image, call.Arena);
+                return Plan.Encode(call.Image);
+            }
+            /// <summary>One call per op: wire bytes in, native object out. The block carries the decoded image's strings, bytes and sub-images.</summary>
+            public static unsafe UsesDep Unmarshal(byte[] wire)
+            {
+                using var call = global::Pbwire.ImageCall.Rent(ImageBytes, wire.Length * 4 + 65536);
+                Plan.Decode(wire, call.Image, call.DecodeArena, call.DecodeArenaBytes);
+                var native = new UsesDep();
+                native.ReadImage(call.Image);
+                return native;
+            }
         }
 
     }

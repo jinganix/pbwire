@@ -698,6 +698,11 @@ php-ext-test: php-ext shared
 dart-shim-native:
 	./bindings/dart/build.sh
 
+# The C# shim arm's native reader (bindings/csharp/native/pbw_cs_shim.c): one
+# flat image in, one call per op, same codec and core as the C binding.
+csharp-shim-native:
+	./bindings/csharp/native/build.sh
+
 dart-test: shared dart-shim-native
 	cd bindings/dart && $(DART) pub get >/dev/null
 	cd bindings/dart && $(DART) run tests/selftest.dart ../c/tests/data/matrix3.desc
@@ -718,8 +723,13 @@ conformance-dart: $(CONFORMANCE_DESC) dart-shim-native
 rust-test: shared
 	cd bindings/rust && cargo test
 
-csharp-test: shared
+csharp-test: shared csharp-shim-native
 	cd bindings/csharp && $(DOTNET) run --project tests -- ../c/tests/data/matrix3.desc
+
+# pbench: the gate (byte parity + field compare across the arms) and the
+# interleaved provisional table, over the C-side layout reader.
+csharp-pbench: shared csharp-shim-native
+	cd bindings/csharp/pbench/gate && $(DOTNET) run -c Release -- compare
 
 SWIFT ?= swift
 SCALAC ?= scalac
@@ -817,7 +827,7 @@ dart-pbench:
 rust-bench:
 	./scripts/bench-run.sh --binding rust -- ./bindings/rust/benchmarks/bench.sh
 
-csharp-bench:
+csharp-bench: csharp-shim-native
 	./scripts/bench-run.sh --binding csharp -- ./bindings/csharp/benchmarks/bench.sh
 
 swift-bench:
@@ -902,8 +912,9 @@ clean:
 	conformance-ruby conformance-java conformance-lua conformance-r conformance-node ruby-bind java-test ruby-test node-test objc-test r-bind \
 	lua-bind lua-test lua-bench \
 	java-bench ruby-bench node-bench objc-bench go-bench pbench-java \
-	kotlin-test php-test dart-test rust-test csharp-test \
+	kotlin-test php-test dart-test rust-test csharp-test csharp-pbench \
 	kotlin-bench php-bench dart-bench rust-bench csharp-bench \
+	csharp-shim-native dart-shim-native \
 	swift-test scala-test elixir-test zig-test fsharp-test clojure-test julia-test julia-shim-native r-test \
 	swift-bench scala-bench elixir-bench zig-bench fsharp-bench clojure-bench julia-bench r-bench \
 	desc-fixture test-cpp clean plugin-c go-test \
