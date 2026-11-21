@@ -237,9 +237,69 @@ def run():
     return status
 
 
+def load_core(path):
+    """Imports one pure-core module by file path (the A/B switch)."""
+    import importlib.util
+
+    name = "pbwire_py_core_" + os.path.basename(os.path.dirname(path))
+    spec = importlib.util.spec_from_file_location(name, path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def ab(argv):
+    """A/B probe for the pure core: two module paths, interleaved rounds.
+
+        bench.py ab bindings/python/pbench/core.py /tmp/core-v1.py
+
+    Both modules must expose NAME, marshal(dict), unmarshal(wire) and a TYPE
+    with encode/decode. Every round times both sides back to back, so a
+    drifting machine hits them equally; a candidate is only kept when it wins
+    in every round. Bytes must stay identical.
+    """
+    if len(argv) < 3:
+        print("usage: ab <base.py> <cand.py> [rounds]")
+        return 2
+    base = load_core(argv[1])
+    cand = load_core(argv[2])
+    rounds = int(argv[3]) if len(argv) > 3 else 3
+    tiers = TIERS[-2:]
+    status = 0
+    for label, repeats, want in tiers:
+        values = scalars3(repeats)
+        wire = base.marshal(values)
+        if len(wire) != want or cand.marshal(values) != wire:
+            print("FAIL %s: base and candidate bytes differ" % label)
+            return 1
+        base_message = base.TYPE.decode(wire)
+        cand_message = cand.TYPE.decode(wire)
+        ops = [
+            ("encode(data)", lambda m: m.marshal(values)),
+            ("to_dict(bytes)", lambda m: m.unmarshal(wire)),
+            ("encode(parsed)", lambda m: m.TYPE.encode(m is base and base_message or cand_message)),
+        ]
+        print("\n%s: %d bytes, %d interleaved rounds" % (label, len(wire), rounds))
+        print("  %-20s %-16s %10s %10s" % ("impl", "op", "ns/op", "MB/s"))
+        for op, fn in ops:
+            best = {base.NAME: float("inf"), cand.NAME: float("inf")}
+            for _ in range(rounds):
+                for module in (base, cand):
+                    ns = time_it(lambda: fn(module))[0]
+                    best[module.NAME] = min(best[module.NAME], ns)
+            for module in (base, cand):
+                ns = best[module.NAME]
+                print("  %-20s %-16s %10.1f %10.1f" % (module.NAME, op, ns, len(wire) / ns * 1e3))
+            ratio = best[base.NAME] / best[cand.NAME]
+            print("  %-20s %-16s %10s %.3fx" % ("", "candidate", "", ratio))
+    return status
+
+
 def main(argv):
+    if len(argv) >= 2 and argv[1] == "ab":
+        return ab(argv[1:])
     if len(argv) < 2 or argv[1] != "bench":
-        print("usage: %s bench" % argv[0])
+        print("usage: %s bench | ab <base.py> <cand.py> [rounds]" % argv[0])
         return 2
     return run()
 

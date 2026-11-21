@@ -1588,3 +1588,48 @@ calibrated passes): protobuf's pure-Python parser 6.2 MB/s decode and 15.0 MB/s
 serialize-from-parsed. The port is at 6.8 MB/s decode (1.10x) and 10.5 MB/s
 `encode(dict)` -- which builds the tree first -- so the port is in the same
 class as the official pure-Python runtime, not 100x behind it.
+
+Formal rows: `make python-bench` 2026-11-21
+(`results/bench-python-20261121T010913Z.json`, not committed), MB/s per tier:
+
+| tier | core encode(data) | core to_dict(bytes) | core encode(parsed) |
+|---|---|---|---|
+| 136 B | 8.8 | 6.9 | 12.2 |
+| 174 B | 8.8 | 6.7 | 13.0 |
+| 2469 B | 10.1 | 6.8 | 18.8 |
+| 74913 B | 10.3 | 6.7 | 19.3 |
+
+upb in the same run: 82.4 / 39.3 / 1477.6 encode(data) / to_dict / encode(parsed)
+at 74913 B, and the extension's handle path 577.1 / 156.9 / 91672.9. Every core
+cell is below its baseline, which is the expected shape for an interpreter-only
+codec; the ratio that matters is against the pure-Python runtime above.
+
+### Round 1: inline the decode dispatch -- neutral, reverted
+
+Probe: `python3 bindings/python/benchmarks/bench.py ab <base.py> <cand.py> 3`
+(two module paths, interleaved rounds, best-of-pass ns/op per label; the new
+A/B mode). Candidate: inline `slot_of`, `wt_incompatible` and `is_packable`
+into the decode loop (the three hottest helper calls, ~8% of decode's tottime in
+cProfile). Bytes identical.
+
+| cell | base | candidate | ratio |
+|---|---|---|---|
+| 2469 B to_dict | 360672 ns | 335901 ns | 1.074x |
+| 74913 B to_dict | 11691790 ns | 11590926 ns | 1.009x |
+| 74913 B encode(data) | 7143315 ns | 7224004 ns | 0.989x |
+| 74913 B encode(parsed) | 4109406 ns | 4133122 ns | 0.994x |
+
+The win does not repeat on the published xlarge cell, and the encode rows --
+which touch none of the changed code -- moved by ~1%, which is the probe's
+noise. Recorded neutral and reverted, per the rule above.
+
+Decision (Stage 6): no further rounds. The below-baseline cells are not a
+dispatch problem; 74913 B decode spends its time materializing 3000 messages,
+9000 strings/ints/bools and 3000 dicts (cProfile: `read_known` 23%, `to_object`
+19%, `to_py`/`materialize` 12%), and the same is true of encode (`from_object`
+plus the tree walk). Closing the gap means a different representation -- a
+columnar/arena tree or a generated fast path that skips the intermediate
+Python objects -- which is a rewrite of the tree and both codecs, not a
+one-change A/B round, and it would put the arm at odds with the pbench contract
+(a native object in and out). The arm is published as the no-extension path
+with its numbers, exactly as the TypeScript and C# cores are.
