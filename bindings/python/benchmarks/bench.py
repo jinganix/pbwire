@@ -5,19 +5,36 @@ scalar kind, string, enum, nested message, three repeated kinds, proto3
 optional) and the four standard tiers from BENCHMARKS.md: the repeated fields
 scale x0 / x1 / x100 / x3000.
 
-The rows compare the same user-visible task, not the same internal call:
+The rows compare the same user-visible task, not the same internal call.
+Four pbwire rows, named by the mechanism they time. The first three time
+the same native-in/native-out task; the fourth is the prebuilt handle:
+
+    pbwire-py-tree   a native dict in and out through the shipped per-field
+                     API: encode(dict); decode, then read every field back
+                     with one get() per field into a fresh dict (the pbench
+                     tree arm). No prebuilt handle before the timer.
+    pbwire-py-shim   the same dict in and out in one downcall per op: the C
+                     extension walks the dict (encode) and the tree
+                     (decode().to_dict()).
+    pbwire-py-core   the pure-Python core (bindings/python/pure/, no CPython
+                     extension), timed on the same task (see below).
+    pbwire-py-proxy  encode/decode of a Message handle built (and read)
+                     before the timer: the codec's own cost once the tree
+                     exists. "The data is already in pbwire." Published,
+                     never the headline.
 
     encode(data)    Python values -> wire bytes
-                    pbwire: encode(dict)
+                    tree/shim: encode(dict)
                     upb:    populate a message from the dict, then serialize
-    decode(bytes)   wire bytes -> in-memory message (fields read on demand)
-                    pbwire: decode(bytes)
-                    upb:    Scalars3.FromString(bytes)
     to_dict(bytes)  wire bytes -> plain Python data
-                    pbwire: decode(bytes).to_dict()
+                    tree: decode(bytes), then one get() per field
+                    shim: decode(bytes).to_dict()
                     upb:    FromString, then read every field into dicts/lists
+    decode(bytes)   wire bytes -> in-memory message (fields read on demand)
+                    proxy: decode(bytes), no materialization
+                    upb:    Scalars3.FromString(bytes)
     encode(parsed)  in-memory message -> wire bytes
-                    pbwire: encode(message)   (a parsed message keeps its bytes)
+                    proxy: encode(message)   (a parsed message keeps its bytes)
                     upb:    message.SerializeToString()
 
 `to_dict(bytes)` deliberately does not use `json_format.MessageToDict`: that
@@ -57,6 +74,7 @@ import matrix3_pb2
 
 sys.path.insert(0, os.path.join(HERE, "..", "pbench"))   # the pure core arm
 import core as pure_core  # noqa: E402
+import tree as tree_arm  # noqa: E402
 
 TIERS = (("small", 0, 136), ("medium", 1, 174), ("large", 100, 2469), ("xlarge", 3000, 74913))
 DESC = "bindings/c/tests/data/matrix3.desc"
@@ -181,11 +199,20 @@ def run():
         if len(reference) != want:
             return fail("official encoder wrote %d bytes, expected %d" % (len(reference), want), label)
         if scalars.encode(values) != reference:
-            return fail("pbwire-py bytes differ from protobuf", label)
+            return fail("pbwire-py-shim bytes differ from protobuf", label)
         if scalars.decode(reference).to_dict() != want_dict:
-            return fail("pbwire-py to_dict differs", label)
+            return fail("pbwire-py-shim to_dict differs", label)
         if scalars.encode(scalars.decode(reference)) != reference:
-            return fail("pbwire-py Message round trip differs", label)
+            return fail("pbwire-py-proxy Message round trip differs", label)
+        # The tree arm is gated before it is timed: same bytes through the
+        # per-field full task, same fields back, byte-exact round trip of
+        # the materialized dict.
+        if tree_arm.marshal(values) != reference:
+            return fail("pbwire-py-tree bytes differ from protobuf", label)
+        if tree_arm.unmarshal(reference) != want_dict:
+            return fail("pbwire-py-tree field compare differs", label)
+        if scalars.encode(tree_arm.unmarshal(reference)) != reference:
+            return fail("pbwire-py-tree full-task round trip differs", label)
         if protobuf_data(matrix3_pb2.Scalars3.FromString(reference)) != want_dict:
             return fail("protobuf data differs", label)
 
@@ -203,15 +230,19 @@ def run():
         pb_message = matrix3_pb2.Scalars3.FromString(reference)
 
         rows = [
-            ("pbwire-py", "encode(data)",
+            ("pbwire-py-tree", "encode(data)",
+             time_it(lambda: tree_arm.marshal(values))[0]),
+            ("pbwire-py-shim", "encode(data)",
              time_it(lambda: scalars.encode(values))[0]),
             (base_label, "encode(data)",
              time_it(lambda: protobuf_of(values).SerializeToString())[0]),
-            ("pbwire-py", "decode(bytes)",
+            ("pbwire-py-proxy", "decode(bytes)",
              time_it(lambda: scalars.decode(reference))[0]),
             (base_label, "decode(bytes)",
              time_it(lambda: matrix3_pb2.Scalars3.FromString(reference))[0]),
-            ("pbwire-py", "to_dict(bytes)",
+            ("pbwire-py-tree", "to_dict(bytes)",
+             time_it(lambda: tree_arm.unmarshal(reference))[0]),
+            ("pbwire-py-shim", "to_dict(bytes)",
              time_it(lambda: scalars.decode(reference).to_dict())[0]),
             (pure_core.NAME, "encode(data)",
              time_it(lambda: pure_core.marshal(values))[0]),
@@ -222,7 +253,7 @@ def run():
             (base_label, "to_dict(bytes)",
              time_it(lambda: protobuf_data(
                  matrix3_pb2.Scalars3.FromString(reference)))[0]),
-            ("pbwire-py", "encode(parsed)",
+            ("pbwire-py-proxy", "encode(parsed)",
              time_it(lambda: scalars.encode(message))[0]),
             (base_label, "encode(parsed)",
              time_it(lambda: pb_message.SerializeToString())[0]),
