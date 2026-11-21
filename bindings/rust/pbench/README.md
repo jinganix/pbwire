@@ -8,7 +8,8 @@ and wire bytes out; wire bytes in and a fully readable native object out.
 
 | arm | file | mechanism | what it answers |
 |---|---|---|---|
-| `tree` | `benchmarks/src/main.rs` | the shipped handle: `schema.message(name)`, one `set_*` per field, `encode_to()` into a reused buffer; `decode()` then one `get_*` per field | what the per-field native call costs once the tree exists |
+| `tree` | `benchmarks/src/main.rs` | the shipped handle as an application uses it: a fresh `schema.message(name)` per encode (one `set_*` per field), `encode_to()` into a reused buffer, drop; `decode()`, one `get_*` per field into a sink, drop | what the per-field native round trip costs |
+| `proxy` | `benchmarks/src/main.rs` | the prebuilt task: a held handle's `encode_to`, one-shot `decode`-and-drop with no materialization (relabelled, not re-measured) | what a held tree costs, never the headline |
 | `shim` | `benchmarks/src/main.rs` | the generated `<Message>Flat` (`#[repr(C)]`) is the native object; `FlatType::encode_in_place` / `decode_in_place` cross once into `bindings/c/runtime/pbw_struct.c`, which walks that memory in place through `pbw_struct_codec_*` | is a boundary worth paying for at all |
 | `core` | `pbench/core_arm.rs` | the pure-Rust port of the C core behind the `core` cargo feature (`src/core/`): one `Message` tree in and wire bytes out, wire bytes in and the same tree out | can the host language replace the C core for this binding |
 
@@ -96,20 +97,29 @@ walks the wire. MB/s over wire bytes, 2026-11-21:
 ## Verdict
 
 **Keep the shipped `tree` runtime and publish the flat-image `shim` row as the
-native-object candidate; encode splits by payload size, decode does not.** One
-call per op removes the per-field crossing: shim decode is above prost at every
-tier (1.38x at 136 B, 1.90x at 74 KB) and shim encode is above prost at 136 B
-(1.10x), level at 174 B (1.01x), and below it at 2469 B (0.80x) and 74913 B
-(0.84x). The encode loss is the shared C struct codec's repeated-element path,
-not the Rust arm: `make bench-c` measures the same codec at 1132.2 MB/s on
-74913 B, while the tree row's `encode_to` reaches 1600.9 MB/s there, and prost's
-generated writer is straight-line code with no per-element reserve.
+native-object candidate; shim encode splits by payload size, decode does not.** One
+call per op removes the per-field crossing: shim decode is above prost at every tier
+(1.38x at 136 B, 2.01x at 74 KB) and shim encode is above prost at 136 B
+(1.11x), level at 174 B (1.05x), and below it at 2469 B (0.87x) and 74913 B
+(0.88x), formal run `results/bench-rust-20261121T184711Z.json`. The encode loss is
+the shared C struct codec's repeated-element path, not the Rust arm: `make bench-c`
+measures the same codec at 1132.2 MB/s on 74913 B, while the proxy row's `encode_to`
+reaches 1764.4 MB/s there, and prost's generated writer is straight-line code with
+no per-element reserve.
 
-It is not "replace the shipped fast path": `pbwire-rust-tree` times a *prebuilt*
-handle's `encode_to`, which beats prost on every encode tier (1.20x/1.11x/
-1.23x/1.17x on the recorded run) and stays the shipping runtime for
-applications that
-already hold a tree. It is not "a boundary feature is missing": the boundary is
+The `tree` row now times the Go-parity full task, so its encode is the per-field
+build price, not the prebuilt price: 0.06x-0.09x of prost on every tier (the old
+prebuilt number lives on the `proxy` row, 13.2x-22.2x above the tree on encode, never
+the headline). Tree decode stays the application path and the headline: 0.82x of
+prost at 136 B, then 1.04x / 1.89x / 1.99x at 174 / 2469 / 74913 B. Below-baseline
+native cells are flagged for the optimization pass: tree encode on every tier, tree
+decode at 136 B, shim encode at 2469 B and above, core everywhere against prost;
+no optimization here.
+
+The old prebuilt number now lives on the `proxy` row, published beside the
+native rows and never the headline: a held handle's `encode_to` still beats
+prost on every encode tier, but no application pays only that, so it does not
+decide the default path. It is not "a boundary feature is missing": the boundary is
 a single call in both directions, and the shim's decode is faster than the tree
 decode at every tier; only the struct codec's encode path is behind, and that is
 a C runtime question shared by every layout binding, not a missing Rust entry
@@ -177,3 +187,42 @@ Against prost that is 0.64x / 0.64x / 0.70x / 0.68x on encode and 0.47x / 0.57x
 on encode and 0.56x / 0.61x / 0.64x / 0.59x on decode. The tree arm (the
 shipped static link) stays ahead of it everywhere: 1.79x / 1.66x / 1.88x / 1.86x
 on encode and 2.50x / 2.64x / 2.82x / 3.14x on decode.
+
+## Go-parity re-time (Task 6)
+
+`make rust-bench` records `results/bench-rust-<stamp>.{log,json}`; the run below
+is `results/bench-rust-20261121T184711Z.json` (same machine class, sha
+recorded in the JSON). The `tree` rows now time the full task: a fresh native
+`Message` per iteration (one `set_*` per field, the same field list the gate
+checks), `encode_to` into the reused buffer, drop; `decode`, one `get_*` per
+field into a sink, drop. Allocation and free (Rust `drop`, which frees the
+root message) both sit inside the timer; the encode buffer stays reused exactly
+as the bench header always said. The `proxy` rows are the old prebuilt shape
+relabelled, not re-measured as a new task. `shim`/`core` timer bodies are
+unchanged (the app-owned flat image / core message is the steady-state hot
+loop, like the reused encode buffers); their numbers below come from the same
+binary run.
+
+xlarge ns/op (74913 B) plus THROUGHPUT ratios (pbwire MB/s over baseline MB/s,
+higher is faster, `✅>=1.0x`):
+
+| arm | encode ns/op | vs prost enc | vs rust-protobuf enc | decode ns/op | vs prost dec | vs rust-protobuf dec |
+|---|---|---|---|---|---|---|
+| tree (full task) | 944227.0 | 0.06x | 0.09x | 99447.5 | 1.99x | 1.93x |
+| shim (one downcall) | 62835.6 | 0.88x | 1.36x | 98258.1 | 2.01x | 1.95x |
+| core (pure Rust) | 78749.6 | 0.70x | 1.08x | 311998.7 | 0.63x | 0.62x |
+| proxy (prebuilt) | 42456.5 | 1.31x | 2.01x | 100066.6 | 1.98x | 1.92x |
+
+Proxy/tree gap at xlarge: 22.2x encode, 0.99x decode (decode is dominated by
+the C decode itself, so the per-field consume adds almost nothing there). Tree
+vs prost across tiers: encode 0.09x / 0.09x / 0.06x / 0.06x, decode 0.82x /
+1.04x / 1.89x / 1.99x; shim vs prost: encode 1.11x / 1.05x / 0.87x / 0.88x,
+decode 1.38x / 1.70x / 1.93x / 2.01x.
+
+Verdict: the shipped default stays the static link to the C core with the
+`tree` handle API (the only dynamic path; its decode is the headline
+application number and beats both baselines above 136 B). The `Flat` shim is
+recommended for one-shot native traffic (fastest native-in/native-out on 6 of
+8 cells against prost, best decode everywhere). `core` stays the no-C-toolchain
+mode, published never headlined. `proxy` is published with the held-tree price,
+never the headline.
