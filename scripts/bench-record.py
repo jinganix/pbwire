@@ -268,6 +268,8 @@ threads: 1 vs 8 (14 cores), 500 iterations per thread, something
         "small: 136 bytes (repeat field x0)\n"
         "  pbwire-go        encode         282.5      481.4        3       1234\n"
         "  protobuf-go      encode         344.9      394.3        1         48\n"
+        "# spread small encode pbwire-go 280.1-285.0\n"
+        "# spread small encode protobuf-go 340.2-349.9\n"
     )
     assert len(goa) == 1 and len(goa[0]["rows"]) == 2, goa
     assert goa[0]["rows"][0] == {

@@ -31,6 +31,7 @@ import (
 	"math"
 	"os"
 	"runtime"
+	"sort"
 	"sync"
 	"testing"
 	"time"
@@ -55,7 +56,8 @@ var tiers = []tier{
 }
 
 const minPassSeconds = 0.25
-const passes = 3
+const serialPasses = 7
+const parPasses = 3
 
 func i32p(v int32) *int32   { return &v }
 func strp(v string) *string { return &v }
@@ -104,9 +106,9 @@ func fillOfficial(n int) *matrix3pb.Scalars3 {
 	return m
 }
 
-// checkStruct compares every field of a pbwire decode against the protobuf-go
-// decode of the same bytes: the Go core path is correct only if nothing was
-// dropped on the way back into Go.
+// checkStruct compares every known field of a pbwire decode against the protobuf-go
+// decode of the same bytes: the Go core path is correct only if no known field
+// was dropped on the way back into Go (unknowns now ride the unknownFields buffer).
 func checkStruct(label string, got *matrix3.Scalars3, want *matrix3pb.Scalars3) error {
 	bad := func(what string) error {
 		return fmt.Errorf("%s: struct decode lost %s", label, what)
@@ -228,7 +230,16 @@ func run(count int, op func()) float64 {
 // message (sharing one message across Marshal goroutines leans on
 // undocumented cache behavior); decode builds a fresh message per op, encode
 // only reads prebuilt structs and discards the output (no shared sink).
-func measureParallel(count int, op func(g int)) float64 {
+func measureParallel(count int, op func(g int)) (med, lo, hi float64) {
+	ns := make([]float64, 0, parPasses)
+	for p := 0; p < parPasses; p++ {
+		ns = append(ns, runParallel(count, op))
+	}
+	sort.Float64s(ns)
+	return ns[parPasses/2], ns[0], ns[parPasses-1]
+}
+
+func runParallel(count int, op func(g int)) float64 {
 	n := runtime.GOMAXPROCS(0)
 	if n < 1 {
 		n = 1
@@ -271,17 +282,19 @@ func calibrate(op func(), floor int) int {
 	}
 }
 
-func measure(floor int, op func()) float64 {
+// measure runs an op over serialPasses calibrated rounds and reports the
+// median ns/op; lo and hi are the extremes, printed as the tier's spread
+// line so a loaded box shows its noise instead of hiding it behind a best.
+func measure(floor int, op func()) (med, lo, hi float64) {
 	runtime.GC() // a row inherits no heap growth from the row before it
 	count := calibrate(op, floor)
 	run(count, op) // warm-up
-	best := float64(1e100)
-	for p := 0; p < passes; p++ {
-		if ns := run(count, op); ns < best {
-			best = ns
-		}
+	ns := make([]float64, 0, serialPasses)
+	for p := 0; p < serialPasses; p++ {
+		ns = append(ns, run(count, op))
 	}
-	return best
+	sort.Float64s(ns)
+	return ns[serialPasses/2], ns[0], ns[serialPasses-1]
 }
 
 func row(impl, op string, size int, ns float64, allocs float64, bop float64) {
@@ -321,17 +334,17 @@ func TestMatrix3Bench(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		structEncode := measure(1, func() {
+		structEncode, structEncodeLo, structEncodeHi := measure(1, func() {
 			sinkBytes, _ = structMsg.Marshal()
 		})
-		officialEncode := measure(tr.floor, func() {
+		officialEncode, officialEncodeLo, officialEncodeHi := measure(tr.floor, func() {
 			sinkBytes, _ = proto.Marshal(official)
 		})
-		structDecode := measure(1, func() {
+		structDecode, structDecodeLo, structDecodeHi := measure(1, func() {
 			m := new(matrix3.Scalars3)
 			_ = m.Unmarshal(reference)
 		})
-		officialDecode := measure(tr.floor, func() {
+		officialDecode, officialDecodeLo, officialDecodeHi := measure(tr.floor, func() {
 			var m matrix3pb.Scalars3
 			_ = proto.Unmarshal(reference, &m)
 		})
@@ -356,24 +369,24 @@ func TestMatrix3Bench(t *testing.T) {
 		for i := range officials {
 			officials[i] = fillOfficial(tr.n)
 		}
-		structEncodePar := measureParallel(calibrate(func() {
+		structEncodePar, structEncodeParLo, structEncodeParHi := measureParallel(calibrate(func() {
 			_, _ = structMsg.Marshal()
 		}, 1), func(_ int) {
 			_, _ = structMsg.Marshal()
 		})
-		officialEncodePar := measureParallel(calibrate(func() {
+		officialEncodePar, officialEncodeParLo, officialEncodeParHi := measureParallel(calibrate(func() {
 			_, _ = proto.Marshal(officials[0])
 		}, tr.floor), func(g int) {
 			_, _ = proto.Marshal(officials[g%len(officials)])
 		})
-		structDecodePar := measureParallel(calibrate(func() {
+		structDecodePar, structDecodeParLo, structDecodeParHi := measureParallel(calibrate(func() {
 			m := new(matrix3.Scalars3)
 			_ = m.Unmarshal(reference)
 		}, 1), func(_ int) {
 			m := new(matrix3.Scalars3)
 			_ = m.Unmarshal(reference)
 		})
-		officialDecodePar := measureParallel(calibrate(func() {
+		officialDecodePar, officialDecodeParLo, officialDecodeParHi := measureParallel(calibrate(func() {
 			var m matrix3pb.Scalars3
 			_ = proto.Unmarshal(reference, &m)
 		}, tr.floor), func(_ int) {
@@ -405,6 +418,17 @@ func TestMatrix3Bench(t *testing.T) {
 		row("protobuf-go", "encode-par", len(reference), officialEncodePar, officialEncodeParAllocs, officialEncodeParBop)
 		row("pbwire-go", "decode-par", len(reference), structDecodePar, structDecodeParAllocs, structDecodeParBop)
 		row("protobuf-go", "decode-par", len(reference), officialDecodePar, officialDecodeParAllocs, officialDecodeParBop)
+		// Spread lines start at column 0 with no "bytes", so the recorder
+		// skips them (see its selftest): the log keeps the noise, the JSON
+		// keeps the medians.
+		fmt.Printf("# spread %s encode pbwire-go %.1f-%.1f\n", tr.label, structEncodeLo, structEncodeHi)
+		fmt.Printf("# spread %s encode protobuf-go %.1f-%.1f\n", tr.label, officialEncodeLo, officialEncodeHi)
+		fmt.Printf("# spread %s decode pbwire-go %.1f-%.1f\n", tr.label, structDecodeLo, structDecodeHi)
+		fmt.Printf("# spread %s decode protobuf-go %.1f-%.1f\n", tr.label, officialDecodeLo, officialDecodeHi)
+		fmt.Printf("# spread %s encode-par pbwire-go %.1f-%.1f\n", tr.label, structEncodeParLo, structEncodeParHi)
+		fmt.Printf("# spread %s encode-par protobuf-go %.1f-%.1f\n", tr.label, officialEncodeParLo, officialEncodeParHi)
+		fmt.Printf("# spread %s decode-par pbwire-go %.1f-%.1f\n", tr.label, structDecodeParLo, structDecodeParHi)
+		fmt.Printf("# spread %s decode-par protobuf-go %.1f-%.1f\n", tr.label, officialDecodeParLo, officialDecodeParHi)
 		fmt.Println()
 	}
 }
