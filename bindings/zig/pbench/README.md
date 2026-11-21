@@ -10,10 +10,7 @@ and wire bytes out; wire bytes in and a fully readable native object out.
 |---|---|---|---|
 | `tree` | `benchmarks/bench.zig` | the shipped dynamic handle: one `set` per field, `encodeInto` into a reused buffer; `decode` then one `get` per field | what the per-field native call costs once the tree exists |
 | `shim` | `benchmarks/bench.zig` | the generated `extern struct <Message>Mirror` is the native object; `pbwire.InPlace.encodeInPlace` / `decodeInPlace` cross once and `bindings/c/runtime/pbw_struct.c` walks that memory in place | is a boundary worth paying for at all |
-| `core` | `n/a` | a pure-Zig port of the C core | plan 22 (`issue41-22-core-zig.md`) builds it |
-
-`core` prints `n/a` until plan 22 lands; there is no second wire implementation
-in this binding.
+| `core` | `pbench/core_arm.zig` + `core/` | the pure-Zig wire core: its own descriptor reader, tree and binary codec, no C source and no translate-c | can a build that does not compile `src/*.c` still be the same binding |
 
 ## Layout table
 

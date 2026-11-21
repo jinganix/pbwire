@@ -86,6 +86,15 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
+    // The pbench core arm, so the bench can import it as a module (Zig
+    // modules may not reach outside their own path).
+    const pbench_core_mod = b.createModule(.{
+        .root_source_file = b.path("pbench/core_arm.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "pbwire_core", .module = pure_mod }},
+    });
+
     // The generated matrix3 model, for the shim row both bench harnesses time.
     const model_mod = b.createModule(.{
         .root_source_file = b.path("tests/gen/matrix3.zig"),
@@ -157,6 +166,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "pbwire", .module = pbwire_mod },
             .{ .name = "pbwire_gen", .module = model_mod },
             .{ .name = "pbwire_core", .module = pure_mod },
+            .{ .name = "pbench_core", .module = pbench_core_mod },
         },
     });
     const bench = b.addExecutable(.{ .name = "bench", .root_module = bench_mod });
