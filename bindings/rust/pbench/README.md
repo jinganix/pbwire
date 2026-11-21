@@ -116,6 +116,33 @@ a C runtime question shared by every layout binding, not a missing Rust entry
 point. The arm stays re-runnable (`cargo test --test flat`, `make rust-bench`)
 so a faster struct encoder moves this row without touching Rust.
 
+### The `core` arm: keep the static link as the default
+
+**The shipped default stays the static link to the C core; the `core` feature
+serves builds that cannot link C.** The pure-Rust core is not a replacement for
+`pbwire-rust-tree` and it is not faster than it: on the provisional run the core
+is 0.45-0.54x of the tree arm's encode (1119.2 against 1876.8 MB/s at 136 B,
+895.2 against 1740.2 at 74 KB) and 0.22-0.40x of its decode. Against prost -- the
+baseline that matters, because prost is pure Rust too -- it is 0.68-0.69x on
+every encode and 0.47-0.70x on decode, while it beats `rust-protobuf`'s
+generated writer on the two large encode tiers (1.04x) and loses every decode
+(0.56-0.63x).
+
+The reason is the tree, not the wire: prost's generated writer and reader are
+straight-line code over typed struct fields, while this arm keeps the C core's
+shape -- a slot vector of a `Value` enum, a boxed `Message` per submessage and a
+byte vector per string -- because that is what a schema-driven codec must do when
+the message type is only known at run time. On decode those allocations are what
+the 74 KB payload pays (3000 `inners`, 3000 `tags`); encode allocates nothing and
+lands within 4% of `rust-protobuf`.
+
+So the arm is published for what it is: the no-C-toolchain, no-`unsafe`,
+no-generated-code mode, held to the same official binary suite as the C core
+(1412 successes, 1403 skipped, 2 expected, 0 unexpected), re-runnable with `make
+conformance-rust` and `make rust-bench`. Anyone who can link the static library
+keeps the faster handle; a cross-compiled or sandboxed build that cannot gets
+the same bytes at 0.5-0.7x of prost.
+
 ## Formal rows (Stage 5)
 
 `make rust-bench` records `results/bench-rust-<stamp>.{log,json}`; the run below
