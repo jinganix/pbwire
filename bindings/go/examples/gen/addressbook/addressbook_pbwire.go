@@ -33,8 +33,9 @@ func (c Person_PhoneType) String() string {
 
 // tutorial.Person.PhoneNumber
 type Person_PhoneNumber struct {
-	Number string
-	Type   *Person_PhoneType
+	Number        string
+	Type          *Person_PhoneType
+	unknownFields []byte
 }
 
 func (m *Person_PhoneNumber) GetNumber() string {
@@ -68,10 +69,11 @@ func (m *Person_PhoneNumber) Unmarshal(wire []byte) error {
 
 // tutorial.Person
 type Person struct {
-	Name   string
-	Id     int32
-	Email  *string
-	Phones []*Person_PhoneNumber
+	Name          string
+	Id            int32
+	Email         *string
+	Phones        []*Person_PhoneNumber
+	unknownFields []byte
 }
 
 func (m *Person) GetName() string {
@@ -119,7 +121,8 @@ func (m *Person) Unmarshal(wire []byte) error {
 
 // tutorial.AddressBook
 type AddressBook struct {
-	People []*Person
+	People        []*Person
+	unknownFields []byte
 }
 
 func (m *AddressBook) GetPeople() []*Person {

@@ -56,3 +56,20 @@ var Oneof1Meta = runtime.NewTable("spectest.Oneof1", []*runtime.Field{
 		NewMsg:   func() any { return &Oneof1_Inner{} },
 	},
 })
+
+func init() {
+	Oneof1_InnerMeta.Unknown = func(msg any, raw []byte) {
+		m := msg.(*Oneof1_Inner)
+		m.unknownFields = append(m.unknownFields, raw...)
+	}
+	Oneof1_InnerMeta.EncodeUnknown = func(msg any) []byte {
+		return msg.(*Oneof1_Inner).unknownFields
+	}
+	Oneof1Meta.Unknown = func(msg any, raw []byte) {
+		m := msg.(*Oneof1)
+		m.unknownFields = append(m.unknownFields, raw...)
+	}
+	Oneof1Meta.EncodeUnknown = func(msg any) []byte {
+		return msg.(*Oneof1).unknownFields
+	}
+}

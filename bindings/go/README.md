@@ -79,10 +79,11 @@ Optional fields are pointers (`nil` = absent), oneofs are interface
 wrappers (`isOneof1_kind`), repeated fields are slices — the same shapes
 `protoc-gen-go` emits. A `proto.Message` interface is deliberately not
 implemented (maps ride as repeated entry structs, as in every binding), and
-unknown wire fields are dropped on decode, as before: the struct has nowhere
-to keep them. That makes the headline rows narrower than protobuf-go on
-unknown-carrying input; the pbench gate pins the difference
-(`TestGateSemantics`) instead of hiding it. Reach for `runtime.DMsg` (decode retains unknowns and binary
+unknown wire fields are retained on decode in an `unknownFields` buffer and
+replayed after the known fields on encode, byte for byte like the
+reference; `Reset` clears them with the rest. The pbench gate pins the
+round trip (`TestGateSemantics`), including nested messages. Reach for
+`runtime.DMsg (decode retains unknowns and binary
 re-encode preserves them) when that matters.
 
 | Piece | Path | Role |
@@ -92,7 +93,7 @@ re-encode preserves them) when that matters.
 | engine | [`runtime/`](runtime/) | the shipped pure-Go engine: `Schema`/`DType`/`DMsg`, the one `EncodeTable`/`DecodeTable` engine, descriptor-set plans, model<->tree converters |
 | C core candidate | [`pbench/dync/dynamic/`](pbench/dync/dynamic/) | `Registry` (hot-swap), `Schema`, `MessageType`, `Message`, model<->tree converter |
 | bench | [`benchmarks/bench_test.go`](benchmarks/bench_test.go) | four standard tiers: thin model vs `protobuf-go`, gated on byte parity and a field-by-field decode before timing |
-| arms | [`pbench/`](pbench/) (`go test -tags pbench ./pbench/`) | the two dynamic arms over the same tiers, native struct in and out, converter-only glue (issue #41) |
+| arms | [`pbench/`](pbench/) (`go test -tags pbench ./pbench/`) | the C value tree and pure-Go value tree arms over the same tiers, native struct in and out, converter-only glue (issue #41) |
 
 ```shell
 make go-test    # engine + converter + generated-model compat checks (needs protoc)

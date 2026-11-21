@@ -51,3 +51,13 @@ var UsesDepMeta = runtime.NewTable("xfile.UsesDep", []*runtime.Field{
 		SetStr: func(msg any, v string) { msg.(*UsesDep).Note = v },
 	},
 })
+
+func init() {
+	UsesDepMeta.Unknown = func(msg any, raw []byte) {
+		m := msg.(*UsesDep)
+		m.unknownFields = append(m.unknownFields, raw...)
+	}
+	UsesDepMeta.EncodeUnknown = func(msg any) []byte {
+		return msg.(*UsesDep).unknownFields
+	}
+}

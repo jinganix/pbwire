@@ -10,7 +10,8 @@ import (
 
 // spectest.Oneof1.Inner
 type Oneof1_Inner struct {
-	V int32
+	V             int32
+	unknownFields []byte
 }
 
 func (m *Oneof1_Inner) GetV() int32 {
@@ -51,8 +52,9 @@ type Oneof1_Inner_ struct{ Inner *Oneof1_Inner }
 func (*Oneof1_Inner_) isOneof1_kind() {}
 
 type Oneof1 struct {
-	Kind isOneof1_kind
-	Name string
+	Kind          isOneof1_kind
+	Name          string
+	unknownFields []byte
 }
 
 func (m *Oneof1) GetName() string {

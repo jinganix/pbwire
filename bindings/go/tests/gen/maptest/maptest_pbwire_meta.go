@@ -123,3 +123,41 @@ var MapTestMeta = runtime.NewTable("spectest.MapTest", []*runtime.Field{
 		},
 	},
 })
+
+func init() {
+	MapValueMeta.Unknown = func(msg any, raw []byte) {
+		m := msg.(*MapValue)
+		m.unknownFields = append(m.unknownFields, raw...)
+	}
+	MapValueMeta.EncodeUnknown = func(msg any) []byte {
+		return msg.(*MapValue).unknownFields
+	}
+	MapTest_ByIntEntryMeta.Unknown = func(msg any, raw []byte) {
+		m := msg.(*MapTest_ByIntEntry)
+		m.unknownFields = append(m.unknownFields, raw...)
+	}
+	MapTest_ByIntEntryMeta.EncodeUnknown = func(msg any) []byte {
+		return msg.(*MapTest_ByIntEntry).unknownFields
+	}
+	MapTest_ByStrEntryMeta.Unknown = func(msg any, raw []byte) {
+		m := msg.(*MapTest_ByStrEntry)
+		m.unknownFields = append(m.unknownFields, raw...)
+	}
+	MapTest_ByStrEntryMeta.EncodeUnknown = func(msg any) []byte {
+		return msg.(*MapTest_ByStrEntry).unknownFields
+	}
+	MapTest_ByMsgEntryMeta.Unknown = func(msg any, raw []byte) {
+		m := msg.(*MapTest_ByMsgEntry)
+		m.unknownFields = append(m.unknownFields, raw...)
+	}
+	MapTest_ByMsgEntryMeta.EncodeUnknown = func(msg any) []byte {
+		return msg.(*MapTest_ByMsgEntry).unknownFields
+	}
+	MapTestMeta.Unknown = func(msg any, raw []byte) {
+		m := msg.(*MapTest)
+		m.unknownFields = append(m.unknownFields, raw...)
+	}
+	MapTestMeta.EncodeUnknown = func(msg any) []byte {
+		return msg.(*MapTest).unknownFields
+	}
+}

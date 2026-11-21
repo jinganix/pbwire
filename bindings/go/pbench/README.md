@@ -16,10 +16,10 @@ dynamic paths are what this harness compares.
 
 | dir | arm | what it does |
 |---|---|---|
-| `dync/dynamic/` | dynamic C core engine | `Schema`/`Type`/`Message`: value tree in C over cgo, hot-swappable registry, plus the shipped model<->tree converter |
-| `dync/dync.go` | dynamic C core arm | struct -> C tree -> wire -> C tree -> struct, all through the shipped converter |
-| `dyngo/dyngo.go` + `../runtime/` | dynamic Go core engine | `Schema`/`DType`/`DMsg`: pure-Go value tree and the shared table engine in the shipped `runtime/`, plus the model<->tree converter |
-| `dyngo/dyngo.go` | dynamic Go core arm | struct -> `DMsg` -> wire -> `DMsg` -> struct, all through the shipped converter, no cgo |
+| `dync/dynamic/` | C value tree (engine) | `Schema`/`Type`/`Message`: value tree in C over cgo, hot-swappable registry, plus the shipped model<->tree converter |
+| `dync/dync.go` | C value tree (arm) | struct -> C tree -> wire -> C tree -> struct, all through the shipped converter |
+| `dyngo/dyngo.go` + `../runtime/` | pure-Go value tree (engine) | `Schema`/`DType`/`DMsg`: pure-Go value tree and the shared table engine in the shipped `runtime/`, plus the model<->tree converter |
+| `dyngo/dyngo.go` | pure-Go value tree (arm) | struct -> `DMsg` -> wire -> `DMsg` -> struct, all through the shipped converter, no cgo |
 
 The C arm keeps its engine next to it; the Go arm drives the shipped
 `../runtime/` engine. Nothing here is extra scaffolding. The shipped engine is the pure-Go table engine in
@@ -40,10 +40,9 @@ go test -tags pbench -run TestCompare -v -count=1 ./pbench/
 ```
 
 Last recorded run (Apple M4 Pro; absolute numbers move with the host, the
-ordering does not): `dyngo` direct 1.42-1.76x encode and 0.88-1.13x decode
-against `protobuf-go`, `dync` 0.05-0.10x encode and 0.11-0.13x decode.
-(Remeasured without the retired struct arm; the shipped struct path is
-timed in `../benchmarks/`.)
+ordering does not): pure-Go value tree 1.34-1.49x encode and 0.93-1.19x
+decode against `protobuf-go`, C value tree 0.05-0.09x encode and 0.12-0.13x
+decode. (The shipped struct path is timed in `../benchmarks/`.)
 
 That ordering is the reason the arms exist: a per-field copy into any tree
 (the C core with cgo crossings worst, the Go core better but still

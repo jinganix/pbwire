@@ -10,8 +10,9 @@ import (
 
 // spectest.MapValue
 type MapValue struct {
-	Name  string
-	Value int32
+	Name          string
+	Value         int32
+	unknownFields []byte
 }
 
 func (m *MapValue) GetName() string {
@@ -45,8 +46,9 @@ func (m *MapValue) Unmarshal(wire []byte) error {
 
 // spectest.MapTest.ByIntEntry
 type MapTest_ByIntEntry struct {
-	Key   int32
-	Value string
+	Key           int32
+	Value         string
+	unknownFields []byte
 }
 
 func (m *MapTest_ByIntEntry) GetKey() int32 {
@@ -80,8 +82,9 @@ func (m *MapTest_ByIntEntry) Unmarshal(wire []byte) error {
 
 // spectest.MapTest.ByStrEntry
 type MapTest_ByStrEntry struct {
-	Key   string
-	Value int32
+	Key           string
+	Value         int32
+	unknownFields []byte
 }
 
 func (m *MapTest_ByStrEntry) GetKey() string {
@@ -115,8 +118,9 @@ func (m *MapTest_ByStrEntry) Unmarshal(wire []byte) error {
 
 // spectest.MapTest.ByMsgEntry
 type MapTest_ByMsgEntry struct {
-	Key   string
-	Value *MapValue
+	Key           string
+	Value         *MapValue
+	unknownFields []byte
 }
 
 func (m *MapTest_ByMsgEntry) GetKey() string {
@@ -150,9 +154,10 @@ func (m *MapTest_ByMsgEntry) Unmarshal(wire []byte) error {
 
 // spectest.MapTest
 type MapTest struct {
-	ByInt []*MapTest_ByIntEntry
-	ByStr []*MapTest_ByStrEntry
-	ByMsg []*MapTest_ByMsgEntry
+	ByInt         []*MapTest_ByIntEntry
+	ByStr         []*MapTest_ByStrEntry
+	ByMsg         []*MapTest_ByMsgEntry
+	unknownFields []byte
 }
 
 func (m *MapTest) GetByInt() []*MapTest_ByIntEntry {

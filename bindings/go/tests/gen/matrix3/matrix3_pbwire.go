@@ -33,8 +33,9 @@ func (c Color3) String() string {
 
 // structtest.Inner3
 type Inner3 struct {
-	Name  string
-	Value int32
+	Name          string
+	Value         int32
+	unknownFields []byte
 }
 
 func (m *Inner3) GetName() string {
@@ -68,28 +69,29 @@ func (m *Inner3) Unmarshal(wire []byte) error {
 
 // structtest.Scalars3
 type Scalars3 struct {
-	I32    int32
-	I64    int64
-	U32    uint32
-	U64    uint64
-	S32    int32
-	S64    int64
-	Fx32   uint32
-	Fx64   uint64
-	Sfx32  int32
-	Sfx64  int64
-	F32    float32
-	F64    float64
-	Flag   bool
-	Str    string
-	Color  Color3
-	Inner  *Inner3
-	Nums   []int32
-	Tags   []string
-	Inners []*Inner3
-	OptI32 *int32
-	OptStr *string
-	Flags  []bool
+	I32           int32
+	I64           int64
+	U32           uint32
+	U64           uint64
+	S32           int32
+	S64           int64
+	Fx32          uint32
+	Fx64          uint64
+	Sfx32         int32
+	Sfx64         int64
+	F32           float32
+	F64           float64
+	Flag          bool
+	Str           string
+	Color         Color3
+	Inner         *Inner3
+	Nums          []int32
+	Tags          []string
+	Inners        []*Inner3
+	OptI32        *int32
+	OptStr        *string
+	Flags         []bool
+	unknownFields []byte
 }
 
 func (m *Scalars3) GetI32() int32 {

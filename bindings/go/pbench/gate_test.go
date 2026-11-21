@@ -89,10 +89,9 @@ func structOf(w *matrix3pb.Scalars3) *matrix3.Scalars3 {
 
 // TestGateSemantics pins the two semantic vectors from issue 41: invalid
 // UTF-8 in a proto3 string must fail decode on every path, and unknown
-// field 999 must round-trip byte-identical through the oracle while the
-// native-struct paths pin their documented deviation (dropped on decode:
-// the struct has no unknown storage, see bindings/go/README.md;
-// runtime.DMsg retains).
+// field 999 must round-trip byte-identical through the oracle and through
+// the thin model (retained in the generated struct's unknownFields, cleared
+// by Reset, replayed after the known fields like the reference).
 func TestGateSemantics(t *testing.T) {
 	// Vector 1: str is field 14 (BytesType). Valid UTF-8 decodes; the
 	// same shape with invalid bytes must error mentioning UTF-8.
@@ -129,8 +128,8 @@ func TestGateSemantics(t *testing.T) {
 		}
 	}
 
-	// Vector 2: unknown field 999 (varint 7). The oracle keeps it;
-	// the struct paths drop it (pinned, not hidden).
+	// Vector 2: unknown field 999 (varint 7). The oracle keeps it, and so
+	// must the thin model, byte for byte; Reset clears the retained bytes.
 	unk := protowire.AppendTag(nil, 999, protowire.VarintType)
 	unk = protowire.AppendVarint(unk, 7)
 	var o matrix3pb.Scalars3
@@ -144,12 +143,16 @@ func TestGateSemantics(t *testing.T) {
 	if err := m.Unmarshal(unk); err != nil {
 		t.Fatalf("thin model rejected unknown-only wire: %v", err)
 	}
+	if again, err := m.Marshal(); err != nil || !bytes.Equal(again, unk) {
+		t.Fatalf("thin model must retain unknowns: got %x want %x, err %v", again, unk, err)
+	}
+	m.Reset()
 	if again, err := m.Marshal(); err != nil || len(again) != 0 {
-		t.Fatalf("thin model round trip: %x (want empty), err %v", again, err)
+		t.Fatalf("Reset must clear retained unknowns: got %x, err %v", again, err)
 	}
 
-	// Vector 3: field 999 nested inside Inner3 (field 16) drops the same
-	// way; unknown-only wire decodes without error (covered above).
+	// Vector 3: field 999 nested inside Inner3 (field 16) round-trips
+	// untouched, inside the submessage's length prefix like the reference.
 	inner := protowire.AppendTag(nil, 999, protowire.VarintType)
 	inner = protowire.AppendVarint(inner, 7)
 	nested := protowire.AppendTag(nil, 16, protowire.BytesType)
@@ -161,7 +164,7 @@ func TestGateSemantics(t *testing.T) {
 	if m2.Inner == nil {
 		t.Fatal("thin model dropped the known inner message carrying unknowns")
 	}
-	if again, err := m2.Marshal(); err != nil || bytes.Contains(again, inner) {
-		t.Fatalf("thin model replayed nested unknowns: %x, err %v", again, err)
+	if again, err := m2.Marshal(); err != nil || !bytes.Equal(again, nested) {
+		t.Fatalf("thin model must replay nested unknowns: got %x want %x, err %v", again, nested, err)
 	}
 }

@@ -212,9 +212,10 @@ func TestAuditMaptestRoundTrip(t *testing.T) {
 	}
 }
 
-// Unknown fields are dropped on the table path (no retention hooks): pin
-// the drop so a future retention change is a deliberate, tested decision.
-func TestAuditUnknownDropped(t *testing.T) {
+// Unknown fields are retained on the table path (generated tables wire
+// the Unknown/EncodeUnknown hooks): pin the retention so a future drop is
+// a deliberate, tested decision.
+func TestAuditUnknownRetained(t *testing.T) {
 	base, err := runtime.EncodeModel(&oneof1.Oneof1{Name: "n"}, oneof1.Oneof1Meta)
 	if err != nil {
 		t.Fatal(err)
@@ -228,7 +229,7 @@ func TestAuditUnknownDropped(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Equal(again, base) {
-		t.Fatalf("unknowns retained: %x", again)
+	if !bytes.Equal(again, wire) {
+		t.Fatalf("unknowns lost: got %x want %x", again, wire)
 	}
 }

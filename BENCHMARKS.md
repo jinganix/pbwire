@@ -792,14 +792,14 @@ decode-par (1.02x) and xlarge decode-par (1.34x). The host was loaded
 (load average above core count), so the par rows carry scheduler noise —
 published as measured, not as a scaling claim. The
 pbench gate pins the semantic edge the table cannot show: invalid UTF-8 in
-a proto3 string fails on every path, and unknown fields are dropped by the
-struct paths exactly as documented (`TestGateSemantics`). The two
-dynamic arms behind the thin model were compared under
+a proto3 string fails on every path, and unknown fields round-trip through
+the struct paths byte for byte (`TestGateSemantics`). The two
+value-tree arms behind the thin model were compared under
 [`bindings/go/pbench/`](bindings/go/pbench/) (same tiers, interleaved,
-native struct in and out, converter-only glue): the C core at 0.05-0.10x
-encode and 0.11-0.13x decode, the pure-Go direct path at 1.42-1.76x encode
-and 0.88-1.13x decode. The per-field copy into any tree is what separates
-them.
+native struct in and out, converter-only glue): the C value tree at
+0.05-0.09x encode and 0.12-0.13x decode, the pure-Go value tree at 1.34-1.49x
+encode and 0.93-1.19x decode. The per-field copy into any tree is what
+separates them.
 
 ### Python vs `google.protobuf` (upb)
 

@@ -10,8 +10,9 @@ import (
 
 // xdep.DepMsg
 type DepMsg struct {
-	Name  string
-	Value int32
+	Name          string
+	Value         int32
+	unknownFields []byte
 }
 
 func (m *DepMsg) GetName() string {
