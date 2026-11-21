@@ -126,6 +126,354 @@ func (t *DType) Decode(wire []byte) (*DMsg, error) {
 // Encode serializes the tree.
 func (t *DType) Encode(m *DMsg) ([]byte, error) { return m.Encode() }
 
+// EncodeDeterministic serializes the tree with map entries in key order:
+// the bytes are stable across runs for equal trees and match the C
+// deterministic encoder. Only map-entry rows reorder, and the caller's
+// tree keeps its insertion order. Every other row keeps its order.
+func (t *DType) EncodeDeterministic(m *DMsg) ([]byte, error) {
+	tb := t.tableFor()
+	cap0 := tb.capHint()
+	if cap0 < 256 {
+		cap0 = 256
+	}
+	e := Encoder{Buf: make([]byte, 0, cap0)}
+	if err := encodeTable(&e, m, tb, 0, true); err != nil {
+		return nil, err
+	}
+	tb.setCapHint(len(e.Buf) + 64)
+	return e.Result(), nil
+}
+
+// EncodedSize returns the exact number of bytes Encode writes: one walk
+// over the tree, no output allocated or written. It mirrors encodeTable's
+// presence rules field by field, so size and bytes cannot disagree on
+// what emits.
+func (m *DMsg) EncodedSize() int {
+	if m == nil {
+		return 0
+	}
+	return msgSize(m)
+}
+
+// msgSize totals one tree: every plan field plus retained unknown bytes.
+// A nil tree sizes as empty, like the encoder writes it. Entry key/value
+// rows size from presence, like skipZero emits them; heuristic entry rows
+// (see isEntryShape) always emit, like their Required mark.
+func msgSize(m *DMsg) int {
+	if m == nil {
+		return 0
+	}
+	tb := m.typ.tableFor()
+	shape := isEntryShape(tb)
+	entryPlan := m.typ.plan.IsMapEntry
+	n := 0
+	for i, fp := range m.typ.plan.Fields {
+		isKV := fp.Number == 1 || fp.Number == 2
+		entry := entryPlan && isKV
+		force := fp.Presence == PresenceRequired || (!entry && shape && isKV)
+		n += fieldSize(&m.slots[i], fp, entry, force)
+	}
+	return n + len(m.unknown)
+}
+
+// fieldSize is the encoded length of one field occurrence run: tags plus
+// payloads, with packed runs sharing one length prefix like the encoder.
+// entry marks a map-entry key/value row, which emits exactly when present;
+// force marks rows that always emit (proto2 required, or the Required mark
+// NewTable sets on entry-shaped rows).
+func fieldSize(s *slot, fp *FieldPlan, entry, force bool) int {
+	if fp.Repeated {
+		return repSize(s, fp)
+	}
+	if fp.Presence == PresenceOneof {
+		if !s.oneofSet {
+			return 0
+		}
+		return oneofSize(s, fp)
+	}
+	if fp.Proto == descriptorpb.FieldDescriptorProto_TYPE_MESSAGE || fp.Group {
+		present := s.m != nil
+		if entry {
+			present = s.present
+		}
+		if !present && !force {
+			return 0
+		}
+		if fp.Group {
+			return SizeTag(fp.Number, WireStartGroup) + msgSize(s.m) + SizeTag(fp.Number, WireEndGroup)
+		}
+		child := msgSize(s.m)
+		return SizeTag(fp.Number, WireLen) + SizeVarint(uint64(child)) + child
+	}
+	if entry {
+		if !s.present {
+			return 0
+		}
+	} else if explicitPresence(fp) {
+		if s.opt == nil && !force {
+			return 0
+		}
+	} else if fp.Presence != PresenceRequired && !force && isZeroScalar(s, fp) {
+		return 0
+	}
+	return SizeTag(fp.Number, fp.Wire) + scalarSize(s, fp)
+}
+
+// oneofSize sizes one set oneof member: no presence guard beyond the
+// wrapper itself, so zero and empty values still count.
+func oneofSize(s *slot, fp *FieldPlan) int {
+	if fp.Proto == descriptorpb.FieldDescriptorProto_TYPE_MESSAGE || fp.Group {
+		if fp.Group {
+			return SizeTag(fp.Number, WireStartGroup) + msgSize(s.m) + SizeTag(fp.Number, WireEndGroup)
+		}
+		child := msgSize(s.m)
+		return SizeTag(fp.Number, WireLen) + SizeVarint(uint64(child)) + child
+	}
+	return SizeTag(fp.Number, fp.Wire) + scalarSize(s, fp)
+}
+
+// isZeroScalar reports whether an implicit-presence scalar reads as its
+// zero, exactly like the encoder's skip: floats compare == 0, so -0.0 is
+// omitted too.
+func isZeroScalar(s *slot, fp *FieldPlan) bool {
+	switch fp.Proto {
+	case descriptorpb.FieldDescriptorProto_TYPE_INT32,
+		descriptorpb.FieldDescriptorProto_TYPE_SINT32,
+		descriptorpb.FieldDescriptorProto_TYPE_SFIXED32,
+		descriptorpb.FieldDescriptorProto_TYPE_ENUM:
+		return int32(s.u) == 0
+	case descriptorpb.FieldDescriptorProto_TYPE_FLOAT:
+		return math.Float32frombits(uint32(s.u)) == 0
+	case descriptorpb.FieldDescriptorProto_TYPE_DOUBLE:
+		return math.Float64frombits(s.u) == 0
+	case descriptorpb.FieldDescriptorProto_TYPE_STRING:
+		return s.str == ""
+	case descriptorpb.FieldDescriptorProto_TYPE_BYTES:
+		return len(s.p) == 0
+	default:
+		return s.u == 0
+	}
+}
+
+// scalarSize is the payload length of one scalar value, without its tag.
+func scalarSize(s *slot, fp *FieldPlan) int {
+	switch fp.Proto {
+	case descriptorpb.FieldDescriptorProto_TYPE_INT32,
+		descriptorpb.FieldDescriptorProto_TYPE_ENUM:
+		return SizeVarint(uint64(int64(int32(s.u))))
+	case descriptorpb.FieldDescriptorProto_TYPE_INT64,
+		descriptorpb.FieldDescriptorProto_TYPE_UINT64:
+		return SizeVarint(s.u)
+	case descriptorpb.FieldDescriptorProto_TYPE_UINT32:
+		return SizeVarint(uint64(uint32(s.u)))
+	case descriptorpb.FieldDescriptorProto_TYPE_SINT32:
+		return SizeVarint(ZigZagEncode32(int32(s.u)))
+	case descriptorpb.FieldDescriptorProto_TYPE_SINT64:
+		return SizeVarint(ZigZagEncode64(int64(s.u)))
+	case descriptorpb.FieldDescriptorProto_TYPE_FIXED32,
+		descriptorpb.FieldDescriptorProto_TYPE_SFIXED32,
+		descriptorpb.FieldDescriptorProto_TYPE_FLOAT:
+		return 4
+	case descriptorpb.FieldDescriptorProto_TYPE_FIXED64,
+		descriptorpb.FieldDescriptorProto_TYPE_SFIXED64,
+		descriptorpb.FieldDescriptorProto_TYPE_DOUBLE:
+		return 8
+	case descriptorpb.FieldDescriptorProto_TYPE_BOOL:
+		return 1
+	case descriptorpb.FieldDescriptorProto_TYPE_STRING:
+		return SizeVarint(uint64(len(s.str))) + len(s.str)
+	case descriptorpb.FieldDescriptorProto_TYPE_BYTES:
+		return SizeVarint(uint64(len(s.p))) + len(s.p)
+	}
+	return 0
+}
+
+// repSize sizes one repeated run: packed numerics share one length prefix,
+// strings/bytes/messages repeat their framing per element, groups frame
+// each element with start/end tags.
+func repSize(s *slot, fp *FieldPlan) int {
+	if s.rep == nil {
+		return 0
+	}
+	if fp.Group {
+		tag := SizeTag(fp.Number, WireStartGroup) + SizeTag(fp.Number, WireEndGroup)
+		n := 0
+		for _, child := range s.rep.([]*DMsg) {
+			n += tag + msgSize(child)
+		}
+		return n
+	}
+	if fp.Proto == descriptorpb.FieldDescriptorProto_TYPE_MESSAGE {
+		n := 0
+		for _, child := range s.rep.([]*DMsg) {
+			body := msgSize(child)
+			n += SizeTag(fp.Number, WireLen) + SizeVarint(uint64(body)) + body
+		}
+		return n
+	}
+	if fp.Proto == descriptorpb.FieldDescriptorProto_TYPE_STRING {
+		n := 0
+		for _, v := range s.rep.([]string) {
+			n += SizeTag(fp.Number, WireLen) + SizeVarint(uint64(len(v))) + len(v)
+		}
+		return n
+	}
+	if fp.Proto == descriptorpb.FieldDescriptorProto_TYPE_BYTES {
+		n := 0
+		for _, v := range s.rep.([][]byte) {
+			n += SizeTag(fp.Number, WireLen) + SizeVarint(uint64(len(v))) + len(v)
+		}
+		return n
+	}
+	if fp.Packed {
+		body := repBodySize(s, fp)
+		if body == 0 && repNumLen(s) == 0 {
+			return 0
+		}
+		return SizeTag(fp.Number, WireLen) + SizeVarint(uint64(body)) + body
+	}
+	tag := SizeTag(fp.Number, fp.Wire)
+	n := 0
+	switch run := s.rep.(type) {
+	case []int32:
+		for _, v := range run {
+			n += tag + numElemSize(fp, uint64(int64(v)), uint64(uint32(v)))
+		}
+	case []int64:
+		for _, v := range run {
+			n += tag + numElemSize(fp, uint64(v), uint64(v))
+		}
+	case []uint32:
+		for _, v := range run {
+			n += tag + numElemSize(fp, uint64(int64(int32(v))), uint64(v))
+		}
+	case []uint64:
+		for _, v := range run {
+			n += tag + numElemSize(fp, v, v)
+		}
+	case []float32:
+		n += len(run) * (tag + 4)
+	case []float64:
+		n += len(run) * (tag + 8)
+	case []bool:
+		n += len(run) * (tag + 1)
+	}
+	return n
+}
+
+// repNumLen counts a repeated numeric run for the packed-empty guard.
+func repNumLen(s *slot) int {
+	switch run := s.rep.(type) {
+	case []int32:
+		return len(run)
+	case []int64:
+		return len(run)
+	case []uint32:
+		return len(run)
+	case []uint64:
+		return len(run)
+	case []float32:
+		return len(run)
+	case []float64:
+		return len(run)
+	case []bool:
+		return len(run)
+	}
+	return 0
+}
+
+// repBodySize totals the payload of a packed run, without tag or prefix.
+func repBodySize(s *slot, fp *FieldPlan) int {
+	n := 0
+	switch run := s.rep.(type) {
+	case []int32:
+		for _, v := range run {
+			n += numElemSize(fp, uint64(int64(v)), uint64(uint32(v)))
+		}
+	case []int64:
+		for _, v := range run {
+			n += numElemSize(fp, uint64(v), uint64(v))
+		}
+	case []uint32:
+		for _, v := range run {
+			n += numElemSize(fp, uint64(int64(int32(v))), uint64(v))
+		}
+	case []uint64:
+		for _, v := range run {
+			n += numElemSize(fp, v, v)
+		}
+	case []float32:
+		n += len(run) * 4
+	case []float64:
+		n += len(run) * 8
+	case []bool:
+		n += len(run)
+	}
+	return n
+}
+
+// numElemSize sizes one packed or unpacked numeric element: sign-extended
+// for signed kinds, zigzag for sint, raw 4/8 for fixed, one byte for bool.
+// sext carries the value sign-extended to 64 bits, zext zero-extended.
+func numElemSize(fp *FieldPlan, sext, zext uint64) int {
+	switch fp.Proto {
+	case descriptorpb.FieldDescriptorProto_TYPE_INT32,
+		descriptorpb.FieldDescriptorProto_TYPE_INT64,
+		descriptorpb.FieldDescriptorProto_TYPE_ENUM:
+		return SizeVarint(sext)
+	case descriptorpb.FieldDescriptorProto_TYPE_UINT32,
+		descriptorpb.FieldDescriptorProto_TYPE_UINT64:
+		return SizeVarint(zext)
+	case descriptorpb.FieldDescriptorProto_TYPE_SINT32:
+		return SizeVarint(ZigZagEncode32(int32(sext)))
+	case descriptorpb.FieldDescriptorProto_TYPE_SINT64:
+		return SizeVarint(ZigZagEncode64(int64(sext)))
+	case descriptorpb.FieldDescriptorProto_TYPE_FIXED32,
+		descriptorpb.FieldDescriptorProto_TYPE_SFIXED32,
+		descriptorpb.FieldDescriptorProto_TYPE_FLOAT:
+		return 4
+	case descriptorpb.FieldDescriptorProto_TYPE_FIXED64,
+		descriptorpb.FieldDescriptorProto_TYPE_SFIXED64,
+		descriptorpb.FieldDescriptorProto_TYPE_DOUBLE:
+		return 8
+	case descriptorpb.FieldDescriptorProto_TYPE_BOOL:
+		return 1
+	}
+	return 0
+}
+
+// EncodeDelimited frames the message with a varint length prefix: prefix
+// plus body in one fresh slice the caller owns.
+func (m *DMsg) EncodeDelimited() []byte {
+	body, err := m.Encode()
+	if err != nil {
+		return nil
+	}
+	out := AppendVarint(make([]byte, 0, SizeVarint(uint64(len(body)))+len(body)), uint64(len(body)))
+	return append(out, body...)
+}
+
+// DecodeDelimited decodes one length-prefixed frame: the message plus the
+// frame's prefix + body length in consumed. Trailing bytes are left for the
+// caller. A truncated prefix, a body shorter than the prefix claims, or a
+// body that does not parse is ErrWire.
+func (t *DType) DecodeDelimited(wire []byte) (*DMsg, int, error) {
+	d := Decoder{Buf: wire}
+	n, err := d.Varint()
+	if err != nil {
+		return nil, 0, ErrWire
+	}
+	if n > uint64(len(wire)-d.Off) {
+		return nil, 0, ErrWire
+	}
+	body := wire[d.Off : d.Off+int(n)]
+	m, err := t.Decode(body)
+	if err != nil {
+		return nil, 0, err
+	}
+	return m, d.Off + int(n), nil
+}
+
 // Encode serializes the tree into a fresh slice the caller owns.
 func (m *DMsg) Encode() ([]byte, error) {
 	t := m.typ.tableFor()
@@ -134,7 +482,7 @@ func (m *DMsg) Encode() ([]byte, error) {
 		cap0 = 256
 	}
 	e := Encoder{Buf: make([]byte, 0, cap0)}
-	if err := EncodeTable(&e, m, t, 0); err != nil {
+	if err := encodeTable(&e, m, t, 0, false); err != nil {
 		return nil, err
 	}
 	t.setCapHint(len(e.Buf) + 64)
@@ -166,6 +514,19 @@ func (t *DType) buildTable() *Table {
 		rows = append(rows, t.buildRow(i, t.plan.Fields[i]))
 	}
 	tb := NewTable(t.plan.Full, rows)
+	tb.IsMapEntry = t.plan.IsMapEntry
+	if t.plan.IsMapEntry {
+		// Exact entry mark, independent of the table-name heuristic in
+		// NewTable: hand-built schemas may name entries freely.
+		if len(tb.ByNum) > 2 {
+			if tb.ByNum[1] != nil {
+				tb.ByNum[1].Required = true
+			}
+			if tb.ByNum[2] != nil {
+				tb.ByNum[2].Required = true
+			}
+		}
+	}
 	tb.Unknown = func(msg any, raw []byte) {
 		d := msg.(*DMsg)
 		d.unknown = append(d.unknown, raw...)
@@ -303,6 +664,13 @@ func (t *DType) buildRow(i int, fp *FieldPlan) *Field {
 		Packed:   fp.Packed,
 		Group:    fp.Group,
 		Oneof:    fp.Presence == PresenceOneof,
+	}
+	if t.plan.IsMapEntry && (fp.Number == 1 || fp.Number == 2) {
+		// Entry key/value rows emit whenever present, even for zero:
+		// reference map semantics (see skipZero). The slot flag is the
+		// presence the engine cannot read through value getters.
+		f.Entry = true
+		f.Present = func(msg any) bool { return acc(msg).present }
 	}
 	kind, ok := kindOf(fp.Proto)
 	if !ok {

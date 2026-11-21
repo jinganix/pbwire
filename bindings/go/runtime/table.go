@@ -21,7 +21,10 @@
 package runtime
 
 import (
+	"bytes"
 	"math"
+	"sort"
+	"strings"
 	"sync/atomic"
 	"unsafe"
 )
@@ -239,6 +242,15 @@ type Field struct {
 	GetOneof func(msg any) (any, bool)
 	SetOneof func(msg any, v any)
 	NewMsg   func() any
+
+	// Entry marks key/value rows of map-entry tables: they emit whenever
+	// present, even for zero values, matching reference map semantics
+	// (an unset entry key encodes as absent, like the C core). Present
+	// reports the row's presence; the dynamic core reads the slot, while
+	// generated rows predate presence tracking and always emit through
+	// the Required mark NewTable sets instead (Entry stays false there).
+	Entry   bool
+	Present func(msg any) bool
 }
 
 // Table is one message's table: its rows plus a ByNum index sized to the
@@ -263,6 +275,13 @@ type Table struct {
 	// hasFast reports whether any row carries valid offset columns. The
 	// engine reads it once per message instead of scanning rows per field.
 	hasFast bool
+
+	// IsMapEntry marks a map-entry message table: holders repeat it and
+	// sort their elements by key on the deterministic path. The dynamic
+	// core sets it from the schema plan; generated tables predate the
+	// flag, so the encoder also recognizes the protoc entry shape (see
+	// isMapEntryTable).
+	IsMapEntry bool
 }
 
 // capHint reports the last successful encode size plus headroom, or 0 before
@@ -295,6 +314,19 @@ func NewTable(name string, fields []*Field) *Table {
 			break
 		}
 	}
+	// Map-entry key/value rows always emit when the entry does, even for
+	// zero keys and empty values, like the C core and every reference
+	// serializer. Generated tables predate a schema marker, so entries
+	// are recognized by the shape protoc enforces (see isEntryShape);
+	// the dynamic core also marks exact entry tables from its plan.
+	if isEntryShape(tb) && len(tb.ByNum) > 2 {
+		if tb.ByNum[1] != nil {
+			tb.ByNum[1].Required = true
+		}
+		if tb.ByNum[2] != nil {
+			tb.ByNum[2].Required = true
+		}
+	}
 	return tb
 }
 
@@ -318,10 +350,36 @@ func packableKind(k Kind) bool {
 	return false
 }
 
+// skipZero reports whether an implicit row holding its zero value stays
+// unwritten: required rows and present map-entry key/value rows emit even
+// for zero, matching reference map semantics (an unset entry key encodes
+// as absent, like the C core). The Present call runs only for entry rows,
+// so plain fields pay one predictable branch on top of their old check.
+func skipZero(f *Field, msg any) bool {
+	if f.Entry {
+		// Entry rows answer from presence alone: the Required mark
+		// NewTable sets is for generated rows, which carry no presence.
+		return f.Present == nil || !f.Present(msg)
+	}
+	if f.Required {
+		return false
+	}
+	return true
+}
+
 // EncodeTable walks any table calling getters and writes straight into the
 // encoder. Rows run in table order, so generated tables list fields in
 // ascending field-number order for byte-identical output.
 func EncodeTable(e *Encoder, msg any, t *Table, depth int) error {
+	return encodeTable(e, msg, t, depth, false)
+}
+
+// encodeTable is the shared engine behind EncodeTable: deterministic selects
+// the repeated-row writer once per message (never inside the per-field loop),
+// so the plain path pays no per-field branch for a mode it never uses. Only
+// map-entry message rows change under deterministic: a sorted copy encodes,
+// never the caller's slice, and every other row keeps its order.
+func encodeTable(e *Encoder, msg any, t *Table, depth int, deterministic bool) error {
 	if err := CheckDepth(depth); err != nil {
 		return err
 	}
@@ -329,6 +387,10 @@ func EncodeTable(e *Encoder, msg any, t *Table, depth int) error {
 		return nil
 	}
 	base := fastBase(t, msg)
+	writeRep := encodeRepeatedPlain
+	if deterministic {
+		writeRep = encodeRepeatedDeterministic
+	}
 	for _, f := range t.Fields {
 		if base != nil && f.Fast {
 			done, err := encodeFast(e, base, f, depth)
@@ -340,7 +402,7 @@ func EncodeTable(e *Encoder, msg any, t *Table, depth int) error {
 			}
 		}
 		if f.Repeated {
-			if err := encodeRepeated(e, msg, f, depth); err != nil {
+			if err := writeRep(e, msg, f, depth); err != nil {
 				return err
 			}
 			continue
@@ -350,13 +412,13 @@ func EncodeTable(e *Encoder, msg any, t *Table, depth int) error {
 			if !ok {
 				continue
 			}
-			if err := writeOneofValue(e, f, v, depth); err != nil {
+			if err := writeOneofValue(e, f, v, depth, deterministic); err != nil {
 				return err
 			}
 			continue
 		}
 		if f.Group {
-			if err := encodeGroup(e, msg, f, depth); err != nil {
+			if err := encodeGroup(e, msg, f, depth, deterministic); err != nil {
 				return err
 			}
 			continue
@@ -386,7 +448,7 @@ func EncodeTable(e *Encoder, msg any, t *Table, depth int) error {
 				continue
 			}
 			v := f.GetI32(msg)
-			if v == 0 && !f.Required {
+			if v == 0 && skipZero(f, msg) {
 				continue
 			}
 			e.Tag(f.Num, WireVarint)
@@ -402,7 +464,7 @@ func EncodeTable(e *Encoder, msg any, t *Table, depth int) error {
 				continue
 			}
 			v := f.GetI64(msg)
-			if v == 0 && !f.Required {
+			if v == 0 && skipZero(f, msg) {
 				continue
 			}
 			e.Tag(f.Num, WireVarint)
@@ -418,7 +480,7 @@ func EncodeTable(e *Encoder, msg any, t *Table, depth int) error {
 				continue
 			}
 			v := f.GetU32(msg)
-			if v == 0 && !f.Required {
+			if v == 0 && skipZero(f, msg) {
 				continue
 			}
 			e.Tag(f.Num, WireVarint)
@@ -434,7 +496,7 @@ func EncodeTable(e *Encoder, msg any, t *Table, depth int) error {
 				continue
 			}
 			v := f.GetU64(msg)
-			if v == 0 && !f.Required {
+			if v == 0 && skipZero(f, msg) {
 				continue
 			}
 			e.Tag(f.Num, WireVarint)
@@ -450,7 +512,7 @@ func EncodeTable(e *Encoder, msg any, t *Table, depth int) error {
 				continue
 			}
 			v := f.GetS32(msg)
-			if v == 0 && !f.Required {
+			if v == 0 && skipZero(f, msg) {
 				continue
 			}
 			e.Tag(f.Num, WireVarint)
@@ -466,7 +528,7 @@ func EncodeTable(e *Encoder, msg any, t *Table, depth int) error {
 				continue
 			}
 			v := f.GetS64(msg)
-			if v == 0 && !f.Required {
+			if v == 0 && skipZero(f, msg) {
 				continue
 			}
 			e.Tag(f.Num, WireVarint)
@@ -482,7 +544,7 @@ func EncodeTable(e *Encoder, msg any, t *Table, depth int) error {
 				continue
 			}
 			v := f.GetFx32(msg)
-			if v == 0 && !f.Required {
+			if v == 0 && skipZero(f, msg) {
 				continue
 			}
 			e.Tag(f.Num, WireFixed32)
@@ -498,7 +560,7 @@ func EncodeTable(e *Encoder, msg any, t *Table, depth int) error {
 				continue
 			}
 			v := f.GetFx64(msg)
-			if v == 0 && !f.Required {
+			if v == 0 && skipZero(f, msg) {
 				continue
 			}
 			e.Tag(f.Num, WireFixed64)
@@ -514,7 +576,7 @@ func EncodeTable(e *Encoder, msg any, t *Table, depth int) error {
 				continue
 			}
 			v := f.GetSfx32(msg)
-			if v == 0 && !f.Required {
+			if v == 0 && skipZero(f, msg) {
 				continue
 			}
 			e.Tag(f.Num, WireFixed32)
@@ -530,7 +592,7 @@ func EncodeTable(e *Encoder, msg any, t *Table, depth int) error {
 				continue
 			}
 			v := f.GetSfx64(msg)
-			if v == 0 && !f.Required {
+			if v == 0 && skipZero(f, msg) {
 				continue
 			}
 			e.Tag(f.Num, WireFixed64)
@@ -546,7 +608,7 @@ func EncodeTable(e *Encoder, msg any, t *Table, depth int) error {
 				continue
 			}
 			v := f.GetF32(msg)
-			if v == 0 && !f.Required {
+			if v == 0 && skipZero(f, msg) {
 				continue
 			}
 			e.Tag(f.Num, WireFixed32)
@@ -562,7 +624,7 @@ func EncodeTable(e *Encoder, msg any, t *Table, depth int) error {
 				continue
 			}
 			v := f.GetF64(msg)
-			if v == 0 && !f.Required {
+			if v == 0 && skipZero(f, msg) {
 				continue
 			}
 			e.Tag(f.Num, WireFixed64)
@@ -582,7 +644,7 @@ func EncodeTable(e *Encoder, msg any, t *Table, depth int) error {
 				continue
 			}
 			v := f.GetBool(msg)
-			if !v && !f.Required {
+			if !v && skipZero(f, msg) {
 				continue
 			}
 			e.Tag(f.Num, WireVarint)
@@ -602,7 +664,7 @@ func EncodeTable(e *Encoder, msg any, t *Table, depth int) error {
 				continue
 			}
 			v := f.GetStr(msg)
-			if v == "" && !f.Required {
+			if v == "" && skipZero(f, msg) {
 				continue
 			}
 			e.Tag(f.Num, WireLen)
@@ -618,7 +680,7 @@ func EncodeTable(e *Encoder, msg any, t *Table, depth int) error {
 				continue
 			}
 			v := f.GetBytes(msg)
-			if len(v) == 0 && !f.Required {
+			if len(v) == 0 && skipZero(f, msg) {
 				continue
 			}
 			e.Tag(f.Num, WireLen)
@@ -634,18 +696,18 @@ func EncodeTable(e *Encoder, msg any, t *Table, depth int) error {
 				continue
 			}
 			v := f.GetEnum(msg)
-			if v == 0 && !f.Required {
+			if v == 0 && skipZero(f, msg) {
 				continue
 			}
 			e.Tag(f.Num, WireVarint)
 			e.Varint(uint64(int64(v)))
 		case KindMessage:
 			sub := f.GetMsg(msg)
-			if sub == nil && !f.Required {
+			if sub == nil && skipZero(f, msg) {
 				continue
 			}
 			mark := e.Begin(f.Num)
-			if err := EncodeTable(e, sub, f.Sub(), depth+1); err != nil {
+			if err := encodeTable(e, sub, f.Sub(), depth+1, deterministic); err != nil {
 				return err
 			}
 			e.End(mark)
@@ -657,13 +719,13 @@ func EncodeTable(e *Encoder, msg any, t *Table, depth int) error {
 
 // encodeGroup frames one group value with start/end tags; the shared body
 // is nil-tolerant, so required and oneof members need no extra check.
-func encodeGroup(e *Encoder, msg any, f *Field, depth int) error {
+func encodeGroup(e *Encoder, msg any, f *Field, depth int, deterministic bool) error {
 	sub := f.GetMsg(msg)
-	if sub == nil && !f.Required {
+	if sub == nil && skipZero(f, msg) {
 		return nil
 	}
 	e.Tag(f.Num, WireStartGroup)
-	if err := EncodeTable(e, sub, f.Sub(), depth+1); err != nil {
+	if err := encodeTable(e, sub, f.Sub(), depth+1, deterministic); err != nil {
 		return err
 	}
 	e.Tag(f.Num, WireEndGroup)
@@ -672,7 +734,7 @@ func encodeGroup(e *Encoder, msg any, f *Field, depth int) error {
 
 // writeOneofValue writes a set oneof member: no presence guard beyond the
 // wrapper itself, so zero and empty values still encode.
-func writeOneofValue(e *Encoder, f *Field, v any, depth int) error {
+func writeOneofValue(e *Encoder, f *Field, v any, depth int, deterministic bool) error {
 	switch f.Kind {
 	case KindInt32:
 		e.Tag(f.Num, WireVarint)
@@ -729,7 +791,7 @@ func writeOneofValue(e *Encoder, f *Field, v any, depth int) error {
 	case KindMessage:
 		if f.Group {
 			e.Tag(f.Num, WireStartGroup)
-			if err := EncodeTable(e, v, f.Sub(), depth+1); err != nil {
+			if err := encodeTable(e, v, f.Sub(), depth+1, deterministic); err != nil {
 				return err
 			}
 			e.Tag(f.Num, WireEndGroup)
@@ -745,7 +807,7 @@ func writeOneofValue(e *Encoder, f *Field, v any, depth int) error {
 			return nil
 		}
 		mark := e.Begin(f.Num)
-		if err := EncodeTable(e, v, f.Sub(), depth+1); err != nil {
+		if err := encodeTable(e, v, f.Sub(), depth+1, deterministic); err != nil {
 			return err
 		}
 		e.End(mark)
@@ -753,10 +815,23 @@ func writeOneofValue(e *Encoder, f *Field, v any, depth int) error {
 	return nil
 }
 
+// encodeRepeatedPlain and encodeRepeatedDeterministic are the two row
+// writers encodeTable selects between once per message: plain encode never
+// touches the deterministic flag, not even as a parameter it ignores.
+func encodeRepeatedPlain(e *Encoder, msg any, f *Field, depth int) error {
+	return encodeRepeated(e, msg, f, depth, false)
+}
+
+func encodeRepeatedDeterministic(e *Encoder, msg any, f *Field, depth int) error {
+	return encodeRepeated(e, msg, f, depth, true)
+}
+
 // encodeRepeated writes one repeated row: packable numerics share one
 // length prefix when the row packs, strings/bytes repeat the tag, messages
 // recurse per element (a nil element encodes empty, like protoc-gen-go).
-func encodeRepeated(e *Encoder, msg any, f *Field, depth int) error {
+// Under deterministic, repeated map-entry rows encode a copy sorted by key;
+// the map check runs once per repeated message row, never per element.
+func encodeRepeated(e *Encoder, msg any, f *Field, depth int, deterministic bool) error {
 	switch f.Kind {
 	case KindInt32:
 		vs := f.GetRepI32(msg)
@@ -1015,6 +1090,11 @@ func encodeRepeated(e *Encoder, msg any, f *Field, depth int) error {
 			e.Varint(uint64(int64(v)))
 		}
 	case KindMessage:
+		if deterministic && f.Foreign == nil && !f.Group {
+			if sub := f.Sub(); isMapEntryTable(sub) {
+				return encodeMapEntriesSorted(e, msg, f, sub, depth)
+			}
+		}
 		n := f.RepMsgLen(msg)
 		for i := 0; i < n; i++ {
 			sub := f.RepMsgAt(msg, i)
@@ -1029,7 +1109,7 @@ func encodeRepeated(e *Encoder, msg any, f *Field, depth int) error {
 			}
 			if f.Group {
 				e.Tag(f.Num, WireStartGroup)
-				if err := EncodeTable(e, sub, f.Sub(), depth+1); err != nil {
+				if err := encodeTable(e, sub, f.Sub(), depth+1, deterministic); err != nil {
 					return err
 				}
 				e.Tag(f.Num, WireEndGroup)
@@ -1038,12 +1118,201 @@ func encodeRepeated(e *Encoder, msg any, f *Field, depth int) error {
 			mark := e.Begin(f.Num)
 			// A nil element encodes empty, like protoc-gen-go: the
 			// table closures normalize typed nils to nil, and
-			// EncodeTable is nil-tolerant.
-			if err := EncodeTable(e, sub, f.Sub(), depth+1); err != nil {
+			// encodeTable is nil-tolerant.
+			if err := encodeTable(e, sub, f.Sub(), depth+1, deterministic); err != nil {
 				return err
 			}
 			e.End(mark)
 		}
+	}
+	return nil
+}
+
+// isMapEntryTable reports whether sub is a map-entry message. The dynamic
+// core marks entry tables from the schema plan; generated tables predate
+// that flag, so they fall back to the entry shape protoc enforces: exactly
+// fields 1 (scalar key) and 2 (value), named like an entry. A repeated
+// plain message shaped exactly like an entry would also match; protoc
+// names real entries Parent+Field+"Entry", so the suffix keeps that
+// misfire to hand-built tables only.
+func isMapEntryTable(sub *Table) bool {
+	if sub == nil {
+		return false
+	}
+	return sub.IsMapEntry || isEntryShape(sub)
+}
+
+// isEntryShape recognizes the entry shape protoc enforces: exactly fields
+// 1 (scalar key) and 2 (value), on a table named like an entry.
+func isEntryShape(tb *Table) bool {
+	if tb == nil || len(tb.Fields) != 2 {
+		return false
+	}
+	k, v := tb.Fields[0], tb.Fields[1]
+	if k.Num != 1 || v.Num != 2 {
+		return false
+	}
+	if k.Kind == KindMessage || k.Repeated || k.Oneof || k.Explicit || k.Group {
+		return false
+	}
+	if v.Repeated || v.Oneof || v.Explicit || v.Group {
+		return false
+	}
+	return strings.HasSuffix(tb.Name, "Entry")
+}
+
+// mapKey is one entry's sort key: the raw numeric bits, the string bytes,
+// or nothing when the key field is absent (or the table has no key row).
+type mapKey struct {
+	kind Kind
+	has  bool
+	i    int64
+	u    uint64
+	s    string
+	p    []byte
+}
+
+// mapEntryKey reads an entry element's key through the entry table's own
+// getters, so generated structs and dynamic trees share the comparison.
+// A dynamic entry that never set its key sorts as missing.
+func mapEntryKey(sub *Table, elem any) mapKey {
+	var k mapKey
+	if sub == nil || len(sub.ByNum) < 2 || sub.ByNum[1] == nil {
+		return k
+	}
+	row := sub.ByNum[1]
+	k.kind = row.Kind
+	if dm, ok := elem.(*DMsg); ok {
+		present := false
+		for i, fp := range dm.typ.plan.Fields {
+			if fp.Number == 1 {
+				present = dm.slots[i].present
+				break
+			}
+		}
+		if !present {
+			return k
+		}
+	}
+	k.has = true
+	switch row.Kind {
+	case KindString:
+		k.s = row.GetStr(elem)
+	case KindBytes:
+		k.p = row.GetBytes(elem)
+	case KindInt32, KindSint32:
+		k.i = int64(row.GetI32(elem))
+	case KindSfixed32:
+		k.i = int64(row.GetSfx32(elem))
+	case KindEnum:
+		k.i = int64(row.GetEnum(elem))
+	case KindInt64, KindSint64:
+		k.i = row.GetI64(elem)
+	case KindSfixed64:
+		k.i = row.GetSfx64(elem)
+	case KindUint32:
+		k.u = uint64(row.GetU32(elem))
+	case KindFixed32:
+		k.u = uint64(row.GetFx32(elem))
+	case KindUint64:
+		k.u = row.GetU64(elem)
+	case KindFixed64:
+		k.u = row.GetFx64(elem)
+	case KindBool:
+		if row.GetBool(elem) {
+			k.u = 1
+		}
+	case KindFloat:
+		k.u = uint64(math.Float32bits(row.GetF32(elem)))
+	case KindDouble:
+		k.u = math.Float64bits(row.GetF64(elem))
+	default:
+		k.has = false
+	}
+	return k
+}
+
+// mapKeyCmp orders two entry keys, mirroring src/encode.c map_key_cmp and
+// the Java GenericCodec deterministic branch: a missing key sorts first,
+// string/bytes keys compare bytewise, signed numerics numerically, and
+// unsigned kinds by raw bits.
+func mapKeyCmp(sub *Table, a, b any) int {
+	ka := mapEntryKey(sub, a)
+	kb := mapEntryKey(sub, b)
+	if !ka.has || !kb.has {
+		if ka.has == kb.has {
+			return 0
+		}
+		if !ka.has {
+			return -1
+		}
+		return 1
+	}
+	switch ka.kind {
+	case KindString:
+		if ka.s == kb.s {
+			return 0
+		}
+		if ka.s < kb.s {
+			return -1
+		}
+		return 1
+	case KindBytes:
+		return bytes.Compare(ka.p, kb.p)
+	case KindInt32, KindSint32, KindSfixed32, KindEnum,
+		KindInt64, KindSint64, KindSfixed64:
+		if ka.i == kb.i {
+			return 0
+		}
+		if ka.i < kb.i {
+			return -1
+		}
+		return 1
+	default:
+		if ka.u == kb.u {
+			return 0
+		}
+		if ka.u < kb.u {
+			return -1
+		}
+		return 1
+	}
+}
+
+// encodeMapEntriesSorted encodes one repeated map-entry row in key order.
+// Elements are copied into an index first: the caller's slice (and the
+// dynamic tree's run) keep their insertion order. A table without a key
+// row keeps insertion order, like the C core; a nil element sorts like a
+// missing key and encodes empty, like the plain path. Entry bytes recurse
+// deterministically, so nested maps sort at every level.
+func encodeMapEntriesSorted(e *Encoder, msg any, f *Field, sub *Table, depth int) error {
+	n := f.RepMsgLen(msg)
+	if n == 0 {
+		return nil
+	}
+	if len(sub.ByNum) < 2 || sub.ByNum[1] == nil {
+		for i := 0; i < n; i++ {
+			mark := e.Begin(f.Num)
+			if err := encodeTable(e, f.RepMsgAt(msg, i), sub, depth+1, true); err != nil {
+				return err
+			}
+			e.End(mark)
+		}
+		return nil
+	}
+	order := make([]any, n)
+	for i := 0; i < n; i++ {
+		order[i] = f.RepMsgAt(msg, i)
+	}
+	sort.SliceStable(order, func(a, b int) bool {
+		return mapKeyCmp(sub, order[a], order[b]) < 0
+	})
+	for _, elem := range order {
+		mark := e.Begin(f.Num)
+		if err := encodeTable(e, elem, sub, depth+1, true); err != nil {
+			return err
+		}
+		e.End(mark)
 	}
 	return nil
 }

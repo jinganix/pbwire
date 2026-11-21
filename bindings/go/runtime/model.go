@@ -12,6 +12,18 @@ import (
 // hint lives on the table, so a steady-state loop reuses the size it already
 // paid for without the model carrying any state.
 func EncodeModel(msg any, t *Table) ([]byte, error) {
+	return encodeModel(msg, t, false)
+}
+
+// EncodeModelDeterministic serializes a generated model with map entries in
+// key order (see encodeTable): the bytes are stable across runs for equal
+// trees, and equal the C deterministic encoder's output. Only map-entry
+// rows reorder; every other row keeps its order.
+func EncodeModelDeterministic(msg any, t *Table) ([]byte, error) {
+	return encodeModel(msg, t, true)
+}
+
+func encodeModel(msg any, t *Table, deterministic bool) ([]byte, error) {
 	if msg == nil {
 		return []byte{}, nil
 	}
@@ -23,7 +35,7 @@ func EncodeModel(msg any, t *Table) ([]byte, error) {
 		cap0 = 256
 	}
 	e := Encoder{Buf: make([]byte, 0, cap0)}
-	if err := EncodeTable(&e, msg, t, 0); err != nil {
+	if err := encodeTable(&e, msg, t, 0, deterministic); err != nil {
 		return nil, err
 	}
 	t.setCapHint(len(e.Buf) + 64)
