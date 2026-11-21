@@ -292,8 +292,8 @@ payload, the boundary cost and the baseline all differ.
 | C structs | direct call, layout tables | 74913 B | 1171.4 (1.32x ✅) `shim` (its `tree` arm is the `pbw_ctx` row above) | 728.1 (1.96x ✅) `shim` |
 | Go | `cshim` runtime, one cgo call per op | 74913 B | 1050.7 (1.78x ✅) `core`; `tree` 28.1 (0.05x ❌) | 512.1 (1.46x ✅) `core`; `tree` 33.5 (0.13x ❌) |
 | Python | CPython extension, dict path | 74913 B | 577.1 (7.00x ✅) `encode(data)`; pure-Python `core` 19.3 (1.29x ✅) `encode(parsed)`, 10.3 `encode(data)` | 941.9 (1.20x ✅) `dict`; pure-Python `core` 6.7 (1.08x ✅) |
-| Java | pure-Java codec, no native code | 74913 B | 1120.1 (1.26x ✅) `tree`; generated model `core` 671.6 (0.75x ❌) | 729.1 (1.76x ✅) `tree`; `core` 331.7 (0.80x ❌) |
-| Kotlin | the pure-Java codec + DSL | 74913 B | 990.3 (1.11x ✅) `tree`; `core` 705.4 (0.79x ❌) | 772.9 (1.77x ✅) `tree`; `core` 329.6 (0.76x ❌) |
+| Java | pure-Java codec, no native code | 74913 B | 1120.1 (1.26x ✅) `tree`; generated model `core` 662.5 (0.74x ❌) | 729.1 (1.76x ✅) `tree`; `core` 339.3 (0.83x ❌) |
+| Kotlin | the pure-Java codec + DSL | 74913 B | 990.3 (1.11x ✅) `tree`; `core` 705.6 (0.81x ❌) | 772.9 (1.77x ✅) `tree`; `core` 333.1 (0.75x ❌) |
 | Node | N-API addon | 74913 B | 1689.3 (3.36x ✅) `tree`; native-object `shim` 58.1 (0.12x ❌); pure-TS `core` 177.2 (2.96x ✅ vs jspb, 0.34x vs protobufjs) | 1196.1 (2.95x ✅) `tree`; `shim` 52.3 (0.13x ❌); `core` 86.1 (1.02x ✅ vs jspb, 0.21x vs protobufjs) |
 | Dart | `dart:ffi` binding | 74913 B | 1506.3 (15.55x ✅) `tree`; native-object `shim` 1073.6 (11.08x ✅); pure-Dart `core` 466.7 (4.82x ✅) | 674.0 (4.25x ✅) `tree`; `shim` 727.1 (4.59x ✅); pure-Dart `core` 209.9 (1.32x ✅) |
 | Ruby | C extension over the core | 74913 B | 1804.9 (1.35x ✅) `tree`; native-object `shim` 253.5 (0.19x ❌) | 1207.8 (1.75x ✅) `tree`; `shim` 158.6 (0.23x ❌) |
@@ -304,7 +304,7 @@ payload, the boundary cost and the baseline all differ.
 | Lua | C module, tables | 74913 B | 196.9 (1.09x ✅) | 124.7 (1.42x ✅) |
 | Erlang | NIF (`pbwire`) | 74913 B | 483.3 (3.91x ✅) | 356.5 (1.60x ✅) |
 | Swift | static link (SwiftPM) | 74913 B | 1656.6 (6.01x ✅) `tree`; native-object `shim` 886.6 (3.22x ✅); pure-Swift `core` 239.6 (0.87x ❌) | 586.8 (2.71x ✅) `tree`; `shim` 563.3 (2.60x ✅); `core` 60.2 (0.28x ❌) |
-| Scala | the Java runtime + DSL | 74913 B | 1050.5 (1.45x ✅) `tree`; case-class `core` 240.5 (0.33x ❌) | 707.4 (1.37x ✅) `tree`; `core` 155.0 (0.30x ❌) |
+| Scala | the Java runtime + DSL | 74913 B | 1050.5 (1.45x ✅) `tree`; case-class `core` 334.6 (0.42x ❌) | 707.4 (1.37x ✅) `tree`; `core` 169.7 (0.34x ❌) |
 | Elixir | NIF (Hex `:pbwire`, same core as Erlang) | 74913 B | 152.6 (2.56x ✅) | 105.7 (1.90x ✅) |
 | Zig | static link | 74913 B | 1604.0 (1.94x ✅) `tree`; native-object `shim` 1197.1 (1.45x ✅); pure-Zig `core` 731.9 (0.89x ❌) | 724.2 (1.39x ✅) `tree`; `shim` 745.0 (1.43x ✅); `core` 356.6 (0.68x ❌) |
 | F# | P/Invoke over the C# runtime | 74913 B | 671.2 (1.35x ✅) `tree` (that row dipped in this run: 2469 B reads 1461.5); `shim` 658.3 (1.33x ✅) | 722.6 (1.40x ✅) `tree`; `shim` 354.6 (0.69x ❌) |
@@ -973,20 +973,20 @@ Standard cases), which makes its xlarge tier a memcpy.
 
 | payload | op | pbwire-java-tree (MB/s, x protobuf-java) | pbwire-java-core (MB/s) | protobuf-java (MB/s) |
 |---|---|---|---|---|
-| 136 B | encode | 1585.4 (0.71x ❌) | 607.8 | 2235.7 |
-| 136 B | decode | 852.6 (1.38x ✅) | 321.7 | 618.8 |
-| 174 B | encode | 1226.6 (1.17x ✅) | 583.2 | 1051.0 |
-| 174 B | decode | 632.7 (1.16x ✅) | 289.2 | 545.5 |
-| 2469 B | encode | 915.2 (1.12x ✅) | 584.3 | 819.8 |
-| 2469 B | decode | 708.0 (1.68x ✅) | 277.6 | 420.7 |
-| 74913 B | encode | 1120.1 (1.26x ✅) | 671.6 | 891.6 |
-| 74913 B | decode | 729.1 (1.76x ✅) | 331.7 | 413.7 |
+| 136 B | encode | 1585.4 (0.71x ❌) | 595.8 | 2235.7 |
+| 136 B | decode | 852.6 (1.38x ✅) | 321.2 | 618.8 |
+| 174 B | encode | 1226.6 (1.17x ✅) | 606.8 | 1051.0 |
+| 174 B | decode | 632.7 (1.16x ✅) | 277.5 | 545.5 |
+| 2469 B | encode | 915.2 (1.12x ✅) | 606.9 | 819.8 |
+| 2469 B | decode | 708.0 (1.68x ✅) | 311.4 | 420.7 |
+| 74913 B | encode | 1120.1 (1.26x ✅) | 662.5 | 891.6 |
+| 74913 B | decode | 729.1 (1.76x ✅) | 339.3 | 413.7 |
 
 The two pbwire columns are the arms: `tree` is the prebuilt `GenericCodec`/`DMsg`
 tree, `core` is the committed generated model (`Structtest_Scalars3`) used as the
 native object (`toByteArray()`/`parseFrom()`). The `core` row is the shipped
-typed path and it loses at every tier here (0.27x at 136 B, 0.75x at 74 KB
-encode, 0.52x-0.80x decode): the generated table walks one `FieldMeta` lambda
+typed path and it loses at every tier here (0.27x at 136 B, 0.74x at 74 KB
+encode, 0.52x-0.82x decode): the generated table walks one `FieldMeta` lambda
 per field and its decode builds the eager typed tree, against a generated writer
 that knows every tag and a decode that materializes nothing until read. The
 `tree` row therefore stays Java's headline, and the model stays the ergonomic
@@ -1199,20 +1199,20 @@ into its own buffer, which `NSData` then takes over.
 
 | payload | op | pbwire-kotlin-tree (MB/s, x protobuf-kotlin) | pbwire-kotlin-core (MB/s) | protobuf-kotlin (MB/s) |
 |---|---|---|---|---|
-| 136 B | encode | 1554.4 (0.71x ❌) | 609.6 | 2202.7 |
-| 136 B | decode | 890.4 (1.41x ✅) | 339.1 | 632.2 |
-| 174 B | encode | 1491.6 (1.20x ✅) | 640.3 | 1242.6 |
-| 174 B | decode | 722.0 (1.24x ✅) | 292.5 | 582.9 |
-| 2469 B | encode | 996.9 (1.16x ✅) | 641.2 | 862.5 |
-| 2469 B | decode | 709.0 (1.54x ✅) | 300.2 | 459.6 |
-| 74913 B | encode | 990.3 (1.11x ✅) | 705.4 | 890.0 |
-| 74913 B | decode | 772.9 (1.77x ✅) | 329.6 | 436.1 |
+| 136 B | encode | 1554.4 (0.71x ❌) | 628.8 | 2202.7 |
+| 136 B | decode | 890.4 (1.41x ✅) | 317.0 | 632.2 |
+| 174 B | encode | 1491.6 (1.20x ✅) | 624.4 | 1242.6 |
+| 174 B | decode | 722.0 (1.24x ✅) | 309.7 | 582.9 |
+| 2469 B | encode | 996.9 (1.16x ✅) | 643.4 | 862.5 |
+| 2469 B | decode | 709.0 (1.54x ✅) | 298.8 | 459.6 |
+| 74913 B | encode | 990.3 (1.11x ✅) | 705.6 | 890.0 |
+| 74913 B | decode | 772.9 (1.77x ✅) | 333.1 | 436.1 |
 
 Kotlin reuses the Java runtime (`bindings/java/runtime`), so these numbers are
 `pbwire-java`'s: one workspace lookup plus one `byte[]` copy per call. `core`
 is the same committed generated Java model the Kotlin DSL builds (the
 `tests/gen/matrix3.kt` factories are inline sugar over it), so it repeats
-Java's loss (0.28x at 136 B, 0.79x at 74 KB encode, 0.50x-0.76x decode) for the
+Java's loss (0.29x at 136 B, 0.79x at 74 KB encode, 0.50x-0.76x decode) for the
 same reason; the `tree` row stays the headline. The `tree` decode column is
 lazy, the `core` column eager (the materialization footnote is in the Java
 section). `shim` for the JVM four: `bindings/java/pbench/` (`jni/`, one
@@ -1567,14 +1567,14 @@ the remaining gap are recorded in `docs/perf-attempts.md`.
 
 | payload | op | pbwire-scala-tree (MB/s, x scalapb) | pbwire-scala-core (MB/s) | scalapb (MB/s) |
 |---|---|---|---|---|
-| 136 B | encode | 1290.2 (0.81x ❌) | 367.1 | 1598.8 |
-| 136 B | decode | 775.5 (1.34x ✅) | 229.4 | 578.1 |
-| 174 B | encode | 1293.7 (1.37x ✅) | 353.9 | 942.0 |
-| 174 B | decode | 702.3 (1.00x ✅) | 202.6 | 700.2 |
-| 2469 B | encode | 1000.5 (1.44x ✅) | 237.9 | 694.6 |
-| 2469 B | decode | 661.4 (1.22x ✅) | 131.6 | 542.7 |
-| 74913 B | encode | 1050.5 (1.45x ✅) | 240.5 | 723.2 |
-| 74913 B | decode | 707.4 (1.37x ✅) | 155.0 | 515.1 |
+| 136 B | encode | 1290.2 (0.81x ❌) | 587.1 | 1598.8 |
+| 136 B | decode | 775.5 (1.34x ✅) | 336.6 | 578.1 |
+| 174 B | encode | 1293.7 (1.37x ✅) | 494.2 | 942.0 |
+| 174 B | decode | 702.3 (1.00x ✅) | 244.3 | 700.2 |
+| 2469 B | encode | 1000.5 (1.44x ✅) | 310.6 | 694.6 |
+| 2469 B | decode | 661.4 (1.22x ✅) | 160.9 | 542.7 |
+| 74913 B | encode | 1050.5 (1.45x ✅) | 334.6 | 723.2 |
+| 74913 B | decode | 707.4 (1.37x ✅) | 169.7 | 515.1 |
 
 Same class as Kotlin: the JVM binding reuses the Java runtime and adds only
 an idiomatic DSL — no second codec, no JNI, schema from a `FileDescriptorSet`
@@ -1582,8 +1582,8 @@ at run time. The baseline is `scalapbc`-generated code (needs `cs install
 scalapbc` once); the jars land in `benchmarks/deps`. Byte parity per tier
 before timing, like every other row. `core` is the committed generated
 `matrix3Gen` case class; its `encode`/`decode` fill and load a `Message`
-field by field by name, so it is the slowest JVM `core` row (0.23x at 136 B,
-0.33x at 74 KB encode, 0.24x-0.30x decode): the translation is the cost, not
+field by field by name, so it is the slowest JVM `core` row (0.37x at 136 B,
+0.46x at 74 KB encode, 0.33x-0.58x decode): the translation is the cost, not
 the wire engine. `tree` stays the headline. `shim` for the JVM four:
 `bindings/java/pbench/` (`jni/`, one crossing, no tree translation -- a
 ceiling, not a binding cost).

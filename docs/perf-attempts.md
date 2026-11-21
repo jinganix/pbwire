@@ -1044,6 +1044,39 @@ probe (`benchmarks/ab.sh` times `GenericCodec` and the protobuf-java
 oracle, and the runtime change that would move this is the rejected
 per-message codegen).
 
+## Cell: the JVM `core` rows, plan 03b Stage 6 (2026-11-21)
+
+Plan 03 skipped Stage 6 on the theory that nothing in scope could move the
+generated-model rows. This pass put three changes on the probe anyway. The
+probe is a JVM `CoreAb` (xlarge payload, 3000 repeats) that times the two
+shapes the published rows use: the committed Java model through `PbCodec`
+(Java/Kotlin `core`) and a Scala-style `Message` fill/load by name
+(+ `Message.encode`, Scala `core`). Base and candidate are two runtime class
+dirs from the same tree, run alternately in separate JVMs, 3-5 rounds. Byte
+parity is asserted in the probe before any timing, and the official
+harnesses re-ran the parity gates at the end.
+
+| # | candidate | A/B (fill-encode, xlarge) | verdict |
+|---|---|---|---|
+| 1 | `MessageType.field(name)` reads a flat open-addressed `name -> slot` table built once per type, instead of `HashMap` | base 296.6-313.5 us -> 218.7-192.4 us over 5 rounds (-27..-38%) | **kept** |
+| 2 | slot-direct `DMsg` stores: `putRef`/`appendRef`/`newMessageInSlot` write the already-resolved slot, so a string/bytes/message write no longer re-resolves the field number and switches on its kind | 206.4-229.2 us -> 194.4-211.0 us over 5 rounds (-6..-15%) | **kept** |
+| 3 | one `DMsg` allocation fewer per message: share a static empty `oneofCase` when `oneofCount == 0` (3000 fewer arrays on the xlarge fill) | r1 200.4 -> 197.4 us, r2 193.7 -> 194.3, r3 186.5 -> 229.8 | **rejected** (not a win in every round) |
+
+Why only Scala moves: Java/Kotlin `core` is `Structtest_Scalars3.toByteArray()`
+/ `parseFrom()`, which walk the generated `PbCodec`/`FieldMeta` table by slot
+and never build a `DMsg`; there is no name lookup and no reference store on
+that path, so the probe's `core-encode` read 79-86 us before and after (noise).
+Scala's committed case-class `encode` is the only JVM `core` that fills a
+`DMsg` field by field, and that is where hypotheses 1-2 apply.
+
+Published run: `results/bench-{java,kotlin,scala}-20261121T0357*.json`
+(`make java-bench kotlin-bench scala-bench`). Scala `core` encode rose
+240.5 -> 334.6 MB/s at xlarge (0.33x -> 0.42x of the same run's ScalaPB);
+the other two `core` columns read within noise (Java 671.6 -> 662.5,
+Kotlin 705.4 -> 705.6 MB/s) because their code path is untouched. The
+`tree` and baseline columns stay on the plan-03 run: this pass was taken
+under the same loaded host and only the changed cells are republished.
+
 ## Provisional: the Node two-arm pbench (2026-11-21, issue 41)
 
 First run of the Node `pbench` rows, before plan 04's Stage 5 recorder pass:
