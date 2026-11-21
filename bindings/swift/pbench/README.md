@@ -10,10 +10,10 @@ and wire bytes out; wire bytes in and a fully readable native object out.
 |---|---|---|---|
 | `tree` | `Sources/Pbench/Arms.swift` | the shipped `Message` handle: one `set` per field, then `encode()`; `decode()` then one `get` per field | what the per-field downcall costs once the tree exists |
 | `shim` | `Sources/Pbench/Arms.swift` | the generated `@frozen <Message>Repr` is the native object; `InPlace.encodeInPlace` / `decodeInPlace` cross once and `bindings/swift/Sources/CPbwire/shim.c` walks that memory in place through `pbw_struct_codec_*` | is a boundary worth paying for at all |
-| `core` | `n/a` | a pure-Swift port of the C core | plan 21 (`issue41-21-core-swift.md`) builds it |
-
-`core` prints `n/a` until plan 21 lands; there is no second wire
-implementation in this binding.
+| `core` | `Sources/Pbench/CoreArm.swift` | the pure-Swift `PbwireCore` product: a schema from the descriptor set, a value tree built with one `set` per field, then `encode`/`decode` | who walks the wire with no C library, no `unsafeFlags` link and no generated code |
+`core` replaces the `n/a` plan 21 started from: the arm is `PbwireCore`
+(`Sources/PbwireCore/`), a second, independent Swift implementation of the
+binary format that builds without the C module.
 
 ## Layout table
 
