@@ -2,12 +2,9 @@
 // model; the dynamic cores hold a value tree. These functions move a message
 // between the two through the tables both sides already share, with no
 // reflection and no wire round trip: every row copies getter to setter,
-// nested messages recurse, unknown fields stay on the tree.
-//
-// Export targets a fresh zero struct: absent tree fields leave the struct
-// field at its zero value, and unknown bytes have nowhere to go on a struct
-// and are dropped (documented, matching the thin model's decode contract).
-// Required fields are not enforced on either direction.
+// nested messages recurse, and unknown fields ride the model table's
+// Unknown/EncodeUnknown hooks on every level (hook-less tables keep the old
+// drop behavior). Required fields are not enforced on either direction.
 package runtime
 
 import (
@@ -57,6 +54,11 @@ func importInto(model any, meta *Table, d *DMsg, t *DType) error {
 		}
 		if err := importRow(t, i, model, mrow, d, drow); err != nil {
 			return fmt.Errorf("codec: field %s: %w", fp.Name, err)
+		}
+	}
+	if meta.EncodeUnknown != nil {
+		if raw := meta.EncodeUnknown(model); len(raw) > 0 {
+			d.unknown = append(d.unknown, raw...)
 		}
 	}
 	return nil
@@ -162,6 +164,11 @@ func exportInto(d *DMsg, model any, meta *Table, t *DType) error {
 		}
 		if err := exportRow(t, i, d, drow, model, mrow); err != nil {
 			return fmt.Errorf("codec: field %s: %w", fp.Name, err)
+		}
+	}
+	if meta.Unknown != nil {
+		if raw := d.UnknownBytes(); len(raw) > 0 {
+			meta.Unknown(model, raw)
 		}
 	}
 	return nil

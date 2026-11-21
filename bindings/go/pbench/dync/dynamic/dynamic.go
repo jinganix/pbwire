@@ -451,6 +451,36 @@ func copyBytes(p unsafe.Pointer, l C.size_t) ([]byte, error) {
 	return C.GoBytes(p, C.int(l)), nil
 }
 
+// UnknownBytes returns the raw unknown-field bytes this tree retained on
+// decode (tag + payload per item, in wire order), copied out: the tree
+// keeps its own copy. Empty when nothing unknown was seen.
+func (m *Message) UnknownBytes() ([]byte, error) {
+	if err := m.check(); err != nil {
+		return nil, err
+	}
+	n := C.pbw_message_unknown_len(m.c)
+	if n == 0 {
+		return nil, nil
+	}
+	return copyBytes(unsafe.Pointer(C.pbw_message_unknown_bytes(m.c)), n)
+}
+
+// AddUnknownBytes appends raw unknown-field bytes (tag + payload per item,
+// as produced by UnknownBytes) to this tree. Emitted after the known fields
+// on encode, in the order added.
+func (m *Message) AddUnknownBytes(raw []byte) error {
+	if err := m.check(); err != nil {
+		return err
+	}
+	if len(raw) == 0 {
+		return nil
+	}
+	if st := C.pbw_message_add_unknown_bytes(m.c, unsafe.Pointer(&raw[0]), C.size_t(len(raw))); st != C.PBW_OK {
+		return statusErr("dynamic: add unknown bytes", st)
+	}
+	return nil
+}
+
 // GetString reads a string field (copied out).
 func (m *Message) GetString(name string) (string, bool, error) {
 	v, err := m.getValue(name)

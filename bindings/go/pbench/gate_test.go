@@ -167,4 +167,32 @@ func TestGateSemantics(t *testing.T) {
 	if again, err := m2.Marshal(); err != nil || !bytes.Equal(again, nested) {
 		t.Fatalf("thin model must replay nested unknowns: got %x want %x, err %v", again, nested, err)
 	}
+
+	// Vector 4: the dynamic arms retain unknowns end to end like the oracle.
+	// The converters move them through the meta hooks on every level, so an
+	// unknown-carrying wire round-trips through tree and struct alike.
+	arms := []struct {
+		name    string
+		marshal func(*matrix3.Scalars3) ([]byte, error)
+		decode  func([]byte) (*matrix3.Scalars3, error)
+	}{
+		{"dync", cDync.Marshal, cDync.Unmarshal},
+		{"dyngo", cDynGo.Marshal, cDynGo.Unmarshal},
+	}
+	for _, arm := range arms {
+		back, err := arm.decode(unk)
+		if err != nil {
+			t.Fatalf("%s rejected unknown-only wire: %v", arm.name, err)
+		}
+		if again, err := arm.marshal(back); err != nil || !bytes.Equal(again, unk) {
+			t.Fatalf("%s must retain unknowns: got %x want %x, err %v", arm.name, again, unk, err)
+		}
+		nback, err := arm.decode(nested)
+		if err != nil {
+			t.Fatalf("%s rejected nested unknown wire: %v", arm.name, err)
+		}
+		if nagain, err := arm.marshal(nback); err != nil || !bytes.Equal(nagain, nested) {
+			t.Fatalf("%s must replay nested unknowns: got %x want %x, err %v", arm.name, nagain, nested, err)
+		}
+	}
 }
