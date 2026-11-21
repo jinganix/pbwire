@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	"google.golang.org/protobuf/proto"
-	"pbwire/pbench/cshim"
 	"pbwire/pbench/dync"
 	"pbwire/pbench/dyngo"
 	"pbwire/tests/gen/matrix3"
@@ -27,10 +26,6 @@ func TestArmsGate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cShim, err := cshim.New()
-	if err != nil {
-		t.Fatal(err)
-	}
 	arms := []struct {
 		name    string
 		marshal func(*matrix3.Scalars3) ([]byte, error)
@@ -39,7 +34,6 @@ func TestArmsGate(t *testing.T) {
 		{"dync", cDync.Marshal, cDync.Unmarshal},
 		{"dyngo", cDynGo.Marshal, cDynGo.Unmarshal},
 		{"dyngo-direct", cDynGo.DirectMarshal, cDynGo.DirectUnmarshal},
-		{"cshim", cShim.Marshal, cShim.Unmarshal},
 	}
 	for _, arm := range arms {
 		for _, tr := range []struct{ n int }{{0}, {1}, {100}, {3000}} {

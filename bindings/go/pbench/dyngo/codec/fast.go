@@ -1,10 +1,10 @@
-// Offset fast path: the cshim shape inside the shared table engine.
+// Offset fast path: struct memory read directly inside the shared
+// table engine.
 //
 // A row with Fast set carries layout facts (Off/Has/Count/Elem) over the
 // same Go struct the closures address. The engine then reads the struct
-// memory directly instead of calling a getter per field, exactly like the
-// Erlang-style C shim reads Go memory through its once-measured layout
-// table — except everything stays in Go, so there is no cgo crossing.
+// memory directly instead of calling a getter per field. Everything
+// stays in Go, so there is no cgo crossing.
 //
 // Safety rules, stated once:
 //
@@ -13,8 +13,8 @@
 //   - Decode stores plain integers, floats and bools only. Storing a
 //     pointer (string header, slice header, optional allocation,
 //     submessage) through unsafe.Pointer would skip the write barrier, so
-//     those rows stay on closures — the same split the cshim probe uses
-//     with its Go-side fixup.
+//     those rows stay on closures, which perform the typed stores with
+//     their write barriers intact.
 //   - 64-bit kinds check 8-byte alignment at run time and fall back to
 //     closures otherwise, so 32-bit targets cannot fault.
 //   - Rows the path cannot express (oneof, Foreign, Group, KindMessage)

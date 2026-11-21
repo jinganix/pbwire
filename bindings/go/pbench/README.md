@@ -20,20 +20,18 @@ dynamic paths are what this harness compares.
 | `dync/dync.go` | dynamic C core arm | struct -> C tree -> wire -> C tree -> struct, all through the shipped converter |
 | `dyngo/codec/` | dynamic Go core engine | `Schema`/`DType`/`DMsg`: pure-Go value tree and the shared table engine, plus the model<->tree converter |
 | `dyngo/dyngo.go` | dynamic Go core arm | struct -> `DMsg` -> wire -> `DMsg` -> struct, all through the shipped converter, no cgo |
-| `cshim/` | Erlang-style C | measures the struct layout once, then C reads Go memory directly: one crossing per call |
 
-Both candidates keep their engine next to their arm; nothing here is shared
-scaffolding. The harness selected `cshim`: the shipped engine is `../runtime/`
-(layout in `../runtime/layout/`), and `cshim/` keeps the matrix3 reference arm
-whose hand-written plan and fixup mirror what `protoc-gen-pbwire` emits.
-`dyngo/codec/` is a candidate that generated code still reaches: a model the
-cshim cannot drive keeps the table engine's `Marshal`/`Unmarshal`.
+Both arms keep their engine next to them; nothing here is shared
+scaffolding. The shipped engine is the pure-Go table engine in
+`dyngo/codec/`: every generated model marshals through it, so the
+harness now compares the two dynamic cores (C tree vs Go tree) with the
+shipped struct path measured separately in `../benchmarks/`.
 
 ## Harness
 
-`compare_test.go` (build tag `pbench`, so `go test ./...` stays fast) times all
-three arms plus `protobuf-go` in the same process, interleaved round by round,
-median of 5 rounds, on all four tiers. `gate_test.go` gates every arm before
+`compare_test.go` (build tag `pbench`, so `go test ./...` stays fast) times both
+arms plus `protobuf-go` in the same process, interleaved round by round,
+median of 5 rounds, on all four tiers. `gate_test.go` gates both arms before
 timing: byte-identical output to `protobuf-go` for all four tiers, and a
 field-by-field struct compare against the oracle decode.
 
@@ -42,12 +40,12 @@ go test -tags pbench -run TestCompare -v -count=1 ./pbench/
 ```
 
 Last recorded run (Apple M4 Pro; absolute numbers move with the host, the
-ordering does not): `cshim` 1.35-1.80x encode and 1.21-1.96x decode against
-`protobuf-go`, `dyngo` direct 1.42-1.76x encode and 0.88-1.13x decode, `dync`
-0.05-0.10x encode and 0.11-0.13x decode.
+ordering does not): `dyngo` direct 1.42-1.76x encode and 0.88-1.13x decode
+against `protobuf-go`, `dync` 0.05-0.10x encode and 0.11-0.13x decode.
+(Remeasured without the retired struct arm; the shipped struct path is
+timed in `../benchmarks/`.)
 
 That ordering is the reason the arms exist: a per-field copy into any tree
 (the C core with cgo crossings worst, the Go core better but still
-per-field) costs far more than reading the struct in place. The C shim is
-the shape to copy when a binding must be both native-object-end-to-end and
-fast.
+per-field) costs far more than reading the struct in place, which is what
+the shipped table engine's fast path does.

@@ -74,7 +74,7 @@ type Field struct {
 	Packed   bool // repeated packable numerics share one length run
 	Group    bool // proto2 group: start/end framing (Kind is KindMessage)
 	Oneof    bool // oneof member: presence via GetOneof, value always written
-	// Fast and the columns below are the cshim-shaped layout facts.
+	// Fast and the columns below are struct-layout facts for the fast path.
 	// Fast means the columns are valid and the engine may read/write the
 	// struct field directly instead of calling the closures. Zero Fast
 	// keeps the row on closures: offset 0 is a legal field offset (the

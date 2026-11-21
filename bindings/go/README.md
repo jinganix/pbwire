@@ -1,21 +1,16 @@
 # pbwire Go binding
 
-Shipped: thin generated models over [`runtime/`](runtime/), the Erlang-style C
-codec. The layout is measured once from the generated structs, C reads the
-struct memory directly through those offsets, and `Marshal`/`Unmarshal` cross
-cgo once per call (decode adds one `Stage` call per oneof group). A model the
-cshim cannot drive (cross-file field types, skipped fields, a message that
-repeats and is itself a field of another message) stays on the table engine,
-so its generated metadata file imports the pure-Go candidate
-[`pbench/dyngo/codec/`](pbench/dyngo/codec/), which also carries the
-descriptor-set schema (`Schema`/`DType`/`DMsg`) and the model<->tree
-converters the dynamic arms share.
+Shipped: thin generated models over the pure-Go table engine
+[`pbench/dyngo/codec/`](pbench/dyngo/codec/): no cgo, no layout measurement,
+no schema argument. The generated metadata file holds one field table per
+message; the one shared engine interprets every table. The same package also
+carries the descriptor-set schema (`Schema`/`DType`/`DMsg`) and the
+model<->tree converters the dynamic arms share.
 
 A generated model is a `protoc-gen-pbwire` struct plus one metadata file of
 field tables. Nothing in generated code decides a tag, a length, presence or
-skipping. The candidates keep their engines in [`pbench/`](pbench/) next to
-their arms: `cshim` won the comparison, so its engine ships as `runtime/`; the
-pure-Go one stays a candidate.
+skipping. The dynamic candidates keep their engines in [`pbench/`](pbench/)
+next to their arms; the pure-Go table engine is the one that ships.
 
 ## Dynamic C core (candidate, not shipped)
 
@@ -72,7 +67,7 @@ promised for multi-entry maps until a deterministic pass exists.
 import gen "pbwire/tests/gen/matrix3"
 
 m := &gen.Scalars3{I32: -7, Str: "kid", Inner: &gen.Inner3{Name: "x", Value: 1}}
-wire, _ := m.Marshal()                // runtime cshim: no schema argument
+wire, _ := m.Marshal()                // table engine: no schema argument
 back := &gen.Scalars3{}
 back.Unmarshal(wire)
 back.GetStr()                          // "kid" (nil-safe, like protoc-gen-go)
@@ -88,14 +83,12 @@ to keep them. Reach for the two dynamic cores when that matters.
 
 | Piece | Path | Role |
 |---|---|---|
-| model | `tests/gen/<pkg>/<base>_pbwire.go` | structs, enums, getters, `Reset`; `Marshal`/`Unmarshal` when the file has no cshim wiring |
-| cshim wiring | `tests/gen/<pkg>/<base>_pbwire_cshim.go` | registry, offsets, copy/fixup and the `Marshal`/`Unmarshal` going through `runtime/`; emitted only when the whole file is drivable |
+| model | `tests/gen/<pkg>/<base>_pbwire.go` | structs, enums, getters, `Reset`, `Marshal`/`Unmarshal` via the table engine |
 | metadata | `tests/gen/<pkg>/<base>_pbwire_meta.go` | one field table per message: facts and trivial accessors, no wire logic |
-| engine (default) | [`runtime/`](runtime/) | the cshim C codec plus [`layout/`](runtime/layout): struct offsets in, one cgo crossing per op |
-| engine (fallback) | [`pbench/dyngo/codec/`](pbench/dyngo/codec/) | candidate pure-Go engine: `Schema`/`DType`/`DMsg`, the one `EncodeTable`/`DecodeTable` engine, descriptor-set plans, model<->tree converters |
+| engine | [`pbench/dyngo/codec/`](pbench/dyngo/codec/) | the shipped pure-Go engine: `Schema`/`DType`/`DMsg`, the one `EncodeTable`/`DecodeTable` engine, descriptor-set plans, model<->tree converters |
 | C core candidate | [`pbench/dync/dynamic/`](pbench/dync/dynamic/) | `Registry` (hot-swap), `Schema`, `MessageType`, `Message`, model<->tree converter |
 | bench | [`benchmarks/bench_test.go`](benchmarks/bench_test.go) | four standard tiers: thin model vs `protobuf-go`, gated on byte parity and a field-by-field decode before timing |
-| arms | [`pbench/`](pbench/) (`go test -tags pbench ./pbench/`) | the three dynamic arms over the same tiers, native struct in and out, converter-only glue (issue #41) |
+| arms | [`pbench/`](pbench/) (`go test -tags pbench ./pbench/`) | the two dynamic arms over the same tiers, native struct in and out, converter-only glue (issue #41) |
 
 ```shell
 make go-test    # engine + converter + generated-model compat checks (needs protoc)

@@ -1,7 +1,6 @@
-// Switch-audit guards: every shape the cshim path drives today must behave
-// identically on the pure-Go table engine before generated models switch to
-// it. A failing test here is a switch blocker, not a flaky oracle: each
-// case pins byte output or a field-level round trip.
+// Switch-audit guards: every shape the retired cshim path drove must behave
+// identically on the pure-Go table engine that generated models now use.
+// Each case pins byte output or a field-level round trip.
 package codec_test
 
 import (
@@ -134,10 +133,10 @@ func TestAuditRecursiveTable(t *testing.T) {
 	}
 }
 
-// Generated oneof1 models: the table engine must match cshim bytes today,
-// so the switch cannot change a single byte. Covers scalar, string and
-// message members plus the empty-inner edge cshim encodes explicitly.
-func TestAuditOneof1Parity(t *testing.T) {
+// Generated oneof1 models round-trip through the table engine, including
+// scalar, string and message members plus the empty-inner edge that presence
+// in the wrapper (not the value) keeps alive.
+func TestAuditOneof1RoundTrip(t *testing.T) {
 	msgs := []*oneof1.Oneof1{
 		{Name: "n", Kind: &oneof1.Oneof1_Num{Num: -42}},
 		{Kind: &oneof1.Oneof1_Text{Text: "hi"}},
@@ -146,84 +145,90 @@ func TestAuditOneof1Parity(t *testing.T) {
 		{Name: "only"},
 	}
 	for i, m := range msgs {
-		ref, err := m.Marshal()
+		wire, err := codec.EncodeModel(m, oneof1.Oneof1Meta)
 		if err != nil {
-			t.Fatalf("case %d: cshim marshal: %v", i, err)
-		}
-		got, err := codec.EncodeModel(m, oneof1.Oneof1Meta)
-		if err != nil {
-			t.Fatalf("case %d: table encode: %v", i, err)
-		}
-		if !bytes.Equal(got, ref) {
-			t.Fatalf("case %d: table %x != cshim %x", i, got, ref)
+			t.Fatalf("case %d: encode: %v", i, err)
 		}
 		back := new(oneof1.Oneof1)
-		if err := codec.DecodeModel(ref, back, oneof1.Oneof1Meta); err != nil {
-			t.Fatalf("case %d: table decode: %v", i, err)
+		if err := codec.DecodeModel(wire, back, oneof1.Oneof1Meta); err != nil {
+			t.Fatalf("case %d: decode: %v", i, err)
 		}
 		again, err := codec.EncodeModel(back, oneof1.Oneof1Meta)
-		if err != nil || !bytes.Equal(again, ref) {
-			t.Fatalf("case %d: re-encode %x != %x (%v)", i, again, ref, err)
+		if err != nil || !bytes.Equal(again, wire) {
+			t.Fatalf("case %d: re-encode %x != %x (%v)", i, again, wire, err)
+		}
+		if back.Name != m.Name {
+			t.Fatalf("case %d: name %q want %q", i, back.Name, m.Name)
+		}
+		switch w := m.Kind.(type) {
+		case *oneof1.Oneof1_Num:
+			g, ok := back.Kind.(*oneof1.Oneof1_Num)
+			if !ok || g.Num != w.Num {
+				t.Fatalf("case %d: kind mismatch %+v", i, back.Kind)
+			}
+		case *oneof1.Oneof1_Text:
+			g, ok := back.Kind.(*oneof1.Oneof1_Text)
+			if !ok || g.Text != w.Text {
+				t.Fatalf("case %d: kind mismatch %+v", i, back.Kind)
+			}
+		case *oneof1.Oneof1_Inner_:
+			g, ok := back.Kind.(*oneof1.Oneof1_Inner_)
+			if !ok || (g.Inner == nil) != (w.Inner == nil) || (w.Inner != nil && g.Inner.V != w.Inner.V) {
+				t.Fatalf("case %d: kind mismatch %+v", i, back.Kind)
+			}
+		default:
+			if back.Kind != nil {
+				t.Fatalf("case %d: kind %+v want nil", i, back.Kind)
+			}
 		}
 	}
 }
 
-// Generated maptest models: repeated entry messages must match cshim bytes.
-func TestAuditMaptestParity(t *testing.T) {
+// Generated maptest models round-trip through the table engine: repeated
+// entry messages with string, int and message values.
+func TestAuditMaptestRoundTrip(t *testing.T) {
 	m := &maptest.MapTest{
 		ByInt: []*maptest.MapTest_ByIntEntry{{Key: -1, Value: "neg"}, {Key: 7, Value: "seven"}},
 		ByStr: []*maptest.MapTest_ByStrEntry{{Key: "a", Value: -2}},
 		ByMsg: []*maptest.MapTest_ByMsgEntry{{Key: "k", Value: &maptest.MapValue{Name: "v", Value: 3}}},
 	}
-	ref, err := m.Marshal()
+	wire, err := codec.EncodeModel(m, maptest.MapTestMeta)
 	if err != nil {
-		t.Fatalf("cshim marshal: %v", err)
-	}
-	got, err := codec.EncodeModel(m, maptest.MapTestMeta)
-	if err != nil {
-		t.Fatalf("table encode: %v", err)
-	}
-	if !bytes.Equal(got, ref) {
-		t.Fatalf("table %x != cshim %x", got, ref)
+		t.Fatalf("encode: %v", err)
 	}
 	back := new(maptest.MapTest)
-	if err := codec.DecodeModel(ref, back, maptest.MapTestMeta); err != nil {
-		t.Fatalf("table decode: %v", err)
+	if err := codec.DecodeModel(wire, back, maptest.MapTestMeta); err != nil {
+		t.Fatalf("decode: %v", err)
 	}
 	again, err := codec.EncodeModel(back, maptest.MapTestMeta)
-	if err != nil || !bytes.Equal(again, ref) {
-		t.Fatalf("re-encode %x != %x (%v)", again, ref, err)
+	if err != nil || !bytes.Equal(again, wire) {
+		t.Fatalf("re-encode %x != %x (%v)", again, wire, err)
+	}
+	if len(back.ByInt) != 2 || len(back.ByStr) != 1 || len(back.ByMsg) != 1 {
+		t.Fatalf("entries lost: %+v", back)
+	}
+	if back.ByMsg[0].Value.Name != "v" || back.ByInt[0].Value != "neg" {
+		t.Fatalf("entry payloads lost: %+v", back)
 	}
 }
 
-// Unknown fields: both paths drop them today (no retention hooks on dev).
-// Pin the parity so the switch cannot silently gain or lose retention.
-func TestAuditUnknownDroppedBoth(t *testing.T) {
+// Unknown fields are dropped on the table path (no retention hooks): pin
+// the drop so a future retention change is a deliberate, tested decision.
+func TestAuditUnknownDropped(t *testing.T) {
 	base, err := codec.EncodeModel(&oneof1.Oneof1{Name: "n"}, oneof1.Oneof1Meta)
 	if err != nil {
 		t.Fatal(err)
 	}
 	wire := append(base, 0x98, 0x06, 0x07) // field 99, varint 7
-	tabBack := new(oneof1.Oneof1)
-	if err := codec.DecodeModel(wire, tabBack, oneof1.Oneof1Meta); err != nil {
-		t.Fatalf("table decode: %v", err)
+	back := new(oneof1.Oneof1)
+	if err := codec.DecodeModel(wire, back, oneof1.Oneof1Meta); err != nil {
+		t.Fatalf("decode: %v", err)
 	}
-	tabAgain, err := codec.EncodeModel(tabBack, oneof1.Oneof1Meta)
+	again, err := codec.EncodeModel(back, oneof1.Oneof1Meta)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Equal(tabAgain, base) {
-		t.Fatalf("table path retained unknowns: %x", tabAgain)
-	}
-	cshimBack := new(oneof1.Oneof1)
-	if err := cshimBack.Unmarshal(wire); err != nil {
-		t.Fatalf("cshim decode: %v", err)
-	}
-	cshimAgain, err := cshimBack.Marshal()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(cshimAgain, base) {
-		t.Fatalf("cshim path retained unknowns: %x", cshimAgain)
+	if !bytes.Equal(again, base) {
+		t.Fatalf("unknowns retained: %x", again)
 	}
 }
