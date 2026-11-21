@@ -8,7 +8,8 @@ extern alias Oracle;
 //   shim  the generated model as the native object: Scalars3Layout.Marshal /
 //         .Unmarshal, one call per op (see the README for the deviation: the
 //         core has no offset reader, so the walk is the model's shipped one)
-//   core  n/a: plan 16
+//   core  the pure-C# core (Pbwire.Core): CCore.New/Marshal/Unmarshal, no
+//         native library at all
 //
 //   dotnet run --project gate -c Release            gate, exit 0 or 1
 //   dotnet run --project gate -c Release -- compare compare table after the gate
@@ -16,6 +17,7 @@ extern alias Oracle;
 using System.Diagnostics;
 using Google.Protobuf;
 using Pbwire;
+using Msg = Pbwire.Core.Msg;
 using Pbwire.Pbench;
 using Structtest;
 using Official = Oracle::Structtest;
@@ -31,6 +33,8 @@ if (!File.Exists(desc))
 var cases = new[] { "small", "medium", "large", "xlarge" };
 var repeats = new[] { 0, 1, 100, 3000 };
 var want = new[] { 136, 174, 2469, 74913 };
+
+CCore.Use(desc);
 
 using var schema = Schema.FromFile(desc);
 var scalars = schema.Message("structtest.Scalars3");
@@ -85,6 +89,14 @@ for (var tier = 0; tier < cases.Length; tier++)
         continue;
     }
 
+    // core arm: the pure-C# core's own tree, no native library.
+    var coreNative = CCore.New(n);
+    if (!CCore.Marshal(coreNative).SequenceEqual(reference))
+    {
+        Fail(label, "core encode differs from Google.Protobuf");
+        continue;
+    }
+
     // decode: fields plus a byte-identical re-encode, both arms.
     var back = Matrix3Shim.Unmarshal(reference);
     var model = (Scalars3)back;
@@ -125,6 +137,27 @@ for (var tier = 0; tier < cases.Length; tier++)
         }
     }
 
+    var coreBack = CCore.Unmarshal(reference);
+    var coreNums = (object?[]?)coreBack.Get("nums") ?? [];
+    var coreInnerBack = coreBack.Get("inner") as Msg;
+    var coreOk = CCore.Marshal(coreBack).SequenceEqual(reference)
+        && coreBack.Get("str") is "hello"
+        && coreInnerBack?.Get("name") is "kid"
+        && coreInnerBack?.Get("value") is 42
+        && coreNums.Length == n
+        && (n == 0 || (int)coreNums[n - 1]! == n - 4)
+        && ((object?[]?)coreBack.Get("tags") ?? []).Length == n
+        && ((object?[]?)coreBack.Get("flags") ?? []).Length == n
+        && coreBack.Has("opt_i32") && coreBack.Get("opt_i32") is -7
+        && coreBack.Has("opt_str") && coreBack.Get("opt_str") is "opt"
+        && coreBack.Get("u64") is ulong.MaxValue
+        && coreBack.Get("color") is 2;
+    if (!coreOk)
+    {
+        Fail(label, "core decode differs");
+        continue;
+    }
+
     Console.WriteLine($"OK   {label} parity + field compare, x{n} ({reference.Length} bytes)");
 }
 
@@ -148,15 +181,18 @@ for (var tier = 0; tier < cases.Length; tier++)
     var count = floors[tier];
     using var message = FillPbwire(scalars, inner, n);
     var native = Matrix3Shim.New(n);
+    var coreNative = CCore.New(n);
     var official = FillOfficial(n);
 
     var ops = new (string Impl, string Op, Action Run)[]
     {
         ("pbwire-csharp-tree", "encode", () => message.Encode()),
         ("pbwire-csharp-shim", "encode", () => Matrix3Shim.Marshal(native)),
+        ("pbwire-csharp-core", "encode", () => CCore.Marshal(coreNative)),
         ("protobuf-csharp", "encode", () => official.ToByteArray()),
         ("pbwire-csharp-tree", "decode", () => scalars.Decode(reference).Dispose()),
         ("pbwire-csharp-shim", "decode", () => Matrix3Shim.Unmarshal(reference)),
+        ("pbwire-csharp-core", "decode", () => CCore.Unmarshal(reference)),
         ("protobuf-csharp", "decode", () => Official.Scalars3.Parser.ParseFrom(reference)),
     };
     var rounds = new double[ops.Length, 5];

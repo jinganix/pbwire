@@ -13,6 +13,7 @@
   <ItemGroup>
     <ProjectReference Include="../Models.csproj" />
     <ProjectReference Include="../Shim.csproj" />
+    <ProjectReference Include="../c-core/CCore.csproj" />
     <ProjectReference Include="../../Pbwire/Pbwire.csproj" />
     <ProjectReference Include="../../oracle/oracle.csproj">
       <Aliases>Oracle</Aliases>

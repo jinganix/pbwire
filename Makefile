@@ -674,6 +674,20 @@ conformance-fsharp: $(CONFORMANCE_DESC) fsharp-test
 		$(DOTNET_ABS) run --project bindings/fsharp/conformance -c Release -- \
 		$(CURDIR)/$(CONFORMANCE_DESC)
 
+# Same suite through the pure-C# core (bindings/csharp/Pbwire/Core, no native
+# library): binary in, binary out; JSON and text answer "skipped", so the
+# pass set is the binary suite. Builds first and execs the dll, so the
+# runner's pipe carries only the testee's own stdout.
+conformance-csharp: $(CONFORMANCE_DESC)
+	@test -x "$(DOTNET_ABS)" || { echo "dotnet not found: $(DOTNET)"; exit 1; }
+	@test -x "$(CONFORMANCE_RUNNER)" || { \
+		echo "conformance_test_runner not found: $(CONFORMANCE_RUNNER)"; \
+		echo "run 'make conformance-setup' first"; exit 1; }
+	$(DOTNET) build bindings/csharp/conformance -c Release --nologo -v q
+	$(CONFORMANCE_RUNNER) --failure_list $(CURDIR)/conformance/failure_list_pbwire.txt \
+		$(DOTNET_ABS) bindings/csharp/conformance/bin/Release/net10.0/Testee.dll \
+		$(CURDIR)/$(CONFORMANCE_DESC)
+
 objc-test:
 	./bindings/objc/build.sh test
 
