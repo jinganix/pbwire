@@ -1756,3 +1756,19 @@ rows are prebuilt-object ops (`encode_dict` on a Dict held before the timer,
 three smaller encode tiers (0.08-0.17x) and every decode tier (0.03-0.15x); the
 one above-baseline cell is the 74 KB encode (1.83x), where ProtoBuf.jl's
 per-field size pre-pass dominates and the flat slot loop does not.
+
+Stage 6 decision: **recorded, not chased**. The only above-baseline cell (74 KB
+encode, 1.83x) needs no work; every below-baseline cell is a decode or a small
+encode, and their cost is the `Dict` <-> tree conversion, not the wire walk: a
+`Vector{Any}` slot table written and read per field, one `Any` vector per
+repeated field, one `Raw` slice per decoded string, and `from_dict`/`to_dict`
+name lookups where ProtoBuf.jl writes and reads typed struct fields. A
+one-change-per-round probe cannot move that -- the candidates (hoist the field
+table into a local in `encode_into`/`decode_into`, cache `def.fields` length,
+drop the result copy) are each worth a few percent of a 2.6 us encode or a
+826 ns decode, which is inside this host's run-to-run spread (the same session
+moved the tree arm's xlarge encode from 1653 to 1718 MB/s). The honest fix is a
+columnar/lazy tree or code generated for the concrete message -- a rewrite of
+the tree and both codecs, i.e. the `ccall` runtime again. The arm is published
+with its numbers as the no-native path, exactly as the TypeScript, C#, Python
+and Dart cores are.
