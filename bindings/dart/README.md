@@ -71,14 +71,14 @@ performance numbers; higher is better, MB/s over wire bytes:
 
 | payload | op | pbwire-dart-tree (MB/s, x protobuf-dart) | pbwire-dart-shim (MB/s, x) | protobuf-dart (MB/s) |
 |---|---|---|---|---|
-| 136 B | encode | 818.0 (3.94x) | 1335.1 (6.43x) | 207.6 |
-| 136 B | decode | 374.7 (1.72x) | 1003.2 (4.61x) | 217.7 |
-| 174 B | encode | 915.3 (5.06x) | 1273.9 (7.05x) | 180.8 |
-| 174 B | decode | 402.5 (2.13x) | 912.1 (4.82x) | 189.3 |
-| 2469 B | encode | 1351.4 (11.40x) | 1059.3 (8.94x) | 118.5 |
-| 2469 B | decode | 630.3 (4.40x) | 675.3 (4.71x) | 143.3 |
-| 74913 B | encode | 1593.8 (15.73x) | 1152.9 (11.38x) | 101.3 |
-| 74913 B | decode | 726.0 (4.57x) | 745.5 (4.69x) | 159.0 |
+| 136 B | encode | 836.4 (4.30x) | 1301.9 (6.70x) | 194.4 |
+| 136 B | decode | 371.2 (1.73x) | 974.8 (4.54x) | 214.7 |
+| 174 B | encode | 899.0 (5.15x) | 1159.4 (6.64x) | 174.5 |
+| 174 B | decode | 396.9 (2.08x) | 897.5 (4.69x) | 191.2 |
+| 2469 B | encode | 1264.9 (12.61x) | 1005.0 (10.02x) | 100.3 |
+| 2469 B | decode | 636.3 (4.36x) | 607.8 (4.17x) | 145.8 |
+| 74913 B | encode | 1506.3 (15.55x) | 1073.6 (11.08x) | 96.9 |
+| 74913 B | decode | 674.0 (4.25x) | 727.1 (4.59x) | 158.5 |
 
 `pbwire-dart-tree` is the shipped handle path; `pbwire-dart-shim` is the
 native-object arm. The three pbench arms:
