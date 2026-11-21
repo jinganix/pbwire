@@ -80,7 +80,9 @@ wrappers (`isOneof1_kind`), repeated fields are slices — the same shapes
 `protoc-gen-go` emits. A `proto.Message` interface is deliberately not
 implemented (maps ride as repeated entry structs, as in every binding), and
 unknown wire fields are dropped on decode, as before: the struct has nowhere
-to keep them. Reach for `runtime.DMsg` (decode retains unknowns and binary
+to keep them. That makes the headline rows narrower than protobuf-go on
+unknown-carrying input; the pbench gate pins the difference
+(`TestGateSemantics`) instead of hiding it. Reach for `runtime.DMsg` (decode retains unknowns and binary
 re-encode preserves them) when that matters.
 
 | Piece | Path | Role |

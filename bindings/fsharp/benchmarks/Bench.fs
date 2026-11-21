@@ -7,7 +7,7 @@
 // x100 / x3000, which lands the tiers on 136 / 174 / 2469 / 74913 bytes. Both
 // sides must produce identical bytes before anything is timed, and both
 // allocate per call (pbwire Encode()/Parse() against ToByteArray()/
-// ParseFrom()), so the comparison is like for like. (The C# harness also times
+// ParseFrom()), so both sides build and read the same .NET objects. (The C# harness also times
 // protobuf-net; this one does not: it singular-encodes single-element packed
 // fields, so two of the four tiers carry nothing MB/s-fair to time.)
 //
