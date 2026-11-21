@@ -1495,3 +1495,16 @@ or text printer), so `make conformance-node-core` passes the binary suite with
 the two expected tag-truncation failures and skips the JSON half (1412
 successes, 1403 skipped, 2 expected failures, 0 unexpected). The addon-backed
 `make conformance-node` keeps covering binary + JSON + text (2750 + 443).
+
+Stage 6 decision: **not attempted in plan 15**. One cell sits below the
+official baseline in the formal run (136 B decode: 60.6 against jspb's 106.5
+MB/s); every encode cell and the 2469 B / 74913 B decodes are at or above it.
+The gap there is per-decode allocation (one tree object per message, one array
+per repeated field, one slice object per string), and pushing it down means
+either a columnar/lazy tree (the Java runtime's design, a rewrite of the tree
+and both codecs) or a generated fast path (what protobufjs does, and what this
+arm exists to measure without). Neither is a one-change-per-round probe, and the
+plan's remaining budget went to the descriptor reader, the decoder's unknown/
+group/limit rules and the binary conformance pass. The prototype of this arm
+also crossed the plan's 3-hour budget, so the decision is recorded rather than
+the cell chased.
