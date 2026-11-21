@@ -14,6 +14,13 @@ public final class MessageType {
     private final Schema schema;
     final GenericCodec.MessageDef def;
     private final Map<Integer, MessageType> subtypes = new ConcurrentHashMap<>();
+    // Flat name -> slot table, built once: the model fills address fields by
+    // name, so this is the fill's per-field lookup. An open-addressed array
+    // costs one hash and one probe instead of a HashMap node walk, and it is
+    // the same cost as an ordinal without regenerating the model.
+    private volatile String[] nameKeys;
+    private volatile int[] nameSlots;
+    private int nameMask;
 
     MessageType(Schema schema, GenericCodec.MessageDef def) {
         this.schema = schema;
@@ -118,11 +125,49 @@ public final class MessageType {
 
     /** The field slot with this name; throws when the schema has no such field. */
     int field(String fieldName) {
-        Integer slot = def.byName.get(fieldName);
-        if (slot == null) {
-            throw new PbwireException(name() + ": no such field: " + fieldName);
+        String[] keys = nameKeys;
+        if (keys == null) {
+            keys = buildNames();
         }
-        return slot;
+        int h = fieldName.hashCode();
+        h ^= h >>> 16;
+        int i = h & nameMask;
+        while (true) {
+            String k = keys[i];
+            if (k == null) {
+                break;
+            }
+            if (k.equals(fieldName)) {
+                return nameSlots[i];
+            }
+            i = (i + 1) & nameMask;
+        }
+        throw new PbwireException(name() + ": no such field: " + fieldName);
+    }
+
+    /** Builds the flat name table from the definition's name map. */
+    private String[] buildNames() {
+        int cap = 8;
+        while (cap < def.byName.size() * 2) {
+            cap <<= 1;
+        }
+        String[] keys = new String[cap];
+        int[] slots = new int[cap];
+        int mask = cap - 1;
+        for (Map.Entry<String, Integer> e : def.byName.entrySet()) {
+            int h = e.getKey().hashCode();
+            h ^= h >>> 16;
+            int i = h & mask;
+            while (keys[i] != null) {
+                i = (i + 1) & mask;
+            }
+            keys[i] = e.getKey();
+            slots[i] = e.getValue();
+        }
+        nameSlots = slots;
+        nameMask = mask;
+        nameKeys = keys;
+        return keys;
     }
 
     /** The field slot with this number; throws when the schema has no such field. */
