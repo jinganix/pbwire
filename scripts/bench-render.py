@@ -32,6 +32,14 @@ def render(path):
         print("### %s: %s bytes (%s%s)" % (
             block["case"], block["bytes"], iters, repeats))
         print()
+        if any(row.get("allocs") is not None for row in block["rows"]):
+            print("| impl | op | ns/op | MB/s | allocs/op | B/op |")
+            print("|---|---|---|---|---|---|")
+            for row in block["rows"]:
+                print("| %s | %s | %.1f | %.1f | %.0f | %.0f |" % (
+                    row["impl"], row["op"], row["ns"], row["mbps"],
+                    row.get("allocs") or 0, row.get("bop") or 0))
+            continue
         print("| impl | op | ns/op | MB/s |")
         print("|---|---|---|---|")
         for row in block["rows"]:
