@@ -85,10 +85,11 @@ type FieldPlan struct {
 
 // MessagePlan is one message's ordered field list plus lookup indexes.
 type MessagePlan struct {
-	Full       string       // fully qualified proto name
-	Fields     []*FieldPlan // declaration order
-	Oneofs     []string     // distinct real oneof names, declaration order
-	IsMapEntry bool         // this message is a map entry (key/value are Fields 1/2)
+	Full       string          // fully qualified proto name
+	Fields     []*FieldPlan    // declaration order
+	Oneofs     []string        // distinct real oneof names, declaration order
+	IsMapEntry bool            // this message is a map entry (key/value are Fields 1/2)
+	Reserved   map[string]bool // reserved field names, skipped silently by the text parser
 	byNumber   map[uint32]*FieldPlan
 	byName     map[string]*FieldPlan
 }
@@ -280,6 +281,12 @@ func (s *Schema) fillMessage(full string, m *descriptorpb.DescriptorProto, f *de
 	}
 	mp.byNumber = make(map[uint32]*FieldPlan, len(mp.Fields))
 	mp.byName = make(map[string]*FieldPlan, len(mp.Fields))
+	for _, name := range m.ReservedName {
+		if mp.Reserved == nil {
+			mp.Reserved = map[string]bool{}
+		}
+		mp.Reserved[name] = true
+	}
 	for _, fp := range mp.Fields {
 		if _, dup := mp.byNumber[fp.Number]; dup {
 			return fmt.Errorf("codec: message %s has duplicate field number %d", full, fp.Number)
