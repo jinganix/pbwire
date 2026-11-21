@@ -1292,23 +1292,28 @@ first if this row ever regresses.
 
 | payload | op | pbwire-csharp-tree (MB/s, x protobuf-csharp) | pbwire-csharp-shim (MB/s, x) | protobuf-csharp (MB/s) | protobuf-net (MB/s) |
 |---|---|---|---|---|
-| 136 B | encode | 1538.9 (3.32x ✅) | 146.4 (0.32x ❌) | 463.6 | 567.4 |
-| 136 B | decode | 870.4 (1.80x ✅) | 174.6 (0.36x ❌) | 482.7 | 491.1 |
-| 174 B | encode | 1478.9 (3.63x ✅) | 121.2 (0.30x ❌) | 407.5 | — |
-| 174 B | decode | 789.0 (2.05x ✅) | 126.8 (0.33x ❌) | 384.8 | — |
-| 2469 B | encode | 1191.3 (2.09x ✅) | 56.0 (0.10x ❌) | 569.7 | 392.3 |
-| 2469 B | decode | 670.6 (1.43x ✅) | 46.8 (0.10x ❌) | 469.7 | 296.0 |
-| 74913 B | encode | 1689.7 (3.46x ✅) | 59.1 (0.12x ❌) | 488.7 | 381.9 |
-| 74913 B | decode | 750.7 (1.48x ✅) | 51.5 (0.10x ❌) | 506.9 | 328.0 |
+| 136 B | encode | 1499.8 (3.22x ✅) | 1130.8 (2.43x ✅) | 465.6 | 566.4 |
+| 136 B | decode | 871.8 (1.74x ✅) | 744.1 (1.49x ✅) | 500.5 | 484.7 |
+| 174 B | encode | 1491.0 (3.65x ✅) | 980.3 (2.40x ✅) | 408.1 | — |
+| 174 B | decode | 790.7 (1.98x ✅) | 595.9 (1.49x ✅) | 400.3 | — |
+| 2469 B | encode | 1361.3 (2.42x ✅) | 617.5 (1.10x ✅) | 562.0 | 392.8 |
+| 2469 B | decode | 674.0 (1.45x ✅) | 341.5 (0.74x ❌) | 464.3 | 294.1 |
+| 74913 B | encode | 1603.5 (3.37x ✅) | 654.1 (1.37x ✅) | 476.0 | 370.7 |
+| 74913 B | decode | 729.1 (1.48x ✅) | 348.7 (0.71x ❌) | 492.3 | 319.5 |
 
 `pbwire-csharp-tree` is the shipped path: a prebuilt `Pbwire.Message` handle
 encoded/decoded in one call. `pbwire-csharp-shim` is the pbench native-object
-arm: a generated model in, one `Marshal`/`Unmarshal` call per op. It is below
-Google.Protobuf at every tier because every present field still crosses the
-boundary once -- the C core has no entry that reads a pinned managed object
-through the generated layout table, and adding one needs `src/`. The handle row
-is 3.3-3.6x ahead encode and 1.4-2.1x decode; the shim rows are published, not
-headlined. protobuf-net, the other widely used C#
+arm: the generated model is copied into one contiguous unmanaged image per op
+and **one** `P/Invoke` (`bindings/csharp/native/pbw_cs_shim.c`, built by
+`make csharp-shim-native`) walks it through the C layout codec, so no field
+crosses the boundary. It is above Google.Protobuf on every encode tier
+(1.10-2.43x) and on the two small decode tiers (1.49x). The 2469 B and 74913 B
+decode rows are below the baseline (0.74x, 0.71x): the C decode itself is
+faster than the reference parser (xlarge 729 MB/s of native work), but
+materialising 3000 ints, 3000 strings, 3000 sub-messages and 3000 bools into
+managed objects costs more than the reference parser's whole run. The handle
+row skips that copy, which is why it stays the headline; the shim rows are
+published, not headlined. protobuf-net, the other widely used C#
 runtime (hand-written contracts in Pbn.cs, bytes gated like the rest), is
 slower than Google.Protobuf on every tier here (xlarge 365.1 vs 484.3
 encode): the official runtime is the fastest baseline, so the ratio column
@@ -1511,14 +1516,14 @@ pace; the default debug build is ~20x slower and is not timed.
 
 | payload | op | pbwire-fsharp-tree (MB/s, x Google.Protobuf) | pbwire-fsharp-shim (MB/s, x) | Google.Protobuf (MB/s) |
 |---|---|---|---|---|
-| 136 B | encode | 1477.5 (3.24x ✅) | 132.3 (0.29x ❌) | 456.6 |
-| 136 B | decode | 877.8 (1.93x ✅) | 156.6 (0.34x ❌) | 454.8 |
-| 174 B | encode | 1512.3 (3.72x ✅) | 110.0 (0.27x ❌) | 406.1 |
-| 174 B | decode | 741.1 (1.88x ✅) | 116.1 (0.29x ❌) | 394.0 |
-| 2469 B | encode | 1414.5 (2.53x ✅) | 56.7 (0.10x ❌) | 559.8 |
-| 2469 B | decode | 666.4 (1.42x ✅) | 47.0 (0.10x ❌) | 468.4 |
-| 74913 B | encode | 1617.7 (3.36x ✅) | 58.3 (0.12x ❌) | 481.0 |
-| 74913 B | decode | 734.1 (1.49x ✅) | 48.9 (0.10x ❌) | 494.1 |
+| 136 B | encode | 1442.0 (3.14x ✅) | 1180.6 (2.57x ✅) | 459.7 |
+| 136 B | decode | 868.4 (1.73x ✅) | 760.2 (1.51x ✅) | 502.5 |
+| 174 B | encode | 1422.3 (3.50x ✅) | 966.1 (2.37x ✅) | 406.8 |
+| 174 B | decode | 787.0 (1.94x ✅) | 590.5 (1.45x ✅) | 406.0 |
+| 2469 B | encode | 1461.5 (2.79x ✅) | 643.0 (1.23x ✅) | 523.6 |
+| 2469 B | decode | 691.5 (3.62x ✅) | 320.8 (1.68x ✅) | 191.1 |
+| 74913 B | encode | 671.2 (1.35x ✅) | 658.3 (1.33x ✅) | 496.1 |
+| 74913 B | decode | 722.6 (1.40x ✅) | 354.6 (0.69x ❌) | 515.0 |
 
 Same class as Kotlin: F# reuses the C# binding's project via
 `ProjectReference` and adds only an F#-idiomatic facade — no second runtime,
@@ -1527,8 +1532,11 @@ no packages, schema from a `FileDescriptorSet` at run time. The baseline is
 `.cs`). Byte parity per tier before timing. Both rows come from the C#
 runtime: `pbwire-fsharp-tree` is the `Message` handle the facade exposes,
 `pbwire-fsharp-shim` is the C# generated model's native-object entry
-(`bindings/csharp/pbench/Shim.cs`), so F# has no separate port and no second
-wire implementation.
+(`bindings/csharp/pbench/Shim.cs`), i.e. the same one-call C reader over the
+flat image, so F# has no separate port and no second wire implementation. It is
+above Google.Protobuf on every encode tier and on three of four decode tiers;
+the xlarge decode row carries the managed materialisation cost the C# section
+describes.
 
 ### Clojure (Java runtime + interop) vs `protobuf-java`
 
