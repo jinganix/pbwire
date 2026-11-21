@@ -130,6 +130,7 @@ func loadJSONSchema(t *testing.T) *runtime.Schema {
 					jfield("ratio", 11, jlabelOpt, descriptorpb.FieldDescriptorProto_TYPE_DOUBLE, ""),
 					jfield("quant", 12, jlabelOpt, descriptorpb.FieldDescriptorProto_TYPE_FLOAT, ""),
 					jfield("target", 13, jlabelOpt, descriptorpb.FieldDescriptorProto_TYPE_MESSAGE, ".jsontest.Target"),
+				jfield("shade", 14, jlabelOpt, descriptorpb.FieldDescriptorProto_TYPE_ENUM, ".jsontest.Shade"),
 				},
 				NestedType: []*descriptorpb.DescriptorProto{
 					jmapEntry("ScoresEntry", "string", "int32", ""),
@@ -149,6 +150,15 @@ func loadJSONSchema(t *testing.T) *runtime.Schema {
 				jfield("ws", 10, jlabelOpt, descriptorpb.FieldDescriptorProto_TYPE_MESSAGE, ".google.protobuf.StringValue")),
 		},
 		EnumType: []*descriptorpb.EnumDescriptorProto{
+			{
+				Name: jstrp("Shade"),
+				Value: []*descriptorpb.EnumValueDescriptorProto{
+					{Name: jstrp("SHADE_UNSPECIFIED"), Number: ji32p(0)},
+					{Name: jstrp("SHADE_RED"), Number: ji32p(1)},
+					{Name: jstrp("SHADE_CRIMSON"), Number: ji32p(1)},
+				},
+				Options: &descriptorpb.EnumOptions{AllowAlias: proto.Bool(true)},
+			},
 			{
 				Name: jstrp("Color"),
 				Value: []*descriptorpb.EnumValueDescriptorProto{
@@ -340,6 +350,35 @@ func TestJSONEnumNumbers(t *testing.T) {
 		if v, ok, err := got.GetInt("color"); err != nil || !ok || v != 1 {
 			t.Fatalf("%s: color = %d ok=%v err=%v", text, v, ok, err)
 		}
+	}
+}
+
+func TestJSONEnumAlias(t *testing.T) {
+	s := loadJSONSchema(t)
+	typ := mustType(t, s, "jsontest.M")
+	// The alias name parses to its number, like src/json.c
+	// (pbw_enum_find_value) and Java GenericCodec.EnumDef.valueOf.
+	m, err := typ.UnmarshalJSON(`{"shade":"SHADE_CRIMSON"}`, false)
+	if err != nil {
+		t.Fatalf("alias parse: %v", err)
+	}
+	if v, ok, err := m.GetInt("shade"); err != nil || !ok || v != 1 {
+		t.Fatalf("shade = %d ok=%v err=%v", v, ok, err)
+	}
+	// Print keeps the first-declared name, and it round-trips.
+	out, err := typ.MarshalJSON(m)
+	if err != nil {
+		t.Fatalf("reprint: %v", err)
+	}
+	if out != `{"shade":"SHADE_RED"}` {
+		t.Fatalf("alias reprint = %s", out)
+	}
+	back, err := typ.UnmarshalJSON(out, false)
+	if err != nil {
+		t.Fatalf("first-name parse: %v", err)
+	}
+	if v, ok, err := back.GetInt("shade"); err != nil || !ok || v != 1 {
+		t.Fatalf("shade = %d ok=%v err=%v", v, ok, err)
 	}
 }
 

@@ -113,6 +113,7 @@ type EnumPlan struct {
 	Full   string
 	Closed bool             // true under proto2 syntax
 	Values map[int32]string // first name wins on aliases
+	ByName map[string]int32 // every name, aliases included, to its number
 }
 
 // Schema is a loaded, immutable set of message and enum plans. The dynamic
@@ -239,13 +240,15 @@ func syntaxOf(f *descriptorpb.FileDescriptorProto) string {
 
 func (s *Schema) addEnum(full string, e *descriptorpb.EnumDescriptorProto, f *descriptorpb.FileDescriptorProto) {
 	vals := map[int32]string{}
+	byName := map[string]int32{}
 	for _, v := range e.Value {
 		n := v.GetNumber()
 		if _, ok := vals[n]; !ok {
 			vals[n] = v.GetName()
 		}
+		byName[v.GetName()] = n
 	}
-	s.enums[full] = &EnumPlan{Full: full, Closed: syntaxOf(f) == "proto2", Values: vals}
+	s.enums[full] = &EnumPlan{Full: full, Closed: syntaxOf(f) == "proto2", Values: vals, ByName: byName}
 }
 
 func (s *Schema) addMessage(full string, m *descriptorpb.DescriptorProto, f *descriptorpb.FileDescriptorProto) {

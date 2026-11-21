@@ -1829,15 +1829,18 @@ func (p *jsonIn) parseScalarValue(m *DMsg, ord int, fp *FieldPlan) error {
 }
 
 // parseEnumValue parses an enum value; skip is true when an unknown name was
-// ignored and the caller must store nothing.
+// ignored and the caller must store nothing. Like src/json.c
+// (pbw_enum_find_value) and Java GenericCodec.EnumDef.valueOf, every alias
+// name resolves; print keeps the first-declared name from EnumPlan.Values.
 func (p *jsonIn) parseEnumValue(m *DMsg, ord int, fp *FieldPlan) (bool, error) {
 	ep, err := m.typ.s.Enum(fp.Enum)
 	if err != nil {
 		return false, p.fail("unknown enum %s", fp.Enum)
 	}
-	byName := map[string]int32{}
-	for num, name := range ep.Values {
-		if _, dup := byName[name]; !dup {
+	byName := ep.ByName
+	if byName == nil {
+		byName = map[string]int32{}
+		for num, name := range ep.Values {
 			byName[name] = num
 		}
 	}
