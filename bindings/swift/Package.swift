@@ -12,6 +12,10 @@ let package = Package(
     name: "pbwire",
     products: [
         .library(name: "Pbwire", targets: ["Pbwire"]),
+        // The pure-Swift core: no C module, no `libpbwire.a`, no unsafeFlags,
+        // so this product can be a normal SwiftPM dependency. The FFI product
+        // above stays the default (see pbench/README.md#verdict).
+        .library(name: "PbwireCore", targets: ["PbwireCore"]),
     ],
     targets: [
         // Re-exports the C core header (repo include/pbwire.h) as module
@@ -28,6 +32,11 @@ let package = Package(
             name: "Pbwire",
             dependencies: ["CPbwire"],
             path: "Sources/Pbwire"),
+        // The pure-Swift wire core: descriptor reader, value tree, wire
+        // primitives, encode/decode. Deliberately depends on nothing.
+        .target(
+            name: "PbwireCore",
+            path: "Sources/PbwireCore"),
         // Generated addressbook models over the Pbwire runtime (codegen:
         // `make -C codegen gen-examples`). No .desc file at use time.
         .target(
@@ -58,5 +67,11 @@ let package = Package(
             dependencies: ["Pbwire"],
             path: "Tests/PbwireTests",
             linkerSettings: [pbwireLink]),
+        // The pure core's own gate: descriptor, codec, wire. No C dependency,
+        // so this suite builds and runs with the C archive absent.
+        .testTarget(
+            name: "PbwireCoreTests",
+            dependencies: ["PbwireCore"],
+            path: "Tests/PbwireCoreTests"),
     ]
 )
