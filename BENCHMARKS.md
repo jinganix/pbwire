@@ -180,7 +180,7 @@ own README. Dart ran once `dart pub global activate protoc_plugin` provided
 | PHP (`ext-ffi` + C extension) | `make php-bench` (`bindings/php/benchmarks`) | the official PHP runtime (`protobuf/php/src`): C extension (fastest) + pure-PHP | all 4 | 1.23x / 1.29x `tree` vs C ext ✅ (420x / 139x vs pure; native-object `shim` 0.16x / 0.36x, `shim-ffi` 0.004x / 0.008x) |
 | Dart (`dart:ffi`) | `make dart-bench` (`bindings/dart/benchmarks`) | the `protobuf` Dart package + generated code | all 4 | 15.73x ✅ / 4.57x ✅ `tree` (native-object `shim` 11.38x / 4.69x, one C-side reader call per op) |
 | Rust (static link) | `make rust-bench` (`bindings/rust/benchmarks`) | prost (fastest) + rust-protobuf 3.x generated code | all 4 | 1.17x ✅ / 1.88x ✅ `tree` (native-object `shim` 0.84x / 1.90x, one C-side struct-codec call per op; `shim` encode is above prost at 136 B and level at 174 B) |
-| C# (P/Invoke) | `make csharp-bench` (`bindings/csharp/benchmarks`) | Google.Protobuf C# generated code (fastest) + protobuf-net | all 4 | 3.46x ✅ / 1.48x ✅ `tree` (native-object `shim` 0.12x / 0.10x) |
+| C# (P/Invoke) | `make csharp-bench` (`bindings/csharp/benchmarks`) | Google.Protobuf C# generated code (fastest) + protobuf-net | all 4 | 3.46x ✅ / 1.48x ✅ `tree` (native-object `shim` 0.12x / 0.10x; pure-C# `core` 1.38x encode / 0.63x decode vs protobuf-csharp at 74 KB, no native library) |
 | Lua (C module, tables) | `make lua-bench` (`bindings/lua/benchmarks`) | `lua-protobuf` 0.6.0 | all 4 | 1.09x ✅ / 1.42x ✅ (8.93x via builder encode — data already in pbwire) |
 | Swift (SwiftPM, static link) | `make swift-bench` (`bindings/swift/benchmarks`) | `apple/swift-protobuf` 1.39.0 generated code from the same `matrix3.proto` | all 4 | 6.31x ✅ / 2.59x ✅ `tree` (native-object `shim` 3.37x / 2.56x, one C-side layout-codec call per op) |
 | Scala (Java runtime + DSL) | `make scala-bench` (`bindings/scala/benchmarks`) | ScalaPB 0.11.18 generated code from the same `matrix3.proto` | all 4 | 1.45x ✅ / 1.37x ✅ `tree` (`core` case class 0.33x / 0.30x) |
@@ -1354,6 +1354,37 @@ These rows land at ~1.5 GB/s encode and ~735 MB/s decode on the xlarge tier, whi
 is the C core's own number: by 2.5 KB the per-call boundary is invisible and only
 the baseline's own codec is being measured. That is the point of the schema-at-
 runtime design -- the binding owns ergonomics, the core owns the format.
+
+The third arm is the pure-C# core (`bindings/csharp/Pbwire/Core/`,
+`make conformance-csharp`): descriptor reader, tree, encoder and decoder in
+managed code, no `DllImport`, no native library. Formal `make csharp-bench`,
+same run (`results/bench-csharp-20261121T004756Z.json`, 2026-11-21), MB/s and
+the ratio against protobuf-csharp in that run:
+
+| payload | op | pbwire-csharp-core (MB/s) | x protobuf-csharp |
+|---|---|---|---|
+| 136 B | encode | 925.8 | 2.02x ✅ |
+| 136 B | decode | 540.9 | 1.14x ✅ |
+| 174 B | encode | 852.6 | 2.11x ✅ |
+| 174 B | decode | 479.6 | 1.21x ✅ |
+| 2469 B | encode | 621.2 | 1.09x ✅ |
+| 2469 B | decode | 362.4 | 0.77x ❌ |
+| 74913 B | encode | 653.6 | 1.38x ✅ |
+| 74913 B | decode | 318.6 | 0.63x ❌ |
+
+An in-language codec that walks a schema table beats the generated reader and
+writer on every encode tier and on the two small decodes. It loses the two
+large decodes to its own tree: every element is a boxed slot, a `Raw` slice or
+a `Msg`, so 3000 ints + 3000 strings + 3000 sub-messages + 3000 bools cost
+more than the reference parser's straight-line `ParseFrom`, while the `tree`
+row pays no materialisation at all. The core is still above the shim's image
+round trip on both ops at 74 KB (319 / 363 decode, 654 / 666 encode), because
+nothing is copied twice. The official binary suite is green through it
+(`make conformance-csharp`: 1412 successes, 1403 skipped for JSON/text, 2
+expected failures, 0 unexpected), which is the bar for publishing this row.
+The verdict and the Stage 6 decision are in `bindings/csharp/pbench/README.md`
+and `docs/perf-attempts.md`: the core is the no-native-library arm (and F#'s
+fallback), never the headline.
 
 ### Lua (C module, tables) vs `lua-protobuf`
 
