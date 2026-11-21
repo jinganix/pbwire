@@ -16,6 +16,11 @@ let package = Package(
         // so this product can be a normal SwiftPM dependency. The FFI product
         // above stays the default (see pbench/README.md#verdict).
         .library(name: "PbwireCore", targets: ["PbwireCore"]),
+        // The official conformance testee (bindings/swift/conformance/): the
+        // 4-byte-framed request/response protocol over the pure core, so
+        // `make conformance-swift` drives this port, not the C core. An
+        // executable product adds nothing to a library consumer's build.
+        .executable(name: "pbwire-conformance", targets: ["PbwireConformance"]),
     ],
     targets: [
         // Re-exports the C core header (repo include/pbwire.h) as module
@@ -37,6 +42,13 @@ let package = Package(
         .target(
             name: "PbwireCore",
             path: "Sources/PbwireCore"),
+        // The conformance testee: the official testee protocol (length-prefixed
+        // ConformanceRequest/Response) on stdin/stdout over the pure core.
+        .executableTarget(
+            name: "PbwireConformance",
+            dependencies: ["PbwireCore"],
+            path: "conformance",
+            exclude: ["README.md"]),
         // Generated addressbook models over the Pbwire runtime (codegen:
         // `make -C codegen gen-examples`). No .desc file at use time.
         .target(
@@ -53,7 +65,7 @@ let package = Package(
         // matrix3 (the generated mirror is symlinked in from the test model).
         .target(
             name: "Pbench",
-            dependencies: ["Pbwire"],
+            dependencies: ["Pbwire", "PbwireCore"],
             path: "Sources/Pbench"),
         // The four standard tiers (see BENCHMARKS.md) on matrix3.desc.
         .executableTarget(

@@ -678,6 +678,19 @@ conformance-rust: $(CONFORMANCE_DESC)
 		$(CURDIR)/bindings/rust/target/release/pbwire-conformance \
 		$(CURDIR)/$(CONFORMANCE_DESC)
 
+# Same suite through the pure-Swift core (`bindings/swift/Sources/PbwireCore/`):
+# no C module, no `libpbwire.a`, no `unsafeFlags` -- the testee links only the
+# PbwireCore product, so this target is the official check of the no-native path.
+# Binary in, binary out; JSON and text answer "skipped".
+conformance-swift: $(CONFORMANCE_DESC)
+	@test -x "$(CONFORMANCE_RUNNER)" || { \
+		echo "conformance_test_runner not found: $(CONFORMANCE_RUNNER)"; \
+		echo "run 'make conformance-setup' first"; exit 1; }
+	cd bindings/swift && swift build -c release --product pbwire-conformance
+	$(CONFORMANCE_RUNNER) --failure_list $(CURDIR)/conformance/failure_list_pbwire.txt \
+		$(CURDIR)/bindings/swift/.build/release/pbwire-conformance \
+		$(CURDIR)/$(CONFORMANCE_DESC)
+
 # Same suite through the Zig binding (binary, JSON and text; JSPB skips).
 conformance-zig: $(CONFORMANCE_DESC)
 	@test -x "$(CONFORMANCE_RUNNER)" || { \
@@ -1001,7 +1014,7 @@ clean:
 
 .PHONY: all test fuzz coverage release-check examples shared format format-check bench bench-c erlang-test erlang-core-sync ruby-core-sync erlang-bench \
 	python-bind python-test python-bench difftest difftest-short conformance conformance-setup conformance-python \
-	conformance-ruby conformance-java conformance-lua conformance-r conformance-node conformance-rust ruby-bind java-test ruby-test node-test objc-test r-bind \
+	conformance-ruby conformance-java conformance-lua conformance-r conformance-node conformance-rust conformance-swift ruby-bind java-test ruby-test node-test objc-test r-bind \
 	lua-bind lua-test lua-bench \
 	java-bench ruby-bench node-bench objc-bench go-bench pbench-java \
 	kotlin-test php-test dart-test rust-test csharp-test csharp-pbench \

@@ -1,6 +1,6 @@
 // Swift binding benchmark on the four standard tiers from BENCHMARKS.md.
 //
-// Two rows per tier, the same payload as the C/Dart/Go/Java/Julia/Rust rows
+// Three rows per tier, the same payload as the C/Dart/Go/Java/Julia/Rust rows
 // (every scalar kind, the nested message, the two proto3 optionals, and the
 // repeated fields scaled x0 / x1 / x100 / x3000, which lands the tiers on
 // 136 / 174 / 2469 / 74913 bytes):
@@ -9,6 +9,8 @@
 //   pbwire-swift-shim  the generated `@frozen Structtest_Scalars3Repr`, read
 //                      and written in place: one `encodeInPlace` call and one
 //                      `decodeInPlace` call into the C layout codec
+//   pbwire-swift-core  the pure-Swift `PbwireCore` product: a prebuilt
+//                      `Message` tree, `encode`/`decode` with no C library
 //
 // The harness gates the wire size and every payload field before timing
 // anything, and prints the standard block format (throughput over wire bytes,
@@ -36,13 +38,14 @@ let descPath =
 let schema = try Schema(contentsOfFile: descPath)
 
 if compare {
-    exit(try runCompare(schema: schema))
+    exit(try runCompare(schema: schema, descPath: descPath))
 }
 
 for tier in pbenchTiers {
     let n = tier.repeats
     let tree = try TreeArm(schema: schema, repeats: n)
     let shim = try ShimArm(schema: schema, repeats: n)
+    let core = try CoreArm(descPath: descPath, repeats: n)
 
     let reference = try tree.encode()
     guard reference.count == tier.bytes else {
@@ -71,18 +74,35 @@ for tier in pbenchTiers {
         failures += 1
         continue
     }
+    // The core arm is a second wire implementation: its bytes must equal the
+    // C core's reference image, and its decoded tree must expose the payload.
+    let coreWire = try core.encode()
+    guard coreWire == [UInt8](reference) else {
+        fputs("bench: \(tier.name): core bytes differ from the handle's\n", stderr)
+        failures += 1
+        continue
+    }
+    if let bad = try core.readBack(try core.decode(coreWire), repeats: n) {
+        fputs("bench: \(tier.name): core decode differs at \(bad)\n", stderr)
+        failures += 1
+        continue
+    }
 
     let count = try Harness.calibrate(tier.floor) { _ = try tree.encode() }
     let treeEncodeNs = try Harness.best(count) { _ = try tree.encode() }
     let shimEncodeNs = try Harness.best(count) { _ = try shim.encode() }
     let treeDecodeNs = try Harness.best(count) { _ = try tree.decode(reference) }
     let shimDecodeNs = try Harness.best(count) { _ = try shim.decode(reference) }
+    let coreEncodeNs = try Harness.best(count) { _ = try core.encode() }
+    let coreDecodeNs = try Harness.best(count) { _ = try core.decode(coreWire) }
 
     Harness.header(tier, reference.count, count)
     Harness.row("pbwire-swift-tree", "encode", reference.count, treeEncodeNs)
     Harness.row("pbwire-swift-shim", "encode", reference.count, shimEncodeNs)
     Harness.row("pbwire-swift-tree", "decode", reference.count, treeDecodeNs)
     Harness.row("pbwire-swift-shim", "decode", reference.count, shimDecodeNs)
+    Harness.row("pbwire-swift-core", "encode", reference.count, coreEncodeNs)
+    Harness.row("pbwire-swift-core", "decode", reference.count, coreDecodeNs)
     print()
 }
 

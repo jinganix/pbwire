@@ -9,7 +9,7 @@ import Pbwire
 
 /// Runs the provisional compare over the four tiers; returns 1 on any check
 /// failure (bytes, sizes or a field), 0 otherwise.
-public func runCompare(schema: Schema) throws -> Int32 {
+public func runCompare(schema: Schema, descPath: String) throws -> Int32 {
     var failures = 0
     let rounds = 5
 
@@ -17,6 +17,7 @@ public func runCompare(schema: Schema) throws -> Int32 {
         let n = tier.repeats
         let tree = try TreeArm(schema: schema, repeats: n)
         let shim = try ShimArm(schema: schema, repeats: n)
+        let core = try CoreArm(descPath: descPath, repeats: n)
 
         let treeBytes = try tree.encode()
         let shimBytes = try shim.encode()
@@ -47,26 +48,39 @@ public func runCompare(schema: Schema) throws -> Int32 {
             failures += 1
             continue
         }
+        let coreBytes = try core.encode()
+        guard coreBytes == [UInt8](treeBytes) else {
+            fputs("compare: \(tier.name): core bytes differ from the handle's\n", stderr)
+            failures += 1
+            continue
+        }
+        if let bad = try core.readBack(try core.decode(coreBytes), repeats: n) {
+            fputs("compare: \(tier.name): core decode differs at \(bad)\n", stderr)
+            failures += 1
+            continue
+        }
 
         let count = try Harness.calibrate(tier.floor) { _ = try tree.encode() }
-        let ops: [(String, () throws -> Void)] = [
-            ("tree", { _ = try tree.encode() }),
-            ("shim", { _ = try shim.encode() }),
-            ("tree", { _ = try tree.decode(treeBytes) }),
-            ("shim", { _ = try shim.decode(shimBytes) }),
+        let ops: [(String, String, () throws -> Void)] = [
+            ("tree", "encode", { _ = try tree.encode() }),
+            ("shim", "encode", { _ = try shim.encode() }),
+            ("core", "encode", { _ = try core.encode() }),
+            ("tree", "decode", { _ = try tree.decode(treeBytes) }),
+            ("shim", "decode", { _ = try shim.decode(shimBytes) }),
+            ("core", "decode", { _ = try core.decode(coreBytes) }),
         ]
         var samples = [[Double]](repeating: [], count: ops.count)
         for _ in 0..<rounds {
             for (i, op) in ops.enumerated() {
                 let begin = Harness.now()
-                for _ in 0..<count { try op.1() }
+                for _ in 0..<count { try op.2() }
                 samples[i].append(Double(Harness.now() - begin) / Double(count))
             }
         }
         Harness.header(tier, tier.bytes, count)
         for (i, op) in ops.enumerated() {
             let median = samples[i].sorted()[rounds / 2]
-            Harness.row("pbwire-swift-\(op.0)", i < 2 ? "encode" : "decode", tier.bytes, median)
+            Harness.row("pbwire-swift-\(op.0)", op.1, tier.bytes, median)
         }
         print()
     }

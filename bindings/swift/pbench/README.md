@@ -78,26 +78,37 @@ Julia and Dart mirrors follow). The published payload sets every scalar, so the
 arm's bytes equal the reference exactly; a *zero* mirror re-encodes to explicit
 zero fields, which is valid proto3 that decodes to the same mirror.
 
-`make conformance-swift` is **deferred**: this plan's file list does not add a
-conformance testee (the Swift binding's `conformance/README.md` records that the
-binary/stdin testee does not exist yet, and the other bindings' targets drive
-their own testee against the official suite), so there is no target to wire up
-here. The gate above plus `make swift-test` cover this stage.
+`make conformance-swift` drives the official binary suite through
+`bindings/swift/conformance/main.swift` (the same 4-byte-framed
+`ConformanceRequest`/`ConformanceResponse` protocol every other binding's testee
+speaks) over the pure core, so plan 09's deferred target exists and the
+no-native path is checked by the suite itself, not only by `swift test`. Result:
+1412 successes, 1403 skipped (JSON/text), 2 expected failures, 0 unexpected —
+the same failure set as the C core and every other port.
+
+The `core` arm has its own gate inside `Bench`: before timing anything it
+encodes the tier through `PbwireCore` and requires the bytes to equal the
+`tree` handle's reference image (which `InPlaceTest`/`GeneratedTest` pin to
+protoc and swift-protobuf), then reads every payload field back off the decoded
+core tree. A core row that prints is a row whose bytes and values a second,
+independent wire implementation agrees with.
 
 ## Provisional table (Stage 3)
 
 `cd bindings/swift && swift run -c release Bench compare`: interleaved rounds
-(all four ops back to back), median of five. `tree` is a *prebuilt* handle's
+(all six ops back to back), median of five. `tree` is a *prebuilt* handle's
 `encode()`/`decode()` (the formal row's definition); `shim` is one
 `encodeInPlace` / `decodeInPlace` call on the flat mirror, with the mirror and
-arena allocated once. MB/s over wire bytes, 2026-11-21, recorded mid-session:
+arena allocated once; `core` is a prebuilt `PbwireCore` `Message` tree through
+one `encode()` / one `decode()`. MB/s over wire bytes, 2026-11-21, before the
+stage 6 rounds:
 
-| tier | `tree` enc | `shim` enc | `tree` dec | `shim` dec |
-|---|---|---|---|---|
-| 136 B | 1073.9 | 919.3 | 879.6 | 717.3 |
-| 174 B | 1115.9 | 937.2 | 801.9 | 672.4 |
-| 2469 B | 1492.8 | 1004.7 | 689.3 | 534.4 |
-| 74913 B | 1675.8 | 917.0 | 642.6 | 592.4 |
+| tier | `tree` enc | `shim` enc | `core` enc | `tree` dec | `shim` dec | `core` dec |
+|---|---|---|---|---|---|---|
+| 136 B | 1023.0 | 914.0 | 163.3 | 836.1 | 717.9 | 75.0 |
+| 174 B | 742.9 | 700.1 | 94.3 | 497.4 | 555.5 | 47.8 |
+| 2469 B | 694.5 | 502.5 | 82.8 | 304.6 | 293.3 | 22.2 |
+| 74913 B | 1518.8 | 854.1 | 185.3 | 592.1 | 560.0 | 51.2 |
 
 ## Verdict
 

@@ -1837,3 +1837,32 @@ by boxing its `Vec` payloads, `Box<[u8]>` strings) each move a few percent of a
 the gap is a columnar or code-generated tree -- the rewrite the TypeScript, C#,
 Python, Dart and Julia cores also declined. The arm is published with its
 numbers as the no-C path.
+
+## Provisional: the Swift pure-core arm (plan 21, 2026-11-21, issue 41)
+
+`bindings/swift/Sources/PbwireCore/` is a pure-Swift port of the C core, shipped
+as the `PbwireCore` product beside the FFI `Pbwire` product. It exists because
+the FFI package cannot be a normal SwiftPM dependency: its products carry
+`LinkerSetting.unsafeFlags(["../../build/libpbwire.a"])`, which SwiftPM rejects
+in a non-root package. `PbwireCore` has no C module, no archive and no unsafe
+flags, so `swift build --product pbwire-conformance` links only Swift.
+
+`swift run -c release Bench compare`, one session, M-series arm64 laptop; the
+core arm is a prebuilt `PbwireCore` `Message` tree through one `encode()` / one
+`decode()`, exactly the shape of the `pbwire-swift-tree` row, so the rows differ
+only in who walks the wire. MB/s at 136 / 174 / 2469 / 74913 B, before the stage
+6 rounds: `pbwire-swift-core` encode 163.3 / 94.3 / 82.8 / 185.3, decode 75.0 /
+47.8 / 22.2 / 51.2, against the shipped handle's 1023.0 / 742.9 / 694.5 /
+1518.8 and 836.1 / 497.4 / 304.6 / 592.1.
+
+Conformance: `make conformance-swift` (the new testee in
+`bindings/swift/conformance/`) passes the binary suite with the same failure set
+as the C core — 1412 successes, 1403 skipped, 2 expected, 0 unexpected.
+
+First reading before any attempt: the Rust core (the same port shape, a
+`Vec<Option<Value>>` tree) does 923 MB/s encode and 238 MB/s decode at 74 KB, so
+a 5x gap at equal algorithm says Swift-side overhead outside the wire walk, not
+a worse codec. Candidates, one per round: a class `MsgDef` (every
+`schema.messages[i]` read copies a struct with two dictionaries and three
+arrays), an inline `Tag` (every tag write currently retains a `[UInt8]`), and
+per-message `Field` copies.
