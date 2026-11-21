@@ -173,7 +173,7 @@ own README. Dart ran once `dart pub global activate protoc_plugin` provided
 | C++ | same engine as C (`bindings/cpp` mirrors the C structs; `make bench-c` is the harness) | `protoc` C++ generated from the same `matrix3.proto` | all 4 | 1.33x ✅ / 2.00x ✅ |
 | Go (thin model, shim runtime) | `make go-bench` (`bindings/go/benchmarks`) | `protobuf-go` generated code from the same `matrix3.proto` | all 4 | 1.88x ✅ / 1.46x ✅ |
 | Java (pure-Java codec) | `make java-bench` (`bindings/java/benchmarks`) | `protobuf-java` generated code from the same `matrix3.proto` | all 4 | 1.26x ✅ / 1.76x ✅ `tree` (0.71x at 136 B; `core` generated model 0.75x / 0.80x) |
-| Node (N-API addon) | `make node-bench` (`bindings/node/benchmarks`) | [protobufjs](https://www.npmjs.com/package/protobufjs) (fastest) + `google-protobuf` (jspb) from the same `matrix3.proto` | all 4 | 3.36x ✅ / 2.95x ✅ `tree` (native-object `shim` 0.12x / 0.13x vs protobufjs, 1.03x encode / 0.64x decode vs jspb at 74 KB) |
+| Node (N-API addon) | `make node-bench` (`bindings/node/benchmarks`) | [protobufjs](https://www.npmjs.com/package/protobufjs) (fastest) + `google-protobuf` (jspb) from the same `matrix3.proto` | all 4 | 3.36x ✅ / 2.95x ✅ `tree` (native-object `shim` 0.12x / 0.13x vs protobufjs, 1.03x encode / 0.64x decode vs jspb at 74 KB; pure-TS `core` 2.96x encode / 1.02x decode vs jspb at 74 KB, 0.34x / 0.21x vs protobufjs) |
 | Ruby (C extension) | `make ruby-bench` (`bindings/ruby/benchmarks`) | the `google-protobuf` gem (C extension) | all 4 | 1.35x ✅ / 1.75x ✅ `tree` (native-object `shim` 0.19x / 0.23x, one C-extension object walk per op) |
 | Objective-C (ARC) | `make objc-bench` (`bindings/objc/benchmarks`) | the `protobuf` ObjC runtime + generated code from the same `matrix3.proto` | all 4 | 1.72x ✅ / 1.18x ✅ |
 | Kotlin (pure-Java codec + DSL) | `make kotlin-bench` (`bindings/kotlin/benchmarks`) | `protoc --kotlin_out` over `protobuf-java`, same `matrix3.proto` | all 4 | 1.11x ✅ / 1.77x ✅ `tree` (0.71x at 136 B; `core` 0.79x / 0.76x) |
@@ -990,8 +990,10 @@ field only when it is read). `shim` is the user-visible native-object task:
 `type.encodeObject(obj)` and `type.decodeToObject(wire)` hand a plain JS object
 or `Buffer` to the addon and get one back, one N-API downcall per op, with the
 addon walking the schema's field table in C (nested messages and repeated
-elements recurse in C, so no per-field JS round trip). `core` is plan 15's
-TS/JS port and prints `n/a` until it exists.
+elements recurse in C, so no per-field JS round trip). `core` is the pure
+TypeScript codec (`bindings/node/lib/core/`, `make conformance-node-core`): the
+same task with no native library and no boundary, measured in its own table
+below.
 
 `shim` is the slower row, and that is the finding: it is 1.05x-1.17x faster than
 assembling the same message with one `set()` per field (the pbench `tree` arm
@@ -1003,6 +1005,31 @@ past jspb on encode (1.03x) and stays below it on decode (0.64x); at 136 B it is
 below jspb on both. The verdict (and the A/B that accepted the arena build for
 the encode tree) is in `bindings/node/pbench/README.md` and the ledger; the
 `tree` row stays the binding's headline for data that is already in pbwire.
+
+The pure-TypeScript core arm (`make node-bench`, recorded
+`results/bench-node-20261121T003321Z.json`, host load average above 20, so the
+small tiers are noisy) does the same native-object task without any native
+code. MB/s and the ratio against the official runtime in the same run:
+
+| payload | op | pbwire-node-core (MB/s) | x jspb | x protobufjs |
+|---|---|---|---|---|
+| 136 B | encode | 18.5 | 1.28x ✅ | 0.25x ❌ |
+| 136 B | decode | 60.6 | 0.57x ❌ | 0.48x ❌ |
+| 174 B | encode | 69.1 | 4.37x ✅ | 0.40x ❌ |
+| 174 B | decode | 74.7 | 1.76x ✅ | 0.40x ❌ |
+| 2469 B | encode | 142.8 | 2.51x ✅ | 0.33x ❌ |
+| 2469 B | decode | 81.6 | 1.01x ✅ | 0.22x ❌ |
+| 74913 B | encode | 177.2 | 2.96x ✅ | 0.34x ❌ |
+| 74913 B | decode | 86.1 | 1.02x ✅ | 0.21x ❌ |
+
+The reading: an in-language codec that walks a schema table beats jspb's
+generated reader/writer on encode at every tier and matches it on the large
+decodes, because jspb resolves a code/type table per field and hands every
+repeated element to a closure. It stays 3-5x behind protobufjs, which generates
+per-type code, and it is 9.5x slower than the addon's prebuilt-handle row on
+encode at 74 KB (13.6x on decode), which is the price of a per-field JS walk
+against the C core. The small-tier decode cell is the one place jspb's
+generated reader wins.
 
 jspb's throughput does not move with payload size: its writer resolves a
 code/type table per field and hands every repeated element to a closure, where

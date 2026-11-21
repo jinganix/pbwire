@@ -37,7 +37,8 @@ exists.
 loop per tier and reports the median of five rounds (`node pbench/compare.js`). The
 formal, recorded run is `make node-bench`, which drives
 `benchmarks/bench.js` and prints `pbwire-node-tree` (the prebuilt handle row)
-beside `pbwire-node-shim` (the native-object row).
+beside `pbwire-node-shim` (the native-object row) and `pbwire-node-core` (the
+same task on the pure-TS core).
 
 ## Run table
 
@@ -111,16 +112,18 @@ against jspb's 1135 ns. So the in-language core beats the official runtime's
 generated code on every encode cell and on the 74 KB decode, and loses the
 small-tier decode where a dynamic slot lookup replaces jspb's generated reader;
 it stays 2.5-3.7x behind protobufjs at every tier because protobufjs generates
-per-type code. It is 3-4x the shipped addon path at 74 KB (435 µs against the
-handle's ~50 µs), which is what a per-field JS walk costs against the C core.
+per-type code. At 74 KB it is 9.5x the prebuilt handle on encode (423 µs
+against 44 µs) and 13.6x on decode (870 µs against 64 µs), while beating the
+one-downcall shim row by 2.9x on encode and 1.6x on decode: the fast lane for
+data that is already a pbwire tree stays the C core.
 
 Which arm ships for which host: **the addon stays the Node runtime** (it is the
 only arm with JSON/text mappings, the only one whose decode is the C core's
-single implementation, and 3-4x faster at the large tiers). **The TS core is
+single implementation, and an order of magnitude faster at the large tiers). **The TS core is
 what ships to a host with no toolchain to build the addon** — plain Node with no
 C compiler, an electron/bundled runtime, or a JS engine that is not Node
 (browser, edge worker) — where the alternative is not the addon but nothing.
-Shipping it as the default would trade a 3-4x slow encode for no benefit on a
+Shipping it as the default would trade a 9.5x slower encode for no benefit on a
 host that can build the addon, and it would put a second wire implementation on
 the default path, which `AGENTS.md` rules out.
 

@@ -184,7 +184,7 @@ provisional run and the verdict are in [`pbench/README.md`](pbench/README.md).
 |---|---|---|
 | `tree` | `pbench/a-tree.js` | the `Message` handle: one `set()` per field then `encode()`, one `get()` per field after `decode()` |
 | `shim` | `pbench/b-shim.js` | `type.encodeObject(obj)` / `type.decodeToObject(wire)`: one downcall, the addon walks the JS object in C |
-| `core` | `n/a` | plan 15 builds the TS/JS port; until then the arm prints `n/a` |
+| `core` | `pbench/c-core.js` | the pure-TypeScript codec in `lib/core/`: the descriptor reader, tree, encoder and decoder in JS, so the task runs in the JS heap with no boundary (binary wire format; no JSON/text mapping) |
 
 ```
 bindings/node/pbench/setup.sh        # addon + benchmarks/gen (jspb + .desc)
