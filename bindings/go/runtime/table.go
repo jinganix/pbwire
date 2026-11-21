@@ -26,6 +26,7 @@ import (
 	"sort"
 	"strings"
 	"sync/atomic"
+	"unicode/utf8"
 	"unsafe"
 )
 
@@ -78,6 +79,10 @@ type Field struct {
 	Packed   bool // repeated packable numerics share one length run
 	Group    bool // proto2 group: start/end framing (Kind is KindMessage)
 	Oneof    bool // oneof member: presence via GetOneof, value always written
+	// UTF8 validates string payloads on decode: proto3 string fields reject
+	// invalid UTF-8, proto2 strings and bytes never do, like the reference.
+	// Set from the schema plan; generated tables predate it and stay off.
+	UTF8 bool
 	// Fast and the columns below are struct-layout facts for the fast path.
 	// Fast means the columns are valid and the engine may read/write the
 	// struct field directly instead of calling the closures. Zero Fast
@@ -1323,7 +1328,15 @@ func encodeMapEntriesSorted(e *Encoder, msg any, f *Field, sub *Table, depth int
 // GetOrCreateMsg; repeated numerics accept packed runs and unpacked
 // singles; enums keep unknown values as int32.
 func DecodeTable(d *Decoder, a *Arena, msg any, t *Table, depth int) error {
-	if err := CheckDepth(depth); err != nil {
+	return DecodeTableLimits(d, a, msg, t, depth, Limits{})
+}
+
+// DecodeTableLimits is DecodeTable with explicit bounds: inputs are already
+// byte-checked by the caller, and nesting past the effective cap fails. The
+// old name keeps its signature as a defaults wrapper. The limit rides by
+// value and the depth check stays a single compare per message.
+func DecodeTableLimits(d *Decoder, a *Arena, msg any, t *Table, depth int, lim Limits) error {
+	if err := lim.checkDepth(depth); err != nil {
 		return err
 	}
 	// One address extraction per message: singular scalar stores below
@@ -1336,12 +1349,12 @@ func DecodeTable(d *Decoder, a *Arena, msg any, t *Table, depth int) error {
 		}
 		f := lookup(t, num)
 		if f == nil {
-			if err := skipUnknown(t, d, msg, num, wt, depth); err != nil {
+			if err := skipUnknown(t, d, msg, num, wt, depth, lim); err != nil {
 				return err
 			}
 			continue
 		}
-		if err := decodeField(d, a, t, msg, base, f, num, wt, depth); err != nil {
+		if err := decodeField(d, a, t, msg, base, f, num, wt, depth, lim); err != nil {
 			return err
 		}
 	}
@@ -1351,30 +1364,30 @@ func DecodeTable(d *Decoder, a *Arena, msg any, t *Table, depth int) error {
 // decodeField decodes one field occurrence: repeated rows fan out, oneof
 // members wrap (last wins), groups run their own loop, foreign messages
 // cross through the sibling, everything else reads and assigns.
-func decodeField(d *Decoder, a *Arena, t *Table, msg any, base unsafe.Pointer, f *Field, num uint32, wt WireType, depth int) error {
+func decodeField(d *Decoder, a *Arena, t *Table, msg any, base unsafe.Pointer, f *Field, num uint32, wt WireType, depth int, lim Limits) error {
 	if f.Repeated {
-		return decodeRepeated(d, a, t, msg, f, wt, depth)
+		return decodeRepeated(d, a, t, msg, f, wt, depth, lim)
 	}
 	if f.Oneof {
-		v, ok, err := readOneofValue(d, a, f, wt, depth)
+		v, ok, err := readOneofValue(d, a, f, wt, depth, lim)
 		if err != nil {
 			return err
 		}
 		if !ok {
-			return skipUnknown(t, d, msg, num, wt, depth)
+			return skipUnknown(t, d, msg, num, wt, depth, lim)
 		}
 		f.SetOneof(msg, v)
 		return nil
 	}
 	if f.Group {
 		if wt != WireStartGroup {
-			return skipUnknown(t, d, msg, num, wt, depth)
+			return skipUnknown(t, d, msg, num, wt, depth, lim)
 		}
-		return decodeGroup(d, a, msg, f, depth)
+		return decodeGroup(d, a, msg, f, depth, lim)
 	}
 	if f.Foreign != nil {
 		if wt != WireLen {
-			return skipUnknown(t, d, msg, num, wt, depth)
+			return skipUnknown(t, d, msg, num, wt, depth, lim)
 		}
 		raw, err := d.Bytes()
 		if err != nil {
@@ -1386,7 +1399,7 @@ func decodeField(d *Decoder, a *Arena, t *Table, msg any, base unsafe.Pointer, f
 	switch f.Kind {
 	case KindInt32:
 		if wt != WireVarint {
-			return skipUnknown(t, d, msg, num, wt, depth)
+			return skipUnknown(t, d, msg, num, wt, depth, lim)
 		}
 		v, err := d.Varint()
 		if err != nil {
@@ -1399,7 +1412,7 @@ func decodeField(d *Decoder, a *Arena, t *Table, msg any, base unsafe.Pointer, f
 		}
 	case KindInt64:
 		if wt != WireVarint {
-			return skipUnknown(t, d, msg, num, wt, depth)
+			return skipUnknown(t, d, msg, num, wt, depth, lim)
 		}
 		v, err := d.Varint()
 		if err != nil {
@@ -1412,7 +1425,7 @@ func decodeField(d *Decoder, a *Arena, t *Table, msg any, base unsafe.Pointer, f
 		}
 	case KindUint32:
 		if wt != WireVarint {
-			return skipUnknown(t, d, msg, num, wt, depth)
+			return skipUnknown(t, d, msg, num, wt, depth, lim)
 		}
 		v, err := d.Varint()
 		if err != nil {
@@ -1425,7 +1438,7 @@ func decodeField(d *Decoder, a *Arena, t *Table, msg any, base unsafe.Pointer, f
 		}
 	case KindUint64:
 		if wt != WireVarint {
-			return skipUnknown(t, d, msg, num, wt, depth)
+			return skipUnknown(t, d, msg, num, wt, depth, lim)
 		}
 		v, err := d.Varint()
 		if err != nil {
@@ -1438,7 +1451,7 @@ func decodeField(d *Decoder, a *Arena, t *Table, msg any, base unsafe.Pointer, f
 		}
 	case KindSint32:
 		if wt != WireVarint {
-			return skipUnknown(t, d, msg, num, wt, depth)
+			return skipUnknown(t, d, msg, num, wt, depth, lim)
 		}
 		v, err := d.Varint()
 		if err != nil {
@@ -1451,7 +1464,7 @@ func decodeField(d *Decoder, a *Arena, t *Table, msg any, base unsafe.Pointer, f
 		}
 	case KindSint64:
 		if wt != WireVarint {
-			return skipUnknown(t, d, msg, num, wt, depth)
+			return skipUnknown(t, d, msg, num, wt, depth, lim)
 		}
 		v, err := d.Varint()
 		if err != nil {
@@ -1464,7 +1477,7 @@ func decodeField(d *Decoder, a *Arena, t *Table, msg any, base unsafe.Pointer, f
 		}
 	case KindFixed32:
 		if wt != WireFixed32 {
-			return skipUnknown(t, d, msg, num, wt, depth)
+			return skipUnknown(t, d, msg, num, wt, depth, lim)
 		}
 		v, err := d.Fixed32()
 		if err != nil {
@@ -1477,7 +1490,7 @@ func decodeField(d *Decoder, a *Arena, t *Table, msg any, base unsafe.Pointer, f
 		}
 	case KindFixed64:
 		if wt != WireFixed64 {
-			return skipUnknown(t, d, msg, num, wt, depth)
+			return skipUnknown(t, d, msg, num, wt, depth, lim)
 		}
 		v, err := d.Fixed64()
 		if err != nil {
@@ -1490,7 +1503,7 @@ func decodeField(d *Decoder, a *Arena, t *Table, msg any, base unsafe.Pointer, f
 		}
 	case KindSfixed32:
 		if wt != WireFixed32 {
-			return skipUnknown(t, d, msg, num, wt, depth)
+			return skipUnknown(t, d, msg, num, wt, depth, lim)
 		}
 		v, err := d.Fixed32()
 		if err != nil {
@@ -1503,7 +1516,7 @@ func decodeField(d *Decoder, a *Arena, t *Table, msg any, base unsafe.Pointer, f
 		}
 	case KindSfixed64:
 		if wt != WireFixed64 {
-			return skipUnknown(t, d, msg, num, wt, depth)
+			return skipUnknown(t, d, msg, num, wt, depth, lim)
 		}
 		v, err := d.Fixed64()
 		if err != nil {
@@ -1516,7 +1529,7 @@ func decodeField(d *Decoder, a *Arena, t *Table, msg any, base unsafe.Pointer, f
 		}
 	case KindFloat:
 		if wt != WireFixed32 {
-			return skipUnknown(t, d, msg, num, wt, depth)
+			return skipUnknown(t, d, msg, num, wt, depth, lim)
 		}
 		v, err := d.Fixed32()
 		if err != nil {
@@ -1529,7 +1542,7 @@ func decodeField(d *Decoder, a *Arena, t *Table, msg any, base unsafe.Pointer, f
 		}
 	case KindDouble:
 		if wt != WireFixed64 {
-			return skipUnknown(t, d, msg, num, wt, depth)
+			return skipUnknown(t, d, msg, num, wt, depth, lim)
 		}
 		v, err := d.Fixed64()
 		if err != nil {
@@ -1542,7 +1555,7 @@ func decodeField(d *Decoder, a *Arena, t *Table, msg any, base unsafe.Pointer, f
 		}
 	case KindBool:
 		if wt != WireVarint {
-			return skipUnknown(t, d, msg, num, wt, depth)
+			return skipUnknown(t, d, msg, num, wt, depth, lim)
 		}
 		v, err := d.Varint()
 		if err != nil {
@@ -1555,11 +1568,14 @@ func decodeField(d *Decoder, a *Arena, t *Table, msg any, base unsafe.Pointer, f
 		}
 	case KindString:
 		if wt != WireLen {
-			return skipUnknown(t, d, msg, num, wt, depth)
+			return skipUnknown(t, d, msg, num, wt, depth, lim)
 		}
 		raw, err := d.Bytes()
 		if err != nil {
 			return err
+		}
+		if f.UTF8 && !utf8.Valid(raw) {
+			return ErrWire
 		}
 		if f.Explicit {
 			f.SetOptStr(msg, a.AddString(raw))
@@ -1568,7 +1584,7 @@ func decodeField(d *Decoder, a *Arena, t *Table, msg any, base unsafe.Pointer, f
 		}
 	case KindBytes:
 		if wt != WireLen {
-			return skipUnknown(t, d, msg, num, wt, depth)
+			return skipUnknown(t, d, msg, num, wt, depth, lim)
 		}
 		raw, err := d.Bytes()
 		if err != nil {
@@ -1581,7 +1597,7 @@ func decodeField(d *Decoder, a *Arena, t *Table, msg any, base unsafe.Pointer, f
 		}
 	case KindEnum:
 		if wt != WireVarint {
-			return skipUnknown(t, d, msg, num, wt, depth)
+			return skipUnknown(t, d, msg, num, wt, depth, lim)
 		}
 		v, err := d.Varint()
 		if err != nil {
@@ -1594,7 +1610,7 @@ func decodeField(d *Decoder, a *Arena, t *Table, msg any, base unsafe.Pointer, f
 		}
 	case KindMessage:
 		if wt != WireLen {
-			return skipUnknown(t, d, msg, num, wt, depth)
+			return skipUnknown(t, d, msg, num, wt, depth, lim)
 		}
 		raw, err := d.Bytes()
 		if err != nil {
@@ -1602,7 +1618,7 @@ func decodeField(d *Decoder, a *Arena, t *Table, msg any, base unsafe.Pointer, f
 		}
 		sub := Decoder{Buf: raw}
 		target := f.GetOrCreateMsg(msg)
-		if err := DecodeTable(&sub, a, target, f.Sub(), depth+1); err != nil {
+		if err := DecodeTableLimits(&sub, a, target, f.Sub(), depth+1, lim); err != nil {
 			return err
 		}
 		if !sub.Done() {
@@ -1614,15 +1630,15 @@ func decodeField(d *Decoder, a *Arena, t *Table, msg any, base unsafe.Pointer, f
 
 // decodeGroup runs a proto2 group body: members loop until the matching
 // end tag, dispatched through the sub-table like a nested message.
-func decodeGroup(d *Decoder, a *Arena, msg any, f *Field, depth int) error {
-	return decodeGroupBody(d, a, f.GetOrCreateMsg(msg), f.Sub(), f.Num, depth)
+func decodeGroup(d *Decoder, a *Arena, msg any, f *Field, depth int, lim Limits) error {
+	return decodeGroupBody(d, a, f.GetOrCreateMsg(msg), f.Sub(), f.Num, depth, lim)
 }
 
 // decodeGroupBody is the end-tag-terminated loop shared by plain and oneof
 // group members: every member occurrence dispatches through sub like a
 // nested message body.
-func decodeGroupBody(d *Decoder, a *Arena, target any, sub *Table, group uint32, depth int) error {
-	if err := CheckDepth(depth); err != nil {
+func decodeGroupBody(d *Decoder, a *Arena, target any, sub *Table, group uint32, depth int, lim Limits) error {
+	if err := lim.checkDepth(depth); err != nil {
 		return err
 	}
 	base := fastBase(sub, target)
@@ -1639,12 +1655,12 @@ func decodeGroupBody(d *Decoder, a *Arena, target any, sub *Table, group uint32,
 		}
 		g := lookup(sub, num)
 		if g == nil {
-			if err := skipUnknown(sub, d, target, num, wt, depth); err != nil {
+			if err := skipUnknown(sub, d, target, num, wt, depth, lim); err != nil {
 				return err
 			}
 			continue
 		}
-		if err := decodeField(d, a, sub, target, base, g, num, wt, depth); err != nil {
+		if err := decodeField(d, a, sub, target, base, g, num, wt, depth, lim); err != nil {
 			return err
 		}
 	}
@@ -1653,7 +1669,7 @@ func decodeGroupBody(d *Decoder, a *Arena, target any, sub *Table, group uint32,
 // readOneofValue reads one set oneof member: the wire type must match (or
 // the occurrence skips, like any unknown), then the value comes back
 // unwrapped for SetOneof to wrap. ok=false means skip.
-func readOneofValue(d *Decoder, a *Arena, f *Field, wt WireType, depth int) (v any, ok bool, err error) {
+func readOneofValue(d *Decoder, a *Arena, f *Field, wt WireType, depth int, lim Limits) (v any, ok bool, err error) {
 	switch f.Kind {
 	case KindInt32:
 		if wt != WireVarint {
@@ -1780,6 +1796,9 @@ func readOneofValue(d *Decoder, a *Arena, f *Field, wt WireType, depth int) (v a
 		if err != nil {
 			return nil, false, err
 		}
+		if f.UTF8 && !utf8.Valid(raw) {
+			return nil, false, ErrWire
+		}
 		return a.AddString(raw), true, nil
 	case KindBytes:
 		if wt != WireLen {
@@ -1805,7 +1824,7 @@ func readOneofValue(d *Decoder, a *Arena, f *Field, wt WireType, depth int) (v a
 				return nil, false, nil
 			}
 			target := f.NewMsg()
-			if err := decodeGroupBody(d, a, target, f.Sub(), f.Num, depth); err != nil {
+			if err := decodeGroupBody(d, a, target, f.Sub(), f.Num, depth, lim); err != nil {
 				return nil, false, err
 			}
 			return target, true, nil
@@ -1826,7 +1845,7 @@ func readOneofValue(d *Decoder, a *Arena, f *Field, wt WireType, depth int) (v a
 			return target, true, nil
 		}
 		target := f.NewMsg()
-		if err := DecodeTable(&sub, a, target, f.Sub(), depth+1); err != nil {
+		if err := DecodeTableLimits(&sub, a, target, f.Sub(), depth+1, lim); err != nil {
 			return nil, false, err
 		}
 		if !sub.Done() {
@@ -1840,7 +1859,7 @@ func readOneofValue(d *Decoder, a *Arena, f *Field, wt WireType, depth int) (v a
 // decodeRepeated handles one repeated row. Packable numerics accept both
 // packed runs (wt == Len) and unpacked singles; strings, bytes and
 // messages require Len.
-func decodeRepeated(d *Decoder, a *Arena, t *Table, msg any, f *Field, wt WireType, depth int) error {
+func decodeRepeated(d *Decoder, a *Arena, t *Table, msg any, f *Field, wt WireType, depth int, lim Limits) error {
 	switch f.Kind {
 	case KindInt32:
 		switch wt {
@@ -1852,7 +1871,7 @@ func decodeRepeated(d *Decoder, a *Arena, t *Table, msg any, f *Field, wt WireTy
 			f.AppendI32(msg, int32(v))
 		case WireLen:
 			if !packableKind(f.Kind) {
-				return skipUnknown(t, d, msg, f.Num, wt, depth)
+				return skipUnknown(t, d, msg, f.Num, wt, depth, lim)
 			}
 			raw, err := d.Bytes()
 			if err != nil {
@@ -1867,7 +1886,7 @@ func decodeRepeated(d *Decoder, a *Arena, t *Table, msg any, f *Field, wt WireTy
 				f.AppendI32(msg, int32(v))
 			}
 		default:
-			return skipUnknown(t, d, msg, f.Num, wt, depth)
+			return skipUnknown(t, d, msg, f.Num, wt, depth, lim)
 		}
 	case KindInt64:
 		switch wt {
@@ -1879,7 +1898,7 @@ func decodeRepeated(d *Decoder, a *Arena, t *Table, msg any, f *Field, wt WireTy
 			f.AppendI64(msg, int64(v))
 		case WireLen:
 			if !packableKind(f.Kind) {
-				return skipUnknown(t, d, msg, f.Num, wt, depth)
+				return skipUnknown(t, d, msg, f.Num, wt, depth, lim)
 			}
 			raw, err := d.Bytes()
 			if err != nil {
@@ -1894,7 +1913,7 @@ func decodeRepeated(d *Decoder, a *Arena, t *Table, msg any, f *Field, wt WireTy
 				f.AppendI64(msg, int64(v))
 			}
 		default:
-			return skipUnknown(t, d, msg, f.Num, wt, depth)
+			return skipUnknown(t, d, msg, f.Num, wt, depth, lim)
 		}
 	case KindUint32:
 		switch wt {
@@ -1906,7 +1925,7 @@ func decodeRepeated(d *Decoder, a *Arena, t *Table, msg any, f *Field, wt WireTy
 			f.AppendU32(msg, uint32(v))
 		case WireLen:
 			if !packableKind(f.Kind) {
-				return skipUnknown(t, d, msg, f.Num, wt, depth)
+				return skipUnknown(t, d, msg, f.Num, wt, depth, lim)
 			}
 			raw, err := d.Bytes()
 			if err != nil {
@@ -1921,7 +1940,7 @@ func decodeRepeated(d *Decoder, a *Arena, t *Table, msg any, f *Field, wt WireTy
 				f.AppendU32(msg, uint32(v))
 			}
 		default:
-			return skipUnknown(t, d, msg, f.Num, wt, depth)
+			return skipUnknown(t, d, msg, f.Num, wt, depth, lim)
 		}
 	case KindUint64:
 		switch wt {
@@ -1933,7 +1952,7 @@ func decodeRepeated(d *Decoder, a *Arena, t *Table, msg any, f *Field, wt WireTy
 			f.AppendU64(msg, v)
 		case WireLen:
 			if !packableKind(f.Kind) {
-				return skipUnknown(t, d, msg, f.Num, wt, depth)
+				return skipUnknown(t, d, msg, f.Num, wt, depth, lim)
 			}
 			raw, err := d.Bytes()
 			if err != nil {
@@ -1948,7 +1967,7 @@ func decodeRepeated(d *Decoder, a *Arena, t *Table, msg any, f *Field, wt WireTy
 				f.AppendU64(msg, v)
 			}
 		default:
-			return skipUnknown(t, d, msg, f.Num, wt, depth)
+			return skipUnknown(t, d, msg, f.Num, wt, depth, lim)
 		}
 	case KindSint32:
 		switch wt {
@@ -1960,7 +1979,7 @@ func decodeRepeated(d *Decoder, a *Arena, t *Table, msg any, f *Field, wt WireTy
 			f.AppendS32(msg, ZigZagDecode32(v))
 		case WireLen:
 			if !packableKind(f.Kind) {
-				return skipUnknown(t, d, msg, f.Num, wt, depth)
+				return skipUnknown(t, d, msg, f.Num, wt, depth, lim)
 			}
 			raw, err := d.Bytes()
 			if err != nil {
@@ -1975,7 +1994,7 @@ func decodeRepeated(d *Decoder, a *Arena, t *Table, msg any, f *Field, wt WireTy
 				f.AppendS32(msg, ZigZagDecode32(v))
 			}
 		default:
-			return skipUnknown(t, d, msg, f.Num, wt, depth)
+			return skipUnknown(t, d, msg, f.Num, wt, depth, lim)
 		}
 	case KindSint64:
 		switch wt {
@@ -1987,7 +2006,7 @@ func decodeRepeated(d *Decoder, a *Arena, t *Table, msg any, f *Field, wt WireTy
 			f.AppendS64(msg, ZigZagDecode64(v))
 		case WireLen:
 			if !packableKind(f.Kind) {
-				return skipUnknown(t, d, msg, f.Num, wt, depth)
+				return skipUnknown(t, d, msg, f.Num, wt, depth, lim)
 			}
 			raw, err := d.Bytes()
 			if err != nil {
@@ -2002,7 +2021,7 @@ func decodeRepeated(d *Decoder, a *Arena, t *Table, msg any, f *Field, wt WireTy
 				f.AppendS64(msg, ZigZagDecode64(v))
 			}
 		default:
-			return skipUnknown(t, d, msg, f.Num, wt, depth)
+			return skipUnknown(t, d, msg, f.Num, wt, depth, lim)
 		}
 	case KindFixed32:
 		switch wt {
@@ -2014,7 +2033,7 @@ func decodeRepeated(d *Decoder, a *Arena, t *Table, msg any, f *Field, wt WireTy
 			f.AppendFx32(msg, v)
 		case WireLen:
 			if !packableKind(f.Kind) {
-				return skipUnknown(t, d, msg, f.Num, wt, depth)
+				return skipUnknown(t, d, msg, f.Num, wt, depth, lim)
 			}
 			raw, err := d.Bytes()
 			if err != nil {
@@ -2029,7 +2048,7 @@ func decodeRepeated(d *Decoder, a *Arena, t *Table, msg any, f *Field, wt WireTy
 				f.AppendFx32(msg, v)
 			}
 		default:
-			return skipUnknown(t, d, msg, f.Num, wt, depth)
+			return skipUnknown(t, d, msg, f.Num, wt, depth, lim)
 		}
 	case KindFixed64:
 		switch wt {
@@ -2041,7 +2060,7 @@ func decodeRepeated(d *Decoder, a *Arena, t *Table, msg any, f *Field, wt WireTy
 			f.AppendFx64(msg, v)
 		case WireLen:
 			if !packableKind(f.Kind) {
-				return skipUnknown(t, d, msg, f.Num, wt, depth)
+				return skipUnknown(t, d, msg, f.Num, wt, depth, lim)
 			}
 			raw, err := d.Bytes()
 			if err != nil {
@@ -2056,7 +2075,7 @@ func decodeRepeated(d *Decoder, a *Arena, t *Table, msg any, f *Field, wt WireTy
 				f.AppendFx64(msg, v)
 			}
 		default:
-			return skipUnknown(t, d, msg, f.Num, wt, depth)
+			return skipUnknown(t, d, msg, f.Num, wt, depth, lim)
 		}
 	case KindSfixed32:
 		switch wt {
@@ -2068,7 +2087,7 @@ func decodeRepeated(d *Decoder, a *Arena, t *Table, msg any, f *Field, wt WireTy
 			f.AppendSfx32(msg, int32(v))
 		case WireLen:
 			if !packableKind(f.Kind) {
-				return skipUnknown(t, d, msg, f.Num, wt, depth)
+				return skipUnknown(t, d, msg, f.Num, wt, depth, lim)
 			}
 			raw, err := d.Bytes()
 			if err != nil {
@@ -2083,7 +2102,7 @@ func decodeRepeated(d *Decoder, a *Arena, t *Table, msg any, f *Field, wt WireTy
 				f.AppendSfx32(msg, int32(v))
 			}
 		default:
-			return skipUnknown(t, d, msg, f.Num, wt, depth)
+			return skipUnknown(t, d, msg, f.Num, wt, depth, lim)
 		}
 	case KindSfixed64:
 		switch wt {
@@ -2095,7 +2114,7 @@ func decodeRepeated(d *Decoder, a *Arena, t *Table, msg any, f *Field, wt WireTy
 			f.AppendSfx64(msg, int64(v))
 		case WireLen:
 			if !packableKind(f.Kind) {
-				return skipUnknown(t, d, msg, f.Num, wt, depth)
+				return skipUnknown(t, d, msg, f.Num, wt, depth, lim)
 			}
 			raw, err := d.Bytes()
 			if err != nil {
@@ -2110,7 +2129,7 @@ func decodeRepeated(d *Decoder, a *Arena, t *Table, msg any, f *Field, wt WireTy
 				f.AppendSfx64(msg, int64(v))
 			}
 		default:
-			return skipUnknown(t, d, msg, f.Num, wt, depth)
+			return skipUnknown(t, d, msg, f.Num, wt, depth, lim)
 		}
 	case KindFloat:
 		switch wt {
@@ -2122,7 +2141,7 @@ func decodeRepeated(d *Decoder, a *Arena, t *Table, msg any, f *Field, wt WireTy
 			f.AppendF32(msg, math.Float32frombits(v))
 		case WireLen:
 			if !packableKind(f.Kind) {
-				return skipUnknown(t, d, msg, f.Num, wt, depth)
+				return skipUnknown(t, d, msg, f.Num, wt, depth, lim)
 			}
 			raw, err := d.Bytes()
 			if err != nil {
@@ -2137,7 +2156,7 @@ func decodeRepeated(d *Decoder, a *Arena, t *Table, msg any, f *Field, wt WireTy
 				f.AppendF32(msg, math.Float32frombits(v))
 			}
 		default:
-			return skipUnknown(t, d, msg, f.Num, wt, depth)
+			return skipUnknown(t, d, msg, f.Num, wt, depth, lim)
 		}
 	case KindDouble:
 		switch wt {
@@ -2149,7 +2168,7 @@ func decodeRepeated(d *Decoder, a *Arena, t *Table, msg any, f *Field, wt WireTy
 			f.AppendF64(msg, math.Float64frombits(v))
 		case WireLen:
 			if !packableKind(f.Kind) {
-				return skipUnknown(t, d, msg, f.Num, wt, depth)
+				return skipUnknown(t, d, msg, f.Num, wt, depth, lim)
 			}
 			raw, err := d.Bytes()
 			if err != nil {
@@ -2164,7 +2183,7 @@ func decodeRepeated(d *Decoder, a *Arena, t *Table, msg any, f *Field, wt WireTy
 				f.AppendF64(msg, math.Float64frombits(v))
 			}
 		default:
-			return skipUnknown(t, d, msg, f.Num, wt, depth)
+			return skipUnknown(t, d, msg, f.Num, wt, depth, lim)
 		}
 	case KindBool:
 		switch wt {
@@ -2176,7 +2195,7 @@ func decodeRepeated(d *Decoder, a *Arena, t *Table, msg any, f *Field, wt WireTy
 			f.AppendBool(msg, v != 0)
 		case WireLen:
 			if !packableKind(f.Kind) {
-				return skipUnknown(t, d, msg, f.Num, wt, depth)
+				return skipUnknown(t, d, msg, f.Num, wt, depth, lim)
 			}
 			raw, err := d.Bytes()
 			if err != nil {
@@ -2191,20 +2210,23 @@ func decodeRepeated(d *Decoder, a *Arena, t *Table, msg any, f *Field, wt WireTy
 				f.AppendBool(msg, v != 0)
 			}
 		default:
-			return skipUnknown(t, d, msg, f.Num, wt, depth)
+			return skipUnknown(t, d, msg, f.Num, wt, depth, lim)
 		}
 	case KindString:
 		if wt != WireLen {
-			return skipUnknown(t, d, msg, f.Num, wt, depth)
+			return skipUnknown(t, d, msg, f.Num, wt, depth, lim)
 		}
 		raw, err := d.Bytes()
 		if err != nil {
 			return err
 		}
+		if f.UTF8 && !utf8.Valid(raw) {
+			return ErrWire
+		}
 		f.AppendStr(msg, a.AddString(raw))
 	case KindBytes:
 		if wt != WireLen {
-			return skipUnknown(t, d, msg, f.Num, wt, depth)
+			return skipUnknown(t, d, msg, f.Num, wt, depth, lim)
 		}
 		raw, err := d.Bytes()
 		if err != nil {
@@ -2221,7 +2243,7 @@ func decodeRepeated(d *Decoder, a *Arena, t *Table, msg any, f *Field, wt WireTy
 			f.AppendEnum(msg, int32(v))
 		case WireLen:
 			if !packableKind(f.Kind) {
-				return skipUnknown(t, d, msg, f.Num, wt, depth)
+				return skipUnknown(t, d, msg, f.Num, wt, depth, lim)
 			}
 			raw, err := d.Bytes()
 			if err != nil {
@@ -2236,21 +2258,21 @@ func decodeRepeated(d *Decoder, a *Arena, t *Table, msg any, f *Field, wt WireTy
 				f.AppendEnum(msg, int32(v))
 			}
 		default:
-			return skipUnknown(t, d, msg, f.Num, wt, depth)
+			return skipUnknown(t, d, msg, f.Num, wt, depth, lim)
 		}
 	case KindMessage:
 		if f.Group {
 			if wt != WireStartGroup {
-				return skipUnknown(t, d, msg, f.Num, wt, depth)
+				return skipUnknown(t, d, msg, f.Num, wt, depth, lim)
 			}
 			if f.Foreign != nil {
-				return skipUnknown(t, d, msg, f.Num, wt, depth)
+				return skipUnknown(t, d, msg, f.Num, wt, depth, lim)
 			}
 			item := f.NewRepMsg(msg)
-			return decodeGroupBody(d, a, item, f.Sub(), f.Num, depth)
+			return decodeGroupBody(d, a, item, f.Sub(), f.Num, depth, lim)
 		}
 		if wt != WireLen {
-			return skipUnknown(t, d, msg, f.Num, wt, depth)
+			return skipUnknown(t, d, msg, f.Num, wt, depth, lim)
 		}
 		raw, err := d.Bytes()
 		if err != nil {
@@ -2265,7 +2287,7 @@ func decodeRepeated(d *Decoder, a *Arena, t *Table, msg any, f *Field, wt WireTy
 		}
 		sub := Decoder{Buf: raw}
 		item := f.NewRepMsg(msg)
-		if err := DecodeTable(&sub, a, item, f.Sub(), depth+1); err != nil {
+		if err := DecodeTableLimits(&sub, a, item, f.Sub(), depth+1, lim); err != nil {
 			return err
 		}
 		if !sub.Done() {
@@ -2287,11 +2309,11 @@ func appendUnknown(e *Encoder, t *Table, msg any) {
 // skipUnknown drops one field the table does not accept, retaining its
 // tag-inclusive bytes when the table has an Unknown hook. Without a hook this
 // is exactly Decoder.Skip, so struct models keep dropping unknown fields.
-func skipUnknown(t *Table, d *Decoder, msg any, num uint32, wt WireType, depth int) error {
+func skipUnknown(t *Table, d *Decoder, msg any, num uint32, wt WireType, depth int, lim Limits) error {
 	if t == nil || t.Unknown == nil {
-		return d.Skip(num, wt, depth)
+		return d.SkipLimits(num, wt, depth, lim)
 	}
-	raw, err := d.SkipRaw(num, wt, depth)
+	raw, err := d.SkipRawLimits(num, wt, depth, lim)
 	if err != nil {
 		return err
 	}

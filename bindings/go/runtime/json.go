@@ -50,8 +50,20 @@ func (t *DType) MarshalJSON(m *DMsg) (string, error) {
 // ignoreUnknown is set. An unresolvable Any @type always fails, and a
 // missing proto2 required field fails after the parse.
 func (t *DType) UnmarshalJSON(text string, ignoreUnknown bool) (*DMsg, error) {
+	return t.UnmarshalJSONLimits(text, ignoreUnknown, Limits{})
+}
+
+// UnmarshalJSONLimits is UnmarshalJSON with explicit bounds: documents
+// larger than the byte cap fail before anything parses, and nesting past
+// the effective cap fails. Like the reference, an array costs a level too,
+// so a repeated message chain spends two levels per message. The old name
+// keeps its signature as a defaults wrapper.
+func (t *DType) UnmarshalJSONLimits(text string, ignoreUnknown bool, lim Limits) (*DMsg, error) {
+	if err := lim.checkBytes(len(text)); err != nil {
+		return nil, err
+	}
 	m := t.New()
-	p := &jsonIn{s: text, ignore: ignoreUnknown}
+	p := &jsonIn{s: text, ignore: ignoreUnknown, lim: lim}
 	if err := p.parseMessageValue(m); err != nil {
 		return nil, err
 	}
@@ -991,6 +1003,18 @@ type jsonIn struct {
 	s      string
 	pos    int
 	ignore bool
+	lim    Limits
+	depth  int
+}
+
+// enter counts one nesting level: a message, or an array, which costs a
+// level like the reference. Past the effective cap it reports ErrDepth.
+func (p *jsonIn) enter() error {
+	if p.depth >= p.lim.effectiveDepth() {
+		return ErrDepth
+	}
+	p.depth++
+	return nil
 }
 
 func (p *jsonIn) fail(format string, args ...any) error {
@@ -1236,6 +1260,10 @@ done:
 
 // skipValue skips one JSON value (for unknown fields and Any scans).
 func (p *jsonIn) skipValue() error {
+	if err := p.enter(); err != nil {
+		return err
+	}
+	defer func() { p.depth-- }()
 	switch p.peekKind() {
 	case jkObj:
 		if err := p.expectCh('{'); err != nil {
@@ -2008,9 +2036,13 @@ func (p *jsonIn) parseElement(m *DMsg, ord int, fp *FieldPlan) error {
 		return p.emitNull(m, ord, fp)
 	}
 	// Nested arrays flatten into the current one, except inside Value and
-	// ListValue.
+	// ListValue. The brackets still cost a level, like a plain array.
 	if p.peekKind() == jkArr && !isValueField(m, ord, fp) &&
 		jsonClassify(fieldMsgFull(m, ord, fp)) != jwList {
+		if err := p.enter(); err != nil {
+			return err
+		}
+		defer func() { p.depth-- }()
 		if err := p.expectCh('['); err != nil {
 			return err
 		}
@@ -2040,6 +2072,10 @@ func (p *jsonIn) parseElement(m *DMsg, ord int, fp *FieldPlan) error {
 }
 
 func (p *jsonIn) parseArray(m *DMsg, ord int, fp *FieldPlan) error {
+	if err := p.enter(); err != nil {
+		return err
+	}
+	defer func() { p.depth-- }()
 	if err := p.expectCh('['); err != nil {
 		return err
 	}
@@ -2293,6 +2329,10 @@ func (p *jsonIn) parseObjectBody(m *DMsg) error {
 
 // parseMessageValue routes a message value by kind, like the reference.
 func (p *jsonIn) parseMessageValue(m *DMsg) error {
+	if err := p.enter(); err != nil {
+		return err
+	}
+	defer func() { p.depth-- }()
 	switch jsonClassify(m.typ.plan.Full) {
 	case jwAny:
 		if p.peekKind() == jkNull {
@@ -2794,7 +2834,7 @@ func (p *jsonIn) parseAny(m *DMsg) error {
 		if f.hasTypeURL {
 			continue
 		}
-		q := &jsonIn{s: f.text, ignore: p.ignore}
+		q := &jsonIn{s: f.text, ignore: p.ignore, lim: p.lim, depth: p.depth}
 		if kind != jwNone {
 			if f.key != "value" {
 				return p.fail("Any %s wants a \"value\" key", name)

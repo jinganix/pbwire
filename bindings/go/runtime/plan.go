@@ -79,6 +79,7 @@ type FieldPlan struct {
 	Enum        string                                 // full name for enum fields ("" otherwise)
 	Oneof       string                                 // containing oneof, "" when not a real oneof member
 	Group       bool                                   // TYPE_GROUP: start/end group framing, not length-delimited
+	UTF8        bool                                   // proto3 strings reject invalid UTF-8 on decode; proto2 strings never do
 	HasDefault  bool                                   // proto2 explicit default (informational; absent still reads as zero)
 	Default     string                                 // raw default text from the descriptor
 }
@@ -448,5 +449,9 @@ func (s *Schema) buildField(syntax string, oneofs []string, fd *descriptorpb.Fie
 			fp.Packed = fd.GetOptions().GetPacked()
 		}
 	}
+	// String validation follows the dialect default (VERIFY for proto3 and
+	// editions, NONE for proto2), like the reference FeatureSet default: only
+	// string fields carry it, bytes never do.
+	fp.UTF8 = syntax == "proto3" && fp.Proto == descriptorpb.FieldDescriptorProto_TYPE_STRING
 	return fp, nil
 }

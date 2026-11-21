@@ -46,14 +46,24 @@ func encodeModel(msg any, t *Table, deterministic bool) ([]byte, error) {
 // Arena per call, grown from the input, backs every decoded string and byte
 // payload, so the result owns its memory after return.
 func DecodeModel(wire []byte, msg any, t *Table) error {
+	return DecodeModelLimits(wire, msg, t, Limits{})
+}
+
+// DecodeModelLimits is DecodeModel with explicit bounds: inputs larger than
+// the byte cap fail before anything decodes, and nesting past the effective
+// cap fails. The old name keeps its signature as a defaults wrapper.
+func DecodeModelLimits(wire []byte, msg any, t *Table, lim Limits) error {
 	if msg == nil {
 		return fmt.Errorf("pbwire: unmarshal into a nil message")
 	}
 	if rv := reflect.ValueOf(msg); rv.Kind() == reflect.Ptr && rv.IsNil() {
 		return fmt.Errorf("pbwire: unmarshal into a nil message")
 	}
+	if err := lim.checkBytes(len(wire)); err != nil {
+		return err
+	}
 	d := Decoder{Buf: wire}
 	a := Arena{}
 	a.Grow(len(wire))
-	return DecodeTable(&d, &a, msg, t, 0)
+	return DecodeTableLimits(&d, &a, msg, t, 0, lim)
 }

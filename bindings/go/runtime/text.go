@@ -42,8 +42,19 @@ func (t *DType) MarshalText(m *DMsg, printUnknown bool) (string, error) {
 // fail unless the schema reserved them, a repeated singular or oneof member
 // fails, and a missing proto2 required field fails after the parse.
 func (t *DType) UnmarshalText(text string) (*DMsg, error) {
+	return t.UnmarshalTextLimits(text, Limits{})
+}
+
+// UnmarshalTextLimits is UnmarshalText with explicit bounds: documents
+// larger than the byte cap fail before anything parses, and nesting past
+// the effective cap fails. Like the reference, a list costs a level too.
+// The old name keeps its signature as a defaults wrapper.
+func (t *DType) UnmarshalTextLimits(text string, lim Limits) (*DMsg, error) {
+	if err := lim.checkBytes(len(text)); err != nil {
+		return nil, err
+	}
 	m := t.New()
-	p := &textIn{s: text}
+	p := &textIn{s: text, lim: lim}
 	if err := p.parseBody(m); err != nil {
 		return nil, err
 	}
@@ -519,8 +530,20 @@ func textGroupSpan(num uint32, raw []byte) (body, rest []byte, ok bool) {
 /* ------------------------------------------------------------ parser */
 
 type textIn struct {
-	s   string
-	pos int
+	s     string
+	pos   int
+	lim   Limits
+	depth int
+}
+
+// enter counts one nesting level: a message body, or a list, which costs a
+// level like the reference. Past the effective cap it reports ErrDepth.
+func (p *textIn) enter() error {
+	if p.depth >= p.lim.effectiveDepth() {
+		return ErrDepth
+	}
+	p.depth++
+	return nil
 }
 
 func (p *textIn) fail(format string, args ...any) error {
@@ -972,6 +995,10 @@ func (p *textIn) skipReservedValue() error {
 
 // skipValue skips one value whose type can only be guessed.
 func (p *textIn) skipValue() error {
+	if err := p.enter(); err != nil {
+		return err
+	}
+	defer func() { p.depth-- }()
 	p.skip()
 	if p.pos >= len(p.s) {
 		return p.fail("expected a value at offset %d", p.pos)
@@ -1087,6 +1114,10 @@ func (p *textIn) skipValue() error {
 // parseMessageValue parses `{...}` or `<...>` (colon optional), appending
 // for repeated fields and storing fresh for singular ones.
 func (p *textIn) parseMessageValue(m *DMsg, ord int, fp *FieldPlan) error {
+	if err := p.enter(); err != nil {
+		return err
+	}
+	defer func() { p.depth-- }()
 	p.skip()
 	if p.pos < len(p.s) && p.s[p.pos] == ':' {
 		p.pos++
@@ -1201,6 +1232,10 @@ func (p *textIn) parseMessageBody(m *DMsg, closer byte) error {
 
 // parseList parses `[a, b]` for a repeated field.
 func (p *textIn) parseList(m *DMsg, ord int, fp *FieldPlan) error {
+	if err := p.enter(); err != nil {
+		return err
+	}
+	defer func() { p.depth-- }()
 	p.skip()
 	if p.pos >= len(p.s) || p.s[p.pos] != '[' {
 		return p.fail("expected '[' for field %q", fp.Name)

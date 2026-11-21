@@ -190,8 +190,13 @@ func (d *Decoder) Next() (uint32, WireType, error) {
 // (the whole start/end frame for a group). The slice aliases the input, so a
 // caller that keeps it must copy.
 func (d *Decoder) SkipRaw(num uint32, wt WireType, depth int) ([]byte, error) {
+	return d.SkipRawLimits(num, wt, depth, Limits{})
+}
+
+// SkipRawLimits is SkipRaw with explicit bounds, like SkipLimits is to Skip.
+func (d *Decoder) SkipRawLimits(num uint32, wt WireType, depth int, lim Limits) ([]byte, error) {
 	start := d.lastTag
-	if err := d.Skip(num, wt, depth); err != nil {
+	if err := d.SkipLimits(num, wt, depth, lim); err != nil {
 		return nil, err
 	}
 	return d.Buf[start:d.Off], nil
@@ -295,6 +300,13 @@ func (d *Decoder) String() (string, error) {
 // depth+1 and must close with the matching end tag; an end tag at top level
 // (or a mismatched one) is ErrWire.
 func (d *Decoder) Skip(num uint32, wt WireType, depth int) error {
+	return d.SkipLimits(num, wt, depth, Limits{})
+}
+
+// SkipLimits is Skip with explicit bounds: group nesting past the effective
+// cap fails instead of recursing. The old name keeps its signature as a
+// defaults wrapper.
+func (d *Decoder) SkipLimits(num uint32, wt WireType, depth int, lim Limits) error {
 	switch wt {
 	case WireVarint:
 		_, err := d.Varint()
@@ -309,7 +321,7 @@ func (d *Decoder) Skip(num uint32, wt WireType, depth int) error {
 		_, err := d.Bytes()
 		return err
 	case WireStartGroup:
-		if err := CheckDepth(depth + 1); err != nil {
+		if err := lim.checkDepth(depth + 1); err != nil {
 			return err
 		}
 		for {
@@ -323,7 +335,7 @@ func (d *Decoder) Skip(num uint32, wt WireType, depth int) error {
 				}
 				return nil
 			}
-			if err := d.Skip(inner, innerWT, depth+1); err != nil {
+			if err := d.SkipLimits(inner, innerWT, depth+1, lim); err != nil {
 				return err
 			}
 		}

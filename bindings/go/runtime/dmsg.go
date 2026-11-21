@@ -109,12 +109,22 @@ func (t *DType) New() *DMsg {
 
 // Decode parses wire bytes into a new tree.
 func (t *DType) Decode(wire []byte) (*DMsg, error) {
+	return t.DecodeLimits(wire, Limits{})
+}
+
+// DecodeLimits is Decode with explicit bounds: inputs larger than the byte
+// cap fail before anything decodes, and nesting past the effective cap
+// fails. The old name keeps its signature as a defaults wrapper.
+func (t *DType) DecodeLimits(wire []byte, lim Limits) (*DMsg, error) {
+	if err := lim.checkBytes(len(wire)); err != nil {
+		return nil, err
+	}
 	m := t.New()
 	a := &Arena{}
 	a.Grow(len(wire))
 	m.arena = a
 	d := Decoder{Buf: wire}
-	if err := DecodeTable(&d, a, m, t.tableFor(), 0); err != nil {
+	if err := DecodeTableLimits(&d, a, m, t.tableFor(), 0, lim); err != nil {
 		return nil, err
 	}
 	if !d.Done() {
@@ -147,21 +157,73 @@ func (t *DType) EncodeDeterministic(m *DMsg) ([]byte, error) {
 // EncodedSize returns the exact number of bytes Encode writes: one walk
 // over the tree, no output allocated or written. It mirrors encodeTable's
 // presence rules field by field, so size and bytes cannot disagree on
-// what emits.
+// what emits. Trees deeper than the cap (which Encode would reject) report
+// -1 instead of a size.
 func (m *DMsg) EncodedSize() int {
 	if m == nil {
 		return 0
 	}
-	return msgSize(m)
+	n, err := msgSize(m, Limits{}, 0)
+	if err != nil {
+		return -1
+	}
+	return n
+}
+
+// IsInitialized reports whether every proto2 required field in the tree
+// holds a value, recursing into present submessages like the reference
+// check. A nil tree is trivially initialized; encode never enforces this,
+// like the C core.
+func (m *DMsg) IsInitialized() bool {
+	if m == nil {
+		return true
+	}
+	for i, fp := range m.typ.plan.Fields {
+		s := &m.slots[i]
+		if fp.Presence == PresenceRequired && !s.present {
+			return false
+		}
+		if fp.Proto != descriptorpb.FieldDescriptorProto_TYPE_MESSAGE && !fp.Group {
+			if sub, ok := s.oneof.(*DMsg); ok && sub != nil && !sub.IsInitialized() {
+				return false
+			}
+			continue
+		}
+		if fp.Repeated {
+			if subs, ok := s.rep.([]*DMsg); ok {
+				for _, sub := range subs {
+					if sub != nil && !sub.IsInitialized() {
+						return false
+					}
+				}
+			}
+			continue
+		}
+		if fp.Presence == PresenceOneof {
+			if sub, ok := s.oneof.(*DMsg); ok && sub != nil && !sub.IsInitialized() {
+				return false
+			}
+			continue
+		}
+		if s.m != nil && !s.m.IsInitialized() {
+			return false
+		}
+	}
+	return true
 }
 
 // msgSize totals one tree: every plan field plus retained unknown bytes.
 // A nil tree sizes as empty, like the encoder writes it. Entry key/value
 // rows size from presence, like skipZero emits them; heuristic entry rows
-// (see isEntryShape) always emit, like their Required mark.
-func msgSize(m *DMsg) int {
+// (see isEntryShape) always emit, like their Required mark. Depth past the
+// effective cap is an error, so hostile trees fail instead of growing the
+// stack: the encoder would reject them too.
+func msgSize(m *DMsg, lim Limits, depth int) (int, error) {
 	if m == nil {
-		return 0
+		return 0, nil
+	}
+	if err := lim.checkDepth(depth); err != nil {
+		return 0, err
 	}
 	tb := m.typ.tableFor()
 	shape := isEntryShape(tb)
@@ -171,9 +233,13 @@ func msgSize(m *DMsg) int {
 		isKV := fp.Number == 1 || fp.Number == 2
 		entry := entryPlan && isKV
 		force := fp.Presence == PresenceRequired || (!entry && shape && isKV)
-		n += fieldSize(&m.slots[i], fp, entry, force)
+		size, err := fieldSize(&m.slots[i], fp, entry, force, lim, depth)
+		if err != nil {
+			return 0, err
+		}
+		n += size
 	}
-	return n + len(m.unknown)
+	return n + len(m.unknown), nil
 }
 
 // fieldSize is the encoded length of one field occurrence run: tags plus
@@ -181,15 +247,15 @@ func msgSize(m *DMsg) int {
 // entry marks a map-entry key/value row, which emits exactly when present;
 // force marks rows that always emit (proto2 required, or the Required mark
 // NewTable sets on entry-shaped rows).
-func fieldSize(s *slot, fp *FieldPlan, entry, force bool) int {
+func fieldSize(s *slot, fp *FieldPlan, entry, force bool, lim Limits, depth int) (int, error) {
 	if fp.Repeated {
-		return repSize(s, fp)
+		return repSize(s, fp, lim, depth)
 	}
 	if fp.Presence == PresenceOneof {
 		if !s.oneofSet {
-			return 0
+			return 0, nil
 		}
-		return oneofSize(s, fp)
+		return oneofSize(s, fp, lim, depth)
 	}
 	if fp.Proto == descriptorpb.FieldDescriptorProto_TYPE_MESSAGE || fp.Group {
 		present := s.m != nil
@@ -197,39 +263,53 @@ func fieldSize(s *slot, fp *FieldPlan, entry, force bool) int {
 			present = s.present
 		}
 		if !present && !force {
-			return 0
+			return 0, nil
 		}
 		if fp.Group {
-			return SizeTag(fp.Number, WireStartGroup) + msgSize(s.m) + SizeTag(fp.Number, WireEndGroup)
+			child, err := msgSize(s.m, lim, depth+1)
+			if err != nil {
+				return 0, err
+			}
+			return SizeTag(fp.Number, WireStartGroup) + child + SizeTag(fp.Number, WireEndGroup), nil
 		}
-		child := msgSize(s.m)
-		return SizeTag(fp.Number, WireLen) + SizeVarint(uint64(child)) + child
+		child, err := msgSize(s.m, lim, depth+1)
+		if err != nil {
+			return 0, err
+		}
+		return SizeTag(fp.Number, WireLen) + SizeVarint(uint64(child)) + child, nil
 	}
 	if entry {
 		if !s.present {
-			return 0
+			return 0, nil
 		}
 	} else if explicitPresence(fp) {
 		if s.opt == nil && !force {
-			return 0
+			return 0, nil
 		}
 	} else if fp.Presence != PresenceRequired && !force && isZeroScalar(s, fp) {
-		return 0
+		return 0, nil
 	}
-	return SizeTag(fp.Number, fp.Wire) + scalarSize(s, fp)
+	return SizeTag(fp.Number, fp.Wire) + scalarSize(s, fp), nil
 }
 
 // oneofSize sizes one set oneof member: no presence guard beyond the
 // wrapper itself, so zero and empty values still count.
-func oneofSize(s *slot, fp *FieldPlan) int {
+func oneofSize(s *slot, fp *FieldPlan, lim Limits, depth int) (int, error) {
 	if fp.Proto == descriptorpb.FieldDescriptorProto_TYPE_MESSAGE || fp.Group {
 		if fp.Group {
-			return SizeTag(fp.Number, WireStartGroup) + msgSize(s.m) + SizeTag(fp.Number, WireEndGroup)
+			child, err := msgSize(s.m, lim, depth+1)
+			if err != nil {
+				return 0, err
+			}
+			return SizeTag(fp.Number, WireStartGroup) + child + SizeTag(fp.Number, WireEndGroup), nil
 		}
-		child := msgSize(s.m)
-		return SizeTag(fp.Number, WireLen) + SizeVarint(uint64(child)) + child
+		child, err := msgSize(s.m, lim, depth+1)
+		if err != nil {
+			return 0, err
+		}
+		return SizeTag(fp.Number, WireLen) + SizeVarint(uint64(child)) + child, nil
 	}
-	return SizeTag(fp.Number, fp.Wire) + scalarSize(s, fp)
+	return SizeTag(fp.Number, fp.Wire) + scalarSize(s, fp), nil
 }
 
 // isZeroScalar reports whether an implicit-presence scalar reads as its
@@ -291,46 +371,53 @@ func scalarSize(s *slot, fp *FieldPlan) int {
 // repSize sizes one repeated run: packed numerics share one length prefix,
 // strings/bytes/messages repeat their framing per element, groups frame
 // each element with start/end tags.
-func repSize(s *slot, fp *FieldPlan) int {
+func repSize(s *slot, fp *FieldPlan, lim Limits, depth int) (int, error) {
 	if s.rep == nil {
-		return 0
+		return 0, nil
 	}
 	if fp.Group {
 		tag := SizeTag(fp.Number, WireStartGroup) + SizeTag(fp.Number, WireEndGroup)
 		n := 0
 		for _, child := range s.rep.([]*DMsg) {
-			n += tag + msgSize(child)
+			body, err := msgSize(child, lim, depth+1)
+			if err != nil {
+				return 0, err
+			}
+			n += tag + body
 		}
-		return n
+		return n, nil
 	}
 	if fp.Proto == descriptorpb.FieldDescriptorProto_TYPE_MESSAGE {
 		n := 0
 		for _, child := range s.rep.([]*DMsg) {
-			body := msgSize(child)
+			body, err := msgSize(child, lim, depth+1)
+			if err != nil {
+				return 0, err
+			}
 			n += SizeTag(fp.Number, WireLen) + SizeVarint(uint64(body)) + body
 		}
-		return n
+		return n, nil
 	}
 	if fp.Proto == descriptorpb.FieldDescriptorProto_TYPE_STRING {
 		n := 0
 		for _, v := range s.rep.([]string) {
 			n += SizeTag(fp.Number, WireLen) + SizeVarint(uint64(len(v))) + len(v)
 		}
-		return n
+		return n, nil
 	}
 	if fp.Proto == descriptorpb.FieldDescriptorProto_TYPE_BYTES {
 		n := 0
 		for _, v := range s.rep.([][]byte) {
 			n += SizeTag(fp.Number, WireLen) + SizeVarint(uint64(len(v))) + len(v)
 		}
-		return n
+		return n, nil
 	}
 	if fp.Packed {
 		body := repBodySize(s, fp)
 		if body == 0 && repNumLen(s) == 0 {
-			return 0
+			return 0, nil
 		}
-		return SizeTag(fp.Number, WireLen) + SizeVarint(uint64(body)) + body
+		return SizeTag(fp.Number, WireLen) + SizeVarint(uint64(body)) + body, nil
 	}
 	tag := SizeTag(fp.Number, fp.Wire)
 	n := 0
@@ -358,7 +445,7 @@ func repSize(s *slot, fp *FieldPlan) int {
 	case []bool:
 		n += len(run) * (tag + 1)
 	}
-	return n
+	return n, nil
 }
 
 // repNumLen counts a repeated numeric run for the packed-empty guard.
@@ -458,16 +545,29 @@ func (m *DMsg) EncodeDelimited() []byte {
 // caller. A truncated prefix, a body shorter than the prefix claims, or a
 // body that does not parse is ErrWire.
 func (t *DType) DecodeDelimited(wire []byte) (*DMsg, int, error) {
+	return t.DecodeDelimitedLimits(wire, Limits{})
+}
+
+// DecodeDelimitedLimits is DecodeDelimited with explicit bounds: a declared
+// frame longer than the byte cap fails before the body decodes, like the
+// reference frame split, and body nesting past the effective cap fails. The
+// old name keeps its signature as a defaults wrapper.
+func (t *DType) DecodeDelimitedLimits(wire []byte, lim Limits) (*DMsg, int, error) {
 	d := Decoder{Buf: wire}
 	n, err := d.Varint()
 	if err != nil {
 		return nil, 0, ErrWire
 	}
+	// The cap is checked before the body, so an oversized frame is ErrLimit
+	// whether or not the bytes arrived.
+	if lim.MaxBytes > 0 && n > uint64(lim.MaxBytes) {
+		return nil, 0, ErrLimit
+	}
 	if n > uint64(len(wire)-d.Off) {
 		return nil, 0, ErrWire
 	}
 	body := wire[d.Off : d.Off+int(n)]
-	m, err := t.Decode(body)
+	m, err := t.DecodeLimits(body, lim)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -664,6 +764,7 @@ func (t *DType) buildRow(i int, fp *FieldPlan) *Field {
 		Packed:   fp.Packed,
 		Group:    fp.Group,
 		Oneof:    fp.Presence == PresenceOneof,
+		UTF8:     fp.UTF8,
 	}
 	if t.plan.IsMapEntry && (fp.Number == 1 || fp.Number == 2) {
 		// Entry key/value rows emit whenever present, even for zero:
