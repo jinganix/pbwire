@@ -87,3 +87,48 @@ baseline on every encode tier (1.7x-3.0x) and on the two small decode tiers
 every repeated element (3000 ints, 3000 strings, 3000 sub-messages, 3000 bools
 at the xlarge tier) into managed objects, which the handle row never pays.
 Stage 6 addresses (or records) exactly those two cells.
+
+## Verdict
+
+**Publish the flat-image `shim` row as the native-object path: with one
+`P/Invoke` per op the C reader is above the official baseline on 10 of the 12
+encode/decode cells, and the two it loses are the managed materialisation, not
+the boundary.** Formal `make csharp-bench` medians (2026-11-21,
+`results/bench-csharp-20261121T000941Z.json`):
+
+| tier | op | pbwire-csharp-shim | protobuf-csharp | x |
+|---|---|---|---|---|
+| 136 B | encode | 1130.8 | 465.6 | 2.43 |
+| 136 B | decode | 744.1 | 500.5 | 1.49 |
+| 174 B | encode | 980.3 | 408.1 | 2.40 |
+| 174 B | decode | 595.9 | 400.3 | 1.49 |
+| 2469 B | encode | 617.5 | 562.0 | 1.10 |
+| 2469 B | decode | 341.5 | 464.3 | 0.74 |
+| 74913 B | encode | 654.1 | 476.0 | 1.37 |
+| 74913 B | decode | 348.7 | 492.3 | 0.71 |
+
+What is measured is the mechanism the plan set out to build: the native object
+is copied into one contiguous image per op (`WriteImage`), one `DllImport`
+hands it to `bindings/csharp/native/pbw_cs_shim.c`, and the C layout codec
+walks it in place. There is no per-field crossing anywhere in `shim`.
+
+The two below-baseline cells are decode at 2469 B and 74913 B. The split at
+74913 B (warm, median): C decode 103 us, `ReadImage` 147 us, i.e. the native
+half is 2.1x faster than `protobuf-csharp`'s whole decode (492 MB/s -> 729 MB/s
+of raw work), and materialising 3000 ints, 3000 strings, 3000 sub-messages and
+3000 bools into managed objects costs more than the reference parser's entire
+run. That is the price of a *separate* native object: the handle row (`tree`)
+does not pay it because it never leaves the C tree.
+
+It is not (a) -- "replace the shipped fast path": a prebuilt `Message` handle
+encodes 1603.5 MB/s and decodes 729.1 MB/s at 74 KB, faster than the image path
+because it skips the copy, and re-encode users keep it. It is not (c) -- "a
+boundary feature is missing": the boundary is one call at every tier; what is
+missing is the willingness to hand a managed object graph to C, which no C ABI
+can do without an image. Both rows are published (`pbwire-csharp-shim` beside
+`pbwire-csharp-tree`); the shim is the native-object row, never the headline.
+
+Stage 6 (optimization) is recorded in `docs/perf-attempts.md`: the plan-cache
+change (one static `LayoutPlan` instead of a lock+lookup per op) is kept and is
+byte-identical, and the two decode cells cannot cross without dropping the
+image copy -- a mechanism change, not a tuning round.
