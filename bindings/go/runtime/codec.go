@@ -328,18 +328,28 @@ func (c *Codec) EncodeRaw(base unsafe.Pointer) ([]byte, error) {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	// One Pinner for the whole call: base (its address crosses as an
+	// integer) and the attempt buffer C writes into. A retry unpins
+	// everything before growing, so no discarded buffer stays pinned.
+	var pinner runtime.Pinner
 	hint := c.hint
 	if hint < 64 {
 		hint = 64
 	}
 	for {
 		out := make([]byte, hint)
+		pinner.Pin(base)
 		var dst *C.uint8_t
 		if hint != 0 {
 			dst = (*C.uint8_t)(unsafe.Pointer(&out[0]))
+			pinner.Pin(&out[0])
 		}
 		res := C.cshim_encode(c.h, C.uintptr_t(uintptr(base)), dst,
 			C.size_t(hint))
+		// Base and the attempt buffer stay pinned and alive through the
+		// call; unpin before the status switch so a retry regrows clean.
+		runtime.KeepAlive(base)
+		pinner.Unpin()
 		switch int(res.status) {
 		case stOK:
 			n := int(res.len)
@@ -376,12 +386,19 @@ func (c *Codec) DecodeInto(base unsafe.Pointer, wire []byte, materialize func(st
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	// Pin base and the wire backing for the call: C reads the wire and
+	// writes the struct through the offsets.
+	var pinner runtime.Pinner
+	defer pinner.Unpin()
+	pinner.Pin(base)
 	var wp *C.uint8_t
 	if len(wire) != 0 {
 		wp = (*C.uint8_t)(unsafe.Pointer(&wire[0]))
+		pinner.Pin(&wire[0])
 	}
 	res := C.cshim_decode(c.h, C.uintptr_t(uintptr(base)), wp,
 		C.size_t(len(wire)))
+	runtime.KeepAlive(base)
 	runtime.KeepAlive(wire)
 	if int(res.status) != stOK {
 		return statusError("decode", res.status, res.fail_off)
@@ -401,12 +418,19 @@ func (c *Codec) DecodeRaw(base unsafe.Pointer, wire []byte) (int, error) {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	// Pin base and the wire backing for the call: C reads the wire and
+	// writes the struct through the offsets.
+	var pinner runtime.Pinner
+	defer pinner.Unpin()
+	pinner.Pin(base)
 	var wp *C.uint8_t
 	if len(wire) != 0 {
 		wp = (*C.uint8_t)(unsafe.Pointer(&wire[0]))
+		pinner.Pin(&wire[0])
 	}
 	res := C.cshim_decode(c.h, C.uintptr_t(uintptr(base)), wp,
 		C.size_t(len(wire)))
+	runtime.KeepAlive(base)
 	runtime.KeepAlive(wire)
 	if int(res.status) != stOK {
 		return 0, statusError("decode", res.status, res.fail_off)
