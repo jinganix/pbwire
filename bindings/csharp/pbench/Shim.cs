@@ -47,6 +47,14 @@ public static class Matrix3Shim
         return m;
     }
 
+    /// <summary>
+    /// True when the `shim` arm is the C-side reader over the flat image (one
+    /// P/Invoke per op), not a managed walk with one crossing per field.
+    /// </summary>
+    public static bool IsNativeReader =>
+        throw new NotSupportedException(
+            "native entry not found: build bindings/csharp/native/pbw_cs_shim.c (make csharp-shim-native)");
+
     /// <summary>One call per op: native object in, wire bytes out.</summary>
     public static byte[] Marshal(object native) => Scalars3.Scalars3Layout.Marshal((Scalars3)native);
 

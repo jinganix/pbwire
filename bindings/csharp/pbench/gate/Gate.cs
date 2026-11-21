@@ -42,6 +42,21 @@ Inner3.Inner3Layout.Table.Verify(inner);
 
 var failures = 0;
 var refs = new byte[want.Length][];
+
+// The `shim` arm must be the C-side reader over the flat image (one P/Invoke
+// per op). Until that entry exists this fails with "native entry not found"
+// instead of timing the managed per-field walk the plan replaces.
+try
+{
+    if (!Matrix3Shim.IsNativeReader)
+    {
+        Fail("gate", "the shim arm is not the native flat-image reader");
+    }
+}
+catch (Exception e)
+{
+    Fail("gate", e.Message);
+}
 for (var tier = 0; tier < cases.Length; tier++)
 {
     var label = cases[tier];
