@@ -224,9 +224,11 @@ func run(count int, op func()) float64 {
 
 // measureParallel splits count ops across GOMAXPROCS goroutines and reports
 // wall ns/op: what a server with shared-nothing messages sees. The closure
-// must be goroutine-safe: decode builds a fresh message per op, encode only
-// reads the prebuilt struct and discards the output (no shared sink).
-func measureParallel(count int, op func()) float64 {
+// receives its goroutine index so callers can hand each goroutine its own
+// message (sharing one message across Marshal goroutines leans on
+// undocumented cache behavior); decode builds a fresh message per op, encode
+// only reads prebuilt structs and discards the output (no shared sink).
+func measureParallel(count int, op func(g int)) float64 {
 	n := runtime.GOMAXPROCS(0)
 	if n < 1 {
 		n = 1
@@ -239,12 +241,12 @@ func measureParallel(count int, op func()) float64 {
 	start := time.Now()
 	for g := 0; g < n; g++ {
 		wg.Add(1)
-		go func() {
+		go func(g int) {
 			defer wg.Done()
 			for i := 0; i < per; i++ {
-				op()
+				op(g)
 			}
-		}()
+		}(g)
 	}
 	wg.Wait()
 	return float64(time.Since(start).Nanoseconds()) / float64(per*n)
@@ -348,27 +350,33 @@ func TestMatrix3Bench(t *testing.T) {
 			_ = proto.Unmarshal(reference, &m)
 		})
 		// Parallel rows: same ops, shared-nothing closures, wall time per op.
+		// Each goroutine gets its own official message: sharing one across
+		// Marshal goroutines leans on undocumented cache behavior.
+		officials := make([]*matrix3pb.Scalars3, runtime.GOMAXPROCS(0))
+		for i := range officials {
+			officials[i] = fillOfficial(tr.n)
+		}
 		structEncodePar := measureParallel(calibrate(func() {
 			_, _ = structMsg.Marshal()
-		}, 1), func() {
+		}, 1), func(_ int) {
 			_, _ = structMsg.Marshal()
 		})
 		officialEncodePar := measureParallel(calibrate(func() {
-			_, _ = proto.Marshal(official)
-		}, tr.floor), func() {
-			_, _ = proto.Marshal(official)
+			_, _ = proto.Marshal(officials[0])
+		}, tr.floor), func(g int) {
+			_, _ = proto.Marshal(officials[g%len(officials)])
 		})
 		structDecodePar := measureParallel(calibrate(func() {
 			m := new(matrix3.Scalars3)
 			_ = m.Unmarshal(reference)
-		}, 1), func() {
+		}, 1), func(_ int) {
 			m := new(matrix3.Scalars3)
 			_ = m.Unmarshal(reference)
 		})
 		officialDecodePar := measureParallel(calibrate(func() {
 			var m matrix3pb.Scalars3
 			_ = proto.Unmarshal(reference, &m)
-		}, tr.floor), func() {
+		}, tr.floor), func(_ int) {
 			var m matrix3pb.Scalars3
 			_ = proto.Unmarshal(reference, &m)
 		})
