@@ -8,11 +8,19 @@ and wire bytes out; wire bytes in and a fully readable native object out.
 
 | arm | file | mechanism | what it answers |
 |---|---|---|---|
-| `tree` | `a-tree.dart` | the shipped handle: `schema.message(name)`, one `set` per field, `encode()`; `decode()` then one `get` per field | what the per-field downcall task costs once the tree exists |
+| `tree` | `a-tree.dart` | the shipped handle full task: a fresh `Message` per iteration, one `set` per field, `encode()`, `close()`; a fresh `decode()`, one `get` per field into a live sink, `close()` | what the per-field downcall task costs end to end |
+| `proxy` | `benchmarks/bench.dart` | the prebuilt task only: a held handle's `encode()`, one-shot decode-and-close with no materialization (the old `pbwire-dart-tree` shape, relabelled not re-measured) | the transcoder task, published, never the headline |
 | `shim` | `b-shim.dart` | the generated `<Message>Layout` (`dart:ffi` `Struct`) is the native object; `PbwireLayout.encode` / `decodeInto` cross once and `bindings/dart/native/pbw_dart_shim.c` walks that memory in place through `pbw_struct_codec_*` | is a boundary worth paying for at all |
 | `core` | `c-core.dart` | the pure-Dart core (`package:pbwire/core/`): one `set` per field on a `Msg` tree, then `encode()`; `decode()` then one `get` per field | what the per-field boundary costs when there is none, and the only arm that runs where `dart:ffi` does not exist |
 
-The `core` arm is `bindings/dart/lib/core/`, a pure-Dart port of the C core
+The `shim` and `core` timers reuse an app-owned native input across timed
+iterations (the flat image / the `Msg` tree, built once per tier): harness
+allocator steady state is not codec cost, so only the `tree` row rebuilds its
+native object inside the timer. The reuse is disclosed here and in the
+`bench.dart` header; every row still frees what the timed op allocates (the
+decode image and arena are released in a `finally`).
+
+The `core` arm is `bindings/dart/lib/core/` a pure-Dart port of the C core
 (plan 18, `issue41-18-core-dart.md`). `dart2js`/`dart2wasm` have no `dart:ffi`,
 so the `shim` row covers the VM targets only and the `core` row covers the
 rest. There is still no second wire implementation in this binding: `tree` and
@@ -82,29 +90,37 @@ and loses the small tiers and every decode cell to per-call allocation: one
 one `Msg` per nested message and one growable list per repeated field per
 decode. It is the only arm that runs without a C library, which is the point.
 
-## Verdict
+## Verdict (Go parity, 2026-11-21)
 
-**Publish the flat-image `shim` row as the native-object path; the C-side
-reader removes the boundary the `tree` arm pays.** With one FFI call per op,
-the `shim` row is above the official baseline at every tier: 10.8x encode and
-8.7x decode at 136 B, 14.9x and 4.8x at 74 KB. The `tree` row (build a handle
-with one downcall per field, then read one back) is 0.4-0.7x the baseline
-because each field crosses `dart:ffi` twice; that is the per-field walk issue
-41 is about, not the codec.
+**Ship the flat-image `shim` row as the native-object path; publish `tree`
+(full task), `core`, and `proxy` beside it, never headline `proxy`.** Formal
+`make dart-bench` (`results/bench-dart-20261121T185927Z.json`), xlarge
+(74913 B) THROUGHPUT ratios (pbwire MB/s over protobuf-dart MB/s, higher is
+faster): `tree` 0.50x encode / 4.57x decode, `shim` 10.98x / 4.81x, `core`
+4.78x / 1.42x, `proxy` (prebuilt) 15.41x / 4.66x. Across tiers vs
+protobuf-dart, `tree` encode 0.46x/0.49x/0.39x/0.50x and `tree` decode
+0.45x/0.52x/3.19x/4.57x (small/medium/large/xlarge): the per-field FFI walk
+costs more than the codec on encode at every tier, while decode wins once the
+payload amortizes the crossings. The proxy/tree encode gap is 8.8x/10.4x/
+22.5x/30.8x -- the gap the old prebuilt `tree` row was hiding.
 
-It is not (a) -- "replace the shipped fast path": the formal `make dart-bench`
-row `pbwire-dart-tree` times a *prebuilt* handle's `encode()`, which stays the
-shipping runtime for applications that already hold a tree (and is well above
-the baseline). It is not (c) -- "a boundary feature is missing": there is no
-payload-size crossover, the shim is above the baseline from 136 B to 74 KB.
-`make dart-bench` publishes both rows (`pbwire-dart-shim` beside
-`pbwire-dart-tree`); the shim is the native-object row, never a replacement for
-the handle.
+It is not the prebuilt handle: applications that already hold a tree keep the
+`proxy` shape (well above the baseline), but a native object in and out pays
+the `tree` row. It is not a replacement for the handle: the `shim` row is the
+native-object path because one FFI call per op removes the per-field boundary
+the `tree` arm pays, above the baseline at every tier (encode 6.6x-11.0x,
+decode 4.8x-4.9x). The `core` arm stays the path for targets with no C
+library (dart2js, dart2wasm): above the baseline from 2469 B up (encode
+2.51x/4.78x, decode 1.29x/1.42x), below it on the small tiers (encode
+0.32x/0.40x, decode 0.37x/0.45x) from per-message allocation plus the dynamic
+slot loop.
 
-Stage 6 (optimization) is a recorded no-op: no published Dart cell is below
-its baseline (the prebuilt handle and the flat image both beat `protobuf-dart`
-at every tier, see `make dart-bench`), so no A/B round was run and the
-attempts ledger gains no entry.
+Below-baseline native cells flagged for the optimization pass (no optimization
+here): `tree` encode every tier, `tree` decode 136/174 B, `core` encode/decode
+136/174 B. Gate: `pbench/gate.dart` 36/36 plus the bench full-task gate 4/4
+tiers (fresh-build bytes + field compare + re-encode on 136/174/2469/74913 B);
+`make dart-test` PASS, `make conformance-dart` 439 successes 0 unexpected,
+`make conformance-dart-core` 0 unexpected, `./scripts/check.sh` OK.
 
 ### The `core` arm: portable, not a replacement
 
