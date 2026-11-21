@@ -105,3 +105,28 @@ Stage 6 (optimization) is a recorded no-op: no published Dart cell is below
 its baseline (the prebuilt handle and the flat image both beat `protobuf-dart`
 at every tier, see `make dart-bench`), so no A/B round was run and the
 attempts ledger gains no entry.
+
+### The `core` arm: portable, not a replacement
+
+**The FFI runtime stays the VM's path; the pure core is the arm for the
+targets that have no C library at all (dart2js, dart2wasm, a host that cannot
+ship a dynamic library).** It is the same whole user task as `tree` -- build
+the native object with one entry per field, `encode()`; `decode()` then read
+every field -- with the pure-Dart codec instead of the C one, so the two rows
+differ only in which codec does the work: 0.35x / 0.09x the baseline at 136 B,
+1.23x / 0.47x at 2469 B and 1.81x / 0.59x at 74 KB (encode / decode, against
+`protobuf-dart`). The codec itself is fast where there is work to amortize --
+it beats the generated encoder from 2469 B up, 1.8x at 74 KB -- and pays for
+every message twice on decode: one `Msg` with a 22-slot list per message and a
+growable `List` per repeated field, on top of a dynamic slot lookup per field
+where the generated reader writes a compiled field. The small tiers are
+per-call overhead (a `fromObject` walk and one workspace copy per encode).
+
+So it is (b) in the pbench contract -- a host without a native library -- and
+never (a): `make dart-bench` publishes it as `pbwire-dart-core` beside
+`pbwire-dart-tree` and `pbwire-dart-shim`, and the README's install path keeps
+the handle. Stage 6 for this arm is recorded, not chased: the below-baseline
+cells are the per-message allocation and the dynamic slot loop, and closing
+them means a columnar/lazy tree or code generated for the concrete message --
+a rewrite of the tree and both codecs, which is what the FFI runtime already
+is.
