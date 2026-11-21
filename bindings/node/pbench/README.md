@@ -36,9 +36,13 @@ exists.
 `compare.js` interleaves `a-tree`, `b-shim`, `core`, jspb and protobufjs in one
 loop per tier and reports the median of five rounds (`node pbench/compare.js`). The
 formal, recorded run is `make node-bench`, which drives
-`benchmarks/bench.js` and prints `pbwire-node-tree` (the prebuilt handle row)
-beside `pbwire-node-shim` (the native-object row) and `pbwire-node-core` (the
-same task on the pure-TS core).
+`benchmarks/bench.js` and prints `pbwire-node-tree` (the full per-field task:
+build a fresh handle with one `set()` per field, encode, free; decode, read
+every field back with one `get()` per field, free) beside `pbwire-node-shim`
+(the same task in one downcall), `pbwire-node-core` (the same task on the
+pure-TS core) and `pbwire-node-proxy` (the prebuilt hold-and-recode row:
+re-encode a held handle, decode-and-free with no materialization; published,
+never the headline).
 
 ## Run table
 
@@ -103,45 +107,37 @@ baselines while the prebuilt handle row still beats them.
 
 ## Verdict
 
-**The TS core is not a replacement for the addon; it is the boundary-free
-reference arm and the host that ships where no compiler exists.** Stage 3
-numbers (2026-11-21, load average ~22): `pbwire-node-core` encodes 74 KB in
-435 µs against jspb's 1277 µs and decodes it in 853 µs against 894 µs, and at
-136 B it encodes in 2049 ns against jspb's 2322 ns and decodes in 1450 ns
-against jspb's 1135 ns. So the in-language core beats the official runtime's
-generated code on every encode cell and on the 74 KB decode, and loses the
-small-tier decode where a dynamic slot lookup replaces jspb's generated reader;
-it stays 2.5-3.7x behind protobufjs at every tier because protobufjs generates
-per-type code. At 74 KB it is 9.5x the prebuilt handle on encode (423 µs
-against 44 µs) and 13.6x on decode (870 µs against 64 µs), while beating the
-one-downcall shim row by 2.9x on encode and 1.6x on decode: the fast lane for
-data that is already a pbwire tree stays the C core.
+**Ships: the addon. The tree arm (shipped per-field handle API) stays the
+documented default path; the shim arm (`encodeObject` / `decodeToObject`) is
+the recommended one-shot path for fresh native objects.** Formal run
+`results/bench-node-20261121T181411Z.json` (`make node-bench`, Go-parity
+timers: fresh handle per iteration, freed inside the timer, every gate-checked
+field read back; xlarge = 74913 B):
 
-Which arm ships for which host: **the addon stays the Node runtime** (it is the
-only arm with JSON/text mappings, the only one whose decode is the C core's
-single implementation, and an order of magnitude faster at the large tiers). **The TS core is
-what ships to a host with no toolchain to build the addon** — plain Node with no
-C compiler, an electron/bundled runtime, or a JS engine that is not Node
-(browser, edge worker) — where the alternative is not the addon but nothing.
-Shipping it as the default would trade a 9.5x slower encode for no benefit on a
-host that can build the addon, and it would put a second wire implementation on
-the default path, which `AGENTS.md` rules out.
+| xlarge arm | encode | decode | vs jspb | vs protobufjs |
+|---|---|---|---|---|
+| `tree` | 1466.7 us | 1492.4 us | 1.14x / 1.67x | 10.0x / 8.4x |
+| `shim` | 1271.4 us | 1403.2 us | 0.98x / 1.57x | 8.7x / 7.9x |
+| `core` | 942.9 us | 943.1 us | 0.73x / 1.06x | 6.4x / 5.3x |
+| `proxy` | 43.5 us | 61.0 us | prebuilt, never headline | prebuilt, never headline |
 
-**Keep the handle path as the runtime; the shim arm stays the native-object
-path and a re-runnable candidate.** The shim replaces the JS per-field assembly
-(it is 1.17x at 136 B and 1.05x at 74 KB) but not the `Message` tree, and it
-does not close the gap to the official runtimes: each field of the
-native-object task crosses N-API once (an object property read on encode, an
-object property write on decode) at ~60-70 ns, against jspb's and protobufjs's
-per-field cost inside their own heap (~5 ns). One downcall per op already
-removes what can be removed; Stage 6 records the two boundary changes that were
-tried and why they do not close it. Publishing both rows (Stage 5) keeps the
-codec number and the native-object number visible instead of quoting one for the
-other.
+Why tree stays the default: it is the only arm with JSON/text mappings, the
+only one whose decode is the C core's single implementation, and the only path
+that reuses a held tree (the proxy row: 43.5 us encode at xlarge, 34x the tree
+row). The shim beats per-field assembly at every tier (1.27x at 136 B encode,
+1.15x at xlarge encode) and ties jspb on xlarge encode, so one-shot
+encode/decode of a fresh object should go through the one-downcall surface; it
+stays a recommendation rather than the default because each field still crosses
+N-API once (~60-70 ns per property read/write) where jspb and protobufjs pay a
+few ns in their own heap, leaving every native row below both baselines.
 
-It is not (a) because "replace the harness path" cannot mean replacing the
-binding's shipped fast path: a prebuilt `Message` encodes 74 KB in ~50 µs and
-decodes it in ~60 µs, 15-30x faster than either native-object row, and anyone
-who re-encodes the same message keeps that path. It is not (c) because there is
-no payload-size crossover: the shim is below both baselines at every tier, small
-and xlarge alike.
+Why not core as the default: the pure-TS core beats jspb on xlarge encode
+(0.73x) and ties it on decode, but shipping it as the default would put a
+second wire implementation on the default path, which `AGENTS.md` rules out. It
+is what ships to a host with no toolchain to build the addon (plain Node with
+no C compiler, an electron/bundled runtime, or a non-Node JS engine), where the
+alternative is not the addon but nothing.
+
+Why not proxy as the headline: it times data already in pbwire, not what an
+application pays. It is published (the transcoder task is real) and never
+quoted against a native row.
