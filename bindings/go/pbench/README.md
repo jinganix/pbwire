@@ -1,4 +1,4 @@
-# pbench: the three dynamic arms, one harness
+# pbench: the two dynamic arms, one harness
 
 Every arm does the same user-visible task over the same payload (the
 `matrix3` tiers from `../benchmarks/bench_test.go`): a native Go struct in,
