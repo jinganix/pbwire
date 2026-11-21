@@ -118,13 +118,46 @@ type EnumPlan struct {
 	ByName map[string]int32 // every name, aliases included, to its number
 }
 
-// Schema is a loaded, immutable set of message and enum plans. The dynamic
-// type cache is the one mutable part: Schema.Type builds and memoizes one
-// DType per message, so the plans themselves are still read-only.
+// Schema is a loaded, immutable set of message, enum and service plans.
+// The dynamic type cache is the one mutable part: Schema.Type builds and
+// memoizes one DType per message, so the plans themselves are still
+// read-only.
 type Schema struct {
 	messages map[string]*MessagePlan
 	enums    map[string]*EnumPlan
+	services map[string]*ServicePlan
 	types    sync.Map // full name -> *DType
+}
+
+// ServicePlan is one service: its methods in declaration order plus lookup.
+// The core does no RPC; a transport resolves method names to input/output
+// types through these and frames the bytes itself.
+type ServicePlan struct {
+	Full    string // fully qualified service name, without the leading dot
+	Methods []*MethodPlan
+	byName  map[string]*MethodPlan
+}
+
+// Method returns the plan for a method name.
+func (p *ServicePlan) Method(name string) (*MethodPlan, error) {
+	if p == nil {
+		return nil, fmt.Errorf("codec: nil service")
+	}
+	m, ok := p.byName[name]
+	if !ok {
+		return nil, fmt.Errorf("codec: service %s has no method %q", p.Full, name)
+	}
+	return m, nil
+}
+
+// MethodPlan is one method: its resolved input/output types plus the
+// streaming flags from the descriptor (both false is unary).
+type MethodPlan struct {
+	Name            string
+	Input           *DType
+	Output          *DType
+	ClientStreaming bool
+	ServerStreaming bool
 }
 
 // Load builds a Schema from raw FileDescriptorSet bytes (the exact bytes
@@ -139,6 +172,7 @@ func Load(set []byte) (*Schema, error) {
 	s := &Schema{
 		messages: map[string]*MessagePlan{},
 		enums:    map[string]*EnumPlan{},
+		services: map[string]*ServicePlan{},
 	}
 	for _, f := range fds.File {
 		pkg := f.GetPackage()
@@ -147,6 +181,14 @@ func Load(set []byte) (*Schema, error) {
 		}
 		for _, m := range f.MessageType {
 			s.addMessage(joinName(pkg, nil, m.GetName()), m, f)
+		}
+	}
+	for _, f := range fds.File {
+		pkg := f.GetPackage()
+		for _, svc := range f.Service {
+			if err := s.addService(joinName(pkg, nil, svc.GetName()), svc); err != nil {
+				return nil, err
+			}
 		}
 	}
 	for _, f := range fds.File {
@@ -199,6 +241,50 @@ func (s *Schema) Enum(full string) (*EnumPlan, error) {
 		return nil, fmt.Errorf("codec: unknown enum %q", full)
 	}
 	return e, nil
+}
+
+// Service returns the plan for a fully qualified service name.
+func (s *Schema) Service(full string) (*ServicePlan, error) {
+	p, ok := s.services[full]
+	if !ok {
+		return nil, fmt.Errorf("codec: unknown service %q", full)
+	}
+	return p, nil
+}
+
+// addService registers one service, resolving every method's input and
+// output to its message type. All message plans exist by now (every file's
+// messages are added before any service resolves), so an unknown type name
+// fails the whole Load loudly, like an unknown field type reference.
+func (s *Schema) addService(full string, svc *descriptorpb.ServiceDescriptorProto) error {
+	if _, dup := s.services[full]; dup {
+		return fmt.Errorf("codec: duplicate service %s", full)
+	}
+	sp := &ServicePlan{Full: full, byName: map[string]*MethodPlan{}}
+	for _, md := range svc.Method {
+		in, err := s.Type(normName(md.GetInputType()))
+		if err != nil {
+			return fmt.Errorf("codec: service %s method %s: %w", full, md.GetName(), err)
+		}
+		out, err := s.Type(normName(md.GetOutputType()))
+		if err != nil {
+			return fmt.Errorf("codec: service %s method %s: %w", full, md.GetName(), err)
+		}
+		mp := &MethodPlan{
+			Name:            md.GetName(),
+			Input:           in,
+			Output:          out,
+			ClientStreaming: md.GetClientStreaming(),
+			ServerStreaming: md.GetServerStreaming(),
+		}
+		if _, dup := sp.byName[mp.Name]; dup {
+			return fmt.Errorf("codec: service %s has duplicate method %s", full, mp.Name)
+		}
+		sp.byName[mp.Name] = mp
+		sp.Methods = append(sp.Methods, mp)
+	}
+	s.services[full] = sp
+	return nil
 }
 
 func joinName(pkg string, path []string, name string) string {

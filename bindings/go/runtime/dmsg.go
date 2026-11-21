@@ -755,6 +755,7 @@ func (m *DMsg) mergeInto(dst *DMsg) {
 func (t *DType) buildRow(i int, fp *FieldPlan) *Field {
 	acc := func(msg any) *slot { return &msg.(*DMsg).slots[i] }
 	f := &Field{
+		Name:     fp.Name,
 		Num:      fp.Number,
 		Wire:     fp.Wire,
 		Kind:     Kind(0),
