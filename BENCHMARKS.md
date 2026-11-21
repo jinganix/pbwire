@@ -68,7 +68,9 @@ for a case, and `scripts/bench-record.py` accepts the shorter header.
 (`pbwire-c1`: the C binding's one-shot API, which compiles the layout on every
 call) after the standard four rows; only the standard block is aggregated
 below. Go rows additionally print `allocs/op` and `B/op`, recorded into the
-JSON and rendered when present. The Python harness names its ops by the task instead (`encode(data)`,
+JSON and rendered when present. Go `ns/op` is the median of 7 calibrated
+passes (3 for the `-par` rows); each tier's log ends with `# spread` lines
+holding the per-row min-max band, which the recorder skips. The Python harness names its ops by the task instead (`encode(data)`,
 `decode(bytes)`, `to_dict(bytes)`, `encode(parsed)`), because a dict-based
 binding has two representations and only comparing like with like is fair.
 
@@ -161,7 +163,7 @@ own README. Dart ran once `dart pub global activate protoc_plugin` provided
 | Erlang/OTP NIF | `make benchmarks` in `bindings/erlang/benchmarks` | gpb (pure Erlang), with gpb NIF (libprotobuf) as the second baseline, same `matrix3.proto` | all 4 | 3.91x / 1.60x vs best-of-two ✅ |
 | Python (CPython ext) | `make python-bench` (`bindings/python/benchmarks/bench.py`) | `google.protobuf` (upb C extension) on the same `matrix3.proto` | all 4 | 6.87x ✅ / 1.19x ✅ |
 | C++ | same engine as C (`bindings/cpp` mirrors the C structs; `make bench-c` is the harness) | `protoc` C++ generated from the same `matrix3.proto` | all 4 | 1.33x ✅ / 2.00x ✅ |
-| Go (thin model, pure-Go engine) | `make go-bench` (`bindings/go/benchmarks`) | `protobuf-go` generated code from the same `matrix3.proto` | all 4 | 1.48x ✅ / 1.13x ✅ (xlarge; full tiers + allocs in section) |
+| Go (thin model, pure-Go engine) | `make go-bench` (`bindings/go/benchmarks`) | `protobuf-go` generated code from the same `matrix3.proto` | all 4 | 1.41x ✅ / 1.12x ✅ (xlarge; full tiers + allocs in section) |
 | Java (pure-Java codec) | `make java-bench` (`bindings/java/benchmarks`) | `protobuf-java` generated code from the same `matrix3.proto` | all 4 | 1.13x ✅ / 1.95x ✅ (0.77x at 136 B) |
 | Node (N-API addon) | `make node-bench` (`bindings/node/benchmarks`) | [protobufjs](https://www.npmjs.com/package/protobufjs) (fastest) + `google-protobuf` (jspb) from the same `matrix3.proto` | all 4 | 3.18x ✅ / 3.17x ✅ |
 | Ruby (C extension) | `make ruby-bench` (`bindings/ruby/benchmarks`) | the `google-protobuf` gem (C extension) | all 4 | 1.34x ✅ / 1.67x ✅ |
@@ -763,34 +765,38 @@ Apple M4 Pro, same process times both sides:
 
 | payload | op | pbwire-go (MB/s, x protobuf-go) | protobuf-go (MB/s) | allocs/op (pbwire / protobuf-go) | B/op (pbwire / protobuf-go) |
 |---|---|---|---|---|---|
-| 136 B | encode | 868.0 (1.31x ✅) | 662.6 | 1 / 1 | 256 / 144 |
-| 136 B | decode | 592.8 (1.04x ✅) | 570.8 | 5 / 7 | 444 / 384 |
-| 174 B | encode | 918.8 (1.44x ✅) | 639.5 | 1 / 1 | 256 / 176 |
-| 174 B | decode | 490.1 (1.02x ✅) | 481.4 | 10 / 14 | 544 / 488 |
-| 2469 B | encode | 867.5 (1.59x ✅) | 546.6 | 1 / 1 | 2688 / 2688 |
-| 2469 B | decode | 352.4 (1.16x ✅) | 303.7 | 133 / 325 | 13288 / 15064 |
-| 74913 B | encode | 834.9 (1.48x ✅) | 562.8 | 1 / 1 | 81920 / 81920 |
-| 74913 B | decode | 336.6 (1.13x ✅) | 298.7 | 3057 / 9037 | 426957 / 472238 |
-| 136 B | encode-par | 1051.4 (0.50x ❌) | 2116.5 | 1 / 1 | 256 / 144 |
-| 136 B | decode-par | 1046.2 (0.90x ❌) | 1158.4 | 5 / 7 | 444 / 384 |
-| 174 B | encode-par | 1317.7 (0.58x ❌) | 2288.7 | 1 / 1 | 256 / 176 |
-| 174 B | decode-par | 935.3 (0.89x ❌) | 1052.1 | 10 / 14 | 544 / 488 |
-| 2469 B | encode-par | 1744.6 (0.75x ❌) | 2333.5 | 1 / 1 | 2688 / 2688 |
-| 2469 B | decode-par | 469.8 (1.02x ✅) | 461.3 | 133 / 325 | 13288 / 15064 |
-| 74913 B | encode-par | 2572.3 (0.67x ❌) | 3841.5 | 1 / 1 | 81920 / 81920 |
-| 74913 B | decode-par | 684.5 (1.34x ✅) | 512.7 | 3057 / 9037 | 426954 / 472236 |
+| 136 B | encode | 772.4 (1.31x ✅) | 591.3 | 1 / 1 | 256 / 144 |
+| 136 B | decode | 510.2 (0.93x ❌) | 546.4 | 5 / 7 | 500 / 384 |
+| 174 B | encode | 791.1 (1.34x ✅) | 591.4 | 1 / 1 | 256 / 176 |
+| 174 B | decode | 421.9 (1.05x ✅) | 401.7 | 10 / 14 | 624 / 488 |
+| 2469 B | encode | 745.0 (1.56x ✅) | 478.0 | 1 / 1 | 2688 / 2688 |
+| 2469 B | decode | 251.0 (0.90x ❌) | 279.7 | 133 / 325 | 15744 / 15064 |
+| 74913 B | encode | 779.1 (1.41x ✅) | 553.3 | 1 / 1 | 81920 / 81920 |
+| 74913 B | decode | 301.4 (1.12x ✅) | 268.6 | 3057 / 9037 | 499012 / 472238 |
+| 136 B | encode-par | 969.5 (0.53x ❌) | 1841.1 | 1 / 1 | 256 / 144 |
+| 136 B | decode-par | 793.4 (0.73x ❌) | 1080.7 | 5 / 7 | 500 / 384 |
+| 174 B | encode-par | 1173.8 (0.57x ❌) | 2050.2 | 1 / 1 | 256 / 176 |
+| 174 B | decode-par | 873.7 (0.99x ❌) | 886.9 | 10 / 14 | 624 / 488 |
+| 2469 B | encode-par | 1552.4 (0.68x ❌) | 2276.1 | 1 / 1 | 2688 / 2688 |
+| 2469 B | decode-par | 414.1 (0.91x ❌) | 452.8 | 133 / 325 | 15744 / 15064 |
+| 74913 B | encode-par | 2044.3 (0.58x ❌) | 3503.4 | 1 / 1 | 81920 / 81920 |
+| 74913 B | decode-par | 649.8 (1.06x ✅) | 612.6 | 3057 / 9037 | 499010 / 472236 |
 
 Encode is ahead on every tier: the fast path reads scalars, strings and
 bytes straight from struct memory with no getter calls and no tree. Decode stores plain integer-width scalars straight into struct memory
 through the same offset columns (no pointers cross, so no write barrier is
 skipped); strings, bytes, slices, optionals and submessages stay on
-closures by design. Encode leads 1.31x–1.59x; decode leads every tier
-(1.02x–1.16x). The parallel rows show what a server sees, each goroutine on
-its own message: protobuf-go scales better with core count on encode
-(0.50x–0.75x) and on the two small decode tiers, while pbwire takes large
-decode-par (1.02x) and xlarge decode-par (1.34x). The host was loaded
-(load average above core count), so the par rows carry scheduler noise —
-published as measured, not as a scaling claim. The
+closures by design. Encode leads 1.31x–1.56x; decode sits at parity
+(0.90x–1.12x) and moves run to run on a loaded box — the `# spread` lines
+in the bench log show the min-max band behind each median, e.g. large
+decode pbwire-go spanning 1.5x inside one run while the baseline side spans
+1.1x. The parallel rows show what a server sees, each goroutine on its own
+message: protobuf-go scales better with core count on encode-par
+(0.53x–0.68x) and the small decode-par tiers, while pbwire takes large
+decode-par only at 0.91x and xlarge decode-par at 1.06x. The host was
+loaded (load average near or above core count), so every par row and every
+near-parity cell carries scheduler noise — published as measured, not as a
+scaling claim. The
 pbench gate pins the semantic edge the table cannot show: invalid UTF-8 in
 a proto3 string fails on every path, and unknown fields round-trip through
 the struct paths byte for byte (`TestGateSemantics`). The two
