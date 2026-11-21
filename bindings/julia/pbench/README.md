@@ -8,7 +8,8 @@ and wire bytes out; wire bytes in and a fully readable native object out.
 
 | arm | file | mechanism | what it answers |
 |---|---|---|---|
-| `tree` | `a-tree.jl` | the shipped `Dict`/`Message` handle: `to_dict`, `encode_dict`; `decode_dict`, `from_dict` | what the codec costs once the tree exists |
+| `tree` | `a-tree.jl` | the shipped `Dict`/`Message` handle through the per-field API, Go-parity full task: fresh `Message` per iteration (one `set` per field), `encode`, `close`; `decode`, one `get` per field folded into a live sink, `close` | what an application pays for the native object in and out |
+| `proxy` | `benchmarks/bench.jl` (held `probe`) | the prebuilt task: a held handle's `encode`, bare `decode` + `close` with no materialization, and the reusable-`Ctx` workspace decode (`dec+ctx`) | what the transcoder/proxy task costs; published, never the headline |
 | `shim` | `b-shim.jl` | the generated `mutable struct <Message>Layout` image is the native object; `Pbwire.encode_layout` / `decode_layout` cross once and `bindings/julia/native/pbw_julia_shim.c` walks that memory in place through `pbw_struct_codec_*` | is a boundary worth paying for at all |
 | `core` | `core_arm.jl` | the pure-Julia core (`runtime/src/core/`): `encode` / `decode` + field reads, no `ccall`, no native library | what the whole task costs when the wire walk is an interpreter loop |
 
@@ -50,46 +51,66 @@ bytes, that every decode path exposes every field `payload.jl` reads (including
 `u64`), that the shim's decoded image re-encodes to the same bytes, and that the
 core's decoded dict equals the input object and re-encodes byte-exactly.
 
-## Provisional table (Stage 3)
+`tree`, `shim` and `core` all time the same native-in/native-out task on the
+four standard tiers. `shim`/`core` time the one-downcall op on the app-owned
+native input (layout image / `Dict`) held across iterations -- the harness's
+steady-state carve-out, said here and in the `bench.jl` header; only `tree`
+rebuilds its native input per iteration.
 
-`cd pbench && julia --project=../runtime compare.jl`: interleaved rounds (all
-three arms back to back), median of five. `tree` is the whole user task (build
-with one `set` per field, then encode; decode, then read every field back);
-`shim` is one `encode_layout` / `decode_layout` call on the flat image, with the
-image and arena allocated once; `core` is the pure-Julia arm (a plain `Dict`
-in, `encode_dict` out; wire bytes in, fully materialized `decode_dict` out). MB/s
-over wire bytes, 2026-11-21, recorded mid-session:
+## Formal table (`make julia-bench`, Go-parity re-time)
+
+`make julia-bench` (`bindings/julia/benchmarks/bench.jl` via the recorder
+into `results/bench-julia-20261121T190400Z.json`): interleaved rounds, median
+of five. `tree` is the Go-parity full task (fresh `Message` per iteration,
+one `set` per field, encode, `close`; decode, every field folded into a live
+sink, `close`); `proxy` is the old prebuilt shape, relabelled not
+re-measured; `shim` is one `encode_layout` / `decode_layout` call on the
+app-owned flat image; `core` is the pure-Julia arm (plain `Dict` in,
+`encode_dict` out; wire bytes in, fully materialized `decode_dict` out).
+MB/s over wire bytes; x = THROUGHPUT ratio vs ProtoBuf.jl (higher = faster):
 
 | tier | `tree` enc | `shim` enc | `core` enc | pb-jl enc | `tree` dec | `shim` dec | `core` dec | pb-jl dec |
 |---|---|---|---|---|---|---|---|---|
-| 136 B | 138.6 | 1334.6 | 48.8 | 390.6 | 183.7 | 1145.2 | 172.6 | 1279.5 |
-| 174 B | 132.3 | 1235.5 | 26.6 | 327.2 | 180.4 | 1003.5 | 48.9 | 699.1 |
-| 2469 B | 85.3 | 1030.5 | 29.4 | 110.0 | 420.2 | 684.7 | 25.9 | 610.0 |
-| 74913 B | 84.8 | 1117.4 | 30.0 | 11.9 | 514.0 | 748.5 | 25.1 | 728.1 |
+| 136 B | 160.5 (0.42x) | 1307.0 (3.39x) | 39.1 (0.10x) | 385.6 | 212.5 (0.18x) | 1102.5 (0.93x) | 162.7 (0.14x) | 1181.2 |
+| 174 B | 144.4 (0.45x) | 1243.1 (3.90x) | 22.3 (0.07x) | 319.1 | 213.0 (0.30x) | 980.5 (1.39x) | 47.9 (0.07x) | 706.0 |
+| 2469 B | 87.3 (0.70x) | 1040.5 (8.30x) | 28.6 (0.23x) | 125.3 | 576.1 (0.93x) | 693.3 (1.12x) | 25.9 (0.04x) | 617.0 |
+| 74913 B | 87.9 (7.26x) | 1122.2 (92.74x) | 29.3 (2.42x) | 12.1 | 739.8 (1.04x) | 738.9 (1.04x) | 24.9 (0.04x) | 709.1 |
+
+The prebuilt `proxy` row beside it (same run, MB/s): encode
+1757.0 / 1644.6 / 1648.0 / 1694.4; decode 1037.8 / 886.2 / 689.9 / 747.2
+(`dec+ctx` 1140.5 / 958.5 / 698.7 / 740.5). Proxy/tree encode gap:
+11.0x / 11.4x / 18.9x / 19.3x -- the gap the old prebuilt `tree` row was
+hiding. The xlarge baseline encoder collapses (12.1 MB/s: the generated
+encoder re-derives sizes per field), which is why every pbwire encoder is
+above it there; on the three smaller tiers the ratios read normally.
 
 ## Verdict
 
-**Publish the flat-image `shim` row as the native-object path beside the
-shipped handle.** With one `ccall` per op, the shim is above ProtoBuf.jl on all
-four encode tiers (3.3x at 136 B, 9.3x at 74 KB) and above it on medium, large
-and xlarge decode; the 136 B decode is 0.85x, so the small-size decode still
-pays the C struct decode plus the ccall. The whole-task `tree` row (build a
-`Message` with one setter per field, then read one getter per field) is 0.4-1.6x
-the baseline encode because each field crosses the boundary; that is the
-per-field walk issue 41 corrects, not the codec.
+**Ship the flat-image `shim` row as the native-object path; publish the
+full-task `tree`, the `core`, and the `proxy` rows beside it, never headline
+`proxy`.** With one `ccall` per op, the shim is above ProtoBuf.jl on all four
+encode tiers (3.39x at 136 B, 92.74x at 74 KB -- the xlarge baseline encoder
+collapses) and above it on medium, large and xlarge decode; only the 136 B
+decode is below at 0.93x, where the C struct decode plus the one `ccall`
+(123 ns against ProtoBuf.jl's 115 ns) still costs more than the generated
+one-shot parse. The whole-task `tree` row (fresh `Message` per iteration, one
+setter per field, then one getter per field into a live sink) is 0.42-0.70x
+the baseline encode on the three smaller tiers because each field crosses the
+boundary -- that is the per-field walk issue 41 corrects, not the codec -- and
+7.26x at 74 KB where the generated encoder falls over. At 74 KB the tree
+decode (1.04x) and the shim decode (1.04x) both match the baseline because the
+wire walk, not the boundary, dominates.
 
-It is not (a) -- "replace the shipped fast path": the formal
-`make julia-bench` row `pbwire-julia-tree` times a *prebuilt* `Message`, which
-stays the shipping runtime for applications that already hold a tree. It is not
-(c) -- "a boundary feature is missing": the shim removes the per-field crossing
-from 136 B to 74 KB; only the small decode stays below the pure-Julia generated
-baseline, and Stage 6 tests that one cell.
+It is not (a) -- "replace the shipped fast path": the `ccall` runtime stays
+the shipping codec, and the prebuilt shape applications that already hold a
+tree pay is still published as `pbwire-julia-proxy` (11-19x the tree encode
+across tiers). It is not (c) -- "a boundary feature is missing": the shim
+removes the per-field crossing from 136 B to 74 KB; only the small decode
+stays below the generated baseline.
 
-For the review's 136 B decode question: the shim does remove the per-call
-`malloc`/`free` pair (the plan owns the image and the caller-memory arena, so
-steady-state decode allocates nothing). The remaining gap is the C struct
-decode plus the one `ccall`; 124 ns against ProtoBuf.jl's 105 ns, not an arena
-cost.
+Below-baseline native cells, flagged for Task 15 (no optimization here): tree
+encode 136/174/2469 B, tree decode 136/174/2469 B, shim decode 136 B, core
+encode 136/174/2469 B, core decode all four tiers.
 
 ## Verdict (core, plan 19)
 
