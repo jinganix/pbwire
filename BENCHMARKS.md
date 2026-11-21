@@ -70,6 +70,11 @@ call) after the standard four rows; only the standard block is aggregated
 below. Go rows additionally print `allocs/op` and `B/op`, recorded into the
 JSON and rendered when present. Go `ns/op` is the median of 7 calibrated
 passes (3 for the `-par` rows); each tier's log ends with `# spread` lines
+holding the per-row min-max band, which the recorder skips. Every pass also
+prints a `Benchmark<impl><op><tier> <count> <ns> ns/op` line (non-indented,
+also skipped): `grep ^Benchmark results/bench-go-<ts>.log > old.txt` on two
+runs, then `benchstat old.txt new.txt` for a significance-tested delta. Go `ns/op` is the median of 7 calibrated
+passes (3 for the `-par` rows); each tier's log ends with `# spread` lines
 holding the per-row min-max band, which the recorder skips. The Python harness names its ops by the task instead (`encode(data)`,
 `decode(bytes)`, `to_dict(bytes)`, `encode(parsed)`), because a dict-based
 binding has two representations and only comparing like with like is fair.

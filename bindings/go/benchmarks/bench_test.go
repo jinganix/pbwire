@@ -230,12 +230,15 @@ func run(count int, op func()) float64 {
 // message (sharing one message across Marshal goroutines leans on
 // undocumented cache behavior); decode builds a fresh message per op, encode
 // only reads prebuilt structs and discards the output (no shared sink).
-func measureParallel(count int, op func(g int)) (med, lo, hi float64) {
+func measureParallel(count int, op func(g int), label string) (med, lo, hi float64) {
 	ns := make([]float64, 0, parPasses)
 	for p := 0; p < parPasses; p++ {
 		ns = append(ns, runParallel(count, op))
 	}
 	sort.Float64s(ns)
+	for _, v := range ns {
+		fmt.Printf("Benchmark%s %d %.1f ns/op\n", label, count, v)
+	}
 	return ns[parPasses/2], ns[0], ns[parPasses-1]
 }
 
@@ -285,7 +288,7 @@ func calibrate(op func(), floor int) int {
 // measure runs an op over serialPasses calibrated rounds and reports the
 // median ns/op; lo and hi are the extremes, printed as the tier's spread
 // line so a loaded box shows its noise instead of hiding it behind a best.
-func measure(floor int, op func()) (med, lo, hi float64) {
+func measure(floor int, op func(), label string) (med, lo, hi float64) {
 	runtime.GC() // a row inherits no heap growth from the row before it
 	count := calibrate(op, floor)
 	run(count, op) // warm-up
@@ -294,6 +297,12 @@ func measure(floor int, op func()) (med, lo, hi float64) {
 		ns = append(ns, run(count, op))
 	}
 	sort.Float64s(ns)
+	for _, v := range ns {
+		// One benchstat sample per pass: non-indented so the recorder
+		// skips it (see its selftest); grep ^Benchmark out of the log
+		// to compare two runs with benchstat.
+		fmt.Printf("Benchmark%s %d %.1f ns/op\n", label, count, v)
+	}
 	return ns[serialPasses/2], ns[0], ns[serialPasses-1]
 }
 
@@ -336,18 +345,18 @@ func TestMatrix3Bench(t *testing.T) {
 
 		structEncode, structEncodeLo, structEncodeHi := measure(1, func() {
 			sinkBytes, _ = structMsg.Marshal()
-		})
+		}, "GoEncode"+tr.label)
 		officialEncode, officialEncodeLo, officialEncodeHi := measure(tr.floor, func() {
 			sinkBytes, _ = proto.Marshal(official)
-		})
+		}, "PbEncode"+tr.label)
 		structDecode, structDecodeLo, structDecodeHi := measure(1, func() {
 			m := new(matrix3.Scalars3)
 			_ = m.Unmarshal(reference)
-		})
+		}, "GoDecode"+tr.label)
 		officialDecode, officialDecodeLo, officialDecodeHi := measure(tr.floor, func() {
 			var m matrix3pb.Scalars3
 			_ = proto.Unmarshal(reference, &m)
-		})
+		}, "PbDecode"+tr.label)
 		structEncodeAllocs, structEncodeBop := allocStats(func() {
 			sinkBytes, _ = structMsg.Marshal()
 		})
@@ -373,26 +382,26 @@ func TestMatrix3Bench(t *testing.T) {
 			_, _ = structMsg.Marshal()
 		}, 1), func(_ int) {
 			_, _ = structMsg.Marshal()
-		})
+		}, "GoEncodePar"+tr.label)
 		officialEncodePar, officialEncodeParLo, officialEncodeParHi := measureParallel(calibrate(func() {
 			_, _ = proto.Marshal(officials[0])
 		}, tr.floor), func(g int) {
 			_, _ = proto.Marshal(officials[g%len(officials)])
-		})
+		}, "PbEncodePar"+tr.label)
 		structDecodePar, structDecodeParLo, structDecodeParHi := measureParallel(calibrate(func() {
 			m := new(matrix3.Scalars3)
 			_ = m.Unmarshal(reference)
 		}, 1), func(_ int) {
 			m := new(matrix3.Scalars3)
 			_ = m.Unmarshal(reference)
-		})
+		}, "GoDecodePar"+tr.label)
 		officialDecodePar, officialDecodeParLo, officialDecodeParHi := measureParallel(calibrate(func() {
 			var m matrix3pb.Scalars3
 			_ = proto.Unmarshal(reference, &m)
 		}, tr.floor), func(_ int) {
 			var m matrix3pb.Scalars3
 			_ = proto.Unmarshal(reference, &m)
-		})
+		}, "PbDecodePar"+tr.label)
 
 		fmt.Printf("\n%s: %d bytes (repeat field x%d)\n", tr.label, len(reference), tr.n)
 		fmt.Printf("  %-17s %-7s %12s %10s %8s %10s\n", "impl", "op", "ns/op", "MB/s", "allocs", "B/op")
