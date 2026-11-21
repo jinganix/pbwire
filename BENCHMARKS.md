@@ -761,20 +761,20 @@ decode before timing. Apple M4 Pro, same process times both sides:
 
 | payload | op | pbwire-go (MB/s, x protobuf-go) | protobuf-go (MB/s) |
 |---|---|---|---|
-| 136 B | encode | 891.2 (1.33x ✅) | 672.3 |
-| 136 B | decode | 613.1 (1.04x ✅) | 587.6 |
-| 174 B | encode | 975.2 (1.50x ✅) | 649.2 |
-| 174 B | decode | 509.3 (1.03x ✅) | 495.5 |
-| 2469 B | encode | 896.2 (1.60x ✅) | 561.3 |
-| 2469 B | decode | 407.3 (1.27x ✅) | 321.3 |
-| 74913 B | encode | 913.2 (1.54x ✅) | 594.6 |
-| 74913 B | decode | 466.5 (1.34x ✅) | 347.1 |
+| 136 B | encode | 832.9 (1.36x ✅) | 610.6 |
+| 136 B | decode | 565.2 (1.03x ✅) | 549.5 |
+| 174 B | encode | 880.2 (1.50x ✅) | 585.5 |
+| 174 B | decode | 484.7 (1.03x ✅) | 469.2 |
+| 2469 B | encode | 829.5 (1.57x ✅) | 528.9 |
+| 2469 B | decode | 377.1 (1.31x ✅) | 287.5 |
+| 74913 B | encode | 837.5 (1.49x ✅) | 563.1 |
+| 74913 B | decode | 435.9 (1.38x ✅) | 315.2 |
 
 Encode is ahead on every tier: the fast path reads scalars, strings and
 bytes straight from struct memory with no getter calls and no tree. Decode stores plain integer-width scalars straight into struct memory
 through the same offset columns (no pointers cross, so no write barrier is
 skipped); strings, bytes, slices, optionals and submessages stay on
-closures by design. It leads on all four tiers now (1.03x–1.34x): folding
+closures by design. It leads on all four tiers now (1.03x–1.38x): folding
 the varint/length loops from `Consume*` into the `Decoder` methods removed
 one call level per field occurrence, which was the largest single slice of
 the small-tier gap. The remaining per-field dispatch (table lookup, kind

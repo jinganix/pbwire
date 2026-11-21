@@ -54,12 +54,13 @@ back, _ := typ.Decode(wire)                // retains unknown fields, tag includ
 nums, _ := back.GetIntSlice("nums")
 ```
 
-Wire-first scope: encode, decode, field access and unknown-field retention.
-JSON, text, delimited framing, limits, `Visit`, the WKT helpers and
-`Registry` hot swap stay C-core-only for now, which is the candidate in
-[`pbench/dync/dynamic/`](pbench/dync/dynamic/). Maps ride as repeated entry
-messages in first-seen order with no sort: byte equality across runs is not
-promised for multi-entry maps until a deterministic pass exists.
+Full-runtime scope: encode, decode, field access and unknown-field retention,
+plus JSON, text, deterministic encode, delimited framing, encoded size,
+limits, `Visit`, the WKT helpers and `Registry` hot swap -- all on `DMsg`,
+all in this package. The candidate in [`pbench/dync/dynamic/`](pbench/dync/dynamic/)
+keeps the C-core arm for comparison only. Maps ride as repeated entry
+messages in first-seen order; `EncodeDeterministic` sorts native map-entry
+rows by key, so equal trees encode byte-identical bytes across runs.
 
 ## Thin generated model
 
@@ -79,7 +80,8 @@ wrappers (`isOneof1_kind`), repeated fields are slices — the same shapes
 `protoc-gen-go` emits. A `proto.Message` interface is deliberately not
 implemented (maps ride as repeated entry structs, as in every binding), and
 unknown wire fields are dropped on decode, as before: the struct has nowhere
-to keep them. Reach for the two dynamic cores when that matters.
+to keep them. Reach for `runtime.DMsg` (decode retains unknowns and binary
+re-encode preserves them) when that matters.
 
 | Piece | Path | Role |
 |---|---|---|
@@ -105,19 +107,35 @@ hand-written model can replace the generated one without touching the codec.
 embed and no schema registry to warm, so a generated model never consults a
 `FileDescriptorSet` at run time.
 
-## Core coverage (C core candidate)
+## Runtime coverage (shipped `runtime/` surface)
 
-The `dynamic` API mirrors the core one for one; each call is a single cgo
-downcall. It stays a `pbench` candidate, so none of this is in the shipped
-binding today:
+Everything below is the shipped pure-Go engine: no cgo, no schema argument at
+call time. JSON, text, deterministic encode, delimited framing, encoded size,
+limits, the WKT helpers, `Visit`, service routing and hot-swap `Registry` all
+operate on `DMsg` (the dynamic message). Thin-model convenience wrappers stay
+out of scope by design: a struct composes them from public API in two lines:
+
+```go
+d, _ := typ.ImportModel(m, gen.Scalars3Meta)
+js, _ := typ.MarshalJSON(d)
+```
 
 | member | what it does |
 |---|---|
-| `Message.ToJSON()` / `MessageType.ParseJSON(text, ignoreUnknown)` | JSON mapping |
-| `Message.ToText(printUnknown)` / `MessageType.ParseText(text)` | text format |
-| `Message.EncodeDeterministic()` | map entries sorted by key |
-| `Message.EncodeDelimited()` / `MessageType.DecodeDelimited(wire)` | framing, returns `consumed` |
-| `Message.EncodedSize()` | exact size without writing |
-| `MessageType.DecodeLimits(wire, maxBytes, maxDepth)`, `ParseJSONLimits(...)`, `ParseTextLimits(...)` | input bounds on every decode/parse |
-| `MessageType.Visit(wire, maxBytes, maxDepth, cb)` | single-level scan (callback via `cgo.Handle`) |
-| `Message.AnyTypeURL()`/`AnyPayload()`, `Message.TimestampMillis()`/`DurationMillis()`, `Message.FieldMaskPathCount()`/`FieldMaskPathAt(i)`, `Schema.ResolveMethod(service, method)` | WKT helpers and routing |
+| `Schema.Load(set)` / `Schema.Type(full)` / `Schema.Message/Enum/Extension/Service(full)` | descriptor-set plans: message, enum, extension and service routing |
+| `Registry{Load, Swap, Current}` | hot-swap schemas; retired schemas stay valid for in-flight use |
+| `DType.New/Decode/DecodeLimits` | build empty, parse wire bytes, parse with byte/depth bounds |
+| `DType.Encode(m)` / `DType.EncodeDeterministic(m)` | serialize a tree; deterministic sorts native map-entry rows by key |
+| `DType.DecodeDelimited/DecodeDelimitedLimits` | framing, returns `consumed`, trailing bytes left unread |
+| `DMsg.EncodedSize()` / `DMsg.IsInitialized()` | exact size without writing; proto2 required-field check |
+| `DType.MarshalJSON/UnmarshalJSON(+Limits)` | JSON mapping, `ignoreUnknown` flag, byte/depth bounds |
+| `DType.MarshalText/UnmarshalText(+Limits)` | text format, `printUnknown` flag, byte/depth bounds |
+| `DType.Visit(wire, lim, fn)` | single-level scan, raw bits, non-nil visitor aborts |
+| `AnyPack/AnyUnpack`, `AnyTypeURL/AnyPayload`, `TimestampMillis/TimestampFromMillis`, `DurationMillis/DurationFromMillis`, `FieldMaskPaths/NewFieldMask` | WKT helpers |
+| `DType.ImportModel/ExportModel` | struct tree converters shared with the thin generated models |
+| `Encoder/Decoder` | wire primitives (tags, varints, fixed widths, skips) for hand-written codecs |
+
+Known limitations, each needing an emitter change plus regen so parked, not
+built: generated-model tables predate the schema UTF-8 flag, so proto3 strings
+skip UTF-8 validation on the struct path; deterministic encode keeps foreign
+(`ForeignOps`) rows in first-seen order while native map-entry rows sort by key.
