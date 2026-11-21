@@ -11,7 +11,7 @@ bytes out; wire bytes in and a fully readable native object out.
 |---|---|---|---|
 | `tree` | `a-tree.js` | the shipped handle path: `newMessage()` plus one `set()` per field, `encode()`; decode into a `Message`, one `get()` per field | what the per-field downcall API costs for the whole task |
 | `shim` | `b-shim.js` | `type.encodeObject(obj)` / `type.decodeToObject(wire)`: one N-API downcall, the addon walks the JS object against the schema's field table in C | is the boundary worth paying for at all |
-| `core` | `n/a` | a TS/JS port of the C core | plan 15 (`issue41-15-core-ts.md`) builds it; until then the arm prints `n/a` |
+| `core` | `c-core.js` | the pure-TypeScript core (`../lib/core/`): the descriptor reader, tree and codec in JS, so the task runs in the JS heap with no boundary at all | what the wire format costs when there is no native library to call |
 
 `Payload` is `payload.js` (one object shared by the gate and the timing loop),
 the oracle is google-protobuf (jspb) generated code from the same `.proto`.
@@ -23,8 +23,8 @@ bindings/node/pbench/setup.sh        # addon + benchmarks/gen (jspb + .desc)
 node bindings/node/pbench/gate.js    # gate: PASS / exit 1
 ```
 
-The gate asserts, per tier, that `a-tree` bytes and `b-shim` bytes equal jspb's
-bytes, that each arm's decode reads the fields `benchmarks/bench.js` checks
+The gate asserts, per tier, that `a-tree`, `b-shim` and `core` bytes equal
+jspb's bytes, that each arm's decode reads the fields `benchmarks/bench.js` checks
 (`str`, `inner.name`, `inner.value`, the repeated lengths and last element, the
 proto3 optionals, `u64`, `color`), and that the decoded object re-encodes to the
 same bytes. It fails loudly while an arm or the `encodeObject` /
@@ -33,8 +33,8 @@ exists.
 
 ## Timing
 
-`compare.js` interleaves `a-tree`, `b-shim`, jspb and protobufjs in one loop per
-tier and reports the median of five rounds (`node pbench/compare.js`). The
+`compare.js` interleaves `a-tree`, `b-shim`, `core`, jspb and protobufjs in one
+loop per tier and reports the median of five rounds (`node pbench/compare.js`). The
 formal, recorded run is `make node-bench`, which drives
 `benchmarks/bench.js` and prints `pbwire-node-tree` (the prebuilt handle row)
 beside `pbwire-node-shim` (the native-object row).
