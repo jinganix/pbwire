@@ -184,8 +184,13 @@ ProtoBuf.jl on the 74 KB encode and below it everywhere else, the price of the
 
 Rust has all three: `tree` is the prebuilt `Message` handle, `shim` is the
 generated `#[repr(C)]` `<Message>Flat` read in place by the C struct codec
-compiled into the crate (`pbwire-rust-shim`, one call per op), `core` waits on
-plan 20.
+compiled into the crate (`pbwire-rust-shim`, one call per op), and `core` is the
+pure-Rust codec of `bindings/rust/src/core/` behind the `core` cargo feature
+(`pbwire-rust-core`, no C library, no `unsafe`, no generated code;
+`make conformance-rust`). It is above `rust-protobuf` on the two large encodes
+(1.04x) and below prost everywhere (0.64-0.70x encode, 0.47-0.73x decode),
+because prost's generated code has no value tree in the way: published as the
+no-C-toolchain mode, never as the shipped fast path.
 
 Swift has all three: `tree` is the prebuilt `Message` handle, `shim` is the
 generated `@frozen` `<Message>Repr` mirror (no references, so no ARC per field)

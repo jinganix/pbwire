@@ -181,6 +181,7 @@ own README. Dart ran once `dart pub global activate protoc_plugin` provided
 | PHP (`ext-ffi` + C extension) | `make php-bench` (`bindings/php/benchmarks`) | the official PHP runtime (`protobuf/php/src`): C extension (fastest) + pure-PHP | all 4 | 1.23x / 1.29x `tree` vs C ext ✅ (420x / 139x vs pure; native-object `shim` 0.16x / 0.36x, `shim-ffi` 0.004x / 0.008x) |
 | Dart (`dart:ffi`) | `make dart-bench` (`bindings/dart/benchmarks`) | the `protobuf` Dart package + generated code | all 4 | 15.73x ✅ / 4.57x ✅ `tree` (native-object `shim` 11.38x / 4.69x, one C-side reader call per op; pure-Dart `core` 4.82x ✅ encode / 1.32x ✅ decode at 74 KB, 0.34x / 0.33x at 136 B, no native library) |
 | Rust (static link) | `make rust-bench` (`bindings/rust/benchmarks`) | prost (fastest) + rust-protobuf 3.x generated code | all 4 | 1.17x ✅ / 1.88x ✅ `tree` (native-object `shim` 0.84x / 1.90x, one C-side struct-codec call per op; `shim` encode is above prost at 136 B and level at 174 B) |
+| Rust (pure-Rust `core`) | `make rust-bench` + `make conformance-rust` (`bindings/rust/src/core/`, `core` cargo feature) | prost (the fastest pure-Rust codec) + rust-protobuf 3.x | all 4 | 0.68x ❌ / 0.66x ❌ vs prost (1.04x ✅ / 0.59x vs rust-protobuf; no C library, no `unsafe`, official binary suite passed) |
 | C# (P/Invoke) | `make csharp-bench` (`bindings/csharp/benchmarks`) | Google.Protobuf C# generated code (fastest) + protobuf-net | all 4 | 3.46x ✅ / 1.48x ✅ `tree` (native-object `shim` 0.12x / 0.10x; pure-C# `core` 1.38x encode / 0.63x decode vs protobuf-csharp at 74 KB, no native library) |
 | Lua (C module, tables) | `make lua-bench` (`bindings/lua/benchmarks`) | `lua-protobuf` 0.6.0 | all 4 | 1.09x ✅ / 1.42x ✅ (8.93x via builder encode — data already in pbwire) |
 | Swift (SwiftPM, static link) | `make swift-bench` (`bindings/swift/benchmarks`) | `apple/swift-protobuf` 1.39.0 generated code from the same `matrix3.proto` | all 4 | 6.31x ✅ / 2.59x ✅ `tree` (native-object `shim` 3.37x / 2.56x, one C-side layout-codec call per op) |
@@ -288,6 +289,7 @@ payload, the boundary cost and the baseline all differ.
 | Objective-C | ARC wrapper | 74913 B | 62089.8 (1.72x ✅) | 29297.5 (1.18x ✅) |
 | PHP | C extension | 74913 B | 1639.1 (1.23x ✅) `tree`; native-object `shim` 214.6 (0.16x ❌) | 750.8 (1.29x ✅) `tree`; `shim` 206.9 (0.36x ❌) |
 | Rust | static link | 74913 B | 1600.9 (1.17x ✅) `tree`; native-object `shim` 1145.0 (0.84x ❌) | 716.2 (1.88x ✅) `tree`; `shim` 722.7 (1.90x ✅) |
+| Rust (`core`, pure-Rust) | no native code, `core` feature | 74913 B | 923.2 (0.68x ❌) | 238.4 (0.66x ❌) |
 | C# | P/Invoke | 74913 B | 1689.7 (3.46x ✅) `tree`; native-object `shim` 59.1 (0.12x ❌) | 750.7 (1.48x ✅) `tree`; `shim` 51.5 (0.10x ❌) |
 | Lua | C module, tables | 74913 B | 196.9 (1.09x ✅) | 124.7 (1.42x ✅) |
 | Erlang | NIF (`pbwire`) | 74913 B | 483.3 (3.91x ✅) | 356.5 (1.60x ✅) |
@@ -1325,16 +1327,16 @@ the generated reader writes a compiled field. It is (b) in the pbench contract
 
 ![Rust vs prost (and rust-protobuf 3.x) — MB/s by tier](docs/charts/bench-rust-vs-prost-and-rust-protobuf-3-x.svg)
 
-| payload | op | pbwire-rust-tree (MB/s, x prost) | pbwire-rust-shim (MB/s, x prost) | prost (MB/s) | protobuf-rust (MB/s) |
-|---|---|---|---|---|---|
-| 136 B | encode | 1845.2 (1.20x ✅) | 1703.2 (1.10x ✅) | 1541.8 | 1248.5 |
-| 136 B | decode | 1030.9 (1.24x ✅) | 1147.6 (1.38x ✅) | 833.0 | 722.5 |
-| 174 B | encode | 1726.3 (1.11x ✅) | 1566.9 (1.01x ✅) | 1548.5 | 1336.8 |
-| 174 B | decode | 879.6 (1.41x ✅) | 1020.5 (1.64x ✅) | 623.3 | 567.6 |
-| 2469 B | encode | 1655.0 (1.23x ✅) | 1072.3 (0.80x ❌) | 1340.9 | 822.6 |
-| 2469 B | decode | 651.6 (1.91x ✅) | 640.4 (1.88x ✅) | 340.4 | 344.3 |
-| 74913 B | encode | 1600.9 (1.17x ✅) | 1145.0 (0.84x ❌) | 1370.9 | 845.1 |
-| 74913 B | decode | 716.2 (1.88x ✅) | 722.7 (1.90x ✅) | 380.4 | 381.6 |
+| payload | op | pbwire-rust-tree (MB/s, x prost) | pbwire-rust-shim (MB/s, x prost) | pbwire-rust-core (MB/s, x prost) | prost (MB/s) | protobuf-rust (MB/s) |
+|---|---|---|---|---|---|---|
+| 136 B | encode | 1845.2 (1.20x ✅) | 1703.2 (1.10x ✅) | 1008.3 (0.64x ❌) | 1541.8 | 1248.5 |
+| 136 B | decode | 1030.9 (1.24x ✅) | 1147.6 (1.38x ✅) | 413.0 (0.47x ❌) | 833.0 | 722.5 |
+| 174 B | encode | 1726.3 (1.11x ✅) | 1566.9 (1.01x ✅) | 978.2 (0.64x ❌) | 1548.5 | 1336.8 |
+| 174 B | decode | 879.6 (1.41x ✅) | 1020.5 (1.64x ✅) | 348.4 (0.57x ❌) | 623.3 | 567.6 |
+| 2469 B | encode | 1655.0 (1.23x ✅) | 1072.3 (0.80x ❌) | 869.0 (0.70x ❌) | 1340.9 | 822.6 |
+| 2469 B | decode | 651.6 (1.91x ✅) | 640.4 (1.88x ✅) | 237.1 (0.73x ❌) | 340.4 | 344.3 |
+| 74913 B | encode | 1600.9 (1.17x ✅) | 1145.0 (0.84x ❌) | 923.2 (0.68x ❌) | 1370.9 | 845.1 |
+| 74913 B | decode | 716.2 (1.88x ✅) | 722.7 (1.90x ✅) | 238.4 (0.66x ❌) | 380.4 | 381.6 |
 
 The archive is linked in, so a call is a direct C call with no `dlopen` lookup.
 `pbwire-rust-tree` is a prebuilt `Message` handle (`encode_to()` into one reused
@@ -1346,6 +1348,20 @@ gated like the rest), is behind the tree row on every cell now that encode
 reuses one buffer per implementation (pbwire `encode_to()`, rust-protobuf
 `write_to_vec()`, prost `encode()`): the one-shot `encode()` paid the core
 malloc plus a 75 KB copy that neither baseline pays.
+
+`pbwire-rust-core` is the pure-Rust codec of `bindings/rust/src/core/` behind
+the `core` cargo feature (off by default, so the crate keeps the static link):
+one `Message` tree in and wire bytes out, wire bytes in and a fully readable
+tree out, with no C library, no `unsafe` and no generated code, held to the same
+official binary suite as the C core (`make conformance-rust`: 1412 successes,
+1403 skipped, 2 expected, 0 unexpected). It is behind prost on every cell
+(0.64-0.70x encode, 0.47-0.73x decode) and ahead of `rust-protobuf` on the two
+large encodes (1.04x / 1.05x): encode allocates nothing and is within 4% of the
+generated writer at 74 KB, while decode pays the boxed tree a schema-driven
+codec needs -- a slot vector per message, a boxed sub-message and one owned byte
+vector per string, ~12k allocations for the 74 KB payload. It is published as
+the no-C-toolchain mode, not as a replacement for the static link: the `tree`
+row (the shipped path) is 1.66-1.88x its encode and 2.50-3.14x its decode.
 
 The shim's decode leads prost at every tier (1.38x at 136 B, 1.90x at 74 KB)
 and its encode leads at 136 B (1.10x), is level at 174 B (1.01x), and trails at
