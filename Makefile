@@ -749,6 +749,7 @@ dart-test: shared dart-shim-native
 	cd bindings/dart && $(DART) run tests/core/descriptor_test.dart ../c/tests/data
 	cd bindings/dart && $(DART) run tests/core/wire_test.dart
 	cd bindings/dart && $(DART) run tests/core/codec_test.dart ../c/tests/data
+	cd bindings/dart && $(DART) run tests/core/web_smoke.dart
 
 # Same suite through the Dart binding (binary, JSON and text; the shim arm
 # shares the C core, so this proves the binding's own decode/encode/JSON/text
@@ -761,6 +762,14 @@ conformance-dart: $(CONFORMANCE_DESC) dart-shim-native
 	$(CONFORMANCE_RUNNER) --failure_list $(CURDIR)/conformance/failure_list_pbwire.txt \
 		bindings/dart/conformance/testee.sh \
 		$(CURDIR)/$(CONFORMANCE_DESC)
+
+# The pure core on the web backends: int is a double there, so this compiles
+# the same edge-value check to JS and to wasm and runs the JS build.
+NODE ?= node
+dart-core-web:
+	cd bindings/dart && $(DART) compile js -o /tmp/pbwire-core-web.js tests/core/web_smoke.dart
+	$(NODE) /tmp/pbwire-core-web.js
+	cd bindings/dart && $(DART) compile wasm -o /tmp/pbwire-core-web.wasm tests/core/web_smoke.dart
 
 # The same official suite through the pure-Dart core (no FFI, no C library):
 # binary in, binary out; JSON and text answer `skipped`, like every other

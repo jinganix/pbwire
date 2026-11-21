@@ -223,6 +223,8 @@ make conformance-csharp          # the pure-C# core: binary in/out, JSON and
                                  # text answer "skipped" (same scope as above)
 make conformance-dart-core       # the pure-Dart core: binary in/out, JSON and
                                  # text answer "skipped" (same scope as above)
+make dart-core-web               # the pure core compiled to dart2js and wasm
+                                 # (int is a double there; 64-bit stays BigInt)
 make conformance-julia conformance-scala conformance-clojure conformance-fsharp conformance-zig
 ```
 
