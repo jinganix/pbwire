@@ -22,7 +22,7 @@ const Value = tree.Value;
 const Reader = wire.Reader;
 const Error = wire.Error;
 
-pub fn decode(alloc: Allocator, core: *const CoreSchema, def: usize, data: []const u8, limits: Limits) !Message {
+pub fn decode(alloc: Allocator, core: *const CoreSchema, def: usize, data: []const u8, limits: Limits) wire.Error!Message {
     try limits.checkBytes(data.len, "message");
     var m = try Message.newRoot(alloc, core, def);
     errdefer m.deinit();
@@ -33,7 +33,7 @@ pub fn decode(alloc: Allocator, core: *const CoreSchema, def: usize, data: []con
     return m;
 }
 
-pub fn decodeSlice(alloc: Allocator, core: *const CoreSchema, def: usize, data: []const u8, off: usize, length: usize, limits: Limits) !Message {
+pub fn decodeSlice(alloc: Allocator, core: *const CoreSchema, def: usize, data: []const u8, off: usize, length: usize, limits: Limits) wire.Error!Message {
     try limits.checkBytes(length, "message");
     const end = std.math.add(usize, off, length) catch return Error.BadSlice;
     var m = try Message.newRoot(alloc, core, def);
@@ -54,7 +54,7 @@ fn wtIncompatible(f: *const Field, wt: u8) bool {
     return wt != f.wt;
 }
 
-fn listMut(m: *Message, slot: usize) !*std.ArrayListUnmanaged(Value) {
+fn listMut(m: *Message, slot: usize) wire.Error!*std.ArrayListUnmanaged(Value) {
     if (m.values[slot] == null) m.values[slot] = .{ .list = .empty };
     if (m.values[slot]) |*v| {
         switch (v.*) {
@@ -65,7 +65,7 @@ fn listMut(m: *Message, slot: usize) !*std.ArrayListUnmanaged(Value) {
     unreachable;
 }
 
-fn newSub(m: *Message, def: usize) !*Message {
+fn newSub(m: *Message, def: usize) wire.Error!*Message {
     const sub = try m.a.create(Message);
     sub.* = try Message.newIn(m.core, def, m.a);
     return sub;
@@ -79,7 +79,7 @@ fn canMerge(m: *Message, f: *const Field, slot: usize) bool {
     return m.oneof_case[@intCast(f.oneof)] == slot + 1;
 }
 
-pub fn decodeInto(m: *Message, r: *Reader, end: usize, group_end: i64, depth: u32) !void {
+pub fn decodeInto(m: *Message, r: *Reader, end: usize, group_end: i64, depth: u32) wire.Error!void {
     if (depth > r.cap) return Error.LimitExceeded;
     const outer_end = r.end;
     r.end = end;
@@ -108,7 +108,7 @@ pub fn decodeInto(m: *Message, r: *Reader, end: usize, group_end: i64, depth: u3
     if (!closed) return Error.InvalidData;
 }
 
-fn readKnown(m: *Message, r: *Reader, slot: usize, wt: u8, depth: u32) !void {
+fn readKnown(m: *Message, r: *Reader, slot: usize, wt: u8, depth: u32) wire.Error!void {
     const f = &m.core.messages[m.def].fields[slot];
     const kind = f.kind;
     if (f.repeated) {
@@ -194,7 +194,7 @@ fn isZero(v: Value) bool {
     };
 }
 
-fn readPacked(r: *Reader, kind: Kind, items: *std.ArrayListUnmanaged(Value), a: Allocator) !void {
+fn readPacked(r: *Reader, kind: Kind, items: *std.ArrayListUnmanaged(Value), a: Allocator) wire.Error!void {
     const length = try r.rLen32();
     const end = r.pos + length;
     switch (kind) {
@@ -230,7 +230,7 @@ fn readPacked(r: *Reader, kind: Kind, items: *std.ArrayListUnmanaged(Value), a: 
     if (r.pos != end) return Error.InvalidData;
 }
 
-fn readPackedVar(r: *Reader, kind: Kind) !Value {
+fn readPackedVar(r: *Reader, kind: Kind) wire.Error!Value {
     return switch (kind) {
         .int32, .enumeration => .{ .i32 = @bitCast(try r.rVar32()) },
         .uint32 => .{ .u32 = try r.rVar32() },
@@ -242,7 +242,7 @@ fn readPackedVar(r: *Reader, kind: Kind) !Value {
     };
 }
 
-fn readNumSingle(r: *Reader, kind: Kind) !Value {
+fn readNumSingle(r: *Reader, kind: Kind) wire.Error!Value {
     return switch (kind) {
         .int32, .enumeration => .{ .i32 = @bitCast(try r.rVar32()) },
         .uint32 => .{ .u32 = try r.rVar32() },
@@ -261,7 +261,7 @@ fn readNumSingle(r: *Reader, kind: Kind) !Value {
     };
 }
 
-fn checkRequired(m: *const Message, cap: u32, depth: u32) !void {
+fn checkRequired(m: *const Message, cap: u32, depth: u32) wire.Error!void {
     if (depth > cap) return Error.LimitExceeded;
     const def = m.defn();
     if (def.has_required) {

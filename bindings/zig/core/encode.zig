@@ -19,19 +19,19 @@ const Error = wire.Error;
 
 const Buf = std.ArrayListUnmanaged(u8);
 
-pub fn encode(alloc: Allocator, m: *const Message) ![]u8 {
+pub fn encode(alloc: Allocator, m: *const Message) wire.Error![]u8 {
     var w: Buf = .empty;
     errdefer w.deinit(alloc);
     try encodeInto(m, &w, alloc, 0);
     return w.toOwnedSlice(alloc);
 }
 
-pub fn encodeTo(m: *const Message, w: *Buf, alloc: Allocator) !void {
+pub fn encodeTo(m: *const Message, w: *Buf, alloc: Allocator) wire.Error!void {
     w.clearRetainingCapacity();
     try encodeInto(m, w, alloc, 0);
 }
 
-pub fn encodeInto(m: *const Message, w: *Buf, alloc: Allocator, depth: u32) !void {
+pub fn encodeInto(m: *const Message, w: *Buf, alloc: Allocator, depth: u32) wire.Error!void {
     if (depth > wire.MAX_DEPTH) return Error.LimitExceeded;
     const def = m.defn();
     const check_required = def.has_required;
@@ -77,11 +77,11 @@ fn isZero(v: Value) bool {
     };
 }
 
-fn writeTag(w: *Buf, alloc: Allocator, tag: *const wire.Tag) !void {
+fn writeTag(w: *Buf, alloc: Allocator, tag: *const wire.Tag) wire.Error!void {
     try w.appendSlice(alloc, tag.slice());
 }
 
-fn writeVar32(w: *Buf, alloc: Allocator, v: u32) !void {
+fn writeVar32(w: *Buf, alloc: Allocator, v: u32) wire.Error!void {
     var x: u64 = v;
     while (x > 0x7f) {
         try w.append(alloc, @as(u8, @truncate(x & 0x7f)) | 0x80);
@@ -90,7 +90,7 @@ fn writeVar32(w: *Buf, alloc: Allocator, v: u32) !void {
     try w.append(alloc, @truncate(x));
 }
 
-fn writeVar64(w: *Buf, alloc: Allocator, v: u64) !void {
+fn writeVar64(w: *Buf, alloc: Allocator, v: u64) wire.Error!void {
     var x = v;
     while (x > 0x7f) {
         try w.append(alloc, @as(u8, @truncate(x & 0x7f)) | 0x80);
@@ -99,29 +99,29 @@ fn writeVar64(w: *Buf, alloc: Allocator, v: u64) !void {
     try w.append(alloc, @truncate(x));
 }
 
-fn writeFixed32(w: *Buf, alloc: Allocator, v: u32) !void {
+fn writeFixed32(w: *Buf, alloc: Allocator, v: u32) wire.Error!void {
     var bytes: [4]u8 = undefined;
     std.mem.writeInt(u32, &bytes, v, .little);
     try w.appendSlice(alloc, &bytes);
 }
 
-fn writeFixed64(w: *Buf, alloc: Allocator, v: u64) !void {
+fn writeFixed64(w: *Buf, alloc: Allocator, v: u64) wire.Error!void {
     var bytes: [8]u8 = undefined;
     std.mem.writeInt(u64, &bytes, v, .little);
     try w.appendSlice(alloc, &bytes);
 }
 
-fn writeLen(w: *Buf, alloc: Allocator, n: usize) !void {
+fn writeLen(w: *Buf, alloc: Allocator, n: usize) wire.Error!void {
     try writeVar64(w, alloc, @intCast(n));
 }
 
-fn writeBytes(w: *Buf, alloc: Allocator, tag: *const wire.Tag, data: []const u8) !void {
+fn writeBytes(w: *Buf, alloc: Allocator, tag: *const wire.Tag, data: []const u8) wire.Error!void {
     try writeTag(w, alloc, tag);
     try writeLen(w, alloc, data.len);
     try w.appendSlice(alloc, data);
 }
 
-fn patchLen(w: *Buf, alloc: Allocator, lp: usize) !void {
+fn patchLen(w: *Buf, alloc: Allocator, lp: usize) wire.Error!void {
     const length = w.items.len - lp - 1;
     if (length < 128) {
         w.items[lp] = @intCast(length);
@@ -143,7 +143,7 @@ fn patchLen(w: *Buf, alloc: Allocator, lp: usize) !void {
     w.items[p] = @truncate(x);
 }
 
-fn writeValue(w: *Buf, alloc: Allocator, f: *const Field, v: Value, depth: u32) !void {
+fn writeValue(w: *Buf, alloc: Allocator, f: *const Field, v: Value, depth: u32) wire.Error!void {
     switch (f.kind) {
         .string, .bytes => {
             const data = if (v == .bytes) v.bytes else &[_]u8{};
@@ -167,7 +167,7 @@ fn writeValue(w: *Buf, alloc: Allocator, f: *const Field, v: Value, depth: u32) 
     }
 }
 
-fn writeNumSingle(w: *Buf, alloc: Allocator, kind: Kind, v: Value) !void {
+fn writeNumSingle(w: *Buf, alloc: Allocator, kind: Kind, v: Value) wire.Error!void {
     const i = v.asI64() orelse 0;
     const u = v.asU64() orelse 0;
     switch (kind) {
@@ -188,7 +188,7 @@ fn writeNumSingle(w: *Buf, alloc: Allocator, kind: Kind, v: Value) !void {
     }
 }
 
-fn encodeRepNum(w: *Buf, alloc: Allocator, f: *const Field, items: []const Value) !void {
+fn encodeRepNum(w: *Buf, alloc: Allocator, f: *const Field, items: []const Value) wire.Error!void {
     const n = items.len;
     if (f.is_packed) {
         switch (f.kind) {

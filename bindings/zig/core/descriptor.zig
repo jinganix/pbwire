@@ -133,7 +133,7 @@ pub const CoreSchema = struct {
     }
 
     pub fn messageIndex(self: *const CoreSchema, full_name: []const u8) !usize {
-        return self.message_by_name.get(full_name) orelse Error.NotFound;
+        return self.message_by_name.get(full_name) orelse return Error.NotFound;
     }
 
     pub fn message(self: *const CoreSchema, full_name: []const u8) !*const MsgDef {

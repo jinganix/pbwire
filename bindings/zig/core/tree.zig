@@ -153,7 +153,7 @@ pub const Message = struct {
     }
 
     pub fn fieldSlot(self: *const Message, name: []const u8) !usize {
-        return self.defn().by_name.get(name) orelse Error.NotFound;
+        return self.defn().by_name.get(name) orelse return Error.NotFound;
     }
 
     pub fn field(self: *const Message, name: []const u8) !*const Field {
@@ -169,7 +169,7 @@ pub const Message = struct {
     }
 
     pub fn oneofCase(self: *const Message, oneof_name: []const u8) !u32 {
-        const idx = self.defn().oneof_by_name.get(oneof_name) orelse Error.NotFound;
+        const idx = (self.defn().oneof_by_name.get(oneof_name)) orelse return Error.NotFound;
         if (idx >= self.oneof_case.len) return 0;
         const c = self.oneof_case[idx];
         return if (c == 0) 0 else self.defn().fields[c - 1].number;
