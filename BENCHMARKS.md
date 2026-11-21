@@ -179,7 +179,7 @@ own README. Dart ran once `dart pub global activate protoc_plugin` provided
 | Objective-C (ARC) | `make objc-bench` (`bindings/objc/benchmarks`) | the `protobuf` ObjC runtime + generated code from the same `matrix3.proto` | all 4 | 1.72x ✅ / 1.18x ✅ |
 | Kotlin (pure-Java codec + DSL) | `make kotlin-bench` (`bindings/kotlin/benchmarks`) | `protoc --kotlin_out` over `protobuf-java`, same `matrix3.proto` | all 4 | 1.11x ✅ / 1.77x ✅ `tree` (0.71x at 136 B; `core` 0.79x / 0.76x) |
 | PHP (`ext-ffi` + C extension) | `make php-bench` (`bindings/php/benchmarks`) | the official PHP runtime (`protobuf/php/src`): C extension (fastest) + pure-PHP | all 4 | 1.23x / 1.29x `tree` vs C ext ✅ (420x / 139x vs pure; native-object `shim` 0.16x / 0.36x, `shim-ffi` 0.004x / 0.008x) |
-| Dart (`dart:ffi`) | `make dart-bench` (`bindings/dart/benchmarks`) | the `protobuf` Dart package + generated code | all 4 | 15.73x ✅ / 4.57x ✅ `tree` (native-object `shim` 11.38x / 4.69x, one C-side reader call per op) |
+| Dart (`dart:ffi`) | `make dart-bench` (`bindings/dart/benchmarks`) | the `protobuf` Dart package + generated code | all 4 | 15.73x ✅ / 4.57x ✅ `tree` (native-object `shim` 11.38x / 4.69x, one C-side reader call per op; pure-Dart `core` 4.82x ✅ encode / 1.32x ✅ decode at 74 KB, 0.34x / 0.33x at 136 B, no native library) |
 | Rust (static link) | `make rust-bench` (`bindings/rust/benchmarks`) | prost (fastest) + rust-protobuf 3.x generated code | all 4 | 1.17x ✅ / 1.88x ✅ `tree` (native-object `shim` 0.84x / 1.90x, one C-side struct-codec call per op; `shim` encode is above prost at 136 B and level at 174 B) |
 | C# (P/Invoke) | `make csharp-bench` (`bindings/csharp/benchmarks`) | Google.Protobuf C# generated code (fastest) + protobuf-net | all 4 | 3.46x ✅ / 1.48x ✅ `tree` (native-object `shim` 0.12x / 0.10x; pure-C# `core` 1.38x encode / 0.63x decode vs protobuf-csharp at 74 KB, no native library) |
 | Lua (C module, tables) | `make lua-bench` (`bindings/lua/benchmarks`) | `lua-protobuf` 0.6.0 | all 4 | 1.09x ✅ / 1.42x ✅ (8.93x via builder encode — data already in pbwire) |
@@ -283,7 +283,7 @@ payload, the boundary cost and the baseline all differ.
 | Kotlin | the pure-Java codec + DSL | 74913 B | 964.8 (1.09x ✅) | 742.1 (1.68x ✅) |
 | Node (`tree`, prebuilt handle) | N-API addon | 74913 B | 1689.3 (3.36x ✅) | 1196.1 (2.95x ✅) |
 | Node (`shim`, native object in/out) | N-API addon, one downcall | 74913 B | 58.1 (0.12x ❌) | 52.3 (0.13x ❌) |
-| Dart (`tree`, prebuilt handle) | `dart:ffi` binding | 74913 B | 1593.8 (15.73x ✅) `tree`; native-object `shim` 1152.9 (11.38x ✅) | 726.0 (4.57x ✅) `tree`; `shim` 745.5 (4.69x ✅) |
+| Dart (`tree`, prebuilt handle) | `dart:ffi` binding | 74913 B | 1593.8 (15.73x ✅) `tree`; native-object `shim` 1152.9 (11.38x ✅); pure-Dart `core` 466.7 (4.82x ✅) | 726.0 (4.57x ✅) `tree`; `shim` 745.5 (4.69x ✅); pure-Dart `core` 209.9 (1.32x ✅) |
 | Ruby | C extension over the core | 74913 B | 1804.9 (1.35x ✅) `tree`; native-object `shim` 253.5 (0.19x ❌) | 1207.8 (1.75x ✅) `tree`; `shim` 158.6 (0.23x ❌) |
 | Objective-C | ARC wrapper | 74913 B | 62089.8 (1.72x ✅) | 29297.5 (1.18x ✅) |
 | PHP | C extension | 74913 B | 1639.1 (1.23x ✅) `tree`; native-object `shim` 214.6 (0.16x ❌) | 750.8 (1.29x ✅) `tree`; `shim` 206.9 (0.36x ❌) |
@@ -1289,16 +1289,16 @@ different codec.
 
 ![Dart vs the protobuf Dart package — MB/s by tier](docs/charts/bench-dart-vs-the-protobuf-dart-package.svg)
 
-| payload | op | pbwire-dart-tree (MB/s, x protobuf-dart) | pbwire-dart-shim (MB/s, x) | protobuf-dart (MB/s) |
-|---|---|---|---|---|
-| 136 B | encode | 818.0 (3.94x ✅) | 1335.1 (6.43x ✅) | 207.6 |
-| 136 B | decode | 374.7 (1.72x ✅) | 1003.2 (4.61x ✅) | 217.7 |
-| 174 B | encode | 915.3 (5.06x ✅) | 1273.9 (7.05x ✅) | 180.8 |
-| 174 B | decode | 402.5 (2.13x ✅) | 912.1 (4.82x ✅) | 189.3 |
-| 2469 B | encode | 1351.4 (11.40x ✅) | 1059.3 (8.94x ✅) | 118.5 |
-| 2469 B | decode | 630.3 (4.40x ✅) | 675.3 (4.71x ✅) | 143.3 |
-| 74913 B | encode | 1593.8 (15.73x ✅) | 1152.9 (11.38x ✅) | 101.3 |
-| 74913 B | decode | 726.0 (4.57x ✅) | 745.5 (4.69x ✅) | 159.0 |
+| payload | op | pbwire-dart-tree (MB/s, x protobuf-dart) | pbwire-dart-shim (MB/s, x) | pbwire-dart-core (MB/s, x) | protobuf-dart (MB/s) |
+|---|---|---|---|---|---|
+| 136 B | encode | 818.0 (3.94x ✅) | 1335.1 (6.43x ✅) | 66.9 (0.34x ❌) | 207.6 |
+| 136 B | decode | 374.7 (1.72x ✅) | 1003.2 (4.61x ✅) | 70.5 (0.33x ❌) | 217.7 |
+| 174 B | encode | 915.3 (5.06x ✅) | 1273.9 (7.05x ✅) | 65.4 (0.37x ❌) | 180.8 |
+| 174 B | decode | 402.5 (2.13x ✅) | 912.1 (4.82x ✅) | 79.4 (0.42x ❌) | 189.3 |
+| 2469 B | encode | 1351.4 (11.40x ✅) | 1059.3 (8.94x ✅) | 312.3 (3.11x ✅) | 118.5 |
+| 2469 B | decode | 630.3 (4.40x ✅) | 675.3 (4.71x ✅) | 172.8 (1.19x ✅) | 143.3 |
+| 74913 B | encode | 1593.8 (15.73x ✅) | 1152.9 (11.38x ✅) | 466.7 (4.82x ✅) | 101.3 |
+| 74913 B | decode | 726.0 (4.57x ✅) | 745.5 (4.69x ✅) | 209.9 (1.32x ✅) | 159.0 |
 
 `pbwire-dart-tree` is the shipped path: a prebuilt `Message` handle encoded and
 decoded in one call. `pbwire-dart-shim` is the pbench native-object arm: the
@@ -1309,6 +1309,16 @@ is above the baseline at every tier (11.4-6.4x encode, 4.6-4.8x decode) because
 the codec runs in C and the boundary is paid once; only the `Uint8List` copy of
 the result remains. The handle row stays the headline for applications that
 already hold a tree; the shim row is the native-object path.
+
+`pbwire-dart-core` is the pure-Dart core (`bindings/dart/lib/core/`, no
+`dart:ffi`, no `dart:io`): a `Msg` tree with BigInt for the 64-bit kinds, so it
+also runs on dart2js and dart2wasm where the shared library cannot be reached.
+On encode it beats the generated encoder from 2469 B up and is 4.82x the
+baseline at 74 KB; it loses the two small tiers (0.34x, 0.37x) and the small
+decodes to per-call allocation -- one `Msg` with a 22-slot list per message,
+one growable list per repeated field, one dynamic slot lookup per field where
+the generated reader writes a compiled field. It is (b) in the pbench contract
+(a host with no native library), never a replacement for the FFI rows.
 
 
 #### Rust vs prost (and `rust-protobuf` 3.x)

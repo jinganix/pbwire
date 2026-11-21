@@ -87,17 +87,24 @@ native-object arm. The three pbench arms:
 |---|---|---|
 | `tree` | the prebuilt `Message` handle: one `set` per field to build, `encode()`; `decode()` then one `get` per field | what the per-field downcall task costs once the tree exists |
 | `shim` | the generated `<Message>Layout` (`dart:ffi` `Struct`) is the native object; `PbwireLayout.encode` / `decodeInto` make one FFI call and `native/pbw_dart_shim.c` walks that memory in place through `pbw_struct_codec_*` | is a boundary worth paying for at all |
-| `core` | a pure-Dart port of the C core | plan 18 (`issue41-18-core-dart.md`) |
+| `core` | the pure-Dart core (`lib/core/`, no `dart:ffi`, no `dart:io`): one entry per field on a `Msg` tree, `encode()`; `decode()` then one `get` per field | what the wire costs with no boundary at all, and the only arm that runs on dart2js/dart2wasm |
 
-Both published rows beat the official runtime; the shim is the row a caller
-with its own native image pays. The gate, the provisional table and the verdict
-are in [`pbench/README.md`](pbench/README.md).
+All three published rows beat the official runtime on encode; the shim is the
+row a caller with its own native image pays, and `core` is the row for targets
+without a C library (it is 0.34x / 0.33x the baseline at 136 B and 4.82x /
+1.32x at 74 KB). The gate, the provisional table and the verdict are in
+[`pbench/README.md`](pbench/README.md).
 
 ## Conformance
 
 `make conformance-dart` runs the official binary/JSON/text suite through
 `conformance/testee.dart` on `build/conformance.desc`; it passes with the same
-two expected failures as the C testee.
+two expected failures as the C testee. `make conformance-dart-core` runs the
+same suite through the pure core (`conformance/testee_core.dart`): binary in
+and out, 1412 successes, 1403 JSON/text requests skipped, 2 expected failures,
+0 unexpected. `make dart-core-web` compiles the core to dart2js and dart2wasm
+and runs the edge-value check under node (`int` is a double there, so every
+64-bit kind is BigInt).
 
 Strings cross as NUL-terminated C strings, so `setString()` stops at the first
 NUL byte: use `setBytes()` for binary payloads (a `string` field accepts them

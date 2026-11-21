@@ -1679,3 +1679,24 @@ expected tag-truncation failures and skips the JSON/text half: 1412 successes,
 1403 skipped, 2 expected failures, 0 unexpected -- the same set as the C core,
 the TypeScript, C# and Python ports. The FFI testee `make conformance-dart`
 keeps covering binary + JSON + text (2750 + 439).
+
+Formal rows (`make dart-bench`, `results/bench-dart-20261121T013521Z.json`,
+MB/s at 136 / 174 / 2469 / 74913 B): `pbwire-dart-core` encode 66.9 / 65.4 /
+312.3 / 466.7 and decode 70.5 / 79.4 / 172.8 / 209.9; protobuf-dart the same
+run 194.4 / 174.5 / 118.5 / 101.3 and 214.7 / 189.3 / 143.3 / 159.0. The
+published rows are prebuilt-tree ops, so the below-baseline cells are exactly
+the two small tiers (0.34x / 0.33x and 0.37x / 0.42x); from 2469 B the core is
+above the baseline on both ops (3.11x / 1.19x) and 4.82x / 1.32x at 74 KB.
+
+Stage 6 decision: **recorded, not chased**. Both below-baseline cells are the
+136 B and 174 B tiers, and their cost is fixed per message, not per byte: one
+`Msg` with a 22-slot `List` and one growable `List` per repeated field per
+decode, one `fromObject` walk plus one workspace copy per encode, and a dynamic
+`slotOf` + `fields[s]` + cast per field where the generated reader writes a
+compiled field. A one-change-per-round probe cannot move that: the candidates
+(hoist the field table into a local, cache `fields.length`, drop the workspace
+copy) are each worth a few percent of a 2 µs op, and the honest fix is a
+columnar/lazy tree or code generated for the concrete message -- a rewrite of
+the tree and both codecs, and what the FFI runtime already is. The arm is
+published with its numbers as the portable (no native library, dart2js/
+dart2wasm) path, exactly as the TypeScript, C# and Python cores are.

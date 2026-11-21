@@ -17,6 +17,7 @@ import 'dart:io';
 
 import 'package:ffi/ffi.dart';
 import 'package:fixnum/fixnum.dart';
+import 'package:pbwire/core/schema.dart' as core;
 import 'package:pbwire/pbwire.dart';
 
 import 'gen/matrix3.dart' as model;
@@ -41,6 +42,10 @@ void main(List<String> args) {
   final ty = schema.message('structtest.Scalars3');
   final innerTy = schema.message('structtest.Inner3');
 
+  // The pure-Dart core: same descriptor, no native library.
+  final coreSchema = core.Schema.fromBytes(File(args[0]).readAsBytesSync());
+  final coreType = coreSchema.message('structtest.Scalars3');
+
   // The shim arm: the same payload as a flat layout image, one FFI call per op.
   final layoutSchema = PbwLayoutSchema.load(args[0]);
   // Children register first: the parent's message row resolves it by name.
@@ -64,6 +69,25 @@ void main(List<String> args) {
     final got = message.encode();
     if (!_equals(got, reference)) {
       _fail(label, 'pbwire-dart wrote ${got.length} bytes, protobuf-dart ${reference.length}');
+      continue;
+    }
+    // The core arm's native object, built once per tier like the others.
+    final coreMsg = core.fromObject(coreType.def, _corePayload(n));
+    final coreBytes = coreType.encode(coreMsg);
+    if (!_equals(coreBytes, reference)) {
+      _fail(label,
+          'pbwire-dart-core wrote ${coreBytes.length} bytes, protobuf-dart ${reference.length}');
+      continue;
+    }
+    final coreBack = coreType.decode(reference);
+    final coreBackOk = _equals(coreType.encode(coreBack), reference) &&
+        core.getField(coreBack, 'str') == 'hello' &&
+        core.getField(core.getField(coreBack, 'inner') as core.Msg, 'name') ==
+            'kid' &&
+        ((core.getField(coreBack, 'nums') as List<Object?>?)?.length ?? 0) == n;
+    if (!coreBackOk) {
+      _fail(label, 'pbwire-dart-core decode differs');
+      message.close();
       continue;
     }
     final image = _fillLayout(imageArena, n);
@@ -93,6 +117,8 @@ void main(List<String> args) {
     final tierCount = _calibrate(() => message.encode(), count);
     final encode = _measure(count, () => message.encode());
     final decode = _measure(count, () => ty.decode(reference)..close());
+    final coreEncode = _measure(count, () => coreType.encode(coreMsg));
+    final coreDecode = _measure(count, () => coreType.decode(reference));
     final out = calloc<ffi.Uint8>(ffi.sizeOf<model.Scalars3Layout>()).cast<model.Scalars3Layout>();
     final decodeArena = PbwArena(reference.length);
     double shimEncode;
@@ -116,9 +142,11 @@ void main(List<String> args) {
         '${'ns/op'.padLeft(12)} ${'MB/s'.padLeft(10)}');
     _row('pbwire-dart-tree', 'encode', reference.length, encode);
     _row('pbwire-dart-shim', 'encode', reference.length, shimEncode);
+    _row('pbwire-dart-core', 'encode', reference.length, coreEncode);
     _row('protobuf-dart', 'encode', reference.length, officialEncode);
     _row('pbwire-dart-tree', 'decode', reference.length, decode);
     _row('pbwire-dart-shim', 'decode', reference.length, shimDecode);
+    _row('pbwire-dart-core', 'decode', reference.length, coreDecode);
     _row('protobuf-dart', 'decode', reference.length, officialDecode);
     stdout.writeln();
     message.close();
@@ -132,6 +160,35 @@ void main(List<String> args) {
     exit(1);
   }
 }
+
+/// The core arm's payload as a plain Dart map (proto field names, BigInt for
+/// the 64-bit kinds); one build per measured op, like the other arms' objects.
+Map<String, Object?> _corePayload(int n) => <String, Object?>{
+      'i32': -2147483648,
+      'i64': BigInt.parse('9223372036854775807'),
+      'u32': 4294967295,
+      'u64': BigInt.parse('18446744073709551615'),
+      's32': -2147483648,
+      's64': BigInt.parse('-9223372036854775808'),
+      'fx32': 0xdeadbeef,
+      'fx64': BigInt.parse('72623859790382856'),
+      'sfx32': -2147483648,
+      'sfx64': BigInt.parse('-9223372036854775808'),
+      'f32': double.infinity,
+      'f64': -123456.789,
+      'flag': true,
+      'str': 'hello',
+      'color': 2,
+      'opt_i32': -7,
+      'opt_str': 'opt',
+      'inner': <String, Object?>{'name': 'kid', 'value': 42},
+      'nums': <Object?>[for (var i = 0; i < n; i++) i - 3],
+      'tags': <Object?>[for (var i = 0; i < n; i++) 'tag'],
+      'inners': <Object?>[
+        for (var i = 0; i < n; i++) <String, Object?>{'name': 'grandkid', 'value': i + 1}
+      ],
+      'flags': <Object?>[for (var i = 0; i < n; i++) i % 2 == 0],
+    };
 
 proto.Scalars3 _fillOfficial(int n) => proto.Scalars3(
       i32: -2147483648,
