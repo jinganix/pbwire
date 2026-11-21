@@ -76,9 +76,38 @@ x3000). Copied from [BENCHMARKS.md](../../BENCHMARKS.md), which is the single
 source for all performance numbers; higher is better, MB/s over wire bytes.
 
 `pbench/` is the three-arm contract: `tree` (dynamic handle, whole task),
-`shim` (flat layout image), `core` (`n/a`, plan 19). Run `pbench/setup.sh`,
-then `julia --project=runtime pbench/gate.jl` (byte/field gate) and
-`compare.jl` (interleaved median table).
+`shim` (flat layout image), `core` (the pure-Julia codec below). Run
+`pbench/setup.sh`, then `julia --project=runtime pbench/gate.jl` (byte/field
+gate) and `compare.jl` (interleaved median table).
+
+## Pure-Julia core (no native library)
+
+`runtime/src/PbwireCore.jl` + `runtime/src/core/` is a second, independent
+implementation: descriptor reader, `Message` tree, wire primitives, encoder and
+a decoder with unknown retention, groups, packed runs, oneofs, presence and
+limits -- stdlib only, no `ccall`, no generated code, no `.proto` parser. It is
+the arm for hosts that cannot build or load the C core; the `ccall` runtime
+above stays the shipped fast path.
+
+```julia
+include("bindings/julia/runtime/src/PbwireCore.jl")
+using .PbwireCore
+
+schema = from_file("bindings/c/tests/data/matrix3.desc")
+ty = msgtype(schema, "structtest.Scalars3")
+m = decode(ty, wire)        # unknown fields retained, strings stay slices
+@assert encode(m) == wire   # byte-exact round trip
+@assert to_dict(m)["nums"] == Any[1, -5, 300]
+```
+
+The official binary suite proves it: `make conformance-julia-core` reports
+1412 successes, 1403 skipped (JSON/text are out of this arm's scope), 2
+expected failures, 0 unexpected -- the same failure set as the C core and the
+TypeScript, C#, Python and Dart ports. `bindings/julia/tests/core/` holds the
+234-check gate (`make julia-test` runs it), and `BENCHMARKS.md` carries the
+`pbwire-julia-core` row: above ProtoBuf.jl on the 74 KB encode, below it on the
+small tiers and every decode (the `Dict` <-> tree conversion an interpreter
+pays). Published as the no-native arm, never the headline.
 
 Strings cross as NUL-terminated C strings, so `set_string!` rejects embedded
 NUL bytes: use `set_bytes!` for binary payloads (a `string` field accepts them

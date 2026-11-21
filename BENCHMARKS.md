@@ -297,7 +297,7 @@ payload, the boundary cost and the baseline all differ.
 | Zig | static link | 74913 B | 1736.2 (2.07x ✅) `tree`; native-object `shim` 1202.7 (1.44x ✅) | 741.8 (2.23x ✅) `tree`; `shim` 751.0 (2.26x ✅) |
 | F# | P/Invoke over the C# runtime | 74913 B | 1617.7 (3.36x ✅) `tree`; `shim` 58.3 (0.12x ❌) | 734.1 (1.49x ✅) `tree`; `shim` 48.9 (0.10x ❌) |
 | Clojure | the Java runtime + interop | 74913 B | 974.8 (1.12x ✅) | 718.2 (1.66x ✅) |
-| Julia | `dlopen` + `ccall` | 74913 B | 1653.0 (137.75x ✅) `tree`; native-object `shim` 1154.4 (96.20x ✅) | 761.6 (1.08x ✅) `tree`; `shim` 783.6 (1.11x ✅) |
+| Julia | `dlopen` + `ccall` | 74913 B | 1653.0 (137.75x ✅) `tree`; native-object `shim` 1154.4 (96.20x ✅); pure-Julia `core` 22.1 (1.83x ✅ at the 74 KB encode, 0.03x decode) | 761.6 (1.08x ✅) `tree`; `shim` 783.6 (1.11x ✅); pure-Julia `core` 22.5 (0.03x ❌) |
 | R | C extension, named lists | 74913 B | 1089.6 (400.04x ✅) `tree`; native-object `shim` 137.3 (50.42x ✅) | 288.1 (106.29x ✅) `tree`; `shim` 122.7 (45.27x ✅) |
 
 Read it as: the in-process dynamic core sets the pace (1.38x the C++
@@ -1728,6 +1728,38 @@ path on the 136 B tier, leads by 11% on 174 B and 1-8% on the larger tiers,
 where the arena reset now keeps the used chunk prefix instead of re-mallocing
 it every decode. The tree it returns is read-only and dies at the
 next `decode_in`/`reset!` on that context.
+
+The third arm is the pure-Julia core (`bindings/julia/runtime/src/core/`,
+`make conformance-julia-core`): descriptor reader, tree, encoder and decoder in
+stdlib-only Julia, no `ccall`, no native library, no generated code. Formal
+`make julia-bench`, same run (`results/bench-julia-20261121T020057Z.json`,
+2026-11-21), MB/s and the ratio against ProtoBuf.jl in that run:
+
+| payload | op | pbwire-julia-core (MB/s) | x ProtoBuf.jl |
+|---|---|---|---|
+| 136 B | encode | 52.7 | 0.14x ❌ |
+| 136 B | decode | 164.6 | 0.15x ❌ |
+| 174 B | encode | 25.8 | 0.08x ❌ |
+| 174 B | decode | 46.8 | 0.06x ❌ |
+| 2469 B | encode | 21.7 | 0.17x ❌ |
+| 2469 B | decode | 23.5 | 0.04x ❌ |
+| 74913 B | encode | 22.1 | 1.83x ✅ |
+| 74913 B | decode | 22.5 | 0.03x ❌ |
+
+The in-language codec wins the one cell where the baseline wastes work: at
+74 KB the generated Julia encoder re-derives every field's size before writing,
+while this one writes fused tag+value pairs into one reusable buffer, so it is
+1.83x the baseline encode. Every other cell is the price of the portable path:
+the published rows convert a plain `Dict` to the tree (encode) or materialize
+the whole dict (decode), and that per-field conversion, not the wire walk, is
+what an interpreter pays -- `from_dict`/`to_dict` walk a `Vector{Any}` slot
+table, decoded strings stay `Raw` slices until read, and ProtoBuf.jl's
+generated decoder writes straight into typed struct fields. The official binary
+suite is green through it (`make conformance-julia-core`: 1412 successes, 1403
+skipped for JSON/text, 2 expected failures, 0 unexpected), which is the bar for
+publishing the row. The verdict and the Stage 6 decision are in
+`bindings/julia/pbench/README.md` and `docs/perf-attempts.md`: the core is the
+no-native-library arm, never the headline.
 
 ### R (C extension, named lists) vs RProtoBuf
 

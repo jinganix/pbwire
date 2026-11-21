@@ -176,8 +176,11 @@ so it is also the row that exists on dart2js/dart2wasm).
 
 Julia has all three: `tree` is the prebuilt `Message` handle, `shim` is the
 generated mutable `<Message>Layout` read in place by
-`bindings/julia/native/pbw_julia_shim.c` (`pbwire-julia-shim`), `core` waits
-on plan 19.
+`bindings/julia/native/pbw_julia_shim.c` (`pbwire-julia-shim`), and `core` is
+the pure-Julia codec of `bindings/julia/runtime/src/core/`
+(`pbwire-julia-core`: stdlib only, no `ccall`, no native library; it is above
+ProtoBuf.jl on the 74 KB encode and below it everywhere else, the price of the
+`Dict` <-> tree conversion in an interpreter).
 
 Rust has all three: `tree` is the prebuilt `Message` handle, `shim` is the
 generated `#[repr(C)]` `<Message>Flat` read in place by the C struct codec
@@ -245,7 +248,7 @@ throughput against the official runtime, copied from
 | Zig | `zig-protobuf` codegen per message, fragmented across forks | `@cImport`-free static link (`translate-c` + `libpbwire.a` compiled in); the generated `extern struct` mirror is read in place by the C struct codec, one call per op | 1.81x / 2.13x `tree`, 1.44x / 2.26x native-object `shim` (vs zig-protobuf) |
 | F# | .NET protobuf means C# SDK style even in F# code | facade over the C# project (`ProjectReference`, same P/Invoke core and the same one-call C reader) | 3.14x / 1.40x `tree` (vs Google.Protobuf; native-object `shim` 2.57x encode, 1.51x decode at 136 B, 0.69x decode at 74 KB) |
 | Clojure | protobuf-java interop per message, maps materialized per field | mutable-message fast path over the Java runtime (maps stay for convenience) | 1.16x / 1.77x (vs protobuf-java; mutable-message fast path; 0.75x encode at 136 B) |
-| Julia | `ProtoBuf.jl` is pure Julia, per-field interpreter overhead | `dlopen` + `ccall` FFI host (`FileDescriptorSet` at run time, `Dict` boundary); the generated layout image is read in place by a C-side reader (`bindings/julia/native/`), one `ccall` per op | 96.20x / 1.11x `shim` (vs ProtoBuf.jl; prebuilt `tree` handle 137.75x / 1.08x, 136 B shim decode 0.96x) |
+| Julia | `ProtoBuf.jl` is pure Julia, per-field interpreter overhead | `dlopen` + `ccall` FFI host (`FileDescriptorSet` at run time, `Dict` boundary); the generated layout image is read in place by a C-side reader (`bindings/julia/native/`), one `ccall` per op; the pure-Julia `core` (`runtime/src/core/`) is the no-native arm | 96.20x / 1.11x `shim` (vs ProtoBuf.jl; prebuilt `tree` handle 137.75x / 1.08x, 136 B shim decode 0.96x; pure-Julia `core` 1.83x encode / 0.03x decode at 74 KB, 0.14x / 0.15x at 136 B) |
 | R | `RProtoBuf` binds the C++ runtime per message | C extension over the core (`.Call`, named lists in/out, statically linked) | 61.5x / 66.6x (vs RProtoBuf) |
 | Lua | game servers hand tables to `pbc`/`lua-protobuf`, each with its own schema story | C module over the core: tables convert through the schema's arena, a builder tree is the write fast path | 1.08x / 1.33x (vs lua-protobuf; 7.65x via builder encode — data already in pbwire) |
 
