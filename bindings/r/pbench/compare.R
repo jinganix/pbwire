@@ -3,10 +3,13 @@
 #
 #   Rscript bindings/r/pbench/compare.R
 #
-# The ops are whole user tasks: `tree` encode is the prebuilt builder handle,
-# `tree` decode is wire -> builder tree; `shim` encode/decode is one .Call with
-# the named list in or out. The baseline is RProtoBuf, materialized into a plain
-# list on decode (the same task, see payload.R).
+# The ops are whole user tasks: `tree` encode builds a fresh builder per call
+# (message + set + encode) and `tree` decode parses plus reads fully back
+# (JSON print, folded into a sink); `shim` encode/decode is one .Call with
+# the named list in or out (documented-eager: the C walk in pbwr_decode_desc
+# / pbwr_message_sexp materializes every field before returning, so decode
+# needs no fold-sink -- see b-shim.R). The baseline is RProtoBuf, materialized
+# into a plain list on decode (the same task, see payload.R).
 
 source(file.path(dirname(sub(
   "^--file=", "",
@@ -47,10 +50,18 @@ for (tier in PB_TIERS) {
   repeats <- tier$repeats
   fix <- pbench_payload(repeats)
   wire <- shim_encode(fix)
-  tree <- tree_prepare(fix)
+  # The tree decode folds its JSON read-back into a sink so the
+  # materialization cannot be skipped; the sink total is printed per tier.
+  tree_sink <- new.env(parent = emptyenv())
+  tree_sink$n <- 0
+  tree_decode_sink <- function() {
+    j <- tree_decode_full(wire)
+    tree_sink$n <- tree_sink$n + nchar(j)
+    invisible(j)
+  }
   ops <- list(
-    "pbwire-r-tree" = list(encode = function() tree_encode(tree),
-                           decode = function() tree_decode(wire)),
+    "pbwire-r-tree" = list(encode = function() tree_encode_full(fix),
+                           decode = tree_decode_sink),
     "pbwire-r-shim" = list(encode = function() shim_encode(fix),
                            decode = function() shim_decode(wire)),
     "RProtoBuf" = list(encode = function() baseline$wire(repeats),
@@ -79,6 +90,8 @@ for (tier in PB_TIERS) {
         median(samples[[paste(impl, op)]])
     }
   }
+  cat(sprintf("  # %s tree decode sink: %d chars read back\n", label,
+              tree_sink$n))
 }
 
 cat("provisional: median of", ROUNDS, "interleaved rounds, ns/op and MB/s\n")

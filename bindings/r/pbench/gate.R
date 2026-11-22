@@ -56,15 +56,18 @@ for (tier in PB_TIERS) {
   }
   fix <- pbench_payload(repeats)
 
-  # tree: the prebuilt builder handle. Encode is one builder encode; decode is
-  # wire -> builder tree, and the tree re-encodes byte for byte.
-  tree <- tree_prepare(fix)
-  check(identical(tree_encode(tree), ref), paste(label, ": tree bytes differ"))
+  # tree: the shipped per-field full task through the builder handle. Encode
+  # builds a fresh builder per call (message + set + encode); decode parses
+  # to a builder and reads it fully back (JSON print, the shipped read-back
+  # path: builders have no per-field getters by design).
+  check(identical(tree_encode_full(fix), ref),
+        paste(label, ": tree bytes differ"))
+  check(identical(tree_decode_full(ref),
+                   pbwire_msg_to_json(tree_prepare(fix))),
+        paste(label, ": tree decode does not print like the source tree"))
   tree_back <- tree_decode(ref)
   check(identical(tree_encode(tree_back), ref),
         paste(label, ": tree re-encode differs"))
-  check(identical(pbwire_msg_to_json(tree_back), pbwire_msg_to_json(tree)),
-        paste(label, ": tree decode does not print like the source tree"))
 
   # shim: the named list in and out through one .Call.
   check(identical(shim_encode(fix), ref),
