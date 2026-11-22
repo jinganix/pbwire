@@ -5,6 +5,27 @@
 # nested message, the proto3 optionals, and the repeated fields scaled
 # x0 / x1 / x100 / x3000 (136 / 174 / 2469 / 74913 bytes).
 #
+# Four pbwire rows, named by the mechanism they time. The first two time the
+# same native-in/native-out task; the third is the prebuilt handle:
+#
+#   pbwire-ruby-tree   a native model in and out through the shipped
+#                        per-field facade: Structtest_Scalars3.encode(obj)
+#                        builds a Message with one set per field, then encodes;
+#                        .decode(wire) reads one get per field back into a fresh
+#                        model (the pbench a-tree arm). The model is built fresh
+#                        per iteration and every gate-checked field is read back
+#                        inside the timer. No prebuilt handle before the timer.
+#   pbwire-ruby-shim   the same model in and out in one C-extension entry per
+#                        op: encode_object walks the model's ivars in C,
+#                        decode_object materializes the models in C. Encode
+#                        reuses the app-owned model across iterations (the
+#                        steady-state carve-out); decode materializes a fresh
+#                        model per call inside the timer.
+#   pbwire-ruby-proxy  encode/decode of a Message handle built before the
+#                        timer: re-encode a held handle, decode-and-free with no
+#                        materialization. The codec's own cost once the tree
+#                        exists. Published, never the headline.
+#
 # Both sides build the same tree and must produce identical bytes before
 # anything is timed.
 #
@@ -178,6 +199,26 @@ def fail(label, what)
   $failures += 1
 end
 
+# Live sink for the tree decode timer: every gate-checked field is folded in
+# so the read-back cannot be skipped. Same field list the parity checks below
+# assert (str, inner name/value, repeated lengths and last elements, the
+# proto3 optionals, u64, color, plus every scalar the re-encode covers).
+$sink = 0
+
+def consume_tree(back, repeats)
+  acc = back.i32 + back.i64 + back.u32 + back.u64 + back.s32 + back.s64 +
+        back.fx32 + back.fx64 + back.sfx32 + back.sfx64 +
+        (back.flag ? 1 : 0) + back.str.length + back.color +
+        back.inner.name.length + back.inner.value +
+        back.nums.length + back.tags.length + back.inners.length + back.flags.length +
+        back.opt_i32 + back.opt_str.length +
+        back.f32.to_s.length + back.f64.to_s.length +
+        (repeats.zero? ? 0 : back.nums.last + back.inners.last.value +
+         (back.flags.last ? 1 : 0))
+  $sink = ($sink + acc) & 0xFFFFFFFFFFFFFFFF
+  back
+end
+
 schema = Pbwire::Schema.from_file(File.expand_path('gen/matrix3.desc', __dir__))
 shim_type = schema.type('structtest.Scalars3')
 
@@ -197,6 +238,32 @@ CASES.each do |label, repeats, want, iterations|
     fail(label, 'pbwire-ruby-shim and google-protobuf encode differently')
     next
   end
+  # The tree arm is gated before it is timed: the same bytes through the
+  # per-field full task, the same fields back, byte-exact round trip of the
+  # materialized model. Mirrors pbench Payload.tree_encode/tree_decode.
+  unless Pbwire::Gen::Structtest_Scalars3.encode(model) == reference
+    fail(label, 'pbwire-ruby-tree and google-protobuf encode differently')
+    next
+  end
+  tree_back = Pbwire::Gen::Structtest_Scalars3.decode(reference)
+  tree_ok = (Pbwire::Gen::Structtest_Scalars3.encode(tree_back) == reference) &&
+            tree_back.str == 'hello' &&
+            tree_back.inner.name == 'kid' &&
+            tree_back.inner.value == 42 &&
+            tree_back.nums.length == repeats &&
+            tree_back.tags.length == repeats &&
+            tree_back.inners.length == repeats &&
+            tree_back.flags.length == repeats &&
+            (repeats.zero? || tree_back.inners[repeats - 1].value == repeats) &&
+            tree_back.opt_i32 == -7 &&
+            tree_back.opt_str == 'opt' &&
+            tree_back.u64 == 18_446_744_073_709_551_615 &&
+            tree_back.color == 2
+  unless tree_ok
+    fail(label, 'pbwire-ruby-tree decode differs')
+    next
+  end
+  consume_tree(tree_back, repeats)
   shim_back = shim_type.decode_object(reference, MODEL_CLASSES)
   unless Pbwire::Gen::Structtest_Scalars3.encode(shim_back) == reference &&
          shim_back.inner.name == 'kid' &&
@@ -209,7 +276,8 @@ CASES.each do |label, repeats, want, iterations|
     next
   end
   decoder = schema.message('structtest.Scalars3')
-  # Decode must round-trip byte-exactly and expose the same values.
+  # The prebuilt handle behind the proxy row: decode must round-trip
+  # byte-exactly (no materialization; the tree row covers the full task).
   back = decoder.decode(reference)
   back_ok = (back.encode == reference) &&
               back['str'] == 'hello' &&
@@ -226,16 +294,24 @@ CASES.each do |label, repeats, want, iterations|
   puts "OK   #{label} encoding parity (#{reference.bytesize} bytes)"
 
   official = fill_official(repeats)
+  # The count is calibrated on the prebuilt proxy op: every op calibrates
+  # independently from the floor, and the proxy op stays first so the printed
+  # count matches the old rows. Proxy rows are the old prebuilt task relabelled,
+  # not re-measured as a new task; same-run timing only, never the headline.
   ns, count = measure(iterations,
-                       'pbwire_encode' => -> { message.encode },
+                       'proxy_encode' => -> { message.encode },
+                       'tree_encode' => -> { Pbwire::Gen::Structtest_Scalars3.encode(fill_model(repeats)) },
                        'shim_encode' => -> { shim_type.encode_object(model) },
                        'gem_encode' => -> { Structtest::Scalars3.encode(official) },
-                       'pbwire_decode' => -> { decoder.decode(reference).close },
+                       'proxy_decode' => -> { decoder.decode(reference).close },
+                       'tree_decode' => -> { consume_tree(Pbwire::Gen::Structtest_Scalars3.decode(reference), repeats) },
                        'shim_decode' => -> { shim_type.decode_object(reference, MODEL_CLASSES) },
                        'gem_decode' => -> { Structtest::Scalars3.decode(reference) })
-  encode_ns = ns['pbwire_encode']
+  proxy_encode_ns = ns['proxy_encode']
+  encode_ns = ns['tree_encode']
   shim_encode_ns = ns['shim_encode']
-  decode_ns = ns['pbwire_decode']
+  proxy_decode_ns = ns['proxy_decode']
+  decode_ns = ns['tree_decode']
   shim_decode_ns = ns['shim_decode']
   official_encode_ns = ns['gem_encode']
   official_decode_ns = ns['gem_decode']
@@ -245,9 +321,11 @@ CASES.each do |label, repeats, want, iterations|
   puts format("  %-14s %-7s %12s %10s", 'impl', 'op', 'ns/op', 'MB/s')
   puts row('pbwire-ruby-tree', 'encode', reference.bytesize, encode_ns)
   puts row('pbwire-ruby-shim', 'encode', reference.bytesize, shim_encode_ns)
+  puts row('pbwire-ruby-proxy', 'encode', reference.bytesize, proxy_encode_ns)
   puts row('google-protobuf', 'encode', reference.bytesize, official_encode_ns)
   puts row('pbwire-ruby-tree', 'decode', reference.bytesize, decode_ns)
   puts row('pbwire-ruby-shim', 'decode', reference.bytesize, shim_decode_ns)
+  puts row('pbwire-ruby-proxy', 'decode', reference.bytesize, proxy_decode_ns)
   puts row('google-protobuf', 'decode', reference.bytesize, official_decode_ns)
   puts
 end

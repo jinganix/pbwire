@@ -38,7 +38,11 @@ def median(values)
 end
 
 # Ops are [impl, op, callable]. Each gets one count, then every round runs
-# every op once; the median per op wins.
+# every op once; the median per op wins. The tree arm times the full task:
+# encode builds a fresh native model per iteration, decode reads every
+# gate-checked field back (reads_ok? is the gate's own field list, so
+# gate and timer assert the same fields by construction). Shim encode reuses
+# the app-owned model across iterations (steady-state carve-out).
 def measure(ops, floor)
   counts = ops.map { |_, _, op| calibrate(op, floor) }
   counts.each_with_index { |count, i| ns_per_op(count, &ops[i][2]) }
@@ -84,7 +88,8 @@ Payload::TIERS.each do |tier|
        "(repeated fields x#{repeats})"
   puts format('  %-19s %-7s %12s %10s', 'impl', 'op', 'ns/op', 'MB/s')
   encode = measure([
-                     ['pbwire-ruby-tree', 'encode', -> { TreeArm.marshal(obj) }],
+                     ['pbwire-ruby-tree', 'encode',
+                      -> { TreeArm.marshal(Payload.object(repeats)) }],
                      ['pbwire-ruby-shim', 'encode', -> { ShimArm.marshal(obj) }],
                      ['google-protobuf', 'encode',
                       -> { Structtest::Scalars3.encode(official) }]
@@ -92,7 +97,8 @@ Payload::TIERS.each do |tier|
   encode.each { |impl, op, ns| puts row(impl, op, bytes, ns) }
 
   decode = measure([
-                     ['pbwire-ruby-tree', 'decode', -> { TreeArm.unmarshal(ref) }],
+                     ['pbwire-ruby-tree', 'decode',
+                      -> { Payload.reads_ok?(TreeArm.unmarshal(ref), repeats) }],
                      ['pbwire-ruby-shim', 'decode', -> { ShimArm.unmarshal(ref) }],
                      ['google-protobuf', 'decode',
                       -> { Structtest::Scalars3.decode(ref) }]
