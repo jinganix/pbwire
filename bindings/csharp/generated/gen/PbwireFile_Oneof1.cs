@@ -52,6 +52,19 @@ namespace Spectest {
             "AxAECQoMCgUEAAIDARIDEAoPCgwKBQQAAgMDEgMQEhNiBnByb3RvMw==");
         }
 
+        /// <summary>The embedded descriptor set, for the native flat-image reader.</summary>
+        public static byte[] DescriptorSetBytes() { return Convert.FromBase64String(DescBase64()); }
+
+        private static global::Pbwire.LayoutSource? _layouts;
+        /// <summary>Every flat layout in this file: the native reader resolves sub-messages here.</summary>
+        /// <remarks>Built on first use: a static field would reach a layout's Type (and so this holder) while this type is still initializing.</remarks>
+        public static global::Pbwire.LayoutSource Layouts => _layouts ??= new global::Pbwire.LayoutSource(
+            "PbwireFile_Oneof1", DescriptorSetBytes,
+            new global::Pbwire.LayoutType[] {
+                Oneof1.Types.Inner.InnerLayout.Spec,
+                Oneof1.Oneof1Layout.Spec,
+            });
+
         /// <summary>Every message in this file, for whole-schema pre-registration.</summary>
         public static readonly string[] MessageNames = {
             "spectest.Oneof1.Inner",

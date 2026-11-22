@@ -3,6 +3,8 @@
 // Do not edit; regenerate from the .proto instead.
 
 import 'dart:typed_data';
+import 'dart:ffi' as ffi;
+import 'package:ffi/ffi.dart' as ffi;
 
 import 'package:protobuf/protobuf.dart' as $pb;
 import 'package:pbwire/pbwire.dart';
@@ -91,6 +93,25 @@ class Person_PhoneNumber {
   }
 }
 
+
+/// tutorial.Person.PhoneNumber as a flat `dart:ffi` image: the native object the layout codec
+/// reads and writes in one call.
+final class Person_PhoneNumberLayout extends ffi.Struct {
+  external ffi.Pointer<ffi.Utf8> number;
+  @ffi.Int32() external int type_;
+  @ffi.Int32() external int hasType;
+  static int get layoutSize => ffi.sizeOf<Person_PhoneNumberLayout>();
+}
+
+/// Byte offset of each field's value slot of tutorial.Person.PhoneNumber, in descriptor order.
+const List<int> person_PhoneNumberLayoutOffsets = <int>[0, 8];
+/// Field numbers matching [person_PhoneNumberLayoutOffsets].
+const List<int> person_PhoneNumberLayoutNumbers = <int>[1, 2];
+/// tutorial.Person.PhoneNumber's layout rows: the flat image the native reader consumes.
+const List<PbwField> person_PhoneNumberLayoutRows = <PbwField>[
+  PbwField(number: 1, kind: PbwKind.string_, offset: 0, required: true, type: 9, wire: 2),
+  PbwField(number: 2, kind: PbwKind.enumeration, offset: 8, has: 12, type: 14, wire: 0),
+];
 /// tutorial.Person
 class Person {
   Person._();
@@ -178,6 +199,30 @@ class Person {
   }
 }
 
+
+/// tutorial.Person as a flat `dart:ffi` image: the native object the layout codec
+/// reads and writes in one call.
+final class PersonLayout extends ffi.Struct {
+  external ffi.Pointer<ffi.Utf8> name;
+  @ffi.Int32() external int id;
+  @ffi.Int32() external int hasId;
+  external ffi.Pointer<ffi.Utf8> email;
+  external ffi.Pointer<Person_PhoneNumberLayout> phones;
+  @ffi.IntPtr() external int phonesCount;
+  static int get layoutSize => ffi.sizeOf<PersonLayout>();
+}
+
+/// Byte offset of each field's value slot of tutorial.Person, in descriptor order.
+const List<int> personLayoutOffsets = <int>[0, 8, 16, 24];
+/// Field numbers matching [personLayoutOffsets].
+const List<int> personLayoutNumbers = <int>[1, 2, 3, 4];
+/// tutorial.Person's layout rows: the flat image the native reader consumes.
+const List<PbwField> personLayoutRows = <PbwField>[
+  PbwField(number: 1, kind: PbwKind.string_, offset: 0, required: true, type: 9, wire: 2),
+  PbwField(number: 2, kind: PbwKind.int32, offset: 8, has: 12, required: true, type: 5, wire: 0),
+  PbwField(number: 3, kind: PbwKind.string_, offset: 16, type: 9, wire: 2),
+  PbwField(number: 4, kind: PbwKind.message, offset: 24, repeated: true, count: 32, child: 'tutorial.Person.PhoneNumber', type: 11, wire: 2),
+];
 /// tutorial.AddressBook
 class AddressBook {
   AddressBook._();
@@ -235,3 +280,20 @@ class AddressBook {
   }
 }
 
+
+/// tutorial.AddressBook as a flat `dart:ffi` image: the native object the layout codec
+/// reads and writes in one call.
+final class AddressBookLayout extends ffi.Struct {
+  external ffi.Pointer<PersonLayout> people;
+  @ffi.IntPtr() external int peopleCount;
+  static int get layoutSize => ffi.sizeOf<AddressBookLayout>();
+}
+
+/// Byte offset of each field's value slot of tutorial.AddressBook, in descriptor order.
+const List<int> addressBookLayoutOffsets = <int>[0];
+/// Field numbers matching [addressBookLayoutOffsets].
+const List<int> addressBookLayoutNumbers = <int>[1];
+/// tutorial.AddressBook's layout rows: the flat image the native reader consumes.
+const List<PbwField> addressBookLayoutRows = <PbwField>[
+  PbwField(number: 1, kind: PbwKind.message, offset: 0, repeated: true, count: 8, child: 'tutorial.Person', type: 11, wire: 2),
+];

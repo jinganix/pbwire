@@ -28,6 +28,27 @@ pbwire_encode <- function(schema, type, msg) {
   .Call("pbwr_encode", schema, type, msg, PACKAGE = "pbwire")
 }
 
+## The type resolved once per schema: `pbwire_type_number` hands out a slot
+## number and `pbwire_encode_number` / `pbwire_decode_number` take it, so a hot
+## loop does not look the type name up on every call. Same C list walk, in the
+## generated model's `Type_encode(list)` shape.
+pbwire_type_number <- function(schema, type) {
+  .Call("pbwr_type_number", schema, type, PACKAGE = "pbwire")
+}
+
+pbwire_encode_number <- function(schema, number, msg) {
+  .Call("pbwr_encode_number", schema, number, msg, PACKAGE = "pbwire")
+}
+
+pbwire_decode_number <- function(schema, number, wire, limits = NULL) {
+  .Call("pbwr_decode_number", schema, number, wire, limits, PACKAGE = "pbwire")
+}
+
+## shortcut: no pure-R core, reopen when a native-less R target appears. A
+## pure-R engine would walk every field through the interpreter (orders of
+## magnitude off), and there is no R deployment that cannot load this
+## extension, so the C core stays the only wire implementation here.
+
 pbwire_decode <- function(schema, type, wire, limits = NULL) {
   .Call("pbwr_decode", schema, type, wire, limits, PACKAGE = "pbwire")
 }

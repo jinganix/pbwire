@@ -5,6 +5,8 @@
 const std = @import("std");
 const pbwire = @import("pbwire");
 
+const FieldPlan = pbwire.FieldPlan;
+
 // structtest.Color3
 pub const Structtest_Color3 = enum(i32) {
     COLOR3_UNSPECIFIED = 0,
@@ -56,6 +58,28 @@ pub const Structtest_Inner3 = struct {
         return out;
     }
 };
+
+
+/// structtest.Inner3 as a flat native image: one C struct-codec call reads and writes it in
+/// place. Every offset below is asserted at comptime.
+pub const Inner3Mirror = extern struct {
+    name: ?[*:0]const u8 = null,
+    value: i32 = 0,
+
+    /// Field plan rows: slot offset and has/count/oneof offsets. The
+    /// comptime block below proves every offset.
+    pub const fields = [_]FieldPlan{
+        .{ .number = 1, .kind = .string, .offset = 0 },
+        .{ .number = 2, .kind = .int32, .offset = 8 },
+    };
+    pub const plan = pbwire.InPlace(@This(), "structtest.Inner3", &fields);
+};
+
+comptime {
+    std.debug.assert(@offsetOf(Inner3Mirror, "name") == 0);
+    std.debug.assert(@offsetOf(Inner3Mirror, "value") == 8);
+    std.debug.assert(@sizeOf(Inner3Mirror) == 16);
+}
 
 // structtest.Scalars3
 pub const Structtest_Scalars3 = struct {
@@ -323,4 +347,96 @@ pub const Structtest_Scalars3 = struct {
         return out;
     }
 };
+
+
+/// structtest.Scalars3 as a flat native image: one C struct-codec call reads and writes it in
+/// place. Every offset below is asserted at comptime.
+pub const Scalars3Mirror = extern struct {
+    i32: i32 = 0,
+    i64: i64 = 0,
+    u32: u32 = 0,
+    u64: u64 = 0,
+    s32: i32 = 0,
+    s64: i64 = 0,
+    fx32: u32 = 0,
+    fx64: u64 = 0,
+    sfx32: i32 = 0,
+    sfx64: i64 = 0,
+    f32: f32 = 0,
+    f64: f64 = 0,
+    flag: u8 = 0,
+    str: ?[*:0]const u8 = null,
+    color: i32 = 0,
+    inner: ?*Inner3Mirror = null,
+    nums: ?[*]i32 = null,
+    nums_count: usize = 0,
+    tags: ?[*]?[*:0]const u8 = null,
+    tags_count: usize = 0,
+    inners: ?[*]Inner3Mirror = null,
+    inners_count: usize = 0,
+    opt_i32: i32 = 0,
+    has_opt_i32: i32 = 0,
+    opt_str: ?[*:0]const u8 = null,
+    flags: ?[*]u8 = null,
+    flags_count: usize = 0,
+
+    /// Field plan rows: slot offset and has/count/oneof offsets. The
+    /// comptime block below proves every offset.
+    pub const fields = [_]FieldPlan{
+        .{ .number = 1, .kind = .int32, .offset = 0 },
+        .{ .number = 2, .kind = .int64, .offset = 8 },
+        .{ .number = 3, .kind = .uint32, .offset = 16 },
+        .{ .number = 4, .kind = .uint64, .offset = 24 },
+        .{ .number = 5, .kind = .sint32, .offset = 32 },
+        .{ .number = 6, .kind = .sint64, .offset = 40 },
+        .{ .number = 7, .kind = .fixed32, .offset = 48 },
+        .{ .number = 8, .kind = .fixed64, .offset = 56 },
+        .{ .number = 9, .kind = .sfixed32, .offset = 64 },
+        .{ .number = 10, .kind = .sfixed64, .offset = 72 },
+        .{ .number = 11, .kind = .float, .offset = 80 },
+        .{ .number = 12, .kind = .double, .offset = 88 },
+        .{ .number = 13, .kind = .boolean, .offset = 96 },
+        .{ .number = 14, .kind = .string, .offset = 104 },
+        .{ .number = 15, .kind = .enumeration, .offset = 112 },
+        .{ .number = 16, .kind = .message, .offset = 120, .child = pbwire.ChildPlan{ .full_name = "structtest.Inner3", .fields = &Inner3Mirror.fields, .size = @sizeOf(Inner3Mirror) } },
+        .{ .number = 17, .kind = .int32, .repeated = true, .is_packed = true, .offset = 128, .count = 136 },
+        .{ .number = 18, .kind = .string, .repeated = true, .offset = 144, .count = 152 },
+        .{ .number = 19, .kind = .message, .repeated = true, .offset = 160, .count = 168, .child = pbwire.ChildPlan{ .full_name = "structtest.Inner3", .fields = &Inner3Mirror.fields, .size = @sizeOf(Inner3Mirror) } },
+        .{ .number = 20, .kind = .int32, .offset = 176, .has = 180 },
+        .{ .number = 21, .kind = .string, .offset = 184 },
+        .{ .number = 22, .kind = .boolean, .repeated = true, .is_packed = true, .offset = 192, .count = 200 },
+    };
+    pub const plan = pbwire.InPlace(@This(), "structtest.Scalars3", &fields);
+};
+
+comptime {
+    std.debug.assert(@offsetOf(Scalars3Mirror, "i32") == 0);
+    std.debug.assert(@offsetOf(Scalars3Mirror, "i64") == 8);
+    std.debug.assert(@offsetOf(Scalars3Mirror, "u32") == 16);
+    std.debug.assert(@offsetOf(Scalars3Mirror, "u64") == 24);
+    std.debug.assert(@offsetOf(Scalars3Mirror, "s32") == 32);
+    std.debug.assert(@offsetOf(Scalars3Mirror, "s64") == 40);
+    std.debug.assert(@offsetOf(Scalars3Mirror, "fx32") == 48);
+    std.debug.assert(@offsetOf(Scalars3Mirror, "fx64") == 56);
+    std.debug.assert(@offsetOf(Scalars3Mirror, "sfx32") == 64);
+    std.debug.assert(@offsetOf(Scalars3Mirror, "sfx64") == 72);
+    std.debug.assert(@offsetOf(Scalars3Mirror, "f32") == 80);
+    std.debug.assert(@offsetOf(Scalars3Mirror, "f64") == 88);
+    std.debug.assert(@offsetOf(Scalars3Mirror, "flag") == 96);
+    std.debug.assert(@offsetOf(Scalars3Mirror, "str") == 104);
+    std.debug.assert(@offsetOf(Scalars3Mirror, "color") == 112);
+    std.debug.assert(@offsetOf(Scalars3Mirror, "inner") == 120);
+    std.debug.assert(@offsetOf(Scalars3Mirror, "nums") == 128);
+    std.debug.assert(@offsetOf(Scalars3Mirror, "nums_count") == 136);
+    std.debug.assert(@offsetOf(Scalars3Mirror, "tags") == 144);
+    std.debug.assert(@offsetOf(Scalars3Mirror, "tags_count") == 152);
+    std.debug.assert(@offsetOf(Scalars3Mirror, "inners") == 160);
+    std.debug.assert(@offsetOf(Scalars3Mirror, "inners_count") == 168);
+    std.debug.assert(@offsetOf(Scalars3Mirror, "opt_i32") == 176);
+    std.debug.assert(@offsetOf(Scalars3Mirror, "has_opt_i32") == 180);
+    std.debug.assert(@offsetOf(Scalars3Mirror, "opt_str") == 184);
+    std.debug.assert(@offsetOf(Scalars3Mirror, "flags") == 192);
+    std.debug.assert(@offsetOf(Scalars3Mirror, "flags_count") == 200);
+    std.debug.assert(@sizeOf(Scalars3Mirror) == 208);
+}
 

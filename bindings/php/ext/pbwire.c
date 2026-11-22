@@ -56,6 +56,7 @@ typedef struct {
     zval schema_zv; /* Pbwire\Schema, kept alive */
     const pbw_descriptor *desc;
     zval fields;    /* php array: name -> Pbwire\Field, resolved once */
+    pbw_ctx *array_ctx; /* scratch arena/buffer for the one-call array entry */
     zend_object std;
 } type_obj;
 
@@ -543,6 +544,7 @@ static zend_object *type_create_obj(zend_class_entry *ce) {
     ZVAL_UNDEF(&o->schema_zv);
     ZVAL_UNDEF(&o->fields);
     o->desc = NULL;
+    o->array_ctx = NULL;
     return &o->std;
 }
 
@@ -556,6 +558,10 @@ static void type_free(zend_object *o) {
     }
     if (Z_TYPE(t->fields) == IS_ARRAY) {
         zval_ptr_dtor(&t->fields);
+    }
+    if (t->array_ctx != NULL) {
+        pbw_ctx_free(t->array_ctx);
+        t->array_ctx = NULL;
     }
     zend_object_std_dtor(&t->std);
 }
@@ -618,6 +624,420 @@ static const pbw_field *type_field_cached(zval *type_zv, const char *name,
     return f;
 }
 
+/* ------------------------------------------------------- array entry walk */
+
+/* One PHP array in the generated model's shape -> a C tree, all inside one
+ * extension call. The array is not a flat memory image: each descriptor field
+ * is looked up with zend_hash_str_find and the nested message / repeated list
+ * is walked recursively in C. A string value reuses the zend_string the array
+ * already holds; nothing is copied into a temporary PHP string. */
+#define PBWIRE_ARRAY_MAX_DEPTH 64
+
+static int array_is_message_type(pbw_type type) {
+    return type == PBW_TYPE_MESSAGE || type == PBW_TYPE_GROUP;
+}
+
+/* One scratch context per Type: reset per call, so steady use stops paying a
+ * context malloc/free and keeps the arena chunks and encode buffer. */
+static pbw_ctx *type_array_ctx(type_obj *t) {
+    if (t->array_ctx == NULL) {
+        t->array_ctx = pbw_ctx_new();
+    }
+    return t->array_ctx;
+}
+
+static int array_bad_field(const pbw_field *field, const char *what) {
+    char buf[320];
+
+    snprintf(buf, sizeof buf, "field %s: %s", pbw_field_name(field), what);
+    throw_error(buf);
+    return -1;
+}
+
+/* uint64/fixed64: a PHP int up to PHP_INT_MAX, or the full decimal string.
+ * A negative int would be a bit pattern, not the value, so it is rejected
+ * instead of truncated. */
+static int array_uint64(zval *zv, uint64_t *out) {
+    if (Z_TYPE_P(zv) == IS_LONG) {
+        zend_long n = Z_LVAL_P(zv);
+
+        if (n < 0) {
+            throw_error("uint64 must be a non-negative integer or a decimal string");
+            return -1;
+        }
+        *out = (uint64_t)n;
+        return 0;
+    }
+    if (Z_TYPE_P(zv) == IS_STRING) {
+        const char *s = Z_STRVAL_P(zv);
+        size_t len = Z_STRLEN_P(zv);
+        uint64_t acc = 0;
+
+        if (len == 0) {
+            throw_error("uint64 decimal string is empty");
+            return -1;
+        }
+        for (size_t i = 0; i < len; i++) {
+            unsigned digit;
+
+            if (s[i] < '0' || s[i] > '9') {
+                throw_error("uint64 must be a decimal string");
+                return -1;
+            }
+            digit = (unsigned)(s[i] - '0');
+            if (acc > (UINT64_MAX - digit) / 10) {
+                throw_error("uint64 decimal string overflows");
+                return -1;
+            }
+            acc = acc * 10 + digit;
+        }
+        *out = acc;
+        return 0;
+    }
+    throw_error("uint64 must be a non-negative integer or a decimal string");
+    return -1;
+}
+
+static int array_scalar_value(zval *zv, const pbw_field *field, pbw_ctx *ctx,
+                              pbw_value **out) {
+    pbw_type type = pbw_field_type(field);
+    uint64_t bits = 0;
+
+    *out = NULL;
+    switch (type) {
+    case PBW_TYPE_DOUBLE: {
+        double d;
+
+        if (Z_TYPE_P(zv) != IS_DOUBLE && Z_TYPE_P(zv) != IS_LONG) {
+            return array_bad_field(field, "expected a number");
+        }
+        d = zval_get_double(zv);
+        memcpy(&bits, &d, sizeof bits);
+        break;
+    }
+    case PBW_TYPE_FLOAT: {
+        float f;
+        uint32_t ubits;
+
+        if (Z_TYPE_P(zv) != IS_DOUBLE && Z_TYPE_P(zv) != IS_LONG) {
+            return array_bad_field(field, "expected a number");
+        }
+        f = (float)zval_get_double(zv);
+        memcpy(&ubits, &f, sizeof ubits);
+        bits = ubits;
+        break;
+    }
+    case PBW_TYPE_BOOL:
+        if (Z_TYPE_P(zv) != IS_TRUE && Z_TYPE_P(zv) != IS_FALSE) {
+            return array_bad_field(field, "expected a bool");
+        }
+        bits = Z_TYPE_P(zv) == IS_TRUE ? 1u : 0u;
+        break;
+    case PBW_TYPE_STRING:
+    case PBW_TYPE_BYTES:
+        if (Z_TYPE_P(zv) != IS_STRING) {
+            return array_bad_field(field, "expected a string");
+        }
+        *out = pbw_value_new_bytes_ctx(ctx, Z_STRVAL_P(zv), Z_STRLEN_P(zv));
+        if (*out == NULL) {
+            throw_error("out of memory");
+            return -1;
+        }
+        return 0;
+    case PBW_TYPE_UINT64:
+    case PBW_TYPE_FIXED64:
+        if (array_uint64(zv, &bits) != 0) {
+            return -1;
+        }
+        break;
+    case PBW_TYPE_UINT32:
+    case PBW_TYPE_FIXED32:
+        if (Z_TYPE_P(zv) != IS_LONG || Z_LVAL_P(zv) < 0 ||
+            (uint64_t)Z_LVAL_P(zv) > UINT32_MAX) {
+            return array_bad_field(field, "expected a uint32 integer");
+        }
+        bits = (uint64_t)Z_LVAL_P(zv);
+        break;
+    case PBW_TYPE_INT32:
+    case PBW_TYPE_SINT32:
+    case PBW_TYPE_SFIXED32:
+    case PBW_TYPE_ENUM:
+        if (Z_TYPE_P(zv) != IS_LONG || Z_LVAL_P(zv) < INT32_MIN ||
+            Z_LVAL_P(zv) > INT32_MAX) {
+            return array_bad_field(field, "expected an int32 integer");
+        }
+        bits = (uint64_t)(int64_t)Z_LVAL_P(zv);
+        break;
+    case PBW_TYPE_INT64:
+    case PBW_TYPE_SINT64:
+    case PBW_TYPE_SFIXED64:
+        if (Z_TYPE_P(zv) != IS_LONG) {
+            return array_bad_field(field, "expected an int64 integer");
+        }
+        bits = (uint64_t)Z_LVAL_P(zv);
+        break;
+    default:
+        return array_bad_field(field, "unsupported array scalar type");
+    }
+    *out = pbw_value_new_uint_ctx(ctx, bits);
+    if (*out == NULL) {
+        throw_error("out of memory");
+        return -1;
+    }
+    return 0;
+}
+
+static int array_encode_message(zval *arr, pbw_ctx *ctx,
+                                const pbw_descriptor *desc, pbw_message *msg,
+                                unsigned depth) {
+    size_t nfields;
+    size_t found = 0;
+    size_t i;
+
+    if (depth > PBWIRE_ARRAY_MAX_DEPTH) {
+        throw_error("nesting limit exceeded");
+        return -1;
+    }
+    if (Z_TYPE_P(arr) != IS_ARRAY) {
+        throw_error("a message must be a PHP array");
+        return -1;
+    }
+    nfields = pbw_descriptor_field_count(desc);
+    for (i = 0; i < nfields; i++) {
+        const pbw_field *field = pbw_descriptor_field_at(desc, i);
+        const char *name = pbw_field_name(field);
+        pbw_type type = pbw_field_type(field);
+        zval *value = zend_hash_str_find(Z_ARRVAL_P(arr), name, strlen(name));
+
+        if (value == NULL) {
+            continue; /* absent, like an unset optional */
+        }
+        found++;
+        if (Z_TYPE_P(value) == IS_NULL) {
+            continue;
+        }
+        if (pbw_field_label(field) == PBW_LABEL_REPEATED) {
+            zval *item;
+
+            if (Z_TYPE_P(value) != IS_ARRAY) {
+                return array_bad_field(field, "expected a list");
+            }
+            ZEND_HASH_FOREACH_VAL(Z_ARRVAL_P(value), item) {
+                if (Z_TYPE_P(item) == IS_NULL) {
+                    return array_bad_field(field, "NULL is not a value");
+                }
+                if (array_is_message_type(type)) {
+                    const pbw_descriptor *sub =
+                        pbw_field_message_type(field);
+                    pbw_message *child;
+
+                    if (sub == NULL) {
+                        return array_bad_field(field, "unresolved message type");
+                    }
+                    if (Z_TYPE_P(item) != IS_ARRAY) {
+                        return array_bad_field(field, "expected a nested array");
+                    }
+                    child = pbw_message_set_message(msg,
+                                                    pbw_field_number(field));
+                    if (child == NULL) {
+                        return array_bad_field(field, "cannot set message");
+                    }
+                    if (array_encode_message(item, ctx, sub, child,
+                                             depth + 1) != 0) {
+                        return -1;
+                    }
+                } else {
+                    pbw_value *val = NULL;
+                    pbw_status st;
+
+                    if (array_scalar_value(item, field, ctx, &val) != 0) {
+                        return -1;
+                    }
+                    st = pbw_message_set_field(msg, field, val);
+                    if (st != PBW_OK) {
+                        pbw_value_free(val);
+                        throw_error_status("set", st);
+                        return -1;
+                    }
+                }
+            }
+            ZEND_HASH_FOREACH_END();
+        } else if (array_is_message_type(type)) {
+            const pbw_descriptor *sub = pbw_field_message_type(field);
+            pbw_message *child;
+
+            if (sub == NULL) {
+                return array_bad_field(field, "unresolved message type");
+            }
+            if (Z_TYPE_P(value) != IS_ARRAY) {
+                return array_bad_field(field, "expected a nested array");
+            }
+            child = pbw_message_set_message(msg, pbw_field_number(field));
+            if (child == NULL) {
+                return array_bad_field(field, "cannot set message");
+            }
+            if (array_encode_message(value, ctx, sub, child, depth + 1) != 0) {
+                return -1;
+            }
+        } else {
+            pbw_value *val = NULL;
+            pbw_status st;
+
+            if (array_scalar_value(value, field, ctx, &val) != 0) {
+                return -1;
+            }
+            st = pbw_message_set_field(msg, field, val);
+            if (st != PBW_OK) {
+                pbw_value_free(val);
+                throw_error_status("set", st);
+                return -1;
+            }
+        }
+    }
+    /* Every array key either matched a descriptor field above or is a typo:
+     * a unique key cannot be consumed twice, so the counts decide. */
+    if (found != zend_hash_num_elements(Z_ARRVAL_P(arr))) {
+        char buf[512];
+
+        snprintf(buf, sizeof buf, "%s: no such field in the array",
+                 pbw_descriptor_name(desc));
+        throw_error(buf);
+        return -1;
+    }
+    return 0;
+}
+
+static int array_scalar_zval(pbw_type type, const pbw_value *value,
+                             zval *out) {
+    switch (type) {
+    case PBW_TYPE_DOUBLE:
+        ZVAL_DOUBLE(out, pbw_value_get_double(value));
+        return 0;
+    case PBW_TYPE_FLOAT:
+        ZVAL_DOUBLE(out, (double)pbw_value_get_float(value));
+        return 0;
+    case PBW_TYPE_BOOL:
+        ZVAL_BOOL(out, pbw_value_get_bool(value) != 0);
+        return 0;
+    case PBW_TYPE_STRING:
+    case PBW_TYPE_BYTES: {
+        size_t len = 0;
+        const void *data = pbw_value_get_bytes(value, &len);
+
+        ZVAL_STRINGL(out, data != NULL ? (const char *)data : "", len);
+        return 0;
+    }
+    case PBW_TYPE_INT32:
+    case PBW_TYPE_SINT32:
+    case PBW_TYPE_SFIXED32:
+    case PBW_TYPE_ENUM:
+        ZVAL_LONG(out, (zend_long)pbw_value_get_int32(value));
+        return 0;
+    case PBW_TYPE_INT64:
+    case PBW_TYPE_SINT64:
+    case PBW_TYPE_SFIXED64:
+        ZVAL_LONG(out, (zend_long)pbw_value_get_int(value));
+        return 0;
+    case PBW_TYPE_UINT32:
+    case PBW_TYPE_FIXED32:
+        ZVAL_LONG(out, (zend_long)pbw_value_get_uint32(value));
+        return 0;
+    case PBW_TYPE_UINT64:
+    case PBW_TYPE_FIXED64: {
+        uint64_t n = pbw_value_get_uint(value);
+
+        if (n > (uint64_t)ZEND_LONG_MAX) {
+            char buf[32];
+
+            snprintf(buf, sizeof buf, "%llu", (unsigned long long)n);
+            ZVAL_STRING(out, buf);
+        } else {
+            ZVAL_LONG(out, (zend_long)n);
+        }
+        return 0;
+    }
+    default:
+        return -1;
+    }
+}
+
+static int array_decode_message(const pbw_message *msg, zval *out,
+                                unsigned depth) {
+    const pbw_descriptor *desc = pbw_message_descriptor(msg);
+    size_t nfields = pbw_descriptor_field_count(desc);
+    size_t i;
+
+    if (desc == NULL || depth > PBWIRE_ARRAY_MAX_DEPTH) {
+        throw_error("nesting limit exceeded");
+        return -1;
+    }
+    array_init(out);
+    for (i = 0; i < nfields; i++) {
+        const pbw_field *field = pbw_descriptor_field_at(desc, i);
+        const char *name = pbw_field_name(field);
+        pbw_type type = pbw_field_type(field);
+        pbw_value *value = pbw_message_get_field(msg, field);
+        zval elem;
+
+        if (pbw_field_label(field) == PBW_LABEL_REPEATED) {
+            size_t count = value != NULL ? pbw_value_count(value) : 0;
+            zval list;
+            size_t k;
+
+            array_init_size(&list, count);
+            for (k = 0; k < count; k++) {
+                pbw_value *item = pbw_value_at(value, k);
+
+                if (item == NULL) {
+                    zval_ptr_dtor(&list);
+                    throw_error("decodeArray: no list item returned");
+                    return -1;
+                }
+                ZVAL_UNDEF(&elem);
+                if (array_is_message_type(type)) {
+                    pbw_message *sub = pbw_value_get_message(item);
+
+                    if (sub == NULL ||
+                        array_decode_message(sub, &elem, depth + 1) != 0) {
+                        if (Z_TYPE(elem) != IS_UNDEF) {
+                            zval_ptr_dtor(&elem);
+                        }
+                        zval_ptr_dtor(&list);
+                        return -1;
+                    }
+                } else if (array_scalar_zval(type, item, &elem) != 0) {
+                    zval_ptr_dtor(&list);
+                    throw_error("decodeArray: unsupported scalar type");
+                    return -1;
+                }
+                add_next_index_zval(&list, &elem);
+            }
+            add_assoc_zval_ex(out, name, strlen(name), &list);
+            continue;
+        }
+        if (value == NULL) {
+            continue;
+        }
+        ZVAL_UNDEF(&elem);
+        if (array_is_message_type(type)) {
+            pbw_message *sub = pbw_value_get_message(value);
+
+            if (sub == NULL ||
+                array_decode_message(sub, &elem, depth + 1) != 0) {
+                if (Z_TYPE(elem) != IS_UNDEF) {
+                    zval_ptr_dtor(&elem);
+                }
+                return -1;
+            }
+        } else if (array_scalar_zval(type, value, &elem) != 0) {
+            throw_error("decodeArray: unsupported scalar type");
+            return -1;
+        }
+        add_assoc_zval_ex(out, name, strlen(name), &elem);
+    }
+    return 0;
+}
+
 ZEND_BEGIN_ARG_INFO_EX(arginfo_type_field, 0, 0, 1)
 ZEND_ARG_TYPE_INFO(0, name, IS_STRING, 0)
 ZEND_END_ARG_INFO()
@@ -658,6 +1078,15 @@ ZEND_END_ARG_INFO()
 
 ZEND_BEGIN_ARG_INFO_EX(arginfo_type_nestedtype, 0, 0, 1)
 ZEND_ARG_OBJ_INFO(0, field, Pbwire\\Field, 0)
+ZEND_END_ARG_INFO()
+
+ZEND_BEGIN_ARG_INFO_EX(arginfo_type_encodearray, 0, 0, 1)
+ZEND_ARG_TYPE_INFO(0, message, IS_ARRAY, 0)
+ZEND_END_ARG_INFO()
+
+ZEND_BEGIN_ARG_INFO_EX(arginfo_type_decodearray, 0, 0, 1)
+ZEND_ARG_TYPE_INFO(0, wire, IS_STRING, 0)
+ZEND_ARG_TYPE_INFO_WITH_DEFAULT_VALUE(0, limits, IS_ARRAY, 1, "null")
 ZEND_END_ARG_INFO()
 
 PHP_METHOD(Type, __construct) {
@@ -1024,6 +1453,87 @@ PHP_METHOD(Type, isMessageField) {
     field_obj *fo = field_from(Z_OBJ_P(field_zv));
     pbw_type ty = pbw_field_type(fo->field);
     RETURN_BOOL(ty == PBW_TYPE_MESSAGE || ty == PBW_TYPE_GROUP);
+}
+
+/* One extension entry: the PHP array is walked in C and the tree filled in C. */
+PHP_METHOD(Type, encodeArray) {
+    zval *message_zv;
+    ZEND_PARSE_PARAMETERS_START(1, 1)
+    Z_PARAM_ARRAY(message_zv)
+    ZEND_PARSE_PARAMETERS_END();
+
+    type_obj *t = type_from(Z_OBJ_P(ZEND_THIS));
+    pbw_ctx *ctx = type_array_ctx(t);
+    pbw_message *msg;
+    const uint8_t *out = NULL;
+    size_t len = 0;
+    pbw_status st;
+    zend_string *str;
+
+    if (ctx == NULL) {
+        throw_error("out of memory");
+        RETURN_THROWS();
+    }
+    pbw_ctx_reset(ctx);
+    msg = pbw_message_new_ctx(ctx, t->desc);
+    if (msg == NULL) {
+        throw_error("out of memory");
+        RETURN_THROWS();
+    }
+    if (array_encode_message(message_zv, ctx, t->desc, msg, 0) != 0) {
+        RETURN_THROWS();
+    }
+    st = pbw_encode_ctx(ctx, msg, &out, &len);
+    if (st != PBW_OK) {
+        throw_error_status("encodeArray", st);
+        RETURN_THROWS();
+    }
+    str = zend_string_init((const char *)out, len, 0);
+    RETURN_STR(str);
+}
+
+/* The reverse entry: wire bytes in, the fully materialized PHP array out. */
+PHP_METHOD(Type, decodeArray) {
+    char *wire;
+    size_t wire_len;
+    zval *limits_zv = NULL;
+    pbw_limits lim;
+    const pbw_limits *limp = NULL;
+    type_obj *t;
+    pbw_message *msg = NULL;
+    pbw_status st;
+    zval out;
+
+    ZEND_PARSE_PARAMETERS_START(1, 2)
+    Z_PARAM_STRING(wire, wire_len)
+    Z_PARAM_OPTIONAL
+    Z_PARAM_ZVAL(limits_zv)
+    ZEND_PARSE_PARAMETERS_END();
+
+    if (parse_limits(limits_zv, &lim, &limp) != 0) {
+        RETURN_THROWS();
+    }
+    t = type_from(Z_OBJ_P(ZEND_THIS));
+    st = limp == NULL ? pbw_decode(t->desc, wire, wire_len, &msg)
+                      : pbw_decode_limits(t->desc, wire, wire_len, limp, &msg);
+    if (st != PBW_OK) {
+        throw_error_status("decodeArray", st);
+        RETURN_THROWS();
+    }
+    if (msg == NULL) {
+        throw_error("decodeArray: no message returned");
+        RETURN_THROWS();
+    }
+    ZVAL_UNDEF(&out);
+    if (array_decode_message(msg, &out, 0) != 0) {
+        if (Z_TYPE(out) != IS_UNDEF) {
+            zval_ptr_dtor(&out);
+        }
+        pbw_message_free(msg);
+        RETURN_THROWS();
+    }
+    pbw_message_free(msg);
+    RETURN_ZVAL(&out, 1, 1);
 }
 
 /* ---------------------------------------------------------------- Field */
@@ -1762,7 +2272,7 @@ PHP_METHOD(Message, setMessage) {
         RETURN_THROWS();
     }
     zval subtype;
-    if (type_create(&subtype, &m->type_zv, sub) != 0) {
+    if (type_create(&subtype, &type_from(Z_OBJ(m->type_zv))->schema_zv, sub) != 0) {
         RETURN_THROWS();
     }
     int rc = message_create(return_value, &subtype, ZEND_THIS, child, NULL, false);
@@ -1964,7 +2474,7 @@ PHP_METHOD(Message, getMessage) {
         RETURN_NULL();
     }
     zval subtype;
-    if (type_create(&subtype, &m->type_zv, subdesc) != 0) {
+    if (type_create(&subtype, &type_from(Z_OBJ(m->type_zv))->schema_zv, subdesc) != 0) {
         RETURN_THROWS();
     }
     int rc = message_create(return_value, &subtype, ZEND_THIS, sub, NULL, false);
@@ -2060,7 +2570,7 @@ PHP_METHOD(Message, at) {
     const pbw_descriptor *sub = pbw_field_message_type(f);
     if (sub != NULL) {
         zval subtype;
-        if (type_create(&subtype, &m->type_zv, sub) != 0) {
+        if (type_create(&subtype, &type_from(Z_OBJ(m->type_zv))->schema_zv, sub) != 0) {
             RETURN_THROWS();
         }
         int rc = value_create(return_value, ZEND_THIS, &subtype, item);
@@ -2205,6 +2715,8 @@ static const zend_function_entry type_methods[] = {
     PHP_ME(Type, durationFromMillis, arginfo_type_frommillis, ZEND_ACC_PUBLIC)
     PHP_ME(Type, nestedType, arginfo_type_nestedtype, ZEND_ACC_PUBLIC)
     PHP_ME(Type, isMessageField, arginfo_type_nestedtype, ZEND_ACC_PUBLIC)
+    PHP_ME(Type, encodeArray, arginfo_type_encodearray, ZEND_ACC_PUBLIC)
+    PHP_ME(Type, decodeArray, arginfo_type_decodearray, ZEND_ACC_PUBLIC)
     PHP_FE_END,
 };
 

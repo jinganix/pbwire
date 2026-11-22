@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>Pbwire.Pbench.Core</AssemblyName>
+    <RootNamespace>Pbwire.Pbench</RootNamespace>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="CCore.cs" />
+    <ProjectReference Include="../../Pbwire/Pbwire.csproj" />
+  </ItemGroup>
+
+</Project>

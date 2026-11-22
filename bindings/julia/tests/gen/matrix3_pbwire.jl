@@ -60,6 +60,24 @@ function decode(::Type{Structtest_Inner3}, wire::Vector{UInt8})
     return from_dict(Structtest_Inner3, Pbwire.decode_dict(ty, wire))
 end
 
+
+# structtest.Inner3 as a flat native image: one ccall reads and writes it in place.
+mutable struct Inner3Layout
+    name::Ptr{UInt8}
+    value::Int32
+end
+
+function Inner3Layout()
+    return Inner3Layout(
+        Ptr{UInt8}(C_NULL),
+        Int32(0),
+    )
+end
+
+const inner3LayoutRows = Pbwire.LayoutRow[
+    Pbwire.LayoutRow(1, 7, 0, fieldoffset(Inner3Layout, :name), 0, 0, 9, 2, 0, 0, 0, 0, ""),
+    Pbwire.LayoutRow(2, 0, 0, fieldoffset(Inner3Layout, :value), 0, 0, 5, 0, 0, 0, 0, 0, ""),
+]
 # structtest.Scalars3
 mutable struct Structtest_Scalars3
     i32::Int64
@@ -269,3 +287,91 @@ function decode(::Type{Structtest_Scalars3}, wire::Vector{UInt8})
     return from_dict(Structtest_Scalars3, Pbwire.decode_dict(ty, wire))
 end
 
+
+# structtest.Scalars3 as a flat native image: one ccall reads and writes it in place.
+mutable struct Scalars3Layout
+    i32::Int32
+    i64::Int64
+    u32::UInt32
+    u64::UInt64
+    s32::Int32
+    s64::Int64
+    fx32::UInt32
+    fx64::UInt64
+    sfx32::Int32
+    sfx64::Int64
+    f32::Float32
+    f64::Float64
+    flag::Bool
+    str::Ptr{UInt8}
+    color::Int32
+    inner::Ptr{Inner3Layout}
+    nums::Ptr{Int32}
+    numsCount::Csize_t
+    tags::Ptr{Ptr{UInt8}}
+    tagsCount::Csize_t
+    inners::Ptr{Inner3Layout}
+    innersCount::Csize_t
+    opt_i32::Int32
+    has_opt_i32::Int32
+    opt_str::Ptr{UInt8}
+    flags::Ptr{Bool}
+    flagsCount::Csize_t
+end
+
+function Scalars3Layout()
+    return Scalars3Layout(
+        Int32(0),
+        Int64(0),
+        UInt32(0),
+        UInt64(0),
+        Int32(0),
+        Int64(0),
+        UInt32(0),
+        UInt64(0),
+        Int32(0),
+        Int64(0),
+        Float32(0),
+        Float64(0),
+        Bool(0),
+        Ptr{UInt8}(C_NULL),
+        Int32(0),
+        Ptr{Inner3Layout}(C_NULL),
+        Ptr{Int32}(C_NULL),
+        Csize_t(0),
+        Ptr{Ptr{UInt8}}(C_NULL),
+        Csize_t(0),
+        Ptr{Inner3Layout}(C_NULL),
+        Csize_t(0),
+        Int32(0),
+        Int32(0),
+        Ptr{UInt8}(C_NULL),
+        Ptr{Bool}(C_NULL),
+        Csize_t(0),
+    )
+end
+
+const scalars3LayoutRows = Pbwire.LayoutRow[
+    Pbwire.LayoutRow(1, 0, 0, fieldoffset(Scalars3Layout, :i32), 0, 0, 5, 0, 0, 0, 0, 0, ""),
+    Pbwire.LayoutRow(2, 1, 0, fieldoffset(Scalars3Layout, :i64), 0, 0, 3, 0, 0, 0, 0, 0, ""),
+    Pbwire.LayoutRow(3, 2, 0, fieldoffset(Scalars3Layout, :u32), 0, 0, 13, 0, 0, 0, 0, 0, ""),
+    Pbwire.LayoutRow(4, 3, 0, fieldoffset(Scalars3Layout, :u64), 0, 0, 4, 0, 0, 0, 0, 0, ""),
+    Pbwire.LayoutRow(5, 0, 0, fieldoffset(Scalars3Layout, :s32), 0, 0, 17, 0, 0, 0, 0, 0, ""),
+    Pbwire.LayoutRow(6, 1, 0, fieldoffset(Scalars3Layout, :s64), 0, 0, 18, 0, 0, 0, 0, 0, ""),
+    Pbwire.LayoutRow(7, 2, 0, fieldoffset(Scalars3Layout, :fx32), 0, 0, 7, 5, 0, 0, 0, 0, ""),
+    Pbwire.LayoutRow(8, 3, 0, fieldoffset(Scalars3Layout, :fx64), 0, 0, 6, 1, 0, 0, 0, 0, ""),
+    Pbwire.LayoutRow(9, 0, 0, fieldoffset(Scalars3Layout, :sfx32), 0, 0, 15, 5, 0, 0, 0, 0, ""),
+    Pbwire.LayoutRow(10, 1, 0, fieldoffset(Scalars3Layout, :sfx64), 0, 0, 16, 1, 0, 0, 0, 0, ""),
+    Pbwire.LayoutRow(11, 5, 0, fieldoffset(Scalars3Layout, :f32), 0, 0, 2, 5, 0, 0, 0, 0, ""),
+    Pbwire.LayoutRow(12, 6, 0, fieldoffset(Scalars3Layout, :f64), 0, 0, 1, 1, 0, 0, 0, 0, ""),
+    Pbwire.LayoutRow(13, 4, 0, fieldoffset(Scalars3Layout, :flag), 0, 0, 8, 0, 0, 0, 0, 0, ""),
+    Pbwire.LayoutRow(14, 7, 0, fieldoffset(Scalars3Layout, :str), 0, 0, 9, 2, 0, 0, 0, 0, ""),
+    Pbwire.LayoutRow(15, 9, 0, fieldoffset(Scalars3Layout, :color), 0, 0, 14, 0, 0, 0, 0, 0, ""),
+    Pbwire.LayoutRow(16, 10, 0, fieldoffset(Scalars3Layout, :inner), 0, 0, 11, 2, 0, 0, 0, 0, "structtest.Inner3"),
+    Pbwire.LayoutRow(17, 0, 1, fieldoffset(Scalars3Layout, :nums), 0, fieldoffset(Scalars3Layout, :numsCount), 5, 0, 1, 0, 0, 0, ""),
+    Pbwire.LayoutRow(18, 7, 1, fieldoffset(Scalars3Layout, :tags), 0, fieldoffset(Scalars3Layout, :tagsCount), 9, 2, 0, 0, 0, 0, ""),
+    Pbwire.LayoutRow(19, 10, 1, fieldoffset(Scalars3Layout, :inners), 0, fieldoffset(Scalars3Layout, :innersCount), 11, 2, 0, 0, 0, 0, "structtest.Inner3"),
+    Pbwire.LayoutRow(20, 0, 0, fieldoffset(Scalars3Layout, :opt_i32), fieldoffset(Scalars3Layout, :has_opt_i32), 0, 5, 0, 0, 0, 0, 0, ""),
+    Pbwire.LayoutRow(21, 7, 0, fieldoffset(Scalars3Layout, :opt_str), 0, 0, 9, 2, 0, 0, 0, 0, ""),
+    Pbwire.LayoutRow(22, 4, 1, fieldoffset(Scalars3Layout, :flags), 0, fieldoffset(Scalars3Layout, :flagsCount), 8, 0, 1, 0, 0, 0, ""),
+]

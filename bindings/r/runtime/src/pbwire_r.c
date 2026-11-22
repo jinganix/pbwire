@@ -67,6 +67,12 @@ typedef struct {
     /* Last one used: a decode loop usually repeats the same message type, so
      * this skips the list walk. */
     struct pbwr_fields *last;
+    /* Message numbers: slot i+1 is types[i]. The generated model resolves its
+     * type name once per schema and passes the number per call, so the hot
+     * path is a bounds check instead of a schema-wide name lookup. */
+    const pbw_descriptor **types;
+    size_t ntypes;
+    size_t captypes;
 } pbwr_schema;
 
 /* A context: reusable arena + encode buffer for a decode/encode loop, so
@@ -77,7 +83,7 @@ typedef struct {
     pbw_pool *pool; /* NULL for standalone contexts */
     SEXP pool_sexp; /* R_NilValue unless pooled */
     int released;
-    unsigned gen; /* bumped by reset/release; builders hold their own */
+    unsigned gen;      /* bumped by reset/release; builders hold their own */
     size_t retain_cap; /* tracked here; the core only takes a setter */
 } pbwr_context;
 
@@ -96,7 +102,7 @@ typedef struct {
     pbw_message *tree;
     SEXP schema_sexp;
     SEXP ctx_sexp; /* R_NilValue unless borrowed */
-    pbw_ctx *ctx; /* borrowed arena, NULL for owned trees */
+    pbw_ctx *ctx;  /* borrowed arena, NULL for owned trees */
     unsigned gen;
     int readonly;
 } pbwr_message;
@@ -111,7 +117,8 @@ typedef struct pbwr_fields {
     struct pbwr_fields *next;
 } pbwr_fields;
 
-static SEXP pbwr_schema_tag(void)
+static SEXP
+pbwr_schema_tag(void)
 {
     static SEXP tag = NULL;
 
@@ -122,7 +129,8 @@ static SEXP pbwr_schema_tag(void)
     return tag;
 }
 
-static SEXP pbwr_message_tag(void)
+static SEXP
+pbwr_message_tag(void)
 {
     static SEXP tag = NULL;
 
@@ -723,31 +731,38 @@ pbwr_repeated_sexp(pbwr_schema *s, const pbw_field *field,
             break;
         }
         case PBW_TYPE_BOOL:
-            LOGICAL(out)[j] = pbw_value_get_bool(item) ? TRUE : FALSE;
+            LOGICAL(out)
+            [j] = pbw_value_get_bool(item) ? TRUE : FALSE;
             break;
         case PBW_TYPE_INT32:
         case PBW_TYPE_SINT32:
         case PBW_TYPE_SFIXED32:
         case PBW_TYPE_ENUM:
-            INTEGER(out)[j] = pbw_value_get_int32(item);
+            INTEGER(out)
+            [j] = pbw_value_get_int32(item);
             break;
         case PBW_TYPE_FLOAT:
-            REAL(out)[j] = (double)pbw_value_get_float(item);
+            REAL(out)
+            [j] = (double)pbw_value_get_float(item);
             break;
         case PBW_TYPE_DOUBLE:
-            REAL(out)[j] = pbw_value_get_double(item);
+            REAL(out)
+            [j] = pbw_value_get_double(item);
             break;
         case PBW_TYPE_INT64:
         case PBW_TYPE_SINT64:
         case PBW_TYPE_SFIXED64:
-            REAL(out)[j] = (double)pbw_value_get_int(item);
+            REAL(out)
+            [j] = (double)pbw_value_get_int(item);
             break;
         case PBW_TYPE_UINT32:
         case PBW_TYPE_FIXED32:
-            REAL(out)[j] = (double)pbw_value_get_uint32(item);
+            REAL(out)
+            [j] = (double)pbw_value_get_uint32(item);
             break;
         default:
-            REAL(out)[j] = (double)pbw_value_get_uint(item);
+            REAL(out)
+            [j] = (double)pbw_value_get_uint(item);
             break;
         }
     }
@@ -891,6 +906,7 @@ pbwr_schema_finalizer(SEXP s)
         if (p->schema != NULL) {
             pbw_schema_free(p->schema);
         }
+        free(p->types);
         free(p);
         R_ClearExternalPtr(s);
     }
@@ -1003,12 +1019,10 @@ pbwr_wire_in(SEXP wire, const void **bytes, size_t *len)
     }
 }
 
-SEXP
-pbwr_encode(SEXP schema_sexp, SEXP type, SEXP list)
+/* Encode one named list of `desc` through the schema's arena + buffer. */
+static SEXP
+pbwr_encode_desc(pbwr_schema *s, const pbw_descriptor *desc, SEXP list)
 {
-    pbwr_schema *s = pbwr_check_schema(schema_sexp);
-    const char *name = pbwr_type_name(type);
-    const pbw_descriptor *desc = pbwr_find(s->schema, name);
     /* Reset first: the arena holds the previous call's tree, the buffer
      * the previous encoding. One reset covers both. */
     pbw_message *msg;
@@ -1026,7 +1040,7 @@ pbwr_encode(SEXP schema_sexp, SEXP type, SEXP list)
     /* Reuses the context's buffer: steady use stops calling malloc. */
     status = pbw_encode_ctx(s->ctx, msg, &out, &len);
     if (status != PBW_OK) {
-        pbwr_fail(status, "encode", name);
+        pbwr_fail(status, "encode", pbw_descriptor_name(desc));
     }
     ans = allocVector(RAWSXP, (R_xlen_t)len);
     if (len > 0) {
@@ -1037,12 +1051,11 @@ pbwr_encode(SEXP schema_sexp, SEXP type, SEXP list)
 
 /* Arena decode: one bump allocator, no per-value malloc. The tree is
  * read-only and dies with the next reset; conversion only reads. */
-SEXP
-pbwr_decode(SEXP schema_sexp, SEXP type, SEXP wire, SEXP limits_sexp)
+static SEXP
+pbwr_decode_desc(pbwr_schema *s, const pbw_descriptor *desc, SEXP wire,
+                 SEXP limits_sexp)
 {
-    pbwr_schema *s = pbwr_check_schema(schema_sexp);
-    const char *name = pbwr_type_name(type);
-    const pbw_descriptor *desc = pbwr_find(s->schema, name);
+    const char *name = pbw_descriptor_name(desc);
     const void *bytes;
     size_t len;
     pbw_limits storage;
@@ -1057,6 +1070,98 @@ pbwr_decode(SEXP schema_sexp, SEXP type, SEXP wire, SEXP limits_sexp)
         pbwr_fail(status, "decode", name);
     }
     return pbwr_message_sexp(msg, s, 0);
+}
+
+SEXP
+pbwr_encode(SEXP schema_sexp, SEXP type, SEXP list)
+{
+    pbwr_schema *s = pbwr_check_schema(schema_sexp);
+    const pbw_descriptor *desc = pbwr_find(s->schema, pbwr_type_name(type));
+
+    return pbwr_encode_desc(s, desc, list);
+}
+
+SEXP
+pbwr_decode(SEXP schema_sexp, SEXP type, SEXP wire, SEXP limits_sexp)
+{
+    pbwr_schema *s = pbwr_check_schema(schema_sexp);
+    const pbw_descriptor *desc = pbwr_find(s->schema, pbwr_type_name(type));
+
+    return pbwr_decode_desc(s, desc, wire, limits_sexp);
+}
+
+/* A message number: slot i+1 of this schema's type table, assigned on first
+ * use and stable until the schema dies. The generated model resolves its type
+ * name once per schema and passes the number on every call, so the hot path
+ * pays a bounds check instead of a schema-wide name lookup. */
+SEXP
+pbwr_type_number(SEXP schema_sexp, SEXP type)
+{
+    pbwr_schema *s = pbwr_check_schema(schema_sexp);
+    const pbw_descriptor *desc = pbwr_find(s->schema, pbwr_type_name(type));
+    size_t i;
+
+    for (i = 0; i < s->ntypes; i++) {
+        if (s->types[i] == desc) {
+            return ScalarInteger((int)(i + 1));
+        }
+    }
+    if (s->ntypes == s->captypes) {
+        size_t cap = s->captypes != 0 ? s->captypes * 2 : 8;
+        const pbw_descriptor **grown;
+
+        if (cap > (size_t)INT32_MAX) {
+            Rf_error("pbwire: too many message types in one schema");
+        }
+        grown =
+            (const pbw_descriptor **)realloc(s->types, cap * sizeof(*grown));
+        if (grown == NULL) {
+            Rf_error("pbwire: out of memory");
+        }
+        s->types = grown;
+        s->captypes = cap;
+    }
+    s->types[s->ntypes++] = desc;
+    return ScalarInteger((int)s->ntypes);
+}
+
+/* The descriptor behind a message number. A number this schema never handed
+ * out is an error, not a silent fallback to slot 1. */
+static const pbw_descriptor *
+pbwr_type_by_number(pbwr_schema *s, SEXP number)
+{
+    double n = Rf_asReal(number);
+
+    /* Check the bounds before the integrality cast: ntypes fits an int, so the
+     * cast below cannot overflow. */
+    if (!R_FINITE(n) || n < 1.0 || n > (double)s->ntypes) {
+        Rf_error("pbwire: no message number %g in this schema", n);
+    }
+    if (n != (double)(size_t)n) {
+        Rf_error("pbwire: message number %g is not a whole number", n);
+    }
+    return s->types[(size_t)n - 1];
+}
+
+/* Encode a named list by message number: `Type_encode(list)` in the generated
+ * model's shape, one .Call, the whole walk in C. */
+SEXP
+pbwr_encode_number(SEXP schema_sexp, SEXP number, SEXP list)
+{
+    pbwr_schema *s = pbwr_check_schema(schema_sexp);
+
+    return pbwr_encode_desc(s, pbwr_type_by_number(s, number), list);
+}
+
+/* The same by number for the decode side: wire bytes in, a fully materialized
+ * named list out. */
+SEXP
+pbwr_decode_number(SEXP schema_sexp, SEXP number, SEXP wire, SEXP limits_sexp)
+{
+    pbwr_schema *s = pbwr_check_schema(schema_sexp);
+
+    return pbwr_decode_desc(s, pbwr_type_by_number(s, number), wire,
+                            limits_sexp);
 }
 
 /* Gateway passthrough (and the conformance binary path): decode and
@@ -1347,7 +1452,8 @@ pbwr_decode_delimited(SEXP schema_sexp, SEXP type, SEXP wire,
         UNPROTECT(4);
         Rf_error("pbwire: frame too large");
     }
-    INTEGER(read)[0] = (int)consumed;
+    INTEGER(read)
+    [0] = (int)consumed;
     SET_VECTOR_ELT(ans, 0, item);
     SET_VECTOR_ELT(ans, 1, read);
     SET_STRING_ELT(names, 0, mkChar("message"));
@@ -1577,8 +1683,8 @@ pbwr_limits_opt(SEXP v, pbw_limits *storage)
     for (i = 0; i < Rf_xlength(v); i++) {
         const char *k = (names != R_NilValue && TYPEOF(names) == STRSXP &&
                          STRING_ELT(names, i) != NA_STRING)
-            ? CHAR(STRING_ELT(names, i))
-            : "";
+                            ? CHAR(STRING_ELT(names, i))
+                            : "";
         double d = Rf_asReal(VECTOR_ELT(v, i));
 
         /* NaN compares false against 0, and casting it is undefined; reject it
@@ -1699,7 +1805,8 @@ pbwr_visit(SEXP schema_sexp, SEXP type, SEXP wire, SEXP limits_sexp)
             }
         } else {
             PROTECT(value = allocVector(REALSXP, 1));
-            REAL(value)[0] = (double)e->u64;
+            REAL(value)
+            [0] = (double)e->u64;
         }
         SET_VECTOR_ELT(ev, 2, value);
         UNPROTECT(3);
@@ -2363,6 +2470,9 @@ pbwr_context_encode(SEXP ctx_sexp, SEXP schema_sexp, SEXP type, SEXP list)
 
 static const R_CallMethodDef pbwr_calls[] = {
     {"pbwr_load", (DL_FUNC)&pbwr_load, 2},
+    {"pbwr_type_number", (DL_FUNC)&pbwr_type_number, 2},
+    {"pbwr_encode_number", (DL_FUNC)&pbwr_encode_number, 3},
+    {"pbwr_decode_number", (DL_FUNC)&pbwr_decode_number, 4},
     {"pbwr_encode", (DL_FUNC)&pbwr_encode, 3},
     {"pbwr_decode", (DL_FUNC)&pbwr_decode, 4},
     {"pbwr_roundtrip", (DL_FUNC)&pbwr_roundtrip, 3},

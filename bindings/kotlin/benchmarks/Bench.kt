@@ -5,10 +5,14 @@
  *
  * The same payload as the C/Go/Java/Rust rows: every scalar kind, the nested
  * message, the two proto3 optionals, and the repeated fields scaled x0 / x1 /
- * x100 / x3000, which lands the tiers on 136 / 174 / 2469 / 74913 bytes. Both
- * sides must produce identical bytes before anything is timed, and both
- * allocate per call (pbwire encode()/decode() against toByteArray()/
- * parseFrom()), so the comparison is like for like.
+ * x100 / x3000, which lands the tiers on 136 / 174 / 2469 / 74913 bytes. Every
+ * row allocates per call (pbwire encode()/decode() against toByteArray()/
+ * parseFrom()), so the timer covers the user-visible task.
+ *
+ * Arms (bindings/README.md#pbench-three-arms-one-contract):
+ *   tree  Message (GenericCodec/DMsg), prebuilt -- what the codec costs once the tree exists
+ *   core  the committed generated model      -- native object in and out (Structtest_Scalars3)
+ *   shim  ../java/pbench/jni                 -- ceiling: one JNI crossing, no tree translation
  *
  *   ./bench.sh          generate, build, run
  */
@@ -87,6 +91,36 @@ private fun fillPbwire(ty: MessageType, n: Int): Message = ty.newMessage().apply
     }
 }
 
+/** The committed generated Java model for the same payload (native object). */
+private fun fillModel(n: Int): Structtest_Scalars3 {
+    val b = Structtest_Scalars3.newBuilder()
+    b.setI32(Int.MIN_VALUE)
+    b.setI64(Long.MAX_VALUE)
+    b.setU32(-1)
+    b.setU64(-1L)
+    b.setS32(Int.MIN_VALUE)
+    b.setS64(Long.MIN_VALUE)
+    b.setFx32(0xdeadbeef.toInt())
+    b.setFx64(72623859790382856L)
+    b.setSfx32(Int.MIN_VALUE)
+    b.setSfx64(Long.MIN_VALUE)
+    b.setF32(Float.POSITIVE_INFINITY)
+    b.setF64(-123456.789)
+    b.setFlag(true)
+    b.setStr("hello")
+    b.setColorValue(2)
+    b.setInner(Structtest_Inner3.newBuilder().setName("kid").setValue(42))
+    b.setOptI32(-7)
+    b.setOptStr("opt")
+    for (i in 0 until n) {
+        b.addNums(i - 3)
+        b.addTags("tag")
+        b.addInners(Structtest_Inner3.newBuilder().setName("grandkid").setValue(i + 1))
+        b.addFlags(i % 2 == 0)
+    }
+    return b.build()
+}
+
 private fun run(iterations: Int, op: () -> Unit): Double {
     val start = System.nanoTime()
     for (i in 0 until iterations) {
@@ -111,19 +145,19 @@ private fun calibrate(op: () -> Unit, floor: Int): Int {
 }
 
 /** Every op calibrates independently from the floor, then one warm-up
- * pass and the best of PASSES timed passes. */
-private fun measure(floor: Int, op: () -> Unit): Double {
-    val count = calibrate(op, floor)
-    run(count, op)
-    var best = Double.MAX_VALUE
+ * pass and the best of PASSES timed passes, all ops back to back per pass. */
+private fun measureAll(floor: Int, ops: List<() -> Unit>): DoubleArray {
+    val counts = IntArray(ops.size) { calibrate(ops[it], floor) }
+    ops.forEachIndexed { i, op -> run(minOf(counts[i], 1000), op) }
+    val best = DoubleArray(ops.size) { Double.MAX_VALUE }
     for (pass in 0 until PASSES) {
-        best = minOf(best, run(count, op))
+        ops.forEachIndexed { i, op -> best[i] = minOf(best[i], run(counts[i], op)) }
     }
     return best
 }
 
 private fun row(impl: String, op: String, bytes: Int, ns: Double) {
-    println("  %-12s %-7s %12.1f %10.1f".format(impl, op, ns, bytes / ns * 1000.0))
+    println("  %-18s %-7s %12.1f %10.1f".format(impl, op, ns, bytes / ns * 1000.0))
 }
 
 fun main(args: Array<String>) {
@@ -170,20 +204,48 @@ fun main(args: Array<String>) {
                     return@use
                 }
 
+                // The native-object arm: the committed generated model must
+                // round-trip byte-identically and expose the same values.
+                val model = fillModel(n)
+                if (!model.toByteArray().contentEquals(reference)) {
+                    println("FAIL $label: pbwire-kotlin core encode differs")
+                    failures++
+                    return@use
+                }
+                val modelBack = Structtest_Scalars3.parseFrom(reference)
+                val modelOk = modelBack.toByteArray().contentEquals(reference) &&
+                    modelBack.getStr() == "hello" &&
+                    modelBack.getNumsCount() == n &&
+                    modelBack.getInnersCount() == n &&
+                    modelBack.getInner().getName() == "kid" &&
+                    (n == 0 || modelBack.getInners(n - 1).getValue() == n)
+                if (!modelOk) {
+                    println("FAIL $label: pbwire-kotlin core decode differs")
+                    failures++
+                    return@use
+                }
+                println("OK   $label generated-model parity, x$n (${reference.size} bytes)")
+
                 val official = fillOfficial(n)
                 // Tier line shows the reference op's count; slower ops keep the floor.
                 val tierCount = calibrate({ message.encode() }, count)
-                val encode = measure(count) { message.encode() }
-                val decode = measure(count) { ty.decode(reference).close() }
-                val officialEncode = measure(count) { official.toByteArray() }
-                val officialDecode = measure(count) { Matrix3.Scalars3.parseFrom(reference) }
+                val res = measureAll(count, listOf(
+                    { message.encode() },
+                    { model.toByteArray() },
+                    { official.toByteArray() },
+                    { ty.decode(reference).close() },
+                    { Structtest_Scalars3.parseFrom(reference) },
+                    { Matrix3.Scalars3.parseFrom(reference) },
+                ))
 
                 println("$label: ${reference.size} bytes, $tierCount iterations (repeat field x$n)")
-                println("  %-12s %-7s %12s %10s".format("impl", "op", "ns/op", "MB/s"))
-                row("pbwire-kotlin", "encode", reference.size, encode)
-                row("protobuf-kotlin", "encode", reference.size, officialEncode)
-                row("pbwire-kotlin", "decode", reference.size, decode)
-                row("protobuf-kotlin", "decode", reference.size, officialDecode)
+                println("  %-18s %-7s %12s %10s".format("impl", "op", "ns/op", "MB/s"))
+                row("pbwire-kotlin-tree", "encode", reference.size, res[0])
+                row("pbwire-kotlin-core", "encode", reference.size, res[1])
+                row("protobuf-kotlin", "encode", reference.size, res[2])
+                row("pbwire-kotlin-tree", "decode", reference.size, res[3])
+                row("pbwire-kotlin-core", "decode", reference.size, res[4])
+                row("protobuf-kotlin", "decode", reference.size, res[5])
                 println()
             }
         }

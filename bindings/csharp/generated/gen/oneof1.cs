@@ -20,7 +20,7 @@ namespace Spectest {
     }
 
     /// <summary>spectest.Oneof1</summary>
-    public sealed partial class Oneof1 {
+    public sealed partial class Oneof1 : Pbwire.INativeModel {
         /// <summary>Field number for the "name" field.</summary>
         public const int NameFieldNumber = 1;
         public string Name { get; set; }  = "";
@@ -113,6 +113,9 @@ namespace Spectest {
             using Pbwire.Message msg = PbwireFile_Oneof1.Schema.Message("spectest.Oneof1").Decode(wire);
             LoadFrom(msg);
         }
+        /// <summary>The native-object entry: one call per op over the shipped converter.</summary>
+        void Pbwire.INativeModel.WriteTo(Pbwire.Message msg) { EncodeInto(msg); }
+        void Pbwire.INativeModel.ReadFrom(Pbwire.Message msg) { LoadFrom(msg); }
         public void MergeFrom(Oneof1 other) {
             if (other == null) { return; }
             Name = other.Name;
@@ -144,10 +147,92 @@ namespace Spectest {
             var subInner = msg.GetMessage("inner");
             if (subInner != null) { var m = new Types.Inner(); m.LoadFrom(subInner); Inner = m; }
         }
+        /// <summary>Bytes of one flat image: the native object's pinned representation.</summary>
+        public const int ImageBytes = 40;
+        /// <summary>Copies this native object into a zeroed flat image; strings, bytes and sub-images come from <paramref name="arena"/>.</summary>
+        public unsafe void WriteImage(byte* img, global::Pbwire.ImageArena arena) {
+            *(IntPtr*)(img + 8) = Name.Length == 0 ? IntPtr.Zero : arena.Utf8(Name);
+            *(int*)(img + 0) = (int)(Num);
+            *(uint*)(img + 32) = (uint)KindCase;
+            *(IntPtr*)(img + 16) = Text.Length == 0 ? IntPtr.Zero : arena.Utf8(Text);
+            *(uint*)(img + 32) = (uint)KindCase;
+            *(IntPtr*)(img + 24) = Inner == null ? IntPtr.Zero : (IntPtr)Inner.NewImage(arena);
+            *(uint*)(img + 32) = (uint)KindCase;
+        }
+
+        /// <summary>Allocates a zeroed sub-image from the call arena and fills it.</summary>
+        public unsafe byte* NewImage(global::Pbwire.ImageArena arena) {
+            var p = (byte*)arena.Alloc(ImageBytes);
+            global::Pbwire.ImageArena.Clear(p, ImageBytes);
+            WriteImage(p, arena);
+            return p;
+            }
+
+        /// <summary>Copies a decoded flat image into this native object; the image's pointers must still be alive.</summary>
+        public unsafe void ReadImage(byte* img) {
+            {
+                var p = *(IntPtr*)(img + 8);
+                Name = p == IntPtr.Zero ? "" : (global::System.Runtime.InteropServices.Marshal.PtrToStringUTF8(p) ?? "");
+            }
+            switch (*(uint*)(img + 32)) {
+                case 2:
+                    Num = *(int*)(img + 0);
+                    break;
+                case 3:
+                    { var p = *(IntPtr*)(img + 16); Text = p == IntPtr.Zero ? "" : (global::System.Runtime.InteropServices.Marshal.PtrToStringUTF8(p) ?? ""); }
+                    break;
+                case 4:
+                    { var p = *(byte**)(img + 24); if (p != null) { var c = new Types.Inner(); c.ReadImage(p); Inner = c; } }
+                    break;
+                default: break;
+            }
+            GC.KeepAlive(this);
+        }
+
+        /// <summary>Flat slot layout: scalar offsets, pointer slots for the reference-typed fields, one presence bit per proto3 optional. Read by the native-object entry, gated by Pbwire.Layout.Verify.</summary>
+        public static class Oneof1Layout {
+            /// <summary>The message type the table describes.</summary>
+            public static readonly global::Pbwire.MessageType Type = PbwireFile_Oneof1.Schema.Message("spectest.Oneof1");
+            /// <summary>One row per field, in slot order.</summary>
+            public static readonly global::Pbwire.Layout Table = new global::Pbwire.Layout("spectest.Oneof1", 40, 0)
+                .FieldAt("num", 0, 4)
+                .Ref("name", 8, 8)
+                .Ref("text", 16, 8)
+                .Ref("inner", 24, 8);
+            /// <summary>One row per field, with the presence/count/oneof words and wire facts the C layout codec reads.</summary>
+            public static readonly global::Pbwire.LayoutRow[] Rows = {
+                new(2, global::Pbwire.FlatKind.Int32, 0, 5, Oneof: true, Case: 32),
+                new(1, global::Pbwire.FlatKind.String, 8, 9, Wire: 2),
+                new(3, global::Pbwire.FlatKind.String, 16, 9, Wire: 2, Oneof: true, Case: 32),
+                new(4, global::Pbwire.FlatKind.Message, 24, 11, Wire: 2, Oneof: true, Case: 32, Child: "spectest.Oneof1.Inner"),
+            };
+            /// <summary>This message's image, as the file's layout source sees it.</summary>
+            public static readonly global::Pbwire.LayoutType Spec = new("spectest.Oneof1", ImageBytes, Rows);
+            private static global::Pbwire.LayoutPlan? _plan;
+            /// <summary>The compiled reader, cached after the first call (no per-op lookup).</summary>
+            private static global::Pbwire.LayoutPlan Plan => _plan ??= global::Pbwire.LayoutPlan.Compile(PbwireFile_Oneof1.Layouts, Spec);
+            /// <summary>One call per op: native object in, wire bytes out (one native call over the flat image).</summary>
+            public static unsafe byte[] Marshal(Oneof1 native)
+            {
+                using var call = global::Pbwire.ImageCall.Rent(ImageBytes);
+                native.WriteImage(call.Image, call.Arena);
+                return Plan.Encode(call.Image);
+            }
+            /// <summary>One call per op: wire bytes in, native object out. The block carries the decoded image's strings, bytes and sub-images.</summary>
+            public static unsafe Oneof1 Unmarshal(byte[] wire)
+            {
+                using var call = global::Pbwire.ImageCall.Rent(ImageBytes, wire.Length * 4 + 65536);
+                Plan.Decode(wire, call.Image, call.DecodeArena, call.DecodeArenaBytes);
+                var native = new Oneof1();
+                native.ReadImage(call.Image);
+                return native;
+            }
+        }
+
 
         public static partial class Types {
             /// <summary>spectest.Oneof1.Inner</summary>
-            public sealed partial class Inner {
+            public sealed partial class Inner : Pbwire.INativeModel {
                 /// <summary>Field number for the "v" field.</summary>
                 public const int VFieldNumber = 1;
                 public int V { get; set; }
@@ -190,6 +275,9 @@ namespace Spectest {
                     using Pbwire.Message msg = PbwireFile_Oneof1.Schema.Message("spectest.Oneof1.Inner").Decode(wire);
                     LoadFrom(msg);
                 }
+                /// <summary>The native-object entry: one call per op over the shipped converter.</summary>
+                void Pbwire.INativeModel.WriteTo(Pbwire.Message msg) { EncodeInto(msg); }
+                void Pbwire.INativeModel.ReadFrom(Pbwire.Message msg) { LoadFrom(msg); }
                 public void MergeFrom(Inner other) {
                     if (other == null) { return; }
                     V = other.V;
@@ -202,6 +290,61 @@ namespace Spectest {
                 internal void LoadFrom(Pbwire.Message msg) {
                     V = (int)msg.GetInt("v");
                 }
+                /// <summary>Bytes of one flat image: the native object's pinned representation.</summary>
+                public const int ImageBytes = 8;
+                /// <summary>Copies this native object into a zeroed flat image; strings, bytes and sub-images come from <paramref name="arena"/>.</summary>
+                public unsafe void WriteImage(byte* img, global::Pbwire.ImageArena arena) {
+                    *(int*)(img + 0) = (int)(V);
+                }
+
+                /// <summary>Allocates a zeroed sub-image from the call arena and fills it.</summary>
+                public unsafe byte* NewImage(global::Pbwire.ImageArena arena) {
+                    var p = (byte*)arena.Alloc(ImageBytes);
+                    global::Pbwire.ImageArena.Clear(p, ImageBytes);
+                    WriteImage(p, arena);
+                    return p;
+                    }
+
+                /// <summary>Copies a decoded flat image into this native object; the image's pointers must still be alive.</summary>
+                public unsafe void ReadImage(byte* img) {
+                    V = *(int*)(img + 0);
+                    GC.KeepAlive(this);
+                }
+
+                /// <summary>Flat slot layout: scalar offsets, pointer slots for the reference-typed fields, one presence bit per proto3 optional. Read by the native-object entry, gated by Pbwire.Layout.Verify.</summary>
+                public static class InnerLayout {
+                    /// <summary>The message type the table describes.</summary>
+                    public static readonly global::Pbwire.MessageType Type = PbwireFile_Oneof1.Schema.Message("spectest.Oneof1.Inner");
+                    /// <summary>One row per field, in slot order.</summary>
+                    public static readonly global::Pbwire.Layout Table = new global::Pbwire.Layout("spectest.Oneof1.Inner", 8, 0)
+                        .FieldAt("v", 0, 4);
+                    /// <summary>One row per field, with the presence/count/oneof words and wire facts the C layout codec reads.</summary>
+                    public static readonly global::Pbwire.LayoutRow[] Rows = {
+                        new(1, global::Pbwire.FlatKind.Int32, 0, 5),
+                    };
+                    /// <summary>This message's image, as the file's layout source sees it.</summary>
+                    public static readonly global::Pbwire.LayoutType Spec = new("spectest.Oneof1.Inner", ImageBytes, Rows);
+                    private static global::Pbwire.LayoutPlan? _plan;
+                    /// <summary>The compiled reader, cached after the first call (no per-op lookup).</summary>
+                    private static global::Pbwire.LayoutPlan Plan => _plan ??= global::Pbwire.LayoutPlan.Compile(PbwireFile_Oneof1.Layouts, Spec);
+                    /// <summary>One call per op: native object in, wire bytes out (one native call over the flat image).</summary>
+                    public static unsafe byte[] Marshal(Inner native)
+                    {
+                        using var call = global::Pbwire.ImageCall.Rent(ImageBytes);
+                        native.WriteImage(call.Image, call.Arena);
+                        return Plan.Encode(call.Image);
+                    }
+                    /// <summary>One call per op: wire bytes in, native object out. The block carries the decoded image's strings, bytes and sub-images.</summary>
+                    public static unsafe Inner Unmarshal(byte[] wire)
+                    {
+                        using var call = global::Pbwire.ImageCall.Rent(ImageBytes, wire.Length * 4 + 65536);
+                        Plan.Decode(wire, call.Image, call.DecodeArena, call.DecodeArenaBytes);
+                        var native = new Inner();
+                        native.ReadImage(call.Image);
+                        return native;
+                    }
+                }
+
             }
 
         }

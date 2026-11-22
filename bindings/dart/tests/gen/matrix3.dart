@@ -3,6 +3,8 @@
 // Do not edit; regenerate from the .proto instead.
 
 import 'dart:typed_data';
+import 'dart:ffi' as ffi;
+import 'package:ffi/ffi.dart' as ffi;
 
 import 'package:fixnum/fixnum.dart';
 import 'package:protobuf/protobuf.dart' as $pb;
@@ -89,6 +91,24 @@ class Inner3 {
   }
 }
 
+
+/// structtest.Inner3 as a flat `dart:ffi` image: the native object the layout codec
+/// reads and writes in one call.
+final class Inner3Layout extends ffi.Struct {
+  external ffi.Pointer<ffi.Utf8> name;
+  @ffi.Int32() external int value;
+  static int get layoutSize => ffi.sizeOf<Inner3Layout>();
+}
+
+/// Byte offset of each field's value slot of structtest.Inner3, in descriptor order.
+const List<int> inner3LayoutOffsets = <int>[0, 8];
+/// Field numbers matching [inner3LayoutOffsets].
+const List<int> inner3LayoutNumbers = <int>[1, 2];
+/// structtest.Inner3's layout rows: the flat image the native reader consumes.
+const List<PbwField> inner3LayoutRows = <PbwField>[
+  PbwField(number: 1, kind: PbwKind.string_, offset: 0, type: 9, wire: 2),
+  PbwField(number: 2, kind: PbwKind.int32, offset: 8, type: 5, wire: 0),
+];
 /// structtest.Scalars3
 class Scalars3 {
   Scalars3._();
@@ -355,3 +375,66 @@ class Scalars3 {
   }
 }
 
+
+/// structtest.Scalars3 as a flat `dart:ffi` image: the native object the layout codec
+/// reads and writes in one call.
+final class Scalars3Layout extends ffi.Struct {
+  @ffi.Int32() external int i32;
+  @ffi.Int64() external int i64;
+  @ffi.Uint32() external int u32;
+  @ffi.Uint64() external int u64;
+  @ffi.Int32() external int s32;
+  @ffi.Int64() external int s64;
+  @ffi.Uint32() external int fx32;
+  @ffi.Uint64() external int fx64;
+  @ffi.Int32() external int sfx32;
+  @ffi.Int64() external int sfx64;
+  @ffi.Float() external double f32;
+  @ffi.Double() external double f64;
+  @ffi.Bool() external bool flag;
+  external ffi.Pointer<ffi.Utf8> str;
+  @ffi.Int32() external int color;
+  external ffi.Pointer<Inner3Layout> inner;
+  external ffi.Pointer<ffi.Int32> nums;
+  @ffi.IntPtr() external int numsCount;
+  external ffi.Pointer<ffi.Pointer<ffi.Utf8>> tags;
+  @ffi.IntPtr() external int tagsCount;
+  external ffi.Pointer<Inner3Layout> inners;
+  @ffi.IntPtr() external int innersCount;
+  @ffi.Int32() external int optI32;
+  @ffi.Int32() external int hasOptI32;
+  external ffi.Pointer<ffi.Utf8> optStr;
+  external ffi.Pointer<ffi.Bool> flags;
+  @ffi.IntPtr() external int flagsCount;
+  static int get layoutSize => ffi.sizeOf<Scalars3Layout>();
+}
+
+/// Byte offset of each field's value slot of structtest.Scalars3, in descriptor order.
+const List<int> scalars3LayoutOffsets = <int>[0, 8, 16, 24, 32, 40, 48, 56, 64, 72, 80, 88, 96, 104, 112, 120, 128, 144, 160, 176, 184, 192];
+/// Field numbers matching [scalars3LayoutOffsets].
+const List<int> scalars3LayoutNumbers = <int>[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22];
+/// structtest.Scalars3's layout rows: the flat image the native reader consumes.
+const List<PbwField> scalars3LayoutRows = <PbwField>[
+  PbwField(number: 1, kind: PbwKind.int32, offset: 0, type: 5, wire: 0),
+  PbwField(number: 2, kind: PbwKind.int64, offset: 8, type: 3, wire: 0),
+  PbwField(number: 3, kind: PbwKind.uint32, offset: 16, type: 13, wire: 0),
+  PbwField(number: 4, kind: PbwKind.uint64, offset: 24, type: 4, wire: 0),
+  PbwField(number: 5, kind: PbwKind.int32, offset: 32, type: 17, wire: 0),
+  PbwField(number: 6, kind: PbwKind.int64, offset: 40, type: 18, wire: 0),
+  PbwField(number: 7, kind: PbwKind.uint32, offset: 48, type: 7, wire: 5),
+  PbwField(number: 8, kind: PbwKind.uint64, offset: 56, type: 6, wire: 1),
+  PbwField(number: 9, kind: PbwKind.int32, offset: 64, type: 15, wire: 5),
+  PbwField(number: 10, kind: PbwKind.int64, offset: 72, type: 16, wire: 1),
+  PbwField(number: 11, kind: PbwKind.float32, offset: 80, type: 2, wire: 5),
+  PbwField(number: 12, kind: PbwKind.float64, offset: 88, type: 1, wire: 1),
+  PbwField(number: 13, kind: PbwKind.boolean, offset: 96, type: 8, wire: 0),
+  PbwField(number: 14, kind: PbwKind.string_, offset: 104, type: 9, wire: 2),
+  PbwField(number: 15, kind: PbwKind.enumeration, offset: 112, type: 14, wire: 0),
+  PbwField(number: 16, kind: PbwKind.message, offset: 120, child: 'structtest.Inner3', type: 11, wire: 2),
+  PbwField(number: 17, kind: PbwKind.int32, offset: 128, repeated: true, count: 136, type: 5, wire: 0, packed: true),
+  PbwField(number: 18, kind: PbwKind.string_, offset: 144, repeated: true, count: 152, type: 9, wire: 2),
+  PbwField(number: 19, kind: PbwKind.message, offset: 160, repeated: true, count: 168, child: 'structtest.Inner3', type: 11, wire: 2),
+  PbwField(number: 20, kind: PbwKind.int32, offset: 176, has: 180, type: 5, wire: 0),
+  PbwField(number: 21, kind: PbwKind.string_, offset: 184, type: 9, wire: 2),
+  PbwField(number: 22, kind: PbwKind.boolean, offset: 192, repeated: true, count: 200, type: 8, wire: 0, packed: true),
+];

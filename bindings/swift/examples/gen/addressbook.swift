@@ -46,6 +46,22 @@ public struct Tutorial_Person_PhoneNumber {
     }
 }
 
+
+/// tutorial.Person.PhoneNumber as a flat native mirror: one C call reads and writes it in place.
+@frozen
+public struct Tutorial_Person_PhoneNumberRepr: Pbwire.ReprMessage {
+    public var number: UnsafePointer<CChar>? = nil
+    public var type: Int32 = 0
+    public var hasType: Int32 = 0
+    public init() {}
+
+    public static let protoName = "tutorial.Person.PhoneNumber"
+    public static let fields: [Pbwire.FieldPlan] = [
+        Pbwire.FieldPlan(number: 1, kind: .string, offset: MemoryLayout<Tutorial_Person_PhoneNumberRepr>.offset(of: \.number)!, type: 9, wire: 2, required: true),
+        Pbwire.FieldPlan(number: 2, kind: .`enum`, offset: MemoryLayout<Tutorial_Person_PhoneNumberRepr>.offset(of: \.type)!, type: 14, wire: 0, has: MemoryLayout<Tutorial_Person_PhoneNumberRepr>.offset(of: \.hasType)!),
+    ]
+}
+
 /// tutorial.Person
 public struct Tutorial_Person {
     public var name: String = ""
@@ -88,6 +104,29 @@ public struct Tutorial_Person {
     }
 }
 
+
+/// tutorial.Person as a flat native mirror: one C call reads and writes it in place.
+/// The child mirrors must be registered before this one.
+@frozen
+public struct Tutorial_PersonRepr: Pbwire.ReprMessage {
+    public var name: UnsafePointer<CChar>? = nil
+    public var id: Int32 = 0
+    public var email: UnsafePointer<CChar>? = nil
+    public var phones: UnsafeMutablePointer<Tutorial_Person_PhoneNumberRepr>? = nil
+    public var countPhones: Int = 0
+    public var hasId: Int32 = 0
+    public init() {}
+
+    public static let protoName = "tutorial.Person"
+    public static let children: [any Pbwire.ReprMessage.Type] = [Tutorial_Person_PhoneNumberRepr.self]
+    public static let fields: [Pbwire.FieldPlan] = [
+        Pbwire.FieldPlan(number: 1, kind: .string, offset: MemoryLayout<Tutorial_PersonRepr>.offset(of: \.name)!, type: 9, wire: 2, required: true),
+        Pbwire.FieldPlan(number: 2, kind: .int32, offset: MemoryLayout<Tutorial_PersonRepr>.offset(of: \.id)!, type: 5, wire: 0, has: MemoryLayout<Tutorial_PersonRepr>.offset(of: \.hasId)!, required: true),
+        Pbwire.FieldPlan(number: 3, kind: .string, offset: MemoryLayout<Tutorial_PersonRepr>.offset(of: \.email)!, type: 9, wire: 2),
+        Pbwire.FieldPlan(number: 4, kind: .message, offset: MemoryLayout<Tutorial_PersonRepr>.offset(of: \.phones)!, type: 11, wire: 2, repeated: true, count: MemoryLayout<Tutorial_PersonRepr>.offset(of: \.countPhones)!, elem: MemoryLayout<Tutorial_Person_PhoneNumberRepr>.stride),
+    ]
+}
+
 /// tutorial.AddressBook
 public struct Tutorial_AddressBook {
     public var people: [Tutorial_Person] = []
@@ -119,5 +158,21 @@ public struct Tutorial_AddressBook {
         }
         return out
     }
+}
+
+
+/// tutorial.AddressBook as a flat native mirror: one C call reads and writes it in place.
+/// The child mirrors must be registered before this one.
+@frozen
+public struct Tutorial_AddressBookRepr: Pbwire.ReprMessage {
+    public var people: UnsafeMutablePointer<Tutorial_PersonRepr>? = nil
+    public var countPeople: Int = 0
+    public init() {}
+
+    public static let protoName = "tutorial.AddressBook"
+    public static let children: [any Pbwire.ReprMessage.Type] = [Tutorial_PersonRepr.self]
+    public static let fields: [Pbwire.FieldPlan] = [
+        Pbwire.FieldPlan(number: 1, kind: .message, offset: MemoryLayout<Tutorial_AddressBookRepr>.offset(of: \.people)!, type: 11, wire: 2, repeated: true, count: MemoryLayout<Tutorial_AddressBookRepr>.offset(of: \.countPeople)!, elem: MemoryLayout<Tutorial_PersonRepr>.stride),
+    ]
 }
 

@@ -152,6 +152,12 @@ func parseOptions(param string) (gen.Options, error) {
 				return opt, fmt.Errorf("bad option %q (want true or false)", part)
 			}
 			opt.Registry = b
+		case "layout":
+			b, err := strconv.ParseBool(value)
+			if err != nil {
+				return opt, fmt.Errorf("bad option %q (want true or false)", part)
+			}
+			opt.NoLayout = !b
 		default:
 			if rest, ok := strings.CutPrefix(key, "M"); ok {
 				if opt.Mappings == nil {

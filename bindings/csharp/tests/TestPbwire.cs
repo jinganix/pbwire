@@ -281,6 +281,8 @@ Check(Rejects(() => edgeTy.NewMessage().SetMessage("text"), "not a message field
     live.Dispose();
 }
 
+var coreChecks = Pbwire.Test.CoreTests.Run(Path.GetDirectoryName(Path.GetFullPath(desc))!);
+Console.WriteLine($"OK   pure core: {coreChecks} checks passed");
 Console.WriteLine($"OK   {checks} checks passed");
 
 static bool Rejects(Action op, string expected)

@@ -25,6 +25,12 @@ same way, the way the Erlang binding reuses gpb instead of duplicating it.
 | conformance | [`conformance/`](conformance/) | status and plan: blocked on test-message module-name collisions |
 | plugin | none | `elixir-protobuf` (`protoc-gen-elixir`) is the generator; `__message_props__/0` is the schema source |
 
+Mechanisms: `tree` (the NIF handle over the shared core, structs in and out) and
+`shim` (the single NIF entry that reads the struct directly). No `core` arm:
+`elixir-protobuf` is the pure-Elixir codec and the baseline, so a second pure
+implementation would measure our code against the competitor. Contract:
+[`../README.md#pbench-three-arms-one-contract`](../README.md#pbench-three-arms-one-contract).
+
 ## Build and run
 
 Needs Elixir (see [`.tool-versions`](.tool-versions)) and a C compiler; `mix`

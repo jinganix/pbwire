@@ -32,6 +32,8 @@ export as_int, as_bool, as_float, as_double, as_string, as_bytes, as_message
 export encode_deterministic, encode_delimited, decode_delimited, decode_limits
 export print_json, parse_json, print_text, parse_text
 export encoded_size, is_initialized
+export LayoutRow, LayoutSchema, layout_schema, LayoutType, layout_type
+export LayoutPlan, layout_plan, encode_layout, decode_layout
 export any_pack, any_type_url, any_payload
 export timestamp_millis, duration_millis, timestamp_from_millis, duration_from_millis
 export fieldmask_paths, visit
@@ -72,6 +74,32 @@ function _libpath()
         end
     end
     throw(PbwireError(-1, "no shared library found (set PBWIRE_LIB; run `make shared`)"))
+end
+
+"""`ENV["PBWIRE_JULIA_LIB"]`, else `build/libpbwire_julia.{dylib,so}` by walking up."""
+function _julia_libpath()
+    env = get(ENV, "PBWIRE_JULIA_LIB", "")
+    if !isempty(env)
+        return env
+    end
+    for start in (pwd(), dirname(@__FILE__))
+        dir = abspath(start)
+        while true
+            for suffix in ("dylib", "so")
+                candidate = joinpath(dir, "build", "libpbwire_julia.$suffix")
+                if isfile(candidate)
+                    return candidate
+                end
+            end
+            parent = dirname(dir)
+            if parent == dir
+                break
+            end
+            dir = parent
+        end
+    end
+    throw(PbwireError(-1,
+        "no layout library found (run `make julia-shim-native`)"))
 end
 
 # `ccall` in recent Julia needs a compile-time library name, so every C
@@ -160,6 +188,13 @@ const _p_pbw_value_new_double = Ref{Ptr{Cvoid}}(C_NULL)
 const _p_pbw_value_new_float = Ref{Ptr{Cvoid}}(C_NULL)
 const _p_pbw_value_new_int = Ref{Ptr{Cvoid}}(C_NULL)
 const _p_pbw_value_new_string = Ref{Ptr{Cvoid}}(C_NULL)
+const _jl_handle = Ref{Ptr{Cvoid}}(C_NULL)
+const _p_pbw_julia_schema_new = Ref{Ptr{Cvoid}}(C_NULL)
+const _p_pbw_julia_schema_free = Ref{Ptr{Cvoid}}(C_NULL)
+const _p_pbw_julia_type_new = Ref{Ptr{Cvoid}}(C_NULL)
+const _p_pbw_julia_type_free = Ref{Ptr{Cvoid}}(C_NULL)
+const _p_pbw_julia_encode = Ref{Ptr{Cvoid}}(C_NULL)
+const _p_pbw_julia_decode = Ref{Ptr{Cvoid}}(C_NULL)
 
 macro libcall(fname, Ret, ArgT, args...)
     if !(fname isa QuoteNode)
@@ -773,6 +808,195 @@ function decode_dict(ty::MsgType, wire::Vector{UInt8})
     finally
         close(m)
     end
+end
+
+
+# ------------------------------------------------------------- flat layout
+
+"""One row of a generated layout: the C reader's field facts plus a slot
+offset (computed with `fieldoffset` in the generated file, never hard-coded).
+`child` is a message row's proto full name, empty otherwise."""
+struct LayoutRow
+    number::UInt64
+    kind::UInt64
+    repeated::UInt64
+    offset::UInt64
+    has::UInt64
+    count::UInt64
+    type::UInt64
+    wire::UInt64
+    packed::UInt64
+    required::UInt64
+    oneof::UInt64
+    cs::UInt64
+    child::String
+end
+
+# The core's inline pbw_bytes_t (data, len); embedded in a layout image.
+struct _PbwBytes
+    data::Ptr{UInt8}
+    len::Csize_t
+end
+
+# The C row mirror: every field is 64-bit so the Julia vector needs no padding
+# rules, plus the child's proto full name as a NUL-terminated pointer.
+struct _PbwJuliaRow
+    number::UInt64
+    kind::UInt64
+    repeated::UInt64
+    offset::UInt64
+    has::UInt64
+    count::UInt64
+    type::UInt64
+    wire::UInt64
+    packed::UInt64
+    required::UInt64
+    oneof::UInt64
+    cs::UInt64
+    child::Ptr{UInt8}
+end
+
+function _ensure_layout_lib()
+    if _jl_handle[] != C_NULL
+        return
+    end
+    h = Libdl.dlopen(_julia_libpath())
+    _p_pbw_julia_schema_new[] = Libdl.dlsym(h, :pbw_julia_schema_new)
+    _p_pbw_julia_schema_free[] = Libdl.dlsym(h, :pbw_julia_schema_free)
+    _p_pbw_julia_type_new[] = Libdl.dlsym(h, :pbw_julia_type_new)
+    _p_pbw_julia_type_free[] = Libdl.dlsym(h, :pbw_julia_type_free)
+    _p_pbw_julia_encode[] = Libdl.dlsym(h, :pbw_julia_encode)
+    _p_pbw_julia_decode[] = Libdl.dlsym(h, :pbw_julia_decode)
+    _jl_handle[] = h
+end
+
+"""A registry for one core [`Schema`](@ref), owned by the layout library.
+It keeps the types compiled from the generated rows; the schema itself stays
+owned by the core wrapper."""
+mutable struct LayoutSchema
+    handle::Ptr{Cvoid}
+    schema::Schema
+    function LayoutSchema(schema::Schema)
+        _ensure_layout_lib()
+        out = Ref{Ptr{Cvoid}}(C_NULL)
+        GC.@preserve schema begin
+            status = @libcall(:pbw_julia_schema_new, Cint,
+                (Ptr{Cvoid}, Ptr{Ptr{Cvoid}}), schema.handle, out)
+        end
+        _check(status, "layout schema")
+        ls = new(out[], schema)
+        finalizer(ls) do x
+            if x.handle != C_NULL
+                @libcall(:pbw_julia_schema_free, Cvoid, (Ptr{Cvoid},), x.handle)
+                x.handle = C_NULL
+            end
+        end
+        return ls
+    end
+end
+
+"""Wraps a core schema for the layout reader (one registry per schema)."""
+layout_schema(schema::Schema) = LayoutSchema(schema)
+
+"""A compiled layout of one generated `mutable struct`: the native object plus
+its reusable encode buffer. Child types must be registered before their parent;
+the registry, kept alive here, owns and frees them all together."""
+mutable struct LayoutType
+    handle::Ptr{Cvoid}
+    name::String
+    size::Int
+    schema::LayoutSchema # keeps the registry (and the core schema) alive
+    function LayoutType(handle::Ptr{Cvoid}, name::String, size::Int,
+            schema::LayoutSchema)
+        if handle == C_NULL
+            throw(PbwireError(-1, "layout type: out of memory"))
+        end
+        # The registry owns every type it compiled and frees them together,
+        # so a type never frees itself (that would double-free a child that
+        # outlived its parent's finalizer).
+        return new(handle, name, size, schema)
+    end
+end
+
+"""Registers one generated layout type. `rows` come from the generated
+`<message>LayoutRows`; offsets are `fieldoffset` calls, so they cannot drift
+from the Julia struct. The child row must be registered first."""
+function layout_type(schema::LayoutSchema, name::String, ::Type{T},
+        rows::Vector{LayoutRow}) where {T}
+    crows = Vector{_PbwJuliaRow}(undef, length(rows))
+    children = Vector{String}(undef, length(rows))
+    for i in eachindex(rows)
+        r = rows[i]
+        children[i] = r.child
+        crows[i] = _PbwJuliaRow(r.number, r.kind, r.repeated, r.offset,
+            r.has, r.count, r.type, r.wire, r.packed, r.required,
+            r.oneof, r.cs, Ptr{UInt8}(C_NULL))
+    end
+    # The C registration only needs the child name during the call; keeping
+    # the strings in `children` alive here is what makes their pointers valid.
+    GC.@preserve crows children schema begin
+        for i in eachindex(rows)
+            if !isempty(children[i])
+                crows[i] = _PbwJuliaRow(rows[i].number, rows[i].kind,
+                    rows[i].repeated, rows[i].offset, rows[i].has,
+                    rows[i].count, rows[i].type, rows[i].wire,
+                    rows[i].packed, rows[i].required, rows[i].oneof,
+                    rows[i].cs, Base.unsafe_convert(Ptr{UInt8}, children[i]))
+            end
+        end
+        out = Ref{Ptr{Cvoid}}(C_NULL)
+        status = @libcall(:pbw_julia_type_new, Cint,
+            (Ptr{Cvoid}, Cstring, Ptr{_PbwJuliaRow}, Csize_t, Csize_t,
+             Ptr{Ptr{Cvoid}}),
+            schema.handle, name, crows, length(crows), sizeof(T), out)
+        _check(status, "layout type $name")
+        return LayoutType(out[], name, Int(sizeof(T)), schema)
+    end
+end
+
+"""A reusable layout call: the compiled type, one zeroed native image and one
+call-owned arena. `decode_layout` fills `image` and bump-allocates every
+string/bytes/child from `arena`, so the plan must outlive a decoded image."""
+mutable struct LayoutPlan{T}
+    layout::LayoutType
+    image::T
+    arena::Vector{UInt8}
+end
+
+"""Compiles a generated layout and allocates its image and arena once."""
+function layout_plan(schema::LayoutSchema, name::String, ::Type{T},
+        rows::Vector{LayoutRow}; arena_bytes::Integer = 1 << 20) where {T}
+    lt = layout_type(schema, name, T, rows)
+    return LayoutPlan{T}(lt, T(), Vector{UInt8}(undef, Int(arena_bytes)))
+end
+
+"""Native image -> wire bytes, one ccall. The image is borrowed: strings,
+byte arrays, repeated arrays and sub-images must stay alive for the call."""
+function encode_layout(::Type{T}, msg::T, plan::LayoutPlan{T}) where {T}
+    out = Ref{Ptr{UInt8}}(C_NULL)
+    len = Ref{Csize_t}(0)
+    GC.@preserve msg plan begin
+        status = @libcall(:pbw_julia_encode, Cint,
+            (Ptr{Cvoid}, Ref{T}, Ptr{Ptr{UInt8}}, Ptr{Csize_t}),
+            plan.layout.handle, msg, out, len)
+    end
+    _check(status, "layout encode")
+    n = Int(len[])
+    wire = copy(unsafe_wrap(Array, out[], n; own = false))
+    return wire
+end
+
+"""Wire bytes -> the plan's native image, one ccall. The decoded pointers
+live in `plan.arena`, so a later decode or freeing the plan invalidates it."""
+function decode_layout(bytes::Vector{UInt8}, ::Type{T}, plan::LayoutPlan{T}) where {T}
+    GC.@preserve bytes plan begin
+        status = @libcall(:pbw_julia_decode, Cint,
+            (Ptr{Cvoid}, Ptr{UInt8}, Csize_t, Ref{T}, Ptr{UInt8}, Csize_t),
+            plan.layout.handle, isempty(bytes) ? C_NULL : bytes,
+            length(bytes), plan.image, plan.arena, length(plan.arena))
+    end
+    _check(status, "layout decode")
+    return plan.image
 end
 
 # ------------------------------------------------------------------ extras

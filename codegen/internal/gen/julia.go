@@ -35,6 +35,7 @@ func juliaFiles(f *model.File, opt Options) ([]File, error) {
 		}
 		for _, m := range f.Messages {
 			writeJuliaMessage(&b, f, m)
+			writeJuliaLayout(&b, f, m)
 		}
 		files = append(files, File{Name: base(f) + "_pbwire.jl", Content: b.String()})
 	}
@@ -280,4 +281,246 @@ func writeJuliaFromDict(b *strings.Builder, f *model.File, field model.Field) {
 		fmt.Fprintf(b, "        out.%s = d[%q]\n", name, name)
 		b.WriteString("    end\n")
 	}
+}
+
+/* ------------------------------------------------------------ flat layout */
+
+// The native-object arm (plan 07): every message the flat codec can express
+// gets a mutable Julia struct whose fields are the C codec's in-place image,
+// plus a LayoutRow table built with `fieldoffset`, so the Julia struct and the
+// C row table cannot disagree. Offsets are computed by Julia at load time (not
+// hard-coded here); the rows carry the field facts pbw_struct_codec_* needs.
+//
+// Non-blittable slots follow bindings/c/runtime/pbw_struct.h: a string slot is
+// a `Ptr{UInt8}` to NUL-terminated UTF-8, bytes are the core's inline
+// `pbw_bytes_t` (`_PbwBytes`), a sub-message is a pointer to the child image,
+// and a repeated field is a pointer to a contiguous array plus a count. The
+// caller keeps the strings/arrays alive while encode borrows the image; decode
+// bump-allocates them from the caller's arena.
+
+// juliaLayoutKindInfo maps one field kind to the row facts and Julia slot type.
+func juliaLayoutKindInfo(field model.Field) (jl string, cKind, typ, wire int, ok bool) {
+	switch field.Kind {
+	case protoreflect.Int32Kind:
+		return "Int32", 0, 5, 0, true
+	case protoreflect.Sint32Kind:
+		return "Int32", 0, 17, 0, true
+	case protoreflect.Sfixed32Kind:
+		return "Int32", 0, 15, 5, true
+	case protoreflect.Int64Kind:
+		return "Int64", 1, 3, 0, true
+	case protoreflect.Sint64Kind:
+		return "Int64", 1, 18, 0, true
+	case protoreflect.Sfixed64Kind:
+		return "Int64", 1, 16, 1, true
+	case protoreflect.Uint32Kind:
+		return "UInt32", 2, 13, 0, true
+	case protoreflect.Fixed32Kind:
+		return "UInt32", 2, 7, 5, true
+	case protoreflect.Uint64Kind:
+		return "UInt64", 3, 4, 0, true
+	case protoreflect.Fixed64Kind:
+		return "UInt64", 3, 6, 1, true
+	case protoreflect.BoolKind:
+		return "Bool", 4, 8, 0, true
+	case protoreflect.FloatKind:
+		return "Float32", 5, 2, 5, true
+	case protoreflect.DoubleKind:
+		return "Float64", 6, 1, 1, true
+	case protoreflect.StringKind:
+		return "Ptr{UInt8}", 7, 9, 2, true
+	case protoreflect.BytesKind:
+		return "Pbwire._PbwBytes", 8, 12, 2, true
+	case protoreflect.EnumKind:
+		return "Int32", 9, 14, 0, true
+	case protoreflect.MessageKind:
+		return "Ptr{" + field.Message + "Layout}", 10, 11, 2, true
+	case protoreflect.GroupKind:
+		return "Ptr{" + field.Message + "Layout}", 10, 10, 3, true
+	}
+	return "", 0, 0, 0, false
+}
+
+// juliaLayoutOK reports whether a message's flat image is expressible: every
+// field has a slot, and every local child the message names does too.
+func juliaLayoutOK(f *model.File, m model.Message) bool {
+	return juliaLayoutOKMsg(f, m, map[string]bool{})
+}
+
+func juliaLayoutOKMsg(f *model.File, m model.Message, seen map[string]bool) bool {
+	if seen[m.Name] {
+		return true
+	}
+	seen[m.Name] = true
+	for _, field := range m.Fields {
+		if field.Skip != "" {
+			return false
+		}
+		if _, _, _, _, ok := juliaLayoutKindInfo(field); !ok {
+			return false
+		}
+		if field.Kind != protoreflect.MessageKind && field.Kind != protoreflect.GroupKind {
+			continue
+		}
+		if field.Import != "" {
+			continue // the sibling file emits its own layout
+		}
+		var child *model.Message
+		for i := range f.Messages {
+			if f.Messages[i].Name == field.Message {
+				child = &f.Messages[i]
+			}
+		}
+		if child == nil || !juliaLayoutOKMsg(f, *child, seen) {
+			return false
+		}
+	}
+	return true
+}
+
+func juliaLayoutChild(f *model.File, field model.Field) string {
+	if field.Full != "" {
+		return field.Full
+	}
+	for _, m := range f.Messages {
+		if m.Name == field.Message {
+			return m.Full
+		}
+	}
+	return field.Message
+}
+
+func juliaLayoutType(f *model.File, field model.Field) string {
+	_, _, _, _, _ = juliaLayoutKindInfo(field)
+	if field.Kind == protoreflect.MessageKind || field.Kind == protoreflect.GroupKind {
+		return field.Message + "Layout"
+	}
+	jl, _, _, _, _ := juliaLayoutKindInfo(field)
+	return jl
+}
+
+// writeJuliaLayout emits the flat mutable struct, its zero constructor and the
+// fieldoffset row table of one message.
+func writeJuliaLayout(b *strings.Builder, f *model.File, m model.Message) {
+	if !juliaLayoutOK(f, m) {
+		return
+	}
+	layout := m.Name + "Layout"
+	rowsVar := strings.ToLower(m.Name[:1]) + m.Name[1:] + "LayoutRows"
+	var decls []string
+	var zeros []string
+	var rows []string
+	cases := map[string]string{}
+	taken := map[string]bool{}
+	unique := func(name string) string {
+		for taken[name] {
+			name += "0"
+		}
+		taken[name] = true
+		return name
+	}
+	row := func(field model.Field, slot, has, count, cs string, oneof bool) {
+		jl, cKind, typ, wire, _ := juliaLayoutKindInfo(field)
+		_ = jl
+		child := "\"\""
+		if cKind == 10 {
+			child = "\"" + juliaLayoutChild(f, field) + "\""
+		}
+		rep, pack, hasArg, cntArg, csArg, oneofArg := "0", "0", "0", "0", "0", "0"
+		if field.Repeated {
+			rep = "1"
+		}
+		if field.Packed && field.Repeated {
+			pack = "1"
+		}
+		if has != "" {
+			hasArg = "fieldoffset(" + layout + ", :" + has + ")"
+		}
+		if count != "" {
+			cntArg = "fieldoffset(" + layout + ", :" + count + ")"
+		}
+		if oneof {
+			oneofArg = "1"
+			csArg = "fieldoffset(" + layout + ", :" + cs + ")"
+		}
+		required := "0"
+		if field.Required {
+			required = "1"
+		}
+		rows = append(rows, fmt.Sprintf(
+			"    Pbwire.LayoutRow(%d, %d, %s, fieldoffset(%s, :%s), %s, %s, %d, %d, %s, %s, %s, %s, %s),",
+			field.Number, cKind, rep, layout, field.Name, hasArg, cntArg,
+			typ, wire, pack, required, oneofArg, csArg, child))
+	}
+	for _, field := range m.Fields {
+		if !field.Repeated && field.Oneof != "" {
+			if _, seen := cases[field.Oneof]; !seen {
+				name := unique(field.Oneof + "Case")
+				cases[field.Oneof] = name
+				decls = append(decls, name+"::UInt32")
+				zeros = append(zeros, "UInt32(0)")
+			}
+		}
+		jl := juliaLayoutType(f, field)
+		name := field.Name
+		if field.Repeated {
+			decls = append(decls, name+"::Ptr{"+jl+"}")
+			zeros = append(zeros, "Ptr{"+jl+"}(C_NULL)")
+			count := unique(name + "Count")
+			decls = append(decls, count+"::Csize_t")
+			zeros = append(zeros, "Csize_t(0)")
+			row(field, "", "", count, "", false)
+			continue
+		}
+		declType := jl
+		zero := jl + "(0)"
+		switch jl {
+		case "Ptr{UInt8}":
+			zero = "Ptr{UInt8}(C_NULL)"
+		case "Pbwire._PbwBytes":
+			zero = "Pbwire._PbwBytes(C_NULL, 0)"
+		default:
+			if strings.HasPrefix(jl, "Ptr{") {
+				zero = jl + "(C_NULL)"
+			} else if field.Kind == protoreflect.MessageKind || field.Kind == protoreflect.GroupKind {
+				declType = "Ptr{" + jl + "}"
+				zero = "Ptr{" + jl + "}(C_NULL)"
+			}
+		}
+		decls = append(decls, name+"::"+declType)
+		zeros = append(zeros, zero)
+		has := ""
+		// A pointer-shaped slot is absent when NULL, a oneof uses its case
+		// word; every other optional scalar needs the 4-byte has flag.
+		_, cKind, _, _, _ := juliaLayoutKindInfo(field)
+		if field.Oneof == "" && (field.NeedsHas || field.Required) &&
+			cKind != 7 && cKind != 8 && cKind != 10 {
+			has = unique("has_" + field.Name)
+			decls = append(decls, has+"::Int32")
+			zeros = append(zeros, "Int32(0)")
+		}
+		cs := ""
+		if field.Oneof != "" {
+			cs = cases[field.Oneof]
+		}
+		row(field, "", has, "", cs, field.Oneof != "")
+	}
+	fmt.Fprintf(b, "\n# %s as a flat native image: one ccall reads and writes it in place.\n", m.Full)
+	fmt.Fprintf(b, "mutable struct %s\n", layout)
+	for _, d := range decls {
+		fmt.Fprintf(b, "    %s\n", d)
+	}
+	b.WriteString("end\n\n")
+	fmt.Fprintf(b, "function %s()\n", layout)
+	fmt.Fprintf(b, "    return %s(\n", layout)
+	for _, z := range zeros {
+		fmt.Fprintf(b, "        %s,\n", z)
+	}
+	b.WriteString("    )\n")
+	b.WriteString("end\n\n")
+	fmt.Fprintf(b, "const %s = Pbwire.LayoutRow[\n", rowsVar)
+	for _, r := range rows {
+		b.WriteString(r + "\n")
+	}
+	b.WriteString("]\n")
 }

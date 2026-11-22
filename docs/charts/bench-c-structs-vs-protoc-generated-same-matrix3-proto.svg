@@ -2,9 +2,9 @@
 <rect width="728" height="500" fill="#ffffff"/>
 <text x="364.0" y="26" text-anchor="middle" font-size="15" font-weight="bold">C structs vs protoc generated (same matrix3.proto) — MB/s by tier (log scale)</text>
 <rect x="64" y="40" width="12" height="12" fill="#2da44e"/>
-<text x="80" y="51" font-size="12">pbwire-c</text>
-<rect x="154.0" y="40" width="12" height="12" fill="#57606a"/>
-<text x="170.0" y="51" font-size="12">protoc gen</text>
+<text x="80" y="51" font-size="12">pbwire-c-shim</text>
+<rect x="186.5" y="40" width="12" height="12" fill="#57606a"/>
+<text x="202.5" y="51" font-size="12">protoc gen</text>
 <line x1="64" y1="351.2" x2="704" y2="351.2" stroke="#e1e4e8"/>
 <text x="56" y="355.2" text-anchor="end" font-size="10" fill="#57606a">500</text>
 <line x1="64" y1="228.7" x2="704" y2="228.7" stroke="#e1e4e8"/>

@@ -21,11 +21,15 @@ if ! command -v protoc-gen-dart >/dev/null 2>&1; then
     exit 1
 fi
 
+make -C "$root/codegen" build >/dev/null
 mkdir -p "$gen"
-protoc -I"$(dirname "$proto")" --dart_out="$gen" \
+protoc -I"$(dirname "$proto")" \
+    --plugin=protoc-gen-pbwire="$root/codegen/build/protoc-gen-pbwire" \
+    --dart_out="$gen" --pbwire_out="$gen" --pbwire_opt=lang=dart \
     --descriptor_set_out="$gen/matrix3.desc" --include_imports "$proto"
 
 make -C "$root" shared >/dev/null
+sh "$root/bindings/dart/build.sh" >/dev/null
 
 cd "$here"
 dart pub get >/dev/null

@@ -1,0 +1,1 @@
+../../../Tests/PbwireTests/gen/matrix3_meta.swift

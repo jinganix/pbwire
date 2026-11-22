@@ -8,6 +8,7 @@
 //   zig build example  run the round-trip example
 //   zig build bench    run the four standard tiers (needs a matrix3.desc path)
 //   zig build testee   build the conformance testee binary
+//   zig build -Dcore=true testee   the same testee on the pure-Zig core
 //
 // Written against the Zig 0.17 module-based build API (everything hangs off
 // b.createModule; Step.Compile takes only name + root_module).
@@ -31,6 +32,10 @@ const core_sources = [_][]const u8{
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+    // `-Dcore=true` selects the pure-Zig core for the test and testee steps:
+    // no C source, no translate-c, no `libpbwire.a` in that artifact. The
+    // default stays the static-link build.
+    const want_core = b.option(bool, "core", "Use the pure-Zig core (no C sources) for tests and the conformance testee") orelse false;
 
     // Static core library every artifact links.
     const core_mod = b.createModule(.{
@@ -44,6 +49,15 @@ pub fn build(b: *std.Build) void {
         .files = &core_sources,
         .flags = &.{ "-std=c99", "-Wall" },
     });
+    // The C binding's layout codec: the generated extern-struct mirror is
+    // walked in place by this file, so the binding links one implementation
+    // and adds no wire code of its own.
+    core_mod.addIncludePath(b.path("../c/runtime"));
+    core_mod.addCSourceFiles(.{
+        .root = b.path("../c/runtime"),
+        .files = &.{"pbw_struct.c"},
+        .flags = &.{ "-std=c99", "-Wall" },
+    });
     const lib = b.addLibrary(.{ .name = "pbwire", .root_module = core_mod });
 
     // The binding module itself: `const pbwire = @import("pbwire");`
@@ -54,6 +68,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     tc.addIncludePath(b.path("../../include"));
+    tc.addIncludePath(b.path("../c/runtime"));
     const pbwire_mod = b.createModule(.{
         .root_source_file = b.path("runtime/pbwire.zig"),
         .target = target,
@@ -63,6 +78,31 @@ pub fn build(b: *std.Build) void {
         },
     });
     pbwire_mod.addIncludePath(b.path("../../include"));
+    pbwire_mod.addIncludePath(b.path("../c/runtime"));
+
+    // The pure-Zig core: no C source, no translate-c, no libc dependency.
+    const pure_mod = b.createModule(.{
+        .root_source_file = b.path("core/root.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    // The pbench core arm, so the bench can import it as a module (Zig
+    // modules may not reach outside their own path).
+    const pbench_core_mod = b.createModule(.{
+        .root_source_file = b.path("pbench/core_arm.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "pbwire_core", .module = pure_mod }},
+    });
+
+    // The generated matrix3 model, for the shim row both bench harnesses time.
+    const model_mod = b.createModule(.{
+        .root_source_file = b.path("tests/gen/matrix3.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "pbwire", .module = pbwire_mod }},
+    });
 
     // zig build test
     const unit_mod = b.createModule(.{
@@ -77,6 +117,17 @@ pub fn build(b: *std.Build) void {
     const run_unit = b.addRunArtifact(unit);
     const test_step = b.step("test", "Run the self-check (zig test)");
     test_step.dependOn(&run_unit.step);
+
+    // The core's own tests (descriptor gate + codec). They link no C code.
+    const core_test_mod = b.createModule(.{
+        .root_source_file = b.path("tests/core/root.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "pbwire_core", .module = pure_mod }},
+    });
+    const core_test = b.addTest(.{ .name = "coretest", .root_module = core_test_mod });
+    const run_core_test = b.addRunArtifact(core_test);
+    test_step.dependOn(&run_core_test.step);
 
     // zig build generated-test: matrix3 oracle through the generated structs.
     const gen_mod = b.createModule(.{
@@ -112,7 +163,12 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
         .link_libc = true,
-        .imports = &.{.{ .name = "pbwire", .module = pbwire_mod }},
+        .imports = &.{
+            .{ .name = "pbwire", .module = pbwire_mod },
+            .{ .name = "pbwire_gen", .module = model_mod },
+            .{ .name = "pbwire_core", .module = pure_mod },
+            .{ .name = "pbench_core", .module = pbench_core_mod },
+        },
     });
     const bench = b.addExecutable(.{ .name = "bench", .root_module = bench_mod });
     bench.root_module.linkLibrary(lib);
@@ -120,16 +176,21 @@ pub fn build(b: *std.Build) void {
     const bench_step = b.step("bench", "Run the four standard tiers");
     bench_step.dependOn(&run_bench.step);
 
-    // zig build testee (installs conformance/testee-zig)
+    // zig build testee (installs conformance/testee-zig). `-Dcore=true`
+    // installs the pure-Zig testee instead: the official suite through the
+    // no-native path, with no C module and no libpbwire.a.
     const testee_mod = b.createModule(.{
-        .root_source_file = b.path("conformance/testee.zig"),
+        .root_source_file = b.path(if (want_core) "conformance/testee_core.zig" else "conformance/testee.zig"),
         .target = target,
         .optimize = optimize,
         .link_libc = true,
-        .imports = &.{.{ .name = "pbwire", .module = pbwire_mod }},
+        .imports = if (want_core)
+            &.{.{ .name = "pbwire_core", .module = pure_mod }}
+        else
+            &.{.{ .name = "pbwire", .module = pbwire_mod }},
     });
     const testee = b.addExecutable(.{ .name = "testee-zig", .root_module = testee_mod });
-    testee.root_module.linkLibrary(lib);
+    if (!want_core) testee.root_module.linkLibrary(lib);
     b.installArtifact(testee);
     const testee_step = b.step("testee", "Build the conformance testee");
     // Install, not just compile: the conformance target runs
@@ -148,7 +209,7 @@ pub fn build(b: *std.Build) void {
         const generator = zp.artifact("protoc-gen-zig");
 
         // System protoc drives their plugin (no protoc download involved).
-        const protoc = b.findProgram(.{ .names = &.{ "protoc" } }) orelse "protoc";
+        const protoc = b.findProgram(.{ .names = &.{"protoc"} }) orelse "protoc";
         const gen_run = b.addSystemCommand(&.{protoc});
         gen_run.addPrefixedArtifactArg("--plugin=protoc-gen-zig=", generator);
         const gen_dir = gen_run.addPrefixedOutputDirectoryArg("--zig_out=", "gen");
@@ -169,8 +230,11 @@ pub fn build(b: *std.Build) void {
             .link_libc = true,
             .imports = &.{
                 .{ .name = "pbwire", .module = pbwire_mod },
+                .{ .name = "pbwire_gen", .module = model_mod },
                 .{ .name = "protobuf", .module = protobuf_mod },
                 .{ .name = "matrix3", .module = matrix3_mod },
+                .{ .name = "pbwire_core", .module = pure_mod },
+                .{ .name = "pbench_core", .module = pbench_core_mod },
             },
         });
         const vs = b.addExecutable(.{ .name = "bench-vs-baseline", .root_module = vs_mod });

@@ -56,6 +56,45 @@ impl Inner3 {
     }
 }
 
+/// structtest.Inner3 as a flat native image: `Schema::in_place` hands this memory
+/// to the C struct codec, so one call reads or writes it in place.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct Inner3Flat {
+    pub name: *mut ::core::ffi::c_char,
+    pub value: i32,
+}
+
+impl Inner3Flat {
+    /// Field plan rows: name, slot offset, kind, flags, has/count/oneof
+    /// offsets, child image. Offsets are asserted below.
+    pub const FIELDS: &'static [pbwire::FieldPlan] = {
+        use pbwire::Kind;
+        &[
+            pbwire::FieldPlan("name", 0, Kind::String, 0, 0, 0, 0, None),
+            pbwire::FieldPlan("value", 8, Kind::I32, 0, 0, 0, 0, None),
+        ]
+    };
+}
+
+const _: () = assert!(::core::mem::offset_of!(Inner3Flat, name) == 0);
+const _: () = assert!(::core::mem::offset_of!(Inner3Flat, value) == 8);
+
+impl ::core::default::Default for Inner3Flat {
+    fn default() -> Self {
+        // SAFETY: every slot is an integer, a raw pointer, or `PbwBytes`,
+        // so an all-zero image is a valid (empty) message.
+        unsafe { ::core::mem::zeroed() }
+    }
+}
+
+unsafe impl pbwire::FlatMessage for Inner3Flat {
+    const FULL_NAME: &'static str = "structtest.Inner3";
+    fn fields() -> &'static [pbwire::FieldPlan] {
+        Inner3Flat::FIELDS
+    }
+}
+
 /// structtest.Scalars3
 #[derive(Clone, PartialEq, Debug, Default)]
 pub struct Scalars3 {
@@ -234,6 +273,115 @@ impl Scalars3 {
             }
         }
         Ok(o)
+    }
+}
+
+/// structtest.Scalars3 as a flat native image: `Schema::in_place` hands this memory
+/// to the C struct codec, so one call reads or writes it in place.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct Scalars3Flat {
+    pub i32: i32,
+    pub i64: i64,
+    pub u32: u32,
+    pub u64: u64,
+    pub s32: i32,
+    pub s64: i64,
+    pub fx32: u32,
+    pub fx64: u64,
+    pub sfx32: i32,
+    pub sfx64: i64,
+    pub f32: f32,
+    pub f64: f64,
+    pub flag: u8,
+    pub str: *mut ::core::ffi::c_char,
+    pub color: i32,
+    pub inner: *mut Inner3Flat,
+    pub nums: *mut i32,
+    pub nums_count: usize,
+    pub tags: *mut *mut ::core::ffi::c_char,
+    pub tags_count: usize,
+    pub inners: *mut Inner3Flat,
+    pub inners_count: usize,
+    pub opt_i32: i32,
+    pub has_opt_i32: i32,
+    pub opt_str: *mut ::core::ffi::c_char,
+    pub flags: *mut u8,
+    pub flags_count: usize,
+}
+
+impl Scalars3Flat {
+    /// Field plan rows: name, slot offset, kind, flags, has/count/oneof
+    /// offsets, child image. Offsets are asserted below.
+    pub const FIELDS: &'static [pbwire::FieldPlan] = {
+        use pbwire::Kind;
+        &[
+            pbwire::FieldPlan("i32", 0, Kind::I32, 0, 0, 0, 0, None),
+            pbwire::FieldPlan("i64", 8, Kind::I64, 0, 0, 0, 0, None),
+            pbwire::FieldPlan("u32", 16, Kind::U32, 0, 0, 0, 0, None),
+            pbwire::FieldPlan("u64", 24, Kind::U64, 0, 0, 0, 0, None),
+            pbwire::FieldPlan("s32", 32, Kind::S32, 0, 0, 0, 0, None),
+            pbwire::FieldPlan("s64", 40, Kind::S64, 0, 0, 0, 0, None),
+            pbwire::FieldPlan("fx32", 48, Kind::Fx32, 0, 0, 0, 0, None),
+            pbwire::FieldPlan("fx64", 56, Kind::Fx64, 0, 0, 0, 0, None),
+            pbwire::FieldPlan("sfx32", 64, Kind::Sfx32, 0, 0, 0, 0, None),
+            pbwire::FieldPlan("sfx64", 72, Kind::Sfx64, 0, 0, 0, 0, None),
+            pbwire::FieldPlan("f32", 80, Kind::F32, 0, 0, 0, 0, None),
+            pbwire::FieldPlan("f64", 88, Kind::F64, 0, 0, 0, 0, None),
+            pbwire::FieldPlan("flag", 96, Kind::Bool, 0, 0, 0, 0, None),
+            pbwire::FieldPlan("str", 104, Kind::String, 0, 0, 0, 0, None),
+            pbwire::FieldPlan("color", 112, Kind::Enum, 0, 0, 0, 0, None),
+            pbwire::FieldPlan("inner", 120, Kind::Message, 0, 0, 0, 0, Some(pbwire::ChildPlan { full_name: "structtest.Inner3", fields: Inner3Flat::FIELDS, size: ::core::mem::size_of::<Inner3Flat>() })),
+            pbwire::FieldPlan("nums", 128, Kind::I32, pbwire::REPEATED | pbwire::PACKED, 0, 136, 0, None),
+            pbwire::FieldPlan("tags", 144, Kind::String, pbwire::REPEATED, 0, 152, 0, None),
+            pbwire::FieldPlan("inners", 160, Kind::Message, pbwire::REPEATED, 0, 168, 0, Some(pbwire::ChildPlan { full_name: "structtest.Inner3", fields: Inner3Flat::FIELDS, size: ::core::mem::size_of::<Inner3Flat>() })),
+            pbwire::FieldPlan("opt_i32", 176, Kind::I32, 0, 180, 0, 0, None),
+            pbwire::FieldPlan("opt_str", 184, Kind::String, 0, 0, 0, 0, None),
+            pbwire::FieldPlan("flags", 192, Kind::Bool, pbwire::REPEATED | pbwire::PACKED, 0, 200, 0, None),
+        ]
+    };
+}
+
+const _: () = assert!(::core::mem::offset_of!(Scalars3Flat, i32) == 0);
+const _: () = assert!(::core::mem::offset_of!(Scalars3Flat, i64) == 8);
+const _: () = assert!(::core::mem::offset_of!(Scalars3Flat, u32) == 16);
+const _: () = assert!(::core::mem::offset_of!(Scalars3Flat, u64) == 24);
+const _: () = assert!(::core::mem::offset_of!(Scalars3Flat, s32) == 32);
+const _: () = assert!(::core::mem::offset_of!(Scalars3Flat, s64) == 40);
+const _: () = assert!(::core::mem::offset_of!(Scalars3Flat, fx32) == 48);
+const _: () = assert!(::core::mem::offset_of!(Scalars3Flat, fx64) == 56);
+const _: () = assert!(::core::mem::offset_of!(Scalars3Flat, sfx32) == 64);
+const _: () = assert!(::core::mem::offset_of!(Scalars3Flat, sfx64) == 72);
+const _: () = assert!(::core::mem::offset_of!(Scalars3Flat, f32) == 80);
+const _: () = assert!(::core::mem::offset_of!(Scalars3Flat, f64) == 88);
+const _: () = assert!(::core::mem::offset_of!(Scalars3Flat, flag) == 96);
+const _: () = assert!(::core::mem::offset_of!(Scalars3Flat, str) == 104);
+const _: () = assert!(::core::mem::offset_of!(Scalars3Flat, color) == 112);
+const _: () = assert!(::core::mem::offset_of!(Scalars3Flat, inner) == 120);
+const _: () = assert!(::core::mem::offset_of!(Scalars3Flat, nums) == 128);
+const _: () = assert!(::core::mem::offset_of!(Scalars3Flat, nums_count) == 136);
+const _: () = assert!(::core::mem::offset_of!(Scalars3Flat, tags) == 144);
+const _: () = assert!(::core::mem::offset_of!(Scalars3Flat, tags_count) == 152);
+const _: () = assert!(::core::mem::offset_of!(Scalars3Flat, inners) == 160);
+const _: () = assert!(::core::mem::offset_of!(Scalars3Flat, inners_count) == 168);
+const _: () = assert!(::core::mem::offset_of!(Scalars3Flat, opt_i32) == 176);
+const _: () = assert!(::core::mem::offset_of!(Scalars3Flat, has_opt_i32) == 180);
+const _: () = assert!(::core::mem::offset_of!(Scalars3Flat, opt_str) == 184);
+const _: () = assert!(::core::mem::offset_of!(Scalars3Flat, flags) == 192);
+const _: () = assert!(::core::mem::offset_of!(Scalars3Flat, flags_count) == 200);
+
+impl ::core::default::Default for Scalars3Flat {
+    fn default() -> Self {
+        // SAFETY: every slot is an integer, a raw pointer, or `PbwBytes`,
+        // so an all-zero image is a valid (empty) message.
+        unsafe { ::core::mem::zeroed() }
+    }
+}
+
+unsafe impl pbwire::FlatMessage for Scalars3Flat {
+    const FULL_NAME: &'static str = "structtest.Scalars3";
+    fn fields() -> &'static [pbwire::FieldPlan] {
+        Scalars3Flat::FIELDS
     }
 }
 

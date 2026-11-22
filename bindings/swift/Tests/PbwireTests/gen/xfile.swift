@@ -44,3 +44,23 @@ public struct Xfile_UsesDep {
     }
 }
 
+
+/// xfile.UsesDep as a flat native mirror: one C call reads and writes it in place.
+/// The child mirrors must be registered before this one.
+@frozen
+public struct Xfile_UsesDepRepr: Pbwire.ReprMessage {
+    public var single: UnsafeMutablePointer<Xdep_DepMsgRepr>? = nil
+    public var many: UnsafeMutablePointer<Xdep_DepMsgRepr>? = nil
+    public var countMany: Int = 0
+    public var note: UnsafePointer<CChar>? = nil
+    public init() {}
+
+    public static let protoName = "xfile.UsesDep"
+    public static let children: [any Pbwire.ReprMessage.Type] = [Xdep_DepMsgRepr.self]
+    public static let fields: [Pbwire.FieldPlan] = [
+        Pbwire.FieldPlan(number: 1, kind: .message, offset: MemoryLayout<Xfile_UsesDepRepr>.offset(of: \.single)!, type: 11, wire: 2, elem: MemoryLayout<Xdep_DepMsgRepr>.stride),
+        Pbwire.FieldPlan(number: 2, kind: .message, offset: MemoryLayout<Xfile_UsesDepRepr>.offset(of: \.many)!, type: 11, wire: 2, repeated: true, count: MemoryLayout<Xfile_UsesDepRepr>.offset(of: \.countMany)!, elem: MemoryLayout<Xdep_DepMsgRepr>.stride),
+        Pbwire.FieldPlan(number: 3, kind: .string, offset: MemoryLayout<Xfile_UsesDepRepr>.offset(of: \.note)!, type: 9, wire: 2),
+    ]
+}
+

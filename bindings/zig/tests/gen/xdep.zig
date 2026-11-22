@@ -5,6 +5,8 @@
 const std = @import("std");
 const pbwire = @import("pbwire");
 
+const FieldPlan = pbwire.FieldPlan;
+
 // xdep.DepMsg
 pub const Xdep_DepMsg = struct {
     name: []const u8 = "",
@@ -49,4 +51,26 @@ pub const Xdep_DepMsg = struct {
         return out;
     }
 };
+
+
+/// xdep.DepMsg as a flat native image: one C struct-codec call reads and writes it in
+/// place. Every offset below is asserted at comptime.
+pub const DepMsgMirror = extern struct {
+    name: ?[*:0]const u8 = null,
+    value: i32 = 0,
+
+    /// Field plan rows: slot offset and has/count/oneof offsets. The
+    /// comptime block below proves every offset.
+    pub const fields = [_]FieldPlan{
+        .{ .number = 1, .kind = .string, .offset = 0 },
+        .{ .number = 2, .kind = .int32, .offset = 8 },
+    };
+    pub const plan = pbwire.InPlace(@This(), "xdep.DepMsg", &fields);
+};
+
+comptime {
+    std.debug.assert(@offsetOf(DepMsgMirror, "name") == 0);
+    std.debug.assert(@offsetOf(DepMsgMirror, "value") == 8);
+    std.debug.assert(@sizeOf(DepMsgMirror) == 16);
+}
 

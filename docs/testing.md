@@ -210,16 +210,37 @@ make go-test                     # thin models + codec engine (parity, generated
 make test-cpp                    # C++ binding self-check
 make codegen-test                  # the generated model test of every binding
 make conformance-python          # official suite through the Python binding
+make conformance-python-pure     # same through the pure-Python core: binary
+                                 # in/out; JSON and text answer "skipped"
+
 make conformance-ruby            # same through the Ruby binding
 make conformance-java            # same through the Java binding (pure-Java JSON/text)
 make conformance-lua conformance-r conformance-node  # same through those bindings
+make conformance-node-core       # the pure-TypeScript core: binary in/out; JSON
+                                 # and text answer "skipped" (runner counts skips,
+                                 # not failures), so the pass set is the binary suite
+make conformance-csharp          # the pure-C# core: binary in/out, JSON and
+                                 # text answer "skipped" (same scope as above)
+make conformance-dart-core       # the pure-Dart core: binary in/out, JSON and
+                                 # text answer "skipped" (same scope as above)
+make conformance-julia-core      # the pure-Julia core: binary in/out, JSON and
+                                 # text answer "skipped" (same scope as above)
+make conformance-rust            # the pure-Rust core (`bindings/rust/src/core/`,
+                                 # no C library): binary in/out, JSON and text
+                                 # answer "skipped" (same scope as above)
+make dart-core-web               # the pure core compiled to dart2js and wasm
+                                 # (int is a double there; 64-bit stays BigInt)
 make conformance-julia conformance-scala conformance-clojure conformance-fsharp conformance-zig
 ```
 
 Eleven bindings run the whole suite (binary, JSON and text); only JSPB answers
-`skipped` everywhere. The JVM bindings share the Java runtime, and the FFI /
-static-link hosts forward to the same C core, so a mapping bug has one place to
-live and one suite to prove it.
+`skipped` everywhere. The host-language `core` arms that ship a binary codec
+only (`conformance-node-core`, `conformance-csharp`,
+`conformance-python-pure`, `conformance-dart-core`,
+`conformance-julia-core`, `conformance-rust`) answer `skipped` for the
+JSON and text requests, so their pass set is the binary suite. The JVM bindings
+share the Java runtime, and the FFI / static-link hosts forward to the same C
+core, so a mapping bug has one place to live and one suite to prove it.
 
 The suite's *recommended* tier is not enforced. For the core,
 `--enforce_recommended` reports 67 cases in four families. The binary/JSON run

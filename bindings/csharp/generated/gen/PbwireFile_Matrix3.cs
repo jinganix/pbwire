@@ -97,6 +97,19 @@ namespace Structtest {
             "Mw==");
         }
 
+        /// <summary>The embedded descriptor set, for the native flat-image reader.</summary>
+        public static byte[] DescriptorSetBytes() { return Convert.FromBase64String(DescBase64()); }
+
+        private static global::Pbwire.LayoutSource? _layouts;
+        /// <summary>Every flat layout in this file: the native reader resolves sub-messages here.</summary>
+        /// <remarks>Built on first use: a static field would reach a layout's Type (and so this holder) while this type is still initializing.</remarks>
+        public static global::Pbwire.LayoutSource Layouts => _layouts ??= new global::Pbwire.LayoutSource(
+            "PbwireFile_Matrix3", DescriptorSetBytes,
+            new global::Pbwire.LayoutType[] {
+                Inner3.Inner3Layout.Spec,
+                Scalars3.Scalars3Layout.Spec,
+            });
+
         /// <summary>Every message in this file, for whole-schema pre-registration.</summary>
         public static readonly string[] MessageNames = {
             "structtest.Inner3",

@@ -64,11 +64,50 @@ julia --project=runtime examples/roundtrip.jl
 julia --project=runtime benchmarks/bench.jl # vs JuliaIO/ProtoBuf.jl, four tiers
 ```
 
-Without `benchmarks/oracle/matrix3_pb.jl` (generated with `protoc
---julia_out`) the script times pbwire only and says so. The four tiers are
+`benchmarks/bench.jl` prints two mechanisms: `pbwire-julia-tree` is the
+prebuilt dynamic `Message` handle (plain encode/decode plus the reusable
+`Ctx` workspace), and `pbwire-julia-shim` is the generated `mutable struct
+Scalars3Layout` read and written in place by
+`native/pbw_julia_shim.c`, one `ccall` per op. `make julia-bench` builds the
+shim library first. Without `benchmarks/oracle/.../matrix3_pb.jl` (generated
+with `protojl`) the script times pbwire only and says so. The four tiers are
 small / medium / large / xlarge (the repeated fields scaled x0 / x1 / x100 /
 x3000). Copied from [BENCHMARKS.md](../../BENCHMARKS.md), which is the single
 source for all performance numbers; higher is better, MB/s over wire bytes.
+
+`pbench/` is the three-arm contract: `tree` (dynamic handle, whole task),
+`shim` (flat layout image), `core` (the pure-Julia codec below). Run
+`pbench/setup.sh`, then `julia --project=runtime pbench/gate.jl` (byte/field
+gate) and `compare.jl` (interleaved median table).
+
+## Pure-Julia core (no native library)
+
+`runtime/src/PbwireCore.jl` + `runtime/src/core/` is a second, independent
+implementation: descriptor reader, `Message` tree, wire primitives, encoder and
+a decoder with unknown retention, groups, packed runs, oneofs, presence and
+limits -- stdlib only, no `ccall`, no generated code, no `.proto` parser. It is
+the arm for hosts that cannot build or load the C core; the `ccall` runtime
+above stays the shipped fast path.
+
+```julia
+include("bindings/julia/runtime/src/PbwireCore.jl")
+using .PbwireCore
+
+schema = from_file("bindings/c/tests/data/matrix3.desc")
+ty = msgtype(schema, "structtest.Scalars3")
+m = decode(ty, wire)        # unknown fields retained, strings stay slices
+@assert encode(m) == wire   # byte-exact round trip
+@assert to_dict(m)["nums"] == Any[1, -5, 300]
+```
+
+The official binary suite proves it: `make conformance-julia-core` reports
+1412 successes, 1403 skipped (JSON/text are out of this arm's scope), 2
+expected failures, 0 unexpected -- the same failure set as the C core and the
+TypeScript, C#, Python and Dart ports. `bindings/julia/tests/core/` holds the
+234-check gate (`make julia-test` runs it), and `BENCHMARKS.md` carries the
+`pbwire-julia-core` row: above ProtoBuf.jl on the 74 KB encode, below it on the
+small tiers and every decode (the `Dict` <-> tree conversion an interpreter
+pays). Published as the no-native arm, never the headline.
 
 Strings cross as NUL-terminated C strings, so `set_string!` rejects embedded
 NUL bytes: use `set_bytes!` for binary payloads (a `string` field accepts them
@@ -86,9 +125,9 @@ anything. One message tree belongs to one thread, like the C core.
 
 ## Generated models
 
-`protoc-gen-pbwire` (in `../../codegen`) emits `<base>_pbwire.jl`
-(structs over this dynamic API) and `<base>_meta.jl` (the embedded
-descriptor set plus its loader, included by path). `--pbwire_opt=lang=julia`
+`protoc-gen-pbwire` (in `../../codegen`) also emits a
+`mutable struct <Message>Layout` and its `fieldoffset` row table beside each
+message, the native object the pbench `shim` arm reads in one call. `--pbwire_opt=lang=julia`
 `[,model=bool][,register=bool][,registry=bool]` (all default `true`):
 `model=false` leaves the schema file for dynamic-only users;
 `register=false` drops the lazy load so `init_schema()` (embedded bytes)

@@ -19,6 +19,7 @@ open System
 open System.Diagnostics
 open Pbwire
 open Pbwire.FSharp
+open Pbwire.Pbench
 open Google.Protobuf
 open Structtest
 
@@ -131,7 +132,7 @@ let measure floor (op: unit -> unit) =
     best, count
 
 let row impl op (bytes: int) ns =
-    printfn "  %-12s %-7s %12.1f %10.1f" impl op ns (float bytes / ns * 1000.0)
+    printfn "  %-20s %-7s %12.1f %10.1f" impl op ns (float bytes / ns * 1000.0)
 
 [<EntryPoint>]
 let main argv =
@@ -159,6 +160,14 @@ let main argv =
                 else
                     printfn $"OK   %s{label} encoding parity, x{n} (%d{reference.Length} bytes)"
 
+                    // The shim arm's native object: the committed generated model,
+                    // filled before the timer; same two rows through the C# runtime.
+                    let native = Matrix3Shim.New n
+                    if Matrix3Shim.Marshal native <> reference then
+                        fail label "pbwire-fsharp-shim encode differs"
+                    elif Matrix3Shim.Marshal(Matrix3Shim.Unmarshal reference) <> reference then
+                        fail label "pbwire-fsharp-shim decode differs"
+
                     // Decode must round-trip byte-exactly and expose the same values.
                     use back = Pbwire.parse ty reference
                     let backInnerName =
@@ -184,6 +193,9 @@ let main argv =
                                 use d = Pbwire.parse ty reference
                                 ())
 
+                        let shimEncodeNs, _ = measure floor (fun () -> Matrix3Shim.Marshal native |> ignore)
+                        let shimDecodeNs, _ = measure floor (fun () -> Matrix3Shim.Unmarshal reference |> ignore)
+
                         let officialEncodeNs, _ = measure floor (fun () -> official.ToByteArray() |> ignore)
                         let officialDecodeNs, _ =
                             measure floor (fun () -> Scalars3.Parser.ParseFrom reference |> ignore)
@@ -193,10 +205,12 @@ let main argv =
                         let hOp: string = "op"
                         let hNs: string = "ns/op"
                         let hMb: string = "MB/s"
-                        printfn "  %-12s %-7s %12s %10s" hImpl hOp hNs hMb
-                        row "pbwire-fsharp" "encode" reference.Length encodeNs
+                        printfn "  %-20s %-7s %12s %10s" hImpl hOp hNs hMb
+                        row "pbwire-fsharp-tree" "encode" reference.Length encodeNs
+                        row "pbwire-fsharp-shim" "encode" reference.Length shimEncodeNs
                         row "protobuf-csharp" "encode" reference.Length officialEncodeNs
-                        row "pbwire-fsharp" "decode" reference.Length decodeNs
+                        row "pbwire-fsharp-tree" "decode" reference.Length decodeNs
+                        row "pbwire-fsharp-shim" "decode" reference.Length shimDecodeNs
                         row "protobuf-csharp" "decode" reference.Length officialDecodeNs
                         printfn ""
 

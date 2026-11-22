@@ -11,6 +11,12 @@ header (`../c/examples/gen/addressbook.h`) are shared unchanged. A real C++
 binding would add classes/RAII on top; the example stays on plain structs
 so the wire behavior it pins is exactly the C one.
 
+Mechanisms: `tree` (the dynamic `pbw_ctx` value tree) and `shim` (the C struct
+codec reading C memory in place through layout tables). No `core` arm: C++ runs
+the shipped `src/` through the same C header, so a third mechanism would be the
+core measuring itself. Contract:
+[`../README.md#pbench-three-arms-one-contract`](../README.md#pbench-three-arms-one-contract).
+
 Build and run (from the repo root; needs a C++17 compiler):
 
 ```sh
@@ -38,7 +44,7 @@ There is no separate C++ codec to measure: the benchmark is the C struct codec
 [`BENCHMARKS.md`](../../BENCHMARKS.md), which is the single source for all
 performance numbers; higher is better, MB/s over wire bytes:
 
-| payload | op | pbwire-c (MB/s, x gen) | protoc gen (MB/s) |
+| payload | op | pbwire-c-shim (MB/s, x gen) | protoc gen (MB/s) |
 |---|---|---|---|
 | 136 B | encode | 1476.8 (1.0x) | 1416.4 |
 | 136 B | decode | 1090.8 (1.2x) | 894.2 |

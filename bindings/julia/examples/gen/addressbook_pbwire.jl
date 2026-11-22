@@ -60,6 +60,26 @@ function decode(::Type{Tutorial_Person_PhoneNumber}, wire::Vector{UInt8})
     return from_dict(Tutorial_Person_PhoneNumber, Pbwire.decode_dict(ty, wire))
 end
 
+
+# tutorial.Person.PhoneNumber as a flat native image: one ccall reads and writes it in place.
+mutable struct Person_PhoneNumberLayout
+    number::Ptr{UInt8}
+    type::Int32
+    has_type::Int32
+end
+
+function Person_PhoneNumberLayout()
+    return Person_PhoneNumberLayout(
+        Ptr{UInt8}(C_NULL),
+        Int32(0),
+        Int32(0),
+    )
+end
+
+const person_PhoneNumberLayoutRows = Pbwire.LayoutRow[
+    Pbwire.LayoutRow(1, 7, 0, fieldoffset(Person_PhoneNumberLayout, :number), 0, 0, 9, 2, 0, 1, 0, 0, ""),
+    Pbwire.LayoutRow(2, 9, 0, fieldoffset(Person_PhoneNumberLayout, :type), fieldoffset(Person_PhoneNumberLayout, :has_type), 0, 14, 0, 0, 0, 0, 0, ""),
+]
 # tutorial.Person
 mutable struct Tutorial_Person
     name::String
@@ -125,6 +145,34 @@ function decode(::Type{Tutorial_Person}, wire::Vector{UInt8})
     return from_dict(Tutorial_Person, Pbwire.decode_dict(ty, wire))
 end
 
+
+# tutorial.Person as a flat native image: one ccall reads and writes it in place.
+mutable struct PersonLayout
+    name::Ptr{UInt8}
+    id::Int32
+    has_id::Int32
+    email::Ptr{UInt8}
+    phones::Ptr{Person_PhoneNumberLayout}
+    phonesCount::Csize_t
+end
+
+function PersonLayout()
+    return PersonLayout(
+        Ptr{UInt8}(C_NULL),
+        Int32(0),
+        Int32(0),
+        Ptr{UInt8}(C_NULL),
+        Ptr{Person_PhoneNumberLayout}(C_NULL),
+        Csize_t(0),
+    )
+end
+
+const personLayoutRows = Pbwire.LayoutRow[
+    Pbwire.LayoutRow(1, 7, 0, fieldoffset(PersonLayout, :name), 0, 0, 9, 2, 0, 1, 0, 0, ""),
+    Pbwire.LayoutRow(2, 0, 0, fieldoffset(PersonLayout, :id), fieldoffset(PersonLayout, :has_id), 0, 5, 0, 0, 1, 0, 0, ""),
+    Pbwire.LayoutRow(3, 7, 0, fieldoffset(PersonLayout, :email), 0, 0, 9, 2, 0, 0, 0, 0, ""),
+    Pbwire.LayoutRow(4, 10, 1, fieldoffset(PersonLayout, :phones), 0, fieldoffset(PersonLayout, :phonesCount), 11, 2, 0, 0, 0, 0, "tutorial.Person.PhoneNumber"),
+]
 # tutorial.AddressBook
 mutable struct Tutorial_AddressBook
     people::Vector{Tutorial_Person}
@@ -166,3 +214,20 @@ function decode(::Type{Tutorial_AddressBook}, wire::Vector{UInt8})
     return from_dict(Tutorial_AddressBook, Pbwire.decode_dict(ty, wire))
 end
 
+
+# tutorial.AddressBook as a flat native image: one ccall reads and writes it in place.
+mutable struct AddressBookLayout
+    people::Ptr{PersonLayout}
+    peopleCount::Csize_t
+end
+
+function AddressBookLayout()
+    return AddressBookLayout(
+        Ptr{PersonLayout}(C_NULL),
+        Csize_t(0),
+    )
+end
+
+const addressBookLayoutRows = Pbwire.LayoutRow[
+    Pbwire.LayoutRow(1, 10, 1, fieldoffset(AddressBookLayout, :people), 0, fieldoffset(AddressBookLayout, :peopleCount), 11, 2, 0, 0, 0, 0, "tutorial.Person"),
+]

@@ -16,6 +16,8 @@
         "build.zig",
         "build.zig.zon",
         "runtime",
+        "core",
+        "pbench",
         "examples",
         "tests",
         "benchmarks",

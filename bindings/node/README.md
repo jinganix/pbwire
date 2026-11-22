@@ -108,8 +108,10 @@ from the binary. Output: `bindings/node/build/pbwire_node.node`.
 | `type.name` / `type.schema` | dotted full name and owning schema |
 | `type.newMessage()` | empty `Message` (the mutable tree form) |
 | `type.encode(object \| Message)` | encode a plain object or an existing `Message` |
+| `type.encodeObject(object)` | encode a plain object in one addon downcall: the addon walks the schema's fields in C (nested messages and repeated elements recurse inside C), so no per-field `set()` crosses the boundary |
 | `type.decode(buffer)` | decode wire bytes into a `Message`; throws on malformed input |
 | `type.decodeObject(buffer)` | decode wire bytes into a plain object in one call; same values `get()` returns, but the result holds no bytes and cannot re-encode — the fast path when most fields are read |
+| `type.decodeToObject(buffer)` | `decodeObject` under the native-object-in/out name the pbench arms use |
 
 `Message`
 | member | meaning |
@@ -124,7 +126,7 @@ Values map per field type:
 | field type | JS value |
 |---|---|
 | `int32`, `uint32`, `sint32`, `fixed32`, `sfixed32`, `enum` | `number` |
-| `int64`, `uint64`, `sint64`, `fixed64`, `sfixed64` | `BigInt` (a `number` is accepted on `set`) |
+| `int64`, `uint64`, `sint64`, `fixed64`, `sfixed64` | `BigInt`, or a decimal string; a `number` is accepted while it is an exact safe integer. Anything else is refused with a `TypeError` naming the field, never truncated |
 | `float`, `double` | `number` |
 | `bool` | `boolean` |
 | `string` | `string` |
@@ -172,28 +174,54 @@ protoc -Ibindings/node/tests/data \
     bindings/node/tests/data/demo.proto
 ```
 
+## pbench: the four arms
+
+`pbench/` compares the arms the [pbench contract](../README.md#pbench-three-arms-one-contract)
+defines over the same `matrix3` payload. The detailed table, the gate, the
+provisional run and the verdict are in [`pbench/README.md`](pbench/README.md).
+
+| arm | file | mechanism |
+|---|---|---|
+| `tree` | `pbench/a-tree.js` | the `Message` handle: one `set()` per field then `encode()`, one `get()` per field after `decode()` |
+| `shim` | `pbench/b-shim.js` | `type.encodeObject(obj)` / `type.decodeToObject(wire)`: one downcall, the addon walks the JS object in C |
+| `core` | `pbench/c-core.js` | the pure-TypeScript codec in `lib/core/`: the descriptor reader, tree, encoder and decoder in JS, so the task runs in the JS heap with no boundary (binary wire format; no JSON/text mapping) |
+
+```
+bindings/node/pbench/setup.sh        # addon + benchmarks/gen (jspb + .desc)
+node bindings/node/pbench/gate.js    # bytes + field-by-field decode, PASS/exit 1
+node bindings/node/pbench/compare.js # interleaved arms + baselines, median of 5
+```
+
 ## Benchmark
 
 `benchmarks/bench.sh` generates `matrix3_pb.js` with `protoc-gen-js`, installs
 `google-protobuf` (the jspb runtime), `protoc-gen-js` and [protobufjs](https://www.npmjs.com/package/protobufjs) (the
 fastest widely used JS runtime) into `benchmarks/node_modules` on first run,
 and prints the four standard tiers from [`BENCHMARKS.md`](../../BENCHMARKS.md)
-for `pbwire-node`, jspb and protobufjs side by side:
+for `pbwire-node-tree`, `pbwire-node-shim`, jspb and protobufjs side by side.
+`tree` is the codec with the data already in a `Message`; `shim` is the
+native-object task (plain object in, wire out; wire in, plain object out):
 
 ```sh
 ./benchmarks/bench.sh      # or: make node-bench
 ```
 
-| payload | op | pbwire-node (MB/s, x jspb) | jspb (MB/s) | protobufjs (MB/s) |
-|---|---|---|---|---|
-| 136 B | encode | 592.6 (9.6x) | 61.5 | 251.1 |
-| 136 B | decode | 404.0 (3.3x) | 122.0 | 410.8 |
-| 174 B | encode | 540.1 (8.3x) | 64.9 | 301.0 |
-| 174 B | decode | 465.4 (4.0x) | 115.5 | 396.9 |
-| 2469 B | encode | 1333.4 (22.5x) | 59.3 | 423.6 |
-| 2469 B | decode | 1149.6 (14.2x) | 80.8 | 377.4 |
-| 74913 B | encode | 1487.6 (23.4x) | 63.7 | 494.4 |
-| 74913 B | decode | 1644.6 (19.0x) | 86.6 | 412.9 |
+| payload | op | pbwire-node-tree (MB/s, x protobufjs) | pbwire-node-shim (MB/s) | protobufjs (MB/s) | jspb (MB/s) |
+|---|---|---|---|---|---|
+| 136 B | encode | 587.3 (2.45x) | 48.1 | 239.8 | 56.4 |
+| 136 B | decode | 368.7 (0.92x) | 59.9 | 400.7 | 121.0 |
+| 174 B | encode | 568.7 (1.95x) | 53.6 | 291.0 | 60.9 |
+| 174 B | decode | 436.7 (1.15x) | 47.7 | 380.4 | 108.8 |
+| 2469 B | encode | 1449.3 (3.45x) | 53.7 | 420.2 | 53.2 |
+| 2469 B | decode | 947.5 (2.51x) | 47.9 | 377.0 | 79.2 |
+| 74913 B | encode | 1689.3 (3.36x) | 58.1 | 502.9 | 56.6 |
+| 74913 B | decode | 1196.1 (2.95x) | 52.3 | 405.1 | 81.1 |
+
+The `shim` row is the native object in and out and it loses to both baselines:
+each field costs one N-API object property read (encode) or write (decode),
+~60-70 ns, where the JS runtimes pay a few ns in their own heap. It does beat
+assembling the message with `set()` per field (1.05x-1.17x in `pbench/`), so it
+is the shipped object converter; the `tree` row stays the headline.
 
 jspb's throughput does not move with payload size: its writer resolves a
 code/type table per field and hands every repeated element to a closure, where

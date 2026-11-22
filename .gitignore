@@ -52,6 +52,8 @@ coverage/
 # macOS clang writes per-source diagnostic plists for some toolchains
 /*.plist
 bench/gen/
+bindings/csharp/pbench/**/bin/
+bindings/csharp/pbench/**/obj/
 bindings/c/benchmarks/gen/
 bindings/go/benchmarks/gen/
 bindings/python/benchmarks/gen/
@@ -77,12 +79,15 @@ bindings/clojure/benchmarks/deps/
 bindings/clojure/.cpcache/
 bindings/r/pbwire.so
 bindings/julia/benchmarks/oracle/
+bindings/julia/pbench/gen/
 bindings/zig/zig-out/
 bindings/zig/.zig-cache/
 bindings/zig/zig-pkg/
 bindings/dart/benchmarks/gen/
 bindings/dart/.dart_tool/
 bindings/dart/benchmarks/.dart_tool/
+bindings/dart/pbench/gen/
+bindings/dart/pbench/.dart_tool/
 bindings/csharp/benchmarks/gen/
 bindings/csharp/*/bin/
 bindings/csharp/*/obj/

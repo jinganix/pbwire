@@ -3,6 +3,8 @@
 // Do not edit; regenerate from the .proto instead.
 
 import 'dart:typed_data';
+import 'dart:ffi' as ffi;
+import 'package:ffi/ffi.dart' as ffi;
 
 import 'package:pbwire/pbwire.dart';
 import 'xdep.dart' as _imp_xdep;
@@ -85,3 +87,24 @@ class UsesDep {
   }
 }
 
+
+/// xfile.UsesDep as a flat `dart:ffi` image: the native object the layout codec
+/// reads and writes in one call.
+final class UsesDepLayout extends ffi.Struct {
+  external ffi.Pointer<_imp_xdep.DepMsgLayout> single;
+  external ffi.Pointer<_imp_xdep.DepMsgLayout> many;
+  @ffi.IntPtr() external int manyCount;
+  external ffi.Pointer<ffi.Utf8> note;
+  static int get layoutSize => ffi.sizeOf<UsesDepLayout>();
+}
+
+/// Byte offset of each field's value slot of xfile.UsesDep, in descriptor order.
+const List<int> usesDepLayoutOffsets = <int>[0, 8, 24];
+/// Field numbers matching [usesDepLayoutOffsets].
+const List<int> usesDepLayoutNumbers = <int>[1, 2, 3];
+/// xfile.UsesDep's layout rows: the flat image the native reader consumes.
+const List<PbwField> usesDepLayoutRows = <PbwField>[
+  PbwField(number: 1, kind: PbwKind.message, offset: 0, child: 'xdep.DepMsg', type: 11, wire: 2),
+  PbwField(number: 2, kind: PbwKind.message, offset: 8, repeated: true, count: 16, child: 'xdep.DepMsg', type: 11, wire: 2),
+  PbwField(number: 3, kind: PbwKind.string_, offset: 24, type: 9, wire: 2),
+];

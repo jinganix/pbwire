@@ -14,6 +14,9 @@
 #
 # Build it with build.sh (or `make ruby-build`); the extension is linked against
 # the C core, so the schema and the wire format stay in one place.
+#
+# pbench core arm: n/a. shortcut: no pure-Ruby core, reopen when a native-less
+# Ruby target appears.
 require_relative 'pbwire_ext'
 
 # Idiomatic Ruby resource handling, mirroring File.open: with a block the

@@ -3,6 +3,23 @@
 # x0 / x1 / x100 / x3000). Against RProtoBuf when it is installed and loads
 # the same schema; otherwise the baseline columns print "-".
 #
+# Three pbwire rows, named by the arm they time: `pbwire-r-shim` is the native
+# object of an R application (a named list in, wire bytes out; one .Call, the
+# walk in C, decode fully materialized in C so no fold-sink is needed -- see
+# pbench/b-shim.R) and `pbwire-r-tree` is the shipped per-field full task
+# through the builder handle (a fresh `pbwire_message` + `pbwire_message_set`
+# per encode, then `pbwire_message_encode`; `pbwire_parse_binary` plus a full
+# `pbwire_msg_to_json` read-back per decode, folded into a sink). R builders
+# have no per-field getters by design, so the JSON/text print IS the shipped
+# read-back path; R's GC owns the builder (no manual free). `pbwire-r-proxy`
+# is the prebuilt task relabelled (re-encode a held handle, decode-and-drop
+# with no materialization), timed in the same run, never the headline.
+# The encode input list is app-owned steady-state (the Task 5 ledger ruling,
+# Python worker D3 merged as 99ac9ac, whose review accepted plain-data dict
+# reuse as "standard harness practice": encode is one .Call either way); the
+# fresh builder, the whole C field walk and the encode all sit inside the
+# timer. See pbench/README.md.
+#
 # Both sides must produce identical bytes before anything is timed. Like the
 # other harnesses it calibrates from the floor until one pass takes
 # 0.25 s, warms up, then reports the best of 3 passes.
@@ -13,6 +30,11 @@ here <- dirname(sub("^--file=", "", grep("^--file=", commandArgs(),
                                          value = TRUE)[1L]))
 dyn.load(file.path(here, "..", "pbwire.so"))
 source(file.path(here, "..", "runtime", "R", "pbwire.R"))
+# The timed arms live in pbench (Node template correction 1: the bench reuses
+# the arm modules, so gate and timer stay identical by construction).
+source(file.path(here, "..", "pbench", "payload.R"))
+source(file.path(here, "..", "pbench", "a-tree.R"))
+source(file.path(here, "..", "pbench", "b-shim.R"))
 
 schema <- pbwire_loadfile("../../c/tests/data/matrix3.desc")
 MSG <- "structtest.Scalars3"
@@ -164,34 +186,72 @@ for (c in cases) {
     stopifnot(identical(got[names(ref)], ref))
   }
 
+  # Tree full-task gate: fresh-builder bytes, full read-back, re-encode.
+  # (The shim/proxy bytes gates sit beside the field checks above.)
+  stopifnot(identical(tree_encode_full(tbl), wire))
+  stopifnot(identical(tree_decode_full(wire),
+                       pbwire_msg_to_json(tree_prepare(tbl))))
+  stopifnot(identical(pbwire_msg_encode(pbwire_parse_binary(schema, MSG, wire)),
+                      wire))
   ec <- calibrate(function() bench_encode(tbl), floor)
   dc <- calibrate(function() bench_decode(wire), floor)
-  # Builder hot path: built once outside timing, so encode() is one core
-  # walk plus one buffer malloc.
+  # Proxy: the prebuilt task. The handle is built once outside timing, so
+  # encode() is one core walk plus one buffer malloc; decoding straight into
+  # a builder tree is one .Call too (no named-list materialization in
+  # between). Relabelled, not re-measured as a new task: same-run timing
+  # only, never the headline.
   built <- pbwire_message(schema, MSG)
   pbwire_msg_set(built, tbl)
   stopifnot(identical(pbwire_msg_encode(built), wire))
   mc <- calibrate(function() pbwire_msg_encode(built), floor)
+  tc <- calibrate(function() pbwire_parse_binary(schema, MSG, wire), floor)
+  # Tree full task: fresh builder (+ whole C field walk + encode) per encode;
+  # parse plus full JSON read-back per decode, folded into a sink. Every op
+  # still calibrates independently (Node correction 2: the fast proxy ops
+  # never inflate the tree rows).
+  fc <- calibrate(function() tree_encode_full(tbl), floor)
+  tree_sink <- 0
+  jc <- calibrate(function() {
+    j <- tree_decode_full(wire)
+    tree_sink <<- tree_sink + nchar(j)
+  }, floor)
   ens <- best(function() bench_encode(tbl), ec) * 1e9
   dns <- best(function() bench_decode(wire), dc) * 1e9
   mns <- best(function() pbwire_msg_encode(built), mc) * 1e9
+  tns <- best(function() pbwire_parse_binary(schema, MSG, wire), tc) * 1e9
+  fns <- best(function() tree_encode_full(tbl), fc) * 1e9
+  tree_sink <- 0
+  jns <- best(function() {
+    j <- tree_decode_full(wire)
+    tree_sink <<- tree_sink + nchar(j)
+  }, jc) * 1e9
   embps <- length(wire) / ens * 1000
   dmbps <- length(wire) / dns * 1000
   mmbps <- length(wire) / mns * 1000
+  tmbps <- length(wire) / tns * 1000
+  fmbps <- length(wire) / fns * 1000
+  jmbps <- length(wire) / jns * 1000
+  # Rows are named by the arm they time (BENCHMARKS.md "Output format"):
+  # `pbwire-r-shim` is the named-list task (a list in, wire out, the whole walk
+  # in C), `pbwire-r-tree` the per-field full task through a fresh builder,
+  # `pbwire-r-proxy` the prebuilt builder handle.
   cat(sprintf("%s: %d bytes, %d iterations (repeat field x%d)\n",
               name, length(wire), ec, repeats))
   cat("  impl      op           ns/op       MB/s\n")
-  cat(sprintf("  pbwire    encode    %10.1f %10.1f\n", ens, embps))
-  cat(sprintf("  pbwire    encode_msg%10.1f %10.1f\n", mns, mmbps))
-  cat(sprintf("  pbwire    decode    %10.1f %10.1f\n", dns, dmbps))
+  cat(sprintf("  pbwire-r-shim encode %10.1f %10.1f\n", ens, embps))
+  cat(sprintf("  pbwire-r-tree encode %10.1f %10.1f\n", fns, fmbps))
+  cat(sprintf("  pbwire-r-proxy encode %10.1f %10.1f\n", mns, mmbps))
+  cat(sprintf("  pbwire-r-shim decode %10.1f %10.1f\n", dns, dmbps))
+  cat(sprintf("  pbwire-r-tree decode %10.1f %10.1f\n", jns, jmbps))
+  cat(sprintf("  pbwire-r-proxy decode %10.1f %10.1f\n", tns, tmbps))
   if (has_pb) {
     be <- best(function() pb_encode(tbl), ec) * 1e9
     bd <- best(function() pb_decode(wire), dc) * 1e9
-    cat(sprintf("  base      encode    %10.1f %10.1f\n", be,
+    cat(sprintf("  RProtoBuf encode    %10.1f %10.1f\n", be,
                 length(wire) / be * 1000))
-    cat(sprintf("  base      decode    %10.1f %10.1f\n", bd,
+    cat(sprintf("  RProtoBuf decode    %10.1f %10.1f\n", bd,
                 length(wire) / bd * 1000))
-    cat(sprintf("  -- vs baseline: encode %.2fx, encode_msg %.2fx, decode %.2fx\n",
-                be / ens, be / mns, bd / dns))
+    cat(sprintf("  -- vs RProtoBuf: shim encode %.2fx, tree encode %.2fx, proxy encode %.2fx, shim decode %.2fx, tree decode %.2fx, proxy decode %.2fx\n",
+                be / ens, be / fns, be / mns, bd / dns, bd / jns, bd / tns))
   }
 }

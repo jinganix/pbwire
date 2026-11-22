@@ -31,6 +31,10 @@ type Options struct {
 	// Schema.fromClasses(<Prefix>_Registry.MESSAGES) is whole-schema
 	// registration with no descriptor file. Needs Model.
 	Registry bool
+	// NoLayout turns off the C# flat-layout table (<Message>Layout) that the
+	// native-object arm and its gate consume. Default emission; only C# reads
+	// this field.
+	NoLayout bool
 	// DescSetB64 is the FileDescriptorSet for this file (transitive closure
 	// of its imports) encoded as base64. Emitters whose runtime embeds its
 	// own schema (no .desc file at use time) read it from here.

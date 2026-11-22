@@ -1533,3 +1533,404 @@ final class Method {
     return _lib.methodServerStreaming(_ptr) != 0;
   }
 }
+
+/* ------------------------------------------------- the native layout reader */
+
+/// pbw_struct_kind_t, in the C header's order: one row per field, saying where
+/// that field lives in the generated `<Message>Layout`.
+enum PbwKind {
+  int32,
+  int64,
+  uint32,
+  uint64,
+  boolean,
+  float32,
+  float64,
+  string_,
+  bytes,
+  enumeration,
+  message,
+}
+
+/// The core's inline byte string (`pbw_bytes_t`): pointer plus length. Used as
+/// a Struct member so a `bytes` field needs no pointer indirection.
+final class PbwBytes extends Struct {
+  external Pointer<Uint8> data;
+
+  @IntPtr()
+  external int len;
+}
+
+/// One field row of a message's flat layout. The generated `*LayoutRows`
+/// constants are lists of these; [PbwireLayout] hands them to the C reader,
+/// which walks the Dart Struct in place. A row with [proname] set is a sub-
+/// message and names its proto full name, so the child must be registered first.
+final class PbwField {
+  const PbwField({
+    required this.number,
+    required this.kind,
+    required this.offset,
+    this.repeated = false,
+    this.has = 0,
+    this.count = 0,
+    this.child = '',
+    this.oneof = false,
+    this.cs = 0,
+    this.required = false,
+    this.type = 0,
+    this.wire = 0,
+    this.packed = false,
+  });
+
+  /// Proto field number.
+  final int number;
+
+  /// Slot kind: scalar, string, bytes, enum or sub-message.
+  final PbwKind kind;
+
+  /// Byte offset of the value slot (`size_t` pointer slot for repeated fields).
+  final int offset;
+
+  final bool repeated;
+
+  /// Offset of the 4-byte presence flag (proto3 `optional` / proto2 optional).
+  final int has;
+
+  /// Offset of the `size_t` element count of a repeated field.
+  final int count;
+
+  /// Proto full name of the sub-message this row points at.
+  final String child;
+
+  final bool oneof;
+
+  /// Offset of the oneof's shared case word.
+  final int cs;
+
+  final bool required;
+
+  /// `pbw_type` (0 asks the C codec to read it from the schema).
+  final int type;
+
+  /// Wire type of one element (0 asks the codec).
+  final int wire;
+
+  /// Repeated numerics packed on the wire.
+  final bool packed;
+}
+
+/// The row as C reads it: every field 64-bit so the Dart mirror has no padding
+/// rules to get wrong, then the child's proto full name.
+final class PbwDartRow extends Struct {
+  @Uint64()
+  external int number;
+
+  @Uint64()
+  external int kind;
+
+  @Uint64()
+  external int repeated;
+
+  @Uint64()
+  external int offset;
+
+  @Uint64()
+  external int has;
+
+  @Uint64()
+  external int count;
+
+  @Uint64()
+  external int type;
+
+  @Uint64()
+  external int wire;
+
+  @Uint64()
+  external int packed;
+
+  @Uint64()
+  external int required;
+
+  @Uint64()
+  external int oneof;
+
+  @Uint64()
+  external int cs;
+
+  external Pointer<Utf8> child;
+}
+
+typedef _DartSchemaLoadNative = Int32 Function(
+    Pointer<Void> data, IntPtr len, Pointer<Pointer<Void>> out);
+typedef _DartSchemaLoadDart = int Function(
+    Pointer<Void> data, int len, Pointer<Pointer<Void>> out);
+typedef _DartSchemaFreeNative = Void Function(Pointer<Void> schema);
+typedef _DartSchemaFreeDart = void Function(Pointer<Void> schema);
+typedef _DartTypeNewNative = Int32 Function(Pointer<Void> schema,
+    Pointer<Utf8> message, Pointer<PbwDartRow> rows, IntPtr nrows, IntPtr size,
+    Pointer<Pointer<Void>> out);
+typedef _DartTypeNewDart = int Function(Pointer<Void> schema,
+    Pointer<Utf8> message, Pointer<PbwDartRow> rows, int nrows, int size,
+    Pointer<Pointer<Void>> out);
+typedef _DartEncodeNative = Int32 Function(Pointer<Void> type, Pointer<Void> base,
+    Pointer<Pointer<Uint8>> out, Pointer<IntPtr> outLen);
+typedef _DartEncodeDart = int Function(Pointer<Void> type, Pointer<Void> base,
+    Pointer<Pointer<Uint8>> out, Pointer<IntPtr> outLen);
+typedef _DartDecodeNative = Int32 Function(Pointer<Void> type,
+    Pointer<Uint8> wire, IntPtr wireLen, Pointer<Void> base,
+    Pointer<Uint8> arena, IntPtr arenaLen);
+typedef _DartDecodeDart = int Function(Pointer<Void> type,
+    Pointer<Uint8> wire, int wireLen, Pointer<Void> base,
+    Pointer<Uint8> arena, int arenaLen);
+
+/// The `bindings/dart/native` shim library: the C-side layout reader that
+/// walks a `dart:ffi` Struct in place with the C binding's `pbw_struct` codec.
+final class PbwireShimLibrary {
+  PbwireShimLibrary._(DynamicLibrary lib)
+      : schemaLoad = lib.lookupFunction<_DartSchemaLoadNative, _DartSchemaLoadDart>(
+            'pbw_dart_schema_load'),
+        schemaFree = lib.lookupFunction<_DartSchemaFreeNative, _DartSchemaFreeDart>(
+            'pbw_dart_schema_free'),
+        typeNew = lib.lookupFunction<_DartTypeNewNative, _DartTypeNewDart>(
+            'pbw_dart_type_new'),
+        encode = lib.lookupFunction<_DartEncodeNative, _DartEncodeDart>(
+            'pbw_dart_encode'),
+        decode = lib.lookupFunction<_DartDecodeNative, _DartDecodeDart>(
+            'pbw_dart_decode');
+
+  static PbwireShimLibrary? _instance;
+
+  /// The process-wide shim; built by `bindings/dart/build.sh`.
+  static PbwireShimLibrary get instance =>
+      _instance ??= PbwireShimLibrary._(DynamicLibrary.open(path()));
+
+  /// `PBWIRE_DART_LIB`, else `build/libpbwire_dart.{dylib,so}` under the
+  /// package directory found by walking up from the working directory or the
+  /// entry script.
+  static String path() {
+    final env = Platform.environment['PBWIRE_DART_LIB'];
+    if (env != null && env.isNotEmpty) {
+      return env;
+    }
+    for (final start in [Directory.current.path, File.fromUri(Platform.script).parent.path]) {
+      var dir = Directory(start).absolute;
+      while (true) {
+        for (final rel in ['build', 'bindings/dart/build']) {
+          for (final suffix in ['dylib', 'so']) {
+            final candidate = File('${dir.path}/$rel/libpbwire_dart.$suffix');
+            if (candidate.existsSync()) {
+              return candidate.path;
+            }
+          }
+        }
+        final parent = dir.parent;
+        if (parent.path == dir.path) {
+          break;
+        }
+        dir = parent;
+      }
+    }
+    throw PbwireException(-1,
+        'no Dart shim library found (set PBWIRE_DART_LIB; run bindings/dart/build.sh)');
+  }
+
+  final _DartSchemaLoadDart schemaLoad;
+  final _DartSchemaFreeDart schemaFree;
+  final _DartTypeNewDart typeNew;
+  final _DartEncodeDart encode;
+  final _DartDecodeDart decode;
+}
+
+PbwireShimLibrary get _dartLib => PbwireShimLibrary.instance;
+
+PbwireException _dartStatus(int status) {
+  final lib = PbwireLibrary.instance;
+  return PbwireException(status, lib.strerror(status).toDartString());
+}
+
+/// The layout side's schema: the shim library links its own copy of the core,
+/// so it loads the descriptor set itself (a tree [Schema] handle stays on the
+/// core library). Messages register in dependency order: children first.
+final class PbwLayoutSchema {
+  PbwLayoutSchema.fromBytes(Uint8List bytes)
+      : _names = Arena() {
+    final data = malloc<Uint8>(bytes.isEmpty ? 1 : bytes.length);
+    final out = calloc<Pointer<Void>>();
+    try {
+      data.asTypedList(bytes.length).setAll(0, bytes);
+      final status = _dartLib.schemaLoad(data.cast(), bytes.length, out);
+      if (status != 0) {
+        throw _dartStatus(status);
+      }
+      _handle = out.value;
+    } finally {
+      malloc.free(data);
+      calloc.free(out);
+    }
+  }
+
+  static PbwLayoutSchema load(String path) =>
+      PbwLayoutSchema.fromBytes(File(path).readAsBytesSync());
+
+  Pointer<Void> _handle = nullptr;
+  final Arena _names;
+  final Map<String, PbwType> _types = {};
+
+  /// Compiles one message layout: [size] is `sizeOf<MessageLayout>()`, [rows]
+  /// the generated offset table. Sub-message rows must already be registered.
+  PbwType type(String message, List<PbwField> rows, int size) {
+    if (_handle == nullptr) {
+      throw PbwireException(-1, 'PbwLayoutSchema is closed');
+    }
+    final existing = _types[message];
+    if (existing != null) {
+      return existing;
+    }
+    final native = _names.allocate<Utf8>(message.length + 1);
+    native.cast<Uint8>().asTypedList(message.length + 1).setAll(0, message.codeUnits);
+    final raw = _names.allocate<PbwDartRow>(
+        (rows.length == 0 ? 1 : rows.length) * sizeOf<PbwDartRow>());
+    final childNames = <Pointer<Utf8>>[];
+    for (var i = 0; i < rows.length; i++) {
+      final row = rows[i];
+      raw[i]
+        ..number = row.number
+        ..kind = row.kind.index
+        ..repeated = row.repeated ? 1 : 0
+        ..offset = row.offset
+        ..has = row.has
+        ..count = row.count
+        ..type = row.type
+        ..wire = row.wire
+        ..packed = row.packed ? 1 : 0
+        ..required = row.required ? 1 : 0
+        ..oneof = row.oneof ? 1 : 0
+        ..cs = row.cs;
+      if (row.child.isNotEmpty) {
+        final childName = _names.allocate<Utf8>(row.child.length + 1);
+        childName
+            .cast<Uint8>()
+            .asTypedList(row.child.length + 1)
+            .setAll(0, row.child.codeUnits);
+        childNames.add(childName);
+        raw[i].child = childName;
+      }
+    }
+    final out = calloc<Pointer<Void>>();
+    try {
+      final status = _dartLib.typeNew(_handle, native, raw, rows.length, size, out);
+      if (status != 0) {
+        throw _dartStatus(status);
+      }
+      final type = PbwType._(this, out.value, size, message);
+      _types[message] = type;
+      return type;
+    } finally {
+      calloc.free(out);
+    }
+  }
+
+  void close() {
+    if (_handle == nullptr) {
+      return;
+    }
+    for (final type in _types.values) {
+      type._release();
+    }
+    _types.clear();
+    _dartLib.schemaFree(_handle);
+    _names.releaseAll();
+    _handle = nullptr;
+  }
+}
+
+/// One compiled message layout: rows, C codec and the Dart Struct size.
+final class PbwType {
+  PbwType._(this.schema, this._handle, this.size, this.message)
+      : _out = calloc<Pointer<Uint8>>(),
+        _outLen = calloc<IntPtr>();
+
+  final PbwLayoutSchema schema;
+  final String message;
+
+  /// `sizeOf<Layout>()`: the bytes of one flat image.
+  final int size;
+
+  Pointer<Void> _handle;
+  final Pointer<Pointer<Uint8>> _out;
+  final Pointer<IntPtr> _outLen;
+
+  void _release() {
+    calloc.free(_out);
+    calloc.free(_outLen);
+  }
+}
+
+/// The call-owned arena for one decode: the wire copy and the C bump arena
+/// live in one block. Every string/bytes/sub-message pointer a decode writes
+/// points into it, so release it in a `finally` after the last read; reuse it
+/// across calls (each decode resets it) for the steady state the C core's arena
+/// is built for.
+final class PbwArena {
+  PbwArena(int wireLength, {int extra = 0})
+      : wireLength = wireLength,
+        _arenaOffset = (wireLength + 7) & ~7,
+        _arenaBytes = wireLength * 4 + 65536 + extra,
+        _block = malloc<Uint8>(((wireLength + 7) & ~7) + wireLength * 4 + 65536 + extra);
+
+  final int wireLength;
+  final int _arenaOffset;
+  final int _arenaBytes;
+  final Pointer<Uint8> _block;
+
+  /// Where `decodeInto` copies the wire bytes (8-byte aligned).
+  Pointer<Uint8> get wire => _block;
+
+  /// The C bump arena inside the same block (`pbw_struct_arena_new_mem`).
+  Pointer<Uint8> get arena => _block + _arenaOffset;
+
+  int get arenaBytes => _arenaBytes;
+
+  void release() => malloc.free(_block);
+}
+
+/// One FFI call per op over the generated layout image.
+final class PbwireLayout {
+  PbwireLayout._();
+
+  /// Encodes one flat image into wire bytes. The returned list is a fresh
+  /// `Uint8List`: the C buffer is reused by the next call of the same type.
+  static Uint8List encode<T extends Struct>(Pointer<T> message, PbwType type) {
+    final status = _dartLib.encode(type._handle, message.cast(), type._out, type._outLen);
+    if (status != 0) {
+      throw _dartStatus(status);
+    }
+    final len = type._outLen.value;
+    if (len == 0) {
+      return Uint8List(0);
+    }
+    final bytes = type._out.value.cast<Uint8>();
+    return Uint8List.fromList(bytes.asTypedList(len));
+  }
+
+  /// Decodes [wire] into a fresh flat image at [into], one FFI call. The image
+  /// borrows [arena]: strings, bytes and sub-messages point into it, so read
+  /// [into] before releasing the arena.
+  static void decodeInto<T extends Struct>(
+      Uint8List wire, Pointer<T> into, PbwType type, PbwArena arena) {
+    if (wire.length > arena.wireLength) {
+      throw PbwireException(-1,
+          'wire is ${wire.length} bytes, the arena has ${arena.wireLength}');
+    }
+    arena.wire.asTypedList(wire.length).setAll(0, wire);
+    final status = _dartLib.decode(
+        type._handle, arena.wire, wire.length, into.cast(), arena.arena, arena.arenaBytes);
+    if (status == 2) {
+      throw PbwireException(status, 'decode arena too small: widen PbwArena(extra:)');
+    }
+    if (status != 0) {
+      throw _dartStatus(status);
+    }
+  }
+}

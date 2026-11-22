@@ -1,8 +1,11 @@
 useDynLib(pbwire, .registration = TRUE)
 export(pbwire_load,
        pbwire_loadfile,
+       pbwire_type_number,
        pbwire_encode,
+       pbwire_encode_number,
        pbwire_decode,
+       pbwire_decode_number,
        pbwire_roundtrip,
        pbwire_to_json,
        pbwire_from_json,

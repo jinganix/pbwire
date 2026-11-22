@@ -125,13 +125,16 @@ shortest encoding of a proto3 message. Unknown fields in the wire are kept by a
 | tests | [`tests/test_pbwire.py`](tests/test_pbwire.py) | byte parity with the `protoc` reference, oneof/merge/required failure paths, and the core-API surface (JSON/text, framing, visit, limits, WKT, services) |
 | benchmarks | [`benchmarks/bench.py`](benchmarks/bench.py) | vs `google.protobuf` on four tiers |
 | conformance | [`conformance/`](conformance/) | official runner testee, `make conformance-python` |
+| pure core | [`pure/`](pure/) | stdlib-only port of the C core (descriptor, tree, wire, encode, decode, schema) for hosts with no C extension: `make conformance-python-pure` |
+| pbench | [`pbench/`](pbench/) | the three arms over `matrix3` (`tree` = parsed `Message`, `shim` = `encode(dict)`/`to_dict()`, `core` = `pure/`), gate + provisional probe |
 
 ## Build
 
 ```shell
-make python-bind    # builds the extension next to the sources
-make python-test    # self-check (no dependencies beyond Python)
-make python-bench   # benchmark vs google.protobuf (needs protoc + protobuf)
+make python-bind            # builds the extension next to the sources
+make python-test            # self-check, extension + pure core (no dependencies)
+make conformance-python-pure  # official binary suite through pure/ (no extension)
+make python-bench           # benchmark vs google.protobuf (needs protoc + protobuf)
 ```
 
 The extension statically links the core (`build/libpbwire.a`), so it needs a C
@@ -188,6 +191,34 @@ its serialization re-encodes every field from its own structs where a parsed
 `Message` just hands back the bytes. The `to_dict()` row is the one where both
 sides pay for every dict, string and int; that cost is `malloc`-bound and
 nobody can avoid it.
+
+## Pure-Python mode
+
+[`pure/`](pure/) is the same wire format without the CPython extension:
+`descriptor.py` reads the `FileDescriptorSet`, `tree.py` holds the value tree,
+`encode.py`/`decode.py` are the codec (unknown fields retained, groups, packed,
+oneof, presence, limits), and `schema.py` is the facade
+(`Schema.from_file`, `type.decode/encode`, `type.encode_object/decode_object`).
+It is stdlib only -- no extension, no `google.protobuf` -- for pure-Python
+interpreters, PyPy and sandboxes.
+
+```python
+from pure.schema import Schema
+
+schema = Schema.from_file("matrix3.desc")
+type = schema.message("structtest.Scalars3")
+wire = type.encode_object({"i32": 5, "str": "hi"})   # dict in
+data = type.decode_object(wire)                       # dict out
+tree = type.decode(wire)                              # unknown fields kept
+assert type.encode(tree) == wire                      # byte-exact
+```
+
+The extension stays the shipped codec: it is ~100x faster (at 74 KB, 941.9
+MB/s decode against the pure core's 6.7). The core is the no-extension mode and
+is published as such; it is at parity with `google.protobuf`'s own pure-Python
+runtime (1.08x decode, 1.29x `encode(parsed)`) and passes the official binary
+suite with the same failure set as the C core. Verdict and numbers:
+[`pbench/README.md`](pbench/README.md).
 
 ## Generated models
 

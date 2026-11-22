@@ -6,6 +6,8 @@ const std = @import("std");
 const pbwire = @import("pbwire");
 const xdep = @import("xdep.zig");
 
+const FieldPlan = pbwire.FieldPlan;
+
 // xfile.UsesDep
 pub const Xfile_UsesDep = struct {
     single: ?xdep.Xdep_DepMsg = null,
@@ -77,4 +79,31 @@ pub const Xfile_UsesDep = struct {
         return out;
     }
 };
+
+
+/// xfile.UsesDep as a flat native image: one C struct-codec call reads and writes it in
+/// place. Every offset below is asserted at comptime.
+pub const UsesDepMirror = extern struct {
+    single: ?*xdep.DepMsgMirror = null,
+    many: ?[*]xdep.DepMsgMirror = null,
+    many_count: usize = 0,
+    note: ?[*:0]const u8 = null,
+
+    /// Field plan rows: slot offset and has/count/oneof offsets. The
+    /// comptime block below proves every offset.
+    pub const fields = [_]FieldPlan{
+        .{ .number = 1, .kind = .message, .offset = 0, .child = pbwire.ChildPlan{ .full_name = "xdep.DepMsg", .fields = &xdep.DepMsgMirror.fields, .size = @sizeOf(xdep.DepMsgMirror) } },
+        .{ .number = 2, .kind = .message, .repeated = true, .offset = 8, .count = 16, .child = pbwire.ChildPlan{ .full_name = "xdep.DepMsg", .fields = &xdep.DepMsgMirror.fields, .size = @sizeOf(xdep.DepMsgMirror) } },
+        .{ .number = 3, .kind = .string, .offset = 24 },
+    };
+    pub const plan = pbwire.InPlace(@This(), "xfile.UsesDep", &fields);
+};
+
+comptime {
+    std.debug.assert(@offsetOf(UsesDepMirror, "single") == 0);
+    std.debug.assert(@offsetOf(UsesDepMirror, "many") == 8);
+    std.debug.assert(@offsetOf(UsesDepMirror, "many_count") == 16);
+    std.debug.assert(@offsetOf(UsesDepMirror, "note") == 24);
+    std.debug.assert(@sizeOf(UsesDepMirror) == 32);
+}
 

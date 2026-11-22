@@ -75,6 +75,8 @@ typedef struct {
     uint8_t packed;
     uint8_t required;
     uint8_t oneof; /* 1-based oneof group, 0 = none */
+    ID ivar;      /* @<ruby_name>: the generated model's value slot */
+    ID has_ivar;  /* @has_<ruby_name>, or 0 when the model has no has_ flag */
     VALUE name; /* frozen UTF-8 String */
     VALUE sub;  /* Type of a MESSAGE field, else Qnil */
 } field_t;
@@ -87,6 +89,8 @@ typedef struct {
     uint32_t *by_number;      /* dense field number -> index, or NULL */
     uint32_t by_number_size;  /* entries in by_number */
     VALUE by_name;            /* Hash: field name -> Integer index */
+    VALUE name_str;           /* frozen UTF-8 full name, for class lookup */
+    pbw_ctx *ctx;             /* encode/decode arena, reset per object call */
     uint32_t oneofs;
     int has_required;
 } type_t;
@@ -248,6 +252,7 @@ type_mark(void *ptr)
         return;
     }
     rb_gc_mark(type->by_name);
+    rb_gc_mark(type->name_str);
     for (i = 0; i < type->count; i++) {
         rb_gc_mark(type->fields[i].name);
         rb_gc_mark(type->fields[i].sub);
@@ -264,6 +269,10 @@ type_free(void *ptr)
     }
     holder_release(type->holder);
     type->holder = NULL;
+    if (type->ctx != NULL) {
+        pbw_ctx_free(type->ctx);
+        type->ctx = NULL;
+    }
     xfree(type->fields);
     xfree(type->by_number);
     xfree(type);
@@ -327,6 +336,8 @@ type_alloc(VALUE klass)
     type->by_number = NULL;
     type->by_number_size = 0;
     type->by_name = Qnil;
+    type->name_str = Qnil;
+    type->ctx = NULL;
     type->oneofs = 0;
     type->has_required = 0;
     return obj;
@@ -421,6 +432,26 @@ packable(pbw_type type)
 
 static VALUE type_for(VALUE schema_obj, const pbw_descriptor *desc);
 
+/* The generated model names a field @<name>, or @_<name> when the proto name
+ * starts uppercase (Ruby would parse it as a constant), and carries a
+ * separate @has_<name> for presence-carrying scalars. */
+static ID
+model_ivar_id(const char *name, const char *prefix)
+{
+    VALUE str = rb_str_new_cstr(prefix);
+    ID id;
+
+    if (name != NULL && name[0] >= 'A' && name[0] <= 'Z') {
+        rb_str_cat_cstr(str, "_");
+    }
+    if (name != NULL) {
+        rb_str_cat_cstr(str, name);
+    }
+    id = rb_intern_str(str);
+    RB_GC_GUARD(str);
+    return id;
+}
+
 /* Fill one Type's field table. Runs under rb_protect, so every rb_* call
  * here may raise and type_for() can drop the half-built Type afterwards. */
 typedef struct {
@@ -455,6 +486,13 @@ type_fill(VALUE argp)
         f->oneof = (uint8_t)pbw_field_oneof_index(field);
         f->name = rb_utf8_str_new_cstr(pbw_field_name(field));
         rb_obj_freeze(f->name);
+        f->ivar = model_ivar_id(pbw_field_name(field), "@");
+        f->has_ivar = 0;
+        if (!f->repeated && f->type != PBW_TYPE_MESSAGE &&
+            f->type != PBW_TYPE_GROUP && !f->required &&
+            (f->oneof != 0 || !pbw_descriptor_is_proto3(desc))) {
+            f->has_ivar = model_ivar_id(pbw_field_name(field), "@has_");
+        }
         f->sub = Qnil;
         if (f->oneof > type->oneofs) {
             type->oneofs = f->oneof;
@@ -514,6 +552,7 @@ type_for(VALUE schema_obj, const pbw_descriptor *desc)
         schema->types = types;
     }
     key = rb_utf8_str_new_cstr(pbw_descriptor_name(desc));
+    rb_obj_freeze(key);
     found = rb_hash_aref(types, key);
     if (!NIL_P(found)) {
         return found;
@@ -521,6 +560,7 @@ type_for(VALUE schema_obj, const pbw_descriptor *desc)
     count = pbw_descriptor_field_count(desc);
     obj = typed_object_alloc(cType, &type_data_type, (void **)&type);
     type->desc = desc;
+    type->name_str = key;
     /* A Type outlives the Schema object it came from: it keeps the C schema
      * alive (the descriptor pointers it holds point into it). */
     type->holder = schema->holder;
@@ -1572,6 +1612,446 @@ item_to_ruby(VALUE owner, field_t *f, pbw_value *value)
     }
 }
 
+/* ------------------------------------------------- object codec (shim) */
+
+/* The generated model is the native object: encode walks its instance
+ * variables inside C (one entry call, no Ruby loop), decode materializes the
+ * model classes inside C. `to_h` is deliberately not used: a Hash per call is
+ * exactly the per-field allocation this arm removes. */
+
+static type_t *
+field_sub_type(field_t *f)
+{
+    type_t *sub;
+
+    TypedData_Get_Struct(f->sub, type_t, &type_data_type, sub);
+    return sub;
+}
+
+static int
+scalar_is_unsigned(uint8_t type)
+{
+    switch ((pbw_type)type) {
+    case PBW_TYPE_UINT32:
+    case PBW_TYPE_UINT64:
+    case PBW_TYPE_FIXED32:
+    case PBW_TYPE_FIXED64:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+/* The generated model's presence rule: has_ fields are explicit, a string is
+ * present when non-nil and non-empty, everything else when non-zero/true. */
+static int
+object_scalar_present(field_t *f, VALUE value)
+{
+    switch ((pbw_type)f->type) {
+    case PBW_TYPE_STRING:
+    case PBW_TYPE_BYTES:
+        if (NIL_P(value)) {
+            return 0;
+        }
+        Check_Type(value, T_STRING);
+        return RSTRING_LEN(value) > 0;
+    case PBW_TYPE_BOOL:
+        return RTEST(value);
+    case PBW_TYPE_FLOAT:
+    case PBW_TYPE_DOUBLE:
+        return !NIL_P(value) && NUM2DBL(value) != 0.0;
+    default:
+        if (NIL_P(value)) {
+            return 0;
+        }
+        return scalar_is_unsigned(f->type) ? rb_num2ull(value) != 0
+                                           : rb_num2ll(value) != 0;
+    }
+}
+
+/* One scalar/string value as a core value. UINT64_MAX must go through
+ * rb_num2ull: rb_num2ll raises on it. */
+static pbw_value *
+object_scalar_value(field_t *f, VALUE value, pbw_ctx *ctx)
+{
+    uint64_t bits;
+
+    switch ((pbw_type)f->type) {
+    case PBW_TYPE_STRING:
+    case PBW_TYPE_BYTES:
+        Check_Type(value, T_STRING);
+        return pbw_value_new_bytes_ctx(ctx, RSTRING_PTR(value),
+                                       (size_t)RSTRING_LEN(value));
+    case PBW_TYPE_FLOAT: {
+        float fv = (float)NUM2DBL(value);
+
+        memcpy(&bits, &fv, 4);
+        return pbw_value_new_uint_ctx(ctx, bits);
+    }
+    case PBW_TYPE_DOUBLE: {
+        double dv = NUM2DBL(value);
+
+        memcpy(&bits, &dv, 8);
+        return pbw_value_new_uint_ctx(ctx, bits);
+    }
+    case PBW_TYPE_BOOL:
+        return pbw_value_new_uint_ctx(ctx, RTEST(value) ? 1u : 0u);
+    case PBW_TYPE_INT32:
+    case PBW_TYPE_INT64:
+    case PBW_TYPE_SINT32:
+    case PBW_TYPE_SINT64:
+    case PBW_TYPE_SFIXED32:
+    case PBW_TYPE_SFIXED64:
+    case PBW_TYPE_ENUM:
+        return pbw_value_new_uint_ctx(ctx, (uint64_t)rb_num2ll(value));
+    default:
+        return pbw_value_new_uint_ctx(ctx, rb_num2ull(value));
+    }
+}
+
+static VALUE
+object_scalar_to_ruby(field_t *f, pbw_value *value)
+{
+    switch ((pbw_type)f->type) {
+    case PBW_TYPE_STRING:
+    case PBW_TYPE_BYTES: {
+        size_t len = 0;
+        const uint8_t *data = (const uint8_t *)pbw_value_get_bytes(value, &len);
+
+        return string_from(f->type, data, len);
+    }
+    case PBW_TYPE_FLOAT:
+        return rb_float_new((double)pbw_value_get_float(value));
+    case PBW_TYPE_DOUBLE:
+        return rb_float_new(pbw_value_get_double(value));
+    case PBW_TYPE_BOOL:
+        return pbw_value_get_bool(value) ? Qtrue : Qfalse;
+    case PBW_TYPE_INT32:
+    case PBW_TYPE_INT64:
+    case PBW_TYPE_SINT32:
+    case PBW_TYPE_SINT64:
+    case PBW_TYPE_SFIXED32:
+    case PBW_TYPE_SFIXED64:
+    case PBW_TYPE_ENUM:
+        return LL2NUM(pbw_value_get_int(value));
+    default:
+        return ULL2NUM(pbw_value_get_uint(value));
+    }
+}
+
+/* What an absent field looks like on the generated model. Explicit-presence
+ * fields stay nil (the model's from_message does the same); implicit scalars
+ * get the generated initialize defaults. */
+static VALUE
+object_default(field_t *f)
+{
+    if (f->has_ivar != 0) {
+        return Qnil;
+    }
+    switch ((pbw_type)f->type) {
+    case PBW_TYPE_STRING:
+    case PBW_TYPE_BYTES:
+    case PBW_TYPE_MESSAGE:
+    case PBW_TYPE_GROUP:
+        return Qnil;
+    case PBW_TYPE_BOOL:
+        return Qfalse;
+    case PBW_TYPE_FLOAT:
+    case PBW_TYPE_DOUBLE:
+        return DBL2NUM(0.0);
+    default:
+        return INT2FIX(0);
+    }
+}
+
+static void object_fill(pbw_message *msg, type_t *type, VALUE obj,
+                        pbw_ctx *ctx);
+
+typedef struct {
+    pbw_message *msg;
+    type_t *type;
+    VALUE obj;
+    pbw_ctx *ctx;
+} object_fill_args;
+
+static VALUE
+object_fill_protected(VALUE argp)
+{
+    object_fill_args *a = (object_fill_args *)(void *)argp;
+
+    object_fill(a->msg, a->type, a->obj, a->ctx);
+    return Qnil;
+}
+
+/* Walk the generated model's ivars in descriptor order and fill the tree. */
+static void
+object_fill(pbw_message *msg, type_t *type, VALUE obj, pbw_ctx *ctx)
+{
+    size_t i;
+
+    for (i = 0; i < type->count; i++) {
+        field_t *f = &type->fields[i];
+        const pbw_field *df = pbw_descriptor_field_at(type->desc, f->index);
+        pbw_status status;
+
+        if (f->repeated) {
+            VALUE array = rb_ivar_get(obj, f->ivar);
+            long count;
+            long j;
+
+            if (NIL_P(array)) {
+                continue;
+            }
+            Check_Type(array, T_ARRAY);
+            count = RARRAY_LEN(array);
+            for (j = 0; j < count; j++) {
+                VALUE item = RARRAY_AREF(array, j);
+
+                if (f->type == PBW_TYPE_MESSAGE ||
+                    f->type == PBW_TYPE_GROUP) {
+                    pbw_message *child =
+                        pbw_message_set_message(msg, f->number);
+
+                    if (child == NULL) {
+                        rb_raise(eError, "%s.%s: out of memory",
+                                 type_name(type), RSTRING_PTR(f->name));
+                    }
+                    object_fill(child, field_sub_type(f), item, ctx);
+                } else {
+                    pbw_value *built = object_scalar_value(f, item, ctx);
+
+                    status = pbw_message_set_field(msg, df, built);
+                    if (status != PBW_OK) {
+                        pbw_value_free(built);
+                        rb_raise(eError, "%s.%s: %s", type_name(type),
+                                 RSTRING_PTR(f->name), pbw_strerror(status));
+                    }
+                }
+            }
+            continue;
+        }
+
+        if (f->type == PBW_TYPE_MESSAGE || f->type == PBW_TYPE_GROUP) {
+            VALUE child_obj = rb_ivar_get(obj, f->ivar);
+            pbw_message *child;
+
+            if (NIL_P(child_obj)) {
+                continue;
+            }
+            child = pbw_message_set_message(msg, f->number);
+            if (child == NULL) {
+                rb_raise(eError, "%s.%s: out of memory", type_name(type),
+                         RSTRING_PTR(f->name));
+            }
+            object_fill(child, field_sub_type(f), child_obj, ctx);
+            continue;
+        }
+
+        {
+            VALUE value = rb_ivar_get(obj, f->ivar);
+            int present;
+
+            if (f->required) {
+                present = 1;
+            } else if (f->has_ivar != 0 &&
+                       rb_ivar_defined(obj, f->has_ivar)) {
+                present = RTEST(rb_ivar_get(obj, f->has_ivar));
+            } else {
+                present = object_scalar_present(f, value);
+            }
+            if (!present) {
+                continue;
+            }
+            {
+                pbw_value *built = object_scalar_value(f, value, ctx);
+
+                status = pbw_message_set_field(msg, df, built);
+                if (status != PBW_OK) {
+                    pbw_value_free(built);
+                    rb_raise(eError, "%s.%s: %s", type_name(type),
+                             RSTRING_PTR(f->name), pbw_strerror(status));
+                }
+            }
+        }
+    }
+}
+
+/* One decoded message as an instance of `classes[type full name]`. classes
+ * may also be a single Class, which covers a message with no sub-messages. */
+static VALUE
+object_from_tree(type_t *type, const pbw_message *msg, VALUE classes)
+{
+    VALUE klass = Qnil;
+    VALUE obj;
+    size_t i;
+
+    if (RB_TYPE_P(classes, T_HASH)) {
+        klass = rb_hash_aref(classes, type->name_str);
+    } else if (RB_TYPE_P(classes, T_CLASS)) {
+        klass = classes;
+    }
+    if (!RB_TYPE_P(klass, T_CLASS)) {
+        rb_raise(rb_eArgError,
+                 "decode_object: no class for %s (pass a full-name => Class "
+                 "Hash)", type_name(type));
+    }
+    obj = rb_obj_alloc(klass);
+
+    for (i = 0; i < type->count; i++) {
+        field_t *f = &type->fields[i];
+        const pbw_field *df = pbw_descriptor_field_at(type->desc, f->index);
+        pbw_value *value = pbw_message_get_field(msg, df);
+
+        if (f->repeated) {
+            size_t count = value != NULL ? pbw_value_count(value) : 0;
+            VALUE array = rb_ary_new_capa((long)count);
+            size_t j;
+
+            for (j = 0; j < count; j++) {
+                pbw_value *item = pbw_value_at(value, j);
+
+                if (f->type == PBW_TYPE_MESSAGE ||
+                    f->type == PBW_TYPE_GROUP) {
+                    pbw_message *child = pbw_value_get_message(item);
+                    VALUE child_obj = Qnil;
+
+                    if (child != NULL) {
+                        child_obj = object_from_tree(field_sub_type(f), child,
+                                                     classes);
+                    }
+                    rb_ary_push(array, child_obj);
+                } else {
+                    rb_ary_push(array, object_scalar_to_ruby(f, item));
+                }
+            }
+            rb_ivar_set(obj, f->ivar, array);
+            continue;
+        }
+
+        if (f->type == PBW_TYPE_MESSAGE || f->type == PBW_TYPE_GROUP) {
+            VALUE child_obj = Qnil;
+
+            if (value != NULL) {
+                pbw_message *child = pbw_value_get_message(value);
+
+                if (child != NULL) {
+                    child_obj = object_from_tree(field_sub_type(f), child,
+                                                 classes);
+                }
+            }
+            rb_ivar_set(obj, f->ivar, child_obj);
+            continue;
+        }
+
+        if (value == NULL) {
+            rb_ivar_set(obj, f->ivar, object_default(f));
+            if (f->has_ivar != 0) {
+                rb_ivar_set(obj, f->has_ivar, Qfalse);
+            }
+        } else {
+            VALUE out = object_scalar_to_ruby(f, value);
+
+            rb_ivar_set(obj, f->ivar, out);
+            RB_GC_GUARD(out);
+            if (f->has_ivar != 0) {
+                rb_ivar_set(obj, f->has_ivar, Qtrue);
+            }
+        }
+    }
+    return obj;
+}
+
+static VALUE
+type_encode_object(VALUE self, VALUE obj)
+{
+    type_t *type;
+    pbw_message *tree;
+    object_fill_args args;
+    int state = 0;
+    size_t len = 0;
+    VALUE out;
+    pbw_status status;
+
+    TypedData_Get_Struct(self, type_t, &type_data_type, type);
+    if (type->ctx == NULL) {
+        type->ctx = pbw_ctx_new();
+        if (type->ctx == NULL) {
+            rb_raise(eError, "%s: out of memory", type_name(type));
+        }
+    }
+    pbw_ctx_reset(type->ctx);
+    tree = pbw_message_new_ctx(type->ctx, type->desc);
+    if (tree == NULL) {
+        rb_raise(eError, "%s: out of memory", type_name(type));
+    }
+    args.msg = tree;
+    args.type = type;
+    args.obj = obj;
+    args.ctx = type->ctx;
+    rb_protect(object_fill_protected, (VALUE)(void *)&args, &state);
+    if (state != 0) {
+        rb_jump_tag(state);
+    }
+    {
+        const uint8_t *data = NULL;
+
+        status = pbw_encode_ctx(type->ctx, tree, &data, &len);
+        if (status != PBW_OK) {
+            rb_raise(eError, "%s: %s", type_name(type),
+                     pbw_strerror(status));
+        }
+        out = rb_str_new((const char *)data, (long)len);
+    }
+    return out;
+}
+
+typedef struct {
+    type_t *type;
+    pbw_message *tree;
+    VALUE classes;
+    VALUE result;
+} object_decode_args;
+
+static VALUE
+object_decode_protected(VALUE argp)
+{
+    object_decode_args *a = (object_decode_args *)(void *)argp;
+
+    a->result = object_from_tree(a->type, a->tree, a->classes);
+    return Qnil;
+}
+
+static VALUE
+type_decode_object(int argc, VALUE *argv, VALUE self)
+{
+    type_t *type;
+    VALUE wire;
+    VALUE classes = Qnil;
+    pbw_message *tree = NULL;
+    pbw_status status;
+    object_decode_args args;
+    int state = 0;
+
+    rb_scan_args(argc, argv, "11", &wire, &classes);
+    TypedData_Get_Struct(self, type_t, &type_data_type, type);
+    StringValue(wire);
+    status = pbw_decode(type->desc, RSTRING_PTR(wire),
+                        (size_t)RSTRING_LEN(wire), &tree);
+    if (status != PBW_OK) {
+        rb_raise(eError, "%s: %s", type_name(type), pbw_strerror(status));
+    }
+    args.type = type;
+    args.tree = tree;
+    args.classes = classes;
+    args.result = Qnil;
+    rb_protect(object_decode_protected, (VALUE)(void *)&args, &state);
+    pbw_message_free(tree);
+    if (state != 0) {
+        rb_jump_tag(state);
+    }
+    return args.result;
+}
+
 static VALUE
 schema_do_load(VALUE klass, VALUE bytes, const pbw_limits *limits)
 {
@@ -1651,6 +2131,23 @@ schema_message(VALUE self, VALUE name)
     TypedData_Get_Struct(self, schema_t, &schema_data_type, own);
     type = type_for(self, desc);
     return message_builder_new(type, own->holder, tree, Qnil, 1);
+}
+
+/* The Type behind a message name: the C-side field table, and the receiver
+ * of encode_object/decode_object. Keeping it reachable lets a caller compile
+ * the type once and skip schema_message()'s builder allocation. */
+static VALUE
+schema_type(VALUE self, VALUE name)
+{
+    pbw_schema *schema = schema_ptr(self);
+    const pbw_descriptor *desc;
+
+    StringValue(name);
+    desc = pbw_schema_find(schema, StringValueCStr(name));
+    if (desc == NULL || pbw_descriptor_is_enum(desc)) {
+        rb_raise(eError, "no message %" PRIsVALUE " in the schema", name);
+    }
+    return type_for(self, desc);
 }
 
 static VALUE
@@ -3228,6 +3725,34 @@ message_inspect(VALUE self)
                       type_name(message_type_of(self)));
 }
 
+/* Message-side twins of the Type object codec: a builder already carries its
+ * type, so pbench can compile one handle and use it for both arms. */
+static VALUE
+message_encode_object(VALUE self, VALUE obj)
+{
+    message_t *message;
+
+    TypedData_Get_Struct(self, message_t, &message_data_type, message);
+    if (message->kind == MSG_CLOSED) {
+        rb_raise(eError, "%s: message is closed",
+                 type_name(message_type_of(self)));
+    }
+    return type_encode_object(message->type, obj);
+}
+
+static VALUE
+message_decode_object(int argc, VALUE *argv, VALUE self)
+{
+    message_t *message;
+
+    TypedData_Get_Struct(self, message_t, &message_data_type, message);
+    if (message->kind == MSG_CLOSED) {
+        rb_raise(eError, "%s: message is closed",
+                 type_name(message_type_of(self)));
+    }
+    return type_decode_object(argc, argv, message->type);
+}
+
 /* ------------------------------------------------------------- extension */
 
 void
@@ -3246,6 +3771,7 @@ Init_pbwire_ext(void)
     rb_define_method(cSchema, "service", schema_service, 1);
     rb_define_method(cSchema, "resolve", schema_resolve, 2);
     rb_define_method(cSchema, "message", schema_message, 1);
+    rb_define_method(cSchema, "type", schema_type, 1);
     rb_define_method(cSchema, "close", schema_close, 0);
     rb_define_method(cSchema, "release", schema_close, 0);
     rb_define_method(cSchema, "closed?", schema_closed_p, 0);
@@ -3254,6 +3780,8 @@ Init_pbwire_ext(void)
 
     cType = rb_define_class_under(mPbwire, "Type", rb_cObject);
     rb_define_alloc_func(cType, type_alloc);
+    rb_define_method(cType, "encode_object", type_encode_object, 1);
+    rb_define_method(cType, "decode_object", type_decode_object, -1);
 
     cPool = rb_define_class_under(mPbwire, "Pool", rb_cObject);
     rb_define_singleton_method(cPool, "new", pool_s_new, -1);
@@ -3282,6 +3810,8 @@ Init_pbwire_ext(void)
     rb_define_method(cMessage, "[]", message_get, 1);
     rb_define_method(cMessage, "encode", message_encode, 0);
     rb_define_method(cMessage, "decode", message_decode, -1);
+    rb_define_method(cMessage, "encode_object", message_encode_object, 1);
+    rb_define_method(cMessage, "decode_object", message_decode_object, -1);
     rb_define_method(cMessage, "encoded_size", message_encoded_size, 0);
     rb_define_method(cMessage, "encode_to", message_encode_to, 1);
     rb_define_method(cMessage, "encode_delimited_to",

@@ -34,15 +34,17 @@
  * Values map per field type:
  *
  *   int32/uint32/sint32/fixed32/sfixed32/enum   number
- *   int64/uint64/sint64/fixed64/sfixed64        BigInt
+ *   int64/uint64/sint64/fixed64/sfixed64        BigInt, or a decimal string
  *   float/double                                number
  *   bool                                        boolean
  *   string                                      string
  *   bytes                                       Buffer
  *   message / repeated                          object / array
  *
- * There is no int64 precision loss: 64-bit fields are BigInt, and a JS number
- * is accepted when setting (rounded the way Number->int64 rounds).
+ * There is no int64 precision loss: 64-bit fields read as BigInt, and writing
+ * takes a BigInt or an exact decimal string. A JS number is accepted only
+ * while it is an exact safe integer; anything else is refused with a TypeError
+ * naming the field instead of being rounded.
  */
 
 const fs = require('node:fs');
@@ -129,6 +131,16 @@ class MessageType {
     }
     // The addon builds the tree, encodes it into the type's scratch buffer and
     // frees the tree; only the bytes cross back.
+    return this.encodeObject(value);
+  }
+
+  /** Encode a plain object (or a generated class instance's plain shape) in
+   * one addon downcall: the addon walks the schema's fields in C and fills a
+   * tree it frees again, so no per-field set() crosses the boundary. */
+  encodeObject(value) {
+    if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+      throw new TypeError('pbwire: encodeObject expects an object');
+    }
     return this._copy(addon.encodeObject(this._handle, value));
   }
 
@@ -179,6 +191,12 @@ class MessageType {
       throw new TypeError('pbwire: decodeObject expects a Buffer');
     }
     return addon.decodeObject(this._handle, bytes, opts);
+  }
+
+  /** `decodeObject` under the native-object-in/native-object-out name the
+   * pbench arms use. */
+  decodeToObject(bytes, opts) {
+    return this.decodeObject(bytes, opts);
   }
 
   /** Decode wire bytes into a Message; throws on malformed input. A

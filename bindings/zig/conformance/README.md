@@ -20,3 +20,13 @@ C testee). JSPB answers `skipped`, like the C testee. A request that fails to
 decode answers `runtime_error`; the two binary tag-truncation cases the
 reference C++ testee fails identically are covered by the shared
 `conformance/failure_list_pbwire.txt` (same core decoder, same two failures).
+
+## Pure-Zig core testee
+
+`testee_core.zig` is the same wire protocol driven by `bindings/zig/core/`
+(`zig build -Dcore=true testee`, run by `make conformance-zig-core`). It links
+no C source, no translate-c output and no `libpbwire.a`; the request and
+response envelopes come from the descriptor set, like the message under test.
+Binary in -> binary out is what the pure core implements; JSON and text requests
+answer `skipped`, so the pass set is the binary suite. The same two
+tag-truncation cases are expected (same decoder rule, same shared failure list).
