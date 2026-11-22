@@ -230,8 +230,13 @@ jobs:
         run: |
           out=$(gofmt -l bindings/go)
           if [ -n "$out" ]; then echo "$out"; exit 1; fi
+      - name: Go vet (no stdlib-interface collisions)
+        run: |
+          (cd bindings/go && go vet ./...)
       - name: cgo dynamic binding tests
         run: make go-test
+      - name: pbench semantic gate (UTF-8, unknowns, arm parity)
+        run: (cd bindings/go && go test -count=1 -tags pbench ./pbench/)
 
   ruby:
     name: Ruby binding
