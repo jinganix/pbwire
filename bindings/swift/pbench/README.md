@@ -8,7 +8,9 @@ and wire bytes out; wire bytes in and a fully readable native object out.
 
 | arm | file | mechanism | what it answers |
 |---|---|---|---|
-| `tree` | `Sources/Pbench/Arms.swift` | the shipped `Message` handle: one `set` per field, then `encode()`; `decode()` then one `get` per field | what the per-field downcall costs once the tree exists |
+| `tree` | `Sources/Bench/main.swift` (timer) over `Sources/Pbench/Arms.swift` (handle) | the shipped `Message` handle full task: a fresh native object per iteration (one `set` per field, `encode`, deinit frees inside the timer); a fresh `decode` per iteration with every gate-checked field folded into a live sink, deinit frees inside the timer | what an application pays per message end to end |
+| `proxy` | `Sources/Bench/main.swift` (timer) | the old prebuilt shape, relabelled not re-measured as a new task: a held handle's `encode`, bare decode with no materialization (same-run timing only, never the headline) | what the transcoder/hold-and-re-encode path costs |
+| `shim` | `Sources/Pbench/Arms.swift` | the generated `@frozen <Message>Repr` is the native object; `InPlace.encodeInPlace` / `decodeInPlace` cross once and `bindings/swift/Sources/CPbwire/shim.c` walks that memory in place through `pbw_struct_codec_*` | is a boundary worth paying for at all |
 | `shim` | `Sources/Pbench/Arms.swift` | the generated `@frozen <Message>Repr` is the native object; `InPlace.encodeInPlace` / `decodeInPlace` cross once and `bindings/swift/Sources/CPbwire/shim.c` walks that memory in place through `pbw_struct_codec_*` | is a boundary worth paying for at all |
 | `core` | `Sources/Pbench/CoreArm.swift` | the pure-Swift `PbwireCore` product: a schema from the descriptor set, a value tree built with one `set` per field, then `encode`/`decode` | who walks the wire with no C library, no `unsafeFlags` link and no generated code |
 `core` replaces the `n/a` plan 21 started from: the arm is `PbwireCore`
@@ -93,6 +95,15 @@ protoc and swift-protobuf), then reads every payload field back off the decoded
 core tree. A core row that prints is a row whose bytes and values a second,
 independent wire implementation agrees with.
 
+The `tree` full-task gate lives in `Bench` itself: per tier, before timing
+anything, it builds a second fresh `Message` through the same
+`schema.message` + `fillTree` path the timer uses and requires its bytes to
+equal the reference image, decodes the reference fresh and compares every
+gate-checked field (`TreeArm.readBack`, the same list the timer's
+`consumeTree` folds into the sink), and re-encodes the decoded tree
+byte-exactly. A tree row that prints is a row whose timer body is proven
+byte- and field-correct.
+
 ## Provisional table (Stage 3)
 
 `cd bindings/swift && swift run -c release Bench compare`: interleaved rounds
@@ -110,29 +121,37 @@ stage 6 rounds:
 | 2469 B | 694.5 | 502.5 | 82.8 | 304.6 | 293.3 | 22.2 |
 | 74913 B | 1518.8 | 854.1 | 185.3 | 592.1 | 560.0 | 51.2 |
 
-## Verdict
+## Verdict (Go-parity re-time)
 
-**Keep the shipped `tree` runtime and publish the flat-mirror `shim` row as the
-native-object mechanism.** With one downcall per op the shim is above the
-swift-protobuf baseline at every tier on both ops: 2.3x encode and 3.1x decode
-at 136 B, 3.4x and 2.6x at 74 KB (formal run, `results/bench-swift-*`). The
-`tree` row — a *prebuilt* handle's `encode()`/`decode()`, no per-field work in
-the timed loop — is faster than the shim everywhere, because on Swift the
-boundary was never per-field in that row: the handle is already one call into
-the C core's own encoder, while the shim runs the generic C struct codec over
-the mirror (the same codec the C, Dart, Julia, Rust and C# shim rows time).
+**Ship the `tree` handle as the default runtime; publish the flat-mirror `shim`
+row as the native-object mechanism; publish `core` and `proxy` beside them,
+never headline `proxy`.** Formal run `results/bench-swift-20261121T193722Z.json`
+(MB/s over wire bytes, ratio = pbwire / swift-protobuf, higher is faster):
 
-So it is not (a) — "replace the shipped fast path": `pbwire-swift-tree` stays
-the runtime an application that holds a `Message` should use, and it is the
-fastest row here. It is not (c) — "a boundary feature is missing": the shim
-needs no new entry point, it is above the baseline from 136 B to 74 KB. What it
-answers is (b): a native `@frozen` value type can be encoded and decoded with
-one downcall and no ARC per field, at 3.1-3.9x the official runtime, so a Swift
-application that wants its own object shape never has to build a `Message`
-tree to get there. The gap to the handle is the shared struct codec's encode
-path (it writes proto3 implicit scalars unconditionally and reserves per
-repeated element), a C runtime question that moves every layout row at once —
-recorded in `docs/perf-attempts.md`, not patched under this plan.
+| tier | `tree` enc | `tree` dec | `shim` enc | `shim` dec | `core` enc | `core` dec |
+|---|---|---|---|---|---|---|
+| 136 B | 123.6 (0.28x) | 311.4 (1.25x) | 974.9 (2.18x) | 769.9 (3.09x) | 241.1 (0.54x) | 98.6 (0.40x) |
+| 174 B | 115.9 (0.35x) | 274.5 (1.37x) | 966.5 (2.91x) | 707.7 (3.53x) | 223.8 (0.67x) | 91.2 (0.45x) |
+| 2469 B | 69.1 (0.26x) | 614.5 (3.25x) | 994.1 (3.80x) | 534.4 (2.83x) | 247.3 (0.95x) | 63.9 (0.34x) |
+| 74913 B | 66.3 (0.24x) | 578.9 (2.68x) | 915.1 (3.31x) | 580.9 (2.69x) | 247.7 (0.90x) | 65.9 (0.30x) |
+
+Proxy/tree encode gap: 8.5x/9.7x/21.1x/25.3x (small/medium/large/xlarge) —
+the gap the old prebuilt `tree` row was hiding. Proxy decode stays near tree
+decode (1.06x at xlarge): decode was always dominated by the C core walk, not
+by materialization.
+
+The `tree` row stays the default because it is the shipped path an
+application that holds a `Message` uses, and its decode beats the baseline at
+every tier (1.25x–3.25x). Its encode is below the baseline at every tier
+(0.24x–0.35x): one downcall per `set`, plus a fresh 3000-child build at
+xlarge. That encode gap is the per-field cost issue 41 named, and it is
+exactly what the old prebuilt row hid. The `shim` row is the answer for an
+application with its own object shape: one downcall per op, above the
+baseline on both ops at every tier (2.18x–3.80x encode, 2.69x–3.53x decode),
+no ARC per field. `core` stays the no-native, no-`unsafeFlags` path (see
+below), below the baseline on decode at every tier. Below-baseline native
+cells are flagged for the optimization pass: tree encode all tiers, core
+encode 136/174 B, core decode all tiers; no optimization under this task.
 
 ## Verdict: the pure core (Stage 4)
 
@@ -145,35 +164,40 @@ dependency, or a build with no C toolchain, has nowhere to go. `PbwireCore`
 answers that: pure Swift, no C module, no archive, no unsafe flags, and it
 passes the official binary suite on its own (`make conformance-swift`).
 
-It is not the fast path and does not pretend to be: the formal run below puts
-it at 0.54-0.90x of swift-protobuf on encode and 0.28-0.43x on decode, against
-2.6-6.3x / 2.6-4.2x for the `tree` handle. The gap is the value tree's ARC
+It is not the fast path and does not pretend to be: the Go-parity formal run
+above puts it at 0.54–0.95x of swift-protobuf on encode and 0.30–0.45x on
+decode, against 0.24–0.35x / 1.25–3.25x for the full-task `tree` handle and
+2.18–3.80x / 2.69–3.53x for the `shim` mirror. The gap is the value tree's ARC
 traffic, not the wire walk: one class `Message` plus one slot array per
 submessage, one `[UInt8]` per string, and a `Value`/`Field` copy per field, at
 3000 sub-messages and 3000 strings in the 74 KB payload. Why the gap exists and
 what was already fixed is in `docs/perf-attempts.md`.
 
-## Formal rows (Stage 5)
+## Formal rows (Go-parity re-time)
 
 `make swift-bench` records `results/bench-swift-<stamp>.{log,json}` and prints
-all three rows per tier plus the apple/swift-protobuf baseline
-(`benchmarks/baseline`): `pbwire-swift-tree` (the prebuilt handle),
-`pbwire-swift-shim` (the flat mirror) and `pbwire-swift-core` (the pure core's
-prebuilt tree), same harness, same payload, same bytes. The run below is
-`results/bench-swift-20261121T025449Z.json` (Apple M4 Pro, arm64). MB/s over
-wire bytes:
+all four rows per tier plus the apple/swift-protobuf baseline
+(`benchmarks/baseline`): `pbwire-swift-tree` (the shipped-handle full task),
+`pbwire-swift-proxy` (the relabelled prebuilt hold-and-recode, never the
+headline), `pbwire-swift-shim` (the flat mirror) and `pbwire-swift-core` (the
+pure core's prebuilt tree), same harness, same payload, same bytes. The run
+below is `results/bench-swift-20261121T193722Z.json` (Apple M4 Pro, arm64).
+MB/s over wire bytes:
 
-| tier | `tree` enc | `shim` enc | `core` enc | swift-protobuf enc | `tree` dec | `shim` dec | `core` dec | swift-protobuf dec |
-|---|---|---|---|---|---|---|---|---|
-| 136 B | 955.2 | 883.8 | 232.8 | 434.2 | 858.1 | 652.4 | 93.0 | 246.0 |
-| 174 B | 1087.4 | 935.0 | 213.4 | 323.2 | 784.2 | 652.8 | 84.3 | 198.1 |
-| 2469 B | 1481.6 | 998.2 | 234.9 | 260.3 | 656.3 | 508.6 | 61.9 | 193.2 |
-| 74913 B | 1656.6 | 886.6 | 239.6 | 275.6 | 586.8 | 563.3 | 60.2 | 216.4 |
+| tier | `tree` enc | `proxy` enc | `shim` enc | `core` enc | swift-protobuf enc | `tree` dec | `proxy` dec | `shim` dec | `core` dec | swift-protobuf dec |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 136 B | 123.6 | 1047.5 | 974.9 | 241.1 | 448.0 | 311.4 | 952.3 | 769.9 | 98.6 | 249.1 |
+| 174 B | 115.9 | 1128.3 | 966.5 | 223.8 | 331.8 | 274.5 | 848.4 | 707.7 | 91.2 | 200.6 |
+| 2469 B | 69.1 | 1457.9 | 994.1 | 247.3 | 261.3 | 614.5 | 680.1 | 534.4 | 63.9 | 188.8 |
+| 74913 B | 66.3 | 1675.1 | 915.1 | 247.7 | 276.2 | 578.9 | 610.1 | 580.9 | 65.9 | 216.3 |
 
-Against swift-protobuf: `core` encode 0.54x / 0.66x / 0.90x / 0.87x and decode
-0.38x / 0.43x / 0.32x / 0.28x; the `tree` row is 2.20x / 3.36x / 5.69x / 6.01x
-on encode and 3.49x / 3.96x / 3.40x / 2.71x on decode, the `shim` row 2.04x /
-2.89x / 3.84x / 3.22x and 2.65x / 3.30x / 2.63x / 2.60x.
+Throughput ratios (pbwire / swift-protobuf, higher is faster): `tree` encode
+0.28x / 0.35x / 0.26x / 0.24x and decode 1.25x / 1.37x / 3.25x / 2.68x; `shim`
+encode 2.18x / 2.91x / 3.80x / 3.31x and decode 3.09x / 3.53x / 2.83x / 2.69x;
+`core` encode 0.54x / 0.67x / 0.95x / 0.90x and decode 0.40x / 0.45x / 0.34x /
+0.30x. The pre-Go-parity Stage 5 table (prebuilt `tree` at 2.20x–6.01x encode)
+is superseded by the Verdict table above; the proxy column above carries the
+old prebuilt shape forward for comparison.
 
 Stage 6 (optimization): one round, kept. The first profile of the core arm was
 dominated by `swift_beginAccess` (a class `Reader`'s stored-property mutations
