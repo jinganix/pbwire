@@ -20,7 +20,15 @@
 #                        decode_object materializes the models in C. Encode
 #                        reuses the app-owned model across iterations (the
 #                        steady-state carve-out); decode materializes a fresh
-#                        model per call inside the timer.
+#                        model per call inside the timer. Shim decode carries
+#                        no Ruby-side folding sink by design: type_decode_object
+#                        (bindings/ruby/ext/pbwire_ext/pbwire_ext.c) always runs
+#                        pbw_decode plus object_from_tree over every field
+#                        before it returns -- repeated arrays and nested models
+#                        included -- so the full Ruby object already exists when
+#                        the timer lambda drops the reference. A consume over
+#                        the result would only add Ruby getter calls on top of
+#                        finished C work; it cannot fuse or skip anything.
 #   pbwire-ruby-proxy  encode/decode of a Message handle built before the
 #                        timer: re-encode a held handle, decode-and-free with no
 #                        materialization. The codec's own cost once the tree
@@ -305,7 +313,7 @@ CASES.each do |label, repeats, want, iterations|
                        'gem_encode' => -> { Structtest::Scalars3.encode(official) },
                        'proxy_decode' => -> { decoder.decode(reference).close },
                        'tree_decode' => -> { consume_tree(Pbwire::Gen::Structtest_Scalars3.decode(reference), repeats) },
-                       'shim_decode' => -> { shim_type.decode_object(reference, MODEL_CLASSES) },
+                       'shim_decode' => -> { shim_type.decode_object(reference, MODEL_CLASSES) }, # eager: type_decode_object materializes every field in C before return (see header), so no folding sink is needed
                        'gem_decode' => -> { Structtest::Scalars3.decode(reference) })
   proxy_encode_ns = ns['proxy_encode']
   encode_ns = ns['tree_encode']

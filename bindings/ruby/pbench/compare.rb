@@ -5,6 +5,15 @@
 # median of five rounds is printed. Bytes are compared before anything is
 # timed (the gate does this too; this is the last guard before a number).
 #
+# Shim decode carries no Ruby-side folding sink by design: type_decode_object
+# (bindings/ruby/ext/pbwire_ext/pbwire_ext.c) always runs pbw_decode plus
+# object_from_tree over every field before it returns -- repeated arrays and
+# nested models included -- so the full Ruby object already exists when the
+# timer lambda drops the reference. A reads_ok? over the result would only
+# add Ruby getter calls on top of finished C work; it cannot fuse or skip
+# anything. The tree arm keeps reads_ok? because its per-field gets happen in
+# Ruby and need the fold to stay live.
+#
 #   ruby bindings/ruby/pbench/compare.rb
 
 require_relative 'payload'
@@ -99,7 +108,7 @@ Payload::TIERS.each do |tier|
   decode = measure([
                      ['pbwire-ruby-tree', 'decode',
                       -> { Payload.reads_ok?(TreeArm.unmarshal(ref), repeats) }],
-                     ['pbwire-ruby-shim', 'decode', -> { ShimArm.unmarshal(ref) }],
+                     ['pbwire-ruby-shim', 'decode', -> { ShimArm.unmarshal(ref) }], # eager C materialization (see header); no reads_ok? needed
                      ['google-protobuf', 'decode',
                       -> { Structtest::Scalars3.decode(ref) }]
                    ], tier[:iterations])
