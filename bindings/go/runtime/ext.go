@@ -20,6 +20,12 @@ func encodeSubmessage(e *Encoder, sub any, tbl *Table, depth int, deterministic 
 	if err := encodeTable(e, sub, tbl, depth, deterministic); err != nil {
 		return err
 	}
+	// Plan tables (Dynamic) are the only ones whose messages can be *DMsg
+	// trees with extensions; generated tables skip the assertion entirely,
+	// which saves one per nested and repeated submessage on encode.
+	if tbl == nil || !tbl.Dynamic {
+		return nil
+	}
 	if dm, ok := sub.(*DMsg); ok && dm != nil {
 		return encodeExtTable(e, dm, depth, deterministic)
 	}

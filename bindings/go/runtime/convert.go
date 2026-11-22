@@ -134,7 +134,7 @@ func importMessage(t *DType, i int, sub any, mrow *Field) (*DMsg, error) {
 		return st.New(), nil
 	}
 	child := st.New()
-	if err := importInto(sub, mrow.Sub(), child, st); err != nil {
+	if err := importInto(sub, mrow.subTable(), child, st); err != nil {
 		return nil, err
 	}
 	return child, nil
@@ -238,7 +238,7 @@ func exportMessage(t *DType, i int, sub *DMsg, target any, mrow *Field) error {
 		}
 		return mrow.Foreign.Decode(target, raw)
 	}
-	return exportInto(sub, target, mrow.Sub(), st)
+	return exportInto(sub, target, mrow.subTable(), st)
 }
 
 // exportOneofValue converts a set oneof member for the model side.
@@ -268,7 +268,7 @@ func exportOneofValue(t *DType, i int, v any, mrow *Field) (any, error) {
 		}
 		return target, nil
 	}
-	if err := exportInto(sub, target, mrow.Sub(), st); err != nil {
+	if err := exportInto(sub, target, mrow.subTable(), st); err != nil {
 		return nil, err
 	}
 	return target, nil

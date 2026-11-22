@@ -35,8 +35,8 @@ import (
 	"google.golang.org/protobuf/types/descriptorpb"
 )
 
-// MarshalJSON prints a message in the JSON mapping.
-func (t *DType) MarshalJSON(m *DMsg) (string, error) {
+// MarshalJSONString prints a message in the JSON mapping.
+func (t *DType) MarshalJSONString(m *DMsg) (string, error) {
 	o := &jsonOut{}
 	o.printMessage(m)
 	if o.err != nil {
@@ -45,19 +45,19 @@ func (t *DType) MarshalJSON(m *DMsg) (string, error) {
 	return o.sb.String(), nil
 }
 
-// UnmarshalJSON parses JSON into a new tree; unknown fields fail unless
+// UnmarshalJSONString parses JSON into a new tree; unknown fields fail unless
 // ignoreUnknown is set. An unresolvable Any @type always fails, and a
 // missing proto2 required field fails after the parse.
-func (t *DType) UnmarshalJSON(text string, ignoreUnknown bool) (*DMsg, error) {
-	return t.UnmarshalJSONLimits(text, ignoreUnknown, Limits{})
+func (t *DType) UnmarshalJSONString(text string, ignoreUnknown bool) (*DMsg, error) {
+	return t.UnmarshalJSONStringLimits(text, ignoreUnknown, Limits{})
 }
 
-// UnmarshalJSONLimits is UnmarshalJSON with explicit bounds: documents
+// UnmarshalJSONStringLimits is UnmarshalJSONString with explicit bounds: documents
 // larger than the byte cap fail before anything parses, and nesting past
 // the effective cap fails. Like the reference, an array costs a level too,
 // so a repeated message chain spends two levels per message. The old name
 // keeps its signature as a defaults wrapper.
-func (t *DType) UnmarshalJSONLimits(text string, ignoreUnknown bool, lim Limits) (*DMsg, error) {
+func (t *DType) UnmarshalJSONStringLimits(text string, ignoreUnknown bool, lim Limits) (*DMsg, error) {
 	if err := lim.checkBytes(len(text)); err != nil {
 		return nil, err
 	}

@@ -133,15 +133,27 @@ func (t *DType) DecodeLimits(wire []byte, lim Limits) (*DMsg, error) {
 		return nil, err
 	}
 	m := t.New()
+	tb := t.tableFor()
 	a := &Arena{}
-	a.Grow(len(wire))
+	initCap := 0
+	if h := tb.arenaHint(); h > 0 {
+		a.Grow(h)
+		initCap = cap(a.buf)
+	} else {
+		a.Grow(len(wire))
+	}
 	m.arena = a
 	d := Decoder{Buf: wire}
-	if err := DecodeTableLimits(&d, a, m, t.tableFor(), 0, lim); err != nil {
+	if err := DecodeTableLimits(&d, a, m, tb, 0, lim); err != nil {
 		return nil, err
 	}
 	if !d.Done() {
 		return nil, ErrWire
+	}
+	if initCap > 0 && cap(a.buf) > initCap {
+		tb.setArenaHintOverflow(len(a.buf))
+	} else {
+		tb.setArenaHint(len(a.buf))
 	}
 	return m, nil
 }
@@ -158,7 +170,9 @@ func (t *DType) EncodeDeterministic(m *DMsg) ([]byte, error) {
 	// another type, and the row closures index its slots.
 	tb := m.typ.tableFor()
 	cap0 := tb.capHint()
-	if cap0 < 256 {
+	if cap0 == 0 {
+		// Cold table only: one allocation covers the smallest messages.
+		// Steady state allocates the learned size (see EncodeModel).
 		cap0 = 256
 	}
 	e := Encoder{Buf: make([]byte, 0, cap0)}
@@ -710,7 +724,9 @@ func (m *DMsg) Encode() ([]byte, error) {
 	}
 	t := m.typ.tableFor()
 	cap0 := t.capHint()
-	if cap0 < 256 {
+	if cap0 == 0 {
+		// Cold table only: one allocation covers the smallest messages.
+		// Steady state allocates the learned size (see EncodeModel).
 		cap0 = 256
 	}
 	e := Encoder{Buf: make([]byte, 0, cap0)}
@@ -746,6 +762,7 @@ func (t *DType) buildTable() *Table {
 		rows = append(rows, t.buildRow(i, t.plan.Fields[i]))
 	}
 	tb := newTable(t.plan.Full, rows, t.plan.IsMapEntry)
+	tb.Dynamic = true
 	// Extensions are not rows (they live in m.ext, not the slot array),
 	// but binary decode needs a row to land them in: build one per hit
 	// from the same builders the regular rows use, so decode, text and
