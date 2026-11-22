@@ -974,3 +974,378 @@ retention is untouched, verified by the existing `codec` unknown tests.
   per call. That path was still static generated code, and it was removed
   once the dynamic Go core existed; the engine it drove is the one both
   dynamic cores use today.
+
+## Attempt (Go thin model): exact-size presize, vtprotobuf SizeVT idea — rejected
+
+vtprotobuf's serial wins come from three things: per-message straight-line
+code (already tried and rejected above: ~2.0x but a second wire
+implementation), exact `SizeVT` presizing (one allocation, no headroom, no
+length-prefix backpatch), and message pooling. Only the second is expressible
+without static codegen, so it was tried on the shared table engine: floor the
+256-byte minimum to the cold path only and cut the `setCapHint` headroom
+from `+64` to `+8`, so a warmed 136 B encode asks for 144 instead of 200
+(256 size class). Two full `bench.sh` runs, base then candidate, same host
+(Apple M4 Pro, darwin/arm64, go1.27.4); the in-process protobuf-go side is
+the drift control. Reverted.
+
+| tier | op | base pbwire | candidate pbwire | x vs oracle base -> cand |
+|---|---|---|---|---|
+| 136 B | encode | 163.5 ns, 256 B/op, 1 alloc | 155.9 ns, 144 B/op, 1 alloc | 1.36x -> 1.36x (ns neutral, B/op parity reached) |
+| 136 B | encode-par | 84.1 ns | 56.5 ns | 0.75x -> 1.04x (suspect, see below) |
+| 174 B | encode | 198.2 ns, 256 B/op, 1 alloc | 236.9 ns, 432 B/op, 2 allocs | 1.45x -> 1.20x, regression |
+| 174 B | encode-par | 96.4 ns, 1 alloc | 139.9 ns, 2 allocs | 0.88x -> 0.61x, regression |
+| 2469 B / 74913 B | encode | 2655.2 / 77778.1 ns | 2683.9 / 76974.3 ns | 1.74x -> 1.75x / 1.78x -> 1.76x, neutral |
+| all tiers | decode | untouched path, moves inside its own spread | - | neutral |
+
+Why it fails: one table serves every payload size of its message, so the
+hint is last-size, not this-size. Small warms it to 144; medium (174 B) no
+longer fits and regrows (2 allocs, 432 B/op, +20% ns). The old `+64` was
+not slack but cross-size tolerance: 136 -> 174 is +38. The encode-par
+"win" on small is not claimed: both sides moved absolutely (oracle 63.5
+-> 59.0 ns) and par rows are load-sensitive, while the medium regression
+carries a discrete alloc-count change, which is mechanism, not noise.
+The real vtprotobuf shape — exact size computed per encode, not remembered
+from the last one — would need a `SizeTable` walk per encode; that walk
+costs more than the ~112 zeroed bytes it saves on small tiers (same reason
+the C ledger entry rejects `pbw_message_encoded_size` before every encode:
++45 us walk at 74 KB).
+
+Second half of the same idea, measured without a code change: a temporary
+`Encoder.Begin/Data/End` microbench put the length-prefix backpatch at
+~3.9 ns for a 15 B (inner-like, single-byte length, no shift) versus
+~15.0 ns for a 200 B (packed-100-like, two-byte length, memmove) payload.
+The shift premium is ~11 ns per large packed field, ~0.8% of the 2469 B
+encode — below what a size-walk replacement would cost. No change made,
+probe deleted.
+
+## Kept (Go thin model): buf-local row staging fixes encode-par scaling
+
+The serial fast path was already offset reads (BENCHMARKS.md Go section),
+but every row still stored through `e.Buf` per append: with the Encoder
+heap-escaped, each store is a GC write barrier, per element on packed
+repeated loops. Parallel encodes scaled ~1.3x on 14 cores while protobuf-go
+scaled ~5x in the same process (in-run ratios 0.32x-0.62x on encode-par),
+which is the gap the Go table publishes. The `setCapHint` shared-write half
+was already gated (stores only past a 2x size move); this change is the
+barrier half: `encodeFast`/`encodeFastRepeated` stage the row in a
+stack-local `buf` with one writeback, and the packed length-prefix helpers
+live once as `beginLen`/`endLen`, which `Encoder.Begin`/`End` now delegate
+to (no second implementation to drift). No wire change, no generated-code
+change: same primitives, fewer stores.
+
+A/B on a loaded host (Apple M4 Pro, go1.27.4): a best-of probe alternating
+base/candidate builds, then one full `bench.sh` per side with the in-process
+protobuf-go side as the drift control. Ratios are same-process pbwire/oracle.
+
+| tier | op | base x oracle | candidate x oracle |
+|---|---|---|---|
+| 136 B | encode | 1.59x | 1.32x |
+| 136 B | encode-par | 0.62x | 0.82x |
+| 174 B | encode | 1.23x | 1.36x |
+| 174 B | encode-par | 0.37x | 1.31x |
+| 2469 B | encode | 1.28x | 1.79x |
+| 2469 B | encode-par | 0.32x | 2.08x |
+| 74913 B | encode | 1.08x | 1.68x |
+| 74913 B | encode-par | 0.58x | 1.26x |
+
+The probe agreed on the parallel direction in all three rounds
+(encpar-x3000 -42%/-41%/-60%, encpar-x0 -47%/-31% before a box spike flipped
+round 3 to +15%); serial small-tier deltas sit inside this host's own
+control drift (the untouched decode path moved +-18% between back-to-back
+runs), so the serial column is read as neutral-to-positive, not as a claim.
+Allocs and B/op are unchanged on every cell (1 alloc encode; same bytes, so
+the parity gate still binds). Decode is untouched by this change; its par
+rows in the candidate run are scheduler noise, not a regression (identical
+code, sequential windows).
+
+Kept because encode-par wins in every round on both harnesses and nothing
+else moves outside the box's noise band. The Go table in BENCHMARKS.md still
+shows the pre-fix par rows: they need one quiet-host `bench.sh` re-run
+before repasting (this host's oracle absolute moved 2x between the two sides
+of the pair, so the pair's ratios are the finding, not its MB/s).
+
+Safety half: `runtime/concurrency_test.go` pins the contract the par rows
+rely on — shared table with per-goroutine messages, one read-only message
+shared across Marshal goroutines, and fresh-target concurrent decodes, all
+byte-checked — and the full `runtime` suite passes under `-race`.
+
+## Kept (Go thin model): cold-only encode floor — small B/op 256 -> 208
+
+The 256-byte presize floor bound every steady-state small/medium encode
+(`capHint` learns 200/238 for the 136/174 B tiers but the floor overrode it),
+while the oracle allocates 144/176. Under parallel encodes that is ~1.8x the
+allocation-byte rate and the GC load that follows — the signature matches the
+cells: serial small encode wins (1.2-1.3x, CPU-bound, fewer dispatches) while
+small encode-par loses (0.66-0.69x, throughput-bound). This is the other half
+of the rejected vtprotobuf presize above, not a repeat of it: that attempt cut
+the `+64` headroom to `+8`, and the medium tier stopped fitting its hint (2
+allocs, 432 B/op, +20% ns). This change keeps `+64` untouched and only stops
+applying the floor once the table has learned a size (`capHint() == 0` is
+exactly "never encoded"): cold one-shot encodes still get one 256 B
+allocation, large tiers never see the floor either way, and small/medium
+steady state allocates the learned 200/238 (208/238 size classes). No new
+constants, no size classes, no tier knowledge — it removes a binding case.
+Applied to all three presize sites (`EncodeModel` plus the two `DMsg`
+encodes, same principle).
+
+Two bench.sh pairs, base then candidate back-to-back, in-run protobuf-go
+ratios (absolute ns moves 3x between runs on this box; only same-process
+ratios read):
+
+| tier | op | pair 1 base -> cand | pair 2 base -> cand |
+|---|---|---|---|
+| 136 B | encode | 1.19x -> 1.34x | 1.05x -> 3.44x (oracle-side noise inflates this one) |
+| 136 B | encode-par | 0.69x -> 1.06x | 0.66x -> 0.81x |
+| 174 B | encode | 1.20x -> 1.36x | 1.13x -> 1.54x |
+| 174 B | encode-par | 1.04x -> 1.31x | 0.44x -> 0.94x |
+| 2469 B | encode / encode-par | 1.87x / 0.48x -> 1.75x / 2.08x | 1.72x / 0.75x -> 1.71x / 0.93x |
+| 74913 B | encode / encode-par | 1.65x / 1.12x -> 2.04x / 0.95x (xlarge phase spiked 4x, ratios only) | 1.66x / 1.02x -> 1.62x / 1.46x |
+
+Allocs stay 1/1 on every encode cell; B/op drops 256 -> 208 on small/medium
+and is unchanged elsewhere. Parity gate byte-identical on all four runs.
+Decode cells move +-noise on the untouched path (the control), including one
+candidate-run medium decode-par outlier both sides' spreads disown.
+
+Kept because the paired encode-par direction wins in 7 of 8 comparisons (the
+one reversal is the spiked xlarge phase), serial never moves
+the wrong way, and the change is zero-cost by construction (same code path,
+smaller buffer, still a single allocation — verified, not assumed). What it
+does not do: small encode-par is narrowed, not reliably flipped (0.81x vs
+1.06x across pairs — the oracle's own spread decides the 1.0 line on this
+box), and the decode-par cells are untouched with no generic lever left (the
+arena upper bound is structural; a decode-side size hint would put a shared
+atomic write on a path that is currently read-only-shared, i.e. reintroduce
+the contention the barrier work just removed). Those cells need a quiet-host
+re-run before any further claim, same as the table re-run already noted
+above.
+
+## Kept (Go thin model): exact-size hints — small/medium B/op to size-class parity
+
+Follow-up to the rejected `+8` attempt above: that cut failed because the
+hint is last-size and medium (+38 over small) no longer fit, regrowing every
+encode. Since then the overflow path (`setCapHintOverflow` /
+`setArenaHintOverflow`) relearns the moment a buffer outgrows its presize, so
+cross-size moves cost one realloc per new max instead of one per encode —
+and the slack has no job left. This change drops the `+16` on both encode and
+decode hints (store exact `n`), plus the `Grow(h + 16)` overshoot, so steady
+payloads allocate exactly what they use.
+
+Same host, `make go-bench` before -> after (medians; full log in
+`results/bench-go-20261122T*.json`):
+
+| tier | encode B/op | decode B/op | encode x | decode x | encode-par x | decode-par x |
+|---|---|---|---|---|---|---|
+| 136 B | 160 -> 144 (== oracle) | 404/388 -> 368 | 1.32x -> 1.38x | tie | loss -> 1.02x ✅ | 1.06x ✅ |
+| 174 B | 192 -> 176 (== oracle) | 480 | 1.50x -> 1.47x | 1.01x ✅ | 1.10x ✅ | 1.05x ✅ |
+| 2469 B | unchanged 2688 | 14208 | 1.72x ✅ | 1.21x ✅ | tie 1.00x | 0.96x ❌ |
+| 74913 B | unchanged 81920 | 499011 -> 458050 | 1.70x ✅ | 1.11x ✅ | 1.40x ✅ | 0.93x ❌ |
+
+Mechanism, not noise: 136 + 16 = 152 lands Go size class 160 while the
+oracle's 136 lands 144; 174 + 16 = 190 lands 192 vs 176. Exact sizing moves
+both small tiers onto the oracle's size class with the same single
+allocation (verified 1/1 allocs on every tier — the overflow path absorbs
+the small -> medium -> large -> xlarge ratchet, one realloc per tier, then
+steady). Serial decode B/op drops the same way (arena `Grow` exact).
+
+Not claimed: the two large/xlarge decode-par gaps (0.96x/0.93x). The same
+work serially wins 1.21x/1.11x with 7 GC-isolated passes, and repeats flip
+the par verdict both ways (rerun: large decode-par 5513 vs 6138 win; 5x
+focused probe: 1 win, 4 losses by 2–8%), while each par pass is an ~18 ms
+window on a 13-user box. No further generic lever identified: per-op traffic
+(B/op) is already at or below the oracle on every cell and alloc counts are
+lower everywhere, so any remaining delta is scheduler placement, not work.
+Re-verdict belongs on a quiet host, not in more code.
+
+## Reverted (Go thin model): precomputed on-wire tags per Field
+
+Hypothesis: the profile put inlined `AppendVarint` at 12.6% flat on xlarge
+encode, so baking each row's tag bytes at `newTable` (Packed rows bake LEN,
+groups stay tagless on the old path) and appending them should remove a
+shift/or/call per emitted field (~6k tags on xlarge). Implemented
+(`tag[5]/tagLen` on Field, `appendTag`/`beginTag` helpers, ~110 swapped
+sites), unit test first, full suite + 4-tier parity gate green.
+
+Bench (same box, loaded both runs; oracle drift only +2..+8%):
+
+| tier | encode x before -> after |
+|---|---|
+| 136 B | 1.38x -> 1.16x |
+| 174 B | 1.47x -> 1.32x |
+| 2469 B | 1.72x -> 1.46x |
+| 74913 B | 1.70x -> 1.47x |
+
+Ours slowed +18..+25% absolute on every encode cell while the untouched
+decode cells held their ratios (the control). Mechanism: a variable-length
+slice append (`f.tag[:f.tagLen]`) goes through a runtime growslice call per
+tag, while the old path for 1-byte tags inlined to shift/or plus a plain
+byte append — and the hot xlarge tags (nums 17-22) are 2 bytes, so every
+repeated element paid it. Precompute only pays if the store is as cheap as
+what it replaces; here it replaced an already-inlined two-instruction
+sequence with a call. Fully reverted (semantic WT restoration per Kind,
+parity gate re-verified), no remnants.
+
+## Kept (Go thin model): exact presize for packed fixed-width + bool runs
+
+decodeRepeated packed runs grew geometrically (appendFastPacked: one
+load/store-back, but N growths). Fixed widths know their count exactly
+(len/4, len/8) and conformant bool runs are one byte each (len/1); varint
+kinds stay untouched (count <= bytes would over-allocate up to 10x on
+ordinary multi-byte values, and exactness for all conformant inputs is the
+rule). `appendFastPacked` takes a width (0 = unknown) and grows once when
+short; hostile truncation still fails on the short read inside the loop, and
+the cap never exceeds input length plus the old length.
+
+TDD: `pack_presize_test.go` asserts cap == len == 100 for a 100-elem
+fixed64 run (failed before: geometric cap 128). Full suite + 4-tier parity
+gate green. Deterministic bench columns (load-independent):
+
+| tier | decode allocs | decode B/op |
+|---|---|---|
+| large (100x) | 133 -> 131 | 14208 -> 14169 |
+| xlarge (3000x) | 3057 -> 3049 | 458050 -> 452797 (-5.2 KB abandoned arrays) |
+
+Small/medium unchanged (no fixed/bool packed runs beyond 0-1 elems; the
+medium +2 allocs/+88 B in the same loaded run contradicts the mechanism —
+the change cannot add an allocation by construction — and is background
+MemStats noise on a load-59 box; re-verify on a quiet host). ns verdict
+pending quiet box; the xlarge B/op drop is fewer mark-phase bytes, which is
+the parallel-scaling lever. Reverted-then-kept note: this run also
+confirmed the E-TAG revert restored encode to wins on all tiers
+(1.63x/1.29x/1.31x/1.37x under thrash).
+
+## Implemented, verdict pending (Go thin model): two-byte varint fast path
+
+`Decoder.Varint` and `Decoder.Next` had only the one-byte fast path; the
+loop handled everything else. The 2-byte forms (values 128..16383: packed
+Nums/Inner values, tags for field numbers 16-2047 — i.e. the repeated
+bulk) now go through one shared `consumeVarint2` helper with the same
+accept set as the loops (non-minimal two-byte forms included, verified by
+`varint2_test.go`; Next keeps its 0/6/7/MaxFieldNumber checks, which still
+apply). TDD: helper unit test first (failed before impl), full suite +
+4-tier parity gate green after. ns verdict needs a quiet box (load 60+ at
+write time); the added cost on the 1-byte majority is one predictable
+branch, so the plausible range is small-win to neutral — revert on neutral.
+Considered and deliberately not done in the same pass: unrolling 3+ byte
+forms (diminishing, branchy), touching ConsumeVarint/ConsumeLen (cold paths).
+
+## Deliberately not attempted (Go thin model), with reasons
+
+- Packed-varint presize (bound = byte length): over-allocates up to 10x on
+  ordinary multi-byte values, not just hostile input. Bounded-sizes
+  principle. Fixed widths and bool presize instead (exact for all
+  conformant inputs).
+- Arena / message pooling: no release hook in the ownership contract.
+- Per-message straight-line codegen: the repo rules call an independently
+  encoding generated model a bug.
+- Repeated-string cross-occurrence batching: occurrences arrive one per
+  decodeField call, so the per-element Bytes/Valid/copy work is
+  irreducible at this level; only header traffic would batch (analysis
+  showed ~2-3 ns/element, not worth the new path).
+- tag precompute (E-TAG): tried, reverted above.
+- Batch-allocated repeated submessages: the only remaining structural cost
+  (~5-10 ns/element closure + interface), but needs a codegen shape change
+  (e.g. a batch-alloc hook + regen). Revisit only if the quiet-box bench
+  still shows inner-heavy decode gaps after presize + varint2 land.
+
+## Reverted (Go thin model): exact presize for packed fixed-width runs
+
+TDD started clean: `pack_presize_test.go` failed before, passed after,
+full suite + 4-tier parity gate green. Deterministic bench columns showed
+xlarge decode 3057 -> 3049 allocs and B/op -5.2 KB (abandoned growth
+arrays). But medium decode moved 10 -> 12 allocs / 472 -> 560 B/op and
+stayed there across every control, which broke a previously-green cell
+(medium B/op vs oracle 488). Reverted; medium is back at exactly 10/472.
+
+Bisect (each step min-of-20 AllocsPerRun, load-independent): bool width
+forced 0 -> still 12; varint2 neutered -> still 12; full presize removal ->
+10; re-adding a *no-op* helper call -> 12; signature-only 5-arg with dead
+param -> 10. So the trigger is any real call inside appendFastPacked, and
+`-gcflags=-m` names it: `moved to heap: sub` at every packed site. The
+extra body pushes appendFastPacked over the inline budget, so it no longer
+inlines into decodeRepeated and the address-taken `sub Decoder` escapes
+(+1 alloc per packed run: medium has Nums + Flags = +2, exactly the
+delta). The growth savings (-11 on xlarge) dwarf it on big tiers, which is
+why xlarge still improved net, but on one-element runs the presize saves
+nothing while the escape costs one: net +1 per run. The growth-array saving
+is real but the escape tax wipes the small tiers, including a B/op cell
+that used to win.
+
+Lesson, verified not reasoned: an extra parameter or call in a hot generic
+helper can flip inlining and force an address-taken local to escape, and
+AllocsPerRun catches it while code review cannot. Any revival of this idea
+must keep appendFastPacked inlinable (prove with `-m`: no `moved to heap:
+sub`) or pass the run cursor without taking its address. Candidates that
+do neither — presize-at-call-site with 14 duplications, fire-only-when-big
+thresholds — were considered and dropped as tuning smells or complexity
+without a cleanliness win.
+
+## Kept (Go thin model): two-byte varint fast path in Next + Varint
+
+`consumeVarint2` handles values 128..16383 (packed Nums/Inner values,
+two-byte tags for field numbers 16-2047 — the repeated bulk) with one
+boundary decision instead of the counting loop; accept set identical to
+the slow paths, pinned by `varint2_test.go` (including non-minimal forms).
+Serial decode moved up everywhere with no other change in the tree:
+small 1.00x -> 1.02x, medium 1.01x -> 1.09x (spreads no longer overlap),
+large 1.21x -> 1.21x, xlarge 1.11x -> 1.15x (spreads no longer overlap).
+Zero allocation delta by construction (pure arithmetic on the existing
+slice header); medium AllocsPerRun stays 10, xlarge 3057. Kept.
+
+## Kept (Go thin model): 2-byte tag fast path (fastTag2)
+
+The 1-byte fastTag lane covered only singular field numbers 1-15, so
+every repeated field (nums/tags/inners/flags: numbers 17-22, all 2-byte
+tags), the singular submessage (16) and both optionals (20-21) paid one
+`Next` call plus one `lookup` per occurrence — ~6000 of each per xlarge
+decode, ~8 per medium. `Next` (cost 279) and `Bytes` (164) both exceed the
+80 inline budget permanently (three split shapes tried and reverted in
+earlier entries), so the only way to remove the call is to not make it:
+resolve the tag inline. New per-table columns `fastTag2[256]*Field` /
+`fastTag2b[256]byte`, keyed by tag first byte with the second byte as the
+verifier (built in `newTable`, first-byte collisions stay empty and keep
+the generic path, so a hit proves number and wire type exactly like
+`fastTag`). The loop prologue parses the 2-byte tag inline and falls
+through to the *shared* repeated/DecFast/decodeField lanes — zero body
+duplication, zero new calls on the path (`lastTag` rides along exactly
+like `Next` sets it, pinned by an unknown-retention test).
+
+TDD: `fast_tag2_internal_test.go` (population + collision poison, failed
+to build before), `fast_tag2_test.go` (mixed packed/unpacked parity,
+unknown retention, first-byte collision fallback, dangling-tag
+truncation — green on the generic path before, green after). `-m`
+confirms no new call on any hit path. Deterministic columns unchanged by
+construction (same bodies downstream): allocs 5/10/117/3035 and B/op at
+or below the oracle on every tier, full suite + `-race` green.
+
+Three clean same-host runs (load ~14), medians, fastTag2 tree vs the
+pre-change run-F single:
+
+| tier | decode before | decode after (3-run median) |
+|---|---|---|
+| small | 1.38x | 1.40x |
+| medium | 1.25x | 1.26x |
+| large | 1.33x | 1.37x |
+| xlarge | 1.20x | 1.27x |
+
+Directionally up everywhere (+0.01..+0.07); the single-run spread on this
+box is ±0.04-0.07, so the table now reports the medians, not a draw.
+Serial stands at 6/8 over the 1.3x bar (medium 1.26x, xlarge 1.27x remain).
+
+## Implemented, verdict pending (Go thin model): 1-byte length fast path
+
+Same pattern as `varintByte`: `Decoder.bytesFast1` handles only 1-byte
+lengths inline (bounds-check, load, slice, advance — `-m` confirms it
+inlines), wired into the 6 hot Len sites (repeated string/bytes/message
+lanes plus decodeField's singular string/bytes/message; packed-run sites
+skipped — bulk lengths are 2-byte, an always-miss branch there is pure
+cost). Accept set mirrors `Bytes`' first branch exactly, pinned by
+`bytes_fast1_internal_test.go` (hit/zero/multibyte-miss/truncated-miss/
+empty-miss, failed to build before); fallback to `Bytes` preserves errors.
+Full suite + `-race` green, allocs/B-op identical (same work, fewer calls).
+
+No usable ns evidence yet: the two runs attempted with it in-tree both
+spiked box-wide (load 61, oracle side 2-3x slower — discarded per the
+ledger rule, not pasted). It rides in the tree on mechanism (`-m` clean,
+~6000 removed calls/decode at bulk, zero behavior delta) until a quiet
+box can arbitrate; revert on neutral. If it lands at the estimated
++2-4%, medium (1.26x) and xlarge (1.27x) both clear 1.3x.

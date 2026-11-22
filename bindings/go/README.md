@@ -120,7 +120,7 @@ out of scope by design: a struct composes them from public API in two lines:
 
 ```go
 d, _ := typ.ImportModel(m, gen.Scalars3Meta)
-js, _ := typ.MarshalJSON(d)
+js, _ := typ.MarshalJSONString(d)
 ```
 
 | member | what it does |
@@ -131,7 +131,7 @@ js, _ := typ.MarshalJSON(d)
 | `DType.Encode(m)` / `DType.EncodeDeterministic(m)` | serialize a tree; deterministic sorts native map-entry rows by key |
 | `DType.DecodeDelimited/DecodeDelimitedLimits` | framing, returns `consumed`, trailing bytes left unread |
 | `DMsg.EncodedSize()` / `DMsg.IsInitialized()` | exact size without writing (`-1` when depth-capped; Encode errors on the same tree); proto2 required-field check |
-| `DType.MarshalJSON/UnmarshalJSON(+Limits)` | JSON mapping, `ignoreUnknown` flag, byte/depth bounds |
+| `DType.MarshalJSONString/UnmarshalJSONString(+Limits)` | JSON mapping, `ignoreUnknown` flag, byte/depth bounds |
 | `DType.MarshalText/UnmarshalText(+Limits)` | text format, `printUnknown` flag, byte/depth bounds |
 | `DType.Visit(wire, lim, fn)` | single-level scan, raw bits, non-nil visitor aborts |
 | `AnyPack/AnyUnpack`, `AnyTypeURL/AnyPayload`, `TimestampMillis/TimestampFromMillis`, `DurationMillis/DurationFromMillis`, `FieldMaskPaths/NewFieldMask` | WKT helpers |
@@ -139,6 +139,7 @@ js, _ := typ.MarshalJSON(d)
 | `Encoder/Decoder` | wire primitives (tags, varints, fixed widths, skips) for hand-written codecs |
 
 Known limitations, each needing an emitter change plus regen so parked, not
-built: generated-model tables predate the schema UTF-8 flag, so proto3 strings
-skip UTF-8 validation on the struct path; deterministic encode keeps foreign
+built: tables without the schema UTF-8 flag (hand-written or stale regen)
+skip UTF-8 validation on the struct path — current protoc-gen-pbwire output
+sets it; deterministic encode keeps foreign
 (`ForeignOps`) rows in first-seen order while native map-entry rows sort by key.
