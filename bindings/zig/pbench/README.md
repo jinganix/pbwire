@@ -8,7 +8,8 @@ and wire bytes out; wire bytes in and a fully readable native object out.
 
 | arm | file | mechanism | what it answers |
 |---|---|---|---|
-| `tree` | `benchmarks/bench.zig` | the shipped dynamic handle: one `set` per field, `encodeInto` into a reused buffer; `decode` then one `get` per field | what the per-field native call costs once the tree exists |
+| `tree` | `benchmarks/bench.zig` (`bench_vs_baseline.zig` for the baseline run) | the shipped dynamic handle, fresh per iteration: one `set` per field, `encodeInto` into a reused caller buffer, free; fresh `decode` then one `get` per field folded into a live sink, free | what the per-field native round trip costs the application |
+| `proxy` | `benchmarks/bench.zig` (`bench_vs_baseline.zig`) | the old prebuilt shape: a held handle's `encodeInto`, decode-and-drop with no materialization; same-run timing only, never the headline | what the transcoder task costs without the native round trip |
 | `shim` | `benchmarks/bench.zig` | the generated `extern struct <Message>Mirror` is the native object; `pbwire.InPlace.encodeInPlace` / `decodeInPlace` cross once and `bindings/c/runtime/pbw_struct.c` walks that memory in place | is a boundary worth paying for at all |
 | `core` | `pbench/core_arm.zig` + `core/` | the pure-Zig wire core: its own descriptor reader, tree and binary codec, no C source and no translate-c | can a build that does not compile `src/*.c` still be the same binding |
 
@@ -50,9 +51,19 @@ the same bytes Arwalk/zig-protobuf's generated code writes for those values),
 that a decode exposes every fixture value (`str`, `inner.name`/`value`, the
 repeated counts and last elements, the proto3 optionals with their has flag,
 `u64`, `color`, the repeated bools), and that the decoded mirror re-encodes to
-the same bytes. The bench repeats the byte gate for every tier before timing.
+the same bytes. The bench repeats the byte gate for every tier before timing, plus a deep
+field gate: decoding the reference must expose every fixture value (all
+scalars, the nested message, both proto3 optionals, the counts and last
+elements of all four repeated fields) and a second fresh-build message must
+encode to the same bytes, so the timed per-iteration build is gated too.
 
-## Provisional table (Stage 3)
+## Provisional table (Stage 3, historical)
+
+Superseded: the `tree` column below is the pre-parity prebuilt-handle
+definition (a held `Message` re-encoded, decode-and-drop). The formal
+Go-parity definition is the Verdict table: fresh native `Message` in and out
+through the shipped per-field API, alloc and free inside the timer, every
+gate-checked field materialized.
 
 `cd bindings/zig && zig build -Doptimize=ReleaseFast bench`: all three arms back
 to back in one process, best of three passes. MB/s over wire bytes, 2026-11-21:
@@ -72,14 +83,36 @@ unexpected).
 
 ## Verdict
 
-**Publish the flat-image `shim` row as the native-object path beside the
-shipped dynamic handle.** With one C call per op the shim is above the
-zig-protobuf baseline at every tier: 1.36x / 1.59x / 1.36x / 1.45x on encode
-and 1.45x / 1.42x / 1.13x / 1.43x on decode. The tree row (a prebuilt
-`pbwire.Message` handle) is still faster on encode because it is the core's own
-encoder; the shim is the answer for an application that wants its own
-`extern struct` object, and it removes the per-field crossing issue 41 is
-about. There is no below-baseline shim cell, so Stage 6 is a recorded no-op.
+**Ship the dynamic-handle `tree` as the default runtime; publish the
+flat-mirror `shim` row as the native-object fast path.** The `tree` arm is
+the shipped API, and its decode side beats the Arwalk/zig-protobuf baseline
+at large and xlarge (1.08x / 1.34x); its encode side trails everywhere
+(0.19x-0.27x: a fresh per-field build plus the C encoder against generated
+code that writes straight into the output). The `shim` arm is above the
+baseline at every tier on both ops (encode 1.41x / 1.55x / 1.33x / 1.45x,
+decode 1.44x / 1.46x / 1.14x / 1.46x), so an application that wants its own
+`extern struct` object takes the one-downcall path and skips the per-field
+crossing issue 41 is about. The pure-Zig `core` stays the no-C build, not
+the fast path (encode 0.42x-0.88x, decode 0.54x-0.93x of the baseline). The
+`proxy` row is published beside them, never the headline: at xlarge the held
+handle re-encodes 10.0x faster than the fresh native build (45589.6 ns/op vs
+456842.8 ns/op), which is the gap the old prebuilt `tree` row was hiding.
+Proxy decode stays near tree decode (1.01x at xlarge): decode was always
+dominated by the C core walk, not by materialization.
+
+Formal Go-parity rows (`make zig-bench`, `results/bench-zig-20261122T014913Z.json`,
+Apple M4 Pro arm64; ratios are THROUGHPUT = MB/s pbwire / MB/s baseline):
+
+| tier | `tree` enc | `tree` dec | `shim` enc | `shim` dec | `core` enc | `core` dec | `proxy` enc | `proxy` dec |
+|---|---|---|---|---|---|---|---|---|
+| 136 B | 0.24x | 0.88x | 1.41x | 1.44x | 0.42x | 0.93x | 64.8 ns/op | 122.4 ns/op |
+| 174 B | 0.27x | 0.85x | 1.55x | 1.46x | 0.54x | 0.91x | 88.4 ns/op | 180.6 ns/op |
+| 2469 B | 0.21x | 1.08x | 1.33x | 1.14x | 0.77x | 0.54x | 1419.3 ns/op | 3604.6 ns/op |
+| 74913 B | 0.19x | 1.34x | 1.45x | 1.46x | 0.88x | 0.66x | 45589.6 ns/op | 104567.9 ns/op |
+
+Below-baseline native cells, flagged for the optimization pass: tree encode
+all tiers, tree decode 136/174 B, core encode all tiers, core decode all
+tiers. No optimization is attempted here.
 
 ## Formal rows (Stage 5)
 
