@@ -114,25 +114,29 @@ the recommended one-shot path for fresh native objects.** Formal run
 timers: fresh handle per iteration, freed inside the timer, every gate-checked
 field read back; xlarge = 74913 B):
 
-| xlarge arm | encode | decode | vs jspb | vs protobufjs |
-|---|---|---|---|---|
-| `tree` | 1466.7 us | 1492.4 us | 1.14x / 1.67x | 10.0x / 8.4x |
-| `shim` | 1271.4 us | 1403.2 us | 0.98x / 1.57x | 8.7x / 7.9x |
-| `core` | 942.9 us | 943.1 us | 0.73x / 1.06x | 6.4x / 5.3x |
-| `proxy` | 43.5 us | 61.0 us | prebuilt, never headline | prebuilt, never headline |
+| xlarge arm | encode MB/s (x jspb / x protobufjs) | decode MB/s (x jspb / x protobufjs) |
+|---|---|---|
+| `tree` | 51.1 (0.88x / 0.10x) | 50.2 (0.60x / 0.12x) |
+| `shim` | 58.9 (1.02x / 0.12x) | 53.4 (0.64x / 0.13x) |
+| `core` | 79.4 (1.37x / 0.16x) | 79.4 (0.95x / 0.19x) |
+| `proxy` | 1723.3 (prebuilt, never headline) | 1229.0 (prebuilt, never headline) |
+
+Ratios are THROUGHPUT (MB/s pbwire / MB/s baseline, higher is faster), formal
+run `results/bench-node-20261121T181411Z.json`.
 
 Why tree stays the default: it is the only arm with JSON/text mappings, the
 only one whose decode is the C core's single implementation, and the only path
-that reuses a held tree (the proxy row: 43.5 us encode at xlarge, 34x the tree
-row). The shim beats per-field assembly at every tier (1.27x at 136 B encode,
-1.15x at xlarge encode) and ties jspb on xlarge encode, so one-shot
+that reuses a held tree (the proxy row: 43.5 us encode at xlarge, 33.7x the
+tree encode). The shim beats per-field assembly at every tier (1.27x at 136 B
+encode,
+1.15x at xlarge encode) and beats jspb on xlarge encode (1.02x), so one-shot
 encode/decode of a fresh object should go through the one-downcall surface; it
 stays a recommendation rather than the default because each field still crosses
 N-API once (~60-70 ns per property read/write) where jspb and protobufjs pay a
 few ns in their own heap, leaving every native row below both baselines.
 
 Why not core as the default: the pure-TS core beats jspb on xlarge encode
-(0.73x) and ties it on decode, but shipping it as the default would put a
+(1.37x) and stays just below it on decode (0.95x), but shipping it as the
 second wire implementation on the default path, which `AGENTS.md` rules out. It
 is what ships to a host with no toolchain to build the addon (plain Node with
 no C compiler, an electron/bundled runtime, or a non-Node JS engine), where the
