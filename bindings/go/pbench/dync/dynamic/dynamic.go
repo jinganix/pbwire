@@ -2,7 +2,7 @@
 // FileDescriptorSet at run time (no recompile, no restart), builds dynamic
 // message trees and encodes/decodes them through the shared C core over cgo.
 //
-// The three arms, one contract (bindings/README.md#pbench-three-arms-one-contract):
+// The four arms, one contract (bindings/README.md#pbench-three-arms-one-contract):
 // pbench/dync in this directory (tree, C core over cgo), pbench/dyngo (core,
 // pure Go: codec.Load + Schema.Type + DMsg over the shared table engine) and
 // pbench/cshim (shim, C reads Go memory through a generated layout table).

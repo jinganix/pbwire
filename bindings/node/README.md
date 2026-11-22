@@ -174,7 +174,7 @@ protoc -Ibindings/node/tests/data \
     bindings/node/tests/data/demo.proto
 ```
 
-## pbench: the three arms
+## pbench: the four arms
 
 `pbench/` compares the arms the [pbench contract](../README.md#pbench-three-arms-one-contract)
 defines over the same `matrix3` payload. The detailed table, the gate, the

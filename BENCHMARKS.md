@@ -253,7 +253,7 @@ table, never a silently missing row. 39 published native columns count as
 tree/shim/core (plus the three pure-core appendix tables for Python, C# and
 Julia), and 13 `proxy` rows stand beside them in the same runs (same-run
 timing only, never headlined; F# and the JVM riders share their host's
-`proxy`). The arms that are absent are deliberate: the JVM four publish no
+`proxy`). The Kotlin/Scala/Clojure/F# rider rows are pre-parity prebuilt-handle runs and are not comparable to the Go-parity native rows. The arms that are absent are deliberate: the JVM four publish no
 `shim` column (the
 JNI ceiling is a probe in `bindings/java/pbench/`, so the JVM tables show the
 binding, not a best case), PHP/Ruby/R publish no `core` column (each records the
@@ -1081,17 +1081,6 @@ decode 373.9 / 427.7 / 965.2 / 1229.0 MB/s. Proxy/tree encode gap at xlarge:
 33.7x -- the gap the old prebuilt `tree` row was hiding. Formal run
 `results/bench-node-20261121T181411Z.json`.
 
-The two pbwire columns are the arms (`bindings/node/pbench/`). `tree` is the
-codec once the data is already in pbwire: a `Message` handle is built before the
-timer, and `encode()`/`decode()` run against it (a decoded handle materializes a
-field only when it is read). `shim` is the user-visible native-object task:
-`type.encodeObject(obj)` and `type.decodeToObject(wire)` hand a plain JS object
-or `Buffer` to the addon and get one back, one N-API downcall per op, with the
-addon walking the schema's field table in C (nested messages and repeated
-elements recurse in C, so no per-field JS round trip). `core` is the pure
-TypeScript codec (`bindings/node/lib/core/`, `make conformance-node-core`): the
-same native task in the same run, no native library and no boundary.
-
 Against jspb (the legacy baseline) the native rows read: tree encode
 0.66x / 0.67x / 0.83x / 0.88x and decode 0.34x / 0.32x / 0.54x / 0.60x; shim
 encode 0.84x / 0.85x / 0.98x / 1.02x and decode 0.53x / 0.45x / 0.60x / 0.64x;
@@ -1255,7 +1244,7 @@ the latest run, but treat that cell as a tie that moves with the baseline.
 The `Message`-wrapper cut (no per-decode `AtomicBoolean`, no volatile open
 flag) removes the binding's own per-call overhead on top, so both narrow tiers
 track the codec instead of the wrapper. From 2.5
-KB up both ops are ahead at every tier.
+KB up both ops are ahead at every tier. These Kotlin rows are pre-parity prebuilt-handle runs and are not comparable to the Go-parity native rows.
 
 #### PHP vs the official PHP runtime (pure + C extension)
 
@@ -1692,7 +1681,7 @@ field by field by name, so it is the slowest JVM `core` row (0.37x at 136 B,
 0.46x at 74 KB encode, 0.33x-0.58x decode): the translation is the cost, not
 the wire engine. `tree` stays the headline. `shim` for the JVM four:
 `bindings/java/pbench/` (`jni/`, one crossing, no tree translation -- a
-ceiling, not a binding cost).
+ceiling, not a binding cost). These Scala rows are pre-parity prebuilt-handle runs and are not comparable to the Go-parity native rows.
 
 ### Elixir (NIF over the shared core) vs `elixir-protobuf`
 
@@ -1810,7 +1799,7 @@ runtime: `pbwire-fsharp-tree` is the `Message` handle the facade exposes,
 flat image, so F# has no separate port and no second wire implementation. It is
 above Google.Protobuf on every encode tier and on three of four decode tiers;
 the xlarge decode row carries the managed materialisation cost the C# section
-describes.
+describes. These F# rows are pre-parity prebuilt-handle runs and are not comparable to the Go-parity native rows.
 
 ### Clojure (Java runtime + interop) vs `protobuf-java`
 
@@ -1846,7 +1835,7 @@ and never warms, which once inflated this row past 9x. The persistent-map
 fns stay for convenience and are gated for parity, but hot loops use the
 mutable path — the same split Lua documents (table vs builder). Same codec
 as Java/Scala underneath (plain interop over the Java runtime, no second
-wire implementation), byte parity per tier.
+wire implementation), byte parity per tier. These Clojure rows are pre-parity prebuilt-handle runs and are not comparable to the Go-parity native rows.
 
 ### Julia (`dlopen` + `ccall`) vs ProtoBuf.jl
 

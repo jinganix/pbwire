@@ -22,7 +22,7 @@ The normative arm names are the contract's; this is where the Java rows live.
 | `proxy` | [`../benchmarks/Bench.java`](../benchmarks/Bench.java), `GenericCodec`/`DMsg` prebuilt | the old prebuilt task, relabelled not re-measured: re-encode a held tree, decode-and-drop with no materialization. Published, never the headline |
 | `shim` | `jni/` (`pbwire_jni.c`) | the C core behind one JNI call; it never translates a tree, so it is a ceiling |
 
-The three rows obey
+The four rows obey
 [`../../README.md#pbench-three-arms-one-contract`](../../README.md#pbench-three-arms-one-contract).
 `Bindings/README.md` publishes `tree` and `core` side by side and says that
 `jni/` is the ceiling, not a binding cost.

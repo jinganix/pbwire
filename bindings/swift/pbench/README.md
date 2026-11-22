@@ -1,4 +1,4 @@
-# Swift pbench: three arms, one contract
+# Swift pbench: four arms, one contract
 
 The arms, the gate and the timing loop from
 [`bindings/README.md`](../../README.md#pbench-three-arms-one-contract), applied
