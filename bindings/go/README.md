@@ -79,10 +79,11 @@ Optional fields are pointers (`nil` = absent), oneofs are interface
 wrappers (`isOneof1_kind`), repeated fields are slices — the same shapes
 `protoc-gen-go` emits. A `proto.Message` interface is deliberately not
 implemented (maps ride as repeated entry structs, as in every binding), and
-unknown wire fields are dropped on decode, as before: the struct has nowhere
-to keep them. That makes the headline rows narrower than protobuf-go on
-unknown-carrying input; the pbench gate pins the difference
-(`TestGateSemantics`) instead of hiding it. Reach for `runtime.DMsg` (decode retains unknowns and binary
+unknown wire fields are retained on decode in an `unknownFields` buffer and
+replayed after the known fields on encode, byte for byte like the
+reference; `Reset` clears them with the rest. The pbench gate pins the
+round trip (`TestGateSemantics`), including nested messages. Reach for
+`runtime.DMsg (decode retains unknowns and binary
 re-encode preserves them) when that matters.
 
 | Piece | Path | Role |
@@ -92,7 +93,7 @@ re-encode preserves them) when that matters.
 | engine | [`runtime/`](runtime/) | the shipped pure-Go engine: `Schema`/`DType`/`DMsg`, the one `EncodeTable`/`DecodeTable` engine, descriptor-set plans, model<->tree converters |
 | C core candidate | [`pbench/dync/dynamic/`](pbench/dync/dynamic/) | `Registry` (hot-swap), `Schema`, `MessageType`, `Message`, model<->tree converter |
 | bench | [`benchmarks/bench_test.go`](benchmarks/bench_test.go) | four standard tiers: thin model vs `protobuf-go`, gated on byte parity and a field-by-field decode before timing |
-| arms | [`pbench/`](pbench/) (`go test -tags pbench ./pbench/`) | the two dynamic arms over the same tiers, native struct in and out, converter-only glue (issue #41) |
+| arms | [`pbench/`](pbench/) (`go test -tags pbench ./pbench/`) | the C value tree and pure-Go value tree arms over the same tiers, native struct in and out, converter-only glue (issue #41) |
 
 ```shell
 make go-test    # engine + converter + generated-model compat checks (needs protoc)
@@ -119,7 +120,7 @@ out of scope by design: a struct composes them from public API in two lines:
 
 ```go
 d, _ := typ.ImportModel(m, gen.Scalars3Meta)
-js, _ := typ.MarshalJSON(d)
+js, _ := typ.MarshalJSONString(d)
 ```
 
 | member | what it does |
@@ -130,7 +131,7 @@ js, _ := typ.MarshalJSON(d)
 | `DType.Encode(m)` / `DType.EncodeDeterministic(m)` | serialize a tree; deterministic sorts native map-entry rows by key |
 | `DType.DecodeDelimited/DecodeDelimitedLimits` | framing, returns `consumed`, trailing bytes left unread |
 | `DMsg.EncodedSize()` / `DMsg.IsInitialized()` | exact size without writing (`-1` when depth-capped; Encode errors on the same tree); proto2 required-field check |
-| `DType.MarshalJSON/UnmarshalJSON(+Limits)` | JSON mapping, `ignoreUnknown` flag, byte/depth bounds |
+| `DType.MarshalJSONString/UnmarshalJSONString(+Limits)` | JSON mapping, `ignoreUnknown` flag, byte/depth bounds |
 | `DType.MarshalText/UnmarshalText(+Limits)` | text format, `printUnknown` flag, byte/depth bounds |
 | `DType.Visit(wire, lim, fn)` | single-level scan, raw bits, non-nil visitor aborts |
 | `AnyPack/AnyUnpack`, `AnyTypeURL/AnyPayload`, `TimestampMillis/TimestampFromMillis`, `DurationMillis/DurationFromMillis`, `FieldMaskPaths/NewFieldMask` | WKT helpers |
@@ -138,6 +139,7 @@ js, _ := typ.MarshalJSON(d)
 | `Encoder/Decoder` | wire primitives (tags, varints, fixed widths, skips) for hand-written codecs |
 
 Known limitations, each needing an emitter change plus regen so parked, not
-built: generated-model tables predate the schema UTF-8 flag, so proto3 strings
-skip UTF-8 validation on the struct path; deterministic encode keeps foreign
+built: tables without the schema UTF-8 flag (hand-written or stale regen)
+skip UTF-8 validation on the struct path — current protoc-gen-pbwire output
+sets it; deterministic encode keeps foreign
 (`ForeignOps`) rows in first-seen order while native map-entry rows sort by key.

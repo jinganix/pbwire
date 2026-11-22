@@ -130,7 +130,7 @@ func loadJSONSchema(t *testing.T) *runtime.Schema {
 					jfield("ratio", 11, jlabelOpt, descriptorpb.FieldDescriptorProto_TYPE_DOUBLE, ""),
 					jfield("quant", 12, jlabelOpt, descriptorpb.FieldDescriptorProto_TYPE_FLOAT, ""),
 					jfield("target", 13, jlabelOpt, descriptorpb.FieldDescriptorProto_TYPE_MESSAGE, ".jsontest.Target"),
-				jfield("shade", 14, jlabelOpt, descriptorpb.FieldDescriptorProto_TYPE_ENUM, ".jsontest.Shade"),
+					jfield("shade", 14, jlabelOpt, descriptorpb.FieldDescriptorProto_TYPE_ENUM, ".jsontest.Shade"),
 				},
 				NestedType: []*descriptorpb.DescriptorProto{
 					jmapEntry("ScoresEntry", "string", "int32", ""),
@@ -270,18 +270,18 @@ func TestJSONScalarsRoundTrip(t *testing.T) {
 	s := loadJSONSchema(t)
 	typ := mustType(t, s, "jsontest.M")
 	m := fillJSONM(t, typ)
-	got, err := typ.MarshalJSON(m)
+	got, err := typ.MarshalJSONString(m)
 	if err != nil {
-		t.Fatalf("MarshalJSON: %v", err)
+		t.Fatalf("MarshalJSONString: %v", err)
 	}
 	if got != wantJSONM {
 		t.Fatalf("print:\n got %s\nwant %s", got, wantJSONM)
 	}
-	back, err := typ.UnmarshalJSON(got, false)
+	back, err := typ.UnmarshalJSONString(got, false)
 	if err != nil {
-		t.Fatalf("UnmarshalJSON: %v", err)
+		t.Fatalf("UnmarshalJSONString: %v", err)
 	}
-	again, err := typ.MarshalJSON(back)
+	again, err := typ.MarshalJSONString(back)
 	if err != nil {
 		t.Fatalf("reprint: %v", err)
 	}
@@ -304,14 +304,14 @@ func TestJSONEnumNumbers(t *testing.T) {
 	s := loadJSONSchema(t)
 	typ := mustType(t, s, "jsontest.M")
 	// Unknown number on an open (proto3) enum is kept as a number.
-	m, err := typ.UnmarshalJSON(`{"color":99}`, false)
+	m, err := typ.UnmarshalJSONString(`{"color":99}`, false)
 	if err != nil {
 		t.Fatalf("open unknown number: %v", err)
 	}
 	if v, ok, err := m.GetInt("color"); err != nil || !ok || v != 99 {
 		t.Fatalf("color = %d ok=%v err=%v", v, ok, err)
 	}
-	out, err := typ.MarshalJSON(m)
+	out, err := typ.MarshalJSONString(m)
 	if err != nil {
 		t.Fatalf("reprint: %v", err)
 	}
@@ -320,7 +320,7 @@ func TestJSONEnumNumbers(t *testing.T) {
 	}
 	// Unknown number on a closed (proto2) enum lands in unknown bytes.
 	req := mustType(t, s, "jsontest2.Req")
-	rm, err := req.UnmarshalJSON(`{"need":1,"ec":99}`, false)
+	rm, err := req.UnmarshalJSONString(`{"need":1,"ec":99}`, false)
 	if err != nil {
 		t.Fatalf("closed unknown number: %v", err)
 	}
@@ -331,10 +331,10 @@ func TestJSONEnumNumbers(t *testing.T) {
 		t.Fatalf("unknown bytes = % x, want 10 63", got)
 	}
 	// Unknown names fail, and stay failed-but-skipped under ignore.
-	if _, err := typ.UnmarshalJSON(`{"color":"NOPE"}`, false); err == nil {
+	if _, err := typ.UnmarshalJSONString(`{"color":"NOPE"}`, false); err == nil {
 		t.Fatalf("unknown enum name must fail")
 	}
-	skipped, err := typ.UnmarshalJSON(`{"color":"NOPE"}`, true)
+	skipped, err := typ.UnmarshalJSONString(`{"color":"NOPE"}`, true)
 	if err != nil {
 		t.Fatalf("ignored unknown enum name: %v", err)
 	}
@@ -343,7 +343,7 @@ func TestJSONEnumNumbers(t *testing.T) {
 	}
 	// Quoted numbers and names both spell the value.
 	for _, text := range []string{`{"color":"COLOR_RED"}`, `{"color":"1"}`, `{"color":1}`} {
-		got, err := typ.UnmarshalJSON(text, false)
+		got, err := typ.UnmarshalJSONString(text, false)
 		if err != nil {
 			t.Fatalf("%s: %v", text, err)
 		}
@@ -358,7 +358,7 @@ func TestJSONEnumAlias(t *testing.T) {
 	typ := mustType(t, s, "jsontest.M")
 	// The alias name parses to its number, like src/json.c
 	// (pbw_enum_find_value) and Java GenericCodec.EnumDef.valueOf.
-	m, err := typ.UnmarshalJSON(`{"shade":"SHADE_CRIMSON"}`, false)
+	m, err := typ.UnmarshalJSONString(`{"shade":"SHADE_CRIMSON"}`, false)
 	if err != nil {
 		t.Fatalf("alias parse: %v", err)
 	}
@@ -366,14 +366,14 @@ func TestJSONEnumAlias(t *testing.T) {
 		t.Fatalf("shade = %d ok=%v err=%v", v, ok, err)
 	}
 	// Print keeps the first-declared name, and it round-trips.
-	out, err := typ.MarshalJSON(m)
+	out, err := typ.MarshalJSONString(m)
 	if err != nil {
 		t.Fatalf("reprint: %v", err)
 	}
 	if out != `{"shade":"SHADE_RED"}` {
 		t.Fatalf("alias reprint = %s", out)
 	}
-	back, err := typ.UnmarshalJSON(out, false)
+	back, err := typ.UnmarshalJSONString(out, false)
 	if err != nil {
 		t.Fatalf("first-name parse: %v", err)
 	}
@@ -392,15 +392,15 @@ func TestJSONMapPrintLastWins(t *testing.T) {
 		mustSet(t, e.SetString("key", kv[0].(string)))
 		mustSet(t, e.SetInt("value", kv[1].(int64)))
 	}
-	out, err := typ.MarshalJSON(m)
+	out, err := typ.MarshalJSONString(m)
 	if err != nil {
-		t.Fatalf("MarshalJSON: %v", err)
+		t.Fatalf("MarshalJSONString: %v", err)
 	}
 	if out != `{"scores":{"b":2,"a":3}}` {
 		t.Fatalf("map last-wins print = %s", out)
 	}
 	// Duplicate keys fail the parse, like the reference.
-	if _, err := typ.UnmarshalJSON(`{"scores":{"a":1,"a":2}}`, false); err == nil {
+	if _, err := typ.UnmarshalJSONString(`{"scores":{"a":1,"a":2}}`, false); err == nil {
 		t.Fatalf("duplicate map key must fail")
 	}
 }
@@ -410,9 +410,9 @@ func TestJSONIntMapKeysParse(t *testing.T) {
 	typ := mustType(t, s, "jsontest.M")
 	// Distinct integer keys are distinct entries, like the reference: the
 	// duplicate-key check compares decoded keys, not empty strings.
-	m, err := typ.UnmarshalJSON(`{"by_id":{"1":"a","3":"b"}}`, false)
+	m, err := typ.UnmarshalJSONString(`{"by_id":{"1":"a","3":"b"}}`, false)
 	if err != nil {
-		t.Fatalf("UnmarshalJSON int-keyed map: %v", err)
+		t.Fatalf("UnmarshalJSONString int-keyed map: %v", err)
 	}
 	items, err := m.GetMessageSlice("by_id")
 	if err != nil || len(items) != 2 {
@@ -434,7 +434,7 @@ func TestJSONIntMapKeysParse(t *testing.T) {
 		t.Fatalf("by_id = %v, want map[1:a 3:b]", seen)
 	}
 	// A repeated key still fails the parse, like the reference.
-	if _, err := typ.UnmarshalJSON(`{"by_id":{"1":"a","1":"b"}}`, false); err == nil {
+	if _, err := typ.UnmarshalJSONString(`{"by_id":{"1":"a","1":"b"}}`, false); err == nil {
 		t.Fatalf("duplicate int map key must fail")
 	}
 }
@@ -461,19 +461,19 @@ func TestJSONWellKnown(t *testing.T) {
 	e, err := m.NewMessage("e")
 	mustSet(t, err)
 	_ = e
-	out, err := typ.MarshalJSON(m)
+	out, err := typ.MarshalJSONString(m)
 	if err != nil {
-		t.Fatalf("MarshalJSON: %v", err)
+		t.Fatalf("MarshalJSONString: %v", err)
 	}
 	want := `{"ts":"1970-01-01T00:00:00.001Z","dur":"3.200s","fm":"fooBar,baz","wi":7,"e":{}}`
 	if out != want {
 		t.Fatalf("wkt print:\n got %s\nwant %s", out, want)
 	}
-	back, err := typ.UnmarshalJSON(out, false)
+	back, err := typ.UnmarshalJSONString(out, false)
 	if err != nil {
-		t.Fatalf("UnmarshalJSON: %v", err)
+		t.Fatalf("UnmarshalJSONString: %v", err)
 	}
-	again, err := typ.MarshalJSON(back)
+	again, err := typ.MarshalJSONString(back)
 	if err != nil {
 		t.Fatalf("reprint: %v", err)
 	}
@@ -481,11 +481,11 @@ func TestJSONWellKnown(t *testing.T) {
 		t.Fatalf("wkt round trip:\n got %s\nwant %s", again, want)
 	}
 	// Object forms parse too.
-	obj, err := typ.UnmarshalJSON(`{"ts":{"seconds":0,"nanos":1000000},"dur":"-3.2s","ws":"hi","lv":[1,"x",null],"v":1.5}`, false)
+	obj, err := typ.UnmarshalJSONString(`{"ts":{"seconds":0,"nanos":1000000},"dur":"-3.2s","ws":"hi","lv":[1,"x",null],"v":1.5}`, false)
 	if err != nil {
 		t.Fatalf("wkt object forms: %v", err)
 	}
-	re, err := typ.MarshalJSON(obj)
+	re, err := typ.MarshalJSONString(obj)
 	if err != nil {
 		t.Fatalf("reprint: %v", err)
 	}
@@ -497,18 +497,18 @@ func TestJSONWellKnown(t *testing.T) {
 func TestJSONStruct(t *testing.T) {
 	s := loadJSONSchema(t)
 	typ := mustType(t, s, "jsontest.W")
-	m, err := typ.UnmarshalJSON(`{"st":{"a":1.5,"b":"x","c":true,"d":null,"e":{"n":1},"f":[1,2]}}`, false)
+	m, err := typ.UnmarshalJSONString(`{"st":{"a":1.5,"b":"x","c":true,"d":null,"e":{"n":1},"f":[1,2]}}`, false)
 	if err != nil {
 		t.Fatalf("struct parse: %v", err)
 	}
-	out, err := typ.MarshalJSON(m)
+	out, err := typ.MarshalJSONString(m)
 	if err != nil {
 		t.Fatalf("struct print: %v", err)
 	}
 	if out != `{"st":{"a":1.5,"b":"x","c":true,"d":null,"e":{"n":1},"f":[1,2]}}` {
 		t.Fatalf("struct round trip = %s", out)
 	}
-	if _, err := typ.UnmarshalJSON(`{"st":{"a":1,"a":2}}`, false); err == nil {
+	if _, err := typ.UnmarshalJSONString(`{"st":{"a":1,"a":2}}`, false); err == nil {
 		t.Fatalf("duplicate struct key must fail")
 	}
 }
@@ -527,19 +527,19 @@ func TestJSONAny(t *testing.T) {
 	mustSet(t, err)
 	mustSet(t, any.SetString("type_url", "type.googleapis.com/jsontest.Target"))
 	mustSet(t, any.SetBytes("value", wire))
-	out, err := typ.MarshalJSON(m)
+	out, err := typ.MarshalJSONString(m)
 	if err != nil {
-		t.Fatalf("MarshalJSON: %v", err)
+		t.Fatalf("MarshalJSONString: %v", err)
 	}
 	want := `{"any":{"@type":"type.googleapis.com/jsontest.Target","name":"packed","value":9}}`
 	if out != want {
 		t.Fatalf("any print:\n got %s\nwant %s", out, want)
 	}
-	back, err := typ.UnmarshalJSON(out, false)
+	back, err := typ.UnmarshalJSONString(out, false)
 	if err != nil {
 		t.Fatalf("any parse: %v", err)
 	}
-	again, err := typ.MarshalJSON(back)
+	again, err := typ.MarshalJSONString(back)
 	if err != nil {
 		t.Fatalf("any reprint: %v", err)
 	}
@@ -547,11 +547,11 @@ func TestJSONAny(t *testing.T) {
 		t.Fatalf("any round trip:\n got %s\nwant %s", again, want)
 	}
 	// Well-known payloads ride under "value".
-	tsAny, err := typ.UnmarshalJSON(`{"any":{"@type":"type.googleapis.com/google.protobuf.Timestamp","value":"1970-01-01T00:00:00Z"}}`, false)
+	tsAny, err := typ.UnmarshalJSONString(`{"any":{"@type":"type.googleapis.com/google.protobuf.Timestamp","value":"1970-01-01T00:00:00Z"}}`, false)
 	if err != nil {
 		t.Fatalf("any timestamp parse: %v", err)
 	}
-	re, err := typ.MarshalJSON(tsAny)
+	re, err := typ.MarshalJSONString(tsAny)
 	if err != nil {
 		t.Fatalf("any timestamp reprint: %v", err)
 	}
@@ -560,12 +560,12 @@ func TestJSONAny(t *testing.T) {
 	}
 	// Unresolvable @type always fails, even when unknown fields are ignored.
 	for _, ign := range []bool{false, true} {
-		if _, err := typ.UnmarshalJSON(`{"any":{"@type":"type.googleapis.com/jsontest.Missing"}}`, ign); err == nil {
+		if _, err := typ.UnmarshalJSONString(`{"any":{"@type":"type.googleapis.com/jsontest.Missing"}}`, ign); err == nil {
 			t.Fatalf("unresolvable @type must fail (ignore=%v)", ign)
 		}
 	}
 	// A bare @type-less object fails.
-	if _, err := typ.UnmarshalJSON(`{"any":{"name":"x"}}`, false); err == nil {
+	if _, err := typ.UnmarshalJSONString(`{"any":{"name":"x"}}`, false); err == nil {
 		t.Fatalf("@type-less any must fail")
 	}
 }
@@ -573,10 +573,10 @@ func TestJSONAny(t *testing.T) {
 func TestJSONUnknownAndRequired(t *testing.T) {
 	s := loadJSONSchema(t)
 	typ := mustType(t, s, "jsontest.M")
-	if _, err := typ.UnmarshalJSON(`{"bogus":1}`, false); err == nil {
+	if _, err := typ.UnmarshalJSONString(`{"bogus":1}`, false); err == nil {
 		t.Fatalf("unknown field must fail")
 	}
-	m, err := typ.UnmarshalJSON(`{"bogus":1,"flag":true}`, true)
+	m, err := typ.UnmarshalJSONString(`{"bogus":1,"flag":true}`, true)
 	if err != nil {
 		t.Fatalf("ignored unknown field: %v", err)
 	}
@@ -584,10 +584,10 @@ func TestJSONUnknownAndRequired(t *testing.T) {
 		t.Fatalf("flag = %v ok=%v err=%v", v, ok, err)
 	}
 	req := mustType(t, s, "jsontest2.Req")
-	if _, err := req.UnmarshalJSON(`{"name":"x"}`, false); err == nil {
+	if _, err := req.UnmarshalJSONString(`{"name":"x"}`, false); err == nil {
 		t.Fatalf("missing required field must fail")
 	}
-	okm, err := req.UnmarshalJSON(`{"need":5}`, false)
+	okm, err := req.UnmarshalJSONString(`{"need":5}`, false)
 	if err != nil {
 		t.Fatalf("required present: %v", err)
 	}
@@ -595,7 +595,7 @@ func TestJSONUnknownAndRequired(t *testing.T) {
 		t.Fatalf("need = %d present=%v err=%v", v, present, err)
 	}
 	// Unknown fails even with explicit presence next to it.
-	if _, err := req.UnmarshalJSON(`{"need":1,"zzz":{}}`, true); err != nil {
+	if _, err := req.UnmarshalJSONString(`{"need":1,"zzz":{}}`, true); err != nil {
 		t.Fatalf("ignored unknown with required: %v", err)
 	}
 }
@@ -603,7 +603,7 @@ func TestJSONUnknownAndRequired(t *testing.T) {
 func TestJSONLegacyTolerances(t *testing.T) {
 	s := loadJSONSchema(t)
 	typ := mustType(t, s, "jsontest.M")
-	m, err := typ.UnmarshalJSON(`{'bigId':'42','flag':'yes','ratio':1e3,'blob':'AAEC-v8',}`, false)
+	m, err := typ.UnmarshalJSONString(`{'bigId':'42','flag':'yes','ratio':1e3,'blob':'AAEC-v8',}`, false)
 	if err != nil {
 		t.Fatalf("legacy tolerances: %v", err)
 	}
@@ -620,11 +620,11 @@ func TestJSONLegacyTolerances(t *testing.T) {
 		t.Fatalf("blob = % x ok=%v", v, ok)
 	}
 	// Bare keys, null as unset, nested-array flattening, implicit default drop.
-	m2, err := typ.UnmarshalJSON(`{text:null,nums:[[1,2],3],flag:false}`, false)
+	m2, err := typ.UnmarshalJSONString(`{text:null,nums:[[1,2],3],flag:false}`, false)
 	if err != nil {
 		t.Fatalf("bare/null/flatten: %v", err)
 	}
-	out, err := typ.MarshalJSON(m2)
+	out, err := typ.MarshalJSONString(m2)
 	if err != nil {
 		t.Fatalf("reprint: %v", err)
 	}
@@ -641,11 +641,11 @@ func TestJSONOneofAndNames(t *testing.T) {
 	}
 	typ := mustType(t, s, "spectest.Oneof1")
 	// Proto and camelCase names both parse; print uses the JSON name.
-	m, err := typ.UnmarshalJSON(`{"name":"n","num":5}`, false)
+	m, err := typ.UnmarshalJSONString(`{"name":"n","num":5}`, false)
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	out, err := typ.MarshalJSON(m)
+	out, err := typ.MarshalJSONString(m)
 	if err != nil {
 		t.Fatalf("print: %v", err)
 	}
@@ -653,15 +653,15 @@ func TestJSONOneofAndNames(t *testing.T) {
 		t.Fatalf("oneof print = %s", out)
 	}
 	// Two members of one oneof fail.
-	if _, err := typ.UnmarshalJSON(`{"num":5,"text":"t"}`, false); err == nil {
+	if _, err := typ.UnmarshalJSONString(`{"num":5,"text":"t"}`, false); err == nil {
 		t.Fatalf("oneof duplicate must fail")
 	}
 	// Plain duplicates last-win and singular messages merge.
-	m2, err := typ.UnmarshalJSON(`{"name":"a","name":"b","inner":{"v":1},"inner":{}}`, false)
+	m2, err := typ.UnmarshalJSONString(`{"name":"a","name":"b","inner":{"v":1},"inner":{}}`, false)
 	if err != nil {
 		t.Fatalf("dup merge: %v", err)
 	}
-	out2, err := typ.MarshalJSON(m2)
+	out2, err := typ.MarshalJSONString(m2)
 	if err != nil {
 		t.Fatalf("reprint: %v", err)
 	}
@@ -669,7 +669,7 @@ func TestJSONOneofAndNames(t *testing.T) {
 		t.Fatalf("dup merge print = %s", out2)
 	}
 	// Unknown extension-style keys fail unless ignored.
-	if _, err := typ.UnmarshalJSON(`{"[foo.bar]":1}`, false); err == nil {
+	if _, err := typ.UnmarshalJSONString(`{"[foo.bar]":1}`, false); err == nil {
 		t.Fatalf("extension key must fail")
 	}
 }
@@ -685,29 +685,29 @@ func TestJSONMatrix3Fixture(t *testing.T) {
 	mustSet(t, m.SetInt("i32", -7))
 	mustSet(t, m.SetString("str", "hello"))
 	mustSet(t, m.SetInt("color", 2))
-	text, err := typ.MarshalJSON(m)
+	text, err := typ.MarshalJSONString(m)
 	if err != nil {
-		t.Fatalf("MarshalJSON: %v", err)
+		t.Fatalf("MarshalJSONString: %v", err)
 	}
 	if text != `{"i32":-7,"str":"hello","color":"COLOR3_GREEN"}` {
 		t.Fatalf("matrix3 print = %s", text)
 	}
-	back, err := typ.UnmarshalJSON(text, false)
+	back, err := typ.UnmarshalJSONString(text, false)
 	if err != nil {
-		t.Fatalf("UnmarshalJSON: %v", err)
+		t.Fatalf("UnmarshalJSONString: %v", err)
 	}
 	if v, ok, _ := back.GetInt("i32"); !ok || v != -7 {
 		t.Fatalf("i32 = %d ok=%v", v, ok)
 	}
 	// Trailing garbage fails; empty object parses to the empty tree.
-	if _, err := typ.UnmarshalJSON(text+` `+`{"a":1}`, false); err == nil {
+	if _, err := typ.UnmarshalJSONString(text+` `+`{"a":1}`, false); err == nil {
 		t.Fatalf("trailing bytes must fail")
 	}
-	empty, err := typ.UnmarshalJSON(`{}`, false)
+	empty, err := typ.UnmarshalJSONString(`{}`, false)
 	if err != nil {
 		t.Fatalf("empty: %v", err)
 	}
-	again, err := typ.MarshalJSON(empty)
+	again, err := typ.MarshalJSONString(empty)
 	if err != nil {
 		t.Fatalf("reprint: %v", err)
 	}
@@ -715,7 +715,7 @@ func TestJSONMatrix3Fixture(t *testing.T) {
 		t.Fatalf("empty print = %s", again)
 	}
 	// camelCase input lands on the underscore field.
-	cm, err := typ.UnmarshalJSON(`{"optI32":-7}`, false)
+	cm, err := typ.UnmarshalJSONString(`{"optI32":-7}`, false)
 	if err != nil {
 		t.Fatalf("camelCase: %v", err)
 	}
@@ -725,7 +725,7 @@ func TestJSONMatrix3Fixture(t *testing.T) {
 	// Proto name prints as its JSON name.
 	m2 := typ.New()
 	mustSet(t, m2.SetInt("opt_i32", 1))
-	o2, err := typ.MarshalJSON(m2)
+	o2, err := typ.MarshalJSONString(m2)
 	if err != nil {
 		t.Fatalf("print: %v", err)
 	}

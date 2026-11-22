@@ -96,10 +96,11 @@ func (e *Encoder) Text(s string) {
 // Begin starts a length-delimited field (submessage or packed run): it
 // writes the tag plus a one-byte length placeholder and returns a mark for
 // End. Marks nest but must close LIFO: End the most recent Begin first.
+// One implementation behind both this and the fast path's beginLen, so the
+// two cannot drift apart.
 func (e *Encoder) Begin(num uint32) int {
-	e.Tag(num, WireLen)
-	mark := len(e.Buf)
-	e.Buf = append(e.Buf, 0)
+	var mark int
+	e.Buf, mark = beginLen(e.Buf, num)
 	return mark
 }
 
@@ -107,24 +108,7 @@ func (e *Encoder) Begin(num uint32) int {
 // buffer end shifts right when the length itself needs more than one byte,
 // so no Begin opened after mark may still be open.
 func (e *Encoder) End(mark int) {
-	n := len(e.Buf) - mark - 1
-	if n < 0x80 {
-		e.Buf[mark] = byte(n)
-		return
-	}
-	var tmp [10]byte
-	v := uint64(n)
-	i := 0
-	for v >= 0x80 {
-		tmp[i] = byte(v) | 0x80
-		v >>= 7
-		i++
-	}
-	tmp[i] = byte(v)
-	i++
-	e.Buf = append(e.Buf, tmp[1:i]...)
-	copy(e.Buf[mark+i:], e.Buf[mark+1:])
-	copy(e.Buf[mark:], tmp[:i])
+	e.Buf = endLen(e.Buf, mark)
 }
 
 // Decoder is a bounds-checked cursor over a caller's wire slice for
@@ -167,6 +151,18 @@ func (d *Decoder) Next() (uint32, WireType, error) {
 			return 0, 0, ErrWire
 		}
 		d.Off++
+		return num, wt, nil
+	}
+	// Two-byte tags (field numbers 16-2047) skip the loop the same
+	// way; values stay far below MaxFieldNumber, so only the 0/6/7
+	// checks below still apply.
+	if v, n, ok := consumeVarint2(b); ok {
+		num := uint32(v >> 3)
+		wt := WireType(v & 7)
+		if num == 0 || wt > WireFixed32 {
+			return 0, 0, ErrWire
+		}
+		d.Off += n
 		return num, wt, nil
 	}
 	var v uint64
@@ -215,6 +211,52 @@ func (d *Decoder) SkipRawLimits(num uint32, wt WireType, depth int, lim Limits) 
 	return d.Buf[start:d.Off], nil
 }
 
+// consumeVarint2 reads a two-byte varint (values 0..16383 with a
+// continuation bit, the packed/small-int bulk) at the front of b: one
+// boundary decision instead of the counting loop. Short input, a
+// terminating first byte, or a continuation in the second byte report
+// false for the single-byte path or the slow loop, whose accept set is
+// unchanged (including non-minimal two-byte forms, which the loop takes).
+func consumeVarint2(b []byte) (uint64, int, bool) {
+	if len(b) < 2 || b[0] < 0x80 || b[1] >= 0x80 {
+		return 0, 0, false
+	}
+	return uint64(b[0]&0x7f) | uint64(b[1])<<7, 2, true
+}
+
+// varintByte consumes a 1-byte varint value: the common small-int case
+// with no loop and no error path. Multi-byte values report false for the
+// Varint slow path. The body is one bounds check plus a load, so it
+// inlines into the decode loop's fast lane (check the build log on
+// doubt); as a call it would cost exactly what it saves.
+func (d *Decoder) varintByte() (uint64, bool) {
+	if d.Off < len(d.Buf) && d.Buf[d.Off] < 0x80 {
+		v := uint64(d.Buf[d.Off])
+		d.Off++
+		return v, true
+	}
+	return 0, false
+}
+
+// bytesFast1 consumes a length-delimited value whose length fits one
+// byte: bounds-check, length load and payload slice with no loop and no
+// error path, so it inlines into the decode loop's Len lanes (check the
+// build log on doubt); as a call it would cost exactly what it saves.
+// Anything else — multi-byte lengths, truncation, empty input — reports
+// false for the Bytes slow path, whose 1-byte accept set is mirrored
+// exactly (same bytes and Off movement on hit, none on miss).
+func (d *Decoder) bytesFast1() ([]byte, bool) {
+	b := d.Buf[d.Off:]
+	if len(b) > 0 && b[0] < 0x80 {
+		n := int(b[0])
+		if n <= len(b)-1 {
+			d.Off += 1 + n
+			return b[1 : 1+n], true
+		}
+	}
+	return nil, false
+}
+
 // Varint reads one varint. The loop is inline (same accept set as
 // ConsumeVarint): scalar fields parse one varint each, so one call level
 // here is one per scalar on every decode.
@@ -225,6 +267,12 @@ func (d *Decoder) Varint() (uint64, error) {
 	if len(b) > 0 && b[0] < 0x80 {
 		d.Off++
 		return uint64(b[0]), nil
+	}
+	// Two-byte varints (packed values, inner numbers, two-byte tags)
+	// skip the loop the same way.
+	if v, n, ok := consumeVarint2(b); ok {
+		d.Off += n
+		return v, nil
 	}
 	var v uint64
 	for i := 0; i < 10; i++ {

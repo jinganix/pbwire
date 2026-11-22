@@ -1,5 +1,5 @@
-// Generated-compat check for the Go binding (TESTSPEC T1–T6, vectors.json as
-// the single source of truth):
+// Generated-compat check for the Go binding (TESTSPEC T1–T6, the pinned
+// protoc bytes in codegen/testdata/matrix3.bin plus field-by-field asserts):
 //
 //	T1  generated Marshal == pinned protoc reference bytes
 //	T2  Unmarshal of the reference == vectors, field by field
@@ -10,13 +10,11 @@
 //	    identical observable results (import swap only)
 //	T6  errors are loud, not crashes: bad wire, unmarshal into nil
 //
-// Run: go test ./... (from bindings/go; needs build/libpbwire.a, see
-// the root Makefile go-test target).
+// Run: go test ./... (from bindings/go; pure Go, no C toolchain).
 package tests
 
 import (
 	"bytes"
-	"encoding/json"
 	"math"
 	"os"
 	"path/filepath"
@@ -38,15 +36,6 @@ import (
 
 const oraclePin = "v1.36.12"
 
-var vectors struct {
-	Message string `json:"message"`
-	Values  map[string]any
-	Extra   []struct {
-		Message string            `json:"message"`
-		Values  map[string]string `json:"values"`
-	} `json:"extra_messages"`
-}
-
 var reference []byte
 
 func testdata(t *testing.T, rel string) string {
@@ -57,13 +46,6 @@ func testdata(t *testing.T, rel string) string {
 func loadVectors(t *testing.T) {
 	t.Helper()
 	td := filepath.Join(filepath.Dir(callerFile(t)), "..", "..", "..", "codegen", "testdata")
-	raw, err := os.ReadFile(filepath.Join(td, "vectors.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := json.Unmarshal(raw, &vectors); err != nil {
-		t.Fatal(err)
-	}
 	ref, err := os.ReadFile(filepath.Join(td, "matrix3.bin"))
 	if err != nil {
 		// vectors.json references ../../bindings/c/tests/data from the testdata dir
@@ -453,9 +435,10 @@ func TestT6Errors(t *testing.T) {
 	}
 }
 
-// The generated model is safe for concurrent use: one codec per message type
-// serializes its own C scratch. Run with -race to prove the shared state is
-// covered (TESTSPEC: the thin model stands in for generated code).
+// The generated model is safe for concurrent use: tables are read-only and
+// the only shared write is an atomic size hint. Run with -race to prove the
+// shared state is covered (TESTSPEC: the thin model stands in for generated
+// code).
 func TestModelConcurrentUse(t *testing.T) {
 	ref, err := os.ReadFile(filepath.Join(filepath.Dir(callerFile(t)), "..", "..", "c", "tests", "data", "matrix3.bin"))
 	if err != nil {

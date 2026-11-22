@@ -22,7 +22,7 @@ var MapValueMeta = runtime.NewTable("spectest.MapValue", []*runtime.Field{
 })
 
 // MapTest_ByIntEntryMeta is the generated DATA table for spectest.MapTest.ByIntEntry: one row per field.
-var MapTest_ByIntEntryMeta = runtime.NewTable("spectest.MapTest.ByIntEntry", []*runtime.Field{
+var MapTest_ByIntEntryMeta = runtime.NewMapEntryTable("spectest.MapTest.ByIntEntry", []*runtime.Field{
 	{Name: "key", Num: 1, Wire: runtime.WireVarint, Kind: runtime.KindInt32, Fast: true, Off: uint32(unsafe.Offsetof(MapTest_ByIntEntry{}.Key)),
 		GetI32: func(msg any) int32 { return msg.(*MapTest_ByIntEntry).Key },
 		SetI32: func(msg any, v int32) { msg.(*MapTest_ByIntEntry).Key = v },
@@ -34,7 +34,7 @@ var MapTest_ByIntEntryMeta = runtime.NewTable("spectest.MapTest.ByIntEntry", []*
 })
 
 // MapTest_ByStrEntryMeta is the generated DATA table for spectest.MapTest.ByStrEntry: one row per field.
-var MapTest_ByStrEntryMeta = runtime.NewTable("spectest.MapTest.ByStrEntry", []*runtime.Field{
+var MapTest_ByStrEntryMeta = runtime.NewMapEntryTable("spectest.MapTest.ByStrEntry", []*runtime.Field{
 	{Name: "key", Num: 1, Wire: runtime.WireLen, Kind: runtime.KindString, UTF8: true, Fast: true, Off: uint32(unsafe.Offsetof(MapTest_ByStrEntry{}.Key)),
 		GetStr: func(msg any) string { return msg.(*MapTest_ByStrEntry).Key },
 		SetStr: func(msg any, v string) { msg.(*MapTest_ByStrEntry).Key = v },
@@ -46,7 +46,7 @@ var MapTest_ByStrEntryMeta = runtime.NewTable("spectest.MapTest.ByStrEntry", []*
 })
 
 // MapTest_ByMsgEntryMeta is the generated DATA table for spectest.MapTest.ByMsgEntry: one row per field.
-var MapTest_ByMsgEntryMeta = runtime.NewTable("spectest.MapTest.ByMsgEntry", []*runtime.Field{
+var MapTest_ByMsgEntryMeta = runtime.NewMapEntryTable("spectest.MapTest.ByMsgEntry", []*runtime.Field{
 	{Name: "key", Num: 1, Wire: runtime.WireLen, Kind: runtime.KindString, UTF8: true, Fast: true, Off: uint32(unsafe.Offsetof(MapTest_ByMsgEntry{}.Key)),
 		GetStr: func(msg any) string { return msg.(*MapTest_ByMsgEntry).Key },
 		SetStr: func(msg any, v string) { msg.(*MapTest_ByMsgEntry).Key = v },
@@ -123,3 +123,41 @@ var MapTestMeta = runtime.NewTable("spectest.MapTest", []*runtime.Field{
 		},
 	},
 })
+
+func init() {
+	MapValueMeta.Unknown = func(msg any, raw []byte) {
+		m := msg.(*MapValue)
+		m.unknownFields = append(m.unknownFields, raw...)
+	}
+	MapValueMeta.EncodeUnknown = func(msg any) []byte {
+		return msg.(*MapValue).unknownFields
+	}
+	MapTest_ByIntEntryMeta.Unknown = func(msg any, raw []byte) {
+		m := msg.(*MapTest_ByIntEntry)
+		m.unknownFields = append(m.unknownFields, raw...)
+	}
+	MapTest_ByIntEntryMeta.EncodeUnknown = func(msg any) []byte {
+		return msg.(*MapTest_ByIntEntry).unknownFields
+	}
+	MapTest_ByStrEntryMeta.Unknown = func(msg any, raw []byte) {
+		m := msg.(*MapTest_ByStrEntry)
+		m.unknownFields = append(m.unknownFields, raw...)
+	}
+	MapTest_ByStrEntryMeta.EncodeUnknown = func(msg any) []byte {
+		return msg.(*MapTest_ByStrEntry).unknownFields
+	}
+	MapTest_ByMsgEntryMeta.Unknown = func(msg any, raw []byte) {
+		m := msg.(*MapTest_ByMsgEntry)
+		m.unknownFields = append(m.unknownFields, raw...)
+	}
+	MapTest_ByMsgEntryMeta.EncodeUnknown = func(msg any) []byte {
+		return msg.(*MapTest_ByMsgEntry).unknownFields
+	}
+	MapTestMeta.Unknown = func(msg any, raw []byte) {
+		m := msg.(*MapTest)
+		m.unknownFields = append(m.unknownFields, raw...)
+	}
+	MapTestMeta.EncodeUnknown = func(msg any) []byte {
+		return msg.(*MapTest).unknownFields
+	}
+}

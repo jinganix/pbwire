@@ -268,6 +268,8 @@ threads: 1 vs 8 (14 cores), 500 iterations per thread, something
         "small: 136 bytes (repeat field x0)\n"
         "  pbwire-go        encode         282.5      481.4        3       1234\n"
         "  protobuf-go      encode         344.9      394.3        1         48\n"
+        "# spread small encode pbwire-go 280.1-285.0\n"
+        "# spread small encode protobuf-go 340.2-349.9\n"
     )
     assert len(goa) == 1 and len(goa[0]["rows"]) == 2, goa
     assert goa[0]["rows"][0] == {
@@ -278,6 +280,20 @@ threads: 1 vs 8 (14 cores), 500 iterations per thread, something
     assert goa[0]["rows"][1]["bop"] == 48, goa[0]["rows"]
     # Old logs without the columns keep parsing with null allocs.
     assert go[0]["rows"][0].get("allocs") is None, go[0]["rows"]
+    # Spread and benchstat sample lines never form rows: spread lines are
+    # non-indented comments, Benchmark lines carry no byte count.
+    sampled = parse_log(
+        "small: 136 bytes (repeat field x0)\n"
+        "  pbwire-go        encode         282.5      481.4        3       1234\n"
+        "BenchmarkGoEncodesmall 100000 280.1 ns/op\n"
+        "BenchmarkGoEncodesmall 100000 285.0 ns/op\n"
+        "# spread small encode pbwire-go 280.1-285.0\n"
+        "medium: 174 bytes (repeat field x1)\n"
+        "  pbwire-go        encode         300.0      580.0\n"
+    )
+    assert len(sampled) == 2, sampled
+    assert len(sampled[0]["rows"]) == 1 and len(sampled[1]["rows"]) == 1, sampled
+    assert sampled[0]["rows"][0]["ns"] == 282.5, sampled
     print("selftest: parser OK (%d sample blocks)" % len(cases))
 
 

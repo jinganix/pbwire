@@ -438,7 +438,8 @@ func TestFramingDelimited(t *testing.T) {
 	m := fillMapUnsorted(t, typ)
 	body, err := typ.Encode(m)
 	mustSet(t, err)
-	frame := m.EncodeDelimited()
+	frame, err := m.EncodeDelimited()
+	mustSet(t, err)
 	if len(frame) == 0 || !bytes.Equal(frame[len(frame)-len(body):], body) {
 		t.Fatal("EncodeDelimited must end with the plain body")
 	}
@@ -454,7 +455,8 @@ func TestFramingDelimited(t *testing.T) {
 		t.Fatal("delimited round trip changed the message")
 	}
 	// Empty message: one zero byte, consumed exactly 1.
-	zero := typ.New().EncodeDelimited()
+	zero, err := typ.New().EncodeDelimited()
+	mustSet(t, err)
 	if len(zero) != 1 || zero[0] != 0 {
 		t.Fatalf("empty delimited = %x, want 00", zero)
 	}

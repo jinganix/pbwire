@@ -146,7 +146,7 @@ func main() {
 		var parsed *runtime.DMsg
 		if has, _ := req.Has("json_payload"); has {
 			text, _, _ := req.GetString("json_payload")
-			parsed, err = msgtype.UnmarshalJSON(text, category == categoryJSONIgnoreUnknown)
+			parsed, err = msgtype.UnmarshalJSONString(text, category == categoryJSONIgnoreUnknown)
 		} else if has, _ := req.Has("text_payload"); has {
 			text, _, _ := req.GetString("text_payload")
 			parsed, err = msgtype.UnmarshalText(text)
@@ -164,7 +164,7 @@ func main() {
 		switch wanted {
 		case formatJSON:
 			var text string
-			text, err = msgtype.MarshalJSON(parsed)
+			text, err = msgtype.MarshalJSONString(parsed)
 			if err == nil {
 				respond(stdout, restype, "json_payload", text, nil)
 			}

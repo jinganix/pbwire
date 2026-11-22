@@ -7,6 +7,8 @@
 
 package runtime
 
+import "math"
+
 // importScalar copies one singular scalar, string, bytes or enum field.
 func importScalar(model any, mrow *Field, d *DMsg, drow *Field) error {
 	switch mrow.Kind {
@@ -117,7 +119,7 @@ func importScalar(model any, mrow *Field, d *DMsg, drow *Field) error {
 			}
 			return nil
 		}
-		if v := mrow.GetF32(model); v != 0 || mrow.Required {
+		if v := mrow.GetF32(model); math.Float32bits(v) != 0 || mrow.Required {
 			drow.SetF32(d, v)
 		}
 	case KindDouble:
@@ -127,7 +129,7 @@ func importScalar(model any, mrow *Field, d *DMsg, drow *Field) error {
 			}
 			return nil
 		}
-		if v := mrow.GetF64(model); v != 0 || mrow.Required {
+		if v := mrow.GetF64(model); math.Float64bits(v) != 0 || mrow.Required {
 			drow.SetF64(d, v)
 		}
 	case KindBool:

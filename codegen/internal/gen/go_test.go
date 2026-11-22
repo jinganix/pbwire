@@ -122,6 +122,37 @@ func TestGoTableUTF8Proto3Only(t *testing.T) {
 	}
 }
 
+// Unknown retention: every generated message carries an unknownFields
+// buffer, and its table wires the Unknown/EncodeUnknown hooks so the engine
+// retains tag-inclusive bytes on decode and replays them after the known
+// fields on encode (unknown fields are data, not noise).
+func TestGoTableUnknownRetention(t *testing.T) {
+	files, err := goFiles(goTestFile(), Options{Lang: "go", Model: true, Register: true, Registry: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := goFileMap(t, files)
+	models, ok := got["t_pbwire.go"]
+	if !ok {
+		t.Fatalf("missing model file, got %v", keys(got))
+	}
+	if !strings.Contains(models, "unknownFields []byte") {
+		t.Error("model struct must carry an unknownFields buffer")
+	}
+	meta, ok := got["t_pbwire_meta.go"]
+	if !ok {
+		t.Fatalf("missing meta file, got %v", keys(got))
+	}
+	for _, want := range []string{
+		"MMeta.Unknown = func(msg any, raw []byte)",
+		"MMeta.EncodeUnknown = func(msg any) []byte",
+	} {
+		if !strings.Contains(meta, want) {
+			t.Errorf("meta file misses %q", want)
+		}
+	}
+}
+
 // Default: one thin model file per .proto. Structs, getters and Reset; the
 // field rows live in meta, the Marshal/Unmarshal forwarding in the cshim
 // wiring file. No descriptor, no plan gate, no encoder state.
@@ -266,7 +297,7 @@ func TestGoCodecBranches(t *testing.T) {
 	for _, want := range []string{
 		"type B struct",
 		"func (m *B) GetReq() int32",
-		"Opt      *string",
+		"Opt           *string",
 		"func (m *B) Reset()",
 		"type isB_kind interface",
 	} {

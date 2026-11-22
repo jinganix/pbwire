@@ -1,10 +1,8 @@
 // Shipped model<->tree conversion for the C core: the same native struct the
 // application holds moves into and out of a dynamic C tree through public API
-// only. The pbench dync arm times exactly these functions.
-//
-// Export targets a fresh tree: absent model fields are never set, and unknown
-// bytes have nowhere to come from on a struct. Required fields are not
-// enforced.
+// only. The pbench dync arm times exactly these functions. Unknown fields
+// ride the model table's Unknown/EncodeUnknown hooks on every level
+// (hook-less tables keep the old drop behavior).
 package dynamic
 
 import (
@@ -48,6 +46,13 @@ func importInto(model any, meta *codec.Table, m *Message) error {
 	for _, row := range meta.Fields {
 		if err := importRow(model, row, m); err != nil {
 			return fmt.Errorf("dynamic: field %s: %w", row.Name, err)
+		}
+	}
+	if meta.EncodeUnknown != nil {
+		if raw := meta.EncodeUnknown(model); len(raw) > 0 {
+			if err := m.AddUnknownBytes(raw); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -119,6 +124,15 @@ func exportInto(m *Message, model any, meta *codec.Table) error {
 	for _, row := range meta.Fields {
 		if err := exportRow(m, row, model); err != nil {
 			return fmt.Errorf("dynamic: field %s: %w", row.Name, err)
+		}
+	}
+	if meta.Unknown != nil {
+		raw, err := m.UnknownBytes()
+		if err != nil {
+			return err
+		}
+		if len(raw) > 0 {
+			meta.Unknown(model, raw)
 		}
 	}
 	return nil

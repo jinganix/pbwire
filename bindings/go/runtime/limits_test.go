@@ -149,16 +149,16 @@ func TestLimitsDepthJSON(t *testing.T) {
 	s := loadLimitSchema(t)
 	typ := mustType(t, s, "limtest.Rec")
 	shallow := deepJSON(100)
-	if _, err := typ.UnmarshalJSONLimits(shallow, false, runtime.Limits{MaxDepth: 200}); err != nil {
+	if _, err := typ.UnmarshalJSONStringLimits(shallow, false, runtime.Limits{MaxDepth: 200}); err != nil {
 		t.Fatalf("under-cap JSON: %v", err)
 	}
-	if _, err := typ.UnmarshalJSONLimits(shallow, false, runtime.Limits{MaxDepth: 50}); err == nil {
+	if _, err := typ.UnmarshalJSONStringLimits(shallow, false, runtime.Limits{MaxDepth: 50}); err == nil {
 		t.Fatal("over-depth JSON must fail")
 	}
-	if _, err := typ.UnmarshalJSON(deepJSON(300), false); err == nil {
+	if _, err := typ.UnmarshalJSONString(deepJSON(300), false); err == nil {
 		t.Fatal("default deep JSON must fail")
 	}
-	if _, err := typ.UnmarshalJSONLimits(deepJSON(10), false, runtime.Limits{MaxBytes: 10}); !errors.Is(err, runtime.ErrLimit) {
+	if _, err := typ.UnmarshalJSONStringLimits(deepJSON(10), false, runtime.Limits{MaxBytes: 10}); !errors.Is(err, runtime.ErrLimit) {
 		t.Fatalf("over-cap JSON: got %v, want ErrLimit", err)
 	}
 }

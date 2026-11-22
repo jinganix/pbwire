@@ -137,3 +137,20 @@ var Scalars3Meta = runtime.NewTable("structtest.Scalars3", []*runtime.Field{
 		AppendBool: func(msg any, v bool) { m := msg.(*Scalars3); m.Flags = append(m.Flags, v) },
 	},
 })
+
+func init() {
+	Inner3Meta.Unknown = func(msg any, raw []byte) {
+		m := msg.(*Inner3)
+		m.unknownFields = append(m.unknownFields, raw...)
+	}
+	Inner3Meta.EncodeUnknown = func(msg any) []byte {
+		return msg.(*Inner3).unknownFields
+	}
+	Scalars3Meta.Unknown = func(msg any, raw []byte) {
+		m := msg.(*Scalars3)
+		m.unknownFields = append(m.unknownFields, raw...)
+	}
+	Scalars3Meta.EncodeUnknown = func(msg any) []byte {
+		return msg.(*Scalars3).unknownFields
+	}
+}

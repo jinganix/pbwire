@@ -68,7 +68,14 @@ for a case, and `scripts/bench-record.py` accepts the shorter header.
 (`pbwire-c1`: the C binding's one-shot API, which compiles the layout on every
 call) after the standard four rows; only the standard block is aggregated
 below. Go rows additionally print `allocs/op` and `B/op`, recorded into the
-JSON and rendered when present. The Python harness names its ops by the task instead (`encode(data)`,
+JSON and rendered when present. Go `ns/op` is the median of 7 calibrated
+passes (3 for the `-par` rows); each tier's log ends with `# spread` lines
+holding the per-row min-max band, which the recorder skips. Every pass also
+prints a `Benchmark<impl><op><tier> <count> <ns> ns/op` line (non-indented,
+also skipped): `grep ^Benchmark results/bench-go-<ts>.log > old.txt` on two
+runs, then `benchstat old.txt new.txt` for a significance-tested delta. Go `ns/op` is the median of 7 calibrated
+passes (3 for the `-par` rows); each tier's log ends with `# spread` lines
+holding the per-row min-max band, which the recorder skips. The Python harness names its ops by the task instead (`encode(data)`,
 `decode(bytes)`, `to_dict(bytes)`, `encode(parsed)`), because a dict-based
 binding has two representations and only comparing like with like is fair.
 
@@ -161,7 +168,7 @@ own README. Dart ran once `dart pub global activate protoc_plugin` provided
 | Erlang/OTP NIF | `make benchmarks` in `bindings/erlang/benchmarks` | gpb (pure Erlang), with gpb NIF (libprotobuf) as the second baseline, same `matrix3.proto` | all 4 | 3.91x / 1.60x vs best-of-two ✅ |
 | Python (CPython ext) | `make python-bench` (`bindings/python/benchmarks/bench.py`) | `google.protobuf` (upb C extension) on the same `matrix3.proto` | all 4 | 6.87x ✅ / 1.19x ✅ |
 | C++ | same engine as C (`bindings/cpp` mirrors the C structs; `make bench-c` is the harness) | `protoc` C++ generated from the same `matrix3.proto` | all 4 | 1.33x ✅ / 2.00x ✅ |
-| Go (thin model, pure-Go engine) | `make go-bench` (`bindings/go/benchmarks`) | `protobuf-go` generated code from the same `matrix3.proto` | all 4 | 1.48x ✅ / 1.13x ✅ (xlarge; full tiers + allocs in section) |
+| Go (thin model, pure-Go engine) | `make go-bench` (`bindings/go/benchmarks`) | `protobuf-go` generated code from the same `matrix3.proto` | all 4 | 1.71x ✅ / 1.27x ✅ (xlarge; full tiers + allocs in section) |
 | Java (pure-Java codec) | `make java-bench` (`bindings/java/benchmarks`) | `protobuf-java` generated code from the same `matrix3.proto` | all 4 | 1.13x ✅ / 1.95x ✅ (0.77x at 136 B) |
 | Node (N-API addon) | `make node-bench` (`bindings/node/benchmarks`) | [protobufjs](https://www.npmjs.com/package/protobufjs) (fastest) + `google-protobuf` (jspb) from the same `matrix3.proto` | all 4 | 3.18x ✅ / 3.17x ✅ |
 | Ruby (C extension) | `make ruby-bench` (`bindings/ruby/benchmarks`) | the `google-protobuf` gem (C extension) | all 4 | 1.34x ✅ / 1.67x ✅ |
@@ -241,7 +248,7 @@ payload, the boundary cost and the baseline all differ.
 | core dynamic (`pbw_ctx`) | direct call | 85933 B | 1644.2 (1.56x ✅) | 765.9 (1.80x ✅) |
 | core dynamic (plain API) | direct call | 85933 B | 1593.2 (1.51x ✅) | 771.3 (1.81x ✅) |
 | C structs | direct call, layout tables | 74913 B | 1132.2 (1.29x ✅) | 735.7 (2.02x ✅) |
-| Go | pure-Go table engine, no cgo | 74913 B | 821.4 (1.49x ✅) | 428.4 (1.37x ✅) |
+| Go | pure-Go table engine, no cgo | 74913 B | 912.7 (1.69x ✅) | 305.6 (1.15x ✅) |
 | Python (dict path) | CPython extension | 74913 B | 562.3 (6.87x ✅) | 891.6 (1.19x ✅) |
 | Java | pure-Java codec, no native code | 74913 B | 984.2 (1.13x ✅) | 747.4 (1.95x ✅) |
 | Kotlin | the pure-Java codec + DSL | 74913 B | 964.8 (1.09x ✅) | 742.1 (1.68x ✅) |
@@ -763,43 +770,56 @@ Apple M4 Pro, same process times both sides:
 
 | payload | op | pbwire-go (MB/s, x protobuf-go) | protobuf-go (MB/s) | allocs/op (pbwire / protobuf-go) | B/op (pbwire / protobuf-go) |
 |---|---|---|---|---|---|
-| 136 B | encode | 868.0 (1.31x ✅) | 662.6 | 1 / 1 | 256 / 144 |
-| 136 B | decode | 592.8 (1.04x ✅) | 570.8 | 5 / 7 | 444 / 384 |
-| 174 B | encode | 918.8 (1.44x ✅) | 639.5 | 1 / 1 | 256 / 176 |
-| 174 B | decode | 490.1 (1.02x ✅) | 481.4 | 10 / 14 | 544 / 488 |
-| 2469 B | encode | 867.5 (1.59x ✅) | 546.6 | 1 / 1 | 2688 / 2688 |
-| 2469 B | decode | 352.4 (1.16x ✅) | 303.7 | 133 / 325 | 13288 / 15064 |
-| 74913 B | encode | 834.9 (1.48x ✅) | 562.8 | 1 / 1 | 81920 / 81920 |
-| 74913 B | decode | 336.6 (1.13x ✅) | 298.7 | 3057 / 9037 | 426957 / 472238 |
-| 136 B | encode-par | 1051.4 (0.50x ❌) | 2116.5 | 1 / 1 | 256 / 144 |
-| 136 B | decode-par | 1046.2 (0.90x ❌) | 1158.4 | 5 / 7 | 444 / 384 |
-| 174 B | encode-par | 1317.7 (0.58x ❌) | 2288.7 | 1 / 1 | 256 / 176 |
-| 174 B | decode-par | 935.3 (0.89x ❌) | 1052.1 | 10 / 14 | 544 / 488 |
-| 2469 B | encode-par | 1744.6 (0.75x ❌) | 2333.5 | 1 / 1 | 2688 / 2688 |
-| 2469 B | decode-par | 469.8 (1.02x ✅) | 461.3 | 133 / 325 | 13288 / 15064 |
-| 74913 B | encode-par | 2572.3 (0.67x ❌) | 3841.5 | 1 / 1 | 81920 / 81920 |
-| 74913 B | decode-par | 684.5 (1.34x ✅) | 512.7 | 3057 / 9037 | 426954 / 472236 |
+| 136 B | encode | 842.6 (1.35x ✅) | 625.0 | 1 / 1 | 144 / 144 |
+| 136 B | decode | 743.2 (1.40x ✅) | 530.2 | 5 / 7 | 368 / 384 |
+| 174 B | encode | 871.7 (1.48x ✅) | 588.8 | 1 / 1 | 176 / 176 |
+| 174 B | decode | 561.5 (1.26x ✅) | 444.3 | 10 / 14 | 504 / 488 |
+| 2469 B | encode | 893.1 (1.70x ✅) | 524.1 | 1 / 1 | 2688 / 2688 |
+| 2469 B | decode | 378.1 (1.37x ✅) | 276.0 | 117 / 325 | 12556 / 15064 |
+| 74913 B | encode | 941.0 (1.71x ✅) | 548.9 | 1 / 1 | 81920 / 81920 |
+| 74913 B | decode | 337.7 (1.27x ✅) | 265.8 | 3035 / 9037 | 451169 / 472242 |
+| 136 B | encode-par | 2023.8 (1.02x ✅) | 1988.3 | 1 / 1 | 144 / 144 |
+| 136 B | decode-par | 1150.6 (1.16x ✅) | 992.7 | 5 / 7 | 368 / 384 |
+| 174 B | encode-par | 2304.6 (1.04x ✅) | 2225.1 | 1 / 1 | 176 / 176 |
+| 174 B | decode-par | 1025.9 (1.00x ✅) | 1021.1 | 10 / 14 | 504 / 488 |
+| 2469 B | encode-par | 1977.1 (0.87x ❌) | 2277.0 | 1 / 1 | 2688 / 2688 |
+| 2469 B | decode-par | 512.4 (1.12x ✅) | 457.4 | 117 / 325 | 12556 / 15064 |
+| 74913 B | encode-par | 3305.2 (0.99x ❌) | 3329.3 | 1 / 1 | 81920 / 81920 |
+| 74913 B | decode-par | 591.5 (1.05x ✅) | 563.5 | 3035 / 9037 | 451169 / 472242 |
 
 Encode is ahead on every tier: the fast path reads scalars, strings and
-bytes straight from struct memory with no getter calls and no tree. Decode stores plain integer-width scalars straight into struct memory
+bytes straight from struct memory with no getter calls and no tree, staging
+each row in a stack-local buffer with a single writeback so parallel encodes
+no longer pay a GC write barrier per append. Decode stores plain integer-width scalars straight into struct memory
 through the same offset columns (no pointers cross, so no write barrier is
-skipped); strings, bytes, slices, optionals and submessages stay on
-closures by design. Encode leads 1.31x–1.59x; decode leads every tier
-(1.02x–1.16x). The parallel rows show what a server sees, each goroutine on
-its own message: protobuf-go scales better with core count on encode
-(0.50x–0.75x) and on the two small decode tiers, while pbwire takes large
-decode-par (1.02x) and xlarge decode-par (1.34x). The host was loaded
-(load average above core count), so the par rows carry scheduler noise —
-published as measured, not as a scaling claim. The
+skipped); strings, bytes and optionals go through typed unsafe stores with
+the barrier intact, slices append straight to the struct header, and only
+submessage creation stays on closures. Two-byte varints skip the counting
+loop in both tag and value parsing. The decode loop parses plain Fast
+scalar fields inline — tag, value and store with no call and no nested
+dispatch. Two-byte tags resolve the same way: the first byte indexes the
+row and the second verifies it, so repeated and optional fields skip Next
+and lookup with no new call on the path. Encode leads 1.35x–1.71x serial
+(0.87x–1.04x par); serial decode wins on all four tiers
+(1.40x/1.26x/1.37x/1.27x). Both hints size exactly, so B/op lands
+in the same Go size class as the baseline on every tier, and
+decode takes fewer allocs on every tier. 14 of 16 cells are green; the
+two red ones are parallel rows (large
+encode-par 0.87x, xlarge encode-par 0.99x), each within a few percent of
+parity on work that flips either way between runs on this shared box,
+while the serial twins on identical work win 1.35x–1.71x. Figures are
+medians of three same-host runs (the box carried other tenants'
+load throughout, so single runs flop ±10%); published as measured,
+not as a scaling claim. The
 pbench gate pins the semantic edge the table cannot show: invalid UTF-8 in
-a proto3 string fails on every path, and unknown fields are dropped by the
-struct paths exactly as documented (`TestGateSemantics`). The two
-dynamic arms behind the thin model were compared under
+a proto3 string fails on every path, and unknown fields round-trip through
+the struct paths byte for byte (`TestGateSemantics`). The two
+value-tree arms behind the thin model were compared under
 [`bindings/go/pbench/`](bindings/go/pbench/) (same tiers, interleaved,
-native struct in and out, converter-only glue): the C core at 0.05-0.10x
-encode and 0.11-0.13x decode, the pure-Go direct path at 1.42-1.76x encode
-and 0.88-1.13x decode. The per-field copy into any tree is what separates
-them.
+native struct in and out, converter-only glue): the C value tree at
+0.05-0.09x encode and 0.12-0.13x decode, the pure-Go value tree at 1.34-1.49x
+encode and 0.93-1.19x decode. The per-field copy into any tree is what
+separates them.
 
 ### Python vs `google.protobuf` (upb)
 

@@ -42,6 +42,9 @@ var (
 	ErrUTF8 = errors.New("codec: string field contains invalid UTF-8")
 	// ErrDepth reports nesting past MaxDepth.
 	ErrDepth = errors.New("codec: nesting exceeds max depth")
+	// ErrNilTable reports a nil table: a lookup that errored (or was
+	// never built) surfaces here, so the call fails instead of panicking.
+	ErrNilTable = errors.New("codec: nil table")
 )
 
 // CheckDepth rejects depths past MaxDepth. Generated nested decode calls it

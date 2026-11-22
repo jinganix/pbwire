@@ -81,3 +81,27 @@ var AddressBookMeta = runtime.NewTable("tutorial.AddressBook", []*runtime.Field{
 		},
 	},
 })
+
+func init() {
+	Person_PhoneNumberMeta.Unknown = func(msg any, raw []byte) {
+		m := msg.(*Person_PhoneNumber)
+		m.unknownFields = append(m.unknownFields, raw...)
+	}
+	Person_PhoneNumberMeta.EncodeUnknown = func(msg any) []byte {
+		return msg.(*Person_PhoneNumber).unknownFields
+	}
+	PersonMeta.Unknown = func(msg any, raw []byte) {
+		m := msg.(*Person)
+		m.unknownFields = append(m.unknownFields, raw...)
+	}
+	PersonMeta.EncodeUnknown = func(msg any) []byte {
+		return msg.(*Person).unknownFields
+	}
+	AddressBookMeta.Unknown = func(msg any, raw []byte) {
+		m := msg.(*AddressBook)
+		m.unknownFields = append(m.unknownFields, raw...)
+	}
+	AddressBookMeta.EncodeUnknown = func(msg any) []byte {
+		return msg.(*AddressBook).unknownFields
+	}
+}

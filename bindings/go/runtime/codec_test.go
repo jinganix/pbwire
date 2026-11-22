@@ -1896,7 +1896,7 @@ func TestOffsetFastPathParity(t *testing.T) {
 		}
 	}
 
-	// Unknown fields are dropped on the struct path either way.
+	// Unknown fields are dropped on hook-less tables either way.
 	withUnknown := append(encodeProbe(slow, cases["full"]),
 		0x98, 0x06, 0x07) // field 99, varint 7
 	if !reflect.DeepEqual(decodeProbe(slow, withUnknown), decodeProbe(fast, withUnknown)) {

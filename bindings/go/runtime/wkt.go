@@ -132,8 +132,9 @@ func AnyUnpack(m *DMsg, typ *DType) (*DMsg, error) {
 }
 
 // toMillis reads seconds (field 1) + nanos (field 2) as milliseconds,
-// shared by both time shapes: same fields, same range rule.
-func toMillis(m *DMsg, what string) (int64, error) {
+// shared by both time shapes: same fields, same range rule. A Timestamp
+// carries only non-negative nanos; a Duration keeps the sign in both fields.
+func toMillis(m *DMsg, what string, timestamp bool) (int64, error) {
 	if m == nil {
 		return 0, fmt.Errorf("codec: %s needs a value", what)
 	}
@@ -149,7 +150,7 @@ func toMillis(m *DMsg, what string) (int64, error) {
 		}
 		nanos = int64(int32(sNano.u))
 	}
-	if nanos > maxNanos || nanos < -maxNanos {
+	if nanos > maxNanos || nanos < -maxNanos || (timestamp && nanos < 0) {
 		return 0, ErrWire
 	}
 	// sec*1000 + nanos/1e6 must stay inside int64; each bound uses the
@@ -175,12 +176,12 @@ func toMillis(m *DMsg, what string) (int64, error) {
 
 // TimestampMillis is a Timestamp message as milliseconds since the epoch.
 func TimestampMillis(m *DMsg) (int64, error) {
-	return toMillis(m, "Timestamp")
+	return toMillis(m, "Timestamp", true)
 }
 
 // DurationMillis is a Duration message as milliseconds.
 func DurationMillis(m *DMsg) (int64, error) {
-	return toMillis(m, "Duration")
+	return toMillis(m, "Duration", false)
 }
 
 // fromMillis builds a seconds/nanos message from milliseconds.

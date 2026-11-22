@@ -191,6 +191,7 @@ func goFiles(f *model.File, opt Options) ([]File, error) {
 	for _, m := range f.Messages {
 		writeGoTable(&meta, f, m)
 	}
+	writeGoUnknownHooks(&meta, f)
 	// Canonical gofmt output: struct alignment and indentation stay
 	// correct no matter how wide field names get.
 	var files []File
@@ -327,6 +328,9 @@ func writeGoMessage(b *strings.Builder, f *model.File, m model.Message) {
 		}
 		fmt.Fprintf(b, "\t%s %s\n", goCamel(field.Name), goFieldType(f, field))
 	}
+	// Retained unknown fields, tag included: appended on decode, replayed
+	// after the known fields on encode. Reset clears them with the rest.
+	b.WriteString("\tunknownFields []byte\n")
 	b.WriteString("}\n\n")
 	writeGoGetters(b, f, m)
 	writeGoCodec(b, f, m)
@@ -408,13 +412,40 @@ func writeGoCodec(b *strings.Builder, f *model.File, m model.Message) {
 	fmt.Fprintf(b, "\treturn runtime.DecodeModel(wire, m, %sMeta)\n}\n\n", m.Name)
 }
 
+// writeGoUnknownHooks wires the retention hooks every generated table
+// needs: Unknown appends tag-inclusive bytes to the message's buffer on
+// decode, EncodeUnknown hands them back for replay after the known fields
+// on encode. One init per file keeps the tables themselves data-only.
+func writeGoUnknownHooks(b *strings.Builder, f *model.File) {
+	if len(f.Messages) == 0 {
+		return
+	}
+	b.WriteString("func init() {\n")
+	for _, m := range f.Messages {
+		fmt.Fprintf(b, "\t%sMeta.Unknown = func(msg any, raw []byte) {\n", m.Name)
+		fmt.Fprintf(b, "\t\tm := msg.(*%s)\n", m.Name)
+		fmt.Fprintf(b, "\t\tm.unknownFields = append(m.unknownFields, raw...)\n")
+		fmt.Fprintf(b, "\t}\n")
+		fmt.Fprintf(b, "\t%sMeta.EncodeUnknown = func(msg any) []byte {\n", m.Name)
+		fmt.Fprintf(b, "\t\treturn msg.(*%s).unknownFields\n", m.Name)
+		fmt.Fprintf(b, "\t}\n")
+	}
+	b.WriteString("}\n\n")
+}
+
 // writeGoTable emits one message's data table: one row per proto field in
 // ascending field-number order. Every row is field facts (number, wire
 // type, kind, presence, repetition) plus trivial getter/setter closures on
 // the struct; no wire logic is emitted here.
 func writeGoTable(b *strings.Builder, f *model.File, m model.Message) {
 	fmt.Fprintf(b, "// %sMeta is the generated DATA table for %s: one row per field.\n", m.Name, m.Full)
-	fmt.Fprintf(b, "var %sMeta = runtime.NewTable(%q, []*runtime.Field{\n", m.Name, m.Full)
+	ctor := "NewTable"
+	if m.IsMapEntry {
+		// An entry's key and value emit even when zero, so the table says
+		// what it is instead of the runtime guessing from its shape.
+		ctor = "NewMapEntryTable"
+	}
+	fmt.Fprintf(b, "var %sMeta = runtime.%s(%q, []*runtime.Field{\n", m.Name, ctor, m.Full)
 	for _, field := range goSorted(m) {
 		if field.Skip != "" {
 			continue

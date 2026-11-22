@@ -12,9 +12,10 @@ import (
 
 // xfile.UsesDep
 type UsesDep struct {
-	Single *xdep.DepMsg
-	Many   []*xdep.DepMsg
-	Note   string
+	Single        *xdep.DepMsg
+	Many          []*xdep.DepMsg
+	Note          string
+	unknownFields []byte
 }
 
 func (m *UsesDep) GetSingle() *xdep.DepMsg {

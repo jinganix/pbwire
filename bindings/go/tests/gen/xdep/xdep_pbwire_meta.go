@@ -20,3 +20,13 @@ var DepMsgMeta = runtime.NewTable("xdep.DepMsg", []*runtime.Field{
 		SetI32: func(msg any, v int32) { msg.(*DepMsg).Value = v },
 	},
 })
+
+func init() {
+	DepMsgMeta.Unknown = func(msg any, raw []byte) {
+		m := msg.(*DepMsg)
+		m.unknownFields = append(m.unknownFields, raw...)
+	}
+	DepMsgMeta.EncodeUnknown = func(msg any) []byte {
+		return msg.(*DepMsg).unknownFields
+	}
+}

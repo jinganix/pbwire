@@ -2,12 +2,9 @@
 // model; the dynamic cores hold a value tree. These functions move a message
 // between the two through the tables both sides already share, with no
 // reflection and no wire round trip: every row copies getter to setter,
-// nested messages recurse, unknown fields stay on the tree.
-//
-// Export targets a fresh zero struct: absent tree fields leave the struct
-// field at its zero value, and unknown bytes have nowhere to go on a struct
-// and are dropped (documented, matching the thin model's decode contract).
-// Required fields are not enforced on either direction.
+// nested messages recurse, and unknown fields ride the model table's
+// Unknown/EncodeUnknown hooks on every level (hook-less tables keep the old
+// drop behavior). Required fields are not enforced on either direction.
 package runtime
 
 import (
@@ -40,7 +37,7 @@ func (t *DType) ExportModel(d *DMsg, model any, meta *Table) error {
 	if meta == nil {
 		return fmt.Errorf("codec: export without a model table")
 	}
-	return exportInto(d, model, meta, t)
+	return exportInto(d, model, meta, d.typ)
 }
 
 // importInto copies one message level from the model side to the tree side.
@@ -57,6 +54,11 @@ func importInto(model any, meta *Table, d *DMsg, t *DType) error {
 		}
 		if err := importRow(t, i, model, mrow, d, drow); err != nil {
 			return fmt.Errorf("codec: field %s: %w", fp.Name, err)
+		}
+	}
+	if meta.EncodeUnknown != nil {
+		if raw := meta.EncodeUnknown(model); len(raw) > 0 {
+			d.unknown = append(d.unknown, raw...)
 		}
 	}
 	return nil
@@ -132,7 +134,7 @@ func importMessage(t *DType, i int, sub any, mrow *Field) (*DMsg, error) {
 		return st.New(), nil
 	}
 	child := st.New()
-	if err := importInto(sub, mrow.Sub(), child, st); err != nil {
+	if err := importInto(sub, mrow.subTable(), child, st); err != nil {
 		return nil, err
 	}
 	return child, nil
@@ -162,6 +164,11 @@ func exportInto(d *DMsg, model any, meta *Table, t *DType) error {
 		}
 		if err := exportRow(t, i, d, drow, model, mrow); err != nil {
 			return fmt.Errorf("codec: field %s: %w", fp.Name, err)
+		}
+	}
+	if meta.Unknown != nil {
+		if raw := d.UnknownBytes(); len(raw) > 0 {
+			meta.Unknown(model, raw)
 		}
 	}
 	return nil
@@ -231,7 +238,7 @@ func exportMessage(t *DType, i int, sub *DMsg, target any, mrow *Field) error {
 		}
 		return mrow.Foreign.Decode(target, raw)
 	}
-	return exportInto(sub, target, mrow.Sub(), st)
+	return exportInto(sub, target, mrow.subTable(), st)
 }
 
 // exportOneofValue converts a set oneof member for the model side.
@@ -261,7 +268,7 @@ func exportOneofValue(t *DType, i int, v any, mrow *Field) (any, error) {
 		}
 		return target, nil
 	}
-	if err := exportInto(sub, target, mrow.Sub(), st); err != nil {
+	if err := exportInto(sub, target, mrow.subTable(), st); err != nil {
 		return nil, err
 	}
 	return target, nil
