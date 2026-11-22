@@ -11,7 +11,6 @@ and wire bytes out; wire bytes in and a fully readable native object out.
 | `tree` | `Sources/Bench/main.swift` (timer) over `Sources/Pbench/Arms.swift` (handle) | the shipped `Message` handle full task: a fresh native object per iteration (one `set` per field, `encode`, deinit frees inside the timer); a fresh `decode` per iteration with every gate-checked field folded into a live sink, deinit frees inside the timer | what an application pays per message end to end |
 | `proxy` | `Sources/Bench/main.swift` (timer) | the old prebuilt shape, relabelled not re-measured as a new task: a held handle's `encode`, bare decode with no materialization (same-run timing only, never the headline) | what the transcoder/hold-and-re-encode path costs |
 | `shim` | `Sources/Pbench/Arms.swift` | the generated `@frozen <Message>Repr` is the native object; `InPlace.encodeInPlace` / `decodeInPlace` cross once and `bindings/swift/Sources/CPbwire/shim.c` walks that memory in place through `pbw_struct_codec_*` | is a boundary worth paying for at all |
-| `shim` | `Sources/Pbench/Arms.swift` | the generated `@frozen <Message>Repr` is the native object; `InPlace.encodeInPlace` / `decodeInPlace` cross once and `bindings/swift/Sources/CPbwire/shim.c` walks that memory in place through `pbw_struct_codec_*` | is a boundary worth paying for at all |
 | `core` | `Sources/Pbench/CoreArm.swift` | the pure-Swift `PbwireCore` product: a schema from the descriptor set, a value tree built with one `set` per field, then `encode`/`decode` | who walks the wire with no C library, no `unsafeFlags` link and no generated code |
 `core` replaces the `n/a` plan 21 started from: the arm is `PbwireCore`
 (`Sources/PbwireCore/`), a second, independent Swift implementation of the
@@ -104,7 +103,9 @@ gate-checked field (`TreeArm.readBack`, the same list the timer's
 byte-exactly. A tree row that prints is a row whose timer body is proven
 byte- and field-correct.
 
-## Provisional table (Stage 3)
+## Provisional table (Stage 3, historical)
+
+> Historical pre-parity definition: `tree` below is a prebuilt handle's `encode()`/`decode()`; the formal Go-parity definition is the Verdict table.
 
 `cd bindings/swift && swift run -c release Bench compare`: interleaved rounds
 (all six ops back to back), median of five. `tree` is a *prebuilt* handle's
