@@ -14,9 +14,11 @@
 # read-back path; R's GC owns the builder (no manual free). `pbwire-r-proxy`
 # is the prebuilt task relabelled (re-encode a held handle, decode-and-drop
 # with no materialization), timed in the same run, never the headline.
-# The encode input list is app-owned steady-state (the Python-arm precedent:
-# encode is one .Call either way); the fresh builder, the whole C field walk
-# and the encode all sit inside the timer. See pbench/README.md.
+# The encode input list is app-owned steady-state (the Task 5 ledger ruling,
+# Python worker D3 merged as 99ac9ac, whose review accepted plain-data dict
+# reuse as "standard harness practice": encode is one .Call either way); the
+# fresh builder, the whole C field walk and the encode all sit inside the
+# timer. See pbench/README.md.
 #
 # Both sides must produce identical bytes before anything is timed. Like the
 # other harnesses it calibrates from the floor until one pass takes

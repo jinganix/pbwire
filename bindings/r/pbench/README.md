@@ -8,7 +8,7 @@ and wire bytes out; wire bytes in and a fully readable native object out.
 
 | arm | file | mechanism | what it answers |
 |---|---|---|---|
-| `tree` | `a-tree.R` | the shipped builder handle as the full task: `tree_encode_full(list)` builds a fresh `pbwire_message` + `pbwire_message_set` per encode (R has no per-field setter, so `set()` walks every named field in C, see `pbwr_fill` in `runtime/src/pbwire_r.c`), then `pbwire_message_encode()`; `tree_decode_full(wire)` parses with `pbwire_parse_binary()` and reads fully back with `pbwire_msg_to_json()` (R builders have no per-field getters by design, so the JSON/text print IS the shipped read-back path; the decode folds its `nchar` into a sink). The list feeding the encode is app-owned steady-state input (the Python-arm precedent); the fresh builder, the whole C field walk and the encode all sit inside the timer. R's GC owns the builder (no manual free exists on this path) | what an application pays through the per-field API |
+| `tree` | `a-tree.R` | the shipped builder handle as the full task: `tree_encode_full(list)` builds a fresh `pbwire_message` + `pbwire_message_set` per encode (R has no per-field setter, so `set()` walks every named field in C, see `pbwr_fill` in `runtime/src/pbwire_r.c`), then `pbwire_message_encode()`; `tree_decode_full(wire)` parses with `pbwire_parse_binary()` and reads fully back with `pbwire_msg_to_json()` (R builders have no per-field getters by design, so the JSON/text print IS the shipped read-back path; the decode folds its `nchar` into a sink). The list feeding the encode is app-owned steady-state input (Task 5 ledger ruling, Python worker D3 merged as 99ac9ac, whose review accepted plain-data dict reuse as "standard harness practice"); the fresh builder, the whole C field walk and the encode all sit inside the timer. R's GC owns the builder (no manual free exists on this path) | what an application pays through the per-field API |
 | `shim` | `b-shim.R` | the generated model's shape, `Structtest_Scalars3_encode(list)` / `_decode(wire)`: one `.Call` hands the named list (or the wire bytes) to C, which walks it and fills the tree inside C and returns the raw vector (or the fully materialized named list). The type is resolved once into a schema-owned message number (`pbwire_type_number`), so the per-call work is a bounds check, not a name lookup. Encode reuses the app-owned list across iterations (steady-state carve-out, said here and in the harness header). Decode carries no R-side folding sink by design: `pbwr_decode_number` runs `pbwr_decode_desc`, which returns `pbwr_message_sexp(msg, s, 0)` -- that walk builds every repeated R vector element by element and converts every scalar before returning (`runtime/src/pbwire_r.c`), so the full R list already exists when the timer drops the reference | is a boundary worth paying for at all |
 | `core` | `n/a` | a pure-R port of the C core | deferred: a pure-R engine loops per field in the interpreter, orders of magnitude off, and no user needs it |
 | `proxy` | the prebuilt builder in `benchmarks/bench.R` | re-encode a held handle (`pbwire_message_encode`), decode-and-drop with no materialization (`pbwire_parse_binary`) | the codec's own cost once the tree exists -- published, never the headline |
@@ -55,7 +55,8 @@ relabelled not re-measured as a new task).
 ## Run table
 
 Formal (`make r-bench`, `results/bench-r-20261122T020549Z.json`, best of 3;
-throughput ratios = pbwire MB/s over RProtoBuf MB/s):
+throughput ratios = pbwire MB/s over RProtoBuf MB/s; all rows same run --
+`proxy` is same-run timing only, never the headline):
 
 | tier | arm | encode ns/op | vs RProtoBuf enc | decode ns/op | vs RProtoBuf dec |
 |---|---|---|---|---|---|
@@ -79,7 +80,7 @@ pays the fresh builder plus the `set()` walk on encode and the parse plus the
 JSON read-back on decode, so it trails `shim` by 1.4x-2.8x -- but it still
 beats RProtoBuf by 8-38x everywhere, because RProtoBuf pays R-level per-field
 work on top of its own C++ call. Proxy/tree gap at xlarge: 14.9x encode,
-7.3x decode -- the gap the old prebuilt `tree` row was hiding. Proxy decode
+7.3x decode -- the gap the old prebuilt `tree` row was hiding (same-run timing only). Proxy decode
 stays far above RProtoBuf (33x-188x): decode was faster than RProtoBuf even
 before materialization; the materialization is what costs.
 
@@ -93,7 +94,7 @@ tier, both ops (22.42x-55.23x / 27.47x-59.67x vs RProtoBuf). `pbwire-r-tree`
 is the per-field-API reference (fresh builder per encode, parse plus full
 read-back per decode), published beside it, 8.01x-38.32x RProtoBuf -- never
 replaced by `proxy`. The `proxy` row (prebuilt builder) stays the form a hot
-loop should hold (109x-573x / 33x-188x vs RProtoBuf), published never the
+loop should hold (109x-573x / 33x-188x vs RProtoBuf, same-run timing only), published never the
 headline.
 
 It is not (a) -- "replace the shipped fast path": the list path is 1/1.4 to

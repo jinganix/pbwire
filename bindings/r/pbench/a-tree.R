@@ -17,10 +17,16 @@
 #                            R builders have no per-field getters by design, so
 #                            the JSON/text print IS the shipped read-back path)
 #
-# The R list feeding the encode is app-owned steady-state input (the
-# Python-arm precedent: encode is one .Call either way, so a fresh R list
-# per iteration would price list construction, not the codec). The fresh
-# builder, the whole field walk and the encode all sit inside the timer.
+# The R list feeding the encode is app-owned steady-state input (the Task 5
+# ledger ruling, Python worker D3 merged as 99ac9ac, whose review accepted
+# plain-data dict reuse as "standard harness practice": encode is one .Call
+# either way, so a fresh R list per iteration would price list construction,
+# not the codec). The fresh builder, the whole field walk and the encode all
+# sit inside the timer.
+# The schema-context buffer reuse at runtime/src/pbwire_r.c:1040 does NOT
+# apply here: that is the shim path (pbwr_encode_desc); this builder path
+# goes through pbwr_message_encode -> pbw_encode, which mallocs its buffer
+# per call.
 # No manual free exists on this path: the builder is an external pointer
 # and R's GC runs the finalizer (same note as the Python/Java/Ruby arms).
 
