@@ -11,8 +11,10 @@ declare(strict_types=1);
  * message, the two proto3 optionals, and the repeated fields scaled x0 / x1 /
  * x100 / x3000, which lands the tiers on 136 / 174 / 2469 / 74913 bytes. Both
  * sides must produce identical bytes before anything is timed, and both
- * allocate per call (pbwire encode()/decode() against serializeToString()/
- * mergeFromString()), so the comparison is like for like.
+ * allocate per call (pbwire fresh-Message build/encode and decode/read-back/
+ * close against serializeToString()/mergeFromString()), so the comparison
+ * is like for like. The prebuilt-handle re-encode is kept as the `proxy`
+ * row: same-run timing only, never the headline.
  *
  * The official runtime comes from the cached protobuf checkout (its php/src
  * tree), loaded through a plain SPL autoloader: no composer needed. When the
@@ -26,6 +28,8 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/../runtime/pbwire.php';
 require_once __DIR__ . '/../pbench/payload.php';
+require_once __DIR__ . '/../pbench/a-tree.php';
+require_once __DIR__ . '/../pbench/b-shim.php';
 
 use Pbwire\Schema;
 
@@ -59,9 +63,17 @@ $desc = $argv[1] ?? "$gen/matrix3.desc";
 // The C extension (when loaded) backs the same generated classes, so one
 // label covers whichever official implementation is actually timed.
 $officialImpl = extension_loaded('protobuf') ? 'protobuf-php-c' : 'protobuf-php';
-// Rows are named by the arm they time: the prebuilt Message handle, the
-// native-array entry (one C extension call) or the same API on ext-ffi.
+// Rows are named by the arm they time: the per-field full task (fresh Message
+// per iteration, one set per field, encode, read back per field, close), the
+// prebuilt proxy (a held Message handle, re-encode out), the native-array
+// entry (one C extension call) or the same API on ext-ffi.
+//
+// The full-task encode and the shim encode read the app-owned native array.
+// Reusing a plain-data fixture across iterations is standard harness
+// practice (Task 5 ledger ruling, Python worker D3, merged 99ac9ac); only
+// the Message -- fresh per iteration, closed inside the timer -- is timed.
 $treeImpl = 'pbwire-php-tree';
+$proxyImpl = 'pbwire-php-proxy';
 $shimImpl = extension_loaded('pbwire') ? 'pbwire-php-shim' : 'pbwire-php-shim-ffi';
 echo 'impl: ' . (extension_loaded('pbwire') ? 'C extension ' . phpversion('pbwire') : 'ext-ffi') . "\n";
 echo 'official: ' . ($officialImpl === 'protobuf-php-c' ? 'C extension ' . phpversion('protobuf') : 'pure PHP') . "\n\n";
@@ -69,6 +81,7 @@ $schema = Schema::fromFile($desc);
 $ty = $schema->message('structtest.Scalars3');
 $innerTy = $schema->message('structtest.Inner3');
 $failures = 0;
+$sink = 0;
 
 for ($tier = 0; $tier < count(CASES); $tier++) {
     $label = CASES[$tier];
@@ -82,15 +95,17 @@ for ($tier = 0; $tier < count(CASES); $tier++) {
         continue;
     }
 
+    // The proxy task: a prebuilt Message handle, re-encoded out. Same-run
+    // timing only, never the headline.
     $message = fillPbwire($ty, $innerTy, $n);
     $got = $message->encode();
 
     if ($got !== $reference) {
-        fail($label, "$treeImpl wrote " . strlen($got) . ' bytes, protobuf-php ' . strlen($reference));
+        fail($label, "$proxyImpl wrote " . strlen($got) . ' bytes, protobuf-php ' . strlen($reference));
         continue;
     }
 
-    // Decode must round-trip byte-exactly and expose the same values.
+    // Proxy decode round-trips byte-exactly with no read-back.
     $back = $ty->decode($reference);
     $backOk = $back->encode() === $reference
         && $back->getString('str') === 'hello'
@@ -99,13 +114,28 @@ for ($tier = 0; $tier < count(CASES); $tier++) {
         && ($n === 0 || $back->at('nums', $n - 1)?->asInt() === $n - 4);
     $back->close();
     if (!$backOk) {
+        fail($label, "$proxyImpl decode differs");
+        continue;
+    }
+
+    // The tree task: a native array in, fresh Message per call, one set per
+    // field, encode, close; wire in, one get per field back out, close.
+    $arrayPayload = pbwire_pbench_payload($n);
+    $fullWire = tree_encode_full($ty, $innerTy, $arrayPayload);
+    if ($fullWire !== $reference) {
+        fail($label, "$treeImpl wrote " . strlen($fullWire) . ' bytes, protobuf-php ' . strlen($reference));
+        continue;
+    }
+    $fullBack = tree_decode_full($ty, $reference);
+    if (!pbwire_pbench_reads_ok($fullBack, $n)
+        || $ty->encodeArray($fullBack) !== $reference
+        || $fullBack !== pbwire_pbench_official_materialize($reference)) {
         fail($label, "$treeImpl decode differs");
         continue;
     }
 
     // The native-object arm: a PHP array in, one entry call; wire in, the
     // fully materialized array out. The same gate as the tree arm.
-    $arrayPayload = pbwire_pbench_payload($n);
     $arrayWire = $ty->encodeArray($arrayPayload);
     if ($arrayWire !== $reference) {
         fail($label, "$shimImpl wrote " . strlen($arrayWire) . ' bytes, protobuf-php ' . strlen($reference));
@@ -123,8 +153,15 @@ for ($tier = 0; $tier < count(CASES); $tier++) {
     $officialClass = \Structtest\Scalars3::class;
     // Tier line shows the reference op's count; slower ops keep the floor.
     $count = calibrate(static fn () => $message->encode(), $iterations);
-    $encode = measure($iterations, static fn () => $message->encode());
-    $decode = measure($iterations, static fn () => $ty->decode($reference));
+    $proxyEncode = measure($iterations, static fn () => $message->encode());
+    $proxyDecode = measure($iterations, static fn () => $ty->decode($reference));
+    $treeEncode = measure($iterations, static fn () => tree_encode_full($ty, $innerTy, $arrayPayload));
+    $treeDecode = measure($iterations, static function () use ($ty, $reference, &$sink) {
+        $out = tree_decode_full($ty, $reference);
+        $sink += count($out);
+
+        return $out;
+    });
     $shimEncode = measure($iterations, static fn () => $ty->encodeArray($arrayPayload));
     $shimDecode = measure($iterations, static fn () => $ty->decodeArray($reference));
     $officialEncode = measure($iterations, static fn () => $official->serializeToString());
@@ -138,14 +175,18 @@ for ($tier = 0; $tier < count(CASES); $tier++) {
     $bytes = strlen($reference);
     printf("%s: %d bytes, %d iterations (repeat field x%d)\n", $label, $bytes, $count, $n);
     printf("  %-12s %-7s %12s %10s\n", 'impl', 'op', 'ns/op', 'MB/s');
-    row($treeImpl, 'encode', $bytes, $encode);
+    row($treeImpl, 'encode', $bytes, $treeEncode);
     row($shimImpl, 'encode', $bytes, $shimEncode);
     row($officialImpl, 'encode', $bytes, $officialEncode);
-    row($treeImpl, 'decode', $bytes, $decode);
+    row($proxyImpl, 'encode', $bytes, $proxyEncode);
+    row($treeImpl, 'decode', $bytes, $treeDecode);
     row($shimImpl, 'decode', $bytes, $shimDecode);
     row($officialImpl, 'decode', $bytes, $officialDecode);
+    row($proxyImpl, 'decode', $bytes, $proxyDecode);
     echo "\n";
 }
+
+echo "sink: $sink\n";
 
 if ($failures !== 0) {
     fwrite(STDERR, "$failures check(s) failed\n");
@@ -194,6 +235,7 @@ function fillOfficial(int $n): \Structtest\Scalars3
     return $m;
 }
 
+/** The proxy task's prebuilt handle: built once outside the timer. */
 function fillPbwire(Pbwire\Type $ty, Pbwire\Type $innerTy, int $n): Pbwire\Message
 {
     $m = $ty->newMessage();

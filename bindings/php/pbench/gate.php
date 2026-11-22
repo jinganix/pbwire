@@ -30,7 +30,7 @@ function gate_check(bool $ok, string $what): void
 }
 
 $arms = [
-    'tree' => ['file' => 'a-tree.php', 'need' => ['tree_prepare', 'tree_encode', 'tree_decode']],
+    'tree' => ['file' => 'a-tree.php', 'need' => ['tree_prepare', 'tree_encode', 'tree_decode', 'tree_encode_full', 'tree_decode_full']],
     'shim' => ['file' => 'b-shim.php', 'need' => ['shim_encode', 'shim_decode', 'shim_impl']],
 ];
 foreach ($arms as $name => $arm) {
@@ -49,6 +49,11 @@ if ($failures > 0) {
 }
 
 $type = pbwire_pbench_type();
+$innerTy = $type->nestedType($type->field('inner'));
+if ($innerTy === null) {
+    gate_check(false, 'tree full task: unresolved inner type');
+    exit(1);
+}
 $shim = shim_impl();
 
 foreach (PB_TIERS as $tier) {
@@ -64,9 +69,17 @@ foreach (PB_TIERS as $tier) {
     $payload = pbwire_pbench_payload($repeats);
 
     $tree = tree_prepare($ref);
-    gate_check(tree_encode($tree) === $ref, "$label: tree bytes differ from the official runtime");
+    gate_check(tree_encode($tree) === $ref, "$label: proxy bytes differ from the official runtime");
     $treeBack = tree_decode($ref);
-    gate_check(tree_encode($treeBack) === $ref, "$label: tree re-encode differs");
+    gate_check(tree_encode($treeBack) === $ref, "$label: proxy re-encode differs");
+
+    gate_check(tree_encode_full($type, $innerTy, $payload) === $ref,
+        "$label: tree full-task bytes differ from the official runtime");
+    $full = tree_decode_full($type, $ref);
+    gate_check(pbwire_pbench_reads_ok($full, $repeats), "$label: tree full-task decode differs");
+    gate_check(shim_encode($full) === $ref, "$label: tree full-task re-encode differs");
+    gate_check($full === pbwire_pbench_official_materialize($ref),
+        "$label: tree full-task decode differs from the official materialization");
 
     gate_check(shim_encode($payload) === $ref, "$label: shim bytes differ from the official runtime");
     $back = shim_decode($ref);

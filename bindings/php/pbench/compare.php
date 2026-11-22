@@ -10,9 +10,11 @@ declare(strict_types=1);
  *   php bindings/php/pbench/compare.php
  *   php -d extension=.../pbwire.so bindings/php/pbench/compare.php
  *
- * `tree` is the prebuilt Message handle, the loaded shim arm is the array path
- * (C extension or ext-ffi, named by the row), the baseline is the official
- * runtime with its model materialized on decode.
+ * `tree` is the per-field full task (fresh Message per call, one set per
+ * field, encode, read back per field, close), `proxy` is the prebuilt Message
+ * handle, the loaded shim arm is the array path (C extension or ext-ffi,
+ * named by the row), the baseline is the official runtime with its model
+ * materialized on decode.
  */
 
 require __DIR__ . '/payload.php';
@@ -52,6 +54,9 @@ function pbwire_pbench_pass(callable $op, int $count): float
 }
 
 $shim = shim_impl();
+$sink = 0;
+$pbType = pbwire_pbench_type();
+$pbInnerTy = $pbType->nestedType($pbType->field('inner'));
 $medians = [];
 
 foreach (PB_TIERS as $tier) {
@@ -64,6 +69,15 @@ foreach (PB_TIERS as $tier) {
     $officialClass = \Structtest\Scalars3::class;
     $ops = [
         'pbwire-php-tree' => [
+            'encode' => static fn () => tree_encode_full($pbType, $pbInnerTy, $payload),
+            'decode' => static function () use ($pbType, $wire, &$sink) {
+                $out = tree_decode_full($pbType, $wire);
+                $sink += count($out);
+
+                return $out;
+            },
+        ],
+        'pbwire-php-proxy' => [
             'encode' => static fn () => tree_encode($tree),
             'decode' => static fn () => tree_decode($wire),
         ],
@@ -71,7 +85,7 @@ foreach (PB_TIERS as $tier) {
             'encode' => static fn () => shim_encode($payload),
             'decode' => static fn () => shim_decode($wire),
         ],
-        'protobuf-php' => [
+        (extension_loaded('protobuf') ? 'protobuf-php-c' : 'protobuf-php') => [
             'encode' => static fn () => $official->serializeToString(),
             'decode' => static function () use ($officialClass, $wire) {
                 $m = new $officialClass();
@@ -113,3 +127,4 @@ foreach (PB_TIERS as $tier) {
         }
     }
 }
+echo "sink: $sink\n";
