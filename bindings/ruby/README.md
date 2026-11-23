@@ -212,39 +212,35 @@ interleaves the implementations and keeps the best of several runs. It needs
 `protoc`, a C compiler and the gem. Copied from that file, which is the single
 source for all performance numbers; higher is better, MB/s over wire bytes:
 
-| payload | op | pbwire-ruby-tree (MB/s, x gem) | pbwire-ruby-shim (MB/s, x gem) | gem (MB/s) |
-|---|---|---|---|---|
-| 136 B | encode | 903.7 (1.30x) | 181.0 (0.26x) | 696.6 |
-| 136 B | decode | 356.7 (1.46x) | 138.5 (0.57x) | 244.3 |
-| 174 B | encode | 789.7 (0.98x) | 197.2 (0.25x) | 802.8 |
-| 174 B | decode | 457.7 (1.74x) | 153.4 (0.58x) | 262.8 |
-| 2469 B | encode | 1531.2 (1.24x) | 220.7 (0.18x) | 1230.0 |
-| 2469 B | decode | 933.3 (1.88x) | 142.6 (0.29x) | 497.3 |
-| 74913 B | encode | 1804.9 (1.35x) | 253.5 (0.19x) | 1334.9 |
-| 74913 B | decode | 1207.8 (1.75x) | 158.6 (0.23x) | 690.4 |
+| payload | op | pbwire-ruby-shim (MB/s, x gem) | gem (MB/s) |
+|---|---|---|---|
+| 136 B | encode | 186.9 (0.27x ❌) | 696.6 |
+| 136 B | decode | 140.8 (0.58x ❌) | 242.4 |
+| 174 B | encode | 204.8 (0.26x ❌) | 796.3 |
+| 174 B | decode | 159.5 (0.60x ❌) | 265.8 |
+| 2469 B | encode | 224.7 (0.19x ❌) | 1212.6 |
+| 2469 B | decode | 147.0 (0.30x ❌) | 489.8 |
+| 74913 B | encode | 252.7 (0.18x ❌) | 1366.1 |
+| 74913 B | decode | 163.1 (0.23x ❌) | 702.7 |
 
 ```shell
 gem install google-protobuf
 RUBY=$(command -v ruby) make ruby-bench
 ```
 
-The `tree` row is the shipped prebuilt-handle path: encoding writes one pass
-from the C tree straight into the returned String, and decoding is one
-validating scan that records where each wire field lives (materializing on
-`get`). It is above the gem at xlarge on both ops.
+The per-field `tree` build is a `pbench/`-only arm (see [`pbench/README.md`](pbench/README.md) for the arms, gate and verdict); the published row is `shim` below.
 
 The `shim` row is the native-object path from `pbench/`: one C-extension entry
 walks a generated model's instance variables and fills the tree
 (`encode_object`), or materializes the generated model classes in C
-(`decode_object`). It removes the Ruby-side per-field loop (2.5x-3.1x the
-per-field facade) but is below the gem, whose generated object already owns
+(`decode_object`). It removes the Ruby-side per-field loop but is below the gem, whose generated object already owns
 C-backed storage and whose decode stays lazy. See
 [`pbench/README.md`](pbench/README.md) for the arms, gate and verdict.
 
 | arm | mechanism | status |
 |---|---|---|
-| `tree` | prebuilt `Message` builder / wire view | shipped, `pbwire-ruby-tree` |
-| `shim` | one C-extension object walk over the generated model | `pbwire-ruby-shim`, re-runnable candidate |
+| `tree` | prebuilt `Message` builder / wire view | `pbench/`-only arm (see `pbench/README.md`) |
+| `shim` | one C-extension object walk over the generated model | shipped, `pbwire-ruby-shim` (published) |
 | `core` | pure-Ruby port of the C core | `n/a`: `shortcut: no pure-Ruby core, reopen when a native-less Ruby target appears` |
 
 ## Conformance

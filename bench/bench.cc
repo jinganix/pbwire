@@ -277,6 +277,66 @@ fill_pbw(pbw_message *m, int repeated)
     }
 }
 
+/* DynamicMessage filler mirroring fill_gen/fill_pbw field for field: the dyn
+ * encode arm builds fresh per iteration like the other two, so the encode
+ * comparison is the same construct + serialize task on every row. Descriptors
+ * resolve once before main (namespace-scope init is single-threaded); the
+ * per-iteration work is pure reflection sets, no lookup. */
+struct DynFields {
+    const google::protobuf::FieldDescriptor *f[22] = {};
+    const google::protobuf::FieldDescriptor *child_name = nullptr;
+    const google::protobuf::FieldDescriptor *child_value = nullptr;
+    DynFields()
+    {
+        const google::protobuf::Descriptor *d = bench::Msg::descriptor();
+        const google::protobuf::Descriptor *c = bench::Child::descriptor();
+        for (int n = 1; n <= 21; n++)
+            f[n] = d->FindFieldByNumber(n);
+        child_name = c->FindFieldByNumber(1);
+        child_value = c->FindFieldByNumber(2);
+    }
+};
+
+static DynFields g_dyn_fields;
+
+void
+fill_dyn(google::protobuf::Message *m, int repeated)
+{
+    static const uint8_t raw[] = {0x00, 0xff, 0x7f};
+    const google::protobuf::Reflection *r = m->GetReflection();
+    const google::protobuf::FieldDescriptor *const *f = g_dyn_fields.f;
+    std::string blob(reinterpret_cast<const char *>(raw), sizeof(raw));
+    r->SetInt32(m, f[1], -1);
+    r->SetInt64(m, f[2], INT64_MIN);
+    r->SetUInt32(m, f[3], 4294967295u);
+    r->SetUInt64(m, f[4], UINT64_MAX);
+    r->SetInt32(m, f[5], INT32_MIN);
+    r->SetInt64(m, f[6], INT64_MAX);
+    r->SetUInt32(m, f[7], 0xdeadbeefu);
+    r->SetUInt64(m, f[8], 0x0102030405060708ull);
+    r->SetInt32(m, f[9], -2);
+    r->SetInt64(m, f[10], -3);
+    r->SetFloat(m, f[11], 3.5f);
+    r->SetDouble(m, f[12], -2.25);
+    r->SetBool(m, f[13], true);
+    r->SetString(m, f[14], "hello pbwire");
+    r->SetString(m, f[15], blob);
+    r->SetEnumValue(m, f[16], 3); /* BLUE */
+    google::protobuf::Message *child = r->MutableMessage(m, f[17]);
+    const google::protobuf::Reflection *cr = child->GetReflection();
+    cr->SetString(child, g_dyn_fields.child_name, "kid");
+    cr->SetInt64(child, g_dyn_fields.child_value, 42);
+    for (int i = 0; i < repeated; i++) {
+        r->AddInt32(m, f[18], i - 3);
+        r->AddInt32(m, f[19], i * 17);
+        r->AddString(m, f[20], "tag");
+        google::protobuf::Message *kid = r->AddMessage(m, f[21]);
+        const google::protobuf::Reflection *kr = kid->GetReflection();
+        kr->SetString(kid, g_dyn_fields.child_name, "grandkid");
+        kr->SetInt64(kid, g_dyn_fields.child_value, i + 1);
+    }
+}
+
 void
 fill_gen2(bench2::Msg2 *m)
 {
@@ -1347,8 +1407,6 @@ bench_case(const char *label, int repeated, int iterations,
            pbw_descriptor *desc)
 {
     std::string ref = gen_bytes(repeated);
-    bench::Msg gen_msg;
-    fill_gen(&gen_msg, repeated);
 
     /* The tree arm's full task, gated before it is timed: a fresh per-field
      * build must match the reference too (not just a held tree), and the
@@ -1366,6 +1424,24 @@ bench_case(const char *label, int repeated, int iterations,
         }
     }
 
+    /* Same gate for the DynamicMessage arm: a fresh reflection build must
+     * match the reference, since it is timed per iteration too. */
+    {
+        google::protobuf::DynamicMessageFactory gate_factory;
+        const google::protobuf::Message *gate_proto =
+            gate_factory.GetPrototype(bench::Msg::descriptor());
+        google::protobuf::Message *gate_fresh = gate_proto->New();
+        std::string gate_bytes;
+
+        fill_dyn(gate_fresh, repeated);
+        (void)gate_fresh->SerializeToString(&gate_bytes);
+        delete gate_fresh;
+        if (gate_bytes != ref) {
+            fail("fresh-build DynamicMessage bytes differ");
+            return;
+        }
+    }
+
     pbw_message *pbw_msg = pbw_message_new(desc);
     fill_pbw(pbw_msg, repeated);
 
@@ -1373,8 +1449,6 @@ bench_case(const char *label, int repeated, int iterations,
     google::protobuf::DynamicMessageFactory factory;
     const google::protobuf::Descriptor *d = bench::Msg::descriptor();
     const google::protobuf::Message *prototype = factory.GetPrototype(d);
-    google::protobuf::Message *dyn = prototype->New();
-    (void)dyn->ParseFromString(ref);
 
     pbw_ctx *ctx = pbw_ctx_new();
     std::string scratch;
@@ -1382,8 +1456,9 @@ bench_case(const char *label, int repeated, int iterations,
     std::vector<Row> rows;
     int iters = 0;
 
-    /* Tree encode rows build a fresh tree per iteration (the full task:
-     * alloc, fill, encode, free inside the timer). The held-tree re-encode
+    /* Encode rows all build fresh per iteration: construct + serialize with
+     * release inside the timer on every arm, so the comparison is the same
+     * calling method, not build-against-re-encode. The held-tree re-encode
      * below is the proxy row: same-run timing only, never the headline. */
     rows.push_back({"pbwire", "encode", time_it([&] {
                         pbw_message *m = pbw_message_new(desc);
@@ -1399,17 +1474,22 @@ bench_case(const char *label, int repeated, int iterations,
                     ref.size()});
 
     rows.push_back({"pb gen", "encode", time_it([&] {
+                        bench::Msg m;
+                        fill_gen(&m, repeated);
                         scratch.clear();
-                        (void)gen_msg.SerializeToString(&scratch);
+                        (void)m.SerializeToString(&scratch);
                         encoded_len = scratch.size();
                     },
                                                 iterations),
                     ref.size()});
 
     rows.push_back({"pb dyn", "encode", time_it([&] {
+                        google::protobuf::Message *m = prototype->New();
+                        fill_dyn(m, repeated);
                         scratch.clear();
-                        (void)dyn->SerializeToString(&scratch);
+                        (void)m->SerializeToString(&scratch);
                         encoded_len = scratch.size();
+                        delete m;
                     },
                                                 iterations),
                     ref.size()});
@@ -1499,7 +1579,6 @@ bench_case(const char *label, int repeated, int iterations,
     }
     (void)encoded_len;
 
-    delete dyn;
     pbw_message_free(pbw_msg);
     pbw_ctx_free(ctx);
 }
@@ -1963,9 +2042,9 @@ bench_threads(const char *label, int repeated, int iterations, pbw_descriptor *d
     rows.push_back({"pb gen", "decode", 0, 0});
     int iters = 0;
 
-    /* encode: one read-only message per thread is the old prebuilt task; the
-     * tree arm builds its message fresh per iteration instead, so the timer
-     * covers the same build + encode task as the single-threaded row. */
+    /* encode: every arm builds fresh per iteration (construct + serialize
+     * with release inside the timer), so single- and multi-thread rows are
+     * the same calling method as the single-threaded table. */
     {
         auto setup = [&](int) {
             auto ctx = std::shared_ptr<pbw_ctx>(pbw_ctx_new(), pbw_ctx_free);
@@ -1985,14 +2064,14 @@ bench_threads(const char *label, int repeated, int iterations, pbw_descriptor *d
     }
     {
         auto setup = [&](int) {
-            auto msg = std::shared_ptr<bench::Msg>(new bench::Msg());
             std::string scratch;
 
-            fill_gen(msg.get(), repeated);
             scratch.reserve(ref.size() + 16);
-            return [msg, scratch = std::move(scratch)](int) mutable {
+            return [scratch = std::move(scratch), repeated](int) mutable {
+                bench::Msg msg;
+                fill_gen(&msg, repeated);
                 scratch.clear();
-                (void)msg->SerializeToString(&scratch);
+                (void)msg.SerializeToString(&scratch);
             };
         };
         rows[1].single = time_pool(1, iters, iterations, setup);

@@ -144,24 +144,23 @@ allocate per call. Copied from the run on Apple M4 Pro / Swift 6.4.2 /
 swift-protobuf 1.39.0 (per-run noise is a few percent); higher is better,
 MB/s over wire bytes:
 
-| payload | op | pbwire-swift-tree (MB/s, x swift-protobuf) | pbwire-swift-shim (MB/s, x swift-protobuf) | swift-protobuf (MB/s) |
-|---|---|---|---|---|
-| 136 B | encode | 1137.6 (2.6x) | 1021.1 (2.3x) | 437.1 |
-| 136 B | decode | 923.3 (3.7x) | 757.6 (3.1x) | 247.0 |
-| 174 B | encode | 1189.6 (3.7x) | 983.7 (3.0x) | 324.4 |
-| 174 B | decode | 827.8 (4.2x) | 708.5 (3.6x) | 196.0 |
-| 2469 B | encode | 1498.6 (5.6x) | 1037.4 (3.9x) | 268.2 |
-| 2469 B | decode | 682.3 (3.5x) | 511.8 (2.6x) | 197.5 |
-| 74913 B | encode | 1763.7 (6.3x) | 941.2 (3.4x) | 279.6 |
-| 74913 B | decode | 591.1 (2.6x) | 584.6 (2.6x) | 228.4 |
+| payload | op | pbwire-swift-shim (MB/s, x swift-protobuf) | swift-protobuf (MB/s) |
+|---|---|---|---|
+| 136 B | encode | 861.4 (3.39x ✅) | 254.3 |
+| 136 B | decode | 533.6 (2.15x ✅) | 248.6 |
+| 174 B | encode | 698.6 (2.14x ✅) | 326.9 |
+| 174 B | decode | 521.4 (2.58x ✅) | 202.0 |
+| 2469 B | encode | 1047.8 (3.88x ✅) | 270.4 |
+| 2469 B | decode | 528.1 (2.75x ✅) | 192.3 |
+| 74913 B | encode | 923.2 (3.22x ✅) | 286.4 |
+| 74913 B | decode | 568.3 (2.49x ✅) | 227.9 |
 
-`pbwire-swift-tree` times a prebuilt `Message` handle; the wrapper adds one
+`pbwire-swift-shim` is the published entry: it times the generated
+`@frozen` `<Message>Repr` mirror with one call per op into the C layout codec (the per-field `tree` build is a `pbench/`-only arm). The wrapper adds one
 Swift object per call and no copy (`encode` hands the malloc'd buffer the C
 encoder already filled to `Data` with a free deallocator, `decode` wraps the
-decoder's arena in one `Message`). `pbwire-swift-shim` times the generated
-`@frozen` `<Message>Repr` mirror with one call per op into the C layout codec —
-see [`pbench/README.md`](pbench/README.md) for the mechanism, the gate and why
-the prebuilt handle stays the faster row.
+decoder's arena in one `Message`) —
+see [`pbench/README.md`](pbench/README.md) for the mechanism and the gate.
 
 ## The pure-Swift core
 

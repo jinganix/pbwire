@@ -195,38 +195,34 @@ node bindings/node/pbench/compare.js # interleaved arms + baselines, median of 5
 ## Benchmark
 
 `benchmarks/bench.sh` generates `matrix3_pb.js` with `protoc-gen-js`, installs
-`google-protobuf` (the jspb runtime), `protoc-gen-js` and [protobufjs](https://www.npmjs.com/package/protobufjs) (the
+[protobufjs](https://www.npmjs.com/package/protobufjs) (the
 fastest widely used JS runtime) into `benchmarks/node_modules` on first run,
 and prints the four standard tiers from [`BENCHMARKS.md`](../../BENCHMARKS.md)
-for `pbwire-node-tree`, `pbwire-node-shim`, jspb and protobufjs side by side.
-`tree` is the codec with the data already in a `Message`; `shim` is the
+for `pbwire-node-shim` and protobufjs side by side.
+`shim` is the
 native-object task (plain object in, wire out; wire in, plain object out):
 
 ```sh
 ./benchmarks/bench.sh      # or: make node-bench
 ```
 
-| payload | op | pbwire-node-tree (MB/s, x protobufjs) | pbwire-node-shim (MB/s) | protobufjs (MB/s) | jspb (MB/s) |
-|---|---|---|---|---|---|
-| 136 B | encode | 587.3 (2.45x) | 48.1 | 239.8 | 56.4 |
-| 136 B | decode | 368.7 (0.92x) | 59.9 | 400.7 | 121.0 |
-| 174 B | encode | 568.7 (1.95x) | 53.6 | 291.0 | 60.9 |
-| 174 B | decode | 436.7 (1.15x) | 47.7 | 380.4 | 108.8 |
-| 2469 B | encode | 1449.3 (3.45x) | 53.7 | 420.2 | 53.2 |
-| 2469 B | decode | 947.5 (2.51x) | 47.9 | 377.0 | 79.2 |
-| 74913 B | encode | 1689.3 (3.36x) | 58.1 | 502.9 | 56.6 |
-| 74913 B | decode | 1196.1 (2.95x) | 52.3 | 405.1 | 81.1 |
+| payload | op | pbwire-node-shim (MB/s, x protobufjs) | protobufjs (MB/s) |
+|---|---|---|---|
+| 136 B | encode | 52.0 (0.20x ❌) | 255.1 |
+| 136 B | decode | 63.3 (0.15x ❌) | 409.8 |
+| 174 B | encode | 55.7 (0.20x ❌) | 273.1 |
+| 174 B | decode | 47.3 (0.12x ❌) | 407.7 |
+| 2469 B | encode | 54.9 (0.13x ❌) | 429.6 |
+| 2469 B | decode | 49.0 (0.11x ❌) | 435.5 |
+| 74913 B | encode | 60.1 (0.12x ❌) | 515.6 |
+| 74913 B | decode | 54.7 (0.12x ❌) | 437.9 |
 
-The `shim` row is the native object in and out and it loses to both baselines:
+The `shim` row is the native object in and out and it trails protobufjs:
 each field costs one N-API object property read (encode) or write (decode),
-~60-70 ns, where the JS runtimes pay a few ns in their own heap. It does beat
-assembling the message with `set()` per field (1.05x-1.17x in `pbench/`), so it
-is the shipped object converter; the `tree` row stays the headline.
+~60-70 ns, where protobufjs pays a few ns in its own heap. It is the shipped
+object converter; the per-field `tree` arm is compared in `pbench/README.md`, not here.
 
-jspb's throughput does not move with payload size: its writer resolves a
-code/type table per field and hands every repeated element to a closure, where
-the C core writes one tag byte and one inline value, or memcpys an already
-validated slice. Two boundary costs decide the small tiers: N-API's own
+Two boundary costs decide the small tiers: N-API's own
 `Buffer` creation costs ~200 ns, so `encode()` encodes into the type's reusable
 buffer and copies into a JS-allocated (pooled) `Buffer` of the exact size, and
 decode copies the payload once with `Buffer.from` instead of paying for a

@@ -69,19 +69,19 @@ xlarge (the repeated fields scaled x0 / x1 / x100 / x3000). Copied from
 [BENCHMARKS.md](../../BENCHMARKS.md), which is the single source for all
 performance numbers; higher is better, MB/s over wire bytes:
 
-| payload | op | pbwire-dart-tree (MB/s, x protobuf-dart) | pbwire-dart-shim (MB/s, x) | protobuf-dart (MB/s) |
-|---|---|---|---|---|
-| 136 B | encode | 836.4 (4.30x) | 1301.9 (6.70x) | 194.4 |
-| 136 B | decode | 371.2 (1.73x) | 974.8 (4.54x) | 214.7 |
-| 174 B | encode | 899.0 (5.15x) | 1159.4 (6.64x) | 174.5 |
-| 174 B | decode | 396.9 (2.08x) | 897.5 (4.69x) | 191.2 |
-| 2469 B | encode | 1264.9 (12.61x) | 1005.0 (10.02x) | 100.3 |
-| 2469 B | decode | 636.3 (4.36x) | 607.8 (4.17x) | 145.8 |
-| 74913 B | encode | 1506.3 (15.55x) | 1073.6 (11.08x) | 96.9 |
-| 74913 B | decode | 674.0 (4.25x) | 727.1 (4.59x) | 158.5 |
+| payload | op | pbwire-dart-shim (MB/s, x protobuf-dart) | protobuf-dart (MB/s) |
+|---|---|---|---|
+| 136 B | encode | 1394.5 (6.59x ✅) | 211.7 |
+| 136 B | decode | 1042.0 (5.08x ✅) | 205.0 |
+| 174 B | encode | 1270.6 (7.33x ✅) | 173.3 |
+| 174 B | decode | 908.9 (5.46x ✅) | 166.6 |
+| 2469 B | encode | 1021.4 (8.32x ✅) | 122.7 |
+| 2469 B | decode | 669.5 (4.78x ✅) | 140.2 |
+| 74913 B | encode | 1125.1 (11.03x ✅) | 102.0 |
+| 74913 B | decode | 725.1 (4.64x ✅) | 156.2 |
 
-`pbwire-dart-tree` is the shipped handle path; `pbwire-dart-shim` is the
-native-object arm. The three pbench arms:
+`pbwire-dart-shim` is the published native-object entry; the per-field `tree`
+build lives in `pbench/`. The three pbench arms:
 
 | arm | mechanism | what it answers |
 |---|---|---|
@@ -89,10 +89,8 @@ native-object arm. The three pbench arms:
 | `shim` | the generated `<Message>Layout` (`dart:ffi` `Struct`) is the native object; `PbwireLayout.encode` / `decodeInto` make one FFI call and `native/pbw_dart_shim.c` walks that memory in place through `pbw_struct_codec_*` | is a boundary worth paying for at all |
 | `core` | the pure-Dart core (`lib/core/`, no `dart:ffi`, no `dart:io`): one entry per field on a `Msg` tree, `encode()`; `decode()` then one `get` per field | what the wire costs with no boundary at all, and the only arm that runs on dart2js/dart2wasm |
 
-All three published rows beat the official runtime on encode; the shim is the
-row a caller with its own native image pays, and `core` is the row for targets
-without a C library (it is 0.34x / 0.33x the baseline at 136 B and 4.82x /
-1.32x at 74 KB). The gate, the provisional table and the verdict are in
+The `shim` row is the one a caller with its own native image pays, and `core` is the row for targets
+without a C library. The gate, the provisional table and the verdict are in
 [`pbench/README.md`](pbench/README.md).
 
 ## Conformance
