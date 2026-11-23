@@ -15,6 +15,9 @@ Gem::Specification.new do |s|
   s.homepage = "https://github.com/jinganix/pbwire"
   s.license = "Apache-2.0"
   s.required_ruby_version = ">= 3.0"
+  # Generated models decode their embedded descriptor with Base64, which is
+  # a bundled gem (not a default one) since Ruby 3.4.
+  s.add_runtime_dependency "base64"
   # Only gem-relative paths: `gem install` rejects parent references, so the
   # core travels as ext/pbwire_ext/core_*.c + the two headers it includes
   # (symlinks into the repo, packaged as real files).
