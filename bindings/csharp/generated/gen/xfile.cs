@@ -145,6 +145,7 @@ namespace Xfile {
             Many.Clear();
             var nMany = (int)(*(nuint*)(img + 24));
             if (nMany != 0) {
+                if (Many.Capacity < nMany) Many.Capacity = nMany;
                 var p = *(byte**)(img + 8);
                 for (var i = 0; i < nMany; i++) { var c = new Xdep.DepMsg(); c.ReadImage(p + i * Xdep.DepMsg.ImageBytes); Many.Add(c); }
             }
@@ -185,7 +186,9 @@ namespace Xfile {
             /// <summary>One call per op: wire bytes in, native object out. The block carries the decoded image's strings, bytes and sub-images.</summary>
             public static unsafe UsesDep Unmarshal(byte[] wire)
             {
-                using var call = global::Pbwire.ImageCall.Rent(ImageBytes, wire.Length * 4 + 65536);
+                // Decode arena: every sub-message image now carries presence words (1.5x worst-case growth),
+                // so the wire-proportional headroom tracks that factor; status 2 names this formula.
+                using var call = global::Pbwire.ImageCall.Rent(ImageBytes, wire.Length * 6 + 65536);
                 Plan.Decode(wire, call.Image, call.DecodeArena, call.DecodeArenaBytes);
                 var native = new UsesDep();
                 native.ReadImage(call.Image);

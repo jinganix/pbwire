@@ -147,7 +147,9 @@ namespace Spectest {
             /// <summary>One call per op: wire bytes in, native object out. The block carries the decoded image's strings, bytes and sub-images.</summary>
             public static unsafe MapValue Unmarshal(byte[] wire)
             {
-                using var call = global::Pbwire.ImageCall.Rent(ImageBytes, wire.Length * 4 + 65536);
+                // Decode arena: every sub-message image now carries presence words (1.5x worst-case growth),
+                // so the wire-proportional headroom tracks that factor; status 2 names this formula.
+                using var call = global::Pbwire.ImageCall.Rent(ImageBytes, wire.Length * 6 + 65536);
                 Plan.Decode(wire, call.Image, call.DecodeArena, call.DecodeArenaBytes);
                 var native = new MapValue();
                 native.ReadImage(call.Image);
@@ -308,18 +310,21 @@ namespace Spectest {
             ByInt.Clear();
             var nByInt = (int)(*(nuint*)(img + 24));
             if (nByInt != 0) {
+                if (ByInt.Capacity < nByInt) ByInt.Capacity = nByInt;
                 var p = *(byte**)(img + 0);
                 for (var i = 0; i < nByInt; i++) { var c = new Types.ByIntEntry(); c.ReadImage(p + i * Types.ByIntEntry.ImageBytes); ByInt.Add(c); }
             }
             ByStr.Clear();
             var nByStr = (int)(*(nuint*)(img + 32));
             if (nByStr != 0) {
+                if (ByStr.Capacity < nByStr) ByStr.Capacity = nByStr;
                 var p = *(byte**)(img + 8);
                 for (var i = 0; i < nByStr; i++) { var c = new Types.ByStrEntry(); c.ReadImage(p + i * Types.ByStrEntry.ImageBytes); ByStr.Add(c); }
             }
             ByMsg.Clear();
             var nByMsg = (int)(*(nuint*)(img + 40));
             if (nByMsg != 0) {
+                if (ByMsg.Capacity < nByMsg) ByMsg.Capacity = nByMsg;
                 var p = *(byte**)(img + 16);
                 for (var i = 0; i < nByMsg; i++) { var c = new Types.ByMsgEntry(); c.ReadImage(p + i * Types.ByMsgEntry.ImageBytes); ByMsg.Add(c); }
             }
@@ -356,7 +361,9 @@ namespace Spectest {
             /// <summary>One call per op: wire bytes in, native object out. The block carries the decoded image's strings, bytes and sub-images.</summary>
             public static unsafe MapTest Unmarshal(byte[] wire)
             {
-                using var call = global::Pbwire.ImageCall.Rent(ImageBytes, wire.Length * 4 + 65536);
+                // Decode arena: every sub-message image now carries presence words (1.5x worst-case growth),
+                // so the wire-proportional headroom tracks that factor; status 2 names this formula.
+                using var call = global::Pbwire.ImageCall.Rent(ImageBytes, wire.Length * 6 + 65536);
                 Plan.Decode(wire, call.Image, call.DecodeArena, call.DecodeArenaBytes);
                 var native = new MapTest();
                 native.ReadImage(call.Image);
@@ -494,7 +501,9 @@ namespace Spectest {
                     /// <summary>One call per op: wire bytes in, native object out. The block carries the decoded image's strings, bytes and sub-images.</summary>
                     public static unsafe ByIntEntry Unmarshal(byte[] wire)
                     {
-                        using var call = global::Pbwire.ImageCall.Rent(ImageBytes, wire.Length * 4 + 65536);
+                        // Decode arena: every sub-message image now carries presence words (1.5x worst-case growth),
+                        // so the wire-proportional headroom tracks that factor; status 2 names this formula.
+                        using var call = global::Pbwire.ImageCall.Rent(ImageBytes, wire.Length * 6 + 65536);
                         Plan.Decode(wire, call.Image, call.DecodeArena, call.DecodeArenaBytes);
                         var native = new ByIntEntry();
                         native.ReadImage(call.Image);
@@ -632,7 +641,9 @@ namespace Spectest {
                     /// <summary>One call per op: wire bytes in, native object out. The block carries the decoded image's strings, bytes and sub-images.</summary>
                     public static unsafe ByStrEntry Unmarshal(byte[] wire)
                     {
-                        using var call = global::Pbwire.ImageCall.Rent(ImageBytes, wire.Length * 4 + 65536);
+                        // Decode arena: every sub-message image now carries presence words (1.5x worst-case growth),
+                        // so the wire-proportional headroom tracks that factor; status 2 names this formula.
+                        using var call = global::Pbwire.ImageCall.Rent(ImageBytes, wire.Length * 6 + 65536);
                         Plan.Decode(wire, call.Image, call.DecodeArena, call.DecodeArenaBytes);
                         var native = new ByStrEntry();
                         native.ReadImage(call.Image);
@@ -773,7 +784,9 @@ namespace Spectest {
                     /// <summary>One call per op: wire bytes in, native object out. The block carries the decoded image's strings, bytes and sub-images.</summary>
                     public static unsafe ByMsgEntry Unmarshal(byte[] wire)
                     {
-                        using var call = global::Pbwire.ImageCall.Rent(ImageBytes, wire.Length * 4 + 65536);
+                        // Decode arena: every sub-message image now carries presence words (1.5x worst-case growth),
+                        // so the wire-proportional headroom tracks that factor; status 2 names this formula.
+                        using var call = global::Pbwire.ImageCall.Rent(ImageBytes, wire.Length * 6 + 65536);
                         Plan.Decode(wire, call.Image, call.DecodeArena, call.DecodeArenaBytes);
                         var native = new ByMsgEntry();
                         native.ReadImage(call.Image);

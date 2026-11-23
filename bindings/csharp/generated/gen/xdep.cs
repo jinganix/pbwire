@@ -147,7 +147,9 @@ namespace Xdep {
             /// <summary>One call per op: wire bytes in, native object out. The block carries the decoded image's strings, bytes and sub-images.</summary>
             public static unsafe DepMsg Unmarshal(byte[] wire)
             {
-                using var call = global::Pbwire.ImageCall.Rent(ImageBytes, wire.Length * 4 + 65536);
+                // Decode arena: every sub-message image now carries presence words (1.5x worst-case growth),
+                // so the wire-proportional headroom tracks that factor; status 2 names this formula.
+                using var call = global::Pbwire.ImageCall.Rent(ImageBytes, wire.Length * 6 + 65536);
                 Plan.Decode(wire, call.Image, call.DecodeArena, call.DecodeArenaBytes);
                 var native = new DepMsg();
                 native.ReadImage(call.Image);
