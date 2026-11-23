@@ -83,18 +83,19 @@ large / xlarge (the repeated fields scaled x0 / x1 / x100 / x3000). Copied from
 [BENCHMARKS.md](../../BENCHMARKS.md), which is the single source for all
 performance numbers; higher is better, MB/s over wire bytes:
 
-| payload | op | pbwire-php-tree (MB/s, x protobuf-php-c) | pbwire-php-shim (MB/s, x) | protobuf-php-c (MB/s) |
-|---|---|---|---|---|
-| 136 B | encode | 1519.8 (1.71x) | 186.5 (0.21x) | 886.2 |
-| 136 B | decode | 787.3 (1.84x) | 168.0 (0.39x) | 428.7 |
-| 174 B | encode | 1518.2 (1.55x) | 201.2 (0.20x) | 982.0 |
-| 174 B | decode | 753.5 (1.75x) | 178.0 (0.41x) | 431.1 |
-| 2469 B | encode | 1787.7 (1.34x) | 196.0 (0.15x) | 1332.4 |
-| 2469 B | decode | 680.5 (1.29x) | 189.4 (0.36x) | 525.7 |
-| 74913 B | encode | 1639.1 (1.23x) | 214.6 (0.16x) | 1332.0 |
-| 74913 B | decode | 750.8 (1.29x) | 206.9 (0.36x) | 580.5 |
+| payload | op | pbwire-php-shim (MB/s, x) | protobuf-php-c (MB/s) |
+|---|---|---|---|
+| 136 B | encode | 186.0 (0.22x ❌) | 852.0 |
+| 136 B | decode | 168.2 (0.40x ❌) | 420.9 |
+| 174 B | encode | 198.8 (0.21x ❌) | 969.1 |
+| 174 B | decode | 175.5 (0.42x ❌) | 420.4 |
+| 2469 B | encode | 199.6 (0.15x ❌) | 1329.3 |
+| 2469 B | decode | 194.6 (0.37x ❌) | 524.8 |
+| 74913 B | encode | 216.0 (0.16x ❌) | 1330.3 |
+| 74913 B | decode | 211.3 (0.37x ❌) | 565.1 |
 
-The tree handle is the shipped path and wins every tier. The native array
+`pbwire-php-shim` is the published native-object entry; the per-field `tree`
+build is a `pbench/`-only arm (see `pbench/README.md`). The native array
 entry is below the official C extension because each field costs a hashtable
 lookup plus a C tree store, and decode materializes the array eagerly.
 `bench.sh` also times the `ext-ffi` deployment separately: the same
@@ -103,9 +104,7 @@ field, which is interpreter-scale (~5 MB/s) and published as
 `pbwire-php-shim-ffi` so the no-compiler cost is not quoted as the C extension.
 
 Without the C extension the same harness measures the pure-PHP runtime
-instead (single `php -n`-style run): xlarge `pbwire-php-tree` 1552.5 MB/s vs
-3.7 (encode) and 748.9 vs 5.4 (decode). The ~140-420x gap is the interpreter,
-not the codec.
+instead; see [BENCHMARKS.md](../../BENCHMARKS.md#php-vs-the-official-php-runtime-pure--c-extension) for the `shim-ffi` vs pure-PHP rows.
 
 `pbench/` is the re-runnable arm comparison; `pbench/README.md` has the
 provisional table, the deferred-core TODO and the verdict.

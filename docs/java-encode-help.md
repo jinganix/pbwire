@@ -1,11 +1,11 @@
 # Help wanted: Java 136 B encode
 
 The pure-Java codec (`bindings/java/runtime`, shared by the Kotlin, Scala
-and Clojure bindings) beats `protobuf-java` on every tier except one:
-**136 B encode sits at ~0.7x** (see the
+and Clojure bindings) trails `protobuf-java` on every encode tier
+(0.26x-0.44x), worst at the smallest: **136 B encode sits at ~0.26x** (see the
 [Java section](../BENCHMARKS.md#java-vs-protobuf-java) and the
 [at-a-glance table](../BENCHMARKS.md#at-a-glance-every-binding-one-tier)
-in BENCHMARKS.md; the A/B probe measured ~75 ns vs ~58 ns per encode).
+in BENCHMARKS.md; the A/B probe measured ~224 ns vs ~59 ns per encode).
 Tuning so far has hit what looks like a structural floor. I am a solo
 developer. Ten years ago I worked at a mobile game company, and to speed up
 the gateway I wrote `enif_protobuf`: a fast C core for Erlang (which has no
@@ -13,6 +13,12 @@ official protobuf runtime) that raised throughput several times over pure
 Erlang code. With AI help I later ported that same dynamic design to 23 host
 bindings, all measured against their official counterparts in BENCHMARKS.md.
 If you know HotSpot and the Java memory model well, I would welcome your help.
+
+> Note (2026-11-23 results slim): the published Java headline is now the
+generated model (`core`, 0.72x/0.79x at xlarge) — the same-task comparison.
+This page still tracks the per-field `tree` encoder below, now a `pbench`-only
+arm (see `bindings/java/pbench/README.md`); the numbers are unchanged, only
+the headline moved.
 
 ## Why I insist on dynamic (not generated)
 
@@ -33,7 +39,7 @@ no per-message generated `writeTo`, no `protoc` codegen step, and no JNI.
 A fix that turns this binding into generated straight-line writers, or that
 moves encoding into native code, will not be accepted -- that is my product
 decision, not an oversight. The question is what a dynamic encoder can
-still do within that shape. A well-evidenced "0.7x is the floor, here is
+still do within that shape. A well-evidenced "0.26x is the floor, here is
 the proof" is also a welcome answer: it closes the issue instead of
 leaving it open.
 
@@ -53,8 +59,11 @@ unrolled 64-bit varint writer reached 437 bytes and the call site reported
 "hot method too big", which evaporated the win. Anything unrolled has to be
 checked with `-XX:+PrintInlining`, not reasoned about. The
 [xlarge row](../BENCHMARKS.md#java-vs-protobuf-java) shows the other side of
-the same codec: encode 1.13x / decode 1.95x once the payload dominates the
-per-field dispatch, so this call is only about the 136 B cell.
+the same codec: decode 0.81x while encode trails at 0.29x even when the payload
+dominates, so the per-field dispatch taxes every tier and this call is sharpest
+at the 136 B cell. (Before the Go-parity re-time the `tree` arm held a prebuilt
+handle and the same page read ~0.7x / 1.13x encode; the arm now times the full
+native-in/native-out task, so the crossing cost is visible.)
 
 ## What has been tried (all neutral or worse)
 

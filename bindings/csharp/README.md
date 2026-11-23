@@ -54,31 +54,28 @@ dotnet run --project examples -- ../c/tests/data/matrix3.desc   # example
 ## Benchmarks
 
 ```shell
-./benchmarks/bench.sh    # vs Google.Protobuf C# + protobuf-net, four tiers
+./benchmarks/bench.sh    # vs Google.Protobuf C#, four tiers
 ```
 
-Needs `protoc` and NuGet access (`dotnet restore` fetches `Google.Protobuf`
-and `protobuf-net`).
+Needs `protoc` and NuGet access (`dotnet restore` fetches `Google.Protobuf`).
 The four tiers are small / medium / large / xlarge (the repeated fields scaled
 x0 / x1 / x100 / x3000). Copied from [BENCHMARKS.md](../../BENCHMARKS.md),
 which is the single source for all performance numbers; higher is better, MB/s
-over wire bytes. `pbwire-csharp-tree` is the prebuilt `Pbwire.Message` handle;
-`pbwire-csharp-shim` is the generated model's native-object entry, one call per
+over wire bytes. `pbwire-csharp-shim` is the published native-object entry, one call per
 op (see `pbench/README.md` for the recorded deviation: the C core has no
-offset reader, so every field still crosses once). protobuf-net's medium rows
-are absent: it singular-encodes single-element packed fields, so there is
-nothing byte-identical to time:
+offset reader, so every field still crosses once); the per-field `tree` build is a
+`pbench/`-only arm (see `pbench/README.md`):
 
-| payload | op | pbwire-csharp-tree (MB/s, x protobuf-csharp) | pbwire-csharp-shim (MB/s, x) | protobuf-csharp (MB/s) | protobuf-net (MB/s) |
-|---|---|---|---|---|
-| 136 B | encode | 1538.9 (3.32x) | 146.4 (0.32x) | 463.6 | 567.4 |
-| 136 B | decode | 870.4 (1.80x) | 174.6 (0.36x) | 482.7 | 491.1 |
-| 174 B | encode | 1478.9 (3.63x) | 121.2 (0.30x) | 407.5 | — |
-| 174 B | decode | 789.0 (2.05x) | 126.8 (0.33x) | 384.8 | — |
-| 2469 B | encode | 1191.3 (2.09x) | 56.0 (0.10x) | 569.7 | 392.3 |
-| 2469 B | decode | 670.6 (1.43x) | 46.8 (0.10x) | 469.7 | 296.0 |
-| 74913 B | encode | 1689.7 (3.46x) | 59.1 (0.12x) | 488.7 | 381.9 |
-| 74913 B | decode | 750.7 (1.48x) | 51.5 (0.10x) | 506.9 | 328.0 |
+| payload | op | pbwire-csharp-shim (MB/s, x protobuf-csharp) | protobuf-csharp (MB/s) |
+|---|---|---|---|
+| 136 B | encode | 1152.8 (2.46x ✅) | 468.6 |
+| 136 B | decode | 751.8 (1.56x ✅) | 480.7 |
+| 174 B | encode | 972.2 (2.35x ✅) | 413.1 |
+| 174 B | decode | 614.0 (1.56x ✅) | 393.8 |
+| 2469 B | encode | 623.0 (1.13x ✅) | 549.9 |
+| 2469 B | decode | 356.3 (0.75x ❌) | 472.0 |
+| 74913 B | encode | 657.6 (1.42x ✅) | 461.9 |
+| 74913 B | decode | 370.3 (0.73x ❌) | 506.3 |
 
 Strings cross as NUL-terminated C strings, so `Set(field, string)` stops at the
 first NUL byte: use the `ReadOnlySpan<byte>` overload for binary payloads (a

@@ -62,40 +62,40 @@ cargo run --no-default-features --features core --bin pbwire-conformance -- ../.
 ```
 
 It is the pbench `core` arm, published as the no-native mode
-(`pbench/README.md`): the shipped handle (the static link) stays 1.66-1.88x its
-encode and 2.50-3.14x its decode, and prost is 1.4-1.5x its encode.
+(`pbench/README.md`); the published comparison is the `shim` row in
+[BENCHMARKS.md](../../BENCHMARKS.md#rust-vs-prost).
 
 ## Benchmarks
 
 ```shell
-./benchmarks/bench.sh    # vs rust-protobuf 3.x generated code + prost, four tiers
+./benchmarks/bench.sh    # vs prost generated code, four tiers
 ```
 
-Needs `cargo install protobuf-codegen` (it provides `protoc-gen-rs` and the
-runtime the generated code uses); the prost baseline generates at build time
+The prost baseline generates at build time
 from crates.io. The four tiers are small / medium / large /
 xlarge (the repeated fields scaled x0 / x1 / x100 / x3000). Copied from
 [BENCHMARKS.md](../../BENCHMARKS.md), which is the single source for all
 performance numbers; higher is better, MB/s over wire bytes:
 
-| payload | op | pbwire-rust-tree (MB/s, x prost) | pbwire-rust-shim (MB/s, x prost) | prost (MB/s) | protobuf-rust (MB/s) |
-|---|---|---|---|---|---|
-| 136 B | encode | 1845.2 (1.20x) | 1703.2 (1.10x) | 1541.8 | 1248.5 |
-| 136 B | decode | 1030.9 (1.24x) | 1147.6 (1.38x) | 833.0 | 722.5 |
-| 174 B | encode | 1726.3 (1.11x) | 1566.9 (1.01x) | 1548.5 | 1336.8 |
-| 174 B | decode | 879.6 (1.41x) | 1020.5 (1.64x) | 623.3 | 567.6 |
-| 2469 B | encode | 1655.0 (1.23x) | 1072.3 (0.80x) | 1340.9 | 822.6 |
-| 2469 B | decode | 651.6 (1.91x) | 640.4 (1.88x) | 340.4 | 344.3 |
-| 74913 B | encode | 1600.9 (1.17x) | 1145.0 (0.84x) | 1370.9 | 845.1 |
-| 74913 B | decode | 716.2 (1.88x) | 722.7 (1.90x) | 380.4 | 381.6 |
+| payload | op | pbwire-rust-shim (MB/s, x prost) | prost (MB/s) |
+|---|---|---|---|
+| 136 B | encode | 1841.7 (1.40x ✅) | 1317.4 |
+| 136 B | decode | 1226.9 (1.35x ✅) | 911.1 |
+| 174 B | encode | 1693.8 (1.35x ✅) | 1255.5 |
+| 174 B | decode | 1098.5 (1.60x ✅) | 687.7 |
+| 2469 B | encode | 1108.6 (0.92x ❌) | 1204.2 |
+| 2469 B | decode | 643.3 (1.87x ✅) | 344.0 |
+| 74913 B | encode | 1190.7 (0.92x ❌) | 1290.1 |
+| 74913 B | decode | 766.0 (1.90x ✅) | 403.9 |
 
 `set_str` rejects a string containing a NUL byte (it would truncate on the way
 to C); use `set_bytes` for binary payloads, including on a `string` field.
 
 ### The native-object arm
 
-`pbwire-rust-tree` times a prebuilt `Message`; `pbwire-rust-shim` times the
-generated `#[repr(C)]` mirror with one call per op:
+`pbwire-rust-shim` is the published entry: it times the
+generated `#[repr(C)]` mirror with one call per op (the per-field `tree` build
+lives in `pbench/`, see [`pbench/README.md`](pbench/README.md)):
 
 ```rust
 let mut plan = schema.in_place::<Scalars3Flat>()?;   // compiles the rows once
