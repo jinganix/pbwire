@@ -79,8 +79,11 @@ rm -rf "$out"
 mkdir -p "$out"
 javac -nowarn -d "$out" "$root"/bindings/java/runtime/*.java
 CP="$out:$scalapb_jar:$lenses_jar:$proto_jar:$scala3_jar:$scala_lib_jar"
+# tests/gen/matrix3{,_meta}.scala is the committed generated model (core arm).
 scalac -nowarn -cp "$CP" -d "$out" \
     "$root"/bindings/scala/runtime/*.scala "$here"/Bench.scala \
+    "$root"/bindings/scala/tests/gen/matrix3.scala \
+    "$root"/bindings/scala/tests/gen/matrix3_meta.scala \
     $(find "$gen" -name '*.scala')
 
 exec java -cp "$CP" Bench "$gen/matrix3.desc"

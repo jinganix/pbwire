@@ -56,6 +56,45 @@ impl MapValue {
     }
 }
 
+/// spectest.MapValue as a flat native image: `Schema::in_place` hands this memory
+/// to the C struct codec, so one call reads or writes it in place.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct MapValueFlat {
+    pub name: *mut ::core::ffi::c_char,
+    pub value: i32,
+}
+
+impl MapValueFlat {
+    /// Field plan rows: name, slot offset, kind, flags, has/count/oneof
+    /// offsets, child image. Offsets are asserted below.
+    pub const FIELDS: &'static [pbwire::FieldPlan] = {
+        use pbwire::Kind;
+        &[
+            pbwire::FieldPlan("name", 0, Kind::String, 0, 0, 0, 0, None),
+            pbwire::FieldPlan("value", 8, Kind::I32, 0, 0, 0, 0, None),
+        ]
+    };
+}
+
+const _: () = assert!(::core::mem::offset_of!(MapValueFlat, name) == 0);
+const _: () = assert!(::core::mem::offset_of!(MapValueFlat, value) == 8);
+
+impl ::core::default::Default for MapValueFlat {
+    fn default() -> Self {
+        // SAFETY: every slot is an integer, a raw pointer, or `PbwBytes`,
+        // so an all-zero image is a valid (empty) message.
+        unsafe { ::core::mem::zeroed() }
+    }
+}
+
+unsafe impl pbwire::FlatMessage for MapValueFlat {
+    const FULL_NAME: &'static str = "spectest.MapValue";
+    fn fields() -> &'static [pbwire::FieldPlan] {
+        MapValueFlat::FIELDS
+    }
+}
+
 /// spectest.MapTest
 #[derive(Clone, PartialEq, Debug, Default)]
 pub struct MapTest {
@@ -132,6 +171,54 @@ impl MapTest {
     }
 }
 
+/// spectest.MapTest as a flat native image: `Schema::in_place` hands this memory
+/// to the C struct codec, so one call reads or writes it in place.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct MapTestFlat {
+    pub by_int: *mut map_test::ByIntEntryFlat,
+    pub by_int_count: usize,
+    pub by_str: *mut map_test::ByStrEntryFlat,
+    pub by_str_count: usize,
+    pub by_msg: *mut map_test::ByMsgEntryFlat,
+    pub by_msg_count: usize,
+}
+
+impl MapTestFlat {
+    /// Field plan rows: name, slot offset, kind, flags, has/count/oneof
+    /// offsets, child image. Offsets are asserted below.
+    pub const FIELDS: &'static [pbwire::FieldPlan] = {
+        use pbwire::Kind;
+        &[
+            pbwire::FieldPlan("by_int", 0, Kind::Message, pbwire::REPEATED, 0, 8, 0, Some(pbwire::ChildPlan { full_name: "spectest.MapTest.ByIntEntry", fields: map_test::ByIntEntryFlat::FIELDS, size: ::core::mem::size_of::<map_test::ByIntEntryFlat>() })),
+            pbwire::FieldPlan("by_str", 16, Kind::Message, pbwire::REPEATED, 0, 24, 0, Some(pbwire::ChildPlan { full_name: "spectest.MapTest.ByStrEntry", fields: map_test::ByStrEntryFlat::FIELDS, size: ::core::mem::size_of::<map_test::ByStrEntryFlat>() })),
+            pbwire::FieldPlan("by_msg", 32, Kind::Message, pbwire::REPEATED, 0, 40, 0, Some(pbwire::ChildPlan { full_name: "spectest.MapTest.ByMsgEntry", fields: map_test::ByMsgEntryFlat::FIELDS, size: ::core::mem::size_of::<map_test::ByMsgEntryFlat>() })),
+        ]
+    };
+}
+
+const _: () = assert!(::core::mem::offset_of!(MapTestFlat, by_int) == 0);
+const _: () = assert!(::core::mem::offset_of!(MapTestFlat, by_int_count) == 8);
+const _: () = assert!(::core::mem::offset_of!(MapTestFlat, by_str) == 16);
+const _: () = assert!(::core::mem::offset_of!(MapTestFlat, by_str_count) == 24);
+const _: () = assert!(::core::mem::offset_of!(MapTestFlat, by_msg) == 32);
+const _: () = assert!(::core::mem::offset_of!(MapTestFlat, by_msg_count) == 40);
+
+impl ::core::default::Default for MapTestFlat {
+    fn default() -> Self {
+        // SAFETY: every slot is an integer, a raw pointer, or `PbwBytes`,
+        // so an all-zero image is a valid (empty) message.
+        unsafe { ::core::mem::zeroed() }
+    }
+}
+
+unsafe impl pbwire::FlatMessage for MapTestFlat {
+    const FULL_NAME: &'static str = "spectest.MapTest";
+    fn fields() -> &'static [pbwire::FieldPlan] {
+        MapTestFlat::FIELDS
+    }
+}
+
 /// Nested message and enum types in `MapTest`.
 pub mod map_test {
     #[allow(unused_imports)]
@@ -184,6 +271,45 @@ pub mod map_test {
         }
     }
 
+    /// spectest.MapTest.ByIntEntry as a flat native image: `Schema::in_place` hands this memory
+    /// to the C struct codec, so one call reads or writes it in place.
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    pub struct ByIntEntryFlat {
+        pub key: i32,
+        pub value: *mut ::core::ffi::c_char,
+    }
+
+    impl ByIntEntryFlat {
+        /// Field plan rows: name, slot offset, kind, flags, has/count/oneof
+        /// offsets, child image. Offsets are asserted below.
+        pub const FIELDS: &'static [pbwire::FieldPlan] = {
+            use pbwire::Kind;
+            &[
+                pbwire::FieldPlan("key", 0, Kind::I32, 0, 0, 0, 0, None),
+                pbwire::FieldPlan("value", 8, Kind::String, 0, 0, 0, 0, None),
+            ]
+        };
+    }
+
+    const _: () = assert!(::core::mem::offset_of!(ByIntEntryFlat, key) == 0);
+    const _: () = assert!(::core::mem::offset_of!(ByIntEntryFlat, value) == 8);
+
+    impl ::core::default::Default for ByIntEntryFlat {
+        fn default() -> Self {
+            // SAFETY: every slot is an integer, a raw pointer, or `PbwBytes`,
+            // so an all-zero image is a valid (empty) message.
+            unsafe { ::core::mem::zeroed() }
+        }
+    }
+
+    unsafe impl pbwire::FlatMessage for ByIntEntryFlat {
+        const FULL_NAME: &'static str = "spectest.MapTest.ByIntEntry";
+        fn fields() -> &'static [pbwire::FieldPlan] {
+            ByIntEntryFlat::FIELDS
+        }
+    }
+
     /// spectest.MapTest.ByStrEntry
     #[derive(Clone, PartialEq, Eq, Hash, Debug, Default)]
     pub struct ByStrEntry {
@@ -228,6 +354,45 @@ pub mod map_test {
             o.key = msg.get_str(t.field("key")?).unwrap_or("").to_string();
             o.value = msg.get_i64(t.field("value")?) as i32;
             Ok(o)
+        }
+    }
+
+    /// spectest.MapTest.ByStrEntry as a flat native image: `Schema::in_place` hands this memory
+    /// to the C struct codec, so one call reads or writes it in place.
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    pub struct ByStrEntryFlat {
+        pub key: *mut ::core::ffi::c_char,
+        pub value: i32,
+    }
+
+    impl ByStrEntryFlat {
+        /// Field plan rows: name, slot offset, kind, flags, has/count/oneof
+        /// offsets, child image. Offsets are asserted below.
+        pub const FIELDS: &'static [pbwire::FieldPlan] = {
+            use pbwire::Kind;
+            &[
+                pbwire::FieldPlan("key", 0, Kind::String, 0, 0, 0, 0, None),
+                pbwire::FieldPlan("value", 8, Kind::I32, 0, 0, 0, 0, None),
+            ]
+        };
+    }
+
+    const _: () = assert!(::core::mem::offset_of!(ByStrEntryFlat, key) == 0);
+    const _: () = assert!(::core::mem::offset_of!(ByStrEntryFlat, value) == 8);
+
+    impl ::core::default::Default for ByStrEntryFlat {
+        fn default() -> Self {
+            // SAFETY: every slot is an integer, a raw pointer, or `PbwBytes`,
+            // so an all-zero image is a valid (empty) message.
+            unsafe { ::core::mem::zeroed() }
+        }
+    }
+
+    unsafe impl pbwire::FlatMessage for ByStrEntryFlat {
+        const FULL_NAME: &'static str = "spectest.MapTest.ByStrEntry";
+        fn fields() -> &'static [pbwire::FieldPlan] {
+            ByStrEntryFlat::FIELDS
         }
     }
 
@@ -277,6 +442,45 @@ pub mod map_test {
                 o.value = Some(super::MapValue::from_message(schema, &m)?);
             }
             Ok(o)
+        }
+    }
+
+    /// spectest.MapTest.ByMsgEntry as a flat native image: `Schema::in_place` hands this memory
+    /// to the C struct codec, so one call reads or writes it in place.
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    pub struct ByMsgEntryFlat {
+        pub key: *mut ::core::ffi::c_char,
+        pub value: *mut super::MapValueFlat,
+    }
+
+    impl ByMsgEntryFlat {
+        /// Field plan rows: name, slot offset, kind, flags, has/count/oneof
+        /// offsets, child image. Offsets are asserted below.
+        pub const FIELDS: &'static [pbwire::FieldPlan] = {
+            use pbwire::Kind;
+            &[
+                pbwire::FieldPlan("key", 0, Kind::String, 0, 0, 0, 0, None),
+                pbwire::FieldPlan("value", 8, Kind::Message, 0, 0, 0, 0, Some(pbwire::ChildPlan { full_name: "spectest.MapValue", fields: super::MapValueFlat::FIELDS, size: ::core::mem::size_of::<super::MapValueFlat>() })),
+            ]
+        };
+    }
+
+    const _: () = assert!(::core::mem::offset_of!(ByMsgEntryFlat, key) == 0);
+    const _: () = assert!(::core::mem::offset_of!(ByMsgEntryFlat, value) == 8);
+
+    impl ::core::default::Default for ByMsgEntryFlat {
+        fn default() -> Self {
+            // SAFETY: every slot is an integer, a raw pointer, or `PbwBytes`,
+            // so an all-zero image is a valid (empty) message.
+            unsafe { ::core::mem::zeroed() }
+        }
+    }
+
+    unsafe impl pbwire::FlatMessage for ByMsgEntryFlat {
+        const FULL_NAME: &'static str = "spectest.MapTest.ByMsgEntry";
+        fn fields() -> &'static [pbwire::FieldPlan] {
+            ByMsgEntryFlat::FIELDS
         }
     }
 

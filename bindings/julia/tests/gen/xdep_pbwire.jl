@@ -53,3 +53,21 @@ function decode(::Type{Xdep_DepMsg}, wire::Vector{UInt8})
     return from_dict(Xdep_DepMsg, Pbwire.decode_dict(ty, wire))
 end
 
+
+# xdep.DepMsg as a flat native image: one ccall reads and writes it in place.
+mutable struct DepMsgLayout
+    name::Ptr{UInt8}
+    value::Int32
+end
+
+function DepMsgLayout()
+    return DepMsgLayout(
+        Ptr{UInt8}(C_NULL),
+        Int32(0),
+    )
+end
+
+const depMsgLayoutRows = Pbwire.LayoutRow[
+    Pbwire.LayoutRow(1, 7, 0, fieldoffset(DepMsgLayout, :name), 0, 0, 9, 2, 0, 0, 0, 0, ""),
+    Pbwire.LayoutRow(2, 0, 0, fieldoffset(DepMsgLayout, :value), 0, 0, 5, 0, 0, 0, 0, 0, ""),
+]

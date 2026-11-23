@@ -3,6 +3,8 @@
 // Do not edit; regenerate from the .proto instead.
 
 import 'dart:typed_data';
+import 'dart:ffi' as ffi;
+import 'package:ffi/ffi.dart' as ffi;
 
 import 'package:pbwire/pbwire.dart';
 import 'maptest_meta.dart';
@@ -68,6 +70,24 @@ class MapValue {
   }
 }
 
+
+/// spectest.MapValue as a flat `dart:ffi` image: the native object the layout codec
+/// reads and writes in one call.
+final class MapValueLayout extends ffi.Struct {
+  external ffi.Pointer<ffi.Utf8> name;
+  @ffi.Int32() external int value;
+  static int get layoutSize => ffi.sizeOf<MapValueLayout>();
+}
+
+/// Byte offset of each field's value slot of spectest.MapValue, in descriptor order.
+const List<int> mapValueLayoutOffsets = <int>[0, 8];
+/// Field numbers matching [mapValueLayoutOffsets].
+const List<int> mapValueLayoutNumbers = <int>[1, 2];
+/// spectest.MapValue's layout rows: the flat image the native reader consumes.
+const List<PbwField> mapValueLayoutRows = <PbwField>[
+  PbwField(number: 1, kind: PbwKind.string_, offset: 0, type: 9, wire: 2),
+  PbwField(number: 2, kind: PbwKind.int32, offset: 8, type: 5, wire: 0),
+];
 /// spectest.MapTest.ByIntEntry
 class MapTest_ByIntEntry {
   MapTest_ByIntEntry._();
@@ -129,6 +149,24 @@ class MapTest_ByIntEntry {
   }
 }
 
+
+/// spectest.MapTest.ByIntEntry as a flat `dart:ffi` image: the native object the layout codec
+/// reads and writes in one call.
+final class MapTest_ByIntEntryLayout extends ffi.Struct {
+  @ffi.Int32() external int key;
+  external ffi.Pointer<ffi.Utf8> value;
+  static int get layoutSize => ffi.sizeOf<MapTest_ByIntEntryLayout>();
+}
+
+/// Byte offset of each field's value slot of spectest.MapTest.ByIntEntry, in descriptor order.
+const List<int> mapTest_ByIntEntryLayoutOffsets = <int>[0, 8];
+/// Field numbers matching [mapTest_ByIntEntryLayoutOffsets].
+const List<int> mapTest_ByIntEntryLayoutNumbers = <int>[1, 2];
+/// spectest.MapTest.ByIntEntry's layout rows: the flat image the native reader consumes.
+const List<PbwField> mapTest_ByIntEntryLayoutRows = <PbwField>[
+  PbwField(number: 1, kind: PbwKind.int32, offset: 0, type: 5, wire: 0),
+  PbwField(number: 2, kind: PbwKind.string_, offset: 8, type: 9, wire: 2),
+];
 /// spectest.MapTest.ByStrEntry
 class MapTest_ByStrEntry {
   MapTest_ByStrEntry._();
@@ -190,6 +228,24 @@ class MapTest_ByStrEntry {
   }
 }
 
+
+/// spectest.MapTest.ByStrEntry as a flat `dart:ffi` image: the native object the layout codec
+/// reads and writes in one call.
+final class MapTest_ByStrEntryLayout extends ffi.Struct {
+  external ffi.Pointer<ffi.Utf8> key;
+  @ffi.Int32() external int value;
+  static int get layoutSize => ffi.sizeOf<MapTest_ByStrEntryLayout>();
+}
+
+/// Byte offset of each field's value slot of spectest.MapTest.ByStrEntry, in descriptor order.
+const List<int> mapTest_ByStrEntryLayoutOffsets = <int>[0, 8];
+/// Field numbers matching [mapTest_ByStrEntryLayoutOffsets].
+const List<int> mapTest_ByStrEntryLayoutNumbers = <int>[1, 2];
+/// spectest.MapTest.ByStrEntry's layout rows: the flat image the native reader consumes.
+const List<PbwField> mapTest_ByStrEntryLayoutRows = <PbwField>[
+  PbwField(number: 1, kind: PbwKind.string_, offset: 0, type: 9, wire: 2),
+  PbwField(number: 2, kind: PbwKind.int32, offset: 8, type: 5, wire: 0),
+];
 /// spectest.MapTest.ByMsgEntry
 class MapTest_ByMsgEntry {
   MapTest_ByMsgEntry._();
@@ -253,6 +309,24 @@ class MapTest_ByMsgEntry {
   }
 }
 
+
+/// spectest.MapTest.ByMsgEntry as a flat `dart:ffi` image: the native object the layout codec
+/// reads and writes in one call.
+final class MapTest_ByMsgEntryLayout extends ffi.Struct {
+  external ffi.Pointer<ffi.Utf8> key;
+  external ffi.Pointer<MapValueLayout> value;
+  static int get layoutSize => ffi.sizeOf<MapTest_ByMsgEntryLayout>();
+}
+
+/// Byte offset of each field's value slot of spectest.MapTest.ByMsgEntry, in descriptor order.
+const List<int> mapTest_ByMsgEntryLayoutOffsets = <int>[0, 8];
+/// Field numbers matching [mapTest_ByMsgEntryLayoutOffsets].
+const List<int> mapTest_ByMsgEntryLayoutNumbers = <int>[1, 2];
+/// spectest.MapTest.ByMsgEntry's layout rows: the flat image the native reader consumes.
+const List<PbwField> mapTest_ByMsgEntryLayoutRows = <PbwField>[
+  PbwField(number: 1, kind: PbwKind.string_, offset: 0, type: 9, wire: 2),
+  PbwField(number: 2, kind: PbwKind.message, offset: 8, child: 'spectest.MapValue', type: 11, wire: 2),
+];
 /// spectest.MapTest
 class MapTest {
   MapTest._();
@@ -338,3 +412,26 @@ class MapTest {
   }
 }
 
+
+/// spectest.MapTest as a flat `dart:ffi` image: the native object the layout codec
+/// reads and writes in one call.
+final class MapTestLayout extends ffi.Struct {
+  external ffi.Pointer<MapTest_ByIntEntryLayout> byInt;
+  @ffi.IntPtr() external int byIntCount;
+  external ffi.Pointer<MapTest_ByStrEntryLayout> byStr;
+  @ffi.IntPtr() external int byStrCount;
+  external ffi.Pointer<MapTest_ByMsgEntryLayout> byMsg;
+  @ffi.IntPtr() external int byMsgCount;
+  static int get layoutSize => ffi.sizeOf<MapTestLayout>();
+}
+
+/// Byte offset of each field's value slot of spectest.MapTest, in descriptor order.
+const List<int> mapTestLayoutOffsets = <int>[0, 16, 32];
+/// Field numbers matching [mapTestLayoutOffsets].
+const List<int> mapTestLayoutNumbers = <int>[1, 2, 3];
+/// spectest.MapTest's layout rows: the flat image the native reader consumes.
+const List<PbwField> mapTestLayoutRows = <PbwField>[
+  PbwField(number: 1, kind: PbwKind.message, offset: 0, repeated: true, count: 8, child: 'spectest.MapTest.ByIntEntry', type: 11, wire: 2),
+  PbwField(number: 2, kind: PbwKind.message, offset: 16, repeated: true, count: 24, child: 'spectest.MapTest.ByStrEntry', type: 11, wire: 2),
+  PbwField(number: 3, kind: PbwKind.message, offset: 32, repeated: true, count: 40, child: 'spectest.MapTest.ByMsgEntry', type: 11, wire: 2),
+];

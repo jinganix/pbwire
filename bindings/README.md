@@ -59,8 +59,9 @@ anything else:
   what removes the per-call boundary cost that made the Fiddle version lose.
 - **Lua is the same shape as Ruby, minus the wire view.** It links the core
   statically and loads a `FileDescriptorSet` at run time, but messages are
-  plain tables converted through one transient tree per call instead of a
-  builder/wire-view pair.
+  plain tables: the one-entry `schema:encode`/`schema:decode` walks them
+  straight through to the wire, while a builder tree stays for mutation,
+  exact-64-bit and JSON/text paths.
 - **Languages whose toolchain can call C get the descriptor set, not a plugin.**
   Dart (`dart:ffi`) and C# (P/Invoke) are one class with Node
   and Objective-C: load the `FileDescriptorSet`, call the C ABI, own no
@@ -100,46 +101,237 @@ anything else:
   project and adds only an F#-idiomatic facade over the same P/Invoke
   runtime, exactly like Kotlin reuses Java.
 
+## pbench: four arms, one contract
+
+<a id="pbench-three-arms-one-contract"></a>
+
+Every binding's `pbench/` compares the same four arms over the same `matrix3`
+payload and the four standard tiers. The `tree`, `shim` and `core` arms do the
+same user-visible task: a native object in, wire bytes out; wire bytes in, a
+fully readable native object out. None of the three may hold a prebuilt tree
+before the timer starts, and none may use test-only glue: the native <-> tree
+move goes through a shipped converter or a shipped model, so the timer covers
+what a user of that path pays. The `tree` arm builds its native input fresh
+per iteration; the `shim`/`core` encode arms may reuse app-owned native input
+across iterations (the steady-state carve-out: the boundary price is their
+question, not the build price), disclosed per binding in its pbench README.
+The fourth arm, `proxy`, times the prebuilt task instead: re-encode a held
+handle, decode-and-free with no materialization. It is published, never the
+headline.
+
+| arm | mechanism | what it answers |
+|---|---|---|
+| `tree` | a native object in and out through the shipped per-field API (build per field, encode; decode, read back per field, free); no prebuilt tree before the timer | what a user of that path pays |
+| `shim` | C reads and writes the host's own memory through a layout/offset table; one crossing per op, no intermediate tree | is a boundary worth paying for at all |
+| `core` | the C core ported to the host language: value tree plus wire engine plus skip/group/unknown/validation, native object in and out | can the host language replace the C core for this binding |
+| `proxy` | the prebuilt task: re-encode a held handle, decode-and-free with no materialization | what the proxy/transcoder task costs; published, never the headline |
+
+The uniform contract, per binding:
+
+```
+New(descriptorSet) -> Arm
+Arm.Marshal(nativeMessage) -> wire bytes
+Arm.Unmarshal(wire) -> nativeMessage
+Arm.Proxy() -> wire bytes                       // proxy arm only, prebuilt held before the timer
+```
+
+Gate before any timing: every arm's bytes equal the official runtime's bytes on
+all four tiers, and every arm's decode compares field by field against an
+oracle decode. Timing: interleaved rounds (all arms plus the baseline back to
+back), median of five, printed in the `BENCHMARKS.md` "Output format" block so
+`scripts/bench-record.py` reads it unchanged.
+
+The layered rule replaces "no second wire implementation" for the third arm:
+the C core stays the default for every host binding that can reach it, a
+host-language `core` port is the one allowed second mechanism, and the official
+binary conformance suite is the single contract both obey. `core` numbers enter
+`BENCHMARKS.md` only after the arm passes the official binary conformance
+suite; until then it prints `n/a`. pbench keeps one copy of the shipped codec,
+as an adapter over `runtime/`, never a duplicate engine.
+
+C# has all three plus the prebuilt row: `tree` is the per-field full task
+(fresh handle per iteration, one shipped `Set()` per field, `Encode()` +
+`Dispose()` inside the timer; decode reads every gate-checked field back),
+`shim` is the generated model's native-object entry (`pbwire-csharp-shim`), and `core`
+is the pure-C# port in `bindings/csharp/Pbwire/Core/` (`pbwire-csharp-core`,
+`make conformance-csharp`). F# rides the C# P/Invoke runtime and prints the
+same `tree`/`shim` rows plus a same-run `proxy` through it; the pure core is C#-only today (no F#
+facade is wired to it, no separate F# port exists). The `core` row is the
+honest full task (plain object in, conversion plus codec per call): it trails
+the generated codec on every cell (0.68x/0.73x small encode is its best,
+0.55x / 0.25x at 74 KB) -- the no-toolchain arm, never the headline.
+The C# `shim` row copies the
+native object into one contiguous image per op and hands it to a C-side reader
+(`bindings/csharp/native/pbw_cs_shim.c`, one `P/Invoke` per op): it is above
+Google.Protobuf on every encode tier (1.10x-2.60x) and on the small decode
+tiers
+(1.55x-1.58x), and below it at 2469 B / 74913 B decode (0.78x / 0.74x) because
+the
+image-to-object copy costs more than the reference parser's whole run (see
+`bindings/csharp/pbench/README.md`). The `proxy` row holds the prebuilt-handle
+price (3.59x / 1.47x at 74 KB), published beside the native rows and never
+headlined. A managed
+class with reference members cannot be pinned, so the image -- not
+`GCHandle.Alloc(obj, Pinned)` -- is what C walks.
+
+Python has all three plus the prebuilt row: `tree` is the per-field full task
+(fresh dict in, `encode(dict)`; `decode(bytes)` plus `to_dict()` with every
+field read back), `shim` is the same task in one CPython downcall per op, and `core` is the pure-Python
+port in `bindings/python/pure/` (`pbwire-py-core`, `make
+conformance-python-pure`). The core is the no-extension mode (pure-Python
+interpreter, PyPy, sandbox), published, never the headline: at 74 KB it is 6.5
+MB/s decode / 10.3 MB/s `encode(data)` against the extension's 911.2 / 570.2
+(`proxy decode(bytes)` / `tree encode(data)`),
+and against `google.protobuf`'s own pure-Python runtime -- the comparable
+baseline -- it is 1.05x on decode and 1.25x on `encode(parsed)`. See
+`bindings/python/pbench/README.md`.
+
+Dart has all three plus the prebuilt row: `tree` is the per-field full task
+(one `set` per field, `encode()`, `close()` per iteration; decode plus a full
+read-back), `shim` is the
+generated flat `<Message>Layout` read in place by the C-side reader
+(`pbwire-dart-shim`), and `core` is the pure-Dart codec of
+`bindings/dart/lib/core/` (`pbwire-dart-core`, no `dart:ffi` and no `dart:io`,
+so it is also the row that exists on dart2js/dart2wasm).
+
+Julia has all three plus the prebuilt row: `tree` is the per-field full task
+(fresh `Message` per iteration, one `set` per field, `close()` inside the
+timer; decode plus a full read-back), `shim` is the
+generated mutable `<Message>Layout` read in place by
+`bindings/julia/native/pbw_julia_shim.c` (`pbwire-julia-shim`), and `core` is
+the pure-Julia codec of `bindings/julia/runtime/src/core/`
+(`pbwire-julia-core`: stdlib only, no `ccall`, no native library; 2.42x
+ProtoBuf.jl on the 74 KB encode -- on the same collapsed baseline the native
+rows quote -- and below it everywhere else, the price of the
+`Dict` <-> tree conversion in an interpreter). The `proxy` row holds the
+prebuilt-handle price, published beside the native rows and never headlined.
+
+Rust has all three plus the prebuilt row: `tree` is the per-field full task
+(fresh `fill` build per iteration, `encode`; decode plus a full read-back),
+`shim` is the
+generated `#[repr(C)]` `<Message>Flat` read in place by the C struct codec
+compiled into the crate (`pbwire-rust-shim`, one call per op), and `core` is the
+pure-Rust codec of `bindings/rust/src/core/` behind the `core` cargo feature
+(`pbwire-rust-core`, no C library, no `unsafe`, no generated code;
+`make conformance-rust`). It is above `rust-protobuf` on the two large encodes
+(1.12x / 1.08x) and below prost everywhere (0.62-0.70x encode, 0.47-0.65x
+decode),
+because prost's generated code has no value tree in the way: published as the
+no-C-toolchain mode, never as the shipped fast path.
+
+Swift has all three plus the prebuilt row: `tree` is the per-field full task
+(fresh message plus `fillTree` build per iteration; decode plus `consumeTree`),
+`shim` is the
+generated `@frozen` `<Message>Repr` mirror (no references, so no ARC per field)
+read in place by `bindings/swift/Sources/CPbwire/shim.c` over the same C struct
+codec (`pbwire-swift-shim`, one call per op), and `core` is the `PbwireCore`
+product (`bindings/swift/Sources/PbwireCore/`): a pure-Swift descriptor reader,
+value tree, encoder and decoder with no C module, no `libpbwire.a` and no
+`unsafeFlags`, so it can be a normal SwiftPM dependency and `make
+conformance-swift` can drive the official suite through it.
+
+Zig has all three plus the prebuilt row: `tree` is the per-field full task
+(fresh handle per iteration, one `set` per field; decode plus a full
+read-back), `shim` is the
+generated `extern struct` mirror read in place by the C struct codec
+(`pbwire-zig-shim`, one call per op), and `core` is the pure-Zig codec of
+`bindings/zig/core/` selected by `-Dcore=true` (`pbwire-zig-core`: descriptor
+reader, value tree and binary encoder/decoder with no C source, no translate-c
+and no `libpbwire.a`; `make conformance-zig-core`). It is below the generated
+baseline on every cell (0.42-0.88x encode, 0.54-0.93x decode), so the
+static link stays the default and the core option exists for a build that
+cannot compile `src/*.c`.
+
+Ruby has two native arms plus the prebuilt row: `tree` is the per-field facade
+(fresh model per iteration, full read-back on decode), `shim` is the
+generated model read by one C-extension entry (`pbwire-ruby-shim`); `core` is
+deferred (`shortcut: no pure-Ruby core, reopen when a native-less Ruby target
+appears`).
+
+R has two native arms plus the prebuilt row: `tree` is the per-field-API
+reference (fresh builder, full read-back on decode), `shim` is
+the named list in and wire bytes out through one `.Call` with the walk inside C
+(`pbwire-r-shim`, the generated model's `Type_encode(list)` shape); `core` is
+deferred (`shortcut: no pure-R core, reopen when a native-less R target
+appears`).
+
+PHP has two native arms plus the FFI deployment and the prebuilt row: `tree`
+is the per-field full task (fresh `Message` per call, one `set`/`get` per
+field, `close` inside the timer), `shim` is the native array in and wire bytes
+out through one
+C-extension entry that walks it in C (`pbwire-php-shim`), and `shim-ffi` is the
+same API on the shipped `ext-ffi` wrapper (`pbwire-php-shim-ffi`, no compiler);
+`core` is deferred (`shortcut: no pure-PHP core, reopen when a no-compiler
+deployment needs it`) because the official pure-PHP runtime is already the
+baseline.
+
+A binding states which of the four it has, including the two-mechanism
+bindings and the deferred ports with the reason: the status table in
+[BENCHMARKS.md](../BENCHMARKS.md#bindings-vs-their-baselines), with the per-arm
+detail in `bindings/<lang>/pbench/README.md`.
+
 ## What each binding solves
 
 Every row is also the reason that binding exists: its host runtime's status quo
 has a specific cost, and the binding removes it *without* a second wire
-implementation. The ratios are xlarge-tier throughput against the official
-runtime, copied from [BENCHMARKS.md](../BENCHMARKS.md) where the reasoning and
-the full tables are.
+implementation (the allowed third mechanism is the
+[`core` arm](#pbench-four-arms-one-contract)). The ratios are xlarge-tier
+throughput against the official runtime, copied from
+[BENCHMARKS.md](../BENCHMARKS.md) where the reasoning and the full tables are.
 
 | binding | the pain it removes | what it does instead | encode / decode vs official |
 |---|---|---|---|
 | C | dynamic messages cost a libprotobuf dependency, or hand-written wire code per message | struct codec compiled from layout tables over the shared core, schema loaded at run time | 1.33x / 2.00x (vs protoc C++) |
 | C++ | generated classes pin the schema at compile time; `DynamicMessage` is 10x slower | the same C runtime and header, no extra layer | 1.33x / 2.00x (vs protoc C++) |
 | Embedded | generated C codecs pin the schema at compile time and need a struct per message; a full runtime drags a heap in | static-memory facade over the same core: one box, one arena, caller-owned encode buffers, input bounded by `pbw_limits` | no separate bench — the facade is a pass-through, so the C row and the core bench measure the wire it speaks |
-| Python | `google.protobuf` needs a generated module per `.proto`, and dict conversion is seconds at 75 KB | CPython extension: dict↔wire in C, `decode()` returns a parsed message that keeps one slice per wire field | 6.85x / 1.22x (vs upb) |
-| Ruby | the `google-protobuf` gem materializes and re-encodes every field; a Fiddle bridge costs ~3 µs per downcall | C extension over the core: builder tree for writes, validating wire view for reads | 1.20x / 1.64x (vs the gem) |
-| Java | JNI glue, or protobuf-java re-deriving sizes before every write | pure-Java codec: columnar values, lazy decode, `Unsafe` stores (no JNI, no native lib, no generator) | 1.15x / 1.89x (vs protobuf-java; 0.95x encode at 74 KB) |
+| Python | `google.protobuf` needs a generated module per `.proto`, and dict conversion is seconds at 75 KB | CPython extension: dict↔wire in C, `decode()` returns a parsed message that keeps one slice per wire field | 7.19x / 3.65x (vs upb; `tree encode(data)` / `shim to_dict`; pure-Python `core` 1.25x / 1.05x vs the pure-Python runtime) |
+| Ruby | the `google-protobuf` gem materializes and re-encodes every field; a Fiddle bridge costs ~3 µs per downcall | C extension over the core: per-field facade plus a one-entry native-object path over the generated model (prebuilt builder/wire view stays the holder fast path) | 0.03x / 0.08x `tree` (native-object `shim` 0.19x / 0.23x vs the gem; prebuilt `proxy` 1.29x / 1.74x, same-run only) |
+| Java | JNI glue, or protobuf-java re-deriving sizes before every write | pure-Java codec: columnar values, lazy decode, `Unsafe` stores (no JNI, no native lib, no generator) | 0.28x / 0.87x `tree` (vs protobuf-java; `core` generated model 0.63x / 0.81x) |
 | Kotlin | official Kotlin is Kotlin over protobuf-java | reuses the Java runtime, adds a DSL | 1.20x / 1.81x (vs protobuf-kotlin; 0.78x encode at 136 B) |
-| Node | jspb resolves a code/type table per field and hands every repeated element to a closure | N-API addon (node headers only), reusable buffer, wire view for decoded messages | 22.9x / 12.6x (vs jspb; 2.55x / 2.40x vs [protobufjs](https://www.npmjs.com/package/protobufjs)) |
+| Node | jspb resolves a code/type table per field and hands every repeated element to a closure | N-API addon (node headers only), reusable buffer, wire view for decoded messages; the native-object path is one addon call that walks the JS object in C | 0.10x / 0.12x `tree` (vs [protobufjs](https://www.npmjs.com/package/protobufjs); 0.88x / 0.60x vs jspb; native-object `shim` 1.02x encode / 0.64x decode vs jspb) |
 | Objective-C | the ObjC runtime allocates and copies per field | ARC wrapper: the encoder's buffer is handed to `NSData` with no copy | 1.92x / 1.16x (vs protobuf-objc; 6.6x / 2.7x at 136 B) |
-| PHP | the official runtime is pure PHP, all per-field bookkeeping in the interpreter | native C extension over the core (`ext-ffi` wrapper without a compiler) | 1.11x / 1.29x (vs C ext; 362x / 140x vs pure PHP) |
-| Dart | a pure-Dart field loop dominates, and FFI adds copies | `dart:ffi` plus the core's arena | 15.4x / 4.27x (vs protobuf-dart) |
-| Rust | rust-protobuf generated codecs | links `libpbwire.a` statically behind a safe wrapper | 1.69x / 1.86x (vs rust-protobuf; 0.98x / 1.59x vs prost) |
-| C# | Google.Protobuf is already a fast tree codec — the closest race of the set | P/Invoke plus a resolver, no packages | 3.07x / 1.47x (vs Google.Protobuf; 3.93x / 2.27x vs protobuf-net) |
-| Go | the official runtime walks `protoreflect`/`protowire` per field | thin generated structs over the pure-Go table engine (`runtime/`), which also holds the descriptor-set value tree | 1.71x / 1.27x (vs protobuf-go; thin model, struct in and struct out, xlarge tier) |
-| Erlang | gpb is pure Erlang; gpb NIF binds libprotobuf per message | NIF over the core, consuming gpb's own definitions — no second generator | 3.91x / 1.60x (vs gpb) |
-| Swift | Apple moved to Swift while the binding set still spoke ObjC; `swift-protobuf` generates a struct per message | SwiftPM package: FFI host over the C ABI (`FileDescriptorSet` at run time, static `libpbwire.a`, no wire code) | 4.43x / 2.84x (vs swift-protobuf) |
+| PHP | the official runtime is pure PHP, all per-field bookkeeping in the interpreter | native C extension over the core (`ext-ffi` wrapper without a compiler); the native-object path is one extension entry that walks the PHP array in C | 0.07x / 0.09x `tree` (vs the C ext; native-object `shim` 0.17x / 0.37x; 2.54x / 0.89x `tree` vs pure PHP; `proxy` 1.26x / 1.25x, same-run only) |
+| Dart | a pure-Dart field loop dominates, and the per-field walk is what the native task pays | `dart:ffi` plus the core's arena; the native-object path is one FFI call that reads the flat `<Message>Layout` in place (`bindings/dart/native/`); the pure-Dart `core` is the portable path for hosts without a C library | 0.50x / 4.57x `tree` (vs protobuf-dart; native-object `shim` 11.0x / 4.8x; pure `core` 4.8x encode / 1.4x decode at 74 KB) |
+| Rust | rust-protobuf generated codecs | links `libpbwire.a` statically behind a safe wrapper | 0.06x / 1.99x `tree` vs prost (native-object `shim` 0.88x / 2.01x; vs rust-protobuf 0.09x / 1.93x) |
+| C# | Google.Protobuf is already a fast tree codec — the closest race of the set | P/Invoke plus a resolver, no packages; the native-object path is one call into `bindings/csharp/native/pbw_cs_shim.c` over a per-op flat image | 0.17x / 1.44x `tree` (vs Google.Protobuf; native-object `shim` 1.40x encode, 0.74x decode at 74 KB) |
+| Go | the official runtime walks `protoreflect`/`protowire` per field | thin generated structs over the pure-Go table engine (`runtime/`), which also holds the descriptor-set value tree; the Erlang-style `shim` candidate and the per-field `dync tree` compete in `pbench/` ([issue 41](https://github.com/jinganix/pbwire/issues/41)) | 1.71x / 1.27x (vs protobuf-go; thin model, struct in and struct out, xlarge tier; per-field `dync tree` 0.05x / 0.12x) |
+
+| PHP | the official runtime is pure PHP, all per-field bookkeeping in the interpreter | native C extension over the core (`ext-ffi` wrapper without a compiler); the native-object path is one extension entry that walks the PHP array in C | 0.07x / 0.09x `tree` (vs the C ext; native-object `shim` 0.17x / 0.37x; 2.54x / 0.89x `tree` vs pure PHP; `proxy` 1.26x / 1.25x, same-run only) |
+| Dart | a pure-Dart field loop dominates, and the per-field walk is what the native task pays | `dart:ffi` plus the core's arena; the native-object path is one FFI call that reads the flat `<Message>Layout` in place (`bindings/dart/native/`); the pure-Dart `core` is the portable path for hosts without a C library | 0.50x / 4.57x `tree` (vs protobuf-dart; native-object `shim` 11.0x / 4.8x; pure `core` 4.8x encode / 1.4x decode at 74 KB) |
+| Rust | rust-protobuf generated codecs | links `libpbwire.a` statically behind a safe wrapper | 0.06x / 1.99x `tree` vs prost (native-object `shim` 0.88x / 2.01x; vs rust-protobuf 0.09x / 1.93x) |
+| C# | Google.Protobuf is already a fast tree codec — the closest race of the set | P/Invoke plus a resolver, no packages; the native-object path is one call into `bindings/csharp/native/pbw_cs_shim.c` over a per-op flat image | 0.17x / 1.44x `tree` (vs Google.Protobuf; native-object `shim` 1.40x encode, 0.74x decode at 74 KB) |
+
+| Erlang | gpb is pure Erlang; gpb NIF binds libprotobuf per message | NIF over the core, consuming gpb's own definitions — no second generator | 2.87x / 1.52x (vs gpb) |
+| Swift | Apple moved to Swift while the binding set still spoke ObjC; `swift-protobuf` generates a struct per message | SwiftPM package: FFI host over the C ABI (`FileDescriptorSet` at run time, static `libpbwire.a`, no wire code), plus a pure-Swift `PbwireCore` product for consumers the `unsafeFlags` static link cannot reach | 0.24x / 2.68x `tree` (vs swift-protobuf; native-object `shim` 3.31x / 2.69x) |
 | Scala | data teams write Scala against Java protobuf | same Java runtime as Kotlin plus an idiomatic DSL — one runtime, three JVM languages | 1.21x / 1.25x (vs ScalaPB) |
-| Elixir | `elixir-protobuf` is pure Elixir, every field through the interpreter | struct↔tuple translation over the shared NIF (no C of its own) | 2.41x / 0.99x (vs elixir-protobuf; xlarge decode at parity) |
-| Zig | `zig-protobuf` codegen per message, fragmented across forks | `@cImport`-free static link (`translate-c` + `libpbwire.a` compiled in) | 1.81x / 2.13x (vs zig-protobuf) |
-| F# | .NET protobuf means C# SDK style even in F# code | facade over the C# project (`ProjectReference`, same P/Invoke core) | 3.05x / 1.44x (vs Google.Protobuf) |
+| Elixir | `elixir-protobuf` is pure Elixir, every field through the interpreter | struct↔tuple translation over the shared NIF (no C of its own) | 2.84x / 1.84x (vs elixir-protobuf) |
+| Zig | `zig-protobuf` codegen per message, fragmented across forks | `@cImport`-free static link (`translate-c` + `libpbwire.a` compiled in); the generated `extern struct` mirror is read in place by the C struct codec, one call per op; a pure-Zig `core` port behind `-Dcore=true` is the no-C-source build | 0.19x / 1.34x `tree` (native-object `shim` 1.45x / 1.46x, pure `core` 0.88x / 0.66x at 74 KB vs zig-protobuf) |
+| F# | .NET protobuf means C# SDK style even in F# code | facade over the C# project (`ProjectReference`, same P/Invoke core and the same one-call C reader) | 0.15x / 1.47x `tree` (vs Google.Protobuf; native-object `shim` 2.52x encode, 1.56x decode at 136 B, 0.73x decode at 74 KB; prebuilt `proxy` same-run only) |
 | Clojure | protobuf-java interop per message, maps materialized per field | mutable-message fast path over the Java runtime (maps stay for convenience) | 1.16x / 1.77x (vs protobuf-java; mutable-message fast path; 0.75x encode at 136 B) |
-| Julia | `ProtoBuf.jl` is pure Julia, per-field interpreter overhead | `dlopen` + `ccall` FFI host (`FileDescriptorSet` at run time, `Dict` boundary) | 135.6x / 1.00x (vs ProtoBuf.jl; baseline encode collapses with size) |
-| R | `RProtoBuf` binds the C++ runtime per message | C extension over the core (`.Call`, named lists in/out, statically linked) | 61.5x / 66.6x (vs RProtoBuf) |
-| Lua | game servers hand tables to `pbc`/`lua-protobuf`, each with its own schema story | C module over the core: tables convert through the schema's arena, builders encode hot | 1.08x / 1.33x (vs lua-protobuf; 7.65x via builder encode) |
+| Julia | `ProtoBuf.jl` is pure Julia, per-field interpreter overhead | `dlopen` + `ccall` FFI host (`FileDescriptorSet` at run time, `Dict` boundary); the generated layout image is read in place by a C-side reader (`bindings/julia/native/`), one `ccall` per op; the pure-Julia `core` (`runtime/src/core/`) is the no-native arm | 92.74x / 1.04x `shim` (vs ProtoBuf.jl; full-task `tree` 7.26x encode on the xlarge baseline collapse, 1.04x decode) |
+| R | `RProtoBuf` binds the C++ runtime per message | C extension over the core (`.Call`, named lists in/out, statically linked) | 38.71x / 25.26x `tree` (vs RProtoBuf; native-object `shim` 55.79x / 58.78x; prebuilt `proxy` same-run only) |
+| Lua | game servers hand tables to `pbc`/`lua-protobuf`, each with its own schema story | C module over the core: one-entry table encode/decode plus a builder tree for mutation | 0.97x / 1.43x `shim` (vs lua-protobuf; native-object, one C entry per op; full-task `tree` 0.61x / 1.03x; prebuilt `proxy` same-run only) |
 
 Read the ratios as "what this binding buys its host language", not as a
 cross-language speed ranking: the payload and the boundary cost differ per row,
 which is why the at-a-glance table in
 [BENCHMARKS.md](../BENCHMARKS.md#at-a-glance-every-binding-one-tier) puts them
 side by side with the absolute MB/s.
+
+Header ratios quote the native-object row (host data in, host data out). The
+`proxy` row further down is the same codec with the tree already built: a proxy
+or transcoder task, not an application's encode. It is published beside the
+native rows from the same run (same-run timing only), never headlined.
+
+Go-parity close (2026-11-22, issue 41 plan): every binding with a `pbench/`
+re-times its `tree` arm as the full task -- fresh native object per iteration,
+alloc and free inside the timer, deep materialization of every gate-checked
+field -- and every published row stays green behind the official conformance
+suite. The prebuilt `proxy` row prices the old headline: 8x-34x the native
+encode on Node, 10x on Zig, 21x on C#, 25x on Swift, 31x on Dart, 52x on Go.
+Below-baseline native cells are parked with reasons in `docs/perf-attempts.md`
+(no untried one-change mechanism); Task 15's JVM slice is closed there,
+other tracks still parked.
 
 ## Status
 
@@ -151,7 +343,7 @@ the three mental-model shifts plus one row per language.
 | C | `pbw_struct_schema_load(path)` on a `FileDescriptorSet`; `plugin/` additionally emits structs + layout tables for the compile-time side | ✅ | struct layout is codegen, the schema itself is loaded |
 | C++ | the C runtime and its generated headers, unchanged | ✅ | inherits C |
 | Python | `pbwire.Schema.from_file/load` on a `FileDescriptorSet` | ✅ | the extension is compiled but the schema is always loaded; `decode()` returns a parsed message, `to_dict()`/`encode(dict)` are the dict path; binary + JSON + text testee |
-| Go | `protoc-gen-pbwire` generated models (field tables, no descriptor at run time); the `pbench` Go engine adds `codec.Load` on a `FileDescriptorSet` for a value tree | ✅ | struct path needs no schema; the dynamic C core stays a `pbench` candidate |
+| Go | `protoc-gen-pbwire` generated models (field tables, no descriptor at run time); the `pbench` Go engines add `Load` on a `FileDescriptorSet` for a value tree | ✅ | struct path needs no schema; the dynamic engines (the C core, the pure-Go core, the vendored `cshim` candidate) stay `pbench` arms until [issue 41](https://github.com/jinganix/pbwire/issues/41) closes |
 | Erlang | `gpb_compile` → records + `get_msg_defs/0` → `pbwire:load_cache/1` | ✅ | gpb is the plugin, epb needs no descriptor path |
 | Lua | `pbwire.loadfile` on a `FileDescriptorSet` | ✅ | tables in, tables out; arena per schema, builders anchor it |
 | Java | `FileDescriptorSet` at run time, own pure-Java reader (JDK 17+) | ✅ | no JNI, no C glue, no generator, no native library; binary + JSON + text conformance testee |
@@ -159,14 +351,14 @@ the three mental-model shifts plus one row per language.
 | Node | `FileDescriptorSet` at run time, hand-written N-API addon | ✅ | no npm deps, node headers only |
 | Objective-C | `FileDescriptorSet` at run time, ARC wrapper over the C API | ✅ | Foundation only, no codegen |
 | Kotlin | the Java binding's runtime: `FileDescriptorSet` at run time, one Java runtime for both | ✅ | four DSL helpers, no second codec; JSON/text/delimited arrive with the Java runtime |
-| PHP | `Pbwire\Schema::fromFile` on a `FileDescriptorSet`, native C extension or `ext-ffi` | ✅ | no composer; the C extension needs only its `.so` |
+| PHP | `Pbwire\Schema::fromFile` on a `FileDescriptorSet`, native C extension or `ext-ffi` | ✅ | no composer; the C extension needs only its `.so`; `Type::encodeArray`/`decodeArray` are the native-array entry |
 | Dart | `Schema.load` on a `FileDescriptorSet`, `dart:ffi` | ✅ | `package:ffi` only (malloc, strings) |
 | Rust | `Schema::from_file` on a `FileDescriptorSet`, core linked in statically | ✅ | no bindgen, no external crate |
 | C# | `Schema.FromFile` on a `FileDescriptorSet`, P/Invoke + `DllImportResolver` | ✅ | no packages in the binding project |
 | Swift | `Schema(contentsOfFile:)` on a `FileDescriptorSet`, SwiftPM + C ABI | ✅ | links `build/libpbwire.a` via `unsafeFlags`; baseline is a separate package, no checked-in generated code |
 | Scala | the Java binding's runtime: `FileDescriptorSet` at run time | ✅ | DSL over the same runtime as Java/Kotlin; binary + JSON + text testee; baseline needs `scalapbc` once |
 | Elixir | `elixir-protobuf` structs + `__message_props__/0` → the shared `:pbwire` NIF | ✅ | no C of its own; Hex `:pbwire` tracks `bindings/erlang` (mix.lock pins the current release) |
-| Zig | `Schema.fromFile` on a `FileDescriptorSet`, core sources compiled in statically | ✅ | `build.zig` API targets Zig 0.17; binary + JSON + text testee (`make conformance-zig`); baseline not wired (needs network) |
+| Zig | `Schema.fromFile` on a `FileDescriptorSet`, core sources compiled in statically; `-Dcore=true` uses the pure-Zig reader | ✅ | `build.zig` API targets Zig 0.17; binary + JSON + text testee (`make conformance-zig`), binary pure-core testee (`make conformance-zig-core`); `make zig-bench` wires the pinned Arwalk/zig-protobuf baseline (fetched on first run) |
 | F# | the C# binding's project: `FileDescriptorSet` at run time | ✅ | `ProjectReference`, no second runtime; JSON/text/visit come from the C# binding; binary + JSON + text testee |
 | Clojure | the Java binding's runtime via plain interop, `FileDescriptorSet` at run time | ✅ | persistent maps in/out, plus `to-json`/`from-json`/`to-text`/`from-text`; binary + JSON + text testee; `benchmarks/deps` jars are fetched, not committed |
 | Embedded | `pbwe_open` on a `FileDescriptorSet`, static facade over the C core | ✅ | one malloc phase, then bounded steady state; caller-owned buffers, no per-message allocation |

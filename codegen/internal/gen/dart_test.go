@@ -136,3 +136,70 @@ func TestDartImpPrefix(t *testing.T) {
 		}
 	}
 }
+
+// The layout gate (plan 06 Stage 1): every message gets a flat `dart:ffi`
+// Struct plus the offset/row table the C-side reader consumes. A missing
+// class, a missing row or a row without its offset means the shim arm has no
+// native object to time, so the test fails before any number is published.
+func TestDartLayout(t *testing.T) {
+	f := &model.File{
+		Path:    "matrix3.proto",
+		Package: "structtest",
+		Messages: []model.Message{
+			{
+				Name: "Inner3",
+				Full: "structtest.Inner3",
+				Fields: []model.Field{
+					{Name: "name", Lower: "name", Pascal: "Name", Number: 1, Kind: protoreflect.StringKind},
+					{Name: "value", Lower: "value", Pascal: "Value", Number: 2, Kind: protoreflect.Int32Kind},
+				},
+			},
+			{
+				Name: "Scalars3",
+				Full: "structtest.Scalars3",
+				Fields: []model.Field{
+					{Name: "i32", Lower: "i32", Pascal: "I32", Number: 1, Kind: protoreflect.Int32Kind},
+					{Name: "str", Lower: "str", Pascal: "Str", Number: 14, Kind: protoreflect.StringKind},
+					{Name: "inner", Lower: "inner", Pascal: "Inner", Number: 16, Kind: protoreflect.MessageKind, Message: "Inner3", Full: "structtest.Inner3"},
+					{Name: "opt_i32", Lower: "optI32", Pascal: "OptI32", Number: 20, Kind: protoreflect.Int32Kind, NeedsHas: true},
+					{Name: "nums", Lower: "nums", Pascal: "Nums", Number: 17, Kind: protoreflect.Int32Kind, Repeated: true, Packed: true},
+				},
+			},
+		},
+	}
+	files, err := dartFiles(f, Options{Lang: "dart", Model: true, Register: true, Registry: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var models string
+	for _, file := range files {
+		if file.Name == "matrix3.dart" {
+			models = file.Content
+		}
+	}
+	if models == "" {
+		t.Fatalf("missing the models file, got %v", files)
+	}
+	for _, want := range []string{
+		"import 'dart:ffi' as ffi;",
+		"final class Scalars3Layout extends ffi.Struct",
+		"@ffi.Int32() external int i32;",
+		"external ffi.Pointer<ffi.Utf8> str;",
+		"external ffi.Pointer<Inner3Layout> inner;",
+		"@ffi.Int32() external int optI32;",
+		"@ffi.Int32() external int hasOptI32;",
+		"external ffi.Pointer<ffi.Int32> nums;",
+		"@ffi.IntPtr() external int numsCount;",
+		"const List<int> scalars3LayoutOffsets = <int>[0, 8, 16, 24, 32];",
+		"static int get layoutSize => ffi.sizeOf<Scalars3Layout>();",
+		"const List<PbwField> scalars3LayoutRows = <PbwField>[",
+		"PbwField(number: 1, kind: PbwKind.int32, offset: 0, type: 5, wire: 0),",
+		"PbwField(number: 16, kind: PbwKind.message, offset: 16, child: 'structtest.Inner3', type: 11, wire: 2),",
+		"PbwField(number: 20, kind: PbwKind.int32, offset: 24, has: 28, type: 5, wire: 0),",
+		"PbwField(number: 17, kind: PbwKind.int32, offset: 32, repeated: true, count: 40, type: 5, wire: 0, packed: true),",
+	} {
+		if !strings.Contains(models, want) {
+			t.Errorf("models file misses %q", want)
+		}
+	}
+}

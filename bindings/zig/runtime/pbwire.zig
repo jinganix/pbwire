@@ -996,3 +996,216 @@ pub const Pool = struct {
         return c.pbw_pool_idle(self.ptr);
     }
 };
+
+/// The C struct codec's inline byte string (`pbw_bytes_t`): `data == null` is
+/// absent, `len` is the truth, and `data` may contain NUL.
+pub const Bytes = c.pbw_bytes_t;
+
+/// One mirror slot's wire kind. The variants are finer than the C storage
+/// class because int32, sint32 and sfixed32 share one 4-byte slot but carry
+/// three different wire tags.
+pub const FieldKind = enum(u32) {
+    int32,
+    sint32,
+    sfixed32,
+    int64,
+    sint64,
+    sfixed64,
+    uint32,
+    fixed32,
+    uint64,
+    fixed64,
+    boolean,
+    float,
+    double,
+    enumeration,
+    string,
+    bytes,
+    message,
+    group,
+
+    /// `pbw_struct_kind_t` (the C codec's storage class).
+    fn storage(self: FieldKind) c.pbw_struct_kind_t {
+        const v: c_int = switch (self) {
+            .int32, .sint32, .sfixed32 => c.PBW_SF_INT32,
+            .int64, .sint64, .sfixed64 => c.PBW_SF_INT64,
+            .uint32, .fixed32 => c.PBW_SF_UINT32,
+            .uint64, .fixed64 => c.PBW_SF_UINT64,
+            .boolean => c.PBW_SF_BOOL,
+            .float => c.PBW_SF_FLOAT,
+            .double => c.PBW_SF_DOUBLE,
+            .string => c.PBW_SF_STRING,
+            .bytes => c.PBW_SF_BYTES,
+            .enumeration => c.PBW_SF_ENUM,
+            .message, .group => c.PBW_SF_MESSAGE,
+        };
+        return @intCast(v);
+    }
+
+    /// `(pbw_type, wire type)` of one element.
+    fn wire(self: FieldKind) struct { typ: u8, wire: u8 } {
+        return switch (self) {
+            .int32 => .{ .typ = 5, .wire = 0 },
+            .sint32 => .{ .typ = 17, .wire = 0 },
+            .sfixed32 => .{ .typ = 15, .wire = 5 },
+            .int64 => .{ .typ = 3, .wire = 0 },
+            .sint64 => .{ .typ = 18, .wire = 0 },
+            .sfixed64 => .{ .typ = 16, .wire = 1 },
+            .uint32 => .{ .typ = 13, .wire = 0 },
+            .fixed32 => .{ .typ = 7, .wire = 5 },
+            .uint64 => .{ .typ = 4, .wire = 0 },
+            .fixed64 => .{ .typ = 6, .wire = 1 },
+            .boolean => .{ .typ = 8, .wire = 0 },
+            .float => .{ .typ = 2, .wire = 5 },
+            .double => .{ .typ = 1, .wire = 1 },
+            .enumeration => .{ .typ = 14, .wire = 0 },
+            .string => .{ .typ = 9, .wire = 2 },
+            .bytes => .{ .typ = 12, .wire = 2 },
+            .message => .{ .typ = 11, .wire = 2 },
+            .group => .{ .typ = 10, .wire = 3 },
+        };
+    }
+};
+
+/// A message-typed row's child image: its rows, its proto full name and the
+/// size of one image (the repeated array stride).
+pub const ChildPlan = struct {
+    full_name: []const u8,
+    fields: []const FieldPlan,
+    size: usize,
+};
+
+/// One field row of a generated mirror. Offsets are slot offsets in the
+/// mirror; `has`/`count`/`cs` are 0 when the field has no such slot.
+pub const FieldPlan = struct {
+    number: u32,
+    kind: FieldKind,
+    repeated: bool = false,
+    is_packed: bool = false,
+    required: bool = false,
+    oneof: bool = false,
+    offset: usize = 0,
+    has: usize = 0,
+    count: usize = 0,
+    cs: usize = 0,
+    child: ?ChildPlan = null,
+};
+
+fn enumDefault(desc: ?*const c.pbw_descriptor, plan: FieldPlan) i32 {
+    if (plan.kind != .enumeration or plan.repeated) return 0;
+    const field = c.pbw_descriptor_find_field(desc, plan.number) orelse return 0;
+    const text = c.pbw_field_default_value(field);
+    if (text == null) return 0;
+    const s = std.mem.trim(u8, std.mem.span(@as([*:0]const u8, @ptrCast(text))), " \t\r\n");
+    if (s.len == 0) return 0;
+    return std.fmt.parseInt(i32, s, 10) catch 0;
+}
+
+/// Compile one generated mirror into the C struct codec: the native-object
+/// path. One `encodeInPlace` / `decodeInPlace` call crosses the boundary; the
+/// C codec walks the mirror in place, so no field is copied per field.
+///
+/// `plans` is the generated comptime row table; the mirror type `T` must have
+/// exactly those slots (the generated file asserts every offset at comptime).
+/// The compiled rows and the codec are owned by the plan; the encode buffer is
+/// C-owned and reused (a view is valid until the next encode); the decode
+/// arena is C-owned and reset by each decode, so a decoded image is readable
+/// until the next `decodeInPlace` on the same plan or `deinit`.
+pub fn InPlace(comptime T: type, comptime full_name: []const u8, comptime plans: []const FieldPlan) type {
+    return struct {
+        const Self = @This();
+
+        schema: *const Schema,
+        codec: *c.pbw_struct_codec,
+        rows_arena: std.heap.ArenaAllocator,
+        buf: c.pbw_struct_buf = .{},
+        arena: ?*c.pbw_struct_arena = null,
+
+        pub const image_size = @sizeOf(T);
+
+        pub fn init(allocator: std.mem.Allocator, schema: *const Schema) !Self {
+            var rows_arena = std.heap.ArenaAllocator.init(allocator);
+            errdefer rows_arena.deinit();
+            const a = rows_arena.allocator();
+            const rows = try a.alloc(c.pbw_struct_field_t, plans.len);
+            try buildRows(a, schema, full_name, plans, rows);
+
+            var name_buf: [512]u8 = undefined;
+            try toNul(full_name, &name_buf);
+            var codec: ?*c.pbw_struct_codec = null;
+            try check(c.pbw_struct_codec_init(&codec, schema.ptr, nulPtr(&name_buf), rows.ptr, rows.len));
+            return .{
+                .schema = schema,
+                .codec = codec orelse return Error.UnknownStatus,
+                .rows_arena = rows_arena,
+            };
+        }
+
+        pub fn deinit(self: *Self) void {
+            c.pbw_struct_codec_free(self.codec);
+            c.pbw_struct_buf_free(&self.buf);
+            c.pbw_struct_arena_free(self.arena);
+            self.rows_arena.deinit();
+        }
+
+        /// One call: the C codec reads the mirror in place and appends the
+        /// wire bytes to this plan's reusable buffer. The slice is a view of
+        /// that buffer, valid until the next encode on this plan.
+        pub fn encodeInPlace(self: *Self, image: *const T) ![]const u8 {
+            try check(c.pbw_struct_codec_encode(self.codec, @ptrCast(image), &self.buf));
+            if (self.buf.data == null or self.buf.len == 0) return &[_]u8{};
+            return self.buf.data[0..self.buf.len];
+        }
+
+        /// One call: the C codec writes the mirror in place. Strings, bytes,
+        /// arrays and sub-messages are bump-allocated from a C-owned arena, so
+        /// the decoded image must not outlive the plan or the next decode.
+        pub fn decodeInPlace(self: *Self, wire: []const u8, image: *T) !void {
+            @memset(std.mem.asBytes(image), 0);
+            var arena = self.arena;
+            const status = c.pbw_struct_codec_decode(self.codec, dataPtr(wire), wire.len, &arena, @ptrCast(image));
+            // Keep the arena even on failure: C created it before parsing, and
+            // a later decode reuses (and resets) it.
+            self.arena = arena;
+            try check(status);
+        }
+    };
+}
+
+/// Compiles one level of a generated plan into C rows, recursively. Every row
+/// array is allocated from the plan's arena, so the pointers the C codec
+/// holds stay valid for the life of the plan.
+fn buildRows(a: std.mem.Allocator, schema: *const Schema, message: []const u8, plans: []const FieldPlan, rows: []c.pbw_struct_field_t) !void {
+    var nbuf: [512]u8 = undefined;
+    try toNul(message, &nbuf);
+    const desc = c.pbw_schema_find(schema.ptr, nulPtr(&nbuf)) orelse return Error.NotFound;
+    for (plans, 0..) |plan, i| {
+        const w = plan.kind.wire();
+        var row: c.pbw_struct_field_t = .{
+            .fnum = plan.number,
+            .kind = plan.kind.storage(),
+            .repeated = @intFromBool(plan.repeated),
+            .offset = plan.offset,
+            .has = plan.has,
+            .count = plan.count,
+            .elem = 0,
+            .dflt = enumDefault(desc, plan),
+            .fields = null,
+            .nfields = 0,
+            .type = w.typ,
+            .wire = w.wire,
+            .@"packed" = @intFromBool(plan.is_packed),
+            .required = @intFromBool(plan.required),
+            .oneof = @intFromBool(plan.oneof),
+            .cs = plan.cs,
+        };
+        if (plan.child) |child| {
+            const child_rows = try a.alloc(c.pbw_struct_field_t, child.fields.len);
+            try buildRows(a, schema, child.full_name, child.fields, child_rows);
+            row.fields = child_rows.ptr;
+            row.nfields = child_rows.len;
+            row.elem = child.size;
+        }
+        rows[i] = row;
+    }
+}

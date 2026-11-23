@@ -42,12 +42,13 @@ else
     unset -f _warn_stale
 fi
 
-# `swift test` on this toolchain only discovers the XCTest suite with an
+# `swift test` on this toolchain only discovers an XCTest suite with an
 # explicit filter (otherwise the new runner reports 0 tests), so filter by
-# the suite name; it runs all 13.
+# each suite name: PbwireTests is the FFI runtime (13 tests) and PbwireCoreTests
+# is the pure core's descriptor/codec gate.
 case "${1:-all}" in
-    test) swift test --filter PbwireTests ;;
+    test) swift test --filter PbwireTests && swift test --filter PbwireCoreTests ;;
     example) swift run Roundtrip ;;
-    all) swift test --filter PbwireTests && swift run Roundtrip ;;
+    all) swift test --filter PbwireTests && swift test --filter PbwireCoreTests && swift run Roundtrip ;;
     *) echo "usage: $0 [test|example|all]" >&2; exit 2 ;;
 esac

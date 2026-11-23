@@ -9,6 +9,7 @@ namespace Spectest {
 
     public static class PbwireFile_Maptest {
         private static volatile Schema? _schema;
+        private static volatile Schema? _embedded;
         private static readonly object _lock = new object();
 
         static PbwireFile_Maptest() { Init(); }
@@ -18,11 +19,15 @@ namespace Spectest {
             if (_schema == null) {
                 lock (_lock) {
                     if (_schema == null) {
-                        _schema = Schema.FromBytes(Convert.FromBase64String(DescBase64()));
+                        _embedded ??= Schema.FromBytes(Convert.FromBase64String(DescBase64()));
+                        _schema = _embedded;
                     }
                 }
             }
         }
+
+        /// <summary>Whether the embedded set is active: only then do models take the flat-image reader.</summary>
+        internal static bool IsEmbedded => _schema != null && ReferenceEquals(_schema, _embedded);
 
         /// <summary>Registers an externally loaded schema: models encode/decode through it instead of the embedded set. The caller owns it; null restores the embedded set (call Init to reload).</summary>
         public static void UseSchema(Schema? s) {
@@ -59,6 +64,22 @@ namespace Spectest {
             "BAQBAgISAxACIwoMCgUEAQICBhIDEAIXCgwKBQQBAgIBEgMQGB4KDAoFBAEC",
             "AgMSAxAhImIGcHJvdG8z");
         }
+
+        /// <summary>The embedded descriptor set, for the native flat-image reader.</summary>
+        public static byte[] DescriptorSetBytes() { return Convert.FromBase64String(DescBase64()); }
+
+        private static global::Pbwire.LayoutSource? _layouts;
+        /// <summary>Every flat layout in this file: the native reader resolves sub-messages here.</summary>
+        /// <remarks>Built on first use: a static field would reach a layout's Type (and so this holder) while this type is still initializing.</remarks>
+        public static global::Pbwire.LayoutSource Layouts => _layouts ??= new global::Pbwire.LayoutSource(
+            "PbwireFile_Maptest", DescriptorSetBytes,
+            new global::Pbwire.LayoutType[] {
+                MapValue.MapValueLayout.Spec,
+                MapTest.Types.ByIntEntry.ByIntEntryLayout.Spec,
+                MapTest.Types.ByStrEntry.ByStrEntryLayout.Spec,
+                MapTest.Types.ByMsgEntry.ByMsgEntryLayout.Spec,
+                MapTest.MapTestLayout.Spec,
+            });
 
         /// <summary>Every message in this file, for whole-schema pre-registration.</summary>
         public static readonly string[] MessageNames = {

@@ -1,7 +1,9 @@
 //go:build pbench
 
-// Interleaved comparison of the two dynamic arms on the same payload:
-// dync is the C core over cgo and dyngo is the Go core (value tree, no cgo). Every arm does
+// Interleaved comparison of the dynamic arms on the same payload:
+// dync is the C core over cgo, dyngo is the Go core (value tree, no cgo),
+// dyngo-direct is the same Go engine on the direct struct path (no tree),
+// and cshim is the Erlang-style C codec reading Go memory directly. Every arm does
 // the same user-visible task, native struct in and native struct out, and every
 // impl is measured in the same round, back to back, so machine load hits all of
 // them equally and the median across rounds is the number to read.
@@ -17,6 +19,7 @@ import (
 	"time"
 
 	"google.golang.org/protobuf/proto"
+	"pbwire/pbench/cshim"
 	"pbwire/pbench/dync"
 	"pbwire/pbench/dyngo"
 	"pbwire/tests/gen/matrix3"
@@ -95,18 +98,34 @@ func checkStruct(label string, got *matrix3.Scalars3, want *matrix3pb.Scalars3) 
 	return nil
 }
 
+// dyngoDirect times the direct struct path (EncodeModel/DecodeModel, no
+// DMsg tree). The gate still covers the tree-conversion arm separately
+// in gate_test.go, so this row measures the practical path.
+type dyngoDirect struct{ c *dyngo.Codec }
+
+func (d dyngoDirect) Name() string { return "dyngo-direct" }
+func (d dyngoDirect) Marshal(m *matrix3.Scalars3) ([]byte, error) {
+	return d.c.DirectMarshal(m)
+}
+func (d dyngoDirect) Unmarshal(wire []byte) (*matrix3.Scalars3, error) {
+	return d.c.DirectUnmarshal(wire)
+}
+
 func TestCompare(t *testing.T) {
 	cDync, err := dync.New()
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer cDync.Close()
 	cDynGo, err := dyngo.New()
 	if err != nil {
 		t.Fatal(err)
 	}
-	impls := []codec{cDync, cDynGo}
-	names := []string{"dync (C core)", "dyngo (Go core)", "protobuf-go"}
+	cShim, err := cshim.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	impls := []codec{cDync, cDynGo, dyngoDirect{cDynGo}, cShim}
+	names := []string{"dync (C core)", "dyngo (Go tree)", "dyngo-direct (Go core)", "cshim (erlang-style)", "protobuf-go"}
 
 	const rounds = 5
 

@@ -47,11 +47,14 @@ javac -nowarn -cp "$jar" -d "$here/out/oracle-classes" \
     $(find "$oracle" -name '*.java')
 
 # One fat jar: kotlin classes + stdlib, facade, oracle, protobuf-java.
+# The conformance testee rides along: same schema-driven shape as the
+# Scala/Clojure testees over the shared Java runtime (TesteeKt main).
 rm -f "$here/out/pbwire.jar"
 kotlinc -nowarn -cp "$here/out/java-classes:$here/out/oracle-classes:$jar" \
     -include-runtime -d "$here/out/pbwire.jar" \
     "$here"/runtime/*.kt "$here"/tests/*.kt "$here"/tests/gen/*.kt \
-    "$here"/examples/*.kt "$here"/examples/gen/*.kt
+    "$here"/examples/*.kt "$here"/examples/gen/*.kt \
+    "$here"/conformance/*.kt
 stage=$here/out/fat-stage
 rm -rf "$stage"
 mkdir -p "$stage"

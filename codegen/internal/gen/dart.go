@@ -194,7 +194,12 @@ func dartFiles(f *model.File, opt Options) ([]File, error) {
 		})
 		var b strings.Builder
 		b.WriteString(header(f, "Generated facades over the pbwire dynamic API, protobuf-dart shape."))
-		b.WriteString("import 'dart:typed_data';\n\n")
+		b.WriteString("import 'dart:typed_data';\n")
+		if dartLayoutAny(f) {
+			b.WriteString("import 'dart:ffi' as ffi;\n")
+			b.WriteString("import 'package:ffi/ffi.dart' as ffi;\n")
+		}
+		b.WriteString("\n")
 		if dartNeedsFixnum(f) {
 			b.WriteString("import 'package:fixnum/fixnum.dart';\n")
 		}
@@ -214,6 +219,7 @@ func dartFiles(f *model.File, opt Options) ([]File, error) {
 				writeDartOneofKind(&b, m, o)
 			}
 			writeDartMessage(&b, f, m, fileStem)
+			writeDartLayout(&b, f, m)
 		}
 		files = append(files, File{Name: fileStem + ".dart", Content: b.String()})
 	}
@@ -708,4 +714,302 @@ func dartSigned32(field model.Field) bool {
 	default:
 		return false
 	}
+}
+
+/* ------------------------------------------------------------ flat layout */
+
+// The native-object arm (plan 06): every message gets a `dart:ffi` Struct
+// whose member order and offsets are the flat image `pbw_dart_shim.c` walks in
+// place through pbw_struct_codec_*. The offsets are computed here, so the Dart
+// class and the C row table cannot disagree; the rows carry the field facts the
+// codec needs (kind, proto type, wire type, presence and count slots).
+//
+// Copy rules for the non-blittable slots: a `string` row is a NUL-terminated
+// `char *` (UTF-8) and a `bytes` row is the core's inline `pbw_bytes_t`
+// (pointer + length); both point into a per-call `Arena` the caller owns. Encode
+// borrows them, decode allocates them from the call's arena, so the arena must
+// outlive the read of a decoded image.
+
+// dartLayoutKindInfo maps one field kind to the C codec's row facts and its
+// Dart member width: PbwKind name, pbw_struct_kind_t, pbw_type, wire type,
+// slot size and alignment.
+func dartLayoutKindInfo(field model.Field) (name string, cKind, typ, wire, size, align int, ok bool) {
+	switch field.Kind {
+	case protoreflect.Int32Kind:
+		return "int32", 0, 5, 0, 4, 4, true
+	case protoreflect.Sint32Kind:
+		return "int32", 0, 17, 0, 4, 4, true
+	case protoreflect.Sfixed32Kind:
+		return "int32", 0, 15, 5, 4, 4, true
+	case protoreflect.Int64Kind:
+		return "int64", 1, 3, 0, 8, 8, true
+	case protoreflect.Sint64Kind:
+		return "int64", 1, 18, 0, 8, 8, true
+	case protoreflect.Sfixed64Kind:
+		return "int64", 1, 16, 1, 8, 8, true
+	case protoreflect.Uint32Kind:
+		return "uint32", 2, 13, 0, 4, 4, true
+	case protoreflect.Fixed32Kind:
+		return "uint32", 2, 7, 5, 4, 4, true
+	case protoreflect.Uint64Kind:
+		return "uint64", 3, 4, 0, 8, 8, true
+	case protoreflect.Fixed64Kind:
+		return "uint64", 3, 6, 1, 8, 8, true
+	case protoreflect.BoolKind:
+		return "boolean", 4, 8, 0, 1, 1, true
+	case protoreflect.FloatKind:
+		return "float32", 5, 2, 5, 4, 4, true
+	case protoreflect.DoubleKind:
+		return "float64", 6, 1, 1, 8, 8, true
+	case protoreflect.StringKind:
+		return "string_", 7, 9, 2, 8, 8, true
+	case protoreflect.BytesKind:
+		return "bytes", 8, 12, 2, 16, 8, true
+	case protoreflect.EnumKind:
+		return "enumeration", 9, 14, 0, 4, 4, true
+	case protoreflect.MessageKind:
+		return "message", 10, 11, 2, 8, 8, true
+	case protoreflect.GroupKind:
+		return "message", 10, 10, 3, 8, 8, true
+	}
+	return "", 0, 0, 0, 0, 0, false
+}
+
+// dartLayoutDecl is the Dart Struct member declaration for one singular field.
+func dartLayoutDecl(field model.Field) string {
+	name := dartName(field.Lower)
+	switch field.Kind {
+	case protoreflect.Int32Kind, protoreflect.Sint32Kind, protoreflect.Sfixed32Kind:
+		return "@ffi.Int32() external int " + name + ";"
+	case protoreflect.Int64Kind, protoreflect.Sint64Kind, protoreflect.Sfixed64Kind:
+		return "@ffi.Int64() external int " + name + ";"
+	case protoreflect.Uint32Kind, protoreflect.Fixed32Kind:
+		return "@ffi.Uint32() external int " + name + ";"
+	case protoreflect.Uint64Kind, protoreflect.Fixed64Kind:
+		return "@ffi.Uint64() external int " + name + ";"
+	case protoreflect.BoolKind:
+		return "@ffi.Bool() external bool " + name + ";"
+	case protoreflect.FloatKind:
+		return "@ffi.Float() external double " + name + ";"
+	case protoreflect.DoubleKind:
+		return "@ffi.Double() external double " + name + ";"
+	case protoreflect.StringKind:
+		return "external ffi.Pointer<ffi.Utf8> " + name + ";"
+	case protoreflect.BytesKind:
+		return "external PbwBytes " + name + ";"
+	case protoreflect.EnumKind:
+		return "@ffi.Int32() external int " + name + ";"
+	default:
+		return "external ffi.Pointer<" + field.Message + "Layout> " + name + ";"
+	}
+}
+
+// dartLayoutPointee is the element type of a repeated field's array.
+func dartLayoutPointee(field model.Field) string {
+	switch field.Kind {
+	case protoreflect.BoolKind:
+		return "ffi.Bool"
+	case protoreflect.FloatKind:
+		return "ffi.Float"
+	case protoreflect.DoubleKind:
+		return "ffi.Double"
+	case protoreflect.StringKind:
+		return "ffi.Pointer<ffi.Utf8>"
+	case protoreflect.BytesKind:
+		return "PbwBytes"
+	case protoreflect.Int64Kind, protoreflect.Sint64Kind, protoreflect.Sfixed64Kind:
+		return "ffi.Int64"
+	case protoreflect.Uint64Kind, protoreflect.Fixed64Kind:
+		return "ffi.Uint64"
+	case protoreflect.Uint32Kind, protoreflect.Fixed32Kind:
+		return "ffi.Uint32"
+	case protoreflect.MessageKind, protoreflect.GroupKind:
+		return field.Message + "Layout"
+	default:
+		return "ffi.Int32"
+	}
+}
+
+// dartLayoutBase is the top-level name prefix of one message's layout tables.
+func dartLayoutBase(m model.Message) string {
+	return strings.ToLower(m.Name[:1]) + m.Name[1:] + "Layout"
+}
+
+// dartLayoutVar is the top-level row-list name of one message.
+func dartLayoutVar(m model.Message) string {
+	return dartLayoutBase(m) + "Rows"
+}
+
+// dartLayoutOK reports whether a message's flat image is expressible: every
+// field has a slot, and every local sub-message it names has one too (a
+// skipped field has no row, and the codec refuses a layout that misses one).
+func dartLayoutOK(f *model.File, m model.Message) bool {
+	return dartLayoutOKMsg(f, m, map[string]bool{})
+}
+
+func dartLayoutOKMsg(f *model.File, m model.Message, seen map[string]bool) bool {
+	if seen[m.Name] {
+		return true
+	}
+	seen[m.Name] = true
+	for _, field := range m.Fields {
+		if field.Skip != "" {
+			return false
+		}
+		if field.Kind != protoreflect.MessageKind && field.Kind != protoreflect.GroupKind {
+			continue
+		}
+		if field.Import != "" {
+			continue // the sibling file emits its own layout
+		}
+		var child *model.Message
+		for i := range f.Messages {
+			if f.Messages[i].Name == field.Message {
+				child = &f.Messages[i]
+			}
+		}
+		if child == nil || !dartLayoutOKMsg(f, *child, seen) {
+			return false
+		}
+	}
+	return true
+}
+
+func dartLayoutAny(f *model.File) bool {
+	for _, m := range f.Messages {
+		if dartLayoutOK(f, m) {
+			return true
+		}
+	}
+	return false
+}
+
+// dartLayoutChild is the registry key of a message-typed field: its proto full
+// name; map entries carry only their generated class name in the model, so the
+// local message list supplies the full name there.
+func dartLayoutChild(f *model.File, field model.Field) string {
+	if field.Full != "" {
+		return field.Full
+	}
+	for _, m := range f.Messages {
+		if m.Name == field.Message {
+			return m.Full
+		}
+	}
+	return field.Message
+}
+
+// writeDartLayout emits the flat Struct class plus the row list of one message.
+// A message the codec cannot express gets neither, so nothing references a
+// missing class.
+func writeDartLayout(b *strings.Builder, f *model.File, m model.Message) {
+	if !dartLayoutOK(f, m) {
+		return
+	}
+	off := 0
+	alloc := func(size, align int) int {
+		if off%align != 0 {
+			off += align - off%align
+		}
+		slot := off
+		off += size
+		return slot
+	}
+	var decls []string
+	var offsets []int
+	var numbers []int
+	var rows []string
+	cases := map[string]int{}
+	taken := map[string]bool{}
+	for _, field := range m.Fields {
+		kind, cKind, typ, wire, size, align, ok := dartLayoutKindInfo(field)
+		if !ok {
+			return
+		}
+		has, count := 0, 0
+		if field.Oneof != "" {
+			if _, seen := cases[field.Oneof]; !seen {
+				cs := alloc(4, 4)
+				cases[field.Oneof] = cs
+				name := dartName(model.LowerCamel(field.Oneof)) + "Case"
+				for taken[name] {
+					name += "0"
+				}
+				taken[name] = true
+				decls = append(decls, "@ffi.Uint32() external int "+name+";")
+			}
+		}
+		slot := 0
+		name := dartName(field.Lower)
+		if field.Repeated {
+			padded := alloc(8, 8)
+			decls = append(decls, "external ffi.Pointer<"+dartLayoutPointee(field)+"> "+name+";")
+			count = alloc(8, 8)
+			decls = append(decls, "@ffi.IntPtr() external int "+name+"Count;")
+			slot = padded
+		} else {
+			slot = alloc(size, align)
+			decls = append(decls, dartLayoutDecl(field))
+			// Presence: a pointer-shaped slot is absent when NULL, a
+			// repeated field uses its count, and a oneof uses its case word.
+			// Everything else needs the 4-byte has flag the codec reads.
+			needHas := field.Oneof == "" &&
+				(field.NeedsHas || field.Required) &&
+				cKind != 7 && cKind != 8 && cKind != 10
+			if needHas {
+				has = alloc(4, 4)
+				decls = append(decls, "@ffi.Int32() external int has"+field.Pascal+";")
+			}
+		}
+		offsets = append(offsets, slot)
+		numbers = append(numbers, int(field.Number))
+		row := "PbwField(number: " + fmt.Sprint(field.Number) + ", kind: PbwKind." + kind +
+			", offset: " + fmt.Sprint(slot)
+		if field.Repeated {
+			row += ", repeated: true"
+		}
+		if has != 0 {
+			row += ", has: " + fmt.Sprint(has)
+		}
+		if count != 0 {
+			row += ", count: " + fmt.Sprint(count)
+		}
+		if cKind == 10 {
+			row += ", child: '" + dartLayoutChild(f, field) + "'"
+		}
+		if field.Oneof != "" {
+			row += ", oneof: true, cs: " + fmt.Sprint(cases[field.Oneof])
+		}
+		if field.Required {
+			row += ", required: true"
+		}
+		row += ", type: " + fmt.Sprint(typ) + ", wire: " + fmt.Sprint(wire)
+		if field.Packed && field.Repeated {
+			row += ", packed: true"
+		}
+		row += "),"
+		rows = append(rows, row)
+	}
+	fmt.Fprintf(b, "\n/// %s as a flat `dart:ffi` image: the native object the layout codec\n/// reads and writes in one call.\nfinal class %sLayout extends ffi.Struct {\n", m.Full, m.Name)
+	for _, d := range decls {
+		b.WriteString("  " + d + "\n")
+	}
+	fmt.Fprintf(b, "  static int get layoutSize => ffi.sizeOf<%sLayout>();\n}\n\n", m.Name)
+	fmt.Fprintf(b, "/// Byte offset of each field's value slot of %s, in descriptor order.\n", m.Full)
+	fmt.Fprintf(b, "const List<int> %sOffsets = <int>[%s];\n", dartLayoutBase(m), joinInts(offsets))
+	fmt.Fprintf(b, "/// Field numbers matching [%sOffsets].\n", dartLayoutBase(m))
+	fmt.Fprintf(b, "const List<int> %sNumbers = <int>[%s];\n", dartLayoutBase(m), joinInts(numbers))
+	fmt.Fprintf(b, "/// %s's layout rows: the flat image the native reader consumes.\nconst List<PbwField> %s = <PbwField>[\n", m.Full, dartLayoutVar(m))
+	for _, row := range rows {
+		b.WriteString("  " + row + "\n")
+	}
+	b.WriteString("];\n")
+}
+
+func joinInts(values []int) string {
+	parts := make([]string, len(values))
+	for i, v := range values {
+		parts[i] = fmt.Sprint(v)
+	}
+	return strings.Join(parts, ", ")
 }

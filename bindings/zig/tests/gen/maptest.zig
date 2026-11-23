@@ -5,6 +5,8 @@
 const std = @import("std");
 const pbwire = @import("pbwire");
 
+const FieldPlan = pbwire.FieldPlan;
+
 // spectest.MapValue
 pub const Spectest_MapValue = struct {
     name: []const u8 = "",
@@ -49,6 +51,28 @@ pub const Spectest_MapValue = struct {
         return out;
     }
 };
+
+
+/// spectest.MapValue as a flat native image: one C struct-codec call reads and writes it in
+/// place. Every offset below is asserted at comptime.
+pub const MapValueMirror = extern struct {
+    name: ?[*:0]const u8 = null,
+    value: i32 = 0,
+
+    /// Field plan rows: slot offset and has/count/oneof offsets. The
+    /// comptime block below proves every offset.
+    pub const fields = [_]FieldPlan{
+        .{ .number = 1, .kind = .string, .offset = 0 },
+        .{ .number = 2, .kind = .int32, .offset = 8 },
+    };
+    pub const plan = pbwire.InPlace(@This(), "spectest.MapValue", &fields);
+};
+
+comptime {
+    std.debug.assert(@offsetOf(MapValueMirror, "name") == 0);
+    std.debug.assert(@offsetOf(MapValueMirror, "value") == 8);
+    std.debug.assert(@sizeOf(MapValueMirror) == 16);
+}
 
 // spectest.MapTest.ByIntEntry
 pub const Spectest_MapTest_ByIntEntry = struct {
@@ -95,6 +119,28 @@ pub const Spectest_MapTest_ByIntEntry = struct {
     }
 };
 
+
+/// spectest.MapTest.ByIntEntry as a flat native image: one C struct-codec call reads and writes it in
+/// place. Every offset below is asserted at comptime.
+pub const MapTest_ByIntEntryMirror = extern struct {
+    key: i32 = 0,
+    value: ?[*:0]const u8 = null,
+
+    /// Field plan rows: slot offset and has/count/oneof offsets. The
+    /// comptime block below proves every offset.
+    pub const fields = [_]FieldPlan{
+        .{ .number = 1, .kind = .int32, .offset = 0 },
+        .{ .number = 2, .kind = .string, .offset = 8 },
+    };
+    pub const plan = pbwire.InPlace(@This(), "spectest.MapTest.ByIntEntry", &fields);
+};
+
+comptime {
+    std.debug.assert(@offsetOf(MapTest_ByIntEntryMirror, "key") == 0);
+    std.debug.assert(@offsetOf(MapTest_ByIntEntryMirror, "value") == 8);
+    std.debug.assert(@sizeOf(MapTest_ByIntEntryMirror) == 16);
+}
+
 // spectest.MapTest.ByStrEntry
 pub const Spectest_MapTest_ByStrEntry = struct {
     key: []const u8 = "",
@@ -139,6 +185,28 @@ pub const Spectest_MapTest_ByStrEntry = struct {
         return out;
     }
 };
+
+
+/// spectest.MapTest.ByStrEntry as a flat native image: one C struct-codec call reads and writes it in
+/// place. Every offset below is asserted at comptime.
+pub const MapTest_ByStrEntryMirror = extern struct {
+    key: ?[*:0]const u8 = null,
+    value: i32 = 0,
+
+    /// Field plan rows: slot offset and has/count/oneof offsets. The
+    /// comptime block below proves every offset.
+    pub const fields = [_]FieldPlan{
+        .{ .number = 1, .kind = .string, .offset = 0 },
+        .{ .number = 2, .kind = .int32, .offset = 8 },
+    };
+    pub const plan = pbwire.InPlace(@This(), "spectest.MapTest.ByStrEntry", &fields);
+};
+
+comptime {
+    std.debug.assert(@offsetOf(MapTest_ByStrEntryMirror, "key") == 0);
+    std.debug.assert(@offsetOf(MapTest_ByStrEntryMirror, "value") == 8);
+    std.debug.assert(@sizeOf(MapTest_ByStrEntryMirror) == 16);
+}
 
 // spectest.MapTest.ByMsgEntry
 pub const Spectest_MapTest_ByMsgEntry = struct {
@@ -189,6 +257,28 @@ pub const Spectest_MapTest_ByMsgEntry = struct {
         return out;
     }
 };
+
+
+/// spectest.MapTest.ByMsgEntry as a flat native image: one C struct-codec call reads and writes it in
+/// place. Every offset below is asserted at comptime.
+pub const MapTest_ByMsgEntryMirror = extern struct {
+    key: ?[*:0]const u8 = null,
+    value: ?*MapValueMirror = null,
+
+    /// Field plan rows: slot offset and has/count/oneof offsets. The
+    /// comptime block below proves every offset.
+    pub const fields = [_]FieldPlan{
+        .{ .number = 1, .kind = .string, .offset = 0 },
+        .{ .number = 2, .kind = .message, .offset = 8, .child = pbwire.ChildPlan{ .full_name = "spectest.MapValue", .fields = &MapValueMirror.fields, .size = @sizeOf(MapValueMirror) } },
+    };
+    pub const plan = pbwire.InPlace(@This(), "spectest.MapTest.ByMsgEntry", &fields);
+};
+
+comptime {
+    std.debug.assert(@offsetOf(MapTest_ByMsgEntryMirror, "key") == 0);
+    std.debug.assert(@offsetOf(MapTest_ByMsgEntryMirror, "value") == 8);
+    std.debug.assert(@sizeOf(MapTest_ByMsgEntryMirror) == 16);
+}
 
 // spectest.MapTest
 pub const Spectest_MapTest = struct {
@@ -282,4 +372,35 @@ pub const Spectest_MapTest = struct {
         return out;
     }
 };
+
+
+/// spectest.MapTest as a flat native image: one C struct-codec call reads and writes it in
+/// place. Every offset below is asserted at comptime.
+pub const MapTestMirror = extern struct {
+    by_int: ?[*]MapTest_ByIntEntryMirror = null,
+    by_int_count: usize = 0,
+    by_str: ?[*]MapTest_ByStrEntryMirror = null,
+    by_str_count: usize = 0,
+    by_msg: ?[*]MapTest_ByMsgEntryMirror = null,
+    by_msg_count: usize = 0,
+
+    /// Field plan rows: slot offset and has/count/oneof offsets. The
+    /// comptime block below proves every offset.
+    pub const fields = [_]FieldPlan{
+        .{ .number = 1, .kind = .message, .repeated = true, .offset = 0, .count = 8, .child = pbwire.ChildPlan{ .full_name = "spectest.MapTest.ByIntEntry", .fields = &MapTest_ByIntEntryMirror.fields, .size = @sizeOf(MapTest_ByIntEntryMirror) } },
+        .{ .number = 2, .kind = .message, .repeated = true, .offset = 16, .count = 24, .child = pbwire.ChildPlan{ .full_name = "spectest.MapTest.ByStrEntry", .fields = &MapTest_ByStrEntryMirror.fields, .size = @sizeOf(MapTest_ByStrEntryMirror) } },
+        .{ .number = 3, .kind = .message, .repeated = true, .offset = 32, .count = 40, .child = pbwire.ChildPlan{ .full_name = "spectest.MapTest.ByMsgEntry", .fields = &MapTest_ByMsgEntryMirror.fields, .size = @sizeOf(MapTest_ByMsgEntryMirror) } },
+    };
+    pub const plan = pbwire.InPlace(@This(), "spectest.MapTest", &fields);
+};
+
+comptime {
+    std.debug.assert(@offsetOf(MapTestMirror, "by_int") == 0);
+    std.debug.assert(@offsetOf(MapTestMirror, "by_int_count") == 8);
+    std.debug.assert(@offsetOf(MapTestMirror, "by_str") == 16);
+    std.debug.assert(@offsetOf(MapTestMirror, "by_str_count") == 24);
+    std.debug.assert(@offsetOf(MapTestMirror, "by_msg") == 32);
+    std.debug.assert(@offsetOf(MapTestMirror, "by_msg_count") == 40);
+    std.debug.assert(@sizeOf(MapTestMirror) == 48);
+}
 

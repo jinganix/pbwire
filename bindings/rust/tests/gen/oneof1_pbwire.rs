@@ -62,6 +62,53 @@ impl Oneof1 {
     }
 }
 
+/// spectest.Oneof1 as a flat native image: `Schema::in_place` hands this memory
+/// to the C struct codec, so one call reads or writes it in place.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct Oneof1Flat {
+    pub name: *mut ::core::ffi::c_char,
+    pub kind_case: u32,
+    pub num: i32,
+    pub text: *mut ::core::ffi::c_char,
+    pub inner: *mut oneof1::InnerFlat,
+}
+
+impl Oneof1Flat {
+    /// Field plan rows: name, slot offset, kind, flags, has/count/oneof
+    /// offsets, child image. Offsets are asserted below.
+    pub const FIELDS: &'static [pbwire::FieldPlan] = {
+        use pbwire::Kind;
+        &[
+            pbwire::FieldPlan("name", 0, Kind::String, 0, 0, 0, 0, None),
+            pbwire::FieldPlan("num", 12, Kind::I32, pbwire::ONEOF, 0, 0, 8, None),
+            pbwire::FieldPlan("text", 16, Kind::String, pbwire::ONEOF, 0, 0, 8, None),
+            pbwire::FieldPlan("inner", 24, Kind::Message, pbwire::ONEOF, 0, 0, 8, Some(pbwire::ChildPlan { full_name: "spectest.Oneof1.Inner", fields: oneof1::InnerFlat::FIELDS, size: ::core::mem::size_of::<oneof1::InnerFlat>() })),
+        ]
+    };
+}
+
+const _: () = assert!(::core::mem::offset_of!(Oneof1Flat, name) == 0);
+const _: () = assert!(::core::mem::offset_of!(Oneof1Flat, kind_case) == 8);
+const _: () = assert!(::core::mem::offset_of!(Oneof1Flat, num) == 12);
+const _: () = assert!(::core::mem::offset_of!(Oneof1Flat, text) == 16);
+const _: () = assert!(::core::mem::offset_of!(Oneof1Flat, inner) == 24);
+
+impl ::core::default::Default for Oneof1Flat {
+    fn default() -> Self {
+        // SAFETY: every slot is an integer, a raw pointer, or `PbwBytes`,
+        // so an all-zero image is a valid (empty) message.
+        unsafe { ::core::mem::zeroed() }
+    }
+}
+
+unsafe impl pbwire::FlatMessage for Oneof1Flat {
+    const FULL_NAME: &'static str = "spectest.Oneof1";
+    fn fields() -> &'static [pbwire::FieldPlan] {
+        Oneof1Flat::FIELDS
+    }
+}
+
 /// Nested message and enum types in `Oneof1`.
 pub mod oneof1 {
     #[allow(unused_imports)]
@@ -106,6 +153,42 @@ pub mod oneof1 {
             let mut o = Self::default();
             o.v = msg.get_i64(t.field("v")?) as i32;
             Ok(o)
+        }
+    }
+
+    /// spectest.Oneof1.Inner as a flat native image: `Schema::in_place` hands this memory
+    /// to the C struct codec, so one call reads or writes it in place.
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    pub struct InnerFlat {
+        pub v: i32,
+    }
+
+    impl InnerFlat {
+        /// Field plan rows: name, slot offset, kind, flags, has/count/oneof
+        /// offsets, child image. Offsets are asserted below.
+        pub const FIELDS: &'static [pbwire::FieldPlan] = {
+            use pbwire::Kind;
+            &[
+                pbwire::FieldPlan("v", 0, Kind::I32, 0, 0, 0, 0, None),
+            ]
+        };
+    }
+
+    const _: () = assert!(::core::mem::offset_of!(InnerFlat, v) == 0);
+
+    impl ::core::default::Default for InnerFlat {
+        fn default() -> Self {
+            // SAFETY: every slot is an integer, a raw pointer, or `PbwBytes`,
+            // so an all-zero image is a valid (empty) message.
+            unsafe { ::core::mem::zeroed() }
+        }
+    }
+
+    unsafe impl pbwire::FlatMessage for InnerFlat {
+        const FULL_NAME: &'static str = "spectest.Oneof1.Inner";
+        fn fields() -> &'static [pbwire::FieldPlan] {
+            InnerFlat::FIELDS
         }
     }
 

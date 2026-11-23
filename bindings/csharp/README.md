@@ -62,23 +62,69 @@ and `protobuf-net`).
 The four tiers are small / medium / large / xlarge (the repeated fields scaled
 x0 / x1 / x100 / x3000). Copied from [BENCHMARKS.md](../../BENCHMARKS.md),
 which is the single source for all performance numbers; higher is better, MB/s
-over wire bytes (protobuf-net's medium rows are absent: it singular-encodes
-single-element packed fields, so there is nothing byte-identical to time):
+over wire bytes. `pbwire-csharp-tree` is the prebuilt `Pbwire.Message` handle;
+`pbwire-csharp-shim` is the generated model's native-object entry, one call per
+op (see `pbench/README.md` for the recorded deviation: the C core has no
+offset reader, so every field still crosses once). protobuf-net's medium rows
+are absent: it singular-encodes single-element packed fields, so there is
+nothing byte-identical to time:
 
-| payload | op | pbwire-csharp (MB/s, x protobuf-csharp) | protobuf-csharp (MB/s) | protobuf-net (MB/s) |
+| payload | op | pbwire-csharp-tree (MB/s, x protobuf-csharp) | pbwire-csharp-shim (MB/s, x) | protobuf-csharp (MB/s) | protobuf-net (MB/s) |
 |---|---|---|---|---|
-| 136 B | encode | 1470.5 (3.1x) | 479.4 | 587.7 |
-| 136 B | decode | 1164.5 (2.4x) | 480.1 | 463.1 |
-| 174 B | encode | 1377.2 (3.3x) | 416.0 | — |
-| 174 B | decode | 983.4 (2.5x) | 399.1 | — |
-| 2469 B | encode | 1326.1 (2.3x) | 582.1 | 409.5 |
-| 2469 B | decode | 660.2 (1.4x) | 471.3 | 306.7 |
-| 74913 B | encode | 1532.7 (2.9x) | 526.7 | 414.2 |
-| 74913 B | decode | 745.6 (1.4x) | 526.6 | 344.9 |
+| 136 B | encode | 1538.9 (3.32x) | 146.4 (0.32x) | 463.6 | 567.4 |
+| 136 B | decode | 870.4 (1.80x) | 174.6 (0.36x) | 482.7 | 491.1 |
+| 174 B | encode | 1478.9 (3.63x) | 121.2 (0.30x) | 407.5 | — |
+| 174 B | decode | 789.0 (2.05x) | 126.8 (0.33x) | 384.8 | — |
+| 2469 B | encode | 1191.3 (2.09x) | 56.0 (0.10x) | 569.7 | 392.3 |
+| 2469 B | decode | 670.6 (1.43x) | 46.8 (0.10x) | 469.7 | 296.0 |
+| 74913 B | encode | 1689.7 (3.46x) | 59.1 (0.12x) | 488.7 | 381.9 |
+| 74913 B | decode | 750.7 (1.48x) | 51.5 (0.10x) | 506.9 | 328.0 |
 
 Strings cross as NUL-terminated C strings, so `Set(field, string)` stops at the
 first NUL byte: use the `ReadOnlySpan<byte>` overload for binary payloads (a
 `string` field accepts them too, which is how protobuf's wire format works).
+
+## Pure-C# core (no native library)
+
+`bindings/csharp/Pbwire/Core/` is a second, self-contained engine with no
+`DllImport`: it reads the same `FileDescriptorSet`, builds its own schema, and
+encodes/decodes the same bytes, so a deployment with no C toolchain and no
+`libpbwire` still uses pbwire. Nothing in `Pbwire.cs` changes: the P/Invoke
+binding stays the default. The F# facade still rides the P/Invoke binding;
+wiring it to this core is a separate change.
+
+```csharp
+using Pbwire.Core;
+
+var schema = Schema.FromFile("../c/tests/data/matrix3.desc");
+var ty = schema.Message("structtest.Scalars3");
+var msg = ty.NewMessage().Set("i32", -42).Set("str", "alice");
+msg.Add("tags", "a").Add("tags", "bb");        // repeated: appends (converted)
+msg.NewMessage("inner").Set("name", "kid");
+
+byte[] wire = ty.Encode(msg);                  // byte-identical with the C core
+Msg back = ty.Decode(wire);                    // unknown fields retained
+byte[] again = ty.Encode(back);                // byte-exact round trip
+```
+
+`ty.DecodeObject(wire)` / `ty.EncodeObject(dict)` are the plain-object forms the
+pbench `core` arm times (prebuilt plain object in, conversion plus codec per
+call -- the honest full task, not a prebuilt tree). Scope is the binary codec and the same subset the C
+core owns: descriptor reader, encode, decode with unknown retention, groups,
+packed runs, oneof, presence, proto2 required fields, depth/size limits, strict
+tags and lengths, UTF-8 validation on proto3 strings. There is no JSON or text
+printer and no deterministic/delimited/WKT helper in this core (use the P/Invoke
+binding for those). `long`/`ulong` edges round-trip exactly, and no field takes
+a `byte[]` on the hot path: repeated elements are boxed slots, strings/bytes
+decoded off the wire stay slices of the input until read.
+
+`make conformance-csharp` runs the official binary suite through it: 1412
+successes, 1403 skipped (JSON/text input and output), 2 expected failures, 0
+unexpected, same failure set as the C core. Numbers: `BENCHMARKS.md` and
+`pbench/README.md`; the honest full-task row trails the generated codec on
+most cells (small-encode 0.67x/0.71x is its best) because every op converts
+the plain object into the boxed tree and back, so it is the no-toolchain
+arm, not the shipped fast path.
 
 ## Ownership and threads
 

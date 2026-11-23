@@ -46,5 +46,6 @@ protoc -I"$root/bindings/c/tests/data" --java_out="$here/out/oracle-src" \
 javac -nowarn -cp "$protobuf_jar" -d "$here/out/oracle-classes" \
     $(find "$here/out/oracle-src" -name '*.java')
 
-cp="$clj_jar:$spec_jar:$core_specs_jar:$here/out/java-classes:$here/out/oracle-classes:$protobuf_jar:$here/../runtime/src:$here"
+cp="$clj_jar:$spec_jar:$core_specs_jar:$here/out/java-classes:$here/out/oracle-classes:$protobuf_jar:$here/../runtime/src:$here/../tests/gen:$here"
+# tests/gen/matrix3{,_meta}.clj is the committed generated model (tree arm).
 java -cp "$cp" clojure.main -m pbwire.bench "$root/bindings/c/tests/data/matrix3.desc"

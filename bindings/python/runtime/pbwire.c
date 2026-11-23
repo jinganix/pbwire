@@ -400,7 +400,7 @@ rd_group_body(rdr *r, uint32_t fnum, unsigned depth, const uint8_t **body,
 /* --------------------------------------------------------------- types */
 
 typedef struct {
-    PyObject *name;    /* owned, interned */
+    PyObject *name;    /* owned (plain unicode: compare by value, not pointer) */
     const char *cname; /* UTF-8 view of name, owned by it */
     uint32_t number;
     uint8_t type;
@@ -864,7 +864,20 @@ enc_message(MessageType *mt, PyObject *obj, sbuf *b, unsigned depth)
             int known = 0;
 
             for (k = 0; k < mt->nfields; k++) {
+                int eq;
+
+                /* Pointer first (the common interned case), then by
+                 * value: an equal-but-not-identical key is still known. */
                 if (mt->fields[k].name == key) {
+                    known = 1;
+                    break;
+                }
+                eq = PyObject_RichCompareBool(mt->fields[k].name, key,
+                                              Py_EQ);
+                if (eq < 0) {
+                    return 0;
+                }
+                if (eq) {
                     known = 1;
                     break;
                 }
@@ -1708,6 +1721,14 @@ sub_message(Message *parent, field_t *f, uint32_t off, uint32_t len)
     if (sub == NULL) {
         return NULL;
     }
+    /* Null before tracking: the GC may traverse between here and the field
+     * assignments, and the scan below can still fail, so the object must be
+     * collectable and its dealloc must see a tracked object. */
+    sub->mtype = NULL;
+    sub->buffer = NULL;
+    sub->slices = sub->inline_slices;
+    sub->nslices = 0;
+    sub->cap = MSG_INLINE_SLICES;
     PyObject_GC_Track(sub);
     sub->mtype = f->sub;
     Py_INCREF(f->sub);
@@ -1717,9 +1738,6 @@ sub_message(Message *parent, field_t *f, uint32_t off, uint32_t len)
     sub->off = off;
     sub->len = len;
     sub->depth = (uint16_t)(parent->depth + 1);
-    sub->slices = sub->inline_slices;
-    sub->nslices = 0;
-    sub->cap = MSG_INLINE_SLICES;
     if (!scan_message(sub, (MessageType *)f->sub, sub->data, off, len,
                       sub->depth)) {
         Py_DECREF(sub);
@@ -1764,6 +1782,12 @@ joined_message(Message *m, field_t *f, uint32_t fidx)
         Py_DECREF(buffer);
         return NULL;
     }
+    /* Null before tracking: see sub_message. */
+    out->mtype = NULL;
+    out->buffer = NULL;
+    out->slices = out->inline_slices;
+    out->nslices = 0;
+    out->cap = MSG_INLINE_SLICES;
     PyObject_GC_Track(out);
     out->mtype = f->sub;
     Py_INCREF(f->sub);
@@ -1772,9 +1796,6 @@ joined_message(Message *m, field_t *f, uint32_t fidx)
     out->off = 0;
     out->len = (uint32_t)total;
     out->depth = (uint16_t)(m->depth + 1);
-    out->slices = out->inline_slices;
-    out->nslices = 0;
-    out->cap = MSG_INLINE_SLICES;
     if (!scan_message(out, (MessageType *)f->sub, out->data, 0, out->len,
                       out->depth)) {
         Py_DECREF(out);
@@ -2411,6 +2432,12 @@ decode_buffer(MessageType *mt, PyObject *buffer)
         Py_DECREF(buffer);
         return NULL;
     }
+    /* Null before tracking: see sub_message. */
+    m->mtype = NULL;
+    m->buffer = NULL;
+    m->slices = m->inline_slices;
+    m->nslices = 0;
+    m->cap = MSG_INLINE_SLICES;
     PyObject_GC_Track(m);
     m->mtype = (PyObject *)mt;
     Py_INCREF(mt);
@@ -2419,9 +2446,6 @@ decode_buffer(MessageType *mt, PyObject *buffer)
     m->off = 0;
     m->len = (uint32_t)PyBytes_GET_SIZE(buffer);
     m->depth = 0;
-    m->slices = m->inline_slices;
-    m->nslices = 0;
-    m->cap = MSG_INLINE_SLICES;
     if (!scan_message(m, mt, m->data, 0, m->len, 0)) {
         Py_DECREF(m);
         return NULL;
@@ -3489,6 +3513,15 @@ make_message(PyObject *schema_obj, const pbw_descriptor *desc, PyObject *cache)
         return NULL;
     }
     self = (PyObject *)mt;
+    /* Null before tracking: the field loop below allocates (a GC can
+     * traverse this object mid-build) and fail_built frees it, so the
+     * object must be tracked and traverse/clear-safe from here on. */
+    mt->name = NULL;
+    mt->schema_obj = NULL;
+    mt->by_name = NULL;
+    mt->fields = NULL;
+    mt->nfields = 0;
+    PyObject_GC_Track(self);
     mt->name = key; /* the cache key is the message name */
     mt->name_utf8 = pbw_descriptor_name(desc);
     mt->schema_obj = schema_obj;
@@ -3568,7 +3601,8 @@ make_message(PyObject *schema_obj, const pbw_descriptor *desc, PyObject *cache)
             }
         }
     }
-    PyObject_GC_Track(self);
+    /* Tracked at creation (see above); fail_built() below frees a tracked
+     * object, so no second track here. */
     return self;
 
 fail_built:
@@ -3721,12 +3755,15 @@ new_schema(const void *data, size_t len, const char *what,
         return NULL;
     }
     self->schema = schema;
+    /* Null before tracking: the cache alloc below can trigger a GC
+     * traversal, and its failure frees this object. */
+    self->cache = NULL;
+    PyObject_GC_Track(self);
     self->cache = PyDict_New();
     if (self->cache == NULL) {
         Py_DECREF(self);
         return NULL;
     }
-    PyObject_GC_Track(self);
     return (PyObject *)self;
 }
 

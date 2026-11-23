@@ -61,3 +61,26 @@ function decode(::Type{Xfile_UsesDep}, wire::Vector{UInt8})
     return from_dict(Xfile_UsesDep, Pbwire.decode_dict(ty, wire))
 end
 
+
+# xfile.UsesDep as a flat native image: one ccall reads and writes it in place.
+mutable struct UsesDepLayout
+    single::Ptr{DepMsgLayout}
+    many::Ptr{DepMsgLayout}
+    manyCount::Csize_t
+    note::Ptr{UInt8}
+end
+
+function UsesDepLayout()
+    return UsesDepLayout(
+        Ptr{DepMsgLayout}(C_NULL),
+        Ptr{DepMsgLayout}(C_NULL),
+        Csize_t(0),
+        Ptr{UInt8}(C_NULL),
+    )
+end
+
+const usesDepLayoutRows = Pbwire.LayoutRow[
+    Pbwire.LayoutRow(1, 10, 0, fieldoffset(UsesDepLayout, :single), 0, 0, 11, 2, 0, 0, 0, 0, "xdep.DepMsg"),
+    Pbwire.LayoutRow(2, 10, 1, fieldoffset(UsesDepLayout, :many), 0, fieldoffset(UsesDepLayout, :manyCount), 11, 2, 0, 0, 0, 0, "xdep.DepMsg"),
+    Pbwire.LayoutRow(3, 7, 0, fieldoffset(UsesDepLayout, :note), 0, 0, 9, 2, 0, 0, 0, 0, ""),
+]

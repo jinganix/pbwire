@@ -8,6 +8,14 @@
  * matches the C/Go/Python rows: 136 / 174 / 2469 / 74913 bytes. Both sides must
  * produce identical bytes before anything is timed.
  *
+ * Arms (bindings/README.md#pbench-three-arms-one-contract):
+ *   tree  the `PBWMessage` facade, full task -- fresh per-field build per
+ *               iteration, then encode; decode reads the reference bytes
+ *               per iteration (an eager tree, so no separate read-back).
+ *   proxy the held handle -- re-encode a prebuilt tree. Published, never
+ *               the headline.
+ * (The direct struct path is the same C code, measured by `make bench-c`.)
+ *
  *   ./bench.sh          generate, build, run
  */
 
@@ -206,6 +214,19 @@ main(int argc, char **argv)
                 failures++;
                 continue;
             }
+            /* Full-task tree gate: a fresh per-field build must match the
+             * reference too (not just the held tree above). */
+            {
+                PBWMessage *freshGate = fill_pbwire(schema, c->pad, &error);
+                NSData *freshBytes =
+                    freshGate == nil ? nil : [freshGate encode:&error];
+                if (freshBytes == nil || ![freshBytes isEqualToData:reference]) {
+                    printf("FAIL %s: pbwire-objc fresh-build bytes differ\n",
+                           c->label);
+                    failures++;
+                    continue;
+                }
+            }
             /* Decode must round-trip byte-exactly and expose the same values. */
             {
                 NSError *gateError = nil;
@@ -229,15 +250,24 @@ main(int argc, char **argv)
             {
                 Scalars3 *official = fill_official(c->pad);
                 PBWMessage *decodeSource = fill_pbwire(schema, c->pad, &error);
-                /* Tier line shows the reference op's count; slower ops keep
-                 * the floor. */
+                /* The tree arm's full task: a fresh per-field build per
+                 * iteration, then encode. The held-tree re-encode below is
+                 * the proxy row: same-run timing only, never the headline.
+                 * Tier line shows the tree op's count. */
                 int count = calibrate(^{
                   NSError *ignored = nil;
+                  PBWMessage *fresh = fill_pbwire(schema, c->pad, &ignored);
 
-                  (void)[message encode:&ignored];
+                  (void)[fresh encode:&ignored];
                 },
                                       c->iterations);
                 double encode_ns = measure(c->iterations, ^{
+                  NSError *ignored = nil;
+                  PBWMessage *fresh = fill_pbwire(schema, c->pad, &ignored);
+
+                  (void)[fresh encode:&ignored];
+                });
+                double proxy_encode_ns = measure(c->iterations, ^{
                   NSError *ignored = nil;
 
                   (void)[message encode:&ignored];
@@ -263,6 +293,8 @@ main(int argc, char **argv)
                 row("protobuf-objc", "encode", reference.length, official_encode_ns);
                 row("pbwire-objc", "decode", reference.length, decode_ns);
                 row("protobuf-objc", "decode", reference.length, official_decode_ns);
+                row("pbwire-objc-proxy", "encode", reference.length,
+                    proxy_encode_ns);
                 printf("\n");
             }
         }

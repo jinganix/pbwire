@@ -1,79 +1,41 @@
 # Julia binding benchmark on the same matrix3.proto and the four standard tiers
+
+using Printf
 # from BENCHMARKS.md: every scalar kind, the nested message, the two proto3
 # optionals, and the repeated fields scaled x0 / x1 / x100 / x3000, which lands
 # the tiers on 136 / 174 / 2469 / 74913 bytes.
 #
-# Both sides must produce identical bytes before anything is timed. The
-# baseline is JuliaIO/ProtoBuf.jl with generated code (`oracle/matrix3_pb.jl`,
-# produced by `protojl("matrix3.proto", "<proto dir>", "benchmarks/oracle")`);
-# when it is absent the script times pbwire only and says so.
+# The rows are the published mechanisms: `pbwire-julia-tree` is the Go-parity
+# full task (a fresh dynamic Message per iteration through the shipped
+# per-field API: one set per field, encode, close; decode, one get per field
+# folded into a live sink, close), `pbwire-julia-proxy` is the old prebuilt
+# shape (a held handle's encode, bare decode-and-close, and the reusable Ctx
+# workspace decode, relabelled not re-measured, never the headline),
+# `pbwire-julia-shim` is the generated flat layout image read and written in
+# place by the C reader (one ccall per op), and `pbwire-julia-core` is the
+# pure-Julia core (plan 19): a plain Dict in, encode_dict out; wire bytes in,
+# fully materialized decode_dict out. All sides must produce identical bytes
+# before anything is timed.
+#
+# Steady-state carve-out (disclosed): `shim`/`core` time the one-downcall op
+# on the app-owned native input (layout image / Dict) held across iterations,
+# the same shape `make julia-bench` has always timed; only `tree` rebuilds
+# its native input per iteration.
+#
+# The baseline is JuliaIO/ProtoBuf.jl with generated code
+# (`benchmarks/oracle/.../matrix3_pb.jl`, produced by `protojl("matrix3.proto",
+# "<proto dir>", "benchmarks/oracle")`); when it is absent the script times
+# pbwire only and says so.
 #
 #   julia --project=runtime benchmarks/bench.jl [matrix3.desc]
 
-push!(LOAD_PATH, joinpath(@__DIR__, "..", "runtime"))
-using Pbwire
-using Printf
+include(joinpath(@__DIR__, "..", "pbench", "b-shim.jl"))
+include(joinpath(@__DIR__, "..", "pbench", "core_arm.jl"))
+using .CoreArm
 
-const CASES = ("small", "medium", "large", "xlarge")
-const REPEATS = (0, 1, 100, 3000)
-const WANT = (136, 174, 2469, 74913)
 const FLOORS = (50000, 50000, 5000, 500)
 const MIN_PASS_SECONDS = 0.25
 const PASSES = 3
-
-function fill_pbwire!(ty::MsgType, n::Int)
-    m = new_message(ty)
-    set_int!(m, "i32", -2147483648)
-    set_int!(m, "i64", 9223372036854775807)
-    set_int!(m, "u32", 4294967295)
-    set_int!(m, "u64", -1)
-    set_int!(m, "s32", -2147483648)
-    set_int!(m, "s64", -9223372036854775808)
-    set_int!(m, "fx32", 0xdeadbeef)
-    set_int!(m, "fx64", 72623859790382856)
-    set_int!(m, "sfx32", -2147483648)
-    set_int!(m, "sfx64", -9223372036854775808)
-    set_float!(m, "f32", Inf)
-    set_double!(m, "f64", -123456.789)
-    set_bool!(m, "flag", true)
-    set_string!(m, "str", "hello")
-    set_int!(m, "color", 2)
-    set_int!(m, "opt_i32", -7)
-    set_string!(m, "opt_str", "opt")
-    kid = set_message!(m, "inner")
-    set_string!(kid, "name", "kid")
-    set_int!(kid, "value", 42)
-    for i in 0:(n - 1)
-        set_int!(m, "nums", i - 3)
-        set_string!(m, "tags", "tag")
-        set_bool!(m, "flags", i % 2 == 0)
-        inner = set_message!(m, "inners")
-        set_string!(inner, "name", "grandkid")
-        set_int!(inner, "value", i + 1)
-    end
-    return m
-end
-
-function fill_baseline(n::Int)
-    Main.Scalars3(Int32(-2147483648), 9223372036854775807, UInt32(4294967295),
-        typemax(UInt64), Int32(-2147483648), typemin(Int64),
-        UInt32(0xdeadbeef), UInt64(72623859790382856),
-        typemin(Int32), typemin(Int64), Inf32, -123456.789, true, "hello",
-        Main.Color3.COLOR3_GREEN, Main.Inner3("kid", Int32(42)),
-        Int32[i - 3 for i in 0:(n - 1)], fill("tag", n),
-        [Main.Inner3("grandkid", Int32(i + 1)) for i in 0:(n - 1)],
-        Int32(-7), "opt", Bool[i % 2 == 0 for i in 0:(n - 1)])
-end
-
-function baseline_encode(m)
-    io = IOBuffer()
-    Main.PB.encode(Main.PB.ProtoEncoder(io), m)
-    return take!(io)
-end
-
-function baseline_decode(::Type{T}, bytes::Vector{UInt8}) where {T}
-    return Main.PB.decode(Main.PB.ProtoDecoder(IOBuffer(bytes)), T)
-end
 
 function calibrate(op, floor::Int)
     n = max(floor, 1)
@@ -106,81 +68,171 @@ function measure(floor::Int, op)
 end
 
 function row(impl::String, op::String, bytes::Int, ns::Float64)
-    @printf("  %-12s %-7s %12.1f %10.1f\n", impl, op, ns, bytes / ns * 1000.0)
+    @printf("  %-18s %-7s %12.1f %10.1f\n", impl, op, ns, bytes / ns * 1000.0)
 end
 
-# Optional baseline: generated ProtoBuf.jl code next to this script, included
-# at top level so its methods are visible to everything below (including
-# fill_baseline) without world-age issues.
-const ORACLE_PATH = joinpath(@__DIR__, "oracle", "matrix3_pb.jl")
-const HAS_BASELINE = let ok = false
-    if isfile(ORACLE_PATH)
-        try
-            include(ORACLE_PATH)
-            ok = true
-        catch e
-            @warn "baseline oracle present but not loadable; timing pbwire only" exception = e
-        end
+# Folds every gate-checked field (same list `tree_reads` asserts) so the tree
+# decode timer pays the read, not just the parse. Returns an Int the caller
+# adds to a live sink.
+function consume_tree!(m::Message, repeats::Int)
+    acc = Int64(0)
+    acc += get_int(m, "i32")
+    acc += get_int(m, "i64")
+    acc += get_int(m, "u32")
+    acc += get_int(m, "u64")
+    acc += get_int(m, "s32")
+    acc += get_int(m, "s64")
+    acc += get_int(m, "fx32")
+    acc += get_int(m, "fx64")
+    acc += get_int(m, "sfx32")
+    acc += get_int(m, "sfx64")
+    acc += get_float(m, "f32") > 0 ? Int64(1) : Int64(0)
+    acc += trunc(Int64, get_double(m, "f64"))
+    acc += get_bool(m, "flag") ? Int64(1) : Int64(0)
+    acc += Int64(length(get_string(m, "str")))
+    acc += get_int(m, "color")
+    acc += has(m, "opt_i32") ? get_int(m, "opt_i32") : Int64(0)
+    acc += has(m, "opt_str") ? Int64(length(get_string(m, "opt_str"))) : Int64(0)
+    inner = get_message(m, "inner")
+    acc += Int64(length(get_string(inner, "name")))
+    acc += get_int(inner, "value")
+    acc += Int64(Pbwire.count(m, "nums"))
+    acc += Int64(Pbwire.count(m, "tags"))
+    acc += Int64(Pbwire.count(m, "inners"))
+    acc += Int64(Pbwire.count(m, "flags"))
+    if repeats > 0
+        acc += as_int(at(m, "nums", repeats))
+        acc += Int64(length(as_string(at(m, "tags", repeats))))
+        acc += as_bool(at(m, "flags", repeats)) ? Int64(1) : Int64(0)
+        acc += get_int(as_message(at(m, "inners", repeats)), "value")
     end
-    ok
+    return acc
 end
 
 function main(args::Vector{String})
-    desc = isempty(args) ?
-           joinpath(@__DIR__, "..", "..", "c", "tests", "data", "matrix3.desc") : args[1]
+    desc = isempty(args) ? DESC : args[1]
     schema = from_file(desc)
     ty = msgtype(schema, "structtest.Scalars3")
+    ls = layout_schema(schema)
 
-    # Optional baseline: generated ProtoBuf.jl code next to this script.
-    baseline = HAS_BASELINE || nothing
-    if baseline === nothing
-        println("note: no ProtoBuf.jl baseline (benchmarks/oracle/matrix3_pb.jl absent);")
-        println("      timing pbwire only. Generate it with protojl and")
-        println("      rerun to compare against JuliaIO/ProtoBuf.jl.")
+    if !HAS_ORACLE
+        println("note: no ProtoBuf.jl baseline under benchmarks/oracle;")
+        println("      timing pbwire only. Generate it with pbench/setup.sh or protojl.")
     end
 
     failures = 0
-    for tier in 1:4
-        label, n, want, floor = CASES[tier], REPEATS[tier], WANT[tier], FLOORS[tier]
-        tmp = fill_pbwire!(ty, n)
-        got = encode(tmp)
+    for (tier, floor) in zip(tiers, FLOORS)
+        label, n, want = tier.label, tier.repeats, tier.bytes
+        tmp = fill_tree!(ty, n)
+        got = Pbwire.encode(tmp)
         close(tmp)
         if length(got) != want
             println("FAIL $label: pbwire wrote $(length(got)) bytes, expected $want")
             failures += 1
             continue
         end
-        back = decode(ty, got)
-        ok = encode(back) == got && get_string(back, "str") == "hello" &&
-             Pbwire.count(back, "nums") == n &&
-             (n == 0 || as_int(at(back, "nums", n)) == n - 4)
+        # The tree full task, gated before it is timed: a second fresh
+        # native build encodes to the same bytes, a fresh decode exposes
+        # every gate-checked field, and the decoded tree re-encodes
+        # byte-exactly. The prebuilt rows below are the proxy arm.
+        fresh = fill_tree!(ty, n)
+        fresh_got = Pbwire.encode(fresh)
+        close(fresh)
+        if fresh_got != got
+            println("FAIL $label: pbwire-julia-tree fresh-build bytes differ")
+            failures += 1
+            continue
+        end
+        back = Pbwire.decode(ty, got)
+        ok = tree_reads(back, n)
+        again = ok ? Pbwire.encode(back) : UInt8[]
         close(back)
         if !ok
-            println("FAIL $label: pbwire decode differs")
+            println("FAIL $label: pbwire-julia-tree field compare differs")
+            failures += 1
+            continue
+        end
+        if again != got
+            println("FAIL $label: pbwire-julia-tree re-encode differs")
+            failures += 1
+            continue
+        end
+
+        payload = layout_payload(ls, n)
+        shim_got = shim_encode(payload)
+        if shim_got != got
+            println("FAIL $label: shim bytes differ")
+            failures += 1
+            continue
+        end
+        if !layout_reads(shim_decode(got, payload), n)
+            println("FAIL $label: shim decode differs")
+            failures += 1
+            continue
+        end
+        core_obj = core_object(n)
+        if core_marshal(core_obj) != got || core_roundtrip(got) != got ||
+           core_unmarshal(got) != core_obj
+            println("FAIL $label: core bytes or fields differ")
             failures += 1
             continue
         end
         println("OK   $label encoding parity, x$n ($want bytes)")
 
-        probe = fill_pbwire!(ty, n)
-        tier_n = calibrate(() -> encode(probe), floor)
-        enc = measure(floor, () -> encode(probe))
-        dec = measure(floor, () -> let m = decode(ty, got)
+        probe = fill_tree!(ty, n)
+        # Floor calibration stays on the prebuilt op so the slower tree op
+        # never inflates any row's iteration count.
+        tier_n = calibrate(() -> Pbwire.encode(probe), floor)
+        sink = Ref{Int64}(0)
+        enc = measure(floor, () -> begin
+            built = fill_tree!(ty, n)
+            try
+                sink[] += Int64(length(Pbwire.encode(built)))
+            finally
+                close(built)
+            end
+        end)
+        dec = measure(floor, () -> begin
+            m = Pbwire.decode(ty, got)
+            try
+                sink[] += consume_tree!(m, n)
+            finally
+                close(m)
+            end
+        end)
+        # The proxy arm: the old prebuilt shape (a held handle's encode,
+        # bare decode-and-close with no materialization), relabelled not
+        # re-measured as a new task, never the headline.
+        proxy_enc = measure(floor, () -> Pbwire.encode(probe))
+        proxy_dec = measure(floor, () -> let m = Pbwire.decode(ty, got)
             close(m)
         end)
-        # The workspace path: the same decode into a reusable context, which
-        # drops the per-message arena allocation. Both rows are the binding's
-        # own API; the table's ratio uses the workspace one.
+        # The workspace path: the same prebuilt decode into a reusable
+        # context, which drops the per-message arena allocation. A proxy-row
+        # variant of the bare decode, kept beside it.
         ctx = Ctx()
         dec_ctx = measure(floor, () -> decode_in(ctx, ty, got))
         close(probe)
+        sink[] == typemax(Int64) && error("unreachable sink guard")
+
+        shim_enc = measure(floor, () -> shim_encode(payload))
+        shim_dec = measure(floor, () -> shim_decode(got, payload))
+        core_enc = measure(floor, () -> core_marshal(core_obj))
+        core_dec = measure(floor, () -> core_unmarshal(got))
+
         println("$label: $want bytes, $tier_n iterations (repeat field x$n)")
-        println("  $(rpad("impl", 12)) $(rpad("op", 7)) $(lpad("ns/op", 12)) $(lpad("MB/s", 10))")
-        row("pbwire-julia", "encode", want, enc)
-        row("pbwire-julia", "decode", want, dec)
-        row("pbwire-julia", "dec+ctx", want, dec_ctx)
-        if baseline !== nothing
-            ref = fill_baseline(n)
+        println("  $(rpad("impl", 18)) $(rpad("op", 7)) $(lpad("ns/op", 12)) $(lpad("MB/s", 10))")
+        row("pbwire-julia-tree", "encode", want, enc)
+        row("pbwire-julia-tree", "decode", want, dec)
+        row("pbwire-julia-proxy", "encode", want, proxy_enc)
+        row("pbwire-julia-proxy", "decode", want, proxy_dec)
+        row("pbwire-julia-proxy", "dec+ctx", want, dec_ctx)
+        row("pbwire-julia-shim", "encode", want, shim_enc)
+        row("pbwire-julia-shim", "decode", want, shim_dec)
+        row("pbwire-julia-core", "encode", want, core_enc)
+        row("pbwire-julia-core", "decode", want, core_dec)
+        if HAS_ORACLE
+            ref = baseline_message(n)
             ref_bytes = baseline_encode(ref)
             if ref_bytes != got
                 println("FAIL $label: baseline differs from pbwire bytes")
@@ -189,7 +241,7 @@ function main(args::Vector{String})
                 continue
             end
             benc = measure(floor, () -> baseline_encode(ref))
-            bdec = measure(floor, () -> baseline_decode(Main.Scalars3, got))
+            bdec = measure(floor, () -> baseline_decode(got))
             row("protobuf-jl", "encode", want, benc)
             row("protobuf-jl", "decode", want, bdec)
         end

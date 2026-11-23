@@ -9,6 +9,11 @@
  * Decode on the nanopb side zeroes the struct first (a decode needs a fresh
  * message) and pbwire's decode resets its arena first; that reset is part of
  * both numbers, because it is work every caller does per message.
+ *
+ * Arms: `pbwire` is the facade `tree` arm -- build + fill + encode fresh per
+ * iteration inside the timer (the full task). `pbwire-proxy` re-encodes the
+ * held tree instead: same-run timing only, never the headline. There is no
+ * third mechanism here (see BENCHMARKS.md: two mechanisms).
  */
 
 #include <stdint.h>
@@ -156,8 +161,57 @@ run_case(pbwe_box *box, const pbw_descriptor *desc, int samples, int iters)
             memcmp(wire_pb, wire_nb, wire_pb_len) == 0;
     printf("samples x%d: %zu bytes (pbwire == nanopb: %s)\n", samples, wire_pb_len,
            equal ? "yes" : "NO");
+    if (!equal)
+        return 0;
 
-    /* ---- encode ---- */
+    /* Field-by-field gate: identical bytes must also decode to the values
+     * both sides filled (byte parity alone would not catch a dropped field
+     * that both sides drop). */
+    {
+        const pbw_message *check = NULL;
+        const pbw_value *id = NULL;
+        const pbw_value *lbl = NULL;
+        const pbw_value *samp = NULL;
+        const void *lbl_bytes = NULL;
+        size_t lbl_len = 0;
+        int ok_fields = 0;
+
+        if (pbwe_decode_desc(box, desc, wire_pb, wire_pb_len, &check) != PBW_OK) {
+            fprintf(stderr, "gate decode failed\n");
+            return 0;
+        }
+        id = pbw_message_get(check, 1);
+        lbl = pbw_message_get(check, 6);
+        samp = pbw_message_get(check, 8);
+        if (lbl != NULL)
+            lbl_bytes = pbw_value_get_bytes(lbl, &lbl_len);
+        ok_fields = id != NULL && pbw_value_get_uint(id) == 42 &&
+                    lbl_bytes != NULL && lbl_len == sizeof(label) - 1 &&
+                    memcmp(lbl_bytes, label, lbl_len) == 0 &&
+                    (samp == NULL ? 0 : (int)pbw_value_count(samp)) == samples;
+        if (!ok_fields) {
+            fprintf(stderr, "field gate failed\n");
+            return 0;
+        }
+    }
+
+    /* ---- encode (fresh tree per iteration: build + fill + encode) ---- */
+    t0 = now_ns();
+    for (i = 0; i < iters; i++) {
+        built = pbwe_build(box, desc);
+        if (built == NULL) {
+            return 0;
+        }
+        fill_tree(box->ctx, built, samples);
+        if (pbwe_encode(built, wire_pb, sizeof(wire_pb), &len) != PBW_OK) {
+            return 0;
+        }
+        sink += (long)len;
+    }
+    t1 = now_ns();
+    report("pbwire", "encode", (t1 - t0) / iters, wire_pb_len);
+
+    /* ---- encode (proxy: the old held-tree re-encode, relabelled) ---- */
     t0 = now_ns();
     for (i = 0; i < iters; i++) {
         if (pbwe_encode(built, wire_pb, sizeof(wire_pb), &len) != PBW_OK) {
@@ -166,7 +220,7 @@ run_case(pbwe_box *box, const pbw_descriptor *desc, int samples, int iters)
         sink += (long)len;
     }
     t1 = now_ns();
-    report("pbwire", "encode", (t1 - t0) / iters, wire_pb_len);
+    report("pbwire-proxy", "encode", (t1 - t0) / iters, wire_pb_len);
 
     t0 = now_ns();
     for (i = 0; i < iters; i++) {

@@ -5,24 +5,53 @@ scalar kind, string, enum, nested message, three repeated kinds, proto3
 optional) and the four standard tiers from BENCHMARKS.md: the repeated fields
 scale x0 / x1 / x100 / x3000.
 
-The rows compare the same user-visible task, not the same internal call:
+The rows compare the same user-visible task, not the same internal call.
+Four pbwire rows, named by the mechanism they time. The first three time
+the same native-in/native-out task; the fourth is the prebuilt handle:
+
+    pbwire-py-tree   a native dict in and out through the shipped per-field
+                     API: encode(dict); decode, then read every field back
+                     with one get() per field into a fresh dict (the pbench
+                     tree arm). No prebuilt handle before the timer.
+    pbwire-py-shim   the same dict in and out in one downcall per op: the C
+                     extension walks the dict (encode) and the tree
+                     (decode().to_dict()).
+    pbwire-py-core   the pure-Python core (bindings/python/pure/, no CPython
+                     extension), timed on the same task (see below).
+    pbwire-py-proxy  encode/decode of a Message handle built (and read)
+                     before the timer: the codec's own cost once the tree
+                     exists. "The data is already in pbwire." Published,
+                     never the headline.
 
     encode(data)    Python values -> wire bytes
-                    pbwire: encode(dict)
+                    tree/shim: encode(dict)
                     upb:    populate a message from the dict, then serialize
-    decode(bytes)   wire bytes -> in-memory message (fields read on demand)
-                    pbwire: decode(bytes)
-                    upb:    Scalars3.FromString(bytes)
     to_dict(bytes)  wire bytes -> plain Python data
-                    pbwire: decode(bytes).to_dict()
+                    tree: decode(bytes), then one get() per field
+                    shim: decode(bytes).to_dict()
                     upb:    FromString, then read every field into dicts/lists
+    decode(bytes)   wire bytes -> in-memory message (fields read on demand)
+                    proxy: decode(bytes), no materialization
+                    upb:    Scalars3.FromString(bytes)
     encode(parsed)  in-memory message -> wire bytes
-                    pbwire: encode(message)   (a parsed message keeps its bytes)
+                    proxy: encode(message)   (a parsed message keeps its bytes)
                     upb:    message.SerializeToString()
 
 `to_dict(bytes)` deliberately does not use `json_format.MessageToDict`: that
 goes through JSON-shaped intermediate values and is ~4x slower than reading the
 fields, so it would not measure the same thing.
+
+The `pbwire-py-core` rows are the pure-Python core (`bindings/python/pure/`, no
+CPython extension, no `google.protobuf`), timed on the same task:
+
+    encode(data)    encode_object(dict): build the tree, then write the wire
+    to_dict(bytes)  decode_object(bytes): parse, then read every field
+    encode(parsed)  encode(tree): the tree a decode already built
+
+They are gated first -- the core's bytes must equal protoc's, its decode must
+equal the same dict, and a decoded tree must re-encode byte-exactly -- so no
+row is printed before the arm is correct. It is the no-extension path and is
+never the fast one; see `bindings/python/pbench/README.md`.
 
 The baseline row names the protobuf implementation that is actually loaded
 (`pb upb`: protobuf's C extension). The generated `matrix3_pb2` module comes
@@ -42,6 +71,10 @@ sys.path.insert(0, os.path.join(HERE, "gen"))         # matrix3_pb2
 import pbwire as pbw
 from google.protobuf.internal import api_implementation
 import matrix3_pb2
+
+sys.path.insert(0, os.path.join(HERE, "..", "pbench"))   # the pure core arm
+import core as pure_core  # noqa: E402
+import tree as tree_arm  # noqa: E402
 
 TIERS = (("small", 0, 136), ("medium", 1, 174), ("large", 100, 2469), ("xlarge", 3000, 74913))
 DESC = "bindings/c/tests/data/matrix3.desc"
@@ -166,32 +199,61 @@ def run():
         if len(reference) != want:
             return fail("official encoder wrote %d bytes, expected %d" % (len(reference), want), label)
         if scalars.encode(values) != reference:
-            return fail("pbwire-py bytes differ from protobuf", label)
+            return fail("pbwire-py-shim bytes differ from protobuf", label)
         if scalars.decode(reference).to_dict() != want_dict:
-            return fail("pbwire-py to_dict differs", label)
+            return fail("pbwire-py-shim to_dict differs", label)
         if scalars.encode(scalars.decode(reference)) != reference:
-            return fail("pbwire-py Message round trip differs", label)
+            return fail("pbwire-py-proxy Message round trip differs", label)
+        # The tree arm is gated before it is timed: same bytes through the
+        # per-field full task, same fields back, byte-exact round trip of
+        # the materialized dict.
+        if tree_arm.marshal(values) != reference:
+            return fail("pbwire-py-tree bytes differ from protobuf", label)
+        if tree_arm.unmarshal(reference) != want_dict:
+            return fail("pbwire-py-tree field compare differs", label)
+        if scalars.encode(tree_arm.unmarshal(reference)) != reference:
+            return fail("pbwire-py-tree full-task round trip differs", label)
         if protobuf_data(matrix3_pb2.Scalars3.FromString(reference)) != want_dict:
             return fail("protobuf data differs", label)
+
+        # The pure core is gated before it is timed: same bytes, same data,
+        # byte-exact round trip.
+        if pure_core.marshal(values) != reference:
+            return fail("pure core bytes differ from protobuf", label)
+        if pure_core.unmarshal(reference) != want_dict:
+            return fail("pure core decode differs", label)
+        core_message = pure_core.TYPE.decode(reference)
+        if pure_core.TYPE.encode(core_message) != reference:
+            return fail("pure core tree round trip differs", label)
 
         message = scalars.decode(reference)
         pb_message = matrix3_pb2.Scalars3.FromString(reference)
 
         rows = [
-            ("pbwire-py", "encode(data)",
+            ("pbwire-py-tree", "encode(data)",
+             time_it(lambda: tree_arm.marshal(values))[0]),
+            ("pbwire-py-shim", "encode(data)",
              time_it(lambda: scalars.encode(values))[0]),
             (base_label, "encode(data)",
              time_it(lambda: protobuf_of(values).SerializeToString())[0]),
-            ("pbwire-py", "decode(bytes)",
+            ("pbwire-py-proxy", "decode(bytes)",
              time_it(lambda: scalars.decode(reference))[0]),
             (base_label, "decode(bytes)",
              time_it(lambda: matrix3_pb2.Scalars3.FromString(reference))[0]),
-            ("pbwire-py", "to_dict(bytes)",
+            ("pbwire-py-tree", "to_dict(bytes)",
+             time_it(lambda: tree_arm.unmarshal(reference))[0]),
+            ("pbwire-py-shim", "to_dict(bytes)",
              time_it(lambda: scalars.decode(reference).to_dict())[0]),
+            (pure_core.NAME, "encode(data)",
+             time_it(lambda: pure_core.marshal(values))[0]),
+            (pure_core.NAME, "to_dict(bytes)",
+             time_it(lambda: pure_core.unmarshal(reference))[0]),
+            (pure_core.NAME, "encode(parsed)",
+             time_it(lambda: pure_core.TYPE.encode(core_message))[0]),
             (base_label, "to_dict(bytes)",
              time_it(lambda: protobuf_data(
                  matrix3_pb2.Scalars3.FromString(reference)))[0]),
-            ("pbwire-py", "encode(parsed)",
+            ("pbwire-py-proxy", "encode(parsed)",
              time_it(lambda: scalars.encode(message))[0]),
             (base_label, "encode(parsed)",
              time_it(lambda: pb_message.SerializeToString())[0]),
@@ -206,9 +268,69 @@ def run():
     return status
 
 
+def load_core(path):
+    """Imports one pure-core module by file path (the A/B switch)."""
+    import importlib.util
+
+    name = "pbwire_py_core_" + os.path.basename(os.path.dirname(path))
+    spec = importlib.util.spec_from_file_location(name, path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def ab(argv):
+    """A/B probe for the pure core: two module paths, interleaved rounds.
+
+        bench.py ab bindings/python/pbench/core.py /tmp/core-v1.py
+
+    Both modules must expose NAME, marshal(dict), unmarshal(wire) and a TYPE
+    with encode/decode. Every round times both sides back to back, so a
+    drifting machine hits them equally; a candidate is only kept when it wins
+    in every round. Bytes must stay identical.
+    """
+    if len(argv) < 3:
+        print("usage: ab <base.py> <cand.py> [rounds]")
+        return 2
+    base = load_core(argv[1])
+    cand = load_core(argv[2])
+    rounds = int(argv[3]) if len(argv) > 3 else 3
+    tiers = TIERS[-2:]
+    status = 0
+    for label, repeats, want in tiers:
+        values = scalars3(repeats)
+        wire = base.marshal(values)
+        if len(wire) != want or cand.marshal(values) != wire:
+            print("FAIL %s: base and candidate bytes differ" % label)
+            return 1
+        base_message = base.TYPE.decode(wire)
+        cand_message = cand.TYPE.decode(wire)
+        ops = [
+            ("encode(data)", lambda m: m.marshal(values)),
+            ("to_dict(bytes)", lambda m: m.unmarshal(wire)),
+            ("encode(parsed)", lambda m: m.TYPE.encode(m is base and base_message or cand_message)),
+        ]
+        print("\n%s: %d bytes, %d interleaved rounds" % (label, len(wire), rounds))
+        print("  %-20s %-16s %10s %10s" % ("impl", "op", "ns/op", "MB/s"))
+        for op, fn in ops:
+            best = {base.NAME: float("inf"), cand.NAME: float("inf")}
+            for _ in range(rounds):
+                for module in (base, cand):
+                    ns = time_it(lambda: fn(module))[0]
+                    best[module.NAME] = min(best[module.NAME], ns)
+            for module in (base, cand):
+                ns = best[module.NAME]
+                print("  %-20s %-16s %10.1f %10.1f" % (module.NAME, op, ns, len(wire) / ns * 1e3))
+            ratio = best[base.NAME] / best[cand.NAME]
+            print("  %-20s %-16s %10s %.3fx" % ("", "candidate", "", ratio))
+    return status
+
+
 def main(argv):
+    if len(argv) >= 2 and argv[1] == "ab":
+        return ab(argv[1:])
     if len(argv) < 2 or argv[1] != "bench":
-        print("usage: %s bench" % argv[0])
+        print("usage: %s bench | ab <base.py> <cand.py> [rounds]" % argv[0])
         return 2
     return run()
 

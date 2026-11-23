@@ -55,6 +55,14 @@ dotnet run --project tests -- ../c/tests/data/matrix3.desc        # self-check
 dotnet run --project examples -- ../c/tests/data/matrix3.desc     # example
 ```
 
+The F# facade has no separate port: `make fsharp-bench` prints
+`pbwire-fsharp-tree` (the `Message` handle the facade exposes, fresh build
+per iteration with a full field read-back on decode),
+`pbwire-fsharp-shim` (the C# generated model's native-object entry) and a
+same-run `pbwire-fsharp-proxy` (held handle, published, never the headline)
+through the C# runtime, so all three rows measure the same shipped code the
+C# binding publishes.
+
 ## Benchmarks
 
 ```shell
@@ -66,20 +74,26 @@ x0 / x1 / x100 / x3000). Measured on Apple M4 Pro, .NET 10.0.403; higher is
 better, MB/s over wire bytes (the official baseline itself moves ±10% between
 runs, so the ratios are in-run):
 
-| payload | op | pbwire-fsharp (MB/s, x protobuf-csharp) | protobuf-csharp (MB/s) |
-|---|---|---|---|
-| 136 B | encode | 1382.3 (3.0x) | 458.1 |
-| 136 B | decode | 1145.8 (2.3x) | 494.4 |
-| 174 B | encode | 1379.4 (3.3x) | 412.3 |
-| 174 B | decode | 976.0 (2.5x) | 396.9 |
-| 2469 B | encode | 1331.3 (2.4x) | 559.5 |
-| 2469 B | decode | 669.4 (1.4x) | 466.4 |
-| 74913 B | encode | 1441.6 (2.9x) | 492.2 |
-| 74913 B | decode | 728.3 (1.4x) | 510.7 |
+| payload | op | pbwire-fsharp-tree (MB/s, x protobuf-csharp) | pbwire-fsharp-shim (MB/s, x) | protobuf-csharp (MB/s) |
+|---|---|---|---|---|
+| 136 B | encode | 110.0 (0.24x) | 1149.1 (2.52x) | 455.6 |
+| 136 B | decode | 181.9 (0.40x) | 705.3 (1.56x) | 450.7 |
+| 174 B | encode | 94.3 (0.23x) | 933.5 (2.29x) | 407.0 |
+| 174 B | decode | 132.8 (0.35x) | 579.1 (1.52x) | 379.8 |
+| 2469 B | encode | 76.6 (0.13x) | 628.8 (1.07x) | 588.2 |
+| 2469 B | decode | 533.1 (1.13x) | 351.2 (0.75x) | 470.3 |
+| 74913 B | encode | 72.3 (0.15x) | 661.4 (1.33x) | 495.8 |
+| 74913 B | decode | 713.1 (1.47x) | 354.7 (0.73x) | 486.6 |
+
+Same-run `proxy` rows (held handle, never the headline): encode
+1443.2 / 1400.8 / 1353.5 / 1583.6 MB/s, decode
+862.5 / 796.1 / 673.0 / 714.0 MB/s. Formal run
+`results/bench-fsharp-20261123T005908Z.json`.
 
 Every tier is gated before timing: the official bytes must land on the pinned
-size, `pbwire-fsharp` must encode byte-identical bytes, and decoding the
-reference and re-encoding must return the same bytes. Unlike the C# harness
+size, the fresh-build `tree` arm must encode byte-identical bytes, the decode
+must expose every gate-checked field, and re-encoding must return the same
+bytes. Unlike the C# harness
 this one skips protobuf-net: it singular-encodes single-element packed fields,
 so two of the four tiers carry nothing MB/s-fair to time.
 
@@ -91,7 +105,7 @@ dotnet run --project conformance -- ../../build/conformance.desc   # needs `make
 
 `conformance/Testee.fs` speaks the runner's wire protocol through the facade
 only (the request/response envelopes are dynamic messages too, exactly like the
-Java testee). Binary in → binary out is fully covered (1389 successes, 0
+Java testee). Binary in → binary out is fully covered (2750 successes, 0
 unexpected failures — the same 2 expected failures the C testee lists in
 `conformance/failure_list_pbwire.txt`); JSON and text in both directions go
 through the C# binding's printers and parsers, so only JSPB answers `skipped`. The testee binary needs the .NET runtime on

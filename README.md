@@ -169,13 +169,16 @@ address book, loaded from `addressbook.desc` at runtime) is in
 `make bench` verifies byte-for-byte equality with libprotobuf before timing
 anything, so a speed number can never come from a wrong encoder. On an Apple
 M4 Pro with `-O2` and `protoc 36.2`, the in-process dynamic core with a
-`pbw_ctx` runs 1.24-1.56x the throughput of the generated C++ codec on encode
-and 1.50-1.81x on decode, on every tier
-(132 B to 86 KB), and 11.7-18.0x the speed of C++
-`DynamicMessage` on encode and 3.0-5.3x on decode. Generated code only wins where
-a dynamic codec meets generated straight-line writes on a tiny message
-(Java/Kotlin/Clojure, 136 B, 0.77x/0.83x/0.74x); the arena and plain APIs win
-every tier. `make bench-docker` runs the
+`pbw_ctx` decodes at 1.31-1.78x the throughput of the generated C++ codec on
+every tier (132 B to 86 KB), and 2.9-5.1x the speed of C++
+`DynamicMessage` on decode (1.2-2.7x on encode). Encode trails the generated
+codec at 0.14-0.18x: the timed task builds the tree fresh per field per
+iteration (alloc, fill, encode, free inside the timer) while the compiled
+straight-line writer knows every tag; re-encoding a held tree (the `proxy`
+row, same-run timing only) stays ahead at 1.25-1.55x. Generated code wins encode
+where a dynamic codec meets generated straight-line writes (every tier here;
+Java/Kotlin/Clojure only on their 136 B tier, 0.77x/0.83x/0.74x); the arena and
+plain APIs win every tier on decode. `make bench-docker` runs the
 same harnesses in a Linux container and `make bench-compare` pairs the two runs
 row by row, so the numbers above hold off Apple silicon as well
 ([BENCHMARKS.md](BENCHMARKS.md#linux-docker-the-same-harnesses-one-container-away)).
@@ -191,19 +194,19 @@ The one-row summary is here; the detail is there.
 |---|---|---|---|
 | [C](bindings/c/) | static link, struct codec | 1.29x (xlarge) / 2.02x (xlarge) | [protoc C++](https://github.com/protocolbuffers/protobuf) |
 | [C++](bindings/cpp/) | same C runtime, same header | 1.29x (xlarge) / 2.02x (xlarge)¹ | [protoc C++](https://github.com/protocolbuffers/protobuf) |
-| [Python](bindings/python/) | CPython extension | 6.87x (xlarge) / 1.19x (xlarge) (64x via `encode(parsed)`) | [google.protobuf (upb)](https://pypi.org/project/protobuf/) |
+| [Python](bindings/python/) | CPython extension | 6.87x (xlarge, `encode(dict)`) / 3.69x (xlarge, `to_dict`) (64x via `encode(parsed)`, data already in pbwire) | [google.protobuf (upb)](https://pypi.org/project/protobuf/) |
 | [Ruby](bindings/ruby/) | C extension, linked | 1.35x (small) / 1.86x (large) | [google-protobuf gem](https://rubygems.org/gems/google-protobuf) |
 | [Java](bindings/java/) | pure-Java codec, no native code | 1.23x (medium) / 1.95x (xlarge) | [protobuf-java](https://github.com/protocolbuffers/protobuf/tree/main/java) |
 | [Kotlin](bindings/kotlin/) | Java runtime + DSL | 1.13x (medium) / 1.68x (xlarge) | [protobuf-kotlin](https://github.com/protocolbuffers/protobuf/tree/main/java/kotlin) |
 | [Node](bindings/node/) | N-API addon | 3.18x (xlarge) / 3.17x (xlarge) vs protobufjs | [jspb](https://www.npmjs.com/package/google-protobuf) + [protobufjs](https://www.npmjs.com/package/protobufjs) |
-| [Objective-C](bindings/objc/) | ARC wrapper | 7.44x (small) / 2.83x (medium) | [protobuf-objc](https://github.com/protocolbuffers/protobuf/tree/main/objectivec) |
+| [Objective-C](bindings/objc/) | ARC wrapper | 0.37x (small) / 2.96x (medium) `tree` (fresh build per iteration; held-tree `proxy` encode 6.62x / 6.56x / 5.00x / 1.92x, same-run only) | [protobuf-objc](https://github.com/protocolbuffers/protobuf/tree/main/objectivec) |
 | [PHP](bindings/php/) | C extension | 1.70x (small) / 1.90x (small) vs C ext (373x / 135x vs pure PHP) | [protobuf-php](https://github.com/protocolbuffers/protobuf/tree/main/php) |
 | [Dart](bindings/dart/) | `dart:ffi` | 13.7x (xlarge) / 4.4x (xlarge) | [protobuf-dart](https://pub.dev/packages/protobuf) |
 | [Rust](bindings/rust/) | static link | 1.29x (small) / 1.86x (xlarge) vs prost | [rust-protobuf 3.x](https://github.com/stepancheg/rust-protobuf) + [prost](https://github.com/tokio-rs/prost) |
 | [C#](bindings/csharp/) | P/Invoke | 3.19x (medium) / 2.08x (medium) | [Google.Protobuf](https://www.nuget.org/packages/Google.Protobuf) + [protobuf-net](https://github.com/protobuf-net/protobuf-net) |
 | [Go](bindings/go/) | thin generated models, pure-Go engine, no cgo | 1.49x (xlarge) / 1.20x (xlarge) | [google.golang.org/protobuf](https://pkg.go.dev/google.golang.org/protobuf) |
 | [Erlang](bindings/erlang/) | NIF | 3.91x (xlarge) / 2.47x (medium) | [gpb](https://github.com/tomas-abrahamsson/gpb) |
-| [Lua](bindings/lua/) | C module, tables + builder | 8.93x (xlarge, builder) / 1.66x (small, tables) | [lua-protobuf](https://github.com/starwing/lua-protobuf) |
+| [Lua](bindings/lua/) | C module, tables + builder | 1.09x (xlarge, tables) / 1.42x (xlarge, tables) (8.93x via builder encode, data already in pbwire) | [lua-protobuf](https://github.com/starwing/lua-protobuf) |
 | [Swift](bindings/swift/) | SwiftPM, static link | 5.51x (xlarge) / 4.24x (medium) | [swift-protobuf](https://github.com/apple/swift-protobuf) |
 | [Scala](bindings/scala/) | Java runtime + DSL | 1.48x (medium) / 1.21x (xlarge) | [ScalaPB](https://github.com/scalapb/ScalaPB) |
 | [Elixir](bindings/elixir/) | NIF (shared core) | 3.06x (small) / 1.90x (xlarge) | [elixir-protobuf](https://github.com/elixir-protobuf/protobuf) |
@@ -214,6 +217,10 @@ The one-row summary is here; the detail is there.
 | [R](bindings/r/) | C extension, named lists | 59.0x (large) / 50.3x (xlarge) | [RProtoBuf](https://github.com/eddelbuettel/rprotobuf) |
 
 ¹ C++ has no separate bench; same engine as the C struct codec. Best columns take the best ratio across the four tiers for encode/decode separately, tier in parentheses (Apple M4 Pro, `protoc 36.2`); tiers and absolute MB/s are in [BENCHMARKS.md](BENCHMARKS.md).
+
+Header ratios quote the native-object row (host data in, host data out). The
+`tree` row further down is the same codec with the tree already built: a proxy
+or transcoder task, not an application's encode.
 
 ## Comparison with generated code, `DynamicMessage` and upb
 

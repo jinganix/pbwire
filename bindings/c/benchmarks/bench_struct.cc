@@ -357,7 +357,10 @@ bench_case(pbw_schema *schema, const char *label, int n, int iterations)
 
     /* Steady state: one compiled codec, one output buffer, one decode arena,
      * so neither path allocates per message (the generated side reuses its
-     * std::string the same way). */
+     * std::string the same way). This is the struct/native-image `shim` arm:
+     * it keeps the prebuilt native input across iterations under the
+     * steady-state carve-out (the boundary price is its question, not the
+     * build price), with this disclosure instead of a fresh-build timer. */
     rows.push_back({"pbwire-c", "encode", time_it([&] {
                         (void)pbw_struct_codec_encode(codec, &d.s, &out);
                     },

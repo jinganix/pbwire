@@ -360,6 +360,18 @@ conformance-go: $(CONFORMANCE_DESC) $(GO_TESTEE)
 		$(CURDIR)/$(GO_TESTEE) \
 		$(CURDIR)/$(CONFORMANCE_DESC)
 
+# Same suite through the pure-Python core (no CPython extension, no
+# google.protobuf): binary in, binary out; JSON and text answer "skipped"
+# (the runner counts skips, not failures), so the pass set is the binary
+# suite.
+conformance-python-pure: $(CONFORMANCE_DESC)
+	@test -x "$(CONFORMANCE_RUNNER)" || { \
+		echo "conformance_test_runner not found: $(CONFORMANCE_RUNNER)"; \
+		echo "run 'make conformance-setup' first"; exit 1; }
+	$(CONFORMANCE_RUNNER) --failure_list $(CURDIR)/conformance/failure_list_pbwire.txt \
+		$(PY_ABS) bindings/python/conformance/testee_pure.py \
+		$(CURDIR)/$(CONFORMANCE_DESC)
+
 # Same suite through the Lua binding (binary, JSON and text; only JSPB
 # answers "skipped").
 conformance-lua: $(CONFORMANCE_DESC) lua-bind
@@ -385,6 +397,17 @@ conformance-ruby: $(CONFORMANCE_DESC) ruby-bind
 		echo "run 'make conformance-setup' first"; exit 1; }
 	$(CONFORMANCE_RUNNER) \
 		$(RUBY_ABS) bindings/ruby/conformance/testee.rb \
+		$(CURDIR)/$(CONFORMANCE_DESC)
+
+# Same suite through the PHP binding (binary, JSON and text; only JSPB
+# answers "skipped"). Runs on the shipped ext-ffi wrapper, so it needs no
+# compiler and no php-ext build; the interpreter has to be an absolute path.
+conformance-php: $(CONFORMANCE_DESC) php-test
+	@test -x "$(CONFORMANCE_RUNNER)" || { \
+		echo "conformance_test_runner not found: $(CONFORMANCE_RUNNER)"; \
+		echo "run 'make conformance-setup' first"; exit 1; }
+	$(CONFORMANCE_RUNNER) --failure_list $(CURDIR)/conformance/failure_list_pbwire.txt \
+		$(PHP_ABS) bindings/php/conformance/testee.php \
 		$(CURDIR)/$(CONFORMANCE_DESC)
 
 # Same suite through the Java binding (binary wire format; JSON/text answer
@@ -583,6 +606,7 @@ python-bind: $(PY_MODULE)
 
 python-test: python-bind
 	$(PY) bindings/python/tests/test_pbwire.py
+	$(PY) bindings/python/tests/pure/run.py
 
 # Host-language bindings over the same C ABI (see bindings/README.md). Each
 # loads a FileDescriptorSet at run time, so none of them needs a plugin or a
@@ -635,6 +659,18 @@ conformance-node: $(CONFORMANCE_DESC) node-test
 		$(NODE_ABS) bindings/node/conformance/testee.js \
 		$(CURDIR)/$(CONFORMANCE_DESC)
 
+# Same suite through the pure-TypeScript core (no native library): binary in,
+# binary out; JSON and text answer "skipped" (the runner does not count a skip
+# as a failure), so the pass set is the binary suite.
+conformance-node-core: $(CONFORMANCE_DESC)
+	@test -x "$(NODE_ABS)" || { echo "node not found: $(NODE_ABS)"; exit 1; }
+	@test -x "$(CONFORMANCE_RUNNER)" || { \
+		echo "conformance_test_runner not found: $(CONFORMANCE_RUNNER)"; \
+		echo "run 'make conformance-setup' first"; exit 1; }
+	$(CONFORMANCE_RUNNER) --failure_list $(CURDIR)/conformance/failure_list_pbwire.txt \
+		$(NODE_ABS) bindings/node/conformance/testee-core.js \
+		$(CURDIR)/$(CONFORMANCE_DESC)
+
 # Same suite through the Julia binding (binary, JSON and text; JSPB skips).
 conformance-julia: $(CONFORMANCE_DESC)
 	@test -x "$(CONFORMANCE_RUNNER)" || { \
@@ -643,6 +679,44 @@ conformance-julia: $(CONFORMANCE_DESC)
 	$(CONFORMANCE_RUNNER) --failure_list $(CURDIR)/conformance/failure_list_pbwire.txt \
 		$(JULIA_ABS) --project=bindings/julia/runtime \
 		bindings/julia/conformance/testee.jl $(CURDIR)/$(CONFORMANCE_DESC)
+
+# Same suite through the pure-Julia core (no native library, no ccall):
+# binary in, binary out; JSON and text answer "skipped" (the runner counts
+# skips, not failures), so the pass set is the binary suite.
+conformance-julia-core: $(CONFORMANCE_DESC)
+	@test -x "$(CONFORMANCE_RUNNER)" || { \
+		echo "conformance_test_runner not found: $(CONFORMANCE_RUNNER)"; \
+		echo "run 'make conformance-setup' first"; exit 1; }
+	$(CONFORMANCE_RUNNER) --failure_list $(CURDIR)/conformance/failure_list_pbwire.txt \
+		$(JULIA_ABS) --project=bindings/julia/runtime \
+		bindings/julia/conformance/testee_core.jl $(CURDIR)/$(CONFORMANCE_DESC)
+
+# Same suite through the pure-Rust core (`bindings/rust/src/core/`, no C
+# library and no `unsafe`): binary in, binary out; JSON and text answer
+# "skipped" (the runner counts skips, not failures), so the pass set is the
+# binary suite.
+conformance-rust: $(CONFORMANCE_DESC)
+	@test -x "$(CONFORMANCE_RUNNER)" || { \
+		echo "conformance_test_runner not found: $(CONFORMANCE_RUNNER)"; \
+		echo "run 'make conformance-setup' first"; exit 1; }
+	cd bindings/rust && cargo build --release --no-default-features --features core \
+		--bin pbwire-conformance
+	$(CONFORMANCE_RUNNER) --failure_list $(CURDIR)/conformance/failure_list_pbwire.txt \
+		$(CURDIR)/bindings/rust/target/release/pbwire-conformance \
+		$(CURDIR)/$(CONFORMANCE_DESC)
+
+# Same suite through the pure-Swift core (`bindings/swift/Sources/PbwireCore/`):
+# no C module, no `libpbwire.a`, no `unsafeFlags` -- the testee links only the
+# PbwireCore product, so this target is the official check of the no-native path.
+# Binary in, binary out; JSON and text answer "skipped".
+conformance-swift: $(CONFORMANCE_DESC)
+	@test -x "$(CONFORMANCE_RUNNER)" || { \
+		echo "conformance_test_runner not found: $(CONFORMANCE_RUNNER)"; \
+		echo "run 'make conformance-setup' first"; exit 1; }
+	cd bindings/swift && swift build -c release --product pbwire-conformance
+	$(CONFORMANCE_RUNNER) --failure_list $(CURDIR)/conformance/failure_list_pbwire.txt \
+		$(CURDIR)/bindings/swift/.build/release/pbwire-conformance \
+		$(CURDIR)/$(CONFORMANCE_DESC)
 
 # Same suite through the Zig binding (binary, JSON and text; JSPB skips).
 conformance-zig: $(CONFORMANCE_DESC)
@@ -653,6 +727,17 @@ conformance-zig: $(CONFORMANCE_DESC)
 	$(CONFORMANCE_RUNNER) --failure_list $(CURDIR)/conformance/failure_list_pbwire.txt \
 		$(CURDIR)/bindings/zig/zig-out/bin/testee-zig $(CURDIR)/$(CONFORMANCE_DESC)
 
+# Same suite through the pure-Zig core (`bindings/zig/core/`): `-Dcore=true`
+# builds a testee with no C source, no translate-c and no `libpbwire.a`.
+# Binary in, binary out; JSON and text answer "skipped".
+conformance-zig-core: $(CONFORMANCE_DESC)
+	@test -x "$(CONFORMANCE_RUNNER)" || { \
+		echo "conformance_test_runner not found: $(CONFORMANCE_RUNNER)"; \
+		echo "run 'make conformance-setup' first"; exit 1; }
+	cd bindings/zig && zig build -Dcore=true testee
+	$(CONFORMANCE_RUNNER) --failure_list $(CURDIR)/conformance/failure_list_pbwire.txt \
+		$(CURDIR)/bindings/zig/zig-out/bin/testee-zig $(CURDIR)/$(CONFORMANCE_DESC)
+
 # Scala reuses the Java runtime: the classpath comes from its build script.
 conformance-scala: $(CONFORMANCE_DESC) scala-test
 	@test -x "$(CONFORMANCE_RUNNER)" || { \
@@ -660,6 +745,17 @@ conformance-scala: $(CONFORMANCE_DESC) scala-test
 		echo "run 'make conformance-setup' first"; exit 1; }
 	$(CONFORMANCE_RUNNER) --failure_list $(CURDIR)/conformance/failure_list_pbwire.txt \
 		$(JAVA_ABS) -cp "$(SCALA_CP)" Testee $(CURDIR)/$(CONFORMANCE_DESC)
+
+# Kotlin reuses the Java runtime too: the testee (TesteeKt) rides in the
+# fat jar kotlin-test builds, over the same schema-driven facade as the
+# Java/Scala testees.
+KOTLIN_CP = $(CURDIR)/bindings/kotlin/out/pbwire.jar
+conformance-kotlin: $(CONFORMANCE_DESC) kotlin-test
+	@test -x "$(CONFORMANCE_RUNNER)" || { \
+		echo "conformance_test_runner not found: $(CONFORMANCE_RUNNER)"; \
+		echo "run 'make conformance-setup' first"; exit 1; }
+	$(CONFORMANCE_RUNNER) --failure_list $(CURDIR)/conformance/failure_list_pbwire.txt \
+		$(JAVA_ABS) -cp "$(KOTLIN_CP)" TesteeKt $(CURDIR)/$(CONFORMANCE_DESC)
 
 # Clojure reuses the Java runtime too.
 conformance-clojure: $(CONFORMANCE_DESC) clojure-test
@@ -678,6 +774,20 @@ conformance-fsharp: $(CONFORMANCE_DESC) fsharp-test
 		$(DOTNET_ABS) run --project bindings/fsharp/conformance -c Release -- \
 		$(CURDIR)/$(CONFORMANCE_DESC)
 
+# Same suite through the pure-C# core (bindings/csharp/Pbwire/Core, no native
+# library): binary in, binary out; JSON and text answer "skipped", so the
+# pass set is the binary suite. Builds first and execs the dll, so the
+# runner's pipe carries only the testee's own stdout.
+conformance-csharp: $(CONFORMANCE_DESC)
+	@test -x "$(DOTNET_ABS)" || { echo "dotnet not found: $(DOTNET)"; exit 1; }
+	@test -x "$(CONFORMANCE_RUNNER)" || { \
+		echo "conformance_test_runner not found: $(CONFORMANCE_RUNNER)"; \
+		echo "run 'make conformance-setup' first"; exit 1; }
+	$(DOTNET) build bindings/csharp/conformance -c Release --nologo -v q
+	$(CONFORMANCE_RUNNER) --failure_list $(CURDIR)/conformance/failure_list_pbwire.txt \
+		$(DOTNET_ABS) bindings/csharp/conformance/bin/Release/net10.0/Testee.dll \
+		$(CURDIR)/$(CONFORMANCE_DESC)
+
 objc-test:
 	./bindings/objc/build.sh test
 
@@ -687,6 +797,7 @@ objc-test:
 # and PHP, Dart and C# dlopen the shared library. Each needs only its own
 # toolchain; none is part of the commit gate.
 PHP ?= php
+PHP_ABS := $(shell command -v $(PHP) 2>/dev/null || echo $(PHP))
 DART ?= dart
 DOTNET ?= dotnet
 
@@ -709,15 +820,71 @@ php-ext-test: php-ext shared
 	$(PHP) -d extension=$(CURDIR)/bindings/php/ext/modules/pbwire.so bindings/php/tests/test.php
 	$(PHP) -d extension=$(CURDIR)/bindings/php/ext/modules/pbwire.so bindings/php/tests/generated_test.php
 
-dart-test: shared
+# The shim arm's native reader (bindings/dart/native/pbw_dart_shim.c) compiled
+# with the C binding's struct codec and the core into one dynamic library.
+dart-shim-native:
+	./bindings/dart/build.sh
+
+# The C# shim arm's native reader (bindings/csharp/native/pbw_cs_shim.c): one
+# flat image in, one call per op, same codec and core as the C binding.
+csharp-shim-native:
+	./bindings/csharp/native/build.sh
+
+dart-test: shared dart-shim-native
 	cd bindings/dart && $(DART) pub get >/dev/null
 	cd bindings/dart && $(DART) run tests/selftest.dart ../c/tests/data/matrix3.desc
+	cd bindings/dart && $(DART) run tests/layout_test.dart ../c/tests/data/matrix3.desc
+	cd bindings/dart && $(DART) run tests/core/descriptor_test.dart ../c/tests/data
+	cd bindings/dart && $(DART) run tests/core/wire_test.dart
+	cd bindings/dart && $(DART) run tests/core/codec_test.dart ../c/tests/data
+	cd bindings/dart && $(DART) run tests/core/web_smoke.dart
+
+# Same suite through the Dart binding (binary, JSON and text; the shim arm
+# shares the C core, so this proves the binding's own decode/encode/JSON/text
+# plumbing on the same requests).
+conformance-dart: $(CONFORMANCE_DESC) dart-shim-native
+	cd bindings/dart && $(DART) pub get >/dev/null
+	@test -x "$(CONFORMANCE_RUNNER)" || { \
+		echo "conformance_test_runner not found: $(CONFORMANCE_RUNNER)"; \
+		echo "run 'make conformance-setup' first"; exit 1; }
+	$(CONFORMANCE_RUNNER) --failure_list $(CURDIR)/conformance/failure_list_pbwire.txt \
+		bindings/dart/conformance/testee.sh \
+		$(CURDIR)/$(CONFORMANCE_DESC)
+
+# The pure core on the web backends: int is a double there, so this compiles
+# the same edge-value check to JS and to wasm and runs the JS build.
+NODE ?= node
+dart-core-web:
+	cd bindings/dart && $(DART) compile js -o /tmp/pbwire-core-web.js tests/core/web_smoke.dart
+	$(NODE) /tmp/pbwire-core-web.js
+	cd bindings/dart && $(DART) compile wasm -o /tmp/pbwire-core-web.wasm tests/core/web_smoke.dart
+
+# The same official suite through the pure-Dart core (no FFI, no C library):
+# binary in, binary out; JSON and text answer `skipped`, like every other
+# pure-core testee here.
+conformance-dart-core: $(CONFORMANCE_DESC)
+	cd bindings/dart && $(DART) pub get >/dev/null
+	@test -x "$(CONFORMANCE_RUNNER)" || { \
+		echo "conformance_test_runner not found: $(CONFORMANCE_RUNNER)"; \
+		echo "run 'make conformance-setup' first"; exit 1; }
+	$(CONFORMANCE_RUNNER) --failure_list $(CURDIR)/conformance/failure_list_pbwire.txt \
+		bindings/dart/conformance/testee_core.sh \
+		$(CURDIR)/$(CONFORMANCE_DESC)
 
 rust-test: shared
 	cd bindings/rust && cargo test
+	# The pure-Rust core is a feature, so it needs its own pass: this is the
+	# `--no-default-features` build the `core` arm and `make conformance-rust`
+	# rely on (no C code linked into the testee).
+	cd bindings/rust && cargo test --no-default-features --features core
 
-csharp-test: shared
+csharp-test: shared csharp-shim-native
 	cd bindings/csharp && $(DOTNET) run --project tests -- ../c/tests/data/matrix3.desc
+
+# pbench: the gate (byte parity + field compare across the arms) and the
+# interleaved provisional table, over the C-side layout reader.
+csharp-pbench: shared csharp-shim-native
+	cd bindings/csharp/pbench/gate && $(DOTNET) run -c Release -- compare
 
 SWIFT ?= swift
 SCALAC ?= scalac
@@ -760,7 +927,10 @@ fsharp-test: shared
 clojure-test:
 	cd bindings/clojure && ./build.sh
 
-julia-test:
+julia-shim-native: build/libpbwire.a
+	sh bindings/julia/build.sh
+
+julia-test: julia-shim-native
 	cd bindings/julia && $(JULIA) --project=runtime tests/runtests.jl
 
 r-test: r-bind
@@ -802,10 +972,17 @@ php-bench:
 dart-bench:
 	./scripts/bench-run.sh --binding dart -- ./bindings/dart/benchmarks/bench.sh
 
+# pbench: the gate (bytes parity + field compare across the arms) and the
+# interleaved provisional table.
+dart-pbench:
+	./bindings/dart/pbench/setup.sh
+	cd bindings/dart/pbench && $(DART) run gate.dart ../../c/tests/data/matrix3.desc
+	cd bindings/dart/pbench && $(DART) run compare.dart ../../c/tests/data/matrix3.desc
+
 rust-bench:
 	./scripts/bench-run.sh --binding rust -- ./bindings/rust/benchmarks/bench.sh
 
-csharp-bench:
+csharp-bench: csharp-shim-native
 	./scripts/bench-run.sh --binding csharp -- ./bindings/csharp/benchmarks/bench.sh
 
 swift-bench:
@@ -826,7 +1003,7 @@ fsharp-bench:
 clojure-bench:
 	./scripts/bench-run.sh --binding clojure -- ./bindings/clojure/benchmarks/bench.sh
 
-julia-bench:
+julia-bench: julia-shim-native
 	./scripts/bench-run.sh --binding julia -- $(JULIA) --project=bindings/julia/runtime bindings/julia/benchmarks/bench.jl
 
 r-bench:
@@ -887,12 +1064,13 @@ clean:
 
 .PHONY: all test fuzz coverage release-check examples shared format format-check bench bench-c erlang-test erlang-core-sync ruby-core-sync erlang-bench \
 	python-bind python-test python-bench difftest difftest-short conformance conformance-setup conformance-python \
-	conformance-ruby conformance-java conformance-lua conformance-r conformance-node ruby-bind java-test ruby-test node-test objc-test r-bind \
+	conformance-ruby conformance-php conformance-java conformance-kotlin conformance-lua conformance-r conformance-node conformance-rust conformance-swift conformance-zig-core ruby-bind java-test ruby-test node-test objc-test r-bind \
 	lua-bind lua-test lua-bench \
 	java-bench ruby-bench node-bench objc-bench go-bench pbench-java \
-	kotlin-test php-test dart-test rust-test csharp-test \
+	kotlin-test php-test dart-test rust-test csharp-test csharp-pbench \
 	kotlin-bench php-bench dart-bench rust-bench csharp-bench \
-	swift-test scala-test elixir-test zig-test fsharp-test clojure-test julia-test r-test \
+	csharp-shim-native dart-shim-native \
+	swift-test scala-test elixir-test zig-test fsharp-test clojure-test julia-test julia-shim-native r-test \
 	swift-bench scala-bench elixir-bench zig-bench fsharp-bench clojure-bench julia-bench r-bench \
 	desc-fixture test-cpp clean plugin-c go-test \
 	codegen codegen-test codegen-conformance bench-docker bench-compare

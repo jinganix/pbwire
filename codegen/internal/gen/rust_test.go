@@ -126,3 +126,31 @@ func TestRustModSegment(t *testing.T) {
 		}
 	}
 }
+
+// Plan 08 gate: every expressible message gets a #[repr(C)] mirror whose slot
+// order and layout table come from one place, so the two cannot disagree.
+func TestRustLayout(t *testing.T) {
+	files := rustFiles(rustTestFile(), Options{Lang: "rust", Model: true, Register: true, Registry: true})
+	models := rustFileMap(t, files)["matrix3_pbwire.rs"]
+	for _, want := range []string{
+		"#[repr(C)]",
+		"pub struct Scalars3Flat",
+		"pub const FIELDS: &'static [pbwire::FieldPlan]",
+		`("i32", 0, Kind::I32`,
+		"impl pbwire::FlatMessage for Scalars3Flat",
+		"core::mem::offset_of!(Scalars3Flat, i32) == 0",
+	} {
+		if !strings.Contains(models, want) {
+			t.Errorf("models file misses %q", want)
+		}
+	}
+}
+
+// layout=false keeps the flat mirror out of the model (the tree rows stay).
+func TestRustLayoutOff(t *testing.T) {
+	files := rustFiles(rustTestFile(), Options{Lang: "rust", Model: true, Register: true, Registry: true, NoLayout: true})
+	models := rustFileMap(t, files)["matrix3_pbwire.rs"]
+	if strings.Contains(models, "Scalars3Flat") {
+		t.Error("layout=false must not emit the flat mirror")
+	}
+}

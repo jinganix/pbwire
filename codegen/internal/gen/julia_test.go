@@ -117,3 +117,69 @@ func TestJuliaFilesNoRegistry(t *testing.T) {
 		t.Error("loader stays without the registry")
 	}
 }
+
+// The layout gate (plan 07 Stage 1): every message that the flat layout can
+// express gets a mutable `isbits`-field image plus the offset/row table the
+// C-side reader consumes. A missing struct or a row without its `fieldoffset`
+// means the shim arm has no native object to time, so the test fails before
+// any number is published.
+func TestJuliaLayout(t *testing.T) {
+	f := &model.File{
+		Path:    "matrix3.proto",
+		Package: "structtest",
+		Prefix:  "Structtest",
+		Messages: []model.Message{
+			{
+				Name: "Inner3",
+				Full: "structtest.Inner3",
+				Fields: []model.Field{
+					{Name: "name", Lower: "name", Pascal: "Name", Number: 1, Kind: protoreflect.StringKind},
+					{Name: "value", Lower: "value", Pascal: "Value", Number: 2, Kind: protoreflect.Int32Kind},
+				},
+			},
+			{
+				Name: "Scalars3",
+				Full: "structtest.Scalars3",
+				Fields: []model.Field{
+					{Name: "i32", Lower: "i32", Pascal: "I32", Number: 1, Kind: protoreflect.Int32Kind},
+					{Name: "str", Lower: "str", Pascal: "Str", Number: 14, Kind: protoreflect.StringKind},
+					{Name: "inner", Lower: "inner", Pascal: "Inner", Number: 16, Kind: protoreflect.MessageKind, Message: "Inner3", Full: "structtest.Inner3"},
+					{Name: "opt_i32", Lower: "optI32", Pascal: "OptI32", Number: 20, Kind: protoreflect.Int32Kind, NeedsHas: true},
+					{Name: "nums", Lower: "nums", Pascal: "Nums", Number: 17, Kind: protoreflect.Int32Kind, Repeated: true, Packed: true},
+				},
+			},
+		},
+	}
+	files, err := juliaFiles(f, Options{Lang: "julia", Model: true, Register: true, Registry: true, DescSetB64: "e30="})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var models string
+	for _, file := range files {
+		if file.Name == "matrix3_pbwire.jl" {
+			models = file.Content
+		}
+	}
+	if models == "" {
+		t.Fatalf("missing the models file, got %v", files)
+	}
+	for _, want := range []string{
+		"mutable struct Scalars3Layout",
+		"i32::Int32",
+		"str::Ptr{UInt8}",
+		"inner::Ptr{Inner3Layout}",
+		"nums::Ptr{Int32}",
+		"numsCount::Csize_t",
+		"const scalars3LayoutRows = Pbwire.LayoutRow[",
+		"fieldoffset(Scalars3Layout, :i32)",
+		"fieldoffset(Scalars3Layout, :str)",
+		"fieldoffset(Scalars3Layout, :inner)",
+		"fieldoffset(Scalars3Layout, :has_opt_i32)",
+		"fieldoffset(Scalars3Layout, :nums)",
+		"fieldoffset(Scalars3Layout, :numsCount)",
+	} {
+		if !strings.Contains(models, want) {
+			t.Errorf("models file misses %q", want)
+		}
+	}
+}

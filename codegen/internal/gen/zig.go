@@ -31,6 +31,9 @@ func zigFiles(f *model.File, opt Options) []File {
 			fmt.Fprintf(&b, "const %s = @import(\"%s.zig\");\n", zigIdent(stem(imp.Path)), stem(imp.Path))
 		}
 		b.WriteString("\n")
+		// The in-place arm's row type is spelled FieldPlan in the table below,
+		// so the generated file reads as a table, not a qualified expression.
+		b.WriteString("const FieldPlan = pbwire.FieldPlan;\n\n")
 		for _, e := range f.Enums {
 			fmt.Fprintf(&b, "// %s\n", e.Full)
 			fmt.Fprintf(&b, "pub const %s = enum(i32) {\n", className(f, e.Name))
@@ -39,8 +42,15 @@ func zigFiles(f *model.File, opt Options) []File {
 			}
 			b.WriteString("};\n\n")
 		}
+		byLocal := map[string]*model.Message{}
+		for i := range f.Messages {
+			byLocal[f.Messages[i].Name] = &f.Messages[i]
+		}
 		for _, m := range f.Messages {
 			writeZigMessage(&b, f, m)
+			if p, ok := zigLayoutPlanOf(f, m, byLocal, map[string]bool{}); ok {
+				writeZigLayout(&b, p, m.Full)
+			}
 		}
 		files = append(files, File{Name: base(f) + ".zig", Content: b.String()})
 	}
@@ -531,4 +541,290 @@ func zigGetScalar(field model.Field, msg, f string) string {
 		}
 		return fmt.Sprintf("@intCast(%s.getI64(%s))", msg, f)
 	}
+}
+
+/* ------------------------------------------------------------ flat layout */
+
+// The in-place arm (plan 10): every message the C struct codec can express
+// gets an `extern struct` mirror whose slots are exactly that codec's image,
+// plus a comptime FieldPlan row table. Offsets are computed here with C's
+// struct rules and asserted beside the table with `@offsetOf`, so an offset
+// the compiler disagrees with fails the build instead of producing bytes.
+// Slot sizes assume a 64-bit target: on any other target the assertions are a
+// compile error, loudly, rather than a silently wrong image.
+type zigLayoutSlot struct {
+	name   string
+	typ    string
+	offset int
+	size   int
+	align  int
+}
+
+type zigLayoutRow struct {
+	name   string
+	number int
+	kind   string
+	offset int
+	has    int
+	count  int
+	cs     int
+	child  string // `pbwire.ChildPlan{ ... }`, "" for no child
+	flags  []string
+}
+
+type zigLayoutPlan struct {
+	name  string
+	slots []zigLayoutSlot
+	rows  []zigLayoutRow
+	size  int
+}
+
+// zigLayoutKind maps one field kind to its mirror slot and the field's wire
+// kind. The finer variants (sint32 vs sfixed32) share a C storage slot but
+// carry different wire tags, so the row kind names the proto kind, not the
+// slot.
+func zigLayoutKind(field model.Field) (kind, slot string, size, align int, ok bool) {
+	switch field.Kind {
+	case protoreflect.Int32Kind:
+		return "int32", "i32", 4, 4, true
+	case protoreflect.Sint32Kind:
+		return "sint32", "i32", 4, 4, true
+	case protoreflect.Sfixed32Kind:
+		return "sfixed32", "i32", 4, 4, true
+	case protoreflect.Int64Kind:
+		return "int64", "i64", 8, 8, true
+	case protoreflect.Sint64Kind:
+		return "sint64", "i64", 8, 8, true
+	case protoreflect.Sfixed64Kind:
+		return "sfixed64", "i64", 8, 8, true
+	case protoreflect.Uint32Kind:
+		return "uint32", "u32", 4, 4, true
+	case protoreflect.Fixed32Kind:
+		return "fixed32", "u32", 4, 4, true
+	case protoreflect.Uint64Kind:
+		return "uint64", "u64", 8, 8, true
+	case protoreflect.Fixed64Kind:
+		return "fixed64", "u64", 8, 8, true
+	case protoreflect.BoolKind:
+		// One byte, never a Zig bool: a decoder byte can never be invalid.
+		return "boolean", "u8", 1, 1, true
+	case protoreflect.FloatKind:
+		return "float", "f32", 4, 4, true
+	case protoreflect.DoubleKind:
+		return "double", "f64", 8, 8, true
+	case protoreflect.EnumKind:
+		return "enumeration", "i32", 4, 4, true
+	case protoreflect.StringKind:
+		return "string", "?[*:0]const u8", 8, 8, true
+	case protoreflect.BytesKind:
+		return "bytes", "pbwire.Bytes", 16, 8, true
+	case protoreflect.MessageKind:
+		return "message", "message", 8, 8, true
+	case protoreflect.GroupKind:
+		return "group", "group", 8, 8, true
+	}
+	return "", "", 0, 0, false
+}
+
+// zigMirrorName is the mirror type of a message: the model's local name plus
+// Mirror, so it cannot collide with the struct the same file emits.
+func zigMirrorName(local string) string { return local + "Mirror" }
+
+// zigMirrorRef is the mirror type expression of a message-typed field: the
+// sibling module's type when foreign, this file's otherwise.
+func zigMirrorRef(f *model.File, field model.Field) string {
+	if field.Import != "" {
+		if imp := findImport(f, field.Import); imp != nil {
+			return zigIdent(stem(imp.Path)) + "." + zigMirrorName(field.Message)
+		}
+	}
+	return zigMirrorName(field.Message)
+}
+
+// zigSlotType is the mirror slot of one field (singular). A message slot is a
+// pointer to the child image; a string is a NUL-terminated pointer; bytes are
+// the core's inline pointer+length.
+func zigSlotType(f *model.File, field model.Field) (string, int, int) {
+	_, slot, size, align, _ := zigLayoutKind(field)
+	if field.Message != "" {
+		return "?*" + zigMirrorRef(f, field), size, align
+	}
+	return slot, size, align
+}
+
+// zigLayoutSlotZero is the zero value of one mirror slot: a mirror is a plain
+// image, so an all-zero image is a valid empty message.
+func zigLayoutSlotZero(typ string) string {
+	if typ == "pbwire.Bytes" {
+		return "std.mem.zeroes(pbwire.Bytes)"
+	}
+	if strings.HasPrefix(typ, "?") {
+		return "null"
+	}
+	return "0"
+}
+
+// zigLayoutSlotOf appends one slot at natural alignment and returns its offset.
+func (p *zigLayoutPlan) add(name, typ string, size, align int) int {
+	off := 0
+	for _, s := range p.slots {
+		if end := s.offset + s.size; end > off {
+			off = end
+		}
+	}
+	off = (off + align - 1) / align * align
+	p.slots = append(p.slots, zigLayoutSlot{name: name, typ: typ, offset: off, size: size, align: align})
+	if end := off + size; end > p.size {
+		p.size = end
+	}
+	return off
+}
+
+// zigLayoutPlanOf builds one message's mirror and rows, or reports it as not
+// expressible. A skipped field, an unknown kind, or a child that is itself not
+// expressible (including a reference cycle) means the message has no mirror.
+func zigLayoutPlanOf(f *model.File, m model.Message, byLocal map[string]*model.Message, seen map[string]bool) (*zigLayoutPlan, bool) {
+	if seen[m.Name] {
+		return nil, false // a cycle: the row tables would reference each other
+	}
+	seen[m.Name] = true
+	defer delete(seen, m.Name)
+	for _, field := range m.Fields {
+		if field.Skip != "" {
+			return nil, false
+		}
+		if _, _, _, _, ok := zigLayoutKind(field); !ok {
+			return nil, false
+		}
+		if field.Message == "" || field.Import != "" {
+			continue
+		}
+		cn, ok := byLocal[field.Message]
+		if !ok {
+			return nil, false
+		}
+		if _, ok := zigLayoutPlanOf(f, *cn, byLocal, seen); !ok {
+			return nil, false
+		}
+	}
+	p := &zigLayoutPlan{name: zigMirrorName(m.Name)}
+	taken := map[string]bool{}
+	caseOf := map[string]int{}
+	unique := func(name string) string {
+		for taken[name] {
+			name += "0"
+		}
+		taken[name] = true
+		return name
+	}
+	for _, field := range m.Fields {
+		slotName := unique(zigProp(field))
+		kind, _, size, align, _ := zigLayoutKind(field)
+		child := ""
+		if field.Message != "" {
+			ref := zigMirrorRef(f, field)
+			child = fmt.Sprintf("pbwire.ChildPlan{ .full_name = %q, .fields = &%s.fields, .size = @sizeOf(%s) }",
+				zigFullName(f, field), ref, ref)
+		}
+		if field.Repeated {
+			elem, _, _ := zigSlotType(f, field)
+			if field.Message != "" {
+				elem = zigMirrorRef(f, field)
+			}
+			off := p.add(slotName, "?[*]"+elem, 8, 8)
+			count := p.add(unique(slotName+"_count"), "usize", 8, 8)
+			var flags []string
+			flags = append(flags, "repeated")
+			if field.Packed {
+				flags = append(flags, "packed")
+			}
+			p.rows = append(p.rows, zigLayoutRow{
+				name: field.Name, number: int(field.Number), kind: kind,
+				offset: off, count: count, child: child, flags: flags,
+			})
+			continue
+		}
+		cs := 0
+		var flags []string
+		if field.Oneof != "" {
+			caseSlot, ok := caseOf[field.Oneof]
+			if !ok {
+				caseSlot = p.add(unique(field.Oneof+"_case"), "u32", 4, 4)
+				caseOf[field.Oneof] = caseSlot
+			}
+			cs = caseSlot
+			flags = append(flags, "oneof")
+		}
+		slot, _, _ := zigSlotType(f, field)
+		off := p.add(slotName, slot, size, align)
+		has := 0
+		// A pointer-shaped slot is absent when NULL, a oneof uses its case
+		// word; every other optional scalar needs the 4-byte has flag.
+		pointer := field.Kind == protoreflect.StringKind || field.Kind == protoreflect.BytesKind ||
+			field.Kind == protoreflect.MessageKind || field.Kind == protoreflect.GroupKind
+		if field.Oneof == "" && (field.NeedsHas || field.Required) && !pointer {
+			has = p.add(unique("has_"+field.Name), "i32", 4, 4)
+		}
+		if field.Required {
+			flags = append(flags, "required")
+		}
+		p.rows = append(p.rows, zigLayoutRow{
+			name: field.Name, number: int(field.Number), kind: kind,
+			offset: off, has: has, cs: cs, child: child, flags: flags,
+		})
+	}
+	// An extern struct is padded to its strictest alignment; the mirror size
+	// (the repeated child array stride) must include that tail padding.
+	align := 1
+	for _, s := range p.slots {
+		if s.align > align {
+			align = s.align
+		}
+	}
+	p.size = (p.size + align - 1) / align * align
+	return p, true
+}
+
+// writeZigLayout emits one message's extern-struct mirror, its FieldPlan
+// table and the comptime offset/size assertions that prove the table.
+func writeZigLayout(b *strings.Builder, p *zigLayoutPlan, full string) {
+	fmt.Fprintf(b, "\n/// %s as a flat native image: one C struct-codec call reads and writes it in\n/// place. Every offset below is asserted at comptime.\n", full)
+	fmt.Fprintf(b, "pub const %s = extern struct {\n", p.name)
+	for _, s := range p.slots {
+		fmt.Fprintf(b, "    %s: %s = %s,\n", s.name, s.typ, zigLayoutSlotZero(s.typ))
+	}
+	b.WriteString("\n    /// Field plan rows: slot offset and has/count/oneof offsets. The\n    /// comptime block below proves every offset.\n")
+	b.WriteString("    pub const fields = [_]FieldPlan{\n")
+	for _, r := range p.rows {
+		fmt.Fprintf(b, "        .{ .number = %d, .kind = .%s", r.number, r.kind)
+		for _, flag := range r.flags {
+			if flag == "packed" {
+				flag = "is_packed"
+			}
+			b.WriteString(", ." + flag + " = true")
+		}
+		fmt.Fprintf(b, ", .offset = %d", r.offset)
+		if r.has != 0 {
+			fmt.Fprintf(b, ", .has = %d", r.has)
+		}
+		if r.count != 0 {
+			fmt.Fprintf(b, ", .count = %d", r.count)
+		}
+		if r.cs != 0 {
+			fmt.Fprintf(b, ", .cs = %d", r.cs)
+		}
+		if r.child != "" {
+			b.WriteString(", .child = " + r.child)
+		}
+		b.WriteString(" },\n")
+	}
+	b.WriteString("    };\n")
+	fmt.Fprintf(b, "    pub const plan = pbwire.InPlace(@This(), %q, &fields);\n", full)
+	b.WriteString("};\n")
+	b.WriteString("\ncomptime {\n")
+	for _, s := range p.slots {
+		fmt.Fprintf(b, "    std.debug.assert(@offsetOf(%s, %q) == %d);\n", p.name, s.name, s.offset)
+	}
+	fmt.Fprintf(b, "    std.debug.assert(@sizeOf(%s) == %d);\n", p.name, p.size)
+	b.WriteString("}\n\n")
 }

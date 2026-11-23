@@ -4,18 +4,29 @@
 ;;
 ;; The same payload as every other row: every scalar kind, the nested
 ;; message, the two proto3 optionals, and the repeated fields scaled
-;; x0 / x1 / x100 / x3000 (136 / 174 / 2469 / 74913 bytes). Both sides must
-;; produce identical bytes before anything is timed, and both reuse a
-;; pre-built message per call (encode-message against toByteArray,
-;; decode-message plus close against parseFrom), so the comparison is like
-;; for like with the Java row. The persistent-map fns (encode/decode) stay
-;; for convenience and are gated for parity, but the timed path is the
-;; mutable Message (fill once, encode many; decode plus close, no map
-;; materialization), which is what beats the generated baseline.
+;; x0 / x1 / x100 / x3000 (136 / 174 / 2469 / 74913 bytes). Every row's
+;; bytes are gated against the official runtime before anything is timed.
+;;
+;; Arms (bindings/README.md#pbench-three-arms-one-contract):
+;;   tree  the persistent-map API, fresh map per iteration -- the full task:
+;;         a fresh (payload n) per iteration, encode; decode, every
+;;         gate-checked field read back per iteration (consume-tree)
+;;   core  the mutable-message fast path       -- native object in and out, no map walk
+;;   proxy the prebuilt-map task, relabelled   -- held map re-encoded,
+;;         decode-and-drop with no read-back. Published, never the headline.
+;;   shim  ../java/pbench/jni                  -- ceiling: one JNI crossing, no tree translation
+;;
+;; The persistent-map fns (encode/decode) are the `tree` row: the map is
+;; the binding's own tree, so its walk and materialization are the arm's
+;; cost. The `core` row is the mutable Message (fill once, encode many;
+;; decode plus close, no map materialization), which is what beats the
+;; generated baseline. The review focus for this plan says the core row is
+;; that fast path, not a per-call map conversion.
 ;;
 ;;   ./bench.sh
 (ns pbwire.bench
-  (:require [pbwire.core :as pb])
+  (:require [matrix3 :as gen]
+            [pbwire.core :as pb])
   (:import (java.util Arrays) (structtest Matrix3$Scalars3)))
 
 (def ^:private cases ["small" "medium" "large" "xlarge"])
@@ -100,13 +111,36 @@
         count
         (recur (* 2 count))))))
 
-(defn- measure [floor op]
-  (let [count (calibrate op floor)]
-    (run-ns count op)
-    (apply min (repeatedly passes #(run-ns count op)))))
+(defn- measure-all [floor ops]
+  (let [counts (mapv #(calibrate % floor) ops)
+        best (atom (vec (repeat (count ops) Double/MAX_VALUE)))]
+    (doseq [[c op] (map vector (mapv #(min % 1000) counts) ops)]
+      (run-ns c op))
+    (dotimes [_ passes]
+      (doseq [i (range (count ops))]
+        (swap! best #(assoc % i (min (nth % i) (run-ns (nth counts i) (nth ops i)))))))
+    @best))
 
 (defn- row [impl op nbytes ns]
-  (println (format "  %-12s %-7s %12.1f %10.1f" impl op ns (/ (* nbytes 1000.0) ns))))
+  (println (format "  %-18s %-7s %12.1f %10.1f" impl op ns (/ (* nbytes 1000.0) ns))))
+
+(def ^:private sink (atom 0))
+
+(defn- consume-tree
+  "The tree decode half of the timed full task: decode to a persistent
+   map, then read back every gate-checked field (the same field list the
+   gate asserts), so the timer covers the materialization."
+  [ty wire n]
+  (let [back (pb/decode ty wire)]
+    (swap! sink +
+           (count (:str back))
+           (count (:tags back))
+           (count (:inners back))
+           (count (get-in back [:inner :name]))
+           (get-in back [:inner :value]))
+    (when (pos? n)
+      (let [last-inner (last (:inners back))]
+        (swap! sink + (count (:name last-inner)) (:value last-inner))))))
 
 (defn -main [desc]
   (let [schema (pb/load-schema desc)
@@ -142,29 +176,62 @@
                                        (or (zero? n)
                                            (= (- n 4) (last (:nums back))))
                                        (Arrays/equals ^bytes reference
-                                                      ^bytes (pb/encode ty back))))]
+                                                      ^bytes (pb/encode ty back))))
+                        gen-ok (Arrays/equals
+                                ^bytes reference
+                                ^bytes (gen/encode-structtest-scalars3 data))
+                        ;; Full-task tree gate: a fresh per-iteration build must
+                        ;; match the reference too (not just the held map above).
+                        fresh-ok (Arrays/equals
+                                  ^bytes reference
+                                  ^bytes (gen/encode-structtest-scalars3
+                                            (payload n)))]
                     (when-not back-ok
                       (println "FAIL" label "pbwire-clojure decode differs")
-                      (swap! failures inc)))
+                      (swap! failures inc))
+                    (when-not gen-ok
+                      (println "FAIL" label "generated model bytes differ")
+                      (swap! failures inc))
+                    (when-not fresh-ok
+                      (println "FAIL" label "fresh-build tree bytes differ")
+                      (swap! failures inc))
+                    (when (and back-ok gen-ok fresh-ok)
+                      (println "OK  " (str label " generated-model parity, x" n
+                                           " (" (count reference) " bytes)"))))
+                  ;; Tree ops are the Go-parity full task: a fresh map per
+                  ;; iteration, deep materialization of every gate-checked field
+                  ;; on decode (consume-tree). Proxy ops are the old prebuilt
+                  ;; task, relabelled, not re-measured as a new task.
+                  ;; Calibration stays per-op (measure-all): the fast proxy ops
+                  ;; keep their own count and never inflate the tree rows.
                   (let [data-msg (pb/new-message ty)
                         _ (pb/fill-message! data-msg data)
-                        tier-count (calibrate #(pb/encode-message data-msg) floor)
-                        encode (measure floor #(pb/encode-message data-msg))
-                        decode (measure floor #(let [m (pb/decode-message ty reference)]
-                                                 (pb/close! m)))
-                        official-encode (measure floor #(.toByteArray official))
-                        official-decode (measure floor
-                                                 #(structtest.Matrix3$Scalars3/parseFrom
-                                                   ^bytes reference))]
+                        tier-count (calibrate #(gen/encode-structtest-scalars3
+                                                 (payload n)) floor)
+                        res (measure-all floor
+                              [#(gen/encode-structtest-scalars3 (payload n))
+                               #(pb/encode-message data-msg)
+                               #(gen/encode-structtest-scalars3 data)
+                               #(.toByteArray official)
+                               #(consume-tree ty reference n)
+                               #(let [m (pb/decode-message ty reference)]
+                                  (pb/close! m))
+                               #(gen/decode-structtest-scalars3 reference)
+                               #(structtest.Matrix3$Scalars3/parseFrom
+                                 ^bytes reference)])]
                     (pb/close! data-msg)
                     (println (str label ": " (count reference) " bytes, "
                                   tier-count " iterations (repeat field x" n ")"))
-                    (println (format "  %-12s %-7s %12s %10s"
+                    (println (format "  %-18s %-7s %12s %10s"
                                      "impl" "op" "ns/op" "MB/s"))
-                    (row "pbwire-clj" "encode" (count reference) encode)
-                    (row "protobuf-java" "encode" (count reference) official-encode)
-                    (row "pbwire-clj" "decode" (count reference) decode)
-                    (row "protobuf-java" "decode" (count reference) official-decode)
+                    (row "pbwire-clj-tree" "encode" (count reference) (nth res 0))
+                    (row "pbwire-clj-core" "encode" (count reference) (nth res 1))
+                    (row "pbwire-clj-proxy" "encode" (count reference) (nth res 2))
+                    (row "protobuf-java" "encode" (count reference) (nth res 3))
+                    (row "pbwire-clj-tree" "decode" (count reference) (nth res 4))
+                    (row "pbwire-clj-core" "decode" (count reference) (nth res 5))
+                    (row "pbwire-clj-proxy" "decode" (count reference) (nth res 6))
+                    (row "protobuf-java" "decode" (count reference) (nth res 7))
                     (println))))))))
       (finally (pb/close! schema)))
     (when (pos? @failures)

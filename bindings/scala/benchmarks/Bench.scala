@@ -8,7 +8,17 @@
  * scaled x0 / x1 / x100 / x3000, which lands the tiers on 136 / 174 / 2469 /
  * 74913 bytes. Both sides must produce identical bytes before anything is
  * timed, and both allocate per call (pbwire encode()/decode() against
- * toByteArray/parseFrom), so the comparison is like for like.
+ * toByteArray/parseFrom), so the timer covers the user-visible task.
+ *
+ * Arms (bindings/README.md#pbench-three-arms-one-contract):
+ *   tree  Message (GenericCodec/DMsg) full task -- fresh build per field per
+ *               iteration, encode; decode, every gate-checked field read back
+ *               per iteration (mirrors bindings/java/benchmarks/Bench.java)
+ *   core  the committed generated model      -- native object in and out (matrix3Gen case classes)
+ *   proxy Message (GenericCodec/DMsg), prebuilt -- re-encode a held tree,
+ *               decode-and-drop with no materialization. Published, never
+ *               the headline.
+ *   shim  ../java/pbench/jni                 -- ceiling: one JNI crossing, no tree translation
  *
  * The `structtest` classes are the ScalaPB baseline: bench.sh generates
  * them from bindings/c/tests/data/matrix3.proto with scalapbc, so this
@@ -32,6 +42,63 @@ object Bench {
   private val Passes = 3
 
   private var failures = 0
+
+  private var sink = 0L
+
+  /** Fresh-build tree encode: a new per-field Message per call (never the held tree). */
+  private def freshEncode(ty: MessageType, n: Int): Array[Byte] =
+    using(fillPbwire(ty, n)) { m => m.encode() }
+
+  /**
+   * The tree decode half of the timed full task: decode, then read back
+   * every gate-checked field (the same field list the gate asserts).
+   * Message.decode is lazy on message/string/bytes fields, so this is the
+   * work the binding really does turning wire into values.
+   */
+  private def consumeTree(ty: MessageType, wire: Array[Byte], n: Int): Unit = {
+    using(ty.decode(wire)) { back =>
+      sink += back.getString("str").length
+      sink += back.getList("tags").size()
+      val inners = back.getList("inners")
+      sink += inners.size()
+      val inner = back.getMessage("inner")
+      sink += inner.getString("name").length
+      sink += inner.getLong("value")
+      if (n > 0) {
+        val last = inners.get(n - 1).asInstanceOf[Message]
+        sink += last.getString("name").length
+        sink += last.getLong("value")
+      }
+    }
+  }
+
+  /** The committed generated model for the same payload (native object). */
+  private def fillGenerated(n: Int): matrix3Gen.Structtest_Scalars3 =
+    matrix3Gen.Structtest_Scalars3(
+      i32 = Int.MinValue,
+      i64 = Long.MaxValue,
+      u32 = 0xffffffffL,
+      u64 = -1L,
+      s32 = Int.MinValue,
+      s64 = Long.MinValue,
+      fx32 = 0xdeadbeefL,
+      fx64 = 72623859790382856L,
+      sfx32 = Int.MinValue,
+      sfx64 = Long.MinValue,
+      f32 = Float.PositiveInfinity,
+      f64 = -123456.789,
+      flag = true,
+      str = "hello",
+      color = 2,
+      inner = Some(matrix3Gen.Structtest_Inner3(name = "kid", value = 42)),
+      nums = (0 until n).map(i => i - 3).toList,
+      tags = List.fill(n)("tag"),
+      inners = (0 until n).map(i =>
+        matrix3Gen.Structtest_Inner3(name = "grandkid", value = i + 1)).toList,
+      optI32 = Some(-7),
+      optStr = Some("opt"),
+      flags = (0 until n).map(i => i % 2 == 0).toList
+    )
 
   private def fillOfficial(n: Int): Scalars3 = {
     var m = Scalars3(
@@ -128,7 +195,7 @@ object Bench {
   }
 
   private def row(impl: String, op: String, bytes: Int, ns: Double): Unit =
-    println("  %-12s %-7s %12.1f %10.1f".format(impl, op, ns, bytes / ns * 1000.0))
+    println("  %-18s %-7s %12.1f %10.1f".format(impl, op, ns, bytes / ns * 1000.0))
 
   def main(args: Array[String]): Unit = {
     if (args.length != 1) {
@@ -171,26 +238,69 @@ object Bench {
                 println("FAIL " + label + ": pbwire-scala decode differs")
                 failures += 1
               } else {
-                val official = fillOfficial(n)
-                val tierCount = calibrate(() => message.encode(), count)
-                val res = measureAll(count, Seq(
-                  () => message.encode(),
-                  () => ty.decode(reference).close(),
-                  () => official.toByteArray,
-                  () => Scalars3.parseFrom(reference)))
-                val encode = res(0)
-                val decode = res(1)
-                val officialEncode = res(2)
-                val officialDecode = res(3)
+                // The native-object arm: the committed generated model must
+                // round-trip byte-identically and expose the same values.
+                val model = fillGenerated(n)
+                val modelBytes = matrix3Gen.Structtest_Scalars3.encode(model)
+                if (!java.util.Arrays.equals(modelBytes, reference)) {
+                  println("FAIL " + label + ": pbwire-scala core encode differs")
+                  failures += 1
+                } else {
+                  val modelBack = matrix3Gen.Structtest_Scalars3.decode(reference)
+                  val modelOk = java.util.Arrays.equals(
+                    matrix3Gen.Structtest_Scalars3.encode(modelBack), reference) &&
+                    modelBack.str == "hello" &&
+                    modelBack.nums.size == n &&
+                    modelBack.inners.size == n &&
+                    modelBack.inner.exists(_.name == "kid") &&
+                    (n == 0 || modelBack.inners(n - 1).value == n)
+                  if (!modelOk) {
+                    println("FAIL " + label + ": pbwire-scala core decode differs")
+                    failures += 1
+                  } else {
+                    println("OK   " + label + " generated-model parity, x" + n +
+                      " (" + reference.length + " bytes)")
+                    // Full-task tree gate: a fresh per-field build must match the
+                    // reference too (not just the held tree above), and the decode
+                    // below must expose the same values the timer materializes.
+                    val fresh = freshEncode(ty, n)
+                    if (!java.util.Arrays.equals(fresh, reference)) {
+                      println("FAIL " + label + ": fresh-build tree bytes differ")
+                      failures += 1
+                    } else {
+                      val official = fillOfficial(n)
+                    // Tree ops are the Go-parity full task: fresh Message per
+                      // iteration, deep materialization of every gate-checked field
+                      // on decode (the same field list the gate asserts). Proxy ops
+                      // are the old prebuilt task, relabelled, not re-measured as a
+                      // new task. Calibration stays per-op (measureAll): the fast
+                      // proxy ops keep their own count and never inflate the tree rows.
+                      val tierCount = calibrate(() => freshEncode(ty, n), count)
+                      val res = measureAll(count, Seq(
+                        () => freshEncode(ty, n),
+                        () => matrix3Gen.Structtest_Scalars3.encode(model),
+                        () => message.encode(),
+                        () => official.toByteArray,
+                        () => consumeTree(ty, reference, n),
+                        () => matrix3Gen.Structtest_Scalars3.decode(reference),
+                        () => ty.decode(reference).close(),
+                        () => Scalars3.parseFrom(reference)))
 
-                println(label + ": " + reference.length + " bytes, " + tierCount +
-                  " iterations (repeat field x" + n + ")")
-                println("  %-12s %-7s %12s %10s".format("impl", "op", "ns/op", "MB/s"))
-                row("pbwire-scala", "encode", reference.length, encode)
-                row("scalapb", "encode", reference.length, officialEncode)
-                row("pbwire-scala", "decode", reference.length, decode)
-                row("scalapb", "decode", reference.length, officialDecode)
-                println()
+                      println(label + ": " + reference.length + " bytes, " + tierCount +
+                        " iterations (repeat field x" + n + ")")
+                      println("  %-18s %-7s %12s %10s".format("impl", "op", "ns/op", "MB/s"))
+                      row("pbwire-scala-tree", "encode", reference.length, res(0))
+                      row("pbwire-scala-core", "encode", reference.length, res(1))
+                      row("pbwire-scala-proxy", "encode", reference.length, res(2))
+                      row("scalapb", "encode", reference.length, res(3))
+                      row("pbwire-scala-tree", "decode", reference.length, res(4))
+                      row("pbwire-scala-core", "decode", reference.length, res(5))
+                      row("pbwire-scala-proxy", "decode", reference.length, res(6))
+                      row("scalapb", "decode", reference.length, res(7))
+                      println()
+                    }
+                  }
+                }
               }
             }
           }

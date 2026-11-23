@@ -48,5 +48,8 @@ if [ "${1:-all}" = build ]; then
     exit 0
 fi
 
-# --expose-gc so the finalizer test can force the collections it checks.
-exec node --expose-gc --test "$here/test/test_pbwire.js" "$here/tests/generated_test.js" "$here/tests/compat_test.js"
+# --expose-gc so the finalizer test can force the collections it checks. The
+# pure-TypeScript core tests run here too: they need no native library, but
+# they are part of the binding's self-check.
+exec node --expose-gc --test "$here/test/test_pbwire.js" "$here/tests/generated_test.js" \
+    "$here/tests/compat_test.js" "$here"/tests/core/*_test.js

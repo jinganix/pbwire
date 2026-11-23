@@ -20,7 +20,7 @@ namespace Tutorial {
     }
 
     /// <summary>tutorial.Person</summary>
-    public sealed partial class Person {
+    public sealed partial class Person : Pbwire.INativeModel {
         /// <summary>Field number for the "name" field.</summary>
         public const int NameFieldNumber = 1;
         public string Name { get; set; }  = "";
@@ -70,7 +70,9 @@ namespace Tutorial {
         public override string ToString() {
             return "Person {{ " + "Name = " + Name + ", " + "Id = " + Id + ", " + "Email = " + Email + " }}";
         }
-        public byte[] ToByteArray() {
+        /// <summary>One native call over the flat image (the promoted shim arm); the per-field path while an external schema is registered.</summary>
+        public byte[] ToByteArray() => PbwireFile_Addressbook.IsEmbedded ? PersonLayout.Marshal(this) : EncodeViaHandle();
+        private byte[] EncodeViaHandle() {
             using Pbwire.Message msg = PbwireFile_Addressbook.Schema.Message("tutorial.Person").NewMessage();
             EncodeInto(msg);
             return msg.Encode();
@@ -85,9 +87,13 @@ namespace Tutorial {
         }
         public int CalculateSize() => ToByteArray().Length;
          internal void MergeFromBytes(byte[] wire) {
+            if (PbwireFile_Addressbook.IsEmbedded) { MergeFrom(PersonLayout.Unmarshal(wire)); return; }
             using Pbwire.Message msg = PbwireFile_Addressbook.Schema.Message("tutorial.Person").Decode(wire);
             LoadFrom(msg);
         }
+        /// <summary>The native-object entry: one call per op over the shipped converter.</summary>
+        void Pbwire.INativeModel.WriteTo(Pbwire.Message msg) { EncodeInto(msg); }
+        void Pbwire.INativeModel.ReadFrom(Pbwire.Message msg) { LoadFrom(msg); }
         public void MergeFrom(Person other) {
             if (other == null) { return; }
             Name = other.Name;
@@ -115,6 +121,99 @@ namespace Tutorial {
                 if (sub != null) { var m = new Types.PhoneNumber(); m.LoadFrom(sub); Phones.Add(m); }
             }
         }
+        /// <summary>Bytes of one flat image: the native object's pinned representation.</summary>
+        public const int ImageBytes = 48;
+        /// <summary>Copies this native object into a zeroed flat image; strings, bytes and sub-images come from <paramref name="arena"/>.</summary>
+        public unsafe void WriteImage(byte* img, global::Pbwire.ImageArena arena) {
+            *(IntPtr*)(img + 8) = arena.Utf8OrEmpty(Name);
+            *(int*)(img + 32) = 1;
+            *(int*)(img + 0) = (int)(Id);
+            *(IntPtr*)(img + 16) = HasEmail ? arena.Utf8OrEmpty(Email) : IntPtr.Zero;
+            {
+                var n = Phones.Count;
+                if (n != 0) {
+                    var p = (byte*)arena.Alloc(n * Types.PhoneNumber.ImageBytes);
+                    for (var i = 0; i < n; i++) {
+                        Phones[i].WriteImage(p + i * Types.PhoneNumber.ImageBytes, arena);
+                    }
+                    *(IntPtr*)(img + 24) = (IntPtr)p;
+                }
+                *(nuint*)(img + 40) = (nuint)n;
+            }
+        }
+
+        /// <summary>Allocates a zeroed sub-image from the call arena and fills it.</summary>
+        public unsafe byte* NewImage(global::Pbwire.ImageArena arena) {
+            var p = (byte*)arena.Alloc(ImageBytes);
+            global::Pbwire.ImageArena.Clear(p, ImageBytes);
+            WriteImage(p, arena);
+            return p;
+            }
+
+        /// <summary>Copies a decoded flat image into this native object; the image's pointers must still be alive.</summary>
+        public unsafe void ReadImage(byte* img) {
+            {
+                var p = *(IntPtr*)(img + 8);
+                Name = p == IntPtr.Zero ? null! : (global::System.Runtime.InteropServices.Marshal.PtrToStringUTF8(p) ?? "");
+            }
+            Id = *(int*)(img + 0);
+            {
+                var p = *(IntPtr*)(img + 16);
+                if (p == IntPtr.Zero) { ClearEmail(); }
+                else { Email = global::System.Runtime.InteropServices.Marshal.PtrToStringUTF8(p) ?? ""; }
+            }
+            Phones.Clear();
+            var nPhones = (int)(*(nuint*)(img + 40));
+            if (nPhones != 0) {
+                if (Phones.Capacity < nPhones) Phones.Capacity = nPhones;
+                var p = *(byte**)(img + 24);
+                for (var i = 0; i < nPhones; i++) { var c = new Types.PhoneNumber(); c.ReadImage(p + i * Types.PhoneNumber.ImageBytes); Phones.Add(c); }
+            }
+            GC.KeepAlive(this);
+        }
+
+        /// <summary>Flat slot layout: scalar offsets, pointer slots for the reference-typed fields, one presence bit per proto3 optional. Read by the native-object entry, gated by Pbwire.Layout.Verify.</summary>
+        public static class PersonLayout {
+            /// <summary>The message type the table describes.</summary>
+            public static readonly global::Pbwire.MessageType Type = PbwireFile_Addressbook.Schema.Message("tutorial.Person");
+            /// <summary>One row per field, in slot order.</summary>
+            public static readonly global::Pbwire.Layout Table = new global::Pbwire.Layout("tutorial.Person", 48, 1)
+                .FieldAt("id", 0, 4)
+                .Ref("name", 8, 8)
+                .Has("email", 0, 16)
+                .Ref("phones", 24, 8);
+            /// <summary>One row per field, with the presence/count/oneof words and wire facts the C layout codec reads.</summary>
+            public static readonly global::Pbwire.LayoutRow[] Rows = {
+                new(2, global::Pbwire.FlatKind.Int32, 0, 5, Has: 32, Required: true),
+                new(1, global::Pbwire.FlatKind.String, 8, 9, Wire: 2, Required: true),
+                new(3, global::Pbwire.FlatKind.String, 16, 9, Wire: 2),
+                new(4, global::Pbwire.FlatKind.Message, 24, 11, Wire: 2, Repeated: true, Count: 40, Child: "tutorial.Person.PhoneNumber"),
+            };
+            /// <summary>This message's image, as the file's layout source sees it.</summary>
+            public static readonly global::Pbwire.LayoutType Spec = new("tutorial.Person", ImageBytes, Rows);
+            private static global::Pbwire.LayoutPlan? _plan;
+            /// <summary>The compiled reader, cached after the first call (no per-op lookup).</summary>
+            private static global::Pbwire.LayoutPlan Plan => _plan ??= global::Pbwire.LayoutPlan.Compile(PbwireFile_Addressbook.Layouts, Spec);
+            /// <summary>One call per op: native object in, wire bytes out (one native call over the flat image).</summary>
+            public static unsafe byte[] Marshal(Person native)
+            {
+                using var call = global::Pbwire.ImageCall.Rent(ImageBytes);
+                native.WriteImage(call.Image, call.Arena);
+                return Plan.Encode(call.Image);
+            }
+            /// <summary>One call per op: wire bytes in, native object out. The block carries the decoded image's strings, bytes and sub-images.</summary>
+            public static unsafe Person Unmarshal(byte[] wire)
+            {
+                // Decode arena: every sub-message image now carries presence words (1.5x worst-case growth),
+                // so the wire-proportional headroom tracks that factor; status 2 names this formula.
+                using var call = global::Pbwire.ImageCall.Rent(ImageBytes, wire.Length * 6 + 65536);
+                Plan.Decode(wire, call.Image, call.DecodeArena, call.DecodeArenaBytes);
+                var native = new Person();
+                native.ReadImage(call.Image);
+                return native;
+            }
+        }
+
 
         public static partial class Types {
             /// <summary>tutorial.Person.PhoneType</summary>
@@ -125,7 +224,7 @@ namespace Tutorial {
             }
 
             /// <summary>tutorial.Person.PhoneNumber</summary>
-            public sealed partial class PhoneNumber {
+            public sealed partial class PhoneNumber : Pbwire.INativeModel {
                 /// <summary>Field number for the "number" field.</summary>
                 public const int NumberFieldNumber = 1;
                 public string Number { get; set; }  = "";
@@ -162,7 +261,9 @@ namespace Tutorial {
                 public override string ToString() {
                     return "PhoneNumber {{ " + "Number = " + Number + ", " + "Type = " + Type + " }}";
                 }
-                public byte[] ToByteArray() {
+                /// <summary>One native call over the flat image (the promoted shim arm); the per-field path while an external schema is registered.</summary>
+                public byte[] ToByteArray() => PbwireFile_Addressbook.IsEmbedded ? PhoneNumberLayout.Marshal(this) : EncodeViaHandle();
+                private byte[] EncodeViaHandle() {
                     using Pbwire.Message msg = PbwireFile_Addressbook.Schema.Message("tutorial.Person.PhoneNumber").NewMessage();
                     EncodeInto(msg);
                     return msg.Encode();
@@ -177,9 +278,13 @@ namespace Tutorial {
                 }
                 public int CalculateSize() => ToByteArray().Length;
                  internal void MergeFromBytes(byte[] wire) {
+                    if (PbwireFile_Addressbook.IsEmbedded) { MergeFrom(PhoneNumberLayout.Unmarshal(wire)); return; }
                     using Pbwire.Message msg = PbwireFile_Addressbook.Schema.Message("tutorial.Person.PhoneNumber").Decode(wire);
                     LoadFrom(msg);
                 }
+                /// <summary>The native-object entry: one call per op over the shipped converter.</summary>
+                void Pbwire.INativeModel.WriteTo(Pbwire.Message msg) { EncodeInto(msg); }
+                void Pbwire.INativeModel.ReadFrom(Pbwire.Message msg) { LoadFrom(msg); }
                 public void MergeFrom(PhoneNumber other) {
                     if (other == null) { return; }
                     Number = other.Number;
@@ -195,13 +300,78 @@ namespace Tutorial {
                     Number = msg.GetString("number") ?? "";
                     if (msg.Has("type")) { Type = (PhoneType)msg.GetInt("type"); }
                 }
+                /// <summary>Bytes of one flat image: the native object's pinned representation.</summary>
+                public const int ImageBytes = 24;
+                /// <summary>Copies this native object into a zeroed flat image; strings, bytes and sub-images come from <paramref name="arena"/>.</summary>
+                public unsafe void WriteImage(byte* img, global::Pbwire.ImageArena arena) {
+                    *(IntPtr*)(img + 8) = arena.Utf8OrEmpty(Number);
+                    *(int*)(img + 16) = HasType ? 1 : 0;
+                    *(int*)(img + 0) = (int)(Type);
+                }
+
+                /// <summary>Allocates a zeroed sub-image from the call arena and fills it.</summary>
+                public unsafe byte* NewImage(global::Pbwire.ImageArena arena) {
+                    var p = (byte*)arena.Alloc(ImageBytes);
+                    global::Pbwire.ImageArena.Clear(p, ImageBytes);
+                    WriteImage(p, arena);
+                    return p;
+                    }
+
+                /// <summary>Copies a decoded flat image into this native object; the image's pointers must still be alive.</summary>
+                public unsafe void ReadImage(byte* img) {
+                    {
+                        var p = *(IntPtr*)(img + 8);
+                        Number = p == IntPtr.Zero ? null! : (global::System.Runtime.InteropServices.Marshal.PtrToStringUTF8(p) ?? "");
+                    }
+                    if (*(int*)(img + 16) != 0) Type = (PhoneType)(*(int*)(img + 0));
+                    GC.KeepAlive(this);
+                }
+
+                /// <summary>Flat slot layout: scalar offsets, pointer slots for the reference-typed fields, one presence bit per proto3 optional. Read by the native-object entry, gated by Pbwire.Layout.Verify.</summary>
+                public static class PhoneNumberLayout {
+                    /// <summary>The message type the table describes.</summary>
+                    public static readonly global::Pbwire.MessageType Type = PbwireFile_Addressbook.Schema.Message("tutorial.Person.PhoneNumber");
+                    /// <summary>One row per field, in slot order.</summary>
+                    public static readonly global::Pbwire.Layout Table = new global::Pbwire.Layout("tutorial.Person.PhoneNumber", 24, 1)
+                        .Has("type", 0, 0)
+                        .Ref("number", 8, 8);
+                    /// <summary>One row per field, with the presence/count/oneof words and wire facts the C layout codec reads.</summary>
+                    public static readonly global::Pbwire.LayoutRow[] Rows = {
+                        new(2, global::Pbwire.FlatKind.Enum, 0, 14, Has: 16),
+                        new(1, global::Pbwire.FlatKind.String, 8, 9, Wire: 2, Required: true),
+                    };
+                    /// <summary>This message's image, as the file's layout source sees it.</summary>
+                    public static readonly global::Pbwire.LayoutType Spec = new("tutorial.Person.PhoneNumber", ImageBytes, Rows);
+                    private static global::Pbwire.LayoutPlan? _plan;
+                    /// <summary>The compiled reader, cached after the first call (no per-op lookup).</summary>
+                    private static global::Pbwire.LayoutPlan Plan => _plan ??= global::Pbwire.LayoutPlan.Compile(PbwireFile_Addressbook.Layouts, Spec);
+                    /// <summary>One call per op: native object in, wire bytes out (one native call over the flat image).</summary>
+                    public static unsafe byte[] Marshal(PhoneNumber native)
+                    {
+                        using var call = global::Pbwire.ImageCall.Rent(ImageBytes);
+                        native.WriteImage(call.Image, call.Arena);
+                        return Plan.Encode(call.Image);
+                    }
+                    /// <summary>One call per op: wire bytes in, native object out. The block carries the decoded image's strings, bytes and sub-images.</summary>
+                    public static unsafe PhoneNumber Unmarshal(byte[] wire)
+                    {
+                        // Decode arena: every sub-message image now carries presence words (1.5x worst-case growth),
+                        // so the wire-proportional headroom tracks that factor; status 2 names this formula.
+                        using var call = global::Pbwire.ImageCall.Rent(ImageBytes, wire.Length * 6 + 65536);
+                        Plan.Decode(wire, call.Image, call.DecodeArena, call.DecodeArenaBytes);
+                        var native = new PhoneNumber();
+                        native.ReadImage(call.Image);
+                        return native;
+                    }
+                }
+
             }
 
         }
     }
 
     /// <summary>tutorial.AddressBook</summary>
-    public sealed partial class AddressBook {
+    public sealed partial class AddressBook : Pbwire.INativeModel {
         /// <summary>Field number for the "people" field.</summary>
         public const int PeopleFieldNumber = 1;
         private readonly global::Google.Protobuf.Collections.RepeatedField<Person> people_ = new global::Google.Protobuf.Collections.RepeatedField<Person>();
@@ -227,7 +397,9 @@ namespace Tutorial {
         public override string ToString() {
             return "AddressBook {{ }}";
         }
-        public byte[] ToByteArray() {
+        /// <summary>One native call over the flat image (the promoted shim arm); the per-field path while an external schema is registered.</summary>
+        public byte[] ToByteArray() => PbwireFile_Addressbook.IsEmbedded ? AddressBookLayout.Marshal(this) : EncodeViaHandle();
+        private byte[] EncodeViaHandle() {
             using Pbwire.Message msg = PbwireFile_Addressbook.Schema.Message("tutorial.AddressBook").NewMessage();
             EncodeInto(msg);
             return msg.Encode();
@@ -242,9 +414,13 @@ namespace Tutorial {
         }
         public int CalculateSize() => ToByteArray().Length;
          internal void MergeFromBytes(byte[] wire) {
+            if (PbwireFile_Addressbook.IsEmbedded) { MergeFrom(AddressBookLayout.Unmarshal(wire)); return; }
             using Pbwire.Message msg = PbwireFile_Addressbook.Schema.Message("tutorial.AddressBook").Decode(wire);
             LoadFrom(msg);
         }
+        /// <summary>The native-object entry: one call per op over the shipped converter.</summary>
+        void Pbwire.INativeModel.WriteTo(Pbwire.Message msg) { EncodeInto(msg); }
+        void Pbwire.INativeModel.ReadFrom(Pbwire.Message msg) { LoadFrom(msg); }
         public void MergeFrom(AddressBook other) {
             if (other == null) { return; }
             People.Add(other.People);
@@ -261,6 +437,79 @@ namespace Tutorial {
                 if (sub != null) { var m = new Person(); m.LoadFrom(sub); People.Add(m); }
             }
         }
+        /// <summary>Bytes of one flat image: the native object's pinned representation.</summary>
+        public const int ImageBytes = 16;
+        /// <summary>Copies this native object into a zeroed flat image; strings, bytes and sub-images come from <paramref name="arena"/>.</summary>
+        public unsafe void WriteImage(byte* img, global::Pbwire.ImageArena arena) {
+            {
+                var n = People.Count;
+                if (n != 0) {
+                    var p = (byte*)arena.Alloc(n * Person.ImageBytes);
+                    for (var i = 0; i < n; i++) {
+                        People[i].WriteImage(p + i * Person.ImageBytes, arena);
+                    }
+                    *(IntPtr*)(img + 0) = (IntPtr)p;
+                }
+                *(nuint*)(img + 8) = (nuint)n;
+            }
+        }
+
+        /// <summary>Allocates a zeroed sub-image from the call arena and fills it.</summary>
+        public unsafe byte* NewImage(global::Pbwire.ImageArena arena) {
+            var p = (byte*)arena.Alloc(ImageBytes);
+            global::Pbwire.ImageArena.Clear(p, ImageBytes);
+            WriteImage(p, arena);
+            return p;
+            }
+
+        /// <summary>Copies a decoded flat image into this native object; the image's pointers must still be alive.</summary>
+        public unsafe void ReadImage(byte* img) {
+            People.Clear();
+            var nPeople = (int)(*(nuint*)(img + 8));
+            if (nPeople != 0) {
+                if (People.Capacity < nPeople) People.Capacity = nPeople;
+                var p = *(byte**)(img + 0);
+                for (var i = 0; i < nPeople; i++) { var c = new Person(); c.ReadImage(p + i * Person.ImageBytes); People.Add(c); }
+            }
+            GC.KeepAlive(this);
+        }
+
+        /// <summary>Flat slot layout: scalar offsets, pointer slots for the reference-typed fields, one presence bit per proto3 optional. Read by the native-object entry, gated by Pbwire.Layout.Verify.</summary>
+        public static class AddressBookLayout {
+            /// <summary>The message type the table describes.</summary>
+            public static readonly global::Pbwire.MessageType Type = PbwireFile_Addressbook.Schema.Message("tutorial.AddressBook");
+            /// <summary>One row per field, in slot order.</summary>
+            public static readonly global::Pbwire.Layout Table = new global::Pbwire.Layout("tutorial.AddressBook", 16, 0)
+                .Ref("people", 0, 8);
+            /// <summary>One row per field, with the presence/count/oneof words and wire facts the C layout codec reads.</summary>
+            public static readonly global::Pbwire.LayoutRow[] Rows = {
+                new(1, global::Pbwire.FlatKind.Message, 0, 11, Wire: 2, Repeated: true, Count: 8, Child: "tutorial.Person"),
+            };
+            /// <summary>This message's image, as the file's layout source sees it.</summary>
+            public static readonly global::Pbwire.LayoutType Spec = new("tutorial.AddressBook", ImageBytes, Rows);
+            private static global::Pbwire.LayoutPlan? _plan;
+            /// <summary>The compiled reader, cached after the first call (no per-op lookup).</summary>
+            private static global::Pbwire.LayoutPlan Plan => _plan ??= global::Pbwire.LayoutPlan.Compile(PbwireFile_Addressbook.Layouts, Spec);
+            /// <summary>One call per op: native object in, wire bytes out (one native call over the flat image).</summary>
+            public static unsafe byte[] Marshal(AddressBook native)
+            {
+                using var call = global::Pbwire.ImageCall.Rent(ImageBytes);
+                native.WriteImage(call.Image, call.Arena);
+                return Plan.Encode(call.Image);
+            }
+            /// <summary>One call per op: wire bytes in, native object out. The block carries the decoded image's strings, bytes and sub-images.</summary>
+            public static unsafe AddressBook Unmarshal(byte[] wire)
+            {
+                // Decode arena: every sub-message image now carries presence words (1.5x worst-case growth),
+                // so the wire-proportional headroom tracks that factor; status 2 names this formula.
+                using var call = global::Pbwire.ImageCall.Rent(ImageBytes, wire.Length * 6 + 65536);
+                Plan.Decode(wire, call.Image, call.DecodeArena, call.DecodeArenaBytes);
+                var native = new AddressBook();
+                native.ReadImage(call.Image);
+                return native;
+            }
+        }
+
     }
 
 }

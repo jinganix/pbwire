@@ -13,14 +13,28 @@ import structtest.Matrix3;
 
 /*
  * Benchmark for the pure-Java binding: the generic codec against the
- * official protobuf-java generated code and DynamicMessage, same
- * matrix3.proto, same four tiers as BENCHMARKS.md. The codec loads the
- * schema from matrix3.desc with its own parser -- protobuf-java below is
- * only the baseline being beaten, plus the DynamicMessage column.
+ * official protobuf-java generated code, same matrix3.proto, same four
+ * tiers as BENCHMARKS.md. The codec loads the schema from matrix3.desc with
+ * its own parser -- protobuf-java below is only the baseline being beaten.
+ * DynamicMessage stays a correctness cross-check, not a timed column: the
+ * timed rows are the two arms plus the baseline, six per tier.
  *
  * Correctness gates (un-timed): proto2 round trip against matrix2.bin,
  * oneof against edge.bin, groups + extensions cross-checked through
  * DynamicMessage, unknown-field retention, and the required-field gate.
+ *
+ * Arms (bindings/README.md#pbench-three-arms-one-contract), timed in one
+ * interleaved round per tier. The first two time the native-in/native-out
+ * task; the third is the prebuilt handle:
+ *
+ *   tree  GenericCodec/DMsg full task    -- fresh DMsg built per field per
+ *                     iteration, encode; decode, every gate-checked field
+ *                     read back per iteration (Java has no free; GC owns it)
+ *   core  the committed generated model  -- native object in and out (Structtest_Scalars3)
+ *   proxy GenericCodec/DMsg, prebuilt    -- re-encode a held tree,
+ *                     decode-and-drop with no materialization. Published,
+ *                     never the headline.
+ *   shim  ../pbench/jni                  -- ceiling: one JNI crossing, no tree translation
  */
 public final class Bench {
     private Bench() {
@@ -100,8 +114,31 @@ public final class Bench {
         if (failures != 0) {
             return;
         }
+        // The native-object row: the committed generated model must produce
+        // the same bytes in both directions before it is timed.
+        Structtest_Scalars3 model = fillModel(n);
+        if (!Arrays.equals(model.toByteArray(), reference)) {
+            fail(label, "generated model bytes differ");
+            return;
+        }
+        Structtest_Scalars3 modelBack = Structtest_Scalars3.parseFrom(reference);
+        boolean modelOk = "hello".equals(modelBack.getStr())
+                && modelBack.getNumsCount() == n
+                && modelBack.getInnersCount() == n
+                && "kid".equals(modelBack.getInner().getName())
+                && (n == 0 || modelBack.getInners(n - 1).getValue() == n);
+        if (!Arrays.equals(modelBack.toByteArray(), reference)) {
+            fail(label, "generated model round trip differs");
+            return;
+        }
+        if (!modelOk) {
+            fail(label, "generated model values differ");
+            return;
+        }
         System.out.printf("OK   %s parity, x%d (%d bytes)%n", label, n,
                 reference.length);
+        System.out.printf("OK   %s generated-model parity, x%d (%d bytes)%n",
+                label, n, reference.length);
 
         Descriptors.Descriptor desc = protoScalars3;
         DynamicMessage dynBuilt = DynamicMessage.parseFrom(desc, reference);
@@ -110,26 +147,45 @@ public final class Bench {
             return;
         }
 
+        // Full-task tree gate: a fresh per-field build must match the
+        // reference too (not just the held tree above), and the decode
+        // below must expose the same values the timer materializes.
+        if (!Arrays.equals(GenericCodec.encode(fillGeneric(scalars3, n)),
+                reference)) {
+            fail(label, "fresh-build tree bytes differ");
+            return;
+        }
+
         Matrix3.Scalars3 officialMessage = fillOfficial(n);
+        // Tree ops are the Go-parity full task: fresh DMsg per iteration,
+        // deep materialization of every gate-checked field on decode (the
+        // same field list checkDecoded asserts). Proxy ops are the old
+        // prebuilt task, relabelled, not re-measured as a new task.
+        // Calibration stays per-op (measureAll): the fast proxy ops keep
+        // their own count and never inflate the tree rows.
         Runnable[] ops = {
+            () -> GenericCodec.encode(fillGeneric(scalars3, n)),
+            model::toByteArray,
             () -> GenericCodec.encode(data),
-            () -> GenericCodec.decode(scalars3, reference),
             officialMessage::toByteArray,
+            () -> consumeTree(scalars3, reference, n),
+            () -> Structtest_Scalars3.parseFrom(reference),
+            () -> GenericCodec.decode(scalars3, reference),
             () -> parse(reference),
-            dynBuilt::toByteArray,
-            () -> parseDyn(desc, reference),
         };
         double[] best = measureAll(floor, ops);
 
         System.out.printf("%s: %d bytes, floor %d iterations (repeat field x%d)%n",
                 label, reference.length, floor, n);
-        System.out.printf("  %-14s %-7s %12s %10s%n", "impl", "op", "ns/op", "MB/s");
-        row("pbwire-java", "encode", reference.length, best[0]);
-        row("protobuf-java", "encode", reference.length, best[2]);
-        row("dynamicmessage", "encode", reference.length, best[4]);
-        row("pbwire-java", "decode", reference.length, best[1]);
-        row("protobuf-java", "decode", reference.length, best[3]);
-        row("dynamicmessage", "decode", reference.length, best[5]);
+        System.out.printf("  %-18s %-7s %12s %10s%n", "impl", "op", "ns/op", "MB/s");
+        row("pbwire-java-tree", "encode", reference.length, best[0]);
+        row("pbwire-java-core", "encode", reference.length, best[1]);
+        row("pbwire-java-proxy", "encode", reference.length, best[2]);
+        row("protobuf-java", "encode", reference.length, best[3]);
+        row("pbwire-java-tree", "decode", reference.length, best[4]);
+        row("pbwire-java-core", "decode", reference.length, best[5]);
+        row("pbwire-java-proxy", "decode", reference.length, best[6]);
+        row("protobuf-java", "decode", reference.length, best[7]);
         System.out.println();
     }
 
@@ -298,6 +354,34 @@ public final class Bench {
         return def.fields[def.byName.get(name)].number;
     }
 
+    private static long sink;
+
+    /**
+     * The tree decode half of the timed full task: decode, then read back
+     * every gate-checked field (same field list as checkDecoded asserts).
+     * GenericCodec.decode is lazy on message/string/bytes fields, so this
+     * is the work the binding really does turning wire into values.
+     */
+    private static void consumeTree(GenericCodec.MessageDef def, byte[] wire,
+            int n) {
+        GenericCodec.DMsg back = GenericCodec.decode(def, wire);
+        sink += ((String) back.get(num(back.def, "str"))).length();
+        sink += back.getList(num(back.def, "tags")).size();
+        java.util.List<Object> inners =
+                back.getList(num(back.def, "inners"));
+        sink += inners.size();
+        GenericCodec.DMsg inner =
+                (GenericCodec.DMsg) back.get(num(back.def, "inner"));
+        sink += ((String) inner.get(num(inner.def, "name"))).length();
+        sink += ((Number) inner.get(num(inner.def, "value"))).intValue();
+        if (n > 0) {
+            GenericCodec.DMsg last =
+                    (GenericCodec.DMsg) inners.get(n - 1);
+            sink += ((String) last.get(num(last.def, "name"))).length();
+            sink += ((Number) last.get(num(last.def, "value"))).intValue();
+        }
+    }
+
     private static void checkDecoded(GenericCodec.DMsg back, int n,
             String label) {
         int inners = num(back.def, "inners");
@@ -334,22 +418,13 @@ public final class Bench {
         }
     }
 
-    private static DynamicMessage parseDyn(Descriptors.Descriptor desc,
-            byte[] wire) {
-        try {
-            return DynamicMessage.parseFrom(desc, wire);
-        } catch (Exception e) {
-            throw new RuntimeException(e);
-        }
-    }
-
     private static void fail(String label, String what) {
         System.out.printf("FAIL %s: %s%n", label, what);
         failures++;
     }
 
     private static void row(String impl, String op, int bytes, double ns) {
-        System.out.printf("  %-14s %-7s %12.1f %10.1f%n", impl, op, ns,
+        System.out.printf("  %-18s %-7s %12.1f %10.1f%n", impl, op, ns,
                 bytes / ns * 1000.0);
     }
 
@@ -380,6 +455,37 @@ public final class Bench {
             b.addInners(Matrix3.Inner3.newBuilder().setName("grandkid")
                     .setValue(i + 1));
             b.addFlags(i % 2 == 0);
+        }
+        return b.build();
+    }
+
+    /** The committed generated model for the same payload (native object). */
+    private static Structtest_Scalars3 fillModel(int n) {
+        Structtest_Scalars3.Builder b = Structtest_Scalars3.newBuilder()
+                .setI32(Integer.MIN_VALUE)
+                .setI64(Long.MAX_VALUE)
+                .setU32(-1)
+                .setU64(-1L)
+                .setS32(Integer.MIN_VALUE)
+                .setS64(Long.MIN_VALUE)
+                .setFx32(0xdeadbeef)
+                .setFx64(72623859790382856L)
+                .setSfx32(Integer.MIN_VALUE)
+                .setSfx64(Long.MIN_VALUE)
+                .setF32(Float.POSITIVE_INFINITY)
+                .setF64(-123456.789)
+                .setFlag(true)
+                .setStr("hello")
+                .setColorValue(2)
+                .setInner(Structtest_Inner3.newBuilder().setName("kid").setValue(42))
+                .setOptI32(-7)
+                .setOptStr("opt");
+        for (int i = 0; i < n; i++) {
+            b.addNums(i - 3)
+                    .addTags("tag")
+                    .addInners(Structtest_Inner3.newBuilder()
+                            .setName("grandkid").setValue(i + 1))
+                    .addFlags(i % 2 == 0);
         }
         return b.build();
     }

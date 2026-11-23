@@ -97,12 +97,17 @@ private func calibrate(_ count: Int, _ op: () throws -> Void) rethrows -> Int {
     }
 }
 
+// Left-justified, never truncated: a row name longer than the column
+// (`pbwire-swift-tree`) pushes the next one right, like the C harnesses.
+private func pad(_ text: String, _ width: Int) -> String {
+    text.count >= width ? text : text + String(repeating: " ", count: width - text.count)
+}
+
 private func row(_ impl: String, _ op: String, _ bytes: Int, _ ns: Double) {
     let mbs = Double(bytes) / ns * 1000
     print(
-        "  \(impl.padding(toLength: 12, withPad: " ", startingAt: 0)) "
-            + "\(op.padding(toLength: 7, withPad: " ", startingAt: 0)) "
-            + "\(String(format: "%12.1f", ns)) \(String(format: "%10.1f", mbs))")
+        "  \(pad(impl, 12)) \(pad(op, 7)) \(String(format: "%12.1f", ns)) "
+            + "\(String(format: "%10.1f", mbs))")
 }
 
 // #filePath is the compiled source path: file, BenchBoth, Sources,
@@ -158,9 +163,9 @@ for tier in 0..<cases.count {
 
     print("\(cases[tier]): \(reference.count) bytes, \(count) iterations (repeat field x\(n))")
     print("  \("impl".padding(toLength: 12, withPad: " ", startingAt: 0)) \("op".padding(toLength: 7, withPad: " ", startingAt: 0)) \("ns/op".padding(toLength: 12, withPad: " ", startingAt: 0)) \("MB/s".padding(toLength: 10, withPad: " ", startingAt: 0))")
-    row("pbwire-swift", "encode", reference.count, encodeNs)
+    row("pbwire-swift-tree", "encode", reference.count, encodeNs)
     row("swift-protobuf", "encode", reference.count, officialEncodeNs)
-    row("pbwire-swift", "decode", reference.count, decodeNs)
+    row("pbwire-swift-tree", "decode", reference.count, decodeNs)
     row("swift-protobuf", "decode", reference.count, officialDecodeNs)
     print()
 }

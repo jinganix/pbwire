@@ -11,7 +11,27 @@ is unchanged: keep the pure-Java codec. What is new is that the harness below is
 committed, so the next person (or the next language's template) starts from a
 re-runnable gate instead of a throwaway.
 
+## Arms
+
+The normative arm names are the contract's; this is where the Java rows live.
+
+| arm | here | what it times |
+|---|---|---|
+| `tree` | [`../benchmarks/Bench.java`](../benchmarks/Bench.java), `GenericCodec`/`DMsg` full task | fresh `DMsg` built per field per iteration, encode; decode, every gate-checked field read back per iteration (Java has no `free`; GC owns it) |
+| `core` | [`../benchmarks/Bench.java`](../benchmarks/Bench.java), the committed `Structtest_Scalars3` model | native object in and out through the shipped model |
+| `proxy` | [`../benchmarks/Bench.java`](../benchmarks/Bench.java), `GenericCodec`/`DMsg` prebuilt | the old prebuilt task, relabelled not re-measured: re-encode a held tree, decode-and-drop with no materialization. Published, never the headline |
+| `shim` | `jni/` (`pbwire_jni.c`) | the C core behind one JNI call; it never translates a tree, so it is a ceiling |
+
+The four rows obey
+[`../../README.md#pbench-three-arms-one-contract`](../../README.md#pbench-three-arms-one-contract).
+`Bindings/README.md` publishes `tree` and `core` side by side and says that
+`jni/` is the ceiling, not a binding cost.
+
 ## Contract
+
+The normative contract is in
+[`../../README.md#pbench-three-arms-one-contract`](../../README.md#pbench-three-arms-one-contract).
+This section is the Java-specific shape of those arms.
 
 Both sides measure the same shape, so the ratio is the codec and not the setup:
 
@@ -26,6 +46,12 @@ Both sides measure the same shape, so the ratio is the codec and not the setup:
   counts; the Java side reads the decoded arrays, because
   `GenericCodec.decode` is lazy on message/string/bytes fields and
   materializing them here would time work the binding never does.
+
+`Compare.java` keeps this prebuilt shape on purpose: it prices the
+JNI-ceiling question, not the application task. The application task
+(fresh native per iteration, deep materialization) lives in
+`../benchmarks/Bench.java` as the `tree` row, with the old prebuilt task
+kept beside it as the `proxy` row.
 
 Every tier is gated before any timing: both candidates must reproduce the
 reference bytes exactly and both decodes must report a live tree. Timing is
@@ -88,6 +114,45 @@ pair while `GenericCodec.decode` is lazy on message/string/bytes fields. Absolut
 ns move with machine load and JDK (a loaded host puts the small tier at 0.57x
 pure encode rather than 0.50x, and the large/xlarge encode ratio anywhere in
 1.4x-2.0x); only the intra-run ratios are comparable.
+
+## Verdict
+
+Selected: the pure-Java runtime (`../runtime/`) stays the shipped codec. `jni/`
+stays the `shim` ceiling and is not a candidate for the runtime: it never
+translates a tree, so a real JNI binding pays strictly more than its numbers.
+The ledger entry is
+[`Rejected: JNI binding for Java`](../../../docs/perf-attempts.md#rejected-jni-binding-for-java-2026-11-16).
+
+Go-parity re-time (`results/bench-java-20261121T183049Z.json`, xlarge
+74913 B, throughput ratios = pbwire MB/s over `protobuf-java` MB/s):
+
+| arm | encode ns/op | vs baseline | decode ns/op | vs baseline |
+|---|---|---|---|---|
+| `tree` (full task) | 303081.7 | 0.28x | 209700.8 | 0.87x |
+| `core` (generated model) | 132921.2 | 0.63x | 227270.9 | 0.81x |
+| `proxy` (prebuilt) | 75433.1 | 1.11x | 94570.1 | 1.94x |
+
+Proxy/tree gap at xlarge: 4.0x encode, 2.2x decode -- the old headline
+was the held handle, not the application. The `tree` row (fresh `DMsg`
+per iteration, every gate-checked field read back) is the application
+path and the headline; `proxy` is published beside it, never the
+headline. Both native arms sit below the baseline on every tier
+(`tree` encode 0.27x-0.43x, decode 0.73x-0.90x; `core` encode
+0.28x-0.70x, decode 0.51x-0.79x); the Task 15 optimization pass ran its
+two keeps against the `benchmarks/` full-task arms (single-resolution
+name-keyed writes; inlined tag wire-type gate) and parked the residual
+floors with mechanisms in
+[`docs/perf-attempts.md`](../../../docs/perf-attempts.md#cell-java-tree-encodedecode-at-xlarge-plan-2026-11-22-task-3-jvm-group).
+No `pbench`-arm change here: the ceiling table above is unaffected.
+
+Selected: the pure-Java runtime (`../runtime/`) stays the shipped codec.
+`jni/` stays the `shim` ceiling and is not a candidate for the runtime: it never
+translates a tree, so a real JNI binding pays strictly more than its numbers.
+The ledger entry is
+[`Rejected: JNI binding for Java`](../../../docs/perf-attempts.md#rejected-jni-binding-for-java-2026-11-16).
+The `core` arm (the committed generated model) is the native-shape
+reference, not a second runtime. The prior per-arm numbers and reasons are in
+[`Provisional: the JVM four, three arms`](../../../docs/perf-attempts.md#provisional-the-jvm-four-three-arms-2026-11-21-issue-41).
 
 ## Reuse in other languages
 

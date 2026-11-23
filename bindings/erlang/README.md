@@ -23,6 +23,12 @@ with `pbwire:` — the API and the wire format are unchanged.
 This is the rebar3 layout (`src/`, `c_src/`, `include/`, `priv/`, `test/`), the
 local equivalent of the other bindings' `runtime/` + `tests/`.
 
+Mechanisms: `tree` (the NIF handle over the core, record tuples in and out) and
+`shim` (the single NIF entry that reads the record tuple directly). No `core`
+arm: gpb is already a pure-Erlang codec and is the baseline, so a second one
+would measure our code against the competitor, not a decision. Contract:
+[`../README.md#pbench-three-arms-one-contract`](../README.md#pbench-three-arms-one-contract).
+
 ## Build and run
 
 Needs Erlang/OTP (see [`.tool-versions`](.tool-versions)) and a C compiler;
@@ -146,10 +152,11 @@ Call `pbwire:set_opts/1` before `load_cache/1`:
 **gpb NIF** (libprotobuf behind gpb's own NIF generator) on the same schema and
 payload as every other binding in this repo:
 `bindings/c/tests/data/matrix3.proto` with the repeated fields scaled
-x0 / x1 / x100 / x3000 (136 / 174 / 2469 / 74913 bytes on the wire). Both
-backends build the same gpb record, so the timer measures the codec, not the
-tree. Every backend must match gpb byte for byte (encoding the record and
-re-encoding a decoded reference) before anything is timed.
+x0 / x1 / x100 / x3000 (136 / 174 / 2469 / 74913 bytes on the wire). Every
+encode iteration builds a fresh gpb record inside the timed closure
+(native-in, no prebuilt tree before the timer). Every backend must match gpb
+byte for byte (encoding the record and re-encoding a decoded reference) plus
+a field-by-field read-back of the decoded record before anything is timed.
 
 The gpb NIF baseline needs `protoc` plus the protobuf C++ runtime; the suite
 builds and runs it when `pkg-config --exists protobuf` succeeds, otherwise the
@@ -162,18 +169,18 @@ for all performance numbers; higher is better, MB/s over wire bytes. See
 runs, quick mode, the gpb NIF baseline).
 
 <!-- BENCHMARK_RESULTS_START -->
-Last run: 2026-11-14 06:43:48 UTC (matrix3.proto, the four standard tiers; Erlang 29.0.1 per `.tool-versions`; machine Apple M4 Pro)
+Last run: 2026-11-23 01:13:21 UTC (matrix3.proto, the four standard tiers; Erlang 29.0.1 per `.tool-versions`; machine Apple M4 Pro)
 
 | payload | op | pbwire-erlang (MB/s, x gpb) | gpb (MB/s) | gpb-nif (MB/s) |
 |---|---|---|---|---|
-| 136 B | encode | 502.2 (2.43x) | 206.3 | 85.1 |
-| 136 B | decode | 541.7 (2.27x) | 238.3 | 97.5 |
-| 174 B | encode | 451.3 (3.14x) | 143.7 | 101.5 |
-| 174 B | decode | 486.6 (2.47x) | 196.7 | 118.5 |
-| 2469 B | encode | 415.4 (3.44x) | 120.7 | 88.1 |
-| 2469 B | decode | 325.0 (1.76x) | 185.1 | 131.4 |
-| 74913 B | encode | 483.3 (3.91x) | 123.6 | 121.4 |
-| 74913 B | decode | 356.5 (1.60x) | 222.6 | 209.0 |
+| 136 B | encode | 419.6 (2.91x) | 144.0 | 46.2 |
+| 136 B | decode | 494.4 (2.22x) | 222.4 | 49.9 |
+| 174 B | encode | 419.4 (3.25x) | 129.2 | 49.2 |
+| 174 B | decode | 491.5 (2.42x) | 203.5 | 54.9 |
+| 2469 B | encode | 284.8 (2.73x) | 104.4 | 81.2 |
+| 2469 B | decode | 330.8 (1.65x) | 200.7 | 157.2 |
+| 74913 B | encode | 299.4 (2.87x) | 104.2 | 103.1 |
+| 74913 B | decode | 337.1 (1.52x) | 221.9 | 198.4 |
 
 Higher is better. Throughput in MB/s on serialized wire size. Case names are the
 four standard tiers at the repo root ([BENCHMARKS.md](../../BENCHMARKS.md)).

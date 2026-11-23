@@ -14,6 +14,7 @@
 using System.Diagnostics;
 using Google.Protobuf;
 using Pbwire;
+using Pbwire.Pbench;
 using Structtest;
 
 var cases = new[] { "small", "medium", "large", "xlarge" };
@@ -30,6 +31,8 @@ if (args.Length != 1)
     Console.Error.WriteLine("usage: Bench <descriptor-set>");
     return 2;
 }
+
+CCore.Use(args[0]);
 
 using var schema = Schema.FromFile(args[0]);
 var ty = schema.Message("structtest.Scalars3");
@@ -56,18 +59,23 @@ for (var tier = 0; tier < cases.Length; tier++)
     }
     Console.WriteLine($"OK   {label} encoding parity, x{n} ({reference.Length} bytes)");
 
-    // Decode must round-trip byte-exactly and expose the same values.
-    using (var back = ty.Decode(reference))
+    // The tree arm's full task, gated before it is timed: a fresh native
+    // build per iteration through the shipped per-field API, then a decode
+    // that reads every checked field back. No prebuilt handle before the
+    // timer; the prebuilt rows below are the proxy arm.
+    using (var fresh = FillPbwire(ty, innerTy, n))
     {
-        var backInner = back.GetMessage("inner");
-        var backOk = back.Encode().SequenceEqual(reference)
-            && back.GetString("str") == "hello"
-            && backInner?.GetString("name") == "kid"
-            && back.Count("nums") == n
-            && (n == 0 || back.At("nums", n - 1)?.AsLong() == n - 4);
-        if (!backOk)
+        if (!fresh.Encode().SequenceEqual(reference))
         {
-            Fail(label, "pbwire-csharp decode differs");
+            Fail(label, "pbwire-csharp-tree fresh-build bytes differ");
+            continue;
+        }
+    }
+    using (var treeBack = ty.Decode(reference))
+    {
+        if (!TreeFieldsOk(treeBack, reference, n))
+        {
+            Fail(label, "pbwire-csharp-tree field compare differs");
             continue;
         }
     }
@@ -88,25 +96,76 @@ for (var tier = 0; tier < cases.Length; tier++)
         Console.WriteLine($"NOTE   {label}: protobuf-net singular-encodes single-element packed fields ({pbnBytes.Length} vs {reference.Length} bytes); its rows skipped");
     }
 
+    // The shim arm's native object: the committed generated model, filled before
+    // the timer. Its bytes must match too, and its decode must re-encode equal.
+    var native = Matrix3Shim.New(n);
+    var shimBytes = Matrix3Shim.Marshal(native);
+    if (!shimBytes.SequenceEqual(reference))
+    {
+        Fail(label, $"pbwire-csharp-shim wrote {shimBytes.Length} bytes, protobuf-csharp {reference.Length}");
+        continue;
+    }
+    if (!Matrix3Shim.Marshal(Matrix3Shim.Unmarshal(reference)).SequenceEqual(reference))
+    {
+        Fail(label, "pbwire-csharp-shim decode differs");
+        continue;
+    }
+
+    // The pure-C# core arm's native object: the plain object (proto field
+    // names), converted and encoded per call. No native library is involved.
+    var coreNative = CCore.New(n);
+    if (!CCore.Marshal(coreNative).SequenceEqual(reference))
+    {
+        Fail(label, "pbwire-csharp-core encode differs");
+        continue;
+    }
+    if (!CCore.Marshal(CCore.Unmarshal(reference)).SequenceEqual(reference))
+    {
+        Fail(label, "pbwire-csharp-core decode differs");
+        continue;
+    }
+
     var official = FillOfficial(n);
-    // Tier line shows the reference op's count; slower ops keep the floor.
+    // Tier line shows the reference op's count; the floor calibration stays
+    // on the prebuilt op so the slower tree op never inflates any row.
     var tierCount = Calibrate(() => message.Encode(), count);
-    var encode = Measure(count, () => message.Encode());
-    var decode = Measure(count, () =>
+    var sink = new long[1];
+    var treeEncode = Measure(count, () =>
+    {
+        using var built = FillPbwire(ty, innerTy, n);
+        built.Encode();
+    });
+    var treeDecode = Measure(count, () =>
     {
         using var decoded = ty.Decode(reference);
+        sink[0] += ConsumeTree(decoded, n);
     });
+    var proxyEncode = Measure(count, () => message.Encode());
+    var proxyDecode = Measure(count, () =>
+    {
+        using var held = ty.Decode(reference);
+    });
+    var shimEncode = Measure(count, () => Matrix3Shim.Marshal(native));
+    var shimDecode = Measure(count, () => Matrix3Shim.Unmarshal(reference));
+    var coreEncode = Measure(count, () => CCore.Marshal(coreNative));
+    var coreDecode = Measure(count, () => CCore.Unmarshal(reference));
     var officialEncode = Measure(count, () => official.ToByteArray());
     var pbnEncode = pbnOk ? Measure(count, () => PbnEncode(pbn)) : 0;
     var officialDecode = Measure(count, () => Scalars3.Parser.ParseFrom(reference));
     var pbnDecode = pbnOk ? Measure(count, () => PbnDecode(reference)) : 0;
 
     Console.WriteLine($"{label}: {reference.Length} bytes, {tierCount} iterations (repeat field x{n})");
-    Console.WriteLine($"  {"impl",-12} {"op",-7} {"ns/op",12} {"MB/s",10}");
-    Row("pbwire-csharp", "encode", reference.Length, encode);
+    Console.WriteLine($"  {"impl",-20} {"op",-7} {"ns/op",12} {"MB/s",10}");
+    Row("pbwire-csharp-tree", "encode", reference.Length, treeEncode);
+    Row("pbwire-csharp-shim", "encode", reference.Length, shimEncode);
+    Row("pbwire-csharp-core", "encode", reference.Length, coreEncode);
     Row("protobuf-csharp", "encode", reference.Length, officialEncode);
     if (pbnOk) Row("protobuf-net", "encode", reference.Length, pbnEncode);
-    Row("pbwire-csharp", "decode", reference.Length, decode);
+    Row("pbwire-csharp-tree", "decode", reference.Length, treeDecode);
+    Row("pbwire-csharp-proxy", "encode", reference.Length, proxyEncode);
+    Row("pbwire-csharp-proxy", "decode", reference.Length, proxyDecode);
+    Row("pbwire-csharp-shim", "decode", reference.Length, shimDecode);
+    Row("pbwire-csharp-core", "decode", reference.Length, coreDecode);
     Row("protobuf-csharp", "decode", reference.Length, officialDecode);
     if (pbnOk) Row("protobuf-net", "decode", reference.Length, pbnDecode);
     Console.WriteLine();
@@ -150,6 +209,65 @@ static Scalars3 FillOfficial(int n)
         m.Flags.Add(i % 2 == 0);
     }
     return m;
+}
+
+static long ConsumeTree(Message m, int n)
+{
+    // Folds every gate-checked field so the timer pays the read, not just
+    // the parse. Same field list the gate asserts in TreeFieldsOk.
+    var acc = 0L;
+    acc += m.GetInt("i32");
+    acc += m.GetLong("i64");
+    acc += m.GetLong("u32");
+    acc += m.GetLong("u64");
+    acc += m.GetInt("s32");
+    acc += m.GetLong("s64");
+    acc += m.GetInt("fx32");
+    acc += m.GetLong("fx64");
+    acc += m.GetInt("sfx32");
+    acc += m.GetLong("sfx64");
+    acc += m.GetFloat("f32") > 0 ? 1 : 0;
+    acc += (long)m.GetDouble("f64");
+    acc += m.GetBool("flag") ? 1 : 0;
+    acc += m.GetString("str")?.Length ?? 0;
+    acc += m.GetInt("color");
+    acc += m.Has("opt_i32") ? m.GetInt("opt_i32") : 0;
+    acc += m.Has("opt_str") ? m.GetString("opt_str")?.Length ?? 0 : 0;
+    var inner = m.GetMessage("inner");
+    acc += inner?.GetString("name")?.Length ?? 0;
+    acc += inner?.GetInt("value") ?? 0;
+    acc += m.Count("nums") + m.Count("tags") + m.Count("inners") + m.Count("flags");
+    if (n > 0)
+    {
+        acc += m.At("nums", n - 1)?.AsLong() ?? 0;
+        acc += m.At("nums", 0)?.AsLong() ?? 0;
+        acc += m.At("tags", n - 1)?.AsString()?.Length ?? 0;
+        acc += m.At("flags", n - 1)?.AsBool() == true ? 1 : 0;
+        var kid = m.At("inners", n - 1)?.AsMessage();
+        acc += kid?.GetString("name")?.Length ?? 0;
+        acc += kid?.GetInt("value") ?? 0;
+    }
+    return acc;
+}
+
+static bool TreeFieldsOk(Message m, byte[] reference, int n)
+{
+    var inner = m.GetMessage("inner");
+    var kid = n == 0 ? null : m.At("inners", n - 1)?.AsMessage();
+    return m.Encode().SequenceEqual(reference)
+        && m.GetString("str") == "hello"
+        && inner?.GetString("name") == "kid"
+        && inner?.GetInt("value") == 42
+        && m.Count("nums") == n
+        && m.Count("tags") == n
+        && m.Count("inners") == n
+        && m.Count("flags") == n
+        && (n == 0 || m.At("nums", n - 1)?.AsLong() == n - 4)
+        && (n == 0 || kid?.GetInt("value") == n)
+        && m.Has("opt_i32") && m.GetInt("opt_i32") == -7
+        && m.Has("opt_str") && m.GetString("opt_str") == "opt"
+        && m.GetLong("u64") == -1L
+        && m.GetInt("color") == 2;
 }
 
 static Message FillPbwire(MessageType ty, MessageType innerTy, int n)
@@ -280,7 +398,7 @@ static double Measure(int floor, Action op)
 }
 
 static void Row(string impl, string op, int bytes, double ns) =>
-    Console.WriteLine($"  {impl,-12} {op,-7} {ns,12:F1} {bytes / ns * 1000.0,10:F1}");
+    Console.WriteLine($"  {impl,-20} {op,-7} {ns,12:F1} {bytes / ns * 1000.0,10:F1}");
 
 void Fail(string label, string what)
 {

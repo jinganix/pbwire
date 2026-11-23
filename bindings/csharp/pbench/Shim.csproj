@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>Pbwire.PbenchShim</AssemblyName>
+    <RootNamespace>Pbwire.Pbench</RootNamespace>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="Shim.cs" />
+    <ProjectReference Include="Models.csproj" />
+    <ProjectReference Include="../Pbwire/Pbwire.csproj" />
+  </ItemGroup>
+
+</Project>

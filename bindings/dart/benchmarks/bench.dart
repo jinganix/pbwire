@@ -4,18 +4,29 @@
 //
 // The same payload as the C/Go/Java/Rust rows: every scalar kind, the nested
 // message, the two proto3 optionals, and the repeated fields scaled x0 / x1 /
-// x100 / x3000, which lands the tiers on 136 / 174 / 2469 / 74913 bytes. Both
-// sides must produce identical bytes before anything is timed, and both
-// allocate per call (pbwire encode()/decode() against writeToBuffer()/
-// fromBuffer()), so the comparison is like for like.
+// x100 / x3000, which lands the tiers on 136 / 174 / 2469 / 74913 bytes. All
+// three encoding paths must produce identical bytes before anything is timed.
+// The `pbwire-dart-tree` row times the Go-parity full task: a fresh native
+// `Message` per iteration (one `set` per field), `encode()`, `close()`; decode,
+// one `get` per field into a live sink, `close()`. The `pbwire-dart-proxy` row
+// keeps the old prebuilt shape (a held handle's `encode()`, one-shot
+// decode-and-close with no materialization), relabelled not re-measured, never
+// the headline. `pbwire-dart-shim` is the generated flat `Struct` image read in
+// place by the C reader (one FFI call each); its app-owned image is reused
+// across iterations (steady-state carve-out, disclosed here), as is the core
+// arm's prebuilt `Msg` tree.
 //
 //   ./bench.sh          generate, build, run
 
+import 'dart:ffi' as ffi;
 import 'dart:io';
 
+import 'package:ffi/ffi.dart';
 import 'package:fixnum/fixnum.dart';
+import 'package:pbwire/core/schema.dart' as core;
 import 'package:pbwire/pbwire.dart';
 
+import 'gen/matrix3.dart' as model;
 import 'gen/matrix3.pb.dart' as proto;
 
 const _cases = ['small', 'medium', 'large', 'xlarge'];
@@ -37,6 +48,19 @@ void main(List<String> args) {
   final ty = schema.message('structtest.Scalars3');
   final innerTy = schema.message('structtest.Inner3');
 
+  // The pure-Dart core: same descriptor, no native library.
+  final coreSchema = core.Schema.fromBytes(File(args[0]).readAsBytesSync());
+  final coreType = coreSchema.message('structtest.Scalars3');
+
+  // The shim arm: the same payload as a flat layout image, one FFI call per op.
+  final layoutSchema = PbwLayoutSchema.load(args[0]);
+  // Children register first: the parent's message row resolves it by name.
+  layoutSchema.type(
+      'structtest.Inner3', model.inner3LayoutRows, ffi.sizeOf<model.Inner3Layout>());
+  final imageType = layoutSchema.type('structtest.Scalars3',
+      model.scalars3LayoutRows, ffi.sizeOf<model.Scalars3Layout>());
+  final imageArena = Arena();
+
   for (var tier = 0; tier < _cases.length; tier++) {
     final label = _cases[tier];
     final n = _repeats[tier];
@@ -53,7 +77,55 @@ void main(List<String> args) {
       _fail(label, 'pbwire-dart wrote ${got.length} bytes, protobuf-dart ${reference.length}');
       continue;
     }
+    // The core arm's native object, built once per tier like the others.
+    final coreMsg = core.fromObject(coreType.def, _corePayload(n));
+    final coreBytes = coreType.encode(coreMsg);
+    if (!_equals(coreBytes, reference)) {
+      _fail(label,
+          'pbwire-dart-core wrote ${coreBytes.length} bytes, protobuf-dart ${reference.length}');
+      continue;
+    }
+    final coreBack = coreType.decode(reference);
+    final coreBackOk = _equals(coreType.encode(coreBack), reference) &&
+        core.getField(coreBack, 'str') == 'hello' &&
+        core.getField(core.getField(coreBack, 'inner') as core.Msg, 'name') ==
+            'kid' &&
+        ((core.getField(coreBack, 'nums') as List<Object?>?)?.length ?? 0) == n;
+    if (!coreBackOk) {
+      _fail(label, 'pbwire-dart-core decode differs');
+      message.close();
+      continue;
+    }
+    final image = _fillLayout(imageArena, n);
+    final shimBytes = PbwireLayout.encode(image, imageType);
+    if (!_equals(shimBytes, reference)) {
+      _fail(label, 'pbwire-dart-shim wrote ${shimBytes.length} bytes, protobuf-dart ${reference.length}');
+      continue;
+    }
     // Decode must round-trip byte-exactly and expose the same values.
+    // Go-parity gate on the tree full task: a fresh native build encodes to
+    // the reference bytes, a fresh decode exposes every gate-checked field
+    // (the same list the timer consumes), and the decoded tree re-encodes
+    // byte-exactly.
+    final fresh = _fillPbwire(ty, innerTy, n);
+    final freshBytes = fresh.encode();
+    fresh.close();
+    if (!_equals(freshBytes, reference)) {
+      _fail(label,
+          'fresh tree wrote ${freshBytes.length} bytes, protobuf-dart ${reference.length}');
+      message.close();
+      continue;
+    }
+    final freshBack = ty.decode(reference);
+    final freshOk = _equals(freshBack.encode(), reference) &&
+        _treeFieldsOk(freshBack, n);
+    freshBack.close();
+    if (!freshOk) {
+      _fail(label, 'fresh tree decode field compare differs');
+      message.close();
+      continue;
+    }
+    stdout.writeln('OK   $label tree full-task parity, x$n');
     final back = ty.decode(reference);
     final backInner = back.getMessage('inner');
     final backOk = _equals(back.encode(), reference) &&
@@ -70,29 +142,183 @@ void main(List<String> args) {
     stdout.writeln('OK   $label encoding parity, x$n (${reference.length} bytes)');
 
     final official = _fillOfficial(n);
-    // Tier line shows the reference op's count; slower ops keep the floor.
+    // Tier line shows the fast prebuilt op's count; the slower full-task tree
+    // op keeps the floor (re-calibrating on it would inflate every row's
+    // iteration count and the run time).
     final tierCount = _calibrate(() => message.encode(), count);
-    final encode = _measure(count, () => message.encode());
-    final decode = _measure(count, () => ty.decode(reference)..close());
+    // The tree full task (Go parity): a fresh native build per iteration,
+    // encoded and closed inside the timer; a fresh decode per iteration, every
+    // gate-checked field folded into a live sink, closed inside the timer.
+    var treeSink = 0;
+    final treeEncode = _measure(count, () {
+      final m = _fillPbwire(ty, innerTy, n);
+      m.encode();
+      m.close();
+    });
+    final treeDecode = _measure(count, () {
+      final m = ty.decode(reference);
+      treeSink += _consumeTree(m, n);
+      m.close();
+    });
+    if (treeSink < 0) {
+      stdout.writeln('sink $treeSink');
+    }
+    // The proxy task: the old prebuilt shape, relabelled not re-measured as
+    // a new task (a held handle's encode, one-shot decode-and-close with no
+    // materialization), never the headline.
+    final proxyEncode = _measure(count, () => message.encode());
+    final proxyDecode = _measure(count, () => ty.decode(reference)..close());
+    final coreEncode = _measure(count, () => coreType.encode(coreMsg));
+    final coreDecode = _measure(count, () => coreType.decode(reference));
+    final out = calloc<ffi.Uint8>(ffi.sizeOf<model.Scalars3Layout>()).cast<model.Scalars3Layout>();
+    final decodeArena = PbwArena(reference.length);
+    double shimEncode;
+    double shimDecode;
+    try {
+      // Same count as the tree row, so the two codec rows share a loop shape.
+      shimEncode = _measure(count, () => PbwireLayout.encode(image, imageType));
+      shimDecode = _measure(count, () {
+        PbwireLayout.decodeInto(reference, out, imageType, decodeArena);
+      });
+    } finally {
+      decodeArena.release();
+      calloc.free(out);
+    }
+    // The decoded image must expose the same fields the tree decode checks.
     final officialEncode = _measure(count, () => official.writeToBuffer());
     final officialDecode = _measure(count, () => proto.Scalars3.fromBuffer(reference));
 
     stdout.writeln('$label: ${reference.length} bytes, $tierCount iterations (repeat field x$n)');
-    stdout.writeln('  ${'impl'.padRight(12)} ${'op'.padRight(7)} '
+    stdout.writeln('  ${'impl'.padRight(16)} ${'op'.padRight(7)} '
         '${'ns/op'.padLeft(12)} ${'MB/s'.padLeft(10)}');
-    _row('pbwire-dart', 'encode', reference.length, encode);
+    _row('pbwire-dart-tree', 'encode', reference.length, treeEncode);
+    _row('pbwire-dart-proxy', 'encode', reference.length, proxyEncode);
+    _row('pbwire-dart-shim', 'encode', reference.length, shimEncode);
+    _row('pbwire-dart-core', 'encode', reference.length, coreEncode);
     _row('protobuf-dart', 'encode', reference.length, officialEncode);
-    _row('pbwire-dart', 'decode', reference.length, decode);
+    _row('pbwire-dart-tree', 'decode', reference.length, treeDecode);
+    _row('pbwire-dart-proxy', 'decode', reference.length, proxyDecode);
+    _row('pbwire-dart-shim', 'decode', reference.length, shimDecode);
+    _row('pbwire-dart-core', 'decode', reference.length, coreDecode);
     _row('protobuf-dart', 'decode', reference.length, officialDecode);
     stdout.writeln();
     message.close();
   }
 
+  imageArena.releaseAll();
+  layoutSchema.close();
   schema.close();
   if (_failures != 0) {
     stderr.writeln('$_failures check(s) failed');
     exit(1);
   }
+}
+
+/// The core arm's payload as a plain Dart map (proto field names, BigInt for
+/// the 64-bit kinds); one build per measured op, like the other arms' objects.
+Map<String, Object?> _corePayload(int n) => <String, Object?>{
+      'i32': -2147483648,
+      'i64': BigInt.parse('9223372036854775807'),
+      'u32': 4294967295,
+      'u64': BigInt.parse('18446744073709551615'),
+      's32': -2147483648,
+      's64': BigInt.parse('-9223372036854775808'),
+      'fx32': 0xdeadbeef,
+      'fx64': BigInt.parse('72623859790382856'),
+      'sfx32': -2147483648,
+      'sfx64': BigInt.parse('-9223372036854775808'),
+      'f32': double.infinity,
+      'f64': -123456.789,
+      'flag': true,
+      'str': 'hello',
+      'color': 2,
+      'opt_i32': -7,
+      'opt_str': 'opt',
+      'inner': <String, Object?>{'name': 'kid', 'value': 42},
+      'nums': <Object?>[for (var i = 0; i < n; i++) i - 3],
+      'tags': <Object?>[for (var i = 0; i < n; i++) 'tag'],
+      'inners': <Object?>[
+        for (var i = 0; i < n; i++) <String, Object?>{'name': 'grandkid', 'value': i + 1}
+      ],
+      'flags': <Object?>[for (var i = 0; i < n; i++) i % 2 == 0],
+    };
+
+/// Gate-checks every decoded field (same list the timer consumes, so gate
+/// and timer agree by construction). Mirrors `pbench/a-tree.dart` read.
+bool _treeFieldsOk(Message msg, int n) {
+  final inner = msg.getMessage('inner');
+  final kid = inner != null &&
+      inner.getString('name') == 'kid' &&
+      inner.getInt('value') == 42;
+  inner?.close();
+  return msg.getInt('i32') == -2147483648 &&
+      msg.getInt('i64') == 9223372036854775807 &&
+      msg.getInt('u32') == 4294967295 &&
+      msg.getInt('u64') == -1 &&
+      msg.getInt('s32') == -2147483648 &&
+      msg.getInt('s64') == -9223372036854775808 &&
+      msg.getInt('fx32') == 3735928559 &&
+      msg.getInt('fx64') == 72623859790382856 &&
+      msg.getInt('sfx32') == -2147483648 &&
+      msg.getInt('sfx64') == -9223372036854775808 &&
+      msg.getFloat('f32') == double.infinity &&
+      msg.getDouble('f64') == -123456.789 &&
+      msg.getBool('flag') &&
+      msg.getString('str') == 'hello' &&
+      msg.getInt('color') == 2 &&
+      msg.has('opt_i32') &&
+      msg.getInt('opt_i32') == -7 &&
+      msg.has('opt_str') &&
+      msg.getString('opt_str') == 'opt' &&
+      msg.count('nums') == n &&
+      msg.count('tags') == n &&
+      msg.count('inners') == n &&
+      msg.count('flags') == n &&
+      (n == 0 ||
+          (msg.at('nums', n - 1)?.asInt() == n - 4 &&
+              msg.at('tags', n - 1)?.asString() == 'tag' &&
+              msg.at('flags', n - 1)?.asBool() == ((n - 1) % 2 == 0))) &&
+      kid;
+}
+
+/// Folds every gate-checked field into a live sink (so the timed decode
+/// cannot drop the reads) and returns it; the gate uses the same list, so
+/// gate and timer agree by construction. Mirrors `pbench/a-tree.dart` read.
+int _consumeTree(Message msg, int n) {
+  var sink = 0;
+  sink += msg.getInt('i32');
+  sink += msg.getInt('i64');
+  sink += msg.getInt('u32');
+  sink += msg.getInt('u64');
+  sink += msg.getInt('s32');
+  sink += msg.getInt('s64');
+  sink += msg.getInt('fx32');
+  sink += msg.getInt('fx64');
+  sink += msg.getInt('sfx32');
+  sink += msg.getInt('sfx64');
+  sink += msg.getFloat('f32') == double.infinity ? 1 : 0;
+  sink += msg.getDouble('f64') == -123456.789 ? 1 : 0;
+  sink += msg.getBool('flag') ? 1 : 0;
+  sink += msg.getString('str') == 'hello' ? 1 : 0;
+  sink += msg.getInt('color');
+  sink += msg.has('opt_i32') ? msg.getInt('opt_i32') : 0;
+  sink += msg.has('opt_str') && msg.getString('opt_str') == 'opt' ? 1 : 0;
+  sink += msg.count('nums');
+  sink += msg.count('tags');
+  sink += msg.count('inners');
+  sink += msg.count('flags');
+  if (n > 0) {
+    sink += msg.at('nums', n - 1)?.asInt() ?? 0;
+    sink += msg.at('tags', n - 1)?.asString() == 'tag' ? 1 : 0;
+    sink += msg.at('flags', n - 1)?.asBool() == ((n - 1) % 2 == 0) ? 1 : 0;
+  }
+  final inner = msg.getMessage('inner');
+  if (inner != null) {
+    sink += inner.getString('name') == 'kid' ? 1 : 0;
+    sink += inner.getInt('value');
+    inner.close();
+  }
+  return sink;
 }
 
 proto.Scalars3 _fillOfficial(int n) => proto.Scalars3(
@@ -153,6 +379,64 @@ Message _fillPbwire(Type ty, Type innerTy, int n) {
   return msg;
 }
 
+/// The shim arm's native object: one Scalars3 flat image, with its strings and
+/// arrays allocated in [arena] (the image is reused across the timed calls).
+ffi.Pointer<model.Scalars3Layout> _fillLayout(Arena arena, int n) {
+  final image = arena
+      .allocate<ffi.Uint8>(ffi.sizeOf<model.Scalars3Layout>())
+      .cast<model.Scalars3Layout>();
+  image.ref
+    ..i32 = -2147483648
+    ..i64 = 9223372036854775807
+    ..u32 = 4294967295
+    ..u64 = -1 // 18446744073709551615 as the raw 64-bit pattern
+    ..s32 = -2147483648
+    ..s64 = -9223372036854775808
+    ..fx32 = 3735928559
+    ..fx64 = 72623859790382856
+    ..sfx32 = -2147483648
+    ..sfx64 = -9223372036854775808
+    ..f32 = double.infinity
+    ..f64 = -123456.789
+    ..flag = true
+    ..str = 'hello'.toNativeUtf8(allocator: arena)
+    ..color = 2
+    ..optI32 = -7
+    ..hasOptI32 = 1
+    ..optStr = 'opt'.toNativeUtf8(allocator: arena);
+  final inner = arena
+      .allocate<ffi.Uint8>(ffi.sizeOf<model.Inner3Layout>())
+      .cast<model.Inner3Layout>();
+  inner.ref
+    ..name = 'kid'.toNativeUtf8(allocator: arena)
+    ..value = 42;
+  image.ref.inner = inner;
+  final nums = arena.allocate<ffi.Int32>(n * ffi.sizeOf<ffi.Int32>());
+  final tags = arena.allocate<ffi.Pointer<Utf8>>(n * ffi.sizeOf<ffi.IntPtr>());
+  final inners = arena
+      .allocate<ffi.Uint8>(n * ffi.sizeOf<model.Inner3Layout>())
+      .cast<model.Inner3Layout>();
+  final flags = arena.allocate<ffi.Bool>(n);
+  for (var i = 0; i < n; i++) {
+    nums[i] = i - 3;
+    tags[i] = 'tag'.toNativeUtf8(allocator: arena);
+    inners[i]
+      ..name = 'grandkid'.toNativeUtf8(allocator: arena)
+      ..value = i + 1;
+    flags[i] = i % 2 == 0;
+  }
+  image.ref
+    ..nums = nums
+    ..numsCount = n
+    ..tags = tags
+    ..tagsCount = n
+    ..inners = inners
+    ..innersCount = n
+    ..flags = flags
+    ..flagsCount = n;
+  return image;
+}
+
 double _run(int iterations, void Function() op) {
   final watch = Stopwatch()..start();
   for (var i = 0; i < iterations; i++) {
@@ -193,7 +477,7 @@ double _measure(int floor, void Function() op) {
 }
 
 void _row(String impl, String op, int bytes, double ns) {
-  stdout.writeln('  ${impl.padRight(12)} ${op.padRight(7)} '
+  stdout.writeln('  ${impl.padRight(16)} ${op.padRight(7)} '
       '${ns.toStringAsFixed(1).padLeft(12)} ${(bytes / ns * 1000.0).toStringAsFixed(1).padLeft(10)}');
 }
 

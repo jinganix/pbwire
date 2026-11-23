@@ -20,6 +20,11 @@ if (\extension_loaded('pbwire')) {
     return;
 }
 
+/* shortcut: no pure-PHP core, reopen when a no-compiler deployment needs it.
+ * The official pure-PHP runtime is already the benchmark baseline, so a second
+ * pure-PHP engine here would measure our code against the competitor, not a
+ * deployment choice; the C extension and this ext-ffi wrapper share the core. */
+
 use FFI;
 use FFI\CData;
 
@@ -45,6 +50,8 @@ final class Lib
         const char *pbw_descriptor_name(void *desc);
         void *pbw_descriptor_find_field_name(void *desc, const char *name);
         void *pbw_descriptor_find_field(void *desc, unsigned int number);
+        size_t pbw_descriptor_field_count(void *desc);
+        void *pbw_descriptor_field_at(void *desc, size_t index);
         const char *pbw_field_name(void *field);
         unsigned int pbw_field_number(void *field);
         int pbw_field_type(void *field);
@@ -418,6 +425,9 @@ final class Type
     /** @var array<string, Field> */
     private array $fields = [];
 
+    /** @var list<Field>|null descriptor order, for the pbench array arm */
+    private ?array $ordered = null;
+
     /** @internal Holds $schema so the descriptor cannot outlive its schema. */
     public function __construct(Schema $schema, CData $desc)
     {
@@ -645,6 +655,368 @@ final class Type
         $type = $field->type();
 
         return $type === self::TYPE_MESSAGE || $type === self::TYPE_GROUP;
+    }
+
+    /* ------------------------------------------------- pbench array arm */
+
+    /**
+     * Encode a native PHP array (field name => value) in one call. On the C
+     * extension this is one extension entry that walks the array in C; this
+     * wrapper is the no-compiler sibling (one FFI call per field).
+     */
+    public function encodeArray(array $message): string
+    {
+        $msg = $this->newMessage();
+
+        try {
+            self::fillArray($msg, $this, $message);
+
+            return $msg->encode();
+        } finally {
+            $msg->close();
+        }
+    }
+
+    /** Decode wire bytes into the fully materialized native PHP array. */
+    public function decodeArray(string $wire, ?array $limits = null): array
+    {
+        $msg = $this->decode($wire, $limits);
+
+        try {
+            return self::messageToArray($msg, $this);
+        } finally {
+            $msg->close();
+        }
+    }
+
+    /** @return list<Field> */
+    private function fieldsInOrder(): array
+    {
+        if ($this->ordered !== null) {
+            return $this->ordered;
+        }
+
+        $ffi = Lib::ffi();
+        $count = $ffi->pbw_descriptor_field_count($this->desc);
+        $out = [];
+
+        for ($i = 0; $i < $count; $i++) {
+            $ptr = $ffi->pbw_descriptor_field_at($this->desc, $i);
+
+            if ($ptr === null) {
+                throw new Error("descriptor field $i missing");
+            }
+
+            $name = (string) $ffi->pbw_field_name($ptr);
+            $out[] = $this->fields[$name] ??= new Field($ptr, $this);
+        }
+
+        return $this->ordered = $out;
+    }
+
+    private static function fillArray(Message $msg, self $type, array $message): void
+    {
+        foreach ($message as $key => $_) {
+            if (!is_string($key) || $key === '') {
+                throw new Error('message arrays need string field names');
+            }
+
+            $type->field($key); /* rejects an unknown name */
+        }
+
+        foreach ($type->fieldsInOrder() as $field) {
+            $name = $field->name();
+
+            if (!array_key_exists($name, $message)) {
+                continue;
+            }
+
+            $value = $message[$name];
+
+            if ($value === null) {
+                continue; /* absent, like an unset optional */
+            }
+
+            $repeated = $field->label() === 3;
+
+            if ($repeated) {
+                if (!is_array($value)) {
+                    throw new Error("field $name: expected a list");
+                }
+
+                $msg->clear($field);
+
+                if ($type->isMessageField($field)) {
+                    $sub = $type->nestedType($field);
+
+                    if ($sub === null) {
+                        throw new Error("field $name: unresolved message type");
+                    }
+
+                    foreach ($value as $item) {
+                        if (!is_array($item)) {
+                            throw new Error("field $name: expected a nested array");
+                        }
+
+                        self::fillArray($msg->setMessage($field), $sub, $item);
+                    }
+                } else {
+                    foreach ($value as $item) {
+                        if ($item === null) {
+                            throw new Error("field $name: NULL is not a value");
+                        }
+
+                        self::setScalar($msg, $field, $item);
+                    }
+                }
+            } elseif ($type->isMessageField($field)) {
+                if (!is_array($value)) {
+                    throw new Error("field $name: expected a nested array");
+                }
+
+                $sub = $type->nestedType($field);
+
+                if ($sub === null) {
+                    throw new Error("field $name: unresolved message type");
+                }
+
+                $msg->clear($field);
+                self::fillArray($msg->setMessage($field), $sub, $value);
+            } else {
+                self::setScalar($msg, $field, $value);
+            }
+        }
+    }
+
+    private static function setScalar(Message $msg, Field $field, mixed $value): void
+    {
+        $type = $field->type();
+        $name = $field->name();
+
+        switch ($type) {
+            case 1: /* double */
+                if (!is_int($value) && !is_float($value)) {
+                    throw new Error("field $name: expected a number");
+                }
+                $msg->setDouble($field, (float) $value);
+
+                return;
+
+            case 2: /* float */
+                if (!is_int($value) && !is_float($value)) {
+                    throw new Error("field $name: expected a number");
+                }
+                $msg->setFloat($field, (float) $value);
+
+                return;
+
+            case 8: /* bool */
+                if (!is_bool($value)) {
+                    throw new Error("field $name: expected a bool");
+                }
+                $msg->setBool($field, $value);
+
+                return;
+
+            case 9: /* string */
+                if (!is_string($value)) {
+                    throw new Error("field $name: expected a string");
+                }
+                $msg->setString($field, $value);
+
+                return;
+
+            case 12: /* bytes */
+                if (!is_string($value)) {
+                    throw new Error("field $name: expected a string");
+                }
+                $msg->setBytes($field, $value);
+
+                return;
+
+            case 4: /* uint64 */
+            case 6: /* fixed64 */
+                if (is_string($value)) {
+                    $bits = self::uint64Bits($value, $name);
+                } elseif (is_int($value) && $value >= 0) {
+                    $bits = $value;
+                } else {
+                    throw new Error("field $name: uint64 must be a non-negative integer or a decimal string");
+                }
+                $msg->setInt($field, $bits);
+
+                return;
+
+            case 3: /* int64 */
+            case 16: /* sfixed64 */
+            case 18: /* sint64 */
+                if (!is_int($value)) {
+                    throw new Error("field $name: expected an int64 integer");
+                }
+                $msg->setInt($field, $value);
+
+                return;
+
+            case 5: /* int32 */
+            case 14: /* enum */
+            case 15: /* sfixed32 */
+            case 17: /* sint32 */
+                if (!is_int($value) || $value < -2147483648 || $value > 2147483647) {
+                    throw new Error("field $name: expected an int32 integer");
+                }
+                $msg->setInt($field, $value);
+
+                return;
+
+            case 7: /* fixed32 */
+            case 13: /* uint32 */
+                if (!is_int($value) || $value < 0 || $value > 4294967295) {
+                    throw new Error("field $name: expected a uint32 integer");
+                }
+                $msg->setInt($field, $value);
+
+                return;
+        }
+
+        throw new Error("field $name: unsupported array scalar type");
+    }
+
+    /** A decimal uint64 string -> the signed int whose 64 bits are the value. */
+    private static function uint64Bits(string $text, string $name): int
+    {
+        if ($text === '') {
+            throw new Error("field $name: uint64 decimal string is empty");
+        }
+
+        $lo = 0;
+        $hi = 0;
+        $len = strlen($text);
+
+        for ($i = 0; $i < $len; $i++) {
+            $digit = ord($text[$i]) - 48;
+
+            if ($digit < 0 || $digit > 9) {
+                throw new Error("field $name: uint64 must be a decimal string");
+            }
+
+            $t = $lo * 10 + $digit;
+            $lo = $t & 0xFFFFFFFF;
+            $hi = $hi * 10 + intdiv($t - $lo, 4294967296);
+
+            if ($hi > 0xFFFFFFFF) {
+                throw new Error("field $name: uint64 decimal string overflows");
+            }
+        }
+
+        return ($hi << 32) | $lo;
+    }
+
+    private static function messageToArray(Message $msg, self $type): array
+    {
+        $out = [];
+
+        foreach ($type->fieldsInOrder() as $field) {
+            $name = $field->name();
+
+            if ($field->label() === 3) {
+                $count = $msg->count($field);
+                $list = [];
+
+                if ($type->isMessageField($field)) {
+                    $sub = $type->nestedType($field);
+
+                    if ($sub === null) {
+                        throw new Error("field $name: unresolved message type");
+                    }
+
+                    for ($i = 0; $i < $count; $i++) {
+                        $child = $msg->at($field, $i)?->asMessage();
+
+                        if ($child === null) {
+                            throw new Error("field $name: no message item");
+                        }
+                        $list[] = self::messageToArray($child, $sub);
+                    }
+                } else {
+                    for ($i = 0; $i < $count; $i++) {
+                        $item = $msg->at($field, $i);
+
+                        if ($item === null) {
+                            throw new Error("field $name: no list item");
+                        }
+                        $list[] = self::scalarFromValue($field, $item);
+                    }
+                }
+
+                $out[$name] = $list;
+
+                continue;
+            }
+
+            if (!$msg->has($field)) {
+                continue;
+            }
+
+            if ($type->isMessageField($field)) {
+                $sub = $type->nestedType($field);
+                $child = $sub === null ? null : $msg->getMessage($field);
+
+                if ($sub === null || $child === null) {
+                    throw new Error("field $name: no nested message");
+                }
+                $out[$name] = self::messageToArray($child, $sub);
+            } else {
+                $out[$name] = self::scalarFromMessage($msg, $field);
+            }
+        }
+
+        return $out;
+    }
+
+    private static function scalarFromMessage(Message $msg, Field $field): mixed
+    {
+        switch ($field->type()) {
+            case 1:
+                return $msg->getDouble($field);
+            case 2:
+                return $msg->getFloat($field);
+            case 8:
+                return $msg->getBool($field);
+            case 9:
+                return $msg->getString($field) ?? '';
+            case 12:
+                return $msg->getBytes($field) ?? '';
+            case 4:
+            case 6:
+                $n = $msg->getInt($field);
+
+                return $n < 0 ? sprintf('%u', $n) : $n;
+            default:
+                return $msg->getInt($field);
+        }
+    }
+
+    private static function scalarFromValue(Field $field, Value $value): mixed
+    {
+        switch ($field->type()) {
+            case 1:
+                return $value->asDouble();
+            case 2:
+                return $value->asFloat();
+            case 8:
+                return $value->asBool();
+            case 9:
+                return $value->asString() ?? '';
+            case 12:
+                return $value->asBytes() ?? '';
+            case 4:
+            case 6:
+                $n = $value->asInt();
+
+                return $n < 0 ? sprintf('%u', $n) : $n;
+            default:
+                return $value->asInt();
+        }
     }
 }
 

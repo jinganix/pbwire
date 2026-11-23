@@ -330,7 +330,7 @@ C++ runtime), `make bench`, `make bench-c` (C structs vs protoc C++). Optional, 
   Go ships pure-Go generated models (no cgo); Elixir translates structs for the shared NIF
   (no C of its own); F# reuses the C# project.
 - [bindings/go/README.md](bindings/go/README.md): Go binding, thin generated models over the pure-Go
-  table engine plus the pbench dynamic C core (`go test ./...` covers parity).
+  table engine plus the pbench dynamic arms (`go test ./...` covers parity).
 - [bindings/python/runtime/pbwire.c](bindings/python/runtime/pbwire.c): Python binding, a CPython
   extension; schema from a `FileDescriptorSet`, dict<->wire in C for every field kind,
   `decode()` returns a parsed message that records one slice per wire field (fields materialize on

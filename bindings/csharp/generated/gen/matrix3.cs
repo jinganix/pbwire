@@ -27,7 +27,7 @@ namespace Structtest {
     }
 
     /// <summary>structtest.Inner3</summary>
-    public sealed partial class Inner3 {
+    public sealed partial class Inner3 : Pbwire.INativeModel {
         /// <summary>Field number for the "name" field.</summary>
         public const int NameFieldNumber = 1;
         public string Name { get; set; }  = "";
@@ -58,7 +58,9 @@ namespace Structtest {
         public override string ToString() {
             return "Inner3 {{ " + "Name = " + Name + ", " + "Value = " + Value + " }}";
         }
-        public byte[] ToByteArray() {
+        /// <summary>One native call over the flat image (the promoted shim arm); the per-field path while an external schema is registered.</summary>
+        public byte[] ToByteArray() => PbwireFile_Matrix3.IsEmbedded ? Inner3Layout.Marshal(this) : EncodeViaHandle();
+        private byte[] EncodeViaHandle() {
             using Pbwire.Message msg = PbwireFile_Matrix3.Schema.Message("structtest.Inner3").NewMessage();
             EncodeInto(msg);
             return msg.Encode();
@@ -73,9 +75,13 @@ namespace Structtest {
         }
         public int CalculateSize() => ToByteArray().Length;
          internal void MergeFromBytes(byte[] wire) {
+            if (PbwireFile_Matrix3.IsEmbedded) { MergeFrom(Inner3Layout.Unmarshal(wire)); return; }
             using Pbwire.Message msg = PbwireFile_Matrix3.Schema.Message("structtest.Inner3").Decode(wire);
             LoadFrom(msg);
         }
+        /// <summary>The native-object entry: one call per op over the shipped converter.</summary>
+        void Pbwire.INativeModel.WriteTo(Pbwire.Message msg) { EncodeInto(msg); }
+        void Pbwire.INativeModel.ReadFrom(Pbwire.Message msg) { LoadFrom(msg); }
         public void MergeFrom(Inner3 other) {
             if (other == null) { return; }
             Name = other.Name;
@@ -93,10 +99,75 @@ namespace Structtest {
             Name = msg.GetString("name") ?? "";
             Value = (int)msg.GetInt("value");
         }
+        /// <summary>Bytes of one flat image: the native object's pinned representation.</summary>
+        public const int ImageBytes = 24;
+        /// <summary>Copies this native object into a zeroed flat image; strings, bytes and sub-images come from <paramref name="arena"/>.</summary>
+        public unsafe void WriteImage(byte* img, global::Pbwire.ImageArena arena) {
+            *(IntPtr*)(img + 8) = Name.Length == 0 ? IntPtr.Zero : arena.Utf8(Name);
+            *(int*)(img + 16) = Value != 0 ? 1 : 0;
+            *(int*)(img + 0) = (int)(Value);
+        }
+
+        /// <summary>Allocates a zeroed sub-image from the call arena and fills it.</summary>
+        public unsafe byte* NewImage(global::Pbwire.ImageArena arena) {
+            var p = (byte*)arena.Alloc(ImageBytes);
+            global::Pbwire.ImageArena.Clear(p, ImageBytes);
+            WriteImage(p, arena);
+            return p;
+            }
+
+        /// <summary>Copies a decoded flat image into this native object; the image's pointers must still be alive.</summary>
+        public unsafe void ReadImage(byte* img) {
+            {
+                var p = *(IntPtr*)(img + 8);
+                Name = p == IntPtr.Zero ? "" : (global::System.Runtime.InteropServices.Marshal.PtrToStringUTF8(p) ?? "");
+            }
+            Value = *(int*)(img + 0);
+            GC.KeepAlive(this);
+        }
+
+        /// <summary>Flat slot layout: scalar offsets, pointer slots for the reference-typed fields, one presence bit per proto3 optional. Read by the native-object entry, gated by Pbwire.Layout.Verify.</summary>
+        public static class Inner3Layout {
+            /// <summary>The message type the table describes.</summary>
+            public static readonly global::Pbwire.MessageType Type = PbwireFile_Matrix3.Schema.Message("structtest.Inner3");
+            /// <summary>One row per field, in slot order.</summary>
+            public static readonly global::Pbwire.Layout Table = new global::Pbwire.Layout("structtest.Inner3", 24, 0)
+                .FieldAt("value", 0, 4)
+                .Ref("name", 8, 8);
+            /// <summary>One row per field, with the presence/count/oneof words and wire facts the C layout codec reads.</summary>
+            public static readonly global::Pbwire.LayoutRow[] Rows = {
+                new(2, global::Pbwire.FlatKind.Int32, 0, 5, Has: 16),
+                new(1, global::Pbwire.FlatKind.String, 8, 9, Wire: 2),
+            };
+            /// <summary>This message's image, as the file's layout source sees it.</summary>
+            public static readonly global::Pbwire.LayoutType Spec = new("structtest.Inner3", ImageBytes, Rows);
+            private static global::Pbwire.LayoutPlan? _plan;
+            /// <summary>The compiled reader, cached after the first call (no per-op lookup).</summary>
+            private static global::Pbwire.LayoutPlan Plan => _plan ??= global::Pbwire.LayoutPlan.Compile(PbwireFile_Matrix3.Layouts, Spec);
+            /// <summary>One call per op: native object in, wire bytes out (one native call over the flat image).</summary>
+            public static unsafe byte[] Marshal(Inner3 native)
+            {
+                using var call = global::Pbwire.ImageCall.Rent(ImageBytes);
+                native.WriteImage(call.Image, call.Arena);
+                return Plan.Encode(call.Image);
+            }
+            /// <summary>One call per op: wire bytes in, native object out. The block carries the decoded image's strings, bytes and sub-images.</summary>
+            public static unsafe Inner3 Unmarshal(byte[] wire)
+            {
+                // Decode arena: every sub-message image now carries presence words (1.5x worst-case growth),
+                // so the wire-proportional headroom tracks that factor; status 2 names this formula.
+                using var call = global::Pbwire.ImageCall.Rent(ImageBytes, wire.Length * 6 + 65536);
+                Plan.Decode(wire, call.Image, call.DecodeArena, call.DecodeArenaBytes);
+                var native = new Inner3();
+                native.ReadImage(call.Image);
+                return native;
+            }
+        }
+
     }
 
     /// <summary>structtest.Scalars3</summary>
-    public sealed partial class Scalars3 {
+    public sealed partial class Scalars3 : Pbwire.INativeModel {
         /// <summary>Field number for the "i32" field.</summary>
         public const int I32FieldNumber = 1;
         public int I32 { get; set; }
@@ -262,7 +333,9 @@ namespace Structtest {
         public override string ToString() {
             return "Scalars3 {{ " + "I32 = " + I32 + ", " + "I64 = " + I64 + ", " + "U32 = " + U32 + ", " + "U64 = " + U64 + ", " + "S32 = " + S32 + ", " + "S64 = " + S64 + ", " + "Fx32 = " + Fx32 + ", " + "Fx64 = " + Fx64 + ", " + "Sfx32 = " + Sfx32 + ", " + "Sfx64 = " + Sfx64 + ", " + "F32 = " + F32 + ", " + "F64 = " + F64 + ", " + "Flag = " + Flag + ", " + "Str = " + Str + ", " + "Color = " + Color + ", " + "OptI32 = " + OptI32 + ", " + "OptStr = " + OptStr + " }}";
         }
-        public byte[] ToByteArray() {
+        /// <summary>One native call over the flat image (the promoted shim arm); the per-field path while an external schema is registered.</summary>
+        public byte[] ToByteArray() => PbwireFile_Matrix3.IsEmbedded ? Scalars3Layout.Marshal(this) : EncodeViaHandle();
+        private byte[] EncodeViaHandle() {
             using Pbwire.Message msg = PbwireFile_Matrix3.Schema.Message("structtest.Scalars3").NewMessage();
             EncodeInto(msg);
             return msg.Encode();
@@ -277,9 +350,13 @@ namespace Structtest {
         }
         public int CalculateSize() => ToByteArray().Length;
          internal void MergeFromBytes(byte[] wire) {
+            if (PbwireFile_Matrix3.IsEmbedded) { MergeFrom(Scalars3Layout.Unmarshal(wire)); return; }
             using Pbwire.Message msg = PbwireFile_Matrix3.Schema.Message("structtest.Scalars3").Decode(wire);
             LoadFrom(msg);
         }
+        /// <summary>The native-object entry: one call per op over the shipped converter.</summary>
+        void Pbwire.INativeModel.WriteTo(Pbwire.Message msg) { EncodeInto(msg); }
+        void Pbwire.INativeModel.ReadFrom(Pbwire.Message msg) { LoadFrom(msg); }
         public void MergeFrom(Scalars3 other) {
             if (other == null) { return; }
             I32 = other.I32;
@@ -411,6 +488,236 @@ namespace Structtest {
                 if (itemFlags != null) { Flags.Add(itemFlags.AsBool()); }
             }
         }
+        /// <summary>Bytes of one flat image: the native object's pinned representation.</summary>
+        public const int ImageBytes = 264;
+        /// <summary>Copies this native object into a zeroed flat image; strings, bytes and sub-images come from <paramref name="arena"/>.</summary>
+        public unsafe void WriteImage(byte* img, global::Pbwire.ImageArena arena) {
+            *(int*)(img + 168) = I32 != 0 ? 1 : 0;
+            *(int*)(img + 0) = (int)(I32);
+            *(int*)(img + 172) = I64 != 0 ? 1 : 0;
+            *(long*)(img + 8) = (long)(I64);
+            *(int*)(img + 176) = U32 != 0 ? 1 : 0;
+            *(uint*)(img + 16) = (uint)(U32);
+            *(int*)(img + 180) = U64 != 0 ? 1 : 0;
+            *(ulong*)(img + 24) = (ulong)(U64);
+            *(int*)(img + 184) = S32 != 0 ? 1 : 0;
+            *(int*)(img + 32) = (int)(S32);
+            *(int*)(img + 188) = S64 != 0 ? 1 : 0;
+            *(long*)(img + 40) = (long)(S64);
+            *(int*)(img + 192) = Fx32 != 0 ? 1 : 0;
+            *(uint*)(img + 48) = (uint)(Fx32);
+            *(int*)(img + 196) = Fx64 != 0 ? 1 : 0;
+            *(ulong*)(img + 56) = (ulong)(Fx64);
+            *(int*)(img + 200) = Sfx32 != 0 ? 1 : 0;
+            *(int*)(img + 64) = (int)(Sfx32);
+            *(int*)(img + 204) = Sfx64 != 0 ? 1 : 0;
+            *(long*)(img + 72) = (long)(Sfx64);
+            *(int*)(img + 208) = F32 != 0 ? 1 : 0;
+            *(float*)(img + 80) = (float)(F32);
+            *(int*)(img + 212) = F64 != 0 ? 1 : 0;
+            *(double*)(img + 88) = (double)(F64);
+            *(int*)(img + 216) = Flag ? 1 : 0;
+            *(byte*)(img + 96) = (byte)(Flag ? 1 : 0);
+            *(IntPtr*)(img + 112) = Str.Length == 0 ? IntPtr.Zero : arena.Utf8(Str);
+            *(int*)(img + 220) = Color != 0 ? 1 : 0;
+            *(int*)(img + 100) = (int)(Color);
+            *(IntPtr*)(img + 120) = Inner == null ? IntPtr.Zero : (IntPtr)Inner.NewImage(arena);
+            {
+                var n = Nums.Count;
+                if (n != 0) {
+                    var p = (byte*)arena.Alloc(n * 4);
+                    for (var i = 0; i < n; i++) {
+                        *(int*)(p + i * 4) = (int)(Nums[i]);
+                    }
+                    *(IntPtr*)(img + 128) = (IntPtr)p;
+                }
+                *(nuint*)(img + 224) = (nuint)n;
+            }
+            {
+                var n = Tags.Count;
+                if (n != 0) {
+                    var p = (byte*)arena.Alloc(n * 8);
+                    for (var i = 0; i < n; i++) {
+                        ((IntPtr*)p)[i] = arena.Utf8(Tags[i]);
+                    }
+                    *(IntPtr*)(img + 136) = (IntPtr)p;
+                }
+                *(nuint*)(img + 232) = (nuint)n;
+            }
+            {
+                var n = Inners.Count;
+                if (n != 0) {
+                    var p = (byte*)arena.Alloc(n * Inner3.ImageBytes);
+                    for (var i = 0; i < n; i++) {
+                        Inners[i].WriteImage(p + i * Inner3.ImageBytes, arena);
+                    }
+                    *(IntPtr*)(img + 144) = (IntPtr)p;
+                }
+                *(nuint*)(img + 240) = (nuint)n;
+            }
+            *(int*)(img + 248) = HasOptI32 ? 1 : 0;
+            *(int*)(img + 104) = (int)(OptI32);
+            *(IntPtr*)(img + 152) = HasOptStr ? arena.Utf8OrEmpty(OptStr) : IntPtr.Zero;
+            {
+                var n = Flags.Count;
+                if (n != 0) {
+                    var p = (byte*)arena.Alloc(n * 1);
+                    for (var i = 0; i < n; i++) {
+                        *(byte*)(p + i * 1) = (byte)(Flags[i] ? 1 : 0);
+                    }
+                    *(IntPtr*)(img + 160) = (IntPtr)p;
+                }
+                *(nuint*)(img + 256) = (nuint)n;
+            }
+        }
+
+        /// <summary>Allocates a zeroed sub-image from the call arena and fills it.</summary>
+        public unsafe byte* NewImage(global::Pbwire.ImageArena arena) {
+            var p = (byte*)arena.Alloc(ImageBytes);
+            global::Pbwire.ImageArena.Clear(p, ImageBytes);
+            WriteImage(p, arena);
+            return p;
+            }
+
+        /// <summary>Copies a decoded flat image into this native object; the image's pointers must still be alive.</summary>
+        public unsafe void ReadImage(byte* img) {
+            I32 = *(int*)(img + 0);
+            I64 = *(long*)(img + 8);
+            U32 = *(uint*)(img + 16);
+            U64 = *(ulong*)(img + 24);
+            S32 = *(int*)(img + 32);
+            S64 = *(long*)(img + 40);
+            Fx32 = *(uint*)(img + 48);
+            Fx64 = *(ulong*)(img + 56);
+            Sfx32 = *(int*)(img + 64);
+            Sfx64 = *(long*)(img + 72);
+            F32 = *(float*)(img + 80);
+            F64 = *(double*)(img + 88);
+            Flag = *(byte*)(img + 96) != 0;
+            {
+                var p = *(IntPtr*)(img + 112);
+                Str = p == IntPtr.Zero ? "" : (global::System.Runtime.InteropServices.Marshal.PtrToStringUTF8(p) ?? "");
+            }
+            Color = (Color3)(*(int*)(img + 100));
+            {
+                var p = *(byte**)(img + 120);
+                if (p != null) { var c = new Inner3(); c.ReadImage(p); Inner = c; }
+            }
+            Nums.Clear();
+            var nNums = (int)(*(nuint*)(img + 224));
+            if (nNums != 0) {
+                if (Nums.Capacity < nNums) Nums.Capacity = nNums;
+                var p = *(byte**)(img + 128);
+                for (var i = 0; i < nNums; i++) { Nums.Add(*(int*)(p + i * 4)); }
+            }
+            Tags.Clear();
+            var nTags = (int)(*(nuint*)(img + 232));
+            if (nTags != 0) {
+                if (Tags.Capacity < nTags) Tags.Capacity = nTags;
+                var p = *(byte**)(img + 136);
+                for (var i = 0; i < nTags; i++) { Tags.Add(global::System.Runtime.InteropServices.Marshal.PtrToStringUTF8(((IntPtr*)p)[i]) ?? ""); }
+            }
+            Inners.Clear();
+            var nInners = (int)(*(nuint*)(img + 240));
+            if (nInners != 0) {
+                if (Inners.Capacity < nInners) Inners.Capacity = nInners;
+                var p = *(byte**)(img + 144);
+                for (var i = 0; i < nInners; i++) { var c = new Inner3(); c.ReadImage(p + i * Inner3.ImageBytes); Inners.Add(c); }
+            }
+            if (*(int*)(img + 248) != 0) OptI32 = *(int*)(img + 104);
+            {
+                var p = *(IntPtr*)(img + 152);
+                if (p == IntPtr.Zero) { ClearOptStr(); }
+                else { OptStr = global::System.Runtime.InteropServices.Marshal.PtrToStringUTF8(p) ?? ""; }
+            }
+            Flags.Clear();
+            var nFlags = (int)(*(nuint*)(img + 256));
+            if (nFlags != 0) {
+                if (Flags.Capacity < nFlags) Flags.Capacity = nFlags;
+                var p = *(byte**)(img + 160);
+                for (var i = 0; i < nFlags; i++) { Flags.Add(*(byte*)(p + i * 1) != 0); }
+            }
+            GC.KeepAlive(this);
+        }
+
+        /// <summary>Flat slot layout: scalar offsets, pointer slots for the reference-typed fields, one presence bit per proto3 optional. Read by the native-object entry, gated by Pbwire.Layout.Verify.</summary>
+        public static class Scalars3Layout {
+            /// <summary>The message type the table describes.</summary>
+            public static readonly global::Pbwire.MessageType Type = PbwireFile_Matrix3.Schema.Message("structtest.Scalars3");
+            /// <summary>One row per field, in slot order.</summary>
+            public static readonly global::Pbwire.Layout Table = new global::Pbwire.Layout("structtest.Scalars3", 264, 2)
+                .FieldAt("i32", 0, 4)
+                .FieldAt("i64", 8, 8)
+                .FieldAt("u32", 16, 4)
+                .FieldAt("u64", 24, 8)
+                .FieldAt("s32", 32, 4)
+                .FieldAt("s64", 40, 8)
+                .FieldAt("fx32", 48, 4)
+                .FieldAt("fx64", 56, 8)
+                .FieldAt("sfx32", 64, 4)
+                .FieldAt("sfx64", 72, 8)
+                .FieldAt("f32", 80, 4)
+                .FieldAt("f64", 88, 8)
+                .FieldAt("flag", 96, 1)
+                .FieldAt("color", 100, 4)
+                .Has("opt_i32", 0, 104)
+                .Ref("str", 112, 8)
+                .Ref("inner", 120, 8)
+                .Ref("nums", 128, 8)
+                .Ref("tags", 136, 8)
+                .Ref("inners", 144, 8)
+                .Has("opt_str", 1, 152)
+                .Ref("flags", 160, 8);
+            /// <summary>One row per field, with the presence/count/oneof words and wire facts the C layout codec reads.</summary>
+            public static readonly global::Pbwire.LayoutRow[] Rows = {
+                new(1, global::Pbwire.FlatKind.Int32, 0, 5, Has: 168),
+                new(2, global::Pbwire.FlatKind.Int64, 8, 3, Has: 172),
+                new(3, global::Pbwire.FlatKind.Uint32, 16, 13, Has: 176),
+                new(4, global::Pbwire.FlatKind.Uint64, 24, 4, Has: 180),
+                new(5, global::Pbwire.FlatKind.Int32, 32, 17, Has: 184),
+                new(6, global::Pbwire.FlatKind.Int64, 40, 18, Has: 188),
+                new(7, global::Pbwire.FlatKind.Uint32, 48, 7, Wire: 5, Has: 192),
+                new(8, global::Pbwire.FlatKind.Uint64, 56, 6, Wire: 1, Has: 196),
+                new(9, global::Pbwire.FlatKind.Int32, 64, 15, Wire: 5, Has: 200),
+                new(10, global::Pbwire.FlatKind.Int64, 72, 16, Wire: 1, Has: 204),
+                new(11, global::Pbwire.FlatKind.Float, 80, 2, Wire: 5, Has: 208),
+                new(12, global::Pbwire.FlatKind.Double, 88, 1, Wire: 1, Has: 212),
+                new(13, global::Pbwire.FlatKind.Bool, 96, 8, Has: 216),
+                new(15, global::Pbwire.FlatKind.Enum, 100, 14, Has: 220),
+                new(20, global::Pbwire.FlatKind.Int32, 104, 5, Has: 248),
+                new(14, global::Pbwire.FlatKind.String, 112, 9, Wire: 2),
+                new(16, global::Pbwire.FlatKind.Message, 120, 11, Wire: 2, Child: "structtest.Inner3"),
+                new(17, global::Pbwire.FlatKind.Int32, 128, 5, Repeated: true, Count: 224, Packed: true),
+                new(18, global::Pbwire.FlatKind.String, 136, 9, Wire: 2, Repeated: true, Count: 232),
+                new(19, global::Pbwire.FlatKind.Message, 144, 11, Wire: 2, Repeated: true, Count: 240, Child: "structtest.Inner3"),
+                new(21, global::Pbwire.FlatKind.String, 152, 9, Wire: 2),
+                new(22, global::Pbwire.FlatKind.Bool, 160, 8, Repeated: true, Count: 256, Packed: true),
+            };
+            /// <summary>This message's image, as the file's layout source sees it.</summary>
+            public static readonly global::Pbwire.LayoutType Spec = new("structtest.Scalars3", ImageBytes, Rows);
+            private static global::Pbwire.LayoutPlan? _plan;
+            /// <summary>The compiled reader, cached after the first call (no per-op lookup).</summary>
+            private static global::Pbwire.LayoutPlan Plan => _plan ??= global::Pbwire.LayoutPlan.Compile(PbwireFile_Matrix3.Layouts, Spec);
+            /// <summary>One call per op: native object in, wire bytes out (one native call over the flat image).</summary>
+            public static unsafe byte[] Marshal(Scalars3 native)
+            {
+                using var call = global::Pbwire.ImageCall.Rent(ImageBytes);
+                native.WriteImage(call.Image, call.Arena);
+                return Plan.Encode(call.Image);
+            }
+            /// <summary>One call per op: wire bytes in, native object out. The block carries the decoded image's strings, bytes and sub-images.</summary>
+            public static unsafe Scalars3 Unmarshal(byte[] wire)
+            {
+                // Decode arena: every sub-message image now carries presence words (1.5x worst-case growth),
+                // so the wire-proportional headroom tracks that factor; status 2 names this formula.
+                using var call = global::Pbwire.ImageCall.Rent(ImageBytes, wire.Length * 6 + 65536);
+                Plan.Decode(wire, call.Image, call.DecodeArena, call.DecodeArenaBytes);
+                var native = new Scalars3();
+                native.ReadImage(call.Image);
+                return native;
+            }
+        }
+
     }
 
 }

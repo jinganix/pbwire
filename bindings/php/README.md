@@ -69,7 +69,10 @@ needs only the `.so` above (no `PBWIRE_LIB`, no shared library).
 ```
 
 `bench.sh` builds `ext/` when `phpize` exists and times both versions back
-to back (`pbwire-php` rows for FFI, `pbwire-php-c` for the native extension).
+to back. Rows are named by the arm: `pbwire-php-tree` (prebuilt `Message`),
+`pbwire-php-shim` (native array through one C-extension entry),
+`pbwire-php-shim-ffi` (the same array API on `ext-ffi`, the no-compiler
+deployment).
 
 The official side is the `php/src` tree of the cached protobuf checkout that
 `make conformance-setup` clones (or `PBWIRE_PROTOBUF_SRC`), loaded through a
@@ -80,30 +83,56 @@ large / xlarge (the repeated fields scaled x0 / x1 / x100 / x3000). Copied from
 [BENCHMARKS.md](../../BENCHMARKS.md), which is the single source for all
 performance numbers; higher is better, MB/s over wire bytes:
 
-| payload | op | pbwire-php-c (MB/s, x protobuf-php-c) | protobuf-php-c (MB/s) |
-|---|---|---|---|
-| 136 B | encode | 1493.8 (1.7x) | 864.1 |
-| 136 B | decode | 860.6 (2.0x) | 435.3 |
-| 174 B | encode | 1349.9 (1.5x) | 922.8 |
-| 174 B | decode | 772.1 (1.8x) | 422.9 |
-| 2469 B | encode | 1406.4 (1.1x) | 1280.4 |
-| 2469 B | decode | 624.3 (1.2x) | 503.9 |
-| 74913 B | encode | 1378.4 (1.1x) | 1295.8 |
-| 74913 B | decode | 681.7 (1.2x) | 561.4 |
+| payload | op | pbwire-php-tree (MB/s, x protobuf-php-c) | pbwire-php-shim (MB/s, x) | protobuf-php-c (MB/s) |
+|---|---|---|---|---|
+| 136 B | encode | 1519.8 (1.71x) | 186.5 (0.21x) | 886.2 |
+| 136 B | decode | 787.3 (1.84x) | 168.0 (0.39x) | 428.7 |
+| 174 B | encode | 1518.2 (1.55x) | 201.2 (0.20x) | 982.0 |
+| 174 B | decode | 753.5 (1.75x) | 178.0 (0.41x) | 431.1 |
+| 2469 B | encode | 1787.7 (1.34x) | 196.0 (0.15x) | 1332.4 |
+| 2469 B | decode | 680.5 (1.29x) | 189.4 (0.36x) | 525.7 |
+| 74913 B | encode | 1639.1 (1.23x) | 214.6 (0.16x) | 1332.0 |
+| 74913 B | decode | 750.8 (1.29x) | 206.9 (0.36x) | 580.5 |
 
-The rows above are the C extension (`pbwire-php-c`); `bench.sh` times the
-FFI wrapper first (`pbwire-php` rows) when `phpize` is missing or the build
-fails. The FFI version pays one trampoline per call, so it trails on the
-small tiers and converges as the payload grows (xlarge 0.90x / 1.30x vs the
-same C-extension baseline in the same harness).
+The tree handle is the shipped path and wins every tier. The native array
+entry is below the official C extension because each field costs a hashtable
+lookup plus a C tree store, and decode materializes the array eagerly.
+`bench.sh` also times the `ext-ffi` deployment separately: the same
+`Type::encodeArray`/`decodeArray` API with the walk in PHP, one FFI call per
+field, which is interpreter-scale (~5 MB/s) and published as
+`pbwire-php-shim-ffi` so the no-compiler cost is not quoted as the C extension.
 
 Without the C extension the same harness measures the pure-PHP runtime
-instead (single `php -n`-style run): xlarge 1384.2 MB/s vs 3.7 (encode) and
-658.7 vs 5.2 (decode). The ~300x gap is the interpreter, not the codec.
+instead (single `php -n`-style run): xlarge `pbwire-php-tree` 1552.5 MB/s vs
+3.7 (encode) and 748.9 vs 5.4 (decode). The ~140-420x gap is the interpreter,
+not the codec.
+
+`pbench/` is the re-runnable arm comparison; `pbench/README.md` has the
+provisional table, the deferred-core TODO and the verdict.
 
 Strings cross with explicit lengths, so embedded NUL bytes survive both
 ways (`setString()` and `setBytes()` accept them; a `string` field accepts
 byte payloads too, which is how protobuf's wire format works).
+
+## Conformance
+
+`conformance/testee.php` drives the official `conformance_test_runner`
+through this binding (`make conformance-php`):
+
+```
+CONFORMANCE SUITE PASSED: 2750 successes, 0 skipped, 2 expected failures,
+0 unexpected failures.
+CONFORMANCE SUITE PASSED: 443 successes, 0 skipped, 0 expected failures,
+0 unexpected failures.
+```
+
+It runs on the shipped `ext-ffi` wrapper, so it needs no compiler and no
+`php-ext` build; binary, JSON and text travel through the same core trees
+the FFI calls use (unknown fields survive, oneof collapses to the last
+member), and text output honors the runner's `print_unknown_fields` flag.
+Only JSPB answers `skipped`. The 2 expected failures are the shared
+`conformance/failure_list_pbwire.txt` (tag varints the reference C++
+testee truncates identically).
 
 ## Threads and lifetimes
 
@@ -151,5 +180,6 @@ second codec):
 | `Message::timestampMillis()` / `Type::timestampFromMillis($ms)` (and the duration twins) | Timestamp/Duration as milliseconds |
 | `Message::anyPack($typeUrl, $payload)`, `Message::anyTypeUrl()`, `Message::anyPayload()` | `google.protobuf.Any` |
 | `Message::fieldmaskPaths()` | `google.protobuf.FieldMask` |
+| `Type::encodeArray($array)` / `Type::decodeArray($wire)` | native array in/out; one entry call in the C extension, the same API on `ext-ffi` |
 | `Schema::services()`, `Schema::service($name)`, `Schema::resolve($service, $method)` | routing metadata, no RPC |
 | `$limits = ['max_bytes' => n, 'max_depth' => n]` | bounds on every decode/parse/load entry point |

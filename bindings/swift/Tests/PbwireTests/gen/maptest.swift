@@ -39,6 +39,21 @@ public struct Spectest_MapValue {
     }
 }
 
+
+/// spectest.MapValue as a flat native mirror: one C call reads and writes it in place.
+@frozen
+public struct Spectest_MapValueRepr: Pbwire.ReprMessage {
+    public var name: UnsafePointer<CChar>? = nil
+    public var value: Int32 = 0
+    public init() {}
+
+    public static let protoName = "spectest.MapValue"
+    public static let fields: [Pbwire.FieldPlan] = [
+        Pbwire.FieldPlan(number: 1, kind: .string, offset: MemoryLayout<Spectest_MapValueRepr>.offset(of: \.name)!, type: 9, wire: 2),
+        Pbwire.FieldPlan(number: 2, kind: .int32, offset: MemoryLayout<Spectest_MapValueRepr>.offset(of: \.value)!, type: 5, wire: 0),
+    ]
+}
+
 /// spectest.MapTest.ByIntEntry
 public struct Spectest_MapTest_ByIntEntry {
     public var key: Int64 = 0
@@ -71,6 +86,21 @@ public struct Spectest_MapTest_ByIntEntry {
         if case .string(let v)? = msg.get("value") { out.value = v }
         return out
     }
+}
+
+
+/// spectest.MapTest.ByIntEntry as a flat native mirror: one C call reads and writes it in place.
+@frozen
+public struct Spectest_MapTest_ByIntEntryRepr: Pbwire.ReprMessage {
+    public var key: Int32 = 0
+    public var value: UnsafePointer<CChar>? = nil
+    public init() {}
+
+    public static let protoName = "spectest.MapTest.ByIntEntry"
+    public static let fields: [Pbwire.FieldPlan] = [
+        Pbwire.FieldPlan(number: 1, kind: .int32, offset: MemoryLayout<Spectest_MapTest_ByIntEntryRepr>.offset(of: \.key)!, type: 5, wire: 0),
+        Pbwire.FieldPlan(number: 2, kind: .string, offset: MemoryLayout<Spectest_MapTest_ByIntEntryRepr>.offset(of: \.value)!, type: 9, wire: 2),
+    ]
 }
 
 /// spectest.MapTest.ByStrEntry
@@ -107,6 +137,21 @@ public struct Spectest_MapTest_ByStrEntry {
     }
 }
 
+
+/// spectest.MapTest.ByStrEntry as a flat native mirror: one C call reads and writes it in place.
+@frozen
+public struct Spectest_MapTest_ByStrEntryRepr: Pbwire.ReprMessage {
+    public var key: UnsafePointer<CChar>? = nil
+    public var value: Int32 = 0
+    public init() {}
+
+    public static let protoName = "spectest.MapTest.ByStrEntry"
+    public static let fields: [Pbwire.FieldPlan] = [
+        Pbwire.FieldPlan(number: 1, kind: .string, offset: MemoryLayout<Spectest_MapTest_ByStrEntryRepr>.offset(of: \.key)!, type: 9, wire: 2),
+        Pbwire.FieldPlan(number: 2, kind: .int32, offset: MemoryLayout<Spectest_MapTest_ByStrEntryRepr>.offset(of: \.value)!, type: 5, wire: 0),
+    ]
+}
+
 /// spectest.MapTest.ByMsgEntry
 public struct Spectest_MapTest_ByMsgEntry {
     public var key: String = ""
@@ -139,6 +184,23 @@ public struct Spectest_MapTest_ByMsgEntry {
         if let n = msg.nested("value") { out.value = try Spectest_MapValue.fromMessage(n) }
         return out
     }
+}
+
+
+/// spectest.MapTest.ByMsgEntry as a flat native mirror: one C call reads and writes it in place.
+/// The child mirrors must be registered before this one.
+@frozen
+public struct Spectest_MapTest_ByMsgEntryRepr: Pbwire.ReprMessage {
+    public var key: UnsafePointer<CChar>? = nil
+    public var value: UnsafeMutablePointer<Spectest_MapValueRepr>? = nil
+    public init() {}
+
+    public static let protoName = "spectest.MapTest.ByMsgEntry"
+    public static let children: [any Pbwire.ReprMessage.Type] = [Spectest_MapValueRepr.self]
+    public static let fields: [Pbwire.FieldPlan] = [
+        Pbwire.FieldPlan(number: 1, kind: .string, offset: MemoryLayout<Spectest_MapTest_ByMsgEntryRepr>.offset(of: \.key)!, type: 9, wire: 2),
+        Pbwire.FieldPlan(number: 2, kind: .message, offset: MemoryLayout<Spectest_MapTest_ByMsgEntryRepr>.offset(of: \.value)!, type: 11, wire: 2, elem: MemoryLayout<Spectest_MapValueRepr>.stride),
+    ]
 }
 
 /// spectest.MapTest
@@ -182,5 +244,27 @@ public struct Spectest_MapTest {
         }
         return out
     }
+}
+
+
+/// spectest.MapTest as a flat native mirror: one C call reads and writes it in place.
+/// The child mirrors must be registered before this one.
+@frozen
+public struct Spectest_MapTestRepr: Pbwire.ReprMessage {
+    public var byInt: UnsafeMutablePointer<Spectest_MapTest_ByIntEntryRepr>? = nil
+    public var countByInt: Int = 0
+    public var byStr: UnsafeMutablePointer<Spectest_MapTest_ByStrEntryRepr>? = nil
+    public var countByStr: Int = 0
+    public var byMsg: UnsafeMutablePointer<Spectest_MapTest_ByMsgEntryRepr>? = nil
+    public var countByMsg: Int = 0
+    public init() {}
+
+    public static let protoName = "spectest.MapTest"
+    public static let children: [any Pbwire.ReprMessage.Type] = [Spectest_MapTest_ByIntEntryRepr.self, Spectest_MapTest_ByStrEntryRepr.self, Spectest_MapTest_ByMsgEntryRepr.self]
+    public static let fields: [Pbwire.FieldPlan] = [
+        Pbwire.FieldPlan(number: 1, kind: .message, offset: MemoryLayout<Spectest_MapTestRepr>.offset(of: \.byInt)!, type: 11, wire: 2, repeated: true, count: MemoryLayout<Spectest_MapTestRepr>.offset(of: \.countByInt)!, elem: MemoryLayout<Spectest_MapTest_ByIntEntryRepr>.stride),
+        Pbwire.FieldPlan(number: 2, kind: .message, offset: MemoryLayout<Spectest_MapTestRepr>.offset(of: \.byStr)!, type: 11, wire: 2, repeated: true, count: MemoryLayout<Spectest_MapTestRepr>.offset(of: \.countByStr)!, elem: MemoryLayout<Spectest_MapTest_ByStrEntryRepr>.stride),
+        Pbwire.FieldPlan(number: 3, kind: .message, offset: MemoryLayout<Spectest_MapTestRepr>.offset(of: \.byMsg)!, type: 11, wire: 2, repeated: true, count: MemoryLayout<Spectest_MapTestRepr>.offset(of: \.countByMsg)!, elem: MemoryLayout<Spectest_MapTest_ByMsgEntryRepr>.stride),
+    ]
 }
 

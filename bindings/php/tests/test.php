@@ -125,6 +125,42 @@ try {
 
 echo "OK   $checks checks passed\n";
 
+/* ---------------------------------------------- one-call array entry (pbench) */
+
+/* The native array path: uint64 past PHP_INT_MAX arrives as its decimal string
+ * and re-encodes to the same bytes as the builder's -1 bit pattern. */
+$u64Max = '18446744073709551615';
+$u64Wire = $ty->newMessage()->setInt('u64', -1)->encode();
+check($ty->encodeArray(['u64' => $u64Max]) === $u64Wire, 'encodeArray u64 decimal string');
+$u64Back = $ty->decodeArray($u64Wire);
+check(($u64Back['u64'] ?? null) === $u64Max, 'decodeArray u64 decimal string');
+check($ty->encodeArray($u64Back) === $u64Wire, 'array u64 round trip');
+
+$arr = [
+    'i32' => -2147483648,
+    'str' => 'hello',
+    'inner' => ['name' => 'kid', 'value' => 42],
+    'nums' => [1, -5, 300],
+    'tags' => ['a', 'bb'],
+    'flags' => [true, false, true],
+];
+$arrWire = $ty->encodeArray($arr);
+$arrBack = $ty->decodeArray($arrWire);
+check(($arrBack['inner']['name'] ?? null) === 'kid' && ($arrBack['nums'][1] ?? null) === -5,
+    'encodeArray/decodeArray nested and repeated');
+check($ty->encodeArray($arrBack) === $arrWire, 'array decode -> encode is byte-exact');
+
+foreach ([['u64' => -1], ['u64' => '18446744073709551616'], ['u64' => '1.5'],
+          ['nope' => 1]] as $bad) {
+    try {
+        $ty->encodeArray($bad);
+        check(false, 'invalid array accepted: ' . json_encode($bad));
+    } catch (Error) {
+        check(true, 'invalid array rejected');
+    }
+}
+echo "OK   array entry: u64 decimal string, nested/repeated, invalid values\n";
+
 /* ------------------------------------------------------------------ edge cases */
 
 /*
