@@ -37,8 +37,8 @@ let asStringOpt (v: Value) : string option = v.AsString() |> Option.ofObj
 let asBytesOpt (v: Value) : byte[] option = v.AsBytes() |> Option.ofObj
 let asMessageOpt (v: Value) : Message option = v.AsMessage() |> Option.ofObj
 
-let fill (ty: MessageType) (innerTy: MessageType) : byte[] =
-    use msg = ty.NewMessage()
+let makeMessage (ty: MessageType) (innerTy: MessageType) : Message =
+    let msg = ty.NewMessage()
     let name = innerTy.Field "name"
     let value = innerTy.Field "value"
 
@@ -78,7 +78,163 @@ let fill (ty: MessageType) (innerTy: MessageType) : byte[] =
         inner.Set(name, "kid") |> ignore
         inner.Set(value, 42L) |> ignore)
     |> ignore
+    msg
+
+let fill (ty: MessageType) (innerTy: MessageType) : byte[] =
+    use msg = makeMessage ty innerTy
     msg.Encode()
+
+// Concurrent stress over the matrix3 oracle: 8 workers x 200 iters, three
+// phases per worker mirroring the C/C++/Rust/Zig/Swift/C# shape:
+//
+//   (a) per-worker message encode == want bytes,
+//   (b) SHARED read-only message concurrent encode == want bytes,
+//   (c) fresh-target decode of want with field checks (NOT re-encode).
+//
+// Only the schema types and the oracle cross threads. MessageType.Field takes
+// a lock around its cache fill (like LayoutSource.Plan in the C# binding this
+// facades), so worker name lookups are safe even cold: the serial baseline
+// below is the oracle pin only, not a cache warmer. Every other message is
+// worker-owned. Concurrent encodes of one native tree are safe: the C core
+// keeps no mutable encode state (proven by bindings/c/tests/test_concurrency.c).
+// Speed prints only, never asserted.
+let concurrency (schema: Schema) (ty: MessageType) (innerTy: MessageType) (oracle: byte[]) =
+    // Cap tracks ACTUAL parallelism (Julia precedent `min(8, nthreads())`):
+    // `Async.Parallel` over 8 blocking-gated workers does not guarantee 8
+    // concurrent threads, so a `Barrier(8)` start gate can deadlock on hosts
+    // with < 8 cores. The spin/wait start gate below waits on this same
+    // count, so gate and parallelism cannot disagree. Blocking waits also
+    // stay out of `async {}`: the cold phase runs on `Task.Run` threads.
+    let workers = min 8 Environment.ProcessorCount
+    let iters = 200
+    // Every field the matrix3 fixture touches: resolving the full set per
+    // iteration hammers the cache fill from all workers at once.
+    let names =
+        [| "i32"; "i64"; "u32"; "u64"; "s32"; "s64"; "fx32"; "fx64"
+           "sfx32"; "sfx64"; "f32"; "f64"; "flag"; "str"; "color"
+           "opt_i32"; "opt_str"; "nums"; "tags"; "inners"; "inner"; "flags" |]
+
+    // COLD-cache phase first: one FRESH type pair with no prior Field lookups
+    // on any thread, shared across workers that concurrently resolve the full
+    // field-name set and encode 200 iters each. This is the real server pattern
+    // (a singleton type shared across first-burst request threads); concurrent
+    // cold fills used to race on the Dictionary, so this phase exercises the
+    // lock. Resolution must match the warm pair field-for-field and the bytes
+    // must equal the oracle.
+    let coldTy = Pbwire.messageType schema "structtest.Scalars3"
+    let coldInner = Pbwire.messageType schema "structtest.Inner3"
+    // A spin/wait start gate so all workers hit the cold cache in the same
+    // instant: without it, thread-startup stagger alone could serialize the
+    // first fill and the race window would be timing luck instead of a real
+    // hammering.
+    let mutable arrived = 0
+    let coldSw = System.Diagnostics.Stopwatch.StartNew()
+
+    let coldWork (worker: int) : string list =
+        System.Threading.Interlocked.Increment(&arrived) |> ignore
+        let spin = System.Threading.SpinWait()
+        while System.Threading.Volatile.Read(&arrived) < workers do
+            spin.SpinOnce()
+        let problems = ResizeArray<string>()
+        for _ in 1..iters do
+            try
+                let mutable mismatch: string option = None
+                for n in names do
+                    if mismatch.IsNone && (coldTy.Field n).Number <> (ty.Field n).Number then
+                        mismatch <- Some n
+                match mismatch with
+                | Some n -> problems.Add($"worker %d{worker}: cold field %s{n} resolved differently")
+                | None -> ()
+                if (coldInner.Field "name").Number <> (innerTy.Field "name").Number
+                    || (coldInner.Field "value").Number <> (innerTy.Field "value").Number then
+                    problems.Add($"worker %d{worker}: cold inner field resolved differently")
+                System.Threading.Interlocked.Increment(&checks) |> ignore
+                if fill coldTy coldInner <> oracle then
+                    problems.Add($"worker %d{worker}: cold independent-encode != want bytes")
+            with _ ->
+                problems.Add($"worker %d{worker}: cold threw")
+        List.ofSeq problems
+
+    let coldResults =
+        [| for w in 0 .. workers - 1 -> System.Threading.Tasks.Task.Run(fun () -> coldWork w) |]
+        |> System.Threading.Tasks.Task.WhenAll
+        |> fun t -> t.Result
+        |> Array.toList
+        |> List.concat
+
+    coldSw.Stop()
+    let coldTotal = workers * iters
+    printfn $"OK   concurrent cold-cache: %d{coldTotal} resolves+encodes in %.3f{coldSw.Elapsed.TotalSeconds} s (%.0f{float coldTotal / coldSw.Elapsed.TotalSeconds}/s)"
+    check (List.isEmpty coldResults) (sprintf "concurrency cold-cache: %s" (String.concat "; " (List.truncate 8 coldResults)))
+
+    // Serial encode-once baseline: must equal the protoc oracle before any
+    // worker starts, so a mapping bug fails here and not in a thread.
+    check (fill ty innerTy = oracle) "concurrency serial encode equals the protoc oracle"
+
+    // Shared read-only fixture for phase (b): never mutated while workers run.
+    use shared = makeMessage ty innerTy
+
+    let sw = System.Diagnostics.Stopwatch.StartNew()
+
+    let work (worker: int) : Async<string list> =
+        async {
+            let problems = ResizeArray<string>()
+            let record phase = problems.Add($"worker %d{worker}: %s{phase}")
+            for _ in 1..iters do
+                // (a) independent-message encode == want bytes.
+                try
+                    use m = makeMessage ty innerTy
+                    System.Threading.Interlocked.Increment(&checks) |> ignore
+                    if m.Encode() <> oracle then
+                        record "phase (a) independent-encode != want bytes"
+                with _ ->
+                    record "phase (a) threw"
+                // (b) SHARED read-only message concurrent encode == want bytes.
+                try
+                    System.Threading.Interlocked.Increment(&checks) |> ignore
+                    if shared.Encode() <> oracle then
+                        record "phase (b) shared-read-only-encode != want bytes"
+                with _ ->
+                    record "phase (b) threw"
+                // (c) fresh-target decode with field checks, NOT re-encode.
+                try
+                    use back = Pbwire.parse ty oracle
+                    System.Threading.Interlocked.Increment(&checks) |> ignore
+                    let innerValue =
+                        Pbwire.at back "inners" 1
+                        |> Option.bind asMessageOpt
+                        |> Option.map (fun m -> Pbwire.getInt64 m "value")
+                    let ok =
+                        Pbwire.getInt back "i32" = Int32.MinValue
+                        && Pbwire.getBool back "flag"
+                        && Pbwire.tryString back "str" = Some "hello"
+                        && Pbwire.getFloat back "f64" = -123456.789
+                        && Pbwire.getInt64 back "color" = 2L
+                        && Pbwire.getInt64 back "opt_i32" = -7L
+                        && Pbwire.count back "nums" = 3
+                        && (Pbwire.at back "nums" 1 |> Option.map (fun v -> v.AsLong())) = Some -5L
+                        && (Pbwire.at back "tags" 1 |> Option.bind asStringOpt) = Some "bb"
+                        && innerValue = Some -2L
+                        && (Pbwire.at back "flags" 1 |> Option.map (fun v -> v.AsBool())) = Some false
+                        && (Pbwire.tryMessage back "inner" |> Option.bind (fun m -> Pbwire.tryString m "name")) = Some "kid"
+                    if not ok then
+                        record "phase (c) fresh-target decode field mismatch"
+                with _ ->
+                    record "phase (c) threw"
+            return List.ofSeq problems
+        }
+
+    let results =
+        [ for w in 0 .. workers - 1 -> work w ]
+        |> Async.Parallel
+        |> Async.RunSynchronously
+        |> Array.toList
+        |> List.concat
+
+    sw.Stop()
+    let total = workers * iters * 3
+    printfn $"OK   concurrent: %d{total} encodes+decodes in %.3f{sw.Elapsed.TotalSeconds} s (%.0f{float total / sw.Elapsed.TotalSeconds}/s)"
+    check (List.isEmpty results) (sprintf "concurrency: %s" (String.concat "; " (List.truncate 8 results)))
 
 // Walk up to the checkout: `dotnet run` keeps the caller's working directory.
 let findRepo () =
@@ -240,6 +396,8 @@ let main argv =
     check (seen > 0) "visit saw fields"
     check (Pbwire.serviceCount schema = 0) "no services in fixture"
     check (throws (fun () -> Pbwire.resolveMethod schema "no.Such" "Nope" |> ignore)) "unknown service accepted"
+
+    concurrency schema ty innerTy oracle
 
     printfn $"OK   %d{checks} checks passed"
     0

@@ -6,7 +6,6 @@ import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Self-check for the Java binding: plain assertions, no framework, no
@@ -301,6 +300,14 @@ public final class TestPbwire {
     /**
      * A loaded schema and its message types are read-only, so threads can share
      * them; only a message (and the per-thread encode workspace) is confined.
+     * 4 workers x 2000 iters, three phases per worker: (a) independent-message
+     * encode == want bytes, (b) SHARED read-only message concurrent encode ==
+     * want bytes (the codec never mutates the tree on encode: lazy slices copy
+     * verbatim, the string cache lives in the ThreadLocal workspace), (c)
+     * fresh-target decode of want with field checks, NOT re-encode. Only the
+     * schema type, the shared message and the want bytes cross threads; every
+     * worker owns its other messages. Timing prints only, never asserted;
+     * failures name the worker and the phase.
      */
     private static void threads(Schema schema) {
         MessageType sample = schema.message("pbwire.test.Sample");
@@ -308,24 +315,54 @@ public final class TestPbwire {
         try (Message message = sampleMessage(sample)) {
             reference = message.encode();
         }
+        // Serial oracle pin: must hold before any worker starts, so a mapping
+        // bug fails here and not in a thread.
+        try (Message built = sampleMessage(sample)) {
+            check(Arrays.equals(built.encode(), reference), "serial encode is the oracle");
+        }
+        // 1-thread throughput baseline (print only).
+        int serialIters = 2_000;
+        long serialStart = System.nanoTime();
+        for (int i = 0; i < serialIters; i++) {
+            try (Message built = sampleMessage(sample)) {
+                built.encode();
+            }
+        }
+        double serialSecs = (System.nanoTime() - serialStart) / 1e9;
+        // Shared read-only fixture for phase (b): filled once here, never
+        // mutated while workers run, closed after they join.
+        Message shared = sampleMessage(sample);
         ExecutorService pool = Executors.newFixedThreadPool(4);
-        AtomicInteger mismatches = new AtomicInteger();
+        List<String> problems = java.util.Collections.synchronizedList(new java.util.ArrayList<>());
         CountDownLatch done = new CountDownLatch(4);
+        long start = System.nanoTime();
         for (int thread = 0; thread < 4; thread++) {
+            final int worker = thread;
             pool.execute(() -> {
                 try {
                     for (int i = 0; i < 2_000; i++) {
                         try (Message built = sampleMessage(sample)) {
                             if (!Arrays.equals(built.encode(), reference)) {
-                                mismatches.incrementAndGet();
+                                problems.add("worker " + worker + ": phase (a) independent-encode != want bytes");
                             }
+                        } catch (RuntimeException e) {
+                            problems.add("worker " + worker + ": phase (a) threw " + e.getClass().getSimpleName());
+                        }
+                        try {
+                            if (!Arrays.equals(shared.encode(), reference)) {
+                                problems.add("worker " + worker + ": phase (b) shared-read-only-encode != want bytes");
+                            }
+                        } catch (RuntimeException e) {
+                            problems.add("worker " + worker + ": phase (b) threw " + e.getClass().getSimpleName());
                         }
                         try (Message decoded = sample.decode(reference)) {
                             if (decoded.getInt("int32_field") != -42
                                     || decoded.getList("numbers").size() != 3
                                     || decoded.getMessage("inner").getLong("x") != 7) {
-                                mismatches.incrementAndGet();
+                                problems.add("worker " + worker + ": phase (c) fresh-decode field mismatch");
                             }
+                        } catch (RuntimeException e) {
+                            problems.add("worker " + worker + ": phase (c) threw " + e.getClass().getSimpleName());
                         }
                     }
                 } finally {
@@ -337,10 +374,17 @@ public final class TestPbwire {
             done.await();
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
+            problems.add("join interrupted");
         } finally {
             pool.shutdown();
         }
-        check(mismatches.get() == 0, "4 threads share one schema, each with its own messages");
+        shared.close();
+        double parallelSecs = (System.nanoTime() - start) / 1e9;
+        check(problems.isEmpty(), "4 threads share one schema, each with its own messages"
+                + (problems.isEmpty() ? "" : ": " + String.join("; ", problems.subList(0, Math.min(8, problems.size())))));
+        int total = 4 * 2_000 * 3;
+        System.out.printf("OK   threads: serial %d encodes in %.3f s (%.0f/s), 4-thread %d phase ops in %.3f s (%.0f/s)%n",
+                serialIters, serialSecs, serialIters / serialSecs, total, parallelSecs, total / parallelSecs);
     }
 
     /** A message with every field family the fixture has, for the thread check. */

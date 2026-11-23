@@ -118,6 +118,20 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run the self-check (zig test)");
     test_step.dependOn(&run_unit.step);
 
+    // zig build test also covers the concurrency check (8 threads x 200
+    // iters over the matrix3 oracle).
+    const conc_mod = b.createModule(.{
+        .root_source_file = b.path("tests/concurrent.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+        .imports = &.{.{ .name = "pbwire", .module = pbwire_mod }},
+    });
+    const conc = b.addTest(.{ .name = "concurrent", .root_module = conc_mod });
+    conc.root_module.linkLibrary(lib);
+    const run_conc = b.addRunArtifact(conc);
+    test_step.dependOn(&run_conc.step);
+
     // The core's own tests (descriptor gate + codec). They link no C code.
     const core_test_mod = b.createModule(.{
         .root_source_file = b.path("tests/core/root.zig"),

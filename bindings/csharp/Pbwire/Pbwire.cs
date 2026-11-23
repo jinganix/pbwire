@@ -337,6 +337,7 @@ public sealed class MessageType
     private readonly Schema _schema;
     private readonly IntPtr _desc;
     private readonly Dictionary<string, Field> _fields = new();
+    private readonly object _fieldsLock = new();
 
     internal MessageType(Schema schema, IntPtr desc)
     {
@@ -358,20 +359,32 @@ public sealed class MessageType
         }
     }
 
-    /// <summary>Resolves a field once and caches it: a later set/get costs one native call.</summary>
+    /// <summary>Resolves a field once and caches it: a later set/get costs one native call.
+    /// Lock-guarded like <see cref="LayoutSource"/>: a singleton MessageType is
+    /// shared across first-burst request threads, so concurrent cold
+    /// <c>Field</c> calls must not race on the <c>Dictionary</c> (concurrent
+    /// read+write on <c>Dictionary</c> is undefined, not just a lost update).
+    /// The native lookup has no managed reentrancy, so it runs inside the lock
+    /// and single-construction semantics are kept.
+    /// </summary>
     public Field Field(string name)
     {
         EnsureOpen();
-        if (_fields.TryGetValue(name, out var cached))
+        lock (_fieldsLock)
         {
-            return cached;
+            if (_fields.TryGetValue(name, out var cached))
+            {
+                return cached;
+            }
+            var ptr = Native.pbw_descriptor_find_field_name(_desc, name);
+            if (ptr == IntPtr.Zero)
+            {
+                throw new PbwireException(-1, $"{Name}: no such field: {name}");
+            }
+            var field = new Field(this, ptr);
+            _fields[name] = field;
+            return field;
         }
-        var ptr = Native.pbw_descriptor_find_field_name(_desc, name);
-        if (ptr == IntPtr.Zero)
-        {
-            throw new PbwireException(-1, $"{Name}: no such field: {name}");
-        }
-        return _fields[name] = new Field(this, ptr);
     }
 
     public Message NewMessage()

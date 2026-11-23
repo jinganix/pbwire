@@ -77,6 +77,79 @@
           "unknown message accepted")
       (finally (pb/close! schema)))))
 
+(deftest concurrent-encode
+  ;; 4 workers x 2000 iters over one shared MessageType, three phases per
+  ;; worker: (a) independent-map encode == want bytes, (b) SHARED read-only
+  ;; map concurrent encode == want bytes (the map IS the shared message here:
+  ;; pb/encode builds a fresh tree per call, so the shared input map is the
+  ;; exact analogue of the shared read-only message), (c) fresh-target decode
+  ;; of want with field checks, NOT re-encode. Only the type, the shared map
+  ;; and the want bytes cross threads. Timing prints only, never asserted;
+  ;; failures name the worker and the phase.
+  (let [desc (or (System/getenv "PBWIRE_MATRIX3_DESC")
+                 "../c/tests/data/matrix3.desc")
+        dir (.getParent (io/file desc))
+        oracle (slurp-bytes (str dir "/matrix3.bin"))
+        schema (pb/load-schema desc)
+        ty (pb/message-type schema "structtest.Scalars3")]
+    (try
+      ;; Serial oracle pin: must hold before any worker starts.
+      (is (bytes= oracle (pb/encode ty matrix3-fill))
+          "serial encode equals the protoc oracle")
+      (let [want (pb/encode ty matrix3-fill)
+            serial-iters 2000
+            t0 (System/nanoTime)]
+        (dotimes [_ serial-iters] (pb/encode ty matrix3-fill))
+        (let [serial-secs (/ (- (System/nanoTime) t0) 1e9)
+              start (System/nanoTime)
+              futs (doall
+                      (for [worker (range 4)]
+                        (future
+                          (let [problems (java.util.ArrayList.)]
+                            (dotimes [_ 2000]
+                              ;; (a) independent-map encode == want bytes.
+                              (try
+                                (when-not (bytes= want (pb/encode ty (into {} matrix3-fill)))
+                                  (.add problems (str "worker " worker
+                                                      ": phase (a) independent-encode != want bytes")))
+                                (catch Throwable t
+                                  (.add problems (str "worker " worker ": phase (a) threw "
+                                                      (.getSimpleName (class t))))))
+                              ;; (b) SHARED read-only map concurrent encode == want bytes.
+                              (try
+                                (when-not (bytes= want (pb/encode ty matrix3-fill))
+                                  (.add problems (str "worker " worker
+                                                      ": phase (b) shared-read-only-encode != want bytes")))
+                                (catch Throwable t
+                                  (.add problems (str "worker " worker ": phase (b) threw "
+                                                      (.getSimpleName (class t))))))
+                              ;; (c) fresh-target decode with field checks.
+                              (try
+                                (let [back (pb/decode ty want)]
+                                  (when-not (and (= Integer/MIN_VALUE (:i32 back))
+                                                 (= true (:flag back))
+                                                 (= "hello" (:str back))
+                                                 (= -123456.789 (:f64 back))
+                                                 (= 2 (:color back))
+                                                 (= [1 -5 300] (:nums back))
+                                                 (= ["a" "bb"] (:tags back))
+                                                 (= "kid" (get-in back [:inner :name])))
+                                    (.add problems (str "worker " worker
+                                                        ": phase (c) fresh-decode field mismatch"))))
+                                (catch Throwable t
+                                  (.add problems (str "worker " worker ": phase (c) threw "
+                                                      (.getSimpleName (class t)))))))
+                            (vec problems)))))
+              problems (vec (mapcat deref futs))
+              parallel-secs (/ (- (System/nanoTime) start) 1e9)
+              total (* 4 2000 3)]
+          (is (empty? problems)
+              (str "4 threads share one type: " (pr-str (take 8 problems))))
+          (println (format "OK   threads: serial %d encodes in %.3f s (%.0f/s), 4-thread %d phase ops in %.3f s (%.0f/s)"
+                           serial-iters (double serial-secs) (/ serial-iters serial-secs)
+                           total (double parallel-secs) (/ total parallel-secs)))))
+      (finally (pb/close! schema)))))
+
 (deftest edge-payload
   (let [root "../.."
         oracle (slurp-bytes (str root "/tests/data/edge.bin"))
