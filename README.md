@@ -169,13 +169,16 @@ address book, loaded from `addressbook.desc` at runtime) is in
 `make bench` verifies byte-for-byte equality with libprotobuf before timing
 anything, so a speed number can never come from a wrong encoder. On an Apple
 M4 Pro with `-O2` and `protoc 36.2`, the in-process dynamic core with a
-`pbw_ctx` runs 1.24-1.56x the throughput of the generated C++ codec on encode
-and 1.50-1.81x on decode, on every tier
-(132 B to 86 KB), and 11.7-18.0x the speed of C++
-`DynamicMessage` on encode and 3.0-5.3x on decode. Generated code only wins where
-a dynamic codec meets generated straight-line writes on a tiny message
-(Java/Kotlin/Clojure, 136 B, 0.77x/0.83x/0.74x); the arena and plain APIs win
-every tier. `make bench-docker` runs the
+`pbw_ctx` decodes at 1.31-1.78x the throughput of the generated C++ codec on
+every tier (132 B to 86 KB), and 2.9-5.1x the speed of C++
+`DynamicMessage` on decode (1.2-2.7x on encode). Encode trails the generated
+codec at 0.14-0.18x: the timed task builds the tree fresh per field per
+iteration (alloc, fill, encode, free inside the timer) while the compiled
+straight-line writer knows every tag; re-encoding a held tree (the `proxy`
+row, same-run timing only) stays ahead at 1.25-1.55x. Generated code wins encode
+where a dynamic codec meets generated straight-line writes (every tier here;
+Java/Kotlin/Clojure only on their 136 B tier, 0.77x/0.83x/0.74x); the arena and
+plain APIs win every tier on decode. `make bench-docker` runs the
 same harnesses in a Linux container and `make bench-compare` pairs the two runs
 row by row, so the numbers above hold off Apple silicon as well
 ([BENCHMARKS.md](BENCHMARKS.md#linux-docker-the-same-harnesses-one-container-away)).
@@ -196,7 +199,7 @@ The one-row summary is here; the detail is there.
 | [Java](bindings/java/) | pure-Java codec, no native code | 1.23x (medium) / 1.95x (xlarge) | [protobuf-java](https://github.com/protocolbuffers/protobuf/tree/main/java) |
 | [Kotlin](bindings/kotlin/) | Java runtime + DSL | 1.13x (medium) / 1.68x (xlarge) | [protobuf-kotlin](https://github.com/protocolbuffers/protobuf/tree/main/java/kotlin) |
 | [Node](bindings/node/) | N-API addon | 3.18x (xlarge) / 3.17x (xlarge) vs protobufjs | [jspb](https://www.npmjs.com/package/google-protobuf) + [protobufjs](https://www.npmjs.com/package/protobufjs) |
-| [Objective-C](bindings/objc/) | ARC wrapper | 7.44x (small) / 2.83x (medium) | [protobuf-objc](https://github.com/protocolbuffers/protobuf/tree/main/objectivec) |
+| [Objective-C](bindings/objc/) | ARC wrapper | 0.37x (small) / 2.96x (medium) `tree` (fresh build per iteration; held-tree `proxy` encode 6.62x / 6.56x / 5.00x / 1.92x, same-run only) | [protobuf-objc](https://github.com/protocolbuffers/protobuf/tree/main/objectivec) |
 | [PHP](bindings/php/) | C extension | 1.70x (small) / 1.90x (small) vs C ext (373x / 135x vs pure PHP) | [protobuf-php](https://github.com/protocolbuffers/protobuf/tree/main/php) |
 | [Dart](bindings/dart/) | `dart:ffi` | 13.7x (xlarge) / 4.4x (xlarge) | [protobuf-dart](https://pub.dev/packages/protobuf) |
 | [Rust](bindings/rust/) | static link | 1.29x (small) / 1.86x (xlarge) vs prost | [rust-protobuf 3.x](https://github.com/stepancheg/rust-protobuf) + [prost](https://github.com/tokio-rs/prost) |

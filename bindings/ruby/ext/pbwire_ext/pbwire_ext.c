@@ -77,6 +77,7 @@ typedef struct {
     uint8_t oneof; /* 1-based oneof group, 0 = none */
     ID ivar;      /* @<ruby_name>: the generated model's value slot */
     ID has_ivar;  /* @has_<ruby_name>, or 0 when the model has no has_ flag */
+    const pbw_field *df; /* descriptor slot, cached: field_at per op -> once */
     VALUE name; /* frozen UTF-8 String */
     VALUE sub;  /* Type of a MESSAGE field, else Qnil */
 } field_t;
@@ -478,6 +479,7 @@ type_fill(VALUE argp)
 
         f->number = pbw_field_number(field);
         f->index = (uint32_t)i;
+        f->df = field;
         f->type = (uint8_t)pbw_field_type(field);
         f->wire = (uint8_t)wire_type_of((pbw_type)f->type);
         f->repeated = pbw_field_label(field) == PBW_LABEL_REPEATED;
@@ -1076,8 +1078,7 @@ scan_message(message_t *m, type_t *type, const uint8_t *data, size_t off,
     if (seen != NULL) {
         for (i = 0; i < type->count; i++) {
             if (type->fields[i].required && !seen[i]) {
-                *missing = pbw_field_name(
-                    pbw_descriptor_field_at(type->desc, i));
+                *missing = pbw_field_name(type->fields[i].df);
                 status = PBW_ERR_REQUIRED;
                 goto done;
             }
@@ -1791,7 +1792,7 @@ object_fill(pbw_message *msg, type_t *type, VALUE obj, pbw_ctx *ctx)
 
     for (i = 0; i < type->count; i++) {
         field_t *f = &type->fields[i];
-        const pbw_field *df = pbw_descriptor_field_at(type->desc, f->index);
+        const pbw_field *df = f->df;
         pbw_status status;
 
         if (f->repeated) {
@@ -1899,7 +1900,7 @@ object_from_tree(type_t *type, const pbw_message *msg, VALUE classes)
 
     for (i = 0; i < type->count; i++) {
         field_t *f = &type->fields[i];
-        const pbw_field *df = pbw_descriptor_field_at(type->desc, f->index);
+        const pbw_field *df = f->df;
         pbw_value *value = pbw_message_get_field(msg, df);
 
         if (f->repeated) {
@@ -2203,8 +2204,7 @@ message_set(VALUE self, VALUE key, VALUE value)
     pbw_message *tree = message_tree(self, &message);
     type_t *type = message_type_of(self);
     field_t *f = field_lookup(type, key);
-    const pbw_field *descriptor_field =
-        pbw_descriptor_field_at(type->desc, (size_t)f->index);
+    const pbw_field *descriptor_field = f->df;
     pbw_status status;
     int moved = 0;
 
@@ -2295,8 +2295,7 @@ message_get(VALUE self, VALUE key)
             /* Also checks that no parent this builder was borrowed from has
              * been closed under it. */
             pbw_message *tree = message_read_tree(self, &message);
-            pbw_value *value = pbw_message_get_field(
-                tree, pbw_descriptor_field_at(type->desc, (size_t)f->index));
+            pbw_value *value = pbw_message_get_field(tree, f->df);
 
             if (f->repeated) {
                 VALUE array;

@@ -141,24 +141,25 @@ loading:
 `benchmarks/bench.exs` measures `Pbwire` against `elixir-protobuf` (pure
 Elixir) on the same schema and payload as every other binding in this repo:
 `bindings/c/tests/data/matrix3.proto` with the repeated fields scaled
-x0 / x1 / x100 / x3000 (136 / 174 / 2469 / 74913 bytes on the wire). Both
-backends build the same struct, so the timer measures the codec, not the
-tree. Every backend must match byte for byte (encode, plus re-encoding a
-decoded reference) before anything is timed.
+x0 / x1 / x100 / x3000 (136 / 174 / 2469 / 74913 bytes on the wire). Every
+encode iteration builds a fresh struct inside the timed closure (native-in,
+no prebuilt struct before the timer). Every backend must match byte for byte
+(encode, plus re-encoding a decoded reference) and read back field-for-field
+equal to the input struct before anything is timed.
 
 <!-- BENCHMARK_RESULTS_START -->
-Last run: 2026-11-05 (matrix3.proto, the four standard tiers; Elixir 1.20.5 / OTP 29, Apple M4 Pro)
+Last run: 2026-11-23 (matrix3.proto, the four standard tiers; Elixir 1.20.5 / OTP 29, Apple M4 Pro)
 
 | payload | op | pbwire-elixir (MB/s, x protobuf) | protobuf (MB/s) |
 |---|---|---|---|
-| 136 B | encode | 154.1 (3.3x) | 47.3 |
-| 136 B | decode | 84.8 (1.4x) | 59.5 |
-| 174 B | encode | 157.3 (3.0x) | 51.6 |
-| 174 B | decode | 102.0 (1.6x) | 63.4 |
-| 2469 B | encode | 166.8 (2.8x) | 60.2 |
-| 2469 B | decode | 99.0 (1.7x) | 57.8 |
-| 74913 B | encode | 145.6 (2.3x) | 63.2 |
-| 74913 B | decode | 84.7 (1.4x) | 60.6 |
+| 136 B | encode | 151.1 (3.2x) | 46.8 |
+| 136 B | decode | 104.7 (1.8x) | 59.3 |
+| 174 B | encode | 154.3 (3.1x) | 49.3 |
+| 174 B | decode | 115.9 (1.9x) | 60.1 |
+| 2469 B | encode | 137.7 (2.7x) | 50.1 |
+| 2469 B | decode | 111.6 (2.0x) | 54.8 |
+| 74913 B | encode | 145.2 (2.8x) | 51.1 |
+| 74913 B | decode | 105.6 (1.8x) | 57.4 |
 
 Higher is better. Throughput in MB/s on serialized wire size.
 <!-- BENCHMARK_RESULTS_END -->

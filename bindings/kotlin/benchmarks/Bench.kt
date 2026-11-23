@@ -10,8 +10,13 @@
  * parseFrom()), so the timer covers the user-visible task.
  *
  * Arms (bindings/README.md#pbench-three-arms-one-contract):
- *   tree  Message (GenericCodec/DMsg), prebuilt -- what the codec costs once the tree exists
+ *   tree  Message (GenericCodec/DMsg) full task -- fresh build per field per
+ *               iteration, encode; decode, every gate-checked field read back
+ *               per iteration (mirrors bindings/java/benchmarks/Bench.java)
  *   core  the committed generated model      -- native object in and out (Structtest_Scalars3)
+ *   proxy Message (GenericCodec/DMsg), prebuilt -- re-encode a held tree,
+ *               decode-and-drop with no materialization. Published, never
+ *               the headline.
  *   shim  ../java/pbench/jni                 -- ceiling: one JNI crossing, no tree translation
  *
  *   ./bench.sh          generate, build, run
@@ -29,6 +34,31 @@ private const val MIN_PASS_SECONDS = 0.25
 private const val PASSES = 3
 
 private var failures = 0
+
+private var sink = 0L
+
+/**
+ * The tree decode half of the timed full task: decode, then read back
+ * every gate-checked field (the same field list the gate asserts).
+ * Message.decode is lazy on message/string/bytes fields, so this is the
+ * work the binding really does turning wire into values.
+ */
+private fun consumeTree(ty: MessageType, wire: ByteArray, n: Int) {
+    ty.decode(wire).use { back ->
+        sink += back.getString("str").length
+        sink += back.getList("tags").size
+        val inners = back.getList("inners")
+        sink += inners.size
+        val inner = back.getMessage("inner")
+        sink += inner.getString("name").length
+        sink += inner.getLong("value")
+        if (n > 0) {
+            val last = inners[n - 1] as Message
+            sink += last.getString("name").length
+            sink += last.getLong("value")
+        }
+    }
+}
 
 private fun fillOfficial(n: Int): Matrix3.Scalars3 =
     scalars3 {
@@ -226,15 +256,31 @@ fun main(args: Array<String>) {
                 }
                 println("OK   $label generated-model parity, x$n (${reference.size} bytes)")
 
+                // Full-task tree gate: a fresh per-field build must match the
+                // reference too (not just the held tree above), and the decode
+                // below must expose the same values the timer materializes.
+                if (!fillPbwire(ty, n).use { it.encode() }.contentEquals(reference)) {
+                    println("FAIL $label: fresh-build tree bytes differ")
+                    failures++
+                    return@use
+                }
+
                 val official = fillOfficial(n)
-                // Tier line shows the reference op's count; slower ops keep the floor.
-                val tierCount = calibrate({ message.encode() }, count)
+                // Tree ops are the Go-parity full task: fresh Message per iteration,
+                // deep materialization of every gate-checked field on decode (the
+                // same field list the gate asserts). Proxy ops are the old prebuilt
+                // task, relabelled, not re-measured as a new task. Calibration
+                // stays per-op (measureAll): the fast proxy ops keep their own
+                // count and never inflate the tree rows.
+                val tierCount = calibrate({ fillPbwire(ty, n).use { it.encode() } }, count)
                 val res = measureAll(count, listOf(
-                    { message.encode() },
+                    { fillPbwire(ty, n).use { it.encode() } },
                     { model.toByteArray() },
+                    { message.encode() },
                     { official.toByteArray() },
-                    { ty.decode(reference).close() },
+                    { consumeTree(ty, reference, n) },
                     { Structtest_Scalars3.parseFrom(reference) },
+                    { ty.decode(reference).close() },
                     { Matrix3.Scalars3.parseFrom(reference) },
                 ))
 
@@ -242,10 +288,12 @@ fun main(args: Array<String>) {
                 println("  %-18s %-7s %12s %10s".format("impl", "op", "ns/op", "MB/s"))
                 row("pbwire-kotlin-tree", "encode", reference.size, res[0])
                 row("pbwire-kotlin-core", "encode", reference.size, res[1])
-                row("protobuf-kotlin", "encode", reference.size, res[2])
-                row("pbwire-kotlin-tree", "decode", reference.size, res[3])
-                row("pbwire-kotlin-core", "decode", reference.size, res[4])
-                row("protobuf-kotlin", "decode", reference.size, res[5])
+                row("pbwire-kotlin-proxy", "encode", reference.size, res[2])
+                row("protobuf-kotlin", "encode", reference.size, res[3])
+                row("pbwire-kotlin-tree", "decode", reference.size, res[4])
+                row("pbwire-kotlin-core", "decode", reference.size, res[5])
+                row("pbwire-kotlin-proxy", "decode", reference.size, res[6])
+                row("protobuf-kotlin", "decode", reference.size, res[7])
                 println()
             }
         }

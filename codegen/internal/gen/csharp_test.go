@@ -102,6 +102,45 @@ func TestCSharpFilesManualRegister(t *testing.T) {
 }
 
 // registry=false drops the name list and preload; the loader stays.
+// The promoted entries: a message with a flat layout encodes/decodes in one
+// native call over the image; with NoLayout the per-field handle path stays.
+func TestCSharpShimPromotion(t *testing.T) {
+	files, err := csharpFiles(csharpLayoutFile(), Options{Lang: "csharp", Model: true, Register: true, Registry: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	models, ok := csharpFileMap(t, files)["matrix3.cs"]
+	if !ok {
+		t.Fatal("missing models file")
+	}
+	for _, want := range []string{"ToByteArray() => PbwireFile_Matrix3.IsEmbedded ? Scalars3Layout.Marshal(this) : EncodeViaHandle();", "if (PbwireFile_Matrix3.IsEmbedded) { MergeFrom(Scalars3Layout.Unmarshal(wire)); return; }"} {
+		if !strings.Contains(models, want) {
+			t.Errorf("promoted entry misses %q", want)
+		}
+	}
+	holder, ok := csharpFileMap(t, files)["PbwireFile_Matrix3.cs"]
+	if !ok {
+		t.Fatal("missing holder file")
+	}
+	if !strings.Contains(holder, "internal static bool IsEmbedded") {
+		t.Error("holder misses the embedded-override switch")
+	}
+	plain, err := csharpFiles(csharpLayoutFile(), Options{Lang: "csharp", Model: true, Register: true, Registry: true, NoLayout: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fallback, ok := csharpFileMap(t, plain)["matrix3.cs"]
+	if !ok {
+		t.Fatal("missing models file")
+	}
+	if strings.Contains(fallback, "Layout.Marshal(this)") {
+		t.Error("NoLayout must not reference the image reader")
+	}
+	if !strings.Contains(fallback, "EncodeInto(msg);") || !strings.Contains(fallback, "LoadFrom(msg);") {
+		t.Error("NoLayout must keep the per-field handle path")
+	}
+}
+
 func TestCSharpFilesNoRegistry(t *testing.T) {
 	files, err := csharpFiles(csharpTestFile(), Options{Lang: "csharp", Model: true, Register: true, Registry: false})
 	if err != nil {

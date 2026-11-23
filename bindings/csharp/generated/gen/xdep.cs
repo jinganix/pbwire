@@ -51,7 +51,9 @@ namespace Xdep {
         public override string ToString() {
             return "DepMsg {{ " + "Name = " + Name + ", " + "Value = " + Value + " }}";
         }
-        public byte[] ToByteArray() {
+        /// <summary>One native call over the flat image (the promoted shim arm); the per-field path while an external schema is registered.</summary>
+        public byte[] ToByteArray() => PbwireFile_Xdep.IsEmbedded ? DepMsgLayout.Marshal(this) : EncodeViaHandle();
+        private byte[] EncodeViaHandle() {
             using Pbwire.Message msg = PbwireFile_Xdep.Schema.Message("xdep.DepMsg").NewMessage();
             EncodeInto(msg);
             return msg.Encode();
@@ -66,6 +68,7 @@ namespace Xdep {
         }
         public int CalculateSize() => ToByteArray().Length;
          internal void MergeFromBytes(byte[] wire) {
+            if (PbwireFile_Xdep.IsEmbedded) { MergeFrom(DepMsgLayout.Unmarshal(wire)); return; }
             using Pbwire.Message msg = PbwireFile_Xdep.Schema.Message("xdep.DepMsg").Decode(wire);
             LoadFrom(msg);
         }
@@ -90,10 +93,11 @@ namespace Xdep {
             Value = (int)msg.GetInt("value");
         }
         /// <summary>Bytes of one flat image: the native object's pinned representation.</summary>
-        public const int ImageBytes = 16;
+        public const int ImageBytes = 24;
         /// <summary>Copies this native object into a zeroed flat image; strings, bytes and sub-images come from <paramref name="arena"/>.</summary>
         public unsafe void WriteImage(byte* img, global::Pbwire.ImageArena arena) {
             *(IntPtr*)(img + 8) = Name.Length == 0 ? IntPtr.Zero : arena.Utf8(Name);
+            *(int*)(img + 16) = Value != 0 ? 1 : 0;
             *(int*)(img + 0) = (int)(Value);
         }
 
@@ -120,12 +124,12 @@ namespace Xdep {
             /// <summary>The message type the table describes.</summary>
             public static readonly global::Pbwire.MessageType Type = PbwireFile_Xdep.Schema.Message("xdep.DepMsg");
             /// <summary>One row per field, in slot order.</summary>
-            public static readonly global::Pbwire.Layout Table = new global::Pbwire.Layout("xdep.DepMsg", 16, 0)
+            public static readonly global::Pbwire.Layout Table = new global::Pbwire.Layout("xdep.DepMsg", 24, 0)
                 .FieldAt("value", 0, 4)
                 .Ref("name", 8, 8);
             /// <summary>One row per field, with the presence/count/oneof words and wire facts the C layout codec reads.</summary>
             public static readonly global::Pbwire.LayoutRow[] Rows = {
-                new(2, global::Pbwire.FlatKind.Int32, 0, 5),
+                new(2, global::Pbwire.FlatKind.Int32, 0, 5, Has: 16),
                 new(1, global::Pbwire.FlatKind.String, 8, 9, Wire: 2),
             };
             /// <summary>This message's image, as the file's layout source sees it.</summary>

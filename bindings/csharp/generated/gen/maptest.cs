@@ -51,7 +51,9 @@ namespace Spectest {
         public override string ToString() {
             return "MapValue {{ " + "Name = " + Name + ", " + "Value = " + Value + " }}";
         }
-        public byte[] ToByteArray() {
+        /// <summary>One native call over the flat image (the promoted shim arm); the per-field path while an external schema is registered.</summary>
+        public byte[] ToByteArray() => PbwireFile_Maptest.IsEmbedded ? MapValueLayout.Marshal(this) : EncodeViaHandle();
+        private byte[] EncodeViaHandle() {
             using Pbwire.Message msg = PbwireFile_Maptest.Schema.Message("spectest.MapValue").NewMessage();
             EncodeInto(msg);
             return msg.Encode();
@@ -66,6 +68,7 @@ namespace Spectest {
         }
         public int CalculateSize() => ToByteArray().Length;
          internal void MergeFromBytes(byte[] wire) {
+            if (PbwireFile_Maptest.IsEmbedded) { MergeFrom(MapValueLayout.Unmarshal(wire)); return; }
             using Pbwire.Message msg = PbwireFile_Maptest.Schema.Message("spectest.MapValue").Decode(wire);
             LoadFrom(msg);
         }
@@ -90,10 +93,11 @@ namespace Spectest {
             Value = (int)msg.GetInt("value");
         }
         /// <summary>Bytes of one flat image: the native object's pinned representation.</summary>
-        public const int ImageBytes = 16;
+        public const int ImageBytes = 24;
         /// <summary>Copies this native object into a zeroed flat image; strings, bytes and sub-images come from <paramref name="arena"/>.</summary>
         public unsafe void WriteImage(byte* img, global::Pbwire.ImageArena arena) {
             *(IntPtr*)(img + 8) = Name.Length == 0 ? IntPtr.Zero : arena.Utf8(Name);
+            *(int*)(img + 16) = Value != 0 ? 1 : 0;
             *(int*)(img + 0) = (int)(Value);
         }
 
@@ -120,12 +124,12 @@ namespace Spectest {
             /// <summary>The message type the table describes.</summary>
             public static readonly global::Pbwire.MessageType Type = PbwireFile_Maptest.Schema.Message("spectest.MapValue");
             /// <summary>One row per field, in slot order.</summary>
-            public static readonly global::Pbwire.Layout Table = new global::Pbwire.Layout("spectest.MapValue", 16, 0)
+            public static readonly global::Pbwire.Layout Table = new global::Pbwire.Layout("spectest.MapValue", 24, 0)
                 .FieldAt("value", 0, 4)
                 .Ref("name", 8, 8);
             /// <summary>One row per field, with the presence/count/oneof words and wire facts the C layout codec reads.</summary>
             public static readonly global::Pbwire.LayoutRow[] Rows = {
-                new(2, global::Pbwire.FlatKind.Int32, 0, 5),
+                new(2, global::Pbwire.FlatKind.Int32, 0, 5, Has: 16),
                 new(1, global::Pbwire.FlatKind.String, 8, 9, Wire: 2),
             };
             /// <summary>This message's image, as the file's layout source sees it.</summary>
@@ -194,7 +198,9 @@ namespace Spectest {
         public override string ToString() {
             return "MapTest {{ }}";
         }
-        public byte[] ToByteArray() {
+        /// <summary>One native call over the flat image (the promoted shim arm); the per-field path while an external schema is registered.</summary>
+        public byte[] ToByteArray() => PbwireFile_Maptest.IsEmbedded ? MapTestLayout.Marshal(this) : EncodeViaHandle();
+        private byte[] EncodeViaHandle() {
             using Pbwire.Message msg = PbwireFile_Maptest.Schema.Message("spectest.MapTest").NewMessage();
             EncodeInto(msg);
             return msg.Encode();
@@ -209,6 +215,7 @@ namespace Spectest {
         }
         public int CalculateSize() => ToByteArray().Length;
          internal void MergeFromBytes(byte[] wire) {
+            if (PbwireFile_Maptest.IsEmbedded) { MergeFrom(MapTestLayout.Unmarshal(wire)); return; }
             using Pbwire.Message msg = PbwireFile_Maptest.Schema.Message("spectest.MapTest").Decode(wire);
             LoadFrom(msg);
         }
@@ -330,9 +337,9 @@ namespace Spectest {
                 .Ref("by_msg", 16, 8);
             /// <summary>One row per field, with the presence/count/oneof words and wire facts the C layout codec reads.</summary>
             public static readonly global::Pbwire.LayoutRow[] Rows = {
-                new(1, global::Pbwire.FlatKind.Message, 0, 11, Wire: 2, Repeated: true, Count: 24, Child: "MapTest_ByIntEntry"),
-                new(2, global::Pbwire.FlatKind.Message, 8, 11, Wire: 2, Repeated: true, Count: 32, Child: "MapTest_ByStrEntry"),
-                new(3, global::Pbwire.FlatKind.Message, 16, 11, Wire: 2, Repeated: true, Count: 40, Child: "MapTest_ByMsgEntry"),
+                new(1, global::Pbwire.FlatKind.Message, 0, 11, Wire: 2, Repeated: true, Count: 24, Child: "spectest.MapTest.ByIntEntry"),
+                new(2, global::Pbwire.FlatKind.Message, 8, 11, Wire: 2, Repeated: true, Count: 32, Child: "spectest.MapTest.ByStrEntry"),
+                new(3, global::Pbwire.FlatKind.Message, 16, 11, Wire: 2, Repeated: true, Count: 40, Child: "spectest.MapTest.ByMsgEntry"),
             };
             /// <summary>This message's image, as the file's layout source sees it.</summary>
             public static readonly global::Pbwire.LayoutType Spec = new("spectest.MapTest", ImageBytes, Rows);
@@ -391,7 +398,9 @@ namespace Spectest {
                 public override string ToString() {
                     return "ByIntEntry {{ " + "Key = " + Key + ", " + "Value = " + Value + " }}";
                 }
-                public byte[] ToByteArray() {
+                /// <summary>One native call over the flat image (the promoted shim arm); the per-field path while an external schema is registered.</summary>
+                public byte[] ToByteArray() => PbwireFile_Maptest.IsEmbedded ? ByIntEntryLayout.Marshal(this) : EncodeViaHandle();
+                private byte[] EncodeViaHandle() {
                     using Pbwire.Message msg = PbwireFile_Maptest.Schema.Message("spectest.MapTest.ByIntEntry").NewMessage();
                     EncodeInto(msg);
                     return msg.Encode();
@@ -406,6 +415,7 @@ namespace Spectest {
                 }
                 public int CalculateSize() => ToByteArray().Length;
                  internal void MergeFromBytes(byte[] wire) {
+                    if (PbwireFile_Maptest.IsEmbedded) { MergeFrom(ByIntEntryLayout.Unmarshal(wire)); return; }
                     using Pbwire.Message msg = PbwireFile_Maptest.Schema.Message("spectest.MapTest.ByIntEntry").Decode(wire);
                     LoadFrom(msg);
                 }
@@ -430,9 +440,10 @@ namespace Spectest {
                     Value = msg.GetString("value") ?? "";
                 }
                 /// <summary>Bytes of one flat image: the native object's pinned representation.</summary>
-                public const int ImageBytes = 16;
+                public const int ImageBytes = 24;
                 /// <summary>Copies this native object into a zeroed flat image; strings, bytes and sub-images come from <paramref name="arena"/>.</summary>
                 public unsafe void WriteImage(byte* img, global::Pbwire.ImageArena arena) {
+                    *(int*)(img + 16) = Key != 0 ? 1 : 0;
                     *(int*)(img + 0) = (int)(Key);
                     *(IntPtr*)(img + 8) = Value.Length == 0 ? IntPtr.Zero : arena.Utf8(Value);
                 }
@@ -460,12 +471,12 @@ namespace Spectest {
                     /// <summary>The message type the table describes.</summary>
                     public static readonly global::Pbwire.MessageType Type = PbwireFile_Maptest.Schema.Message("spectest.MapTest.ByIntEntry");
                     /// <summary>One row per field, in slot order.</summary>
-                    public static readonly global::Pbwire.Layout Table = new global::Pbwire.Layout("spectest.MapTest.ByIntEntry", 16, 0)
+                    public static readonly global::Pbwire.Layout Table = new global::Pbwire.Layout("spectest.MapTest.ByIntEntry", 24, 0)
                         .FieldAt("key", 0, 4)
                         .Ref("value", 8, 8);
                     /// <summary>One row per field, with the presence/count/oneof words and wire facts the C layout codec reads.</summary>
                     public static readonly global::Pbwire.LayoutRow[] Rows = {
-                        new(1, global::Pbwire.FlatKind.Int32, 0, 5),
+                        new(1, global::Pbwire.FlatKind.Int32, 0, 5, Has: 16),
                         new(2, global::Pbwire.FlatKind.String, 8, 9, Wire: 2),
                     };
                     /// <summary>This message's image, as the file's layout source sees it.</summary>
@@ -525,7 +536,9 @@ namespace Spectest {
                 public override string ToString() {
                     return "ByStrEntry {{ " + "Key = " + Key + ", " + "Value = " + Value + " }}";
                 }
-                public byte[] ToByteArray() {
+                /// <summary>One native call over the flat image (the promoted shim arm); the per-field path while an external schema is registered.</summary>
+                public byte[] ToByteArray() => PbwireFile_Maptest.IsEmbedded ? ByStrEntryLayout.Marshal(this) : EncodeViaHandle();
+                private byte[] EncodeViaHandle() {
                     using Pbwire.Message msg = PbwireFile_Maptest.Schema.Message("spectest.MapTest.ByStrEntry").NewMessage();
                     EncodeInto(msg);
                     return msg.Encode();
@@ -540,6 +553,7 @@ namespace Spectest {
                 }
                 public int CalculateSize() => ToByteArray().Length;
                  internal void MergeFromBytes(byte[] wire) {
+                    if (PbwireFile_Maptest.IsEmbedded) { MergeFrom(ByStrEntryLayout.Unmarshal(wire)); return; }
                     using Pbwire.Message msg = PbwireFile_Maptest.Schema.Message("spectest.MapTest.ByStrEntry").Decode(wire);
                     LoadFrom(msg);
                 }
@@ -564,10 +578,11 @@ namespace Spectest {
                     Value = (int)msg.GetInt("value");
                 }
                 /// <summary>Bytes of one flat image: the native object's pinned representation.</summary>
-                public const int ImageBytes = 16;
+                public const int ImageBytes = 24;
                 /// <summary>Copies this native object into a zeroed flat image; strings, bytes and sub-images come from <paramref name="arena"/>.</summary>
                 public unsafe void WriteImage(byte* img, global::Pbwire.ImageArena arena) {
                     *(IntPtr*)(img + 8) = Key.Length == 0 ? IntPtr.Zero : arena.Utf8(Key);
+                    *(int*)(img + 16) = Value != 0 ? 1 : 0;
                     *(int*)(img + 0) = (int)(Value);
                 }
 
@@ -594,12 +609,12 @@ namespace Spectest {
                     /// <summary>The message type the table describes.</summary>
                     public static readonly global::Pbwire.MessageType Type = PbwireFile_Maptest.Schema.Message("spectest.MapTest.ByStrEntry");
                     /// <summary>One row per field, in slot order.</summary>
-                    public static readonly global::Pbwire.Layout Table = new global::Pbwire.Layout("spectest.MapTest.ByStrEntry", 16, 0)
+                    public static readonly global::Pbwire.Layout Table = new global::Pbwire.Layout("spectest.MapTest.ByStrEntry", 24, 0)
                         .FieldAt("value", 0, 4)
                         .Ref("key", 8, 8);
                     /// <summary>One row per field, with the presence/count/oneof words and wire facts the C layout codec reads.</summary>
                     public static readonly global::Pbwire.LayoutRow[] Rows = {
-                        new(2, global::Pbwire.FlatKind.Int32, 0, 5),
+                        new(2, global::Pbwire.FlatKind.Int32, 0, 5, Has: 16),
                         new(1, global::Pbwire.FlatKind.String, 8, 9, Wire: 2),
                     };
                     /// <summary>This message's image, as the file's layout source sees it.</summary>
@@ -659,7 +674,9 @@ namespace Spectest {
                 public override string ToString() {
                     return "ByMsgEntry {{ " + "Key = " + Key + " }}";
                 }
-                public byte[] ToByteArray() {
+                /// <summary>One native call over the flat image (the promoted shim arm); the per-field path while an external schema is registered.</summary>
+                public byte[] ToByteArray() => PbwireFile_Maptest.IsEmbedded ? ByMsgEntryLayout.Marshal(this) : EncodeViaHandle();
+                private byte[] EncodeViaHandle() {
                     using Pbwire.Message msg = PbwireFile_Maptest.Schema.Message("spectest.MapTest.ByMsgEntry").NewMessage();
                     EncodeInto(msg);
                     return msg.Encode();
@@ -674,6 +691,7 @@ namespace Spectest {
                 }
                 public int CalculateSize() => ToByteArray().Length;
                  internal void MergeFromBytes(byte[] wire) {
+                    if (PbwireFile_Maptest.IsEmbedded) { MergeFrom(ByMsgEntryLayout.Unmarshal(wire)); return; }
                     using Pbwire.Message msg = PbwireFile_Maptest.Schema.Message("spectest.MapTest.ByMsgEntry").Decode(wire);
                     LoadFrom(msg);
                 }

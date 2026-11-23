@@ -9,8 +9,8 @@
  *
  * The `tree` row here times the whole user task (build the handle with one
  * set() per field, then encode; decode into a handle, then read every field),
- * so it is not the prebuilt-handle row `make node-bench` prints as
- * `pbwire-node-tree`.
+ * the same task `make node-bench` prints as `pbwire-node-tree` (the
+ * prebuilt-handle row there is `pbwire-node-proxy`, same-run only).
  */
 
 const path = require('node:path');

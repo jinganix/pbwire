@@ -399,6 +399,17 @@ conformance-ruby: $(CONFORMANCE_DESC) ruby-bind
 		$(RUBY_ABS) bindings/ruby/conformance/testee.rb \
 		$(CURDIR)/$(CONFORMANCE_DESC)
 
+# Same suite through the PHP binding (binary, JSON and text; only JSPB
+# answers "skipped"). Runs on the shipped ext-ffi wrapper, so it needs no
+# compiler and no php-ext build; the interpreter has to be an absolute path.
+conformance-php: $(CONFORMANCE_DESC) php-test
+	@test -x "$(CONFORMANCE_RUNNER)" || { \
+		echo "conformance_test_runner not found: $(CONFORMANCE_RUNNER)"; \
+		echo "run 'make conformance-setup' first"; exit 1; }
+	$(CONFORMANCE_RUNNER) --failure_list $(CURDIR)/conformance/failure_list_pbwire.txt \
+		$(PHP_ABS) bindings/php/conformance/testee.php \
+		$(CURDIR)/$(CONFORMANCE_DESC)
+
 # Same suite through the Java binding (binary wire format; JSON/text answer
 # "skipped" because the binding has no printers). The runner execv()s the
 # testee program directly, so the interpreter has to be an absolute path.
@@ -735,6 +746,17 @@ conformance-scala: $(CONFORMANCE_DESC) scala-test
 	$(CONFORMANCE_RUNNER) --failure_list $(CURDIR)/conformance/failure_list_pbwire.txt \
 		$(JAVA_ABS) -cp "$(SCALA_CP)" Testee $(CURDIR)/$(CONFORMANCE_DESC)
 
+# Kotlin reuses the Java runtime too: the testee (TesteeKt) rides in the
+# fat jar kotlin-test builds, over the same schema-driven facade as the
+# Java/Scala testees.
+KOTLIN_CP = $(CURDIR)/bindings/kotlin/out/pbwire.jar
+conformance-kotlin: $(CONFORMANCE_DESC) kotlin-test
+	@test -x "$(CONFORMANCE_RUNNER)" || { \
+		echo "conformance_test_runner not found: $(CONFORMANCE_RUNNER)"; \
+		echo "run 'make conformance-setup' first"; exit 1; }
+	$(CONFORMANCE_RUNNER) --failure_list $(CURDIR)/conformance/failure_list_pbwire.txt \
+		$(JAVA_ABS) -cp "$(KOTLIN_CP)" TesteeKt $(CURDIR)/$(CONFORMANCE_DESC)
+
 # Clojure reuses the Java runtime too.
 conformance-clojure: $(CONFORMANCE_DESC) clojure-test
 	@test -x "$(CONFORMANCE_RUNNER)" || { \
@@ -775,6 +797,7 @@ objc-test:
 # and PHP, Dart and C# dlopen the shared library. Each needs only its own
 # toolchain; none is part of the commit gate.
 PHP ?= php
+PHP_ABS := $(shell command -v $(PHP) 2>/dev/null || echo $(PHP))
 DART ?= dart
 DOTNET ?= dotnet
 
@@ -1041,7 +1064,7 @@ clean:
 
 .PHONY: all test fuzz coverage release-check examples shared format format-check bench bench-c erlang-test erlang-core-sync ruby-core-sync erlang-bench \
 	python-bind python-test python-bench difftest difftest-short conformance conformance-setup conformance-python \
-	conformance-ruby conformance-java conformance-lua conformance-r conformance-node conformance-rust conformance-swift conformance-zig-core ruby-bind java-test ruby-test node-test objc-test r-bind \
+	conformance-ruby conformance-php conformance-java conformance-kotlin conformance-lua conformance-r conformance-node conformance-rust conformance-swift conformance-zig-core ruby-bind java-test ruby-test node-test objc-test r-bind \
 	lua-bind lua-test lua-bench \
 	java-bench ruby-bench node-bench objc-bench go-bench pbench-java \
 	kotlin-test php-test dart-test rust-test csharp-test csharp-pbench \

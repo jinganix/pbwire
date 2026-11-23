@@ -4,8 +4,18 @@
 -- (luarocks install lua-protobuf); otherwise pbwire runs alone and the
 -- baseline columns print "-".
 --
+-- Three pbwire rows, named by the pbench arm they time
+-- (bindings/lua/pbench/): `tree` is the shipped per-field full task (fresh
+-- builder per call: message + set + encode; parse + full read-back as JSON
+-- per decode), `shim` is the same native-in/native-out task in one C entry
+-- per op (schema:encode / schema:decode), `proxy` is the prebuilt task
+-- (held-builder re-encode, roundtrip with no materialization): published,
+-- never the headline. Every timed encode builds a fresh table per iteration
+-- (no prebuilt table before the timer); decode inputs share the tier wire.
+--
 -- Both sides build the same message and must produce identical bytes before
--- anything is timed. Like the other harnesses it calibrates from the floor
+-- anything is timed (the pbench gate does this too; this is the last guard
+-- before a number). Like the other harnesses it calibrates from the floor
 -- until one pass takes 0.25 s, warms up, then reports the best of 3 passes.
 --
 --   ./bench.sh
@@ -51,11 +61,23 @@ if has_pb then
     has_pb = pb.load(desc) and true or false
 end
 
-local function bench_encode(tbl)
+-- The pbench arms, inline so the formal record and the gate time the same
+-- closures: tree is the fresh-builder full task, shim one C entry per op.
+local function tree_encode(tbl)
+    local m = schema:message(MSG)
+    m:set(tbl)
+    return m:encode()
+end
+
+local function tree_decode(wire)
+    return schema:parse_binary(MSG, wire):to_json()
+end
+
+local function shim_encode(tbl)
     return schema:encode(MSG, tbl)
 end
 
-local function bench_decode(wire)
+local function shim_decode(wire)
     return schema:decode(MSG, wire)
 end
 
@@ -92,18 +114,24 @@ local cases = {
     { "xlarge", 3000, 74913, 2000 },
 }
 
+-- Fold-back sink: every timed call contributes its output length, so no
+-- result is dead, and the total is printed per tier.
+local sink = { n = 0 }
+
 for _, c in ipairs(cases) do
     local name, repeats, want, floor = c[1], c[2], c[3], c[4]
     local tbl = fill(repeats)
-    local wire = bench_encode(tbl)
+    local wire = shim_encode(tbl)
     -- Gate: tier size (our bytes are canonical and protoc-identical, see
     -- README), then every field of the decoded message against the known
     -- input. lua-protobuf writes nested messages in table hash order, so
     -- raw baseline bytes are not comparable; the baseline only has to
-    -- agree on size and survive a decode spot-check.
+    -- agree on size and survive a decode spot-check. Both native arms must
+    -- agree byte for byte (the pbench gate asserts this too).
     assert(#wire == want,
            string.format("%s: got %d bytes, want %d", name, #wire, want))
-    local back = bench_decode(wire)
+    assert(tree_encode(tbl) == wire, name .. ": tree/shim bytes differ")
+    local back = shim_decode(wire)
     assert(back.i32 == -2147483648 and back.i64 == 9223372036854775807,
            name .. ": ints")
     assert(back.u32 == 4294967295 and back.u64 == 2 ^ 64,
@@ -136,34 +164,77 @@ for _, c in ipairs(cases) do
                name .. ": baseline decode")
     end
 
-    local ec = calibrate(function() bench_encode(tbl) end, floor)
-    local dc = calibrate(function() bench_decode(wire) end, floor)
-    -- Builder hot path: built once outside timing (game broadcast), so
-    -- encode() is one core walk plus one buffer malloc.
+    -- Fresh table per timed encode iteration on every arm (no prebuilt
+    -- table before the timer); decode inputs share the tier wire.
+    local function fresh_encode_shim()
+        local w = shim_encode(fill(repeats))
+        sink.n = sink.n + #w
+    end
+    local function fresh_encode_tree()
+        local w = tree_encode(fill(repeats))
+        sink.n = sink.n + #w
+    end
+    local function decode_shim()
+        local t = shim_decode(wire)
+        sink.n = sink.n + #t.str + #t.nums
+    end
+    local function decode_tree()
+        sink.n = sink.n + #tree_decode(wire)
+    end
+    -- Proxy: built once outside timing (game broadcast), so encode is one
+    -- core walk plus one buffer malloc and decode is the gateway
+    -- passthrough with no materialization.
     local built = schema:message(MSG)
     built:set(tbl)
     assert(built:encode() == wire, name .. ": builder matches")
-    local mc = calibrate(function() built:encode() end, floor)
-    local ens = best(function() bench_encode(tbl) end, ec) * 1e9
-    local dns = best(function() bench_decode(wire) end, dc) * 1e9
-    local mns = best(function() built:encode() end, mc) * 1e9
-    local embps = #wire / ens * 1000
-    local dmbps = #wire / dns * 1000
-    local mmbps = #wire / mns * 1000
-    print(string.format("%s: %d bytes, %d iterations (repeat field x%d)",
-        name, #wire, ec, repeats))
-    print("  impl      op           ns/op       MB/s")
-    print(string.format("  pbwire    encode    %10.1f %10.1f", ens, embps))
-    print(string.format("  pbwire    encode_msg%10.1f %10.1f", mns, mmbps))
-    print(string.format("  pbwire    decode    %10.1f %10.1f", dns, dmbps))
-    if has_pb then
-        local be = best(function() pb.encode(MSG, tbl) end, ec) * 1e9
-        local bd = best(function() pb.decode(MSG, wire) end, dc) * 1e9
-        print(string.format("  base      encode    %10.1f %10.1f", be,
-                            #wire / be * 1000))
-        print(string.format("  base      decode    %10.1f %10.1f", bd,
-                            #wire / bd * 1000))
-        print(string.format("  -- vs baseline: encode %.2fx, encode_msg %.2fx, decode %.2fx",
-                            be / ens, be / mns, bd / dns))
+    local function encode_proxy()
+        sink.n = sink.n + #built:encode()
     end
+    local function decode_proxy()
+        sink.n = sink.n + #schema:roundtrip(MSG, wire)
+    end
+
+    local tec = calibrate(fresh_encode_tree, floor)
+    local sec = calibrate(fresh_encode_shim, floor)
+    local tdc = calibrate(decode_tree, floor)
+    local sdc = calibrate(decode_shim, floor)
+    local pec = calibrate(encode_proxy, floor)
+    local pdc = calibrate(decode_proxy, floor)
+    local tens = best(fresh_encode_tree, tec) * 1e9
+    local sens = best(fresh_encode_shim, sec) * 1e9
+    local tdns = best(decode_tree, tdc) * 1e9
+    local sdns = best(decode_shim, sdc) * 1e9
+    local pens = best(encode_proxy, pec) * 1e9
+    local pdns = best(decode_proxy, pdc) * 1e9
+    print(string.format("%s: %d bytes, %d iterations (repeat field x%d)",
+        name, #wire, sec, repeats))
+    print("  impl      op           ns/op       MB/s")
+    print(string.format("  %-14s %-7s %12.1f %10.1f",
+        "pbwire-lua-tree", "encode", tens, #wire / tens * 1000))
+    print(string.format("  %-14s %-7s %12.1f %10.1f",
+        "pbwire-lua-shim", "encode", sens, #wire / sens * 1000))
+    print(string.format("  %-14s %-7s %12.1f %10.1f",
+        "pbwire-lua-proxy", "encode", pens, #wire / pens * 1000))
+    print(string.format("  %-14s %-7s %12.1f %10.1f",
+        "pbwire-lua-tree", "decode", tdns, #wire / tdns * 1000))
+    print(string.format("  %-14s %-7s %12.1f %10.1f",
+        "pbwire-lua-shim", "decode", sdns, #wire / sdns * 1000))
+    print(string.format("  %-14s %-7s %12.1f %10.1f",
+        "pbwire-lua-proxy", "decode", pdns, #wire / pdns * 1000))
+    if has_pb then
+        local be = best(function()
+            sink.n = sink.n + #pb.encode(MSG, fill(repeats))
+        end, sec) * 1e9
+        local bd = best(function()
+            sink.n = sink.n + #pb.decode(MSG, wire).str
+        end, sdc) * 1e9
+        print(string.format("  %-14s %-7s %12.1f %10.1f",
+            "lua-protobuf", "encode", be, #wire / be * 1000))
+        print(string.format("  %-14s %-7s %12.1f %10.1f",
+            "lua-protobuf", "decode", bd, #wire / bd * 1000))
+        print(string.format("  -- vs baseline: tree %.2fx/%.2fx, shim %.2fx/%.2fx, proxy %.2fx/%.2fx",
+                            be / tens, bd / tdns, be / sens, bd / sdns,
+                            be / pens, bd / pdns))
+    end
+    print(string.format("  # sink: %d chars folded back", sink.n))
 end

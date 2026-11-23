@@ -235,3 +235,59 @@ the codec F#'s facade can fall back to. Stage 6 is recorded in
 `docs/perf-attempts.md`: the two below-baseline decode cells need unboxed
 slot storage (a columnar/struct tree), which is a representation change, not
 a tuning round; no probe was run for a cell that a one-line change cannot move.
+
+## Verdict (Task 5 takeover, 2026-11-22)
+
+Selection unchanged: **ship the flat-image `shim` as the native-object path**
+-- and now the generated models actually take it. `ToByteArray()` encodes in
+one native call over the image (`<Message>Layout.Marshal`) whenever the
+embedded descriptor set is active, and `MergeFromBytes` decodes the same way
+(`<Message>Layout.Unmarshal`); an externally registered schema
+(`UseSchema`) keeps the per-field handle path, which reads the override
+(`PbwireFile_<Stem>.IsEmbedded` switches between them, `EncodeInto` /
+`LoadFrom` stay for the fallback). F# rides free: no F# code changed.
+
+Three correctness fixes land with the promotion (all gated):
+
+- Every singular scalar owns a 4-byte presence word -- implicit-presence
+  zero no longer hits the wire, and `WriteImage` mirrors the per-field
+  path's skip condition (`Has` bit, `Required`, or `p != 0`).
+  Strings/bytes keep NULL as the absence signal, with `Utf8OrEmpty` (never
+  NULL) for values the wire must keep and `Clear` on absent optionals
+  during `ReadImage` instead of assigning null.
+- `LayoutPlan.Decode` returns the default message on empty input without a
+  native call.
+- The decode arena headroom tracks the grown images
+  (`wire.Length * 6 + 65536`, was `* 4`): the xlarge gate tier failed with
+  `status 2` before the bump, passes after; the formula lives in codegen
+  so every generated model carries it.
+
+One honesty fix: the `core` arm converted nothing -- `CCore.New` built the
+`Msg` tree once before the timer, so the published `core` row (1.34x / 0.62x
+at xlarge) priced the codec, not the task. It now holds the plain object
+(`Dictionary<string, object?>`, the same prebuilt native input every arm
+encodes from) and converts per call (`EncodeObject` / `DecodeObject`),
+exactly what the arm table above always described. The row drops to
+0.55x / 0.25x at xlarge -- the documented price of native-in/native-out,
+the same class as Python's accepted `encode(data)` 0.69x -- and the gate
+checks it byte-identical plus field-by-field. The old row was a proxy row
+in a core label; it is superseded, not comparable.
+
+Same-host A/B (interleaved `compare`, median of 5, in-process
+`protobuf-csharp` as drift control): presizing the four repeated lists in
+generated `ReadImage` (`Capacity = n` when short, never shrunk) moves xlarge
+`shim` decode 0.698x -> 0.735x and large 0.757x -> 0.803x, with the small
+tiers inside their usual spread (no elements to presize there). Mechanism:
+~48 growth reallocations per xlarge decode removed; kept. The remaining
+decode floor is structural -- managed materialisation of 3000 ints, 3000
+strings, 3000 sub-messages and 3000 bools -- and is recorded in
+`docs/perf-attempts.md`.
+
+Formal `make csharp-bench` for the shipped code is
+`results/bench-csharp-20261122T181950Z.json` (same-host A/B above folded
+in: xlarge `shim` decode 0.74x, `core` 0.55x / 0.25x); the `BENCHMARKS.md`
+C# rows follow that record.
+Below-baseline native cells after this task: tree encode every tier, tree
+decode at 136/174 B, shim decode at 2469/74913 B, core every cell but small
+encode (0.67x/0.71x) -- the core row is honest now, and its red is published,
+not tuned away.

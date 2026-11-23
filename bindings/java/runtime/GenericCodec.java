@@ -752,11 +752,17 @@ public final class GenericCodec {
         }
 
         public DMsg set(int fnum, Object v) {
-            int s = slot(fnum);
+            return setSlot(slot(fnum), v);
+        }
+
+        /** Name-keyed writes resolve once: the slot indexes every store,
+         *  so the string path pays one map lookup, never map plus the
+         *  numeric path's second lookup and re-dispatch. */
+        private DMsg setSlot(int s, Object v) {
             Field f = def.fields[s];
             if (f.repeated) {
-                throw new IllegalArgumentException("repeated field " + fnum
-                        + ": use add()");
+                throw new IllegalArgumentException("repeated field "
+                        + f.number + ": use add()");
             }
             if (v == null) {
                 throw new IllegalArgumentException("null value");
@@ -816,7 +822,7 @@ public final class GenericCodec {
         }
 
         public DMsg set(String name, Object v) {
-            return set(def.fields[slotByName(name)].number, v);
+            return setSlot(slotByName(name), v);
         }
 
         private void setPresent(int s, Field f) {
@@ -836,11 +842,15 @@ public final class GenericCodec {
         }
 
         public DMsg add(int fnum, Object v) {
-            int s = slot(fnum);
+            return addSlot(slot(fnum), v);
+        }
+
+        /** Name-keyed appends resolve once, like {@link #setSlot}. */
+        private DMsg addSlot(int s, Object v) {
             Field f = def.fields[s];
             if (!f.repeated) {
-                throw new IllegalArgumentException("singular field " + fnum
-                        + ": use set()");
+                throw new IllegalArgumentException("singular field "
+                        + f.number + ": use set()");
             }
             if (v == null) {
                 throw new IllegalArgumentException("null value");
@@ -867,7 +877,7 @@ public final class GenericCodec {
                 rp.ref[s] = a;
             }
             if (f.kind >= K_MESSAGE && !(v instanceof DMsg)) {
-                throw new IllegalArgumentException("field " + fnum
+                throw new IllegalArgumentException("field " + f.number
                         + " needs DMsg");
             }
             a[n] = v;
@@ -876,7 +886,7 @@ public final class GenericCodec {
         }
 
         public DMsg add(String name, Object v) {
-            return add(def.fields[slotByName(name)].number, v);
+            return addSlot(slotByName(name), v);
         }
 
         /* Slot-direct primitive stores: Message already resolved the slot
@@ -971,18 +981,17 @@ public final class GenericCodec {
                 throw new IllegalArgumentException("field " + fnum
                         + " is not a message");
             }
-            DMsg m = new DMsg(f.msgType);
-            if (f.repeated) {
-                add(fnum, m);
-            } else {
-                set(fnum, m);
-            }
-            return m;
+            return newMessageInSlot(s);
         }
 
         public DMsg newMessage(String name) {
             int s = slotByName(name);
-            return newMessage(def.fields[s].number);
+            Field f = def.fields[s];
+            if (f.kind != K_MESSAGE && f.kind != K_GROUP) {
+                throw new IllegalArgumentException("field " + f.number
+                        + " is not a message");
+            }
+            return newMessageInSlot(s);
         }
 
         public DMsg clear(int fnum) {
@@ -2275,11 +2284,31 @@ public final class GenericCodec {
                 break;
             }
             int s = def.lookup(fnum);
-            if (s < 0 || wtIncompatible(def.fields[s], wt)) {
+            // Wire-type gate, inlined: one field fetch feeds both the
+            // check and the read, with no per-element call. Groups only
+            // open here; end tags belong to the parent loop. A repeated
+            // packable field takes the LEN packed run whatever its
+            // declared form, and a packed field still takes the unpacked
+            // element form (singular tag), like the C core.
+            Field f = s < 0 ? null : def.fields[s];
+            boolean badWt;
+            if (f == null) {
+                badWt = true;
+            } else if (f.kind == K_GROUP) {
+                badWt = wt != 3;
+            } else if (f.repeated && isPackableKind(f.kind)
+                    && wt == Wire.WT_LEN) {
+                badWt = false;
+            } else if (f.repeated && f.packed && isPackableKind(f.kind)) {
+                badWt = wt != wireType(f.type, false);
+            } else {
+                badWt = wt != f.wt;
+            }
+            if (badWt) {
                 retainUnknown(m, r, fieldStart, fnum, wt, depth);
                 continue;
             }
-            readKnown(m, r, def.fields[s], s, wt, fieldStart, depth);
+            readKnown(m, r, f, s, wt, fieldStart, depth);
         }
         r.end = outerEnd;
         if (!closed) {
@@ -2301,23 +2330,6 @@ public final class GenericCodec {
             m.unknown = new ArrayList<>(4); // lazy: most messages have none
         }
         m.unknown.add(Arrays.copyOfRange(r.b, fieldStart, r.pos));
-    }
-
-    private static boolean wtIncompatible(Field f, int wt) {
-        if (f.kind == K_GROUP) {
-            return wt != 3; // start-group only; end tags handled by the parent
-        }
-        if (f.repeated && isPackableKind(f.kind)) {
-            if (wt == Wire.WT_LEN) {
-                return false; // packed run, whatever the declared form
-            }
-            if (f.packed) {
-                // A packed field still accepts the unpacked element form,
-                // like the C core (singular tag) and the reference parsers.
-                return wt != wireType(f.type, false);
-            }
-        }
-        return wt != f.wt;
     }
 
     private static void readKnown(DMsg m, Wire.Reader r, Field f, int s,
@@ -2498,11 +2510,26 @@ public final class GenericCodec {
                 throw new IllegalArgumentException("bad tag " + tag);
             }
             int s = def.lookup(fnum);
-            if (s < 0 || wtIncompatible(def.fields[s], wt)) {
+            // Same inlined wire-type gate as the decoding loop above.
+            Field f = s < 0 ? null : def.fields[s];
+            boolean badWt;
+            if (f == null) {
+                badWt = true;
+            } else if (f.kind == K_GROUP) {
+                badWt = wt != 3;
+            } else if (f.repeated && isPackableKind(f.kind)
+                    && wt == Wire.WT_LEN) {
+                badWt = false;
+            } else if (f.repeated && f.packed && isPackableKind(f.kind)) {
+                badWt = wt != wireType(f.type, false);
+            } else {
+                badWt = wt != f.wt;
+            }
+            if (badWt) {
                 validateUnknown(r, fnum, wt, depth);
                 continue;
             }
-            validateKnown(r, def.fields[s], wt, depth);
+            validateKnown(r, f, wt, depth);
         }
         r.end = outerEnd;
     }

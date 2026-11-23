@@ -7,7 +7,9 @@
 #     mix run benchmarks/bench.exs
 #
 # Every backend must produce the pinned 136 / 174 / 2469 / 74913 bytes
-# (encode, plus re-encoding a decoded reference) before anything is timed.
+# (encode, plus re-encoding a decoded reference) and decode back to the same
+# struct field by field before anything is timed. Each encode iteration builds
+# a fresh struct inside the timed closure, so the timer covers native-in work.
 # Each op is calibrated from its tier floor until one pass takes at least
 # 0.25 s, then the best of 3 timed samples is reported; throughput is MB/s
 # over serialized wire size. Same unified standard as every other binding.
@@ -84,12 +86,18 @@ defmodule Bench do
         fail("#{label}: decode/re-encode round trip differs")
       end
 
-      ref_iters = calibrate(floor, fn -> Pbwire.encode(msg) end)
+      check_fields!(label, "pbwire", Pbwire.decode(pb, Scalars3), msg)
+      check_fields!(label, "protobuf", Protobuf.decode(ref, Scalars3), msg)
+
+      ref_iters = calibrate(floor, fn -> Pbwire.encode(scalars3(n)) end)
 
       IO.puts("#{label}: #{want} bytes, #{ref_iters} iterations (repeat field x#{n})")
       IO.puts("  impl       op           ns/op       MB/s")
-      time("pbwire", "encode", floor, fn -> Pbwire.encode(msg) end, want)
-      time("protobuf", "encode", floor, fn -> Protobuf.encode(msg) end, want)
+      # Native-in: every encode iteration builds a fresh struct inside the
+      # timed closure (no prebuilt struct before the timer); decode input
+      # is the pinned wire bytes, output a fresh struct per iteration.
+      time("pbwire", "encode", floor, fn -> Pbwire.encode(scalars3(n)) end, want)
+      time("protobuf", "encode", floor, fn -> Protobuf.encode(scalars3(n)) end, want)
       time("pbwire", "decode", floor, fn -> Pbwire.decode(ref, Scalars3) end, want)
       time("protobuf", "decode", floor, fn -> Protobuf.decode(ref, Scalars3) end, want)
     end
@@ -152,6 +160,19 @@ defmodule Bench do
       end)
 
     us * 1000
+  end
+
+  # Field-by-field gate beyond byte equality: the decoded struct must match
+  # the input struct on every field; the first mismatch names the field.
+  defp check_fields!(label, impl, got, want) do
+    want_map = Map.from_struct(want)
+    got_map = Map.from_struct(got)
+
+    Enum.each(Map.keys(want_map), fn field ->
+      unless Map.fetch!(got_map, field) == Map.fetch!(want_map, field) do
+        fail("#{label}: #{impl} field #{field} differs")
+      end
+    end)
   end
 
   defp fail(reason) do

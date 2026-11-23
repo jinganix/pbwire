@@ -2034,7 +2034,28 @@ The win does not repeat on the published xlarge cell, and the encode rows --
 which touch none of the changed code -- moved by ~1%, which is the probe's
 noise. Recorded neutral and reverted, per the rule above.
 
-Decision (Stage 6): no further rounds. The below-baseline cells are not a
+### Round 2: slice-assigned tag writes -- slower, rejected (Task 2, 2026-11-22)
+
+Hypothesis: the six `for c in tag: b[p] = c; p += 1` per-byte loops in the
+fused writers (`pure/wire.py`: `w_tag`, `w_tag_var32/64`, `w_tag_fixed32/64`,
+`w_bytes`) should lose to one slice assignment (`b[p:p + n_tag] = tag`), a
+C-level copy. Candidate: identical `pure/` with only those loops replaced.
+Same-host A/B (`bench.py ab`, 3 interleaved rounds, best-of-pass):
+
+| cell | base | candidate | ratio |
+|---|---|---|---|
+| 2469 B encode(data) | 240186 ns | 254707 ns | 0.943x |
+| 74913 B encode(data) | 7155461 ns | 7566128 ns | 0.946x |
+| 74913 B encode(parsed) | 3704667 ns | 3872794 ns | 0.957x |
+| 74913 B to_dict | 10791998 ns | 10968754 ns | 0.984x |
+
+The candidate loses on every encode cell on both tiers while the untouched
+decode row sits at 0.984x (noise). Mechanism: matrix3 tags are 1-2 bytes, so
+the slice machinery (slice parsing, temporary objects) costs more than the
+1-2 indexed stores it replaces -- the per-byte loop is already near-optimal
+at this size. Reverted; the encode walk stays with indexed stores.
+
+Decision (Stage 6, reaffirmed): no further rounds. The below-baseline cells are not a
 dispatch problem; 74913 B decode spends its time materializing 3000 messages,
 9000 strings/ints/bools and 3000 dicts (cProfile: `read_known` 23%, `to_object`
 19%, `to_py`/`materialize` 12%), and the same is true of encode (`from_object`
@@ -2349,3 +2370,359 @@ Conformance: `make conformance-zig-core` (the new
 binary suite with the same failure set as the C core: 1412 successes, 1403
 skipped, 2 expected, 0 unexpected. The skipped half is JSON/text, out of this
 core's binary scope.
+
+## Cell: Lua shim decode, all tiers (plan 2026-11-22 Task 1, pilot)
+
+`make lua-bench` (`results/bench-lua-20261122T160929Z.json`, Apple M4 Pro,
+Lua 5.5.1): `pbwire-lua-shim` decode 147.0 / 142.8 / 131.6 / 134.6 MB/s
+(1.43x-1.61x vs lua-protobuf) — already the winning native arm, kept by the
+Task 1 selection. One optimization round, same-host A/B, interleaved
+base/candidate processes (5 rounds each, median reported, small + xlarge
+tiers): merge the count-then-fill loops in `pbwlua_push_message`
+(`bindings/lua/runtime/pbwire.c`) into a single pass — presize the table
+with the field count and do one `pbw_message_get_field` per field instead of
+two.
+
+Result: xlarge 540209 -> 536867 ns/op (+0.6%), small 887.3 -> 872.4 ns/op
+(+1.7%) — inside the noise floor, and the mechanism does not explain more:
+`pbw_message_get_field` is O(1) (fresh check + bounds + presence bit), so the
+removed pass is ~66k lookups x ~5 ns = ~0.3 ms against a ~540 ms xlarge
+decode (0.06%). Reverted: the exact-size hash (a sparse message keeps a small
+hash) is worth more than a sub-percent decode move.
+
+The encode side was analyzed but not attempted: per-field cost is one
+`rawgeti` + `rawget` per known field (~11 ns measured in pure Lua for the
+pair) plus one irreducible `lua_next` unknown-key scan per message (~27 ns
+per key measured — the scan IS the contract: unknown keys must fail, and any
+correct implementation visits every key at least once). The single-pass
+alternative (dispatch every key by interned-pointer probe, stash values in
+stack slots, emit in descriptor order) saves ~5 ns/field at best against a
+far more intricate hot path, so it stays unbuilt. No `runtime/` change from
+the perf round; the selection (shim already shipped) stands.
+
+## Cell: Java tree encode/decode at xlarge (plan 2026-11-22 Task 3, JVM group)
+
+Reproduce (`make java-bench`, same host that ran the Task 1/2 benches above;
+`results/bench-java-20261122T163333Z.json`, pre-change): xlarge 74913 B,
+same-run ratios vs `protobuf-java` — `tree` encode 0.279 / decode 0.845,
+`core` 0.693 / 0.805. Small tier: `tree` encode 0.238 / decode 0.910.
+Matches the brief's red cells (0.28x/0.87x, core 0.63x/0.81x) within the
+documented ±10% JVM run variation.
+
+Profile (throwaway `/tmp` probes against the bench classes, then JFR
+`ExecutionSample` on the xlarge loops — no repo harness touched): the tree
+encode op is 83% `fillGeneric`, not `encodeInto`. Split at xlarge: DMsg
+build ~248 us, encode of the held tree ~66 us, while the prebuilt
+`proxy` encode already beats the baseline 1.11x. The `tree` arm builds
+fresh per iteration by contract (the Go-parity close: "the gap the old
+prebuilt tree row was hiding" is priced in on purpose program-wide — Node
+33.7x, C# 21x — and the baseline's prebuilt encode is the disclosed
+steady-state side), so the red cell is the dynamic build price: ~12000
+name-keyed `set`/`add`/`newMessage` calls per xlarge iteration (HashMap +
+second fnum->slot lookup + re-dispatch each), ~6000 `Integer` boxes, 3001
+`DMsg` allocations. JFR on the encode op: `DMsg.add` on 65% of stacks,
+`newMessage` 32%, `slotByName` 15%; `growLong`/`growObj` near zero
+(growth is amortized, not a target — the earlier larger-minimum attempt
+stayed rejected). Decode split: lazy `decode` ~90 us, `consumeTree`
+readback ~187 us (materializes all 3001 inner Slices + two `getList`
+copies); JFR: `decodeInto` first, then `getList`/`materialize`/`readKnown`,
+`wtIncompatible` on ~29% of stacks, `validateInto` meaningful (full
+re-validation walk per inner, required: decode must fail on invalid bytes
+even when the field is never read).
+
+### Kept (1): name-keyed DMsg writes resolve once
+
+`set/add/newMessage(String)` resolved name->number->slot and re-ran the
+numeric path's checks per call; `newMessage(String)` paid three
+resolutions (map + slot + the inner add/set re-dispatch). The string
+entries now resolve name->slot once and run the slot-direct bodies
+(`setSlot`/`addSlot`, both funnelled from the int entries so the two
+spellings share one body; `newMessage` funnels to the existing
+`newMessageInSlot`). Same exceptions for the same inputs (`slot()` still
+validates the numeric path; `fields[s].number == fnum` whenever the slot
+is valid, so the messages are unchanged).
+
+A/B: alternating separate JVMs, `TIER=xlarge` Bench, base vs candidate
+class dirs, `-Xms1g -Xmx1g -XX:+UseSerialGC`, tree/core/proxy rows every
+round (4 rounds). xlarge tree encode ns/op, base -> cand: 285728 -> 250382
+(-12.4%), 283188 -> 250597 (-11.5%), 287044 -> 250147 (-12.9%),
+284520 -> 252369 (-11.3%). Controls flat every round (core encode +0.7%
+mean, proxy encode -0.2%, core/proxy decode mixed ±3%): the win is the
+change, on the only path it touches. Tree decode mixed ±1% (mutation-only
+change, as predicted). Kotlin/Scala/Clojure inherit it: all three DSLs
+build through these string entries (`fillPbwire`/`message(name)`/
+persistent-map assoc over `set`/`newMessage`).
+
+### Kept (2): the tag wire-type gate is inlined at both dispatch loops
+
+`wtIncompatible` (one call + one field re-fetch per tag occurrence,
+~6000/iter at xlarge plus the same again inside `validateInto` and the
+materializing re-decodes) is now one branch shape at the `decodeInto` and
+`validateInto` loops, same accept set (groups only open; packed LEN
+whatever the declared form; packed field still takes the unpacked singular
+form; else `wt != f.wt`; unknown numbers still retain). The helper is
+deleted; both loops fetch the field once and pass it to
+`readKnown`/`validateKnown`.
+
+A/B (same rig, base = change 1): xlarge tree decode base -> cand:
+201345 -> 198275 (-1.5%), 202305 -> 195854 (-3.2%), 204870 -> 198615
+(-3.1%), 201253 -> 198192 (-1.5%). Corroboration from the pure changed
+code: `proxy` decode (decodeInto only, no readback) -4.8%/-6.1%/-7.8%/-6.0%
+all four rounds; untouched paths mixed (tree/core/proxy encode means
++0.9%/+0.0%/+2.0% with one op-level calibration outlier each way in round
+1 — per-op calibration noise, opposite directions in the same JVM, not box
+drift). Tree decode moves less than proxy decode because the readback
+(materialization + `getList` copies) is untouched: -2.3% mean on the
+published op.
+
+### Rejected / not attempted (with reasons)
+
+- Faster name->slot table (custom open-addressed map with reference-equality
+  fast path for interned literals, replacing the `HashMap.get` inside
+  `slotByName`): analyzed, not built. `HashMap.get` already reference-checks
+  first, so the saving is ~2 ns x ~12000 calls ≈ 8% of the op at best,
+  against a second per-type structure with its own lifecycle to review (the
+  review focus already flags per-type caches) — a second encode change for a
+  single-digit move on a cell whose floor is structural (below).
+- Lazy validation skip (record slices without `validateInto`, validate on
+  first read): rejected without building. Decode must fail on invalid bytes
+  even for unread fields (conformance `parse_error` + the proxy
+  decode-and-drop op), so the double traversal is the laziness price, not a
+  bug. Same reason the `Slice`-per-element record stays: the ref must point
+  at something, and the object is minimal.
+- Splitting `readKnown` for inlining: no mechanism. The 7-arg call stands;
+  the logic has to live somewhere and both dispatch sites are already flat.
+- `newMessage`/`DMsg` allocation or boxing removal on the build: intrinsic
+  to the arm (fresh tree per iteration through the `Object` API). Only
+  per-message generated writers remove it — the product decision the Java
+  136 B cell already recorded as rejected.
+
+### Task 15 disposition (JVM slice): floors documented, two keeps banked
+
+After both keeps, the formal re-run
+(`results/bench-java-20261122T165732Z.json`, same host, higher load than
+the pre-change run — baseline/proxy uniformly ~+1-9%, so only same-run
+ratios read): xlarge `tree` encode 0.284 / decode 0.826, `core` 0.699 /
+0.791; the A/B deltas (-12% encode, -2%/-6% decode) sit inside this run's
+load noise, which is why the keeps are claimed from the interleaved A/Bs,
+not the formal table. The cells stay red and are now floors, each with its
+mechanism: tree encode is the dynamic build (boxing + per-message
+allocation + per-field dispatch vs generated typed builders — ~227 us of
+the 297 us op; the codec itself, proxy-vs-baseline, is 1.09x); tree decode
+is the lazy double-touch (validate + record, then materialize + copy vs
+one eager generated pass); core encode/decode is the `PbCodec`/`FieldMeta`
+per-field table (flat in every A/B control, confirming the gap lives there;
+the formal run's core-encode 0.63x -> 0.70x is run noise on a JIT-sensitive
+lambda path, not a change effect — nothing on that path was touched;
+closing it needs per-message generated writers, already rejected). The
+Kotlin 136 B encode cell (0.71x) is the fixed per-op cost
+(ThreadLocal workspace + buffer + copyOut vs a memoized baseline write at
+136 B) on the riders' pre-parity prebuilt basis — structural at that size,
+not attempted. Transfer check (full-tier A/B under formal conditions:
+`bench.sh` straight, all four tiers, default flags, base/cand alternating,
+2 rounds): tree encode base -> cand 308045 -> 286720 (-6.9%) and 302670 ->
+288859 (-4.5%); tree decode +0.4%/+1.7%; untouched core rows mixed ±7%.
+The encode keep transfers at about half strength (tier-order/G1 state halves
+a dispatch-shape win but never flips it: 8/8 JVMs across three rigs); the
+decode keep sits inside full-tier noise (the isolated -2%/-6% stands on
+mechanism + proxy corroboration, and the full-tier runs contradict nothing —
+same sign or nil, never a consistent regression). Both keeps stand as filed.
+No further untried one-change mechanism on any JVM native
+cell; the JVM slice of Task 15 is closed.
+
+Conformance gap closed beside the perf work: `make conformance-kotlin`
+is new (`bindings/kotlin/conformance/Testee.kt`, same schema-driven shape
+as the Scala/Clojure testees over the shared runtime; `KOTLIN_CP` =
+the fat jar). Result: 443 successes, 0 unexpected — the same count as
+java/scala/clojure on this host.
+
+## Cell: Ruby shim encode/decode vs the gem (plan 2026-11-22 Task 4, C-extension group)
+
+Formal `results/bench-ruby-20261122T015616Z.json`: `pbwire-ruby-shim` 0.19x/0.23x
+at xlarge (0.18x-0.58x across tiers), `tree` 0.03x/0.08x. The encode walk
+(`object_fill`) and the decode walk (`object_from_tree`) each paid one
+`pbw_descriptor_field_at` index fetch per field per object on top of the
+work itself (ivar get/set, scalar convert, tree store), while the per-field
+IDs, the ctx arenas and the preallocated decode arrays were already in
+place. One round, same-host A/B (`pbench/compare.rb`, 3 runs each side,
+median-reported ns/op): cache the `pbw_field *` in `field_t` at setup
+(`f->df`, `bindings/ruby/ext/pbwire_ext/pbwire_ext.c`) and use it at all
+five hot sites (fill, from_tree, set, get, required-check).
+
+A/B (base -> cand, ns/op, lower wins): small enc 823.3 -> 803.3 (-2.4%),
+small dec 1047.3 -> 1039.0 (-0.8%), medium enc 976.8 -> 966.6 (-1.0%),
+medium dec 1243.8 -> 1238.1 (-0.5%), large enc 11637.8 -> 11611.8 (-0.2%),
+large dec 18065 -> 17904 (-0.9%), xlarge enc 312384 -> 308546 (-1.2%),
+xlarge dec 501830 -> 499401 (-0.5%). Every cell moves the same direction
+across all three rounds (small-encode ranges do not overlap); the
+mechanism explains it (one descriptor indirection removed per field per
+op, nothing else touched). Kept: `make ruby-test` 41/41,
+`pbench/gate.rb` PASS, `make conformance-ruby` 443/0. The keeps are
+claimed from the interleaved A/Bs, not a formal re-run (same convention
+as the Task 3 JVM keeps): the cells stay red and are now floors — the
+remaining gap is the model materialization itself (ivar walk + per-scalar
+convert + tree store vs the gem's C-backed generated objects), which no
+index-fetch removal closes.
+
+## Cell: Node shim encode vs jspb (plan 2026-11-22 Task 4, C-extension group)
+
+Formal `results/bench-node-20261121T181411Z.json`: `pbwire-node-shim`
+1.02x/0.64x vs jspb at xlarge (0.12x/0.13x vs protobufjs). The shim encode
+paid two N-API crossings per op: `encodeObject` returned the scratch
+length as a double, then JS `_copy` ran `Buffer.allocUnsafe` +
+`copyEncoded` (second downcall + memcpy). One round, same-host A/B
+(`pbench/compare.js`, 3 runs each side): return the bytes directly with
+`napi_create_buffer_copy` (one downcall, one copy), keeping the
+stale-scratch state machine (`enc_valid` consumed, so a stray
+`copyEncoded` still reports "without a preceding encode" as the test
+pins).
+
+A/B (base -> cand, ns/op): small enc 2822 -> 2937 (+4.1%), medium enc
+3383 -> 3613 (+6.8%), large enc 46411 -> 46391 (nil), xlarge enc 1309020
+-> 1280420 (-2.2%); decode untouched (nil both tiers, as expected). The
+mechanism explains both directions: for small buffers the old path's
+`Buffer.allocUnsafe` comes from the JS slab pool while
+`napi_create_buffer_copy` mallocs, so the saved crossing (~60-70 ns) does
+not cover the allocator gap; at xlarge both paths malloc and the saved
+crossing wins. Rejected: it trades a small-tier regression (the sizes
+users encode most) for an xlarge-only win. Reverted to base
+(`addon.c` + `lib/pbwire.js` unchanged); `make node-test` 70/0,
+`pbench/gate.js` PASS on the kept tree. The floor stands as the pbench
+README documents it: one N-API property read/write per field (~60-70 ns)
+vs a few ns in jspb/protobufjs's own heap.
+
+## Cell: PHP shim encode/decode vs the official C extension (plan 2026-11-22 Task 4, C-extension group)
+
+Formal `results/bench-php-20261122T022541Z.json`: `pbwire-php-shim`
+0.17x/0.37x at xlarge (0.15x-0.21x / 0.37x-0.41x across tiers),
+`tree` 0.07x/0.09x. Spot re-time this host (`compare.php` with the
+rebuilt ext): shim xlarge 356187.7 ns/op (210.3 MB/s) encode, 366150.2
+(204.6) decode — same shape as formal. The proxy row in the same formal
+run is 1612.8/713.2 (19.0x/13.4x the shim at xlarge): the gap between
+re-encoding a held tree and walking a PHP array field by field is the
+floor, not a bug. Two candidates analyzed, neither built:
+
+- Interned field-name keys per Type (skip the per-op name hash in
+  `zend_hash_str_find`/`add_assoc_zval_ex`): reach stops at the top
+  level. The nested walk (`array_encode_message` /
+  `array_decode_message` recurse through descriptors, not Type objects),
+  where thousands of probes happen at xlarge, has no Type to hang a
+  cache on — a per-descriptor cache from the binding is out (core owns
+  the descriptor, and the review focus already flags per-type caches).
+  Saving one hash per top-level field (~40 at xlarge) against a new
+  lifecycle in `type_obj` (interned-string array + free handler + GC
+  visibility) prices out at single-digit percent of one op at best.
+- Array-order iteration instead of schema-order probing (foreach the
+  input keys, resolve each with `pbw_descriptor_find_field_name`):
+  xlarge messages are dense (probe count ≈ key count), and sparse tiers
+  would trade N cheap probes for N descriptor hash lookups — no
+  crossover mechanism, same steady state either way.
+
+No `ext/` change from the perf round. The `array_scalar_value` path was
+re-read in the same pass (direct zval reads, ctx arenas, no copies) and
+holds nothing further single-change-sized.
+
+## Cell: R native arms vs RProtoBuf (plan 2026-11-22 Task 4, C-extension group)
+
+No red cell: formal `results/bench-r-20261122T020549Z.json` has `shim`
+22x-60x and `tree` 8x-38x above RProtoBuf on every tier and op, and the
+pbench verdict already records "nothing to optimize here". The round
+was a verification re-time plus assessment, not a change:
+`pbench/compare.R` on this host confirms the shape (shim 25x-60x,
+tree 8x-45x; one xlarge-encode round had tree ahead of shim, 572265 vs
+646484 ns/op — the reverse of formal — which is host-load movement on a
+fully green board, not a finding). Assessed and not attempted: decode
+materialization already preallocates every vector by count
+(`allocVector(VECSXP/STRSXP/...)` sized from `pbw_value_count`,
+`runtime/src/pbwire_r.c`); the remaining cost is the listed-API shape
+itself (named-list walk + per-scalar convert vs RProtoBuf's R-level
+per-field work on C++). No `runtime/` change; `make r-test` and
+`make conformance-r` (443/0) stand as the proof.
+
+## Cell: C# shim decode at xlarge (plan 2026-11-22 Task 5, .NET)
+
+Formal `results/bench-csharp-20261122T181429Z.json` (this host): `shim`
+decode 0.71x at 74913 B (357.9 vs 504.9 MB/s), 0.72x at 2469 B; encode
+above baseline on all four tiers (1.12x-2.54x). Same-host A/B, interleaved
+`pbench/compare` (median of 5, in-process `protobuf-csharp` as drift
+control): presize the four repeated lists in generated `ReadImage`
+(`if (Nums.Capacity < nNums) Nums.Capacity = nNums;`, never shrunk so a
+reused model keeps its larger buffer) before the fill loops.
+
+Result: xlarge 0.698x -> 0.735x (220898 -> 208795 ns/op against a baseline
+that moved 154305 -> 153435, +0.6% drift), large 0.757x -> 0.803x; small /
+medium inside their usual spread (3x+ round spread, 0-1 elements, nothing
+to presize). Mechanism: ~48 growth reallocations per xlarge decode removed
+(4 lists x ~12 doublings to 3000). Kept: one line per repeated field in
+`codegen/internal/gen/csharp.go`, gate byte-identical both ways,
+`make csharp-test` green.
+
+No further round on this cell: the remainder is the managed
+materialisation the pbench README already splits (native decode faster
+than the reference parser's whole run; 3000 ints + 3000 strings + 3000
+sub-messages + 3000 bools into objects costs more), which no boundary
+tuning removes short of dropping the image copy -- a mechanism change,
+not a round.
+
+## Cell: C# core honest re-baseline (plan 2026-11-22 Task 5, .NET)
+
+Not a tuning round: the published `core` row (1.34x / 0.62x at xlarge)
+timed a `Msg` tree built once before the timer -- a proxy row in a core
+label. Aligned to the arm contract (plain object in, convert + codec per
+call, same prebuilt native input every arm encodes from), the row is
+0.53x / 0.25x at xlarge, 0.46x / 0.35x at 2469 B, 0.67x-0.71x encode at
+136/174 B. No code change was attempted to recover the old numbers: the
+conversion (`Dictionary<string, object?>` with string keys per message,
+boxed slots) is the task, the same class as Python's accepted
+`encode(data)` 0.69x. Published as-is; the core stays the no-toolchain
+arm, never the headline.
+
+## Cell: Dart tree encode at large (plan 2026-11-22 Task 6, static-link group)
+
+Worst red cell on a non-shipped arm: `tree` encode 0.39x at 2469 B vs
+protobuf-dart (0.46x/0.49x/0.50x on the other tiers; the shipped `shim`
+row is 6.6x-11.0x everywhere). Micro-split on the same host
+(`pbench/micro_split.dart`, since removed; best of 5): build-only 67540
+ns/op, encode-only 2000 ns/op, decode+read 7265 ns/op -- the build is
+97% of the row, ~109 ns per set at 100 repeats (~620 sets).
+
+Per-set split (`pbench/micro_set.dart`): `Type.field(name)` resolve
+9 ns/op, `setInt` on a cached `Field` 36 ns/op (one `valueNewInt` FFI +
+C malloc plus one `messageSet` FFI). Same-host A/B of by-name build vs
+a pre-resolved-`Field` build (`pbench/micro_ab.dart`): 69990/69624
+ns/op vs 66493/64851 ns/op, i.e. +5.0%/+6.9% -- the whole Dart-side
+share, and it redefines the timed task (the arm prices the shipped
+by-name per-field API, the same task `protobuf-dart`'s generated
+setters do without a lookup).
+
+Rejected: the remaining ~93% is two FFI crossings plus one C malloc per
+set, which is the priced boundary, not a tuning gap -- the same class
+as Go's `dync` (0.05x-0.13x, never headlined). The fix would be
+combined native setters (`messageSetInt` et al. in one crossing, no
+value malloc), i.e. new C entries plus a second setter family in
+`lib/pbwire.dart` for a non-shipped arm: disproportionate, not a
+round. The `shim` row stays the native-object answer.
+
+## Cell: Julia tree decode at small (plan 2026-11-22 Task 6, static-link group)
+
+Worst red cell on a non-shipped arm: `tree` decode 0.18x at 136 B vs
+ProtoBuf.jl (212.5 vs 1181.2 MB/s; the shipped `shim` row is 0.93x on
+this tier and above the baseline everywhere else). Micro-split on the
+same host (`pbench/micro_ab.jl`, since removed; best of 5):
+decode-only 127 ns/op (matches the one-`ccall` shim decode at ~123
+ns), read-only by name 492 ns/op, read-only with hoisted `Field`
+objects 132 ns/op, full `tree_decode` 733 ns/op (~127 + 492 +
+re-encode).
+
+Mechanism, verified by the hoisted-Field A/B: each by-name get pays a
+`Dict{String,Field}` lookup (~10 ns, `field()` is already cached per
+`MsgType`) plus two ccalls (`pbw_message_get_field` +
+`pbw_value_get_*`, ~4 ns each), i.e. ~18 ns per field against ~8 ns
+hoisted, times ~30 field reads. Hoisting moves the row but redefines
+the timed task (the arm prices the shipped by-name per-field API);
+removing the ccalls needs combined native getters, i.e. a new C entry
+for a non-shipped arm: disproportionate, not a round. The `shim` row
+stays the native-object answer; the small-tier `tree` decode cell
+stays flagged, same class as the ledger's Julia 136 B decode entries
+above (per-call malloc/free plus the boundary, fixed only by an
+ownership or API change).

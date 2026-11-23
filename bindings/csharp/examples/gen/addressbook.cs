@@ -70,7 +70,9 @@ namespace Tutorial {
         public override string ToString() {
             return "Person {{ " + "Name = " + Name + ", " + "Id = " + Id + ", " + "Email = " + Email + " }}";
         }
-        public byte[] ToByteArray() {
+        /// <summary>One native call over the flat image (the promoted shim arm); the per-field path while an external schema is registered.</summary>
+        public byte[] ToByteArray() => PbwireFile_Addressbook.IsEmbedded ? PersonLayout.Marshal(this) : EncodeViaHandle();
+        private byte[] EncodeViaHandle() {
             using Pbwire.Message msg = PbwireFile_Addressbook.Schema.Message("tutorial.Person").NewMessage();
             EncodeInto(msg);
             return msg.Encode();
@@ -85,6 +87,7 @@ namespace Tutorial {
         }
         public int CalculateSize() => ToByteArray().Length;
          internal void MergeFromBytes(byte[] wire) {
+            if (PbwireFile_Addressbook.IsEmbedded) { MergeFrom(PersonLayout.Unmarshal(wire)); return; }
             using Pbwire.Message msg = PbwireFile_Addressbook.Schema.Message("tutorial.Person").Decode(wire);
             LoadFrom(msg);
         }
@@ -122,10 +125,10 @@ namespace Tutorial {
         public const int ImageBytes = 48;
         /// <summary>Copies this native object into a zeroed flat image; strings, bytes and sub-images come from <paramref name="arena"/>.</summary>
         public unsafe void WriteImage(byte* img, global::Pbwire.ImageArena arena) {
-            *(IntPtr*)(img + 8) = Name.Length == 0 ? IntPtr.Zero : arena.Utf8(Name);
+            *(IntPtr*)(img + 8) = arena.Utf8OrEmpty(Name);
             *(int*)(img + 32) = 1;
             *(int*)(img + 0) = (int)(Id);
-            *(IntPtr*)(img + 16) = Email.Length == 0 ? IntPtr.Zero : arena.Utf8(Email);
+            *(IntPtr*)(img + 16) = HasEmail ? arena.Utf8OrEmpty(Email) : IntPtr.Zero;
             {
                 var n = Phones.Count;
                 if (n != 0) {
@@ -156,11 +159,13 @@ namespace Tutorial {
             Id = *(int*)(img + 0);
             {
                 var p = *(IntPtr*)(img + 16);
-                Email = p == IntPtr.Zero ? null! : (global::System.Runtime.InteropServices.Marshal.PtrToStringUTF8(p) ?? "");
+                if (p == IntPtr.Zero) { ClearEmail(); }
+                else { Email = global::System.Runtime.InteropServices.Marshal.PtrToStringUTF8(p) ?? ""; }
             }
             Phones.Clear();
             var nPhones = (int)(*(nuint*)(img + 40));
             if (nPhones != 0) {
+                if (Phones.Capacity < nPhones) Phones.Capacity = nPhones;
                 var p = *(byte**)(img + 24);
                 for (var i = 0; i < nPhones; i++) { var c = new Types.PhoneNumber(); c.ReadImage(p + i * Types.PhoneNumber.ImageBytes); Phones.Add(c); }
             }
@@ -199,7 +204,9 @@ namespace Tutorial {
             /// <summary>One call per op: wire bytes in, native object out. The block carries the decoded image's strings, bytes and sub-images.</summary>
             public static unsafe Person Unmarshal(byte[] wire)
             {
-                using var call = global::Pbwire.ImageCall.Rent(ImageBytes, wire.Length * 4 + 65536);
+                // Decode arena: every sub-message image now carries presence words (1.5x worst-case growth),
+                // so the wire-proportional headroom tracks that factor; status 2 names this formula.
+                using var call = global::Pbwire.ImageCall.Rent(ImageBytes, wire.Length * 6 + 65536);
                 Plan.Decode(wire, call.Image, call.DecodeArena, call.DecodeArenaBytes);
                 var native = new Person();
                 native.ReadImage(call.Image);
@@ -254,7 +261,9 @@ namespace Tutorial {
                 public override string ToString() {
                     return "PhoneNumber {{ " + "Number = " + Number + ", " + "Type = " + Type + " }}";
                 }
-                public byte[] ToByteArray() {
+                /// <summary>One native call over the flat image (the promoted shim arm); the per-field path while an external schema is registered.</summary>
+                public byte[] ToByteArray() => PbwireFile_Addressbook.IsEmbedded ? PhoneNumberLayout.Marshal(this) : EncodeViaHandle();
+                private byte[] EncodeViaHandle() {
                     using Pbwire.Message msg = PbwireFile_Addressbook.Schema.Message("tutorial.Person.PhoneNumber").NewMessage();
                     EncodeInto(msg);
                     return msg.Encode();
@@ -269,6 +278,7 @@ namespace Tutorial {
                 }
                 public int CalculateSize() => ToByteArray().Length;
                  internal void MergeFromBytes(byte[] wire) {
+                    if (PbwireFile_Addressbook.IsEmbedded) { MergeFrom(PhoneNumberLayout.Unmarshal(wire)); return; }
                     using Pbwire.Message msg = PbwireFile_Addressbook.Schema.Message("tutorial.Person.PhoneNumber").Decode(wire);
                     LoadFrom(msg);
                 }
@@ -294,7 +304,7 @@ namespace Tutorial {
                 public const int ImageBytes = 24;
                 /// <summary>Copies this native object into a zeroed flat image; strings, bytes and sub-images come from <paramref name="arena"/>.</summary>
                 public unsafe void WriteImage(byte* img, global::Pbwire.ImageArena arena) {
-                    *(IntPtr*)(img + 8) = Number.Length == 0 ? IntPtr.Zero : arena.Utf8(Number);
+                    *(IntPtr*)(img + 8) = arena.Utf8OrEmpty(Number);
                     *(int*)(img + 16) = HasType ? 1 : 0;
                     *(int*)(img + 0) = (int)(Type);
                 }
@@ -345,7 +355,9 @@ namespace Tutorial {
                     /// <summary>One call per op: wire bytes in, native object out. The block carries the decoded image's strings, bytes and sub-images.</summary>
                     public static unsafe PhoneNumber Unmarshal(byte[] wire)
                     {
-                        using var call = global::Pbwire.ImageCall.Rent(ImageBytes, wire.Length * 4 + 65536);
+                        // Decode arena: every sub-message image now carries presence words (1.5x worst-case growth),
+                        // so the wire-proportional headroom tracks that factor; status 2 names this formula.
+                        using var call = global::Pbwire.ImageCall.Rent(ImageBytes, wire.Length * 6 + 65536);
                         Plan.Decode(wire, call.Image, call.DecodeArena, call.DecodeArenaBytes);
                         var native = new PhoneNumber();
                         native.ReadImage(call.Image);
@@ -385,7 +397,9 @@ namespace Tutorial {
         public override string ToString() {
             return "AddressBook {{ }}";
         }
-        public byte[] ToByteArray() {
+        /// <summary>One native call over the flat image (the promoted shim arm); the per-field path while an external schema is registered.</summary>
+        public byte[] ToByteArray() => PbwireFile_Addressbook.IsEmbedded ? AddressBookLayout.Marshal(this) : EncodeViaHandle();
+        private byte[] EncodeViaHandle() {
             using Pbwire.Message msg = PbwireFile_Addressbook.Schema.Message("tutorial.AddressBook").NewMessage();
             EncodeInto(msg);
             return msg.Encode();
@@ -400,6 +414,7 @@ namespace Tutorial {
         }
         public int CalculateSize() => ToByteArray().Length;
          internal void MergeFromBytes(byte[] wire) {
+            if (PbwireFile_Addressbook.IsEmbedded) { MergeFrom(AddressBookLayout.Unmarshal(wire)); return; }
             using Pbwire.Message msg = PbwireFile_Addressbook.Schema.Message("tutorial.AddressBook").Decode(wire);
             LoadFrom(msg);
         }
@@ -452,6 +467,7 @@ namespace Tutorial {
             People.Clear();
             var nPeople = (int)(*(nuint*)(img + 8));
             if (nPeople != 0) {
+                if (People.Capacity < nPeople) People.Capacity = nPeople;
                 var p = *(byte**)(img + 0);
                 for (var i = 0; i < nPeople; i++) { var c = new Person(); c.ReadImage(p + i * Person.ImageBytes); People.Add(c); }
             }
@@ -484,7 +500,9 @@ namespace Tutorial {
             /// <summary>One call per op: wire bytes in, native object out. The block carries the decoded image's strings, bytes and sub-images.</summary>
             public static unsafe AddressBook Unmarshal(byte[] wire)
             {
-                using var call = global::Pbwire.ImageCall.Rent(ImageBytes, wire.Length * 4 + 65536);
+                // Decode arena: every sub-message image now carries presence words (1.5x worst-case growth),
+                // so the wire-proportional headroom tracks that factor; status 2 names this formula.
+                using var call = global::Pbwire.ImageCall.Rent(ImageBytes, wire.Length * 6 + 65536);
                 Plan.Decode(wire, call.Image, call.DecodeArena, call.DecodeArenaBytes);
                 var native = new AddressBook();
                 native.ReadImage(call.Image);

@@ -58,7 +58,9 @@ namespace Xfile {
         public override string ToString() {
             return "UsesDep {{ " + "Note = " + Note + " }}";
         }
-        public byte[] ToByteArray() {
+        /// <summary>One native call over the flat image (the promoted shim arm); the per-field path while an external schema is registered.</summary>
+        public byte[] ToByteArray() => PbwireFile_Xfile.IsEmbedded ? UsesDepLayout.Marshal(this) : EncodeViaHandle();
+        private byte[] EncodeViaHandle() {
             using Pbwire.Message msg = PbwireFile_Xfile.Schema.Message("xfile.UsesDep").NewMessage();
             EncodeInto(msg);
             return msg.Encode();
@@ -73,6 +75,7 @@ namespace Xfile {
         }
         public int CalculateSize() => ToByteArray().Length;
          internal void MergeFromBytes(byte[] wire) {
+            if (PbwireFile_Xfile.IsEmbedded) { MergeFrom(UsesDepLayout.Unmarshal(wire)); return; }
             using Pbwire.Message msg = PbwireFile_Xfile.Schema.Message("xfile.UsesDep").Decode(wire);
             LoadFrom(msg);
         }

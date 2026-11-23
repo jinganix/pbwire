@@ -192,34 +192,40 @@ varints the reference C++ testee truncates identically); only JSPB answers
 `benchmarks/bench.sh` runs the four standard tiers from
 [`BENCHMARKS.md`](../../BENCHMARKS.md) against `lua-protobuf` 0.6.0 on the same
 `matrix3.proto` (small / medium / large / xlarge scale the repeated fields
-x0 / x1 / x100 / x3000). The gate is tier size (our bytes are canonical) plus a
-full-field expectation check; the baseline only has to agree on size and decode,
-because `lua-protobuf` writes nested messages in table hash order, so raw bytes
+x0 / x1 / x100 / x3000), with one row per pbench arm (`pbench/`): `tree` is
+the fresh-builder full task, `shim` the same task in one C entry per op,
+`proxy` the prebuilt task (published, never headlined). The gate is tier
+size (our bytes are canonical) plus a full-field expectation check; the
+baseline only has to agree on size and decode, because `lua-protobuf` writes nested messages in table hash order, so raw bytes
 are not comparable. Needs only Lua and a C compiler, plus the baseline for its
 columns (`luarocks install lua-protobuf`). Copied from that run (Apple M4 Pro,
-Lua 5.5.1); higher is better, MB/s over wire bytes:
+Lua 5.5.1, `results/bench-lua-20261122T160929Z.json`); higher is better, MB/s
+over wire bytes:
 
-| payload | op | pbwire-lua (MB/s, x lua-protobuf) | lua-protobuf (MB/s) |
-|---|---|---|---|
-| 136 B | encode | 133.7 (1.1x) | 126.6 |
-| 136 B | encode_msg | 912.5 (7.2x) | 126.6 |
-| 136 B | decode | 99.8 (1.1x) | 89.8 |
-| 174 B | encode | 150.5 (1.1x) | 141.6 |
-| 174 B | encode_msg | 995.0 (7.0x) | 141.6 |
-| 174 B | decode | 100.4 (1.1x) | 92.0 |
-| 2469 B | encode | 180.9 (1.1x) | 172.0 |
-| 2469 B | encode_msg | 1200.1 (7.0x) | 172.0 |
-| 2469 B | decode | 105.6 (1.2x) | 88.0 |
-| 74913 B | encode | 198.4 (1.0x) | 191.7 |
-| 74913 B | encode_msg | 1544.4 (8.1x) | 191.7 |
-| 74913 B | decode | 106.3 (1.2x) | 91.5 |
+| payload | op | pbwire-lua-tree (MB/s, x lua-protobuf) | pbwire-lua-shim (MB/s, x lua-protobuf) | lua-protobuf (MB/s) |
+|---|---|---|---|---|
+| 136 B | encode | 73.3 (0.80x) | 102.5 (1.13x) | 91.1 |
+| 136 B | decode | 66.4 (0.73x) | 147.0 (1.61x) | 91.4 |
+| 174 B | encode | 72.0 (0.78x) | 102.2 (1.11x) | 92.4 |
+| 174 B | decode | 70.5 (0.77x) | 142.8 (1.56x) | 91.7 |
+| 2469 B | encode | 64.0 (0.67x) | 99.8 (1.04x) | 95.5 |
+| 2469 B | decode | 85.1 (0.98x) | 131.6 (1.52x) | 86.8 |
+| 74913 B | encode | 65.3 (0.61x) | 104.1 (0.97x) | 107.2 |
+| 74913 B | decode | 97.0 (1.03x) | 134.6 (1.43x) | 94.1 |
 
-`encode_msg` is the builder hot path: one core walk plus one buffer malloc
-per send, no table conversion, which is why it runs at the core's own
-~1.0-1.5 GB/s. The table path converts table→tree→wire (two passes where
-the baseline writes one); it used to trail ~0.6-0.8x and now leads 1.0x-1.2x
-across tiers. Decode wins at every tier because it
-is one validating parse straight into tables with no tree kept.
+`proxy` in the same run (prebuilt builder re-encode, `roundtrip()` with no
+materialization; same-run timing only, never headlined): encode 985.2 /
+1017.7 / 1480.3 / 1768.1 MB/s, decode 480.8 / 459.5 / 456.8 / 524.2 MB/s.
+The xlarge `shim` encode cell (0.97x) is a tie, not a finding: it flips
+between runs inside the host's ±10% spread.
+
+The table path (`shim`) writes straight from the Lua table into the wire
+buffer (one pass over schema fields in descriptor order, no intermediate
+tree, no per-value allocation), so it beats the per-field builder assembly
+on every tier on both ops (1.40x-1.59x encode, 1.39x-2.21x decode) and is
+the shipped default. The builder hot path (`proxy`: build once, `encode()`
+per send) runs at the core's own ~1.0-1.7 GB/s. Decode wins at every tier
+because it is one validating parse straight into tables with no tree kept.
 
 ## Layout
 

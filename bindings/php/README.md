@@ -114,6 +114,26 @@ Strings cross with explicit lengths, so embedded NUL bytes survive both
 ways (`setString()` and `setBytes()` accept them; a `string` field accepts
 byte payloads too, which is how protobuf's wire format works).
 
+## Conformance
+
+`conformance/testee.php` drives the official `conformance_test_runner`
+through this binding (`make conformance-php`):
+
+```
+CONFORMANCE SUITE PASSED: 2750 successes, 0 skipped, 2 expected failures,
+0 unexpected failures.
+CONFORMANCE SUITE PASSED: 443 successes, 0 skipped, 0 expected failures,
+0 unexpected failures.
+```
+
+It runs on the shipped `ext-ffi` wrapper, so it needs no compiler and no
+`php-ext` build; binary, JSON and text travel through the same core trees
+the FFI calls use (unknown fields survive, oneof collapses to the last
+member), and text output honors the runner's `print_unknown_fields` flag.
+Only JSPB answers `skipped`. The 2 expected failures are the shared
+`conformance/failure_list_pbwire.txt` (tag varints the reference C++
+testee truncates identically).
+
 ## Threads and lifetimes
 
 No global state beyond the library handle. A `Schema` or `Message` belongs to one

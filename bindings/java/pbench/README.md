@@ -137,9 +137,13 @@ was the held handle, not the application. The `tree` row (fresh `DMsg`
 per iteration, every gate-checked field read back) is the application
 path and the headline; `proxy` is published beside it, never the
 headline. Both native arms sit below the baseline on every tier
-(`tree` encode 0.26x-0.34x, decode 0.72x-0.93x; `core` encode
-0.30x-0.63x, decode 0.56x-0.81x), so both cells are flagged for the
-Task 15 optimization pass -- no optimization is attempted here.
+(`tree` encode 0.27x-0.43x, decode 0.73x-0.90x; `core` encode
+0.28x-0.70x, decode 0.51x-0.79x); the Task 15 optimization pass ran its
+two keeps against the `benchmarks/` full-task arms (single-resolution
+name-keyed writes; inlined tag wire-type gate) and parked the residual
+floors with mechanisms in
+[`docs/perf-attempts.md`](../../../docs/perf-attempts.md#cell-java-tree-encodedecode-at-xlarge-plan-2026-11-22-task-3-jvm-group).
+No `pbench`-arm change here: the ceiling table above is unaffected.
 
 Selected: the pure-Java runtime (`../runtime/`) stays the shipped codec.
 `jni/` stays the `shim` ceiling and is not a candidate for the runtime: it never

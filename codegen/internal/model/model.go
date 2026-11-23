@@ -203,6 +203,12 @@ func (f *File) buildField(fd protoreflect.FieldDescriptor) Field {
 		// (IsList excludes maps in recent protobuf-go, so set it here.)
 		field.Repeated = true
 		field.Message = f.messageLocal(fd)
+		if md := fd.Message(); md != nil {
+			// The flat-image readers resolve sub-messages by proto full
+			// name, so the entry needs one even though it rides under a
+			// local class name.
+			field.Full = string(md.FullName())
+		}
 		if field.Message == "" {
 			field.Skip = "map entry from another file: use the dynamic API"
 		}

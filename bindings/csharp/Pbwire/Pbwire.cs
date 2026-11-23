@@ -1565,9 +1565,13 @@ public sealed unsafe class LayoutPlan
         return new ReadOnlySpan<byte>((void*)data, (int)len).ToArray();
     }
 
-    /// <summary>Wire bytes in, flat image out: strings/bytes/children point into <paramref name="arena"/>.</summary>
+    /// <summary>Wire bytes in, flat image out: strings/bytes/children point into <paramref name="arena"/>. Empty input is the default message: the image stays zeroed and no native call runs.</summary>
     public void Decode(byte[] wire, byte* image, IntPtr arena, int arenaBytes)
     {
+        if (wire.Length == 0)
+        {
+            return;
+        }
         int status;
         fixed (byte* data = wire)
         {
@@ -1708,6 +1712,18 @@ public sealed unsafe class ImageArena
         bytes.CopyTo(new Span<byte>(at, bytes.Length));
         at[bytes.Length] = 0;
         return (IntPtr)at;
+    }
+
+    /// <summary>A NUL-terminated UTF-8 copy that is never NULL: empty text takes one NUL byte, so a set-but-empty value stays visible to the native reader.</summary>
+    public IntPtr Utf8OrEmpty(string? text)
+    {
+        if (string.IsNullOrEmpty(text))
+        {
+            var at = Alloc(1);
+            at[0] = 0;
+            return (IntPtr)at;
+        }
+        return Utf8(text);
     }
 
     /// <summary>A NUL-terminated UTF-8 copy, or NULL for an absent value.</summary>

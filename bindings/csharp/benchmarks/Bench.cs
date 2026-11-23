@@ -111,8 +111,8 @@ for (var tier = 0; tier < cases.Length; tier++)
         continue;
     }
 
-    // The pure-C# core arm's native object (its own tree, built before the
-    // timer, like the tree arm's handle). No native library is involved.
+    // The pure-C# core arm's native object: the plain object (proto field
+    // names), converted and encoded per call. No native library is involved.
     var coreNative = CCore.New(n);
     if (!CCore.Marshal(coreNative).SequenceEqual(reference))
     {

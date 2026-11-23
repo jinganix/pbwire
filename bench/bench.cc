@@ -1350,6 +1350,22 @@ bench_case(const char *label, int repeated, int iterations,
     bench::Msg gen_msg;
     fill_gen(&gen_msg, repeated);
 
+    /* The tree arm's full task, gated before it is timed: a fresh per-field
+     * build must match the reference too (not just a held tree), and the
+     * timer covers build + encode with alloc/free inside. */
+    {
+        pbw_message *fresh = pbw_message_new(desc);
+        std::string fresh_bytes;
+
+        fill_pbw(fresh, repeated);
+        fresh_bytes = pbw_bytes_of(desc, fresh);
+        pbw_message_free(fresh);
+        if (fresh_bytes != ref) {
+            fail("fresh-build tree bytes differ");
+            return;
+        }
+    }
+
     pbw_message *pbw_msg = pbw_message_new(desc);
     fill_pbw(pbw_msg, repeated);
 
@@ -1366,12 +1382,18 @@ bench_case(const char *label, int repeated, int iterations,
     std::vector<Row> rows;
     int iters = 0;
 
+    /* Tree encode rows build a fresh tree per iteration (the full task:
+     * alloc, fill, encode, free inside the timer). The held-tree re-encode
+     * below is the proxy row: same-run timing only, never the headline. */
     rows.push_back({"pbwire", "encode", time_it([&] {
+                        pbw_message *m = pbw_message_new(desc);
                         uint8_t *buf = nullptr;
                         size_t len = 0;
-                        pbw_encode(pbw_msg, &buf, &len);
+                        fill_pbw(m, repeated);
+                        pbw_encode(m, &buf, &len);
                         encoded_len = len;
                         pbw_free(buf);
+                        pbw_message_free(m);
                     },
                                                 iterations, &iters),
                     ref.size()});
@@ -1393,12 +1415,37 @@ bench_case(const char *label, int repeated, int iterations,
                     ref.size()});
 
     rows.push_back({"pbwire c", "encode", time_it([&] {
+                        pbw_message *m = pbw_message_new(desc);
+                        const uint8_t *out = nullptr;
+                        size_t len = 0;
+                        fill_pbw(m, repeated);
+                        pbw_encode_ctx(ctx, m, &out, &len);
+                        encoded_len = len;
+                        pbw_message_free(m);
+                    },
+                                                  iterations),
+                    ref.size()});
+
+    /* Proxy rows: the old prebuilt task, relabelled. Re-encoding a held tree
+     * measures the encoder alone, not the user-visible build + encode task,
+     * so these stay published but unheadlined. */
+    rows.push_back({"pbwire proxy", "encode", time_it([&] {
+                        uint8_t *buf = nullptr;
+                        size_t len = 0;
+                        pbw_encode(pbw_msg, &buf, &len);
+                        encoded_len = len;
+                        pbw_free(buf);
+                    },
+                                                      iterations),
+                    ref.size()});
+
+    rows.push_back({"pbwire c proxy", "encode", time_it([&] {
                         const uint8_t *out = nullptr;
                         size_t len = 0;
                         pbw_encode_ctx(ctx, pbw_msg, &out, &len);
                         encoded_len = len;
                     },
-                                                  iterations),
+                                                        iterations),
                     ref.size()});
 
     /* Decode rows sink only the status: every implementation must produce it,
@@ -1916,14 +1963,18 @@ bench_threads(const char *label, int repeated, int iterations, pbw_descriptor *d
     rows.push_back({"pb gen", "decode", 0, 0});
     int iters = 0;
 
-    /* encode: one read-only message per thread, encoded into its own buffer */
+    /* encode: one read-only message per thread is the old prebuilt task; the
+     * tree arm builds its message fresh per iteration instead, so the timer
+     * covers the same build + encode task as the single-threaded row. */
     {
         auto setup = [&](int) {
             auto ctx = std::shared_ptr<pbw_ctx>(pbw_ctx_new(), pbw_ctx_free);
-            auto msg = std::shared_ptr<pbw_message>(pbw_message_new(desc), pbw_message_free);
 
-            fill_pbw(msg.get(), repeated);
-            return [ctx, msg](int) {
+            return [ctx, desc, repeated](int) {
+                auto msg = std::shared_ptr<pbw_message>(
+                    pbw_message_new(desc), pbw_message_free);
+
+                fill_pbw(msg.get(), repeated);
                 const uint8_t *out = nullptr;
                 size_t len = 0;
                 (void)pbw_encode_ctx(ctx.get(), msg.get(), &out, &len);

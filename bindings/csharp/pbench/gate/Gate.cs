@@ -8,8 +8,9 @@ extern alias Oracle;
 //   shim  the generated model as the native object: Scalars3Layout.Marshal /
 //         .Unmarshal, one call per op (see the README for the deviation: the
 //         core has no offset reader, so the walk is the model's shipped one)
-//   core  the pure-C# core (Pbwire.Core): CCore.New/Marshal/Unmarshal, no
-//         native library at all
+//   core  the pure-C# core (Pbwire.Core): CCore.New/Marshal/Unmarshal over a
+//         plain object (proto field names, long/ulong for 64-bit), no native
+//         library at all
 //
 //   dotnet run --project gate -c Release            gate, exit 0 or 1
 //   dotnet run --project gate -c Release -- compare compare table after the gate
@@ -17,7 +18,6 @@ extern alias Oracle;
 using System.Diagnostics;
 using Google.Protobuf;
 using Pbwire;
-using Msg = Pbwire.Core.Msg;
 using Pbwire.Pbench;
 using Structtest;
 using Official = Oracle::Structtest;
@@ -138,20 +138,20 @@ for (var tier = 0; tier < cases.Length; tier++)
     }
 
     var coreBack = CCore.Unmarshal(reference);
-    var coreNums = (object?[]?)coreBack.Get("nums") ?? [];
-    var coreInnerBack = coreBack.Get("inner") as Msg;
+    var coreNums = (object?[]?)coreBack.GetValueOrDefault("nums") ?? [];
+    var coreInnerBack = coreBack.GetValueOrDefault("inner") as Dictionary<string, object?>;
     var coreOk = CCore.Marshal(coreBack).SequenceEqual(reference)
-        && coreBack.Get("str") is "hello"
-        && coreInnerBack?.Get("name") is "kid"
-        && coreInnerBack?.Get("value") is 42
+        && coreBack.GetValueOrDefault("str") is "hello"
+        && coreInnerBack?.GetValueOrDefault("name") is "kid"
+        && coreInnerBack?.GetValueOrDefault("value") is 42
         && coreNums.Length == n
         && (n == 0 || (int)coreNums[n - 1]! == n - 4)
-        && ((object?[]?)coreBack.Get("tags") ?? []).Length == n
-        && ((object?[]?)coreBack.Get("flags") ?? []).Length == n
-        && coreBack.Has("opt_i32") && coreBack.Get("opt_i32") is -7
-        && coreBack.Has("opt_str") && coreBack.Get("opt_str") is "opt"
-        && coreBack.Get("u64") is ulong.MaxValue
-        && coreBack.Get("color") is 2;
+        && ((object?[]?)coreBack.GetValueOrDefault("tags") ?? []).Length == n
+        && ((object?[]?)coreBack.GetValueOrDefault("flags") ?? []).Length == n
+        && coreBack.GetValueOrDefault("opt_i32") is -7
+        && coreBack.GetValueOrDefault("opt_str") is "opt"
+        && coreBack.GetValueOrDefault("u64") is ulong.MaxValue
+        && coreBack.GetValueOrDefault("color") is 2;
     if (!coreOk)
     {
         Fail(label, "core decode differs");

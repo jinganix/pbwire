@@ -9,6 +9,7 @@ namespace Tutorial {
 
     public static class PbwireFile_Addressbook {
         private static volatile Schema? _schema;
+        private static volatile Schema? _embedded;
         private static readonly object _lock = new object();
 
         static PbwireFile_Addressbook() { Init(); }
@@ -18,11 +19,15 @@ namespace Tutorial {
             if (_schema == null) {
                 lock (_lock) {
                     if (_schema == null) {
-                        _schema = Schema.FromBytes(Convert.FromBase64String(DescBase64()));
+                        _embedded ??= Schema.FromBytes(Convert.FromBase64String(DescBase64()));
+                        _schema = _embedded;
                     }
                 }
             }
         }
+
+        /// <summary>Whether the embedded set is active: only then do models take the flat-image reader.</summary>
+        internal static bool IsEmbedded => _schema != null && ReferenceEquals(_schema, _embedded);
 
         /// <summary>Registers an externally loaded schema: models encode/decode through it instead of the embedded set. The caller owns it; null restores the embedded set (call Init to reload).</summary>
         public static void UseSchema(Schema? s) {

@@ -95,7 +95,9 @@ namespace Spectest {
         public override string ToString() {
             return "Oneof1 {{ " + "Name = " + Name + ", " + "kind = " + KindCase + " }}";
         }
-        public byte[] ToByteArray() {
+        /// <summary>One native call over the flat image (the promoted shim arm); the per-field path while an external schema is registered.</summary>
+        public byte[] ToByteArray() => PbwireFile_Oneof1.IsEmbedded ? Oneof1Layout.Marshal(this) : EncodeViaHandle();
+        private byte[] EncodeViaHandle() {
             using Pbwire.Message msg = PbwireFile_Oneof1.Schema.Message("spectest.Oneof1").NewMessage();
             EncodeInto(msg);
             return msg.Encode();
@@ -110,6 +112,7 @@ namespace Spectest {
         }
         public int CalculateSize() => ToByteArray().Length;
          internal void MergeFromBytes(byte[] wire) {
+            if (PbwireFile_Oneof1.IsEmbedded) { MergeFrom(Oneof1Layout.Unmarshal(wire)); return; }
             using Pbwire.Message msg = PbwireFile_Oneof1.Schema.Message("spectest.Oneof1").Decode(wire);
             LoadFrom(msg);
         }
@@ -154,7 +157,7 @@ namespace Spectest {
             *(IntPtr*)(img + 8) = Name.Length == 0 ? IntPtr.Zero : arena.Utf8(Name);
             *(int*)(img + 0) = (int)(Num);
             *(uint*)(img + 32) = (uint)KindCase;
-            *(IntPtr*)(img + 16) = Text.Length == 0 ? IntPtr.Zero : arena.Utf8(Text);
+            *(IntPtr*)(img + 16) = arena.Utf8OrEmpty(Text);
             *(uint*)(img + 32) = (uint)KindCase;
             *(IntPtr*)(img + 24) = Inner == null ? IntPtr.Zero : (IntPtr)Inner.NewImage(arena);
             *(uint*)(img + 32) = (uint)KindCase;
@@ -221,7 +224,9 @@ namespace Spectest {
             /// <summary>One call per op: wire bytes in, native object out. The block carries the decoded image's strings, bytes and sub-images.</summary>
             public static unsafe Oneof1 Unmarshal(byte[] wire)
             {
-                using var call = global::Pbwire.ImageCall.Rent(ImageBytes, wire.Length * 4 + 65536);
+                // Decode arena: every sub-message image now carries presence words (1.5x worst-case growth),
+                // so the wire-proportional headroom tracks that factor; status 2 names this formula.
+                using var call = global::Pbwire.ImageCall.Rent(ImageBytes, wire.Length * 6 + 65536);
                 Plan.Decode(wire, call.Image, call.DecodeArena, call.DecodeArenaBytes);
                 var native = new Oneof1();
                 native.ReadImage(call.Image);
@@ -257,7 +262,9 @@ namespace Spectest {
                 public override string ToString() {
                     return "Inner {{ " + "V = " + V + " }}";
                 }
-                public byte[] ToByteArray() {
+                /// <summary>One native call over the flat image (the promoted shim arm); the per-field path while an external schema is registered.</summary>
+                public byte[] ToByteArray() => PbwireFile_Oneof1.IsEmbedded ? InnerLayout.Marshal(this) : EncodeViaHandle();
+                private byte[] EncodeViaHandle() {
                     using Pbwire.Message msg = PbwireFile_Oneof1.Schema.Message("spectest.Oneof1.Inner").NewMessage();
                     EncodeInto(msg);
                     return msg.Encode();
@@ -272,6 +279,7 @@ namespace Spectest {
                 }
                 public int CalculateSize() => ToByteArray().Length;
                  internal void MergeFromBytes(byte[] wire) {
+                    if (PbwireFile_Oneof1.IsEmbedded) { MergeFrom(InnerLayout.Unmarshal(wire)); return; }
                     using Pbwire.Message msg = PbwireFile_Oneof1.Schema.Message("spectest.Oneof1.Inner").Decode(wire);
                     LoadFrom(msg);
                 }
@@ -294,6 +302,7 @@ namespace Spectest {
                 public const int ImageBytes = 8;
                 /// <summary>Copies this native object into a zeroed flat image; strings, bytes and sub-images come from <paramref name="arena"/>.</summary>
                 public unsafe void WriteImage(byte* img, global::Pbwire.ImageArena arena) {
+                    *(int*)(img + 4) = V != 0 ? 1 : 0;
                     *(int*)(img + 0) = (int)(V);
                 }
 
@@ -320,7 +329,7 @@ namespace Spectest {
                         .FieldAt("v", 0, 4);
                     /// <summary>One row per field, with the presence/count/oneof words and wire facts the C layout codec reads.</summary>
                     public static readonly global::Pbwire.LayoutRow[] Rows = {
-                        new(1, global::Pbwire.FlatKind.Int32, 0, 5),
+                        new(1, global::Pbwire.FlatKind.Int32, 0, 5, Has: 4),
                     };
                     /// <summary>This message's image, as the file's layout source sees it.</summary>
                     public static readonly global::Pbwire.LayoutType Spec = new("spectest.Oneof1.Inner", ImageBytes, Rows);
@@ -337,7 +346,9 @@ namespace Spectest {
                     /// <summary>One call per op: wire bytes in, native object out. The block carries the decoded image's strings, bytes and sub-images.</summary>
                     public static unsafe Inner Unmarshal(byte[] wire)
                     {
-                        using var call = global::Pbwire.ImageCall.Rent(ImageBytes, wire.Length * 4 + 65536);
+                        // Decode arena: every sub-message image now carries presence words (1.5x worst-case growth),
+                        // so the wire-proportional headroom tracks that factor; status 2 names this formula.
+                        using var call = global::Pbwire.ImageCall.Rent(ImageBytes, wire.Length * 6 + 65536);
                         Plan.Decode(wire, call.Image, call.DecodeArena, call.DecodeArenaBytes);
                         var native = new Inner();
                         native.ReadImage(call.Image);

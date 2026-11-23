@@ -101,6 +101,9 @@ func writeCsharpHolder(b *strings.Builder, f *model.File, opt Options, holder st
 	}
 	b.WriteString("    public static class " + holder + " {\n")
 	b.WriteString("        private static volatile Schema? _schema;\n")
+	if !opt.NoLayout {
+		b.WriteString("        private static volatile Schema? _embedded;\n")
+	}
 	b.WriteString("        private static readonly object _lock = new object();\n\n")
 	if opt.Register {
 		fmt.Fprintf(b, "        static %s() { Init(); }\n\n", holder)
@@ -110,11 +113,20 @@ func writeCsharpHolder(b *strings.Builder, f *model.File, opt Options, holder st
 	b.WriteString("            if (_schema == null) {\n")
 	b.WriteString("                lock (_lock) {\n")
 	b.WriteString("                    if (_schema == null) {\n")
-	b.WriteString("                        _schema = Schema.FromBytes(Convert.FromBase64String(DescBase64()));\n")
+	if !opt.NoLayout {
+		b.WriteString("                        _embedded ??= Schema.FromBytes(Convert.FromBase64String(DescBase64()));\n")
+		b.WriteString("                        _schema = _embedded;\n")
+	} else {
+		b.WriteString("                        _schema ??= Schema.FromBytes(Convert.FromBase64String(DescBase64()));\n")
+	}
 	b.WriteString("                    }\n")
 	b.WriteString("                }\n")
 	b.WriteString("            }\n")
 	b.WriteString("        }\n\n")
+	if !opt.NoLayout {
+		b.WriteString("        /// <summary>Whether the embedded set is active: only then do models take the flat-image reader.</summary>\n")
+		b.WriteString("        internal static bool IsEmbedded => _schema != null && ReferenceEquals(_schema, _embedded);\n\n")
+	}
 	b.WriteString("        /// <summary>Registers an externally loaded schema: models encode/decode through it instead of the embedded set. The caller owns it; null restores the embedded set (call Init to reload).</summary>\n")
 	b.WriteString("        public static void UseSchema(Schema? s) {\n")
 	b.WriteString("            lock (_lock) { _schema = s; }\n")
@@ -586,10 +598,13 @@ func csSlots(m *model.Message) (slots []csSlot, total, presenceBits int) {
 		if field.Oneof != "" {
 			continue
 		}
-		if (field.NeedsHas || field.Required) &&
+		// Every singular scalar gets a presence word: the C layout codec
+		// emits a slot with no word unconditionally, so without one an
+		// implicit-presence zero (proto3 `i32 = 0`) would hit the wire.
+		// Strings/bytes/messages keep NULL as the absence signal.
+		if field.Message == "" &&
 			field.Kind != protoreflect.StringKind &&
-			field.Kind != protoreflect.BytesKind &&
-			field.Message == "" {
+			field.Kind != protoreflect.BytesKind {
 			slot.hasOff = alloc(4)
 		}
 	}
@@ -691,7 +706,9 @@ func writeCsharpLayout(b *strings.Builder, f *model.File, n *csNode, indent, hol
 	fmt.Fprintf(b, "%s    return Plan.Encode(call.Image);\n%s}\n", in, in)
 	fmt.Fprintf(b, "%s/// <summary>One call per op: wire bytes in, native object out. The block carries the decoded image's strings, bytes and sub-images.</summary>\n", in)
 	fmt.Fprintf(b, "%spublic static unsafe %s Unmarshal(byte[] wire)\n%s{\n", in, n.self, in)
-	fmt.Fprintf(b, "%s    using var call = global::Pbwire.ImageCall.Rent(ImageBytes, wire.Length * 4 + 65536);\n", in)
+	fmt.Fprintf(b, "%s    // Decode arena: every sub-message image now carries presence words (1.5x worst-case growth),\n", in)
+	fmt.Fprintf(b, "%s    // so the wire-proportional headroom tracks that factor; status 2 names this formula.\n", in)
+	fmt.Fprintf(b, "%s    using var call = global::Pbwire.ImageCall.Rent(ImageBytes, wire.Length * 6 + 65536);\n", in)
 	fmt.Fprintf(b, "%s    Plan.Decode(wire, call.Image, call.DecodeArena, call.DecodeArenaBytes);\n", in)
 	fmt.Fprintf(b, "%s    var native = new %s();\n", in, n.self)
 	fmt.Fprintf(b, "%s    native.ReadImage(call.Image);\n", in)
@@ -848,9 +865,15 @@ func writeCsharpImage(b *strings.Builder, f *model.File, n *csNode, indent strin
 			// Written unconditionally: the codec reads only the member the case
 			// word selects, and a stale value beyond the case is never wire content.
 		} else if slot.hasOff != 0 {
+			// The word mirrors the per-field path's skip condition, so the
+			// image encodes exactly what ToByteArray used to: has-bits for
+			// proto3 optionals, unconditional for required, value presence
+			// (`p != 0`) for implicit-presence scalars.
 			cond := "1"
 			if field.NeedsHas && !field.Required {
 				cond = "Has" + csProp(field) + " ? 1 : 0"
+			} else if !field.Required {
+				cond = csEncodeCond(field, prop) + " ? 1 : 0"
 			}
 			fmt.Fprintf(b, "%s    *(int*)(img + %d) = %s;\n", indent, slot.hasOff, cond)
 		}
@@ -871,10 +894,33 @@ func writeCsharpImage(b *strings.Builder, f *model.File, n *csNode, indent strin
 		case field.Message != "":
 			fmt.Fprintf(b, "%s    *(IntPtr*)(img + %s) = %s == null ? IntPtr.Zero : (IntPtr)%s.NewImage(arena);\n", indent, off, prop, prop)
 		case field.Kind == protoreflect.StringKind:
-			fmt.Fprintf(b, "%s    *(IntPtr*)(img + %s) = %s.Length == 0 ? IntPtr.Zero : arena.Utf8(%s);\n", indent, off, prop, prop)
+			// NULL is the absence signal, so a value the wire must keep
+			// (required, has-bit set, or the selected oneof member) always
+			// materialises, even when empty; Utf8OrEmpty never returns NULL.
+			switch {
+			case slot.oneof:
+				fmt.Fprintf(b, "%s    *(IntPtr*)(img + %s) = arena.Utf8OrEmpty(%s);\n", indent, off, prop)
+			case field.NeedsHas && !field.Required:
+				fmt.Fprintf(b, "%s    *(IntPtr*)(img + %s) = Has%s ? arena.Utf8OrEmpty(%s) : IntPtr.Zero;\n", indent, off, prop, prop)
+			case field.Required:
+				fmt.Fprintf(b, "%s    *(IntPtr*)(img + %s) = arena.Utf8OrEmpty(%s);\n", indent, off, prop)
+			default:
+				fmt.Fprintf(b, "%s    *(IntPtr*)(img + %s) = %s.Length == 0 ? IntPtr.Zero : arena.Utf8(%s);\n", indent, off, prop, prop)
+			}
 		case field.Kind == protoreflect.BytesKind:
-			fmt.Fprintf(b, "%s    {\n%s        var b = %s.Span;\n", indent, indent, prop)
-			fmt.Fprintf(b, "%s        var p = b.Length == 0 ? IntPtr.Zero : arena.Copy(b);\n", indent)
+			// arena.Copy is already non-NULL for empty input; the same
+			// absence rule as strings, over the span.
+			ptr := fmt.Sprintf("%s.Span", prop)
+			switch {
+			case slot.oneof:
+				fmt.Fprintf(b, "%s    {\n%s        var b = %s;\n%s        var p = arena.Copy(b);\n", indent, indent, ptr, indent)
+			case field.NeedsHas && !field.Required:
+				fmt.Fprintf(b, "%s    {\n%s        var b = %s;\n%s        var p = Has%s ? arena.Copy(b) : IntPtr.Zero;\n", indent, indent, ptr, indent, prop)
+			case field.Required:
+				fmt.Fprintf(b, "%s    {\n%s        var b = %s;\n%s        var p = arena.Copy(b);\n", indent, indent, ptr, indent)
+			default:
+				fmt.Fprintf(b, "%s    {\n%s        var b = %s;\n%s        var p = b.Length == 0 ? IntPtr.Zero : arena.Copy(b);\n", indent, indent, ptr, indent)
+			}
 			fmt.Fprintf(b, "%s        *(IntPtr*)(img + %s) = p;\n%s        *(nuint*)(img + %d) = (nuint)b.Length;\n%s    }\n", indent, off, indent, slot.offset+8, indent)
 		default:
 			csWriteScalar(b, indent+"    ", "img + "+off, prop, field)
@@ -916,7 +962,7 @@ func writeCsharpImage(b *strings.Builder, f *model.File, n *csNode, indent strin
 		case field.Repeated:
 			fmt.Fprintf(b, "%s%s.Clear();\n", inner, prop)
 			fmt.Fprintf(b, "%svar n%s = (int)(*(nuint*)(img + %d));\n", inner, csProp(field), slot.countOff)
-			fmt.Fprintf(b, "%sif (n%s != 0) {\n%s    var p = *(byte**)(img + %s);\n", inner, csProp(field), inner, off)
+			fmt.Fprintf(b, "%sif (n%s != 0) {\n%s    if (%s.Capacity < n%s) %s.Capacity = n%s;\n%s    var p = *(byte**)(img + %s);\n", inner, csProp(field), inner, prop, csProp(field), prop, csProp(field), inner, off)
 			writeCsharpElemRead(b, inner+"    ", field, f, cur, byName)
 			fmt.Fprintf(b, "%s}\n", inner)
 		case field.Message != "":
@@ -924,6 +970,14 @@ func writeCsharpImage(b *strings.Builder, f *model.File, n *csNode, indent strin
 			fmt.Fprintf(b, "%s%s{\n%s    var p = *(byte**)(img + %s);\n", inner, guard, inner, off)
 			fmt.Fprintf(b, "%s    if (p != null) { var c = new %s(); c.ReadImage(p); %s = c; }\n%s}\n", inner, child, prop, inner)
 		case field.Kind == protoreflect.StringKind:
+			// An unconditional property set would trip the has-bit setter,
+			// so an absent optional clears instead of assigning null.
+			if field.NeedsHas && !field.Required {
+				fmt.Fprintf(b, "%s{\n%s    var p = *(IntPtr*)(img + %s);\n", inner, inner, off)
+				fmt.Fprintf(b, "%s    if (p == IntPtr.Zero) { Clear%s(); }\n", inner, prop)
+				fmt.Fprintf(b, "%s    else { %s = global::System.Runtime.InteropServices.Marshal.PtrToStringUTF8(p) ?? \"\"; }\n%s}\n", inner, prop, inner)
+				break
+			}
 			fmt.Fprintf(b, "%s%s{\n%s    var p = *(IntPtr*)(img + %s);\n", inner, guard, inner, off)
 			empty := "\"\""
 			if field.NeedsHas || field.Required {
@@ -933,6 +987,11 @@ func writeCsharpImage(b *strings.Builder, f *model.File, n *csNode, indent strin
 		case field.Kind == protoreflect.BytesKind:
 			fmt.Fprintf(b, "%s%s{\n%s    var p = *(byte**)(img + %s);\n", inner, guard, inner, off)
 			fmt.Fprintf(b, "%s    var len = (int)(*(nuint*)(img + %d));\n", inner, slot.offset+8)
+			if field.NeedsHas && !field.Required {
+				fmt.Fprintf(b, "%s    if (p == null) { Clear%s(); }\n", inner, prop)
+				fmt.Fprintf(b, "%s    else { %s = global::Google.Protobuf.ByteString.CopyFrom(new ReadOnlySpan<byte>(p, len)); }\n%s}\n", inner, prop, inner)
+				break
+			}
 			fmt.Fprintf(b, "%s    if (p != null) { %s = global::Google.Protobuf.ByteString.CopyFrom(new ReadOnlySpan<byte>(p, len)); }\n%s}\n", inner, prop, inner)
 		default:
 			expr := csReadScalar(field, "img + "+off)
@@ -1101,7 +1160,7 @@ func writeCsharpMessage(b *strings.Builder, f *model.File, n *csNode, indent str
 	for _, o := range oneofs {
 		writeCsharpOneof(b, f, n, o, sub, curobj, byLocal)
 	}
-	writeCsharpCodec(b, f, n, sub, curobj, byLocal, holder, parser)
+	writeCsharpCodec(b, f, n, sub, curobj, byLocal, holder, parser, layout)
 	if layout {
 		writeCsharpLayout(b, f, n, sub, holder)
 	}
@@ -1270,9 +1329,13 @@ func csOneofDefault(field model.Field) string {
 	}
 }
 
-func writeCsharpCodec(b *strings.Builder, f *model.File, n *csNode, indent string, cur []string, byLocal map[string]*csNode, holder, parser string) {
+func writeCsharpCodec(b *strings.Builder, f *model.File, n *csNode, indent string, cur []string, byLocal map[string]*csNode, holder, parser string, layout bool) {
 	m := n.msg
 	full := m.Full
+	// The shipped entries: a message with a flat layout encodes/decodes in
+	// one native call over the image (the promoted shim arm); without one it
+	// keeps the per-field handle path. EncodeInto/LoadFrom stay for Run and
+	// the no-layout fallback.
 	for i := 0; i < csHasBits(m); i++ {
 		fmt.Fprintf(b, "%sprivate int _hasBits%d;\n", indent, i)
 	}
@@ -1346,10 +1409,22 @@ func writeCsharpCodec(b *strings.Builder, f *model.File, n *csNode, indent strin
 		fmt.Fprintf(b, "%s    return \"%s {{ \" + %s + \" }}\";\n", indent, n.self, strings.Join(parts, " + \", \" + "))
 	}
 	fmt.Fprintf(b, "%s}\n", indent)
-	fmt.Fprintf(b, "%spublic byte[] ToByteArray() {\n", indent)
-	fmt.Fprintf(b, "%s    using Pbwire.Message msg = "+holder+".Schema.Message(%q).NewMessage();\n", indent, full)
-	fmt.Fprintf(b, "%s    EncodeInto(msg);\n", indent)
-	fmt.Fprintf(b, "%s    return msg.Encode();\n%s}\n", indent, indent)
+	if layout && csLayoutOK(m) {
+		// The promoted shim arm, with a fallback: an externally registered
+		// schema (UseSchema) keeps the per-field handle path, which reads the
+		// override; the image reader is compiled from the embedded set.
+		fmt.Fprintf(b, "%s/// <summary>One native call over the flat image (the promoted shim arm); the per-field path while an external schema is registered.</summary>\n", indent)
+		fmt.Fprintf(b, "%spublic byte[] ToByteArray() => "+holder+".IsEmbedded ? %sLayout.Marshal(this) : EncodeViaHandle();\n", indent, n.self)
+		fmt.Fprintf(b, "%sprivate byte[] EncodeViaHandle() {\n", indent)
+		fmt.Fprintf(b, "%s    using Pbwire.Message msg = "+holder+".Schema.Message(%q).NewMessage();\n", indent, full)
+		fmt.Fprintf(b, "%s    EncodeInto(msg);\n", indent)
+		fmt.Fprintf(b, "%s    return msg.Encode();\n%s}\n", indent, indent)
+	} else {
+		fmt.Fprintf(b, "%spublic byte[] ToByteArray() {\n", indent)
+		fmt.Fprintf(b, "%s    using Pbwire.Message msg = "+holder+".Schema.Message(%q).NewMessage();\n", indent, full)
+		fmt.Fprintf(b, "%s    EncodeInto(msg);\n", indent)
+		fmt.Fprintf(b, "%s    return msg.Encode();\n%s}\n", indent, indent)
+	}
 	fmt.Fprintf(b, "%spublic ByteString ToByteString() => ByteString.CopyFrom(ToByteArray());\n", indent)
 	fmt.Fprintf(b, "%spublic void WriteTo(CodedOutputStream output) {\n", indent)
 	fmt.Fprintf(b, "%s    // No raw-bytes sink in 3.36: chunk through WriteRawTag.\n", indent)
@@ -1359,9 +1434,16 @@ func writeCsharpCodec(b *strings.Builder, f *model.File, n *csNode, indent strin
 	fmt.Fprintf(b, "%s    for (; i < bytes.Length; i++) { output.WriteRawTag(bytes[i]); }\n", indent)
 	fmt.Fprintf(b, "%s}\n", indent)
 	fmt.Fprintf(b, "%spublic int CalculateSize() => ToByteArray().Length;\n", indent)
-	fmt.Fprintf(b, "%s internal void MergeFromBytes(byte[] wire) {\n", indent)
-	fmt.Fprintf(b, "%s    using Pbwire.Message msg = "+holder+".Schema.Message(%q).Decode(wire);\n", indent, full)
-	fmt.Fprintf(b, "%s    LoadFrom(msg);\n%s}\n", indent, indent)
+	if layout && csLayoutOK(m) {
+		fmt.Fprintf(b, "%s internal void MergeFromBytes(byte[] wire) {\n", indent)
+		fmt.Fprintf(b, "%s    if ("+holder+".IsEmbedded) { MergeFrom(%sLayout.Unmarshal(wire)); return; }\n", indent, n.self)
+		fmt.Fprintf(b, "%s    using Pbwire.Message msg = "+holder+".Schema.Message(%q).Decode(wire);\n", indent, full)
+		fmt.Fprintf(b, "%s    LoadFrom(msg);\n%s}\n", indent, indent)
+	} else {
+		fmt.Fprintf(b, "%s internal void MergeFromBytes(byte[] wire) {\n", indent)
+		fmt.Fprintf(b, "%s    using Pbwire.Message msg = "+holder+".Schema.Message(%q).Decode(wire);\n", indent, full)
+		fmt.Fprintf(b, "%s    LoadFrom(msg);\n%s}\n", indent, indent)
+	}
 	fmt.Fprintf(b, "%s/// <summary>The native-object entry: one call per op over the shipped converter.</summary>\n", indent)
 	fmt.Fprintf(b, "%svoid Pbwire.INativeModel.WriteTo(Pbwire.Message msg) { EncodeInto(msg); }\n", indent)
 	fmt.Fprintf(b, "%svoid Pbwire.INativeModel.ReadFrom(Pbwire.Message msg) { LoadFrom(msg); }\n", indent)

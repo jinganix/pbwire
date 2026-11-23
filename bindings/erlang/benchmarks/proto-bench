@@ -107,9 +107,12 @@ run_case(Label, Repeats, Want, Backends) ->
     check_size(Label, byte_size(Ref), Want),
     [check_parity(Label, Name, Encode, Decode, Msg, Ref)
      || {Name, Encode, Decode} <- Backends],
+    %% Native-in: every encode iteration builds a fresh gpb record inside
+    %% the timed closure (no prebuilt tree before the timer); decode input
+    %% is the pinned wire bytes, output a fresh record per iteration.
     Ops = lists:flatmap(
             fun({Name, Encode, Decode}) ->
-                    [{Name, "encode", fun() -> Encode(Msg) end},
+                    [{Name, "encode", fun() -> Encode(scalars3(Repeats)) end},
                      {Name, "decode", fun() -> Decode(Ref) end}]
             end, Backends),
     Iterations = iterations([Op || {_, _, Op} <- Ops], 1),
@@ -133,9 +136,36 @@ check_size(Label, Got, Want) ->
 %% bytes: a speed number from a wrong codec is meaningless.
 check_parity(Label, Name, Encode, Decode, Msg, Ref) ->
     check_bytes(Label, Name, "encode", Encode(Msg), Ref),
-    check_bytes(Label, Name, "decode/re-encode", Encode(Decode(Ref)), Ref),
+    Decoded = Decode(Ref),
+    check_bytes(Label, Name, "decode/re-encode", Encode(Decoded), Ref),
+    check_fields(Label, Name, Decoded, Msg),
     io:format("OK   ~s: ~s encode/decode parity (~w bytes)~n",
               [Label, impl(Name), byte_size(Ref)]).
+
+%% Field-by-field gate beyond byte equality: the decoded record must match
+%% the input record position by position; the first mismatch reports which
+%% field index diverged.
+check_fields(Label, Name, Got, Want) ->
+    check_each(Label, Name,
+               tuple_to_list(norm(Want)), tuple_to_list(norm(Got)), 1).
+
+%% pbwire decodes strings as binaries, gpb as lists: normalize binaries so
+%% the gate compares field values, not string containers.
+norm(B) when is_binary(B) -> binary_to_list(B);
+norm(T) when is_tuple(T) -> list_to_tuple([norm(E) || E <- tuple_to_list(T)]);
+norm(L) when is_list(L) -> [norm(E) || E <- L];
+norm(X) -> X.
+
+check_each(_Label, _Name, [], [], _Pos) -> ok;
+check_each(Label, Name, [W | Ws], [G | Gs], Pos) ->
+    case W =:= G of
+        true -> check_each(Label, Name, Ws, Gs, Pos + 1);
+        false -> fail(Label, io_lib:format("~s field ~w differs: ~P vs ~P",
+                                           [impl(Name), Pos, W, 10, G, 10]))
+    end;
+check_each(Label, Name, _, _, Pos) ->
+    fail(Label, io_lib:format("~s record arity differs at field ~w",
+                              [impl(Name), Pos])).
 
 iterations(Ops, N) ->
     Slowest = lists:max([run(Op, N) || Op <- Ops]),

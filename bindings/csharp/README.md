@@ -108,7 +108,8 @@ byte[] again = ty.Encode(back);                // byte-exact round trip
 ```
 
 `ty.DecodeObject(wire)` / `ty.EncodeObject(dict)` are the plain-object forms the
-pbench `core` arm times. Scope is the binary codec and the same subset the C
+pbench `core` arm times (prebuilt plain object in, conversion plus codec per
+call -- the honest full task, not a prebuilt tree). Scope is the binary codec and the same subset the C
 core owns: descriptor reader, encode, decode with unknown retention, groups,
 packed runs, oneof, presence, proto2 required fields, depth/size limits, strict
 tags and lengths, UTF-8 validation on proto3 strings. There is no JSON or text
@@ -120,9 +121,10 @@ decoded off the wire stay slices of the input until read.
 `make conformance-csharp` runs the official binary suite through it: 1412
 successes, 1403 skipped (JSON/text input and output), 2 expected failures, 0
 unexpected, same failure set as the C core. Numbers: `BENCHMARKS.md` and
-`pbench/README.md`; it beats Google.Protobuf's generated codec on every encode
-tier and loses the two large decodes to the boxed tree, so it is the
-no-toolchain arm, not the shipped fast path.
+`pbench/README.md`; the honest full-task row trails the generated codec on
+most cells (small-encode 0.67x/0.71x is its best) because every op converts
+the plain object into the boxed tree and back, so it is the no-toolchain
+arm, not the shipped fast path.
 
 ## Ownership and threads
 
