@@ -327,4 +327,115 @@ defmodule PbwireTest do
   after
     Pbwire.load_schema(@mods, max_depth: 0)
   end
+
+  # Threading proof: 8 streams x 200 iters x three phases, mirroring the
+  # other bindings' shape over the matrix3 oracle (test/gen/matrix3.ex):
+  #
+  #   (a) independent-struct encode == want bytes,
+  #   (b) SHARED read-only struct concurrent encode == want bytes,
+  #   (c) fresh-target decode of want with field checks (NOT re-encode).
+  #
+  # Processes share nothing mutable: the schema is loaded once up front
+  # (specs in :persistent_term, the NIF cache read-locked per the Erlang
+  # binding's guarantee), each encode builds a fresh tuple and returns fresh
+  # binaries, and Elixir structs are immutable values. BEAM processes have
+  # separate heaps, so per-worker ownership holds by construction. Timing
+  # prints only, never asserted; failures name worker+phase.
+  test "concurrent encode/decode over the matrix3 oracle" do
+    alias Structtest.{Inner3, Scalars3}
+    alias Structtest.Matrix3.Registry
+
+    :ok = Pbwire.load_schema(Registry.message_modules())
+    reference = File.read!(Path.join([__DIR__, "..", "..", "c", "tests", "data", "matrix3.bin"]))
+
+    build = fn ->
+      %Scalars3{
+        i32: -2_147_483_648,
+        i64: 9_223_372_036_854_775_807,
+        u32: 4_294_967_295,
+        u64: 18_446_744_073_709_551_615,
+        s32: -2_147_483_648,
+        s64: -9_223_372_036_854_775_808,
+        fx32: 0xDEADBEEF,
+        fx64: 72_623_859_790_382_856,
+        sfx32: -2_147_483_648,
+        sfx64: -9_223_372_036_854_775_808,
+        f32: :infinity,
+        f64: -123_456.789,
+        flag: true,
+        str: "hello",
+        color: :COLOR3_GREEN,
+        inner: %Inner3{name: "kid", value: 42},
+        nums: [1, -5, 300],
+        tags: ["a", "bb"],
+        inners: [%Inner3{name: "x", value: 1}, %Inner3{name: "y", value: -2}],
+        opt_i32: -7,
+        opt_str: "opt",
+        flags: [true, false, true]
+      }
+    end
+
+    # Serial oracle pin: one encode must equal the protoc bytes before any
+    # stream starts, so a mapping bug fails here and not in a worker.
+    want = Pbwire.encode(build.())
+    assert want == reference
+    assert want == Protobuf.encode(build.())
+
+    shared = build.()
+    total = 8 * 200 * 3
+    t0 = System.monotonic_time(:millisecond)
+
+    problems =
+      1..8
+      |> Task.async_stream(
+        fn worker ->
+          Enum.flat_map(1..200, fn _ ->
+            a =
+              if Pbwire.encode(build.()) == want,
+                do: [],
+                else: ["phase (a) independent-encode != want bytes"]
+
+            b =
+              if Pbwire.encode(shared) == want,
+                do: [],
+                else: ["phase (b) shared-read-only-encode != want bytes"]
+
+            c =
+              try do
+                back = Pbwire.decode(want, Scalars3)
+
+                if back == Protobuf.decode(want, Scalars3) and back.i32 == -2_147_483_648 and
+                     back.u64 == 18_446_744_073_709_551_615 and back.f32 == :infinity and
+                     back.f64 == -123_456.789 and back.flag == true and back.str == "hello" and
+                     back.color == :COLOR3_GREEN and back.inner == %Inner3{name: "kid", value: 42} and
+                     back.nums == [1, -5, 300] and back.tags == ["a", "bb"] and
+                     length(back.inners) == 2 and back.opt_i32 == -7 and
+                     back.opt_str == "opt" and back.flags == [true, false, true] do
+                  []
+                else
+                  ["phase (c) fresh-target decode field mismatch"]
+                end
+              rescue
+                e -> ["phase (c) fresh-target decode raised #{inspect(e)}"]
+              end
+
+            Enum.map(a ++ b ++ c, &"worker #{worker}: #{&1}")
+          end)
+        end,
+        max_concurrency: 8,
+        timeout: :infinity
+      )
+      |> Enum.flat_map(fn
+        {:ok, ps} -> ps
+        {:exit, reason} -> ["stream exited: #{inspect(reason)}"]
+      end)
+
+    elapsed = System.monotonic_time(:millisecond) - t0
+    IO.puts("concurrent: #{total} encodes+decodes in #{Float.round(elapsed / 1000, 3)} s")
+
+    assert problems == [],
+           "concurrent failures: " <> Enum.join(Enum.take(problems, 8), "; ")
+  after
+    Pbwire.load_schema(@mods)
+  end
 end

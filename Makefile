@@ -19,6 +19,7 @@ FUZZ_BIN := build/fuzz_decode
 THREAD_BIN := build/test_threads
 DESC_BIN := build/test_descriptor
 STRUCT_BIN := build/test_struct
+CONCURRENCY_BIN := build/test_concurrency
 EMBEDDED_BIN := build/test_embedded
 EMBEDDED_NOFAIL_BIN := build/test_embedded_nofail
 EMBEDDED_EXAMPLE_BIN := build/example_embedded
@@ -156,7 +157,7 @@ $(NOFAIL_BIN): tests/test_nofail.c $(TEST_DEPS) $(NOFAIL_OBJ) $(NOFAIL_STRUCT_OB
 $(EMBEDDED_NOFAIL_BIN): bindings/embedded/tests/test_embedded.c bindings/embedded/runtime/pbwe.c $(NOFAIL_OBJ) | build
 	$(CC) $(CFLAGS) $(CPPFLAGS) -DPBWE_HAVE_ALLOC_HOOKS -Ibindings/embedded/runtime -o $@ bindings/embedded/tests/test_embedded.c bindings/embedded/runtime/pbwe.c $(NOFAIL_OBJ)
 
-test: $(TEST_BIN) $(MALFORMED_BIN) $(NOFAIL_BIN) $(EMBEDDED_NOFAIL_BIN) $(THREAD_BIN) $(DESC_BIN) $(STRUCT_BIN) $(EMBEDDED_BIN) $(EXAMPLE_BIN) $(GATEWAY_BIN) $(EMBEDDED_EXAMPLE_BIN)
+test: $(TEST_BIN) $(MALFORMED_BIN) $(NOFAIL_BIN) $(EMBEDDED_NOFAIL_BIN) $(THREAD_BIN) $(DESC_BIN) $(STRUCT_BIN) $(CONCURRENCY_BIN) $(EMBEDDED_BIN) $(EXAMPLE_BIN) $(GATEWAY_BIN) $(EMBEDDED_EXAMPLE_BIN)
 	./$(TEST_BIN)
 	./$(MALFORMED_BIN)
 	./$(NOFAIL_BIN)
@@ -164,6 +165,7 @@ test: $(TEST_BIN) $(MALFORMED_BIN) $(NOFAIL_BIN) $(EMBEDDED_NOFAIL_BIN) $(THREAD
 	./$(THREAD_BIN)
 	./$(DESC_BIN)
 	./$(STRUCT_BIN)
+	./$(CONCURRENCY_BIN)
 	./$(EMBEDDED_BIN)
 	./$(EXAMPLE_BIN)
 	./$(GATEWAY_BIN)
@@ -185,7 +187,7 @@ port-test:
 port-test-32:
 	rm -f build/*.o build/libpbwire.a build/libpbwire.*.dylib build/libpbwire.so* \
 		build/test_pbwire build/test_malformed build/test_nofail build/test_threads \
-		build/test_descriptor build/test_struct build/test_embedded \
+		build/test_descriptor build/test_struct build/test_concurrency build/test_embedded \
 		build/test_embedded_nofail build/example_addressbook build/example_gateway \
 		build/example_embedded
 	$(MAKE) test CFLAGS="-O2 -std=c99 -Wall -Wextra -Werror -pedantic -fPIC -m32"
@@ -244,6 +246,8 @@ $(DESC_BIN): tests/test_descriptor.c $(TEST_HDRS) $(LIB) | build
 	$(CC) $(CFLAGS) $(CPPFLAGS) -o $@ $< $(LIB)
 
 C_RUNTIME := bindings/c/runtime/pbw_struct.c
+$(CONCURRENCY_BIN): bindings/c/tests/test_concurrency.c $(TEST_DEPS) $(C_RUNTIME) $(LIB) | build
+	$(CC) $(CFLAGS) $(CPPFLAGS) -pthread -Ibindings/c/runtime -Ibindings/c/tests -Ibindings/c/examples -o $@ bindings/c/tests/test_concurrency.c $(C_RUNTIME) $(LIB)
 $(STRUCT_BIN): bindings/c/tests/test_struct.c $(TEST_DEPS) $(C_RUNTIME) $(LIB) | build
 	$(CC) $(CFLAGS) $(CPPFLAGS) -Ibindings/c/runtime -Ibindings/c/tests -Ibindings/c/examples -o $@ bindings/c/tests/test_struct.c $(C_RUNTIME) $(LIB)
 
@@ -265,12 +269,17 @@ CPP_RUNTIME_OBJ := build/pbw_struct_c.o
 $(CPP_RUNTIME_OBJ): $(C_RUNTIME) | build
 	$(CC) $(CFLAGS) $(CPPFLAGS) -Ibindings/c/runtime -c -o $@ $(C_RUNTIME)
 CPP_TEST_BIN := build/test_cpp_addressbook
+CPP_CONCURRENCY_BIN := build/test_cpp_concurrency
 
 $(CPP_TEST_BIN): bindings/cpp/tests/roundtrip.cc $(CPP_RUNTIME_OBJ) $(LIB) | build
 	$(CXX) $(CXXFLAGS) $(CPPFLAGS) -Ibindings/c/runtime -Ibindings/c/examples -o $@ $< $(CPP_RUNTIME_OBJ) $(LIB)
 
-test-cpp: $(CPP_TEST_BIN)
+$(CPP_CONCURRENCY_BIN): bindings/cpp/tests/concurrency.cc $(CPP_RUNTIME_OBJ) $(LIB) | build
+	$(CXX) $(CXXFLAGS) $(CPPFLAGS) -pthread -Ibindings/c/runtime -Ibindings/c/examples -o $@ $< $(CPP_RUNTIME_OBJ) $(LIB)
+
+test-cpp: $(CPP_TEST_BIN) $(CPP_CONCURRENCY_BIN)
 	./$(CPP_TEST_BIN)
+	./$(CPP_CONCURRENCY_BIN)
 
 COMPAT_ORACLE_PB := bindings/cpp/tests/gen_oracle/matrix3.pb.cc
 bindings/cpp/tests/gen_oracle/%.pb.cc: bindings/c/tests/data/%.proto

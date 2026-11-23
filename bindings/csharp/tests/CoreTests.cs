@@ -8,6 +8,7 @@
 namespace Pbwire.Test;
 
 using Pbwire.Core;
+using System.Diagnostics;
 
 internal static class CoreTests
 {
@@ -39,6 +40,7 @@ internal static class CoreTests
         DescriptorGate();
         EncodeParity();
         DecodeRetention();
+        Concurrency();
         return _checks;
     }
 
@@ -127,41 +129,7 @@ internal static class CoreTests
     private static void EncodeParity()
     {
         var scalars = Type("matrix3.desc", "structtest.Scalars3");
-        var msg = scalars.NewMessage();
-        msg.Set("i32", int.MinValue)
-            .Set("i64", long.MaxValue)
-            .Set("u32", uint.MaxValue)
-            .Set("u64", ulong.MaxValue)
-            .Set("s32", int.MinValue)
-            .Set("s64", long.MinValue)
-            .Set("fx32", 0xdeadbeefL)
-            .Set("fx64", 72623859790382856L)
-            .Set("sfx32", int.MinValue)
-            .Set("sfx64", long.MinValue)
-            .Set("f32", float.PositiveInfinity)
-            .Set("f64", -123456.789)
-            .Set("flag", true)
-            .Set("str", "hello")
-            .Set("color", 2L)
-            .Set("opt_i32", -7L)
-            .Set("opt_str", "opt");
-        foreach (var n in new[] { 1L, -5L, 300L })
-        {
-            msg.Add("nums", n);
-        }
-        foreach (var tag in new[] { "a", "bb" })
-        {
-            msg.Add("tags", tag);
-        }
-        var inner = scalars.Def.Fields[15].MsgType!;
-        foreach (var (name, value) in new[] { ("x", 1L), ("y", -2L) })
-        {
-            var kid = new Msg(inner);
-            kid.Set("name", name).Set("value", value);
-            msg.GetRep("inners").Add(kid);
-        }
-        msg.Add("flags", true).Add("flags", false).Add("flags", true);
-        msg.NewMessage("inner").Set("name", "kid").Set("value", 42L);
+        var msg = BuildScalars(scalars);
 
         var want = Bin("matrix3.bin");
         var got = scalars.Encode(msg);
@@ -258,6 +226,223 @@ internal static class CoreTests
 
         // A decoded tree re-encodes byte-exactly.
         Check(scalars.Encode(scalars.Decode(pinned)).SequenceEqual(pinned), "decode/encode round trip is byte-exact");
+    }
+
+    /// <summary>
+    /// The populated matrix3.txt values, same as <see cref="EncodeParity"/>: the oracle
+    /// bytes only match this exact content. A fresh tree per call, so every worker
+    /// owns its message.
+    /// </summary>
+    private static Msg BuildScalars(MessageType scalars)
+    {
+        var msg = scalars.NewMessage();
+        msg.Set("i32", int.MinValue)
+            .Set("i64", long.MaxValue)
+            .Set("u32", uint.MaxValue)
+            .Set("u64", ulong.MaxValue)
+            .Set("s32", int.MinValue)
+            .Set("s64", long.MinValue)
+            .Set("fx32", 0xdeadbeefL)
+            .Set("fx64", 72623859790382856L)
+            .Set("sfx32", int.MinValue)
+            .Set("sfx64", long.MinValue)
+            .Set("f32", float.PositiveInfinity)
+            .Set("f64", -123456.789)
+            .Set("flag", true)
+            .Set("str", "hello")
+            .Set("color", 2L)
+            .Set("opt_i32", -7L)
+            .Set("opt_str", "opt");
+        foreach (var n in new[] { 1L, -5L, 300L })
+        {
+            msg.Add("nums", n);
+        }
+        foreach (var tag in new[] { "a", "bb" })
+        {
+            msg.Add("tags", tag);
+        }
+        var inner = scalars.Def.Fields[15].MsgType!;
+        foreach (var (name, value) in new[] { ("x", 1L), ("y", -2L) })
+        {
+            var kid = new Msg(inner);
+            kid.Set("name", name).Set("value", value);
+            msg.GetRep("inners").Add(kid);
+        }
+        msg.Add("flags", true).Add("flags", false).Add("flags", true);
+        msg.NewMessage("inner").Set("name", "kid").Set("value", 42L);
+        return msg;
+    }
+
+    /// <summary>
+    /// Concurrent stress over the matrix3 oracle: 8 workers x 200 iters, three
+    /// phases per worker mirroring the C/C++/Rust/Zig/Swift shape: (a)
+    /// independent-message encode == want bytes, (b) SHARED read-only message
+    /// concurrent encode == want bytes, (c) fresh-target decode of want with
+    /// field checks (NOT re-encode).
+    ///
+    /// Only the schema and the want bytes cross threads; the schema is read-only
+    /// after load and every worker builds per-iteration local messages. Encode
+    /// holds no mutable shared-side state (its workspace buffer is [ThreadStatic]
+    /// and the result is a fresh array per call), so sharing one Msg for phase
+    /// (b) is read-only sharing. Timing prints only, never asserted.
+    /// </summary>
+    private static void Concurrency()
+    {
+        const int Workers = 8;
+        const int Iters = 200;
+        var scalars = Type("matrix3.desc", "structtest.Scalars3");
+        var want = Bin("matrix3.bin");
+
+        // Serial encode-once baseline: must equal the protoc oracle before any
+        // worker starts, so a mapping bug fails here and not in a thread.
+        Check(
+            scalars.Encode(BuildScalars(scalars)).SequenceEqual(want),
+            "concurrency serial encode equals the protoc oracle");
+
+        // Shared read-only fixture for phase (b): never mutated while workers run.
+        var shared = BuildScalars(scalars);
+
+        var failures = new List<string>();
+        var start = Stopwatch.StartNew();
+        Parallel.For(0, Workers, worker =>
+        {
+            for (var i = 0; i < Iters; i++)
+            {
+                // (a) independent-message encode == want bytes.
+                try
+                {
+                    if (!scalars.Encode(BuildScalars(scalars)).SequenceEqual(want))
+                    {
+                        Record(failures, worker, "phase (a) independent-encode != want bytes");
+                    }
+                    Interlocked.Increment(ref _checks);
+                }
+                catch (Exception e)
+                {
+                    Record(failures, worker, "phase (a) independent-encode threw " + e.GetType().Name);
+                }
+                // (b) SHARED read-only message concurrent encode == want bytes.
+                try
+                {
+                    if (!scalars.Encode(shared).SequenceEqual(want))
+                    {
+                        Record(failures, worker, "phase (b) shared-read-only-encode != want bytes");
+                    }
+                    Interlocked.Increment(ref _checks);
+                }
+                catch (Exception e)
+                {
+                    Record(failures, worker, "phase (b) shared-read-only-encode threw " + e.GetType().Name);
+                }
+                // (c) fresh-target decode with field checks, NOT re-encode.
+                try
+                {
+                    var back = scalars.Decode(want);
+                    Interlocked.Increment(ref _checks);
+                    if (!CheckDecoded(back))
+                    {
+                        Record(failures, worker, "phase (c) fresh-target decode field mismatch");
+                    }
+                }
+                catch (Exception e)
+                {
+                    Record(failures, worker, "phase (c) fresh-target decode threw " + e.GetType().Name);
+                }
+            }
+        });
+        start.Stop();
+        var total = Workers * Iters * 3;
+        Console.WriteLine($"concurrent: {total} encodes+decodes in {start.Elapsed.TotalSeconds:F3} s ({total / start.Elapsed.TotalSeconds:F0}/s)");
+        Check(failures.Count == 0, "concurrency: " + string.Join("; ", failures.Take(8)));
+    }
+
+    private static void Record(List<string> failures, int worker, string phase)
+    {
+        lock (failures)
+        {
+            failures.Add($"worker {worker}: {phase}");
+        }
+    }
+
+    /// <summary>The phase (c) field checks: the same values the oracle pins.</summary>
+    private static bool CheckDecoded(Msg back)
+    {
+        if (back.Get("i32") is not int i32 || i32 != int.MinValue)
+        {
+            return false;
+        }
+        if (back.Get("u64") is not ulong u64 || u64 != ulong.MaxValue)
+        {
+            return false;
+        }
+        if (back.Get("f32") is not float f32 || f32 != float.PositiveInfinity)
+        {
+            return false;
+        }
+        if (back.Get("f64") is not double f64 || f64 != -123456.789)
+        {
+            return false;
+        }
+        if (back.Get("flag") is not bool flag || !flag)
+        {
+            return false;
+        }
+        if (back.Get("str") is not string str || str != "hello")
+        {
+            return false;
+        }
+        if (back.Get("color") is not int color || color != 2)
+        {
+            return false;
+        }
+        if (back.Get("inner") is not Msg inner)
+        {
+            return false;
+        }
+        if (inner.Get("name") is not string name || name != "kid")
+        {
+            return false;
+        }
+        if (inner.Get("value") is not int value || value != 42)
+        {
+            return false;
+        }
+        if (back.Get("nums") is not object?[] nums || nums.Length != 3
+            || nums[0] is not int n0 || n0 != 1
+            || nums[1] is not int n1 || n1 != -5
+            || nums[2] is not int n2 || n2 != 300)
+        {
+            return false;
+        }
+        if (back.Get("tags") is not object?[] tags || tags.Length != 2
+            || tags[0] as string != "a" || tags[1] as string != "bb")
+        {
+            return false;
+        }
+        if (back.Get("inners") is not object?[] inners || inners.Length != 2)
+        {
+            return false;
+        }
+        if (inners[1] is not Msg second || second.Get("value") is not int sv || sv != -2)
+        {
+            return false;
+        }
+        if (back.Get("opt_i32") is not int opt || opt != -7)
+        {
+            return false;
+        }
+        if (back.Get("opt_str") is not string optStr || optStr != "opt")
+        {
+            return false;
+        }
+        if (back.Get("flags") is not object?[] flags || flags.Length != 3
+            || flags[0] is not bool b0 || !b0
+            || flags[1] is not bool b1 || b1
+            || flags[2] is not bool b2 || !b2)
+        {
+            return false;
+        }
+        return true;
     }
 
     private static bool Throws(Action op)

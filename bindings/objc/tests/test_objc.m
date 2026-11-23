@@ -15,7 +15,10 @@
 #import "PBWContext.h"
 #import "PBWPool.h"
 
+#include <dispatch/dispatch.h>
+#include <math.h>
 #include <stdio.h>
+#include <time.h>
 
 static int failures;
 static NSString *descriptorPath;
@@ -845,6 +848,243 @@ testContextPool(void)
     CHECK_STRING([probe valueForField:@"text"], @"a\0b");
 }
 
+/* Concurrency check over the matrix3 oracle: 8 workers x 200 iters, three
+ * phases per worker mirroring the C/C++/Rust/Zig shape:
+ *
+ *   (a) per-thread message encode == want bytes,
+ *   (b) SHARED read-only message concurrent encode == want bytes,
+ *   (c) fresh-target decode of want with field checks (NOT re-encode).
+ *
+ * The schema and the want bytes are the only cross-thread state, both
+ * read-only after startup. Every other object is per-thread: each worker
+ * drains its own autoreleasepool, builds local messages, and each encode
+ * hands its buffer to a fresh NSData, so no allocator crosses threads.
+ * Timing prints only, never asserted. */
+
+#define CONCURRENCY_THREADS 8
+#define CONCURRENCY_ITERS 200
+
+static PBWSchema *concSchema;  /* shared, read-only after load */
+static NSData *concWant;       /* matrix3.bin oracle, shared read-only */
+static PBWMessage *concShared; /* shared fixture: encoded, never mutated */
+static unsigned concWorkerFailures[CONCURRENCY_THREADS];
+
+static void
+concFail(unsigned worker, const char *phase)
+{
+    fprintf(stderr, "worker %u: %s\n", worker, phase);
+    concWorkerFailures[worker]++;
+}
+
+/* The populated matrix3.txt values (same as the Swift GeneratedTest: the
+ * oracle bytes only match this exact content). The caller owns the message,
+ * or gets nil when a setter rejects its value. */
+static PBWMessage *
+concFillMessage(PBWSchema *schema)
+{
+    PBWMessage *inner;
+    PBWMessage *one;
+    PBWMessage *two;
+    PBWMessage *m = [schema messageByName:@"structtest.Scalars3"];
+
+    if (m == nil || ![m setValue:@(INT32_MIN) forField:@"i32" error:NULL] || ![m setValue:@(INT64_MAX) forField:@"i64" error:NULL] || ![m setValue:@(UINT32_MAX) forField:@"u32" error:NULL] || ![m setValue:@(UINT64_MAX) forField:@"u64" error:NULL] || ![m setValue:@(INT32_MIN) forField:@"s32" error:NULL] || ![m setValue:@(INT64_MIN) forField:@"s64" error:NULL] || ![m setValue:@(0xdeadbeefU) forField:@"fx32" error:NULL] || ![m setValue:@(72623859790382856ULL) forField:@"fx64" error:NULL] || ![m setValue:@(INT32_MIN) forField:@"sfx32" error:NULL] || ![m setValue:@(INT64_MIN) forField:@"sfx64" error:NULL] || ![m setValue:@(INFINITY) forField:@"f32" error:NULL] || ![m setValue:@(-123456.789) forField:@"f64" error:NULL] || ![m setValue:@YES forField:@"flag" error:NULL] || ![m setValue:@"hello" forField:@"str" error:NULL] || ![m setValue:@(2) forField:@"color" error:NULL] || ![m setValues:@[ @(1), @(-5), @(300) ]
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     forField:@"nums"
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        error:NULL] ||
+        ![m setValues:@[ @"a", @"bb" ]
+             forField:@"tags"
+                error:NULL] ||
+        ![m setValue:@(-7) forField:@"opt_i32" error:NULL] || ![m setValue:@"opt" forField:@"opt_str" error:NULL] || ![m setValues:@[ @YES, @NO, @YES ]
+                                                                                                                          forField:@"flags"
+                                                                                                                             error:NULL]) {
+        return nil;
+    }
+    inner = [m addMessageForField:@"inner" error:NULL];
+    if (inner == nil || ![inner setValue:@"kid" forField:@"name" error:NULL] || ![inner setValue:@(42) forField:@"value" error:NULL]) {
+        return nil;
+    }
+    /* A repeated message field appends on every call. */
+    one = [m addMessageForField:@"inners" error:NULL];
+    if (one == nil || ![one setValue:@"x" forField:@"name" error:NULL] || ![one setValue:@(1) forField:@"value" error:NULL]) {
+        return nil;
+    }
+    two = [m addMessageForField:@"inners" error:NULL];
+    if (two == nil || ![two setValue:@"y" forField:@"name" error:NULL] || ![two setValue:@(-2) forField:@"value" error:NULL]) {
+        return nil;
+    }
+    return m;
+}
+
+static BOOL
+concCheckDecoded(PBWMessage *m)
+{
+    PBWMessage *inner;
+    PBWMessage *second;
+
+    if (![[m valueForField:@"i32"] isEqualToNumber:@(INT32_MIN)]) {
+        return NO;
+    }
+    if (![[m valueForField:@"u64"] isEqualToNumber:@(UINT64_MAX)]) {
+        return NO;
+    }
+    if ([[m valueForField:@"f32"] floatValue] != INFINITY) {
+        return NO;
+    }
+    if ([[m valueForField:@"f64"] doubleValue] != -123456.789) {
+        return NO;
+    }
+    if (![[m valueForField:@"flag"] isEqualToNumber:@YES]) {
+        return NO;
+    }
+    if (![[m valueForField:@"str"] isEqual:@"hello"]) {
+        return NO;
+    }
+    if (![[m valueForField:@"color"] isEqualToNumber:@(2)]) {
+        return NO;
+    }
+    inner = [m messageForField:@"inner"];
+    if (inner == nil || ![[inner valueForField:@"name"] isEqual:@"kid"] || ![[inner valueForField:@"value"] isEqualToNumber:@(42)]) {
+        return NO;
+    }
+    if (![[m valuesForField:@"nums"]
+            isEqualToArray:@[ @(1), @(-5), @(300) ]]) {
+        return NO;
+    }
+    if (![[m valuesForField:@"tags"] isEqualToArray:@[ @"a", @"bb" ]]) {
+        return NO;
+    }
+    if ([m countForField:@"inners"] != 2) {
+        return NO;
+    }
+    second = [m valueForField:@"inners" atIndex:1];
+    if (![[second valueForField:@"value"] isEqualToNumber:@(-2)]) {
+        return NO;
+    }
+    if (![[m valueForField:@"opt_i32"] isEqualToNumber:@(-7)]) {
+        return NO;
+    }
+    if (![[m valueForField:@"opt_str"] isEqual:@"opt"]) {
+        return NO;
+    }
+    if (![[m valuesForField:@"flags"]
+            isEqualToArray:@[ @YES, @NO, @YES ]]) {
+        return NO;
+    }
+    return YES;
+}
+
+static void
+concRunWorker(size_t index)
+{
+    unsigned worker = (unsigned)index;
+    unsigned i;
+
+    for (i = 0; i < CONCURRENCY_ITERS; i++) {
+        @autoreleasepool {
+            NSError *error = nil;
+            PBWMessage *m = concFillMessage(concSchema);
+            NSData *wire = m != nil ? [m encode:&error] : nil;
+
+            if (wire == nil || ![wire isEqualToData:concWant]) {
+                concFail(worker,
+                         "phase (a) independent-encode != want bytes");
+            }
+        }
+    }
+    for (i = 0; i < CONCURRENCY_ITERS; i++) {
+        @autoreleasepool {
+            NSError *error = nil;
+            /* The tree is shared but never mutated here: -encode: reads
+             * it into a per-call buffer, so each worker still owns every
+             * allocation it touches. */
+            NSData *wire = [concShared encode:&error];
+
+            if (wire == nil || ![wire isEqualToData:concWant]) {
+                concFail(worker,
+                         "phase (b) shared-read-only-encode != want bytes");
+            }
+        }
+    }
+    for (i = 0; i < CONCURRENCY_ITERS; i++) {
+        @autoreleasepool {
+            NSError *error = nil;
+            PBWMessage *tmpl =
+                [concSchema messageByName:@"structtest.Scalars3"];
+            PBWMessage *back =
+                tmpl != nil ? [tmpl decode:concWant error:&error] : nil;
+
+            if (back == nil || !concCheckDecoded(back)) {
+                concFail(worker,
+                         "phase (c) fresh-target decode field mismatch");
+            }
+        }
+    }
+}
+
+static void
+testConcurrency(void)
+{
+    NSString *root = [[[[@(__FILE__) stringByDeletingLastPathComponent]
+        stringByDeletingLastPathComponent]
+        stringByDeletingLastPathComponent]
+        stringByDeletingLastPathComponent];
+    NSString *desc = [root
+        stringByAppendingPathComponent:@"bindings/c/tests/data/matrix3.desc"];
+    NSString *bin = [root
+        stringByAppendingPathComponent:@"bindings/c/tests/data/matrix3.bin"];
+    NSError *error = nil;
+    PBWSchema *schema = [PBWSchema schemaFromFile:desc error:&error];
+    NSData *want = [NSData dataWithContentsOfFile:bin];
+    PBWMessage *baseline;
+    NSData *serial;
+    struct timespec t0;
+    struct timespec t1;
+    double elapsed;
+    unsigned i;
+    unsigned total = 0;
+
+    if (schema == nil || want.length == 0) {
+        fprintf(stderr, "concurrency: cannot load matrix3 fixtures\n");
+        failures++;
+        return;
+    }
+    /* Serial baseline: one encode must equal the protoc oracle before any
+     * worker starts, so a mapping bug fails here and not in a thread. */
+    baseline = concFillMessage(schema);
+    serial = baseline != nil ? [baseline encode:&error] : nil;
+    if (serial == nil || ![serial isEqualToData:want]) {
+        fprintf(stderr, "concurrency: serial encode != matrix3.bin\n");
+        failures++;
+        return;
+    }
+
+    concSchema = schema;
+    concWant = want;
+    concShared = baseline;
+    for (i = 0; i < CONCURRENCY_THREADS; i++) {
+        concWorkerFailures[i] = 0;
+    }
+
+    clock_gettime(CLOCK_MONOTONIC, &t0);
+    dispatch_apply(CONCURRENCY_THREADS,
+                   dispatch_get_global_queue(QOS_CLASS_DEFAULT, 0),
+                   ^(size_t index) {
+                     concRunWorker(index);
+                   });
+    clock_gettime(CLOCK_MONOTONIC, &t1);
+    elapsed = (double)(t1.tv_sec - t0.tv_sec) + (double)(t1.tv_nsec - t0.tv_nsec) / 1e9;
+    for (i = 0; i < CONCURRENCY_THREADS; i++) {
+        total += concWorkerFailures[i];
+    }
+    failures += (int)total;
+    printf("concurrency: %u threads x %u iters x 3 phases, %u failures "
+           "in %.3f s (%.0f/s)\n",
+           CONCURRENCY_THREADS, CONCURRENCY_ITERS, total, elapsed,
+           (double)(CONCURRENCY_THREADS * CONCURRENCY_ITERS * 3) / elapsed);
+    concSchema = nil;
+    concWant = nil;
+    concShared = nil;
+}
+
 int
 main(int argc, char **argv)
 {
@@ -867,6 +1107,7 @@ main(int argc, char **argv)
         testLimits();
         testCoverSchema();
         testContextPool();
+        testConcurrency();
 
         if (failures == 0) {
             printf("test_objc: all checks passed (%s)\n",

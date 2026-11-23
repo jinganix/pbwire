@@ -8,6 +8,9 @@
  */
 import java.nio.file.Files
 import java.nio.file.Path
+import java.util.Collections
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
 
 private var checks = 0
 
@@ -58,6 +61,81 @@ private fun fill(ty: MessageType): Message = ty.build {
     }
 }
 
+/*
+ * 4 workers x 2000 iters over one shared MessageType, three phases per
+ * worker: (a) independent-message encode == want bytes, (b) SHARED
+ * read-only message concurrent encode == want bytes, (c) fresh-target decode
+ * of want with field checks, NOT re-encode. Only the type, the shared message
+ * and the want bytes cross threads; every worker owns its other messages.
+ * Timing prints only, never asserted; failures name the worker and the phase.
+ */
+fun threads(ty: MessageType) {
+    val want = fill(ty).use { it.encode() }
+    // Serial oracle pin: must hold before any worker starts.
+    fill(ty).use { check(it.encode().contentEquals(want), "serial encode is the oracle") }
+    // 1-thread throughput baseline (print only).
+    val serialIters = 2000
+    val serialStart = System.nanoTime()
+    repeat(serialIters) { fill(ty).use { it.encode() } }
+    val serialSecs = (System.nanoTime() - serialStart) / 1e9
+    // Shared read-only fixture for phase (b): filled once here, never mutated
+    // while workers run, closed after they join.
+    val shared = fill(ty)
+    val problems = Collections.synchronizedList(mutableListOf<String>())
+    val pool = Executors.newFixedThreadPool(4)
+    val done = CountDownLatch(4)
+    val start = System.nanoTime()
+    repeat(4) { worker ->
+        pool.execute {
+            try {
+                repeat(2000) {
+                    try {
+                        fill(ty).use {
+                            if (!it.encode().contentEquals(want)) {
+                                problems.add("worker $worker: phase (a) independent-encode != want bytes")
+                            }
+                        }
+                    } catch (e: RuntimeException) {
+                        problems.add("worker $worker: phase (a) threw ${e.javaClass.simpleName}")
+                    }
+                    try {
+                        if (!shared.encode().contentEquals(want)) {
+                            problems.add("worker $worker: phase (b) shared-read-only-encode != want bytes")
+                        }
+                    } catch (e: RuntimeException) {
+                        problems.add("worker $worker: phase (b) threw ${e.javaClass.simpleName}")
+                    }
+                    try {
+                        ty.parse(want).use { back ->
+                            if (back.getLong("i32") != Int.MIN_VALUE.toLong()
+                                || !back.getBool("flag")
+                                || back.getString("str") != "hello"
+                                || back.getDouble("f64") != -123456.789
+                                || back.getLong("color") != 2L
+                                || back.getList("nums") != listOf(1L, -5L, 300L)
+                                || back.getMessage("inner")!!.getString("name") != "kid"
+                            ) {
+                                problems.add("worker $worker: phase (c) fresh-decode field mismatch")
+                            }
+                        }
+                    } catch (e: RuntimeException) {
+                        problems.add("worker $worker: phase (c) threw ${e.javaClass.simpleName}")
+                    }
+                }
+            } finally {
+                done.countDown()
+            }
+        }
+    }
+    done.await()
+    pool.shutdown()
+    shared.close()
+    check(problems.isEmpty(), "4 threads share one type: ${problems.take(8)}")
+    val parallelSecs = (System.nanoTime() - start) / 1e9
+    val total = 4 * 2000 * 3
+    println("OK   threads: serial $serialIters encodes in %.3f s (%.0f/s), 4-thread $total phase ops in %.3f s (%.0f/s)".format(serialSecs, serialIters / serialSecs, parallelSecs, total / parallelSecs))
+}
+
 fun main(args: Array<String>) {
     val desc = args.getOrNull(0) ?: "../c/tests/data/matrix3.desc"
     val oracle = Files.readAllBytes(Path.of(desc).resolveSibling("matrix3.bin"))
@@ -65,6 +143,8 @@ fun main(args: Array<String>) {
     schema(desc).use { schema ->
         val ty = schema.message("structtest.Scalars3")
         val innerTy = schema.message("structtest.Inner3")
+
+        threads(ty)
 
         fill(ty).use { msg ->
             val wire = msg.encode()

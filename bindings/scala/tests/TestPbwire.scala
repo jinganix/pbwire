@@ -54,6 +54,93 @@ object TestPbwire {
     m.message("inner") { c => c.set("name", "kid"); c.set("value", 42L) }
   }
 
+  // 4 workers x 2000 iters over one shared MessageType, three phases per
+  // worker: (a) independent-message encode == want bytes, (b) SHARED
+  // read-only message concurrent encode == want bytes, (c) fresh-target decode
+  // of want with field checks, NOT re-encode. Only the type, the shared
+  // message and the want bytes cross threads; every worker owns its other
+  // messages. Timing prints only, never asserted; failures name the worker
+  // and the phase.
+  def threads(ty: MessageType): Unit = {
+    val want = using(fill(ty)) { _.encode() }
+    // Serial oracle pin: must hold before any worker starts.
+    using(fill(ty)) { m =>
+      check(java.util.Arrays.equals(m.encode(), want), "serial encode is the oracle")
+    }
+    // 1-thread throughput baseline (print only).
+    val serialIters = 2000
+    val serialStart = System.nanoTime()
+    var s = 0
+    while (s < serialIters) {
+      using(fill(ty)) { _.encode() }
+      s += 1
+    }
+    val serialSecs = (System.nanoTime() - serialStart) / 1e9
+    // Shared read-only fixture for phase (b): filled once here, never mutated
+    // while workers run, closed after they join.
+    val shared = fill(ty)
+    val problems =
+      java.util.Collections.synchronizedList(new java.util.ArrayList[String]())
+    val pool = java.util.concurrent.Executors.newFixedThreadPool(4)
+    val done = new java.util.concurrent.CountDownLatch(4)
+    val start = System.nanoTime()
+    var worker = 0
+    while (worker < 4) {
+      val w = worker
+      pool.execute(new Runnable {
+        def run(): Unit = {
+          try {
+            var j = 0
+            while (j < 2000) {
+              try {
+                using(fill(ty)) { m =>
+                  if (!java.util.Arrays.equals(m.encode(), want))
+                    problems.add("worker " + w + ": phase (a) independent-encode != want bytes")
+                }
+              } catch {
+                case e: RuntimeException =>
+                  problems.add("worker " + w + ": phase (a) threw " + e.getClass.getSimpleName)
+              }
+              try {
+                if (!java.util.Arrays.equals(shared.encode(), want))
+                  problems.add("worker " + w + ": phase (b) shared-read-only-encode != want bytes")
+              } catch {
+                case e: RuntimeException =>
+                  problems.add("worker " + w + ": phase (b) threw " + e.getClass.getSimpleName)
+              }
+              try {
+                using(ty.parse(want)) { back =>
+                  if (back.getLong("i32") != Int.MinValue.toLong
+                    || !back.getBool("flag")
+                    || back.getString("str") != "hello"
+                    || back.getDouble("f64") != -123456.789
+                    || back.getLong("color") != 2L
+                    || back.getList("nums").asScala.toList != List(1L, -5L, 300L)
+                    || back.getMessage("inner").getString("name") != "kid")
+                    problems.add("worker " + w + ": phase (c) fresh-decode field mismatch")
+                }
+              } catch {
+                case e: RuntimeException =>
+                  problems.add("worker " + w + ": phase (c) threw " + e.getClass.getSimpleName)
+              }
+              j += 1
+            }
+          } finally {
+            done.countDown()
+          }
+        }
+      })
+      worker += 1
+    }
+    done.await()
+    pool.shutdown()
+    shared.close()
+    check(problems.isEmpty, "4 threads share one type: " + problems.toArray.take(8).mkString("; "))
+    val parallelSecs = (System.nanoTime() - start) / 1e9
+    val total = 4 * 2000 * 3
+    println(f"OK   threads: serial $serialIters encodes in $serialSecs%.3f s (${serialIters / serialSecs}%.0f/s), 4-thread $total phase ops in $parallelSecs%.3f s (${total / parallelSecs}%.0f/s)")
+  }
+
   def main(args: Array[String]): Unit = {
     val matrixDesc = if (args.length > 0) args(0) else "../c/tests/data/matrix3.desc"
     val edgeDesc = if (args.length > 1) args(1) else "../../tests/data/edge.desc"
@@ -62,6 +149,8 @@ object TestPbwire {
     using(schema(matrixDesc)) { schema =>
       val ty = schema.message("structtest.Scalars3")
       val innerTy = schema.message("structtest.Inner3")
+
+      threads(ty)
 
       using(fill(ty)) { msg =>
         val wire = msg.encode()

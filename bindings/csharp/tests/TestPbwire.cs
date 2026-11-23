@@ -5,6 +5,7 @@
 //   dotnet run --project tests -- <descriptor-set>
 
 using Pbwire;
+using System.Diagnostics;
 
 var desc = args.Length > 0 ? args[0] : "../../c/tests/data/matrix3.desc";
 var oracle = File.ReadAllBytes(Path.Combine(Path.GetDirectoryName(Path.GetFullPath(desc))!, "matrix3.bin"));
@@ -20,9 +21,8 @@ void Check(bool ok, string what)
     }
 }
 
-byte[] Fill(MessageType ty, MessageType innerTy)
+void FillInto(Message msg, MessageType innerTy)
 {
-    using var msg = ty.NewMessage();
     var name = innerTy.Field("name");
     var value = innerTy.Field("value");
 
@@ -61,7 +61,179 @@ byte[] Fill(MessageType ty, MessageType innerTy)
         msg.Set("flags", flag);
     }
     msg.SetMessage("inner").Set(name, "kid").Set(value, 42L);
+}
+
+byte[] Fill(MessageType ty, MessageType innerTy)
+{
+    using var msg = ty.NewMessage();
+    FillInto(msg, innerTy);
     return msg.Encode();
+}
+
+// Concurrent stress over the matrix3 oracle: 8 workers x 200 iters, three
+// phases per worker mirroring the C/C++/Rust/Zig/Swift shape: (a)
+// independent-message encode == want bytes over the shim, (b) SHARED
+// read-only message concurrent encode == want bytes, (c) fresh-target decode
+// of want with field checks (NOT re-encode).
+//
+// Only the schema types and the want bytes cross threads. MessageType.Field
+// takes a lock around its cache fill (like LayoutSource.Plan), so worker name
+// lookups are safe even cold: the serial baseline below is the oracle pin
+// only, not a cache warmer. Concurrent encodes of one native tree
+// are safe: the C core keeps no mutable encode state (proven by
+// bindings/c/tests/test_concurrency.c). Timing prints only, never asserted.
+void Concurrency(Schema schema, MessageType ty, MessageType innerTy, byte[] want)
+{
+    const int Workers = 8;
+    const int Iters = 200;
+    // Every field the matrix3 fixture touches: resolving the full set per
+    // iteration hammers the cache fill from all workers at once.
+    string[] names = new[]
+    {
+        "i32", "i64", "u32", "u64", "s32", "s64", "fx32", "fx64",
+        "sfx32", "sfx64", "f32", "f64", "flag", "str", "color",
+        "opt_i32", "opt_str", "nums", "tags", "inners", "inner", "flags",
+    };
+
+    // COLD-cache phase first: one FRESH type pair with no prior Field lookups
+    // on any thread, shared across workers that concurrently resolve the full
+    // field-name set and encode 200 iters each. This is the real server pattern
+    // (a singleton type shared across first-burst request threads); concurrent
+    // cold fills used to race on the Dictionary, so this phase exercises the
+    // lock. Resolution must match the warm pair field-for-field and the bytes
+    // must equal want.
+    // COLD-cache phase first: one FRESH type pair with no prior Field lookups
+    // on any thread, shared across workers that concurrently resolve the full
+    // field-name set and encode 200 iters each. This is the real server pattern
+    // (a singleton type shared across first-burst request threads); concurrent
+    // cold fills used to race on the Dictionary, so this phase exercises the
+    // lock. Resolution must match the warm pair field-for-field and the bytes
+    // must equal want.
+    var coldTy = schema.Message("structtest.Scalars3");
+    var coldInner = schema.Message("structtest.Inner3");
+    var coldProblems = new List<string>();
+    // Worker count tracks ACTUAL parallelism (Julia precedent
+    // `min(8, nthreads())`): `Parallel.For(0, 8, ...)` does not guarantee 8
+    // concurrent workers, so a `Barrier(8)` start gate can deadlock on hosts
+    // with < 8 cores (first wave blocks in the barrier while the remaining
+    // iterations queue on the same blocked workers). The spin/wait start gate
+    // below waits on this same count, so gate and parallelism cannot disagree.
+    var workers = Math.Min(Workers, Environment.ProcessorCount);
+    var arrived = 0;
+    var coldSw = Stopwatch.StartNew();
+    Parallel.For(0, workers, worker =>
+    {
+        Interlocked.Increment(ref arrived);
+        var spin = new SpinWait();
+        while (Volatile.Read(ref arrived) < workers) spin.SpinOnce();
+        for (var i = 0; i < Iters; i++)
+        {
+            try
+            {
+                foreach (var n in names)
+                {
+                    if (coldTy.Field(n).Number != ty.Field(n).Number)
+                    {
+                        lock (coldProblems) { coldProblems.Add($"worker {worker}: cold field {n} resolved differently"); }
+                        break;
+                    }
+                }
+                if (coldInner.Field("name").Number != innerTy.Field("name").Number
+                    || coldInner.Field("value").Number != innerTy.Field("value").Number)
+                {
+                    lock (coldProblems) { coldProblems.Add($"worker {worker}: cold inner field resolved differently"); }
+                }
+                if (!Fill(coldTy, coldInner).SequenceEqual(want))
+                {
+                    lock (coldProblems) { coldProblems.Add($"worker {worker}: cold independent-encode != want bytes"); }
+                }
+                Interlocked.Increment(ref checks);
+            }
+            catch (Exception e)
+            {
+                lock (coldProblems) { coldProblems.Add($"worker {worker}: cold threw {e.GetType().Name}"); }
+            }
+        }
+    });
+    coldSw.Stop();
+    var coldTotal = workers * Iters;
+    Console.WriteLine($"OK   concurrent cold-cache: {coldTotal} resolves+encodes in {coldSw.Elapsed.TotalSeconds:F3} s ({coldTotal / coldSw.Elapsed.TotalSeconds:F0}/s)");
+    Check(coldProblems.Count == 0, "concurrency cold-cache: " + string.Join("; ", coldProblems.Take(8)));
+
+    // Serial encode-once baseline: must equal the protoc oracle before any
+    // worker starts, so a mapping bug fails here and not in a thread.
+    Check(Fill(ty, innerTy).SequenceEqual(want), "concurrency serial encode equals the protoc oracle");
+
+    // Shared read-only fixture for phase (b): filled once here, never mutated
+    // while workers run.
+    using var shared = ty.NewMessage();
+    FillInto(shared, innerTy);
+
+    var problems = new List<string>();
+    var sw = Stopwatch.StartNew();
+    Parallel.For(0, workers, worker =>
+    {
+        for (var i = 0; i < Iters; i++)
+        {
+            // (a) independent-message encode == want bytes: each iteration
+            // owns its message; nothing crosses threads but ty/innerTy/want.
+            try
+            {
+                if (!Fill(ty, innerTy).SequenceEqual(want))
+                {
+                    lock (problems) { problems.Add($"worker {worker}: phase (a) independent-encode != want bytes"); }
+                }
+                Interlocked.Increment(ref checks);
+            }
+            catch (Exception e)
+            {
+                lock (problems) { problems.Add($"worker {worker}: phase (a) threw {e.GetType().Name}"); }
+            }
+            // (b) SHARED read-only message concurrent encode == want bytes.
+            try
+            {
+                if (!shared.Encode().SequenceEqual(want))
+                {
+                    lock (problems) { problems.Add($"worker {worker}: phase (b) shared-read-only-encode != want bytes"); }
+                }
+                Interlocked.Increment(ref checks);
+            }
+            catch (Exception e)
+            {
+                lock (problems) { problems.Add($"worker {worker}: phase (b) threw {e.GetType().Name}"); }
+            }
+            // (c) fresh-target decode with field checks, NOT re-encode.
+            try
+            {
+                using var back = ty.Decode(want);
+                Interlocked.Increment(ref checks);
+                var ok = back.GetInt("i32") == int.MinValue
+                    && back.GetBool("flag")
+                    && back.GetString("str") == "hello"
+                    && back.GetDouble("f64") == -123456.789
+                    && back.GetLong("color") == 2
+                    && back.GetLong("opt_i32") == -7
+                    && back.Count("nums") == 3
+                    && back.At("nums", 1)?.AsLong() == -5
+                    && back.At("tags", 1)?.AsString() == "bb"
+                    && back.At("inners", 1)?.AsMessage()?.GetLong("value") == -2
+                    && back.At("flags", 1)?.AsBool() == false
+                    && back.GetMessage("inner")?.GetString("name") == "kid";
+                if (!ok)
+                {
+                    lock (problems) { problems.Add($"worker {worker}: phase (c) fresh-target decode field mismatch"); }
+                }
+            }
+            catch (Exception e)
+            {
+                lock (problems) { problems.Add($"worker {worker}: phase (c) threw {e.GetType().Name}"); }
+            }
+        }
+    });
+    sw.Stop();
+    var total = workers * Iters * 3;
+    Console.WriteLine($"OK   concurrent: {total} encodes+decodes in {sw.Elapsed.TotalSeconds:F3} s ({total / sw.Elapsed.TotalSeconds:F0}/s)");
+    Check(problems.Count == 0, "concurrency: " + string.Join("; ", problems.Take(8)));
 }
 
 using var schema = Schema.FromFile(desc);
@@ -280,6 +452,8 @@ Check(Rejects(() => edgeTy.NewMessage().SetMessage("text"), "not a message field
     view.Dispose();
     live.Dispose();
 }
+
+Concurrency(schema, ty, innerTy, oracle);
 
 var coreChecks = Pbwire.Test.CoreTests.Run(Path.GetDirectoryName(Path.GetFullPath(desc))!);
 Console.WriteLine($"OK   pure core: {coreChecks} checks passed");

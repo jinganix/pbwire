@@ -12,40 +12,40 @@ const C_DATA = joinpath(@__DIR__, "..", "..", "c", "tests", "data")
 const CORE_DATA = joinpath(@__DIR__, "..", "..", "..", "tests", "data")
 
 function fill_scalars!(m::Message)
-    set_int!(m, "i32", -2147483648)
-    set_int!(m, "i64", 9223372036854775807)
-    set_int!(m, "u32", 4294967295)
-    set_int!(m, "u64", -1) # u64::MAX bits
-    set_int!(m, "s32", -2147483648)
-    set_int!(m, "s64", -9223372036854775808)
-    set_int!(m, "fx32", 0xdeadbeef)
-    set_int!(m, "fx64", 72623859790382856)
-    set_int!(m, "sfx32", -2147483648)
-    set_int!(m, "sfx64", -9223372036854775808)
-    set_float!(m, "f32", Inf)
-    set_double!(m, "f64", -123456.789)
-    set_bool!(m, "flag", true)
-    set_string!(m, "str", "hello")
-    set_int!(m, "color", 2)
-    set_int!(m, "opt_i32", -7)
-    set_string!(m, "opt_str", "opt")
+    Pbwire.set_int!(m, "i32", -2147483648)
+    Pbwire.set_int!(m, "i64", 9223372036854775807)
+    Pbwire.set_int!(m, "u32", 4294967295)
+    Pbwire.set_int!(m, "u64", -1) # u64::MAX bits
+    Pbwire.set_int!(m, "s32", -2147483648)
+    Pbwire.set_int!(m, "s64", -9223372036854775808)
+    Pbwire.set_int!(m, "fx32", 0xdeadbeef)
+    Pbwire.set_int!(m, "fx64", 72623859790382856)
+    Pbwire.set_int!(m, "sfx32", -2147483648)
+    Pbwire.set_int!(m, "sfx64", -9223372036854775808)
+    Pbwire.set_float!(m, "f32", Inf)
+    Pbwire.set_double!(m, "f64", -123456.789)
+    Pbwire.set_bool!(m, "flag", true)
+    Pbwire.set_string!(m, "str", "hello")
+    Pbwire.set_int!(m, "color", 2)
+    Pbwire.set_int!(m, "opt_i32", -7)
+    Pbwire.set_string!(m, "opt_str", "opt")
     for n in (1, -5, 300)
-        set_int!(m, "nums", n)
+        Pbwire.set_int!(m, "nums", n)
     end
     for tag in ("a", "bb")
-        set_string!(m, "tags", tag)
+        Pbwire.set_string!(m, "tags", tag)
     end
     for (x, v) in (("x", 1), ("y", -2))
-        inner = set_message!(m, "inners")
-        set_string!(inner, "name", x)
-        set_int!(inner, "value", v)
+        inner = Pbwire.set_message!(m, "inners")
+        Pbwire.set_string!(inner, "name", x)
+        Pbwire.set_int!(inner, "value", v)
     end
     for flag in (true, false, true)
-        set_bool!(m, "flags", flag)
+        Pbwire.set_bool!(m, "flags", flag)
     end
-    kid = set_message!(m, "inner")
-    set_string!(kid, "name", "kid")
-    set_int!(kid, "value", 42)
+    kid = Pbwire.set_message!(m, "inner")
+    Pbwire.set_string!(kid, "name", "kid")
+    Pbwire.set_int!(kid, "value", 42)
     return m
 end
 
@@ -251,4 +251,163 @@ end
         @test failures == 0
         println("  $(file): $(checks - failures)/$(checks) checks")
     end
+end
+
+using Base.Threads # @threads / Atomic for the testset below
+
+# Threading proof over the C-core path: 8 workers x 200 iters x three phases,
+# mirroring the other bindings' shape:
+#
+#   (a) independent-message encode == want bytes,
+#   (b) SHARED read-only message concurrent encode == want bytes,
+#   (c) fresh-target decode of want with field checks (NOT re-encode),
+#
+# plus a cold-cache phase first: fresh types shared across workers behind a
+# start gate, so every worker hits the field + nested-type caches in the same
+# instant (without the gate startup stagger could serialize the first fill
+# and the race window would be timing luck). The MsgType lock makes cold
+# resolution safe; with the lock reverted this phase fails, so it is not a
+# vacuous green.
+#
+# The schema, the warmed type, the want bytes and (for the cold phase) the
+# fresh types are the only cross-thread state, all read-only after warmup.
+# Every message a worker fills/encodes/decodes is worker-owned and closed;
+# the shared message is encode-only (its `cap` hint is atomic, so concurrent
+# encodes never race on the write-back). With `-t1` the same body runs as a
+# serial loop with the same asserts. Speed prints only, never asserted.
+@testset "concurrent" begin
+    schema = Pbwire.from_file(joinpath(C_DATA, "matrix3.desc"))
+    ty = Pbwire.msgtype(schema, "structtest.Scalars3")
+    oracle = read(joinpath(C_DATA, "matrix3.bin"))
+
+    # Serial oracle pin: one encode must equal the protoc bytes before any
+    # worker starts, so a mapping bug fails here and not in a thread. This
+    # also warms ty's field + nested-type caches, so the phases below share
+    # only read-only state.
+    probe = fill_scalars!(Pbwire.new_message(ty))
+    want = Pbwire.encode(probe)
+    @test want == oracle
+    Pbwire.close(probe)
+
+    # Shared read-only fixture for phase (b): built once, never mutated.
+    shared = fill_scalars!(Pbwire.new_message(ty))
+
+    problems = String[]
+    problems_lock = ReentrantLock()
+    record(w, phase) = lock(problems_lock) do
+        push!(problems, "worker $w: $phase")
+    end
+
+    # Phase (c) field checks, the same values the main suite pins.
+    function check_decoded(w, d)
+        ok = Pbwire.get_int(d, "i32") == -2147483648 &&
+            Pbwire.get_int(d, "u64") == -1 && # u64::MAX bits, kept as Int64
+            isinf(Pbwire.get_float(d, "f32")) &&
+            Pbwire.get_double(d, "f64") == -123456.789 &&
+            Pbwire.get_bool(d, "flag") &&
+            Pbwire.get_string(d, "str") == "hello" &&
+            Pbwire.get_int(d, "color") == 2 &&
+            Pbwire.get_int(Pbwire.get_message(d, "inner"), "value") == 42 &&
+            Pbwire.get_string(Pbwire.get_message(d, "inner"), "name") == "kid" &&
+            Pbwire.count(d, "nums") == 3 &&
+            Pbwire.as_int(Pbwire.at(d, "nums", 2)) == -5 &&
+            Pbwire.as_string(Pbwire.at(d, "tags", 2)) == "bb" &&
+            Pbwire.get_int(Pbwire.as_message(Pbwire.at(d, "inners", 2)), "value") == -2 &&
+            Pbwire.get_int(d, "opt_i32") == -7 &&
+            Pbwire.get_string(d, "opt_str") == "opt" &&
+            Pbwire.as_bool(Pbwire.at(d, "flags", 2)) == false
+        ok || record(w, "phase (c) fresh-target decode field mismatch")
+    end
+
+    function run_worker(w)
+        for _ in 1:200
+            # (a) independent-message encode == want bytes.
+            m = fill_scalars!(Pbwire.new_message(ty))
+            try
+                Pbwire.encode(m) == want ||
+                    record(w, "phase (a) independent-encode != want bytes")
+            catch e
+                record(w, "phase (a) independent-encode threw $e")
+            end
+            Pbwire.close(m)
+            # (b) SHARED read-only message concurrent encode == want bytes.
+            try
+                Pbwire.encode(shared) == want ||
+                    record(w, "phase (b) shared-read-only-encode != want bytes")
+            catch e
+                record(w, "phase (b) shared-read-only-encode threw $e")
+            end
+            # (c) fresh-target decode with field checks, NOT re-encode.
+            d = nothing
+            try
+                d = Pbwire.decode(ty, want)
+                check_decoded(w, d)
+            catch e
+                record(w, "phase (c) fresh-target decode threw $e")
+            end
+            d !== nothing && Pbwire.close(d)
+        end
+    end
+
+    # One serial worker first: the 1-thread reference for the timing print,
+    # with the same asserts as every other worker.
+    t_serial = @elapsed run_worker(0)
+    println("  concurrent serial reference: 600 encodes+decodes in " *
+        "$(round(t_serial, digits=3)) s ($(round(600 / t_serial)) ops/s)")
+
+    # Cold-cache phase on fresh types: string setters resolve every field
+    # name (warming `fields`), nested setters resolve the message types
+    # (warming `nested`), all under contention behind the start gate.
+    cold_ty = Pbwire.msgtype(schema, "structtest.Scalars3")
+    nstart = min(8, nthreads())
+    cold_body(w) = begin
+        for _ in 1:200
+            m = fill_scalars!(Pbwire.new_message(cold_ty))
+            try
+                Pbwire.encode(m) == want ||
+                    record(w, "phase (cold) cold-resolve encode != want bytes")
+            catch e
+                record(w, "phase (cold) cold-resolve threw $e")
+            end
+            Pbwire.close(m)
+        end
+    end
+    if nthreads() > 1
+        gate = Atomic{Int}(0)
+        t_cold = @elapsed @threads for w in 1:8
+            atomic_add!(gate, 1)
+            while gate[] < nstart
+                yield()
+            end
+            cold_body(w)
+        end
+        println("  concurrent cold-cache: 1600 resolves+encodes in " *
+            "$(round(t_cold, digits=3)) s ($(round(1600 / t_cold)) resolves/s)")
+    else
+        t_cold = @elapsed for w in 1:8
+            cold_body(w)
+        end
+        println("  concurrent cold-cache (serial fallback, 1 thread): " *
+            "1600 resolves+encodes in $(round(t_cold, digits=3)) s")
+    end
+
+    if nthreads() > 1
+        t = @elapsed @threads for w in 1:8
+            run_worker(w)
+        end
+        println("  concurrent: 4800 encodes+decodes in " *
+            "$(round(t, digits=3)) s ($(round(4800 / t)) ops/s)")
+    else
+        t = @elapsed for w in 1:8
+            run_worker(w)
+        end
+        println("  concurrent (serial fallback, 1 thread): " *
+            "4800 encodes+decodes in $(round(t, digits=3)) s")
+    end
+
+    if !isempty(problems)
+        println("  failures: " * join(Iterators.take(problems, 8), "; "))
+    end
+    @test isempty(problems)
+    Pbwire.close(shared)
 end

@@ -295,10 +295,11 @@ mutable struct MsgType
     desc::Ptr{Cvoid}
     fields::Dict{String,Field}
     nested::Dict{UInt32,MsgType} # per field number, so a nested walk reuses one cache
+    lock::ReentrantLock # guards both caches: first-burst threads share one type
 end
 
 _msgtype(s::Schema, desc::Ptr{Cvoid}) =
-    MsgType(s, desc, Dict{String,Field}(), Dict{UInt32,MsgType}())
+    MsgType(s, desc, Dict{String,Field}(), Dict{UInt32,MsgType}(), ReentrantLock())
 
 """Looks up a message by fully qualified name, e.g. `structtest.Scalars3`."""
 function msgtype(s::Schema, full_name::String)
@@ -310,24 +311,30 @@ function msgtype(s::Schema, full_name::String)
     return _msgtype(s, desc)
 end
 
-"""Resolves a field once and caches it: a later set/get costs one native call."""
+"""Resolves a field once and caches it: a later set/get costs one native call.
+
+The lookup-plus-fill holds the type lock, so first-burst threads sharing one
+type resolve concurrently without racing on the `Dict` (concurrent read+write
+on a `Dict` is undefined); the native lookup inside is a pure descriptor read."""
 function field(ty::MsgType, name::String)
-    cached = get(ty.fields, name, nothing)
-    if cached !== nothing
-        return cached
+    lock(ty.lock) do
+        cached = get(ty.fields, name, nothing)
+        if cached !== nothing
+            return cached
+        end
+        GC.@preserve ty begin
+            ptr = @libcall(:pbw_descriptor_find_field_name, Ptr{Cvoid},
+                (Ptr{Cvoid}, Cstring), ty.desc, name)
+        end
+        if ptr == C_NULL
+            dname = unsafe_string(
+                @libcall(:pbw_descriptor_name, Ptr{UInt8}, (Ptr{Cvoid},), ty.desc))
+            throw(PbwireError(-1, "$name: no such field on $dname"))
+        end
+        f = _field(ty, ptr)
+        ty.fields[name] = f
+        return f
     end
-    GC.@preserve ty begin
-        ptr = @libcall(:pbw_descriptor_find_field_name, Ptr{Cvoid},
-            (Ptr{Cvoid}, Cstring), ty.desc, name)
-    end
-    if ptr == C_NULL
-        dname = unsafe_string(
-            @libcall(:pbw_descriptor_name, Ptr{UInt8}, (Ptr{Cvoid},), ty.desc))
-        throw(PbwireError(-1, "$name: no such field on $dname"))
-    end
-    f = _field(ty, ptr)
-    ty.fields[name] = f
-    return f
 end
 
 """The message type of a MESSAGE/GROUP field, for nested access.
@@ -336,15 +343,17 @@ Memoised per (type, field number): without the cache every nested access built
 a fresh `MsgType` with an empty field cache, so each nested field lookup went
 back to a native name search."""
 function _nested_type(ty::MsgType, f::Field)
-    cached = get(ty.nested, f.number, nothing)
-    cached !== nothing && return cached
-    GC.@preserve ty f begin
-        desc = @libcall(:pbw_field_message_type, Ptr{Cvoid}, (Ptr{Cvoid},), f.ptr)
+    lock(ty.lock) do
+        cached = get(ty.nested, f.number, nothing)
+        cached !== nothing && return cached
+        GC.@preserve ty f begin
+            desc = @libcall(:pbw_field_message_type, Ptr{Cvoid}, (Ptr{Cvoid},), f.ptr)
+        end
+        desc == C_NULL && return nothing
+        sub = _msgtype(ty.schema, desc)
+        ty.nested[f.number] = sub
+        return sub
     end
-    desc == C_NULL && return nothing
-    sub = _msgtype(ty.schema, desc)
-    ty.nested[f.number] = sub
-    return sub
 end
 
 # ---------------------------------------------------------------- the message
@@ -356,13 +365,14 @@ mutable struct Message
     handle::Ptr{Cvoid}
     owned::Bool
     parent::Any # keeps the tree alive: the parent Message, or the Ctx it lives in
-    cap::Int # last wire length seen: the encode buffer hint, 0 when unknown
+    cap::Threads.Atomic{Int} # last wire length: the encode buffer hint (atomic,
+    # so concurrent encodes of one shared message never race on the write-back)
     function Message(ty::MsgType, handle::Ptr{Cvoid}, owned::Bool,
             parent, cap::Int = 0)
         if handle == C_NULL
             throw(PbwireError(-1, "pbw_message_new: out of memory"))
         end
-        return new(ty, handle, owned, parent, cap)
+        return new(ty, handle, owned, parent, Threads.Atomic{Int}(cap))
     end
 end
 
@@ -623,7 +633,7 @@ the allocating writer once and remembers the new size, so a re-encode loop
 settles on the direct path."""
 function encode(m::Message)
     len = Ref{Csize_t}(0)
-    cap = m.cap
+    cap = m.cap[]
     if cap == 0 # hand-built tree: ask the decoder's hint (0 unless it was decoded)
         cap = Int(@libcall(:pbw_message_wire_size, Csize_t, (Ptr{Cvoid},), m.handle))
     end
@@ -638,7 +648,7 @@ function encode(m::Message)
         if status == 0
             n = Int(len[])
             resize!(wire, n)
-            m.cap = n
+            m.cap[] = n
             return wire
         end
         status == _ERR_LIMIT || _check(status, "encode")
@@ -652,7 +662,7 @@ function encode(m::Message)
     n = Int(len[])
     wire = copy(unsafe_wrap(Array, out[], n; own = false))
     @libcall(:pbw_free, Cvoid, (Ptr{Cvoid},), out[])
-    m.cap = n
+    m.cap[] = n
     return wire
 end
 
