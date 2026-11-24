@@ -245,3 +245,55 @@ tests need no `protoc`):
 ```shell
 (cd bindings/lua/tests/data && protoc --descriptor_set_out=sample.desc sample.proto)
 ```
+
+## Benchmarks
+
+### Lua (C module, tables) vs `lua-protobuf`
+
+![Lua (C module, tables) vs lua-protobuf — MB/s by tier](../../docs/charts/bench-lua-c-module-tables-vs-lua-protobuf.svg)
+
+| payload | op | pbwire-lua-shim (MB/s, x lua-protobuf) | lua-protobuf (MB/s) |
+|---|---|---|---|
+| 136 B | encode | 105.0 (1.07x ✅) | 98.2 |
+| 136 B | decode | 147.6 (1.63x ✅) | 90.4 |
+| 174 B | encode | 106.7 (1.06x ✅) | 100.6 |
+| 174 B | decode | 145.8 (1.59x ✅) | 91.8 |
+| 2469 B | encode | 107.8 (1.03x ✅) | 104.7 |
+| 2469 B | decode | 145.7 (1.54x ✅) | 94.5 |
+| 74913 B | encode | 111.0 (0.99x ❌) | 112.5 |
+| 74913 B | decode | 141.2 (1.47x ✅) | 96.3 |
+
+Same class as Ruby/R: a C extension over the core (plain tables in/out
+through one transient tree per call, statically linked), schema from
+a `FileDescriptorSet` at run time. The pbwire column is the native-in/native-out
+full task (`pbench/`), formal run
+`../../results/bench-lua-20261124T103637Z.json`: `shim` runs the plain-table task in
+one C entry. The per-field `tree` arm is compared in
+`pbench/README.md`, not here.
+
+One published row (`pbench/README.md` carries the selection):
+
+- **`pbwire-lua-shim`** is the task a Lua application runs: the plain table
+in, wire bytes out. One C entry (`schema:encode`) walks the table against the
+schema's prepared field table and writes straight from it into the wire
+buffer (one pass over schema fields in descriptor order, no intermediate
+tree, no per-value allocation); the decode is the same one entry in reverse
+and materializes the fresh table eagerly. It is the published comparison and
+beats lua-protobuf on every cell but one
+(1.03x-1.07x / 1.47x-1.63x vs lua-protobuf). It is also the already-shipped
+path, so the selection places nothing new in `runtime/`.
+
+The xlarge `shim` encode cell (0.99x) is a tie, not a finding: it flips
+between runs (1.07x-1.10x at the other tiers, 1.05x-1.06x for xlarge in the
+provisional `compare.lua` runs) inside the host's ±10% run-to-run spread, and
+both sides share the same fresh-table construction inside the timer. Decode
+wins at every tier because it is one validating parse straight into tables
+with no tree kept. Both directions walk one prepared per-descriptor cache,
+so a decoded table costs no field-name interning, no descriptor lookup and
+no hash growth per field (each table is created with its exact hash size,
+and an absent repeated field's empty table is written in the same pass). The
+gate is tier size plus a full-field expectation check, with tree/shim byte
+agreement and the unknown-field-999 vectors (top level and nested) on top;
+the baseline gate is the logical payload -- its bytes decode to the same
+gate-checked fields -- because `lua-protobuf`
+writes fields in table hash order, so raw byte equality is not required.

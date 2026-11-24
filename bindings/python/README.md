@@ -235,3 +235,72 @@ dual registration) must run first; `registry=false` drops
 `MESSAGE_NAMES` + `preload()`. The committed output is
 `tests/gen/` and `examples/gen/`; `examples/addressbook.py` uses the dataclasses
 only. See `../../codegen/README.md`.
+
+## Benchmarks
+
+### Python vs `google.protobuf` (upb)
+
+![Python vs google.protobuf (upb) — MB/s by tier](../../docs/charts/bench-python-vs-google-protobuf-upb.svg)
+
+| payload | op | pbwire-py shim (MB/s, x upb) | upb (MB/s) |
+|---|---|---|---|
+| 136 B | encode(data) | 113.5 (2.93x ✅) | 38.8 |
+| 136 B | to_dict(bytes) | 162.1 (4.93x ✅) | 32.9 |
+| 174 B | encode(data) | 131.2 (2.95x ✅) | 44.5 |
+| 174 B | to_dict(bytes) | 149.7 (5.42x ✅) | 27.6 |
+| 2469 B | encode(data) | 178.5 (3.07x ✅) | 58.2 |
+| 2469 B | to_dict(bytes) | 181.2 (4.52x ✅) | 40.1 |
+| 74913 B | encode(data) | 141.2 (2.43x ✅) | 58.2 |
+| 74913 B | to_dict(bytes) | 155.9 (3.70x ✅) | 42.1 |
+
+The `shim` rows are the published comparison: the same native task in one
+downcall per op (fresh dict in, `encode(dict)`; `decode(bytes)` plus
+`to_dict()` with every field read back). The per-field `tree` arm is compared
+in `pbench/README.md`, not here. Formal run `../../results/bench-python-20261124T094642Z.json`.
+
+Rows are the same user-visible task in both arms:
+
+- **encode(data)** starts from the same dict. upb has no dict entry point, so
+  its side is filling a generated message field by field and then serializing;
+  that population is most of the ~945 us on the 75 KB tier. pbwire walks the
+  dict once and writes the wire directly (the one-downcall `shim` path).
+- **to_dict(bytes)** ends with plain Python data on either side: native
+  `decode(bytes)` plus `to_dict()`, against `FromString` plus reading every field through
+  `ListFields()`. This is the `malloc`-bound row — 3000 sub-messages mean 3000
+  dicts, 12000 ints and 3000 strings on either side, and nobody escapes it.
+  (`json_format.MessageToDict` is ~4x slower than reading the fields, so the
+  harness does not use it.)
+
+#### What the optimization pass changed
+
+| version | xlarge encode | xlarge decode |
+|---|---|---|
+| cffi bridge (one call per value) | 9.3 MB/s | 8.6 MB/s |
+| CPython extension, dict-in/dict-out | 586.7 | 202.5 (dict) |
+| CPython extension, parsed messages | 554.6 | 1284.7 (message) |
+
+The dict codec was already at the floor for its contract: decoding into plain
+dicts costs one dict, one list and one int/str object per value, and the old
+`decode()` was within 10% of that floor. That is why it stayed at 0.26-0.4x of
+upb — upb never builds those objects. The way out was not a faster loop but a
+different representation:
+
+- `decode()` now returns a `Message` that records one 16-byte slice per wire
+  field instead of materializing a dict tree: one tag scan, one allocation per
+  message (the slices live inside the object up to 16 fields), and the whole
+  payload validated while walking it.
+- Materialization moved to `Message.to_dict()` / `Message.getattr`, so it only
+  happens for fields that are actually read.
+- `encode()` accepts a `Message` and returns the retained bytes, which is what
+  makes the parse/encode round trip exact (and why the Python conformance
+  testee no longer needs a failure list).
+- The per-field facts (number, type, wire type, packed/required/oneof, sub-type)
+  are resolved once per message type and cached per schema, so
+  `schema.message(name)` is a dict lookup and the hot loops never see a
+  descriptor.
+- Decode pre-sizes the list for a packed run (element count from the payload:
+  varints end on a byte without the continuation bit, fixed runs divide) and
+  fills it with `PyList_SET_ITEM`; the per-field list table lives on the stack
+  for messages with up to 8 fields, which is every sub-message on these tiers.
+
+The pure-Python core port is compared in `pbench/README.md`, not here.

@@ -277,3 +277,31 @@ exception or a bad term handled in the NIF kills the whole VM.
 gpb records are the generated model: `protoc-erl` generates the record definitions and `get_msg_defs/0`,
 and the binding encodes/decodes those records directly. There is no second generator and no
 `codegen` output for Erlang.
+
+## Benchmarks
+
+### Erlang: `pbwire` vs gpb vs gpb NIF
+
+![Erlang: pbwire vs gpb vs gpb NIF — MB/s by tier](../../docs/charts/bench-erlang-pbwire-vs-gpb-vs-gpb-nif.svg)
+
+`matrix3.proto`, all four tiers, best of three samples per op. Same payload / op /
+MB/s layout as every other table: the `pbwire-erlang` column carries the ratio
+against the faster of gpb / gpb NIF per op (gpb is the byte reference either
+way), the other columns are the two baselines side by side. Formal run
+`../../results/bench-erlang-20261124T110417Z.json`. The `pbwire-erlang`
+rows are the single NIF arm with a fresh record built inside the timed closure
+per iteration (native-in full task); gpb, the pure-Erlang codec,
+**is** the `core` comparison, so a second BEAM port would measure our code
+against the competitor rather than a decision. No second pbwire path exists
+here, so this single-arm section is unchanged.
+
+| payload | op | pbwire-erlang (MB/s, x best) | gpb (MB/s) | gpb-nif (MB/s) |
+|---|---|---|---|---|
+| 136 B | encode | 466.5 (3.02x ✅) | 154.6 | 92.2 |
+| 136 B | decode | 532.6 (2.22x ✅) | 240.1 | 107.2 |
+| 174 B | encode | 353.0 (2.42x ✅) | 145.6 | 89.4 |
+| 174 B | decode | 512.4 (2.36x ✅) | 217.5 | 115.5 |
+| 2469 B | encode | 318.7 (2.74x ✅) | 116.2 | 78.5 |
+| 2469 B | decode | 345.1 (1.58x ✅) | 219.1 | 192.2 |
+| 74913 B | encode | 322.8 (2.95x ✅) | 109.0 | 109.4 |
+| 74913 B | decode | 355.5 (1.59x ✅) | 223.5 | 214.5 |

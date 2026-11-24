@@ -128,3 +128,48 @@ embedded descriptor set, `loadSchema`, `MESSAGE_NAMES` + `preload`).
 `registry=false` drops the name list and preload. Loading stays explicit
 (the caller passes the schema), so there is no implicit registry for
 `register` to gate.
+
+## Benchmarks
+
+### Zig (static link) vs Arwalk/zig-protobuf
+
+![Zig (static link) vs Arwalk/zig-protobuf — MB/s by tier](../../docs/charts/bench-zig-static-link-vs-arwalk-zig-protobuf.svg)
+
+| payload | op | pbwire-zig-shim (MB/s, x zig-protobuf) | zig-protobuf (MB/s) |
+|---|---|---|---|
+| 136 B | encode | 1719.1 (1.37x ✅) | 1257.8 |
+| 136 B | decode | 1271.7 (1.46x ✅) | 868.6 |
+| 174 B | encode | 1355.5 (1.61x ✅) | 842.6 |
+| 174 B | decode | 1095.9 (1.44x ✅) | 759.4 |
+| 2469 B | encode | 1120.5 (1.42x ✅) | 788.7 |
+| 2469 B | decode | 708.9 (1.16x ✅) | 611.1 |
+| 74913 B | encode | 1129.9 (1.83x ✅) | 616.7 |
+| 74913 B | decode | 785.9 (1.40x ✅) | 559.8 |
+
+The pbwire column is the native-in/native-out full task (formal run
+`../../results/bench-zig-20261124T110757Z.json`): `shim` runs it in one
+`encodeInPlace`/`decodeInPlace` call. The per-field `tree` arm is compared in
+`pbench/README.md`, not here.
+
+Same class as Rust: the core sources compile into a static archive that links
+into one self-contained binary, schema from a `FileDescriptorSet` at run
+time. The baseline is Arwalk/zig-protobuf 7.0.0 generated code from the same
+`matrix3.proto` (tarball pinned in `build.zig.zon`, fetched on first run and
+cached; generation runs the system `protoc` against their plugin, and the
+`test` / plain `bench` steps never resolve the dependency, so they stay
+offline-safe — `bench.sh` runs pbwire-only by default, `--baseline` (what
+`make zig-bench` passes) runs the comparison). Bytes are gated equal on all
+four tiers before timing. `pbwire-zig-shim` is the published comparison: it
+times the generated
+`extern struct <Message>Mirror` with one `encodeInPlace`/`decodeInPlace` call
+into `../c/runtime/pbw_struct.c` (compiled into the same archive), so no
+field crosses per field. The shim is above the baseline on every cell.
+
+The pure-Zig core port is compared in `pbench/README.md`, not here.
+
+The baseline's decode is structural:
+it materializes every field with its own allocation (which is also what the
+small tiers time most of), while the binding decodes into one arena; the lead
+shrinks as the payload grows and per-byte work takes over. At
+`-Doptimize=ReleaseFast` (what `bench.sh` runs) both sides sit near the core's
+pace; the default debug build is ~20x slower and is not timed.

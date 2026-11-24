@@ -143,3 +143,38 @@ dynamic-only users; `register=false` delays type resolution so
 `init-schema` (embedded bytes by default, external bytes for the
 descriptor mode) must run first; `registry=false` drops `message-names`
 + `preload`.
+
+## Benchmarks
+
+### Clojure (Java runtime + interop) vs `protobuf-java`
+
+![Clojure (Java runtime + interop) vs protobuf-java — MB/s by tier](../../docs/charts/bench-clojure-java-runtime-interop-vs-protobuf-java.svg)
+
+| payload | op | pbwire-clj-core (MB/s, x protobuf-java) | protobuf-java (MB/s) |
+|---|---|---|---|
+| 136 B | encode | 19.8 (0.01x ❌) | 1476.3 |
+| 136 B | decode | 41.9 (0.06x ❌) | 672.7 |
+| 174 B | encode | 19.0 (0.02x ❌) | 956.2 |
+| 174 B | decode | 38.7 (0.07x ❌) | 585.0 |
+| 2469 B | encode | 10.7 (0.03x ❌) | 420.5 |
+| 2469 B | decode | 174.3 (0.37x ❌) | 476.4 |
+| 74913 B | encode | 10.8 (0.02x ❌) | 477.9 |
+| 74913 B | decode | 268.3 (0.58x ❌) | 464.3 |
+
+`core` is the mutable-message fast path and the published comparison: a fresh `Message` per iteration (build + fill + encode + close; decode plus a deep read-back of every gate-checked field), the generated
+model's native object with no map walk. The persistent-map API stays for
+convenience and is gated for parity, but hot loops use the mutable path — the
+same split the README documents (maps for convenience, the mutable path for
+hot loops) and Lua documents (table vs builder). The per-field `tree` map-API
+arm is compared in `pbench/` (see its README), not here.
+Formal run
+`../../results/bench-clojure-20261124T110510Z.json`.
+
+The timed path builds a fresh mutable message per iteration (fill + encode + close, with the same deep read-back as the tree arm on decode and no map materialization), like the Java row, and the
+baseline builds a fresh message per iteration for its direct `toByteArray` call: the measured type carries a hint so
+the call compiles direct. An unhinted local reflects (~800 ns a call here)
+and never warms, which once inflated this row past 9x. The persistent-map
+fns stay for convenience and are gated for parity, but hot loops use the
+mutable path — the same split Lua documents (table vs builder). Same codec
+as Java/Scala underneath (plain interop over the Java runtime, no second
+wire implementation), byte parity per tier.

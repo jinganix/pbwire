@@ -143,3 +143,74 @@ built: tables without the schema UTF-8 flag (hand-written or stale regen)
 skip UTF-8 validation on the struct path — current protoc-gen-pbwire output
 sets it; deterministic encode keeps foreign
 (`ForeignOps`) rows in first-seen order while native map-entry rows sort by key.
+
+## Benchmarks
+
+### Go (thin model vs protobuf-go)
+
+![Go (thin model vs protobuf-go) — MB/s by tier](../../docs/charts/bench-go-thin-model-vs-protobuf-go.svg)
+
+The shipped engine is the pure-Go table codec in
+[`runtime/`](runtime/): no cgo,
+no layout tables. `make go-bench` (`benchmarks`, build-tagged
+so `go test ./...` stays fast) times the thin generated model —
+`Marshal()`/`Unmarshal()` over that engine, native struct in and out —
+against `protobuf-go` generated code from the same `matrix3.proto` on all
+four tiers. The two generated packages are the committed ones under
+`tests`, so `bench.sh` needs Go only: no protoc, no C toolchain,
+no descriptor.
+
+The rows below time the same user-visible task, struct in and struct
+out, gated on byte-identical output and a field-by-field decode before
+timing; the `*-par` rows run the same ops across `GOMAXPROCS` goroutines.
+Apple M4 Pro, same process times both sides:
+
+| payload | op | pbwire-go (MB/s, x protobuf-go) | protobuf-go (MB/s) | allocs/op (pbwire / protobuf-go) | B/op (pbwire / protobuf-go) |
+|---|---|---|---|---|---|
+| 136 B | encode | 549.8 (1.17x ✅) | 469.5 | 5 / 5 | 500 / 516 |
+| 136 B | decode | 779.3 (1.41x ✅) | 551.5 | 5 / 7 | 368 / 384 |
+| 174 B | encode | 564.3 (1.29x ✅) | 437.1 | 10 / 10 | 624 / 656 |
+| 174 B | decode | 588.9 (1.26x ✅) | 468.1 | 10 / 14 | 504 / 488 |
+| 2469 B | encode | 444.8 (1.51x ✅) | 294.2 | 133 / 133 | 15744 / 17360 |
+| 2469 B | decode | 417.1 (1.48x ✅) | 281.3 | 117 / 325 | 12556 / 15064 |
+| 74913 B | encode | 520.7 (1.38x ✅) | 376.4 | 3057 / 3057 | 499011 / 547028 |
+| 74913 B | decode | 419.8 (1.31x ✅) | 321.2 | 3035 / 9037 | 451168 / 472237 |
+| 136 B | encode-par | 897.5 (0.97x ❌) | 926.0 | 5 / 5 | 500 / 516 |
+| 136 B | decode-par | 1281.4 (1.17x ✅) | 1095.8 | 5 / 7 | 368 / 384 |
+| 174 B | encode-par | 864.3 (1.09x ✅) | 790.5 | 10 / 10 | 624 / 656 |
+| 174 B | decode-par | 994.1 (1.31x ✅) | 761.1 | 10 / 14 | 504 / 488 |
+| 2469 B | encode-par | 451.3 (1.05x ✅) | 429.1 | 133 / 133 | 15744 / 17360 |
+| 2469 B | decode-par | 526.2 (1.16x ✅) | 454.8 | 117 / 325 | 12556 / 15064 |
+| 74913 B | encode-par | 526.1 (0.93x ❌) | 566.3 | 3057 / 3057 | 499011 / 547028 |
+| 74913 B | decode-par | 657.2 (0.99x ❌) | 663.4 | 3035 / 9037 | 451168 / 472237 |
+
+Encode is ahead on every tier: the fast path reads scalars, strings and
+bytes straight from struct memory with no getter calls and no tree, staging
+each row in a stack-local buffer with a single writeback so parallel encodes
+no longer pay a GC write barrier per append. Decode stores plain integer-width scalars straight into struct memory
+through the same offset columns (no pointers cross, so no write barrier is
+skipped); strings, bytes and optionals go through typed unsafe stores with
+the barrier intact, slices append straight to the struct header, and only
+submessage creation stays on closures. Two-byte varints skip the counting
+loop in both tag and value parsing. The decode loop parses plain Fast
+scalar fields inline — tag, value and store with no call and no nested
+dispatch. Two-byte tags resolve the same way: the first byte indexes the
+row and the second verifies it, so repeated and optional fields skip Next
+and lookup with no new call on the path. Encode leads 1.17x–1.51x serial
+(0.93x–1.09x par); serial decode wins on all four tiers
+(1.41x/1.26x/1.48x/1.31x). Both hints size exactly, so B/op lands
+in the same Go size class as the baseline on every tier, and
+decode takes fewer allocs on every tier. 13 of 16 cells are green; the
+three red rows sit within a few percent of
+parity on work that flips either way between runs on this shared box
+(small encode-par 0.97x, xlarge encode-par 0.93x, xlarge decode-par 0.99x),
+while the serial twins on identical work win outright (1.38x / 1.31x). Figures are
+medians of three same-host runs (the box carried other tenants'
+load throughout, so single runs flop ±10%); published as measured,
+not as a scaling claim. The
+pbench gate pins the semantic edge the table cannot show: invalid UTF-8 in
+a proto3 string fails on every path, and unknown fields round-trip through
+the struct paths byte for byte (`TestGateSemantics`). The dynamic arms
+behind the thin model (the per-field `dync` tree, the pure-Go `core` paths)
+and the vendored `cshim` candidate are compared in
+[`pbench/`](pbench/) (see its README), not here.

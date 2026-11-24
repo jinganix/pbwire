@@ -139,3 +139,40 @@ without a second implementation:
 | `anyPack`, `anyTypeUrl`/`anyPayload`, `timestampFromMillis`/`timestampMillis` (+ duration), `fieldMaskPaths` | WKT helpers |
 | `serviceCount`/`serviceAt`/`service`, `resolveMethod` | routing metadata |
 | `decodeLimits(ty, wire, maxBytes, maxDepth)` | input bounds |
+
+## Benchmarks
+
+### F# (facade over the C# runtime) vs Google.Protobuf
+
+![F# (facade over the C# runtime) vs Google.Protobuf — MB/s by tier](../../docs/charts/bench-f-facade-over-the-c-runtime-vs-google-protobuf.svg)
+
+| payload | op | pbwire-fsharp-shim (MB/s, x) | Google.Protobuf (MB/s) |
+|---|---|---|---|
+| 136 B | encode | 971.3 (2.31x ✅) | 421.1 |
+| 136 B | decode | 759.0 (1.52x ✅) | 498.5 |
+| 174 B | encode | 744.2 (2.05x ✅) | 363.3 |
+| 174 B | decode | 611.9 (1.49x ✅) | 410.6 |
+| 2469 B | encode | 473.1 (1.10x ✅) | 431.4 |
+| 2469 B | decode | 371.3 (0.76x ❌) | 485.9 |
+| 74913 B | encode | 496.0 (1.25x ✅) | 396.3 |
+| 74913 B | decode | 389.6 (0.73x ❌) | 531.6 |
+
+Same class as Kotlin: F# reuses the C# binding's project via
+`ProjectReference` and adds only an F#-idiomatic facade — no second runtime,
+no packages, schema from a `FileDescriptorSet` at run time. The baseline is
+`protoc`-generated C# compiled in a sibling project (F# cannot compile
+`.cs`). Byte parity per tier before timing. Both rows come from the C#
+runtime: `pbwire-fsharp-shim` is the C# generated model's native-object entry
+(`../csharp/pbench/Shim.cs`), i.e. the same one-call C reader over the
+flat image, so F# has no separate port and no second wire implementation.
+Formal run `../../results/bench-fsharp-20261124T104000Z.json`.
+
+`pbwire-fsharp-shim` is the published comparison: the
+generated model is copied into one contiguous unmanaged image per op and one
+C-reader call walks it, so no field crosses the boundary. It is above
+Google.Protobuf on every encode tier (1.10x-2.31x) and on the two small
+decode tiers (1.49x-1.52x). The 2469 B and 74913 B decode rows are below the
+baseline (0.76x, 0.73x): the C decode itself is faster than the reference
+parser, but materialising 3000 ints, 3000 strings, 3000 sub-messages and 3000
+bools into managed objects costs more than the reference parser's whole run.
+These F# rows are native-in/native-out rows.

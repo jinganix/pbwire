@@ -249,3 +249,37 @@ is always explicit). The Registry is per-file — qualified
 (`Spectest.Maptest.Registry`) when the file stem differs from the package
 prefix, short (`Xdep.Registry`) otherwise — so two files in one package
 never share one.
+
+## Benchmarks
+
+### Elixir (NIF over the shared core) vs `elixir-protobuf`
+
+![Elixir (NIF over the shared core) vs elixir-protobuf — MB/s by tier](../../docs/charts/bench-elixir-nif-over-the-shared-core-vs-elixir-protobuf.svg)
+
+| payload | op | pbwire-elixir (MB/s, x elixir-protobuf) | elixir-protobuf (MB/s) |
+|---|---|---|---|
+| 136 B | encode | 158.0 (3.15x ✅) | 50.1 |
+| 136 B | decode | 108.8 (1.75x ✅) | 62.2 |
+| 174 B | encode | 161.7 (3.10x ✅) | 52.2 |
+| 174 B | decode | 122.1 (1.90x ✅) | 64.4 |
+| 2469 B | encode | 151.7 (2.89x ✅) | 52.4 |
+| 2469 B | decode | 121.6 (2.05x ✅) | 59.2 |
+| 74913 B | encode | 160.4 (2.99x ✅) | 53.6 |
+| 74913 B | decode | 117.8 (1.91x ✅) | 61.7 |
+
+Same class as Erlang: the BEAM binding reuses the published `:pbwire` Hex
+NIF (the same C core as `bindings/erlang`) and owns only the struct↔tuple
+translation; `elixir-protobuf` is the schema plugin, like gpb is for Erlang, and
+its pure-Elixir rows **are** the `core` comparison for this binding. No
+second pbwire path exists here, so this single-arm section is unchanged.
+Every encode is byte-identical to `Protobuf.encode/1` and every decode reads
+back field-for-field equal to the input struct before timing; each encode
+iteration builds a fresh struct inside the timed closure (native-in full task). Formal run `../../results/bench-elixir-20261124T103901Z.json`. Known
+deliberate divergences from the oracle: NaN bit identity, unknown-field drop
+(the NIF tuple form has no storage), raise on missing `required`.
+
+The struct build is one pass over the NIF's record: the per-position field
+tables are built once per module at schema load, so a decode indexes them
+instead of walking two lists through `Tuple.to_list` + `Enum.zip` + `Enum.map`
++ a list concat. That is what lifted the xlarge decode row off the 0.99x floor
+(see the [attempts ledger](../../docs/perf-attempts.md)).
