@@ -1,0 +1,11 @@
+syntax = "proto3";
+
+package shop;
+
+import "examples/gateway.proto";
+
+// v1 echo gateway service: fixed-path contract fixture.
+// Echo semantics: PlaceOrder takes a shop.Order and returns it.
+service OrderService {
+  rpc PlaceOrder(Order) returns (Order);
+}

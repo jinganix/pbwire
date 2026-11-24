@@ -1,13 +1,12 @@
 # pbnginx — fixed-path reverse proxy demo (CONTRACT)
 
-> [!WARNING]
-> RULING-RELEVANT FINDING: `examples/gateway.proto` defines **zero
-> services and zero methods** (package `shop`; messages `Item`, `Order`
-> only — verified with `protoc --decode` and `grep -c 'service '`). The
-> plan's `shop.OrderService` names are placeholders. The service and
-> method below are a **PROPOSED stub** so Tasks 2–5 have fixed paths to
-> build against. If the fixture later gains a real `service` block, this
-> table MUST be revised to match it exactly.
+Fixture note: `examples/gateway.proto` (package `shop`) defines
+messages `Item` and `Order` only — no `service` block (per controller
+ruling it stays untouched). The service below is therefore declared in
+the overlay fixture `tools/pbnginx/gateway_svc.proto`, which imports
+`examples/gateway.proto` and defines `service OrderService` with echo
+semantics (`PlaceOrder`: `shop.Order` → `shop.Order`), matching the
+plan's v1 echo gateway.
 
 ## Fixed-path scheme
 
@@ -23,14 +22,16 @@ POST /pb/<service>/<method>
 - `<method>` is the proto `rpc` name exactly as declared (case-sensitive).
 - Request body: binary-encoded input message (`Content-Type: application/proto`).
 - Response body: binary-encoded output message.
-- Runtime schema entry is always `FileDescriptorSet` bytes
-  (`examples/gateway.desc`), loaded at startup, never embedded.
+- Runtime schema entry is always `FileDescriptorSet` bytes.
+  Later tasks load `tools/pbnginx/gateway_svc.desc` (generated with
+  `--include_imports`, so it embeds `shop.Order`/`shop.Item` via the
+  import), never `examples/gateway.desc` alone, never embedded code.
 
 ## Path table
 
-| Path | Input message | Output message | Status |
-|---|---|---|---|
-| /pb/shop.OrderService/PlaceOrder | shop.Order | shop.Order | PROPOSED stub — no `service` block in fixture |
+| Path | Input message | Output message |
+|---|---|---|
+| /pb/shop.OrderService/PlaceOrder | shop.Order | shop.Order |
 
 ## Pinned request vectors (`protoc --encode`, proto3 canonical)
 
