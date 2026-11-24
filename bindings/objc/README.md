@@ -144,7 +144,7 @@ the malloc'd buffer the C encoder already filled to `NSData`
 (`dataWithBytesNoCopy:length:freeWhenDone:`), and `decode` wraps the arena the C
 decoder produced in one `PBWMessage`.
 
-`pbwire-objc` therefore beats the generated runtime on every tier and both ops.
+`pbwire-objc` therefore beats the generated runtime on decode on every tier (encode trails just below: 0.96x at xlarge).
 The
 xlarge tier is one 74 KB string, i.e. a memcpy race: the generated encoder writes
 it into an `NSMutableData` of the final size, and the wrapper writes it into its

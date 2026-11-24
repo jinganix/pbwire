@@ -160,7 +160,7 @@ different codec.
 
 `pbwire-php-shim` is the published native-object entry; the per-field `tree`
 build is a `pbench/`-only arm (see `pbench/README.md`). The native array
-entry is below the official C extension because each field costs a hashtable
+entry leads the official C extension on encode on every tier (2.01x-2.90x) but stays below it on decode (0.36x-0.43x) because each field costs a hashtable
 lookup plus a C tree store, and decode materializes the array eagerly.
 `bench.sh` also times the `ext-ffi` deployment separately: the same
 `Type::encodeArray`/`decodeArray` API with the walk in PHP, one FFI call per
@@ -168,7 +168,7 @@ field, which is interpreter-scale (~5 MB/s) and published as
 `pbwire-php-shim-ffi` so the no-compiler cost is not quoted as the C extension.
 
 Without the C extension the same harness measures the pure-PHP runtime
-instead; see [BENCHMARKS.md](../../BENCHMARKS.md#php-vs-the-official-php-runtime-pure--c-extension) for the `shim-ffi` vs pure-PHP rows.
+instead; the `shim-ffi` vs pure-PHP rows are in the third table below.
 
 `pbench/` is the re-runnable arm comparison; `pbench/README.md` has the
 provisional table, the deferred-core TODO and the verdict.

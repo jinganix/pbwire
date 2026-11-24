@@ -148,13 +148,11 @@ no prebuilt struct before the timer). Every backend must match byte for byte
 equal to the input struct before anything is timed.
 
 Higher is better. Throughput in MB/s on serialized wire size.
-<!-- BENCHMARK_RESULTS_END -->
 
 The baseline is pure Elixir (~50 MB/s flat across tiers: per-field
 bookkeeping in the interpreter), so the NIF wins every cell; xlarge
-decode is the closest race (1.40x), where the struct↔tuple translation the
-Elixir half owns is most visible. Rerun with `make bench` and paste the new
-table over the block above.
+decode is the closest race (1.91x), where the struct↔tuple translation the
+Elixir half owns is most visible. Rerun with `make elixir-bench`; the recorded run lands in `results/`.
 
 ### Elixir (NIF over the shared core) vs `elixir-protobuf`
 

@@ -261,6 +261,44 @@ def main():
         per_file_embeds.setdefault(path, {})[idx] = (
             f"![{plain} — MB/s by tier]({prefix}/bench-{slug}.svg)")
 
+    # stub sections in BENCHMARKS.md (per-binding table moved to the
+    # binding README, header + one-liner + link left behind) keep their
+    # chart image too: match by section title slug.
+    generated = {}
+    for path, idx, title, series, srows in collect_sections():
+        generated.setdefault(slug_of(title), title.replace("`", ""))
+    blines = lines_of(BENCH)
+    # collect first (original coordinates), insert bottom-up so earlier
+    # indices stay valid
+    stub_inserts = []
+    for i, line in enumerate(blines):
+        m = re.match(r"###+ (.+)", line)
+        if not m:
+            continue
+        slug = slug_of(m.group(1))
+        if slug not in generated:
+            continue
+        window = blines[i + 1:i + 7]
+        if not any("Full table and method:" in w for w in window):
+            continue
+        if any(w.startswith("![") and f"bench-{slug}.svg" in w
+               for w in window):
+            continue
+        plain = generated[slug]
+        chart = (f"![{plain} — MB/s by tier]"
+                 f"(docs/charts/bench-{slug}.svg)")
+        j = i + 1
+        while j < len(blines) and blines[j] == "":
+            j += 1
+        stub_inserts.append((j, chart, slug))
+    for j, chart, slug in sorted(stub_inserts, reverse=True):
+        blines[j:j] = [chart, ""]
+        print(f"charted stub {slug} into BENCHMARKS.md")
+    if stub_inserts:
+        with open(BENCH, "w") as f:
+            f.write("\n".join(blines) + "\n")
+        print("stub charts written into BENCHMARKS.md")
+
     # embed under each header (bottom-up so indices stay valid;
     # skip blank lines when looking for an existing chart line)
     for path, embeds in per_file_embeds.items():

@@ -122,7 +122,7 @@ The `dec+ctx` rows are the binding's other decode entry point:
 `decode_in(ctx, ty, wire)` decodes into a reusable `Ctx`, so steady-state
 decoding stops allocating (the C core's `pbw_decode_ctx`, which resets a sealed
 arena on entry, so no separate reset call is needed). It matches the plain
-path on the 136 B tier, leads by 11% on 174 B and 1-8% on the larger tiers,
+path within a few percent on every tier (136 B +1.9%, 174 B -4.3%, 2469 B +1.0%, xlarge -4.1%),
 where the arena reset now keeps the used chunk prefix instead of re-mallocing
 it every decode. The tree it returns is read-only and dies at the
 next `decode_in`/`reset!` on that context.

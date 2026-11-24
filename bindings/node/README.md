@@ -242,7 +242,7 @@ Each field of a native-object op is one N-API property read or
 write (~60-70 ns) where protobufjs pays a few ns in its own heap.
 The verdict (tree handle path stays the documented default, the one-downcall
 `shim` is the recommended one-shot path) is in `pbench/README.md`
-and the ledger; the old prebuilt-handle `tree` headline is retired. The
+and the [attempts ledger](../../docs/perf-attempts.md); the old prebuilt-handle `tree` headline is retired. The
 pure-TypeScript core port is compared in `pbench/README.md`, not here.
 
 protobufjs is the published baseline, and the harness gates its bytes too.

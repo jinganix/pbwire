@@ -154,9 +154,7 @@ best is reported, so a busy machine hits both implementations equally.
 The four tiers are small / medium / large / xlarge (the repeated fields scaled
 x0 / x1 / x100 / x3000).
 
-`pbwire-java` wins from 174 B up on encode and wins every decode tier: 1.2x
-at 174 B, 1.1x at 2469 B, 1.1x at 74913 B on encode; 1.4x, 1.8x and 2.1x on
-decode. The one cell it loses is the 136 B encode (0.73x): `protobuf-java`'s
+The headline comparison is the generated-model `core` row in the table below (1.10x at 74 KB encode, 0.80x at 74 KB decode): `protobuf-java`'s
 generated writer is one straight-line block of known tags and values (~58 ns),
 while a dynamic codec pays a presence gate, a type dispatch and tag loads per
 field (~79 ns including the `byte[]` copy). That floor is structural, not

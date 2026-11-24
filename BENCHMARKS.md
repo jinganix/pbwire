@@ -139,8 +139,8 @@ materialization of every gate-checked field); `shim` rows and the shipped JVM
 `core` rows keep their timers except where the task
 changed. Pbench-only arms (the prebuilt `proxy` task, pure-language `core`
 ports, Go `dync`, the vendored `cshim`, the JNI ceiling) stay in
-`bindings/<lang>/pbench/README.md` and are never pasted here. The re-timed runs are `results/bench-<lang>-2026112*.json` (one
-binding at a time under `results/.bench.lock`), and the per-binding tables,
+`bindings/<lang>/pbench/README.md` and are never pasted here. The re-timed runs are `results/bench-<lang>-20261124*.json` (one
+binding at a time under `results/.bench.lock`); the per-binding tables live in each binding's README (`## Benchmarks`), and
 the at-a-glance rows and the per-binding summary below are pasted from them.
 Full re-time 2026-11-24 (fresh-build headline contract, `docs/perf-fairness.md`):
 every binding re-ran once under `results/.bench.lock`; the per-binding tables,
@@ -156,8 +156,8 @@ interleaved), and finally 04:00-04:30 UTC core, C, Python, Julia, Go, Rust,
 Node, Ruby, Lua, PHP and Zig re-ran once the encoder cached its buffer base
 pointer and capacity (a C-only change, so Java, Kotlin, Scala and Clojure kept
 their 03:00 numbers). The at-a-glance rows, the per-binding summary and the
-core table reflect those runs, except where the Go-parity re-time above
-re-pasted a binding's table from its `results/bench-<lang>-2026112*.json`
+core table reflect those runs, except where a re-time above
+re-pasted a binding's table from its `results/bench-<lang>-20261124*.json`
 run. Each row is pasted verbatim from one run of that binding, so
 both columns of a row come from the same measurement; where a binding
 was re-run (Ruby, Objective-C, Kotlin, Elixir, Julia, Erlang) the pasted run is the one
@@ -168,7 +168,7 @@ throughout (load average 5-14 on 14 cores, ~0.4-1.0 normalised), so absolute
 MB/s reads 10-20% low against a quiet machine while `x baseline` reproduces
 (run-to-run variation is ±10% per cell, more on the JVM narrow tiers).
 Erlang ran from its own record this time
-(`results/bench-erlang-20261123T055756Z.json`), pasted like every other binding.
+(`results/bench-erlang-20261124T110417Z.json`), pasted like every other binding.
 Dart ran with `protoc-gen-dart` 25.1.0 on `PATH` (`dart pub global activate
 protoc_plugin` plus `~/.pub-cache/bin`).
 
@@ -814,15 +814,21 @@ only — absolute numbers move between machines.
 
 ### C structs vs `protoc` generated (same `matrix3.proto`)
 
+![C structs vs protoc generated (same matrix3.proto) — MB/s by tier](docs/charts/bench-c-structs-vs-protoc-generated-same-matrix3-proto.svg)
+
 xlarge: encode 1148.2 (4.10x ✅) / decode 754.5 (2.01x ✅).
 Full table and method: [binding README](bindings/c/README.md#benchmarks).
 
 ### Go (thin model vs protobuf-go)
 
+![Go (thin model vs protobuf-go) — MB/s by tier](docs/charts/bench-go-thin-model-vs-protobuf-go.svg)
+
 xlarge: encode 520.7 (1.38x ✅) / decode 419.8 (1.31x ✅).
 Full table and method: [binding README](bindings/go/README.md#benchmarks).
 
 ### Python vs `google.protobuf` (upb)
+
+![Python vs google.protobuf (upb) — MB/s by tier](docs/charts/bench-python-vs-google-protobuf-upb.svg)
 
 xlarge: encode 141.2 (2.43x ✅) / decode 155.9 (3.70x ✅).
 Full table and method: [binding README](bindings/python/README.md#benchmarks).
@@ -840,95 +846,133 @@ Standard cases), which makes its xlarge tier a memcpy.
 
 #### Java vs `protobuf-java`
 
+![Java vs protobuf-java — MB/s by tier](docs/charts/bench-java-vs-protobuf-java.svg)
+
 xlarge: encode 452.3 (1.10x ✅) / decode 326.7 (0.80x ❌).
 Full table and method: [binding README](bindings/java/README.md#benchmarks).
 
 #### Node vs protobufjs
+
+![Node vs protobufjs — MB/s by tier](docs/charts/bench-node-vs-protobufjs.svg)
 
 xlarge: encode 58.9 (0.19x ❌) / decode 54.8 (0.12x ❌).
 Full table and method: [binding README](bindings/node/README.md#benchmarks).
 
 #### Ruby (C extension) vs the `google-protobuf` gem
 
+![Ruby (C extension) vs the google-protobuf gem — MB/s by tier](docs/charts/bench-ruby-c-extension-vs-the-google-protobuf-gem.svg)
+
 xlarge: encode 99.4 (4.87x ✅) / decode 159.4 (0.24x ❌).
 Full table and method: [binding README](bindings/ruby/README.md#benchmarks).
 
 #### Objective-C vs the `protobuf` ObjC runtime
+
+![Objective-C vs the protobuf ObjC runtime — MB/s by tier](docs/charts/bench-objective-c-vs-the-protobuf-objc-runtime.svg)
 
 xlarge: encode 211.6 (0.96x ❌) / decode 33134.1 (1.16x ✅).
 Full table and method: [binding README](bindings/objc/README.md#benchmarks).
 
 #### Kotlin vs `protoc --kotlin_out` over `protobuf-java`
 
+![Kotlin vs protoc --kotlin_out over protobuf-java — MB/s by tier](docs/charts/bench-kotlin-vs-protoc-kotlin-out-over-protobuf-java.svg)
+
 xlarge: encode 463.0 (27.24x ✅) / decode 324.0 (0.72x ❌).
 Full table and method: [binding README](bindings/kotlin/README.md#benchmarks).
 
 #### PHP vs the official PHP runtime (pure + C extension)
+
+![PHP vs the official PHP runtime (pure + C extension) — MB/s by tier](docs/charts/bench-php-vs-the-official-php-runtime-pure-c-extension.svg)
 
 xlarge: encode 162.8 (2.90x ✅) / decode 208.4 (0.36x ❌).
 Full table and method: [binding README](bindings/php/README.md#benchmarks).
 
 #### Dart vs the `protobuf` Dart package
 
+![Dart vs the protobuf Dart package — MB/s by tier](docs/charts/bench-dart-vs-the-protobuf-dart-package.svg)
+
 xlarge: encode 153.6 (1.80x ✅) / decode 784.0 (4.96x ✅).
 Full table and method: [binding README](bindings/dart/README.md#benchmarks).
 
 #### Rust vs prost
+
+![Rust vs prost — MB/s by tier](docs/charts/bench-rust-vs-prost.svg)
 
 xlarge: encode 1083.2 (2.06x ✅) / decode 698.3 (1.86x ✅).
 Full table and method: [binding README](bindings/rust/README.md#benchmarks).
 
 #### C# vs Google.Protobuf
 
+![C# vs Google.Protobuf — MB/s by tier](docs/charts/bench-c-vs-google-protobuf.svg)
+
 xlarge: encode 503.0 (1.32x ✅) / decode 383.7 (0.72x ❌).
 Full table and method: [binding README](bindings/csharp/README.md#benchmarks).
 
 ### Lua (C module, tables) vs `lua-protobuf`
+
+![Lua (C module, tables) vs lua-protobuf — MB/s by tier](docs/charts/bench-lua-c-module-tables-vs-lua-protobuf.svg)
 
 xlarge: encode 111.0 (0.99x ❌) / decode 141.2 (1.47x ✅).
 Full table and method: [binding README](bindings/lua/README.md#benchmarks).
 
 ### Erlang: `pbwire` vs gpb vs gpb NIF
 
+![Erlang: pbwire vs gpb vs gpb NIF — MB/s by tier](docs/charts/bench-erlang-pbwire-vs-gpb-vs-gpb-nif.svg)
+
 xlarge: encode 322.8 (2.95x ✅) / decode 355.5 (1.59x ✅) vs best of gpb / gpb NIF.
 Full table and method: [binding README](bindings/erlang/README.md#benchmarks).
 
 ### Swift (SwiftPM, static link) vs `apple/swift-protobuf`
+
+![Swift (SwiftPM, static link) vs apple/swift-protobuf — MB/s by tier](docs/charts/bench-swift-swiftpm-static-link-vs-apple-swift-protobuf.svg)
 
 xlarge: encode 912.6 (3.20x ✅) / decode 570.9 (2.47x ✅).
 Full table and method: [binding README](bindings/swift/README.md#benchmarks).
 
 ### Scala (Java runtime + DSL) vs ScalaPB
 
+![Scala (Java runtime + DSL) vs ScalaPB — MB/s by tier](docs/charts/bench-scala-java-runtime-dsl-vs-scalapb.svg)
+
 xlarge: encode 255.8 (170.53x ✅) / decode 161.9 (0.27x ❌).
 Full table and method: [binding README](bindings/scala/README.md#benchmarks).
 
 ### Elixir (NIF over the shared core) vs `elixir-protobuf`
+
+![Elixir (NIF over the shared core) vs elixir-protobuf — MB/s by tier](docs/charts/bench-elixir-nif-over-the-shared-core-vs-elixir-protobuf.svg)
 
 xlarge: encode 160.4 (2.99x ✅) / decode 117.8 (1.91x ✅).
 Full table and method: [binding README](bindings/elixir/README.md#benchmarks).
 
 ### Zig (static link) vs Arwalk/zig-protobuf
 
+![Zig (static link) vs Arwalk/zig-protobuf — MB/s by tier](docs/charts/bench-zig-static-link-vs-arwalk-zig-protobuf.svg)
+
 xlarge: encode 1129.9 (1.83x ✅) / decode 785.9 (1.40x ✅).
 Full table and method: [binding README](bindings/zig/README.md#benchmarks).
 
 ### F# (facade over the C# runtime) vs Google.Protobuf
+
+![F# (facade over the C# runtime) vs Google.Protobuf — MB/s by tier](docs/charts/bench-f-facade-over-the-c-runtime-vs-google-protobuf.svg)
 
 xlarge: encode 496.0 (1.25x ✅) / decode 389.6 (0.73x ❌).
 Full table and method: [binding README](bindings/fsharp/README.md#benchmarks).
 
 ### Clojure (Java runtime + interop) vs `protobuf-java`
 
+![Clojure (Java runtime + interop) vs protobuf-java — MB/s by tier](docs/charts/bench-clojure-java-runtime-interop-vs-protobuf-java.svg)
+
 xlarge: encode 10.8 (0.02x ❌) / decode 268.3 (0.58x ❌).
 Full table and method: [binding README](bindings/clojure/README.md#benchmarks).
 
 ### Julia (`dlopen` + `ccall`) vs ProtoBuf.jl
 
+![Julia (dlopen + ccall) vs ProtoBuf.jl — MB/s by tier](docs/charts/bench-julia-dlopen-ccall-vs-protobuf-jl.svg)
+
 xlarge: encode 263.9 (21.99x ✅) / decode 804.0 (1.09x ✅).
 Full table and method: [binding README](bindings/julia/README.md#benchmarks).
 
 ### R (C extension, named lists) vs RProtoBuf
+
+![R (C extension, named lists) vs RProtoBuf — MB/s by tier](docs/charts/bench-r-c-extension-named-lists-vs-rprotobuf.svg)
 
 xlarge: encode 51.9 (19.96x ✅) / decode 161.1 (53.70x ✅).
 Full table and method: [binding README](bindings/r/README.md#benchmarks).

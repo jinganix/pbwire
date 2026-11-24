@@ -77,7 +77,7 @@ mutable path.
 
 The small tiers are where a persistent map per message would lose: 3000
 submaps and 12000 boxed ints on the xlarge tier plus a per-field interop
-call cannot race a generated straight-line writer, and map materialization
+call cannot race a generated straight-line writer, and map materialization on decode is the same structural cost the Python dict path pays against upb. If a hot loop needs the Java row's speed, call the Java runtime directly -- it is already on the classpath.
 
 ### Clojure (Java runtime + interop) vs `protobuf-java`
 
@@ -111,10 +111,6 @@ fns stay for convenience and are gated for parity, but hot loops use the
 mutable path — the same split Lua documents (table vs builder). Same codec
 as Java/Scala underneath (plain interop over the Java runtime, no second
 wire implementation), byte parity per tier.
-
-on decode is the same structural cost the Python dict path pays against
-upb. If a hot loop needs the Java row's speed, call the Java runtime
-directly -- it is already on the classpath.
 
 The stale community alternative,
 [ninjudd/clojure-protobuf](https://github.com/ninjudd/clojure-protobuf)

@@ -221,7 +221,7 @@ The per-field `tree` build is a `pbench/`-only arm (see [`pbench/README.md`](pbe
 The `shim` row is the native-object path from `pbench/`: one C-extension entry
 walks a generated model's instance variables and fills the tree
 (`encode_object`), or materializes the generated model classes in C
-(`decode_object`). It removes the Ruby-side per-field loop but is below the gem, whose generated object already owns
+(`decode_object`). It removes the Ruby-side per-field loop; encode leads on every tier (2.19x-4.87x), while decode stays below the gem, whose generated object already owns
 C-backed storage and whose decode stays lazy. See
 [`pbench/README.md`](pbench/README.md) for the arms, gate and verdict.
 
