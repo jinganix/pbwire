@@ -251,3 +251,65 @@ literals and calls the generated `*_encode`/`*_decode` wrappers only.
 
 For every other language, `../../codegen/` generates the same kind of generated layer;
 see `../../codegen/README.md`.
+
+## Benchmarks
+
+### C structs vs `protoc` generated (same `matrix3.proto`)
+
+![C structs vs protoc generated (same matrix3.proto) — MB/s by tier](../../docs/charts/bench-c-structs-vs-protoc-generated-same-matrix3-proto.svg)
+
+The `pbwire-c-shim` rows are the struct codec reading C memory in place. Both
+sides build a fresh native struct per iteration inside the timer (fill +
+encode + free); the output buffer stays reused per side, the same reuse the
+harness always had. The dynamic tree still appears in `make bench`'s proxy
+rows for the same message, and `pbwire-c1` stays the one-shot probe.
+
+| payload | op | pbwire-c-shim (MB/s, x gen) | protoc gen (MB/s) |
+|---|---|---|---|
+| 136 B | encode | 1693.2 (2.37x ✅) | 715.9 |
+| 136 B | decode | 1292.5 (1.45x ✅) | 892.2 |
+| 174 B | encode | 1211.9 (1.89x ✅) | 641.4 |
+| 174 B | decode | 1098.6 (1.38x ✅) | 794.2 |
+| 2469 B | encode | 1128.1 (3.96x ✅) | 284.9 |
+| 2469 B | decode | 701.6 (1.75x ✅) | 401.5 |
+| 74913 B | encode | 1148.2 (4.10x ✅) | 280.2 |
+| 74913 B | decode | 754.5 (2.01x ✅) | 375.6 |
+
+The struct codec writes and reads wire bytes directly from the layout tables;
+there is no dynamic message tree in between. Four changes got it ahead of
+generated straight-line code instead of ~1.7x behind it:
+
+- a compiled codec (`pbw_struct_codec`) that resolves the schema once and
+  precomputes an opcode and the tag bytes per field, so the per-field work is
+  one small dispatch instead of a schema/type lookup;
+- an fnum -> field map plus a precomputed free list on the decode side, so a
+  field tag is one indexed load and releasing a tree only visits the rows that
+  own memory;
+- caller-owned buffers: one reused `pbw_struct_buf` for the output and one
+  reused `pbw_struct_arena` for decoded memory, so a steady-state loop does not
+  touch the allocator at all (an arena block never moves, so decoded pointers
+  stay valid);
+- a link-time encode budget (`tail`, one suffix sum per plan level): a
+  single reserve at level entry covers every singular scalar, so those write
+  through a hoisted cursor with no capacity check at all (measured 136 B
+  encode 0.93x -> 1.05x; per-field reserves chained every check through
+  `b->len`, which is what the last 7 ns were).
+
+The struct encoder's single pass
+(where `SerializeToString` walks the message twice: size, then write) and the
+decode arena (no per-value malloc, no free walk) dominate at every tier; the
+link-time budget above is what closed the last small-tier gap, where
+generated straight-line code has no per-field dispatch at all.
+
+The harness also prints a `pbwire-c1` block: the one-shot API, which compiles
+the layout per call and mallocs per value (7.1x / 6.0x slower at 136 B, 4.0x /
+4.6x at 174 B, and down to ~1.0x / ~1.7x from 2.5 KB up, where the per-call layout
+compile is amortised). It stays in the
+output so that trade-off is visible rather than hidden.
+
+Concurrency (same tree, `build/test_concurrency`, 8 threads x 200 iters:
+3200 verifications, 0 failures): scale encode 1thr 286.7 MB/s (669.6 ns/op),
+8thr 262.9 MB/s/thread, agg 2103.6 MB/s. The C++ mirror
+(`build/test_cpp_concurrency`, same engine, no separate bench section) passes
+the same way: 8 threads x 200 iters, 4800 verifications, 0 failures; scale
+encode 1thr 292.9 MB/s (655.6 ns/op), 8thr agg 1234.2 MB/s (155.6 ns/op).

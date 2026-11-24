@@ -56,3 +56,7 @@ performance numbers; higher is better, MB/s over wire bytes:
 | 74913 B | decode | 899.1 (2.3x) | 389.2 |
 
 
+
+## Benchmarks
+
+The C++ binding drives the same C struct codec measured under `make bench-c`; it ships no separate bench harness. Full table and method: [C structs vs `protoc` generated](../c/README.md#benchmarks).
