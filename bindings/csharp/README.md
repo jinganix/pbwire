@@ -70,18 +70,18 @@ offset reader, so every field still crosses once); the per-field `tree` build is
 
 | payload | op | pbwire-csharp-shim (MB/s, x protobuf-csharp) | protobuf-csharp (MB/s) |
 |---|---|---|---|---|
-| 136 B | encode | 957.2 (2.22x ✅) | 432.1 |
-| 136 B | decode | 745.5 (1.55x ✅) | 479.7 |
-| 174 B | encode | 747.4 (2.03x ✅) | 367.3 |
-| 174 B | decode | 617.0 (1.52x ✅) | 406.1 |
-| 2469 B | encode | 455.9 (1.09x ✅) | 417.2 |
-| 2469 B | decode | 360.5 (0.73x ❌) | 492.8 |
-| 74913 B | encode | 503.0 (1.32x ✅) | 379.8 |
-| 74913 B | decode | 383.7 (0.72x ❌) | 533.1 |
+| 136 B | encode | 978.3 (2.24x ✅) | 437.5 |
+| 136 B | decode | 758.2 (1.75x ✅) | 434.4 |
+| 174 B | encode | 737.4 (2.01x ✅) | 366.3 |
+| 174 B | decode | 608.0 (1.49x ✅) | 408.4 |
+| 2469 B | encode | 462.1 (1.09x ✅) | 423.7 |
+| 2469 B | decode | 364.6 (0.76x ❌) | 482.6 |
+| 74913 B | encode | 492.6 (1.30x ✅) | 378.3 |
+| 74913 B | decode | 370.4 (0.70x ❌) | 532.2 |
 
 The pbwire column is the native-in/native-out full task
 (`pbench/`, formal run
-`../../results/bench-csharp-20261124T102141Z.json`): `shim` runs it in one P/Invoke
+`../../results/bench-csharp-20261124T141514Z.json`): `shim` runs it in one P/Invoke
 per op. The per-field `tree` arm is compared in
 `pbench/README.md`, not here.
 

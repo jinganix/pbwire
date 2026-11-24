@@ -161,19 +161,19 @@ what a hot loop keeps.
 
 | payload | op | pbwire-r-shim (MB/s, x RProtoBuf) | RProtoBuf (MB/s) |
 |---|---|---|---|
-| 136 B | encode | 46.7 (17.30x ✅) | 2.7 |
-| 136 B | decode | 91.0 (32.50x ✅) | 2.8 |
-| 174 B | encode | 30.7 (10.96x ✅) | 2.8 |
-| 174 B | decode | 102.1 (32.94x ✅) | 3.1 |
-| 2469 B | encode | 46.0 (17.69x ✅) | 2.6 |
-| 2469 B | decode | 145.7 (47.00x ✅) | 3.1 |
-| 74913 B | encode | 51.9 (19.96x ✅) | 2.6 |
-| 74913 B | decode | 161.1 (53.70x ✅) | 3.0 |
+| 136 B | encode | 44.7 (17.19x ✅) | 2.6 |
+| 136 B | decode | 88.3 (32.70x ✅) | 2.7 |
+| 174 B | encode | 29.5 (11.35x ✅) | 2.6 |
+| 174 B | decode | 99.7 (33.23x ✅) | 3.0 |
+| 2469 B | encode | 46.3 (18.52x ✅) | 2.5 |
+| 2469 B | decode | 143.5 (47.83x ✅) | 3.0 |
+| 74913 B | encode | 48.2 (19.28x ✅) | 2.5 |
+| 74913 B | decode | 159.6 (57.00x ✅) | 2.8 |
 
 Same class as Lua/Ruby: a C extension over the core (named lists in/out
 through one transient tree per call, statically linked), schema from
 a `FileDescriptorSet` at run time. The pbwire column is the native-in/native-out
-full task (formal run `../../results/bench-r-20261124T104341Z.json`): `shim` runs the
+full task (formal run `../../results/bench-r-20261124T143645Z.json`): `shim` runs the
 named-list task in one `.Call`. The per-field `tree` arm is compared in
 `pbench/README.md`, not here.
 

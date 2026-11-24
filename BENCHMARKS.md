@@ -122,8 +122,11 @@ re-running, and refresh this section when the machine or toolchain moves.
 > in the ledger). The tables below are the post-change runs; the remaining
 > decode gaps are baseline strength, not validator cost.
 
-Last full refresh: 2026-11-23, 05:17-06:15 UTC (every `make *-bench`
-on this tree, one harness at a time, the whole matrix in ~60 minutes), plus an
+Last full refresh: 2026-11-24, 13:46-14:48 UTC (every `make *-bench`
+on this tree except Erlang, one harness at a time, the whole matrix in ~60 minutes;
+formal runs `results/bench-<lang>-20261124T13*.json` / `T14*.json`; dart's first
+attempt failed on a missing `protoc-gen-dart` and was re-run with
+`~/.pub-cache/bin` on `PATH`), plus an
 08:30 UTC core re-run after `bench/bench.cc` switched the generated and
 DynamicMessage encode arms to fresh-build per iteration (same construct +
 serialize calling method as the pbwire arms; see the Core section). Core
@@ -132,7 +135,7 @@ struct and the compiled struct codec (thin model, same new + set + encode task
 as the baseline; formal run `results/bench-core-20261124T071914Z.json`).
 Core re-run 2026-11-24, 07:38 UTC: the plain arms go through a fresh arena per
 call (same batched profile as the reference parse; formal run
-`results/bench-core-20261124T073808Z.json`). Go-parity re-time 2026-11-21/22 (issue 41 plan): every binding
+`results/bench-core-20261124T134623Z.json`). Go-parity re-time 2026-11-21/22 (issue 41 plan): every binding
 with a `pbench/` re-times its `tree` arm as the native-in/native-out full task
 (fresh native object per iteration, alloc and free inside the timer, deep
 materialization of every gate-checked field); `shim` rows and the shipped JVM
@@ -203,31 +206,31 @@ protoc_plugin` plus `~/.pub-cache/bin`).
 
 | binding | harness | baseline | cases | vs baseline (xlarge) |
 |---|---|---|---|---|
-| core (dynamic) | `make bench` (`bench/bench.cc`) | `protoc` C++ generated + DynamicMessage | all 4 | 2.19x ✅ / 1.88x ✅ `ctx` (plain 2.22x ✅ / 1.89x ✅; thin model, both sides build fresh per iteration) |
-| C structs | `make bench-c` (`bindings/c/benchmarks/bench_struct.cc`) | `protoc` C++ generated from the same `matrix3.proto` | all 4 | 4.10x ✅ / 2.01x ✅ `shim` |
+| core (dynamic) | `make bench` (`bench/bench.cc`) | `protoc` C++ generated + DynamicMessage | all 4 | 2.13x ✅ / 1.83x ✅ `ctx` (plain 2.18x ✅ / 1.89x ✅; thin model, both sides build fresh per iteration) |
+| C structs | `make bench-c` (`bindings/c/benchmarks/bench_struct.cc`) | `protoc` C++ generated from the same `matrix3.proto` | all 4 | 4.17x ✅ / 2.03x ✅ `shim` |
 | Erlang/OTP NIF | `make benchmarks` in `bindings/erlang/benchmarks` | gpb (pure Erlang), with gpb NIF (libprotobuf) as the second baseline, same `matrix3.proto` | all 4 | 2.95x / 1.59x vs best-of-two ✅ |
-| Python (CPython ext) | `make python-bench` (`bindings/python/benchmarks/bench.py`) | `google.protobuf` (upb C extension) on the same `matrix3.proto` | all 4 | 2.43x ✅ `shim encode(data)` / 3.70x ✅ `shim to_dict` |
-| C++ | same engine as C (`bindings/cpp` mirrors the C structs; `make bench-c` is the harness) | `protoc` C++ generated from the same `matrix3.proto` | all 4 | 4.10x ✅ / 2.01x ✅ |
-| Go (thin model, pure-Go engine) | `make go-bench` (`bindings/go/benchmarks`) | `protobuf-go` generated code from the same `matrix3.proto` | all 4 | 1.38x ✅ / 1.31x ✅ (xlarge; full tiers + allocs in section) |
-| Java (pure-Java codec) | `make java-bench` (`bindings/java/benchmarks`) | `protobuf-java` generated code from the same `matrix3.proto` | all 4 | 1.10x ✅ / 0.80x ❌ `core` (generated model) |
-| Node (N-API addon) | `make node-bench` (`bindings/node/benchmarks`) | [protobufjs](https://www.npmjs.com/package/protobufjs) from the same `matrix3.proto` | all 4 | 0.19x ❌ / 0.12x ❌ `shim` vs protobufjs |
-| Ruby (C extension) | `make ruby-bench` (`bindings/ruby/benchmarks`) | the `google-protobuf` gem (C extension) | all 4 | 4.87x ✅ / 0.24x ❌ `shim` (one C-extension entry per op) |
+| Python (CPython ext) | `make python-bench` (`bindings/python/benchmarks/bench.py`) | `google.protobuf` (upb C extension) on the same `matrix3.proto` | all 4 | 2.75x ✅ `shim encode(data)` / 3.58x ✅ `shim to_dict` |
+| C++ | same engine as C (`bindings/cpp` mirrors the C structs; `make bench-c` is the harness) | `protoc` C++ generated from the same `matrix3.proto` | all 4 | 4.17x ✅ / 2.03x ✅ |
+| Go (thin model, pure-Go engine) | `make go-bench` (`bindings/go/benchmarks`) | `protobuf-go` generated code from the same `matrix3.proto` | all 4 | 1.36x ✅ / 1.33x ✅ (xlarge; full tiers + allocs in section) |
+| Java (pure-Java codec) | `make java-bench` (`bindings/java/benchmarks`) | `protobuf-java` generated code from the same `matrix3.proto` | all 4 | 0.95x ❌ / 0.80x ❌ `core` (generated model) |
+| Node (N-API addon) | `make node-bench` (`bindings/node/benchmarks`) | [protobufjs](https://www.npmjs.com/package/protobufjs) from the same `matrix3.proto` | all 4 | 0.18x ❌ / 0.13x ❌ `shim` vs protobufjs |
+| Ruby (C extension) | `make ruby-bench` (`bindings/ruby/benchmarks`) | the `google-protobuf` gem (C extension) | all 4 | 4.97x ✅ / 0.23x ❌ `shim` (one C-extension entry per op) |
 
-| Objective-C (ARC) | `make objc-bench` (`bindings/objc/benchmarks`) | the `protobuf` ObjC runtime + generated code from the same `matrix3.proto` | all 4 | 0.96x ❌ / 1.16x ✅ `tree` (encode 0.52x-0.96x, decode 1.16x-3.00x; fresh build per iteration) |
-| Kotlin (pure-Java codec + DSL) | `make kotlin-bench` (`bindings/kotlin/benchmarks`) | `protoc --kotlin_out` over `protobuf-java`, same `matrix3.proto` | all 4 | 27.24x ✅ / 0.72x ❌ `core` (generated model; xlarge encode on a `protobuf-kotlin` baseline collapse) |
-| PHP (`ext-ffi` + C extension) | `make php-bench` (`bindings/php/benchmarks`) | the official PHP runtime (`protobuf/php/src`): C extension (fastest) + pure-PHP | all 4 | 2.90x ✅ / 0.36x ❌ `shim` vs C ext (`shim-ffi` interpreter-scale; pure-PHP tables in section) |
-| Dart (`dart:ffi`) | `make dart-bench` (`bindings/dart/benchmarks`) | the `protobuf` Dart package + generated code | all 4 | 1.80x ✅ / 4.96x ✅ `shim` (one C-side reader call per op) |
-| Rust (static link) | `make rust-bench` (`bindings/rust/benchmarks`) | prost generated code from the same `matrix3.proto` | all 4 | 2.06x ✅ / 1.86x ✅ `shim` vs prost (one C-side struct-codec call per op; encode above prost at 2469 B up) |
-| C# (P/Invoke) | `make csharp-bench` (`bindings/csharp/benchmarks`) | Google.Protobuf C# generated code from the same `matrix3.proto` | all 4 | 1.32x ✅ / 0.72x ❌ `shim` (one P/Invoke per op over the flat image) |
-| Lua (C module, tables) | `make lua-bench` (`bindings/lua/benchmarks`) | `lua-protobuf` 0.6.0 | all 4 | 0.99x ❌ / 1.47x ✅ `shim` (native-object, one C entry per op; xlarge encode is a run-to-run tie) |
-| Swift (SwiftPM, static link) | `make swift-bench` (`bindings/swift/benchmarks`) | `apple/swift-protobuf` 1.39.0 generated code from the same `matrix3.proto` | all 4 | 3.20x ✅ / 2.47x ✅ `shim` (one C-side layout-codec call per op) |
-| Scala (Java runtime + DSL) | `make scala-bench` (`bindings/scala/benchmarks`) | ScalaPB 0.11.18 generated code from the same `matrix3.proto` | all 4 | 170.53x ✅ / 0.27x ❌ `core` (case class; xlarge encode on a ScalaPB baseline collapse) |
-| Elixir (NIF over the shared core) | `make elixir-bench` (`bindings/elixir/benchmarks`) | `elixir-protobuf` 0.17.1 structs from the same `matrix3.proto` | all 4 | 2.99x ✅ / 1.91x ✅ |
-| Zig (static link) | `make zig-bench` (`bindings/zig/benchmarks`, `-Doptimize=ReleaseFast`) | Arwalk/zig-protobuf 7.0.0 generated code from the same `matrix3.proto` | all 4 | 1.83x ✅ / 1.40x ✅ `shim` (`extern struct` mirror, one C struct-codec call per op) |
-| F# (facade over the C# runtime) | `make fsharp-bench` (`bindings/fsharp/benchmarks`) | Google.Protobuf C# generated code from the same `matrix3.proto` | all 4 | 1.25x ✅ / 0.73x ❌ `shim` (one C-reader call over the flat image) |
-| Clojure (Java runtime + interop) | `make clojure-bench` (`bindings/clojure/benchmarks`) | `protobuf-java` generated code from the same `matrix3.proto` | all 4 | 0.02x ❌ / 0.58x ❌ `core` (fresh mutable message per iteration; 0.01x at 136 B) |
-| Julia (`ccall` FFI) | `make julia-bench` (`bindings/julia/benchmarks`) | JuliaIO/ProtoBuf.jl 1.3.0 generated code from the same `matrix3.proto` | all 4 | 21.99x ✅ / 1.09x ✅ `shim` (one C-side layout read per op; xlarge encode on the ProtoBuf.jl baseline collapse; 136 B shim encode 0.01x) |
-| R (C extension, named lists) | `make r-bench` (`bindings/r/benchmarks`) | RProtoBuf 0.4.28 on the same `matrix3.proto` | all 4 | 19.96x ✅ / 53.70x ✅ `shim` (named list, one `.Call`, the walk in C) |
+| Objective-C (ARC) | `make objc-bench` (`bindings/objc/benchmarks`) | the `protobuf` ObjC runtime + generated code from the same `matrix3.proto` | all 4 | 0.98x ❌ / 1.16x ✅ `tree` (fresh build per iteration) |
+| Kotlin (pure-Java codec + DSL) | `make kotlin-bench` (`bindings/kotlin/benchmarks`) | `protoc --kotlin_out` over `protobuf-java`, same `matrix3.proto` | all 4 | 28.09x ✅ / 0.74x ❌ `core` (generated model; xlarge encode on a `protobuf-kotlin` baseline collapse) |
+| PHP (`ext-ffi` + C extension) | `make php-bench` (`bindings/php/benchmarks`) | the official PHP runtime (`protobuf/php/src`): C extension (fastest) + pure-PHP | all 4 | 2.98x ✅ / 0.37x ❌ `shim` vs C ext (`shim-ffi` interpreter-scale; pure-PHP tables in section) |
+| Dart (`dart:ffi`) | `make dart-bench` (`bindings/dart/benchmarks`) | the `protobuf` Dart package + generated code | all 4 | 1.82x ✅ / 4.84x ✅ `shim` (one C-side reader call per op) |
+| Rust (static link) | `make rust-bench` (`bindings/rust/benchmarks`) | prost generated code from the same `matrix3.proto` | all 4 | 2.02x ✅ / 1.86x ✅ `shim` vs prost (one C-side struct-codec call per op; encode above prost at 2469 B up) |
+| C# (P/Invoke) | `make csharp-bench` (`bindings/csharp/benchmarks`) | Google.Protobuf C# generated code from the same `matrix3.proto` | all 4 | 1.30x ✅ / 0.70x ❌ `shim` (one P/Invoke per op over the flat image) |
+| Lua (C module, tables) | `make lua-bench` (`bindings/lua/benchmarks`) | `lua-protobuf` 0.6.0 | all 4 | 0.99x ❌ / 1.44x ✅ `shim` (native-object, one C entry per op; xlarge encode is a run-to-run tie) |
+| Swift (SwiftPM, static link) | `make swift-bench` (`bindings/swift/benchmarks`) | `apple/swift-protobuf` 1.39.0 generated code from the same `matrix3.proto` | all 4 | 3.24x ✅ / 2.54x ✅ `shim` (one C-side layout-codec call per op) |
+| Scala (Java runtime + DSL) | `make scala-bench` (`bindings/scala/benchmarks`) | ScalaPB 0.11.18 generated code from the same `matrix3.proto` | all 4 | 184.79x ✅ / 0.27x ❌ `core` (case class; xlarge encode on a ScalaPB baseline collapse) |
+| Elixir (NIF over the shared core) | `make elixir-bench` (`bindings/elixir/benchmarks`) | `elixir-protobuf` 0.17.1 structs from the same `matrix3.proto` | all 4 | 2.98x ✅ / 1.91x ✅ |
+| Zig (static link) | `make zig-bench` (`bindings/zig/benchmarks`, `-Doptimize=ReleaseFast`) | Arwalk/zig-protobuf 7.0.0 generated code from the same `matrix3.proto` | all 4 | 1.84x ✅ / 1.47x ✅ `shim` (`extern struct` mirror, one C struct-codec call per op) |
+| F# (facade over the C# runtime) | `make fsharp-bench` (`bindings/fsharp/benchmarks`) | Google.Protobuf C# generated code from the same `matrix3.proto` | all 4 | 1.28x ✅ / 0.74x ❌ `shim` (one C-reader call over the flat image) |
+| Clojure (Java runtime + interop) | `make clojure-bench` (`bindings/clojure/benchmarks`) | `protobuf-java` generated code from the same `matrix3.proto` | all 4 | 0.02x ❌ / 0.54x ❌ `core` (fresh mutable message per iteration; 0.01x at 136 B) |
+| Julia (`ccall` FFI) | `make julia-bench` (`bindings/julia/benchmarks`) | JuliaIO/ProtoBuf.jl 1.3.0 generated code from the same `matrix3.proto` | all 4 | 22.35x ✅ / 1.08x ✅ `shim` (one C-side layout read per op; xlarge encode on the ProtoBuf.jl baseline collapse; 136 B shim encode 0.02x) |
+| R (C extension, named lists) | `make r-bench` (`bindings/r/benchmarks`) | RProtoBuf 0.4.28 on the same `matrix3.proto` | all 4 | 19.28x ✅ / 57.00x ✅ `shim` (named list, one `.Call`, the walk in C) |
 
 "vs baseline" is encode / decode throughput relative to the most-popular baseline on
 the largest case the binding runs. Each binding is compared against its
@@ -289,28 +292,28 @@ times the same native-in/native-out task on the same payload, never a tree
 built before the timer; bytes are identical everywhere. The headline rows now
 time the same task the generated baseline times -- one native object in, one
 codec call -- so the sub-1.0x cells that remain are codec gaps, not boundary
-floors: Node's `shim` (0.19x / 0.12x of protobufjs at
-74 KB), Ruby's and PHP's `shim` decode (0.24x of the gem; 0.36x of
-the official C extension -- encode now leads on both, 4.87x / 2.90x,
+floors: Node's `shim` (0.18x / 0.13x of protobufjs at
+74 KB), Ruby's and PHP's `shim` decode (0.23x of the gem; 0.37x of
+the official C extension -- encode now leads on both, 4.97x / 2.98x,
 under the same fresh-build task), the JVM `core` decode (Java 0.80x of
-protobuf-java; Kotlin 0.72x and Scala 0.27x ride the same
-runtime), Clojure's `core` on both ops (0.02x / 0.58x: the fresh
+protobuf-java; Kotlin 0.74x and Scala 0.27x ride the same
+runtime), Clojure's `core` on both ops (0.02x / 0.54x: the fresh
 mutable-message build per iteration dominates there), the managed materialization on C#/F# `shim` decode at
-74 KB (0.72x / 0.73x: the C decode is faster than the reference parser, but
+74 KB (0.70x / 0.74x: the C decode is faster than the reference parser, but
 materializing 3000 managed objects costs more than its whole run), and
 Julia's small-tier `shim` encode (0.01x at 136 B: the fresh image build
-in Julia dominates the timer; the xlarge 21.99x is the ProtoBuf.jl
+in Julia dominates the timer; the xlarge 22.35x is the ProtoBuf.jl
 baseline collapse below), and ObjC `tree` encode
-(0.96x: a fresh per-field build plus alloc/free inside
+(0.98x: a fresh per-field build plus alloc/free inside
 the timer; the ObjC xlarge tier
 rebuilds its 74 KB `str` fixture per iteration). The core's old `tree` headline
 (0.39x-0.58x) retired with the fairness contract: the tree-API build price
 (malloc + field lookup per value vs direct stores) is no longer a headline. The Lua xlarge `shim` encode cell (0.99x) is a
-run-to-run tie, and so is Go's xlarge decode-par (0.99x, serial twin 1.31x).
+run-to-run tie, and so is Go's xlarge decode-par (0.99x, serial twin 1.33x).
 Julia's, Kotlin's and Scala's xlarge `shim`/`core`
-encode ratios (21.99x / 27.24x / 170.53x) are baseline collapses, not codec wins:
-ProtoBuf.jl's generated encoder falls to 12.0 MB/s there, `protobuf-kotlin`
-to 17.0 MB/s and ScalaPB to 1.5 MB/s. Each cell is inside
+encode ratios (22.35x / 28.09x / 184.79x) are baseline collapses, not codec wins:
+ProtoBuf.jl's generated encoder falls to 11.3 MB/s there, `protobuf-kotlin`
+to 17.6 MB/s and ScalaPB to 1.4 MB/s. Each cell is inside
 the run-to-run band of its own baseline; `docs/perf-attempts.md` records what
 was tried there.
 
@@ -338,55 +341,55 @@ payload, the boundary cost and the baseline all differ.
 
 | binding | reaches the core | xlarge wire size | encode MB/s (x baseline) | decode MB/s (x baseline) |
 |---|---|---|---|---|
-| core dynamic (`pbw_ctx`) | direct call, thin model | 85933 B | 712.4 (2.19x ✅) `ctx` (fresh thin-model build per iteration) | 851.2 (1.88x ✅) |
-| core dynamic (plain API) | direct call, thin model | 85933 B | 718.1 (2.22x ✅) (fresh thin-model build per iteration) | 852.6 (1.89x ✅) |
-| C structs | direct call, layout tables | 74913 B | 1148.2 (4.10x ✅) `shim` | 754.5 (2.01x ✅) `shim` |
-| Go | pure-Go table engine, no cgo | 74913 B | 520.7 (1.38x ✅) | 419.8 (1.31x ✅) |
-| Python | CPython extension, dict path | 74913 B | 141.2 (2.43x ✅) `shim encode(data)` | 155.9 (3.70x ✅) `shim to_dict` |
-| Java | pure-Java codec, no native code | 74913 B | 452.3 (1.10x ✅) `core` (generated model) | 326.7 (0.80x ❌) `core` |
-| Kotlin | the pure-Java codec + DSL | 74913 B | 463.0 (27.24x ✅, baseline collapse) `core` | 324.0 (0.72x ❌) `core` |
-| Node | N-API addon | 74913 B | 58.9 (0.19x ❌ vs protobufjs) `shim` | 54.8 (0.12x ❌ vs protobufjs) `shim` |
-| Dart | `dart:ffi` binding | 74913 B | 153.6 (1.80x ✅) `shim` | 784.0 (4.96x ✅) `shim` |
-| Ruby | C extension over the core | 74913 B | 99.4 (4.87x ✅) `shim` | 159.4 (0.24x ❌) `shim` |
+| core dynamic (`pbw_ctx`) | direct call, thin model | 85933 B | 716.8 (2.13x ✅) `ctx` (fresh thin-model build per iteration) | 817.1 (1.83x ✅) |
+| core dynamic (plain API) | direct call, thin model | 85933 B | 732.7 (2.18x ✅) (fresh thin-model build per iteration) | 842.3 (1.89x ✅) |
+| C structs | direct call, layout tables | 74913 B | 1149.3 (4.17x ✅) `shim` | 763.6 (2.03x ✅) `shim` |
+| Go | pure-Go table engine, no cgo | 74913 B | 482.5 (1.36x ✅) | 393.8 (1.33x ✅) |
+| Python | CPython extension, dict path | 74913 B | 164.8 (2.75x ✅) `shim encode(data)` | 153.1 (3.58x ✅) `shim to_dict` |
+| Java | pure-Java codec, no native code | 74913 B | 436.1 (0.95x ❌) `core` (generated model) | 334.0 (0.80x ❌) `core` |
+| Kotlin | the pure-Java codec + DSL | 74913 B | 494.4 (28.09x ✅, baseline collapse) `core` | 350.3 (0.74x ❌) `core` |
+| Node | N-API addon | 74913 B | 57.0 (0.18x ❌ vs protobufjs) `shim` | 54.5 (0.13x ❌ vs protobufjs) `shim` |
+| Dart | `dart:ffi` binding | 74913 B | 151.6 (1.82x ✅) `shim` | 764.4 (4.84x ✅) `shim` |
+| Ruby | C extension over the core | 74913 B | 97.4 (4.97x ✅) `shim` | 154.9 (0.23x ❌) `shim` |
 
-| Objective-C | ARC wrapper | 74913 B | 211.6 (0.96x ❌) `tree` (fresh build per iteration) | 33134.1 (1.16x ✅) |
-| PHP | C extension | 74913 B | 162.8 (2.90x ✅) `shim`; `shim-ffi` 5.5 | 208.4 (0.36x ❌) `shim`; `shim-ffi` 4.7 |
-| Rust | static link | 74913 B | 1083.2 (2.06x ✅ vs prost) `shim` | 698.3 (1.86x ✅) `shim` |
-| C# | P/Invoke | 74913 B | 503.0 (1.32x ✅) `shim` | 383.7 (0.72x ❌) `shim` |
-| Lua | C module, tables | 74913 B | 111.0 (0.99x, tie) `shim` | 141.2 (1.47x ✅) `shim` |
+| Objective-C | ARC wrapper | 74913 B | 215.8 (0.98x ❌) `tree` (fresh build per iteration) | 33081.5 (1.16x ✅) |
+| PHP | C extension | 74913 B | 168.1 (2.98x ✅) `shim`; `shim-ffi` 5.3 | 211.3 (0.37x ❌) `shim`; `shim-ffi` 4.5 |
+| Rust | static link | 74913 B | 1145.3 (2.02x ✅ vs prost) `shim` | 752.5 (1.86x ✅) `shim` |
+| C# | P/Invoke | 74913 B | 492.6 (1.30x ✅) `shim` | 370.4 (0.70x ❌) `shim` |
+| Lua | C module, tables | 74913 B | 107.5 (0.99x ❌) `shim` | 132.5 (1.44x ✅) `shim` |
 | Erlang | NIF (`pbwire`) | 74913 B | 322.8 (2.95x ✅) | 355.5 (1.59x ✅) |
-| Swift | static link (SwiftPM) | 74913 B | 912.6 (3.20x ✅) `shim` | 570.9 (2.47x ✅) `shim` |
-| Scala | the Java runtime + DSL | 74913 B | 255.8 (170.53x ✅, baseline collapse) `core` (case class) | 161.9 (0.27x ❌) `core` |
-| Elixir | NIF (Hex `:pbwire`, same core as Erlang) | 74913 B | 160.4 (2.99x ✅) | 117.8 (1.91x ✅) |
-| Zig | static link | 74913 B | 1129.9 (1.83x ✅) `shim` | 785.9 (1.40x ✅) `shim` |
-| F# | P/Invoke over the C# runtime | 74913 B | 496.0 (1.25x ✅) `shim` | 389.6 (0.73x ❌) `shim` |
-| Clojure | the Java runtime + interop | 74913 B | 10.8 (0.02x ❌) `core` (fresh build per iteration) | 268.3 (0.58x ❌) `core` |
-| Julia | `dlopen` + `ccall` | 74913 B | 263.9 (21.99x ✅, baseline collapse) `shim` | 804.0 (1.09x ✅) `shim` |
-| R | C extension, named lists | 74913 B | 51.9 (19.96x ✅) `shim` | 161.1 (53.70x ✅) `shim` |
+| Swift | static link (SwiftPM) | 74913 B | 911.9 (3.24x ✅) `shim` | 573.7 (2.54x ✅) `shim` |
+| Scala | the Java runtime + DSL | 74913 B | 258.7 (184.79x ✅, baseline collapse) `core` (case class) | 168.4 (0.27x ❌) `core` |
+| Elixir | NIF (Hex `:pbwire`, same core as Erlang) | 74913 B | 154.6 (2.98x ✅) | 113.0 (1.91x ✅) |
+| Zig | static link | 74913 B | 1085.0 (1.84x ✅) `shim` | 774.7 (1.47x ✅) `shim` |
+| F# | P/Invoke over the C# runtime | 74913 B | 493.5 (1.28x ✅) `shim` | 376.0 (0.74x ❌) `shim` |
+| Clojure | the Java runtime + interop | 74913 B | 10.5 (0.02x ❌) `core` (fresh build per iteration) | 250.6 (0.54x ❌) `core` |
+| Julia | `dlopen` + `ccall` | 74913 B | 252.5 (22.35x ✅, baseline collapse) `shim` | 770.7 (1.08x ✅) `shim` |
+| R | C extension, named lists | 74913 B | 48.2 (19.28x ✅) `shim` | 159.6 (57.00x ✅) `shim` |
 
-Read it as: the in-process core sets the pace (2.2x the C++
+Read it as: the in-process core sets the pace (2.1x the C++
 generated code on encode at this size, 1.9x on decode), and every headline row times the same task as
 the generated baseline -- one native object in, one codec call -- so the
 below-the-line cells are codec gaps, not boundary floors: Node `shim`
-(0.19x / 0.12x of protobufjs), Ruby `shim` decode
-(0.24x) and PHP `shim` decode (0.36x of the official C extension), the
-JVM `core` decode (Java 0.80x, Kotlin 0.72x, Scala 0.27x) and Clojure's
-`core` (0.02x / 0.58x).
+(0.18x / 0.13x of protobufjs), Ruby `shim` decode
+(0.23x) and PHP `shim` decode (0.37x of the official C extension), the
+JVM `core` decode (Java 0.80x, Kotlin 0.74x, Scala 0.27x) and Clojure's
+`core` (0.02x / 0.54x).
 The above-the-line cells are the same task won outright: the core thin
-model 2.2x / 1.9x, Ruby `shim` encode
-4.87x, PHP `shim` encode 2.90x, Rust `shim`
-2.06x / 1.86x, Dart 1.80x / 4.96x, C# `shim` encode 1.32x, Swift 3.20x / 2.47x, Zig
-1.83x / 1.40x. The outliers are baseline or unit effects, not pbwire
+model 2.1x / 1.9x, Ruby `shim` encode
+4.97x, PHP `shim` encode 2.98x, Rust `shim`
+2.02x / 1.86x, Dart 1.82x / 4.84x, C# `shim` encode 1.30x, Swift 3.24x / 2.54x, Zig
+1.84x / 1.47x. The outliers are baseline or unit effects, not pbwire
 effects: Python's encode column is the dict path (3000 sub-messages, 12000
 ints), the xlarge encode columns of Julia, Kotlin and Scala are baseline
 collapses (ProtoBuf.jl's
-generated encoder falls to 12.0 MB/s there, `protobuf-kotlin` to 17.0 MB/s,
-ScalaPB to 1.5 MB/s), and the Objective-C tier is a
+generated encoder falls to 11.3 MB/s there, `protobuf-kotlin` to 17.6 MB/s,
+ScalaPB to 1.4 MB/s), and the Objective-C tier is a
 memcpy race over one 74 KB string (the 16-byte UTF-8 word scan is what keeps
 its decode near the copy cost).
 The headline names the most-popular baseline: Node's native rows are quoted
 over protobufjs, and Node's `shim` row -- the native object in and out --
-is 0.19x / 0.12x of protobufjs: the same task on both sides, so the gap is
+is 0.18x / 0.13x of protobufjs: the same task on both sides, so the gap is
 the codec's, not the boundary's. PHP's native rows are over the official C
 extension (the pure-PHP runtime trails it by ~360x / ~110x at 74 KB) -- see
 their sections. The old per-field `tree` headlines are retired: the published
@@ -709,21 +712,21 @@ the current machine.
 
 | payload | op | pbwire ctx (MB/s, x gen) | pbwire plain (MB/s, x gen) | protoc gen (MB/s) | DynamicMessage (MB/s) |
 |---|---|---|---|---|---|
-| 132 B | encode | 1311.0 (1.70x ✅) | 1103.6 (1.43x ✅) | 769.7 | 96.9 |
-| 132 B | decode | 1348.2 (1.47x ✅) | 1099.3 (1.20x ✅) | 916.6 | 292.3 |
-| 169 B | encode | 1070.9 (1.57x ✅) | 913.9 (1.34x ✅) | 680.6 | 91.9 |
-| 169 B | decode | 1163.6 (1.45x ✅) | 988.6 (1.23x ✅) | 804.5 | 284.6 |
-| 2755 B | encode | 731.1 (2.25x ✅) | 679.3 (2.09x ✅) | 325.1 | 95.5 |
-| 2755 B | decode | 756.2 (1.63x ✅) | 741.7 (1.60x ✅) | 464.9 | 254.9 |
-| 85933 B | encode | 712.4 (2.19x ✅) | 718.1 (2.22x ✅) | 324.7 | 105.4 |
-| 85933 B | decode | 851.2 (1.88x ✅) | 852.6 (1.89x ✅) | 452.4 | 265.4 |
+| 132 B | encode | 1262.6 (1.72x ✅) | 1110.1 (1.51x ✅) | 735.3 | 95.2 |
+| 132 B | decode | 1345.5 (1.50x ✅) | 1081.9 (1.20x ✅) | 898.2 | 289.7 |
+| 169 B | encode | 1036.7 (1.54x ✅) | 930.6 (1.38x ✅) | 675.2 | 89.7 |
+| 169 B | decode | 1148.0 (1.42x ✅) | 975.6 (1.21x ✅) | 809.3 | 281.8 |
+| 2755 B | encode | 695.3 (2.17x ✅) | 689.0 (2.15x ✅) | 321.1 | 95.0 |
+| 2755 B | decode | 742.2 (1.59x ✅) | 736.7 (1.58x ✅) | 466.2 | 256.6 |
+| 85933 B | encode | 716.8 (2.13x ✅) | 732.7 (2.18x ✅) | 336.1 | 106.1 |
+| 85933 B | decode | 817.1 (1.83x ✅) | 842.3 (1.89x ✅) | 445.4 | 254.5 |
 
 The encode rows are the same new + set + encode task on both sides: a
 fresh native struct per iteration (plain stores plus the payload allocations
 the generated side makes too, then one codec call, released inside the timer
 for pbwire; fill setters, serialize, destructor for generated code;
 reflection fill, serialize, delete for DynamicMessage) — formal run
-`results/bench-core-20261124T073808Z.json`. The generated baseline builds
+`results/bench-core-20261124T134623Z.json`. The generated baseline builds
 fresh per iteration too, so the comparison is the same calling method, not
 build-against-re-encode. The pbwire side goes through the generated C struct
 (`bench/gen/msg_struct.h`, the shipped thin model) and the compiled struct
@@ -734,14 +737,14 @@ Threads (169 B, 1 vs 8):
 
 | op | pbwire 1thr (MB/s, x gen) | pbwire 8thr agg (MB/s, x gen) | gen 1thr (MB/s) | gen 8thr agg (MB/s) |
 |---|---|---|---|---|
-| encode | 990.1 (1.45x ✅) | 7782.9 (1.43x ✅) | 682.1 | 5441.4 |
-| decode | 1180.5 (1.45x ✅) | 6934.8 (1.09x ✅) | 816.4 | 6369.1 |
+| encode | 987.7 (1.45x ✅) | 7498.1 (1.44x ✅) | 683.3 | 5211.5 |
+| decode | 1185.5 (1.44x ✅) | 6899.2 (1.13x ✅) | 820.5 | 6106.0 |
 
 `8thr agg` is the total throughput of all eight threads. The compiled
 struct codec and the wire input are shared by all threads; each thread only
-adds its own output buffer and decode arena. pbwire scales 7.9x (encode) and
-5.9x (decode)
-from 1 to 8 threads in that run; generated code reaches 8.0x and 7.8x. Both
+adds its own output buffer and decode arena. pbwire scales 7.6x (encode) and
+5.8x (decode)
+from 1 to 8 threads in that run; generated code reaches 7.6x and 7.4x. Both
 are
 limited by cache and memory bandwidth, not by a lock: the library has no
 global
@@ -816,21 +819,21 @@ only — absolute numbers move between machines.
 
 ![C structs vs protoc generated (same matrix3.proto) — MB/s by tier](docs/charts/bench-c-structs-vs-protoc-generated-same-matrix3-proto.svg)
 
-xlarge: encode 1148.2 (4.10x ✅) / decode 754.5 (2.01x ✅).
+xlarge: encode 1149.3 (4.17x ✅) / decode 763.6 (2.03x ✅).
 Full table and method: [binding README](bindings/c/README.md#benchmarks).
 
 ### Go (thin model vs protobuf-go)
 
 ![Go (thin model vs protobuf-go) — MB/s by tier](docs/charts/bench-go-thin-model-vs-protobuf-go.svg)
 
-xlarge: encode 520.7 (1.38x ✅) / decode 419.8 (1.31x ✅).
+xlarge: encode 482.5 (1.36x ✅) / decode 393.8 (1.33x ✅).
 Full table and method: [binding README](bindings/go/README.md#benchmarks).
 
 ### Python vs `google.protobuf` (upb)
 
 ![Python vs google.protobuf (upb) — MB/s by tier](docs/charts/bench-python-vs-google-protobuf-upb.svg)
 
-xlarge: encode 141.2 (2.43x ✅) / decode 155.9 (3.70x ✅).
+xlarge: encode 164.8 (2.75x ✅) / decode 153.1 (3.58x ✅).
 Full table and method: [binding README](bindings/python/README.md#benchmarks).
 
 ### Managed-language bindings vs their official runtimes
@@ -848,70 +851,70 @@ Standard cases), which makes its xlarge tier a memcpy.
 
 ![Java vs protobuf-java — MB/s by tier](docs/charts/bench-java-vs-protobuf-java.svg)
 
-xlarge: encode 452.3 (1.10x ✅) / decode 326.7 (0.80x ❌).
+xlarge: encode 436.1 (0.95x ❌) / decode 334.0 (0.80x ❌).
 Full table and method: [binding README](bindings/java/README.md#benchmarks).
 
 #### Node vs protobufjs
 
 ![Node vs protobufjs — MB/s by tier](docs/charts/bench-node-vs-protobufjs.svg)
 
-xlarge: encode 58.9 (0.19x ❌) / decode 54.8 (0.12x ❌).
+xlarge: encode 57.0 (0.18x ❌) / decode 54.5 (0.13x ❌).
 Full table and method: [binding README](bindings/node/README.md#benchmarks).
 
 #### Ruby (C extension) vs the `google-protobuf` gem
 
 ![Ruby (C extension) vs the google-protobuf gem — MB/s by tier](docs/charts/bench-ruby-c-extension-vs-the-google-protobuf-gem.svg)
 
-xlarge: encode 99.4 (4.87x ✅) / decode 159.4 (0.24x ❌).
+xlarge: encode 97.4 (4.97x ✅) / decode 154.9 (0.23x ❌).
 Full table and method: [binding README](bindings/ruby/README.md#benchmarks).
 
 #### Objective-C vs the `protobuf` ObjC runtime
 
 ![Objective-C vs the protobuf ObjC runtime — MB/s by tier](docs/charts/bench-objective-c-vs-the-protobuf-objc-runtime.svg)
 
-xlarge: encode 211.6 (0.96x ❌) / decode 33134.1 (1.16x ✅).
+xlarge: encode 215.8 (0.98x ❌) / decode 33081.5 (1.16x ✅).
 Full table and method: [binding README](bindings/objc/README.md#benchmarks).
 
 #### Kotlin vs `protoc --kotlin_out` over `protobuf-java`
 
 ![Kotlin vs protoc --kotlin_out over protobuf-java — MB/s by tier](docs/charts/bench-kotlin-vs-protoc-kotlin-out-over-protobuf-java.svg)
 
-xlarge: encode 463.0 (27.24x ✅) / decode 324.0 (0.72x ❌).
+xlarge: encode 494.4 (28.09x ✅) / decode 350.3 (0.74x ❌).
 Full table and method: [binding README](bindings/kotlin/README.md#benchmarks).
 
 #### PHP vs the official PHP runtime (pure + C extension)
 
 ![PHP vs the official PHP runtime (pure + C extension) — MB/s by tier](docs/charts/bench-php-vs-the-official-php-runtime-pure-c-extension.svg)
 
-xlarge: encode 162.8 (2.90x ✅) / decode 208.4 (0.36x ❌).
+xlarge: encode 168.1 (2.98x ✅) / decode 211.3 (0.37x ❌).
 Full table and method: [binding README](bindings/php/README.md#benchmarks).
 
 #### Dart vs the `protobuf` Dart package
 
 ![Dart vs the protobuf Dart package — MB/s by tier](docs/charts/bench-dart-vs-the-protobuf-dart-package.svg)
 
-xlarge: encode 153.6 (1.80x ✅) / decode 784.0 (4.96x ✅).
+xlarge: encode 151.6 (1.82x ✅) / decode 764.4 (4.84x ✅).
 Full table and method: [binding README](bindings/dart/README.md#benchmarks).
 
 #### Rust vs prost
 
 ![Rust vs prost — MB/s by tier](docs/charts/bench-rust-vs-prost.svg)
 
-xlarge: encode 1083.2 (2.06x ✅) / decode 698.3 (1.86x ✅).
+xlarge: encode 1145.3 (2.02x ✅) / decode 752.5 (1.86x ✅).
 Full table and method: [binding README](bindings/rust/README.md#benchmarks).
 
 #### C# vs Google.Protobuf
 
 ![C# vs Google.Protobuf — MB/s by tier](docs/charts/bench-c-vs-google-protobuf.svg)
 
-xlarge: encode 503.0 (1.32x ✅) / decode 383.7 (0.72x ❌).
+xlarge: encode 492.6 (1.30x ✅) / decode 370.4 (0.70x ❌).
 Full table and method: [binding README](bindings/csharp/README.md#benchmarks).
 
 ### Lua (C module, tables) vs `lua-protobuf`
 
 ![Lua (C module, tables) vs lua-protobuf — MB/s by tier](docs/charts/bench-lua-c-module-tables-vs-lua-protobuf.svg)
 
-xlarge: encode 111.0 (0.99x ❌) / decode 141.2 (1.47x ✅).
+xlarge: encode 107.5 (0.99x ❌) / decode 132.5 (1.44x ✅).
 Full table and method: [binding README](bindings/lua/README.md#benchmarks).
 
 ### Erlang: `pbwire` vs gpb vs gpb NIF
@@ -925,56 +928,56 @@ Full table and method: [binding README](bindings/erlang/README.md#benchmarks).
 
 ![Swift (SwiftPM, static link) vs apple/swift-protobuf — MB/s by tier](docs/charts/bench-swift-swiftpm-static-link-vs-apple-swift-protobuf.svg)
 
-xlarge: encode 912.6 (3.20x ✅) / decode 570.9 (2.47x ✅).
+xlarge: encode 911.9 (3.24x ✅) / decode 573.7 (2.54x ✅).
 Full table and method: [binding README](bindings/swift/README.md#benchmarks).
 
 ### Scala (Java runtime + DSL) vs ScalaPB
 
 ![Scala (Java runtime + DSL) vs ScalaPB — MB/s by tier](docs/charts/bench-scala-java-runtime-dsl-vs-scalapb.svg)
 
-xlarge: encode 255.8 (170.53x ✅) / decode 161.9 (0.27x ❌).
+xlarge: encode 258.7 (184.79x ✅) / decode 168.4 (0.27x ❌).
 Full table and method: [binding README](bindings/scala/README.md#benchmarks).
 
 ### Elixir (NIF over the shared core) vs `elixir-protobuf`
 
 ![Elixir (NIF over the shared core) vs elixir-protobuf — MB/s by tier](docs/charts/bench-elixir-nif-over-the-shared-core-vs-elixir-protobuf.svg)
 
-xlarge: encode 160.4 (2.99x ✅) / decode 117.8 (1.91x ✅).
+xlarge: encode 154.6 (2.98x ✅) / decode 113.0 (1.91x ✅).
 Full table and method: [binding README](bindings/elixir/README.md#benchmarks).
 
 ### Zig (static link) vs Arwalk/zig-protobuf
 
 ![Zig (static link) vs Arwalk/zig-protobuf — MB/s by tier](docs/charts/bench-zig-static-link-vs-arwalk-zig-protobuf.svg)
 
-xlarge: encode 1129.9 (1.83x ✅) / decode 785.9 (1.40x ✅).
+xlarge: encode 1085.0 (1.84x ✅) / decode 774.7 (1.47x ✅).
 Full table and method: [binding README](bindings/zig/README.md#benchmarks).
 
 ### F# (facade over the C# runtime) vs Google.Protobuf
 
 ![F# (facade over the C# runtime) vs Google.Protobuf — MB/s by tier](docs/charts/bench-f-facade-over-the-c-runtime-vs-google-protobuf.svg)
 
-xlarge: encode 496.0 (1.25x ✅) / decode 389.6 (0.73x ❌).
+xlarge: encode 493.5 (1.28x ✅) / decode 376.0 (0.74x ❌).
 Full table and method: [binding README](bindings/fsharp/README.md#benchmarks).
 
 ### Clojure (Java runtime + interop) vs `protobuf-java`
 
 ![Clojure (Java runtime + interop) vs protobuf-java — MB/s by tier](docs/charts/bench-clojure-java-runtime-interop-vs-protobuf-java.svg)
 
-xlarge: encode 10.8 (0.02x ❌) / decode 268.3 (0.58x ❌).
+xlarge: encode 10.5 (0.02x ❌) / decode 250.6 (0.54x ❌).
 Full table and method: [binding README](bindings/clojure/README.md#benchmarks).
 
 ### Julia (`dlopen` + `ccall`) vs ProtoBuf.jl
 
 ![Julia (dlopen + ccall) vs ProtoBuf.jl — MB/s by tier](docs/charts/bench-julia-dlopen-ccall-vs-protobuf-jl.svg)
 
-xlarge: encode 263.9 (21.99x ✅) / decode 804.0 (1.09x ✅).
+xlarge: encode 252.5 (22.35x ✅) / decode 770.7 (1.08x ✅).
 Full table and method: [binding README](bindings/julia/README.md#benchmarks).
 
 ### R (C extension, named lists) vs RProtoBuf
 
 ![R (C extension, named lists) vs RProtoBuf — MB/s by tier](docs/charts/bench-r-c-extension-named-lists-vs-rprotobuf.svg)
 
-xlarge: encode 51.9 (19.96x ✅) / decode 161.1 (53.70x ✅).
+xlarge: encode 48.2 (19.28x ✅) / decode 159.6 (57.00x ✅).
 Full table and method: [binding README](bindings/r/README.md#benchmarks).
 
 ## Embedded: nanopb, same message, both sides

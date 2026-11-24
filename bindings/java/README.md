@@ -177,19 +177,19 @@ large/xlarge encode -- see [`pbench/README.md`](pbench/README.md).
 
 | payload | op | pbwire-java-core (MB/s, x protobuf-java) | protobuf-java (MB/s) |
 |---|---|---|---|
-| 136 B | encode | 523.9 (0.36x ❌) | 1466.0 |
-| 136 B | decode | 318.9 (0.51x ❌) | 623.2 |
-| 174 B | encode | 457.0 (0.54x ❌) | 849.5 |
-| 174 B | decode | 313.5 (0.57x ❌) | 549.6 |
-| 2469 B | encode | 427.9 (1.08x ✅) | 396.6 |
-| 2469 B | decode | 298.1 (0.69x ❌) | 431.7 |
-| 74913 B | encode | 452.3 (1.10x ✅) | 411.3 |
-| 74913 B | decode | 326.7 (0.80x ❌) | 409.5 |
+| 136 B | encode | 530.6 (0.35x ❌) | 1500.3 |
+| 136 B | decode | 322.4 (0.50x ❌) | 639.8 |
+| 174 B | encode | 464.8 (0.52x ❌) | 901.0 |
+| 174 B | decode | 321.5 (0.57x ❌) | 565.2 |
+| 2469 B | encode | 409.6 (0.97x ❌) | 424.0 |
+| 2469 B | decode | 299.9 (0.68x ❌) | 443.8 |
+| 74913 B | encode | 436.1 (0.95x ❌) | 460.8 |
+| 74913 B | decode | 334.0 (0.80x ❌) | 418.7 |
 
 The pbwire column is the committed generated model (`Structtest_Scalars3`)
 used as the native object (`toByteArray()`/`parseFrom()`): the same task the
 `protobuf-java` baseline runs. The per-field `tree` arm is compared in
-`pbench/` (see its README), not here. Formal run `../../results/bench-java-20261124T094820Z.json`.
+`pbench/` (see its README), not here. Formal run `../../results/bench-java-20261124T135431Z.json`.
 
 The `core` column above is Java's headline: the shipped typed path (0.36x at
 136 B, 1.10x at 74 KB encode, 0.51x-0.80x decode): the generated table walks

@@ -155,17 +155,17 @@ see [`pbench/README.md`](pbench/README.md) for the mechanism and the gate.
 
 | payload | op | pbwire-swift-shim (MB/s, x swift-protobuf) | swift-protobuf (MB/s) |
 |---|---|---|---|
-| 136 B | encode | 965.6 (2.12x ✅) | 454.6 |
-| 136 B | decode | 753.1 (2.98x ✅) | 252.5 |
-| 174 B | encode | 988.8 (2.91x ✅) | 340.1 |
-| 174 B | decode | 706.1 (3.45x ✅) | 204.9 |
-| 2469 B | encode | 1006.9 (3.71x ✅) | 271.6 |
-| 2469 B | decode | 532.2 (2.65x ✅) | 200.5 |
-| 74913 B | encode | 912.6 (3.20x ✅) | 285.5 |
-| 74913 B | decode | 570.9 (2.47x ✅) | 231.2 |
+| 136 B | encode | 987.9 (2.20x ✅) | 448.3 |
+| 136 B | decode | 770.2 (3.16x ✅) | 243.4 |
+| 174 B | encode | 969.8 (2.89x ✅) | 335.7 |
+| 174 B | decode | 694.3 (3.52x ✅) | 197.4 |
+| 2469 B | encode | 1064.4 (3.93x ✅) | 270.8 |
+| 2469 B | decode | 533.5 (2.97x ✅) | 179.5 |
+| 74913 B | encode | 911.9 (3.24x ✅) | 281.2 |
+| 74913 B | decode | 573.7 (2.54x ✅) | 226.0 |
 
 The pbwire column is the native-in/native-out full task (formal run
-`../../results/bench-swift-20261124T102332Z.json`): `shim` runs it in one
+`../../results/bench-swift-20261124T141852Z.json`): `shim` runs it in one
 `encodeInPlace`/`decodeInPlace` call. The per-field `tree` arm is compared in
 `pbench/README.md`, not here. Pairing note: the formal run prints the four native
 rows without the baseline in its first case set and the native row against

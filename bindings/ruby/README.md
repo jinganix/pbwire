@@ -237,14 +237,14 @@ C-backed storage and whose decode stays lazy. See
 
 | payload | op | pbwire-ruby-shim (MB/s, x gem) | gem (MB/s) |
 |---|---|---|---|
-| 136 B | encode | 96.7 (2.19x ✅) | 44.1 |
-| 136 B | decode | 141.2 (0.58x ❌) | 243.7 |
-| 174 B | encode | 102.5 (3.45x ✅) | 29.7 |
-| 174 B | decode | 148.3 (0.61x ❌) | 241.2 |
-| 2469 B | encode | 88.3 (4.51x ✅) | 19.6 |
-| 2469 B | decode | 148.0 (0.30x ❌) | 489.2 |
-| 74913 B | encode | 99.4 (4.87x ✅) | 20.4 |
-| 74913 B | decode | 159.4 (0.24x ❌) | 676.5 |
+| 136 B | encode | 99.4 (2.29x ✅) | 43.5 |
+| 136 B | decode | 145.5 (0.59x ❌) | 247.3 |
+| 174 B | encode | 108.5 (3.53x ✅) | 30.7 |
+| 174 B | decode | 155.1 (0.60x ❌) | 257.7 |
+| 2469 B | encode | 86.6 (4.63x ✅) | 18.7 |
+| 2469 B | decode | 143.4 (0.29x ❌) | 493.6 |
+| 74913 B | encode | 97.4 (4.97x ✅) | 19.6 |
+| 74913 B | decode | 154.9 (0.23x ❌) | 661.8 |
 
 Ruby is a C extension over the same core, so this is C extension against C
 extension. The first version drove the same C ABI through stdlib Fiddle and lost
@@ -255,7 +255,7 @@ boundary, added the repeated-field payload (so the xlarge tier is 3000 nested
 messages, not one 74 KB string), and split the message into two representations.
 The pbwire column is the native-in/native-out full task
 (`pbench/`), formal run
-`../../results/bench-ruby-20261124T095831Z.json`:
+`../../results/bench-ruby-20261124T135903Z.json`:
 
 - **`shim` (native object in and out).** `type.encode_object(obj)` walks the
 generated model inside C in one entry call and fills a pbw tree; `decode_object`

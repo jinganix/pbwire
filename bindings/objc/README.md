@@ -157,21 +157,21 @@ twice.
 
 The `pbwire-objc` rows are the `tree` arm: a fresh `PBWMessage` built per
 field per iteration on both sides, then encoded (formal run
-`../../results/bench-objc-20261124T105441Z.json`). The gap is the per-iteration build
+`../../results/bench-objc-20261124T140212Z.json`). The gap is the per-iteration build
 cost priced in pbench: seventeen
 boxed setters plus the `str` copy, and the xlarge tier rebuilds its 74 KB
 `str` fixture per iteration on both sides (pad-`str` payload).
 
 | payload | op | pbwire-objc (MB/s, x protobuf-objc) | protobuf-objc (MB/s) |
 |---|---|---|---|
-| 136 B | encode | 62.0 (0.52x ❌) | 119.6 |
-| 136 B | decode | 727.8 (2.76x ✅) | 264.1 |
-| 174 B | encode | 67.2 (0.59x ❌) | 113.0 |
-| 174 B | decode | 920.5 (3.00x ✅) | 306.4 |
-| 2469 B | encode | 181.2 (0.93x ❌) | 195.8 |
-| 2469 B | decode | 9326.1 (2.47x ✅) | 3773.5 |
-| 74913 B | encode | 211.6 (0.96x ❌) | 219.5 |
-| 74913 B | decode | 33134.1 (1.16x ✅) | 28499.3 |
+| 136 B | encode | 60.9 (0.51x ❌) | 119.1 |
+| 136 B | decode | 711.3 (2.70x ✅) | 263.6 |
+| 174 B | encode | 65.1 (0.58x ❌) | 112.1 |
+| 174 B | decode | 909.5 (3.03x ✅) | 299.7 |
+| 2469 B | encode | 189.7 (0.93x ❌) | 203.5 |
+| 2469 B | decode | 9193.6 (2.45x ✅) | 3751.9 |
+| 74913 B | encode | 215.8 (0.98x ❌) | 219.3 |
+| 74913 B | decode | 33081.5 (1.16x ✅) | 28610.7 |
 
 The direct struct path is the same C code, measured by `make bench-c` (the
 `shim` rows); there is no third mechanism to compare here. No second pbwire

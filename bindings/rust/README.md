@@ -81,18 +81,18 @@ xlarge (the repeated fields scaled x0 / x1 / x100 / x3000).
 
 | payload | op | pbwire-rust-shim (MB/s, x prost) | prost (MB/s) |
 |---|---|---|---|---|
-| 136 B | encode | 767.3 (0.80x ❌) | 964.8 |
-| 136 B | decode | 237.2 (0.27x ❌) | 880.5 |
-| 174 B | encode | 692.5 (0.95x ❌) | 730.6 |
-| 174 B | decode | 204.3 (0.32x ❌) | 637.6 |
-| 2469 B | encode | 976.0 (1.88x ✅) | 518.5 |
-| 2469 B | decode | 568.0 (1.63x ✅) | 348.2 |
-| 74913 B | encode | 1083.2 (2.06x ✅) | 525.0 |
-| 74913 B | decode | 698.3 (1.86x ✅) | 374.6 |
+| 136 B | encode | 492.3 (0.49x ❌) | 1001.0 |
+| 136 B | decode | 128.7 (0.14x ❌) | 906.1 |
+| 174 B | encode | 700.2 (0.95x ❌) | 734.0 |
+| 174 B | decode | 294.7 (0.42x ❌) | 705.4 |
+| 2469 B | encode | 1016.2 (1.89x ✅) | 538.9 |
+| 2469 B | decode | 618.6 (1.65x ✅) | 374.1 |
+| 74913 B | encode | 1145.3 (2.02x ✅) | 567.4 |
+| 74913 B | decode | 752.5 (1.86x ✅) | 404.2 |
 
 The archive is linked in, so a call is a direct C call with no `dlopen` lookup.
 The pbwire column is the native-in/native-out full task (formal run
-`../../results/bench-rust-20261124T094448Z.json`).
+`../../results/bench-rust-20261124T141310Z.json`).
 `pbwire-rust-shim` is the published comparison: the
 generated `#[repr(C)]` mirror read and written by the C struct codec in one
 call per op, with a fresh image and decode arena built per iteration on both sides. prost, the

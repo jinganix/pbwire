@@ -62,14 +62,14 @@ x0 / x1 / x100 / x3000).
 
 | payload | op | pbwire-kotlin-core (MB/s, x protobuf-kotlin) | protobuf-kotlin (MB/s) |
 |---|---|---|---|
-| 136 B | encode | 533.1 (0.39x ❌) | 1367.1 |
-| 136 B | decode | 327.3 (0.51x ❌) | 636.7 |
-| 174 B | encode | 507.6 (0.58x ❌) | 878.7 |
-| 174 B | decode | 306.3 (0.55x ❌) | 561.5 |
-| 2469 B | encode | 447.8 (2.02x ✅) | 222.0 |
-| 2469 B | decode | 291.5 (0.63x ❌) | 464.8 |
-| 74913 B | encode | 463.0 (27.24x ✅) | 17.0 |
-| 74913 B | decode | 324.0 (0.72x ❌) | 447.8 |
+| 136 B | encode | 503.2 (0.36x ❌) | 1383.6 |
+| 136 B | decode | 319.5 (0.49x ❌) | 655.5 |
+| 174 B | encode | 450.7 (0.49x ❌) | 918.5 |
+| 174 B | decode | 316.0 (0.55x ❌) | 579.5 |
+| 2469 B | encode | 466.4 (2.19x ✅) | 212.9 |
+| 2469 B | decode | 306.4 (0.65x ❌) | 472.9 |
+| 74913 B | encode | 494.4 (28.09x ✅) | 17.6 |
+| 74913 B | decode | 350.3 (0.74x ❌) | 473.3 |
 
 Kotlin reuses the Java runtime (`../java/runtime`), so these numbers are
 `pbwire-java`'s: one workspace lookup plus one `byte[]` copy per call. `core`
@@ -86,7 +86,7 @@ not here. The `Message`-wrapper cut (no per-decode
 `AtomicBoolean`, no volatile open flag) removes the binding's own per-call
 overhead on top, so the narrow tiers track the codec instead of the wrapper.
 Formal run
-`../../results/bench-kotlin-20261124T094919Z.json`.
+`../../results/bench-kotlin-20261124T140311Z.json`.
 
 ## Why not a copy of the Java runtime?
 

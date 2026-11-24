@@ -85,17 +85,17 @@ gate) and `compare.jl` (interleaved median table).
 
 | payload | op | pbwire-julia-shim (MB/s, x ProtoBuf.jl) | pbwire-julia dec+ctx (MB/s, x ProtoBuf.jl) | ProtoBuf.jl (MB/s) |
 |---|---|---|---|---|
-| 136 B | encode | 2.6 (0.01x ❌) | -- | 188.6 |
-| 136 B | decode | 1132.6 (0.96x ❌) | 1154.3 (0.98x ❌) | 1182.3 |
-| 174 B | encode | 3.4 (0.02x ❌) | -- | 209.2 |
-| 174 B | decode | 1041.3 (1.39x ✅) | 996.1 (1.33x ✅) | 750.7 |
-| 2469 B | encode | 41.1 (0.50x ❌) | -- | 83.0 |
-| 2469 B | decode | 705.9 (1.08x ✅) | 712.7 (1.09x ✅) | 656.5 |
-| 74913 B | encode | 263.9 (21.99x ✅) | -- | 12.0 |
-| 74913 B | decode | 804.0 (1.09x ✅) | 770.7 (1.04x ✅) | 740.7 |
+| 136 B | encode | 2.6 (0.02x ❌) | -- | 165.4 |
+| 136 B | decode | 1123.3 (0.93x ❌) | 1107.0 (0.92x ❌) | 1201.5 |
+| 174 B | encode | 3.1 (0.02x ❌) | -- | 154.8 |
+| 174 B | decode | 1000.6 (1.40x ✅) | 977.6 (1.37x ✅) | 712.3 |
+| 2469 B | encode | 40.8 (0.65x ❌) | -- | 62.6 |
+| 2469 B | decode | 700.2 (1.17x ✅) | 711.9 (1.19x ✅) | 600.0 |
+| 74913 B | encode | 252.5 (22.35x ✅) | -- | 11.3 |
+| 74913 B | decode | 770.7 (1.08x ✅) | 717.9 (1.01x ✅) | 713.2 |
 
 The `shim` column is the native-in/native-out full task (formal run
-`../../results/bench-julia-20261124T104119Z.json`): one `ccall` over the generated
+`../../results/bench-julia-20261124T143405Z.json`): one `ccall` over the generated
 layout image per op. The per-field `tree` arm is compared in
 `pbench/README.md`, not here. The xlarge encode column is a baseline
 collapse (ProtoBuf.jl's generated encoder falls to 12.0 MB/s there), so the

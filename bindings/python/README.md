@@ -177,19 +177,19 @@ nobody can avoid it.
 
 | payload | op | pbwire-py shim (MB/s, x upb) | upb (MB/s) |
 |---|---|---|---|
-| 136 B | encode(data) | 113.5 (2.93x ✅) | 38.8 |
-| 136 B | to_dict(bytes) | 162.1 (4.93x ✅) | 32.9 |
-| 174 B | encode(data) | 131.2 (2.95x ✅) | 44.5 |
-| 174 B | to_dict(bytes) | 149.7 (5.42x ✅) | 27.6 |
-| 2469 B | encode(data) | 178.5 (3.07x ✅) | 58.2 |
-| 2469 B | to_dict(bytes) | 181.2 (4.52x ✅) | 40.1 |
-| 74913 B | encode(data) | 141.2 (2.43x ✅) | 58.2 |
-| 74913 B | to_dict(bytes) | 155.9 (3.70x ✅) | 42.1 |
+| 136 B | encode(data) | 117.6 (2.90x ✅) | 40.5 |
+| 136 B | to_dict(bytes) | 162.3 (4.69x ✅) | 34.6 |
+| 174 B | encode(data) | 132.0 (2.83x ✅) | 46.6 |
+| 174 B | to_dict(bytes) | 149.8 (5.37x ✅) | 27.9 |
+| 2469 B | encode(data) | 184.4 (3.02x ✅) | 61.1 |
+| 2469 B | to_dict(bytes) | 186.8 (4.51x ✅) | 41.4 |
+| 74913 B | encode(data) | 164.8 (2.75x ✅) | 60.0 |
+| 74913 B | to_dict(bytes) | 153.1 (3.58x ✅) | 42.8 |
 
 The `shim` rows are the published comparison: the same native task in one
 downcall per op (fresh dict in, `encode(dict)`; `decode(bytes)` plus
 `to_dict()` with every field read back). The per-field `tree` arm is compared
-in `pbench/README.md`, not here. Formal run `../../results/bench-python-20261124T094642Z.json`.
+in `pbench/README.md`, not here. Formal run `../../results/bench-python-20261124T135250Z.json`.
 
 Rows are the same user-visible task in both arms:
 

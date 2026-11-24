@@ -78,14 +78,14 @@ runs, so the ratios are in-run):
 
 | payload | op | pbwire-fsharp-shim (MB/s, x) | Google.Protobuf (MB/s) |
 |---|---|---|---|
-| 136 B | encode | 971.3 (2.31x ✅) | 421.1 |
-| 136 B | decode | 759.0 (1.52x ✅) | 498.5 |
-| 174 B | encode | 744.2 (2.05x ✅) | 363.3 |
-| 174 B | decode | 611.9 (1.49x ✅) | 410.6 |
-| 2469 B | encode | 473.1 (1.10x ✅) | 431.4 |
-| 2469 B | decode | 371.3 (0.76x ❌) | 485.9 |
-| 74913 B | encode | 496.0 (1.25x ✅) | 396.3 |
-| 74913 B | decode | 389.6 (0.73x ❌) | 531.6 |
+| 136 B | encode | 966.5 (2.26x ✅) | 427.0 |
+| 136 B | decode | 747.2 (1.56x ✅) | 480.2 |
+| 174 B | encode | 737.6 (2.01x ✅) | 366.9 |
+| 174 B | decode | 594.6 (1.58x ✅) | 376.5 |
+| 2469 B | encode | 471.2 (1.11x ✅) | 425.9 |
+| 2469 B | decode | 363.2 (0.73x ❌) | 494.6 |
+| 74913 B | encode | 493.5 (1.28x ✅) | 384.1 |
+| 74913 B | decode | 376.0 (0.74x ❌) | 505.0 |
 
 Same class as Kotlin: F# reuses the C# binding's project via
 `ProjectReference` and adds only an F#-idiomatic facade — no second runtime,
@@ -95,7 +95,7 @@ no packages, schema from a `FileDescriptorSet` at run time. The baseline is
 runtime: `pbwire-fsharp-shim` is the C# generated model's native-object entry
 (`../csharp/pbench/Shim.cs`), i.e. the same one-call C reader over the
 flat image, so F# has no separate port and no second wire implementation.
-Formal run `../../results/bench-fsharp-20261124T104000Z.json`.
+Formal run `../../results/bench-fsharp-20261124T142945Z.json`.
 
 `pbwire-fsharp-shim` is the published comparison: the
 generated model is copied into one contiguous unmanaged image per op and one

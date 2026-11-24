@@ -207,31 +207,31 @@ The one-row summary is here; the detail is there.
 
 | Language | How it talks to the core | Best encode / decode vs official | Baseline |
 |---|---|---|---|
-| [C](bindings/c/) | static link, struct codec | 1.34x (xlarge) / 2.30x (xlarge) | [protoc C++](https://github.com/protocolbuffers/protobuf) |
-| [C++](bindings/cpp/) | same C runtime, same header | 1.34x (xlarge) / 2.30x (xlarge)¹ | [protoc C++](https://github.com/protocolbuffers/protobuf) |
-| [Python](bindings/python/) | CPython extension | 7.18x (xlarge, `shim encode`) / 3.75x (xlarge, `shim to_dict`) | [google.protobuf (upb)](https://pypi.org/project/protobuf/) |
-| [Ruby](bindings/ruby/) | C extension, linked | 0.18x (xlarge) / 0.23x (xlarge) `shim` | [google-protobuf gem](https://rubygems.org/gems/google-protobuf) |
-| [Java](bindings/java/) | pure-Java codec, no native code | 0.72x (xlarge) / 0.79x (xlarge) `core` (generated model) | [protobuf-java](https://github.com/protocolbuffers/protobuf/tree/main/java) |
-| [Kotlin](bindings/kotlin/) | Java runtime + DSL | 0.76x (xlarge) / 0.75x (xlarge) `core` | [protobuf-kotlin](https://github.com/protocolbuffers/protobuf/tree/main/java/kotlin) |
-| [Node](bindings/node/) | N-API addon | 0.12x (xlarge) / 0.12x (xlarge) `shim` vs protobufjs | [protobufjs](https://www.npmjs.com/package/protobufjs) |
-| [Objective-C](bindings/objc/) | ARC wrapper | 0.01x (xlarge) / 1.18x (xlarge) `tree` (fresh build per iteration) | [protobuf-objc](https://github.com/protocolbuffers/protobuf/tree/main/objectivec) |
-| [PHP](bindings/php/) | C extension | 0.16x (xlarge) / 0.37x (xlarge) `shim` vs C ext | [protobuf-php](https://github.com/protocolbuffers/protobuf/tree/main/php) |
-| [Dart](bindings/dart/) | `dart:ffi` | 11.03x (xlarge) / 4.64x (xlarge) `shim` | [protobuf-dart](https://pub.dev/packages/protobuf) |
-| [Rust](bindings/rust/) | static link | 0.92x (xlarge) / 1.90x (xlarge) `shim` vs prost | [prost](https://github.com/tokio-rs/prost) |
-| [C#](bindings/csharp/) | P/Invoke | 1.42x (xlarge) / 0.73x (xlarge) `shim` | [Google.Protobuf](https://www.nuget.org/packages/Google.Protobuf) |
-| [Go](bindings/go/) | thin generated models, pure-Go engine, no cgo | 1.70x (xlarge) / 1.25x (xlarge) | [google.golang.org/protobuf](https://pkg.go.dev/google.golang.org/protobuf) |
+| [C](bindings/c/) | static link, struct codec | 4.17x (xlarge) / 2.03x (xlarge) | [protoc C++](https://github.com/protocolbuffers/protobuf) |
+| [C++](bindings/cpp/) | same C runtime, same header | 4.17x (xlarge) / 2.03x (xlarge)¹ | [protoc C++](https://github.com/protocolbuffers/protobuf) |
+| [Python](bindings/python/) | CPython extension | 2.75x (xlarge, `shim encode`) / 3.58x (xlarge, `shim to_dict`) | [google.protobuf (upb)](https://pypi.org/project/protobuf/) |
+| [Ruby](bindings/ruby/) | C extension, linked | 4.97x (xlarge) / 0.23x (xlarge) `shim` | [google-protobuf gem](https://rubygems.org/gems/google-protobuf) |
+| [Java](bindings/java/) | pure-Java codec, no native code | 0.95x (xlarge) / 0.80x (xlarge) `core` (generated model) | [protobuf-java](https://github.com/protocolbuffers/protobuf/tree/main/java) |
+| [Kotlin](bindings/kotlin/) | Java runtime + DSL | 28.09x (xlarge) / 0.74x (xlarge) `core` | [protobuf-kotlin](https://github.com/protocolbuffers/protobuf/tree/main/java/kotlin) |
+| [Node](bindings/node/) | N-API addon | 0.18x (xlarge) / 0.13x (xlarge) `shim` vs protobufjs | [protobufjs](https://www.npmjs.com/package/protobufjs) |
+| [Objective-C](bindings/objc/) | ARC wrapper | 0.98x (xlarge) / 1.16x (xlarge) `tree` (fresh build per iteration) | [protobuf-objc](https://github.com/protocolbuffers/protobuf/tree/main/objectivec) |
+| [PHP](bindings/php/) | C extension | 2.98x (xlarge) / 0.37x (xlarge) `shim` vs C ext | [protobuf-php](https://github.com/protocolbuffers/protobuf/tree/main/php) |
+| [Dart](bindings/dart/) | `dart:ffi` | 1.82x (xlarge) / 4.84x (xlarge) `shim` | [protobuf-dart](https://pub.dev/packages/protobuf) |
+| [Rust](bindings/rust/) | static link | 2.02x (xlarge) / 1.86x (xlarge) `shim` vs prost | [prost](https://github.com/tokio-rs/prost) |
+| [C#](bindings/csharp/) | P/Invoke | 1.30x (xlarge) / 0.70x (xlarge) `shim` | [Google.Protobuf](https://www.nuget.org/packages/Google.Protobuf) |
+| [Go](bindings/go/) | thin generated models, pure-Go engine, no cgo | 1.36x (xlarge) / 1.33x (xlarge) | [google.golang.org/protobuf](https://pkg.go.dev/google.golang.org/protobuf) |
 | [Erlang](bindings/erlang/) | NIF | 3.00x (xlarge) / 1.52x (xlarge) | [gpb](https://github.com/tomas-abrahamsson/gpb) |
-| [Lua](bindings/lua/) | C module, tables + builder | 0.99x (xlarge, tie) / 1.42x (xlarge) `shim` | [lua-protobuf](https://github.com/starwing/lua-protobuf) |
-| [Swift](bindings/swift/) | SwiftPM, static link | 3.22x (xlarge) / 2.49x (xlarge) `shim` | [swift-protobuf](https://github.com/apple/swift-protobuf) |
-| [Scala](bindings/scala/) | Java runtime + DSL | 0.39x (xlarge) / 0.25x (xlarge) `core` (case class) | [ScalaPB](https://github.com/scalapb/ScalaPB) |
-| [Elixir](bindings/elixir/) | NIF (shared core) | 2.84x (xlarge) / 1.84x (xlarge) | [elixir-protobuf](https://github.com/elixir-protobuf/protobuf) |
-| [Zig](bindings/zig/) | static link | 1.38x (xlarge) / 1.37x (xlarge) `shim` | [zig-protobuf](https://github.com/Arwalk/zig-protobuf) |
-| [F#](bindings/fsharp/) | C# runtime + facade | 1.34x (xlarge) / 0.70x (xlarge) `shim` | [Google.Protobuf](https://www.nuget.org/packages/Google.Protobuf) |
-| [Clojure](bindings/clojure/) | Java runtime + interop | 1.18x (xlarge) / 1.77x (xlarge) `core` (mutable-message fast path; 0.70x encode at 136 B) | [protobuf-java](https://github.com/protocolbuffers/protobuf/tree/main/java) |
-| [Julia](bindings/julia/) | `dlopen` + `ccall` | 94.42x (xlarge) / 1.07x (xlarge) `shim` | [ProtoBuf.jl](https://github.com/JuliaIO/ProtoBuf.jl) |
-| [R](bindings/r/) | C extension, named lists | 51.90x (xlarge) / 53.00x (xlarge) `shim` | [RProtoBuf](https://github.com/eddelbuettel/rprotobuf) |
+| [Lua](bindings/lua/) | C module, tables + builder | 0.99x (xlarge, tie) / 1.44x (xlarge) `shim` | [lua-protobuf](https://github.com/starwing/lua-protobuf) |
+| [Swift](bindings/swift/) | SwiftPM, static link | 3.24x (xlarge) / 2.54x (xlarge) `shim` | [swift-protobuf](https://github.com/apple/swift-protobuf) |
+| [Scala](bindings/scala/) | Java runtime + DSL | 184.79x (xlarge) / 0.27x (xlarge) `core` (case class) | [ScalaPB](https://github.com/scalapb/ScalaPB) |
+| [Elixir](bindings/elixir/) | NIF (shared core) | 2.98x (xlarge) / 1.91x (xlarge) | [elixir-protobuf](https://github.com/elixir-protobuf/protobuf) |
+| [Zig](bindings/zig/) | static link | 1.84x (xlarge) / 1.47x (xlarge) `shim` | [zig-protobuf](https://github.com/Arwalk/zig-protobuf) |
+| [F#](bindings/fsharp/) | C# runtime + facade | 1.28x (xlarge) / 0.74x (xlarge) `shim` | [Google.Protobuf](https://www.nuget.org/packages/Google.Protobuf) |
+| [Clojure](bindings/clojure/) | Java runtime + interop | 0.02x (xlarge) / 0.54x (xlarge) `core` (mutable-message fast path; 0.01x encode at 136 B) | [protobuf-java](https://github.com/protocolbuffers/protobuf/tree/main/java) |
+| [Julia](bindings/julia/) | `dlopen` + `ccall` | 22.35x (xlarge) / 1.08x (xlarge) `shim` | [ProtoBuf.jl](https://github.com/JuliaIO/ProtoBuf.jl) |
+| [R](bindings/r/) | C extension, named lists | 19.28x (xlarge) / 57.00x (xlarge) `shim` | [RProtoBuf](https://github.com/eddelbuettel/rprotobuf) |
 
-¹ C++ has no separate bench; same engine as the C struct codec. Ratios quote the struct-passing (one-call) row at the xlarge tier (Apple M4 Pro, `protoc 36.2`, 2026-11-23 full re-run); the core and the three single-arm bindings (Objective-C, Erlang, Elixir) quote their native row; per-tier tables and absolute MB/s are in [BENCHMARKS.md](BENCHMARKS.md).
+¹ C++ has no separate bench; same engine as the C struct codec. Ratios quote the struct-passing (one-call) row at the xlarge tier (Apple M4 Pro, `protoc 36.2`, 2026-11-24 full re-run); the core and the three single-arm bindings (Objective-C, Erlang, Elixir) quote their native row; per-tier tables and absolute MB/s are in [BENCHMARKS.md](BENCHMARKS.md).
 
 Header ratios quote the struct-passing row (native object in, one codec call — the same task as filling generated code's struct): what a user of the shipped path pays. The core and the single-arm bindings quote their native row.
 
@@ -249,9 +249,9 @@ Pick pbwire when the schema is only known at runtime, when one C core serves
 several host languages, or when libprotobuf must not be in the process. Pick
 generated code only when the schema never changes *and* you accept a codegen
 step: even then the one-call path wins or ties most published encode cells
-— the exceptions are the JVM generated models' per-call reflection (Java
-0.72x, Kotlin 0.76x, Scala 0.39x), the Ruby/PHP per-call walks (0.18x, 0.16x)
-and Rust's per-element reserve (0.92x) — while the in-process `pbw_ctx` wins every tier of the
+— the exceptions are the managed per-call builds (Java 0.95x, Clojure 0.02x
+on the fresh-build task), Lua's run-to-run tie (0.99x) and Node's `shim`
+(0.18x) — while the in-process `pbw_ctx` wins every tier of the
 core benchmark and the C struct codec wins every tier of its own.
 
 ## Contributing

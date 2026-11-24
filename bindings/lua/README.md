@@ -219,20 +219,20 @@ because it is one validating parse straight into tables with no tree kept.
 
 | payload | op | pbwire-lua-shim (MB/s, x lua-protobuf) | lua-protobuf (MB/s) |
 |---|---|---|---|
-| 136 B | encode | 105.0 (1.07x ✅) | 98.2 |
-| 136 B | decode | 147.6 (1.63x ✅) | 90.4 |
-| 174 B | encode | 106.7 (1.06x ✅) | 100.6 |
-| 174 B | decode | 145.8 (1.59x ✅) | 91.8 |
-| 2469 B | encode | 107.8 (1.03x ✅) | 104.7 |
-| 2469 B | decode | 145.7 (1.54x ✅) | 94.5 |
-| 74913 B | encode | 111.0 (0.99x ❌) | 112.5 |
-| 74913 B | decode | 141.2 (1.47x ✅) | 96.3 |
+| 136 B | encode | 103.5 (1.07x ✅) | 96.8 |
+| 136 B | decode | 145.9 (1.72x ✅) | 84.9 |
+| 174 B | encode | 105.3 (1.10x ✅) | 95.7 |
+| 174 B | decode | 139.7 (1.70x ✅) | 82.2 |
+| 2469 B | encode | 102.8 (1.02x ✅) | 100.6 |
+| 2469 B | decode | 134.4 (1.54x ✅) | 87.0 |
+| 74913 B | encode | 107.5 (0.99x ❌) | 109.0 |
+| 74913 B | decode | 132.5 (1.44x ✅) | 91.9 |
 
 Same class as Ruby/R: a C extension over the core (plain tables in/out
 through one transient tree per call, statically linked), schema from
 a `FileDescriptorSet` at run time. The pbwire column is the native-in/native-out
 full task (`pbench/`), formal run
-`../../results/bench-lua-20261124T103637Z.json`: `shim` runs the plain-table task in
+`../../results/bench-lua-20261124T141712Z.json`: `shim` runs the plain-table task in
 one C entry. The per-field `tree` arm is compared in
 `pbench/README.md`, not here.
 

@@ -242,14 +242,14 @@ rows for the same message, and `pbwire-c1` stays the one-shot probe.
 
 | payload | op | pbwire-c-shim (MB/s, x gen) | protoc gen (MB/s) |
 |---|---|---|---|
-| 136 B | encode | 1693.2 (2.37x ✅) | 715.9 |
-| 136 B | decode | 1292.5 (1.45x ✅) | 892.2 |
-| 174 B | encode | 1211.9 (1.89x ✅) | 641.4 |
-| 174 B | decode | 1098.6 (1.38x ✅) | 794.2 |
-| 2469 B | encode | 1128.1 (3.96x ✅) | 284.9 |
-| 2469 B | decode | 701.6 (1.75x ✅) | 401.5 |
-| 74913 B | encode | 1148.2 (4.10x ✅) | 280.2 |
-| 74913 B | decode | 754.5 (2.01x ✅) | 375.6 |
+| 136 B | encode | 1761.7 (2.54x ✅) | 692.9 |
+| 136 B | decode | 1259.2 (1.43x ✅) | 879.0 |
+| 174 B | encode | 1119.2 (1.80x ✅) | 621.4 |
+| 174 B | decode | 1065.5 (1.39x ✅) | 765.6 |
+| 2469 B | encode | 1060.9 (3.87x ✅) | 274.0 |
+| 2469 B | decode | 684.9 (1.75x ✅) | 392.4 |
+| 74913 B | encode | 1149.3 (4.17x ✅) | 275.9 |
+| 74913 B | decode | 763.6 (2.03x ✅) | 376.1 |
 
 The struct codec writes and reads wire bytes directly from the layout tables;
 there is no dynamic message tree in between. Four changes got it ahead of

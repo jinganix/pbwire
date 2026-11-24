@@ -94,17 +94,17 @@ counts and gates every tier on byte-identical output before timing.
 
 | payload | op | pbwire-zig-shim (MB/s, x zig-protobuf) | zig-protobuf (MB/s) |
 |---|---|---|---|
-| 136 B | encode | 1719.1 (1.37x ✅) | 1257.8 |
-| 136 B | decode | 1271.7 (1.46x ✅) | 868.6 |
-| 174 B | encode | 1355.5 (1.61x ✅) | 842.6 |
-| 174 B | decode | 1095.9 (1.44x ✅) | 759.4 |
-| 2469 B | encode | 1120.5 (1.42x ✅) | 788.7 |
-| 2469 B | decode | 708.9 (1.16x ✅) | 611.1 |
-| 74913 B | encode | 1129.9 (1.83x ✅) | 616.7 |
-| 74913 B | decode | 785.9 (1.40x ✅) | 559.8 |
+| 136 B | encode | 1591.2 (1.28x ✅) | 1239.6 |
+| 136 B | decode | 1220.4 (1.43x ✅) | 855.4 |
+| 174 B | encode | 1252.5 (1.53x ✅) | 821.0 |
+| 174 B | decode | 1053.9 (1.40x ✅) | 751.2 |
+| 2469 B | encode | 1106.0 (1.45x ✅) | 762.9 |
+| 2469 B | decode | 692.8 (1.17x ✅) | 593.9 |
+| 74913 B | encode | 1085.0 (1.84x ✅) | 590.7 |
+| 74913 B | decode | 774.7 (1.47x ✅) | 527.4 |
 
 The pbwire column is the native-in/native-out full task (formal run
-`../../results/bench-zig-20261124T110757Z.json`): `shim` runs it in one
+`../../results/bench-zig-20261124T142800Z.json`): `shim` runs it in one
 `encodeInPlace`/`decodeInPlace` call. The per-field `tree` arm is compared in
 `pbench/README.md`, not here.
 

@@ -91,20 +91,20 @@ headline row on the same payload. The `ext-ffi` wrapper is the no-compiler
 deployment and gets its own row (`pbwire-php-shim-ffi`). The per-field `tree`
 arm is compared in `pbench/` (see its README), not here. Formal
 run
-`../../results/bench-php-20261124T101527Z.json`: the C-extension pass first, then
+`../../results/bench-php-20261124T140435Z.json`: the C-extension pass first, then
 the `ext-ffi` pass against the same C-extension baseline, then the `ext-ffi`
 pass against the pure-PHP baseline.
 
 | payload | op | pbwire-php-shim (MB/s, x) | protobuf-php-c (MB/s) |
 |---|---|---|---|
-| 136 B | encode | 155.0 (2.02x ✅) | 76.9 |
-| 136 B | decode | 168.6 (0.42x ❌) | 402.8 |
-| 174 B | encode | 156.9 (2.01x ✅) | 78.0 |
-| 174 B | decode | 173.9 (0.43x ❌) | 401.2 |
-| 2469 B | encode | 154.1 (2.68x ✅) | 57.5 |
-| 2469 B | decode | 197.3 (0.38x ❌) | 519.4 |
-| 74913 B | encode | 162.8 (2.90x ✅) | 56.1 |
-| 74913 B | decode | 208.4 (0.36x ❌) | 572.3 |
+| 136 B | encode | 160.6 (2.06x ✅) | 78.0 |
+| 136 B | decode | 171.2 (0.40x ❌) | 428.0 |
+| 174 B | encode | 151.1 (1.90x ✅) | 79.6 |
+| 174 B | decode | 173.6 (0.42x ❌) | 413.0 |
+| 2469 B | encode | 154.2 (2.78x ✅) | 55.4 |
+| 2469 B | decode | 189.0 (0.36x ❌) | 523.6 |
+| 74913 B | encode | 168.1 (2.98x ✅) | 56.4 |
+| 74913 B | decode | 211.3 (0.37x ❌) | 574.5 |
 
 `pbwire-php-shim` is the task a PHP application runs when its
 data is an array: one extension entry walks the array in C
@@ -122,14 +122,14 @@ official C extension is the baseline in that same run:
 
 | payload | op | pbwire-php-shim-ffi (MB/s, x) | protobuf-php-c (MB/s) |
 |---|---|---|---|
-| 136 B | encode | 4.9 | 77.9 |
-| 136 B | decode | 5.7 | 423.6 |
-| 174 B | encode | 5.1 | 80.1 |
-| 174 B | decode | 5.7 | 421.3 |
-| 2469 B | encode | 5.1 | 58.1 |
-| 2469 B | decode | 4.5 | 511.0 |
-| 74913 B | encode | 5.5 | 53.6 |
-| 74913 B | decode | 4.7 | 573.3 |
+| 136 B | encode | 4.7 | 78.0 |
+| 136 B | decode | 5.7 | 431.2 |
+| 174 B | encode | 4.9 | 78.5 |
+| 174 B | decode | 5.4 | 414.9 |
+| 2469 B | encode | 2.4 | 54.6 |
+| 2469 B | decode | 4.4 | 498.2 |
+| 74913 B | encode | 5.3 | 53.2 |
+| 74913 B | decode | 4.5 | 572.3 |
 
 The `shim-ffi` column is the same array API through the FFI trampoline (one
 FFI call per field), which is why it reads interpreter-scale next to the
@@ -140,13 +140,13 @@ different race; the FFI array entry is the pbwire side there:
 
 | payload | op | pbwire-php-shim-ffi (MB/s) | protobuf-php (MB/s) |
 |---|---|---|---|
-| 136 B | encode | 4.9 | 3.2 |
-| 136 B | decode | 5.9 | 6.6 |
-| 174 B | encode | 4.9 | 3.1 |
-| 174 B | decode | 5.6 | 6.1 |
-| 2469 B | encode | 5.1 | 3.1 |
-| 2469 B | decode | 4.3 | 5.1 |
-| 74913 B | encode | 5.5 | 3.3 |
+| 136 B | encode | 4.8 | 3.2 |
+| 136 B | decode | 5.7 | 6.6 |
+| 174 B | encode | 5.1 | 3.2 |
+| 174 B | decode | 5.6 | 6.2 |
+| 2469 B | encode | 5.0 | 3.1 |
+| 2469 B | decode | 4.4 | 5.3 |
+| 74913 B | encode | 5.4 | 3.3 |
 | 74913 B | decode | 4.6 | 5.5 |
 
 The pure-PHP runtime spends its time on per-field bookkeeping (~4-6 MB/s flat

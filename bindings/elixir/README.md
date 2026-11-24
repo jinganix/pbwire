@@ -160,14 +160,14 @@ Elixir half owns is most visible. Rerun with `make elixir-bench`; the recorded r
 
 | payload | op | pbwire-elixir (MB/s, x elixir-protobuf) | elixir-protobuf (MB/s) |
 |---|---|---|---|
-| 136 B | encode | 158.0 (3.15x ✅) | 50.1 |
-| 136 B | decode | 108.8 (1.75x ✅) | 62.2 |
-| 174 B | encode | 161.7 (3.10x ✅) | 52.2 |
-| 174 B | decode | 122.1 (1.90x ✅) | 64.4 |
-| 2469 B | encode | 151.7 (2.89x ✅) | 52.4 |
-| 2469 B | decode | 121.6 (2.05x ✅) | 59.2 |
-| 74913 B | encode | 160.4 (2.99x ✅) | 53.6 |
-| 74913 B | decode | 117.8 (1.91x ✅) | 61.7 |
+| 136 B | encode | 153.5 (3.25x ✅) | 47.3 |
+| 136 B | decode | 109.0 (1.79x ✅) | 60.9 |
+| 174 B | encode | 159.2 (3.18x ✅) | 50.1 |
+| 174 B | decode | 114.1 (1.84x ✅) | 61.9 |
+| 2469 B | encode | 149.1 (2.81x ✅) | 53.0 |
+| 2469 B | decode | 116.3 (2.04x ✅) | 56.9 |
+| 74913 B | encode | 154.6 (2.98x ✅) | 51.9 |
+| 74913 B | decode | 113.0 (1.91x ✅) | 59.1 |
 
 Same class as Erlang: the BEAM binding reuses the published `:pbwire` Hex
 NIF (the same C core as `bindings/erlang`) and owns only the struct↔tuple
@@ -176,7 +176,7 @@ its pure-Elixir rows **are** the `core` comparison for this binding. No
 second pbwire path exists here, so this single-arm section is unchanged.
 Every encode is byte-identical to `Protobuf.encode/1` and every decode reads
 back field-for-field equal to the input struct before timing; each encode
-iteration builds a fresh struct inside the timed closure (native-in full task). Formal run `../../results/bench-elixir-20261124T103901Z.json`. Known
+iteration builds a fresh struct inside the timed closure (native-in full task). Formal run `../../results/bench-elixir-20261124T142715Z.json`. Known
 deliberate divergences from the oracle: NaN bit identity, unknown-field drop
 (the NIF tuple form has no storage), raise on missing `required`.
 

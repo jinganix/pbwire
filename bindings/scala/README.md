@@ -70,14 +70,14 @@ x0 / x1 / x100 / x3000).
 
 | payload | op | pbwire-scala-core (MB/s, x scalapb) | scalapb (MB/s) |
 |---|---|---|---|
-| 136 B | encode | 528.8 (0.33x ❌) | 1580.9 |
-| 136 B | decode | 339.8 (0.41x ❌) | 834.3 |
-| 174 B | encode | 399.6 (0.44x ❌) | 902.2 |
-| 174 B | decode | 228.5 (0.29x ❌) | 780.0 |
-| 2469 B | encode | 240.4 (6.97x ✅) | 34.5 |
-| 2469 B | decode | 147.4 (0.27x ❌) | 543.2 |
-| 74913 B | encode | 255.8 (170.53x ✅) | 1.5 |
-| 74913 B | decode | 161.9 (0.27x ❌) | 602.8 |
+| 136 B | encode | 514.9 (0.32x ❌) | 1591.6 |
+| 136 B | decode | 328.9 (0.39x ❌) | 834.1 |
+| 174 B | encode | 397.6 (0.44x ❌) | 900.9 |
+| 174 B | decode | 222.6 (0.29x ❌) | 775.6 |
+| 2469 B | encode | 235.2 (6.86x ✅) | 34.3 |
+| 2469 B | decode | 154.4 (0.25x ❌) | 615.8 |
+| 74913 B | encode | 258.7 (184.79x ✅) | 1.4 |
+| 74913 B | decode | 168.4 (0.27x ❌) | 632.2 |
 
 Same class as Kotlin: the JVM binding reuses the Java runtime and adds only
 an idiomatic DSL — no second codec, no JNI, schema from a `FileDescriptorSet`
@@ -91,7 +91,7 @@ encode, 0.27x-0.41x decode): the translation is the cost, not
 the wire engine. The large/xlarge encode ratios (6.97x/170.53x) ride a ScalaPB
 baseline collapse at those tiers, not a codec win. The per-field `tree` arm is compared in
 `pbench/` (see its README), not here. Formal run
-`../../results/bench-scala-20261124T102827Z.json`.
+`../../results/bench-scala-20261124T142332Z.json`.
 
 ## Conformance
 

@@ -85,14 +85,14 @@ call cannot race a generated straight-line writer, and map materialization on de
 
 | payload | op | pbwire-clj-core (MB/s, x protobuf-java) | protobuf-java (MB/s) |
 |---|---|---|---|
-| 136 B | encode | 19.8 (0.01x ❌) | 1476.3 |
-| 136 B | decode | 41.9 (0.06x ❌) | 672.7 |
-| 174 B | encode | 19.0 (0.02x ❌) | 956.2 |
-| 174 B | decode | 38.7 (0.07x ❌) | 585.0 |
-| 2469 B | encode | 10.7 (0.03x ❌) | 420.5 |
-| 2469 B | decode | 174.3 (0.37x ❌) | 476.4 |
-| 74913 B | encode | 10.8 (0.02x ❌) | 477.9 |
-| 74913 B | decode | 268.3 (0.58x ❌) | 464.3 |
+| 136 B | encode | 19.1 (0.01x ❌) | 1456.0 |
+| 136 B | decode | 42.7 (0.06x ❌) | 672.5 |
+| 174 B | encode | 18.5 (0.02x ❌) | 933.1 |
+| 174 B | decode | 39.2 (0.07x ❌) | 591.5 |
+| 2469 B | encode | 10.2 (0.02x ❌) | 440.2 |
+| 2469 B | decode | 166.5 (0.35x ❌) | 470.4 |
+| 74913 B | encode | 10.5 (0.02x ❌) | 474.5 |
+| 74913 B | decode | 250.6 (0.54x ❌) | 464.6 |
 
 `core` is the mutable-message fast path and the published comparison: a fresh `Message` per iteration (build + fill + encode + close; decode plus a deep read-back of every gate-checked field), the generated
 model's native object with no map walk. The persistent-map API stays for
@@ -101,7 +101,7 @@ same split the README documents (maps for convenience, the mutable path for
 hot loops) and Lua documents (table vs builder). The per-field `tree` map-API
 arm is compared in `pbench/` (see its README), not here.
 Formal run
-`../../results/bench-clojure-20261124T110510Z.json`.
+`../../results/bench-clojure-20261124T143103Z.json`.
 
 The timed path builds a fresh mutable message per iteration (fill + encode + close, with the same deep read-back as the tree arm on decode and no map materialization), like the Java row, and the
 baseline builds a fresh message per iteration for its direct `toByteArray` call: the measured type carries a hint so

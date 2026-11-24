@@ -73,18 +73,18 @@ xlarge (the repeated fields scaled x0 / x1 / x100 / x3000).
 
 | payload | op | pbwire-dart-shim (MB/s, x protobuf-dart) | protobuf-dart (MB/s) |
 |---|---|---|---|
-| 136 B | encode | 287.7 (2.73x ✅) | 105.2 |
-| 136 B | decode | 1062.4 (5.16x ✅) | 205.7 |
-| 174 B | encode | 254.6 (2.67x ✅) | 95.2 |
-| 174 B | decode | 917.0 (5.33x ✅) | 171.9 |
-| 2469 B | encode | 143.9 (1.56x ✅) | 92.3 |
-| 2469 B | decode | 707.6 (4.80x ✅) | 147.3 |
-| 74913 B | encode | 153.6 (1.80x ✅) | 85.1 |
-| 74913 B | decode | 784.0 (4.96x ✅) | 158.1 |
+| 136 B | encode | 262.1 (2.75x ✅) | 95.4 |
+| 136 B | decode | 1003.5 (5.23x ✅) | 191.9 |
+| 174 B | encode | 252.9 (2.63x ✅) | 96.3 |
+| 174 B | decode | 928.4 (5.27x ✅) | 176.3 |
+| 2469 B | encode | 139.0 (1.56x ✅) | 89.0 |
+| 2469 B | decode | 700.3 (5.01x ✅) | 139.7 |
+| 74913 B | encode | 151.6 (1.82x ✅) | 83.1 |
+| 74913 B | decode | 764.4 (4.84x ✅) | 157.9 |
 
 The pbwire column is the native-in/native-out full task
 (`pbench/`, formal run
-`../../results/bench-dart-20261124T103430Z.json`): `shim` runs it in one FFI call
+`../../results/bench-dart-20261124T141135Z.json`): `shim` runs it in one FFI call
 over the flat `<Message>Layout`. The per-field `tree` arm is compared in
 `pbench/README.md`, not here.
 
