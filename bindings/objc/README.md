@@ -210,3 +210,45 @@ otherwise); `registry=false` drops `<Fn>MessageNames` +
 `<Fn>Preload`. The committed output is `tests/gen/` and `examples/gen/`;
 `examples/roundtrip.m` assigns typed properties only. See
 `../../codegen/README.md`.
+
+## Benchmarks
+
+#### Objective-C vs the `protobuf` ObjC runtime
+
+![Objective-C vs the protobuf ObjC runtime — MB/s by tier](../../docs/charts/bench-objective-c-vs-the-protobuf-objc-runtime.svg)
+
+The `pbwire-objc` rows are the `tree` arm: a fresh `PBWMessage` built per
+field per iteration on both sides, then encoded (formal run
+`../../results/bench-objc-20261124T105441Z.json`). The gap is the per-iteration build
+cost priced in pbench: seventeen
+boxed setters plus the `str` copy, and the xlarge tier rebuilds its 74 KB
+`str` fixture per iteration on both sides (pad-`str` payload).
+
+| payload | op | pbwire-objc (MB/s, x protobuf-objc) | protobuf-objc (MB/s) |
+|---|---|---|---|
+| 136 B | encode | 62.0 (0.52x ❌) | 119.6 |
+| 136 B | decode | 727.8 (2.76x ✅) | 264.1 |
+| 174 B | encode | 67.2 (0.59x ❌) | 113.0 |
+| 174 B | decode | 920.5 (3.00x ✅) | 306.4 |
+| 2469 B | encode | 181.2 (0.93x ❌) | 195.8 |
+| 2469 B | decode | 9326.1 (2.47x ✅) | 3773.5 |
+| 74913 B | encode | 211.6 (0.96x ❌) | 219.5 |
+| 74913 B | decode | 33134.1 (1.16x ✅) | 28499.3 |
+
+The direct struct path is the same C code, measured by `make bench-c` (the
+`shim` rows); there is no third mechanism to compare here. No second pbwire
+path exists here: the ARC wrapper is the single native arm, so this section
+keeps its row unchanged.
+
+The ARC wrapper adds one Objective-C object per call and no copy: `encode`
+hands
+the encoder's own malloc'd buffer to `NSData` with
+`dataWithBytesNoCopy:length:freeWhenDone:`, and `decode` wraps the decoder's
+arena in one `PBWMessage`. Decode stays ahead of the generated runtime on all
+four tiers (2.76x / 3.00x at 136-174 B; the 74 KB tier is 1.16x, the closest
+row). The xlarge tier is one 74 KB string, so decode is a memcpy race: the
+UTF-8 validation that runs at parse is the one walk over those bytes that is
+not a copy, which is why it now uses the 16-byte ASCII scan (see the [attempts ledger](../../docs/perf-attempts.md));
+the generated encoder
+writes it into an `NSMutableData` of the final size, and the wrapper writes it
+into its own buffer, which `NSData` then takes over.

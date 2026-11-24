@@ -83,3 +83,37 @@ thread, `use`/`close` frees a root, and a nested message is a view of its parent
 typed properties, `fun encode(schema)` and a `companion object { fun decode }`.
 The committed output is `tests/gen/`; `examples/Roundtrip.kt` uses only typed
 assignments. See `../../codegen/README.md`.
+
+## Benchmarks
+
+#### Kotlin vs `protoc --kotlin_out` over `protobuf-java`
+
+![Kotlin vs protoc --kotlin_out over protobuf-java — MB/s by tier](../../docs/charts/bench-kotlin-vs-protoc-kotlin-out-over-protobuf-java.svg)
+
+| payload | op | pbwire-kotlin-core (MB/s, x protobuf-kotlin) | protobuf-kotlin (MB/s) |
+|---|---|---|---|
+| 136 B | encode | 533.1 (0.39x ❌) | 1367.1 |
+| 136 B | decode | 327.3 (0.51x ❌) | 636.7 |
+| 174 B | encode | 507.6 (0.58x ❌) | 878.7 |
+| 174 B | decode | 306.3 (0.55x ❌) | 561.5 |
+| 2469 B | encode | 447.8 (2.02x ✅) | 222.0 |
+| 2469 B | decode | 291.5 (0.63x ❌) | 464.8 |
+| 74913 B | encode | 463.0 (27.24x ✅) | 17.0 |
+| 74913 B | decode | 324.0 (0.72x ❌) | 447.8 |
+
+Kotlin reuses the Java runtime (`../java/runtime`), so these numbers are
+`pbwire-java`'s: one workspace lookup plus one `byte[]` copy per call. `core`
+is the same committed generated Java model the Kotlin DSL builds (the
+`tests/gen/matrix3.kt` factories are inline sugar over it) and the published
+comparison here; it tracks Java's `core` row (0.36x at 136 B, 1.10x at 74 KB
+encode, 0.51x-0.80x decode) for the same reason: a generated writer knows
+every tag at compile time while the dynamic tree walk derives them, the same
+structural floor the Java section explains. The xlarge encode ratio (27.24x)
+rides a `protobuf-kotlin` baseline collapse (17.0 MB/s there); decode is the
+honest comparison. The `core` column is eager. The
+per-field `tree` arm is compared in `../java/pbench/` (see its README),
+not here. The `Message`-wrapper cut (no per-decode
+`AtomicBoolean`, no volatile open flag) removes the binding's own per-call
+overhead on top, so the narrow tiers track the codec instead of the wrapper.
+Formal run
+`../../results/bench-kotlin-20261124T094919Z.json`.

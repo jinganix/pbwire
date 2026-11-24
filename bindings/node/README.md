@@ -267,3 +267,58 @@ constants, describing exactly the plain objects `MessageType.encode()` accepts
 and `Message.get()` returns. The committed output is `tests/gen/` and
 `examples/gen/`; the generated test type-checks with `tsc --strict --checkJs`.
 See `../../codegen/README.md`.
+
+## Benchmarks
+
+#### Node vs protobufjs
+
+![Node vs protobufjs — MB/s by tier](../../docs/charts/bench-node-vs-protobufjs.svg)
+
+| payload | op | pbwire-node-shim (MB/s, x protobufjs) | protobufjs (MB/s) |
+|---|---|---|---|---|
+| 136 B | encode | 50.1 (0.64x ❌) | 78.0 |
+| 136 B | decode | 61.5 (0.15x ❌) | 399.7 |
+| 174 B | encode | 53.7 (0.59x ❌) | 90.7 |
+| 174 B | decode | 49.3 (0.12x ❌) | 403.8 |
+| 2469 B | encode | 55.1 (0.23x ❌) | 236.9 |
+| 2469 B | decode | 49.6 (0.12x ❌) | 410.0 |
+| 74913 B | encode | 58.9 (0.19x ❌) | 316.0 |
+| 74913 B | decode | 54.8 (0.12x ❌) | 449.1 |
+
+The pbwire column is the native-in/native-out full task
+(`pbench/`): `shim` runs the native-object task in one
+`encodeObject` / `decodeToObject` downcall. The per-field `tree` arm is
+compared in `pbench/README.md`, not here. Formal run
+`../../results/bench-node-20261124T095512Z.json`.
+
+Each field of a native-object op is one N-API property read or
+write (~60-70 ns) where protobufjs pays a few ns in its own heap.
+The verdict (tree handle path stays the documented default, the one-downcall
+`shim` is the recommended one-shot path) is in `pbench/README.md`
+and the ledger; the old prebuilt-handle `tree` headline is retired. The
+pure-TypeScript core port is compared in `pbench/README.md`, not here.
+
+protobufjs is the published baseline, and the harness gates its bytes too.
+
+What the gap is made of, and what the optimization pass changed:
+
+| version | xlarge encode | xlarge decode |
+|---|---|---|
+| N-API addon, tree per message | 1300.4 | 565.2 |
+| encode into a reusable buffer, wire view for decoded messages | 1366.6 | 1596.7 |
+
+- `decode()` returns the bytes plus one 12-byte slice per wire field instead of
+  materializing a tree: one validating tag scan, one allocation for the slice
+  array, and the bytes copied once with `Buffer.from`. A value materializes only
+  when it is read. Byte-for-byte re-encoding falls out of it, so no unknown-field
+  bookkeeping is needed either.
+- The wire form keeps no native state (JS `Buffer` + `Uint32Array`), because an
+  N-API finalizer costs ~250 ns per object — more than the whole decode of a
+  136 B message. Only the built form, which has no JS-visible storage, is
+  wrapped.
+- `encode()` writes into the type's reusable core buffer and copies into a
+  JS-allocated (pooled) `Buffer` of the exact size: N-API's own `Buffer`
+  creation is ~200 ns, versus ~26 ns for a pooled allocation.
+- Field facts are resolved once per descriptor into a cached table (name hash,
+  direct number index, wire type, label, oneof, closed enum), so the scan and
+  the accessors never walk the descriptor.
