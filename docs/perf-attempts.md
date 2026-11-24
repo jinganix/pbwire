@@ -2898,3 +2898,23 @@ shipped; the residual 2-3% lean is dispatch wobble inside a tier both sides
 build identically, inside the few-percent run-to-run band the harness
 documents. Revisit only if a quiet-machine run ever shows a gap clearly
 outside that band.
+
+## Cell: Lua `shim` xlarge encode (0.98x) — confirmed tie, no change
+
+Task 10 of the below-baseline plan (2026-11-24): three consecutive
+`make lua-bench` runs on the same host keep xlarge `shim` encode just under
+the line without ever opening a real gap — 0.98x, 0.99x, 0.98x (prior formal
+run 0.99x; the other encode tiers sit green at 1.03x-1.06x in the same runs).
+Decode stays green throughout (1.42x-1.47x). Formal pasted run:
+`results/bench-lua-20261124T204559Z.json`.
+
+No probe was needed beyond the re-runs: unlike the ObjC case there is no
+candidate asymmetry to isolate — the `shim` path already encodes straight
+from the Lua table into the schema context's reused buffer in one C entry
+per op, which is exactly the C-harness buffer-reuse shape
+(`bindings/c/benchmarks/bench_struct.cc`), and both sides pay the same
+fresh-table construction inside the timer. No binding or harness change
+shipped; the residual 1-2% lean is dispatch wobble inside a tier both sides
+build identically, inside the ±10% run-to-run band the binding README
+documents. Revisit only if a quiet-machine run ever shows a gap clearly
+outside that band.

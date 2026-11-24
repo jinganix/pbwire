@@ -222,7 +222,7 @@ protoc_plugin` plus `~/.pub-cache/bin`).
 | Dart (`dart:ffi`) | `make dart-bench` (`bindings/dart/benchmarks`) | the `protobuf` Dart package + generated code | all 4 | 1.82x ✅ / 4.84x ✅ `shim` (one C-side reader call per op) |
 | Rust (static link) | `make rust-bench` (`bindings/rust/benchmarks`) | prost generated code from the same `matrix3.proto` | all 4 | 2.02x ✅ / 1.86x ✅ `shim` vs prost (one C-side struct-codec call per op; encode above prost at 2469 B up) |
 | C# (P/Invoke) | `make csharp-bench` (`bindings/csharp/benchmarks`) | Google.Protobuf C# generated code from the same `matrix3.proto` | all 4 | 1.32x ✅ / 0.77x ❌ `shim` (one P/Invoke per op over the flat image) |
-| Lua (C module, tables) | `make lua-bench` (`bindings/lua/benchmarks`) | `lua-protobuf` 0.6.0 | all 4 | 0.99x ❌ / 1.44x ✅ `shim` (native-object, one C entry per op; xlarge encode is a run-to-run tie) |
+| Lua (C module, tables) | `make lua-bench` (`bindings/lua/benchmarks`) | `lua-protobuf` 0.6.0 | all 4 | 0.98x ❌ / 1.47x ✅ `shim` (native-object, one C entry per op; xlarge encode is a run-to-run tie) |
 | Swift (SwiftPM, static link) | `make swift-bench` (`bindings/swift/benchmarks`) | `apple/swift-protobuf` 1.39.0 generated code from the same `matrix3.proto` | all 4 | 3.24x ✅ / 2.54x ✅ `shim` (one C-side layout-codec call per op) |
 | Scala (Java runtime + DSL) | `make scala-bench` (`bindings/scala/benchmarks`) | ScalaPB 0.11.18 generated code from the same `matrix3.proto` | all 4 | 211.33x ✅ / 0.30x ❌ `core` (case class; xlarge encode on a ScalaPB baseline collapse) |
 | Elixir (NIF over the shared core) | `make elixir-bench` (`bindings/elixir/benchmarks`) | `elixir-protobuf` 0.17.1 structs from the same `matrix3.proto` | all 4 | 2.98x ✅ / 1.91x ✅ |
@@ -307,7 +307,7 @@ baseline collapse below), and ObjC `tree` encode
 the timer; the ObjC xlarge tier
 rebuilds its 74 KB `str` fixture per iteration). The core's old `tree` headline
 (0.39x-0.58x) retired with the fairness contract: the tree-API build price
-(malloc + field lookup per value vs direct stores) is no longer a headline. The Lua xlarge `shim` encode cell (0.99x) is a
+(malloc + field lookup per value vs direct stores) is no longer a headline. The Lua xlarge `shim` encode cell (0.98x) is a
 run-to-run tie, and so is Go's xlarge decode-par (0.99x, serial twin 1.33x).
 Julia's, Kotlin's and Scala's xlarge `shim`/`core`
 encode ratios (22.35x / 27.74x / 211.33x) are baseline collapses, not codec wins:
@@ -355,7 +355,7 @@ payload, the boundary cost and the baseline all differ.
 | PHP | C extension | 74913 B | 168.1 (2.98x ✅) `shim`; `shim-ffi` 5.3 | 211.3 (0.37x ❌) `shim`; `shim-ffi` 4.5 |
 | Rust | static link | 74913 B | 1145.3 (2.02x ✅ vs prost) `shim` | 752.5 (1.86x ✅) `shim` |
 | C# | P/Invoke | 74913 B | 483.0 (1.32x ✅) `shim` | 385.3 (0.77x ❌) `shim` |
-| Lua | C module, tables | 74913 B | 107.5 (0.99x ❌) `shim` | 132.5 (1.44x ✅) `shim` |
+| Lua | C module, tables | 74913 B | 105.8 (0.98x ❌) `shim` | 137.3 (1.47x ✅) `shim` |
 | Erlang | NIF (`pbwire`) | 74913 B | 322.8 (2.95x ✅) | 355.5 (1.59x ✅) |
 | Swift | static link (SwiftPM) | 74913 B | 911.9 (3.24x ✅) `shim` | 573.7 (2.54x ✅) `shim` |
 | Scala | the Java runtime + DSL | 74913 B | 253.6 (211.33x ✅, baseline collapse) `core` (case class) | 166.8 (0.30x ❌) `core` |
@@ -913,7 +913,7 @@ Full table and method: [binding README](bindings/csharp/README.md#benchmarks).
 
 ![Lua (C module, tables) vs lua-protobuf — MB/s by tier](docs/charts/bench-lua-c-module-tables-vs-lua-protobuf.svg)
 
-xlarge: encode 107.5 (0.99x ❌) / decode 132.5 (1.44x ✅).
+xlarge: encode 105.8 (0.98x ❌) / decode 137.3 (1.47x ✅).
 Full table and method: [binding README](bindings/lua/README.md#benchmarks).
 
 ### Erlang: `pbwire` vs gpb vs gpb NIF
