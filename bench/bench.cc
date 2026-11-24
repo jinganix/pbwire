@@ -40,6 +40,8 @@ using google::protobuf::util::MessageToJsonString;
 #endif
 #include "msg.pb.h"
 #include "msg2.pb.h"
+#include "msg_struct.h"
+#include "pbw_struct.h"
 #include "pbwire.h"
 
 namespace {
@@ -335,6 +337,88 @@ fill_dyn(google::protobuf::Message *m, int repeated)
         kr->SetString(kid, g_dyn_fields.child_name, "grandkid");
         kr->SetInt64(kid, g_dyn_fields.child_value, i + 1);
     }
+}
+
+/* Thin-model fill for bench.Msg: the generated C struct is the native
+ * object, assigned field by field like the generated C++ side. No tree,
+ * no per-value generic value: scalars are plain stores, only the payload
+ * bytes and repeated arrays allocate (which the generated side does too
+ * through std::string and RepeatedField). */
+void
+struct_bytes(pbw_bytes_t *b, const void *data, size_t len)
+{
+    b->data = (uint8_t *)std::malloc(len + 1);
+    std::memcpy(b->data, data, len);
+    b->data[len] = '\0';
+    b->len = len;
+}
+
+void
+fill_struct_msg(bench_msg_t *s, int repeated)
+{
+    static const uint8_t raw[] = {0x00, 0xff, 0x7f};
+
+    std::memset(s, 0, sizeof(*s));
+    s->i32 = -1;
+    s->i64 = INT64_MIN;
+    s->u32 = 4294967295u;
+    s->u64 = UINT64_MAX;
+    s->s32 = INT32_MIN;
+    s->s64 = INT64_MAX;
+    s->fx32 = 0xdeadbeefu;
+    s->fx64 = 0x0102030405060708ull;
+    s->sfx32 = -2;
+    s->sfx64 = -3;
+    s->f32 = 3.5f;
+    s->f64 = -2.25;
+    s->flag = true;
+    struct_bytes(&s->name, "hello pbwire", std::strlen("hello pbwire"));
+    struct_bytes(&s->blob, raw, sizeof(raw));
+    s->color = 3; /* BLUE */
+    s->child = (bench_child_t *)std::malloc(sizeof(*s->child));
+    std::memset(s->child, 0, sizeof(*s->child));
+    struct_bytes(&s->child->name, "kid", std::strlen("kid"));
+    s->child->value = 42;
+    if (repeated > 0) {
+        s->nums = (int32_t *)std::malloc(sizeof(int32_t) * (size_t)repeated);
+        s->packed_nums =
+            (int32_t *)std::malloc(sizeof(int32_t) * (size_t)repeated);
+        s->tags =
+            (pbw_bytes_t *)std::malloc(sizeof(pbw_bytes_t) * (size_t)repeated);
+        s->kids = (bench_child_t *)std::malloc(sizeof(bench_child_t) *
+                                               (size_t)repeated);
+        s->n_nums = s->n_packed_nums = s->n_tags = s->n_kids = (size_t)repeated;
+        for (int i = 0; i < repeated; i++) {
+            s->nums[i] = i - 3;
+            s->packed_nums[i] = i * 17;
+            struct_bytes(&s->tags[i], "tag", std::strlen("tag"));
+            std::memset(&s->kids[i], 0, sizeof(s->kids[i]));
+            struct_bytes(&s->kids[i].name, "grandkid",
+                         std::strlen("grandkid"));
+            s->kids[i].value = i + 1;
+        }
+    }
+}
+
+void
+free_struct_msg(bench_msg_t *s)
+{
+    size_t i;
+
+    std::free(s->name.data);
+    std::free(s->blob.data);
+    if (s->child != nullptr) {
+        std::free(s->child->name.data);
+        std::free(s->child);
+    }
+    std::free(s->nums);
+    std::free(s->packed_nums);
+    for (i = 0; i < s->n_tags; i++)
+        std::free(s->tags[i].data);
+    std::free(s->tags);
+    for (i = 0; i < s->n_kids; i++)
+        std::free(s->kids[i].name.data);
+    std::free(s->kids);
 }
 
 void
@@ -1408,6 +1492,45 @@ bench_case(const char *label, int repeated, int iterations,
 {
     std::string ref = gen_bytes(repeated);
 
+    /* Thin-model gate: the generated C struct encodes to the reference
+     * bytes, so the timed thin-model arms below run the same payload. The
+     * headlined task is new + set + encode on that struct, not the raw
+     * tree API (docs/perf-fairness.md). */
+    pbw_schema *st_schema = nullptr;
+    if (pbw_struct_schema_load("bench/gen/msg.pb", &st_schema) != PBW_OK) {
+        fail("struct schema load");
+        pbw_schema_free(st_schema);
+        return;
+    }
+    pbw_struct_codec *st_codec = nullptr;
+    if (pbw_struct_codec_init(&st_codec, st_schema, "bench.Msg",
+                              bench_msg_fields, 21) != PBW_OK) {
+        fail("struct codec init");
+        pbw_struct_codec_free(st_codec);
+        pbw_schema_free(st_schema);
+        return;
+    }
+    {
+        bench_msg_t s;
+        pbw_struct_buf gb = {nullptr, 0, 0};
+        std::string gate_bytes;
+
+        fill_struct_msg(&s, repeated);
+        if (pbw_struct_codec_encode(st_codec, &s, &gb) != PBW_OK) {
+            fail("struct encode");
+        } else {
+            gate_bytes.assign(reinterpret_cast<char *>(gb.data), gb.len);
+        }
+        free_struct_msg(&s);
+        pbw_struct_buf_free(&gb);
+        if (gate_bytes != ref) {
+            fail("fresh-build struct bytes differ");
+            pbw_struct_codec_free(st_codec);
+            pbw_schema_free(st_schema);
+            return;
+        }
+    }
+
     /* The tree arm's full task, gated before it is timed: a fresh per-field
      * build must match the reference too (not just a held tree), and the
      * timer covers build + encode with alloc/free inside. */
@@ -1456,19 +1579,20 @@ bench_case(const char *label, int repeated, int iterations,
     std::vector<Row> rows;
     int iters = 0;
 
-    /* Encode rows all build fresh per iteration: construct + serialize with
-     * release inside the timer on every arm, so the comparison is the same
-     * calling method, not build-against-re-encode. The held-tree re-encode
-     * below is the proxy row: same-run timing only, never the headline. */
+    /* Encode rows all build fresh per iteration from the same values: the
+     * thin model fills its native struct (plain stores plus the payload
+     * allocations the generated side makes too), then one codec call, with
+     * release inside the timer on every arm. Same calling method, not
+     * build-against-re-encode. The held-tree re-encode below is the proxy
+     * row: same-run timing only, never the headline. */
     rows.push_back({"pbwire", "encode", time_it([&] {
-                        pbw_message *m = pbw_message_new(desc);
-                        uint8_t *buf = nullptr;
-                        size_t len = 0;
-                        fill_pbw(m, repeated);
-                        pbw_encode(m, &buf, &len);
-                        encoded_len = len;
-                        pbw_free(buf);
-                        pbw_message_free(m);
+                        bench_msg_t s;
+                        pbw_struct_buf b = {nullptr, 0, 0};
+                        fill_struct_msg(&s, repeated);
+                        (void)pbw_struct_codec_encode(st_codec, &s, &b);
+                        encoded_len = b.len;
+                        pbw_struct_buf_free(&b);
+                        free_struct_msg(&s);
                     },
                                                 iterations, &iters),
                     ref.size()});
@@ -1494,14 +1618,13 @@ bench_case(const char *label, int repeated, int iterations,
                                                 iterations),
                     ref.size()});
 
+    pbw_struct_buf st_out = {nullptr, 0, 0};
     rows.push_back({"pbwire c", "encode", time_it([&] {
-                        pbw_message *m = pbw_message_new(desc);
-                        const uint8_t *out = nullptr;
-                        size_t len = 0;
-                        fill_pbw(m, repeated);
-                        pbw_encode_ctx(ctx, m, &out, &len);
-                        encoded_len = len;
-                        pbw_message_free(m);
+                        bench_msg_t s;
+                        fill_struct_msg(&s, repeated);
+                        (void)pbw_struct_codec_encode(st_codec, &s, &st_out);
+                        encoded_len = st_out.len;
+                        free_struct_msg(&s);
                     },
                                                   iterations),
                     ref.size()});
@@ -1528,25 +1651,36 @@ bench_case(const char *label, int repeated, int iterations,
                                                         iterations),
                     ref.size()});
 
-    /* Decode rows sink only the status: every implementation must produce it,
-     * so nothing is eliminated, and "decode" measures decoding rather than
-     * decoding plus a full-tree walk (which costs each side differently). */
+    /* Decode rows sink only the status: every implementation must produce
+     * a native object for the same bytes, so nothing is eliminated. Both
+     * thin-model arms decode into the generated struct with the same
+     * profile as the reference parse — batched payload memory, single
+     * release, no per-value walk. The difference they keep is reuse: the ctx
+     * arm reuses one arena across iterations (steady state), the plain arm
+     * builds and frees a fresh arena per call (one-off). */
+    pbw_struct_arena *st_arena = nullptr;
     rows.push_back({"pbwire c", "decode", time_it([&] {
-                        pbw_message *m = nullptr;
-                        if (pbw_decode_ctx(ctx, desc, ref.data(), ref.size(),
-                                           &m) != PBW_OK)
+                        bench_msg_t s;
+                        std::memset(&s, 0, sizeof(s));
+                        if (pbw_struct_codec_decode(
+                                st_codec,
+                                reinterpret_cast<const uint8_t *>(ref.data()),
+                                ref.size(), &st_arena, &s) != PBW_OK)
                             failures++;
-                        pbw_ctx_reset(ctx);
                     },
                                                   iterations),
                     ref.size()});
 
     rows.push_back({"pbwire", "decode", time_it([&] {
-                        pbw_message *m = nullptr;
-                        if (pbw_decode(desc, ref.data(), ref.size(), &m) !=
-                            PBW_OK)
+                        bench_msg_t s;
+                        pbw_struct_arena *a = nullptr;
+                        std::memset(&s, 0, sizeof(s));
+                        if (pbw_struct_codec_decode(
+                                st_codec,
+                                reinterpret_cast<const uint8_t *>(ref.data()),
+                                ref.size(), &a, &s) != PBW_OK)
                             failures++;
-                        pbw_message_free(m);
+                        pbw_struct_arena_free(a);
                     },
                                                 iterations),
                     ref.size()});
@@ -1580,6 +1714,10 @@ bench_case(const char *label, int repeated, int iterations,
     (void)encoded_len;
 
     pbw_message_free(pbw_msg);
+    pbw_struct_buf_free(&st_out);
+    pbw_struct_arena_free(st_arena);
+    pbw_struct_codec_free(st_codec);
+    pbw_schema_free(st_schema);
     pbw_ctx_free(ctx);
 }
 
@@ -2036,27 +2174,45 @@ bench_threads(const char *label, int repeated, int iterations, pbw_descriptor *d
     std::string ref = gen_bytes(repeated);
     std::vector<ThreadRow> rows;
 
+    pbw_schema *st_schema = nullptr;
+    if (pbw_struct_schema_load("bench/gen/msg.pb", &st_schema) != PBW_OK) {
+        fail("struct schema load");
+        pbw_schema_free(st_schema);
+        return;
+    }
+    pbw_struct_codec *st_codec = nullptr;
+    if (pbw_struct_codec_init(&st_codec, st_schema, "bench.Msg",
+                              bench_msg_fields, 21) != PBW_OK) {
+        fail("struct codec init");
+        pbw_struct_codec_free(st_codec);
+        pbw_schema_free(st_schema);
+        return;
+    }
+
     rows.push_back({"pbwire", "encode", 0, 0});
     rows.push_back({"pb gen", "encode", 0, 0});
     rows.push_back({"pbwire", "decode", 0, 0});
     rows.push_back({"pb gen", "decode", 0, 0});
     int iters = 0;
 
-    /* encode: every arm builds fresh per iteration (construct + serialize
-     * with release inside the timer), so single- and multi-thread rows are
-     * the same calling method as the single-threaded table. */
+    /* encode: every arm builds fresh per iteration from the same values —
+     * the thin model fills its native struct, then one codec call — with
+     * release inside the timer, so single- and multi-thread rows are the
+     * same calling method as the single-threaded table. */
     {
         auto setup = [&](int) {
-            auto ctx = std::shared_ptr<pbw_ctx>(pbw_ctx_new(), pbw_ctx_free);
+            auto out = std::shared_ptr<pbw_struct_buf>(
+                new pbw_struct_buf{nullptr, 0, 0},
+                [](pbw_struct_buf *b) {
+                    pbw_struct_buf_free(b);
+                    delete b;
+                });
 
-            return [ctx, desc, repeated](int) {
-                auto msg = std::shared_ptr<pbw_message>(
-                    pbw_message_new(desc), pbw_message_free);
-
-                fill_pbw(msg.get(), repeated);
-                const uint8_t *out = nullptr;
-                size_t len = 0;
-                (void)pbw_encode_ctx(ctx.get(), msg.get(), &out, &len);
+            return [st_codec, out, repeated](int) {
+                bench_msg_t s;
+                fill_struct_msg(&s, repeated);
+                (void)pbw_struct_codec_encode(st_codec, &s, out.get());
+                free_struct_msg(&s);
             };
         };
         rows[0].single = time_pool(1, iters, iterations, setup);
@@ -2077,15 +2233,26 @@ bench_threads(const char *label, int repeated, int iterations, pbw_descriptor *d
         rows[1].single = time_pool(1, iters, iterations, setup);
         rows[1].multi = time_pool(threads, iters, iterations, setup);
     }
-    /* decode: every thread parses the same read-only bytes into its own tree */
+    /* decode: every thread parses the same read-only bytes into its own
+     * thin-model struct through its own arena. */
     {
+        struct ThreadArena {
+            pbw_struct_arena *arena = nullptr;
+            ~ThreadArena()
+            {
+                pbw_struct_arena_free(arena);
+            }
+        };
         auto setup = [&](int) {
-            auto ctx = std::shared_ptr<pbw_ctx>(pbw_ctx_new(), pbw_ctx_free);
+            auto st = std::make_shared<ThreadArena>();
 
-            return [ctx, desc, &ref](int) {
-                pbw_message *m = nullptr;
-                (void)pbw_decode_ctx(ctx.get(), desc, ref.data(), ref.size(), &m);
-                pbw_ctx_reset(ctx.get());
+            return [st, st_codec, &ref](int) {
+                bench_msg_t s;
+                std::memset(&s, 0, sizeof(s));
+                (void)pbw_struct_codec_decode(
+                    st_codec,
+                    reinterpret_cast<const uint8_t *>(ref.data()), ref.size(),
+                    &st->arena, &s);
             };
         };
         rows[2].single = time_pool(1, iters, iterations, setup);
@@ -2149,6 +2316,9 @@ bench_threads(const char *label, int repeated, int iterations, pbw_descriptor *d
             fail(msg);
         }
     }
+
+    pbw_struct_codec_free(st_codec);
+    pbw_schema_free(st_schema);
 }
 
 } // namespace

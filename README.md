@@ -38,6 +38,7 @@ pbw_free(buf);
 | [Design and architecture](docs/design.md) | how it works, dynamic message semantics, the two allocation strategies, scope, limits, use cases, repository layout |
 | [Performance benchmarks](BENCHMARKS.md) | **the performance document**: the four standard tiers, every binding against its official runtime, and the cross-binding comparison |
 | [Performance attempts ledger](docs/perf-attempts.md) | every optimization tried against a still-below-baseline cell, its A/B number, and why it was kept or rejected |
+| [Benchmark fairness](docs/perf-fairness.md) | what makes a row comparable: full-flow native in/out, matched freshness and depth, same-run calibration |
 | [Help wanted: Java 136 B encode](docs/java-encode-help.md) | the one open perf gap: what was tried, why it looks structural, and how to help |
 | [Examples index](docs/examples.md) | one runnable round trip per binding, with the exact command |
 | [Testing and conformance](docs/testing.md) | the self-check, pinned reference bytes, `difftest`, the official conformance suite |
@@ -168,15 +169,16 @@ address book, loaded from `addressbook.desc` at runtime) is in
 
 `make bench` verifies byte-for-byte equality with libprotobuf before timing
 anything, so a speed number can never come from a wrong encoder. On an Apple
-M4 Pro with `-O2` and `protoc 36.2`, the in-process dynamic core with a
-`pbw_ctx` decodes at 1.32-1.75x the throughput of the generated C++ codec on
-every tier (132 B to 86 KB), and 2.8-4.4x the speed of C++
-`DynamicMessage` on decode (1.7-3.0x on encode). Encode trails the generated
-codec at 0.39x-0.58x on the same construct + serialize task: both sides build
-fresh per iteration now (alloc, fill, encode, free inside the timer for pbwire;
-fill setters, serialize, destructor for generated code), and what remains is
-per-value build cost (malloc + field lookup per value vs direct stores),
-narrowing as the payload grows. Generated code still wins a few published cells: the JVM generated models pay
+M4 Pro with `-O2` and `protoc 36.2`, the in-process core through its generated
+C struct and compiled struct codec encodes at 1.34-2.25x the throughput of the
+generated C++ codec on
+every tier (132 B to 86 KB), and 6.8-11.4x the speed of C++
+`DynamicMessage` on encode (2.9-3.8x on decode). Decode wins through the arena
+at 1.45-1.98x on ctx and 1.20-1.89x plain — the same batched profile as the
+reference parse on both sides now.
+The old tree-API encode row (0.39x-0.58x) retired with the fairness contract
+(`docs/perf-fairness.md`): headlines go through the shipped thin model now.
+Generated code still wins a few published cells: the JVM generated models pay
 reflection per call (Java 0.72x/0.79x, Kotlin 0.76x/0.75x, Scala 0.39x/0.25x),
 Ruby and PHP pay their one-extension-call walk (0.18x/0.23x, 0.16x/0.37x),
 Rust's struct encoder reserves per repeated element (0.92x encode from 2469 B
@@ -189,11 +191,12 @@ row by row, so the numbers above hold off Apple silicon as well
 
 Every host binding passes its native object in one call — the same task as
 filling generated code's struct — and that struct-passing row is the published
-comparison in the table below. The core has no struct to pass (its schema
-arrives at runtime), so it quotes its native tree row instead, as do the three
-single-arm bindings (Objective-C, Erlang, Elixir). Since the 08:30 UTC core
-re-run both sides build fresh per iteration, even the core encode row is the
-same construct + serialize calling method as its baseline.
+comparison in the table below. The core times the same task through its own
+generated C struct (`bench/gen/msg_struct.h`); the three
+single-arm bindings (Objective-C, Erlang, Elixir) quote their native row.
+Since the 2026-11-24 core
+re-run both sides fill a native struct fresh per iteration, even the core encode row is the
+same new + set + encode calling method as its baseline.
 
 The per-language tables — the same four payload tiers for every binding against
 its official runtime (Python, Go, Java, Kotlin, Node, Ruby, Objective-C, PHP,

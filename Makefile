@@ -462,6 +462,8 @@ BENCH_CXX ?= c++
 BENCH_BIN := build/bench
 BENCH_PB := bench/gen/msg.pb.cc bench/gen/msg2.pb.cc
 BENCH_DESC := bench/gen/msg.pb
+BENCH_STRUCT_GEN := bench/gen/msg_struct.h
+BENCH_PLUGIN := bindings/c/plugin/build/protoc-gen-pbwire-c
 BENCH_C_PB := bindings/c/benchmarks/gen/matrix3.pb.cc
 BENCH_C_BIN := build/bench_struct_c
 
@@ -494,9 +496,26 @@ bench/gen/%.pb: bench/%.proto
 	@mkdir -p bench/gen
 	$(PROTOC) -Ibench --include_imports --descriptor_set_out=$@ $<
 
-$(BENCH_BIN): bench/bench.cc $(BENCH_PB) $(BENCH_DESC) $(LIB) | build
-	$(BENCH_CXX) -std=c++17 -O2 -pthread -Iinclude -Ibench/gen $(PB_CXXFLAGS) \
-		-o $@ bench/bench.cc $(BENCH_PB) $(LIB) $(PB_LIBS)
+# Thin-model header for bench.Msg: the core bench encodes through the
+# generated C struct (same task as the generated C++ side), so the struct
+# layout comes from the plugin, not from a hand-written table. Needs Go
+# for the plugin build; the container image prebuilds it (see
+# docker/bench.Dockerfile), the host builds it on demand here.
+$(BENCH_PLUGIN):
+	$(MAKE) -C bindings/c/plugin build
+
+$(BENCH_STRUCT_GEN): bench/msg.proto $(BENCH_PLUGIN)
+	@mkdir -p bench/gen
+	@rm -rf bench/gen/.struct-tmp && mkdir -p bench/gen/.struct-tmp
+	PATH="$(CURDIR)/bindings/c/plugin/build:$$PATH" $(PROTOC) -Ibench \
+		--plugin=protoc-gen-pbwire-c=$(BENCH_PLUGIN) \
+		--pbwire-c_out=bench/gen/.struct-tmp bench/msg.proto
+	cp bench/gen/.struct-tmp/msg.h $@
+	@rm -rf bench/gen/.struct-tmp
+
+$(BENCH_BIN): bench/bench.cc $(BENCH_PB) $(BENCH_DESC) $(BENCH_STRUCT_GEN) $(CPP_RUNTIME_OBJ) $(LIB) | build
+	$(BENCH_CXX) -std=c++17 -O2 -pthread -Iinclude -Ibench/gen -Ibindings/c/runtime $(PB_CXXFLAGS) \
+		-o $@ bench/bench.cc $(BENCH_PB) $(CPP_RUNTIME_OBJ) $(LIB) $(PB_LIBS)
 
 bench: $(BENCH_BIN)
 	./scripts/bench-run.sh --binding core -- ./$(BENCH_BIN) bench

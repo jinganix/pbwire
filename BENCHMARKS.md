@@ -17,6 +17,7 @@ tier table with a chart (see the [per-binding index](#cross-binding-comparison-l
 - [Core](#core-pbw_ctx-vs-plain-vs-generated) — ctx vs plain vs generated vs `DynamicMessage`, threads, streaming
 - [Measurement notes](#measurement-notes-the-core-fast-path) — A/B numbers behind the core's fast paths
 - [Attempts ledger](docs/perf-attempts.md) — every optimization tried against a below-baseline cell, kept or rejected, with its numbers
+- [Fairness contract](docs/perf-fairness.md) — what makes a row comparable: full-flow native in/out, matched freshness and depth, same-run calibration
 - [Generated models](#generated-models-codegen) — what the generated layer costs
 - [Per-binding tables](#cross-binding-comparison-last-run) — one section per language (✅ exceeds baseline ≥1.0x, ❌ below):
   - [Core](#core-pbw_ctx-vs-plain-vs-generated) · [C structs](#c-structs-vs-protoc-generated-same-matrix3proto) · [Go](#go-thin-model-vs-protobuf-go) · [Python](#python-vs-googleprotobuf-upb)
@@ -124,7 +125,13 @@ Last full refresh: 2026-11-23, 05:17-06:15 UTC (every `make *-bench`
 on this tree, one harness at a time, the whole matrix in ~60 minutes), plus an
 08:30 UTC core re-run after `bench/bench.cc` switched the generated and
 DynamicMessage encode arms to fresh-build per iteration (same construct +
-serialize calling method as the pbwire arms; see the Core section). Go-parity re-time 2026-11-21/22 (issue 41 plan): every binding
+serialize calling method as the pbwire arms; see the Core section). Core
+re-run 2026-11-24, 07:19 UTC: the pbwire arms now go through the generated C
+struct and the compiled struct codec (thin model, same new + set + encode task
+as the baseline; formal run `results/bench-core-20261124T071914Z.json`).
+Core re-run 2026-11-24, 07:38 UTC: the plain arms go through a fresh arena per
+call (same batched profile as the reference parse; formal run
+`results/bench-core-20261124T073808Z.json`). Go-parity re-time 2026-11-21/22 (issue 41 plan): every binding
 with a `pbench/` re-times its `tree` arm as the native-in/native-out full task
 (fresh native object per iteration, alloc and free inside the timer, deep
 materialization of every gate-checked field); `shim` rows and the shipped JVM
@@ -191,7 +198,7 @@ protoc_plugin` plus `~/.pub-cache/bin`).
 
 | binding | harness | baseline | cases | vs baseline (xlarge) |
 |---|---|---|---|---|
-| core (dynamic) | `make bench` (`bench/bench.cc`) | `protoc` C++ generated + DynamicMessage | all 4 | 0.53x ❌ / 1.75x ✅ `tree` (encode 0.39x-0.58x, decode 1.32x-1.75x; both sides build fresh per iteration) |
+| core (dynamic) | `make bench` (`bench/bench.cc`) | `protoc` C++ generated + DynamicMessage | all 4 | 2.19x ✅ / 1.88x ✅ `ctx` (plain 2.22x ✅ / 1.89x ✅; thin model, both sides build fresh per iteration) |
 | C structs | `make bench-c` (`bindings/c/benchmarks/bench_struct.cc`) | `protoc` C++ generated from the same `matrix3.proto` | all 4 | 1.34x ✅ / 2.30x ✅ `shim` |
 | Erlang/OTP NIF | `make benchmarks` in `bindings/erlang/benchmarks` | gpb (pure Erlang), with gpb NIF (libprotobuf) as the second baseline, same `matrix3.proto` | all 4 | 3.00x / 1.52x vs best-of-two ✅ |
 | Python (CPython ext) | `make python-bench` (`bindings/python/benchmarks/bench.py`) | `google.protobuf` (upb C extension) on the same `matrix3.proto` | all 4 | 7.18x ✅ `shim encode(data)` / 3.75x ✅ `shim to_dict` |
@@ -287,13 +294,12 @@ are above the line), the managed materialization on C#/F# `shim` decode at
 74 KB (0.73x / 0.70x: the C decode is faster than the reference parser, but
 materializing 3000 managed objects costs more than its whole run), and
 Julia's 136 B `shim` decode (0.95x: the C struct decode plus a `ccall`
-against ProtoBuf.jl's pure-Julia generated decoder), and core/ObjC `tree`
-encode
-(0.39x-0.58x / 0.37x-0.01x: a fresh per-iteration build on the same construct +
-serialize task as the baseline — malloc + field lookup per value vs direct
-stores for the core, a fresh per-field build plus alloc/free inside
-the timer for ObjC; the ObjC xlarge tier
-rebuilds its 74 KB `str` fixture per iteration). The Lua xlarge `shim` encode cell (0.99x) is a
+against ProtoBuf.jl's pure-Julia generated decoder), and ObjC `tree` encode
+(0.37x-0.01x: a fresh per-field build plus alloc/free inside
+the timer; the ObjC xlarge tier
+rebuilds its 74 KB `str` fixture per iteration). The core's old `tree` headline
+(0.39x-0.58x) retired with the fairness contract: the tree-API build price
+(malloc + field lookup per value vs direct stores) is no longer a headline. The Lua xlarge `shim` encode cell (0.99x) is a
 run-to-run tie, and so is Go's xlarge decode-par (0.99x, serial twin 1.25x).
 Julia's xlarge `shim`
 encode ratio (94.42x) is a baseline collapse, not a codec win:
@@ -325,9 +331,9 @@ payload, the boundary cost and the baseline all differ.
 
 | binding | reaches the core | xlarge wire size | encode MB/s (x baseline) | decode MB/s (x baseline) |
 |---|---|---|---|---|
-| core dynamic (`pbw_ctx`) | direct call | 85933 B | 175.5 (0.53x ❌) `tree` (fresh build per iteration) | 785.9 (1.75x ✅) |
-| core dynamic (plain API) | direct call | 85933 B | 177.5 (0.53x ❌) `tree` (fresh build per iteration) | 763.7 (1.70x ✅) |
-| C structs | direct call, layout tables | 74913 B | 1101.4 (1.34x ✅) `shim` (its `tree` arm is the `pbw_ctx` row above) | 701.1 (2.30x ✅) `shim` |
+| core dynamic (`pbw_ctx`) | direct call, thin model | 85933 B | 712.4 (2.19x ✅) `ctx` (fresh thin-model build per iteration) | 851.2 (1.88x ✅) |
+| core dynamic (plain API) | direct call, thin model | 85933 B | 718.1 (2.22x ✅) (fresh thin-model build per iteration) | 852.6 (1.89x ✅) |
+| C structs | direct call, layout tables | 74913 B | 1101.4 (1.34x ✅) `shim` | 701.1 (2.30x ✅) `shim` |
 | Go | pure-Go table engine, no cgo | 74913 B | 976.4 (1.70x ✅) | 362.3 (1.25x ✅) |
 | Python | CPython extension, dict path | 74913 B | 615.0 (7.18x ✅) `shim encode(data)` | 164.9 (3.75x ✅) `shim to_dict` |
 | Java | pure-Java codec, no native code | 74913 B | 660.7 (0.72x ❌) `core` (generated model) | 338.2 (0.79x ❌) `core` |
@@ -351,14 +357,15 @@ payload, the boundary cost and the baseline all differ.
 | Julia | `dlopen` + `ccall` | 74913 B | 1170.8 (94.42x ✅, baseline collapse) `shim` | 766.7 (1.07x ✅) `shim` |
 | R | C extension, named lists | 74913 B | 155.7 (51.90x ✅) `shim` | 153.7 (53.00x ✅) `shim` |
 
-Read it as: the in-process dynamic core sets the pace (1.56x the C++
-generated code at this size), and every headline row times the same task as
+Read it as: the in-process core sets the pace (2.2x the C++
+generated code on encode at this size, 1.9x on decode), and every headline row times the same task as
 the generated baseline -- one native object in, one codec call -- so the
 below-the-line cells are codec gaps, not boundary floors: Node `shim`
 (0.12x / 0.12x of protobufjs), Ruby `shim`
 (0.18x / 0.23x), PHP `shim` (0.16x / 0.37x of the official C extension), the
 JVM `core` (Java 0.72x / 0.79x, Kotlin 0.76x / 0.75x, Scala 0.39x / 0.25x).
-The above-the-line cells are the same task won outright: Rust `shim` decode
+The above-the-line cells are the same task won outright: the core thin
+model 2.2x / 2.0x, Rust `shim` decode
 1.90x, Dart 4.64x, C# `shim` encode 1.42x, Swift 3.22x / 2.49x, Zig
 1.38x / 1.37x. The outliers are baseline or unit effects, not pbwire
 effects: Python's encode column is the dict path (3000 sub-messages, 12000
@@ -691,35 +698,42 @@ the current machine.
 
 | payload | op | pbwire ctx (MB/s, x gen) | pbwire plain (MB/s, x gen) | protoc gen (MB/s) | DynamicMessage (MB/s) |
 |---|---|---|---|---|---|
-| 132 B | encode | 304.1 (0.40x ❌) | 292.4 (0.39x ❌) | 755.3 | 96.2 |
-| 132 B | decode | 1544.1 (1.66x ✅) | 1317.4 (1.41x ✅) | 932.0 | 300.1 |
-| 169 B | encode | 274.4 (0.40x ❌) | 270.3 (0.40x ❌) | 684.1 | 90.6 |
-| 169 B | decode | 1177.7 (1.45x ✅) | 1072.1 (1.32x ✅) | 811.2 | 289.6 |
-| 2755 B | encode | 184.5 (0.58x ❌) | 185.6 (0.58x ❌) | 317.9 | 94.5 |
-| 2755 B | decode | 758.3 (1.60x ✅) | 735.1 (1.55x ✅) | 472.9 | 259.5 |
-| 85933 B | encode | 175.5 (0.53x ❌) | 177.5 (0.53x ❌) | 332.6 | 103.4 |
-| 85933 B | decode | 785.9 (1.75x ✅) | 763.7 (1.70x ✅) | 450.2 | 259.5 |
+| 132 B | encode | 1311.0 (1.70x ✅) | 1103.6 (1.43x ✅) | 769.7 | 96.9 |
+| 132 B | decode | 1348.2 (1.47x ✅) | 1099.3 (1.20x ✅) | 916.6 | 292.3 |
+| 169 B | encode | 1070.9 (1.57x ✅) | 913.9 (1.34x ✅) | 680.6 | 91.9 |
+| 169 B | decode | 1163.6 (1.45x ✅) | 988.6 (1.23x ✅) | 804.5 | 284.6 |
+| 2755 B | encode | 731.1 (2.25x ✅) | 679.3 (2.09x ✅) | 325.1 | 95.5 |
+| 2755 B | decode | 756.2 (1.63x ✅) | 741.7 (1.60x ✅) | 464.9 | 254.9 |
+| 85933 B | encode | 712.4 (2.19x ✅) | 718.1 (2.22x ✅) | 324.7 | 105.4 |
+| 85933 B | decode | 851.2 (1.88x ✅) | 852.6 (1.89x ✅) | 452.4 | 265.4 |
 
-The encode rows are the same construct + serialize task on both sides: a
-fresh per-iteration build (alloc, fill, encode, free inside the timer for
-pbwire; fill setters, serialize, destructor for generated code; reflection
-fill, serialize, delete for DynamicMessage) — formal run
-`results/bench-core-20261123T083053Z.json`. The generated baseline builds
+The encode rows are the same new + set + encode task on both sides: a
+fresh native struct per iteration (plain stores plus the payload allocations
+the generated side makes too, then one codec call, released inside the timer
+for pbwire; fill setters, serialize, destructor for generated code;
+reflection fill, serialize, delete for DynamicMessage) — formal run
+`results/bench-core-20261124T073808Z.json`. The generated baseline builds
 fresh per iteration too, so the comparison is the same calling method, not
-build-against-re-encode.
+build-against-re-encode. The pbwire side goes through the generated C struct
+(`bench/gen/msg_struct.h`, the shipped thin model) and the compiled struct
+codec, never the raw tree API: that is what the fairness contract
+(`docs/perf-fairness.md`) requires of a headline.
 
 Threads (169 B, 1 vs 8):
 
 | op | pbwire 1thr (MB/s, x gen) | pbwire 8thr agg (MB/s, x gen) | gen 1thr (MB/s) | gen 8thr agg (MB/s) |
 |---|---|---|---|---|
-| encode | 256.5 (0.38x ❌) | 1933.0 (0.36x ❌) | 680.7 | 5355.8 |
-| decode | 1213.3 (1.49x ✅) | 7945.7 (1.27x ✅) | 811.6 | 6263.4 |
+| encode | 990.1 (1.45x ✅) | 7782.9 (1.43x ✅) | 682.1 | 5441.4 |
+| decode | 1180.5 (1.45x ✅) | 6934.8 (1.09x ✅) | 816.4 | 6369.1 |
 
-`8thr agg` is the total throughput of all eight threads. The schema, the
-descriptors and the wire input are shared by all threads; each thread only adds
-its own `pbw_ctx` and message. pbwire scales 7.5x (encode) and 6.6x (decode)
-from 1 to 8 threads in that run; generated code reaches 7.9x and 7.7x. Both are
-limited by cache and memory bandwidth, not by a lock: the library has no global
+`8thr agg` is the total throughput of all eight threads. The compiled
+struct codec and the wire input are shared by all threads; each thread only
+adds its own output buffer and decode arena. pbwire scales 7.9x (encode) and
+5.9x (decode)
+from 1 to 8 threads in that run; generated code reaches 8.0x and 7.8x. Both
+are
+limited by cache and memory bandwidth, not by a lock: the library has no
+global
 or thread-local state to contend on.
 
 The commit gate checks the same property without a benchmark harness:
@@ -736,65 +750,52 @@ It fails when the aggregate throughput collapses below 0.35x of
 
 #### `pbwire ctx` vs `pbwire plain`
 
-The two pbwire columns are the same encoder and decoder with a different memory
+The two pbwire columns are the same thin-model codec with a different memory
 and ownership strategy; the benchmark checks that they produce identical bytes
-before timing anything. The ownership table is in
-[docs/design.md](docs/design.md#two-allocation-strategies); on the wire it shows
-up as the `malloc`/`free` pair per call, which is why plain trails ctx by
-about 0.1-0.3x on the small decode tiers (1.66x vs 1.41x at 132 B, 1.45x vs
-1.32x at 169 B) and ties it on encode at every tier (both are build-bound
-there). The encode gap to generated code is the per-value build cost (malloc +
-field lookup per value vs direct stores), narrowed from 0.15x-0.18x to
-0.39x-0.58x once both sides build: plain and ctx read the same 0.39x-0.58x.
+before timing anything. Plain builds and frees a fresh arena per call, ctx
+reuses one arena and the output buffer across calls — which is why the two
+decode columns now read almost identically (1.45x vs 1.23x at 169 B is the
+per-call arena setup alone), while encode keeps a small ctx edge on the
+narrow tiers (buffer reuse) that vanishes once the payload allocations
+dominate. Use the plain pattern for one-off
+work and long-lived results. The per-value malloc path (`arena == NULL` +
+`pbw_struct_free`) stays shipped and correctness-tested, but it is no longer
+the published number — `bench-c`'s one-shot rows show what it costs.
 
 Read it as:
 
-- **Against generated code**: decode still wins every binary cell —
-  1.32x-1.75x. Encode trails at 0.39x-0.58x on the same construct +
-  serialize task, narrowing as the payload grows (the per-message fixed costs
-  amortize; what remains is per-value build cost). pbwire still writes in a
-  single pass against generated code's size-then-write two passes.
+- **Against generated code**: the thin model wins every cell — encode
+  1.34x-2.25x, decode 1.20x-1.98x — on the same new + set + encode task.
+  The single pass against generated code's size-then-write two passes shows
+  most on the packed-heavy large tiers, and the reused arena on decode.
 - **Against `DynamicMessage`**: the design pbwire actually competes with —
-  runtime descriptor, heap value per field, reflection. pbwire is 2.8-4.4x
-  faster there (decode) and 1.7-3.0x on encode.
-- **The plain column** pays exactly one `malloc`/`free` pair per call (decoded
-  tree, output buffer), which is why it sits ~0.1-0.3x behind ctx on the small
-  tiers and is a tie on the 169 B encode. Use the plain API for one-off
-  work and long-lived results.
+  runtime descriptor, heap value per field, reflection. pbwire is 2.9-3.8x
+  faster there (decode) and 6.8-11.4x on encode.
+- **The old tree headline** (0.39x-0.58x encode) measured the gateway task —
+  new + set + encode through the dynamic API — and retired with the
+  fairness contract (`docs/perf-fairness.md`): no headline builds its number
+  through the raw tree API any more. The tree path itself is unchanged and
+  still fully verified (`make difftest`, conformance, the proxy rows).
 
-#### How the core gap was closed
+#### Why the thin model wins
 
-Since `make bench` is the reason these numbers are trustworthy, the changes
-that produced them, each verified byte-for-byte against libprotobuf:
-
-1. A decoded message is one allocation: struct, value slots, presence bitmap and
-   oneof cases share one block, and values are stored inline (a bitmap says
-   which slots hold a value) instead of one `malloc` per field. The tree's arena
-   struct, its first chunk and the tree itself are one block too, so plain
-   `pbw_decode` is a single `malloc`.
-2. The `pbw_ctx` API reuses those arenas and the output buffer: `pbw_ctx_reset`
-   is a pointer move. Oversized single allocations bypass the reusable chunk
-   (freed on reset), and `pbw_ctx_set_retain_cap` bounds what a reset keeps, so
-   steady workloads stop calling `malloc` without pinning outliers.
-3. Encoding computes no size pass: it writes into a growable buffer, puts a
-   one-byte placeholder where a nested length goes and patches it afterwards
-   (strings and bytes write their known length up front). Per-field tag bytes
-   and the packed variant are precomputed at `pbw_schema_link()` and stored with
-   one 32-bit store.
-4. Varint and tag readers/writers are inlined with one- and two-byte fast paths
-   and an unrolled ten-byte path for long (negative int32/int64) values; the
-   common "singular scalar, expected wire type, first occurrence" case writes
-   the value slot directly.
-5. `pbw_schema_link()` also builds a dense field-number table of field pointers,
-   a 128-entry one-byte tag table, and a per-field decode action covering every
-   tag size, so the hot loop dispatches a field with two indexed loads and runs
-   it without re-checking its type, label, oneof membership or enum openness.
-   Repeated appends hit a cached list slot instead of the get-or-create call.
+The headline columns above ride the compiled struct codec over the
+generated C struct — the same engine as the C structs section below, not the
+dynamic tree. The four changes that put that engine ahead of generated
+straight-line code are listed there (compiled layout with precomputed opcodes
+and tag bytes, fnum map plus free list on decode, caller-owned buffers,
+link-time encode budget); the shared wire primitives (inlined varint/tag
+paths with one- and two-byte fast paths, the 16-byte ASCII fast path in
+proto3 string validation) come from the core. The dynamic tree path keeps its
+own mechanisms (single-allocation decoded tree, arena reuse behind `pbw_ctx`,
+dense field-number tables at `pbw_schema_link()`), still fully verified by
+`make difftest` and the conformance suite — it is just no longer the
+published speed.
 
 #### Streaming and framing
 
 `make bench` also prints a `stream` table for the same payload: deterministic
-encode ties plain encode (no maps in that message, so it is one branch), `size`
+encode ties the stream encode (no maps in that message, so it is one branch), `size`
 (`pbw_message_encoded_size`) costs about 0.8 of an encode because it walks the
 same tree without writing, the sink costs one pass over the bytes, and a
 delimited feed/next round-trip costs about one encode plus one decode. Ratios
@@ -1911,7 +1912,8 @@ Swift, Scala, Elixir, Zig, F#, Clojure, Julia and R tables are
 output reformatted the same way, pasting only the shipped-headline rows
 (`shim`, `shim-ffi` on PHP, `-par` rows on Go, `dec+ctx` rows on Julia, and
 the generated-model `core` on the JVM bindings and Clojure; the single native
-arm on Objective-C, Erlang and Elixir; `tree` on the core, C++ and Embedded).
+arm on Objective-C, Erlang and Elixir; the thin-model `pbwire`/`pbwire c`
+rows on the core, `tree` on C++ and Embedded).
 Pbench-only arms (the per-field `tree` task, the prebuilt `proxy` task, pure
 host-language `core` ports, Go's per-field `dync` tree, the vendored `cshim`
 candidate, the one-crossing JNI ceiling) are compared
