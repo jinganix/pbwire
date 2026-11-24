@@ -2762,3 +2762,41 @@ stays the native-object answer; the small-tier `tree` decode cell
 stays flagged, same class as the ledger's Julia 136 B decode entries
 above (per-call malloc/free plus the boundary, fixed only by an
 ownership or API change).
+
+## Kept (Node shim): leaf-table single-pass decode (Task 4, 2026-11-24)
+
+`decodeToObject` validated every range with `scan_range` and then
+materialised it with `slices_to_js`, which allocates four scratch arrays per
+message level: 3000 `Inner3` payloads paid 12000 `calloc`/`free` pairs plus a
+second C scan per nested message. Tables with only singular
+scalars/strings/bytes (no repeated, oneof or sub-message field) now validate
+and materialise in one tag scan (`wire_leaf_to_js`, flagged once per
+descriptor in `table_build`): later occurrences overwrite, which is last-wins
+for a table with no oneof and no merge. Semantics pinned by a new
+`decodeObject matches the tree decoder on wire edges` block in
+`bindings/node/test/test_pbwire.js` (last-wins, merge, oneof reset,
+packed/unpacked/mixed, packed-for-singular skip per core parity, unknown
+skip, closed-enum absence, truncated/malformed/deep-nesting throws, missing
+required) plus a 563-payload ad-hoc differential of `decodeObject` against
+tree `get()` with zero divergences; the suite is green before and after.
+
+A/B (`bindings/node/benchmarks/ab.sh`, `AB_REQUIRE=decode`, interleaved,
+best-of-rounds): xlarge decode median 1.09-1.10x across three sessions
+(5/5, 5/5, 4/5 rounds; the one lost round ran under ~30% host inflation),
+large 1.03-1.09x, small/medium inside the noise band (1.00-1.03x), encode
+untouched everywhere (0.98-1.03x medians). Formal `make node-bench`
+(`results/bench-node-20261124T193829Z.json`): xlarge `shim` decode 57.9 MB/s
+against protobufjs 429.7 (0.13x, was 0.13x), encode 56.3 against 297.0
+(0.19x, was 0.18x).
+
+Encode deliberately untouched: `js_to_message` already builds the tree in the
+type's arena (the kept 2026-11-21 change, +16% xlarge); what remains per field
+is one `napi_get_named_property` plus one property enumeration per object
+(the unknown-field reject), i.e. the ~60-70 ns N-API read floor the README
+names. Direct-to-wire emission would save only the ~43 us C tree walk (~3%
+of the op). The honest ceiling stands: the C core itself encodes the xlarge
+payload at ~1628 MB/s (`proxy` row, 5.5x protobufjs), so the whole 0.19x /
+0.13x gap is the ~18k encode / ~30k decode N-API interactions, and no
+in-addon tuning crosses 1.0x against an in-heap generated runtime. Both
+timer arms stay deep and fresh-task (the fold A/B moves neither side), so the
+pair is fair and the cells stay red as documented.

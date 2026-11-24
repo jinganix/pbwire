@@ -223,20 +223,20 @@ per-message finalizer.
 
 | payload | op | pbwire-node-shim (MB/s, x protobufjs) | protobufjs (MB/s) |
 |---|---|---|---|---|
-| 136 B | encode | 49.3 (0.64x ❌) | 76.9 |
-| 136 B | decode | 61.1 (0.15x ❌) | 403.4 |
-| 174 B | encode | 54.1 (0.60x ❌) | 90.8 |
-| 174 B | decode | 49.1 (0.12x ❌) | 407.9 |
-| 2469 B | encode | 52.5 (0.20x ❌) | 259.4 |
-| 2469 B | decode | 49.0 (0.11x ❌) | 442.4 |
-| 74913 B | encode | 57.0 (0.18x ❌) | 311.2 |
-| 74913 B | decode | 54.5 (0.13x ❌) | 424.3 |
+| 136 B | encode | 50.5 (0.66x ❌) | 76.9 |
+| 136 B | decode | 61.1 (0.15x ❌) | 415.7 |
+| 174 B | encode | 52.4 (0.59x ❌) | 88.8 |
+| 174 B | decode | 48.2 (0.12x ❌) | 394.7 |
+| 2469 B | encode | 52.3 (0.22x ❌) | 237.9 |
+| 2469 B | decode | 53.4 (0.12x ❌) | 436.0 |
+| 74913 B | encode | 56.3 (0.19x ❌) | 297.0 |
+| 74913 B | decode | 57.9 (0.13x ❌) | 429.7 |
 
 The pbwire column is the native-in/native-out full task
 (`pbench/`): `shim` runs the native-object task in one
 `encodeObject` / `decodeToObject` downcall. The per-field `tree` arm is
 compared in `pbench/README.md`, not here. Formal run
-`../../results/bench-node-20261124T135535Z.json`.
+`../../results/bench-node-20261124T193829Z.json`.
 
 Each field of a native-object op is one N-API property read or
 write (~60-70 ns) where protobufjs pays a few ns in its own heap.
@@ -253,6 +253,7 @@ What the gap is made of, and what the optimization pass changed:
 |---|---|---|
 | N-API addon, tree per message | 1300.4 | 565.2 |
 | encode into a reusable buffer, wire view for decoded messages | 1366.6 | 1596.7 |
+| leaf-table single-pass `decodeToObject` (Task 4, 2026-11-24) | 1330.4 | 1294.2 |
 
 - `decode()` returns the bytes plus one 12-byte slice per wire field instead of
   materializing a tree: one validating tag scan, one allocation for the slice
@@ -269,6 +270,13 @@ What the gap is made of, and what the optimization pass changed:
 - Field facts are resolved once per descriptor into a cached table (name hash,
   direct number index, wire type, label, oneof, closed enum), so the scan and
   the accessors never walk the descriptor.
+- `decodeToObject()` on a leaf table (singular scalars/strings/bytes only, no
+  repeated, oneof or sub-message field) validates and materializes in one tag
+  scan with no slice list and none of the per-level scratch arrays: the xlarge
+  win is the 12000 `calloc`/`free` pairs the 3000 `Inner3` payloads used to
+  pay. Everything else about the op is unchanged -- unknown fields skip,
+  closed-enum unknowns stay absent, packed-for-singular stays skipped, and
+  the tree decoder agrees on a 563-payload mutation corpus.
 
 ## Deliberate skips
 

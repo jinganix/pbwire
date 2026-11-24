@@ -213,7 +213,7 @@ The one-row summary is here; the detail is there.
 | [Ruby](bindings/ruby/) | C extension, linked | 4.97x (xlarge) / 0.23x (xlarge) `shim` | [google-protobuf gem](https://rubygems.org/gems/google-protobuf) |
 | [Java](bindings/java/) | pure-Java codec, no native code | 0.95x (xlarge) / 0.80x (xlarge) `core` (generated model) | [protobuf-java](https://github.com/protocolbuffers/protobuf/tree/main/java) |
 | [Kotlin](bindings/kotlin/) | Java runtime + DSL | 28.09x (xlarge) / 0.74x (xlarge) `core` | [protobuf-kotlin](https://github.com/protocolbuffers/protobuf/tree/main/java/kotlin) |
-| [Node](bindings/node/) | N-API addon | 0.18x (xlarge) / 0.13x (xlarge) `shim` vs protobufjs | [protobufjs](https://www.npmjs.com/package/protobufjs) |
+| [Node](bindings/node/) | N-API addon | 0.19x (xlarge) / 0.13x (xlarge) `shim` vs protobufjs | [protobufjs](https://www.npmjs.com/package/protobufjs) |
 | [Objective-C](bindings/objc/) | ARC wrapper | 0.98x (xlarge) / 1.16x (xlarge) `tree` (fresh build per iteration) | [protobuf-objc](https://github.com/protocolbuffers/protobuf/tree/main/objectivec) |
 | [PHP](bindings/php/) | C extension | 2.98x (xlarge) / 0.37x (xlarge) `shim` vs C ext | [protobuf-php](https://github.com/protocolbuffers/protobuf/tree/main/php) |
 | [Dart](bindings/dart/) | `dart:ffi` | 1.82x (xlarge) / 4.84x (xlarge) `shim` | [protobuf-dart](https://pub.dev/packages/protobuf) |

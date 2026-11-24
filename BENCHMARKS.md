@@ -213,7 +213,7 @@ protoc_plugin` plus `~/.pub-cache/bin`).
 | C++ | same engine as C (`bindings/cpp` mirrors the C structs; `make bench-c` is the harness) | `protoc` C++ generated from the same `matrix3.proto` | all 4 | 4.17x ✅ / 2.03x ✅ |
 | Go (thin model, pure-Go engine) | `make go-bench` (`bindings/go/benchmarks`) | `protobuf-go` generated code from the same `matrix3.proto` | all 4 | 1.36x ✅ / 1.33x ✅ (xlarge; full tiers + allocs in section) |
 | Java (pure-Java codec) | `make java-bench` (`bindings/java/benchmarks`) | `protobuf-java` generated code from the same `matrix3.proto` | all 4 | 0.95x ❌ / 0.80x ❌ `core` (generated model) |
-| Node (N-API addon) | `make node-bench` (`bindings/node/benchmarks`) | [protobufjs](https://www.npmjs.com/package/protobufjs) from the same `matrix3.proto` | all 4 | 0.18x ❌ / 0.13x ❌ `shim` vs protobufjs |
+| Node (N-API addon) | `make node-bench` (`bindings/node/benchmarks`) | [protobufjs](https://www.npmjs.com/package/protobufjs) from the same `matrix3.proto` | all 4 | 0.19x ❌ / 0.13x ❌ `shim` vs protobufjs |
 | Ruby (C extension) | `make ruby-bench` (`bindings/ruby/benchmarks`) | the `google-protobuf` gem (C extension) | all 4 | 5.03x ✅ / 6.11x ✅ `shim` (one C-extension entry per op) |
 
 | Objective-C (ARC) | `make objc-bench` (`bindings/objc/benchmarks`) | the `protobuf` ObjC runtime + generated code from the same `matrix3.proto` | all 4 | 0.98x ❌ / 1.16x ✅ `tree` (fresh build per iteration) |
@@ -292,7 +292,7 @@ times the same native-in/native-out task on the same payload, never a tree
 built before the timer; bytes are identical everywhere. The headline rows now
 time the same task the generated baseline times -- one native object in, one
 codec call -- so the sub-1.0x cells that remain are codec gaps, not boundary
-floors: Node's `shim` (0.18x / 0.13x of protobufjs at
+floors: Node's `shim` (0.19x / 0.13x of protobufjs at
 74 KB), PHP's `shim` decode (0.37x of
 the official C extension -- encode now leads, 2.98x,
 under the same fresh-build task), the JVM `core` decode (Java 0.80x of
@@ -348,7 +348,7 @@ payload, the boundary cost and the baseline all differ.
 | Python | CPython extension, dict path | 74913 B | 164.8 (2.75x ✅) `shim encode(data)` | 153.1 (3.58x ✅) `shim to_dict` |
 | Java | pure-Java codec, no native code | 74913 B | 436.1 (0.95x ❌) `core` (generated model) | 334.0 (0.80x ❌) `core` |
 | Kotlin | the pure-Java codec + DSL | 74913 B | 494.4 (28.09x ✅, baseline collapse) `core` | 350.3 (0.74x ❌) `core` |
-| Node | N-API addon | 74913 B | 57.0 (0.18x ❌ vs protobufjs) `shim` | 54.5 (0.13x ❌ vs protobufjs) `shim` |
+| Node | N-API addon | 74913 B | 56.3 (0.19x ❌ vs protobufjs) `shim` | 57.9 (0.13x ❌ vs protobufjs) `shim` |
 | Dart | `dart:ffi` binding | 74913 B | 151.6 (1.82x ✅) `shim` | 764.4 (4.84x ✅) `shim` |
 | Ruby | C extension over the core | 74913 B | 100.6 (5.03x ✅) `shim` | 184.6 (6.11x ✅) `shim` |
 
@@ -371,7 +371,7 @@ Read it as: the in-process core sets the pace (2.1x the C++
 generated code on encode at this size, 1.9x on decode), and every headline row times the same task as
 the generated baseline -- one native object in, one codec call -- so the
 below-the-line cells are codec gaps, not boundary floors: Node `shim`
-(0.18x / 0.13x of protobufjs),
+(0.19x / 0.13x of protobufjs),
 PHP `shim` decode (0.37x of the official C extension), the
 JVM `core` decode (Java 0.80x, Kotlin 0.74x, Scala 0.27x) and Clojure's
 `core` (0.02x / 0.54x).
@@ -389,7 +389,7 @@ memcpy race over one 74 KB string (the 16-byte UTF-8 word scan is what keeps
 its decode near the copy cost).
 The headline names the most-popular baseline: Node's native rows are quoted
 over protobufjs, and Node's `shim` row -- the native object in and out --
-is 0.18x / 0.13x of protobufjs: the same task on both sides, so the gap is
+is 0.19x / 0.13x of protobufjs: the same task on both sides, so the gap is
 the codec's, not the boundary's. PHP's native rows are over the official C
 extension (the pure-PHP runtime trails it by ~360x / ~110x at 74 KB) -- see
 their sections. The old per-field `tree` headlines are retired: the published
@@ -858,7 +858,7 @@ Full table and method: [binding README](bindings/java/README.md#benchmarks).
 
 ![Node vs protobufjs — MB/s by tier](docs/charts/bench-node-vs-protobufjs.svg)
 
-xlarge: encode 57.0 (0.18x ❌) / decode 54.5 (0.13x ❌).
+xlarge: encode 56.3 (0.19x ❌) / decode 57.9 (0.13x ❌).
 Full table and method: [binding README](bindings/node/README.md#benchmarks).
 
 #### Ruby (C extension) vs the `google-protobuf` gem

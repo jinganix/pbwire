@@ -231,6 +231,7 @@ struct desc_table {
     uint32_t mask;        /* name hash: slot count - 1 */
     uint32_t *slots;      /* name hash: field index + 1, 0 = empty */
     int8_t eager;         /* 1: a required field is reachable; -2: resolving */
+    uint8_t leaf;         /* 1: every field is a singular scalar/string/bytes */
 };
 
 struct schema_handle {
@@ -594,6 +595,22 @@ table_build(schema_handle *schema, const pbw_descriptor *desc)
             slot = (slot + 1) & table->mask;
         }
         table->slots[slot] = i + 1;
+    }
+    /* A leaf table holds only singular scalars, strings and bytes: no
+     * repeated field, no oneof member, no sub-message. Such a message
+     * materializes in one tag scan with no slice list and no per-level
+     * scratch (see wire_leaf_to_js). Eager tables never reach the wire
+     * path, so `required` cannot appear here. */
+    table->leaf = nfields > 0;
+    for (i = 0; i < nfields; i++) {
+        field_entry *entry = &table->fields[i];
+
+        if (entry->label == PBW_LABEL_REPEATED || entry->oneof != 0 ||
+            entry->type == PBW_TYPE_MESSAGE ||
+            entry->type == PBW_TYPE_GROUP) {
+            table->leaf = 0;
+            break;
+        }
     }
     return table;
 }
@@ -2000,6 +2017,116 @@ slices_to_js(napi_env env, desc_table *table, const uint8_t *base,
     return out;
 }
 
+/* A leaf message range as a plain JS object: one tag scan that validates and
+ * materializes in a single pass, with no slice list and none of the four
+ * per-level scratch arrays slices_to_js allocates. A repeated unknown number
+ * is skipped exactly as scan_range would skip it; a known field with an
+ * unexpected wire type is unknown data too. Later occurrences overwrite
+ * earlier ones, which is last-wins for a table with no oneof and no merge.
+ * The cursor is an offset, recomputed into a pointer after every N-API call,
+ * so no raw pointer into the caller's Buffer outlives an allocation. */
+static napi_value
+wire_leaf_to_js(napi_env env, desc_table *table, const uint8_t *base,
+                uint32_t off, uint32_t len, uint32_t depth)
+{
+    napi_value out = NULL;
+    uint32_t pos = off;
+    uint32_t end = off + len;
+
+    if (depth >= PBW_MAX_DEPTH) {
+        return fail_argument(env, "nesting limit exceeded");
+    }
+    if (napi_create_object(env, &out) != napi_ok) {
+        return NULL;
+    }
+    while (pos < end) {
+        const uint8_t *p = base + pos;
+        const uint8_t *pend = base + end;
+        uint32_t tag;
+        uint32_t number;
+        uint32_t wire_type;
+        uint32_t index;
+        field_entry *entry;
+        napi_value item;
+        scan_status skip;
+
+        if (!rb_tag(&p, pend, &tag)) {
+            return fail_argument(env, "invalid wire data");
+        }
+        number = tag >> 3;
+        wire_type = tag & 7;
+        if (number == 0 || wire_type > 5 || wire_type == 4) {
+            return fail_argument(env, "invalid wire data");
+        }
+        pos = (uint32_t)(p - base);
+        index = table_by_number(table, number);
+        if (index == NOT_FOUND ||
+            table->fields[index].wire != wire_type) {
+            /* Unknown, or a known field with an unexpected wire type:
+             * unknown data, skipped after validation. */
+            p = base + pos;
+            skip = skip_value(&p, pend, number, wire_type, depth);
+            if (skip != SCAN_OK) {
+                return fail_argument(env, skip == SCAN_LIMIT
+                                              ? "nesting limit exceeded"
+                                              : "invalid wire data");
+            }
+            pos = (uint32_t)(p - base);
+            continue;
+        }
+        entry = &table->fields[index];
+        if (entry->type == PBW_TYPE_STRING ||
+            entry->type == PBW_TYPE_BYTES) {
+            size_t payload_len;
+            uint32_t payload;
+
+            p = base + pos;
+            if (!rb_len(&p, pend, &payload_len) ||
+                payload_len > (size_t)(pend - p)) {
+                return fail_argument(env, "invalid wire data");
+            }
+            if (entry->utf8 && !pbw_utf8_valid(p, payload_len)) {
+                return fail_argument(env, "invalid wire data");
+            }
+            payload = (uint32_t)(p - base);
+            pos = (uint32_t)(p - base + payload_len);
+            item = bytes_to_js(env, (pbw_type)entry->type, base + payload,
+                               payload_len);
+            if (item == NULL) {
+                return NULL;
+            }
+            if (napi_set_named_property(env, out, entry->name, item) !=
+                napi_ok) {
+                return NULL;
+            }
+            continue;
+        }
+        {
+            uint64_t bits;
+            const uint8_t *after;
+
+            p = base + pos;
+            after = p;
+            if (!read_value(&after, pend, (pbw_type)entry->type, &bits)) {
+                return fail_argument(env, "invalid wire data");
+            }
+            pos = (uint32_t)(after - base);
+            if (!enum_known(entry, bits)) {
+                continue; /* a closed-enum number the schema ignores */
+            }
+            item = scalar_to_js(env, (pbw_type)entry->type, bits);
+            if (item == NULL) {
+                return NULL;
+            }
+            if (napi_set_named_property(env, out, entry->name, item) !=
+                napi_ok) {
+                return NULL;
+            }
+        }
+    }
+    return out;
+}
+
 /* A message range as a plain JS object: one tag scan into a stack slice list,
  * then the object. */
 static napi_value
@@ -2015,6 +2142,9 @@ wire_object_to_js(napi_env env, desc_table *table, const uint8_t *base,
     list.cap = 32;
     if (depth >= PBW_MAX_DEPTH) {
         return fail_argument(env, "nesting limit exceeded");
+    }
+    if (table->leaf) {
+        return wire_leaf_to_js(env, table, base, off, len, depth);
     }
     status = scan_range(table, base, off, len, depth, 0, &list, NULL);
     if (status != SCAN_OK) {
