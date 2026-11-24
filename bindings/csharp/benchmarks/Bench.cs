@@ -9,6 +9,16 @@
 // allocate per call (pbwire Encode()/Decode() against ToByteArray()/
 // ParseFrom()), so the comparison is like for like.
 //
+// Decode fairness (docs/perf-fairness.md section 4): both headline arms are
+// deep without an extra fold. Matrix3Shim.Unmarshal runs one C layout-codec
+// call that fills the flat image plus its own ReadImage, which materializes
+// every gate-checked field -- every repeated element and every nested model
+// -- into the returned object before the timer stops. The official
+// ParseFrom eagerly decodes every field the same way (it throws on invalid
+// UTF-8 during the parse, so no lazy tail hides behind the return). A fold
+// over either result would only add accessor calls on top of finished work,
+// so both timers observe the full payload as is.
+//
 //   ./bench.sh          generate, build, run
 
 using System.Diagnostics;

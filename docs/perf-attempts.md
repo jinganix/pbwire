@@ -1603,6 +1603,42 @@ Formal rows: `make csharp-bench` 2026-11-21
 74913 B; `make fsharp-bench` (`results/bench-fsharp-20261121T001056Z.json`)
 encode 1180.6 / 966.1 / 643.0 / 658.3, decode 760.2 / 590.5 / 320.8 / 354.6.
 
+## Kept (C# shim): ASCII fast-path string decode (Task 3, 2026-11-24)
+
+`ReadImage` paid a `Marshal.PtrToStringUTF8` transition per string (6000
+native calls on the xlarge tier: tags, inner names, `str`, optionals).
+`Pbwire.ImageText.Decode` keeps the exact contract (NULL/empty handling,
+NUL termination, non-ASCII fallback to the runtime decoder) and decodes
+pure-ASCII runs with a fused length/scan plus `string.Create` widening;
+generated `ReadImage` calls it at all four string sites (singular, optional,
+repeated, oneof). Behaviour-identical by construction, pinned by new T7
+struct-path edge tests in `bindings/csharp/generated/GeneratedTest.cs`
+(last-wins, sub-message merge, oneof reset, packed/unpacked/mixed, malformed
+throws, non-ASCII round-trip through the fallback, unknown skip, empty
+input); the suite is green before and after.
+
+Formal `make csharp-bench` (`results/bench-csharp-20261124T191013Z.json`):
+xlarge `shim` decode 370.4 -> 385.3 MB/s against a 498.9 baseline (0.70x ->
+0.77x); large 364.6 -> 373.4 (0.76x -> 0.77x); small/medium decode improve
+inside their band (1.75x -> 1.61x / 1.49x -> 1.57x -- the baseline side moved
+too, same-run ratios throughout). `make fsharp-bench`
+(`results/bench-fsharp-20261124T191738Z.json`) rides the same runtime:
+xlarge `shim` decode 0.74x, inside harness noise of its 0.74x. Encode
+untouched on both (helper is decode-only).
+
+Deliberately not attempted, with measurements: bulk `AddRange` transfer for
+repeated value types (loop clones save ~1.4 us nums + ~0.9 us flags on xlarge
+-- ~1% -- for template branching plus a small-tier threshold; disproportionate
+churn, skipped), shared-core `always_inline` on the struct hot loop (~3 us in
+a hacked-lib A/B; touches every struct-codec user for noise), `-O3` for the
+shim library (no measurable delta same-host), and dropping string copies or
+UTF-8 validation in the C codec (needs an image-ABI change for lengths plus
+pinning, or a semantic divergence the reference does not share -- the official
+C# parser also rejects invalid UTF-8 eagerly -- for a projected ~0.9x at best).
+The residual is the documented double materialisation (wire -> arena/image ->
+managed vs the reference's single pass); crossing needs the mechanism change
+plan 05b already rejected, not another tuning round.
+
 ## Provisional: Rust shim arm (plan 08)
 
 The flat-layout shim is the generated `#[repr(C)]` mirror plus one call into

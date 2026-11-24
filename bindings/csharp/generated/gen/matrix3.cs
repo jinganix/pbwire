@@ -120,7 +120,7 @@ namespace Structtest {
         public unsafe void ReadImage(byte* img) {
             {
                 var p = *(IntPtr*)(img + 8);
-                Name = p == IntPtr.Zero ? "" : (global::System.Runtime.InteropServices.Marshal.PtrToStringUTF8(p) ?? "");
+                Name = p == IntPtr.Zero ? "" : global::Pbwire.ImageText.Decode(p);
             }
             Value = *(int*)(img + 0);
             GC.KeepAlive(this);
@@ -596,7 +596,7 @@ namespace Structtest {
             Flag = *(byte*)(img + 96) != 0;
             {
                 var p = *(IntPtr*)(img + 112);
-                Str = p == IntPtr.Zero ? "" : (global::System.Runtime.InteropServices.Marshal.PtrToStringUTF8(p) ?? "");
+                Str = p == IntPtr.Zero ? "" : global::Pbwire.ImageText.Decode(p);
             }
             Color = (Color3)(*(int*)(img + 100));
             {
@@ -615,7 +615,7 @@ namespace Structtest {
             if (nTags != 0) {
                 if (Tags.Capacity < nTags) Tags.Capacity = nTags;
                 var p = *(byte**)(img + 136);
-                for (var i = 0; i < nTags; i++) { Tags.Add(global::System.Runtime.InteropServices.Marshal.PtrToStringUTF8(((IntPtr*)p)[i]) ?? ""); }
+                for (var i = 0; i < nTags; i++) { Tags.Add(global::Pbwire.ImageText.Decode(((IntPtr*)p)[i])); }
             }
             Inners.Clear();
             var nInners = (int)(*(nuint*)(img + 240));
@@ -628,7 +628,7 @@ namespace Structtest {
             {
                 var p = *(IntPtr*)(img + 152);
                 if (p == IntPtr.Zero) { ClearOptStr(); }
-                else { OptStr = global::System.Runtime.InteropServices.Marshal.PtrToStringUTF8(p) ?? ""; }
+                else { OptStr = global::Pbwire.ImageText.Decode(p); }
             }
             Flags.Clear();
             var nFlags = (int)(*(nuint*)(img + 256));

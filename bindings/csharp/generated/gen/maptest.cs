@@ -113,7 +113,7 @@ namespace Spectest {
         public unsafe void ReadImage(byte* img) {
             {
                 var p = *(IntPtr*)(img + 8);
-                Name = p == IntPtr.Zero ? "" : (global::System.Runtime.InteropServices.Marshal.PtrToStringUTF8(p) ?? "");
+                Name = p == IntPtr.Zero ? "" : global::Pbwire.ImageText.Decode(p);
             }
             Value = *(int*)(img + 0);
             GC.KeepAlive(this);
@@ -468,7 +468,7 @@ namespace Spectest {
                     Key = *(int*)(img + 0);
                     {
                         var p = *(IntPtr*)(img + 8);
-                        Value = p == IntPtr.Zero ? "" : (global::System.Runtime.InteropServices.Marshal.PtrToStringUTF8(p) ?? "");
+                        Value = p == IntPtr.Zero ? "" : global::Pbwire.ImageText.Decode(p);
                     }
                     GC.KeepAlive(this);
                 }
@@ -607,7 +607,7 @@ namespace Spectest {
                 public unsafe void ReadImage(byte* img) {
                     {
                         var p = *(IntPtr*)(img + 8);
-                        Key = p == IntPtr.Zero ? "" : (global::System.Runtime.InteropServices.Marshal.PtrToStringUTF8(p) ?? "");
+                        Key = p == IntPtr.Zero ? "" : global::Pbwire.ImageText.Decode(p);
                     }
                     Value = *(int*)(img + 0);
                     GC.KeepAlive(this);
@@ -747,7 +747,7 @@ namespace Spectest {
                 public unsafe void ReadImage(byte* img) {
                     {
                         var p = *(IntPtr*)(img + 0);
-                        Key = p == IntPtr.Zero ? "" : (global::System.Runtime.InteropServices.Marshal.PtrToStringUTF8(p) ?? "");
+                        Key = p == IntPtr.Zero ? "" : global::Pbwire.ImageText.Decode(p);
                     }
                     {
                         var p = *(byte**)(img + 8);

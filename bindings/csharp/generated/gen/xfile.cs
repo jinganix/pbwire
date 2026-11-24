@@ -151,7 +151,7 @@ namespace Xfile {
             }
             {
                 var p = *(IntPtr*)(img + 16);
-                Note = p == IntPtr.Zero ? "" : (global::System.Runtime.InteropServices.Marshal.PtrToStringUTF8(p) ?? "");
+                Note = p == IntPtr.Zero ? "" : global::Pbwire.ImageText.Decode(p);
             }
             GC.KeepAlive(this);
         }

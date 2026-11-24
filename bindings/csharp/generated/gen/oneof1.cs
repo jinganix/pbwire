@@ -175,14 +175,14 @@ namespace Spectest {
         public unsafe void ReadImage(byte* img) {
             {
                 var p = *(IntPtr*)(img + 8);
-                Name = p == IntPtr.Zero ? "" : (global::System.Runtime.InteropServices.Marshal.PtrToStringUTF8(p) ?? "");
+                Name = p == IntPtr.Zero ? "" : global::Pbwire.ImageText.Decode(p);
             }
             switch (*(uint*)(img + 32)) {
                 case 2:
                     Num = *(int*)(img + 0);
                     break;
                 case 3:
-                    { var p = *(IntPtr*)(img + 16); Text = p == IntPtr.Zero ? "" : (global::System.Runtime.InteropServices.Marshal.PtrToStringUTF8(p) ?? ""); }
+                    { var p = *(IntPtr*)(img + 16); Text = global::Pbwire.ImageText.Decode(p); }
                     break;
                 case 4:
                     { var p = *(byte**)(img + 24); if (p != null) { var c = new Types.Inner(); c.ReadImage(p); Inner = c; } }

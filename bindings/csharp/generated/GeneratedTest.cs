@@ -219,4 +219,68 @@ Check(Spectest.PbwireFile_Oneof1.MessageNames.Length == 2, "oneof registry lists
     Check(Spectest.Oneof1.Parser.ParseFrom(referenceOneof).Name == "a", "Init restores embedded");
 }
 
+// T7: struct-path (Layout.Unmarshal, the shim decode arm) edge semantics over
+// hand-built wire. Same rules as the reference parser, pinned here because
+// the image reader is a second decoder: last-wins, sub-message merge, oneof
+// reset, packed/unpacked/mixed repetition, malformed input throwing loudly.
+// Two deliberate divergences, both documented in pbench/README.md: a packed
+// run for a singular scalar is skipped like the core decoder (PHP rule; Ruby
+// rejects it instead), and unknown fields decode fine but do not survive a
+// re-encode (the flat image keeps no unknown storage). Deep-nesting and
+// missing-required have no fixture here (no recursive or proto2 message in
+// the C# models): the limits live in the shared C codec, covered by its own
+// tests, and every C# message here is proto3 without required fields.
+static byte[] V7(uint v)
+{
+    var b = new List<byte>();
+    while (v >= 0x80) { b.Add((byte)(v | 0x80)); v >>= 7; }
+    b.Add((byte)v);
+    return b.ToArray();
+}
+static byte[] Tag7(int fnum, int wt) => V7((uint)(fnum << 3 | wt));
+static byte[] Len7(byte[] p) => V7((uint)p.Length);
+static byte[] Cat7(params byte[][] parts) => parts.SelectMany(p => p).ToArray();
+static byte[] LF7(int fnum, byte[] payload) => Cat7(Tag7(fnum, 2), Len7(payload), payload);
+{
+    // Last duplicate wins for a singular scalar.
+    var w = Cat7(Tag7(1, 0), V7(1), Tag7(1, 0), V7(2));
+    Check(Scalars3.Scalars3Layout.Unmarshal(w).I32 == 2, "T7 last duplicate wins");
+    // A repeated singular sub-message merges field by field.
+    var nm = new byte[] { (byte)'a' };
+    var m1 = Cat7(Tag7(1, 2), Len7(nm), nm);
+    var m2 = Cat7(Tag7(2, 0), V7(3));
+    var both = Scalars3.Scalars3Layout.Unmarshal(Cat7(LF7(16, m1), LF7(16, m2)));
+    Check(both.Inner?.Name == "a" && both.Inner?.Value == 3, "T7 sub-message merges");
+    // Packed, unpacked and mixed repetition concatenate.
+    var mixed = Scalars3.Scalars3Layout.Unmarshal(
+        Cat7(LF7(17, new byte[] { 3, 4 }), Tag7(17, 0), V7(6), LF7(17, new byte[] { 7 })));
+    Check(mixed.Nums.Count == 4 && mixed.Nums[3] == 7, "T7 packed/unpacked mix");
+    var flags = Scalars3.Scalars3Layout.Unmarshal(Cat7(Tag7(22, 0), V7(1), LF7(22, new byte[] { 0 })));
+    Check(flags.Flags.Count == 2 && flags.Flags[0] && !flags.Flags[1], "T7 unpacked/packed flags");
+    // A packed run for a singular scalar is skipped (core parity: PHP skips
+    // it too, Ruby rejects it; neither keeps the value).
+    Check(Scalars3.Scalars3Layout.Unmarshal(LF7(1, V7(9))).I32 == 0, "T7 packed-for-singular skips");
+    // Unknown fields read fine but do not survive a re-encode.
+    var withUnknown = Cat7(Tag7(999, 0), V7(1), Tag7(1, 0), V7(5));
+    var unk = Scalars3.Scalars3Layout.Unmarshal(withUnknown);
+    Check(unk.I32 == 5, "T7 unknown field skips");
+    Check(Scalars3.Scalars3Layout.Marshal(unk).Length == 2, "T7 unknown field drops on re-encode");
+    // Truncated wire throws loudly instead of reading past the end.
+    Check(Throws(() => Scalars3.Scalars3Layout.Unmarshal(new byte[] { 0x08, 0x80 })), "T7 truncated varint throws");
+    var ab2 = new byte[] { (byte)'a', (byte)'b' };
+    Check(Throws(() => Scalars3.Scalars3Layout.Unmarshal(Cat7(Tag7(14, 2), V7(10), ab2))), "T7 length overrun throws");
+    // Oneof: the last member on the wire wins and the case follows it.
+    var hi = new byte[] { (byte)'h', (byte)'i' };
+    var numThenText = Oneof1.Oneof1Layout.Unmarshal(Cat7(Tag7(2, 0), V7(7), LF7(3, hi)));
+    Check(numThenText.KindCase == Oneof1.KindOneofCase.Text && numThenText.Text == "hi", "T7 oneof last wins");
+    var textThenNum = Oneof1.Oneof1Layout.Unmarshal(Cat7(LF7(3, hi), Tag7(2, 0), V7(7)));
+    Check(textThenNum.KindCase == Oneof1.KindOneofCase.Num && textThenNum.Num == 7, "T7 oneof resets");
+    // Non-ASCII strings take the ImageText fallback and round-trip exactly.
+    var snow = new Scalars3 { Str = "h\u00e9llo \u2603" };
+    var snowBack = Scalars3.Scalars3Layout.Unmarshal(Scalars3.Scalars3Layout.Marshal(snow));
+    Check(snowBack.Str == snow.Str, "T7 non-ASCII string round-trips");
+    // Empty wire is the default message.
+    Check(Scalars3.Scalars3Layout.Unmarshal(Array.Empty<byte>()).Equals(new Scalars3()), "T7 empty decodes to default");
+}
+
 Console.WriteLine($"compat: {checks} checks passed");

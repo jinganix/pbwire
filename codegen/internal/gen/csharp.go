@@ -975,7 +975,7 @@ func writeCsharpImage(b *strings.Builder, f *model.File, n *csNode, indent strin
 			if field.NeedsHas && !field.Required {
 				fmt.Fprintf(b, "%s{\n%s    var p = *(IntPtr*)(img + %s);\n", inner, inner, off)
 				fmt.Fprintf(b, "%s    if (p == IntPtr.Zero) { Clear%s(); }\n", inner, prop)
-				fmt.Fprintf(b, "%s    else { %s = global::System.Runtime.InteropServices.Marshal.PtrToStringUTF8(p) ?? \"\"; }\n%s}\n", inner, prop, inner)
+				fmt.Fprintf(b, "%s    else { %s = global::Pbwire.ImageText.Decode(p); }\n%s}\n", inner, prop, inner)
 				break
 			}
 			fmt.Fprintf(b, "%s%s{\n%s    var p = *(IntPtr*)(img + %s);\n", inner, guard, inner, off)
@@ -983,7 +983,7 @@ func writeCsharpImage(b *strings.Builder, f *model.File, n *csNode, indent strin
 			if field.NeedsHas || field.Required {
 				empty = "null!"
 			}
-			fmt.Fprintf(b, "%s    %s = p == IntPtr.Zero ? %s : (global::System.Runtime.InteropServices.Marshal.PtrToStringUTF8(p) ?? \"\");\n%s}\n", inner, prop, empty, inner)
+			fmt.Fprintf(b, "%s    %s = p == IntPtr.Zero ? %s : global::Pbwire.ImageText.Decode(p);\n%s}\n", inner, prop, empty, inner)
 		case field.Kind == protoreflect.BytesKind:
 			fmt.Fprintf(b, "%s%s{\n%s    var p = *(byte**)(img + %s);\n", inner, guard, inner, off)
 			fmt.Fprintf(b, "%s    var len = (int)(*(nuint*)(img + %d));\n", inner, slot.offset+8)
@@ -1036,7 +1036,7 @@ func writeCsharpElemRead(b *strings.Builder, indent string, field model.Field, f
 		fmt.Fprintf(b, "%sfor (var i = 0; i < n%s; i++) { var c = new %s(); c.ReadImage(p + i * %s.ImageBytes); %s.Add(c); }\n",
 			indent, csProp(field), child, child, prop)
 	case field.Kind == protoreflect.StringKind:
-		fmt.Fprintf(b, "%sfor (var i = 0; i < n%s; i++) { %s.Add(global::System.Runtime.InteropServices.Marshal.PtrToStringUTF8(((IntPtr*)p)[i]) ?? \"\"); }\n",
+		fmt.Fprintf(b, "%sfor (var i = 0; i < n%s; i++) { %s.Add(global::Pbwire.ImageText.Decode(((IntPtr*)p)[i])); }\n",
 			indent, csProp(field), prop)
 	case field.Kind == protoreflect.BytesKind:
 		fmt.Fprintf(b, "%sfor (var i = 0; i < n%s; i++) {\n", indent, csProp(field))
@@ -1071,7 +1071,7 @@ func writeCsharpOneofRead(b *strings.Builder, indent string, m *model.Message, o
 			fmt.Fprintf(b, "{ var p = *(byte**)(img + %s); if (p != null) { var c = new %s(); c.ReadImage(p); %s = c; } }\n",
 				off, csFieldPath(f, field, cur, byLocal), prop)
 		case field.Kind == protoreflect.StringKind:
-			fmt.Fprintf(b, "{ var p = *(IntPtr*)(img + %s); %s = p == IntPtr.Zero ? \"\" : (global::System.Runtime.InteropServices.Marshal.PtrToStringUTF8(p) ?? \"\"); }\n", off, prop)
+			fmt.Fprintf(b, "{ var p = *(IntPtr*)(img + %s); %s = global::Pbwire.ImageText.Decode(p); }\n", off, prop)
 		case field.Kind == protoreflect.BytesKind:
 			fmt.Fprintf(b, "{ var p = *(byte**)(img + %s); var len = (int)(*(nuint*)(img + %d)); %s = p == null ? global::Google.Protobuf.ByteString.Empty : global::Google.Protobuf.ByteString.CopyFrom(new ReadOnlySpan<byte>(p, len)); }\n", off, slot.offset+8, prop)
 		default:
