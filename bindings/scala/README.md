@@ -62,9 +62,36 @@ binding's runtime.
 Needs `scalac`, `protoc` and `scalapbc` (the ScalaPB compiler); downloads
 the ScalaPB runtime and protobuf-java from Maven Central on first run. The
 four tiers are small / medium / large / xlarge (the repeated fields scaled
-x0 / x1 / x100 / x3000). Copied from [BENCHMARKS.md](../../BENCHMARKS.md),
-which is the single source for all performance numbers; higher is better,
-MB/s over wire bytes.
+x0 / x1 / x100 / x3000).
+
+### Scala (Java runtime + DSL) vs ScalaPB
+
+![Scala (Java runtime + DSL) vs ScalaPB — MB/s by tier](../../docs/charts/bench-scala-java-runtime-dsl-vs-scalapb.svg)
+
+| payload | op | pbwire-scala-core (MB/s, x scalapb) | scalapb (MB/s) |
+|---|---|---|---|
+| 136 B | encode | 528.8 (0.33x ❌) | 1580.9 |
+| 136 B | decode | 339.8 (0.41x ❌) | 834.3 |
+| 174 B | encode | 399.6 (0.44x ❌) | 902.2 |
+| 174 B | decode | 228.5 (0.29x ❌) | 780.0 |
+| 2469 B | encode | 240.4 (6.97x ✅) | 34.5 |
+| 2469 B | decode | 147.4 (0.27x ❌) | 543.2 |
+| 74913 B | encode | 255.8 (170.53x ✅) | 1.5 |
+| 74913 B | decode | 161.9 (0.27x ❌) | 602.8 |
+
+Same class as Kotlin: the JVM binding reuses the Java runtime and adds only
+an idiomatic DSL — no second codec, no JNI, schema from a `FileDescriptorSet`
+at run time. The baseline is `scalapbc`-generated code (needs `cs install
+scalapbc` once); the jars land in `benchmarks/deps`. Byte parity per tier
+before timing, like every other row. `core` is the committed generated
+`matrix3Gen` case class and the published comparison here; its `encode`/`decode`
+fill and load a `Message`
+field by field by name, so it is the slowest JVM `core` row at small tiers (0.33x at 136 B
+encode, 0.27x-0.41x decode): the translation is the cost, not
+the wire engine. The large/xlarge encode ratios (6.97x/170.53x) ride a ScalaPB
+baseline collapse at those tiers, not a codec win. The per-field `tree` arm is compared in
+`pbench/` (see its README), not here. Formal run
+`../../results/bench-scala-20261124T102827Z.json`.
 
 ## Conformance
 
@@ -108,33 +135,3 @@ the descriptor mode) must run first; `registry=false` drops `messageNames`
   and field operations through the dynamic tree; nothing is lost, nothing
   is sugar-coated.
 
-## Benchmarks
-
-### Scala (Java runtime + DSL) vs ScalaPB
-
-![Scala (Java runtime + DSL) vs ScalaPB — MB/s by tier](../../docs/charts/bench-scala-java-runtime-dsl-vs-scalapb.svg)
-
-| payload | op | pbwire-scala-core (MB/s, x scalapb) | scalapb (MB/s) |
-|---|---|---|---|
-| 136 B | encode | 528.8 (0.33x ❌) | 1580.9 |
-| 136 B | decode | 339.8 (0.41x ❌) | 834.3 |
-| 174 B | encode | 399.6 (0.44x ❌) | 902.2 |
-| 174 B | decode | 228.5 (0.29x ❌) | 780.0 |
-| 2469 B | encode | 240.4 (6.97x ✅) | 34.5 |
-| 2469 B | decode | 147.4 (0.27x ❌) | 543.2 |
-| 74913 B | encode | 255.8 (170.53x ✅) | 1.5 |
-| 74913 B | decode | 161.9 (0.27x ❌) | 602.8 |
-
-Same class as Kotlin: the JVM binding reuses the Java runtime and adds only
-an idiomatic DSL — no second codec, no JNI, schema from a `FileDescriptorSet`
-at run time. The baseline is `scalapbc`-generated code (needs `cs install
-scalapbc` once); the jars land in `benchmarks/deps`. Byte parity per tier
-before timing, like every other row. `core` is the committed generated
-`matrix3Gen` case class and the published comparison here; its `encode`/`decode`
-fill and load a `Message`
-field by field by name, so it is the slowest JVM `core` row at small tiers (0.33x at 136 B
-encode, 0.27x-0.41x decode): the translation is the cost, not
-the wire engine. The large/xlarge encode ratios (6.97x/170.53x) ride a ScalaPB
-baseline collapse at those tiers, not a codec win. The per-field `tree` arm is compared in
-`pbench/` (see its README), not here. Formal run
-`../../results/bench-scala-20261124T102827Z.json`.

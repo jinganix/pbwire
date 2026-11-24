@@ -54,37 +54,7 @@ none.
 
 Downloads `protobuf-java` and `protobuf-kotlin` from Maven Central on first run.
 The four tiers are small / medium / large / xlarge (the repeated fields scaled
-x0 / x1 / x100 / x3000). Copied from [BENCHMARKS.md](../../BENCHMARKS.md),
-which is the single source for all performance numbers; higher is better, MB/s
-over wire bytes:
-
-| payload | op | pbwire-kotlin (MB/s, x protobuf-kotlin) | protobuf-kotlin (MB/s) |
-|---|---|---|---|
-| 136 B | encode | 1729.7 (0.8x) | 2109.9 |
-| 136 B | decode | 934.8 (1.5x) | 634.2 |
-| 174 B | encode | 627.8 (0.5x) | 1189.7 |
-| 174 B | decode | 777.0 (1.4x) | 560.5 |
-| 2469 B | encode | 967.3 (1.1x) | 861.4 |
-| 2469 B | decode | 772.7 (1.6x) | 470.2 |
-| 74913 B | encode | 934.3 (1.1x) | 833.7 |
-| 74913 B | decode | 788.1 (1.7x) | 453.1 |
-
-## Why not a copy of the Java runtime?
-
-A second copy of the codec tables would be a second thing to keep in sync for
-zero benefit: Kotlin calls Java classes with no
-marshalling cost, and the JVM is the same host either way. The ownership and
-threading rules are the Java binding's: a `Schema` or `Message` belongs to one
-thread, `use`/`close` frees a root, and a nested message is a view of its parent.
-
-## Generated models
-
-`protoc-gen-pbwire` (in `../../codegen`) generates Kotlin `data class`es with
-typed properties, `fun encode(schema)` and a `companion object { fun decode }`.
-The committed output is `tests/gen/`; `examples/Roundtrip.kt` uses only typed
-assignments. See `../../codegen/README.md`.
-
-## Benchmarks
+x0 / x1 / x100 / x3000).
 
 #### Kotlin vs `protoc --kotlin_out` over `protobuf-java`
 
@@ -117,3 +87,19 @@ not here. The `Message`-wrapper cut (no per-decode
 overhead on top, so the narrow tiers track the codec instead of the wrapper.
 Formal run
 `../../results/bench-kotlin-20261124T094919Z.json`.
+
+## Why not a copy of the Java runtime?
+
+A second copy of the codec tables would be a second thing to keep in sync for
+zero benefit: Kotlin calls Java classes with no
+marshalling cost, and the JVM is the same host either way. The ownership and
+threading rules are the Java binding's: a `Schema` or `Message` belongs to one
+thread, `use`/`close` frees a root, and a nested message is a view of its parent.
+
+## Generated models
+
+`protoc-gen-pbwire` (in `../../codegen`) generates Kotlin `data class`es with
+typed properties, `fun encode(schema)` and a `companion object { fun decode }`.
+The committed output is `tests/gen/`; `examples/Roundtrip.kt` uses only typed
+assignments. See `../../codegen/README.md`.
+

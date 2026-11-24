@@ -198,7 +198,7 @@ Two things to notice when reading the example:
 - Absent enums decode to their proto default (`type = 2 [default = HOME]`
   yields `HOME` with `has_type == 0`); the layout row carries it.
 
-## Benchmark
+## Benchmarks
 
 [`benchmarks/bench_struct.cc`](benchmarks/bench_struct.cc) measures the
 generated structs against the official C++ generated code (`protoc
@@ -225,34 +225,10 @@ dispatch used to be all that was left to pay. The gap grows with message size
 because `SerializeToString` walks the message twice (size, then write) while
 the struct encoder writes in one pass:
 
-| payload | op | pbwire-c-shim (MB/s, x gen) | protoc gen (MB/s) |
-|---|---|---|---|
-| 136 B | encode | 1476.8 (1.0x) | 1416.4 |
-| 136 B | decode | 1090.8 (1.2x) | 894.2 |
-| 174 B | encode | 1441.1 (1.0x) | 1407.5 |
-| 174 B | decode | 1025.0 (1.3x) | 799.8 |
-| 2469 B | encode | 1064.7 (1.2x) | 919.3 |
-| 2469 B | decode | 812.4 (2.0x) | 401.8 |
-| 74913 B | encode | 1213.2 (1.3x) | 931.8 |
-| 74913 B | decode | 899.1 (2.3x) | 389.2 |
-
 The harness also prints a `pbwire-c1` block: the one-shot API, which compiles
 the layout on every call and mallocs every value. It is 3-5x slower, which is
 the price of that convenience — the point of the extra block is to keep the
 trade-off visible rather than hidden.
-
-## Generated models
-
-The struct binding *is* the generated model: `plugin/` generates the C structs, the
-enum typedefs and the layout tables, with the `.proto` type named in each field
-comment (`int32_t color; /* optional, structtest.Color3 */`). `tests/gen/` and
-`examples/gen/` hold the pinned output; `examples/addressbook.c` assigns struct
-literals and calls the generated `*_encode`/`*_decode` wrappers only.
-
-For every other language, `../../codegen/` generates the same kind of generated layer;
-see `../../codegen/README.md`.
-
-## Benchmarks
 
 ### C structs vs `protoc` generated (same `matrix3.proto`)
 
@@ -313,3 +289,15 @@ Concurrency (same tree, `build/test_concurrency`, 8 threads x 200 iters:
 (`build/test_cpp_concurrency`, same engine, no separate bench section) passes
 the same way: 8 threads x 200 iters, 4800 verifications, 0 failures; scale
 encode 1thr 292.9 MB/s (655.6 ns/op), 8thr agg 1234.2 MB/s (155.6 ns/op).
+
+## Generated models
+
+The struct binding *is* the generated model: `plugin/` generates the C structs, the
+enum typedefs and the layout tables, with the `.proto` type named in each field
+comment (`int32_t color; /* optional, structtest.Color3 */`). `tests/gen/` and
+`examples/gen/` hold the pinned output; `examples/addressbook.c` assigns struct
+literals and calls the generated `*_encode`/`*_decode` wrappers only.
+
+For every other language, `../../codegen/` generates the same kind of generated layer;
+see `../../codegen/README.md`.
+

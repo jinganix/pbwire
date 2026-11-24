@@ -66,34 +66,52 @@ each leaf directory); the compiled Java runtime still comes from `build.sh`
 ```
 
 The four tiers are small / medium / large / xlarge (the repeated fields scaled
-x0 / x1 / x100 / x3000). Copied from [BENCHMARKS.md](../../BENCHMARKS.md),
-which is the single source for all performance numbers; higher is better, MB/s
-over wire bytes. The baseline is `protoc --java_out` code compiled at bench
+x0 / x1 / x100 / x3000). The baseline is `protoc --java_out` code compiled at bench
 time; both sides must produce identical bytes before anything is timed, and
-both allocate per call. The Clojure encode under test reuses a pre-built
-mutable message (fill once, encode many); decode is a validating scan plus
-close, no map materialization — like the Java row — so it tracks the Java
-row tier for tier (losing only the 136 B encode, like Java). The baseline is
+both allocate per call. The baseline is
 a direct `toByteArray` call: the measured value carries a type hint so the
 call compiles direct. An unhinted local reflects (~800 ns a call here) and
 never warms, which once inflated this row past 9x. The persistent-map fns
 stay for convenience and are gated for parity, but hot loops use the
 mutable path.
 
-| payload | op | pbwire-clj (MB/s, x protobuf-java) | protobuf-java (MB/s) |
-|---|---|---|---|
-| 136 B | encode | 1618.4 (0.7x) | 2179.9 |
-| 136 B | decode | 932.7 (1.4x) | 665.4 |
-| 174 B | encode | 1408.6 (1.1x) | 1242.2 |
-| 174 B | decode | 781.0 (1.3x) | 581.1 |
-| 2469 B | encode | 1023.1 (1.2x) | 855.9 |
-| 2469 B | decode | 753.7 (1.6x) | 469.7 |
-| 74913 B | encode | 1028.1 (1.1x) | 900.5 |
-| 74913 B | decode | 811.0 (1.7x) | 463.9 |
-
 The small tiers are where a persistent map per message would lose: 3000
 submaps and 12000 boxed ints on the xlarge tier plus a per-field interop
 call cannot race a generated straight-line writer, and map materialization
+
+### Clojure (Java runtime + interop) vs `protobuf-java`
+
+![Clojure (Java runtime + interop) vs protobuf-java — MB/s by tier](../../docs/charts/bench-clojure-java-runtime-interop-vs-protobuf-java.svg)
+
+| payload | op | pbwire-clj-core (MB/s, x protobuf-java) | protobuf-java (MB/s) |
+|---|---|---|---|
+| 136 B | encode | 19.8 (0.01x ❌) | 1476.3 |
+| 136 B | decode | 41.9 (0.06x ❌) | 672.7 |
+| 174 B | encode | 19.0 (0.02x ❌) | 956.2 |
+| 174 B | decode | 38.7 (0.07x ❌) | 585.0 |
+| 2469 B | encode | 10.7 (0.03x ❌) | 420.5 |
+| 2469 B | decode | 174.3 (0.37x ❌) | 476.4 |
+| 74913 B | encode | 10.8 (0.02x ❌) | 477.9 |
+| 74913 B | decode | 268.3 (0.58x ❌) | 464.3 |
+
+`core` is the mutable-message fast path and the published comparison: a fresh `Message` per iteration (build + fill + encode + close; decode plus a deep read-back of every gate-checked field), the generated
+model's native object with no map walk. The persistent-map API stays for
+convenience and is gated for parity, but hot loops use the mutable path — the
+same split the README documents (maps for convenience, the mutable path for
+hot loops) and Lua documents (table vs builder). The per-field `tree` map-API
+arm is compared in `pbench/` (see its README), not here.
+Formal run
+`../../results/bench-clojure-20261124T110510Z.json`.
+
+The timed path builds a fresh mutable message per iteration (fill + encode + close, with the same deep read-back as the tree arm on decode and no map materialization), like the Java row, and the
+baseline builds a fresh message per iteration for its direct `toByteArray` call: the measured type carries a hint so
+the call compiles direct. An unhinted local reflects (~800 ns a call here)
+and never warms, which once inflated this row past 9x. The persistent-map
+fns stay for convenience and are gated for parity, but hot loops use the
+mutable path — the same split Lua documents (table vs builder). Same codec
+as Java/Scala underneath (plain interop over the Java runtime, no second
+wire implementation), byte parity per tier.
+
 on decode is the same structural cost the Python dict path pays against
 upb. If a hot loop needs the Java row's speed, call the Java runtime
 directly -- it is already on the classpath.
@@ -144,37 +162,3 @@ dynamic-only users; `register=false` delays type resolution so
 descriptor mode) must run first; `registry=false` drops `message-names`
 + `preload`.
 
-## Benchmarks
-
-### Clojure (Java runtime + interop) vs `protobuf-java`
-
-![Clojure (Java runtime + interop) vs protobuf-java — MB/s by tier](../../docs/charts/bench-clojure-java-runtime-interop-vs-protobuf-java.svg)
-
-| payload | op | pbwire-clj-core (MB/s, x protobuf-java) | protobuf-java (MB/s) |
-|---|---|---|---|
-| 136 B | encode | 19.8 (0.01x ❌) | 1476.3 |
-| 136 B | decode | 41.9 (0.06x ❌) | 672.7 |
-| 174 B | encode | 19.0 (0.02x ❌) | 956.2 |
-| 174 B | decode | 38.7 (0.07x ❌) | 585.0 |
-| 2469 B | encode | 10.7 (0.03x ❌) | 420.5 |
-| 2469 B | decode | 174.3 (0.37x ❌) | 476.4 |
-| 74913 B | encode | 10.8 (0.02x ❌) | 477.9 |
-| 74913 B | decode | 268.3 (0.58x ❌) | 464.3 |
-
-`core` is the mutable-message fast path and the published comparison: a fresh `Message` per iteration (build + fill + encode + close; decode plus a deep read-back of every gate-checked field), the generated
-model's native object with no map walk. The persistent-map API stays for
-convenience and is gated for parity, but hot loops use the mutable path — the
-same split the README documents (maps for convenience, the mutable path for
-hot loops) and Lua documents (table vs builder). The per-field `tree` map-API
-arm is compared in `pbench/` (see its README), not here.
-Formal run
-`../../results/bench-clojure-20261124T110510Z.json`.
-
-The timed path builds a fresh mutable message per iteration (fill + encode + close, with the same deep read-back as the tree arm on decode and no map materialization), like the Java row, and the
-baseline builds a fresh message per iteration for its direct `toByteArray` call: the measured type carries a hint so
-the call compiles direct. An unhinted local reflects (~800 ns a call here)
-and never warms, which once inflated this row past 9x. The persistent-map
-fns stay for convenience and are gated for parity, but hot loops use the
-mutable path — the same split Lua documents (table vs builder). Same codec
-as Java/Scala underneath (plain interop over the Java runtime, no second
-wire implementation), byte parity per tier.

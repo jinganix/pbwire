@@ -143,15 +143,13 @@ setuptools, no wheel, no generated Python. `make python-bind` writes
 `bindings/python/pbwire<EXT_SUFFIX>`; add that directory to `PYTHONPATH` (the
 tests and the benchmark do it themselves).
 
-## Benchmark
+## Benchmarks
 
 [`benchmarks/bench.py`](benchmarks/bench.py) compares against `google.protobuf`
 (the upb C extension) on the same `matrix3.proto` message at the four standard
 tiers from [`../../BENCHMARKS.md`](../../BENCHMARKS.md) (small / medium / large /
 xlarge scale the repeated fields x0 / x1 / x100 / x3000), printing the same
-`impl op ns/op MB/s` table as every other harness. Copied from that file, which
-is the single source for all performance numbers; higher is better, MB/s over
-wire bytes.
+`impl op ns/op MB/s` table as every other harness.
 
 ```shell
 make python-bench
@@ -159,25 +157,6 @@ make python-bench
 
 It verifies byte-for-byte parity with `protobuf`'s own encoding and
 both dict representations before timing.
-
-| payload | op | pbwire-py (MB/s, x upb) | upb (MB/s) |
-|---|---|---|---|
-| 136 B | encode(data) | 291.4 (5.7x) | 51.5 |
-| 136 B | decode(bytes) | 663.7 (1.2x) | 568.6 |
-| 136 B | to_dict(bytes) | 161.4 (4.8x) | 33.3 |
-| 136 B | encode(parsed) | 3087.4 (4.1x) | 751.3 |
-| 174 B | encode(data) | 334.7 (5.7x) | 58.4 |
-| 174 B | decode(bytes) | 727.6 (1.3x) | 573.3 |
-| 174 B | to_dict(bytes) | 154.5 (5.6x) | 27.6 |
-| 174 B | encode(parsed) | 3897.8 (4.8x) | 819.8 |
-| 2469 B | encode(data) | 497.8 (6.6x) | 75.2 |
-| 2469 B | decode(bytes) | 1127.3 (1.6x) | 717.7 |
-| 2469 B | to_dict(bytes) | 200.3 (4.8x) | 41.4 |
-| 2469 B | encode(parsed) | 31535.5 (22x) | 1430.8 |
-| 74913 B | encode(data) | 593.1 (6.9x) | 85.8 |
-| 74913 B | decode(bytes) | 1376.6 (1.7x) | 810.5 |
-| 74913 B | to_dict(bytes) | 173.2 (4.0x) | 43.5 |
-| 74913 B | encode(parsed) | 94176.6 (63x) | 1500.0 |
 
 Rows are the same user-visible task on both sides: `encode(data)` starts from
 the same dict, `decode(bytes)` ends with an in-memory message, `to_dict(bytes)`
@@ -191,52 +170,6 @@ its serialization re-encodes every field from its own structs where a parsed
 `Message` just hands back the bytes. The `to_dict()` row is the one where both
 sides pay for every dict, string and int; that cost is `malloc`-bound and
 nobody can avoid it.
-
-## Pure-Python mode
-
-[`pure/`](pure/) is the same wire format without the CPython extension:
-`descriptor.py` reads the `FileDescriptorSet`, `tree.py` holds the value tree,
-`encode.py`/`decode.py` are the codec (unknown fields retained, groups, packed,
-oneof, presence, limits), and `schema.py` is the facade
-(`Schema.from_file`, `type.decode/encode`, `type.encode_object/decode_object`).
-It is stdlib only -- no extension, no `google.protobuf` -- for pure-Python
-interpreters, PyPy and sandboxes.
-
-```python
-from pure.schema import Schema
-
-schema = Schema.from_file("matrix3.desc")
-type = schema.message("structtest.Scalars3")
-wire = type.encode_object({"i32": 5, "str": "hi"})   # dict in
-data = type.decode_object(wire)                       # dict out
-tree = type.decode(wire)                              # unknown fields kept
-assert type.encode(tree) == wire                      # byte-exact
-```
-
-The extension stays the shipped codec: it is ~100x faster (at 74 KB, 941.9
-MB/s decode against the pure core's 6.7). The core is the no-extension mode and
-is published as such; it is at parity with `google.protobuf`'s own pure-Python
-runtime (1.08x decode, 1.29x `encode(parsed)`) and passes the official binary
-suite with the same failure set as the C core. Verdict and numbers:
-[`pbench/README.md`](pbench/README.md).
-
-## Generated models
-
-`protoc-gen-pbwire` (in `../../codegen`) generates dataclasses with type
-annotations plus `to_dict()`/`from_dict()`, and `encode(msg_type)` /
-`decode(msg_type, wire)` on top of the dict API. Each file splits in two:
-`<base>_pbwire.py` (dataclasses) and `<base>_pbwire_meta.py` (the embedded
-descriptor set plus its loader, imported by the models file).
-`--pbwire_opt=lang=python[,model=bool][,register=bool][,registry=bool]`
-(all default `true`): `model=false` leaves the schema module for
-dynamic-only users; `register=false` drops the lazy load so
-`init_schema()` (embedded bytes) or `use_schema()` (an external schema,
-dual registration) must run first; `registry=false` drops
-`MESSAGE_NAMES` + `preload()`. The committed output is
-`tests/gen/` and `examples/gen/`; `examples/addressbook.py` uses the dataclasses
-only. See `../../codegen/README.md`.
-
-## Benchmarks
 
 ### Python vs `google.protobuf` (upb)
 
@@ -304,3 +237,48 @@ different representation:
   for messages with up to 8 fields, which is every sub-message on these tiers.
 
 The pure-Python core port is compared in `pbench/README.md`, not here.
+
+## Pure-Python mode
+
+[`pure/`](pure/) is the same wire format without the CPython extension:
+`descriptor.py` reads the `FileDescriptorSet`, `tree.py` holds the value tree,
+`encode.py`/`decode.py` are the codec (unknown fields retained, groups, packed,
+oneof, presence, limits), and `schema.py` is the facade
+(`Schema.from_file`, `type.decode/encode`, `type.encode_object/decode_object`).
+It is stdlib only -- no extension, no `google.protobuf` -- for pure-Python
+interpreters, PyPy and sandboxes.
+
+```python
+from pure.schema import Schema
+
+schema = Schema.from_file("matrix3.desc")
+type = schema.message("structtest.Scalars3")
+wire = type.encode_object({"i32": 5, "str": "hi"})   # dict in
+data = type.decode_object(wire)                       # dict out
+tree = type.decode(wire)                              # unknown fields kept
+assert type.encode(tree) == wire                      # byte-exact
+```
+
+The extension stays the shipped codec: it is ~100x faster (at 74 KB, 941.9
+MB/s decode against the pure core's 6.7). The core is the no-extension mode and
+is published as such; it is at parity with `google.protobuf`'s own pure-Python
+runtime (1.08x decode, 1.29x `encode(parsed)`) and passes the official binary
+suite with the same failure set as the C core. Verdict and numbers:
+[`pbench/README.md`](pbench/README.md).
+
+## Generated models
+
+`protoc-gen-pbwire` (in `../../codegen`) generates dataclasses with type
+annotations plus `to_dict()`/`from_dict()`, and `encode(msg_type)` /
+`decode(msg_type, wire)` on top of the dict API. Each file splits in two:
+`<base>_pbwire.py` (dataclasses) and `<base>_pbwire_meta.py` (the embedded
+descriptor set plus its loader, imported by the models file).
+`--pbwire_opt=lang=python[,model=bool][,register=bool][,registry=bool]`
+(all default `true`): `model=false` leaves the schema module for
+dynamic-only users; `register=false` drops the lazy load so
+`init_schema()` (embedded bytes) or `use_schema()` (an external schema,
+dual registration) must run first; `registry=false` drops
+`MESSAGE_NAMES` + `preload()`. The committed output is
+`tests/gen/` and `examples/gen/`; `examples/addressbook.py` uses the dataclasses
+only. See `../../codegen/README.md`.
+

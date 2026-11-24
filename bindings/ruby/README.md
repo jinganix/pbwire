@@ -201,7 +201,7 @@ the wire). Extensions are read by number, not name.
   wrap the C API; `to_builder` materializes a decoded view into a canonical
   tree. Unknown fields round-trip byte for byte in every form.
 
-## Benchmark
+## Benchmarks
 
 `benchmarks/bench.sh` runs the four standard tiers from
 [`BENCHMARKS.md`](../../BENCHMARKS.md) against the `google-protobuf` gem on the
@@ -209,19 +209,7 @@ same `matrix3.proto` (small / medium / large / xlarge scale the repeated fields
 x0 / x1 / x100 / x3000). Both sides build the same message and must produce
 identical bytes before anything is timed; the benchmark
 interleaves the implementations and keeps the best of several runs. It needs
-`protoc`, a C compiler and the gem. Copied from that file, which is the single
-source for all performance numbers; higher is better, MB/s over wire bytes:
-
-| payload | op | pbwire-ruby-shim (MB/s, x gem) | gem (MB/s) |
-|---|---|---|---|
-| 136 B | encode | 186.9 (0.27x ❌) | 696.6 |
-| 136 B | decode | 140.8 (0.58x ❌) | 242.4 |
-| 174 B | encode | 204.8 (0.26x ❌) | 796.3 |
-| 174 B | decode | 159.5 (0.60x ❌) | 265.8 |
-| 2469 B | encode | 224.7 (0.19x ❌) | 1212.6 |
-| 2469 B | decode | 147.0 (0.30x ❌) | 489.8 |
-| 74913 B | encode | 252.7 (0.18x ❌) | 1366.1 |
-| 74913 B | decode | 163.1 (0.23x ❌) | 702.7 |
+`protoc`, a C compiler and the gem.
 
 ```shell
 gem install google-protobuf
@@ -242,6 +230,47 @@ C-backed storage and whose decode stays lazy. See
 | `tree` | prebuilt `Message` builder / wire view | `pbench/`-only arm (see `pbench/README.md`) |
 | `shim` | one C-extension object walk over the generated model | shipped, `pbwire-ruby-shim` (published) |
 | `core` | pure-Ruby port of the C core | `n/a`: `shortcut: no pure-Ruby core, reopen when a native-less Ruby target appears` |
+
+#### Ruby (C extension) vs the `google-protobuf` gem
+
+![Ruby (C extension) vs the google-protobuf gem — MB/s by tier](../../docs/charts/bench-ruby-c-extension-vs-the-google-protobuf-gem.svg)
+
+| payload | op | pbwire-ruby-shim (MB/s, x gem) | gem (MB/s) |
+|---|---|---|---|
+| 136 B | encode | 96.7 (2.19x ✅) | 44.1 |
+| 136 B | decode | 141.2 (0.58x ❌) | 243.7 |
+| 174 B | encode | 102.5 (3.45x ✅) | 29.7 |
+| 174 B | decode | 148.3 (0.61x ❌) | 241.2 |
+| 2469 B | encode | 88.3 (4.51x ✅) | 19.6 |
+| 2469 B | decode | 148.0 (0.30x ❌) | 489.2 |
+| 74913 B | encode | 99.4 (4.87x ✅) | 20.4 |
+| 74913 B | decode | 159.4 (0.24x ❌) | 676.5 |
+
+Ruby is a C extension over the same core, so this is C extension against C
+extension. The first version drove the same C ABI through stdlib Fiddle and lost
+every row by an order of magnitude: a downcall costs ~3 µs, so a 136 B encode was
+3.3 µs against the core's ~65 ns, and the tiers could only be compared by padding
+`str` because the wrapper had no repeated fields. The rewrite removed the
+boundary, added the repeated-field payload (so the xlarge tier is 3000 nested
+messages, not one 74 KB string), and split the message into two representations.
+The pbwire column is the native-in/native-out full task
+(`pbench/`), formal run
+`../../results/bench-ruby-20261124T095831Z.json`:
+
+- **`shim` (native object in and out).** `type.encode_object(obj)` walks the
+generated model inside C in one entry call and fills a pbw tree; `decode_object`
+decodes once and materializes the generated model classes in C. It is the
+published comparison on both ops (2.19x-4.87x encode / 0.24x-0.61x decode vs the gem) and the
+simplest -- one extension call removes the Ruby per-field loop. Encode leads
+on every tier: both sides build the model fresh per iteration, and one C walk
+from Ruby ivars beats the gem's object fill -- while decode stays
+below the gem: the gem's generated object already owns C-backed storage (and
+its decode stays lazy), while this row builds a C tree from Ruby ivars and
+materializes every model and array. The per-field `tree` arm is compared in
+`pbench/README.md`, not here.
+
+The old `tree` headline is retired: the published row is the native-object
+`shim` arm.
 
 ## Conformance
 
@@ -290,45 +319,3 @@ constructors and accessors, `#encode(schema)` and `.decode(schema, wire)`. The
 committed output is `test/gen/` and `examples/gen/`; `examples/roundtrip.rb`
 uses typed assignments only. See `../../codegen/README.md`.
 
-## Benchmarks
-
-#### Ruby (C extension) vs the `google-protobuf` gem
-
-![Ruby (C extension) vs the google-protobuf gem — MB/s by tier](../../docs/charts/bench-ruby-c-extension-vs-the-google-protobuf-gem.svg)
-
-| payload | op | pbwire-ruby-shim (MB/s, x gem) | gem (MB/s) |
-|---|---|---|---|
-| 136 B | encode | 96.7 (2.19x ✅) | 44.1 |
-| 136 B | decode | 141.2 (0.58x ❌) | 243.7 |
-| 174 B | encode | 102.5 (3.45x ✅) | 29.7 |
-| 174 B | decode | 148.3 (0.61x ❌) | 241.2 |
-| 2469 B | encode | 88.3 (4.51x ✅) | 19.6 |
-| 2469 B | decode | 148.0 (0.30x ❌) | 489.2 |
-| 74913 B | encode | 99.4 (4.87x ✅) | 20.4 |
-| 74913 B | decode | 159.4 (0.24x ❌) | 676.5 |
-
-Ruby is a C extension over the same core, so this is C extension against C
-extension. The first version drove the same C ABI through stdlib Fiddle and lost
-every row by an order of magnitude: a downcall costs ~3 µs, so a 136 B encode was
-3.3 µs against the core's ~65 ns, and the tiers could only be compared by padding
-`str` because the wrapper had no repeated fields. The rewrite removed the
-boundary, added the repeated-field payload (so the xlarge tier is 3000 nested
-messages, not one 74 KB string), and split the message into two representations.
-The pbwire column is the native-in/native-out full task
-(`pbench/`), formal run
-`../../results/bench-ruby-20261124T095831Z.json`:
-
-- **`shim` (native object in and out).** `type.encode_object(obj)` walks the
-generated model inside C in one entry call and fills a pbw tree; `decode_object`
-decodes once and materializes the generated model classes in C. It is the
-published comparison on both ops (2.19x-4.87x encode / 0.24x-0.61x decode vs the gem) and the
-simplest -- one extension call removes the Ruby per-field loop. Encode leads
-on every tier: both sides build the model fresh per iteration, and one C walk
-from Ruby ivars beats the gem's object fill -- while decode stays
-below the gem: the gem's generated object already owns C-backed storage (and
-its decode stays lazy), while this row builds a C tree from Ruby ivars and
-materializes every model and array. The per-field `tree` arm is compared in
-`pbench/README.md`, not here.
-
-The old `tree` headline is retired: the published row is the native-object
-`shim` arm.

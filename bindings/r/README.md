@@ -143,7 +143,7 @@ expected failures are the shared `conformance/failure_list_pbwire.txt` (tag
 varints the reference C++ testee truncates identically); only JSPB answers
 `skipped`.
 
-## Benchmark
+## Benchmarks
 
 `benchmarks/bench.R` runs the four standard tiers from
 [`BENCHMARKS.md`](../../BENCHMARKS.md) against RProtoBuf when it is installed
@@ -154,39 +154,6 @@ time: `pbwire-r-shim` is the named list in and wire bytes out through one
 `.Call` (the walk happens in C), `pbwire-r-tree` is a prebuilt builder handle.
 Neither replaces the other: a list is what R code passes around, a builder is
 what a hot loop keeps.
-
-## pbench: the named-list row and the builder row
-
-[`pbench/`](pbench/README.md) holds the issue-41 arms, the RProtoBuf gate and the
-interleaved comparison loop (`Rscript pbench/gate.R`,
-`Rscript pbench/compare.R`). The arm table, the provisional numbers and the
-verdict live in [`pbench/README.md`](pbench/README.md); `make r-bench` is the
-formal run. `core` (a pure-R port) is deferred: a per-field interpreter loop is
-orders of magnitude off and no native-less R target exists
-(`shortcut: no pure-R core, reopen when a native-less R target appears`).
-
-## Layout
-
-| Piece | Path |
-|---|---|
-| the binding | [`runtime/src/pbwire_r.c`](runtime/src/pbwire_r.c) (+ [`runtime/R/pbwire.R`](runtime/R/pbwire.R) wrapper) |
-| package skeleton | [`runtime/DESCRIPTION`](runtime/DESCRIPTION), [`runtime/NAMESPACE`](runtime/NAMESPACE), [`runtime/src/Makevars`](runtime/src/Makevars) |
-| build | [`build.sh`](build.sh) |
-| example | [`examples/roundtrip.R`](examples/roundtrip.R) |
-| self-check | [`tests/test_pbwire.R`](tests/test_pbwire.R) |
-| benchmark | [`benchmarks/bench.R`](benchmarks/bench.R) | the four standard tiers against RProtoBuf |
-| pbench | [`pbench/`](pbench/README.md) | the `tree`/`shim` arms, the gate and the interleaved comparison |
-| conformance | [`conformance/testee.R`](conformance/testee.R) | binary, JSON and text through the official runner |
-| fixture | [`tests/data/sample.proto`](tests/data/sample.proto) and the checked-in `sample.desc` |
-
-Regenerate the descriptor set after editing the fixture (it is checked in, so the
-tests need no `protoc`):
-
-```shell
-(cd tests/data && protoc --descriptor_set_out=sample.desc sample.proto)
-```
-
-## Benchmarks
 
 ### R (C extension, named lists) vs RProtoBuf
 
@@ -242,3 +209,35 @@ both sides produce plain lists, the list path leads 52x / 53x (encode / decode)
 at xlarge. Two R spellings
 to know: `INT32_MIN` reads back as `NA` (it *is* `NA_INTEGER`), and doubles past
 2^63 clamp to the int/uint limits — both documented in the binding README.
+
+## pbench: the named-list row and the builder row
+
+[`pbench/`](pbench/README.md) holds the issue-41 arms, the RProtoBuf gate and the
+interleaved comparison loop (`Rscript pbench/gate.R`,
+`Rscript pbench/compare.R`). The arm table, the provisional numbers and the
+verdict live in [`pbench/README.md`](pbench/README.md); `make r-bench` is the
+formal run. `core` (a pure-R port) is deferred: a per-field interpreter loop is
+orders of magnitude off and no native-less R target exists
+(`shortcut: no pure-R core, reopen when a native-less R target appears`).
+
+## Layout
+
+| Piece | Path |
+|---|---|
+| the binding | [`runtime/src/pbwire_r.c`](runtime/src/pbwire_r.c) (+ [`runtime/R/pbwire.R`](runtime/R/pbwire.R) wrapper) |
+| package skeleton | [`runtime/DESCRIPTION`](runtime/DESCRIPTION), [`runtime/NAMESPACE`](runtime/NAMESPACE), [`runtime/src/Makevars`](runtime/src/Makevars) |
+| build | [`build.sh`](build.sh) |
+| example | [`examples/roundtrip.R`](examples/roundtrip.R) |
+| self-check | [`tests/test_pbwire.R`](tests/test_pbwire.R) |
+| benchmark | [`benchmarks/bench.R`](benchmarks/bench.R) | the four standard tiers against RProtoBuf |
+| pbench | [`pbench/`](pbench/README.md) | the `tree`/`shim` arms, the gate and the interleaved comparison |
+| conformance | [`conformance/testee.R`](conformance/testee.R) | binary, JSON and text through the official runner |
+| fixture | [`tests/data/sample.proto`](tests/data/sample.proto) and the checked-in `sample.desc` |
+
+Regenerate the descriptor set after editing the fixture (it is checked in, so the
+tests need no `protoc`):
+
+```shell
+(cd tests/data && protoc --descriptor_set_out=sample.desc sample.proto)
+```
+

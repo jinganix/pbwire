@@ -79,20 +79,84 @@ The official side is the `php/src` tree of the cached protobuf checkout that
 plain SPL autoloader: no composer, no PEAR. When the protobuf C extension is
 installed the harness times it first (`-c` rows), then re-runs under `php -n`
 for the pure-PHP baseline. The four tiers are small / medium /
-large / xlarge (the repeated fields scaled x0 / x1 / x100 / x3000). Copied from
-[BENCHMARKS.md](../../BENCHMARKS.md), which is the single source for all
-performance numbers; higher is better, MB/s over wire bytes:
+large / xlarge (the repeated fields scaled x0 / x1 / x100 / x3000).
+
+#### PHP vs the official PHP runtime (pure + C extension)
+
+![PHP vs the official PHP runtime (pure + C extension) — MB/s by tier](../../docs/charts/bench-php-vs-the-official-php-runtime-pure-c-extension.svg)
+
+The native C extension publishes the native-array entry
+(`pbwire-php-shim`, one extension entry that walks the array in C) as its
+headline row on the same payload. The `ext-ffi` wrapper is the no-compiler
+deployment and gets its own row (`pbwire-php-shim-ffi`). The per-field `tree`
+arm is compared in `pbench/` (see its README), not here. Formal
+run
+`../../results/bench-php-20261124T101527Z.json`: the C-extension pass first, then
+the `ext-ffi` pass against the same C-extension baseline, then the `ext-ffi`
+pass against the pure-PHP baseline.
 
 | payload | op | pbwire-php-shim (MB/s, x) | protobuf-php-c (MB/s) |
 |---|---|---|---|
-| 136 B | encode | 186.0 (0.22x ❌) | 852.0 |
-| 136 B | decode | 168.2 (0.40x ❌) | 420.9 |
-| 174 B | encode | 198.8 (0.21x ❌) | 969.1 |
-| 174 B | decode | 175.5 (0.42x ❌) | 420.4 |
-| 2469 B | encode | 199.6 (0.15x ❌) | 1329.3 |
-| 2469 B | decode | 194.6 (0.37x ❌) | 524.8 |
-| 74913 B | encode | 216.0 (0.16x ❌) | 1330.3 |
-| 74913 B | decode | 211.3 (0.37x ❌) | 565.1 |
+| 136 B | encode | 155.0 (2.02x ✅) | 76.9 |
+| 136 B | decode | 168.6 (0.42x ❌) | 402.8 |
+| 174 B | encode | 156.9 (2.01x ✅) | 78.0 |
+| 174 B | decode | 173.9 (0.43x ❌) | 401.2 |
+| 2469 B | encode | 154.1 (2.68x ✅) | 57.5 |
+| 2469 B | decode | 197.3 (0.38x ❌) | 519.4 |
+| 74913 B | encode | 162.8 (2.90x ✅) | 56.1 |
+| 74913 B | decode | 208.4 (0.36x ❌) | 572.3 |
+
+`pbwire-php-shim` is the task a PHP application runs when its
+data is an array: one extension entry walks the array in C
+(`zend_hash_str_find` per field, recursion) and fills the tree, or materializes
+the array on decode. It is the published comparison on both ops (2.01x-2.90x
+encode, 0.36x-0.43x decode): encode leads at every tier because both sides
+build the array fresh per iteration and one C walk beats the extension's
+field-by-field fill, while decode stays below the official C
+extension at every tier because every field still costs a hashtable lookup plus
+a C tree store, and the decode materializes the array eagerly.
+
+The `ext-ffi` wrapper runs the same array API through one FFI trampoline per
+field (the no-compiler deployment), so its row is interpreter-scale; the
+official C extension is the baseline in that same run:
+
+| payload | op | pbwire-php-shim-ffi (MB/s, x) | protobuf-php-c (MB/s) |
+|---|---|---|---|
+| 136 B | encode | 4.9 | 77.9 |
+| 136 B | decode | 5.7 | 423.6 |
+| 174 B | encode | 5.1 | 80.1 |
+| 174 B | decode | 5.7 | 421.3 |
+| 2469 B | encode | 5.1 | 58.1 |
+| 2469 B | decode | 4.5 | 511.0 |
+| 74913 B | encode | 5.5 | 53.6 |
+| 74913 B | decode | 4.7 | 573.3 |
+
+The `shim-ffi` column is the same array API through the FFI trampoline (one
+FFI call per field), which is why it reads interpreter-scale next to the
+C-entry `shim` row above.
+
+The pure-PHP runtime, timed by a second `php -n` run in the same harness, is a
+different race; the FFI array entry is the pbwire side there:
+
+| payload | op | pbwire-php-shim-ffi (MB/s) | protobuf-php (MB/s) |
+|---|---|---|---|
+| 136 B | encode | 4.9 | 3.2 |
+| 136 B | decode | 5.9 | 6.6 |
+| 174 B | encode | 4.9 | 3.1 |
+| 174 B | decode | 5.6 | 6.1 |
+| 2469 B | encode | 5.1 | 3.1 |
+| 2469 B | decode | 4.3 | 5.1 |
+| 74913 B | encode | 5.5 | 3.3 |
+| 74913 B | decode | 4.6 | 5.5 |
+
+The pure-PHP runtime spends its time on per-field bookkeeping (~4-6 MB/s flat
+across tiers). Against it the FFI-run `shim-ffi` row -- the same array API,
+no C extension -- stays above the pure-PHP runtime on encode and near it on
+decode; both sides build a fresh array per iteration inside the timer, so the native `shim` row
+stays the comparison. Both shim builds (C extension and
+`ext-ffi`) produce identical bytes and pass the pbench gate on all four tiers;
+the gap between them is the per-field PHP loop plus the FFI trampoline, not a
+different codec.
 
 `pbwire-php-shim` is the published native-object entry; the per-field `tree`
 build is a `pbench/`-only arm (see `pbench/README.md`). The native array
@@ -183,82 +247,3 @@ second codec):
 | `Schema::services()`, `Schema::service($name)`, `Schema::resolve($service, $method)` | routing metadata, no RPC |
 | `$limits = ['max_bytes' => n, 'max_depth' => n]` | bounds on every decode/parse/load entry point |
 
-## Benchmarks
-
-#### PHP vs the official PHP runtime (pure + C extension)
-
-![PHP vs the official PHP runtime (pure + C extension) — MB/s by tier](../../docs/charts/bench-php-vs-the-official-php-runtime-pure-c-extension.svg)
-
-The native C extension publishes the native-array entry
-(`pbwire-php-shim`, one extension entry that walks the array in C) as its
-headline row on the same payload. The `ext-ffi` wrapper is the no-compiler
-deployment and gets its own row (`pbwire-php-shim-ffi`). The per-field `tree`
-arm is compared in `pbench/` (see its README), not here. Formal
-run
-`../../results/bench-php-20261124T101527Z.json`: the C-extension pass first, then
-the `ext-ffi` pass against the same C-extension baseline, then the `ext-ffi`
-pass against the pure-PHP baseline.
-
-| payload | op | pbwire-php-shim (MB/s, x) | protobuf-php-c (MB/s) |
-|---|---|---|---|
-| 136 B | encode | 155.0 (2.02x ✅) | 76.9 |
-| 136 B | decode | 168.6 (0.42x ❌) | 402.8 |
-| 174 B | encode | 156.9 (2.01x ✅) | 78.0 |
-| 174 B | decode | 173.9 (0.43x ❌) | 401.2 |
-| 2469 B | encode | 154.1 (2.68x ✅) | 57.5 |
-| 2469 B | decode | 197.3 (0.38x ❌) | 519.4 |
-| 74913 B | encode | 162.8 (2.90x ✅) | 56.1 |
-| 74913 B | decode | 208.4 (0.36x ❌) | 572.3 |
-
-
-`pbwire-php-shim` is the task a PHP application runs when its
-data is an array: one extension entry walks the array in C
-(`zend_hash_str_find` per field, recursion) and fills the tree, or materializes
-the array on decode. It is the published comparison on both ops (2.01x-2.90x
-encode, 0.36x-0.43x decode): encode leads at every tier because both sides
-build the array fresh per iteration and one C walk beats the extension's
-field-by-field fill, while decode stays below the official C
-extension at every tier because every field still costs a hashtable lookup plus
-a C tree store, and the decode materializes the array eagerly.
-
-The `ext-ffi` wrapper runs the same array API through one FFI trampoline per
-field (the no-compiler deployment), so its row is interpreter-scale; the
-official C extension is the baseline in that same run:
-
-| payload | op | pbwire-php-shim-ffi (MB/s, x) | protobuf-php-c (MB/s) |
-|---|---|---|---|
-| 136 B | encode | 4.9 | 77.9 |
-| 136 B | decode | 5.7 | 423.6 |
-| 174 B | encode | 5.1 | 80.1 |
-| 174 B | decode | 5.7 | 421.3 |
-| 2469 B | encode | 5.1 | 58.1 |
-| 2469 B | decode | 4.5 | 511.0 |
-| 74913 B | encode | 5.5 | 53.6 |
-| 74913 B | decode | 4.7 | 573.3 |
-
-The `shim-ffi` column is the same array API through the FFI trampoline (one
-FFI call per field), which is why it reads interpreter-scale next to the
-C-entry `shim` row above.
-
-The pure-PHP runtime, timed by a second `php -n` run in the same harness, is a
-different race; the FFI array entry is the pbwire side there:
-
-| payload | op | pbwire-php-shim-ffi (MB/s) | protobuf-php (MB/s) |
-|---|---|---|---|
-| 136 B | encode | 4.9 | 3.2 |
-| 136 B | decode | 5.9 | 6.6 |
-| 174 B | encode | 4.9 | 3.1 |
-| 174 B | decode | 5.6 | 6.1 |
-| 2469 B | encode | 5.1 | 3.1 |
-| 2469 B | decode | 4.3 | 5.1 |
-| 74913 B | encode | 5.5 | 3.3 |
-| 74913 B | decode | 4.6 | 5.5 |
-
-The pure-PHP runtime spends its time on per-field bookkeeping (~4-6 MB/s flat
-across tiers). Against it the FFI-run `shim-ffi` row -- the same array API,
-no C extension -- stays above the pure-PHP runtime on encode and near it on
-decode; both sides build a fresh array per iteration inside the timer, so the native `shim` row
-stays the comparison. Both shim builds (C extension and
-`ext-ffi`) produce identical bytes and pass the pbench gate on all four tiers;
-the gap between them is the per-field PHP loop plus the FFI trampoline, not a
-different codec.

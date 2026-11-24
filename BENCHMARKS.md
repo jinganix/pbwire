@@ -827,9 +827,9 @@ Full table and method: [binding README](bindings/go/README.md#benchmarks).
 xlarge: encode 141.2 (2.43x ✅) / decode 155.9 (3.70x ✅).
 Full table and method: [binding README](bindings/python/README.md#benchmarks).
 
-### Java, Node, Ruby and Objective-C vs their official runtimes
+### Managed-language bindings vs their official runtimes
 
-All four load a `FileDescriptorSet` at run time. Node and Objective-C call
+Every binding below loads a `FileDescriptorSet` at run time. Node and Objective-C call
 the C ABI from an FFI runtime (Node through an
 N-API addon, Objective-C through an ARC wrapper), so those tables measure the
 cost of that boundary on top of the same C core. Java is a pure-Java codec

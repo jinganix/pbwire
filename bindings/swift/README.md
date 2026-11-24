@@ -125,7 +125,7 @@ one thread, like the C core.
 | fixture | `tests/data/probe.proto` + committed `probe.desc`, `tests/data/matrix3.desc`, `tests/data/maptest.desc` (maps for the deterministic row) | regenerate with `protoc -Itests/data --descriptor_set_out=tests/data/probe.desc tests/data/probe.proto` (`build.sh` also regenerates `matrix3.desc`/`maptest.desc` from `bindings/c/tests/data` when protoc exists) |
 | conformance | `conformance/README.md` | how the official suite covers this binding (via the C testee) |
 
-## Benchmark
+## Benchmarks
 
 `benchmarks/bench.sh` runs the four standard tiers from
 [`BENCHMARKS.md`](../../BENCHMARKS.md), then the side-by-side comparison in
@@ -140,20 +140,7 @@ network once and `PROTOC_PATH`, which `bench.sh` exports):
 ```
 
 Both sides must produce identical bytes before anything is timed, and both
-allocate per call. Copied from the run on Apple M4 Pro / Swift 6.4.2 /
-swift-protobuf 1.39.0 (per-run noise is a few percent); higher is better,
-MB/s over wire bytes:
-
-| payload | op | pbwire-swift-shim (MB/s, x swift-protobuf) | swift-protobuf (MB/s) |
-|---|---|---|---|
-| 136 B | encode | 861.4 (3.39x ✅) | 254.3 |
-| 136 B | decode | 533.6 (2.15x ✅) | 248.6 |
-| 174 B | encode | 698.6 (2.14x ✅) | 326.9 |
-| 174 B | decode | 521.4 (2.58x ✅) | 202.0 |
-| 2469 B | encode | 1047.8 (3.88x ✅) | 270.4 |
-| 2469 B | decode | 528.1 (2.75x ✅) | 192.3 |
-| 74913 B | encode | 923.2 (3.22x ✅) | 286.4 |
-| 74913 B | decode | 568.3 (2.49x ✅) | 227.9 |
+allocate per call.
 
 `pbwire-swift-shim` is the published entry: it times the generated
 `@frozen` `<Message>Repr` mirror with one call per op into the C layout codec (the per-field `tree` build is a `pbench/`-only arm). The wrapper adds one
@@ -161,6 +148,44 @@ Swift object per call and no copy (`encode` hands the malloc'd buffer the C
 encoder already filled to `Data` with a free deallocator, `decode` wraps the
 decoder's arena in one `Message`) —
 see [`pbench/README.md`](pbench/README.md) for the mechanism and the gate.
+
+### Swift (SwiftPM, static link) vs `apple/swift-protobuf`
+
+![Swift (SwiftPM, static link) vs apple/swift-protobuf — MB/s by tier](../../docs/charts/bench-swift-swiftpm-static-link-vs-apple-swift-protobuf.svg)
+
+| payload | op | pbwire-swift-shim (MB/s, x swift-protobuf) | swift-protobuf (MB/s) |
+|---|---|---|---|
+| 136 B | encode | 965.6 (2.12x ✅) | 454.6 |
+| 136 B | decode | 753.1 (2.98x ✅) | 252.5 |
+| 174 B | encode | 988.8 (2.91x ✅) | 340.1 |
+| 174 B | decode | 706.1 (3.45x ✅) | 204.9 |
+| 2469 B | encode | 1006.9 (3.71x ✅) | 271.6 |
+| 2469 B | decode | 532.2 (2.65x ✅) | 200.5 |
+| 74913 B | encode | 912.6 (3.20x ✅) | 285.5 |
+| 74913 B | decode | 570.9 (2.47x ✅) | 231.2 |
+
+The pbwire column is the native-in/native-out full task (formal run
+`../../results/bench-swift-20261124T102332Z.json`): `shim` runs it in one
+`encodeInPlace`/`decodeInPlace` call. The per-field `tree` arm is compared in
+`pbench/README.md`, not here. Pairing note: the formal run prints the four native
+rows without the baseline in its first case set and the native row against
+`swift-protobuf` in its second; the ratios above pair each MB/s with
+the same run's own baseline MB/s (e.g. xlarge shim 912.6 vs 285.5 = 3.20x).
+
+FFI host like Objective-C/Dart: `FileDescriptorSet` at run time, C ABI calls
+only, no wire code, no plugin. SwiftPM links `build/libpbwire.a` via
+`unsafeFlags` (so plain `swift test` works offline); the baseline is a
+separate package using swift-protobuf's own build plugin, so no generated
+code is checked in. The gate is byte parity per tier plus the pinned
+`matrix3.bin` oracle.
+
+`pbwire-swift-shim` is the published comparison: it times the generated `@frozen <Message>Repr` mirror with one
+`encodeInPlace`/`decodeInPlace` call into `../c/runtime/pbw_struct.c`
+(compiled into the package's `CPbwire` target), so no field and no ARC crosses
+per field. The shim answers
+the native-object question at 2.1-3.7x encode and 2.5-3.5x decode.
+
+The pure-Swift core port is compared in `pbench/README.md`, not here.
 
 ## The pure-Swift core
 
@@ -251,42 +276,3 @@ Known limits (same as the Objective-C wrapper):
   `.double` to a `float` field (or `.int`/`.uint` to either) converts the way
   a narrowing Swift initializer does.
 
-## Benchmarks
-
-### Swift (SwiftPM, static link) vs `apple/swift-protobuf`
-
-![Swift (SwiftPM, static link) vs apple/swift-protobuf — MB/s by tier](../../docs/charts/bench-swift-swiftpm-static-link-vs-apple-swift-protobuf.svg)
-
-| payload | op | pbwire-swift-shim (MB/s, x swift-protobuf) | swift-protobuf (MB/s) |
-|---|---|---|---|
-| 136 B | encode | 965.6 (2.12x ✅) | 454.6 |
-| 136 B | decode | 753.1 (2.98x ✅) | 252.5 |
-| 174 B | encode | 988.8 (2.91x ✅) | 340.1 |
-| 174 B | decode | 706.1 (3.45x ✅) | 204.9 |
-| 2469 B | encode | 1006.9 (3.71x ✅) | 271.6 |
-| 2469 B | decode | 532.2 (2.65x ✅) | 200.5 |
-| 74913 B | encode | 912.6 (3.20x ✅) | 285.5 |
-| 74913 B | decode | 570.9 (2.47x ✅) | 231.2 |
-
-The pbwire column is the native-in/native-out full task (formal run
-`../../results/bench-swift-20261124T102332Z.json`): `shim` runs it in one
-`encodeInPlace`/`decodeInPlace` call. The per-field `tree` arm is compared in
-`pbench/README.md`, not here. Pairing note: the formal run prints the four native
-rows without the baseline in its first case set and the native row against
-`swift-protobuf` in its second; the ratios above pair each MB/s with
-the same run's own baseline MB/s (e.g. xlarge shim 912.6 vs 285.5 = 3.20x).
-
-FFI host like Objective-C/Dart: `FileDescriptorSet` at run time, C ABI calls
-only, no wire code, no plugin. SwiftPM links `build/libpbwire.a` via
-`unsafeFlags` (so plain `swift test` works offline); the baseline is a
-separate package using swift-protobuf's own build plugin, so no generated
-code is checked in. The gate is byte parity per tier plus the pinned
-`matrix3.bin` oracle.
-
-`pbwire-swift-shim` is the published comparison: it times the generated `@frozen <Message>Repr` mirror with one
-`encodeInPlace`/`decodeInPlace` call into `../c/runtime/pbw_struct.c`
-(compiled into the package's `CPbwire` target), so no field and no ARC crosses
-per field. The shim answers
-the native-object question at 2.1-3.7x encode and 2.5-3.5x decode.
-
-The pure-Swift core port is compared in `pbench/README.md`, not here.

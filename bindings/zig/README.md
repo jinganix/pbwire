@@ -88,49 +88,6 @@ comparison harness (`benchmarks/bench_vs_baseline.zig`, `zig build
 -Dbaseline=true bench-baseline`) times both sides with shared iteration
 counts and gates every tier on byte-identical output before timing.
 
-## Threads
-
-A `Schema` is immutable once loaded, so it can be shared between threads. A
-`Message` is not thread safe on purpose: like the C core, one tree belongs to
-one thread.
-
-## Conformance
-
-`conformance/testee.zig` speaks the runner's wire protocol and covers binary,
-JSON and text (JSPB answers `skipped`); see `conformance/README.md`.
-Error-result strings carry the Zig error name rather than the core's
-`strerror` text — the runner only checks which result field is set, not the
-message. The two binary tag-truncation cases the reference C++ testee fails
-identically apply here too (same core decoder), so the shared
-`failure_list_pbwire.txt` covers this testee as well.
-
-## Layout
-
-| path | contents |
-|------|----------|
-| `runtime/pbwire.zig` | the binding: `Schema`, `MessageType`, `Field`, `Message`, `Value` over `@cImport` |
-| `core/` | pure-Zig descriptor reader, tree, wire engine, encode/decode (`-Dcore=true`) |
-| `build.zig` / `build.zig.zon` | static-libpbwire step plus `test` / `example` / `bench` / `testee` steps and the `core` option |
-| `examples/roundtrip.zig` | runnable round trip |
-| `tests/selftest.zig` | self-check (`zig build test`): oracle bytes, round trip, rejects, text/JSON |
-| `benchmarks/bench.zig` + `bench.sh` | the four standard tiers |
-| `conformance/testee.zig` | official-suite testee (binary + JSON + text, JSPB skipped); `make conformance-zig` |
-| `conformance/testee_core.zig` | binary pure-core testee (`-Dcore=true`); `make conformance-zig-core` |
-| `pbench/core_arm.zig` | the `core` pbench arm, imported by both bench harnesses |
-
-## Generated models
-
-`protoc-gen-pbwire` (in `../../codegen`) emits `<base>.zig` (structs whose
-`encode`/`decode` take an explicit `schema`) and `<base>_meta.zig` (the
-embedded descriptor set, `loadSchema`, `MESSAGE_NAMES` + `preload`).
-`--pbwire_opt=lang=zig[,model=bool][,registry=bool]` (both default `true`):
-`model=false` leaves the schema file for dynamic-only users;
-`registry=false` drops the name list and preload. Loading stays explicit
-(the caller passes the schema), so there is no implicit registry for
-`register` to gate.
-
-## Benchmarks
-
 ### Zig (static link) vs Arwalk/zig-protobuf
 
 ![Zig (static link) vs Arwalk/zig-protobuf — MB/s by tier](../../docs/charts/bench-zig-static-link-vs-arwalk-zig-protobuf.svg)
@@ -173,3 +130,46 @@ small tiers time most of), while the binding decodes into one arena; the lead
 shrinks as the payload grows and per-byte work takes over. At
 `-Doptimize=ReleaseFast` (what `bench.sh` runs) both sides sit near the core's
 pace; the default debug build is ~20x slower and is not timed.
+
+
+## Threads
+
+A `Schema` is immutable once loaded, so it can be shared between threads. A
+`Message` is not thread safe on purpose: like the C core, one tree belongs to
+one thread.
+
+## Conformance
+
+`conformance/testee.zig` speaks the runner's wire protocol and covers binary,
+JSON and text (JSPB answers `skipped`); see `conformance/README.md`.
+Error-result strings carry the Zig error name rather than the core's
+`strerror` text — the runner only checks which result field is set, not the
+message. The two binary tag-truncation cases the reference C++ testee fails
+identically apply here too (same core decoder), so the shared
+`failure_list_pbwire.txt` covers this testee as well.
+
+## Layout
+
+| path | contents |
+|------|----------|
+| `runtime/pbwire.zig` | the binding: `Schema`, `MessageType`, `Field`, `Message`, `Value` over `@cImport` |
+| `core/` | pure-Zig descriptor reader, tree, wire engine, encode/decode (`-Dcore=true`) |
+| `build.zig` / `build.zig.zon` | static-libpbwire step plus `test` / `example` / `bench` / `testee` steps and the `core` option |
+| `examples/roundtrip.zig` | runnable round trip |
+| `tests/selftest.zig` | self-check (`zig build test`): oracle bytes, round trip, rejects, text/JSON |
+| `benchmarks/bench.zig` + `bench.sh` | the four standard tiers |
+| `conformance/testee.zig` | official-suite testee (binary + JSON + text, JSPB skipped); `make conformance-zig` |
+| `conformance/testee_core.zig` | binary pure-core testee (`-Dcore=true`); `make conformance-zig-core` |
+| `pbench/core_arm.zig` | the `core` pbench arm, imported by both bench harnesses |
+
+## Generated models
+
+`protoc-gen-pbwire` (in `../../codegen`) emits `<base>.zig` (structs whose
+`encode`/`decode` take an explicit `schema`) and `<base>_meta.zig` (the
+embedded descriptor set, `loadSchema`, `MESSAGE_NAMES` + `preload`).
+`--pbwire_opt=lang=zig[,model=bool][,registry=bool]` (both default `true`):
+`model=false` leaves the schema file for dynamic-only users;
+`registry=false` drops the name list and preload. Loading stays explicit
+(the caller passes the schema), so there is no implicit registry for
+`register` to gate.
+

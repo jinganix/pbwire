@@ -136,7 +136,7 @@ loading:
 | `:max_bytes` | unset | Reject `:pbwire.decode/2` inputs larger than this many bytes, like the C core's `pbw_limits.max_bytes` (0: no cap) |
 | `:max_depth` | unset | Reject `:pbwire.decode/2` inputs nested deeper than this many messages, like `pbw_limits.max_depth` (0: built-in caps only) |
 
-## Benchmark
+## Benchmarks
 
 `benchmarks/bench.exs` measures `Pbwire` against `elixir-protobuf` (pure
 Elixir) on the same schema and payload as every other binding in this repo:
@@ -147,20 +147,6 @@ no prebuilt struct before the timer). Every backend must match byte for byte
 (encode, plus re-encoding a decoded reference) and read back field-for-field
 equal to the input struct before anything is timed.
 
-<!-- BENCHMARK_RESULTS_START -->
-Last run: 2026-11-23 (matrix3.proto, the four standard tiers; Elixir 1.20.5 / OTP 29, Apple M4 Pro)
-
-| payload | op | pbwire-elixir (MB/s, x protobuf) | protobuf (MB/s) |
-|---|---|---|---|
-| 136 B | encode | 151.1 (3.2x) | 46.8 |
-| 136 B | decode | 104.7 (1.8x) | 59.3 |
-| 174 B | encode | 154.3 (3.1x) | 49.3 |
-| 174 B | decode | 115.9 (1.9x) | 60.1 |
-| 2469 B | encode | 137.7 (2.7x) | 50.1 |
-| 2469 B | decode | 111.6 (2.0x) | 54.8 |
-| 74913 B | encode | 145.2 (2.8x) | 51.1 |
-| 74913 B | decode | 105.6 (1.8x) | 57.4 |
-
 Higher is better. Throughput in MB/s on serialized wire size.
 <!-- BENCHMARK_RESULTS_END -->
 
@@ -169,6 +155,38 @@ bookkeeping in the interpreter), so the NIF wins every cell; xlarge
 decode is the closest race (1.40x), where the struct↔tuple translation the
 Elixir half owns is most visible. Rerun with `make bench` and paste the new
 table over the block above.
+
+### Elixir (NIF over the shared core) vs `elixir-protobuf`
+
+![Elixir (NIF over the shared core) vs elixir-protobuf — MB/s by tier](../../docs/charts/bench-elixir-nif-over-the-shared-core-vs-elixir-protobuf.svg)
+
+| payload | op | pbwire-elixir (MB/s, x elixir-protobuf) | elixir-protobuf (MB/s) |
+|---|---|---|---|
+| 136 B | encode | 158.0 (3.15x ✅) | 50.1 |
+| 136 B | decode | 108.8 (1.75x ✅) | 62.2 |
+| 174 B | encode | 161.7 (3.10x ✅) | 52.2 |
+| 174 B | decode | 122.1 (1.90x ✅) | 64.4 |
+| 2469 B | encode | 151.7 (2.89x ✅) | 52.4 |
+| 2469 B | decode | 121.6 (2.05x ✅) | 59.2 |
+| 74913 B | encode | 160.4 (2.99x ✅) | 53.6 |
+| 74913 B | decode | 117.8 (1.91x ✅) | 61.7 |
+
+Same class as Erlang: the BEAM binding reuses the published `:pbwire` Hex
+NIF (the same C core as `bindings/erlang`) and owns only the struct↔tuple
+translation; `elixir-protobuf` is the schema plugin, like gpb is for Erlang, and
+its pure-Elixir rows **are** the `core` comparison for this binding. No
+second pbwire path exists here, so this single-arm section is unchanged.
+Every encode is byte-identical to `Protobuf.encode/1` and every decode reads
+back field-for-field equal to the input struct before timing; each encode
+iteration builds a fresh struct inside the timed closure (native-in full task). Formal run `../../results/bench-elixir-20261124T103901Z.json`. Known
+deliberate divergences from the oracle: NaN bit identity, unknown-field drop
+(the NIF tuple form has no storage), raise on missing `required`.
+
+The struct build is one pass over the NIF's record: the per-position field
+tables are built once per module at schema load, so a decode indexes them
+instead of walking two lists through `Tuple.to_list` + `Enum.zip` + `Enum.map`
++ a list concat. That is what lifted the xlarge decode row off the 0.99x floor
+(see the [attempts ledger](../../docs/perf-attempts.md)).
 
 ## FAQ
 
@@ -250,36 +268,3 @@ is always explicit). The Registry is per-file — qualified
 prefix, short (`Xdep.Registry`) otherwise — so two files in one package
 never share one.
 
-## Benchmarks
-
-### Elixir (NIF over the shared core) vs `elixir-protobuf`
-
-![Elixir (NIF over the shared core) vs elixir-protobuf — MB/s by tier](../../docs/charts/bench-elixir-nif-over-the-shared-core-vs-elixir-protobuf.svg)
-
-| payload | op | pbwire-elixir (MB/s, x elixir-protobuf) | elixir-protobuf (MB/s) |
-|---|---|---|---|
-| 136 B | encode | 158.0 (3.15x ✅) | 50.1 |
-| 136 B | decode | 108.8 (1.75x ✅) | 62.2 |
-| 174 B | encode | 161.7 (3.10x ✅) | 52.2 |
-| 174 B | decode | 122.1 (1.90x ✅) | 64.4 |
-| 2469 B | encode | 151.7 (2.89x ✅) | 52.4 |
-| 2469 B | decode | 121.6 (2.05x ✅) | 59.2 |
-| 74913 B | encode | 160.4 (2.99x ✅) | 53.6 |
-| 74913 B | decode | 117.8 (1.91x ✅) | 61.7 |
-
-Same class as Erlang: the BEAM binding reuses the published `:pbwire` Hex
-NIF (the same C core as `bindings/erlang`) and owns only the struct↔tuple
-translation; `elixir-protobuf` is the schema plugin, like gpb is for Erlang, and
-its pure-Elixir rows **are** the `core` comparison for this binding. No
-second pbwire path exists here, so this single-arm section is unchanged.
-Every encode is byte-identical to `Protobuf.encode/1` and every decode reads
-back field-for-field equal to the input struct before timing; each encode
-iteration builds a fresh struct inside the timed closure (native-in full task). Formal run `../../results/bench-elixir-20261124T103901Z.json`. Known
-deliberate divergences from the oracle: NaN bit identity, unknown-field drop
-(the NIF tuple form has no storage), raise on missing `required`.
-
-The struct build is one pass over the NIF's record: the per-position field
-tables are built once per module at schema load, so a decode indexes them
-instead of walking two lists through `Tuple.to_list` + `Enum.zip` + `Enum.map`
-+ a list concat. That is what lifted the xlarge decode row off the 0.99x floor
-(see the [attempts ledger](../../docs/perf-attempts.md)).

@@ -59,23 +59,50 @@ dotnet run --project examples -- ../c/tests/data/matrix3.desc   # example
 
 Needs `protoc` and NuGet access (`dotnet restore` fetches `Google.Protobuf`).
 The four tiers are small / medium / large / xlarge (the repeated fields scaled
-x0 / x1 / x100 / x3000). Copied from [BENCHMARKS.md](../../BENCHMARKS.md),
-which is the single source for all performance numbers; higher is better, MB/s
-over wire bytes. `pbwire-csharp-shim` is the published native-object entry, one call per
+x0 / x1 / x100 / x3000). `pbwire-csharp-shim` is the published native-object entry, one call per
 op (see `pbench/README.md` for the recorded deviation: the C core has no
 offset reader, so every field still crosses once); the per-field `tree` build is a
 `pbench/`-only arm (see `pbench/README.md`):
 
+#### C# vs Google.Protobuf
+
+![C# vs Google.Protobuf — MB/s by tier](../../docs/charts/bench-c-vs-google-protobuf.svg)
+
 | payload | op | pbwire-csharp-shim (MB/s, x protobuf-csharp) | protobuf-csharp (MB/s) |
-|---|---|---|---|
-| 136 B | encode | 1152.8 (2.46x ✅) | 468.6 |
-| 136 B | decode | 751.8 (1.56x ✅) | 480.7 |
-| 174 B | encode | 972.2 (2.35x ✅) | 413.1 |
-| 174 B | decode | 614.0 (1.56x ✅) | 393.8 |
-| 2469 B | encode | 623.0 (1.13x ✅) | 549.9 |
-| 2469 B | decode | 356.3 (0.75x ❌) | 472.0 |
-| 74913 B | encode | 657.6 (1.42x ✅) | 461.9 |
-| 74913 B | decode | 370.3 (0.73x ❌) | 506.3 |
+|---|---|---|---|---|
+| 136 B | encode | 957.2 (2.22x ✅) | 432.1 |
+| 136 B | decode | 745.5 (1.55x ✅) | 479.7 |
+| 174 B | encode | 747.4 (2.03x ✅) | 367.3 |
+| 174 B | decode | 617.0 (1.52x ✅) | 406.1 |
+| 2469 B | encode | 455.9 (1.09x ✅) | 417.2 |
+| 2469 B | decode | 360.5 (0.73x ❌) | 492.8 |
+| 74913 B | encode | 503.0 (1.32x ✅) | 379.8 |
+| 74913 B | decode | 383.7 (0.72x ❌) | 533.1 |
+
+The pbwire column is the native-in/native-out full task
+(`pbench/`, formal run
+`../../results/bench-csharp-20261124T102141Z.json`): `shim` runs it in one P/Invoke
+per op. The per-field `tree` arm is compared in
+`pbench/README.md`, not here.
+
+`pbwire-csharp-shim` is the shipped native-object path:
+the generated model is copied into one contiguous unmanaged image per op and
+**one** `P/Invoke` (`native/pbw_cs_shim.c`, built by
+`make csharp-shim-native`) walks it through the C layout codec, so no field
+crosses the boundary. It is above Google.Protobuf on every encode tier
+(1.09x-2.22x) and on the two small decode tiers (1.55x/1.52x). The 2469 B and
+74913 B decode rows are below the baseline (0.73x, 0.72x): the C decode itself
+is faster than the reference parser, but materialising 3000 ints, 3000 strings,
+3000 sub-messages and 3000 bools into managed objects costs more than the
+reference parser's whole run.
+
+The native `shim` rows land at ~500 MB/s encode and ~380 MB/s decode on the
+xlarge tier: by 2.5 KB the per-call boundary is invisible and the C layout
+codec plus the managed materialisation are what is being measured. That is the
+point of the schema-at-runtime design -- the binding owns ergonomics, the core
+owns the format.
+
+The pure-C# core port is compared in `pbench/README.md`, not here.
 
 Strings cross as NUL-terminated C strings, so `Set(field, string)` stops at the
 first NUL byte: use the `ReadOnlySpan<byte>` overload for binary payloads (a
@@ -168,44 +195,3 @@ P/Invoke reaches the whole core through the binding; nothing is re-implemented:
 | `MessageType.AnyPack(url, payload)`, `Message.AnyTypeUrl()`/`AnyPayload()`, `MessageType.TimestampFromMillis(ms)` (+ duration), `Message.TimestampMillis()`/`DurationMillis()`, `Message.FieldMaskPaths()` | WKT helpers |
 | `Schema.ServiceCount()`/`ServiceAt(i)`/`Service(name)`, `Schema.ResolveMethod(service, method)` | routing metadata |
 
-## Benchmarks
-
-#### C# vs Google.Protobuf
-
-![C# vs Google.Protobuf — MB/s by tier](../../docs/charts/bench-c-vs-google-protobuf.svg)
-
-| payload | op | pbwire-csharp-shim (MB/s, x protobuf-csharp) | protobuf-csharp (MB/s) |
-|---|---|---|---|---|
-| 136 B | encode | 957.2 (2.22x ✅) | 432.1 |
-| 136 B | decode | 745.5 (1.55x ✅) | 479.7 |
-| 174 B | encode | 747.4 (2.03x ✅) | 367.3 |
-| 174 B | decode | 617.0 (1.52x ✅) | 406.1 |
-| 2469 B | encode | 455.9 (1.09x ✅) | 417.2 |
-| 2469 B | decode | 360.5 (0.73x ❌) | 492.8 |
-| 74913 B | encode | 503.0 (1.32x ✅) | 379.8 |
-| 74913 B | decode | 383.7 (0.72x ❌) | 533.1 |
-
-The pbwire column is the native-in/native-out full task
-(`pbench/`, formal run
-`../../results/bench-csharp-20261124T102141Z.json`): `shim` runs it in one P/Invoke
-per op. The per-field `tree` arm is compared in
-`pbench/README.md`, not here.
-
-`pbwire-csharp-shim` is the shipped native-object path:
-the generated model is copied into one contiguous unmanaged image per op and
-**one** `P/Invoke` (`native/pbw_cs_shim.c`, built by
-`make csharp-shim-native`) walks it through the C layout codec, so no field
-crosses the boundary. It is above Google.Protobuf on every encode tier
-(1.09x-2.22x) and on the two small decode tiers (1.55x/1.52x). The 2469 B and
-74913 B decode rows are below the baseline (0.73x, 0.72x): the C decode itself
-is faster than the reference parser, but materialising 3000 ints, 3000 strings,
-3000 sub-messages and 3000 bools into managed objects costs more than the
-reference parser's whole run.
-
-The native `shim` rows land at ~500 MB/s encode and ~380 MB/s decode on the
-xlarge tier: by 2.5 KB the per-call boundary is invisible and the C layout
-codec plus the managed materialisation are what is being measured. That is the
-point of the schema-at-runtime design -- the binding owns ergonomics, the core
-owns the format.
-
-The pure-C# core port is compared in `pbench/README.md`, not here.

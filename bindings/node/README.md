@@ -192,7 +192,7 @@ node bindings/node/pbench/gate.js    # bytes + field-by-field decode, PASS/exit 
 node bindings/node/pbench/compare.js # interleaved arms + baselines, median of 5
 ```
 
-## Benchmark
+## Benchmarks
 
 `benchmarks/bench.sh` generates `matrix3_pb.js` with `protoc-gen-js`, installs
 [protobufjs](https://www.npmjs.com/package/protobufjs) (the
@@ -206,17 +206,6 @@ native-object task (plain object in, wire out; wire in, plain object out):
 ./benchmarks/bench.sh      # or: make node-bench
 ```
 
-| payload | op | pbwire-node-shim (MB/s, x protobufjs) | protobufjs (MB/s) |
-|---|---|---|---|
-| 136 B | encode | 52.0 (0.20x ❌) | 255.1 |
-| 136 B | decode | 63.3 (0.15x ❌) | 409.8 |
-| 174 B | encode | 55.7 (0.20x ❌) | 273.1 |
-| 174 B | decode | 47.3 (0.12x ❌) | 407.7 |
-| 2469 B | encode | 54.9 (0.13x ❌) | 429.6 |
-| 2469 B | decode | 49.0 (0.11x ❌) | 435.5 |
-| 74913 B | encode | 60.1 (0.12x ❌) | 515.6 |
-| 74913 B | decode | 54.7 (0.12x ❌) | 437.9 |
-
 The `shim` row is the native object in and out and it trails protobufjs:
 each field costs one N-API object property read (encode) or write (decode),
 ~60-70 ns, where protobufjs pays a few ns in its own heap. It is the shipped
@@ -227,48 +216,6 @@ Two boundary costs decide the small tiers: N-API's own
 buffer and copies into a JS-allocated (pooled) `Buffer` of the exact size, and
 decode copies the payload once with `Buffer.from` instead of paying for a
 per-message finalizer.
-
-## Deliberate skips
-
-- **No protoc plugin / code generation.** The schema is always loaded at run
-  time, like the Python binding: a `FileDescriptorSet` is the only schema
-  source, and there is no generated layout to keep in sync.
-Also exported: JSON/text format (`messageToJson`/`jsonToMessage` — the latter
-with an optional ignore-unknown flag, `messageToText`/`textToMessage` — the
-former with an optional print-unknown flag), field presence (`has`), and
-delimited framing (`encodeDelimited`/`decodeDelimited`, returning
-`{message, read}` so concatenated frames decode in a loop).
-See `test/test_pbwire.js`.
-
-## Conformance
-
-`conformance/testee.js` drives the official `conformance_test_runner`
-through this binding (`make conformance-node`):
-
-```
-CONFORMANCE SUITE PASSED: 2750 successes, 0 skipped, 2 expected failures,
-0 unexpected failures.
-CONFORMANCE SUITE PASSED: 443 successes, 0 skipped, 0 expected failures,
-0 unexpected failures.
-```
-
-Binary input decodes to a tree (unknown fields survive, oneof collapses to
-the last member) and every output renders that same tree; JSON input with
-unknown fields only parses when the test category asks to ignore them, and
-text output honors the runner's `print_unknown_fields` flag. The 2 expected
-failures are the shared `conformance/failure_list_pbwire.txt` (tag varints
-the reference C++ testee truncates identically); only JSPB answers `skipped`.
-
-## Generated models
-
-`protoc-gen-pbwire` (in `../../codegen`) generates `matrix3.d.ts` interfaces
-(for TypeScript) and a JSDoc/`@ts-check` `.js` with the same shapes plus the enum
-constants, describing exactly the plain objects `MessageType.encode()` accepts
-and `Message.get()` returns. The committed output is `tests/gen/` and
-`examples/gen/`; the generated test type-checks with `tsc --strict --checkJs`.
-See `../../codegen/README.md`.
-
-## Benchmarks
 
 #### Node vs protobufjs
 
@@ -322,3 +269,44 @@ What the gap is made of, and what the optimization pass changed:
 - Field facts are resolved once per descriptor into a cached table (name hash,
   direct number index, wire type, label, oneof, closed enum), so the scan and
   the accessors never walk the descriptor.
+
+## Deliberate skips
+
+- **No protoc plugin / code generation.** The schema is always loaded at run
+  time, like the Python binding: a `FileDescriptorSet` is the only schema
+  source, and there is no generated layout to keep in sync.
+Also exported: JSON/text format (`messageToJson`/`jsonToMessage` — the latter
+with an optional ignore-unknown flag, `messageToText`/`textToMessage` — the
+former with an optional print-unknown flag), field presence (`has`), and
+delimited framing (`encodeDelimited`/`decodeDelimited`, returning
+`{message, read}` so concatenated frames decode in a loop).
+See `test/test_pbwire.js`.
+
+## Conformance
+
+`conformance/testee.js` drives the official `conformance_test_runner`
+through this binding (`make conformance-node`):
+
+```
+CONFORMANCE SUITE PASSED: 2750 successes, 0 skipped, 2 expected failures,
+0 unexpected failures.
+CONFORMANCE SUITE PASSED: 443 successes, 0 skipped, 0 expected failures,
+0 unexpected failures.
+```
+
+Binary input decodes to a tree (unknown fields survive, oneof collapses to
+the last member) and every output renders that same tree; JSON input with
+unknown fields only parses when the test category asks to ignore them, and
+text output honors the runner's `print_unknown_fields` flag. The 2 expected
+failures are the shared `conformance/failure_list_pbwire.txt` (tag varints
+the reference C++ testee truncates identically); only JSPB answers `skipped`.
+
+## Generated models
+
+`protoc-gen-pbwire` (in `../../codegen`) generates `matrix3.d.ts` interfaces
+(for TypeScript) and a JSDoc/`@ts-check` `.js` with the same shapes plus the enum
+constants, describing exactly the plain objects `MessageType.encode()` accepts
+and `Message.get()` returns. The committed output is `tests/gen/` and
+`examples/gen/`; the generated test type-checks with `tsc --strict --checkJs`.
+See `../../codegen/README.md`.
+
