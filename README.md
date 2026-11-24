@@ -250,8 +250,8 @@ several host languages, or when libprotobuf must not be in the process. Pick
 generated code only when the schema never changes *and* you accept a codegen
 step: even then the one-call path wins or ties most published encode cells
 — the exceptions are the managed per-call builds (Clojure 0.26x
-on the fresh-build task), Lua's run-to-run tie (0.99x) and Node's `shim`
-(0.18x) — while the in-process `pbw_ctx` wins every tier of the
+on the fresh-build task), Lua's run-to-run tie (0.98x) and Node's `shim`
+(0.19x) — while the in-process `pbw_ctx` wins every tier of the
 core benchmark and the C struct codec wins every tier of its own.
 
 ## Contributing
