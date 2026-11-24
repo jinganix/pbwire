@@ -220,9 +220,9 @@ The per-field `tree` build is a `pbench/`-only arm (see [`pbench/README.md`](pbe
 
 The `shim` row is the native-object path from `pbench/`: one C-extension entry
 walks a generated model's instance variables and fills the tree
-(`encode_object`), or materializes the generated model classes in C
-(`decode_object`). It removes the Ruby-side per-field loop; encode leads on every tier (2.19x-4.87x), while decode stays below the gem, whose generated object already owns
-C-backed storage and whose decode stays lazy. See
+(`encode_object`), or runs one layout-table tag scan straight into the generated
+model classes (`decode_object`). It removes the Ruby-side per-field loop; it leads
+on every tier on both ops (2.25x-5.00x encode, 5.56x-6.02x decode). See
 [`pbench/README.md`](pbench/README.md) for the arms, gate and verdict.
 
 | arm | mechanism | status |
@@ -237,14 +237,14 @@ C-backed storage and whose decode stays lazy. See
 
 | payload | op | pbwire-ruby-shim (MB/s, x gem) | gem (MB/s) |
 |---|---|---|---|
-| 136 B | encode | 99.4 (2.29x ✅) | 43.5 |
-| 136 B | decode | 145.5 (0.59x ❌) | 247.3 |
-| 174 B | encode | 108.5 (3.53x ✅) | 30.7 |
-| 174 B | decode | 155.1 (0.60x ❌) | 257.7 |
-| 2469 B | encode | 86.6 (4.63x ✅) | 18.7 |
-| 2469 B | decode | 143.4 (0.29x ❌) | 493.6 |
-| 74913 B | encode | 97.4 (4.97x ✅) | 19.6 |
-| 74913 B | decode | 154.9 (0.23x ❌) | 661.8 |
+| 136 B | encode | 95.3 (2.25x ✅) | 42.4 |
+| 136 B | decode | 121.5 (5.87x ✅) | 20.7 |
+| 174 B | encode | 106.2 (3.43x ✅) | 31.0 |
+| 174 B | decode | 136.0 (5.99x ✅) | 22.7 |
+| 2469 B | encode | 89.4 (4.71x ✅) | 19.0 |
+| 2469 B | decode | 151.2 (5.56x ✅) | 27.2 |
+| 74913 B | encode | 99.5 (5.00x ✅) | 19.9 |
+| 74913 B | decode | 180.0 (6.02x ✅) | 29.9 |
 
 Ruby is a C extension over the same core, so this is C extension against C
 extension. The first version drove the same C ABI through stdlib Fiddle and lost
@@ -255,18 +255,20 @@ boundary, added the repeated-field payload (so the xlarge tier is 3000 nested
 messages, not one 74 KB string), and split the message into two representations.
 The pbwire column is the native-in/native-out full task
 (`pbench/`), formal run
-`../../results/bench-ruby-20261124T135903Z.json`:
+`../../results/bench-ruby-20261124T172802Z.json`:
 
 - **`shim` (native object in and out).** `type.encode_object(obj)` walks the
 generated model inside C in one entry call and fills a pbw tree; `decode_object`
-decodes once and materializes the generated model classes in C. It is the
-published comparison on both ops (2.19x-4.87x encode / 0.24x-0.61x decode vs the gem) and the
-simplest -- one extension call removes the Ruby per-field loop. Encode leads
+runs one layout-table tag scan straight into the generated model classes, with
+no intermediate tree and no per-field API. It is the
+published comparison on both ops (2.25x-5.00x encode / 5.56x-6.02x decode vs the gem) and the
+simplest -- one extension call removes the Ruby per-field loop. Both sides
+observe the full payload on decode: the shim entry materializes every repeated
+element and nested model before it returns, while the gem arm folds the same
+fields (every repeated element) through its accessors into a live sink -- a bare
+gem parse on its own would time a shallower task. Encode leads
 on every tier: both sides build the model fresh per iteration, and one C walk
-from Ruby ivars beats the gem's object fill -- while decode stays
-below the gem: the gem's generated object already owns C-backed storage (and
-its decode stays lazy), while this row builds a C tree from Ruby ivars and
-materializes every model and array. The per-field `tree` arm is compared in
+from Ruby ivars beats the gem's object fill. The per-field `tree` arm is compared in
 `pbench/README.md`, not here.
 
 The old `tree` headline is retired: the published row is the native-object
