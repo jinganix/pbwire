@@ -20,8 +20,10 @@ POST /pb/<service>/<method>
 - `<service>` is the fully qualified proto service name
   (`<package>.<Service>`, e.g. `shop.OrderService`).
 - `<method>` is the proto `rpc` name exactly as declared (case-sensitive).
-- Request body: binary-encoded input message (`Content-Type: application/proto`).
+- Request body: raw binary protobuf body (Content-Type unset in v1).
 - Response body: binary-encoded output message.
+- `Accept: application/json` returns JSON mapping.
+- Errors are HTTP status + plain-text body.
 - Runtime schema entry is always `FileDescriptorSet` bytes.
   Later tasks load `tools/pbnginx/gateway_svc.desc` (generated with
   `--include_imports`, so it embeds `shop.Order`/`shop.Item` via the
@@ -38,6 +40,12 @@ POST /pb/<service>/<method>
 Generated from `examples/` with
 `protoc --encode=<type> gateway.proto` (fixture `gateway.desc` verified
 byte-identical via `cd examples && protoc --descriptor_set_out=... gateway.proto`).
+
+Canonical overlay command (run from repo root so the import resolves):
+
+```sh
+protoc --include_imports --descriptor_set_out=tools/pbnginx/gateway_svc.desc tools/pbnginx/gateway_svc.proto
+```
 
 `shop.Order` (`id: "ord-1"`, one `Item(sku-9, 3)`, `attrs{color:red}`,
 `status: PLACED` — exercises nested message + map + enum):
