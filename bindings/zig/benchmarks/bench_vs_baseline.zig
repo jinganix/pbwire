@@ -522,8 +522,13 @@ fn runCase(io: std.Io, alloc: std.mem.Allocator, ty: *const pbwire.MessageType, 
             consumeTree(&d, ff);
         }
         fn encBase() void {
-            var base_fresh = fillBase(ga, nn) catch unreachable;
-            defer base_fresh.deinit(ga);
+            // fillBase borrows string literals and owns only the repeated
+            // appends, so (like the gate's tier arena) a per-iteration arena
+            // owns the build and is dropped whole: never deinit a message
+            // whose strings it does not own.
+            var ba: std.heap.ArenaAllocator = .init(ga);
+            defer ba.deinit();
+            var base_fresh = fillBase(ba.allocator(), nn) catch unreachable;
             _ = sa.reset(.retain_capacity);
             var w: std.Io.Writer = .fixed(b);
             base_fresh.encode(&w, sa.allocator()) catch unreachable;

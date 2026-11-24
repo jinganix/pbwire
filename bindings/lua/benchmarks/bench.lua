@@ -14,10 +14,12 @@
 -- never the headline. Every timed encode builds a fresh table per iteration
 -- (no prebuilt table before the timer); decode inputs share the tier wire.
 --
--- Both sides build the same message and must produce identical bytes before
--- anything is timed (the pbench gate does this too; this is the last guard
--- before a number). Like the other harnesses it calibrates from the floor
--- until one pass takes 0.25 s, warms up, then reports the best of 3 passes.
+-- Both sides build the same message. pbwire's own arms must produce identical
+-- bytes (gated before timing); the lua-protobuf baseline writes fields in
+-- table hash order, so its gate is the logical payload (its bytes decode to
+-- the same gate-checked fields), not raw byte equality. Like the other
+-- harnesses it calibrates from the floor until one pass takes 0.25 s,
+-- warms up, then reports the best of 3 passes.
 --
 --   ./bench.sh
 
@@ -161,15 +163,19 @@ for _, c in ipairs(cases) do
     if has_pb then
         local pbwire_bytes = pb.encode(MSG, tbl)
         assert(#pbwire_bytes == want, name .. ": baseline size")
-        -- Full-flow gate: baseline must carry the same payload. Byte
-        -- equality is required where the encoder is deterministic; nested
-        -- tables stay ordered arrays so field order is stable.
-        assert(pbwire_bytes == wire, name .. ": baseline bytes differ")
-        local pbback = pb.decode(MSG, wire)
-        assert(pbback.str == "hello" and #pbback.inners == repeats,
-               name .. ": baseline decode")
-        assert(#pbback.nums == repeats and #pbback.tags == repeats,
-               name .. ": baseline repeated counts")
+        -- Full-flow gate: lua-protobuf writes fields in table hash order,
+        -- not field-number order, so raw bytes are never identical. Gate on
+        -- the logical payload instead: baseline bytes must decode (through
+        -- pbwire itself) to the same gate-checked fields.
+        local pbback = shim_decode(pbwire_bytes)
+        assert(pbback.str == "hello" and pbback.inner.name == "kid"
+               and #pbback.nums == repeats and #pbback.tags == repeats
+               and #pbback.inners == repeats and #pbback.flags == repeats,
+               name .. ": baseline payload differs")
+        if repeats > 0 then
+            assert(pbback.inners[repeats].value == repeats,
+                   name .. ": baseline repeated tail")
+        end
     end
 
     -- Fresh table per timed encode iteration on every arm (no prebuilt
