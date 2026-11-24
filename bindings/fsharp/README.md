@@ -105,7 +105,12 @@ decode tiers (1.57x/1.50x). The 2469 B and 74913 B decode rows are below the
 baseline (0.81x, 0.74x): the C decode itself is faster than the reference
 parser, but materialising 3000 ints, 3000 strings, 3000 sub-messages and 3000
 bools into managed objects costs more than the reference parser's whole run.
-These F# rows are native-in/native-out rows.
+These F# rows are native-in/native-out rows. Read the ratios, not the
+absolutes, across runs: the absolutes move with the host (xlarge shim decode
+reads 376.0 MB/s on one host, 340.6 MB/s on a slower one) while the in-run
+ratio to the same-run baseline is the metric (0.74x both times); likewise
+the large-decode 0.73x -> 0.81x jump is harness noise-band width on byte-
+identical `Matrix3Shim.Unmarshal` code, not a code change.
 
 
 Every tier is gated before timing: the official bytes must land on the pinned

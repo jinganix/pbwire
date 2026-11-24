@@ -1614,7 +1614,7 @@ generated `ReadImage` calls it at all four string sites (singular, optional,
 repeated, oneof). Behaviour-identical by construction, pinned by new T7
 struct-path edge tests in `bindings/csharp/generated/GeneratedTest.cs`
 (last-wins, sub-message merge, oneof reset, packed/unpacked/mixed, malformed
-throws, non-ASCII round-trip through the fallback, unknown skip, empty
+throws, invalid UTF-8 parity, non-ASCII round-trip through the fallback, unknown skip, empty
 input); the suite is green before and after.
 
 Formal `make csharp-bench` (`results/bench-csharp-20261124T191013Z.json`):

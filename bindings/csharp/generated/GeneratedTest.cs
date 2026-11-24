@@ -279,6 +279,16 @@ static byte[] LF7(int fnum, byte[] payload) => Cat7(Tag7(fnum, 2), Len7(payload)
     var snow = new Scalars3 { Str = "h\u00e9llo \u2603" };
     var snowBack = Scalars3.Scalars3Layout.Unmarshal(Scalars3.Scalars3Layout.Marshal(snow));
     Check(snowBack.Str == snow.Str, "T7 non-ASCII string round-trips");
+    // Invalid UTF-8 in a string field throws on both sides (parity: the C
+    // struct codec validates proto3 strings like the reference parser, so
+    // the ImageText fallback never sees these bytes from the wire).
+    var badStr = new byte[] { 0xff, 0xfe };
+    var badWire = Cat7(Tag7(14, 2), Len7(badStr), badStr);
+    var shimThrew = false;
+    try { Scalars3.Scalars3Layout.Unmarshal(badWire); } catch (Pbwire.PbwireException) { shimThrew = true; }
+    var officialThrew = false;
+    try { Oracle::Structtest.Scalars3.Parser.ParseFrom(badWire); } catch (InvalidProtocolBufferException) { officialThrew = true; }
+    Check(shimThrew && officialThrew, "T7 invalid UTF-8 throws on both sides");
     // Empty wire is the default message.
     Check(Scalars3.Scalars3Layout.Unmarshal(Array.Empty<byte>()).Equals(new Scalars3()), "T7 empty decodes to default");
 }

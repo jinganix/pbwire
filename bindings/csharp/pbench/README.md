@@ -300,10 +300,12 @@ native calls on the xlarge tier -- so the helper decodes pure-ASCII runs
 (every bench string) with a fused NUL/ASCII scan plus `string.Create`
 widening and falls back to the runtime decoder otherwise; generated
 `ReadImage` calls it at all four string sites. Byte- and value-identical by
-construction, and the new T7 block in `generated/GeneratedTest.cs` pins the
+construction, and the new T7 block in `generated/GeneratedTest.cs` (13 new
+Checks; 55 suite total) pins the
 struct path's edge semantics in the same commit: last-wins, sub-message
 merge, oneof reset, packed/unpacked/mixed repetition, truncated and
-overrunning input throwing loudly, non-ASCII round-trip through the fallback,
+overrunning input throwing loudly, invalid UTF-8 throwing on both sides,
+non-ASCII round-trip through the fallback,
 and empty input decoding to default.
 
 Two rules the tests pin, following the Ruby/PHP tasks: a packed run for a
@@ -316,8 +318,10 @@ the limits live in the shared C codec and are covered by its own tests.
 
 Formal `make csharp-bench` is
 `results/bench-csharp-20261124T191013Z.json`: xlarge `shim` decode 0.70x ->
-0.77x, large 0.76x -> 0.77x, small/medium decode inside their band; encode
-untouched (decode-only change). `make fsharp-bench`
+0.77x, large 0.76x -> 0.77x, small/medium decode inside their band. Encode is
+untouched by the change (decode-only helper), so its ratios moved only with
+the baseline between runs (C# xlarge encode 1.30x -> 1.32x, F# 1.28x ->
+1.37x). `make fsharp-bench`
 (`results/bench-fsharp-20261124T191738Z.json`) rides the same runtime and
 sits at 0.74x, inside harness noise of its 0.74x. The remaining gap is the
 double materialisation the 05b verdict already recorded (wire -> arena/image
