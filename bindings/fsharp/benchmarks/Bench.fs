@@ -249,7 +249,6 @@ let main argv =
                         if not (treeFieldsOk back reference n) then
                             fail label "pbwire-fsharp-tree field compare differs"
                         else
-                            let official = fillOfficial n
                             // Tier line shows the proxy op's count; the floor calibration
                             // stays on the prebuilt op so the slower tree op never
                             // inflates any row. Every op calibrates on its own count.
@@ -269,10 +268,14 @@ let main argv =
                                     use d = Pbwire.parse ty reference
                                     sink <- sink + consumeTree d n)
 
-                            let shimEncodeNs, _ = measure floor (fun () -> Matrix3Shim.Marshal native |> ignore)
+                            // Headline encode rows are the fresh task: build a fresh native
+                            // input per iteration inside the timer, encode, release inside
+                            // the timer. Decode rows already allocate a fresh output per
+                            // iteration; kept as is.
+                            let shimEncodeNs, _ = measure floor (fun () -> Matrix3Shim.Marshal (Matrix3Shim.New n) |> ignore)
                             let shimDecodeNs, _ = measure floor (fun () -> Matrix3Shim.Unmarshal reference |> ignore)
 
-                            let officialEncodeNs, _ = measure floor (fun () -> official.ToByteArray() |> ignore)
+                            let officialEncodeNs, _ = measure floor (fun () -> (fillOfficial n).ToByteArray() |> ignore)
                             let officialDecodeNs, _ =
                                 measure floor (fun () -> Scalars3.Parser.ParseFrom reference |> ignore)
 

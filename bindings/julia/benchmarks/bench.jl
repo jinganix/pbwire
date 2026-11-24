@@ -17,10 +17,11 @@ using Printf
 # fully materialized decode_dict out. All sides must produce identical bytes
 # before anything is timed.
 #
-# Steady-state carve-out (disclosed): `shim`/`core` time the one-downcall op
-# on the app-owned native input (layout image / Dict) held across iterations,
-# the same shape `make julia-bench` has always timed; only `tree` rebuilds
-# its native input per iteration.
+# Fresh-task headline (disclosed): `shim` encode builds a fresh layout image
+# per iteration inside the timer, like `tree` rebuilds its Message; the
+# baseline encode builds a fresh ProtoBuf.jl message per iteration. `core`
+# keeps the steady-state shape (one-downcall op on the held Dict) beside the
+# fresh rows; `proxy`/`dec+ctx` stay prebuilt, never the headline.
 #
 # The baseline is JuliaIO/ProtoBuf.jl with generated code
 # (`benchmarks/oracle/.../matrix3_pb.jl`, produced by `protojl("matrix3.proto",
@@ -215,7 +216,7 @@ function main(args::Vector{String})
         close(probe)
         sink[] == typemax(Int64) && error("unreachable sink guard")
 
-        shim_enc = measure(floor, () -> shim_encode(payload))
+        shim_enc = measure(floor, () -> shim_encode(layout_payload(ls, n)))
         shim_dec = measure(floor, () -> shim_decode(got, payload))
         core_enc = measure(floor, () -> core_marshal(core_obj))
         core_dec = measure(floor, () -> core_unmarshal(got))
@@ -240,7 +241,7 @@ function main(args::Vector{String})
                 println()
                 continue
             end
-            benc = measure(floor, () -> baseline_encode(ref))
+            benc = measure(floor, () -> baseline_encode(baseline_message(n)))
             bdec = measure(floor, () -> baseline_decode(got))
             row("protobuf-jl", "encode", want, benc)
             row("protobuf-jl", "decode", want, bdec)

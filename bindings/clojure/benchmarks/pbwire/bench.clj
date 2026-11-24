@@ -224,21 +224,23 @@
                   ;; task, relabelled, not re-measured as a new task.
                   ;; Calibration stays per-op (measure-all): the fast proxy ops
                   ;; keep their own count and never inflate the tree rows.
-                  (let [data-msg (pb/new-message ty)
-                        _ (pb/fill-message! data-msg data)
-                        tier-count (calibrate #(gen/encode-structtest-scalars3
+                  (let [tier-count (calibrate #(gen/encode-structtest-scalars3
                                                  (payload n)) floor)
                         res (measure-all floor
                               [#(gen/encode-structtest-scalars3 (payload n))
-                               #(pb/encode-message data-msg)
+                               #(let [m (pb/new-message ty)]
+                                  (try
+                                    (pb/fill-message! m (payload n))
+                                    (pb/encode-message m)
+                                    (finally (pb/close! m))))
                                #(gen/encode-structtest-scalars3 data)
-                               #(.toByteArray official)
+                               #(let [^Matrix3$Scalars3 fresh__ (official-message n)]
+                                  (.toByteArray fresh__))
                                #(consume-tree ty reference n)
                                #(consume-core ty reference n)
                                #(gen/decode-structtest-scalars3 reference)
                                #(structtest.Matrix3$Scalars3/parseFrom
                                  ^bytes reference)])]
-                    (pb/close! data-msg)
                     (println (str label ": " (count reference) " bytes, "
                                   tier-count " iterations (repeat field x" n ")"))
                     (println (format "  %-18s %-7s %12s %10s"

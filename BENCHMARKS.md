@@ -87,12 +87,13 @@ JNI ceiling -- lives in the same place.
 
 Timer boundary (all bindings): a fresh native object per iteration, allocation
 and `free`/`close` inside the timer, deep materialization of every
-gate-checked field. Plain-data fixtures may be reused across iterations
-(fixture-reuse ruling, `docs/perf-attempts.md` Python worker D3); reused
+gate-checked field. Headline encode arms build that input fresh inside the
+timer on both sides (new + set + encode, the real scenario); reused
 encode buffers stay allowed only where the harness already does it and says
-so. The `shim` encode arms may reuse app-owned native input across
-iterations (the steady-state carve-out: the boundary price is their question,
-not the build price); the `tree` arm always builds fresh.
+so. A steady-state reference row (app-owned input reused across iterations)
+may stay in a harness labeled as such, but it is never the pasted headline.
+Plain-data fixtures may be reused across iterations
+(fixture-reuse ruling, `docs/perf-attempts.md` Python worker D3).
 
 The Python harness names its ops by the task as well as the representation
 (`encode(data)`, `decode(bytes)`, `to_dict(bytes)`): a

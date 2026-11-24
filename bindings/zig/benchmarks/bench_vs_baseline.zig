@@ -13,9 +13,12 @@
 //! reuse the harness always had. The `proxy` rows are the old prebuilt shape
 //! (a held handle's `encodeInto`, decode-and-drop with no materialization),
 //! relabelled not re-measured as a new task: same-run timing only, never the
-//! headline. `shim`/`core` keep the steady-state shape: the app-owned mirror
-//! image (plus the plan's decode arena) and the prebuilt core tree live
-//! across iterations. Prints one block per case in the repo-wide harness
+//! headline. The headline `shim` encode arms build a fresh native input per
+//! iteration inside the timer (fresh mirror / fresh generated struct, encode,
+//! free); encode still reuses one caller buffer each side (plus a retained
+//! scratch arena for the baseline), the same reuse the harness always had.
+//! `core` keeps the steady-state shape: the prebuilt core tree lives across
+//! iterations. Prints one block per case in the repo-wide harness
 //! format, with `base` rows and a `-- vs baseline` line like the other
 //! bindings.
 //!
@@ -519,9 +522,11 @@ fn runCase(io: std.Io, alloc: std.mem.Allocator, ty: *const pbwire.MessageType, 
             consumeTree(&d, ff);
         }
         fn encBase() void {
+            var base_fresh = fillBase(ga, nn) catch unreachable;
+            defer base_fresh.deinit(ga);
             _ = sa.reset(.retain_capacity);
             var w: std.Io.Writer = .fixed(b);
-            bm.encode(&w, sa.allocator()) catch unreachable;
+            base_fresh.encode(&w, sa.allocator()) catch unreachable;
             std.mem.doNotOptimizeAway(w.end);
         }
         fn decBase() void {
@@ -531,7 +536,9 @@ fn runCase(io: std.Io, alloc: std.mem.Allocator, ty: *const pbwire.MessageType, 
             std.mem.doNotOptimizeAway(&d);
         }
         fn encShim() void {
-            const out = plan.encodeInPlace(image) catch unreachable;
+            var fixture = fillShim(ga, nn) catch unreachable;
+            defer fixture.deinit(ga);
+            const out = plan.encodeInPlace(&fixture.image) catch unreachable;
             std.mem.doNotOptimizeAway(out);
         }
         fn decShim() void {

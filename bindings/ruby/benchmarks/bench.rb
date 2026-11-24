@@ -18,8 +18,9 @@
 #   pbwire-ruby-shim   the same model in and out in one C-extension entry per
 #                        op: encode_object walks the model's ivars in C,
 #                        decode_object materializes the models in C. Encode
-#                        reuses the app-owned model across iterations (the
-#                        steady-state carve-out); decode materializes a fresh
+#                        builds a fresh model per iteration inside the timer
+#                        (message preparation included), on both sides; decode
+#                        materializes a fresh
 #                        model per call inside the timer. Shim decode carries
 #                        no Ruby-side folding sink by design: type_decode_object
 #                        (bindings/ruby/ext/pbwire_ext/pbwire_ext.c) always runs
@@ -301,7 +302,9 @@ CASES.each do |label, repeats, want, iterations|
   end
   puts "OK   #{label} encoding parity (#{reference.bytesize} bytes)"
 
-  official = fill_official(repeats)
+  # Headline encodes build a fresh model per iteration inside the timer
+  # (message preparation included), on both sides. Proxy rows stay on
+  # their prebuilt handles.
   # The count is calibrated on the prebuilt proxy op: every op calibrates
   # independently from the floor, and the proxy op stays first so the printed
   # count matches the old rows. Proxy rows are the old prebuilt task relabelled,
@@ -309,8 +312,8 @@ CASES.each do |label, repeats, want, iterations|
   ns, count = measure(iterations,
                        'proxy_encode' => -> { message.encode },
                        'tree_encode' => -> { Pbwire::Gen::Structtest_Scalars3.encode(fill_model(repeats)) },
-                       'shim_encode' => -> { shim_type.encode_object(model) },
-                       'gem_encode' => -> { Structtest::Scalars3.encode(official) },
+                       'shim_encode' => -> { shim_type.encode_object(fill_model(repeats)) },
+                       'gem_encode' => -> { Structtest::Scalars3.encode(fill_official(repeats)) },
                        'proxy_decode' => -> { decoder.decode(reference).close },
                        'tree_decode' => -> { consume_tree(Pbwire::Gen::Structtest_Scalars3.decode(reference), repeats) },
                        'shim_decode' => -> { shim_type.decode_object(reference, MODEL_CLASSES) }, # eager: type_decode_object materializes every field in C before return (see header), so no folding sink is needed

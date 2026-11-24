@@ -278,9 +278,9 @@ object Bench {
                       val tierCount = calibrate(() => freshEncode(ty, n), count)
                       val res = measureAll(count, Seq(
                         () => freshEncode(ty, n),
-                        () => matrix3Gen.Structtest_Scalars3.encode(model),
+                        () => matrix3Gen.Structtest_Scalars3.encode(fillGenerated(n)),
                         () => message.encode(),
-                        () => official.toByteArray,
+                        () => fillOfficial(n).toByteArray,
                         () => consumeTree(ty, reference, n),
                         () => matrix3Gen.Structtest_Scalars3.decode(reference),
                         () => ty.decode(reference).close(),

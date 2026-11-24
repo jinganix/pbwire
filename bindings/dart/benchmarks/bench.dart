@@ -11,10 +11,10 @@
 // one `get` per field into a live sink, `close()`. The `pbwire-dart-proxy` row
 // keeps the old prebuilt shape (a held handle's `encode()`, one-shot
 // decode-and-close with no materialization), relabelled not re-measured, never
-// the headline. `pbwire-dart-shim` is the generated flat `Struct` image read in
-// place by the C reader (one FFI call each); its app-owned image is reused
-// across iterations (steady-state carve-out, disclosed here), as is the core
-// arm's prebuilt `Msg` tree.
+// the headline. The headline encode rows (`shim`, `core`, `protobuf-dart`) are
+// the fresh task: build a fresh native input per iteration inside the timer,
+// encode, release inside the timer. Decode rows already produce a fresh output
+// per iteration; kept as is.
 //
 //   ./bench.sh          generate, build, run
 
@@ -141,7 +141,6 @@ void main(List<String> args) {
     }
     stdout.writeln('OK   $label encoding parity, x$n (${reference.length} bytes)');
 
-    final official = _fillOfficial(n);
     // Tier line shows the fast prebuilt op's count; the slower full-task tree
     // op keeps the floor (re-calibrating on it would inflate every row's
     // iteration count and the run time).
@@ -168,15 +167,27 @@ void main(List<String> args) {
     // materialization), never the headline.
     final proxyEncode = _measure(count, () => message.encode());
     final proxyDecode = _measure(count, () => ty.decode(reference)..close());
-    final coreEncode = _measure(count, () => coreType.encode(coreMsg));
+    final coreEncode = _measure(count, () {
+      final freshCore = core.fromObject(coreType.def, _corePayload(n));
+      coreType.encode(freshCore);
+    });
     final coreDecode = _measure(count, () => coreType.decode(reference));
     final out = calloc<ffi.Uint8>(ffi.sizeOf<model.Scalars3Layout>()).cast<model.Scalars3Layout>();
     final decodeArena = PbwArena(reference.length);
     double shimEncode;
     double shimDecode;
     try {
-      // Same count as the tree row, so the two codec rows share a loop shape.
-      shimEncode = _measure(count, () => PbwireLayout.encode(image, imageType));
+      // Headline encode rows are the fresh task: a fresh native input per
+      // iteration inside the timer, encoded and released inside the timer.
+      shimEncode = _measure(count, () {
+        final arena = Arena();
+        try {
+          final freshImage = _fillLayout(arena, n);
+          PbwireLayout.encode(freshImage, imageType);
+        } finally {
+          arena.releaseAll();
+        }
+      });
       shimDecode = _measure(count, () {
         PbwireLayout.decodeInto(reference, out, imageType, decodeArena);
       });
@@ -185,7 +196,7 @@ void main(List<String> args) {
       calloc.free(out);
     }
     // The decoded image must expose the same fields the tree decode checks.
-    final officialEncode = _measure(count, () => official.writeToBuffer());
+    final officialEncode = _measure(count, () => _fillOfficial(n).writeToBuffer());
     final officialDecode = _measure(count, () => proto.Scalars3.fromBuffer(reference));
 
     stdout.writeln('$label: ${reference.length} bytes, $tierCount iterations (repeat field x$n)');
@@ -380,7 +391,8 @@ Message _fillPbwire(Type ty, Type innerTy, int n) {
 }
 
 /// The shim arm's native object: one Scalars3 flat image, with its strings and
-/// arrays allocated in [arena] (the image is reused across the timed calls).
+/// arrays allocated in [arena] (the gate builds one image in the tier arena;
+/// the timer rebuilds it fresh per iteration and releases the arena).
 ffi.Pointer<model.Scalars3Layout> _fillLayout(Arena arena, int n) {
   final image = arena
       .allocate<ffi.Uint8>(ffi.sizeOf<model.Scalars3Layout>())

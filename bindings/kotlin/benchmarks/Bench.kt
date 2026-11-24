@@ -275,9 +275,9 @@ fun main(args: Array<String>) {
                 val tierCount = calibrate({ fillPbwire(ty, n).use { it.encode() } }, count)
                 val res = measureAll(count, listOf(
                     { fillPbwire(ty, n).use { it.encode() } },
-                    { model.toByteArray() },
+                    { fillModel(n).toByteArray() },
                     { message.encode() },
-                    { official.toByteArray() },
+                    { fillOfficial(n).toByteArray() },
                     { consumeTree(ty, reference, n) },
                     { Structtest_Scalars3.parseFrom(reference) },
                     { ty.decode(reference).close() },

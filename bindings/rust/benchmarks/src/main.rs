@@ -15,13 +15,15 @@
  * x100 / x3000, which lands the tiers on 136 / 174 / 2469 / 74913 bytes. Both
  * sides must produce identical bytes before anything is timed. Encode reuses
  * one buffer per implementation (pbwire encode_to(), rust-protobuf
- * write_to_vec(), prost encode()): each side's idiomatic hot loop, so the
- * steady state allocates nothing anywhere and the codec is timed, not the
- * allocator. A one-shot pbwire encode() would pay the core malloc plus a
- * 75 KB copy that neither baseline pays; encode_to() exists so hot loops do
- * not. Baseline decode stays one-shot on every side (parse_from_bytes /
- * decode / Type::decode, each with its own arena); the tree row instead
- * decodes, reads every field back out, then drops the message.
+ * write_to_vec(), prost encode()): each side's idiomatic hot loop. The
+ * headline `shim` encode arms build a fresh native input per iteration
+ * inside the timer (fresh mirror / fresh generated message, encode, drop);
+ * decode builds a fresh output per iteration on both sides. A one-shot
+ * pbwire encode() would pay the core malloc plus a 75 KB copy that neither
+ * baseline pays; encode_to() exists so hot loops do not. Baseline decode
+ * stays one-shot on every side (parse_from_bytes / decode / Type::decode,
+ * each with its own arena); the tree row instead decodes, reads every field
+ * back out, then drops the message.
  *
  *   ./bench.sh          generate, build, run
  */
@@ -213,7 +215,6 @@ fn run_case(schema: &Schema, ty: &Type<'_>, inner_ty: &Type<'_>, core: &core_arm
         }
     }
 
-    let official = fill_official(n);
     let prost_msg = fill_prost(n);
     if prost_msg.encode_to_vec() != reference {
         fail(label, "prost wrote different bytes than protobuf-rust");
@@ -269,23 +270,29 @@ fn run_case(schema: &Schema, ty: &Type<'_>, inner_ty: &Type<'_>, core: &core_arm
         return;
     }
     let flat_encode = measure(iterations, || {
-        flat.encode_in_place(&payload.image).expect("flat encode").len()
+        let fresh = FlatPayload::new(n);
+        let len = flat.encode_in_place(&fresh.image).expect("flat encode").len();
+        drop(fresh);
+        len
     });
     let flat_decode = measure(iterations, || {
-        flat.decode_in_place(&reference, &mut flat_image)
+        let mut fresh_image = FlatImage::<Scalars3Flat>::new();
+        flat.decode_in_place(&reference, &mut fresh_image)
             .expect("flat decode")
     });
     let official_encode = measure(iterations, || {
+        let fresh = fill_official(n);
         official_buf.clear();
-        official.write_to_vec(&mut official_buf).expect("encode");
+        fresh.write_to_vec(&mut official_buf).expect("encode");
         official_buf.len()
     });
     let official_decode = measure(iterations, || {
         Scalars3::parse_from_bytes(&reference).expect("decode")
     });
     let prost_encode = measure(iterations, || {
+        let fresh = fill_prost(n);
         prost_buf.clear();
-        prost_msg.encode(&mut prost_buf).expect("encode");
+        fresh.encode(&mut prost_buf).expect("encode");
         prost_buf.len()
     });
     let prost_decode = measure(iterations, || {

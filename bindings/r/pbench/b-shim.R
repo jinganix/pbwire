@@ -13,8 +13,8 @@
 # every scalar (`pbwr_scalar_sexp`) before returning (see runtime/src/
 # pbwire_r.c). The full R list therefore exists when the timed call returns;
 # a fold over the result would only add R getter calls on top of finished C
-# work. Encode reuses the app-owned list across iterations (the steady-state
-# carve-out, disclosed here and in the README).
+# work. Headline timing is fresh-task: the caller builds a fresh list per
+# iteration inside the timer, then encodes.
 #
 #   shim_encode(pbwire list) -> wire bytes
 #   shim_decode(wire)        -> pbwire list

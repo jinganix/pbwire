@@ -68,10 +68,10 @@ $officialImpl = extension_loaded('protobuf') ? 'protobuf-php-c' : 'protobuf-php'
 // prebuilt proxy (a held Message handle, re-encode out), the native-array
 // entry (one C extension call) or the same API on ext-ffi.
 //
-// The full-task encode and the shim encode read the app-owned native array.
-// Reusing a plain-data fixture across iterations is standard harness
-// practice (Task 5 ledger ruling, Python worker D3, merged 99ac9ac); only
-// the Message -- fresh per iteration, closed inside the timer -- is timed.
+// Headline encode rows are fresh-task: each timed iteration builds a fresh
+// native array (pbwire) / fresh generated message (official) inside the
+// timer, then encodes. Decode rows are full-materialization on both sides
+// (decodeArray vs mergeFromString into a fresh message).
 $treeImpl = 'pbwire-php-tree';
 $proxyImpl = 'pbwire-php-proxy';
 $shimImpl = extension_loaded('pbwire') ? 'pbwire-php-shim' : 'pbwire-php-shim-ffi';
@@ -149,7 +149,6 @@ for ($tier = 0; $tier < count(CASES); $tier++) {
 
     echo "OK   $label encoding parity, x$n (" . strlen($reference) . " bytes)\n";
 
-    $official = fillOfficial($n);
     $officialClass = \Structtest\Scalars3::class;
     // Tier line shows the reference op's count; slower ops keep the floor.
     $count = calibrate(static fn () => $message->encode(), $iterations);
@@ -162,9 +161,11 @@ for ($tier = 0; $tier < count(CASES); $tier++) {
 
         return $out;
     });
-    $shimEncode = measure($iterations, static fn () => $ty->encodeArray($arrayPayload));
+    $shimEncode = measure($iterations, static function () use ($ty, $n) {
+        return $ty->encodeArray(pbwire_pbench_payload($n));
+    });
     $shimDecode = measure($iterations, static fn () => $ty->decodeArray($reference));
-    $officialEncode = measure($iterations, static fn () => $official->serializeToString());
+    $officialEncode = measure($iterations, static fn () => fillOfficial($n)->serializeToString());
     $officialDecode = measure($iterations, static function () use ($officialClass, $reference) {
         $parsed = new $officialClass();
         $parsed->mergeFromString($reference);

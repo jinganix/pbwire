@@ -125,7 +125,6 @@ for (var tier = 0; tier < cases.Length; tier++)
         continue;
     }
 
-    var official = FillOfficial(n);
     // Tier line shows the reference op's count; the floor calibration stays
     // on the prebuilt op so the slower tree op never inflates any row.
     var tierCount = Calibrate(() => message.Encode(), count);
@@ -145,12 +144,15 @@ for (var tier = 0; tier < cases.Length; tier++)
     {
         using var held = ty.Decode(reference);
     });
-    var shimEncode = Measure(count, () => Matrix3Shim.Marshal(native));
+    // Headline encode rows are the fresh task: build a fresh native input
+    // per iteration inside the timer, encode, release inside the timer.
+    // Decode rows already allocate a fresh output per iteration; kept as is.
+    var shimEncode = Measure(count, () => Matrix3Shim.Marshal(Matrix3Shim.New(n)));
     var shimDecode = Measure(count, () => Matrix3Shim.Unmarshal(reference));
-    var coreEncode = Measure(count, () => CCore.Marshal(coreNative));
+    var coreEncode = Measure(count, () => CCore.Marshal(CCore.New(n)));
     var coreDecode = Measure(count, () => CCore.Unmarshal(reference));
-    var officialEncode = Measure(count, () => official.ToByteArray());
-    var pbnEncode = pbnOk ? Measure(count, () => PbnEncode(pbn)) : 0;
+    var officialEncode = Measure(count, () => FillOfficial(n).ToByteArray());
+    var pbnEncode = pbnOk ? Measure(count, () => PbnEncode(FillPbn(n))) : 0;
     var officialDecode = Measure(count, () => Scalars3.Parser.ParseFrom(reference));
     var pbnDecode = pbnOk ? Measure(count, () => PbnDecode(reference)) : 0;
 

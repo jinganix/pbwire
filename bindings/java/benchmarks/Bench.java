@@ -165,9 +165,9 @@ public final class Bench {
         // their own count and never inflate the tree rows.
         Runnable[] ops = {
             () -> GenericCodec.encode(fillGeneric(scalars3, n)),
-            model::toByteArray,
+            () -> fillModel(n).toByteArray(),
             () -> GenericCodec.encode(data),
-            officialMessage::toByteArray,
+            () -> fillOfficial(n).toByteArray(),
             () -> consumeTree(scalars3, reference, n),
             () -> Structtest_Scalars3.parseFrom(reference),
             () -> GenericCodec.decode(scalars3, reference),
