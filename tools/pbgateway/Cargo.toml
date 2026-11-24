@@ -1,0 +1,9 @@
+[package]
+name = "pbgateway"
+version = "0.1.0"
+edition = "2021"
+description = "Fixed-path protobuf echo gateway: POST /pb/<Service>/<Method> (binary in/out, JSON on Accept)"
+license = "MIT"
+
+[dependencies]
+pbwire = { path = "../../bindings/rust" }
