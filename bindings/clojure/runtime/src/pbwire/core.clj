@@ -19,13 +19,17 @@
 ;; package-private `def` slot (see MessageType.java), so one reflective read
 ;; per type exposes the public GenericCodec$MessageDef field table. Cached
 ;; per type; a schema is read-only after load, so the cache never goes stale.
-(defonce ^:private def-slot
+(defonce ^:private ^java.lang.reflect.Field def-slot
   (doto (.getDeclaredField MessageType "def") (.setAccessible true)))
 
 ;; Weak keys: the cache must not keep a dropped schema's field tables alive,
 ;; and keying on the MessageDef (not the type name) keeps two schemas that
 ;; share a type name from reading each other's table.
-(defonce ^:private field-cache
+;; Hinted as java.util.Map so the per-call cache probe on the timed path
+;; compiles to a direct interface call: an unhinted var compiles to
+;; reflection (~3 us a probe here), which once dominated every encode and
+;; every nested-message fill/decode of this binding.
+(defonce ^:private ^java.util.Map field-cache
   (java.util.Collections/synchronizedMap (java.util.WeakHashMap.)))
 
 (defn- type-info

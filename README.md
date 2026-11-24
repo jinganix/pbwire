@@ -227,7 +227,7 @@ The one-row summary is here; the detail is there.
 | [Elixir](bindings/elixir/) | NIF (shared core) | 2.98x (xlarge) / 1.91x (xlarge) | [elixir-protobuf](https://github.com/elixir-protobuf/protobuf) |
 | [Zig](bindings/zig/) | static link | 1.84x (xlarge) / 1.47x (xlarge) `shim` | [zig-protobuf](https://github.com/Arwalk/zig-protobuf) |
 | [F#](bindings/fsharp/) | C# runtime + facade | 1.28x (xlarge) / 0.74x (xlarge) `shim` | [Google.Protobuf](https://www.nuget.org/packages/Google.Protobuf) |
-| [Clojure](bindings/clojure/) | Java runtime + interop | 0.02x (xlarge) / 0.54x (xlarge) `core` (mutable-message fast path; 0.01x encode at 136 B) | [protobuf-java](https://github.com/protocolbuffers/protobuf/tree/main/java) |
+| [Clojure](bindings/clojure/) | Java runtime + interop | 0.26x (xlarge) / 0.74x (xlarge) `core` (mutable-message fast path; 0.05x encode at 136 B) | [protobuf-java](https://github.com/protocolbuffers/protobuf/tree/main/java) |
 | [Julia](bindings/julia/) | `dlopen` + `ccall` | 22.35x (xlarge) / 1.08x (xlarge) `shim` | [ProtoBuf.jl](https://github.com/JuliaIO/ProtoBuf.jl) |
 | [R](bindings/r/) | C extension, named lists | 19.28x (xlarge) / 57.00x (xlarge) `shim` | [RProtoBuf](https://github.com/eddelbuettel/rprotobuf) |
 
@@ -249,7 +249,7 @@ Pick pbwire when the schema is only known at runtime, when one C core serves
 several host languages, or when libprotobuf must not be in the process. Pick
 generated code only when the schema never changes *and* you accept a codegen
 step: even then the one-call path wins or ties most published encode cells
-— the exceptions are the managed per-call builds (Clojure 0.02x
+— the exceptions are the managed per-call builds (Clojure 0.26x
 on the fresh-build task), Lua's run-to-run tie (0.99x) and Node's `shim`
 (0.18x) — while the in-process `pbw_ctx` wins every tier of the
 core benchmark and the C struct codec wins every tier of its own.

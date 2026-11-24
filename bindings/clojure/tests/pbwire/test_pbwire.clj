@@ -177,6 +177,52 @@
       (is (thrown? Exception (pb/encode ty {:text {:nested "map"}})))
       (finally (pb/close! schema)))))
 
+(deftest wire-edge-semantics
+  ;; T7-style typed decode edges (bindings/java/tests/TestGenerated.java)
+  ;; on the map API: a repeated singular scalar keeps the last value,
+  ;; repeated singular sub-messages merge, packed and unpacked forms both
+  ;; decode on repeated numerics, a packed run for a singular field is
+  ;; skipped, and malformed/truncated/over-deep inputs fail loudly.
+  ;; The map holds only schema fields, so a map round-trip drops unknown
+  ;; fields -- the typed-model behavior T7 pins for Java.
+  (let [desc (or (System/getenv "PBWIRE_MATRIX3_DESC")
+                 "../c/tests/data/matrix3.desc")
+        schema (pb/load-schema desc)
+        ty (pb/message-type schema "structtest.Scalars3")
+        inner-ty (pb/message-type schema "structtest.Inner3")
+        wire (fn [& xs] (byte-array (map unchecked-byte xs)))]
+    (try
+      (is (= 7 (:i32 (pb/decode ty (wire 0x08 0x05 0x08 0x07))))
+          "singular last wins")
+      (let [a (pb/encode inner-ty {:name "a"})
+            b (pb/encode inner-ty {:value 9})
+            merged (byte-array (concat [0x82 0x01 (count a)] (seq a)
+                                         [0x82 0x01 (count b)] (seq b)))]
+        (is (= {:name "a" :value 9} (:inner (pb/decode ty merged)))
+            "singular message merges"))
+      (is (= [1 2 3]
+             (:nums (pb/decode ty (wire 0x8A 0x01 0x03 0x01 0x02 0x03))))
+          "packed repeated decodes")
+      (is (= [1 2]
+             (:nums (pb/decode ty (wire 0x88 0x01 0x01 0x88 0x01 0x02))))
+          "unpacked repeated decodes")
+      (is (not (contains? (pb/decode ty (wire 0x0A 0x01 0x05)) :i32))
+          "packed-for-singular skipped")
+      (let [with-unknown (wire 0x08 0x01 0xF8 0x03 0x2A)
+            back (pb/decode ty with-unknown)]
+        (is (= 1 (:i32 back)))
+        (is (bytes= (wire 0x08 0x01) (pb/encode ty back))
+            "map re-encode drops unknown fields"))
+      (is (= -1 (:u64 (pb/decode ty (pb/encode ty {:u64 -1}))))
+          "uint64 full bits round-trip")
+      (doseq [bad [(wire 0x00)
+                   (wire 0x72)
+                   (wire 0x3D 0x01 0x02)
+                   (wire 0x72 0x05 0x61)
+                   (byte-array (repeat 300 (unchecked-byte 0x0B)))]]
+        (is (thrown? Exception (pb/decode ty bad)) "bad wire is loud"))
+      (finally (pb/close! schema)))))
+
 (defn -main [& args]
   (let [{:keys [fail error]} (run-tests 'pbwire.test-pbwire)]
     (System/exit (if (zero? (+ fail error)) 0 1))))

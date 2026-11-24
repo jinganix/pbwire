@@ -27,7 +27,7 @@
 (ns pbwire.bench
   (:require [matrix3 :as gen]
             [pbwire.core :as pb])
-  (:import (java.util Arrays) (structtest Matrix3$Scalars3)))
+  (:import (java.util Arrays) (structtest Matrix3$Scalars3 Matrix3$Inner3) Message))
 
 (def ^:private cases ["small" "medium" "large" "xlarge"])
 (def ^:private repeats [0 1 100 3000])
@@ -144,23 +144,44 @@
 
 (defn- consume-core
   "The core decode half: mutable decode plus the same gate-checked
-   read-back as consume-tree, so core vs protobuf-java is deep vs deep."
+   read-back as consume-tree, so core vs protobuf-java is deep vs deep.
+   Every interop target is hinted: an unhinted local compiles to a
+   reflective call on the timed path, and (last inners) walks the whole
+   repeated field where an indexed get keeps the same read."
   [ty wire n]
-  (let [m (pb/decode-message ty wire)]
+  (let [^Message m (pb/decode-message ty wire)]
     (try
       (let [s (.get m "str")
-            inner (.get m "inner")
-            tags (.get m "tags")
-            inners (.get m "inners")
+            ^Message inner (.get m "inner")
+            ^java.util.List tags (.get m "tags")
+            ^java.util.List inners (.get m "inners")
             iname (when inner (.get inner "name"))
             ivalue (when inner (.get inner "value"))]
         (swap! sink + (count s) (count tags) (count inners)
                (count iname) (long (or ivalue 0)))
         (when (pos? n)
-          (let [last-inner (last inners)]
+          (let [^Message last-inner (.get inners (dec n))]
             (swap! sink + (count (.get last-inner "name"))
                    (long (.get last-inner "value"))))))
       (finally (pb/close! m)))))
+
+(defn- consume-baseline
+  "The baseline decode half of the timed full task, mirroring
+   bindings/java/benchmarks/Bench.java consumeBaseline (Task 5): the pbwire
+   core arm materializes every gate-checked field, so the protobuf-java arm
+   folds the same gate-checked fields instead of timing a bare parse
+   (fairness 4). Task 5 measured nil effect (protobuf-java strings parse
+   eagerly); this keeps the two harnesses' headline cells comparable."
+  [^bytes wire n]
+  (let [^Matrix3$Scalars3 back (structtest.Matrix3$Scalars3/parseFrom wire)]
+    (swap! sink + (.length (.getStr back))
+           (.getTagsCount back)
+           (.getInnersCount back)
+           (.length (.getName (.getInner back)))
+           (.getValue (.getInner back)))
+    (when (pos? n)
+      (let [^Matrix3$Inner3 m (.getInners back (dec n))]
+        (swap! sink + (.length (.getName m)) (.getValue m))))))
 
 (defn -main [desc]
   (let [schema (pb/load-schema desc)
@@ -239,8 +260,7 @@
                                #(consume-tree ty reference n)
                                #(consume-core ty reference n)
                                #(gen/decode-structtest-scalars3 reference)
-                               #(structtest.Matrix3$Scalars3/parseFrom
-                                 ^bytes reference)])]
+                               #(consume-baseline reference n)])]
                     (println (str label ": " (count reference) " bytes, "
                                   tier-count " iterations (repeat field x" n ")"))
                     (println (format "  %-18s %-7s %12s %10s"

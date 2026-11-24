@@ -85,14 +85,14 @@ call cannot race a generated straight-line writer, and map materialization on de
 
 | payload | op | pbwire-clj-core (MB/s, x protobuf-java) | protobuf-java (MB/s) |
 |---|---|---|---|
-| 136 B | encode | 19.1 (0.01x ❌) | 1456.0 |
-| 136 B | decode | 42.7 (0.06x ❌) | 672.5 |
-| 174 B | encode | 18.5 (0.02x ❌) | 933.1 |
-| 174 B | decode | 39.2 (0.07x ❌) | 591.5 |
-| 2469 B | encode | 10.2 (0.02x ❌) | 440.2 |
-| 2469 B | decode | 166.5 (0.35x ❌) | 470.4 |
-| 74913 B | encode | 10.5 (0.02x ❌) | 474.5 |
-| 74913 B | decode | 250.6 (0.54x ❌) | 464.6 |
+| 136 B | encode | 75.8 (0.05x ❌) | 1471.6 |
+| 136 B | decode | 403.5 (0.92x ❌) | 438.9 |
+| 174 B | encode | 80.5 (0.08x ❌) | 954.8 |
+| 174 B | decode | 310.4 (0.77x ❌) | 400.7 |
+| 2469 B | encode | 117.7 (0.25x ❌) | 474.4 |
+| 2469 B | decode | 270.6 (0.65x ❌) | 413.3 |
+| 74913 B | encode | 136.9 (0.26x ❌) | 531.3 |
+| 74913 B | decode | 304.4 (0.74x ❌) | 412.0 |
 
 `core` is the mutable-message fast path and the published comparison: a fresh `Message` per iteration (build + fill + encode + close; decode plus a deep read-back of every gate-checked field), the generated
 model's native object with no map walk. The persistent-map API stays for
@@ -100,8 +100,18 @@ convenience and is gated for parity, but hot loops use the mutable path — the
 same split the README documents (maps for convenience, the mutable path for
 hot loops) and Lua documents (table vs builder). The per-field `tree` map-API
 arm is compared in `pbench/` (see its README), not here.
+Two fixes moved the row from 0.02x / 0.54x: the binding's field-table
+cache (`type-info`) now resolves through a hinted interface instead of a
+reflective call per message (~3 us a probe before, paid on every nested
+message of every iteration), the core decode arm is fully hinted with an
+indexed last-element read, and the protobuf-java decode arm folds the
+same gate-checked fields the gate asserts instead of timing a bare
+parse (fairness §4, mirroring Java's `consumeBaseline`). The residual is
+structural: the only encode path is generic per-field `set` (~30 ns a
+value plus boxing) against generated straight-line stores, and decode
+pays the runtime's defensive repeated-field copies.
 Formal run
-`../../results/bench-clojure-20261124T143103Z.json`.
+`../../results/bench-clojure-20261124T203243Z.json`.
 
 The timed path builds a fresh mutable message per iteration (fill + encode + close, with the same deep read-back as the tree arm on decode and no map materialization), like the Java row, and the
 baseline builds a fresh message per iteration for its direct `toByteArray` call: the measured type carries a hint so

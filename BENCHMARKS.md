@@ -228,7 +228,7 @@ protoc_plugin` plus `~/.pub-cache/bin`).
 | Elixir (NIF over the shared core) | `make elixir-bench` (`bindings/elixir/benchmarks`) | `elixir-protobuf` 0.17.1 structs from the same `matrix3.proto` | all 4 | 2.98x ✅ / 1.91x ✅ |
 | Zig (static link) | `make zig-bench` (`bindings/zig/benchmarks`, `-Doptimize=ReleaseFast`) | Arwalk/zig-protobuf 7.0.0 generated code from the same `matrix3.proto` | all 4 | 1.84x ✅ / 1.47x ✅ `shim` (`extern struct` mirror, one C struct-codec call per op) |
 | F# (facade over the C# runtime) | `make fsharp-bench` (`bindings/fsharp/benchmarks`) | Google.Protobuf C# generated code from the same `matrix3.proto` | all 4 | 1.37x ✅ / 0.74x ❌ `shim` (one C-reader call over the flat image) |
-| Clojure (Java runtime + interop) | `make clojure-bench` (`bindings/clojure/benchmarks`) | `protobuf-java` generated code from the same `matrix3.proto` | all 4 | 0.02x ❌ / 0.54x ❌ `core` (fresh mutable message per iteration; 0.01x at 136 B) |
+| Clojure (Java runtime + interop) | `make clojure-bench` (`bindings/clojure/benchmarks`) | `protobuf-java` generated code from the same `matrix3.proto` | all 4 | 0.26x ❌ / 0.74x ❌ `core` (fresh mutable message per iteration; 0.05x at 136 B) |
 | Julia (`ccall` FFI) | `make julia-bench` (`bindings/julia/benchmarks`) | JuliaIO/ProtoBuf.jl 1.3.0 generated code from the same `matrix3.proto` | all 4 | 22.35x ✅ / 1.08x ✅ `shim` (one C-side layout read per op; xlarge encode on the ProtoBuf.jl baseline collapse; 136 B shim encode 0.02x) |
 | R (C extension, named lists) | `make r-bench` (`bindings/r/benchmarks`) | RProtoBuf 0.4.28 on the same `matrix3.proto` | all 4 | 19.28x ✅ / 57.00x ✅ `shim` (named list, one `.Call`, the walk in C) |
 
@@ -297,8 +297,7 @@ floors: Node's `shim` (0.19x / 0.13x of protobufjs at
 the official C extension -- encode now leads, 2.98x,
 under the same fresh-build task), the JVM `core` decode (Java 0.84x of
 protobuf-java; Kotlin 0.77x rides the same
-runtime, Scala 0.30x adds the case-class translation on top), Clojure's `core` on both ops (0.02x / 0.54x: the fresh
-mutable-message build per iteration dominates there), the managed materialization on C#/F# `shim` decode at
+runtime, Scala 0.30x adds the case-class translation on top), Clojure's `core` on both ops (0.26x / 0.74x: generic per-field `set` dominates encode, defensive list copies decode), the managed materialization on C#/F# `shim` decode at
 74 KB (0.77x / 0.74x: the C decode is faster than the reference parser, but
 materializing 3000 managed objects costs more than its whole run), and
 Julia's small-tier `shim` encode (0.01x at 136 B: the fresh image build
@@ -363,7 +362,7 @@ payload, the boundary cost and the baseline all differ.
 | Elixir | NIF (Hex `:pbwire`, same core as Erlang) | 74913 B | 154.6 (2.98x ✅) | 113.0 (1.91x ✅) |
 | Zig | static link | 74913 B | 1085.0 (1.84x ✅) `shim` | 774.7 (1.47x ✅) `shim` |
 | F# | P/Invoke over the C# runtime | 74913 B | 481.7 (1.37x ✅) `shim` | 340.6 (0.74x ❌) `shim` |
-| Clojure | the Java runtime + interop | 74913 B | 10.5 (0.02x ❌) `core` (fresh build per iteration) | 250.6 (0.54x ❌) `core` |
+| Clojure | the Java runtime + interop | 74913 B | 136.9 (0.26x ❌) `core` (fresh build per iteration) | 304.4 (0.74x ❌) `core` |
 | Julia | `dlopen` + `ccall` | 74913 B | 252.5 (22.35x ✅, baseline collapse) `shim` | 770.7 (1.08x ✅) `shim` |
 | R | C extension, named lists | 74913 B | 48.2 (19.28x ✅) `shim` | 159.6 (57.00x ✅) `shim` |
 
@@ -374,7 +373,7 @@ below-the-line cells are codec gaps, not boundary floors: Node `shim`
 (0.19x / 0.13x of protobufjs),
 PHP `shim` decode (0.37x of the official C extension), the
 JVM `core` decode (Java 0.84x, Kotlin 0.77x, Scala 0.30x) and Clojure's
-`core` (0.02x / 0.54x).
+`core` (0.26x / 0.74x).
 The above-the-line cells are the same task won outright: the core thin
 model 2.1x / 1.9x, Ruby `shim`
 5.03x / 6.11x, PHP `shim` encode 2.98x, Rust `shim`
@@ -963,7 +962,7 @@ Full table and method: [binding README](bindings/fsharp/README.md#benchmarks).
 
 ![Clojure (Java runtime + interop) vs protobuf-java — MB/s by tier](docs/charts/bench-clojure-java-runtime-interop-vs-protobuf-java.svg)
 
-xlarge: encode 10.5 (0.02x ❌) / decode 250.6 (0.54x ❌).
+xlarge: encode 136.9 (0.26x ❌) / decode 304.4 (0.74x ❌).
 Full table and method: [binding README](bindings/clojure/README.md#benchmarks).
 
 ### Julia (`dlopen` + `ccall`) vs ProtoBuf.jl
