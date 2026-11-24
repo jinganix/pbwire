@@ -47,6 +47,16 @@ the official runtime's own materialization field for field. The prebuilt
 published shim builds (C extension and `ext-ffi`) must pass and produce
 identical bytes.
 
+## Unknown fields
+
+`decodeArray` skips unknown fields (the array has no slot for them), so
+re-encoding the array drops them. The `Message` path (`Type::decode` +
+`Message::encode`) and the official runtime instead preserve them (reordered
+to the end), exactly like the tree materialization the C-extension shim
+replaced. That divergence is pinned by `tests/test.php` (`decodeArray
+unknowns do not survive re-encode`); a packed run for a singular scalar is
+likewise skipped as unknown on both builds, following the decoder.
+
 ## Timing
 
 `compare.php` interleaves the full-task tree arm, the prebuilt proxy, the
@@ -161,6 +171,24 @@ byte.
 second pure-PHP engine would measure our code against the competitor; the TODO
 in `runtime/pbwire.php` names the condition that would reopen it.
 
-Below-baseline native cells (`tree` and `shim` on every tier against the
-official C extension) are candidates for the optimization pass; no
-byte-changing or timer-shaping change is attempted here.
+## 2026-11-24 optimization (shim decode)
+
+The below-baseline `shim` decode cell went to the optimization pass and came
+back above it. `Type::decodeArray` on the C extension is now one `pbw_visit`
+tag scan per message level straight into the PHP array -- singular values land
+in their slot as they parse (last wins), repeated values append into the list
+created up front, singular sub-messages decode once from their merged payload
+range at the end of their level, oneof losers reset after the scan -- with no
+tree and no per-field API in the timer. The columns stay cached per
+descriptor for the call, so a 3000-deep payload builds two tables, and every
+intermediate is owned by a frame slot (ranges stay offset/length integers)
+so no pointer outlives a `zval` allocation. Unknown fields are still skipped
+(and dropped on re-encode, see above); malformed, truncated, over-deep and
+required-missing input raises the same status text the tree path did, pinned
+by `tests/test.php`. Formal `make php-bench`
+(`results/bench-php-20261124T181316Z.json`): `shim` decode leads the official
+C extension on every tier (2.82x / 2.80x / 2.71x / 2.81x small to xlarge)
+with both decode timers folding the same gate-checked fields into the same
+live sink (docs/perf-fairness.md section 4: the baseline arm was a bare
+parse until this run). The `tree` full task and `shim-ffi` stay where they
+were -- per-field and per-trampoline costs the scan does not pay.
