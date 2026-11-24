@@ -216,7 +216,7 @@ protoc_plugin` plus `~/.pub-cache/bin`).
 | Node (N-API addon) | `make node-bench` (`bindings/node/benchmarks`) | [protobufjs](https://www.npmjs.com/package/protobufjs) from the same `matrix3.proto` | all 4 | 0.19x ❌ / 0.13x ❌ `shim` vs protobufjs |
 | Ruby (C extension) | `make ruby-bench` (`bindings/ruby/benchmarks`) | the `google-protobuf` gem (C extension) | all 4 | 5.03x ✅ / 6.11x ✅ `shim` (one C-extension entry per op) |
 
-| Objective-C (ARC) | `make objc-bench` (`bindings/objc/benchmarks`) | the `protobuf` ObjC runtime + generated code from the same `matrix3.proto` | all 4 | 0.98x ❌ / 1.16x ✅ `tree` (fresh build per iteration) |
+| Objective-C (ARC) | `make objc-bench` (`bindings/objc/benchmarks`) | the `protobuf` ObjC runtime + generated code from the same `matrix3.proto` | all 4 | 0.97x ❌ / 1.16x ✅ `tree` (fresh build per iteration) |
 | Kotlin (pure-Java codec + DSL) | `make kotlin-bench` (`bindings/kotlin/benchmarks`) | `protoc --kotlin_out` over `protobuf-java`, same `matrix3.proto` | all 4 | 27.74x ✅ / 0.77x ❌ `core` (generated model; xlarge encode on a `protobuf-kotlin` baseline collapse) |
 | PHP (`ext-ffi` + C extension) | `make php-bench` (`bindings/php/benchmarks`) | the official PHP runtime (`protobuf/php/src`): C extension (fastest) + pure-PHP | all 4 | 2.94x ✅ / 2.81x ✅ `shim` vs C ext (`shim-ffi` interpreter-scale; pure-PHP tables in section) |
 | Dart (`dart:ffi`) | `make dart-bench` (`bindings/dart/benchmarks`) | the `protobuf` Dart package + generated code | all 4 | 1.82x ✅ / 4.84x ✅ `shim` (one C-side reader call per op) |
@@ -351,7 +351,7 @@ payload, the boundary cost and the baseline all differ.
 | Dart | `dart:ffi` binding | 74913 B | 151.6 (1.82x ✅) `shim` | 764.4 (4.84x ✅) `shim` |
 | Ruby | C extension over the core | 74913 B | 100.6 (5.03x ✅) `shim` | 184.6 (6.11x ✅) `shim` |
 
-| Objective-C | ARC wrapper | 74913 B | 215.8 (0.98x ❌) `tree` (fresh build per iteration) | 33081.5 (1.16x ✅) |
+| Objective-C | ARC wrapper | 74913 B | 203.6 (0.97x ❌) `tree` (fresh build per iteration) | 31641.7 (1.16x ✅) |
 | PHP | C extension | 74913 B | 168.1 (2.98x ✅) `shim`; `shim-ffi` 5.3 | 211.3 (0.37x ❌) `shim`; `shim-ffi` 4.5 |
 | Rust | static link | 74913 B | 1145.3 (2.02x ✅ vs prost) `shim` | 752.5 (1.86x ✅) `shim` |
 | C# | P/Invoke | 74913 B | 483.0 (1.32x ✅) `shim` | 385.3 (0.77x ❌) `shim` |
@@ -871,7 +871,7 @@ Full table and method: [binding README](bindings/ruby/README.md#benchmarks).
 
 ![Objective-C vs the protobuf ObjC runtime — MB/s by tier](docs/charts/bench-objective-c-vs-the-protobuf-objc-runtime.svg)
 
-xlarge: encode 215.8 (0.98x ❌) / decode 33081.5 (1.16x ✅).
+xlarge: encode 203.6 (0.97x ❌) / decode 31641.7 (1.16x ✅).
 Full table and method: [binding README](bindings/objc/README.md#benchmarks).
 
 #### Kotlin vs `protoc --kotlin_out` over `protobuf-java`

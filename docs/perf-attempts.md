@@ -2873,3 +2873,28 @@ Honest ceiling: decode 0.84x on the loaded formal bench, ~1.0x isolated.
 The encode cell is green (1.00x); the decode cell stays red and is now a
 floor with its mechanism named above. No further untried one-change
 runtime mechanism on the JVM `core` decode path.
+
+## Cell: Objective-C `tree` xlarge encode (0.97x) — confirmed noise band, no change
+
+Task 9 of the below-baseline plan (2026-11-24): five consecutive
+`make objc-bench` runs on the same machine keep xlarge encode below the line
+without ever crossing it — 0.964x, 0.984x (prior formal runs), then 0.858x,
+0.981x, 0.972x (three runs back to back; the 0.858x pass ran under load from
+other benches on the same host). Decode stays green throughout
+(1.16x-1.20x). Formal pasted run:
+`results/bench-objc-20261124T203820Z.json`.
+
+A probe built from the same harness sources times the fresh-build half alone
+(xlarge pad, 2000 iterations): `fill_pbwire` ~374 us/iter vs `fill_official`
+~407 us/iter vs the shared `padded(74775)` fixture alone ~361 us/iter. The
+74 KB `NSString` both sides rebuild identically dominates the ~368 us op; the
+encode tail itself (held-tree re-encode, no build) is ~1 us. So there is no
+asymmetric buffer-reuse cost to align with the C harness
+(`bindings/c/benchmarks/bench_struct.cc` reuses one output buffer per side):
+both ObjC sides already allocate exactly one fresh output buffer per
+iteration, and reusing it would only touch the ~1 us tail, not the ~360 us
+shared fixture both sides pay inside the timer. No binding or harness change
+shipped; the residual 2-3% lean is dispatch wobble inside a tier both sides
+build identically, inside the few-percent run-to-run band the harness
+documents. Revisit only if a quiet-machine run ever shows a gap clearly
+outside that band.

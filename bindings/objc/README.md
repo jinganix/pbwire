@@ -144,7 +144,7 @@ the malloc'd buffer the C encoder already filled to `NSData`
 (`dataWithBytesNoCopy:length:freeWhenDone:`), and `decode` wraps the arena the C
 decoder produced in one `PBWMessage`.
 
-`pbwire-objc` therefore beats the generated runtime on decode on every tier (encode trails just below: 0.96x at xlarge).
+`pbwire-objc` therefore beats the generated runtime on decode on every tier (encode trails just below: 0.97x at xlarge).
 The
 xlarge tier is one 74 KB string, i.e. a memcpy race: the generated encoder writes
 it into an `NSMutableData` of the final size, and the wrapper writes it into its
@@ -157,21 +157,31 @@ twice.
 
 The `pbwire-objc` rows are the `tree` arm: a fresh `PBWMessage` built per
 field per iteration on both sides, then encoded (formal run
-`../../results/bench-objc-20261124T140212Z.json`). The gap is the per-iteration build
+`../../results/bench-objc-20261124T203820Z.json`). The gap is the per-iteration build
 cost priced in pbench: seventeen
 boxed setters plus the `str` copy, and the xlarge tier rebuilds its 74 KB
 `str` fixture per iteration on both sides (pad-`str` payload).
 
+Task 9 verdict (2026-11-24): five consecutive `make objc-bench` runs keep
+xlarge encode at 0.86x-0.98x (0.858x once under load, otherwise 0.96x-0.98x),
+never crossing 1.0x. A probe timing the fresh-build half alone shows both
+sides pay the same ~360 us for the shared 74 KB `padded()` fixture while the
+encode tail (held-tree re-encode) is ~1 us, so the C-harness buffer-reuse
+shape has no asymmetric cost to align here: both sides already allocate one
+fresh output buffer per iteration (`pbw_encode` malloc handed to `NSData`
+vs the generated `data`'s `NSMutableData`). No binding change: the residual
+2-3% is dispatch wobble inside a tier both sides build identically.
+
 | payload | op | pbwire-objc (MB/s, x protobuf-objc) | protobuf-objc (MB/s) |
 |---|---|---|---|
-| 136 B | encode | 60.9 (0.51x ❌) | 119.1 |
-| 136 B | decode | 711.3 (2.70x ✅) | 263.6 |
-| 174 B | encode | 65.1 (0.58x ❌) | 112.1 |
-| 174 B | decode | 909.5 (3.03x ✅) | 299.7 |
-| 2469 B | encode | 189.7 (0.93x ❌) | 203.5 |
-| 2469 B | decode | 9193.6 (2.45x ✅) | 3751.9 |
-| 74913 B | encode | 215.8 (0.98x ❌) | 219.3 |
-| 74913 B | decode | 33081.5 (1.16x ✅) | 28610.7 |
+| 136 B | encode | 60.7 (0.53x ❌) | 115.4 |
+| 136 B | decode | 689.9 (2.75x ✅) | 250.7 |
+| 174 B | encode | 61.6 (0.57x ❌) | 108.0 |
+| 174 B | decode | 878.5 (3.22x ✅) | 273.1 |
+| 2469 B | encode | 184.4 (0.95x ❌) | 193.4 |
+| 2469 B | decode | 9202.4 (2.47x ✅) | 3725.3 |
+| 74913 B | encode | 203.6 (0.97x ❌) | 209.4 |
+| 74913 B | decode | 31641.7 (1.16x ✅) | 27228.3 |
 
 The direct struct path is the same C code, measured by `make bench-c` (the
 `shim` rows); there is no third mechanism to compare here. No second pbwire
