@@ -31,7 +31,9 @@
 #                        exists when the timer lambda drops the reference.
 #                        The gem arm folds the same fields (every repeated
 #                        element) through its accessors into the same live
-#                        sink, so both timers observe the full payload.
+#                        sink, and the tree arm folds the same full list in
+#                        Ruby, so all three decode timers observe the full
+#                        payload.
 #   pbwire-ruby-proxy  encode/decode of a Message handle built before the
 #                        timer: re-encode a held handle, decode-and-free with no
 #                        materialization. The codec's own cost once the tree
@@ -214,7 +216,17 @@ end
 # so the read-back cannot be skipped. Same field list the parity checks below
 # assert (str, inner name/value, repeated lengths and last elements, the
 # proto3 optionals, u64, color, plus every scalar the re-encode covers).
+# Both Ruby-side arms fold every repeated element, matching what the shim's
+# C loop builds, so all three decode timers below observe the full payload.
 $sink = 0
+
+def fold_repeated(back, acc)
+  back.nums.each { |v| acc += v }
+  back.tags.each { |s| acc += s.length }
+  back.inners.each { |m| acc += m.name.length + m.value }
+  back.flags.each { |f| acc += (f ? 1 : 0) }
+  acc
+end
 
 # The baseline's decode is a bare upb parse: field values stay in C-backed
 # storage until an accessor crosses into Ruby. The shim arm instead
@@ -232,11 +244,7 @@ def consume_gem(back, repeats)
         back.nums.length + back.tags.length + back.inners.length + back.flags.length +
         back.opt_i32 + back.opt_str.length +
         back.f32.to_s.length + back.f64.to_s.length
-  back.nums.each { |v| acc += v }
-  back.tags.each { |s| acc += s.length }
-  back.inners.each { |m| acc += m.name.length + m.value }
-  back.flags.each { |f| acc += (f ? 1 : 0) }
-  $sink = ($sink + acc) & 0xFFFFFFFFFFFFFFFF
+  $sink = ($sink + fold_repeated(back, acc)) & 0xFFFFFFFFFFFFFFFF
   back
 end
 
@@ -250,7 +258,7 @@ def consume_tree(back, repeats)
         back.f32.to_s.length + back.f64.to_s.length +
         (repeats.zero? ? 0 : back.nums.last + back.inners.last.value +
          (back.flags.last ? 1 : 0))
-  $sink = ($sink + acc) & 0xFFFFFFFFFFFFFFFF
+  $sink = ($sink + fold_repeated(back, acc)) & 0xFFFFFFFFFFFFFFFF
   back
 end
 

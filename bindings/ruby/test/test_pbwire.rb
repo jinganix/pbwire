@@ -600,5 +600,176 @@ check 'pool and context recycle arenas' do
   assert raised(Pbwire::Error) { pool.release(pc) }, 'double release raises'
 end
 
+# decode_object edge semantics: the C layout-table path (one tag scan
+# straight into the model). Wires are hand-built so branches the matrix3
+# bench payload never hits are covered: duplicate singulars, split
+# sub-message merge, oneof reset, packed/unpacked runs, malformed bytes,
+# missing required fields. Unknown fields are skipped and dropped on
+# re-encode (the model has no slot for them); that divergence from
+# Message#decode is pinned here, see pbench/README.md.
+class DecodeOneOfSub
+  attr_reader :v
+end
+
+class DecodeOneOf
+  attr_reader :num, :text, :sub, :blob, :id
+  attr_reader :has_num, :has_text, :has_blob
+end
+
+class DecodeGroupInner
+  attr_reader :x, :s
+end
+
+class DecodeGroupItem
+  attr_reader :v
+end
+
+class DecodeGroupTest
+  attr_reader :inner, :item, :id
+end
+
+class DecodeScalars2
+  attr_reader :id, :i32, :has_i32
+end
+
+ONEOF_CLASSES = {
+  'structtest.OneOfTest' => DecodeOneOf,
+  'structtest.Sub' => DecodeOneOfSub
+}.freeze
+GROUP_CLASSES = {
+  'structtest.GroupTest' => DecodeGroupTest,
+  'structtest.GroupTest.Inner' => DecodeGroupInner,
+  'structtest.GroupTest.Item' => DecodeGroupItem
+}.freeze
+M2_CLASSES = { 'structtest.Scalars2' => DecodeScalars2 }.freeze
+
+def oneof_type
+  $oneof_schema ||= Pbwire::Schema.from_file('bindings/c/tests/data/oneoftest.desc')
+  $oneof_schema.type('structtest.OneOfTest')
+end
+
+def group_type
+  $group_schema ||= Pbwire::Schema.from_file('bindings/c/tests/data/grouptest.desc')
+  $group_schema.type('structtest.GroupTest')
+end
+
+def matrix2_type
+  $matrix2_schema ||= Pbwire::Schema.from_file('bindings/c/tests/data/matrix2.desc')
+  $matrix2_schema.type('structtest.Scalars2')
+end
+
+def inner3_type
+  Pbwire::Gen._schema(Pbwire::Gen::DESC_B64_MATRIX3).type('structtest.Inner3')
+end
+
+M3_CLASSES = {
+  'structtest.Scalars3' => Pbwire::Gen::Structtest_Scalars3,
+  'structtest.Inner3' => Pbwire::Gen::Structtest_Inner3
+}.freeze
+
+def scalars3_type
+  Pbwire::Gen._schema(Pbwire::Gen::DESC_B64_MATRIX3).type('structtest.Scalars3')
+end
+
+check 'decode_object keeps the last duplicate singular' do
+  back = inner3_type.decode_object("\x0a\x01a\x0a\x01b\x10\x2a",
+                                    'structtest.Inner3' => Pbwire::Gen::Structtest_Inner3)
+  assert_equal 'b', back.name, 'duplicate string keeps last'
+  assert_equal 42, back.value, 'value decodes'
+end
+
+check 'decode_object merges a split singular sub-message' do
+  first = "\x0a\x03kid" # inner.name only
+  second = "\x10\x2a" # inner.value (42) only
+  wire = "\x82\x01" + [first.bytesize].pack('C') + first +
+         "\x82\x01" + [second.bytesize].pack('C') + second
+  back = scalars3_type.decode_object(wire, M3_CLASSES)
+  assert_equal 'kid', back.inner.name, 'merged name'
+  assert_equal 42, back.inner.value, 'merged value'
+end
+
+check 'decode_object merges a split singular group' do
+  x_only = "\x0b\x10\x05\x0c" # Inner group, x = 5
+  s_only = "\x0b\x1a\x01g\x0c" # Inner group, s = 'g'
+  back = group_type.decode_object(x_only + s_only, GROUP_CLASSES)
+  assert_equal 5, back.inner.x, 'merged group int'
+  assert_equal 'g', back.inner.s, 'merged group string'
+end
+
+check 'decode_object oneof keeps the last member only' do
+  num_then_text = "\x08\x2a\x12\x02hi"
+  back = oneof_type.decode_object(num_then_text, ONEOF_CLASSES)
+  assert_equal 'hi', back.text, 'text wins'
+  assert back.has_text, 'winner keeps presence'
+  assert_equal 0, back.num, 'loser resets to default'
+  assert !back.has_num, 'loser loses presence'
+
+  text_then_num = "\x12\x02hi\x08\x2a"
+  back = oneof_type.decode_object(text_then_num, ONEOF_CLASSES)
+  assert_equal 42, back.num, 'num wins'
+  assert back.has_num, 'winner keeps presence'
+  assert_equal nil, back.text, 'loser resets to nil'
+  assert !back.has_text, 'loser loses presence'
+
+  sub = "\x1a\x02\x08\x07" # sub.v = 7
+  blob = "\x22\x03abc"
+  back = oneof_type.decode_object(sub + blob, ONEOF_CLASSES)
+  assert_equal nil, back.sub, 'message loser resets to nil'
+  assert_equal 'abc', back.blob, 'bytes winner'
+  assert back.has_blob, 'bytes winner keeps presence'
+  back = oneof_type.decode_object(blob + sub, ONEOF_CLASSES)
+  assert_equal 7, back.sub.v, 'message winner decodes'
+  assert_equal nil, back.blob, 'bytes loser resets to nil'
+  assert !back.has_blob, 'bytes loser loses presence'
+end
+
+check 'decode_object reads packed and unpacked runs alike' do
+  unpacked = "\x88\x01\x01\x88\x01\x02"
+  packed = "\x8a\x01\x02\x01\x02"
+  mixed = "\x88\x01\x01\x8a\x01\x02\x02\x03"
+  assert_equal [1, 2], scalars3_type.decode_object(unpacked, M3_CLASSES).nums, 'unpacked'
+  assert_equal [1, 2], scalars3_type.decode_object(packed, M3_CLASSES).nums, 'packed'
+  assert_equal [1, 2, 3], scalars3_type.decode_object(mixed, M3_CLASSES).nums, 'mixed'
+end
+
+check 'decode_object rejects a packed run for a singular scalar' do
+  error = raised(Pbwire::Error) do
+    scalars3_type.decode_object("\x72\x02\x01\x02", M3_CLASSES)
+  end
+  assert error, 'expected an error'
+  assert error.message.include?('invalid serialized data'), "unexpected message: #{error.message}"
+end
+
+check 'decode_object rejects malformed bytes' do
+  inner_classes = { 'structtest.Inner3' => Pbwire::Gen::Structtest_Inner3 }
+  assert raised(Pbwire::Error) { inner3_type.decode_object("\x08\xff", inner_classes) },
+         'truncated varint'
+  assert raised(Pbwire::Error) { inner3_type.decode_object("\x0a\x05abc", inner_classes) },
+         'truncated length-delimited'
+  assert raised(Pbwire::Error) { inner3_type.decode_object("\x1c", inner_classes) },
+         'lone END_GROUP'
+  assert raised(Pbwire::Error) { inner3_type.decode_object("\x0b" * 300, inner_classes) },
+         'nesting deeper than the limit'
+end
+
+check 'decode_object rejects a missing required field' do
+  error = raised(Pbwire::Error) { matrix2_type.decode_object('', M2_CLASSES) }
+  assert error, 'expected an error'
+  assert error.message.include?('required field id is missing'), "unexpected message: #{error.message}"
+  back = matrix2_type.decode_object("\x08\x2a", M2_CLASSES)
+  assert_equal 42, back.id, 'required field decodes'
+  assert_equal 0, back.i32, 'absent optional reads its default'
+  assert !back.has_i32, 'absent optional has no presence'
+end
+
+check 'decode_object skips unknown fields, drops them on re-encode' do
+  # Field 99 does not exist on Inner3; the known name must still decode.
+  wire = "\x98\x06\x07\x0a\x01a"
+  back = inner3_type.decode_object(wire, 'structtest.Inner3' => Pbwire::Gen::Structtest_Inner3)
+  assert_equal 'a', back.name, 'known field decodes past unknowns'
+  assert_equal "\x0a\x01a", inner3_type.encode_object(back),
+               'unknowns do not survive re-encode (documented)'
+end
+
 puts "#{CHECKS.size - failures}/#{CHECKS.size} checks passed"
 exit(failures.zero? ? 0 : 1)

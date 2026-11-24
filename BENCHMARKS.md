@@ -214,7 +214,7 @@ protoc_plugin` plus `~/.pub-cache/bin`).
 | Go (thin model, pure-Go engine) | `make go-bench` (`bindings/go/benchmarks`) | `protobuf-go` generated code from the same `matrix3.proto` | all 4 | 1.36x ✅ / 1.33x ✅ (xlarge; full tiers + allocs in section) |
 | Java (pure-Java codec) | `make java-bench` (`bindings/java/benchmarks`) | `protobuf-java` generated code from the same `matrix3.proto` | all 4 | 0.95x ❌ / 0.80x ❌ `core` (generated model) |
 | Node (N-API addon) | `make node-bench` (`bindings/node/benchmarks`) | [protobufjs](https://www.npmjs.com/package/protobufjs) from the same `matrix3.proto` | all 4 | 0.18x ❌ / 0.13x ❌ `shim` vs protobufjs |
-| Ruby (C extension) | `make ruby-bench` (`bindings/ruby/benchmarks`) | the `google-protobuf` gem (C extension) | all 4 | 5.00x ✅ / 6.02x ✅ `shim` (one C-extension entry per op) |
+| Ruby (C extension) | `make ruby-bench` (`bindings/ruby/benchmarks`) | the `google-protobuf` gem (C extension) | all 4 | 5.03x ✅ / 6.11x ✅ `shim` (one C-extension entry per op) |
 
 | Objective-C (ARC) | `make objc-bench` (`bindings/objc/benchmarks`) | the `protobuf` ObjC runtime + generated code from the same `matrix3.proto` | all 4 | 0.98x ❌ / 1.16x ✅ `tree` (fresh build per iteration) |
 | Kotlin (pure-Java codec + DSL) | `make kotlin-bench` (`bindings/kotlin/benchmarks`) | `protoc --kotlin_out` over `protobuf-java`, same `matrix3.proto` | all 4 | 28.09x ✅ / 0.74x ❌ `core` (generated model; xlarge encode on a `protobuf-kotlin` baseline collapse) |
@@ -350,7 +350,7 @@ payload, the boundary cost and the baseline all differ.
 | Kotlin | the pure-Java codec + DSL | 74913 B | 494.4 (28.09x ✅, baseline collapse) `core` | 350.3 (0.74x ❌) `core` |
 | Node | N-API addon | 74913 B | 57.0 (0.18x ❌ vs protobufjs) `shim` | 54.5 (0.13x ❌ vs protobufjs) `shim` |
 | Dart | `dart:ffi` binding | 74913 B | 151.6 (1.82x ✅) `shim` | 764.4 (4.84x ✅) `shim` |
-| Ruby | C extension over the core | 74913 B | 99.5 (5.00x ✅) `shim` | 180.0 (6.02x ✅) `shim` |
+| Ruby | C extension over the core | 74913 B | 100.6 (5.03x ✅) `shim` | 184.6 (6.11x ✅) `shim` |
 
 | Objective-C | ARC wrapper | 74913 B | 215.8 (0.98x ❌) `tree` (fresh build per iteration) | 33081.5 (1.16x ✅) |
 | PHP | C extension | 74913 B | 168.1 (2.98x ✅) `shim`; `shim-ffi` 5.3 | 211.3 (0.37x ❌) `shim`; `shim-ffi` 4.5 |
@@ -377,7 +377,7 @@ JVM `core` decode (Java 0.80x, Kotlin 0.74x, Scala 0.27x) and Clojure's
 `core` (0.02x / 0.54x).
 The above-the-line cells are the same task won outright: the core thin
 model 2.1x / 1.9x, Ruby `shim`
-5.00x / 6.02x, PHP `shim` encode 2.98x, Rust `shim`
+5.03x / 6.11x, PHP `shim` encode 2.98x, Rust `shim`
 2.02x / 1.86x, Dart 1.82x / 4.84x, C# `shim` encode 1.30x, Swift 3.24x / 2.54x, Zig
 1.84x / 1.47x. The outliers are baseline or unit effects, not pbwire
 effects: Python's encode column is the dict path (3000 sub-messages, 12000
@@ -865,7 +865,7 @@ Full table and method: [binding README](bindings/node/README.md#benchmarks).
 
 ![Ruby (C extension) vs the google-protobuf gem — MB/s by tier](docs/charts/bench-ruby-c-extension-vs-the-google-protobuf-gem.svg)
 
-xlarge: encode 99.5 (5.00x ✅) / decode 180.0 (6.02x ✅).
+xlarge: encode 100.6 (5.03x ✅) / decode 184.6 (6.11x ✅).
 Full table and method: [binding README](bindings/ruby/README.md#benchmarks).
 
 #### Objective-C vs the `protobuf` ObjC runtime

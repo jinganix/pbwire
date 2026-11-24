@@ -222,7 +222,7 @@ The `shim` row is the native-object path from `pbench/`: one C-extension entry
 walks a generated model's instance variables and fills the tree
 (`encode_object`), or runs one layout-table tag scan straight into the generated
 model classes (`decode_object`). It removes the Ruby-side per-field loop; it leads
-on every tier on both ops (2.25x-5.00x encode, 5.56x-6.02x decode). See
+on every tier on both ops (2.32x-5.03x encode, 5.55x-6.11x decode). See
 [`pbench/README.md`](pbench/README.md) for the arms, gate and verdict.
 
 | arm | mechanism | status |
@@ -237,14 +237,14 @@ on every tier on both ops (2.25x-5.00x encode, 5.56x-6.02x decode). See
 
 | payload | op | pbwire-ruby-shim (MB/s, x gem) | gem (MB/s) |
 |---|---|---|---|
-| 136 B | encode | 95.3 (2.25x ✅) | 42.4 |
-| 136 B | decode | 121.5 (5.87x ✅) | 20.7 |
-| 174 B | encode | 106.2 (3.43x ✅) | 31.0 |
-| 174 B | decode | 136.0 (5.99x ✅) | 22.7 |
-| 2469 B | encode | 89.4 (4.71x ✅) | 19.0 |
-| 2469 B | decode | 151.2 (5.56x ✅) | 27.2 |
-| 74913 B | encode | 99.5 (5.00x ✅) | 19.9 |
-| 74913 B | decode | 180.0 (6.02x ✅) | 29.9 |
+| 136 B | encode | 100.5 (2.32x ✅) | 43.4 |
+| 136 B | decode | 126.1 (6.00x ✅) | 21.0 |
+| 174 B | encode | 106.9 (3.47x ✅) | 30.8 |
+| 174 B | decode | 139.4 (5.93x ✅) | 23.5 |
+| 2469 B | encode | 89.0 (4.76x ✅) | 18.7 |
+| 2469 B | decode | 153.1 (5.55x ✅) | 27.6 |
+| 74913 B | encode | 100.6 (5.03x ✅) | 20.0 |
+| 74913 B | decode | 184.6 (6.11x ✅) | 30.2 |
 
 Ruby is a C extension over the same core, so this is C extension against C
 extension. The first version drove the same C ABI through stdlib Fiddle and lost
@@ -255,13 +255,13 @@ boundary, added the repeated-field payload (so the xlarge tier is 3000 nested
 messages, not one 74 KB string), and split the message into two representations.
 The pbwire column is the native-in/native-out full task
 (`pbench/`), formal run
-`../../results/bench-ruby-20261124T172802Z.json`:
+`../../results/bench-ruby-20261124T174520Z.json`:
 
 - **`shim` (native object in and out).** `type.encode_object(obj)` walks the
 generated model inside C in one entry call and fills a pbw tree; `decode_object`
 runs one layout-table tag scan straight into the generated model classes, with
 no intermediate tree and no per-field API. It is the
-published comparison on both ops (2.25x-5.00x encode / 5.56x-6.02x decode vs the gem) and the
+published comparison on both ops (2.32x-5.03x encode / 5.55x-6.11x decode vs the gem) and the
 simplest -- one extension call removes the Ruby per-field loop. Both sides
 observe the full payload on decode: the shim entry materializes every repeated
 element and nested model before it returns, while the gem arm folds the same

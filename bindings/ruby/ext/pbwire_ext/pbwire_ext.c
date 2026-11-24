@@ -1712,17 +1712,31 @@ object_scalar_value(field_t *f, VALUE value, pbw_ctx *ctx)
 
 /* One tag scan straight into the generated model, no pbw_message tree. The
  * Type's field table is the layout: field number -> wire facts -> model
- * ivar, resolved once per type. Singular scalars/strings land on their ivar
+ * ivar, resolved per type. Singular scalars/strings land on their ivar
  * as they parse (last wins, the merge the tree used to do); repeated values
  * push straight into the array created up front; singular sub-messages
- * accumulate their raw payloads and decode once at the end, so a repeated
+ * remember their payload range and decode once at the end, so a repeated
  * singular still parses as one message. Oneof losers are reset to their
  * defaults after the scan. Every gate-checked field is materialized before
  * return, so the timer needs no Ruby-side fold. Raises Pbwire::Error on
- * malformed bytes, like pbw_decode did. Stack scratch only, so a raise
- * unwinds with nothing to free. The host-class map is resolved through a
- * tiny per-call cache: a 3000-deep payload names two classes, so one Hash
- * lookup per type per top-level call replaces one per message. */
+ * malformed bytes, like pbw_decode did.
+ *
+ * GC rooting: every Ruby VALUE the scan creates is reachable from `obj`
+ * (repeated arrays and singular values are set on their ivar the moment
+ * they are built). Singular sub-message payloads stay as (offset, length)
+ * integers into the input buffer while seen once, so the common case
+ * copies nothing; only a repeated singular allocates an accumulator
+ * String, and that String is stored on the model's ivar before any further
+ * Ruby allocation, so the recursive decode at the end reads memory that is
+ * anchored by `obj` (or by the caller's wire String, as every C extension
+ * relies on). No RSTRING_PTR is ever held across an allocation that could
+ * free its String. Plain C scratch (seen/winner/ranges) lives on the
+ * stack, so a raise unwinds with nothing to free.
+ *
+ * The host-class map is resolved through a tiny per-call cache: a 3000-deep
+ * payload names two classes, so one Hash lookup per type per top-level call
+ * replaces one per message. The 8-entry cap only bounds stack use: a deeper
+ * schema falls back to the uncached Hash lookup with identical results. */
 typedef struct {
     VALUE classes;
     const type_t *types[8];
@@ -1779,6 +1793,34 @@ object_note_singular(VALUE obj, field_t *f, unsigned char *seen,
     }
 }
 
+/* One occurrence of a singular sub-message (message or group) payload.
+ * The first occurrence only records its range; a repeat concatenates into
+ * an accumulator String that is stored on the model's own ivar before any
+ * further Ruby allocation, so the end-of-scan decode reads rooted memory.
+ * `data` is the current frame base; ranges are frame-relative. */
+static void
+object_accumulate_submsg(VALUE obj, field_t *f, const uint8_t *data,
+                          const uint8_t *body, size_t body_len,
+                          size_t *acc_off, size_t *acc_len,
+                          unsigned char *seen, uint32_t *winner)
+{
+    if (!seen[f->index]) {
+        acc_off[f->index] = (size_t)(body - data);
+        acc_len[f->index] = body_len;
+    } else {
+        VALUE cur = rb_ivar_get(obj, f->ivar);
+
+        if (NIL_P(cur)) {
+            /* Second occurrence: materialize the pending first range. */
+            cur = rb_str_new((const char *)(data + acc_off[f->index]),
+                             (long)acc_len[f->index]);
+            rb_ivar_set(obj, f->ivar, cur);
+        }
+        rb_str_cat(cur, (const char *)body, (long)body_len);
+    }
+    object_note_singular(obj, f, seen, winner);
+}
+
 static VALUE
 object_decode_bytes(type_t *type, const uint8_t *data, size_t len,
                       uint32_t depth, klass_cache_t *cache)
@@ -1788,7 +1830,12 @@ object_decode_bytes(type_t *type, const uint8_t *data, size_t len,
     unsigned char *seen;
     uint32_t *winner;
     VALUE *rep; /* repeated arrays, also rooted via obj */
-    VALUE *acc; /* singular sub-message payload accumulators */
+    /* First payload range of each singular sub-message, frame-relative.
+     * Plain integers: no GC hazard. A repeated singular additionally
+     * builds an accumulator String stored on the model's own ivar (see
+     * object_accumulate_submsg), so it stays rooted by `obj`. */
+    size_t *acc_off;
+    size_t *acc_len;
     size_t count = type->count;
     size_t i;
 
@@ -1806,7 +1853,8 @@ object_decode_bytes(type_t *type, const uint8_t *data, size_t len,
         memset(winner, 0, type->oneofs * sizeof(*winner));
     }
     rep = ALLOCA_N(VALUE, count != 0 ? count : 1);
-    acc = ALLOCA_N(VALUE, count != 0 ? count : 1);
+    acc_off = ALLOCA_N(size_t, count != 0 ? count : 1);
+    acc_len = ALLOCA_N(size_t, count != 0 ? count : 1);
 
     /* Defaults first, so every ivar is rooted via obj for the whole scan. */
     for (i = 0; i < count; i++) {
@@ -1824,7 +1872,6 @@ object_decode_bytes(type_t *type, const uint8_t *data, size_t len,
                 rb_ivar_set(obj, f->has_ivar, Qfalse);
             }
         }
-        acc[i] = Qnil;
     }
 
     r.p = data;
@@ -1842,6 +1889,14 @@ object_decode_bytes(type_t *type, const uint8_t *data, size_t len,
         if (f == NULL ||
             (wt != (unsigned)f->wire &&
              !(wt == 2 && f->repeated && packable((pbw_type)f->type)))) {
+            if (f != NULL && wt == 2 && (unsigned)f->wire != 2 &&
+                !f->repeated) {
+                /* A length-delimited run for a singular scalar is
+                 * malformed (packed means repeated); fail instead of
+                 * silently dropping the bytes. */
+                rb_raise(eError, "%s: invalid serialized data",
+                         type_name(type));
+            }
             if (!rd_skip(&r, fnum, wt, depth)) {
                 rb_raise(eError, "%s: invalid serialized data",
                          type_name(type));
@@ -1865,14 +1920,8 @@ object_decode_bytes(type_t *type, const uint8_t *data, size_t len,
                                                 body_len, depth + 1,
                                                 cache));
             } else {
-                if (NIL_P(acc[f->index])) {
-                    acc[f->index] = rb_str_new((const char *)body,
-                                               (long)body_len);
-                } else {
-                    rb_str_cat(acc[f->index], (const char *)body,
-                               (long)body_len);
-                }
-                object_note_singular(obj, f, seen, winner);
+                object_accumulate_submsg(obj, f, data, body, body_len,
+                                         acc_off, acc_len, seen, winner);
             }
             continue;
         }
@@ -1907,14 +1956,9 @@ object_decode_bytes(type_t *type, const uint8_t *data, size_t len,
                                                     (size_t)plen, depth + 1,
                                                     cache));
                 } else {
-                    if (NIL_P(acc[f->index])) {
-                        acc[f->index] = rb_str_new((const char *)r.p,
-                                                   (long)plen);
-                    } else {
-                        rb_str_cat(acc[f->index], (const char *)r.p,
-                                   (long)plen);
-                    }
-                    object_note_singular(obj, f, seen, winner);
+                    object_accumulate_submsg(obj, f, data, r.p,
+                                             (size_t)plen, acc_off, acc_len,
+                                             seen, winner);
                 }
             } else if (f->repeated) {
                 rb_ary_push(rep[f->index],
@@ -1963,7 +2007,8 @@ object_decode_bytes(type_t *type, const uint8_t *data, size_t len,
                     rb_ivar_set(obj, f->has_ivar, Qfalse);
                 }
             }
-            acc[i] = Qnil;
+            acc_off[i] = 0;
+            acc_len[i] = 0;
         }
     }
     /* Singular sub-messages: one recursive decode of the merged payloads. */
@@ -1972,14 +2017,24 @@ object_decode_bytes(type_t *type, const uint8_t *data, size_t len,
 
         if ((f->type == PBW_TYPE_MESSAGE ||
              f->type == PBW_TYPE_GROUP) &&
-            !f->repeated && !NIL_P(acc[i]) &&
+            !f->repeated && seen[i] &&
             (f->oneof == 0 || winner[f->oneof - 1] == (uint32_t)(i + 1))) {
-            VALUE child =
-                object_decode_bytes(field_sub_type(f),
-                                    (const uint8_t *)RSTRING_PTR(acc[i]),
-                                    (size_t)RSTRING_LEN(acc[i]), depth + 1,
-                                    cache);
+            VALUE cur = rb_ivar_get(obj, f->ivar);
+            VALUE child;
 
+            if (NIL_P(cur)) {
+                /* Seen once: decode the recorded range in place. */
+                child = object_decode_bytes(field_sub_type(f),
+                                            data + acc_off[i], acc_len[i],
+                                            depth + 1, cache);
+            } else {
+                /* Seen more than once: decode the accumulator, which has
+                 * been rooted on the model's ivar since it was built. */
+                child = object_decode_bytes(field_sub_type(f),
+                                            (const uint8_t *)RSTRING_PTR(cur),
+                                            (size_t)RSTRING_LEN(cur),
+                                            depth + 1, cache);
+            }
             rb_ivar_set(obj, f->ivar, child);
         }
     }
