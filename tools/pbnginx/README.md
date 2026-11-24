@@ -62,3 +62,53 @@ protoc --include_imports --descriptor_set_out=tools/pbnginx/gateway_svc.desc too
 
 Tasks 3–5 MUST use the `shop.Order` vector above as the reference
 request body for `POST /pb/shop.OrderService/PlaceOrder`.
+
+## Follow-along demo (pbgateway behind nginx)
+
+Prerequisite: an `nginx` binary on `PATH` (`nginx -v` must work).
+Without it the e2e script `tools/pbcurl/tests/e2e_gateway.sh`
+SKIPs cleanly (exit 0 with a `SKIP: nginx binary not found` message)
+rather than failing, so CI without nginx stays green.
+
+All commands run from the repo root.
+
+1. Generate the descriptor set (overlay embeds `shop.Order`/`shop.Item`):
+
+```sh
+protoc --include_imports --descriptor_set_out=tools/pbnginx/gateway_svc.desc tools/pbnginx/gateway_svc.proto
+```
+
+2. Start the echo gateway on `:8081`:
+
+```sh
+cargo build --manifest-path tools/pbgateway/Cargo.toml
+./tools/pbgateway/target/debug/pbgateway --desc tools/pbnginx/gateway_svc.desc --port 8081 &
+```
+
+3. Start nginx on `:8080` (`proxy_pass 127.0.0.1:8081` for `/pb/`):
+
+```sh
+nginx -t -c "$PWD/tools/pbnginx/nginx.conf"
+nginx -c "$PWD/tools/pbnginx/nginx.conf"
+```
+
+4. Invoke through nginx (echoed field `ord-1` proves the round-trip):
+
+```sh
+cargo build --manifest-path tools/pbcurl/Cargo.toml
+PBURL_BASE=http://127.0.0.1:8080 ./tools/pbcurl/target/debug/pbcurl invoke \
+  --desc tools/pbnginx/gateway_svc.desc shop.OrderService/PlaceOrder '{"id":"ord-1"}'
+```
+
+Or run the whole path as one script:
+
+```sh
+bash tools/pbcurl/tests/e2e_gateway.sh
+```
+
+5. Stop everything (unload = stop gateway, then stop nginx):
+
+```sh
+nginx -c "$PWD/tools/pbnginx/nginx.conf" -s stop
+kill %1  # the pbgateway background job (or `kill <pid>`)
+```
