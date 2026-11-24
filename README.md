@@ -223,7 +223,7 @@ The one-row summary is here; the detail is there.
 | [Erlang](bindings/erlang/) | NIF | 3.00x (xlarge) / 1.52x (xlarge) | [gpb](https://github.com/tomas-abrahamsson/gpb) |
 | [Lua](bindings/lua/) | C module, tables + builder | 0.99x (xlarge, tie) / 1.44x (xlarge) `shim` | [lua-protobuf](https://github.com/starwing/lua-protobuf) |
 | [Swift](bindings/swift/) | SwiftPM, static link | 3.24x (xlarge) / 2.54x (xlarge) `shim` | [swift-protobuf](https://github.com/apple/swift-protobuf) |
-| [Scala](bindings/scala/) | Java runtime + DSL | 184.79x (xlarge) / 0.27x (xlarge) `core` (case class) | [ScalaPB](https://github.com/scalapb/ScalaPB) |
+| [Scala](bindings/scala/) | Java runtime + DSL | 211.33x (xlarge) / 0.30x (xlarge) `core` (case class) | [ScalaPB](https://github.com/scalapb/ScalaPB) |
 | [Elixir](bindings/elixir/) | NIF (shared core) | 2.98x (xlarge) / 1.91x (xlarge) | [elixir-protobuf](https://github.com/elixir-protobuf/protobuf) |
 | [Zig](bindings/zig/) | static link | 1.84x (xlarge) / 1.47x (xlarge) `shim` | [zig-protobuf](https://github.com/Arwalk/zig-protobuf) |
 | [F#](bindings/fsharp/) | C# runtime + facade | 1.28x (xlarge) / 0.74x (xlarge) `shim` | [Google.Protobuf](https://www.nuget.org/packages/Google.Protobuf) |

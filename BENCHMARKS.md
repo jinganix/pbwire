@@ -224,7 +224,7 @@ protoc_plugin` plus `~/.pub-cache/bin`).
 | C# (P/Invoke) | `make csharp-bench` (`bindings/csharp/benchmarks`) | Google.Protobuf C# generated code from the same `matrix3.proto` | all 4 | 1.32x ✅ / 0.77x ❌ `shim` (one P/Invoke per op over the flat image) |
 | Lua (C module, tables) | `make lua-bench` (`bindings/lua/benchmarks`) | `lua-protobuf` 0.6.0 | all 4 | 0.99x ❌ / 1.44x ✅ `shim` (native-object, one C entry per op; xlarge encode is a run-to-run tie) |
 | Swift (SwiftPM, static link) | `make swift-bench` (`bindings/swift/benchmarks`) | `apple/swift-protobuf` 1.39.0 generated code from the same `matrix3.proto` | all 4 | 3.24x ✅ / 2.54x ✅ `shim` (one C-side layout-codec call per op) |
-| Scala (Java runtime + DSL) | `make scala-bench` (`bindings/scala/benchmarks`) | ScalaPB 0.11.18 generated code from the same `matrix3.proto` | all 4 | 184.79x ✅ / 0.27x ❌ `core` (case class; xlarge encode on a ScalaPB baseline collapse) |
+| Scala (Java runtime + DSL) | `make scala-bench` (`bindings/scala/benchmarks`) | ScalaPB 0.11.18 generated code from the same `matrix3.proto` | all 4 | 211.33x ✅ / 0.30x ❌ `core` (case class; xlarge encode on a ScalaPB baseline collapse) |
 | Elixir (NIF over the shared core) | `make elixir-bench` (`bindings/elixir/benchmarks`) | `elixir-protobuf` 0.17.1 structs from the same `matrix3.proto` | all 4 | 2.98x ✅ / 1.91x ✅ |
 | Zig (static link) | `make zig-bench` (`bindings/zig/benchmarks`, `-Doptimize=ReleaseFast`) | Arwalk/zig-protobuf 7.0.0 generated code from the same `matrix3.proto` | all 4 | 1.84x ✅ / 1.47x ✅ `shim` (`extern struct` mirror, one C struct-codec call per op) |
 | F# (facade over the C# runtime) | `make fsharp-bench` (`bindings/fsharp/benchmarks`) | Google.Protobuf C# generated code from the same `matrix3.proto` | all 4 | 1.37x ✅ / 0.74x ❌ `shim` (one C-reader call over the flat image) |
@@ -296,8 +296,8 @@ floors: Node's `shim` (0.19x / 0.13x of protobufjs at
 74 KB), PHP's `shim` decode (0.37x of
 the official C extension -- encode now leads, 2.98x,
 under the same fresh-build task), the JVM `core` decode (Java 0.84x of
-protobuf-java; Kotlin 0.77x and Scala 0.27x ride the same
-runtime), Clojure's `core` on both ops (0.02x / 0.54x: the fresh
+protobuf-java; Kotlin 0.77x rides the same
+runtime, Scala 0.30x adds the case-class translation on top), Clojure's `core` on both ops (0.02x / 0.54x: the fresh
 mutable-message build per iteration dominates there), the managed materialization on C#/F# `shim` decode at
 74 KB (0.77x / 0.74x: the C decode is faster than the reference parser, but
 materializing 3000 managed objects costs more than its whole run), and
@@ -311,9 +311,9 @@ rebuilds its 74 KB `str` fixture per iteration). The core's old `tree` headline
 (malloc + field lookup per value vs direct stores) is no longer a headline. The Lua xlarge `shim` encode cell (0.99x) is a
 run-to-run tie, and so is Go's xlarge decode-par (0.99x, serial twin 1.33x).
 Julia's, Kotlin's and Scala's xlarge `shim`/`core`
-encode ratios (22.35x / 27.74x / 184.79x) are baseline collapses, not codec wins:
+encode ratios (22.35x / 27.74x / 211.33x) are baseline collapses, not codec wins:
 ProtoBuf.jl's generated encoder falls to 11.3 MB/s there, `protobuf-kotlin`
-to 17.6 MB/s and ScalaPB to 1.4 MB/s. Each cell is inside
+to 17.6 MB/s and ScalaPB to 1.2 MB/s. Each cell is inside
 the run-to-run band of its own baseline; `docs/perf-attempts.md` records what
 was tried there.
 
@@ -359,7 +359,7 @@ payload, the boundary cost and the baseline all differ.
 | Lua | C module, tables | 74913 B | 107.5 (0.99x ❌) `shim` | 132.5 (1.44x ✅) `shim` |
 | Erlang | NIF (`pbwire`) | 74913 B | 322.8 (2.95x ✅) | 355.5 (1.59x ✅) |
 | Swift | static link (SwiftPM) | 74913 B | 911.9 (3.24x ✅) `shim` | 573.7 (2.54x ✅) `shim` |
-| Scala | the Java runtime + DSL | 74913 B | 258.7 (184.79x ✅, baseline collapse) `core` (case class) | 168.4 (0.27x ❌) `core` |
+| Scala | the Java runtime + DSL | 74913 B | 253.6 (211.33x ✅, baseline collapse) `core` (case class) | 166.8 (0.30x ❌) `core` |
 | Elixir | NIF (Hex `:pbwire`, same core as Erlang) | 74913 B | 154.6 (2.98x ✅) | 113.0 (1.91x ✅) |
 | Zig | static link | 74913 B | 1085.0 (1.84x ✅) `shim` | 774.7 (1.47x ✅) `shim` |
 | F# | P/Invoke over the C# runtime | 74913 B | 481.7 (1.37x ✅) `shim` | 340.6 (0.74x ❌) `shim` |
@@ -373,7 +373,7 @@ the generated baseline -- one native object in, one codec call -- so the
 below-the-line cells are codec gaps, not boundary floors: Node `shim`
 (0.19x / 0.13x of protobufjs),
 PHP `shim` decode (0.37x of the official C extension), the
-JVM `core` decode (Java 0.84x, Kotlin 0.77x, Scala 0.27x) and Clojure's
+JVM `core` decode (Java 0.84x, Kotlin 0.77x, Scala 0.30x) and Clojure's
 `core` (0.02x / 0.54x).
 The above-the-line cells are the same task won outright: the core thin
 model 2.1x / 1.9x, Ruby `shim`
@@ -384,7 +384,7 @@ effects: Python's encode column is the dict path (3000 sub-messages, 12000
 ints), the xlarge encode columns of Julia, Kotlin and Scala are baseline
 collapses (ProtoBuf.jl's
 generated encoder falls to 11.3 MB/s there, `protobuf-kotlin` to 17.6 MB/s,
-ScalaPB to 1.4 MB/s), and the Objective-C tier is a
+ScalaPB to 1.2 MB/s), and the Objective-C tier is a
 memcpy race over one 74 KB string (the 16-byte UTF-8 word scan is what keeps
 its decode near the copy cost).
 The headline names the most-popular baseline: Node's native rows are quoted
@@ -935,7 +935,7 @@ Full table and method: [binding README](bindings/swift/README.md#benchmarks).
 
 ![Scala (Java runtime + DSL) vs ScalaPB — MB/s by tier](docs/charts/bench-scala-java-runtime-dsl-vs-scalapb.svg)
 
-xlarge: encode 258.7 (184.79x ✅) / decode 168.4 (0.27x ❌).
+xlarge: encode 253.6 (211.33x ✅) / decode 166.8 (0.30x ❌).
 Full table and method: [binding README](bindings/scala/README.md#benchmarks).
 
 ### Elixir (NIF over the shared core) vs `elixir-protobuf`
