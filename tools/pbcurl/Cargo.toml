@@ -2,7 +2,7 @@
 name = "pbcurl"
 version = "0.1.0"
 edition = "2021"
-description = "curl for protobuf RPC: list/describe services from a descriptor set (no network in v1)"
+description = "curl for protobuf RPC: list/describe from a descriptor set, invoke JSON over the fixed-path gateway" 
 license = "MIT"
 
 [dependencies]
