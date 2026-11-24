@@ -1,0 +1,9 @@
+[package]
+name = "pbcurl"
+version = "0.1.0"
+edition = "2021"
+description = "curl for protobuf RPC: list/describe services from a descriptor set (no network in v1)"
+license = "MIT"
+
+[dependencies]
+pbwire = { path = "../../bindings/rust" }
