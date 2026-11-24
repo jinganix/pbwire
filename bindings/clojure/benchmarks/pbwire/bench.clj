@@ -142,6 +142,26 @@
       (let [last-inner (last (:inners back))]
         (swap! sink + (count (:name last-inner)) (:value last-inner))))))
 
+(defn- consume-core
+  "The core decode half: mutable decode plus the same gate-checked
+   read-back as consume-tree, so core vs protobuf-java is deep vs deep."
+  [ty wire n]
+  (let [m (pb/decode-message ty wire)]
+    (try
+      (let [s (.get m "str")
+            inner (.get m "inner")
+            tags (.get m "tags")
+            inners (.get m "inners")
+            iname (when inner (.get inner "name"))
+            ivalue (when inner (.get inner "value"))]
+        (swap! sink + (count s) (count tags) (count inners)
+               (count iname) (long (or ivalue 0)))
+        (when (pos? n)
+          (let [last-inner (last inners)]
+            (swap! sink + (count (.get last-inner "name"))
+                   (long (.get last-inner "value"))))))
+      (finally (pb/close! m)))))
+
 (defn -main [desc]
   (let [schema (pb/load-schema desc)
         ty (pb/message-type schema "structtest.Scalars3")
@@ -214,8 +234,7 @@
                                #(gen/encode-structtest-scalars3 data)
                                #(.toByteArray official)
                                #(consume-tree ty reference n)
-                               #(let [m (pb/decode-message ty reference)]
-                                  (pb/close! m))
+                               #(consume-core ty reference n)
                                #(gen/decode-structtest-scalars3 reference)
                                #(structtest.Matrix3$Scalars3/parseFrom
                                  ^bytes reference)])]

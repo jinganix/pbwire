@@ -97,6 +97,8 @@ C++ runtime), `make bench`, `make bench-c` (C structs vs protoc C++). Optional, 
 - [docs/perf-attempts.md](docs/perf-attempts.md): the attempts ledger for the cells that are still
   below their baseline (Java/Kotlin 136 B encode, Julia 136 B decode) — every candidate change,
   its A/B number, and why it was rejected.
+- [docs/perf-fairness.md](docs/perf-fairness.md): the fairness contract behind the numbers —
+  full-flow native in/out, matched freshness and depth, same-run calibration.
 - [AGENTS.md](AGENTS.md): commands, layout and the hard invariants for agents changing this code.
 - [CONTRIBUTING.md](CONTRIBUTING.md): Conventional Commits scopes, hooks, commit gate.
 - [ROADMAP.md](ROADMAP.md): what is done, what is never, what is next.

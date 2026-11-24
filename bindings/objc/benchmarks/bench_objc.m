@@ -248,7 +248,6 @@ main(int argc, char **argv)
                    c->repeats, (size_t)reference.length);
 
             {
-                Scalars3 *official = fill_official(c->pad);
                 PBWMessage *decodeSource = fill_pbwire(schema, c->pad, &error);
                 /* The tree arm's full task: a fresh per-field build per
                  * iteration, then encode. The held-tree re-encode below is
@@ -278,7 +277,10 @@ main(int argc, char **argv)
                   (void)[decodeSource decode:reference error:&ignored];
                 });
                 double official_encode_ns = measure(c->iterations, ^{
-                  (void)[official data];
+                  // Fresh-task symmetry: tree encode builds fresh per
+                  // iteration, so the baseline must too (was held reuse).
+                  Scalars3 *freshOfficial = fill_official(c->pad);
+                  (void)[freshOfficial data];
                 });
                 double official_decode_ns = measure(c->iterations, ^{
                   NSError *ignored = nil;

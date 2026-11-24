@@ -163,9 +163,13 @@ for tier in 0..<cases.count {
 
     print("\(cases[tier]): \(reference.count) bytes, \(count) iterations (repeat field x\(n))")
     print("  \("impl".padding(toLength: 12, withPad: " ", startingAt: 0)) \("op".padding(toLength: 7, withPad: " ", startingAt: 0)) \("ns/op".padding(toLength: 12, withPad: " ", startingAt: 0)) \("MB/s".padding(toLength: 10, withPad: " ", startingAt: 0))")
-    row("pbwire-swift-tree", "encode", reference.count, encodeNs)
+    // NOTE (bench-fairness spec): this is the held-handle proxy task
+    // (built once, re-encoded), not the fresh/shim full-flow task. Same-run
+    // timing only, never the headline; the shim-vs-baseline same-run row
+    // lives in Sources/Bench once it gains a baseline.
+    row("pbwire-swift-proxy", "encode", reference.count, encodeNs)
     row("swift-protobuf", "encode", reference.count, officialEncodeNs)
-    row("pbwire-swift-tree", "decode", reference.count, decodeNs)
+    row("pbwire-swift-proxy", "decode", reference.count, decodeNs)
     row("swift-protobuf", "decode", reference.count, officialDecodeNs)
     print()
 }

@@ -6,8 +6,9 @@
 --
 -- Three pbwire rows, named by the pbench arm they time
 -- (bindings/lua/pbench/): `tree` is the shipped per-field full task (fresh
--- builder per call: message + set + encode; parse + full read-back as JSON
--- per decode), `shim` is the same native-in/native-out task in one C entry
+-- builder per call: message + set + encode; parse + full read-back per
+-- decode, folded with the same field list as shim so the depth matches),
+-- `shim` is the same native-in/native-out task in one C entry
 -- per op (schema:encode / schema:decode), `proxy` is the prebuilt task
 -- (held-builder re-encode, roundtrip with no materialization): published,
 -- never the headline. Every timed encode builds a fresh table per iteration
@@ -158,10 +159,17 @@ for _, c in ipairs(cases) do
                name .. ": repeated tail")
     end
     if has_pb then
-        assert(#pb.encode(MSG, tbl) == want, name .. ": baseline size")
+        local pbwire_bytes = pb.encode(MSG, tbl)
+        assert(#pbwire_bytes == want, name .. ": baseline size")
+        -- Full-flow gate: baseline must carry the same payload. Byte
+        -- equality is required where the encoder is deterministic; nested
+        -- tables stay ordered arrays so field order is stable.
+        assert(pbwire_bytes == wire, name .. ": baseline bytes differ")
         local pbback = pb.decode(MSG, wire)
         assert(pbback.str == "hello" and #pbback.inners == repeats,
                name .. ": baseline decode")
+        assert(#pbback.nums == repeats and #pbback.tags == repeats,
+               name .. ": baseline repeated counts")
     end
 
     -- Fresh table per timed encode iteration on every arm (no prebuilt
@@ -176,10 +184,23 @@ for _, c in ipairs(cases) do
     end
     local function decode_shim()
         local t = shim_decode(wire)
-        sink.n = sink.n + #t.str + #t.nums
+        -- Same depth as tree: every gate-checked repeated field plus the
+        -- nested name, so bare-parse cannot pose as deep materialization.
+        sink.n = sink.n + #t.str + #t.nums + #t.tags + #t.inners
+        if repeats > 0 then
+            sink.n = sink.n + #t.inners[repeats].name
+        end
     end
     local function decode_tree()
-        sink.n = sink.n + #tree_decode(wire)
+        -- tree_decode stringifies the whole message (full read-back); fold
+        -- the same field list via a table decode so the sink depth matches
+        -- shim and baseline instead of comparing string length vs table.
+        local t = shim_decode(wire)
+        local js = tree_decode(wire)
+        sink.n = sink.n + #t.str + #t.nums + #t.tags + #t.inners + #js
+        if repeats > 0 then
+            sink.n = sink.n + #t.inners[repeats].name
+        end
     end
     -- Proxy: built once outside timing (game broadcast), so encode is one
     -- core walk plus one buffer malloc and decode is the gateway
@@ -222,12 +243,22 @@ for _, c in ipairs(cases) do
     print(string.format("  %-14s %-7s %12.1f %10.1f",
         "pbwire-lua-proxy", "decode", pdns, #wire / pdns * 1000))
     if has_pb then
-        local be = best(function()
+        local function baseline_encode()
             sink.n = sink.n + #pb.encode(MSG, fill(repeats))
-        end, sec) * 1e9
-        local bd = best(function()
-            sink.n = sink.n + #pb.decode(MSG, wire).str
-        end, sdc) * 1e9
+        end
+        local function baseline_decode()
+            local b = pb.decode(MSG, wire)
+            sink.n = sink.n + #b.str + #b.nums + #b.tags + #b.inners
+            if repeats > 0 then
+                sink.n = sink.n + #b.inners[repeats].name
+            end
+        end
+        -- Per-op independent calibration (spec section 5): never reuse
+        -- another op's count.
+        local bec = calibrate(baseline_encode, floor)
+        local bdc = calibrate(baseline_decode, floor)
+        local be = best(baseline_encode, bec) * 1e9
+        local bd = best(baseline_decode, bdc) * 1e9
         print(string.format("  %-14s %-7s %12.1f %10.1f",
             "lua-protobuf", "encode", be, #wire / be * 1000))
         print(string.format("  %-14s %-7s %12.1f %10.1f",
