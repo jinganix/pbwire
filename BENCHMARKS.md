@@ -212,7 +212,7 @@ protoc_plugin` plus `~/.pub-cache/bin`).
 | Python (CPython ext) | `make python-bench` (`bindings/python/benchmarks/bench.py`) | `google.protobuf` (upb C extension) on the same `matrix3.proto` | all 4 | 2.75x ✅ `shim encode(data)` / 3.58x ✅ `shim to_dict` |
 | C++ | same engine as C (`bindings/cpp` mirrors the C structs; `make bench-c` is the harness) | `protoc` C++ generated from the same `matrix3.proto` | all 4 | 4.17x ✅ / 2.03x ✅ |
 | Go (thin model, pure-Go engine) | `make go-bench` (`bindings/go/benchmarks`) | `protobuf-go` generated code from the same `matrix3.proto` | all 4 | 1.36x ✅ / 1.33x ✅ (xlarge; full tiers + allocs in section) |
-| Java (pure-Java codec) | `make java-bench` (`bindings/java/benchmarks`) | `protobuf-java` generated code from the same `matrix3.proto` | all 4 | 1.00x ✅ / 0.84x ❌ `core` (generated model) |
+| Java (pure-Java codec) | `make java-bench` (`bindings/java/benchmarks`) | `protobuf-java` generated code from the same `matrix3.proto` | all 4 | 1.00x ✅ / 0.84x ❌ `core` (generated model; encode rounds to parity — 443.9 vs 445.0 MB/s, a coin-flip inside the ±10% JVM band) |
 | Node (N-API addon) | `make node-bench` (`bindings/node/benchmarks`) | [protobufjs](https://www.npmjs.com/package/protobufjs) from the same `matrix3.proto` | all 4 | 0.19x ❌ / 0.13x ❌ `shim` vs protobufjs |
 | Ruby (C extension) | `make ruby-bench` (`bindings/ruby/benchmarks`) | the `google-protobuf` gem (C extension) | all 4 | 5.03x ✅ / 6.11x ✅ `shim` (one C-extension entry per op) |
 
@@ -293,9 +293,8 @@ built before the timer; bytes are identical everywhere. The headline rows now
 time the same task the generated baseline times -- one native object in, one
 codec call -- so the sub-1.0x cells that remain are codec gaps, not boundary
 floors: Node's `shim` (0.19x / 0.13x of protobufjs at
-74 KB), PHP's `shim` decode (0.37x of
-the official C extension -- encode now leads, 2.98x,
-under the same fresh-build task), the JVM `core` decode (Java 0.84x of
+74 KB), PHP's `shim` (2.94x encode / 2.81x decode of
+the official C extension under the same fresh-build task), the JVM `core` decode (Java 0.84x of
 protobuf-java; Kotlin 0.77x rides the same
 runtime, Scala 0.30x adds the case-class translation on top), Clojure's `core` on both ops (0.26x / 0.74x: generic per-field `set` dominates encode, defensive list copies decode), the managed materialization on C#/F# `shim` decode at
 74 KB (0.77x / 0.74x: the C decode is faster than the reference parser, but
@@ -303,7 +302,7 @@ materializing 3000 managed objects costs more than its whole run), and
 Julia's small-tier `shim` encode (0.01x at 136 B: the fresh image build
 in Julia dominates the timer; the xlarge 22.35x is the ProtoBuf.jl
 baseline collapse below), and ObjC `tree` encode
-(0.98x: a fresh per-field build plus alloc/free inside
+(0.97x: a fresh per-field build plus alloc/free inside
 the timer; the ObjC xlarge tier
 rebuilds its 74 KB `str` fixture per iteration). The core's old `tree` headline
 (0.39x-0.58x) retired with the fairness contract: the tree-API build price
@@ -345,14 +344,14 @@ payload, the boundary cost and the baseline all differ.
 | C structs | direct call, layout tables | 74913 B | 1149.3 (4.17x ✅) `shim` | 763.6 (2.03x ✅) `shim` |
 | Go | pure-Go table engine, no cgo | 74913 B | 482.5 (1.36x ✅) | 393.8 (1.33x ✅) |
 | Python | CPython extension, dict path | 74913 B | 164.8 (2.75x ✅) `shim encode(data)` | 153.1 (3.58x ✅) `shim to_dict` |
-| Java | pure-Java codec, no native code | 74913 B | 443.9 (1.00x ✅) `core` (generated model) | 348.1 (0.84x ❌) `core` |
+| Java | pure-Java codec, no native code | 74913 B | 443.9 (1.00x ✅, rounds to parity — 443.9 vs 445.0 MB/s, a coin-flip inside the ±10% JVM band) `core` (generated model) | 348.1 (0.84x ❌) `core` |
 | Kotlin | the pure-Java codec + DSL | 74913 B | 488.3 (27.74x ✅, baseline collapse) `core` | 339.9 (0.77x ❌) `core` |
 | Node | N-API addon | 74913 B | 56.3 (0.19x ❌ vs protobufjs) `shim` | 57.9 (0.13x ❌ vs protobufjs) `shim` |
 | Dart | `dart:ffi` binding | 74913 B | 151.6 (1.82x ✅) `shim` | 764.4 (4.84x ✅) `shim` |
 | Ruby | C extension over the core | 74913 B | 100.6 (5.03x ✅) `shim` | 184.6 (6.11x ✅) `shim` |
 
 | Objective-C | ARC wrapper | 74913 B | 203.6 (0.97x ❌) `tree` (fresh build per iteration) | 31641.7 (1.16x ✅) |
-| PHP | C extension | 74913 B | 168.1 (2.98x ✅) `shim`; `shim-ffi` 5.3 | 211.3 (0.37x ❌) `shim`; `shim-ffi` 4.5 |
+| PHP | C extension | 74913 B | 158.9 (2.94x ✅) `shim`; `shim-ffi` 5.2 | 233.0 (2.81x ✅) `shim`; `shim-ffi` 4.5 |
 | Rust | static link | 74913 B | 1145.3 (2.02x ✅ vs prost) `shim` | 752.5 (1.86x ✅) `shim` |
 | C# | P/Invoke | 74913 B | 483.0 (1.32x ✅) `shim` | 385.3 (0.77x ❌) `shim` |
 | Lua | C module, tables | 74913 B | 105.8 (0.98x ❌) `shim` | 137.3 (1.47x ✅) `shim` |
@@ -371,13 +370,13 @@ generated code on encode at this size, 1.9x on decode), and every headline row t
 the generated baseline -- one native object in, one codec call -- so the
 below-the-line cells are codec gaps, not boundary floors: Node `shim`
 (0.19x / 0.13x of protobufjs),
-PHP `shim` decode (0.37x of the official C extension), the
+PHP `shim` (2.94x / 2.81x of the official C extension), the
 JVM `core` decode (Java 0.84x, Kotlin 0.77x, Scala 0.30x) and Clojure's
 `core` (0.26x / 0.74x).
 The above-the-line cells are the same task won outright: the core thin
 model 2.1x / 1.9x, Ruby `shim`
-5.03x / 6.11x, PHP `shim` encode 2.98x, Rust `shim`
-2.02x / 1.86x, Dart 1.82x / 4.84x, C# `shim` encode 1.30x, Swift 3.24x / 2.54x, Zig
+5.03x / 6.11x, PHP `shim` encode 2.94x, Rust `shim`
+2.02x / 1.86x, Dart 1.82x / 4.84x, C# `shim` encode 1.32x, Swift 3.24x / 2.54x, Zig
 1.84x / 1.47x. The outliers are baseline or unit effects, not pbwire
 effects: Python's encode column is the dict path (3000 sub-messages, 12000
 ints), the xlarge encode columns of Julia, Kotlin and Scala are baseline
@@ -885,7 +884,7 @@ Full table and method: [binding README](bindings/kotlin/README.md#benchmarks).
 
 ![PHP vs the official PHP runtime (pure + C extension) — MB/s by tier](docs/charts/bench-php-vs-the-official-php-runtime-pure-c-extension.svg)
 
-xlarge: encode 168.1 (2.98x ✅) / decode 211.3 (0.37x ❌).
+xlarge: encode 158.9 (2.94x ✅) / decode 233.0 (2.81x ✅).
 Full table and method: [binding README](bindings/php/README.md#benchmarks).
 
 #### Dart vs the `protobuf` Dart package
