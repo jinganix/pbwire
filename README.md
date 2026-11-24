@@ -211,7 +211,7 @@ The one-row summary is here; the detail is there.
 | [C++](bindings/cpp/) | same C runtime, same header | 4.17x (xlarge) / 2.03x (xlarge)¹ | [protoc C++](https://github.com/protocolbuffers/protobuf) |
 | [Python](bindings/python/) | CPython extension | 2.75x (xlarge, `shim encode`) / 3.58x (xlarge, `shim to_dict`) | [google.protobuf (upb)](https://pypi.org/project/protobuf/) |
 | [Ruby](bindings/ruby/) | C extension, linked | 4.97x (xlarge) / 0.23x (xlarge) `shim` | [google-protobuf gem](https://rubygems.org/gems/google-protobuf) |
-| [Java](bindings/java/) | pure-Java codec, no native code | 0.95x (xlarge) / 0.80x (xlarge) `core` (generated model) | [protobuf-java](https://github.com/protocolbuffers/protobuf/tree/main/java) |
+| [Java](bindings/java/) | pure-Java codec, no native code | 1.00x (xlarge) / 0.84x (xlarge) `core` (generated model) | [protobuf-java](https://github.com/protocolbuffers/protobuf/tree/main/java) |
 | [Kotlin](bindings/kotlin/) | Java runtime + DSL | 28.09x (xlarge) / 0.74x (xlarge) `core` | [protobuf-kotlin](https://github.com/protocolbuffers/protobuf/tree/main/java/kotlin) |
 | [Node](bindings/node/) | N-API addon | 0.19x (xlarge) / 0.13x (xlarge) `shim` vs protobufjs | [protobufjs](https://www.npmjs.com/package/protobufjs) |
 | [Objective-C](bindings/objc/) | ARC wrapper | 0.98x (xlarge) / 1.16x (xlarge) `tree` (fresh build per iteration) | [protobuf-objc](https://github.com/protocolbuffers/protobuf/tree/main/objectivec) |
@@ -249,7 +249,7 @@ Pick pbwire when the schema is only known at runtime, when one C core serves
 several host languages, or when libprotobuf must not be in the process. Pick
 generated code only when the schema never changes *and* you accept a codegen
 step: even then the one-call path wins or ties most published encode cells
-— the exceptions are the managed per-call builds (Java 0.95x, Clojure 0.02x
+— the exceptions are the managed per-call builds (Clojure 0.02x
 on the fresh-build task), Lua's run-to-run tie (0.99x) and Node's `shim`
 (0.18x) — while the in-process `pbw_ctx` wins every tier of the
 core benchmark and the C struct codec wins every tier of its own.

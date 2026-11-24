@@ -212,6 +212,93 @@ public final class TestGenerated {
                         == spectest.Oneof1OuterClass.Oneof1.KindCase.NUM,
                 "T6 oneof wire order agrees with oracle");
 
+        // T7: decode edge semantics on the typed path. A repeated singular
+        // scalar keeps the last value; repeated singular sub-messages merge
+        // like the reference; packed and unpacked forms both decode on
+        // repeated numerics. A packed run for a singular field is skipped
+        // (core parity), not an error, and unknown fields do not survive a
+        // typed re-encode -- the dynamic tree retains them, the typed model
+        // drops them (pinned here, documented in the binding README).
+        Structtest_Scalars3 lastWins =
+                Structtest_Scalars3.parseFrom(new byte[] {0x08, 0x05, 0x08, 0x07});
+        check(lastWins.getI32() == 7, "T7 singular last wins");
+        check(structtest.Matrix3.Scalars3
+                        .parseFrom(new byte[] {0x08, 0x05, 0x08, 0x07}).getI32() == 7,
+                "T7 singular last wins agrees with oracle");
+        byte[] innerA = Structtest_Inner3.newBuilder().setName("a").build()
+                .toByteArray();
+        byte[] innerB = Structtest_Inner3.newBuilder().setValue(9).build()
+                .toByteArray();
+        byte[] mergedWire = new byte[] {(byte) 0x82, 0x01, (byte) innerA.length};
+        mergedWire = concat(mergedWire, innerA);
+        mergedWire = concat(mergedWire,
+                new byte[] {(byte) 0x82, 0x01, (byte) innerB.length});
+        mergedWire = concat(mergedWire, innerB);
+        Structtest_Scalars3 merged = Structtest_Scalars3.parseFrom(mergedWire);
+        check("a".equals(merged.getInner().getName())
+                && merged.getInner().getValue() == 9, "T7 singular message merges");
+        structtest.Matrix3.Scalars3 oracleMerged =
+                structtest.Matrix3.Scalars3.parseFrom(mergedWire);
+        check("a".equals(oracleMerged.getInner().getName())
+                && oracleMerged.getInner().getValue() == 9,
+                "T7 singular message merge agrees with oracle");
+        Structtest_Scalars3 packedNums = Structtest_Scalars3.parseFrom(
+                new byte[] {(byte) 0x8A, 0x01, 0x03, 0x01, 0x02, 0x03});
+        check(packedNums.getNumsList().equals(List.of(1, 2, 3)),
+                "T7 packed repeated decodes");
+        check(structtest.Matrix3.Scalars3.parseFrom(
+                        new byte[] {(byte) 0x8A, 0x01, 0x03, 0x01, 0x02, 0x03})
+                        .getNumsList().equals(List.of(1, 2, 3)),
+                "T7 packed repeated agrees with oracle");
+        Structtest_Scalars3 unpackedNums = Structtest_Scalars3.parseFrom(
+                new byte[] {(byte) 0x88, 0x01, 0x01, (byte) 0x88, 0x01, 0x02});
+        check(unpackedNums.getNumsList().equals(List.of(1, 2)),
+                "T7 unpacked repeated decodes");
+        check(structtest.Matrix3.Scalars3.parseFrom(
+                        new byte[] {(byte) 0x88, 0x01, 0x01, (byte) 0x88, 0x01, 0x02})
+                        .getNumsList().equals(List.of(1, 2)),
+                "T7 unpacked repeated agrees with oracle");
+        Structtest_Scalars3 packedSingular =
+                Structtest_Scalars3.parseFrom(new byte[] {0x0A, 0x01, 0x05});
+        check(packedSingular.getI32() == 0, "T7 packed-for-singular skipped");
+        check(structtest.Matrix3.Scalars3
+                        .parseFrom(new byte[] {0x0A, 0x01, 0x05}).getI32() == 0,
+                "T7 packed-for-singular agrees with oracle");
+        byte[] withUnknown =
+                concat(new byte[] {0x08, 0x01}, new byte[] {(byte) 0xF8, 0x03, 0x2A});
+        Structtest_Scalars3 dropped = Structtest_Scalars3.parseFrom(withUnknown);
+        check(dropped.getI32() == 1
+                && Arrays.equals(dropped.toByteArray(), new byte[] {0x08, 0x01}),
+                "T7 typed re-encode drops unknown fields");
+        check(structtest.Matrix3.Scalars3.parseFrom(withUnknown).toByteArray().length
+                        == withUnknown.length,
+                "T7 oracle retains unknown fields (typed divergence pinned)");
+        // Malformed, truncated and over-deep inputs fail loudly.
+        checkThrows(() -> Structtest_Scalars3.parseFrom(new byte[] {0x00}),
+                "T7 field zero fails");
+        checkThrows(() -> Structtest_Scalars3.parseFrom(new byte[] {0x1B}),
+                "T7 stray end-group fails");
+        checkThrows(() -> Structtest_Scalars3.parseFrom(new byte[] {0x72}),
+                "T7 truncated tag fails");
+        checkThrows(() -> Structtest_Scalars3.parseFrom(new byte[] {0x3D, 0x01, 0x02}),
+                "T7 truncated fixed32 fails");
+        checkThrows(() -> Structtest_Scalars3.parseFrom(
+                new byte[] {0x72, 0x05, 0x61}),
+                "T7 truncated length-delimited fails");
+        byte[] deep = new byte[300];
+        Arrays.fill(deep, (byte) 0x0B); // 300 nested start-groups, unknown field 1
+        try {
+            Structtest_Scalars3.parseFrom(deep);
+            throw new AssertionError("T7 deep nesting fails");
+        } catch (IllegalArgumentException expected) {
+            check(expected.getMessage().contains("nesting"),
+                    "T7 deep nesting names the cap");
+        }
+        checkThrows(() -> structtest.Matrix3.Scalars3.parseFrom(deep),
+                "T7 oracle deep nesting fails too");
+        checkThrows(() -> Tutorial_Person.parseFrom(new byte[0]),
+                "T7 missing required fails on decode");
+
         // Map entries ride as repeated entry structs, byte-exact with protoc.
         Spectest_MapTest maps = Spectest_MapTest.parseFrom(referenceMap);
         check(maps.getByIntCount() == 2 && maps.getByInt(0).getKey() == 1
@@ -264,6 +351,12 @@ public final class TestGenerated {
             return;
         }
         throw new AssertionError(what);
+    }
+
+    private static byte[] concat(byte[] a, byte[] b) {
+        byte[] out = Arrays.copyOf(a, a.length + b.length);
+        System.arraycopy(b, 0, out, a.length, b.length);
+        return out;
     }
 
     private static Structtest_Scalars3 build() {

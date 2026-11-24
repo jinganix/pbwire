@@ -154,16 +154,22 @@ best is reported, so a busy machine hits both implementations equally.
 The four tiers are small / medium / large / xlarge (the repeated fields scaled
 x0 / x1 / x100 / x3000).
 
-The headline comparison is the generated-model `core` row in the table below (1.10x at 74 KB encode, 0.80x at 74 KB decode): `protobuf-java`'s
-generated writer is one straight-line block of known tags and values (~58 ns),
-while a dynamic codec pays a presence gate, a type dispatch and tag loads per
-field (~79 ns including the `byte[]` copy). That floor is structural, not
-tuning — and the generated models share most of it: they skip the tree and
-the schema lookup, but `PbCodec.encodeInto` still walks a `Meta` table with
-one dispatch per field (presence test, kind `switch`, getter call), so they
-narrow the gap without reaching straight-line generated code.
-Keep hot loops on the dynamic `Message` path; keep domain code on the
-generated models.
+The headline comparison is the generated-model `core` row in the table below (1.00x at 74 KB encode, 0.84x at 74 KB decode): `protobuf-java`'s
+generated writer is one straight-line block of known tags and values, while
+a table-driven codec pays a presence gate, a type dispatch and tag loads per
+field. That floor is structural, not tuning — and the generated models share
+most of it: they skip the tree and the schema lookup, but `PbCodec.encodeInto`
+still walks a `Meta` table with one dispatch per field (presence test, kind
+`switch`, getter call), so they narrow the gap without reaching straight-line
+generated code. Decode closed from 0.80x to 0.84x by linking the table's
+Builder setters as direct calls (`Bind` spins them via `LambdaMetafactory`
+instead of per-call `MethodHandle.invoke`), batching the packed-run kind
+dispatch per run, and keeping a single pending singular sub-message out of
+the map; the remaining gap is the generated `Builder` storage itself
+(`Integer` boxing on repeated numerics, list copies plus the
+`isInitialized` walk in `build()`), which the runtime cannot reach without
+a codegen change. Keep hot loops on the dynamic `Message` path; keep domain
+code on the generated models.
 
 `pbench/` keeps the other comparison committed and runnable: the pure-Java codec
 against the C core through JNI, same process, same tiers, gated on byte parity
@@ -177,26 +183,30 @@ large/xlarge encode -- see [`pbench/README.md`](pbench/README.md).
 
 | payload | op | pbwire-java-core (MB/s, x protobuf-java) | protobuf-java (MB/s) |
 |---|---|---|---|
-| 136 B | encode | 530.6 (0.35x ❌) | 1500.3 |
-| 136 B | decode | 322.4 (0.50x ❌) | 639.8 |
-| 174 B | encode | 464.8 (0.52x ❌) | 901.0 |
-| 174 B | decode | 321.5 (0.57x ❌) | 565.2 |
-| 2469 B | encode | 409.6 (0.97x ❌) | 424.0 |
-| 2469 B | decode | 299.9 (0.68x ❌) | 443.8 |
-| 74913 B | encode | 436.1 (0.95x ❌) | 460.8 |
-| 74913 B | decode | 334.0 (0.80x ❌) | 418.7 |
+| 136 B | encode | 517.2 (0.34x ❌) | 1509.0 |
+| 136 B | decode | 452.0 (0.73x ❌) | 622.5 |
+| 174 B | encode | 451.5 (0.53x ❌) | 845.7 |
+| 174 B | decode | 361.2 (0.67x ❌) | 538.9 |
+| 2469 B | encode | 412.1 (0.97x ❌) | 423.6 |
+| 2469 B | decode | 328.4 (0.79x ❌) | 414.5 |
+| 74913 B | encode | 443.9 (1.00x ✅) | 445.0 |
+| 74913 B | decode | 348.1 (0.84x ❌) | 416.6 |
 
 The pbwire column is the committed generated model (`Structtest_Scalars3`)
 used as the native object (`toByteArray()`/`parseFrom()`): the same task the
-`protobuf-java` baseline runs. The per-field `tree` arm is compared in
-`pbench/` (see its README), not here. Formal run `../../results/bench-java-20261124T135431Z.json`.
+`protobuf-java` baseline runs, a fresh build per iteration on both sides. The
+baseline decode arm folds the same gate-checked fields the `core` arm
+materializes eagerly (`consumeBaseline`: every repeated element into the live
+sink), so the pair is deep on both sides (fairness §4); `protobuf-java`
+strings parse eagerly, so the fold costs it nothing measurable. The per-field
+`tree` arm is compared in `pbench/` (see its README), not here. Formal run
+`../../results/bench-java-20261124T200358Z.json`.
 
-The `core` column above is Java's headline: the shipped typed path (0.36x at
-136 B, 1.10x at 74 KB encode, 0.51x-0.80x decode): the generated table walks
+The `core` column above is Java's headline: the shipped typed path (0.34x at
+136 B, 1.00x at 74 KB encode, 0.67x-0.84x decode): the generated table walks
 one `FieldMeta` lambda per field and its decode builds the eager typed tree,
-against a generated writer that knows every tag and a decode that
-materializes nothing until read. The model stays the ergonomic path. The
-`core` decode column is eager. The one-crossing JNI probe
+against a generated writer that knows every tag at compile time. The model
+stays the ergonomic path. The one-crossing JNI probe
 lives in `pbench/` (see its README), not here.
 
 The binding is a pure-Java codec (`runtime`): the descriptor
@@ -212,8 +222,8 @@ with a checked fallback when `Unsafe` is missing or the platform is
 big-endian. Against generated `protobuf-java` the per-field work left --
 loads, one `switch`, one call, a presence gate and a type dispatch per field
 -- is what a generated writer avoids by knowing every tag and value at
-compile time, which is why the generated-model `core` encode sits below the
-line at every tier: that floor is structural, not tuning.
+compile time, which is why the generated-model `core` encode only reaches
+parity from the large tier up: that floor is structural, not tuning.
 
 ## Layout
 
@@ -226,7 +236,7 @@ line at every tier: that floor is structural, not tuning.
 | API | [`runtime/MessageType.java`](runtime/MessageType.java), [`runtime/Message.java`](runtime/Message.java), [`runtime/PbwireException.java`](runtime/PbwireException.java) | the dynamic wrapper: typed getters, views, presence, errors |
 | example | [`examples/Roundtrip.java`](examples/Roundtrip.java) | build → encode → decode → compare |
 | conformance | [`conformance/Testee.java`](conformance/Testee.java) | official suite testee (binary in → out, JSON/text skip) |
-| tests | [`tests/TestPbwire.java`](tests/TestPbwire.java), [`tests/TestGenerated.java`](tests/TestGenerated.java), [`tests/TestMetaSchema.java`](tests/TestMetaSchema.java), [`tests/TestSwap.java`](tests/TestSwap.java) | assert-based self-checks, no framework: dynamic gate, generated-model compat (T1–T6), Meta-schema and hot-swap checks |
+| tests | [`tests/TestPbwire.java`](tests/TestPbwire.java), [`tests/TestGenerated.java`](tests/TestGenerated.java), [`tests/TestMetaSchema.java`](tests/TestMetaSchema.java), [`tests/TestSwap.java`](tests/TestSwap.java) | assert-based self-checks, no framework: dynamic gate, generated-model compat (T1–T7: T7 pins typed decode edges), Meta-schema and hot-swap checks |
 | fixture | [`tests/data/sample.proto`](tests/data/sample.proto) + `sample.desc` | `protoc --descriptor_set_out --include_imports` |
 | benchmark | [`benchmarks/Bench.java`](benchmarks/Bench.java) | the four standard tiers against `protobuf-java` |
 | pbench | [`pbench/Compare.java`](pbench/Compare.java), [`pbench/pure/`](pbench/pure/), [`pbench/jni/`](pbench/jni/) | one directory per candidate: the pure-Java codec against the C core through JNI, kept as a rerunnable reference |
@@ -269,6 +279,17 @@ protoc --descriptor_set_out=tests/data/sample.desc --include_imports \
   the dynamic tree; nothing is lost, nothing is sugar-coated. Maps and
   oneofs are first-class in the generated models (`Map` fields, a
   `getKindCase()` on every oneof).
+- **Typed decode drops unknown fields; the dynamic tree keeps them.** A
+  `parseFrom` on a generated model skips what is not in its table (and a
+  packed run on a singular field is skipped too, like the core), so a typed
+  re-encode is byte-exact only for known fields -- pinned by T7, mirroring
+  the reference skip. `GenericCodec` records unknown slices and re-emits
+  them verbatim instead.
+- **Typed setter failures on the fast path propagate raw.** `Bind` links
+  Builder setters as direct calls; a runtime failure inside one is not
+  wrapped (the reflective fallback keeps the old `IllegalStateException`).
+  Decode-time setters on generated builders cannot fail (wire values are
+  never null), so the fast path pays one interface call per field.
 - **No per-thread workspace release.** The encode buffer and the string-image
   cache live in one `ThreadLocal` per thread and are never freed: a thread
   that used the binding keeps one buffer (bounded by the largest message it

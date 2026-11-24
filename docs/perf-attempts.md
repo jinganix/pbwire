@@ -2800,3 +2800,76 @@ payload at ~1628 MB/s (`proxy` row, 5.5x protobufjs), so the whole 0.19x /
 in-addon tuning crosses 1.0x against an in-heap generated runtime. Both
 timer arms stay deep and fresh-task (the fold A/B moves neither side), so the
 pair is fair and the cells stay red as documented.
+
+## Kept (Java core): direct-linked table setters + decode dispatch trims (Task 5, 2026-11-24)
+
+Pre-change formal `results/bench-java-20261124T135431Z.json`: xlarge `core`
+encode 436.1 MB/s against protobuf-java 460.8 (0.95x), decode 334.0 against
+418.7 (0.80x). Encode was already at parity in quiet runs; decode was the
+red cell, so all changes below are decode-side (encode paths untouched).
+
+Profile (throwaway `/tmp` probes against the bench classes, then JFR
+`ExecutionSample` on the xlarge decode loop): the decode pays ~18k Builder
+setter/adder calls per iteration (3000 packed nums + 3000 unpacked tags +
+3000 packed flags + 3000 inners x setName/setValue/addInners + singulars),
+and every one crossed a `MethodHandle.invoke` adaptation frame
+(`Bind.lambda$intSetter$0` / `lambda$setter$0` on the hot stacks), plus a
+per-call guard frame, plus `ArrayList.grow` on the four fresh 3000-long
+Builder lists, plus a `HashMap` alloc + hash + entry walk for the single
+pending singular sub-message, plus a kind `switch` per packed element.
+Encode getters were already direct method references, which is why encode
+was never red in quiet runs.
+
+Kept (all in `bindings/java/runtime`, no generated-file change, so
+Kotlin/Scala/Clojure inherit them with no code change on their side):
+
+- `Bind` setters spin direct calls via `LambdaMetafactory` instead of
+  per-call `MethodHandle.invoke` (same signatures, same loud bind-time
+  failure; non-linkable targets keep the old reflective path; runtime
+  setter failures on the fast path now propagate raw, documented in the
+  binding README). Isolated probe decode 340.4 -> 434.9 MB/s (+28%).
+- `parseInto` keeps a single pending singular sub-message in two locals
+  and only promotes to the `HashMap` on a second distinct field (+2%).
+- Packed int/long loops hoist the kind `switch` out of the element loop;
+  the per-call guard frame is dropped; the unpacked scalar wire check
+  reads the precomputed `FieldMeta.wt` instead of the `singularWt`
+  switch (+4% combined).
+- Harness fairness (`bindings/java/benchmarks/Bench.java`): the baseline
+  decode arm folds every gate-checked field (`consumeBaseline`, same live
+  sink, every repeated element like the tree arm's new full fold) instead
+  of timing a bare parse (fairness §4). Measured nil on both sides:
+  protobuf-java strings parse eagerly (`readStringRequireUtf8`), so the
+  fold costs it nothing — kept as documentation, not as a speedup.
+
+A/B (isolated `/tmp` probes, same session, alternating class dirs):
+decode 340.4 -> 489.6 MB/s against a folded baseline at ~480-492
+(~1.0x in isolation). Formal `make java-bench`
+(`results/bench-java-20261124T200358Z.json`, loaded host): xlarge `core`
+encode 443.9 vs 445.0 (1.00x, was 0.95x), decode 348.1 vs 416.6 (0.84x,
+was 0.80x). `make java-test` green (TestGenerated 77 -> 97 checks: new T7
+pins typed decode edges — scalar last-wins, singular-message merge,
+packed/unpacked acceptance, packed-for-singular skip vs the oracle,
+typed unknown-field drop vs the dynamic tree's retention, field-zero /
+stray-end-group / truncated-tag / truncated-fixed32 /
+truncated-length-delimited throws, 300-deep group nesting hitting the
+256 cap, missing-required on decode); kotlin/scala/clojure test gates
+green on the shared runtime.
+
+Rejected / measured (with reasons):
+
+- ASCII string fast path on decode (Latin1 inflate behind an ASCII
+  scan): ~1.5 ns per small string either way — both sides already pay a
+  `String` construction per value, so there is no gap to close. Not built
+  in the repo (scratch probe only).
+- Anything inside the generated `Builder`/message storage: the ~2900
+  `Integer` boxes on packed-nums decode, the four list copies plus four
+  `unmodifiableList` wrappers plus the 3000-inner `isInitialized` walk
+  in `build()`. protobuf-java keeps primitive `IntArrayList`s and flips
+  them immutable zero-copy. Reaching that storage needs per-message
+  primitive lists from codegen plus a regen of every Java model — out of
+  the runtime-only scope, and disproportionate for the ~10% it prices at.
+
+Honest ceiling: decode 0.84x on the loaded formal bench, ~1.0x isolated.
+The encode cell is green (1.00x); the decode cell stays red and is now a
+floor with its mechanism named above. No further untried one-change
+runtime mechanism on the JVM `core` decode path.

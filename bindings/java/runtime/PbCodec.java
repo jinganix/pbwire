@@ -759,7 +759,12 @@ public final class PbCodec {
         }
         // Singular message/group builders pending assignment: repeat
         // occurrences merge into the same builder, like the reference.
+        // One pending builder rides two locals (no map); a second
+        // distinct field promotes to a map. Single-submessage messages
+        // (the common shape) never allocate here.
         Map<Integer, Object> pend = null;
+        int pendSlot = -1;
+        Object pendOne = null;
         // Last member of each oneof seen on the wire: pending submessage
         // builders are flushed after the loop, and one flushed late must not
         // resurrect a member a later scalar already replaced.
@@ -805,20 +810,38 @@ public final class PbCodec {
                             int len = Wire.rLen32(r);
                             int stop = r.pos + len;
                             ObjIntConsumer<B> add = (ObjIntConsumer<B>) f.set;
-                            while (r.pos < stop) {
-                                add.accept(b, readInt(r, f.kind));
+                            // The kind switch sits outside the loop: one
+                            // dispatch per run, not per element.
+                            switch (f.kind) {
+                                case Kind.SINT32:
+                                    while (r.pos < stop) {
+                                        add.accept(b, Wire.unzig32(
+                                                Wire.rVar(r) & 0xFFFFFFFFL));
+                                    }
+                                    break;
+                                case Kind.FIXED32:
+                                case Kind.SFIXED32:
+                                    while (r.pos < stop) {
+                                        add.accept(b, Wire.rFixed32(r));
+                                    }
+                                    break;
+                                default:
+                                    while (r.pos < stop) {
+                                        add.accept(b, (int) Wire.rVar(r));
+                                    }
+                                    break;
                             }
                             if (r.pos != stop) {
                                 throw new IllegalArgumentException("packed overrun");
                             }
-                        } else if (wt == singularWt(f)) {
+                        } else if (wt == f.wt) {
                             ((ObjIntConsumer<B>) f.set).accept(b, readInt(r, f.kind));
                         } else {
                             Wire.skipUnknown(r, fnum, wt, depth);
                         }
                         break;
                     }
-                    if (wt != singularWt(f)) {
+                    if (wt != f.wt) {
                         Wire.skipUnknown(r, fnum, wt, depth);
                         break;
                     }
@@ -835,20 +858,36 @@ public final class PbCodec {
                             int len = Wire.rLen32(r);
                             int stop = r.pos + len;
                             ObjLongConsumer<B> add = (ObjLongConsumer<B>) f.set;
-                            while (r.pos < stop) {
-                                add.accept(b, readLong(r, f.kind));
+                            // One dispatch per run, not per element.
+                            switch (f.kind) {
+                                case Kind.SINT64:
+                                    while (r.pos < stop) {
+                                        add.accept(b, Wire.unzig64(Wire.rVar(r)));
+                                    }
+                                    break;
+                                case Kind.FIXED64:
+                                case Kind.SFIXED64:
+                                    while (r.pos < stop) {
+                                        add.accept(b, Wire.rFixed64(r));
+                                    }
+                                    break;
+                                default:
+                                    while (r.pos < stop) {
+                                        add.accept(b, Wire.rVar(r));
+                                    }
+                                    break;
                             }
                             if (r.pos != stop) {
                                 throw new IllegalArgumentException("packed overrun");
                             }
-                        } else if (wt == singularWt(f)) {
+                        } else if (wt == f.wt) {
                             ((ObjLongConsumer<B>) f.set).accept(b, readLong(r, f.kind));
                         } else {
                             Wire.skipUnknown(r, fnum, wt, depth);
                         }
                         break;
                     }
-                    if (wt != singularWt(f)) {
+                    if (wt != f.wt) {
                         Wire.skipUnknown(r, fnum, wt, depth);
                         break;
                     }
@@ -978,11 +1017,23 @@ public final class PbCodec {
                         ((BiConsumer<B, Object>) f.set).accept(b, built);
                         break;
                     }
-                    if (pend == null) {
+                    Object sub;
+                    if (pend != null) {
+                        sub = pend.get(slot);
+                        if (sub == null) {
+                            sub = f.factory.get();
+                            pend.put(slot, sub);
+                        }
+                    } else if (pendSlot == slot) {
+                        sub = pendOne;
+                    } else if (pendSlot < 0) {
+                        pendSlot = slot;
+                        sub = f.factory.get();
+                        pendOne = sub;
+                    } else {
                         pend = new HashMap<>();
-                    }
-                    Object sub = pend.get(slot);
-                    if (sub == null) {
+                        pend.put(pendSlot, pendOne);
+                        pendOne = null;
                         sub = f.factory.get();
                         pend.put(slot, sub);
                     }
@@ -1005,15 +1056,12 @@ public final class PbCodec {
         if (!closed) {
             throw new IllegalArgumentException("missing end-group for " + groupEnd);
         }
+        if (pendOne != null) {
+            flushPend(b, meta, pendSlot, pendOne, lastOneof);
+        }
         if (pend != null) {
             for (Map.Entry<Integer, Object> e : pend.entrySet()) {
-                FieldMeta<O, B> f = meta.fields[e.getKey()];
-                if (f.oneof >= 0 && lastOneof != null
-                        && lastOneof[f.oneof] != f.number) {
-                    continue; // a later member of the same oneof won
-                }
-                Object built = ((Function<Object, Object>) f.finish).apply(e.getValue());
-                ((BiConsumer<B, Object>) f.set).accept(b, built);
+                flushPend(b, meta, e.getKey(), e.getValue(), lastOneof);
             }
         }
         if (meta.hasRequired) {
@@ -1025,28 +1073,16 @@ public final class PbCodec {
         }
     }
 
-    private static int singularWt(FieldMeta<?, ?> f) {
-        switch (f.kind) {
-            case Kind.INT32:
-            case Kind.UINT32:
-            case Kind.SINT32:
-            case Kind.INT64:
-            case Kind.UINT64:
-            case Kind.SINT64:
-            case Kind.BOOL:
-            case Kind.ENUM:
-                return 0;
-            case Kind.FIXED64:
-            case Kind.SFIXED64:
-            case Kind.DOUBLE:
-                return 1;
-            case Kind.FIXED32:
-            case Kind.SFIXED32:
-            case Kind.FLOAT:
-                return 5;
-            default:
-                return 2;
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    private static <O, B> void flushPend(B b, Meta<O, B> meta, int slot, Object sub,
+            int[] lastOneof) {
+        FieldMeta<O, B> f = meta.fields[slot];
+        if (f.oneof >= 0 && lastOneof != null
+                && lastOneof[f.oneof] != f.number) {
+            return; // a later member of the same oneof won
         }
+        Object built = ((Function<Object, Object>) f.finish).apply(sub);
+        ((BiConsumer<B, Object>) f.set).accept(b, built);
     }
 
     private static int readInt(Wire.Reader r, int kind) {

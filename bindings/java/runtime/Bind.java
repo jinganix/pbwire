@@ -1,5 +1,8 @@
+import java.lang.invoke.CallSite;
+import java.lang.invoke.LambdaMetafactory;
 import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
+import java.lang.invoke.MethodType;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Method;
 import java.util.function.BiConsumer;
@@ -13,64 +16,157 @@ import java.util.function.Supplier;
 /**
  * Binds canonical Builder setters by name, once per table: the generated
  * Meta file names the method, this resolves it to a functional interface
- * over a MethodHandle. No per-call reflection and no boxing for the
- * int/long/double shapes, so a rebound table encodes exactly like a
- * hand-written one. A missing or misshapen method fails here, loudly,
- * instead of on the wire.
+ * with a direct call to the target (spun via LambdaMetafactory, so the
+ * hot decode path pays one interface call per field, like a hand-written
+ * lambda, instead of a MethodHandle.invoke adaptation per call -- a
+ * runtime setter failure on the fast path propagates raw, unwrapped).
+ * No
+ * per-call reflection and no boxing for the int/long/double shapes, so a
+ * rebound table encodes exactly like a hand-written one. A missing or
+ * misshapen method fails here, loudly, instead of on the wire. Methods
+ * the lookup cannot link directly (non-public targets) fall back to the
+ * MethodHandle.invoke path.
  */
 final class Bind {
     private Bind() {
     }
 
     static <B> ObjIntConsumer<B> intSetter(Class<B> builderClass, String name) {
-        MethodHandle mh = handle(builderClass, name, int.class);
+        Method m = method(builderClass, name, int.class);
+        ObjIntConsumer<B> direct = spinInt(builderClass, m);
+        if (direct != null) {
+            return direct;
+        }
+        MethodHandle mh = unreflect(m);
         return (b, v) -> {
             try {
                 mh.invoke(b, v);
             } catch (Throwable t) {
-                throw new IllegalStateException(
-                        builderClass.getName() + "." + name + " failed", t);
+                throw failed(builderClass, name, t);
             }
         };
     }
 
     static <B> ObjLongConsumer<B> longSetter(Class<B> builderClass, String name) {
-        MethodHandle mh = handle(builderClass, name, long.class);
+        Method m = method(builderClass, name, long.class);
+        ObjLongConsumer<B> direct = spinLong(builderClass, m);
+        if (direct != null) {
+            return direct;
+        }
+        MethodHandle mh = unreflect(m);
         return (b, v) -> {
             try {
                 mh.invoke(b, v);
             } catch (Throwable t) {
-                throw new IllegalStateException(
-                        builderClass.getName() + "." + name + " failed", t);
+                throw failed(builderClass, name, t);
             }
         };
     }
 
     static <B> ObjDoubleConsumer<B> doubleSetter(Class<B> builderClass, String name) {
-        MethodHandle mh = handle(builderClass, name, double.class);
+        Method m = method(builderClass, name, double.class);
+        ObjDoubleConsumer<B> direct = spinDouble(builderClass, m);
+        if (direct != null) {
+            return direct;
+        }
+        MethodHandle mh = unreflect(m);
         return (b, v) -> {
             try {
                 mh.invoke(b, v);
             } catch (Throwable t) {
-                throw new IllegalStateException(
-                        builderClass.getName() + "." + name + " failed", t);
+                throw failed(builderClass, name, t);
             }
         };
     }
 
     static <B, T> BiConsumer<B, T> setter(Class<B> builderClass, String name,
             Class<T> param) {
-        MethodHandle mh = handle(builderClass, name, param);
+        Method m = method(builderClass, name, param);
+        BiConsumer<B, T> direct = spinObj(builderClass, m, param);
+        if (direct != null) {
+            return direct;
+        }
+        MethodHandle mh = unreflect(m);
         @SuppressWarnings("unchecked")
         BiConsumer<B, T> set = (BiConsumer<B, T>) (BiConsumer<?, ?>) (b, v) -> {
             try {
                 mh.invoke(b, v);
             } catch (Throwable t) {
-                throw new IllegalStateException(
-                        builderClass.getName() + "." + name + " failed", t);
+                throw failed(builderClass, name, t);
             }
         };
         return set;
+    }
+
+    /** Same loud failure as before, factored out of the lambdas. */
+    private static IllegalStateException failed(Class<?> builderClass, String name,
+            Throwable t) {
+        return new IllegalStateException(
+                builderClass.getName() + "." + name + " failed", t);
+    }
+
+    /**
+     * Spins a direct implementation of the functional interface over the
+     * target method. A void SAM accepts a value-returning impl (the
+     * chaining Builder is dropped), which is what makes the generated
+     * setters link without an adapter. Returns null when the target is
+     * not linkable from here, so the caller keeps the reflective path.
+     */
+    @SuppressWarnings("unchecked")
+    private static <B> ObjIntConsumer<B> spinInt(Class<B> builderClass, Method m) {
+        try {
+            MethodHandle impl = MethodHandles.lookup().unreflect(m);
+            CallSite cs = LambdaMetafactory.metafactory(MethodHandles.lookup(),
+                    "accept", MethodType.methodType(ObjIntConsumer.class),
+                    MethodType.methodType(void.class, Object.class, int.class),
+                    impl, MethodType.methodType(void.class, builderClass, int.class));
+            return (ObjIntConsumer<B>) cs.getTarget().invoke();
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private static <B> ObjLongConsumer<B> spinLong(Class<B> builderClass, Method m) {
+        try {
+            MethodHandle impl = MethodHandles.lookup().unreflect(m);
+            CallSite cs = LambdaMetafactory.metafactory(MethodHandles.lookup(),
+                    "accept", MethodType.methodType(ObjLongConsumer.class),
+                    MethodType.methodType(void.class, Object.class, long.class),
+                    impl, MethodType.methodType(void.class, builderClass, long.class));
+            return (ObjLongConsumer<B>) cs.getTarget().invoke();
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private static <B> ObjDoubleConsumer<B> spinDouble(Class<B> builderClass, Method m) {
+        try {
+            MethodHandle impl = MethodHandles.lookup().unreflect(m);
+            CallSite cs = LambdaMetafactory.metafactory(MethodHandles.lookup(),
+                    "accept", MethodType.methodType(ObjDoubleConsumer.class),
+                    MethodType.methodType(void.class, Object.class, double.class),
+                    impl, MethodType.methodType(void.class, builderClass, double.class));
+            return (ObjDoubleConsumer<B>) cs.getTarget().invoke();
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private static <B, T> BiConsumer<B, T> spinObj(Class<B> builderClass, Method m,
+            Class<T> param) {
+        try {
+            MethodHandle impl = MethodHandles.lookup().unreflect(m);
+            CallSite cs = LambdaMetafactory.metafactory(MethodHandles.lookup(),
+                    "accept", MethodType.methodType(BiConsumer.class),
+                    MethodType.methodType(void.class, Object.class, Object.class),
+                    impl, MethodType.methodType(void.class, builderClass, param));
+            return (BiConsumer<B, T>) cs.getTarget().invoke();
+        } catch (Throwable t) {
+            return null;
+        }
     }
 
     static <B> Predicate<B> checker(Class<B> builderClass, String name) {
@@ -168,7 +264,8 @@ final class Bind {
                 messageClass.getName() + " has no nested Builder class");
     }
 
-    private static MethodHandle handle(Class<?> builderClass, String name,
+    /** Resolves the setter, accepting the boxed spelling like before. */
+    private static Method method(Class<?> builderClass, String name,
             Class<?>... params) {
         Method m = find(builderClass, name, params);
         if (m == null) {
@@ -183,6 +280,10 @@ final class Bind {
             throw new IllegalArgumentException(
                     builderClass.getName() + " needs a public " + name + describe(params));
         }
+        return m;
+    }
+
+    private static MethodHandle unreflect(Method m) {
         try {
             m.setAccessible(true);
         } catch (RuntimeException ignored) {
@@ -192,8 +293,14 @@ final class Bind {
             return MethodHandles.lookup().unreflect(m);
         } catch (IllegalAccessException e) {
             throw new IllegalArgumentException(
-                    builderClass.getName() + "." + name + " is not accessible", e);
+                    m.getDeclaringClass().getName() + "." + m.getName()
+                            + " is not accessible", e);
         }
+    }
+
+    private static MethodHandle handle(Class<?> builderClass, String name,
+            Class<?>... params) {
+        return unreflect(method(builderClass, name, params));
     }
 
     private static Method find(Class<?> builderClass, String name, Class<?>[] params) {

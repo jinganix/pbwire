@@ -212,7 +212,7 @@ protoc_plugin` plus `~/.pub-cache/bin`).
 | Python (CPython ext) | `make python-bench` (`bindings/python/benchmarks/bench.py`) | `google.protobuf` (upb C extension) on the same `matrix3.proto` | all 4 | 2.75x ✅ `shim encode(data)` / 3.58x ✅ `shim to_dict` |
 | C++ | same engine as C (`bindings/cpp` mirrors the C structs; `make bench-c` is the harness) | `protoc` C++ generated from the same `matrix3.proto` | all 4 | 4.17x ✅ / 2.03x ✅ |
 | Go (thin model, pure-Go engine) | `make go-bench` (`bindings/go/benchmarks`) | `protobuf-go` generated code from the same `matrix3.proto` | all 4 | 1.36x ✅ / 1.33x ✅ (xlarge; full tiers + allocs in section) |
-| Java (pure-Java codec) | `make java-bench` (`bindings/java/benchmarks`) | `protobuf-java` generated code from the same `matrix3.proto` | all 4 | 0.95x ❌ / 0.80x ❌ `core` (generated model) |
+| Java (pure-Java codec) | `make java-bench` (`bindings/java/benchmarks`) | `protobuf-java` generated code from the same `matrix3.proto` | all 4 | 1.00x ✅ / 0.84x ❌ `core` (generated model) |
 | Node (N-API addon) | `make node-bench` (`bindings/node/benchmarks`) | [protobufjs](https://www.npmjs.com/package/protobufjs) from the same `matrix3.proto` | all 4 | 0.19x ❌ / 0.13x ❌ `shim` vs protobufjs |
 | Ruby (C extension) | `make ruby-bench` (`bindings/ruby/benchmarks`) | the `google-protobuf` gem (C extension) | all 4 | 5.03x ✅ / 6.11x ✅ `shim` (one C-extension entry per op) |
 
@@ -295,7 +295,7 @@ codec call -- so the sub-1.0x cells that remain are codec gaps, not boundary
 floors: Node's `shim` (0.19x / 0.13x of protobufjs at
 74 KB), PHP's `shim` decode (0.37x of
 the official C extension -- encode now leads, 2.98x,
-under the same fresh-build task), the JVM `core` decode (Java 0.80x of
+under the same fresh-build task), the JVM `core` decode (Java 0.84x of
 protobuf-java; Kotlin 0.74x and Scala 0.27x ride the same
 runtime), Clojure's `core` on both ops (0.02x / 0.54x: the fresh
 mutable-message build per iteration dominates there), the managed materialization on C#/F# `shim` decode at
@@ -346,7 +346,7 @@ payload, the boundary cost and the baseline all differ.
 | C structs | direct call, layout tables | 74913 B | 1149.3 (4.17x ✅) `shim` | 763.6 (2.03x ✅) `shim` |
 | Go | pure-Go table engine, no cgo | 74913 B | 482.5 (1.36x ✅) | 393.8 (1.33x ✅) |
 | Python | CPython extension, dict path | 74913 B | 164.8 (2.75x ✅) `shim encode(data)` | 153.1 (3.58x ✅) `shim to_dict` |
-| Java | pure-Java codec, no native code | 74913 B | 436.1 (0.95x ❌) `core` (generated model) | 334.0 (0.80x ❌) `core` |
+| Java | pure-Java codec, no native code | 74913 B | 443.9 (1.00x ✅) `core` (generated model) | 348.1 (0.84x ❌) `core` |
 | Kotlin | the pure-Java codec + DSL | 74913 B | 494.4 (28.09x ✅, baseline collapse) `core` | 350.3 (0.74x ❌) `core` |
 | Node | N-API addon | 74913 B | 56.3 (0.19x ❌ vs protobufjs) `shim` | 57.9 (0.13x ❌ vs protobufjs) `shim` |
 | Dart | `dart:ffi` binding | 74913 B | 151.6 (1.82x ✅) `shim` | 764.4 (4.84x ✅) `shim` |
@@ -373,7 +373,7 @@ the generated baseline -- one native object in, one codec call -- so the
 below-the-line cells are codec gaps, not boundary floors: Node `shim`
 (0.19x / 0.13x of protobufjs),
 PHP `shim` decode (0.37x of the official C extension), the
-JVM `core` decode (Java 0.80x, Kotlin 0.74x, Scala 0.27x) and Clojure's
+JVM `core` decode (Java 0.84x, Kotlin 0.74x, Scala 0.27x) and Clojure's
 `core` (0.02x / 0.54x).
 The above-the-line cells are the same task won outright: the core thin
 model 2.1x / 1.9x, Ruby `shim`
@@ -851,7 +851,7 @@ Standard cases), which makes its xlarge tier a memcpy.
 
 ![Java vs protobuf-java — MB/s by tier](docs/charts/bench-java-vs-protobuf-java.svg)
 
-xlarge: encode 436.1 (0.95x ❌) / decode 334.0 (0.80x ❌).
+xlarge: encode 443.9 (1.00x ✅) / decode 348.1 (0.84x ❌).
 Full table and method: [binding README](bindings/java/README.md#benchmarks).
 
 #### Node vs protobufjs
