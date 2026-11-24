@@ -217,7 +217,7 @@ protoc_plugin` plus `~/.pub-cache/bin`).
 | Ruby (C extension) | `make ruby-bench` (`bindings/ruby/benchmarks`) | the `google-protobuf` gem (C extension) | all 4 | 5.03x ✅ / 6.11x ✅ `shim` (one C-extension entry per op) |
 
 | Objective-C (ARC) | `make objc-bench` (`bindings/objc/benchmarks`) | the `protobuf` ObjC runtime + generated code from the same `matrix3.proto` | all 4 | 0.98x ❌ / 1.16x ✅ `tree` (fresh build per iteration) |
-| Kotlin (pure-Java codec + DSL) | `make kotlin-bench` (`bindings/kotlin/benchmarks`) | `protoc --kotlin_out` over `protobuf-java`, same `matrix3.proto` | all 4 | 28.09x ✅ / 0.74x ❌ `core` (generated model; xlarge encode on a `protobuf-kotlin` baseline collapse) |
+| Kotlin (pure-Java codec + DSL) | `make kotlin-bench` (`bindings/kotlin/benchmarks`) | `protoc --kotlin_out` over `protobuf-java`, same `matrix3.proto` | all 4 | 27.74x ✅ / 0.77x ❌ `core` (generated model; xlarge encode on a `protobuf-kotlin` baseline collapse) |
 | PHP (`ext-ffi` + C extension) | `make php-bench` (`bindings/php/benchmarks`) | the official PHP runtime (`protobuf/php/src`): C extension (fastest) + pure-PHP | all 4 | 2.94x ✅ / 2.81x ✅ `shim` vs C ext (`shim-ffi` interpreter-scale; pure-PHP tables in section) |
 | Dart (`dart:ffi`) | `make dart-bench` (`bindings/dart/benchmarks`) | the `protobuf` Dart package + generated code | all 4 | 1.82x ✅ / 4.84x ✅ `shim` (one C-side reader call per op) |
 | Rust (static link) | `make rust-bench` (`bindings/rust/benchmarks`) | prost generated code from the same `matrix3.proto` | all 4 | 2.02x ✅ / 1.86x ✅ `shim` vs prost (one C-side struct-codec call per op; encode above prost at 2469 B up) |
@@ -296,7 +296,7 @@ floors: Node's `shim` (0.19x / 0.13x of protobufjs at
 74 KB), PHP's `shim` decode (0.37x of
 the official C extension -- encode now leads, 2.98x,
 under the same fresh-build task), the JVM `core` decode (Java 0.84x of
-protobuf-java; Kotlin 0.74x and Scala 0.27x ride the same
+protobuf-java; Kotlin 0.77x and Scala 0.27x ride the same
 runtime), Clojure's `core` on both ops (0.02x / 0.54x: the fresh
 mutable-message build per iteration dominates there), the managed materialization on C#/F# `shim` decode at
 74 KB (0.77x / 0.74x: the C decode is faster than the reference parser, but
@@ -311,7 +311,7 @@ rebuilds its 74 KB `str` fixture per iteration). The core's old `tree` headline
 (malloc + field lookup per value vs direct stores) is no longer a headline. The Lua xlarge `shim` encode cell (0.99x) is a
 run-to-run tie, and so is Go's xlarge decode-par (0.99x, serial twin 1.33x).
 Julia's, Kotlin's and Scala's xlarge `shim`/`core`
-encode ratios (22.35x / 28.09x / 184.79x) are baseline collapses, not codec wins:
+encode ratios (22.35x / 27.74x / 184.79x) are baseline collapses, not codec wins:
 ProtoBuf.jl's generated encoder falls to 11.3 MB/s there, `protobuf-kotlin`
 to 17.6 MB/s and ScalaPB to 1.4 MB/s. Each cell is inside
 the run-to-run band of its own baseline; `docs/perf-attempts.md` records what
@@ -347,7 +347,7 @@ payload, the boundary cost and the baseline all differ.
 | Go | pure-Go table engine, no cgo | 74913 B | 482.5 (1.36x ✅) | 393.8 (1.33x ✅) |
 | Python | CPython extension, dict path | 74913 B | 164.8 (2.75x ✅) `shim encode(data)` | 153.1 (3.58x ✅) `shim to_dict` |
 | Java | pure-Java codec, no native code | 74913 B | 443.9 (1.00x ✅) `core` (generated model) | 348.1 (0.84x ❌) `core` |
-| Kotlin | the pure-Java codec + DSL | 74913 B | 494.4 (28.09x ✅, baseline collapse) `core` | 350.3 (0.74x ❌) `core` |
+| Kotlin | the pure-Java codec + DSL | 74913 B | 488.3 (27.74x ✅, baseline collapse) `core` | 339.9 (0.77x ❌) `core` |
 | Node | N-API addon | 74913 B | 56.3 (0.19x ❌ vs protobufjs) `shim` | 57.9 (0.13x ❌ vs protobufjs) `shim` |
 | Dart | `dart:ffi` binding | 74913 B | 151.6 (1.82x ✅) `shim` | 764.4 (4.84x ✅) `shim` |
 | Ruby | C extension over the core | 74913 B | 100.6 (5.03x ✅) `shim` | 184.6 (6.11x ✅) `shim` |
@@ -373,7 +373,7 @@ the generated baseline -- one native object in, one codec call -- so the
 below-the-line cells are codec gaps, not boundary floors: Node `shim`
 (0.19x / 0.13x of protobufjs),
 PHP `shim` decode (0.37x of the official C extension), the
-JVM `core` decode (Java 0.84x, Kotlin 0.74x, Scala 0.27x) and Clojure's
+JVM `core` decode (Java 0.84x, Kotlin 0.77x, Scala 0.27x) and Clojure's
 `core` (0.02x / 0.54x).
 The above-the-line cells are the same task won outright: the core thin
 model 2.1x / 1.9x, Ruby `shim`
@@ -879,7 +879,7 @@ Full table and method: [binding README](bindings/objc/README.md#benchmarks).
 
 ![Kotlin vs protoc --kotlin_out over protobuf-java — MB/s by tier](docs/charts/bench-kotlin-vs-protoc-kotlin-out-over-protobuf-java.svg)
 
-xlarge: encode 494.4 (28.09x ✅) / decode 350.3 (0.74x ❌).
+xlarge: encode 488.3 (27.74x ✅) / decode 339.9 (0.77x ❌).
 Full table and method: [binding README](bindings/kotlin/README.md#benchmarks).
 
 #### PHP vs the official PHP runtime (pure + C extension)

@@ -62,31 +62,34 @@ x0 / x1 / x100 / x3000).
 
 | payload | op | pbwire-kotlin-core (MB/s, x protobuf-kotlin) | protobuf-kotlin (MB/s) |
 |---|---|---|---|
-| 136 B | encode | 503.2 (0.36x ❌) | 1383.6 |
-| 136 B | decode | 319.5 (0.49x ❌) | 655.5 |
-| 174 B | encode | 450.7 (0.49x ❌) | 918.5 |
-| 174 B | decode | 316.0 (0.55x ❌) | 579.5 |
-| 2469 B | encode | 466.4 (2.19x ✅) | 212.9 |
-| 2469 B | decode | 306.4 (0.65x ❌) | 472.9 |
-| 74913 B | encode | 494.4 (28.09x ✅) | 17.6 |
-| 74913 B | decode | 350.3 (0.74x ❌) | 473.3 |
+| 136 B | encode | 521.2 (0.38x ❌) | 1387.8 |
+| 136 B | decode | 386.5 (0.62x ❌) | 626.4 |
+| 174 B | encode | 521.6 (0.56x ❌) | 930.9 |
+| 174 B | decode | 366.9 (0.65x ❌) | 561.9 |
+| 2469 B | encode | 452.3 (1.97x ✅) | 229.6 |
+| 2469 B | decode | 325.3 (0.73x ❌) | 447.4 |
+| 74913 B | encode | 488.3 (27.74x ✅) | 17.6 |
+| 74913 B | decode | 339.9 (0.77x ❌) | 440.8 |
 
 Kotlin reuses the Java runtime (`../java/runtime`), so these numbers are
 `pbwire-java`'s: one workspace lookup plus one `byte[]` copy per call. `core`
 is the same committed generated Java model the Kotlin DSL builds (the
 `tests/gen/matrix3.kt` factories are inline sugar over it) and the published
-comparison here; it tracks Java's `core` row (0.36x at 136 B, 1.10x at 74 KB
-encode, 0.51x-0.80x decode) for the same reason: a generated writer knows
+comparison here; it tracks Java's `core` row (1.00x encode / 0.84x decode at 74 KB after Task 5) for the same reason: a generated writer knows
 every tag at compile time while the dynamic tree walk derives them, the same
-structural floor the Java section explains. The xlarge encode ratio (27.24x)
-rides a `protobuf-kotlin` baseline collapse (17.0 MB/s there); decode is the
+structural floor the Java section explains. The xlarge encode ratio (27.74x)
+rides a `protobuf-kotlin` baseline collapse (17.6 MB/s there); decode is the
 honest comparison. The `core` column is eager. The
 per-field `tree` arm is compared in `../java/pbench/` (see its README),
 not here. The `Message`-wrapper cut (no per-decode
 `AtomicBoolean`, no volatile open flag) removes the binding's own per-call
 overhead on top, so the narrow tiers track the codec instead of the wrapper.
 Formal run
-`../../results/bench-kotlin-20261124T140311Z.json`.
+`../../results/bench-kotlin-20261124T201156Z.json`. The `protobuf-kotlin`
+decode arm folds the same gate-checked fields the gate asserts
+(`consumeBaseline`, mirroring Java Task 5; measured ~4% on xlarge, the
+same nil-effect direction), so both headline sides observe the full
+payload.
 
 ## Why not a copy of the Java runtime?
 
