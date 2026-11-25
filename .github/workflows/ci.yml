@@ -145,19 +145,6 @@ jobs:
           sudo ln -sf /usr/bin/clang-format-20 /usr/local/bin/clang-format
           ./scripts/check.sh
 
-  format:
-    name: clang-format
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-      - name: Install clang-format
-        # apt ships clang-format 18 on 24.04; the tree needs >= 19.
-        run: sudo apt-get update && sudo apt-get install -y clang-format-20
-      - name: Check C formatting
-        run: |
-          sudo ln -sf /usr/bin/clang-format-20 /usr/local/bin/clang-format
-          make format-check
-
   codegen:
     name: Generated models (regenerate + Python, Node, Ruby, PHP checks)
     runs-on: ubuntu-latest
