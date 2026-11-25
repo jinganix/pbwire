@@ -3444,6 +3444,45 @@ reverted under the keep rule. Both xlarge shim cells stay deep red. Closing
 either needs a mechanism change (fewer N-API object/value creations per
 element, or a different emission shape), not another tuning round.
 
+## Cell: Node flat-image `shim-image` arm (generated-passing perf Task 1, 2026-11-25)
+
+Spike: one N-API crossing per op over a hand-written flat ArrayBuffer image
+(`bindings/node/pbench/layout-matrix3.js`, 83-byte fixed header plus a
+variable tail in field order) instead of one property read/write per field.
+`type.encodeImage(image)` / `type.decodeImage(wire)` in
+`bindings/node/runtime/addon.c` walk the image in C through the matrix3
+layout table (same field order as `nativeObject`); strings copy into the
+type's encode arena exactly like `encodeObject` values, so nothing aliases
+the host buffer. Bench arm in `bindings/node/benchmarks/bench.js`
+(`pbwire-node-shim-image`): fresh image build per iteration inside the timer
+on encode, image-to-object conversion inside the timer on decode — the same
+fresh-task shape as `shim`.
+
+Formal `make node-bench` (`results/bench-node-20261125T094543Z.json`;
+same-run ratios, so the host's load (~6-16 from other tenants, absolute
+MB/s below the idle records) moves both sides together):
+
+| tier | enc image/shim | enc image/pjs | dec image/shim | dec image/pjs |
+|---|---|---|---|---|
+| 136 B | 2.07x | 1.38x | 2.61x | 0.42x |
+| 174 B | 1.82x | 1.13x | 3.08x | 0.39x |
+| 2469 B | 1.20x | 0.27x | 2.07x | 0.27x |
+| 74913 B | 1.15x | 0.22x | 1.92x | 0.27x |
+
+Rejected: the bar is >= 1.0x vs protobufjs on both ops, and decode sits at
+0.27x-0.42x on every tier (encode clears the bar only at 136/174 B). The
+crossing elimination is real — the arm beats `shim` on all eight cells
+(1.15x-3.08x), removing the ~30k N-API interactions the closeout above
+names as the floor — but the image just moves the per-field work into the
+JS heap: one TextEncoder.encode per string (6000+ at xlarge) plus DataView
+writes on the way in, one TextDecoder.decode per string plus DataView reads
+on the way out, with a full tree build in C either way. protobufjs pays none
+of that (own-heap objects, no translation, no second representation), so the
+gap grows with the repeated-field scale and no tuning of this arm closes a
+~2.4x-3.8x decode gap. Gate (`OK shim-image parity` all four tiers,
+byte-identical to the reference) and `make node-test` (71/71) stay green;
+the arm stays in the harness as a labeled spike row, no headline change.
+
 ## Cell: embedded encode x100/x3000 vs nanopb (perf loop Task 5 — exhaustion 2026-11-25)
 
 Round 1 (packed INT32 blind-write + 1B/2B varint fast-path in `write_packed`):
