@@ -1889,14 +1889,9 @@ object_decode_bytes(type_t *type, const uint8_t *data, size_t len,
         if (f == NULL ||
             (wt != (unsigned)f->wire &&
              !(wt == 2 && f->repeated && packable((pbw_type)f->type)))) {
-            if (f != NULL && wt == 2 && (unsigned)f->wire != 2 &&
-                !f->repeated) {
-                /* A length-delimited run for a singular scalar is
-                 * malformed (packed means repeated); fail instead of
-                 * silently dropping the bytes. */
-                rb_raise(eError, "%s: invalid serialized data",
-                         type_name(type));
-            }
+            /* A length-delimited run for a singular scalar is not packed
+             * (core parity: read_packed runs only for REPEATED packable
+             * fields), so skip it as unknown, like PHP/C#/Node. */
             if (!rd_skip(&r, fnum, wt, depth)) {
                 rb_raise(eError, "%s: invalid serialized data",
                          type_name(type));
