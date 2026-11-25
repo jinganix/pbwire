@@ -3,8 +3,12 @@ import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
+import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 import java.util.function.Function;
+import java.util.function.ObjDoubleConsumer;
+import java.util.function.ObjIntConsumer;
+import java.util.function.ObjLongConsumer;
 import java.util.function.Supplier;
 
 /**
@@ -299,6 +303,32 @@ public final class TestGenerated {
         checkThrows(() -> Tutorial_Person.parseFrom(new byte[0]),
                 "T7 missing required fails on decode");
 
+        // Bind contract (T6): a throwing setter surfaces IllegalStateException
+        // with the "<builder>.<setter> failed" message and the original cause,
+        // whether the call runs through the spun fast path or the
+        // MethodHandle.invoke fallback path. ThrowingBuilder is public, so it
+        // binds through the spin; fallback.FallbackBuilder is a non-public
+        // cross-package type the spin refuses, so it binds through the
+        // reflective path (whose invoke-time access failure wraps identically).
+        checkBindWrap(() -> Bind.intSetter(ThrowingBuilder.class, "setI32")
+                .accept(new ThrowingBuilder(), 1), "T6 Bind int fast wraps", "setI32");
+        checkBindWrap(() -> Bind.longSetter(ThrowingBuilder.class, "setI64")
+                .accept(new ThrowingBuilder(), 1L), "T6 Bind long fast wraps", "setI64");
+        checkBindWrap(() -> Bind.doubleSetter(ThrowingBuilder.class, "setF64")
+                .accept(new ThrowingBuilder(), 1.0), "T6 Bind double fast wraps", "setF64");
+        checkBindWrap(() -> Bind.setter(ThrowingBuilder.class, "setStr", String.class)
+                .accept(new ThrowingBuilder(), "x"), "T6 Bind obj fast wraps", "setStr");
+        Class<?> fallbackClass = Class.forName("fallback.FallbackBuilder");
+        java.lang.reflect.Constructor<?> fallbackCtor =
+                fallbackClass.getDeclaredConstructor();
+        fallbackCtor.setAccessible(true);
+        Object fallbackBuilder = fallbackCtor.newInstance();
+        @SuppressWarnings("unchecked")
+        ObjIntConsumer<Object> fallbackSet =
+                Bind.intSetter((Class<Object>) fallbackClass, "setI32");
+        checkBindWrap(() -> fallbackSet.accept(fallbackBuilder, 1),
+                "T6 Bind int fallback wraps", "setI32");
+
         // Map entries ride as repeated entry structs, byte-exact with protoc.
         Spectest_MapTest maps = Spectest_MapTest.parseFrom(referenceMap);
         check(maps.getByIntCount() == 2 && maps.getByInt(0).getKey() == 1
@@ -341,6 +371,38 @@ public final class TestGenerated {
     @FunctionalInterface
     private interface ThrowingRunnable {
         void run() throws Exception;
+    }
+
+    /** Throwing setters for the Bind wrap contract (public: spun fast path). */
+    public static final class ThrowingBuilder {
+        public void setI32(int v) {
+            throw new IllegalArgumentException("boom-int");
+        }
+
+        public void setI64(long v) {
+            throw new IllegalArgumentException("boom-long");
+        }
+
+        public void setF64(double v) {
+            throw new IllegalArgumentException("boom-double");
+        }
+
+        public void setStr(String v) {
+            throw new IllegalArgumentException("boom-obj");
+        }
+    }
+
+    private static void checkBindWrap(ThrowingRunnable fn, String what, String setter) {
+        try {
+            fn.run();
+        } catch (Throwable t) {
+            check(t instanceof IllegalStateException
+                    && t.getMessage() != null
+                    && t.getMessage().endsWith("." + setter + " failed")
+                    && t.getCause() != null, what + " (got " + t + ")");
+            return;
+        }
+        throw new AssertionError(what + " (no throw)");
     }
 
     private static void checkThrows(ThrowingRunnable fn, String what) {

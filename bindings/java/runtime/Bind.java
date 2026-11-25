@@ -19,7 +19,8 @@ import java.util.function.Supplier;
  * with a direct call to the target (spun via LambdaMetafactory, so the
  * hot decode path pays one interface call per field, like a hand-written
  * lambda, instead of a MethodHandle.invoke adaptation per call -- a
- * runtime setter failure on the fast path propagates raw, unwrapped).
+ * runtime setter failure on the fast path is wrapped in an
+ * IllegalStateException, exactly like the fallback path).
  * No
  * per-call reflection and no boxing for the int/long/double shapes, so a
  * rebound table encodes exactly like a hand-written one. A missing or
@@ -33,7 +34,7 @@ final class Bind {
 
     static <B> ObjIntConsumer<B> intSetter(Class<B> builderClass, String name) {
         Method m = method(builderClass, name, int.class);
-        ObjIntConsumer<B> direct = spinInt(builderClass, m);
+        ObjIntConsumer<B> direct = spinInt(builderClass, name, m);
         if (direct != null) {
             return direct;
         }
@@ -49,7 +50,7 @@ final class Bind {
 
     static <B> ObjLongConsumer<B> longSetter(Class<B> builderClass, String name) {
         Method m = method(builderClass, name, long.class);
-        ObjLongConsumer<B> direct = spinLong(builderClass, m);
+        ObjLongConsumer<B> direct = spinLong(builderClass, name, m);
         if (direct != null) {
             return direct;
         }
@@ -65,7 +66,7 @@ final class Bind {
 
     static <B> ObjDoubleConsumer<B> doubleSetter(Class<B> builderClass, String name) {
         Method m = method(builderClass, name, double.class);
-        ObjDoubleConsumer<B> direct = spinDouble(builderClass, m);
+        ObjDoubleConsumer<B> direct = spinDouble(builderClass, name, m);
         if (direct != null) {
             return direct;
         }
@@ -82,7 +83,7 @@ final class Bind {
     static <B, T> BiConsumer<B, T> setter(Class<B> builderClass, String name,
             Class<T> param) {
         Method m = method(builderClass, name, param);
-        BiConsumer<B, T> direct = spinObj(builderClass, m, param);
+        BiConsumer<B, T> direct = spinObj(builderClass, name, m, param);
         if (direct != null) {
             return direct;
         }
@@ -113,57 +114,92 @@ final class Bind {
      * not linkable from here, so the caller keeps the reflective path.
      */
     @SuppressWarnings("unchecked")
-    private static <B> ObjIntConsumer<B> spinInt(Class<B> builderClass, Method m) {
+    private static <B> ObjIntConsumer<B> spinInt(Class<B> builderClass, String name,
+            Method m) {
         try {
             MethodHandle impl = MethodHandles.lookup().unreflect(m);
             CallSite cs = LambdaMetafactory.metafactory(MethodHandles.lookup(),
                     "accept", MethodType.methodType(ObjIntConsumer.class),
                     MethodType.methodType(void.class, Object.class, int.class),
                     impl, MethodType.methodType(void.class, builderClass, int.class));
-            return (ObjIntConsumer<B>) cs.getTarget().invoke();
+            @SuppressWarnings("unchecked")
+            ObjIntConsumer<B> direct = (ObjIntConsumer<B>) cs.getTarget().invoke();
+            return (b, v) -> {
+                try {
+                    direct.accept(b, v);
+                } catch (Throwable t) {
+                    throw failed(builderClass, name, t);
+                }
+            };
         } catch (Throwable t) {
             return null;
         }
     }
 
     @SuppressWarnings("unchecked")
-    private static <B> ObjLongConsumer<B> spinLong(Class<B> builderClass, Method m) {
+    private static <B> ObjLongConsumer<B> spinLong(Class<B> builderClass, String name,
+            Method m) {
         try {
             MethodHandle impl = MethodHandles.lookup().unreflect(m);
             CallSite cs = LambdaMetafactory.metafactory(MethodHandles.lookup(),
                     "accept", MethodType.methodType(ObjLongConsumer.class),
                     MethodType.methodType(void.class, Object.class, long.class),
                     impl, MethodType.methodType(void.class, builderClass, long.class));
-            return (ObjLongConsumer<B>) cs.getTarget().invoke();
+            @SuppressWarnings("unchecked")
+            ObjLongConsumer<B> direct = (ObjLongConsumer<B>) cs.getTarget().invoke();
+            return (b, v) -> {
+                try {
+                    direct.accept(b, v);
+                } catch (Throwable t) {
+                    throw failed(builderClass, name, t);
+                }
+            };
         } catch (Throwable t) {
             return null;
         }
     }
 
     @SuppressWarnings("unchecked")
-    private static <B> ObjDoubleConsumer<B> spinDouble(Class<B> builderClass, Method m) {
+    private static <B> ObjDoubleConsumer<B> spinDouble(Class<B> builderClass, String name,
+            Method m) {
         try {
             MethodHandle impl = MethodHandles.lookup().unreflect(m);
             CallSite cs = LambdaMetafactory.metafactory(MethodHandles.lookup(),
                     "accept", MethodType.methodType(ObjDoubleConsumer.class),
                     MethodType.methodType(void.class, Object.class, double.class),
                     impl, MethodType.methodType(void.class, builderClass, double.class));
-            return (ObjDoubleConsumer<B>) cs.getTarget().invoke();
+            @SuppressWarnings("unchecked")
+            ObjDoubleConsumer<B> direct = (ObjDoubleConsumer<B>) cs.getTarget().invoke();
+            return (b, v) -> {
+                try {
+                    direct.accept(b, v);
+                } catch (Throwable t) {
+                    throw failed(builderClass, name, t);
+                }
+            };
         } catch (Throwable t) {
             return null;
         }
     }
 
     @SuppressWarnings("unchecked")
-    private static <B, T> BiConsumer<B, T> spinObj(Class<B> builderClass, Method m,
-            Class<T> param) {
+    private static <B, T> BiConsumer<B, T> spinObj(Class<B> builderClass, String name,
+            Method m, Class<T> param) {
         try {
             MethodHandle impl = MethodHandles.lookup().unreflect(m);
             CallSite cs = LambdaMetafactory.metafactory(MethodHandles.lookup(),
                     "accept", MethodType.methodType(BiConsumer.class),
                     MethodType.methodType(void.class, Object.class, Object.class),
                     impl, MethodType.methodType(void.class, builderClass, param));
-            return (BiConsumer<B, T>) cs.getTarget().invoke();
+            @SuppressWarnings("unchecked")
+            BiConsumer<B, T> direct = (BiConsumer<B, T>) cs.getTarget().invoke();
+            return (b, v) -> {
+                try {
+                    direct.accept(b, v);
+                } catch (Throwable t) {
+                    throw failed(builderClass, name, t);
+                }
+            };
         } catch (Throwable t) {
             return null;
         }

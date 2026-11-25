@@ -257,8 +257,8 @@ static byte[] LF7(int fnum, byte[] payload) => Cat7(Tag7(fnum, 2), Len7(payload)
     Check(mixed.Nums.Count == 4 && mixed.Nums[3] == 7, "T7 packed/unpacked mix");
     var flags = Scalars3.Scalars3Layout.Unmarshal(Cat7(Tag7(22, 0), V7(1), LF7(22, new byte[] { 0 })));
     Check(flags.Flags.Count == 2 && flags.Flags[0] && !flags.Flags[1], "T7 unpacked/packed flags");
-    // A packed run for a singular scalar is skipped (core parity: PHP skips
-    // it too, Ruby rejects it; neither keeps the value).
+    // A packed run for a singular scalar is skipped (core parity: PHP and
+    // Ruby skip it too; none keeps the value).
     Check(Scalars3.Scalars3Layout.Unmarshal(LF7(1, V7(9))).I32 == 0, "T7 packed-for-singular skips");
     // Unknown fields read fine but do not survive a re-encode.
     var withUnknown = Cat7(Tag7(999, 0), V7(1), Tag7(1, 0), V7(5));
