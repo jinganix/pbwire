@@ -26,7 +26,7 @@ case "$HEADER" in
 esac
 
 TYPES='feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert'
-SCOPES='core|protoc|test|docs|build|ci|bindings'
+SCOPES='core|protoc|test|bindings|docs|build|ci|tools'
 PATTERN="^(${TYPES})\\((${SCOPES})\\): .+"
 
 if ! printf '%s\n' "$HEADER" | grep -qE "$PATTERN"; then

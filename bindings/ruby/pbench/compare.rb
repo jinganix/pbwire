@@ -5,10 +5,10 @@
 # median of five rounds is printed. Bytes are compared before anything is
 # timed (the gate does this too; this is the last guard before a number).
 #
-# Shim decode carries no Ruby-side folding sink by design: type_decode_object
-# (bindings/ruby/ext/pbwire_ext/pbwire_ext.c) always runs pbw_decode plus
-# object_from_tree over every field before it returns -- repeated arrays and
-# nested models included -- so the full Ruby object already exists when the
+# Shim decode carries no Ruby-side folding sink by design: decode_object
+# (bindings/ruby/ext/pbwire_ext/pbwire_ext.c) runs one layout-table tag scan
+# straight into the model -- no pbw_decode tree, no per-field API -- over
+# every field before it returns, so the full Ruby object already exists when the
 # timer lambda drops the reference. A reads_ok? over the result would only
 # add Ruby getter calls on top of finished C work; it cannot fuse or skip
 # anything. The tree arm keeps reads_ok? because its per-field gets happen in

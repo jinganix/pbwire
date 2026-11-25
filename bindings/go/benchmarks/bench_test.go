@@ -105,6 +105,39 @@ func fillOfficial(n int) *matrix3pb.Scalars3 {
 	return m
 }
 
+// fillStruct builds the same logical payload as fillOfficial through the
+// pbwire thin model: one native object in, one codec call, with the build
+// price inside the timer (fresh-task both sides).
+func fillStruct(n int) *matrix3.Scalars3 {
+	m := &matrix3.Scalars3{
+		I32:    math.MinInt32,
+		I64:    math.MaxInt64,
+		U32:    math.MaxUint32,
+		U64:    math.MaxUint64,
+		S32:    math.MinInt32,
+		S64:    math.MinInt64,
+		Fx32:   0xdeadbeef,
+		Fx64:   72623859790382856,
+		Sfx32:  math.MinInt32,
+		Sfx64:  math.MinInt64,
+		F32:    float32(math.Inf(1)),
+		F64:    -123456.789,
+		Flag:   true,
+		Str:    "hello",
+		Color:  matrix3.Color3_COLOR3_GREEN,
+		Inner:  &matrix3.Inner3{Name: "kid", Value: 42},
+		OptI32: i32p(-7),
+		OptStr: strp("opt"),
+	}
+	for i := 0; i < n; i++ {
+		m.Nums = append(m.Nums, int32(i-3))
+		m.Tags = append(m.Tags, "tag")
+		m.Inners = append(m.Inners, &matrix3.Inner3{Name: "grandkid", Value: int32(i + 1)})
+		m.Flags = append(m.Flags, i%2 == 0)
+	}
+	return m
+}
+
 // checkStruct compares every known field of a pbwire decode against the protobuf-go
 // decode of the same bytes: the Go core path is correct only if no known field
 // was dropped on the way back into Go (unknowns now ride the unknownFields buffer).
@@ -225,10 +258,8 @@ func run(count int, op func()) float64 {
 
 // measureParallel splits count ops across GOMAXPROCS goroutines and reports
 // wall ns/op: what a server with shared-nothing messages sees. The closure
-// receives its goroutine index so callers can hand each goroutine its own
-// message (sharing one message across Marshal goroutines leans on
-// undocumented cache behavior); decode builds a fresh message per op, encode
-// only reads prebuilt structs and discards the output (no shared sink).
+// receives its goroutine index; decode builds a fresh message per op, encode
+// builds a fresh message per op and discards the output (no shared sink).
 func measureParallel(count int, op func(g int), label string) (med, lo, hi float64) {
 	ns := make([]float64, 0, parPasses)
 	for p := 0; p < parPasses; p++ {
@@ -336,17 +367,16 @@ func TestMatrix3Bench(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		// The native object an application holds, built before the timer.
-		structMsg := &matrix3.Scalars3{}
-		if err := structMsg.Unmarshal(reference); err != nil {
-			t.Fatal(err)
-		}
-
+		// Fresh task: both sides build a fresh native object per iteration
+		// inside the timer (fill + Marshal, release on return); decode arms
+		// already build fresh per iteration (new + Unmarshal) and stay as is.
 		structEncode, structEncodeLo, structEncodeHi := measure(1, func() {
-			sinkBytes, _ = structMsg.Marshal()
+			m := fillStruct(tr.n)
+			sinkBytes, _ = m.Marshal()
 		}, "GoEncode"+tr.label)
 		officialEncode, officialEncodeLo, officialEncodeHi := measure(tr.floor, func() {
-			sinkBytes, _ = proto.Marshal(official)
+			m := fillOfficial(tr.n)
+			sinkBytes, _ = proto.Marshal(m)
 		}, "PbEncode"+tr.label)
 		structDecode, structDecodeLo, structDecodeHi := measure(1, func() {
 			m := new(matrix3.Scalars3)
@@ -357,10 +387,12 @@ func TestMatrix3Bench(t *testing.T) {
 			_ = proto.Unmarshal(reference, &m)
 		}, "PbDecode"+tr.label)
 		structEncodeAllocs, structEncodeBop := allocStats(func() {
-			sinkBytes, _ = structMsg.Marshal()
+			m := fillStruct(tr.n)
+			sinkBytes, _ = m.Marshal()
 		})
 		officialEncodeAllocs, officialEncodeBop := allocStats(func() {
-			sinkBytes, _ = proto.Marshal(official)
+			m := fillOfficial(tr.n)
+			sinkBytes, _ = proto.Marshal(m)
 		})
 		structDecodeAllocs, structDecodeBop := allocStats(func() {
 			m := new(matrix3.Scalars3)
@@ -370,34 +402,22 @@ func TestMatrix3Bench(t *testing.T) {
 			var m matrix3pb.Scalars3
 			_ = proto.Unmarshal(reference, &m)
 		})
-		// Parallel rows: same ops, shared-nothing closures, wall time per op.
-		// Each goroutine gets its own official message: sharing one across
-		// Marshal goroutines leans on undocumented cache behavior.
-		officials := make([]*matrix3pb.Scalars3, runtime.GOMAXPROCS(0))
-		for i := range officials {
-			officials[i] = fillOfficial(tr.n)
-		}
-		structMsgs := make([]*matrix3.Scalars3, len(officials))
-		for i, o := range officials {
-			reference, err := proto.Marshal(o)
-			if err != nil {
-				t.Fatal(err)
-			}
-			m := &matrix3.Scalars3{}
-			if err := m.Unmarshal(reference); err != nil {
-				t.Fatal(err)
-			}
-			structMsgs[i] = m
-		}
+		// Parallel rows: same fresh-task ops, shared-nothing closures, wall
+		// time per op. Each op builds its own message, so nothing is shared
+		// across Marshal goroutines.
 		structEncodePar, structEncodeParLo, structEncodeParHi := measureParallel(calibrate(func() {
-			_, _ = structMsgs[0].Marshal()
-		}, 1), func(g int) {
-			_, _ = structMsgs[g%len(structMsgs)].Marshal()
+			m := fillStruct(tr.n)
+			_, _ = m.Marshal()
+		}, 1), func(_ int) {
+			m := fillStruct(tr.n)
+			_, _ = m.Marshal()
 		}, "GoEncodePar"+tr.label)
 		officialEncodePar, officialEncodeParLo, officialEncodeParHi := measureParallel(calibrate(func() {
-			_, _ = proto.Marshal(officials[0])
-		}, tr.floor), func(g int) {
-			_, _ = proto.Marshal(officials[g%len(officials)])
+			m := fillOfficial(tr.n)
+			_, _ = proto.Marshal(m)
+		}, tr.floor), func(_ int) {
+			m := fillOfficial(tr.n)
+			_, _ = proto.Marshal(m)
 		}, "PbEncodePar"+tr.label)
 		structDecodePar, structDecodeParLo, structDecodeParHi := measureParallel(calibrate(func() {
 			m := new(matrix3.Scalars3)

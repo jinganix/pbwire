@@ -18,6 +18,9 @@ echo "== versions =="
 echo "== llms.txt sync =="
 ./scripts/check-llms.sh
 
+echo "== bench refs (gate: chart anchors + ORDER) =="
+./scripts/check-bench-refs.sh --gate
+
 echo "== build + test =="
 make -s test
 

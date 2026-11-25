@@ -29,8 +29,8 @@ module Pbwire
       alias_method :__pbwire_from_bytes__, :from_bytes
       alias_method :__pbwire_from_file__, :from_file
 
-      def from_bytes(bytes)
-        schema = __pbwire_from_bytes__(bytes)
+      def from_bytes(bytes, opts = nil)
+        schema = __pbwire_from_bytes__(bytes, opts)
         return schema unless block_given?
 
         begin
@@ -40,8 +40,8 @@ module Pbwire
         end
       end
 
-      def from_file(path)
-        schema = __pbwire_from_file__(path)
+      def from_file(path, opts = nil)
+        schema = __pbwire_from_file__(path, opts)
         return schema unless block_given?
 
         begin

@@ -73,20 +73,51 @@ It is the pbench `core` arm, published as the no-native mode
 
 The prost baseline generates at build time
 from crates.io. The four tiers are small / medium / large /
-xlarge (the repeated fields scaled x0 / x1 / x100 / x3000). Copied from
-[BENCHMARKS.md](../../BENCHMARKS.md), which is the single source for all
-performance numbers; higher is better, MB/s over wire bytes:
+xlarge (the repeated fields scaled x0 / x1 / x100 / x3000).
+
+#### Rust vs prost
+
+![Rust vs prost — MB/s by tier](../../docs/charts/bench-rust-vs-prost.svg)
 
 | payload | op | pbwire-rust-shim (MB/s, x prost) | prost (MB/s) |
-|---|---|---|---|
-| 136 B | encode | 1841.7 (1.40x ✅) | 1317.4 |
-| 136 B | decode | 1226.9 (1.35x ✅) | 911.1 |
-| 174 B | encode | 1693.8 (1.35x ✅) | 1255.5 |
-| 174 B | decode | 1098.5 (1.60x ✅) | 687.7 |
-| 2469 B | encode | 1108.6 (0.92x ❌) | 1204.2 |
-| 2469 B | decode | 643.3 (1.87x ✅) | 344.0 |
-| 74913 B | encode | 1190.7 (0.92x ❌) | 1290.1 |
-| 74913 B | decode | 766.0 (1.90x ✅) | 403.9 |
+|---|---|---|---|---|
+| 136 B | encode | 492.3 (0.49x ❌) | 1001.0 |
+| 136 B | decode | 128.7 (0.14x ❌) | 906.1 |
+| 174 B | encode | 700.2 (0.95x ❌) | 734.0 |
+| 174 B | decode | 294.7 (0.42x ❌) | 705.4 |
+| 2469 B | encode | 1016.2 (1.89x ✅) | 538.9 |
+| 2469 B | decode | 618.6 (1.65x ✅) | 374.1 |
+| 74913 B | encode | 1145.3 (2.02x ✅) | 567.4 |
+| 74913 B | decode | 752.5 (1.86x ✅) | 404.2 |
+
+The archive is linked in, so a call is a direct C call with no `dlopen` lookup.
+The pbwire column is the native-in/native-out full task (formal run
+`../../results/bench-rust-20261124T141310Z.json`).
+`pbwire-rust-shim` is the published comparison: the
+generated `#[repr(C)]` mirror read and written by the C struct codec in one
+call per op, with a fresh image and decode arena built per iteration on both sides. prost, the
+published baseline (generated at build time by build.rs, bytes
+gated like the rest), is behind the `shim` rows on the two large tiers and
+ahead of them on the two small tiers, where the per-iteration image build
+dominates.
+
+The pure-Rust core port is compared in `pbench/README.md`, not here.
+
+The shim's decode leads prost on the two large tiers (1.63x at 2469 B, 1.86x
+at 74 KB) and trails on the two small tiers (0.27x/0.32x), while its encode
+trails at 136/174 B (0.80x/0.95x) and leads at 2469 B/74913 B
+(1.88x/2.06x): under the fresh-build contract the per-iteration image build
+dominates the small tiers, and on the large tiers the shared C struct encoder's
+single pass (`make bench-c` measures the same codec at
+1148.2 MB/s on 74913 B) beats prost's generated writer. `../../docs/perf-attempts.md` records the `-O3` A/B attempt on that
+cell and why it was rejected (the sibling layout arms compile the same C file
+at `-O2`).
+
+`encode_to()` tries the caller's buffer first and only asks for the exact size
+(a second tree walk) when the buffer does not fit, which is what keeps the
+measured loop at one walk per call. Sizing on every call instead halves the
+encode throughput (xlarge 624 MB/s, 0.52x prost): the number worth checking
+first if this row ever regresses.
 
 `set_str` rejects a string containing a NUL byte (it would truncate on the way
 to C); use `set_bytes` for binary payloads, including on a `string` field.
@@ -152,3 +183,4 @@ linked core:
 | `Type::visit(wire, &mut cb)` | single-level scan; a panicking callback is caught, never unwinds into C |
 | `Type::any_pack(url, payload)`, `Message::any_type_url()`/`any_payload()`, `Type::timestamp_from_millis(ms)`/`duration_from_millis(ms)`, `Message::timestamp_millis()`/`duration_millis()`, `Message::fieldmask_path_count()`/`fieldmask_path_at(i)` | WKT helpers |
 | `Schema::service(..)`/`service_at`/`service_count`, `Schema::resolve_method(service, method)` | routing metadata |
+

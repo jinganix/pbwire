@@ -7,6 +7,15 @@
 // x100 / x3000, which lands the tiers on 136 / 174 / 2469 / 74913 bytes. Both
 // sides must produce identical bytes before anything is timed.
 //
+// Decode fairness (docs/perf-fairness.md section 4): both headline arms are
+// deep without an extra fold. Matrix3Shim.Unmarshal runs one C layout-codec
+// call that fills the flat image plus its own ReadImage, which materializes
+// every gate-checked field into the returned object before the timer stops.
+// The official ParseFrom eagerly decodes every field the same way (it throws
+// on invalid UTF-8 during the parse, so no lazy tail hides behind the
+// return). A fold over either result would only add accessor calls on top of
+// finished work, so both timers observe the full payload as is.
+//
 // Arms (bindings/README.md#pbench-three-arms-one-contract):
 //   tree  the facade's Message handle, full task -- fresh build per field per
 //               iteration, encode; decode, every gate-checked field read back
@@ -249,7 +258,6 @@ let main argv =
                         if not (treeFieldsOk back reference n) then
                             fail label "pbwire-fsharp-tree field compare differs"
                         else
-                            let official = fillOfficial n
                             // Tier line shows the proxy op's count; the floor calibration
                             // stays on the prebuilt op so the slower tree op never
                             // inflates any row. Every op calibrates on its own count.
@@ -269,10 +277,14 @@ let main argv =
                                     use d = Pbwire.parse ty reference
                                     sink <- sink + consumeTree d n)
 
-                            let shimEncodeNs, _ = measure floor (fun () -> Matrix3Shim.Marshal native |> ignore)
+                            // Headline encode rows are the fresh task: build a fresh native
+                            // input per iteration inside the timer, encode, release inside
+                            // the timer. Decode rows already allocate a fresh output per
+                            // iteration; kept as is.
+                            let shimEncodeNs, _ = measure floor (fun () -> Matrix3Shim.Marshal (Matrix3Shim.New n) |> ignore)
                             let shimDecodeNs, _ = measure floor (fun () -> Matrix3Shim.Unmarshal reference |> ignore)
 
-                            let officialEncodeNs, _ = measure floor (fun () -> official.ToByteArray() |> ignore)
+                            let officialEncodeNs, _ = measure floor (fun () -> (fillOfficial n).ToByteArray() |> ignore)
                             let officialDecodeNs, _ =
                                 measure floor (fun () -> Scalars3.Parser.ParseFrom reference |> ignore)
 

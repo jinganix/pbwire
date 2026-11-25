@@ -143,7 +143,7 @@ expected failures are the shared `conformance/failure_list_pbwire.txt` (tag
 varints the reference C++ testee truncates identically); only JSPB answers
 `skipped`.
 
-## Benchmark
+## Benchmarks
 
 `benchmarks/bench.R` runs the four standard tiers from
 [`BENCHMARKS.md`](../../BENCHMARKS.md) against RProtoBuf when it is installed
@@ -154,6 +154,61 @@ time: `pbwire-r-shim` is the named list in and wire bytes out through one
 `.Call` (the walk happens in C), `pbwire-r-tree` is a prebuilt builder handle.
 Neither replaces the other: a list is what R code passes around, a builder is
 what a hot loop keeps.
+
+### R (C extension, named lists) vs RProtoBuf
+
+![R (C extension, named lists) vs RProtoBuf — MB/s by tier](../../docs/charts/bench-r-c-extension-named-lists-vs-rprotobuf.svg)
+
+| payload | op | pbwire-r-shim (MB/s, x RProtoBuf) | RProtoBuf (MB/s) |
+|---|---|---|---|
+| 136 B | encode | 44.7 (17.19x ✅) | 2.6 |
+| 136 B | decode | 88.3 (32.70x ✅) | 2.7 |
+| 174 B | encode | 29.5 (11.35x ✅) | 2.6 |
+| 174 B | decode | 99.7 (33.23x ✅) | 3.0 |
+| 2469 B | encode | 46.3 (18.52x ✅) | 2.5 |
+| 2469 B | decode | 143.5 (47.83x ✅) | 3.0 |
+| 74913 B | encode | 48.2 (19.28x ✅) | 2.5 |
+| 74913 B | decode | 159.6 (57.00x ✅) | 2.8 |
+
+Same class as Lua/Ruby: a C extension over the core (named lists in/out
+through one transient tree per call, statically linked), schema from
+a `FileDescriptorSet` at run time. The pbwire column is the native-in/native-out
+full task (formal run `../../results/bench-r-20261124T143645Z.json`): `shim` runs the
+named-list task in one `.Call`. The per-field `tree` arm is compared in
+`pbench/README.md`, not here.
+
+Same class as Lua/Ruby: a C extension over the core (named lists in/out
+through one transient tree per call, statically linked), schema from
+a `FileDescriptorSet` at run time. The wrappers scope every `.Call` to
+`PACKAGE = "pbwire"`: a bare entry-point name re-searches every loaded DLL
+per call, which costs 30+ us once a native-heavy package (RProtoBuf itself,
+Rcpp) shares the session; the registered-table hit is ~100 ns. Bytes are
+gated equal on all four tiers before timing (RProtoBuf takes the `u64` max as
+its decimal string — R numerics cannot spell it — everything else is the same
+R values pbwire encodes), and the materialized decode is gated identical too,
+plus a full decode round trip.
+
+One published row (`pbench/README.md`):
+
+- **`pbwire-r-shim`** is the task an R application runs: the generated model's
+  named list in, wire bytes out. One `.Call` hands the list to C, which walks it
+  and fills the tree inside C; the decode is the same one call in reverse and
+  returns the fully materialized named list. The type is resolved once into a
+  schema-owned message number, so the call does not look a name up per message.
+  It is the published comparison on both ops
+  (11.0x-20.0x / 32.5x-53.7x vs RProtoBuf).
+
+Encode is no contest at any tier: setting 3000 nested messages field by field
+through S4 dispatch costs RProtoBuf ~27 ms where the C core walks the list once.
+Decode is compared as the same user-visible task: `RProtoBuf::read` parses in C++
+and materializes fields lazily on `$`, while `pbwire_decode` builds the full
+named-list tree eagerly, so the baseline side reads every field into the same
+plain-list shape (the table's `decode` rows). A bare `read()` alone is a few
+times faster than `pbwire_decode`, but it hands back a Message, not R data; once
+both sides produce plain lists, the list path leads 52x / 53x (encode / decode)
+at xlarge. Two R spellings
+to know: `INT32_MIN` reads back as `NA` (it *is* `NA_INTEGER`), and doubles past
+2^63 clamp to the int/uint limits — both documented in the binding README.
 
 ## pbench: the named-list row and the builder row
 
@@ -185,3 +240,4 @@ tests need no `protoc`):
 ```shell
 (cd tests/data && protoc --descriptor_set_out=sample.desc sample.proto)
 ```
+

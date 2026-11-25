@@ -38,6 +38,30 @@ private var failures = 0
 private var sink = 0L
 
 /**
+ * The baseline decode half of the timed full task, mirroring
+ * bindings/java/benchmarks/Bench.java consumeBaseline (Task 5): the
+ * pbwire core arm (Structtest_Scalars3.parseFrom) materializes every
+ * field eagerly through its Builder, so the protobuf-java arm folds the
+ * same gate-checked fields instead of timing a bare parse (fairness §4).
+ * Task 5 measured nil effect (protobuf-java strings parse eagerly); this
+ * keeps the two harnesses' headline cells directly comparable.
+ */
+private fun consumeBaseline(wire: ByteArray, n: Int) {
+    val back = Matrix3.Scalars3.parseFrom(wire)
+    sink += back.getStr().length
+    for (i in 0 until back.getTagsCount()) {
+        sink += back.getTags(i).length
+    }
+    sink += back.getInnersCount()
+    sink += back.getInner().getName().length
+    sink += back.getInner().getValue()
+    for (i in 0 until n) {
+        val m = back.getInners(i)
+        sink += m.getName().length + m.getValue()
+    }
+}
+
+/**
  * The tree decode half of the timed full task: decode, then read back
  * every gate-checked field (the same field list the gate asserts).
  * Message.decode is lazy on message/string/bytes fields, so this is the
@@ -275,13 +299,13 @@ fun main(args: Array<String>) {
                 val tierCount = calibrate({ fillPbwire(ty, n).use { it.encode() } }, count)
                 val res = measureAll(count, listOf(
                     { fillPbwire(ty, n).use { it.encode() } },
-                    { model.toByteArray() },
+                    { fillModel(n).toByteArray() },
                     { message.encode() },
-                    { official.toByteArray() },
+                    { fillOfficial(n).toByteArray() },
                     { consumeTree(ty, reference, n) },
                     { Structtest_Scalars3.parseFrom(reference) },
                     { ty.decode(reference).close() },
-                    { Matrix3.Scalars3.parseFrom(reference) },
+                    { consumeBaseline(reference, n) },
                 ))
 
                 println("$label: ${reference.size} bytes, $tierCount iterations (repeat field x$n)")

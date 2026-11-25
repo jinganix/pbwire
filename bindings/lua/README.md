@@ -187,7 +187,7 @@ expected failures are the shared `conformance/failure_list_pbwire.txt` (tag
 varints the reference C++ testee truncates identically); only JSPB answers
 `skipped`.
 
-## Benchmark
+## Benchmarks
 
 `benchmarks/bench.sh` runs the four standard tiers from
 [`BENCHMARKS.md`](../../BENCHMARKS.md) against `lua-protobuf` 0.6.0 on the same
@@ -198,25 +198,12 @@ the prebuilt `proxy` task are compared in `pbench/` (see `pbench/README.md`). Th
 size (our bytes are canonical) plus a full-field expectation check; the
 baseline only has to agree on size and decode, because `lua-protobuf` writes nested messages in table hash order, so raw bytes
 are not comparable. Needs only Lua and a C compiler, plus the baseline for its
-columns (`luarocks install lua-protobuf`). Copied from that run (Apple M4 Pro,
-Lua 5.5.1, `results/bench-lua-20261123T054814Z.json`); higher is better, MB/s
-over wire bytes:
-
-| payload | op | pbwire-lua-shim (MB/s, x lua-protobuf) | lua-protobuf (MB/s) |
-|---|---|---|---|
-| 136 B | encode | 106.0 (1.08x ✅) | 98.6 |
-| 136 B | decode | 151.7 (1.63x ✅) | 93.1 |
-| 174 B | encode | 106.6 (1.10x ✅) | 97.2 |
-| 174 B | decode | 148.7 (1.61x ✅) | 92.6 |
-| 2469 B | encode | 101.2 (1.07x ✅) | 94.4 |
-| 2469 B | decode | 135.3 (1.61x ✅) | 83.9 |
-| 74913 B | encode | 99.4 (0.99x ❌) | 100.1 |
-| 74913 B | decode | 123.0 (1.42x ✅) | 86.9 |
+columns (`luarocks install lua-protobuf`).
 
 `proxy` in the same run (prebuilt builder re-encode, `roundtrip()` with no
-materialization; same-run timing only, never headlined): encode 1054.8 /
-1076.0 / 1510.1 / 1607.1 MB/s, decode 509.7 / 487.0 / 449.3 / 476.4 MB/s.
-The xlarge `shim` encode cell (0.99x) is a tie, not a finding: it flips
+materialization; same-run timing only, never headlined): encode 1054.0 /
+1085.8 / 1574.1 / 1779.2 MB/s, decode 506.9 / 480.8 / 474.8 / 522.8 MB/s.
+The xlarge `shim` encode cell (0.98x) is a tie, not a finding: it flips
 between runs inside the host's ±10% spread.
 
 The table path (`shim`) writes straight from the Lua table into the wire
@@ -225,6 +212,68 @@ tree, no per-value allocation), so it is
 the shipped default. The builder hot path (`proxy`: build once, `encode()`
 per send) runs at the core's own ~1.0-1.7 GB/s. Decode wins at every tier
 because it is one validating parse straight into tables with no tree kept.
+
+### Lua (C module, tables) vs `lua-protobuf`
+
+![Lua (C module, tables) vs lua-protobuf — MB/s by tier](../../docs/charts/bench-lua-c-module-tables-vs-lua-protobuf.svg)
+
+| payload | op | pbwire-lua-shim (MB/s, x lua-protobuf) | lua-protobuf (MB/s) |
+|---|---|---|---|
+| 136 B | encode | 102.8 (1.04x ✅) | 98.4 |
+| 136 B | decode | 145.9 (1.66x ✅) | 87.9 |
+| 174 B | encode | 105.3 (1.06x ✅) | 99.3 |
+| 174 B | decode | 142.8 (1.61x ✅) | 88.9 |
+| 2469 B | encode | 103.4 (1.03x ✅) | 100.5 |
+| 2469 B | decode | 141.3 (1.58x ✅) | 89.3 |
+| 74913 B | encode | 105.8 (0.98x ❌) | 107.7 |
+| 74913 B | decode | 137.3 (1.47x ✅) | 93.5 |
+
+Same class as Ruby/R: a C extension over the core (plain tables in/out
+through one transient tree per call, statically linked), schema from
+a `FileDescriptorSet` at run time. The pbwire column is the native-in/native-out
+full task (`pbench/`), formal run
+`../../results/bench-lua-20261124T204559Z.json`: `shim` runs the plain-table task in
+one C entry. The per-field `tree` arm is compared in
+`pbench/README.md`, not here.
+
+One published row (`pbench/README.md` carries the selection):
+
+- **`pbwire-lua-shim`** is the task a Lua application runs: the plain table
+in, wire bytes out. One C entry (`schema:encode`) walks the table against the
+schema's prepared field table and writes straight from it into the wire
+buffer (one pass over schema fields in descriptor order, no intermediate
+tree, no per-value allocation); the decode is the same one entry in reverse
+and materializes the fresh table eagerly. It is the published comparison and
+beats lua-protobuf on every cell but one
+(1.03x-1.06x / 1.58x-1.66x vs lua-protobuf). It is also the already-shipped
+path, so the selection places nothing new in `runtime/`.
+
+The xlarge `shim` encode cell (0.98x) is a tie, not a finding: it flips
+between runs (1.07x-1.10x at the other tiers, 1.05x-1.06x for xlarge in the
+provisional `compare.lua` runs) inside the host's ±10% run-to-run spread, and
+both sides share the same fresh-table construction inside the timer.
+
+Task 10 verdict (2026-11-24): three consecutive `make lua-bench` runs on
+the same host keep xlarge `shim` encode at 0.98x, 0.99x, 0.98x (decode
+1.42x-1.47x, green throughout) without ever opening a gap beyond 2%: the
+prior formal run sat at 0.99x, so the cell never leaves the noise band in
+either direction. No binding change shipped: the `shim` path already walks
+the Lua table straight into the reused context buffer in one C entry (the
+C-harness buffer-reuse shape from
+`bindings/c/benchmarks/bench_struct.cc` has no asymmetric cost to align),
+and the residual 1-2% lean is dispatch wobble inside a tier both sides
+build identically. Revisit only if a quiet-machine run ever shows a gap
+clearly outside that band. Decode
+wins at every tier because it is one validating parse straight into tables
+with no tree kept. Both directions walk one prepared per-descriptor cache,
+so a decoded table costs no field-name interning, no descriptor lookup and
+no hash growth per field (each table is created with its exact hash size,
+and an absent repeated field's empty table is written in the same pass). The
+gate is tier size plus a full-field expectation check, with tree/shim byte
+agreement and the unknown-field-999 vectors (top level and nested) on top;
+the baseline gate is the logical payload -- its bytes decode to the same
+gate-checked fields -- because `lua-protobuf`
+writes fields in table hash order, so raw byte equality is not required.
 
 ## Layout
 
@@ -245,3 +294,4 @@ tests need no `protoc`):
 ```shell
 (cd bindings/lua/tests/data && protoc --descriptor_set_out=sample.desc sample.proto)
 ```
+

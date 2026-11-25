@@ -355,20 +355,24 @@ bench_case(pbw_schema *schema, const char *label, int n, int iterations)
         return;
     }
 
-    /* Steady state: one compiled codec, one output buffer, one decode arena,
-     * so neither path allocates per message (the generated side reuses its
-     * std::string the same way). This is the struct/native-image `shim` arm:
-     * it keeps the prebuilt native input across iterations under the
-     * steady-state carve-out (the boundary price is its question, not the
-     * build price), with this disclosure instead of a fresh-build timer. */
+    /* Fresh task: a fresh native struct per iteration (fill + encode + free
+     * inside the timer) on both sides; one output buffer stays reused per
+     * side (pbwire `out`, generated `scratch`), the same reuse the harness
+     * always had. This is the struct/native-image `shim` arm: one native
+     * object in, one codec call, with the build price inside the timer. */
     rows.push_back({"pbwire-c", "encode", time_it([&] {
-                        (void)pbw_struct_codec_encode(codec, &d.s, &out);
+                        CaseData fresh;
+                        fill_struct(fresh, n);
+                        (void)pbw_struct_codec_encode(codec, &fresh.s, &out);
+                        free_struct(fresh);
                     },
                                                   iterations, &iters),
                     ref.size()});
     rows.push_back({"pb gen", "encode", time_it([&] {
+                        structtest::Scalars3 m;
+                        fill_gen(&m, n);
                         scratch.clear();
-                        (void)gen_msg.SerializeToString(&scratch);
+                        (void)m.SerializeToString(&scratch);
                     },
                                                 iterations),
                     ref.size()});

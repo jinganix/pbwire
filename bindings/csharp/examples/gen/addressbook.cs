@@ -154,13 +154,13 @@ namespace Tutorial {
         public unsafe void ReadImage(byte* img) {
             {
                 var p = *(IntPtr*)(img + 8);
-                Name = p == IntPtr.Zero ? null! : (global::System.Runtime.InteropServices.Marshal.PtrToStringUTF8(p) ?? "");
+                Name = p == IntPtr.Zero ? null! : global::Pbwire.ImageText.Decode(p);
             }
             Id = *(int*)(img + 0);
             {
                 var p = *(IntPtr*)(img + 16);
                 if (p == IntPtr.Zero) { ClearEmail(); }
-                else { Email = global::System.Runtime.InteropServices.Marshal.PtrToStringUTF8(p) ?? ""; }
+                else { Email = global::Pbwire.ImageText.Decode(p); }
             }
             Phones.Clear();
             var nPhones = (int)(*(nuint*)(img + 40));
@@ -321,7 +321,7 @@ namespace Tutorial {
                 public unsafe void ReadImage(byte* img) {
                     {
                         var p = *(IntPtr*)(img + 8);
-                        Number = p == IntPtr.Zero ? null! : (global::System.Runtime.InteropServices.Marshal.PtrToStringUTF8(p) ?? "");
+                        Number = p == IntPtr.Zero ? null! : global::Pbwire.ImageText.Decode(p);
                     }
                     if (*(int*)(img + 16) != 0) Type = (PhoneType)(*(int*)(img + 0));
                     GC.KeepAlive(this);

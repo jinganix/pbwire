@@ -72,21 +72,46 @@ x0 / x1 / x100 / x3000). Measured on Apple M4 Pro, .NET 10.0.403; higher is
 better, MB/s over wire bytes (the official baseline itself moves ±10% between
 runs, so the ratios are in-run):
 
+### F# (facade over the C# runtime) vs Google.Protobuf
+
+![F# (facade over the C# runtime) vs Google.Protobuf — MB/s by tier](../../docs/charts/bench-f-facade-over-the-c-runtime-vs-google-protobuf.svg)
+
 | payload | op | pbwire-fsharp-shim (MB/s, x) | Google.Protobuf (MB/s) |
 |---|---|---|---|
-| 136 B | encode | 1172.1 (2.52x ✅) | 464.5 |
-| 136 B | decode | 738.3 (1.47x ✅) | 501.4 |
-| 174 B | encode | 932.4 (3.05x ✅) | 306.2 |
-| 174 B | decode | 533.5 (1.38x ✅) | 387.9 |
-| 2469 B | encode | 632.2 (1.11x ✅) | 569.2 |
-| 2469 B | decode | 365.1 (0.75x ❌) | 486.1 |
-| 74913 B | encode | 657.0 (1.34x ✅) | 490.0 |
-| 74913 B | decode | 362.8 (0.70x ❌) | 518.9 |
+| 136 B | encode | 936.5 (2.30x ✅) | 407.7 |
+| 136 B | decode | 745.8 (1.57x ✅) | 476.5 |
+| 174 B | encode | 649.5 (1.86x ✅) | 349.2 |
+| 174 B | decode | 587.9 (1.50x ✅) | 392.4 |
+| 2469 B | encode | 459.9 (1.11x ✅) | 415.3 |
+| 2469 B | decode | 380.1 (0.81x ❌) | 471.3 |
+| 74913 B | encode | 481.7 (1.37x ✅) | 351.2 |
+| 74913 B | decode | 340.6 (0.74x ❌) | 462.4 |
 
-Same-run `proxy` rows (held handle, never the headline): encode
-1538.2 / 1521.1 / 1393.8 / 1649.5 MB/s, decode
-891.7 / 831.8 / 678.9 / 735.1 MB/s. Formal run
-`results/bench-fsharp-20261123T054655Z.json`.
+Same class as Kotlin: F# reuses the C# binding's project via
+`ProjectReference` and adds only an F#-idiomatic facade — no second runtime,
+no packages, schema from a `FileDescriptorSet` at run time. The baseline is
+`protoc`-generated C# compiled in a sibling project (F# cannot compile
+`.cs`). Byte parity per tier before timing. Both rows come from the C#
+runtime: `pbwire-fsharp-shim` is the C# generated model's native-object entry
+(`../csharp/pbench/Shim.cs`), i.e. the same one-call C reader over the
+flat image, so F# has no separate port and no second wire implementation.
+Formal run `../../results/bench-fsharp-20261124T191738Z.json`.
+
+`pbwire-fsharp-shim` is the published comparison: the
+generated model is copied into one contiguous unmanaged image per op and one
+C-reader call walks it, so no field crosses the boundary. It is above
+Google.Protobuf on every encode tier (1.11x-2.30x) and on the two small
+decode tiers (1.57x/1.50x). The 2469 B and 74913 B decode rows are below the
+baseline (0.81x, 0.74x): the C decode itself is faster than the reference
+parser, but materialising 3000 ints, 3000 strings, 3000 sub-messages and 3000
+bools into managed objects costs more than the reference parser's whole run.
+These F# rows are native-in/native-out rows. Read the ratios, not the
+absolutes, across runs: the absolutes move with the host (xlarge shim decode
+reads 376.0 MB/s on one host, 340.6 MB/s on a slower one) while the in-run
+ratio to the same-run baseline is the metric (0.74x both times); likewise
+the large-decode 0.73x -> 0.81x jump is harness noise-band width on byte-
+identical `Matrix3Shim.Unmarshal` code, not a code change.
+
 
 Every tier is gated before timing: the official bytes must land on the pinned
 size, the fresh-build `tree` arm must encode byte-identical bytes, the decode
@@ -139,3 +164,4 @@ without a second implementation:
 | `anyPack`, `anyTypeUrl`/`anyPayload`, `timestampFromMillis`/`timestampMillis` (+ duration), `fieldMaskPaths` | WKT helpers |
 | `serviceCount`/`serviceAt`/`service`, `resolveMethod` | routing metadata |
 | `decodeLimits(ty, wire, maxBytes, maxDepth)` | input bounds |
+

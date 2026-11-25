@@ -59,6 +59,64 @@ $pbType = pbwire_pbench_type();
 $pbInnerTy = $pbType->nestedType($pbType->field('inner'));
 $medians = [];
 
+/* Decode fairness (docs/perf-fairness.md section 4): the shim's C loop
+ * already materializes every repeated element and every scalar before
+ * returning, while the official mergeFromString is a bare parse. Both sides
+ * fold the same gate-checked fields into the same live sink, so every decode
+ * timer observes the full payload; the tree arm folds its full array too. */
+function pbwire_pbench_fold_official(\Structtest\Scalars3 $m): int|float
+{
+    $acc = $m->getI32() + $m->getI64() + ($m->getU32() & 0xFFFFFFFF) + $m->getU64()
+        + $m->getS32() + $m->getS64() + ($m->getFx32() & 0xFFFFFFFF) + $m->getFx64()
+        + $m->getSfx32() + $m->getSfx64() + ($m->getFlag() ? 1 : 0)
+        + strlen($m->getStr()) + $m->getColor()
+        + strlen($m->getInner()->getName()) + $m->getInner()->getValue()
+        + count($m->getNums()) + count($m->getTags())
+        + count($m->getInners()) + count($m->getFlags())
+        + $m->getOptI32() + strlen($m->getOptStr())
+        + strlen((string) $m->getF32()) + strlen((string) $m->getF64());
+    foreach ($m->getNums() as $v) {
+        $acc += $v;
+    }
+    foreach ($m->getTags() as $s) {
+        $acc += strlen($s);
+    }
+    foreach ($m->getInners() as $in) {
+        $acc += strlen($in->getName()) + $in->getValue();
+    }
+    foreach ($m->getFlags() as $f) {
+        $acc += $f ? 1 : 0;
+    }
+
+    return $acc;
+}
+
+function pbwire_pbench_fold_tree(array $back): int|float
+{
+    $acc = $back['i32'] + $back['i64'] + $back['u32'] + $back['s32'] + $back['s64']
+        + $back['fx32'] + $back['fx64'] + $back['sfx32'] + $back['sfx64']
+        + ($back['flag'] ? 1 : 0) + strlen($back['str']) + $back['color']
+        + strlen($back['inner']['name']) + $back['inner']['value']
+        + count($back['nums']) + count($back['tags'])
+        + count($back['inners']) + count($back['flags'])
+        + $back['opt_i32'] + strlen($back['opt_str'])
+        + strlen((string) $back['f32']) + strlen((string) $back['f64']);
+    foreach ($back['nums'] as $v) {
+        $acc += $v;
+    }
+    foreach ($back['tags'] as $s) {
+        $acc += strlen($s);
+    }
+    foreach ($back['inners'] as $in) {
+        $acc += strlen($in['name']) + $in['value'];
+    }
+    foreach ($back['flags'] as $f) {
+        $acc += $f ? 1 : 0;
+    }
+
+    return $acc;
+}
+
 foreach (PB_TIERS as $tier) {
     $label = $tier['label'];
     $repeats = $tier['repeats'];
@@ -72,7 +130,7 @@ foreach (PB_TIERS as $tier) {
             'encode' => static fn () => tree_encode_full($pbType, $pbInnerTy, $payload),
             'decode' => static function () use ($pbType, $wire, &$sink) {
                 $out = tree_decode_full($pbType, $wire);
-                $sink += count($out);
+                $sink += pbwire_pbench_fold_tree($out);
 
                 return $out;
             },
@@ -87,9 +145,10 @@ foreach (PB_TIERS as $tier) {
         ],
         (extension_loaded('protobuf') ? 'protobuf-php-c' : 'protobuf-php') => [
             'encode' => static fn () => $official->serializeToString(),
-            'decode' => static function () use ($officialClass, $wire) {
+            'decode' => static function () use ($officialClass, $wire, &$sink) {
                 $m = new $officialClass();
                 $m->mergeFromString($wire);
+                $sink += pbwire_pbench_fold_official($m);
 
                 return $m;
             },

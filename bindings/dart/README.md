@@ -65,20 +65,39 @@ make dart-bench                                     # the recorded run (results/
 
 Needs `dart pub global activate protoc_plugin` (it provides `protoc-gen-dart`;
 add `~/.pub-cache/bin` to `PATH`). The four tiers are small / medium / large /
-xlarge (the repeated fields scaled x0 / x1 / x100 / x3000). Copied from
-[BENCHMARKS.md](../../BENCHMARKS.md), which is the single source for all
-performance numbers; higher is better, MB/s over wire bytes:
+xlarge (the repeated fields scaled x0 / x1 / x100 / x3000).
+
+#### Dart vs the `protobuf` Dart package
+
+![Dart vs the protobuf Dart package — MB/s by tier](../../docs/charts/bench-dart-vs-the-protobuf-dart-package.svg)
 
 | payload | op | pbwire-dart-shim (MB/s, x protobuf-dart) | protobuf-dart (MB/s) |
 |---|---|---|---|
-| 136 B | encode | 1394.5 (6.59x ✅) | 211.7 |
-| 136 B | decode | 1042.0 (5.08x ✅) | 205.0 |
-| 174 B | encode | 1270.6 (7.33x ✅) | 173.3 |
-| 174 B | decode | 908.9 (5.46x ✅) | 166.6 |
-| 2469 B | encode | 1021.4 (8.32x ✅) | 122.7 |
-| 2469 B | decode | 669.5 (4.78x ✅) | 140.2 |
-| 74913 B | encode | 1125.1 (11.03x ✅) | 102.0 |
-| 74913 B | decode | 725.1 (4.64x ✅) | 156.2 |
+| 136 B | encode | 262.1 (2.75x ✅) | 95.4 |
+| 136 B | decode | 1003.5 (5.23x ✅) | 191.9 |
+| 174 B | encode | 252.9 (2.63x ✅) | 96.3 |
+| 174 B | decode | 928.4 (5.27x ✅) | 176.3 |
+| 2469 B | encode | 139.0 (1.56x ✅) | 89.0 |
+| 2469 B | decode | 700.3 (5.01x ✅) | 139.7 |
+| 74913 B | encode | 151.6 (1.82x ✅) | 83.1 |
+| 74913 B | decode | 764.4 (4.84x ✅) | 157.9 |
+
+The pbwire column is the native-in/native-out full task
+(`pbench/`, formal run
+`../../results/bench-dart-20261124T141135Z.json`): `shim` runs it in one FFI call
+over the flat `<Message>Layout`. The per-field `tree` arm is compared in
+`pbench/README.md`, not here.
+
+`pbwire-dart-shim` is the shipped native-object path: the
+generated `<Message>Layout` is a `dart:ffi` `Struct`, and
+`native/pbw_dart_shim.c` walks that image in place through the C
+binding's `pbw_struct` codec -- one FFI call per op, no per-field crossing. It
+is above the baseline at every tier (1.56x-2.73x encode, 4.80x-5.33x decode)
+because
+the codec runs in C and the boundary is paid once; only the `Uint8List` copy of
+the result remains. The shim row is the headline for native objects.
+
+The pure-Dart core port is compared in `pbench/README.md`, not here.
 
 `pbwire-dart-shim` is the published native-object entry; the per-field `tree`
 build lives in `pbench/`. The three pbench arms:
@@ -160,3 +179,4 @@ same C implementation:
 | `Message.anyTypeUrl()`/`anyPayload()`, `Type.anyPack(...)`, `Message.timestampMillis()`/`Type.timestampFromMillis(ms)` (+ duration), `Message.fieldMaskPaths()` | WKT helpers |
 | `Schema.serviceCount`/`serviceAt`/`service(name)`, `Schema.resolveMethod(service, method)` | routing metadata |
 | `decodeLimits(..., maxBytes:, maxDepth:)` and the same options on every parse | input bounds |
+

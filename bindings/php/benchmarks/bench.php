@@ -14,7 +14,11 @@ declare(strict_types=1);
  * allocate per call (pbwire fresh-Message build/encode and decode/read-back/
  * close against serializeToString()/mergeFromString()), so the comparison
  * is like for like. The prebuilt-handle re-encode is kept as the `proxy`
- * row: same-run timing only, never the headline.
+ * row: same-run timing only, never the headline. Decode rows are deep on
+ * both sides: the shim's C loop materializes every gate-checked field before
+ * returning, while the official mergeFromString is a bare parse, so the
+ * baseline arm folds the same fields (every repeated element) into the same
+ * live sink -- see foldOfficial/foldTree (docs/perf-fairness.md section 4).
  *
  * The official runtime comes from the cached protobuf checkout (its php/src
  * tree), loaded through a plain SPL autoloader: no composer needed. When the
@@ -68,10 +72,10 @@ $officialImpl = extension_loaded('protobuf') ? 'protobuf-php-c' : 'protobuf-php'
 // prebuilt proxy (a held Message handle, re-encode out), the native-array
 // entry (one C extension call) or the same API on ext-ffi.
 //
-// The full-task encode and the shim encode read the app-owned native array.
-// Reusing a plain-data fixture across iterations is standard harness
-// practice (Task 5 ledger ruling, Python worker D3, merged 99ac9ac); only
-// the Message -- fresh per iteration, closed inside the timer -- is timed.
+// Headline encode rows are fresh-task: each timed iteration builds a fresh
+// native array (pbwire) / fresh generated message (official) inside the
+// timer, then encodes. Decode rows are full-materialization on both sides
+// (decodeArray vs mergeFromString into a fresh message).
 $treeImpl = 'pbwire-php-tree';
 $proxyImpl = 'pbwire-php-proxy';
 $shimImpl = extension_loaded('pbwire') ? 'pbwire-php-shim' : 'pbwire-php-shim-ffi';
@@ -149,25 +153,34 @@ for ($tier = 0; $tier < count(CASES); $tier++) {
 
     echo "OK   $label encoding parity, x$n (" . strlen($reference) . " bytes)\n";
 
-    $official = fillOfficial($n);
     $officialClass = \Structtest\Scalars3::class;
     // Tier line shows the reference op's count; slower ops keep the floor.
+    // Decode fairness (docs/perf-fairness.md section 4): the shim's C loop
+    // already materializes every repeated element and every scalar before
+    // returning, while the official mergeFromString is a bare parse whose
+    // values cross into PHP only through accessors. Both sides fold the same
+    // gate-checked fields -- every element of every repeated field -- into
+    // the same live sink, so all three decode timers observe the full
+    // payload; the tree arm folds its full array the same way.
     $count = calibrate(static fn () => $message->encode(), $iterations);
     $proxyEncode = measure($iterations, static fn () => $message->encode());
     $proxyDecode = measure($iterations, static fn () => $ty->decode($reference));
     $treeEncode = measure($iterations, static fn () => tree_encode_full($ty, $innerTy, $arrayPayload));
-    $treeDecode = measure($iterations, static function () use ($ty, $reference, &$sink) {
+    $treeDecode = measure($iterations, static function () use ($ty, $reference, $n, &$sink) {
         $out = tree_decode_full($ty, $reference);
-        $sink += count($out);
+        $sink += foldTree($out, $n);
 
         return $out;
     });
-    $shimEncode = measure($iterations, static fn () => $ty->encodeArray($arrayPayload));
+    $shimEncode = measure($iterations, static function () use ($ty, $n) {
+        return $ty->encodeArray(pbwire_pbench_payload($n));
+    });
     $shimDecode = measure($iterations, static fn () => $ty->decodeArray($reference));
-    $officialEncode = measure($iterations, static fn () => $official->serializeToString());
-    $officialDecode = measure($iterations, static function () use ($officialClass, $reference) {
+    $officialEncode = measure($iterations, static fn () => fillOfficial($n)->serializeToString());
+    $officialDecode = measure($iterations, static function () use ($officialClass, $reference, $n, &$sink) {
         $parsed = new $officialClass();
         $parsed->mergeFromString($reference);
+        $sink += foldOfficial($parsed, $n);
 
         return $parsed;
     });
@@ -322,6 +335,61 @@ function run(int $iterations, callable $op): float
 function row(string $impl, string $op, int $bytes, float $ns): void
 {
     printf("  %-12s %-7s %12.1f %10.1f\n", $impl, $op, $ns, $bytes / $ns * 1000.0);
+}
+
+/** Every gate-checked scalar plus every element of every repeated field. */
+function foldOfficial(\Structtest\Scalars3 $m, int $n): int|float
+{
+    $acc = $m->getI32() + $m->getI64() + ($m->getU32() & 0xFFFFFFFF) + $m->getU64()
+        + $m->getS32() + $m->getS64() + ($m->getFx32() & 0xFFFFFFFF) + $m->getFx64()
+        + $m->getSfx32() + $m->getSfx64() + ($m->getFlag() ? 1 : 0)
+        + strlen($m->getStr()) + $m->getColor()
+        + strlen($m->getInner()->getName()) + $m->getInner()->getValue()
+        + count($m->getNums()) + count($m->getTags())
+        + count($m->getInners()) + count($m->getFlags())
+        + $m->getOptI32() + strlen($m->getOptStr())
+        + strlen((string) $m->getF32()) + strlen((string) $m->getF64());
+    foreach ($m->getNums() as $v) {
+        $acc += $v;
+    }
+    foreach ($m->getTags() as $s) {
+        $acc += strlen($s);
+    }
+    foreach ($m->getInners() as $in) {
+        $acc += strlen($in->getName()) + $in->getValue();
+    }
+    foreach ($m->getFlags() as $f) {
+        $acc += $f ? 1 : 0;
+    }
+
+    return $acc;
+}
+
+/** Same fields over the tree arm's array shape. */
+function foldTree(array $back, int $n): int|float
+{
+    $acc = $back['i32'] + $back['i64'] + $back['u32'] + $back['s32'] + $back['s64']
+        + $back['fx32'] + $back['fx64'] + $back['sfx32'] + $back['sfx64']
+        + ($back['flag'] ? 1 : 0) + strlen($back['str']) + $back['color']
+        + strlen($back['inner']['name']) + $back['inner']['value']
+        + count($back['nums']) + count($back['tags'])
+        + count($back['inners']) + count($back['flags'])
+        + $back['opt_i32'] + strlen($back['opt_str'])
+        + strlen((string) $back['f32']) + strlen((string) $back['f64']);
+    foreach ($back['nums'] as $v) {
+        $acc += $v;
+    }
+    foreach ($back['tags'] as $s) {
+        $acc += strlen($s);
+    }
+    foreach ($back['inners'] as $in) {
+        $acc += strlen($in['name']) + $in['value'];
+    }
+    foreach ($back['flags'] as $f) {
+        $acc += $f ? 1 : 0;
+    }
+
+    return $acc;
 }
 
 function fail(string $label, string $what): void

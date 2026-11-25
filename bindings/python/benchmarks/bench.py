@@ -229,13 +229,16 @@ def run():
         message = scalars.decode(reference)
         pb_message = matrix3_pb2.Scalars3.FromString(reference)
 
+        # Headline encode(data): fresh native dict per iteration inside the
+        # timer (message preparation included), on both sides. Proxy /
+        # parsed rows below stay on their prebuilt handles.
         rows = [
             ("pbwire-py-tree", "encode(data)",
-             time_it(lambda: tree_arm.marshal(values))[0]),
+             time_it(lambda: tree_arm.marshal(scalars3(repeats)))[0]),
             ("pbwire-py-shim", "encode(data)",
-             time_it(lambda: scalars.encode(values))[0]),
+             time_it(lambda: scalars.encode(scalars3(repeats)))[0]),
             (base_label, "encode(data)",
-             time_it(lambda: protobuf_of(values).SerializeToString())[0]),
+             time_it(lambda: protobuf_of(scalars3(repeats)).SerializeToString())[0]),
             ("pbwire-py-proxy", "decode(bytes)",
              time_it(lambda: scalars.decode(reference))[0]),
             (base_label, "decode(bytes)",
@@ -245,7 +248,7 @@ def run():
             ("pbwire-py-shim", "to_dict(bytes)",
              time_it(lambda: scalars.decode(reference).to_dict())[0]),
             (pure_core.NAME, "encode(data)",
-             time_it(lambda: pure_core.marshal(values))[0]),
+             time_it(lambda: pure_core.marshal(scalars3(repeats)))[0]),
             (pure_core.NAME, "to_dict(bytes)",
              time_it(lambda: pure_core.unmarshal(reference))[0]),
             (pure_core.NAME, "encode(parsed)",

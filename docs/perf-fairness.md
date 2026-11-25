@@ -1,0 +1,214 @@
+# Benchmark fairness: full-flow native in/out
+
+This page is the fairness contract behind [BENCHMARKS.md](../BENCHMARKS.md).
+Read BENCHMARKS.md first for the standard cases, the harness names and the
+current numbers; this page only states what makes a row comparable. It extends
+(does not replace) the Output format / Timer boundary / Correctness-first
+rules there, and applies to every `make *-bench` harness and every row pasted
+into BENCHMARKS.md.
+
+## 1. Why
+
+A binding exists to move host objects across the wire. A number is only
+meaningful if it times that whole trip: host-native value in, codec call,
+wire bytes out (encode) / wire bytes in, codec call, host-native value out
+(decode). Timing a held core handle (`Message`/tree/`Decoder` built before
+the timer, re-encode or bare decode-and-drop) skips the host<->core
+crossing and measures the C core against itself. That is the `proxy` task:
+published, never the headline.
+
+## 2. The full-flow rule (non-negotiable)
+
+No preset scenarios. The harness must not assume a use case that favors
+either side (no "pbwire builds, the baseline reuses", no "schema arrives
+at runtime so the tree is the input"). Both sides run the same task, from
+the same logical values, with the same prep location and the same output
+shape. If the two APIs cannot take the same shape, each side uses its own
+idiomatic API on the same values — and the row is labelled with exactly
+what each side did, so the difference is visible instead of hidden in a
+scenario.
+
+- Encode times `native -> bytes`. The input at the timer boundary is a
+  host-native value (dict / model / struct / table / message object of the
+  binding's public API), built by public API calls. Never a core `Message`
+  handle, never a pre-encoded buffer.
+- Decode times `bytes -> native`. The output is a host-native value of the
+  same shape the binding ships (same struct / dict / table / model class).
+  `bytes -> handle` with no materialization is the `proxy` task, not a
+  headline.
+- Both sides cross the same boundary. `struct` vs `struct`, `dict` vs
+  `dict`, `table` vs `table`; `lazy handle` vs `lazy handle` only when both
+  sides expose that as their shipped API. Never `table` vs `JSON string`,
+  never `full object` vs `.str only`.
+- No core-handle cache across iterations. Reusing an app-owned *native*
+  input across iterations is the documented steady-state carve-out (the
+  boundary price is the question, not the build price). Reusing a core
+  `Message`/tree/decoder is `proxy` and must not share a cell with a
+  native-in/out baseline.
+
+## 3. Freshness must match (headline = fresh-task)
+
+The headlined cell is always the fresh task: a fresh native object per
+iteration (`fill_*` inside the timer, alloc/free inside). It measures build
++ codec — the real scenario, since message use is unavoidable. The baseline
+does the same (`fillOfficial` / `fromObject` inside the timer).
+
+A steady-state cell (one app-owned native object built once, re-encoded /
+re-decoded every iteration; measures codec + boundary only) may stay in the
+harness as a labeled reference row, but it is never the pasted headline and
+never shares a cell with a fresh-task arm. `core bench.cc` and every binding
+headline below are fresh-task on both sides.
+
+## 3.1 Data preparation must be symmetric
+
+- Same logical values from the same source data on both sides (`fill_gen` /
+  `fill_pbw` / `fill_dyn` field for field, same constants, same repeat
+  counts); a side never gets cheaper constants or fewer fields.
+- Same prep location: `fresh-task` builds inside the timer on both sides
+  (alloc/free inside); `steady-state` builds once outside the timer on both
+  sides (timer covers codec + boundary only). Never one side fresh inside
+  while the other reuses a held object.
+- Prep cost that comes from the API itself (dynamic `set` + value alloc per
+  field vs generated direct stores) is the measured subject in `fresh-task`
+  mode, not a violation — it is disclosed as build price, and the
+  codec-only question gets its own `steady-state`/`proxy` cell. What is
+  forbidden is extra prep asymmetry on top: different values, different
+  field counts, or build-inside vs reuse-outside mixed in one cell.
+
+## 4. Materialization depth must match
+
+- Deep decode means every gate-checked field is read into the host value
+  before the timer stops (or the binding proves its C/FFI entry already
+  materialized every field before return, with a source pointer).
+- `bare parse` vs `deep` is never a headline pair. Either add an explicit
+  `consume_*` fold on both sides (with a live `$sink`/`sink` so DCE cannot
+  skip it) or demote the bare side to `proxy`.
+- Sinks must fold the same fields on both sides so the same work is kept
+  alive.
+
+## 5. The rest (unchanged, restated)
+
+- Same schema, same values, same `want` bytes (`136/174/2469/74913`);
+  payload change (ObjC pad-`str`) is a declared exception, not silently
+  comparable.
+- Byte equality + field read-back + re-encode round-trip gate before timing;
+  baseline gets the same gate (size-only is not a gate).
+- Per-op independent calibration to `>=0.25s`, one warm-up, best-of-3,
+  interleaved; never reuse one op's count for another except display-only.
+- Same run, same process for both columns of a row. A `shim` number from
+  `Bench` vs a baseline from `BenchBoth` is not a row.
+- Baseline is the most-popular official package, same `.proto`, pinned
+  version; a collapsed baseline (e.g. Julia xlarge `12.4 MB/s`) is labelled
+  collapse, not a win.
+- `proxy` / pure-host `core` ports / `dync` / `cshim` / JNI-ceiling arms stay
+  in `bindings/<lang>/pbench/README.md`, never in `BENCHMARKS.md` tier tables.
+
+## 6. Headline arms
+
+Headline encode rows use the shipped thin/generated model: new a native
+message, set its values, encode — never the raw tree API (`new` +
+per-field generic `set` with one allocation per value). The tree API stays
+fully tested for correctness (`make test`, `make difftest`, conformance)
+but is not the published speed number: no shipped binding builds its
+headline through it, and no baseline does either.
+
+`shim` (one binding entry per op over a native value), JVM `core`
+(generated model), Go thin model, single NIF/ARC arm. A `tree` row is only
+a headline when both sides build a tree (or equivalent dynamic structure)
+from the same values in the same mode — never tree-vs-struct as the
+headline pair. Every headline cell names its mode
+(`fresh` / `steady-state`) and its task (`encode(data)` / `to_dict` /
+`shim` / `core`).
+
+## 7. Status
+
+Done in-tree (tables re-paste on each binding's next `make *-bench` run;
+numbers below are the pre-sweep runs until then):
+
+- Core: headline arms go through the generated C struct
+  (`bench/gen/msg_struct.h`, regenerated by the plugin at build time) and the
+  compiled struct codec — new + set + encode per iteration on both sides.
+  Plain decode uses a fresh arena per call; ctx reuses one. Table re-pasted
+  from `results/bench-core-20261124T073808Z.json`; all eight cells above
+  the line.
+- All bindings: headline encode arms build fresh native input per iteration
+  on both sides (C/C++/Go/Rust/Zig structs, Python dicts, JVM generated
+  models, Node/Ruby/PHP/Julia/Dart/C#/F# natives, R named lists).
+  Erlang/Elixir/ObjC/Lua were already fresh; Swift still needs its same-run
+  baseline row before it can convert.
+- Clojure `core` decode: mutable decode plus the same gate-checked read-back
+  as `consume-tree`, vs `protobuf-java` full parse.
+- Known remaining non-headline asymmetries (documented, not pasted):
+  Ruby `gem_decode` bare vs deep `tree`/`shim`; Julia `core` held Dict and
+  shim-decode plan-image reuse; PHP/R tree arms reuse the input
+  array/table (freshness is the Message/builder); ObjC pad-`str` payload;
+  Swift cross-run comparison.
+
+## 8. Output format and timer boundary (from BENCHMARKS.md)
+
+Every harness prints one block per case (throughput over wire bytes, higher
+is better):
+
+```
+<case>: <bytes> bytes, <iterations> iterations (repeat field x<repeats>)
+  impl      op           ns/op       MB/s
+  <impl>    encode        ...        ...
+  <base>    encode        ...        ...
+  <impl>    decode        ...        ...
+  <base>    decode        ...        ...
+```
+
+`ns/op` and `MB/s` are two views of the same measurement
+(`MB/s = bytes / ns/op * 1000`). The comma and the iteration count are
+optional: a harness that calibrates per op (Go, Python) has no single count
+for a case, and `scripts/bench-record.py` accepts the shorter header.
+`make bench-c` adds one more block per case
+(`pbwire-c1`: the C binding's one-shot API, which compiles the layout on every
+call) after the standard rows; only the standard block is aggregated
+below.
+Rows are named by the shipped entry point they time. The published comparison
+is the struct-passing headline: one native object in, one codec call -- the
+same task the generated baseline runs when it fills its struct. `shim` is that
+task in one crossing: C reads the host's memory through a layout table, with
+no intermediate tree. `shim-ffi` (PHP only) is the same array API on the
+no-compiler `ext-ffi` deployment. Go's `-par` rows time the same thin-model ops
+across `GOMAXPROCS` goroutines. The JVM bindings and Clojure publish the
+generated-model `core`: the same pure-Java runtime with shipped ergonomics
+(the mutable-message fast path on Clojure). The per-field `tree` arm -- a
+native object in and out through the shipped per-field API, no prebuilt tree
+before the timer -- is a `pbench/`-only arm now: compared in
+`bindings/<lang>/pbench/README.md`, never pasted here. Anything else a harness
+prints -- the prebuilt-handle `proxy` task, pure host-language `core` ports,
+Go's per-field `dync` tree, the vendored `cshim` candidate, the one-crossing
+JNI ceiling -- lives in the same place.
+
+Timer boundary (all bindings): a fresh native object per iteration, allocation
+and `free`/`close` inside the timer, deep materialization of every
+gate-checked field. Headline encode arms build that input fresh inside the
+timer on both sides (new + set + encode, the real scenario); reused
+encode buffers stay allowed only where the harness already does it and says
+so. A steady-state reference row (app-owned input reused across iterations)
+may stay in a harness labeled as such, but it is never the pasted headline.
+Plain-data fixtures may be reused across iterations
+(fixture-reuse ruling, `docs/perf-attempts.md` Python worker D3).
+
+The Python harness names its ops by the task as well as the representation
+(`encode(data)`, `decode(bytes)`, `to_dict(bytes)`): a
+dict-based binding has two representations, and the row name says which one the
+timer covers.
+
+## 9. Per-harness correctness gates (from BENCHMARKS.md)
+
+Correctness first everywhere: the core bench verifies byte-for-byte equality
+before timing, the C and Python benches check their bytes against the
+`protoc`-produced reference (plus a decode→encode round trip) before timing,
+the Java, Kotlin, Ruby, Rust, C#, PHP and Zig harnesses
+require their bytes to equal the official encoder's bytes before timing
+anything, the Swift, Scala, Elixir, F#, Clojure and Julia harnesses do
+the same against swift-protobuf / ScalaPB / elixir-protobuf / Google.Protobuf /
+protobuf-java / ProtoBuf.jl respectively
+(the R harness gates on the tier sizes, baseline byte equality, plus a full decode round trip, since
+R cannot spell INT32_MIN distinctly from NA), and the Erlang and Elixir harnesses require the pinned wire size and byte
+equality (encode, plus re-encoding a decoded reference) plus a field-by-field read-back of the decoded record/struct
+from every backend
+before timing.

@@ -3,8 +3,12 @@ import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
+import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 import java.util.function.Function;
+import java.util.function.ObjDoubleConsumer;
+import java.util.function.ObjIntConsumer;
+import java.util.function.ObjLongConsumer;
 import java.util.function.Supplier;
 
 /**
@@ -212,6 +216,134 @@ public final class TestGenerated {
                         == spectest.Oneof1OuterClass.Oneof1.KindCase.NUM,
                 "T6 oneof wire order agrees with oracle");
 
+        // T7: decode edge semantics on the typed path. A repeated singular
+        // scalar keeps the last value; repeated singular sub-messages merge
+        // like the reference; packed and unpacked forms both decode on
+        // repeated numerics. A packed run for a singular field is skipped
+        // (core parity), not an error, and unknown fields do not survive a
+        // typed re-encode -- the dynamic tree retains them, the typed model
+        // drops them (pinned here, documented in the binding README).
+        Structtest_Scalars3 lastWins =
+                Structtest_Scalars3.parseFrom(new byte[] {0x08, 0x05, 0x08, 0x07});
+        check(lastWins.getI32() == 7, "T7 singular last wins");
+        check(structtest.Matrix3.Scalars3
+                        .parseFrom(new byte[] {0x08, 0x05, 0x08, 0x07}).getI32() == 7,
+                "T7 singular last wins agrees with oracle");
+        byte[] innerA = Structtest_Inner3.newBuilder().setName("a").build()
+                .toByteArray();
+        byte[] innerB = Structtest_Inner3.newBuilder().setValue(9).build()
+                .toByteArray();
+        byte[] mergedWire = new byte[] {(byte) 0x82, 0x01, (byte) innerA.length};
+        mergedWire = concat(mergedWire, innerA);
+        mergedWire = concat(mergedWire,
+                new byte[] {(byte) 0x82, 0x01, (byte) innerB.length});
+        mergedWire = concat(mergedWire, innerB);
+        Structtest_Scalars3 merged = Structtest_Scalars3.parseFrom(mergedWire);
+        check("a".equals(merged.getInner().getName())
+                && merged.getInner().getValue() == 9, "T7 singular message merges");
+        structtest.Matrix3.Scalars3 oracleMerged =
+                structtest.Matrix3.Scalars3.parseFrom(mergedWire);
+        check("a".equals(oracleMerged.getInner().getName())
+                && oracleMerged.getInner().getValue() == 9,
+                "T7 singular message merge agrees with oracle");
+        Structtest_Scalars3 packedNums = Structtest_Scalars3.parseFrom(
+                new byte[] {(byte) 0x8A, 0x01, 0x03, 0x01, 0x02, 0x03});
+        check(packedNums.getNumsList().equals(List.of(1, 2, 3)),
+                "T7 packed repeated decodes");
+        check(structtest.Matrix3.Scalars3.parseFrom(
+                        new byte[] {(byte) 0x8A, 0x01, 0x03, 0x01, 0x02, 0x03})
+                        .getNumsList().equals(List.of(1, 2, 3)),
+                "T7 packed repeated agrees with oracle");
+        Structtest_Scalars3 unpackedNums = Structtest_Scalars3.parseFrom(
+                new byte[] {(byte) 0x88, 0x01, 0x01, (byte) 0x88, 0x01, 0x02});
+        check(unpackedNums.getNumsList().equals(List.of(1, 2)),
+                "T7 unpacked repeated decodes");
+        check(structtest.Matrix3.Scalars3.parseFrom(
+                        new byte[] {(byte) 0x88, 0x01, 0x01, (byte) 0x88, 0x01, 0x02})
+                        .getNumsList().equals(List.of(1, 2)),
+                "T7 unpacked repeated agrees with oracle");
+        Structtest_Scalars3 packedSingular =
+                Structtest_Scalars3.parseFrom(new byte[] {0x0A, 0x01, 0x05});
+        check(packedSingular.getI32() == 0, "T7 packed-for-singular skipped");
+        check(structtest.Matrix3.Scalars3
+                        .parseFrom(new byte[] {0x0A, 0x01, 0x05}).getI32() == 0,
+                "T7 packed-for-singular agrees with oracle");
+        byte[] withUnknown =
+                concat(new byte[] {0x08, 0x01}, new byte[] {(byte) 0xF8, 0x03, 0x2A});
+        Structtest_Scalars3 dropped = Structtest_Scalars3.parseFrom(withUnknown);
+        check(dropped.getI32() == 1
+                && Arrays.equals(dropped.toByteArray(), new byte[] {0x08, 0x01}),
+                "T7 typed re-encode drops unknown fields");
+        check(structtest.Matrix3.Scalars3.parseFrom(withUnknown).toByteArray().length
+                        == withUnknown.length,
+                "T7 oracle retains unknown fields (typed divergence pinned)");
+        // Malformed, truncated and over-deep inputs fail loudly.
+        checkThrows(() -> Structtest_Scalars3.parseFrom(new byte[] {0x00}),
+                "T7 field zero fails");
+        checkThrows(() -> Structtest_Scalars3.parseFrom(new byte[] {0x1B}),
+                "T7 stray end-group fails");
+        checkThrows(() -> Structtest_Scalars3.parseFrom(new byte[] {0x72}),
+                "T7 truncated tag fails");
+        checkThrows(() -> Structtest_Scalars3.parseFrom(new byte[] {0x3D, 0x01, 0x02}),
+                "T7 truncated fixed32 fails");
+        checkThrows(() -> Structtest_Scalars3.parseFrom(
+                new byte[] {0x72, 0x05, 0x61}),
+                "T7 truncated length-delimited fails");
+        byte[] deep = new byte[300];
+        Arrays.fill(deep, (byte) 0x0B); // 300 nested start-groups, unknown field 1
+        try {
+            Structtest_Scalars3.parseFrom(deep);
+            throw new AssertionError("T7 deep nesting fails");
+        } catch (IllegalArgumentException expected) {
+            check(expected.getMessage().contains("nesting"),
+                    "T7 deep nesting names the cap");
+        }
+        checkThrows(() -> structtest.Matrix3.Scalars3.parseFrom(deep),
+                "T7 oracle deep nesting fails too");
+        checkThrows(() -> Tutorial_Person.parseFrom(new byte[0]),
+                "T7 missing required fails on decode");
+
+        // Bind contract (T6): a throwing setter surfaces IllegalStateException
+        // with the "<builder>.<setter> failed" message and the original cause,
+        // whether the call runs through the spun fast path or the
+        // MethodHandle.invoke fallback path. ThrowingBuilder is public, so it
+        // binds through the spin; fallback.FallbackBuilder is a non-public
+        // cross-package type the spin refuses, so it binds through the
+        // reflective path (whose invoke-time access failure wraps identically).
+        checkBindWrap(() -> Bind.intSetter(ThrowingBuilder.class, "setI32")
+                .accept(new ThrowingBuilder(), 1), "T6 Bind int fast wraps", "setI32");
+        checkBindWrap(() -> Bind.longSetter(ThrowingBuilder.class, "setI64")
+                .accept(new ThrowingBuilder(), 1L), "T6 Bind long fast wraps", "setI64");
+        checkBindWrap(() -> Bind.doubleSetter(ThrowingBuilder.class, "setF64")
+                .accept(new ThrowingBuilder(), 1.0), "T6 Bind double fast wraps", "setF64");
+        checkBindWrap(() -> Bind.setter(ThrowingBuilder.class, "setStr", String.class)
+                .accept(new ThrowingBuilder(), "x"), "T6 Bind obj fast wraps", "setStr");
+        Class<?> fallbackClass = Class.forName("fallback.FallbackBuilder");
+        java.lang.reflect.Constructor<?> fallbackCtor =
+                fallbackClass.getDeclaredConstructor();
+        fallbackCtor.setAccessible(true);
+        Object fallbackBuilder = fallbackCtor.newInstance();
+        @SuppressWarnings("unchecked")
+        ObjIntConsumer<Object> fallbackSet =
+                Bind.intSetter((Class<Object>) fallbackClass, "setI32");
+        checkBindWrap(() -> fallbackSet.accept(fallbackBuilder, 1),
+                "T6 Bind int fallback wraps", "setI32");
+        @SuppressWarnings("unchecked")
+        ObjLongConsumer<Object> fallbackSetLong =
+                Bind.longSetter((Class<Object>) fallbackClass, "setI64");
+        checkBindWrap(() -> fallbackSetLong.accept(fallbackBuilder, 1L),
+                "T6 Bind long fallback wraps", "setI64");
+        @SuppressWarnings("unchecked")
+        ObjDoubleConsumer<Object> fallbackSetDouble =
+                Bind.doubleSetter((Class<Object>) fallbackClass, "setF64");
+        checkBindWrap(() -> fallbackSetDouble.accept(fallbackBuilder, 1.0),
+                "T6 Bind double fallback wraps", "setF64");
+        @SuppressWarnings("unchecked")
+        BiConsumer<Object, String> fallbackSetObj =
+                Bind.setter((Class<Object>) fallbackClass, "setStr", String.class);
+        checkBindWrap(() -> fallbackSetObj.accept(fallbackBuilder, "x"),
+                "T6 Bind obj fallback wraps", "setStr");
+
         // Map entries ride as repeated entry structs, byte-exact with protoc.
         Spectest_MapTest maps = Spectest_MapTest.parseFrom(referenceMap);
         check(maps.getByIntCount() == 2 && maps.getByInt(0).getKey() == 1
@@ -256,6 +388,38 @@ public final class TestGenerated {
         void run() throws Exception;
     }
 
+    /** Throwing setters for the Bind wrap contract (public: spun fast path). */
+    public static final class ThrowingBuilder {
+        public void setI32(int v) {
+            throw new IllegalArgumentException("boom-int");
+        }
+
+        public void setI64(long v) {
+            throw new IllegalArgumentException("boom-long");
+        }
+
+        public void setF64(double v) {
+            throw new IllegalArgumentException("boom-double");
+        }
+
+        public void setStr(String v) {
+            throw new IllegalArgumentException("boom-obj");
+        }
+    }
+
+    private static void checkBindWrap(ThrowingRunnable fn, String what, String setter) {
+        try {
+            fn.run();
+        } catch (Throwable t) {
+            check(t instanceof IllegalStateException
+                    && t.getMessage() != null
+                    && t.getMessage().endsWith("." + setter + " failed")
+                    && t.getCause() != null, what + " (got " + t + ")");
+            return;
+        }
+        throw new AssertionError(what + " (no throw)");
+    }
+
     private static void checkThrows(ThrowingRunnable fn, String what) {
         try {
             fn.run();
@@ -264,6 +428,12 @@ public final class TestGenerated {
             return;
         }
         throw new AssertionError(what);
+    }
+
+    private static byte[] concat(byte[] a, byte[] b) {
+        byte[] out = Arrays.copyOf(a, a.length + b.length);
+        System.arraycopy(b, 0, out, a.length, b.length);
+        return out;
     }
 
     private static Structtest_Scalars3 build() {

@@ -78,3 +78,7 @@ ENV PATH=/usr/local/go/bin:/root/.cargo/bin:/root/go/bin:$PATH \
 # they need, and .git stays in because bench-record.py reads the sha from it.
 FROM bench AS source
 COPY . /work
+
+# Prebuild the C struct plugin: `make bench` regenerates bench/gen/msg_struct.h
+# through it, and the timed run must not depend on the Go module network.
+RUN make -C /work/bindings/c/plugin build

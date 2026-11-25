@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Render BENCHMARKS.md tables as SVG bar charts (vertical bars).
+"""Render tier tables as SVG bar charts (vertical bars).
 
-Single source of truth: everything is parsed straight out of
-BENCHMARKS.md, so the charts can never drift from the tables.
+Single source of truth: the tier tables wherever they live —
+BENCHMARKS.md (global sections) and each binding's README
+`## Benchmarks` section. The charts can never drift from the tables.
 
 Every per-language tier table -> docs/charts/bench-<slug>.svg,
   embedded under its own section header (idempotent re-run)
@@ -18,6 +19,7 @@ import re
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BENCH = os.path.join(ROOT, "BENCHMARKS.md")
 OUT_DIR = os.path.join(ROOT, "docs", "charts")
+BINDINGS_DIR = os.path.join(ROOT, "bindings")
 
 RATIO = re.compile(r"\(([\d.]+)x\s*[✅❌]\)")
 NUM = re.compile(r"[\d.]+")
@@ -31,17 +33,27 @@ def slug_of(title):
                   title.replace("`", "").lower()).strip("-")
 
 
-def parse_section_tables(lines):
+def parse_section_tables(lines, only_under=None):
     """Map section header -> first tier table under it.
 
     Returns [(line_idx, title, series_names, rows)] where each row is
     (payload, op, [mb_or_none_per_series]). Only the first
     payload/op table per header is kept (e.g. PHP's C-extension table;
     the pure-PHP appendix stays table-only).
+
+    When only_under is set (a `## ` title), `###` sections only count
+    inside that parent — used for binding READMEs so unrelated tables
+    elsewhere in the file are never picked up.
     """
-    found, cur = [], None
+    found, cur, parent = [], None, None
     for i, line in enumerate(lines):
-        if re.match(r"###+ ", line):
+        if line.startswith("## ") and not line.startswith("###"):
+            parent = line.strip("# ").strip()
+            cur = None
+        elif re.match(r"###+ ", line):
+            if only_under is not None and parent != only_under:
+                cur = None
+                continue
             cur = (i, line.strip("# ").strip())
         elif line.startswith("## "):
             cur = None
@@ -86,6 +98,50 @@ def parse_section_tables(lines):
             rows = sorted(rows, key=lambda r: ops.index(r[1]))
             result.append((idx, title, series, rows))
     return result
+
+
+def collect_sections():
+    """All tier-table sections with their owning file.
+
+    Returns [(path, idx, title, series, rows)]; on title conflict the
+    binding README wins over BENCHMARKS.md (the move leaves no table
+    behind, so a conflict is only ever mid-move).
+    """
+    by_title = {}
+    order = []
+
+    def add(path, idx, title, series, rows):
+        key = slug_of(title)
+        entry = (path, idx, title, series, rows)
+        if key in by_title:
+            order[order.index(by_title[key])] = entry
+            by_title[key] = entry
+        else:
+            by_title[key] = entry
+            order.append(entry)
+
+    with open(BENCH) as f:
+        blines = f.read().splitlines()
+    for idx, title, series, rows in parse_section_tables(blines):
+        add(BENCH, idx, title, series, rows)
+    readme_paths = sorted(
+        os.path.join(BINDINGS_DIR, d, "README.md")
+        for d in os.listdir(BINDINGS_DIR)
+        if os.path.isfile(os.path.join(BINDINGS_DIR, d, "README.md"))
+    )
+    for rp in readme_paths:
+        with open(rp) as f:
+            rlines = f.read().splitlines()
+        for idx, title, series, rows \
+                in parse_section_tables(rlines, only_under="Benchmarks"):
+            add(rp, idx, title, series, rows)
+    return order
+
+
+def chart_prefix(path):
+    if path == BENCH:
+        return "docs/charts"
+    return "../../docs/charts"
 
 
 def log_ticks(lo, hi):
@@ -185,38 +241,86 @@ def lang_svg(title, series, rows, path):
 
 
 def main():
-    with open(BENCH) as f:
-        lines = f.read().splitlines()
     os.makedirs(OUT_DIR, exist_ok=True)
-    sections = parse_section_tables(lines)
-    embeds = {}  # header line idx -> chart markdown line
-    for idx, title, series, srows in sections:
+    file_lines = {}  # path -> lines (loaded lazily, written if changed)
+
+    def lines_of(path):
+        if path not in file_lines:
+            with open(path) as f:
+                file_lines[path] = f.read().splitlines()
+        return file_lines[path]
+
+    per_file_embeds = {}  # path -> {header idx -> chart line}
+    for path, idx, title, series, srows in collect_sections():
         slug = slug_of(title)
-        path = os.path.join(OUT_DIR, f"bench-{slug}.svg")
-        lang_svg(title.replace("`", ""), series, srows, path)
-        print(f"wrote {path} ({len(srows)} rows x {len(series)} series)")
+        out = os.path.join(OUT_DIR, f"bench-{slug}.svg")
+        lang_svg(title.replace("`", ""), series, srows, out)
+        print(f"wrote {out} ({len(srows)} rows x {len(series)} series)")
         plain = title.replace("`", "")
-        embeds[idx] = f"![{plain} — MB/s by tier](docs/charts/bench-{slug}.svg)"
+        prefix = chart_prefix(path)
+        per_file_embeds.setdefault(path, {})[idx] = (
+            f"![{plain} — MB/s by tier]({prefix}/bench-{slug}.svg)")
+
+    # stub sections in BENCHMARKS.md (per-binding table moved to the
+    # binding README, header + one-liner + link left behind) keep their
+    # chart image too: match by section title slug.
+    generated = {}
+    for path, idx, title, series, srows in collect_sections():
+        generated.setdefault(slug_of(title), title.replace("`", ""))
+    blines = lines_of(BENCH)
+    # collect first (original coordinates), insert bottom-up so earlier
+    # indices stay valid
+    stub_inserts = []
+    for i, line in enumerate(blines):
+        m = re.match(r"###+ (.+)", line)
+        if not m:
+            continue
+        slug = slug_of(m.group(1))
+        if slug not in generated:
+            continue
+        window = blines[i + 1:i + 7]
+        if not any("Full table and method:" in w for w in window):
+            continue
+        if any(w.startswith("![") and f"bench-{slug}.svg" in w
+               for w in window):
+            continue
+        plain = generated[slug]
+        chart = (f"![{plain} — MB/s by tier]"
+                 f"(docs/charts/bench-{slug}.svg)")
+        j = i + 1
+        while j < len(blines) and blines[j] == "":
+            j += 1
+        stub_inserts.append((j, chart, slug))
+    for j, chart, slug in sorted(stub_inserts, reverse=True):
+        blines[j:j] = [chart, ""]
+        print(f"charted stub {slug} into BENCHMARKS.md")
+    if stub_inserts:
+        with open(BENCH, "w") as f:
+            f.write("\n".join(blines) + "\n")
+        print("stub charts written into BENCHMARKS.md")
 
     # embed under each header (bottom-up so indices stay valid;
     # skip blank lines when looking for an existing chart line)
-    changed = False
-    for idx in sorted(embeds, reverse=True):
-        j = idx + 1
-        while j < len(lines) and lines[j] == "":
-            j += 1
-        if j < len(lines) and lines[j].startswith("![") \
-                and "docs/charts/bench-" in lines[j]:
-            if lines[j] != embeds[idx]:
-                lines[j] = embeds[idx]
+    for path, embeds in per_file_embeds.items():
+        lines = lines_of(path)
+        changed = False
+        for idx in sorted(embeds, reverse=True):
+            j = idx + 1
+            while j < len(lines) and lines[j] == "":
+                j += 1
+            if j < len(lines) and lines[j].startswith("![") \
+                    and "/bench-" in lines[j] \
+                    and lines[j].endswith(".svg)"):
+                if lines[j] != embeds[idx]:
+                    lines[j] = embeds[idx]
+                    changed = True
+            else:
+                lines[idx + 1:idx + 1] = ["", embeds[idx]]
                 changed = True
-        else:
-            lines[idx + 1:idx + 1] = ["", embeds[idx]]
-            changed = True
-    if changed:
-        with open(BENCH, "w") as f:
-            f.write("\n".join(lines) + "\n")
-        print(f"embedded {len(embeds)} charts into BENCHMARKS.md")
+        if changed:
+            with open(path, "w") as f:
+                f.write("\n".join(lines) + "\n")
+            print(f"embedded {len(embeds)} charts into {path}")
 
 
 if __name__ == "__main__":

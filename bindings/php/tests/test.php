@@ -411,6 +411,116 @@ try {
 
 echo "OK   $checks checks passed\n";
 
+/* --------------------------------- decodeArray edge semantics */
+
+/*
+ * The direct wire->array path (one C-side tag scan, no tree): hand-built
+ * wires covering branches the matrix3 bench payload never hits. Runs under
+ * both the C extension and the ext-ffi wrapper, so it pins the two builds
+ * to identical arrays.
+ */
+
+/* A duplicate singular keeps the last value. */
+$dup = $innerTy->decodeArray("\x0a\x01a\x0a\x01b\x10\x2a");
+check(($dup['name'] ?? null) === 'b', 'decodeArray duplicate string keeps last');
+check(($dup['value'] ?? null) === 42, 'decodeArray value decodes');
+
+/* A split singular sub-message merges into one array. */
+$split = $ty->decodeArray("\x82\x01\x05\x0a\x03kid\x82\x01\x02\x10\x2a");
+check(($split['inner']['name'] ?? null) === 'kid', 'decodeArray merged sub-message name');
+check(($split['inner']['value'] ?? null) === 42, 'decodeArray merged sub-message value');
+
+/* Groups merge the same way. */
+$groupSchema = Schema::fromFile("$data/grouptest.desc");
+$groupTy = $groupSchema->message('structtest.GroupTest');
+$groupBack = $groupTy->decodeArray("\x0b\x10\x05\x0c\x0b\x1a\x01g\x0c");
+check(($groupBack['inner']['x'] ?? null) === 5, 'decodeArray merged group int');
+check(($groupBack['inner']['s'] ?? null) === 'g', 'decodeArray merged group string');
+
+/* Oneof keeps the last member only; losers read back as absent keys. */
+$oneofSchema = Schema::fromFile("$data/oneoftest.desc");
+$oneofTy = $oneofSchema->message('structtest.OneOfTest');
+$numThenText = $oneofTy->decodeArray("\x08\x2a\x12\x02hi");
+check(($numThenText['text'] ?? null) === 'hi', 'decodeArray oneof text wins');
+check(!array_key_exists('num', $numThenText), 'decodeArray oneof loser is absent');
+$textThenNum = $oneofTy->decodeArray("\x12\x02hi\x08\x2a");
+check(($textThenNum['num'] ?? null) === 42, 'decodeArray oneof num wins');
+check(!array_key_exists('text', $textThenNum), 'decodeArray oneof loser is absent');
+$subThenBlob = $oneofTy->decodeArray("\x1a\x02\x08\x07\x22\x03abc");
+check(($subThenBlob['blob'] ?? null) === 'abc', 'decodeArray oneof bytes wins');
+check(!array_key_exists('sub', $subThenBlob), 'decodeArray oneof message loser is absent');
+$blobThenSub = $oneofTy->decodeArray("\x22\x03abc\x1a\x02\x08\x07");
+check(($blobThenSub['sub']['v'] ?? null) === 7, 'decodeArray oneof message wins');
+check(!array_key_exists('blob', $blobThenSub), 'decodeArray oneof bytes loser is absent');
+
+/* Packed and unpacked runs of a repeated scalar read back alike. */
+$unpacked = $ty->decodeArray("\x88\x01\x01\x88\x01\x02");
+check(($unpacked['nums'] ?? null) === [1, 2], 'decodeArray unpacked run');
+$packed = $ty->decodeArray("\x8a\x01\x02\x01\x02");
+check(($packed['nums'] ?? null) === [1, 2], 'decodeArray packed run');
+$mixed = $ty->decodeArray("\x88\x01\x01\x8a\x01\x02\x02\x03");
+check(($mixed['nums'] ?? null) === [1, 2, 3], 'decodeArray mixed run');
+
+/* A packed run for a singular scalar is skipped as unknown (both builds
+ * follow the decoder here), so the field reads back as absent. */
+$packedSingular = $ty->decodeArray("\x0a\x02\x01\x02");
+check(!array_key_exists('i32', $packedSingular), 'decodeArray packed singular is absent');
+
+/* Malformed input is an error, not a crash or a partial array. */
+foreach ([
+    'truncated varint' => "\x08\xff",
+    'truncated length-delimited' => "\x0a\x05abc",
+    'lone END_GROUP' => "\x1c",
+    'nesting deeper than the limit' => str_repeat("\x0b", 300),
+] as $what => $bad) {
+    try {
+        $innerTy->decodeArray($bad);
+        check(false, "decodeArray accepted $what");
+    } catch (Error) {
+        check(true, "decodeArray rejects $what");
+    }
+}
+try {
+    $ty->decodeArray("\x82\x01\x03\x0a\x01a", ['max_bytes' => 4]);
+    check(false, 'decodeArray max_bytes accepted');
+} catch (Error) {
+    check(true, 'decodeArray max_bytes');
+}
+try {
+    $ty->decodeArray("\x82\x01\x03\x0a\x01a", ['max_depth' => 1]);
+    check(true, 'decodeArray max_depth allows nesting down to the cap');
+} catch (Error) {
+    check(false, 'decodeArray max_depth rejected nesting at the cap');
+}
+try {
+    /* Three nested unknown groups exceed a max_depth of 2 on both builds. */
+    $ty->decodeArray("\x0b\x0b\x0b\x0c\x0c\x0c", ['max_depth' => 2]);
+    check(false, 'decodeArray max_depth accepted');
+} catch (Error) {
+    check(true, 'decodeArray max_depth');
+}
+
+/* A missing required field fails; a present one decodes. */
+$matrix2 = Schema::fromFile("$data/matrix2.desc")->message('structtest.Scalars2');
+try {
+    $matrix2->decodeArray('');
+    check(false, 'decodeArray accepted a missing required field');
+} catch (Error $e) {
+    check(str_contains($e->getMessage(), 'required'), 'decodeArray rejects a missing required field');
+}
+$reqBack = $matrix2->decodeArray("\x08\x2a");
+check(($reqBack['id'] ?? null) === 42, 'decodeArray required field decodes');
+check(!array_key_exists('i32', $reqBack), 'decodeArray absent optional is absent');
+
+/* Unknown fields are skipped and dropped on re-encode (the array has no
+ * slot for them); the Message path preserves them instead. Pinned here,
+ * documented in pbench/README.md. */
+$unknownBack = $innerTy->decodeArray("\x98\x06\x07\x0a\x01a");
+check(($unknownBack['name'] ?? null) === 'a', 'decodeArray decodes past unknowns');
+check($innerTy->encodeArray($unknownBack) === "\x0a\x01a", 'decodeArray unknowns do not survive re-encode');
+
+echo "OK   $checks checks passed\n";
+
 /* A Type caches its Field handles; that cycle must be collectable, or the
  * native schema behind an unreachable Type never goes away. */
 $cycleSchema = Schema::fromFile($desc);

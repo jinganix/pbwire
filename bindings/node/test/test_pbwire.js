@@ -197,6 +197,109 @@ test('decodeObject materializes every field in one call', () => {
   made.free();
 });
 
+test('decodeObject matches the tree decoder on wire edges', () => {
+  const leaf = shapes.message('shapes.Leaf');
+  const treeGet = (type, bytes) => {
+    const m = type.decode(bytes);
+    const out = {};
+    for (const name of Object.keys(type.decodeObject(bytes))) {
+      out[name] = m.get(name);
+    }
+    m.free();
+    return out;
+  };
+
+  // Last-wins on a singular field, through a leaf table and a nested one.
+  const twice = Buffer.from([0x08, 0x01, 0x08, 0x02]);
+  assert.strictEqual(leaf.decodeObject(twice).n, 2);
+  assert.strictEqual(leaf.decode(twice).get('n'), 2);
+  const innerTwice = Buffer.concat([
+    person.encode({ inner: { x: 1 } }),
+    person.encode({ inner: { x: 2, tag: 'b' } }),
+  ]);
+  assert.deepStrictEqual(person.decodeObject(innerTwice).inner, { x: 2, tag: 'b' });
+
+  // A singular submessage repeated on the wire merges across occurrences.
+  const merged = Buffer.concat([
+    person.encode({ inner: { x: 1 } }),
+    person.encode({ inner: { tag: 'b' } }),
+  ]);
+  assert.deepStrictEqual(person.decodeObject(merged).inner, { x: 1, tag: 'b' });
+  assert.deepStrictEqual(person.decode(merged).get('inner'), { x: 1, tag: 'b' });
+
+  // Oneof: a later member clears the earlier one, like get() does.
+  const picked = Buffer.concat([one.encode({ text: 'first' }), one.encode({ num: 7 })]);
+  assert.deepStrictEqual(one.decodeObject(picked), { num: 7 });
+  assert.deepStrictEqual(treeGet(one, picked), { num: 7 });
+
+  // Packed, unpacked and mixed repetition read back in wire order.
+  const mixed = Buffer.concat([
+    Buffer.from([0x0a, 0x03, 0x01, 0x02, 0x03]), // packed_nums packed: 1 2 3
+    Buffer.from([0x08, 0x04]), // packed_nums unpacked: 4
+  ]);
+  assert.deepStrictEqual(one.decodeObject(mixed).packed_nums, [1, 2, 3, 4]);
+  const packedLoose = Buffer.from([0x12, 0x02, 0x04, 0x05]); // loose packed: 4 5
+  assert.deepStrictEqual(one.decodeObject(packedLoose).loose_nums, [4, 5]);
+  assert.deepStrictEqual(one.decodeObject(Buffer.from([0x0a, 0x00])), {});
+
+  // A packed run for a singular field is skipped, like the tree decoder
+  // (core parity: only repeated packable fields accept wire type 2).
+  const packedSingle = Buffer.from([0x0a, 0x01, 0x05]);
+  assert.deepStrictEqual(leaf.decodeObject(packedSingle), {});
+  assert.strictEqual(leaf.decode(packedSingle).get('n'), undefined);
+
+  // An unknown field inside a leaf payload is skipped, not rejected.
+  const innerUnknown = Buffer.from([0x08, 0x01, 0x48, 0x05]);
+  assert.deepStrictEqual(leaf.decodeObject(innerUnknown), { n: 1 });
+
+  // A closed-enum number the schema does not list stays absent.
+  const unknown = ancient.newMessage();
+  unknown.set('color', 9);
+  const raw = unknown.encode();
+  assert.strictEqual(ancient.decodeObject(raw).color, undefined);
+  assert.strictEqual(ancient.decode(raw).get('color'), undefined);
+  unknown.free();
+
+  // Malformed input throws the same way on both materializers.
+  for (const bad of [
+    Buffer.from([0x08, 0x80]), // truncated varint
+    Buffer.from([0x0a, 0x05, 0x61]), // length past the end
+    Buffer.from([0x00]), // field number 0
+    one.encode({ leaves: [{ n: 1 }] }).subarray(0, 3), // truncated leaf
+  ]) {
+    assert.throws(() => leaf.decodeObject(bad), /pbwire:/);
+  }
+  assert.throws(() => one.decodeObject(
+    one.encode({ leaves: [{ n: 1 }] }).subarray(0, 3)), /pbwire:/);
+  assert.throws(() => one.decode(
+    one.encode({ leaves: [{ n: 1 }] }).subarray(0, 3)), /pbwire:/);
+
+  // Invalid UTF-8 in a string field is rejected, not replaced.
+  const badUtf = Buffer.concat([
+    Buffer.from([0x32, 0x03, 0x12, 0x01, 0xff]),
+  ]);
+  assert.throws(() => person.decodeObject(badUtf), /pbwire:/);
+  assert.throws(() => person.decode(badUtf), /pbwire:/);
+
+  // Nesting past the cap throws instead of overflowing. decodeObject
+  // reports it as invalid wire data while decode() names the limit;
+  // both refuse, which is what this pins.
+  const deep = (depth) => {
+    let bytes = Buffer.alloc(0);
+    for (let i = 0; i < depth; i++) {
+      const body = Buffer.concat([Buffer.from([0x10, 0x01]), bytes]);
+      bytes = Buffer.concat([Buffer.from([0x0a]), varint(body.length), body]);
+    }
+    return bytes;
+  };
+  assert.throws(() => node.decodeObject(deep(400)), /pbwire:/);
+  assert.throws(() => node.decode(deep(400)), /nesting limit/);
+
+  // A missing required field fails, through the eager tree path.
+  assert.throws(() => strict.decodeObject(Buffer.alloc(0)), /required/);
+  assert.throws(() => strict.decodeObject(Buffer.from([0x12, 0x00])), /required/);
+});
+
 test('absent fields read as undefined and are not written', () => {
   const empty = person.newMessage();
   for (const name of ['name', 'id', 'inner', 'nums', 'blob', 'big']) {

@@ -88,6 +88,8 @@ public final class TestPbwire {
                 check(decoded.getList("numbers").equals(List.of(1L, 2L, 3L)), "repeated round trip");
                 check(decoded.get("int32_field").equals(-42L), "get by name");
                 check(decoded.get(1).equals(-42L), "get by number");
+                check(decoded.get("numbers").equals(List.of(1L, 2L, 3L)), "get() on a repeated field reads that field");
+                check(decoded.get(13).equals(List.of(1L, 2L, 3L)), "get(number) on a repeated field reads that field");
                 check(decoded.has("string_field"), "has() sees a set field");
             }
         }

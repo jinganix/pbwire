@@ -45,6 +45,38 @@ object Bench {
 
   private var sink = 0L
 
+  /**
+   * The baseline decode half of the timed full task, mirroring
+   * bindings/java/benchmarks/Bench.java consumeBaseline (Task 5) and the
+   * Kotlin harness (Task 6): the pbwire core arm
+   * (matrix3Gen.Structtest_Scalars3.decode) materializes every field
+   * eagerly into the case class, so the ScalaPB arm folds the same
+   * gate-checked fields instead of timing a bare parseFrom (fairness §4).
+   * ScalaPB parses strictly (every field lands in the case class), so expect
+   * the same nil effect Task 5 measured; this keeps the two harnesses'
+   * headline cells directly comparable.
+   */
+  private def consumeBaseline(wire: Array[Byte], n: Int): Unit = {
+    val back = Scalars3.parseFrom(wire)
+    sink += back.str.length
+    var i = 0
+    while (i < back.tags.size) {
+      sink += back.tags(i).length
+      i += 1
+    }
+    sink += back.inners.size
+    back.inner.foreach(in => {
+      sink += in.name.length
+      sink += in.value
+    })
+    var j = 0
+    while (j < n) {
+      val m = back.inners(j)
+      sink += m.name.length + m.value
+      j += 1
+    }
+  }
+
   /** Fresh-build tree encode: a new per-field Message per call (never the held tree). */
   private def freshEncode(ty: MessageType, n: Int): Array[Byte] =
     using(fillPbwire(ty, n)) { m => m.encode() }
@@ -278,13 +310,13 @@ object Bench {
                       val tierCount = calibrate(() => freshEncode(ty, n), count)
                       val res = measureAll(count, Seq(
                         () => freshEncode(ty, n),
-                        () => matrix3Gen.Structtest_Scalars3.encode(model),
+                        () => matrix3Gen.Structtest_Scalars3.encode(fillGenerated(n)),
                         () => message.encode(),
-                        () => official.toByteArray,
+                        () => fillOfficial(n).toByteArray,
                         () => consumeTree(ty, reference, n),
                         () => matrix3Gen.Structtest_Scalars3.decode(reference),
                         () => ty.decode(reference).close(),
-                        () => Scalars3.parseFrom(reference)))
+                        () => consumeBaseline(reference, n)))
 
                       println(label + ": " + reference.length + " bytes, " + tierCount +
                         " iterations (repeat field x" + n + ")")

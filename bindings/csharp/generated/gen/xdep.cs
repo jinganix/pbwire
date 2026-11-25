@@ -113,7 +113,7 @@ namespace Xdep {
         public unsafe void ReadImage(byte* img) {
             {
                 var p = *(IntPtr*)(img + 8);
-                Name = p == IntPtr.Zero ? "" : (global::System.Runtime.InteropServices.Marshal.PtrToStringUTF8(p) ?? "");
+                Name = p == IntPtr.Zero ? "" : global::Pbwire.ImageText.Decode(p);
             }
             Value = *(int*)(img + 0);
             GC.KeepAlive(this);

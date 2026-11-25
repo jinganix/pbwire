@@ -54,20 +54,42 @@ none.
 
 Downloads `protobuf-java` and `protobuf-kotlin` from Maven Central on first run.
 The four tiers are small / medium / large / xlarge (the repeated fields scaled
-x0 / x1 / x100 / x3000). Copied from [BENCHMARKS.md](../../BENCHMARKS.md),
-which is the single source for all performance numbers; higher is better, MB/s
-over wire bytes:
+x0 / x1 / x100 / x3000).
 
-| payload | op | pbwire-kotlin (MB/s, x protobuf-kotlin) | protobuf-kotlin (MB/s) |
+#### Kotlin vs `protoc --kotlin_out` over `protobuf-java`
+
+![Kotlin vs protoc --kotlin_out over protobuf-java — MB/s by tier](../../docs/charts/bench-kotlin-vs-protoc-kotlin-out-over-protobuf-java.svg)
+
+| payload | op | pbwire-kotlin-core (MB/s, x protobuf-kotlin) | protobuf-kotlin (MB/s) |
 |---|---|---|---|
-| 136 B | encode | 1729.7 (0.8x) | 2109.9 |
-| 136 B | decode | 934.8 (1.5x) | 634.2 |
-| 174 B | encode | 627.8 (0.5x) | 1189.7 |
-| 174 B | decode | 777.0 (1.4x) | 560.5 |
-| 2469 B | encode | 967.3 (1.1x) | 861.4 |
-| 2469 B | decode | 772.7 (1.6x) | 470.2 |
-| 74913 B | encode | 934.3 (1.1x) | 833.7 |
-| 74913 B | decode | 788.1 (1.7x) | 453.1 |
+| 136 B | encode | 521.2 (0.38x ❌) | 1387.8 |
+| 136 B | decode | 386.5 (0.62x ❌) | 626.4 |
+| 174 B | encode | 521.6 (0.56x ❌) | 930.9 |
+| 174 B | decode | 366.9 (0.65x ❌) | 561.9 |
+| 2469 B | encode | 452.3 (1.97x ✅) | 229.6 |
+| 2469 B | decode | 325.3 (0.73x ❌) | 447.4 |
+| 74913 B | encode | 488.3 (27.74x ✅) | 17.6 |
+| 74913 B | decode | 339.9 (0.77x ❌) | 440.8 |
+
+Kotlin reuses the Java runtime (`../java/runtime`), so these numbers are
+`pbwire-java`'s: one workspace lookup plus one `byte[]` copy per call. `core`
+is the same committed generated Java model the Kotlin DSL builds (the
+`tests/gen/matrix3.kt` factories are inline sugar over it) and the published
+comparison here; it tracks Java's `core` row (1.00x encode / 0.84x decode at 74 KB after Task 5) for the same reason: a generated writer knows
+every tag at compile time while the dynamic tree walk derives them, the same
+structural floor the Java section explains. The xlarge encode ratio (27.74x)
+rides a `protobuf-kotlin` baseline collapse (17.6 MB/s there); decode is the
+honest comparison. The `core` column is eager. The
+per-field `tree` arm is compared in `../java/pbench/` (see its README),
+not here. The `Message`-wrapper cut (no per-decode
+`AtomicBoolean`, no volatile open flag) removes the binding's own per-call
+overhead on top, so the narrow tiers track the codec instead of the wrapper.
+Formal run
+`../../results/bench-kotlin-20261124T201156Z.json`. The `protobuf-kotlin`
+decode arm folds the same gate-checked fields the gate asserts
+(`consumeBaseline`, mirroring Java Task 5; measured ~4% on xlarge, the
+same nil-effect direction), so both headline sides observe the full
+payload.
 
 ## Why not a copy of the Java runtime?
 
@@ -83,3 +105,4 @@ thread, `use`/`close` frees a root, and a nested message is a view of its parent
 typed properties, `fun encode(schema)` and a `companion object { fun decode }`.
 The committed output is `tests/gen/`; `examples/Roundtrip.kt` uses only typed
 assignments. See `../../codegen/README.md`.
+

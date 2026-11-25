@@ -22,6 +22,7 @@
 #include <ext/spl/spl_exceptions.h>
 
 #include <pbwire.h>
+#include "internal.h"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -907,135 +908,661 @@ static int array_encode_message(zval *arr, pbw_ctx *ctx,
     return 0;
 }
 
-static int array_scalar_zval(pbw_type type, const pbw_value *value,
-                             zval *out) {
-    switch (type) {
-    case PBW_TYPE_DOUBLE:
-        ZVAL_DOUBLE(out, pbw_value_get_double(value));
-        return 0;
-    case PBW_TYPE_FLOAT:
-        ZVAL_DOUBLE(out, (double)pbw_value_get_float(value));
-        return 0;
-    case PBW_TYPE_BOOL:
-        ZVAL_BOOL(out, pbw_value_get_bool(value) != 0);
-        return 0;
-    case PBW_TYPE_STRING:
-    case PBW_TYPE_BYTES: {
-        size_t len = 0;
-        const void *data = pbw_value_get_bytes(value, &len);
+/* ------------------------- direct wire->array decode ------------------------- */
 
-        ZVAL_STRINGL(out, data != NULL ? (const char *)data : "", len);
-        return 0;
-    }
-    case PBW_TYPE_INT32:
-    case PBW_TYPE_SINT32:
-    case PBW_TYPE_SFIXED32:
-    case PBW_TYPE_ENUM:
-        ZVAL_LONG(out, (zend_long)pbw_value_get_int32(value));
-        return 0;
-    case PBW_TYPE_INT64:
-    case PBW_TYPE_SINT64:
-    case PBW_TYPE_SFIXED64:
-        ZVAL_LONG(out, (zend_long)pbw_value_get_int(value));
-        return 0;
-    case PBW_TYPE_UINT32:
-    case PBW_TYPE_FIXED32:
-        ZVAL_LONG(out, (zend_long)pbw_value_get_uint32(value));
-        return 0;
-    case PBW_TYPE_UINT64:
-    case PBW_TYPE_FIXED64: {
-        uint64_t n = pbw_value_get_uint(value);
+/* decodeArray without the tree: one pbw_visit tag scan per message level
+ * builds the PHP array straight from the wire. The descriptor column table
+ * is the layout: field pointer -> wire facts -> array slot, resolved once
+ * per level while the visit callback only converts raw wire bits and records
+ * sub-message ranges. Singular scalars land in their slot as they parse
+ * (last wins, the merge the tree used to do); repeated values append
+ * straight into the list created up front; singular sub-messages remember
+ * their payload range and decode once at the end of their level, so split
+ * occurrences still merge into one message. Oneof losers are reset after the
+ * scan. Every gate-checked field is materialized before return, so the timer
+ * needs no PHP-side fold. Raises Pbwire::Error with the same status text
+ * pbw_decode reported on malformed bytes, like the tree path did.
+ *
+ * GC rooting: every zval the scan creates is owned by a frame slot from the
+ * moment it is built (owned refcounts never reach zero through later
+ * allocations), and lists are appended to in place. Singular sub-message
+ * payloads stay as (offset, length) integers into the input buffer while seen
+ * once, so the common case copies nothing; only a repeated singular
+ * allocates an emalloc accumulator, which is C memory the collector never
+ * sees. The input wire string is held by the call frame for the whole call,
+ * so range pointers into it stay valid; no Z_STRVAL_P outlives a zval
+ * allocation or a recursive decode. Plain C scratch (slots/seen/ranges)
+ * lives in emalloc frames that unwind on error with nothing leaked.
+ *
+ * Unknown fields are skipped exactly like the tree path (the reference
+ * decoders keep them, the array has no slot for them); re-encoding the array
+ * drops them while Message re-encode preserves them, see pbench/README.md.
+ * Packed runs are accepted for repeated packable fields regardless of the
+ * declared packed flag, like the tree path; any other wire-type mismatch is
+ * skipped as unknown. A closed enum's unknown value leaves the field absent,
+ * like the reference parsers. The expected wire type comes from the linked
+ * field (field->wire_type), so an Editions DELIMITED-encoded message rides
+ * the group path exactly like the decoder. */
+typedef struct {
+    const pbw_field *field;
+    const char *name;
+    size_t name_len;
+    pbw_type type;
+    uint32_t wire;
+    uint32_t oneof;
+    unsigned repeated : 1;
+    unsigned is_msg : 1;
+    unsigned group_wire : 1;
+    unsigned is_str : 1;
+    unsigned is_enum : 1;
+    unsigned check_utf8 : 1;
+} arr_col;
 
-        if (n > (uint64_t)ZEND_LONG_MAX) {
-            char buf[32];
+/* One occurrence of a singular sub-message payload. The first occurrence only
+ * records its range; a repeat concatenates into an emalloc accumulator, so
+ * the end-of-level decode reads memory the collector never sees. `base` is
+ * the current level's buffer; ranges are frame-relative integers. */
+typedef struct {
+    size_t off;
+    size_t len;
+    uint8_t *buf;
+    size_t use;
+    size_t cap;
+} arr_sub;
 
-            snprintf(buf, sizeof buf, "%llu", (unsigned long long)n);
-            ZVAL_STRING(out, buf);
-        } else {
-            ZVAL_LONG(out, (zend_long)n);
+typedef struct arr_frame arr_frame;
+
+/* One column table per descriptor, built once per top-level call and shared
+ * by every nested message of that type: a 3000-deep payload names two
+ * types, so this replaces 3000 rebuilds with two. Descriptors outlive the
+ * call (the Type keeps its Schema alive), so borrowing is safe. */
+typedef struct {
+    const pbw_descriptor *desc;
+    arr_col *cols;
+    size_t nfields;
+    uint32_t max_oneof;
+} arr_layout;
+
+typedef struct {
+    uint32_t depth_cap; /* min(user max_depth, PBWIRE_ARRAY_MAX_DEPTH) */
+    uint32_t user_dlim; /* effective user max_depth for nested visits */
+    int nesting;        /* the cap hit is the 64 default, not the user */
+    arr_layout *layouts;
+    size_t nlayouts;
+    size_t layouts_cap;
+} arr_opts;
+
+struct arr_frame {
+    const pbw_descriptor *desc;
+    const uint8_t *base;
+    arr_opts *opts;
+    arr_col *cols;      /* borrowed from the per-call layout cache */
+    zval *slots;        /* singular values (owned) / repeated lists */
+    unsigned char *seen; /* singular presence */
+    arr_sub *subs;       /* singular sub-message ranges */
+    uint32_t *winner;    /* oneof winners: field index + 1 */
+    size_t nfields;
+    uint32_t depth;
+    void *block; /* one allocation holding slots+seen+subs+winner */
+};
+
+static const arr_layout *arr_layout_for(arr_opts *opts,
+                                        const pbw_descriptor *desc) {
+    size_t i;
+
+    for (i = 0; i < opts->nlayouts; i++) {
+        if (opts->layouts[i].desc == desc) {
+            return &opts->layouts[i];
         }
-        return 0;
     }
-    default:
-        return -1;
+    if (opts->nlayouts == opts->layouts_cap) {
+        size_t cap = opts->layouts_cap == 0 ? 4 : opts->layouts_cap * 2;
+
+        opts->layouts = erealloc(opts->layouts, cap * sizeof *opts->layouts);
+        opts->layouts_cap = cap;
+    }
+    {
+        arr_layout *layout = &opts->layouts[opts->nlayouts];
+        size_t nfields = pbw_descriptor_field_count(desc);
+        size_t k;
+
+        layout->desc = desc;
+        layout->cols =
+            nfields == 0 ? NULL : ecalloc(nfields, sizeof *layout->cols);
+        layout->nfields = nfields;
+        layout->max_oneof = 0;
+        for (k = 0; k < nfields; k++) {
+            const pbw_field *field = pbw_descriptor_field_at(desc, k);
+            arr_col *c = &layout->cols[k];
+
+            c->field = field;
+            c->name = pbw_field_name(field);
+            c->name_len = strlen(c->name);
+            c->type = pbw_field_type(field);
+            c->wire = field->wire_type;
+            c->oneof = pbw_field_oneof_index(field);
+            c->repeated = pbw_field_label(field) == PBW_LABEL_REPEATED;
+            c->is_msg =
+                c->type == PBW_TYPE_MESSAGE || c->type == PBW_TYPE_GROUP;
+            c->group_wire = c->wire == PBW_WIRE_START_GROUP;
+            c->is_str = c->type == PBW_TYPE_STRING ||
+                        c->type == PBW_TYPE_BYTES;
+            c->is_enum = c->type == PBW_TYPE_ENUM;
+            c->check_utf8 = c->type == PBW_TYPE_STRING &&
+                            pbw_field_requires_utf8_validation(field);
+            if (c->oneof > layout->max_oneof) {
+                layout->max_oneof = c->oneof;
+            }
+        }
+        opts->nlayouts++;
+        return layout;
     }
 }
 
-static int array_decode_message(const pbw_message *msg, zval *out,
-                                unsigned depth) {
-    const pbw_descriptor *desc = pbw_message_descriptor(msg);
-    size_t nfields = pbw_descriptor_field_count(desc);
+static void arr_opts_free(arr_opts *opts) {
     size_t i;
 
-    if (desc == NULL || depth > PBWIRE_ARRAY_MAX_DEPTH) {
-        throw_error("nesting limit exceeded");
-        return -1;
+    for (i = 0; i < opts->nlayouts; i++) {
+        efree(opts->layouts[i].cols);
     }
-    array_init(out);
-    for (i = 0; i < nfields; i++) {
-        const pbw_field *field = pbw_descriptor_field_at(desc, i);
-        const char *name = pbw_field_name(field);
-        pbw_type type = pbw_field_type(field);
-        pbw_value *value = pbw_message_get_field(msg, field);
-        zval elem;
+    efree(opts->layouts);
+    opts->layouts = NULL;
+    opts->nlayouts = opts->layouts_cap = 0;
+}
 
-        if (pbw_field_label(field) == PBW_LABEL_REPEATED) {
-            size_t count = value != NULL ? pbw_value_count(value) : 0;
-            zval list;
-            size_t k;
+static uint64_t arr_zigzag(uint64_t value, unsigned width) {
+    uint64_t mask = width == 32 ? 0xffffffffull : ~0ull;
+    uint64_t u = value & mask;
 
-            array_init_size(&list, count);
-            for (k = 0; k < count; k++) {
-                pbw_value *item = pbw_value_at(value, k);
+    return ((u >> 1) ^ (0ull - (u & 1))) & mask;
+}
 
-                if (item == NULL) {
-                    zval_ptr_dtor(&list);
-                    throw_error("decodeArray: no list item returned");
-                    return -1;
-                }
-                ZVAL_UNDEF(&elem);
-                if (array_is_message_type(type)) {
-                    pbw_message *sub = pbw_value_get_message(item);
+static int arr_varint(const uint8_t **pp, const uint8_t *end,
+                      uint64_t *out) {
+    const uint8_t *p = *pp;
+    uint64_t value = 0;
+    unsigned shift = 0;
 
-                    if (sub == NULL ||
-                        array_decode_message(sub, &elem, depth + 1) != 0) {
-                        if (Z_TYPE(elem) != IS_UNDEF) {
-                            zval_ptr_dtor(&elem);
-                        }
-                        zval_ptr_dtor(&list);
-                        return -1;
-                    }
-                } else if (array_scalar_zval(type, item, &elem) != 0) {
-                    zval_ptr_dtor(&list);
-                    throw_error("decodeArray: unsupported scalar type");
-                    return -1;
-                }
-                add_next_index_zval(&list, &elem);
-            }
-            add_assoc_zval_ex(out, name, strlen(name), &list);
-            continue;
+    while (p < end && shift < 64) {
+        uint8_t byte = *p++;
+
+        value |= (uint64_t)(byte & 0x7f) << shift;
+        if ((byte & 0x80) == 0) {
+            *pp = p;
+            *out = value;
+            return 1;
         }
-        if (value == NULL) {
-            continue;
-        }
-        ZVAL_UNDEF(&elem);
-        if (array_is_message_type(type)) {
-            pbw_message *sub = pbw_value_get_message(value);
-
-            if (sub == NULL ||
-                array_decode_message(sub, &elem, depth + 1) != 0) {
-                if (Z_TYPE(elem) != IS_UNDEF) {
-                    zval_ptr_dtor(&elem);
-                }
-                return -1;
-            }
-        } else if (array_scalar_zval(type, value, &elem) != 0) {
-            throw_error("decodeArray: unsupported scalar type");
-            return -1;
-        }
-        add_assoc_zval_ex(out, name, strlen(name), &elem);
+        shift += 7;
     }
     return 0;
+}
+
+static uint32_t arr_le32(const uint8_t *p) {
+    return (uint32_t)p[0] | ((uint32_t)p[1] << 8) |
+           ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+}
+
+static uint64_t arr_le64(const uint8_t *p) {
+    return (uint64_t)arr_le32(p) | ((uint64_t)arr_le32(p + 4) << 32);
+}
+
+/* Raw wire bits -> PHP value: the same mapping the tree materialization used
+ * (sign extension, zigzag, decimal strings past LONG_MAX). */
+static void arr_scalar_zval(pbw_type type, uint64_t bits, zval *out) {
+    switch (type) {
+    case PBW_TYPE_DOUBLE: {
+        double d;
+
+        memcpy(&d, &bits, sizeof d);
+        ZVAL_DOUBLE(out, d);
+        return;
+    }
+    case PBW_TYPE_FLOAT: {
+        float f;
+        uint32_t b = (uint32_t)bits;
+
+        memcpy(&f, &b, sizeof f);
+        ZVAL_DOUBLE(out, (double)f);
+        return;
+    }
+    case PBW_TYPE_BOOL:
+        ZVAL_BOOL(out, bits != 0);
+        return;
+    case PBW_TYPE_INT32:
+    case PBW_TYPE_SFIXED32:
+    case PBW_TYPE_ENUM:
+        ZVAL_LONG(out, (zend_long)(int64_t)(int32_t)bits);
+        return;
+    case PBW_TYPE_SINT32:
+        ZVAL_LONG(out, (zend_long)(int64_t)(int32_t)arr_zigzag(bits, 32));
+        return;
+    case PBW_TYPE_UINT32:
+    case PBW_TYPE_FIXED32:
+        ZVAL_LONG(out, (zend_long)(uint32_t)bits);
+        return;
+    case PBW_TYPE_INT64:
+    case PBW_TYPE_SFIXED64:
+        ZVAL_LONG(out, (zend_long)(int64_t)bits);
+        return;
+    case PBW_TYPE_SINT64:
+        ZVAL_LONG(out, (zend_long)(int64_t)arr_zigzag(bits, 64));
+        return;
+    case PBW_TYPE_UINT64:
+    case PBW_TYPE_FIXED64:
+        if (bits > (uint64_t)ZEND_LONG_MAX) {
+            char buf[32];
+
+            snprintf(buf, sizeof buf, "%llu", (unsigned long long)bits);
+            ZVAL_STRING(out, buf);
+        } else {
+            ZVAL_LONG(out, (zend_long)bits);
+        }
+        return;
+    default:
+        ZVAL_NULL(out);
+        return;
+    }
+}
+
+static void arr_frame_free(arr_frame *f) {
+    if (f->block != NULL) {
+        size_t i;
+
+        for (i = 0; i < f->nfields; i++) {
+            if (f->subs[i].buf != NULL) {
+                efree(f->subs[i].buf);
+            }
+            if (Z_TYPE(f->slots[i]) != IS_UNDEF) {
+                zval_ptr_dtor(&f->slots[i]);
+            }
+        }
+        efree(f->block);
+        f->block = NULL;
+    }
+}
+
+/* Closed enums divert unknown numbers to the unknown fields: the value leaves
+ * the field absent instead of landing in the array. */
+static int arr_enum_kept(const arr_col *c, uint64_t bits) {
+    if (!c->is_enum || !pbw_enum_is_closed(c->field)) {
+        return 1;
+    }
+    return pbw_enum_find_name(pbw_field_message_type(c->field),
+                               (int32_t)bits, NULL) != 0;
+}
+
+static void arr_note_singular(arr_frame *f, arr_col *c, size_t idx) {
+    f->seen[idx] = 1;
+    if (c->oneof != 0) {
+        f->winner[c->oneof] = (uint32_t)idx + 1;
+    }
+}
+
+static void arr_store_scalar(arr_frame *f, arr_col *c, size_t idx,
+                             uint64_t bits) {
+    if (!arr_enum_kept(c, bits)) {
+        return;
+    }
+    if (c->repeated) {
+        zval v;
+
+        arr_scalar_zval(c->type, bits, &v);
+        add_next_index_zval(&f->slots[idx], &v);
+        return;
+    }
+    if (f->seen[idx]) {
+        zval_ptr_dtor(&f->slots[idx]);
+    }
+    arr_scalar_zval(c->type, bits, &f->slots[idx]);
+    arr_note_singular(f, c, idx);
+}
+
+static pbw_status arr_store_string(arr_frame *f, arr_col *c, size_t idx,
+                                   const uint8_t *data, size_t len) {
+    if (c->check_utf8 && !pbw_utf8_ok(data, len)) {
+        return PBW_ERR_INVALID;
+    }
+    if (c->repeated) {
+        zval v;
+
+        ZVAL_STRINGL(&v, (const char *)data, len);
+        add_next_index_zval(&f->slots[idx], &v);
+        return PBW_OK;
+    }
+    if (f->seen[idx]) {
+        zval_ptr_dtor(&f->slots[idx]);
+    }
+    ZVAL_STRINGL(&f->slots[idx], (const char *)data, len);
+    arr_note_singular(f, c, idx);
+    return PBW_OK;
+}
+
+static void arr_sub_record(arr_frame *f, arr_col *c, size_t idx,
+                           const uint8_t *body, size_t body_len) {
+    arr_sub *s = &f->subs[idx];
+
+    if (c->oneof != 0) {
+        if (f->seen[idx] && f->winner[c->oneof] != 0 &&
+            f->winner[c->oneof] != (uint32_t)idx + 1) {
+            /* Another member intervened: the pending bytes are dropped,
+             * like the tree that the oneof switch cleared. */
+            if (s->buf != NULL) {
+                efree(s->buf);
+                s->buf = NULL;
+                s->use = s->cap = 0;
+            }
+            f->seen[idx] = 0;
+        }
+        f->winner[c->oneof] = (uint32_t)idx + 1;
+    }
+    if (!f->seen[idx]) {
+        s->off = (size_t)(body - f->base);
+        s->len = body_len;
+        s->buf = NULL;
+        s->use = s->cap = 0;
+    } else if (s->buf == NULL) {
+        s->cap = s->len + body_len;
+        s->buf = emalloc(s->cap);
+        memcpy(s->buf, f->base + s->off, s->len);
+        memcpy(s->buf + s->len, body, body_len);
+        s->use = s->cap;
+    } else {
+        if (s->use + body_len > s->cap) {
+            s->cap = s->use + body_len;
+            s->buf = erealloc(s->buf, s->cap);
+        }
+        memcpy(s->buf + s->use, body, body_len);
+        s->use += body_len;
+    }
+    f->seen[idx] = 1;
+}
+
+static pbw_status arr_decode(const pbw_descriptor *desc, const uint8_t *wire,
+                             size_t wire_len, const pbw_limits *limits,
+                             uint32_t depth, arr_opts *opts, zval *out);
+
+static pbw_status arr_message_item(arr_frame *f, arr_col *c, size_t idx,
+                                   const uint8_t *body, size_t body_len) {
+    const pbw_descriptor *sub = pbw_field_message_type(c->field);
+    pbw_limits nested;
+    zval child;
+    pbw_status st;
+
+    if (sub == NULL) {
+        return PBW_ERR_INVALID;
+    }
+    ZVAL_UNDEF(&child);
+    nested.max_bytes = 0;
+    nested.max_depth = f->opts->user_dlim;
+    st = arr_decode(sub, body, body_len, &nested, f->depth + 1, f->opts,
+                     &child);
+    if (st != PBW_OK) {
+        return st;
+    }
+    add_next_index_zval(&f->slots[idx], &child);
+    return PBW_OK;
+}
+
+/* A packed run of scalars: whole values only, like the tree path, so a
+ * truncated tail fails instead of silently dropping bytes. */
+static pbw_status arr_packed(arr_frame *f, arr_col *c, size_t idx,
+                             const uint8_t *data, size_t len) {
+    pbw_type type = c->type;
+
+    if (len == 0) {
+        return PBW_OK;
+    }
+    if (type == PBW_TYPE_FIXED32 || type == PBW_TYPE_SFIXED32 ||
+        type == PBW_TYPE_FLOAT) {
+        const uint8_t *p = data;
+        const uint8_t *end = data + len;
+
+        if (len % 4 != 0) {
+            return PBW_ERR_INVALID;
+        }
+        while (p < end) {
+            arr_store_scalar(f, c, idx, arr_le32(p));
+            p += 4;
+        }
+        return PBW_OK;
+    }
+    if (type == PBW_TYPE_FIXED64 || type == PBW_TYPE_SFIXED64 ||
+        type == PBW_TYPE_DOUBLE) {
+        const uint8_t *p = data;
+        const uint8_t *end = data + len;
+
+        if (len % 8 != 0) {
+            return PBW_ERR_INVALID;
+        }
+        while (p < end) {
+            arr_store_scalar(f, c, idx, arr_le64(p));
+            p += 8;
+        }
+        return PBW_OK;
+    }
+    {
+        const uint8_t *p = data;
+        const uint8_t *end = data + len;
+        uint64_t raw;
+
+        while (p < end) {
+            if (!arr_varint(&p, end, &raw)) {
+                return PBW_ERR_INVALID;
+            }
+            arr_store_scalar(f, c, idx, raw);
+        }
+        return PBW_OK;
+    }
+}
+
+static size_t arr_tag_len(uint32_t number, uint32_t wire) {
+    uint64_t tag = ((uint64_t)number << 3) | wire;
+    size_t len = 1;
+
+    while (tag >= 0x80) {
+        tag >>= 7;
+        len++;
+    }
+    return len;
+}
+
+static pbw_status arr_visit(void *ud, const pbw_field *field, uint32_t number,
+                            uint32_t wire_type,
+                            const pbw_visit_value *value) {
+    arr_frame *f = (arr_frame *)ud;
+    size_t idx;
+    arr_col *c;
+    (void)number;
+
+    if (field == NULL) {
+        return PBW_OK; /* unknown: already skipped by the scan */
+    }
+    for (idx = 0; idx < f->nfields; idx++) {
+        if (f->cols[idx].field == field) {
+            break;
+        }
+    }
+    if (idx == f->nfields) {
+        return PBW_OK; /* extension or otherwise not materialized */
+    }
+    c = &f->cols[idx];
+    if (wire_type != c->wire) {
+        /* A repeated numeric field may arrive packed regardless of the
+         * declared packed flag; anything else mismatched rides as
+         * unknown, like the decoder. */
+        if (wire_type == PBW_WIRE_LEN && c->repeated &&
+            pbw_is_packable(c->type)) {
+            return arr_packed(f, c, idx, value->data, value->len);
+        }
+        return PBW_OK;
+    }
+    if (c->is_msg) {
+        const uint8_t *body = value->data;
+        size_t body_len = value->len;
+
+        if (c->group_wire) {
+            size_t tl =
+                arr_tag_len(pbw_field_number(c->field), PBW_WIRE_START_GROUP);
+
+            if (value->len < 2 * tl) {
+                return PBW_ERR_INVALID;
+            }
+            body += tl;
+            body_len -= 2 * tl;
+        }
+        if (c->repeated) {
+            return arr_message_item(f, c, idx, body, body_len);
+        }
+        arr_sub_record(f, c, idx, body, body_len);
+        return PBW_OK;
+    }
+    if (c->is_str) {
+        return arr_store_string(f, c, idx, value->data, value->len);
+    }
+    arr_store_scalar(f, c, idx, value->u64);
+    return PBW_OK;
+}
+
+/* Oneof losers go back to absent after the scan; singular sub-messages decode
+ * once from their merged payloads; then the array is assembled in descriptor
+ * order, which is the order the tree materialization produced, so strict
+ * comparisons against it keep passing. */
+static pbw_status arr_finish(arr_frame *f, arr_opts *opts, zval *out) {
+    size_t i;
+
+    for (i = 0; i < f->nfields; i++) {
+        arr_col *c = &f->cols[i];
+
+        if (!c->repeated && !f->seen[i] &&
+            pbw_field_is_required(c->field, f->desc)) {
+            return PBW_ERR_REQUIRED;
+        }
+    }
+    for (i = 0; i < f->nfields; i++) {
+        arr_col *c = &f->cols[i];
+
+        if (c->oneof != 0 && f->seen[i] &&
+            f->winner[c->oneof] != (uint32_t)i + 1) {
+            if (f->subs[i].buf != NULL) {
+                efree(f->subs[i].buf);
+                f->subs[i].buf = NULL;
+                f->subs[i].use = f->subs[i].cap = 0;
+            }
+            if (Z_TYPE(f->slots[i]) != IS_UNDEF) {
+                zval_ptr_dtor(&f->slots[i]);
+                ZVAL_UNDEF(&f->slots[i]);
+            }
+            f->seen[i] = 0;
+        }
+    }
+    for (i = 0; i < f->nfields; i++) {
+        arr_col *c = &f->cols[i];
+
+        if (!c->is_msg || c->repeated || !f->seen[i]) {
+            continue;
+        }
+        if (c->oneof != 0 && f->winner[c->oneof] != (uint32_t)i + 1) {
+            continue;
+        }
+        {
+            const pbw_descriptor *sub =
+                pbw_field_message_type(c->field);
+            const uint8_t *ptr;
+            size_t len;
+            pbw_limits nested;
+            zval child;
+            pbw_status st;
+
+            if (sub == NULL) {
+                return PBW_ERR_INVALID;
+            }
+            if (f->subs[i].buf != NULL) {
+                ptr = f->subs[i].buf;
+                len = f->subs[i].use;
+            } else {
+                ptr = f->base + f->subs[i].off;
+                len = f->subs[i].len;
+            }
+            ZVAL_UNDEF(&child);
+            nested.max_bytes = 0;
+            nested.max_depth = opts->user_dlim;
+            st = arr_decode(sub, ptr, len, &nested, f->depth + 1, opts,
+                             &child);
+            if (st != PBW_OK) {
+                return st;
+            }
+            f->slots[i] = child;
+        }
+    }
+    array_init_size(out, (uint32_t)f->nfields);
+    for (i = 0; i < f->nfields; i++) {
+        arr_col *c = &f->cols[i];
+
+        if (c->repeated) {
+            add_assoc_zval_ex(out, c->name, c->name_len, &f->slots[i]);
+            ZVAL_UNDEF(&f->slots[i]);
+            continue;
+        }
+        if (f->seen[i]) {
+            add_assoc_zval_ex(out, c->name, c->name_len, &f->slots[i]);
+            ZVAL_UNDEF(&f->slots[i]);
+        }
+    }
+    return PBW_OK;
+}
+
+static pbw_status arr_decode(const pbw_descriptor *desc, const uint8_t *wire,
+                             size_t wire_len, const pbw_limits *limits,
+                             uint32_t depth, arr_opts *opts, zval *out) {
+    const arr_layout *layout;
+    arr_frame f;
+    pbw_status st;
+    size_t i;
+    size_t seen_off;
+    size_t subs_off;
+    size_t winner_off;
+    size_t total;
+
+    /* Core allows nesting down to the cap (`depth >= dlim` is checked before
+     * descending, so a frame at exactly the cap still decodes); deeper fails
+     * the same way the tree walk did. */
+    if (depth > opts->depth_cap) {
+        if (opts->depth_cap == PBWIRE_ARRAY_MAX_DEPTH) {
+            opts->nesting = 1;
+        }
+        return PBW_ERR_LIMIT;
+    }
+    layout = arr_layout_for(opts, desc);
+    memset(&f, 0, sizeof f);
+    f.desc = desc;
+    f.base = wire;
+    f.opts = opts;
+    f.depth = depth;
+    f.cols = layout->cols;
+    f.nfields = layout->nfields;
+    /* One zeroed block per level: IS_UNDEF slots, clear presence, empty
+     * ranges and oneof winners. The layout columns stay cached. */
+    seen_off = f.nfields * sizeof *f.slots;
+    subs_off = (seen_off + f.nfields + 7) & ~(size_t)7;
+    winner_off = subs_off + f.nfields * sizeof *f.subs;
+    total = winner_off + (layout->max_oneof + 1) * sizeof *f.winner;
+    f.block = emalloc(total == 0 ? 1 : total);
+    memset(f.block, 0, total == 0 ? 1 : total);
+    f.slots = (zval *)f.block;
+    f.seen = (unsigned char *)((char *)f.block + seen_off);
+    f.subs = (arr_sub *)((char *)f.block + subs_off);
+    f.winner = (uint32_t *)((char *)f.block + winner_off);
+    for (i = 0; i < f.nfields; i++) {
+        if (f.cols[i].repeated) {
+            array_init(&f.slots[i]);
+        }
+    }
+    st = pbw_visit_limits(desc, wire, wire_len, limits, arr_visit, &f, NULL);
+    if (st == PBW_OK) {
+        st = arr_finish(&f, opts, out);
+    }
+    arr_frame_free(&f);
+    return st;
 }
 
 ZEND_BEGIN_ARG_INFO_EX(arginfo_type_field, 0, 0, 1)
@@ -1492,7 +2019,9 @@ PHP_METHOD(Type, encodeArray) {
     RETURN_STR(str);
 }
 
-/* The reverse entry: wire bytes in, the fully materialized PHP array out. */
+/* The reverse entry: wire bytes in, the fully materialized PHP array out.
+ * One C-side tag scan per message level builds the array straight from the
+ * wire (see arr_decode above): no tree, no per-field API in the timer. */
 PHP_METHOD(Type, decodeArray) {
     char *wire;
     size_t wire_len;
@@ -1500,7 +2029,7 @@ PHP_METHOD(Type, decodeArray) {
     pbw_limits lim;
     const pbw_limits *limp = NULL;
     type_obj *t;
-    pbw_message *msg = NULL;
+    arr_opts opts;
     pbw_status st;
     zval out;
 
@@ -1514,25 +2043,31 @@ PHP_METHOD(Type, decodeArray) {
         RETURN_THROWS();
     }
     t = type_from(Z_OBJ_P(ZEND_THIS));
-    st = limp == NULL ? pbw_decode(t->desc, wire, wire_len, &msg)
-                      : pbw_decode_limits(t->desc, wire, wire_len, limp, &msg);
-    if (st != PBW_OK) {
-        throw_error_status("decodeArray", st);
-        RETURN_THROWS();
-    }
-    if (msg == NULL) {
-        throw_error("decodeArray: no message returned");
-        RETURN_THROWS();
-    }
+    opts.user_dlim = limp == NULL || lim.max_depth == 0 ||
+                             lim.max_depth > PBW_MAX_DEPTH
+                         ? PBW_MAX_DEPTH
+                         : lim.max_depth;
+    opts.depth_cap = opts.user_dlim < PBWIRE_ARRAY_MAX_DEPTH
+                         ? opts.user_dlim
+                         : PBWIRE_ARRAY_MAX_DEPTH;
+    opts.nesting = 0;
+    opts.layouts = NULL;
+    opts.nlayouts = opts.layouts_cap = 0;
     ZVAL_UNDEF(&out);
-    if (array_decode_message(msg, &out, 0) != 0) {
+    st = arr_decode(t->desc, (const uint8_t *)wire, wire_len, limp, 0, &opts,
+                     &out);
+    arr_opts_free(&opts);
+    if (st != PBW_OK) {
         if (Z_TYPE(out) != IS_UNDEF) {
             zval_ptr_dtor(&out);
         }
-        pbw_message_free(msg);
+        if (opts.nesting) {
+            throw_error("nesting limit exceeded");
+        } else {
+            throw_error_status("decodeArray", st);
+        }
         RETURN_THROWS();
     }
-    pbw_message_free(msg);
     RETURN_ZVAL(&out, 1, 1);
 }
 

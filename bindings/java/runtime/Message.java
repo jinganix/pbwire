@@ -240,7 +240,7 @@ public final class Message implements AutoCloseable {
         segment();
         GenericCodec.Field f = type.def.fields[slot];
         if (f.repeated) {
-            return getList(slot);
+            return getListAt(slot);
         }
         Object v = data.get(f.number);
         if (v instanceof GenericCodec.DMsg) {

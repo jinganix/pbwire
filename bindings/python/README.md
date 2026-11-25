@@ -143,15 +143,13 @@ setuptools, no wheel, no generated Python. `make python-bind` writes
 `bindings/python/pbwire<EXT_SUFFIX>`; add that directory to `PYTHONPATH` (the
 tests and the benchmark do it themselves).
 
-## Benchmark
+## Benchmarks
 
 [`benchmarks/bench.py`](benchmarks/bench.py) compares against `google.protobuf`
 (the upb C extension) on the same `matrix3.proto` message at the four standard
 tiers from [`../../BENCHMARKS.md`](../../BENCHMARKS.md) (small / medium / large /
 xlarge scale the repeated fields x0 / x1 / x100 / x3000), printing the same
-`impl op ns/op MB/s` table as every other harness. Copied from that file, which
-is the single source for all performance numbers; higher is better, MB/s over
-wire bytes.
+`impl op ns/op MB/s` table as every other harness.
 
 ```shell
 make python-bench
@@ -159,25 +157,6 @@ make python-bench
 
 It verifies byte-for-byte parity with `protobuf`'s own encoding and
 both dict representations before timing.
-
-| payload | op | pbwire-py (MB/s, x upb) | upb (MB/s) |
-|---|---|---|---|
-| 136 B | encode(data) | 291.4 (5.7x) | 51.5 |
-| 136 B | decode(bytes) | 663.7 (1.2x) | 568.6 |
-| 136 B | to_dict(bytes) | 161.4 (4.8x) | 33.3 |
-| 136 B | encode(parsed) | 3087.4 (4.1x) | 751.3 |
-| 174 B | encode(data) | 334.7 (5.7x) | 58.4 |
-| 174 B | decode(bytes) | 727.6 (1.3x) | 573.3 |
-| 174 B | to_dict(bytes) | 154.5 (5.6x) | 27.6 |
-| 174 B | encode(parsed) | 3897.8 (4.8x) | 819.8 |
-| 2469 B | encode(data) | 497.8 (6.6x) | 75.2 |
-| 2469 B | decode(bytes) | 1127.3 (1.6x) | 717.7 |
-| 2469 B | to_dict(bytes) | 200.3 (4.8x) | 41.4 |
-| 2469 B | encode(parsed) | 31535.5 (22x) | 1430.8 |
-| 74913 B | encode(data) | 593.1 (6.9x) | 85.8 |
-| 74913 B | decode(bytes) | 1376.6 (1.7x) | 810.5 |
-| 74913 B | to_dict(bytes) | 173.2 (4.0x) | 43.5 |
-| 74913 B | encode(parsed) | 94176.6 (63x) | 1500.0 |
 
 Rows are the same user-visible task on both sides: `encode(data)` starts from
 the same dict, `decode(bytes)` ends with an in-memory message, `to_dict(bytes)`
@@ -191,6 +170,73 @@ its serialization re-encodes every field from its own structs where a parsed
 `Message` just hands back the bytes. The `to_dict()` row is the one where both
 sides pay for every dict, string and int; that cost is `malloc`-bound and
 nobody can avoid it.
+
+### Python vs `google.protobuf` (upb)
+
+![Python vs google.protobuf (upb) — MB/s by tier](../../docs/charts/bench-python-vs-google-protobuf-upb.svg)
+
+| payload | op | pbwire-py shim (MB/s, x upb) | upb (MB/s) |
+|---|---|---|---|
+| 136 B | encode(data) | 117.6 (2.90x ✅) | 40.5 |
+| 136 B | to_dict(bytes) | 162.3 (4.69x ✅) | 34.6 |
+| 174 B | encode(data) | 132.0 (2.83x ✅) | 46.6 |
+| 174 B | to_dict(bytes) | 149.8 (5.37x ✅) | 27.9 |
+| 2469 B | encode(data) | 184.4 (3.02x ✅) | 61.1 |
+| 2469 B | to_dict(bytes) | 186.8 (4.51x ✅) | 41.4 |
+| 74913 B | encode(data) | 164.8 (2.75x ✅) | 60.0 |
+| 74913 B | to_dict(bytes) | 153.1 (3.58x ✅) | 42.8 |
+
+The `shim` rows are the published comparison: the same native task in one
+downcall per op (fresh dict in, `encode(dict)`; `decode(bytes)` plus
+`to_dict()` with every field read back). The per-field `tree` arm is compared
+in `pbench/README.md`, not here. Formal run `../../results/bench-python-20261124T135250Z.json`.
+
+Rows are the same user-visible task in both arms:
+
+- **encode(data)** starts from the same dict. upb has no dict entry point, so
+  its side is filling a generated message field by field and then serializing;
+  that population is most of the ~945 us on the 75 KB tier. pbwire walks the
+  dict once and writes the wire directly (the one-downcall `shim` path).
+- **to_dict(bytes)** ends with plain Python data on either side: native
+  `decode(bytes)` plus `to_dict()`, against `FromString` plus reading every field through
+  `ListFields()`. This is the `malloc`-bound row — 3000 sub-messages mean 3000
+  dicts, 12000 ints and 3000 strings on either side, and nobody escapes it.
+  (`json_format.MessageToDict` is ~4x slower than reading the fields, so the
+  harness does not use it.)
+
+#### What the optimization pass changed
+
+| version | xlarge encode | xlarge decode |
+|---|---|---|
+| cffi bridge (one call per value) | 9.3 MB/s | 8.6 MB/s |
+| CPython extension, dict-in/dict-out | 586.7 | 202.5 (dict) |
+| CPython extension, parsed messages | 554.6 | 1284.7 (message) |
+
+The dict codec was already at the floor for its contract: decoding into plain
+dicts costs one dict, one list and one int/str object per value, and the old
+`decode()` was within 10% of that floor. That is why it stayed at 0.26-0.4x of
+upb — upb never builds those objects. The way out was not a faster loop but a
+different representation:
+
+- `decode()` now returns a `Message` that records one 16-byte slice per wire
+  field instead of materializing a dict tree: one tag scan, one allocation per
+  message (the slices live inside the object up to 16 fields), and the whole
+  payload validated while walking it.
+- Materialization moved to `Message.to_dict()` / `Message.getattr`, so it only
+  happens for fields that are actually read.
+- `encode()` accepts a `Message` and returns the retained bytes, which is what
+  makes the parse/encode round trip exact (and why the Python conformance
+  testee no longer needs a failure list).
+- The per-field facts (number, type, wire type, packed/required/oneof, sub-type)
+  are resolved once per message type and cached per schema, so
+  `schema.message(name)` is a dict lookup and the hot loops never see a
+  descriptor.
+- Decode pre-sizes the list for a packed run (element count from the payload:
+  varints end on a byte without the continuation bit, fixed runs divide) and
+  fills it with `PyList_SET_ITEM`; the per-field list table lives on the stack
+  for messages with up to 8 fields, which is every sub-message on these tiers.
+
+The pure-Python core port is compared in `pbench/README.md`, not here.
 
 ## Pure-Python mode
 
@@ -235,3 +281,4 @@ dual registration) must run first; `registry=false` drops
 `MESSAGE_NAMES` + `preload()`. The committed output is
 `tests/gen/` and `examples/gen/`; `examples/addressbook.py` uses the dataclasses
 only. See `../../codegen/README.md`.
+

@@ -163,15 +163,20 @@ public final class Bench {
         // prebuilt task, relabelled, not re-measured as a new task.
         // Calibration stays per-op (measureAll): the fast proxy ops keep
         // their own count and never inflate the tree rows.
+        // Decode depth matches on both headline sides (fairness §4): the
+        // core model materializes every string eagerly at parse, while
+        // protobuf-java keeps strings lazy (ByteString until first read),
+        // so the baseline arm folds the same gate-checked fields
+        // (consumeBaseline) instead of timing a bare parse.
         Runnable[] ops = {
             () -> GenericCodec.encode(fillGeneric(scalars3, n)),
-            model::toByteArray,
+            () -> fillModel(n).toByteArray(),
             () -> GenericCodec.encode(data),
-            officialMessage::toByteArray,
+            () -> fillOfficial(n).toByteArray(),
             () -> consumeTree(scalars3, reference, n),
             () -> Structtest_Scalars3.parseFrom(reference),
             () -> GenericCodec.decode(scalars3, reference),
-            () -> parse(reference),
+            () -> consumeBaseline(reference, n),
         };
         double[] best = measureAll(floor, ops);
 
@@ -360,13 +365,18 @@ public final class Bench {
      * The tree decode half of the timed full task: decode, then read back
      * every gate-checked field (same field list as checkDecoded asserts).
      * GenericCodec.decode is lazy on message/string/bytes fields, so this
-     * is the work the binding really does turning wire into values.
+     * is the work the binding really does turning wire into values. Every
+     * repeated element is folded, matching the core arm's eager
+     * materialization (see consumeBaseline).
      */
     private static void consumeTree(GenericCodec.MessageDef def, byte[] wire,
             int n) {
         GenericCodec.DMsg back = GenericCodec.decode(def, wire);
         sink += ((String) back.get(num(back.def, "str"))).length();
-        sink += back.getList(num(back.def, "tags")).size();
+        java.util.List<Object> tags = back.getList(num(back.def, "tags"));
+        for (Object t : tags) {
+            sink += ((String) t).length();
+        }
         java.util.List<Object> inners =
                 back.getList(num(back.def, "inners"));
         sink += inners.size();
@@ -374,11 +384,33 @@ public final class Bench {
                 (GenericCodec.DMsg) back.get(num(back.def, "inner"));
         sink += ((String) inner.get(num(inner.def, "name"))).length();
         sink += ((Number) inner.get(num(inner.def, "value"))).intValue();
-        if (n > 0) {
-            GenericCodec.DMsg last =
-                    (GenericCodec.DMsg) inners.get(n - 1);
-            sink += ((String) last.get(num(last.def, "name"))).length();
-            sink += ((Number) last.get(num(last.def, "value"))).intValue();
+        for (Object o : inners) {
+            GenericCodec.DMsg m = (GenericCodec.DMsg) o;
+            sink += ((String) m.get(num(m.def, "name"))).length();
+            sink += ((Number) m.get(num(m.def, "value"))).intValue();
+        }
+    }
+
+    /**
+     * The baseline decode half of the timed full task. protobuf-java keeps
+     * string fields lazy (ByteString until first read), so a bare parse
+     * skips the string materialization the core arm pays eagerly. This
+     * folds the same gate-checked fields checkDecoded asserts -- every
+     * repeated element, like consumeTree -- into the same live sink, so
+     * both timers observe the full payload (fairness §4).
+     */
+    private static void consumeBaseline(byte[] wire, int n) {
+        Matrix3.Scalars3 back = parse(wire);
+        sink += back.getStr().length();
+        for (int i = 0; i < back.getTagsCount(); i++) {
+            sink += back.getTags(i).length();
+        }
+        sink += back.getInnersCount();
+        sink += back.getInner().getName().length();
+        sink += back.getInner().getValue();
+        for (int i = 0; i < n; i++) {
+            Matrix3.Inner3 m = back.getInners(i);
+            sink += m.getName().length() + m.getValue();
         }
     }
 

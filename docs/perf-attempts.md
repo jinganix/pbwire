@@ -11,7 +11,7 @@ harness names and the current numbers. This page only adds the experiments.
 
 ## How an attempt is measured
 
-Same method as the core's notes in BENCHMARKS.md:
+Same method as [the core fast-path notes](#measurement-notes-the-core-fast-path-from-benchmarksmd):
 
 1. Build the unchanged tree and the candidate as two binaries/class dirs from
    the same source tree (`base` and `vN`).
@@ -1603,6 +1603,42 @@ Formal rows: `make csharp-bench` 2026-11-21
 74913 B; `make fsharp-bench` (`results/bench-fsharp-20261121T001056Z.json`)
 encode 1180.6 / 966.1 / 643.0 / 658.3, decode 760.2 / 590.5 / 320.8 / 354.6.
 
+## Kept (C# shim): ASCII fast-path string decode (Task 3, 2026-11-24)
+
+`ReadImage` paid a `Marshal.PtrToStringUTF8` transition per string (6000
+native calls on the xlarge tier: tags, inner names, `str`, optionals).
+`Pbwire.ImageText.Decode` keeps the exact contract (NULL/empty handling,
+NUL termination, non-ASCII fallback to the runtime decoder) and decodes
+pure-ASCII runs with a fused length/scan plus `string.Create` widening;
+generated `ReadImage` calls it at all four string sites (singular, optional,
+repeated, oneof). Behaviour-identical by construction, pinned by new T7
+struct-path edge tests in `bindings/csharp/generated/GeneratedTest.cs`
+(last-wins, sub-message merge, oneof reset, packed/unpacked/mixed, malformed
+throws, invalid UTF-8 parity, non-ASCII round-trip through the fallback, unknown skip, empty
+input); the suite is green before and after.
+
+Formal `make csharp-bench` (`results/bench-csharp-20261124T191013Z.json`):
+xlarge `shim` decode 370.4 -> 385.3 MB/s against a 498.9 baseline (0.70x ->
+0.77x); large 364.6 -> 373.4 (0.76x -> 0.77x); small/medium decode improve
+inside their band (1.75x -> 1.61x / 1.49x -> 1.57x -- the baseline side moved
+too, same-run ratios throughout). `make fsharp-bench`
+(`results/bench-fsharp-20261124T191738Z.json`) rides the same runtime:
+xlarge `shim` decode 0.74x, inside harness noise of its 0.74x. Encode
+untouched on both (helper is decode-only).
+
+Deliberately not attempted, with measurements: bulk `AddRange` transfer for
+repeated value types (loop clones save ~1.4 us nums + ~0.9 us flags on xlarge
+-- ~1% -- for template branching plus a small-tier threshold; disproportionate
+churn, skipped), shared-core `always_inline` on the struct hot loop (~3 us in
+a hacked-lib A/B; touches every struct-codec user for noise), `-O3` for the
+shim library (no measurable delta same-host), and dropping string copies or
+UTF-8 validation in the C codec (needs an image-ABI change for lengths plus
+pinning, or a semantic divergence the reference does not share -- the official
+C# parser also rejects invalid UTF-8 eagerly -- for a projected ~0.9x at best).
+The residual is the documented double materialisation (wire -> arena/image ->
+managed vs the reference's single pass); crossing needs the mechanism change
+plan 05b already rejected, not another tuning round.
+
 ## Provisional: Rust shim arm (plan 08)
 
 The flat-layout shim is the generated `#[repr(C)]` mirror plus one call into
@@ -2726,3 +2762,598 @@ stays the native-object answer; the small-tier `tree` decode cell
 stays flagged, same class as the ledger's Julia 136 B decode entries
 above (per-call malloc/free plus the boundary, fixed only by an
 ownership or API change).
+
+## Kept (Node shim): leaf-table single-pass decode (Task 4, 2026-11-24)
+
+`decodeToObject` validated every range with `scan_range` and then
+materialised it with `slices_to_js`, which allocates four scratch arrays per
+message level: 3000 `Inner3` payloads paid 12000 `calloc`/`free` pairs plus a
+second C scan per nested message. Tables with only singular
+scalars/strings/bytes (no repeated, oneof or sub-message field) now validate
+and materialise in one tag scan (`wire_leaf_to_js`, flagged once per
+descriptor in `table_build`): later occurrences overwrite, which is last-wins
+for a table with no oneof and no merge. Semantics pinned by a new
+`decodeObject matches the tree decoder on wire edges` block in
+`bindings/node/test/test_pbwire.js` (last-wins, merge, oneof reset,
+packed/unpacked/mixed, packed-for-singular skip per core parity, unknown
+skip, closed-enum absence, truncated/malformed/deep-nesting throws, missing
+required) plus a 563-payload ad-hoc differential of `decodeObject` against
+tree `get()` with zero divergences; the suite is green before and after.
+
+A/B (`bindings/node/benchmarks/ab.sh`, `AB_REQUIRE=decode`, interleaved,
+best-of-rounds): xlarge decode median 1.09-1.10x across three sessions
+(5/5, 5/5, 4/5 rounds; the one lost round ran under ~30% host inflation),
+large 1.03-1.09x, small/medium inside the noise band (1.00-1.03x), encode
+untouched everywhere (0.98-1.03x medians). Formal `make node-bench`
+(`results/bench-node-20261124T193829Z.json`): xlarge `shim` decode 57.9 MB/s
+against protobufjs 429.7 (0.13x, was 0.13x), encode 56.3 against 297.0
+(0.19x, was 0.18x).
+
+Encode deliberately untouched: `js_to_message` already builds the tree in the
+type's arena (the kept 2026-11-21 change, +16% xlarge); what remains per field
+is one `napi_get_named_property` plus one property enumeration per object
+(the unknown-field reject), i.e. the ~60-70 ns N-API read floor the README
+names. Direct-to-wire emission would save only the ~43 us C tree walk (~3%
+of the op). The honest ceiling stands: the C core itself encodes the xlarge
+payload at ~1628 MB/s (`proxy` row, 5.5x protobufjs), so the whole 0.19x /
+0.13x gap is the ~18k encode / ~30k decode N-API interactions, and no
+in-addon tuning crosses 1.0x against an in-heap generated runtime. Both
+timer arms stay deep and fresh-task (the fold A/B moves neither side), so the
+pair is fair and the cells stay red as documented.
+
+## Kept (Java core): direct-linked table setters + decode dispatch trims (Task 5, 2026-11-24)
+
+Pre-change formal `results/bench-java-20261124T135431Z.json`: xlarge `core`
+encode 436.1 MB/s against protobuf-java 460.8 (0.95x), decode 334.0 against
+418.7 (0.80x). Encode was already at parity in quiet runs; decode was the
+red cell, so all changes below are decode-side (encode paths untouched).
+
+Profile (throwaway `/tmp` probes against the bench classes, then JFR
+`ExecutionSample` on the xlarge decode loop): the decode pays ~18k Builder
+setter/adder calls per iteration (3000 packed nums + 3000 unpacked tags +
+3000 packed flags + 3000 inners x setName/setValue/addInners + singulars),
+and every one crossed a `MethodHandle.invoke` adaptation frame
+(`Bind.lambda$intSetter$0` / `lambda$setter$0` on the hot stacks), plus a
+per-call guard frame, plus `ArrayList.grow` on the four fresh 3000-long
+Builder lists, plus a `HashMap` alloc + hash + entry walk for the single
+pending singular sub-message, plus a kind `switch` per packed element.
+Encode getters were already direct method references, which is why encode
+was never red in quiet runs.
+
+Kept (all in `bindings/java/runtime`, no generated-file change, so
+Kotlin/Scala/Clojure inherit them with no code change on their side):
+
+- `Bind` setters spin direct calls via `LambdaMetafactory` instead of
+  per-call `MethodHandle.invoke` (same signatures, same loud bind-time
+  failure; non-linkable targets keep the old reflective path; runtime
+  setter failures on the fast path now propagate raw, documented in the
+  binding README). Isolated probe decode 340.4 -> 434.9 MB/s (+28%).
+- `parseInto` keeps a single pending singular sub-message in two locals
+  and only promotes to the `HashMap` on a second distinct field (+2%).
+- Packed int/long loops hoist the kind `switch` out of the element loop;
+  the per-call guard frame is dropped; the unpacked scalar wire check
+  reads the precomputed `FieldMeta.wt` instead of the `singularWt`
+  switch (+4% combined).
+- Harness fairness (`bindings/java/benchmarks/Bench.java`): the baseline
+  decode arm folds every gate-checked field (`consumeBaseline`, same live
+  sink, every repeated element like the tree arm's new full fold) instead
+  of timing a bare parse (fairness §4). Measured nil on both sides:
+  protobuf-java strings parse eagerly (`readStringRequireUtf8`), so the
+  fold costs it nothing — kept as documentation, not as a speedup.
+
+A/B (isolated `/tmp` probes, same session, alternating class dirs):
+decode 340.4 -> 489.6 MB/s against a folded baseline at ~480-492
+(~1.0x in isolation). Formal `make java-bench`
+(`results/bench-java-20261124T200358Z.json`, loaded host): xlarge `core`
+encode 443.9 vs 445.0 (1.00x, was 0.95x), decode 348.1 vs 416.6 (0.84x,
+was 0.80x). `make java-test` green (TestGenerated 77 -> 97 checks: new T7
+pins typed decode edges — scalar last-wins, singular-message merge,
+packed/unpacked acceptance, packed-for-singular skip vs the oracle,
+typed unknown-field drop vs the dynamic tree's retention, field-zero /
+stray-end-group / truncated-tag / truncated-fixed32 /
+truncated-length-delimited throws, 300-deep group nesting hitting the
+256 cap, missing-required on decode); kotlin/scala/clojure test gates
+green on the shared runtime.
+
+Rejected / measured (with reasons):
+
+- ASCII string fast path on decode (Latin1 inflate behind an ASCII
+  scan): ~1.5 ns per small string either way — both sides already pay a
+  `String` construction per value, so there is no gap to close. Not built
+  in the repo (scratch probe only).
+- Anything inside the generated `Builder`/message storage: the ~2900
+  `Integer` boxes on packed-nums decode, the four list copies plus four
+  `unmodifiableList` wrappers plus the 3000-inner `isInitialized` walk
+  in `build()`. protobuf-java keeps primitive `IntArrayList`s and flips
+  them immutable zero-copy. Reaching that storage needs per-message
+  primitive lists from codegen plus a regen of every Java model — out of
+  the runtime-only scope, and disproportionate for the ~10% it prices at.
+
+Honest ceiling: decode 0.84x on the loaded formal bench, ~1.0x isolated.
+The encode cell is green (1.00x); the decode cell stays red and is now a
+floor with its mechanism named above. No further untried one-change
+runtime mechanism on the JVM `core` decode path.
+
+## Cell: Objective-C `tree` xlarge encode (0.97x) — confirmed noise band, no change
+
+Task 9 of the below-baseline plan (2026-11-24): five consecutive
+`make objc-bench` runs on the same machine keep xlarge encode below the line
+without ever crossing it — 0.964x, 0.984x (prior formal runs), then 0.858x,
+0.981x, 0.972x (three runs back to back; the 0.858x pass ran under load from
+other benches on the same host). Decode stays green throughout
+(1.16x-1.20x). Formal pasted run:
+`results/bench-objc-20261124T203820Z.json`.
+
+A probe built from the same harness sources times the fresh-build half alone
+(xlarge pad, 2000 iterations): `fill_pbwire` ~374 us/iter vs `fill_official`
+~407 us/iter vs the shared `padded(74775)` fixture alone ~361 us/iter. The
+74 KB `NSString` both sides rebuild identically dominates the ~368 us op; the
+encode tail itself (held-tree re-encode, no build) is ~1 us. So there is no
+asymmetric buffer-reuse cost to align with the C harness
+(`bindings/c/benchmarks/bench_struct.cc` reuses one output buffer per side):
+both ObjC sides already allocate exactly one fresh output buffer per
+iteration, and reusing it would only touch the ~1 us tail, not the ~360 us
+shared fixture both sides pay inside the timer. No binding or harness change
+shipped; the residual 2-3% lean is dispatch wobble inside a tier both sides
+build identically, inside the few-percent run-to-run band the harness
+documents. Revisit only if a quiet-machine run ever shows a gap clearly
+outside that band.
+
+## Cell: Lua `shim` xlarge encode (0.98x) — confirmed tie, no change
+
+Task 10 of the below-baseline plan (2026-11-24): three consecutive
+`make lua-bench` runs on the same host keep xlarge `shim` encode just under
+the line without ever opening a real gap — 0.98x, 0.99x, 0.98x (prior formal
+run 0.99x; the other encode tiers sit green at 1.03x-1.06x in the same runs).
+Decode stays green throughout (1.42x-1.47x). Formal pasted run:
+`results/bench-lua-20261124T204559Z.json`.
+
+No probe was needed beyond the re-runs: unlike the ObjC case there is no
+candidate asymmetry to isolate — the `shim` path already encodes straight
+from the Lua table into the schema context's reused buffer in one C entry
+per op, which is exactly the C-harness buffer-reuse shape
+(`bindings/c/benchmarks/bench_struct.cc`), and both sides pay the same
+fresh-table construction inside the timer. No binding or harness change
+shipped; the residual 1-2% lean is dispatch wobble inside a tier both sides
+build identically, inside the ±10% run-to-run band the binding README
+documents. Revisit only if a quiet-machine run ever shows a gap clearly
+outside that band.
+
+## Test-environment history (from BENCHMARKS.md)
+
+Moved verbatim from the BENCHMARKS.md top matter on 2026-11-25 (trim);
+the tables above it are the current numbers.
+
+> **Optimization (2026-11-14):** the proto3 `string` UTF-8 validation that
+> runs at parse time (see
+> [#aligned-cost-proto3-string-utf-8-validation](#aligned-cost-proto3-string-utf-8-validation))
+> was the main reason the decode rows below had fallen behind. It now shares
+> one sequence rule and skips ASCII runs 16 bytes at a time, so a 74 KB value
+> costs ~1.3 us instead of ~20 us and a short value is checked inline (measured
+> in the ledger). The tables below are the post-change runs; the remaining
+> decode gaps are baseline strength, not validator cost.
+
+Last full refresh: 2026-11-24, 13:46-14:48 UTC (every `make *-bench`
+on this tree except Erlang, one harness at a time, the whole matrix in ~60 minutes;
+formal runs `results/bench-<lang>-20261124T13*.json` / `T14*.json`; dart's first
+attempt failed on a missing `protoc-gen-dart` and was re-run with
+`~/.pub-cache/bin` on `PATH`), plus an
+08:30 UTC core re-run after `bench/bench.cc` switched the generated and
+DynamicMessage encode arms to fresh-build per iteration (same construct +
+serialize calling method as the pbwire arms; see the Core section). Core
+re-run 2026-11-24, 07:19 UTC: the pbwire arms now go through the generated C
+struct and the compiled struct codec (thin model, same new + set + encode task
+as the baseline; formal run `results/bench-core-20261124T071914Z.json`).
+Core re-run 2026-11-24, 07:38 UTC: the plain arms go through a fresh arena per
+call (same batched profile as the reference parse; formal run
+`results/bench-core-20261124T134623Z.json`). Go-parity re-time 2026-11-21/22 (issue 41 plan): every binding
+with a `pbench/` re-times its `tree` arm as the native-in/native-out full task
+(fresh native object per iteration, alloc and free inside the timer, deep
+materialization of every gate-checked field); `shim` rows and the shipped JVM
+`core` rows keep their timers except where the task
+changed. Pbench-only arms (the prebuilt `proxy` task, pure-language `core`
+ports, Go `dync`, the vendored `cshim`, the JNI ceiling) stay in
+`bindings/<lang>/pbench/README.md` and are never pasted here. The re-timed runs are `results/bench-<lang>-20261124*.json` (one
+binding at a time under `results/.bench.lock`); the per-binding tables live in each binding's README (`## Benchmarks`), and
+the at-a-glance rows and the per-binding summary below are pasted from them.
+Full re-time 2026-11-24 (fresh-build headline contract, `docs/perf-fairness.md`):
+every binding re-ran once under `results/.bench.lock`; the per-binding tables,
+the at-a-glance rows and the per-binding summary below are pasted from
+`results/bench-<lang>-20261124*.json`.
+Partial refresh 2026-11-15, 02:26-03:12 UTC: core, Python
+and Julia re-ran after the first generic pass (plain-encode `wire_len` hint,
+32 inline Python slices, sealed-arena implicit reset), then Java, Kotlin,
+Scala, Clojure and Julia again plus core and Python once more after the
+follow-ups (arena reset keeps the used chunk prefix, `Message` drops its
+`AtomicBoolean`, decode drops its `ThreadLocal` reader, Scala measures
+interleaved), and finally 04:00-04:30 UTC core, C, Python, Julia, Go, Rust,
+Node, Ruby, Lua, PHP and Zig re-ran once the encoder cached its buffer base
+pointer and capacity (a C-only change, so Java, Kotlin, Scala and Clojure kept
+their 03:00 numbers). The at-a-glance rows, the per-binding summary and the
+core table reflect those runs, except where a re-time above
+re-pasted a binding's table from its `results/bench-<lang>-20261124*.json`
+run. Each row is pasted verbatim from one run of that binding, so
+both columns of a row come from the same measurement; where a binding
+was re-run (Ruby, Objective-C, Kotlin, Elixir, Julia, Erlang) the pasted run is the one
+whose own baseline did not collapse under host load (a run whose fastest
+baseline is under 85% of that binding's median baseline is treated as
+contaminated and skipped). The host carried someone else's background load
+throughout (load average 5-14 on 14 cores, ~0.4-1.0 normalised), so absolute
+MB/s reads 10-20% low against a quiet machine while `x baseline` reproduces
+(run-to-run variation is ±10% per cell, more on the JVM narrow tiers).
+Erlang ran from its own record this time
+(`results/bench-erlang-20261124T110417Z.json`), pasted like every other binding.
+Dart ran with `protoc-gen-dart` 25.1.0 on `PATH` (`dart pub global activate
+protoc_plugin` plus `~/.pub-cache/bin`).
+
+| piece | version |
+|---|---|
+| machine | Apple M4 Pro, 14 cores, 48 GB RAM |
+| OS | macOS (Darwin 27.2.0, arm64) |
+| C/C++ | Apple clang 21.0.0, `-O2` |
+| `protoc` / libprotobuf C++ | 36.2 |
+| Python | 3.15.2, `protobuf` 7.36.2 (upb) |
+| Erlang/OTP | 29.0.1 |
+| Node | v26.3.0 (`google-protobuf` 4.0.3, protobufjs 8.8.1) |
+| Go | 1.27.3 |
+| Java | OpenJDK 26.0.1 |
+| Ruby | 4.0.9 (`google-protobuf` gem 4.36.2) |
+| Objective-C | same clang, Xcode Foundation |
+| PHP | 8.5.12 (`protobuf` C extension 5.36.2) |
+| Dart | 3.13.7 |
+| Rust | 1.99.1 |
+| C# | .NET 10.0.403 |
+| Lua | 5.5.1, `lua-protobuf` 0.6.0 |
+| Swift | 6.4.2, `swift-protobuf` 1.39.0 |
+| Scala | 3.10.0, ScalaPB 0.11.18, `protobuf-java` 4.36.2 |
+| Elixir | 1.20.5 / OTP 29, `protobuf` 0.17.1, `pbwire` 0.1.7 (Hex) |
+| Zig | 0.17.1 (`-Doptimize=ReleaseFast`), zig-protobuf 7.0.0 |
+| F# | .NET 10.0.403 (Google.Protobuf baseline via C#) |
+| Clojure | 1.12.0, `protobuf-java` 4.36.2 |
+| Julia | 1.13.3, ProtoBuf.jl 1.3.0 |
+| R | 4.6.2, RProtoBuf 0.4.28 |
+
+## Linux (docker) paired run, 2026-11-14 (from BENCHMARKS.md)
+
+Moved verbatim from the BENCHMARKS.md top matter on 2026-11-25 (trim).
+
+Every table above is Apple-silicon. The claims have to hold on the other
+architecture too, so `make bench-docker` runs the same harnesses — same
+payloads, same baselines, same measurement standard — inside
+`docker/bench.Dockerfile`, and `make bench-compare` pairs the newest record
+per binding/platform in `results/`, row by row:
+
+```bash
+make bench            # the macOS side (or whatever host you are benching)
+make bench-docker     # the Linux side: core, c, go, rust, node, ruby, lua, java, python
+make bench-compare    # newest pair per binding, xlarge tier, speedup per row
+```
+
+The image installs the pinned protobuf (so the generated baseline is the same
+version as the tables above) plus the Go, Rust, Node, Ruby, Lua, Java and
+Python toolchains. It covers what runs without an Apple toolchain:
+Objective-C and Swift stay host-only, PHP needs the official C extension as its
+baseline (Ubuntu packages none, and building it from source needs a generated
+`utf8_range` amalgamation only protobuf's own build produces — a pure-PHP
+baseline would be a ~300x different comparison), and the toolchains the image
+does not install (Dart, Zig, C#/F#, Julia, R, Erlang/Elixir,
+Kotlin/Scala/Clojure) run on the host only. `--bindings core,c` narrows a run,
+`--rebuild` rebuilds the image, and the container always benches a *copy* of the
+tree, so ELF objects never land in the host's `build/`.
+
+Last run: 2026-11-14, `make bench-docker` on the image in the repo, `make
+bench-compare` for the pairing. Absolute MB/s per row is what `--absolute`
+prints; the speedup against the same baseline on the same side is what travels.
+
+### core
+
+- macOS: 2026-11-14T18:00:19+00:00 (Darwin 27.0.0, arm64, Apple M4 Pro, 14 cores, libprotoc 36.2)
+- Linux: 2026-11-14T06:30:14+00:00 (Linux 6.8.0-64-generic container, aarch64, ?, 4 cores, libprotoc 36.2)
+
+| case | op | macOS x baseline | Linux x baseline |
+|---|---|---|---|
+| xlarge | encode | 1.42x (pb gen) | 1.14x (pb gen) |
+| xlarge | decode | 1.78x (pb gen) | 2.31x (pb gen) |
+
+### c
+
+- macOS: 2026-11-14T18:19:31+00:00 (Darwin 27.0.0, arm64, Apple M4 Pro, 14 cores, libprotoc 36.2)
+- Linux: 2026-11-14T06:31:26+00:00 (Linux 6.8.0-64-generic container, aarch64, ?, 4 cores, libprotoc 36.2)
+
+| case | op | macOS x baseline | Linux x baseline |
+|---|---|---|---|
+| xlarge | encode | 1.32x (pb gen) | 1.32x (pb gen) |
+| xlarge | decode | 1.96x (pb gen) | 2.82x (pb gen) |
+
+### go
+
+- macOS: 2026-11-14T18:20:12+00:00 (Darwin 27.0.0, arm64, Apple M4 Pro, 14 cores, libprotoc 36.2)
+- Linux: 2026-11-14T06:32:08+00:00 (Linux 6.8.0-64-generic container, aarch64, ?, 4 cores, libprotoc 36.2)
+
+| case | op | macOS x baseline | Linux x baseline |
+|---|---|---|---|
+| xlarge | encode | 2.61x (protobuf-go) | 2.65x (protobuf-go) |
+| xlarge | decode | 2.38x (protobuf-go) | 2.27x (protobuf-go) |
+
+### python
+
+- macOS: 2026-11-14T18:21:09+00:00 (Darwin 27.0.0, arm64, Apple M4 Pro, 14 cores, libprotoc 36.2)
+- Linux: 2026-11-14T06:38:46+00:00 (Linux 6.8.0-64-generic container, aarch64, ?, 4 cores, libprotoc 36.2)
+
+| case | op | macOS x baseline | Linux x baseline |
+|---|---|---|---|
+| xlarge | encode(data) | 7.11x (pb upb) | 8.05x (pb upb) |
+| xlarge | decode(bytes) | 1.17x (pb upb) | 1.28x (pb upb) |
+| xlarge | to_dict(bytes) | 3.70x (pb upb) | 4.73x (pb upb) |
+| xlarge | encode(parsed) | 63.05x (pb upb) | 55.86x (pb upb) |
+
+### java
+
+- macOS: 2026-11-14T18:01:43+00:00 (Darwin 27.0.0, arm64, Apple M4 Pro, 14 cores, libprotoc 36.2)
+- Linux: 2026-11-14T06:37:47+00:00 (Linux 6.8.0-64-generic container, aarch64, ?, 4 cores, libprotoc 36.2)
+
+| case | op | macOS x baseline | Linux x baseline |
+|---|---|---|---|
+| xlarge | encode | 1.09x (protobuf-java) | 0.96x (protobuf-java) |
+| xlarge | decode | 1.94x (protobuf-java) | 1.72x (protobuf-java) |
+
+### node
+
+- macOS: 2026-11-14T18:22:24+00:00 (Darwin 27.0.0, arm64, Apple M4 Pro, 14 cores, libprotoc 36.2)
+- Linux: 2026-11-14T06:35:33+00:00 (Linux 6.8.0-64-generic container, aarch64, ?, 4 cores, libprotoc 36.2)
+
+| case | op | macOS x baseline | Linux x baseline |
+|---|---|---|---|
+| xlarge | encode | 2.99x (protobufjs) | 4.91x (protobufjs) |
+| xlarge | decode | 2.77x (protobufjs) | 2.37x (protobufjs) |
+
+### ruby
+
+- macOS: 2026-11-14T18:44:34+00:00 (Darwin 27.0.0, arm64, Apple M4 Pro, 14 cores, libprotoc 36.2)
+- Linux: 2026-11-14T06:36:19+00:00 (Linux 6.8.0-64-generic container, aarch64, ?, 4 cores, libprotoc 36.2)
+
+| case | op | macOS x baseline | Linux x baseline |
+|---|---|---|---|
+| xlarge | encode | 1.19x (google-protobuf) | 1.11x (google-protobuf) |
+| xlarge | decode | 1.69x (google-protobuf) | 1.89x (google-protobuf) |
+
+### rust
+
+- macOS: 2026-11-14T18:03:19+00:00 (Darwin 27.0.0, arm64, Apple M4 Pro, 14 cores, libprotoc 36.2)
+- Linux: 2026-11-14T06:33:27+00:00 (Linux 6.8.0-64-generic container, aarch64, ?, 4 cores, libprotoc 36.2)
+
+skipped 2 row(s): the baseline differs across sides (prost vs protobuf-rust, protobuf-rust vs prost)
+
+| case | op | macOS x baseline | Linux x baseline |
+|---|---|---|---|
+| xlarge | encode | 1.04x (prost) | 1.49x (prost) |
+| xlarge | decode | 1.92x (prost) | 1.10x (prost) |
+
+### lua
+
+- macOS: 2026-11-14T18:31:09+00:00 (Darwin 27.0.0, arm64, Apple M4 Pro, 14 cores, libprotoc 36.2)
+- Linux: 2026-11-14T06:36:57+00:00 (Linux 6.8.0-64-generic container, aarch64, ?, 4 cores, libprotoc 36.2)
+
+no comparable row for xlarge
+
+
+## Measurement notes: the core fast path (from BENCHMARKS.md)
+
+Moved verbatim from the BENCHMARKS.md top matter on 2026-11-25 (trim).
+
+The decoder's generic length reader (`pbw_len_read`, in `wire.c`) is an
+out-of-line call. Strings and bytes shorter than 128 bytes — most of them —
+now take a one-byte inline path in `read_length()` instead. A/B measured with
+two bench binaries built from `HEAD` and the change, 8 alternating runs of
+200k iterations, median ns/op:
+
+| case | HEAD decode | now decode | delta |
+|---|---|---|---|
+| 136 B | 131.6 | 127.0 | -3.5% |
+| 174 B | 196.2 | 193.0 | -1.6% |
+| 2469 B | 4998.9 | 4862.9 | -2.7% |
+| 74913 B | 139641.8 | 140036.4 | +0.3% (noise) |
+
+Encode paths are untouched by this change (they moved by the same +/-3% noise
+floor, which is how the run was calibrated). Same session, the same change was
+rejected for `skip_value()` (unknown fields): no measurable effect, so that
+call stays out of line.
+
+The decoder used to inline fast paths only for one-byte tags and run everything
+else through per-item generic calls; two-byte tags carried a second copy of the
+inline bodies. All tag sizes now share one link-time action switch (the action
+lives on the field, covering singular and repeated shapes), repeated appends
+reuse a cached list slot instead of the get-or-create call, and packed runs
+append through reserved list storage with no call per item. Measured two ways:
+a C best-of-5 of decode+free on the 74913-byte matrix3 payload went 141.1 us to
+107.4 us (-24%), and the PHP binding's full-xlarge decode over 10 interleaved
+rounds against the official C extension moved from 0.91x to 1.10-1.19x. Packed
+encode got the same treatment (one dispatch per run, blind kind-specific write
+loops over a hoisted cursor): packed bool x3000 went 4.8 us to 1.1 us, packed
+int32 x3000 7.0 us to 3.5 us, both best-of-5. Unpacked-item loops were tried
+hoisted the same way and reverted: the bigger `encode_message` cost more in
+icache and register pressure than the per-item switch saved, measured -33% on
+the core bench's unpacked-heavy message.
+
+Formatting/parsing doubles used `strtod`/`snprintf`, which follow `LC_NUMERIC`:
+a host that calls `setlocale(LC_NUMERIC, "de_DE.UTF-8")` made the JSON parser
+read `1.5` as `1` and the printers emit `1,5` (invalid JSON). `wire.c` now owns
+both conversions (`pbw_strtod`, `pbw_format_g`): the print/parse entry points ask
+`pbw_locale_dot()` once, the C-locale path is the same libc call as before and
+is inlined, and only a non-'.' separator takes the translating slow path.
+Measured with the same A/B method (14 alternating runs, 400k iterations): JSON
+parse +0.4%, JSON print +0.7%, text parse +0.3%, text print +0.1%, with the
+unmodified reference rows drifting -0.7..+0.5% in the same runs, i.e. inside the
+noise floor. The same pass removed the JSON parser's 64-byte number buffer (long
+numbers were rejected; the reference has no such limit).
+
+The JSON printer built a per-message `order` array (malloc + insertion sort)
+before printing fields, although a linked schema's fields are already sorted by
+number (as `link_message()` leaves them). The linked path now prints in place:
+one pass, no allocation. Measured two ways, medians of alternating runs:
+
+| measurement | before | after | delta |
+|---|---|---|---|
+| `make bench` json print (one message) | 1815.3 ns | 1746.5 ns | -3.8% |
+| `pbw_json_print` on matrix3 x3000 (3000 messages) | 13.3 ms | 12.6 ms | -5.2% |
+
+The text parser also stopped malloc-ing a buffer per numeric token (stack
+buffer first); measured neutral on the bench schema (text parse -0.2%), kept
+because it removes one allocation per number.
+
+`pbw_pool_release` grew its idle array with one `realloc` per release, so filling
+a pool of N contexts cost O(N^2) copying. It now doubles the slot array. Filling
+300 pools x 2048 contexts (acquire all, release all, free the pool):
+
+| build | run 1 | run 2 | run 3 |
+|---|---|---|---|
+| HEAD | 19.7 ms | 20.0 ms | 19.6 ms |
+| now | 13.5 ms | 11.9 ms | 11.8 ms |
+
+The rest of the review (overflow guards in the schema, stream and binding
+growth paths, and freeing a nested decoded root's arena) only touches failure
+and teardown paths. Re-measured with the same A/B method afterwards: every
+row inside the +/-3% noise floor (stream `fed`/`detenc` -1..-4%, `sink`
+-0.7%, `framed` -0.9%), so nothing was kept that costs throughput.
+
+Decoding materializes a tree, and two structural costs sat on that path: a
+decoded string or bytes item took two allocations (the value struct and its
+payload), and every decoded item crossed a translation unit into `message.c`
+(`pbw_value_new_uint_a`, `pbw_value_new_bytes_a`, `pbw_value_new_message_a`,
+`pbw_value_list_push`, `pbw_message_new_a`) — `make` compiles each `src/*.c`
+with no LTO, so those were real calls, one or two per decoded value. Three
+changes removed them:
+
+- an arena string/bytes value puts its payload in the same bump as the value
+  struct (`pbw_value_new_bytes_a`); the heap path keeps its two allocations,
+  which `pbw_value_free` releases separately;
+- a packed varint run allocates all of its item nodes in one bump, using the
+  item count the >64-byte pre-scan already computed; a packed closed-enum run
+  keeps the per-item node path (no scan, no node block), because it drops
+  unknown values and the block would hold nodes nothing uses. A/B against the
+  scan+reserve form on a 100k-value packed closed enum (C probe,
+  `pbw_decode_ctx` + reset, median of 15, three interleaved rounds) put every
+  row inside the +/-3% noise floor (all-known 442 vs 442 ns, mixed-unknown 578
+  vs 583 ns at 100/125 KB), so this one is allocation locality, not a
+  throughput win, and the smaller diff was kept;
+- the tree builders are `PBW_INLINE` in `internal.h` (the same pattern as
+  `pbw_arena_alloc` and `pbw_find_field`). They stay one definition, moved and
+  not copied, so a translation unit that never calls one emits nothing for it.
+
+A/B measured on the settled tree with two binaries built from the same sources,
+one with the change reverted, alternating in one session (C probe, best-of-5,
+`bench.Msg` against the generated payload, `pbw_decode` + `pbw_message_free`,
+median ns per decode; 60000 iterations at 132 B, 20000 at 169 B, 2000 at
+2755 B, 400 at 85933 B):
+
+| case | before | after | delta |
+|---|---|---|---|
+| 132 B | 101.1 | 100.1 | -1.0% (noise) |
+| 169 B | 158.3 | 155.1 | -2.0% |
+| 2755 B | 4076.6 | 3713.3 | -8.9% |
+| 85933 B | 119472.8 | 107836.5 | -9.7% |
+
+The win scales with the number of decoded values, which is where the two costs
+were; a small message is dominated by the one tree allocation and the call
+overhead into the API instead. Encode is untouched: `encode.o` built from the
+reverted tree and from the changed tree is byte-identical, and the probe's
+encode rows stayed inside the noise floor in every round. An LTO build limited to
+`message.c`, `decode.c` and `wire.c` measured the same decode gain on the
+same tier, which is what identified the cross-TU call cost; LTO as a default
+build flag would change every binding's link step, so the helpers moved
+instead.
+
+Packed *fixed-width* runs still allocated one node per item: the list was
+reserved (the payload length divides exactly by the item width) but the nodes
+were not batched. `read_packed()` now takes the same one-bump node block for
+fixed-width runs that the varint scan enables, which covers packed double /
+fixed32 / sfixed / float arrays. A/B on a hand-built message with one packed
+field (generic shape, not the tier message), alternating runs, best-of-5,
+decode+free, median ns:
+
+| case | before | after | delta |
+|---|---|---|---|
+| packed double x3000, 24 KB | 8666.2 | 6815.0 | -21.4% |
+| packed fixed32 x3000, 12 KB | 7383.3 | 6163.9 | -16.5% |
+| packed double x64, 515 B | 221.7 | 188.0 | -15.2% |
+| packed double x8, 66 B | 53.2 | 51.3 | -3.6% |
+| packed sint32 x3000 (control, same varint path) | 11974.9 | 12183.3 | noise |
+
+Three candidates were measured and rejected in the same pass:
+
+- **3-byte varint window in `read_varint()`** (the 1- and 2-byte windows are
+  inline already): -4..5% on the 85933-byte tier, but +3..5% on 132 and 169 B,
+  where the extra inline copy costs more in the per-field dispatch than the
+  call it removes. Same conclusion as
+  [the Julia-cell note](#cell-julia-136-b-decode-092-095x); the small tiers are the
+  common real case, so it stays out.
+- **Presence-bitmap hoist in `decode_fields()`** (keep one word in a register
+  and flush at the end): measured with a write-skipping ablation, which is
+  upper-bound only - 132 B decode moved -3% plain / -0.6% ctx, i.e. at the
+  noise floor, and the hoist would need every storing path to cooperate
+  (`pbw_message_put`, `pbw_message_list_for`). Not built.
+- **`pbw_ctx` retention for trees above the 1 MiB budget**: raising the cap to
+  8 MiB on the 85933-byte tier changed nothing, so the arena's growth
+  mallocs are not a cost worth touching; the documented knob is enough.
+
+## Below-the-line cells (from the BENCHMARKS.md top matter)
+
+Moved verbatim from the BENCHMARKS.md top matter on 2026-11-25 (trim).
+
+Every binding with a
+wired baseline is re-timed Go-parity (2026-11-21/22, C-side 2026-11-23): every published row
+times the same native-in/native-out task on the same payload, never a tree
+built before the timer; bytes are identical everywhere. The headline rows now
+time the same task the generated baseline times -- one native object in, one
+codec call -- so the sub-1.0x cells that remain are codec gaps, not boundary
+floors: Node's `shim` (0.19x / 0.13x of protobufjs at
+74 KB), PHP's `shim` (2.94x encode / 2.81x decode of
+the official C extension under the same fresh-build task), the JVM `core` decode (Java 0.84x of
+protobuf-java; Kotlin 0.77x rides the same
+runtime, Scala 0.30x adds the case-class translation on top), Clojure's `core` on both ops (0.26x / 0.74x: generic per-field `set` dominates encode, defensive list copies decode), the managed materialization on C#/F# `shim` decode at
+74 KB (0.77x / 0.74x: the C decode is faster than the reference parser, but
+materializing 3000 managed objects costs more than its whole run), and
+Julia's small-tier `shim` encode (0.01x at 136 B: the fresh image build
+in Julia dominates the timer; the xlarge 22.35x is the ProtoBuf.jl
+baseline collapse below), and ObjC `tree` encode
+(0.97x: a fresh per-field build plus alloc/free inside
+the timer; the ObjC xlarge tier
+rebuilds its 74 KB `str` fixture per iteration). The core's old `tree` headline
+(0.39x-0.58x) retired with the fairness contract: the tree-API build price
+(malloc + field lookup per value vs direct stores) is no longer a headline. The Lua xlarge `shim` encode cell (0.98x) is a
+run-to-run tie, and so is Go's xlarge decode-par (0.99x, serial twin 1.33x).
+Julia's, Kotlin's and Scala's xlarge `shim`/`core`
+encode ratios (22.35x / 27.74x / 211.33x) are baseline collapses, not codec wins:
+ProtoBuf.jl's generated encoder falls to 11.3 MB/s there, `protobuf-kotlin`
+to 17.6 MB/s and ScalaPB to 1.2 MB/s. Each cell is inside
+the run-to-run band of its own baseline; `docs/perf-attempts.md` records what
+was tried there.
+
+Read it as: the in-process core sets the pace (2.1x the C++
+generated code on encode at this size, 1.9x on decode), and every headline row times the same task as
+the generated baseline -- one native object in, one codec call -- so the
+below-the-line cells are codec gaps, not boundary floors: Node `shim`
+(0.19x / 0.13x of protobufjs),
+PHP `shim` (2.94x / 2.81x of the official C extension), the
+JVM `core` decode (Java 0.84x, Kotlin 0.77x, Scala 0.30x) and Clojure's
+`core` (0.26x / 0.74x).
+The above-the-line cells are the same task won outright: the core thin
+model 2.1x / 1.9x, Ruby `shim`
+5.03x / 6.11x, PHP `shim` encode 2.94x, Rust `shim`
+2.02x / 1.86x, Dart 1.82x / 4.84x, C# `shim` encode 1.32x, Swift 3.24x / 2.54x, Zig
+1.84x / 1.47x. The outliers are baseline or unit effects, not pbwire
+effects: Python's encode column is the dict path (3000 sub-messages, 12000
+ints), the xlarge encode columns of Julia, Kotlin and Scala are baseline
+collapses (ProtoBuf.jl's
+generated encoder falls to 11.3 MB/s there, `protobuf-kotlin` to 17.6 MB/s,
+ScalaPB to 1.2 MB/s), and the Objective-C tier is a
+memcpy race over one 74 KB string (the 16-byte UTF-8 word scan is what keeps
+its decode near the copy cost).
+The headline names the most-popular baseline: Node's native rows are quoted
+over protobufjs, and Node's `shim` row -- the native object in and out --
+is 0.19x / 0.13x of protobufjs: the same task on both sides, so the gap is
+the codec's, not the boundary's. PHP's native rows are over the official C
+extension (the pure-PHP runtime trails it by ~360x / ~110x at 74 KB) -- see
+their sections. The old per-field `tree` headlines are retired: the published
+rows are the struct-passing headline arm, and per-field timings stay in
+`bindings/<lang>/pbench/README.md`.

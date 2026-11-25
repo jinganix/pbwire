@@ -146,7 +146,7 @@ Call `pbwire:set_opts/1` before `load_cache/1`:
 `string` fields decode to binaries by default; non-Latin-1 text needs
 `{with_utf8, true}` or encoding raises.
 
-## Benchmark
+## Benchmarks
 
 `benchmarks/proto-bench` measures epb against **gpb** (pure Erlang) and the
 **gpb NIF** (libprotobuf behind gpb's own NIF generator) on the same schema and
@@ -163,24 +163,9 @@ builds and runs it when `pkg-config --exists protobuf` succeeds, otherwise the
 table simply has no `gpb-nif` column. Each op is the best of three timed
 samples (`BENCH_TARGET_TIME` seconds each, default 2) after one warm-up pass.
 
-Copied from [`BENCHMARKS.md`](../../BENCHMARKS.md), which is the single source
-for all performance numbers; higher is better, MB/s over wire bytes. See
+ See
 [benchmarks/README.md](benchmarks/README.md) for all targets (per-backend
 runs, quick mode, the gpb NIF baseline).
-
-<!-- BENCHMARK_RESULTS_START -->
-Last run: 2026-11-23 01:13:21 UTC (matrix3.proto, the four standard tiers; Erlang 29.0.1 per `.tool-versions`; machine Apple M4 Pro)
-
-| payload | op | pbwire-erlang (MB/s, x gpb) | gpb (MB/s) | gpb-nif (MB/s) |
-|---|---|---|---|---|
-| 136 B | encode | 419.6 (2.91x) | 144.0 | 46.2 |
-| 136 B | decode | 494.4 (2.22x) | 222.4 | 49.9 |
-| 174 B | encode | 419.4 (3.25x) | 129.2 | 49.2 |
-| 174 B | decode | 491.5 (2.42x) | 203.5 | 54.9 |
-| 2469 B | encode | 284.8 (2.73x) | 104.4 | 81.2 |
-| 2469 B | decode | 330.8 (1.65x) | 200.7 | 157.2 |
-| 74913 B | encode | 299.4 (2.87x) | 104.2 | 103.1 |
-| 74913 B | decode | 337.1 (1.52x) | 221.9 | 198.4 |
 
 Higher is better. Throughput in MB/s on serialized wire size. Case names are the
 four standard tiers at the repo root ([BENCHMARKS.md](../../BENCHMARKS.md)).
@@ -192,6 +177,32 @@ Refresh the table after a run (rewrites this block and the one in
 ```shell
 make update-readme    # from bindings/erlang/benchmarks (runs the suite)
 ```
+
+### Erlang: `pbwire` vs gpb vs gpb NIF
+
+![Erlang: pbwire vs gpb vs gpb NIF — MB/s by tier](../../docs/charts/bench-erlang-pbwire-vs-gpb-vs-gpb-nif.svg)
+
+`matrix3.proto`, all four tiers, best of three samples per op. Same payload / op /
+MB/s layout as every other table: the `pbwire-erlang` column carries the ratio
+against the faster of gpb / gpb NIF per op (gpb is the byte reference either
+way), the other columns are the two baselines side by side. Formal run
+`../../results/bench-erlang-20261124T110417Z.json`. The `pbwire-erlang`
+rows are the single NIF arm with a fresh record built inside the timed closure
+per iteration (native-in full task); gpb, the pure-Erlang codec,
+**is** the `core` comparison, so a second BEAM port would measure our code
+against the competitor rather than a decision. No second pbwire path exists
+here, so this single-arm section is unchanged.
+
+| payload | op | pbwire-erlang (MB/s, x best) | gpb (MB/s) | gpb-nif (MB/s) |
+|---|---|---|---|---|
+| 136 B | encode | 466.5 (3.02x ✅) | 154.6 | 92.2 |
+| 136 B | decode | 532.6 (2.22x ✅) | 240.1 | 107.2 |
+| 174 B | encode | 353.0 (2.42x ✅) | 145.6 | 89.4 |
+| 174 B | decode | 512.4 (2.36x ✅) | 217.5 | 115.5 |
+| 2469 B | encode | 318.7 (2.74x ✅) | 116.2 | 78.5 |
+| 2469 B | decode | 345.1 (1.58x ✅) | 219.1 | 192.2 |
+| 74913 B | encode | 322.8 (2.95x ✅) | 109.0 | 109.4 |
+| 74913 B | decode | 355.5 (1.59x ✅) | 223.5 | 214.5 |
 
 ## FAQ
 
@@ -277,3 +288,4 @@ exception or a bad term handled in the NIF kills the whole VM.
 gpb records are the generated model: `protoc-erl` generates the record definitions and `get_msg_defs/0`,
 and the binding encodes/decodes those records directly. There is no second generator and no
 `codegen` output for Erlang.
+

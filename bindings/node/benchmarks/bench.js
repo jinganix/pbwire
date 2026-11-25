@@ -320,18 +320,21 @@ function main() {
         }
         console.log(`OK   ${label} encoding parity, x${repeats} (${reference.length} bytes)`);
 
-        const official = fillOfficial(repeats);
+        // Headline encode rows: fresh native input per iteration inside the
+        // timer (message preparation included), on both sides. Proxy rows
+        // stay on their prebuilt handles. Decode arms materialize fresh
+        // output per call and are unchanged.
         // Tier line shows the reference op's count; slower ops keep the floor.
         const count = calibrate(() => message.encode(), iterations);
         const proxyEncodeNs = measure(iterations, () => message.encode());
         const proxyDecodeNs = measure(iterations, () => type.decode(reference).free());
-        const encodeNs = measure(iterations, () => treeArm.marshal(shimObject));
+        const encodeNs = measure(iterations, () => treeArm.marshal(nativeObject(repeats)));
         const decodeNs = measure(iterations, () => treeArm.unmarshal(reference));
-        const coreEncodeNs = measure(iterations, () => coreArm.marshal(shimObject));
+        const coreEncodeNs = measure(iterations, () => coreArm.marshal(nativeObject(repeats)));
         const coreDecodeNs = measure(iterations, () => coreArm.unmarshal(reference));
-        const shimEncodeNs = measure(iterations, () => type.encodeObject(shimObject));
+        const shimEncodeNs = measure(iterations, () => type.encodeObject(nativeObject(repeats)));
         const shimDecodeNs = measure(iterations, () => type.decodeToObject(reference));
-        const officialEncodeNs = measure(iterations, () => official.serializeBinary());
+        const officialEncodeNs = measure(iterations, () => fillOfficial(repeats).serializeBinary());
         const officialDecodeNs = measure(iterations, () => Scalars3.deserializeBinary(reference));
         let pjs = null;
         let pjsEncodeNs = 0;
@@ -344,7 +347,7 @@ function main() {
                 message.free();
                 continue;
             }
-            pjsEncodeNs = measure(iterations, () => ProtobufJsType.encode(pjs).finish());
+            pjsEncodeNs = measure(iterations, () => ProtobufJsType.encode(fillProtobufJs(repeats)).finish());
             pjsDecodeNs = measure(iterations, () => ProtobufJsType.decode(reference));
         }
         message.free();

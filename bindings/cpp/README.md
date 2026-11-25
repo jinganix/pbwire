@@ -37,22 +37,6 @@ C++ self-check (round trip and the required-field failure path).
 | benchmarks | [`benchmarks/`](benchmarks/) | the C numbers (same codec): `make bench-c` |
 | conformance | [`conformance/`](conformance/) | inherits the C position: official suite + struct parity |
 
-## Benchmark
+## Benchmarks
 
-There is no separate C++ codec to measure: the benchmark is the C struct codec
-(`make bench-c` from the repo root), so the numbers are the C ones. Copied from
-[`BENCHMARKS.md`](../../BENCHMARKS.md), which is the single source for all
-performance numbers; higher is better, MB/s over wire bytes:
-
-| payload | op | pbwire-c-shim (MB/s, x gen) | protoc gen (MB/s) |
-|---|---|---|---|
-| 136 B | encode | 1476.8 (1.0x) | 1416.4 |
-| 136 B | decode | 1090.8 (1.2x) | 894.2 |
-| 174 B | encode | 1441.1 (1.0x) | 1407.5 |
-| 174 B | decode | 1025.0 (1.3x) | 799.8 |
-| 2469 B | encode | 1064.7 (1.2x) | 919.3 |
-| 2469 B | decode | 812.4 (2.0x) | 401.8 |
-| 74913 B | encode | 1213.2 (1.3x) | 931.8 |
-| 74913 B | decode | 899.1 (2.3x) | 389.2 |
-
-
+The C++ binding drives the same C struct codec measured under `make bench-c`; it ships no separate bench harness. Full table and method: [C structs vs `protoc` generated](../c/README.md#benchmarks).

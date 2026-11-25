@@ -201,7 +201,7 @@ the wire). Extensions are read by number, not name.
   wrap the C API; `to_builder` materializes a decoded view into a canonical
   tree. Unknown fields round-trip byte for byte in every form.
 
-## Benchmark
+## Benchmarks
 
 `benchmarks/bench.sh` runs the four standard tiers from
 [`BENCHMARKS.md`](../../BENCHMARKS.md) against the `google-protobuf` gem on the
@@ -209,19 +209,7 @@ same `matrix3.proto` (small / medium / large / xlarge scale the repeated fields
 x0 / x1 / x100 / x3000). Both sides build the same message and must produce
 identical bytes before anything is timed; the benchmark
 interleaves the implementations and keeps the best of several runs. It needs
-`protoc`, a C compiler and the gem. Copied from that file, which is the single
-source for all performance numbers; higher is better, MB/s over wire bytes:
-
-| payload | op | pbwire-ruby-shim (MB/s, x gem) | gem (MB/s) |
-|---|---|---|---|
-| 136 B | encode | 186.9 (0.27x ❌) | 696.6 |
-| 136 B | decode | 140.8 (0.58x ❌) | 242.4 |
-| 174 B | encode | 204.8 (0.26x ❌) | 796.3 |
-| 174 B | decode | 159.5 (0.60x ❌) | 265.8 |
-| 2469 B | encode | 224.7 (0.19x ❌) | 1212.6 |
-| 2469 B | decode | 147.0 (0.30x ❌) | 489.8 |
-| 74913 B | encode | 252.7 (0.18x ❌) | 1366.1 |
-| 74913 B | decode | 163.1 (0.23x ❌) | 702.7 |
+`protoc`, a C compiler and the gem.
 
 ```shell
 gem install google-protobuf
@@ -232,9 +220,9 @@ The per-field `tree` build is a `pbench/`-only arm (see [`pbench/README.md`](pbe
 
 The `shim` row is the native-object path from `pbench/`: one C-extension entry
 walks a generated model's instance variables and fills the tree
-(`encode_object`), or materializes the generated model classes in C
-(`decode_object`). It removes the Ruby-side per-field loop but is below the gem, whose generated object already owns
-C-backed storage and whose decode stays lazy. See
+(`encode_object`), or runs one layout-table tag scan straight into the generated
+model classes (`decode_object`). It removes the Ruby-side per-field loop; it leads
+on every tier on both ops (2.32x-5.03x encode, 5.55x-6.11x decode). See
 [`pbench/README.md`](pbench/README.md) for the arms, gate and verdict.
 
 | arm | mechanism | status |
@@ -242,6 +230,49 @@ C-backed storage and whose decode stays lazy. See
 | `tree` | prebuilt `Message` builder / wire view | `pbench/`-only arm (see `pbench/README.md`) |
 | `shim` | one C-extension object walk over the generated model | shipped, `pbwire-ruby-shim` (published) |
 | `core` | pure-Ruby port of the C core | `n/a`: `shortcut: no pure-Ruby core, reopen when a native-less Ruby target appears` |
+
+#### Ruby (C extension) vs the `google-protobuf` gem
+
+![Ruby (C extension) vs the google-protobuf gem — MB/s by tier](../../docs/charts/bench-ruby-c-extension-vs-the-google-protobuf-gem.svg)
+
+| payload | op | pbwire-ruby-shim (MB/s, x gem) | gem (MB/s) |
+|---|---|---|---|
+| 136 B | encode | 100.5 (2.32x ✅) | 43.4 |
+| 136 B | decode | 126.1 (6.00x ✅) | 21.0 |
+| 174 B | encode | 106.9 (3.47x ✅) | 30.8 |
+| 174 B | decode | 139.4 (5.93x ✅) | 23.5 |
+| 2469 B | encode | 89.0 (4.76x ✅) | 18.7 |
+| 2469 B | decode | 153.1 (5.55x ✅) | 27.6 |
+| 74913 B | encode | 100.6 (5.03x ✅) | 20.0 |
+| 74913 B | decode | 184.6 (6.11x ✅) | 30.2 |
+
+Ruby is a C extension over the same core, so this is C extension against C
+extension. The first version drove the same C ABI through stdlib Fiddle and lost
+every row by an order of magnitude: a downcall costs ~3 µs, so a 136 B encode was
+3.3 µs against the core's ~65 ns, and the tiers could only be compared by padding
+`str` because the wrapper had no repeated fields. The rewrite removed the
+boundary, added the repeated-field payload (so the xlarge tier is 3000 nested
+messages, not one 74 KB string), and split the message into two representations.
+The pbwire column is the native-in/native-out full task
+(`pbench/`), formal run
+`../../results/bench-ruby-20261124T174520Z.json`:
+
+- **`shim` (native object in and out).** `type.encode_object(obj)` walks the
+generated model inside C in one entry call and fills a pbw tree; `decode_object`
+runs one layout-table tag scan straight into the generated model classes, with
+no intermediate tree and no per-field API. It is the
+published comparison on both ops (2.32x-5.03x encode / 5.55x-6.11x decode vs the gem) and the
+simplest -- one extension call removes the Ruby per-field loop. Both sides
+observe the full payload on decode: the shim entry materializes every repeated
+element and nested model before it returns, while the gem arm folds the same
+fields (every repeated element) through its accessors into a live sink -- a bare
+gem parse on its own would time a shallower task. Encode leads
+on every tier: both sides build the model fresh per iteration, and one C walk
+from Ruby ivars beats the gem's object fill. The per-field `tree` arm is compared in
+`pbench/README.md`, not here.
+
+The old `tree` headline is retired: the published row is the native-object
+`shim` arm.
 
 ## Conformance
 
@@ -289,3 +320,4 @@ tests need no `protoc`):
 constructors and accessors, `#encode(schema)` and `.decode(schema, wire)`. The
 committed output is `test/gen/` and `examples/gen/`; `examples/roundtrip.rb`
 uses typed assignments only. See `../../codegen/README.md`.
+

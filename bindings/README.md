@@ -267,7 +267,7 @@ baseline.
 
 A binding states which of the four it has, including the two-mechanism
 bindings and the deferred ports with the reason: the status table in
-[BENCHMARKS.md](../BENCHMARKS.md#bindings-vs-their-baselines), with the per-arm
+[BENCHMARKS.md](../BENCHMARKS.md#at-a-glance-every-binding-one-tier), with the per-arm
 detail in `bindings/<lang>/pbench/README.md`.
 
 ## What each binding solves
@@ -281,31 +281,31 @@ throughput against the official runtime, copied from
 
 | binding | the pain it removes | what it does instead | encode / decode vs official |
 |---|---|---|---|
-| C | dynamic messages cost a libprotobuf dependency, or hand-written wire code per message | struct codec compiled from layout tables over the shared core, schema loaded at run time | 1.33x / 2.00x (vs protoc C++) |
-| C++ | generated classes pin the schema at compile time; `DynamicMessage` is 10x slower | the same C runtime and header, no extra layer | 1.33x / 2.00x (vs protoc C++) |
+| C | dynamic messages cost a libprotobuf dependency, or hand-written wire code per message | struct codec compiled from layout tables over the shared core, schema loaded at run time | 4.17x / 2.03x (vs protoc C++) |
+| C++ | generated classes pin the schema at compile time; `DynamicMessage` is 10x slower | the same C runtime and header, no extra layer | 4.17x / 2.03x (vs protoc C++) |
 | Embedded | generated C codecs pin the schema at compile time and need a struct per message; a full runtime drags a heap in | static-memory facade over the same core: one box, one arena, caller-owned encode buffers, input bounded by `pbw_limits` | no separate bench — the facade is a pass-through, so the C row and the core bench measure the wire it speaks |
-| Python | `google.protobuf` needs a generated module per `.proto`, and dict conversion is seconds at 75 KB | CPython extension: dict↔wire in C, `decode()` returns a parsed message that keeps one slice per wire field | 7.18x / 3.75x (vs upb; `shim encode(data)` / `shim to_dict`)) |
-| Ruby | the `google-protobuf` gem materializes and re-encodes every field; a Fiddle bridge costs ~3 µs per downcall | C extension over the core: per-field facade plus a one-entry native-object path over the generated model (prebuilt builder/wire view stays the holder fast path) | 0.18x / 0.23x `shim` (vs the gem) |
-| Java | JNI glue, or protobuf-java re-deriving sizes before every write | pure-Java codec: columnar values, lazy decode, `Unsafe` stores (no JNI, no native lib, no generator) | 0.72x / 0.79x `core` (generated model, vs protobuf-java) |
-| Kotlin | official Kotlin is Kotlin over protobuf-java | reuses the Java runtime, adds a DSL | 0.76x / 0.75x `core` (vs protobuf-kotlin) |
-| Node | jspb resolves a code/type table per field and hands every repeated element to a closure | N-API addon (node headers only), reusable buffer, wire view for decoded messages; the native-object path is one addon call that walks the JS object in C | 0.12x / 0.12x `shim` (vs protobufjs) |
-| Objective-C | the ObjC runtime allocates and copies per field | ARC wrapper: the encoder's buffer is handed to `NSData` with no copy | 0.01x / 1.18x (vs protobuf-objc; single native path, fresh build per iteration) |
-| PHP | the official runtime is pure PHP, all per-field bookkeeping in the interpreter | native C extension over the core (`ext-ffi` wrapper without a compiler); the native-object path is one extension entry that walks the PHP array in C | 0.16x / 0.37x `shim` (vs the C ext) |
-| Dart | a pure-Dart field loop dominates, and the per-field walk is what the native task pays | `dart:ffi` plus the core's arena; the native-object path is one FFI call that reads the flat `<Message>Layout` in place (`bindings/dart/native/`); the pure-Dart `core` is the portable path for hosts without a C library | 11.03x / 4.64x `shim` (vs protobuf-dart)) |
-| Rust | rust-protobuf generated codecs | links `libpbwire.a` statically behind a safe wrapper | 0.92x / 1.90x `shim` vs prost |
-| C# | Google.Protobuf is already a fast tree codec — the closest race of the set | P/Invoke plus a resolver, no packages; the native-object path is one call into `bindings/csharp/native/pbw_cs_shim.c` over a per-op flat image | 1.42x / 0.73x `shim` (vs Google.Protobuf) encode, 0.73x decode at 74 KB) |
-| Go | the official runtime walks `protoreflect`/`protowire` per field | thin generated structs over the pure-Go table engine (`runtime/`), which also holds the descriptor-set value tree | 1.70x / 1.25x (vs protobuf-go; thin model, struct in and struct out, xlarge tier) |
+| Python | `google.protobuf` needs a generated module per `.proto`, and dict conversion is seconds at 75 KB | CPython extension: dict↔wire in C, `decode()` returns a parsed message that keeps one slice per wire field | 2.75x / 3.58x (vs upb; `shim encode(data)` / `shim to_dict`) |
+| Ruby | the `google-protobuf` gem materializes and re-encodes every field; a Fiddle bridge costs ~3 µs per downcall | C extension over the core: per-field facade plus a one-entry native-object path over the generated model (prebuilt builder/wire view stays the holder fast path) | 5.03x / 6.11x `shim` (vs the gem) |
+| Java | JNI glue, or protobuf-java re-deriving sizes before every write | pure-Java codec: columnar values, lazy decode, `Unsafe` stores (no JNI, no native lib, no generator) | 1.00x / 0.84x `core` (generated model, vs protobuf-java) |
+| Kotlin | official Kotlin is Kotlin over protobuf-java | reuses the Java runtime, adds a DSL | 27.74x / 0.77x `core` (vs protobuf-kotlin) |
+| Node | jspb resolves a code/type table per field and hands every repeated element to a closure | N-API addon (node headers only), reusable buffer, wire view for decoded messages; the native-object path is one addon call that walks the JS object in C | 0.19x / 0.13x `shim` (vs protobufjs) |
+| Objective-C | the ObjC runtime allocates and copies per field | ARC wrapper: the encoder's buffer is handed to `NSData` with no copy | 0.97x / 1.16x (vs protobuf-objc; single native path, fresh build per iteration) |
+| PHP | the official runtime is pure PHP, all per-field bookkeeping in the interpreter | native C extension over the core (`ext-ffi` wrapper without a compiler); the native-object path is one extension entry that walks the PHP array in C | 2.94x / 2.81x `shim` (vs the C ext) |
+| Dart | a pure-Dart field loop dominates, and the per-field walk is what the native task pays | `dart:ffi` plus the core's arena; the native-object path is one FFI call that reads the flat `<Message>Layout` in place (`bindings/dart/native/`); the pure-Dart `core` is the portable path for hosts without a C library | 1.82x / 4.84x `shim` (vs protobuf-dart) |
+| Rust | rust-protobuf generated codecs | links `libpbwire.a` statically behind a safe wrapper | 2.02x / 1.86x `shim` vs prost |
+| C# | Google.Protobuf is already a fast tree codec — the closest race of the set | P/Invoke plus a resolver, no packages; the native-object path is one call into `bindings/csharp/native/pbw_cs_shim.c` over a per-op flat image | 1.32x / 0.77x `shim` (vs Google.Protobuf) |
+| Go | the official runtime walks `protoreflect`/`protowire` per field | thin generated structs over the pure-Go table engine (`runtime/`), which also holds the descriptor-set value tree | 1.36x / 1.33x (vs protobuf-go; thin model, struct in and struct out, xlarge tier) |
 
-| Erlang | gpb is pure Erlang; gpb NIF binds libprotobuf per message | NIF over the core, consuming gpb's own definitions — no second generator | 3.00x / 1.52x (vs gpb) |
-| Swift | Apple moved to Swift while the binding set still spoke ObjC; `swift-protobuf` generates a struct per message | SwiftPM package: FFI host over the C ABI (`FileDescriptorSet` at run time, static `libpbwire.a`, no wire code), plus a pure-Swift `PbwireCore` product for consumers the `unsafeFlags` static link cannot reach | 3.22x / 2.49x `shim` (vs swift-protobuf) |
-| Scala | data teams write Scala against Java protobuf | same Java runtime as Kotlin plus an idiomatic DSL — one runtime, three JVM languages | 0.39x / 0.25x `core` (case class, vs ScalaPB) |
-| Elixir | `elixir-protobuf` is pure Elixir, every field through the interpreter | struct↔tuple translation over the shared NIF (no C of its own) | 2.84x / 1.84x (vs elixir-protobuf) |
-| Zig | `zig-protobuf` codegen per message, fragmented across forks | `@cImport`-free static link (`translate-c` + `libpbwire.a` compiled in); the generated `extern struct` mirror is read in place by the C struct codec, one call per op; a pure-Zig `core` port behind `-Dcore=true` is the no-C-source build | 1.38x / 1.37x `shim` (vs zig-protobuf) at 74 KB vs zig-protobuf) |
-| F# | .NET protobuf means C# SDK style even in F# code | facade over the C# project (`ProjectReference`, same P/Invoke core and the same one-call C reader) | 1.34x / 0.70x `shim` (vs Google.Protobuf) at 74 KB) |
-| Clojure | protobuf-java interop per message, maps materialized per field | mutable-message fast path over the Java runtime (maps stay for convenience) | 1.18x / 1.77x (vs protobuf-java; mutable-message fast path; 0.70x encode at 136 B) |
-| Julia | `ProtoBuf.jl` is pure Julia, per-field interpreter overhead | `dlopen` + `ccall` FFI host (`FileDescriptorSet` at run time, `Dict` boundary); the generated layout image is read in place by a C-side reader (`bindings/julia/native/`), one `ccall` per op; the pure-Julia `core` (`runtime/src/core/`) is the no-native arm | 94.42x / 1.07x `shim` (vs ProtoBuf.jl) |
-| R | `RProtoBuf` binds the C++ runtime per message | C extension over the core (`.Call`, named lists in/out, statically linked) | 51.90x / 53.00x `shim` (vs RProtoBuf)) |
-| Lua | game servers hand tables to `pbc`/`lua-protobuf`, each with its own schema story | C module over the core: one-entry table encode/decode plus a builder tree for mutation | 0.99x (tie) / 1.42x `shim` (vs lua-protobuf; native-object, one C entry per op) |
+| Erlang | gpb is pure Erlang; gpb NIF binds libprotobuf per message | NIF over the core, consuming gpb's own definitions — no second generator | 2.95x / 1.59x (vs gpb) |
+| Swift | Apple moved to Swift while the binding set still spoke ObjC; `swift-protobuf` generates a struct per message | SwiftPM package: FFI host over the C ABI (`FileDescriptorSet` at run time, static `libpbwire.a`, no wire code), plus a pure-Swift `PbwireCore` product for consumers the `unsafeFlags` static link cannot reach | 3.24x / 2.54x `shim` (vs swift-protobuf) |
+| Scala | data teams write Scala against Java protobuf | same Java runtime as Kotlin plus an idiomatic DSL — one runtime, three JVM languages | 211.33x / 0.30x `core` (case class, vs ScalaPB) |
+| Elixir | `elixir-protobuf` is pure Elixir, every field through the interpreter | struct↔tuple translation over the shared NIF (no C of its own) | 2.98x / 1.91x (vs elixir-protobuf) |
+| Zig | `zig-protobuf` codegen per message, fragmented across forks | `@cImport`-free static link (`translate-c` + `libpbwire.a` compiled in); the generated `extern struct` mirror is read in place by the C struct codec, one call per op; a pure-Zig `core` port behind `-Dcore=true` is the no-C-source build | 1.84x / 1.47x `shim` (vs zig-protobuf) |
+| F# | .NET protobuf means C# SDK style even in F# code | facade over the C# project (`ProjectReference`, same P/Invoke core and the same one-call C reader) | 1.37x / 0.74x `shim` (vs Google.Protobuf) |
+| Clojure | protobuf-java interop per message, maps materialized per field | mutable-message fast path over the Java runtime (maps stay for convenience) | 0.26x / 0.74x (vs protobuf-java; mutable-message fast path; 0.05x encode at 136 B) |
+| Julia | `ProtoBuf.jl` is pure Julia, per-field interpreter overhead | `dlopen` + `ccall` FFI host (`FileDescriptorSet` at run time, `Dict` boundary); the generated layout image is read in place by a C-side reader (`bindings/julia/native/`), one `ccall` per op; the pure-Julia `core` (`runtime/src/core/`) is the no-native arm | 22.35x / 1.08x `shim` (vs ProtoBuf.jl) |
+| R | `RProtoBuf` binds the C++ runtime per message | C extension over the core (`.Call`, named lists in/out, statically linked) | 19.28x / 57.00x `shim` (vs RProtoBuf) |
+| Lua | game servers hand tables to `pbc`/`lua-protobuf`, each with its own schema story | C module over the core: one-entry table encode/decode plus a builder tree for mutation | 0.98x (tie) / 1.47x `shim` (vs lua-protobuf; native-object, one C entry per op) |
 
 Read the ratios as "what this binding buys its host language", not as a
 cross-language speed ranking: the payload and the boundary cost differ per row,

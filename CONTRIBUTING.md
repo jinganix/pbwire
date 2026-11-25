@@ -45,6 +45,7 @@ This repository uses [Conventional Commits](https://www.conventionalcommits.org/
 | `docs` | `README.md`, `docs/`, `BENCHMARKS.md`, `AGENTS.md`, `CONTRIBUTING.md`, `llms.txt`, `LICENSE` |
 | `build` | `Makefile`, `CMakeLists.txt`, `cmake/`, toolchain versions |
 | `ci` | `.githooks/`, `scripts/`, `.github/` |
+| `tools` | `tools/` (developer CLIs and demos over the C ABI) |
 
 When a new top-level code directory appears, add a scope here **and** update `SCOPES` in
 `scripts/validate-commit-msg.sh` (the two must stay in sync).

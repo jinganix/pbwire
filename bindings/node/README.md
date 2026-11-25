@@ -192,7 +192,7 @@ node bindings/node/pbench/gate.js    # bytes + field-by-field decode, PASS/exit 
 node bindings/node/pbench/compare.js # interleaved arms + baselines, median of 5
 ```
 
-## Benchmark
+## Benchmarks
 
 `benchmarks/bench.sh` generates `matrix3_pb.js` with `protoc-gen-js`, installs
 [protobufjs](https://www.npmjs.com/package/protobufjs) (the
@@ -206,17 +206,6 @@ native-object task (plain object in, wire out; wire in, plain object out):
 ./benchmarks/bench.sh      # or: make node-bench
 ```
 
-| payload | op | pbwire-node-shim (MB/s, x protobufjs) | protobufjs (MB/s) |
-|---|---|---|---|
-| 136 B | encode | 52.0 (0.20x ❌) | 255.1 |
-| 136 B | decode | 63.3 (0.15x ❌) | 409.8 |
-| 174 B | encode | 55.7 (0.20x ❌) | 273.1 |
-| 174 B | decode | 47.3 (0.12x ❌) | 407.7 |
-| 2469 B | encode | 54.9 (0.13x ❌) | 429.6 |
-| 2469 B | decode | 49.0 (0.11x ❌) | 435.5 |
-| 74913 B | encode | 60.1 (0.12x ❌) | 515.6 |
-| 74913 B | decode | 54.7 (0.12x ❌) | 437.9 |
-
 The `shim` row is the native object in and out and it trails protobufjs:
 each field costs one N-API object property read (encode) or write (decode),
 ~60-70 ns, where protobufjs pays a few ns in its own heap. It is the shipped
@@ -227,6 +216,67 @@ Two boundary costs decide the small tiers: N-API's own
 buffer and copies into a JS-allocated (pooled) `Buffer` of the exact size, and
 decode copies the payload once with `Buffer.from` instead of paying for a
 per-message finalizer.
+
+#### Node vs protobufjs
+
+![Node vs protobufjs — MB/s by tier](../../docs/charts/bench-node-vs-protobufjs.svg)
+
+| payload | op | pbwire-node-shim (MB/s, x protobufjs) | protobufjs (MB/s) |
+|---|---|---|---|---|
+| 136 B | encode | 50.5 (0.66x ❌) | 76.9 |
+| 136 B | decode | 61.1 (0.15x ❌) | 415.7 |
+| 174 B | encode | 52.4 (0.59x ❌) | 88.8 |
+| 174 B | decode | 48.2 (0.12x ❌) | 394.7 |
+| 2469 B | encode | 52.3 (0.22x ❌) | 237.9 |
+| 2469 B | decode | 53.4 (0.12x ❌) | 436.0 |
+| 74913 B | encode | 56.3 (0.19x ❌) | 297.0 |
+| 74913 B | decode | 57.9 (0.13x ❌) | 429.7 |
+
+The pbwire column is the native-in/native-out full task
+(`pbench/`): `shim` runs the native-object task in one
+`encodeObject` / `decodeToObject` downcall. The per-field `tree` arm is
+compared in `pbench/README.md`, not here. Formal run
+`../../results/bench-node-20261124T193829Z.json`.
+
+Each field of a native-object op is one N-API property read or
+write (~60-70 ns) where protobufjs pays a few ns in its own heap.
+The verdict (tree handle path stays the documented default, the one-downcall
+`shim` is the recommended one-shot path) is in `pbench/README.md`
+and the [attempts ledger](../../docs/perf-attempts.md); the old prebuilt-handle `tree` headline is retired. The
+pure-TypeScript core port is compared in `pbench/README.md`, not here.
+
+protobufjs is the published baseline, and the harness gates its bytes too.
+
+What the gap is made of, and what the optimization pass changed:
+
+| version | xlarge encode | xlarge decode |
+|---|---|---|
+| N-API addon, tree per message | 1300.4 | 565.2 |
+| encode into a reusable buffer, wire view for decoded messages | 1366.6 | 1596.7 |
+| leaf-table single-pass `decodeToObject` (Task 4, 2026-11-24) | 1330.4 | 1294.2 |
+
+- `decode()` returns the bytes plus one 12-byte slice per wire field instead of
+  materializing a tree: one validating tag scan, one allocation for the slice
+  array, and the bytes copied once with `Buffer.from`. A value materializes only
+  when it is read. Byte-for-byte re-encoding falls out of it, so no unknown-field
+  bookkeeping is needed either.
+- The wire form keeps no native state (JS `Buffer` + `Uint32Array`), because an
+  N-API finalizer costs ~250 ns per object — more than the whole decode of a
+  136 B message. Only the built form, which has no JS-visible storage, is
+  wrapped.
+- `encode()` writes into the type's reusable core buffer and copies into a
+  JS-allocated (pooled) `Buffer` of the exact size: N-API's own `Buffer`
+  creation is ~200 ns, versus ~26 ns for a pooled allocation.
+- Field facts are resolved once per descriptor into a cached table (name hash,
+  direct number index, wire type, label, oneof, closed enum), so the scan and
+  the accessors never walk the descriptor.
+- `decodeToObject()` on a leaf table (singular scalars/strings/bytes only, no
+  repeated, oneof or sub-message field) validates and materializes in one tag
+  scan with no slice list and none of the per-level scratch arrays: the xlarge
+  win is the 12000 `calloc`/`free` pairs the 3000 `Inner3` payloads used to
+  pay. Everything else about the op is unchanged -- unknown fields skip,
+  closed-enum unknowns stay absent, packed-for-singular stays skipped, and
+  the tree decoder agrees on a 563-payload mutation corpus.
 
 ## Deliberate skips
 
@@ -267,3 +317,4 @@ constants, describing exactly the plain objects `MessageType.encode()` accepts
 and `Message.get()` returns. The committed output is `tests/gen/` and
 `examples/gen/`; the generated test type-checks with `tsc --strict --checkJs`.
 See `../../codegen/README.md`.
+

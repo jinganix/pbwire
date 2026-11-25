@@ -14,11 +14,11 @@
 # read-back path; R's GC owns the builder (no manual free). `pbwire-r-proxy`
 # is the prebuilt task relabelled (re-encode a held handle, decode-and-drop
 # with no materialization), timed in the same run, never the headline.
-# The encode input list is app-owned steady-state (the Task 5 ledger ruling,
-# Python worker D3 merged as 99ac9ac, whose review accepted plain-data dict
-# reuse as "standard harness practice": encode is one .Call either way); the
-# fresh builder, the whole C field walk and the encode all sit inside the
-# timer. See pbench/README.md.
+# Headline shim encode rows are fresh-task: each timed iteration builds a fresh
+# named list inside the timer, then encodes (pbwire) / builds the RProtoBuf
+# message from that fresh list and serializes (baseline). Decode rows are deep
+# on both sides (fully materialized list vs full per-field read). See
+# pbench/README.md.
 #
 # Both sides must produce identical bytes before anything is timed. Like the
 # other harnesses it calibrates from the floor until one pass takes
@@ -193,7 +193,7 @@ for (c in cases) {
                        pbwire_msg_to_json(tree_prepare(tbl))))
   stopifnot(identical(pbwire_msg_encode(pbwire_parse_binary(schema, MSG, wire)),
                       wire))
-  ec <- calibrate(function() bench_encode(tbl), floor)
+  ec <- calibrate(function() bench_encode(fill(repeats)), floor)
   dc <- calibrate(function() bench_decode(wire), floor)
   # Proxy: the prebuilt task. The handle is built once outside timing, so
   # encode() is one core walk plus one buffer malloc; decoding straight into
@@ -215,7 +215,7 @@ for (c in cases) {
     j <- tree_decode_full(wire)
     tree_sink <<- tree_sink + nchar(j)
   }, floor)
-  ens <- best(function() bench_encode(tbl), ec) * 1e9
+  ens <- best(function() bench_encode(fill(repeats)), ec) * 1e9
   dns <- best(function() bench_decode(wire), dc) * 1e9
   mns <- best(function() pbwire_msg_encode(built), mc) * 1e9
   tns <- best(function() pbwire_parse_binary(schema, MSG, wire), tc) * 1e9
@@ -245,7 +245,7 @@ for (c in cases) {
   cat(sprintf("  pbwire-r-tree decode %10.1f %10.1f\n", jns, jmbps))
   cat(sprintf("  pbwire-r-proxy decode %10.1f %10.1f\n", tns, tmbps))
   if (has_pb) {
-    be <- best(function() pb_encode(tbl), ec) * 1e9
+    be <- best(function() pb_encode(fill(repeats)), ec) * 1e9
     bd <- best(function() pb_decode(wire), dc) * 1e9
     cat(sprintf("  RProtoBuf encode    %10.1f %10.1f\n", be,
                 length(wire) / be * 1000))

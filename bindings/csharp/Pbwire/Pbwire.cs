@@ -1756,3 +1756,48 @@ public sealed unsafe class ImageArena
     /// <summary>Zeroes a range (a fresh sub-image before its owner writes it).</summary>
     public static void Clear(byte* at, int size) => new Span<byte>(at, size).Clear();
 }
+
+/// <summary>
+/// Decodes a NUL-terminated UTF-8 C string from unmanaged memory (a decoded
+/// image's string slot or a repeated-string element) into a managed string.
+/// The ASCII fast path covers what the wire usually carries (bench payloads
+/// are all ASCII); anything else falls back to the runtime decoder, so the
+/// result is identical to <c>Marshal.PtrToStringUTF8</c> on every input,
+/// including embedded NUL handling (the first NUL ends the string) and the
+/// empty string. NULL decodes to <c>string.Empty</c>, matching the reader the
+/// generated <c>ReadImage</c> used before. The pointer must stay alive for the
+/// call only; nothing is retained.
+/// </summary>
+public static unsafe class ImageText
+{
+    /// <summary>Decodes the NUL-terminated UTF-8 string at <paramref name="ptr"/>.</summary>
+    public static string Decode(IntPtr ptr)
+    {
+        if (ptr == IntPtr.Zero)
+        {
+            return "";
+        }
+        byte* p = (byte*)ptr;
+        int len = 0;
+        while (p[len] != 0 && p[len] < 0x80)
+        {
+            len++;
+        }
+        if (p[len] != 0)
+        {
+            return Marshal.PtrToStringUTF8(ptr) ?? "";
+        }
+        if (len == 0)
+        {
+            return "";
+        }
+        return string.Create(len, ptr, static (span, state) =>
+        {
+            byte* src = (byte*)state;
+            for (var i = 0; i < span.Length; i++)
+            {
+                span[i] = (char)src[i];
+            }
+        });
+    }
+}

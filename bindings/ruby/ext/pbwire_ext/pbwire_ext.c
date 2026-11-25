@@ -1710,34 +1710,331 @@ object_scalar_value(field_t *f, VALUE value, pbw_ctx *ctx)
     }
 }
 
-static VALUE
-object_scalar_to_ruby(field_t *f, pbw_value *value)
-{
-    switch ((pbw_type)f->type) {
-    case PBW_TYPE_STRING:
-    case PBW_TYPE_BYTES: {
-        size_t len = 0;
-        const uint8_t *data = (const uint8_t *)pbw_value_get_bytes(value, &len);
+/* One tag scan straight into the generated model, no pbw_message tree. The
+ * Type's field table is the layout: field number -> wire facts -> model
+ * ivar, resolved per type. Singular scalars/strings land on their ivar
+ * as they parse (last wins, the merge the tree used to do); repeated values
+ * push straight into the array created up front; singular sub-messages
+ * remember their payload range and decode once at the end, so a repeated
+ * singular still parses as one message. Oneof losers are reset to their
+ * defaults after the scan. Every gate-checked field is materialized before
+ * return, so the timer needs no Ruby-side fold. Raises Pbwire::Error on
+ * malformed bytes, like pbw_decode did.
+ *
+ * GC rooting: every Ruby VALUE the scan creates is reachable from `obj`
+ * (repeated arrays and singular values are set on their ivar the moment
+ * they are built). Singular sub-message payloads stay as (offset, length)
+ * integers into the input buffer while seen once, so the common case
+ * copies nothing; only a repeated singular allocates an accumulator
+ * String, and that String is stored on the model's ivar before any further
+ * Ruby allocation, so the recursive decode at the end reads memory that is
+ * anchored by `obj` (or by the caller's wire String, as every C extension
+ * relies on). No RSTRING_PTR is ever held across an allocation that could
+ * free its String. Plain C scratch (seen/winner/ranges) lives on the
+ * stack, so a raise unwinds with nothing to free.
+ *
+ * The host-class map is resolved through a tiny per-call cache: a 3000-deep
+ * payload names two classes, so one Hash lookup per type per top-level call
+ * replaces one per message. The 8-entry cap only bounds stack use: a deeper
+ * schema falls back to the uncached Hash lookup with identical results. */
+typedef struct {
+    VALUE classes;
+    const type_t *types[8];
+    VALUE klasses[8];
+    size_t count;
+} klass_cache_t;
 
-        return string_from(f->type, data, len);
+static VALUE
+cached_klass(klass_cache_t *cache, type_t *type)
+{
+    size_t i;
+    VALUE klass;
+
+    for (i = 0; i < cache->count; i++) {
+        if (cache->types[i] == type) {
+            return cache->klasses[i];
+        }
     }
-    case PBW_TYPE_FLOAT:
-        return rb_float_new((double)pbw_value_get_float(value));
-    case PBW_TYPE_DOUBLE:
-        return rb_float_new(pbw_value_get_double(value));
-    case PBW_TYPE_BOOL:
-        return pbw_value_get_bool(value) ? Qtrue : Qfalse;
-    case PBW_TYPE_INT32:
-    case PBW_TYPE_INT64:
-    case PBW_TYPE_SINT32:
-    case PBW_TYPE_SINT64:
-    case PBW_TYPE_SFIXED32:
-    case PBW_TYPE_SFIXED64:
-    case PBW_TYPE_ENUM:
-        return LL2NUM(pbw_value_get_int(value));
-    default:
-        return ULL2NUM(pbw_value_get_uint(value));
+    if (RB_TYPE_P(cache->classes, T_HASH)) {
+        klass = rb_hash_aref(cache->classes, type->name_str);
+    } else if (RB_TYPE_P(cache->classes, T_CLASS)) {
+        klass = cache->classes;
+    } else {
+        klass = Qnil;
     }
+    if (!RB_TYPE_P(klass, T_CLASS)) {
+        rb_raise(rb_eArgError,
+                 "decode_object: no class for %s (pass a full-name => Class "
+                 "Hash)", type_name(type));
+    }
+    if (cache->count < 8) {
+        cache->types[cache->count] = type;
+        cache->klasses[cache->count] = klass;
+        cache->count++;
+    }
+    return klass;
+}
+
+static VALUE object_decode_bytes(type_t *type, const uint8_t *data,
+                                 size_t len, uint32_t depth,
+                                 klass_cache_t *cache);
+static VALUE object_default(field_t *f);
+
+static void
+object_note_singular(VALUE obj, field_t *f, unsigned char *seen,
+                       uint32_t *winner)
+{
+    seen[f->index] = 1;
+    if (f->has_ivar != 0) {
+        rb_ivar_set(obj, f->has_ivar, Qtrue);
+    }
+    if (f->oneof != 0 && winner != NULL) {
+        winner[f->oneof - 1] = f->index + 1;
+    }
+}
+
+/* One occurrence of a singular sub-message (message or group) payload.
+ * The first occurrence only records its range; a repeat concatenates into
+ * an accumulator String that is stored on the model's own ivar before any
+ * further Ruby allocation, so the end-of-scan decode reads rooted memory.
+ * `data` is the current frame base; ranges are frame-relative. */
+static void
+object_accumulate_submsg(VALUE obj, field_t *f, const uint8_t *data,
+                          const uint8_t *body, size_t body_len,
+                          size_t *acc_off, size_t *acc_len,
+                          unsigned char *seen, uint32_t *winner)
+{
+    if (!seen[f->index]) {
+        acc_off[f->index] = (size_t)(body - data);
+        acc_len[f->index] = body_len;
+    } else {
+        VALUE cur = rb_ivar_get(obj, f->ivar);
+
+        if (NIL_P(cur)) {
+            /* Second occurrence: materialize the pending first range. */
+            cur = rb_str_new((const char *)(data + acc_off[f->index]),
+                             (long)acc_len[f->index]);
+            rb_ivar_set(obj, f->ivar, cur);
+        }
+        rb_str_cat(cur, (const char *)body, (long)body_len);
+    }
+    object_note_singular(obj, f, seen, winner);
+}
+
+static VALUE
+object_decode_bytes(type_t *type, const uint8_t *data, size_t len,
+                      uint32_t depth, klass_cache_t *cache)
+{
+    VALUE obj;
+    rdr r;
+    unsigned char *seen;
+    uint32_t *winner;
+    VALUE *rep; /* repeated arrays, also rooted via obj */
+    /* First payload range of each singular sub-message, frame-relative.
+     * Plain integers: no GC hazard. A repeated singular additionally
+     * builds an accumulator String stored on the model's own ivar (see
+     * object_accumulate_submsg), so it stays rooted by `obj`. */
+    size_t *acc_off;
+    size_t *acc_len;
+    size_t count = type->count;
+    size_t i;
+
+    if (depth >= RB_PBW_MAX_DEPTH) {
+        rb_raise(eError, "%s: nesting limit exceeded", type_name(type));
+    }
+    obj = rb_obj_alloc(cached_klass(cache, type));
+
+    seen = ALLOCA_N(unsigned char, count != 0 ? count : 1);
+    if (count != 0) {
+        memset(seen, 0, count);
+    }
+    winner = type->oneofs != 0 ? ALLOCA_N(uint32_t, type->oneofs) : NULL;
+    if (winner != NULL) {
+        memset(winner, 0, type->oneofs * sizeof(*winner));
+    }
+    rep = ALLOCA_N(VALUE, count != 0 ? count : 1);
+    acc_off = ALLOCA_N(size_t, count != 0 ? count : 1);
+    acc_len = ALLOCA_N(size_t, count != 0 ? count : 1);
+
+    /* Defaults first, so every ivar is rooted via obj for the whole scan. */
+    for (i = 0; i < count; i++) {
+        field_t *f = &type->fields[i];
+
+        if (f->repeated) {
+            rep[i] = rb_ary_new();
+            rb_ivar_set(obj, f->ivar, rep[i]);
+        } else if (f->type == PBW_TYPE_MESSAGE ||
+                   f->type == PBW_TYPE_GROUP) {
+            rb_ivar_set(obj, f->ivar, Qnil);
+        } else {
+            rb_ivar_set(obj, f->ivar, object_default(f));
+            if (f->has_ivar != 0) {
+                rb_ivar_set(obj, f->has_ivar, Qfalse);
+            }
+        }
+    }
+
+    r.p = data;
+    r.end = data + len;
+    while (r.p < r.end) {
+        uint32_t fnum;
+        unsigned wt;
+        field_t *f;
+
+        if (!rd_tag(&r, &fnum, &wt)) {
+            rb_raise(eError, "%s: invalid serialized data",
+                     type_name(type));
+        }
+        f = type_field_by_number(type, fnum);
+        if (f == NULL ||
+            (wt != (unsigned)f->wire &&
+             !(wt == 2 && f->repeated && packable((pbw_type)f->type)))) {
+            /* A length-delimited run for a singular scalar is not packed
+             * (core parity: read_packed runs only for REPEATED packable
+             * fields), so skip it as unknown, like PHP/C#/Node. */
+            if (!rd_skip(&r, fnum, wt, depth)) {
+                rb_raise(eError, "%s: invalid serialized data",
+                         type_name(type));
+            }
+            continue;
+        }
+        if (f->required) {
+            seen[f->index] = 1;
+        }
+        if (f->type == PBW_TYPE_GROUP) {
+            const uint8_t *body;
+            size_t body_len;
+
+            if (!rd_group_body(&r, fnum, depth, &body, &body_len)) {
+                rb_raise(eError, "%s: invalid serialized data",
+                         type_name(type));
+            }
+            if (f->repeated) {
+                rb_ary_push(rep[f->index],
+                            object_decode_bytes(field_sub_type(f), body,
+                                                body_len, depth + 1,
+                                                cache));
+            } else {
+                object_accumulate_submsg(obj, f, data, body, body_len,
+                                         acc_off, acc_len, seen, winner);
+            }
+            continue;
+        }
+        if (wt == 2) {
+            uint64_t plen;
+
+            if (!rd_varint(&r, &plen) ||
+                plen > (uint64_t)(r.end - r.p)) {
+                rb_raise(eError, "%s: invalid serialized data",
+                         type_name(type));
+            }
+            if (f->type != PBW_TYPE_MESSAGE &&
+                f->type != PBW_TYPE_STRING &&
+                f->type != PBW_TYPE_BYTES) {
+                /* A packed run of scalars: the filter above only lets
+                 * repeated packable fields through with wt == 2. */
+                const uint8_t *end = r.p + (size_t)plen;
+
+                while (r.p < end) {
+                    size_t used = 0;
+                    VALUE v = scalar_at(f, r.p, end, &used);
+
+                    r.p += used;
+                    rb_ary_push(rep[f->index], v);
+                }
+                continue;
+            }
+            if (f->type == PBW_TYPE_MESSAGE) {
+                if (f->repeated) {
+                    rb_ary_push(rep[f->index],
+                                object_decode_bytes(field_sub_type(f), r.p,
+                                                    (size_t)plen, depth + 1,
+                                                    cache));
+                } else {
+                    object_accumulate_submsg(obj, f, data, r.p,
+                                             (size_t)plen, acc_off, acc_len,
+                                             seen, winner);
+                }
+            } else if (f->repeated) {
+                rb_ary_push(rep[f->index],
+                            string_from(f->type, r.p, (size_t)plen));
+            } else {
+                rb_ivar_set(obj, f->ivar,
+                            string_from(f->type, r.p, (size_t)plen));
+                object_note_singular(obj, f, seen, winner);
+            }
+            r.p += (size_t)plen;
+            continue;
+        }
+        {
+            size_t used = 0;
+            VALUE v = scalar_at(f, r.p, r.end, &used);
+
+            r.p += used;
+            if (f->repeated) {
+                rb_ary_push(rep[f->index], v);
+            } else {
+                rb_ivar_set(obj, f->ivar, v);
+                object_note_singular(obj, f, seen, winner);
+            }
+        }
+    }
+
+    for (i = 0; i < count; i++) {
+        if (type->fields[i].required && !seen[i]) {
+            rb_raise(eError, "%s: required field %s is missing",
+                     type_name(type),
+                     pbw_field_name(type->fields[i].df));
+        }
+    }
+    /* Oneof: every member but the last one seen goes back to its default. */
+    for (i = 0; i < count; i++) {
+        field_t *f = &type->fields[i];
+
+        if (f->oneof != 0 && seen[i] &&
+            winner[f->oneof - 1] != (uint32_t)(i + 1)) {
+            if (f->type == PBW_TYPE_MESSAGE ||
+                f->type == PBW_TYPE_GROUP) {
+                rb_ivar_set(obj, f->ivar, Qnil);
+            } else {
+                rb_ivar_set(obj, f->ivar, object_default(f));
+                if (f->has_ivar != 0) {
+                    rb_ivar_set(obj, f->has_ivar, Qfalse);
+                }
+            }
+            acc_off[i] = 0;
+            acc_len[i] = 0;
+        }
+    }
+    /* Singular sub-messages: one recursive decode of the merged payloads. */
+    for (i = 0; i < count; i++) {
+        field_t *f = &type->fields[i];
+
+        if ((f->type == PBW_TYPE_MESSAGE ||
+             f->type == PBW_TYPE_GROUP) &&
+            !f->repeated && seen[i] &&
+            (f->oneof == 0 || winner[f->oneof - 1] == (uint32_t)(i + 1))) {
+            VALUE cur = rb_ivar_get(obj, f->ivar);
+            VALUE child;
+
+            if (NIL_P(cur)) {
+                /* Seen once: decode the recorded range in place. */
+                child = object_decode_bytes(field_sub_type(f),
+                                            data + acc_off[i], acc_len[i],
+                                            depth + 1, cache);
+            } else {
+                /* Seen more than once: decode the accumulator, which has
+                 * been rooted on the model's ivar since it was built. */
+                child = object_decode_bytes(field_sub_type(f),
+                                            (const uint8_t *)RSTRING_PTR(cur),
+                                            (size_t)RSTRING_LEN(cur),
+                                            depth + 1, cache);
+            }
+            rb_ivar_set(obj, f->ivar, child);
+        }
+    }
+    RB_GC_GUARD(cache->classes);
+    return obj;
 }
 
 /* What an absent field looks like on the generated model. Explicit-presence
@@ -1877,90 +2174,8 @@ object_fill(pbw_message *msg, type_t *type, VALUE obj, pbw_ctx *ctx)
     }
 }
 
-/* One decoded message as an instance of `classes[type full name]`. classes
- * may also be a single Class, which covers a message with no sub-messages. */
-static VALUE
-object_from_tree(type_t *type, const pbw_message *msg, VALUE classes)
-{
-    VALUE klass = Qnil;
-    VALUE obj;
-    size_t i;
-
-    if (RB_TYPE_P(classes, T_HASH)) {
-        klass = rb_hash_aref(classes, type->name_str);
-    } else if (RB_TYPE_P(classes, T_CLASS)) {
-        klass = classes;
-    }
-    if (!RB_TYPE_P(klass, T_CLASS)) {
-        rb_raise(rb_eArgError,
-                 "decode_object: no class for %s (pass a full-name => Class "
-                 "Hash)", type_name(type));
-    }
-    obj = rb_obj_alloc(klass);
-
-    for (i = 0; i < type->count; i++) {
-        field_t *f = &type->fields[i];
-        const pbw_field *df = f->df;
-        pbw_value *value = pbw_message_get_field(msg, df);
-
-        if (f->repeated) {
-            size_t count = value != NULL ? pbw_value_count(value) : 0;
-            VALUE array = rb_ary_new_capa((long)count);
-            size_t j;
-
-            for (j = 0; j < count; j++) {
-                pbw_value *item = pbw_value_at(value, j);
-
-                if (f->type == PBW_TYPE_MESSAGE ||
-                    f->type == PBW_TYPE_GROUP) {
-                    pbw_message *child = pbw_value_get_message(item);
-                    VALUE child_obj = Qnil;
-
-                    if (child != NULL) {
-                        child_obj = object_from_tree(field_sub_type(f), child,
-                                                     classes);
-                    }
-                    rb_ary_push(array, child_obj);
-                } else {
-                    rb_ary_push(array, object_scalar_to_ruby(f, item));
-                }
-            }
-            rb_ivar_set(obj, f->ivar, array);
-            continue;
-        }
-
-        if (f->type == PBW_TYPE_MESSAGE || f->type == PBW_TYPE_GROUP) {
-            VALUE child_obj = Qnil;
-
-            if (value != NULL) {
-                pbw_message *child = pbw_value_get_message(value);
-
-                if (child != NULL) {
-                    child_obj = object_from_tree(field_sub_type(f), child,
-                                                 classes);
-                }
-            }
-            rb_ivar_set(obj, f->ivar, child_obj);
-            continue;
-        }
-
-        if (value == NULL) {
-            rb_ivar_set(obj, f->ivar, object_default(f));
-            if (f->has_ivar != 0) {
-                rb_ivar_set(obj, f->has_ivar, Qfalse);
-            }
-        } else {
-            VALUE out = object_scalar_to_ruby(f, value);
-
-            rb_ivar_set(obj, f->ivar, out);
-            RB_GC_GUARD(out);
-            if (f->has_ivar != 0) {
-                rb_ivar_set(obj, f->has_ivar, Qtrue);
-            }
-        }
-    }
-    return obj;
-}
+/* One decoded message as an instance of the mapped host class. See
+ * object_decode_bytes above: decode goes straight from the wire, no tree. */
 
 static VALUE
 type_encode_object(VALUE self, VALUE obj)
@@ -2006,51 +2221,27 @@ type_encode_object(VALUE self, VALUE obj)
     return out;
 }
 
-typedef struct {
-    type_t *type;
-    pbw_message *tree;
-    VALUE classes;
-    VALUE result;
-} object_decode_args;
-
-static VALUE
-object_decode_protected(VALUE argp)
-{
-    object_decode_args *a = (object_decode_args *)(void *)argp;
-
-    a->result = object_from_tree(a->type, a->tree, a->classes);
-    return Qnil;
-}
-
 static VALUE
 type_decode_object(int argc, VALUE *argv, VALUE self)
 {
     type_t *type;
     VALUE wire;
     VALUE classes = Qnil;
-    pbw_message *tree = NULL;
-    pbw_status status;
-    object_decode_args args;
-    int state = 0;
 
     rb_scan_args(argc, argv, "11", &wire, &classes);
     TypedData_Get_Struct(self, type_t, &type_data_type, type);
     StringValue(wire);
-    status = pbw_decode(type->desc, RSTRING_PTR(wire),
-                        (size_t)RSTRING_LEN(wire), &tree);
-    if (status != PBW_OK) {
-        rb_raise(eError, "%s: %s", type_name(type), pbw_strerror(status));
+    /* One C call: the layout table walks the bytes straight into the model.
+     * No tree, no per-field API; stack scratch only, so a raise unwinds
+     * with nothing to free. */
+    {
+        klass_cache_t cache;
+
+        cache.classes = classes;
+        cache.count = 0;
+        return object_decode_bytes(type, (const uint8_t *)RSTRING_PTR(wire),
+                                   (size_t)RSTRING_LEN(wire), 0, &cache);
     }
-    args.type = type;
-    args.tree = tree;
-    args.classes = classes;
-    args.result = Qnil;
-    rb_protect(object_decode_protected, (VALUE)(void *)&args, &state);
-    pbw_message_free(tree);
-    if (state != 0) {
-        rb_jump_tag(state);
-    }
-    return args.result;
 }
 
 static VALUE
@@ -3390,6 +3581,36 @@ static const rb_data_type_t pool_data_type = {
     RUBY_TYPED_FREE_IMMEDIATELY,
 };
 
+/* Allocators so rb_obj_alloc works for Context/Pool (typed_object_alloc
+ * goes through the class allocator): without one, Context.new/Pool.new
+ * raise TypeError. Zero-fill then set immediates explicitly, like the
+ * Schema/Message allocators above, so a bare allocate never trips the
+ * marker. */
+static VALUE
+ctx_alloc(VALUE klass)
+{
+    ctx_t *ctx;
+    VALUE obj = TypedData_Make_Struct(klass, ctx_t, &ctx_data_type, ctx);
+
+    ctx->ctx = NULL;
+    ctx->pool = NULL;
+    ctx->pool_obj = Qnil;
+    ctx->released = 1;
+    ctx->gen = 0;
+    ctx->retain_cap = 0;
+    return obj;
+}
+
+static VALUE
+pool_alloc(VALUE klass)
+{
+    pool_t *pool;
+    VALUE obj = TypedData_Make_Struct(klass, pool_t, &pool_data_type, pool);
+
+    pool->pool = NULL;
+    return obj;
+}
+
 static ctx_t *
 ctx_ptr(VALUE obj)
 {
@@ -3783,6 +4004,7 @@ Init_pbwire_ext(void)
     rb_define_method(cType, "decode_object", type_decode_object, -1);
 
     cPool = rb_define_class_under(mPbwire, "Pool", rb_cObject);
+    rb_define_alloc_func(cPool, pool_alloc);
     rb_define_singleton_method(cPool, "new", pool_s_new, -1);
     rb_define_method(cPool, "acquire", pool_acquire, 0);
     rb_define_method(cPool, "release", pool_release, 1);
@@ -3790,6 +4012,7 @@ Init_pbwire_ext(void)
     rb_define_method(cPool, "close", pool_close, 0);
 
     cContext = rb_define_class_under(mPbwire, "Context", rb_cObject);
+    rb_define_alloc_func(cContext, ctx_alloc);
     rb_define_singleton_method(cContext, "new", context_s_new, 0);
     rb_define_method(cContext, "decode", context_decode, -1);
     rb_define_method(cContext, "encode", context_encode, 1);
