@@ -98,8 +98,8 @@ The `shim` column is the native-in/native-out full task (formal run
 `../../results/bench-julia-20261124T143405Z.json`): one `ccall` over the generated
 layout image per op. The per-field `tree` arm is compared in
 `pbench/README.md`, not here. The xlarge encode column is a baseline
-collapse (ProtoBuf.jl's generated encoder falls to 12.0 MB/s there), so the
-shim ratio spikes (21.99x); the decode row is the honest comparison (1.09x).
+collapse (ProtoBuf.jl's generated encoder falls to 11.3 MB/s there), so the
+shim ratio spikes (22.35x); the decode row is the honest comparison (1.08x).
 
 FFI host like Dart/C#: `Libdl.dlopen` + `ccall` into the C ABI (function
 pointers resolved once via `dlsym`, since recent Julia needs a compile-time
@@ -111,7 +111,7 @@ collapses with size (pure-Julia per-field appends).
 
 `pbwire-julia-shim` is the published comparison: a generated `mutable struct Scalars3Layout` is the object,
 and `native/pbw_julia_shim.c` walks it in place through
-`pbw_struct_codec_*`, one `ccall` per op, with a fresh image built per iteration. The shim trails on small-tier encode (0.01x/0.02x): building the layout image fresh per iteration in Julia dominates the timer there. The xlarge encode ratio (21.99x) quotes the ProtoBuf.jl baseline collapse, not the codec, and the large tier (0.50x) trails it outright; decode wins on medium/large/xlarge (1.39x / 1.08x / 1.09x). The 136 B decode stays
+`pbw_struct_codec_*`, one `ccall` per op, with a fresh image built per iteration. The shim trails on small-tier encode (0.01x/0.02x): building the layout image fresh per iteration in Julia dominates the timer there. The xlarge encode ratio (22.35x) quotes the ProtoBuf.jl baseline collapse, not the codec, and the large tier (0.50x) trails it outright; decode wins on medium/large/xlarge (1.39x / 1.08x / 1.09x). The 136 B decode stays
 just below (0.96x `shim`): the small
 tier is the C struct decode plus the boundary, not an arena cost (the plan
 removes the per-call `malloc`/`free` pair, and Stage 6 recorded two attempts

@@ -22,7 +22,7 @@ run history lives in [the attempts ledger](docs/perf-attempts.md).
 ## Standard cases
 
 `small` / `medium` / `large` / `xlarge` scale the repeated fields of each
-binding's representative message x0 / x1 / x100 / x3000. Every binding except
+binding's representative message across four tiers (see the repeats column). Every binding except
 the core uses the same `matrix3.proto` schema and the same payload, so their
 wire sizes are identical; the core has its own `bench.Msg` because it measures
 `DynamicMessage` against generated C++ on the same tree.
@@ -35,8 +35,8 @@ wire sizes are identical; the core has its own `bench.Msg` because it measures
 | xlarge | x3000 | 85933 B | 74913 B |
 
 Objective-C lands on the same four wire sizes by padding the `str` field
-instead of wrapping repeated fields, so its xlarge tier is one 74 KB string
-rather than 3000 sub-messages. Erlang uses `matrix3.proto` like the others:
+instead of wrapping repeated fields, so its xlarge tier is a single large string
+rather than repeated sub-messages. Erlang uses `matrix3.proto` like the others:
 the gpb record module is generated from `bindings/c/tests/data/matrix3.proto`
 and the payload is built in `proto-bench` from the same values as `matrix3.txt`.
 
@@ -84,8 +84,8 @@ payload, the boundary cost and the baseline all differ.
 | C structs | `make bench-c` (`bindings/c/benchmarks/bench_struct.cc`) | 74913 B | 1149.3 (4.17x ✅) `shim` | 763.6 (2.03x ✅) `shim` | `protoc` C++ generated from the same `matrix3.proto` |
 | Go | `make go-bench` (`bindings/go/benchmarks`) | 74913 B | 482.5 (1.36x ✅) | 393.8 (1.33x ✅) | `protobuf-go` generated code from the same `matrix3.proto` |
 | Python | `make python-bench` (`bindings/python/benchmarks/bench.py`) | 74913 B | 164.8 (2.75x ✅) `shim encode(data)` | 153.1 (3.58x ✅) `shim to_dict` | `google.protobuf` (upb C extension) on the same `matrix3.proto` |
-| Java | `make java-bench` (`bindings/java/benchmarks`) | 74913 B | 443.9 (1.00x ✅, rounds to parity — 443.9 vs 445.0 MB/s, a coin-flip inside the ±10% JVM band) `core` (generated model) | 348.1 (0.84x ❌) `core` | `protobuf-java` generated code from the same `matrix3.proto` |
-| Kotlin | `make kotlin-bench` (`bindings/kotlin/benchmarks`) | 74913 B | 488.3 (27.74x ✅, baseline collapse) `core` | 339.9 (0.77x ❌) `core` | `protoc --kotlin_out` over `protobuf-java`, same `matrix3.proto` |
+| Java | `make java-bench` (`bindings/java/benchmarks`) | 74913 B | 443.9 (1.00x ✅ — rounds to parity, a coin-flip inside the ±10% band) `core` (generated model) | 348.1 (0.84x ❌) `core` | `protobuf-java` generated code from the same `matrix3.proto` |
+| Kotlin | `make kotlin-bench` (`bindings/kotlin/benchmarks`) | 74913 B | 488.3 (27.74x ✅ — baseline collapse) `core` | 339.9 (0.77x ❌) `core` | `protoc --kotlin_out` over `protobuf-java`, same `matrix3.proto` |
 | Node | `make node-bench` (`bindings/node/benchmarks`) | 74913 B | 56.3 (0.19x ❌ vs protobufjs) `shim` | 57.9 (0.13x ❌ vs protobufjs) `shim` | [protobufjs](https://www.npmjs.com/package/protobufjs) from the same `matrix3.proto` |
 | Dart | `make dart-bench` (`bindings/dart/benchmarks`) | 74913 B | 151.6 (1.82x ✅) `shim` | 764.4 (4.84x ✅) `shim` | the `protobuf` Dart package + generated code |
 | Ruby | `make ruby-bench` (`bindings/ruby/benchmarks`) | 74913 B | 100.6 (5.03x ✅) `shim` | 184.6 (6.11x ✅) `shim` | the `google-protobuf` gem (C extension) |
@@ -97,12 +97,12 @@ payload, the boundary cost and the baseline all differ.
 | Lua | `make lua-bench` (`bindings/lua/benchmarks`) | 74913 B | 105.8 (0.98x ❌) `shim` | 137.3 (1.47x ✅) `shim` | `lua-protobuf` 0.6.0 |
 | Erlang | `make benchmarks` in `bindings/erlang/benchmarks` | 74913 B | 322.8 (2.95x ✅) | 355.5 (1.59x ✅) | gpb (pure Erlang), with gpb NIF (libprotobuf) as the second baseline, same `matrix3.proto` |
 | Swift | `make swift-bench` (`bindings/swift/benchmarks`) | 74913 B | 911.9 (3.24x ✅) `shim` | 573.7 (2.54x ✅) `shim` | `apple/swift-protobuf` 1.39.0 generated code from the same `matrix3.proto` |
-| Scala | `make scala-bench` (`bindings/scala/benchmarks`) | 74913 B | 253.6 (211.33x ✅, baseline collapse) `core` (case class) | 166.8 (0.30x ❌) `core` | ScalaPB 0.11.18 generated code from the same `matrix3.proto` |
+| Scala | `make scala-bench` (`bindings/scala/benchmarks`) | 74913 B | 253.6 (211.33x ✅ — baseline collapse) `core` (case class) | 166.8 (0.30x ❌) `core` | ScalaPB 0.11.18 generated code from the same `matrix3.proto` |
 | Elixir | `make elixir-bench` (`bindings/elixir/benchmarks`) | 74913 B | 154.6 (2.98x ✅) | 113.0 (1.91x ✅) | `elixir-protobuf` 0.17.1 structs from the same `matrix3.proto` |
 | Zig | `make zig-bench` (`bindings/zig/benchmarks`, `-Doptimize=ReleaseFast`) | 74913 B | 1085.0 (1.84x ✅) `shim` | 774.7 (1.47x ✅) `shim` | Arwalk/zig-protobuf 7.0.0 generated code from the same `matrix3.proto` |
 | F# | `make fsharp-bench` (`bindings/fsharp/benchmarks`) | 74913 B | 481.7 (1.37x ✅) `shim` | 340.6 (0.74x ❌) `shim` | Google.Protobuf C# generated code from the same `matrix3.proto` |
 | Clojure | `make clojure-bench` (`bindings/clojure/benchmarks`) | 74913 B | 136.9 (0.26x ❌) `core` (fresh build per iteration) | 304.4 (0.74x ❌) `core` | `protobuf-java` generated code from the same `matrix3.proto` |
-| Julia | `make julia-bench` (`bindings/julia/benchmarks`) | 74913 B | 252.5 (22.35x ✅, baseline collapse) `shim` | 770.7 (1.08x ✅) `shim` | JuliaIO/ProtoBuf.jl 1.3.0 generated code from the same `matrix3.proto` |
+| Julia | `make julia-bench` (`bindings/julia/benchmarks`) | 74913 B | 252.5 (22.35x ✅ — baseline collapse) `shim` | 770.7 (1.08x ✅) `shim` | JuliaIO/ProtoBuf.jl 1.3.0 generated code from the same `matrix3.proto` |
 | R | `make r-bench` (`bindings/r/benchmarks`) | 74913 B | 48.2 (19.28x ✅) `shim` | 159.6 (57.00x ✅) `shim` | RProtoBuf 0.4.28 on the same `matrix3.proto` |
 
 ## Linux (docker): the same harnesses, one container away
@@ -121,7 +121,7 @@ with what was kept and why.
 ## Generated models (codegen)
 
 The generated models are ergonomics, not a second hot path; what the layer costs,
-measured on `matrix3` x3000 (~33 KB) with identical values through both paths:
+measured on the largest `matrix3` tier (~33 KB) with identical values through both paths:
 
 | language | encode, generated / dynamic | decode, generated / dynamic |
 |---|---|---|
