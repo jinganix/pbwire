@@ -13,4 +13,16 @@ class FallbackBuilder {
     public void setI32(int v) {
         throw new IllegalArgumentException("boom-fallback");
     }
+
+    public void setI64(long v) {
+        throw new IllegalArgumentException("boom-fallback");
+    }
+
+    public void setF64(double v) {
+        throw new IllegalArgumentException("boom-fallback");
+    }
+
+    public void setStr(String v) {
+        throw new IllegalArgumentException("boom-fallback");
+    }
 }

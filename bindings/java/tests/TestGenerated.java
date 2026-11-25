@@ -328,6 +328,21 @@ public final class TestGenerated {
                 Bind.intSetter((Class<Object>) fallbackClass, "setI32");
         checkBindWrap(() -> fallbackSet.accept(fallbackBuilder, 1),
                 "T6 Bind int fallback wraps", "setI32");
+        @SuppressWarnings("unchecked")
+        ObjLongConsumer<Object> fallbackSetLong =
+                Bind.longSetter((Class<Object>) fallbackClass, "setI64");
+        checkBindWrap(() -> fallbackSetLong.accept(fallbackBuilder, 1L),
+                "T6 Bind long fallback wraps", "setI64");
+        @SuppressWarnings("unchecked")
+        ObjDoubleConsumer<Object> fallbackSetDouble =
+                Bind.doubleSetter((Class<Object>) fallbackClass, "setF64");
+        checkBindWrap(() -> fallbackSetDouble.accept(fallbackBuilder, 1.0),
+                "T6 Bind double fallback wraps", "setF64");
+        @SuppressWarnings("unchecked")
+        BiConsumer<Object, String> fallbackSetObj =
+                Bind.setter((Class<Object>) fallbackClass, "setStr", String.class);
+        checkBindWrap(() -> fallbackSetObj.accept(fallbackBuilder, "x"),
+                "T6 Bind obj fallback wraps", "setStr");
 
         // Map entries ride as repeated entry structs, byte-exact with protoc.
         Spectest_MapTest maps = Spectest_MapTest.parseFrom(referenceMap);

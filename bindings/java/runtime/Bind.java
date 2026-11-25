@@ -113,7 +113,6 @@ final class Bind {
      * setters link without an adapter. Returns null when the target is
      * not linkable from here, so the caller keeps the reflective path.
      */
-    @SuppressWarnings("unchecked")
     private static <B> ObjIntConsumer<B> spinInt(Class<B> builderClass, String name,
             Method m) {
         try {
@@ -136,7 +135,6 @@ final class Bind {
         }
     }
 
-    @SuppressWarnings("unchecked")
     private static <B> ObjLongConsumer<B> spinLong(Class<B> builderClass, String name,
             Method m) {
         try {
@@ -159,7 +157,6 @@ final class Bind {
         }
     }
 
-    @SuppressWarnings("unchecked")
     private static <B> ObjDoubleConsumer<B> spinDouble(Class<B> builderClass, String name,
             Method m) {
         try {
@@ -182,7 +179,6 @@ final class Bind {
         }
     }
 
-    @SuppressWarnings("unchecked")
     private static <B, T> BiConsumer<B, T> spinObj(Class<B> builderClass, String name,
             Method m, Class<T> param) {
         try {
