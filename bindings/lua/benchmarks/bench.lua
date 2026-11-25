@@ -29,6 +29,13 @@ local pbwire = require("pbwire")
 local schema = pbwire.loadfile("../../c/tests/data/matrix3.desc")
 local MSG = "structtest.Scalars3"
 
+-- Generated-shape control arm: the committed codegen output
+-- (tests/gen/matrix3.lua) over the same payload. Single-arg encode/decode
+-- use the embedded schema; the legacy (schema, ...) form keeps working.
+package.path = "../tests/gen/?.lua;" .. package.path
+local gen = dofile("../tests/gen/matrix3.lua")
+local Scalars = gen.Structtest_Scalars3
+
 local I32MIN = -2147483647 - 1
 local I64MIN = (-9223372036854775807) - 1
 local U64MAX = -1 -- bit pattern: lua_tointeger(-1) reinterprets as 2^64-1
@@ -84,6 +91,24 @@ local function shim_decode(wire)
     return schema:decode(MSG, wire)
 end
 
+-- Generated-shape arm: same payload through the generated model. new()
+-- merges over defaults, so the fill() table only needs the has_* presence
+-- flags added; plain inner tables work (to_table reads .name/.value).
+local function fill_gen(repeats)
+    local t = fill(repeats)
+    t.has_opt_i32 = true
+    t.has_opt_str = true
+    return Scalars.new(t)
+end
+
+local function gen_encode(msg)
+    return Scalars.encode(msg)
+end
+
+local function gen_decode(wire)
+    return Scalars.decode(wire)
+end
+
 local function clock()
     return os.clock()
 end
@@ -134,6 +159,8 @@ for _, c in ipairs(cases) do
     assert(#wire == want,
            string.format("%s: got %d bytes, want %d", name, #wire, want))
     assert(tree_encode(tbl) == wire, name .. ": tree/shim bytes differ")
+    assert(gen_encode(fill_gen(repeats)) == wire,
+           name .. ": gen/shim bytes differ")
     local back = shim_decode(wire)
     assert(back.i32 == -2147483648 and back.i64 == 9223372036854775807,
            name .. ": ints")
@@ -188,6 +215,11 @@ for _, c in ipairs(cases) do
         local w = tree_encode(fill(repeats))
         sink.n = sink.n + #w
     end
+    -- Generated-shape arm: fresh model build + encode per iteration.
+    local function fresh_encode_gen()
+        local w = gen_encode(fill_gen(repeats))
+        sink.n = sink.n + #w
+    end
     local function decode_shim()
         local t = shim_decode(wire)
         -- Same depth as tree: every gate-checked repeated field plus the
@@ -208,6 +240,15 @@ for _, c in ipairs(cases) do
             sink.n = sink.n + #t.inners[repeats].name
         end
     end
+    local function decode_gen()
+        -- Same depth as shim: every gate-checked repeated field plus the
+        -- nested name, over the generated-model object.
+        local t = gen_decode(wire)
+        sink.n = sink.n + #t.str + #t.nums + #t.tags + #t.inners
+        if repeats > 0 then
+            sink.n = sink.n + #t.inners[repeats].name
+        end
+    end
     -- Proxy: built once outside timing (game broadcast), so encode is one
     -- core walk plus one buffer malloc and decode is the gateway
     -- passthrough with no materialization.
@@ -223,14 +264,18 @@ for _, c in ipairs(cases) do
 
     local tec = calibrate(fresh_encode_tree, floor)
     local sec = calibrate(fresh_encode_shim, floor)
+    local gec = calibrate(fresh_encode_gen, floor)
     local tdc = calibrate(decode_tree, floor)
     local sdc = calibrate(decode_shim, floor)
+    local gdc = calibrate(decode_gen, floor)
     local pec = calibrate(encode_proxy, floor)
     local pdc = calibrate(decode_proxy, floor)
     local tens = best(fresh_encode_tree, tec) * 1e9
     local sens = best(fresh_encode_shim, sec) * 1e9
+    local gens = best(fresh_encode_gen, gec) * 1e9
     local tdns = best(decode_tree, tdc) * 1e9
     local sdns = best(decode_shim, sdc) * 1e9
+    local gdns = best(decode_gen, gdc) * 1e9
     local pens = best(encode_proxy, pec) * 1e9
     local pdns = best(decode_proxy, pdc) * 1e9
     print(string.format("%s: %d bytes, %d iterations (repeat field x%d)",
@@ -241,11 +286,15 @@ for _, c in ipairs(cases) do
     print(string.format("  %-14s %-7s %12.1f %10.1f",
         "pbwire-lua-shim", "encode", sens, #wire / sens * 1000))
     print(string.format("  %-14s %-7s %12.1f %10.1f",
+        "pbwire-lua-gen", "encode", gens, #wire / gens * 1000))
+    print(string.format("  %-14s %-7s %12.1f %10.1f",
         "pbwire-lua-proxy", "encode", pens, #wire / pens * 1000))
     print(string.format("  %-14s %-7s %12.1f %10.1f",
         "pbwire-lua-tree", "decode", tdns, #wire / tdns * 1000))
     print(string.format("  %-14s %-7s %12.1f %10.1f",
         "pbwire-lua-shim", "decode", sdns, #wire / sdns * 1000))
+    print(string.format("  %-14s %-7s %12.1f %10.1f",
+        "pbwire-lua-gen", "decode", gdns, #wire / gdns * 1000))
     print(string.format("  %-14s %-7s %12.1f %10.1f",
         "pbwire-lua-proxy", "decode", pdns, #wire / pdns * 1000))
     if has_pb then
@@ -269,9 +318,9 @@ for _, c in ipairs(cases) do
             "lua-protobuf", "encode", be, #wire / be * 1000))
         print(string.format("  %-14s %-7s %12.1f %10.1f",
             "lua-protobuf", "decode", bd, #wire / bd * 1000))
-        print(string.format("  -- vs baseline: tree %.2fx/%.2fx, shim %.2fx/%.2fx, proxy %.2fx/%.2fx",
+        print(string.format("  -- vs baseline: tree %.2fx/%.2fx, shim %.2fx/%.2fx, gen %.2fx/%.2fx, proxy %.2fx/%.2fx",
                             be / tens, bd / tdns, be / sens, bd / sdns,
-                            be / pens, bd / pdns))
+                            be / gens, bd / gdns, be / pens, bd / pdns))
     end
     print(string.format("  # sink: %d chars folded back", sink.n))
 end

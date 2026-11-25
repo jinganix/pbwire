@@ -26,6 +26,11 @@
 
 #import "Matrix3.pbobjc.h"
 
+/* Generated-shape control arm: the committed pbwire codegen output
+ * (bindings/objc/tests/gen/matrix3.h, GPBMessage-shaped PBWGen_Scalars3
+ * over the same dynamic API). */
+#import "matrix3.h"
+
 #include <stdio.h>
 #include <time.h>
 
@@ -106,6 +111,40 @@ fill_pbwire(PBWSchema *schema, int pad, NSError **error)
     if (inner == nil || ![inner setValue:@"kid" forField:@"name" error:error] || ![inner setValue:@42 forField:@"value" error:error]) {
         return nil;
     }
+    return m;
+}
+
+/* Generated-shape control arm: the committed PBWGen_Scalars3 facade over
+ * the same dynamic API, built fresh per iteration like fill_pbwire. The
+ * setters mark proto3-optional presence (setOptI32:/setOptStr:) and the
+ * inner link (setInner:) automatically. */
+static PBWGen_Scalars3 *
+fill_gen(int pad)
+{
+    PBWGen_Scalars3 *m = [PBWGen_Scalars3 message];
+    PBWGen_Inner3 *inner;
+
+    m.i32 = INT32_MIN;
+    m.i64 = INT64_MAX;
+    m.u32 = UINT32_MAX;
+    m.u64 = UINT64_MAX;
+    m.s32 = INT32_MIN;
+    m.s64 = INT64_MIN;
+    m.fx32 = 0xdeadbeefu;
+    m.fx64 = UINT64_C(72623859790382856);
+    m.sfx32 = INT32_MIN;
+    m.sfx64 = INT64_MIN;
+    m.f32 = INFINITY;
+    m.f64 = -123456.789;
+    m.flag = YES;
+    m.str = padded(pad);
+    m.color = PBWGen_Color3_COLOR3_GREEN;
+    inner = [PBWGen_Inner3 message];
+    inner.name = @"kid";
+    inner.value = 42;
+    m.inner = inner;
+    m.optI32 = -7; /* the setter marks the proto3 optional present */
+    m.optStr = @"opt";
     return m;
 }
 
@@ -227,6 +266,34 @@ main(int argc, char **argv)
                     continue;
                 }
             }
+            /* Generated-shape gate: the facade must match the reference
+             * too (same bytes the tree gate asserts). */
+            {
+                PBWGen_Scalars3 *genGate = fill_gen(c->pad);
+                NSData *genBytes =
+                    genGate == nil ? nil : [genGate data];
+                if (genBytes == nil || ![genBytes isEqualToData:reference]) {
+                    printf("FAIL %s: pbwire-objc-gen bytes differ\n",
+                           c->label);
+                    failures++;
+                    continue;
+                }
+            }
+            /* Decode must round-trip through the facade as well. */
+            {
+                NSError *genError = nil;
+                PBWGen_Scalars3 *genBack =
+                    [PBWGen_Scalars3 parseFromData:reference
+                                             error:&genError];
+                NSData *genRt =
+                    genBack == nil ? nil : [genBack data];
+                if (genRt == nil || ![genRt isEqualToData:reference]) {
+                    printf("FAIL %s: pbwire-objc-gen decode differs\n",
+                           c->label);
+                    failures++;
+                    continue;
+                }
+            }
             /* Decode must round-trip byte-exactly and expose the same values. */
             {
                 NSError *gateError = nil;
@@ -271,6 +338,17 @@ main(int argc, char **argv)
 
                   (void)[message encode:&ignored];
                 });
+                double gen_encode_ns = measure(c->iterations, ^{
+                  PBWGen_Scalars3 *freshGen = fill_gen(c->pad);
+
+                  (void)[freshGen data];
+                });
+                double gen_decode_ns = measure(c->iterations, ^{
+                  NSError *ignored = nil;
+
+                  (void)[PBWGen_Scalars3 parseFromData:reference
+                                                 error:&ignored];
+                });
                 double decode_ns = measure(c->iterations, ^{
                   NSError *ignored = nil;
 
@@ -297,6 +375,10 @@ main(int argc, char **argv)
                 row("protobuf-objc", "decode", reference.length, official_decode_ns);
                 row("pbwire-objc-proxy", "encode", reference.length,
                     proxy_encode_ns);
+                row("pbwire-objc-gen", "encode", reference.length,
+                    gen_encode_ns);
+                row("pbwire-objc-gen", "decode", reference.length,
+                    gen_decode_ns);
                 printf("\n");
             }
         }

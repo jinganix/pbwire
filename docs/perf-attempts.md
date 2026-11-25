@@ -3659,3 +3659,36 @@ cells are the known ScalaPB baseline collapse (7.76x/211.33x in the plan;
 (generated test ok: 25 checks) and `make conformance-java` (2766 binary +
 443 text/JSON, only the 2 known tag-truncation failures) stay green; no
 headline change.
+
+## Cell: Lua + ObjC generated-shape control arms (generated-passing plan Task 5 — encode ties / decode trails, no promotion, 2026-11-25)
+
+Verify-only control arms over the committed codegen output. Lua
+`pbwire-lua-gen` (`Structtest_Scalars3.new` + single-arg `encode`/`decode`
+from `bindings/lua/tests/gen/matrix3.lua`; the legacy `(schema, ...)` form
+is untouched) in `bindings/lua/benchmarks/bench.lua`. ObjC
+`pbwire-objc-gen` (`PBWGen_Scalars3` build + `-data` /
+`+parseFromData:error:`, fresh per iteration like `fill_pbwire`) in
+`bindings/objc/benchmarks/bench_objc.m` (`bench.sh` now also compiles the
+committed `tests/gen/matrix3.m` / `matrix3_schema.m`; no generated file
+touched). Gates on all four tiers before timing: gen encode equals the
+reference bytes, gen decode round-trips byte-exact.
+
+Four consecutive same-host `make lua-bench` runs, xlarge gen/shim speed
+(higher favors gen): enc 0.61/0.61/0.60/0.59, dec 0.56/0.56/0.57/0.56 — a
+consistent one-directional loss on every tier of both ops (small encode
+0.38x-0.39x: `new()` merge + `to_table` rebuild walk the payload twice in
+Lua before reaching the same C core). Four consecutive same-host `make
+objc-bench` runs, xlarge gen/tree speed: enc 1.00/1.01/0.99/0.98 (tie,
+crosses 1.0 both ways inside the ±10% band), dec 0.29/0.30/0.30/0.30
+(`loadFromMessage` re-reads every field through `valueForField:` plus one
+facade alloc per message). Small tiers trail on encode too (0.63x-0.71x:
+the facade alloc dominates the tiny message). Formal records
+`results/bench-lua-20261125T105115Z/105527Z/105734Z/105939Z.json` and
+`results/bench-objc-20261125T105404Z/110144Z/110257Z/110411Z.json`.
+
+Verdict: no arm wins any run cleanly, so nothing graduates to the Task-1
+promotion flow. No headline change, no `BENCHMARKS.md` change; both arms
+stay in the harness as labeled control rows. `make lua-test` green (plus
+`tests/test_generated.lua`), `make objc-test` green (`build.sh generated`
+fails identically at BASE — pre-existing `extSchema != nil`, untouched by
+this task), `make format-check` clean.

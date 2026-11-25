@@ -37,13 +37,18 @@ protoc -I"$(dirname "$proto")" --objc_out="$gen" \
 
 # The generated codec and the runtime are manual-retain-release; the pbwire
 # wrapper and the harness are ARC. Linking the two is fine.
+# The pbwire generated-shape arm (PBWGen_Scalars3) compiles from the committed
+# codegen output beside the wrapper; the oracle stays protoc-generated.
 "$cc" -O2 -c "$gen/Matrix3.pbobjc.m" -I"$gen" -I"$src/objectivec" \
     -o "$gen/Matrix3.pbobjc.o"
 
 "$cc" -fobjc-arc -O2 -Wall -Wextra \
     -I"$root/include" -I"$here/.." -I"$gen" -I"$src/objectivec" \
+    -I"$here/../tests/gen" \
     -o "$gen/bench_objc" \
     "$here/../PBWSchema.m" "$here/../PBWMessage.m" "$here/bench_objc.m" \
+    "$here/../tests/gen/matrix3.m" \
+    "$here/../tests/gen/matrix3_schema.m" \
     "$gen/Matrix3.pbobjc.o" "$gen/GPBProtocolBuffers.o" "$root/build/libpbwire.a" \
     -framework Foundation -lpthread
 
