@@ -595,11 +595,13 @@ $(EMB_BENCH_DIR)/msg.pb.c: bindings/embedded/benchmarks/msg.proto \
 # instead of the repo's c99; everything else keeps the standard flags.
 EMB_BENCH_CFLAGS = $(filter-out -std=c99,$(CFLAGS)) -std=c11
 $(EMB_BENCH): bindings/embedded/benchmarks/bench.c $(EMB_BENCH_DIR)/msg.desc \
-	$(EMB_BENCH_DIR)/msg.pb.c $(LIB) | build
+	$(EMB_BENCH_DIR)/msg.pb.c bindings/embedded/benchmarks/gen/msg.h \
+	$(C_RUNTIME) $(LIB) | build
 	$(CC) $(EMB_BENCH_CFLAGS) $(CPPFLAGS) -Ibindings/embedded/runtime \
+		-Ibindings/embedded/benchmarks -Ibindings/c/runtime \
 		-I$(EMB_BENCH_DIR) -I$(NANOPB_SRC) -o $@ \
 		bindings/embedded/benchmarks/bench.c bindings/embedded/runtime/pbwe.c \
-		$(EMB_BENCH_DIR)/msg.pb.c $(NANOPB_SRC)/pb_common.c \
+		$(C_RUNTIME) $(EMB_BENCH_DIR)/msg.pb.c $(NANOPB_SRC)/pb_common.c \
 		$(NANOPB_SRC)/pb_encode.c $(NANOPB_SRC)/pb_decode.c $(LIB)
 
 embedded-bench: $(EMB_BENCH)

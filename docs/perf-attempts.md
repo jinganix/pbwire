@@ -3444,6 +3444,45 @@ reverted under the keep rule. Both xlarge shim cells stay deep red. Closing
 either needs a mechanism change (fewer N-API object/value creations per
 element, or a different emission shape), not another tuning round.
 
+## Cell: Node flat-image `shim-image` arm (generated-passing perf Task 1, 2026-11-25)
+
+Spike: one N-API crossing per op over a hand-written flat ArrayBuffer image
+(`bindings/node/pbench/layout-matrix3.js`, 83-byte fixed header plus a
+variable tail in field order) instead of one property read/write per field.
+`type.encodeImage(image)` / `type.decodeImage(wire)` in
+`bindings/node/runtime/addon.c` walk the image in C through the matrix3
+layout table (same field order as `nativeObject`); strings copy into the
+type's encode arena exactly like `encodeObject` values, so nothing aliases
+the host buffer. Bench arm in `bindings/node/benchmarks/bench.js`
+(`pbwire-node-shim-image`): fresh image build per iteration inside the timer
+on encode, image-to-object conversion inside the timer on decode — the same
+fresh-task shape as `shim`.
+
+Formal `make node-bench` (`results/bench-node-20261125T094543Z.json`;
+same-run ratios, so the host's load (~6-16 from other tenants, absolute
+MB/s below the idle records) moves both sides together):
+
+| tier | enc image/shim | enc image/pjs | dec image/shim | dec image/pjs |
+|---|---|---|---|---|
+| 136 B | 2.07x | 1.38x | 2.61x | 0.42x |
+| 174 B | 1.82x | 1.13x | 3.08x | 0.39x |
+| 2469 B | 1.20x | 0.27x | 2.07x | 0.27x |
+| 74913 B | 1.15x | 0.22x | 1.92x | 0.27x |
+
+Rejected: the bar is >= 1.0x vs protobufjs on both ops, and decode sits at
+0.27x-0.42x on every tier (encode clears the bar only at 136/174 B). The
+crossing elimination is real — the arm beats `shim` on all eight cells
+(1.15x-3.08x), removing the ~30k N-API interactions the closeout above
+names as the floor — but the image just moves the per-field work into the
+JS heap: one TextEncoder.encode per string (6000+ at xlarge) plus DataView
+writes on the way in, one TextDecoder.decode per string plus DataView reads
+on the way out, with a full tree build in C either way. protobufjs pays none
+of that (own-heap objects, no translation, no second representation), so the
+gap grows with the repeated-field scale and no tuning of this arm closes a
+~2.4x-3.8x decode gap. Gate (`OK shim-image parity` all four tiers,
+byte-identical to the reference) and `make node-test` (71/71) stay green;
+the arm stays in the harness as a labeled spike row, no headline change.
+
 ## Cell: embedded encode x100/x3000 vs nanopb (perf loop Task 5 — exhaustion 2026-11-25)
 
 Round 1 (packed INT32 blind-write + 1B/2B varint fast-path in `write_packed`):
@@ -3505,3 +3544,151 @@ small>medium>large≈xlarge shape. The effect (~1%) sits below this host's
 per-round noise floor at load 8-14, so it cannot clear the keep bar here —
 not a false kill from the earlier concurrent load. Reverted again, R1
 (last-string decode reuse) stands. A third attempt would need load <3 first.
+
+## Cell: Clojure `core` vs `protobuf-java` (generated-passing plan Task 2 — `core-gen` rejected, 2026-11-25)
+
+`core-gen` arm in `bindings/clojure/benchmarks/pbwire/bench.clj`: encode
+builds a fresh `Structtest_Scalars3` via the committed pbwire Java
+generated model's Builder plus `toByteArray` per iteration (same fresh-task
+shape as the `protobuf-java` row); decode runs `parseFrom` plus the same
+gate-checked deep fold as `consume-baseline` (str length, tags/inners
+counts, inner name/value, indexed last-inner read), every interop target
+type-hinted (compile checked with `*warn-on-reflection*` — zero warnings in
+`bench.clj`). Byte gates (`core-gen` encode `Arrays/equals` reference,
+`parseFrom` + re-encode round-trip) pass on all four tiers. Formal run
+`results/bench-clojure-20261125T100923Z.json` (idle host):
+
+| tier | enc gen/core | enc gen/pbuf | dec gen/core | dec gen/pbuf |
+|---|---|---|---|---|
+| 136 B | 7.00x | 0.34x | 0.85x | 0.76x |
+| 174 B | 6.18x | 0.51x | 1.03x | 0.81x |
+| 2469 B | 3.62x | 0.92x | 1.18x | 0.70x |
+| 74913 B | 3.50x | 0.96x | 1.12x | 0.74x |
+
+Rejected on both prongs of the bar: decode loses to current `core` at
+136 B (0.85x — fixed `parseFrom` price dominates the tiny message), and
+xlarge reaches only 0.96x / 0.74x vs `protobuf-java`. Encode scales toward
+parity (0.34x -> 0.96x) as the fixed builder-alloc price amortizes, but
+decode sits at 0.70x-0.81x on every tier doing the same fold as the
+baseline: the pbwire Java generated model still decodes through the generic
+table-driven `PbCodec` runtime, not a compiled per-message parser, so the
+parse itself is the gap and no amount of hinting on the Clojure side closes
+it. `make clojure-test` (4 tests, 46 assertions, 0 failures) stays green;
+the arm stays in the harness as a labeled experimental row, no headline
+change.
+
+## Cell: embedded struct-codec direct path (generated-passing plan Task 3 — rejected, 2026-11-25)
+
+Spike: `pbwire-struct` arm in `bindings/embedded/benchmarks/bench.c` over
+the generated struct for `benchmarks/msg.proto` (pinned at
+`benchmarks/gen/msg.h`, produced by `protoc-gen-pbwire-c`, never in
+`bindings/c/tests/gen`). Compiled codec (`pbw_struct_codec_init` once on
+`box.schema`) + caller-memory arena (`pbw_struct_arena_new_mem`, 64 KB
+static block: the x3000 decode grows its repeated array by doubling, so
+~2x the 12 KB final plus slack overflows 32 KB with PBW_ERR_NOMEM).
+Encode fills a fresh struct per iteration and encodes via the reused
+`pbw_struct_buf` (steady-state allocates nothing); decode memsets a caller
+struct and decodes into the arena (next decode resets it, zero per-decode
+allocation). Gate per tier: struct bytes == nanopb bytes plus the pinned
+sizes (52/55/154/5928 B), field checks (id/label/samples), decode +
+re-encode byte check.
+
+`make embedded-bench` (four same-host runs, ratios struct/nanopb):
+
+| tier | enc | dec |
+|---|---|---|
+| x0 | 4.6x-5.8x | 7.4x-8.2x |
+| x1 | 4.7x-6.4x | 6.9x-8.8x |
+| x100 | 2.7x-3.8x | 2.7x-2.9x |
+| x3000 | 2.9x-3.1x | 2.5x-3.0x |
+
+The time prong passes decisively: the x100/x3000 headline gap (tree
+~0.5x, the ~45% deficit this spike targets) closes and reverses to ~3x,
+and struct decode beats the tree decode on every tier of every run.
+Flash prong fails: `pbw_struct.o` is 7303 B text (`-Os -mthumb`, same
+flags as `scripts/mcu-size.sh`) plus 416 B `.rodata` for the generated
+8-row table — about +7.7 KB, +17% over the measured 46295 B codec total
+(+20% over the README's 39211 B narrative number; nanopb stays 7021 B).
+The current budget narrative (fixed codec for every type vs 7 KB for one)
+cannot absorb a second fixed engine without changing, and a struct-only
+firmware that GCs the tree objects is unmeasured re-architecture, not this
+spike. Per the bar (time AND flash, else rejection): REJECTED, no headline
+change, no doc-number changes. The arm stays in the harness as a labeled
+spike row. `make test` green (incl. `test_embedded`), `make format-check`
+clean, `src/` untouched (no `difftest` owed). Note: `make embedded-size`
+fails at BASE on this host (GCC 16: the script's freestanding `string.h`
+stub lacks `memchr`, which `src/json.c` now uses) — flash totals above
+come from a patched script copy plus a direct `pbw_struct.o` compile; the
+script itself is untouched. Caveat: flash was measured out-of-tree — any
+future promotion must re-measure inside a real firmware link.
+
+## Cell: Scala `core` vs ScalaPB (generated-passing plan Task 4 — case class over the Java model rejected, 2026-11-25)
+
+`matrix3Gen` case classes in `bindings/scala/tests/gen/matrix3.scala` now
+delegate wire I/O to the committed pbwire Java generated model
+(`bindings/java/tests/gen/Structtest_*`, the same facade the Kotlin
+binding's `matrix3.kt` builds via inline DSL sugar): `encode` fills a
+fresh Java `Builder` and calls `toByteArray` per iteration (same
+fresh-task shape as the ScalaPB row); `decode` runs `parseFrom` plus a
+`load` conversion to the case class. `fill`/`load` changed signatures
+from `Message` to the Java `Builder`/message; the `ty` schema handle
+stays pinned for conformance paths (`matrix3_meta.scala` untouched).
+`bench.sh`/`build.sh` compile `Structtest_*.java` beside the runtime
+(same narrow glob the Clojure Task-2 `bench.sh` uses). Byte gates
+(`encode == reference`, re-encode round-trip, `copy()`/`Option` presence
+on `optI32`, Java-model cross-check) pass on all four tiers. Formal run
+`results/bench-scala-20261125T103906Z.json` (interleaved per-op
+calibration, so the host load ~8 on 14 cores hits both sides equally;
+speed ratios, higher means pbwire faster):
+
+| tier | enc core/pbuf | dec core/pbuf | dec core/tree |
+|---|---|---|---|
+| 136 B | 0.32x | 0.52x | 0.68x |
+| 174 B | 0.44x | 0.50x | 0.91x |
+| 2469 B | (7.42x baseline collapse, ignore) | 0.35x | 0.67x |
+| 74913 B | (178x baseline collapse, ignore) | 0.42x | 0.69x |
+
+Rejected per the bar (decode >= 1.0x vs ScalaPB): decode sits at
+0.35x-0.52x doing the same fold as the baseline — the pbwire Java
+generated model still decodes through the generic table-driven `PbCodec`
+runtime, not a compiled per-message parser, so the parse itself is the
+gap (same mechanism as the Clojure Task-2 rejection, wider here because
+ScalaPB's parser is faster than protobuf-java's). The large/xlarge encode
+cells are the known ScalaPB baseline collapse (7.76x/211.33x in the plan;
+~7x/~178x on this host), never quoted as a win. `make scala-test`
+(generated test ok: 25 checks) and `make conformance-java` (2766 binary +
+443 text/JSON, only the 2 known tag-truncation failures) stay green; no
+headline change.
+
+## Cell: Lua + ObjC generated-shape control arms (generated-passing plan Task 5 — encode ties / decode trails, no promotion, 2026-11-25)
+
+Verify-only control arms over the committed codegen output. Lua
+`pbwire-lua-gen` (`Structtest_Scalars3.new` + single-arg `encode`/`decode`
+from `bindings/lua/tests/gen/matrix3.lua`; the legacy `(schema, ...)` form
+is untouched) in `bindings/lua/benchmarks/bench.lua`. ObjC
+`pbwire-objc-gen` (`PBWGen_Scalars3` build + `-data` /
+`+parseFromData:error:`, fresh per iteration like `fill_pbwire`) in
+`bindings/objc/benchmarks/bench_objc.m` (`bench.sh` now also compiles the
+committed `tests/gen/matrix3.m` / `matrix3_schema.m`; no generated file
+touched). Gates on all four tiers before timing: gen encode equals the
+reference bytes, gen decode round-trips byte-exact.
+
+Four consecutive same-host `make lua-bench` runs, xlarge gen/shim speed
+(higher favors gen): enc 0.61/0.61/0.60/0.59, dec 0.56/0.56/0.57/0.56 — a
+consistent one-directional loss on every tier of both ops (small encode
+0.38x-0.39x: `new()` merge + `to_table` rebuild walk the payload twice in
+Lua before reaching the same C core). Four consecutive same-host `make
+objc-bench` runs, xlarge gen/tree speed: enc 1.00/1.01/0.99/0.98 (tie,
+crosses 1.0 both ways inside the ±10% band), dec 0.29/0.30/0.30/0.30
+(`loadFromMessage` re-reads every field through `valueForField:` plus one
+facade alloc per message). Small tiers trail on encode too (0.63x-0.71x:
+the facade alloc dominates the tiny message). Formal records
+`results/bench-lua-20261125T105115Z/105527Z/105734Z/105939Z.json` and
+`results/bench-objc-20261125T105404Z/110144Z/110257Z/110411Z.json`.
+
+Verdict: no arm wins any run cleanly, so nothing graduates to the Task-1
+promotion flow. No headline change, no `BENCHMARKS.md` change; both arms
+stay in the harness as labeled control rows. `make lua-test` green (plus
+`tests/test_generated.lua`), `make objc-test` green (`build.sh generated`
+fails identically at BASE — pre-existing `extSchema != nil`, untouched by
+this task), `make format-check` clean.

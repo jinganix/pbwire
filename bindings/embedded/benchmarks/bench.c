@@ -12,8 +12,11 @@
  *
  * Arms: `pbwire` is the facade `tree` arm -- build + fill + encode fresh per
  * iteration inside the timer (the full task). `pbwire-proxy` re-encodes the
- * held tree instead: same-run timing only, never the headline. There is no
- * third mechanism here (see BENCHMARKS.md: two mechanisms).
+ * held tree instead: same-run timing only, never the headline.
+ * `pbwire-struct` is the `shim` arm (the struct codec reading caller memory
+ * in place through layout tables): fresh struct fill + codec encode per
+ * iteration, decode into a caller struct + caller-memory arena
+ * (`pbw_struct_arena_new_mem`, zero per-decode allocation).
  */
 
 #include <stdint.h>
@@ -23,11 +26,13 @@
 #include <time.h>
 
 #include "pbwe.h"
+#include "pbw_struct.h"
 
 #include <pb_encode.h>
 #include <pb_decode.h>
 
-#include "msg.pb.h" /* nanopb generated: eb_Reading + eb_Reading_fields */
+#include "msg.pb.h"  /* nanopb generated: eb_Reading + eb_Reading_fields */
+#include "gen/msg.h" /* pbwire generated: eb_reading_t + eb_reading_fields */
 
 static volatile long sink;
 
@@ -122,19 +127,56 @@ fill_struct(eb_Reading *s, int samples)
     }
 }
 
+/* Same values into the pbwire generated struct (struct-codec `shim` arm).
+ * Backing lives in static storage: encode borrows the struct, so the
+ * pointers only have to outlive the call. */
+static int32_t s_samples[3000];
+static uint8_t s_raw[sizeof(raw)];
+
+static void
+fill_sreading(eb_reading_t *s, int samples)
+{
+    int i;
+
+    memset(s, 0, sizeof(*s));
+    s->id = 42;
+    s->ts = 1700000000u;
+    s->temp = 21.5f;
+    s->pressure = 1013.25;
+    s->ok = true;
+    s->label = label;
+    memcpy(s_raw, raw, sizeof(raw));
+    s->raw.data = s_raw;
+    s->raw.len = sizeof(raw);
+    s->samples = s_samples;
+    s->n_samples = (size_t)samples;
+    for (i = 0; i < samples; i++) {
+        s_samples[i] = i + 1;
+    }
+}
+
 static int
-run_case(pbwe_box *box, const pbw_descriptor *desc, int samples, int iters)
+run_case(pbwe_box *box, const pbw_descriptor *desc, pbw_struct_codec *codec,
+         pbw_struct_arena *sarena, int samples, int iters)
 {
     static uint8_t wire_pb[64 * 1024];
     static uint8_t wire_nb[64 * 1024];
     static eb_Reading got;
+    static pbw_struct_buf sbuf; /* zero-initialized: keeps capacity across tiers */
     eb_Reading nb;
+    eb_reading_t ss;
+    eb_reading_t ds;
     pbw_message *built;
     const pbw_message *msg = NULL;
     size_t wire_pb_len = 0, wire_nb_len = 0, len = 0;
+    size_t want_bytes =
+        samples == 0 ? 52 : samples == 1 ? 55
+                        : samples == 100 ? 154
+                                         : 5928;
     double t0, t1;
     int i;
     int equal;
+    int struct_equal;
 
     built = pbwe_build(box, desc);
     if (built == NULL) {
@@ -234,6 +276,75 @@ run_case(pbwe_box *box, const pbw_descriptor *desc, int samples, int iters)
     t1 = now_ns();
     report("nanopb", "encode", (t1 - t0) / iters, wire_nb_len);
 
+    /* ---- struct-codec gate: same values via the generated struct ---- */
+    fill_sreading(&ss, samples);
+    if (pbw_struct_codec_encode(codec, &ss, &sbuf) != PBW_OK) {
+        fprintf(stderr, "struct encode failed\n");
+        return 0;
+    }
+    struct_equal = wire_nb_len == want_bytes && sbuf.len == wire_nb_len &&
+                   memcmp(sbuf.data, wire_nb, wire_nb_len) == 0;
+    printf("samples x%d: %zu bytes (pbwire-struct == nanopb: %s)\n", samples,
+           sbuf.len, struct_equal ? "yes" : "NO");
+    if (!struct_equal)
+        return 0;
+    /* Decode into a caller struct + caller-memory arena, then re-encode:
+     * the bytes must survive the round trip (no free: the next decode
+     * resets the arena). */
+    memset(&ds, 0, sizeof(ds));
+    {
+        pbw_struct_arena *a = sarena;
+        const char *lbl = NULL;
+
+        if (pbw_struct_codec_decode(codec, wire_nb, wire_nb_len, &a, &ds) !=
+            PBW_OK) {
+            fprintf(stderr, "struct decode failed\n");
+            return 0;
+        }
+        lbl = ds.label;
+        if (ds.id != 42 || lbl == NULL || strcmp(lbl, label) != 0 ||
+            ds.n_samples != (size_t)samples ||
+            (samples > 0 && ds.samples[ds.n_samples - 1] != samples)) {
+            fprintf(stderr, "struct field gate failed\n");
+            return 0;
+        }
+        if (pbw_struct_codec_encode(codec, &ds, &sbuf) != PBW_OK ||
+            sbuf.len != wire_nb_len ||
+            memcmp(sbuf.data, wire_nb, wire_nb_len) != 0) {
+            fprintf(stderr, "struct re-encode mismatch\n");
+            return 0;
+        }
+    }
+
+    /* ---- encode (fresh struct fill + codec encode per iteration) ---- */
+    t0 = now_ns();
+    for (i = 0; i < iters; i++) {
+        fill_sreading(&ss, samples);
+        if (pbw_struct_codec_encode(codec, &ss, &sbuf) != PBW_OK) {
+            return 0;
+        }
+        sink += (long)sbuf.len;
+    }
+    t1 = now_ns();
+    report("pbwire-struct", "encode", (t1 - t0) / iters, sbuf.len);
+
+    /* ---- decode (into a caller struct + caller-memory arena) ---- */
+    t0 = now_ns();
+    for (i = 0; i < iters; i++) {
+        pbw_struct_arena *a = sarena;
+
+        memset(&ds, 0, sizeof(ds));
+        /* Same buffer the gate validated (struct bytes == wire_nb, decode
+         * of wire_nb re-encodes byte-identical): the parity claim is strict. */
+        if (pbw_struct_codec_decode(codec, wire_nb, wire_nb_len, &a, &ds) !=
+            PBW_OK) {
+            return 0;
+        }
+        sink += (long)ds.n_samples;
+    }
+    t1 = now_ns();
+    report("pbwire-struct", "decode", (t1 - t0) / iters, wire_nb_len);
+
     /* ---- decode ---- */
     t0 = now_ns();
     for (i = 0; i < iters; i++) {
@@ -264,11 +375,17 @@ int
 main(int argc, char **argv)
 {
     static uint8_t pool[512 * 1024 + 8];
+    /* Peak of one message plus header: the x3000 decode grows its repeated
+     * array by doubling (~2x the 12 KB final), so 32 KB does not fit. */
+    static uint8_t smem[64 * 1024 + 8];
     void *block = (void *)(((uintptr_t)pool + 7u) & ~(uintptr_t)7u);
+    void *sblock = (void *)(((uintptr_t)smem + 7u) & ~(uintptr_t)7u);
     uint8_t *desc_bytes;
     size_t desc_len = 0;
     pbwe_box box;
     const pbw_descriptor *desc;
+    pbw_struct_codec *codec = NULL;
+    pbw_struct_arena *sarena = NULL;
     int ok = 1;
 
     if (argc != 2) {
@@ -295,10 +412,26 @@ main(int argc, char **argv)
         return 2;
     }
 
-    ok &= run_case(&box, desc, 0, 200000);
-    ok &= run_case(&box, desc, 1, 200000);
-    ok &= run_case(&box, desc, 100, 50000);
-    ok &= run_case(&box, desc, 3000, 2000);
+    if (pbw_struct_codec_init(&codec, box.schema, "eb.Reading",
+                              eb_reading_fields, 8) != PBW_OK) {
+        fprintf(stderr, "struct codec init failed\n");
+        pbwe_close(&box);
+        free(desc_bytes);
+        return 2;
+    }
+    sarena = pbw_struct_arena_new_mem(sblock, sizeof(smem) - 8);
+    if (sarena == NULL) {
+        fprintf(stderr, "struct arena init failed\n");
+        pbw_struct_codec_free(codec);
+        pbwe_close(&box);
+        free(desc_bytes);
+        return 2;
+    }
+
+    ok &= run_case(&box, desc, codec, sarena, 0, 200000);
+    ok &= run_case(&box, desc, codec, sarena, 1, 200000);
+    ok &= run_case(&box, desc, codec, sarena, 100, 50000);
+    ok &= run_case(&box, desc, codec, sarena, 3000, 2000);
 
     printf("checksum: %ld\n", sink);
     pbwe_close(&box);

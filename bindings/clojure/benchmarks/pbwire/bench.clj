@@ -15,6 +15,9 @@
 ;;   proxy the prebuilt-map task, relabelled   -- held map re-encoded,
 ;;         decode-and-drop with no read-back. Published, never the headline.
 ;;   shim  ../java/pbench/jni                  -- ceiling: one JNI crossing, no tree translation
+;;   core-gen the committed pbwire Java generated model (Structtest_Scalars3
+;;         Builder + toByteArray fresh per iteration; parseFrom + the same
+;;         gate-checked deep read as consume-core) -- Task 2 experimental arm.
 ;;
 ;; The persistent-map fns (encode/decode) are the `tree` row: the map is
 ;; the binding's own tree, so its walk and materialization are the arm's
@@ -27,7 +30,9 @@
 (ns pbwire.bench
   (:require [matrix3 :as gen]
             [pbwire.core :as pb])
-  (:import (java.util Arrays) (structtest Matrix3$Scalars3 Matrix3$Inner3) Message))
+  (:import (java.util Arrays) (structtest Matrix3$Scalars3 Matrix3$Inner3) Message
+           Structtest_Scalars3 Structtest_Inner3 Structtest_Color3
+           Structtest_Scalars3$Builder Structtest_Inner3$Builder))
 
 (def ^:private cases ["small" "medium" "large" "xlarge"])
 (def ^:private repeats [0 1 100 3000])
@@ -183,6 +188,87 @@
       (let [^Matrix3$Inner3 m (.getInners back (dec n))]
         (swap! sink + (.length (.getName m)) (.getValue m))))))
 
+(defn- core-gen-message
+  "Fresh-task build via the committed pbwire Java generated model
+   (bindings/java/tests/gen), mirroring official-message field for field.
+   Every interop target is hinted: an unhinted Builder local compiles to
+   a reflective call on the timed path, and the multi-overload add/set
+   forms need hinted args to resolve at compile time."
+  [n]
+  (let [^Structtest_Scalars3$Builder b (Structtest_Scalars3/newBuilder)
+        ^Structtest_Inner3 kid (let [^Structtest_Inner3$Builder ib (Structtest_Inner3/newBuilder)]
+                                 (.setName ib "kid")
+                                 (.setValue ib 42)
+                                 (.build ib))]
+    (.setI32 b Integer/MIN_VALUE)
+    (.setI64 b Long/MAX_VALUE)
+    (.setU32 b (unchecked-int 0xffffffff))
+    (.setU64 b -1)
+    (.setS32 b Integer/MIN_VALUE)
+    (.setS64 b Long/MIN_VALUE)
+    (.setFx32 b (unchecked-int 0xdeadbeef))
+    (.setFx64 b 72623859790382856)
+    (.setSfx32 b Integer/MIN_VALUE)
+    (.setSfx64 b Long/MIN_VALUE)
+    (.setF32 b Float/POSITIVE_INFINITY)
+    (.setF64 b -123456.789)
+    (.setFlag b true)
+    (.setStr b "hello")
+    (.setColor b Structtest_Color3/COLOR3_GREEN)
+    (.setInner b kid)
+    (.setOptI32 b -7)
+    (.setOptStr b "opt")
+    (dotimes [i n]
+      (.addNums b (unchecked-int (- i 3)))
+      (.addTags b "tag")
+      (let [^Structtest_Inner3$Builder ib (Structtest_Inner3/newBuilder)
+            ^Structtest_Inner3 g (do (.setName ib "grandkid")
+                                      (.setValue ib (unchecked-int (inc i)))
+                                      (.build ib))]
+        (.addInners b g))
+      (.addFlags b (even? i)))
+    (.build b)))
+
+(defn- core-gen-encode
+  "Timed encode op: fresh Builder build plus toByteArray per iteration,
+   the same fresh-task shape as the protobuf-java row."
+  [n]
+  (let [^Structtest_Scalars3 m (core-gen-message n)]
+    (.toByteArray m)))
+
+(defn- core-gen-roundtrip-ok?
+  "Decode gate: parseFrom plus the same field checks as the map back-ok
+   gate, closed by a re-encode byte comparison."
+  [^bytes reference n]
+  (let [^Structtest_Scalars3 back (Structtest_Scalars3/parseFrom reference)
+        ^Structtest_Inner3 inner (.getInner back)]
+    (and (= "hello" (.getStr back))
+         (= "kid" (.getName inner))
+         (= n (.getNumsCount back))
+         (or (zero? n)
+             (= (- n 4) (.getNums back (dec n))))
+         (Arrays/equals ^bytes reference ^bytes (.toByteArray back)))))
+
+(defn- consume-core-gen
+  "The core-gen decode half of the timed full task: parseFrom plus the
+   same gate-checked deep read as consume-baseline (str, tags/inners
+   counts, inner name/value, indexed last-inner read), so core-gen vs
+   protobuf-java is deep vs deep. Every interop target is hinted: an
+   unhinted local compiles to a reflective call on the timed path, and an
+   unhinted intermediate (e.g. (.getName (.getInner back))) reflects even
+   when the outer target is hinted, hence the bound inner locals."
+  [^bytes wire n]
+  (let [^Structtest_Scalars3 back (Structtest_Scalars3/parseFrom wire)
+        ^Structtest_Inner3 inner (.getInner back)]
+    (swap! sink + (.length (.getStr back))
+           (.getTagsCount back)
+           (.getInnersCount back)
+           (.length (.getName inner))
+           (.getValue inner))
+    (when (pos? n)
+      (let [^Structtest_Inner3 m (.getInners back (dec n))]
+        (swap! sink + (.length (.getName m)) (.getValue m))))))
+
 (defn -main [desc]
   (let [schema (pb/load-schema desc)
         ty (pb/message-type schema "structtest.Scalars3")
@@ -226,7 +312,14 @@
                         fresh-ok (Arrays/equals
                                   ^bytes reference
                                   ^bytes (gen/encode-structtest-scalars3
-                                            (payload n)))]
+                                            (payload n)))
+                        ;; Task 2 core-gen gate: the committed Java generated
+                        ;; model must match the reference too (encode) and
+                        ;; round-trip it (decode), same bytes both directions.
+                        core-gen-ok (Arrays/equals
+                                    ^bytes reference
+                                    ^bytes (core-gen-encode n))
+                        core-gen-back-ok (core-gen-roundtrip-ok? reference n)]
                     (when-not back-ok
                       (println "FAIL" label "pbwire-clojure decode differs")
                       (swap! failures inc))
@@ -236,7 +329,13 @@
                     (when-not fresh-ok
                       (println "FAIL" label "fresh-build tree bytes differ")
                       (swap! failures inc))
-                    (when (and back-ok gen-ok fresh-ok)
+                    (when-not core-gen-ok
+                      (println "FAIL" label "core-gen model bytes differ")
+                      (swap! failures inc))
+                    (when-not core-gen-back-ok
+                      (println "FAIL" label "core-gen decode differs")
+                      (swap! failures inc))
+                    (when (and back-ok gen-ok fresh-ok core-gen-ok core-gen-back-ok)
                       (println "OK  " (str label " generated-model parity, x" n
                                            " (" (count reference) " bytes)"))))
                   ;; Tree ops are the Go-parity full task: a fresh map per
@@ -260,7 +359,9 @@
                                #(consume-tree ty reference n)
                                #(consume-core ty reference n)
                                #(gen/decode-structtest-scalars3 reference)
-                               #(consume-baseline reference n)])]
+                               #(consume-baseline reference n)
+                               #(core-gen-encode n)
+                               #(consume-core-gen reference n)])]
                     (println (str label ": " (count reference) " bytes, "
                                   tier-count " iterations (repeat field x" n ")"))
                     (println (format "  %-18s %-7s %12s %10s"
@@ -273,6 +374,8 @@
                     (row "pbwire-clj-core" "decode" (count reference) (nth res 5))
                     (row "pbwire-clj-proxy" "decode" (count reference) (nth res 6))
                     (row "protobuf-java" "decode" (count reference) (nth res 7))
+                    (row "pbwire-clj-core-gen" "encode" (count reference) (nth res 8))
+                    (row "pbwire-clj-core-gen" "decode" (count reference) (nth res 9))
                     (println))))))))
       (finally (pb/close! schema)))
     (when (pos? @failures)
