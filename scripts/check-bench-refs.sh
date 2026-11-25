@@ -31,20 +31,32 @@
 # cited JSON, different domain), prose ratios (D3 dedups those), and
 # `pbench/` arm tables (non-formal runs).
 #
-# Invocation: ./scripts/check-bench-refs.sh
-# Run it before and after every BENCHMARKS.md / README / binding-README edit
-# (plan Tasks D2-D4). Exit 0 = green; exit 1 = drift with file:line details.
+# Invocation: ./scripts/check-bench-refs.sh [--gate]
+# --gate runs only the results-independent parts ((a) chart anchors and
+# (b) ORDER match); scripts/check.sh calls it this way. Without --gate the
+# full check runs, including (c) ratios vs results (which reports SKIP when
+# results/ is absent). Run the full form before and after every
+# BENCHMARKS.md / README / binding-README edit (plan Tasks D2-D4).
+# Exit 0 = green; exit 1 = drift with file:line details.
 #
-# NOT wired into scripts/check.sh on purpose: results/ is git-ignored, so a
-# fresh checkout has no JSON records and part (c) would have nothing to check.
-# With no results/*.json present, part (c) reports SKIP and still exits 0;
-# parts (a) and (b) always run. Needs only bash + python3 (stdlib); no new dependencies.
+# Parts (a) and (b) are wired into scripts/check.sh via --gate
+# (results-independent, gate-safe: no results/*.json needed). Part (c)
+# stays a documented manual invocation because results/ is git-ignored --
+# a fresh checkout has no JSON records for it to check against (it reports
+# SKIP there and still exits 0). Needs only bash + python3 (stdlib);
+# no new dependencies.
 set -euo pipefail
+
+if [ "${1:-}" != "" ] && [ "${1:-}" != "--gate" ]; then
+  echo "usage: check-bench-refs.sh [--gate]" >&2
+  exit 2
+fi
+GATE="${1:-}"
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-python3 - "$ROOT" <<'PYEOF'
+python3 - "$ROOT" "$GATE" <<'PYEOF'
 import ast
 import glob
 import importlib.util
@@ -290,8 +302,13 @@ else:
     fails.append("(b) at-a-glance order %s != ORDER %s" % (seq, ORDER))
 
 # ---------- (c) ratios vs cited results/*.json ----------
+GATE = len(sys.argv) > 2 and sys.argv[2] == "--gate"
 have_results = bool(glob.glob(os.path.join(RESULTS, "bench-*.json")))
-if not have_results:
+if GATE:
+    notices.append("SKIP (c): --gate runs (a)+(b) only; "
+                   "run without --gate for ratios vs results")
+    c_base = 0
+elif not have_results:
     notices.append("SKIP (c): no results/*.json present (git-ignored); "
                    "run after a bench re-run")
     c_base = 0
