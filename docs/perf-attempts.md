@@ -3544,3 +3544,35 @@ small>medium>large≈xlarge shape. The effect (~1%) sits below this host's
 per-round noise floor at load 8-14, so it cannot clear the keep bar here —
 not a false kill from the earlier concurrent load. Reverted again, R1
 (last-string decode reuse) stands. A third attempt would need load <3 first.
+
+## Cell: Clojure `core` vs `protobuf-java` (generated-passing plan Task 2 — `core-gen` rejected, 2026-11-25)
+
+`core-gen` arm in `bindings/clojure/benchmarks/pbwire/bench.clj`: encode
+builds a fresh `Structtest_Scalars3` via the committed pbwire Java
+generated model's Builder plus `toByteArray` per iteration (same fresh-task
+shape as the `protobuf-java` row); decode runs `parseFrom` plus the same
+gate-checked deep fold as `consume-baseline` (str length, tags/inners
+counts, inner name/value, indexed last-inner read), every interop target
+type-hinted (compile checked with `*warn-on-reflection*` — zero warnings in
+`bench.clj`). Byte gates (`core-gen` encode `Arrays/equals` reference,
+`parseFrom` + re-encode round-trip) pass on all four tiers. Formal run
+`results/bench-clojure-20261125T100923Z.json` (idle host):
+
+| tier | enc gen/core | enc gen/pbuf | dec gen/core | dec gen/pbuf |
+|---|---|---|---|---|
+| 136 B | 7.00x | 0.34x | 0.85x | 0.76x |
+| 174 B | 6.18x | 0.51x | 1.03x | 0.81x |
+| 2469 B | 3.62x | 0.92x | 1.18x | 0.70x |
+| 74913 B | 3.50x | 0.96x | 1.12x | 0.74x |
+
+Rejected on both prongs of the bar: decode loses to current `core` at
+136 B (0.85x — fixed `parseFrom` price dominates the tiny message), and
+xlarge reaches only 0.96x / 0.74x vs `protobuf-java`. Encode scales toward
+parity (0.34x -> 0.96x) as the fixed builder-alloc price amortizes, but
+decode sits at 0.70x-0.81x on every tier doing the same fold as the
+baseline: the pbwire Java generated model still decodes through the generic
+table-driven `PbCodec` runtime, not a compiled per-message parser, so the
+parse itself is the gap and no amount of hinting on the Clojure side closes
+it. `make clojure-test` (4 tests, 46 assertions, 0 failures) stays green;
+the arm stays in the harness as a labeled experimental row, no headline
+change.

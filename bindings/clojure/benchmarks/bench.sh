@@ -40,7 +40,11 @@ fi
 
 rm -rf "$here/out/java-classes" "$here/out/oracle-src" "$here/out/oracle-classes"
 mkdir -p "$here/out/java-classes" "$here/out/oracle-src" "$here/out/oracle-classes"
-javac -nowarn -d "$here/out/java-classes" "$root"/bindings/java/runtime/*.java
+# The core-gen arm benchmarks the committed pbwire Java generated model
+# (bindings/java/tests/gen): same default package as the runtime, no extra
+# deps, so it compiles beside it into java-classes.
+javac -nowarn -d "$here/out/java-classes" "$root"/bindings/java/runtime/*.java \
+    "$root"/bindings/java/tests/gen/*.java
 protoc -I"$root/bindings/c/tests/data" --java_out="$here/out/oracle-src" \
     "$root/bindings/c/tests/data/matrix3.proto"
 javac -nowarn -cp "$protobuf_jar" -d "$here/out/oracle-classes" \
