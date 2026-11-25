@@ -660,33 +660,7 @@ check 'decode_object skips unknown fields, drops them on re-encode' do
                'unknowns do not survive re-encode (documented)'
 end
 
-failures = 0
-CHECKS.each do |name, block|
-  begin
-    block.call
-    puts "ok   #{name}"
-  rescue AssertionFailed => e
-    failures += 1
-    puts "FAIL #{name}: #{e.message}"
-  rescue StandardError => e
-    failures += 1
-    puts "FAIL #{name}: #{e.class}: #{e.message}"
-  end
-end
-
-puts "#{CHECKS.size - failures}/#{CHECKS.size} checks passed"
-exit(failures.zero? ? 0 : 1)
-
-
-# NOTE: the checks below predate the test runner above and never executed
-# (the runner loop sat above their definitions while the final tally counted
-# definitions, not runs). They stay parked here - still parsed, but neither
-# registered nor run - until a follow-up triages them: several fail against
-# the current API (limits on Schema.from_bytes, Context/Pool construction,
-# the adv.desc path). Do not add new checks here; add them above the runner.
-
-
-ADV = File.expand_path('../../tests/data/adv.desc', __dir__)
+ADV = File.expand_path('../../../tests/data/adv.desc', __dir__)
 
 check 'visit scans fields without a tree' do
   msg = reference_message
@@ -771,7 +745,8 @@ check 'pool and context recycle arenas' do
   msg = reference_message
   wire = msg.encode
   ctx = Pbwire::Context.new
-  assert_equal wire, ctx.encode(schema.message(SAMPLE).tap { |m| m['name'] = 'alice' }), 'context encode matches'
+  named = schema.message(SAMPLE).tap { |m| m['name'] = 'alice' }
+  assert_equal named.encode, ctx.encode(named), 'context encode matches'
   borrowed = ctx.decode(schema, SAMPLE, wire)
   assert_equal wire, borrowed.encode, 'context decode reads back'
   assert raised(Pbwire::Error) { borrowed['name'] = 'bob' }, 'context tree is read-only'
@@ -789,3 +764,20 @@ check 'pool and context recycle arenas' do
   assert raised(Pbwire::Error) { pc.encode(msg) }, 'released context raises'
   assert raised(Pbwire::Error) { pool.release(pc) }, 'double release raises'
 end
+
+failures = 0
+CHECKS.each do |name, block|
+  begin
+    block.call
+    puts "ok   #{name}"
+  rescue AssertionFailed => e
+    failures += 1
+    puts "FAIL #{name}: #{e.message}"
+  rescue StandardError => e
+    failures += 1
+    puts "FAIL #{name}: #{e.class}: #{e.message}"
+  end
+end
+
+puts "#{CHECKS.size - failures}/#{CHECKS.size} checks passed"
+exit(failures.zero? ? 0 : 1)

@@ -3581,6 +3581,36 @@ static const rb_data_type_t pool_data_type = {
     RUBY_TYPED_FREE_IMMEDIATELY,
 };
 
+/* Allocators so rb_obj_alloc works for Context/Pool (typed_object_alloc
+ * goes through the class allocator): without one, Context.new/Pool.new
+ * raise TypeError. Zero-fill then set immediates explicitly, like the
+ * Schema/Message allocators above, so a bare allocate never trips the
+ * marker. */
+static VALUE
+ctx_alloc(VALUE klass)
+{
+    ctx_t *ctx;
+    VALUE obj = TypedData_Make_Struct(klass, ctx_t, &ctx_data_type, ctx);
+
+    ctx->ctx = NULL;
+    ctx->pool = NULL;
+    ctx->pool_obj = Qnil;
+    ctx->released = 1;
+    ctx->gen = 0;
+    ctx->retain_cap = 0;
+    return obj;
+}
+
+static VALUE
+pool_alloc(VALUE klass)
+{
+    pool_t *pool;
+    VALUE obj = TypedData_Make_Struct(klass, pool_t, &pool_data_type, pool);
+
+    pool->pool = NULL;
+    return obj;
+}
+
 static ctx_t *
 ctx_ptr(VALUE obj)
 {
@@ -3974,6 +4004,7 @@ Init_pbwire_ext(void)
     rb_define_method(cType, "decode_object", type_decode_object, -1);
 
     cPool = rb_define_class_under(mPbwire, "Pool", rb_cObject);
+    rb_define_alloc_func(cPool, pool_alloc);
     rb_define_singleton_method(cPool, "new", pool_s_new, -1);
     rb_define_method(cPool, "acquire", pool_acquire, 0);
     rb_define_method(cPool, "release", pool_release, 1);
@@ -3981,6 +4012,7 @@ Init_pbwire_ext(void)
     rb_define_method(cPool, "close", pool_close, 0);
 
     cContext = rb_define_class_under(mPbwire, "Context", rb_cObject);
+    rb_define_alloc_func(cContext, ctx_alloc);
     rb_define_singleton_method(cContext, "new", context_s_new, 0);
     rb_define_method(cContext, "decode", context_decode, -1);
     rb_define_method(cContext, "encode", context_encode, 1);
