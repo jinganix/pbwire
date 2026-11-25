@@ -111,8 +111,8 @@ collapses with size (pure-Julia per-field appends).
 
 `pbwire-julia-shim` is the published comparison: a generated `mutable struct Scalars3Layout` is the object,
 and `native/pbw_julia_shim.c` walks it in place through
-`pbw_struct_codec_*`, one `ccall` per op, with a fresh image built per iteration. The shim trails on small-tier encode (0.01x/0.02x): building the layout image fresh per iteration in Julia dominates the timer there. The xlarge encode ratio (22.35x) quotes the ProtoBuf.jl baseline collapse, not the codec, and the large tier (0.50x) trails it outright; decode wins on medium/large/xlarge (1.39x / 1.08x / 1.09x). The 136 B decode stays
-just below (0.96x `shim`): the small
+`pbw_struct_codec_*`, one `ccall` per op, with a fresh image built per iteration. The shim trails on small-tier encode (0.02x): building the layout image fresh per iteration in Julia dominates the timer there. The xlarge encode ratio (22.35x) quotes the ProtoBuf.jl baseline collapse, not the codec, and the large tier (0.65x) trails it outright; decode wins on medium/large/xlarge (1.40x / 1.17x / 1.08x). The 136 B decode stays
+just below (0.93x `shim`): the small
 tier is the C struct decode plus the boundary, not an arena cost (the plan
 removes the per-call `malloc`/`free` pair, and Stage 6 recorded two attempts
 that did not beat it). The decode row remains the honest headline; the xlarge

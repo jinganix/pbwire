@@ -121,7 +121,7 @@ with what was kept and why.
 ## Generated models (codegen)
 
 The generated models are ergonomics, not a second hot path; what the layer costs,
-measured on the largest `matrix3` tier (~33 KB) with identical values through both paths:
+measured on the largest `matrix3` tier (~74 KB) with identical values through both paths:
 
 | language | encode, generated / dynamic | decode, generated / dynamic |
 |---|---|---|
