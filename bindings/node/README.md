@@ -223,20 +223,20 @@ per-message finalizer.
 
 | payload | op | pbwire-node-shim (MB/s, x protobufjs) | protobufjs (MB/s) |
 |---|---|---|---|---|
-| 136 B | encode | 50.5 (0.66x ❌) | 76.9 |
-| 136 B | decode | 61.1 (0.15x ❌) | 415.7 |
-| 174 B | encode | 52.4 (0.59x ❌) | 88.8 |
-| 174 B | decode | 48.2 (0.12x ❌) | 394.7 |
-| 2469 B | encode | 52.3 (0.22x ❌) | 237.9 |
-| 2469 B | decode | 53.4 (0.12x ❌) | 436.0 |
-| 74913 B | encode | 56.3 (0.19x ❌) | 297.0 |
-| 74913 B | decode | 57.9 (0.13x ❌) | 429.7 |
+| 136 B | encode | 49.5 (0.65x ❌) | 76.0 |
+| 136 B | decode | 64.9 (0.16x ❌) | 394.0 |
+| 174 B | encode | 53.7 (0.61x ❌) | 88.5 |
+| 174 B | decode | 50.5 (0.13x ❌) | 400.1 |
+| 2469 B | encode | 53.3 (0.21x ❌) | 254.2 |
+| 2469 B | decode | 52.8 (0.12x ❌) | 428.6 |
+| 74913 B | encode | 57.0 (0.19x ❌) | 301.1 |
+| 74913 B | decode | 59.1 (0.14x ❌) | 409.9 |
 
 The pbwire column is the native-in/native-out full task
 (`pbench/`): `shim` runs the native-object task in one
 `encodeObject` / `decodeToObject` downcall. The per-field `tree` arm is
 compared in `pbench/README.md`, not here. Formal run
-`../../results/bench-node-20261124T193829Z.json`.
+`../../results/bench-node-20261125T044958Z.json`.
 
 Each field of a native-object op is one N-API property read or
 write (~60-70 ns) where protobufjs pays a few ns in its own heap.

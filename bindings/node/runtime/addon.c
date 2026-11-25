@@ -1878,6 +1878,9 @@ slices_to_js(napi_env env, desc_table *table, const uint8_t *base,
     uint32_t *oneof_live;
     uint32_t npending = 0;
     uint32_t i;
+    const uint8_t *last_bytes = NULL;
+    uint32_t last_len = 0;
+    napi_value last_str = NULL;
 
     arrays = calloc(table->nfields == 0 ? 1 : table->nfields,
                     sizeof(napi_value));
@@ -1926,11 +1929,23 @@ slices_to_js(napi_env env, desc_table *table, const uint8_t *base,
             if (!slice_known(entry, base, wire_len, slice)) {
                 continue;
             }
-            item = slice_to_js(env, table, entry, base, wire_len, slice,
-                               depth);
-            if (item == NULL) {
-                out = NULL;
-                break;
+            if (entry->type == PBW_TYPE_STRING && last_str != NULL &&
+                slice->len == last_len &&
+                (slice->len == 0 ||
+                 memcmp(base + slice->off, last_bytes, slice->len) == 0)) {
+                item = last_str;
+            } else {
+                item = slice_to_js(env, table, entry, base, wire_len, slice,
+                                   depth);
+                if (item == NULL) {
+                    out = NULL;
+                    break;
+                }
+                if (entry->type == PBW_TYPE_STRING) {
+                    last_bytes = base + slice->off;
+                    last_len = slice->len;
+                    last_str = item;
+                }
             }
             if (napi_set_element(env, arrays[slice->index],
                                  positions[slice->index]++, item) != napi_ok) {

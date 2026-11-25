@@ -615,14 +615,31 @@ namespace Structtest {
             if (nTags != 0) {
                 if (Tags.Capacity < nTags) Tags.Capacity = nTags;
                 var p = *(byte**)(img + 136);
-                for (var i = 0; i < nTags; i++) { Tags.Add(global::Pbwire.ImageText.Decode(((IntPtr*)p)[i])); }
+                var p0Tags = ((IntPtr*)p)[0];
+                var s0Tags = global::Pbwire.ImageText.Decode(p0Tags);
+                Tags.Add(s0Tags);
+                for (var i = 1; i < nTags; i++) {
+                    var qTags = ((IntPtr*)p)[i];
+                    Tags.Add(global::Pbwire.ImageText.Equal(qTags, p0Tags) ? s0Tags : global::Pbwire.ImageText.Decode(qTags));
+                }
             }
             Inners.Clear();
             var nInners = (int)(*(nuint*)(img + 240));
             if (nInners != 0) {
                 if (Inners.Capacity < nInners) Inners.Capacity = nInners;
                 var p = *(byte**)(img + 144);
-                for (var i = 0; i < nInners; i++) { var c = new Inner3(); c.ReadImage(p + i * Inner3.ImageBytes); Inners.Add(c); }
+                var c0Inners = new Inner3(); c0Inners.ReadImage(p); Inners.Add(c0Inners);
+                var p0Inners = *(IntPtr*)(p + 8);
+                var s0Inners = c0Inners.Name;
+                for (var i = 1; i < nInners; i++) {
+                    var eInners = p + i * Inner3.ImageBytes;
+                    var qInners = *(IntPtr*)(eInners + 8);
+                    if (global::Pbwire.ImageText.Equal(qInners, p0Inners)) {
+                        var c = new Inner3(); c.Name = s0Inners; c.Value = *(int*)(eInners + 0); Inners.Add(c);
+                    } else {
+                        var c = new Inner3(); c.ReadImage(eInners); Inners.Add(c);
+                    }
+                }
             }
             if (*(int*)(img + 248) != 0) OptI32 = *(int*)(img + 104);
             {

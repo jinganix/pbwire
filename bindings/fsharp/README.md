@@ -78,14 +78,14 @@ runs, so the ratios are in-run):
 
 | payload | op | pbwire-fsharp-shim (MB/s, x) | Google.Protobuf (MB/s) |
 |---|---|---|---|
-| 136 B | encode | 936.5 (2.30x ✅) | 407.7 |
-| 136 B | decode | 745.8 (1.57x ✅) | 476.5 |
-| 174 B | encode | 649.5 (1.86x ✅) | 349.2 |
-| 174 B | decode | 587.9 (1.50x ✅) | 392.4 |
-| 2469 B | encode | 459.9 (1.11x ✅) | 415.3 |
-| 2469 B | decode | 380.1 (0.81x ❌) | 471.3 |
-| 74913 B | encode | 481.7 (1.37x ✅) | 351.2 |
-| 74913 B | decode | 340.6 (0.74x ❌) | 462.4 |
+| 136 B | encode | 958.5 (2.31x ✅) | 415.1 |
+| 136 B | decode | 757.4 (1.54x ✅) | 492.5 |
+| 174 B | encode | 728.0 (2.03x ✅) | 359.1 |
+| 174 B | decode | 618.0 (1.54x ✅) | 402.5 |
+| 2469 B | encode | 453.8 (1.11x ✅) | 408.3 |
+| 2469 B | decode | 429.2 (0.89x ❌) | 483.1 |
+| 74913 B | encode | 488.4 (1.31x ✅) | 374.0 |
+| 74913 B | decode | 463.3 (0.91x ❌) | 509.7 |
 
 Same class as Kotlin: F# reuses the C# binding's project via
 `ProjectReference` and adds only an F#-idiomatic facade — no second runtime,
@@ -95,14 +95,14 @@ no packages, schema from a `FileDescriptorSet` at run time. The baseline is
 runtime: `pbwire-fsharp-shim` is the C# generated model's native-object entry
 (`../csharp/pbench/Shim.cs`), i.e. the same one-call C reader over the
 flat image, so F# has no separate port and no second wire implementation.
-Formal run `../../results/bench-fsharp-20261124T191738Z.json`.
+Formal run `../../results/bench-fsharp-20261125T043307Z.json`.
 
 `pbwire-fsharp-shim` is the published comparison: the
 generated model is copied into one contiguous unmanaged image per op and one
 C-reader call walks it, so no field crosses the boundary. It is above
-Google.Protobuf on every encode tier (1.11x-2.30x) and on the two small
-decode tiers (1.57x/1.50x). The 2469 B and 74913 B decode rows are below the
-baseline (0.81x, 0.74x): the C decode itself is faster than the reference
+Google.Protobuf on every encode tier (1.11x-2.31x) and on the two small
+decode tiers (1.54x/1.54x). The 2469 B and 74913 B decode rows are below the
+baseline (0.89x, 0.91x): the C decode itself is faster than the reference
 parser, but materialising 3000 ints, 3000 strings, 3000 sub-messages and 3000
 bools into managed objects costs more than the reference parser's whole run.
 These F# rows are native-in/native-out rows. Read the ratios, not the

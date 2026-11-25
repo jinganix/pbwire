@@ -293,4 +293,30 @@ static byte[] LF7(int fnum, byte[] payload) => Cat7(Tag7(fnum, 2), Len7(payload)
     Check(Scalars3.Scalars3Layout.Unmarshal(Array.Empty<byte>()).Equals(new Scalars3()), "T7 empty decodes to default");
 }
 
+// T8: repeated-message Name interning (the Inners fast path): the shim reader
+// decodes the first Inners element's Name once and reuses the reference while
+// the image bytes match (ImageText.Equal); a different Name still decodes to
+// its own value, and the re-encode is byte-identical.
+{
+    var m = new Scalars3
+    {
+        Inners =
+        {
+            new Inner3 { Name = "grandkid", Value = 1 },
+            new Inner3 { Name = "grandkid", Value = 2 },
+            new Inner3 { Name = "other", Value = 3 },
+            new Inner3 { Name = "", Value = 4 },
+        },
+    };
+    var back = Scalars3.Scalars3Layout.Unmarshal(Scalars3.Scalars3Layout.Marshal(m));
+    Check(back.Inners.Count == 4, "T8 inners count");
+    Check(back.Inners[0].Name == "grandkid" && back.Inners[0].Value == 1, "T8 first element");
+    Check(back.Inners[1].Name == "grandkid" && back.Inners[1].Value == 2, "T8 repeated name value");
+    Check(ReferenceEquals(back.Inners[0].Name, back.Inners[1].Name), "T8 repeated name reuses reference");
+    Check(back.Inners[2].Name == "other" && back.Inners[2].Value == 3, "T8 miss decodes");
+    Check(!ReferenceEquals(back.Inners[0].Name, back.Inners[2].Name), "T8 miss is its own reference");
+    Check(back.Inners[3].Name == "" && back.Inners[3].Value == 4, "T8 empty name");
+    Check(Scalars3.Scalars3Layout.Marshal(back).SequenceEqual(Scalars3.Scalars3Layout.Marshal(m)), "T8 re-encodes");
+}
+
 Console.WriteLine($"compat: {checks} checks passed");

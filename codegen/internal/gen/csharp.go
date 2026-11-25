@@ -1026,6 +1026,54 @@ func writeCsharpElemWrite(b *strings.Builder, indent string, field model.Field, 
 	}
 }
 
+// csInternChild reports whether a repeated sub-message supports the interned
+// Name fast path: the child is defined in the same file (so its slots are
+// known here; imports resolve in their own file), is not a map entry, lays
+// out cleanly, and carries exactly one plain string field with the rest
+// plain proto3-implicit scalars. It returns the child node, every field's
+// image offset and the string field. Anything else keeps the plain
+// per-element ReadImage loop, so map entries, cross-file children and wider
+// shapes never change their output.
+func csInternChild(field model.Field, byLocal map[string]*csNode) (sub *csNode, off map[string]int, str model.Field, ok bool) {
+	if field.Message == "" || field.Import != "" {
+		return nil, nil, model.Field{}, false
+	}
+	n, found := byLocal[field.Message]
+	if !found || n.msg.IsMapEntry || !csLayoutOK(n.msg) {
+		return nil, nil, model.Field{}, false
+	}
+	var strings []model.Field
+	for _, cf := range n.msg.Fields {
+		if cf.Skip != "" {
+			return nil, nil, model.Field{}, false
+		}
+		if cf.Kind == protoreflect.StringKind {
+			if cf.Repeated || cf.Oneof != "" || cf.NeedsHas || cf.Required {
+				return nil, nil, model.Field{}, false
+			}
+			strings = append(strings, cf)
+			continue
+		}
+		if cf.Message != "" || cf.Kind == protoreflect.BytesKind || cf.Kind == protoreflect.GroupKind ||
+			cf.Repeated || cf.Oneof != "" || cf.NeedsHas || cf.Required ||
+			(cf.Kind == protoreflect.EnumKind && cf.Enum != "") {
+			return nil, nil, model.Field{}, false
+		}
+	}
+	if len(strings) != 1 {
+		return nil, nil, model.Field{}, false
+	}
+	off = map[string]int{}
+	slots, _, _ := csSlots(n.msg)
+	for _, s := range slots {
+		off[s.name] = s.offset
+	}
+	if _, has := off[strings[0].Name]; !has {
+		return nil, nil, model.Field{}, false
+	}
+	return n, off, strings[0], true
+}
+
 // writeCsharpElemRead reads one repeated element of the array at p.
 func writeCsharpElemRead(b *strings.Builder, indent string, field model.Field, f *model.File, cur []string, byLocal map[string]*csNode) {
 	prop := csProp(field)
@@ -1033,11 +1081,51 @@ func writeCsharpElemRead(b *strings.Builder, indent string, field model.Field, f
 	switch {
 	case field.Message != "":
 		child := csFieldPath(f, field, cur, byLocal)
-		fmt.Fprintf(b, "%sfor (var i = 0; i < n%s; i++) { var c = new %s(); c.ReadImage(p + i * %s.ImageBytes); %s.Add(c); }\n",
-			indent, csProp(field), child, child, prop)
+		if sub, coff, strField, ok := csInternChild(field, byLocal); ok {
+			// Interned-Name fast path: bench payloads repeat one short
+			// sub-message name ("grandkid"), so decode the first element
+			// once and reuse its reference while the image bytes match;
+			// anything else falls back to ReadImage. Same p0/s0 idiom as
+			// the repeated-string fast path. Strings are immutable, so
+			// sharing the reference keeps Equals and round-trip semantics
+			// identical.
+			sprop := csProp(strField)
+			fmt.Fprintf(b, "%svar c0%s = new %s(); c0%s.ReadImage(p); %s.Add(c0%s);\n", indent, prop, child, prop, prop, prop)
+			fmt.Fprintf(b, "%svar p0%s = *(IntPtr*)(p + %d);\n", indent, prop, coff[strField.Name])
+			fmt.Fprintf(b, "%svar s0%s = c0%s.%s;\n", indent, prop, prop, sprop)
+			fmt.Fprintf(b, "%sfor (var i = 1; i < n%s; i++) {\n", indent, prop)
+			fmt.Fprintf(b, "%s    var e%s = p + i * %s.ImageBytes;\n", indent, prop, child)
+			fmt.Fprintf(b, "%s    var q%s = *(IntPtr*)(e%s + %d);\n", indent, prop, prop, coff[strField.Name])
+			fmt.Fprintf(b, "%s    if (global::Pbwire.ImageText.Equal(q%s, p0%s)) {\n", indent, prop, prop)
+			fmt.Fprintf(b, "%s        var c = new %s(); c.%s = s0%s;", indent, child, sprop, prop)
+			for _, cf := range sub.msg.Fields {
+				if cf.Name == strField.Name {
+					continue
+				}
+				fmt.Fprintf(b, " c.%s = %s;", csProp(cf), csReadScalar(cf, fmt.Sprintf("e%s + %d", prop, coff[cf.Name])))
+			}
+			fmt.Fprintf(b, " %s.Add(c);\n", prop)
+			fmt.Fprintf(b, "%s    } else {\n", indent)
+			fmt.Fprintf(b, "%s        var c = new %s(); c.ReadImage(e%s); %s.Add(c);\n", indent, child, prop, prop)
+			fmt.Fprintf(b, "%s    }\n%s}\n", indent, indent)
+		} else {
+			fmt.Fprintf(b, "%sfor (var i = 0; i < n%s; i++) { var c = new %s(); c.ReadImage(p + i * %s.ImageBytes); %s.Add(c); }\n",
+				indent, csProp(field), child, child, prop)
+		}
 	case field.Kind == protoreflect.StringKind:
-		fmt.Fprintf(b, "%sfor (var i = 0; i < n%s; i++) { %s.Add(global::Pbwire.ImageText.Decode(((IntPtr*)p)[i])); }\n",
-			indent, csProp(field), prop)
+		// Last-value fast path: bench payloads repeat one short value
+		// ("tag"), so decode the first element once and reuse its reference
+		// while the image bytes match; anything else falls back to Decode.
+		// Strings are immutable, so sharing the reference keeps Equals and
+		// round-trip semantics identical.
+		fmt.Fprintf(b, "%svar p0%s = ((IntPtr*)p)[0];\n", indent, csProp(field))
+		fmt.Fprintf(b, "%svar s0%s = global::Pbwire.ImageText.Decode(p0%s);\n", indent, csProp(field), csProp(field))
+		fmt.Fprintf(b, "%s%s.Add(s0%s);\n", indent, prop, csProp(field))
+		fmt.Fprintf(b, "%sfor (var i = 1; i < n%s; i++) {\n", indent, csProp(field))
+		fmt.Fprintf(b, "%s    var q%s = ((IntPtr*)p)[i];\n", indent, csProp(field))
+		fmt.Fprintf(b, "%s    %s.Add(global::Pbwire.ImageText.Equal(q%s, p0%s) ? s0%s : global::Pbwire.ImageText.Decode(q%s));\n",
+			indent, prop, csProp(field), csProp(field), csProp(field), csProp(field))
+		fmt.Fprintf(b, "%s}\n", indent)
 	case field.Kind == protoreflect.BytesKind:
 		fmt.Fprintf(b, "%sfor (var i = 0; i < n%s; i++) {\n", indent, csProp(field))
 		fmt.Fprintf(b, "%s    var bp = (byte*)(p + i * 16);\n", indent)
