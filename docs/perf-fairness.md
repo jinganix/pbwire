@@ -143,3 +143,72 @@ numbers below are the pre-sweep runs until then):
   shim-decode plan-image reuse; PHP/R tree arms reuse the input
   array/table (freshness is the Message/builder); ObjC pad-`str` payload;
   Swift cross-run comparison.
+
+## 8. Output format and timer boundary (from BENCHMARKS.md)
+
+Every harness prints one block per case (throughput over wire bytes, higher
+is better):
+
+```
+<case>: <bytes> bytes, <iterations> iterations (repeat field x<repeats>)
+  impl      op           ns/op       MB/s
+  <impl>    encode        ...        ...
+  <base>    encode        ...        ...
+  <impl>    decode        ...        ...
+  <base>    decode        ...        ...
+```
+
+`ns/op` and `MB/s` are two views of the same measurement
+(`MB/s = bytes / ns/op * 1000`). The comma and the iteration count are
+optional: a harness that calibrates per op (Go, Python) has no single count
+for a case, and `scripts/bench-record.py` accepts the shorter header.
+`make bench-c` adds one more block per case
+(`pbwire-c1`: the C binding's one-shot API, which compiles the layout on every
+call) after the standard rows; only the standard block is aggregated
+below.
+Rows are named by the shipped entry point they time. The published comparison
+is the struct-passing headline: one native object in, one codec call -- the
+same task the generated baseline runs when it fills its struct. `shim` is that
+task in one crossing: C reads the host's memory through a layout table, with
+no intermediate tree. `shim-ffi` (PHP only) is the same array API on the
+no-compiler `ext-ffi` deployment. Go's `-par` rows time the same thin-model ops
+across `GOMAXPROCS` goroutines. The JVM bindings and Clojure publish the
+generated-model `core`: the same pure-Java runtime with shipped ergonomics
+(the mutable-message fast path on Clojure). The per-field `tree` arm -- a
+native object in and out through the shipped per-field API, no prebuilt tree
+before the timer -- is a `pbench/`-only arm now: compared in
+`bindings/<lang>/pbench/README.md`, never pasted here. Anything else a harness
+prints -- the prebuilt-handle `proxy` task, pure host-language `core` ports,
+Go's per-field `dync` tree, the vendored `cshim` candidate, the one-crossing
+JNI ceiling -- lives in the same place.
+
+Timer boundary (all bindings): a fresh native object per iteration, allocation
+and `free`/`close` inside the timer, deep materialization of every
+gate-checked field. Headline encode arms build that input fresh inside the
+timer on both sides (new + set + encode, the real scenario); reused
+encode buffers stay allowed only where the harness already does it and says
+so. A steady-state reference row (app-owned input reused across iterations)
+may stay in a harness labeled as such, but it is never the pasted headline.
+Plain-data fixtures may be reused across iterations
+(fixture-reuse ruling, `docs/perf-attempts.md` Python worker D3).
+
+The Python harness names its ops by the task as well as the representation
+(`encode(data)`, `decode(bytes)`, `to_dict(bytes)`): a
+dict-based binding has two representations, and the row name says which one the
+timer covers.
+
+## 9. Per-harness correctness gates (from BENCHMARKS.md)
+
+Correctness first everywhere: the core bench verifies byte-for-byte equality
+before timing, the C and Python benches check their bytes against the
+`protoc`-produced reference (plus a decode→encode round trip) before timing,
+the Java, Kotlin, Ruby, Rust, C#, PHP and Zig harnesses
+require their bytes to equal the official encoder's bytes before timing
+anything, the Swift, Scala, Elixir, F#, Clojure and Julia harnesses do
+the same against swift-protobuf / ScalaPB / elixir-protobuf / Google.Protobuf /
+protobuf-java / ProtoBuf.jl respectively
+(the R harness gates on the tier sizes, baseline byte equality, plus a full decode round trip, since
+R cannot spell INT32_MIN distinctly from NA), and the Erlang and Elixir harnesses require the pinned wire size and byte
+equality (encode, plus re-encoding a decoded reference) plus a field-by-field read-back of the decoded record/struct
+from every backend
+before timing.

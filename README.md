@@ -220,7 +220,7 @@ The one-row summary is here; the detail is there.
 | [Rust](bindings/rust/) | static link | 2.02x (xlarge) / 1.86x (xlarge) `shim` vs prost | [prost](https://github.com/tokio-rs/prost) |
 | [C#](bindings/csharp/) | P/Invoke | 1.32x (xlarge) / 0.77x (xlarge) `shim` | [Google.Protobuf](https://www.nuget.org/packages/Google.Protobuf) |
 | [Go](bindings/go/) | thin generated models, pure-Go engine, no cgo | 1.36x (xlarge) / 1.33x (xlarge) | [google.golang.org/protobuf](https://pkg.go.dev/google.golang.org/protobuf) |
-| [Erlang](bindings/erlang/) | NIF | 3.00x (xlarge) / 1.52x (xlarge) | [gpb](https://github.com/tomas-abrahamsson/gpb) |
+| [Erlang](bindings/erlang/) | NIF | 2.95x (xlarge) / 1.59x (xlarge) | [gpb](https://github.com/tomas-abrahamsson/gpb) |
 | [Lua](bindings/lua/) | C module, tables + builder | 0.98x (xlarge, tie) / 1.47x (xlarge) `shim` | [lua-protobuf](https://github.com/starwing/lua-protobuf) |
 | [Swift](bindings/swift/) | SwiftPM, static link | 3.24x (xlarge) / 2.54x (xlarge) `shim` | [swift-protobuf](https://github.com/apple/swift-protobuf) |
 | [Scala](bindings/scala/) | Java runtime + DSL | 211.33x (xlarge) / 0.30x (xlarge) `core` (case class) | [ScalaPB](https://github.com/scalapb/ScalaPB) |

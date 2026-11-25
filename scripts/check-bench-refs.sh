@@ -11,9 +11,9 @@
 #       script inserts under) embeds its chart too;
 #   (b) `ORDER` in `scripts/bench-compare.py` matches the at-a-glance row
 #       order in BENCHMARKS.md (deduped: the two core rows collapse to one);
-#   (c) every ratio cell in the at-a-glance table, the per-binding `xlarge:`
-#       one-liners, the "Bindings vs their baselines" xlarge column, the
-#       binding README tier tables, and the top-level README picker table
+#   (c) every ratio cell in the at-a-glance table (now carrying the merged
+#       harness + baseline columns), the per-binding `xlarge:` one-liners,
+#       the binding README tier tables, and the top-level README picker table
 #       matches its cited `results/bench-<lang>-20261124*.json` formal run
 #       within rounding (markers: displayed ratio >= 1.0 <=> ✅).
 #
@@ -33,8 +33,7 @@
 #
 # Invocation: ./scripts/check-bench-refs.sh
 # Run it before and after every BENCHMARKS.md / README / binding-README edit
-# (plan Tasks D2-D4). Exit 0 = green (KNOWN-EXCEPTION lines are pre-existing
-# drift being tracked, not passes); exit 1 = drift with file:line details.
+# (plan Tasks D2-D4). Exit 0 = green; exit 1 = drift with file:line details.
 #
 # NOT wired into scripts/check.sh on purpose: results/ is git-ignored, so a
 # fresh checkout has no JSON records and part (c) would have nothing to check.
@@ -288,17 +287,7 @@ for line in blines[sec:nxt]:
 if seq == ORDER:
     print("check-bench-refs: (b) ORDER matches at-a-glance order (%d rows)" % len(seq))
 else:
-    # Single documented exception: Dart sits right after Node in the table
-    # while ORDER lists it after PHP (pre-existing drift; normalize the row
-    # or ORDER in D2 and drop this branch).
-    moved = [x for x in ORDER if x != "dart"]
-    moved.insert(moved.index("node") + 1, "dart")
-    if seq == moved:
-        notices.append("KNOWN-EXCEPTION (b): at-a-glance lists Dart after "
-                       "Node, ORDER lists it after PHP; otherwise in sync "
-                       "(%d rows)" % len(seq))
-    else:
-        fails.append("(b) at-a-glance order %s != ORDER %s" % (seq, ORDER))
+    fails.append("(b) at-a-glance order %s != ORDER %s" % (seq, ORDER))
 
 # ---------- (c) ratios vs cited results/*.json ----------
 have_results = bool(glob.glob(os.path.join(RESULTS, "bench-*.json")))
@@ -390,7 +379,7 @@ else:
                                float(rm.group(1)), rm.group(2), base_vals,
                                "%s:%d" % (os.path.relpath(path, ROOT), ln))
 
-    # at-a-glance + baselines tables + stub one-liners + picker
+    # at-a-glance + stub one-liners + picker
     AAG = blines[sec:nxt]
     for line in AAG:
         if not line.startswith("|") or line.startswith("|---") \
@@ -415,37 +404,15 @@ else:
                               float(rm.group(1)), rm.group(2),
                               "at-a-glance %s" % key, hint)
 
-    # "Bindings vs their baselines" xlarge column: ratios only, no MB/s.
-    # Parenthesized asides quote other tiers (prose-level, D3 owns those);
-    # the column contract is the bare encode/decode pair.
-    bsec = blines.index("## Bindings vs their baselines")
-    bnx = next(i for i in range(bsec + 1, len(blines)) if blines[i].startswith("## "))
-    for line in blines[bsec:bnx]:
+    # "Bindings vs their baselines" is merged into the at-a-glance table (D2):
+    # every at-a-glance row must carry the harness + baseline that produced it.
+    for line in AAG:
         if not line.startswith("|") or line.startswith("|---") \
-                or line.startswith("| binding |"):
+                or line.startswith("| binding"):
             continue
         cells = [c.strip() for c in line.strip().strip("|").split("|")]
-        if len(cells) < 5:
-            continue  # the runtime/entry-points key, not the xlarge table
-        key = cells[0].split("(")[0].strip().lower()
-        key = {"core": "core", "c structs": "c", "c++": "c",
-               "erlang/otp nif": "erlang", "c#": "csharp",
-               "f#": "fsharp", "objective-c": "objc"}.get(key, key.split()[0])
-        if key not in RUN:
-            continue
-        case_bytes = 85933 if key == "core" else 74913
-        bare = re.sub(r"\(.*?\)", "", cells[4])
-        parts = bare.split("/")
-        for n, part in enumerate(parts[:2]):
-            hint = "encode" if n == 0 else "decode"
-            for rm in RATIO.finditer(part):
-                marker = rm.group(2)
-                if marker is None:
-                    allm = re.findall(r"(✅|❌)", cells[4])
-                    marker = allm[-1] if allm else None
-                check_ratio_exists(key, case_bytes, float(rm.group(1)),
-                                   "baselines-table %s %s" % (key, hint),
-                                   hint, marker)
+        if len(cells) < 6 or not cells[1] or not cells[5]:
+            fails.append("at-a-glance merged row missing harness/baseline: %s" % line[:120])
 
     # stub `xlarge:` one-liners: section -> binding via its README link
     STUB = re.compile(r"xlarge:\s*encode\s*(\d+\.\d+)\s*\((\d+\.\d+)x\s*(✅|❌)?\)"
@@ -493,14 +460,6 @@ else:
         d = dm.group(1)
         prefix = {"cpp": "c"}.get(d, d)
         if prefix not in RUN or "(xlarge)" not in cells[2]:
-            continue
-        # KNOWN-EXCEPTION (c): the Erlang picker row still quotes the 20261123
-        # run (3.00x/1.52x); every other Erlang table quotes the formal
-        # 20261124 run (2.95x/1.59x). Refresh the picker; then drop this.
-        if d == "erlang":
-            notices.append("KNOWN-EXCEPTION (c): README picker Erlang row "
-                           "quotes the 20261123 run (3.00x/1.52x), not the "
-                           "formal 20261124 run (2.95x/1.59x)")
             continue
         case_bytes = 85933 if prefix == "core" else 74913
         # strip parenthesized asides quoting other tiers (e.g. Clojure's

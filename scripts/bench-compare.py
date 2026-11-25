@@ -132,8 +132,8 @@ def absolute_table(rows, left, right, keys):
 
 
 # Section order: the at-a-glance order of BENCHMARKS.md, then anything else.
-ORDER = ["core", "c", "go", "python", "java", "kotlin", "node", "ruby", "objc",
-         "php", "dart", "rust", "csharp", "lua", "erlang", "swift", "scala",
+ORDER = ["core", "c", "go", "python", "java", "kotlin", "node", "dart", "ruby", "objc",
+         "php", "rust", "csharp", "lua", "erlang", "swift", "scala",
          "elixir", "zig", "fsharp", "clojure", "julia", "r"]
 
 
