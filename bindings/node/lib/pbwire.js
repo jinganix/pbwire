@@ -199,26 +199,6 @@ class MessageType {
     return this.decodeObject(bytes, opts);
   }
 
-  /** Encode a flat image (an ArrayBuffer built by
-   * `pbench/layout-matrix3.js`) in one addon call; returns the wire bytes
-   * as a Buffer. Only structtest.Scalars3 has a layout. */
-  encodeImage(image) {
-    if (!(image instanceof ArrayBuffer)) {
-      throw new TypeError('pbwire: encodeImage expects an ArrayBuffer');
-    }
-    return addon.encodeImage(this._handle, image);
-  }
-
-  /** Decode wire bytes into a flat image (an ArrayBuffer to read back with
-   * `pbench/layout-matrix3.js` decode) in one addon call. Only
-   * structtest.Scalars3 has a layout. */
-  decodeImage(bytes, opts) {
-    if (!Buffer.isBuffer(bytes)) {
-      throw new TypeError('pbwire: decodeImage expects a Buffer');
-    }
-    return addon.decodeImage(this._handle, bytes, opts);
-  }
-
   /** Decode wire bytes into a Message; throws on malformed input. A
    * trailing {maxBytes, maxDepth} caps untrusted input. */
   decode(bytes, opts) {

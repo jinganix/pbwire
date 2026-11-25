@@ -77,10 +77,7 @@ protoc -I"$(dirname "$proto")" \
 
 rm -rf "$out"
 mkdir -p "$out"
-# The Structtest_* Java generated model rides along: the committed Scala
-# matrix3Gen case classes delegate wire I/O to it (Kotlin pattern).
-javac -nowarn -d "$out" "$root"/bindings/java/runtime/*.java \
-    "$root"/bindings/java/tests/gen/Structtest_*.java
+javac -nowarn -d "$out" "$root"/bindings/java/runtime/*.java
 CP="$out:$scalapb_jar:$lenses_jar:$proto_jar:$scala3_jar:$scala_lib_jar"
 # tests/gen/matrix3{,_meta}.scala is the committed generated model (core arm).
 scalac -nowarn -cp "$CP" -d "$out" \

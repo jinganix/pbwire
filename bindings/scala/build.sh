@@ -36,12 +36,9 @@ CP="$here/out/classes:$SCALA_CP"
 
 # The Java runtime: the only codec in this binding (plain javac, like
 # bindings/java/build.sh). No Maven, no Gradle, no JNI, no native library.
-# The Structtest_* generated model rides along: the committed Scala
-# matrix3Gen case classes delegate wire I/O to it (Kotlin pattern).
 rm -rf "$here/out/classes"
 mkdir -p "$here/out/classes"
-javac -nowarn -d "$here/out/classes" "$root"/bindings/java/runtime/*.java \
-    "$root"/bindings/java/tests/gen/Structtest_*.java
+javac -nowarn -d "$here/out/classes" "$root"/bindings/java/runtime/*.java
 
 # The Scala DSL (default package: the Java runtime is not importable from
 # a named package), the self-check, the example and the conformance testee.

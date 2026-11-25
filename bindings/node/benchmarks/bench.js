@@ -8,8 +8,8 @@
 
  * identical bytes before anything is timed.
  *
- * Five pbwire rows, named by the mechanism they time. The first four time
- * the same native-in/native-out task; the fifth is the prebuilt handle:
+ * Four pbwire rows, named by the mechanism they time. The first three time
+ * the same native-in/native-out task; the fourth is the prebuilt handle:
  *
  *   pbwire-node-tree  a native object in and out through the shipped
  *                     per-field API: build a fresh `Message` with one `set()`
@@ -18,10 +18,6 @@
  *                     Fresh handle per iteration, freed inside the timer.
  *   pbwire-node-shim  the native object in, wire out and wire in, native
  *                     object out: one addon call, the object walked in C.
- *   pbwire-node-shim-image
- *                     the flat image (pbench/layout-matrix3.js) in, wire
- *                     out and wire in, flat image out: one addon call, the
- *                     image walked in C with no per-field property reads.
  *   pbwire-node-core  the same native object and the same task on the pure
  *                     TypeScript core: no native library, no boundary.
  *   pbwire-node-proxy encode/decode of a `Message` handle built (and read)
@@ -32,7 +28,6 @@
  *   ./bench.sh        generate, build, run
  */
 
-const assert = require('node:assert');
 const path = require('node:path');
 
 const { Schema } = require(path.join(__dirname, '..', 'lib', 'pbwire'));
@@ -43,8 +38,6 @@ const treeArm = require(path.join(__dirname, '..', 'pbench', 'a-tree'));
 const coreArm = require(path.join(__dirname, '..', 'pbench', 'c-core'));
 // The pbench payload: the same native object the tree/shim/core arms time.
 const { nativeObject } = require(path.join(__dirname, '..', 'pbench', 'payload'));
-// The flat-image layout the shim-image arm encodes in one addon call.
-const layoutMatrix3 = require(path.join(__dirname, '..', 'pbench', 'layout-matrix3'));
 const { Scalars3, Inner3, Color3 } = require(path.join(__dirname, 'gen', 'matrix3_pb.js'));
 
 /* Second baseline: protobufjs, the fastest widely used JS runtime. Optional:
@@ -325,45 +318,7 @@ function main() {
             message.free();
             continue;
         }
-        // The shim-image arm: the flat image in, wire out in one call.
-        if (typeof type.encodeImage !== 'function' ||
-            typeof type.decodeImage !== 'function') {
-            console.log(`FAIL ${label}: shim-image arm missing: encodeImage/decodeImage`);
-            failures++;
-            message.free();
-            continue;
-        }
-        const imageWire = type.encodeImage(layoutMatrix3.encode(shimObject));
-        if (!imageWire.equals(reference)) {
-            console.log(`FAIL ${label}: pbwire-node-shim-image encodes differently`);
-            failures++;
-            message.free();
-            continue;
-        }
-        const imageBack = layoutMatrix3.decode(type.decodeImage(reference));
-        // Field-by-field vs the oracle input: the decoded image must equal
-        // the native object the reference bytes were built from, every
-        // field (scalars, strings, nested, repeated, optionals) included.
-        let imageOk = true;
-        try {
-            assert.deepStrictEqual(imageBack, shimObject);
-        } catch {
-            imageOk = false;
-        }
-        if (!imageOk) {
-            console.log(`FAIL ${label}: pbwire-node-shim-image decode differs`);
-            failures++;
-            message.free();
-            continue;
-        }
-        if (!type.encodeImage(layoutMatrix3.encode(imageBack)).equals(reference)) {
-            console.log(`FAIL ${label}: pbwire-node-shim-image re-encode differs`);
-            failures++;
-            message.free();
-            continue;
-        }
         console.log(`OK   ${label} encoding parity, x${repeats} (${reference.length} bytes)`);
-        console.log(`OK   ${label} shim-image parity, x${repeats} (${reference.length} bytes)`);
 
         // Headline encode rows: fresh native input per iteration inside the
         // timer (message preparation included), on both sides. Proxy rows
@@ -379,10 +334,6 @@ function main() {
         const coreDecodeNs = measure(iterations, () => coreArm.unmarshal(reference));
         const shimEncodeNs = measure(iterations, () => type.encodeObject(nativeObject(repeats)));
         const shimDecodeNs = measure(iterations, () => type.decodeToObject(reference));
-        const shimImageEncodeNs = measure(iterations,
-            () => type.encodeImage(layoutMatrix3.encode(nativeObject(repeats))));
-        const shimImageDecodeNs = measure(iterations,
-            () => layoutMatrix3.decode(type.decodeImage(reference)));
         const officialEncodeNs = measure(iterations, () => fillOfficial(repeats).serializeBinary());
         const officialDecodeNs = measure(iterations, () => Scalars3.deserializeBinary(reference));
         let pjs = null;
@@ -407,7 +358,6 @@ function main() {
             `${'MB/s'.padStart(10)}`);
         row('pbwire-node-tree', 'encode', reference.length, encodeNs);
         row('pbwire-node-shim', 'encode', reference.length, shimEncodeNs);
-        row('pbwire-node-shim-image', 'encode', reference.length, shimImageEncodeNs);
         row('pbwire-node-core', 'encode', reference.length, coreEncodeNs);
         row('pbwire-node-proxy', 'encode', reference.length, proxyEncodeNs);
         row('google-protobuf', 'encode', reference.length, officialEncodeNs);
@@ -416,7 +366,6 @@ function main() {
         }
         row('pbwire-node-tree', 'decode', reference.length, decodeNs);
         row('pbwire-node-shim', 'decode', reference.length, shimDecodeNs);
-        row('pbwire-node-shim-image', 'decode', reference.length, shimImageDecodeNs);
         row('pbwire-node-core', 'decode', reference.length, coreDecodeNs);
         row('pbwire-node-proxy', 'decode', reference.length, proxyDecodeNs);
         row('google-protobuf', 'decode', reference.length, officialDecodeNs);

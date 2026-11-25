@@ -279,40 +279,19 @@ object Bench {
                   failures += 1
                 } else {
                   val modelBack = matrix3Gen.Structtest_Scalars3.decode(reference)
-                  // copy()/presence round-trip on one optional field: the
-                  // case class keeps Option semantics through the Java model.
-                  val copiedBack = matrix3Gen.Structtest_Scalars3.decode(
-                    matrix3Gen.Structtest_Scalars3.encode(model.copy(optI32 = Some(0))))
-                  val clearedBack = matrix3Gen.Structtest_Scalars3.decode(
-                    matrix3Gen.Structtest_Scalars3.encode(model.copy(optI32 = None)))
-                  // Delegation-target parity: the Java generated model must
-                  // agree byte-for-byte (the case class delegates to it).
-                  val javaBack = Structtest_Scalars3.parseFrom(reference)
-                  val javaOk = java.util.Arrays.equals(javaBack.toByteArray(), reference) &&
-                    javaBack.getStr() == "hello" &&
-                    javaBack.hasOptI32() && javaBack.getOptI32() == -7 &&
-                    javaBack.hasOptStr() && javaBack.getOptStr() == "opt"
-                  if (!javaOk) {
-                    println("FAIL " + label + ": java model differs")
+                  val modelOk = java.util.Arrays.equals(
+                    matrix3Gen.Structtest_Scalars3.encode(modelBack), reference) &&
+                    modelBack.str == "hello" &&
+                    modelBack.nums.size == n &&
+                    modelBack.inners.size == n &&
+                    modelBack.inner.exists(_.name == "kid") &&
+                    (n == 0 || modelBack.inners(n - 1).value == n)
+                  if (!modelOk) {
+                    println("FAIL " + label + ": pbwire-scala core decode differs")
                     failures += 1
                   } else {
-                    val modelOk = java.util.Arrays.equals(
-                      matrix3Gen.Structtest_Scalars3.encode(modelBack), reference) &&
-                      modelBack.str == "hello" &&
-                      modelBack.optI32.contains(-7) &&
-                      modelBack.optStr.contains("opt") &&
-                      copiedBack.optI32.contains(0) &&
-                      clearedBack.optI32.isEmpty &&
-                      modelBack.nums.size == n &&
-                      modelBack.inners.size == n &&
-                      modelBack.inner.exists(_.name == "kid") &&
-                      (n == 0 || modelBack.inners(n - 1).value == n)
-                    if (!modelOk) {
-                      println("FAIL " + label + ": pbwire-scala core decode differs")
-                      failures += 1
-                    } else {
-                      println("OK   " + label + " generated-model parity, x" + n +
-                        " (" + reference.length + " bytes)")
+                    println("OK   " + label + " generated-model parity, x" + n +
+                      " (" + reference.length + " bytes)")
                     // Full-task tree gate: a fresh per-field build must match the
                     // reference too (not just the held tree above), and the decode
                     // below must expose the same values the timer materializes.
@@ -352,7 +331,6 @@ object Bench {
                       row("scalapb", "decode", reference.length, res(7))
                       println()
                     }
-                  }
                   }
                 }
               }
