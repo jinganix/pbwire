@@ -3621,3 +3621,41 @@ stub lacks `memchr`, which `src/json.c` now uses) — flash totals above
 come from a patched script copy plus a direct `pbw_struct.o` compile; the
 script itself is untouched. Caveat: flash was measured out-of-tree — any
 future promotion must re-measure inside a real firmware link.
+
+## Cell: Scala `core` vs ScalaPB (generated-passing plan Task 4 — case class over the Java model rejected, 2026-11-25)
+
+`matrix3Gen` case classes in `bindings/scala/tests/gen/matrix3.scala` now
+delegate wire I/O to the committed pbwire Java generated model
+(`bindings/java/tests/gen/Structtest_*`, the same facade the Kotlin
+binding's `matrix3.kt` builds via inline DSL sugar): `encode` fills a
+fresh Java `Builder` and calls `toByteArray` per iteration (same
+fresh-task shape as the ScalaPB row); `decode` runs `parseFrom` plus a
+`load` conversion to the case class. `fill`/`load` changed signatures
+from `Message` to the Java `Builder`/message; the `ty` schema handle
+stays pinned for conformance paths (`matrix3_meta.scala` untouched).
+`bench.sh`/`build.sh` compile `Structtest_*.java` beside the runtime
+(same narrow glob the Clojure Task-2 `bench.sh` uses). Byte gates
+(`encode == reference`, re-encode round-trip, `copy()`/`Option` presence
+on `optI32`, Java-model cross-check) pass on all four tiers. Formal run
+`results/bench-scala-20261125T103906Z.json` (interleaved per-op
+calibration, so the host load ~8 on 14 cores hits both sides equally;
+speed ratios, higher means pbwire faster):
+
+| tier | enc core/pbuf | dec core/pbuf | dec core/tree |
+|---|---|---|---|
+| 136 B | 0.32x | 0.52x | 0.68x |
+| 174 B | 0.44x | 0.50x | 0.91x |
+| 2469 B | (7.42x baseline collapse, ignore) | 0.35x | 0.67x |
+| 74913 B | (178x baseline collapse, ignore) | 0.42x | 0.69x |
+
+Rejected per the bar (decode >= 1.0x vs ScalaPB): decode sits at
+0.35x-0.52x doing the same fold as the baseline — the pbwire Java
+generated model still decodes through the generic table-driven `PbCodec`
+runtime, not a compiled per-message parser, so the parse itself is the
+gap (same mechanism as the Clojure Task-2 rejection, wider here because
+ScalaPB's parser is faster than protobuf-java's). The large/xlarge encode
+cells are the known ScalaPB baseline collapse (7.76x/211.33x in the plan;
+~7x/~178x on this host), never quoted as a win. `make scala-test`
+(generated test ok: 25 checks) and `make conformance-java` (2766 binary +
+443 text/JSON, only the 2 known tag-truncation failures) stay green; no
+headline change.
