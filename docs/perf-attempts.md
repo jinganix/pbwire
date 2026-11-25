@@ -3619,4 +3619,5 @@ clean, `src/` untouched (no `difftest` owed). Note: `make embedded-size`
 fails at BASE on this host (GCC 16: the script's freestanding `string.h`
 stub lacks `memchr`, which `src/json.c` now uses) — flash totals above
 come from a patched script copy plus a direct `pbw_struct.o` compile; the
-script itself is untouched.
+script itself is untouched. Caveat: flash was measured out-of-tree — any
+future promotion must re-measure inside a real firmware link.

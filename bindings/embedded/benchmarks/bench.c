@@ -334,14 +334,16 @@ run_case(pbwe_box *box, const pbw_descriptor *desc, pbw_struct_codec *codec,
         pbw_struct_arena *a = sarena;
 
         memset(&ds, 0, sizeof(ds));
-        if (pbw_struct_codec_decode(codec, wire_pb, wire_pb_len, &a, &ds) !=
+        /* Same buffer the gate validated (struct bytes == wire_nb, decode
+         * of wire_nb re-encodes byte-identical): the parity claim is strict. */
+        if (pbw_struct_codec_decode(codec, wire_nb, wire_nb_len, &a, &ds) !=
             PBW_OK) {
             return 0;
         }
         sink += (long)ds.n_samples;
     }
     t1 = now_ns();
-    report("pbwire-struct", "decode", (t1 - t0) / iters, wire_pb_len);
+    report("pbwire-struct", "decode", (t1 - t0) / iters, wire_nb_len);
 
     /* ---- decode ---- */
     t0 = now_ns();
