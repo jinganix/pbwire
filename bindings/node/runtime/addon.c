@@ -3079,8 +3079,6 @@ copy_encoded(napi_env env, napi_callback_info info)
 #define IMG_OFF_OPT_I32_PRESENT 77
 #define IMG_OFF_OPT_I32 78
 #define IMG_OFF_OPT_STR_PRESENT 82
-#define IMG_FIELD_INNER 16
-#define IMG_FIELD_INNERS 19
 
 /* Every resolved field of Scalars3: the singular entries plus the inner
  * child's name/value entries from its sub-table. */
@@ -3382,7 +3380,7 @@ encode_image(napi_env env, napi_callback_info info)
         if (!img_avail(&r, (size_t)len + 4)) {
             return fail_argument(env, "encodeImage: image too small");
         }
-        child = pbw_message_set_message(msg, IMG_FIELD_INNER);
+        child = pbw_message_set_message(msg, f.inner->number);
         if (child == NULL) {
             return fail_argument(env, "cannot set the nested message field");
         }
@@ -3455,7 +3453,7 @@ encode_image(napi_env env, napi_callback_info info)
             if (!img_avail(&r, (size_t)len + 4)) {
                 return fail_argument(env, "encodeImage: image too small");
             }
-            child = pbw_message_set_message(msg, IMG_FIELD_INNERS);
+            child = pbw_message_set_message(msg, f.inners->number);
             if (child == NULL) {
                 return fail_argument(env,
                                      "cannot set the nested message field");

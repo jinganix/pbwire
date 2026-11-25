@@ -32,6 +32,7 @@
  *   ./bench.sh        generate, build, run
  */
 
+const assert = require('node:assert');
 const path = require('node:path');
 
 const { Schema } = require(path.join(__dirname, '..', 'lib', 'pbwire'));
@@ -340,15 +341,15 @@ function main() {
             continue;
         }
         const imageBack = layoutMatrix3.decode(type.decodeImage(reference));
-        const imageOk = imageBack.str === 'hello'
-            && imageBack.inner.name === 'kid'
-            && imageBack.inner.value === 42
-            && (imageBack.nums ?? []).length === repeats
-            && (imageBack.inners ?? []).length === repeats
-            && (repeats === 0 || imageBack.inners[repeats - 1].value === repeats)
-            && imageBack.opt_i32 === -7
-            && imageBack.u64 === 18446744073709551615n
-            && imageBack.color === 2;
+        // Field-by-field vs the oracle input: the decoded image must equal
+        // the native object the reference bytes were built from, every
+        // field (scalars, strings, nested, repeated, optionals) included.
+        let imageOk = true;
+        try {
+            assert.deepStrictEqual(imageBack, shimObject);
+        } catch {
+            imageOk = false;
+        }
         if (!imageOk) {
             console.log(`FAIL ${label}: pbwire-node-shim-image decode differs`);
             failures++;
