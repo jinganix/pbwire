@@ -3576,3 +3576,47 @@ parse itself is the gap and no amount of hinting on the Clojure side closes
 it. `make clojure-test` (4 tests, 46 assertions, 0 failures) stays green;
 the arm stays in the harness as a labeled experimental row, no headline
 change.
+
+## Cell: embedded struct-codec direct path (generated-passing plan Task 3 — rejected, 2026-11-25)
+
+Spike: `pbwire-struct` arm in `bindings/embedded/benchmarks/bench.c` over
+the generated struct for `benchmarks/msg.proto` (pinned at
+`benchmarks/gen/msg.h`, produced by `protoc-gen-pbwire-c`, never in
+`bindings/c/tests/gen`). Compiled codec (`pbw_struct_codec_init` once on
+`box.schema`) + caller-memory arena (`pbw_struct_arena_new_mem`, 64 KB
+static block: the x3000 decode grows its repeated array by doubling, so
+~2x the 12 KB final plus slack overflows 32 KB with PBW_ERR_NOMEM).
+Encode fills a fresh struct per iteration and encodes via the reused
+`pbw_struct_buf` (steady-state allocates nothing); decode memsets a caller
+struct and decodes into the arena (next decode resets it, zero per-decode
+allocation). Gate per tier: struct bytes == nanopb bytes plus the pinned
+sizes (52/55/154/5928 B), field checks (id/label/samples), decode +
+re-encode byte check.
+
+`make embedded-bench` (four same-host runs, ratios struct/nanopb):
+
+| tier | enc | dec |
+|---|---|---|
+| x0 | 4.6x-5.8x | 7.4x-8.2x |
+| x1 | 4.7x-6.4x | 6.9x-8.8x |
+| x100 | 2.7x-3.8x | 2.7x-2.9x |
+| x3000 | 2.9x-3.1x | 2.5x-3.0x |
+
+The time prong passes decisively: the x100/x3000 headline gap (tree
+~0.5x, the ~45% deficit this spike targets) closes and reverses to ~3x,
+and struct decode beats the tree decode on every tier of every run.
+Flash prong fails: `pbw_struct.o` is 7303 B text (`-Os -mthumb`, same
+flags as `scripts/mcu-size.sh`) plus 416 B `.rodata` for the generated
+8-row table — about +7.7 KB, +17% over the measured 46295 B codec total
+(+20% over the README's 39211 B narrative number; nanopb stays 7021 B).
+The current budget narrative (fixed codec for every type vs 7 KB for one)
+cannot absorb a second fixed engine without changing, and a struct-only
+firmware that GCs the tree objects is unmeasured re-architecture, not this
+spike. Per the bar (time AND flash, else rejection): REJECTED, no headline
+change, no doc-number changes. The arm stays in the harness as a labeled
+spike row. `make test` green (incl. `test_embedded`), `make format-check`
+clean, `src/` untouched (no `difftest` owed). Note: `make embedded-size`
+fails at BASE on this host (GCC 16: the script's freestanding `string.h`
+stub lacks `memchr`, which `src/json.c` now uses) — flash totals above
+come from a patched script copy plus a direct `pbw_struct.o` compile; the
+script itself is untouched.
