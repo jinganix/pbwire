@@ -181,8 +181,8 @@ The old tree-API encode row (0.39x-0.58x) retired with the fairness contract
 Generated code still wins a few published cells: the JVM `core` decode (Java
 0.84x, Kotlin 0.77x, Scala 0.30x — all three ride the same pure-Java runtime,
 and Clojure's `core` trails on both ops at 0.26x/0.74x), Node's `shim`
-(0.19x/0.13x of protobufjs), the managed materialization on C#/F# `shim`
-decode at 74 KB (0.77x/0.74x), and the two xlarge-encode ties (Lua 0.98x, ObjC
+(0.19x/0.14x of protobufjs), the managed materialization on C#/F# `shim`
+decode at 74 KB (0.90x/0.91x), and the two xlarge-encode ties (Lua 0.98x, ObjC
 0.97x — each inside its run-to-run band). Everything else in the table is at
 or above the official runtime. `make bench-docker` runs the
 same harnesses in a Linux container and `make bench-compare` pairs the two runs
@@ -213,12 +213,12 @@ The one-row summary is here; the detail is there.
 | [Ruby](bindings/ruby/) | C extension, linked | 5.03x (xlarge) / 6.11x (xlarge) `shim` | [google-protobuf gem](https://rubygems.org/gems/google-protobuf) |
 | [Java](bindings/java/) | pure-Java codec, no native code | 1.00x (xlarge) / 0.84x (xlarge) `core` (generated model; encode rounds to parity — 443.9 vs 445.0 MB/s, a coin-flip inside the ±10% JVM band) | [protobuf-java](https://github.com/protocolbuffers/protobuf/tree/main/java) |
 | [Kotlin](bindings/kotlin/) | Java runtime + DSL | 27.74x (xlarge) / 0.77x (xlarge) `core` | [protobuf-kotlin](https://github.com/protocolbuffers/protobuf/tree/main/java/kotlin) |
-| [Node](bindings/node/) | N-API addon | 0.19x (xlarge) / 0.13x (xlarge) `shim` vs protobufjs | [protobufjs](https://www.npmjs.com/package/protobufjs) |
+| [Node](bindings/node/) | N-API addon | 0.19x (xlarge) / 0.14x (xlarge) `shim` vs protobufjs | [protobufjs](https://www.npmjs.com/package/protobufjs) |
 | [Objective-C](bindings/objc/) | ARC wrapper | 0.97x (xlarge) / 1.16x (xlarge) `tree` (fresh build per iteration) | [protobuf-objc](https://github.com/protocolbuffers/protobuf/tree/main/objectivec) |
 | [PHP](bindings/php/) | C extension | 2.94x (xlarge) / 2.81x (xlarge) `shim` vs C ext | [protobuf-php](https://github.com/protocolbuffers/protobuf/tree/main/php) |
 | [Dart](bindings/dart/) | `dart:ffi` | 1.82x (xlarge) / 4.84x (xlarge) `shim` | [protobuf-dart](https://pub.dev/packages/protobuf) |
 | [Rust](bindings/rust/) | static link | 2.02x (xlarge) / 1.86x (xlarge) `shim` vs prost | [prost](https://github.com/tokio-rs/prost) |
-| [C#](bindings/csharp/) | P/Invoke | 1.32x (xlarge) / 0.77x (xlarge) `shim` | [Google.Protobuf](https://www.nuget.org/packages/Google.Protobuf) |
+| [C#](bindings/csharp/) | P/Invoke | 1.32x (xlarge) / 0.90x (xlarge) `shim` | [Google.Protobuf](https://www.nuget.org/packages/Google.Protobuf) |
 | [Go](bindings/go/) | thin generated models, pure-Go engine, no cgo | 1.36x (xlarge) / 1.33x (xlarge) | [google.golang.org/protobuf](https://pkg.go.dev/google.golang.org/protobuf) |
 | [Erlang](bindings/erlang/) | NIF | 2.95x (xlarge) / 1.59x (xlarge) | [gpb](https://github.com/tomas-abrahamsson/gpb) |
 | [Lua](bindings/lua/) | C module, tables + builder | 0.98x (xlarge, tie) / 1.47x (xlarge) `shim` | [lua-protobuf](https://github.com/starwing/lua-protobuf) |
@@ -226,7 +226,7 @@ The one-row summary is here; the detail is there.
 | [Scala](bindings/scala/) | Java runtime + DSL | 211.33x (xlarge) / 0.30x (xlarge) `core` (case class) | [ScalaPB](https://github.com/scalapb/ScalaPB) |
 | [Elixir](bindings/elixir/) | NIF (shared core) | 2.98x (xlarge) / 1.91x (xlarge) | [elixir-protobuf](https://github.com/elixir-protobuf/protobuf) |
 | [Zig](bindings/zig/) | static link | 1.84x (xlarge) / 1.47x (xlarge) `shim` | [zig-protobuf](https://github.com/Arwalk/zig-protobuf) |
-| [F#](bindings/fsharp/) | C# runtime + facade | 1.37x (xlarge) / 0.74x (xlarge) `shim` | [Google.Protobuf](https://www.nuget.org/packages/Google.Protobuf) |
+| [F#](bindings/fsharp/) | C# runtime + facade | 1.31x (xlarge) / 0.91x (xlarge) `shim` | [Google.Protobuf](https://www.nuget.org/packages/Google.Protobuf) |
 | [Clojure](bindings/clojure/) | Java runtime + interop | 0.26x (xlarge) / 0.74x (xlarge) `core` (mutable-message fast path; 0.05x encode at 136 B) | [protobuf-java](https://github.com/protocolbuffers/protobuf/tree/main/java) |
 | [Julia](bindings/julia/) | `dlopen` + `ccall` | 22.35x (xlarge) / 1.08x (xlarge) `shim` | [ProtoBuf.jl](https://github.com/JuliaIO/ProtoBuf.jl) |
 | [R](bindings/r/) | C extension, named lists | 19.28x (xlarge) / 57.00x (xlarge) `shim` | [RProtoBuf](https://github.com/eddelbuettel/rprotobuf) |

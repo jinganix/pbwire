@@ -1800,4 +1800,29 @@ public static unsafe class ImageText
             }
         });
     }
+
+    /// <summary>Byte-wise equality of two NUL-terminated UTF-8 C strings (a decoded image's repeated-string elements). NULL equals only NULL; otherwise the bytes up to the first NUL must match. Lets a repeated-string reader decode the first element once and reuse its reference while the image bytes match, without changing what any element decodes to.</summary>
+    public static bool Equal(IntPtr a, IntPtr b)
+    {
+        if (a == b)
+        {
+            return true;
+        }
+        if (a == IntPtr.Zero || b == IntPtr.Zero)
+        {
+            return false;
+        }
+        byte* pa = (byte*)a;
+        byte* pb = (byte*)b;
+        while (*pa == *pb)
+        {
+            if (*pa == 0)
+            {
+                return true;
+            }
+            pa++;
+            pb++;
+        }
+        return false;
+    }
 }

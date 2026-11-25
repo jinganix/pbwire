@@ -3357,3 +3357,151 @@ extension (the pure-PHP runtime trails it by ~360x / ~110x at 74 KB) -- see
 their sections. The old per-field `tree` headlines are retired: the published
 rows are the struct-passing headline arm, and per-field timings stay in
 `bindings/<lang>/pbench/README.md`.
+
+## Cell: C#/F# shim decode at xlarge (perf loop Task 3, .NET — closeout 2026-11-25)
+
+Pre-round formals on this host: C# xlarge shim decode 381.3 vs 493.0 MB/s
+(0.77x, `results/bench-csharp-20261124T192025Z.json`), F# 340.6 vs 462.4
+(0.74x, `results/bench-fsharp-20261124T191738Z.json`); large decode red on
+both (0.72x/0.73x class), small/medium green. Four idea rounds were measured
+against interleaved in-harness baselines; R1+R3 kept, R2/R4 reverted.
+
+Kept R1 — repeated-`string` (Tags) first-element interning: the generated
+`ReadImage` decodes element 0 once and reuses the reference while the image
+bytes match (`ImageText.Equal`, byte-wise C-string compare in
+`bindings/csharp/Pbwire/Pbwire.cs`); anything else falls back to `Decode`.
+Strings are immutable so sharing the reference keeps `Equals`/round-trip
+identical. Gate: new T-siblings in `GeneratedTest.cs` plus byte-identical
+re-encode; `make csharp-test` / `make fsharp-test` green.
+
+Kept R3 — repeated sub-message Inners Name interning (same p0/s0 idiom):
+`codegen/internal/gen/csharp.go:csInternChild` fires only for a same-file,
+non-map-entry child with exactly one plain string field and otherwise plain
+proto3-implicit scalars; the hit path copies the scalar tail inline and skips
+`ReadImage`, the miss path keeps `ReadImage`. Pinned by new T8
+(repeated-name reference reuse, miss decodes to its own reference, empty-name
+edge, byte-identical re-encode).
+
+Rejected R2 — Inners steady-state object reuse (reuse `Inners[i]` in place,
+new only on growth): fresh-task `Unmarshal` news the root every iteration so
+`Count` is always 0 and the reuse branch never hits; median -2.4% (extra
+branch, no win). Reverted, template untouched.
+
+Rejected R4 — `ImageText.Equal` word-compare (strlen once + uint64/uint
+head fast path): slower on both xlarge rounds (+1.4%/+0.9%) because every
+element re-pays `strlen(p0)` while the payloads are 3 B / 8 B (the saved
+byte-loop cycles never cover it). Structural, not tunable. Reverted.
+
+Closeout formals (idle host, one harness at a time):
+`results/bench-csharp-20261125T043109Z.json`: xlarge shim decode 160782.0 ns
+(465.9 MB/s) vs protobuf-csharp 144431.0 ns (518.7 MB/s) = **0.898x**
+(ns ratio 1.113); large 0.878x; small/medium 1.59x/1.55x.
+`results/bench-fsharp-20261125T043307Z.json`: xlarge shim decode 161688.4 ns
+(463.3 MB/s) vs 146969.7 ns (509.7 MB/s) = **0.909x** (ns ratio 1.100);
+large 0.888x; small/medium 1.54x/1.54x.
+`make csharp-test` (6464 checks) and `make fsharp-test` (6453 checks) green
+on the kept tree.
+
+Floor declared: both xlarge (and large) shim-decode cells stay red at
+~0.90x. R1+R3 moved C# 0.77x -> 0.90x and F# 0.74x -> 0.91x by removing the
+repeat-value string decodes; what remains is the managed materialization the
+2026-11-22 entry already split (3000 strings + 3000 sub-messages into objects
+per xlarge decode). No further boundary tuning is proposed — closing it
+needs a mechanism change (e.g. dropping the image copy), not another round.
+
+## Cell: Node shim at xlarge (perf loop Task 2, Node — closeout 2026-11-25)
+
+Pre-round formals: Node xlarge shim ~0.19x encode / ~0.13x-0.14x decode of
+protobufjs. Two idea rounds were measured against interleaved in-harness
+baselines; R1 kept, R2 reverted.
+
+Kept R1 — decode repeated-`STRING` last-value reuse
+(`bindings/node/runtime/addon.c:slices_to_js`): caches the last decoded
+`PBW_TYPE_STRING` element and reuses the `napi_value` when the next element
+has equal length and byte-equal bytes (`memcmp`); miss path keeps
+`slice_to_js`. JS strings are immutable so sharing the reference keeps the
+round-trip identical. Marginal +1~2% on xlarge/large decode (3/3 medians won,
+12/15 rounds), encode untouched, small/medium inside the band. Gate +
+`make node-test` (71/71) green.
+
+Rejected R2 — encode drop of the second `napi_typeof` (thread the observed
+`vkind` into `set_field`): formal gate 0/5 rounds passed (5/5-wins rule not
+met); isolation A/B medians favored the candidate in 27/28 cells at the
+predicted small>medium>large≈xlarge shape but round-level drops under host
+load (11.8/8.9/10.7) kept it under the bar. Semantically zero-risk (no
+intervening JS possible), but unkeepable under the rule. Reverted, R1 kept.
+
+Closeout formals (idle host, one harness at a time):
+`results/bench-node-20261125T044958Z.json` (M4 Pro, Darwin 27.2.0), xlarge
+(74913 B, 8000 iters): shim encode 1313919.3 ns (57.0 MB/s) vs protobufjs
+248776.8 ns (301.1 MB/s) = **0.189x**; shim decode 1267968.3 ns (59.1 MB/s)
+vs protobufjs 182737.5 ns (409.9 MB/s) = **0.144x**.
+`make node-test` green on the kept tree (71/71 pass).
+
+Exhaustion declared on decode (no further single-variable mechanism left;
+the remainder is the ~30k N-API interactions floor); encode R2 stays
+reverted under the keep rule. Both xlarge shim cells stay deep red. Closing
+either needs a mechanism change (fewer N-API object/value creations per
+element, or a different emission shape), not another tuning round.
+
+## Cell: embedded encode x100/x3000 vs nanopb (perf loop Task 5 — exhaustion 2026-11-25)
+
+Round 1 (packed INT32 blind-write + 1B/2B varint fast-path in `write_packed`):
+reverted. Same-session alternating A/B (best-of, iters fixed): x100 proxy
+multi-round reversed (+2.8% on best-of, 2W-3L), x3000 proxy mixed (3W-2L with
+R2/R6 reversed), most round deltas inside the ±5% noise band under host load
+~34; did not meet the "both rows same direction, win every round" bar.
+`encode.o` text +224 B (5 blind-loop instantiations × ~45 B), tripping the
+flash veto. Byte gate (`pbwire == nanopb` every tier), `make test`
+(incl. test_embedded), `make difftest` (20000 cases, >2B fallback fuzzed) and
+`make format-check` were all green on the candidate — a clean loss, not a
+correctness issue. `git checkout -- src/encode.c`, `src/` verified clean.
+
+Round 2 idea pass: exhaustion declared, no new hypothesis. Attribution: the
+headline is the fresh task (`build + fill N×new+set + encode`), while the
+same run's `pbwire-proxy` (held-tree re-encode) already leads nanopb ~7-8x —
+the 43-45% headline gap is tree-build price (per-value `pbw_value_new_*` +
+`pbw_message_set` lookup/validate/append vs nanopb's `memset` + direct
+struct stores), not writer price. Every remaining writer shape is either a
+ledger-rejected repeat (3B varint window, presence hoist, retain-cap,
+wire_len write-back, grow minimum, sizing second walk, LTO, initial
+512/1024, per-write capacity check removal, unpacked hoist) or touches a
+~2-3% non-dominant share. Closing the headline gap needs a mechanism change
+(reused tree / batched build / struct-codec path without a tree), not a
+single-variable writer tune. No code change kept; no further rounds.
+
+## Cell: Objective-C `tree` xlarge encode (0.97x) and Lua `shim` xlarge encode (0.98x) — confirmed ties, no change (perf loop Task 4, 2026-11-25)
+
+Four consecutive same-host `make objc-bench` runs: xlarge encode ratios
+0.997 / 1.002 / 0.982 / 1.009 (decode stays green 1.13x-1.19x). Four
+consecutive same-host `make lua-bench` runs: xlarge shim encode 0.967 /
+0.995 / 1.015 / 1.015 (decode stays green ~1.40x-1.46x). Both cross 1.0 in
+both directions inside the ±10% run-to-run band; the pasted 0.97x / 0.98x
+sit inside the measured noise. No binding or harness change shipped.
+
+## Cell: JVM decode slice (perf loop Task 1 — H-α falsified, floor 2026-11-25)
+
+H-α (converge `materialize` per-element `new Wire.Reader` into one leased
+Reader per `getList` call, with re-entry fallback): allocation target
+achieved (`Wire$Reader` JFR samples 748 -> 0) but timing regressed
+14-18% on tree full-readback (SerialGC best 751.7ms -> 920.9ms, G1 736.8ms
+-> 856.0ms, all 5 pairs base-wins): one `ThreadLocal.get` per `materialize`
+(~3000/walk) costs more than the TLAB bumps it removes. ab.sh dyn rows
+0.98x-1.02x (encode 0%, lazy-decode 0%, as predicted — the path never
+touches `materialize`). Reverted; `make conformance-java` (2766 binary +
+443 text/JSON), java/kotlin/scala/clojure tests all green on both sides.
+Per the round-1 probe, the JVM decode slice has no further unguarded
+single-variable mechanism: Java/Kotlin headline core is fenced behind
+per-message generated Builder storage (boxing, list copies, build walk —
+codegen scope), and the tree path's remaining cost is the lazy double-touch
+itself. Floor declared; no keeps from this loop on the JVM side.
+
+## Retest note (2026-11-25): Node R2 quiet re-run confirms the rejection
+
+R2 (encode drop of the second `napi_typeof`) was re-run on a quieter host
+(5 fresh interleaved rounds, same 5/5-wins gate): 0/5 rounds passed, medians
+19/20 cells still favoring the candidate at the predicted
+small>medium>large≈xlarge shape. The effect (~1%) sits below this host's
+per-round noise floor at load 8-14, so it cannot clear the keep bar here —
+not a false kill from the earlier concurrent load. Reverted again, R1
+(last-string decode reuse) stands. A third attempt would need load <3 first.
