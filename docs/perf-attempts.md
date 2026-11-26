@@ -147,6 +147,8 @@ same-JVM A/B of the two message-build styles shows no codec-side cause, and
 a fixed-heap SerialGC run recovers most of it, so it is the harness's
 allocation/GC sensitivity on a loaded host, not the codec.
 
+Task 4 Kotlin half — parked without code attempts, structural (2026-11-26): the headline `core` timed path contains no Kotlin code — the generated-model encode/decode delegates to the parked java-core/codegen path (`GenericCodec`/`PbCodec`), so no Kotlin DSL-layer edit can move the headline by construction. K-H1/K-H2 (DSL `build`/`message` wrapper closures, tree-arm only) were considered and not attempted: same off-headline-path mechanism as Scala S-H3, forecast ~0 on the headline core. Residual floor = parked java-core/codegen (per-field dispatch, Builder storage, codegen product decision), unchanged from Task 1's regression. No `bindings/kotlin/` code touched; no bench run for an unmeasurable change.
+
 ## Regression: Python `decode()`, 74913 B (1.70x -> 1.41x)
 
 The 0.1.15 required-field work put the required-presence bookkeeping into
@@ -3692,3 +3694,631 @@ stay in the harness as labeled control rows. `make lua-test` green (plus
 `tests/test_generated.lua`), `make objc-test` green (`build.sh generated`
 fails identically at BASE — pre-existing `extSchema != nil`, untouched by
 this task), `make format-check` clean.
+
+## Cell: JVM decode slice (perf loop Task 1 — H1 rejected, no gain, 2026-11-26)
+
+H1 (`bindings/java/runtime/Wire.java`: mirror the existing `rVar` 1-byte
+fast path at the top of `rTag()` and `rLen32()` — `byte b0 = b[p]; if (b0
+>= 0) { r.pos = p+1; return b0; }`, with the `rLen32` truncation bounds
+check kept so failure behavior stays bit-exact). Same accept set and
+strictness, unknowns untouched, locals only, every failure path still
+throws. Formal `make java-bench` (`results/bench-java-20261126T012038Z.json`,
+HEAD `a7a71ce`) vs Task 0 baseline (`results/bench-java-20261126T004756Z.json`,
+base `0b49873`), java-core decode x per tier (136/174/2469/74913 B):
+0.51/0.71/0.72/0.84x vs baseline 0.65/0.64/0.74/0.82x — no cell flipped.
+Stable tiers read flat (large 0.74→0.72x, xlarge 0.82→0.84x, at most a
+low-single-digit absolute gain on xlarge); the small/medium deltas are
+single-run noise (small baseline reproduced bit-identically while the core
+arm swung −22%; medium baseline itself moved −13%). Correctness clean:
+`make conformance-java` PASS (2766 binary + 443 text, 0 unexpected), all
+four tiers byte-parity + oracle field-compare green. Reverted (`Wire.java`
+back to `0b49873` byte-identical); rejected — no gain. Residual points at
+per-field dispatch / Builder-storage floors, i.e. H2 (packed loop) next.
+
+## Cell: JVM decode slice (perf loop Task 1 — H2 rejected, no gain, 2026-11-26)
+
+H2 (`bindings/java/runtime/PbCodec.java` `parseInto()` packed branches only:
+hoist `byte[] rb = r.b; int p = r.pos;` to cursor locals in the four varint
+packed loops (SINT32, INT32/UINT32/ENUM default, SINT64, INT64/UINT64
+default), inline the 1-byte varint fast path per element, fall back to
+`Wire.rVar(r)` after syncing `r.pos = p` for multi-byte elements, write
+`r.pos = p` back once before the existing packed-overrun check; same accept
+set and strictness, unknowns untouched, locals only, every failure path
+still throws with the identical message). Formal `make java-bench`
+(`results/bench-java-20261126T012650Z.json`, HEAD `f5719fd`) vs Task 0
+baseline (`results/bench-java-20261126T004756Z.json`, base `0b49873`),
+java-core decode x per tier (136/174/2469/74913 B): 0.63/0.66/0.66/0.81x vs
+baseline 0.65/0.64/0.74/0.82x — no cell flipped. No gain on either
+packed-heavy tier: large (H2's target, x100 packed repeats) fell 0.72→0.66x
+on a −10.7% core absolute drop (304.0→271.3 MB/s against a −2.6% baseline
+move), xlarge fell 0.84→0.81x on a −4.2% core absolute drop against a flat
+baseline; small/medium deltas are single-run noise (small has x0 repeats so
+the packed loop cannot apply; medium x moved on a +12.3% baseline swing).
+Encode held (large 1.09x, xlarge 1.02x, both above 1.0x). Correctness clean:
+`make conformance-java` PASS (2766 binary + 443 text, 0 unexpected), all
+four tiers byte-parity + oracle field-compare green. Reverted (`PbCodec.java`
+back to `0b49873` byte-identical); rejected — no gain (large-tier absolute
+drop). Residual still points at per-field dispatch / Builder-storage floors,
+i.e. H3 (GenericCodec getList Reader reuse, tree-arm only) next.
+
+## Cell: JVM decode slice (perf loop Task 1 — H3 rejected, contaminated run, 2026-11-26)
+
+H3 (`bindings/java/runtime/GenericCodec.java` only: one method-local
+`Wire.Reader` created per `DMsg.getList` ref-kind call and reused across the
+sibling `Slice` elements via a new `materialize(Field, Slice, Wire.Reader)`
+overload that resets `b/pos/end` per element; the single-arg `materialize`
+is kept as the allocating fallback for all non-getList callers, so no shared
+cursor ever crosses a live call — same accept set and strictness, unknowns
+untouched, locals only, every failure path still throws with the identical
+message). Formal `make java-bench`
+(`results/bench-java-20261126T013205Z.json`, HEAD `e4b6144`) vs Task 0
+baseline (`results/bench-java-20261126T004756Z.json`, base `0b49873`),
+java-core decode x per tier (136/174/2469/74913 B): 0.69/1.30/0.56/1.08x vs
+baseline 0.65/0.64/0.74/0.82x; java-tree decode x per tier:
+0.95/1.36/0.43/0.53x — no genuine flip. THIS RUN IS CONTAMINATED: the
+untouched `protobuf-java` baseline decode absolute fell run-wide vs the
+Round 2 run minutes earlier (small −28.6%, medium −54.7%, large −36.4%,
+xlarge −37.2%; baseline encode collapsed likewise, and the `proxy` arm H3
+cannot affect slowed too), so the apparent medium/xlarge ≥1.0x ratios are
+baseline-collapse artifacts (baseline decode −29–55% run-wide, absolutes
+fell on both arms): core decode absolutes fell on all four tiers vs H2
+(−21.6%/−10.2%/−46.5%/−15.9%) and tree decode absolutes (H3's target path)
+fell on all four tiers vs H2 (−25.4%/−14.6%/−43.8%/−43.1%). Encode
+arithmetically held (large 1.32x, xlarge 1.11x) but equally contaminated —
+carries no information until a clean re-run. Correctness clean:
+`make conformance-java` PASS (2766 binary + 443 text, 0 unexpected), all
+four tiers byte-parity + oracle field-compare green. Reverted
+(`GenericCodec.java` back to `0b49873` byte-identical, runtime dir diff vs
+BASE empty); rejected — apparent medium/xlarge ≥1.0x are baseline-collapse
+artifacts (baseline decode −29–55% run-wide, absolutes fell on both arms),
+no genuine flip. Cap reached (3 rejected hypotheses, gates green every
+round): Task 1 parks with the runtime clean — residual is the documented
+structural floors (per-field dispatch / Builder storage on core,
+validate+record+materialize triple-touch on tree), not a fourth one-change
+mechanism.
+
+## Cell: Node shim vs protobufjs (perf loop Task 2 — H1 rejected, flat within noise, 2026-11-26)
+
+H1 (`bindings/node/runtime/addon.c` only: one cached `napi_ref` property key
+per `field_entry`, created once per schema in `new_desc_value` via
+`ensure_field_keys` with `node_api_create_property_key_utf8` (N-API 10, with
+a `#if NAPI_VERSION >= 10` by-name fallback so Node 20 builds stay loadable
+via `build.sh -DNAPI_VERSION` wiring), used as `napi_get_property` in
+`js_to_message` (encode reads) and `napi_set_property` in `slices_to_js` +
+`wire_leaf_to_js` (decode writes) — 7 sites, replacing the `*_named_*`
+variants to skip per-call V8 UTF-8 interning; deleted once in
+`finalize_schema`; same accept set and strictness, unknowns untouched, no
+globals/thread-locals, every failure path still throws; fix round 1 closed
+an unchecked `table_sub` NULL (OOM discipline) and replaced a tamper-exposed
+`String`-object wrapper with the property-key form; fix round 2 added the
+Node 20 fallback). Expected +5–12% shim encode AND decode, all tiers.
+Formal `make node-bench` (`results/bench-node-20261126T021732Z.json`, HEAD
+`6849ab3`) vs Task 0 baseline (base `0b49873`), shim x vs protobufjs per
+tier (136/174/2469/74913 B) — encode: 0.65/0.59/0.20/0.18x vs baseline
+0.66/0.57/0.21/0.19x; decode: 0.17/0.13/0.13/0.15x vs baseline
+0.16/0.12/0.12/0.14x — no cell flipped. Encode moved
+−1.5%/+3.5%/−4.8%/−5.3% and decode +6.3%/+8.3%/+5.8%/+7.1% vs baseline, all
+within bench noise. Correctness clean: `make conformance-node` PASS (2750
+binary + 443 text/JSON, 0 unexpected), all four tiers byte-parity + oracle
+field-compare green, `make node-test` 71/71. Reverted (whole H1 stack
+`22b34ba..6849ab3` in one revert commit, `bindings/node/` back to `0a4a8c5`
+byte-identical); rejected — flat within noise, no flip. Residual still
+points at the ~18k/~30k N-API interaction-count floor, i.e. H2
+(stack-threaded cross-message string cache, decode path) next.
+
+## Cell: Node shim vs protobufjs (perf loop Task 2 — H2 rejected, xlarge decode flat, 2026-11-26)
+
+H2 (`bindings/node/runtime/addon.c` only: one stack-owned `str_cache`
+`{bytes, len, str}` in `decode_object`'s frame, threaded as a `cache`
+pointer through `wire_object_to_js` → `slices_to_js` (replacing kept R1's
+`last_bytes/last_len/last_str` locals) and → `wire_leaf_to_js` (new STRING
+dedup; BYTES untouched), with forwarding through `slice_to_js`,
+`field_to_js` and `joined_to_js` (which clears the slot because its malloc'd
+temp buffer is freed) so the cache reaches the xlarge inners; `wire_get`
+(tree path) passes NULL and always creates; same HandleScope, dies at
+return, result arrays/objects keep the only refs; fix round 3 snapshots the
+key as an owned `malloc`'d copy — taken before any reentrant setter can run
+— so a mutating `Object.prototype` setter cannot alias a later payload to
+the cached value, freed at `decode_object` teardown; byte-identical output,
+same accept set and strictness, unknown-field replay untouched, no
+globals/thread-locals, every failure path still throws, plain N-API calls
+only so Node 20 stays unaffected). Expected +8–12% xlarge shim decode,
++2–4% large, ~0 small/medium; encode nil.
+Formal `make node-bench` (`results/bench-node-20261126T023344Z.json`, HEAD
+`ad99e21`) vs Task 0 baseline (base `0b49873`), shim x vs protobufjs per
+tier (136/174/2469/74913 B) — encode: 0.63/0.59/0.23/0.19x vs baseline
+0.66/0.57/0.21/0.19x; decode: 0.15/0.13/0.14/0.14x vs baseline
+0.16/0.12/0.12/0.14x — no cell flipped. The H2 target cell (xlarge shim
+decode) reads 0.14x — identical to the Task 0 baseline 0.14x and a tick
+below Round 1's 0.15x, i.e. no decode lift where the cross-message string
+cache should have shown up; encode deltas vs baseline (−0.03/+0.02/+0.02/0.00)
+and decode deltas (−0.01/+0.01/+0.02/0.00) are bench noise, consistent with a
+decode-only walk change. Correctness clean: `make conformance-node` PASS (2750
+binary + 443 text/JSON, 0 unexpected), all four tiers byte-parity + oracle
+field-compare green, `make node-test` 71/71, reentrancy probe green (mutating
+setter no longer aliases cached strings). Reverted (whole H2 stack
+`ed1602e..ad99e21` in one revert commit, `bindings/node/` back to `0a4a8c5`
+byte-identical); rejected — xlarge decode flat at 0.14x, no flip. Residual still
+points at the ~18k/~30k N-API interaction-count floor, i.e. H3
+(skip re-validation of `scan_range`-accepted leaf ranges, decode path) next.
+
+## Cell: Node shim vs protobufjs (perf loop Task 2 — H3 rejected, flat-to-down, 2026-11-26)
+
+H3 (`bindings/node/runtime/addon.c` only: one `trusted` flag threaded through
+the six decode-walk statics (`wire_object_to_js`, `slice_to_js`,
+`joined_to_js`, `field_to_js`, `slices_to_js`, `wire_leaf_to_js`) plus the two
+untrusted entries (`decode_object` and `wire_get` pass 0); `wire_object_to_js`
+literal 1 below its own `scan_range`, which validates — and records — every
+non-leaf range, so everything under `slices_to_js` is scan-accepted by
+construction; the only behavioral delta is the trusted STRING/BYTES leaf
+branch skipping the length-prefix failure/overrun edges and the `pbw_utf8_valid`
+re-scan (dead on scan-accepted ranges: identical base+offsets for slices,
+verbatim copies at field boundaries for joined buffers); unknown-skip,
+`read_value`, closed-enum filtering, last-wins loop and all N-API error handling
+unchanged; fix round 4 stabilizes the bytes against reentrant setters
+(`decode_object` copies a lazy non-leaf root Buffer into a private `malloc`
+snapshot that stays the scan+materialization base, freed on both returns;
+`wire_object_to_js` forwards its incoming bit instead of forcing 1; the trusted
+leaf branch re-checks `rb_len` plus the payload bound so only the UTF-8 re-scan
+stays elided; zero new N-API calls, no version-gated API, Node >= 20
+unaffected). Expected decode lift on large/xlarge leaf strings; encode nil.
+Formal `make node-bench` (`results/bench-node-20261126T025510Z.json`, HEAD
+`8a802b7`) vs Task 0 baseline (base `0b49873`), shim x vs protobufjs per
+tier (136/174/2469/74913 B) — encode: 0.65/0.60/0.21/0.18x vs baseline
+0.66/0.57/0.21/0.19x; decode: 0.16/0.13/0.12/0.13x vs baseline
+0.16/0.12/0.12/0.14x — no cell flipped. Flat-to-down vs Round 1
+(encode 0.65/0.59/0.20/0.18x, decode 0.17/0.13/0.13/0.15x) and vs Round 2
+(encode 0.63/0.59/0.23/0.19x, decode 0.15/0.13/0.14/0.14x): large decode
+shim 42374.0 → 44175.0 ns/op (x 0.14x → 0.12x) and xlarge decode shim
+1220145.1 → 1225083.0 ns/op (x 0.14x → 0.13x), both slower. Correctness clean:
+`make conformance-node` PASS (2750 binary + 443 text/JSON, 0 unexpected), all
+four tiers byte-parity + oracle field-compare green, `make node-test` 71/71,
+reentrancy probe green (mutating setter no longer smuggles bytes past the
+trusted leaf). Reverted (whole H3 stack `e1bd140..8a802b7` in one revert
+commit, `bindings/node/` back to `0a4a8c5` byte-identical); rejected —
+flat-to-down vs baseline, no flip; stabilization snapshot cost visible on
+large/xlarge decode. Cap reached (3 rejected hypotheses, gates green every
+round): Task 2 parks with the runtime clean — residual is the documented
+~18k/~30k N-API interaction-count floor, not a fourth one-change mechanism.
+
+## Cell: Clojure encode (perf loop Task 3 — H1 rejected, flat, 2026-11-26)
+
+H1 (`bindings/clojure/runtime/src/pbwire/core.clj` only: `type-info` cache
+entry extended from `{:name :repeated}` to `{:name :number :kind :repeated}`
+via the public `GenericCodec$Field` `number`/`kind` reads; `fill!` resolves
+the entry once per map key and dispatches on the cached kind int to the
+`Message.set(int, …)` / `newMessage(int)` overloads, collapsing per field
+`(name k)` + string-hash `by-name` get + double `sequential?` probe + `map?`
++ 4–5 value-predicate tests + Java-side `field(name)` re-lookup into one map
+get + one int `case` + one direct overload call; same `.encode` codec;
+unknowns untouched; no new globals; fix round restored the pre-H1
+`PbwireException` wrong-kind errors via a `mismatch!` fallback through the
+int-number overloads and rejected int-for-float). Expected biggest gain on
+all encode tiers, most visibly 136/174 B. Formal `make clojure-bench`
+(`results/bench-clojure-20261126T031453Z.json`, HEAD `792cd51`) vs Task 0
+baseline (`results/bench-clojure-20261126T004626Z.json`, base `0b49873`),
+`pbwire-clj-core` encode x vs `protobuf-java` per tier (136/174/2469/74913 B):
+0.04/0.08/0.23/0.25x vs baseline 0.05/0.08/0.24/0.25x — no cell flipped,
+flat within run-to-run noise. Correctness clean: `make conformance-clojure`
+PASS (2766 binary + 443 text, 0 unexpected), all four tiers byte-parity +
+oracle field-compare green. Reverted (whole H1 stack `69e126b..792cd51` in
+one revert commit, `bindings/clojure/` back to `35d1c40` byte-identical);
+rejected — flat, no flip. Residual still points at the fresh-build (fill)
+path — the `clj-core-gen` arm sits at 0.34/0.52/0.94/0.98x on the same tiers,
+i.e. essentially the whole gap is fill, not codec — i.e. H2 (hoisted
+repeated-element loop, large/xlarge) next.
+
+## Cell: Clojure encode (perf loop Task 3 — H2 narrowed variant reverted unmeasured, faithful variant infeasible, 2026-11-26)
+
+H2 narrowed variant (`bindings/clojure/runtime/src/pbwire/core.clj` only,
+`fill!` repeated branch, +9/−1: the repeated `doseq` branches inline — `map?`
+fills via `(.newMessage msg nm)` directly, else `set-scalar!` directly —
+saving one Clojure call frame per repeated element; name overloads kept,
+singular path and `not repeated` throw untouched). Tried in code (`483a78f`),
+reverted unmeasured per review citation (judged not-H2: the ideas-file H2
+text requires resolving the field once, then calling the already-chosen
+`set(int,…)` / `newMessage(int)` overload per element, which needs the field
+kind up front). Faithful variant infeasible — the only Clojure-reachable
+kind source is H1's rejected kind-cache (`{:name :number :kind :repeated}`,
+rejected flat 0.04/0.08/0.23/0.25x vs 0.05/0.08/0.24/0.25x baseline);
+re-adding it scoped to the repeated branch would be re-applying rejected H1
+under the H2 name. Reverted (narrowed H2 in one revert commit,
+`bindings/clojure/` back to `35d1c40` byte-identical). Residual still points
+at the fresh-build (fill) path — i.e. H3 (seq-free map walk, small-tier fixed
+cost) next.
+
+## Cell: Clojure encode (perf loop Task 3 — H3 rejected, relative uptick, 2026-11-26)
+
+H3 (`bindings/clojure/runtime/src/pbwire/core.clj` only, `fill!` outer
+iteration, +17/−13: the outer `(doseq [[k v] m] …)` becomes
+`(reduce-kv (fn [_ k v] … nil) nil m)` — no seq + per-entry node allocation
+on PersistentHashMap/ArrayMap; per-entry body byte-identical (`(name k)` +
+`by-name` get + `no such field` / `not repeated` throws + `sequential?`
+branch + inner `doseq` / singular `set-one!`); accumulator threaded as `nil`
+and discarded, `msg` still returned; no kind/number reads, inner repeated
+`doseq` untouched — H1/H2 stay reverted). Expected biggest gain on the small
+tier (fixed ~50–100 ns/encode removed from a ~1.7 µs small-tier gap). Formal
+`make clojure-bench` (`results/bench-clojure-20261126T032902Z.json`, HEAD
+`6512255`) vs Task 0 baseline (`results/bench-clojure-20261126T004626Z.json`,
+base `0b49873`), `pbwire-clj-core` encode x vs `protobuf-java` per tier
+(136/174/2469/74913 B): 0.06/0.10/0.30/0.31x vs baseline
+0.05/0.08/0.24/0.25x — no cell flipped, relative uptick at every tier
+(~25–30% over baseline in absolute pbwire MB/s) but no tier near parity.
+Correctness clean: `make conformance-clojure` PASS (2766 binary + 443 text,
+0 unexpected), all four tiers byte-parity + oracle field-compare green.
+Reverted (H3 `6512255` in one revert commit, `bindings/clojure/` back to
+`35d1c40` byte-identical); rejected — relative uptick, no tier near parity.
+Cap reached (3 hypotheses: H1 rejected measured, H2 infeasible logged, H3
+rejected measured; gates green every round): Task 3 parks with the binding
+clean — residual is the per-field `(name k)` + `by-name` get +
+value-predicate dispatch + Java-side `field(name)` re-lookup path, not a
+fourth one-change mechanism.
+
+## Cell: Scala `core` vs ScalaPB (perf loop Task 4 — S-H1 rejected, flat, 2026-11-26)
+
+S-H1 (`Structtest_Scalars3.fill` in `bindings/scala/tests/gen/matrix3.scala`:
+`if (v.nums.nonEmpty) v.nums.foreach(...)` guards on the 4 repeated fills
+— nums/tags/inners/flags — emitted from `codegen/internal/gen/scala.go`
+`writeScalaFill` so generator output and the committed fixture stay
+identical; singular `v.inner` / `v.optI32` / `v.optStr` foreach lines
+untouched, S-H2/S-H3 excluded). Expected +2–5% small-tier encode (4 call
+sites + 4 `Function1` allocs skipped at n=0), ~0 medium and up. Formal
+`make scala-bench` (`results/bench-scala-20261126T034900Z.json`, HEAD
+`2d6d687`) vs Task 0 baseline (`results/bench-scala-20261126T005015Z.json`,
+base `0b49873`), `pbwire-scala-core` encode x vs `scalapb` per tier
+(136/174/2469/74913 B): 0.33/0.45/5.90/157.29x vs baseline
+0.33/0.45/6.97/181.79x — small and medium flat (small core absolute
+511.9→509.9 MB/s, −0.4%; medium core absolute +7.0% matched by a +6.3%
+baseline move, i.e. machine wobble), large/xlarge stay ≥1.0x on the
+scalapb baseline collapse (verdict-free tiers). Correctness clean: `make
+conformance-scala` PASS (2766 binary + 443 text, 0 unexpected), all four
+tiers byte-parity + oracle field-compare green. Reverted (whole S-H1 stack
+`66d066b..2d6d687` in one revert commit, `bindings/scala/` + `codegen/`
+back to `d2ec0d5` byte-identical); rejected — no flip. Residual still
+points at the Java-side floors (per-field dispatch, DMsg storage, codegen
+product decision) — i.e. S-H2 (`isDefined`/`get` on the 3 populated
+options) next.
+
+S-H2 (`Structtest_Scalars3.fill` in `bindings/scala/tests/gen/matrix3.scala`:
+`if (v.inner.isDefined) Structtest_Inner3.fill(msg.newMessage("inner"),
+v.inner.get)` on the 3 populated options — inner/optI32/optStr — emitted
+from `codegen/internal/gen/scala.go` `writeScalaFill` so generator output
+and the committed fixture stay identical; the 4 repeated `foreach` fills
+stay reverted, S-H1 excluded, S-H3 excluded). Expected +1–3% small/medium
+encode (3 `Function1` allocs skipped per encode on options populated at
+every tier), fading at large/xlarge. Formal `make scala-bench`
+(`results/bench-scala-20261126T035739Z.json`, HEAD `d23bcb1`) vs Task 0
+baseline (`results/bench-scala-20261126T005015Z.json`, base `0b49873`),
+`pbwire-scala-core` encode x vs `scalapb` per tier (136/174/2469/74913 B):
+0.33/0.48/8.56/230.73x vs baseline 0.33/0.45/6.97/181.79x — small flat
+(0.3272→0.3277x vs Round 1 S-H1; core absolute 509.9→503.1 MB/s, −1.3% on
+a −1.5% baseline move, i.e. machine wobble), medium ratio uptick dissolves
+into absolutes (0.4543→0.4802x but core absolute 425.8→392.4 MB/s, −7.8%
+slower, while the baseline also slowed 937.2→817.2 MB/s, −12.8% —
+denominator arithmetic, not a core gain), large/xlarge stay ≥1.0x on the
+scalapb baseline collapse (verdict-free tiers). Correctness clean: `make
+conformance-scala` PASS (2766 binary + 443 text, 0 unexpected), all four
+tiers byte-parity + oracle field-compare green. Reverted (S-H2 `d23bcb1` in
+one revert commit, `bindings/scala/` + `codegen/` back to `d2ec0d5`
+byte-identical); rejected — small flat, medium gain is denominator move.
+Residual still points at the Java-side floors (per-field dispatch, DMsg
+storage, codegen product decision) — i.e. S-H3 (`Pbwire.scala` wrapper
+closures, tree-only, ~0 headline) next.
+
+S-H3 (`Pbwire.scala` wrapper closures — closed inapplicable, no headline path, 2026-11-26): harness variant `e58aa0d` (`bindings/scala/benchmarks/Bench.scala` `fillPbwire`: `ty.build`/`m.message` replaced by direct `newMessage`/`set` blocks) reverted as benchmark-gaming per review — it timed only the non-headline tree arm (`freshEncode` → `fillPbwire`), never the headline core, so no gain there could move a published cell. Reverted in `28a01ff` (`bindings/scala/` back to `197f2de` byte-identical); no verify-agent bench run — nothing measurable ever existed. Faithful variant (the S-H3-specified `Pbwire.scala` wrappers) traced off the headline core path with no code change: the headline `core` timed op is `matrix3Gen.Structtest_Scalars3.encode` → `fill(msg, v)` → direct `MessageType.newMessage` + `msg.set`/`msg.newMessage` + codec, and `grep -n "Pbwire\|ty\.build\|msg\.message\|m\.message\|using(" bindings/scala/tests/gen/matrix3.scala` returns zero matches (only one-time `schema.message(...)` descriptor lookups; sole import `java.util.Base64`) — the wrappers execute only inside the non-headline tree arm. Correctness clean on the revert: `make scala-test` PASS (34 checks, 25 generated, protoc-byte oracle green). Closed inapplicable, no headline path. Cap reached (S-H1/S-H2 rejected measured, S-H3 inapplicable logged): Task 4 Scala parks with the tree clean — residual is the documented Java-side floors (per-field dispatch, DMsg storage, codegen product decision).
+
+## Cell: Objective-C encode (perf loop Task 5 — H1 rejected, small/med gains but large wrong-way, 2026-11-26)
+
+H1 (`bindings/objc/PBWMessage.m` only: `-newValueFor:field:name:error:`
+`PBW_TYPE_STRING` branch tries `value.UTF8String` + `strlen` first and uses
+`pbw_value_new_bytes(u, ulen)` directly when `ulen ==
+[value lengthOfBytesUsingEncoding:NSUTF8StringEncoding]`, falling back to
+the unchanged `dataUsingEncoding:` path on mismatch/conversion failure;
+fix round added `objc_precise_lifetime` on the owner `str` so ARC keeps it
+alive through the synchronous copy; same C core, same accept set, unknowns
+untouched, no globals, every failure path returns status). Expected +3–8%
+large (0.93x → 0.96–1.00x flip candidate), +5–10% small/medium, ~0 xlarge.
+Formal `make objc-bench` (`results/bench-objc-20261126T042138Z.json`, HEAD
+`571b49d`) vs Task 0 baseline (`results/bench-objc-20261126T005340Z.json`,
+base `0b49873`), `pbwire-objc` encode x vs `protobuf-objc` per tier
+(136/174/2469/74913 B): 0.61/0.66/0.91/0.97x vs baseline
+0.53/0.60/0.93/1.00x — no cell flipped. Correctness clean: `make
+conformance` PASS (2750 binary + 443 text, 0 unexpected), all four tiers
+byte-parity + oracle field-compare green. Reverted (whole H1 stack
+`d4b7c96..571b49d` in one revert commit, `bindings/objc/` back to
+`456c78a` byte-identical); rejected — small/med gains but large wrong-way,
+xlarge lost parity. Residual still points at the per-call setup (17 boxed
+setters + name lookups per iteration, schema `messageByName:` per
+iteration) — i.e. H2 (`pbw_message_set_field`) next.
+
+H2 (`bindings/objc/PBWMessage.m` only: `-storeValue:forField:allowRepeated:error:`
+calls `pbw_message_set_field(_message, field, stored)` on the already-resolved
+`field` pointer instead of `pbw_message_set(_message, pbw_field_number(field),
+stored)`, skipping the number→index binary search inside every singular store;
+same C core, same accept set, unknowns untouched, no globals, every failure path
+returns status). Expected +10–15% small, +8–12% medium, +2–4% large, ~0 xlarge.
+Formal `make objc-bench` (`results/bench-objc-20261126T042725Z.json`, HEAD
+`76b26d1`) vs Task 0 baseline (`results/bench-objc-20261126T005340Z.json`,
+base `0b49873`), `pbwire-objc` encode x vs `protobuf-objc` per tier
+(136/174/2469/74913 B): 0.54/0.62/0.93/1.02x vs baseline
+0.53/0.60/0.93/1.00x — no owned cell moved beyond noise. Correctness clean:
+`make conformance` PASS (2750 binary + 443 text, 0 unexpected), all four tiers
+byte-parity + oracle field-compare green. Reverted (`76b26d1` in one revert
+commit, `bindings/objc/` back to `456c78a` byte-identical); rejected — large
+at baseline, sub-noise elsewhere, xlarge wobble not claimed. Residual still
+points at the per-iteration schema work — i.e. H3 (schema `messageByName:`
+memo) next, last hypothesis in the cap.
+
+H3 (`bindings/objc/PBWSchema.m` only: `-messageByName:` 1-slot descriptor memo —
+one ivar pair (`_lastName`/`_lastDesc`), hit on `[name isEqualToString:_lastName]`
+else miss path unchanged, memoize on successful message resolve only; every
+read and write of the pair under `@synchronized(self)`, lock not held across
+`pbw_schema_find`; same C core, unknowns untouched, no globals, every failure
+path returns nil as before). Expected +1–3% encode (one `UTF8String` +
+schema name-hash saved per iteration — `fill_pbwire` calls it once per
+iteration on the reused schema), ~0 xlarge. Formal `make objc-bench`
+(`results/bench-objc-20261126T043600Z.json`, HEAD `8f42e46`) vs Task 0
+baseline (`results/bench-objc-20261126T005340Z.json`, base `0b49873`),
+`pbwire-objc` encode x vs `protobuf-objc` per tier (136/174/2469/74913 B):
+0.53/0.62/0.97/1.00x vs baseline 0.53/0.60/0.93/1.00x — no owned cell
+flipped (large 0.97x is baseline-side wobble: pbwire absolute flat 187.5→187.3
+MB/s while the baseline dropped −3.8%; small dead flat 0.5320 vs 0.5321x).
+Correctness clean: `make conformance` PASS (2750 binary + 443 text,
+0 unexpected), all four tiers byte-parity + oracle field-compare green.
+Reverted (`8f42e46` in one revert commit, `bindings/objc/` back to `456c78a`
+byte-identical); rejected — at baseline/lock-masked, xlarge parity held.
+Cap reached (3 rejected hypotheses, gates green every round): Task 5 parks
+with the binding clean — residual is the per-call setup (17 boxed setters +
+name lookups per iteration) plus whatever `@synchronized` costs per lookup,
+not a fourth one-change mechanism.
+
+## Cell: Rust small-tier decode (perf loop Task 6 — H1 kept partial, 2026-11-26)
+
+H1 (`bindings/rust/src/lib.rs` + `ffi.rs` only: `Arena::DEFAULT_BYTES` 1 MB →
+8 KB; new `Arena::ensure_for_wire` sizes `max(current, wire*6+16KiB)` at the top
+of `FlatType::decode_in_place` (8 KB default + wire*6+16KiB first-try); new
+`Arena::grow_for_retry` fallible doubling + `decode_in_place` NOMEM
+double-and-retry loop (re-zero, rebuild arena, decode again); added the missing
+`PBW_ERR_NOMEM` status constant; same C core, no new `unsafe`, no globals,
+byte-identical). Fix round corrected K=2→6 after a temporary measure showed the
+xlarge matrix3 payload (74,913 B wire) needs 333,465 arena bytes minimum (~4.45x
+wire: 16 B alignment + repeated-array doubling throwaway) — xlarge maps to a
+~466 KB first-try block (~39% headroom), small tiers stay ~17/31 KB in the same
+malloc class so the H1 gain is intact. Commits `02aca6c` (H1) + `ba13e86` (fix
+round 1) on `dev`.
+
+Formal `make rust-bench` re-gate (`results/bench-rust-20261126T050458Z.json`,
+HEAD `ba13e86`) vs same-day Task 0 baseline (encode 0.75/0.93/1.89/2.12x, decode
+0.27/0.40/1.76/1.82x), headline `pbwire-rust-shim` vs `prost` per tier
+(136/174/2469/74913 B): encode 0.81/0.99/1.98/2.10x, decode 0.34/0.49/1.79/1.85x
+— small/med decode +26%/+22% genuine partial gain, no cell flipped. Correctness
+clean: crate tests green on `ba13e86` (`cargo test` + `cargo test
+--no-default-features --features core`, fix round 1); `make conformance-rust`
+PASS (1412 + 0 successes, 0 unexpected); all four tiers gate green (bytes equal
++ oracle field compare, xlarge NOMEM fixed). Kept — genuine partial gain, no
+flip; xlarge floors evaluated vs same-day Task 0 (encode −1.4% noise, decode
++1.3%), gates green; the committed-table decode floor (752.5) is judged stale
+host variance.
+
+## Cell: Go `-par` rows (perf loop Task 7 — noise verdict, no change, 2026-11-26)
+
+Three same-host `make go-bench` runs, one at a time on an idle machine, all
+exit 0: Task 0 `results/bench-go-20261126T005628Z.json` (+ `.log`), re-run 1
+`results/bench-go-20261126T051058Z.json` (+ `.log`), re-run 2
+`results/bench-go-20261126T051244Z.json` (+ `.log`), HEAD `90c1328` (no
+source file touched by this task). Per-cell `-par` ratios (pbwire MB/s ÷
+protobuf-go MB/s, from JSON `mbps`): small enc-par 0.951 / 0.939 / 1.010,
+small dec-par 0.979 / 1.117 / 1.192, medium dec-par 0.930 / 1.101 / 1.083,
+large enc-par 0.892 / 1.005 / 0.979, xlarge enc-par 0.983 / 0.964 / 1.170.
+Noise verdict — 1.0x inside every spread, no code change warranted: all 5
+cells flop across parity over the 3 runs, and only one of 15 observations
+(large enc-par task-0, 0.892) sits below 0.90 while its own cell measures
+1.005/0.979 on re-runs. Controls confirm harness noise rather than a code
+gap: medium enc-par flops 1.102 → 0.977 → 1.005 across the same three runs.
+All serial rows green on all three runs. Brief Steps 3+ skipped per the
+noise verdict; `make go-test` full regression green; BENCHMARKS.md untouched
+(serial rows were already ✅).
+
+No H2/H3: v2 think found H1 the sole mover and no applicable encode-side
+mechanism. Encode cells (small 0.75/med 0.93) parked with the
+no-applicable-mechanism reason; decode small/med parked as partial-gain-kept
+(0.34/0.49x, still <1.0x). BENCHMARKS.md rust refresh deferred to Task 11
+(global doc gate), not edited here.
+
+## Cell: Julia shim decode small (perf loop Task 8 — H1 rejected, right direction within noise, 2026-11-26)
+
+H1 (`bindings/julia/runtime/src/Pbwire.jl` only, `decode_layout`: hoisted
+`isempty(bytes)` / `length(bytes)` / `length(plan.arena)` out of the ccall
+argument list into locals, passed pre-converted `Ptr{UInt8}` locals
+(`Base.unsafe_convert` inside the single `GC.@preserve`) instead of implicit
+per-argument conversions, same `pbw_julia_decode` symbol/args, single
+`_check(status, "layout decode")` path kept; no signature, semantics,
+ownership, or C-core change; distinct from the two rejected Stage-6 edits).
+Formal `make julia-bench` (`results/bench-julia-20261126T053114Z.json`, HEAD
+`5e2ceca`) vs drift-controlled pre-H1 re-run on the clean tree
+(`results/bench-julia-20261126T052406Z.json`, sha `fec35ca`), small
+decode-shim x vs ProtoBuf.jl: 0.94x (T0) → 0.93x (re-run) → **0.97x (H1)** —
+still < 1.0x. Correctness clean: `make julia-test` PASS (70/70 +
+core 3/3 + concurrent 2/2), `make conformance-julia` PASS (2750 + 443, 0
+unexpected), all four tiers gate green. Reverted (`git revert --no-commit
+5e2ceca`, `bindings/julia/` back to `fec35ca` byte-identical, this commit);
+rejected — right direction, within noise, no flip (shim absolute 124.2 →
+119.9 ns/op, −3.5%, on a frozen 116.0 ns/op baseline; consistent with the
++0–2% forecast plus band help, but ~120 ns/op single-run noise dominates).
+Residual still FFI floor + the shared `pbw_struct_codec_*` walk (out of scope)
+— i.e. H2 (arena-free `encode_layout` overload) next.
+
+## Cell: Julia encode tiers (perf loop Task 8 — H2 closed unmeasured, no observable without gaming adoption, 2026-11-26)
+
+H2 (`bindings/julia/runtime/src/Pbwire.jl` only + test: arena-free
+`encode_layout(::Type{T}, msg::T, lt::LayoutType)` overload, ~15 lines +
+docstring, on the already-exported generic, same contract as the plan overload
+(fresh caller-owned `Vector`, `_check` on status, `GC.@preserve msg lt`),
+identical `pbw_julia_encode` ccall, native side unchanged; plus a 5-assertion
+`runtests.jl` testset compiling the `LayoutType` via the shipped
+`layout_schema`/`layout_type` path and asserting overload bytes == plan-call
+bytes == protoc oracle plus a decode round-trip). Shipped as product with test
+(`34086bb`), then reverted (`git revert --no-commit 34086bb`,
+`bindings/julia/` back to `fec35ca` byte-identical, this commit); harness
+adoption declined — the forecast gain is 100% the harness's own per-iteration
+dead weight (`layout_payload` builds a 2 MB decode arena plus a plan image per
+encode iteration that `encode_layout` never reads), and the identical timer
+gain is achievable today with a harness-only change (empty-arena plan, zero
+product diff), same class as the Task 6 H1/H2 gaming ruling (harness-side
+fixed-cost removal); the only compliant adoption (same payload via
+`plan.layout`) measures ~0 by construction (identical ccall) while churning
+the published row. Correctness clean while shipped: `make julia-test` PASS
+(70/70 + new 5/5 + core 3/3 + concurrent 2/2). Closed unmeasured — no
+observable without gaming adoption; the product half is YAGNI (no user
+demand). Residual still the per-iteration fresh-image build cost — i.e. H3
+(caller-buffer copy removal in `pbw_julia_encode_to`) next.
+
+## Cell: Julia encode tiers (perf loop Task 8 — H3 infeasible, cap exhausted, 2026-11-26)
+
+H3 (caller-buffer `pbw_julia_encode_to` in
+`bindings/julia/native/pbw_julia_shim.c` + thin `Pbwire.jl` wrapper,
+Julia-allocated `Vector{UInt8}` sized by wire-size hint, retry on
+`PBW_ERR_NOMEM`, removing the type-reusable-buf → fresh-`Vector` copy and
+cross-iteration buffer retention): STOP — no code shipped, no H3 commit
+(tree stays `ecc79e0` = `fec35ca` + H1/H2 ledger). Exact evidence, all
+verified on the `ecc79e0` tree: (1) no such function exists and the
+mechanism it needs lives in the shared core — `grep pbw_julia_encode_to
+bindings/julia/` empty; `pbw_struct.h` exposes only the growable-`pbw_struct_buf`
+encode (`pbw_struct_codec_encode`); the fixed-buffer writer H3's C entry
+needs does not exist — `sb_reserve` in `bindings/c/runtime/pbw_struct.c`
+unconditionally `realloc`s, and `sbuf`/`sb_reserve`/`enc_msg` are all `static`
+to that shared file, unreachable from the separately-compiled shim (headers
+only) — a true direct-into-caller encode needs shared `bindings/c/` runtime
+change (consumers C/Go/Dart/Julia/C#/Swift), outside `bindings/julia/**`
+scope and beyond one localized edit; (2) the only shim-local shape is copy
+relocation, i.e. a gaming edit — `pbw_struct_codec_encode(type, base,
+&type->buf)` + `memcpy` into the caller buffer under a cap check removes
+nothing (Julia-side `copy(unsafe_wrap(...))` becomes an identical C-side
+`memcpy`, same bytes moved, retained `type->buf` stays), zero gain by
+construction, STOP-class churn; (3) no wire-size hint exists, and the only
+substitute is the retention H3 claims to remove — `grep
+wire_size|encoded_size bindings/c/runtime` empty (sizing exists only for the
+tree API: `pbw_message_encoded_size` + `PBW_ENCODE_SLACK`); the sole hint is
+`type->buf.len` (last-encode length = retained per-type state); worse, the
+formal harness builds a fresh plan per encode iteration so any per-plan hint
+is always cold (LIMIT/NOMEM retry → double encode or allocating fallback,
+strictly slower) unless the harness retains hints across iterations — a
+harness-side change to show any effect; (4) forecast honesty — H3 predicts ~0
+on small (build-dominated, the actual 0.01/0.02x red cells) and +1–3%
+large-only while large needs ~60% (0.62x → 1.0x): no red cell closable even
+if built. No harness/doc/bench file touched; `git diff fec35ca --
+bindings/julia/` EMPTY re-verified. Closed infeasible, cap exhausted (H1
+rejected measured 0.93→0.97x; H2 closed unmeasured; H3 infeasible) — Task 8
+parks: small/med encode (0.01/0.02x) parked as per-iteration fresh-image
+build cost needing a bulk-build API beyond the one-change cap; small
+decode-shim residual (0.93x) parked as FFI floor + the shared
+`pbw_struct_codec_*` walk (shared core, Task 1 scope); large encode (0.62x)
+parked with H1/H2/H3 logged and no compliant one-change mechanism left.
+
+## Cell: C#/F# shim decode (perf loop Task 9 — H1 rejected, gains real but sub-flip, 2026-11-26)
+
+H1 (bulk-copy repeated fixed-width scalar runs in generated `ReadImage`:
+`codegen/internal/gen/csharp.go` new `csBulkElem` helper + `writeCsharpElemRead`
+repeated-scalar branch emits one span copy + one `AddRange` (single `EnsureSize` +
+memmove) instead of per-element `Add` — bitwise-identical fixed-width runs (int/uint
+32/64, float/double → direct span copy; bool → byte-to-bool expansion; named enums
+keep the per-element loop); regen `bindings/csharp/generated/gen/matrix3.cs`
+(`Nums` int[3000] + `Flags` bool[3000] loops, `Capacity` preset kept, order/count
+unchanged) via `make gen-csharp`, only `matrix3.cs` changed (2 hunks, xfile/maptest
+byte-identical); same C core via P/Invoke (codec untouched, unknowns preserved),
+no globals/thread-locals (method-local temps), no new failure paths. F# rides the
+shared path, no `bindings/fsharp/` change. Expected +2–5% xlarge-dec, sub-noise by
+construction. Formal `make csharp-bench` (`results/bench-csharp-20261126T061324Z.json`,
+HEAD `9ffdb20`) + `make fsharp-bench` (`results/bench-fsharp-20261126T061539Z.json`),
+idle machine, one harness at a time, vs drift-controlled clean-tree re-run
+(csharp 0.94/0.92x, fsharp 0.90/0.92x large/xlarge-dec) and T0 — owned-cell
+trajectories (T0 → re-run → H1): csharp large-dec 0.91 → 0.94 → **0.96x** (+0.02,
+still <1.0x); csharp xlarge-dec 0.94 → 0.92 → **0.97x** (+0.05, still <1.0x);
+fsharp large-dec 0.97 → 0.90 → **0.96x** (+0.06 vs re-run, −0.01 vs T0, still <1.0x).
+Correctness clean: `make conformance-csharp` PASS (1412 + 0 successes, 0 unexpected)
+and `make conformance-fsharp` PASS (2750 + 443, 0 unexpected), all four tiers
+byte-parity gate green both languages; `make csharp-test` (6464 checks) and
+`make fsharp-test` (6453 checks) green. Reverted (`git revert --no-commit 9ffdb20`,
+`bindings/csharp/` + `codegen/` back to `21f1b71` byte-identical, this commit);
+rejected — gains real but sub-flip (direction matches the +2–5% forecast on the two
+repeat-scaled tiers, no owned cell reached ≥1.0x; medium-tier −0.07x dip both
+languages is shim-side noise on tiers H1 does not touch). Residual still the managed
+materialization floor (image copy + per-element object build) — i.e. H2 (trim `Inners`
+hit-path alloc/work) next.
+
+## Cell: C#/F# shim decode (perf loop Task 9 — H2 rejected, wrong-way beyond noise, 2026-11-26)
+
+H2 (hoist `Inners` scalar-tail loads above `Equal` on the interned hit path:
+`codegen/internal/gen/csharp.go` `writeCsharpElemRead` interned-Name branch via
+`csInternChild` — child scalar-tail loads (`csReadScalar` at the same `coff` offsets,
+expressions verbatim) hoisted into `var v<Field><Prop>` loop locals above the
+`ImageText.Equal` call, miss path keeps `ReadImage` (reloads the same offsets itself);
+regen `bindings/csharp/generated/gen/matrix3.cs` (1 hunk: `var vValueInners` above the
+`qInners` load, hit path `c.Value = vValueInners`); same C core via P/Invoke (codec
+untouched, unknowns preserved), no globals/thread-locals (loop locals only), no new
+failure paths, byte-identical output. F# rides the shared path, no `bindings/fsharp/`
+change. Expected +1–3% large/xlarge-dec, sub-noise by construction. Formal
+`make csharp-bench` (`results/bench-csharp-20261126T062353Z.json`, HEAD `6407521`) +
+`make fsharp-bench` (`results/bench-fsharp-20261126T062619Z.json`), idle machine, one
+harness at a time, vs H1 endpoint (csharp 0.96/0.97x, fsharp 0.96x) and pre-H1
+baselines — owned-cell trajectories (T0 → re-run → H1 → H2): csharp large-dec 0.91 →
+0.94 → 0.96 → **0.88x** (−0.08 vs H1, −0.06 vs re-run, −0.03 vs T0); csharp xlarge-dec
+0.94 → 0.92 → 0.97 → **0.89x** (−0.08 vs H1, −0.03 vs re-run, −0.05 vs T0); fsharp
+large-dec 0.97 → 0.90 → 0.96 → **0.91x** (−0.05 vs H1, +0.01 vs re-run, −0.06 vs T0).
+Correctness clean: `make conformance-csharp` PASS (1412 + 0 successes, 0 unexpected)
+and `make conformance-fsharp` PASS (2750 + 443, 0 unexpected), all four tiers
+byte-parity gate green both languages; `make csharp-test` (6464 checks) and
+`make fsharp-test` (6453 checks) green. Reverted (`git revert --no-commit 6407521`,
+`bindings/csharp/` + `codegen/` back to `21f1b71` byte-identical, this commit);
+rejected — wrong-way beyond noise (all three owned cells moved the wrong way, −5 to −8%
+vs H1, opposite the +1–3% forecast and outside the noise band). Residual still the managed
+materialization floor — i.e. H3 (fuse `Decode`+`Equal` per `Tags` element) last.
+
+## Cell: C#/F# shim decode (perf loop Task 9 — H3 rejected, no flip, 2026-11-26)
+
+H3 (fuse `Decode`+`Equal` per repeated-string `Tags` element: hand-owned
+`bindings/csharp/Pbwire/Pbwire.cs` gains `ImageText.DecodeOrReuse(ptr, refPtr, refStr)`
+(+29 lines, value-identical to `Equal(ptr, refPtr) ? refStr : Decode(ptr)` on every input —
+same-pointer/both-NULL returns `refStr`, either-NULL falls back to `Decode(ptr)`, otherwise one
+ASCII scan serves both compare and hit-path decode with NUL-equal-bytes returning `refStr` and
+mismatches/non-ASCII falling back to the exact `Equal`/`Decode` semantics); emission template
+`codegen/internal/gen/csharp.go` repeated-string branch emits
+`Tags.Add(...DecodeOrReuse(qTags, p0Tags, s0Tags))` instead of the `Equal ? s0 : Decode`
+ternary (first-element `Decode` + `Capacity` preset unchanged); regen
+`bindings/csharp/generated/gen/matrix3.cs` (exactly one changed line, the `Tags` loop;
+`oneof1.cs`, `xfile.cs`, `maptest.cs` byte-identical); same C core via P/Invoke (codec
+untouched, unknowns preserved), no globals/thread-locals (locals only), no new failure paths,
+byte-identical output (hit returns `Decode(refPtr)` by construction; reference sharing keeps
+`Equals`/round-trip identical — already the practiced semantics). F# rides the shared path, no
+`bindings/fsharp/` change. Expected +1–2% large/xlarge-dec, sub-noise by construction. Formal
+`make csharp-bench` (`results/bench-csharp-20261126T063616Z.json`, HEAD `31fe419`) +
+`make fsharp-bench` (`results/bench-fsharp-20261126T063826Z.json`), idle machine, one
+harness at a time, vs H2 endpoint (csharp 0.88/0.89x, fsharp 0.91x) and pre-H1
+baselines — owned-cell trajectories (T0 → re-run → H2 → H3): csharp large-dec 0.91 →
+0.94 → 0.88 → **0.91x** (+0.03 vs H2, −0.03 vs re-run, flat vs T0); csharp xlarge-dec
+0.94 → 0.92 → 0.89 → **0.91x** (+0.02 vs H2, −0.01 vs re-run, −0.03 vs T0); fsharp
+large-dec 0.97 → 0.90 → 0.91 → **0.88x** (−0.03 vs H2, −0.02 vs re-run, −0.09 vs T0).
+Correctness clean: `make conformance-csharp` PASS (1412 + 0 successes, 0 unexpected)
+and `make conformance-fsharp` PASS (2750 + 443, 0 unexpected), all four tiers
+byte-parity gate green both languages; `make csharp-test` (6464 checks) and
+`make fsharp-test` (6453 checks) green. Reverted (`git revert --no-commit 31fe419`,
+`bindings/csharp/` + `codegen/` back to `21f1b71` byte-identical, this commit);
+rejected — no flip (recovered +0.02/+0.03 vs H2 on the two csharp owned cells but only back
+toward the T0 line, fsharp large-dec moved the wrong way −0.03 vs H2; no owned cell reached
+≥1.0x, cap of 3 exhausted). Task parks: residual is the managed materialization floor
+(image copy + per-element object build), no compliant one-change mechanism left.
+
+## Cell: Lua `shim` xlarge encode — noise verdict, no change (lagging-cells Task 10, 2026-11-26)
+
+Task 10 Step 1 re-run (brief: re-run `make lua-bench` twice idle; 1.0x inside the
+spread → record noise verdict, skip to Step 4). Three same-host runs on the
+unchanged tree (`bindings/lua/` diff-empty vs BASE_SHA `0b49873`, HEAD `c42a9ae`):
+xlarge `shim` encode 1.029 / 0.991 / 0.958 (Task 0
+`results/bench-lua-20261126T010407Z.json` → Run 1
+`results/bench-lua-20261126T064511Z.json` → Run 2
+`results/bench-lua-20261126T064648Z.json`; shim 102.0 → 106.0 → 104.3 MB/s
+against a wobbling baseline 99.1 → 107.0 → 108.9 MB/s). Spread 0.958–1.029
+covers 1.0x; the cell flops across parity and no run sits solidly below band
+(lowest 0.958, zero of three below 0.90). Verdict: NOISE — the committed 0.98x
+does not reproduce, no code change warranted. All other lua cells green on all
+three runs. Steps 2–3 skipped per brief; Step 4 regression comes separately.

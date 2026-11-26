@@ -167,22 +167,22 @@ Apple M4 Pro, same process times both sides:
 
 | payload | op | pbwire-go (MB/s, x protobuf-go) | protobuf-go (MB/s) | allocs/op (pbwire / protobuf-go) | B/op (pbwire / protobuf-go) |
 |---|---|---|---|---|---|
-| 136 B | encode | 542.6 (1.16x ✅) | 466.1 | 5 / 5 | 500 / 516 |
-| 136 B | decode | 750.8 (1.43x ✅) | 525.5 | 5 / 7 | 368 / 384 |
-| 174 B | encode | 535.7 (1.24x ✅) | 430.4 | 10 / 10 | 624 / 656 |
-| 174 B | decode | 567.7 (1.28x ✅) | 441.9 | 10 / 14 | 504 / 488 |
-| 2469 B | encode | 434.6 (1.39x ✅) | 313.2 | 133 / 133 | 15744 / 17360 |
-| 2469 B | decode | 392.2 (1.45x ✅) | 271.0 | 117 / 325 | 12556 / 15064 |
-| 74913 B | encode | 482.5 (1.36x ✅) | 354.6 | 3057 / 3057 | 499012 / 547027 |
-| 74913 B | decode | 393.8 (1.33x ✅) | 297.1 | 3035 / 9037 | 451169 / 472236 |
-| 136 B | encode-par | 863.7 (0.95x ❌) | 909.8 | 5 / 5 | 500 / 516 |
-| 136 B | decode-par | 1237.2 (1.14x ✅) | 1083.6 | 5 / 7 | 368 / 384 |
-| 174 B | encode-par | 816.4 (1.09x ✅) | 752.3 | 10 / 10 | 624 / 656 |
-| 174 B | decode-par | 1002.5 (1.01x ✅) | 994.6 | 10 / 14 | 504 / 488 |
-| 2469 B | encode-par | 400.9 (0.99x ❌) | 406.1 | 133 / 133 | 15744 / 17360 |
-| 2469 B | decode-par | 508.4 (1.15x ✅) | 441.7 | 117 / 325 | 12556 / 15064 |
-| 74913 B | encode-par | 494.0 (0.99x ❌) | 500.2 | 3057 / 3057 | 499012 / 547027 |
-| 74913 B | decode-par | 624.9 (0.99x ❌) | 634.2 | 3035 / 9037 | 451169 / 472236 |
+| 136 B | encode | 648.2 (1.28x ✅) | 506.0 | 5 / 5 | 500 / 516 |
+| 136 B | decode | 769.5 (1.42x ✅) | 540.8 | 5 / 7 | 368 / 384 |
+| 174 B | encode | 517.7 (1.26x ✅) | 410.4 | 10 / 10 | 624 / 656 |
+| 174 B | decode | 562.5 (1.25x ✅) | 449.0 | 10 / 14 | 504 / 488 |
+| 2469 B | encode | 442.7 (1.38x ✅) | 321.2 | 133 / 133 | 15744 / 17360 |
+| 2469 B | decode | 382.9 (1.51x ✅) | 253.5 | 117 / 325 | 12556 / 15064 |
+| 74913 B | encode | 468.8 (1.55x ✅) | 303.2 | 3057 / 3057 | 499011 / 547027 |
+| 74913 B | decode | 384.5 (1.28x ✅) | 299.5 | 3035 / 9037 | 451169 / 472236 |
+| 136 B | encode-par | 859.1 (0.95x ❌) | 902.9 | 5 / 5 | 500 / 516 |
+| 136 B | decode-par | 911.0 (0.98x ❌) | 930.3 | 5 / 7 | 368 / 384 |
+| 174 B | encode-par | 683.9 (1.10x ✅) | 620.5 | 10 / 10 | 624 / 656 |
+| 174 B | decode-par | 842.3 (0.93x ❌) | 905.9 | 10 / 14 | 504 / 488 |
+| 2469 B | encode-par | 409.6 (0.89x ❌) | 459.4 | 133 / 133 | 15744 / 17360 |
+| 2469 B | decode-par | 475.8 (1.36x ✅) | 348.8 | 117 / 325 | 12556 / 15064 |
+| 74913 B | encode-par | 499.3 (0.98x ❌) | 507.9 | 3057 / 3057 | 499011 / 547027 |
+| 74913 B | decode-par | 627.7 (1.00x ✅) | 627.6 | 3035 / 9037 | 451169 / 472236 |
 
 Encode is ahead on every tier: the fast path reads scalars, strings and
 bytes straight from struct memory with no getter calls and no tree, staging
@@ -196,15 +196,16 @@ loop in both tag and value parsing. The decode loop parses plain Fast
 scalar fields inline — tag, value and store with no call and no nested
 dispatch. Two-byte tags resolve the same way: the first byte indexes the
 row and the second verifies it, so repeated and optional fields skip Next
-and lookup with no new call on the path. Encode leads 1.17x–1.51x serial
-(0.93x–1.09x par); serial decode wins on all four tiers
-(1.41x/1.26x/1.48x/1.31x). Both hints size exactly, so B/op lands
+and lookup with no new call on the path. Encode leads 1.26x–1.55x serial
+(0.89x–1.10x par); serial decode wins on all four tiers
+(1.42x/1.25x/1.51x/1.28x). Both hints size exactly, so B/op lands
 in the same Go size class as the baseline on every tier, and
-decode takes fewer allocs on every tier. 13 of 16 cells are green; the
-three red rows sit within a few percent of
+decode takes fewer allocs on every tier. 11 of 16 cells are green; the
+five red rows sit within a few percent of
 parity on work that flips either way between runs on this shared box
-(small encode-par 0.97x, xlarge encode-par 0.93x, xlarge decode-par 0.99x),
-while the serial twins on identical work win outright (1.38x / 1.31x). Figures are
+(small encode-par 0.95x, small decode-par 0.98x, medium decode-par 0.93x,
+large encode-par 0.89x, xlarge encode-par 0.98x),
+while the serial twins on identical work win outright (1.25x–1.55x). Figures are
 medians of three same-host runs (the box carried other tenants'
 load throughout, so single runs flop ±10%); published as measured,
 not as a scaling claim. The

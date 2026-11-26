@@ -144,7 +144,7 @@ the malloc'd buffer the C encoder already filled to `NSData`
 (`dataWithBytesNoCopy:length:freeWhenDone:`), and `decode` wraps the arena the C
 decoder produced in one `PBWMessage`.
 
-`pbwire-objc` therefore beats the generated runtime on decode on every tier (encode trails just below: 0.97x at xlarge).
+`pbwire-objc` therefore beats the generated runtime on decode on every tier (encode at parity: 1.00x at xlarge).
 The
 xlarge tier is one 74 KB string, i.e. a memcpy race: the generated encoder writes
 it into an `NSMutableData` of the final size, and the wrapper writes it into its
@@ -157,7 +157,7 @@ twice.
 
 The `pbwire-objc` rows are the `tree` arm: a fresh `PBWMessage` built per
 field per iteration on both sides, then encoded (formal run
-`../../results/bench-objc-20261124T203820Z.json`). The gap is the per-iteration build
+`../../results/bench-objc-20261126T005340Z.json`). The gap is the per-iteration build
 cost priced in pbench: seventeen
 boxed setters plus the `str` copy, and the xlarge tier rebuilds its 74 KB
 `str` fixture per iteration on both sides (pad-`str` payload).
@@ -174,14 +174,14 @@ vs the generated `data`'s `NSMutableData`). No binding change: the residual
 
 | payload | op | pbwire-objc (MB/s, x protobuf-objc) | protobuf-objc (MB/s) |
 |---|---|---|---|
-| 136 B | encode | 60.7 (0.53x ❌) | 115.4 |
-| 136 B | decode | 689.9 (2.75x ✅) | 250.7 |
-| 174 B | encode | 61.6 (0.57x ❌) | 108.0 |
-| 174 B | decode | 878.5 (3.22x ✅) | 273.1 |
-| 2469 B | encode | 184.4 (0.95x ❌) | 193.4 |
-| 2469 B | decode | 9202.4 (2.47x ✅) | 3725.3 |
-| 74913 B | encode | 203.6 (0.97x ❌) | 209.4 |
-| 74913 B | decode | 31641.7 (1.16x ✅) | 27228.3 |
+| 136 B | encode | 60.5 (0.53x ❌) | 113.7 |
+| 136 B | decode | 698.1 (2.72x ✅) | 257.1 |
+| 174 B | encode | 65.8 (0.60x ❌) | 110.2 |
+| 174 B | decode | 894.4 (3.04x ✅) | 294.0 |
+| 2469 B | encode | 187.5 (0.93x ❌) | 201.7 |
+| 2469 B | decode | 9440.1 (2.46x ✅) | 3841.3 |
+| 74913 B | encode | 217.4 (1.00x ✅) | 217.3 |
+| 74913 B | decode | 33105.9 (1.19x ✅) | 27922.7 |
 
 The direct struct path is the same C code, measured by `make bench-c` (the
 `shim` rows); there is no third mechanism to compare here. No second pbwire
@@ -193,7 +193,7 @@ hands
 the encoder's own malloc'd buffer to `NSData` with
 `dataWithBytesNoCopy:length:freeWhenDone:`, and `decode` wraps the decoder's
 arena in one `PBWMessage`. Decode stays ahead of the generated runtime on all
-four tiers (2.76x / 3.00x at 136-174 B; the 74 KB tier is 1.16x, the closest
+four tiers (2.72x / 3.04x at 136-174 B; the 74 KB tier is 1.19x, the closest
 row). The xlarge tier is one 74 KB string, so decode is a memcpy race: the
 UTF-8 validation that runs at parse is the one walk over those bytes that is
 not a copy, which is why it now uses the 16-byte ASCII scan (see the [attempts ledger](../../docs/perf-attempts.md));
