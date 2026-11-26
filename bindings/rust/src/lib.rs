@@ -1368,14 +1368,58 @@ pub struct Arena {
 }
 
 impl Arena {
-    /// The default block: enough for the large benchmark tier with room to
-    /// spare. A smaller one is a `PBW_ERR_NOMEM`, not corruption.
-    pub const DEFAULT_BYTES: usize = 1 << 20;
+    /// The default block: a small malloc-zone starting size. Decode grows it
+    /// from the wire length before use, so this is only the initial size.
+    pub const DEFAULT_BYTES: usize = 8 << 10;
 
     pub fn new(bytes: usize) -> Arena {
         Arena {
             block: vec![0; bytes.div_ceil(8).max(1)],
         }
+    }
+
+    /// Grows the block to `max(current, wire_len * 6 + 16 KiB)` so a decode
+    /// finds room first try; the `try_reserve` keeps an OOM a status error.
+    /// Sizing: matrix3 xlarge (74,913 B wire, x3000 repeats) needs ~333 KB of
+    /// arena (~4.45x wire) — every string/bytes/array slot is 16-byte aligned
+    /// and repeated arrays double through throwaway prefixes a fixed
+    /// caller-memory block cannot reclaim — so K=2 starved it (166 KB) while
+    /// K=6 clears it with headroom. A NOMEM from any other shape
+    /// doubles-and-retries in `decode_in_place`, so this stays a first-try
+    /// fast path, not a cap.
+    fn ensure_for_wire(&mut self, wire_len: usize) -> Result<()> {
+        let want = wire_len.saturating_mul(6).saturating_add(16 << 10);
+        let want_words = want.div_ceil(8).max(1);
+        if self.block.len() >= want_words {
+            return Ok(());
+        }
+        if self
+            .block
+            .try_reserve(want_words - self.block.len())
+            .is_err()
+        {
+            return Err(status_error(ffi::PBW_ERR_NOMEM));
+        }
+        /* Within the reserved capacity this never allocates, so the fallible
+         * path above is the only OOM exit. */
+        self.block.resize(want_words, 0);
+        Ok(())
+    }
+
+    /// Doubles the block for a NOMEM retry; false when no more memory is
+    /// available (the caller then reports the NOMEM status). Fallible-only:
+    /// `try_reserve` is the single OOM exit, the `resize` below it never
+    /// allocates, so this can neither panic nor abort.
+    fn grow_for_retry(&mut self) -> bool {
+        let want = self.block.len().saturating_mul(2).max(2);
+        if want <= self.block.len() {
+            return false;
+        }
+        if self.block.try_reserve(want - self.block.len()).is_err() {
+            return false;
+        }
+        self.block.resize(want, 0);
+        true
     }
 
     fn as_void(&mut self) -> (*mut c_void, usize) {
@@ -1395,7 +1439,8 @@ impl<T: FlatMessage> FlatImage<T> {
         FlatImage::with_arena(Arena::DEFAULT_BYTES)
     }
 
-    /// `bytes` must hold every string/bytes/array/sub-message of one decode.
+    /// `bytes` is the starting arena size, a minimum hint: decode grows the
+    /// block from the wire length when it does not fit.
     pub fn with_arena(bytes: usize) -> FlatImage<T> {
         FlatImage {
             value: T::zeroed(),
@@ -1507,32 +1552,42 @@ impl<'s, T: FlatMessage> FlatType<'s, T> {
     /// decoded image is a view of that arena and must not outlive it (decoding
     /// into the same image again invalidates the previous view).
     pub fn decode_in_place(&self, wire: &[u8], image: &mut FlatImage<T>) -> Result<()> {
-        image.value = T::zeroed();
-        let (mem, len) = image.arena.as_void();
-        let mut arena = unsafe { ffi::pbw_struct_arena_new_mem(mem, len) };
-        if arena.is_null() {
-            return Err(Error {
-                status: ffi::PBW_ERR_INVALID,
-                message: format!(
-                    "decode arena too small for a {} image (grow FlatImage::with_arena)",
-                    T::FULL_NAME
-                ),
-            });
+        image.arena.ensure_for_wire(wire.len())?;
+        loop {
+            image.value = T::zeroed();
+            let (mem, len) = image.arena.as_void();
+            let mut arena = unsafe { ffi::pbw_struct_arena_new_mem(mem, len) };
+            if arena.is_null() {
+                return Err(Error {
+                    status: ffi::PBW_ERR_INVALID,
+                    message: format!(
+                        "decode arena initialization failed for a {} image",
+                        T::FULL_NAME
+                    ),
+                });
+            }
+            let status = unsafe {
+                ffi::pbw_struct_codec_decode(
+                    self.codec.as_ptr(),
+                    wire.as_ptr(),
+                    wire.len(),
+                    &mut arena,
+                    (&mut image.value as *mut T).cast(),
+                )
+            };
+            /* A caller-memory arena never grows: a NOMEM means the
+             * payload-proportional guess missed the shape, so double the
+             * block and run again from a clean image. Every wire still
+             * decodes up to real OOM, which surfaces as status 2. */
+            if status == ffi::PBW_ERR_NOMEM && image.arena.grow_for_retry() {
+                continue;
+            }
+            /* A caller-memory arena owns nothing to free; the block stays ours. */
+            if status != ffi::PBW_OK {
+                return Err(status_error(status));
+            }
+            return Ok(());
         }
-        let status = unsafe {
-            ffi::pbw_struct_codec_decode(
-                self.codec.as_ptr(),
-                wire.as_ptr(),
-                wire.len(),
-                &mut arena,
-                (&mut image.value as *mut T).cast(),
-            )
-        };
-        /* A caller-memory arena owns nothing to free; the block stays ours. */
-        if status != ffi::PBW_OK {
-            return Err(status_error(status));
-        }
-        Ok(())
     }
 }
 

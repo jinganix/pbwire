@@ -85,21 +85,21 @@ gate) and `compare.jl` (interleaved median table).
 
 | payload | op | pbwire-julia-shim (MB/s, x ProtoBuf.jl) | pbwire-julia dec+ctx (MB/s, x ProtoBuf.jl) | ProtoBuf.jl (MB/s) |
 |---|---|---|---|---|
-| 136 B | encode | 2.6 (0.02x ❌) | -- | 165.4 |
-| 136 B | decode | 1123.3 (0.93x ❌) | 1107.0 (0.92x ❌) | 1201.5 |
-| 174 B | encode | 3.1 (0.02x ❌) | -- | 154.8 |
-| 174 B | decode | 1000.6 (1.40x ✅) | 977.6 (1.37x ✅) | 712.3 |
-| 2469 B | encode | 40.8 (0.65x ❌) | -- | 62.6 |
-| 2469 B | decode | 700.2 (1.17x ✅) | 711.9 (1.19x ✅) | 600.0 |
-| 74913 B | encode | 252.5 (22.35x ✅) | -- | 11.3 |
-| 74913 B | decode | 770.7 (1.08x ✅) | 717.9 (1.01x ✅) | 713.2 |
+| 136 B | encode | 2.5 (0.01x ❌) | -- | 183.5 |
+| 136 B | decode | 1124.7 (0.94x ❌) | 1109.5 (0.93x ❌) | 1198.8 |
+| 174 B | encode | 3.4 (0.02x ❌) | -- | 170.2 |
+| 174 B | decode | 1043.6 (1.41x ✅) | 953.6 (1.29x ✅) | 739.5 |
+| 2469 B | encode | 40.8 (0.59x ❌) | -- | 69.0 |
+| 2469 B | decode | 687.5 (1.11x ✅) | 678.6 (1.10x ✅) | 617.7 |
+| 74913 B | encode | 250.4 (21.40x ✅) | -- | 11.7 |
+| 74913 B | decode | 749.2 (1.09x ✅) | 748.6 (1.09x ✅) | 689.6 |
 
 The `shim` column is the native-in/native-out full task (formal run
-`../../results/bench-julia-20261124T143405Z.json`): one `ccall` over the generated
+`../../results/bench-julia-20261126T005817Z.json`): one `ccall` over the generated
 layout image per op. The per-field `tree` arm is compared in
 `pbench/README.md`, not here. The xlarge encode column is a baseline
-collapse (ProtoBuf.jl's generated encoder falls to 11.3 MB/s there), so the
-shim ratio spikes (22.35x); the decode row is the honest comparison (1.08x).
+collapse (ProtoBuf.jl's generated encoder falls to 11.7 MB/s there), so the
+shim ratio spikes (21.40x); the decode row is the honest comparison (1.09x).
 
 FFI host like Dart/C#: `Libdl.dlopen` + `ccall` into the C ABI (function
 pointers resolved once via `dlsym`, since recent Julia needs a compile-time

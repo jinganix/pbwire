@@ -316,6 +316,7 @@ extern "C" {
 /* pbw_status / pbw_type / pbw_label / pbw_value_kind */
 pub const PBW_OK: c_int = 0;
 pub const PBW_ERR_INVALID: c_int = 1;
+pub const PBW_ERR_NOMEM: c_int = 2;
 pub const PBW_ERR_LIMIT: c_int = 5;
 pub const PBW_TYPE_GROUP: c_int = 10;
 pub const PBW_TYPE_MESSAGE: c_int = 11;

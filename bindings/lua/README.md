@@ -219,20 +219,20 @@ because it is one validating parse straight into tables with no tree kept.
 
 | payload | op | pbwire-lua-shim (MB/s, x lua-protobuf) | lua-protobuf (MB/s) |
 |---|---|---|---|
-| 136 B | encode | 102.8 (1.04x ✅) | 98.4 |
-| 136 B | decode | 145.9 (1.66x ✅) | 87.9 |
-| 174 B | encode | 105.3 (1.06x ✅) | 99.3 |
-| 174 B | decode | 142.8 (1.61x ✅) | 88.9 |
-| 2469 B | encode | 103.4 (1.03x ✅) | 100.5 |
-| 2469 B | decode | 141.3 (1.58x ✅) | 89.3 |
-| 74913 B | encode | 105.8 (0.98x ❌) | 107.7 |
-| 74913 B | decode | 137.3 (1.47x ✅) | 93.5 |
+| 136 B | encode | 102.2 (1.06x ✅) | 96.7 |
+| 136 B | decode | 144.0 (1.59x ✅) | 90.5 |
+| 174 B | encode | 105.6 (1.09x ✅) | 96.6 |
+| 174 B | decode | 144.8 (1.60x ✅) | 90.7 |
+| 2469 B | encode | 102.8 (1.02x ✅) | 100.9 |
+| 2469 B | decode | 141.1 (1.54x ✅) | 91.5 |
+| 74913 B | encode | 102.0 (1.03x ✅) | 99.1 |
+| 74913 B | decode | 123.4 (1.41x ✅) | 87.5 |
 
 Same class as Ruby/R: a C extension over the core (plain tables in/out
 through one transient tree per call, statically linked), schema from
 a `FileDescriptorSet` at run time. The pbwire column is the native-in/native-out
 full task (`pbench/`), formal run
-`../../results/bench-lua-20261124T204559Z.json`: `shim` runs the plain-table task in
+`../../results/bench-lua-20261126T010407Z.json`: `shim` runs the plain-table task in
 one C entry. The per-field `tree` arm is compared in
 `pbench/README.md`, not here.
 
@@ -244,19 +244,20 @@ schema's prepared field table and writes straight from it into the wire
 buffer (one pass over schema fields in descriptor order, no intermediate
 tree, no per-value allocation); the decode is the same one entry in reverse
 and materializes the fresh table eagerly. It is the published comparison and
-beats lua-protobuf on every cell but one
-(1.03x-1.06x / 1.58x-1.66x vs lua-protobuf). It is also the already-shipped
+beats lua-protobuf on every cell
+(1.02x-1.09x / 1.41x-1.60x vs lua-protobuf). It is also the already-shipped
 path, so the selection places nothing new in `runtime/`.
 
-The xlarge `shim` encode cell (0.98x) is a tie, not a finding: it flips
-between runs (1.07x-1.10x at the other tiers, 1.05x-1.06x for xlarge in the
-provisional `compare.lua` runs) inside the host's ±10% run-to-run spread, and
+The xlarge `shim` encode cell (1.03x on the pasted run) is a tie, not a finding: it flops
+across parity between runs (1.029x/0.991x/0.958x across three same-host runs per the
+Task 10 noise verdict) inside the host's ±10% run-to-run spread, and
 both sides share the same fresh-table construction inside the timer.
 
-Task 10 verdict (2026-11-24): three consecutive `make lua-bench` runs on
-the same host keep xlarge `shim` encode at 0.98x, 0.99x, 0.98x (decode
-1.42x-1.47x, green throughout) without ever opening a gap beyond 2%: the
-prior formal run sat at 0.99x, so the cell never leaves the noise band in
+Task 10 verdict (2026-11-26): three consecutive `make lua-bench` runs on
+the same host keep xlarge `shim` encode at 1.029x, 0.991x, 0.958x (decode
+1.36x-1.41x, green throughout) without ever reproducing a solid below-band gap: the
+pasted run sits at 1.03x while the other two same-host runs sit at 0.991x/0.958x,
+so the cell never leaves the noise band in
 either direction. No binding change shipped: the `shim` path already walks
 the Lua table straight into the reused context buffer in one C entry (the
 C-harness buffer-reuse shape from

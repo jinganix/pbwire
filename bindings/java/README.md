@@ -154,7 +154,7 @@ best is reported, so a busy machine hits both implementations equally.
 The four tiers are small / medium / large / xlarge (the repeated fields scaled
 x0 / x1 / x100 / x3000).
 
-The headline comparison is the generated-model `core` row in the table below (1.00x at 74 KB encode, 0.84x at 74 KB decode): `protobuf-java`'s
+The headline comparison is the generated-model `core` row in the table below (1.04x at 74 KB encode, 0.82x at 74 KB decode): `protobuf-java`'s
 generated writer is one straight-line block of known tags and values, while
 a table-driven codec pays a presence gate, a type dispatch and tag loads per
 field. That floor is structural, not tuning — and the generated models share
@@ -183,14 +183,14 @@ large/xlarge encode -- see [`pbench/README.md`](pbench/README.md).
 
 | payload | op | pbwire-java-core (MB/s, x protobuf-java) | protobuf-java (MB/s) |
 |---|---|---|---|
-| 136 B | encode | 517.2 (0.34x ❌) | 1509.0 |
-| 136 B | decode | 452.0 (0.73x ❌) | 622.5 |
-| 174 B | encode | 451.5 (0.53x ❌) | 845.7 |
-| 174 B | decode | 361.2 (0.67x ❌) | 538.9 |
-| 2469 B | encode | 412.1 (0.97x ❌) | 423.6 |
-| 2469 B | decode | 328.4 (0.79x ❌) | 414.5 |
-| 74913 B | encode | 443.9 (1.00x ✅) | 445.0 |
-| 74913 B | decode | 348.1 (0.84x ❌) | 416.6 |
+| 136 B | encode | 506.7 (0.34x ❌) | 1478.9 |
+| 136 B | decode | 400.5 (0.65x ❌) | 611.6 |
+| 174 B | encode | 478.5 (0.54x ❌) | 888.9 |
+| 174 B | decode | 349.8 (0.64x ❌) | 546.1 |
+| 2469 B | encode | 410.8 (1.03x ✅) | 399.2 |
+| 2469 B | decode | 302.8 (0.74x ❌) | 408.4 |
+| 74913 B | encode | 436.3 (1.04x ✅) | 420.8 |
+| 74913 B | decode | 319.5 (0.82x ❌) | 391.4 |
 
 The pbwire column is the committed generated model (`Structtest_Scalars3`)
 used as the native object (`toByteArray()`/`parseFrom()`): the same task the
@@ -200,7 +200,7 @@ materializes eagerly (`consumeBaseline`: every repeated element into the live
 sink), so the pair is deep on both sides (fairness §4); `protobuf-java`
 strings parse eagerly, so the fold costs it nothing measurable. The per-field
 `tree` arm is compared in `pbench/` (see its README), not here. Formal run
-`../../results/bench-java-20261124T200358Z.json`.
+`../../results/bench-java-20261126T004756Z.json`.
 
 The `core` column above is Java's headline: the shipped typed path (0.34x at
 136 B, 1.00x at 74 KB encode, 0.67x-0.84x decode): the generated table walks

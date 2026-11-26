@@ -81,18 +81,18 @@ xlarge (the repeated fields scaled x0 / x1 / x100 / x3000).
 
 | payload | op | pbwire-rust-shim (MB/s, x prost) | prost (MB/s) |
 |---|---|---|---|---|
-| 136 B | encode | 492.3 (0.49x ❌) | 1001.0 |
-| 136 B | decode | 128.7 (0.14x ❌) | 906.1 |
-| 174 B | encode | 700.2 (0.95x ❌) | 734.0 |
-| 174 B | decode | 294.7 (0.42x ❌) | 705.4 |
-| 2469 B | encode | 1016.2 (1.89x ✅) | 538.9 |
-| 2469 B | decode | 618.6 (1.65x ✅) | 374.1 |
-| 74913 B | encode | 1145.3 (2.02x ✅) | 567.4 |
-| 74913 B | decode | 752.5 (1.86x ✅) | 404.2 |
+| 136 B | encode | 753.3 (0.81x ❌) | 927.0 |
+| 136 B | decode | 306.4 (0.34x ❌) | 898.3 |
+| 174 B | encode | 708.1 (0.99x ❌) | 717.7 |
+| 174 B | decode | 335.8 (0.49x ❌) | 681.3 |
+| 2469 B | encode | 1026.6 (1.98x ✅) | 519.7 |
+| 2469 B | decode | 609.8 (1.79x ✅) | 341.4 |
+| 74913 B | encode | 1152.3 (2.10x ✅) | 549.4 |
+| 74913 B | decode | 742.6 (1.85x ✅) | 400.4 |
 
 The archive is linked in, so a call is a direct C call with no `dlopen` lookup.
 The pbwire column is the native-in/native-out full task (formal run
-`../../results/bench-rust-20261124T141310Z.json`).
+`../../results/bench-rust-20261126T050458Z.json`).
 `pbwire-rust-shim` is the published comparison: the
 generated `#[repr(C)]` mirror read and written by the C struct codec in one
 call per op, with a fresh image and decode arena built per iteration on both sides. prost, the
@@ -103,10 +103,10 @@ dominates.
 
 The pure-Rust core port is compared in `pbench/README.md`, not here.
 
-The shim's decode leads prost on the two large tiers (1.63x at 2469 B, 1.86x
-at 74 KB) and trails on the two small tiers (0.27x/0.32x), while its encode
-trails at 136/174 B (0.80x/0.95x) and leads at 2469 B/74913 B
-(1.88x/2.06x): under the fresh-build contract the per-iteration image build
+The shim's decode leads prost on the two large tiers (1.79x at 2469 B, 1.85x
+at 74 KB) and trails on the two small tiers (0.34x/0.49x), while its encode
+trails at 136/174 B (0.81x/0.99x) and leads at 2469 B/74913 B
+(1.98x/2.10x): under the fresh-build contract the per-iteration image build
 dominates the small tiers, and on the large tiers the shared C struct encoder's
 single pass (`make bench-c` measures the same codec at
 1148.2 MB/s on 74913 B) beats prost's generated writer. `../../docs/perf-attempts.md` records the `-O3` A/B attempt on that

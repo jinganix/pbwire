@@ -70,18 +70,18 @@ offset reader, so every field still crosses once); the per-field `tree` build is
 
 | payload | op | pbwire-csharp-shim (MB/s, x protobuf-csharp) | protobuf-csharp (MB/s) |
 |---|---|---|---|---|
-| 136 B | encode | 951.4 (2.25x ✅) | 422.1 |
-| 136 B | decode | 771.8 (1.59x ✅) | 484.6 |
-| 174 B | encode | 721.5 (2.00x ✅) | 360.0 |
-| 174 B | decode | 613.5 (1.55x ✅) | 396.9 |
-| 2469 B | encode | 455.9 (1.07x ✅) | 425.9 |
-| 2469 B | decode | 432.5 (0.88x ❌) | 492.8 |
-| 74913 B | encode | 494.4 (1.32x ✅) | 374.5 |
-| 74913 B | decode | 465.9 (0.90x ❌) | 518.7 |
+| 136 B | encode | 967.0 (2.27x ✅) | 425.8 |
+| 136 B | decode | 757.0 (1.57x ✅) | 480.7 |
+| 174 B | encode | 749.4 (2.05x ✅) | 365.9 |
+| 174 B | decode | 624.8 (1.56x ✅) | 401.3 |
+| 2469 B | encode | 464.9 (1.11x ✅) | 417.3 |
+| 2469 B | decode | 439.5 (0.91x ❌) | 483.1 |
+| 74913 B | encode | 506.6 (1.39x ✅) | 363.5 |
+| 74913 B | decode | 484.5 (0.94x ❌) | 513.3 |
 
 The pbwire column is the native-in/native-out full task
 (`pbench/`, formal run
-`../../results/bench-csharp-20261125T043109Z.json`): `shim` runs it in one P/Invoke
+`../../results/bench-csharp-20261126T010051Z.json`): `shim` runs it in one P/Invoke
 per op. The per-field `tree` arm is compared in
 `pbench/README.md`, not here.
 
@@ -90,13 +90,13 @@ the generated model is copied into one contiguous unmanaged image per op and
 **one** `P/Invoke` (`native/pbw_cs_shim.c`, built by
 `make csharp-shim-native`) walks it through the C layout codec, so no field
 crosses the boundary. It is above Google.Protobuf on every encode tier
-(1.07x-2.25x) and on the two small decode tiers (1.59x/1.55x). The 2469 B and
-74913 B decode rows are below the baseline (0.88x, 0.90x): the C decode itself
+(1.11x-2.27x) and on the two small decode tiers (1.57x/1.56x). The 2469 B and
+74913 B decode rows are below the baseline (0.91x, 0.94x): the C decode itself
 is faster than the reference parser, but materialising 3000 ints, 3000 strings,
 3000 sub-messages and 3000 bools into managed objects costs more than the
 reference parser's whole run.
 
-The native `shim` rows land at ~500 MB/s encode and ~470 MB/s decode on the
+The native `shim` rows land at ~510 MB/s encode and ~480 MB/s decode on the
 xlarge tier: by 2.5 KB the per-call boundary is invisible and the C layout
 codec plus the managed materialisation are what is being measured. That is the
 point of the schema-at-runtime design -- the binding owns ergonomics, the core
