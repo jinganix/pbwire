@@ -93,9 +93,6 @@ public final class Xdep_DepMsg implements Xdep_DepMsgOrBuilder {
 
         public Xdep_DepMsg build() {
             Xdep_DepMsg result = buildPartial();
-            if (!result.isInitialized()) {
-                throw new IllegalStateException("xdep.DepMsg" + ": missing required fields");
-            }
             return result;
         }
 

@@ -289,9 +289,6 @@ public final class Spectest_MapTest implements Spectest_MapTestOrBuilder {
 
         public Spectest_MapTest build() {
             Spectest_MapTest result = buildPartial();
-            if (!result.isInitialized()) {
-                throw new IllegalStateException("spectest.MapTest" + ": missing required fields");
-            }
             return result;
         }
 

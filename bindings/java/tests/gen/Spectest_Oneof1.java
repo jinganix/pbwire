@@ -192,9 +192,6 @@ public final class Spectest_Oneof1 implements Spectest_Oneof1OrBuilder {
 
         public Spectest_Oneof1 build() {
             Spectest_Oneof1 result = buildPartial();
-            if (!result.isInitialized()) {
-                throw new IllegalStateException("spectest.Oneof1" + ": missing required fields");
-            }
             return result;
         }
 

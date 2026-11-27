@@ -1010,6 +1010,47 @@ func emitOneofMsgRow(b *strings.Builder, f *model.File, field model.Field, num i
 }
 
 // writeJavaBuilder emits the nested Builder class.
+// javaNeedsCheck reports whether build() must keep the isInitialized walk:
+// the message or any message type reachable through its fields (following
+// Full names within the file, oneof members included) declares required
+// fields. A visited set keeps recursive messages terminating. A message type
+// from another file resolves conservatively to true: its required fields
+// are invisible here, so the check stays.
+func javaNeedsCheck(f *model.File, m model.Message) bool {
+	byFull := map[string]model.Message{}
+	for _, x := range f.Messages {
+		byFull[x.Full] = x
+	}
+	seen := map[string]bool{}
+	var walk func(model.Message) bool
+	walk = func(x model.Message) bool {
+		if seen[x.Full] {
+			return false
+		}
+		seen[x.Full] = true
+		for _, field := range x.Fields {
+			if field.Skip != "" {
+				continue
+			}
+			if field.Required {
+				return true
+			}
+			if field.Message == "" || field.Full == "" {
+				continue
+			}
+			sub, ok := byFull[field.Full]
+			if !ok {
+				return true
+			}
+			if walk(sub) {
+				return true
+			}
+		}
+		return false
+	}
+	return walk(m)
+}
+
 func writeJavaBuilder(b *strings.Builder, f *model.File, m model.Message, cls string, oneofs []string) {
 	fmt.Fprintf(b, "\n    public static final class Builder implements %sOrBuilder {\n", cls)
 	for _, field := range m.Fields {
@@ -1045,9 +1086,11 @@ func writeJavaBuilder(b *strings.Builder, f *model.File, m model.Message, cls st
 	}
 	fmt.Fprintf(b, "        public %s build() {\n", cls)
 	fmt.Fprintf(b, "            %s result = buildPartial();\n", cls)
-	fmt.Fprintf(b, "            if (!result.isInitialized()) {\n")
-	fmt.Fprintf(b, "                throw new IllegalStateException(%q + \": missing required fields\");\n", m.Full)
-	b.WriteString("            }\n")
+	if javaNeedsCheck(f, m) {
+		fmt.Fprintf(b, "            if (!result.isInitialized()) {\n")
+		fmt.Fprintf(b, "                throw new IllegalStateException(%q + \": missing required fields\");\n", m.Full)
+		b.WriteString("            }\n")
+	}
 	b.WriteString("            return result;\n        }\n\n")
 	fmt.Fprintf(b, "        public %s buildPartial() {\n", cls)
 	fmt.Fprintf(b, "            return new %s(this);\n        }\n", cls)

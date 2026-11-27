@@ -93,9 +93,6 @@ public final class Spectest_MapTest_ByStrEntry implements Spectest_MapTest_ByStr
 
         public Spectest_MapTest_ByStrEntry build() {
             Spectest_MapTest_ByStrEntry result = buildPartial();
-            if (!result.isInitialized()) {
-                throw new IllegalStateException("spectest.MapTest.ByStrEntry" + ": missing required fields");
-            }
             return result;
         }
 

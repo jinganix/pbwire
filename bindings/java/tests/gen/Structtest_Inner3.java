@@ -93,9 +93,6 @@ public final class Structtest_Inner3 implements Structtest_Inner3OrBuilder {
 
         public Structtest_Inner3 build() {
             Structtest_Inner3 result = buildPartial();
-            if (!result.isInitialized()) {
-                throw new IllegalStateException("structtest.Inner3" + ": missing required fields");
-            }
             return result;
         }
 
