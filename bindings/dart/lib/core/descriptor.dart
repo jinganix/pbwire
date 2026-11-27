@@ -147,7 +147,7 @@ final class Limits {
   /// Rejects inputs larger than this; 0 means no cap.
   final int maxBytes;
 
-  /// Nesting cap; 0 means [maxDepth] (256). A larger value clamps to it.
+  /// Nesting cap; 0 means [maxDepth] (100). A larger value clamps to it.
   final int maxDepth;
 }
 

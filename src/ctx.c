@@ -64,7 +64,7 @@ pbw_ctx_new_mem(void *mem, size_t len)
     ctx = (pbw_ctx *)mem;
     memset(ctx, 0, sizeof(*ctx));
     pbw_buf_init(&ctx->out);
-    /* No heap here: pbw_encode_ctx() reports NOMEM instead of allocating; the
+    /* No heap here: pbw_encode_ctx() reports INVALID instead of allocating; the
      * encoder for this kind of context is pbw_encode_to(caller memory). */
     ctx->out.fixed = 1;
     if (!pbw_arena_init_mem(&ctx->arena, (uint8_t *)mem + hdr, len - hdr)) {
@@ -183,19 +183,19 @@ pbw_pool_acquire(pbw_pool *pool)
     return ctx;
 }
 
-void
+pbw_status
 pbw_pool_release(pbw_pool *pool, pbw_ctx *ctx)
 {
     pbw_ctx **slot;
 
     if (pool == NULL || ctx == NULL) {
-        return;
+        return PBW_ERR_INVALID;
     }
     if (ctx->arena.no_grow) {
         /* Caller memory can never grow: pooling it would hand out a context
          * that fails where a pooled one succeeds, so it stays with its
          * caller. */
-        return;
+        return PBW_ERR_INVALID;
     }
     /* A released context is always clean: the next acquire can use it
      * without resetting. The retain cap bounds what the reset keeps, so
@@ -203,7 +203,7 @@ pbw_pool_release(pbw_pool *pool, pbw_ctx *ctx)
     pbw_ctx_reset(ctx);
     if (pool->count >= pool->cap) {
         pbw_ctx_free(ctx);
-        return;
+        return PBW_OK;
     }
     /* Grow the slot array by doubling: one realloc per doubling instead of
      * one per release, which matters for a pool that fills up. */
@@ -212,7 +212,7 @@ pbw_pool_release(pbw_pool *pool, pbw_ctx *ctx)
 
         if (pool->idle_cap > SIZE_MAX / 2 / sizeof(*slot)) {
             pbw_ctx_free(ctx);
-            return;
+            return PBW_ERR_NOMEM;
         }
         want = pool->idle_cap != 0 ? pool->idle_cap * 2 : 8;
         if (want > pool->cap) {
@@ -220,17 +220,18 @@ pbw_pool_release(pbw_pool *pool, pbw_ctx *ctx)
         }
         if (want <= pool->idle_cap || want > SIZE_MAX / sizeof(*slot)) {
             pbw_ctx_free(ctx);
-            return;
+            return PBW_ERR_NOMEM;
         }
         slot = (pbw_ctx **)realloc(pool->idle, want * sizeof(*slot));
         if (slot == NULL) {
             pbw_ctx_free(ctx);
-            return;
+            return PBW_ERR_NOMEM;
         }
         pool->idle = slot;
         pool->idle_cap = want;
     }
     pool->idle[pool->count++] = ctx;
+    return PBW_OK;
 }
 
 size_t
@@ -295,6 +296,11 @@ pbw_encode_ctx(pbw_ctx *ctx, const pbw_message *msg, const uint8_t **out,
     }
     *out = NULL;
     *len = 0;
+    if (ctx->out.fixed) {
+        /* A caller-memory context cannot grow an encode buffer: encoding
+         * from it is pbw_encode_to() into caller memory, not this call. */
+        return PBW_ERR_INVALID;
+    }
     status = pbw_encode_buf(&ctx->out, msg);
     if (status != PBW_OK) {
         *out = NULL;

@@ -154,7 +154,7 @@ best is reported, so a busy machine hits both implementations equally.
 The four tiers are small / medium / large / xlarge (the repeated fields scaled
 x0 / x1 / x100 / x3000).
 
-The headline comparison is the generated-model `core` row in the table below (1.04x at 74 KB encode, 0.82x at 74 KB decode): `protobuf-java`'s
+The headline comparison is the generated-model `core` row in the table below (1.05x at 74 KB encode, 1.26x at 74 KB decode): `protobuf-java`'s
 generated writer is one straight-line block of known tags and values, while
 a table-driven codec pays a presence gate, a type dispatch and tag loads per
 field. That floor is structural, not tuning — and the generated models share
@@ -165,10 +165,12 @@ generated code. Decode closed from 0.80x to 0.84x by linking the table's
 Builder setters as direct calls (`Bind` spins them via `LambdaMetafactory`
 instead of per-call `MethodHandle.invoke`), batching the packed-run kind
 dispatch per run, and keeping a single pending singular sub-message out of
-the map; the remaining gap is the generated `Builder` storage itself
-(`Integer` boxing on repeated numerics, list copies plus the
-`isInitialized` walk in `build()`), which the runtime cannot reach without
-a codegen change. Keep hot loops on the dynamic `Message` path; keep domain
+the map. The `Builder` now keeps repeated slots lazy (an absent field costs
+no allocation) and the message returns its already-unmodifiable lists
+directly, both codegen-side; the remaining gap is the generated `Builder`
+storage itself (`Integer` boxing on repeated numerics, plus the
+`isInitialized` walk in `build()`), with per-field dispatch still on the
+runtime. Keep hot loops on the dynamic `Message` path; keep domain
 code on the generated models.
 
 `pbench/` keeps the other comparison committed and runnable: the pure-Java codec
@@ -183,14 +185,14 @@ large/xlarge encode -- see [`pbench/README.md`](pbench/README.md).
 
 | payload | op | pbwire-java-core (MB/s, x protobuf-java) | protobuf-java (MB/s) |
 |---|---|---|---|
-| 136 B | encode | 506.7 (0.34x ❌) | 1478.9 |
-| 136 B | decode | 400.5 (0.65x ❌) | 611.6 |
-| 174 B | encode | 478.5 (0.54x ❌) | 888.9 |
-| 174 B | decode | 349.8 (0.64x ❌) | 546.1 |
-| 2469 B | encode | 410.8 (1.03x ✅) | 399.2 |
-| 2469 B | decode | 302.8 (0.74x ❌) | 408.4 |
-| 74913 B | encode | 436.3 (1.04x ✅) | 420.8 |
-| 74913 B | decode | 319.5 (0.82x ❌) | 391.4 |
+| 136 B | encode | 593.1 (0.38x ❌) | 1545.2 |
+| 136 B | decode | 470.8 (0.73x ❌) | 642.8 |
+| 174 B | encode | 524.6 (0.60x ❌) | 875.1 |
+| 174 B | decode | 397.5 (0.71x ❌) | 563.2 |
+| 2469 B | encode | 421.6 (1.04x ✅) | 406.7 |
+| 2469 B | decode | 310.9 (0.75x ❌) | 411.8 |
+| 74913 B | encode | 288.1 (1.05x ✅) | 275.6 |
+| 74913 B | decode | 279.0 (1.26x ✅) | 221.9 |
 
 The pbwire column is the committed generated model (`Structtest_Scalars3`)
 used as the native object (`toByteArray()`/`parseFrom()`): the same task the
@@ -200,10 +202,10 @@ materializes eagerly (`consumeBaseline`: every repeated element into the live
 sink), so the pair is deep on both sides (fairness §4); `protobuf-java`
 strings parse eagerly, so the fold costs it nothing measurable. The per-field
 `tree` arm is compared in `pbench/` (see its README), not here. Formal run
-`../../results/bench-java-20261126T004756Z.json`.
+`../../results/bench-java-20261126T082129Z.json`.
 
-The `core` column above is Java's headline: the shipped typed path (0.34x at
-136 B, 1.00x at 74 KB encode, 0.67x-0.84x decode): the generated table walks
+The `core` column above is Java's headline: the shipped typed path (0.38x at
+136 B, 1.05x at 74 KB encode, 0.69x-1.26x decode): the generated table walks
 one `FieldMeta` lambda per field and its decode builds the eager typed tree,
 against a generated writer that knows every tag at compile time. The model
 stays the ergonomic path. The one-crossing JNI probe

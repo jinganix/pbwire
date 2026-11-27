@@ -31,7 +31,7 @@ public final class Tutorial_AddressBook implements Tutorial_AddressBookOrBuilder
     }
 
     public List<Tutorial_Person> getPeopleList() {
-        return Collections.unmodifiableList(people_);
+        return people_;
     }
 
     public int getPeopleCount() {
@@ -61,10 +61,10 @@ public final class Tutorial_AddressBook implements Tutorial_AddressBookOrBuilder
 
 
     public static final class Builder implements Tutorial_AddressBookOrBuilder {
-        private List<Tutorial_Person> people_ = new ArrayList<>();
+        private List<Tutorial_Person> people_ = Collections.emptyList();
 
         public Builder clear() {
-            people_.clear();
+            people_ = Collections.emptyList();
             return this;
         }
 
@@ -81,26 +81,41 @@ public final class Tutorial_AddressBook implements Tutorial_AddressBookOrBuilder
         }
 
         public Builder setPeople(int index, Tutorial_Person value) {
+            if (people_ == Collections.<Tutorial_Person>emptyList()) {
+                people_ = new ArrayList<>();
+            }
             people_.set(index, Objects.requireNonNull(value));
             return this;
         }
 
         public Builder setPeople(int index, Tutorial_Person.Builder builder) {
+            if (people_ == Collections.<Tutorial_Person>emptyList()) {
+                people_ = new ArrayList<>();
+            }
             people_.set(index, Objects.requireNonNull(builder).build());
             return this;
         }
 
         public Builder addPeople(Tutorial_Person value) {
+            if (people_ == Collections.<Tutorial_Person>emptyList()) {
+                people_ = new ArrayList<>();
+            }
             people_.add(Objects.requireNonNull(value));
             return this;
         }
 
         public Builder addPeople(Tutorial_Person.Builder builder) {
+            if (people_ == Collections.<Tutorial_Person>emptyList()) {
+                people_ = new ArrayList<>();
+            }
             people_.add(Objects.requireNonNull(builder).build());
             return this;
         }
 
         public Builder addAllPeople(Iterable<? extends Tutorial_Person> values) {
+            if (people_ == Collections.<Tutorial_Person>emptyList()) {
+                people_ = new ArrayList<>();
+            }
             for (Tutorial_Person v : values) {
                 people_.add(Objects.requireNonNull(v));
             }
@@ -108,7 +123,7 @@ public final class Tutorial_AddressBook implements Tutorial_AddressBookOrBuilder
         }
 
         public Builder clearPeople() {
-            people_.clear();
+            people_ = Collections.emptyList();
             return this;
         }
 

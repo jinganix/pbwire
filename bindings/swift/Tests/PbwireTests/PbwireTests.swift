@@ -50,6 +50,18 @@ final class PbwireTests: XCTestCase {
         XCTAssertThrowsError(try Schema(bytes: Data([0xFF, 0x00, 0x01])))
     }
 
+    func testSchemaLoadLimits() throws {
+        // The FFI entry goes through the C loader, so the 1 MiB default cap
+        // applies with no explicit limit to escape it.
+        let big = Data(repeating: 0, count: (1 << 20) + 1)
+        do {
+            _ = try Schema(bytes: big)
+            XCTFail("an oversized descriptor set must fail")
+        } catch let error as PbwireError {
+            XCTAssertEqual(error.status, 5) // PBW_ERR_LIMIT
+        }
+    }
+
     func testScalarRoundTrip() throws {
         let schema = try loadSchema()
         let message = schema.message("pbwswift.Probe")!

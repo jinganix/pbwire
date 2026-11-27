@@ -103,7 +103,8 @@ Rules the facade enforces:
   that fit the retained budget.
 - The last `pbwe_open` argument bounds the *startup* allocation: a
   `pbw_limits` whose `max_bytes` refuses an oversized `FileDescriptorSet`
-  before it is parsed (`NULL` loads it unbounded, like the core).
+  before it is parsed (`NULL` caps it at 1 MiB (`PBW_DEFAULT_MAX_BYTES`),
+  like the core; pass explicit `{0,0}` for trusted uncapped).
 - `pbwe_set_limits(&box, &limits)` puts the core's `pbw_limits` on every
   later decode: `max_bytes` rejects a frame *before* the arena grows,
   `max_depth` bounds nesting. `NULL` restores the core defaults. On a target

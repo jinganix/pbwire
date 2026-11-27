@@ -29,12 +29,19 @@ public final class Schema implements AutoCloseable {
         }
     }
 
-    /** Loads descriptor-set bytes; use {@code --include_imports} so every type resolves. */
+    /**
+     * Loads descriptor-set bytes; use {@code --include_imports} so every type resolves.
+     * Capped at 1 MiB by default, like the C core; an explicit
+     * {@code new Limits(0, 0)} stays uncapped for trusted input.
+     */
     public static Schema fromBytes(byte[] descriptorSet) {
-        return fromBytes(descriptorSet, Limits.defaults());
+        return fromBytes(descriptorSet, Limits.schemaDefaults());
     }
 
-    /** Bounded descriptor load: rejects oversized inputs up front. */
+    /**
+     * Bounded descriptor load: rejects oversized inputs up front. A null limit
+     * behaves like the plain load (1 MiB cap).
+     */
     public static Schema fromBytes(byte[] descriptorSet, Limits lim) {
         try {
             return new Schema(GenericCodec.Schema.load(descriptorSet, lim));

@@ -28,7 +28,7 @@ const (
 // MaxDepth caps nested message/group recursion on decode (and encode).
 // It matches the V3 probe: deep enough for any real schema, shallow enough
 // that a depth bomb cannot exhaust the goroutine stack.
-const MaxDepth = 256
+const MaxDepth = 100
 
 // MaxFieldNumber is the largest legal field number (2^29 - 1).
 const MaxFieldNumber = 1<<29 - 1

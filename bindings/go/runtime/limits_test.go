@@ -148,7 +148,9 @@ func TestLimitsDepthBinary(t *testing.T) {
 func TestLimitsDepthJSON(t *testing.T) {
 	s := loadLimitSchema(t)
 	typ := mustType(t, s, "limtest.Rec")
-	shallow := deepJSON(100)
+	// The top-level message costs a level too, so 99 child levels are the
+	// deepest JSON that fits the 100 cap.
+	shallow := deepJSON(99)
 	if _, err := typ.UnmarshalJSONStringLimits(shallow, false, runtime.Limits{MaxDepth: 200}); err != nil {
 		t.Fatalf("under-cap JSON: %v", err)
 	}

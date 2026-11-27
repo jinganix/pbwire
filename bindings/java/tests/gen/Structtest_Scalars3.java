@@ -150,7 +150,7 @@ public final class Structtest_Scalars3 implements Structtest_Scalars3OrBuilder {
     }
 
     public List<Integer> getNumsList() {
-        return Collections.unmodifiableList(nums_);
+        return nums_;
     }
 
     public int getNumsCount() {
@@ -162,7 +162,7 @@ public final class Structtest_Scalars3 implements Structtest_Scalars3OrBuilder {
     }
 
     public List<String> getTagsList() {
-        return Collections.unmodifiableList(tags_);
+        return tags_;
     }
 
     public int getTagsCount() {
@@ -174,7 +174,7 @@ public final class Structtest_Scalars3 implements Structtest_Scalars3OrBuilder {
     }
 
     public List<Structtest_Inner3> getInnersList() {
-        return Collections.unmodifiableList(inners_);
+        return inners_;
     }
 
     public int getInnersCount() {
@@ -202,7 +202,7 @@ public final class Structtest_Scalars3 implements Structtest_Scalars3OrBuilder {
     }
 
     public List<Boolean> getFlagsList() {
-        return Collections.unmodifiableList(flags_);
+        return flags_;
     }
 
     public int getFlagsCount() {
@@ -251,14 +251,14 @@ public final class Structtest_Scalars3 implements Structtest_Scalars3OrBuilder {
         private String str_;
         private int color_;
         private Structtest_Inner3 inner_;
-        private List<Integer> nums_ = new ArrayList<>();
-        private List<String> tags_ = new ArrayList<>();
-        private List<Structtest_Inner3> inners_ = new ArrayList<>();
+        private List<Integer> nums_ = Collections.emptyList();
+        private List<String> tags_ = Collections.emptyList();
+        private List<Structtest_Inner3> inners_ = Collections.emptyList();
         private boolean hasOptI32;
         private int optI32_ = 0;
         private boolean hasOptStr;
         private String optStr_;
-        private List<Boolean> flags_ = new ArrayList<>();
+        private List<Boolean> flags_ = Collections.emptyList();
 
         public Builder clear() {
             i32_ = 0;
@@ -277,14 +277,14 @@ public final class Structtest_Scalars3 implements Structtest_Scalars3OrBuilder {
             str_ = null;
             color_ = 0;
             inner_ = null;
-            nums_.clear();
-            tags_.clear();
-            inners_.clear();
+            nums_ = Collections.emptyList();
+            tags_ = Collections.emptyList();
+            inners_ = Collections.emptyList();
             hasOptI32 = false;
             optI32_ = 0;
             hasOptStr = false;
             optStr_ = null;
-            flags_.clear();
+            flags_ = Collections.emptyList();
             return this;
         }
 
@@ -545,16 +545,25 @@ public final class Structtest_Scalars3 implements Structtest_Scalars3OrBuilder {
         }
 
         public Builder setNums(int index, int value) {
+            if (nums_ == Collections.<Integer>emptyList()) {
+                nums_ = new ArrayList<>();
+            }
             nums_.set(index, value);
             return this;
         }
 
         public Builder addNums(int value) {
+            if (nums_ == Collections.<Integer>emptyList()) {
+                nums_ = new ArrayList<>();
+            }
             nums_.add(value);
             return this;
         }
 
         public Builder addAllNums(Iterable<? extends Integer> values) {
+            if (nums_ == Collections.<Integer>emptyList()) {
+                nums_ = new ArrayList<>();
+            }
             for (Integer v : values) {
                 nums_.add(v);
             }
@@ -562,7 +571,7 @@ public final class Structtest_Scalars3 implements Structtest_Scalars3OrBuilder {
         }
 
         public Builder clearNums() {
-            nums_.clear();
+            nums_ = Collections.emptyList();
             return this;
         }
 
@@ -580,17 +589,26 @@ public final class Structtest_Scalars3 implements Structtest_Scalars3OrBuilder {
 
         public Builder setTags(int index, String value) {
             Objects.requireNonNull(value);
+            if (tags_ == Collections.<String>emptyList()) {
+                tags_ = new ArrayList<>();
+            }
             tags_.set(index, value);
             return this;
         }
 
         public Builder addTags(String value) {
             Objects.requireNonNull(value);
+            if (tags_ == Collections.<String>emptyList()) {
+                tags_ = new ArrayList<>();
+            }
             tags_.add(value);
             return this;
         }
 
         public Builder addAllTags(Iterable<? extends String> values) {
+            if (tags_ == Collections.<String>emptyList()) {
+                tags_ = new ArrayList<>();
+            }
             for (String v : values) {
                 tags_.add(Objects.requireNonNull(v));
             }
@@ -598,7 +616,7 @@ public final class Structtest_Scalars3 implements Structtest_Scalars3OrBuilder {
         }
 
         public Builder clearTags() {
-            tags_.clear();
+            tags_ = Collections.emptyList();
             return this;
         }
 
@@ -615,26 +633,41 @@ public final class Structtest_Scalars3 implements Structtest_Scalars3OrBuilder {
         }
 
         public Builder setInners(int index, Structtest_Inner3 value) {
+            if (inners_ == Collections.<Structtest_Inner3>emptyList()) {
+                inners_ = new ArrayList<>();
+            }
             inners_.set(index, Objects.requireNonNull(value));
             return this;
         }
 
         public Builder setInners(int index, Structtest_Inner3.Builder builder) {
+            if (inners_ == Collections.<Structtest_Inner3>emptyList()) {
+                inners_ = new ArrayList<>();
+            }
             inners_.set(index, Objects.requireNonNull(builder).build());
             return this;
         }
 
         public Builder addInners(Structtest_Inner3 value) {
+            if (inners_ == Collections.<Structtest_Inner3>emptyList()) {
+                inners_ = new ArrayList<>();
+            }
             inners_.add(Objects.requireNonNull(value));
             return this;
         }
 
         public Builder addInners(Structtest_Inner3.Builder builder) {
+            if (inners_ == Collections.<Structtest_Inner3>emptyList()) {
+                inners_ = new ArrayList<>();
+            }
             inners_.add(Objects.requireNonNull(builder).build());
             return this;
         }
 
         public Builder addAllInners(Iterable<? extends Structtest_Inner3> values) {
+            if (inners_ == Collections.<Structtest_Inner3>emptyList()) {
+                inners_ = new ArrayList<>();
+            }
             for (Structtest_Inner3 v : values) {
                 inners_.add(Objects.requireNonNull(v));
             }
@@ -642,7 +675,7 @@ public final class Structtest_Scalars3 implements Structtest_Scalars3OrBuilder {
         }
 
         public Builder clearInners() {
-            inners_.clear();
+            inners_ = Collections.emptyList();
             return this;
         }
 
@@ -699,16 +732,25 @@ public final class Structtest_Scalars3 implements Structtest_Scalars3OrBuilder {
         }
 
         public Builder setFlags(int index, boolean value) {
+            if (flags_ == Collections.<Boolean>emptyList()) {
+                flags_ = new ArrayList<>();
+            }
             flags_.set(index, value);
             return this;
         }
 
         public Builder addFlags(boolean value) {
+            if (flags_ == Collections.<Boolean>emptyList()) {
+                flags_ = new ArrayList<>();
+            }
             flags_.add(value);
             return this;
         }
 
         public Builder addAllFlags(Iterable<? extends Boolean> values) {
+            if (flags_ == Collections.<Boolean>emptyList()) {
+                flags_ = new ArrayList<>();
+            }
             for (Boolean v : values) {
                 flags_.add(v);
             }
@@ -716,7 +758,7 @@ public final class Structtest_Scalars3 implements Structtest_Scalars3OrBuilder {
         }
 
         public Builder clearFlags() {
-            flags_.clear();
+            flags_ = Collections.emptyList();
             return this;
         }
 

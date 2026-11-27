@@ -17,7 +17,7 @@ export const WT_END_GROUP = 4;
 export const WT_FIXED32 = 5;
 
 /** Nesting cap, the same bound as the C core's PBW_MAX_DEPTH. */
-export const MAX_DEPTH = 256;
+export const MAX_DEPTH = 100;
 
 /** A pbwire failure: the C core's pbw_status where one exists, else -1. */
 export class CoreError extends Error {

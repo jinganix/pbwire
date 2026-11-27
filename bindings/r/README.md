@@ -87,7 +87,7 @@ to equal bytes and match `protoc --encode` byte for byte (verified on the
 
 Every `pbw_status` is checked and raised as an R error; a wrong R type for a
 value raises; malformed wire data is rejected by `decode`. Nothing aborts or
-segfaults on a bad call. Nesting is capped at `PBW_MAX_DEPTH` (256) both ways.
+segfaults on a bad call. Nesting is capped at `PBW_MAX_DEPTH` (100) both ways.
 
 ### Value mapping
 

@@ -39,7 +39,7 @@
 #include <string.h>
 
 /* Same cap as the core's PBW_MAX_DEPTH (src/internal.h, not public). */
-#define RB_PBW_MAX_DEPTH 256
+#define RB_PBW_MAX_DEPTH 100
 #define SLICE_INLINE 32
 #define SLICE_DEAD 0xffffffffu
 

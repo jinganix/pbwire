@@ -24,7 +24,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define CSHIM_MAX_DEPTH 256
+#define CSHIM_MAX_DEPTH 100
 
 /* --------------------------------------------------------------- integers */
 

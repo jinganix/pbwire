@@ -277,6 +277,54 @@ public final class TestGenerated {
         check(structtest.Matrix3.Scalars3.parseFrom(withUnknown).toByteArray().length
                         == withUnknown.length,
                 "T7 oracle retains unknown fields (typed divergence pinned)");
+
+        // T8: the Builder stays usable after build (protoc parity): appends
+        // keep earlier elements, the first message is undisturbed, clear()
+        // resets, and set-on-empty throws IndexOutOfBounds like ArrayList.
+        // Guards the lazy-list handover in the generated Builder.
+        Structtest_Scalars3.Builder reuse = Structtest_Scalars3.newBuilder()
+                .setI32(1).addNums(10).addTags("t")
+                .addInners(Structtest_Inner3.newBuilder().setName("a").setValue(1));
+        Structtest_Scalars3 first = reuse.build();
+        byte[] firstWire = first.toByteArray();
+        reuse.addNums(20).addTags("u")
+                .addInners(Structtest_Inner3.newBuilder().setName("b").setValue(2));
+        Structtest_Scalars3 second = reuse.build();
+        check(first.getNumsList().equals(List.of(10))
+                && Arrays.equals(first.toByteArray(), firstWire)
+                && second.getNumsList().equals(List.of(10, 20))
+                && second.getTagsList().equals(List.of("t", "u"))
+                && second.getInnersCount() == 2, "T8 append-after-build keeps elements");
+        check(structtest.Matrix3.Scalars3.newBuilder().addNums(1).build()
+                        .toBuilder().addNums(2).build().getNumsList().equals(List.of(1, 2)),
+                "T8 oracle append-after-build agrees");
+        reuse.clear();
+        Structtest_Scalars3 cleared = reuse.build();
+        check(cleared.getNumsCount() == 0 && cleared.getTagsCount() == 0
+                && cleared.getInnersCount() == 0 && cleared.getI32() == 0,
+                "T8 clear resets repeated and scalar slots");
+        // Per-field clear on a fresh Builder must not throw: repeated slots
+        // start as the shared empty list, so clear() reinstalls it instead
+        // of mutating it. Clear-after-use resets, and re-add still works.
+        Structtest_Scalars3.newBuilder().clearNums().clearTags().clearInners();
+        checks++;
+        Structtest_Scalars3.Builder used = Structtest_Scalars3.newBuilder().addNums(1)
+                .addTags("t")
+                .addInners(Structtest_Inner3.newBuilder().setName("a").setValue(1));
+        used.clearNums().clearTags().clearInners();
+        Structtest_Scalars3 perField = used.build();
+        check(perField.getNumsCount() == 0 && perField.getTagsCount() == 0
+                && perField.getInnersCount() == 0,
+                "T8 per-field clear resets used slots");
+        used.addNums(2);
+        check(used.build().getNumsList().equals(List.of(2)),
+                "T8 re-add after per-field clear works");
+        try {
+            Structtest_Scalars3.newBuilder().setNums(0, 5);
+            throw new AssertionError("T8 set-on-empty throws");
+        } catch (IndexOutOfBoundsException expected) {
+            checks++;
+        }
         // Malformed, truncated and over-deep inputs fail loudly.
         checkThrows(() -> Structtest_Scalars3.parseFrom(new byte[] {0x00}),
                 "T7 field zero fails");
@@ -300,6 +348,25 @@ public final class TestGenerated {
         }
         checkThrows(() -> structtest.Matrix3.Scalars3.parseFrom(deep),
                 "T7 oracle deep nesting fails too");
+        // Boundary: exactly MAX_DEPTH unknown groups decode (unknowns drop
+        // on typed re-encode, per the T7 pin above), one more trips the
+        // cap. Pins Wire.MAX_DEPTH to the core's PBW_MAX_DEPTH (100): the
+        // 300-deep probe passes under either bound.
+        byte[] atCap = new byte[200];
+        Arrays.fill(atCap, 0, 100, (byte) 0x0B);
+        Arrays.fill(atCap, 100, 200, (byte) 0x0C);
+        check(Structtest_Scalars3.parseFrom(atCap).toByteArray().length == 0,
+                "T7 depth cap admits exactly 100 groups");
+        byte[] pastCap = new byte[202];
+        Arrays.fill(pastCap, 0, 101, (byte) 0x0B);
+        Arrays.fill(pastCap, 101, 202, (byte) 0x0C);
+        try {
+            Structtest_Scalars3.parseFrom(pastCap);
+            throw new AssertionError("T7 101-deep nesting fails");
+        } catch (IllegalArgumentException expected) {
+            check(expected.getMessage().contains("nesting"),
+                    "T7 over-cap nesting names the cap");
+        }
         checkThrows(() -> Tutorial_Person.parseFrom(new byte[0]),
                 "T7 missing required fails on decode");
 

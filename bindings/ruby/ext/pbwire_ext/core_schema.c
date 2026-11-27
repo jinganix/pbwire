@@ -177,6 +177,10 @@ pbw_schema_free(pbw_schema *schema)
     if (schema == NULL) {
         return;
     }
+    /* No live check here: schemas are shared across threads (see
+     * test_threads), so a race-free live count needs atomics portable C99
+     * does not have. The contract is documented on the declaration: the
+     * schema must outlive every message built from it. */
     for (i = 0; i < schema->count; i++) {
         pbw_descriptor_free(schema->descs[i]);
     }

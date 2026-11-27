@@ -124,9 +124,10 @@ pbw_message_add_unknown(pbw_message *msg, const uint8_t *data, size_t len)
             }
             cap *= 2;
         }
-        /* The caller may append the message's own blob to itself;
-         * realloc can move that block, so copy the source first. */
-        if (msg->unknown != NULL && len <= (size_t)(UINTPTR_MAX - (uintptr_t)(const void *)data)) {
+        /* The caller may append the message's own blob to itself; a heap
+         * realloc can move that block, so copy the source first. Arena
+         * memory never moves, so the copy below stays valid without one. */
+        if (msg->arena == NULL && msg->unknown != NULL && len <= (size_t)(UINTPTR_MAX - (uintptr_t)(const void *)data)) {
             uintptr_t base = (uintptr_t)(void *)msg->unknown;
             uintptr_t src = (uintptr_t)(const void *)data;
 
@@ -634,7 +635,10 @@ pbw_value_get_kind(const pbw_value *value)
 uint64_t
 pbw_value_get_uint(const pbw_value *value)
 {
-    return value == NULL ? 0 : value->as.u64;
+    if (value == NULL || value->kind != PBW_VALUE_UINT) {
+        return 0;
+    }
+    return value->as.u64;
 }
 
 int64_t

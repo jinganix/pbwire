@@ -27,6 +27,12 @@ pbw_istream_new(const pbw_limits *limits)
     }
     if (limits != NULL) {
         s->limits = *limits;
+    } else {
+        /* Capped by default: an unbounded stream buffer turns a sender
+         * that never completes a frame into unbounded growth. Trusted
+         * input that must stream uncapped passes explicit limits with
+         * max_bytes = 0. */
+        s->limits.max_bytes = PBW_DEFAULT_MAX_BYTES;
     }
     return s;
 }

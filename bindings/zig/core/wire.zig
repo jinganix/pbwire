@@ -18,7 +18,7 @@ pub const WT_END_GROUP: u8 = 4;
 pub const WT_FIXED32: u8 = 5;
 
 /// Nesting cap, the same bound as the C core's `PBW_MAX_DEPTH`.
-pub const MAX_DEPTH: u32 = 256;
+pub const MAX_DEPTH: u32 = 100;
 
 pub const Error = error{
     InvalidData,

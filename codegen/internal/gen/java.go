@@ -342,6 +342,10 @@ func writeJavaField(b *strings.Builder, f *model.File, field model.Field) {
 func writeJavaCtor(b *strings.Builder, f *model.File, field model.Field) {
 	priv := field.Lower + "_"
 	if field.Repeated {
+		// Defensive copy stays: build() must not disturb later Builder
+		// use (append-after-build keeps earlier elements, like protoc).
+		// The Builder side is already lazy, so an absent field copies an
+		// empty list here -- one small object, no per-element work.
 		if field.Kind == protoreflect.BytesKind {
 			fmt.Fprintf(b, "        {\n            List<byte[]> tmp = new ArrayList<>(b.%s.size());\n", priv)
 			fmt.Fprintf(b, "            for (byte[] e : b.%s) {\n                tmp.add(e.clone());\n            }\n", priv)
@@ -443,7 +447,7 @@ func writeJavaRepeatedGetter(b *strings.Builder, f *model.File, field model.Fiel
 		fmt.Fprintf(b, "            %s e = %s.forNumber(v);\n", t, t)
 		fmt.Fprintf(b, "            out.add(e == null ? %s.UNRECOGNIZED : e);\n", t)
 		fmt.Fprintf(b, "        }\n        return Collections.unmodifiableList(out);\n    }\n\n")
-		fmt.Fprintf(b, "    public List<Integer> get%sValueList() {\n        return Collections.unmodifiableList(%s);\n    }\n\n", p, priv)
+		fmt.Fprintf(b, "    public List<Integer> get%sValueList() {\n        return %s;\n    }\n\n", p, priv)
 		fmt.Fprintf(b, "    public int get%sCount() {\n        return %s.size();\n    }\n\n", p, priv)
 		fmt.Fprintf(b, "    public %s get%s(int index) {\n", t, p)
 		fmt.Fprintf(b, "        %s e = %s.forNumber(%s.get(index));\n", t, t, priv)
@@ -452,7 +456,10 @@ func writeJavaRepeatedGetter(b *strings.Builder, f *model.File, field model.Fiel
 		return
 	}
 	t := javaBoxed(f, field)
-	fmt.Fprintf(b, "    public List<%s> get%sList() {\n        return Collections.unmodifiableList(%s);\n    }\n\n", t, p, priv)
+	// The constructor copies the Builder list into an unmodifiable view,
+	// so the getter returns the field directly: no second wrapper per call
+	// on the encode hot path.
+	fmt.Fprintf(b, "    public List<%s> get%sList() {\n        return %s;\n    }\n\n", t, p, priv)
 	fmt.Fprintf(b, "    public int get%sCount() {\n        return %s.size();\n    }\n\n", p, priv)
 	fmt.Fprintf(b, "    public %s get%s(int index) {\n        return %s.get(index);\n    }\n\n", unbox(t), p, priv)
 }
@@ -1047,18 +1054,33 @@ func writeJavaBuilder(b *strings.Builder, f *model.File, m model.Message, cls st
 	b.WriteString("    }\n")
 }
 
+// javaEnsureMut emits the lazy-list guard for one Builder repeated slot:
+// slots start as the shared empty list (zero allocation when the field is
+// absent, the common small-message shape) and allocate on first mutation.
+// Identity against the singleton, never isEmpty: a heap list may legitimately
+// be empty between clear and re-add, and that must not allocate twice.
+func javaEnsureMut(b *strings.Builder, priv, witness string) {
+	fmt.Fprintf(b, "            if (%s == Collections.<%s>emptyList()) {\n", priv, witness)
+	fmt.Fprintf(b, "                %s = new ArrayList<>();\n", priv)
+	b.WriteString("            }\n")
+}
+
 // writeJavaBuilderField emits one mutable Builder slot.
 func writeJavaBuilderField(b *strings.Builder, f *model.File, field model.Field) {
 	priv := field.Lower + "_"
 	if field.Repeated {
+		// Lazy slots: the shared empty list until the first add, so a
+		// fresh Builder costs one object no matter how many repeated
+		// fields the message has. The add/set paths below allocate on
+		// first mutation and clear() reinstalls the singleton.
 		if field.Kind == protoreflect.BytesKind {
-			fmt.Fprintf(b, "        private List<byte[]> %s = new ArrayList<>();\n", priv)
+			fmt.Fprintf(b, "        private List<byte[]> %s = Collections.emptyList();\n", priv)
 		} else if field.Kind == protoreflect.EnumKind && field.Enum != "" {
-			fmt.Fprintf(b, "        private List<Integer> %s = new ArrayList<>();\n", priv)
+			fmt.Fprintf(b, "        private List<Integer> %s = Collections.emptyList();\n", priv)
 		} else if field.Message != "" {
-			fmt.Fprintf(b, "        private List<%s> %s = new ArrayList<>();\n", javaType(f, field), priv)
+			fmt.Fprintf(b, "        private List<%s> %s = Collections.emptyList();\n", javaType(f, field), priv)
 		} else {
-			fmt.Fprintf(b, "        private List<%s> %s = new ArrayList<>();\n", javaBoxed(f, field), priv)
+			fmt.Fprintf(b, "        private List<%s> %s = Collections.emptyList();\n", javaBoxed(f, field), priv)
 		}
 		return
 	}
@@ -1090,7 +1112,9 @@ func writeJavaBuilderField(b *strings.Builder, f *model.File, field model.Field)
 func writeJavaClearOne(b *strings.Builder, f *model.File, field model.Field, indent string) {
 	priv := field.Lower + "_"
 	if field.Repeated {
-		fmt.Fprintf(b, "%s%s.clear();\n", indent, priv)
+		// Drop the heap list instead of clearing it: the next add
+		// reallocates, so a cleared Builder holds no capacity.
+		fmt.Fprintf(b, "%s%s = Collections.emptyList();\n", indent, priv)
 		return
 	}
 	if field.Message != "" {
@@ -1232,15 +1256,18 @@ func writeJavaRepeatedSetter(b *strings.Builder, f *model.File, field model.Fiel
 		fmt.Fprintf(b, "        public int get%sCount() {\n            return %s.size();\n        }\n\n", p, priv)
 		fmt.Fprintf(b, "        public byte[] get%s(int index) {\n            return %s.get(index).clone();\n        }\n\n", p, priv)
 		fmt.Fprintf(b, "        public Builder set%s(int index, byte[] value) {\n", p)
+		javaEnsureMut(b, priv, "byte[]")
 		fmt.Fprintf(b, "            %s.set(index, Objects.requireNonNull(value).clone());\n", priv)
 		b.WriteString("            return this;\n        }\n\n")
 		fmt.Fprintf(b, "        public Builder add%s(byte[] value) {\n", p)
+		javaEnsureMut(b, priv, "byte[]")
 		fmt.Fprintf(b, "            %s.add(Objects.requireNonNull(value).clone());\n", priv)
 		b.WriteString("            return this;\n        }\n\n")
 		fmt.Fprintf(b, "        public Builder addAll%s(Iterable<byte[]> values) {\n", p)
+		javaEnsureMut(b, priv, "byte[]")
 		fmt.Fprintf(b, "            for (byte[] v : values) {\n                %s.add(Objects.requireNonNull(v).clone());\n            }\n", priv)
 		b.WriteString("            return this;\n        }\n\n")
-		fmt.Fprintf(b, "        public Builder clear%s() {\n            %s.clear();\n            return this;\n        }\n\n", p, priv)
+		fmt.Fprintf(b, "        public Builder clear%s() {\n            %s = Collections.emptyList();\n            return this;\n        }\n\n", p, priv)
 		return
 	}
 	if field.Kind == protoreflect.EnumKind && field.Enum != "" {
@@ -1258,22 +1285,27 @@ func writeJavaRepeatedSetter(b *strings.Builder, f *model.File, field model.Fiel
 		fmt.Fprintf(b, "        public int get%sValue(int index) {\n            return %s.get(index);\n        }\n\n", p, priv)
 		fmt.Fprintf(b, "        public Builder set%s(int index, %s value) {\n", p, t)
 		fmt.Fprintf(b, "            Objects.requireNonNull(value);\n")
+		javaEnsureMut(b, priv, "Integer")
 		fmt.Fprintf(b, "            %s.set(index, value.getNumber());\n", priv)
 		b.WriteString("            return this;\n        }\n\n")
 		fmt.Fprintf(b, "        public Builder set%sValue(int index, int value) {\n", p)
+		javaEnsureMut(b, priv, "Integer")
 		fmt.Fprintf(b, "            %s.set(index, value);\n", priv)
 		b.WriteString("            return this;\n        }\n\n")
 		fmt.Fprintf(b, "        public Builder add%s(%s value) {\n", p, t)
 		fmt.Fprintf(b, "            Objects.requireNonNull(value);\n")
+		javaEnsureMut(b, priv, "Integer")
 		fmt.Fprintf(b, "            %s.add(value.getNumber());\n", priv)
 		b.WriteString("            return this;\n        }\n\n")
 		fmt.Fprintf(b, "        public Builder add%sValue(int value) {\n", p)
+		javaEnsureMut(b, priv, "Integer")
 		fmt.Fprintf(b, "            %s.add(value);\n", priv)
 		b.WriteString("            return this;\n        }\n\n")
 		fmt.Fprintf(b, "        public Builder addAll%s(Iterable<? extends %s> values) {\n", p, t)
+		javaEnsureMut(b, priv, "Integer")
 		fmt.Fprintf(b, "            for (%s v : values) {\n                %s.add(Objects.requireNonNull(v).getNumber());\n            }\n", t, priv)
 		b.WriteString("            return this;\n        }\n\n")
-		fmt.Fprintf(b, "        public Builder clear%s() {\n            %s.clear();\n            return this;\n        }\n\n", p, priv)
+		fmt.Fprintf(b, "        public Builder clear%s() {\n            %s = Collections.emptyList();\n            return this;\n        }\n\n", p, priv)
 		return
 	}
 	elem := unbox(javaBoxed(f, field))
@@ -1283,18 +1315,23 @@ func writeJavaRepeatedSetter(b *strings.Builder, f *model.File, field model.Fiel
 	fmt.Fprintf(b, "        public %s get%s(int index) {\n            return %s.get(index);\n        }\n\n", elem, p, priv)
 	if field.Message != "" {
 		fmt.Fprintf(b, "        public Builder set%s(int index, %s value) {\n", p, t)
+		javaEnsureMut(b, priv, t)
 		fmt.Fprintf(b, "            %s.set(index, Objects.requireNonNull(value));\n", priv)
 		b.WriteString("            return this;\n        }\n\n")
 		fmt.Fprintf(b, "        public Builder set%s(int index, %s.Builder builder) {\n", p, t)
+		javaEnsureMut(b, priv, t)
 		fmt.Fprintf(b, "            %s.set(index, Objects.requireNonNull(builder).build());\n", priv)
 		b.WriteString("            return this;\n        }\n\n")
 		fmt.Fprintf(b, "        public Builder add%s(%s value) {\n", p, t)
+		javaEnsureMut(b, priv, t)
 		fmt.Fprintf(b, "            %s.add(Objects.requireNonNull(value));\n", priv)
 		b.WriteString("            return this;\n        }\n\n")
 		fmt.Fprintf(b, "        public Builder add%s(%s.Builder builder) {\n", p, t)
+		javaEnsureMut(b, priv, t)
 		fmt.Fprintf(b, "            %s.add(Objects.requireNonNull(builder).build());\n", priv)
 		b.WriteString("            return this;\n        }\n\n")
 		fmt.Fprintf(b, "        public Builder addAll%s(Iterable<? extends %s> values) {\n", p, t)
+		javaEnsureMut(b, priv, t)
 		fmt.Fprintf(b, "            for (%s v : values) {\n                %s.add(Objects.requireNonNull(v));\n            }\n", t, priv)
 		b.WriteString("            return this;\n        }\n\n")
 	} else {
@@ -1304,13 +1341,16 @@ func writeJavaRepeatedSetter(b *strings.Builder, f *model.File, field model.Fiel
 		}
 		fmt.Fprintf(b, "        public Builder set%s(int index, %s value) {\n", p, elem)
 		b.WriteString(nullCheck)
+		javaEnsureMut(b, priv, box)
 		fmt.Fprintf(b, "            %s.set(index, value);\n", priv)
 		b.WriteString("            return this;\n        }\n\n")
 		fmt.Fprintf(b, "        public Builder add%s(%s value) {\n", p, elem)
 		b.WriteString(nullCheck)
+		javaEnsureMut(b, priv, box)
 		fmt.Fprintf(b, "            %s.add(value);\n", priv)
 		b.WriteString("            return this;\n        }\n\n")
 		fmt.Fprintf(b, "        public Builder addAll%s(Iterable<? extends %s> values) {\n", p, box)
+		javaEnsureMut(b, priv, box)
 		if elem == "String" {
 			fmt.Fprintf(b, "            for (%s v : values) {\n                %s.add(Objects.requireNonNull(v));\n            }\n", box, priv)
 		} else {
@@ -1318,7 +1358,7 @@ func writeJavaRepeatedSetter(b *strings.Builder, f *model.File, field model.Fiel
 		}
 		b.WriteString("            return this;\n        }\n\n")
 	}
-	fmt.Fprintf(b, "        public Builder clear%s() {\n            %s.clear();\n            return this;\n        }\n\n", p, priv)
+	fmt.Fprintf(b, "        public Builder clear%s() {\n            %s = Collections.emptyList();\n            return this;\n        }\n\n", p, priv)
 }
 
 // writeJavaOneofBuilder emits getKindCase/clearKind plus the member accessors.

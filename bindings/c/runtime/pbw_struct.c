@@ -31,7 +31,7 @@
 #include "pbw_struct.h"
 
 /* Same cap as the core's PBW_MAX_DEPTH (src/internal.h, not public). */
-#define SC_MAX_DEPTH 256
+#define SC_MAX_DEPTH 100
 
 /* ------------------------------------------------------------------ wire */
 

@@ -27,7 +27,7 @@
 #include "pbwire.h"
 
 /* Same cap as the core's PBW_MAX_DEPTH (src/internal.h, not public). */
-#define PY_MAX_DEPTH 256
+#define PY_MAX_DEPTH 100
 
 /* ------------------------------------------------------------------- wire */
 

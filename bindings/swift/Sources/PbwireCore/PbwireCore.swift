@@ -48,21 +48,25 @@ public final class Schema: @unchecked Sendable {
         self.path = path
     }
 
-    /// Loads a descriptor set written by `protoc --descriptor_set_out`.
-    public convenience init(contentsOfFile path: String) throws {
+    /// Loads a descriptor set written by `protoc --descriptor_set_out` with
+    /// explicit bounds, mirroring Java's `fromFile(path, lim)`.
+    /// Capped at 1 MiB by default, like the C core; an explicit `Limits()`
+    /// stays uncapped for trusted input.
+    public convenience init(contentsOfFile path: String, limits: Limits = Limits.schemaDefaults) throws {
         let data = FileManager.default.contents(atPath: path)
         guard let data else {
             throw CoreError("\(path): cannot read the descriptor set")
         }
-        let loaded = try loadSchema([UInt8](data), Limits())
+        let loaded = try loadSchema([UInt8](data), limits)
         self.init(
             messages: loaded.messages, enums: loaded.enums,
             messageByName: loaded.messageByName, enumByName: loaded.enumByName, path: path)
     }
 
     /// Loads descriptor-set bytes; use `--include_imports` so every type
-    /// resolves.
-    public init(bytes: [UInt8], limits: Limits = Limits()) throws {
+    /// resolves. Capped at 1 MiB by default, like the C core; an explicit
+    /// `Limits()` stays uncapped for trusted input.
+    public init(bytes: [UInt8], limits: Limits = Limits.schemaDefaults) throws {
         let loaded = try loadSchema(bytes, limits)
         self.messages = loaded.messages
         self.enums = loaded.enums

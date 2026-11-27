@@ -23,7 +23,7 @@ const int wtEndGroup = 4;
 const int wtFixed32 = 5;
 
 /// Nesting cap, the same bound as the C core's PBW_MAX_DEPTH.
-const int maxDepth = 256;
+const int maxDepth = 100;
 
 /// 2^32: `x % u32` is exact on every target where `1 << 32` is not.
 const int u32 = 4294967296;

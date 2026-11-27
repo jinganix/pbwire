@@ -26,6 +26,18 @@ public final class Limits {
 
     private static final Limits DEFAULTS = new Limits(0, 0);
 
+    /**
+     * Default bound for descriptor-set loads: 1 MiB, like the C core's
+     * {@code pbw_descriptor_set_load}. An explicit {@code new Limits(0, 0)}
+     * stays uncapped (trusted input); a {@code null} limit behaves like this
+     * default, not like {@link #defaults()}.
+     */
+    public static Limits schemaDefaults() {
+        return SCHEMA_DEFAULTS;
+    }
+
+    private static final Limits SCHEMA_DEFAULTS = new Limits(1 << 20, 0);
+
     /** The depth cap this limit enforces on a decode. */
     int effectiveDepth() {
         if (maxDepth == 0 || maxDepth > Wire.MAX_DEPTH) {

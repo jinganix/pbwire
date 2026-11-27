@@ -138,6 +138,20 @@ test('skipGroup validates matching end tags and nesting', () => {
     const deep = new R(new Uint8Array([0x0b]));
     deep.cap = 0;
     assert.throws(() => wire.skipGroup(deep, 1, 1), /nesting exceeds/);
+
+    // Boundary pin: exactly 100 nested groups scan, 101 trip the cap
+    // (the C core's PBW_MAX_DEPTH).
+    const nested = (n) => new Uint8Array([...new Array(n).fill(0x0b), ...new Array(n).fill(0x0c)]);
+    // skipUnknown starts inside the body: the caller read the start tag.
+    const atCap = new R(nested(100));
+    const atCapStart = wire.rTag(atCap);
+    wire.skipUnknown(atCap, 1, atCapStart & 7, 0);
+    assert.equal(atCap.pos, 200);
+    assert.throws(() => {
+        const pastCap = new R(nested(101));
+        const start = wire.rTag(pastCap);
+        wire.skipUnknown(pastCap, 1, start & 7, 0);
+    }, /nesting exceeds/);
 });
 
 test('utf8Valid rejects overlongs, surrogates and out-of-range', () => {
@@ -204,5 +218,5 @@ test('the length placeholder patches one byte and shifts larger ones', () => {
     const out = big.b.subarray(0, big.pos);
     assert.deepEqual(Array.from(out.subarray(0, 3)), [0x0a, 0xac, 0x02]); // 300 = 0xac 0x02
     assert.equal(out.length, 3 + 300);
-    assert.equal(MAX_DEPTH, 256);
+    assert.equal(MAX_DEPTH, 100);
 });

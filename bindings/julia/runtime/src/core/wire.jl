@@ -26,7 +26,7 @@ const WT_END_GROUP = 4
 const WT_FIXED32 = 5
 
 # Nesting cap, the same bound as the C core's PBW_MAX_DEPTH.
-const MAX_DEPTH = 256
+const MAX_DEPTH = 100
 
 const MASK32 = UInt32(0xFFFFFFFF)
 const MASK64 = UInt64(0xFFFFFFFFFFFFFFFF)

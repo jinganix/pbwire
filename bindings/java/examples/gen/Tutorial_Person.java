@@ -67,7 +67,7 @@ public final class Tutorial_Person implements Tutorial_PersonOrBuilder {
     }
 
     public List<Tutorial_Person_PhoneNumber> getPhonesList() {
-        return Collections.unmodifiableList(phones_);
+        return phones_;
     }
 
     public int getPhonesCount() {
@@ -109,7 +109,7 @@ public final class Tutorial_Person implements Tutorial_PersonOrBuilder {
         private int id_ = 0;
         private boolean hasEmail;
         private String email_;
-        private List<Tutorial_Person_PhoneNumber> phones_ = new ArrayList<>();
+        private List<Tutorial_Person_PhoneNumber> phones_ = Collections.emptyList();
 
         public Builder clear() {
             hasName = false;
@@ -118,7 +118,7 @@ public final class Tutorial_Person implements Tutorial_PersonOrBuilder {
             id_ = 0;
             hasEmail = false;
             email_ = null;
-            phones_.clear();
+            phones_ = Collections.emptyList();
             return this;
         }
 
@@ -195,26 +195,41 @@ public final class Tutorial_Person implements Tutorial_PersonOrBuilder {
         }
 
         public Builder setPhones(int index, Tutorial_Person_PhoneNumber value) {
+            if (phones_ == Collections.<Tutorial_Person_PhoneNumber>emptyList()) {
+                phones_ = new ArrayList<>();
+            }
             phones_.set(index, Objects.requireNonNull(value));
             return this;
         }
 
         public Builder setPhones(int index, Tutorial_Person_PhoneNumber.Builder builder) {
+            if (phones_ == Collections.<Tutorial_Person_PhoneNumber>emptyList()) {
+                phones_ = new ArrayList<>();
+            }
             phones_.set(index, Objects.requireNonNull(builder).build());
             return this;
         }
 
         public Builder addPhones(Tutorial_Person_PhoneNumber value) {
+            if (phones_ == Collections.<Tutorial_Person_PhoneNumber>emptyList()) {
+                phones_ = new ArrayList<>();
+            }
             phones_.add(Objects.requireNonNull(value));
             return this;
         }
 
         public Builder addPhones(Tutorial_Person_PhoneNumber.Builder builder) {
+            if (phones_ == Collections.<Tutorial_Person_PhoneNumber>emptyList()) {
+                phones_ = new ArrayList<>();
+            }
             phones_.add(Objects.requireNonNull(builder).build());
             return this;
         }
 
         public Builder addAllPhones(Iterable<? extends Tutorial_Person_PhoneNumber> values) {
+            if (phones_ == Collections.<Tutorial_Person_PhoneNumber>emptyList()) {
+                phones_ = new ArrayList<>();
+            }
             for (Tutorial_Person_PhoneNumber v : values) {
                 phones_.add(Objects.requireNonNull(v));
             }
@@ -222,7 +237,7 @@ public final class Tutorial_Person implements Tutorial_PersonOrBuilder {
         }
 
         public Builder clearPhones() {
-            phones_.clear();
+            phones_ = Collections.emptyList();
             return this;
         }
 

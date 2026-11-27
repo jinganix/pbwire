@@ -135,6 +135,24 @@ final class DescriptorTests: XCTestCase {
         XCTAssertFalse(node.def.hasRequired, "proto3 message has no required field")
     }
 
+    /// Descriptor-set loads cap at 1 MiB by default, like the C core: an
+    /// oversized set fails LIMIT, while an explicit uncapped limit passes the
+    /// size gate (zeros skip as unknown).
+    func testSchemaLoadLimits() throws {
+        let big = [UInt8](repeating: 0, count: (1 << 20) + 1)
+        do {
+            _ = try Schema(bytes: big)
+            XCTFail("an oversized descriptor set must fail with defaults")
+        } catch let e as CoreError {
+            XCTAssertEqual(e.status, 5, "oversized set hits LIMIT with defaults")
+        }
+        do {
+            _ = try Schema(bytes: big, limits: Limits())
+        } catch let e as CoreError {
+            XCTAssertNotEqual(e.status, 5, "explicit uncapped must not hit LIMIT")
+        }
+    }
+
     // ------------------------------------------------------------ fixtures
 
     private func varint(_ v: UInt64) -> [UInt8] {

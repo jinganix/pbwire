@@ -242,7 +242,7 @@ public final class TestVisit {
         check(sample.visit(new byte[] {(byte) 0xA3, 0x08, 0x05},
                 nop) == 0, "an unclosed group fails at offset 0");
 
-        // 300 nested groups exceed the 256 depth cap; the scan never recurses
+        // 300 nested groups exceed the 100 depth cap; the scan never recurses
         // into payloads, so the callback must not fire before the cap trips.
         byte[] deep = new byte[600];
         Arrays.fill(deep, 0, 300, (byte) 0x0B);

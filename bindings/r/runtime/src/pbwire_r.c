@@ -55,7 +55,7 @@
 #include <string.h>
 
 /* == PBW_MAX_DEPTH (include/pbwire.h): nesting cap the decoder enforces. */
-#define PBWR_MAX_DEPTH 256
+#define PBWR_MAX_DEPTH 100
 
 typedef struct {
     pbw_schema *schema;
