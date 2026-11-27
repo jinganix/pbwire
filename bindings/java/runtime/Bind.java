@@ -80,6 +80,22 @@ final class Bind {
         };
     }
 
+    static <B> FieldMeta.BoolAdder<B> boolSetter(Class<B> builderClass, String name) {
+        Method m = method(builderClass, name, boolean.class);
+        FieldMeta.BoolAdder<B> direct = spinBool(builderClass, name, m);
+        if (direct != null) {
+            return direct;
+        }
+        MethodHandle mh = unreflect(m);
+        return (b, v) -> {
+            try {
+                mh.invoke(b, v);
+            } catch (Throwable t) {
+                throw failed(builderClass, name, t);
+            }
+        };
+    }
+
     static <B, T> BiConsumer<B, T> setter(Class<B> builderClass, String name,
             Class<T> param) {
         Method m = method(builderClass, name, param);
@@ -126,6 +142,29 @@ final class Bind {
             return (b, v) -> {
                 try {
                     direct.accept(b, v);
+                } catch (Throwable t) {
+                    throw failed(builderClass, name, t);
+                }
+            };
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    private static <B> FieldMeta.BoolAdder<B> spinBool(Class<B> builderClass,
+            String name, Method m) {
+        try {
+            MethodHandle impl = MethodHandles.lookup().unreflect(m);
+            CallSite cs = LambdaMetafactory.metafactory(MethodHandles.lookup(),
+                    "add", MethodType.methodType(FieldMeta.BoolAdder.class),
+                    MethodType.methodType(void.class, Object.class, boolean.class),
+                    impl, MethodType.methodType(void.class, builderClass, boolean.class));
+            @SuppressWarnings("unchecked")
+            FieldMeta.BoolAdder<B> direct =
+                    (FieldMeta.BoolAdder<B>) cs.getTarget().invoke();
+            return (b, v) -> {
+                try {
+                    direct.add(b, v);
                 } catch (Throwable t) {
                     throw failed(builderClass, name, t);
                 }

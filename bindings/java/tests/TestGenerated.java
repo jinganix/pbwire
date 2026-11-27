@@ -447,6 +447,48 @@ public final class TestGenerated {
         check(Arrays.equals(builtUsesDep.toByteArray(), referenceXfile),
                 "xfile facade != reference");
 
+        // T9: repeated numerics ride primitive storage. Empty builds share
+        // the vacant array, set/add/addAll/clear keep List semantics, the
+        // List view is read-only, and the array getter exposes the storage.
+        Structtest_Scalars3 emptyNums = Structtest_Scalars3.newBuilder().build();
+        check(emptyNums.getNumsList().isEmpty() && emptyNums.getNumsCount() == 0
+                && emptyNums.getNumsArray().length == 0, "T9 empty rep int");
+        check(emptyNums.getFlagsList().isEmpty() && emptyNums.getFlagsCount() == 0
+                && emptyNums.getFlagsArray().length == 0, "T9 empty rep bool");
+        Structtest_Scalars3 two = Structtest_Scalars3.newBuilder()
+                .addNums(1).addNums(-2).addFlags(true).addFlags(false).build();
+        check(two.getNumsList().equals(java.util.List.of(1, -2))
+                && two.getNumsCount() == 2 && two.getNums(0) == 1
+                && two.getNums(1) == -2, "T9 rep int reads");
+        check(java.util.Arrays.equals(two.getNumsArray(), new int[]{1, -2}),
+                "T9 rep int array");
+        check(two.getFlagsList().equals(java.util.List.of(true, false))
+                && two.getFlagsCount() == 2 && two.getFlags(0)
+                && !two.getFlags(1), "T9 rep bool reads");
+        check(java.util.Arrays.equals(two.getFlagsArray(), new boolean[]{true, false}),
+                "T9 rep bool array");
+        Structtest_Scalars3.Builder mut = Structtest_Scalars3.newBuilder()
+                .addNums(1).addNums(2).addAllNums(java.util.List.of(3))
+                .addFlags(true);
+        mut.setNums(0, 9);
+        mut.setFlags(0, false);
+        Structtest_Scalars3 three = mut.build();
+        check(three.getNumsList().equals(java.util.List.of(9, 2, 3)),
+                "T9 set/addAll int");
+        check(three.getFlagsList().equals(java.util.List.of(false)), "T9 set bool");
+        checkThrows(() -> two.getNumsList().add(1), "T9 rep int view read-only");
+        checkThrows(() -> two.getFlagsList().add(true), "T9 rep bool view read-only");
+        checkThrows(() -> Structtest_Scalars3.newBuilder().addNums(1).getNums(5),
+                "T9 indexed read bounds-checked");
+        checkThrows(() -> Structtest_Scalars3.newBuilder().setNums(0, 1),
+                "T9 indexed write bounds-checked");
+        Structtest_Scalars3 clearedPrim = Structtest_Scalars3.newBuilder()
+                .addNums(1).clearNums().addFlags(true).clearFlags().build();
+        check(clearedPrim.getNumsList().isEmpty() && clearedPrim.getFlagsList().isEmpty(),
+                "T9 clear reinstalls empty");
+        check(Arrays.equals(Structtest_Scalars3.parseFrom(two.toByteArray()).getNumsArray(),
+                new int[]{1, -2}), "T9 rep int decode round-trips");
+
         System.out.println("TestGenerated: " + checks + " checks passed");
     }
 

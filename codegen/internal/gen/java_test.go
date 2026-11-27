@@ -121,7 +121,8 @@ func TestJavaFilesRegistryNeedsModel(t *testing.T) {
 }
 
 // The message constructor skips the defensive list copy when the Builder
-// slot is empty: absent repeated fields cost no allocation.
+// slot is empty: absent repeated fields cost no allocation. Primitive
+// fields snapshot via toArray, which shares the vacant array by itself.
 func TestJavaEmptyListNoCopy(t *testing.T) {
 	f := &model.File{
 		Path:    "t.proto",
@@ -131,8 +132,9 @@ func TestJavaEmptyListNoCopy(t *testing.T) {
 			{
 				Name: "M",
 				Full: "t.M",
-				Fields: []model.Field{
+			Fields: []model.Field{
 					{Name: "v", Lower: "v", Pascal: "V", Number: 1, Kind: protoreflect.Int32Kind, Repeated: true},
+					{Name: "s", Lower: "s", Pascal: "S", Number: 2, Kind: protoreflect.StringKind, Repeated: true},
 				},
 			},
 		},
@@ -143,8 +145,57 @@ func TestJavaEmptyListNoCopy(t *testing.T) {
 	}
 	got := fileNames(files)
 	msg := hasFile(t, got, "T_M.java")
-	if !strings.Contains(msg, "b.v_.isEmpty()") {
+	if !strings.Contains(msg, "b.s_.isEmpty()") {
 		t.Error("constructor must short-circuit the copy for empty repeated slots")
+	}
+	if !strings.Contains(msg, "v_ = b.v_.toArray()") {
+		t.Error("primitive slots snapshot via toArray")
+	}
+}
+
+// Repeated numerics ride on primitive storage: the Builder grows an
+// IntList (no per-element boxing), the message keeps an exact array, and
+// the Meta row carries a primitive getter next to the List one.
+func TestJavaRepPrimStorage(t *testing.T) {
+	f := &model.File{
+		Path:    "t.proto",
+		Package: "t",
+		Prefix:  "T",
+		Messages: []model.Message{
+			{
+				Name: "M",
+			Full: "t.M",
+			Fields: []model.Field{
+					{Name: "v", Lower: "v", Pascal: "V", Number: 1, Kind: protoreflect.Int32Kind, Repeated: true, Packed: true},
+					{Name: "ok", Lower: "ok", Pascal: "Ok", Number: 2, Kind: protoreflect.BoolKind, Repeated: true, Packed: true},
+				},
+			},
+		},
+	}
+	files, err := javaFiles(f, Options{Lang: "java", Model: true, Register: true, Registry: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := fileNames(files)
+	msg := hasFile(t, got, "T_M.java")
+	if !strings.Contains(msg, "PrimLists.Ints v_") {
+		t.Error("Builder must grow a primitive list for repeated int")
+	}
+	if !strings.Contains(msg, "int[] v_;") {
+		t.Error("message must keep an exact array for repeated int")
+	}
+	if !strings.Contains(msg, "boolean[] ok_;") {
+		t.Error("message must keep an exact array for repeated bool")
+	}
+	if !strings.Contains(msg, "getVArray()") {
+		t.Error("message must expose the primitive array next to the List view")
+	}
+	meta := hasFile(t, got, "T_MMeta.java")
+	if !strings.Contains(meta, "ofRepIntArr") {
+		t.Error("Meta row must carry the primitive int getter")
+	}
+	if !strings.Contains(meta, "ofRepBoolArr") {
+		t.Error("Meta row must carry the primitive bool getter")
 	}
 }
 

@@ -37,7 +37,23 @@ final class FieldMeta<O, B> {
     final byte[] tag; // singular tag bytes
     final byte[] ptag; // packed tag bytes (null unless packed)
     final byte[] etag; // group end tag (null unless a group)
+    /** Primitive array reader for repeated numerics; null keeps the List path. */
+    interface IntsOf<O> {
+        int[] of(O o);
+    }
+
+    /** Primitive array reader for repeated bools; null keeps the List path. */
+    interface BoolsOf<O> {
+        boolean[] of(O o);
+    }
+
+    /** Primitive adder for repeated bools; decodes without boxing. */
+    interface BoolAdder<B> {
+        void add(B b, boolean v);
+    }
+
     final Object get; // getter lambda on O (or list getter for repeated)
+    final Object getArr; // primitive array getter on O, null = List path
     final Object set; // setter/adder lambda on B
     final Predicate<O> hasM; // null unless explicit/message (encode gate)
     final Predicate<B> hasB; // null unless required (decode check)
@@ -51,6 +67,15 @@ final class FieldMeta<O, B> {
             byte[] ptag, byte[] etag, Object get, Object set, Predicate<O> hasM,
             Predicate<B> hasB, ToIntFunction<O> caseOf, Supplier<?> factory,
             Meta<?, ?> sub, Function<?, ?> finish) {
+        this(number, name, wt, kind, explicit, required, packed, repeated, oneof, tag,
+                ptag, etag, get, null, set, hasM, hasB, caseOf, factory, sub, finish);
+    }
+
+    private FieldMeta(int number, String name, int wt, int kind, boolean explicit,
+            boolean required, boolean packed, boolean repeated, int oneof, byte[] tag,
+            byte[] ptag, byte[] etag, Object get, Object getArr, Object set,
+            Predicate<O> hasM, Predicate<B> hasB, ToIntFunction<O> caseOf,
+            Supplier<?> factory, Meta<?, ?> sub, Function<?, ?> finish) {
         this.number = number;
         this.name = name;
         this.wt = wt;
@@ -64,6 +89,7 @@ final class FieldMeta<O, B> {
         this.ptag = ptag;
         this.etag = etag;
         this.get = get;
+        this.getArr = getArr;
         this.set = set;
         this.hasM = hasM;
         this.hasB = hasB;
@@ -179,6 +205,17 @@ final class FieldMeta<O, B> {
                 get, add, null, null, null, null, null, null);
     }
 
+    // int-shaped repeated on primitive storage: the array getter feeds the
+    // codec, the List getter stays for API-compatible readers.
+    static <O, B> FieldMeta<O, B> ofRepIntArr(int number, int kind, boolean packed,
+            Function<O, ? extends List<?>> get, IntsOf<O> getArr, ObjIntConsumer<B> add,
+            String name) {
+        return new FieldMeta<>(number, name, wtFor(kind), kind, false, false, packed,
+                true, -1, Wire.tagBytes(number, wtFor(kind)),
+                packed ? Wire.tagBytes(number, 2) : null, null,
+                get, getArr, add, null, null, null, null, null, null);
+    }
+
     // long-shaped repeated: int64 uint64 sint64 fixed64 sfixed64
     static <O, B> FieldMeta<O, B> ofRepLong(int number, int kind, boolean packed,
             Function<O, ? extends List<?>> get, ObjLongConsumer<B> add, String name) {
@@ -210,6 +247,17 @@ final class FieldMeta<O, B> {
                 Wire.tagBytes(number, 0),
                 packed ? Wire.tagBytes(number, 2) : null, null,
                 get, add, null, null, null, null, null, null);
+    }
+
+    // bool repeated on primitive storage: the array getter feeds the codec
+    // and the primitive adder decodes without boxing either side.
+    static <O, B> FieldMeta<O, B> ofRepBoolArr(int number, boolean packed,
+            Function<O, ? extends List<?>> get, BoolsOf<O> getArr, BoolAdder<B> add,
+            String name) {
+        return new FieldMeta<>(number, name, 0, Kind.BOOL, false, false, packed, true, -1,
+                Wire.tagBytes(number, 0),
+                packed ? Wire.tagBytes(number, 2) : null, null,
+                get, getArr, add, null, null, null, null, null, null);
     }
 
     static <O, B> FieldMeta<O, B> ofRepString(int number, Function<O, ? extends List<?>> get,

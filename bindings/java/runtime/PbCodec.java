@@ -333,6 +333,28 @@ public final class PbCodec {
             case Kind.ENUM:
             case Kind.FIXED32:
             case Kind.SFIXED32: {
+                if (f.getArr != null) {
+                    int[] vs = ((FieldMeta.IntsOf<O>) f.getArr).of(msg);
+                    if (vs.length == 0) {
+                        return;
+                    }
+                    if (f.packed) {
+                        int n = 0;
+                        for (int v : vs) {
+                            n += packedSize(f.kind, v);
+                        }
+                        Wire.wTag(b, f.ptag);
+                        Wire.wVar32(b, n);
+                        for (int v : vs) {
+                            writePackedVar(b, f.kind, v);
+                        }
+                        return;
+                    }
+                    for (int v : vs) {
+                        writeSingleVar(b, f, v);
+                    }
+                    return;
+                }
                 List<Integer> vs = (List<Integer>) ((Function<O, ?>) f.get).apply(msg);
                 if (vs.isEmpty()) {
                     return;
@@ -431,6 +453,25 @@ public final class PbCodec {
                 return;
             }
             case Kind.BOOL: {
+                if (f.getArr != null) {
+                    boolean[] vs = ((FieldMeta.BoolsOf<O>) f.getArr).of(msg);
+                    if (vs.length == 0) {
+                        return;
+                    }
+                    if (f.packed) {
+                        Wire.wTag(b, f.ptag);
+                        Wire.wVar32(b, vs.length);
+                        Wire.ensure(b, vs.length);
+                        for (boolean v : vs) {
+                            b.b[b.pos++] = (byte) (v ? 1 : 0);
+                        }
+                        return;
+                    }
+                    for (boolean v : vs) {
+                        Wire.wTagVar32(b, f.tag, v ? 1 : 0);
+                    }
+                    return;
+                }
                 List<Boolean> vs = (List<Boolean>) ((Function<O, ?>) f.get).apply(msg);
                 if (vs.isEmpty()) {
                     return;
@@ -953,15 +994,26 @@ public final class PbCodec {
                         if (wt == 2) {
                             int len = Wire.rLen32(r);
                             int stop = r.pos + len;
-                            BiConsumer<B, Boolean> add = (BiConsumer<B, Boolean>) f.set;
-                            while (r.pos < stop) {
-                                add.accept(b, Wire.rVar(r) != 0);
+                            if (f.getArr != null) {
+                                FieldMeta.BoolAdder<B> add = (FieldMeta.BoolAdder<B>) f.set;
+                                while (r.pos < stop) {
+                                    add.add(b, Wire.rVar(r) != 0);
+                                }
+                            } else {
+                                BiConsumer<B, Boolean> add = (BiConsumer<B, Boolean>) f.set;
+                                while (r.pos < stop) {
+                                    add.accept(b, Wire.rVar(r) != 0);
+                                }
                             }
                             if (r.pos != stop) {
                                 throw new IllegalArgumentException("packed overrun");
                             }
                         } else if (wt == 0) {
-                            ((BiConsumer<B, Boolean>) f.set).accept(b, Wire.rVar(r) != 0);
+                            if (f.getArr != null) {
+                                ((FieldMeta.BoolAdder<B>) f.set).add(b, Wire.rVar(r) != 0);
+                            } else {
+                                ((BiConsumer<B, Boolean>) f.set).accept(b, Wire.rVar(r) != 0);
+                            }
                         } else {
                             Wire.skipUnknown(r, fnum, wt, depth);
                         }
