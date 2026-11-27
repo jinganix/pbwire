@@ -994,7 +994,7 @@ workload(void)
             pbw_ctx *a = pbw_pool_acquire(pool);
 
             if (a != NULL) {
-                pbw_pool_release(pool, a);
+                (void)pbw_pool_release(pool, a);
             }
             pbw_pool_free(pool);
         }

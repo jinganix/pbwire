@@ -57,7 +57,7 @@ exports.WT_START_GROUP = 3;
 exports.WT_END_GROUP = 4;
 exports.WT_FIXED32 = 5;
 /** Nesting cap, the same bound as the C core's PBW_MAX_DEPTH. */
-exports.MAX_DEPTH = 256;
+exports.MAX_DEPTH = 100;
 /** A pbwire failure: the C core's pbw_status where one exists, else -1. */
 class CoreError extends Error {
     constructor(message, status = -1) {

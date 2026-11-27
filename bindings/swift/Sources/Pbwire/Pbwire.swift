@@ -81,22 +81,27 @@ public final class Schema {
     fileprivate var mirrors: [String: Any] = [:]
 
     /// Loads a schema from a serialized `FileDescriptorSet` file.
-    public convenience init(contentsOfFile path: String) throws {
+    /// Capped at 1 MiB by default, like the C core; pass `maxBytes: 0` for
+    /// trusted input without a byte cap (`maxDepth: 0` means `PBW_MAX_DEPTH`).
+    public convenience init(contentsOfFile path: String, maxBytes: Int = 1 << 20, maxDepth: Int = 0) throws {
         let data: Data
         do {
             data = try Data(contentsOf: URL(fileURLWithPath: path))
         } catch {
             throw PbwireError(status: -1, message: "cannot read \(path): \(error)")
         }
-        try self.init(bytes: data)
+        try self.init(bytes: data, maxBytes: maxBytes, maxDepth: maxDepth)
     }
 
     /// Loads a schema from descriptor-set bytes, e.g. embedded in the bundle.
     /// Use `--include_imports` so every referenced type resolves.
-    public init(bytes: Data) throws {
+    /// Capped at 1 MiB by default, like the C core; pass `maxBytes: 0` for
+    /// trusted input without a byte cap (`maxDepth: 0` means `PBW_MAX_DEPTH`).
+    public init(bytes: Data, maxBytes: Int = 1 << 20, maxDepth: Int = 0) throws {
         var schema: OpaquePointer?
+        var limits = try makeLimits(maxBytes: maxBytes, maxDepth: maxDepth)
         let status = bytes.withUnsafeBytes { raw in
-            pbw_descriptor_set_load(raw.baseAddress, bytes.count, &schema)
+            pbw_descriptor_set_load_limits(raw.baseAddress, bytes.count, &limits, &schema)
         }
         guard status == PBW_OK else {
             // *out holds the partially built schema so the reason survives.

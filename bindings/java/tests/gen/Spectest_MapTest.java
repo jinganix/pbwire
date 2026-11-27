@@ -35,7 +35,7 @@ public final class Spectest_MapTest implements Spectest_MapTestOrBuilder {
     }
 
     public List<Spectest_MapTest_ByIntEntry> getByIntList() {
-        return Collections.unmodifiableList(byInt_);
+        return byInt_;
     }
 
     public int getByIntCount() {
@@ -47,7 +47,7 @@ public final class Spectest_MapTest implements Spectest_MapTestOrBuilder {
     }
 
     public List<Spectest_MapTest_ByStrEntry> getByStrList() {
-        return Collections.unmodifiableList(byStr_);
+        return byStr_;
     }
 
     public int getByStrCount() {
@@ -59,7 +59,7 @@ public final class Spectest_MapTest implements Spectest_MapTestOrBuilder {
     }
 
     public List<Spectest_MapTest_ByMsgEntry> getByMsgList() {
-        return Collections.unmodifiableList(byMsg_);
+        return byMsg_;
     }
 
     public int getByMsgCount() {
@@ -99,14 +99,14 @@ public final class Spectest_MapTest implements Spectest_MapTestOrBuilder {
 
 
     public static final class Builder implements Spectest_MapTestOrBuilder {
-        private List<Spectest_MapTest_ByIntEntry> byInt_ = new ArrayList<>();
-        private List<Spectest_MapTest_ByStrEntry> byStr_ = new ArrayList<>();
-        private List<Spectest_MapTest_ByMsgEntry> byMsg_ = new ArrayList<>();
+        private List<Spectest_MapTest_ByIntEntry> byInt_ = Collections.emptyList();
+        private List<Spectest_MapTest_ByStrEntry> byStr_ = Collections.emptyList();
+        private List<Spectest_MapTest_ByMsgEntry> byMsg_ = Collections.emptyList();
 
         public Builder clear() {
-            byInt_.clear();
-            byStr_.clear();
-            byMsg_.clear();
+            byInt_ = Collections.emptyList();
+            byStr_ = Collections.emptyList();
+            byMsg_ = Collections.emptyList();
             return this;
         }
 
@@ -123,26 +123,41 @@ public final class Spectest_MapTest implements Spectest_MapTestOrBuilder {
         }
 
         public Builder setByInt(int index, Spectest_MapTest_ByIntEntry value) {
+            if (byInt_ == Collections.<Spectest_MapTest_ByIntEntry>emptyList()) {
+                byInt_ = new ArrayList<>();
+            }
             byInt_.set(index, Objects.requireNonNull(value));
             return this;
         }
 
         public Builder setByInt(int index, Spectest_MapTest_ByIntEntry.Builder builder) {
+            if (byInt_ == Collections.<Spectest_MapTest_ByIntEntry>emptyList()) {
+                byInt_ = new ArrayList<>();
+            }
             byInt_.set(index, Objects.requireNonNull(builder).build());
             return this;
         }
 
         public Builder addByInt(Spectest_MapTest_ByIntEntry value) {
+            if (byInt_ == Collections.<Spectest_MapTest_ByIntEntry>emptyList()) {
+                byInt_ = new ArrayList<>();
+            }
             byInt_.add(Objects.requireNonNull(value));
             return this;
         }
 
         public Builder addByInt(Spectest_MapTest_ByIntEntry.Builder builder) {
+            if (byInt_ == Collections.<Spectest_MapTest_ByIntEntry>emptyList()) {
+                byInt_ = new ArrayList<>();
+            }
             byInt_.add(Objects.requireNonNull(builder).build());
             return this;
         }
 
         public Builder addAllByInt(Iterable<? extends Spectest_MapTest_ByIntEntry> values) {
+            if (byInt_ == Collections.<Spectest_MapTest_ByIntEntry>emptyList()) {
+                byInt_ = new ArrayList<>();
+            }
             for (Spectest_MapTest_ByIntEntry v : values) {
                 byInt_.add(Objects.requireNonNull(v));
             }
@@ -150,7 +165,7 @@ public final class Spectest_MapTest implements Spectest_MapTestOrBuilder {
         }
 
         public Builder clearByInt() {
-            byInt_.clear();
+            byInt_ = Collections.emptyList();
             return this;
         }
 
@@ -167,26 +182,41 @@ public final class Spectest_MapTest implements Spectest_MapTestOrBuilder {
         }
 
         public Builder setByStr(int index, Spectest_MapTest_ByStrEntry value) {
+            if (byStr_ == Collections.<Spectest_MapTest_ByStrEntry>emptyList()) {
+                byStr_ = new ArrayList<>();
+            }
             byStr_.set(index, Objects.requireNonNull(value));
             return this;
         }
 
         public Builder setByStr(int index, Spectest_MapTest_ByStrEntry.Builder builder) {
+            if (byStr_ == Collections.<Spectest_MapTest_ByStrEntry>emptyList()) {
+                byStr_ = new ArrayList<>();
+            }
             byStr_.set(index, Objects.requireNonNull(builder).build());
             return this;
         }
 
         public Builder addByStr(Spectest_MapTest_ByStrEntry value) {
+            if (byStr_ == Collections.<Spectest_MapTest_ByStrEntry>emptyList()) {
+                byStr_ = new ArrayList<>();
+            }
             byStr_.add(Objects.requireNonNull(value));
             return this;
         }
 
         public Builder addByStr(Spectest_MapTest_ByStrEntry.Builder builder) {
+            if (byStr_ == Collections.<Spectest_MapTest_ByStrEntry>emptyList()) {
+                byStr_ = new ArrayList<>();
+            }
             byStr_.add(Objects.requireNonNull(builder).build());
             return this;
         }
 
         public Builder addAllByStr(Iterable<? extends Spectest_MapTest_ByStrEntry> values) {
+            if (byStr_ == Collections.<Spectest_MapTest_ByStrEntry>emptyList()) {
+                byStr_ = new ArrayList<>();
+            }
             for (Spectest_MapTest_ByStrEntry v : values) {
                 byStr_.add(Objects.requireNonNull(v));
             }
@@ -194,7 +224,7 @@ public final class Spectest_MapTest implements Spectest_MapTestOrBuilder {
         }
 
         public Builder clearByStr() {
-            byStr_.clear();
+            byStr_ = Collections.emptyList();
             return this;
         }
 
@@ -211,26 +241,41 @@ public final class Spectest_MapTest implements Spectest_MapTestOrBuilder {
         }
 
         public Builder setByMsg(int index, Spectest_MapTest_ByMsgEntry value) {
+            if (byMsg_ == Collections.<Spectest_MapTest_ByMsgEntry>emptyList()) {
+                byMsg_ = new ArrayList<>();
+            }
             byMsg_.set(index, Objects.requireNonNull(value));
             return this;
         }
 
         public Builder setByMsg(int index, Spectest_MapTest_ByMsgEntry.Builder builder) {
+            if (byMsg_ == Collections.<Spectest_MapTest_ByMsgEntry>emptyList()) {
+                byMsg_ = new ArrayList<>();
+            }
             byMsg_.set(index, Objects.requireNonNull(builder).build());
             return this;
         }
 
         public Builder addByMsg(Spectest_MapTest_ByMsgEntry value) {
+            if (byMsg_ == Collections.<Spectest_MapTest_ByMsgEntry>emptyList()) {
+                byMsg_ = new ArrayList<>();
+            }
             byMsg_.add(Objects.requireNonNull(value));
             return this;
         }
 
         public Builder addByMsg(Spectest_MapTest_ByMsgEntry.Builder builder) {
+            if (byMsg_ == Collections.<Spectest_MapTest_ByMsgEntry>emptyList()) {
+                byMsg_ = new ArrayList<>();
+            }
             byMsg_.add(Objects.requireNonNull(builder).build());
             return this;
         }
 
         public Builder addAllByMsg(Iterable<? extends Spectest_MapTest_ByMsgEntry> values) {
+            if (byMsg_ == Collections.<Spectest_MapTest_ByMsgEntry>emptyList()) {
+                byMsg_ = new ArrayList<>();
+            }
             for (Spectest_MapTest_ByMsgEntry v : values) {
                 byMsg_.add(Objects.requireNonNull(v));
             }
@@ -238,7 +283,7 @@ public final class Spectest_MapTest implements Spectest_MapTestOrBuilder {
         }
 
         public Builder clearByMsg() {
-            byMsg_.clear();
+            byMsg_ = Collections.emptyList();
             return this;
         }
 

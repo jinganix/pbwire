@@ -48,6 +48,11 @@ javac -d "$out" -cp "$jar" "$root"/bindings/java/runtime/*.java \
     "$here/Bench.java" "$gen"/structtest/*.java \
     "$root"/bindings/java/tests/gen/*.java
 
-exec java -cp "$out:$jar" Bench "$gen/matrix3.desc" \
+# Fixed generation ratios, not adaptive sizing: the harness runs four tiers
+# back to back in one JVM, and the adaptive policy sizes the heap from the
+# small-tier allocation rate, then re-times the large-tier spike mid-run.
+# That order effect punished the boxing-heavy core arm by ~15% and varied
+# run to run; fixed ratios keep every tier on the same footing.
+exec java -XX:-UseAdaptiveSizePolicy -cp "$out:$jar" Bench "$gen/matrix3.desc" \
     "$gen/matrix2.desc" "$root/bindings/c/tests/data/matrix2.bin" \
     "$gen/edge.desc" "$root/tests/data/edge.bin" "$gen/desc_proto2.desc"

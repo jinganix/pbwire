@@ -59,7 +59,7 @@ int luaL_error(lua_State *L, const char *fmt, ...) __attribute__((noreturn));
 #define PBWLUA_MESSAGE_MT "PbwireMessage"
 
 /* == PBW_MAX_DEPTH (include/pbwire.h): nesting cap the decoder enforces. */
-#define PBWLUA_MAX_DEPTH 256
+#define PBWLUA_MAX_DEPTH 100
 
 #if LUA_VERSION_NUM >= 502
 #define PBWLUA_LEN(L, i) lua_rawlen(L, i)

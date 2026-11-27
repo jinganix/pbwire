@@ -236,7 +236,7 @@ def test_required_and_limits():
     # A message nested one level deeper than the cap fails.
     inner = b"\x82\x01\x02\x10\x01"  # inner { value: 1 } is fine
     assert scalars.to_object(scalars.decode(inner))["inner"] == {"value": 1}
-    # 400 nested unknown groups exceed the 256 cap.
+    # 400 nested unknown groups exceed the 100 cap.
     deep = b"\x9b\x06" * 400 + b"\x9c\x06" * 400
     try:
         scalars.decode(deep)

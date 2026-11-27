@@ -180,6 +180,23 @@ void _groups() {
   deep.cap = 0;
   check(throwsCore(() => wire.skipGroup(deep, 1, 1), 'nesting exceeds'),
       'the group frame chain is capped');
+
+  // Boundary pin: exactly 100 nested groups scan, 101 trip the cap
+  // (the C core's PBW_MAX_DEPTH).
+  Uint8List nested(int n) => Uint8List.fromList(
+      [...List.filled(n, 0x0b), ...List.filled(n, 0x0c)]);
+  // skipUnknown starts inside the body: the caller read the start tag.
+  final atCap = R(nested(100));
+  final atCapStart = wire.rTag(atCap);
+  wire.skipUnknown(atCap, 1, atCapStart % 8, 0);
+  check(atCap.pos == 200, 'exactly 100 nested groups scan');
+  check(
+      throwsCore(() {
+        final pastCap = R(nested(101));
+        final start = wire.rTag(pastCap);
+        wire.skipUnknown(pastCap, 1, start % 8, 0);
+      }, 'nesting exceeds'),
+      '101 nested groups trip the cap');
 }
 
 void _utf8() {
@@ -267,5 +284,5 @@ void _patch() {
   final out = big.b.sublist(0, big.pos);
   check(out.sublist(0, 3).join(',') == '10,172,2', '300 shifts to two bytes');
   check(out.length == 3 + 300, 'the shifted payload keeps its length');
-  check(wire.maxDepth == 256, 'the nesting cap is 256');
+  check(wire.maxDepth == 100, 'the nesting cap is 100');
 }

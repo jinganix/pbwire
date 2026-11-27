@@ -298,13 +298,13 @@ func TestVisitDeepGroups(t *testing.T) {
 	if at != 0 || calls != 0 {
 		t.Fatalf("300-deep: failOff = %d calls = %d, want 0 and 0", at, calls)
 	}
-	// The cap is 256: exactly 256 nested frames still scan, as one raw frame.
-	at, err = dt.Visit(deep(256), runtime.Limits{}, nop)
+	// The cap is 100: exactly 100 nested frames still scan, as one raw frame.
+	at, err = dt.Visit(deep(100), runtime.Limits{}, nop)
 	if err != nil {
-		t.Fatalf("256-deep: %v", err)
+		t.Fatalf("100-deep: %v", err)
 	}
-	if at != 512 {
-		t.Fatalf("256-deep: failOff = %d, want 512", at)
+	if at != 200 {
+		t.Fatalf("100-deep: failOff = %d, want 200", at)
 	}
 }
 

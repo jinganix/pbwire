@@ -196,15 +196,22 @@ public final class GenericCodec {
          * Loads every message (+ extensions) in the set. The set is parsed
          * and linked here, so the runtime has no protobuf-java dependency:
          * a descriptor set plus this file is the whole schema story.
+         * Capped at 1 MiB by default, like the C core's
+         * {@code pbw_descriptor_set_load}; an explicit {@code new Limits(0, 0)}
+         * stays uncapped for trusted input.
          */
         public static Schema load(byte[] fileDescriptorSet) {
-            return load(fileDescriptorSet, Limits.defaults());
+            return load(fileDescriptorSet, Limits.schemaDefaults());
         }
 
-        /** Bounded descriptor load: rejects oversized inputs up front. */
+        /**
+         * Bounded descriptor load: rejects oversized inputs up front. A null
+         * limit behaves like the plain load (1 MiB cap); an explicit
+         * {@code new Limits(0, 0)} stays uncapped.
+         */
         public static Schema load(byte[] fileDescriptorSet, Limits lim) {
             if (lim == null) {
-                lim = Limits.defaults();
+                lim = Limits.schemaDefaults();
             }
             lim.checkBytes(fileDescriptorSet.length, "descriptor set");
             List<Proto.File> files;

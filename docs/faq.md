@@ -149,7 +149,7 @@ reasons are in [BENCHMARKS.md](../BENCHMARKS.md).
 ### Can I decode untrusted bytes with it?
 
 Yes: lengths are bounds-checked, field number 0 and wire types above 5 are
-rejected, nesting is capped at 256 (`PBW_MAX_DEPTH`), and every failure returns a
+rejected, nesting is capped at 100 (`PBW_MAX_DEPTH`), and every failure returns a
 `pbw_status` instead of aborting. `pbw_limits` lowers the caps per call
 (`max_bytes`, `max_depth`) for stricter hosts. Descriptor sets stay trusted
 input, but `pbw_descriptor_set_load_limits()` applies the same two caps to

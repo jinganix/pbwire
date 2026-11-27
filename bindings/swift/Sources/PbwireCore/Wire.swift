@@ -18,7 +18,7 @@ public let wtEndGroup: UInt8 = 4
 public let wtFixed32: UInt8 = 5
 
 /// Nesting cap, the same bound as the C core's `PBW_MAX_DEPTH`.
-public let maxDepth: UInt32 = 256
+public let maxDepth: UInt32 = 100
 
 /// A pbwire failure: the C core's `pbw_status` where one exists, else -1.
 public struct CoreError: Error, CustomStringConvertible, Sendable {
@@ -46,6 +46,11 @@ public struct Limits: Sendable {
         self.maxBytes = maxBytes
         self.maxDepth = maxDepth
     }
+
+    /// Default bound for descriptor-set loads: 1 MiB, like the C core's
+    /// `pbw_descriptor_set_load`. An explicit `Limits()` stays uncapped
+    /// (trusted input).
+    public static let schemaDefaults = Limits(maxBytes: 1 << 20)
 
     var effectiveDepth: UInt32 {
         maxDepth == 0 || maxDepth > PbwireCore.maxDepth ? PbwireCore.maxDepth : maxDepth

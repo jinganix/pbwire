@@ -281,7 +281,13 @@ struct pbw_schema {
      * message's value slots always match its descriptor. */
     int frozen;
     int proto3; /* dialect handed to descriptors created from now on */
-    char error[192];
+    /* Freeing the schema while messages built from it are still alive is
+     * use-after-free (see pbw_schema_free): messages keep raw descriptor
+     * pointers, so the schema must outlive them. A per-schema live count
+     * cannot enforce this: schemas are shared across threads (see
+     * test_threads), and portable C99 has no atomics for a race-free
+     * counter, so the contract is documented, not counted. */
+    char error[512];
 };
 
 /* pbw_value.flags: the struct or its payload was allocated from an arena or
@@ -409,10 +415,12 @@ pbw_varint_size(uint64_t value)
 }
 size_t pbw_varint_write(uint8_t *out, uint64_t value);
 /* Decimal conversions for the JSON and text formats. The wire format defines
- * '.' as the decimal separator, full stop: these never consult the host
- * locale (no localeconv, no locale-sensitive strtod/printf), so output is
- * byte-identical under any LC_NUMERIC and no concurrent setlocale can skew
- * a parse. The first 25 significant digits accumulate into a (hi, lo)
+ * '.' as the decimal separator, full stop: parsing never consults the host
+ * locale (custom strtod, '.' only, no localeconv), so no concurrent setlocale
+ * can skew a parse; printing formats with snprintf("%g") and replaces a
+ * foreign decimal separator with '.', so output stays byte-identical under
+ * any LC_NUMERIC without querying locale state. The first 25 significant
+ * digits accumulate into a (hi, lo)
  * pair (error ~2^-100 relative) scaled by exact x10 steps, so ordinary
  * inputs round exactly once, like strtod; saturation (inf/zero) is decided
  * by integer decimal-exponent math, so DBL_MAX/DBL_MIN parse exactly.

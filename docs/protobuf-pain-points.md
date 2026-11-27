@@ -171,7 +171,7 @@ has the one-page version:
   allocation per tree, caller-owned, mutable.
 
 Every failure path returns a `pbw_status` (never `abort`), wire input is
-bounds-checked with nesting capped at 256, and `pbw_limits` lowers the caps
+bounds-checked with nesting capped at 100, and `pbw_limits` lowers the caps
 per call. What is *not* claimed: decode still materializes a tree (it is not
 a zero-copy view like FlatBuffers/Cap'n Proto); the win is one allocation
 per tree instead of one per field, plus buffer reuse on the hot path.

@@ -103,6 +103,12 @@ typedef struct pbw_method pbw_method;
 /* ---------------------------------------------------------------- schema */
 
 pbw_schema *pbw_schema_new(void);
+/* Frees the schema and every descriptor in it. The schema must outlive every
+ * message built from it: a message keeps a raw pointer to its descriptor,
+ * so using a message after its schema is freed is use-after-free. Only
+ * pbw_message_free() stays safe after the schema is gone (it never touches
+ * the descriptor). Messages that live in a pbw_ctx arena die at
+ * pbw_ctx_reset()/pbw_ctx_free(), which must also precede the schema free. */
 void pbw_schema_free(pbw_schema *schema);
 
 /* Create a message or enum descriptor. Names must be unique within a schema. */
@@ -171,7 +177,13 @@ const char *pbw_schema_error(const pbw_schema *schema);
  * Descriptors are named fully qualified without the leading dot:
  * "pkg.Outer.Inner". Field type names resolve the same way.
  * *out is always written; on failure it holds the partially built schema so
- * pbw_schema_error() explains why, and the caller frees it as usual. */
+ * pbw_schema_error() explains why, and the caller frees it as usual.
+ * The input is capped at 1 MiB (PBW_ERR_LIMIT past it): sets are trusted
+ * input, but an unbounded load turns one oversized read into unbounded
+ * allocation. Larger trusted sets load with pbw_descriptor_set_load_limits()
+ * and an explicit max_bytes. Concurrent loads are safe (each builds its own
+ * schema); sharing one schema across threads while loading or linking is not,
+ * and the error string truncates past 512 bytes. */
 pbw_status pbw_descriptor_set_load(const void *data, size_t len,
                                    pbw_schema **out);
 
@@ -282,13 +294,20 @@ const pbw_descriptor *pbw_field_message_type(const pbw_field *field);
 
 /* --------------------------------------------------------------- message */
 
-/* A message keeps pointing at its descriptor: the schema must outlive it. The
- * descriptor must be linked (pbw_schema_link() returned PBW_OK), because field
- * lookup relies on the number-sorted field array the link builds. */
+/* A message keeps pointing at its descriptor: the schema must outlive every
+ * message built from it (see pbw_schema_free), or use after the free is
+ * use-after-free. The descriptor must be linked (pbw_schema_link() returned
+ * PBW_OK), because field lookup relies on the number-sorted field array the
+ * link builds. A later add or link (even a failed one, which sorts before it
+ * validates) retires every existing message: get/set/encode and the printers
+ * then fail with PBW_ERR_INVALID (get returns NULL, clear silently ignores
+ * the retired message), so build messages only after the last link. */
 pbw_message *pbw_message_new(const pbw_descriptor *desc);
 /* Frees a message the caller owns and everything under it. A submessage
  * handed out by a parent (pbw_message_set_message(), a decoded tree) is owned
- * by that parent, so freeing it here is a no-op, like arena memory. */
+ * by that parent, so freeing it here is a no-op, like arena memory; freeing
+ * NULL is a no-op too. The no-op cases are by design (they make ownership
+ * transfer safe to write), not errors, so they stay silent. */
 void pbw_message_free(pbw_message *msg);
 const pbw_descriptor *pbw_message_descriptor(const pbw_message *msg);
 /* Wire length this tree was decoded from, 0 when it was built by hand. A
@@ -338,7 +357,9 @@ int pbw_message_is_initialized(const pbw_message *msg);
  * field owned is released with it; one that lives in the tree's arena
  * survives the release unowned, so it can be stored into another field. While
  * detached it rejects stores (nothing would release what it grew there) and
- * becomes writable again once a tree owns it. */
+ * becomes writable again once a tree owns it. On a message retired by a
+ * later schema add or link (see pbw_message_new) clearing silently does
+ * nothing; every other accessor fails instead. */
 void pbw_message_clear(pbw_message *msg, uint32_t number);
 
 /* Unknown fields kept from decoding, as raw wire bytes (each item is its
@@ -347,7 +368,11 @@ void pbw_message_clear(pbw_message *msg, uint32_t number);
 size_t pbw_message_unknown_len(const pbw_message *msg);
 const uint8_t *pbw_message_unknown_bytes(const pbw_message *msg);
 /* Append raw unknown-field bytes (tag + payload per item, as produced by
- * pbw_message_unknown_bytes). Fails on context-owned read-only messages. */
+ * pbw_message_unknown_bytes). During decode the unknown store is bounded by
+ * the input byte cap (unknowns are a subset of the input, checked against
+ * limits->max_bytes up front, plus a few tag bytes for closed-enum
+ * mismatches); this hand-append path is caller-bounded instead, like any
+ * buffer append. Fails on context-owned read-only messages. */
 pbw_status pbw_message_add_unknown_bytes(pbw_message *msg, const void *data,
                                          size_t len);
 
@@ -403,10 +428,16 @@ pbw_value *pbw_value_new_uint_ctx(pbw_ctx *ctx, uint64_t bits);
 pbw_value *pbw_value_new_bytes_ctx(pbw_ctx *ctx, const void *data, size_t len);
 /* Frees a value created by pbw_value_new*(). Values owned by a message (from
  * pbw_message_get(), pbw_value_at(), ...) are released with it: this call is a
- * no-op on them. */
+ * no-op on them, as it is on NULL and on arena values. The no-op cases are by
+ * design (a borrowed value must never be freed twice), not errors, so they
+ * stay silent. */
 void pbw_value_free(pbw_value *value);
 
 pbw_value_kind pbw_value_get_kind(const pbw_value *value);
+/* Numeric getters read the raw bit pattern of a PBW_VALUE_UINT value; any
+ * other kind (bytes, message, list) reads as 0 (0.0 for float/double), so a
+ * caller that skips the kind check gets zero instead of reinterpreted
+ * payload bytes. */
 uint64_t pbw_value_get_uint(const pbw_value *value);
 int64_t pbw_value_get_int(const pbw_value *value);
 int32_t pbw_value_get_int32(const pbw_value *value);
@@ -441,7 +472,7 @@ pbw_ctx *pbw_ctx_new(void);
  * handle plus a chunk header plus room for one allocation; NULL when it is not. An allocation that does not fit returns PBW_ERR_NOMEM from decode and
  * PBW_ERR_LIMIT from pbw_encode_to: the block is the hard cap, so a steady
  * workload never calls malloc. pbw_encode_ctx() needs a growable buffer and
- * reports PBW_ERR_NOMEM here; use pbw_encode_to() instead. */
+ * reports PBW_ERR_INVALID here; use pbw_encode_to() instead. */
 pbw_ctx *pbw_ctx_new_mem(void *mem, size_t len);
 void pbw_ctx_free(pbw_ctx *ctx);
 /* Opaque binding slot, e.g. the language binding's per-thread state.
@@ -453,6 +484,11 @@ void *pbw_ctx_user(const pbw_ctx *ctx);
  * Every message built or decoded with this context dies here too: touching
  * one afterwards reads whatever the next user of the chunk wrote. */
 void pbw_ctx_reset(pbw_ctx *ctx);
+/* Default cap for inputs with no explicit byte bound: plain decode hints,
+ * descriptor-set loads and NULL-limit streams (1 MiB). Single allocations
+ * above it bypass the reusable chunks and are freed on reset, so one outlier
+ * never pins the context. */
+#define PBW_DEFAULT_MAX_BYTES ((size_t)1 << 20)
 /* Max bytes the context keeps resident across resets (decode arena chunks +
  * encode buffer), default 1 MiB. Single allocations above it bypass the
  * reusable chunks and are freed on reset, so one outlier never pins the
@@ -477,7 +513,13 @@ pbw_pool *pbw_pool_new(size_t max_idle, size_t retain_cap);
 void pbw_pool_free(pbw_pool *pool);
 /* Exclusive use until released; NULL when pool is NULL or out of memory. */
 pbw_ctx *pbw_pool_acquire(pbw_pool *pool);
-void pbw_pool_release(pbw_pool *pool, pbw_ctx *ctx);
+/* Release back to the pool (already reset, ready to re-acquire) or free past
+ * max_idle. PBW_OK when the context was pooled or freed, PBW_ERR_INVALID
+ * when the pool or context is NULL, or when the context lives on caller
+ * memory (pbw_ctx_new_mem): such a context can never grow like the pooled
+ * ones, so pooling it would hand out a context that fails where a pooled one
+ * succeeds, and the release is a no-op. */
+pbw_status pbw_pool_release(pbw_pool *pool, pbw_ctx *ctx);
 /* Idle contexts held now (for sizing/debugging, the printf side). */
 size_t pbw_pool_idle(const pbw_pool *pool);
 /* Bytes currently held in the context (for sizing/debugging). */
@@ -490,7 +532,10 @@ size_t pbw_ctx_used(const pbw_ctx *ctx);
 pbw_status pbw_decode_ctx(pbw_ctx *ctx, const pbw_descriptor *desc,
                           const void *buf, size_t len, pbw_message **out);
 /* Encode into the context's buffer. *out stays valid until the next
- * pbw_encode_ctx()/pbw_ctx_reset()/pbw_ctx_free() on the same context. */
+ * pbw_encode_ctx()/pbw_ctx_reset()/pbw_ctx_free() on the same context.
+ * Unsupported on caller-memory contexts (pbw_ctx_new_mem): their buffer
+ * cannot grow, so this reports PBW_ERR_INVALID there; encode with
+ * pbw_encode_to() into caller memory instead. */
 pbw_status pbw_encode_ctx(pbw_ctx *ctx, const pbw_message *msg,
                           const uint8_t **out, size_t *len);
 
@@ -503,13 +548,12 @@ typedef struct pbw_limits {
 
 /* ------------------------------------------------------------------ wire */
 
-/* The text and JSON mappings define '.' as the decimal separator, but strtod
- * and snprintf follow LC_NUMERIC, which the embedding host may have set to a
- * comma-decimal locale. The printers and parsers therefore translate the
- * locale's separator when it is not '.', so the output stays valid under both.
- * That check reads localeconv(), which the C standard does not make safe
- * against a concurrent setlocale(): set the locale once at startup, before
- * another thread calls into this library. */
+/* The text and JSON mappings define '.' as the decimal separator. The parsers
+ * use a locale-independent conversion that accepts '.' only; the printers
+ * format with snprintf("%g") and replace a foreign decimal separator with
+ * '.', so the output stays valid under any LC_NUMERIC. No locale state is
+ * queried (no localeconv, no per-number setlocale dance), which keeps the
+ * printers safe to call from any thread. */
 
 /* Print msg in protobuf text format. *out is malloc'd, NUL-terminated and owned
  * by the caller (pbw_free); *len excludes the NUL. Unknown fields are shown
@@ -563,7 +607,7 @@ pbw_status pbw_json_parse(const pbw_descriptor *desc, const char *text,
 /* Same with explicit bounds and options (either pointer may be NULL for the
  * defaults). The nesting and byte caps behave like pbw_text_parse_limits();
  * note that an array costs a level too, so a repeated message chain spends two
- * levels per message (the default cap then rejects at 128, not 256). */
+ * levels per message (the default cap then rejects at 50, not 100). */
 pbw_status pbw_json_parse_limits(const pbw_descriptor *desc, const char *text,
                                  size_t len, const pbw_limits *limits,
                                  const pbw_json_parse_options *options,
@@ -592,16 +636,16 @@ pbw_status pbw_decode(const pbw_descriptor *desc, const void *buf, size_t len,
 
 /* ------------------------------------------------------------------ limits */
 
-/* Nesting cap the decoder enforces (100 in the reference implementations; 256
- * here for the Erlang binding's 200-deep round-trips, which still rejects
- * conformance test 20000). A decoder that walks wire bytes itself must use the
- * same bound. The cap bounds recursion, not stack: one nesting level costs
- * about 1.4 KB of C stack in a release build and up to 3.8 KB in a debug
- * build (~1 MB under ASan/UBSan), so a thread that parses input up to the cap
- * needs roughly 1 MB free (test_threads pins it to 2 MB; macOS worker threads
- * default to 512 KB). Callers that cannot promise that stack use
- * pbw_limits.max_depth to lower the cap for the binary decoder. */
-#define PBW_MAX_DEPTH 256
+/* Nesting cap the decoder enforces (100, like the reference implementations;
+ * still rejects conformance test 20000). A decoder that walks wire bytes
+ * itself must use the same bound. The cap bounds recursion, not stack: one
+ * nesting level costs about 1.4 KB of C stack in a release build and up to
+ * 3.8 KB in a debug build (~1 MB total under ASan/UBSan), so a thread that
+ * parses input up to the cap needs roughly 1 MB free (test_threads pins it
+ * to 2 MB; macOS worker threads default to 512 KB). Hosts on small stacks
+ * (NIF threads, firmware workers) pass pbw_limits.max_depth to lower the cap
+ * for the call instead of trusting the default. */
+#define PBW_MAX_DEPTH 100
 
 /* Decode with explicit bounds; identical to pbw_decode() with NULL limits. */
 pbw_status pbw_decode_limits(const pbw_descriptor *desc, const void *buf,
@@ -615,7 +659,7 @@ pbw_status pbw_decode_ctx_limits(pbw_ctx *ctx, const pbw_descriptor *desc,
  * nesting at limits->max_depth (0 = PBW_MAX_DEPTH, above clamps to it).
  * Descriptors stay trusted input; the bounds only cap resource use from
  * oversized or hostile sets. NULL limits behaves exactly like
- * pbw_descriptor_set_load(). */
+ * pbw_descriptor_set_load(), including its 1 MiB default cap. */
 pbw_status pbw_descriptor_set_load_limits(const void *data, size_t len,
                                           const pbw_limits *limits,
                                           pbw_schema **out);
@@ -629,7 +673,9 @@ pbw_status pbw_encode_deterministic(const pbw_message *msg, uint8_t **out,
  * contract as pbw_encode_to(): `cap` is the hard limit and PBW_ERR_LIMIT when
  * the message does not fit. The output buffer itself costs no allocation, but
  * the map-entry sort does, so a message with a map can also fail here with
- * PBW_ERR_NOMEM. */
+ * PBW_ERR_NOMEM. Heap-free (embedded/caller-memory) callers must therefore
+ * use plain pbw_encode_to() for maps: the deterministic map sort is
+ * unavailable without the heap, and there is no sorted fallback. */
 pbw_status pbw_encode_deterministic_to(const pbw_message *msg, void *out,
                                        size_t cap, size_t *len);
 
@@ -698,7 +744,11 @@ typedef struct pbw_istream pbw_istream;
 /* Incremental delimited-message reader: feed() appends wire bytes as they
  * arrive, next() decodes one message per call. next() writes NULL to *out
  * and returns PBW_OK when the buffer holds no complete message yet. */
-pbw_istream *pbw_istream_new(const pbw_limits *limits); /* NULL = defaults */
+/* NULL limits mean capped defaults (max_bytes = PBW_DEFAULT_MAX_BYTES, no
+ * depth cap past PBW_MAX_DEPTH): an unbounded stream buffer turns a sender
+ * that never completes a frame into unbounded growth. Pass explicit limits
+ * with max_bytes = 0 only for trusted input that must stream uncapped. */
+pbw_istream *pbw_istream_new(const pbw_limits *limits);
 void pbw_istream_free(pbw_istream *s);
 /* Drop buffered bytes (complete and partial frames alike). */
 void pbw_istream_reset(pbw_istream *s);

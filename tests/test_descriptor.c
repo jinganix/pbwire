@@ -1031,6 +1031,29 @@ test_load_limits(void)
         pbw_descriptor_set_load_limits(desc_set, sizeof(desc_set), &lim, &schema));
     CHECK(pbw_schema_find(schema, "pbwire.test.Outer.Inner") != NULL);
     pbw_schema_free(schema);
+    /* NULL limits carry the plain-loader 1 MiB cap: an input past it fails
+     * with LIMIT, while an explicit {0, 0} stays uncapped per pbw_limits
+     * (it sails past the size gate and fails in the parser instead). */
+    {
+        size_t big_len = PBW_DEFAULT_MAX_BYTES + 1;
+        unsigned char *big = malloc(big_len);
+        pbw_limits nocap = {0, 0};
+        pbw_schema *big_schema = NULL;
+        CHECK(big != NULL);
+        if (big != NULL) {
+            memset(big, 0, big_len);
+            CHECK_STATUS(PBW_ERR_LIMIT,
+                         pbw_descriptor_set_load_limits(big, big_len, NULL,
+                                                        &big_schema));
+            pbw_schema_free(big_schema);
+            big_schema = NULL;
+            CHECK_STATUS(PBW_ERR_INVALID,
+                         pbw_descriptor_set_load_limits(big, big_len, &nocap,
+                                                        &big_schema));
+            pbw_schema_free(big_schema);
+            free(big);
+        }
+    }
 }
 
 static void

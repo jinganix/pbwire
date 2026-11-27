@@ -28,7 +28,7 @@ WT_END_GROUP = 4
 WT_FIXED32 = 5
 
 # Nesting cap, the same bound as the C core's PBW_MAX_DEPTH.
-MAX_DEPTH = 256
+MAX_DEPTH = 100
 
 MASK32 = 0xFFFFFFFF
 MASK64 = 0xFFFFFFFFFFFFFFFF

@@ -406,11 +406,25 @@ test_api_robustness(const pbw_descriptor *d)
         CHECK(bl == 5 && bd != NULL && ((const uint8_t *)bd)[0] == 0);
         pbw_value_free(v);
     }
+    /* NULL limits are capped (LIMIT on a chunk no allocation can hold); an
+     * explicit uncapped stream still reports NOMEM for the same chunk. */
     is = pbw_istream_new(NULL);
     CHECK(is != NULL);
     if (is != NULL) {
-        CHECK_STATUS(PBW_ERR_NOMEM, pbw_istream_feed(is, "x", SIZE_MAX));
+        CHECK_STATUS(PBW_ERR_LIMIT, pbw_istream_feed(is, "x", SIZE_MAX));
         pbw_istream_free(is);
+    }
+    {
+        pbw_limits uncapped;
+
+        memset(&uncapped, 0, sizeof(uncapped));
+        is = pbw_istream_new(&uncapped);
+        CHECK(is != NULL);
+        if (is != NULL) {
+            CHECK_STATUS(PBW_ERR_NOMEM,
+                         pbw_istream_feed(is, "x", SIZE_MAX));
+            pbw_istream_free(is);
+        }
     }
     {
         static const uint8_t bad[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
@@ -1003,6 +1017,78 @@ test_visit_vectors(const pbw_descriptor *d)
     }
 }
 
+/* The scan and the decoder must agree on one buffer: every field the visit
+ * reports is a field the decoded tree holds, in wire order, with the wire
+ * type the schema declares; unknown numbers arrive with a NULL field. */
+typedef struct {
+    uint32_t numbers[16];
+    uint32_t wires[16];
+    const pbw_field *fields[16];
+    size_t n;
+} visit_log;
+
+static pbw_status
+log_visit(void *ud, const pbw_field *field, uint32_t number,
+          uint32_t wire_type, const pbw_visit_value *value)
+{
+    visit_log *log = (visit_log *)ud;
+
+    (void)value;
+    if (log->n < sizeof(log->numbers) / sizeof(log->numbers[0])) {
+        log->numbers[log->n] = number;
+        log->wires[log->n] = wire_type;
+        log->fields[log->n] = field;
+        log->n++;
+    }
+    return PBW_OK;
+}
+
+static void
+test_visit_matches_decode(const pbw_descriptor *d)
+{
+    /* 1:1, 2:"hi", 31:7, 31:8 (explicitly unpacked), 16:"x",
+     * 500:9 (unknown varint). */
+    static const uint8_t wire[] = {
+        0x08, 0x01, 0x12, 0x02, 0x68, 0x69, 0xf8, 0x01, 0x07, 0xf8,
+        0x01, 0x08, 0x82, 0x01, 0x01, 0x78, 0xa0, 0x1f, 0x09};
+    static const uint32_t want_numbers[] = {1, 2, 31, 31, 16, 500};
+    static const uint32_t want_wires[] = {0, 2, 0, 0, 2, 0};
+    visit_log log;
+    pbw_message *decoded = NULL;
+    uint32_t fnums[16];
+    const pbw_value *values[16];
+    size_t n;
+    size_t off = 0;
+    size_t i;
+
+    memset(&log, 0, sizeof(log));
+    CHECK_STATUS(PBW_OK, pbw_visit(d, wire, sizeof(wire), log_visit, &log,
+                                   &off));
+    CHECK(log.n == sizeof(want_numbers) / sizeof(want_numbers[0]));
+    CHECK(off == sizeof(wire));
+    for (i = 0; i < log.n && i < sizeof(want_numbers) / sizeof(want_numbers[0]);
+         i++) {
+        CHECK(log.numbers[i] == want_numbers[i]);
+        CHECK(log.wires[i] == want_wires[i]);
+        if (want_numbers[i] == 500) {
+            CHECK(log.fields[i] == NULL);
+        } else {
+            CHECK(log.fields[i] != NULL);
+        }
+    }
+    CHECK_STATUS(PBW_OK, pbw_decode(d, wire, sizeof(wire), &decoded));
+    CHECK(decoded != NULL);
+    if (decoded != NULL) {
+        /* One present slot per known field; the unknown varint stays in
+         * the unknown store (tag plus payload, 3 bytes). */
+        n = pbw_message_present_list(decoded, fnums, values,
+                                     sizeof(fnums) / sizeof(fnums[0]));
+        CHECK(n == 4);
+        CHECK(pbw_message_unknown_len(decoded) == 3);
+        pbw_message_free(decoded);
+    }
+}
+
 int
 main(void)
 {
@@ -1022,6 +1108,7 @@ main(void)
             test_huge_tags(d);
             test_deep_binary(d);
             test_visit_vectors(d);
+            test_visit_matches_decode(d);
             test_random(d);
         }
         pbw_schema_free(s);

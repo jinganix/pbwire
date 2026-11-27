@@ -802,6 +802,10 @@ read_message_field(reader *r, const pbw_field *field, pbw_message *msg,
         pbw_value *item = pbw_value_new_message_a(msg->arena, nested);
 
         if (item == NULL) {
+            /* decode_message marks nested results stored; the item that
+             * would own it never existed, so drop the mark and release
+             * it instead of leaking the temp. */
+            nested->stored = 0;
             pbw_message_free(nested);
             return PBW_ERR_NOMEM;
         }
@@ -937,10 +941,14 @@ messageset_merge(pbw_message *dst, pbw_message *src)
                 messageset_merge(dst->values[i].as.msg, schild);
 
             pbw_msg_set_present(src, i, 0);
+            /* The sub-merge detached every slot it moved, so the child is
+             * garbage either way: drop the stored mark and release it
+             * instead of leaking it, then report the merge status. */
+            schild->stored = 0;
+            pbw_message_free(schild);
             if (status != PBW_OK) {
                 return status;
             }
-            pbw_message_free(schild);
             continue;
         }
         pbw_message_put(dst, i, sv);
@@ -1075,8 +1083,12 @@ read_messageset_item(reader *r, pbw_message *msg, uint32_t depth,
         msg->values[index].kind == PBW_VALUE_MESSAGE &&
         msg->values[index].as.msg != NULL &&
         msg->values[index].as.msg->desc == ext->sub) {
-        /* Singular messages merge, MessageSet items included. */
+        /* Singular messages merge, MessageSet items included. The merge
+         * detaches the slots it moves, so the temp is garbage either way:
+         * drop the stored mark decode_message set and release it before
+         * checking the status. */
         status = messageset_merge(msg->values[index].as.msg, nested);
+        nested->stored = 0;
         pbw_message_free(nested);
         if (status != PBW_OK) {
             return status;
@@ -1405,6 +1417,10 @@ decode_fields(pbw_message *msg, const uint8_t *buf, size_t len, uint32_t depth, 
                 }
                 item = pbw_value_new_message_a(msg->arena, nested);
                 if (item == NULL) {
+                    /* decode_message marks nested results stored; the item
+                     * that would own it never existed, so drop the mark
+                     * and release it instead of leaking the temp. */
+                    nested->stored = 0;
                     pbw_message_free(nested);
                     return PBW_ERR_NOMEM;
                 }
@@ -1537,13 +1553,19 @@ pbw_decode_limits(const pbw_descriptor *desc, const void *buf, size_t len,
     }
     {
         /* First-chunk hint from the wire length. Saturate instead of wrapping
-         * for a length so large that the size arithmetic would overflow. */
+         * for a length so large that the size arithmetic would overflow, and
+         * cap the first chunk at 64 KiB: an uncapped hint turns one huge
+         * input (NULL limits) into one huge malloc up front, while the
+         * chunk growth behind it already converges geometrically. */
         size_t hint = len;
 
         if (len <= 4096) {
             hint = len * 6 + 1024;
         } else if (len <= SIZE_MAX - len / 2 - 512) {
             hint = len + len / 2 + 512;
+        }
+        if (hint > ((size_t)64 << 10)) {
+            hint = (size_t)64 << 10;
         }
         arena = pbw_arena_new_packed(hint);
     }

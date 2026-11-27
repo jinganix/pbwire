@@ -89,7 +89,7 @@ buffer malloc. That is the ~7-8x row in the benchmark below.
 
 Every `pbw_status` is checked and raised as a Lua error; a wrong Lua type for a
 value raises; malformed wire data is rejected by `decode`. Nothing aborts or
-segfaults on a bad call. Nesting is capped at `PBW_MAX_DEPTH` (256) both ways.
+segfaults on a bad call. Nesting is capped at `PBW_MAX_DEPTH` (100) both ways.
 
 ### Value mapping
 

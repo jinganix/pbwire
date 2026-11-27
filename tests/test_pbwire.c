@@ -2113,14 +2113,29 @@ test_hostile_arguments(pbw_schema *schema)
     }
 
     /* A feed chunk no allocation can hold fails instead of spinning on a
-     * wrapped capacity. */
+     * wrapped capacity. Explicit uncapped limits report NOMEM; the NULL
+     * (capped) defaults refuse the same chunk with LIMIT before growing. */
     {
-        pbw_istream *stream = pbw_istream_new(NULL);
+        pbw_limits uncapped;
+        pbw_istream *stream;
 
+        memset(&uncapped, 0, sizeof(uncapped));
+        stream = pbw_istream_new(&uncapped);
         CHECK(stream != NULL);
-        CHECK_STATUS(PBW_ERR_NOMEM, pbw_istream_feed(stream, "x", SIZE_MAX));
-        CHECK_OK(pbw_istream_feed(stream, "ab", 2));
-        pbw_istream_free(stream);
+        if (stream != NULL) {
+            CHECK_STATUS(PBW_ERR_NOMEM,
+                         pbw_istream_feed(stream, "x", SIZE_MAX));
+            CHECK_OK(pbw_istream_feed(stream, "ab", 2));
+            pbw_istream_free(stream);
+        }
+        stream = pbw_istream_new(NULL);
+        CHECK(stream != NULL);
+        if (stream != NULL) {
+            CHECK_STATUS(PBW_ERR_LIMIT,
+                         pbw_istream_feed(stream, "x", SIZE_MAX));
+            CHECK_OK(pbw_istream_feed(stream, "ab", 2));
+            pbw_istream_free(stream);
+        }
     }
 
     /* One partial prefix byte must not disarm the cap for the next huge
@@ -3581,7 +3596,9 @@ test_ctx_mem(pbw_schema *schema)
     }
     CHECK_OK(pbw_encode_to(msg, wire, sizeof(wire), &len));
     CHECK(len > 0);
-    CHECK_STATUS(PBW_ERR_NOMEM, pbw_encode_ctx(ctx, msg, &bytes, &bytes_len));
+    /* A caller-memory context has no growable encode buffer: pbw_encode_ctx()
+     * is unsupported there (pbw_encode_to() is the encoder), not a NOMEM. */
+    CHECK_STATUS(PBW_ERR_INVALID, pbw_encode_ctx(ctx, msg, &bytes, &bytes_len));
 
     /* Decode the same bytes back into the block, then re-encode them from it. */
     pbw_ctx_reset(ctx);
@@ -3986,7 +4003,7 @@ test_ctx_pool(pbw_schema *schema)
     CHECK(pbw_pool_idle(pool) == 0);
     CHECK_STATUS(PBW_OK, pbw_decode_ctx(a, person, wire, len, &decoded));
     CHECK(decoded != NULL);
-    pbw_pool_release(pool, a);
+    CHECK_STATUS(PBW_OK, pbw_pool_release(pool, a));
     CHECK(pbw_pool_idle(pool) == 1);
     c = pbw_pool_acquire(pool);
     CHECK(c == a); /* freelist reuse, already reset */
@@ -3996,16 +4013,16 @@ test_ctx_pool(pbw_schema *schema)
                  "pooled") == 0);
 
     /* releases past max_idle are freed, not kept */
-    pbw_pool_release(pool, b);
-    pbw_pool_release(pool, c);
+    CHECK_STATUS(PBW_OK, pbw_pool_release(pool, b));
+    CHECK_STATUS(PBW_OK, pbw_pool_release(pool, c));
     CHECK(pbw_pool_idle(pool) == 2);
     a = pbw_pool_acquire(pool);
     b = pbw_pool_acquire(pool);
     c = pbw_pool_acquire(pool); /* pool empty: fresh context */
     CHECK(a != NULL && b != NULL && c != NULL);
-    pbw_pool_release(pool, a);
-    pbw_pool_release(pool, b);
-    pbw_pool_release(pool, c);
+    CHECK_STATUS(PBW_OK, pbw_pool_release(pool, a));
+    CHECK_STATUS(PBW_OK, pbw_pool_release(pool, b));
+    CHECK_STATUS(PBW_OK, pbw_pool_release(pool, c));
     CHECK(pbw_pool_idle(pool) == 2);
 
     /* Caller memory is never pooled: it could not grow like the pooled
@@ -4020,20 +4037,21 @@ test_ctx_pool(pbw_schema *schema)
         pbw_ctx *fresh;
 
         CHECK(fixed != NULL);
-        pbw_pool_release(pool, fixed);
+        /* Caller memory is never pooled: releasing it is a reported no-op. */
+        CHECK_STATUS(PBW_ERR_INVALID, pbw_pool_release(pool, fixed));
         CHECK(pbw_pool_idle(pool) == 2);
         fresh = pbw_pool_acquire(pool);
         CHECK(fresh != NULL && fresh != fixed);
         CHECK_STATUS(PBW_OK,
                      pbw_decode_ctx(fresh, person, wire, len, &decoded));
-        pbw_pool_release(pool, fresh);
+        CHECK_STATUS(PBW_OK, pbw_pool_release(pool, fresh));
     }
 
     /* NULL-safe, and max_idle 0 degenerates to new/free */
     CHECK(pbw_pool_acquire(NULL) == NULL);
     CHECK(pbw_pool_idle(NULL) == 0);
-    pbw_pool_release(NULL, NULL);
-    pbw_pool_release(pool, NULL);
+    CHECK_STATUS(PBW_ERR_INVALID, pbw_pool_release(NULL, NULL));
+    CHECK_STATUS(PBW_ERR_INVALID, pbw_pool_release(pool, NULL));
     {
         pbw_pool *none = pbw_pool_new(0, 0);
         pbw_ctx *one;
@@ -4043,7 +4061,7 @@ test_ctx_pool(pbw_schema *schema)
         CHECK(one != NULL);
         CHECK_STATUS(PBW_OK,
                      pbw_decode_ctx(one, person, wire, len, &decoded));
-        pbw_pool_release(none, one);
+        CHECK_STATUS(PBW_OK, pbw_pool_release(none, one));
         CHECK(pbw_pool_idle(none) == 0);
         pbw_pool_free(none);
     }
@@ -10098,7 +10116,7 @@ test_api_misc(pbw_schema *schema)
         one = pbw_pool_acquire(none);
         CHECK(one != NULL);
         /* max_idle 0 frees on release instead of keeping */
-        pbw_pool_release(none, one);
+        CHECK_STATUS(PBW_OK, pbw_pool_release(none, one));
         CHECK(pbw_pool_idle(none) == 0);
         pbw_pool_free(none);
     }

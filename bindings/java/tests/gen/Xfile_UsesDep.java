@@ -43,7 +43,7 @@ public final class Xfile_UsesDep implements Xfile_UsesDepOrBuilder {
     }
 
     public List<Xdep_DepMsg> getManyList() {
-        return Collections.unmodifiableList(many_);
+        return many_;
     }
 
     public int getManyCount() {
@@ -81,12 +81,12 @@ public final class Xfile_UsesDep implements Xfile_UsesDepOrBuilder {
 
     public static final class Builder implements Xfile_UsesDepOrBuilder {
         private Xdep_DepMsg single_;
-        private List<Xdep_DepMsg> many_ = new ArrayList<>();
+        private List<Xdep_DepMsg> many_ = Collections.emptyList();
         private String note_;
 
         public Builder clear() {
             single_ = null;
-            many_.clear();
+            many_ = Collections.emptyList();
             note_ = null;
             return this;
         }
@@ -127,26 +127,41 @@ public final class Xfile_UsesDep implements Xfile_UsesDepOrBuilder {
         }
 
         public Builder setMany(int index, Xdep_DepMsg value) {
+            if (many_ == Collections.<Xdep_DepMsg>emptyList()) {
+                many_ = new ArrayList<>();
+            }
             many_.set(index, Objects.requireNonNull(value));
             return this;
         }
 
         public Builder setMany(int index, Xdep_DepMsg.Builder builder) {
+            if (many_ == Collections.<Xdep_DepMsg>emptyList()) {
+                many_ = new ArrayList<>();
+            }
             many_.set(index, Objects.requireNonNull(builder).build());
             return this;
         }
 
         public Builder addMany(Xdep_DepMsg value) {
+            if (many_ == Collections.<Xdep_DepMsg>emptyList()) {
+                many_ = new ArrayList<>();
+            }
             many_.add(Objects.requireNonNull(value));
             return this;
         }
 
         public Builder addMany(Xdep_DepMsg.Builder builder) {
+            if (many_ == Collections.<Xdep_DepMsg>emptyList()) {
+                many_ = new ArrayList<>();
+            }
             many_.add(Objects.requireNonNull(builder).build());
             return this;
         }
 
         public Builder addAllMany(Iterable<? extends Xdep_DepMsg> values) {
+            if (many_ == Collections.<Xdep_DepMsg>emptyList()) {
+                many_ = new ArrayList<>();
+            }
             for (Xdep_DepMsg v : values) {
                 many_.add(Objects.requireNonNull(v));
             }
@@ -154,7 +169,7 @@ public final class Xfile_UsesDep implements Xfile_UsesDepOrBuilder {
         }
 
         public Builder clearMany() {
-            many_.clear();
+            many_ = Collections.emptyList();
             return this;
         }
 

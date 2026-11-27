@@ -304,6 +304,22 @@ test('limits: byte cap and nesting cap', () => {
         () => type.decode(groups, { maxBytes: 0, maxDepth: 2 }),
         (e) => e instanceof CoreError && /nesting exceeds/.test(e.message),
     );
+
+    // Boundary pin: exactly 100 nestings decode, 101 trip the cap
+    // (the C core's PBW_MAX_DEPTH).
+    let atCap = u8();
+    for (let i = 0; i < 100; i++) {
+        atCap = Uint8Array.from(ld(1, Array.from(atCap)));
+    }
+    assert.doesNotThrow(() => deep.decode(atCap));
+    let pastCap = u8();
+    for (let i = 0; i < 101; i++) {
+        pastCap = Uint8Array.from(ld(1, Array.from(pastCap)));
+    }
+    assert.throws(
+        () => deep.decode(pastCap),
+        (e) => e instanceof CoreError && e.status === 4,
+    );
 });
 
 test('maptest and extensiontest fixtures round trip', () => {

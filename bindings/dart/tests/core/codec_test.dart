@@ -332,6 +332,38 @@ void _limits() {
   check(
       statusOf(() => type.decode(groups, const Limits(maxDepth: 2))) != null,
       'the nesting cap applies to unknown groups too');
+
+  // Boundary pin: exactly 100 nestings decode, 101 trip the cap
+  // (the C core's PBW_MAX_DEPTH).
+  List<int> lenPrefix(int n) {
+    final out = <int>[];
+    var v = n;
+    while (v > 0x7f) {
+      out.add((v % 128) | 0x80);
+      v = v ~/ 128;
+    }
+    out.add(v);
+    return out;
+  }
+
+  var atCap = u8(<int>[]);
+  for (var i = 0; i < 100; i++) {
+    atCap = cat([
+      [0x0a, ...lenPrefix(atCap.length)],
+      atCap,
+    ]);
+  }
+  check(statusOf(() => deep.decode(atCap)) == null,
+      'exactly 100 nestings decode');
+  var pastCap = u8(<int>[]);
+  for (var i = 0; i < 101; i++) {
+    pastCap = cat([
+      [0x0a, ...lenPrefix(pastCap.length)],
+      pastCap,
+    ]);
+  }
+  check(statusOf(() => deep.decode(pastCap)) == 4,
+      '101 nestings trip the cap');
 }
 
 void _mapsAndExtensions() {

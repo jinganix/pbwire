@@ -89,7 +89,7 @@ payload, the boundary cost and the baseline all differ.
 | C structs | `make bench-c` (`bindings/c/benchmarks/bench_struct.cc`) | 74913 B | 1149.3 (4.17x ✅) `shim` | 763.6 (2.03x ✅) `shim` | `protoc` C++ generated from the same `matrix3.proto` |
 | Go | `make go-bench` (`bindings/go/benchmarks`) | 74913 B | 468.8 (1.55x ✅) | 384.5 (1.28x ✅) | `protobuf-go` generated code from the same `matrix3.proto` |
 | Python | `make python-bench` (`bindings/python/benchmarks/bench.py`) | 74913 B | 164.8 (2.75x ✅) `shim encode(data)` | 153.1 (3.58x ✅) `shim to_dict` | `google.protobuf` (upb C extension) on the same `matrix3.proto` |
-| Java | `make java-bench` (`bindings/java/benchmarks`) | 74913 B | 436.3 (1.04x ✅) `core` (generated model) | 319.5 (0.82x ❌) `core` | `protobuf-java` generated code from the same `matrix3.proto` |
+| Java | `make java-bench` (`bindings/java/benchmarks`) | 74913 B | 288.1 (1.05x ✅) `core` (generated model) | 279.0 (1.26x ✅) `core` | `protobuf-java` generated code from the same `matrix3.proto` |
 | Kotlin | `make kotlin-bench` (`bindings/kotlin/benchmarks`) | 74913 B | 470.6 (27.05x ✅ — baseline collapse) `core` | 341.4 (0.77x ❌) `core` | `protoc --kotlin_out` over `protobuf-java`, same `matrix3.proto` |
 | Node | `make node-bench` (`bindings/node/benchmarks`) | 74913 B | 56.8 (0.19x ❌ vs protobufjs) `shim` | 59.5 (0.14x ❌ vs protobufjs) `shim` | [protobufjs](https://www.npmjs.com/package/protobufjs) from the same `matrix3.proto` |
 | Dart | `make dart-bench` (`bindings/dart/benchmarks`) | 74913 B | 151.6 (1.82x ✅) `shim` | 764.4 (4.84x ✅) `shim` | the `protobuf` Dart package + generated code |
@@ -290,7 +290,7 @@ Standard cases), which makes its xlarge tier a memcpy.
 
 ![Java vs protobuf-java — MB/s by tier](docs/charts/bench-java-vs-protobuf-java.svg)
 
-xlarge: encode 436.3 (1.04x ✅) / decode 319.5 (0.82x ❌).
+xlarge: encode 288.1 (1.05x ✅) / decode 279.0 (1.26x ✅).
 Full table and method: [binding README](bindings/java/README.md#benchmarks).
 
 #### Node vs protobufjs

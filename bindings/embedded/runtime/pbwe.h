@@ -37,8 +37,9 @@ typedef struct {
  * (decode arena head + encode buffer); 0 means the core default (1 MiB), so
  * pass a few KiB on a target whose RAM is the limit. desc_limits caps the load
  * itself, the other startup allocation: max_bytes refuses an oversized set
- * before it is parsed, max_depth bounds descriptor nesting. NULL loads it
- * unbounded, like pbw_descriptor_set_load().
+ * before it is parsed, max_depth bounds descriptor nesting. NULL caps it
+ * at 1 MiB (PBW_DEFAULT_MAX_BYTES), like pbw_descriptor_set_load(); pass
+ * explicit {0,0} for trusted uncapped.
  *
  * Zero the box before the first call and pbwe_close() it before opening it
  * again: a second pbwe_open() on a box that is still open (including one left

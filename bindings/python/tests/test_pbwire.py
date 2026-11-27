@@ -358,7 +358,7 @@ def limits():
                      lambda: scalars.decode(reference, {"max_bytes": 5}),
                      "decode honors max_bytes")
         check(scalars.decode(reference, {"max_bytes": len(reference),
-                                         "max_depth": 256}).to_dict() ==
+                                         "max_depth": 100}).to_dict() ==
               SCALARS3, "limits at the boundary still decode")
         check_raises(TypeError, lambda: scalars.decode(reference, 7),
                      "limits must be a dict")

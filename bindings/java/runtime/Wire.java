@@ -18,11 +18,11 @@ public final class Wire {
 
     /**
      * Nesting cap the decoders enforce: the same bound as the C core's
-     * PBW_MAX_DEPTH (256), so a payload the core accepts never fails here.
+     * PBW_MAX_DEPTH (100), so a payload the core accepts never fails here.
      * Groups and messages share one budget; the dynamic codec and the
      * generated models use the same bound, so the two cannot diverge.
      */
-    public static final int MAX_DEPTH = 256;
+    public static final int MAX_DEPTH = 100;
 
     /** Reusable growable output buffer (the ThreadLocal C-core-pbw_ctx twin). */
     public static final class Buf {

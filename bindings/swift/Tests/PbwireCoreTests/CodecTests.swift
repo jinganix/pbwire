@@ -377,6 +377,14 @@ final class CodecTests: XCTestCase {
         var wire: [UInt8] = []
         for _ in 0...Int(maxDepth) { wire = ld(1, wire) }
         XCTAssertEqual(status { _ = try node.decode(wire) }, 4, "nesting exceeds the cap")
+        // Boundary pin: exactly 100 nestings decode, 101 trip the cap
+        // (the C core's PBW_MAX_DEPTH).
+        var atCap: [UInt8] = []
+        for _ in 0..<100 { atCap = ld(1, atCap) }
+        XCTAssertNoThrow(try node.decode(atCap), "exactly 100 nestings decode")
+        var pastCap: [UInt8] = []
+        for _ in 0..<101 { pastCap = ld(1, pastCap) }
+        XCTAssertEqual(status { _ = try node.decode(pastCap) }, 4, "101 nestings trip the cap")
         let shallow = Limits(maxDepth: 4)
         let nested5 = ld(1, ld(1, ld(1, ld(1, ld(1, [])))))
         XCTAssertEqual(status { _ = try node.decode(nested5, limits: shallow) }, 4)

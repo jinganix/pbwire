@@ -70,7 +70,7 @@ public sealed class R
 public static class Wire
 {
     /// <summary>Nesting cap, the same bound as the C core's PBW_MAX_DEPTH.</summary>
-    public const int MaxDepth = 256;
+    public const int MaxDepth = 100;
 
     public static void Ensure(W w, int extra)
     {

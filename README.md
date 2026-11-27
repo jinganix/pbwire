@@ -89,7 +89,7 @@ pbw_free(buf);
 | Runtime dependencies | none (optional importer `pbwire-protoc` needs libprotobuf, C++17) |
 | Not implemented | `.proto` text parsing in the core (deliberately never: build the set once with `protoc`/`buf`/`pbwire-protoc`); RPC transport and stubs (services load, are queryable, and resolve to descriptors with `pbw_service_resolve` for routing — the transport itself stays official gRPC/Twirp/plain HTTP); no CLI (inspect with `protoc --decode/--encode`) |
 | Memory model | one allocation per decoded tree, or one reusable arena `pbw_ctx` per thread |
-| Limits | nesting depth 256, field numbers up to 2^29-1 |
+| Limits | nesting depth 100, field numbers up to 2^29-1 |
 | Platforms | Linux, macOS, Windows (MSVC through CMake/ctest); any C99 compiler; 32-bit (ILP32) and big-endian are CI-verified |
 | License | Apache-2.0 |
 
@@ -178,8 +178,7 @@ at 1.45-1.98x on ctx and 1.20-1.89x plain — the same batched profile as the
 reference parse on both sides now.
 The old tree-API encode row (0.39x-0.58x) retired with the fairness contract
 (`docs/perf-fairness.md`): headlines go through the shipped thin model now.
-Generated code still wins a few published cells: the JVM `core` decode (Java
-0.82x, Kotlin 0.77x, Scala 0.32x — all three ride the same pure-Java runtime,
+Generated code still wins a few published cells: the JVM `core` decode (Kotlin 0.77x, Scala 0.32x — all three ride the same pure-Java runtime,
 and Clojure's `core` trails on both ops at 0.25x/0.62x), Node's `shim`
 (0.19x/0.14x of protobufjs), the managed materialization on C# `shim`
 decode at 74 KB (0.94x — inside the band), and the two
@@ -212,7 +211,7 @@ The one-row summary is here; the detail is there.
 | [C++](bindings/cpp/) | same C runtime, same header | 4.17x (xlarge) / 2.03x (xlarge)¹ | [protoc C++](https://github.com/protocolbuffers/protobuf) |
 | [Python](bindings/python/) | CPython extension | 2.75x (xlarge, `shim encode`) / 3.58x (xlarge, `shim to_dict`) | [google.protobuf (upb)](https://pypi.org/project/protobuf/) |
 | [Ruby](bindings/ruby/) | C extension, linked | 5.03x (xlarge) / 6.11x (xlarge) `shim` | [google-protobuf gem](https://rubygems.org/gems/google-protobuf) |
-| [Java](bindings/java/) | pure-Java codec, no native code | 1.04x (xlarge) / 0.82x (xlarge) `core` (generated model; encode 436.3 vs 420.8 MB/s, just above parity) | [protobuf-java](https://github.com/protocolbuffers/protobuf/tree/main/java) |
+| [Java](bindings/java/) | pure-Java codec, no native code | 1.05x (xlarge) / 1.26x (xlarge) `core` (generated model; encode 288.1 vs 275.6 MB/s, just above parity) | [protobuf-java](https://github.com/protocolbuffers/protobuf/tree/main/java) |
 | [Kotlin](bindings/kotlin/) | Java runtime + DSL | 27.05x (xlarge) / 0.77x (xlarge) `core` | [protobuf-kotlin](https://github.com/protocolbuffers/protobuf/tree/main/java/kotlin) |
 | [Node](bindings/node/) | N-API addon | 0.19x (xlarge) / 0.14x (xlarge) `shim` vs protobufjs | [protobufjs](https://www.npmjs.com/package/protobufjs) |
 | [Objective-C](bindings/objc/) | ARC wrapper | 1.00x (xlarge, parity) / 1.19x (xlarge) `tree` (fresh build per iteration) | [protobuf-objc](https://github.com/protocolbuffers/protobuf/tree/main/objectivec) |

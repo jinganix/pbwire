@@ -1486,7 +1486,9 @@ ds_load_impl(const void *data, size_t len, uint32_t dlim, size_t max_bytes,
 pbw_status
 pbw_descriptor_set_load(const void *data, size_t len, pbw_schema **out)
 {
-    return ds_load_impl(data, len, PBW_MAX_DEPTH, 0, out);
+    /* Capped by default: an unbounded load turns one oversized read into
+     * unbounded allocation. Larger trusted sets use _limits explicitly. */
+    return ds_load_impl(data, len, PBW_MAX_DEPTH, PBW_DEFAULT_MAX_BYTES, out);
 }
 
 pbw_status
@@ -1494,7 +1496,10 @@ pbw_descriptor_set_load_limits(const void *data, size_t len,
                                const pbw_limits *limits, pbw_schema **out)
 {
     uint32_t dlim = PBW_MAX_DEPTH;
-    size_t max_bytes = 0;
+    /* NULL means the plain-loader cap: an explicit {0, 0} stays uncapped
+     * (0 = no byte cap, per pbw_limits), but a missing struct must not
+     * turn one oversized read into unbounded allocation. */
+    size_t max_bytes = PBW_DEFAULT_MAX_BYTES;
 
     if (limits != NULL) {
         /* Above PBW_MAX_DEPTH clamps, like the wire decoder. */

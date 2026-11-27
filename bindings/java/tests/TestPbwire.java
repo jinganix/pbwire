@@ -48,6 +48,7 @@ public final class TestPbwire {
         schemaError();
         hostileLength();
         bufferLimits();
+        schemaLoadLimits();
         System.out.println(checks + " checks passed");
     }
 
@@ -458,6 +459,36 @@ public final class TestPbwire {
             check(false, "an impossible reservation must fail");
         } catch (PbwireException expected) {
             check(expected.status() == -1, "the ceiling failure has no pbw_status");
+        }
+    }
+
+    /* Descriptor-set loads cap at 1 MiB by default, like the C core: an
+     * oversized set fails LIMIT, while an explicit (0, 0) passes the size
+     * gate (zeros skip as unknown) and a null limit stays capped. */
+    private static void schemaLoadLimits() {
+        byte[] big = new byte[(1 << 20) + 1];
+        try {
+            Schema.fromBytes(big);
+            check(false, "an oversized descriptor set must fail with defaults");
+        } catch (PbwireException expected) {
+            check(expected.status() == 5, "oversized set hits LIMIT with defaults");
+        }
+        try {
+            Schema.fromBytes(big, new Limits(0, 0));
+        } catch (PbwireException e) {
+            check(e.status() != 5, "explicit uncapped must not hit LIMIT");
+        }
+        try {
+            Schema.fromBytes(big, null);
+            check(false, "a null limit must stay capped");
+        } catch (PbwireException expected) {
+            check(expected.status() == 5, "null limit hits LIMIT like the plain load");
+        }
+        try {
+            GenericCodec.Schema.load(big);
+            check(false, "GenericCodec default load must stay capped");
+        } catch (PbwireException expected) {
+            check(expected.status() == 5, "GenericCodec oversized set hits LIMIT");
         }
     }
 
