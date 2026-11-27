@@ -2048,7 +2048,10 @@ wire_leaf_to_js(napi_env env, desc_table *table, const uint8_t *base,
     uint32_t pos = off;
     uint32_t end = off + len;
 
-    if (depth >= PBW_MAX_DEPTH) {
+    /* Match the tree decoder: 100 nestings decode, the 101st trips the cap.
+     * The entry depth here is one past the scan guard, so == MAX is the
+     * innermost legal object, not the overflow. */
+    if (depth > PBW_MAX_DEPTH) {
         return fail_argument(env, "nesting limit exceeded");
     }
     if (napi_create_object(env, &out) != napi_ok) {
@@ -2155,7 +2158,8 @@ wire_object_to_js(napi_env env, desc_table *table, const uint8_t *base,
     memset(&list, 0, sizeof(list));
     list.items = list.inline_;
     list.cap = 32;
-    if (depth >= PBW_MAX_DEPTH) {
+    /* Same bound as wire_leaf_to_js: == MAX is the innermost legal object. */
+    if (depth > PBW_MAX_DEPTH) {
         return fail_argument(env, "nesting limit exceeded");
     }
     if (table->leaf) {
