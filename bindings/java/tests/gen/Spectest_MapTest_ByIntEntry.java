@@ -93,6 +93,9 @@ public final class Spectest_MapTest_ByIntEntry implements Spectest_MapTest_ByInt
 
         public Spectest_MapTest_ByIntEntry build() {
             Spectest_MapTest_ByIntEntry result = buildPartial();
+            if (!result.isInitialized()) {
+                throw new IllegalStateException("spectest.MapTest.ByIntEntry" + ": missing required fields");
+            }
             return result;
         }
 

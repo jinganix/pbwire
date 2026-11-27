@@ -764,6 +764,9 @@ public final class Structtest_Scalars3 implements Structtest_Scalars3OrBuilder {
 
         public Structtest_Scalars3 build() {
             Structtest_Scalars3 result = buildPartial();
+            if (!result.isInitialized()) {
+                throw new IllegalStateException("structtest.Scalars3" + ": missing required fields");
+            }
             return result;
         }
 

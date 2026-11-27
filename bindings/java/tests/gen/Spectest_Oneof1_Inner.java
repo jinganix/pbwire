@@ -71,6 +71,9 @@ public final class Spectest_Oneof1_Inner implements Spectest_Oneof1_InnerOrBuild
 
         public Spectest_Oneof1_Inner build() {
             Spectest_Oneof1_Inner result = buildPartial();
+            if (!result.isInitialized()) {
+                throw new IllegalStateException("spectest.Oneof1.Inner" + ": missing required fields");
+            }
             return result;
         }
 

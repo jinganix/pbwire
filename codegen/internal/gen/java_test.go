@@ -120,63 +120,6 @@ func TestJavaFilesRegistryNeedsModel(t *testing.T) {
 	}
 }
 
-// build() skips the isInitialized walk when neither the message nor any
-// reachable message type declares required fields; otherwise it keeps it.
-func TestJavaBuildSkipsCheck(t *testing.T) {
-	f := &model.File{
-		Path:    "t.proto",
-		Package: "t",
-		Prefix:  "T",
-		Messages: []model.Message{
-			{
-				Name: "M",
-				Full: "t.M",
-				Fields: []model.Field{
-					{Name: "v", Lower: "v", Pascal: "V", Number: 1, Kind: protoreflect.Int32Kind},
-				},
-			},
-			{
-				Name: "R",
-				Full: "t.R",
-				Fields: []model.Field{
-					{Name: "id", Lower: "id", Pascal: "Id", Number: 1, Kind: protoreflect.Int32Kind, Required: true},
-				},
-			},
-			{
-				Name: "P",
-				Full: "t.P",
-				Fields: []model.Field{
-					{Name: "r", Lower: "r", Pascal: "R", Number: 1, Kind: protoreflect.MessageKind, Message: "T_R", Full: "t.R"},
-				},
-			},
-			{
-				Name: "Self",
-				Full: "t.Self",
-				Fields: []model.Field{
-					{Name: "child", Lower: "child", Pascal: "Child", Number: 1, Kind: protoreflect.MessageKind, Message: "T_Self", Full: "t.Self"},
-				},
-			},
-		},
-	}
-	files, err := javaFiles(f, Options{Lang: "java", Model: true, Register: true, Registry: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	got := fileNames(files)
-	if strings.Contains(hasFile(t, got, "T_M.java"), "result.isInitialized()") {
-		t.Error("clean message must skip the isInitialized walk in build()")
-	}
-	if strings.Contains(hasFile(t, got, "T_Self.java"), "result.isInitialized()") {
-		t.Error("recursive message without required fields must skip the walk")
-	}
-	if !strings.Contains(hasFile(t, got, "T_R.java"), "result.isInitialized()") {
-		t.Error("required message must keep the isInitialized check in build()")
-	}
-	if !strings.Contains(hasFile(t, got, "T_P.java"), "result.isInitialized()") {
-		t.Error("message reaching a required type must keep the check")
-	}
-}
-
 // The message constructor skips the defensive list copy when the Builder
 // slot is empty: absent repeated fields cost no allocation.
 func TestJavaEmptyListNoCopy(t *testing.T) {

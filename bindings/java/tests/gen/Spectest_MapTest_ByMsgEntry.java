@@ -109,6 +109,9 @@ public final class Spectest_MapTest_ByMsgEntry implements Spectest_MapTest_ByMsg
 
         public Spectest_MapTest_ByMsgEntry build() {
             Spectest_MapTest_ByMsgEntry result = buildPartial();
+            if (!result.isInitialized()) {
+                throw new IllegalStateException("spectest.MapTest.ByMsgEntry" + ": missing required fields");
+            }
             return result;
         }
 
