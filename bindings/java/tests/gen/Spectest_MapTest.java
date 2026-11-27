@@ -21,9 +21,9 @@ public final class Spectest_MapTest implements Spectest_MapTestOrBuilder {
     private final List<Spectest_MapTest_ByMsgEntry> byMsg_; // by_msg = 3
 
     private Spectest_MapTest(Builder b) {
-        byInt_ = Collections.unmodifiableList(new ArrayList<>(b.byInt_));
-        byStr_ = Collections.unmodifiableList(new ArrayList<>(b.byStr_));
-        byMsg_ = Collections.unmodifiableList(new ArrayList<>(b.byMsg_));
+        byInt_ = b.byInt_.isEmpty() ? Collections.emptyList() : Collections.unmodifiableList(new ArrayList<>(b.byInt_));
+        byStr_ = b.byStr_.isEmpty() ? Collections.emptyList() : Collections.unmodifiableList(new ArrayList<>(b.byStr_));
+        byMsg_ = b.byMsg_.isEmpty() ? Collections.emptyList() : Collections.unmodifiableList(new ArrayList<>(b.byMsg_));
     }
 
     public static Builder newBuilder() {

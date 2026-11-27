@@ -58,14 +58,14 @@ public final class Structtest_Scalars3 implements Structtest_Scalars3OrBuilder {
         str_ = b.str_ == null ? "" : b.str_;
         color_ = b.color_;
         inner_ = b.inner_;
-        nums_ = Collections.unmodifiableList(new ArrayList<>(b.nums_));
-        tags_ = Collections.unmodifiableList(new ArrayList<>(b.tags_));
-        inners_ = Collections.unmodifiableList(new ArrayList<>(b.inners_));
+        nums_ = b.nums_.isEmpty() ? Collections.emptyList() : Collections.unmodifiableList(new ArrayList<>(b.nums_));
+        tags_ = b.tags_.isEmpty() ? Collections.emptyList() : Collections.unmodifiableList(new ArrayList<>(b.tags_));
+        inners_ = b.inners_.isEmpty() ? Collections.emptyList() : Collections.unmodifiableList(new ArrayList<>(b.inners_));
         hasOptI32 = b.hasOptI32;
         optI32_ = b.optI32_;
         hasOptStr = b.hasOptStr;
         optStr_ = b.optStr_ == null ? "" : b.optStr_;
-        flags_ = Collections.unmodifiableList(new ArrayList<>(b.flags_));
+        flags_ = b.flags_.isEmpty() ? Collections.emptyList() : Collections.unmodifiableList(new ArrayList<>(b.flags_));
     }
 
     public static Builder newBuilder() {

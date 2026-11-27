@@ -31,7 +31,7 @@ public final class Tutorial_Person implements Tutorial_PersonOrBuilder {
         id_ = b.id_;
         hasEmail = b.hasEmail;
         email_ = b.email_ == null ? "" : b.email_;
-        phones_ = Collections.unmodifiableList(new ArrayList<>(b.phones_));
+        phones_ = b.phones_.isEmpty() ? Collections.emptyList() : Collections.unmodifiableList(new ArrayList<>(b.phones_));
     }
 
     public static Builder newBuilder() {

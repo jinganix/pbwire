@@ -346,12 +346,16 @@ func writeJavaCtor(b *strings.Builder, f *model.File, field model.Field) {
 		// use (append-after-build keeps earlier elements, like protoc).
 		// The Builder side is already lazy, so an absent field copies an
 		// empty list here -- one small object, no per-element work.
+		// An empty slot shares the singleton instead of copying it: absent
+		// repeated fields cost no allocation. isEmpty covers the cleared
+		// heap list too; both shapes are observably the same empty table.
 		if field.Kind == protoreflect.BytesKind {
-			fmt.Fprintf(b, "        {\n            List<byte[]> tmp = new ArrayList<>(b.%s.size());\n", priv)
+			fmt.Fprintf(b, "        if (b.%s.isEmpty()) {\n            %s = Collections.emptyList();\n        } else {\n", priv, priv)
+			fmt.Fprintf(b, "            List<byte[]> tmp = new ArrayList<>(b.%s.size());\n", priv)
 			fmt.Fprintf(b, "            for (byte[] e : b.%s) {\n                tmp.add(e.clone());\n            }\n", priv)
 			fmt.Fprintf(b, "            %s = Collections.unmodifiableList(tmp);\n        }\n", priv)
 		} else {
-			fmt.Fprintf(b, "        %s = Collections.unmodifiableList(new ArrayList<>(b.%s));\n", priv, priv)
+			fmt.Fprintf(b, "        %s = b.%s.isEmpty() ? Collections.emptyList() : Collections.unmodifiableList(new ArrayList<>(b.%s));\n", priv, priv, priv)
 		}
 		return
 	}

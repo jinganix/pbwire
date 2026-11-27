@@ -177,6 +177,34 @@ func TestJavaBuildSkipsCheck(t *testing.T) {
 	}
 }
 
+// The message constructor skips the defensive list copy when the Builder
+// slot is empty: absent repeated fields cost no allocation.
+func TestJavaEmptyListNoCopy(t *testing.T) {
+	f := &model.File{
+		Path:    "t.proto",
+		Package: "t",
+		Prefix:  "T",
+		Messages: []model.Message{
+			{
+				Name: "M",
+				Full: "t.M",
+				Fields: []model.Field{
+					{Name: "v", Lower: "v", Pascal: "V", Number: 1, Kind: protoreflect.Int32Kind, Repeated: true},
+				},
+			},
+		},
+	}
+	files, err := javaFiles(f, Options{Lang: "java", Model: true, Register: true, Registry: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := fileNames(files)
+	msg := hasFile(t, got, "T_M.java")
+	if !strings.Contains(msg, "b.v_.isEmpty()") {
+		t.Error("constructor must short-circuit the copy for empty repeated slots")
+	}
+}
+
 // The file stem keeps registries distinct when a package spans files;
 // a file named after its package keeps the short form.
 func TestRegistryName(t *testing.T) {
