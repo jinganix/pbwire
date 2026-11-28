@@ -19,7 +19,7 @@ public final class Tutorial_AddressBook implements Tutorial_AddressBookOrBuilder
     private final List<Tutorial_Person> people_; // people = 1
 
     private Tutorial_AddressBook(Builder b) {
-        people_ = Collections.unmodifiableList(new ArrayList<>(b.people_));
+        people_ = b.people_.isEmpty() ? Collections.emptyList() : Collections.unmodifiableList(new ArrayList<>(b.people_));
     }
 
     public static Builder newBuilder() {

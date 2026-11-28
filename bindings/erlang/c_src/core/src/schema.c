@@ -216,6 +216,11 @@ add_descriptor(pbw_schema *schema, const char *name,
     if (schema == NULL || name == NULL || pbw_schema_find(schema, name) != NULL) {
         return NULL;
     }
+    if (schema->frozen) {
+        snprintf(schema->error, sizeof(schema->error),
+                 "add descriptor %s before pbw_schema_link()", name);
+        return NULL;
+    }
     if (schema->count == schema->cap) {
         size_t cap = schema->cap ? schema->cap * 2 : 8;
         size_t bytes;
@@ -704,16 +709,16 @@ pbw_field_set_packed(pbw_field *field, int packed)
     }
 }
 
-void
+pbw_status
 pbw_field_set_oneof(pbw_field *field, uint32_t oneof_index)
 {
     if (field == NULL) {
-        return;
+        return PBW_ERR_INVALID;
     }
     if (field->schema != NULL && field->schema->frozen) {
         /* Growing oneof_count after a link would leave existing messages
          * with a oneof_case array shorter than the index they use. */
-        return;
+        return PBW_ERR_INVALID;
     }
     field->oneof_index = oneof_index;
     if (field->schema != NULL) {
@@ -738,6 +743,7 @@ pbw_field_set_oneof(pbw_field *field, uint32_t oneof_index)
             }
         }
     }
+    return PBW_OK;
 }
 
 static int

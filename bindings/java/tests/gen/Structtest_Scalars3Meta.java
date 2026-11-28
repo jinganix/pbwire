@@ -30,12 +30,12 @@ final class Structtest_Scalars3Meta {
                 FieldMeta.ofString(14, Structtest_Scalars3OrBuilder::getStr, Bind.setter(builderClass, "setStr", String.class), null, null, false, "str"),
                 FieldMeta.ofInt(15, Kind.ENUM, Structtest_Scalars3OrBuilder::getColorValue, Bind.intSetter(builderClass, "setColorValue"), null, null, false, "color"),
                 FieldMeta.ofMessage(16, Structtest_Scalars3OrBuilder::getInner, Bind.setter(builderClass, "setInner", Structtest_Inner3.class), Structtest_Inner3.Builder::new, Structtest_Inner3Meta.META, Structtest_Inner3.Builder::buildPartial, Structtest_Scalars3OrBuilder::hasInner, null, false, "inner"),
-                FieldMeta.ofRepInt(17, Kind.INT32, true, Structtest_Scalars3OrBuilder::getNumsList, Bind.intSetter(builderClass, "addNums"), "nums"),
+                FieldMeta.ofRepIntArr(17, Kind.INT32, true, Structtest_Scalars3OrBuilder::getNumsList, Structtest_Scalars3OrBuilder::getNumsArray, Bind.intSetter(builderClass, "addNums"), "nums"),
                 FieldMeta.ofRepString(18, Structtest_Scalars3OrBuilder::getTagsList, Bind.setter(builderClass, "addTags", String.class), "tags"),
                 FieldMeta.ofRepMessage(19, Structtest_Scalars3OrBuilder::getInnersList, Bind.setter(builderClass, "addInners", Structtest_Inner3.class), Structtest_Inner3.Builder::new, Structtest_Inner3Meta.META, Structtest_Inner3.Builder::buildPartial, "inners"),
                 FieldMeta.ofInt(20, Kind.INT32, Structtest_Scalars3OrBuilder::getOptI32, Bind.intSetter(builderClass, "setOptI32"), Structtest_Scalars3OrBuilder::hasOptI32, null, false, "opt_i32"),
                 FieldMeta.ofString(21, Structtest_Scalars3OrBuilder::getOptStr, Bind.setter(builderClass, "setOptStr", String.class), Structtest_Scalars3OrBuilder::hasOptStr, null, false, "opt_str"),
-                FieldMeta.ofRepBool(22, true, Structtest_Scalars3OrBuilder::getFlagsList, Bind.setter(builderClass, "addFlags", Boolean.class), "flags"),
+                FieldMeta.ofRepBoolArr(22, true, Structtest_Scalars3OrBuilder::getFlagsList, Structtest_Scalars3OrBuilder::getFlagsArray, Bind.boolSetter(builderClass, "addFlags"), "flags"),
                 },
                 new String[0]);
     }

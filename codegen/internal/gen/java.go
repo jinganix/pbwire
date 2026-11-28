@@ -312,6 +312,13 @@ func javaMessageFile(f *model.File, m model.Message, opt Options) File {
 func writeJavaField(b *strings.Builder, f *model.File, field model.Field) {
 	priv := field.Lower + "_"
 	if field.Repeated {
+		if prim := javaRepPrim(field); prim == "int" {
+			fmt.Fprintf(b, "    private final int[] %s; // %s = %d\n", priv, field.Name, field.Number)
+			return
+		} else if prim == "boolean" {
+			fmt.Fprintf(b, "    private final boolean[] %s; // %s = %d\n", priv, field.Name, field.Number)
+			return
+		}
 		if field.Kind == protoreflect.BytesKind {
 			fmt.Fprintf(b, "    private final List<byte[]> %s; // %s = %d\n", priv, field.Name, field.Number)
 		} else if field.Kind == protoreflect.EnumKind && field.Enum != "" {
@@ -346,12 +353,18 @@ func writeJavaCtor(b *strings.Builder, f *model.File, field model.Field) {
 		// use (append-after-build keeps earlier elements, like protoc).
 		// The Builder side is already lazy, so an absent field copies an
 		// empty list here -- one small object, no per-element work.
+		// An empty slot shares the singleton instead of copying it: absent
+		// repeated fields cost no allocation. isEmpty covers the cleared
+		// heap list too; both shapes are observably the same empty table.
 		if field.Kind == protoreflect.BytesKind {
-			fmt.Fprintf(b, "        {\n            List<byte[]> tmp = new ArrayList<>(b.%s.size());\n", priv)
+			fmt.Fprintf(b, "        if (b.%s.isEmpty()) {\n            %s = Collections.emptyList();\n        } else {\n", priv, priv)
+			fmt.Fprintf(b, "            List<byte[]> tmp = new ArrayList<>(b.%s.size());\n", priv)
 			fmt.Fprintf(b, "            for (byte[] e : b.%s) {\n                tmp.add(e.clone());\n            }\n", priv)
 			fmt.Fprintf(b, "            %s = Collections.unmodifiableList(tmp);\n        }\n", priv)
+		} else if prim := javaRepPrim(field); prim == "int" || prim == "boolean" {
+			fmt.Fprintf(b, "        %s = b.%s.toArray();\n", priv, priv)
 		} else {
-			fmt.Fprintf(b, "        %s = Collections.unmodifiableList(new ArrayList<>(b.%s));\n", priv, priv)
+			fmt.Fprintf(b, "        %s = b.%s.isEmpty() ? Collections.emptyList() : Collections.unmodifiableList(new ArrayList<>(b.%s));\n", priv, priv, priv)
 		}
 		return
 	}
@@ -453,6 +466,17 @@ func writeJavaRepeatedGetter(b *strings.Builder, f *model.File, field model.Fiel
 		fmt.Fprintf(b, "        %s e = %s.forNumber(%s.get(index));\n", t, t, priv)
 		fmt.Fprintf(b, "        return e == null ? %s.UNRECOGNIZED : e;\n    }\n\n", t)
 		fmt.Fprintf(b, "    public int get%sValue(int index) {\n        return %s.get(index);\n    }\n\n", p, priv)
+		return
+	}
+	if prim := javaRepPrim(field); prim == "int" || prim == "boolean" {
+		box, elem, arr := "Integer", "int", "int[]"
+		if prim == "boolean" {
+			box, elem, arr = "Boolean", "boolean", "boolean[]"
+		}
+		fmt.Fprintf(b, "    public List<%s> get%sList() {\n        return PrimLists.view(%s);\n    }\n\n", box, p, priv)
+		fmt.Fprintf(b, "    public int get%sCount() {\n        return %s.length;\n    }\n\n", p, priv)
+		fmt.Fprintf(b, "    public %s get%s(int index) {\n        return %s[index];\n    }\n\n", elem, p, priv)
+		fmt.Fprintf(b, "    public %s get%sArray() {\n        return %s;\n    }\n\n", arr, p, priv)
 		return
 	}
 	t := javaBoxed(f, field)
@@ -685,6 +709,23 @@ func writeJavaOrBuilderRepeated(b *strings.Builder, f *model.File, field model.F
 		fmt.Fprintf(b, "    int get%sCount();\n", p)
 		fmt.Fprintf(b, "    %s get%s(int index);\n", t, p)
 		fmt.Fprintf(b, "    int get%sValue(int index);\n", p)
+		return
+	}
+	if prim := javaRepPrim(field); prim == "int" || prim == "boolean" {
+		box, elem, arr := "Integer", "int", "int[]"
+		if prim == "boolean" {
+			box, elem, arr = "Boolean", "boolean", "boolean[]"
+		}
+		fmt.Fprintf(b, "    List<%s> get%sList();\n", box, p)
+		fmt.Fprintf(b, "    int get%sCount();\n", p)
+		fmt.Fprintf(b, "    %s get%s(int index);\n", elem, p)
+		// Hand-written models inherit a boxed copy; generated ones
+		// override with the array directly.
+		fmt.Fprintf(b, "    default %s get%sArray() {\n", arr, p)
+		fmt.Fprintf(b, "        List<%s> vs = get%sList();\n", box, p)
+		fmt.Fprintf(b, "        %s out = new %s[vs.size()];\n", arr, elem)
+		fmt.Fprintf(b, "        for (int i = 0; i < vs.size(); i++) {\n")
+		fmt.Fprintf(b, "            out[i] = vs.get(i);\n        }\n        return out;\n    }\n")
 		return
 	}
 	t := javaBoxed(f, field)
@@ -945,6 +986,11 @@ func writeJavaMetaRow(b *strings.Builder, f *model.File, field model.Field, ob s
 			fmt.Fprintf(b, "                FieldMeta.ofRepBytes(%d, %s::get%sList, %s, %q),\n",
 				num, ob, field.Pascal, setV("add"+field.Pascal, "byte[]"), field.Name)
 		case protoreflect.BoolKind:
+			if javaRepPrim(field) == "boolean" {
+				fmt.Fprintf(b, "                FieldMeta.ofRepBoolArr(%d, %s, %s::get%sList, %s::get%sArray, Bind.boolSetter(builderClass, \"add%s\"), %q),\n",
+					num, pack, ob, field.Pascal, ob, field.Pascal, field.Pascal, field.Name)
+				return
+			}
 			fmt.Fprintf(b, "                FieldMeta.ofRepBool(%d, %s, %s::get%sList, %s, %q),\n",
 				num, pack, ob, field.Pascal, setV("add"+field.Pascal, "Boolean"), field.Name)
 		case protoreflect.FloatKind:
@@ -958,6 +1004,11 @@ func writeJavaMetaRow(b *strings.Builder, f *model.File, field model.Field, ob s
 			fmt.Fprintf(b, "                FieldMeta.ofRepLong(%d, %s, %s, %s::get%sList, %s, %q),\n",
 				num, javaKindInt(field.Kind), pack, ob, field.Pascal, setV("add"+field.Pascal, "long"), field.Name)
 		default:
+			if javaRepPrim(field) == "int" {
+				fmt.Fprintf(b, "                FieldMeta.ofRepIntArr(%d, %s, %s, %s::get%sList, %s::get%sArray, %s, %q),\n",
+					num, javaKindInt(field.Kind), pack, ob, field.Pascal, ob, field.Pascal, bindInt("add"+field.Pascal), field.Name)
+				return
+			}
 			fmt.Fprintf(b, "                FieldMeta.ofRepInt(%d, %s, %s, %s::get%sList, %s, %q),\n",
 				num, javaKindInt(field.Kind), pack, ob, field.Pascal, setV("add"+field.Pascal, "int"), field.Name)
 		}
@@ -1065,10 +1116,49 @@ func javaEnsureMut(b *strings.Builder, priv, witness string) {
 	b.WriteString("            }\n")
 }
 
+// javaRepPrim reports the primitive storage for a repeated scalar field:
+// "int" for the int family and open enums (raw values), "boolean" for
+// bools, "" when the field keeps boxed List storage. Named-enum repeated
+// fields stay on the old path: no fixture covers them and the bench never
+// touches them.
+func javaRepPrim(field model.Field) string {
+	if !field.Repeated || field.Message != "" {
+		return ""
+	}
+	if field.Kind == protoreflect.BoolKind {
+		return "boolean"
+	}
+	switch field.Kind {
+	case protoreflect.Int32Kind, protoreflect.Sint32Kind, protoreflect.Sfixed32Kind,
+		protoreflect.Uint32Kind, protoreflect.Fixed32Kind:
+		return "int"
+	case protoreflect.EnumKind:
+		if field.Enum == "" {
+			return "int"
+		}
+	}
+	return ""
+}
+
+// javaEnsurePrim emits the copy-on-write guard for a primitive slot,
+// mirroring javaEnsureMut: the shared EMPTY until the first mutation.
+func javaEnsurePrim(b *strings.Builder, priv, list string) {
+	fmt.Fprintf(b, "            if (%s == PrimLists.%s.EMPTY) {\n", priv, list)
+	fmt.Fprintf(b, "                %s = new PrimLists.%s();\n", priv, list)
+	b.WriteString("            }\n")
+}
+
 // writeJavaBuilderField emits one mutable Builder slot.
 func writeJavaBuilderField(b *strings.Builder, f *model.File, field model.Field) {
 	priv := field.Lower + "_"
 	if field.Repeated {
+		if prim := javaRepPrim(field); prim == "int" {
+			fmt.Fprintf(b, "        private PrimLists.Ints %s = PrimLists.Ints.EMPTY;\n", priv)
+			return
+		} else if prim == "boolean" {
+			fmt.Fprintf(b, "        private PrimLists.Bools %s = PrimLists.Bools.EMPTY;\n", priv)
+			return
+		}
 		// Lazy slots: the shared empty list until the first add, so a
 		// fresh Builder costs one object no matter how many repeated
 		// fields the message has. The add/set paths below allocate on
@@ -1114,6 +1204,13 @@ func writeJavaClearOne(b *strings.Builder, f *model.File, field model.Field, ind
 	if field.Repeated {
 		// Drop the heap list instead of clearing it: the next add
 		// reallocates, so a cleared Builder holds no capacity.
+		if prim := javaRepPrim(field); prim == "int" {
+			fmt.Fprintf(b, "%s%s = PrimLists.Ints.EMPTY;\n", indent, priv)
+			return
+		} else if prim == "boolean" {
+			fmt.Fprintf(b, "%s%s = PrimLists.Bools.EMPTY;\n", indent, priv)
+			return
+		}
 		fmt.Fprintf(b, "%s%s = Collections.emptyList();\n", indent, priv)
 		return
 	}
@@ -1308,6 +1405,10 @@ func writeJavaRepeatedSetter(b *strings.Builder, f *model.File, field model.Fiel
 		fmt.Fprintf(b, "        public Builder clear%s() {\n            %s = Collections.emptyList();\n            return this;\n        }\n\n", p, priv)
 		return
 	}
+	if prim := javaRepPrim(field); prim == "int" || prim == "boolean" {
+		writeJavaRepeatedPrimSetter(b, field, p, priv, prim)
+		return
+	}
 	elem := unbox(javaBoxed(f, field))
 	box := javaBoxed(f, field)
 	fmt.Fprintf(b, "        public List<%s> get%sList() {\n            return Collections.unmodifiableList(%s);\n        }\n\n", box, p, priv)
@@ -1359,6 +1460,35 @@ func writeJavaRepeatedSetter(b *strings.Builder, f *model.File, field model.Fiel
 		b.WriteString("            return this;\n        }\n\n")
 	}
 	fmt.Fprintf(b, "        public Builder clear%s() {\n            %s = Collections.emptyList();\n            return this;\n        }\n\n", p, priv)
+}
+
+// writeJavaRepeatedPrimSetter emits the Builder accessors for a repeated
+// field on primitive storage: List view plus count/indexed/array reads,
+// copy-on-write set/add/addAll, EMPTY reinstall on clear.
+func writeJavaRepeatedPrimSetter(b *strings.Builder, field model.Field, p, priv, prim string) {
+	list, short, box, elem, arr := "PrimLists.Ints", "Ints", "Integer", "int", "int[]"
+	if prim == "boolean" {
+		list, short, box, elem, arr = "PrimLists.Bools", "Bools", "Boolean", "boolean", "boolean[]"
+	}
+	fmt.Fprintf(b, "        public List<%s> get%sList() {\n", box, p)
+	fmt.Fprintf(b, "            return PrimLists.view(%s.toArray());\n", priv)
+	b.WriteString("        }\n\n")
+	fmt.Fprintf(b, "        public int get%sCount() {\n            return %s.size();\n        }\n\n", p, priv)
+	fmt.Fprintf(b, "        public %s get%s(int index) {\n            return %s.get(index);\n        }\n\n", elem, p, priv)
+	fmt.Fprintf(b, "        public %s get%sArray() {\n            return %s.toArray();\n        }\n\n", arr, p, priv)
+	fmt.Fprintf(b, "        public Builder set%s(int index, %s value) {\n", p, elem)
+	javaEnsurePrim(b, priv, short)
+	fmt.Fprintf(b, "            %s.set(index, value);\n", priv)
+	b.WriteString("            return this;\n        }\n\n")
+	fmt.Fprintf(b, "        public Builder add%s(%s value) {\n", p, elem)
+	javaEnsurePrim(b, priv, short)
+	fmt.Fprintf(b, "            %s.add(value);\n", priv)
+	b.WriteString("            return this;\n        }\n\n")
+	fmt.Fprintf(b, "        public Builder addAll%s(Iterable<? extends %s> values) {\n", p, box)
+	javaEnsurePrim(b, priv, short)
+	fmt.Fprintf(b, "            for (%s v : values) {\n                %s.add(v);\n            }\n", box, priv)
+	b.WriteString("            return this;\n        }\n\n")
+	fmt.Fprintf(b, "        public Builder clear%s() {\n            %s = %s.EMPTY;\n            return this;\n        }\n\n", p, priv, list)
 }
 
 // writeJavaOneofBuilder emits getKindCase/clearKind plus the member accessors.

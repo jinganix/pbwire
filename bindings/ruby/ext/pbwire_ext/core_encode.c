@@ -174,9 +174,9 @@ w_varint(writer *w, uint64_t value)
 {
     uint8_t *out;
 
-    /* Reserve the maximum width so the value is written in place: encoding only
-     * appends, so the slack past w->pos is never read. */
-    if (!w_reserve(w, 10)) {
+    /* Reserve exactly what the value needs: a caller buffer sized by
+     * pbw_message_encoded_size() must accept the write with no slack. */
+    if (!w_reserve(w, pbw_varint_size(value))) {
         return;
     }
     out = w->base + w->pos;
@@ -223,9 +223,10 @@ w_tag_word_le(writer *w, uint32_t word, size_t len)
 #elif defined(_MSC_VER) ||                                          \
     (defined(__BYTE_ORDER__) && defined(__ORDER_LITTLE_ENDIAN__) && \
      __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__)
-    /* memcpy of a fixed size compiles to one store and does not assume the
-     * output offset is aligned. */
-    memcpy(w->base + w->pos, &word, sizeof(word));
+    /* memcpy of the exact length: the word holds the tag little-endian, so
+     * copying only `len` bytes stores exactly the tag. A fixed-size 4-byte
+     * store would write past a caller buffer that fits exactly. */
+    memcpy(w->base + w->pos, &word, len);
 #else
     /* Unknown byte order: the portable spelling. */
     uint8_t *out = w->base + w->pos;
@@ -238,21 +239,20 @@ w_tag_word_le(writer *w, uint32_t word, size_t len)
     w->pos += len;
 }
 
-/* Writes a precomputed tag. Tags are at most five bytes and the buffer is
- * reserved for five, so the four-byte word can be stored unconditionally and
- * the slack is overwritten by the next write. */
+/* Writes a precomputed tag. Reserves exactly `len` bytes, so a caller buffer
+ * sized by pbw_message_encoded_size() fits with no slack. */
 PBW_INLINE void
 w_tag(writer *w, uint32_t word, size_t len)
 {
-    if (!w_reserve(w, 5)) {
+    if (!w_reserve(w, len)) {
         return;
     }
     w_tag_word_le(w, word, len);
 }
 
 /* Same writes without a capacity check, for callers that reserved once for
- * the whole field (tag plus value). Encoding only appends, so the reserved
- * slack past w->pos is never read. */
+ * the whole field (tag plus value). The tag write stores exactly `len`
+ * bytes. */
 PBW_INLINE void
 w_tag_noreserve(writer *w, uint32_t word, size_t len)
 {
@@ -451,12 +451,16 @@ write_group_body(writer *w, const pbw_field *field, const pbw_value *value,
     if (w->status != PBW_OK) {
         return;
     }
-    /* Format the END tag straight into the output: bouncing it through a
-     * stack temp trips -Werror=array-bounds under _FORTIFY_SOURCE once
-     * w_copy inlines (a runtime length against a 5-byte object), and the
-     * extra copy is pointless anyway. */
-    if (!w_reserve(w, 5)) {
-        return;
+    /* Format the END tag straight into the output: reserve exactly what the
+     * tag needs so a caller buffer sized by pbw_message_encoded_size()
+     * fits with no slack. */
+    {
+        size_t need = pbw_varint_size(((uint64_t)field->number << 3) |
+                                      PBW_WIRE_END_GROUP);
+
+        if (!w_reserve(w, need)) {
+            return;
+        }
     }
     w->pos += pbw_varint_write(w->base + w->pos,
                                ((uint64_t)field->number << 3) |
@@ -523,18 +527,19 @@ write_element(writer *w, const pbw_field *field, const pbw_value *value,
             return;
         }
         /* Length is known before the payload: reserve once for tag,
-         * length and payload instead of three separate checks. The tag
-         * write stores a whole word, so reserve 4 for it. */
+         * length and payload instead of three separate checks. The reserve
+         * is exact, so a caller buffer sized by pbw_message_encoded_size()
+         * fits with no slack. */
         size_t lb = pbw_varint_size(value->as.bytes.len);
         if (field->tag_len <= 4) {
-            if (value->as.bytes.len > SIZE_MAX - 4 - lb) {
+            if (value->as.bytes.len > SIZE_MAX - field->tag_len - lb) {
                 /* A payload that big cannot exist (it would need SIZE_MAX
                  * bytes of live memory); refuse rather than wrap the sum into
                  * a tiny reserve and then copy past it. */
                 w->status = PBW_ERR_LIMIT;
                 return;
             }
-            if (!w_reserve(w, 4 + lb + value->as.bytes.len)) {
+            if (!w_reserve(w, field->tag_len + lb + value->as.bytes.len)) {
                 return;
             }
             w_tag_noreserve(w, field->tag_word, field->tag_len);
@@ -578,10 +583,10 @@ write_element(writer *w, const pbw_field *field, const pbw_value *value,
             return;
         }
         /* Tag plus length placeholder in one reserve; the payload that
-         * follows grows on demand like before. The tag write stores a
-         * whole word, so reserve 4 for it. */
+         * follows grows on demand like before. The reserve is exact, so a
+         * caller buffer sized by pbw_message_encoded_size() fits. */
         if (field->tag_len <= 4) {
-            if (!w_reserve(w, 4 + 1)) {
+            if (!w_reserve(w, field->tag_len + 1)) {
                 return;
             }
             w_tag_noreserve(w, field->tag_word, field->tag_len);
@@ -610,10 +615,10 @@ write_element(writer *w, const pbw_field *field, const pbw_value *value,
             return;
         }
         /* One reserve for tag plus value: the common small-message path
-         * then writes without another capacity check. The tag write stores
-         * a whole word, so reserve 4 for it. */
+         * then writes without another capacity check. The reserve is exact,
+         * so a caller buffer sized by pbw_message_encoded_size() fits. */
         if (field->tag_len <= 4) {
-            if (!w_reserve(w, 4 + 4)) {
+            if (!w_reserve(w, field->tag_len + 4)) {
                 return;
             }
             w_tag_noreserve(w, field->tag_word, field->tag_len);
@@ -631,7 +636,7 @@ write_element(writer *w, const pbw_field *field, const pbw_value *value,
             return;
         }
         if (field->tag_len <= 4) {
-            if (!w_reserve(w, 4 + 8)) {
+            if (!w_reserve(w, field->tag_len + 8)) {
                 return;
             }
             w_tag_noreserve(w, field->tag_word, field->tag_len);
@@ -647,11 +652,14 @@ write_element(writer *w, const pbw_field *field, const pbw_value *value,
             return;
         }
         if (field->tag_len <= 4) {
-            if (!w_reserve(w, 4 + 10)) {
+            uint64_t v = wire_value(field->type, value->as.u64);
+            size_t vs = pbw_varint_size(v);
+
+            if (!w_reserve(w, field->tag_len + vs)) {
                 return;
             }
             w_tag_noreserve(w, field->tag_word, field->tag_len);
-            w_varint_noreserve(w, wire_value(field->type, value->as.u64));
+            w_varint_noreserve(w, v);
             return;
         }
         w_field_tag(w, field, 0);
@@ -739,8 +747,10 @@ write_packed(writer *w, const pbw_field *field, const pbw_value *list)
     case PBW_TYPE_BOOL: {
         uint8_t *out;
         payload = n;
-        if (!w_reserve(w, (field->len_tag_len <= 4 ? 4 : field->len_tag_len) +
-                              pbw_varint_size(payload) + payload)) {
+        /* Exact reserve: tag plus length prefix plus payload, so a caller
+         * buffer sized by pbw_message_encoded_size() fits with no slack. */
+        if (!w_reserve(w, field->len_tag_len + pbw_varint_size(payload) +
+                              payload)) {
             return;
         }
         if (field->len_tag_len <= 4) {
@@ -768,8 +778,9 @@ write_packed(writer *w, const pbw_field *field, const pbw_value *list)
     case PBW_TYPE_SFIXED32: {
         uint8_t *out;
         payload = n * 4;
-        if (!w_reserve(w, (field->len_tag_len <= 4 ? 4 : field->len_tag_len) +
-                              pbw_varint_size(payload) + payload)) {
+        /* Exact reserve, like the bool case above. */
+        if (!w_reserve(w, field->len_tag_len + pbw_varint_size(payload) +
+                              payload)) {
             return;
         }
         if (field->len_tag_len <= 4) {
@@ -802,8 +813,9 @@ write_packed(writer *w, const pbw_field *field, const pbw_value *list)
     case PBW_TYPE_SFIXED64: {
         uint8_t *out;
         payload = n * 8;
-        if (!w_reserve(w, (field->len_tag_len <= 4 ? 4 : field->len_tag_len) +
-                              pbw_varint_size(payload) + payload)) {
+        /* Exact reserve, like the bool case above. */
+        if (!w_reserve(w, field->len_tag_len + pbw_varint_size(payload) +
+                              payload)) {
             return;
         }
         if (field->len_tag_len <= 4) {
@@ -885,10 +897,11 @@ write_packed(writer *w, const pbw_field *field, const pbw_value *list)
         }
         break;
     }
-    /* Four bytes cover the tag word store; a five-byte length tag (field
-     * number >= 2^21) is copied byte by byte instead. */
-    if (!w_reserve(w, (field->len_tag_len <= 4 ? 4 : field->len_tag_len) +
-                          pbw_varint_size(payload) + payload)) {
+    /* Exact reserve for tag plus length prefix plus payload: a caller
+     * buffer sized by pbw_message_encoded_size() fits with no slack, also
+     * for five-byte length tags (field number >= 2^21). */
+    if (!w_reserve(w, field->len_tag_len + pbw_varint_size(payload) +
+                          payload)) {
         return;
     }
     if (field->len_tag_len <= 4) {
@@ -1524,8 +1537,9 @@ encode_alloc(const pbw_message *msg, int det, uint8_t **out, size_t *len)
     pbw_buf_init(&buf);
     {
         /* Load-time hint first: a decoded tree re-encodes to about its wire
-         * length, so no walk is needed (exact for untouched trees; the
-         * writer grows if it was mutated, hence no invalidation).
+         * length, so no walk is needed (exact for untouched trees;
+         * mutation zeroes the hint, and the writer grows when it
+         * underestimates).
          * Hand-built trees start from a small fixed buffer and grow on
          * demand: walking the tree to size it costs more than one or two
          * doublings for small messages, and large ones only pay a few

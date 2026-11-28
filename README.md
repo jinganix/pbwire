@@ -101,7 +101,7 @@ for `pbwire-protoc`.
 ```bash
 make          # build build/libpbwire.a
 make test     # self-checks: core, threads, descriptor set, C structs, examples round trip
-make shared   # libpbwire.so.1 / libpbwire.1.dylib, for FFI hosts that dlopen it
+make shared   # libpbwire.so.2 / libpbwire.2.dylib, for FFI hosts that dlopen it
 make format   # clang-format (>= 19); make format-check
 make clean
 ```

@@ -26,6 +26,14 @@ public interface Structtest_Scalars3OrBuilder {
     List<Integer> getNumsList();
     int getNumsCount();
     int getNums(int index);
+    default int[] getNumsArray() {
+        List<Integer> vs = getNumsList();
+        int[] out = new int[vs.size()];
+        for (int i = 0; i < vs.size(); i++) {
+            out[i] = vs.get(i);
+        }
+        return out;
+    }
     List<String> getTagsList();
     int getTagsCount();
     String getTags(int index);
@@ -39,4 +47,12 @@ public interface Structtest_Scalars3OrBuilder {
     List<Boolean> getFlagsList();
     int getFlagsCount();
     boolean getFlags(int index);
+    default boolean[] getFlagsArray() {
+        List<Boolean> vs = getFlagsList();
+        boolean[] out = new boolean[vs.size()];
+        for (int i = 0; i < vs.size(); i++) {
+            out[i] = vs.get(i);
+        }
+        return out;
+    }
 }

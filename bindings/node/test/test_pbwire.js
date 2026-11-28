@@ -61,7 +61,7 @@ function varint(value) {
 }
 
 test('loads a FileDescriptorSet at runtime', () => {
-  assert.strictEqual(abiVersion(), 1);
+  assert.strictEqual(abiVersion(), 2);
   assert.ok(schema instanceof Schema);
   assert.ok(person instanceof MessageType);
   assert.strictEqual(person.name, 'demo.Person');

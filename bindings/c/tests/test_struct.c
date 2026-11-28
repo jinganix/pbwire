@@ -2016,11 +2016,11 @@ test_gap_pins(void)
         f1 = pbw_message_add_field(o, "a", 1, PBW_TYPE_INT32,
                                    PBW_LABEL_OPTIONAL);
         CHECK(f1 != NULL);
-        pbw_field_set_oneof(f1, 1);
+        CHECK_OK(pbw_field_set_oneof(f1, 1));
         f2 = pbw_message_add_field(o, "b", 2, PBW_TYPE_STRING,
                                    PBW_LABEL_OPTIONAL);
         CHECK(f2 != NULL);
-        pbw_field_set_oneof(f2, 1);
+        CHECK_OK(pbw_field_set_oneof(f2, 1));
         CHECK_OK(pbw_schema_link(schema));
         memset(&s, 0, sizeof(s));
         s.a = 7;

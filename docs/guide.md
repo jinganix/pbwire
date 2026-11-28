@@ -63,7 +63,9 @@ one proto2. `pbw_schema_link()` resolves type names and builds the lookup
 tables, so call it once after adding fields, and treat the schema as read-only
 afterwards. Field setters (`pbw_field_set_type_name/oneof/packed`) run before
 the next `pbw_message_add_field`: each add reallocates the field array, so a
-`pbw_field *` held across adds dangles.
+`pbw_field *` held across adds dangles. `pbw_field_set_oneof` must additionally run before
+the first successful `pbw_schema_link()`: the layout freezes then, so a later set is
+refused with `PBW_ERR_INVALID`.
 
 ## Load a schema at runtime
 
@@ -242,18 +244,64 @@ messages on a stream. Feed bytes as they arrive; each `next` call decodes one
 message, or reports nothing yet:
 
 ```c
-pbw_istream *s = pbw_istream_new(NULL);   /* optional pbw_limits */
+const pbw_limits *limits = NULL; /* pass &custom to cap at custom.max_bytes */
+pbw_istream *s = pbw_istream_new(limits);
 
-pbw_istream_feed(s, chunk, chunk_len);     /* append, any split */
-for (;;) {
-    pbw_message *msg = NULL;
-    pbw_istream_next(s, person, &msg);     /* NULL + PBW_OK = need more data */
-    if (msg == NULL)
+size_t at = 0;
+size_t window = (limits != NULL && limits->max_bytes != 0 ? limits->max_bytes : PBW_DEFAULT_MAX_BYTES) + 5;
+while (at < chunk_len) {
+    /* slices of at most max_bytes + 5 always fit an empty buffer */
+    size_t slice = chunk_len - at;
+    size_t drained = 0;
+    int limited;
+    pbw_status feed_st;
+    if (slice > window)
+        slice = window;
+    feed_st = pbw_istream_feed(s, chunk + at, slice);
+    if (feed_st != PBW_OK && feed_st != PBW_ERR_LIMIT) {
+        pbw_istream_reset(s);
         break;
-    /* ... read msg (owned, pbw_message_free) ... */
-    pbw_message_free(msg);
+    }
+    limited = (feed_st == PBW_ERR_LIMIT);
+    if (!limited) {
+        at += slice;
+    }
+    pbw_status st = PBW_OK;
+    for (;;) {
+        pbw_message *msg = NULL;
+        st = pbw_istream_next(s, person, &msg);  /* NULL + PBW_OK = need more data */
+        if (msg == NULL)
+            break;
+        drained++;
+        /* ... read msg (owned, pbw_message_free) ... */
+        pbw_message_free(msg);
+    }
+    if (st != PBW_OK) {
+        /* NULL + status is an error, not need-more-data (e.g. an over-cap
+           frame returns PBW_ERR_LIMIT and stays buffered): reset before the
+           next feed instead of failing every later feed. */
+        pbw_istream_reset(s);
+        break;
+    }
+    if (limited && drained == 0) {
+        /* A split length prefix completes with a <=5-byte feed first: a
+           longer completion past max_bytes + 5 reports LIMIT though the
+           frame fits (e.g. buffered 0x80 + a 69-byte completion). */
+        if (slice > 5) {
+            feed_st = pbw_istream_feed(s, chunk + at, 5);
+            if (feed_st == PBW_OK) {
+                at += 5;
+                continue;
+            }
+        }
+        /* poison slice (e.g. one 2 MiB frame vs a 1 MiB cap): re-feeding
+           it still fails, so stop instead of retrying forever */
+        break;
+    }
 }
 ```
+
+Always check `feed`: past `max_bytes + 5` buffered bytes it returns `PBW_ERR_LIMIT` even when complete frames sit in the buffer, so drain them with `next()` first and re-feed the remainder in slices of at most `max_bytes + 5`.
 
 `pbw_encode_delimited` writes one frame; `pbw_encode_delimited_to` writes the
 same frame into your own buffer (no allocation, `size + prefix +
@@ -379,11 +427,11 @@ reference parser — 40,000 JSON and 60,000 text mutants in
 
 The C ABI is the product, so it is versioned explicitly:
 
-- `PBW_ABI_VERSION` (currently `1`) is in the header; `pbw_abi_version()` returns
+- `PBW_ABI_VERSION` (currently `2`) is in the header; `pbw_abi_version()` returns
 the same number at runtime, so a binding that `dlopen`s the library can refuse a
-mismatch instead of guessing. The Python extension, the Node addon,
-Node, Ruby and PHP compare the two at load time.
-- `make shared` produces `libpbwire.so.1` / `libpbwire.1.dylib`; the CMake
+mismatch instead of guessing. The Python extension and the PHP FFI wrapper
+compare the two at load time.
+- `make shared` produces `libpbwire.so.2` / `libpbwire.2.dylib`; the CMake
 `SOVERSION` carries the same number, so the SONAME and the macro always agree.
 - Additive API changes keep the number; a breaking change bumps both it and the
 SONAME together.

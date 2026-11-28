@@ -32,14 +32,14 @@ public final class Structtest_Scalars3 implements Structtest_Scalars3OrBuilder {
     private final String str_; // str = 14
     private final int color_; // raw value; color = 15
     private final Structtest_Inner3 inner_; // null when absent; inner = 16
-    private final List<Integer> nums_; // nums = 17
+    private final int[] nums_; // nums = 17
     private final List<String> tags_; // tags = 18
     private final List<Structtest_Inner3> inners_; // inners = 19
     private final boolean hasOptI32;
     private final int optI32_; // opt_i32 = 20
     private final boolean hasOptStr;
     private final String optStr_; // opt_str = 21
-    private final List<Boolean> flags_; // flags = 22
+    private final boolean[] flags_; // flags = 22
 
     private Structtest_Scalars3(Builder b) {
         i32_ = b.i32_;
@@ -58,14 +58,14 @@ public final class Structtest_Scalars3 implements Structtest_Scalars3OrBuilder {
         str_ = b.str_ == null ? "" : b.str_;
         color_ = b.color_;
         inner_ = b.inner_;
-        nums_ = Collections.unmodifiableList(new ArrayList<>(b.nums_));
-        tags_ = Collections.unmodifiableList(new ArrayList<>(b.tags_));
-        inners_ = Collections.unmodifiableList(new ArrayList<>(b.inners_));
+        nums_ = b.nums_.toArray();
+        tags_ = b.tags_.isEmpty() ? Collections.emptyList() : Collections.unmodifiableList(new ArrayList<>(b.tags_));
+        inners_ = b.inners_.isEmpty() ? Collections.emptyList() : Collections.unmodifiableList(new ArrayList<>(b.inners_));
         hasOptI32 = b.hasOptI32;
         optI32_ = b.optI32_;
         hasOptStr = b.hasOptStr;
         optStr_ = b.optStr_ == null ? "" : b.optStr_;
-        flags_ = Collections.unmodifiableList(new ArrayList<>(b.flags_));
+        flags_ = b.flags_.toArray();
     }
 
     public static Builder newBuilder() {
@@ -150,15 +150,19 @@ public final class Structtest_Scalars3 implements Structtest_Scalars3OrBuilder {
     }
 
     public List<Integer> getNumsList() {
-        return nums_;
+        return PrimLists.view(nums_);
     }
 
     public int getNumsCount() {
-        return nums_.size();
+        return nums_.length;
     }
 
     public int getNums(int index) {
-        return nums_.get(index);
+        return nums_[index];
+    }
+
+    public int[] getNumsArray() {
+        return nums_;
     }
 
     public List<String> getTagsList() {
@@ -202,15 +206,19 @@ public final class Structtest_Scalars3 implements Structtest_Scalars3OrBuilder {
     }
 
     public List<Boolean> getFlagsList() {
-        return flags_;
+        return PrimLists.view(flags_);
     }
 
     public int getFlagsCount() {
-        return flags_.size();
+        return flags_.length;
     }
 
     public boolean getFlags(int index) {
-        return flags_.get(index);
+        return flags_[index];
+    }
+
+    public boolean[] getFlagsArray() {
+        return flags_;
     }
 
     public byte[] toByteArray() {
@@ -251,14 +259,14 @@ public final class Structtest_Scalars3 implements Structtest_Scalars3OrBuilder {
         private String str_;
         private int color_;
         private Structtest_Inner3 inner_;
-        private List<Integer> nums_ = Collections.emptyList();
+        private PrimLists.Ints nums_ = PrimLists.Ints.EMPTY;
         private List<String> tags_ = Collections.emptyList();
         private List<Structtest_Inner3> inners_ = Collections.emptyList();
         private boolean hasOptI32;
         private int optI32_ = 0;
         private boolean hasOptStr;
         private String optStr_;
-        private List<Boolean> flags_ = Collections.emptyList();
+        private PrimLists.Bools flags_ = PrimLists.Bools.EMPTY;
 
         public Builder clear() {
             i32_ = 0;
@@ -277,14 +285,14 @@ public final class Structtest_Scalars3 implements Structtest_Scalars3OrBuilder {
             str_ = null;
             color_ = 0;
             inner_ = null;
-            nums_ = Collections.emptyList();
+            nums_ = PrimLists.Ints.EMPTY;
             tags_ = Collections.emptyList();
             inners_ = Collections.emptyList();
             hasOptI32 = false;
             optI32_ = 0;
             hasOptStr = false;
             optStr_ = null;
-            flags_ = Collections.emptyList();
+            flags_ = PrimLists.Bools.EMPTY;
             return this;
         }
 
@@ -533,7 +541,7 @@ public final class Structtest_Scalars3 implements Structtest_Scalars3OrBuilder {
         }
 
         public List<Integer> getNumsList() {
-            return Collections.unmodifiableList(nums_);
+            return PrimLists.view(nums_.toArray());
         }
 
         public int getNumsCount() {
@@ -544,25 +552,29 @@ public final class Structtest_Scalars3 implements Structtest_Scalars3OrBuilder {
             return nums_.get(index);
         }
 
+        public int[] getNumsArray() {
+            return nums_.toArray();
+        }
+
         public Builder setNums(int index, int value) {
-            if (nums_ == Collections.<Integer>emptyList()) {
-                nums_ = new ArrayList<>();
+            if (nums_ == PrimLists.Ints.EMPTY) {
+                nums_ = new PrimLists.Ints();
             }
             nums_.set(index, value);
             return this;
         }
 
         public Builder addNums(int value) {
-            if (nums_ == Collections.<Integer>emptyList()) {
-                nums_ = new ArrayList<>();
+            if (nums_ == PrimLists.Ints.EMPTY) {
+                nums_ = new PrimLists.Ints();
             }
             nums_.add(value);
             return this;
         }
 
         public Builder addAllNums(Iterable<? extends Integer> values) {
-            if (nums_ == Collections.<Integer>emptyList()) {
-                nums_ = new ArrayList<>();
+            if (nums_ == PrimLists.Ints.EMPTY) {
+                nums_ = new PrimLists.Ints();
             }
             for (Integer v : values) {
                 nums_.add(v);
@@ -571,7 +583,7 @@ public final class Structtest_Scalars3 implements Structtest_Scalars3OrBuilder {
         }
 
         public Builder clearNums() {
-            nums_ = Collections.emptyList();
+            nums_ = PrimLists.Ints.EMPTY;
             return this;
         }
 
@@ -720,7 +732,7 @@ public final class Structtest_Scalars3 implements Structtest_Scalars3OrBuilder {
         }
 
         public List<Boolean> getFlagsList() {
-            return Collections.unmodifiableList(flags_);
+            return PrimLists.view(flags_.toArray());
         }
 
         public int getFlagsCount() {
@@ -731,25 +743,29 @@ public final class Structtest_Scalars3 implements Structtest_Scalars3OrBuilder {
             return flags_.get(index);
         }
 
+        public boolean[] getFlagsArray() {
+            return flags_.toArray();
+        }
+
         public Builder setFlags(int index, boolean value) {
-            if (flags_ == Collections.<Boolean>emptyList()) {
-                flags_ = new ArrayList<>();
+            if (flags_ == PrimLists.Bools.EMPTY) {
+                flags_ = new PrimLists.Bools();
             }
             flags_.set(index, value);
             return this;
         }
 
         public Builder addFlags(boolean value) {
-            if (flags_ == Collections.<Boolean>emptyList()) {
-                flags_ = new ArrayList<>();
+            if (flags_ == PrimLists.Bools.EMPTY) {
+                flags_ = new PrimLists.Bools();
             }
             flags_.add(value);
             return this;
         }
 
         public Builder addAllFlags(Iterable<? extends Boolean> values) {
-            if (flags_ == Collections.<Boolean>emptyList()) {
-                flags_ = new ArrayList<>();
+            if (flags_ == PrimLists.Bools.EMPTY) {
+                flags_ = new PrimLists.Bools();
             }
             for (Boolean v : values) {
                 flags_.add(v);
@@ -758,7 +774,7 @@ public final class Structtest_Scalars3 implements Structtest_Scalars3OrBuilder {
         }
 
         public Builder clearFlags() {
-            flags_ = Collections.emptyList();
+            flags_ = PrimLists.Bools.EMPTY;
             return this;
         }
 

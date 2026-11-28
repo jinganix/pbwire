@@ -16,8 +16,8 @@ shlib="${1:-}"
 if [ -z "$shlib" ]; then
     make -s shared
     case "$(uname -s)" in
-    Darwin) shlib=build/libpbwire.1.dylib ;;
-    *) shlib=build/libpbwire.so.1 ;;
+    Darwin) shlib=build/libpbwire.2.dylib ;;
+    *) shlib=build/libpbwire.so.2 ;;
     esac
 fi
 [ -f "$shlib" ] || { echo "check-symbols: $shlib not found" >&2; exit 1; }

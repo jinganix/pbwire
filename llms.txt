@@ -193,7 +193,7 @@ C++ runtime), `make bench`, `make bench-c` (C structs vs protoc C++). Optional, 
   recursion; in JSON an array element also costs one level; unknown fields fail unless ignored;
   closed-enum
   unknowns stay unknown).
-- `PBW_ABI_VERSION` (== 1) with `pbw_abi_version()`; the shared library SONAME carries the same
+- `PBW_ABI_VERSION` (== 2) with `pbw_abi_version()`; the shared library SONAME carries the same
   number. Additive C API changes keep it; breaking changes bump it and the SONAME together.
   `pbw_strerror()` explains every status.
 
@@ -250,10 +250,9 @@ C++ runtime), `make bench`, `make bench-c` (C structs vs protoc C++). Optional, 
   `pbwire-protoc` (C++17 + libprotobuf, `.proto` -> `FileDescriptorSet`). They meet only at the
   serialized descriptor set.
 - ABI stability: `PBW_ABI_VERSION` in the header, `pbw_abi_version()` at runtime, CMake
-  `SOVERSION 1`, `make shared` producing `libpbwire.so.1` / `libpbwire.1.dylib`. Additive changes
-  keep the number, breaking changes bump it with the SONAME. `bindings/python` (a CPython
-  extension), `bindings/ruby` (C extension), `bindings/node` (N-API addon) and `bindings/php`
-  (`ext-ffi`) compare `pbw_abi_version()` with `PBW_ABI_VERSION` at load;
+  `SOVERSION 2`, `make shared` producing `libpbwire.so.2` / `libpbwire.2.dylib`. Additive changes
+  keep the number, breaking changes bump it with the SONAME. The Python extension and the PHP
+  FFI wrapper compare the two at load time.
   `bindings/go` is generated models over the pure-Go table engine (no cgo).
   `bindings/java` (pure-Java codec, and Kotlin/Scala/Clojure through it) needs no ABI check.
 - Binding memory ceilings (`pbw_ctx_set_retain_cap` is reachable from Java/Kotlin/Scala/Clojure

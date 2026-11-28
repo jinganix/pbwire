@@ -35,8 +35,8 @@
 /* ABI version: bumped on every breaking change to the C ABI (removed or
  * reordered exports, changed struct layouts visible to callers). Additive
  * changes keep the number. The shared library SONAME carries the same
- * number, so `libpbwire.so.1` and `PBW_ABI_VERSION == 1` always agree. */
-#define PBW_ABI_VERSION 1
+ * number, so `libpbwire.so.2` and `PBW_ABI_VERSION == 2` always agree. */
+#define PBW_ABI_VERSION 2
 
 #ifdef __cplusplus
 extern "C" {
@@ -111,8 +111,9 @@ pbw_schema *pbw_schema_new(void);
  * pbw_ctx_reset()/pbw_ctx_free(), which must also precede the schema free. */
 void pbw_schema_free(pbw_schema *schema);
 
-/* Create a message or enum descriptor. Names must be unique within a schema. */
+/* Create a message descriptor. Names must be unique within a schema; NULL on a frozen schema. */
 pbw_descriptor *pbw_schema_add_message(pbw_schema *schema, const char *name);
+/* Create an enum descriptor. Names must be unique within a schema; NULL on a frozen schema. */
 pbw_descriptor *pbw_schema_add_enum(pbw_schema *schema, const char *name);
 pbw_descriptor *pbw_schema_find(const pbw_schema *schema, const char *name);
 
@@ -159,8 +160,11 @@ void pbw_field_set_packed(pbw_field *field, int packed);
  * as an object instead of an array of entries. The loader sets this from
  * the descriptor; call it for hand-built map entries. */
 void pbw_descriptor_set_map_entry(pbw_descriptor *msg);
-/* 1-based oneof group index; 0 means the field is not in a oneof. */
-void pbw_field_set_oneof(pbw_field *field, uint32_t oneof_index);
+/* 1-based oneof group index; 0 means the field is not in a oneof. Set it
+ * before the first successful pbw_schema_link(): the layout freezes then, so
+ * a later set is refused with PBW_ERR_INVALID (a silent no-op would leave
+ * two members present and encode both). A NULL field is PBW_ERR_INVALID. */
+pbw_status pbw_field_set_oneof(pbw_field *field, uint32_t oneof_index);
 
 /* Resolve type names, sort fields by number and build lookup tables. Idempotent
  * while no field is added; the first success freezes the field layout, so
@@ -322,9 +326,10 @@ size_t pbw_message_wire_size(const pbw_message *msg);
  * on a NULL submessage or a message retired by a later schema change; *len is
  * 0 on every failure. */
 pbw_status pbw_message_encoded_size(const pbw_message *msg, size_t *len);
-/* Slack pbw_encode_to() needs past pbw_message_encoded_size(): the writer
- * reserves tag/varint room upfront, so `size + PBW_ENCODE_SLACK` is the
- * smallest cap guaranteed to fit, while `size` alone may be rejected. */
+/* Slack once needed past pbw_message_encoded_size(): the writer used to
+ * reserve tag/varint room upfront. The writer now reserves exactly what each
+ * field needs, so a buffer of exactly the encoded size fits; the macro stays
+ * for source compatibility (sizing `size + PBW_ENCODE_SLACK` still works). */
 #define PBW_ENCODE_SLACK 12
 
 /* Present value of a field, or NULL. Repeated fields expose a
@@ -372,7 +377,11 @@ const uint8_t *pbw_message_unknown_bytes(const pbw_message *msg);
  * the input byte cap (unknowns are a subset of the input, checked against
  * limits->max_bytes up front, plus a few tag bytes for closed-enum
  * mismatches); this hand-append path is caller-bounded instead, like any
- * buffer append. Fails on context-owned read-only messages. */
+ * buffer append: intentionally no max_bytes check here, so repeated calls
+ * grow the store without bound and the caller must bound total bytes/calls
+ * itself. Fails on context-owned read-only messages.
+ * shortcut: caller-bounded, upgrade to checked wrapper when gateway exposes
+ * raw append to untrusted input. */
 pbw_status pbw_message_add_unknown_bytes(pbw_message *msg, const void *data,
                                          size_t len);
 
@@ -437,7 +446,11 @@ pbw_value_kind pbw_value_get_kind(const pbw_value *value);
 /* Numeric getters read the raw bit pattern of a PBW_VALUE_UINT value; any
  * other kind (bytes, message, list) reads as 0 (0.0 for float/double), so a
  * caller that skips the kind check gets zero instead of reinterpreted
- * payload bytes. */
+ * payload bytes. A wrong-kind (or NULL) 0 is indistinguishable from a
+ * genuine 0, so callers for whom 0 is meaningful must check
+ * pbw_value_get_kind() == PBW_VALUE_UINT first. Signatures stay as-is for
+ * ABI compatibility: there is no status-returning checked accessor, the
+ * kind check is the check. */
 uint64_t pbw_value_get_uint(const pbw_value *value);
 int64_t pbw_value_get_int(const pbw_value *value);
 int32_t pbw_value_get_int32(const pbw_value *value);
@@ -522,7 +535,9 @@ pbw_ctx *pbw_pool_acquire(pbw_pool *pool);
 pbw_status pbw_pool_release(pbw_pool *pool, pbw_ctx *ctx);
 /* Idle contexts held now (for sizing/debugging, the printf side). */
 size_t pbw_pool_idle(const pbw_pool *pool);
-/* Bytes currently held in the context (for sizing/debugging). */
+/* Arena bytes currently held in the context (for sizing/debugging). The
+ * reusable encode buffer (out.cap) is excluded: budget retain_cap against
+ * used() plus the live out.cap when the encode buffer matters. */
 size_t pbw_ctx_used(const pbw_ctx *ctx);
 
 /* Decode into the context instead of one allocation per value. A sealed
@@ -606,8 +621,8 @@ pbw_status pbw_json_parse(const pbw_descriptor *desc, const char *text,
                           size_t len, pbw_message **out);
 /* Same with explicit bounds and options (either pointer may be NULL for the
  * defaults). The nesting and byte caps behave like pbw_text_parse_limits();
- * note that an array costs a level too, so a repeated message chain spends two
- * levels per message (the default cap then rejects at 50, not 100). */
+ * only message objects count toward max_depth (array wrappers do not, so a
+ * repeated message chain costs one level per message like the decoder). */
 pbw_status pbw_json_parse_limits(const pbw_descriptor *desc, const char *text,
                                  size_t len, const pbw_limits *limits,
                                  const pbw_json_parse_options *options,
@@ -618,10 +633,11 @@ pbw_status pbw_json_parse_limits(const pbw_descriptor *desc, const char *text,
 pbw_status pbw_encode(const pbw_message *msg, uint8_t **out, size_t *len);
 /* Encode into caller memory of `cap` bytes, so a binding can write straight
  * into its own buffer. No allocation happens and nothing is freed; `cap` is
- * the hard limit and the writer over-reserves up to 10 bytes per write, so
- * `pbw_message_encoded_size(msg) + PBW_ENCODE_SLACK` may be needed even when
- * the exact size is known. *len is the bytes written, 0 after any failure.
- * PBW_ERR_LIMIT when the message does not fit. */
+ * the hard limit. The writer reserves exactly what each field needs, so a
+ * buffer of exactly `pbw_message_encoded_size(msg)` bytes fits (sizing
+ * `size + PBW_ENCODE_SLACK` still works, the macro is kept for compatibility).
+ * *len is the bytes written, 0 after any failure. PBW_ERR_LIMIT when the
+ * message does not fit. */
 pbw_status pbw_encode_to(const pbw_message *msg, void *out, size_t cap,
                          size_t *len);
 /* Decode buf into a new message of the given type. Unknown fields are kept.
@@ -732,10 +748,10 @@ pbw_status pbw_encode_sink(const pbw_message *msg, pbw_sink_fn sink,
 pbw_status pbw_encode_delimited(const pbw_message *msg, uint8_t **out,
                                 size_t *len);
 /* Same framing into caller memory: no allocation, `cap` is the hard limit.
- * The writer over-reserves like pbw_encode_to(), so the guaranteed-fit cap is
- * pbw_message_encoded_size(msg) + its length prefix + PBW_ENCODE_SLACK (the
- * prefix is one byte under 128 bytes, one more per 7 bits above). *len is the
- * whole frame, 0 after any failure. */
+ * A buffer of exactly pbw_message_encoded_size(msg) plus its length prefix
+ * fits (the prefix is one byte under 128 bytes, one more per 7 bits above;
+ * adding PBW_ENCODE_SLACK still works). *len is the whole frame, 0 after
+ * any failure. */
 pbw_status pbw_encode_delimited_to(const pbw_message *msg, void *out,
                                    size_t cap, size_t *len);
 
@@ -752,6 +768,20 @@ pbw_istream *pbw_istream_new(const pbw_limits *limits);
 void pbw_istream_free(pbw_istream *s);
 /* Drop buffered bytes (complete and partial frames alike). */
 void pbw_istream_reset(pbw_istream *s);
+/* Pipelined complete frames stay feedable past max_bytes + 5 buffered
+ * bytes: while the buffer holds a complete in-cap frame, feed() appends
+ * and next() drains one frame per call, still policing each frame against
+ * the limits, so back-to-back frames that together pass the cap stream
+ * instead of failing LIMIT with deliverable bytes sitting in the buffer.
+ * Only a buffer with no complete frame in it is refused past the cap: an
+ * empty buffer takes one bounded pipelined batch (at most ~2x max_bytes
+ * + 5, opening with an in-cap frame), and otherwise only the chunk
+ * completing a split within-cap frame (plus one cap window of trailing)
+ * grows the buffer. A single over-cap frame is still refused, at feed
+ * time from empty and at next() time when pipelined. When a length prefix
+ * splits across feeds, complete it with a <=5-byte feed first; a longer
+ * completion may report LIMIT though the frame fits. Always check the
+ * feed status. */
 pbw_status pbw_istream_feed(pbw_istream *s, const void *data, size_t len);
 pbw_status pbw_istream_next(pbw_istream *s, const pbw_descriptor *desc,
                             pbw_message **out);

@@ -703,14 +703,20 @@ workload(void)
             pbw_schema_free(s);
             return;
         }
-        pbw_field_set_oneof(gf, 1);
+        if (pbw_field_set_oneof(gf, 1) != PBW_OK) {
+            pbw_schema_free(s);
+            return;
+        }
         gf = pbw_message_add_field(m, "o2", 12, PBW_TYPE_STRING,
                                    PBW_LABEL_OPTIONAL);
         if (gf == NULL) {
             pbw_schema_free(s);
             return;
         }
-        pbw_field_set_oneof(gf, 1);
+        if (pbw_field_set_oneof(gf, 1) != PBW_OK) {
+            pbw_schema_free(s);
+            return;
+        }
         gf = pbw_message_add_field(m, "subs", 13, PBW_TYPE_MESSAGE,
                                    PBW_LABEL_REPEATED);
         if (gf == NULL) {

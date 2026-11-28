@@ -57,12 +57,12 @@ pbw_istream_reset(pbw_istream *s)
     s->off = 0;
 }
 
-/* True when the bytes hold at least one complete frame (length prefix plus
- * body), without decoding anything. Lets feed() tell pipelined frames
- * (which next() will drain and police) from never-completing bytes (which
- * would otherwise grow the buffer forever). */
+/* True when the bytes hold at least one complete in-cap frame (length
+ * prefix plus body), without decoding anything. Lets feed() tell pipelined
+ * frames (which next() will drain and police) from never-completing bytes
+ * (which would otherwise grow the buffer forever). */
 static int
-has_complete_frame(const uint8_t *base, size_t avail)
+has_complete_frame(const uint8_t *base, size_t avail, size_t max)
 {
     size_t used = 0;
     size_t frame;
@@ -71,6 +71,9 @@ has_complete_frame(const uint8_t *base, size_t avail)
         return 0;
     }
     if (!pbw_len_read(base, base + avail, &frame, &used)) {
+        return 0;
+    }
+    if (frame > max) {
         return 0;
     }
     return used <= avail && frame <= avail - used;
@@ -87,9 +90,10 @@ pbw_istream_feed(pbw_istream *s, const void *data, size_t len)
     }
     /* Bound never-completing bytes: without a cap a sender that never forms
      * a frame grows the buffer forever. Pipelined complete frames stay
-     * allowed past the cap (next() polices each frame); only a buffer with
-     * no complete frame in it is refused. The +5 is the length-prefix slack:
-     * a max-sized frame needs at most max_bytes + 5 buffered bytes. */
+     * allowed past the cap (next() drains and polices each frame); only a
+     * buffer with no complete in-cap frame in it is refused. The +5 is the
+     * length-prefix slack: a max-sized frame needs at most max_bytes + 5
+     * buffered bytes. */
     if (s->limits.max_bytes > 0) {
         size_t max = s->limits.max_bytes;
         size_t buffered = s->len - s->off;
@@ -108,25 +112,73 @@ pbw_istream_feed(pbw_istream *s, const void *data, size_t len)
             const uint8_t *base =
                 (buffered > 0 && s->data != NULL) ? s->data + s->off : NULL;
 
-            if (base != NULL && has_complete_frame(base, buffered)) {
+            if (base != NULL && has_complete_frame(base, buffered, max)) {
                 /* Pipelined: next() drains each frame and polices it. */
             } else if (buffered == 0) {
-                if (!has_complete_frame((const uint8_t *)data, len)) {
+                /*
+                 * Empty buffer: accept one bounded pipelined batch so a feed
+                 * holding several complete frames makes progress instead of
+                 * livelocking (feed LIMIT, next NULL, re-feed LIMIT); next()
+                 * drains it one frame at a time. The bound keeps the worst
+                 * case near twice the cap, and the batch must open with an
+                 * in-cap frame, so a single over-cap frame (or a corrupt
+                 * prefix) is still refused here. Anything larger arrives in
+                 * slices of max_bytes + 5, which always fit an empty buffer.
+                 */
+                const uint8_t *chunk = (const uint8_t *)data;
+                size_t bound =
+                    max > (SIZE_MAX - 5) / 2 ? SIZE_MAX : 2 * max + 5;
+                size_t first = 0;
+                size_t head = 0;
+
+                if (len > bound ||
+                    !pbw_len_read(chunk, chunk + len, &first, &head) ||
+                    first > max) {
                     return PBW_ERR_LIMIT;
                 }
             } else {
-                /* A split frame is only let through when this chunk
-                 * completes a within-cap frame; anything else (a partial
-                 * prefix, an oversized frame, trailing garbage) is refused
-                 * before it grows the buffer. */
                 size_t used = 0;
                 size_t frame = 0;
+                int have = 0;
+                int need_more = 0;
 
-                if (base == NULL ||
-                    !pbw_len_read(base, base + buffered, &frame, &used) ||
-                    frame > max || used > max + 5 - frame ||
-                    used + frame <= buffered ||
-                    used + frame > buffered + len) {
+                /* Past max_bytes + 5 only the chunk completing a split frame
+                 * (plus one cap window of trailing) grows the buffer. */
+                if (base != NULL) {
+                    have =
+                        pbw_len_read(base, base + buffered, &frame, &used);
+                    if (!have && buffered < 5) {
+                        /* Split prefix: buffered ends mid-varint, so a read of
+                         * buffered alone always fails even for an in-cap
+                         * frame. Complete it with prefix bytes from the chunk
+                         * (at most the 5-byte varint max) and judge the merged
+                         * prefix instead. */
+                        uint8_t window[5];
+                        size_t need = 5 - buffered;
+                        size_t take = len < need ? len : need;
+                        size_t avail = buffered + take;
+                        const uint8_t *chunk = (const uint8_t *)data;
+
+                        memcpy(window, base, buffered);
+                        memcpy(window + buffered, chunk, take);
+                        if (pbw_len_read(window, window + avail, &frame,
+                                         &used)) {
+                            have = 1;
+                        } else if (avail < 5) {
+                            /* Fewer than 5 bytes total: still truncated, need
+                             * more to decide; let it buffer. Unreachable past
+                             * the cap (over implies len fills to 5), but keeps
+                             * the prefix-completion semantics. */
+                            need_more = 1;
+                            have = 1;
+                        }
+                    }
+                }
+                if (!have || (!need_more &&
+                              (frame > max || used > max + 5 - frame ||
+                               used + frame <= buffered ||
+                               used + frame > buffered + len ||
+                               buffered + len - used - frame > max + 5))) {
                     return PBW_ERR_LIMIT;
                 }
             }

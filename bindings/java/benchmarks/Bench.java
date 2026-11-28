@@ -168,12 +168,22 @@ public final class Bench {
         // protobuf-java keeps strings lazy (ByteString until first read),
         // so the baseline arm folds the same gate-checked fields
         // (consumeBaseline) instead of timing a bare parse.
+        // Field numbers are loop-invariant: resolve once here, not once per
+        // timed iteration (consumeTree would otherwise pay two Hash lookups
+        // per field while the baseline arm uses direct getters).
+        GenericCodec.MessageDef inner3 =
+                schema.message("structtest.Inner3");
+        int[] treeNums = {
+            num(scalars3, "str"), num(scalars3, "tags"),
+            num(scalars3, "inners"), num(scalars3, "inner"),
+            num(inner3, "name"), num(inner3, "value"),
+        };
         Runnable[] ops = {
             () -> GenericCodec.encode(fillGeneric(scalars3, n)),
             () -> fillModel(n).toByteArray(),
             () -> GenericCodec.encode(data),
             () -> fillOfficial(n).toByteArray(),
-            () -> consumeTree(scalars3, reference, n),
+            () -> consumeTree(scalars3, reference, n, treeNums),
             () -> Structtest_Scalars3.parseFrom(reference),
             () -> GenericCodec.decode(scalars3, reference),
             () -> consumeBaseline(reference, n),
@@ -370,24 +380,22 @@ public final class Bench {
      * materialization (see consumeBaseline).
      */
     private static void consumeTree(GenericCodec.MessageDef def, byte[] wire,
-            int n) {
+            int n, int[] f) {
         GenericCodec.DMsg back = GenericCodec.decode(def, wire);
-        sink += ((String) back.get(num(back.def, "str"))).length();
-        java.util.List<Object> tags = back.getList(num(back.def, "tags"));
+        sink += ((String) back.get(f[0])).length();
+        java.util.List<Object> tags = back.getList(f[1]);
         for (Object t : tags) {
             sink += ((String) t).length();
         }
-        java.util.List<Object> inners =
-                back.getList(num(back.def, "inners"));
+        java.util.List<Object> inners = back.getList(f[2]);
         sink += inners.size();
-        GenericCodec.DMsg inner =
-                (GenericCodec.DMsg) back.get(num(back.def, "inner"));
-        sink += ((String) inner.get(num(inner.def, "name"))).length();
-        sink += ((Number) inner.get(num(inner.def, "value"))).intValue();
+        GenericCodec.DMsg inner = (GenericCodec.DMsg) back.get(f[3]);
+        sink += ((String) inner.get(f[4])).length();
+        sink += ((Number) inner.get(f[5])).intValue();
         for (Object o : inners) {
             GenericCodec.DMsg m = (GenericCodec.DMsg) o;
-            sink += ((String) m.get(num(m.def, "name"))).length();
-            sink += ((Number) m.get(num(m.def, "value"))).intValue();
+            sink += ((String) m.get(f[4])).length();
+            sink += ((Number) m.get(f[5])).intValue();
         }
     }
 

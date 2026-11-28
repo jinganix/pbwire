@@ -23,6 +23,18 @@
 #define PBW_MAX_FIELD_NUMBER 536870911u /* 2^29 - 1 */
 #define PBW_FNUM_MAP_LIMIT 512
 
+/* Longest single name component the descriptor loader accepts (mirrors
+ * DS_MAX_NAME in descriptor_set.c). JSON/text name buffers derive from
+ * this so a legal 600-byte (or up to ~4 KiB) field/enum/message name
+ * round-trips instead of hitting INVALID at the old 512/520 caps. */
+#define PBW_MAX_NAME 4096
+/* NUL-terminated single-name buffer (field, enum value, Any type name). */
+#define PBW_NAME_BUF PBW_MAX_NAME
+/* NUL-terminated "[full.name]" buffer: a full extension name composes
+ * scope + '.' + name (see ds_attach_extensions full[DS_MAX_NAME * 2]),
+ * plus the two brackets. */
+#define PBW_EXT_KEY_BUF (2 * PBW_MAX_NAME + 4)
+
 /* Wire types. */
 #define PBW_WIRE_VARINT 0
 #define PBW_WIRE_64BIT 1
@@ -287,6 +299,10 @@ struct pbw_schema {
      * cannot enforce this: schemas are shared across threads (see
      * test_threads), and portable C99 has no atomics for a race-free
      * counter, so the contract is documented, not counted. */
+    /* Last link failure reason (first error wins, later ones only bump the
+     * "... (+N more)" omission count appended by ds_error, so the 512-byte
+     * buffer always shows the first failure plus how many were suppressed).
+     * Empty when the last link succeeded. */
     char error[512];
 };
 
@@ -328,8 +344,9 @@ struct pbw_message {
     size_t unknown_cap;
     /* Wire bytes this tree was loaded from (root only, 0 = unknown).
      * encode_alloc() uses it as the initial buffer guess: exact for an
-     * untouched tree, and merely a guess otherwise (the writer grows on
-     * demand), so it needs no invalidation on mutation. Set at decode. */
+     * untouched tree. Any mutation via clear_slot() zeroes it, so a
+     * shrink never over-reserves the next encode (the writer still grows
+     * on demand when the hint underestimates). Set at decode. */
     size_t wire_len;
 };
 

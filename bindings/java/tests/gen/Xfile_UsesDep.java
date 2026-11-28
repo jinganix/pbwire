@@ -22,7 +22,7 @@ public final class Xfile_UsesDep implements Xfile_UsesDepOrBuilder {
 
     private Xfile_UsesDep(Builder b) {
         single_ = b.single_;
-        many_ = Collections.unmodifiableList(new ArrayList<>(b.many_));
+        many_ = b.many_.isEmpty() ? Collections.emptyList() : Collections.unmodifiableList(new ArrayList<>(b.many_));
         note_ = b.note_ == null ? "" : b.note_;
     }
 

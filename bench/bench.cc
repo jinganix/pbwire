@@ -2089,7 +2089,7 @@ bench_stream(const char *label, int repeated, int iterations,
     rows.push_back({"pbwire", "framed", time_it([&] {
                         pbw_message *m = nullptr;
                         pbw_istream_reset(is);
-                        (void)pbw_istream_feed(is, framed, framed_len);
+                        (void)pbw_istream_feed(is, framed, framed_len); /* trusted input only: framed fits the cap */
                         (void)pbw_istream_next(is, desc, &m);
                         pbw_message_free(m);
                     },

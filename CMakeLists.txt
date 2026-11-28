@@ -46,7 +46,7 @@ target_include_directories(pbwire
            $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
 target_compile_features(pbwire PUBLIC c_std_99)
 set_target_properties(pbwire PROPERTIES EXPORT_NAME pbwire
-    VERSION ${PROJECT_VERSION} SOVERSION 1
+    VERSION ${PROJECT_VERSION} SOVERSION 2
     # Only what include/pbwire.h declares is exported (the header marks public
     # declarations default-visible); internal helpers stay out of the dynamic
     # symbol table.

@@ -91,6 +91,11 @@ pbw_message_wire_size(const pbw_message *msg)
     return msg == NULL ? 0 : msg->wire_len;
 }
 
+/* Caller-bounded append: intentionally no max_bytes check here (decode-path
+ * unknowns are bounded by limits->max_bytes instead); repeated calls grow
+ * the store without bound, so the caller must bound total bytes/calls.
+ * shortcut: caller-bounded, upgrade to checked wrapper when gateway exposes
+ * raw append to untrusted input. */
 int
 pbw_message_add_unknown(pbw_message *msg, const uint8_t *data, size_t len)
 {
@@ -632,6 +637,9 @@ pbw_value_get_kind(const pbw_value *value)
     return value == NULL ? PBW_VALUE_UINT : value->kind;
 }
 
+/* Wrong-kind (including NULL) reads as 0 by design, indistinguishable from a
+ * genuine 0: callers must check pbw_value_get_kind() == PBW_VALUE_UINT first.
+ * No status-returning checked accessor exists; signatures stay frozen for ABI. */
 uint64_t
 pbw_value_get_uint(const pbw_value *value)
 {
@@ -755,6 +763,9 @@ value_matches(const pbw_field *field, const pbw_value *value)
 static void
 clear_slot(pbw_message *msg, size_t index)
 {
+    /* Any store/clear invalidates the decode-size hint, so a shrink never
+     * over-reserves the next encode. */
+    msg->wire_len = 0;
     if (pbw_msg_present(msg, index)) {
         /* Absent before destroy, for the same reason the release walk does it:
          * an arena message's struct outlives its payload. */
