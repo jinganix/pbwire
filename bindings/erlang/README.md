@@ -274,6 +274,15 @@ make c-tests            # C unit tests
 make c-format           # clang-format >= 19 applied to c_src/ and c_src_tests/
 ```
 
+The NIF builds from a vendored, byte-identical copy of the C core in
+`c_src/core/` (so the Hex package compiles standalone). After changing the
+core (`src/*.c`, `src/*.h`, `include/pbwire.h`), refresh the copy from the
+repo root:
+
+```shell
+make erlang-core-sync             # one-key vendored-core refresh (see Makefile)
+```
+
 Layout: `src/pbwire.erl` (public API + NIF stubs) → `c_src/pbwire.c` (NIF entry
 points, per-thread contexts, cache swap), `c_src/ep_encoder.c` / `c_src/ep_decoder.c`
 (single-pass wire codec over the schema cache), `test/` (EUnit, gpb parity, PropEr fuzzing),

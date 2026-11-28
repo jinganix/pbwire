@@ -39,14 +39,14 @@ TEST_DEPS := $(HDRS) $(TEST_HDRS) bindings/c/runtime/pbw_struct.h \
 # PBW_ABI_VERSION and the CMake SOVERSION.
 UNAME_S := $(shell uname -s)
 ifeq ($(UNAME_S),Darwin)
-SHLIB := build/libpbwire.1.dylib
+SHLIB := build/libpbwire.2.dylib
 SHLIB_LINK := build/libpbwire.dylib
-SHLIB_FLAGS := -dynamiclib -install_name @rpath/libpbwire.1.dylib \
-	-compatibility_version 1 -current_version 0.1.18
+SHLIB_FLAGS := -dynamiclib -install_name @rpath/libpbwire.2.dylib \
+	-compatibility_version 2 -current_version 0.1.18
 else
-SHLIB := build/libpbwire.so.1
+SHLIB := build/libpbwire.so.2
 SHLIB_LINK := build/libpbwire.so
-SHLIB_FLAGS := -shared -Wl,-soname,libpbwire.so.1
+SHLIB_FLAGS := -shared -Wl,-soname,libpbwire.so.2
 endif
 
 # Plain `make` builds the static library, as the docs promise (`make` has the

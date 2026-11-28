@@ -32,12 +32,18 @@
 
 /* ---------------------------------------------------------- json names */
 
-/* protoc's ToJsonName: drop every '_', uppercase the letter after it. */
+/* Shared camelizer behind j_json_name/j_camel_name: drop every '_',
+ * uppercase the letter after it, and lowercase the first letter when
+ * lower_first is set (protoc's ToCamelCase; without it, ToJsonName).
+ * Returns the full (untruncated) length; n >= cap means `out` holds a
+ * truncated prefix. Callers must treat that as overflow (explicit error,
+ * like j_copy_any_name's 0), never as a usable name: printing a prefix
+ * while parsing rejects it would silently diverge. */
 static size_t
-j_json_name(const char *name, char *out, size_t cap)
+json_camel_impl(const char *name, char *out, size_t cap, int lower_first)
 {
     size_t n = 0;
-    int upper = 0;
+    int upper = lower_first ? 1 : 0;
 
     for (; *name != '\0'; name++) {
         char c;
@@ -48,34 +54,7 @@ j_json_name(const char *name, char *out, size_t cap)
         }
         c = upper ? (char)toupper((unsigned char)*name) : *name;
         upper = 0;
-        if (n + 1 < cap) {
-            out[n] = c;
-        }
-        n++;
-    }
-    if (cap > 0) {
-        out[n < cap ? n : cap - 1] = '\0';
-    }
-    return n;
-}
-
-/* protoc's ToCamelCase with a lowercased first letter. */
-static size_t
-j_camel_name(const char *name, char *out, size_t cap)
-{
-    size_t n = 0;
-    int upper = 1;
-
-    for (; *name != '\0'; name++) {
-        char c;
-
-        if (*name == '_') {
-            upper = 1;
-            continue;
-        }
-        c = upper ? (char)toupper((unsigned char)*name) : *name;
-        upper = 0;
-        if (n == 0) {
+        if (n == 0 && lower_first) {
             c = (char)tolower((unsigned char)c);
         }
         if (n + 1 < cap) {
@@ -89,33 +68,332 @@ j_camel_name(const char *name, char *out, size_t cap)
     return n;
 }
 
+/* protoc's ToJsonName. Same overflow contract as above: n >= cap means
+ * truncated, caller must skip the candidate instead of comparing its
+ * prefix (which could alias two different field names). */
+static size_t
+j_json_name(const char *name, char *out, size_t cap)
+{
+    return json_camel_impl(name, out, cap, 0);
+}
+
+/* protoc's ToCamelCase with a lowercased first letter. Same overflow
+ * contract as j_json_name. */
+static size_t
+j_camel_name(const char *name, char *out, size_t cap)
+{
+    return json_camel_impl(name, out, cap, 1);
+}
+
 /* Field names print as their jsonName: protoc's ToCamelCase with a
  * lowercased first letter is j_camel_name() below, used for parsing;
- * printing keeps the mapping j_json_name() computes. */
-static void
+ * printing keeps the mapping j_json_name() computes. Returns 1 when the
+ * name fits, 0 when truncated (explicit error, like j_copy_any_name and
+ * the extension branch of j_print_one). */
+static int
 j_print_name(const pbw_field *field, char *out, size_t cap)
 {
-    j_json_name(field->name, out, cap);
+    return j_json_name(field->name, out, cap) < cap;
 }
 
 /* The reference parser matches camelCase names, then proto names, then json
- * names, in that order. */
-static int
-j_field_by_name(const pbw_descriptor *desc, const char *key, size_t len,
-                const pbw_field **out)
+ * names, in that order. The lookups below keep that order: the camel loop
+ * first, then the proto spelling via the O(1) name_map hash (like text.c's
+ * t_lookup_field), then the json loop. The hash must not go first: with
+ * hand-built fields ["fooBar"#1,"foo_bar"#2] the key "fooBar" is both
+ * field #1's proto name and field #2's camel name, and the reference
+ * resolves it to #2 (camel beats proto), so a proto-first hash would
+ * mis-hit #1. A key holding an embedded NUL matches nothing: the probe is
+ * NUL-terminated for the hash, so without this guard "a\0evil" would
+ * resolve as the prefix "a" (the extension branch and j_copy_any_name
+ * already guard the same way). A key that cannot fit the NUL-terminated
+ * probe (len >= PBW_NAME_BUF) cannot equal any loader-accepted name, and
+ * its camel/json image would only be shorter, so it misses outright instead
+ * of scanning truncated prefixes. */
+
+/* One hash slot: FNV-1a of the spelling (like schema.c's name_hash), plus
+ * the field index + 1 (0 marks an empty slot). */
+typedef struct {
+    uint32_t hash;
+    uint32_t row;
+} j_slot;
+
+/* Lazily built camel/json spelling indexes for one descriptor. Both tables
+ * are open-addressed at load <= 1/2, so a miss probes ~1 slot: without this
+ * every unknown key paid a full scan of strlen + camelize per field, which
+ * is quadratic in the field count for an object full of misses. The tables
+ * hold only non-extension spellings that fit PBW_NAME_BUF (truncated ones
+ * are uncomparable and skipped, as in the linear loops below), and a
+ * confirm recompute on hash hit keeps collisions and duplicate spellings
+ * resolving to the same first field the linear scan would find. */
+typedef struct {
+    const pbw_descriptor *desc;
+    size_t count;      /* desc->field_count at build; a mismatch stays linear */
+    size_t camel_size; /* power of two, 0 when unbuilt */
+    j_slot *camel;
+    size_t json_size;
+    j_slot *json;
+} j_index;
+
+/* Per-parse index cache: descriptors are frozen once linked, so an index
+ * built for one key stays valid for the rest of the parse. The Any
+ * re-walk shares the outer parse's cache instead of owning one. */
+typedef struct {
+    j_index *v;
+    size_t len;
+    size_t cap;
+} j_cache;
+
+/* FNV-1a over raw bytes (keys may hold embedded NULs, which never match). */
+static uint32_t
+j_hash_bytes(const char *s, size_t len)
 {
-    /* Room for the longest name pbw_descriptor_set_load() accepts (512
-     * bytes); a shorter buffer would truncate and could alias two names. */
-    char tmp[520];
+    uint32_t h = 2166136261u;
     size_t i;
 
+    for (i = 0; i < len; i++) {
+        h ^= (uint8_t)s[i];
+        h *= 16777619u;
+    }
+    return h;
+}
+
+/* Smallest power-of-two table holding `count` rows at load <= 1/2
+ * (minimum 8 slots); 0 when the size itself is unrepresentable. */
+static size_t
+j_index_size(size_t count)
+{
+    size_t need;
+    size_t size = 8;
+
+    if (count > (SIZE_MAX - 8) / 2) {
+        return 0;
+    }
+    need = count * 2 + 8;
+    while (size < need) {
+        if (size > SIZE_MAX / 2) {
+            return 0;
+        }
+        size *= 2;
+    }
+    return size;
+}
+
+/* Fills an empty index from the descriptor; 0 on allocation failure, in
+ * which case the caller falls back to the linear loops (so a NOMEM here
+ * never fails the parse, it only skips the fast path). */
+static int
+j_index_build(j_index *ix, const pbw_descriptor *desc)
+{
+    char tmp[PBW_NAME_BUF];
+    size_t size;
+    size_t i;
+
+    size = j_index_size(desc->field_count);
+    if (size == 0) {
+        return 0;
+    }
+    ix->camel = (j_slot *)calloc(size, sizeof(*ix->camel));
+    if (ix->camel == NULL) {
+        return 0;
+    }
+    ix->json = (j_slot *)calloc(size, sizeof(*ix->json));
+    if (ix->json == NULL) {
+        free(ix->camel);
+        ix->camel = NULL;
+        return 0;
+    }
+    ix->camel_size = size;
+    ix->json_size = size;
+    for (i = 0; i < desc->field_count; i++) {
+        const pbw_field *f = &desc->fields[i];
+        size_t m;
+        uint32_t h;
+        size_t slot;
+
+        if (f->is_extension) {
+            continue;
+        }
+        m = j_camel_name(f->name, tmp, sizeof(tmp));
+        if (m >= sizeof(tmp)) {
+            continue;
+        }
+        h = j_hash_bytes(tmp, m);
+        slot = (size_t)(h & (uint32_t)(size - 1));
+        while (ix->camel[slot].row != 0) {
+            slot = (slot + 1) & (size - 1);
+        }
+        ix->camel[slot].hash = h;
+        ix->camel[slot].row = (uint32_t)(i + 1);
+        m = j_json_name(f->name, tmp, sizeof(tmp));
+        if (m >= sizeof(tmp)) {
+            continue;
+        }
+        h = j_hash_bytes(tmp, m);
+        slot = (size_t)(h & (uint32_t)(size - 1));
+        while (ix->json[slot].row != 0) {
+            slot = (slot + 1) & (size - 1);
+        }
+        ix->json[slot].hash = h;
+        ix->json[slot].row = (uint32_t)(i + 1);
+    }
+    ix->desc = desc;
+    ix->count = desc->field_count;
+    return 1;
+}
+
+/* Exact lookup in one spelling table: hash-gated, with a camelize
+ * recompute confirming the hit, so collisions cannot mis-resolve. */
+static const pbw_field *
+j_index_lookup(const pbw_descriptor *desc, const j_slot *tab, size_t size,
+               uint32_t h, const char *key, size_t len, int use_json)
+{
+    char tmp[PBW_NAME_BUF];
+    size_t slot;
+
+    if (tab == NULL || size == 0) {
+        return NULL;
+    }
+    slot = (size_t)(h & (uint32_t)(size - 1));
+    for (;;) {
+        const pbw_field *f;
+        size_t m;
+
+        if (tab[slot].row == 0) {
+            return NULL;
+        }
+        if (tab[slot].hash == h) {
+            f = &desc->fields[tab[slot].row - 1];
+            if (!f->is_extension) {
+                m = use_json ? j_json_name(f->name, tmp, sizeof(tmp))
+                             : j_camel_name(f->name, tmp, sizeof(tmp));
+                /* Truncated spellings never match: m >= cap implies
+                 * m != len (len < cap was checked by the caller). */
+                if (m == len && memcmp(tmp, key, len) == 0) {
+                    return f;
+                }
+            }
+        }
+        slot = (slot + 1) & (size - 1);
+    }
+}
+
+/* Finds (building on first miss) the cached index for `desc`; NULL when
+ * the tables could not be built or the layout moved mid-parse, in which
+ * case the caller uses the linear loops. Never fails the parse. */
+static const j_index *
+j_cache_get(j_cache *cache, const pbw_descriptor *desc)
+{
+    size_t i;
+
+    for (i = 0; i < cache->len; i++) {
+        if (cache->v[i].desc == desc) {
+            if (cache->v[i].count == desc->field_count) {
+                return &cache->v[i];
+            }
+            return NULL;
+        }
+    }
+    if (cache->len == cache->cap) {
+        size_t ncap = cache->cap == 0 ? 4 : cache->cap * 2;
+        j_index *nv;
+
+        if (cache->cap != 0 && ncap / 2 != cache->cap) {
+            return NULL;
+        }
+        nv = (j_index *)realloc(cache->v, ncap * sizeof(*nv));
+        if (nv == NULL) {
+            return NULL;
+        }
+        cache->v = nv;
+        cache->cap = ncap;
+    }
+    {
+        j_index ix;
+
+        memset(&ix, 0, sizeof(ix));
+        if (!j_index_build(&ix, desc)) {
+            return NULL;
+        }
+        cache->v[cache->len] = ix;
+        return &cache->v[cache->len++];
+    }
+}
+
+/* Releases every table built during the parse. */
+static void
+j_cache_free(j_cache *cache)
+{
+    size_t i;
+
+    if (cache == NULL) {
+        return;
+    }
+    for (i = 0; i < cache->len; i++) {
+        free(cache->v[i].camel);
+        free(cache->v[i].json);
+    }
+    free(cache->v);
+    cache->v = NULL;
+    cache->len = 0;
+    cache->cap = 0;
+}
+
+static int
+j_field_by_name(j_cache *cache, const pbw_descriptor *desc, const char *key,
+                size_t len, const pbw_field **out)
+{
+    /* Room for the longest name the descriptor loader accepts
+     * (PBW_NAME_BUF); a shorter buffer would truncate and could alias two
+     * names. */
+    char tmp[PBW_NAME_BUF];
+    const pbw_field *found;
+    size_t i;
+
+    if (len >= sizeof(tmp)) {
+        return 0;
+    }
+    if (len > 0 && memchr(key, 0, len) != NULL) {
+        return 0;
+    }
+    if (cache != NULL) {
+        uint32_t h = j_hash_bytes(key, len);
+        const j_index *ix = j_cache_get(cache, desc);
+
+        if (ix != NULL) {
+            found = j_index_lookup(desc, ix->camel, ix->camel_size, h, key,
+                                   len, 0);
+            if (found != NULL) {
+                *out = found;
+                return 1;
+            }
+            memcpy(tmp, key, len);
+            tmp[len] = '\0';
+            found = pbw_descriptor_find_field_name(desc, tmp);
+            /* Extensions are addressable only as "[full.name]"; a plain
+             * key must not resolve to one, or it would shadow a regular
+             * field or accept a spelling the JSON mapping does not
+             * define. */
+            if (found != NULL && !found->is_extension) {
+                *out = found;
+                return 1;
+            }
+            found = j_index_lookup(desc, ix->json, ix->json_size, h, key,
+                                   len, 1);
+            if (found != NULL) {
+                *out = found;
+                return 1;
+            }
+            return 0;
+        }
+        /* No index (allocation failure or a layout that moved mid-parse):
+         * fall through to the linear loops, which stay correct. */
+    }
     for (i = 0; i < desc->field_count; i++) {
         const pbw_field *f = &desc->fields[i];
         size_t n = strlen(f->name);
+        size_t m;
 
-        /* Extensions are addressable only as "[full.name]"; a plain key must
-         * not resolve to one, or it would shadow a regular field or accept a
-         * spelling the JSON mapping does not define. */
         if (f->is_extension) {
             continue;
         }
@@ -125,31 +403,39 @@ j_field_by_name(const pbw_descriptor *desc, const char *key, size_t len,
         if (n != len && strchr(f->name, '_') == NULL) {
             continue;
         }
-        j_camel_name(f->name, tmp, sizeof(tmp));
-        if (strlen(tmp) == len && memcmp(tmp, key, len) == 0) {
+        m = j_camel_name(f->name, tmp, sizeof(tmp));
+        /* Truncated: not comparable, skipping avoids aliasing two names
+         * that share a 4095-byte prefix (explicit-error style). */
+        if (m >= sizeof(tmp)) {
+            continue;
+        }
+        if (m == len && memcmp(tmp, key, len) == 0) {
             *out = f;
             return 1;
         }
     }
-    for (i = 0; i < desc->field_count; i++) {
-        const pbw_field *f = &desc->fields[i];
-
-        if (f->is_extension) {
-            continue;
-        }
-        if (strlen(f->name) == len && memcmp(f->name, key, len) == 0) {
-            *out = f;
-            return 1;
-        }
+    memcpy(tmp, key, len);
+    tmp[len] = '\0';
+    found = pbw_descriptor_find_field_name(desc, tmp);
+    /* Extensions are addressable only as "[full.name]"; a plain key must
+     * not resolve to one, or it would shadow a regular field or accept a
+     * spelling the JSON mapping does not define. */
+    if (found != NULL && !found->is_extension) {
+        *out = found;
+        return 1;
     }
     for (i = 0; i < desc->field_count; i++) {
         const pbw_field *f = &desc->fields[i];
+        size_t m;
 
         if (f->is_extension) {
             continue;
         }
-        j_json_name(f->name, tmp, sizeof(tmp));
-        if (strlen(tmp) == len && memcmp(tmp, key, len) == 0) {
+        m = j_json_name(f->name, tmp, sizeof(tmp));
+        if (m >= sizeof(tmp)) {
+            continue;
+        }
+        if (m == len && memcmp(tmp, key, len) == 0) {
             *out = f;
             return 1;
         }
@@ -211,6 +497,31 @@ j_classify(const pbw_descriptor *desc)
         }
     }
     return J_NOT_WKT;
+}
+
+/* Copies the Any type name (after the last '/') into `out`, NUL-terminated.
+ * 1 on success; 0 when the name does not fit `out` or holds an embedded
+ * NUL (which would otherwise resolve as a truncated prefix). Shared by the
+ * print and parse paths so both accept the same PBW_NAME_BUF range. */
+static int
+j_copy_any_name(const uint8_t *url, size_t url_len, char *out, size_t cap)
+{
+    size_t off = 0;
+    size_t i;
+    size_t n;
+
+    for (i = 0; i < url_len; i++) {
+        if (url[i] == '/') {
+            off = i + 1;
+        }
+    }
+    n = url_len - off;
+    if (n >= cap || memchr(url + off, 0, n) != NULL) {
+        return 0;
+    }
+    memcpy(out, url + off, n);
+    out[n] = '\0';
+    return 1;
 }
 
 /* ---------------------------------------------------------------- output */
@@ -1477,7 +1788,6 @@ j_print_any(j_out *j, const pbw_message *msg)
     size_t url_len = 0;
     const uint8_t *payload = NULL;
     size_t payload_len = 0;
-    const char *slash;
     const pbw_descriptor *resolved;
     pbw_message *decoded = NULL;
 
@@ -1503,28 +1813,14 @@ j_print_any(j_out *j, const pbw_message *msg)
         payload_len = bytes_v->as.bytes.len;
     }
     /* The type name is whatever follows the last '/'. */
-    slash = NULL;
     {
-        size_t i;
+        /* Room for the longest message name the loader accepts. */
+        char name[PBW_NAME_BUF];
 
-        for (i = 0; i < url_len; i++) {
-            if (url[i] == '/') {
-                slash = (const char *)url + i;
-            }
-        }
-    }
-    {
-        /* Room for the longest message name the loader accepts (512). */
-        char name[520];
-        size_t off = slash == NULL ? 0 : (size_t)(slash - (const char *)url) + 1;
-        size_t n = url_len - off;
-
-        if (n >= sizeof(name)) {
+        if (!j_copy_any_name(url, url_len, name, sizeof(name))) {
             j->status = PBW_ERR_INVALID;
             return;
         }
-        memcpy(name, url + off, n);
-        name[n] = '\0';
         resolved = msg->desc->schema == NULL
                        ? NULL
                        : pbw_schema_find(msg->desc->schema, name);
@@ -1570,9 +1866,8 @@ static void
 j_print_one(j_out *j, const pbw_message *msg, const pbw_field *field,
             int *first)
 {
-    /* "[scope.name]" of an extension: the loader caps scope and name at 512
-     * bytes each, plus the brackets. */
-    char key[2 * 512 + 4];
+    /* "[scope.name]" of an extension: scope + '.' + name plus brackets. */
+    char key[PBW_EXT_KEY_BUF];
     const pbw_value *value = &msg->values[(size_t)(field - msg->desc->fields)];
 
     if (!*first) {
@@ -1593,7 +1888,13 @@ j_print_one(j_out *j, const pbw_message *msg, const pbw_field *field,
         key[strlen(full) + 2] = '\0';
         j_quoted(j, (const uint8_t *)key, strlen(key));
     } else {
-        j_print_name(field, key, sizeof(key));
+        /* A truncated display name is an explicit print error (like the
+         * extension branch above and j_copy_any_name), not a silent
+         * prefix: the parser would reject the overlong spelling. */
+        if (!j_print_name(field, key, sizeof(key))) {
+            j->status = PBW_ERR_INVALID;
+            return;
+        }
         j_quoted(j, (const uint8_t *)key, strlen(key));
     }
     j_ch(j, ':');
@@ -1810,7 +2111,8 @@ typedef struct {
     j_cur cur;
     int ignore_unknown;
     uint32_t depth;
-    uint32_t dlim; /* nesting cap for this call (pbw_limits.max_depth) */
+    uint32_t dlim;  /* nesting cap for this call (pbw_limits.max_depth) */
+    j_cache *cache; /* camel/json spelling indexes, owned by the parse root */
 } j_in;
 
 typedef enum {
@@ -3908,21 +4210,19 @@ j_parse_array(j_in *j, pbw_message *msg, const pbw_field *field)
     if (j_expect_ch(j, '[') != PBW_OK) {
         return PBW_ERR_INVALID;
     }
-    if (j->depth >= j->dlim) {
-        return PBW_ERR_LIMIT;
-    }
-    j->depth++;
+    /* The array wrapper is not a message level (like the text parser's list
+     * and the binary decoder): only the element messages count toward dlim.
+     * Nested-array flattening in j_parse_element keeps its own depth check,
+     * so unbounded '[' nesting still stops at the cap. */
     j_skip(&j->cur);
     if (j->cur.p < j->cur.end && *j->cur.p == ']') {
         j->cur.p++;
-        j->depth--;
         return PBW_OK;
     }
     for (;;) {
         pbw_status st = j_parse_element(j, msg, field);
 
         if (st != PBW_OK) {
-            j->depth--;
             return st == PBW_ERR_LIMIT ? st : PBW_ERR_INVALID;
         }
         j_skip(&j->cur);
@@ -3932,16 +4232,13 @@ j_parse_array(j_in *j, pbw_message *msg, const pbw_field *field)
             j_skip(&j->cur);
             if (j->cur.p < j->cur.end && *j->cur.p == ']') {
                 j->cur.p++;
-                j->depth--;
                 return PBW_OK;
             }
             continue;
         }
         if (j_expect_ch(j, ']') != PBW_OK) {
-            j->depth--;
             return PBW_ERR_INVALID;
         }
-        j->depth--;
         return PBW_OK;
     }
 }
@@ -4285,24 +4582,13 @@ j_parse_any(j_in *j, pbw_message *msg)
     /* The type name is whatever follows the last '/'; the stored type_url
      * keeps the full URL. */
     {
-        const uint8_t *slash = NULL;
-        /* Room for the longest message name the loader accepts (512). */
-        char name[520];
-        size_t off;
-        size_t i;
+        /* The stored type_url keeps the full URL; only the part after the
+         * last '/' resolves against the schema. */
+        char name[PBW_NAME_BUF];
 
-        for (i = 0; i < url_len; i++) {
-            if (url[i] == '/') {
-                slash = url + i;
-            }
-        }
-        off = slash == NULL ? 0 : (size_t)(slash - url) + 1;
-        if (url_len - off >= sizeof(name) ||
-            memchr(url + off, 0, url_len - off) != NULL) {
+        if (!j_copy_any_name(url, url_len, name, sizeof(name))) {
             return PBW_ERR_INVALID;
         }
-        memcpy(name, url + off, url_len - off);
-        name[url_len - off] = '\0';
         resolved = msg->desc->schema == NULL
                        ? NULL
                        : pbw_schema_find(msg->desc->schema, name);
@@ -4328,6 +4614,7 @@ j_parse_any(j_in *j, pbw_message *msg)
         inner.ignore_unknown = j->ignore_unknown;
         inner.depth = j->depth + 1;
         inner.dlim = j->dlim;
+        inner.cache = j->cache;
         /* start already points past the '{' the scan consumed. */
         for (;;) {
             pbw_buf key;
@@ -4418,11 +4705,18 @@ j_parse_named_field(j_in *j, pbw_message *msg, const uint8_t *key,
 
     if (len >= 2 && key[0] == '[' && key[len - 1] == ']') {
         /* Extension names are dotted and global, like the text format:
-         * room for scope + '.' + name, both capped at 512 bytes. */
-        char name[1028];
+         * room for scope + '.' + name plus brackets. */
+        char name[PBW_EXT_KEY_BUF];
         const pbw_field *ext;
 
         if (len - 2 >= sizeof(name)) {
+            /* An overlong "[...]" key can never name an extension, but
+             * like any other unknown key it is skipped under
+             * ignore_unknown instead of failing (the miss branches below
+             * do the same). */
+            if (j->ignore_unknown) {
+                return j_skip_value(j);
+            }
             return PBW_ERR_INVALID;
         }
         memcpy(name, key + 1, len - 2);
@@ -4443,7 +4737,8 @@ j_parse_named_field(j_in *j, pbw_message *msg, const uint8_t *key,
             return PBW_ERR_INVALID;
         }
         field = ext;
-    } else if (!j_field_by_name(msg->desc, (const char *)key, len, &field)) {
+    } else if (!j_field_by_name(j->cache, msg->desc, (const char *)key, len,
+                                &field)) {
         if (j->ignore_unknown) {
             return j_skip_value(j);
         }
@@ -4740,6 +5035,7 @@ pbw_json_parse_limits(const pbw_descriptor *desc, const char *text,
                       pbw_message **out)
 {
     j_in j;
+    j_cache cache;
     pbw_message *msg;
     uint32_t dlim = PBW_MAX_DEPTH;
 
@@ -4779,24 +5075,32 @@ pbw_json_parse_limits(const pbw_descriptor *desc, const char *text,
         options != NULL && options->ignore_unknown_fields;
     j.depth = 0;
     j.dlim = dlim;
+    j.cache = &cache;
+    cache.v = NULL;
+    cache.len = 0;
+    cache.cap = 0;
     {
         pbw_status st = j_parse_message(&j, msg);
 
         if (st != PBW_OK) {
             pbw_message_free(msg);
+            j_cache_free(&cache);
             return st;
         }
     }
     j_skip(&j.cur);
     if (j.cur.p != j.cur.end) {
         pbw_message_free(msg);
+        j_cache_free(&cache);
         return PBW_ERR_INVALID;
     }
     /* A missing proto2 `required` field fails, like the binary decoder. */
     if (desc->has_required && !pbw_message_is_initialized(msg)) {
         pbw_message_free(msg);
+        j_cache_free(&cache);
         return PBW_ERR_REQUIRED;
     }
+    j_cache_free(&cache);
     *out = msg;
     return PBW_OK;
 }

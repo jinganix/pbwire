@@ -1017,6 +1017,197 @@ test_visit_vectors(const pbw_descriptor *d)
     }
 }
 
+/* Abort path: a callback error on the 2nd field reports that field's
+ * offset via fail_off. */
+static pbw_status
+abort_second_cb(void *ud, const pbw_field *field, uint32_t number,
+                uint32_t wire_type, const pbw_visit_value *value)
+{
+    size_t *n = (size_t *)ud;
+
+    (void)field;
+    (void)number;
+    (void)wire_type;
+    (void)value;
+    (*n)++;
+    return *n == 2 ? PBW_ERR_INVALID : PBW_OK;
+}
+
+/* Abort path: a callback error on the 1st field reports offset 0. */
+static pbw_status
+abort_first_cb(void *ud, const pbw_field *field, uint32_t number,
+               uint32_t wire_type, const pbw_visit_value *value)
+{
+    size_t *n = (size_t *)ud;
+
+    (void)field;
+    (void)number;
+    (void)wire_type;
+    (void)value;
+    (*n)++;
+    return PBW_ERR_INVALID;
+}
+
+/* A callback status passes through pbw_visit verbatim (never remapped):
+ * the context selects which status the 2nd field reports. */
+typedef struct {
+    size_t n;
+    pbw_status status;
+} abort_status_ctx;
+
+static pbw_status
+abort_second_status_cb(void *ud, const pbw_field *field, uint32_t number,
+                       uint32_t wire_type, const pbw_visit_value *value)
+{
+    abort_status_ctx *ctx = (abort_status_ctx *)ud;
+
+    (void)field;
+    (void)number;
+    (void)wire_type;
+    (void)value;
+    ctx->n++;
+    return ctx->n == 2 ? ctx->status : PBW_OK;
+}
+
+/* Aborts only on unknown fields (field == NULL); records what it saw so
+ * the test can prove the abort came from the unknown field. */
+typedef struct {
+    size_t n;
+    int saw_null;
+    uint32_t number;
+} abort_unknown_ctx;
+
+static pbw_status
+abort_unknown_cb(void *ud, const pbw_field *field, uint32_t number,
+                 uint32_t wire_type, const pbw_visit_value *value)
+{
+    abort_unknown_ctx *ctx = (abort_unknown_ctx *)ud;
+
+    (void)wire_type;
+    (void)value;
+    ctx->n++;
+    if (field == NULL) {
+        ctx->saw_null = 1;
+        ctx->number = number;
+        return PBW_ERR_INVALID;
+    }
+    return PBW_OK;
+}
+
+static void
+test_visit_abort(const pbw_descriptor *d)
+{
+    /* field 1 (varint) occupies bytes 0-1, field 2 (LEN) starts at 2. */
+    static const uint8_t valid[] = {0x08, 0x01, 0x12, 0x02, 0x68, 0x69};
+    size_t n = 0;
+    size_t off = 0;
+    size_t n_lim = 0;
+    size_t off_lim = 0;
+    size_t n_null = 0;
+    pbw_limits lim = {0, 0};
+    pbw_status st;
+
+    st = pbw_visit(d, valid, sizeof(valid), abort_second_cb, &n, &off);
+    CHECK_STATUS(PBW_ERR_INVALID, st);
+    CHECK(n == 2);
+    CHECK(off == 2);
+    /* Bounded defaults agree; NULL fail_off is allowed. */
+    CHECK(pbw_visit_limits(d, valid, sizeof(valid), &lim, abort_second_cb,
+                           &n_lim, &off_lim) == st);
+    CHECK(n_lim == 2 && off_lim == 2);
+    CHECK(pbw_visit(d, valid, sizeof(valid), abort_second_cb, &n_null,
+                    NULL) == st);
+    CHECK(n_null == 2);
+    /* First-field abort reports offset 0. */
+    {
+        size_t n1 = 0;
+        size_t off1 = 0;
+        size_t n1_lim = 0;
+        size_t off1_lim = 0;
+        size_t n1_null = 0;
+        pbw_status st1;
+
+        st1 = pbw_visit(d, valid, sizeof(valid), abort_first_cb, &n1,
+                        &off1);
+        CHECK_STATUS(PBW_ERR_INVALID, st1);
+        CHECK(n1 == 1);
+        CHECK(off1 == 0);
+        CHECK(pbw_visit_limits(d, valid, sizeof(valid), &lim,
+                               abort_first_cb, &n1_lim, &off1_lim) == st1);
+        CHECK(n1_lim == 1 && off1_lim == 0);
+        CHECK(pbw_visit(d, valid, sizeof(valid), abort_first_cb, &n1_null,
+                        NULL) == st1);
+        CHECK(n1_null == 1);
+    }
+    /* NOMEM / LIMIT from the callback pass through verbatim with the
+     * aborting field's offset, like INVALID does. */
+    {
+        static const pbw_status codes[] = {PBW_ERR_NOMEM, PBW_ERR_LIMIT};
+        size_t i;
+
+        for (i = 0; i < sizeof(codes) / sizeof(codes[0]); i++) {
+            abort_status_ctx ctx = {0, codes[i]};
+            abort_status_ctx ctx_lim = {0, codes[i]};
+            abort_status_ctx ctx_null = {0, codes[i]};
+            size_t off_s = 0;
+            size_t off_s_lim = 0;
+            pbw_status sts;
+
+            sts = pbw_visit(d, valid, sizeof(valid),
+                            abort_second_status_cb, &ctx, &off_s);
+            CHECK_STATUS(codes[i], sts);
+            CHECK(ctx.n == 2);
+            CHECK(off_s == 2);
+            CHECK(pbw_visit_limits(d, valid, sizeof(valid), &lim,
+                                   abort_second_status_cb, &ctx_lim,
+                                   &off_s_lim) == sts);
+            CHECK(ctx_lim.n == 2 && off_s_lim == 2);
+            CHECK(pbw_visit(d, valid, sizeof(valid),
+                            abort_second_status_cb, &ctx_null,
+                            NULL) == sts);
+            CHECK(ctx_null.n == 2);
+        }
+    }
+    /* Unknown-field abort: the scan still delivers unknown numbers (with
+     * a NULL field), so aborting on one reports its byte offset. */
+    {
+        /* field 1 (2 bytes) then unknown field 500 (starts at 2). */
+        static const uint8_t with_unknown[] = {0x08, 0x01, 0xA0, 0x1F,
+                                               0x09};
+        /* unknown field 500 alone starts at 0. */
+        static const uint8_t unknown_first[] = {0xA0, 0x1F, 0x09};
+        abort_unknown_ctx ctx = {0, 0, 0};
+        abort_unknown_ctx ctx_lim = {0, 0, 0};
+        abort_unknown_ctx ctx_null = {0, 0, 0};
+        abort_unknown_ctx ctx0 = {0, 0, 0};
+        size_t off_u = 0;
+        size_t off_u_lim = 0;
+        size_t off_u0 = 0;
+        pbw_status stu;
+        pbw_status stu0;
+
+        stu = pbw_visit(d, with_unknown, sizeof(with_unknown),
+                        abort_unknown_cb, &ctx, &off_u);
+        CHECK_STATUS(PBW_ERR_INVALID, stu);
+        CHECK(ctx.n == 2);
+        CHECK(ctx.saw_null && ctx.number == 500);
+        CHECK(off_u == 2);
+        CHECK(pbw_visit_limits(d, with_unknown, sizeof(with_unknown),
+                               &lim, abort_unknown_cb, &ctx_lim,
+                               &off_u_lim) == stu);
+        CHECK(ctx_lim.n == 2 && off_u_lim == 2);
+        CHECK(pbw_visit(d, with_unknown, sizeof(with_unknown),
+                        abort_unknown_cb, &ctx_null, NULL) == stu);
+        CHECK(ctx_null.n == 2);
+        stu0 = pbw_visit(d, unknown_first, sizeof(unknown_first),
+                         abort_unknown_cb, &ctx0, &off_u0);
+        CHECK_STATUS(PBW_ERR_INVALID, stu0);
+        CHECK(ctx0.n == 1);
+        CHECK(ctx0.saw_null && ctx0.number == 500);
+        CHECK(off_u0 == 0);
+    }
+}
+
 /* The scan and the decoder must agree on one buffer: every field the visit
  * reports is a field the decoded tree holds, in wire order, with the wire
  * type the schema declares; unknown numbers arrive with a NULL field. */
@@ -1108,6 +1299,7 @@ main(void)
             test_huge_tags(d);
             test_deep_binary(d);
             test_visit_vectors(d);
+            test_visit_abort(d);
             test_visit_matches_decode(d);
             test_random(d);
         }

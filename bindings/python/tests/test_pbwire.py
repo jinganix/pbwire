@@ -445,7 +445,7 @@ def service():
 
 
 def main():
-    check(pbw.abi_version() == 1, "ABI version matches the core")
+    check(pbw.abi_version() == 2, "ABI version matches the core")
 
     with open(os.path.join(DATA, "matrix3.bin"), "rb") as handle:
         reference = handle.read()

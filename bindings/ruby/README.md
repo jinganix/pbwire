@@ -69,6 +69,15 @@ make ruby-test                     # builds, then runs test/test_pbwire.rb
 ruby -Ibindings/ruby/lib bindings/ruby/examples/roundtrip.rb
 ```
 
+The gem cannot pack symlinks or parent paths, so the C core travels as real
+files under `ext/pbwire_ext/` (`core_*.c` + `pbwire.h` + `internal.h`). After
+changing the core (`src/*.c`, `src/*.h`, `include/pbwire.h`), refresh the copy
+from the repo root:
+
+```shell
+make ruby-core-sync               # one-key vendored-core refresh (see Makefile)
+```
+
 `RUBY=` selects the interpreter, both for the build and the benchmark:
 
 ```shell

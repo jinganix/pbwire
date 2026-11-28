@@ -136,8 +136,8 @@ final class Lib
             self::$ffi = FFI::cdef(self::HEADER, self::path());
             $abi = self::$ffi->pbw_abi_version();
 
-            if ($abi !== 1) {
-                throw new Error("pbwire: ABI version $abi, this binding needs 1");
+            if ($abi !== 2) {
+                throw new Error("pbwire: ABI version $abi, this binding needs 2");
             }
         }
 

@@ -1660,7 +1660,7 @@ t_parse_enum_value(text_in *t, pbw_message *msg, const pbw_field *field)
     } else {
         const char *start;
         size_t len;
-        char name[520];
+        char name[PBW_NAME_BUF];
 
         if (!t_ident(&t->cur, &start, &len)) {
             return PBW_ERR_INVALID;
@@ -2012,13 +2012,13 @@ static pbw_status t_parse_message_body(text_in *t, pbw_message *msg,
  * it). `reserved` reports a name the descriptor declared reserved, which the
  * parser skips. The name buffers live in this non-recursive frame: the
  * recursive body does not pay for them, and they are sized for the longest
- * identifier the descriptor loader accepts (512 bytes). */
+ * identifier the descriptor loader accepts (PBW_NAME_BUF). */
 static pbw_status
 t_lookup_field(const pbw_message *msg, const char *name, size_t name_len,
                const pbw_field **out, int *reserved)
 {
-    char tmp[520];
-    char lower[520];
+    char tmp[PBW_NAME_BUF];
+    char lower[PBW_NAME_BUF];
     size_t i;
 
     *out = NULL;

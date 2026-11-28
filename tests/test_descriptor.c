@@ -552,7 +552,7 @@ test_services(void)
 }
 
 /* Minimal FileDescriptorSet writer for hostile-input tests: no protoc,
- * fixed buffers (the longest hostile name below is 600 bytes). */
+ * fixed buffers (the longest hostile name below is 5000 bytes). */
 typedef struct {
     uint8_t *p;
     size_t len;
@@ -610,11 +610,12 @@ static void
 test_load_hostile(void)
 {
     pbw_schema *schema = NULL;
-    uint8_t file[2048];
-    uint8_t inner[1600];
-    uint8_t method[1400];
-    uint8_t set[2200];
-    static char big[601];
+    uint8_t file[8192];
+    uint8_t inner[8192];
+    uint8_t method[8192];
+    uint8_t set[8192];
+    static char big[5001];
+    static char ok[601];
     ds_w w;
     ds_w iw;
     ds_w mw;
@@ -625,7 +626,41 @@ test_load_hostile(void)
         big[i] = 'A';
     }
     big[sizeof(big) - 1] = '\0';
-    /* 1. a 600-byte message name exceeds DS_MAX_NAME: LIMIT with a reason
+    for (i = 0; i < sizeof(ok) - 1; i++) {
+        ok[i] = 'B';
+    }
+    ok[sizeof(ok) - 1] = '\0';
+    /* 0. a 600-byte message name is legal and loads: DS_MAX_NAME is 4096,
+     * so names that exceeded the old 512 cap must succeed. */
+    iw.p = inner;
+    iw.len = 0;
+    w_str(&iw, 1, ok);
+    w.p = file;
+    w.len = 0;
+    w_str(&w, 1, "n.proto");
+    w_str(&w, 2, "p");
+    w_sub(&w, 4, inner, iw.len);
+    w_str(&w, 12, "proto3");
+    sw.p = set;
+    sw.len = 0;
+    w_sub(&sw, 1, file, w.len);
+    CHECK_STATUS(PBW_OK, pbw_descriptor_set_load(set, sw.len, &schema));
+    {
+        /* fully qualified name is "p." plus the 600 B's */
+        static char want[604];
+        size_t k;
+
+        want[0] = 'p';
+        want[1] = '.';
+        for (k = 0; k < sizeof(ok) - 1; k++) {
+            want[2 + k] = 'B';
+        }
+        want[sizeof(want) - 1] = '\0';
+        CHECK(pbw_schema_find(schema, want) != NULL);
+    }
+    pbw_schema_free(schema);
+    schema = NULL;
+    /* 1. a 5000-byte message name exceeds DS_MAX_NAME: LIMIT with a reason
      * (bare file names are unused by the loader, so they never fail). */
     iw.p = inner;
     iw.len = 0;
@@ -644,7 +679,7 @@ test_load_hostile(void)
     CHECK(schema != NULL && strlen(pbw_schema_error(schema)) > 0);
     pbw_schema_free(schema);
     schema = NULL;
-    /* 2. a 600-byte method input type: LIMIT as well */
+    /* 2. a 5000-byte method input type: LIMIT as well */
     mw.p = method;
     mw.len = 0;
     w_str(&mw, 1, "Go");
@@ -664,7 +699,7 @@ test_load_hostile(void)
         w_sub(&w, 4, msg, mwb.len);
     }
     {
-        uint8_t svc[1500];
+        uint8_t svc[8192];
         ds_w svw;
 
         svw.p = svc;
@@ -759,11 +794,11 @@ test_load_hostile(void)
                  pbw_descriptor_set_load(set, sw.len, &schema));
     pbw_schema_free(schema);
     schema = NULL;
-    /* 6. a 600-byte enum value name: LIMIT */
+    /* 6. a 5000-byte enum value name: LIMIT */
     iw.len = 0;
     w_str(&iw, 1, "E");
     {
-        uint8_t val[700];
+        uint8_t val[8192];
         ds_w vw;
 
         vw.p = val;

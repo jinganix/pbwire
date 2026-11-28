@@ -86,6 +86,16 @@ if [[ $CHECK == 1 ]]; then
   expect Makefile "-compatibility_version $abi" "Makefile darwin compatibility_version"
   expect Makefile "soname,libpbwire.so.$abi" "Makefile linux soname"
   expect CMakeLists.txt "SOVERSION $abi" "cmake SOVERSION"
+  expect scripts/check-symbols.sh "libpbwire\\.so\\.$abi" "check-symbols linux default"
+  expect scripts/check-symbols.sh "libpbwire\\.$abi\\.dylib" "check-symbols darwin default"
+  expect README.md "libpbwire\\.so\\.$abi" "README soname"
+  expect docs/guide.md "libpbwire\\.so\\.$abi" "guide soname"
+  expect llms.txt "libpbwire\\.so\\.$abi" "llms soname"
+  expect bindings/php/runtime/pbwire.php "this binding needs $abi" "php abi assert"
+  expect bindings/python/tests/test_pbwire.py "abi_version\\(\\) == $abi" "python abi assert"
+  expect bindings/node/test/test_pbwire.js "abiVersion\\(\\), $abi" "node abi assert"
+  expect bindings/erlang/c_src/core/include/pbwire.h "#define PBW_ABI_VERSION $abi" "erlang vendored pbwire.h abi"
+  expect bindings/ruby/ext/pbwire_ext/pbwire.h "#define PBW_ABI_VERSION $abi" "ruby vendored pbwire.h abi"
   for f in bindings/python/setup.py bindings/ruby/pbwire.gemspec bindings/objc/PBWire.podspec bindings/clojure/build.clj; do
     grep -q "VERSION" "$f" || fail "$f: no longer reads the VERSION file"
   done
@@ -97,6 +107,12 @@ if [[ $CHECK == 1 ]]; then
 fi
 
 setver CMakeLists.txt -e "s/^project[(]pbwire VERSION [0-9.]*/project(pbwire VERSION $VER/"
+# ABI bumps stay manual: PBW_ABI_VERSION in include/pbwire.h is the source;
+# mirror it in Makefile, CMakeLists.txt, scripts/check-symbols.sh, README.md,
+# docs/guide.md, llms.txt, bindings/php/runtime/pbwire.php,
+# bindings/python/tests/test_pbwire.py, bindings/node/test/test_pbwire.js and the
+# vendored copies bindings/erlang/c_src/core/include/pbwire.h,
+# bindings/ruby/ext/pbwire_ext/pbwire.h (see --check above).
 setver Makefile -e "s/-current_version [0-9.]*/-current_version $VER/"
 setver bindings/dart/pubspec.yaml -e "s/^version: .*/version: $VER/"
 setver bindings/dart/benchmarks/pubspec.yaml -e "s/^version: .*/version: $VER/"

@@ -18,8 +18,13 @@
 #include <stdarg.h>
 #include <stdio.h>
 
-/* buffer size for a fully qualified name; longer names are rejected */
-#define DS_MAX_NAME 512
+/* Fully qualified names (package plus nesting, e.g. "a.b.Outer.Inner") can
+ * legitimately exceed 512 bytes, so allow 4096. Every holder is either a
+ * short-lived stack slot (safe: recursion is capped at PBW_MAX_DEPTH and the
+ * ~16 KiB ds_field_info already lives on the heap) or heap-allocated
+ * (ds_field_info, ds_pending_ext); longer names are rejected with an
+ * explicit "name too long" error. */
+#define DS_MAX_NAME 4096
 /* proto2 defaults are short literals; longer ones are rejected */
 #define DS_MAX_DEFAULT 4096
 
@@ -91,10 +96,73 @@ static void
 ds_error(pbw_schema *schema, const char *fmt, ...)
 {
     va_list ap;
+    /* New message, formatted into a side buffer first so a truncation or a
+     * later error never tears the committed first error. */
+    char msg[sizeof(schema->error)];
+    int n;
 
+    if (schema == NULL || fmt == NULL) {
+        return;
+    }
     va_start(ap, fmt);
-    vsnprintf(schema->error, sizeof(schema->error), fmt, ap);
+    n = vsnprintf(msg, sizeof(msg), fmt, ap);
     va_end(ap);
+    if (n < 0) {
+        return;
+    }
+    if (schema->error[0] == '\0') {
+        /* First error wins verbatim. A single over-long message is already
+         * truncated by the vsnprintf above; mark the cut so it is not
+         * mistaken for the whole text. */
+        memcpy(schema->error, msg, sizeof(schema->error));
+        if (n >= (int)sizeof(schema->error) && sizeof(schema->error) > 4) {
+            memcpy(schema->error + sizeof(schema->error) - 4, "...", 4);
+        }
+        return;
+    }
+    /* Later errors are suppressed: keep the first message's prefix and only
+     * bump the omission count, so the buffer always shows the first failure
+     * plus how many followed. The count lives in the tail text itself, so no
+     * struct growth (and no ABI change) is needed. */
+    {
+        unsigned suppressed = 0;
+        size_t base_len;
+        char suffix[64];
+        int slen;
+        char *tail = strstr(schema->error, " ... (+");
+
+        if (tail != NULL) {
+            size_t tail_off = (size_t)(tail - schema->error);
+            size_t tail_len = strlen(tail);
+            /* Suffix is always ASCII at the very end: " ... (+N more)". */
+            if (tail_len > 9 &&
+                strcmp(tail + tail_len - 6, " more)") == 0 &&
+                sscanf(tail, " ... (+%u more)", &suppressed) == 1) {
+                base_len = tail_off;
+            } else {
+                base_len = strlen(schema->error);
+                suppressed = 0;
+            }
+        } else {
+            base_len = strlen(schema->error);
+            suppressed = 0;
+        }
+        if (suppressed >= (unsigned)~0u - 1u) {
+            return; /* counter saturated: keep the committed text as is */
+        }
+        slen = snprintf(suffix, sizeof(suffix), " ... (+%u more)",
+                        suppressed + 1);
+        if (slen < 0) {
+            return;
+        }
+        if ((size_t)slen >= sizeof(suffix)) {
+            return; /* cannot happen: bounded %u text */
+        }
+        if (base_len > sizeof(schema->error) - 1 - (size_t)slen) {
+            base_len = sizeof(schema->error) - 1 - (size_t)slen;
+        }
+        memcpy(schema->error + base_len, suffix, (size_t)slen + 1);
+    }
 }
 
 /* Reads the next field. 1 = field, 0 = end, -1 = malformed. Legacy groups never
@@ -528,7 +596,9 @@ ds_add_field(pbw_schema *schema, pbw_descriptor *msg,
             (uint8_t)(utf8 == 2 && info->type == PBW_TYPE_STRING);
     }
     if (info->has_oneof) {
-        pbw_field_set_oneof(field, info->oneof);
+        if ((status = pbw_field_set_oneof(field, info->oneof)) != PBW_OK) {
+            return status;
+        }
     }
     return PBW_OK;
 }

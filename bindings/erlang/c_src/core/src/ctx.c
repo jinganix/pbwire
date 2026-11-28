@@ -132,6 +132,8 @@ pbw_ctx_reset(pbw_ctx *ctx)
 size_t
 pbw_ctx_used(const pbw_ctx *ctx)
 {
+    /* Arena only: the reusable encode buffer (out.cap) is excluded, so size
+     * retain_cap budgets against used() plus the live out.cap. */
     return ctx == NULL ? 0 : pbw_arena_used(&ctx->arena);
 }
 

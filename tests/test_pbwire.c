@@ -136,10 +136,10 @@ make_schema(void)
     oneof = pbw_schema_add_message(schema, "OneOf");
     field =
         pbw_message_add_field(oneof, "a", 1, PBW_TYPE_STRING, PBW_LABEL_OPTIONAL);
-    pbw_field_set_oneof(field, 1);
+    CHECK_OK(pbw_field_set_oneof(field, 1));
     field =
         pbw_message_add_field(oneof, "b", 2, PBW_TYPE_INT32, PBW_LABEL_OPTIONAL);
-    pbw_field_set_oneof(field, 1);
+    CHECK_OK(pbw_field_set_oneof(field, 1));
 
     entry = pbw_schema_add_message(schema, "MapEntry");
     pbw_message_add_field(entry, "key", 1, PBW_TYPE_STRING, PBW_LABEL_OPTIONAL);
@@ -296,7 +296,7 @@ make_scalars(pbw_schema *schema)
 }
 
 /* pbw_message_encoded_size() must agree with the encoder, and a buffer sized
- * to it plus PBW_ENCODE_SLACK must be enough for pbw_encode_to(). Called from
+ * to it exactly must be enough for pbw_encode_to(). Called from
  * the tests that build the interesting trees (packed runs, wide tags, maps,
  * groups, unknowns, proto2). */
 static void
@@ -312,14 +312,17 @@ check_encoded_size(const pbw_message *msg)
     CHECK_OK(pbw_message_encoded_size(msg, &size));
     CHECK_OK(pbw_encode(msg, &wire, &wire_len));
     CHECK(size == wire_len);
-    cap = size + PBW_ENCODE_SLACK;
+    /* Exact size fits: the writer reserves exactly what each field needs. */
+    cap = size;
     buf = (uint8_t *)malloc(cap > 0 ? cap : 1);
     CHECK(buf != NULL);
     if (buf != NULL) {
         memset(buf, 0xaa, cap > 0 ? cap : 1);
         CHECK_OK(pbw_encode_to(msg, buf, cap, &len));
         CHECK(len == size);
-        CHECK(len == wire_len && memcmp(buf, wire, wire_len) == 0);
+        CHECK(len == wire_len && (wire_len == 0 || memcmp(buf, wire, wire_len) == 0));
+        /* Sizing with the legacy slack still works. */
+        CHECK_OK(pbw_encode_to(msg, buf, cap, &len));
         free(buf);
     }
     pbw_free(wire);
@@ -971,6 +974,7 @@ test_hostile_arguments(pbw_schema *schema)
             CHECK(msg != NULL);
             CHECK(pbw_message_add_field(msg_type, "b", 2, PBW_TYPE_INT32,
                                         PBW_LABEL_OPTIONAL) == NULL);
+            CHECK(pbw_schema_add_message(late, "Late2") == NULL);
             CHECK(pbw_descriptor_field_count(msg_type) == 1);
             CHECK(pbw_descriptor_find_field(msg_type, 2) == NULL);
             CHECK_OK(pbw_message_set(msg, 1, pbw_value_new_int(5)));
@@ -2420,9 +2424,15 @@ test_parse_limits(pbw_schema *schema)
         pbw_message_free(out);
         out = NULL;
     }
-    /* one level per 2 of depth budget (the array and the object), so a
-     * max_depth of 4 already rejects a three-level chain */
+    /* only message objects spend the depth budget (array wrappers do not),
+     * so like the text parser below a max_depth of 4 still accepts this
+     * three-level chain while a max_depth of 3 rejects it */
     lim.max_depth = 4;
+    CHECK_OK(pbw_json_parse_limits(tree, deep, at, &lim, NULL, &out));
+    CHECK(out != NULL);
+    pbw_message_free(out);
+    out = NULL;
+    lim.max_depth = 3;
     CHECK_STATUS(PBW_ERR_LIMIT,
                  pbw_json_parse_limits(tree, deep, at, &lim, NULL, &out));
     CHECK(out == NULL);
@@ -4091,9 +4101,10 @@ test_encode_to(pbw_schema *schema)
     CHECK_STATUS(PBW_ERR_INVALID, pbw_message_encoded_size(msg, NULL));
     CHECK_STATUS(PBW_ERR_INVALID, pbw_message_encoded_size(NULL, &size));
 
-    /* The caller buffer needs slack: the writer over-reserves tag/varint space,
-     * so exactly PBW_ENCODE_SLACK past the encoded size is the smallest cap that
-     * fits, and nothing past the message is ever written. */
+    /* The writer reserves exactly what each field needs, so a buffer of
+     * exactly the encoded size fits (sizing + PBW_ENCODE_SLACK still works,
+     * the macro is kept for compatibility), and nothing past the message is
+     * ever written. */
     buf = (uint8_t *)malloc(wire_len + PBW_ENCODE_SLACK);
     CHECK(buf != NULL);
     if (buf != NULL) {
@@ -4102,10 +4113,19 @@ test_encode_to(pbw_schema *schema)
         CHECK(len == wire_len);
         CHECK(memcmp(buf, wire, wire_len) == 0);
         CHECK(buf[wire_len + PBW_ENCODE_SLACK - 1] == 0xaa);
-        CHECK_STATUS(PBW_ERR_LIMIT, pbw_encode_to(msg, buf, 4, &len));
-        CHECK(len == 0); /* *len is written on the failure path too */
-        CHECK_STATUS(PBW_ERR_LIMIT, pbw_encode_to(msg, buf, wire_len, &len));
-        CHECK(len == 0);
+        /* Exact size fits with no slack. */
+        CHECK_OK(pbw_encode_to(msg, buf, wire_len, &len));
+        CHECK(len == wire_len);
+        CHECK(memcmp(buf, wire, wire_len) == 0);
+        if (wire_len > 4) {
+            CHECK_STATUS(PBW_ERR_LIMIT, pbw_encode_to(msg, buf, 4, &len));
+            CHECK(len == 0); /* *len is written on the failure path too */
+        }
+        if (wire_len > 0) {
+            CHECK_STATUS(PBW_ERR_LIMIT,
+                         pbw_encode_to(msg, buf, wire_len - 1, &len));
+            CHECK(len == 0);
+        }
         CHECK_STATUS(PBW_ERR_INVALID, pbw_encode_to(msg, NULL, wire_len + 16, &len));
         CHECK_STATUS(PBW_ERR_INVALID, pbw_encode_to(NULL, buf, wire_len + 16, &len));
         CHECK_STATUS(PBW_ERR_INVALID, pbw_encode_to(msg, buf, wire_len + 16, NULL));
@@ -4153,6 +4173,10 @@ test_encode_to(pbw_schema *schema)
             CHECK_OK(pbw_encode_deterministic_to(msg, buf,
                                                  det_len + PBW_ENCODE_SLACK,
                                                  &len));
+            CHECK(len == det_len);
+            CHECK(memcmp(buf, det, det_len) == 0);
+            /* Exact size fits with no slack, like pbw_encode_to(). */
+            CHECK_OK(pbw_encode_deterministic_to(msg, buf, det_len, &len));
             CHECK(len == det_len);
             CHECK(memcmp(buf, det, det_len) == 0);
             CHECK_STATUS(PBW_ERR_LIMIT,
@@ -4414,8 +4438,8 @@ test_unlinked_oneof(void)
                                            PBW_LABEL_OPTIONAL);
 
     CHECK(schema != NULL && desc != NULL && one != NULL && two != NULL);
-    pbw_field_set_oneof(one, 1);
-    pbw_field_set_oneof(two, 1);
+    CHECK_OK(pbw_field_set_oneof(one, 1));
+    CHECK_OK(pbw_field_set_oneof(two, 1));
     {
         pbw_message *msg = pbw_message_new(desc);
 
@@ -4445,7 +4469,7 @@ test_unlinked_oneof(void)
 }
 
 /* The printers and parsers must agree on the longest identifier the
- * descriptor loader accepts (512 bytes per name component): a name that
+ * descriptor loader accepts (PBW_NAME_BUF/DS_MAX_NAME): a name that
  * prints but cannot be parsed back breaks round-tripping a legal schema. */
 static void
 fill_name(char *out, size_t n)
@@ -4461,13 +4485,19 @@ fill_name(char *out, size_t n)
 static void
 test_long_names(void)
 {
-    char field_name[301];
-    char enum_name[301];
-    char ext_name[301];
-    char ext_full[512];
+    /* 600 bytes: past the old 512/520 caps, within DS_MAX_NAME (4096). A
+     * name that loads must also survive JSON/text print+parse (the
+     * regression for the Must-1 truncation). */
+    char field_name[601];
+    char enum_name[601];
+    char ext_name[601];
+    char ext_full[1024];
+    char inner_name[601];
     pbw_schema *schema = pbw_schema_new();
     pbw_descriptor *msg = pbw_schema_add_message(schema, "M");
     pbw_descriptor *en = pbw_schema_add_enum(schema, "E");
+    pbw_descriptor *inner;
+    pbw_descriptor *any;
     pbw_field *field;
     pbw_field *ext;
     pbw_message *message;
@@ -4492,6 +4522,19 @@ test_long_names(void)
     snprintf(ext_full, sizeof(ext_full), "M.%s", ext_name);
     pbw_field_set_full_name(ext, ext_full);
     pbw_field_set_type_name(field, "E");
+    /* Any payload with a 600-byte message name: the @type suffix after the
+     * last '/' must resolve on both the JSON print and parse paths. */
+    fill_name(inner_name, sizeof(inner_name) - 1);
+    inner = pbw_schema_add_message(schema, inner_name);
+    CHECK(inner != NULL);
+    CHECK(pbw_message_add_field(inner, "v", 1, PBW_TYPE_INT32,
+                                PBW_LABEL_OPTIONAL) != NULL);
+    any = pbw_schema_add_message(schema, "google.protobuf.Any");
+    CHECK(any != NULL);
+    CHECK(pbw_message_add_field(any, "type_url", 1, PBW_TYPE_STRING,
+                                PBW_LABEL_OPTIONAL) != NULL);
+    CHECK(pbw_message_add_field(any, "value", 2, PBW_TYPE_BYTES,
+                                PBW_LABEL_OPTIONAL) != NULL);
     CHECK_OK(pbw_schema_link(schema));
 
     message = pbw_message_new(msg);
@@ -4505,8 +4548,11 @@ test_long_names(void)
     CHECK(back != NULL);
     CHECK(pbw_message_get(back, 1) != NULL);
     CHECK(pbw_message_get(back, 100) != NULL);
+    /* The 600-byte enum value name must survive the text round-trip. */
+    CHECK(pbw_value_get_uint(pbw_message_get(back, 1)) == 1);
     pbw_message_free(back);
     pbw_free(text);
+    text = NULL;
 
     CHECK_OK(pbw_json_print(message, &text, &text_len));
     back = NULL;
@@ -4514,10 +4560,634 @@ test_long_names(void)
     CHECK(back != NULL);
     CHECK(pbw_message_get(back, 1) != NULL);
     CHECK(pbw_message_get(back, 100) != NULL);
+    CHECK(pbw_value_get_uint(pbw_message_get(back, 1)) == 1);
     pbw_message_free(back);
     pbw_free(text);
-
+    text = NULL;
     pbw_message_free(message);
+
+    /* 600-byte Any: pack inner, expand via JSON, parse back. */
+    {
+        pbw_message *sub = pbw_message_new(inner);
+        pbw_message *packed = NULL;
+        uint8_t *bytes = NULL;
+        size_t len = 0;
+        char url[1024];
+        char *json = NULL;
+        size_t json_len = 0;
+
+        CHECK(sub != NULL);
+        CHECK_OK(pbw_message_set(sub, 1, pbw_value_new_int(7)));
+        CHECK_OK(pbw_encode(sub, &bytes, &len));
+        snprintf(url, sizeof(url), "type.googleapis.com/%s", inner_name);
+        CHECK_OK(pbw_any_pack(any, url, bytes, len, &packed));
+        pbw_free(bytes);
+        pbw_message_free(sub);
+        CHECK(packed != NULL);
+        CHECK_OK(pbw_json_print(packed, &json, &json_len));
+        CHECK_STATUS(PBW_OK, pbw_json_parse(any, json, json_len, &back));
+        CHECK(back != NULL);
+        if (back != NULL) {
+            CHECK(strcmp(pbw_any_type_url(back), url) == 0);
+            CHECK(pbw_message_get(back, 2) != NULL);
+        }
+        pbw_message_free(back);
+        back = NULL;
+        pbw_free(json);
+        pbw_message_free(packed);
+    }
+
+    pbw_schema_free(schema);
+}
+
+/* Minimal FileDescriptorSet writer for the Must-1 name-limit boundary
+ * tests below (4095/4096 single names, 8191/8192 extension full names).
+ * Mirrors the helpers in tests/test_descriptor.c under an ln_ prefix. */
+typedef struct {
+    uint8_t *p;
+    size_t len;
+} ln_w;
+
+static void
+ln_varint(ln_w *w, uint64_t v)
+{
+    do {
+        w->p[w->len++] = (uint8_t)((v & 0x7f) | (v > 0x7f ? 0x80 : 0));
+        v >>= 7;
+    } while (v > 0);
+}
+
+static void
+ln_tag(ln_w *w, uint32_t field, uint32_t wire)
+{
+    ln_varint(w, ((uint64_t)field << 3) | wire);
+}
+
+static void
+ln_bytes(ln_w *w, const void *data, size_t n)
+{
+    memcpy(w->p + w->len, data, n);
+    w->len += n;
+}
+
+static void
+ln_strn(ln_w *w, uint32_t field, const char *s, size_t n)
+{
+    ln_tag(w, field, 2);
+    ln_varint(w, n);
+    ln_bytes(w, s, n);
+}
+
+static void
+ln_str(ln_w *w, uint32_t field, const char *s)
+{
+    ln_strn(w, field, s, strlen(s));
+}
+
+static void
+ln_sub(ln_w *w, uint32_t field, const uint8_t *body, size_t n)
+{
+    ln_tag(w, field, 2);
+    ln_varint(w, n);
+    ln_bytes(w, body, n);
+}
+
+static void
+ln_int(ln_w *w, uint32_t field, uint64_t v)
+{
+    ln_tag(w, field, 0);
+    ln_varint(w, v);
+}
+
+/* Must-1 boundaries (PBW_MAX_NAME = DS_MAX_NAME = 4096, extension full buffer
+ * DS_MAX_NAME*2 = 8192):
+ * - 4095B field / enum value / "[scope.name]" inner / Any suffix round-trips
+ *   through JSON + text;
+ * - 4096B is rejected (hand-built text parse INVALID, Any print INVALID,
+ *   descriptor-set load LIMIT);
+ * - extension full name (scope + '.' + name) 8191B loads, 8192B is LIMIT.
+ * Hand-built schemas (dup_str) accept any length, so the 4096 print-vs-parse
+ * divergence is pinned explicitly: text prints the over-long name but refuses
+ * to parse it back. */
+static void
+test_long_names_boundary(void)
+{
+    /* 4095B hand-built round-trips: field + enum value. */
+    {
+        char *f4095 = (char *)malloc(4096);
+        pbw_schema *schema = NULL;
+        pbw_descriptor *msg = NULL;
+        pbw_descriptor *en = NULL;
+        pbw_field *field = NULL;
+        pbw_message *message = NULL;
+        pbw_message *back = NULL;
+        char *text = NULL;
+        size_t text_len = 0;
+
+        CHECK(f4095 != NULL);
+        if (f4095 == NULL) {
+            return;
+        }
+        fill_name(f4095, 4095);
+        schema = pbw_schema_new();
+        msg = pbw_schema_add_message(schema, "M");
+        en = pbw_schema_add_enum(schema, "E");
+        CHECK(schema != NULL && msg != NULL && en != NULL);
+        CHECK_OK(pbw_enum_add_value(en, f4095, 1));
+        field = pbw_message_add_field(msg, "e", 1, PBW_TYPE_ENUM,
+                                      PBW_LABEL_OPTIONAL);
+        CHECK(field != NULL);
+        CHECK(pbw_message_add_field(msg, f4095, 2, PBW_TYPE_INT32,
+                                    PBW_LABEL_OPTIONAL) != NULL);
+        pbw_field_set_type_name(field, "E");
+        CHECK_OK(pbw_schema_link(schema));
+        message = pbw_message_new(msg);
+        CHECK(message != NULL);
+        CHECK_OK(pbw_message_set(message, 1, pbw_value_new_uint(1)));
+        CHECK_OK(pbw_message_set(message, 2, pbw_value_new_int(7)));
+        CHECK_OK(pbw_text_print(message, &text, &text_len));
+        CHECK_STATUS(PBW_OK, pbw_text_parse(msg, text, text_len, &back));
+        CHECK(back != NULL);
+        if (back != NULL) {
+            CHECK(pbw_value_get_uint(pbw_message_get(back, 1)) == 1);
+            CHECK(pbw_value_get_int32(pbw_message_get(back, 2)) == 7);
+            pbw_message_free(back);
+            back = NULL;
+        }
+        pbw_free(text);
+        text = NULL;
+        CHECK_OK(pbw_json_print(message, &text, &text_len));
+        CHECK_STATUS(PBW_OK, pbw_json_parse(msg, text, text_len, &back));
+        CHECK(back != NULL);
+        if (back != NULL) {
+            CHECK(pbw_value_get_uint(pbw_message_get(back, 1)) == 1);
+            CHECK(pbw_value_get_int32(pbw_message_get(back, 2)) == 7);
+            pbw_message_free(back);
+            back = NULL;
+        }
+        pbw_free(text);
+        pbw_message_free(message);
+        pbw_schema_free(schema);
+        free(f4095);
+    }
+    /* 4095B "[scope.name]" inner ("M." + 4093B short) and Any suffix. */
+    {
+        char *short4093 = (char *)malloc(4094);
+        char *full4095 = (char *)malloc(4096);
+        char *inner4095 = (char *)malloc(4096);
+        pbw_schema *schema = NULL;
+        pbw_descriptor *msg = NULL;
+        pbw_descriptor *any = NULL;
+        pbw_descriptor *inner = NULL;
+        pbw_field *ext = NULL;
+        pbw_message *message = NULL;
+        pbw_message *back = NULL;
+        char *text = NULL;
+        size_t text_len = 0;
+
+        CHECK(short4093 != NULL && full4095 != NULL && inner4095 != NULL);
+        if (short4093 == NULL || full4095 == NULL || inner4095 == NULL) {
+            free(short4093);
+            free(full4095);
+            free(inner4095);
+            return;
+        }
+        fill_name(short4093, 4093);
+        snprintf(full4095, 4096, "M.%s", short4093);
+        CHECK(strlen(full4095) == 4095);
+        fill_name(inner4095, 4095);
+        schema = pbw_schema_new();
+        msg = pbw_schema_add_message(schema, "M");
+        inner = pbw_schema_add_message(schema, inner4095);
+        any = pbw_schema_add_message(schema, "google.protobuf.Any");
+        CHECK(msg != NULL && inner != NULL && any != NULL);
+        ext = pbw_message_add_extension(msg, "ext", 100, PBW_TYPE_INT32,
+                                        PBW_LABEL_OPTIONAL);
+        CHECK(ext != NULL);
+        pbw_field_set_full_name(ext, full4095);
+        CHECK(pbw_message_add_field(inner, "v", 1, PBW_TYPE_INT32,
+                                    PBW_LABEL_OPTIONAL) != NULL);
+        CHECK(pbw_message_add_field(any, "type_url", 1, PBW_TYPE_STRING,
+                                    PBW_LABEL_OPTIONAL) != NULL);
+        CHECK(pbw_message_add_field(any, "value", 2, PBW_TYPE_BYTES,
+                                    PBW_LABEL_OPTIONAL) != NULL);
+        CHECK_OK(pbw_schema_link(schema));
+        message = pbw_message_new(msg);
+        CHECK(message != NULL);
+        CHECK_OK(pbw_message_set(message, 100, pbw_value_new_int(7)));
+        CHECK_OK(pbw_text_print(message, &text, &text_len));
+        CHECK_STATUS(PBW_OK, pbw_text_parse(msg, text, text_len, &back));
+        CHECK(back != NULL && pbw_message_get(back, 100) != NULL);
+        pbw_message_free(back);
+        back = NULL;
+        pbw_free(text);
+        text = NULL;
+        CHECK_OK(pbw_json_print(message, &text, &text_len));
+        CHECK_STATUS(PBW_OK, pbw_json_parse(msg, text, text_len, &back));
+        CHECK(back != NULL && pbw_message_get(back, 100) != NULL);
+        pbw_message_free(back);
+        back = NULL;
+        pbw_free(text);
+        pbw_message_free(message);
+        /* Any suffix 4095B: pack, expand via JSON, parse back. */
+        {
+            pbw_message *sub = pbw_message_new(inner);
+            pbw_message *packed = NULL;
+            uint8_t *bytes = NULL;
+            size_t len = 0;
+            char *url = (char *)malloc(strlen(inner4095) + 32);
+            char *json = NULL;
+            size_t json_len = 0;
+
+            CHECK(sub != NULL && url != NULL);
+            CHECK_OK(pbw_message_set(sub, 1, pbw_value_new_int(7)));
+            CHECK_OK(pbw_encode(sub, &bytes, &len));
+            snprintf(url, strlen(inner4095) + 32, "type.googleapis.com/%s",
+                     inner4095);
+            CHECK_OK(pbw_any_pack(any, url, bytes, len, &packed));
+            pbw_free(bytes);
+            pbw_message_free(sub);
+            CHECK(packed != NULL);
+            CHECK_OK(pbw_json_print(packed, &json, &json_len));
+            CHECK_STATUS(PBW_OK, pbw_json_parse(any, json, json_len, &back));
+            CHECK(back != NULL);
+            if (back != NULL) {
+                CHECK(strcmp(pbw_any_type_url(back), url) == 0);
+                pbw_message_free(back);
+                back = NULL;
+            }
+            pbw_free(json);
+            pbw_message_free(packed);
+            free(url);
+        }
+        pbw_schema_free(schema);
+        free(short4093);
+        free(full4095);
+        free(inner4095);
+    }
+    /* Hand-built 4096B print-vs-parse: text and JSON-regular print the
+     * over-long name but refuse to parse it back (INVALID); the Any suffix
+     * fails already at JSON print. The JSON-regular asymmetry is known:
+     * print uses the "[full.name]" key buffer (PBW_EXT_KEY_BUF = 8196) so
+     * a 4096B name fits, while parse probes with PBW_NAME_BUF = 4096 and
+     * rejects len >= 4096 outright. */
+    {
+        char *n4096 = (char *)malloc(4097);
+        pbw_schema *schema = NULL;
+        pbw_descriptor *msg = NULL;
+        pbw_descriptor *en = NULL;
+        pbw_descriptor *any = NULL;
+        pbw_descriptor *inner = NULL;
+        pbw_field *field = NULL;
+        pbw_message *message = NULL;
+        pbw_message *back = NULL;
+        char *text = NULL;
+        size_t text_len = 0;
+
+        CHECK(n4096 != NULL);
+        if (n4096 == NULL) {
+            return;
+        }
+        fill_name(n4096, 4096);
+        schema = pbw_schema_new();
+        msg = pbw_schema_add_message(schema, "M");
+        en = pbw_schema_add_enum(schema, "E");
+        inner = pbw_schema_add_message(schema, n4096);
+        any = pbw_schema_add_message(schema, "google.protobuf.Any");
+        CHECK(msg != NULL && en != NULL && inner != NULL && any != NULL);
+        CHECK_OK(pbw_enum_add_value(en, n4096, 1));
+        field = pbw_message_add_field(msg, "e", 1, PBW_TYPE_ENUM,
+                                      PBW_LABEL_OPTIONAL);
+        CHECK(field != NULL);
+        CHECK(pbw_message_add_field(msg, n4096, 2, PBW_TYPE_INT32,
+                                    PBW_LABEL_OPTIONAL) != NULL);
+        pbw_field_set_type_name(field, "E");
+        CHECK(pbw_message_add_field(inner, "v", 1, PBW_TYPE_INT32,
+                                    PBW_LABEL_OPTIONAL) != NULL);
+        CHECK(pbw_message_add_field(any, "type_url", 1, PBW_TYPE_STRING,
+                                    PBW_LABEL_OPTIONAL) != NULL);
+        CHECK(pbw_message_add_field(any, "value", 2, PBW_TYPE_BYTES,
+                                    PBW_LABEL_OPTIONAL) != NULL);
+        CHECK_OK(pbw_schema_link(schema));
+        message = pbw_message_new(msg);
+        CHECK(message != NULL);
+        CHECK_OK(pbw_message_set(message, 1, pbw_value_new_uint(1)));
+        CHECK_OK(pbw_message_set(message, 2, pbw_value_new_int(7)));
+        CHECK_OK(pbw_text_print(message, &text, &text_len));
+        CHECK_STATUS(PBW_ERR_INVALID,
+                     pbw_text_parse(msg, text, text_len, &back));
+        CHECK(back == NULL);
+        pbw_free(text);
+        text = NULL;
+        /* JSON regular field 4096B: print OK (8196 key buffer) vs parse
+         * INVALID (4096 probe buffer) -- pinned asymmetry, see above. */
+        {
+            char *json = NULL;
+            size_t json_len = 0;
+
+            CHECK_OK(pbw_json_print(message, &json, &json_len));
+            CHECK(back == NULL);
+            CHECK_STATUS(PBW_ERR_INVALID,
+                         pbw_json_parse(msg, json, json_len, &back));
+            CHECK(back == NULL);
+            pbw_free(json);
+        }
+        /* Any suffix 4096B fails at JSON print (name buffer is 4096). */
+        {
+            pbw_message *sub = pbw_message_new(inner);
+            pbw_message *packed = NULL;
+            uint8_t *bytes = NULL;
+            size_t len = 0;
+            char *url = (char *)malloc(4096 + 32);
+            char *json = NULL;
+            size_t json_len = 0;
+
+            CHECK(sub != NULL && url != NULL);
+            CHECK_OK(pbw_message_set(sub, 1, pbw_value_new_int(7)));
+            CHECK_OK(pbw_encode(sub, &bytes, &len));
+            snprintf(url, 4096 + 32, "type.googleapis.com/%s", n4096);
+            CHECK_OK(pbw_any_pack(any, url, bytes, len, &packed));
+            pbw_free(bytes);
+            pbw_message_free(sub);
+            CHECK(packed != NULL);
+            CHECK_STATUS(PBW_ERR_INVALID,
+                         pbw_json_print(packed, &json, &json_len));
+            CHECK(json == NULL);
+            pbw_free(json);
+            pbw_message_free(packed);
+            free(url);
+        }
+        pbw_message_free(message);
+        pbw_schema_free(schema);
+        free(n4096);
+    }
+    /* Descriptor-set load caps: 4095B single names load, 4096B is LIMIT. */
+    {
+        char *n4095 = (char *)malloc(4096);
+        char *n4096 = (char *)malloc(4097);
+        uint8_t *file = (uint8_t *)malloc(32768);
+        uint8_t *inner = (uint8_t *)malloc(32768);
+        uint8_t *body = (uint8_t *)malloc(16384);
+        uint8_t *set = (uint8_t *)malloc(32768);
+        ln_w w;
+        ln_w iw;
+        ln_w bw;
+        ln_w sw;
+        pbw_schema *schema = NULL;
+
+        CHECK(n4095 != NULL && n4096 != NULL && file != NULL &&
+              inner != NULL && body != NULL && set != NULL);
+        if (n4095 == NULL || n4096 == NULL || file == NULL ||
+            inner == NULL || body == NULL || set == NULL) {
+            free(n4095);
+            free(n4096);
+            free(file);
+            free(inner);
+            free(body);
+            free(set);
+            return;
+        }
+        fill_name(n4095, 4095);
+        fill_name(n4096, 4096);
+        /* Field name 4095 OK / 4096 LIMIT (message "M", proto3). */
+        iw.p = inner;
+        iw.len = 0;
+        ln_str(&iw, 1, "M");
+        bw.p = body;
+        bw.len = 0;
+        ln_strn(&bw, 1, n4095, 4095);
+        ln_int(&bw, 3, 1);
+        ln_int(&bw, 4, 1);
+        ln_int(&bw, 5, 5);
+        ln_sub(&iw, 2, body, bw.len);
+        w.p = file;
+        w.len = 0;
+        ln_str(&w, 1, "n.proto");
+        ln_str(&w, 2, "p");
+        ln_sub(&w, 4, inner, iw.len);
+        ln_str(&w, 12, "proto3");
+        sw.p = set;
+        sw.len = 0;
+        ln_sub(&sw, 1, file, w.len);
+        CHECK_STATUS(PBW_OK, pbw_descriptor_set_load(set, sw.len, &schema));
+        pbw_schema_free(schema);
+        schema = NULL;
+        iw.len = 0;
+        ln_str(&iw, 1, "M");
+        bw.len = 0;
+        ln_strn(&bw, 1, n4096, 4096);
+        ln_int(&bw, 3, 1);
+        ln_int(&bw, 4, 1);
+        ln_int(&bw, 5, 5);
+        ln_sub(&iw, 2, body, bw.len);
+        w.len = 0;
+        ln_str(&w, 1, "n.proto");
+        ln_str(&w, 2, "p");
+        ln_sub(&w, 4, inner, iw.len);
+        ln_str(&w, 12, "proto3");
+        sw.len = 0;
+        ln_sub(&sw, 1, file, w.len);
+        CHECK_STATUS(PBW_ERR_LIMIT,
+                     pbw_descriptor_set_load(set, sw.len, &schema));
+        pbw_schema_free(schema);
+        schema = NULL;
+        /* Enum value 4095 OK / 4096 LIMIT. */
+        iw.len = 0;
+        ln_str(&iw, 1, "E");
+        bw.len = 0;
+        ln_strn(&bw, 1, n4095, 4095);
+        ln_int(&bw, 2, 1);
+        ln_sub(&iw, 2, body, bw.len);
+        w.len = 0;
+        ln_str(&w, 1, "n.proto");
+        ln_str(&w, 2, "p");
+        ln_sub(&w, 5, inner, iw.len);
+        ln_str(&w, 12, "proto3");
+        sw.len = 0;
+        ln_sub(&sw, 1, file, w.len);
+        CHECK_STATUS(PBW_OK, pbw_descriptor_set_load(set, sw.len, &schema));
+        pbw_schema_free(schema);
+        schema = NULL;
+        iw.len = 0;
+        ln_str(&iw, 1, "E");
+        bw.len = 0;
+        ln_strn(&bw, 1, n4096, 4096);
+        ln_int(&bw, 2, 1);
+        ln_sub(&iw, 2, body, bw.len);
+        w.len = 0;
+        ln_str(&w, 1, "n.proto");
+        ln_str(&w, 2, "p");
+        ln_sub(&w, 5, inner, iw.len);
+        ln_str(&w, 12, "proto3");
+        sw.len = 0;
+        ln_sub(&sw, 1, file, w.len);
+        CHECK_STATUS(PBW_ERR_LIMIT,
+                     pbw_descriptor_set_load(set, sw.len, &schema));
+        pbw_schema_free(schema);
+        schema = NULL;
+        /* Message name 4095 OK (no package) / 4096 LIMIT. */
+        iw.len = 0;
+        ln_strn(&iw, 1, n4095, 4095);
+        w.len = 0;
+        ln_str(&w, 1, "n.proto");
+        ln_sub(&w, 4, inner, iw.len);
+        ln_str(&w, 12, "proto3");
+        sw.len = 0;
+        ln_sub(&sw, 1, file, w.len);
+        CHECK_STATUS(PBW_OK, pbw_descriptor_set_load(set, sw.len, &schema));
+        pbw_schema_free(schema);
+        schema = NULL;
+        iw.len = 0;
+        ln_strn(&iw, 1, n4096, 4096);
+        w.len = 0;
+        ln_str(&w, 1, "n.proto");
+        ln_sub(&w, 4, inner, iw.len);
+        ln_str(&w, 12, "proto3");
+        sw.len = 0;
+        ln_sub(&sw, 1, file, w.len);
+        CHECK_STATUS(PBW_ERR_LIMIT,
+                     pbw_descriptor_set_load(set, sw.len, &schema));
+        pbw_schema_free(schema);
+        schema = NULL;
+        free(n4095);
+        free(n4096);
+        free(file);
+        free(inner);
+        free(body);
+        free(set);
+    }
+    /* Extension full name 8191 OK / 8192 LIMIT: scope 4095B + '.' + name.
+     * Both parts are legal alone; only the combined full[DS_MAX_NAME*2]
+     * decides. */
+    {
+        char *scope4095 = (char *)malloc(4096);
+        char *ename4095 = (char *)malloc(4096);
+        char *ename4096 = (char *)malloc(4097);
+        uint8_t *file = (uint8_t *)malloc(65536);
+        uint8_t *inner = (uint8_t *)malloc(32768);
+        uint8_t *extb = (uint8_t *)malloc(16384);
+        uint8_t *set = (uint8_t *)malloc(65536);
+        size_t i;
+        int t;
+
+        CHECK(scope4095 != NULL && ename4095 != NULL && ename4096 != NULL &&
+              file != NULL && inner != NULL && extb != NULL && set != NULL);
+        if (scope4095 == NULL || ename4095 == NULL || ename4096 == NULL ||
+            file == NULL || inner == NULL || extb == NULL || set == NULL) {
+            free(scope4095);
+            free(ename4095);
+            free(ename4096);
+            free(file);
+            free(inner);
+            free(extb);
+            free(set);
+            return;
+        }
+        fill_name(scope4095, 4095);
+        for (i = 0; i < 4095; i++) {
+            ename4095[i] = 'B';
+        }
+        ename4095[4095] = '\0';
+        for (i = 0; i < 4096; i++) {
+            ename4096[i] = 'B';
+        }
+        ename4096[4096] = '\0';
+        for (t = 0; t < 2; t++) {
+            const char *ename = t == 0 ? ename4095 : ename4096;
+            size_t elen = t == 0 ? 4095 : 4096;
+            ln_w w;
+            ln_w iw;
+            ln_w ew;
+            ln_w sw;
+            uint8_t m2b[64];
+            ln_w m2w;
+            pbw_schema *schema = NULL;
+            pbw_status expect = t == 0 ? PBW_OK : PBW_ERR_LIMIT;
+
+            iw.p = inner;
+            iw.len = 0;
+            ew.p = extb;
+            ew.len = 0;
+            w.p = file;
+            w.len = 0;
+            sw.p = set;
+            sw.len = 0;
+            ln_strn(&iw, 1, scope4095, 4095);
+            ln_strn(&ew, 1, ename, elen);
+            ln_str(&ew, 2, ".M2");
+            ln_int(&ew, 3, 100);
+            ln_int(&ew, 4, 1);
+            ln_int(&ew, 5, 5);
+            ln_sub(&iw, 6, extb, ew.len);
+            ln_str(&w, 1, "n.proto");
+            ln_sub(&w, 4, inner, iw.len);
+            m2w.p = m2b;
+            m2w.len = 0;
+            ln_str(&m2w, 1, "M2");
+            ln_sub(&w, 4, m2b, m2w.len);
+            ln_str(&w, 12, "proto3");
+            ln_sub(&sw, 1, file, w.len);
+            CHECK_STATUS(expect,
+                         pbw_descriptor_set_load(set, sw.len, &schema));
+            pbw_schema_free(schema);
+        }
+        free(scope4095);
+        free(ename4095);
+        free(ename4096);
+        free(file);
+        free(inner);
+        free(extb);
+        free(set);
+    }
+}
+
+/* Locks the Should-6 decision: pbw_message_add_unknown_bytes() is
+ * caller-bounded (shortcut: caller-bounded, upgrade to checked wrapper when
+ * gateway exposes raw append to untrusted input). Repeated appends grow past
+ * the decode-path PBW_DEFAULT_MAX_BYTES cap without an internal LIMIT; the
+ * caller bounds total bytes/calls. */
+static void
+test_unknown_append_caller_bounded(void)
+{
+    pbw_schema *schema = pbw_schema_new();
+    pbw_descriptor *type = NULL;
+    pbw_message *msg = NULL;
+    uint8_t *chunk = NULL;
+    size_t i;
+
+    CHECK(schema != NULL);
+    if (schema == NULL) {
+        return;
+    }
+    type = pbw_schema_add_message(schema, "U");
+    CHECK(type != NULL);
+    CHECK(pbw_message_add_field(type, "a", 1, PBW_TYPE_INT32,
+                                PBW_LABEL_OPTIONAL) != NULL);
+    CHECK_OK(pbw_schema_link(schema));
+    msg = pbw_message_new(type);
+    chunk = (uint8_t *)malloc(1024);
+    CHECK(msg != NULL && chunk != NULL);
+    if (msg == NULL || chunk == NULL) {
+        free(chunk);
+        pbw_message_free(msg);
+        pbw_schema_free(schema);
+        return;
+    }
+    for (i = 0; i < 1024; i++) {
+        chunk[i] = (uint8_t)i;
+    }
+    /* 1024 x 1KiB = 1MiB == PBW_DEFAULT_MAX_BYTES, all caller-bounded
+     * appends succeed: no internal max_bytes LIMIT on this path. */
+    for (i = 0; i < 1024; i++) {
+        CHECK_OK(pbw_message_add_unknown_bytes(msg, chunk, 1024));
+    }
+    CHECK(pbw_message_unknown_len(msg) == 1024 * 1024);
+    CHECK(pbw_message_unknown_bytes(msg) != NULL &&
+          ((const uint8_t *)pbw_message_unknown_bytes(msg))[0] == 0 &&
+          ((const uint8_t *)pbw_message_unknown_bytes(msg))[1024 * 1024 - 1] ==
+              (uint8_t)1023);
+    pbw_message_free(msg);
+    free(chunk);
     pbw_schema_free(schema);
 }
 
@@ -4789,7 +5459,7 @@ test_schema_errors(void)
     field = pbw_message_add_field(msg, "a", 1, PBW_TYPE_INT32,
                                   PBW_LABEL_OPTIONAL);
     CHECK(field != NULL);
-    pbw_field_set_oneof(field, 99);
+    CHECK_OK(pbw_field_set_oneof(field, 99));
     CHECK_STATUS(PBW_ERR_INVALID, pbw_schema_link(schema));
     pbw_schema_free(schema);
 
@@ -4801,7 +5471,7 @@ test_schema_errors(void)
     field = pbw_message_add_field(msg, "a", 1, PBW_TYPE_INT32,
                                   PBW_LABEL_REPEATED);
     CHECK(field != NULL);
-    pbw_field_set_oneof(field, 1);
+    CHECK_OK(pbw_field_set_oneof(field, 1));
     CHECK_STATUS(PBW_ERR_INVALID, pbw_schema_link(schema));
     pbw_schema_free(schema);
 
@@ -4812,7 +5482,7 @@ test_schema_errors(void)
     field = pbw_message_add_field(msg, "a", 1, PBW_TYPE_INT32,
                                   PBW_LABEL_OPTIONAL);
     CHECK(field != NULL);
-    pbw_field_set_oneof(field, 0xffffffffu);
+    CHECK_OK(pbw_field_set_oneof(field, 0xffffffffu));
     CHECK(pbw_message_new(msg) == NULL);
     pbw_schema_free(schema);
 
@@ -4849,8 +5519,8 @@ test_schema_errors(void)
         f1 = pbw_message_add_field(msg, "a", 1, PBW_TYPE_INT32,
                                    PBW_LABEL_OPTIONAL);
         CHECK(f2 != NULL && f1 != NULL);
-        pbw_field_set_oneof((pbw_field *)f2, 1);
-        pbw_field_set_oneof((pbw_field *)f1, 1);
+        CHECK_OK(pbw_field_set_oneof((pbw_field *)f2, 1));
+        CHECK_OK(pbw_field_set_oneof((pbw_field *)f1, 1));
         m = pbw_message_new(msg);
         CHECK(m != NULL);
         CHECK_OK(pbw_message_set_field(m, f2, pbw_value_new_uint(2)));
@@ -4882,12 +5552,51 @@ test_schema_errors(void)
         (void)fa;
         m = pbw_message_new(msg);
         CHECK(m != NULL);
-        pbw_field_set_oneof(fb, 3);
+        CHECK_OK(pbw_field_set_oneof(fb, 3));
         w = pbw_value_new_int(1);
         CHECK(w != NULL);
         CHECK_STATUS(PBW_ERR_INVALID, pbw_message_set_field(m, fb, w));
         pbw_value_free(w); /* rejected: ownership stays with the caller */
         pbw_message_free(m);
+    }
+    pbw_schema_free(schema);
+
+    /* set_oneof() after a successful link fails loudly: a silent no-op
+     * would leave the field outside the oneof, so two members stay present
+     * and encode emits both. */
+    schema = pbw_schema_new();
+    msg = pbw_schema_add_message(schema, "M");
+    {
+        pbw_field *fa;
+        pbw_field *fb;
+
+        fa = pbw_message_add_field(msg, "a", 1, PBW_TYPE_INT32,
+                                   PBW_LABEL_OPTIONAL);
+        fb = pbw_message_add_field(msg, "b", 2, PBW_TYPE_INT32,
+                                   PBW_LABEL_OPTIONAL);
+        CHECK(fa != NULL && fb != NULL);
+        CHECK_OK(pbw_field_set_oneof(fa, 1));
+        CHECK_OK(pbw_field_set_oneof(fb, 1));
+        CHECK_OK(pbw_schema_link(schema));
+        CHECK_STATUS(PBW_ERR_INVALID, pbw_field_set_oneof(fb, 2));
+        CHECK(pbw_field_oneof_index(fb) == 1);
+    }
+    pbw_schema_free(schema);
+
+    /* A failed link leaves the layout mutable: fixing the bad index then
+     * linking succeeds. */
+    schema = pbw_schema_new();
+    msg = pbw_schema_add_message(schema, "M");
+    {
+        pbw_field *f;
+
+        f = pbw_message_add_field(msg, "a", 1, PBW_TYPE_INT32,
+                                  PBW_LABEL_OPTIONAL);
+        CHECK(f != NULL);
+        CHECK_OK(pbw_field_set_oneof(f, 99));
+        CHECK_STATUS(PBW_ERR_INVALID, pbw_schema_link(schema));
+        CHECK_OK(pbw_field_set_oneof(f, 1));
+        CHECK_OK(pbw_schema_link(schema));
     }
     pbw_schema_free(schema);
 
@@ -5594,10 +6303,10 @@ test_text_format(void)
     pbw_field_set_type_name(f, "Sub");
     f = pbw_message_add_field(msg, "o1", 12, PBW_TYPE_INT32,
                               PBW_LABEL_OPTIONAL);
-    pbw_field_set_oneof(f, 1);
+    CHECK_OK(pbw_field_set_oneof(f, 1));
     f = pbw_message_add_field(msg, "o2", 13, PBW_TYPE_INT32,
                               PBW_LABEL_OPTIONAL);
-    pbw_field_set_oneof(f, 1);
+    CHECK_OK(pbw_field_set_oneof(f, 1));
     CHECK(pbw_message_add_field(msg, "h", 14, PBW_TYPE_INT64,
                                 PBW_LABEL_OPTIONAL) != NULL);
     CHECK(pbw_message_add_field(msg, "u", 15, PBW_TYPE_UINT64,
@@ -6322,7 +7031,7 @@ test_json_format(void)
     pbw_field_set_type_name(f, "google.protobuf.Int32Value");
     /* name(5) and alt(19) share oneof 1: setting both fails */
     f = (pbw_field *)pbw_descriptor_find_field_name(msg, "alt");
-    pbw_field_set_oneof(f, 1);
+    CHECK_OK(pbw_field_set_oneof(f, 1));
     f = (pbw_field *)pbw_descriptor_find_field_name(msg, "scores");
     pbw_field_set_type_name(f, "M.ScoresEntry");
     f = (pbw_field *)pbw_descriptor_find_field_name(msg, "ecol");
@@ -6350,7 +7059,7 @@ test_json_format(void)
     f = (pbw_field *)pbw_descriptor_find_field_name(msg, "vrep");
     pbw_field_set_type_name(f, "google.protobuf.Value");
     f = (pbw_field *)pbw_descriptor_find_field_name(msg, "name");
-    pbw_field_set_oneof(f, 1);
+    CHECK_OK(pbw_field_set_oneof(f, 1));
     CHECK_OK(pbw_schema_link(schema));
     /* The golden parses and prints back identically. */
     out = NULL;
@@ -9398,7 +10107,7 @@ test_streaming(pbw_schema *schema)
         CHECK_STATUS(PBW_ERR_INVALID, pbw_istream_next(s, type, &got));
         CHECK(got == NULL);
     }
-    /* A frame over max_bytes is refused. */
+    /* A frame over max_bytes is refused at feed time, before buffering. */
     {
         pbw_limits limits;
         pbw_istream *capped;
@@ -9407,8 +10116,9 @@ test_streaming(pbw_schema *schema)
         limits.max_depth = 0;
         capped = pbw_istream_new(&limits);
         CHECK(capped != NULL);
-        CHECK_OK(pbw_istream_feed(capped, wire, f1_len + f2_len));
-        CHECK_STATUS(PBW_ERR_LIMIT, pbw_istream_next(capped, type, &got));
+        CHECK_STATUS(PBW_ERR_LIMIT,
+                     pbw_istream_feed(capped, wire, f1_len + f2_len));
+        CHECK_OK(pbw_istream_next(capped, type, &got));
         CHECK(got == NULL);
         pbw_istream_free(capped);
     }
@@ -9429,8 +10139,28 @@ test_streaming(pbw_schema *schema)
                      pbw_istream_feed(starved, "\x80", 1));
         pbw_istream_free(starved);
     }
+    /* A corrupt prefix from empty is refused, leaving nothing to drain. */
+    {
+        uint8_t prefix[70];
+        pbw_limits corrupt;
+        pbw_istream *empty;
+
+        memset(prefix, 0x80, sizeof(prefix));
+        corrupt.max_bytes = 64;
+        corrupt.max_depth = 0;
+        empty = pbw_istream_new(&corrupt);
+        CHECK(empty != NULL);
+        CHECK_STATUS(PBW_ERR_LIMIT,
+                     pbw_istream_feed(empty, prefix, sizeof(prefix)));
+        CHECK_OK(pbw_istream_next(empty, type, &got));
+        CHECK(got == NULL);
+        pbw_istream_free(empty);
+    }
     /* Pipelined complete frames past max_bytes + 5 still feed: the
-     * per-frame limit stays enforced by next(), not by the buffer. */
+     * per-frame limit stays enforced by next(), not by the buffer. A
+     * buffer holding a deliverable in-cap frame keeps accepting, so
+     * back-to-back frames stream instead of failing LIMIT with the
+     * earlier frames still undrained. */
     {
         pbw_limits piped;
         pbw_istream *multi;
@@ -9440,16 +10170,176 @@ test_streaming(pbw_schema *schema)
         piped.max_depth = 0;
         multi = pbw_istream_new(&piped);
         CHECK(multi != NULL);
-        for (k = 0; k < 10; k++) {
+        for (k = 0; k < 6; k++) {
             CHECK_OK(pbw_istream_feed(multi, f1, f1_len));
         }
+        /* Buffered but undrained: one more frame still feeds (seven
+         * ~10-byte frames against a 64-byte cap), then all seven
+         * drain in order. */
+        CHECK_OK(pbw_istream_feed(multi, f1, f1_len));
+        for (k = 0; k < 7; k++) {
+            CHECK_OK(pbw_istream_next(multi, type, &got));
+            CHECK(got != NULL);
+            CHECK(strcmp(pbw_value_get_string(pbw_message_get(got, 1)),
+                         "alice") == 0);
+            pbw_message_free(got);
+            got = NULL;
+        }
         CHECK_OK(pbw_istream_next(multi, type, &got));
-        CHECK(got != NULL);
-        CHECK(strcmp(pbw_value_get_string(pbw_message_get(got, 1)),
-                     "alice") == 0);
-        pbw_message_free(got);
-        got = NULL;
+        CHECK(got == NULL);
+        /* The audit's two-frame case at small scale: frames buffered,
+         * then two whole frames in a single feed (80 bytes past
+         * 64 + 5) must not fail LIMIT. */
+        for (k = 0; k < 6; k++) {
+            CHECK_OK(pbw_istream_feed(multi, f1, f1_len));
+        }
+        {
+            uint8_t *two;
+
+            two = (uint8_t *)malloc(f1_len * 2);
+            CHECK(two != NULL);
+            if (two != NULL) {
+                memcpy(two, f1, f1_len);
+                memcpy(two + f1_len, f1, f1_len);
+                CHECK_OK(pbw_istream_feed(multi, two, f1_len * 2));
+                free(two);
+            }
+        }
+        for (k = 0; k < 8; k++) {
+            CHECK_OK(pbw_istream_next(multi, type, &got));
+            CHECK(got != NULL);
+            CHECK(strcmp(pbw_value_get_string(pbw_message_get(got, 1)),
+                         "alice") == 0);
+            pbw_message_free(got);
+            got = NULL;
+        }
+        CHECK_OK(pbw_istream_next(multi, type, &got));
+        CHECK(got == NULL);
         pbw_istream_free(multi);
+    }
+    /* An empty buffer accepts one bounded pipelined batch past max_bytes + 5
+     * (seven ~10-byte frames are 70 bytes against a 64-byte cap) and drains
+     * one frame per next(): without this, feed LIMIT + next NULL + re-feed
+     * LIMIT livelocks, since no drain can free what was never buffered. */
+    {
+        pbw_limits piped;
+        pbw_istream *batch;
+        uint8_t *seven;
+        size_t k;
+
+        piped.max_bytes = 64;
+        piped.max_depth = 0;
+        batch = pbw_istream_new(&piped);
+        CHECK(batch != NULL);
+        seven = (uint8_t *)malloc(f1_len * 7);
+        CHECK(seven != NULL);
+        if (seven != NULL) {
+            for (k = 0; k < 7; k++) {
+                memcpy(seven + k * f1_len, f1, f1_len);
+            }
+            CHECK_OK(pbw_istream_feed(batch, seven, f1_len * 7));
+            for (k = 0; k < 7; k++) {
+                CHECK_OK(pbw_istream_next(batch, type, &got));
+                CHECK(got != NULL);
+                CHECK(strcmp(pbw_value_get_string(pbw_message_get(got, 1)),
+                             "alice") == 0);
+                pbw_message_free(got);
+                got = NULL;
+            }
+            CHECK_OK(pbw_istream_next(batch, type, &got));
+            CHECK(got == NULL);
+            /* Past the bound the feed is still refused, and re-feeding the
+             * same oversized chunk after draining still fails: the caller
+             * slices to max_bytes + 5 (which always fits an empty buffer)
+             * and drains between feeds. Thirty frames are 300 bytes, past
+             * the ~2x bound of 133. */
+            {
+                uint8_t *big;
+                size_t total = f1_len * 30;
+                size_t at = 0;
+                size_t decoded = 0;
+
+                big = (uint8_t *)malloc(total);
+                CHECK(big != NULL);
+                if (big != NULL) {
+                    for (k = 0; k < 30; k++) {
+                        memcpy(big + k * f1_len, f1, f1_len);
+                    }
+                    CHECK_STATUS(PBW_ERR_LIMIT,
+                                 pbw_istream_feed(batch, big, total));
+                    CHECK_OK(pbw_istream_next(batch, type, &got));
+                    CHECK(got == NULL);
+                    while (at < total) {
+                        size_t slice =
+                            total - at > 64 + 5 ? 64 + 5 : total - at;
+
+                        CHECK_OK(
+                            pbw_istream_feed(batch, big + at, slice));
+                        at += slice;
+                        for (;;) {
+                            CHECK_OK(pbw_istream_next(batch, type, &got));
+                            if (got == NULL) {
+                                break;
+                            }
+                            CHECK(strcmp(pbw_value_get_string(
+                                             pbw_message_get(got, 1)),
+                                         "alice") == 0);
+                            decoded++;
+                            pbw_message_free(got);
+                            got = NULL;
+                        }
+                    }
+                    CHECK(decoded == 30);
+                    free(big);
+                }
+            }
+            /* Split completion with large trailing is still refused: the
+             * chunk finishes the half-fed frame but drags 70 trailing bytes
+             * past the one-window allowance. Feeding just the completion
+             * succeeds, and the rest arrives as its own batch. */
+            CHECK_OK(pbw_istream_feed(batch, f1, f1_len / 2));
+            {
+                uint8_t *tail;
+
+                tail = (uint8_t *)malloc(f1_len - f1_len / 2 + f1_len * 7);
+                CHECK(tail != NULL);
+                if (tail != NULL) {
+                    memcpy(tail, f1 + f1_len / 2, f1_len - f1_len / 2);
+                    for (k = 0; k < 7; k++) {
+                        memcpy(tail + f1_len - f1_len / 2 + k * f1_len, f1,
+                               f1_len);
+                    }
+                    CHECK_STATUS(PBW_ERR_LIMIT,
+                                 pbw_istream_feed(batch, tail,
+                                                  f1_len - f1_len / 2 +
+                                                      f1_len * 7));
+                    CHECK_OK(pbw_istream_feed(batch, f1 + f1_len / 2,
+                                              f1_len - f1_len / 2));
+                    CHECK_OK(pbw_istream_next(batch, type, &got));
+                    CHECK(got != NULL);
+                    CHECK(strcmp(pbw_value_get_string(
+                                     pbw_message_get(got, 1)),
+                                 "alice") == 0);
+                    pbw_message_free(got);
+                    got = NULL;
+                    CHECK_OK(pbw_istream_feed(batch,
+                                              tail + f1_len - f1_len / 2,
+                                              f1_len * 7));
+                    for (k = 0; k < 7; k++) {
+                        CHECK_OK(pbw_istream_next(batch, type, &got));
+                        CHECK(got != NULL);
+                        CHECK(strcmp(pbw_value_get_string(
+                                         pbw_message_get(got, 1)),
+                                     "alice") == 0);
+                        pbw_message_free(got);
+                        got = NULL;
+                    }
+                    free(tail);
+                }
+            }
+            free(seven);
+        }
+        pbw_istream_free(batch);
     }
     CHECK_STATUS(PBW_ERR_INVALID, pbw_istream_feed(NULL, wire, 1));
     CHECK_STATUS(PBW_ERR_INVALID, pbw_istream_next(s, type, NULL));
@@ -10096,6 +10986,7 @@ test_api_misc(pbw_schema *schema)
     /* NULL-tolerant mutators and constructors */
     pbw_field_set_type_name(NULL, "x");
     pbw_field_set_full_name(NULL, "x");
+    CHECK_STATUS(PBW_ERR_INVALID, pbw_field_set_oneof(NULL, 1));
     pbw_descriptor_set_map_entry(NULL);
     pbw_ctx_free(NULL);
     pbw_ctx_reset(NULL);
@@ -10660,6 +11551,8 @@ main(void)
     test_add_after_failed_link();
     test_unlinked_oneof();
     test_long_names();
+    test_long_names_boundary();
+    test_unknown_append_caller_bounded();
     test_any_long_url();
     test_schema_errors();
     test_utf8_validation();
