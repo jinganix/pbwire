@@ -42,7 +42,7 @@ ifeq ($(UNAME_S),Darwin)
 SHLIB := build/libpbwire.2.dylib
 SHLIB_LINK := build/libpbwire.dylib
 SHLIB_FLAGS := -dynamiclib -install_name @rpath/libpbwire.2.dylib \
-	-compatibility_version 2 -current_version 0.1.18
+	-compatibility_version 2 -current_version 0.1.19
 else
 SHLIB := build/libpbwire.so.2
 SHLIB_LINK := build/libpbwire.so
