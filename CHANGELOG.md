@@ -1,3 +1,13 @@
+## [0.1.20] - 2026-11-28
+
+### Fixed
+
+- Kotlin binding resumes on Maven Central: kotlin-maven-plugin 2.1.0
+  cannot run on JDK 25 (it failed to parse the version string, so
+  `pbwire-kotlin` missed 0.1.19 while `pbwire-java` and the Scala binding
+  published). Moved to Kotlin 2.4.21, verified with `mvn compile` and the
+  binding self-check on JDK 25.
+
 ## [0.1.19] - 2026-11-28
 
 ### Fixed
