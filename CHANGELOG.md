@@ -1,3 +1,20 @@
+## [0.1.19] - 2026-11-28
+
+### Fixed
+
+- Maven Central publishing resumes after the quota raise: the release
+  workflow publishes `pbwire-java`, `pbwire-kotlin` and the Scala binding
+  again (paused since 0.1.13).
+- JSON parse/print name probes moved off the per-level C stack onto one
+  root-owned scratch buffer: cap-deep input overflowed a 2 MB worker stack
+  under ASan (`stack-overflow` in `j_index_lookup`, caught by the thread
+  stack probe).
+- Oneof layout freezes at the first successful link (`pbw_field_set_oneof`
+  now returns a status and is refused afterwards); the encoder reserves
+  exact field sizes (`PBW_ENCODE_SLACK` stays for source compatibility);
+  JSON depth counts message objects only; numeric getters document the
+  kind-check contract; malformed-input coverage added.
+
 ## [0.1.18] - 2026-11-18
 
 ### Fixed
