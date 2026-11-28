@@ -132,7 +132,7 @@ func TestJavaEmptyListNoCopy(t *testing.T) {
 			{
 				Name: "M",
 				Full: "t.M",
-			Fields: []model.Field{
+				Fields: []model.Field{
 					{Name: "v", Lower: "v", Pascal: "V", Number: 1, Kind: protoreflect.Int32Kind, Repeated: true},
 					{Name: "s", Lower: "s", Pascal: "S", Number: 2, Kind: protoreflect.StringKind, Repeated: true},
 				},
@@ -164,8 +164,8 @@ func TestJavaRepPrimStorage(t *testing.T) {
 		Messages: []model.Message{
 			{
 				Name: "M",
-			Full: "t.M",
-			Fields: []model.Field{
+				Full: "t.M",
+				Fields: []model.Field{
 					{Name: "v", Lower: "v", Pascal: "V", Number: 1, Kind: protoreflect.Int32Kind, Repeated: true, Packed: true},
 					{Name: "ok", Lower: "ok", Pascal: "Ok", Number: 2, Kind: protoreflect.BoolKind, Repeated: true, Packed: true},
 				},

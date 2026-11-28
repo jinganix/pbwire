@@ -364,7 +364,7 @@ func writeJavaCtor(b *strings.Builder, f *model.File, field model.Field) {
 		} else if prim := javaRepPrim(field); prim == "int" || prim == "boolean" {
 			fmt.Fprintf(b, "        %s = b.%s.toArray();\n", priv, priv)
 		} else {
-		fmt.Fprintf(b, "        %s = b.%s.isEmpty() ? Collections.emptyList() : Collections.unmodifiableList(new ArrayList<>(b.%s));\n", priv, priv, priv)
+			fmt.Fprintf(b, "        %s = b.%s.isEmpty() ? Collections.emptyList() : Collections.unmodifiableList(new ArrayList<>(b.%s));\n", priv, priv, priv)
 		}
 		return
 	}

@@ -5185,7 +5185,7 @@ test_unknown_append_caller_bounded(void)
     CHECK(pbw_message_unknown_bytes(msg) != NULL &&
           ((const uint8_t *)pbw_message_unknown_bytes(msg))[0] == 0 &&
           ((const uint8_t *)pbw_message_unknown_bytes(msg))[1024 * 1024 - 1] ==
-              (uint8_t)1023);
+              chunk[1023]);
     pbw_message_free(msg);
     free(chunk);
     pbw_schema_free(schema);

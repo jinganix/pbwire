@@ -137,11 +137,19 @@ typedef struct {
 
 /* Per-parse index cache: descriptors are frozen once linked, so an index
  * built for one key stays valid for the rest of the parse. The Any
- * re-walk shares the outer parse's cache instead of owning one. */
+ * re-walk shares the outer parse's cache instead of owning one. The
+ * spelling scratch lives here (not on the C stack of the per-level lookup
+ * functions): 16 KB of probe buffers per nesting level overflowed a 2 MB
+ * worker stack at PBW_MAX_DEPTH under ASan, while one root-owned buffer
+ * costs nothing per level. It is only ever used transiently (no lookup
+ * holds it across a recursive call), so sharing is safe. */
 typedef struct {
     j_index *v;
     size_t len;
     size_t cap;
+    /* Room for the longest spelling or "[scope.name]" key the descriptor
+     * loader accepts. */
+    char scratch[PBW_EXT_KEY_BUF];
 } j_cache;
 
 /* FNV-1a over raw bytes (keys may hold embedded NULs, which never match). */
@@ -243,12 +251,14 @@ j_index_build(j_index *ix, const pbw_descriptor *desc)
 }
 
 /* Exact lookup in one spelling table: hash-gated, with a camelize
- * recompute confirming the hit, so collisions cannot mis-resolve. */
+ * recompute confirming the hit, so collisions cannot mis-resolve. `tmp`
+ * is the parse-root scratch (PBW_EXT_KEY_BUF bytes), not a stack buffer:
+ * this runs once per nesting level. */
 static const pbw_field *
 j_index_lookup(const pbw_descriptor *desc, const j_slot *tab, size_t size,
-               uint32_t h, const char *key, size_t len, int use_json)
+               uint32_t h, const char *key, size_t len, int use_json,
+               char *tmp)
 {
-    char tmp[PBW_NAME_BUF];
     size_t slot;
 
     if (tab == NULL || size == 0) {
@@ -265,10 +275,14 @@ j_index_lookup(const pbw_descriptor *desc, const j_slot *tab, size_t size,
         if (tab[slot].hash == h) {
             f = &desc->fields[tab[slot].row - 1];
             if (!f->is_extension) {
-                m = use_json ? j_json_name(f->name, tmp, sizeof(tmp))
-                             : j_camel_name(f->name, tmp, sizeof(tmp));
-                /* Truncated spellings never match: m >= cap implies
-                 * m != len (len < cap was checked by the caller). */
+                /* The accepted spelling length stays PBW_NAME_BUF (like
+                 * the linear loops below): the scratch only grew to
+                 * share the buffer with the extension-key probe. */
+                m = use_json ? j_json_name(f->name, tmp, PBW_NAME_BUF)
+                             : j_camel_name(f->name, tmp, PBW_NAME_BUF);
+                /* Truncated spellings never match: m >= PBW_NAME_BUF
+                 * implies m != len (len < PBW_NAME_BUF was checked by
+                 * the caller). */
                 if (m == len && memcmp(tmp, key, len) == 0) {
                     return f;
                 }
@@ -343,26 +357,31 @@ static int
 j_field_by_name(j_cache *cache, const pbw_descriptor *desc, const char *key,
                 size_t len, const pbw_field **out)
 {
-    /* Room for the longest name the descriptor loader accepts
-     * (PBW_NAME_BUF); a shorter buffer would truncate and could alias two
-     * names. */
-    char tmp[PBW_NAME_BUF];
+    /* The parse-root scratch: room for the longest name the descriptor
+     * loader accepts (PBW_NAME_BUF); a shorter buffer would truncate and
+     * could alias two names. A stack buffer here would cost 4 KB per
+     * nesting level (see j_cache). */
+    char *tmp;
     const pbw_field *found;
     size_t i;
 
-    if (len >= sizeof(tmp)) {
+    if (cache == NULL) {
+        return 0;
+    }
+    tmp = cache->scratch;
+    if (len >= PBW_NAME_BUF) {
         return 0;
     }
     if (len > 0 && memchr(key, 0, len) != NULL) {
         return 0;
     }
-    if (cache != NULL) {
+    {
         uint32_t h = j_hash_bytes(key, len);
         const j_index *ix = j_cache_get(cache, desc);
 
         if (ix != NULL) {
             found = j_index_lookup(desc, ix->camel, ix->camel_size, h, key,
-                                   len, 0);
+                                   len, 0, tmp);
             if (found != NULL) {
                 *out = found;
                 return 1;
@@ -379,7 +398,7 @@ j_field_by_name(j_cache *cache, const pbw_descriptor *desc, const char *key,
                 return 1;
             }
             found = j_index_lookup(desc, ix->json, ix->json_size, h, key,
-                                   len, 1);
+                                   len, 1, tmp);
             if (found != NULL) {
                 *out = found;
                 return 1;
@@ -403,10 +422,10 @@ j_field_by_name(j_cache *cache, const pbw_descriptor *desc, const char *key,
         if (n != len && strchr(f->name, '_') == NULL) {
             continue;
         }
-        m = j_camel_name(f->name, tmp, sizeof(tmp));
+        m = j_camel_name(f->name, tmp, PBW_NAME_BUF);
         /* Truncated: not comparable, skipping avoids aliasing two names
          * that share a 4095-byte prefix (explicit-error style). */
-        if (m >= sizeof(tmp)) {
+        if (m >= PBW_NAME_BUF) {
             continue;
         }
         if (m == len && memcmp(tmp, key, len) == 0) {
@@ -431,8 +450,8 @@ j_field_by_name(j_cache *cache, const pbw_descriptor *desc, const char *key,
         if (f->is_extension) {
             continue;
         }
-        m = j_json_name(f->name, tmp, sizeof(tmp));
-        if (m >= sizeof(tmp)) {
+        m = j_json_name(f->name, tmp, PBW_NAME_BUF);
+        if (m >= PBW_NAME_BUF) {
             continue;
         }
         if (m == len && memcmp(tmp, key, len) == 0) {
@@ -530,6 +549,11 @@ typedef struct {
     pbw_buf buf;
     pbw_status status;
     uint32_t depth; /* message nesting, capped at PBW_MAX_DEPTH */
+    /* Name scratch (PBW_EXT_KEY_BUF bytes): j_print_one/_any run once per
+     * nesting level, so their key probes live here instead of on the C
+     * stack (same overflow as the parse path, see j_cache). Consumed
+     * before any recursive call, so sharing is safe. */
+    char scratch[PBW_EXT_KEY_BUF];
 } j_out;
 
 static void
@@ -1812,12 +1836,13 @@ j_print_any(j_out *j, const pbw_message *msg)
         payload = bytes_v->as.bytes.data;
         payload_len = bytes_v->as.bytes.len;
     }
-    /* The type name is whatever follows the last '/'. */
+    /* The type name is whatever follows the last '/'. The probe uses the
+     * print-root scratch, not a stack buffer (see j_out). */
     {
         /* Room for the longest message name the loader accepts. */
-        char name[PBW_NAME_BUF];
+        char *name = j->scratch;
 
-        if (!j_copy_any_name(url, url_len, name, sizeof(name))) {
+        if (!j_copy_any_name(url, url_len, name, PBW_NAME_BUF)) {
             j->status = PBW_ERR_INVALID;
             return;
         }
@@ -1866,8 +1891,10 @@ static void
 j_print_one(j_out *j, const pbw_message *msg, const pbw_field *field,
             int *first)
 {
-    /* "[scope.name]" of an extension: scope + '.' + name plus brackets. */
-    char key[PBW_EXT_KEY_BUF];
+    /* "[scope.name]" of an extension: scope + '.' + name plus brackets.
+     * The print-root scratch, not a stack buffer (see j_out); consumed
+     * by j_quoted before any value recursion. */
+    char *key = j->scratch;
     const pbw_value *value = &msg->values[(size_t)(field - msg->desc->fields)];
 
     if (!*first) {
@@ -1878,7 +1905,7 @@ j_print_one(j_out *j, const pbw_message *msg, const pbw_field *field,
         const char *full =
             field->full_name != NULL ? field->full_name : field->name;
 
-        if (strlen(full) + 3 > sizeof(key)) {
+        if (strlen(full) + 3 > PBW_EXT_KEY_BUF) {
             j->status = PBW_ERR_INVALID;
             return;
         }
@@ -1891,7 +1918,7 @@ j_print_one(j_out *j, const pbw_message *msg, const pbw_field *field,
         /* A truncated display name is an explicit print error (like the
          * extension branch above and j_copy_any_name), not a silent
          * prefix: the parser would reject the overlong spelling. */
-        if (!j_print_name(field, key, sizeof(key))) {
+        if (!j_print_name(field, key, PBW_EXT_KEY_BUF)) {
             j->status = PBW_ERR_INVALID;
             return;
         }
@@ -4580,13 +4607,17 @@ j_parse_any(j_in *j, pbw_message *msg)
         return PBW_ERR_INVALID;
     }
     /* The type name is whatever follows the last '/'; the stored type_url
-     * keeps the full URL. */
+     * keeps the full URL. The probe uses the parse-root scratch, not a
+     * stack buffer: Any nests, so this runs once per nesting level. */
     {
         /* The stored type_url keeps the full URL; only the part after the
          * last '/' resolves against the schema. */
-        char name[PBW_NAME_BUF];
+        char *name = (j->cache != NULL) ? j->cache->scratch : NULL;
 
-        if (!j_copy_any_name(url, url_len, name, sizeof(name))) {
+        if (name == NULL) {
+            return PBW_ERR_NOMEM;
+        }
+        if (!j_copy_any_name(url, url_len, name, PBW_NAME_BUF)) {
             return PBW_ERR_INVALID;
         }
         resolved = msg->desc->schema == NULL
@@ -4705,11 +4736,16 @@ j_parse_named_field(j_in *j, pbw_message *msg, const uint8_t *key,
 
     if (len >= 2 && key[0] == '[' && key[len - 1] == ']') {
         /* Extension names are dotted and global, like the text format:
-         * room for scope + '.' + name plus brackets. */
-        char name[PBW_EXT_KEY_BUF];
+         * room for scope + '.' + name plus brackets. The probe uses the
+         * parse-root scratch, not a stack buffer: this runs once per
+         * nesting level (see j_cache). */
+        char *name = (j->cache != NULL) ? j->cache->scratch : NULL;
         const pbw_field *ext;
 
-        if (len - 2 >= sizeof(name)) {
+        if (name == NULL) {
+            return PBW_ERR_NOMEM;
+        }
+        if (len - 2 >= PBW_EXT_KEY_BUF) {
             /* An overlong "[...]" key can never name an extension, but
              * like any other unknown key it is skipped under
              * ignore_unknown instead of failing (the miss branches below
